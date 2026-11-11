@@ -70,13 +70,23 @@
 #include "../syscall.h"
 #include "ip6/ip6.h"
 
-/* The characters not yet sent, a boot log's worth ahead of the probe. One
- * place is kept empty to tell a full ring from an empty one. */
-#define NETCONSOLE_RING 8192
+/* The characters not yet sent, a boot log's worth ahead of the probe: the
+ * Lenovo writes some 17000 before its link is up. One place is kept empty to
+ * tell a full ring from an empty one. */
+#define NETCONSOLE_RING 32768
 
 static char nc_ring[NETCONSOLE_RING];
-static uint32_t nc_head; /* where the next character goes */
-static uint32_t nc_tail; /* the oldest character not yet sent */
+static uint32_t nc_head;       /* where the next character goes */
+static uint32_t nc_tail;       /* the oldest character not yet sent */
+static uint32_t nc_line_start; /* where the line being written began */
+
+/* What a full ring does with the rest of the line being written: 0, nothing,
+ * since none was dropped; NC_SKIP_LINE, drop it, its start having been taken
+ * back out of the ring; NC_SKIP_END, drop it but end its start, which a
+ * sender already has, with the first newline that finds room. */
+#define NC_SKIP_LINE 1
+#define NC_SKIP_END  2
+static int nc_skip;
 
 /* The frame payload being built: the header, then the characters. */
 static uint8_t nc_payload[NETCONSOLE_HDR_LEN + NETCONSOLE_PAYLOAD_MAX];
@@ -166,31 +176,69 @@ static uint32_t nc_used(void)
     return most;
 }
 
-/** A full ring drops the newest character, since the oldest are the boot
- * log; a newline still starts a drain, which makes room. */
+/** Whether no sender has taken any of the line being written: each one's
+ * place is at its start or before it. */
+static int nc_line_unsent(void)
+{
+    uint32_t written = nc_behind(nc_line_start);
+    struct nc_target *t;
+
+    if (nc_behind(nc_tail) < written) {
+        return 0;
+    }
+    for (t = nc_targets; t; t = t->next) {
+        if (nc_behind(t->tail) < written) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * Take one character, as netconsole.h says. A full ring drops whole records,
+ * so that a sender is given only whole ones, as Linux's consoles are given
+ * whole records and lose whole ones when they fall behind (kernel/printk/
+ * printk.c, `console_prepend_dropped`); it drops the newest, since the oldest
+ * are the boot log. The start of the record it fills in on is taken back out
+ * when no sender has any of it yet and it is no longer than a datagram; when
+ * one has, the record is cut and ended with the next newline that finds room,
+ * so a cut record is never joined to a later one. A newline still starts a
+ * drain, which makes room.
+ */
 void netconsole_putc(char c)
 {
     uint32_t flags = net_lock();
-    uint32_t next = nc_head + 1;
+    int stored = 0;
     int send;
 
-    if (next == NETCONSOLE_RING) {
-        next = 0;
-    }
-    if (nc_used() == NETCONSOLE_RING - 1) {
-        nc_dropped++;
-        send = (nc_enabled || nc_targets) && !nc_sending && c == '\n';
-        net_unlock(flags);
-        if (send) {
-            netconsole_flush();
+    if (nc_skip == 0 && nc_used() == NETCONSOLE_RING - 1) {
+        if (!nc_sending && nc_behind(nc_line_start) <= NETCONSOLE_CHUNK_MAX && nc_line_unsent()) {
+            nc_dropped += nc_behind(nc_line_start);
+            nc_head = nc_line_start;
+            nc_skip = NC_SKIP_LINE;
+        } else {
+            nc_skip = NC_SKIP_END;
         }
-        return;
     }
-    nc_ring[nc_head] = c;
-    nc_head = next;
+    if (nc_skip == NC_SKIP_LINE ||
+        (nc_skip == NC_SKIP_END && (c != '\n' || nc_used() == NETCONSOLE_RING - 1))) {
+        nc_dropped++;
+        if (nc_skip == NC_SKIP_LINE && c == '\n') {
+            nc_skip = 0;
+        }
+    } else {
+        nc_ring[nc_head] = c;
+        nc_head = (nc_head + 1 == NETCONSOLE_RING) ? 0 : nc_head + 1;
+        if (c == '\n') {
+            nc_line_start = nc_head;
+            nc_skip = 0;
+        }
+        stored = 1;
+    }
 
-    send = (nc_enabled || nc_targets) && !nc_sending &&
-           (c == '\n' || (nc_enabled && !nc_held && nc_pending() >= NETCONSOLE_PAYLOAD_MAX));
+    send =
+        (nc_enabled || nc_targets) && !nc_sending &&
+        (c == '\n' || (stored && nc_enabled && !nc_held && nc_pending() >= NETCONSOLE_PAYLOAD_MAX));
     net_unlock(flags);
 
     if (send) {

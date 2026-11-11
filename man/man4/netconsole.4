@@ -13,9 +13,9 @@ The kernel sends the records of its log over the network, so that a
 machine with no serial port leaves a record of its boot and of a panic
 on another machine.
 Every record from the first of the boot is sent, those written before
-the network card started among them: the kernel keeps 8191 characters
-of log until they are sent and drops the newest when that store is
-full.
+the network card started among them: the kernel keeps 32767 characters
+of log until they are sent and drops the newest records whole when that
+store is full.
 The records are sent by calling the card's transmit with interrupts
 off, which waits for the card by polling and not for an interrupt, so
 the record of a panic goes out too.
