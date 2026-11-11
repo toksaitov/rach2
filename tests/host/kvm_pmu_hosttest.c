@@ -8,10 +8,10 @@ extern void *malloc(unsigned long n);
 extern void free(void *p);
 
 static int failures, live, alloc_fail, copy_fail, pmi_count, fault_count;
-static int model_intel, model_ext, model_v2, model_missing, model_ignored;
+static int model_intel, model_ext, model_v2, model_missing, model_ignored, model_lbr, model_notsx;
 static uint32_t irq_flags = 0x200u;
-static uint64_t physical[64];
-static uint32_t physical_index[64], physical_n;
+static uint64_t physical[160];
+static uint32_t physical_index[160], physical_n;
 const struct kvm_backend kvm_vmx, kvm_svm;
 const struct kvm_backend *kvm_backend;
 static struct kvm_vm vm;
@@ -104,6 +104,7 @@ void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t
         *a = 0x16;
     }
     if (leaf == 1 && model_intel) {
+        *a = 0x40651u; /* the Lenovo's Haswell: family 6, model 0x45 */
         *c = PDCM;
     }
     if (leaf == 0xA && model_intel) {
@@ -111,7 +112,7 @@ void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t
         *d = 3u | (48u << 5);
     }
     if (leaf == 7 && model_intel) {
-        *b = 1u << 11;
+        *b = model_notsx ? 0 : 1u << 11;
     }
     if (leaf == 0x80000000u) {
         *a = model_v2 ? 0x80000022u : 0x80000008u;
@@ -140,8 +141,8 @@ static uint64_t *reg(uint32_t index)
             return &physical[i];
         }
     }
-    CHECK(physical_n < 64u, "physical register table fits");
-    if (physical_n == 64u) {
+    CHECK(physical_n < 160u, "physical register table fits");
+    if (physical_n == 160u) {
         return &physical[0];
     }
     physical_index[physical_n] = index;
@@ -242,6 +243,9 @@ static void setup(int intel, int ext, int v2)
     k_memset(cpuid, 0, sizeof(cpuid));
     k_memset(physical, 0, sizeof(physical));
     physical_n = 0;
+    if (intel && model_lbr) {
+        *reg(PERF_CAP) = FW_WRITES | 4u;
+    }
     model_intel = intel;
     model_ext = ext;
     model_v2 = v2;
@@ -386,46 +390,147 @@ static void load_list(const struct kvm_pmu_msr *list, uint32_t n)
     }
 }
 
-/** Drive VMX's production list builder and collector with guest counts. */
+/** Find an MSR in a VMX list, or -1. */
+static int list_find(const struct kvm_pmu_msr *list, uint32_t n, uint32_t index)
+{
+    uint32_t i;
+    for (i = 0; i < n; i++) {
+        if (list[i].index == index) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+/** Drive VMX's switching beside the host's watchdog on counter 0: the
+ * VMCS's global control, no counter written, deltas read after the exit. */
 static void intel_switch(void)
 {
-    struct kvm_pmu_msr guest[24], host[24];
-    uint32_t ng, nh, i;
+    struct kvm_pmu_msr guest[KVM_PMU_LIST_MAX], host[KVM_PMU_LIST_MAX];
+    uint64_t global[2], watch = 0x3Cu | EV_USR | EV_OS | EV_INT | EV_ENABLE;
+    uint32_t ng, nh;
     int before = pmi_count;
     setup(1, 0, 0);
+    *reg(GLOBAL_CTRL) = 1;
+    *reg(EVENTSEL0) = watch;
+    *reg(PMC0) = 1000;
+    *reg(PMC0 + 1u) = 100;
+    *reg(FIXED0) = 200;
     v.pmu.eventsel[0] = 0xC0u | EV_ENABLE | EV_OS | EV_INT;
     v.pmu.counter[0] = v.pmu.gp_mask - 3;
     v.pmu.global_ctrl |= 1ull << 32;
     v.pmu.fixed_ctrl = 9;
     v.pmu.fixed[0] = v.pmu.fixed_mask - 2;
     kvm_pmu_prepare(&v);
-    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh);
-    CHECK(ng <= 24 && nh <= 24, "VMX lists fit caller's room");
-    load_list(guest, ng);
-    CHECK(!(*reg(EVENTSEL0) & EV_INT) && !(*reg(FIXED_CTRL) & 8),
-          "no physical performance interrupt is armed");
-    CHECK(*reg(GLOBAL_CTRL) == ((1ull << 32) | 1), "only chosen guest counters run");
-    *reg(PMC0) = 5;
-    *reg(FIXED0) = 7;
-    for (i = 0; i < ng; i++) {
-        guest[i].value = *reg(guest[i].index);
-    }
-    load_list(host, nh);
-    CHECK(!*reg(GLOBAL_CTRL) && !*reg(EVENTSEL0) && !*reg(FIXED_CTRL),
-          "host load list stops every counter");
-    kvm_pmu_vmx_exit(&v, guest);
-    CHECK(v.pmu.counter[0] == 1 && v.pmu.fixed[0] == 4, "hardware deltas wrap at the guest widths");
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    CHECK(!ng && !nh, "the VMCS switches the global control without lists");
+    CHECK(global[0] == ((1ull << 32) | 3u) && global[1] == 1,
+          "the guest runs its counter on physical counter 1 beside the host's 0");
+    CHECK(*reg(EVENTSEL0) == watch && *reg(PMC0) == 1000, "the host's counter is left alone");
+    CHECK(*reg(EVENTSEL0 + 1u) == (0xC0u | EV_ENABLE | EV_OS) && *reg(FIXED_CTRL) == 1,
+          "selectors are set without a physical performance interrupt");
+    CHECK(*reg(PMC0 + 1u) == 100 && *reg(FIXED0) == 200, "no counter is written at an entry");
+    *reg(PMC0 + 1u) += 5;
+    *reg(FIXED0) += 7;
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    CHECK(v.pmu.counter[0] == 1 && v.pmu.fixed[0] == 4, "deltas wrap at the guest widths");
+    CHECK(!*reg(EVENTSEL0 + 1u) && *reg(EVENTSEL0) == watch, "the exit releases KVM's selector");
     CHECK(v.pmu.global_status == ((1ull << 32) | 1) && pmi_count == before,
           "exit queues status but does not deliver outside the big lock");
     kvm_pmu_prepare(&v);
     CHECK(pmi_count == before + 1, "next preparation delivers the pending PMI");
     kvm_pmu_prepare(&v);
     CHECK(pmi_count == before + 1, "one overflow batch sends one PMI");
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, NULL);
+    CHECK(list_find(guest, ng, GLOBAL_CTRL) >= 0 && list_find(host, nh, GLOBAL_CTRL) >= 0 &&
+              guest[list_find(guest, ng, GLOBAL_CTRL)].value == ((1ull << 32) | 3u) &&
+              host[list_find(host, nh, GLOBAL_CTRL)].value == 1,
+          "without the VMCS's controls the lists switch the global control");
+    *reg(PMC0 + 1u) += 9;
+    kvm_pmu_vmx_exit(&v, guest, 0);
+    CHECK(v.pmu.counter[0] == 1 && !*reg(EVENTSEL0 + 1u),
+          "a failed entry counts nothing and still releases the selector");
+    v.pmu.eventsel[1] = v.pmu.eventsel[2] = v.pmu.eventsel[3] = v.pmu.eventsel[0];
+    v.pmu.global_ctrl = 15;
+    kvm_pmu_prepare(&v);
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    CHECK(v.pmu.run_gp == 7 && global[0] == 15,
+          "a counter left without a physical one does not run");
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    *reg(GLOBAL_CTRL) = 15;
+    *reg(EVENTSEL0) = 0;
+    v.pmu.global_ctrl = 1;
+    kvm_pmu_prepare(&v);
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    CHECK(!*reg(GLOBAL_CTRL) && global[1] == 0 && global[0] == 1 && v.pmu.phys[0] == 0,
+          "counters the host does not hold stop in the host and are the guest's");
+    kvm_pmu_vmx_exit(&v, guest, 1);
     CHECK(!other.pmu.counter[0], "another vCPU has independent counters");
-    kvm_pmu_vmx_enter(&other, guest, host, &ng, &nh);
-    load_list(guest, ng);
-    CHECK(!*reg(PMC0) && !*reg(GLOBAL_CTRL), "another vCPU starts with no physical residue");
-    load_list(host, nh);
+}
+
+/** Drive the guest's LBR stack: PERF_CAPABILITIES, DEBUGCTL, its MSRs,
+ * the lists while DEBUGCTL.LBR is set, and the freeze on a PMI. */
+static void intel_lbr(void)
+{
+    struct kvm_pmu_msr guest[KVM_PMU_LIST_MAX], host[KVM_PMU_LIST_MAX];
+    uint64_t value, global[2];
+    uint32_t ng, nh;
+    int k;
+    model_lbr = 1;
+    model_notsx = 1;
+    setup(1, 0, 0);
+    CHECK(kvm_pmu_feature(PERF_CAP, &value) == 0 && value == (FW_WRITES | 4u),
+          "PERF_CAPABILITIES offers the host's LBR format");
+    CHECK(v.pmu.lbr_nr == 16 && pmu_host.lbr_quirk, "Haswell's 16 records, without TSX");
+    value = FW_WRITES | 5u;
+    CHECK(kvm_pmu_msr(&v, PERF_CAP, 1, &value, 1) == -1, "another LBR format is refused");
+    value = FW_WRITES;
+    CHECK(kvm_pmu_msr(&v, PERF_CAP, 1, &value, 1) == 0 && !v.pmu.lbr_nr &&
+              kvm_pmu_msr(&v, LBR_TOS, 0, &value, 0) == 1,
+          "format 0 removes the stack");
+    value = DEBUGCTL_FRZ;
+    CHECK(kvm_pmu_msr(&v, DEBUGCTL, 1, &value, 0) == -1, "FREEZE needs the stack");
+    value = DEBUGCTL_LBR | DEBUGCTL_BTF;
+    CHECK(kvm_pmu_msr(&v, DEBUGCTL, 1, &value, 0) == 0 && !v.pmu.debugctl,
+          "LBR and BTF without the stack are dropped");
+    cpuid[0].eax = 0x306C3u;
+    value = FW_WRITES | 4u;
+    CHECK(kvm_pmu_msr(&v, PERF_CAP, 1, &value, 1) == -1, "the format needs the host's model");
+    cpuid[0].eax = 0x40651u;
+    CHECK(kvm_pmu_msr(&v, PERF_CAP, 1, &value, 1) == 0 && v.pmu.lbr_nr == 16,
+          "the host's format restores the stack");
+    value = DEBUGCTL_LBR | DEBUGCTL_FRZ | DEBUGCTL_BTF;
+    CHECK(kvm_pmu_msr(&v, DEBUGCTL, 1, &value, 0) == 0 &&
+              v.pmu.debugctl == (DEBUGCTL_LBR | DEBUGCTL_FRZ),
+          "the guest sets LBR and FREEZE_LBRS_ON_PMI");
+    value = 1ull << 2;
+    CHECK(kvm_pmu_msr(&v, DEBUGCTL, 1, &value, 0) == -1, "another DEBUGCTL bit is #GP");
+    value = 7;
+    CHECK(kvm_pmu_msr(&v, LBR_TOS, 1, &value, 1) == 0 && *reg(LBR_TOS) == 7 && v.pmu.lbr_tos == 7,
+          "the caller writes LBR_TOS through the processor");
+    value = 0x1FFFFFFF81000000ull;
+    CHECK(kvm_pmu_msr(&v, LBR_FROM + 15u, 1, &value, 0) == 0 &&
+              kvm_pmu_msr(&v, LBR_FROM + 16u, 0, &value, 0) == 1,
+          "the stack has exactly 16 records");
+    kvm_pmu_prepare(&v);
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    k = list_find(guest, ng, LBR_FROM + 15u);
+    CHECK(ng == 34 && !nh && v.pmu.lbr_list == 0 && k >= 0 &&
+              guest[k].value == 0x7FFFFFFF81000000ull,
+          "the lists carry the stack, LBR_FROM sign-extended into bits 62:61");
+    guest[list_find(guest, ng, LBR_TO + 2u)].value = 0x401000;
+    guest[list_find(guest, ng, LBR_TOS)].value = 2;
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    CHECK(kvm_pmu_msr(&v, LBR_TO + 2u, 0, &value, 0) == 0 && value == 0x401000 &&
+              v.pmu.lbr_tos == 2 && v.pmu.lbr_list == ~0u,
+          "the exit's stored stack is the guest's");
+    v.pmu.pmi = 1;
+    kvm_pmu_prepare(&v);
+    CHECK(v.pmu.debugctl == DEBUGCTL_FRZ, "a PMI under FREEZE_LBRS_ON_PMI clears DEBUGCTL.LBR");
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    CHECK(!ng && v.pmu.lbr_list == ~0u, "a stopped stack stays out of the lists");
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    model_lbr = model_notsx = 0;
 }
 
 /** Drive AMD's legacy, extended and PerfMonV2 switching and its absence. */
@@ -455,8 +560,22 @@ static void amd_switch(void)
               "AMD counts guest execution without a physical interrupt");
         *reg(amd_index(0, 1)) = 17;
         kvm_pmu_svm_exit(&v);
-        CHECK(v.pmu.counter[0] == 17 && !*reg(amd_index(0, 0)) && !*reg(amd_index(0, 1)),
-              "AMD collects and clears physical registers");
+        CHECK(v.pmu.counter[0] == 17 && !*reg(amd_index(0, 0)),
+              "AMD collects the delta and releases the selector");
+        if (mode) {
+            *reg(amd_index(0, 0)) = 0x76u | EV_ENABLE | EV_INT;
+            kvm_pmu_svm_enter(&v);
+            CHECK(*reg(amd_index(0, 0)) == (0x76u | EV_ENABLE | EV_INT) && v.pmu.phys[0] == 1 &&
+                      (*reg(amd_index(1, 0)) & EV_GUEST),
+                  "AMD leaves the host's counter and runs the guest's on the next");
+            *reg(amd_index(1, 1)) += 3;
+            kvm_pmu_svm_exit(&v);
+            CHECK(v.pmu.counter[0] == 20 && !*reg(amd_index(1, 0)) &&
+                      *reg(amd_index(0, 0)) == (0x76u | EV_ENABLE | EV_INT),
+                  "AMD counts on the spare counter and leaves the host's running");
+            *reg(amd_index(0, 0)) = 0;
+            v.pmu.counter[0] = 17;
+        }
         kvm_pmu_svm_enter(&other);
         *reg(amd_index(0, 1)) = 90;
         kvm_pmu_svm_exit(&other);
@@ -483,6 +602,7 @@ int main(void)
     intel_registers();
     filters();
     intel_switch();
+    intel_lbr();
     amd_switch();
     kvm_pmu_vm_free(&vm);
     CHECK(!live, "all allocations returned");
