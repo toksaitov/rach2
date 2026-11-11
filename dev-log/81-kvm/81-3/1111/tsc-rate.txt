@@ -1,0 +1,10 @@
+== tsc-frequency=1000000000
+kvm-boot: result: fail: QEMU exited with 1 before the token: qemu-system-x86_64: kvm_init_vcpu: kvm_arch_init_vcpu failed (0): Operation not supported
+exit 0
+qemu-system-x86_64: warning: TSC frequency mismatch between VM (1000000 kHz) and host (1895610 kHz), and TSC scaling unavailable
+qemu-system-x86_64: kvm_init_vcpu: kvm_arch_init_vcpu failed (0): Operation not supported
+== tsc-frequency=2500000000
+kvm-boot: result: fail: QEMU exited with 1 before the token: qemu-system-x86_64: kvm_init_vcpu: kvm_arch_init_vcpu failed (0): Operation not supported
+exit 0
+qemu-system-x86_64: warning: TSC frequency mismatch between VM (2500000 kHz) and host (1895610 kHz), and TSC scaling unavailable
+qemu-system-x86_64: kvm_init_vcpu: kvm_arch_init_vcpu failed (0): Operation not supported

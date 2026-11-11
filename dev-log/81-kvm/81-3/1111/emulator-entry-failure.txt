@@ -1,0 +1,139 @@
+vmexit_ipi.log
+vmexit_ipi_halt.log
+vmexit_mov_from_cr8.log
+vmexit_mov_to_cr8.log
+vmexit_ple_round_robin.log
+vmexit_tscdeadline.log
+vmexit_tscdeadline_immed.log
+vmexit_vmcall.log
+x2apic.log
+xapic.log
+ smsw (1)
+PASS: smsw (2)
+PASS: smsw (3)
+before 80010011 after 80010019
+PASS: lmsw (1)
+before 80010011 after 80010011
+PASS: lmsw (2)
+PASS: lmsw (3)
+PASS: outsb up
+PASS: outsb down
+PASS: incl
+PASS: decl
+PASS: incb
+PASS: decb
+PASS: lock incl
+PASS: lock decl
+PASS: lock incb
+PASS: lock decb
+PASS: lock negl
+PASS: lock notl
+PASS: lock negb
+PASS: lock notb
+PASS: btcl imm8, r/m
+PASS: btcl reg, r/m
+PASS: btcq reg, r/m
+PASS: bsfw r/m, reg
+PASS: bsfl r/m, reg
+PASS: bsfq r/m, reg
+PASS: bsfq r/m, reg
+PASS: bsrw r/m, reg
+PASS: bsrl r/m, reg
+PASS: bsrq r/m, reg
+PASS: bsrq r/m, reg
+PASS: imul ax, mem
+PASS: imul eax, mem
+PASS: imul ax, mem, imm8
+PASS: imul eax, mem, imm8
+PASS: imul ax, mem, imm
+PASS: imul eax, mem, imm
+PASS: imul rax, mem
+PASS: imul rax, mem, imm8
+PASS: imul rax, mem, imm
+PASS: movdqu (read)
+PASS: movdqu (write)
+PASS: movaps (read)
+PASS: movaps (write)
+PASS: movapd (read)
+PASS: movapd (write)
+PASS: movups (read)
+PASS: movups (write)
+PASS: movupd (read)
+PASS: movupd (write)
+PASS: movups unaligned
+PASS: movupd unaligned
+PASS: unaligned movaps exception
+PASS: movups unaligned crosspage
+PASS: movups crosspage exception
+PASS: shld (cl)
+PASS: shrd (cl)
+PASS: ltr
+PASS: cross-page mmio read
+PASS: cross-page mmio write
+PASS: string_io_mmio
+SKIP: MOVBE unsupported by CPU
+PASS: no fep: #DB suppressed after MOV SS
+PASS: push $imm8
+PASS: push %reg
+PASS: push mem
+PASS: push $imm
+PASS: pop mem
+PASS: pop mem (2)
+PASS: pop reg
+PASS: ret
+PASS: leave
+PASS: enter
+PASS: enter
+PASS: ENTER RSP = ffffffffffffadc8, wanted ffffffffffffadc8
+PASS: ENTER RSP = ffffffffffffbffc, wanted ffffffffffffbffc
+PASS: ENTER val = 1122334455667788, wanted 0x1122334455667788
+PASS: ENTER RSP = ffffffffffff9dc8, wanted ffffffffffff9dc8
+PASS: ENTER RSP = ffffffffffffaffc, wanted ffffffffffffaffc
+PASS: ENTER val = 8877665544332211, wanted 0x8877665544332211
+PASS: xchg reg, r/m (1)
+PASS: xchg reg, r/m (2)
+PASS: xchg reg, r/m (3)
+PASS: xchg reg, r/m (4)
+PASS: xadd reg, r/m (1)
+PASS: xadd reg, r/m (2)
+PASS: xadd reg, r/m (3)
+PASS: xadd reg, r/m (4)
+PASS: mov %cr8
+PASS: ljmp
+PASS: divq (fault)
+PASS: divq (1)
+PASS: mulb mem
+PASS: mulw mem
+PASS: mull mem
+PASS: mulq mem
+PASS: movq (mmx, read)
+PASS: movq (mmx, write)
+PASS: movb $imm, 0(%rip)
+PASS: Test ret/iret with a nullified segment
+KVM: entry failed, hardware error 0x80000021
+
+If you're running a guest on an Intel machine without unrestricted mode
+support, the failure can be most likely due to the guest entering an invalid
+state for Intel VT. For example, the guest maybe running in big real mode
+which is not supported on less recent Intel processors.
+
+RAX=0000000000000001 RBX=0000000000000010 RCX=00000000000003fd RDX=00000000000003f8
+RSI=00000000004175a7 RDI=000000000000000a RBP=000000000101bff0 RSP=000000000101bf70
+R8 =00000000004175a7 R9 =00000000000003f8 R10=000000000000000d R11=0000000000000001
+R12=ffffffffffffa000 R13=ffffffffffffb000 R14=3333333333333333 R15=ffffffffffff9000
+RIP=0000000000402ba8 RFL=00000006 [-----P-] CPL=0 II=0 A20=1 SMM=0 HLT=0
+ES =0043 0000000000000000 ffffffff 00c0f300 DPL=3 DS   [-WA]
+CS =0008 0000000000000000 ffffffff 00a09b00 DPL=0 CS64 [-RA]
+SS =0000 0000000000000000 00000000 00c09300 DPL=0 DS   [-WA]
+DS =0043 0000000000000000 ffffffff 00c0f300 DPL=3 DS   [-WA]
+FS =0000 0000000000000000 ffffffff 00000000
+GS =0000 0000000000400000 ffffffff 00000000
+LDT=0000 0000000000000000 0000ffff 00008200 DPL=0 LDT
+TR =0080 0000000001025f20 0000ffff 00008b00 DPL=0 TSS64-busy
+GDT=     0000000000412160 0000407f
+IDT=     000000000103ff20 00000fff
+CR0=80010011 CR2=ffffffffffffe000 CR3=000000000104a000 CR4=00000220
+DR0=0000000000402058 DR1=0000000000000000 DR2=0000000000000000 DR3=0000000000000000 
+DR6=00000000ffff0ff0 DR7=0000000000000400
+EFER=0000000000000500
+Code=24 00 00 8c d3 66 41 c7 84 24 00 10 00 00 00 00 41 8e 55 00 <8c> d0 66 85 c0 40 0f 94 c7 40 0f b6 ff be 1e 70 41 00 b8 00 00 00 00 e8 b6 24 00 00 66 41

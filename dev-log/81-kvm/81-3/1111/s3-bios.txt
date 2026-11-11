@@ -1,0 +1,41 @@
+status 5
+Copying MPTABLE from 0x00006cfc/6fe1f80 to 0x000f5480
+Copying SMBIOS from 0x00006cfc to 0x000f52d0
+table(50434146)=0x07fe21c0 (via rsdt)
+ACPI: parse DSDT at 0x07fe0040 (len 8576)
+Scan for VGA option rom
+No VGA found, scan for other display
+Turning on vga text mode console
+SeaBIOS (version 1.16.3-debian-1.16.3-2)
+ATA controller 1 at 1f0/3f4/0 (irq 14 dev 9)
+ATA controller 2 at 170/374/0 (irq 15 dev 9)
+Searching bootorder for: HALT
+Found 0 lpt ports
+Found 1 serial ports
+PS2 keyboard initialized
+All threads complete.
+Scan for option roms
+Running option rom at c000:0003
+Searching bootorder for: /rom@genroms/multiboot_dma.bin
+Searching bootorder for: /rom@genroms/kvmvapic.bin
+Searching bootorder for: HALT
+Running option rom at c080:0003
+Space available for UMB: c3000-e8000, f4de0-f5270
+Returned 16646144 bytes of ZoneHigh
+e820 map has 7 items:
+  0: 0000000000000000 - 000000000009fc00 = 1 RAM
+  1: 000000000009fc00 - 00000000000a0000 = 2 RESERVED
+  2: 00000000000f0000 - 0000000000100000 = 2 RESERVED
+  3: 0000000000100000 - 0000000007fe0000 = 1 RAM
+  4: 0000000007fe0000 - 0000000008000000 = 2 RESERVED
+  5: 00000000feffc000 - 00000000ff000000 = 2 RESERVED
+  6: 00000000fffc0000 - 0000000100000000 = 2 RESERVED
+enter handle_19:
+  NULL
+Booting from ROM...
+Booting from c000:003c
+In resume (status=254)
+In 32bit resume
+table(50434146)=0x07fe21c0 (via rsdt)
+Found 1 cpu(s) max supported 1 cpu(s)
+Jump to resume vector (1000)
