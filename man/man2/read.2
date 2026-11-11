@@ -60,6 +60,13 @@ of zero bytes returns zero for them, as Linux's does.
 .Pp
 Regular files are read at the open file description's offset.
 A positive result advances that offset by the number of bytes read.
+A file of a mounted file system is read up to the first page of the
+buffer that cannot be written, and the bytes before it are returned, as
+Linux's copy stops at its first fault; a buffer whose first page cannot
+be written gives
+.Er EFAULT
+only when the offset is short of the file's end, and zero at or past it,
+as on Linux.
 Descriptors shared through duplication or fork share the offset.
 Directories cannot be read with these calls: a read of any count returns
 .Er EISDIR ,
@@ -155,15 +162,18 @@ The total is cut at 0x7ffff000, as one read's count is, and the buffer
 that crosses it is filled only up to it.
 The kernel checks every length first, then that every range lies in user
 space.
-For a file of a mounted file system it then brings the destinations in
-for writing and keeps those before the first page that cannot be written:
-the read ends there with the bytes before it, or
+It then brings each destination in for writing and keeps those before the
+first page that cannot be written: the read ends there with the bytes
+before it, as Linux's read stops at the first fault of its copy, and the
+input past it stays queued.
+When the first destination cannot be written, the call gives
+.Er EFAULT ,
+but for a file of a mounted file system only after the check of the
+list's end at the offset and when the offset is short of the file's end;
+at or past it the call returns zero, as on Linux.
+A datagram socket gives
 .Er EFAULT
-when the first destination cannot be written, as Linux's read stops at
-the first fault of its copy.
-For anything else it checks write access to every nonempty destination
-before taking input, so an invalid destination fails before consuming
-input.
+when the datagram's first copy fails, and the datagram is consumed.
 The descriptor is checked before the list, as for
 .Fn read ,
 so a list requesting no bytes returns zero only from a descriptor that

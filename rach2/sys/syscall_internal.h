@@ -551,7 +551,8 @@ long sys_pwritev(isr_params_t *params);
  * waiting for one unless the description has O_NONBLOCK. Returns the bytes
  * copied, or a negative errno from the wait: -EAGAIN when no datagram waits
  * under O_NONBLOCK, -EINTR, or the socket's pending error, which the call
- * takes.
+ * takes; or -EFAULT when the first copy of a datagram fails, the datagram
+ * consumed.
  *
  * A datagram is a message, so it is taken once and copied out in pieces: the
  * buffers are filled in order until the datagram runs out, and what is left

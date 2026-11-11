@@ -1392,6 +1392,10 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
  * below. */
 static long iov_file_read(fd_entry_t *entry, uintptr_t addr, int count, long long pos);
 
+/** Cut an imported vector to the prefix the caller can reach, as defined
+ * below. */
+static uint32_t iov_prefix(struct kernel_iovec *iov, int count, int into);
+
 /** Import the vector once and write it whole to a pty master, under the
  * pair's lock (`pty_master_writev`), or to a pipe end as one write
  * (`pipe_writev`). `entry` is held and open for writing, and `count` is in
@@ -6397,18 +6401,38 @@ static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_
 }
 
 /**
+ * The answer of a read of the file of `ofd` at `at` whose first byte the
+ * caller cannot write, with the description's lock held: 0 when `at` is at
+ * or past the file's end, since Linux's filemap_read returns there before
+ * its copy, and -EFAULT otherwise, also when the size cannot be had.
+ */
+static int32_t file_read_unwritable(struct open_file *ofd, uint64_t at)
+{
+    struct vfs_stat st;
+
+    if (vfs_getattr(ofd->vmnt, ofd->vnode, &st) == 0 && at >= st.size) {
+        return 0;
+    }
+    return -EFAULT;
+}
+
+/**
  * Read up to `count` bytes into user buffer `buf` from the file of a mounted
  * type or of the KRFFS root that `entry` is open on: at the description's
  * offset, which moves past what was read, or at `*at` for pread64, which
- * leaves it where it was. At the description's offset the end of `asked`
- * bytes, the request before its cut at USER_RW_MAX, is checked again under
- * the description's lock (`rw_offset_end`), since a sharer may have moved
- * the offset while the buffer was faulted in, as Linux checks it under the
+ * leaves it where it was. The buffer is brought in for writing first and
+ * cut before its first page that cannot be written (`iov_prefix`), so that
+ * the read ends there with the bytes before it, as Linux's copy stops at
+ * its first fault. At the description's offset the end of `asked` bytes,
+ * the request before its cut at USER_RW_MAX, is checked again under the
+ * description's lock (`rw_offset_end`), since a sharer may have moved the
+ * offset while the buffer was faulted in, as Linux checks it under the
  * position lock; `asked` is unused with `at`. Returns the bytes read, 0 at
  * the end of the file, or a negative errno: -EBADF for a descriptor not open
- * for reading or on no file, -EFAULT for a buffer the caller cannot write,
- * -EINVAL for that end past 2^63-1, or the type's error. A read of a byte or
- * more reports IN_ACCESS to inotify. The pages mappings of the file hold are
+ * for reading or on no file, -EINVAL for that end past 2^63-1, -EFAULT for
+ * a first byte the caller cannot write short of the file's end
+ * (`file_read_unwritable`), or the type's error. A read of a byte or more
+ * reports IN_ACCESS to inotify. The pages mappings of the file hold are
  * read from memory (`file_read_locked`).
  *
  * A regular ext2 file is read through the file page cache
@@ -6423,7 +6447,9 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
                          size_t asked)
 {
     struct open_file *ofd = entry->ofd;
+    struct kernel_iovec one;
     int32_t bytes_read;
+    uint32_t room;
 
     if (!(entry->flags & FD_FLAG_READ)) {
         return -EBADF;
@@ -6431,15 +6457,19 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
     if (!ofd || !ofd->vmnt) {
         return -EBADF;
     }
-    if (!user_buffer_ok((__force uintptr_t)buf, count, 1)) {
-        return -EFAULT;
-    }
+    one.iov_base = (__force uintptr_t)buf;
+    one.iov_len = count;
+    room = iov_prefix(&one, 1, 1);
     fd_ofd_lock(ofd);
     if (!at && rw_offset_end(entry, asked) != 0) {
         fd_ofd_unlock(ofd);
         return -EINVAL;
     }
-    bytes_read = file_read_locked(ofd, buf, count, at ? *at : ofd->offset);
+    if (room == 0 && count > 0) {
+        bytes_read = file_read_unwritable(ofd, at ? *at : ofd->offset);
+    } else {
+        bytes_read = file_read_locked(ofd, buf, room, at ? *at : ofd->offset);
+    }
     if (bytes_read > 0 && !at) {
         ofd->offset += (uint64_t)bytes_read;
     }
@@ -6583,7 +6613,8 @@ static int32_t read_allowed(const fd_entry_t *entry)
  * ssize_t or for an end at the description's offset past 2^63-1
  * (`rw_offset_end`), then -EISDIR for a directory, as Linux's vfs_read
  * orders them,
- * then -EFAULT for a NULL or bad buffer. The transfer is capped at
+ * then -EFAULT for a NULL or bad buffer, which a file of a mount judges
+ * only after its end (`file_read`). The transfer is capped at
  * USER_RW_MAX after the original range and count have passed. A
  * read of zero bytes returns 0 once those checks have passed, and `buf`
  * may then be NULL, as POSIX allows; from an anonymous descriptor with a
@@ -6635,6 +6666,9 @@ static int32_t read_fd(int fd, char __user *buf, size_t requested)
         /* An eventfd's or a timerfd's read refuses a count under 8. */
         return entry->type == FD_TYPE_ANON && entry->ops ? read_ops(entry, buf, 0, 0) : 0;
     }
+    if (entry->type == FD_TYPE_FILE && !entry->ops) {
+        return file_read(entry, buf, count, NULL, requested);
+    }
     if (!buf) {
         return -EFAULT;
     }
@@ -6666,10 +6700,6 @@ static int32_t read_fd(int fd, char __user *buf, size_t requested)
         packets_read = mouse_read_packets((struct mouse_packet __force *)buf, packets_requested);
 
         return packets_read * (int32_t)sizeof(struct mouse_packet);
-    }
-
-    if (entry->type == FD_TYPE_FILE) {
-        return file_read(entry, buf, count, NULL, requested);
     }
 
     return -EBADF;
@@ -6752,6 +6782,43 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
 #define READV_DGRAM_STACK 1024
 
 /**
+ * Copy the `n` bytes of a datagram at `message` into the buffers of the
+ * user's iovec array at `iov_user` of `iovcnt` elements, in order, reading
+ * each element as it goes: the bytes copied, which stop at the first element
+ * that cannot be read or buffer that cannot be written, or -EFAULT when the
+ * first copy fails, as Linux's copy of a datagram fails.
+ */
+static int32_t dgram_spread(uintptr_t iov_user, int iovcnt, const uint8_t *message, uint32_t n)
+{
+    struct kernel_iovec iov;
+    uint32_t offset = 0;
+    int i;
+
+    for (i = 0; i < iovcnt && offset < n; i++) {
+        uint32_t chunk;
+
+        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
+            break;
+        }
+        if (iov.iov_len == 0) {
+            continue;
+        }
+        chunk = n - offset;
+        if (chunk > iov.iov_len) {
+            chunk = USER_LEN32(iov.iov_len);
+        }
+        if (copy_to_user((void __user *)iov.iov_base, message + offset, chunk) != 0) {
+            return offset > 0 ? (int32_t)offset : -EFAULT;
+        }
+        offset += chunk;
+        if (chunk < iov.iov_len) {
+            break;
+        }
+    }
+    return (int32_t)offset;
+}
+
+/**
  * The datagram at the head of the queue is copied into a kernel buffer, its
  * sender read and the datagram consumed under one hold of `net_lock`, as net.h
  * requires of a system call, and only then spread across the buffers. Nothing
@@ -6777,7 +6844,9 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
  * iovec array and the datagram rewrite the destinations after it, which the
  * check made before the read never saw. `copy_to_user` fails on an address it
  * cannot fault in, so such a caller writes only its own memory; the copy stops
- * at the first iovec it cannot read or buffer it cannot write.
+ * at the first iovec it cannot read or buffer it cannot write, and a datagram
+ * whose first copy fails, which is consumed all the same, is -EFAULT, as
+ * Linux's copy of a datagram fails.
  */
 int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_t *src_ip,
                     uint16_t *src_port, int peek, int32_t *whole)
@@ -6785,8 +6854,8 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
     uint8_t small[READV_DGRAM_STACK];
     uint8_t *message = small;
     struct kernel_iovec iov;
-    uint32_t offset = 0, want = 0;
-    int32_t total = 0;
+    uint32_t want = 0;
+    int32_t total;
     uint32_t held;
     int nonblock;
     int taken;
@@ -6849,33 +6918,30 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
         *whole = length;
     }
 
-    for (i = 0; i < iovcnt && (int)offset < taken; i++) {
-        uint32_t chunk;
-
-        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
-            break;
-        }
-        if (iov.iov_len == 0) {
-            continue;
-        }
-        chunk = (uint32_t)taken - offset;
-        if (chunk > iov.iov_len) {
-            chunk = USER_LEN32(iov.iov_len);
-        }
-        if (copy_to_user((void __user *)iov.iov_base, message + offset, chunk) != 0) {
-            break;
-        }
-        offset += chunk;
-        total += (int32_t)chunk;
-        if (chunk < iov.iov_len) {
-            break;
-        }
-    }
+    total = dgram_spread(iov_user, iovcnt, message, (uint32_t)taken);
     if (message != small) {
         kfree(message);
     }
 
     return total;
+}
+
+/**
+ * The bytes of the buffer `iov` of a readv, at most `left`, that lie in
+ * user space and can be written, up to its first page that cannot
+ * (`iov_prefix`), which are brought in: 0 when none can.
+ */
+static uint32_t readv_room(const struct kernel_iovec *iov, uint32_t left)
+{
+    struct kernel_iovec room = *iov;
+
+    if (room.iov_len > left) {
+        room.iov_len = left;
+    }
+    if (!user_access_ok(room.iov_base, room.iov_len)) {
+        return 0;
+    }
+    return iov_prefix(&room, 1, 1);
 }
 
 /**
@@ -6888,19 +6954,20 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
  * A file of a mount is read by `iov_file_read`, which takes the vector whole,
  * as Linux's vfs_iter_read takes an iov_iter: a buffer that cannot be
  * written ends the read with the bytes before it. For anything else the
- * whole array is checked before a byte is taken, since a read cannot be
- * undone (`iov_import`): a count past IOV_MAX_LOCAL, or a negative length,
- * is -EINVAL, and an iovec the caller cannot read or a buffer it cannot
- * write is -EFAULT, with the input still queued; the total is cut at
- * MAX_RW_COUNT, as Linux's is, and that total ending past 2^63-1 at the
- * description's offset is -EINVAL (`rw_offset_end`). The buffers are
- * checked by `user_buffer_ok` with write access, which faults their pages
- * in, so an address inside the user window that is unmapped or read-only
- * fails here and not half way through. The descriptor is checked before
- * the array (`read_allowed`), as Linux's vfs_readv checks it, so an array
- * that asks for nothing returns 0 only from a descriptor a read could use,
- * a directory among them. Once a byte has been read, a later failure ends
- * the call with the total.
+ * array is checked whole first, as Linux's import checks it (`iov_import`):
+ * a count past IOV_MAX_LOCAL, or a negative length, is -EINVAL, and an
+ * iovec the caller cannot read or a range outside user space is -EFAULT;
+ * the total is cut at MAX_RW_COUNT, as Linux's is, and that total ending
+ * past 2^63-1 at the description's offset is -EINVAL (`rw_offset_end`).
+ * Each buffer is then brought in for writing before it is read into and cut
+ * before its first page that cannot be written (`iov_prefix`), so that the
+ * read ends there with the bytes before it, as Linux's copy to an iov_iter
+ * stops at its first fault; -EFAULT only when no byte was read, and the
+ * input past the cut stays queued. The descriptor is checked before the
+ * array (`read_allowed`), as Linux's vfs_readv checks it, so an array that
+ * asks for nothing returns 0 only from a descriptor a read could use, a
+ * directory among them. Once a byte has been read, a later failure ends the
+ * call with the total.
  *
  * The buffers are filled in order, and how depends on what is behind the
  * descriptor, since a second read is not always reading on. A file of a
@@ -6940,7 +7007,7 @@ static long readv(int fd, uintptr_t iov_user, int iovcnt)
     if (iov_mount_file(entry)) {
         return iov_file_read(entry, iov_user, iovcnt, -1);
     }
-    wanted = iov_import(NULL, iov_user, iovcnt, 1);
+    wanted = iov_import(NULL, iov_user, iovcnt, -1);
     if (wanted <= 0) {
         return wanted;
     }
@@ -6963,9 +7030,8 @@ static long readv(int fd, uintptr_t iov_user, int iovcnt)
         if (iov.iov_len == 0) {
             continue;
         }
-        len = iov.iov_len < (uint32_t)(wanted - total) ? (uint32_t)iov.iov_len
-                                                       : (uint32_t)(wanted - total);
-        if (!user_access_ok(iov.iov_base, len)) {
+        len = readv_room(&iov, (uint32_t)(wanted - total));
+        if (len == 0) {
             return (total > 0) ? total : -EFAULT;
         }
 
@@ -13256,15 +13322,17 @@ static long iov_file_elements_read(struct open_file *ofd, const struct kernel_io
  * stopping at the first element not filled, or when none was read 0 at the
  * end of the file or a negative errno: -EINVAL for a count below 0 or past
  * IOV_MAX_LOCAL, a negative length or an end past 2^63-1, -EFAULT for a
- * vector the caller cannot read or a first buffer it cannot write,
- * -ENOMEM, -EBADF for no file, or the type's error. A read of a byte or
- * more reports IN_ACCESS to inotify. May sleep.
+ * vector the caller cannot read or, short of the file's end, a first buffer
+ * it cannot write (`file_read_unwritable`), -ENOMEM, -EBADF for no file, or
+ * the type's error. The end check and the file's end come before that
+ * -EFAULT, as Linux's rw_verify_area and filemap_read run before any copy.
+ * A read of a byte or more reports IN_ACCESS to inotify. May sleep.
  */
 static long iov_file_read(fd_entry_t *entry, uintptr_t addr, int count, long long pos)
 {
     struct kernel_iovec local[8], *iov = local;
     struct open_file *ofd = entry->ofd;
-    uint32_t wanted = 0;
+    uint32_t wanted = 0, room = 0;
     long rc;
 
     if (count < 0 || count > IOV_MAX_LOCAL) {
@@ -13276,7 +13344,12 @@ static long iov_file_read(fd_entry_t *entry, uintptr_t addr, int count, long lon
             return -ENOMEM;
         }
     }
-    rc = iov_copy_in(iov, addr, count, &wanted, 1);
+    rc = iov_import(iov, addr, count, -1);
+    if (rc >= 0) {
+        wanted = (uint32_t)rc;
+        room = wanted ? iov_prefix(iov, count, 1) : 0;
+        rc = 0;
+    }
     if (rc == 0 && wanted > 0 && (!ofd || !ofd->vmnt)) {
         rc = -EBADF;
     } else if (rc == 0 && wanted > 0 && pos >= 0 &&
@@ -13284,9 +13357,13 @@ static long iov_file_read(fd_entry_t *entry, uintptr_t addr, int count, long lon
         rc = -EINVAL;
     } else if (rc == 0 && wanted > 0) {
         fd_ofd_lock(ofd);
-        rc = pos == -1 && rw_offset_end(entry, wanted) != 0
-                 ? -EINVAL
-                 : iov_file_elements_read(ofd, iov, count, pos);
+        if (pos == -1 && rw_offset_end(entry, wanted) != 0) {
+            rc = -EINVAL;
+        } else if (room == 0) {
+            rc = file_read_unwritable(ofd, pos == -1 ? ofd->offset : (uint64_t)pos);
+        } else {
+            rc = iov_file_elements_read(ofd, iov, count, pos);
+        }
         fd_ofd_unlock(ofd);
         if (rc > 0 && inotify_watches) {
             inotify_desc(ofd, IN_ACCESS);
