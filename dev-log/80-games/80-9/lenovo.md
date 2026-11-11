@@ -51,7 +51,7 @@ L 's=$(bootctl status | sed -n "s/^bootctl: boot.cfg: first sector \([0-9]*\),.*
 RACH2_MEASURE_SLOT=candidate RACH2_MEASURE_KERNEL=$R/release-kernel sh tools/dev/machine_identity.sh $R/identity-before.txt ssh -i krffs/rach2_demo_ed25519 -o BatchMode=yes -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no root@192.168.0.106
 ```
 
-   Passes: the release booted from its committed candidate, no trial armed; `/data` has more than 30 GiB free; both digests `KDIGEST`, and machine_identity finds the kernel in both slots (if the fallback differs, `L 'bootctl fallback'` first); `/data/crysis` holds `game`, `compat` and `saves`. The menu's read needs its 16 sectors contiguous, as `bootctl status` shows; do not go on otherwise. Note which checkpoint saves `SaveGames` lists: `default_Contact_crysis.CRYSISJMSF` is the first level's start, before the suit's reboot.
+   Passes: the release booted from its committed candidate, no trial armed; `/data` has more than 30 GiB free; both digests `KDIGEST`, and machine_identity finds the kernel in both slots (if the fallback differs, `L 'bootctl fallback'` first); `/data/crysis` holds `game`, `compat` and `saves`. The menu's read needs its 16 sectors contiguous, as `bootctl status` shows; do not go on otherwise. Note which saves `SaveGames` lists: `default_00_Contact_01m_18s.CRYSISJMSF`, checkpoint Island_01 at 78 s of play, is the owner's save before the suit's reboot, as Linux's save 07 at 1 min 17 s was. `default_Contact_crysis.CRYSISJMSF` is the game's own start checkpoint, which every `+map island`, the flybys of step 7 among them, writes again at the opening jump; it does not serve.
 3. Stage the files on the data partition and check each:
 
 ```
@@ -98,7 +98,7 @@ L 'mixer vol; dmesg | grep -E "i915: (reset|hangcheck)|wedged|vtd: fault|vm: fau
 ```
 
    Passes, 80-9.3's check: `check: loop0` to `loop3` ok on both, each at 24 frames a second or more, printed beside Linux's (umu 45.02, 46.49, 45.78, 45.66; direct 45.17, 46.54, 45.97, 45.92); `check: wined3d` and `check: fsync` ok; `crysis: result: ... ok`; the mixer at 1 (`volume.txt` in each run's directory lists any change the game made, with its time); no reset, wedge or fault. A run that writes nothing for ten minutes is ended by the script and fails; read its `game.out` before going on.
-8. 80-9.4, the suit's reboot from the checkpoint before it, through umu. `SAVE` is `default_Contact_crysis.CRYSISJMSF` when step 2 listed it; otherwise first run `L "$C save s0"` and use `default_accept_s0.CRYSISJMSF`:
+8. 80-9.4, the suit's reboot from the checkpoint before it, through umu. `SAVE` is `default_00_Contact_01m_18s.CRYSISJMSF`. `hud` loads a copy of it named `default_accept_src_hud-1`, which it removes afterwards, so the owner's save is only read; its second copy is in `/data/crysis-kept/` (SHA-256 `d6458dec...392b`). No step loads or writes a save under a name of the owner's:
 
 ```
 L "$C hud hud-1 SAVE umu" 2>&1 | tee $R/hud-1.out
