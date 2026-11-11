@@ -2870,6 +2870,30 @@ static void stats_rows(void)
     CHECK(live == before, "the last file's close frees the VM");
 }
 
+/** The rest of Linux's machine-check MSRs on the vCPU `fd`, `v`, with ten
+ * banks and MCG_CTL_P: the guest's write of MCG_CAP, which Linux has no
+ * case for; P5_MC_ADDR and P5_MC_TYPE; and a bank's CTL2 without
+ * MCG_CMCI_P, as Linux's get_msr_mce and set_msr_mce. */
+static void mce_more_rows(struct kvm_vcpu *v, int fd)
+{
+    uint64_t value;
+
+    CHECK(kvm_msr_set(v, 0x179, MCG_CTL_P | 2, 0) == KVM_MSR_UNKNOWN &&
+              v->mcg_cap == (MCG_CTL_P | 10),
+          "the guest's write of MCG_CAP is an unknown MSR's");
+    value = 1;
+    CHECK(kvm_msr_get(v, 0, &value, 0) == 0 && value == 0 && kvm_msr_get(v, 1, &value, 1) == 0 &&
+              value == 0 && kvm_msr_set(v, 0, 0, 0) == KVM_MSR_UNKNOWN,
+          "P5_MC_ADDR and P5_MC_TYPE read 0 and take no write");
+    value = 1;
+    CHECK(kvm_msr_get(v, 0x289, &value, 1) == 0 && value == 0 && set_msr(fd, 0x289, 0) == 1 &&
+              set_msr(fd, 0x289, 1) == 0 && kvm_msr_get(v, 0x289, &value, 0) == KVM_MSR_INVAL &&
+              kvm_msr_set(v, 0x289, 0, 0) == KVM_MSR_INVAL &&
+              kvm_msr_get(v, 0x280 + 10, &value, 1) == KVM_MSR_INVAL,
+          "a bank's CTL2 without MCG_CMCI_P is the caller's 0 and the guest's #GP, and past the "
+          "count is refused");
+}
+
 /**
  * The machine-check MSRs, HWCR and POWER_CTL as the caller and the guest
  * reach them, by Linux's host_initiated: MCG_CTL without MCG_CTL_P, which
@@ -2926,6 +2950,7 @@ static void mce_hwcr_rows(void)
     CHECK(kvm_msr_get(v, 0x400 + 4 * 10, &value, 1) == KVM_MSR_INVAL &&
               kvm_msr_get(v, 0x400 + 4 * 32, &value, 1) == KVM_MSR_UNKNOWN,
           "a bank past MCG_CAP's count is refused, one past KVM's 32 unknown");
+    mce_more_rows(v, fd);
     fdclose(fd);
     fdclose(vm);
 }
