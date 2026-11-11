@@ -109,11 +109,17 @@
 /* Kept the same way: the mapping was made with MAP_NORESERVE, as Linux's
  * VM_NORESERVE under overcommit_memory 0, and is never VM_PROT_ACCOUNT. */
 #define VM_PROT_NORESERVE   0x100000u
+/* Kept the same way: the region is the vDSO's data page, [vvar], which
+ * Linux maps VM_IO | VM_PFNMAP and without VM_MAYEXEC. Only the process's
+ * own accesses reach its pages: ptrace, /proc/PID/mem, process_vm_readv
+ * and the pins of devices are refused them, as Linux's get_user_pages
+ * refuses the region, and mprotect answers EACCES to PROT_EXEC. */
+#define VM_PROT_VVAR        0x200000u
 /* The bits a change of the access bits keeps. */
 #define VM_PROT_KEPT                                                                             \
     (VM_PROT_NOWRITE | VM_PROT_IO | VM_PROT_WC | VM_PROT_UC | VM_PROT_DONTFORK | VM_PROT_LOCKS | \
      VM_PROT_GUARD | VM_PROT_SEALED | VM_PROT_SECRET | VM_PROT_WIPEONFORK | VM_PROT_PKEY |       \
-     VM_PROT_ACCOUNT | VM_PROT_NORESERVE)
+     VM_PROT_ACCOUNT | VM_PROT_NORESERVE | VM_PROT_VVAR)
 
 /* The kind of a region, which /proc/PID/maps reports and the fault, fork
  * and brk paths read. */
