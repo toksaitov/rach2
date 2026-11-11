@@ -1524,7 +1524,7 @@ static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t
     ap_ch(t, '-');
     ap_xlow(t, r->end, 8);
     ap_ch(t, ' ');
-    ap_ch(t, (r->prot & VM_PROT_READ) ? 'r' : '-');
+    ap_ch(t, VM_READABLE(r->prot) ? 'r' : '-');
     ap_ch(t, (r->prot & VM_PROT_WRITE) ? 'w' : '-');
     ap_ch(t, (r->prot & VM_PROT_EXEC) ? 'x' : '-');
     ap_ch(t, maps_shared(r) ? 's' : 'p');
@@ -1642,7 +1642,7 @@ static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
     int io = (r->prot & VM_PROT_IO) || (vdso && vdso_is_data(r->file));
 
     ap_str(t, "VmFlags:");
-    ap_str(t, (r->prot & VM_PROT_READ) ? " rd" : "");
+    ap_str(t, VM_READABLE(r->prot) ? " rd" : "");
     ap_str(t, (r->prot & VM_PROT_WRITE) ? " wr" : "");
     ap_str(t, (r->prot & VM_PROT_EXEC) ? " ex" : "");
     ap_smaps_may(t, r);

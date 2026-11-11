@@ -120,7 +120,9 @@ A page Linux would not hand the pipe, as its
 .Fn get_user_pages
 refuses it, is not copied either: the vDSO's data page,
 .Li [vvar] ,
-a region of
+a page of a mapping made without
+.Dv PROT_READ
+that the process has not written, a region of
 .Xr memfd_secret 2 ,
 device memory or a page the caller cannot read ends the call, with the
 bytes before it or

@@ -106,8 +106,10 @@ int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, u
 /** Whether a pin may take the page of `mm` that holds `addr`, for writing
  * with `write`, as Linux's get_user_pages judges its region: one that
  * allows the access, by its protection and its key, and is no device
- * memory, memfd_secret region or vDSO data page. Takes no page in and does
- * not sleep. */
+ * memory, memfd_secret region or vDSO data page. A read of a region mapped
+ * without PROT_READ needs the page present and not the zero page, as
+ * Linux's fast path takes it while its slow path refuses the region. Takes
+ * no page in and does not sleep. */
 int paging_pin_allows(struct mm *mm, uintptr_t addr, int write);
 
 /** As paging_pin_range, also accepting device pages outside the frame

@@ -788,16 +788,33 @@ int vm_populate(uintptr_t start, uintptr_t end)
     return 0;
 }
 
+/** Whether a read pin may take the page at `page` of the region `vma` of
+ * `mm`: always in a region mapped with PROT_READ, and in one without it
+ * (VM_PROT_NOREAD) only a page present and not the zero page, as Linux's
+ * get_user_pages_fast takes such a page from its entry while the slow path
+ * refuses a region without VM_READ. */
+static int pin_read_allows(struct mm *mm, const vma_t *vma, uintptr_t page)
+{
+    pte_t *e;
+
+    if (VM_READABLE(vma->prot)) {
+        return 1;
+    }
+    e = user_pte(mm->dir, page);
+    return e && (*e & PTE_P) && !PTE_IS_ZERO(*e);
+}
+
 /** Whether the region allows the access and, with `io`, device memory; a
  * region of memfd_secret and the vDSO's data page never do, as Linux's
- * get_user_pages refuses both. */
+ * get_user_pages refuses both, and a read of a region mapped without
+ * PROT_READ needs its page there already (`pin_read_allows`). */
 static int pin_allows(struct mm *mm, uintptr_t page, int write, int io)
 {
     const vma_t *vma = vm_find(&mm->vm, page);
 
     return vma && (io || !(vma->prot & VM_PROT_IO)) &&
            !(vma->prot & (VM_PROT_SECRET | VM_PROT_VVAR)) && region_allows(vma, write) &&
-           pkey_allows(mm, vma, write);
+           (write || pin_read_allows(mm, vma, page)) && pkey_allows(mm, vma, write);
 }
 
 int paging_pin_allows(struct mm *mm, uintptr_t addr, int write)

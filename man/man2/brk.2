@@ -354,6 +354,17 @@ Write permission also grants read permission, since an x86 page table has no wri
 .Dv PROT_NONE
 (zero) denies access.
 Execute permission also grants read permission.
+A mapping made or changed with write or execute but without
+.Dv PROT_READ
+is still marked unreadable, as Linux keeps it without
+.Dv VM_READ :
+.Pa /proc/PID/maps
+shows no
+.Ql r ,
+.Xr process_vm_readv 2
+cannot read it, and
+.Xr vmsplice 2
+takes a page of it only once the process has written the page.
 On i686, whose page tables have no execute bit, it is not checked
 separately from read on a fault; on x86-64 a page mapped without
 .Dv PROT_EXEC
