@@ -27,6 +27,18 @@
  */
 int init_mouse(void);
 
+struct evdev;
+
+/**
+ * Register the port's main input device with `name`, the psmouse protocol
+ * number `product` and EVDEV_KEY_BYTES of `keys`. During a protocol switch
+ * this consumes its reserved device and cannot fail. At boot or reconnect
+ * it returns NULL when every slot is taken. Only the main device uses
+ * this call; a pad's stick registers separately. Called inside the command
+ * lock or during bring-up, before the main device reports.
+ */
+struct evdev *ps2mouse_register(const char *name, uint16_t product, const uint8_t *keys);
+
 /* The reply by which the mouse acknowledges a command or its argument. */
 #define PS2MOUSE_ACK 0xFA
 

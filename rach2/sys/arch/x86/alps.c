@@ -2542,9 +2542,9 @@ static int register_pad(void)
     uint8_t keys[EVDEV_KEY_BYTES];
 
     k_memset(keys, 0, sizeof(keys));
-    pad = evdev_register(priv.flags & F_DUALPOINT ? "AlpsPS/2 ALPS DualPoint TouchPad"
-                                                  : "AlpsPS/2 ALPS GlidePoint",
-                         EVDEV_BUS_I8042, PSMOUSE_VENDOR, PSMOUSE_ALPS, keys);
+    pad = ps2mouse_register(priv.flags & F_DUALPOINT ? "AlpsPS/2 ALPS DualPoint TouchPad"
+                                                     : "AlpsPS/2 ALPS GlidePoint",
+                            PSMOUSE_ALPS, keys);
     if (!pad) {
         return -1;
     }

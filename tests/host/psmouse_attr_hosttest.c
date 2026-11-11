@@ -9,6 +9,7 @@
  * host-deps: rach2/sys/evdev.c rach2/sys/mouse.c rach2/sys/arch/x86/smbios.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/park_host.c
  *
  * The driver's files are included whole, so that their static state is
  * reachable. The auxiliary device is a mouse or an Elantech pad. The mouse
@@ -41,6 +42,10 @@
 
 int printf(const char *format, ...);
 int strcmp(const char *a, const char *b);
+
+int park_run(void (*fn)(void));
+int park_resume(void);
+void park(void);
 
 static int fails;
 
@@ -705,6 +710,14 @@ static void drop_files(int port, int of_protocol)
     n_files = n;
 }
 
+/** Remove the captured files and callbacks with the guest's port. */
+void evdev_sysfs_serio_remove(int port)
+{
+    drop_files(port, 0);
+    drop_files(port, 1);
+    port_driver[port] = NULL;
+}
+
 void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
 {
     port_driver[port] = add;
@@ -769,16 +782,21 @@ static int reads(int port, const char *name, const char *text)
     return 1;
 }
 
-/** Write `text`, no NUL after it, to the file `name` of `port`; what the
- * store returned. */
-static int32_t store(int port, const char *name, const char *text)
+/** Write all `len` bytes of `text` to a captured attribute. */
+static int32_t store_bytes(int port, const char *name, const char *text, uint32_t len)
 {
     struct file *f = file_of(port, name);
 
     if (!f) {
         return -ENOENT;
     }
-    return f->attr.store(f->obj, f->arg, text, (uint32_t)k_strlen(text));
+    return f->attr.store(f->obj, f->arg, text, len);
+}
+
+/** Write `text`, without its NUL, to the file `name` of `port`. */
+static int32_t store(int port, const char *name, const char *text)
+{
+    return store_bytes(port, name, text, (uint32_t)k_strlen(text));
 }
 
 /* The Synaptics driver, a stub: a pad with a pass-through port when the row
@@ -993,6 +1011,16 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return cond(arg) ? 0 : -EINTR;
 }
 
+/** Sleep a competing callback on its own stack until the command is free. */
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    while (!cond(arg)) {
+        park();
+    }
+    return 0;
+}
+
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     k_memcpy((void *)dst, src, n);
@@ -1030,6 +1058,50 @@ static int count_named(const char *name)
         evdev_close(&e);
     }
     return count;
+}
+
+/* A nonblocking event descriptor and the records its reads return. */
+struct opened {
+    fd_entry_t e;
+    struct open_file ofd;
+};
+struct event {
+    unsigned long sec, usec;
+    uint16_t type, code;
+    int32_t value;
+};
+
+/** Open the current event device of `phys`; return 0, or -ENODEV. */
+static int open_phys(struct opened *o, const char *phys)
+{
+    struct evdev_desc d;
+    int n;
+
+    k_memset(o, 0, sizeof(*o));
+    o->ofd.status_flags = OFD_NONBLOCK;
+    o->e.ofd = &o->ofd;
+    for (n = 0; n < EVDEV_MAX; n++) {
+        if (evdev_snapshot(n, &d) && strcmp(d.phys, phys) == 0) {
+            return evdev_open(&o->e, n);
+        }
+    }
+    return -ENODEV;
+}
+
+/** Whether a packet read from `o` contains the event specified. */
+static int has_event(struct opened *o, uint16_t type, uint16_t code, int32_t value)
+{
+    struct event events[16];
+    int32_t bytes;
+    int n;
+
+    bytes = evdev_read(&o->e, (char *)events, sizeof(events));
+    for (n = 0; bytes > 0 && n < bytes / (int32_t)sizeof(events[0]); n++) {
+        if (events[n].type == type && events[n].code == code && events[n].value == value) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static const uint8_t no_system[] = {127, 4, 0, 0, 0, 0};
@@ -1322,6 +1394,8 @@ static void protocol_rows(void)
     CHECK("a name psmouse does not know is refused", store(1, "protocol", "mouse") == -EINVAL);
     CHECK("so is one Rach2 has no detect for",
           store(1, "protocol", "lifebook") == -EINVAL && store(1, "protocol", "PS2++") == -EINVAL);
+    CHECK("a protocol write keeps its embedded NUL in the length",
+          store_bytes(1, "protocol", "bare\0junk", 9) == -EINVAL);
     CHECK("a refused name leaves the protocol", protocol == PROTO_IMEX && aux_mouse.reporting);
     CHECK("the alias imps is taken", store(1, "protocol", "imps") == 4);
     CHECK("and the mouse speaks ImPS/2",
@@ -1367,14 +1441,32 @@ static void switch_rows(void)
  * their names find again. */
 static void detect_rows(void)
 {
+    static const uint8_t thinking[] = {0xF5, 0xF3, 10, 0xE8, 0,    0xF3, 20,   0xF3, 60,   0xF3,
+                                       40,   0xF3, 20, 0xF3, 20,   0xF3, 60,   0xF3, 40,   0xF3,
+                                       20,   0xF3, 20, 0xF2, 0xF3, 100,  0xE8, 3,    0xE6, 0xF4};
+    static const uint8_t genius[] = {0xF5, 0xE8, 3,    0xE6, 0xE6, 0xE6, 0xE9,
+                                     0xF3, 100,  0xE8, 3,    0xE6, 0xF4};
+    struct opened o;
+
     model_reset(KIND_MOUSE, 0);
     aux_mouse.thinking = 1;
     CHECK("a ThinkingMouse is found first", init_mouse() == 0 && protocol == PROTO_THINKPS);
     CHECK("protocol reads ThinkPS/2", reads(1, "protocol", "ThinkPS/2\n"));
     CHECK("its device is ThinkPS/2 Kensington ThinkingMouse",
           count_named("ThinkPS/2 Kensington ThinkingMouse") == 1);
-    CHECK("thinkps finds it again",
+    CHECK("bare leaves the detected ThinkingMouse protocol",
+          store(1, "protocol", "bare") == 4 && protocol == PROTO_PS2);
+    n_took = 0;
+    CHECK("thinkps detects it again",
           store(1, "protocol", "thinkps") == 7 && protocol == PROTO_THINKPS);
+    CHECK("the forced detect sends the nine rates and reads the ID",
+          took_bytes(thinking, sizeof(thinking)));
+    CHECK("the new ThinkingMouse device opens", open_phys(&o, "isa0060/serio1/input0") == 0);
+    irq_byte(0x48);
+    irq_byte(1);
+    irq_byte(0);
+    CHECK("its overflow bit supplies the high bit of X", has_event(&o, EV_REL, REL_X, 129));
+    evdev_close(&o.e);
 
     model_reset(KIND_MOUSE, 0);
     aux_mouse.genius = 1;
@@ -1382,7 +1474,114 @@ static void detect_rows(void)
     CHECK("protocol reads GenPS/2", reads(1, "protocol", "GenPS/2\n"));
     CHECK("its device is GenPS/2 Genius Mouse, of four bytes",
           count_named("GenPS/2 Genius Mouse") == 1 && packet_size == 4);
-    CHECK("genius finds it again", store(1, "protocol", "genius") == 6 && protocol == PROTO_GENPS);
+    CHECK("bare leaves the detected Genius protocol",
+          store(1, "protocol", "bare") == 4 && protocol == PROTO_PS2);
+    n_took = 0;
+    CHECK("genius detects it again",
+          store(1, "protocol", "genius") == 6 && protocol == PROTO_GENPS);
+    CHECK("the forced detect sends three scalings and reads status",
+          took_bytes(genius, sizeof(genius)));
+    CHECK("the new Genius device opens", open_phys(&o, "isa0060/serio1/input0") == 0);
+    irq_byte(0x08);
+    irq_byte(0);
+    irq_byte(0);
+    irq_byte(0xff);
+    CHECK("its fourth byte reports a wheel detent", has_event(&o, EV_REL, REL_WHEEL, 1));
+    evdev_close(&o.e);
+}
+
+/** Keep each replaced device open until no replacement slot remains, on
+ * the auxiliary port or its pass-through guest. */
+static void exhaustion_rows(int pass_through)
+{
+    struct opened held[EVDEV_MAX];
+    struct evdev *old;
+    struct event event;
+    static const uint8_t motion[4] = {0x08, 7, 0, 0};
+    int port = pass_through ? EVDEV_SERIO_PASS_THROUGH : 1;
+    int i, n = 0, before, rc;
+    const char *next;
+
+    model_reset(KIND_MOUSE, 0);
+    synaptics_answer = pt_present = pass_through;
+    aux_mouse.wheel = pt_mouse.wheel = ID_IMPS;
+    CHECK("the exhaustion row starts its device", init_mouse() == 0);
+    for (i = 0; i < EVDEV_MAX; i++) {
+        rc = open_phys(&held[i], pass_through ? GUEST_PHYS : "isa0060/serio1/input0");
+        CHECK("the current device opens before replacement", rc == 0);
+        if (rc < 0) {
+            break;
+        }
+        n++;
+        old = pass_through ? guest.dev : mouse_dev;
+        before = pass_through ? guest.protocol : protocol;
+        next = before == PROTO_PS2 ? "imps" : "bare";
+        rc = store(port, "protocol", next);
+        if (i + 1 < EVDEV_MAX) {
+            CHECK("a replacement with a free slot succeeds", rc == 4);
+            CHECK("the old descriptor reports removal",
+                  evdev_read(&held[i].e, (char *)&event, sizeof(event)) == -ENODEV);
+        } else {
+            CHECK("a full table refuses the replacement", rc == -ENOMEM);
+            CHECK("the working device and protocol survive the refusal",
+                  old == (pass_through ? guest.dev : mouse_dev) &&
+                      before == (pass_through ? guest.protocol : protocol));
+            if (pass_through) {
+                ps2mouse_guest_packet(motion);
+            } else {
+                irq_byte(motion[0]);
+                irq_byte(motion[1]);
+                irq_byte(motion[2]);
+                if (packet_size == 4) {
+                    irq_byte(motion[3]);
+                }
+            }
+            CHECK("the last descriptor still reads motion", has_event(&held[i], EV_REL, REL_X, 7));
+            CHECK("reporting and the files remain", aux_mouse.reporting &&
+                                                        (!pass_through || pt_mouse.reporting) &&
+                                                        file_of(port, "protocol") != NULL);
+        }
+    }
+    for (i = 0; i < n; i++) {
+        evdev_close(&held[i].e);
+    }
+    CHECK("closing the old descriptors permits another switch",
+          store(port, "protocol",
+                (pass_through ? guest.protocol : protocol) == PROTO_PS2 ? "imps" : "bare") == 4);
+}
+
+/** A full table must preserve a touchpad too; one spare must suffice for
+ * switching away and back after the old pad's descriptor closes. */
+static void pad_exhaustion_rows(void)
+{
+    struct evdev *reserved[EVDEV_MAX], *old;
+    struct opened o;
+    int n = 0, i;
+
+    model_reset(KIND_PAD, V4_CLICKPAD);
+    CHECK("a pad starts before exhausting the table", init_mouse() == 0 && etd_pad);
+    CHECK("the pad's descriptor opens", open_phys(&o, "isa0060/serio1/input0") == 0);
+    while (n < EVDEV_MAX && (reserved[n] = evdev_reserve()) != NULL) {
+        n++;
+    }
+    old = etd_pad;
+    CHECK("a pad with no replacement slot remains registered",
+          store(1, "protocol", "bare") == -ENOMEM && etd_pad == old && protocol == PROTO_ELANTECH &&
+              file_of(1, "reg_07") != NULL && reporting);
+    CHECK("the reservations filled every spare slot", n == EVDEV_MAX - 1);
+    if (n) {
+        evdev_unregister(reserved[--n]);
+    }
+    CHECK("one spare suffices for switching a pad to a mouse",
+          store(1, "protocol", "bare") == 4 && mouse_dev && !etd_pad);
+    CHECK("switching back without a spare keeps the mouse",
+          store(1, "protocol", "elantech") == -ENOMEM && protocol == PROTO_PS2 && mouse_dev);
+    evdev_close(&o.e);
+    CHECK("closing the old pad permits its protocol again",
+          store(1, "protocol", "elantech") == 8 && etd_pad && protocol == PROTO_ELANTECH);
+    for (i = 0; i < n; i++) {
+        evdev_unregister(reserved[i]);
+    }
 }
 
 /** The files of a Synaptics pad's pass-through port, serio2, and the
@@ -1421,6 +1620,14 @@ static void guest_rows(void)
                                 pt_mouse.rate == 80 && pt_mouse.reporting);
     CHECK("the pad's rate goes through Synaptics' set_rate",
           store(1, "rate", "60") == 2 && synaptics_rate == 60 && reads(1, "rate", "40\n"));
+}
+
+/** The guest's protocol switches, refusals and removal with its parent. */
+static void guest_switch_rows(void)
+{
+    CHECK("the guest refuses an embedded NUL and its suffix",
+          store_bytes(EVDEV_SERIO_PASS_THROUGH, "protocol", "bare\0junk", 9) == -EINVAL &&
+              guest.protocol == PROTO_IMPS);
     CHECK("the guest does not take synaptics",
           store(EVDEV_SERIO_PASS_THROUGH, "protocol", "synaptics") == -EINVAL);
     CHECK("bare switches it to PS/2", store(EVDEV_SERIO_PASS_THROUGH, "protocol", "bare") == 4 &&
@@ -1436,6 +1643,14 @@ static void guest_rows(void)
     CHECK("a write while the guest waits for its reconnect is -ENODEV",
           store(EVDEV_SERIO_PASS_THROUGH, "rate", "40") == -ENODEV);
     guest.active = 1;
+    CHECK("switching the pad to bare removes its child port's callbacks",
+          store(1, "protocol", "bare") == 4 && !guest.dev &&
+              !file_of(EVDEV_SERIO_PASS_THROUGH, "protocol") &&
+              !port_driver[EVDEV_SERIO_PASS_THROUGH]);
+    CHECK("switching back recreates the guest's files",
+          store(1, "protocol", "synaptics") == 9 && guest.dev &&
+              file_of(EVDEV_SERIO_PASS_THROUGH, "protocol") &&
+              port_driver[EVDEV_SERIO_PASS_THROUGH] == guest_files);
 }
 
 /** Whether reg_10 reads 0x5b. */
@@ -1539,6 +1754,61 @@ static void elantech_switch_rows(void)
     CHECK("its settings Linux's again", reads(1, "paritycheck", "0x01\n") && regs[0x07] == 0x01);
 }
 
+/* An Elantech callback that has entered before its files are removed. */
+static struct file waiting_file;
+static int waiting_kind;
+static int32_t waiting_result;
+
+/** Enter the saved callback, whose command wait parks this call. */
+static void waiting_access(void)
+{
+    char buf[32];
+
+    if (waiting_kind == 0) {
+        waiting_result =
+            waiting_file.attr.show(waiting_file.obj, waiting_file.arg, buf, sizeof(buf));
+    } else {
+        waiting_result = waiting_file.attr.store(waiting_file.obj, waiting_file.arg, "5b", 2);
+    }
+}
+
+/** Resume a read, register write and setting write after a switch removed
+ * their protocol; in the last case it has also bound a new Elantech pad. */
+static void elantech_wait_rows(void)
+{
+    static const uint8_t resumed[] = {0xF5, 0xF4};
+    int kind, done;
+    uint8_t reg, debug;
+
+    for (kind = 0; kind < 3; kind++) {
+        model_reset(KIND_PAD, V4_CLICKPAD);
+        CHECK("the concurrent row starts an Elantech pad", init_mouse() == 0 && etd_pad);
+        waiting_file = *file_of(1, kind == 2 ? "debug" : "reg_10");
+        waiting_kind = kind;
+        waiting_result = 0;
+        CHECK("a protocol change takes the command lock", ps2mouse_change_begin() == 0);
+        done = park_run(waiting_access);
+        CHECK("the attribute callback waits for the switch", done == 0 && cmd_busy);
+        CHECK("the switch removes Elantech", aux_set_protocol("bare", 4) == 0);
+        if (kind == 2) {
+            CHECK("a new Elantech protocol binds before the waiter wakes",
+                  aux_set_protocol("elantech", 8) == 0 && etd_pad);
+        }
+        ps2mouse_change_end(0);
+        reg = regs[0x10];
+        debug = etd_info.debug;
+        n_took = 0;
+        if (!done) {
+            CHECK("the waiting callback returns after the switch", park_resume() == 1);
+        }
+        CHECK("the old callback fails with ENODEV", waiting_result == -ENODEV);
+        CHECK("it sends no Elantech command to the new protocol",
+              took_bytes(resumed, sizeof(resumed)) && regs[0x10] == reg && etd_info.debug == debug);
+        CHECK("the port is reporting with its command lock free",
+              !cmd_busy && state == STATE_ACTIVE && reporting);
+    }
+}
+
 /** The rate's restore of register 0x07 on firmware 0x381f17, and version
  * 1's mode bits forced on a write. */
 static void elantech_other_rows(void)
@@ -1578,10 +1848,16 @@ int main(void)
     switch_rows();
     detect_rows();
     guest_rows();
+    guest_switch_rows();
+    exhaustion_rows(0);
+    exhaustion_rows(1);
+    pad_exhaustion_rows();
     elantech_rows();
     elantech_write_rows();
     elantech_switch_rows();
     elantech_other_rows();
+    elantech_wait_rows();
+    model_reset(KIND_MOUSE, 0);
     if (fails == 0) {
         printf("psmouse-attr-test: pass\n");
     }

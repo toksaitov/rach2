@@ -157,8 +157,8 @@ struct evdev_slot {
 };
 
 struct evdev {
-    int used;             /* the slot is taken, by a device or by the opens of one gone */
-    int gone;             /* unregistered: no node, and its opens read -ENODEV */
+    int used;             /* reserved, registered, or held by opens of a device gone */
+    int gone;             /* reserved or unregistered: no node; opens read -ENODEV */
     unsigned int flags;   /* EVDEV_SCAN, EVDEV_KEYBOARD */
     unsigned int leds;    /* the LEDs lit, a bit 1 << LED_* each: a keyboard's
                            * first three as the console has them, the others
@@ -254,8 +254,7 @@ static void copy_text(char *out, const char *s, uint32_t cap)
     out[i] = '\0';
 }
 
-struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor, uint16_t product,
-                             const uint8_t *keys)
+struct evdev *evdev_reserve(void)
 {
     struct evdev *dev = NULL;
     uint32_t flags;
@@ -271,21 +270,42 @@ struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor
     if (dev) {
         k_memset(dev, 0, sizeof(*dev));
         dev->used = 1;
+        dev->gone = 1;
+        wait_queue_init(&dev->wq);
+    }
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    return dev;
+}
+
+struct evdev *evdev_register_reserved(struct evdev *dev, const char *name, uint16_t bustype,
+                                      uint16_t vendor, uint16_t product, const uint8_t *keys)
+{
+    uint32_t flags;
+
+    if (!dev) {
+        dev = evdev_reserve();
+    }
+    if (dev) {
+        flags = spin_lock_irqsave(&evdev_lock);
         copy_text(dev->name, name, sizeof(dev->name));
         dev->texts = name ? TEXT_NAME : 0;
         dev->id[0] = bustype;
         dev->id[1] = vendor;
         dev->id[2] = product;
         k_memcpy(dev->keys, keys, EVDEV_KEY_BYTES);
-        wait_queue_init(&dev->wq);
         dev->gen = ++registered_count;
+        dev->gone = 0;
         change_count++;
-    }
-    spin_unlock_irqrestore(&evdev_lock, flags);
-    if (dev) {
+        spin_unlock_irqrestore(&evdev_lock, flags);
         wq_wake_all(&change_wq);
     }
     return dev;
+}
+
+struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor, uint16_t product,
+                             const uint8_t *keys)
+{
+    return evdev_register_reserved(NULL, name, bustype, vendor, product, keys);
 }
 
 void evdev_describe(struct evdev *dev, const char *phys, unsigned int flags)

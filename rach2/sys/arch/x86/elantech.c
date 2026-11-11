@@ -160,8 +160,9 @@ static const uint8_t etd_reg_numbers[] = {0x07, 0x10, 0x11, 0x20, 0x21,
 #define REG_21   4
 static uint8_t etd_regs[ETD_REGS];
 
-static struct evdev *etd_pad; /* the touchpad's event device */
-static struct evdev *etd_tp;  /* the pointing stick's, or NULL */
+static struct evdev *etd_pad;   /* the touchpad's event device */
+static struct evdev *etd_tp;    /* the pointing stick's, or NULL */
+static uint32_t etd_generation; /* changes when a protocol's callbacks expire */
 static unsigned int etd_single_finger_reports;
 static struct finger_pos etd_mt[MAX_FINGERS];
 
@@ -710,8 +711,7 @@ static int etd_register_pad(void)
     int buttonpad = info->hw_version >= 3 && etd_is_buttonpad();
 
     k_memset(keys, 0, sizeof(keys));
-    etd_pad = evdev_register("ETPS/2 Elantech Touchpad", EVDEV_BUS_I8042, PSMOUSE_VENDOR,
-                             PSMOUSE_ELANTECH, keys);
+    etd_pad = ps2mouse_register("ETPS/2 Elantech Touchpad", PSMOUSE_ELANTECH, keys);
     if (!etd_pad) {
         return -1;
     }
@@ -1358,6 +1358,7 @@ int elantech_reconnect(void)
 
 void elantech_disconnect(void)
 {
+    etd_generation++;
     if (etd_pad) {
         evdev_unregister(etd_pad);
         etd_pad = 0;
@@ -1492,7 +1493,8 @@ static uint8_t *etd_setting(int arg)
  * A file of the pad, as Linux's `elantech_show_int_attr` writes it: a
  * register read from the pad, or a setting, as "0x" and two hex digits and
  * a newline; a register that does not read is "0xffffffff", Linux's -1.
- * The read runs with the pad disabled, as a write's does.
+ * The read runs with the pad disabled, as a write's does; an expired
+ * callback returns -ENODEV after a protocol switch.
  */
 static int32_t show_etd(void *obj, int arg, char *buf, uint32_t cap)
 {
@@ -1501,9 +1503,17 @@ static int32_t show_etd(void *obj, int arg, char *buf, uint32_t cap)
     uint8_t v;
     int rc;
 
-    (void)obj;
+    if ((uintptr_t)obj != etd_generation || !etd_pad) {
+        return -ENODEV;
+    }
     if (arg < ETD_REGS) {
         rc = ps2mouse_change_begin();
+        if ((uintptr_t)obj != etd_generation || !etd_pad) {
+            if (rc == 0) {
+                ps2mouse_change_end(0);
+            }
+            return -ENODEV;
+        }
         if (rc == 0) {
             rc = etd_read_reg(etd_reg_numbers[arg], &etd_regs[arg]);
             ps2mouse_change_end(rc);
@@ -1533,7 +1543,8 @@ out:
  * a byte in hex, which a register takes on the pad and keeps when the pad
  * took it, version 1 with absolute mode and four-byte packets forced on,
  * and a setting takes as it is. The write is answered whole whether or not
- * the pad took it, as Linux answers it.
+ * the pad took it, as Linux answers it. An expired callback returns
+ * -ENODEV without accessing the new protocol.
  */
 static int32_t store_etd(void *obj, int arg, const char *buf, uint32_t len)
 {
@@ -1541,12 +1552,18 @@ static int32_t store_etd(void *obj, int arg, const char *buf, uint32_t len)
     uint8_t reg;
     int rc;
 
-    (void)obj;
+    if ((uintptr_t)obj != etd_generation || !etd_pad) {
+        return -ENODEV;
+    }
     for (n = 0; n < len && buf[n]; n++) { /* Linux's store reads a string */
     }
     rc = ps2mouse_change_begin();
     if (rc < 0) {
         return rc;
+    }
+    if ((uintptr_t)obj != etd_generation || !etd_pad) {
+        ps2mouse_change_end(0);
+        return -ENODEV;
     }
     rc = ps2mouse_parse_uint(buf, n, 16, 255, &v);
     if (rc == 0 && arg < ETD_REGS) {
@@ -1576,7 +1593,7 @@ int elantech_sysfs_add(int dir)
         attr.mode = 0644u;
         attr.show = show_etd;
         attr.store = store_etd;
-        h = sysfs_add_attr(dir, &attr, 0, i);
+        h = sysfs_add_attr(dir, &attr, (void *)(uintptr_t)etd_generation, i);
         if (h < 0) {
             return h;
         }

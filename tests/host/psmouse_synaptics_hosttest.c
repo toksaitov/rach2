@@ -530,6 +530,21 @@ static void drop_files(int port, int of_protocol)
     n_files = n;
 }
 
+/** Remove the guest's captured files and callbacks with its port. */
+void evdev_sysfs_serio_remove(int port)
+{
+    drop_files(port, 0);
+    drop_files(port, 1);
+    port_driver[port] = NULL;
+}
+
+/** This model has no competing command caller. */
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    return cond(arg) ? 0 : -EINTR;
+}
+
 void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
 {
     port_driver[port] = add;
