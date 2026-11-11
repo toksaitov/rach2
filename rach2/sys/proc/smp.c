@@ -536,12 +536,34 @@ void smp_kernel_mapping_changed(void)
     this_cpu()->kernel_gen = ++kernel_gen;
 }
 
-/* How long a stop waits for each processor asked to take it: one with its
- * interrupts off takes it when it next turns them on or spins in a lock,
- * and one that never does, a processor stuck, is left after a second, as
- * Linux's panic leaves one. */
-#define STOP_WAIT_US 1000000u
+/* How long a stop waits for the processors asked to take it by the
+ * interprocessor interrupt, which one with its interrupts off takes when it
+ * next turns them on or spins in a lock; and then for those sent the NMI,
+ * as Linux's `native_stop_other_cpus` waits (arch/x86/kernel/smp.c). */
+#define STOP_WAIT_US     1000000u
+#define STOP_NMI_WAIT_US 10000u
 
+/** Whether a processor of those `asked` marks has not yet stopped. */
+static int stop_pending(const int *asked)
+{
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        if (asked[c] && !cpu_table[c].stopped) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * The stop is Linux's: the interrupt to every other processor, a second's
+ * wait for all, then a non-maskable interrupt to each still running, which
+ * reaches one spinning with its interrupts off (`smp_stop_nmi`), and 10 ms
+ * more; a processor stuck past both, as one whose APIC no longer answers, is
+ * left. Nothing is logged: a processor that did not stop may hold the log's
+ * lock.
+ */
 void smp_stop_others(void)
 {
     int me = (int)arch_cpu_id();
@@ -556,12 +578,33 @@ void smp_stop_others(void)
             platform_cpu_ipi(c);
         }
     }
+    for (waited = 0; stop_pending(asked) && waited < STOP_WAIT_US; waited += 10u) {
+        k_udelay(10);
+    }
+    if (!stop_pending(asked)) {
+        return;
+    }
     for (c = 0; c < NR_CPUS; c++) {
-        for (waited = 0; asked[c] && !cpu_table[c].stopped && waited < STOP_WAIT_US;
-             waited += 10u) {
-            k_udelay(10);
+        if (asked[c] && !cpu_table[c].stopped) {
+            platform_cpu_nmi(c);
         }
     }
+    for (waited = 0; stop_pending(asked) && waited < STOP_NMI_WAIT_US; waited += 10u) {
+        k_udelay(10);
+    }
+}
+
+int smp_stop_nmi(void)
+{
+    struct percpu *cpu = this_cpu();
+
+    if (!cpu->stop_request) {
+        return 0;
+    }
+    cpu->online = 0;
+    cpu->stopped = 1;
+    arch_stop();
+    return 1;
 }
 
 /**

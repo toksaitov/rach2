@@ -132,4 +132,9 @@ int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu));
  * `smp_ipi` (proc/smp.h). */
 void platform_cpu_ipi(int cpu);
 
+/** Send processor `cpu` a non-maskable interrupt, for a stop it did not take
+ * by the interprocessor interrupt (`smp_stop_others`); its handler is
+ * arch/x86/isr.c's, which takes the stop (`smp_stop_nmi`). */
+void platform_cpu_nmi(int cpu);
+
 #endif /* _PLATFORM_H_ */

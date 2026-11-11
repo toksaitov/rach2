@@ -303,3 +303,8 @@ void platform_cpu_ipi(int cpu)
 {
     lapic_send_ipi(cpu_apic[cpu], IPI_VECTOR);
 }
+
+void platform_cpu_nmi(int cpu)
+{
+    lapic_send_nmi(cpu_apic[cpu]);
+}
