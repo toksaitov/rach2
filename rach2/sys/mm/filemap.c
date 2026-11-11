@@ -753,30 +753,36 @@ struct vm_file *filemap_anon_shared(void)
     return &m->vf;
 }
 
+/** What `filemap_shmem_cut` unmaps: the pages of `sh` from `first`. */
+struct shmem_cut {
+    const struct shmem *sh;
+    uint32_t first;
+};
+
+/** The `paging_zap_where` match of `filemap_shmem_cut`: the part of the
+ * region `r` that maps the cut pages of `arg`, a `struct shmem_cut`. */
+static int shmem_cut_match(const vma_t *r, void *arg, uintptr_t *lo, uintptr_t *hi)
+{
+    const struct shmem_cut *c = arg;
+    uintptr_t pages = (r->end - r->start) / PAGE_SIZE;
+
+    if (!r->file || (r->file->share != filemap_share && r->file->share != filemap_share_disk) ||
+        ((const struct filemap *)r->file)->sh != c->sh ||
+        (r->pgoff < c->first && pages <= c->first - r->pgoff)) {
+        return 0;
+    }
+    *lo = r->pgoff < c->first ? r->start + (uintptr_t)(c->first - r->pgoff) * PAGE_SIZE : r->start;
+    *hi = r->end;
+    return 1;
+}
+
 void filemap_shmem_cut(struct shmem *sh, uint32_t first)
 {
-    process_t *p;
-    const vma_t *r;
+    struct shmem_cut c;
 
-    for (p = proc_list; p; p = p->next) {
-        const vm_space_t *vm = p->mm ? &p->mm->vm : NULL;
-
-        for (r = vm ? vm_first(vm) : NULL; r; r = vm_next(r)) {
-            uintptr_t pages = (r->end - r->start) / PAGE_SIZE;
-            uintptr_t from;
-
-            if (!r->file ||
-                (r->file->share != filemap_share && r->file->share != filemap_share_disk) ||
-                ((const struct filemap *)r->file)->sh != sh ||
-                (r->pgoff < first && pages <= first - r->pgoff)) {
-                continue;
-            }
-            from =
-                r->pgoff < first ? r->start + (uintptr_t)(first - r->pgoff) * PAGE_SIZE : r->start;
-            mmn_notify(p->mm, MMN_TRUNCATE, from, r->end);
-            unmap_user_range(p->mm->dir, from, r->end);
-        }
-    }
+    c.sh = sh;
+    c.first = first;
+    paging_zap_where(shmem_cut_match, &c);
 }
 
 int filemap_holds(const void *node)
