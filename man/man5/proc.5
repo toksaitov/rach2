@@ -1057,7 +1057,9 @@ and the three
 .Pa kernel/hung_task_check_interval_secs ,
 0,
 .Pa kernel/hung_task_check_count ,
-2147483647, and
+32768 on i686 and 4194304 on x86-64, Linux's
+.Dv PID_MAX_LIMIT ,
+and
 .Pa kernel/hung_task_warnings ,
 10, as
 .Xr lockup 7
@@ -2313,6 +2315,8 @@ for
 .Ql futex_wait_multiple ,
 .Ql futex_lock_pi ,
 .Ql do_wait ,
+.Ql wait_for_vfork_done ,
+.Ql de_thread ,
 .Ql hrtimer_nanosleep ,
 .Ql do_cpu_nanosleep ,
 for a sleep resumed after a stop

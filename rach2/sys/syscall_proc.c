@@ -2116,7 +2116,7 @@ static int32_t exec_one_thread(void)
                 signal_post_thread(t, SIGKILL, &info);
             }
         }
-        (void)wq_wait_event_nointr(&tg->gone, exec_alone, tg);
+        (void)wq_wait_event_killable(&tg->gone, exec_alone, tg, "de_thread");
         tg->exec_task = NULL;
     }
     return 0;
@@ -2650,7 +2650,7 @@ static int vfork_done(void *arg)
  */
 void proc_vfork_wait(uint32_t pid)
 {
-    (void)wq_wait_event_nointr(&vfork_wq, vfork_done, &pid);
+    (void)wq_wait_event_killable(&vfork_wq, vfork_done, &pid, "wait_for_vfork_done");
 }
 
 void proc_vfork_release(process_t *p)

@@ -318,6 +318,9 @@ struct process {
      * which /proc reports as the state D and counts as blocked; a kernel
      * thread's idle wait (`wq_wait_event_idle`) is not marked. */
     uint32_t uninterruptible;
+    /* Whether that sleep ends on SIGKILL (`wq_wait_event_killable`), which
+     * the hung-task detector does not report. */
+    uint32_t killable;
     /* The frame allocator refused this thread a user page since its last
      * page fault began: the fault is one of memory, not of the address. */
     uint32_t frame_refused;
