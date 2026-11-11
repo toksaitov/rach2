@@ -3931,12 +3931,15 @@ static void start_audio(void)
 
 /**
  * Start the network unless `rach2.nonet` is given: the wired card, the
- * network console with `rach2.netconsole`, then the simulated radios and
- * the ath9k card, which needs the wireless registry, logging what each start
- * found.
+ * network console's targets with `netconsole=` and its frames with
+ * `rach2.netconsole`, then the simulated radios and the ath9k card, which
+ * needs the wireless registry, logging what each start found. Of several
+ * `netconsole=`, the last is read, as Linux's `option_setup` keeps the last
+ * one it is called with (drivers/net/netconsole.c).
  */
 static void start_network(void)
 {
+    static char targets[BOOT_CMDLINE_MAX];
     int radios;
 
     if (kcmdline_has("rach2.nonet")) {
@@ -3946,7 +3949,11 @@ static void start_network(void)
     klog(KLOG_INFO, "net", "started");
     if (init_network()) {
         klog(KLOG_INFO, "net", "ready: %s", net_status());
-        if (kcmdline_has("rach2.netconsole")) {
+        if (kcmdline_count("netconsole") > 0 &&
+            kcmdline_value_nth("netconsole", kcmdline_count("netconsole") - 1, targets,
+                               sizeof(targets))) {
+            (void)netconsole_setup(targets, kcmdline_has("rach2.netconsole"));
+        } else if (kcmdline_has("rach2.netconsole")) {
             netconsole_enable();
         }
         net_print_info();
