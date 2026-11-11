@@ -1858,7 +1858,7 @@ int paging_copy_frame(uintptr_t dst, uintptr_t src)
  * processor and in any interrupt. It is taken with interrupts off, after
  * the big lock and the heap's lock, and nothing under it takes another.
  */
-static struct spinlock frame_lock = SPINLOCK_INIT;
+static struct spinlock frame_lock = SPINLOCK_INIT_NAMED("frame_lock");
 
 /** Mark `frame` used with one reference, whatever it held, and keep the
  * free counts. `frame_lock` is held, or the boot runs alone. */

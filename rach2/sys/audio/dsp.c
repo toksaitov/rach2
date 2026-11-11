@@ -589,6 +589,7 @@ int32_t dspdev_open(fd_entry_t *e, int flags)
         return -ENOMEM;
     }
     wait_queue_init(&d->wq);
+    spin_lock_init(&d->lock, "dsp");
     d->trigger = PCM_ENABLE_INPUT | PCM_ENABLE_OUTPUT;
     if (out) {
         dsp_chan_init(d, &d->play, AUDIO_PLAYBACK, out);

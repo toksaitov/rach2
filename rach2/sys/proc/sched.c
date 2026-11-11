@@ -27,7 +27,7 @@
 static volatile int _sched_enabled = 0;
 
 /* The big lock precedes this lock; interrupts cannot see partial links. */
-static struct spinlock sched_lock = SPINLOCK_INIT;
+static struct spinlock sched_lock = SPINLOCK_INIT_NAMED("sched_lock");
 
 struct ready_queue {
     process_t *head, *tail;

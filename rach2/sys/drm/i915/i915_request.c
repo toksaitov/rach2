@@ -87,7 +87,7 @@ int i915_request_started(const struct i915_request *rq)
 /* The lock of every request's `awaits` and `added` and every engine's
  * `kick`, innermost of all, since a fence may signal in any interrupt and
  * with an engine's lock held. */
-static struct spinlock submit_lock = SPINLOCK_INIT;
+static struct spinlock submit_lock = SPINLOCK_INIT_NAMED("submit_lock");
 
 /* The devices whose requests may wait for fences, by their GT's
  * `submit_next`; and whether an engine has a request to give the chip,

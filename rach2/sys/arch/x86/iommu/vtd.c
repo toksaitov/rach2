@@ -31,7 +31,7 @@ static int vtd_dma_off; /* intel_iommu=off: no device is given to a domain */
 
 /* Domains, context entries and the units' translation, across processors.
  * Taken before a unit's own lock, never after it. */
-static struct spinlock vtd_lock = SPINLOCK_INIT;
+static struct spinlock vtd_lock = SPINLOCK_INIT_NAMED("vtd_lock");
 
 /* How long a unit has to finish a command: a million polls a microsecond
  * apart. */

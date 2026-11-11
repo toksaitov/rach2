@@ -512,7 +512,7 @@ static void vt_answer_query(char c)
 /* The console's lock (`console_lock`), the processor that holds it, -1 for
  * none, and how many times that processor has taken it. A processor that
  * has begun a panic takes none (`k_panic_begin`). */
-static struct spinlock console_spin = SPINLOCK_INIT;
+static struct spinlock console_spin = SPINLOCK_INIT_NAMED("console_spin");
 static volatile int console_owner = -1;
 static int console_depth;
 

@@ -378,6 +378,20 @@ static void bind_unwind(struct drm_i915_private *i915, uint16_t command)
     kfree(i915);
 }
 
+/** Make the spinlocks of a new device record, each of one class for every
+ * device (lib/spinlock.h). */
+static void i915_locks_init(struct drm_i915_private *i915)
+{
+    unsigned e;
+
+    spin_lock_init(&i915->uncore.lock, "i915_uncore");
+    spin_lock_init(&i915->irq.lock, "i915_irq");
+    spin_lock_init(&i915->rps.lock, "i915_rps");
+    for (e = 0; e < I915_NUM_ENGINES; e++) {
+        spin_lock_init(&i915->gt.engine[e].lock, "i915_engine");
+    }
+}
+
 int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
 {
     const struct i915_id *id;
@@ -401,6 +415,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     if (!i915) {
         return -ENOMEM;
     }
+    i915_locks_init(i915);
     i915->pci = *pdev;
     i915->hw = *hw;
     i915->id = id;

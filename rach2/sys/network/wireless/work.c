@@ -21,7 +21,7 @@ static struct wlan_work *queue;
 /* The work whose callback runs now, compared and never dereferenced, since
  * its owner may reuse it once the callback returns. */
 static struct wlan_work *running;
-static struct spinlock queue_lock = SPINLOCK_INIT;
+static struct spinlock queue_lock = SPINLOCK_INIT_NAMED("wlan_queue_lock");
 
 #ifndef RACH2_HOSTTEST
 static process_t *thread;

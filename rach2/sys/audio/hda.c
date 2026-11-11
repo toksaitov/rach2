@@ -1199,7 +1199,7 @@ static int verb_debug_count = 3;
 
 /* One verb at a time on the immediate command interface: its holder owns
  * ICW, IRR and ICS from the wait for an idle interface to the response. */
-static struct spinlock verb_lock = SPINLOCK_INIT;
+static struct spinlock verb_lock = SPINLOCK_INIT_NAMED("verb_lock");
 
 /* The longest a verb waits on the interface, in ticks of the 24 MHz wall
  * clock: 1 ms. A codec answers in the next link frame, 21 us at 48 kHz. */
@@ -1601,7 +1601,7 @@ static uint8_t in_boost[AUDIO_SOURCES];
 static volatile hda_bdl_entry_t cap_bdl[HDA_CAPTURE_ENTRIES] __attribute__((aligned(128)));
 static uint8_t cap_buffer[HDA_CAPTURE_BUFFER] __attribute__((aligned(128)));
 static uint8_t cap_out[HDA_CAPTURE_PERIOD]; /* a period in the reader's format */
-static struct spinlock cap_lock = SPINLOCK_INIT;
+static struct spinlock cap_lock = SPINLOCK_INIT_NAMED("cap_lock");
 static audio_stream_t *cap_stream = NULL; /* the open input stream, or NULL */
 static volatile bool cap_running = false;
 static uint16_t cap_format = 0;   /* the stream format word stream_setup chose */
@@ -3120,7 +3120,7 @@ static void hda_check_dma(int stream)
  */
 #define HDA_JACK_TICKS (TICK_HZ / 4 > 0 ? TICK_HZ / 4 : 1)
 
-static struct spinlock jack_lock = SPINLOCK_INIT;
+static struct spinlock jack_lock = SPINLOCK_INIT_NAMED("jack_lock");
 static int jack_holds = 0;          /* regions outside the tick that program the pins */
 static uint32_t jack_ticks = 0;     /* ticks since the last poll */
 static int8_t jack_seen[HDA_JACKS]; /* a reading that differs from the state and

@@ -79,7 +79,7 @@ void tsc_cpu_setup(int cpu)
 static volatile unsigned int sync_state;
 static volatile uint64_t sync_last;
 static volatile uint64_t sync_round_behind;
-static struct spinlock sync_lock;
+static struct spinlock sync_lock = SPINLOCK_INIT_NAMED("tsc_sync_lock");
 static volatile int sync_failed_cpu;
 static volatile uint64_t sync_behind;
 
