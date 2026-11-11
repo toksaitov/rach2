@@ -45,7 +45,7 @@ static int32_t evict_scan(struct drm_i915_private *i915, uint64_t size, uint64_t
         if (v->evict) {
             v->evict = 0;
             if (err == 0 && v->start < at + size && at < v->start + v->node_size) {
-                (void)i915_vma_unbind(v);
+                (void)i915_vma_unbind(v, !(flags & I915_PIN_NONBLOCK));
                 i915->gem.evictions++;
             }
         }
@@ -135,7 +135,7 @@ int32_t i915_gem_evict_for_node(struct drm_i915_private *i915, uint64_t start, u
             }
             continue;
         }
-        (void)i915_vma_unbind(v);
+        (void)i915_vma_unbind(v, !(flags & I915_PIN_NONBLOCK));
         i915->gem.evictions++;
     }
 }
@@ -155,7 +155,7 @@ int32_t i915_gem_evict_vm(struct drm_i915_private *i915)
     for (v = i915->gem.bound; v; v = next) {
         next = v->ggtt_next;
         if (evictable(v)) {
-            (void)i915_vma_unbind(v);
+            (void)i915_vma_unbind(v, 1);
             i915->gem.evictions++;
         }
     }

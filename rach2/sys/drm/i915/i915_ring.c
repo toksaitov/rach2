@@ -124,7 +124,7 @@ void i915_gt_pages_unmap(struct drm_i915_private *i915, void *vaddr, uint32_t np
     if (!vaddr) {
         return;
     }
-    (void)i915_ggtt_clear_range(i915, ggtt, (uint64_t)npages * I915_GTT_PAGE_SIZE);
+    (void)i915_ggtt_clear_range(i915, ggtt, (uint64_t)npages * I915_GTT_PAGE_SIZE, 0);
     if (ggtt == i915->gt.ggtt_bottom) {
         i915->gt.ggtt_bottom += (uint64_t)npages * I915_GTT_PAGE_SIZE;
     }

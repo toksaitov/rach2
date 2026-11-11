@@ -392,11 +392,13 @@ int32_t i915_ggtt_insert(struct drm_i915_private *i915, uint64_t offset, const u
     return 0;
 }
 
-int32_t i915_ggtt_clear_range(struct drm_i915_private *i915, uint64_t offset, uint64_t size)
+int32_t i915_ggtt_clear_range(struct drm_i915_private *i915, uint64_t offset, uint64_t size,
+                              int may_yield)
 {
     struct chip *c = chip_of(&i915->hw);
     uint64_t i;
 
+    (void)may_yield;
     if (offset + size > GTT_BYTES) {
         return -EINVAL;
     }

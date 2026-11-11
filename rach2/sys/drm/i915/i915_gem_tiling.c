@@ -230,7 +230,7 @@ static int32_t set_tiling(struct drm_i915_gem_object *obj, uint32_t tiling, uint
                 next = obj->vmas;
                 continue;
             }
-            err = i915_vma_unbind(vma);
+            err = i915_vma_unbind(vma, 1);
             if (err != 0) {
                 return err;
             }
