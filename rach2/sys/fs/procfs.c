@@ -7822,6 +7822,7 @@ static const struct {
                    {SYNTH_SYS_OVERFLOWGID, &ns_overflowgid, 0, 65535},
                    {SYNTH_SYS_OVERFLOWUID, &ns_overflowuid, 0, 65535},
                    {SYNTH_SYS_NR_OPEN, &fd_nr_open, FD_NR_OPEN_MIN, FD_NR_OPEN_MAX},
+                   {SYNTH_SYS_PIPE_MAX_SIZE, &pipe_max_size, PAGE_SIZE, 0x7FFFFFFF},
                    {SYNTH_SYS_RANDOMIZE_VA_SPACE, &randomize_va_space, 0, 2},
                    {SYNTH_SYS_TCP_KEEPALIVE_TIME, &tcp_keepalive_time, 1, SYSCTL_SECONDS_MAX},
                    {SYNTH_SYS_TCP_KEEPALIVE_TIME + 1, &tcp_keepalive_intvl, 1, SYSCTL_SECONDS_MAX},

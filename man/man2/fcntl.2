@@ -135,12 +135,20 @@ is open on.
 .It Dv F_GETPIPE_SZ
 Return the capacity of the pipe or FIFO
 .Fa fd
-is an end of, which is 4096 bytes.
-Linux's is 65536 bytes unless
-.Dv F_SETPIPE_SZ
-changes it; here
-.Dv F_SETPIPE_SZ
-is unsupported and the capacity is fixed.
+is an end of, 65536 bytes for a new pipe, as on Linux.
+.It Dv F_SETPIPE_SZ
+Give the pipe or FIFO
+.Fa fd
+is an end of a capacity of at least
+.Fa arg
+bytes, rounded up to a power of two of a page or more, keeping the bytes
+it holds, and return the capacity given.
+A caller without privilege may not grow a pipe past
+.Pa /proc/sys/fs/pipe-max-size ,
+1048576 bytes, nor take the pipes grown past 65536 bytes over 64 MiB in
+all, which Linux counts for each user and this kernel for all of them.
+GNU cat asks for 524288 bytes before it copies through
+.Xr splice 2 .
 .El
 .Pp
 Every other command is refused with
@@ -310,6 +318,8 @@ return the requested flags,
 .Dv F_GET_SEALS
 the seals and
 .Dv F_GETPIPE_SZ
+and
+.Dv F_SETPIPE_SZ
 the capacity.
 The other supported commands return 0.
 When a set lock command fails, no lock has changed, but for one whose
@@ -359,12 +369,20 @@ and checks that the new descriptor's flag is clear.
 .Bl -tag -width "[EOVERFLOW]"
 .It Bq Er EAGAIN
 A set lock command met a conflicting lock.
+.It Bq Er EBUSY
+.Dv F_SETPIPE_SZ
+asked for less than the pipe holds.
+Linux counts what it holds in pages, a write of less than a page taking
+one, and so refuses some shrinks of a pipe of small writes that this
+kernel makes.
 .It Bq Er EBADF
 .Fa fd
 is not an open descriptor, was opened with
 .Dv O_PATH
 and the command is not one it takes,
 .Dv F_GETPIPE_SZ
+or
+.Dv F_SETPIPE_SZ
 was given a descriptor that is no end of a pipe, or a read lock was
 asked for on a descriptor not open for reading or a write lock on one
 not open for writing.
@@ -390,8 +408,11 @@ is none of the three, its range begins before byte 0, or
 .Dv F_GETLK
 asked about
 .Dv F_UNLCK ;
-or an open file description lock command has a nonzero
-.Va l_pid .
+an open file description lock command has a nonzero
+.Va l_pid ;
+or
+.Dv F_SETPIPE_SZ
+asked for more than 2^31 bytes.
 .It Bq Er EIO
 A lock command's
 .Va l_whence
@@ -405,6 +426,8 @@ the limit.
 .It Bq Er ENOLCK
 The kernel heap has no room for a lock.
 .It Bq Er ENOMEM
+.Dv F_SETPIPE_SZ
+found the kernel heap with no room for the new ring.
 A duplication command found the kernel heap with no room for a larger
 descriptor table, as on Linux, or for the open file description it makes
 for the new descriptor and drops at once to share the old one's, which
@@ -417,7 +440,9 @@ or
 .Dv F_SETFL
 would change
 .Dv O_APPEND
-of an append-only file.
+of an append-only file; or
+.Dv F_SETPIPE_SZ
+would grow a pipe past either limit for a caller without privilege.
 .It Bq Er EOVERFLOW
 A lock's range passes the largest offset, or
 .Dv F_GETLK

@@ -4,7 +4,7 @@
  * host-deps: rach2/sys/ipc/pipe_ring.c
  *
  * The ring's count of bytes is tail - head, and a byte's slot is its
- * position & (PIPE_BUF_SIZE - 1). The test runs that arithmetic under the
+ * position & (size - 1). The test runs that arithmetic under the
  * sanitizers: a put never writes past the free space, a get never reads past
  * the bytes in the ring, a transfer across the end of the buffer keeps every
  * byte, and a full ring gives back all it holds.
@@ -49,6 +49,7 @@ int main(void)
 
     /* Empty ring. */
     p.buf = ring;
+    p.size = PIPE_BUF_SIZE;
     p.head = 0;
     p.tail = 0;
     CHECK(pipe_available(&p) == 0);

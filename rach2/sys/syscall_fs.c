@@ -14448,9 +14448,11 @@ static long fcntl_setfl(fd_entry_t *entry, uintptr_t arg)
  *
  * The record locks are `fcntl_lock`'s and the seals `fcntl_seals`'s.
  * F_GETPIPE_SZ gives a pipe's capacity, which bash asks before it writes a
- * here-document into a pipe it reads itself, and is -EBADF for anything
- * else. An O_PATH descriptor takes the commands Linux lets it take, the two
- * duplications, F_GETFD, F_SETFD and F_GETFL, and is -EBADF to the rest.
+ * here-document into a pipe it reads itself, and F_SETPIPE_SZ sets it
+ * (`pipe_set_size`), as GNU cat asks before it splices; both are -EBADF
+ * for anything else. An O_PATH descriptor takes the commands Linux lets it
+ * take, the two duplications, F_GETFD, F_SETFD and F_GETFL, and is -EBADF to
+ * the rest.
  */
 long sys_fcntl64(isr_params_t *params)
 {
@@ -14466,6 +14468,7 @@ long sys_fcntl64(isr_params_t *params)
         F_GETFL = 3,
         F_SETFL = 4,
         F_DUPFD_CLOEXEC = 1030,
+        F_SETPIPE_SZ = 1031,
         F_GETPIPE_SZ = 1032
     };
 
@@ -14558,7 +14561,10 @@ long sys_fcntl64(isr_params_t *params)
     case F_GET_SEALS:
         return fcntl_seals(entry, cmd, (uint32_t)arg);
     case F_GETPIPE_SZ:
-        return entry->type == FD_TYPE_PIPE ? PIPE_BUF_SIZE : -EBADF;
+        return pipe_is(entry) ? pipe_get_size(entry) : -EBADF;
+    case F_SETPIPE_SZ:
+        return pipe_is(entry) ? pipe_set_size(entry, (uint32_t)arg, proc_privileged(current_proc))
+                              : -EBADF;
     default:
         return -EINVAL;
     }

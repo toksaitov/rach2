@@ -328,6 +328,9 @@ int synth_sys_count(void);
 /* The entry of user/max_mnt_namespaces, whose value is the limit of the
  * reader's user namespace, which procfs reads and writes through ns.h. */
 #define SYNTH_SYS_MAX_MNT_NAMESPACES 53
+/* The entry of fs/pipe-max-size, whose value procfs reads from and writes
+ * to ipc/pipe.h's `pipe_max_size`. */
+#define SYNTH_SYS_PIPE_MAX_SIZE      54
 /**
  * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
  * in `*dir`, `all`, `default` or an interface's, and in `*key` the

@@ -26,6 +26,12 @@
  * both ends are closed. */
 static pipe_t *pipes;
 
+int pipe_max_size = PIPE_MAX_SIZE;
+
+/* The bytes the live pipes' rings hold past PIPE_BUF_SIZE each, counted for
+ * PIPE_GROWN_MAX whether or not a ring is allocated yet. */
+static uint32_t pipe_grown;
+
 void pipe_init_pool(void)
 {
     pipes = NULL;
@@ -71,6 +77,7 @@ static pipe_t *pipe_alloc(void)
         return NULL;
     }
     p->in_use = 1;
+    p->size = PIPE_BUF_SIZE;
     p->inode = pipe_next_inode();
     p->read_open = 1;
     p->write_open = 1;
@@ -94,6 +101,9 @@ static void pipe_free(pipe_t *p)
     }
     if (*link) {
         *link = p->next;
+    }
+    if (p->size > PIPE_BUF_SIZE) {
+        pipe_grown -= p->size - PIPE_BUF_SIZE;
     }
     kfree(p->buf);
     kfree(p);
@@ -323,7 +333,7 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, i
             continue;
         }
         if (!p->buf) {
-            p->buf = kmalloc(PIPE_BUF_SIZE);
+            p->buf = kmalloc(p->size);
             if (!p->buf) {
                 return (done > 0) ? (int32_t)done : -ENOMEM;
             }
@@ -522,11 +532,101 @@ static int32_t pipe_wait_data(fd_entry_t *e, int nonblock)
     return (int32_t)pipe_available(p);
 }
 
+/**
+ * Copy the first `n` bytes buffered in the ring of `src` to `dst` when that
+ * is not NULL, or otherwise into the ring of `to` at its tail, a contiguous
+ * span of each at a time. The caller has checked that `src` buffers `n`
+ * bytes and that `to` has room for them; neither ring's counters move.
+ */
+static void pipe_ring_copy(const pipe_t *src, uint8_t *dst, pipe_t *to, uint32_t n)
+{
+    uint32_t done = 0;
+
+    while (done < n) {
+        uint32_t s = (src->head + done) & (src->size - 1), chunk = src->size - s;
+        uint32_t t = to ? (to->tail + done) & (to->size - 1) : 0;
+
+        if (to && chunk > to->size - t) {
+            chunk = to->size - t;
+        }
+        if (chunk > n - done) {
+            chunk = n - done;
+        }
+        k_memcpy(dst ? dst + done : &to->buf[t], &src->buf[s], chunk);
+        done += chunk;
+    }
+}
+
+int32_t pipe_get_size(const fd_entry_t *e)
+{
+    return (int32_t)((const pipe_t *)e->priv)->size;
+}
+
+/**
+ * A new ring is allocated and the bytes buffered copied to the slots their
+ * counters name in it, so `head` and `tail` keep counting as they did. A
+ * growth wakes the writers, which may now have room. The new size is
+ * checked against the bytes buffered in bytes, where Linux checks it in
+ * pages, each write of less than a page taking one, so a shrink Linux
+ * refuses with EBUSY for a pipe of many small writes may succeed here.
+ */
+int32_t pipe_set_size(fd_entry_t *e, uint32_t size, int privileged)
+{
+    pipe_t *p = (pipe_t *)e->priv;
+    uint32_t want = PAGE_SIZE, grown, done = 0, n = pipe_available(p);
+    uint8_t *ring;
+
+    if (size > 0x80000000u) {
+        return -EINVAL;
+    }
+    while (want < size) {
+        want <<= 1;
+    }
+    grown = pipe_grown - (p->size > PIPE_BUF_SIZE ? p->size - PIPE_BUF_SIZE : 0) +
+            (want > PIPE_BUF_SIZE ? want - PIPE_BUF_SIZE : 0);
+    if (want > p->size && !privileged &&
+        (want > (uint32_t)pipe_max_size || grown > PIPE_GROWN_MAX)) {
+        return -EPERM;
+    }
+    if (n > want) {
+        return -EBUSY;
+    }
+    if (want == p->size) {
+        return (int32_t)want;
+    }
+    if (p->buf) {
+        ring = kmalloc(want);
+        if (!ring) {
+            return -ENOMEM;
+        }
+        while (done < n) {
+            uint32_t s = (p->head + done) & (p->size - 1), t = (p->head + done) & (want - 1);
+            uint32_t chunk = p->size - s;
+
+            if (chunk > want - t) {
+                chunk = want - t;
+            }
+            if (chunk > n - done) {
+                chunk = n - done;
+            }
+            k_memcpy(&ring[t], &p->buf[s], chunk);
+            done += chunk;
+        }
+        kfree(p->buf);
+        p->buf = ring;
+    }
+    pipe_grown = grown;
+    if (want > p->size) {
+        pipe_wake(p, &p->write_wq, WQ_ROOM);
+    }
+    p->size = want;
+    return (int32_t)want;
+}
+
 int32_t pipe_splice_peek(fd_entry_t *e, uint8_t *dst, uint32_t n, int nonblock)
 {
     pipe_t *p = (pipe_t *)e->priv;
     int32_t avail;
-    uint32_t i;
 
     if (!(e->flags & FD_FLAG_READ)) {
         return -EBADF;
@@ -546,9 +646,7 @@ int32_t pipe_splice_peek(fd_entry_t *e, uint8_t *dst, uint32_t n, int nonblock)
     if (n > (uint32_t)avail) {
         n = (uint32_t)avail;
     }
-    for (i = 0; i < n; i++) {
-        dst[i] = p->buf[(p->head + i) & (PIPE_BUF_SIZE - 1)];
-    }
+    pipe_ring_copy(p, dst, NULL, n);
     p->spliced = 1;
     return (int32_t)n;
 }
@@ -572,7 +670,7 @@ int32_t pipe_tee(fd_entry_t *in, fd_entry_t *out, uint32_t len, int nonblock, in
 {
     pipe_t *a = (pipe_t *)in->priv;
     pipe_t *b = (pipe_t *)out->priv;
-    uint32_t n, i;
+    uint32_t n;
 
     if (a == b) {
         return -EINVAL;
@@ -604,7 +702,7 @@ int32_t pipe_tee(fd_entry_t *in, fd_entry_t *out, uint32_t len, int nonblock, in
         }
     }
     if (!b->buf) {
-        b->buf = kmalloc(PIPE_BUF_SIZE);
+        b->buf = kmalloc(b->size);
         if (!b->buf) {
             return -ENOMEM;
         }
@@ -616,9 +714,7 @@ int32_t pipe_tee(fd_entry_t *in, fd_entry_t *out, uint32_t len, int nonblock, in
     if (n > len) {
         n = len;
     }
-    for (i = 0; i < n; i++) {
-        b->buf[(b->tail + i) & (PIPE_BUF_SIZE - 1)] = a->buf[(a->head + i) & (PIPE_BUF_SIZE - 1)];
-    }
+    pipe_ring_copy(a, NULL, b, n);
     pipe_ring_produce(b, n);
     pipe_wake(b, &b->read_wq, WQ_DATA);
     if (move) {

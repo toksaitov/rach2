@@ -260,6 +260,7 @@ static void setup(uint32_t head)
     k_memset(&write_ofd, 0, sizeof(write_ofd));
     k_memset(memory, 0x33, sizeof(memory));
     ring.buf = ring_bytes;
+    ring.size = PIPE_BUF_SIZE;
     ring.head = ring.tail = head;
     ring.read_open = ring.write_open = 1;
     reader.priv = writer.priv = &ring;
