@@ -407,20 +407,24 @@ static void scanout_rotate(struct intel_crtc *c, int slot, struct intel_scanout 
     c->shown_to[slot] = to;
 }
 
-/** Boost the request drawing `ps`'s framebuffer, its object's pending
- * write, at the next vblank of `c`, plane `slot`, as Linux's
- * intel_prepare_plane_fb; a flip with an in-fence is not boosted. */
-static void flip_boost(struct intel_crtc *c, int slot, const struct drm_plane_state *ps)
+/** Boost at the next vblank of `c` the request that draws `ps`'s
+ * framebuffer, as Linux's intel_prepare_plane_fb boosts the plane's fence:
+ * the flip's in-fence when it has one, which the core's implicit fencing
+ * has not yet replaced, or else its object's pending write. A fence that is
+ * not an i915 request is not boosted. */
+static void flip_boost(struct intel_crtc *c, const struct drm_plane_state *ps)
 {
     struct drm_framebuffer *fb = ps->fb;
-    struct dma_fence *f;
+    struct dma_fence *f = ps->fence;
 
-    if (ps->fence || fb_is_firmware(fb) || fb->obj[0]->funcs != &i915_gem_object_funcs) {
-        return;
+    if (!f) {
+        if (fb_is_firmware(fb) || fb->obj[0]->funcs != &i915_gem_object_funcs) {
+            return;
+        }
+        f = fb->obj[0]->resv->write;
     }
-    f = fb->obj[0]->resv->write;
     if (f && !dma_fence_is_signaled(f)) {
-        intel_crtc_boost_after_vblank(c, slot, f);
+        intel_crtc_boost_after_vblank(c, f);
     }
 }
 
@@ -479,7 +483,7 @@ int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *sta
                 /* Linux's legacy cursor update neither marks nor boosts. */
                 if (c && !state->legacy_cursor_update) {
                     pipes |= 1u << c->pipe;
-                    flip_boost(c, slot, ps);
+                    flip_boost(c, ps);
                 }
             }
         }
