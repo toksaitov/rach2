@@ -3078,6 +3078,17 @@ static int32_t proc_ns_dir_read(const struct vpath *vp, int pid, int flags)
     return cred_access_bits(uid, gid, mode, CRED_R, 0);
 }
 
+/** Whether an open with `flags` of the directory `vp` names, of the process
+ * `pid`, is refused: another user's /proc/PID/fd and /proc/PID/fdinfo, as
+ * Linux keeps a process's descriptors to those who may trace it
+ * (`procfs_may_read`), but never with O_PATH, which Linux's `do_o_path`
+ * opens with no permission check. 1 or 0. */
+static int proc_fd_dir_refused(const struct vpath *vp, int pid, int flags)
+{
+    return (vp->kind == VNODE_PROC_FD_DIR || vp->kind == VNODE_PROC_FDINFO_DIR) &&
+           !(flags & O_PATH) && !procfs_may_read(pid);
+}
+
 /**
  * Open a synthetic directory (/dev, /proc, /proc/<pid> and its fd, fdinfo
  * and ns, a thread's under /proc/<pid>/task, a directory of /proc/sys or of
@@ -3094,8 +3105,9 @@ static int32_t proc_ns_dir_read(const struct vpath *vp, int pid, int flags)
  * O_CREAT, which asks for a file, is -EISDIR. Another user's /proc/PID/fd
  * and /proc/PID/fdinfo are -EACCES, as Linux keeps a process's descriptors
  * to those who may trace it (`procfs_may_read`). /proc/PID/ns, a thread's
- * among them, is read by its mode and owner (`proc_ns_dir_read`); O_PATH in
- * `flags`, which reads nothing, skips that check. A process, or a device of
+ * among them, is read by its mode and owner (`proc_ns_dir_read`). O_PATH in
+ * `flags`, which reads nothing, skips both checks, as Linux's `do_o_path`
+ * opens with no permission check. A process, or a device of
  * /sys, that is gone is -ENOENT, as is a directory of /dev that is absent
  * (`devfs_subdir_present`), and a record the heap has no room for is
  * -ENFILE. A directory made under /dev is one the caller found there.
@@ -3114,8 +3126,7 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
         }
         pid = procfs_resolve_pid(vp->pid);
     }
-    if ((vp->kind == VNODE_PROC_FD_DIR || vp->kind == VNODE_PROC_FDINFO_DIR) &&
-        !procfs_may_read(pid)) {
+    if (proc_fd_dir_refused(vp, pid, flags)) {
         return -EACCES;
     }
     if ((flags & O_CREAT) && (flags & O_EXCL)) {
