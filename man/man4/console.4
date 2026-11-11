@@ -50,6 +50,12 @@ The slave is
 where N is the lowest index not used by a live pair.
 A network login uses one pair per session.
 Master writes become slave input.
+A master write that finds no room waits, or fails with
+.Er EAGAIN
+when non-blocking.
+With software flow control enabled, a flow character in the waiting
+input can act at once if the input queue has room to retain the prefix
+through it; the write takes and returns that prefix before any wait.
 Slave output and echo enter the master's 4096-byte ring.
 A slave writer the ring has no room for waits until the master reads, as
 on Linux, or, when non-blocking, returns what fit or fails with
@@ -61,7 +67,8 @@ Linux's terminal write lock keeps it, so two processes' lines are not
 mixed within a write; a non-blocking writer that finds another write in
 progress fails with
 .Er EAGAIN .
-Echo that arrives while the ring is full is discarded.
+Echo that arrives while the ring is full is held in the discipline's
+echo buffer, whose oldest byte is discarded when that buffer fills too.
 The slave has the same line discipline and job control as the console.
 .Xr stat 2
 on the slave gives the second it last returned input to a reader as its

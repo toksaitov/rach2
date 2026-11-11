@@ -106,6 +106,23 @@ static void expect_line(struct n_tty *t, const char *expected, int count, const 
     fails++;
 }
 
+/** Initialization enables echo even when the storage was nonzero. */
+static void init_echo(void)
+{
+    struct n_tty t;
+    struct cap cp;
+    unsigned int i;
+
+    for (i = 0; i < sizeof(t); i++) {
+        ((unsigned char *)&t)[i] = 0xa5;
+    }
+    n_tty_init(&t);
+    cap_reset(&cp);
+    CHECK(t.echo_muted == 0);
+    CHECK(feed(&t, &cp, 'a') == 0);
+    CHECK(cap_is(&cp, "a", 1));
+}
+
 /** Preserve VEOL bytes and queued boundaries across termios changes. */
 static void veol_lines(void)
 {
@@ -565,6 +582,7 @@ int main(void)
     unsigned char buf[512];
     int n, i;
 
+    init_echo();
     default_cflag();
     utf8_erase();
     veol_lines();

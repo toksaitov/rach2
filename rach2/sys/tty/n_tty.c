@@ -379,6 +379,7 @@ void n_tty_init(struct n_tty *t)
     t->tco_stopped = 0;
     t->echo_head = 0;
     t->echo_tail = 0;
+    t->echo_muted = 0;
 }
 
 /** Whether `c` is the VSTART or VSTOP of `t`, a disabled (zero) one
