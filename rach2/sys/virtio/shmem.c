@@ -934,13 +934,17 @@ static void gone_give(struct vshm *vs, uintptr_t frame)
  * holds the region's frame for a heap page, the detached region's too.
  * Only the pages the table reaches and the leaves it has are walked, so a
  * buffer refused at its fill, which may be as large as SHMEM_MAX_SIZE and
- * holds no page, costs nothing. vshm_lock, under which the detach moves
- * the record from its heap to the kept list, is taken for a leaf at a time
- * and let go between, with the record's state read again at each take, as
- * Linux breaks a long walk under a spinlock with cond_resched_lock
- * (kernel/sched/core.c:7353-7369 in 6.12.115); the record outlives the
- * call by the driver's reference, and its tables by the pages `sh` still
- * holds, which keep `heap_used` above 0 until the last is given back.
+ * holds no page, costs nothing. The release runs a leaf at a time:
+ * vshm_lock, under which the detach moves the record from its heap to the
+ * kept list, is taken for one leaf and let go after it, and the record's
+ * state is read again at each take, since a detach may come between two
+ * leaves. Linux breaks a long walk under a spinlock with cond_resched_lock
+ * (kernel/sched/core.c:7353-7369 in 6.12.115), which lets the lock go only
+ * when a switch is due or another processor waits for it; this lets it go
+ * after every leaf, since the hold keeps interrupts off and the break is
+ * there to let them in. The record outlives the call by the driver's
+ * reference, and its tables by the pages `sh` still holds, which keep
+ * `heap_used` above 0 until the last is given back.
  */
 static void vs_backing_release(struct virtio_dev *d, struct shmem *sh)
 {
