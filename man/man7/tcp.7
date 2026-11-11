@@ -80,10 +80,20 @@ Given up first, it reports
 .Er ENETUNREACH
 in place of
 .Er ETIMEDOUT .
+A peer window that stays closed over data waiting to be sent, with
+nothing in flight, is probed with one byte at the timeout, doubled after
+each probe up to 60 seconds; once
+.Pa tcp_retries2
+probes in a row have gone unanswered, the connection is given up with
+.Er ETIMEDOUT ,
+counted in TCPAbortOnTimeout, as on Linux.
+A peer that answers each probe with its window still closed keeps the
+connection open.
 .Dv TCP_USER_TIMEOUT ,
-a count of milliseconds, replaces that time, in the handshake as well, and
-ends the keepalive's probing that long after the last segment received;
-0 restores the default.
+a count of milliseconds, replaces that time, in the handshake as well,
+ends the keepalive's probing that long after the last segment received,
+and ends a closed window's probing that long after its first probe,
+answered or not, as Linux does; 0 restores the default.
 A frame the card refuses is kept and sent again at the next tick; a
 connection whose every frame the card has refused for 30 seconds, with
 nothing sent between, is given up, but the wait does not run while the card

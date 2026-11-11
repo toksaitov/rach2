@@ -812,11 +812,17 @@ static void tcp_send_flags(struct tcb *tcb, uint8_t flags)
  * Start the zero-window probe timer when the peer's window is closed over
  * bytes this side still has to send or has sent unacknowledged, and the
  * timer is not running. A window update lost on the way is then found by
- * the probe rather than waited for.
+ * the probe rather than waited for. An open window stops the timer and
+ * ends the probing's back-off and its run, as Linux's tcp_ack_probe does;
+ * the caller calls this after each change of the window.
  */
 static void tcp_arm_zwp(struct tcb *tcb)
 {
-    if (tcb->snd_wnd == 0 && tcb->zwp_due == 0 && tcb->send_tail != tcb->send_ack) {
+    if (tcb->snd_wnd != 0) {
+        tcb->zwp_due = 0;
+        tcb->zwp_backoff = 0;
+        tcb->zwp_stamp = 0;
+    } else if (tcb->zwp_due == 0 && tcb->send_tail != tcb->send_ack) {
         tcb->zwp_due = tcp_due(tcb->rto);
     }
 }
@@ -1492,13 +1498,13 @@ static int tcp_send_byte(struct tcb *tcb, uint32_t seq, uint32_t at)
  *
  * The byte probed is the oldest unacknowledged one, at `send_ack`, which the
  * ring has whether it has unsent bytes or only sent ones; an empty ring sends
- * nothing.
+ * nothing. Returns what `tcp_send_byte` returned, or 0 for nothing sent.
  */
-static void tcp_send_zwp(struct tcb *tcb)
+static int tcp_send_zwp(struct tcb *tcb)
 {
     if (tcb->send_tail == tcb->send_ack)
-        return;
-    (void)tcp_send_byte(tcb, tcb->snd_una, tcb->send_ack);
+        return 0;
+    return tcp_send_byte(tcb, tcb->snd_una, tcb->send_ack);
 }
 
 /**
@@ -1714,6 +1720,102 @@ static void tcp_user_timeout_clamp(struct tcb *tcb)
 }
 
 /**
+ * The wait `when` before the next zero-window probe, shortened to end no
+ * later than TCP_USER_TIMEOUT allows from the first probe, though at least
+ * a tick, as Linux's tcp_clamp_probe0_to_user_timeout does.
+ */
+static uint32_t tcp_zwp_clamp(const struct tcb *tcb, uint32_t when)
+{
+    uint32_t limit, elapsed;
+
+    if (!tcb->sock || !tcb->sock->user_timeout || tcb->zwp_stamp == 0) {
+        return when;
+    }
+    limit = tcp_ms_ticks(tcb->sock->user_timeout);
+    elapsed = TCP_NOW() + 1 - tcb->zwp_stamp;
+    if (elapsed >= limit) {
+        return 1;
+    }
+    return when < limit - elapsed ? when : limit - elapsed;
+}
+
+/**
+ * The wait before the next zero-window probe, as Linux's tcp_probe0_when:
+ * the timeout, at least TCP_RTO_MIN, doubled `zwp_backoff` times, up to
+ * TCP_RTO_MAX.
+ */
+static uint32_t tcp_zwp_when(const struct tcb *tcb)
+{
+    uint32_t when = tcb->rto > TCP_RTO_MIN ? tcb->rto : TCP_RTO_MIN;
+    uint32_t i;
+
+    for (i = 0; i < tcb->zwp_backoff && when < TCP_RTO_MAX; i++) {
+        when <<= 1;
+    }
+    return when < TCP_RTO_MAX ? when : TCP_RTO_MAX;
+}
+
+/**
+ * Run the zero-window probe timer of `tcb`, which has expired, as Linux's
+ * tcp_probe_timer and tcp_send_probe0 do. With the window open or nothing
+ * left to send, nothing goes. With bytes in flight, whose retransmission
+ * timer gives the connection up, the probe goes at twice the timeout and
+ * the probes are not counted. Otherwise each probe counts in `zwp_probes`,
+ * which any acknowledgement clears (`tcp_rx_addr`), and doubles the wait
+ * before the next (`tcp_zwp_when`), or waits TCP_RESOURCE_PROBE_TICKS when
+ * the driver refused it, each wait clamped by `tcp_zwp_clamp`. The
+ * connection is given up with ETIMEDOUT, counted in TCPAbortOnTimeout, as
+ * Linux's tcp_write_err gives it up, once `tcp_retries2` probes have gone
+ * unanswered, or with TCP_USER_TIMEOUT set, once that long has passed since
+ * the first probe while the window stayed closed, answered or not. A
+ * detached block is given up sooner by `tcp_orphan_expired`. Returns 1
+ * when the connection was given up, and `tcb` may be gone.
+ */
+static int tcp_zwp_expire(struct tcb *tcb)
+{
+    uint32_t now = TCP_NOW(), when;
+    int expired = 0, rc;
+
+    tcb->zwp_due = 0;
+    if (tcb->snd_wnd != 0 || tcb->send_tail == tcb->send_ack) {
+        tcb->zwp_probes = 0;
+        tcb->zwp_stamp = 0;
+        return 0;
+    }
+    if (tcb->send_head != tcb->send_ack) {
+        tcb->zwp_probes = 0;
+        tcb->zwp_stamp = 0;
+        (void)tcp_send_zwp(tcb);
+        tcb->zwp_due = tcp_due(tcb->rto << 1 < TCP_RTO_MAX ? tcb->rto << 1 : TCP_RTO_MAX);
+        return 0;
+    }
+    if (tcb->zwp_stamp == 0) {
+        tcb->zwp_stamp = now + 1 != 0 ? now + 1 : 1u;
+    } else if (tcb->sock && tcb->sock->user_timeout) {
+        expired = now + 1 - tcb->zwp_stamp >= tcp_ms_ticks(tcb->sock->user_timeout);
+    }
+    if (expired || (int)tcb->zwp_probes >= tcp_retries2) {
+        net_mib.tcp_abort_on_timeout++;
+        tcp_giveup(tcb);
+        return 1;
+    }
+    rc = tcp_send_zwp(tcb);
+    if (tcb->zwp_probes < 255) {
+        tcb->zwp_probes++;
+    }
+    if (rc == -ENOBUFS) {
+        when = TCP_RESOURCE_PROBE_TICKS;
+    } else {
+        if ((int)tcb->zwp_backoff < tcp_retries2 && tcb->zwp_backoff < 255) {
+            tcb->zwp_backoff++;
+        }
+        when = tcp_zwp_when(tcb);
+    }
+    tcb->zwp_due = tcp_due(tcp_zwp_clamp(tcb, when));
+    return 0;
+}
+
+/**
  * Run the keepalive of `tcb` for a tick (TCP_KEEPIDLE_DEFAULT). It is armed
  * from the tick that finds SO_KEEPALIVE set on the socket, which counts as
  * a segment received, and disarmed when the option is cleared. In
@@ -1801,7 +1903,7 @@ static void tcp_keepalive(struct tcb *tcb)
  * resumes once the data is acknowledged (`send_ack` reaches `send_head`).
  * With no data outstanding, the control segment (SYN, SYN-ACK or FIN) is
  * sent again. The zero-window probe timer sends a probe while the peer's
- * window stays closed and restarts at twice the timeout, up to TCP_RTO_MAX.
+ * window stays closed, backs off and gives up as `tcp_zwp_expire` says.
  * Then the keepalive runs (`tcp_keepalive`). Last, `tcp_tick_pumps` sends
  * what refused transmits left in the rings. Each block's successor is read
  * before the block can be freed.
@@ -1880,12 +1982,8 @@ void tcp_tick(void)
             tcp_user_timeout_clamp(tcb);
         }
 
-        if (tcb->zwp_due != 0 && tcp_expired(tcb->zwp_due)) {
-            tcb->zwp_due = 0;
-            if (tcb->snd_wnd == 0) {
-                tcp_send_zwp(tcb);
-                tcb->zwp_due = tcp_due(tcb->rto << 1 < TCP_RTO_MAX ? tcb->rto << 1 : TCP_RTO_MAX);
-            }
+        if (tcb->zwp_due != 0 && tcp_expired(tcb->zwp_due) && tcp_zwp_expire(tcb)) {
+            continue;
         }
 
         tcp_keepalive(tcb);
@@ -2670,6 +2768,26 @@ static uint16_t tcp_seg_check(net_addr_t src_ip, net_addr_t dst_ip, const uint8_
 }
 
 /**
+ * Note what a segment of `flags` acknowledging `ack_num` answers on the
+ * connection `tcb`, which is not a listener's: any segment answers the
+ * keepalive's probes (`tcp_keepalive`), and an acknowledgement inside
+ * [snd_una, snd_nxt], a duplicate among them, the zero-window probes, as
+ * Linux's tcp_ack clears icsk_probes_out (`tcp_zwp_expire`).
+ */
+static void tcp_rx_answers(struct tcb *tcb, uint8_t flags, uint32_t ack_num)
+{
+    if (tcb->state == TCP_LISTEN) {
+        return;
+    }
+    tcb->ka_since = TCP_NOW();
+    tcb->ka_probes = 0;
+    if ((flags & TCP_ACK) && (int32_t)(ack_num - tcb->snd_una) >= 0 &&
+        (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
+        tcb->zwp_probes = 0;
+    }
+}
+
+/**
  * A segment shorter than the header, longer than TCP_SEG_MAX, with a bad
  * checksum, or with a header length below 20 bytes or past its end is
  * dropped. The checksum is computed against the address the segment was sent
@@ -2748,6 +2866,9 @@ static uint16_t tcp_seg_check(net_addr_t src_ip, net_addr_t dst_ip, const uint8_
  * peer in FIN_WAIT_1 until this side's FIN. TIME_WAIT acknowledges a FIN the
  * peer sent again because its acknowledgement was lost, and restarts its
  * 2MSL wait.
+ *
+ * Every segment that reaches a connection answers its probes first
+ * (`tcp_rx_answers`).
  */
 static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *data, uint16_t len)
 {
@@ -2793,10 +2914,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
         return;
     }
     window = (flags & TCP_SYN) ? field : (uint32_t)field << tcb->snd_wscale;
-    if (tcb->state != TCP_LISTEN) {
-        tcb->ka_since = TCP_NOW();
-        tcb->ka_probes = 0;
-    }
+    tcp_rx_answers(tcb, flags, ack_num);
     if (tcb->state >= TCP_ESTABLISHED && tcb->state != TCP_TIME_WAIT && len == hdr_len &&
         !(flags & (TCP_SYN | TCP_FIN)) && (int32_t)(seq - tcb->rcv_nxt) < 0) {
         tcp_send_flags(tcb, TCP_ACK);
