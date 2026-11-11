@@ -1,0 +1,18 @@
+# Linux on the host, 4 processors
+getpid: 0.236 us
+sched_yield: 0.659 us
+handoff to 1 threads and back after 50 us: 0.370 us a round
+handoff to 1 threads and back after 50 us: 0.365 us a round
+handoff to 3 threads and back after 50 us: 0.903 us a round
+handoff to 3 threads and back after 50 us: 0.948 us a round
+# Rach2 in QEMU before the poll
+getpid: 0.256 us
+sched_yield: 0.346 us
+handoff to 1 threads and back after 50 us: 10.089 us a round
+# the same with -overcommit cpu-pm=on
+handoff to 1 threads and back after 50 us: 4.338 us a round
+handoff to 3 threads and back after 50 us: 1.636 us a round
+# Rach2 in QEMU with the poll
+handoff to 1 threads and back after 50 us: 4.161 us a round
+handoff to 3 threads and back after 50 us: 2.550 us a round
+handoff to 1 threads and back after 500 us: 7.375 us a round

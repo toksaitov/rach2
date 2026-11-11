@@ -1,0 +1,41 @@
+# GL round trips of tripprobe on llvmpipe, Rach2 in QEMU (KVM under WSL's Hyper-V, 4 processors)
+## 80-5's kernel, two boots
+trip: run 0 status 0 ms 884.2
+trip: run 1 status 0 ms 719.4
+trip: run 2 status 0 ms 718.2
+trip: run 0 status 0 ms 732.4
+trip: run 1 status 0 ms 647.3
+trip: run 2 status 0 ms 638.2
+## 80-5's kernel, without WineD3D's command thread (csmt=0x0) and with it, alternating
+games: trip-gl-0-cfg-gl-csmt0x0: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl-0-cfg-gl-csmt0x0: feature level: 0xb000
+games: trip-gl-0-cfg-gl-csmt0x0: tripprobe: 1000 round trips in 656.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-0-cfg-gl-csmt0x0: TRIP OK
+trip: 0-cfg-gl-csmt0x0 status 0 ms 656.9
+games: trip-gl-1-cfg-gl: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl-1-cfg-gl: feature level: 0xb000
+games: trip-gl-1-cfg-gl: tripprobe: 1000 round trips in 1018.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1-cfg-gl: TRIP OK
+trip: 1-cfg-gl status 0 ms 1018.9
+games: trip-gl-2-cfg-gl-csmt0x0: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl-2-cfg-gl-csmt0x0: feature level: 0xb000
+games: trip-gl-2-cfg-gl-csmt0x0: tripprobe: 1000 round trips in 525.7 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2-cfg-gl-csmt0x0: TRIP OK
+trip: 2-cfg-gl-csmt0x0 status 0 ms 525.7
+games: trip-gl-3-cfg-gl: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl-3-cfg-gl: feature level: 0xb000
+games: trip-gl-3-cfg-gl: tripprobe: 1000 round trips in 751.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-3-cfg-gl: TRIP OK
+trip: 3-cfg-gl status 0 ms 751.5
+## 80-5's kernel, QEMU with -overcommit cpu-pm=on
+trip: run 0 status 0 ms 927.6
+trip: run 1 status 0 ms 738.7
+trip: run 2 status 0 ms 920.8
+## the poll on every machine
+trip: run 0 status 0 ms 593.9
+trip: run 1 status 0 ms 539.6
+trip: run 2 status 0 ms 605.1
+## the poll in a guest only, as committed
+trip: run 0 status 0 ms 556.2
+trip: run 1 status 0 ms 537.8
+trip: run 2 status 0 ms 494.3

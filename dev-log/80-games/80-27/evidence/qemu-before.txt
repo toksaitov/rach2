@@ -1,0 +1,95 @@
+# Rach2 in QEMU before the poll: 80-5's root and kernel, trip.py of the task's scratch, loop 2 of 3
+window 732.6 ms
+  cpu [27, 0, 265, 1, 0, 0, 0, 0, 0, 0]
+  processes 8
+  process_pid_steps 1730
+  process_uid_steps 16
+  process_timer_steps 9182
+  process_timer_passes 594
+  timer_passes_late 61
+  tlb_shootdowns 37
+  tlb_shootdown_ipis 37
+  scheduler_picks 44416
+  scheduler_steps 17265
+  vm_gap_steps 147
+  bkl_wait_us 1742608
+  procs_running -1
+  563 trip64.exe       u0     s76    vcs 0       ivcs 14     timed 0
+  581 llvmpipe-0       u0     s19    vcs 2392    ivcs 89     timed 0
+  582 llvmpipe-1       u0     s12    vcs 2567    ivcs 52     timed 0
+  583 llvmpipe-2       u0     s20    vcs 2382    ivcs 67     timed 0
+  584 llvmpipe-3       u0     s17    vcs 2082    ivcs 39     timed 0
+  585 trip64.exe       u0     s0     vcs 0       ivcs 0      timed 0
+  586 trip64.exe       u0     s0     vcs 0       ivcs 0      timed 0
+  587 trip64.exe       u0     s0     vcs 0       ivcs 0      timed 0
+  588 trip64.exe       u0     s0     vcs 0       ivcs 0      timed 0
+  589 trip64.:disk$0   u0     s0     vcs 0       ivcs 0      timed 0
+  590 wined3d_cs       u12    s31    vcs 2091    ivcs 65     timed 0
+bkl_wait_us 1742608
+vector 0       holds    4670  us    42031  per 9.0
+syscall 1      holds    2799  us    24082  per 8.6
+vector 14      holds   20853  us    19963  per 1.0
+syscall 9      holds     198  us    10654  per 53.8
+syscall 441    holds    1773  us    34524  per 19.5
+syscall 20     holds    1801  us    16766  per 9.3
+syscall 217    holds     319  us    85470  per 267.9
+syscall 0      holds    6396  us    23920  per 3.7
+syscall 257    holds     860  us    44660  per 51.9
+vector 32      holds      56  us     4151  per 74.1
+syscall 262    holds     746  us    21304  per 28.6
+syscall 202    holds   31458  us   294430  per 9.4
+syscall 89     holds     541  us     3026  per 5.6
+syscall 17     holds      89  us     6689  per 75.2
+vector 48      holds      21  us     5301  per 252.4
+held us (listed) 636971
+
+# The same without WineD3D's command thread (WINE_D3D_CONFIG=renderer=gl,csmt=0x0), and with it
+## 2-cfg-gl-csmt0x0
+window 529.0 ms
+  696 trip64.exe       u3     s26    vcs 1296    ivcs 54     timed 0
+  714 llvmpipe-0       u0     s20    vcs 1904    ivcs 63     timed 0
+  715 llvmpipe-1       u0     s18    vcs 1976    ivcs 77     timed 0
+  716 llvmpipe-2       u0     s23    vcs 1945    ivcs 73     timed 0
+  717 llvmpipe-3       u0     s21    vcs 1708    ivcs 52     timed 0
+bkl_wait_us 1329920
+vector 0       holds    4759  us    39013  per 8.2
+syscall 1      holds    2426  us    21963  per 9.1
+syscall 9      holds     130  us     8347  per 64.2
+vector 14      holds   17822  us    14969  per 0.8
+syscall 441    holds    1506  us    31384  per 20.8
+syscall 20     holds    1669  us    13136  per 7.9
+syscall 217    holds      71  us    33516  per 472.1
+syscall 0      holds    5560  us    18593  per 3.3
+syscall 257    holds     527  us    17062  per 32.4
+vector 32      holds      47  us     1864  per 39.7
+syscall 262    holds     179  us     3421  per 19.1
+syscall 202    holds   27217  us   271224  per 10.0
+syscall 89     holds     204  us     1169  per 5.7
+syscall 17     holds      37  us     1480  per 40.0
+vector 48      holds       7  us     1919  per 274.1
+held us (listed) 479060
+## 3-cfg-gl
+window 757.8 ms
+  829 trip64.exe       u1     s75    vcs 0       ivcs 15     timed 0
+  845 llvmpipe-0       u0     s15    vcs 2407    ivcs 83     timed 0
+  846 llvmpipe-1       u0     s14    vcs 2568    ivcs 57     timed 0
+  847 llvmpipe-2       u0     s19    vcs 2314    ivcs 81     timed 0
+  848 llvmpipe-3       u0     s18    vcs 2052    ivcs 45     timed 0
+  856 wined3d_cs       u15    s36    vcs 2064    ivcs 71     timed 0
+bkl_wait_us 1819333
+vector 0       holds    4605  us    38771  per 8.4
+syscall 1      holds    2839  us    24504  per 8.6
+syscall 9      holds     214  us    10124  per 47.3
+vector 14      holds   21144  us    18161  per 0.9
+syscall 441    holds    1766  us    36345  per 20.6
+syscall 20     holds    1800  us    15570  per 8.7
+syscall 217    holds     388  us   108936  per 280.8
+syscall 0      holds    6372  us    24054  per 3.8
+syscall 257    holds     922  us    46946  per 50.9
+vector 32      holds      31  us     1628  per 52.5
+syscall 262    holds     918  us    26179  per 28.5
+syscall 202    holds   31194  us   295156  per 9.5
+syscall 89     holds     541  us     3295  per 6.1
+syscall 17     holds      89  us     6050  per 68.0
+vector 48      holds      20  us     5856  per 292.8
+held us (listed) 661575
