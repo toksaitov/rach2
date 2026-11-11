@@ -862,8 +862,10 @@ static void row_interactive(void)
  * nothing and takes no other fence in its place; one whose in-fence is an
  * i915 request, and a second commit's request before the vblank, keep an
  * entry each; the vblank boosts the request the chip has not begun and
- * lets both go; and a pipe whose vblanks go off ends its boosts at once,
- * as Linux's drm_crtc_vblank_off wakes their waits.
+ * lets both go; a pipe whose vblanks go off ends its boosts at once, as
+ * Linux's drm_crtc_vblank_off wakes their waits; and a deferred commit's
+ * tail boosts at once a request the chip has not begun, as Linux's
+ * intel_atomic_commit_fence_wait does, and nothing else.
  */
 static void row_boosts(void)
 {
@@ -901,6 +903,14 @@ static void row_boosts(void)
     CHECK(!b->boosts && boosts_done == n0 + 2 && boosted_last == &rq[2] && fence_refs == refs0 &&
               b->base.vblank.inmodeset && b->base.vblank.refs == 1,
           "boosts: pipe B's vblanks off end it at once, boosted");
+    n0 = boosts_done;
+    mc->commit_fence_wait(&gpu.drm, &other);
+    mc->commit_fence_wait(&gpu.drm, &rq[1].fence.base);
+    CHECK(boosts_done == n0, "boosts: a deferred commit's tail boosts no other driver's fence "
+                             "and no request begun");
+    mc->commit_fence_wait(&gpu.drm, &rq[0].fence.base);
+    CHECK(boosts_done == n0 + 1 && boosted_last == &rq[0],
+          "boosts: a deferred commit's tail boosts a request not begun at once");
     unsignaled = 0;
 }
 

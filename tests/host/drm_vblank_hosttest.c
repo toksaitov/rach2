@@ -675,12 +675,27 @@ static int32_t fd_status(int32_t fd)
     return st;
 }
 
+/* The fences the core told the driver a deferred commit's tail would
+ * wait for (`commit_fence_wait`), the last of them in `tail_wait`. */
+static int tail_waits;
+static struct dma_fence *tail_wait;
+
+/** The driver's `commit_fence_wait`, counted. */
+static void count_tail_wait(struct drm_device *d, struct dma_fence *fence)
+{
+    (void)d;
+    tail_waits++;
+    tail_wait = fence;
+}
+
 /** A nonblocking flip on a late in-fence flips, signals its out-fence and
- * sends its event only after the fence; a blocking flip waits for its
- * fence; a blocking commit waits for the queued one ahead of it. */
+ * sends its event only after the fence, and tells the driver of the fence
+ * its tail would wait for once, as it is queued; a blocking flip waits for
+ * its fence; a blocking commit waits for the queued one ahead of it. */
 static void row_fences(void)
 {
     struct sync_file_info info;
+    struct dma_fence *in;
     fd_entry_t timeline;
     int32_t in_fd, out_fd = 77, out2 = 77, base;
     struct req r;
@@ -695,8 +710,14 @@ static void row_fences(void)
     req_flip(&r, 0, fb_c);
     req_add(&r, &primary[0].base, mc->prop_in_fence_fd, (uint64_t)in_fd);
     req_add(&r, &crtc[0].base, mc->prop_out_fence_ptr, UPTR(&out_fd));
+    mc->commit_fence_wait = count_tail_wait;
+    tail_waits = 0;
     CHECK(req_commit(&r, DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT, 41) == 0,
           "a nonblocking flip on an in-fence that has not signalled");
+    in = sync_file_get_fence(in_fd);
+    CHECK(tail_waits == 1 && tail_wait == in,
+          "the driver is told of the in-fence its tail would wait for, as it is queued");
+    dma_fence_put(in);
     CHECK(out_fd >= 0 && out_fd != 77 && fd_status(out_fd) == 0, "its out-fence, pending");
     k_memset(&info, 0, sizeof(info));
     CHECK(sync_ioctl(fd_get(&table, out_fd), SYNC_IOC_FILE_INFO, (uintptr_t)&info) == 0 &&
@@ -714,6 +735,8 @@ static void row_fences(void)
     CHECK(drm_atomic_commit_work() == 1 && nshown == at + 1 && shown[at] == fb_c &&
               crtc[0].flip_pending == DRM_FLIP_ARMED && nsent == base,
           "the worker flips once it has signalled, and the event waits for the vblank");
+    CHECK(tail_waits == 1, "with no plane's fence left, the driver is told of none");
+    mc->commit_fence_wait = NULL;
     tick();
     CHECK(nsent == base + 1 && sent[base].user_data == 41 && fd_status(out_fd) == 1 &&
               !crtc[0].flip_pending,
