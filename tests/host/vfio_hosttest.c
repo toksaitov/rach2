@@ -615,6 +615,12 @@ struct pin {
 };
 static int pins;         /* pins held */
 static uint32_t pin_gap; /* the page after which the frames jump, or 0 */
+static int reaps;        /* calls of vm_file_reap */
+static int reap_pins;    /* pins held at the last of them */
+
+/* Run once inside the next pin, as another thread runs while the pin
+ * sleeps, or NULL. */
+static void (*pin_hook)(void);
 
 int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
              const struct pin_holder *holder, struct pin **out)
@@ -636,6 +642,12 @@ int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
     p->holder = holder;
     *out = p;
     pins++;
+    if (pin_hook != NULL) {
+        void (*hook)(void) = pin_hook;
+
+        pin_hook = NULL;
+        hook();
+    }
     return 0;
 }
 
@@ -645,9 +657,16 @@ void unpin(struct pin *pin)
     pins--;
 }
 
-/** The model's pins hold no file, so there is none to release. */
+/** Count the releases of the files the pins held, which VFIO makes at the
+ * end of each operation that unpins, and the pins left at the last. Linux
+ * unpins inside iommu->lock, which may sleep, in the unmap
+ * (vfio_iommu_type1.c:1409), the detach (:2508), the release (:2601) and a
+ * failed map (:1490); Rach2's unpin may not, and releases the files after. */
 void vm_file_reap(void)
-{}
+{
+    reaps++;
+    reap_pins = pins;
+}
 
 int pin_live(const struct pin *pin)
 {
@@ -1243,6 +1262,30 @@ static void binding_rows(void)
 
 static int container, group0, device;
 
+static struct vfio_iommu_type1_dma_map raced = {sizeof(raced), 1, 0x400000, 0x400000, 0x1000};
+static int32_t raced_r; /* map_same_iova's result */
+static int32_t unset_r; /* unset_last_group's result */
+static int unset_reaps; /* reaps when unset_last_group returned */
+
+/** Another thread's MAP_DMA of `raced`'s IOVA while a pin sleeps. Linux's
+ * vfio_dma_do_map holds iommu->lock from its overlap check through its pin
+ * (vfio_iommu_type1.c:1572, :1589, :1655), so there the second map waits;
+ * Rach2's pin sleeps without the big kernel lock, so MAP_DMA checks again. */
+static void map_same_iova(void)
+{
+    raced_r = ioc(container, VFIO_IOMMU_MAP_DMA, (uintptr_t)&raced);
+}
+
+/** Another thread's UNSET_CONTAINER of the last group while a pin sleeps.
+ * Linux's detach waits for the map on iommu->lock (vfio_iommu_type1.c:2464),
+ * and the unpin of every mapping follows (:2508); here MAP_DMA finds the
+ * driver gone after its pin. */
+static void unset_last_group(void)
+{
+    unset_r = ioc(group0, VFIO_GROUP_UNSET_CONTAINER, 0);
+    unset_reaps = reaps;
+}
+
 /** The container and group ioctls up to SET_IOMMU. */
 static void container_rows(void)
 {
@@ -1323,6 +1366,7 @@ static void dma_rows(void)
     int32_t fd = container;
 
     pin_gap = 2;
+    reaps = 0;
     CHECK(ioc(container, VFIO_IOMMU_MAP_DMA, (uintptr_t)&map) == 0 && nmaps == 2 &&
               maps[0].iova == 0x100000 && maps[0].size == 0x2000 &&
               maps[0].phys == 0x200010000ull && maps[1].iova == 0x102000 &&
@@ -1347,8 +1391,8 @@ static void dma_rows(void)
     um.iova = 0x100000;
     um.size = 0x4000;
     CHECK(ioc(container, VFIO_IOMMU_UNMAP_DMA, (uintptr_t)&um) == 0 && um.size == 0x4000 &&
-              unmaps == 1 && pins == 0,
-          "UNMAP_DMA removes the mapping and unpins it");
+              unmaps == 1 && pins == 0 && reaps == 1 && reap_pins == 0,
+          "UNMAP_DMA removes the mapping, unpins it, and then releases the pin's files");
     CHECK(ioc(container, VFIO_IOMMU_MAP_DMA, (uintptr_t)&map) == 0 && maps[2].prot == IOMMU_READ,
           "a read-only mapping");
     map.iova = 0x300000;
@@ -1365,6 +1409,23 @@ static void dma_rows(void)
     CHECK(ioc(vfio_groups[5].open ? 0 : open_node("vfio/5"), VFIO_GROUP_SET_CONTAINER,
               (uintptr_t)&fd) == -EPERM,
           "a group that is not viable is refused");
+}
+
+/** A MAP_DMA of the IOVA that another thread maps while the pin sleeps. */
+static void dma_race_rows(void)
+{
+    struct vfio_iommu_type1_dma_unmap um = {sizeof(um), VFIO_DMA_UNMAP_FLAG_ALL, 0, 0};
+    struct vfio_container *c = (struct vfio_container *)fds[container].priv;
+
+    reaps = 0;
+    pin_hook = map_same_iova;
+    CHECK(ioc(container, VFIO_IOMMU_MAP_DMA, (uintptr_t)&raced) == -EEXIST && raced_r == 0 &&
+              c->ndma == 1 && pins == 1 && reaps == 1,
+          "a MAP_DMA whose pin slept checks the IOVA again and fails, as Linux's checks it "
+          "under the lock its pin holds");
+    CHECK(ioc(container, VFIO_IOMMU_UNMAP_DMA, (uintptr_t)&um) == 0 && um.size == 0x1000 &&
+              pins == 0 && c->ndma == 0,
+          "the map made meanwhile stays until its unmap");
 }
 
 /* ---- the device ---- */
@@ -1507,8 +1568,10 @@ static void pcie_rows(void)
           "a PCI Express device has the extended space");
     closefd(wifi);
     CHECK(fns[8].resets == 2, "the card is reset at its release");
+    reaps = 0;
     closefd(g6);
-    CHECK(detaches == 1 && domains == 1, "its group leaves the domain at the last close");
+    CHECK(detaches == 1 && domains == 1 && reaps == 1,
+          "its group leaves the domain at the last close, and the detach releases the pins' files");
 }
 
 /** Mappings of the BARs. */
@@ -1719,6 +1782,7 @@ static void msix_rows(void)
  * and container after it. */
 static void release_rows(void)
 {
+    struct vfio_iommu_type1_dma_map map = {sizeof(map), 3, 0x10000, 0x100000, 0x4000};
     struct vfio_device *d = vdev("0000:00:02.0");
     int32_t fd = 106;
 
@@ -1734,10 +1798,18 @@ static void release_rows(void)
     mapped_ops->put(d);
     CHECK(d->refs == 0 && fns[1].resets == 3 && fns[1].cfg[0x0C] == 0 && evs[6].refs == 0,
           "the last reference resets the device and puts its state back");
-    CHECK(ioc(group0, VFIO_GROUP_UNSET_CONTAINER, 0) == 0 && detaches == 3 && domains == 0,
-          "the last group out releases the driver and its domain");
+    reaps = 0;
+    pin_hook = unset_last_group;
+    CHECK(ioc(container, VFIO_IOMMU_MAP_DMA, (uintptr_t)&map) == -EINVAL && unset_r == 0 &&
+              pins == 0,
+          "a MAP_DMA whose pin slept past the last group's going out fails and unpins");
+    CHECK(detaches == 3 && domains == 0, "the last group out releases the driver and its domain");
+    CHECK(unset_reaps == 1 && reaps == 2 && reap_pins == 0,
+          "the detach and the failed map each release the pins' files at their end");
     closefd(group0);
+    reaps = 0;
     closefd(container);
+    CHECK(reaps == 1, "the container's close releases the pins' files at its end");
     CHECK(slept != 0, "the resets waited through VFIO's sleep");
 }
 
@@ -1749,6 +1821,7 @@ int main(void)
     container_rows();
     iommu_info_rows();
     dma_rows();
+    dma_race_rows();
     region_rows();
     config_rows();
     pcie_rows();
