@@ -596,7 +596,9 @@ int kvm_pv_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, i
             }
             return 0;
         }
-        return -1;
+        /* Linux's KVM_MSR_RET_UNSUPPORTED, which a caller's MSR exit
+         * reports as KVM_MSR_EXIT_REASON_UNKNOWN. */
+        return KVM_MSR_UNKNOWN;
     }
     if (!write) {
         if (index == MSR_KVM_POLL_CONTROL) {

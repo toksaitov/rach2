@@ -2172,7 +2172,7 @@ static void pv_cap_rows(int vm, int fd0, int fd1)
     cap.cap = KVM_CAP_ENFORCE_PV_FEATURE_CPUID;
     cap.args[0] = 1;
     CHECK(fdio(fd1, KVM_ENABLE_CAP, (uintptr_t)&cap) == 0, "KVM_CAP_ENFORCE_PV_FEATURE_CPUID");
-    CHECK(kvm_pv_msr(v1, MSR_KVM_SYSTEM_TIME_NEW, 0, &value, 0) == -1 &&
+    CHECK(kvm_pv_msr(v1, MSR_KVM_SYSTEM_TIME_NEW, 0, &value, 0) == KVM_MSR_UNKNOWN &&
               !kvm_pv_has(v1, KVM_FEATURE_PV_SEND_IPI),
           "holds a vCPU with no KVM leaf to no feature");
     value = 1;
