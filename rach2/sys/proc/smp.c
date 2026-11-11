@@ -83,11 +83,12 @@ struct bkl_ioctl_count {
 static struct bkl_ioctl_count bkl_ioctls[BKL_IOCTL_SLOTS];
 static uint32_t bkl_ioctls_lost; /* calls of a request no slot took */
 
-/* The profile of the kernel under the big lock: each sampled instruction
- * with its caller, open addressed, and the samples taken and lost. */
+/* The profile of the kernel under the big lock: each sampled entry,
+ * instruction and callers, open addressed, and the samples taken and lost. */
 struct bkl_profile_slot {
-    uintptr_t pc;
-    uintptr_t caller; /* 0 when the frame chain gave none */
+    uintptr_t pc[BKL_PROFILE_FRAMES]; /* the instruction, then its callers, 0 past the chain */
+    uint32_t entry;                   /* the process's `bkl_entry`: a key plus one, 0 for none */
+    uint32_t cmd;                     /* the ioctl request for BKL_PROFILE_IOCTL, else 0 */
     uint32_t count;
 };
 static struct bkl_profile_slot bkl_profile[BKL_PROFILE_SLOTS];
@@ -388,26 +389,71 @@ void smp_call_end(uint32_t nr, int ioctl, uint64_t start)
     }
 }
 
+void bkl_entry_push(struct bkl_entry_saved *saved, uint32_t vector, int32_t nr, int ioctl,
+                    uint32_t cmd)
+{
+    struct process *p = current_proc;
+    int key;
+
+    if (!p) {
+        saved->entry = 0;
+        saved->cmd = 0;
+        return;
+    }
+    saved->entry = p->bkl_entry;
+    saved->cmd = p->bkl_cmd;
+    if (ioctl) {
+        key = BKL_PROFILE_IOCTL;
+    } else if (nr >= 0) {
+        key = nr < BKL_ENTRY_SYSCALLS ? (int)nr : BKL_ENTRY_KEYS - 1;
+    } else {
+        key = BKL_ENTRY_SYSCALLS + (int)(vector & 0xffu);
+    }
+    p->bkl_cmd = ioctl ? cmd : 0;
+    p->bkl_entry = (uint32_t)key + 1u;
+}
+
+void bkl_entry_pop(const struct bkl_entry_saved *saved)
+{
+    struct process *p = current_proc;
+
+    if (p) {
+        p->bkl_entry = saved->entry;
+        p->bkl_cmd = saved->cmd;
+    }
+}
+
 void bkl_profile_sample(uintptr_t pc, uintptr_t fp)
 {
     struct percpu *cpu = this_cpu();
     uintptr_t chain[BKL_SAMPLE_PCS], h;
-    int i;
+    uint32_t entry, cmd;
+    int i, f;
 
     if (cpu->bkl_depth < 2) {
         return;
     }
     sample_chain(chain, pc, fp, cpu->current ? cpu->current->kernel_stack : 0);
+    entry = cpu->current ? cpu->current->bkl_entry : 0;
+    cmd = cpu->current ? cpu->current->bkl_cmd : 0;
     bkl_profile_samples++;
-    h = (pc ^ (chain[1] * 31u)) >> 2;
+    h = (uintptr_t)entry * 2654435761u ^ cmd;
+    for (f = 0; f < BKL_PROFILE_FRAMES; f++) {
+        h = h * 31u ^ (chain[f] >> 2);
+    }
     for (i = 0; i < BKL_PROBES; i++) {
         struct bkl_profile_slot *s = &bkl_profile[(h + (uintptr_t)i) % BKL_PROFILE_SLOTS];
 
         if (s->count == 0) {
-            s->pc = pc;
-            s->caller = chain[1];
+            k_memcpy(s->pc, chain, sizeof(s->pc));
+            s->entry = entry;
+            s->cmd = cmd;
         }
-        if (s->pc == pc && s->caller == chain[1]) {
+        f = 0;
+        while (f < BKL_PROFILE_FRAMES && s->pc[f] == chain[f]) {
+            f++;
+        }
+        if (f == BKL_PROFILE_FRAMES && s->entry == entry && s->cmd == cmd) {
             s->count++;
             return;
         }
@@ -548,10 +594,31 @@ int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len)
     return (int32_t)len;
 }
 
+/** Append a profile slot's entry, as `bkl/calls` names one: `syscall` and
+ * its number, `vector` and its number, `ioctl` and its request in hex, or
+ * `kernel 0` for a process in none, such as a kernel thread. */
+static void text_entry(struct bkl_text *t, uint32_t entry, uint32_t cmd)
+{
+    int key = (int)entry - 1;
+
+    if (entry == 0) {
+        text_str(t, "kernel 0");
+    } else if (key == BKL_PROFILE_IOCTL) {
+        text_str(t, "ioctl ");
+        text_hex(t, cmd);
+    } else if (key < BKL_ENTRY_SYSCALLS || key == BKL_ENTRY_KEYS - 1) {
+        text_str(t, "syscall ");
+        text_dec(t, (uint64_t)(key < BKL_ENTRY_SYSCALLS ? key : BKL_ENTRY_SYSCALLS));
+    } else {
+        text_str(t, "vector ");
+        text_dec(t, (uint64_t)(key - BKL_ENTRY_SYSCALLS));
+    }
+}
+
 int32_t smp_profile_show(void *data, char *buf, uint32_t cap)
 {
     struct bkl_text t;
-    int i;
+    int i, f;
 
     (void)data;
     t.buf = buf;
@@ -564,9 +631,11 @@ int32_t smp_profile_show(void *data, char *buf, uint32_t cap)
     text_ch(&t, '\n');
     for (i = 0; i < BKL_PROFILE_SLOTS; i++) {
         if (bkl_profile[i].count != 0) {
-            text_hex(&t, bkl_profile[i].pc);
-            text_ch(&t, ' ');
-            text_hex(&t, bkl_profile[i].caller);
+            text_entry(&t, bkl_profile[i].entry, bkl_profile[i].cmd);
+            for (f = 0; f < BKL_PROFILE_FRAMES; f++) {
+                text_ch(&t, ' ');
+                text_hex(&t, bkl_profile[i].pc[f]);
+            }
             text_ch(&t, ' ');
             text_dec(&t, bkl_profile[i].count);
             text_ch(&t, '\n');
