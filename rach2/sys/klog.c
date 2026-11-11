@@ -132,6 +132,10 @@ static void build_u32(uint32_t v)
  * spaces are dropped first, which is where a format written with a newline of
  * its own goes: `build_putc` has already turned it into one. The record's
  * newline is written past the sink, which would turn it into a space too.
+ *
+ * The sink's place is put back as it was at the end, since an NMI that logs,
+ * as the watchdog's does, can come in the middle of another record's build
+ * on the same processor, whose interrupts are off.
  */
 static void klog_build(struct klog_record *r, int level, const char *subsystem, const char *format,
                        va_list ap)
@@ -140,6 +144,8 @@ static void klog_build(struct klog_record *r, int level, const char *subsystem, 
     uint32_t seconds = (uint32_t)tick_div(kernel_ticks, TICK_HZ, &rest);
     uint32_t us = rest * KLOG_TICK_US;
     uint32_t place;
+    char *was_at = build_at;
+    uint32_t was_left = build_left, was_over = build_over;
 
     build_at = r->text;
     build_left = KLOG_RECORD_MAX - 4;
@@ -176,6 +182,9 @@ static void klog_build(struct klog_record *r, int level, const char *subsystem, 
     }
     *build_at++ = '\n';
     r->len = (uint32_t)(build_at - r->text);
+    build_at = was_at;
+    build_left = was_left;
+    build_over = was_over;
 }
 
 /* ---- destination 1: the ring ---- */
