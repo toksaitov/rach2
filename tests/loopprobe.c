@@ -2,29 +2,32 @@
  * loopprobe: the loopback, the probe's sockets reaching each other through
  * 127.0.0.1 with no ARP and no wire.
  *
- * The IP layer turns a datagram to 127/8 around through the loopback ring,
- * from 127.0.0.1. A datagram socket connected to 127.0.0.1 reports 127.0.0.1
- * as its own address. A UDP datagram sent to 127.0.0.1 at the socket's own
- * bound port comes back with the payload intact and the source 127.0.0.1, an
- * empty datagram comes back as one, and a recvfrom given an address and no
- * length pointer fails with EFAULT and leaves the datagram for the next
- * receive. A receive with MSG_PEEK leaves a datagram and a stream's bytes
- * for the next one, and recvmsg reads a stream into its buffers in order,
- * peeking or taking. A TCP connection to the probe's own listener completes
- * its handshake, moves data both ways and reports the peer 127.0.0.1, and
- * one the server closes at once after accept still connects; a nonblocking
- * accept right after the connect finds the connection, and a poll with a
- * zero timeout right after a write finds the bytes. A transfer larger than
- * the ring arrives whole with no datagram dropped, and the legs of the round
- * trips between two processes are delivered at the exits of the calls that
- * sent them, none left on the ring for the timer while the machine idles.
- * A listener bound to 127.0.0.1 is not reached at
- * the machine's interface address, a bind to an address the machine lacks
- * is refused, and a connect to a closed port is refused by the reset that
- * answers its SYN. The rows of TCP ports check a client's bound source port,
- * the one listener a port may have, ephemeral ports and a shutdown, and a
- * socket that dials its own port opens a connection to itself by a
- * simultaneous open.
+ * The IP layer turns a datagram to 127/8 around through the loopback ring, from
+ * 127.0.0.1. A datagram socket connected to 127.0.0.1 reports 127.0.0.1 as its
+ * own address. A UDP datagram sent to 127.0.0.1 at the socket's own bound port
+ * comes back with the payload intact and the source 127.0.0.1, an empty
+ * datagram comes back as one, and a recvfrom given an address and no length
+ * pointer fails with EFAULT and leaves the datagram for the next receive. A
+ * receive with MSG_PEEK leaves a datagram and a stream's bytes for the next
+ * one, and recvmsg reads a stream into its buffers in order, peeking or taking.
+ * A datagram recvmsg fails only on a buffer the datagram reaches, and then
+ * takes it. A stream receive into an address below user space fails with every
+ * byte kept, one whose later segment cannot be written returns the segments
+ * before it and keeps that one, and one with MSG_WAITALL waits until its
+ * buffers are full. A TCP connection to the probe's own listener completes its
+ * handshake, moves data both ways and reports the peer 127.0.0.1, and one the
+ * server closes at once after accept still connects; a nonblocking accept right
+ * after the connect finds the connection, and a poll with a zero timeout right
+ * after a write finds the bytes. A transfer larger than the ring arrives whole
+ * with no datagram dropped, and the legs of the round trips between two
+ * processes are delivered at the exits of the calls that sent them, none left
+ * on the ring for the timer while the machine idles. A listener bound to
+ * 127.0.0.1 is not reached at the machine's interface address, a bind to an
+ * address the machine lacks is refused, and a connect to a closed port is
+ * refused by the reset that answers its SYN. The rows of TCP ports check a
+ * client's bound source port, the one listener a port may have, ephemeral ports
+ * and a shutdown, and a socket that dials its own port opens a connection to
+ * itself by a simultaneous open.
  *
  * A row that waits for a datagram or a connection blocks in the receive or
  * in poll(2) until it comes, and judges what came; the case's watchdog ends
@@ -63,9 +66,22 @@ typedef unsigned char uint8_t;
 
 #define MSG_DONTWAIT 0x40
 #define MSG_PEEK     0x2
+#define MSG_WAITALL  0x100
 #define MSG_NOSIGNAL 0x4000
 #define EAGAIN       11
 #define EFAULT       14
+
+#define PROT_NONE     0x0
+#define MAP_PRIVATE   0x02
+#define MAP_ANONYMOUS 0x20
+
+/* An address below the bottom of user space, USER_ADDR_MIN: on i686 where
+ * the kernel's image lies, on x86-64 in the low memory under 0x10000. */
+#if defined __x86_64__
+#define LOW_ADDR 0x8000UL
+#else
+#define LOW_ADDR 0x100000UL
+#endif
 
 #define AF_INET     2
 #define SOCK_STREAM 1
@@ -213,6 +229,10 @@ static const struct step {
     {"a second udp peek did not find the datagram and its sender", "udp-peek-again"},
     {"a udp receive after a peek did not take the datagram", "udp-receive-after-peek"},
     {"a udp receive after a peek left the datagram queued", "udp-peek-dequeued"},
+    {"a udp recvmsg failed on a buffer the datagram did not reach", "udp-recvmsg-unreached"},
+    {"a udp recvmsg on an empty socket with a bad buffer was not EAGAIN", "udp-recvmsg-empty-bad"},
+    {"a udp recvmsg into a bad buffer it reached was not EFAULT with the datagram taken",
+     "udp-recvmsg-reached"},
     {"tcp sockets for the peek", "tcp-peek-copies"},
     {"tcp bind for the peek", "tcp-peek-copies"},
     {"tcp listen for the peek", "tcp-peek-copies"},
@@ -228,6 +248,12 @@ static const struct step {
     {"a nonblocking tcp recvmsg did not take the rest", "tcp-recvmsg-rest"},
     {"a nonblocking tcp recvmsg of an empty stream was not EAGAIN", "tcp-recvmsg-empty"},
     {"tcp recvmsg changed a copied vector", "tcp-recvmsg-overlap"},
+    {"a tcp receive below user space was not EFAULT with every byte kept", "tcp-recv-low"},
+    {"no page for the tcp receive buffer rows", "tcp-recv-buffer-kept"},
+    {"a tcp receive did not keep the buffer whose destination failed", "tcp-recv-buffer-kept"},
+    {"a tcp receive with MSG_WAITALL did not wait for its buffers to fill", "tcp-recv-waitall"},
+    {"a nonblocking tcp receive with MSG_WAITALL did not return what had come",
+     "tcp-recv-waitall-nonblock"},
     {"tcp recvmsg with empty buffers was not EAGAIN", "tcp-recvmsg-zero-empty"},
     {"tcp recvmsg with empty buffers did not wait for input", "tcp-recvmsg-zero-wait"},
     {"tcp recvmsg with empty buffers took queued input", "tcp-recvmsg-zero-ready"},
@@ -883,8 +909,95 @@ static int recv_wait(int s, char *buf, int len, int flags)
     return socketcall(SC_RECVFROM, args);
 }
 
+/** A page of no access, mapped once, which a receive cannot write: its
+ * address, or NULL when it cannot be mapped. */
+static void *bad_page(void)
+{
+    static long page;
+
+    if (page == 0) {
+        page = probe_mmap(0, 4096, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (sys_failed(page))
+            page = 0;
+    }
+    return (void *)page;
+}
+
+/* The struct iovec and msghdr of the probe's ABI. */
+struct iovec_probe {
+    void *iov_base;
+    size_t iov_len;
+};
+
+struct msghdr_probe {
+    void *msg_name;
+    unsigned int msg_namelen;
+    struct iovec_probe *msg_iov;
+    size_t msg_iovlen;
+    void *msg_control;
+    size_t msg_controllen;
+    int msg_flags;
+};
+
+/** Receive on `s` into `count` vectors at `iov`, with no address or control
+ * buffer: the count read or a negated errno. */
+static int recvmsg_vec(int s, struct iovec_probe *iov, size_t count, int flags)
+{
+    struct msghdr_probe msg = {0};
+    unsigned long args[3];
+
+    msg.msg_iov = iov;
+    msg.msg_iovlen = count;
+    args[0] = (unsigned long)s;
+    args[1] = (unsigned long)&msg;
+    args[2] = (unsigned long)flags;
+    return socketcall(SC_RECVMSG, args);
+}
+
+/** Send the `len` bytes of `msg` from the UDP socket `s` to the address `sa`:
+ * the bytes sent or a negated errno. */
+static int udp_send(int s, const uint8_t *sa, const char *msg, int len)
+{
+    unsigned long args[6];
+
+    args[0] = (uint32_t)s;
+    args[1] = (unsigned long)msg;
+    args[2] = (uint32_t)len;
+    args[3] = 0;
+    args[4] = (unsigned long)sa;
+    args[5] = 16;
+    return socketcall(SC_SENDTO, args);
+}
+
+/** recvmsg on the datagram socket `s` writes its buffers only as it copies
+ * the datagram into them, as Linux's udp_recvmsg does, with `sa` the
+ * socket's own address: a datagram of four bytes fills the first of two
+ * buffers whose second cannot be written and returns four; a buffer that
+ * cannot be written on an empty socket gives EAGAIN with MSG_DONTWAIT; and a
+ * datagram of eight bytes that reaches it gives EFAULT and is taken. */
+static void udp_recvmsg_bad(int s, const uint8_t *sa)
+{
+    struct iovec_probe iov[2];
+    char first[4];
+
+    iov[0].iov_base = first;
+    iov[0].iov_len = sizeof(first);
+    iov[1].iov_base = bad_page();
+    iov[1].iov_len = 4096;
+    if (!iov[1].iov_base || udp_send(s, sa, "dgrm", 4) != 4 || recvmsg_vec(s, iov, 2, 0) != 4 ||
+        !mem_eq((const uint8_t *)first, (const uint8_t *)"dgrm", 4))
+        fail("a udp recvmsg failed on a buffer the datagram did not reach");
+    if (recvmsg_vec(s, iov + 1, 1, MSG_DONTWAIT) != -EAGAIN)
+        fail("a udp recvmsg on an empty socket with a bad buffer was not EAGAIN");
+    iov[1].iov_len = 4;
+    if (udp_send(s, sa, "datagram", 8) != 8 || recvmsg_vec(s, iov, 2, 0) != -EFAULT ||
+        recvmsg_vec(s, iov, 1, MSG_DONTWAIT) != -EAGAIN)
+        fail("a udp recvmsg into a bad buffer it reached was not EFAULT with the datagram taken");
+}
+
 /** A datagram peeked at with MSG_PEEK stays queued, whole and with its
- * sender, for the next receive, which takes it. */
+ * sender, for the next receive, which takes it. recvmsg then reads the same
+ * socket with buffers it cannot write (`udp_recvmsg_bad`). */
 static void udp_peek(void)
 {
     unsigned long args[6];
@@ -935,24 +1048,9 @@ static void udp_peek(void)
         fail("a udp receive after a peek did not take the datagram");
     if (socketcall(SC_RECVFROM, args) != -EAGAIN)
         fail("a udp receive after a peek left the datagram queued");
+    udp_recvmsg_bad(s, sa);
     sys_close(s);
 }
-
-/* The struct iovec and msghdr of the probe's ABI. */
-struct iovec_probe {
-    void *iov_base;
-    size_t iov_len;
-};
-
-struct msghdr_probe {
-    void *msg_name;
-    unsigned int msg_namelen;
-    struct iovec_probe *msg_iov;
-    size_t msg_iovlen;
-    void *msg_control;
-    size_t msg_controllen;
-    int msg_flags;
-};
 
 /* The two buffers `recvmsg2` reads into, and the header it gives back. */
 static char rm_a[16], rm_b[16];
@@ -993,21 +1091,6 @@ static int recvmsg2_got(const char *want, int alen, int blen)
            mem_eq((const uint8_t *)rm_b, (const uint8_t *)want + alen, blen);
 }
 
-/** Receive on `s` into `count` vectors at `iov`, with no address or control
- * buffer: the count read or a negated errno. */
-static int recvmsg_vec(int s, struct iovec_probe *iov, size_t count, int flags)
-{
-    struct msghdr_probe msg = {0};
-    unsigned long args[3];
-
-    msg.msg_iov = iov;
-    msg.msg_iovlen = count;
-    args[0] = (unsigned long)s;
-    args[1] = (unsigned long)&msg;
-    args[2] = (unsigned long)flags;
-    return socketcall(SC_RECVMSG, args);
-}
-
 /** A receive that overwrites its second vector must still use its original
  * destination, for blocking, nonblocking and peeking reads on `cs` from
  * `as`. The replacement is writable too, so the unfixed kernel fails the
@@ -1040,6 +1123,121 @@ static void tcp_recvmsg_overlap(int cs, int as)
                                   !mem_eq(got, wire, sizeof(wire))))
             fail("tcp recvmsg changed a copied vector");
     }
+}
+
+/** A stream receive whose destination lies below user space fails with
+ * EFAULT and leaves every byte queued, through readv, recvmsg and recvmsg
+ * with MSG_PEEK, as Linux's checked copy fails; a read then takes them. */
+static void tcp_recv_low(int cs, int as)
+{
+    const char *msg = "below-user-space";
+    struct iovec_probe iov[1];
+    char got[16];
+
+    iov[0].iov_base = (void *)LOW_ADDR;
+    iov[0].iov_len = sizeof(got);
+    if (sys_write(as, msg, sizeof(got)) != (int)sizeof(got) ||
+        syscall3(SYS_READV, cs, (long)iov, 1) != -EFAULT || recvmsg_vec(cs, iov, 1, 0) != -EFAULT ||
+        recvmsg_vec(cs, iov, 1, MSG_PEEK) != -EFAULT ||
+        sys_read(cs, got, sizeof(got)) != (int)sizeof(got) ||
+        !mem_eq((const uint8_t *)got, (const uint8_t *)msg, (int)sizeof(got)))
+        fail("a tcp receive below user space was not EFAULT with every byte kept");
+}
+
+/** A stream receive takes each receive buffer whole or not at all: with two
+ * segments queued, which a peek of eight bytes finds, and the second's
+ * destination a page that cannot be written, readv and recvmsg return the
+ * first and leave the second queued for a read, as Linux's tcp_recvmsg
+ * returns what it copied before a failed copy. */
+static void tcp_recv_kept(int cs, int as)
+{
+    struct iovec_probe iov[2];
+    char first[4], got[8];
+    int mode, n;
+
+    iov[0].iov_base = first;
+    iov[0].iov_len = sizeof(first);
+    iov[1].iov_base = bad_page();
+    iov[1].iov_len = 4;
+    if (!iov[1].iov_base)
+        fail("no page for the tcp receive buffer rows");
+    for (mode = 0; mode < 2; mode++) {
+        if (sys_write(as, "seg1", 4) != 4 || sys_write(as, "seg2", 4) != 4 ||
+            recv_wait(cs, got, sizeof(got), MSG_PEEK | MSG_DONTWAIT) != (int)sizeof(got))
+            fail("a tcp receive did not keep the buffer whose destination failed");
+        n = mode == 0 ? syscall3(SYS_READV, cs, (long)iov, 2) : recvmsg_vec(cs, iov, 2, 0);
+        if (n != 4 || !mem_eq((const uint8_t *)first, (const uint8_t *)"seg1", 4) ||
+            sys_read(cs, got, sizeof(got)) != 4 ||
+            !mem_eq((const uint8_t *)got, (const uint8_t *)"seg2", 4))
+            fail("a tcp receive did not keep the buffer whose destination failed");
+    }
+}
+
+/** Receive on the stream `s` into `buf` with MSG_WAITALL, by recv when
+ * `mode` is 0, recvfrom when 1, and recvmsg into two buffers when 2: the
+ * bytes received or a negated errno. */
+static int recv_waitall(int s, char *buf, int len, int mode)
+{
+    struct iovec_probe iov[2];
+    unsigned long args[4];
+
+    if (mode == 0) {
+        args[0] = (uint32_t)s;
+        args[1] = (unsigned long)buf;
+        args[2] = (uint32_t)len;
+        args[3] = MSG_WAITALL;
+        return socketcall(SC_RECV, args);
+    }
+    if (mode == 1)
+        return recv_wait(s, buf, len, MSG_WAITALL);
+    iov[0].iov_base = buf;
+    iov[0].iov_len = 3;
+    iov[1].iov_base = buf + 3;
+    iov[1].iov_len = (size_t)len - 3;
+    return recvmsg_vec(s, iov, 2, MSG_WAITALL);
+}
+
+/** A stream receive with MSG_WAITALL waits until its buffers are full: recv,
+ * recvfrom and recvmsg, each in a child seen asleep after the first half
+ * came, return all eight bytes once the parent sends the second half; with
+ * MSG_DONTWAIT the call returns the half that came, as Linux's tcp_recvmsg
+ * returns what it took where it would wait. */
+static void tcp_recv_waitall(int cs, int as)
+{
+    char buf[8];
+    int mode, pid, status;
+    char state;
+
+    for (mode = 0; mode < 3; mode++) {
+        if (sys_write(as, "wait", 4) != 4)
+            fail("a tcp receive with MSG_WAITALL did not wait for its buffers to fill");
+        pid = sys_fork();
+        if (pid < 0)
+            fail("a tcp receive with MSG_WAITALL did not wait for its buffers to fill");
+        if (pid == 0)
+            sys_exit(recv_waitall(cs, buf, sizeof(buf), mode) == (int)sizeof(buf) &&
+                             mem_eq((const uint8_t *)buf, (const uint8_t *)"waitall!", 8)
+                         ? 0
+                         : 1);
+        while ((state = state_of(pid)) != 'S') {
+            if (state == 0 || state == 'Z') {
+                sys_waitpid(pid, &status);
+                fail("a tcp receive with MSG_WAITALL did not wait for its buffers to fill");
+            }
+            sys_nanosleep_ms(10);
+        }
+        if (sys_write(as, "all!", 4) != 4) {
+            syscall2(SYS_KILL, pid, 9);
+            sys_waitpid(pid, &status);
+            fail("a tcp receive with MSG_WAITALL did not wait for its buffers to fill");
+        }
+        if (sys_waitpid(pid, &status) != pid || status != 0)
+            fail("a tcp receive with MSG_WAITALL did not wait for its buffers to fill");
+    }
+    if (sys_write(as, "half", 4) != 4 ||
+        recv_wait(cs, buf, sizeof(buf), MSG_WAITALL | MSG_DONTWAIT) != 4 ||
+        !mem_eq((const uint8_t *)buf, (const uint8_t *)"half", 4))
+        fail("a nonblocking tcp receive with MSG_WAITALL did not return what had come");
 }
 
 /** Both empty vector forms must sleep before the peer sends, then return
@@ -1142,6 +1340,9 @@ static void tcp_recvmsg(int cs, int as)
     if (recvmsg2(cs, 2, sizeof(rm_b), MSG_DONTWAIT) != -EAGAIN)
         fail("a nonblocking tcp recvmsg of an empty stream was not EAGAIN");
     tcp_recvmsg_overlap(cs, as);
+    tcp_recv_low(cs, as);
+    tcp_recv_kept(cs, as);
+    tcp_recv_waitall(cs, as);
     tcp_recvmsg_zero(cs, as);
 }
 
