@@ -19,6 +19,7 @@
 #include "../lib/kirq.h"
 #include "../proc/process.h"
 #include "../proc/ptrace.h"
+#include "../proc/sched.h"
 #include "../proc/smp.h"
 #include "../lib/spinlock.h"
 #include "mm.h"
@@ -1363,12 +1364,9 @@ static void fault_oom(uintptr_t address, int write)
  * would be pushed into the same guard, and the processor raises a double
  * fault instead (`isr_double_fault`).
  */
-static void _page_fault_handler(isr_params_t *params)
+static void page_fault(isr_params_t *params, uintptr_t fault_address)
 {
-    uintptr_t fault_address;
     int write, user_mode, have_user_proc, in_user_range, pid, key = -1;
-
-    fault_address = arch_fault_address();
 
     write = FAULT_WRITE(params);
     user_mode = FAULT_USER(params);
@@ -1433,6 +1431,32 @@ static void _page_fault_handler(isr_params_t *params)
 #endif
 
     k_panic("Unrecoverable error: page fault while in kernel mode.");
+}
+
+/**
+ * Read the fault's address and handle the fault (`page_fault`), with
+ * interrupts on for a fault from user mode, as Linux's `do_user_addr_fault`
+ * turns them on (arch/x86/mm/fault.c), since its fill may sleep on a file's
+ * locks. The address is read first, before an interrupt's own fault could
+ * change it. Meanwhile the tick leaves its switch for the fault's end
+ * (`in_fault`), as it does in a system call, since the fault changes the
+ * address space under the big lock; the end takes it, as the dispatcher
+ * does at a call's.
+ */
+static void _page_fault_handler(isr_params_t *params)
+{
+    uintptr_t fault_address = arch_fault_address();
+
+    if (!FAULT_USER(params) || !current_proc) {
+        page_fault(params, fault_address);
+        return;
+    }
+    current_proc->in_fault = 1;
+    arch_irq_enable();
+    page_fault(params, fault_address);
+    arch_irq_disable();
+    current_proc->in_fault = 0;
+    sched_take_preempt();
 }
 
 uintptr_t map_mmio(uintptr_t phys_addr, size_t size)

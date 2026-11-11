@@ -640,6 +640,10 @@ struct process {
      * A post marks only the chosen thread; only that thread recomputes it
      * after changing its mask or taking signals. */
     uint32_t sig_woken;
+    /* Nonzero while a fault from user mode runs with interrupts on; the
+     * tick then leaves its switch for the fault's end, as in a system call
+     * (`sched_preempt`). */
+    volatile uint32_t in_fault;
 #ifdef RACH2_LOCKDEP
     /* The sleeping locks this thread holds, which it keeps across its
      * sleeps, for the lock-order checker (lib/lockdep.c); its spinlocks are

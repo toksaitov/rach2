@@ -200,7 +200,7 @@ Nothing is mapped at `mmap`. A fault in a device region asks the object's `page`
 
 ### Page faults
 
-`_page_fault_handler` (`paging.c`) tries, in this order:
+`_page_fault_handler` (`paging.c`) reads the fault's address and, for a fault from user mode, turns interrupts on, as Linux's `do_user_addr_fault` does, since a fill may sleep on a file's locks; the tick leaves its switch for the fault's end meanwhile (`in_fault`), as it does in a system call, and the end takes it. A fault from kernel mode keeps interrupts as they were. `page_fault` then tries, in this order:
 
 1. A fault at a user address while the current process has an address space, from user mode or from the kernel touching a page not yet backed, goes to `vm_resolve`, unless it is a data access the running thread's PKRU denies to the region's key, which the error code's PK bit reports for a present page and `fault_key` finds for one not yet backed, or an instruction fetch from a page of no executable region (`fetch_refused`), which only x86-64's error code reports.
 2. A kernel fault inside the page-cache window goes to `pc_fault`, and panics when the cache cannot serve it.
