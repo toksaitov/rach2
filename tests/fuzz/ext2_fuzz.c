@@ -32,6 +32,18 @@ uint32_t timer_now_us(void)
     return 0;
 }
 
+/** Return 0: the cycle counter does not run here. */
+uint64_t arch_cycles(void)
+{
+    return 0;
+}
+
+/** A cycle is a microsecond here. */
+uint64_t timer_cycles_us(uint64_t cycles)
+{
+    return cycles;
+}
+
 /** Return 1: every buffer the walk passes is present. */
 int vm_resident(uintptr_t addr, uintptr_t len, int write)
 {
