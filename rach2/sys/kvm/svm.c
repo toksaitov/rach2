@@ -1979,12 +1979,15 @@ static int exit_msr(struct kvm_vcpu *v)
     }
     r = kvm_msr_allowed(v, index, write) ? msr_access(v, index, write, &value) : KVM_MSR_FILTERED;
     if (r != 0) {
-        if (v->vm->user_space_msr) {
-            /* The caller's answer skips the instruction. */
+        /* The caller's answer skips the instruction, whose length is
+         * decoded only for an exit the caller takes, as Linux's
+         * kvm_msr_user_space raises #GP before any decode. */
+        if (kvm_msr_user_reason(v, r)) {
             len = insn_len(v);
-            if (len == 0 || kvm_msr_user_exit(v, index, write, value, r, len)) {
-                return 0;
+            if (len != 0) {
+                (void)kvm_msr_user_exit(v, index, write, value, r, len);
             }
+            return 0;
         }
         gp(v);
         return 0;

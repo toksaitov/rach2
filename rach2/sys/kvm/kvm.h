@@ -791,6 +791,11 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host);
  * are never filtered. */
 int kvm_msr_allowed(const struct kvm_vcpu *v, uint32_t index, int write);
 
+/** The KVM_MSR_EXIT_REASON_* of the failure `r`, a KVM_MSR_* one, when
+ * KVM_CAP_X86_USER_SPACE_MSR asked for it on `v`'s VM, else 0: whether
+ * `kvm_msr_user_exit` would give the access to the caller. */
+uint32_t kvm_msr_user_reason(const struct kvm_vcpu *v, int r);
+
 /**
  * Give the caller the guest's RDMSR or WRMSR of `index` that failed with
  * `r`, a KVM_MSR_* failure, when KVM_CAP_X86_USER_SPACE_MSR asked for that

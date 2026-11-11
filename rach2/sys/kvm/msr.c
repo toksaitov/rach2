@@ -703,8 +703,7 @@ int kvm_msr_allowed(const struct kvm_vcpu *v, uint32_t index, int write)
     return f->default_allow;
 }
 
-int kvm_msr_user_exit(struct kvm_vcpu *v, uint32_t index, int write, uint64_t value, int r,
-                      uint32_t len)
+uint32_t kvm_msr_user_reason(const struct kvm_vcpu *v, int r)
 {
     uint32_t reason = KVM_MSR_EXIT_REASON_INVAL;
 
@@ -713,7 +712,15 @@ int kvm_msr_user_exit(struct kvm_vcpu *v, uint32_t index, int write, uint64_t va
     } else if (r == KVM_MSR_FILTERED) {
         reason = KVM_MSR_EXIT_REASON_FILTER;
     }
-    if (!(v->vm->user_space_msr & reason)) {
+    return (v->vm->user_space_msr & reason) ? reason : 0;
+}
+
+int kvm_msr_user_exit(struct kvm_vcpu *v, uint32_t index, int write, uint64_t value, int r,
+                      uint32_t len)
+{
+    uint32_t reason = kvm_msr_user_reason(v, r);
+
+    if (!reason) {
         return 0;
     }
     v->exit.kind = KVM_X_MSR;
