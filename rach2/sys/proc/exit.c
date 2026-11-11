@@ -32,9 +32,10 @@
  *
  * What closing the descriptors put on the loopback ring, a FIN or a reset,
  * is delivered before a waiter is told of the end, since this thread
- * reaches no system call's exit: on Linux the close in do_exit runs the
- * softirq on its local_bh_enable, so a parent whose wait has returned finds
- * the socket's end in the peer.
+ * reaches no system call's exit: on Linux the close by exit_files in
+ * do_exit (kernel/exit.c:949 in 6.12.115) runs the softirq on its
+ * local_bh_enable, before exit_notify tells the parent (966), so a parent
+ * whose wait has returned finds the socket's end in the peer.
  *
  * A thread that is not the last becomes a zombie no wait reports but its
  * tracer's, and wakes an execve or a core that waits for the other threads
