@@ -850,15 +850,10 @@ static const char *const kvm_modules[] = {"kvm", "kvm_intel", "kvm_amd"};
 static const struct kvm_param {
     int module; /* of kvm_modules: kvm, or the backend's kvm_intel or kvm_amd */
     const char *name;
-    char value; /* the file's text is this character and a newline */
-} kvm_params[] = {{0, "force_emulation_prefix", '0'},
-                  {0, "enable_pmu", 'N'},
-                  {0, "tdp_mmu", 'Y'},
-                  {0, "eager_page_split", 'N'},
-                  {1, "ept", 'Y'},
-                  {1, "unrestricted_guest", 'Y'},
-                  {2, "npt", 'Y'},
-                  {2, "avic", 'N'}};
+    char value; /* the file's character; zero means the host PMU's Y or N */
+} kvm_params[] = {{0, "force_emulation_prefix", '0'}, {0, "enable_pmu", 0},    {0, "tdp_mmu", 'Y'},
+                  {0, "eager_page_split", 'N'},       {0, "ignore_msrs", 'N'}, {1, "ept", 'Y'},
+                  {1, "unrestricted_guest", 'Y'},     {2, "npt", 'Y'},         {2, "avic", 'N'}};
 
 #define KVM_NR_PARAMS (sizeof(kvm_params) / sizeof(kvm_params[0]))
 
