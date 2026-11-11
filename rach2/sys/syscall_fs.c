@@ -508,6 +508,66 @@ void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
     fd_ofd_unref(ofd);
 }
 
+/** Whether pread64 can read `entry` at an offset, or it is a stream that
+ * pread64 refuses with -ESPIPE: a pipe, a socket, a terminal or
+ * pseudoterminal, the mouse, a device other than a raw window, the log or
+ * /dev/null, /dev/zero and /dev/full, and an anonymous object with no
+ * `llseek`. 1 or 0. */
+static int pio_seekable(fd_entry_t *entry)
+{
+    if (entry->type == FD_TYPE_DEVICE) {
+        return devfs_fd_is_raw(entry) || devfs_fd_log_size(entry, NULL) || devfs_lseek_zero(entry);
+    }
+    if (entry->type == FD_TYPE_ANON) {
+        return entry->ops && entry->ops->llseek;
+    }
+    return entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR ||
+           entry->type == FD_TYPE_SYNTH_DIR || entry->type == FD_TYPE_PROC ||
+           entry->type == FD_TYPE_FRAMEBUFFER;
+}
+
+/**
+ * Whether a transfer of `count` bytes at `pos` of `entry` would end past
+ * 2^63-1, which Linux's rw_verify_area refuses with EINVAL: 1 or 0. `count`
+ * is the request before its cut at USER_RW_MAX. /proc/PID/mem and /dev/mem
+ * take unsigned offsets, as Linux's FMODE_UNSIGNED_OFFSET makes them, and
+ * are never refused; a NULL `entry` is a directory, whose offsets are
+ * signed.
+ */
+static int rw_end_past(fd_entry_t *entry, uint64_t pos, uint64_t count)
+{
+    const uint64_t max = 0x7FFFFFFFFFFFFFFFull;
+
+    if (entry && (procfs_is_mem(entry) || devfs_fd_is_mem(entry))) {
+        return 0;
+    }
+    return pos > max || count > max - pos;
+}
+
+/**
+ * Check a read or write of `count` bytes, the request before its cut, at
+ * the offset of the description `entry` is open on: -EINVAL when its end
+ * would pass 2^63-1 (`rw_end_past`), as Linux's ksys_read and ksys_write
+ * check every file that is not a stream through rw_verify_area, or 0. A
+ * stream, what pread64 refuses (`pio_seekable`), has no offset to check,
+ * and a directory's is its listing's cursor, whose read is -EISDIR. A raw
+ * window moves an offset of its own, `raw_offset`. A NULL `entry` passes.
+ * The callers ask before the transfer, for Linux's order of errors, and the
+ * transfer asks again under the description's lock, since a sharer's seek
+ * can move the offset while the buffer is faulted in (`file_read`).
+ */
+static int32_t rw_offset_end(fd_entry_t *entry, size_t count)
+{
+    uint64_t pos;
+
+    if (!entry || !entry->ofd || !pio_seekable(entry) || entry->type == FD_TYPE_DIR ||
+        entry->type == FD_TYPE_SYNTH_DIR) {
+        return 0;
+    }
+    pos = devfs_fd_is_raw(entry) ? entry->ofd->raw_offset : entry->ofd->offset;
+    return rw_end_past(entry, pos, (uint64_t)count) ? -EINVAL : 0;
+}
+
 /**
  * The description an ops-backed read or write of `entry` holds for its
  * length, as lseek holds it to move the offset, or NULL. A raw disk window's
@@ -535,8 +595,11 @@ static struct open_file *ops_offset_held(fd_entry_t *entry)
 /** Dispatch an ops-backed write, holding the description of one whose write
  * uses its offset (`ops_offset_held`); -EBADF for a descriptor not open for
  * writing, and -EINVAL for an object without a write, such as an epoll set,
- * as Linux's vfs_write tests FMODE_CAN_WRITE after FMODE_WRITE. */
-static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count)
+ * as Linux's vfs_write tests FMODE_CAN_WRITE after FMODE_WRITE, or for an
+ * end of `asked` bytes, the request before its cut, past 2^63-1 at the
+ * offset the held description has under its lock (`rw_offset_end`), which a
+ * sharer's seek may have moved since the caller's check. */
+static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count, size_t asked)
 {
     struct open_file *held = ops_offset_held(entry);
     int32_t rc;
@@ -546,6 +609,10 @@ static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t cou
     }
     if (held) {
         fd_ofd_lock(held);
+        if (rw_offset_end(entry, asked) != 0) {
+            fd_ofd_unlock(held);
+            return -EINVAL;
+        }
     }
     rc = entry->ops->write ? entry->ops->write(entry, buf, count) : -EINVAL;
     if (held) {
@@ -772,15 +839,19 @@ out:
  * Write `count` bytes of user buffer `buf` to the file of a mounted type or
  * of the KRFFS root that `entry` is open on: at the description's offset,
  * which moves past what was written, or at `*at` for pwrite64, which leaves
- * it where it was.
+ * it where it was. At the description's offset the end of `asked` bytes,
+ * the request before its cut at USER_RW_MAX, is checked again under the
+ * description's lock (`rw_offset_end`), since a sharer may have moved the
+ * offset while the buffer was faulted in, as Linux checks it under the
+ * position lock; `asked` is unused with `at`.
  *
  * Returns the bytes written, or a negative errno: -EBADF for a descriptor
  * not open for writing or not on a file of a mount, -EFAULT, -EBUSY, -EFBIG,
- * or the file system's error. Takes the description's lock, then the file's
- * (`vfs_node_lock`): on a type that sets `file_locked` always, and on
- * another, where it is the mount's namespace lock, for an O_APPEND write
- * and for a file shared mappings hold; each from before the size O_APPEND
- * reads to after the write. May sleep.
+ * -EINVAL for that end past 2^63-1, or the file system's error. Takes the
+ * description's lock, then the file's (`vfs_node_lock`): on a type that sets
+ * `file_locked` always, and on another, where it is the mount's namespace
+ * lock, for an O_APPEND write and for a file shared mappings hold; each from
+ * before the size O_APPEND reads to after the write. May sleep.
  *
  * With O_APPEND every write lands at the current end of the file, whatever
  * the offset says and whatever `at` asks for, as Linux's pwrite does. The
@@ -804,7 +875,7 @@ out:
  * that starts at it fails (`fsize_refused`).
  */
 static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t count,
-                          const uint64_t *at)
+                          const uint64_t *at, size_t asked)
 {
     struct open_file *ofd = entry->ofd;
     struct file_write_state state;
@@ -823,6 +894,10 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
         return -EBUSY;
     }
     fd_ofd_lock(ofd);
+    if (!at && rw_offset_end(entry, asked) != 0) {
+        fd_ofd_unlock(ofd);
+        return -EINVAL;
+    }
     state.own = file_lock(ofd, &state.file);
     state.append = (ofd->status_flags & OFD_APPEND) != 0;
     state.moved = 0;
@@ -919,63 +994,6 @@ static int32_t rw_buffer_range(uintptr_t addr, size_t count)
     return (long)count < 0 ? -EINVAL : 0;
 }
 
-/** Whether pread64 can read `entry` at an offset, or it is a stream that
- * pread64 refuses with -ESPIPE: a pipe, a socket, a terminal or
- * pseudoterminal, the mouse, a device other than a raw window, the log or
- * /dev/null, /dev/zero and /dev/full, and an anonymous object with no
- * `llseek`. 1 or 0. */
-static int pio_seekable(fd_entry_t *entry)
-{
-    if (entry->type == FD_TYPE_DEVICE) {
-        return devfs_fd_is_raw(entry) || devfs_fd_log_size(entry, NULL) || devfs_lseek_zero(entry);
-    }
-    if (entry->type == FD_TYPE_ANON) {
-        return entry->ops && entry->ops->llseek;
-    }
-    return entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR ||
-           entry->type == FD_TYPE_SYNTH_DIR || entry->type == FD_TYPE_PROC ||
-           entry->type == FD_TYPE_FRAMEBUFFER;
-}
-
-/**
- * Whether a transfer of `count` bytes at `pos` of `entry` would end past
- * 2^63-1, which Linux's rw_verify_area refuses with EINVAL: 1 or 0. `count`
- * is the request before its cut at USER_RW_MAX. /proc/PID/mem and /dev/mem
- * take unsigned offsets, as Linux's FMODE_UNSIGNED_OFFSET makes them, and
- * are never refused; a NULL `entry` is a directory, whose offsets are
- * signed.
- */
-static int rw_end_past(fd_entry_t *entry, uint64_t pos, uint64_t count)
-{
-    const uint64_t max = 0x7FFFFFFFFFFFFFFFull;
-
-    if (entry && (procfs_is_mem(entry) || devfs_fd_is_mem(entry))) {
-        return 0;
-    }
-    return pos > max || count > max - pos;
-}
-
-/**
- * Check a read or write of `count` bytes, the request before its cut, at
- * the offset of the description `entry` is open on: -EINVAL when its end
- * would pass 2^63-1 (`rw_end_past`), as Linux's ksys_read and ksys_write
- * check every file that is not a stream through rw_verify_area, or 0. A
- * stream, what pread64 refuses (`pio_seekable`), has no offset to check,
- * and a directory's is its listing's cursor, whose read is -EISDIR. A raw
- * window moves an offset of its own, `raw_offset`. A NULL `entry` passes.
- */
-static int32_t rw_offset_end(fd_entry_t *entry, size_t count)
-{
-    uint64_t pos;
-
-    if (!entry || !entry->ofd || !pio_seekable(entry) || entry->type == FD_TYPE_DIR ||
-        entry->type == FD_TYPE_SYNTH_DIR) {
-        return 0;
-    }
-    pos = devfs_fd_is_raw(entry) ? entry->ofd->raw_offset : entry->ofd->offset;
-    return rw_end_past(entry, pos, (uint64_t)count) ? -EINVAL : 0;
-}
-
 /** Check the descriptor's write access before its buffer or vector.
  * Return -EBADF for a missing descriptor, O_PATH, no write access or an
  * unsupported kind, -EINVAL for an object without a write method, or 0.
@@ -1050,7 +1068,7 @@ static int32_t write_fd(int fd, const char __user *buf, size_t requested)
     count = USER_RW_LEN(requested);
 
     if (entry->ops) {
-        return write_ops(entry, buf, count);
+        return write_ops(entry, buf, count, requested);
     }
 
     if (entry->type == FD_TYPE_SOCKET) {
@@ -1085,7 +1103,7 @@ static int32_t write_fd(int fd, const char __user *buf, size_t requested)
     }
 
     if (entry->type == FD_TYPE_FILE) {
-        return file_write(entry, buf, count, NULL);
+        return file_write(entry, buf, count, NULL, requested);
     }
 
     return -EBADF;
@@ -6293,9 +6311,12 @@ int sock_is_query(const struct socket *sock)
  * the read uses its offset (`ops_offset_held`). Returns the method's
  * answer, -EBADF for a descriptor not open for reading, or -EINVAL for an
  * object with no read method, as Linux's vfs_read tests FMODE_CAN_READ
- * after FMODE_READ. May sleep.
+ * after FMODE_READ, or for an end of `asked` bytes, the request before its
+ * cut, past 2^63-1 at the offset the held description has under its lock
+ * (`rw_offset_end`), which a sharer's seek may have moved since the
+ * caller's check. May sleep.
  */
-static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)
+static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count, size_t asked)
 {
     struct open_file *held = ops_offset_held(entry);
     int32_t rc;
@@ -6305,6 +6326,10 @@ static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)
     }
     if (held) {
         fd_ofd_lock(held);
+        if (rw_offset_end(entry, asked) != 0) {
+            fd_ofd_unlock(held);
+            return -EINVAL;
+        }
     }
     rc = entry->ops->read ? entry->ops->read(entry, buf, count) : -EINVAL;
     if (held) {
@@ -6317,11 +6342,16 @@ static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)
  * Read up to `count` bytes into user buffer `buf` from the file of a mounted
  * type or of the KRFFS root that `entry` is open on: at the description's
  * offset, which moves past what was read, or at `*at` for pread64, which
- * leaves it where it was. Returns the bytes read, 0 at the end of the file,
- * or a negative errno: -EBADF for a descriptor not open for reading or on
- * no file, -EFAULT for a buffer the caller cannot write, -EIO when a shared
- * mapping's pages of the range cannot be written back first
- * (`filemap_file_reading`), or the type's error. A read of a byte or more
+ * leaves it where it was. At the description's offset the end of `asked`
+ * bytes, the request before its cut at USER_RW_MAX, is checked again under
+ * the description's lock (`rw_offset_end`), since a sharer may have moved
+ * the offset while the buffer was faulted in, as Linux checks it under the
+ * position lock; `asked` is unused with `at`. Returns the bytes read, 0 at
+ * the end of the file, or a negative errno: -EBADF for a descriptor not open
+ * for reading or on no file, -EFAULT for a buffer the caller cannot write,
+ * -EIO when a shared mapping's pages of the range cannot be written back
+ * first (`filemap_file_reading`), -EINVAL for that end past 2^63-1, or the
+ * type's error. A read of a byte or more
  * reports IN_ACCESS to inotify.
  *
  * A regular ext2 file is read through the file page cache
@@ -6332,7 +6362,8 @@ static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)
  * rather than reading the same bytes while the first is in a request, and a
  * KRFFS relocation cannot move the handle while it is in use.
  */
-static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, const uint64_t *at)
+static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, const uint64_t *at,
+                         size_t asked)
 {
     struct open_file *ofd = entry->ofd;
     int32_t bytes_read;
@@ -6350,6 +6381,10 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
         return -EIO;
     }
     fd_ofd_lock(ofd);
+    if (!at && rw_offset_end(entry, asked) != 0) {
+        fd_ofd_unlock(ofd);
+        return -EINVAL;
+    }
     if (!filecache_file_read(ofd, buf, count, at ? *at : ofd->offset, &bytes_read)) {
         bytes_read =
             vfs_read(ofd->vmnt, ofd->fhandle, (char __force *)buf, count, at ? *at : ofd->offset);
@@ -6547,14 +6582,14 @@ static int32_t read_fd(int fd, char __user *buf, size_t requested)
 
     if (count == 0) {
         /* An eventfd's or a timerfd's read refuses a count under 8. */
-        return entry->type == FD_TYPE_ANON && entry->ops ? read_ops(entry, buf, 0) : 0;
+        return entry->type == FD_TYPE_ANON && entry->ops ? read_ops(entry, buf, 0, 0) : 0;
     }
     if (!buf) {
         return -EFAULT;
     }
 
     if (entry->ops) {
-        return read_ops(entry, buf, count);
+        return read_ops(entry, buf, count, requested);
     }
 
     if (entry->type == FD_TYPE_SOCKET) {
@@ -6583,7 +6618,7 @@ static int32_t read_fd(int fd, char __user *buf, size_t requested)
     }
 
     if (entry->type == FD_TYPE_FILE) {
-        return file_read(entry, buf, count, NULL);
+        return file_read(entry, buf, count, NULL, requested);
     }
 
     return -EBADF;
@@ -6639,7 +6674,7 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
             return 0;
         }
 
-        return read_ops(entry, buf, count);
+        return read_ops(entry, buf, count, count);
     }
     if (entry->type == FD_TYPE_SOCKET && entry->sock) {
         int32_t r;
@@ -12700,7 +12735,7 @@ long ksys_pread64(int fd, char __user *buf, size_t requested, long long pos)
         return rc;
     }
     if (entry->type == FD_TYPE_FILE && !entry->ops) {
-        return file_read(entry, buf, count, &at);
+        return file_read(entry, buf, count, &at, count);
     }
     if (!entry->ops || !entry->ops->read || !entry->ofd) {
         return -EBADF;
@@ -12724,7 +12759,7 @@ long ksys_pwrite64(int fd, const char __user *buf, size_t requested, long long p
         return rc;
     }
     if (entry->type == FD_TYPE_FILE && !entry->ops) {
-        return file_write(entry, buf, count, &at);
+        return file_write(entry, buf, count, &at, count);
     }
     if (!entry->ops || !entry->ops->write || !entry->ofd) {
         return -EBADF;
@@ -12975,6 +13010,21 @@ static long iov_file_elements(fd_entry_t *entry, const struct kernel_iovec *iov,
 }
 
 /**
+ * The refusals of `iov_file_write` under the description's lock of `entry`:
+ * -EINVAL when, at the shared offset (`pos` -1), the end of `wanted` bytes
+ * passes 2^63-1 (`rw_offset_end`), which a sharer's seek may have moved
+ * since the caller's check, then -EBUSY for a file that backs a loop
+ * device, or 0.
+ */
+static long iov_file_refused(fd_entry_t *entry, long long pos, uint32_t wanted)
+{
+    if (pos == -1 && rw_offset_end(entry, wanted) != 0) {
+        return -EINVAL;
+    }
+    return loop_backs(entry->ofd->vmnt, entry->ofd->vnode) ? -EBUSY : 0;
+}
+
+/**
  * Write the vector of `count` elements at `addr` to the regular file of the
  * descriptor `entry`, which the caller holds, holding its description and file
  * locks across the elements (`file_write_locked`), or the mount's namespace
@@ -12988,7 +13038,8 @@ static long iov_file_elements(fd_entry_t *entry, const struct kernel_iovec *iov,
  * whole 2 MiB chunks before its end (`iov_seal_grow`). Returns the bytes
  * written, including those before a bad data page, or an error when no byte was
  * written: -EINVAL for a count below 0 or past IOV_MAX_LOCAL, a negative
- * length, or a vector whose end at `pos` would pass 2^63-1, -EFAULT for a
+ * length, or a vector whose end at `pos`, or at the shared offset under the
+ * description's lock (`iov_file_refused`), would pass 2^63-1, -EFAULT for a
  * vector or a buffer the caller cannot reach, -EBADF for a descriptor that is
  * not a file of a mount open for writing, -EBUSY for a file that backs a loop
  * device, or the write's error.
@@ -13032,7 +13083,7 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
     }
     state.append = append;
     state.moved = 0;
-    rc = loop_backs(ofd->vmnt, ofd->vnode) ? -EBUSY : 0;
+    rc = iov_file_refused(entry, pos, wanted);
     if (rc == 0) {
         rc = iov_seal_grow(ofd, pos == -1 ? ofd->offset : (uint64_t)pos, wanted, append, &room);
     }
@@ -13680,7 +13731,7 @@ static int32_t copy_put(fd_entry_t *out, int out_fd, const char *buf, uint32_t n
         return pipe_splice_write(out, (const char __force __user *)buf, n, 1, src);
     }
     if (at) {
-        return file_write(out, (const char __force __user *)buf, n, at);
+        return file_write(out, (const char __force __user *)buf, n, at, n);
     }
     return write_fd(out_fd, (const char __force __user *)buf, n);
 }
@@ -13730,7 +13781,7 @@ static int32_t copy_from_file(fd_entry_t *in, uint64_t *pos, fd_entry_t *out, in
         if (pipe_is(out) && !full && want < count - done) {
             want -= (src + want) & (PAGE_SIZE - 1);
         }
-        got = file_read(in, (char __force __user *)buf, want, pos);
+        got = file_read(in, (char __force __user *)buf, want, pos, want);
         if (got <= 0) {
             return done > 0 ? (int32_t)done : got;
         }
