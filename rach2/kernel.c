@@ -508,7 +508,9 @@ static void init_end_line(uint32_t pid, int32_t status)
  * which comes here with them off: what it releases and writes may sleep on a
  * disk that answers only by interrupt, and the timer must not switch away in
  * the middle. Interrupts go off again once the process's end is published,
- * before its record can be freed or the processor given up.
+ * before its record can be freed or the processor given up. The choice of a
+ * core and `proc_group_exit` run with interrupts off, since a fatal signal
+ * posted from an interrupt begins the process's end too (`sig_complete`).
  *
  * The session the process leads gives up the console, its pty slaves and the
  * framebuffer (`terminate_release_session`): before the thread's cleanup
@@ -542,8 +544,7 @@ void terminate_current_process(int32_t signo)
     pid = current_proc->tgid;
     is_init = (pid == init_pid && init_pid != 0);
     current_proc->in_syscall = 1;
-    arch_irq_enable();
-
+    arch_irq_disable();
     core = (signo & WCOREFLAG) && !current_proc->tg->exiting && !current_proc->tg->exec_task &&
            current_proc->mm->dumpable && current_proc->rlim[RLIM_CORE].cur >= PAGE_SIZE;
     signo &= 0x7F;
@@ -551,6 +552,7 @@ void terminate_current_process(int32_t signo)
         current_proc->tg->core_dumping = 1;
     }
     proc_group_exit(signo);
+    arch_irq_enable();
     if (core) {
         signo = terminate_core(signo);
     } else if (current_proc->tg->core_dumping) {

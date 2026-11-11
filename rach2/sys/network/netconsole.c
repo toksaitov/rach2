@@ -73,6 +73,7 @@
 #include "../klog.h"
 #include "../panic.h"
 #include "../timer.h"
+#include "../boot.h"
 #include "../cmdline.h"
 #include "netconsole.h"
 #include "net.h"
@@ -1412,20 +1413,29 @@ static void nc_choose_boot_id(void)
  * Linux reads that uint module parameter: each occurrence in order, as
  * `parse_args` applies them (kernel/params.c:161-186), each value read by
  * `param_set_uint`, which is `kstrtouint` with base 0 (kernel/params.c:238),
- * so `0x10` is 16 and `010` is 8. A value it refuses changes nothing, and the
- * last one it takes counts; with none, Linux's default of 4 stays.
+ * so `0x10` is 16 and `010` is 8, at any length. A value it refuses changes
+ * nothing and is logged, as `parse_args` logs it (kernel/params.c:202-205),
+ * and so is each bare `netpoll.carrier_timeout`, which `parse_one` refuses
+ * for a parameter that takes a value (kernel/params.c:136-138). The last
+ * value taken counts; with none, Linux's default of 4 stays.
  */
 static void nc_read_carrier_timeout(void)
 {
-    char value[24];
+    static const char key[] = "netpoll.carrier_timeout";
+    char value[BOOT_CMDLINE_MAX];
     unsigned long v;
-    int n = kcmdline_count("netpoll.carrier_timeout"), i;
+    int n = kcmdline_count(key), i;
 
     for (i = 0; i < n; i++) {
-        if (kcmdline_value_nth("netpoll.carrier_timeout", i, value, sizeof(value)) &&
-            k_strtoul(value, sizeof(value), &v) == 0 && v <= 0xFFFFFFFFul) {
-            nc_carrier_ticks = (uint64_t)v * TICK_HZ;
+        if (!kcmdline_value_nth(key, i, value, sizeof(value)) ||
+            k_strtoul(value, sizeof(value), &v) != 0 || v > 0xFFFFFFFFul) {
+            klog(KLOG_ERR, "netconsole", "refused: %s=%s", key, value);
+            continue;
         }
+        nc_carrier_ticks = (uint64_t)v * TICK_HZ;
+    }
+    for (i = kcmdline_bare_count(key); i > 0; i--) {
+        klog(KLOG_ERR, "netconsole", "refused: %s", key);
     }
 }
 
