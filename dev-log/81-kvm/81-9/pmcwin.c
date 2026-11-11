@@ -1,7 +1,8 @@
 /*
  * Count a guest's windows of retired instructions on one of its counters,
- * under each value of kvm_intel's pmu_steps, to find which of Linux's steps
- * keeps Haswell's fixed counter 0 exact (81-9.28). Built on the host:
+ * placed on physical fixed counter 0 or on a general counter, under each
+ * value of kvm_intel's pmu_steps, to find which of Linux's steps keeps
+ * Haswell's fixed counter 0 exact (81-9.28). Built on the host:
  * gcc -O1 -o pmcwin pmcwin.c
  */
 #define _GNU_SOURCE
@@ -17,7 +18,9 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#define STEPS_FILE "/sys/module/kvm_intel/parameters/pmu_steps"
+#define STEPS_FILE  "/sys/module/kvm_intel/parameters/pmu_steps"
+#define PLACED_FILE "/sys/module/kvm_intel/parameters/pmu_placed"
+#define STEP_ORDER  0x10u /* pmu_steps' Linux order, fixed counters first */
 #define MEM_SIZE   0x400000u /* the guest's memory, from address 0 */
 #define CODE_GPA   0x1000u
 #define OUT_GPA    0x20000u /* a 32-bit delta for each window */
@@ -37,7 +40,15 @@
  * EDI the CPUIDs, each an exit, inside each window, EBP the windows; each
  * window's delta goes to OUT_GPA on. The two RDPMCs exit too, so a window
  * has two exits and EDI more. HLT ends the run.
+ *
+ * A window retires the first RDPMC, which reads the counter before it
+ * retires, the four instructions from its MOV to the JZ, the loop's four
+ * instructions, XOR, CPUID, DECL and JNZ, EDI times, the 20 NOPs and the
+ * MOV to ECX, and not the second RDPMC, which reads before it retires:
+ * 26 + 4 * EDI instructions (`EXACT`). KVM counts the RDPMCs and CPUIDs
+ * it emulates as Linux's does.
  */
+#define EXACT(exits) (26u + 4u * (exits))
 extern const unsigned char guest_start[], guest_end[];
 __asm__(".pushsection .rodata\n"
         ".code32\n"
@@ -68,29 +79,43 @@ __asm__(".pushsection .rodata\n"
         ".code64\n"
         ".popsection\n");
 
-/* A case: which counter is read and what else counts beside it. */
+/* A case: which counter is read, what else counts beside it, and where
+ * its counters run. With pmu_steps' 0x10 KVM places a guest counter of
+ * retired instructions on physical fixed counter 0 first, and without it
+ * on a general counter first, on Haswell; pmu_placed, read after the run,
+ * shows where they ran. */
 struct probe_case {
     const char *name;
-    uint32_t index;   /* RDPMC's ECX */
-    uint64_t global;  /* the guest's GLOBAL_CTRL */
-    uint64_t fixed;   /* the guest's FIXED_CTRL */
-    uint64_t sel[4];  /* the guest's EVENTSEL0 to 3 */
+    uint32_t index;  /* RDPMC's ECX */
+    uint64_t global; /* the guest's GLOBAL_CTRL */
+    uint64_t fixed;  /* the guest's FIXED_CTRL */
+    uint64_t sel[4]; /* the guest's EVENTSEL0 to 3 */
+    int on_fixed;    /* 1 on physical fixed counter 0, with 0x10; 0 on a
+                        general counter, without it */
+    uint64_t others; /* the general counters the others take, or 0 */
 };
 
+#define FIXED0_BIT (1ull << 32) /* fixed counter 0 in pmu_placed */
+#define INSNS      (EV_ENABLE | EV_OS | EV_USR | 0xC0)
+#define BRANCHES   (EV_ENABLE | EV_OS | EV_USR | 0xC4)
+
 static const struct probe_case cases[] = {
-    /* Fixed counter 0 alone: with pmu_steps' 0x10 it runs on physical
-     * fixed counter 0, and otherwise on a general counter. */
-    {"fixed0", 0x40000000u, 1ull << 32, 0x3, {0, 0, 0, 0}},
-    /* General counter 0 counting instructions retired, 0xC0, alone. */
-    {"gp0", 0, 1, 0, {EV_ENABLE | EV_OS | EV_USR | 0xC0, 0, 0, 0}},
-    /* Fixed counter 0 with the four general counters counting branches,
-     * 0xC4, so that it runs on physical fixed counter 0 in either order. */
-    {"mixed",
+    /* The guest's fixed counter 0 alone, on each kind of counter. */
+    {"fixed0 on fixed", 0x40000000u, 1ull << 32, 0x3, {0, 0, 0, 0}, 1, 0},
+    {"fixed0 on general", 0x40000000u, 1ull << 32, 0x3, {0, 0, 0, 0}, 0, 0},
+    /* The guest's general counter 0 counting instructions retired, 0xC0,
+     * alone, on each kind. */
+    {"gp0 on fixed", 0, 1, 0, {INSNS, 0, 0, 0}, 1, 0},
+    {"gp0 on general", 0, 1, 0, {INSNS, 0, 0, 0}, 0, 0},
+    /* The guest's fixed counter 0 with the four general counters counting
+     * branches, 0xC4, which take the four general counters. */
+    {"mixed on fixed",
      0x40000000u,
      (1ull << 32) | 0xF,
      0x3,
-     {EV_ENABLE | EV_OS | EV_USR | 0xC4, EV_ENABLE | EV_OS | EV_USR | 0xC4,
-      EV_ENABLE | EV_OS | EV_USR | 0xC4, EV_ENABLE | EV_OS | EV_USR | 0xC4}},
+     {BRANCHES, BRANCHES, BRANCHES, BRANCHES},
+     1,
+     0xF},
 };
 
 static int kvm = -1;
@@ -113,6 +138,35 @@ static int write_steps(unsigned value)
         steps_written = 1;
     }
     return r;
+}
+
+/** The physical counters pmu_placed gives, or ~0 when it cannot be read. */
+static uint64_t read_placed(void)
+{
+    char text[32];
+    FILE *f = fopen(PLACED_FILE, "r");
+    uint64_t placed = ~0ull;
+
+    if (f) {
+        if (fgets(text, sizeof(text), f)) {
+            placed = strtoull(text, NULL, 16);
+        }
+        fclose(f);
+    }
+    return placed;
+}
+
+/** Whether `placed` is where case `pc` asks its counters to run: fixed
+ * counter 0 beside the others' general counters, or one general counter
+ * alone. */
+static int placed_as_asked(const struct probe_case *pc, uint64_t placed)
+{
+    uint64_t general = placed & 0xFFFFFFFFull;
+
+    if (pc->on_fixed) {
+        return placed == (FIXED0_BIT | pc->others);
+    }
+    return placed == general && general && !(general & (general - 1u));
 }
 
 /** Put pmu_steps back to 0 on every exit, so that no step outlives us. */
@@ -194,9 +248,11 @@ static void flat(struct kvm_segment *s, int code, uint16_t selector)
 }
 
 /**
- * Run one case of `windows` windows with `exits` CPUIDs in each, and print
- * how many deltas differ from the most common one. 0, or -1 when the run
- * did not end with the guest's HLT.
+ * Run one case of `windows` windows with `exits` CPUIDs in each, under the
+ * knob value `steps`, which the caller has written with the case's 0x10,
+ * and print how many deltas differ from the exact count, EXACT(exits), and
+ * the most common delta apart. 0, or -1 when the run did not end with the
+ * guest's HLT or did not run where the case asks.
  */
 static int run_case(const struct probe_case *pc, unsigned steps, unsigned windows, unsigned exits)
 {
@@ -208,7 +264,8 @@ static int run_case(const struct probe_case *pc, unsigned steps, unsigned window
     struct kvm_sregs sregs;
     struct kvm_regs regs;
     struct kvm_run *run;
-    uint32_t *delta, mode = 0, d;
+    uint32_t *delta, mode = 0, d, exact = EXACT(exits);
+    uint64_t placed;
     unsigned i, j, best = 0, bad = 0, over = 0, under = 0, entries = 0, n;
     uint32_t max_over = 0, max_under = 0;
     unsigned char *mem;
@@ -293,9 +350,16 @@ static int run_case(const struct probe_case *pc, unsigned steps, unsigned window
         fprintf(stderr, "pmcwin: exit %u at entry %u\n", run->exit_reason, entries);
         break;
     }
+    placed = read_placed();
+    if (r == 0 && !placed_as_asked(pc, placed)) {
+        fprintf(stderr, "pmcwin: steps 0x%02x %s exits %u: ran on 0x%llx, not as asked\n", steps,
+                pc->name, exits, (unsigned long long)placed);
+        r = -1;
+    }
     if (r == 0) {
         delta = (uint32_t *)(mem + OUT_GPA);
-        /* The most common delta is the exact count: the windows are alike. */
+        /* The most common delta, reported beside the exact count: alike
+         * windows show repeatability, not that the count is right. */
         for (i = 0; i < windows && i < 512; i++) {
             for (n = 0, j = 0; j < windows; j++) {
                 n += delta[j] == delta[i];
@@ -307,21 +371,22 @@ static int run_case(const struct probe_case *pc, unsigned steps, unsigned window
         }
         for (i = 0; i < windows; i++) {
             d = delta[i];
-            if (d == mode) {
+            if (d == exact) {
                 continue;
             }
             bad++;
-            if (d > mode) {
+            if (d > exact) {
                 over++;
-                max_over = d - mode > max_over ? d - mode : max_over;
+                max_over = d - exact > max_over ? d - exact : max_over;
             } else {
                 under++;
-                max_under = mode - d > max_under ? mode - d : max_under;
+                max_under = exact - d > max_under ? exact - d : max_under;
             }
         }
         printf("pmcwin: steps 0x%02x %s exits %u: %u of %u windows bad, %u over by at most %u, "
-               "%u under by at most %u; exact count %u\n",
-               steps, pc->name, exits, bad, windows, over, max_over, under, max_under, mode);
+               "%u under by at most %u; exact count %u; most common %u in %u; ran on 0x%llx\n",
+               steps, pc->name, exits, bad, windows, over, max_over, under, max_under, exact, mode,
+               best, (unsigned long long)placed);
         fflush(stdout);
     }
     munmap(run, (size_t)run_size);
@@ -334,7 +399,7 @@ static int run_case(const struct probe_case *pc, unsigned steps, unsigned window
 int main(int argc, char **argv)
 {
     static const unsigned exit_counts[] = {0, 10};
-    unsigned windows = 30000, steps, i, k;
+    unsigned windows = 30000, steps, case_steps, i, k;
     int a = 1, failed = 0;
     char *end;
 
@@ -360,18 +425,20 @@ int main(int argc, char **argv)
     signal(SIGHUP, on_signal);
     for (; a < argc; a++) {
         steps = (unsigned)strtoul(argv[a], &end, 0);
-        if (*end) {
-            fprintf(stderr, "pmcwin: bad steps: %s\n", argv[a]);
+        if (*end || (steps & STEP_ORDER)) {
+            fprintf(stderr, "pmcwin: bad steps: %s: 0x10 is the case's own\n", argv[a]);
             return 2;
         }
-        if (write_steps(steps) < 0 && steps != 0) {
-            fprintf(stderr, "pmcwin: steps 0x%02x: %s: %s\n", steps, STEPS_FILE, strerror(errno));
-            failed = 1;
-            continue;
-        }
         for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+            case_steps = cases[i].on_fixed ? steps | STEP_ORDER : steps;
+            if (write_steps(case_steps) < 0) {
+                fprintf(stderr, "pmcwin: steps 0x%02x: %s: %s\n", case_steps, STEPS_FILE,
+                        strerror(errno));
+                failed = 1;
+                continue;
+            }
             for (k = 0; k < 2; k++) {
-                if (run_case(&cases[i], steps, windows, exit_counts[k]) < 0) {
+                if (run_case(&cases[i], case_steps, windows, exit_counts[k]) < 0) {
                     failed = 1;
                 }
             }
