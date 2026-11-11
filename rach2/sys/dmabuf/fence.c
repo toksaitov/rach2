@@ -4,6 +4,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/kirq.h"
 #include "../lib/kstring.h"
+#include "../proc/percpu.h"
 #include "../rtc.h"
 #include "../timer.h"
 
@@ -15,20 +16,51 @@ int64_t dma_fence_now(void)
     return sec * 1000000000ll + ns;
 }
 
-/** Allocate distinct contexts under the big kernel lock. */
+/* The timelines given out so far; the lock makes each allocation one
+ * step on any processor. */
+static struct spinlock context_lock = SPINLOCK_INIT_NAMED("dma_fence_context");
+static uint64_t context_next = 1;
+
+/** Allocate `num` distinct contexts. Any context. */
 uint64_t dma_fence_context_alloc(uint32_t num)
 {
-    static uint64_t next = 1;
-    uint64_t first = next;
-    next += num;
+    uint32_t flags = spin_lock_irqsave(&context_lock);
+    uint64_t first = context_next;
+
+    context_next += num;
+    spin_unlock_irqrestore(&context_lock, flags);
     return first;
 }
 
-/** Initialize a caller-owned fence with one reference. */
+/** Add 1 to `*refs`, atomically. */
+static void fence_ref_get(volatile uint32_t *refs)
+{
+    uint32_t old;
+
+    do {
+        old = *refs;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)refs, old, old + 1u) != old);
+}
+
+/** Take 1 from `*refs`, atomically: 1 when that was the last. */
+static int fence_ref_put(volatile uint32_t *refs)
+{
+    uint32_t old;
+
+    do {
+        old = *refs;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)refs, old, old - 1u) != old);
+    return old == 1u;
+}
+
+/** Initialize a caller-owned fence with one reference and its lock, of
+ * one class for every fence, since no fence's lock is taken under
+ * another's. */
 void dma_fence_init(struct dma_fence *f, const struct dma_fence_ops *ops, uint64_t context,
                     uint64_t seqno)
 {
     k_memset(f, 0, sizeof(*f));
+    spin_lock_init(&f->lock, "dma_fence");
     f->ops = ops;
     f->context = context;
     f->seqno = seqno;
@@ -37,18 +69,18 @@ void dma_fence_init(struct dma_fence *f, const struct dma_fence_ops *ops, uint64
     wait_queue_init(&f->wq);
 }
 
-/** Take a fence reference, allowing NULL. */
+/** Take a fence reference, allowing NULL. Any context. */
 struct dma_fence *dma_fence_get(struct dma_fence *f)
 {
     if (f)
-        f->refs++;
+        fence_ref_get(&f->refs);
     return f;
 }
 
 /** Drop a fence reference and release its record at zero. */
 void dma_fence_put(struct dma_fence *f)
 {
-    if (!f || --f->refs)
+    if (!f || !fence_ref_put(&f->refs))
         return;
     if (f->ops && f->ops->release)
         f->ops->release(f);
@@ -63,38 +95,45 @@ void dma_fence_set_error(struct dma_fence *f, int32_t error)
         f->error = error;
 }
 
-/** Stamp completion, run each callback and wake all.
- * The big kernel lock serializes device interrupts and process context
- * across processors (_irq_router takes it before dispatching a device).
- * The mark is made and every callback runs with interrupts masked, as
- * Linux's dma_fence_signal runs them under the fence's lock with
- * interrupts off: a callback may free the owner of another callback that
- * has been taken off the list but not yet called, and an interrupt that
- * signalled another fence in that window could do so. Once the mark is
- * made, dma_fence_add_callback refuses. Each callback stays on the list,
- * where dma_fence_remove_callback can find it, until it is taken off to
- * be called. The callbacks run in the signaller's context and must not
- * sleep. */
+/**
+ * Stamp completion, run each callback and wake all, as Linux's
+ * dma_fence_signal. The mark is made under the fence's lock, after which
+ * dma_fence_add_callback refuses. The callbacks run one at a time with
+ * interrupts masked, each taken off the list under the lock just before it
+ * runs and named in `running` while it does, so that one still waiting its
+ * turn can be removed, and a removal on another processor of the one that
+ * runs waits for its end: the remover may free its owner once the removal
+ * returns, as once Linux's under the lock does. Unlike Linux's, a callback
+ * runs without the fence's lock, since one may signal another fence or add
+ * a callback to one, which on Linux an irq_work does after the lock is let
+ * go. The callbacks run in the signaller's context and must not sleep.
+ */
 int32_t dma_fence_signal(struct dma_fence *f)
 {
     struct dma_fence_cb *cb;
     uint32_t flags;
     if (!f)
         return -EINVAL;
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&f->lock);
     if (f->signaled) {
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&f->lock, flags);
         return -EINVAL;
     }
     dma_fence_get(f);
-    f->signaled = 1;
     f->timestamp_ns = dma_fence_now();
+    f->signaled = 1;
     while ((cb = f->cbs) != NULL) {
         f->cbs = cb->next;
         cb->next = NULL;
+        f->running = cb;
+        f->running_cpu = this_cpu();
+        spin_unlock(&f->lock);
         cb->func(f, cb);
+        spin_lock(&f->lock);
+        f->running = NULL;
+        f->running_cpu = NULL;
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&f->lock, flags);
     wq_wake_all(&f->wq);
     dma_fence_put(f);
     return 0;
@@ -113,22 +152,27 @@ int dma_fence_is_signaled(struct dma_fence *f)
     return 0;
 }
 
-/** Mark the fence listened and run its `enable_signaling` the first time,
- * signalling the fence when that returns 0, as Linux's
- * __dma_fence_enable_signaling (dma-fence.c:579-601). Returns 1 while the
- * fence is unsignalled. The caller masks interrupts, as Linux holds the
- * fence's lock with them off (dma-fence.c:615-617, 657-667): an interrupt
- * between the test and the mark could enter the same fence's setup, and
- * both would run the hook, which arms an array's children twice. */
+/**
+ * Mark the fence listened under its lock and, the first time, run its
+ * `enable_signaling`, signalling the fence when that returns 0, as Linux's
+ * __dma_fence_enable_signaling (dma-fence.c:579-601). The mark is the
+ * test and set of one step under the lock, so the hook runs once however
+ * many processors and interrupts ask; it runs after the lock is let go,
+ * since an array's and a chain's add callbacks to other fences, and a
+ * signal may come before it or while it runs, which every hook allows.
+ * Interrupts are masked. Returns 1 while the fence is unsignalled.
+ */
 static int enable_masked(struct dma_fence *f)
 {
-    int was_set = f->listened;
+    int was_set;
+    spin_lock(&f->lock);
+    was_set = f->listened;
     f->listened = 1;
+    spin_unlock(&f->lock);
     if (f->signaled)
         return 0;
     if (!was_set && f->ops && f->ops->enable_signaling && !f->ops->enable_signaling(f)) {
-        if (!f->signaled)
-            (void)dma_fence_signal(f);
+        (void)dma_fence_signal(f);
         return 0;
     }
     return !f->signaled;
@@ -153,10 +197,11 @@ int32_t dma_fence_status(struct dma_fence *f)
 }
 
 /** Add a callback unless completion has already happened: 0, or -ENOENT
- * when it has. Signalling is enabled and the callback linked in one step
- * with interrupts masked, as Linux's dma_fence_add_callback does under the
- * fence's lock (dma-fence.c:657-667), so that a signal from an interrupt
- * either finds the callback or comes first. */
+ * when it has. Signalling is enabled first, and the callback linked under
+ * the fence's lock unless the mark is made by then, so that a signal on any
+ * processor either finds it or came first and the callback never runs
+ * inside this call, as Linux's dma_fence_add_callback (dma-fence.c:
+ * 657-667). */
 int32_t dma_fence_add_callback(struct dma_fence *f, struct dma_fence_cb *cb,
                                void (*func)(struct dma_fence *, struct dma_fence_cb *))
 {
@@ -168,32 +213,44 @@ int32_t dma_fence_add_callback(struct dma_fence *f, struct dma_fence_cb *cb,
         kirq_restore(flags);
         return -ENOENT;
     }
+    spin_lock(&f->lock);
+    if (f->signaled) {
+        spin_unlock(&f->lock);
+        kirq_restore(flags);
+        return -ENOENT;
+    }
     cb->func = func;
     cb->next = f->cbs;
     f->cbs = cb;
+    spin_unlock(&f->lock);
     kirq_restore(flags);
     return 0;
 }
 
-/** Detach a still-pending callback, returning whether it was found.
- * The caller holds the big lock, as a device interrupt that signals does;
- * with local interrupts masked too, no callback can still be running. */
+/** Detach a still-pending callback, returning whether it was found. One
+ * that another processor runs is waited for, so that a 0 means it has run
+ * to its end, as Linux's removal under the lock means; one this processor
+ * runs, a callback that removes itself or another of its fence, is not. */
 int dma_fence_remove_callback(struct dma_fence *f, struct dma_fence_cb *cb)
 {
     struct dma_fence_cb **p;
     uint32_t flags;
     if (!f)
         return 0;
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&f->lock);
     for (p = &f->cbs; *p; p = &(*p)->next) {
         if (*p == cb) {
             *p = cb->next;
             cb->next = NULL;
-            kirq_restore(flags);
+            spin_unlock_irqrestore(&f->lock, flags);
             return 1;
         }
     }
-    kirq_restore(flags);
+    while (f->running == cb && f->running_cpu != this_cpu()) {
+        spin_unlock(&f->lock);
+        spin_lock(&f->lock);
+    }
+    spin_unlock_irqrestore(&f->lock, flags);
     return 0;
 }
 
@@ -275,7 +332,7 @@ struct array_cb {
 struct fence_array {
     struct dma_fence base;
     uint32_t count;
-    uint32_t pending; /* fences not yet signalled, counted once armed */
+    volatile uint32_t pending; /* fences not yet signalled, counted once armed */
     struct dma_fence **fences;
     struct array_cb *callbacks;
 };
@@ -308,13 +365,14 @@ static const char *array_timeline_name(struct dma_fence *f)
     return "unbound";
 }
 
-/** Carry a child's error and complete the array after its last child. */
+/** Carry a child's error and complete the array after its last child,
+ * whose callbacks may run on several processors at once. */
 static void array_done(struct dma_fence *f, struct dma_fence_cb *cb)
 {
     struct fence_array *a = ((struct array_cb *)cb)->array;
     if (f->error && !a->base.error)
         dma_fence_set_error(&a->base, f->error);
-    if (--a->pending == 0)
+    if (fence_ref_put(&a->pending))
         dma_fence_signal(&a->base);
 }
 
@@ -603,7 +661,10 @@ static void chain_done(struct dma_fence *f, struct dma_fence_cb *cb);
 /**
  * Wait on the first fence of the chain from `c` back that has not
  * signalled: its own, then each earlier point's. Return 1 with the
- * callback armed, or 0 when every one has signalled.
+ * callback armed, or 0 when every one has signalled. `armed` names the
+ * fence before its callback is added, and nothing here writes it after, so
+ * that the callback, which may run on another processor at once, is its
+ * only writer from then on.
  */
 static int chain_arm(struct dma_fence_chain *c)
 {
@@ -612,30 +673,39 @@ static int chain_arm(struct dma_fence_chain *c)
     while (node) {
         p = to_dma_fence_chain(node);
         f = p ? p->fence : node;
-        if (!dma_fence_add_callback(f, &c->cb.cb, chain_done)) {
-            c->armed = f;
+        c->armed = f;
+        if (!dma_fence_add_callback(f, &c->cb.cb, chain_done))
             return 1;
-        }
         node = p ? p->prev : NULL;
     }
+    c->armed = NULL;
     return 0;
 }
 
-/** Move to the next fence the chain waits on, or signal the chain. Frees
- * nothing, since a fence may signal in an interrupt. */
+/** Move to the next fence the chain waits on, or signal the chain and let
+ * go of the reference its enabling took, as Linux's dma_fence_chain_cb and
+ * dma_fence_chain_irq_work do (dma-fence-chain.c:122-143). */
 static void chain_done(struct dma_fence *f, struct dma_fence_cb *cb)
 {
     struct dma_fence_chain *c = ((struct dma_fence_chain_cb *)cb)->chain;
     (void)f;
-    c->armed = NULL;
-    if (!chain_arm(c))
-        dma_fence_signal(&c->base);
+    if (chain_arm(c))
+        return;
+    dma_fence_signal(&c->base);
+    dma_fence_put(&c->base);
 }
 
-/** Start waiting on the first fence of the chain not yet signalled. */
+/** Start waiting on the first fence of the chain not yet signalled, with a
+ * reference to the chain held while a callback is armed, as Linux's
+ * dma_fence_chain_enable_signaling takes one (dma-fence-chain.c:
+ * 145-161): so the chain is never released while its callback may run. */
 static int chain_enable_signaling(struct dma_fence *f)
 {
-    return chain_arm((struct dma_fence_chain *)f);
+    dma_fence_get(f);
+    if (chain_arm((struct dma_fence_chain *)f))
+        return 1;
+    dma_fence_put(f);
+    return 0;
 }
 
 /** Whether the fence of the point and of each earlier one has signalled,
@@ -657,8 +727,7 @@ static void chain_release(struct dma_fence *f)
 {
     struct dma_fence_chain *c = (struct dma_fence_chain *)f, *p;
     struct dma_fence *prev = c->prev, *next;
-    if (c->armed)
-        dma_fence_remove_callback(c->armed, &c->cb.cb);
+    /* No callback is armed: an armed one holds a reference. */
     c->prev = NULL;
     while (prev && prev->refs == 1 && (p = to_dma_fence_chain(prev)) != NULL) {
         next = p->prev;

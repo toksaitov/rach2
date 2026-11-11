@@ -14,6 +14,7 @@
 #include "../mm/shmem.h"
 #include "../mm/vm.h"
 #include "../pci.h"
+#include "../proc/mutex.h"
 #include "../proc/wait_queue.h"
 #include "uapi.h"
 
@@ -206,11 +207,12 @@ struct dma_fence;
 typedef int32_t (*drm_ioctl_t)(struct drm_device *dev, void *data, struct drm_file *file);
 
 /* Who may call an ioctl, Linux's flags: an authenticated client, the
- * master, root, and a render node's client. DRM_UNLOCKED, at Linux's
- * value, runs the handler without the big lock, under the locks its row
- * names; the dispatcher takes the big lock around every other handler, as
- * Linux took drm_global_mutex around a row without it (drm_ioctl.c:
- * 786-792). */
+ * master, root, and a render node's client. DRM_UNLOCKED runs the
+ * handler without the big lock, under the locks its row names, and the
+ * dispatcher takes the big lock around every other handler. Linux 6.12
+ * runs every row unlocked (drm_ioctl.c:728-746) and has dropped the flag,
+ * which once marked such a row against drm_global_mutex; Rach2 keeps it,
+ * at its old value, while its rows leave the big lock one at a time. */
 #define DRM_AUTH         (1u << 0)
 #define DRM_MASTER       (1u << 1)
 #define DRM_ROOT_ONLY    (1u << 2)
@@ -296,12 +298,19 @@ struct dma_fence {
     const struct dma_fence_ops *ops;
     uint64_t context;
     uint64_t seqno;
-    uint32_t refs;
-    int signaled;
+    volatile uint32_t refs; /* changed atomically */
+    /* Over `signaled`, `listened`, `cbs` and `running`, as Linux's fence
+     * lock; never held while a callback or `enable_signaling` runs. */
+    struct spinlock lock;
+    volatile int signaled;
     int32_t error; /* 0, or the -errno the work failed with */
     int64_t timestamp_ns;
     int64_t deadline_ns; /* earliest requested completion hint, INT64_MAX if none */
     struct dma_fence_cb *cbs;
+    /* The callback a signal runs, taken off `cbs`, and the processor
+     * record of the signaller, or NULL between callbacks. */
+    struct dma_fence_cb *running;
+    const void *running_cpu;
     wait_queue_t wq;
     /* A callback, a sleeper or a poller has asked for the signal, and
      * `enable_signaling` has run, as Linux's
@@ -362,6 +371,9 @@ int32_t dma_fence_default_wait(struct dma_fence *fence, int intr, int64_t deadli
  * when it is imported, so that every device and the CPU see one set.
  */
 struct dma_resv {
+    /* Over the rest, as Linux's reservation's ww_mutex: a sleeping lock,
+     * taken after the driver's object locks (dmabuf/Readme.md). */
+    struct mutex lock;
     struct dma_fence *write; /* all pending writers, or NULL */
     struct dma_fence **reads;
     uint32_t nreads, cap;
