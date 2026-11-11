@@ -28,6 +28,7 @@
 #define MSR_IA32_MCG_STATUS    0x17Au
 #define MSR_IA32_MCG_CTL       0x17Bu
 #define MSR_IA32_MISC_ENABLE   0x1A0u
+#define MSR_IA32_DEBUGCTL      0x1D9u
 #define MSR_MTRR_PHYS_BASE0    0x200u
 #define MSR_MTRR_FIX_64K       0x250u
 #define MSR_MTRR_FIX_16K_80000 0x258u
@@ -177,6 +178,11 @@ const uint32_t *kvm_msr_list(int feature, uint32_t *n)
     *n = (uint32_t)N_INDEX - (host_rdtscp() ? 0u : 1u);
     for (i = 0; i < *n; i++) {
         list[i] = index_list[i];
+    }
+    /* VMX keeps the guest's DEBUGCTL, which Linux saves among
+     * msrs_to_save_base (arch/x86/kvm/x86.c:323); SVM keeps none. */
+    if (kvm_backend == &kvm_vmx) {
+        list[(*n)++] = MSR_IA32_DEBUGCTL;
     }
     *n += kvm_pmu_msr_list(list + *n);
     return list;
