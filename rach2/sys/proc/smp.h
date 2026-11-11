@@ -155,9 +155,9 @@ struct bkl_entry_saved {
 /** Mark the current process, if any, as in the entry by `vector`, the system
  * call `nr` for 0x80 and -1 otherwise, which `bkl_profile_sample` keys its
  * samples by, and keep the entry it was in at `saved`. `ioctl` set marks the
- * call as ioctl request `cmd`. A router calls it before its handlers and
- * `bkl_entry_pop` after them, on the same process, which keeps the mark
- * while it sleeps and gets it back on any processor. */
+ * call as ioctl request `cmd`, of either ABI. A router calls it before its
+ * handlers and `bkl_entry_pop` after them, on the same process, which keeps
+ * the mark while it sleeps and gets it back on any processor. */
 void bkl_entry_push(struct bkl_entry_saved *saved, uint32_t vector, int32_t nr, int ioctl,
                     uint32_t cmd);
 
@@ -199,7 +199,10 @@ int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len);
  * sampled, its count. The caller holds the big lock. */
 int32_t smp_profile_show(void *data, char *buf, uint32_t cap);
 
-/** Zero the profile; `len`. */
+/** Zero the profile; `len`. The caller holds the big lock, which keeps the
+ * other processors' ticks from sampling; this processor's tick is held off
+ * while the table and its totals are zeroed, so that no sample lands in a
+ * cleared slot before its total is cleared. */
 int32_t smp_profile_store(void *data, const char __user *buf, uint32_t len);
 
 /** Answer the requests other processors left this one: stop for good, drop
