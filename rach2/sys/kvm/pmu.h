@@ -8,14 +8,18 @@
 #define KVM_PMU_GP_MAX    8u
 #define KVM_PMU_FIXED_MAX 3u
 
+/* The most last-branch records a legacy LBR stack has: Skylake's 32. */
+#define KVM_LBR_MAX 32u
+
 struct kvm_vcpu;
 struct kvm_vm;
 struct kvm_cpuid_entry2;
 struct kvm_enable_cap;
 
-/* A vCPU's counters. The ioctl lock owns them, including during an entry
- * without the big lock. Only prepare reads the VM's filter, under the big
- * lock; the backend uses the resulting run masks until the next exit. */
+/* A vCPU's counters and last-branch records. The ioctl lock owns them,
+ * including during an entry without the big lock. Only prepare reads the
+ * VM's filter, under the big lock; the backend uses the resulting run masks
+ * until the next exit. */
 struct kvm_pmu {
     uint64_t counter[KVM_PMU_GP_MAX], eventsel[KVM_PMU_GP_MAX];
     uint64_t fixed[KVM_PMU_FIXED_MAX];
@@ -26,6 +30,20 @@ struct kvm_pmu {
     uint32_t run_gp, run_fixed; /* counters enabled for the next entry */
     int core_ext;               /* AMD's extended CTL/CTR aliases */
     int pmi;                    /* an overflow waits for delivery under the big lock */
+    /* The physical counter each running general counter has during an
+     * entry, and the physical counts read before it, for the deltas the
+     * exit adds; fixed counters are their own. */
+    uint8_t phys[KVM_PMU_GP_MAX];
+    uint64_t base[KVM_PMU_GP_MAX], fixed_base[KVM_PMU_FIXED_MAX];
+    uint64_t host_global; /* AMD's PerfMonV2 global control before an entry */
+    /* VMX's IA32_DEBUGCTL: only LBR and FREEZE_LBRS_ON_PMI are kept. */
+    uint64_t debugctl;
+    /* The guest's LBR stack, 0 records without one, and its registers as
+     * the last exit left them, read back as the hardware stored them. */
+    uint32_t lbr_nr;
+    uint32_t lbr_list; /* the stack's first entry in VMX's guest list, or ~0 */
+    uint64_t lbr_select, lbr_tos;
+    uint64_t lbr_from[KVM_LBR_MAX], lbr_to[KVM_LBR_MAX], lbr_info[KVM_LBR_MAX];
 };
 
 /* An entry in VMX's load/store lists, whose format is architectural. */
@@ -34,12 +52,16 @@ struct kvm_pmu_msr {
     uint64_t value;
 };
 
-/** Discover the host PMU once at boot, after the backend is chosen.
- * The hardware counters are reserved for KVM; the host has no perf user. */
+/** Discover the host PMU and its LBR stack once at boot, after the backend
+ * is chosen. The host's own user, the hard-lockup detector, keeps the
+ * counter it has enabled; a guest's counters run on the others. */
 void kvm_pmu_start(void);
 
 /** Whether the host has usable performance counters. */
 int kvm_pmu_enabled(void);
+
+/** Whether the host has Intel's IA32_PERF_GLOBAL_CTRL, of version 2. */
+int kvm_pmu_global(void);
 
 /** Filter the host CPUID entry to the PMU the selected backend supplies. */
 void kvm_pmu_cpuid(struct kvm_cpuid_entry2 *e);
@@ -85,19 +107,38 @@ void kvm_pmu_vm_free(struct kvm_vm *vm);
  * lock, before the backend injects events and lets the guest run. */
 void kvm_pmu_prepare(struct kvm_vcpu *v);
 
+/** Access VMX's IA32_DEBUGCTL, as Linux's vmx_set_msr: LBR and
+ * FREEZE_LBRS_ON_PMI with the guest's LBR stack or from the caller, BTF and
+ * an LBR without a stack dropped, any other bit refused. 0 or -1. */
+int kvm_pmu_debugctl(struct kvm_vcpu *v, int write, uint64_t *value, int host);
+
 /** Load/stop AMD's physical counters with interrupts off, outside the
- * big lock. Selectors use GuestOnly and never enable a physical PMI. */
+ * big lock. Selectors use GuestOnly and never enable a physical PMI; a
+ * counter the host has enabled is left alone. */
 void kvm_pmu_svm_enter(struct kvm_vcpu *v);
 void kvm_pmu_svm_exit(struct kvm_vcpu *v);
 
-/** Build Intel's guest load/store and host load lists. The caller has
- * room for 24 entries in each. Return their lengths in ng and nh. A
- * host entry disables every guest selector before host code can count. */
-void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm_pmu_msr *host,
-                       uint32_t *ng, uint32_t *nh);
+/** The room a VMX MSR list needs for the PMU: the guest's selectors and
+ * global control and an LBR stack of 32 records with their information. */
+#define KVM_PMU_LIST_MAX (KVM_PMU_GP_MAX + 3u + 3u * KVM_LBR_MAX)
 
-/** Accumulate the guest counters VMX stored on exit. The MSR load list
- * has already stopped them. Call only after a successful guest entry. */
-void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest);
+/**
+ * Program Intel's counters for an entry, with interrupts off, and build the
+ * guest's load/store list and the host's load list, of at most
+ * KVM_PMU_LIST_MAX entries each; their lengths go to `*ng` and `*nh`. The
+ * selectors and FIXED_CTRL are written here, gated by the global control,
+ * and no counter is written: each running counter's count is read now and
+ * again after the exit. `global`, when not NULL, receives the guest's and
+ * the host's IA32_PERF_GLOBAL_CTRL for the VMCS's load controls; otherwise
+ * the lists switch it. The guest's LBR stack is in the lists while its
+ * DEBUGCTL.LBR is set.
+ */
+void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm_pmu_msr *host,
+                       uint32_t *ng, uint32_t *nh, uint64_t *global);
+
+/** After the run `kvm_pmu_vmx_enter` prepared, whose exit stopped the
+ * counters: add each running counter's delta when `ran`, and take the LBR
+ * stack the exit stored in `guest`; release the selectors either way. */
+void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest, int ran);
 
 #endif /* _KVM_PMU_H_ */

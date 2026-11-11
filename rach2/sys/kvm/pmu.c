@@ -19,6 +19,12 @@
 #define GLOBAL_CTRL   0x38Fu
 #define GLOBAL_OVF    0x390u
 #define FULL_PMC0     0x4C1u
+#define LBR_SELECT    0x1C8u
+#define LBR_TOS       0x1C9u
+#define DEBUGCTL      0x1D9u
+#define LBR_FROM      0x680u
+#define LBR_TO        0x6C0u
+#define LBR_INFO      0xDC0u
 #define AMD_CTL0      0xC0010000u
 #define AMD_CTR0      0xC0010004u
 #define AMD_CORE_CTL0 0xC0010200u
@@ -39,6 +45,10 @@
 #define EV_TX          (1ull << 32)
 #define EV_TXCP        (1ull << 33)
 #define FW_WRITES      (1ull << 13)
+#define LBR_FORMAT     0x3Full
+#define DEBUGCTL_LBR   (1ull << 0)
+#define DEBUGCTL_BTF   (1ull << 1)
+#define DEBUGCTL_FRZ   (1ull << 11)
 #define PDCM           (1u << 15)
 #define CORE_EXT       (1u << 23)
 #define AMD_EVENT      0xF000000FFull
@@ -47,11 +57,17 @@
 #define FILTER_MAX     300u
 
 /* The backend's physical counters. Linux caps the architectural PMU at
- * version 2 and the fixed counters at three; AMD has at most six. */
+ * version 2 and the fixed counters at three; AMD has at most six. The LBR
+ * stack is Intel's legacy one, of `lbr_nr` records, with information MSRs
+ * when `lbr_info`; `lbr_quirk` is Linux's lbr_from_signext_quirk_wr, and
+ * `model` the processor's, which a guest with the stack must have. */
 struct pmu_host {
     int intel, core_ext, pdcm;
     uint32_t version, nr_gp, nr_fixed, width, fixed_width;
     uint32_t event_length, unavailable;
+    uint64_t lbr_format;
+    uint32_t lbr_nr, model;
+    int lbr_info, lbr_quirk;
 };
 static struct pmu_host pmu_host;
 
@@ -122,6 +138,80 @@ out:
     return result;
 }
 
+/** The model of a CPUID leaf 1 signature, the extended model added from
+ * family 6 on, as Linux's x86_model. */
+static uint32_t cpu_model(uint32_t signature)
+{
+    uint32_t family = (signature >> 8) & 0xFu, model = (signature >> 4) & 0xFu;
+
+    if (family == 0xFu) {
+        family += (signature >> 20) & 0xFFu;
+    }
+    if (family >= 6u) {
+        model += ((signature >> 16) & 0xFu) << 4;
+    }
+    return model;
+}
+
+/** The value a write of LBR_FROM takes: format 4 without TSX refuses bits
+ * 62:61 unless they repeat bits 60:59, which a read leaves clear. */
+static uint64_t lbr_from_value(uint64_t value)
+{
+    if (pmu_host.lbr_quirk) {
+        value |= (value & (3ull << 59)) << 2;
+    }
+    return value;
+}
+
+/** Whether an LBR MSR reads and takes its value back, so that no MSR list
+ * that carries it can fail an entry. */
+static int lbr_msr_works(uint32_t index, int from)
+{
+    uint64_t value;
+
+    return kcpu_rdmsr_safe(index, &value) == 0 &&
+           kcpu_wrmsr_safe(index, from ? lbr_from_value(value) : value) == 0;
+}
+
+/**
+ * Find Intel's legacy LBR stack, which a guest may have from format 4 on,
+ * as Linux's vmx_get_perf_capabilities requires the call stack: 16 records
+ * on Haswell and Broadwell, and 32 with their information MSRs on Skylake
+ * and later, as Linux's intel_pmu_lbr_init_hsw and _skl give them. The
+ * architectural LBR's format, 0x3F, is not taken, as Linux's KVM does not.
+ */
+static void lbr_probe(void)
+{
+    uint32_t a, b, c, d, i, n, flags;
+    uint64_t cap, format;
+    int works;
+
+    if (!pmu_host.pdcm || kcpu_rdmsr_safe(PERF_CAP, &cap) != 0) {
+        return;
+    }
+    format = cap & LBR_FORMAT;
+    if (format < 4u || format > 7u) {
+        return;
+    }
+    kcpu_id(1, &a, &b, &c, &d);
+    pmu_host.model = cpu_model(a);
+    kcpu_id_sub(7, 0, &a, &b, &c, &d);
+    pmu_host.lbr_quirk = format == 4u && !(b & ((1u << 4) | (1u << 11)));
+    n = format == 4u ? 16u : 32u;
+    flags = kirq_save();
+    works = lbr_msr_works(LBR_SELECT, 0) && lbr_msr_works(LBR_TOS, 0);
+    for (i = 0; works && i < n; i++) {
+        works = lbr_msr_works(LBR_FROM + i, 1) && lbr_msr_works(LBR_TO + i, 0) &&
+                (format == 4u || lbr_msr_works(LBR_INFO + i, 0));
+    }
+    kirq_restore(flags);
+    if (works) {
+        pmu_host.lbr_format = format;
+        pmu_host.lbr_nr = n;
+        pmu_host.lbr_info = format != 4u;
+    }
+}
+
 void kvm_pmu_start(void)
 {
     uint32_t a, b, c, d, top;
@@ -151,6 +241,9 @@ void kvm_pmu_start(void)
         }
         kcpu_id(1, &a, &b, &c, &d);
         pmu_host.pdcm = (c & PDCM) != 0;
+        if (pmu_host.width) {
+            lbr_probe();
+        }
     } else {
         kcpu_id(0x80000000u, &top, &b, &c, &d);
         kcpu_id(0x80000001u, &a, &b, &c, &d);
@@ -177,6 +270,18 @@ void kvm_pmu_start(void)
 int kvm_pmu_enabled(void)
 {
     return pmu_host.version != 0;
+}
+
+int kvm_pmu_global(void)
+{
+    return pmu_host.intel && pmu_host.version > 1u;
+}
+
+/** PERF_CAPABILITIES as KVM offers it: full-width writes and the host's
+ * LBR format, as Linux's vmx_get_perf_capabilities. */
+static uint64_t supported_caps(void)
+{
+    return pmu_host.intel && kvm_pmu_enabled() ? FW_WRITES | pmu_host.lbr_format : 0;
 }
 
 void kvm_pmu_cpuid(struct kvm_cpuid_entry2 *e)
@@ -230,6 +335,23 @@ static uint64_t status_mask(const struct kvm_pmu *p)
     return global_mask(p) | (pmu_host.intel ? (3ull << 62) : 0);
 }
 
+/** Whether the guest has PERF_CAPABILITIES through CPUID.PDCM. */
+static int guest_pdcm(const struct kvm_vcpu *v)
+{
+    const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(v, 1, 0);
+
+    return e && (e->ecx & PDCM);
+}
+
+/** Whether the guest's CPUID model is the host's, which the LBR stack's
+ * format belongs to, as Linux's cpuid_model_is_consistent. */
+static int guest_model(const struct kvm_vcpu *v)
+{
+    const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(v, 1, 0);
+
+    return e && cpu_model(e->eax) == pmu_host.model;
+}
+
 void kvm_pmu_reset(struct kvm_vcpu *v)
 {
     struct kvm_pmu *p = &v->pmu;
@@ -252,6 +374,7 @@ void kvm_pmu_refresh(struct kvm_vcpu *v)
     p->gp_mask = p->fixed_mask = 0;
     p->events = 0;
     p->core_ext = 0;
+    p->lbr_nr = 0;
     if (!kvm_pmu_enabled() || v->vm->pmu_disabled) {
         kvm_pmu_reset(v);
         return;
@@ -281,6 +404,12 @@ void kvm_pmu_refresh(struct kvm_vcpu *v)
         p->nr_gp = minimum(p->nr_gp, pmu_host.nr_gp);
         p->gp_mask = mask_bits(48);
     }
+    /* The stack follows Linux's intel_pmu_refresh: a PMU, the LBR format
+     * in PERF_CAPABILITIES, which needs PDCM, and the host's model. */
+    if (pmu_host.intel && p->version && pmu_host.lbr_nr && (p->perf_cap & LBR_FORMAT) &&
+        guest_pdcm(v) && guest_model(v)) {
+        p->lbr_nr = pmu_host.lbr_nr;
+    }
     kvm_pmu_reset(v);
     if (p->version > 1u) {
         p->global_ctrl = mask_bits(p->nr_gp);
@@ -289,7 +418,8 @@ void kvm_pmu_refresh(struct kvm_vcpu *v)
 
 void kvm_pmu_init(struct kvm_vcpu *v)
 {
-    v->pmu.perf_cap = pmu_host.intel && kvm_pmu_enabled() ? FW_WRITES : 0;
+    v->pmu.perf_cap = supported_caps();
+    v->pmu.lbr_list = ~0u;
     kvm_pmu_refresh(v);
 }
 
@@ -326,16 +456,8 @@ int kvm_pmu_feature(uint32_t index, uint64_t *value)
     if (index != PERF_CAP) {
         return -1;
     }
-    *value = pmu_host.intel && kvm_pmu_enabled() ? FW_WRITES : 0;
+    *value = supported_caps();
     return 0;
-}
-
-/** Whether the guest has PERF_CAPABILITIES through CPUID.PDCM. */
-static int guest_pdcm(const struct kvm_vcpu *v)
-{
-    const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(v, 1, 0);
-
-    return e && (e->ecx & PDCM);
 }
 
 /** Find a general counter MSR or selector, returning its index or -1.
@@ -407,11 +529,13 @@ static void counter_io(uint64_t *counter, uint64_t mask, int write, uint64_t *va
     }
 }
 
-/** Access PERF_CAPABILITIES, writable only by the caller before a run. */
+/** Access PERF_CAPABILITIES, writable only by the caller before a run,
+ * with a PMU, and with no LBR format but the host's on the host's model,
+ * as Linux's vmx_set_msr. */
 static int capabilities_io(struct kvm_vcpu *v, int write, uint64_t *value, int host)
 {
     struct kvm_pmu *p = &v->pmu;
-    uint64_t mask = pmu_host.intel && kvm_pmu_enabled() ? FW_WRITES : 0;
+    uint64_t format;
 
     if (!host && (!guest_pdcm(v) || write)) {
         return -1;
@@ -419,7 +543,10 @@ static int capabilities_io(struct kvm_vcpu *v, int write, uint64_t *value, int h
     if (!write) {
         *value = p->perf_cap;
     } else {
-        if ((*value & ~mask) || (v->has_run && *value != p->perf_cap)) {
+        format = *value & LBR_FORMAT;
+        if ((*value & ~supported_caps()) || (v->has_run && *value != p->perf_cap) ||
+            (*value && !p->version) ||
+            (format && (format != pmu_host.lbr_format || !guest_model(v)))) {
             return -1;
         }
         if (p->perf_cap != *value) {
@@ -543,6 +670,68 @@ static int fixed_io(struct kvm_pmu *p, uint32_t index, int write, uint64_t *valu
     return 0;
 }
 
+/**
+ * Access the guest's LBR stack, held as the last exit stored it; 1 for
+ * another MSR. A write is tried on the processor's register first, which
+ * holds no host state and which the next entry with the stack loads again,
+ * so that it faults where the guest's own WRMSR would under Linux, whose
+ * guest writes the registers themselves.
+ */
+static int lbr_io(struct kvm_pmu *p, uint32_t index, int write, uint64_t *value)
+{
+    uint64_t *slot;
+    uint32_t flags;
+    int r;
+
+    if (!p->lbr_nr) {
+        return 1;
+    }
+    if (index == LBR_SELECT) {
+        slot = &p->lbr_select;
+    } else if (index == LBR_TOS) {
+        slot = &p->lbr_tos;
+    } else if (index - LBR_FROM < p->lbr_nr) {
+        slot = &p->lbr_from[index - LBR_FROM];
+    } else if (index - LBR_TO < p->lbr_nr) {
+        slot = &p->lbr_to[index - LBR_TO];
+    } else if (pmu_host.lbr_info && index - LBR_INFO < p->lbr_nr) {
+        slot = &p->lbr_info[index - LBR_INFO];
+    } else {
+        return 1;
+    }
+    if (!write) {
+        *value = *slot;
+        return 0;
+    }
+    flags = kirq_save();
+    r = kcpu_wrmsr_safe(index, *value);
+    kirq_restore(flags);
+    if (r != 0) {
+        return -1;
+    }
+    *slot = *value;
+    return 0;
+}
+
+int kvm_pmu_debugctl(struct kvm_vcpu *v, int write, uint64_t *value, int host)
+{
+    struct kvm_pmu *p = &v->pmu;
+    uint64_t allowed = 0;
+
+    if (!write) {
+        *value = p->debugctl;
+        return 0;
+    }
+    if (pmu_host.lbr_nr && (host || p->lbr_nr)) {
+        allowed = DEBUGCTL_LBR | DEBUGCTL_FRZ;
+    }
+    if (*value & ~(allowed | DEBUGCTL_LBR | DEBUGCTL_BTF)) {
+        return -1;
+    }
+    p->debugctl = *value & allowed;
+    return 0;
+}
+
 int kvm_pmu_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host)
 {
     struct kvm_pmu *p = &v->pmu;
@@ -550,6 +739,13 @@ int kvm_pmu_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, 
 
     if (index == PERF_CAP) {
         return capabilities_io(v, write, value, host);
+    }
+    if (index == DEBUGCTL && pmu_host.intel) {
+        return kvm_pmu_debugctl(v, write, value, host);
+    }
+    r = lbr_io(p, index, write, value);
+    if (r != 1) {
+        return r;
     }
     r = general_io(v, index, write, value, host);
     if (r != 1) {
@@ -728,6 +924,11 @@ void kvm_pmu_prepare(struct kvm_vcpu *v)
     (void)kvm_vcpu_test_clear(v, KVM_REQ_PMU);
     if (p->pmi) {
         p->pmi = 0;
+        /* Versions 2 and 3 freeze the stack on a PMI by clearing
+         * DEBUGCTL.LBR, as Linux's intel_pmu_legacy_freezing_lbrs_on_pmi. */
+        if (p->lbr_nr && p->version > 1u && p->version < 4u && (p->debugctl & DEBUGCTL_FRZ)) {
+            p->debugctl &= ~DEBUGCTL_LBR;
+        }
         kvm_lapic_pmi(v);
     }
     p->run_gp = p->run_fixed = 0;
@@ -744,7 +945,8 @@ void kvm_pmu_prepare(struct kvm_vcpu *v)
 }
 
 /** Add a measured delta, recording a wrap even when its interrupt is
- * disabled. Physical counters start at zero and cannot wrap in one run. */
+ * disabled. A delta is the difference of two physical counts, which the
+ * physical width bounds; no run comes near it. */
 static void accumulate(struct kvm_pmu *p, uint32_t i, int fixed, uint64_t delta)
 {
     uint64_t *counter = fixed ? &p->fixed[i] : &p->counter[i];
@@ -780,61 +982,116 @@ void kvm_pmu_retired(struct kvm_vcpu *v)
     }
 }
 
+/** A general counter's physical selector or count. */
+static uint32_t gp_msr(uint32_t i, int counter)
+{
+    if (pmu_host.intel) {
+        return (counter ? PMC0 : EVENTSEL0) + i;
+    }
+    return amd_index(i, counter);
+}
+
+/**
+ * The general counters the host holds on this processor: those whose
+ * selector is enabled, where Intel's global control, `global`, enables
+ * them too. KVM clears its own selectors at every exit, so these are the
+ * host's, the hard-lockup detector's counter among them.
+ */
+static uint32_t host_counters(uint64_t global)
+{
+    uint32_t i, held = 0;
+
+    for (i = 0; i < pmu_host.nr_gp; i++) {
+        if (kvm_pmu_global() && !(global & (1ull << i))) {
+            continue;
+        }
+        if (pmu_read(gp_msr(i, 0)) & EV_ENABLE) {
+            held |= 1u << i;
+        }
+    }
+    return held;
+}
+
+/**
+ * Give each running general counter, in order, a physical counter the host
+ * does not hold, in `p->phys`. A counter left without one does not count,
+ * as Linux's pinned perf event that cannot be scheduled does not, and
+ * leaves the run mask. Return the physical counters given.
+ */
+static uint32_t map_counters(struct kvm_pmu *p, uint32_t held)
+{
+    uint32_t i, next = 0, used = 0;
+
+    for (i = 0; i < p->nr_gp; i++) {
+        if (!(p->run_gp & (1u << i))) {
+            continue;
+        }
+        while (next < pmu_host.nr_gp && (held & (1u << next))) {
+            next++;
+        }
+        if (next >= pmu_host.nr_gp) {
+            p->run_gp &= ~(1u << i);
+            continue;
+        }
+        p->phys[i] = (uint8_t)next;
+        used |= 1u << next++;
+    }
+    return used;
+}
+
 void kvm_pmu_svm_enter(struct kvm_vcpu *v)
 {
     struct kvm_pmu *p = &v->pmu;
-    uint32_t i;
-    uint64_t select;
+    uint32_t i, used;
 
-    if (pmu_host.intel || !p->version) {
+    if (pmu_host.intel || !p->version || !p->run_gp) {
         return;
     }
-    /* Every counter is stopped and cleared before the first starts, so
-     * that a started one counts none of the writes after it, each of which
-     * is an exit when Rach2 itself runs under a hypervisor. */
+    used = map_counters(p, host_counters(0));
+    /* Each counter starts as late as it can and stops as early, at the
+     * global control when there is one: GuestOnly keeps it from counting
+     * the host, unless an outer hypervisor ignores the bit. */
     if (pmu_host.version > 1u) {
-        pmu_write(AMD_GLOBAL, 0);
+        p->host_global = pmu_read(AMD_GLOBAL);
+        pmu_write(AMD_GLOBAL, p->host_global & ~(uint64_t)used);
     }
-    for (i = 0; i < pmu_host.nr_gp; i++) {
-        pmu_write(amd_index(i, 0), 0);
-        pmu_write(amd_index(i, 1), 0);
-    }
-    if (pmu_host.version > 1u) {
-        pmu_write(AMD_CLEAR, mask_bits(pmu_host.nr_gp));
-    }
-    for (i = 0; i < pmu_host.nr_gp; i++) {
+    for (i = 0; i < p->nr_gp; i++) {
         if (p->run_gp & (1u << i)) {
-            select = (p->eventsel[i] & ~(EV_INT | EV_PIN)) | EV_GUEST;
-            pmu_write(amd_index(i, 0), select);
+            p->base[i] = pmu_read(amd_index(p->phys[i], 1));
+            pmu_write(amd_index(p->phys[i], 0), (p->eventsel[i] & ~(EV_INT | EV_PIN)) | EV_GUEST);
         }
     }
     if (pmu_host.version > 1u) {
-        pmu_write(AMD_GLOBAL, p->run_gp);
+        pmu_write(AMD_GLOBAL, p->host_global | used);
     }
 }
 
 void kvm_pmu_svm_exit(struct kvm_vcpu *v)
 {
     struct kvm_pmu *p = &v->pmu;
-    uint32_t i;
+    uint32_t i, used = 0;
 
-    if (pmu_host.intel || !p->version) {
+    if (pmu_host.intel || !p->version || !p->run_gp) {
         return;
     }
-    /* Every running counter stops before any is read, as at entry. */
+    for (i = 0; i < p->nr_gp; i++) {
+        if (p->run_gp & (1u << i)) {
+            used |= 1u << p->phys[i];
+        }
+    }
     if (pmu_host.version > 1u) {
-        pmu_write(AMD_GLOBAL, 0);
+        pmu_write(AMD_GLOBAL, p->host_global & ~(uint64_t)used);
     }
-    for (i = 0; i < pmu_host.nr_gp; i++) {
+    for (i = 0; i < p->nr_gp; i++) {
         if (p->run_gp & (1u << i)) {
-            pmu_write(amd_index(i, 0), 0);
+            pmu_write(amd_index(p->phys[i], 0), 0);
+            accumulate(p, i, 0,
+                       (pmu_read(amd_index(p->phys[i], 1)) - p->base[i]) &
+                           mask_bits(pmu_host.width));
         }
     }
-    for (i = 0; i < pmu_host.nr_gp; i++) {
-        if (p->run_gp & (1u << i)) {
-            accumulate(p, i, 0, pmu_read(amd_index(i, 1)) & mask_bits(pmu_host.width));
-            pmu_write(amd_index(i, 1), 0);
-        }
+    if (pmu_host.version > 1u) {
+        pmu_write(AMD_GLOBAL, p->host_global);
     }
 }
 
@@ -848,58 +1105,127 @@ static void list_add(struct kvm_pmu_msr *list, uint32_t *n, uint32_t index, uint
 }
 
 void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm_pmu_msr *host,
-                       uint32_t *ng, uint32_t *nh)
+                       uint32_t *ng, uint32_t *nh, uint64_t *global)
 {
     struct kvm_pmu *p = &v->pmu;
-    uint64_t select, fixed = 0;
-    uint32_t i;
+    uint64_t host_global = 0, guest_global, spare, fixed = 0, select;
+    uint32_t i, n, held, used = 0;
 
     *ng = *nh = 0;
-    if (!pmu_host.intel || !p->version) {
+    p->lbr_list = ~0u;
+    if (global) {
+        global[0] = global[1] = 0;
+    }
+    if (!pmu_host.intel || !pmu_host.version) {
         return;
     }
-    if (pmu_host.version > 1u) {
-        list_add(host, nh, GLOBAL_CTRL, 0);
+    if (kvm_pmu_global()) {
+        host_global = pmu_read(GLOBAL_CTRL);
     }
-    for (i = 0; i < pmu_host.nr_gp; i++) {
-        list_add(guest, ng, PMC0 + i, 0);
+    held = host_counters(host_global);
+    if (p->version) {
+        used = map_counters(p, held);
+    } else {
+        p->run_gp = p->run_fixed = 0;
     }
-    for (i = 0; i < pmu_host.nr_fixed; i++) {
-        list_add(guest, ng, FIXED0 + i, 0);
+    if (kvm_pmu_global()) {
+        /* The counters a guest may have stop in the host, once: the host
+         * keeps only the counters it holds enabled. */
+        spare =
+            (mask_bits(pmu_host.nr_gp) & ~(uint64_t)held) | (mask_bits(pmu_host.nr_fixed) << 32);
+        if (host_global & spare) {
+            host_global &= ~spare;
+            pmu_write(GLOBAL_CTRL, host_global);
+        }
     }
-    for (i = 0; i < pmu_host.nr_gp; i++) {
-        select = (p->run_gp & (1u << i)) ? p->eventsel[i] & ~(EV_INT | EV_PIN) : 0;
-        list_add(guest, ng, EVENTSEL0 + i, select);
-        list_add(host, nh, EVENTSEL0 + i, 0);
+    /* Linux writes no counter at an entry and switches only the global
+     * control; a guest counter's selector and FIXED_CTRL are set here,
+     * where the host's global control keeps them stopped, and each count
+     * is read now and again once the exit has stopped it. */
+    for (i = 0; i < p->nr_gp; i++) {
+        if (!(p->run_gp & (1u << i))) {
+            continue;
+        }
+        n = p->phys[i];
+        select = p->eventsel[i] & ~(EV_INT | EV_PIN);
+        if (kvm_pmu_global()) {
+            pmu_write(EVENTSEL0 + n, select);
+        } else {
+            list_add(guest, ng, EVENTSEL0 + n, select);
+            list_add(host, nh, EVENTSEL0 + n, 0);
+        }
+        p->base[i] = pmu_read(PMC0 + n);
     }
-    if (pmu_host.version > 1u) {
+    if (kvm_pmu_global()) {
         for (i = 0; i < p->nr_fixed; i++) {
             if (p->run_fixed & (1u << i)) {
                 fixed |= p->fixed_ctrl & (3ull << (4u * i));
+                p->fixed_base[i] = pmu_read(FIXED0 + i);
             }
         }
-        list_add(guest, ng, FIXED_CTRL, fixed);
-        list_add(host, nh, FIXED_CTRL, 0);
-        list_add(guest, ng, GLOBAL_CTRL, (uint64_t)p->run_gp | ((uint64_t)p->run_fixed << 32));
+        if (fixed) {
+            pmu_write(FIXED_CTRL, fixed);
+        }
+        /* The host's counters count in the guest too, as Linux's do. */
+        guest_global = host_global | used | ((uint64_t)p->run_fixed << 32);
+        if (global) {
+            global[0] = guest_global;
+            global[1] = host_global;
+        } else if (guest_global != host_global) {
+            list_add(guest, ng, GLOBAL_CTRL, guest_global);
+            list_add(host, nh, GLOBAL_CTRL, host_global);
+        }
+    }
+    if (p->lbr_nr && (p->debugctl & DEBUGCTL_LBR)) {
+        p->lbr_list = *ng;
+        list_add(guest, ng, LBR_SELECT, p->lbr_select);
+        list_add(guest, ng, LBR_TOS, p->lbr_tos);
+        for (i = 0; i < p->lbr_nr; i++) {
+            list_add(guest, ng, LBR_FROM + i, lbr_from_value(p->lbr_from[i]));
+            list_add(guest, ng, LBR_TO + i, p->lbr_to[i]);
+            if (pmu_host.lbr_info) {
+                list_add(guest, ng, LBR_INFO + i, p->lbr_info[i]);
+            }
+        }
     }
 }
 
-void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest)
+void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest, int ran)
 {
     struct kvm_pmu *p = &v->pmu;
-    uint32_t i;
+    uint32_t i, k = p->lbr_list;
 
-    if (!pmu_host.intel || !p->version) {
+    p->lbr_list = ~0u;
+    if (!pmu_host.intel || !pmu_host.version) {
         return;
     }
     for (i = 0; i < p->nr_gp; i++) {
-        if (p->run_gp & (1u << i)) {
-            accumulate(p, i, 0, guest[i].value & mask_bits(pmu_host.width));
+        if (!(p->run_gp & (1u << i))) {
+            continue;
+        }
+        if (ran) {
+            accumulate(p, i, 0,
+                       (pmu_read(PMC0 + p->phys[i]) - p->base[i]) & mask_bits(pmu_host.width));
+        }
+        if (kvm_pmu_global()) {
+            pmu_write(EVENTSEL0 + p->phys[i], 0);
         }
     }
-    for (i = 0; i < p->nr_fixed; i++) {
+    for (i = 0; ran && i < p->nr_fixed; i++) {
         if (p->run_fixed & (1u << i)) {
-            accumulate(p, i, 1, guest[pmu_host.nr_gp + i].value & mask_bits(pmu_host.fixed_width));
+            accumulate(p, i, 1,
+                       (pmu_read(FIXED0 + i) - p->fixed_base[i]) & mask_bits(pmu_host.fixed_width));
+        }
+    }
+    if (ran && k != ~0u) {
+        p->lbr_select = guest[k++].value;
+        p->lbr_tos = guest[k++].value;
+        for (i = 0; i < p->lbr_nr; i++) {
+            p->lbr_from[i] = guest[k++].value;
+            p->lbr_to[i] = guest[k++].value;
+            if (pmu_host.lbr_info) {
+                p->lbr_info[i] = guest[k++].value;
+            }
         }
     }
 }
