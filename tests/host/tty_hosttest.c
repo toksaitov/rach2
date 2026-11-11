@@ -50,7 +50,8 @@
  * The echo held goes out ahead of a slave write only as far as the master's
  * ring has room, and the write waits for the rest instead of losing its
  * bytes; a master write goes on after the last slave closes; a VSTART from
- * COM1 drained with no reader keeps the keyboard echo held during the stop;
+ * COM1 drained with no reader keeps the keyboard echo held during the stop,
+ * a full buffer of it whole behind a byte that drain takes;
  * a nonblocking master write behind a full slave counts the flow characters
  * it acts on, and its VSTART gives out the echo held, and writes of data
  * that end in a flow character feed no more than the read queue stores and
@@ -1418,6 +1419,40 @@ static void master_after_close(void)
 }
 
 /**
+ * A full buffer of keyboard echo held during a stop stays whole, its oldest
+ * byte first, when COM1's drain that shows no echo takes an ordinary byte,
+ * which leaves the discipline without room for a line, and its look ahead
+ * acts on the VSTART behind it.
+ */
+static void console_silent_full(void)
+{
+    struct n_tty *ld = &console_tty.ldisc;
+    int k;
+
+    setup_pair();
+    tty_console_init();
+    serial_pos = serial_len = serial_looked = 0;
+    ld->tio.c_lflag &= ~(unsigned int)ICANON;
+    tty_input_char(&console_tty, 023);
+    for (k = 0; k < N_TTY_ECHO_MAX; k++) {
+        tty_input_char(&console_tty, (unsigned char)('a' + k % 26));
+    }
+    CHECK(ld->stopped && ld->echo_tail - ld->echo_head == N_TTY_ECHO_MAX,
+          "a stop holds a full buffer of keyboard echo");
+    tty_set_session(&console_tty, 1, 1);
+    serial_bytes = "q\021";
+    serial_len = 2;
+    irq_enabled = 0;
+    tty_console_poll();
+    irq_enabled = 1;
+    CHECK(!ld->stopped && serial_pos == 1 && serial_looked == 2 &&
+              ld->echo_tail - ld->echo_head == N_TTY_ECHO_MAX &&
+              ld->echo_buf[ld->echo_head & (N_TTY_ECHO_MAX - 1)] == 'a',
+          "COM1's silent byte and VSTART keep the full echo held, its oldest byte first");
+    tty_set_session(&console_tty, 0, 0);
+}
+
+/**
  * Keyboard echo typed while the console's output is stopped stays held when
  * a VSTART from COM1 restarts output in the drain that shows no echo, with
  * no reader waiting, and the next write gives it out first.
@@ -1447,6 +1482,7 @@ static void console_silent_restart(void)
               ld->echo_tail == ld->echo_head,
           "the next write gives the echo out first");
     tty_set_session(&console_tty, 0, 0);
+    console_silent_full();
 }
 
 /* The open description of a nonblocking master. */
