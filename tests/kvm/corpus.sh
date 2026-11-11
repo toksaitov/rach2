@@ -120,8 +120,7 @@ excluded=$(awk '$2 == "excluded"' "$work/list" | wc -l | tr -d ' ')
 # The hard-lockup detector holds a counter, which the PMU tests count on
 # having: kvm-unit-tests' `pmu` and `pmu_lbr` require kernel.nmi_watchdog to
 # read 0, as their configuration checks, and `pmu_counters_test` uses every
-# general counter. It reads 0 for the run and its value comes back on every
-# exit.
+# counter. It reads 0 for the run and its value comes back on every exit.
 if read -r w < /proc/sys/kernel/nmi_watchdog 2> /dev/null && [ "$w" != 0 ] &&
     echo 0 2> /dev/null > /proc/sys/kernel/nmi_watchdog; then
     watchdog=$w
