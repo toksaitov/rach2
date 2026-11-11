@@ -1790,7 +1790,7 @@ static int tcp_zwp_expire(struct tcb *tcb)
         return 0;
     }
     if (tcb->zwp_stamp == 0) {
-        tcb->zwp_stamp = now + 1 != 0 ? now + 1 : 1u;
+        tcb->zwp_stamp = tcp_due(1); /* now + 1, never 0 */
     } else if (tcb->sock && tcb->sock->user_timeout) {
         expired = now + 1 - tcb->zwp_stamp >= tcp_ms_ticks(tcb->sock->user_timeout);
     }
