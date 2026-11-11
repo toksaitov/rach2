@@ -543,7 +543,6 @@ int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range)
     return -ENOENT;
 }
 
-/** A frame of the slot is mapped; any other is MMIO. */
 /** No thread here is switched away, so the steal time is never marked. */
 int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n)
 {
@@ -554,6 +553,7 @@ int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint
     return 1;
 }
 
+/** A frame of the slot is mapped; any other is MMIO. */
 int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write)
 {
     struct kvm_slot_view s;
