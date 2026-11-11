@@ -1013,14 +1013,12 @@ void sched_loadavg(uint32_t avg[3])
  * and this returns without halting so the caller checks its condition again.
  * Those datagrams are this machine's own, a delivery can be what makes a
  * process runnable, and nothing else is going to run to deliver them. A
- * system call's exit delivers only once the ring has three or more, since
- * one or two may be the crossing SYNs of a simultaneous open; a single
- * datagram, which is what a window update or a bare acknowledgement is, would
- * otherwise wait for the timer, and a local connection would turn over one
- * window every ten milliseconds. Interrupts are off here, which is the
- * discipline the drain needs, and a caller that is about to halt holds nothing
- * and is between operations, which is the state the timer's drain relies on
- * too.
+ * call that sleeps inside, a blocking connect or a send that waits for the
+ * peer's window, has put datagrams there that no system call's exit has
+ * delivered yet, and they would otherwise wait for the timer. Interrupts are
+ * off here, which is the discipline the drain needs, and a caller that is
+ * about to halt holds nothing and is between operations, which is the state
+ * the timer's drain relies on too.
  *
  * The big lock is let go for the halt and taken again after it, so that the
  * other processors run kernel code meanwhile. A wake from another processor

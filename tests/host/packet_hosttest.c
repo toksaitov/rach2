@@ -327,19 +327,6 @@ int netdev_running(const struct netdev *nd)
     return nd && !link_down;
 }
 
-/** Take the stack, which on the host is one thread with no interrupts to
- * mask; `ip_loop_settle` takes it around a drain. */
-uint32_t net_lock(void)
-{
-    return 0;
-}
-
-/** Let go of the stack `net_lock` took. */
-void net_unlock(uint32_t flags)
-{
-    (void)flags;
-}
-
 /* What the driver answers a frame with, how many it was handed, and the
  * length, the card and the first bytes of the last one. */
 static int tx_answer;

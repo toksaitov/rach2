@@ -8,6 +8,8 @@
 #include "../mm/paging.h"
 #include "../io/timerfd.h"
 #include "../ipc/sysv.h"
+#include "../lib/kirq.h"
+#include "../network/ip/ip.h"
 #include "ns.h"
 
 /**
@@ -27,6 +29,12 @@
  * table and directories, and a parent waiting in vfork. A descriptor table
  * another process shares keeps its record locks, which it owns (`lock.h`),
  * and the release of a table by its last sharer drops them.
+ *
+ * What closing the descriptors put on the loopback ring, a FIN or a reset,
+ * is delivered before a waiter is told of the end, since this thread
+ * reaches no system call's exit: on Linux the close in do_exit runs the
+ * softirq on its local_bh_enable, so a parent whose wait has returned finds
+ * the socket's end in the peer.
  *
  * A thread that is not the last becomes a zombie no wait reports but its
  * tracer's, and wakes an execve or a core that waits for the other threads
@@ -48,12 +56,18 @@ int proc_exit_cleanup(int32_t status)
     struct tgroup *tg = self->tg;
     process_t *leader = tg->leader;
     process_t *parent;
+    uint32_t flags;
 
     self->in_syscall = 1;
     proc_thread_gone(self);
     mm_drop(self);
     switch_page_directory(_kernel_dir);
     proc_files_put(self);
+    flags = kirq_save();
+    if (ip_loop_pending()) {
+        ip_loop_drain_from(IP_LOOP_FROM_CALL);
+    }
+    kirq_restore(flags);
     proc_fs_put(self);
     proc_vfork_release(self);
     self->exit_code = status;
