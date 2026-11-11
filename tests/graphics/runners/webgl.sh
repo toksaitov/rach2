@@ -121,9 +121,11 @@ run_pages()
             runner_record "list $version $1 pages sha256 $2"
             python3 -I "$RUNNER_DIR/events.py" renderer "$events" >> "$RUNNER_OUT/record"
         fi
+        rejected=
         if [ "$1" -gt 0 ] && [ "$1 $2" != "$count $listsum" ]; then
             # The harness reads a failed fetch (status 0) as an empty list.
             echo "webgl: browser: its list has $1 pages, not $count; its results are dropped" >&2
+            rejected=1
         else
             python3 -I "$RUNNER_DIR/events.py" pages "$events" "$lines" "$upto" "$state" >> "$RUNNER_WORK/attempt"
         fi
@@ -139,8 +141,9 @@ run_pages()
         else
             empty=0
         fi
-        if [ "$state" = "done" ] || [ "$empty" -ge 2 ]; then
-            # The harness ended, or two browsers in a row ran nothing.
+        if { [ "$state" = "done" ] && [ -z "$rejected" ]; } || [ "$empty" -ge 2 ]; then
+            # The harness ended on the established list, or two browsers in
+            # a row ran nothing; a browser whose list was dropped ran nothing.
             for i in $left; do
                 echo "$i notrun 0 0 0 0 -" >> "$RUNNER_WORK/attempt"
             done
