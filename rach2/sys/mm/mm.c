@@ -287,6 +287,19 @@ void mm_resident_add(const struct page_dir *dir, long pages)
     mm->resident -= (unsigned long)-pages < mm->resident ? (unsigned long)-pages : mm->resident;
 }
 
+void mm_note_anon(struct mm *mm, uintptr_t start, uintptr_t end)
+{
+    struct paging_frame_counts counts;
+    vma_t *r;
+
+    for (r = vm_lower(&mm->vm, start); r && r->start < end; r = vm_next(r)) {
+        if (!r->anon && !r->file && r->type != VM_SHARED && !(r->prot & VM_PROT_IO)) {
+            paging_user_frames(mm->dir, r->start, r->end, &counts);
+            r->anon = counts.frames > 0;
+        }
+    }
+}
+
 void mm_drop(struct process *p)
 {
     struct mm *mm = p->mm;

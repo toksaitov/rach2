@@ -293,6 +293,7 @@ static int range_bind(struct mm *mm, uintptr_t start, uintptr_t end, struct vm_p
         }
         spare[0] = spare[0] ? spare[0] : kmalloc(sizeof(*spare[0]));
         spare[1] = spare[1] ? spare[1] : kmalloc(sizeof(*spare[1]));
+        mm_note_anon(mm, s, e);
         if (!spare[0] || !spare[1] || vm_set_policy(&mm->vm, s, e, pol) != 0) {
             rc = -ENOMEM;
         } else if (sh) {

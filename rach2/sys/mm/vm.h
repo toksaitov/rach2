@@ -212,7 +212,7 @@ typedef struct vma {
     struct vm_file *file;
     uint32_t pgoff;
     struct vm_policy *policy; /* mbind's, with a reference; NULL for the default */
-    /* 1 once `note_anon` (syscall_proc.c) found a page of it written, as
+    /* 1 once `mm_note_anon` (mm.c) found a page of it written, as
      * Linux gives a region an anon_vma at its first private page; a split,
      * a move and a fork's copy keep it, unless VM_PROT_WIPEONFORK, and a
      * merge takes either side's. Only VM_PROT_ACCOUNT's drop reads it. */

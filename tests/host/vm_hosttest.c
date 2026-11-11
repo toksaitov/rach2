@@ -355,7 +355,8 @@ static void limit_rows(void)
  * page of which was written, as Linux's mprotect_fixup drops VM_ACCOUNT from
  * an anonymous region with no anon_vma, and that making it writable charges
  * it again; a split, a merge and a fork's copy keep `anon`, but not a copy of
- * a VM_PROT_WIPEONFORK region.
+ * a VM_PROT_WIPEONFORK region, whose charge an mprotect that leaves its
+ * protection as it was keeps, as mprotect_fixup returns first then.
  */
 static void run_account_drop(void)
 {
@@ -387,8 +388,12 @@ static void run_account_drop(void)
     CHECK(vm_find(&p, 0x76000)->prot == 0);
     CHECK(vm_insert(&p, 0x7A000, 0x7B000, rw | VM_PROT_WIPEONFORK, VM_ANON) == 0);
     vm_find(&p, 0x7A000)->anon = 1;
+    CHECK(vm_protect(&p, 0x7A000, 0x7B000, VM_PROT_READ) == 0);
+    CHECK(vm_find(&p, 0x7A000)->prot & VM_PROT_ACCOUNT);
     CHECK(vm_copy(&c, &p) == 0 && c.count == p.count);
     CHECK(vm_find(&c, 0x70000)->anon && !vm_find(&c, 0x7A000)->anon);
+    CHECK(vm_protect(&c, 0x7A000, 0x7B000, VM_PROT_READ) == 0);
+    CHECK(vm_find(&c, 0x7A000)->prot & VM_PROT_ACCOUNT);
     vm_free(&c);
     vm_free(&p);
 }
