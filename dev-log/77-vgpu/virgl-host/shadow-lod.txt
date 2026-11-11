@@ -78,3 +78,30 @@ second time as the runner's rerun of a failure), and 145, 1,415, 2,644 and
 2,629 cases failed, of which 0, 946, 1,258 and 1,255 passed when run again
 in new processes. The first part of dEQP-GLES31, with four of the cases
 above in it, one in each stage, printed eight.
+
+On 2026-11-11 deqp.sh took dEQP-GLES31 in four parts, every fourth case of
+36,828, each part's 9,207 cases in four glcts processes. The first part
+failed on each of three tries the same way: QEMU printed the context error
+above for all four contexts within six seconds,
+
+    vrend_compile_shader: context error reported 5 "glcts" Illegal shader 0
+    0:5(12): error: extension `GL_EXT_texture_shadow_lod' unsupported in fragment shader
+
+the guest printed `Killed` four times, QEMU printed "D3D12: Removing
+Device." and ended. The same 9,207 cases with each case's start and end
+streamed put the four errors at the start of these cases, one a process:
+
+    texture.gather.basic.2d_array.depth32f.size_npot.compare_less.mirrored_repeat_clamp_to_edge
+    texture.gather.basic.2d_array.depth32f.filter_mode.min_linear_mag_linear
+    texture.gather.basic.2d_array.depth32f.size_pot.compare_less.clamp_to_edge_repeat
+    texture.gather.basic.2d_array.depth32f.size_pot.compare_greater.repeat_mirrored_repeat
+
+and after them no case ended for nine minutes. A gather from a depth
+texture is TG4 with a reference value, which translate_tex puts in
+bias_buf for a cube or 2D array texture (vrend_shader.c:3307-3310), so
+that lines 3357-3362 require the extension. In the whole-list search, each
+of the 112 gathers of a 2D array depth texture and the 12 of a cube depth
+texture failed, and the two other context errors of this kind came as
+shaders.opaque_type_indexing.sampler.const_expression.tessellation_control.samplercubearrayshadow
+and .uniform.tessellation_control.samplercubearrayshadow started, which
+the search above did not cover.
