@@ -379,6 +379,13 @@ int user_range_ok(uintptr_t addr, size_t len)
     return user_buffer_ok(addr, len, 1);
 }
 
+/** Report whether the user range a stream receive checks first lies inside
+ * `user`, as `user_buffer_ok`. */
+int user_span_ok(uintptr_t addr, size_t len)
+{
+    return user_buffer_ok(addr, len, 1);
+}
+
 /** Report every page of `user` present. */
 int vm_resident(uintptr_t addr, uintptr_t len, int write)
 {
