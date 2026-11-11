@@ -1,0 +1,383 @@
+/**
+ * wchanmusl: check /proc/PID/syscall and /proc/PID/wchan, a thread's call
+ * and the function it sleeps in, in Linux 6.12's formats.
+ *
+ * The rows: a process's directory and a thread's directory under task list
+ * both files, syscall of mode 0400 and wchan of mode 0444. A thread blocked
+ * in a read of an empty pipe reads, in its syscall file, read's number, the
+ * descriptor, the buffer and the count, then its stack and instruction
+ * pointers, and pipe_read from its wchan file, with no newline. A thread
+ * blocked in a FUTEX_WAIT_PRIVATE reads futex's number, the word's address,
+ * the operation, the value and the null timeout, and futex_wait_queue. A
+ * thread that spins reads "running" and 0. A child of user 1000 gets EACCES
+ * from the root parent's syscall file and 0 from its wchan file, while the
+ * parent sleeps in its wait for the child.
+ *
+ * Prints `WCHANMUSL OK` and exits 0 on success, and prints `WCHANMUSL FAIL
+ * (detail)` and exits 1 otherwise. etude's report (probe_report.h), for the
+ * case ETUDE_CASE names, has an assertion for each row in order: `listed`,
+ * `modes`, `read-call`, with the thread and the pipe, `read-wchan`,
+ * `futex-call`, with its thread, `futex-wchan`, `running`, with its thread,
+ * `running-wchan`, `refused-syscall`, with the fork, and `refused-wchan`.
+ * The first failure fails its assertion and leaves the rest not run.
+ *
+ * Needs root, to make a child of user 1000, or its NEW when a native run
+ * gives `ids=OLD:NEW,...`.
+ */
+
+#define _GNU_SOURCE
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <sched.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include "../probe_args.h"
+#include "../probe_report.h"
+
+extern char **environ;
+
+/* Linux's futex operations, which musl's headers do not give. */
+#define FUTEX_WAIT_PRIVATE 128
+#define FUTEX_WAKE_PRIVATE 129
+
+/* The unprivileged user and group, 1000 or its native NEW. */
+#define OTHER_ID ((unsigned)probe_id(1000))
+
+/* The call and the pointers a syscall file gives: `nr`, then `args` when
+ * `nr` is not -1, then `sp` and `pc`. */
+struct call {
+    long nr;
+    unsigned long args[6];
+    unsigned long sp, pc;
+};
+
+static int pipe_fds[2];
+static char read_buf[16];
+static volatile int futex_word;
+static volatile int spin_stop;
+/* Each thread's id, set by the thread before it blocks or spins. */
+static volatile pid_t reader_tid, waiter_tid, spinner_tid;
+
+/** Report one failed check and return 1, the probe's failure status. */
+static int fail(const char *what)
+{
+    printf("WCHANMUSL FAIL (%s)\n", what);
+    report_stop(what);
+    return 1;
+}
+
+/** Read the file `path` into `buf` of `cap` bytes, ended by a NUL: its
+ * length, or -1 with errno set. */
+static int read_file(const char *path, char *buf, int cap)
+{
+    int fd = open(path, O_RDONLY);
+    int n;
+
+    if (fd < 0) {
+        return -1;
+    }
+    n = (int)read(fd, buf, (size_t)cap - 1);
+    close(fd);
+    if (n < 0) {
+        return -1;
+    }
+    buf[n] = '\0';
+    return n;
+}
+
+/** Read the file `name` of the task `tid` of this process into `buf`. */
+static int task_file(pid_t tid, const char *name, char *buf, int cap)
+{
+    char path[64];
+
+    snprintf(path, sizeof(path), "/proc/self/task/%d/%s", (int)tid, name);
+    return read_file(path, buf, cap);
+}
+
+/** Wait until the thread `tid` is asleep, its stat's state S. */
+static void await_sleep(pid_t tid)
+{
+    char buf[512];
+    const char *p;
+
+    for (;;) {
+        if (task_file(tid, "stat", buf, (int)sizeof(buf)) > 0 && (p = strrchr(buf, ')')) &&
+            p[1] == ' ' && p[2] == 'S') {
+            return;
+        }
+        sched_yield();
+    }
+}
+
+/** Parse a syscall file's `text` into `c`: 1 for a line in one of Linux's
+ * two forms, with the newline that ends it, and 0 otherwise. */
+static int parse_call(const char *text, struct call *c)
+{
+    int n;
+
+    memset(c, 0, sizeof(*c));
+    if (strncmp(text, "-1 ", 3) == 0) {
+        c->nr = -1;
+        return sscanf(text, "-1 0x%lx 0x%lx%n", &c->sp, &c->pc, &n) == 2 &&
+               strcmp(text + n, "\n") == 0;
+    }
+    return sscanf(text, "%ld 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx%n", &c->nr,
+                  &c->args[0], &c->args[1], &c->args[2], &c->args[3], &c->args[4], &c->args[5],
+                  &c->sp, &c->pc, &n) == 9 &&
+           strcmp(text + n, "\n") == 0;
+}
+
+/** Read the syscall file of the task `tid` into `c`: 1 when it holds a call
+ * in Linux's form with nonzero pointers, 0 otherwise. */
+static int task_call(pid_t tid, struct call *c)
+{
+    char buf[256];
+
+    if (task_file(tid, "syscall", buf, (int)sizeof(buf)) <= 0) {
+        return 0;
+    }
+    printf("wchanmusl: task %d syscall: %s", (int)tid, buf);
+    return parse_call(buf, c) && c->sp != 0 && c->pc != 0;
+}
+
+/** Whether the wchan file of the task `tid` reads `want` exactly. */
+static int task_wchan(pid_t tid, const char *want)
+{
+    char buf[64];
+
+    if (task_file(tid, "wchan", buf, (int)sizeof(buf)) < 0) {
+        return 0;
+    }
+    printf("wchanmusl: task %d wchan: %s\n", (int)tid, buf);
+    return strcmp(buf, want) == 0;
+}
+
+/** Whether the directory `path` lists both syscall and wchan. */
+static int lists_both(const char *path)
+{
+    DIR *d = opendir(path);
+    struct dirent *e;
+    int found = 0;
+
+    if (!d) {
+        return 0;
+    }
+    while ((e = readdir(d)) != NULL) {
+        found |= strcmp(e->d_name, "syscall") == 0 ? 1 : strcmp(e->d_name, "wchan") == 0 ? 2 : 0;
+    }
+    closedir(d);
+    return found == 3;
+}
+
+/** The reader: block in a read of the empty pipe until the probe writes. */
+static void *reader(void *arg)
+{
+    (void)arg;
+    reader_tid = (pid_t)syscall(SYS_gettid);
+    return (void *)(long)read(pipe_fds[0], read_buf, sizeof(read_buf));
+}
+
+/** The waiter: block in FUTEX_WAIT_PRIVATE on `futex_word` while it is 0. */
+static void *waiter(void *arg)
+{
+    (void)arg;
+    waiter_tid = (pid_t)syscall(SYS_gettid);
+    while (futex_word == 0) {
+        syscall(SYS_futex, &futex_word, FUTEX_WAIT_PRIVATE, 0, NULL, NULL, 0);
+    }
+    return NULL;
+}
+
+/** The spinner: run without a call until the probe stops it. */
+static void *spinner(void *arg)
+{
+    (void)arg;
+    spinner_tid = (pid_t)syscall(SYS_gettid);
+    while (!spin_stop) {
+    }
+    return NULL;
+}
+
+/** The directories list both files, with Linux's modes. */
+static int listing_rows(void)
+{
+    char path[64];
+    struct stat sc, sw;
+
+    snprintf(path, sizeof(path), "/proc/self/task/%d", (int)syscall(SYS_gettid));
+    if (!lists_both("/proc/self") || !lists_both(path)) {
+        return fail("a process's and a thread's directories list syscall and wchan");
+    }
+    report_held();
+    if (stat("/proc/self/syscall", &sc) != 0 || stat("/proc/self/wchan", &sw) != 0 ||
+        sc.st_mode != (S_IFREG | 0400) || sw.st_mode != (S_IFREG | 0444)) {
+        return fail("syscall is mode 0400 and wchan 0444");
+    }
+    report_held();
+    return 0;
+}
+
+/** A thread blocked in a pipe's read shows the call and pipe_read. */
+static int read_rows(void)
+{
+    pthread_t t;
+    struct call c;
+    void *got;
+
+    if (pipe(pipe_fds) != 0 || pthread_create(&t, NULL, reader, NULL) != 0) {
+        return fail("make the pipe and the reader");
+    }
+    while (reader_tid == 0) {
+        sched_yield();
+    }
+    await_sleep(reader_tid);
+    if (!task_call(reader_tid, &c) || c.nr != SYS_read || c.args[0] != (unsigned long)pipe_fds[0] ||
+        c.args[1] != (unsigned long)read_buf || c.args[2] != sizeof(read_buf)) {
+        return fail("a thread asleep in read shows read, its descriptor, buffer and count");
+    }
+    report_held();
+    if (!task_wchan(reader_tid, "pipe_read")) {
+        return fail("a thread asleep in a pipe's read has the wchan pipe_read");
+    }
+    report_held();
+    if (write(pipe_fds[1], "x", 1) != 1 || pthread_join(t, &got) != 0 || (long)got != 1) {
+        return fail("end the reader with a byte");
+    }
+    return 0;
+}
+
+/** A thread blocked in a futex wait shows the call and futex_wait_queue. */
+static int futex_rows(void)
+{
+    pthread_t t;
+    struct call c;
+
+    if (pthread_create(&t, NULL, waiter, NULL) != 0) {
+        return fail("make the futex waiter");
+    }
+    while (waiter_tid == 0) {
+        sched_yield();
+    }
+    await_sleep(waiter_tid);
+    if (!task_call(waiter_tid, &c) || c.nr != SYS_futex ||
+        c.args[0] != (unsigned long)&futex_word || c.args[1] != FUTEX_WAIT_PRIVATE ||
+        c.args[2] != 0 || c.args[3] != 0) {
+        return fail("a thread asleep in futex shows futex, the word, the operation and value");
+    }
+    report_held();
+    if (!task_wchan(waiter_tid, "futex_wait_queue")) {
+        return fail("a thread asleep in a futex wait has the wchan futex_wait_queue");
+    }
+    report_held();
+    futex_word = 1;
+    syscall(SYS_futex, &futex_word, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
+    if (pthread_join(t, NULL) != 0) {
+        return fail("end the futex waiter");
+    }
+    return 0;
+}
+
+/** A thread that spins reads running and has no wchan. */
+static int running_rows(void)
+{
+    pthread_t t;
+    char buf[64];
+
+    if (pthread_create(&t, NULL, spinner, NULL) != 0) {
+        return fail("make the spinner");
+    }
+    while (spinner_tid == 0) {
+        sched_yield();
+    }
+    if (task_file(spinner_tid, "syscall", buf, (int)sizeof(buf)) < 0 ||
+        strcmp(buf, "running\n") != 0) {
+        spin_stop = 1;
+        return fail("a thread that spins reads running");
+    }
+    report_held();
+    if (!task_wchan(spinner_tid, "0")) {
+        spin_stop = 1;
+        return fail("a thread that spins has the wchan 0");
+    }
+    report_held();
+    spin_stop = 1;
+    if (pthread_join(t, NULL) != 0) {
+        return fail("end the spinner");
+    }
+    return 0;
+}
+
+/** A child of another user may not read root's call, and reads 0 for its
+ * wchan while root sleeps in its wait: the child's exit status is 0, or 1
+ * for the call, or 2 for the wchan. */
+static int refused_rows(void)
+{
+    pid_t parent = getpid(), pid;
+    int status;
+
+    pid = fork();
+    if (pid == 0) {
+        char path[64], buf[64];
+        int fd;
+
+        if (setgid(OTHER_ID) != 0 || setuid(OTHER_ID) != 0) {
+            _exit(3);
+        }
+        snprintf(path, sizeof(path), "/proc/%d/syscall", (int)parent);
+        fd = open(path, O_RDONLY);
+        if (fd >= 0 || errno != EACCES) {
+            _exit(1);
+        }
+        snprintf(path, sizeof(path), "/proc/%d/wchan", (int)parent);
+        _exit(read_file(path, buf, (int)sizeof(buf)) == 1 && buf[0] == '0' ? 0 : 2);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) == 3) {
+        return fail("fork a child of the other user");
+    }
+    if (WEXITSTATUS(status) == 1) {
+        return fail("another user's open of root's syscall file is EACCES");
+    }
+    report_held();
+    if (WEXITSTATUS(status) != 0) {
+        return fail("another user reads 0 from root's wchan file");
+    }
+    report_held();
+    return 0;
+}
+
+/** Begin the report and plan its assertions, in the order they are
+ * checked. */
+static void plan(void)
+{
+    static const char *const ids[] = {
+        "listed",      "modes",   "read-call",     "read-wchan",      "futex-call",
+        "futex-wchan", "running", "running-wchan", "refused-syscall", "refused-wchan"};
+    unsigned i;
+
+    report_begin(report_case(environ, "guest.default.wchanmusl"));
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        report_plan(ids[i]);
+    }
+}
+
+int main(int argc, char **argv)
+{
+    probe_args(argc, argv);
+    setvbuf(stdout, NULL, _IONBF, 0);
+    plan();
+    if (listing_rows() != 0 || read_rows() != 0 || futex_rows() != 0 || running_rows() != 0 ||
+        refused_rows() != 0) {
+        return 1;
+    }
+    report_end();
+    printf("WCHANMUSL OK\n");
+    return 0;
+}
