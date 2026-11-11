@@ -403,7 +403,9 @@ The socket is ioctl-only, or a raw ICMP send requested a broadcast
 destination.
 .It Bq Er EPIPE
 A stream is past its handshake, not in a sending state, and has no pending
-TCP error.
+TCP error, or
+.Xr shutdown 2
+shut the sending half of a UDP or ICMP datagram socket.
 .It Bq Er ETIMEDOUT
 A pending TCP error reports that the connection timed out.
 .El
