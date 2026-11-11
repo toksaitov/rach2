@@ -1,0 +1,7 @@
+bed-forward: start: qemu-system-x86_64 -accel kvm,kernel-irqchip=split -cpu host -smp 4 -m 4096 -device virtio-vga-gl,edid=on,xres=1280,yres=800 -display egl-headless,rendernode=/dev/dri/renderD128
+bed-forward: guest: SSH answered after 19 s
+bed-forward: triangle: llvmpipe f0b3cd1d6d2e2625, virgl (Mesa Intel(R) HD Graphics 4400 (HSW GT2)) f0b3cd1d6d2e2625
+bed-forward: glmark2: virgl (Mesa Intel(R) HD Graphics 4400 (HSW GT2))
+bed-forward: glmark2: [build:use-vbo=true] at 1280x800: validation Success, 86 frames a second
+bed-forward: result: pass: virgl: triangle f0b3cd1d6d2e2625 on virgl (Mesa Intel(R) HD Graphics 4400 (HSW GT2)); glmark2 [build:use-vbo=true] validated at 86 frames a second
+exit 0
