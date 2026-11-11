@@ -1165,6 +1165,12 @@ void drm_gem_object_init(struct drm_device *dev, struct drm_gem_object *obj, uin
     obj->refs = 1;
 }
 
+/** The file's tables are zeroed and never shared here: nothing to make. */
+void drm_file_locks_init(struct drm_file *file)
+{
+    (void)file;
+}
+
 /* The master's buffer objects: one a size, bound in the aperture by the
  * pin. */
 #define NBO 4

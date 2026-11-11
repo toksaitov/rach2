@@ -136,6 +136,15 @@ int smp_serialized(void)
 void arch_relax(void)
 {}
 
+/** A clock that moves on at each read, so a bounded wait for klog's report
+ * lock ends; the lock is never held by another here. */
+uint64_t arch_cycles(void)
+{
+    static uint64_t now;
+
+    return now += 1000u;
+}
+
 /** No performance counter here. */
 void platform_pmu_disable(void)
 {}
