@@ -141,9 +141,9 @@ cleanup()
 {
     [ -z "$drawing" ] || kill -KILL "$drawing" 2>/dev/null
     if [ -n "$scene" ]; then
-        # The harness ends its own scene's group on TERM.
+        # The harness ends its own scene's group on TERM, within 15 seconds.
         kill -TERM "-$scene" 2>/dev/null
-        n=100
+        n=200
         while kill -0 "-$scene" 2>/dev/null && [ "$n" -gt 0 ]; do
             sleep 0.1
             n=$((n - 1))

@@ -102,13 +102,14 @@ esac
 daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' figpid='' bad=0
 
 # end_group PID: end the process group that PID leads, which setsid made,
-# with TERM and, once 10 seconds have passed, KILL, and reap its leader,
-# so that a load's scene, its browser and its compositor end with it.
+# with TERM and, once 20 seconds have passed, KILL, and reap its leader,
+# so that a load's scene, its browser and its compositor end with it. The
+# harness's own stop takes up to 15 seconds.
 end_group()
 {
     [ -n "$1" ] || return 0
     kill -TERM "-$1" 2>/dev/null
-    n=100
+    n=200
     while kill -0 "-$1" 2>/dev/null && [ "$n" -gt 0 ]; do
         sleep 0.1
         n=$((n - 1))

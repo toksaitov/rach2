@@ -209,6 +209,9 @@ scene_game()
 # The scene's half, -I, as the user who runs it: Weston, the scene and its
 # frames, with its scratch under OUT, which the caller gave the user.
 if [ "$inner" = 1 ]; then
+    # This half's process group, which the other half ends on a stop: util-
+    # linux's su -c, Debian's, starts the shell in a session of its own.
+    sed 's/^.*) [^ ]* [0-9]* \([0-9]*\) .*$/\1/' "/proc/$$/stat" > "$out/scene.pgid"
     TMPDIR=$out/tmp
     # A new empty shader cache, so that no rung starts warm from an earlier
     # run: guest-env.sh's GRAPHICS_DONE, which the record names.
@@ -277,19 +280,36 @@ if [ -n "$latency" ] && "$latency" 200 > "$out/latency.out" 2>&1; then
 fi
 
 # The scene's half runs in a process group of its own, which a stop of this
-# half ends whole: its Weston, its scene and their children.
+# half ends whole: its Weston, its scene and their children. Under util-
+# linux's su that half leads a group of its own in another session, which
+# it names in OUT/scene.pgid, and the stop ends that group too. The stop
+# waits 15 seconds before its KILL, longer than the scene's half takes to
+# end its browser, 5 seconds, so that the half's own cleanup runs.
 scene_pid=''
 # shellcheck disable=SC2317 # the traps call it
 stop_scene()
 {
     [ -n "$scene_pid" ] || return 0
-    kill -TERM "-$scene_pid" 2>/dev/null || true
-    n=50
-    while kill -0 "-$scene_pid" 2>/dev/null && [ "$n" -gt 0 ]; do
+    groups="-$scene_pid"
+    pgid=$(cat "$out/scene.pgid" 2>/dev/null) || pgid=''
+    case $pgid in
+        '' | *[!0-9]* | "$scene_pid") ;;
+        *) groups="$groups -$pgid" ;;
+    esac
+    # shellcheck disable=SC2086 # the groups are words
+    kill -TERM $groups 2>/dev/null || true
+    n=150
+    while [ "$n" -gt 0 ]; do
+        live=0
+        for g in $groups; do
+            ! kill -0 "$g" 2>/dev/null || live=1
+        done
+        [ "$live" = 1 ] || break
         sleep 0.1
         n=$((n - 1))
     done
-    kill -KILL "-$scene_pid" 2>/dev/null || true
+    # shellcheck disable=SC2086 # the groups are words
+    kill -KILL $groups 2>/dev/null || true
     wait "$scene_pid" 2>/dev/null || true
     scene_pid=''
 }
@@ -297,6 +317,9 @@ trap stop_scene EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# What an earlier run into OUT left, which this run's line would read.
+rm -f "$out/scene.pgid" "$out/frametimes" "$out/cpuframes" "$out/passes"
 
 flags=''
 [ "$own" = 1 ] || flags=-d
