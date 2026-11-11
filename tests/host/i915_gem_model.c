@@ -691,7 +691,8 @@ void *vm_device_object(const struct vm_file *f)
     return f == &device_file ? (void *)&device_file : 0;
 }
 
-int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, uintptr_t *frames)
+int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t flags,
+                     uintptr_t *frames)
 {
     uintptr_t page;
     uint32_t i = 0;
@@ -700,7 +701,8 @@ int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, u
     for (page = start; page < end; page += 4096u) {
         const vma_t *r = vm_find(&mm->vm, page);
 
-        if (!r || vm_device_object(r->file) || (write && !(r->prot & VM_PROT_WRITE))) {
+        if (!r || vm_device_object(r->file) ||
+            ((flags & PIN_WRITE) && !(r->prot & VM_PROT_WRITE))) {
             return -EFAULT;
         }
     }
