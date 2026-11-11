@@ -494,8 +494,12 @@ static void write_with_data(void)
 }
 
 /**
- * A read over two pages whose second faults, or whose resolve lets a peer
- * drain the ring, returns the bytes of the first. A write of fewer bytes
+ * A read over two pages whose second faults is -EFAULT and keeps every byte
+ * of the buffer it copied, as Linux's pipe_read advances a buffer only once
+ * its copy is whole; one whose resolve lets a peer drain part of the ring
+ * returns the bytes left. A read into a page that faults is -EAGAIN from an
+ * empty pipe and 0 from an ended one, which Linux's pipe_read answers
+ * before any copy. A write of fewer bytes
  * than a page is one group, which a write commits whole, as Linux's
  * pipe_write commits a page: when its second page faults it is -EFAULT
  * with no byte added and no reader woken, and when the reader closes while
@@ -506,9 +510,17 @@ static void later_page(void)
     setup(0);
     pipe_ring_put(&ring, memory, 6);
     pages[1] = -1;
-    CHECK(pipe_read(&reader, user_at(PAGE_SIZE - 2), 6) == 2, "read fault returns partial count");
-    CHECK(pipe_available(&ring) == 4 && write_wakes == 1,
-          "read fault leaves bytes and wakes writer");
+    CHECK(pipe_read(&reader, user_at(PAGE_SIZE - 2), 6) == -EFAULT,
+          "a read fault in a buffer returns efault");
+    CHECK(pipe_available(&ring) == 6 && write_wakes == 0,
+          "a read fault keeps its buffer's bytes and wakes no writer");
+
+    setup(0);
+    pages[0] = -1;
+    CHECK(pipe_read(&reader, user_at(0), 4) == -EAGAIN,
+          "an empty pipe is eagain before a bad buffer faults");
+    ring.write_open = 0;
+    CHECK(pipe_read(&reader, user_at(0), 4) == 0, "an ended pipe is 0 before a bad buffer faults");
 
     setup(0);
     pages[1] = -1;
