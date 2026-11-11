@@ -203,7 +203,7 @@
     },
     {
       "case_id": "machine.large.cache",
-      "behavior": "a 256 MiB file on a 6 GiB ext2 volume that mke2fs made, more than the buffer cache's half of the 256 MiB heap, is read twice and the second read, by read, pread64, readv and preadv2, takes nothing from the disks while Cached grows by the file; a small file read into the file page cache and then changed by write, pwrite, writev, pwritev, pwritev2, truncate, ftruncate, fallocate, copy_file_range, sendfile, splice, a shared mapping's stores and a change to its volume while unmounted reads back as changed; and e2fsck -fn finds the volume consistent after the machine",
+      "behavior": "a 256 MiB file on a 6 GiB ext2 volume that mke2fs made, more than the buffer cache's half of the 256 MiB heap, is read twice and the second read, by read, pread64, readv and preadv2, takes nothing from the disks while Cached grows by the file; pread64 of a small file at its size, past it and at 2^44 gives 0 bytes and leaves Cached as it was; a small file read into the file page cache and then changed by write, pwrite, writev, pwritev, pwritev2, truncate, ftruncate, fallocate, copy_file_range, sendfile, splice, a shared mapping's stores and a change to its volume while unmounted reads back as changed; and e2fsck -fn finds the volume consistent after the machine",
       "units": ["large", "tests/musl/pagecachemusl.c", "rach2/sys/mm/filecache.c", "rach2/sys/fs/ext2.c"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -225,7 +225,7 @@
       "assertions": [
         {"assertion_id": "volume", "checks": "mkmbr writes the disk's table, mke2fs makes the 6 GiB ext2 volume in its first partition and the 16 MiB one in its third, each exiting 0", "source": "scenario"},
         {"assertion_id": "cache-exit", "checks": "pagecachemusl returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
-        {"assertion_id": "cache-ok", "checks": "pagecachemusl says PAGECACHEMUSL OK and never PAGECACHEMUSL FAIL: every block of the 256 MiB file read twice as written, /proc/vmstat's pgpgin unmoved by the second read and /proc/meminfo's Cached grown by 262144 kB with the first, and each change to the small file seen by the next read, through the row's descriptor and a new open, with the size it left", "source": "scenario"},
+        {"assertion_id": "cache-ok", "checks": "pagecachemusl says PAGECACHEMUSL OK and never PAGECACHEMUSL FAIL: every block of the 256 MiB file read twice as written, /proc/vmstat's pgpgin unmoved by the second read and /proc/meminfo's Cached grown by 262144 kB with the first, each pread64 at and past the end of the small file, at 2^44 among them, giving 0 bytes with Cached unchanged, and each change to the small file seen by the next read, through the row's descriptor and a new open, with the size it left", "source": "scenario"},
         {"assertion_id": "fsck", "checks": "e2fsck -fn on the large volume after the machine exits 0, finding it consistent", "source": "scenario"}
       ],
       "branches": [],
