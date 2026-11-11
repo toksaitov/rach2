@@ -305,8 +305,10 @@ void platform_pmu_disable(void)
  * (arch/x86/events/intel/core.c, `intel_pmu_handle_irq`); version 1 and
  * AMD say nothing, and a counter loaded with the negative of its period has
  * overflowed once its top bit is clear (arch/x86/events/core.c,
- * `x86_pmu_handle_irq`). The APIC masks the counter's entry as it delivers
- * the NMI, so the entry is written again, as `intel_pmu_handle_irq` does.
+ * `x86_pmu_handle_irq`). Intel's APIC masks the counter's entry as it
+ * delivers the NMI, and AMD's does not (arch/x86/events/amd/core.c,
+ * `amd_pmu_v2_handle_irq`); the entry is written again on both, as
+ * `intel_pmu_handle_irq` and `x86_pmu_handle_irq` do.
  */
 int platform_pmu_overflow(int *due)
 {
