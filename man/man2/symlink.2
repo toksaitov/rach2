@@ -142,6 +142,15 @@ The descriptor does not change the interpretation of the stored
 .Pp
 When a link is followed, an absolute target is resolved from the root
 and a relative target from the directory containing the link.
+A link at the end of a path, in a sticky directory that others may
+write, is followed only by its owner or when the directory's owner owns
+it; anyone else, root included, gets
+.Er EACCES ,
+as under Linux's
+.Pa /proc/sys/fs/protected_symlinks ,
+which is 1 and takes 0 to turn the rule off
+.Pq Xr proc 5 .
+A link in the middle of a path is followed whoever owns it.
 At most 40 links are followed while resolving one path; a forty-first
 returns
 .Er ELOOP .
@@ -207,7 +216,8 @@ and
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er EACCES
 Search permission on an ancestor directory or write permission on the
-new link's parent was denied.
+new link's parent was denied, or a path ended at another user's link in a
+sticky directory that others may write.
 .It Bq Er EBADF
 A relative path uses an invalid directory descriptor.
 .It Bq Er EBUSY
