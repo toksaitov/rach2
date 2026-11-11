@@ -231,23 +231,11 @@ static void proc_release(process_t *p)
     free_process(p);
 }
 
-/*
- * Init process tracking from kernel.c. A real init's death is fatal
- * (panic_init_died); an init exiting under the debug shell returns to it.
- */
-extern volatile uint32_t init_pid;
-
 /* The debug shell's loop, in kernel.c, reached when an init exits while the
  * debug shell is the supervisor (rescue mode or the no-init test image). */
 extern void shell_loop(void);
 
 extern void shell_reset_input(void);
-
-/* Boot-home policy from kernel.c. debug_shell_is_home is true when the debug
- * shell supervises (an exited init returns to it); false when a real /sbin/init
- * is PID 1, in which case its death is fatal (panic_init_died, never returns).
- */
-extern bool debug_shell_is_home;
 
 extern void panic_init_died(uint32_t pid);
 
@@ -508,7 +496,10 @@ void proc_group_exit(int32_t code)
  * every process exit would print it, a forked child's included, and the shell
  * already answers the question through `$?`. The line that hands the shell
  * back is printed whenever an init returns to the shell: the probe runner
- * scores probes from that one.
+ * scores probes from that one. The line and the harness use the process's
+ * status when its end has begun, as Linux 6.12.115's do_exit reports for
+ * init (kernel/exit.c:913-915); a signal gives the harness 128 plus its
+ * number, never an exit status of zero.
  *
  * In the harness build an init's exit reports its status to QEMU's
  * isa-debug-exit device at once, before the scheduler can switch to a child
@@ -536,7 +527,7 @@ void proc_group_exit(int32_t code)
  */
 int32_t exit_current(int32_t code)
 {
-    int status = (code >> 8) & 0xFF;
+    int status;
     bool is_init;
     int alone;
     uint32_t exiting_pid;
@@ -562,8 +553,16 @@ int32_t exit_current(int32_t code)
     if (!alone) {
         exit_release_session();
     }
+    if (current_proc->tg->exiting) {
+        code = current_proc->tg->exit_code;
+    }
+    status = (code & 0x7F) != 0 ? 128 + (code & 0x7F) : (code >> 8) & 0xFF;
     if (debug_shell_is_home) {
-        klog(KLOG_INFO, "process", "exited with status %d", status);
+        if ((code & 0x7F) != 0) {
+            klog(KLOG_INFO, "process", "killed by signal %d", code & 0x7F);
+        } else {
+            klog(KLOG_INFO, "process", "exited with status %d", status);
+        }
     }
 
 #ifdef RACH2_HARNESS
@@ -580,8 +579,7 @@ int32_t exit_current(int32_t code)
         exit_schedule_away();
     }
 
-    klog(KLOG_INFO, "sys_exit", "init process %d exited with status %d, returning to kernel shell",
-         exiting_pid, status);
+    init_end_line(exiting_pid, code);
     console_puts("Init process exited. Returning to kernel debug shell.");
 
     arch_irq_disable();
@@ -3772,7 +3770,7 @@ static int wait_tracee(process_t *p, int options, struct wait_report *out)
         return 0;
     }
     if (p->pid != p->tgid) {
-        wait_fill_exit(out, p, p->exit_code);
+        wait_fill_exit(out, p, p->tg->exiting ? p->tg->exit_code : p->exit_code);
         wait_hold(out, p, WAIT_FREE, options);
         return 1;
     }

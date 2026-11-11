@@ -488,7 +488,7 @@ static void terminate_release_session(uint32_t pid)
  * for a signal. The status is the process's, so a thread that exit_group's
  * SIGKILL ends last reports the group's exit.
  */
-static void init_end_line(uint32_t pid, int32_t status)
+void init_end_line(uint32_t pid, int32_t status)
 {
     if ((status & 0x7F) == 0) {
         klog(KLOG_INFO, "sys_exit",
@@ -506,10 +506,11 @@ static void init_end_line(uint32_t pid, int32_t status)
  * posts SIGCHLD and wakes a parent blocked in waitpid. The exit code is the
  * wait status of a death by a signal, the signal in its low seven bits.
  * The thread's exit event comes once its process's end has begun and its
- * core is written, and reports the process's status, as Linux 6.12.115's
- * `do_exit` reports the code `do_group_exit` gives it (kernel/exit.c:898,
- * 1070-1098): the status that began the end, with WCOREFLAG once the core
- * is written, or 0 when another thread's execve ends this one.
+ * core is written, and reports the status `do_group_exit` would give
+ * Linux 6.12.115's `do_exit` (kernel/exit.c:897-898, 1075-1096): the
+ * process's status before this thread parks for a core, or after writing
+ * one itself, or 0 when another thread's execve ends this one. Only the
+ * dumper's event includes WCOREFLAG (fs/coredump.c:472-476).
  *
  * A core file is written (`terminate_core`) only when no other thread has
  * begun to end the process: the group's `core_dumping` is set before the
@@ -551,6 +552,7 @@ void terminate_current_process(int32_t signo)
     int core;
     int alone;
     int last;
+    int32_t event_status;
 
     if (!current_proc || current_proc->mm == NULL) {
         return;
@@ -567,14 +569,15 @@ void terminate_current_process(int32_t signo)
         current_proc->tg->core_dumping = 1;
     }
     proc_group_exit(signo);
+    event_status = current_proc->tg->exiting ? current_proc->tg->exit_code : 0;
     arch_irq_enable();
     if (core) {
-        signo = terminate_core(signo);
+        (void)terminate_core(signo);
+        event_status = current_proc->tg->exit_code;
     } else if (current_proc->tg->core_dumping) {
         core_park();
     }
-    ptrace_event(PTRACE_EVENT_EXIT,
-                 (uint32_t)(current_proc->tg->exiting ? current_proc->tg->exit_code : 0));
+    ptrace_event(PTRACE_EVENT_EXIT, (uint32_t)event_status);
     signal_exit_begin();
     alone = current_proc->tg->live == 1;
 
@@ -582,7 +585,7 @@ void terminate_current_process(int32_t signo)
         terminate_release_session(pid);
     }
 
-    last = proc_exit_cleanup(signo);
+    last = proc_exit_cleanup(event_status);
     arch_irq_disable();
 
     if (!last) {
