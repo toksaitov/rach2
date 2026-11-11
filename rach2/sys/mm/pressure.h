@@ -86,6 +86,11 @@ uint32_t mem_reclaim(void);
  * user page. */
 void mem_balance(void);
 
+/** Whether `mem_balance` would reclaim now: the free count is below the
+ * low mark and the caller is not an interrupt handler. A fault asks first,
+ * so that it lets its regions' lock go only when the caches will run. */
+int mem_short(void);
+
 /** Count one level of interrupt entered, for `in_interrupt`. */
 void irq_enter(void);
 
