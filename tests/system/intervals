@@ -15,6 +15,7 @@ tests/restartprobe.c: the sleeps tested, timed against their deadlines
 tests/restartprobe.c: the sleep whose restart registers the tracer edits
 tests/pure64probe.c: the sleep whose resumption is tested, which SIGKILL ends
 tests/pipeprobe.c: a try that changed the heap is followed by a pause
+tests/pipeprobe.c: the parent's state is looked at again every 10 ms
 tests/host/etude_native_hosttest.c: a process or a group is looked at again every 20 ms
 tests/host/etude_legacyset_hosttest.c: the record is read again every 50 ms
 tests/host/etude_exec_hosttest.c: the child is checked every 1 ms
