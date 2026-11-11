@@ -19,7 +19,7 @@
  * and given back, backing in one run and in pieces, partial adoption, the
  * doorbells' hooks, the control node's report, a device that stops running,
  * a refused setup, the detach, and a backing held through a detach while
- * the same frames are attached again.
+ * the same frames are attached, detached and attached again.
  */
 
 #define REGION_PAGES 16u
@@ -531,11 +531,36 @@ static void detach(void)
     check(strstr(last_log, "died") != NULL, "the death logged");
 }
 
+/** The second region of `held_through_detach` detached while `old` still
+ * holds the backing at `page` and the next: the marks its attach made for
+ * them leave its heap, so its record is not kept, and a third region
+ * attached in its place leaves them out again. */
+static void detach_while_held(struct vshm *old, uint32_t page)
+{
+    struct vshm *second = vs;
+
+    second->refs++; /* the driver's bind */
+    second->stop = 1 + (int)VGS_DETACH_ORDERLY;
+    vshm_finish(second);
+    check(second->heap_used == 0 && !second->gone && second->heap_map == NULL && vshm_kept == old &&
+              old->gone_next == NULL && old->heap_used == 2,
+          "held: a detach of the second region clears the old record's marks and keeps no record");
+    vs_put(&second->vdev);
+    attach();
+    vshm_cur = vs;
+    check(vs->heap_used == 2 && heap_bit(vs, page - heap_page(vs, 0)) &&
+              heap_bit(vs, page + 1u - heap_page(vs, 0)),
+          "held: a third region leaves the backing's frames out of its heap");
+}
+
 /** A backing and a command's page held through the detach, as an exported
  * buffer's backing is through a reset: the record keeps its heap's tables,
  * a region attached again over the same frames leaves the held pages out of
- * its heap, and each page's release gives it back to that heap, the last
- * freeing the detached record's tables. */
+ * its heap, which the attach's `vshm_take_region` does, and a detach of
+ * that region clears those marks from its heap, so that its record is not
+ * kept for them; a third attach leaves them out again, and each page's
+ * release gives it back to that heap, the last freeing the detached
+ * record's tables. */
 static void held_through_detach(void)
 {
     struct vshm *old;
@@ -563,7 +588,6 @@ static void held_through_detach(void)
               old->heap_map != NULL && old->rev != NULL && old->frames != NULL,
           "held: the detached record keeps its heap's tables");
     attach();
-    vshm_gone_reserve(vs);
     vshm_cur = vs;
     check(vs->heap_used == 3 && heap_bit(vs, page - heap_page(vs, 0)) &&
               heap_bit(vs, page + 1u - heap_page(vs, 0)) &&
@@ -575,12 +599,13 @@ static void held_through_detach(void)
     check(vs->heap_used == 2 && old->heap_used == 2 && old->gone &&
               !heap_bit(vs, cmd_page - heap_page(vs, 0)),
           "held: the command's page given back to both heaps after the detach");
+    detach_while_held(old, page);
     virtio_backing_release(&old->vdev, &sh);
     shmem_free(&sh);
     check(vs->heap_used == 0 && !old->gone && vshm_kept == NULL && old->heap_map == NULL &&
               old->frames == NULL,
           "held: the release gives the pages to the new heap and frees the old tables");
-    check(unrefs - u0 == REGION_PAGES && frame_refs[page] == 0 && frame_refs[page + 1u] == 0,
+    check(unrefs - u0 == 2u * REGION_PAGES && frame_refs[page] == 0 && frame_refs[page + 1u] == 0,
           "held: every reference given back once");
     vs_put(&old->vdev);
     vs->stop = 1 + (int)VGS_DETACH_ORDERLY;
