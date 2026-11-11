@@ -10,11 +10,13 @@
  * the growth of a stack; node allocation past what it starts with; the
  * merging of neighbours; mprotect's splits and merges, the charge
  * (VM_PROT_ACCOUNT) a private region takes when mprotect first makes it
- * writable and keeps after, and its failure for a gap and for write to a
- * region that may never be written, which keeps that mark; the search for
- * a free range; the bytes a range covers; and the file a region maps: its
- * pages through splits and merges, its references, and its release, which
- * waits for vm_file_reap after the last one goes.
+ * writable and keeps after once a page of it was written (`anon`), or
+ * loses when anonymous memory never written stops being writable, `anon`
+ * through splits, merges and a fork's copy, and its failure for a gap and
+ * for write to a region that may never be written, which keeps that mark;
+ * the search for a free range; the bytes a range covers; and the file a
+ * region maps: its pages through splits and merges, its references, and its
+ * release, which waits for vm_file_reap after the last one goes.
  */
 
 #include "mm/vm.h"
@@ -349,6 +351,49 @@ static void limit_rows(void)
 }
 
 /**
+ * Check that mprotect without write drops the charge of anonymous memory no
+ * page of which was written, as Linux's mprotect_fixup drops VM_ACCOUNT from
+ * an anonymous region with no anon_vma, and that making it writable charges
+ * it again; a split, a merge and a fork's copy keep `anon`, but not a copy of
+ * a VM_PROT_WIPEONFORK region.
+ */
+static void run_account_drop(void)
+{
+    const uint32_t rw = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_ACCOUNT;
+    vm_space_t p = {0}, c = {0};
+    vma_t *r;
+
+    vm_init(&p);
+    CHECK(vm_insert(&p, 0x70000, 0x74000, rw, VM_ANON) == 0);
+    CHECK(vm_protect(&p, 0x71000, 0x72000, VM_PROT_READ) == 0);
+    r = vm_find(&p, 0x71000);
+    CHECK(p.count == 3 && r != NULL && r->end == 0x72000 && r->prot == VM_PROT_READ);
+    CHECK(vm_protect(&p, 0x71000, 0x72000, VM_PROT_READ | VM_PROT_WRITE) == 0);
+    CHECK(p.count == 1 && region_at(&p, 0)->prot == rw);
+    CHECK(vm_protect(&p, 0x70000, 0x74000, VM_PROT_READ) == 0);
+    CHECK(p.count == 1 && region_at(&p, 0)->prot == VM_PROT_READ);
+    CHECK(vm_protect(&p, 0x70000, 0x74000, VM_PROT_READ | VM_PROT_WRITE) == 0);
+    region_at(&p, 0)->anon = 1;
+    CHECK(vm_protect(&p, 0x71000, 0x72000, VM_PROT_READ) == 0);
+    r = vm_find(&p, 0x71000);
+    CHECK(p.count == 3 && r != NULL && r->anon && r->prot == (VM_PROT_READ | VM_PROT_ACCOUNT));
+    CHECK(vm_find(&p, 0x73000)->anon);
+    CHECK(vm_protect(&p, 0x71000, 0x72000, VM_PROT_READ | VM_PROT_WRITE) == 0);
+    CHECK(p.count == 1 && region_at(&p, 0)->anon && region_at(&p, 0)->prot == rw);
+    CHECK(vm_insert(&p, 0x74000, 0x75000, rw, VM_ANON) == 0);
+    CHECK(p.count == 1 && region_at(&p, 0)->end == 0x75000 && region_at(&p, 0)->anon);
+    CHECK(vm_insert(&p, 0x76000, 0x77000, rw, VM_HEAP) == 0);
+    CHECK(vm_protect(&p, 0x76000, 0x77000, 0) == 0);
+    CHECK(vm_find(&p, 0x76000)->prot == 0);
+    CHECK(vm_insert(&p, 0x7A000, 0x7B000, rw | VM_PROT_WIPEONFORK, VM_ANON) == 0);
+    vm_find(&p, 0x7A000)->anon = 1;
+    CHECK(vm_copy(&c, &p) == 0 && c.count == p.count);
+    CHECK(vm_find(&c, 0x70000)->anon && !vm_find(&c, 0x7A000)->anon);
+    vm_free(&c);
+    vm_free(&p);
+}
+
+/**
  * Check the free range `vm_find_free` finds and a hole it uses again, the
  * fallback of `vm_find_mmap` to a gap across the top-down search's base, and
  * the gap a growing stack leaves above another mapping. The guard below the
@@ -582,9 +627,9 @@ int main(void)
         vm_free(&m);
     }
 
-    /* mprotect: a private region keeps its charge (VM_PROT_ACCOUNT) as it
-     * stops and starts being writable, so its pieces join again; one first
-     * made writable by mprotect takes it. */
+    /* mprotect: a private region with a page written (`anon`) keeps its
+     * charge (VM_PROT_ACCOUNT) as it stops and starts being writable, so its
+     * pieces join again; one first made writable by mprotect takes it. */
     {
         vm_space_t p = {0};
         const uint32_t ro = VM_PROT_READ | VM_PROT_ACCOUNT;
@@ -592,6 +637,7 @@ int main(void)
 
         vm_init(&p);
         CHECK(vm_insert(&p, 0x50000, 0x58000, ro | VM_PROT_WRITE, VM_ANON) == 0);
+        vm_find(&p, 0x50000)->anon = 1;
         CHECK(vm_protect(&p, 0x52000, 0x54000, VM_PROT_READ) == 0);
         CHECK(p.count == 3);
         r = vm_find(&p, 0x52000);
@@ -603,6 +649,7 @@ int main(void)
               region_at(&p, 0)->end == 0x58000);
         CHECK(vm_protect(&p, 0x57000, 0x58000, 0) == 0);
         CHECK(vm_insert(&p, 0x58000, 0x5A000, ro, VM_ANON) == 0);
+        vm_find(&p, 0x58000)->anon = 1;
         CHECK(vm_protect(&p, 0x56000, 0x59000, VM_PROT_READ) == 0);
         r = vm_find(&p, 0x56000);
         CHECK(r != NULL && r->start == 0x56000 && r->end == 0x5A000 && r->prot == ro);
@@ -625,6 +672,7 @@ int main(void)
         vm_free(&p);
     }
 
+    run_account_drop();
     run_mapping_edges();
 
     {

@@ -6843,6 +6843,28 @@ static int mlock_allowed(void)
 }
 
 /**
+ * Set `anon` (vm.h) on each region of anonymous memory that meets [start,
+ * end) and has a page written anywhere in it, before a call drops pages of
+ * the range or takes write from it. Linux gives a region its anon_vma at its
+ * first private page and keeps it after the page goes, so the mark is taken
+ * while the pages that show it are still mapped. A page a read brought in
+ * zeroed and nothing stored into does not count, as Linux maps its zero page
+ * there.
+ */
+static void note_anon(struct mm *mm, uintptr_t start, uintptr_t end)
+{
+    struct paging_frame_counts counts;
+    vma_t *r;
+
+    for (r = vm_lower(&mm->vm, start); r && r->start < end; r = vm_next(r)) {
+        if (!r->anon && !r->file && r->type != VM_SHARED && !(r->prot & VM_PROT_IO)) {
+            paging_user_frames(mm->dir, r->start, r->end, &counts);
+            r->anon = counts.frames > 0;
+        }
+    }
+}
+
+/**
  * Set the program break, the heap's top (brk(2)). Its argument is the
  * requested break. Returns the resulting break: the new value on success, or
  * the unchanged current break if the request is below the heap's start or into
@@ -6899,6 +6921,7 @@ long sys_brk(isr_params_t *params)
             return (long)req;
         }
     } else if (new_top < old_top) {
+        note_anon(current_proc->mm, new_top, old_top);
         if (vm_sealed_at(vm, new_top, old_top) < old_top || vm_remove(vm, new_top, old_top) != 0) {
             return (long)vm->brk;
         }
@@ -7350,6 +7373,7 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
     }
     if (rc == 0 && (flags & MAP_FIXED)) {
         if (vm_reserve(vm, 2) == 0) {
+            note_anon(current_proc->mm, base, base + len);
             vm_remove(vm, base, base + len);
             mmn_notify(current_proc->mm, MMN_UNMAP, base, base + len);
             unmap_user_range(_curr_dir, base, base + len);
@@ -7647,6 +7671,7 @@ long sys_munmap(isr_params_t *params)
     if (vm_sealed_at(vm, start, end) < end) {
         return -EPERM;
     }
+    note_anon(current_proc->mm, start, end);
     if (vm_remove(vm, start, end) != 0) {
         vma_exhausted("munmap");
         return -ENOMEM;
@@ -7778,6 +7803,9 @@ static long mprotect_key(isr_params_t *params, int key)
         exec_key = mm->pkey_exec;
     }
     stop = vm_protect_stop(&mm->vm, addr, end, vmprot, &why);
+    if (!(vmprot & VM_PROT_WRITE)) {
+        note_anon(mm, addr, stop);
+    }
     rc = vm_protect_key(&mm->vm, addr, stop, vmprot, key, exec_key);
     if (rc != 0) {
         vma_exhausted("mprotect");
@@ -7810,11 +7838,13 @@ long sys_mprotect(isr_params_t *params)
 static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, uintptr_t to,
                        uintptr_t new_len)
 {
-    vma_t like = *r;
+    vma_t like;
     uint32_t pgoff = r->pgoff + (uint32_t)((addr - r->start) / PAGE_SIZE);
     uintptr_t moved = len < new_len ? len : new_len;
     int rc;
 
+    note_anon(current_proc->mm, addr, addr + len);
+    like = *r;
     if (vm_reserve(vm, 3) != 0) {
         vma_exhausted("mremap");
         return -ENOMEM;
@@ -7869,6 +7899,7 @@ static long remap_fixed(vm_space_t *vm, uintptr_t addr, uintptr_t old_len, uintp
         vma_exhausted("mremap");
         return -ENOMEM;
     }
+    note_anon(current_proc->mm, to, to + new_len);
     vm_remove(vm, to, to + new_len);
     mmn_notify(current_proc->mm, MMN_UNMAP, to, to + new_len);
     unmap_user_range(_curr_dir, to, to + new_len);
@@ -7910,6 +7941,7 @@ static long remap_resize(vma_t *r, uintptr_t addr, uintptr_t old_len, uintptr_t 
         return remap_fixed(vm, addr, old_len, to, new_len);
     }
     if (new_len <= old_len) {
+        note_anon(current_proc->mm, addr + new_len, addr + old_len);
         if (vm_remove(vm, addr + new_len, addr + old_len) != 0) {
             vma_exhausted("mremap");
             return -ENOMEM;
@@ -8189,10 +8221,12 @@ long sys_madvise(isr_params_t *params)
             return -ENOMEM;
         }
         if (advice == MADV_GUARD_INSTALL) {
+            note_anon(current_proc->mm, addr, end);
             mmn_notify(current_proc->mm, MMN_DROP, addr, end);
             unmap_user_range(_curr_dir, addr, end);
         }
     } else if (advice == MADV_DONTNEED || advice == MADV_DONTNEED_LOCKED || advice == MADV_FREE) {
+        note_anon(current_proc->mm, addr, end);
         mmn_notify(current_proc->mm, MMN_DROP, addr, end);
         unmap_user_range(_curr_dir, addr, end);
     }

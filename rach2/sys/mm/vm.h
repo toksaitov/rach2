@@ -100,7 +100,9 @@
  * writable segment of a program, and a private mapping that was writable
  * when it was made or that mprotect first makes writable, unless
  * VM_PROT_NORESERVE is set. The mark stays when the region stops being
- * writable. This kernel keeps no commit count; only smaps reads it. */
+ * writable, except on anonymous memory no page of which was ever written
+ * (`vma_t`'s `anon`), as Linux's mprotect_fixup drops it from a region with
+ * no anon_vma. This kernel keeps no commit count; only smaps reads it. */
 #define VM_PROT_ACCOUNT     0x80000u
 /* Kept the same way: the mapping was made with MAP_NORESERVE, as Linux's
  * VM_NORESERVE under overcommit_memory 0, and is never VM_PROT_ACCOUNT. */
@@ -209,7 +211,12 @@ typedef struct vma {
     vm_type_t type;
     struct vm_file *file;
     uint32_t pgoff;
-    struct vm_policy *policy;          /* mbind's, with a reference; NULL for the default */
+    struct vm_policy *policy; /* mbind's, with a reference; NULL for the default */
+    /* 1 once `note_anon` (syscall_proc.c) found a page of it written, as
+     * Linux gives a region an anon_vma at its first private page; a split,
+     * a move and a fork's copy keep it, unless VM_PROT_WIPEONFORK, and a
+     * merge takes either side's. Only VM_PROT_ACCOUNT's drop reads it. */
+    uint8_t anon;
     struct vma *left, *right, *parent; /* AVL tree links */
     struct vma *prev, *next;           /* address order; next also links spare nodes */
     unsigned int height;               /* subtree height, a leaf's is 1 */
@@ -406,7 +413,9 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end);
 
 /**
  * Give [start, end), which regions must cover without a gap, the access bits
- * `prot`, each region keeping its bits of VM_PROT_KEPT; the
+ * `prot`, each region keeping its bits of VM_PROT_KEPT but VM_PROT_ACCOUNT,
+ * which a private region made writable takes and anonymous memory whose
+ * `anon` is 0 loses when left without write; the
  * regions the range cuts are split at its ends, and the pieces merge with
  * neighbours that then match. An empty range changes nothing. Returns 0; -1
  * for a gap, as Linux's mprotect answers ENOMEM; -2 when a split has no

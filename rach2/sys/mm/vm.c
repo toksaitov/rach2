@@ -322,6 +322,7 @@ static vma_t *vm_link(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t p
     r->file = file;
     r->pgoff = pgoff;
     r->policy = NULL;
+    r->anon = 0;
     r->parent = parent;
     r->left = r->right = NULL;
     r->height = 1;
@@ -403,6 +404,7 @@ static vma_t *vm_split(vm_space_t *vm, vma_t *r, uintptr_t at)
     vm->total -= end - at;
     upper = vm_link(vm, at, end, r->prot, r->type, r->file, pgoff);
     upper->policy = vm_policy_get(r->policy);
+    upper->anon = r->anon;
     return upper;
 }
 
@@ -418,6 +420,7 @@ static int vm_merge(vm_space_t *vm, vma_t *r)
         return 0;
     }
     end = s->end;
+    r->anon |= s->anon;
     vm_delete(vm, s);
     vm->total += end - r->end;
     r->end = end;
@@ -481,6 +484,7 @@ int vm_copy(vm_space_t *dst, const vm_space_t *src)
             copy = vm_link(dst, r->start, r->end, r->prot & ~(uint32_t)VM_PROT_LOCKS, r->type,
                            r->file, r->pgoff);
             copy->policy = vm_policy_get(r->policy);
+            copy->anon = (r->prot & VM_PROT_WIPEONFORK) ? 0 : r->anon;
         }
     }
     return 0;
@@ -514,6 +518,7 @@ int vm_insert_file(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot
     like.type = type;
     like.file = file;
     like.policy = NULL;
+    like.anon = 0;
     return vm_insert_like(vm, start, end, &like, pgoff);
 }
 
@@ -528,6 +533,7 @@ int vm_insert_like(vm_space_t *vm, uintptr_t start, uintptr_t end, const vma_t *
     }
     r = vm_link(vm, start, end, like->prot, like->type, like->file, pgoff);
     r->policy = vm_policy_get(like->policy);
+    r->anon = like->anon;
     (void)vm_merge(vm, r);
     if (r->prev) {
         (void)vm_merge(vm, r->prev);
@@ -614,8 +620,10 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
  * The protection `vm_change` gives the region `r`: `(r->prot & ~mask) | bits`,
  * with VM_PROT_ACCOUNT added under VM_CHANGE_ACCOUNT to a private region that
  * was not writable and is not VM_PROT_NORESERVE, as Linux's mprotect_fixup
- * charges one, and with VM_CHANGE_XO_KEY a key left at the execute-only key
- * dropped to 0.
+ * charges one, and dropped by a change that leaves write off from anonymous
+ * memory none of whose pages was written, as mprotect_fixup drops it from an
+ * anonymous region with no anon_vma; and with VM_CHANGE_XO_KEY a key left at
+ * the execute-only key dropped to 0.
  */
 static uint32_t vm_change_prot(const vma_t *r, uint32_t mask, uint32_t bits, uint32_t opts)
 {
@@ -624,6 +632,9 @@ static uint32_t vm_change_prot(const vma_t *r, uint32_t mask, uint32_t bits, uin
     if ((opts & VM_CHANGE_ACCOUNT) && r->type != VM_SHARED &&
         !(r->prot & (VM_PROT_WRITE | VM_PROT_NORESERVE))) {
         prot |= VM_PROT_ACCOUNT;
+    } else if ((mask & VM_PROT_WRITE) && !(prot & VM_PROT_WRITE) && !r->anon && !r->file &&
+               r->type != VM_SHARED && !(r->prot & VM_PROT_IO)) {
+        prot &= ~(uint32_t)VM_PROT_ACCOUNT;
     }
     if ((opts & VM_CHANGE_XO) && VM_PROT_KEY(prot) == ((opts >> 24) & 15u)) {
         prot &= ~(uint32_t)VM_PROT_PKEY;
