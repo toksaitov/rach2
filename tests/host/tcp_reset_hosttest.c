@@ -694,8 +694,9 @@ static void test_shut_rd(void)
  * shutdown(2) in SYN_SENT disconnects the socket, as Linux's inet_shutdown
  * has tcp_disconnect do: the block is freed, nothing is sent, the socket
  * records ECONNRESET, gives back the port the open chose and may connect
- * again, and a bound port stays. A socket with no block is refused with
- * ENOTCONN.
+ * again, and a bound port stays. A socket with no block takes the flags
+ * and is refused with ENOTCONN, as Linux's TCP_CLOSE case, and keeps them
+ * when it connects again.
  */
 static void test_shutdown_syn_sent(void)
 {
@@ -711,10 +712,14 @@ static void test_shutdown_syn_sent(void)
           tcp_shutdown(&sock, 0, 1) == 0 && sock.tcb == 0 && tcbs == 0 && n_segs == 0);
     CHECK("the socket records ECONNRESET and gives back the ephemeral port",
           sock.so_error == ECONNRESET && sock.local_port == 0 && sock.shutdown == 0);
-    CHECK("a shutdown of a socket with no block is refused with ENOTCONN",
-          tcp_shutdown(&sock, 1, 1) == -ENOTCONN);
-    CHECK("and the socket can connect again", tcp_connect(&sock, net_addr4(PEER), PEER_PORT) == 0 &&
-                                                  sock.tcb != 0 && sock.tcb->state == TCP_SYN_SENT);
+    CHECK("a shutdown of a socket with no block takes the flags and is ENOTCONN",
+          tcp_shutdown(&sock, 1, 0) == -ENOTCONN && sock.shutdown == SOCK_RCV_SHUTDOWN &&
+              tcp_shutdown(&sock, 0, 1) == -ENOTCONN &&
+              sock.shutdown == (SOCK_RCV_SHUTDOWN | SOCK_SEND_SHUTDOWN) && n_segs == 0);
+    CHECK("and the socket can connect again, keeping them",
+          tcp_connect(&sock, net_addr4(PEER), PEER_PORT) == 0 && sock.tcb != 0 &&
+              sock.tcb->state == TCP_SYN_SENT &&
+              sock.shutdown == (SOCK_RCV_SHUTDOWN | SOCK_SEND_SHUTDOWN));
     tcp_close(&sock);
 
     reset_all();
