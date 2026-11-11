@@ -509,8 +509,9 @@ under the rule Linux applies as the signal is sent.
 A thread must take it at once: the thread it was sent to, or for a signal
 sent to the process another of its threads when that one does not, takes
 it at once when it does not block the signal, has not begun to end, is not
-stopped, and is running or has no other signal pending that it does not
-block.
+stopped, and is running or has neither an unblocked signal of its own
+nor signal work assigned to it by a previous send.
+A shared pending signal assigned to another thread does not exclude it.
 That thread must not wait for the signal in
 .Fn rt_sigtimedwait
 .Pq Xr sigaction 2

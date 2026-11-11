@@ -590,13 +590,19 @@ static int sched_prepare_old(process_t *old, struct percpu *cpu, int me)
  * it switches to it. A
  * current process a suspend to idle holds is made ready where it is: on
  * one processor the suspend's writer was the only one to run, and on
- * several the others' next tick stops what they run.
+ * several the others stop what they run at its next switch: the tick's,
+ * a call's exit, or a kernel thread's next sleep or service point.
  *
  * Selection and publication run with interrupts disabled and the run
  * queues' lock held, so a wake cannot race the mark's consumption or a
  * timer re-enter partially updated state. A current process that has
  * already resumed after an idle wait loses its mark before yielding, so
- * that wake cannot prefer it again later.
+ * that wake cannot prefer it again later. The outgoing thread's request
+ * (`need_resched`) is cleared in the same hold, once selection is done
+ * and before either return without a switch, as Linux's __schedule
+ * clears it (kernel/sched/core.c:6705-6707): a request made after the
+ * selection is kept, and one the selection has answered is not taken
+ * again.
  *
  * The switch runs with interrupts disabled: a timer interrupt between the
  * publication of the new current process and the change of stacks inside
@@ -664,6 +670,7 @@ void schedule(void)
     watchdog_sched();
     kick = sched_prepare_old(old, cpu, me);
     next = sched_select(me, old);
+    old->need_resched = 0;
 
     if (!next) {
         if (old == cpu->idle || old->state == PROC_RUNNING || !cpu->idle) {
@@ -789,41 +796,51 @@ void sched_idle_loop(void)
 }
 
 /**
- * A process interrupted in user mode, the idle process and a kernel thread
- * are switched at once. A processor's idle task is not: the interrupt ended
- * its halt, and its loop selects as soon as the handler returns, with the
- * idle marker of the halt cleared first, which a switch from inside the
- * handler would leave set for the process switched to. A process inside a
- * system call is not either: the call's code runs with interrupts on while
- * its own state is half changed, and `sys_exit`, for one, publishes the
- * zombie its parent may reap, kernel stack and all, before it calls
- * `schedule`. The request is kept on the process, so a process that is
- * always inside a call still gives way once per call. Nor is a thread
- * inside klog (`klog_inside`), in a record or a console write, as process
- * 0 is while the debug shell prints a line: klog's count of its users
- * would stay up while the big lock passed on, so the thread gives way at a
- * later tick, as Linux writes each console record with
+ * A process interrupted in user mode and process 0 are switched at once.
+ * A processor's idle task is not: the interrupt ended its halt, and its
+ * loop selects as soon as the handler returns, with the idle marker of the
+ * halt cleared first, which a switch from inside the handler would leave
+ * set for the process switched to. A process inside a system call or a
+ * fault is not either: the call's code runs with interrupts on while its
+ * own state is half changed, and `sys_exit`, for one, publishes the zombie
+ * its parent may reap, kernel stack and all, before it calls `schedule`.
+ * Nor is a kernel thread (`no_tick_switch`), whose work changes state that
+ * only the big lock guards, which the switch lets go: Linux without
+ * CONFIG_PREEMPTION only sets TIF_NEED_RESCHED from the tick
+ * (kernel/sched/core.c:1094) and switches a kernel thread where it calls
+ * schedule or cond_resched (:7287), never on an interrupt's return to
+ * kernel mode (kernel/entry/common.c:356). Nor is a thread inside klog
+ * (`klog_inside`), in a record or a console write, as process 0 is while
+ * the debug shell prints a line: klog's count of its users would stay up
+ * while the big lock passed on, as Linux writes each console record with
  * interrupts off and gives way only between records
  * (kernel/printk/printk.c:3074-3089).
+ *
+ * Each of these keeps the request in its record (`need_resched`): a call
+ * takes it at its exit and a fault at its end, so a process that is always
+ * inside a call still gives way once per call; a kernel thread takes it at
+ * its next sleep or service point (`sched_service_point`), and a thread in
+ * klog at a later tick, once it has left klog.
  */
 void sched_preempt(void)
 {
     if (current_proc && current_proc == this_cpu()->idle) {
         return;
     }
-    if (current_proc && (current_proc->in_syscall || current_proc->in_fault || klog_inside())) {
+    if (current_proc && (current_proc->in_syscall || current_proc->in_fault ||
+                         current_proc->no_tick_switch || klog_inside())) {
         current_proc->need_resched = 1;
         return;
     }
     schedule();
 }
 
-/** The request is cleared before the switch, so a request that arrives
- * during the switch is the next call's. */
+/** `schedule` clears the request under the run queues' lock, after its
+ * selection, so a request that arrives after the selection is the next
+ * call's and none is lost by a clear after the switch. */
 void sched_take_preempt(void)
 {
     if (current_proc && current_proc->need_resched) {
-        current_proc->need_resched = 0;
         schedule();
     }
 }
@@ -831,9 +848,11 @@ void sched_take_preempt(void)
 /**
  * A call that loops over a large buffer keeps the processor for the whole
  * loop, since the tick's switch is taken at the call's exit; a reader woken
- * by a keystroke then waits for the loop. The switch is taken here as the
- * exit would take it: interrupts off, and the request cleared before the
- * switch.
+ * by a keystroke then waits for the loop. A kernel thread keeps it until it
+ * sleeps (`no_tick_switch`), and calls this between two completed works, as
+ * Linux's worker calls cond_resched between works (kernel/workqueue.c:3290-
+ * 3299). The switch is taken here as the exit would take it, with
+ * interrupts off; `schedule` clears the request.
  *
  * `schedule` passes the big lock on only past a real switch, and a call on
  * a processor with nothing else queued has none to make, so the lock goes

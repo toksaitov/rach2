@@ -206,8 +206,9 @@ struct process {
      * is not fatal at its post (`sig_fatal_now`). */
     uint64_t sig_real_blocked;
     /* Set once the thread has begun to end, after its exit event, as Linux's
-     * PF_EXITING: no signal sent to its process picks it to take it, and no
-     * signal sent to it alone begins its process's end (`sig_wants`). */
+     * PF_EXITING: no signal sent to its process picks it to take it
+     * (`sig_wants`), and no signal sent to it alone begins its process's end
+     * (`sig_wants_now`). */
     uint32_t exit_begun;
     /* Program name (basename of the execve'd path, truncated, padded with
      * NULs to the end): the "comm" /proc/<pid>/stat reports and ps shows.
@@ -299,9 +300,21 @@ struct process {
      * 0, its own allocations, the requests a writeback needs, may take from
      * the reserve. */
     uint32_t reclaiming;
-    /* An interrupt asked for a switch while this process was inside a
-     * system call; the call's exit takes it. */
+    /* An interrupt asked for a switch that the process could not take
+     * then: it was inside a system call, a fault or klog, or it defers the
+     * tick's switch (`no_tick_switch`). A call's exit, a fault's end and a
+     * service point take it (`sched_take_preempt`), and `schedule` clears
+     * it at each selection, as Linux's __schedule clears TIF_NEED_RESCHED
+     * (kernel/sched/core.c:6707). */
     volatile uint32_t need_resched;
+    /* 1 for a kernel thread, which an interrupt does not switch: its
+     * request waits in `need_resched` for the thread's next sleep or
+     * service point, as Linux without CONFIG_PREEMPTION switches a kernel
+     * thread only where it calls schedule or cond_resched
+     * (kernel/sched/core.c:7287, kernel/entry/common.c:356). Set by
+     * `setup_process_stack`; the debug shell's test threads clear it, and
+     * process 0 never has it. */
+    uint32_t no_tick_switch;
     /* The buffer cache's list of the buffers this process holds, kept by
      * the cache so its hold rules are checked against them alone. */
     struct bbuf *bcache_held;
@@ -678,7 +691,9 @@ typedef struct process process_t;
 extern process_t *proc_list;
 
 /* Process 0, the record the boot and the debug shell run as; each
- * processor's idle task (smp.c) is another record, off the list. */
+ * processor's idle task (smp.c) is another record, off the list. Unlike a
+ * kernel thread, process 0 takes the tick's switch (`no_tick_switch` 0),
+ * for the shell's tests of preemption, which it runs. */
 extern process_t *proc_idle;
 
 /** The last process ID given out, 0 before the first. */

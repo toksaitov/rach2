@@ -360,13 +360,16 @@ uint32_t timer_late_passes(void)
  * shared buffers require, and nothing it calls waits on hardware.
  *
  * Then the handler reschedules through `sched_preempt`: at once when the
- * current process is not inside a system call, and at the call's exit when
- * it is, since timer IRQs stay enabled during a call so HDA streaming keeps
- * running, yet a switch in the middle of one is unsafe. Kernel threads and
- * process 0 (no current_proc, or one not in_syscall) are switched at once,
- * unless inside klog (`klog_inside`), in a record, a console write or a
- * console byte, as process 0 is while the debug shell prints a line; such a
- * thread gives way at a later tick.
+ * current process is in user mode, and at the call's exit when it is
+ * inside a system call, since timer IRQs stay enabled during a call so HDA
+ * streaming keeps running, yet a switch in the middle of one is unsafe.
+ * A kernel thread defers the switch to its next sleep or service point
+ * (`no_tick_switch`), as Linux without CONFIG_PREEMPTION does, since its
+ * work changes state that only the big lock guards. Process 0 and the
+ * debug shell's test threads are switched at once, unless inside klog
+ * (`klog_inside`), in a record, a console write or a console byte, as
+ * process 0 is while the debug shell prints a line; such a thread gives way
+ * at a later tick.
  */
 static void timer_handler(isr_params_t *params)
 {
@@ -929,8 +932,11 @@ static bool test_usermode(void)
  * when `dir` is NULL, in whatever directory is loaded when it runs. It has
  * the shell's affinity before it is made ready, since `sched_make_ready`
  * queues it on a processor of that affinity and only that processor takes
- * it from its queue. NULL when no record or no stack can be had.
- * `test_process_free` gives back both.
+ * it from its queue. Unlike a kernel thread, it takes the tick's switch
+ * (`no_tick_switch` cleared), since the shell's tests of preemption, the
+ * round-robin turns of machine.smp's preempt case among them, are of that
+ * switch. NULL when no record or no stack can be had. `test_process_free`
+ * gives back both.
  */
 static process_t *test_process(page_dir_t *dir, void (*entry)(void))
 {
@@ -951,6 +957,7 @@ static process_t *test_process(page_dir_t *dir, void (*entry)(void))
     p->parent_pid = current_proc->pid;
     p->affinity = current_proc->affinity;
     setup_process_stack(p, entry);
+    p->no_tick_switch = 0;
     sched_make_ready(p);
     return p;
 }

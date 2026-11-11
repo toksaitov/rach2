@@ -1065,18 +1065,19 @@ static void hung_task_log(const struct hung_report *rep)
  * thread blocked in a sleep no signal ends, but one SIGKILL ends
  * (:206-210).
  *
- * The walk runs with interrupts off. khungtaskd holds the big lock, but a
- * tick switches a kernel thread at once (`sched_preempt`), and the thread
- * it switches to may reap a process and free the record the walk stands
- * on. Linux walks under `rcu_read_lock` and breaks it every
- * HUNG_TASK_LOCK_BREAK, a tenth of a second, with references held, ending
- * the walk when the task it stands on has gone (`rcu_lock_break`, :40,
- * :160-174, :201-205). A record here has no count to hold, so the walk
- * keeps the thread's id instead, lets interrupts in after each report,
- * which it logs then, and goes on from the record with that id, or ends
- * when there is none. Without a report it does not break: the tick count
- * stands still while khungtaskd holds the big lock with interrupts off,
- * and a walk of every thread's record is short.
+ * The walk runs with interrupts off. khungtaskd holds the big lock, and
+ * the tick does not switch a kernel thread (`no_tick_switch`), so no
+ * thread reaps a process and frees the record the walk stands on unless
+ * khungtaskd sleeps or reaches a service point. Linux walks under
+ * `rcu_read_lock` and breaks it every HUNG_TASK_LOCK_BREAK, a tenth of a
+ * second, with references held, ending the walk when the task it stands on
+ * has gone (`rcu_lock_break`, :40, :160-174, :201-205). A record here has
+ * no count to hold, so the walk keeps the thread's id instead, lets
+ * interrupts in after each report, which it logs then, and goes on from
+ * the record with that id, or ends when there is none. Without a report it
+ * does not break: the tick count stands still while khungtaskd holds the
+ * big lock with interrupts off, and a walk of every thread's record is
+ * short.
  */
 static void check_hung_uninterruptible_tasks(uint32_t timeout)
 {
