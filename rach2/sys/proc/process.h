@@ -603,6 +603,11 @@ struct process {
      * set before each block: /proc/PID/wchan gives it while the thread is
      * PROC_BLOCKED, and reads nothing from it in any other state. */
     const char *wchan;
+    /* The switches the hung-task detector last saw, `nvcsw` + `nivcsw`,
+     * and the tick it saw them change at (watchdog.c), as Linux's
+     * last_switch_count and last_switch_time. */
+    unsigned long last_switch_count;
+    uint64_t last_switch_time;
 };
 
 typedef struct process process_t;

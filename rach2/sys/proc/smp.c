@@ -14,6 +14,7 @@
 #include "../lib/kirq.h"
 #include "../timer.h"
 #include "../udelay.h"
+#include "../watchdog.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
@@ -696,10 +697,14 @@ static void smp_stop_here(struct percpu *cpu)
  * was asked to drop, since the sender frees the page once it sees the word
  * clear. A barrier request is answered by the locked exchange that clears
  * it, a full barrier, after a serializing instruction when it asks for one.
+ * A turn of a wait with interrupts off is also the watchdog's
+ * (`watchdog_wait`).
  */
 void smp_service(void)
 {
     struct percpu *cpu = this_cpu();
+
+    watchdog_wait();
 
     if (cpu->stop_request) {
         smp_stop_here(cpu);

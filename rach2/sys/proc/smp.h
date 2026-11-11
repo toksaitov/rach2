@@ -237,7 +237,8 @@ void smp_space_release(const struct page_dir *dir);
  * Stop every other processor for good, for a panic and a power off, and
  * wait, a second at most and 10 ms more for a processor sent an NMI, until
  * each has taken the stop, so that none is still writing the log or the
- * screen when the caller does.
+ * screen when the caller does. A processor sent the NMI takes the stop in
+ * the NMI's handler (`watchdog_nmi`, `smp_stop_nmi`).
  */
 void smp_stop_others(void);
 

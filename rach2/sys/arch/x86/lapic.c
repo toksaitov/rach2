@@ -52,6 +52,7 @@
 #define LAPIC_ICR_LO  0x300
 #define LAPIC_ICR_HI  0x310
 #define LAPIC_TIMER   0x320
+#define LAPIC_LVTPC   0x340
 #define LAPIC_LINT0   0x350
 #define LAPIC_LINT1   0x360
 #define LAPIC_INITIAL 0x380
@@ -335,6 +336,13 @@ void lapic_send_ipi(uint32_t target, uint8_t vector)
 void lapic_send_nmi(uint32_t target)
 {
     send_command(target, ICR_NMI);
+}
+
+void lapic_set_lvtpc(uint32_t entry)
+{
+    if (ready) {
+        apic_write(LAPIC_LVTPC, entry);
+    }
 }
 
 void lapic_send_init(uint32_t target)
