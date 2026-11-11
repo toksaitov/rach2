@@ -115,6 +115,7 @@
 #define SYS_MPROTECT                125
 #define SYS_CLONE                   120
 #define SYS_FUTEX                   240
+#define SYS_FUTEX_TIME64            422
 #define SYS_SIGALTSTACK             186
 #define SYS_RT_SIGPENDING           176
 #define SYS_SIGPROCMASK             126

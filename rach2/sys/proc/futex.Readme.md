@@ -68,7 +68,7 @@ A word's page is made present and writable before the word is read. The read, th
 
 ## Limits
 
-* i686 has no `futex_time64`.
+* On i686, `futex_time64` holds a count of seconds past 2147483647 there, since the native timespec's seconds are a `long`: an absolute deadline after January 2038 ends in it.
 * `FUTEX_CLOCK_REALTIME` is taken with `FUTEX_WAIT_BITSET`, `FUTEX_WAIT_REQUEUE_PI` and `FUTEX_LOCK_PI2`; with `FUTEX_WAIT` or `FUTEX_LOCK_PI` it is `ENOSYS`.
 * A deadline is a whole number of the kernel's ticks.
 * A thread's end walks at most 2048 entries of its robust list.
