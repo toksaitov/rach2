@@ -1,0 +1,159 @@
+/usr/bin/qemu-system-x86_64 --no-reboot -nodefaults -global kvm-pit.lost_tick_policy=discard -device pc-testdev -device isa-debug-exit,iobase=0xf4,iosize=0x4 -display none -serial stdio -device pci-testdev -machine accel=kvm,kernel-irqchip=split -kernel x86/pmu.flat -smp 1 -cpu max # -initrd /srv/ref80/build/pmu-3363/tmp/tmp.dioEifwCh7
+enabling apic
+smp: waiting for 0 APs
+paging enabled
+cr0 = 80010011
+cr3 = 1047000
+cr4 = 20
+PASS: Expected #GP on RDPMC(64)
+PMU version:         2
+GP counters:         4
+GP counter width:    48
+Event Mask length:   7
+Arch Events (mask):  0x7f
+Fixed counters:      3
+Fixed counter width: 48
+PASS: Intel: core cycles-0
+PASS: Intel: core cycles-1
+PASS: Intel: core cycles-2
+PASS: Intel: core cycles-3
+PASS: Intel: instructions-0
+PASS: Intel: instructions-1
+PASS: Intel: instructions-2
+PASS: Intel: instructions-3
+PASS: Intel: ref cycles-0
+PASS: Intel: ref cycles-1
+PASS: Intel: ref cycles-2
+PASS: Intel: ref cycles-3
+PASS: Intel: llc references-0
+PASS: Intel: llc references-1
+PASS: Intel: llc references-2
+PASS: Intel: llc references-3
+PASS: Intel: llc misses-0
+PASS: Intel: llc misses-1
+PASS: Intel: llc misses-2
+PASS: Intel: llc misses-3
+PASS: Intel: branches-0
+PASS: Intel: branches-1
+PASS: Intel: branches-2
+PASS: Intel: branches-3
+PASS: Intel: branch misses-0
+PASS: Intel: branch misses-1
+PASS: Intel: branch misses-2
+PASS: Intel: branch misses-3
+PASS: Intel: fixed-0
+PASS: Intel: fixed-1
+PASS: Intel: fixed-2
+PASS: Intel: rdpmc: cntr-0
+SKIP: Intel: rdpmc: fast-0
+PASS: Intel: rdpmc: cntr-1
+SKIP: Intel: rdpmc: fast-1
+PASS: Intel: rdpmc: cntr-2
+SKIP: Intel: rdpmc: fast-2
+PASS: Intel: rdpmc: cntr-3
+SKIP: Intel: rdpmc: fast-3
+PASS: Intel: rdpmc: fixed cntr-0
+SKIP: Intel: rdpmc: fixed fast-0
+PASS: Intel: rdpmc: fixed cntr-1
+SKIP: Intel: rdpmc: fixed fast-1
+PASS: Intel: rdpmc: fixed cntr-2
+SKIP: Intel: rdpmc: fixed fast-2
+PASS: Intel: all counters
+PASS: Intel: overflow: cntr-0
+PASS: Intel: overflow: status-0
+PASS: Intel: overflow: status clear-0
+PASS: Intel: overflow: irq-0
+PASS: Intel: overflow: cntr-1
+PASS: Intel: overflow: status-1
+PASS: Intel: overflow: status clear-1
+PASS: Intel: overflow: irq-1
+PASS: Intel: overflow: cntr-2
+PASS: Intel: overflow: status-2
+PASS: Intel: overflow: status clear-2
+PASS: Intel: overflow: irq-2
+PASS: Intel: overflow: cntr-3
+PASS: Intel: overflow: status-3
+PASS: Intel: overflow: status clear-3
+PASS: Intel: overflow: irq-3
+PASS: Intel: overflow: cntr-4
+PASS: Intel: overflow: status-4
+PASS: Intel: overflow: status clear-4
+PASS: Intel: overflow: irq-4
+PASS: Intel: cmask
+PASS: Intel: running counter wrmsr: cntr
+PASS: Intel: running counter wrmsr: status msr bit
+PASS: Intel: full-width writes: core cycles-0
+PASS: Intel: full-width writes: core cycles-1
+PASS: Intel: full-width writes: core cycles-2
+PASS: Intel: full-width writes: core cycles-3
+PASS: Intel: full-width writes: instructions-0
+PASS: Intel: full-width writes: instructions-1
+PASS: Intel: full-width writes: instructions-2
+PASS: Intel: full-width writes: instructions-3
+PASS: Intel: full-width writes: ref cycles-0
+PASS: Intel: full-width writes: ref cycles-1
+PASS: Intel: full-width writes: ref cycles-2
+PASS: Intel: full-width writes: ref cycles-3
+PASS: Intel: full-width writes: llc references-0
+PASS: Intel: full-width writes: llc references-1
+PASS: Intel: full-width writes: llc references-2
+PASS: Intel: full-width writes: llc references-3
+PASS: Intel: full-width writes: llc misses-0
+PASS: Intel: full-width writes: llc misses-1
+PASS: Intel: full-width writes: llc misses-2
+PASS: Intel: full-width writes: llc misses-3
+PASS: Intel: full-width writes: branches-0
+PASS: Intel: full-width writes: branches-1
+PASS: Intel: full-width writes: branches-2
+PASS: Intel: full-width writes: branches-3
+PASS: Intel: full-width writes: branch misses-0
+PASS: Intel: full-width writes: branch misses-1
+PASS: Intel: full-width writes: branch misses-2
+PASS: Intel: full-width writes: branch misses-3
+PASS: Intel: full-width writes: fixed-0
+PASS: Intel: full-width writes: fixed-1
+PASS: Intel: full-width writes: fixed-2
+PASS: Intel: full-width writes: rdpmc: cntr-0
+SKIP: Intel: full-width writes: rdpmc: fast-0
+PASS: Intel: full-width writes: rdpmc: cntr-1
+SKIP: Intel: full-width writes: rdpmc: fast-1
+PASS: Intel: full-width writes: rdpmc: cntr-2
+SKIP: Intel: full-width writes: rdpmc: fast-2
+PASS: Intel: full-width writes: rdpmc: cntr-3
+SKIP: Intel: full-width writes: rdpmc: fast-3
+PASS: Intel: full-width writes: rdpmc: fixed cntr-0
+SKIP: Intel: full-width writes: rdpmc: fixed fast-0
+PASS: Intel: full-width writes: rdpmc: fixed cntr-1
+SKIP: Intel: full-width writes: rdpmc: fixed fast-1
+PASS: Intel: full-width writes: rdpmc: fixed cntr-2
+SKIP: Intel: full-width writes: rdpmc: fixed fast-2
+PASS: Intel: full-width writes: all counters
+PASS: Intel: full-width writes: overflow: cntr-0
+PASS: Intel: full-width writes: overflow: status-0
+PASS: Intel: full-width writes: overflow: status clear-0
+PASS: Intel: full-width writes: overflow: irq-0
+PASS: Intel: full-width writes: overflow: cntr-1
+PASS: Intel: full-width writes: overflow: status-1
+PASS: Intel: full-width writes: overflow: status clear-1
+PASS: Intel: full-width writes: overflow: irq-1
+PASS: Intel: full-width writes: overflow: cntr-2
+PASS: Intel: full-width writes: overflow: status-2
+PASS: Intel: full-width writes: overflow: status clear-2
+PASS: Intel: full-width writes: overflow: irq-2
+PASS: Intel: full-width writes: overflow: cntr-3
+PASS: Intel: full-width writes: overflow: status-3
+PASS: Intel: full-width writes: overflow: status clear-3
+PASS: Intel: full-width writes: overflow: irq-3
+PASS: Intel: full-width writes: overflow: cntr-4
+PASS: Intel: full-width writes: overflow: status-4
+PASS: Intel: full-width writes: overflow: status clear-4
+PASS: Intel: full-width writes: overflow: irq-4
+PASS: Intel: full-width writes: cmask
+PASS: Intel: full-width writes: running counter wrmsr: cntr
+PASS: Intel: full-width writes: running counter wrmsr: status msr bit
+PASS: Intel: full-width writes: writing unsupported width to MSR_IA32_PMC0 raises #GP
+PASS: Intel: full-width writes: writing unsupported width to MSR_IA32_PMC1 raises #GP
+PASS: Intel: full-width writes: writing unsupported width to MSR_IA32_PMC2 raises #GP
+PASS: Intel: full-width writes: writing unsupported width to MSR_IA32_PMC3 raises #GP
+SUMMARY: 143 tests, 14 skipped
+
