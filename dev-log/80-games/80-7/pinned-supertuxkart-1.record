@@ -1,0 +1,226 @@
+runner games
+system Rach2 1.0.0 with the GNU system
+kernel Linux 6.18.0-rach2
+cpus 4
+memory_kib 16639336
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline intel_iommu=off 
+cache mesa 0 files in /tmp/t2664-pin/cache, emptied at start: 0
+load start 0.13 0.88 0.73
+processes start 42
+kernel_before cpu  50132 0 82955 260725 0 0 0 0 0 0
+kernel_before cpu0 16658 0 17952 64294 0 0 0 0 0 0
+kernel_before cpu1 16537 0 25975 55791 0 0 0 0 0 0
+kernel_before cpu2 8778 0 21162 68361 0 0 0 0 0 0
+kernel_before cpu3 8157 0 17865 72277 0 0 0 0 0 0
+kernel_before intr 4277536
+kernel_before ctxt 0
+kernel_before btime 1794373324
+kernel_before processes 7345
+kernel_before sleeps_interrupted 2
+kernel_before process_pid_steps 146447
+kernel_before process_uid_steps 9880
+kernel_before process_timer_steps 14698767
+kernel_before process_timer_passes 928095
+kernel_before timer_passes_late 18169
+kernel_before tlb_shootdowns 6127
+kernel_before tlb_shootdown_ipis 12470
+kernel_before scheduler_picks 5380913
+kernel_before scheduler_steps 1127727
+kernel_before vm_gap_steps 5905291
+kernel_before clock_calls 1
+kernel_before vdso_tsc 1
+kernel_before bkl_wait_us 722726643
+kernel_before bkl_wait_max_us 448820
+kernel_before bkl_wait_max_holds 3
+kernel_before bkl_wait_max_hold 0 -1 441311
+kernel_before bkl_wait_max_hold 128 16 8071
+kernel_before bkl_wait_max_hold 0 -1 4
+kernel_before bkl_hold_max_us 447233
+kernel_before bkl_hold_max_entry 0 -1
+kernel_before bkl_hold_sample_us 5753009
+kernel_before bkl_hold_sample_pc ffffffff803903f0 ffffffff80110435 ffffffff801113cd ffffffff80111d7f ffffffff8011218b ffffffff801121f2 ffffffff80362888 ffffffff80109d51
+kernel_before bkl_hold_max_mark 1 0
+kernel_before bkl_hold_max_mark 2 0
+kernel_before bkl_hold_max_mark 4 0
+kernel_before bkl_hold_max_mark 8 0
+kernel_before bkl_hold_max_mark 16 0
+kernel_before bkl_hold_entry syscall 16 2445033 175905201
+kernel_before bkl_hold_entry vector 32 2420799 79963748
+kernel_before bkl_hold_entry syscall 54 795155 57087238
+kernel_before bkl_hold_entry vector 0 3667768 38428248
+kernel_before bkl_hold_entry vector 48 65273 30223972
+kernel_before bkl_hold_entry vector 14 3225904 16766736
+kernel_before bkl_hold_entry syscall 9 61182 7262443
+kernel_before bkl_hold_entry syscall 0 573787 6450601
+kernel_before bkl_hold_entry syscall 257 86101 4802473
+kernel_before bkl_hold_entry syscall 56 7206 4513965
+kernel_before bkl_hold_entry syscall 262 192537 3988813
+kernel_before bkl_hold_entry syscall 1 302176 3884307
+kernel_before bkl_hold_entry syscall 202 354206 2788725
+kernel_before bkl_hold_entry syscall 232 92378 2473428
+kernel_before bkl_hold_entry syscall 271 165198 2258013
+kernel_before bkl_hold_entry vector 53 192987 1925460
+kernel_before kvm_vms 0
+kernel_before kvm_vcpus 0
+kernel_before kvm_slots 0
+kernel_before kvm_tdp_pages 0
+kernel_before kvm_run_mappings 0
+kernel_before kvm_gpa_maps 0
+kernel_before kvm_gpa_map_pages 0
+kernel_before kvm_ioeventfd_signals 0
+kernel_before kvm_irqfd_raises 0
+kernel_before vfio_groups 0
+kernel_before vfio_devices 0
+kernel_before vfio_dma_mappings 0
+kernel_before vfio_dma_pages 0
+kernel_before vfio_dma_io_pages 0
+kernel_before kvm_exits 0
+kernel_before iommu_dma_faults 0
+kernel_before iommu_irq_faults 0
+kernel_before msi_vectors_free 185
+kernel_before latency_timer_us 1337938
+kernel_before latency_disk_us 55968
+kernel_before latency_diskwait_us 0
+kernel_before latency_console_us 0
+kernel_before wlan_refused_tcp 0
+kernel_before wlan_refused_ack 0
+kernel_before wlan_refused_other 0
+kernel_before wlan_rx_held 0
+kernel_before wlan_rx_wait_most 73
+kernel_before wlan_tx_status_lost 0
+kernel_before wlan_rescue_key 0
+kernel_before wlan_rescue_message4 0
+kernel_before wlan_rescue_silent 0
+kernel_before wlan_rescue_saved 0
+kernel_before wlan_rx_old_far 0
+kernel_before loopback_dropped 0
+kernel_before loopback_peak 0
+kernel_before loopback_delivered_tick 0
+kernel_before loopback_delivered_idle 0
+kernel_before loopback_delivered_call 0
+kernel_before loopback_left_idle 0
+kernel_before namecache_hits 2558259
+kernel_before namecache_misses 15608
+kernel_before namecache_entries 8074
+kernel_before namecache_negative 5559
+kernel_before ext2_node_visits 430871
+kernel_before procs_running 2
+kernel_before procs_blocked 0
+compositor the caller's, wayland-0
+size 1366x768
+cache game a new home
+env SDL_VIDEODRIVER=wayland
+env SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR=0
+env GALLIUM_HUD=frametime
+env GALLIUM_HUD_VISIBLE=false
+env GALLIUM_HUD_PERIOD=0
+env LANG=C.UTF-8
+case supertuxkart the profile race of /usr/share/games/rach2/replays/supertuxkart.args
+program /usr/games/supertuxkart, ELF class 2
+game SuperTuxKart, 1.4
+arguments --profile-time=90 --track=hacienda --numkarts=4 --seed=1 --fullscreen --screensize=1366x768
+profile Number of frames: 11405 time 104.388008, Average FPS: 109.255844
+start frame 347 of the dump, the race's first counted back from its end
+renderer Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+load end 1.31 1.12 0.84
+busy 46.8%
+kernel_after cpu  56917 0 96834 284181 0 0 0 0 0 0
+kernel_after cpu0 18693 0 20584 70656 0 0 0 0 0 0
+kernel_after cpu1 18793 0 30229 60312 0 0 0 0 0 0
+kernel_after cpu2 10119 0 25053 74159 0 0 0 0 0 0
+kernel_after cpu3 9310 0 20966 79053 0 0 0 0 0 0
+kernel_after intr 4745100
+kernel_after ctxt 0
+kernel_after btime 1794373324
+kernel_after processes 7964
+kernel_after sleeps_interrupted 2
+kernel_after process_pid_steps 159785
+kernel_after process_uid_steps 10550
+kernel_after process_timer_steps 16333129
+kernel_after process_timer_passes 1030954
+kernel_after timer_passes_late 22462
+kernel_after tlb_shootdowns 6344
+kernel_after tlb_shootdown_ipis 13047
+kernel_after scheduler_picks 6000615
+kernel_after scheduler_steps 1286185
+kernel_after vm_gap_steps 6556912
+kernel_after clock_calls 1
+kernel_after vdso_tsc 1
+kernel_after bkl_wait_us 834670567
+kernel_after bkl_wait_max_us 448820
+kernel_after bkl_wait_max_holds 3
+kernel_after bkl_wait_max_hold 0 -1 441311
+kernel_after bkl_wait_max_hold 128 16 8071
+kernel_after bkl_wait_max_hold 0 -1 4
+kernel_after bkl_hold_max_us 447233
+kernel_after bkl_hold_max_entry 0 -1
+kernel_after bkl_hold_sample_us 5753009
+kernel_after bkl_hold_sample_pc ffffffff803903f0 ffffffff80110435 ffffffff801113cd ffffffff80111d7f ffffffff8011218b ffffffff801121f2 ffffffff80362888 ffffffff80109d51
+kernel_after bkl_hold_max_mark 1 0
+kernel_after bkl_hold_max_mark 2 0
+kernel_after bkl_hold_max_mark 4 0
+kernel_after bkl_hold_max_mark 8 0
+kernel_after bkl_hold_max_mark 16 0
+kernel_after bkl_hold_entry syscall 16 3043922 215304295
+kernel_after bkl_hold_entry vector 32 2635178 88333415
+kernel_after bkl_hold_entry syscall 54 795186 57087302
+kernel_after bkl_hold_entry vector 0 4047177 44278525
+kernel_after bkl_hold_entry vector 48 71813 34245654
+kernel_after bkl_hold_entry vector 14 3494484 17863940
+kernel_after bkl_hold_entry syscall 9 67846 8060410
+kernel_after bkl_hold_entry syscall 0 685854 7409914
+kernel_after bkl_hold_entry syscall 257 108824 6146031
+kernel_after bkl_hold_entry syscall 56 7811 4808862
+kernel_after bkl_hold_entry syscall 1 348544 4685706
+kernel_after bkl_hold_entry syscall 262 200668 4154147
+kernel_after bkl_hold_entry syscall 202 404896 3287715
+kernel_after bkl_hold_entry syscall 232 108666 2964084
+kernel_after bkl_hold_entry syscall 271 186223 2620966
+kernel_after bkl_hold_entry vector 53 220090 2185431
+kernel_after kvm_vms 0
+kernel_after kvm_vcpus 0
+kernel_after kvm_slots 0
+kernel_after kvm_tdp_pages 0
+kernel_after kvm_run_mappings 0
+kernel_after kvm_gpa_maps 0
+kernel_after kvm_gpa_map_pages 0
+kernel_after kvm_ioeventfd_signals 0
+kernel_after kvm_irqfd_raises 0
+kernel_after vfio_groups 0
+kernel_after vfio_devices 0
+kernel_after vfio_dma_mappings 0
+kernel_after vfio_dma_pages 0
+kernel_after vfio_dma_io_pages 0
+kernel_after kvm_exits 0
+kernel_after iommu_dma_faults 0
+kernel_after iommu_irq_faults 0
+kernel_after msi_vectors_free 185
+kernel_after latency_timer_us 1337938
+kernel_after latency_disk_us 55968
+kernel_after latency_diskwait_us 0
+kernel_after latency_console_us 0
+kernel_after wlan_refused_tcp 0
+kernel_after wlan_refused_ack 0
+kernel_after wlan_refused_other 0
+kernel_after wlan_rx_held 0
+kernel_after wlan_rx_wait_most 73
+kernel_after wlan_tx_status_lost 0
+kernel_after wlan_rescue_key 0
+kernel_after wlan_rescue_message4 0
+kernel_after wlan_rescue_silent 0
+kernel_after wlan_rescue_saved 0
+kernel_after wlan_rx_old_far 0
+kernel_after loopback_dropped 0
+kernel_after loopback_peak 0
+kernel_after loopback_delivered_tick 0
+kernel_after loopback_delivered_idle 0
+kernel_after loopback_delivered_call 0
+kernel_after loopback_left_idle 0
+kernel_after namecache_hits 2906610
+kernel_after namecache_misses 18530
+kernel_after namecache_entries 8051
+kernel_after namecache_negative 5493
+kernel_after ext2_node_visits 464470
+kernel_after procs_running 4
+kernel_after procs_blocked 0
