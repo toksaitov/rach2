@@ -1327,6 +1327,16 @@ static void ap_maps_identity(struct procfs_text *t, const struct mm *mm, const v
     ap_u64(t, ofd->ino);
 }
 
+/** Whether region `r` is a shared mapping, Linux's VM_MAYSHARE: a VM_SHARED
+ * region, or a read-only shared mapping served as a private one, VM_FILE
+ * with VM_PROT_NOWRITE, which only a shared mapping is given; the vDSO's
+ * pages, which Linux maps private, are not. */
+static int maps_shared(const vma_t *r)
+{
+    return !vdso_region_name(r->file) &&
+           (r->type == VM_SHARED || (r->type == VM_FILE && (r->prot & VM_PROT_NOWRITE)));
+}
+
 /** Append region `r` of `mm` as its line of /proc/<pid>/maps. */
 static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t *r)
 {
@@ -1340,7 +1350,7 @@ static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t
     ap_ch(t, (r->prot & VM_PROT_READ) ? 'r' : '-');
     ap_ch(t, (r->prot & VM_PROT_WRITE) ? 'w' : '-');
     ap_ch(t, (r->prot & VM_PROT_EXEC) ? 'x' : '-');
-    ap_ch(t, r->type == VM_SHARED && !vdso_region_name(r->file) ? 's' : 'p');
+    ap_ch(t, maps_shared(r) ? 's' : 'p');
     ap_ch(t, ' ');
     ap_xlow(t, r->file ? r->pgoff * PAGE_SIZE : 0u, 8);
     ap_ch(t, ' ');
@@ -1421,31 +1431,53 @@ static void ap_smaps_key(struct procfs_text *t, const vma_t *r)
     }
 }
 
-/** Append the VmFlags line of smaps for the region `r`, the names Linux's
+/**
+ * Append the possible-access part of the VmFlags line of the region `r`:
+ * sh, mr, mw, me and ms. A shared mapping is ms (`maps_shared`), and sh too
+ * only when it may be made writable, as Linux clears VM_SHARED for a file
+ * opened without write. The vDSO's pages have what Linux's special mappings
+ * have: [vdso] mr mw me, and [vvar] mr.
+ */
+static void ap_smaps_may(struct procfs_text *t, const vma_t *r)
+{
+    int vdso = vdso_region_name(r->file) != NULL;
+    int vvar = vdso && vdso_is_data(r->file);
+    int shared = maps_shared(r);
+
+    ap_str(t, shared && !(r->prot & VM_PROT_NOWRITE) ? " sh" : "");
+    ap_str(t, " mr");
+    ap_str(t, (vdso && !vvar) || !(r->prot & VM_PROT_NOWRITE) ? " mw" : "");
+    ap_str(t, vvar || (r->prot & VM_PROT_SECRET) ? "" : " me");
+    ap_str(t, shared ? " ms" : "");
+}
+
+/**
+ * Append the VmFlags line of smaps for the region `r`, the names Linux's
  * show_smap_vma_flags gives the flags this kernel keeps, in the order of
- * Linux's VM_ bits: access and possible access, then gd 0x100, pf 0x400,
- * lo 0x2000, io 0x4000, dc 0x20000, de 0x40000, lf 0x80000,
- * wf 0x2000000, dd 0x4000000, then sl. */
+ * Linux's VM_ bits: access and possible access (`ap_smaps_may`), then gd
+ * 0x100, pf 0x400, lo 0x2000, io 0x4000, dc 0x20000, de 0x40000, lf
+ * 0x80000, wf 0x2000000, dd 0x4000000, then sl. The vDSO's [vdso] is de,
+ * and its [vvar] pf io de dd, as Linux's special mappings are.
+ */
 static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
 {
+    int vdso = vdso_region_name(r->file) != NULL;
+    int io = (r->prot & VM_PROT_IO) || (vdso && vdso_is_data(r->file));
+
     ap_str(t, "VmFlags:");
     ap_str(t, (r->prot & VM_PROT_READ) ? " rd" : "");
     ap_str(t, (r->prot & VM_PROT_WRITE) ? " wr" : "");
     ap_str(t, (r->prot & VM_PROT_EXEC) ? " ex" : "");
-    ap_str(t, r->type == VM_SHARED ? " sh" : "");
-    ap_str(t, " mr");
-    ap_str(t, (r->prot & VM_PROT_NOWRITE) ? "" : " mw");
-    ap_str(t, (r->prot & VM_PROT_SECRET) ? "" : " me");
-    ap_str(t, r->type == VM_SHARED ? " ms" : "");
+    ap_smaps_may(t, r);
     ap_str(t, r->type == VM_STACK ? " gd" : "");
-    ap_str(t, (r->prot & VM_PROT_IO) ? " pf" : "");
+    ap_str(t, io ? " pf" : "");
     ap_str(t, (r->prot & VM_PROT_LOCKED) ? " lo" : "");
-    ap_str(t, (r->prot & VM_PROT_IO) ? " io" : "");
+    ap_str(t, io ? " io" : "");
     ap_str(t, (r->prot & VM_PROT_DONTFORK) ? " dc" : "");
-    ap_str(t, (r->prot & VM_PROT_IO) ? " de" : "");
+    ap_str(t, io || vdso ? " de" : "");
     ap_str(t, (r->prot & VM_PROT_LOCKONFAULT) ? " lf" : "");
     ap_str(t, (r->prot & VM_PROT_WIPEONFORK) ? " wf" : "");
-    ap_str(t, (r->prot & (VM_PROT_SECRET | VM_PROT_IO)) ? " dd" : "");
+    ap_str(t, io || (r->prot & VM_PROT_SECRET) ? " dd" : "");
     ap_str(t, (r->prot & VM_PROT_SEALED) ? " sl" : "");
     ap_ch(t, '\n');
 }

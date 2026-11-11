@@ -1630,8 +1630,25 @@ static void image_paths(void)
     check(maps_path(&space, &r) == interp_path, "one above it is the dynamic linker's");
 }
 
-/** Compare a region's VmFlags with `want`, including Linux's bit order. */
-static void smaps_flags_row(vm_type_t type, uint32_t prot, const char *want)
+/* Stand-ins for the vDSO's two files, for the VmFlags rows. */
+static struct vm_file vdso_text_file, vdso_vvar_file;
+
+/** The maps name of a stand-in of the vDSO's files, and NULL for any other
+ * file. */
+const char *vdso_region_name(const struct vm_file *f)
+{
+    return f == &vdso_text_file ? "[vdso]" : f == &vdso_vvar_file ? "[vvar]" : NULL;
+}
+
+/** Whether `f` is the stand-in of the vDSO's data page. */
+int vdso_is_data(const struct vm_file *f)
+{
+    return f == &vdso_vvar_file;
+}
+
+/** Compare the VmFlags of a region of `type` and `prot` that maps `file`
+ * with `want`, including Linux's bit order. */
+static void smaps_flags_row(vm_type_t type, uint32_t prot, struct vm_file *file, const char *want)
 {
     struct procfs_text t;
     vma_t r;
@@ -1639,6 +1656,7 @@ static void smaps_flags_row(vm_type_t type, uint32_t prot, const char *want)
     k_memset(&r, 0, sizeof(r));
     r.type = type;
     r.prot = prot;
+    r.file = file;
     procfs_text_init(&t);
     ap_smaps_flags(&t, &r);
     check(!t.nomem && t.buf && t.len == (int)__builtin_strlen(want) &&
@@ -1647,21 +1665,31 @@ static void smaps_flags_row(vm_type_t type, uint32_t prot, const char *want)
     kfree(t.buf);
 }
 
-/** Possible access respects the region's restrictions; device mappings
- * cannot grow or enter a core, and each flag appears in Linux's order. */
+/** Possible access respects the region's restrictions; a shared mapping
+ * that may not be made writable is ms but not sh, whether it is VM_SHARED
+ * or served as a private one; device mappings cannot grow or enter a core;
+ * the vDSO's pages have the flags of Linux's special mappings; and each
+ * flag appears in Linux's order. */
 static void smaps_flags_rows(void)
 {
-    smaps_flags_row(VM_ANON, 0, "VmFlags: mr mw me\n");
-    smaps_flags_row(VM_STACK, VM_PROT_READ | VM_PROT_WRITE, "VmFlags: rd wr mr mw me gd\n");
-    smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_NOWRITE, "VmFlags: rd sh mr me ms\n");
-    smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_IO | VM_PROT_DONTFORK,
+    smaps_flags_row(VM_ANON, 0, NULL, "VmFlags: mr mw me\n");
+    smaps_flags_row(VM_STACK, VM_PROT_READ | VM_PROT_WRITE, NULL, "VmFlags: rd wr mr mw me gd\n");
+    smaps_flags_row(VM_SHARED, VM_PROT_READ, NULL, "VmFlags: rd sh mr mw me ms\n");
+    smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_NOWRITE, NULL, "VmFlags: rd mr me ms\n");
+    smaps_flags_row(VM_FILE, VM_PROT_READ | VM_PROT_NOWRITE, NULL, "VmFlags: rd mr me ms\n");
+    smaps_flags_row(VM_FILE, VM_PROT_READ, NULL, "VmFlags: rd mr mw me\n");
+    smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_IO | VM_PROT_DONTFORK, NULL,
                     "VmFlags: rd wr sh mr mw me ms pf io dc de dd\n");
-    smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_SECRET | VM_PROT_LOCKED,
+    smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_SECRET | VM_PROT_LOCKED, NULL,
                     "VmFlags: rd wr sh mr mw ms lo dd\n");
     smaps_flags_row(VM_ANON,
                     VM_PROT_READ | VM_PROT_LOCKED | VM_PROT_LOCKONFAULT | VM_PROT_WIPEONFORK |
                         VM_PROT_SEALED,
-                    "VmFlags: rd mr mw me lo lf wf sl\n");
+                    NULL, "VmFlags: rd mr mw me lo lf wf sl\n");
+    smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_EXEC | VM_PROT_NOWRITE, &vdso_text_file,
+                    "VmFlags: rd ex mr mw me de\n");
+    smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_NOWRITE, &vdso_vvar_file,
+                    "VmFlags: rd mr pf io de dd\n");
 }
 
 /* The descriptor the oom_score_adj rows read and write, on process 7. */

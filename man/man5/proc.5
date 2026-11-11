@@ -1887,7 +1887,8 @@ and a VmFlags line of
 .Ql rd ,
 .Ql wr ,
 .Ql ex ,
-.Ql sh ,
+.Ql sh
+for a shared region that may be made writable,
 .Ql mr ,
 .Ql mw
 unless the region may not be made writable,
@@ -1895,7 +1896,7 @@ unless the region may not be made writable,
 unless the region maps
 .Xr memfd_secret 2 ,
 .Ql ms
-for a shared region,
+for every shared region, one of a file opened without write among them,
 .Ql gd ,
 .Ql pf
 for a mapping of a device object,
@@ -1925,6 +1926,11 @@ which a core file leaves out, and
 for a region
 .Xr mseal 2
 sealed, in that order, the order of Linux's flag bits.
+The vDSO's pages have the flags Linux's special mappings have:
+.Ql mr mw me de
+for [vdso] and
+.Ql mr pf io de dd
+for [vvar], after their access.
 Rss counts the region's pages in memory, clean or dirty by the page
 table's dirty bit and shared only in a shared region.
 Anonymous counts every page of a private region of no file, and each
