@@ -593,7 +593,10 @@ long sys_exit(isr_params_t *params)
 
 /**
  * exit_group: end every thread of the process, the process with the status
- * its argument has.
+ * its argument has. The thread ends with the process's status, another's
+ * when another thread began the process's end first, or 0 when another
+ * thread's execve ends it, as Linux 6.12.115's `do_group_exit` takes it
+ * (kernel/exit.c:1070-1098), which its exit event reports.
  */
 long sys_exit_group(isr_params_t *params)
 {
@@ -601,6 +604,7 @@ long sys_exit_group(isr_params_t *params)
 
     if (current_proc) {
         proc_group_exit(code);
+        code = current_proc->tg->exiting ? current_proc->tg->exit_code : 0;
     }
     return exit_current(code);
 }
@@ -5691,6 +5695,23 @@ static int group_stop_taken(void)
 }
 
 /**
+ * Take SIGKILL off the current thread's pending set and its process's as
+ * the thread acts on it, as Linux 6.12.115's `get_signal` takes it off the
+ * thread's (kernel/signal.c:2772-2777), so that the thread's exit event
+ * stops it for its tracer: `ptrace_stop` ends at a SIGKILL pending in
+ * either set. Every other thread of a process whose end has begun has a
+ * SIGKILL of its own (`sig_complete`, `proc_group_exit`).
+ */
+static void sig_take_kill(void)
+{
+    uint32_t flags = sig_irq_save();
+
+    current_proc->sig_pending &= ~KSIG_BIT(SIGKILL);
+    current_proc->tg->pending &= ~KSIG_BIT(SIGKILL);
+    sig_irq_restore(flags);
+}
+
+/**
  * Act on the default action of the signal `signo` the current thread took:
  * ignore it, stop the process (`sig_group_stop`), or end the process, with
  * a core file for a signal that dumps core (`terminate_current_process`),
@@ -5780,6 +5801,7 @@ void deliver_signals(isr_params_t *tf)
             break;
         }
         if (deliverable & KSIG_BIT(SIGKILL)) {
+            sig_take_kill();
             terminate_current_process(SIGKILL);
             return; /* not reached */
         }

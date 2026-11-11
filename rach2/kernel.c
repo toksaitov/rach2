@@ -494,6 +494,11 @@ static void init_end_line(uint32_t pid, int32_t status)
  * (`proc_group_exit`), and whichever thread ends last publishes the death,
  * posts SIGCHLD and wakes a parent blocked in waitpid. The exit code is the
  * wait status of a death by a signal, the signal in its low seven bits.
+ * The thread's exit event comes once its process's end has begun and its
+ * core is written, and reports the process's status, as Linux 6.12.115's
+ * `do_exit` reports the code `do_group_exit` gives it (kernel/exit.c:898,
+ * 1070-1098): the status that began the end, with WCOREFLAG once the core
+ * is written, or 0 when another thread's execve ends this one.
  *
  * A core file is written (`terminate_core`) only when no other thread has
  * begun to end the process: the group's `core_dumping` is set before the
@@ -540,8 +545,6 @@ void terminate_current_process(int32_t signo)
         return;
     }
 
-    ptrace_event(PTRACE_EVENT_EXIT, (uint32_t)(signo & 0x7F));
-    signal_exit_begin();
     pid = current_proc->tgid;
     is_init = (pid == init_pid && init_pid != 0);
     current_proc->in_syscall = 1;
@@ -559,6 +562,9 @@ void terminate_current_process(int32_t signo)
     } else if (current_proc->tg->core_dumping) {
         core_park();
     }
+    ptrace_event(PTRACE_EVENT_EXIT,
+                 (uint32_t)(current_proc->tg->exiting ? current_proc->tg->exit_code : 0));
+    signal_exit_begin();
     alone = current_proc->tg->live == 1;
 
     if (alone) {
