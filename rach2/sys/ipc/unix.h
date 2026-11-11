@@ -170,10 +170,26 @@ int32_t unix_sendto(fd_entry_t *e, uintptr_t buf, uint32_t len, int flags, uintp
  *
  * -EINVAL for a length past 2^31 - 1 or a stream socket not connected,
  * -ENOTCONN for a sequenced-packet socket not connected, -EOPNOTSUPP for
- * MSG_OOB, the socket's pending error, -EAGAIN, -EINTR, -EFAULT.
+ * MSG_OOB, the socket's pending error, -EAGAIN, -EINTR, -EFAULT. A stream
+ * socket's -EFAULT leaves its message queued; a datagram or
+ * sequenced-packet message whose copy faults is consumed unless MSG_PEEK,
+ * as Linux's is.
  */
 int32_t unix_recvfrom(fd_entry_t *e, uintptr_t buf, uint32_t len, int flags, uintptr_t addr,
                       uintptr_t addrlen_ptr);
+
+struct kernel_iovec;
+
+/**
+ * readv(2) of a socket: a receive with no flags, as `unix_recvfrom`'s, into
+ * the `count` elements of `iov`, a vector iov_import has checked and cut,
+ * `total` bytes in all, in one call, as Linux's sock_read_iter gives the
+ * whole vector to unix_recvmsg (net/socket.c:1110-1130 in 6.12). A datagram
+ * or sequenced-packet socket reads one message across the elements, and a
+ * stream socket's copy that faults keeps its message queued and returns the
+ * bytes of the messages before it, or -EFAULT.
+ */
+int32_t unix_readv(fd_entry_t *e, const struct kernel_iovec *iov, int count, uint32_t total);
 
 /**
  * sendmsg(2) of the caller's struct msghdr at `msg`: the bytes of its
