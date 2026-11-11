@@ -18,7 +18,8 @@
  * descriptor, a chain too long for the device, the heap filled to ENOMEM
  * and given back, backing in one run and in pieces, partial adoption, the
  * doorbells' hooks, the control node's report, a device that stops running,
- * a refused setup and the detach.
+ * a refused setup, the detach, and a backing held through a detach while
+ * the same frames are attached again.
  */
 
 #define REGION_PAGES 16u
@@ -530,6 +531,63 @@ static void detach(void)
     check(strstr(last_log, "died") != NULL, "the death logged");
 }
 
+/** A backing and a command's page held through the detach, as an exported
+ * buffer's backing is through a reset: the record keeps its heap's tables,
+ * a region attached again over the same frames leaves the held pages out of
+ * its heap, and each page's release gives it back to that heap, the last
+ * freeing the detached record's tables. */
+static void held_through_detach(void)
+{
+    struct vshm *old;
+    struct shmem sh;
+    uint64_t addr;
+    uint32_t page, cmd_page, u0;
+    void *cmd;
+
+    attach();
+    old = vs;
+    k_memset(&sh, 0, sizeof(sh));
+    sh.size = 2 * VGS_PAGE;
+    check(virtio_backing_fill(&old->vdev, &sh, sh.size) == 0 && old->heap_used == 2,
+          "held: a backing of two pages");
+    page = vshm_page_of(old, sh_frames[0]);
+    cmd = virtio_dma_alloc(&old->vdev, VGS_PAGE, &addr);
+    cmd_page = (uint32_t)(addr / VGS_PAGE);
+    check(cmd != NULL && old->heap_used == 3, "held: and a command's page");
+    old->refs++; /* the driver's bind */
+    old->stop = 1 + (int)VGS_DETACH_ORDERLY;
+    vshm_cur = old;
+    u0 = unrefs;
+    vshm_finish(old);
+    check(old->gone && vshm_kept == old && !old->attached && old->heap_used == 3 &&
+              old->heap_map != NULL && old->rev != NULL && old->frames != NULL,
+          "held: the detached record keeps its heap's tables");
+    attach();
+    vshm_gone_reserve(vs);
+    vshm_cur = vs;
+    check(vs->heap_used == 3 && heap_bit(vs, page - heap_page(vs, 0)) &&
+              heap_bit(vs, page + 1u - heap_page(vs, 0)) &&
+              heap_bit(vs, cmd_page - heap_page(vs, 0)),
+          "held: the same frames left out of the new heap");
+    check(virtio_dma_alloc(&vs->vdev, vs->heap_pages * VGS_PAGE, &addr) == NULL,
+          "held: the new heap is not whole");
+    virtio_dma_free(&old->vdev, cmd, VGS_PAGE);
+    check(vs->heap_used == 2 && old->heap_used == 2 && old->gone &&
+              !heap_bit(vs, cmd_page - heap_page(vs, 0)),
+          "held: the command's page given back to both heaps after the detach");
+    virtio_backing_release(&old->vdev, &sh);
+    shmem_free(&sh);
+    check(vs->heap_used == 0 && !old->gone && vshm_kept == NULL && old->heap_map == NULL &&
+              old->frames == NULL,
+          "held: the release gives the pages to the new heap and frees the old tables");
+    check(unrefs - u0 == REGION_PAGES && frame_refs[page] == 0 && frame_refs[page + 1u] == 0,
+          "held: every reference given back once");
+    vs_put(&old->vdev);
+    vs->stop = 1 + (int)VGS_DETACH_ORDERLY;
+    vshm_finish(vs);
+    check(vshm_cur == NULL && vshm_kept == NULL, "held: the new region detached with none kept");
+}
+
 /** Run the rows. */
 int main(void)
 {
@@ -545,12 +603,12 @@ int main(void)
     device_lost();
     refused_setup();
     detach();
+    held_through_detach();
     if (!failures) {
         printf("vgpushm-hosttest: result: pass: layout, handshake, ring area, round trip, "
                "merged and refused chains, a full region, backing in one run and in pieces, "
                "partial adoption, doorbells, info, a lost device, "
-               "a refused "
-               "setup and the detach\n");
+               "a refused setup, the detach and a backing held through it\n");
     }
     return failures != 0;
 }
