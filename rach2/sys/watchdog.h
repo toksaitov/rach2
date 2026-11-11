@@ -101,6 +101,19 @@ void touch_nmi_watchdog(void);
  * NMI, or the buddy check, which needs two processors. */
 int watchdog_hardlockup_available(void);
 
+/** A write changed `watchdog`, `soft_watchdog`, `nmi_watchdog` or
+ * `watchdog_thresh`: each processor stops its detectors and starts them
+ * again with the new settings at its next tick, or its next sample period
+ * in a wait, as Linux's `proc_watchdog_update` does. */
+void watchdog_reconfigure(void);
+
+/** The value a read of /proc/sys/kernel/watchdog (`which` 0),
+ * soft_watchdog (1) or nmi_watchdog (2) gives: 1 when a detector it names
+ * is on by the switches, whatever the threshold, as Linux reads its
+ * `watchdog_enabled` (kernel/watchdog.c:980-985), so that nmi_watchdog
+ * reads 0 where the hard detector cannot run. */
+int watchdog_sysctl_value(int which);
+
 /** A /proc/sys/kernel file of the hung-task detector was written: wake
  * `khungtaskd` to read its timeout and interval again, as Linux's
  * `proc_dohung_task_timeout_secs` does. */

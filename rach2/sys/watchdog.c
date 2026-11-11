@@ -79,7 +79,8 @@ int sysctl_hung_task_warnings = 10;
  * check, the wait's turns and sample periods, and whether the wait's check
  * is under way; and the program counter the last NMI interrupted and
  * whether one NMI at it handled more than one source, Linux's
- * `last_nmi_rip` and `swallow_nmi` (arch/x86/kernel/nmi.c). */
+ * `last_nmi_rip` and `swallow_nmi` (arch/x86/kernel/nmi.c); and the
+ * value of `wd_gen` its detectors last started at. */
 struct wd_cpu {
     volatile unsigned int hrtimer_interrupts;
     unsigned int hrtimer_interrupts_saved;
@@ -103,6 +104,7 @@ struct wd_cpu {
     int in_wait;
     uintptr_t last_nmi_pc;
     int swallow_nmi;
+    unsigned int gen;
 };
 
 static struct wd_cpu wd[NR_CPUS];
@@ -111,6 +113,11 @@ static struct wd_cpu wd[NR_CPUS];
  * without it the buddy check is the hard-lockup detector. */
 static volatile int wd_ready;
 static int wd_perf;
+
+/* Moved by each write that changes `watchdog`, `soft_watchdog`,
+ * `nmi_watchdog` or `watchdog_thresh` (`watchdog_reconfigure`); each
+ * processor restarts its detectors when its `gen` differs. */
+static volatile unsigned int wd_gen;
 
 /* The guards of kernel/watchdog.c:111 and :321, which keep one processor at
  * a time dumping every processor's trace; and lib/nmi_backtrace.c's flag
@@ -126,15 +133,15 @@ static volatile unsigned int backtrace_mask[NR_CPUS];
 static volatile unsigned int sync_owner;
 static int sync_depth;
 
-/** The detectors the settings ask for: none while `watchdog` or the
- * threshold is 0, the soft one unless `soft_watchdog` is 0, the hard one
- * unless `nmi_watchdog` is 0 or it cannot run here (kernel/watchdog.c,
- * `lockup_detector_update_enable`). */
-static unsigned int watchdog_wanted(void)
+/** The detectors the switches ask for, Linux's `watchdog_enabled` as
+ * `lockup_detector_update_enable` sets it (kernel/watchdog.c:283-292):
+ * none while `watchdog` is 0, the soft one unless `soft_watchdog` is 0, the
+ * hard one unless `nmi_watchdog` is 0 or it cannot run here. */
+static unsigned int watchdog_switches(void)
 {
     unsigned int e = 0;
 
-    if (!watchdog_user_enabled || watchdog_thresh <= 0) {
+    if (!watchdog_user_enabled) {
         return 0;
     }
     if (watchdog_softlockup_user_enabled) {
@@ -144,6 +151,20 @@ static unsigned int watchdog_wanted(void)
         e |= WD_HARD;
     }
     return e;
+}
+
+/** The detectors the settings ask for: the switches' while the threshold
+ * is above 0, none at 0. */
+static unsigned int watchdog_wanted(void)
+{
+    return watchdog_thresh > 0 ? watchdog_switches() : 0;
+}
+
+int watchdog_sysctl_value(int which)
+{
+    unsigned int bits = which == 0 ? WD_SOFT | WD_HARD : which == 1 ? WD_SOFT : WD_HARD;
+
+    return (watchdog_switches() & bits) != 0;
 }
 
 /** The detectors on now: those `watchdog_wanted` gives, none before
@@ -702,13 +723,40 @@ void watchdog_sched(void)
     softlockup_fn(&wd[arch_cpu_id()]);
 }
 
+void watchdog_reconfigure(void)
+{
+    wd_gen++;
+}
+
+/**
+ * Stop this processor's detectors and start them again with the settings
+ * now, once a write has changed them, as Linux's
+ * `__lockup_detector_reconfigure` stops every timer and counter and starts
+ * them through `watchdog_enable` (kernel/watchdog.c:875-878): the timer
+ * starts a new sample period, and the timestamps are touched, so that no
+ * check reads a time from before the write, while the detector was off or
+ * its threshold longer.
+ */
+static void watchdog_restart(struct wd_cpu *w)
+{
+    w->gen = wd_gen;
+    w->enabled = 0;
+    watchdog_hardlockup_arm(w, 0);
+    w->kicked = 0;
+    w->ticks = 0;
+    w->timer_tsc = w->tick_tsc;
+    watchdog_enable(w, watchdog_enabled());
+}
+
 /**
  * A tick that finds user mode, or the processor halted in an idle wait,
  * runs the soft-lockup function: Linux's stopper thread would have
  * preempted the one and been chosen by the other, and here the tick that
  * finds another processor holding the big lock does not schedule at all.
  * The first tick after `watchdog_init` arms the processor's counter, so
- * that a lockup within the first sample period is caught. The timer fires
+ * that a lockup within the first sample period is caught, and the first
+ * after a write of the settings restarts the detectors (`watchdog_restart`),
+ * whether or not they are on now. The timer fires
  * after a sample period of ticks or of the TSC, whichever comes first, so
  * that the first tick after a wait with interrupts off fires it at once, as
  * Linux's hrtimer fires as soon as interrupts let it, in the context that
@@ -727,6 +775,9 @@ void watchdog_tick(isr_params_t *params)
     if (!w->primed) {
         w->primed = 1;
         watchdog_enable(w, watchdog_enabled());
+    }
+    if (w->gen != wd_gen) {
+        watchdog_restart(w);
     }
     if (FRAME_USER(params) || this_cpu()->idle_wait) {
         softlockup_fn(w);
@@ -773,6 +824,13 @@ void watchdog_wait(void)
     period = sample_cycles();
     now = arch_cycles();
     if (period == 0 || now - w->tick_tsc < period || now - w->wait_tsc < period) {
+        return;
+    }
+    if (w->gen != wd_gen) {
+        w->in_wait = 1;
+        watchdog_restart(w);
+        w->wait_tsc = now;
+        w->in_wait = 0;
         return;
     }
     e = watchdog_enabled();
