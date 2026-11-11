@@ -22,7 +22,9 @@
  * fields. Memory is one slot of 1 MiB at guest-physical 0, the host's.
  *
  * The rows run the trial's path start to finish: the probe, refusing a
- * processor without what the backend needs and choosing the Lenovo's controls;
+ * processor without what the backend needs, leaving the controls that load
+ * IA32_PERF_GLOBAL_CTRL unused on Nehalem and Westmere and choosing the
+ * Lenovo's controls;
  * a VM and its vCPU; each entry inside VMXON and VMPTRLD and each exit followed
  * by VMCLEAR and VMXOFF with CR4 as it was, on every path; the VMCS built and
  * checked by the model; each exit the corpus's guests cause handled in the
@@ -397,8 +399,10 @@ unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, uns
 }
 
 /* The CPUID of the Lenovo's Haswell, as tests/host/kvm_hosttest.c gives
- * it; `cpuid_vmx` clears VMX for the probe's refusal. */
+ * it; `cpuid_vmx` clears VMX for the probe's refusal, and `cpuid_sig` is
+ * leaf 1's signature, which the probe's erratum rows change. */
 static int cpuid_vmx = 1;
+static uint32_t cpuid_sig = 0x000306C3u;
 
 void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
 {
@@ -412,7 +416,7 @@ void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t
         r[3] = 0x49656E69;
         break;
     case 1:
-        r[0] = 0x000306C3;
+        r[0] = cpuid_sig;
         r[1] = 0x00100800;
         r[2] = cpuid_vmx ? 0x7FFAFBBFu : 0x7FFAFB9Fu;
         r[3] = 0xBFEBFBFFu;
@@ -1845,6 +1849,19 @@ static void probe_rows(void)
     model_lenovo();
     m.ept_vpid &= ~VPID_CAP_INVVPID;
     CHECK(vmx_probe() && !(caps.proc2 & PROC2_VPID), "VPID left out without INVVPID");
+    /* Linux's setup_vmcs_config (arch/x86/kvm/vmx/vmx.c:2740-2759) drops the
+     * controls that load IA32_PERF_GLOBAL_CTRL on Nehalem and Westmere,
+     * whose exits may clear its fixed-counter bits, though they offer them. */
+    model_lenovo();
+    CHECK(vmx_probe() && caps.perf_global,
+          "the Lenovo's model offers the controls that load IA32_PERF_GLOBAL_CTRL, which are used");
+    cpuid_sig = 0x000106A5u;
+    CHECK(vmx_probe() && !caps.perf_global, "Nehalem EP, 0x106A5, does not use them");
+    cpuid_sig = 0x000206C2u;
+    CHECK(vmx_probe() && !caps.perf_global, "nor does Westmere EP, 0x206C2");
+    cpuid_sig = 0x00040651u;
+    CHECK(vmx_probe() && caps.perf_global, "the Lenovo's Haswell, 0x40651, does");
+    cpuid_sig = 0x000306C3u;
     model_lenovo();
     kvm_start();
     CHECK(kvm_backend == &kvm_vmx && registered && k_panic_hook == vmx_panic,
