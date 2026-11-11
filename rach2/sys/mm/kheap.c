@@ -11,6 +11,7 @@
 #include "../panic.h"
 #include "../lib/kstring.h"
 #include "paging.h"
+#include "pressure.h"
 
 #define KHEAP_MAGIC   0x4B484550u /* "KHEP" */
 #define KHEAP_CLASSES 8
@@ -78,9 +79,11 @@ static uint32_t class_spare[KHEAP_CLASSES];
  * and pages up to PAGE_ALLOC_COSTLY_ORDER from per-CPU lists
  * (mm/page_alloc.c, pcp_allowed_order). `kept[n - 1]` heads the runs of n
  * pages, at most KHEAP_KEEP_RUNS of them. A kept run's header has magic 0,
- * so a second kfree is refused; its pages stay counted in `pages_held`, and
- * `take_pages` gives every kept run back to the region when it finds no
- * room or no frame, as Linux drains its per-CPU lists before it reclaims. */
+ * so a second kfree is refused; its pages stay counted in `pages_held`.
+ * Every kept run goes back to the region when an allocation of the heap
+ * finds no room or no frame, and when reclaim asks the heap's shrinker for
+ * frames, as Linux drains its per-CPU lists when an allocation fails after
+ * direct reclaim (mm/page_alloc.c:4029-4037). */
 #define KHEAP_KEEP_PAGES 8u
 #define KHEAP_KEEP_RUNS  8u
 struct kept_run {
@@ -89,6 +92,8 @@ struct kept_run {
 };
 static struct kept_run *kept[KHEAP_KEEP_PAGES];
 static uint32_t kept_runs[KHEAP_KEEP_PAGES];
+static uint32_t kept_shrink(struct mem_shrinker *s, uint32_t want, int may_sleep);
+static struct mem_shrinker kept_shrinker = {kept_shrink, NULL};
 
 /** Whether page `page` of the region is taken in the map. */
 static int page_taken(uint32_t page)
@@ -231,7 +236,9 @@ size_t kheap_size_for(uint64_t managed, uint64_t most)
 }
 
 /** The reserve's pages are marked taken from the start, so that the
- * ordinary search passes them; `run_bits` says which runs are out. */
+ * ordinary search passes them; `run_bits` says which runs are out. The kept
+ * runs' shrinker is registered once, however often the host tests start
+ * the heap again. */
 void kheap_init(size_t bytes)
 {
     uint32_t i, map_pages = 0;
@@ -267,6 +274,13 @@ void kheap_init(size_t bytes)
         page_set(i, 1);
     }
     run_bits = 0;
+    k_memset(kept, 0, sizeof(kept));
+    k_memset(kept_runs, 0, sizeof(kept_runs));
+    k_memset(class_pages, 0, sizeof(class_pages));
+    k_memset(class_live, 0, sizeof(class_live));
+    k_memset(class_spare, 0, sizeof(class_spare));
+    mem_shrinker_unregister(&kept_shrinker);
+    mem_shrinker_register(&kept_shrinker);
 }
 
 uint32_t kheap_region_pages(void)
@@ -334,12 +348,11 @@ static void release_run(uint32_t page, uint32_t count)
     }
 }
 
-/** Give every kept run back to the region: 1 when there was one, else 0.
- * `heap_lock` is held. */
-static int kept_drain(void)
+/** Give every kept run back to the region: the pages given back, 0 when
+ * there was no kept run. `heap_lock` is held. */
+static uint32_t kept_drain(void)
 {
-    uint32_t i;
-    int any = 0;
+    uint32_t i, pages = 0;
 
     for (i = 0; i < KHEAP_KEEP_PAGES; i++) {
         while (kept[i]) {
@@ -347,11 +360,26 @@ static int kept_drain(void)
 
             kept[i] = k->next;
             release_run((uint32_t)(((uintptr_t)&k->hdr - KVA_HEAP) / PAGE_SIZE), i + 1u);
-            any = 1;
+            pages += i + 1u;
         }
         kept_runs[i] = 0;
     }
-    return any;
+    return pages;
+}
+
+/** Reclaim's call of the heap (`struct mem_shrinker`): every kept run given
+ * back, whatever `want` is, since they are few; the frames that came back.
+ * It does not sleep. */
+static uint32_t kept_shrink(struct mem_shrinker *s, uint32_t want, int may_sleep)
+{
+    uint32_t flags = spin_lock_irqsave(&heap_lock);
+    uint32_t pages = kept_drain();
+
+    (void)s;
+    (void)want;
+    (void)may_sleep;
+    spin_unlock_irqrestore(&heap_lock, flags);
+    return pages;
 }
 
 /** `count` pages, mapped, as `take_pages` gives them, without draining the
@@ -426,12 +454,30 @@ void *kalloc_pages_try(uint32_t count, uintptr_t *phys)
     return pages_or_null(count, phys, 1);
 }
 
+/** A page for the buffer cache, mapped, from the top of the ordinary
+ * region; `heap_pages` when there is no free page or no frame for it.
+ * `heap_lock` is held. */
+static uint32_t cache_take(void)
+{
+    uint32_t page = find_page_high();
+
+    if (page < heap_pages && map_run(page, 1) != 0) {
+        page = heap_pages;
+    }
+    return page;
+}
+
+/** The kept runs are given back and the page sought again when the region
+ * has no free page or no frame for it. */
 void *kalloc_cache_page(void)
 {
     uint32_t flags = spin_lock_irqsave(&heap_lock);
-    uint32_t page = find_page_high();
+    uint32_t page = cache_take();
 
-    if (page >= heap_pages || map_run(page, 1) != 0) {
+    if (page >= heap_pages && kept_drain()) {
+        page = cache_take();
+    }
+    if (page >= heap_pages) {
         spin_unlock_irqrestore(&heap_lock, flags);
         klog(KLOG_ERR, "kheap", "a cache page: no room or no frame");
         return NULL;
@@ -454,18 +500,35 @@ void kfree_pages(void *p, uint32_t count)
     spin_unlock_irqrestore(&heap_lock, flags);
 }
 
-/** The guard is the first page of a run of `count + 1` and is marked taken
- * only once the pages above it are mapped, so a shortage of frames leaves
- * nothing behind. */
-void *kalloc_guarded(uint32_t count)
+/** The guard of a run of `count` pages and a guard below them, with the
+ * pages mapped and the guard not yet marked taken; `heap_pages` when there is
+ * no such run or no frames for it. `heap_lock` is held. */
+static uint32_t guarded_take(uint32_t count)
 {
-    uint32_t flags = spin_lock_irqsave(&heap_lock);
     uint32_t guard = heap_pages;
 
     if (count > 0 && count < KHEAP_RUN_LEAST) {
         guard = find_run(count + 1);
     }
-    if (guard >= heap_pages || map_run(guard + 1, count) != 0) {
+    if (guard < heap_pages && map_run(guard + 1, count) != 0) {
+        guard = heap_pages;
+    }
+    return guard;
+}
+
+/** The guard is the first page of a run of `count + 1` and is marked taken
+ * only once the pages above it are mapped, so a shortage of frames leaves
+ * nothing behind. The kept runs are given back and the run sought again
+ * when the region has no such run or no frames for it. */
+void *kalloc_guarded(uint32_t count)
+{
+    uint32_t flags = spin_lock_irqsave(&heap_lock);
+    uint32_t guard = guarded_take(count);
+
+    if (guard >= heap_pages && kept_drain()) {
+        guard = guarded_take(count);
+    }
+    if (guard >= heap_pages) {
         spin_unlock_irqrestore(&heap_lock, flags);
         klog(KLOG_ERR, "kheap", "%d pages and a guard: no room or no frame", (int)count);
         return NULL;
