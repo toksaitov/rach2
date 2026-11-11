@@ -6417,6 +6417,9 @@
         {"assertion_id": "fd-other-root", "checks": "Root reaches a uid 1000 child's open directory through /proc/PID/fd/N.", "source": "program"},
         {"assertion_id": "fd-other-same-uid", "checks": "Another uid 1000 process reaches it too.", "source": "program"},
         {"assertion_id": "fd-other-eacces", "checks": "A uid 1001 process gets EACCES.", "source": "program"},
+        {"assertion_id": "fd-dir-owner", "checks": "A process of uid 1000 and gid 1001 enters the /proc/PID/fd of a dumpable child of uid and gid 1000 by chdir and by fchdir through an O_PATH descriptor, as Linux's proc_fd_permission judges the owner of the mode 0500 directory whatever its group.", "source": "program"},
+        {"assertion_id": "fd-dir-eacces", "checks": "A uid 1001 process gets EACCES from chdir and from fchdir through an O_PATH descriptor of that directory.", "source": "program"},
+        {"assertion_id": "fd-dir-ended", "checks": "Once the child is reaped, a process of uid 1000 and gid 1001 enters its fd directory by fchdir through an O_PATH descriptor opened before, and gets ESRCH for its fdinfo directory, as Linux's proc_fdinfo_permission answers for a task that is gone.", "source": "program"},
         {"assertion_id": "long-link", "checks": "The links of paths over 64 bytes, including an O_PATH directory opened through another's link, name them whole.", "source": "program"},
         {"assertion_id": "long-removal", "checks": "The long path is removed.", "source": "program"},
         {"assertion_id": "cleanup", "checks": "The directory and the tmpfs are removed.", "source": "program"}
