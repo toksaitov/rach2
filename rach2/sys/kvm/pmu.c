@@ -789,19 +789,26 @@ void kvm_pmu_svm_enter(struct kvm_vcpu *v)
     if (pmu_host.intel || !p->version) {
         return;
     }
+    /* Every counter is stopped and cleared before the first starts, so
+     * that a started one counts none of the writes after it, each of which
+     * is an exit when Rach2 itself runs under a hypervisor. */
     if (pmu_host.version > 1u) {
         pmu_write(AMD_GLOBAL, 0);
     }
     for (i = 0; i < pmu_host.nr_gp; i++) {
         pmu_write(amd_index(i, 0), 0);
         pmu_write(amd_index(i, 1), 0);
+    }
+    if (pmu_host.version > 1u) {
+        pmu_write(AMD_CLEAR, mask_bits(pmu_host.nr_gp));
+    }
+    for (i = 0; i < pmu_host.nr_gp; i++) {
         if (p->run_gp & (1u << i)) {
             select = (p->eventsel[i] & ~(EV_INT | EV_PIN)) | EV_GUEST;
             pmu_write(amd_index(i, 0), select);
         }
     }
     if (pmu_host.version > 1u) {
-        pmu_write(AMD_CLEAR, mask_bits(pmu_host.nr_gp));
         pmu_write(AMD_GLOBAL, p->run_gp);
     }
 }
@@ -814,15 +821,20 @@ void kvm_pmu_svm_exit(struct kvm_vcpu *v)
     if (pmu_host.intel || !p->version) {
         return;
     }
+    /* Every running counter stops before any is read, as at entry. */
     if (pmu_host.version > 1u) {
         pmu_write(AMD_GLOBAL, 0);
     }
     for (i = 0; i < pmu_host.nr_gp; i++) {
-        pmu_write(amd_index(i, 0), 0);
+        if (p->run_gp & (1u << i)) {
+            pmu_write(amd_index(i, 0), 0);
+        }
+    }
+    for (i = 0; i < pmu_host.nr_gp; i++) {
         if (p->run_gp & (1u << i)) {
             accumulate(p, i, 0, pmu_read(amd_index(i, 1)) & mask_bits(pmu_host.width));
+            pmu_write(amd_index(i, 1), 0);
         }
-        pmu_write(amd_index(i, 1), 0);
     }
 }
 
