@@ -1005,6 +1005,30 @@ and
 makes without attributes and an unprivileged caller's largest, and
 .Pa queues_max ,
 256, the queues such a caller may make;
+.Pa fs/protected_symlinks ,
+1, under which a symbolic link at the end of a path in a sticky directory
+others may write is followed only by its owner or when the directory's
+owner owns it, else
+.Er EACCES ;
+.Pa fs/protected_hardlinks ,
+1, under which a hard link to a file of another user, without
+.Dv CAP_FOWNER ,
+needs a regular file with no set-user-ID bit, no set-group-ID bit with
+group execute, and read and write permission for the caller, else
+.Er EPERM ;
+.Pa fs/protected_regular ,
+2, and
+.Pa fs/protected_fifos ,
+1, under which an
+.Dv O_CREAT
+open of an existing regular file or FIFO in a sticky directory, owned by
+neither the caller nor the directory's owner, is
+.Er EACCES
+when others may write the directory, or at 2 when its group may; any other
+kind of file there is refused so whatever their values;
+each guards root as well, and a write of 0 turns its rule off; the first
+two take 0 or 1, the others 0 to 2, at the values Debian and Ubuntu set,
+where Linux's own are 0;
 .Pa kernel/msgmax ,
 8192,
 .Pa kernel/msgmnb ,
