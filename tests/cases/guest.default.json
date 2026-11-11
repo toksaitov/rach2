@@ -6744,7 +6744,7 @@
         {"assertion_id": "setgid-dir", "checks": "A directory made in a setgid directory takes its group and the bit.", "source": "program"},
         {"assertion_id": "privacy-other-root", "checks": "A process of another user may not open the maps or the descriptors of a root process under /proc.", "source": "program"},
         {"assertion_id": "privacy-own-maps", "checks": "That process reads its own maps.", "source": "program"},
-        {"assertion_id": "privacy-dumpable", "checks": "Its /proc directory is root's while a change of ids leaves it not dumpable, and its own once PR_SET_DUMPABLE makes it so, and so is a descriptor open on its maps.", "source": "program"},
+        {"assertion_id": "privacy-dumpable", "checks": "Its /proc directory, mode 0555, is its own whether or not it is dumpable; a stat of its status is root's while a change of ids leaves it not dumpable and its own once PR_SET_DUMPABLE makes it so; and a descriptor open on its maps before that stays root's, the owner the open's lookup gave it.", "source": "program"},
         {"assertion_id": "timer-si-timer", "checks": "A POSIX timer's signal comes with SI_TIMER and its value.", "source": "program"},
         {"assertion_id": "timer-overrun", "checks": "A periodic timer's signal blocked through several periods comes once with the others as its overrun.", "source": "program"},
         {"assertion_id": "timer-delete", "checks": "timer_delete succeeds, and a deleted timer's id is EINVAL.", "source": "program"},
