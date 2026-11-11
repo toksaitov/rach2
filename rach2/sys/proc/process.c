@@ -93,16 +93,25 @@ static int pid_reserve(void)
     return 0;
 }
 
-/** Exchange indexed thread ids without exposing a partial exchange. */
+/** Exchange the kernel and namespace thread ids of `a` and `b` from the
+ * same PID namespace, with the big lock held and interrupts masked during
+ * the exchange, as Linux 6.12.115's de_thread exchanges the whole PID
+ * objects (fs/exec.c:1112). Neither allocation nor namespace counts change. */
 void proc_exchange_pids(process_t *a, process_t *b)
 {
     uint32_t pid = a->pid;
     uint32_t flags = kirq_save();
+    uint32_t i;
 
     pid_remove(a);
     pid_remove(b);
     a->pid = b->pid;
     b->pid = pid;
+    for (i = 0; i < NS_LEVELS; i++) {
+        pid = a->nspid[i];
+        a->nspid[i] = b->nspid[i];
+        b->nspid[i] = pid;
+    }
     pid_insert(a);
     pid_insert(b);
     kirq_restore(flags);

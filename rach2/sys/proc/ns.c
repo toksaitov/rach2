@@ -70,7 +70,7 @@ struct userns init_userns = {{1, 0xEFFFFFFDu, NS_USER, NULL},
                              {1, {{0, 0, 0xFFFFFFFFu}}, NULL, NULL},
                              0,
                              NS_LIMIT_UNSET};
-struct pidns init_pidns = {{1, 0xEFFFFFFCu, NS_PID, NULL}, NULL, 0, 0, 1};
+struct pidns init_pidns = {{1, 0xEFFFFFFCu, NS_PID, NULL}, NULL, 0, 0, 1, 0, 1};
 struct mntns init_mntns = {{1, 0xF0000000u, NS_MNT, NULL}, 0, 0, NULL, NULL};
 struct netns init_netns = {{1, 0xF0000098u, NS_NET, NULL}, NULL};
 struct utsns init_utsns = {{1, 0xEFFFFFFEu, NS_UTS, NULL}, "rach2", "(none)"};
@@ -753,6 +753,19 @@ static int pid_held_by_group(uint32_t kid, const process_t *gone)
     return 0;
 }
 
+/** Release one allocated PID in `ns` and each ancestor below the first,
+ * with the big lock held. A last release before init was published closes
+ * allocation, as Linux 6.12.115's free_pid does (kernel/pid.c:140-155).
+ * A kept group or session ID counts until pid_held_prune releases it. */
+static void pidns_free(struct pidns *ns)
+{
+    for (; ns != &init_pidns; ns = ns->parent) {
+        if (--ns->allocated == 0) {
+            ns->adding = 0;
+        }
+    }
+}
+
 /** Let go of the kept numbers no group or session has now but through
  * `gone`, a record being freed. */
 static void pid_held_prune(const process_t *gone)
@@ -767,6 +780,7 @@ static void pid_held_prune(const process_t *gone)
             continue;
         }
         *link = h->next;
+        pidns_free(h->ns);
         ns_put(&h->ns->c);
         kfree(h);
     }
@@ -785,18 +799,20 @@ static const struct pid_held *pid_held_find(uint32_t kid)
 
 /** Keep the numbers of `p`, a record being freed in a PID namespace below
  * the first, while a group or a session has its ID, in the memory its fork
- * took for them, `p->pid_keep`, which is otherwise freed. */
-static void pid_held_keep(process_t *p)
+ * took for them, `p->pid_keep`, which is otherwise freed. Return nonzero
+ * when the numbers are kept, so ns_release does not free their allocation. */
+static int pid_held_keep(process_t *p)
 {
     struct pid_held *h = p->pid_keep;
 
     p->pid_keep = NULL;
     if (!h) {
-        return;
+        return 0;
     }
-    if (!p->pidns || p->pidns == &init_pidns || !pid_held_by_group(p->pid, p)) {
+    if (!p->pidns || p->pidns == &init_pidns || !p->nspid[p->pidns->level] ||
+        !pid_held_by_group(p->pid, p)) {
         kfree(h);
-        return;
+        return 0;
     }
     h->kid = p->pid;
     h->ns = p->pidns;
@@ -804,6 +820,7 @@ static void pid_held_keep(process_t *p)
     k_memcpy(h->nr, p->nspid, sizeof(h->nr));
     h->next = pids_held;
     pids_held = h;
+    return 1;
 }
 
 uint32_t pid_seen_by(const process_t *viewer, uint32_t kid)
@@ -865,7 +882,6 @@ static uint32_t pidns_alloc(struct pidns *ns)
 {
     uint32_t tries;
 
-    pid_held_prune(NULL);
     for (tries = 0; tries < NS_PID_MAX; tries++) {
         const struct pid_held *h;
         const process_t *p;
@@ -906,6 +922,7 @@ void ns_reaper_gone(const process_t *p)
         return;
     }
     ns->reaper = 0;
+    ns->adding = 0;
     k_memset(&info, 0, sizeof(info));
     info.code = SI_KERNEL;
     for (q = proc_list; q; q = q->next) {
@@ -941,8 +958,9 @@ static struct userns *userns_new(struct userns *parent, const process_t *p, int3
     return ns;
 }
 
-/** A new PID namespace below `parent`, owned by `owner`; NULL with `*err`
- * set as for userns_new. */
+/** A new PID namespace below `parent`, owned by `owner`, open for PID
+ * allocation as Linux 6.12.115's create_pid_namespace leaves PIDNS_ADDING
+ * set (kernel/pid_namespace.c:113); NULL with `*err` set as for userns_new. */
 static struct pidns *pidns_new(struct pidns *parent, struct userns *owner, int32_t *err)
 {
     struct pidns *ns;
@@ -959,6 +977,7 @@ static struct pidns *pidns_new(struct pidns *parent, struct userns *owner, int32
     ns->parent = parent;
     ns_get(&parent->c);
     ns->level = parent->level + 1u;
+    ns->adding = 1;
     return ns;
 }
 
@@ -1168,23 +1187,36 @@ fail:
 
 /** Give `child` its numbers in each PID namespace from `ns` up to the
  * first's child, reserving number 1 for the first process without making
- * it the reaper yet (`ns_fork_commit`). 0, or -ENOMEM when a namespace is
- * full or has no init and this child is not its first process. */
+ * it the reaper yet (`ns_fork_commit`). Allocation stays open while that
+ * first fork is built, as Linux 6.12.115's alloc_pid tests PIDNS_ADDING
+ * (kernel/pid.c:277-285). 0, or -ENOMEM when a namespace is full or closed,
+ * with partial numbers cleared and an empty new namespace's cursor reset
+ * as alloc_pid does (kernel/pid.c:294-303). The big lock is held; no sleep. */
 static int32_t ns_number(process_t *child, struct pidns *ns)
 {
-    int first = ns != &init_pidns && ns->last == 0;
     struct pidns *at;
 
+    pid_held_prune(NULL);
     for (at = ns; at != &init_pidns; at = at->parent) {
-        if (!(first && at == ns) && at->reaper == 0) {
-            return -ENOMEM;
+        if (!at->adding) {
+            goto fail;
         }
         child->nspid[at->level] = pidns_alloc(at);
         if (child->nspid[at->level] == 0) {
-            return -ENOMEM;
+            goto fail;
         }
     }
+    for (at = ns; at != &init_pidns; at = at->parent) {
+        at->allocated++;
+    }
     return 0;
+
+fail:
+    if (ns != &init_pidns && ns->adding && ns->allocated == 0) {
+        ns->last = 0;
+    }
+    k_memset(child->nspid, 0, sizeof(child->nspid));
+    return -ENOMEM;
 }
 
 int32_t ns_fork_commit(process_t *child)
@@ -1194,7 +1226,7 @@ int32_t ns_fork_commit(process_t *child)
     int first = ns != &init_pidns && child->nspid[ns->level] == 1;
 
     for (at = ns; at != &init_pidns; at = at->parent) {
-        if (!(first && at == ns) && at->reaper == 0) {
+        if (!at->adding) {
             return -ENOMEM;
         }
     }
@@ -1209,8 +1241,9 @@ void ns_fork_abort(process_t *child)
 {
     struct pidns *ns = proc_pidns(child);
 
-    if (ns != &init_pidns && ns->reaper == 0 && child->nspid[ns->level] == 1) {
-        ns->last = 0;
+    if (ns != &init_pidns && child->nspid[ns->level] != 0) {
+        pidns_free(ns);
+        k_memset(child->nspid, 0, sizeof(child->nspid));
     }
 }
 
@@ -1270,7 +1303,9 @@ int32_t ns_fork(process_t *child, const process_t *parent, uint32_t flags)
 void ns_release(process_t *p)
 {
     pid_held_prune(p);
-    pid_held_keep(p);
+    if (!pid_held_keep(p) && p->pidns && p->nspid[p->pidns->level] != 0) {
+        pidns_free(p->pidns);
+    }
     if (p->userns) {
         ns_put(&p->userns->c);
         p->userns = NULL;

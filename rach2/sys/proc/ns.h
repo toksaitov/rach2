@@ -98,6 +98,12 @@ struct pidns {
      * it ends. */
     uint32_t last;
     uint32_t reaper;
+    /* Allocated PIDs, including unfinished forks and IDs kept for groups;
+     * the first namespace uses the kernel's allocator and leaves this 0. */
+    uint32_t allocated;
+    /* PID allocation is open, as Linux's PIDNS_ADDING, even before init
+     * is published; cleared at init's death or the last PID's release. */
+    int adding;
 };
 
 struct mntns {
@@ -279,16 +285,18 @@ int32_t ns_fork(process_t *child, const process_t *parent, uint32_t flags);
 
 /** Commit `child`'s PID namespace numbers after fork's other failure
  * points, with the big lock held and no sleep before the child starts.
- * Recheck that no enclosing init died during the build, then publish the
+ * Recheck that each enclosing namespace still admits PIDs, then publish the
  * first child as reaper and unkillable, as Linux 6.12.115's copy_process
  * does (kernel/fork.c:2571-2583, 2601-2604). 0, or -ENOMEM with nothing
- * committed when a namespace lost its init. */
+ * committed when a namespace closed. */
 int32_t ns_fork_commit(process_t *child);
 
-/** Undo a failed first fork's reservation of PID 1 just before freeing
- * `child`, with the big lock held and no intervening sleep. The namespace
- * has no reaper yet, as in Linux 6.12.115's free_pid failure case
- * (kernel/pid.c:152-159); the next fork can take PID 1 again. */
+/** Release a failed fork's allocated PIDs just before freeing `child`,
+ * with the big lock held and no intervening sleep. The last PID's release
+ * closes allocation, as Linux 6.12.115's free_pid does after a failed first
+ * fork (kernel/pid.c:143-155). Only a failure inside ns_number resets the
+ * first-number cursor, as alloc_pid does (kernel/pid.c:301-303); files and
+ * directories are copied before ns_fork, so their failure allocates no PID. */
 void ns_fork_abort(process_t *child);
 
 /** Drop `p`'s references to its namespaces, at the end of its record. */
