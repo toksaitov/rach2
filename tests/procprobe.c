@@ -251,6 +251,10 @@ static const struct row {
             {"hostname-read-back", ROW_PLAIN},
             {"version", ROW_PLAIN},
             {"ip-forward", ROW_PLAIN},
+            {"panic-read", ROW_PLAIN},
+            {"panic-write", ROW_PLAIN},
+            {"panic-refuse", ROW_PLAIN},
+            {"panic-on-oops", ROW_PLAIN},
             {"rtc-open", ROW_PLAIN},
             {"rtc-read", ROW_PLAIN},
             {"rtc-time-of-day", ROW_PLAIN},
@@ -1282,6 +1286,41 @@ static int write_file(const char *name, const char *text, int len)
     return rc;
 }
 
+/**
+ * /proc/sys/kernel/panic and panic_on_oops take any int, a negative one
+ * among them, and read back what was written, as Linux's `proc_dointvec`
+ * gives them, and refuse text that is no number with EINVAL. Each value is
+ * put back as it was read, since a panic of a later probe acts on it.
+ */
+static void panic_rows(void)
+{
+    static char panic[24], oops[24];
+    int was_panic = slurp("/proc/sys/kernel/panic", panic, (int)sizeof(panic));
+    int was_oops = slurp("/proc/sys/kernel/panic_on_oops", oops, (int)sizeof(oops));
+    int n;
+
+    check("panic-read", was_panic >= 2 && panic[was_panic - 1] == '\n',
+          "/proc/sys/kernel/panic reads as a number and a newline");
+    n = write_file("/proc/sys/kernel/panic", "-1\n", 3) == 3
+            ? slurp("/proc/sys/kernel/panic", buf, (int)sizeof(buf))
+            : -1;
+    check("panic-write", n == 3 && contains(buf, n, "-1\n"),
+          "/proc/sys/kernel/panic takes -1 and reads it back");
+    check("panic-refuse", write_file("/proc/sys/kernel/panic", "x\n", 2) == -EINVAL,
+          "and refuses text that is no number with EINVAL");
+    if (was_panic > 1) {
+        write_file("/proc/sys/kernel/panic", panic, was_panic);
+    }
+    n = write_file("/proc/sys/kernel/panic_on_oops", "1\n", 2) == 2
+            ? slurp("/proc/sys/kernel/panic_on_oops", buf, (int)sizeof(buf))
+            : -1;
+    check("panic-on-oops", was_oops >= 2 && n == 2 && contains(buf, n, "1\n"),
+          "/proc/sys/kernel/panic_on_oops reads as a number and takes 1");
+    if (was_oops > 1) {
+        write_file("/proc/sys/kernel/panic_on_oops", oops, was_oops);
+    }
+}
+
 /** /proc/sys/kernel/hostname takes a write as sethostname does, the text
  * before its newline; /proc/version gives the kernel's name and release; and
  * net/ipv4/ip_forward takes 0 and refuses forwarding, which the stack does
@@ -1310,6 +1349,7 @@ static void sysctl_rows(void)
           write_file("/proc/sys/net/ipv4/ip_forward", "0\n", 2) == 2 &&
               write_file("/proc/sys/net/ipv4/ip_forward", "1\n", 2) == -EINVAL,
           "/proc/sys/net/ipv4/ip_forward takes 0 and refuses 1 with EINVAL");
+    panic_rows();
 }
 
 /** /dev/rtc0: the CMOS clock as hwclock reads it, the time of day of
