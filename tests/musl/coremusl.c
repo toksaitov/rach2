@@ -483,16 +483,18 @@ static uint32_t dump_bytes(void)
     while (line && *line) {
         unsigned long start = strtoul(line, &line, 16);
         unsigned long end = strtoul(line + 1, &line, 16);
-        unsigned long at;
+        unsigned long at, n = 0;
 
         regions++;
         for (at = start; line[1] == 'r' && line[3] == 'x' && at < end; at += 4096ul) {
             (void)*(volatile const char *)at;
         }
-        for (at = start; line[1] == 'r' && at < end; at += sizeof(in_core) * 4096ul) {
-            unsigned long n = (end - at) / 4096ul;
+        /* Step by the pages asked, not the vector's size: a step past `end`
+         * wraps for an i386 stack within 4 MiB of the top of 4 GiB. */
+        for (at = start; line[1] == 'r' && at < end; at += n * 4096ul) {
             unsigned long i;
 
+            n = (end - at) / 4096ul;
             if (n > sizeof(in_core)) {
                 n = sizeof(in_core);
             }
