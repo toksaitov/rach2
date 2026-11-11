@@ -1,0 +1,10 @@
+/usr/bin/qemu-system-x86_64 --no-reboot -nodefaults -global kvm-pit.lost_tick_policy=discard -device pc-testdev -device isa-debug-exit,iobase=0xf4,iosize=0x4 -display none -serial stdio -device pci-testdev -machine accel=kvm,kernel-irqchip=split -kernel x86/pmu_lbr.flat -smp 1 -cpu host,migratable=no # -initrd /data/trial/pmu-3363/tmp/tmp.7KSVdy9qwg
+enabling apic
+smp: waiting for 0 APs
+paging enabled
+cr0 = 80010011
+cr3 = 1044000
+cr4 = 20
+SKIP: (Architectural) LBR is not supported.
+SUMMARY: 1 tests, 1 skipped
+
