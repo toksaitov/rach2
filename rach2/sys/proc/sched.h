@@ -137,20 +137,23 @@ void sched_wait_off_cpu(const process_t *p);
 
 /**
  * From an interrupt handler: switch this processor now, unless it runs its
- * idle task, which selects once the handler returns, or a process inside a
- * system call, which is asked to switch at the call's exit
- * (`sched_take_preempt`).
+ * idle task, which selects once the handler returns, a process inside a
+ * system call or a fault, which is asked to switch at the call's exit or
+ * the fault's end (`sched_take_preempt`), a kernel thread
+ * (`no_tick_switch`), which is asked to switch at its next sleep or
+ * service point, or a thread inside klog.
  */
 void sched_preempt(void);
 
-/** Take the switch an interrupt asked for during the current system call,
- * if one did, clearing the request before the switch. Called with
- * interrupts off, at the call's exit and from `sched_service_point`. */
+/** Take the switch an interrupt asked for (`need_resched`), if one did,
+ * clearing the request before the switch. Called with interrupts off, at a
+ * call's exit, a fault's end and from `sched_service_point`. */
 void sched_take_preempt(void);
 
-/** Inside a long system call, between two of its pieces, with nothing half
- * done, take the switch the tick asked for without waiting for the call's
- * exit. The process is still inside its call when it runs again. */
+/** Inside a long system call, between two of its pieces, or in a kernel
+ * thread, between two completed works, with nothing half done: take the
+ * switch the tick asked for without waiting for the call's exit or the
+ * thread's sleep. A process is still inside its call when it runs again. */
 void sched_service_point(void);
 
 /** Remove `p` from its ready list before it is freed; the big lock is held. */
