@@ -7,9 +7,9 @@
 # them; and the residency again.
 #
 # The ordinary user is uid and gid 1000. Its one other group is the render
-# node's when that group is not root's, as Debian, whose node is 0660 and of
-# group render, grants the GPU to a user; on Rach2, whose node is 0666 and of
-# group 0, it has none. It need not be in passwd.
+# node's when that group is not root's, as Debian grants the GPU to a user.
+# On the trial's roots the node is 0660 and of group render on both systems,
+# so the user gets that group on each. It need not be in passwd.
 # Its programs are three piglit tests that pass under Linux, run in turn on
 # /dev/dri/renderD128 until the last trigger has ended.
 #
