@@ -41,8 +41,8 @@ static void device_close(fd_entry_t *e);
 static int32_t device_mmap(fd_entry_t *e, struct vma *vma);
 static int64_t device_llseek(fd_entry_t *e, int64_t offset, int whence);
 
-static const struct file_ops device_ops = {device_read,  device_write, NULL,         device_ioctl,
-                                           device_close, device_mmap,  device_llseek};
+static const struct file_ops device_ops = {device_read,  device_write, NULL,          device_ioctl,
+                                           device_close, device_mmap,  device_llseek, 0};
 
 int vfio_device_file_is_valid(const struct fd_entry *e)
 {

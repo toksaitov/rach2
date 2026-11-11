@@ -76,6 +76,38 @@ static int refs[MEM_PAGES];
 static struct mm maker;
 static char maker_dir; /* stands for the maker's page directory */
 
+/** 1: the test runs as the one thread, which holds the big lock. */
+int bkl_held(void)
+{
+    return 1;
+}
+
+/** Nothing: the test runs under the big lock throughout. */
+void bkl_enter(void)
+{}
+
+/** Nothing, as `bkl_enter`. */
+void bkl_exit(void)
+{}
+
+/** Take `mm`'s page-table lock, around the notice list's changes: the
+ * test has one thread, so a held lock is the same path twice. */
+uint32_t mm_ptl_lock(struct mm *mm)
+{
+    if (mm->ptl.locked) {
+        __builtin_trap();
+    }
+    mm->ptl.locked = 1;
+    return 0;
+}
+
+/** Give back the page-table lock. */
+void mm_ptl_unlock(struct mm *mm, uint32_t flags)
+{
+    (void)flags;
+    mm->ptl.locked = 0;
+}
+
 /** The page of the model's memory that frame `phys` is, or -1. */
 static int frame_page(uintptr_t phys)
 {

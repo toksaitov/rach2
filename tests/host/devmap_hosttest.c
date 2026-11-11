@@ -6,6 +6,8 @@
  * host-deps: rach2/sys/mm/vm.c rach2/sys/mm/frame.c rach2/sys/mm/notify.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/mmap_lock_host.c
+ * host-deps: tests/host/compat/atomic_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  * host-cflags: -U__UINTPTR_TYPE__ -D__UINTPTR_TYPE__=unsigned
  * host-cflags: -U__INTPTR_TYPE__ -D__INTPTR_TYPE__=int
@@ -418,10 +420,53 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     (void)name;
 }
 
+/** Nothing: the model has no big lock to leave out of an entry. */
+void exception_unlock(uint8_t vector)
+{
+    (void)vector;
+}
+
+/** Nothing: the model's address spaces live as long as the test. */
+void mm_get(struct mm *mm)
+{
+    (void)mm;
+}
+
+/** Nothing, as `mm_get`. */
+void mm_put(struct mm *mm)
+{
+    (void)mm;
+}
+
+/** Release the files whose last region went, as mm.c's does with no lock
+ * held. */
+void mm_reap(void)
+{
+    vm_file_reap();
+}
+
+/** 0: memory is never short. */
+int mem_short(void)
+{
+    return 0;
+}
+
 /** Nothing. */
 void terminate_current_process(int32_t signo)
 {
     (void)signo;
+}
+
+/** `vm_resolve_in` as the fault handler calls it, with `mm`'s regions' lock
+ * held to read once, which a file's or a device's fill lets go. */
+static int resolve_held(struct mm *mm, uintptr_t addr, int write, uintptr_t as_limit)
+{
+    int rc;
+
+    mmap_read_lock(mm);
+    rc = vm_resolve_in(mm, addr, write, as_limit);
+    mmap_unlock(mm);
+    return rc;
 }
 
 /** Nothing: memory is never short. */
@@ -571,7 +616,7 @@ static void fault_rows(void)
     check(dev_obj.puts == 0 && dev_obj.refs == 1, "the object keeps the mapping's reference");
 
     check(pte_of(&dir_a, VA_DEV) == 0, "nothing is mapped before the first touch");
-    check(vm_resolve_in(&mm_a, VA_DEV + PAGE_SIZE + 8, 1, ~(uintptr_t)0) == 1,
+    check(resolve_held(&mm_a, VA_DEV + PAGE_SIZE + 8, 1, ~(uintptr_t)0) == 1,
           "a write to the device range faults in");
     e = pte_of(&dir_a, VA_DEV + PAGE_SIZE);
     check(PTE_ADDR(e) == (DEV_FRAME + 1) * PAGE_SIZE && (e & PTE_NOCACHE) == PTE_NOCACHE &&
@@ -580,17 +625,17 @@ static void fault_rows(void)
     check(paging_user_phys(&dir_a, VA_DEV + PAGE_SIZE + 8) == (DEV_FRAME + 1) * PAGE_SIZE + 8,
           "a read of the mapping reaches the device's frame");
 
-    check(vm_resolve_in(&mm_a, VA_RAM + 2 * PAGE_SIZE, 0, ~(uintptr_t)0) == 1,
+    check(resolve_held(&mm_a, VA_RAM + 2 * PAGE_SIZE, 0, ~(uintptr_t)0) == 1,
           "a read of the object's frames faults in");
     e = pte_of(&dir_a, VA_RAM + 2 * PAGE_SIZE);
     check(PTE_ADDR(e) == ram_obj.frame[2] && (e & PTE_NOCACHE) == PTE_WC && !(e & PTE_W),
           "the object's page is its frame, write-combining and read-only as its region");
     check(frame_count(ram_obj.frame[2]) == 2, "the mapping holds a reference on a counted frame");
-    check(vm_resolve_in(&mm_a, VA_RAM + 2 * PAGE_SIZE, 1, ~(uintptr_t)0) == 0,
+    check(resolve_held(&mm_a, VA_RAM + 2 * PAGE_SIZE, 1, ~(uintptr_t)0) == 0,
           "a write to a read-only device region is refused");
 
     pat_wc = 0;
-    check(vm_resolve_in(&mm_a, VA_RAM + 3 * PAGE_SIZE, 0, ~(uintptr_t)0) == 1 &&
+    check(resolve_held(&mm_a, VA_RAM + 3 * PAGE_SIZE, 0, ~(uintptr_t)0) == 1 &&
               (pte_of(&dir_a, VA_RAM + 3 * PAGE_SIZE) & PTE_NOCACHE) == PTE_NOCACHE,
           "without write-combining the page is uncached");
     pat_wc = 1;
@@ -639,7 +684,7 @@ static void fork_rows(void)
     vma_t *r;
 
     check(map_obj(&mm_a.vm, VA_DF, 2, RW, &ram_obj, 0) == 0 &&
-              vm_resolve_in(&mm_a, VA_DF, 1, ~(uintptr_t)0) == 1 &&
+              resolve_held(&mm_a, VA_DF, 1, ~(uintptr_t)0) == 1 &&
               frame_count(ram_obj.frame[0]) == 2,
           "a second mapping of the object faults in, cached");
     check((pte_of(&dir_a, VA_DF) & PTE_NOCACHE) == 0, "a cached device page has no cache bits");
@@ -678,9 +723,9 @@ static void zap_rows(void)
 {
     isr_params_t params;
 
-    check(vm_resolve_in(&mm_a, VA_DEV, 0, ~(uintptr_t)0) == 1 &&
-              vm_resolve_in(&mm_b, VA_DEV, 0, ~(uintptr_t)0) == 1 &&
-              vm_resolve_in(&mm_b, VA_DEV + 2 * PAGE_SIZE, 0, ~(uintptr_t)0) == 1,
+    check(resolve_held(&mm_a, VA_DEV, 0, ~(uintptr_t)0) == 1 &&
+              resolve_held(&mm_b, VA_DEV, 0, ~(uintptr_t)0) == 1 &&
+              resolve_held(&mm_b, VA_DEV + 2 * PAGE_SIZE, 0, ~(uintptr_t)0) == 1,
           "both spaces fault device pages in");
     paging_zap_device(&dev_obj, 1, 1);
     check(pte_of(&dir_a, VA_DEV) != 0 && pte_of(&dir_a, VA_DEV + PAGE_SIZE) == 0 &&
@@ -696,7 +741,7 @@ static void zap_rows(void)
               pte_of(&dir_a, VA_RAM + 3 * PAGE_SIZE) == 0 &&
               frame_count((RAM_FRAME0 + 2) * PAGE_SIZE) == 1,
           "a zap to the object's end unmaps its pages and drops their references");
-    check(vm_resolve_in(&mm_a, VA_RAM + 2 * PAGE_SIZE, 0, ~(uintptr_t)0) == 1 &&
+    check(resolve_held(&mm_a, VA_RAM + 2 * PAGE_SIZE, 0, ~(uintptr_t)0) == 1 &&
               PTE_ADDR(pte_of(&dir_a, VA_RAM + 2 * PAGE_SIZE)) == ram_obj.frame[2] &&
               frame_count(ram_obj.frame[2]) == 2,
           "a moved page faults in at its new frame");
@@ -728,7 +773,7 @@ static void zap_rows(void)
     check(sent_signo == 0 && proc_a.fault_retry && !proc_a.bus_fault && pte_of(&dir_a, VA_RAM) == 0,
           "an object that cannot give the page yet: no signal, nothing mapped, the access to run "
           "again");
-    check(vm_resolve_in(&mm_a, VA_RAM, 0, ~(uintptr_t)0) == 0,
+    check(resolve_held(&mm_a, VA_RAM, 0, ~(uintptr_t)0) == 0,
           "and the kernel's own resolution of it fails");
     ram_obj.busy = 0;
 }

@@ -105,7 +105,9 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
     }
     for (tries = 0; tries < USERPTR_PIN_TRIES; tries++) {
         seq = obj->userptr.range.seq;
+        mmap_read_lock(obj->userptr.range.mm);
         err = paging_pin_range(obj->userptr.range.mm, start, end, PIN_WRITE, frames);
+        mmap_unlock(obj->userptr.range.mm);
         if (err != 0) {
             kfree(frames);
             return err;
@@ -149,7 +151,8 @@ void i915_gem_userptr_release(struct drm_i915_gem_object *obj)
 /**
  * Whether every page of [addr, addr + len) of `mm` lies in a region of
  * memory with pages, none of a device's, as Linux's probe_range: 0, or
- * -EFAULT for a hole or a device's region.
+ * -EFAULT for a hole or a device's region. The caller holds `mm`'s
+ * regions' lock to read.
  */
 static int32_t probe_range(struct mm *mm, uintptr_t addr, uintptr_t len)
 {
@@ -212,7 +215,9 @@ int32_t i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_fi
         return -ENODEV;
     }
     if (args->flags & I915_USERPTR_PROBE) {
+        mmap_read_lock(mm);
         err = probe_range(mm, (uintptr_t)args->user_ptr, (uintptr_t)args->user_size);
+        mmap_unlock(mm);
         if (err != 0) {
             return err;
         }

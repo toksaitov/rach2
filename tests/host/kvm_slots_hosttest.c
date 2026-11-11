@@ -288,6 +288,48 @@ pte_t *mmu_user_table(page_dir_t *dir, uintptr_t va, int create)
     return host_pt[(va - HVA) / MIB2];
 }
 
+/** 1: the test runs as the one thread, which holds the big lock. */
+int bkl_held(void)
+{
+    return 1;
+}
+
+/** Nothing: the test runs under the big lock throughout. */
+void bkl_enter(void)
+{}
+
+/** Nothing, as `bkl_enter`. */
+void bkl_exit(void)
+{}
+
+/** Take `mm`'s page-table lock, around the notice list's changes: the
+ * test has one thread, so a held lock is the same path twice. */
+uint32_t mm_ptl_lock(struct mm *mm)
+{
+    if (mm->ptl.locked) {
+        __builtin_trap();
+    }
+    mm->ptl.locked = 1;
+    return 0;
+}
+
+/** Give back the page-table lock. */
+void mm_ptl_unlock(struct mm *mm, uint32_t flags)
+{
+    (void)flags;
+    mm->ptl.locked = 0;
+}
+
+/** Clear `bits` in the present model entry of `addr`. */
+void paging_entry_clear(struct mm *mm, uintptr_t addr, pte_t bits)
+{
+    pte_t *table = mmu_user_table(mm->dir, addr, 0);
+
+    if (table && (table[MMU_INDEX(addr)] & PTE_P)) {
+        table[MMU_INDEX(addr)] &= ~bits;
+    }
+}
+
 /** A page of RAM from the top half of `ram`, which the rows that need
  * aligned runs leave alone. */
 static uintptr_t fresh(void)

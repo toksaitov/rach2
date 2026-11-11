@@ -268,20 +268,49 @@ int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, pte_t flags)
  * for an empty range; 0 when a page lies in no region or its region does
  * not allow the access, when no frame can be had, when the range wraps, or
  * when there is no current address space, and the caller then answers
- * -EFAULT. It may sleep, and a 1 holds until the caller sleeps.
+ * -EFAULT. It may sleep. A 1 holds, for a caller under the big lock, until
+ * it sleeps; one without the big lock holds the regions' lock across the
+ * resolution and its use instead (`vm_user_begin`).
  */
 int vm_prefault_range(uintptr_t addr, uintptr_t len, int write);
+
+/**
+ * `vm_prefault_range` with the current address space's regions' lock held
+ * to read on success, so that the range stays as it was found until
+ * `vm_user_end`, as the copies of usercopy.c hold it. 1 with the lock held;
+ * 0 with nothing held, for an empty range or one the thread opened to the
+ * checks; -1, with nothing held, where `vm_prefault_range` answers 0. The
+ * caller holds no regions' lock of its own address space already, since
+ * the resolution must be able to let it go. May sleep.
+ */
+int vm_user_begin(uintptr_t addr, uintptr_t len, int write);
+
+/** Give back the lock a 1 from `vm_user_begin` left held. */
+void vm_user_end(void);
+
+/** `vm_prefault_range` for a caller that holds the current address space's
+ * regions' lock to read already, once, so that a page's fill may let it go
+ * and take it again: 1 with the range in, 0 as `vm_prefault_range`. */
+int vm_prefault_held(uintptr_t addr, uintptr_t len, int write);
+
+/** Clear `bits` in the present entry of `mm` at the user address `addr`, a
+ * mark a pin or a guest's mapping ends, under the page-table lock, so that
+ * a fault's change of the entry is not undone. The caller holds `mm`'s
+ * regions' lock, or the big lock, which every change of the regions holds
+ * (mm.h). */
+void paging_entry_clear(struct mm *mm, uintptr_t addr, pte_t bits);
 
 /**
  * Whether every page of [addr, addr + len) of the current process is
  * present and allows the access, a write when `write` is nonzero, found by
  * walking the page tables with no fault and no sleep: 1 or 0. It is 1 for
  * an empty range, for a range the thread opened to the checks
- * (`user_window_open`) and for a kernel address. A copy to or from a user
- * buffer under a file lock runs in the same step as a 1, with no sleep
- * between, since under the big lock nothing can unmap the range inside
- * that step; on a 0 the caller lets its locks go and brings the pages in
- * (`vm_prefault_range`).
+ * (`user_window_open`) and for a kernel address. The caller holds the big
+ * lock, and a copy to or from a user buffer under a file lock runs in the
+ * same step as a 1, with no sleep between, since every change that takes a
+ * page away is made under the big lock; on a 0, which a regions' lock held
+ * by a writer also gives, the caller lets its locks go and brings the
+ * pages in (`vm_prefault_range`). Any context but an interrupt.
  */
 int vm_resident(uintptr_t addr, uintptr_t len, int write);
 
@@ -293,8 +322,8 @@ int vm_resident(uintptr_t addr, uintptr_t len, int write);
  * over.
  * It stops at the first page that cannot be had, since a populate that
  * falls short leaves the rest to be faulted in later: 0, or -1 when it
- * stopped short, which mmap ignores and mlock answers with EAGAIN. It may
- * sleep.
+ * stopped short, which mmap ignores and mlock answers with EAGAIN. It takes
+ * the regions' lock to read, so the caller holds none, and may sleep.
  */
 int vm_populate(uintptr_t start, uintptr_t end);
 
@@ -326,7 +355,8 @@ void free_user_pages(page_dir_t *dir);
  * (`paging_flush_range`), and then drops its frame's reference, which frees
  * the frame with its last. A page never backed is passed, and a range with
  * no page present costs no flush. A NULL `dir` changes nothing. munmap and
- * a brk that shrinks the heap call it.
+ * a brk that shrinks the heap call it, with the space's regions' lock held
+ * to write or the space no thread's; it takes the big lock.
  */
 void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end);
 
@@ -336,9 +366,22 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end);
  * unmap_mapping_range does: a driver calls it when a page moves, when the
  * object frees it, and when the device goes. The regions stay, and the next
  * access to a page faults to the object's `page` again, which maps the page
- * where it is now or, with -1, raises SIGBUS. It does not sleep.
+ * where it is now or, with -1, raises SIGBUS. It may sleep for a space's
+ * regions' lock (`paging_zap_where`), so never under a spinlock.
  */
 void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count);
+
+/**
+ * Unmap from every address space the part of each region that `match`
+ * picks, given `arg`, and returns 1 for with its range in `*lo` and `*hi`,
+ * as a device object's or a truncated file's pages are taken back. Each
+ * space is changed under its regions' lock held to write, which the walk
+ * may wait for; a space the caller holds to read only is changed as it
+ * stands. The caller holds the big lock, which the process list needs.
+ */
+struct vma;
+void paging_zap_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo, uintptr_t *hi),
+                      void *arg);
 
 /**
  * Move the entries of [from, from + len) in `dir` to [to, to + len), for

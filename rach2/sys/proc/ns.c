@@ -1555,7 +1555,7 @@ static int32_t nsfs_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 }
 
 /* A namespace's descriptor has only ioctl and close. */
-const struct file_ops nsfs_ops = {NULL, NULL, NULL, nsfs_ioctl, nsfs_close, NULL, NULL};
+const struct file_ops nsfs_ops = {NULL, NULL, NULL, nsfs_ioctl, nsfs_close, NULL, NULL, 0};
 
 struct ns_common *nsfs_ns(const fd_entry_t *e)
 {
@@ -1604,11 +1604,12 @@ int32_t nsfs_open(struct ns_common *c, uint32_t oflag)
     f->anon.name = f->name;
     f->ns = c;
     ns_get(c);
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = &nsfs_ops;
     e->priv = f;
     e->flags = FD_FLAG_READ | ((oflag & NS_O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0u);
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 

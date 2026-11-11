@@ -10,6 +10,7 @@
  * host-deps: rach2/sys/network/socket/address.c
  * host-deps: tests/host/compat/kheap_host.c rach2/sys/network/ip6/addr6.c
  * host-deps: rach2/sys/network/socket/dgq.c
+ * host-deps: tests/host/compat/fd_flat.c
  * host-cflags: -Wno-int-to-pointer-cast
  *
  * User pointers are offsets in an arena, preserving the 32-bit syscall ABI
@@ -819,7 +820,7 @@ static void invalid_accept(void)
 static void socket_flags(void)
 {
     proc.fds = &files;
-    files.entries = table;
+    files.chunks[0] = table;
     table[4].ofd = &made_description;
     CHECK(socket_with_flags(AF_INET, SOCK_STREAM | 0x10, 0) == -EINVAL,
           "a type bit other than SOCK_CLOEXEC and SOCK_NONBLOCK is refused");
@@ -849,7 +850,7 @@ static void accept_flags(void)
     int i;
 
     proc.fds = &files;
-    files.entries = table;
+    files.chunks[0] = table;
     table[4].ofd = &made_description;
     sock.type = SOCK_STREAM;
     sock.listening = 1;
@@ -974,7 +975,7 @@ static void accept_reserved(void)
     static struct socket conn;
 
     proc.fds = &files;
-    files.entries = table;
+    files.chunks[0] = table;
     k_memset(&table[4], 0, sizeof(table[4]));
     table[4].ofd = &made_description;
     sock.type = SOCK_STREAM;

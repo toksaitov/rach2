@@ -1,5 +1,6 @@
 /* PI futex rows with the x86-64 kernel's process and syscall structures.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c rach2/sys/tick.c
+ * host-deps: tests/host/compat/mmap_lock_host.c
  * host-cflags: -DRACH2_HOST_X86_64
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  */

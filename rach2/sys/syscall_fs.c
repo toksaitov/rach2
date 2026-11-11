@@ -32,6 +32,7 @@
 #include "fs/fd.h"
 #include "fs/debugfs.h"
 #include "fs/file.h"
+#include "proc/smp.h"
 #include "dmabuf/dmabuf.h"
 #include "fs/lock.h"
 #include "fs/pathbuf.h"
@@ -176,13 +177,20 @@ static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
         return 0;
     }
     for (pr = proc_list; pr; pr = pr->next) {
-        for (i = 0; i < fd_table_cap(pr->fds); i++) {
-            fd_entry_t *e = &pr->fds->entries[i];
+        uint32_t flags;
+
+        if (!pr->fds) {
+            continue;
+        }
+        flags = fd_table_lock(pr->fds);
+        for (i = 0; i < pr->fds->cap; i++) {
+            fd_entry_t *e = fd_slot(pr->fds, i);
 
             if (e != except && fd_root_node(e) == node) {
                 held++;
             }
         }
+        fd_table_unlock(pr->fds, flags);
     }
     if (unix_inflight_holds(node) || filemap_holds(node) || mm_exe_holds(vfs_root_mount(), node)) {
         held++;
@@ -281,7 +289,6 @@ static void fd_release_orphan(fd_entry_t *e)
     if (!locked) {
         return;
     }
-    e = fd_entry_now(current_proc ? current_proc->fds : NULL, e); /* the lock may sleep */
     if (e->type == FD_TYPE_FILE) {
         node = fd_root_node(e);
         if (node->name[0] == '\0' && fd_node_holders(node, e) == 0) {
@@ -369,6 +376,8 @@ static void fd_lock_key(const fd_entry_t *e, struct lock_key *key)
  * a file mapping or a message in flight keeps is not a descriptor of the
  * table (`fd_in_table`), and its release drops none; nor does the close of
  * an O_PATH descriptor, which Linux does not count as a close of the file.
+ * The locks are dropped under the big lock, which guards them, and taken
+ * only when some lock exists.
  */
 static void fd_close_locks(const fd_entry_t *e)
 {
@@ -378,8 +387,10 @@ static void fd_close_locks(const fd_entry_t *e)
         !fd_in_table(current_proc->fds, e)) {
         return;
     }
+    bkl_enter();
     fd_lock_key(e, &key);
     lock_close(&key);
+    bkl_exit();
 }
 
 /**
@@ -388,43 +399,49 @@ static void fd_close_locks(const fd_entry_t *e)
  * its last holder, the record of a synthetic directory, the classified path
  * an O_PATH descriptor of a /dev or /proc leaf keeps, the descriptor's
  * socket reference, and an object with operations (a pipe, a terminal, a
- * pty, the framebuffer). Every release of a descriptor comes here, most by
- * `fd_release_backing`, so none can miss a kind of backing; the caller frees
- * the slot with `fd_free`. May sleep.
+ * pty, the framebuffer), and then the descriptor's reference to its
+ * description. Every release of a descriptor comes here, most by
+ * `fd_release_backing`, so none can miss a kind of backing; the caller then
+ * clears the slot with `fd_free_after`, or drops the copy it released, and
+ * no longer reads `e->ofd`. May sleep.
  *
  * The record, the path and an object with operations belong to the open
  * file description, which dup, dup2 and fork share by its reference count,
- * so each is released once, when the description's last descriptor closes
- * (`refcount` 1 here, before `fd_free` drops it). The framebuffer's close
- * drops one open description's ownership reference (display/fbdev.c). The
- * socket reference is counted
- * for each descriptor (`socket_ref` on dup and fork) and is dropped every
- * time. No descriptor is both an object with operations and a socket.
+ * so each is released once, when the description's last descriptor closes.
+ * Which descriptor is the last is decided in one atomic step on the count
+ * (`fd_ofd_unref_unless_last`), since two descriptors of one description
+ * may close at once in two tables, one of them without the big lock; the
+ * last releases the objects and then ends the description. The
+ * framebuffer's close drops one open description's ownership reference
+ * (display/fbdev.c). The socket reference is counted for each descriptor
+ * (`socket_ref` on dup and fork) and is dropped every time. No descriptor
+ * is both an object with operations and a socket.
  *
  * An orphan, a reserved node no path names, is freed by its last holder,
  * under the root's namespace lock (`fd_release_orphan`). This runs while
  * the closing slot is still populated, which is what the count's `except` is
  * for: the closing descriptor is skipped where it is, so every other release
- * counts it until its own has the lock. The entry is found again after that
- * lock, whose wait may let another sharer grow the table (`fd_entry_now`).
+ * counts it until its own has the lock.
  */
 static void fd_release_objects(fd_entry_t *e)
 {
     fd_release_orphan(e);
-    e = fd_entry_now(current_proc ? current_proc->fds : NULL, e);
-    if ((e->type == FD_TYPE_SYNTH_DIR || e->type == FD_TYPE_SYNTH_PATH) && e->priv && e->ofd &&
-        e->ofd->refcount == 1) {
+    if (e->type == FD_TYPE_SOCKET && e->sock) {
+        socket_unref(e->sock);
+    }
+    if (!e->ofd || fd_ofd_unref_unless_last(e->ofd)) {
+        return;
+    }
+    if ((e->type == FD_TYPE_SYNTH_DIR || e->type == FD_TYPE_SYNTH_PATH) && e->priv) {
         procfs_owner_drop(e->type == FD_TYPE_SYNTH_DIR ? &((struct synth_dir *)e->priv)->own
                                                        : &((struct synth_path *)e->priv)->own);
         kfree(e->priv);
         e->priv = NULL;
     }
-    if (e->type == FD_TYPE_SOCKET && e->sock) {
-        socket_unref(e->sock);
-    }
-    if (e->ops && e->ops->close && e->ofd && e->ofd->refcount == 1) {
+    if (e->ops && e->ops->close) {
         e->ops->close(e);
     }
+    fd_ofd_unref(e->ofd);
 }
 
 void fd_release_backing(fd_entry_t *e)
@@ -500,7 +517,7 @@ struct vfs_mount *fs_exe_lock(const struct open_file *ofd)
  * by, once that address space is off the list `mm_exe_holds` reads, with
  * `locked` held as `fs_exe_lock` returned it: a file of the KRFFS root that
  * lost its name is freed when nothing else holds it, as the release of a
- * file's last descriptor frees one (`fd_release_objects`, which takes the
+ * file's last descriptor frees one (`fd_release_orphan`, which takes the
  * lock again), at the node the file is at now; then the lock goes, and the
  * description's last reference closes it. May sleep.
  */
@@ -516,7 +533,7 @@ void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
         if (ofd->vnode != krffs_fs->node) {
             e.node = ofd->vnode;
         }
-        fd_release_objects(&e);
+        fd_release_orphan(&e);
         vfs_ns_unlock(locked);
     }
     fd_ofd_unref(ofd);
@@ -1230,11 +1247,17 @@ long sys_ftruncate(isr_params_t *params)
 }
 
 /** write(2) takes fd, buf and the raw count, which write_fd checks before
- * cutting it at Linux's MAX_RW_COUNT; the bytes written, or -errno. */
+ * cutting it at Linux's MAX_RW_COUNT; the bytes written, or -errno. The
+ * call holds the big lock unless the descriptor's type runs without it
+ * (`fd_call_lock`). */
 long sys_write(isr_params_t *params)
 {
-    return write_fd((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1),
-                    SC_ARG(params, 2), 1);
+    int fd = (int)SC_ARG(params, 0);
+    int big = fd_call_lock(fd);
+    long rc = write_fd(fd, (const char __user *)SC_ARG(params, 1), SC_ARG(params, 2), 1);
+
+    file_ops_unlock(big);
+    return rc;
 }
 
 /** Element `i` of the vector of struct iovec at `uvec`, in the caller's
@@ -2304,7 +2327,7 @@ static void synth_mount_record(int fd, const struct vfs_ref *ref, const struct v
                    !(flags & O_NOFOLLOW))) {
         return;
     }
-    ofd = current_proc->fds->entries[fd].ofd;
+    ofd = fd_slot(current_proc->fds, fd)->ofd;
     if (!ofd || ofd->vmnt || ofd->synth_mnt) {
         return;
     }
@@ -2335,7 +2358,7 @@ static void synth_mount_record(int fd, const struct vfs_ref *ref, const struct v
  */
 static void synth_dir_record(int fd, int permanent, const char *name)
 {
-    fd_entry_t *e = fd >= 0 ? &current_proc->fds->entries[fd] : NULL;
+    fd_entry_t *e = fd >= 0 ? fd_slot(current_proc->fds, fd) : NULL;
     char *root, *full;
     uint32_t rl, dl;
 
@@ -2631,31 +2654,22 @@ static int32_t proc_fd_reopen(const struct open_file *src, int flags)
         fd_free(current_proc->fds, fd);
         return rc;
     }
-    current_proc->fds->entries[fd].ofd->name = vfs_name_ref(src->name);
+    fd_slot(current_proc->fds, fd)->ofd->name = vfs_name_ref(src->name);
     rc = open_install(&ref, fd, src->dirpath ? src->dirpath + 1 : "", flags);
     vfs_walk_unlock(mnt);
     return rc;
 }
 
 /**
- * A new descriptor that shares the description of descriptor `procfd` of
- * the table `fds`, as dup(2) shares it, close-on-exec where `flags` has
- * O_CLOEXEC. The source is looked up again once the slot is had, since the
- * caller's table may have grown; nothing between the caller's checks and the
- * copy sleeps, the slot's memory coming from the heap, which does not wait.
- * Returns the descriptor or a negative errno.
+ * Fill `dst`, a slot the caller reserved, with a copy of the open
+ * descriptor `src`, which the caller's call holds: the same open file
+ * description, with a reference, which takes the place of any the
+ * reservation made, the object behind it with its vtable, a socket's
+ * reference, and `src`'s flags with FD_CLOEXEC as `cloexec` says and none
+ * of its closing state. The caller then publishes `dst` (`fd_install`).
  */
-static int32_t proc_fd_share(fd_table_t *fds, int procfd, int flags)
+static void dup_fill(fd_entry_t *dst, const fd_entry_t *src, int cloexec)
 {
-    fd_entry_t *src;
-    fd_entry_t *dst;
-    int fd = fd_alloc_from(current_proc->fds, 0);
-
-    if (fd < 0) {
-        return fd;
-    }
-    src = &fds->entries[procfd];
-    dst = &current_proc->fds->entries[fd];
     fd_ofd_unref(dst->ofd);
     dst->type = src->type;
     dst->node = src->node;
@@ -2665,41 +2679,85 @@ static int32_t proc_fd_share(fd_table_t *fds, int procfd, int flags)
     dst->dev = src->dev;
     dst->ofd = src->ofd;
     fd_ofd_ref(dst->ofd);
-    dst->flags =
-        (src->flags & ~(uint32_t)FD_FLAG_CLOEXEC) | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0u);
+    dst->flags = (src->flags & ~(uint32_t)(FD_FLAG_CLOEXEC | FD_FLAG_CLOSING | FD_FLAG_RELEASING)) |
+                 (cloexec ? FD_FLAG_CLOEXEC : 0u);
     if (src->type == FD_TYPE_SOCKET && src->sock) {
         socket_ref(src->sock);
     }
+}
+
+/* `proc_fd_share`'s flag for an O_PATH descriptor, above every O_ flag. */
+#define PROC_FD_SHARE_PATH 0x40000000
+
+/**
+ * A new descriptor that shares the description of descriptor `procfd` of
+ * the table `fds`, as dup(2) shares it, close-on-exec where `flags` has
+ * O_CLOEXEC, and an O_PATH descriptor where it has PROC_FD_SHARE_PATH. The
+ * source is looked up again once the slot is had, under its table's lock
+ * and with a reference to its description, since its owner may have closed
+ * it meanwhile. Returns the descriptor or a negative errno.
+ */
+static int32_t proc_fd_share(fd_table_t *fds, int procfd, int flags)
+{
+    fd_entry_t src;
+    fd_entry_t *dst;
+    int fd = fd_alloc_from(current_proc->fds, 0);
+
+    if (fd < 0) {
+        return fd;
+    }
+    if (fd_peek(fds, procfd, &src, FD_PEEK_REF) != 0) {
+        fd_free(current_proc->fds, fd);
+        return -ENOENT;
+    }
+    dst = fd_slot(current_proc->fds, fd);
+    dup_fill(dst, &src, (flags & O_CLOEXEC) != 0);
+    if (flags & PROC_FD_SHARE_PATH) {
+        dst->flags = FD_FLAG_PATH | (dst->flags & FD_FLAG_CLOEXEC);
+    }
+    fd_ofd_unref(src.ofd);
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
 /**
- * The descriptor the /proc/PID/fd/N link `vp` names, into `*src`, and the
- * process whose table has it, into `*owner`. Another process's descriptor
- * needs a privileged caller or one whose file-system user ID is the
- * process's effective one, which Linux's ptrace access check for a read of
- * /proc compares. 0, -ENOENT for no such process or descriptor, or -EACCES.
+ * A copy of the descriptor the /proc/PID/fd/N link `vp` names, into `*src`,
+ * and the process whose table has it, into `*owner`. Another process's
+ * descriptor needs a privileged caller or one whose file-system user ID is
+ * the process's effective one, which Linux's ptrace access check for a read
+ * of /proc compares. The copy is taken under the table's lock and holds what
+ * a descriptor in flight holds, a reference to its description and to a
+ * socket, since its owner may close it meanwhile without the big lock; the
+ * caller gives them back with `proc_fd_drop`. 0, -ENOENT for no such
+ * process or descriptor, or -EACCES.
  */
-static int32_t proc_fd_entry(const struct vpath *vp, process_t **owner, fd_entry_t **src)
+static int32_t proc_fd_entry(const struct vpath *vp, process_t **owner, fd_entry_t *src)
 {
     int pid = procfs_resolve_id(vp);
     process_t *p = pid < 0 ? NULL : get_process((uint32_t)pid);
-    fd_entry_t *e;
 
-    if (!p || p->state == PROC_UNUSED || !p->fds || vp->procfd < 0 ||
-        vp->procfd >= fd_table_cap(p->fds)) {
+    if (!p || p->state == PROC_UNUSED || !p->fds || vp->procfd < 0) {
         return -ENOENT;
     }
     if (p->fds != current_proc->fds && !cred_privileged() && p->euid != proc_fsuid(current_proc)) {
         return -EACCES;
     }
-    e = &p->fds->entries[vp->procfd];
-    if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING)) {
+    if (fd_peek(p->fds, vp->procfd, src, FD_PEEK_REF) != 0) {
         return -ENOENT;
     }
+    if (src->type == FD_TYPE_SOCKET && src->sock) {
+        socket_ref(src->sock);
+    }
     *owner = p;
-    *src = e;
     return 0;
+}
+
+/** Give back what `proc_fd_entry` took with the copy `src`, as the close of
+ * a descriptor in flight does; the last holder of the description releases
+ * its object. May sleep. */
+static void proc_fd_drop(fd_entry_t *src)
+{
+    fd_release_objects(src);
 }
 
 /** Check a descriptor target against NO_XDEV's mount, or allow no rule.
@@ -2809,18 +2867,30 @@ static int32_t proc_fd_reopen_device(fd_entry_t *src, int flags)
  * the new descriptor, or a negative errno: an error of `proc_fd_entry`,
  * -EACCES, -ENOTDIR, or the open's.
  */
+static int32_t proc_fd_open_from(const struct vpath *vp, process_t *p, fd_entry_t *src, int flags);
+
 static int32_t proc_fd_open(const struct vpath *vp, int flags)
 {
-    unsigned acc = (unsigned)flags & 3u;
-    struct open_file *held;
     process_t *p;
-    fd_entry_t *src;
+    fd_entry_t src;
     int32_t rc;
 
     rc = proc_fd_entry(vp, &p, &src);
     if (rc != 0) {
         return rc;
     }
+    rc = proc_fd_open_from(vp, p, &src, flags);
+    proc_fd_drop(&src);
+    return rc;
+}
+
+/** `proc_fd_open` of the copy `src` of descriptor `vp->procfd` of `p`. */
+static int32_t proc_fd_open_from(const struct vpath *vp, process_t *p, fd_entry_t *src, int flags)
+{
+    unsigned acc = (unsigned)flags & 3u;
+    struct open_file *held;
+    int32_t rc;
+
     rc = proc_fd_xdev(src, current_proc->walk_replay_mnt);
     if (rc != 0) {
         return rc;
@@ -2849,18 +2919,20 @@ int32_t proc_fd_file(const struct vpath *vp, struct vfs_ref *ref, struct open_fi
 {
     struct vfs_mount *mnt;
     process_t *p;
-    fd_entry_t *src;
+    fd_entry_t src;
     int32_t rc;
 
     rc = proc_fd_entry(vp, &p, &src);
     if (rc != 0) {
         return rc;
     }
-    if (!src->ofd || !src->ofd->vmnt || (src->type != FD_TYPE_FILE && src->type != FD_TYPE_DIR)) {
+    if (!src.ofd || !src.ofd->vmnt || (src.type != FD_TYPE_FILE && src.type != FD_TYPE_DIR)) {
+        proc_fd_drop(&src);
         return -EACCES;
     }
-    *held = src->ofd;
+    *held = src.ofd;
     fd_ofd_ref(*held);
+    proc_fd_drop(&src);
     mnt = (*held)->vmnt;
     if (vfs_enter(mnt) != 0) {
         fd_ofd_unref(*held);
@@ -3166,17 +3238,18 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
         return fd;
     }
     procfs_owner_keep(&sd->own, vp);
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_SYNTH_DIR;
     e->node = NULL;
     e->sock = NULL;
     e->ops = NULL;
     e->priv = sd;
     e->ofd->offset = 0;
-    e->flags = FD_FLAG_READ;
+    e->flags = (flags & O_PATH) ? FD_FLAG_PATH : FD_FLAG_READ;
     if (flags & O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -3240,14 +3313,14 @@ static int32_t open_framebuffer(int flags)
     if (fd < 0) {
         return fd;
     }
-    entry = &current_proc->fds->entries[fd];
+    entry = fd_slot(current_proc->fds, fd);
     rc = fb_take(entry);
     if (rc != 0) {
         fd_free(current_proc->fds, fd);
         return rc;
     }
 
-    entry = &current_proc->fds->entries[fd];
+    entry = fd_slot(current_proc->fds, fd);
     entry->type = FD_TYPE_FRAMEBUFFER;
     entry->node = NULL;
     entry->ops = &fb_file_ops;
@@ -3255,6 +3328,7 @@ static int32_t open_framebuffer(int flags)
     entry->ofd->status_flags = (flags & O_NONBLOCK) ? OFD_NONBLOCK : 0u;
     entry->flags = FD_FLAG_READ | FD_FLAG_WRITE | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0u);
 
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -3277,7 +3351,7 @@ static int32_t open_mouse(int flags)
         return fd;
     }
 
-    entry = &current_proc->fds->entries[fd];
+    entry = fd_slot(current_proc->fds, fd);
     entry->type = FD_TYPE_MOUSE;
     entry->node = NULL;
     entry->ofd->offset = 0;
@@ -3286,6 +3360,7 @@ static int32_t open_mouse(int flags)
 
     mouse_clear_packets();
 
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -3557,15 +3632,14 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
  * The FIFO half of `open_special`: the descriptor `fd` the open reserved, whose
  * description holds the file and its mount, as a regular file's does, made an
  * end of the file's pipe. The walk's lock goes before `fifo_attach`, which may
- * wait for the other end, with the slot still a reservation, and finds the
- * entry again after the wait (`fd_entry_now`), since the open's sleeps let
- * another sharer grow the table. Returns the descriptor or a negative errno,
+ * wait for the other end, with the slot still a reservation, which no lookup
+ * finds until it is published. Returns the descriptor or a negative errno,
  * with `ref` released and the reservation installed or freed either way.
  */
 static int32_t open_fifo(struct vfs_ref *ref, int fd, uint64_t ino, int flags)
 {
     struct vfs_mount *mnt = ref->mnt;
-    fd_entry_t *e = &current_proc->fds->entries[fd];
+    fd_entry_t *e = fd_slot(current_proc->fds, fd);
     int32_t rc;
 
     rc = vfs_open_node(mnt, ref->node, flags, &e->ofd->fhandle);
@@ -3583,10 +3657,11 @@ static int32_t open_fifo(struct vfs_ref *ref, int fd, uint64_t ino, int flags)
     vfs_leave(mnt);
     rc = fifo_attach(e, vfs_mount_base(mnt), ino, flags);
     if (rc != 0) {
-        fd_release_orphan(fd_entry_now(current_proc->fds, e));
+        fd_release_orphan(e);
         fd_free(current_proc->fds, fd);
         return rc;
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -3639,7 +3714,7 @@ static int32_t open_device_node(struct vfs_ref *ref, int fd, int block, uint32_t
     vfs_leave(mnt);
     fd_free(current_proc->fds, fd);
     rc = open_device(block, rdev, flags);
-    to = rc >= 0 ? current_proc->fds->entries[rc].ofd : NULL;
+    to = rc >= 0 ? fd_slot(current_proc->fds, rc)->ofd : NULL;
     if (to && !to->dev_mnt) {
         to->dev_mnt = keep->dev_mnt;
         to->dev_node = keep->dev_node;
@@ -3900,16 +3975,14 @@ static int open_truncate(struct open_file *ofd, struct vfs_mount *mnt)
  * registrant gave it (`debugfs_bind`), which read, write and ioctl call in
  * place of the file system's, and whose open may refuse or sleep.
  *
- * The entry gets its type last, which is what publishes it: until then the
- * slot is a reservation, which no other thread's lookup, close or dup2 can
- * take while the file system's open, the truncation or a debugfs file's
- * open sleeps with the description in use. The entry is found again after
- * those sleeps, since another sharer may have grown the table meanwhile
- * (`fd_entry_now`).
+ * The entry is published last (`fd_install`): until then the slot is a
+ * reservation, which no other thread's lookup, close or dup2 can take while
+ * the file system's open, the truncation or a debugfs file's open sleeps
+ * with the description in use.
  */
 static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int flags)
 {
-    fd_entry_t *entry = &current_proc->fds->entries[fd];
+    fd_entry_t *entry = fd_slot(current_proc->fds, fd);
     krffs_node_t *node = ref->node;
     fd_type_t type;
     int rc;
@@ -3959,7 +4032,6 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
         }
     }
 
-    entry = fd_entry_now(current_proc->fds, entry); /* past the last sleep */
     if ((flags & 3) == 0) {
         fd_ofd_access_drop(entry->ofd);
     }
@@ -3990,9 +4062,9 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
             fd_free(current_proc->fds, fd);
             return rc;
         }
-        entry = fd_entry_now(current_proc->fds, entry); /* the file's open may sleep */
     }
     entry->type = type;
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -4158,7 +4230,7 @@ again:
             goto out;
         }
         flags &= ~O_TRUNC;
-        current_proc->fds->entries[fd].ofd->watch_flags = OFD_WATCH_MADE;
+        fd_slot(current_proc->fds, fd)->ofd->watch_flags = OFD_WATCH_MADE;
     } else if (rc != 0) {
         goto out;
     } else {
@@ -4196,7 +4268,7 @@ again:
         }
     }
     locked = ref.mnt;
-    current_proc->fds->entries[fd].ofd->name = entry;
+    fd_slot(current_proc->fds, fd)->ofd->name = entry;
     entry = NULL;
     rc = open_install(&ref, fd, name, flags);
     fd = -1;
@@ -4286,8 +4358,14 @@ static int32_t remount_at(const char *path, uint32_t flags, int bind, const char
     }
     if ((flags & VFS_MS_RDONLY) && !(m->flags & VFS_MS_RDONLY)) {
         for (pr = proc_list; pr && rc == 0; pr = pr->next) {
-            for (i = 0; pr->fds && i < fd_table_cap(pr->fds); i++) {
-                fd_entry_t *e = &pr->fds->entries[i];
+            uint32_t held;
+
+            if (!pr->fds) {
+                continue;
+            }
+            held = fd_table_lock(pr->fds);
+            for (i = 0; i < pr->fds->cap; i++) {
+                fd_entry_t *e = fd_slot(pr->fds, i);
 
                 if (e->type == FD_TYPE_FILE && (e->flags & FD_FLAG_WRITE) && e->ofd &&
                     (bind ? e->ofd->vmnt == m : vfs_mount_base(e->ofd->vmnt) == m)) {
@@ -4295,6 +4373,7 @@ static int32_t remount_at(const char *path, uint32_t flags, int bind, const char
                     break;
                 }
             }
+            fd_table_unlock(pr->fds, held);
         }
     }
     if (rc == 0) {
@@ -5092,7 +5171,7 @@ static int32_t openat2_anchor(int dirfd, const char *name, uint32_t resolve,
 static int openat2_magic(const struct vpath *vp, struct vfs_mount *mnt, uint32_t resolve)
 {
     process_t *owner;
-    fd_entry_t *src;
+    fd_entry_t src;
     int rc;
 
     if (!vp || (vp->kind != VNODE_PROC_FD_LINK && vp->kind != VNODE_PROC_NS_LINK)) {
@@ -5111,7 +5190,11 @@ static int openat2_magic(const struct vpath *vp, struct vfs_mount *mnt, uint32_t
         return -EXDEV;
     }
     rc = proc_fd_entry(vp, &owner, &src);
-    return rc == 0 ? proc_fd_xdev(src, mnt) : rc;
+    if (rc == 0) {
+        rc = proc_fd_xdev(&src, mnt);
+        proc_fd_drop(&src);
+    }
+    return rc;
 }
 
 /* What the checked walk keeps for the ordinary open's replay. */
@@ -5289,40 +5372,88 @@ long sys_openat2(isr_params_t *params)
     return rc;
 }
 
-/** Whether a call of a thread other than the caller that shares `table`
- * holds descriptor `fd`: has looked it up since the call began. */
-static int fd_held_elsewhere(const fd_table_t *table, int fd)
+/**
+ * A socket's calls and release are the network stack's, which runs under the
+ * big lock; a description that names a file, a device node or a synthetic
+ * node is released by a file system; and the description lock that guards
+ * an offset (`ops_offset_held`) is a flag the big lock guards.
+ */
+int file_ops_unlocked(const fd_entry_t *e)
 {
-    const process_t *t;
+    const struct open_file *ofd;
 
-    if (table->refs < 2) {
+    if (!e || !e->ops || !(e->ops->flags & FILE_OPS_UNLOCKED) || e->type == FD_TYPE_SOCKET ||
+        ops_offset_held((fd_entry_t *)(uintptr_t)e)) {
         return 0;
     }
-    for (t = proc_list; t; t = t->next) {
-        if (t != current_proc && t->fds == table && fd / 32 < t->fd_holding &&
-            (t->fd_held[fd / 32] & (1u << (fd % 32)))) {
-            return 1;
-        }
+    ofd = e->ofd;
+    return !ofd || (!ofd->vmnt && !ofd->dev_mnt && !ofd->synth_mnt);
+}
+
+int file_ops_lock(const fd_entry_t *e)
+{
+    if (file_ops_unlocked(e)) {
+        return 0;
     }
-    return 0;
+    bkl_enter();
+    return 1;
+}
+
+void file_ops_unlock(int taken)
+{
+    if (taken) {
+        bkl_exit();
+    }
 }
 
 /**
- * Release descriptor `fd` of `table`, with every backing it holds but the
- * record locks, which the close that ends it drops itself, and free its
- * slot. The entry is marked closing and releasing first, since the release
- * may sleep, in a file system's release of the description's last reference
- * among other places: while it does, a lookup, a dup onto the slot, a copy
- * of the table and another release all pass the entry by, and none of them
- * can take a reference to a description that is going.
+ * The lookup holds the descriptor for the length of the call in a shared
+ * table (`fd_get`), so another sharer's close leaves the slot as it is
+ * until the call ends, and the call's own lookups find the same object or,
+ * once the close has marked it, none.
+ */
+int fd_call_lock(int fd)
+{
+    return file_ops_lock(current_proc ? fd_get(current_proc->fds, fd) : NULL);
+}
+
+/**
+ * Release descriptor `fd` of `table`, which the caller has marked closing
+ * and releasing (`fd_close_claim`, `fd_holds_claim`), with every backing it
+ * holds but the record locks, which the close that ends it drops itself,
+ * and free its slot. The release may sleep, in a file system's release of
+ * the description's last reference among other places: while it does, a
+ * lookup, a dup onto the slot, a copy of the table and another release all
+ * pass the entry by, and none of them can take a reference to a
+ * description that is going.
+ *
+ * The release runs under the big lock, which the objects of every type not
+ * marked unlocked still need; an object marked unlocked is released without
+ * it, its last descriptor closing it as Linux's last `fput` releases a
+ * file (`fd_release_objects`).
  */
 static void fd_teardown(fd_table_t *table, int fd)
 {
-    fd_entry_t *e = &table->entries[fd];
+    fd_entry_t *e = fd_slot(table, fd);
+    int big = !file_ops_unlocked(e);
 
-    e->flags |= FD_FLAG_CLOSING | FD_FLAG_RELEASING;
+    if (big) {
+        bkl_enter();
+    }
     fd_release_objects(e);
-    fd_free(table, fd);
+    fd_free_after(table, fd);
+    if (big) {
+        bkl_exit();
+    }
+}
+
+/** Whether `t`, a sharer of the caller's table, sleeps in an epoll_wait that
+ * holds descriptor `fd` of the table and does not wait on the set `fd`
+ * itself. The caller holds the table's lock. */
+static int epoll_wait_holds(const process_t *t, int fd)
+{
+    return t != current_proc && t->epoll_waiting && t->poll_wqs && t->epoll_wait_fd != fd &&
+           fd / 32 < t->fd_holding && (t->fd_held[fd / 32] & (1u << (fd % 32)));
 }
 
 /**
@@ -5330,33 +5461,42 @@ static void fd_teardown(fd_table_t *table, int fd)
  * that holds it and sleeps, so that a close releases it at once, as a
  * close on Linux does while a thread waits in epoll_wait: the wait comes
  * off every queue it sleeps on, each of which the release may free, with
- * the queue forgotten (`poll_wait`), its hold on `fd` goes, and it is woken
- * to scan its set again, through its own descriptors. The set's own
- * descriptor stays held, since the wait reads the set until it ends. The
- * caller holds the big lock, without which the waits do not look at their
- * records.
+ * the queue forgotten (`poll_let_go`), its hold on `fd` goes, and it is
+ * woken to scan its set again, through its own descriptors. The set's own
+ * descriptor stays held, since the wait reads the set until it ends.
+ * Returns whether any wait let go.
+ *
+ * The caller has marked `fd` closing, so that no scan takes a new hold on
+ * it, or holds the big lock from here until it marks it, as dup2 does.
+ * The sharers are found under the big lock as well as the table's lock:
+ * epoll_wait runs under the big lock from its scan until its sleep gives
+ * the lock up, so a wait that holds `fd` is seen here asleep, with its
+ * queues published, and not between its scan and its sleep, where it
+ * would sleep on with the hold and the close would never end.
  */
-static void epoll_waits_let_go(const fd_table_t *table, int fd)
+static int epoll_waits_let_go(fd_table_t *table, int fd)
 {
     process_t *t;
-    uint32_t i;
+    uint32_t flags;
+    int any = 0;
 
     if (table->refs < 2) {
-        return;
+        return 0;
     }
-    for (t = proc_list; t; t = t->next) {
-        if (t == current_proc || t->fds != table || !t->epoll_waiting || !t->poll_wqs ||
-            t->epoll_wait_fd == fd || fd / 32 >= t->fd_holding ||
-            !(t->fd_held[fd / 32] & (1u << (fd % 32)))) {
+    bkl_enter();
+    flags = fd_table_lock(table);
+    for (t = table->sharers; t; t = t->fd_sharer_next) {
+        if (!epoll_wait_holds(t, fd)) {
             continue;
         }
-        for (i = 0; i < t->poll_n; i++) {
-            wq_poll_remove(t->poll_wqs[i], &t->poll_recs[i]);
-            t->poll_wqs[i] = NULL;
-        }
+        poll_let_go(t);
         t->fd_held[fd / 32] &= ~(1u << (fd % 32));
         wq_wake_proc(t);
+        any = 1;
     }
+    fd_table_unlock(table, flags);
+    bkl_exit();
+    return any;
 }
 
 /**
@@ -5368,67 +5508,49 @@ static void epoll_waits_let_go(const fd_table_t *table, int fd)
  * (`fd_holds_release`), which drops no locks: that may be the call of
  * another process sharing the table, or a call of the caller's own that
  * ends after it took a lock again. Linux keeps the file for such a call
- * through the reference `fdget` takes. An epoll_wait asleep does not keep
- * the descriptors it watches (`epoll_waits_let_go`), since Linux's epoll
- * takes no reference to them. 0, or -EBADF.
+ * through the reference `fdget` takes. The choice is made under the table's
+ * lock (`fd_close_claim`), so of two closes of one descriptor one answers
+ * EBADF. An epoll_wait asleep does not keep the descriptors it watches
+ * (`epoll_waits_let_go`), since Linux's epoll takes no reference to them:
+ * when the holds that kept the slot were such waits', the close releases
+ * it itself (`fd_close_finish`). The claim comes first, so that no wait
+ * takes a hold after the close has looked. Runs without the big lock but
+ * where a step needs it. 0, or -EBADF.
  */
 static int32_t close_fd(int fd)
 {
     fd_table_t *table = current_proc->fds;
     fd_entry_t *e = fd_get(table, fd);
+    int rc;
 
     if (!e) {
         return -EBADF;
     }
     fd_close_locks(e);
-    epoll_waits_let_go(table, fd);
-    if (fd_held_elsewhere(table, fd)) {
-        e->flags |= FD_FLAG_CLOSING;
-        return 0;
+    rc = fd_close_claim(table, fd);
+    if (rc == 0 && epoll_waits_let_go(table, fd)) {
+        rc = fd_close_finish(table, fd);
     }
-    fd_teardown(table, fd);
-    return 0;
+    if (rc == 1) {
+        fd_teardown(table, fd);
+    }
+    return rc < 0 ? rc : 0;
 }
 
 /**
- * An entry whose release another thread has begun (FD_FLAG_RELEASING) is left
- * to it: two threads whose calls end while one of them sleeps in a release
- * would otherwise both find the entry closing and held by nobody, and release
- * it twice. The words up to `fd_holding` are scanned, and it is cleared only
- * after them, since a release may sleep with the address of its entry and
- * the arrays a growth replaced must stay until it ends (`fd_table_reap`);
- * the map is read through the record at each word, since such a growth may
- * have widened it. Then the replaced arrays go when no other sharer holds.
+ * An entry whose release another thread has begun (FD_FLAG_RELEASING) is
+ * left to it: two threads whose calls end while one of them sleeps in a
+ * release would otherwise both find the entry closing and held by nobody,
+ * and release it twice. `fd_holds_claim` lets go of the holds in order,
+ * under the table's lock, and marks each slot it gives back for release.
  */
 void fd_holds_release(void)
 {
-    process_t *p = current_proc;
-    int w;
+    int fd = 0;
 
-    if (!p) {
-        return;
-    }
-    for (w = 0; w < p->fd_holding; w++) {
-        uint32_t bits = p->fd_held[w];
-        int fd;
-
-        p->fd_held[w] = 0;
-        for (fd = w * 32; bits != 0; fd++, bits >>= 1) {
-            fd_entry_t *e;
-
-            if (!(bits & 1u) || !p->fds || fd >= p->fds->cap) {
-                continue;
-            }
-            e = &p->fds->entries[fd];
-            if ((e->flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)) == FD_FLAG_CLOSING &&
-                !fd_held_elsewhere(p->fds, fd)) {
-                fd_teardown(p->fds, fd);
-            }
-        }
-    }
-    p->fd_holding = 0;
-    if (p->fds && p->fds->retired) {
-        fd_table_reap(p->fds);
+    while ((fd = fd_holds_claim(fd)) >= 0) {
+        fd_teardown(current_proc->fds, fd);
+        fd++;
     }
 }
 
@@ -6792,10 +6914,17 @@ static int32_t read_fd(int fd, char __user *buf, size_t requested)
  * range are checked before a count past USER_RW_MAX is cut there, as on
  * Linux. On i686 a count negative as ssize_t is EINVAL after the range
  * check; a compat call on x86-64 has the kernel's 64-bit ssize_t instead.
+ * The call holds the big lock unless the descriptor's type runs without it
+ * (`fd_call_lock`).
  */
 long sys_read(isr_params_t *params)
 {
-    return read_fd((int)SC_ARG(params, 0), (char __user *)SC_ARG(params, 1), SC_ARG(params, 2));
+    int fd = (int)SC_ARG(params, 0);
+    int big = fd_call_lock(fd);
+    long rc = read_fd(fd, (char __user *)SC_ARG(params, 1), SC_ARG(params, 2));
+
+    file_ops_unlock(big);
+    return rc;
 }
 
 /**
@@ -7169,16 +7298,13 @@ long sys_readv(isr_params_t *params)
  * The copy shares the open file description, and with it the offset and
  * the status flags, and the object behind it with its vtable; a socket
  * gains a reference. FD_CLOEXEC is clear on the copy and FD_FLAG_PATH is
- * kept, so the copy of an O_PATH descriptor is one too. The source is
- * looked up again after the allocation, since the table may have grown and
- * its entries moved, and the fresh description the allocation made is
- * dropped for the shared one.
+ * kept, so the copy of an O_PATH descriptor is one too. The fresh
+ * description the allocation made is dropped for the shared one.
  */
 long sys_dup(isr_params_t *params)
 {
     int oldfd = (int)SC_ARG(params, 0);
     fd_entry_t *entry;
-    fd_entry_t *dst;
     int newfd;
 
     if (!current_proc) {
@@ -7188,101 +7314,76 @@ long sys_dup(isr_params_t *params)
     if (!entry) {
         return -EBADF;
     }
-
     newfd = fd_alloc_from(current_proc->fds, 0);
     if (newfd < 0) {
         return newfd;
     }
-    entry = fd_get(current_proc->fds, oldfd);
-    dst = &current_proc->fds->entries[newfd];
-    fd_ofd_unref(dst->ofd);
-    dst->type = entry->type;
-    dst->node = entry->node;
-    dst->sock = entry->sock;
-    dst->ops = entry->ops;
-    dst->priv = entry->priv;
-    dst->dev = entry->dev;
-    dst->ofd = entry->ofd;
-    fd_ofd_ref(dst->ofd);
-    dst->flags = entry->flags & ~(uint32_t)FD_FLAG_CLOEXEC;
-    if (entry->type == FD_TYPE_SOCKET && entry->sock) {
-        socket_ref(entry->sock);
-    }
+    dup_fill(fd_slot(current_proc->fds, newfd), entry, 0);
+    fd_install(current_proc->fds, newfd);
     return newfd;
 }
 
 /**
- * Free slot `fd` for dup2 and dup3 to put a copy in, closing the descriptor
- * there if there is one, with every backing it held (`fd_teardown`), which
- * may sleep. Returns 0, or -EBUSY when the slot cannot be had: an open has
- * reserved it and not yet filled it, which is when Linux's dup2 answers
- * EBUSY; or a call of another thread sharing the table holds its
- * descriptor, or the descriptor a close left to such a call, or a close of
- * it is still releasing it, where Linux replaces the descriptor and the
- * call or the close keeps its file. An epoll_wait asleep lets the
- * descriptor go first (`epoll_waits_let_go`).
+ * Take slot `fd` for dup2 and dup3 to put a copy in, closing the
+ * descriptor there if there is one, with every backing it held
+ * (`fd_teardown`), which may sleep; the slot is reserved under the table's
+ * lock (`fd_dup_target`), so no other sharer's open takes it between. 0,
+ * or -EBUSY when the slot cannot be had: an open has reserved it and not
+ * yet filled it, which is when Linux's dup2 answers EBUSY; or a call of
+ * another thread sharing the table holds its descriptor, or the descriptor
+ * a close left to such a call, or a close of it is still releasing it,
+ * where Linux replaces the descriptor and the call or the close keeps its
+ * file. An epoll_wait asleep lets the descriptor go first
+ * (`epoll_waits_let_go`).
  */
 static int32_t dup_clear(int fd)
 {
     fd_table_t *table = current_proc->fds;
-    fd_entry_t *e = &table->entries[fd];
+    int rc;
 
-    if (e->type == FD_TYPE_NONE && !e->ofd) {
-        return 0;
+    epoll_waits_let_go(table, fd);
+    while ((rc = fd_dup_target(table, fd)) == 1) {
+        fd_close_locks(fd_slot(table, fd));
+        fd_teardown(table, fd);
     }
-    if (e->type != FD_TYPE_NONE && !(e->flags & FD_FLAG_CLOSING)) {
-        epoll_waits_let_go(table, fd);
-    }
-    if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING) || fd_held_elsewhere(table, fd)) {
-        return -EBUSY;
-    }
-    fd_close_locks(e);
-    fd_teardown(table, fd);
-    e = &table->entries[fd]; /* the release may sleep while another sharer grows the table */
-    return e->type == FD_TYPE_NONE && !e->ofd ? 0 : -EBUSY;
+    return rc == 0 ? 0 : -EBUSY;
 }
 
 /**
- * dup2(2): make the descriptor `newfd`, argument 1, a copy of `oldfd`,
- * argument 0, closing what `newfd` had open; `newfd`, or a negative errno.
- * A bad `oldfd`, and a `newfd` that is negative or past the process's
- * limit, is -EBADF, and when the two are equal the call checks `oldfd` and
- * changes nothing. A `newfd` past the end of the table grows it, and a heap
- * with no room for that is -ENOMEM; a slot `dup_clear` cannot free is
- * -EBUSY. `oldfd` is looked up again after the table grows, since its
- * entries may have moved.
+ * dup2(2) and dup3(2): make the descriptor `newfd` a copy of `oldfd`,
+ * closing what `newfd` had open, FD_CLOEXEC set as `cloexec` says;
+ * `newfd`, or a negative errno. A bad `oldfd`, and a `newfd` that is
+ * negative or past the process's limit, is -EBADF, and when the two are
+ * equal the call checks `oldfd` and changes nothing. A `newfd` past the
+ * end of the table grows it, and a heap with no room for that is -ENOMEM;
+ * a slot `dup_clear` cannot take is -EBUSY.
  *
  * The copy shares the open file description, and with it the offset, as
  * POSIX has it, and the object behind it with its vtable; a socket gains a
- * reference, and the copy's FD_CLOEXEC is clear.
+ * reference.
  *
  * The replacement of an open `newfd` may sleep (`dup_clear`), and another
  * thread may close `oldfd` meanwhile. The call holds `oldfd`, so the close
  * leaves it to the call, and the copy is made of what the call looked up, as
  * Linux's dup2 installs the file it looked up; the copy is an open
- * descriptor of its own, with none of the source's closing state.
+ * descriptor of its own, with none of the source's closing state, and is
+ * published whole, with its FD_CLOEXEC.
  */
-long sys_dup2(isr_params_t *params)
+static long dup_to(int oldfd, int newfd, int cloexec)
 {
-    int oldfd = (int)SC_ARG(params, 0);
-    int newfd = (int)SC_ARG(params, 1);
     fd_entry_t *old_entry;
-    fd_entry_t *new_entry;
     int32_t rc;
 
     if (!current_proc) {
         return -ESRCH;
     }
-
     old_entry = fd_get(current_proc->fds, oldfd);
     if (!old_entry) {
         return -EBADF;
     }
-
     if (newfd < 0 || newfd >= fd_limit(current_proc->fds)) {
         return -EBADF;
     }
-
     if (oldfd == newfd) {
         return newfd;
     }
@@ -7290,29 +7391,18 @@ long sys_dup2(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    old_entry = fd_get(current_proc->fds, oldfd);
-
     if (dup_clear(newfd) != 0) {
         return -EBUSY;
     }
-
-    new_entry = &current_proc->fds->entries[newfd];
-    new_entry->type = old_entry->type;
-    new_entry->node = old_entry->node;
-    new_entry->sock = old_entry->sock;
-    new_entry->ops = old_entry->ops;
-    new_entry->priv = old_entry->priv;
-    new_entry->dev = old_entry->dev;
-    new_entry->ofd = old_entry->ofd;
-    fd_ofd_ref(new_entry->ofd);
-    new_entry->flags =
-        old_entry->flags & ~(uint32_t)(FD_FLAG_CLOEXEC | FD_FLAG_CLOSING | FD_FLAG_RELEASING);
-
-    if (new_entry->type == FD_TYPE_SOCKET && new_entry->sock) {
-        socket_ref(new_entry->sock);
-    }
-
+    dup_fill(fd_slot(current_proc->fds, newfd), old_entry, cloexec);
+    fd_install(current_proc->fds, newfd);
     return newfd;
+}
+
+/** dup2(2): argument 0 copied to argument 1 (`dup_to`). */
+long sys_dup2(isr_params_t *params)
+{
+    return dup_to((int)SC_ARG(params, 0), (int)SC_ARG(params, 1), 0);
 }
 
 /** Whether a synthetic node of `kind` is one of the directories, a /sys
@@ -8303,11 +8393,12 @@ static int32_t fstat_getattr(fd_entry_t *e, struct kstat *kst);
 /**
  * What a followed /proc/PID/fd/N link reports: the stat of descriptor `fd`
  * of process `pid`; 0 on success, -ENOENT when it is absent or closing, or
- * the error of the mounted type's getattr. The entry is copied, and a
- * description of a file or a directory on a mount is
+ * the error of the mounted type's getattr. The entry is copied under the
+ * table's lock, and a description of a file or a directory on a mount is
  * held for the length of the stat, whose getattr may sleep while the
  * process closes the descriptor and its release puts the node. The other
- * kinds are read without a sleep.
+ * kinds are read without a sleep, under the big lock, which their release
+ * takes.
  */
 static int32_t synth_fd_stat(int pid, int fd, struct kstat *kst)
 {
@@ -8316,15 +8407,10 @@ static int32_t synth_fd_stat(int pid, int fd, struct kstat *kst)
     int held;
     int32_t rc;
 
-    if (!p || fd < 0 || fd >= fd_table_cap(p->fds) || p->fds->entries[fd].type == FD_TYPE_NONE ||
-        (p->fds->entries[fd].flags & FD_FLAG_CLOSING)) {
+    if (!p || fd_peek(p->fds, fd, &e, FD_PEEK_MOUNTED) != 0) {
         return -ENOENT;
     }
-    e = p->fds->entries[fd];
     held = (e.type == FD_TYPE_FILE || e.type == FD_TYPE_DIR) && e.ofd && e.ofd->vmnt;
-    if (held) {
-        fd_ofd_ref(e.ofd);
-    }
     rc = fstat_getattr(&e, kst);
     if (held) {
         fd_ofd_unref(e.ofd);
@@ -8980,12 +9066,7 @@ static int32_t synth_open_path(const struct vpath *vp, const char *name, int fla
         return -ENOENT;
     }
     if ((kst.st_mode & S_IFMT) == S_IFDIR) {
-        fd = synth_open_dir(vp, (flags & O_CLOEXEC) | O_PATH);
-        if (fd >= 0) {
-            e = &current_proc->fds->entries[fd];
-            e->flags = (e->flags & FD_FLAG_CLOEXEC) | FD_FLAG_PATH;
-        }
-        return fd;
+        return synth_open_dir(vp, (flags & O_CLOEXEC) | O_PATH);
     }
     if (flags & O_DIRECTORY) {
         return -ENOTDIR;
@@ -9001,7 +9082,7 @@ static int32_t synth_open_path(const struct vpath *vp, const char *name, int fla
     }
     copy->vp = *vp;
     procfs_owner_keep(&copy->own, vp);
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_SYNTH_PATH;
     e->node = NULL;
     e->sock = NULL;
@@ -9010,6 +9091,7 @@ static int32_t synth_open_path(const struct vpath *vp, const char *name, int fla
     e->dev = NULL;
     ofd_record_path(e->ofd, name);
     e->flags = FD_FLAG_PATH | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0);
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -9054,7 +9136,7 @@ static int32_t path_install(struct vfs_ref *ref, const char *name, int flags)
         vfs_ref_release(ref);
         return fd;
     }
-    entry = &current_proc->fds->entries[fd];
+    entry = fd_slot(current_proc->fds, fd);
     if (!mnt_is_root(ref->mnt) && ref->mnt->type->ops->pin) {
         int rc = ref->mnt->type->ops->pin(ref->mnt, ref->node, &entry->ofd->pin);
 
@@ -9075,6 +9157,7 @@ static int32_t path_install(struct vfs_ref *ref, const char *name, int flags)
     vfs_desc_open(ref->mnt);
     vfs_leave(ref->mnt);
     entry->flags = FD_FLAG_PATH | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0);
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -9084,20 +9167,35 @@ static int32_t path_install(struct vfs_ref *ref, const char *name, int flags)
  * keep the source description, which O_PATH cannot read or advance.
  * The caller has the kernel lock. Return a descriptor or a negative errno.
  */
+static int32_t proc_fd_open_path_from(const struct vpath *vp, process_t *p, fd_entry_t *src,
+                                      int flags);
+
 static int32_t proc_fd_open_path(const struct vpath *vp, int flags)
 {
-    struct vfs_ref ref;
-    struct vfs_mount *mnt;
-    struct open_file *held;
     process_t *p;
-    fd_entry_t *src;
+    fd_entry_t src;
     int32_t rc;
-    int fd;
 
     rc = proc_fd_entry(vp, &p, &src);
     if (rc != 0) {
         return rc;
     }
+    rc = proc_fd_open_path_from(vp, p, &src, flags);
+    proc_fd_drop(&src);
+    return rc;
+}
+
+/** `proc_fd_open_path` of the copy `src` of descriptor `vp->procfd` of
+ * `p`. */
+static int32_t proc_fd_open_path_from(const struct vpath *vp, process_t *p, fd_entry_t *src,
+                                      int flags)
+{
+    struct vfs_ref ref;
+    struct vfs_mount *mnt;
+    struct open_file *held;
+    int32_t rc;
+    int fd;
+
     rc = proc_fd_xdev(src, current_proc->walk_replay_mnt);
     if (rc != 0) {
         return rc;
@@ -9110,7 +9208,7 @@ static int32_t proc_fd_open_path(const struct vpath *vp, int flags)
         mnt = ref.mnt;
         fd = path_install(&ref, held->dirpath ? path_name(held->dirpath) : "", flags);
         if (fd >= 0) {
-            current_proc->fds->entries[fd].ofd->name = vfs_name_ref(held->name);
+            fd_slot(current_proc->fds, fd)->ofd->name = vfs_name_ref(held->name);
         }
         vfs_walk_unlock(mnt);
         fd_ofd_unref(held);
@@ -9122,11 +9220,7 @@ static int32_t proc_fd_open_path(const struct vpath *vp, int flags)
     if ((flags & O_DIRECTORY) && src->type != FD_TYPE_SYNTH_DIR) {
         return -ENOTDIR;
     }
-    fd = proc_fd_share(p->fds, vp->procfd, flags);
-    if (fd >= 0) {
-        current_proc->fds->entries[fd].flags =
-            FD_FLAG_PATH | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0);
-    }
+    fd = proc_fd_share(p->fds, vp->procfd, flags | PROC_FD_SHARE_PATH);
     return fd;
 }
 
@@ -9178,7 +9272,7 @@ static int32_t open_path(const char *name, int flags)
     }
     rc = path_install(&ref, name, flags);
     if (rc >= 0) {
-        current_proc->fds->entries[rc].ofd->name = entry;
+        fd_slot(current_proc->fds, rc)->ofd->name = entry;
         entry = NULL;
     }
     vfs_name_put(entry);
@@ -10278,7 +10372,9 @@ long sys_sync_file_range(isr_params_t *params)
  * descriptor's included, to the user's buffer in argument 1, with the
  * owner and group the caller's user namespace sees; 0, -EBADF for a
  * descriptor that is not open, -EFAULT for a NULL or bad buffer, or the
- * error of a mounted type's getattr.
+ * error of a mounted type's getattr. The call holds the big lock unless the
+ * descriptor's type runs without it (`fd_call_lock`); i386's fstat calls
+ * come here too (arch/x86_64/ia32_fs.c).
  */
 long sys_fstat64(isr_params_t *params)
 {
@@ -10287,6 +10383,7 @@ long sys_fstat64(isr_params_t *params)
     struct user_stat __user *st = (struct user_stat __user *)SC_ARG(params, 1);
     struct kstat kst;
     fd_entry_t *entry;
+    int big;
 
     if (!current_proc || !st) {
         return -EFAULT;
@@ -10295,7 +10392,9 @@ long sys_fstat64(isr_params_t *params)
     if (!entry) {
         return -EBADF;
     }
+    big = file_ops_lock(entry);
     rc = fstat_getattr(entry, &kst);
+    file_ops_unlock(big);
     if (rc != 0) {
         return rc;
     }
@@ -11444,10 +11543,14 @@ static int32_t chmod_synth(const struct vpath *vp, uint32_t mode)
     }
     if (vp->kind == VNODE_PROC_FD_LINK) {
         process_t *p;
-        fd_entry_t *src;
+        fd_entry_t src;
         int32_t rc = proc_fd_entry(vp, &p, &src);
 
-        return rc != 0 ? rc : chmod_fd(src, mode);
+        if (rc == 0) {
+            rc = chmod_fd(&src, mode);
+            proc_fd_drop(&src);
+        }
+        return rc;
     }
     return proc_fsuid(current_proc) == 0 ? 0 : -EPERM; /* fixed metadata root owns */
 }
@@ -11589,10 +11692,14 @@ static int32_t chown_synth(const struct vpath *vp, uint32_t uid, uint32_t gid)
 {
     if (vp->kind == VNODE_PROC_FD_LINK) {
         process_t *p;
-        fd_entry_t *src;
+        fd_entry_t src;
         int32_t rc = proc_fd_entry(vp, &p, &src);
 
-        return rc != 0 ? rc : chown_fd(src, uid, gid);
+        if (rc == 0) {
+            rc = chown_fd(&src, uid, gid);
+            proc_fd_drop(&src);
+        }
+        return rc;
     }
     if (vp->kind == VNODE_DEV_MADE) {
         return chown_made(vp->syskey, uid, gid);
@@ -13111,7 +13218,7 @@ static void pio_view(fd_entry_t *entry, uint64_t at, fd_entry_t *view, struct op
  * reads it, and a device, a /proc snapshot or a debugfs file, whose
  * operations read, through `pio_view`.
  */
-long ksys_pread64(int fd, char __user *buf, size_t requested, long long pos)
+static long pread_at(int fd, char __user *buf, size_t requested, long long pos)
 {
     uint64_t at = (uint64_t)pos;
     fd_entry_t *entry = NULL;
@@ -13135,7 +13242,7 @@ long ksys_pread64(int fd, char __user *buf, size_t requested, long long pos)
 
 /** Write at the offset through file_write or a device's private view,
  * after checking the original request as pread64 does. */
-long ksys_pwrite64(int fd, const char __user *buf, size_t requested, long long pos)
+static long pwrite_at(int fd, const char __user *buf, size_t requested, long long pos)
 {
     uint64_t at = (uint64_t)pos;
     fd_entry_t *entry = NULL;
@@ -13155,6 +13262,27 @@ long ksys_pwrite64(int fd, const char __user *buf, size_t requested, long long p
     }
     pio_view(entry, at, &view, &desc);
     return entry->ops->write(&view, buf, count);
+}
+
+/** The call holds the big lock unless the descriptor's type runs without it
+ * (`fd_call_lock`). */
+long ksys_pread64(int fd, char __user *buf, size_t requested, long long pos)
+{
+    int big = fd_call_lock(fd);
+    long rc = pread_at(fd, buf, requested, pos);
+
+    file_ops_unlock(big);
+    return rc;
+}
+
+/** `ksys_pread64`'s lock around `pwrite_at`. */
+long ksys_pwrite64(int fd, const char __user *buf, size_t requested, long long pos)
+{
+    int big = fd_call_lock(fd);
+    long rc = pwrite_at(fd, buf, requested, pos);
+
+    file_ops_unlock(big);
+    return rc;
 }
 
 /**
@@ -14049,7 +14177,6 @@ static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uintptr_t arg)
     req.pid = 0;
     fd_lock_key(entry, &key);
     rc = lock_record(&key, by_ofd ? entry->ofd : NULL, op, &req);
-    entry = fd_entry_now(current_proc->fds, entry); /* the wait may let the table grow */
     if (rc == 0 && op != LOCK_GET && req.type != F_UNLCK && !by_ofd &&
         (entry->flags & FD_FLAG_CLOSING)) {
         fd_lock_key(entry, &key);
@@ -14983,14 +15110,14 @@ static long memfd_open(struct vfs_mount *mnt, void *node, int cloexec)
     fd_entry_t *e;
     int fd = fd_alloc(current_proc->fds);
 
-    if (fd < 0 || vfs_open_node(mnt, node, 2, &current_proc->fds->entries[fd].ofd->fhandle) != 0) {
+    if (fd < 0 || vfs_open_node(mnt, node, 2, &fd_slot(current_proc->fds, fd)->ofd->fhandle) != 0) {
         if (fd >= 0) {
             fd_free(current_proc->fds, fd);
         }
         mnt->type->ops->put(mnt, node);
         return fd < 0 ? fd : -ENOMEM;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_FILE;
     e->node = NULL;
     e->flags = FD_FLAG_READ | FD_FLAG_WRITE | (cloexec ? FD_FLAG_CLOEXEC : 0u);
@@ -14998,6 +15125,7 @@ static long memfd_open(struct vfs_mount *mnt, void *node, int cloexec)
     e->ofd->vnode = node;
     e->ofd->ino = vfs_getattr(mnt, node, &st) == 0 ? st.ino : 0;
     vfs_desc_open(mnt);
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -15291,11 +15419,7 @@ long sys_fcntl64(isr_params_t *params)
     case F_GETFD:
         return (entry->flags & FD_FLAG_CLOEXEC) ? 1 : 0; /* 1 == FD_CLOEXEC */
     case F_SETFD:
-        if (arg & 1) {
-            entry->flags |= FD_FLAG_CLOEXEC;
-        } else {
-            entry->flags &= ~(uint32_t)FD_FLAG_CLOEXEC;
-        }
+        fd_set_flags(current_proc->fds, entry, FD_FLAG_CLOEXEC, (arg & 1) ? FD_FLAG_CLOEXEC : 0u);
         return 0;
     case F_GETFL: {
         int rw = entry->flags & (FD_FLAG_READ | FD_FLAG_WRITE);
@@ -15320,7 +15444,7 @@ long sys_fcntl64(isr_params_t *params)
     case F_DUPFD:
     case F_DUPFD_CLOEXEC: {
         int newfd;
-        fd_entry_t *dst;
+
         if (arg >= (uintptr_t)fd_limit(current_proc->fds)) {
             return -EINVAL;
         }
@@ -15328,26 +15452,8 @@ long sys_fcntl64(isr_params_t *params)
         if (newfd < 0) {
             return newfd;
         }
-        entry = fd_get(current_proc->fds, fd);
-        dst = &current_proc->fds->entries[newfd];
-        fd_ofd_unref(dst->ofd);
-        dst->type = entry->type;
-        dst->node = entry->node;
-        dst->sock = entry->sock;
-        dst->ops = entry->ops;
-        dst->priv = entry->priv;
-        dst->dev = entry->dev;
-        dst->ofd = entry->ofd;
-        fd_ofd_ref(dst->ofd);
-        dst->flags = entry->flags;
-        if (entry->type == FD_TYPE_SOCKET && entry->sock) {
-            socket_ref(entry->sock);
-        }
-        if (cmd == F_DUPFD_CLOEXEC) {
-            dst->flags |= FD_FLAG_CLOEXEC;
-        } else {
-            dst->flags &= ~(uint32_t)FD_FLAG_CLOEXEC;
-        }
+        dup_fill(fd_slot(current_proc->fds, newfd), entry, cmd == F_DUPFD_CLOEXEC);
+        fd_install(current_proc->fds, newfd);
         return newfd;
     }
     case F_GETLK:
@@ -15849,8 +15955,8 @@ out:
         kfree(notes);
         return fd;
     }
-    entry = &current_proc->fds->entries[fd];
-    entry->flags |= FD_FLAG_CLOSING | FD_FLAG_RELEASING;
+    entry = fd_slot(current_proc->fds, fd);
+    fd_set_flags(current_proc->fds, entry, 0, FD_FLAG_CLOSING | FD_FLAG_RELEASING);
     if (!entry->ofd || !entry->ofd->vmnt) {
         rc = -EINVAL;
     } else {
@@ -15865,8 +15971,8 @@ out:
         }
     }
     kfree(notes);
-    fd_release_backing(fd_entry_now(current_proc->fds, entry)); /* the writes sleep */
-    fd_free(current_proc->fds, fd);
+    fd_release_backing(entry);
+    fd_free_after(current_proc->fds, fd);
     return rc;
 }
 
@@ -17164,17 +17270,15 @@ static int synth_proc_dirent(const struct synth_dir *sd, int *at, char *name, ui
         }
         return 0;
     }
-    for (i = n; i < fd_table_cap(pp->fds); i++) {
-        if (pp->fds->entries[i].type != FD_TYPE_NONE &&
-            !(pp->fds->entries[i].flags & FD_FLAG_CLOSING)) {
-            *at = i;
-            synth_u32_str(name, (uint32_t)i);
-            *ino = procfs_ino_pid(id);
-            *dtype = sd->kind == VNODE_PROC_FDINFO_DIR ? DT_REG : DT_LNK;
-            return 1;
-        }
+    i = fd_next_open(pp->fds, n);
+    if (i < 0) {
+        return 0;
     }
-    return 0;
+    *at = i;
+    synth_u32_str(name, (uint32_t)i);
+    *ino = procfs_ino_pid(id);
+    *dtype = sd->kind == VNODE_PROC_FDINFO_DIR ? DT_REG : DT_LNK;
+    return 1;
 }
 
 /**
@@ -18248,13 +18352,7 @@ long sys_dup3(isr_params_t *params)
     if (flags & ~(uint32_t)O_CLOEXEC) {
         return -EINVAL;
     }
-    r = (int32_t)sys_dup2(params); /* the same first two arguments */
-    if (r >= 0 && (flags & O_CLOEXEC)) {
-        fd_entry_t *e = fd_get(current_proc->fds, newfd);
-        if (e) {
-            e->flags |= FD_FLAG_CLOEXEC;
-        }
-    }
+    r = (int32_t)dup_to(oldfd, newfd, (flags & O_CLOEXEC) != 0);
     return r;
 }
 
@@ -18346,7 +18444,7 @@ int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uin
             rc = vfs_getattr(ref->mnt, ref->node, &st);
             if (rc == 0) {
                 *ino = (uint32_t)st.ino;
-                ref->mnt->refs++;
+                vfs_mount_get(ref->mnt);
                 vfs_leave(ref->mnt);
             } else {
                 vfs_ref_release(ref);
@@ -18365,8 +18463,7 @@ void fs_socket_unbind(struct vfs_ref *ref)
     struct vfs_mount *mnt = ref->mnt;
 
     vfs_ref_put(ref);
-    mnt->refs--;
-    if (mnt->refs == 0) {
+    if (vfs_mount_put(mnt) == 0) {
         vfs_reap_detached();
     }
 }

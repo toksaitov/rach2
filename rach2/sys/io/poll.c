@@ -23,6 +23,7 @@
 #include "../proc/process.h"
 #include "../proc/wait_queue.h"
 #include "../proc/sched.h"
+#include "../proc/smp.h"
 #include "../tty/tty.h"
 #include "../rtc.h"
 #include "../timer.h"
@@ -70,10 +71,8 @@ static void irq_restore(uint32_t flags)
  * opened before a vhangup(2) answers TTY_HUNG_POLL whatever was asked, as
  * Linux's hung_up_tty_poll does.
  */
-short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
+static short poll_locked(fd_entry_t *e, short events, struct wait_queue **wq)
 {
-    *wq = NULL;
-
     if (e->ops && e->ops->poll) {
         return e->ops->poll(e, events, wq);
     }
@@ -95,6 +94,19 @@ short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
         return tty_poll(&console_tty, want, wq);
     }
     return (short)(events & (POLLIN | POLLOUT));
+}
+
+/** The question runs under the big lock unless the descriptor's type runs
+ * without it (`file_ops_lock`); the caller holds no spinlock. */
+short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
+{
+    int big = file_ops_lock(e);
+    short revents;
+
+    *wq = NULL;
+    revents = poll_locked(e, events, wq);
+    file_ops_unlock(big);
+    return revents;
 }
 
 /* A poll's or a select's descriptors, for the scan of `poll_wait`: the
@@ -122,9 +134,11 @@ static short poll_one(fd_entry_t *e, short events, struct wait_queue **wqs, uint
 
     if (epoll_is_set(e)) {
         uint32_t n = 0;
+        int big = file_ops_lock(e);
 
         revents = epoll_poll_set(e, events, *used < room ? wqs + *used : NULL,
                                  *used < room ? room - *used : 0, &n);
+        file_ops_unlock(big);
         *used += n;
         return revents;
     }
@@ -283,6 +297,23 @@ void poll_let_go(process_t *t)
     spin_unlock_irqrestore(&poll_lock, flags);
 }
 
+/** `signal_pending` under the big lock, which the signal state needs and a
+ * poll or ppoll, which run without it, takes for the question; interrupts
+ * are off. */
+static int poll_signal_pending(void)
+{
+    int big = !bkl_held(), pending;
+
+    if (big) {
+        bkl_enter();
+    }
+    pending = signal_pending();
+    if (big) {
+        bkl_exit();
+    }
+    return pending;
+}
+
 /** Whether the wait whose deadline is `d` is over at this tick. */
 static int poll_expired(struct poll_deadline *d)
 {
@@ -342,7 +373,7 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d,
             rc = ready;
             break;
         }
-        if (signal_pending()) {
+        if (poll_signal_pending()) {
             rc = -EINTR;
             break;
         }
@@ -364,7 +395,7 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d,
         for (i = 0; i < n; i++) {
             changed |= again[i] != wqs[i];
         }
-        if (ready > 0 || signal_pending() || poll_expired(d) || changed ||
+        if (ready > 0 || poll_signal_pending() || poll_expired(d) || changed ||
             current_proc->state != PROC_BLOCKED) {
             poll_unfile(wqs, recs, n);
             current_proc->state = PROC_RUNNING;
@@ -701,11 +732,14 @@ long sys_poll(struct isr_params *params)
  * puts it back after the handler a signal runs for this wait, or at once
  * when none runs, and a wait that did not end for a signal puts it back
  * through `poll_mask_done`. Both masks are set through `signal_set_blocked`,
- * which leaves a signal of the process that a mask blocks to another thread.
+ * which leaves a signal of the process that a mask blocks to another thread,
+ * under the big lock, which the signal state needs and ppoll, which runs
+ * without it, takes for the change.
  */
 int32_t poll_mask_set(uintptr_t umask, uint32_t size)
 {
     uint64_t mask;
+    int big;
 
     if (!umask) {
         return 0;
@@ -716,17 +750,32 @@ int32_t poll_mask_set(uintptr_t umask, uint32_t size)
     if (copy_from_user(&mask, (const void __user *)umask, sizeof(mask)) != 0) {
         return -EFAULT;
     }
+    big = !bkl_held();
+    if (big) {
+        bkl_enter();
+    }
     current_proc->saved_sigmask = current_proc->sig_blocked;
     current_proc->sigmask_saved = 1;
     signal_set_blocked(mask);
+    if (big) {
+        bkl_exit();
+    }
     return 0;
 }
 
 int32_t poll_mask_done(int32_t ret)
 {
     if (current_proc->sigmask_saved && ret != -EINTR) {
+        int big = !bkl_held();
+
+        if (big) {
+            bkl_enter();
+        }
         current_proc->sigmask_saved = 0;
         signal_set_blocked(current_proc->saved_sigmask);
+        if (big) {
+            bkl_exit();
+        }
     }
     return ret;
 }

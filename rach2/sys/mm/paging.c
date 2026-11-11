@@ -426,7 +426,7 @@ void init_paging(struct frame_map *map)
     frame_index_build();
 
     register_isr_handler(PAGE_FAULT_VECTOR, &_page_fault_handler, "page fault");
-
+    exception_unlock(PAGE_FAULT_VECTOR);
     mmu_start();
 
     mmu_heap_ready();
@@ -503,56 +503,143 @@ static void fault_count(int major)
 }
 
 /**
+ * Install `phys` at the user page `page` of `mm` with the entry bits
+ * `flags`, the second phase of a fault, whose frame was had, filled and
+ * zeroed outside every lock: under the page-table lock the entry is read
+ * again and set only while it is still empty, so that of two faults on one
+ * page the first to get there maps it and the other finds it taken, as
+ * Linux's do_anonymous_page checks pte_none under the lock
+ * (mm/memory.c:4805-4810). 0 once installed; 1 when the entry is not empty,
+ * after which the caller gives its frame back and resolves again; -1 with
+ * no memory for a table. x86 caches no translation of an entry that is not
+ * present, so nothing is flushed.
+ */
+static int install_new(struct mm *mm, uintptr_t page, uintptr_t phys, pte_t flags)
+{
+    uint32_t lock = mm_ptl_lock(mm);
+    pte_t *table = mmu_user_table(mm->dir, page, 1);
+    int rc = -1;
+
+    if (table) {
+        rc = table[MMU_INDEX(page)] != 0;
+        if (rc == 0) {
+            table[MMU_INDEX(page)] = PTE_ADDR((pte_t)phys) | (flags & (pte_t)PTE_FLAGS);
+            mm_resident_add(mm->dir, 1);
+        }
+    }
+    mm_ptl_unlock(mm, lock);
+    return rc;
+}
+
+/**
+ * Let go of `mm`'s regions' lock and take the big lock, before a file's or
+ * a device object's operation, which may sleep and runs code of a file
+ * system or a driver that the big lock still guards: a fill may wait for a
+ * file's lock, which comes before the regions' lock, so the lock goes
+ * across the operation, as Linux's fault lets it go across a read
+ * (`lock_folio_maybe_drop_mmap`, mm/filemap.c:3094-3119). `*bkl` says
+ * whether the big lock was taken here. 1 when the lock was let go; 0 when
+ * the caller holds it more than once or to write (`mmap_may_drop`), and the
+ * operation is not made, since it could then wait for a file whose holder
+ * waits for the regions' lock.
+ */
+static int callback_begin(struct mm *mm, int *bkl)
+{
+    if (!mmap_may_drop(mm)) {
+        return 0;
+    }
+    mmap_unlock(mm);
+    *bkl = !bkl_held();
+    if (*bkl) {
+        bkl_enter();
+    }
+    return 1;
+}
+
+/** End what `callback_begin` began: the big lock back if it took it, and
+ * the regions' lock taken again, to read. */
+static void callback_end(struct mm *mm, int bkl)
+{
+    if (bkl) {
+        bkl_exit();
+    }
+    mmap_read_lock(mm);
+}
+
+/**
+ * Whether the region of `mm` at `page` is the one a fault found before its
+ * file's operation let the regions' lock go: one that maps the file `f`
+ * with the protection `prot`, its page `pgoff` at `page`, and no unmap of
+ * a device object's or a truncated file's pages since (`zaps` as `seq`
+ * read it), which may have taken back the page the operation gave.
+ */
+static int region_same(struct mm *mm, uintptr_t page, const struct vm_file *f, uint32_t prot,
+                       uint32_t pgoff, uint32_t seq)
+{
+    const vma_t *vma = vm_find(&mm->vm, page);
+
+    return vma && vma->file == f && vma->prot == prot &&
+           vma->pgoff + (page - vma->start) / PAGE_SIZE == pgoff && mm->zaps == seq;
+}
+
+/**
  * Back a page of a region that maps a file: a frame filled from the file and
  * mapped once it is full. A read maps it copy-on-write; a store marks it
  * anonymous and maps it writable. The mapping is private: a store changes
  * the frame, never the file. The fault counts as
  * major when the fill read the page through the file system.
  *
- * The fill may sleep in the disk. The file is held from before the fill, so
- * a thread that unmaps the region meanwhile cannot free it under the read,
- * and the region is looked up again after it: a page another path backed
- * meanwhile, or a region that changed in any way, its protection included,
- * leaves the frame unused, and the resolution runs again against what is
- * there now, so a page is never mapped with rights its region no longer
- * gives. 1 with the page mapped, 0 when no frame could be had or the read
- * failed, -1 to resolve again.
+ * The fill may sleep in the disk and runs with the regions' lock let go and
+ * the big lock held (`callback_begin`). The file is held from before the
+ * fill, so a thread that unmaps the region meanwhile cannot free it under
+ * the read, and the region is looked up again after it: a region that
+ * changed in any way, its protection included, leaves the frame unused, and
+ * the resolution runs again against what is there now, so a page is never
+ * mapped with rights its region no longer gives; so does a page another
+ * fault mapped meanwhile (`install_new`). 1 with the page mapped, 0 when no
+ * frame could be had, the read failed or the lock could not be let go, -1
+ * to resolve again.
  */
 static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write)
 {
-    page_dir_t *dir = mm->dir;
-    vm_space_t *vm = &mm->vm;
     struct vm_file *f = vma->file;
     uintptr_t page = addr & ~(PAGE_SIZE - 1);
     uint32_t pgoff = vma->pgoff + (uint32_t)((page - vma->start) / PAGE_SIZE);
     uint32_t prot = vma->prot;
+    uint32_t seq = mm->zaps;
     uintptr_t phys = alloc_user_frame();
-    int filled;
-    int rc;
+    int filled, bkl, rc;
 
     if (phys == 0) {
         return 0;
     }
     vm_file_get(f);
+    if (!callback_begin(mm, &bkl)) {
+        vm_file_put(f);
+        free_frame(phys);
+        return 0;
+    }
     filled = f->fill(f, pgoff, phys);
+    callback_end(mm, bkl);
     rc = filled >= 0 ? 1 : 0;
-    vma = vm_find(vm, page);
-    if (!vma || vma->file != f || vma->prot != prot ||
-        vma->pgoff + (page - vma->start) / PAGE_SIZE != pgoff || pte_present(dir, page)) {
+    if (!region_same(mm, page, f, prot, pgoff, seq)) {
         rc = -1;
     }
     vm_file_put(f);
     if (rc == 1 && write) {
         frame_make_anon(phys);
     }
-    if (rc == 1 &&
-        map_user_frame(dir, page, phys,
-                       PTE_P | PTE_U | (write ? PTE_W : PTE_COW) | paging_prot_bits(prot)) == 0) {
-        fault_count(filled > 0);
-        return 1;
+    if (rc == 1) {
+        rc = install_new(mm, page, phys,
+                         PTE_P | PTE_U | (write ? PTE_W : PTE_COW) | paging_prot_bits(prot));
+        if (rc == 0) {
+            fault_count(filled > 0);
+            return 1;
+        }
+        rc = rc > 0 ? -1 : 0;
     }
     free_frame(phys);
-    return rc < 0 ? -1 : 0;
+    return rc;
 }
 
 /**
@@ -561,29 +648,31 @@ static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write
  * immediately when resolving a store. ENXIO raises SIGBUS past EOF.
  *
  * The share of a disk file's pages reads a page from the file the first
- * time, which may sleep, so the file is held across it and the region is
- * looked up again after, as `file_fault` does: a region that changed, or a
- * page backed meanwhile, has the resolution run again. 1 with the page
- * mapped, 0 when no frame could be had, -1 to resolve again.
+ * time, which may sleep, so it runs as `file_fault`'s fill does, with the
+ * file held across it and the region looked up again after: a region that
+ * changed, or a page backed meanwhile, has the resolution run again. 1 with
+ * the page mapped, 0 when no frame could be had or the lock could not be
+ * let go, -1 to resolve again.
  */
 static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write)
 {
-    page_dir_t *dir = mm->dir;
-    vm_space_t *vm = &mm->vm;
     struct vm_file *f = vma->file;
     int private = vma->type != VM_SHARED;
-    int got;
     uintptr_t page = addr & ~(PAGE_SIZE - 1);
     uint32_t pgoff = vma->pgoff + (uint32_t)((page - vma->start) / PAGE_SIZE);
     uint32_t prot = vma->prot;
+    uint32_t seq = mm->zaps;
     uintptr_t phys = 0;
-    int rc = 1;
+    int got, bkl, rc = 1;
 
     vm_file_get(f);
+    if (!callback_begin(mm, &bkl)) {
+        vm_file_put(f);
+        return 0;
+    }
     got = f->share(f, pgoff, &phys);
-    vma = vm_find(vm, page);
-    if (!vma || vma->file != f || vma->prot != prot ||
-        vma->pgoff + (page - vma->start) / PAGE_SIZE != pgoff || pte_present(dir, page)) {
+    callback_end(mm, bkl);
+    if (!region_same(mm, page, f, prot, pgoff, seq)) {
         rc = -1;
     }
     vm_file_put(f);
@@ -593,15 +682,19 @@ static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int wri
     if (got < 0) {
         return rc < 0 ? -1 : 0;
     }
-    if (rc == 1 &&
-        map_user_frame(dir, page, phys,
-                       PTE_P | PTE_U | (private ? PTE_COW : ((prot & VM_PROT_WRITE) ? PTE_W : 0)) |
-                           paging_prot_bits(prot)) == 0) {
-        fault_count(got > 0);
-        return private && write ? cow_fault(mm, page) : 1;
+    if (rc == 1) {
+        rc =
+            install_new(mm, page, phys,
+                        PTE_P | PTE_U | (private ? PTE_COW : ((prot & VM_PROT_WRITE) ? PTE_W : 0)) |
+                            paging_prot_bits(prot));
+        if (rc == 0) {
+            fault_count(got > 0);
+            return private && write ? cow_fault(mm, page) : 1;
+        }
+        rc = rc > 0 ? -1 : 0;
     }
     free_frame(phys);
-    return rc < 0 ? -1 : 0;
+    return rc;
 }
 
 /** The cache bits of a page table entry for a device region of protection
@@ -620,27 +713,33 @@ static pte_t device_cache(uint32_t prot)
  * address the object gives for it, writable when the region is, with the
  * region's cache type, and take a reference for the mapping, which counts
  * only a frame the allocator counts and which unmapping drops. The object's
- * `page` may sleep, so the file is held across it and the region is looked
- * up again after, as `shared_fault` does. 1 with the page mapped; 0 when the
- * object has no page there, with `bus_fault` set for the fault handler's
- * SIGBUS, when it cannot give the page yet, with `fault_retry` set for the
- * handler's return to user mode, or when no page table could be had; -1 to
- * resolve again.
+ * `page` may sleep, so it runs as `file_fault`'s fill does, and the region
+ * is looked up again after, with the count of unmaps of device pages, so
+ * that a page the object took back meanwhile is not mapped. 1 with the page
+ * mapped; 0 when the object has no page there, with `bus_fault` set for the
+ * fault handler's SIGBUS, when it cannot give the page yet, with
+ * `fault_retry` set for the handler's return to user mode, when no page
+ * table could be had, or when the lock could not be let go; -1 to resolve
+ * again.
  */
-static int device_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintptr_t addr)
+static int device_fault(struct mm *mm, const vma_t *vma, uintptr_t addr)
 {
     struct vm_file *f = vma->file;
     uintptr_t page = addr & ~(PAGE_SIZE - 1);
     uint32_t pgoff = vma->pgoff + (uint32_t)((page - vma->start) / PAGE_SIZE);
     uint32_t prot = vma->prot;
+    uint32_t seq = mm->zaps;
     uintptr_t phys = 0;
-    int got;
+    int got, bkl, rc;
 
     vm_file_get(f);
+    if (!callback_begin(mm, &bkl)) {
+        vm_file_put(f);
+        return 0;
+    }
     got = f->device(f, pgoff, &phys);
-    vma = vm_find(vm, page);
-    if (!vma || vma->file != f || vma->prot != prot ||
-        vma->pgoff + (page - vma->start) / PAGE_SIZE != pgoff || pte_present(dir, page)) {
+    callback_end(mm, bkl);
+    if (!region_same(mm, page, f, prot, pgoff, seq)) {
         vm_file_put(f);
         return -1;
     }
@@ -655,10 +754,11 @@ static int device_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintp
         }
         return 0;
     }
-    if (map_user_frame(dir, page, phys,
-                       PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) |
-                           paging_prot_bits(prot) | device_cache(prot)) != 0) {
-        return 0;
+    rc = install_new(mm, page, phys,
+                     PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) | paging_prot_bits(prot) |
+                         device_cache(prot));
+    if (rc != 0) {
+        return rc > 0 ? -1 : 0;
     }
     frame_ref(phys);
     fault_count(0);
@@ -699,96 +799,164 @@ static int pkey_allows(const struct mm *mm, const vma_t *vma, int write)
  * Grow the stack down to `page` for a fault outside every region, as
  * `vm_grow_stack` does under RLIMIT_AS `as_limit`; a locked stack's growth
  * also counts against RLIMIT_MEMLOCK, as Linux's acct_stack_growth checks
- * it. 1 if grown, 0 if not.
+ * it. 1 if grown, 0 if not. The caller holds `vm`'s lock to write, and the
+ * big lock is taken across the change, as every change of the regions
+ * holds it (mm.h).
  */
 static int grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
 {
-    const vma_t *above = vm_lower(vm, page);
+    const vma_t *above;
+    int grown = 0;
 
-    if (above && above->type == VM_STACK && (above->prot & VM_PROT_LOCKED) && page < above->start &&
-        !mem_lock_room(vm_locked(vm) / PAGE_SIZE, (above->start - page) / PAGE_SIZE)) {
-        return 0;
+    bkl_enter();
+    above = vm_lower(vm, page);
+    if (!(above && above->type == VM_STACK && (above->prot & VM_PROT_LOCKED) &&
+          page < above->start &&
+          !mem_lock_room(vm_locked(vm) / PAGE_SIZE, (above->start - page) / PAGE_SIZE))) {
+        grown = vm_grow_stack(vm, page, as_limit);
     }
-    return vm_grow_stack(vm, page, as_limit);
+    bkl_exit();
+    return grown;
 }
 
 /**
- * One try at `vm_resolve_in`: 1 when the page is present and allows the
- * access, 0 when the access is illegal or no frame could be had, and -1
- * when a file's page was read while the regions changed.
- *
- * A page that is there and allows the access needs nothing. Any other needs
- * a frame, or a copy-on-write copy, so the caches give frames back first
- * when memory is short (`mem_balance`), which inside a system call may sleep
- * in a writeback; the region is looked up after that, and nothing from the
- * lookup on sleeps but a file's fill, which checks what it found again. A
- * page of a stack grown here is the stack's: writable and never executable.
- * Each page backed or copied counts as a fault of the current thread
- * (`fault_count`).
+ * Grow the stack of `mm` down to `page` for a fault outside every region
+ * (`grow_stack`). The growth changes the regions, so it needs the lock to
+ * write: a caller that holds it to read once lets it go and takes it to
+ * write for the growth, as Linux's lock_mm_and_find_vma takes it to write
+ * to expand a stack (mm/memory.c:6197-6248), and takes it to read again
+ * after. -1 once the stack grew, for the resolution to run again and back
+ * the page in the stack's region; 0 when it did not grow, or when the
+ * caller holds the lock to read more than once and cannot let it go.
  */
-static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t as_limit)
+static int grow_fault(struct mm *mm, uintptr_t page, uintptr_t as_limit)
 {
-    page_dir_t *dir = mm->dir;
-    vm_space_t *vm = &mm->vm;
-    vma_t *vma = vm_find(vm, addr);
-    uintptr_t phys;
-    uint32_t prot;
+    int grown;
 
-    if (vma && region_allows(vma, write) && pte_present(dir, addr) &&
-        (!write || pte_writable(dir, addr))) {
-        return 1;
+    if (mmap_held(mm, 1)) {
+        return grow_stack(&mm->vm, page, as_limit) ? -1 : 0;
     }
+    if (!mmap_may_drop(mm)) {
+        return 0;
+    }
+    mmap_unlock(mm);
+    mmap_write_lock(mm);
+    grown = grow_stack(&mm->vm, page, as_limit);
+    mmap_unlock(mm);
+    mmap_read_lock(mm);
+    return grown ? -1 : 0;
+}
+
+/** Let `mm`'s regions' lock go, which the caller holds once to read
+ * (`mmap_may_drop`), have the caches give frames back under the big lock,
+ * which they need (`mem_balance`), and take the regions' lock again. */
+static void balance_unlocked(struct mm *mm)
+{
+    mmap_unlock(mm);
+    bkl_enter();
     mem_balance();
-    vma = vm_find(vm, addr);
-    if (!vma) {
-        if (!grow_stack(vm, addr & ~(PAGE_SIZE - 1), as_limit)) {
-            return 0;
-        }
-    } else {
-        if (!region_allows(vma, write)) {
-            return 0;
-        }
-        if (pte_present(dir, addr)) {
-            if (!write || pte_writable(dir, addr)) {
-                return 1;
-            }
-            if (!cow_fault(mm, addr)) {
-                return 0;
-            }
-            fault_count(0);
-            return 1;
-        }
-        if (vma->prot & VM_PROT_IO) {
-            return vma->file && vma->file->device ? device_fault(dir, vm, vma, addr) : 0;
-        }
-        if (vma->file) {
-            return vma->file->share ? shared_fault(mm, vma, addr, write)
-                                    : file_fault(mm, vma, addr, write);
-        }
-    }
+    bkl_exit();
+    mmap_read_lock(mm);
+}
 
-    prot = vma ? vma->prot : VM_PROT_READ | VM_PROT_WRITE;
-    phys = alloc_user_frame();
+/**
+ * Back the missing page `page` of `mm` in an anonymous region of protection
+ * `prot` with a zeroed frame of its own, read-only and marked PTE_ZEROFILL
+ * for a read, and count the fault. 1 when the page is mapped, -1 when
+ * another fault mapped it first and this frame is given back, and 0 when no
+ * frame could be had or zeroed.
+ */
+static int anon_fault(struct mm *mm, uintptr_t page, uint32_t prot, int write)
+{
+    uintptr_t phys = alloc_user_frame();
+    int rc;
+
     if (phys == 0) {
         return 0;
     }
     frame_make_anon(phys);
-    if (paging_zero_frame(phys) != 0 ||
-        map_user_frame(dir, addr, phys,
-                       PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) |
-                           (write ? 0 : PTE_ZEROFILL) | paging_prot_bits(prot)) != 0) {
+    if (paging_zero_frame(phys) != 0) {
         free_frame(phys);
         return 0;
+    }
+    rc = install_new(mm, page, phys,
+                     PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) |
+                         (write ? 0 : PTE_ZEROFILL) | paging_prot_bits(prot));
+    if (rc != 0) {
+        free_frame(phys);
+        return rc > 0 ? -1 : 0;
     }
     fault_count(0);
     return 1;
 }
 
 /**
+ * One try at `vm_resolve_in`: 1 when the page is present and allows the
+ * access, 0 when the access is illegal or no frame could be had, and -1
+ * when the regions or the entry changed while a lock was let go.
+ *
+ * A page that is there and allows the access needs nothing. Any other needs
+ * a frame, or a copy-on-write copy, so the caches give frames back first
+ * when memory is short (`mem_balance`), once for the resolution, as
+ * `*balanced` records: reclaim may write a file back under the file's lock,
+ * which comes before the regions' lock, so a caller that may let the lock
+ * go balances with it let go and resolves again, and one that cannot does
+ * not balance. Each page backed or copied counts as a fault of the current
+ * thread (`fault_count`).
+ */
+static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t as_limit,
+                           int *balanced)
+{
+    page_dir_t *dir = mm->dir;
+    vm_space_t *vm = &mm->vm;
+    vma_t *vma = vm_find(vm, addr);
+    uintptr_t page = addr & ~(PAGE_SIZE - 1);
+    int rc;
+
+    if (vma && region_allows(vma, write) && pte_present(dir, addr) &&
+        (!write || pte_writable(dir, addr))) {
+        return 1;
+    }
+    if (!*balanced) {
+        *balanced = 1;
+        if (mem_short() && mmap_may_drop(mm)) {
+            balance_unlocked(mm);
+            return -1;
+        }
+    }
+    if (!vma) {
+        return grow_fault(mm, page, as_limit);
+    }
+    if (!region_allows(vma, write)) {
+        return 0;
+    }
+    if (pte_present(dir, addr)) {
+        if (!write || pte_writable(dir, addr)) {
+            return 1;
+        }
+        rc = cow_fault(mm, addr);
+        if (rc > 0) {
+            fault_count(0);
+        }
+        return rc;
+    }
+    if (vma->prot & VM_PROT_IO) {
+        return vma->file && vma->file->device ? device_fault(mm, vma, addr) : 0;
+    }
+    if (vma->file) {
+        return vma->file->share ? shared_fault(mm, vma, addr, write)
+                                : file_fault(mm, vma, addr, write);
+    }
+    return anon_fault(mm, page, vma->prot, write);
+}
+
+/**
  * Decide whether an access at `addr`, which need not be aligned, is legal in
  * the address space `mm` and, if so, make sure the page is backed. `write`
  * is 1 for a write, and `as_limit` is the RLIMIT_AS a grown stack is held
- * to.
+ * to. The caller holds `mm`'s regions' lock, to read or to write; a caller
+ * that holds it to read once may find it let go and taken again on return,
+ * so it keeps no region it found before.
  *
  * Outside every region the one legal access grows the stack down
  * (`vm_grow_stack`, under RLIMIT_AS). Inside one, the region's protection
@@ -806,7 +974,7 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
  * or a mapping's, or a page of a device object, which the object gives
  * (`device_fault`) or, gone, answers with SIGBUS. An
  * anonymous one gets a zeroed frame, read-only in the PTE when its region
- * is, so a later write faults; a grown stack page stays writable. One a
+ * is, so a later write faults. One a
  * read brings in is marked PTE_ZEROFILL, and stands for Linux's base zero page
  * until a store sets its dirty bit or the kernel stores into its frame
  * (`page_private`, `cow_fault`, a pin). A file's
@@ -821,10 +989,10 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
  */
 static int vm_resolve_in(struct mm *mm, uintptr_t addr, int write, uintptr_t as_limit)
 {
-    int rc;
+    int rc, balanced = 0;
 
     do {
-        rc = vm_resolve_once(mm, addr, write, as_limit);
+        rc = vm_resolve_once(mm, addr, write, as_limit, &balanced);
     } while (rc < 0);
     return rc;
 }
@@ -881,14 +1049,20 @@ static int range_ready(struct mm *mm, uintptr_t start, uintptr_t end, int write)
  * the kernel's own memory, which a file system's caller passes for a read
  * into a page or a program's image, and is always present; a user pointer
  * there never gets past `user_range_ok`. A range that starts in user space
- * and ends past it is not resident. The walk of the regions is made under
- * the big lock, taken when the caller runs without it, until an address
- * space has a lock of its own.
+ * and ends past it is not resident. The regions are walked under their
+ * lock, taken only when that needs no wait (`mmap_read_trylock`), since the
+ * caller may hold a file's lock, which comes first, or run with interrupts
+ * off; a lock it cannot have now answers 0, and the caller brings the range
+ * in with its own locks let go. The caller holds the big lock, which keeps
+ * a present page present until it sleeps: every change that takes a page
+ * away or takes a right from it, an unmap, a protection change, a move or a
+ * device's or a truncation's revocation, is made under it.
  */
 int vm_resident(uintptr_t addr, uintptr_t len, int write)
 {
     uintptr_t end = addr + len;
-    int taken, ready;
+    struct mm *mm;
+    int ready;
 
     if (len == 0 || (current_proc && proc_window_covers(current_proc, addr, len))) {
         return 1;
@@ -899,59 +1073,94 @@ int vm_resident(uintptr_t addr, uintptr_t len, int write)
     if (end < addr || end > USER_ADDR_MAX || !current_proc || !current_proc->mm) {
         return 0;
     }
-    taken = !bkl_held();
-    if (taken) {
-        bkl_enter();
+    bkl_assert_held();
+    mm = current_proc->mm;
+    if (!mmap_read_trylock(mm)) {
+        return 0;
     }
-    ready = range_ready(current_proc->mm, addr, end, write);
-    if (taken) {
-        bkl_exit();
-    }
+    ready = range_ready(mm, addr, end, write);
+    mmap_unlock(mm);
     return ready;
+}
+
+/** `vm_prefault_range`'s resolution of [addr, end) of `mm`, the current
+ * process's, whose regions' lock the caller holds to read. */
+static int prefault_locked(struct mm *mm, uintptr_t addr, uintptr_t end, int write)
+{
+    uintptr_t page;
+    int ok = 1;
+
+    do {
+        for (page = addr & ~(PAGE_SIZE - 1); ok && page < end; page += PAGE_SIZE) {
+            ok = vm_resolve(page, write);
+        }
+    } while (ok && !range_ready(mm, addr, end, write));
+    return ok;
 }
 
 /**
  * The resolution of one page may sleep, reading a file or writing a cache
- * back, and another thread may meanwhile unmap or protect a page already
- * brought in, which the kernel would then touch and fault on with no way to
- * recover. So once every page is in, the range is checked again with
- * nothing that sleeps, and brought in again when a page went. A range that
- * wraps is refused, since the loop would end early and leave its tail
- * unbacked. A kernel buffer the thread opened to the checks
- * (`user_window_open`) is present already. The resolution is made under the
- * big lock, taken when the caller runs without it, until an address space
- * has a lock of its own; a caller that touches the range after the return
- * holds the lock across both, as the copies do (usercopy.c).
+ * back, with the regions' lock let go, and another thread may meanwhile
+ * unmap or protect a page already brought in, which the kernel would then
+ * touch and fault on with no way to recover. So once every page is in, the
+ * range is checked again with the lock held and nothing that sleeps, and
+ * brought in again when a page went. A range that wraps is refused, since
+ * the loop would end early and leave its tail unbacked. A kernel buffer the
+ * thread opened to the checks (`user_window_open`) is present already. The
+ * lock is given back on return; a caller that touches the range after holds
+ * it across both (`vm_user_begin`), or holds the big lock, which keeps the
+ * pages present until it sleeps (`vm_resident`).
  */
 int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 {
-    uintptr_t page, end;
-    int taken, ok = 1;
+    int rc = vm_user_begin(addr, len, write);
+
+    if (rc > 0) {
+        vm_user_end();
+    }
+    return rc >= 0;
+}
+
+int vm_user_begin(uintptr_t addr, uintptr_t len, int write)
+{
+    struct mm *mm;
+    uintptr_t end;
 
     if (!current_proc || current_proc->mm == NULL) {
+        return -1;
+    }
+    if (len == 0 || proc_window_covers(current_proc, addr, len)) {
+        return 0;
+    }
+    end = addr + len;
+    if (end < addr) {
+        return -1;
+    }
+    mm = current_proc->mm;
+    mmap_read_lock(mm);
+    if (!prefault_locked(mm, addr, end, write)) {
+        mmap_unlock(mm);
+        return -1;
+    }
+    return 1;
+}
+
+void vm_user_end(void)
+{
+    mmap_unlock(current_proc->mm);
+}
+
+int vm_prefault_held(uintptr_t addr, uintptr_t len, int write)
+{
+    uintptr_t end = addr + len;
+
+    if (!current_proc || current_proc->mm == NULL || end < addr) {
         return 0;
     }
     if (len == 0 || proc_window_covers(current_proc, addr, len)) {
         return 1;
     }
-
-    end = addr + len;
-    if (end < addr) {
-        return 0;
-    }
-    taken = !bkl_held();
-    if (taken) {
-        bkl_enter();
-    }
-    do {
-        for (page = addr & ~(PAGE_SIZE - 1); ok && page < end; page += PAGE_SIZE) {
-            ok = vm_resolve(page, write);
-        }
-    } while (ok && !range_ready(current_proc->mm, addr, end, write));
-    if (taken) {
-        bkl_exit();
-    }
-    return ok;
+    return prefault_locked(current_proc->mm, addr, end, write);
 }
 
 /**
@@ -962,17 +1171,24 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
  * or memfd_secret's is passed over, as Linux's populate passes over a VM_IO
  * region and one its get_user_pages refuses. Each
  * page brought in counts as a fault (`fault_count`), as Linux counts its
- * populate's.
+ * populate's. The regions' lock is taken to read, as Linux's __mm_populate
+ * takes it after the change that asked for the pages has let it go
+ * (mm/gup.c), and each page's region is found again, since the lock may
+ * go around a page's fill.
  */
 int vm_populate(uintptr_t start, uintptr_t end)
 {
+    struct mm *mm;
     uintptr_t page;
+    int rc = 0;
 
     if (!current_proc || !current_proc->mm) {
         return -1;
     }
-    for (page = start & ~(PAGE_SIZE - 1); page < end; page += PAGE_SIZE) {
-        const vma_t *vma = vm_find(&current_proc->mm->vm, page);
+    mm = current_proc->mm;
+    mmap_read_lock(mm);
+    for (page = start & ~(PAGE_SIZE - 1); rc == 0 && page < end; page += PAGE_SIZE) {
+        const vma_t *vma = vm_find(&mm->vm, page);
         int write;
 
         if (!vma || !(vma->prot & VM_PROT_READ) ||
@@ -981,10 +1197,11 @@ int vm_populate(uintptr_t start, uintptr_t end)
         }
         write = (vma->prot & VM_PROT_WRITE) && vma->type != VM_SHARED;
         if (!vm_resolve(page, write)) {
-            return -1;
+            rc = -1;
         }
     }
-    return 0;
+    mmap_unlock(mm);
+    return rc;
 }
 
 /** Whether a read pin may take the page at `page` of the region `vma` of
@@ -1055,6 +1272,9 @@ static int pin_resolve(struct mm *mm, uintptr_t page, int write, uintptr_t as_li
  * frame the device has, as Linux unshares a page it pins, and the frame is
  * pinned. With PIN_IO in `flags`, device pages outside the allocator are
  * kept without pins; `ram_pages` counts only the RAM frames that were pinned.
+ * The caller holds `mm`'s regions' lock to read, once, so that a page's
+ * fill may let it go; no fault can change a pinned page afterwards, since
+ * each is writable or of its own frame.
  */
 static int pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t flags,
                      uintptr_t *frames, uint32_t *ram_pages)
@@ -1094,7 +1314,7 @@ static int pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t fla
             frames[i] = phys;
             continue;
         }
-        *e &= ~(pte_t)PTE_ZEROFILL;
+        paging_entry_clear(mm, page, PTE_ZEROFILL);
         if (vma->type != VM_SHARED &&
             ((*e & PTE_COW) || frame_maps(PTE_ADDR(*e) / PAGE_SIZE) > 1) &&
             page_private(mm, page, (vma->prot & VM_PROT_WRITE) != 0) != 0) {
@@ -1130,57 +1350,125 @@ int paging_dma_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t fla
     return pin_range(mm, start, end, PIN_IO | flags, frames, ram_pages);
 }
 
+/*
+ * The hold of a change of a present user entry made by a holder of the
+ * regions' lock to read, a fault or a pin, whom no other such holder is
+ * kept from (`page_change_begin`).
+ */
+struct page_change {
+    int bkl;        /* whether the change took the big lock */
+    uint32_t flags; /* the page-table lock's saved flags */
+};
+
+/**
+ * Begin the second phase of a change of the present entry of `mm` at
+ * `page`, by a holder of the regions' lock to read: the ranges registered
+ * on the space are told of `event` first, unless it is 0, and then the
+ * page-table lock is taken. When the space has a range the big lock is
+ * held from the notice to the change (notify.h), so that a driver that
+ * reads entries under it sees each page before the change or hears of it
+ * after, as Linux's wp_page_copy calls mmu_notifier_invalidate_range_start
+ * before it takes the page-table lock (mm/memory.c:3384-3390). 0; or -1,
+ * with nothing held, when a range was registered after the space was seen
+ * without one, and the change is made again.
+ */
+static int page_change_begin(struct mm *mm, struct page_change *c, int event, uintptr_t page)
+{
+    int ranges = mm->notify != NULL;
+
+    c->bkl = ranges && !bkl_held();
+    if (c->bkl) {
+        bkl_enter();
+    }
+    if (ranges && event) {
+        mmn_notify(mm, event, page, page + PAGE_SIZE);
+    }
+    c->flags = mm_ptl_lock(mm);
+    if (!ranges && mm->notify) {
+        mm_ptl_unlock(mm, c->flags);
+        return -1;
+    }
+    return 0;
+}
+
+/** End what `page_change_begin` began. */
+static void page_change_end(struct mm *mm, const struct page_change *c)
+{
+    mm_ptl_unlock(mm, c->flags);
+    if (c->bkl) {
+        bkl_exit();
+    }
+}
+
 /**
  * Resolve a write to the present copy-on-write (PTE_COW) page at `addr` of
  * `mm`. When this address space holds the frame's last mapping, the page is
  * made writable in place and loses its mark, whatever pins the frame has;
  * otherwise a writable copy of its own takes its place, the ranges
  * registered on the page are told (MMN_COW), and the shared frame's
- * reference is dropped. The caller balanced memory before it looked at the
- * page, so nothing here sleeps and the entry read is the one replaced.
- * Returns 1 if it resolved the page, 0 if the page is not present or not
- * copy-on-write or no frame could be had or copied for it.
+ * reference is dropped. The copy is made first, with no lock but the
+ * regions', and the entry is read again under the page-table lock and
+ * replaced only while it is the one copied (`page_change_begin`). The
+ * caller balanced memory before it looked at the page, so nothing here
+ * sleeps. Returns 1 if it resolved the page, -1 when the entry changed
+ * meanwhile and the resolution runs again, and 0 if the page is not present
+ * or not copy-on-write or no frame could be had or copied for it.
  */
 static int cow_fault(struct mm *mm, uintptr_t addr)
 {
     page_dir_t *dir = mm->dir;
     pte_t *e = user_pte(dir, addr);
+    struct page_change c;
     pte_t pte;
     uintptr_t old_phys, frame;
-    uintptr_t new_phys;
+    uintptr_t new_phys = 0;
+    int rc = 1;
 
     if (!e) {
         return 0;
     }
+    addr &= ~(uintptr_t)(PAGE_SIZE - 1);
     pte = *e;
     if (!(pte & PTE_P) || !(pte & PTE_COW)) {
         return 0;
     }
-
     old_phys = PTE_ADDR(pte);
     frame = old_phys / PAGE_SIZE;
-
-    if (frame >= _frames_number || frame_maps(frame) <= 1) {
-        frame_make_anon(old_phys);
-        *e = (pte & ~(pte_t)(PTE_COW | PTE_ZEROFILL)) | PTE_W;
-        paging_flush_dir(dir, addr);
-        return 1;
+    if (frame < _frames_number && frame_maps(frame) > 1) {
+        new_phys = alloc_user_frame();
+        if (new_phys == 0) {
+            return 0;
+        }
+        if (paging_copy_frame(new_phys, old_phys) != 0) {
+            free_frame(new_phys);
+            return 0;
+        }
+        frame_make_anon(new_phys);
     }
-
-    new_phys = alloc_user_frame();
-    if (new_phys == 0) {
-        return 0;
+    if (page_change_begin(mm, &c, new_phys ? MMN_COW : 0, addr) != 0) {
+        rc = -1;
+    } else {
+        if (*(volatile pte_t *)e != pte) { /* another fault may have changed it */
+            rc = -1;
+        } else if (!new_phys) {
+            frame_make_anon(old_phys);
+            *e = (pte & ~(pte_t)(PTE_COW | PTE_ZEROFILL)) | PTE_W;
+            paging_flush_dir(dir, addr);
+        } else {
+            *e = (pte_t)new_phys | PTE_P | PTE_W | PTE_U | (pte & (PTE_NOEXEC | PTE_PKEY));
+            paging_flush_dir(dir, addr);
+        }
+        page_change_end(mm, &c);
     }
-    if (paging_copy_frame(new_phys, old_phys) != 0) {
-        free_frame(new_phys);
-        return 0;
+    if (rc < 0) {
+        if (new_phys) {
+            free_frame(new_phys);
+        }
+        return -1;
     }
-    addr &= ~(uintptr_t)(PAGE_SIZE - 1);
-    mmn_notify(mm, MMN_COW, addr, addr + PAGE_SIZE);
-    frame_make_anon(new_phys);
-    *e = (pte_t)new_phys | PTE_P | PTE_W | PTE_U | (pte & (PTE_NOEXEC | PTE_PKEY));
-    paging_flush_dir(dir, addr);
-    frame_unref(old_phys);
+    if (new_phys) {
+        frame_unref(old_phys);
+    }
     return 1;
 }
 
@@ -1194,45 +1482,74 @@ static int cow_fault(struct mm *mm, uintptr_t addr)
  * a copy-on-write page of a region mprotect made read-only since, gets a
  * copy with the same rights, read-only still, and one this space alone
  * holds is used as it is; either way the frame is this space's alone after,
- * and the page loses its copy-on-write mark. The caller balanced memory
- * first, so nothing here sleeps. 0, or -1 when no frame could be had or
- * copied.
+ * and the page loses its copy-on-write mark. The entry is replaced in two
+ * phases, as `cow_fault` replaces it, and the change is made again when
+ * the entry changed meanwhile. The caller balanced memory first, so nothing
+ * here sleeps. 0, or -1 when the page is not present or no frame could be
+ * had or copied.
  */
 static int page_private(struct mm *mm, uintptr_t addr, int writable)
 {
     page_dir_t *dir = mm->dir;
-    pte_t *e = user_pte(dir, addr);
+    struct page_change c;
+    uintptr_t old_phys, new_phys;
+    pte_t *e;
     pte_t pte;
-    uintptr_t old_phys;
-    uintptr_t new_phys;
+    int rc;
 
-    if (!e || !((pte = *e) & PTE_P)) {
-        return -1;
-    }
-    if ((pte & PTE_COW) && writable) {
-        return cow_fault(mm, addr) ? 0 : -1;
-    }
-    old_phys = PTE_ADDR(pte);
-    new_phys = old_phys;
-    if (frame_maps(old_phys / PAGE_SIZE) > 1) {
-        new_phys = alloc_user_frame();
-        if (new_phys == 0) {
+    addr &= ~(uintptr_t)(PAGE_SIZE - 1);
+    for (;;) {
+        e = user_pte(dir, addr);
+        if (!e || !((pte = *e) & PTE_P)) {
             return -1;
         }
-        if (paging_copy_frame(new_phys, old_phys) != 0) {
+        if ((pte & PTE_COW) && writable) {
+            rc = cow_fault(mm, addr);
+            if (rc < 0) {
+                continue;
+            }
+            return rc ? 0 : -1;
+        }
+        old_phys = PTE_ADDR(pte);
+        new_phys = old_phys;
+        if (frame_maps(old_phys / PAGE_SIZE) > 1) {
+            new_phys = alloc_user_frame();
+            if (new_phys == 0) {
+                return -1;
+            }
+            if (paging_copy_frame(new_phys, old_phys) != 0) {
+                free_frame(new_phys);
+                return -1;
+            }
+        }
+        if (page_change_begin(mm, &c, new_phys != old_phys ? MMN_COW : 0, addr) == 0) {
+            if (*e == pte) {
+                frame_make_anon(new_phys);
+                *e = (pte_t)new_phys | (pte & PTE_FLAGS & ~(pte_t)(PTE_COW | PTE_ZEROFILL));
+                paging_flush_dir(dir, addr);
+                page_change_end(mm, &c);
+                if (new_phys != old_phys) {
+                    frame_unref(old_phys);
+                }
+                return 0;
+            }
+            page_change_end(mm, &c);
+        }
+        if (new_phys != old_phys) {
             free_frame(new_phys);
-            return -1;
         }
-        addr &= ~(uintptr_t)(PAGE_SIZE - 1);
-        mmn_notify(mm, MMN_COW, addr, addr + PAGE_SIZE);
     }
-    frame_make_anon(new_phys);
-    *e = (pte_t)new_phys | (pte & PTE_FLAGS & ~(pte_t)(PTE_COW | PTE_ZEROFILL));
-    paging_flush_dir(dir, addr);
-    if (new_phys != old_phys) {
-        frame_unref(old_phys);
+}
+
+void paging_entry_clear(struct mm *mm, uintptr_t addr, pte_t bits)
+{
+    uint32_t flags = mm_ptl_lock(mm);
+    pte_t *e = user_pte(mm->dir, addr);
+
+    if (e && (*e & PTE_P)) {
+        *e &= ~bits;
     }
-    return 0;
+    mm_ptl_unlock(mm, flags);
 }
 
 /** `access_page` for the device region `vma`, whose page tables may not
@@ -1256,9 +1573,9 @@ static int access_device(const vma_t *vma, uintptr_t addr, uint8_t *p, uint32_t 
  * device region's bytes go through `access_device`, and a region of
  * memfd_secret and the vDSO's data page are -EIO, as Linux's
  * get_user_pages refuses both. The resolution and, for a write, the
- * balance of memory before a copy may sleep, so the region is looked up
- * again after them, and the page must still be present in a region that
- * allows some access. */
+ * balance of memory before a copy may sleep with `mm`'s regions' lock let
+ * go, so the region is looked up again after them, and the page must still
+ * be present in a region that allows some access. */
 static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, int write)
 {
     const vma_t *vma = vm_find(&mm->vm, addr);
@@ -1278,8 +1595,8 @@ static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, 
     if (!pte_present(mm->dir, addr) && !vm_resolve_in(mm, addr, 0, (uintptr_t)RLIM_INFINITY)) {
         return -EIO;
     }
-    if (write) {
-        mem_balance();
+    if (write && mem_short() && mmap_may_drop(mm)) {
+        balance_unlocked(mm);
     }
     vma = vm_find(&mm->vm, addr);
     if (vma == NULL || !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) ||
@@ -1310,6 +1627,7 @@ int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int wr
     uint8_t *p = buf;
     int rc = 0;
 
+    mmap_read_lock(mm);
     while (len > 0 && rc == 0) {
         uint32_t chunk = PAGE_SIZE - (addr & (PAGE_SIZE - 1));
 
@@ -1321,7 +1639,8 @@ int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int wr
         p += chunk;
         len -= chunk;
     }
-    vm_file_reap();
+    mmap_unlock(mm);
+    mm_reap();
     return rc;
 }
 
@@ -1367,12 +1686,14 @@ static int fault_key(const isr_params_t *params, uintptr_t addr, int write)
  * resolution made legal, a `write` or a read: with `bus`, SIGBUS with
  * BUS_ADRERR, for a device region whose object had no page there; with a
  * `key` of 0 or more, which refused it, SIGSEGV with SEGV_PKUERR and the key
- * in `si_pkey`; else SIGSEGV, SEGV_ACCERR when a region holds the address
- * and SEGV_MAPERR when none does or a guard does, as Linux answers a guard's
- * fault. Each is forced as Linux forces it, and the death is logged only
- * when no handler and no tracer will see a SIGSEGV.
+ * in `si_pkey`; else SIGSEGV, SEGV_ACCERR when `mapped`, a region that is no
+ * guard holding the address, and SEGV_MAPERR when none does or a guard does,
+ * as Linux answers a guard's fault. Each is forced as Linux forces it, and
+ * the death is logged only when no handler and no tracer will see a
+ * SIGSEGV. The caller holds the big lock, which posting a signal needs.
  */
-static void fault_signal(const isr_params_t *params, uintptr_t addr, int write, int bus, int key)
+static void fault_signal(const isr_params_t *params, uintptr_t addr, int write, int bus, int key,
+                         int mapped)
 {
     struct k_siginfo info;
     int signo = bus ? SIGBUS : SIGSEGV;
@@ -1384,9 +1705,7 @@ static void fault_signal(const isr_params_t *params, uintptr_t addr, int write, 
         info.code = SEGV_PKUERR;
         info.pkey = (uint32_t)key;
     } else {
-        const vma_t *vma = vm_find(&current_proc->mm->vm, addr);
-
-        info.code = vma && !(vma->prot & VM_PROT_GUARD) ? SEGV_ACCERR : SEGV_MAPERR;
+        info.code = mapped ? SEGV_ACCERR : SEGV_MAPERR;
     }
     info.addr = addr;
     current_proc->trap_nr = PAGE_FAULT_VECTOR;
@@ -1471,6 +1790,43 @@ static void fault_oom(uintptr_t address, int write)
 }
 
 /**
+ * Resolve the fault at the user address `addr` of the current process under
+ * its regions' lock, held to read, with interrupts on when the faulting code
+ * had them on, as Linux's do_user_addr_fault enables them before it takes
+ * mmap_lock (arch/x86/mm/fault.c:1359). Sets `*key` to the protection key
+ * that refused the access, or -1, and `*mapped` to whether a region other
+ * than a guard holds the address, both for the signal. Returns 1 when the
+ * page is backed and allows the access.
+ */
+static int fault_resolve(isr_params_t *params, uintptr_t addr, int write, int *key, int *mapped)
+{
+    struct mm *mm = current_proc->mm;
+    uint32_t was_in_call = current_proc->in_syscall;
+    uint32_t irq = kirq_save();
+    const vma_t *vma;
+    int resolved;
+
+    current_proc->frame_refused = 0;
+    current_proc->bus_fault = 0;
+    current_proc->fault_retry = 0;
+    if (FRAME_IRQ_ON(params)) {
+        current_proc->in_syscall = 1;
+        arch_irq_enable(); /* the address is read; a nested fault cannot lose it */
+    }
+    mmap_read_lock(mm);
+    *key = fault_key(params, addr, write);
+    resolved = *key < 0 && !fetch_refused(addr, params) &&
+               vm_resolve_in(mm, addr, write, current_proc->rlim[RLIM_AS].cur);
+    vma = vm_find(&mm->vm, addr);
+    *mapped = vma && !(vma->prot & VM_PROT_GUARD);
+    mmap_unlock(mm);
+    mm_reap();
+    kirq_restore(irq);
+    current_proc->in_syscall = was_in_call;
+    return resolved;
+}
+
+/**
  * Resolve a page fault, or end what caused it.
  *
  * Tried in order. A fault while the panic reads the running process
@@ -1521,6 +1877,7 @@ static void fault_oom(uintptr_t address, int write)
 static void page_fault(isr_params_t *params, uintptr_t fault_address)
 {
     int write, user_mode, have_user_proc, in_user_range, pid, key = -1;
+    int resolved, mapped = 0, bkl;
 
     write = FAULT_WRITE(params);
     user_mode = FAULT_USER(params);
@@ -1528,13 +1885,8 @@ static void page_fault(isr_params_t *params, uintptr_t fault_address)
     in_user_range = (fault_address >= USER_ADDR_MIN && fault_address < USER_ADDR_MAX);
 
     if (have_user_proc && in_user_range) {
-        current_proc->frame_refused = 0;
-        current_proc->bus_fault = 0;
-        current_proc->fault_retry = 0;
-        key = fault_key(params, fault_address, write);
-        if (key < 0 && !fetch_refused(fault_address, params) &&
-            vm_resolve_in(current_proc->mm, fault_address, write,
-                          current_proc->rlim[RLIM_AS].cur)) {
+        resolved = fault_resolve(params, fault_address, write, &key, &mapped);
+        if (resolved) {
             return; /* page mapped; iret retries the faulting instruction */
         }
         if (user_mode && current_proc->fault_retry) {
@@ -1548,21 +1900,35 @@ static void page_fault(isr_params_t *params, uintptr_t fault_address)
             note_fault(params, fault_address);
             k_panic("pagecache: window fault with no current process");
         }
-        if (pc_fault(fault_address, write)) {
+        bkl = !bkl_held();
+        if (bkl) {
+            bkl_enter();
+        }
+        resolved = pc_fault(fault_address, write);
+        if (bkl) {
+            bkl_exit();
+        }
+        if (resolved) {
             return;
         }
         note_fault(params, fault_address);
         k_panic("pagecache: unrecoverable disk fault");
     }
 
-    if (user_mode && have_user_proc && in_user_range && current_proc->frame_refused) {
-        fault_oom(fault_address, write);
-        return;
-    }
-
     if (user_mode && have_user_proc) {
-        fault_signal(params, fault_address, write, in_user_range && current_proc->bus_fault,
-                     in_user_range ? key : -1);
+        bkl = !bkl_held();
+        if (bkl) {
+            bkl_enter();
+        }
+        if (in_user_range && current_proc->frame_refused) {
+            fault_oom(fault_address, write);
+        } else {
+            fault_signal(params, fault_address, write, in_user_range && current_proc->bus_fault,
+                         in_user_range ? key : -1, mapped);
+        }
+        if (bkl) {
+            bkl_exit();
+        }
         return;
     }
 
@@ -2711,9 +3077,11 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
  * leaves its frame in it, marked PTE_NONE, an entry no other code makes,
  * and the second, after the one flush, clears those entries and drops their
  * frames. So no processor can reach a frame after it is freed, and a large
- * unmap costs one shootdown, not one a page. The big lock is held
- * throughout, and no processor writes an entry that is not present, so
- * nothing else sees the marked entries.
+ * unmap costs one shootdown, not one a page. The caller holds the space's
+ * lock to write, or the space is no thread's, so no fault installs an entry
+ * meanwhile and nothing else sees the marked entries. The big lock is taken
+ * throughout, since code that reads user memory under it with no fault
+ * expects a page it found to stay until it sleeps.
  */
 void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
 {
@@ -2724,6 +3092,7 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
     if (!dir) {
         return;
     }
+    bkl_enter();
     batch_start(&b, dir);
     for (addr = start; addr < end; addr = next) {
         pte_t *table = user_span(dir, addr, end, &next);
@@ -2758,43 +3127,118 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
             }
         }
     }
+    bkl_exit();
+}
+
+/**
+ * Write-lock `mm` for `paging_zap_device`, under the big lock that the walk
+ * of the process list holds: 1 when it is held to write now, by this call
+ * or already by the caller; 0 when the caller holds it only to read, which
+ * a zap cannot wait for, and the space is zapped as it stands; -1 when the
+ * lock had to be waited for, which lets the big lock go, so that the walk
+ * starts again. `*taken` says whether this call took a hold to give back.
+ */
+static int zap_lock(struct mm *mm, int *taken)
+{
+    *taken = 0;
+    if (mmap_held(mm, 1)) {
+        return 1;
+    }
+    if (mmap_held(mm, 0)) {
+        return 0;
+    }
+    if (mmap_write_trylock(mm)) {
+        *taken = 1;
+        return 1;
+    }
+    mm_get(mm);
+    mmap_write_lock(mm);
+    mmap_unlock(mm);
+    mm_put(mm);
+    return -1;
 }
 
 /**
  * Each thread of a process has its own record on the process list and the
  * address space of its process, so a space shared by threads is walked
- * once for each of them, the later walks finding nothing to unmap.
+ * once for each of them, the later walks finding nothing to unmap. Each
+ * space is changed under its regions' lock held to write (`zap_lock`), and
+ * its count of zaps moves, so that a fault that let the lock go across a
+ * file's or a device's operation maps no page taken back meanwhile.
  */
-void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count)
+void paging_zap_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo, uintptr_t *hi),
+                      void *arg)
 {
     process_t *p;
     const vma_t *r;
-    uint32_t end = count > 0xFFFFFFFFu - pgoff ? 0xFFFFFFFFu : pgoff + count;
+    uintptr_t lo, hi;
+    int held, taken;
 
-    if (!obj) {
-        return;
-    }
+    bkl_assert_held();
+again:
     for (p = proc_list; p; p = p->next) {
-        const vm_space_t *vm = p->mm ? &p->mm->vm : NULL;
+        struct mm *mm = p->mm;
 
-        for (r = vm ? vm_first(vm) : NULL; r; r = vm_next(r)) {
-            uint32_t last = r->pgoff + (uint32_t)((r->end - r->start) / PAGE_SIZE);
-            uint32_t from = r->pgoff > pgoff ? r->pgoff : pgoff;
-            uint32_t to = last < end ? last : end;
-
-            if (from < to && vm_device_object(r->file) == obj) {
-                uintptr_t lo = r->start + (uintptr_t)(from - r->pgoff) * PAGE_SIZE;
-                uintptr_t hi = r->start + (uintptr_t)(to - r->pgoff) * PAGE_SIZE;
-
-                mmn_notify(p->mm, MMN_TRUNCATE, lo, hi);
-                unmap_user_range(p->mm->dir, lo, hi);
+        if (!mm || !mm->dir) {
+            continue;
+        }
+        held = zap_lock(mm, &taken);
+        if (held < 0) {
+            goto again;
+        }
+        mm->zaps++;
+        for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
+            if (match(r, arg, &lo, &hi)) {
+                mmn_notify(mm, MMN_TRUNCATE, lo, hi);
+                unmap_user_range(mm->dir, lo, hi);
             }
+        }
+        if (taken) {
+            mmap_unlock(mm);
         }
     }
 }
 
+/** What `paging_zap_device` unmaps: its object, and pages `first` to `end`
+ * of it. */
+struct zap_device {
+    const void *obj;
+    uint32_t first, end;
+};
+
+/** The `paging_zap_where` match of `paging_zap_device`: the part of the
+ * region `r` that maps the pages of `arg`, a `struct zap_device`. */
+static int zap_device_match(const vma_t *r, void *arg, uintptr_t *lo, uintptr_t *hi)
+{
+    const struct zap_device *z = arg;
+    uint32_t last = r->pgoff + (uint32_t)((r->end - r->start) / PAGE_SIZE);
+    uint32_t from = r->pgoff > z->first ? r->pgoff : z->first;
+    uint32_t to = last < z->end ? last : z->end;
+
+    if (from >= to || vm_device_object(r->file) != z->obj) {
+        return 0;
+    }
+    *lo = r->start + (uintptr_t)(from - r->pgoff) * PAGE_SIZE;
+    *hi = r->start + (uintptr_t)(to - r->pgoff) * PAGE_SIZE;
+    return 1;
+}
+
+void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count)
+{
+    struct zap_device z;
+
+    if (!obj) {
+        return;
+    }
+    z.obj = obj;
+    z.first = pgoff;
+    z.end = count > 0xFFFFFFFFu - pgoff ? 0xFFFFFFFFu : pgoff + count;
+    paging_zap_where(zap_device_match, &z);
+}
+
 /** The tables of the new range are made first, so that the move cannot
- * stop half way. */
+ * stop half way. The caller holds the space's lock to write; the big lock
+ * is taken, as `unmap_user_range` takes it. */
 int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t len)
 {
     uintptr_t addr, next, end = from + len;
@@ -2809,6 +3253,7 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
             }
         }
     }
+    bkl_enter();
     batch_start(&moved, dir);
     batch_start(&replaced, dir);
     for (addr = from; addr < end; addr = next) {
@@ -2833,6 +3278,7 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
     batch_flush(&moved);
     batch_flush(&replaced);
     mm_resident_add(dir, -gone);
+    bkl_exit();
     return 0;
 }
 
@@ -2869,12 +3315,16 @@ static void protect_page(struct flush_batch *b, pte_t *e, uintptr_t addr, uint32
     batch_add(b, addr);
 }
 
+/** The caller holds the space's lock to write; the big lock is taken, as
+ * `unmap_user_range` takes it, since a page made read-only is one a write
+ * under the big lock would otherwise fault on. */
 void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint32_t prot)
 {
     struct flush_batch b;
     uintptr_t addr, next;
     pte_t *table;
 
+    bkl_enter();
     batch_start(&b, dir);
     for (addr = start; addr < end; addr = next) {
         for (table = user_span(dir, addr, end, &next); table && addr < next; addr += PAGE_SIZE) {
@@ -2882,6 +3332,7 @@ void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint3
         }
     }
     batch_flush(&b);
+    bkl_exit();
 }
 
 /**

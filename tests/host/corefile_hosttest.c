@@ -7,6 +7,9 @@
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/nodelock_none.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
+ * host-deps: tests/host/compat/bkl_none.c
+ * host-deps: tests/host/compat/atomic_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * `syscall_fs.c` is included whole, its unused exports private so that the
@@ -235,7 +238,7 @@ static int core_fd(void)
     int fd;
 
     for (fd = 0; fd < files.cap; fd++) {
-        if (files.entries[fd].ofd && files.entries[fd].ofd->vnode == &core_node) {
+        if (fd_slot(&files, fd)->ofd && fd_slot(&files, fd)->ofd->vnode == &core_node) {
             return fd;
         }
     }
@@ -1014,6 +1017,14 @@ int procfs_may_read(int pid)
     return 0;
 }
 
+/** No kind is a system-wide file of /proc here, so the opens and stats
+ * that ask fall through to ENOENT. */
+uint32_t procfs_ino_global(int kind)
+{
+    (void)kind;
+    return 0;
+}
+
 /** No row names a /proc process: -1. */
 int procfs_resolve_id(const struct vpath *vp)
 {
@@ -1722,7 +1733,7 @@ static void row_end(void)
     int fd;
 
     for (fd = 0; fd < files.cap; fd++) {
-        if (files.entries[fd].type != FD_TYPE_NONE || files.entries[fd].ofd) {
+        if (fd_slot(&files, fd)->type != FD_TYPE_NONE || fd_slot(&files, fd)->ofd) {
             fd_free(&files, fd);
         }
     }
@@ -1909,8 +1920,8 @@ static void stream_writev(void)
     k_memset(&s, 0, sizeof(s));
     s.type = SOCK_STREAM;
     check(fd < files.cap, "the table has a descriptor 5");
-    files.entries[fd].type = FD_TYPE_SOCKET;
-    files.entries[fd].sock = &s;
+    fd_slot(&files, fd)->type = FD_TYPE_SOCKET;
+    fd_slot(&files, fd)->sock = &s;
     v[0].iov_base = (uintptr_t)bytes;
     v[0].iov_len = 4;
     v[1].iov_base = (uintptr_t)(bytes + 4);
@@ -1926,8 +1937,8 @@ static void stream_writev(void)
     check(writev_elements(fd, (uintptr_t)v, 2, 8) == -EPIPE && sigpipes == 1,
           "a writev whose first element fails with EPIPE posts SIGPIPE");
     host_copies = 0;
-    files.entries[fd].type = FD_TYPE_NONE;
-    files.entries[fd].sock = NULL;
+    fd_slot(&files, fd)->type = FD_TYPE_NONE;
+    fd_slot(&files, fd)->sock = NULL;
     row_end();
 }
 

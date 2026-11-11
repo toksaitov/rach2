@@ -3,6 +3,7 @@
  * sanitizers.
  *
  * host-deps: rach2/sys/mm/vm.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  *
  * The rows check an insert, which fails for an empty, unaligned or
  * overlapping range; the search by address and the test of overlap; the
@@ -16,7 +17,9 @@
  * for write to a region that may never be written, which keeps that mark;
  * the search for a free range; the bytes a range covers; and the file a
  * region maps: its pages through splits and merges, its references, and its
- * release, which waits for vm_file_reap after the last one goes.
+ * release, which waits for vm_file_reap after the last one goes, with the
+ * list of those waiting answering `vm_file_dead`; `--dead-only` runs that
+ * row alone.
  */
 
 #include "mm/vm.h"
@@ -27,6 +30,19 @@
 void *malloc(unsigned long n);
 void free(void *p);
 static int fail_after = -1;
+
+/** The interrupt flag of the spinlock around the dead files' list: the
+ * test has none to save. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+/** Nothing, as `kirq_save`. */
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
 
 /** The host's malloc. */
 void *kmalloc(size_t n)
@@ -211,6 +227,29 @@ static void reap_rows(void)
     CHECK(released == 2 && one.refs == 0 && two.refs == 0);
     vm_file_reap();
     CHECK(released == 2);
+    vm_free(&m);
+}
+
+/** The list of files waiting for vm_file_reap says when it holds one
+ * (`vm_file_dead`), as a fault that runs without the big lock asks before
+ * it takes the lock to reap, and a reference taken and put back by the
+ * counts' atomic changes leaves the file live. */
+static void dead_rows(void)
+{
+    vm_space_t m = {0};
+    struct vm_file one = {1, no_fill, NULL, count_release};
+
+    released = 0;
+    vm_file_reap();
+    CHECK(!vm_file_dead());
+    CHECK(vm_insert_file(&m, 0x40000, 0x42000, VM_PROT_READ, VM_FILE, &one, 0) == 0);
+    vm_file_put(&one);
+    vm_file_get(&one);
+    vm_file_put(&one);
+    CHECK(one.refs == 1 && !vm_file_dead());
+    CHECK(vm_remove(&m, 0x40000, 0x42000) == 0 && one.refs == 0 && vm_file_dead());
+    vm_file_reap();
+    CHECK(released == 1 && !vm_file_dead());
     vm_free(&m);
 }
 
@@ -467,11 +506,15 @@ static void run_mapping_edges(void)
  * free range found is the highest that fits below hi and at or above lo; a
  * hole a removal left is used again, and 0 is returned when nothing fits.
  */
-int main(void)
+int main(int argc, char **argv)
 {
     vm_space_t vm = {0};
     vma_t *r;
 
+    if (argc == 2 && __builtin_strcmp(argv[1], "--dead-only") == 0) {
+        dead_rows();
+        return fails > 100 ? 100 : fails;
+    }
     vm_init(&vm);
     CHECK(vm.count == 0);
     CHECK(vm_find(&vm, 0x10000) == NULL);
@@ -704,6 +747,7 @@ int main(void)
     nowrite_rows();
     file_rows();
     reap_rows();
+    dead_rows();
     tree_rows();
     limit_rows();
     return (fails > 100) ? 100 : fails;

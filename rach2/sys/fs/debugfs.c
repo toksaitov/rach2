@@ -573,6 +573,7 @@ const struct vfs_ops debugfs_vops = {
     0, /* shutdown */
     0, /* xattr */
     0, /* cachestat */
+    0, /* put_unless_last */
 };
 
 /** The number at the start of `s` in `base`, 8 or 10, its end in `*end`. */
@@ -731,8 +732,8 @@ static void text_close(fd_entry_t *e)
     e->priv = NULL;
 }
 
-static const struct file_ops text_ops = {text_read,  text_write, NULL,       NULL,
-                                         text_close, NULL,       text_llseek};
+static const struct file_ops text_ops = {text_read,  text_write, NULL,        NULL,
+                                         text_close, NULL,       text_llseek, 0};
 
 /** Bind the text file `n` to `e`: a `struct dfs_text` with no text yet.
  * 0, or -ENOMEM. */
@@ -768,7 +769,7 @@ static int32_t sw_sync_bind(fd_entry_t *e, int flags)
 }
 
 /* sync/sw_sync's operations until `sw_sync_open` replaces them. */
-static const struct file_ops sw_sync_unbound = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+static const struct file_ops sw_sync_unbound = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0};
 
 int debugfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, const char *options)
 {

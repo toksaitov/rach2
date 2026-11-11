@@ -5,6 +5,7 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/fd_flat.c
  * host-cflags: -DRACH2_HOST_X86_64
  *
  * The three files of the path are included whole. A row makes an i386
@@ -123,16 +124,16 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
 /* ---- descriptors ---- */
 
 static fd_entry_t entries[8];
-static fd_table_t table = {entries, 8, 1, 0, NULL};
+static fd_table_t table = {{entries}, 8, 1, 0, SPINLOCK_INIT, NULL};
 static process_t proc;
 static struct socket inet6_sock;
 
 fd_entry_t *fd_get(fd_table_t *t, int fd)
 {
-    if (!t || fd < 0 || fd >= t->cap || t->entries[fd].type == FD_TYPE_NONE) {
+    if (!t || fd < 0 || fd >= t->cap || t->chunks[0][fd].type == FD_TYPE_NONE) {
         return NULL;
     }
-    return &t->entries[fd];
+    return &t->chunks[0][fd];
 }
 
 /* The descriptors: a device, a socket of AF_INET, one of AF_INET6, the

@@ -5,6 +5,7 @@
  * host-deps: rach2/sys/kvm/msr.c rach2/sys/kvm/emulate.c rach2/sys/kvm/decode.c
  * host-deps: rach2/sys/kvm/hyperv.c rach2/sys/kvm/pvclock.c
  * host-deps: rach2/sys/kvm/binstats.c rach2/sys/kvm/pmu.c
+ * host-deps: tests/host/compat/fd_flat.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * vmx.c is the kernel's, included whole, so that its table of operations
@@ -96,7 +97,7 @@ static struct mm caller_mm;
 static process_t caller;
 static fd_entry_t entries[64];
 static int reserved[64];
-static fd_table_t table = {entries, 64, 1, 0, NULL};
+static fd_table_t table = {{entries}, 64, 1, 0, SPINLOCK_INIT, NULL};
 struct percpu cpu_table[NR_CPUS] = {{.current = &caller}, {.current = &caller}};
 unsigned int host_cpu;
 

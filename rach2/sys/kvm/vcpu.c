@@ -371,7 +371,7 @@ static void vcpu_close(fd_entry_t *e)
 }
 
 static const struct file_ops vcpu_ops = {NULL,       NULL,      NULL, kvm_vcpu_ioctl,
-                                         vcpu_close, vcpu_mmap, NULL};
+                                         vcpu_close, vcpu_mmap, NULL, 0};
 
 void kvm_vcpu_free(struct kvm_vcpu *v)
 {
@@ -463,11 +463,12 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
     vm->vcpus[vm->nr_vcpus++] = v;
     kvm_vm_get(vm);
     kvm_tsc_sync(v, NULL);
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = &vcpu_ops;
     e->priv = v;
     e->flags = FD_FLAG_READ | FD_FLAG_WRITE | FD_FLAG_CLOEXEC;
+    fd_install(current_proc->fds, fd);
     return fd;
 fail:
     kvm_vcpu_free(v);

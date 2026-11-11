@@ -1420,6 +1420,7 @@ static const struct vfs_ops tmpfs_ops = {
     0, /* shutdown */
     0, /* xattr */
     tmpfs_cachestat,
+    0, /* put_unless_last */
 };
 
 const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1, 1, 0, 0};

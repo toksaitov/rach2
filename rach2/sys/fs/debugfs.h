@@ -96,7 +96,8 @@ void debugfs_remove(const char *path);
  * of the system call layer: `ops`, `priv`, then the file's `open`, or a
  * text file's operations. 0, or the `open`'s -errno or -ENOMEM, after which
  * the caller frees the descriptor's slot, which clears `ops` and `priv`. It
- * may sleep, so the caller finds `e` again after it (`fd_entry_now`).
+ * may sleep; the slot, a reservation until the caller publishes it, stays
+ * where it is.
  */
 int32_t debugfs_bind(void *node, fd_entry_t *e, int flags);
 

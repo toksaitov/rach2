@@ -201,7 +201,8 @@ static void structure(const char *name)
 }
 
 /* Copy every #define line whose name begins with one of the prefixes of
- * `pattern`, which `|` separates. */
+ * `pattern`, which `|` separates, with the lines a backslash continues it
+ * onto. */
 static void defines(const char *pattern)
 {
     int found = 0;
@@ -219,9 +220,12 @@ static void defines(const char *pattern)
             alt += n + 1;
         }
         if (match) {
+            const char *end = t + strcspn(t, "\n");
+            while (*end && end > t && end[-1] == '\\')
+                end += 1 + strcspn(end + 1, "\n");
             if (found++)
                 put("\n", 1);
-            put(t, strcspn(t, "\n"));
+            put(t, (size_t)(end - t));
         }
     }
     if (!found)

@@ -706,7 +706,9 @@ int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_
     uintptr_t off;
     uint32_t i;
 
+    mm_read_begin(mm);
     regions = regions_take(&mm->vm, &count);
+    mm_read_end(mm);
     if (!regions) {
         return -ENOMEM;
     }

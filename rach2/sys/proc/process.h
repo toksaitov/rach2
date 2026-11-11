@@ -90,6 +90,9 @@ struct fs_struct {
      * and `..` stops there. */
     struct vfs_mount *root_mnt;
     void *root_node;
+    /* Guards the two pairs above, which change under the big lock and this,
+     * for a walk that reads the root without the big lock (vfs.c). */
+    struct spinlock lock;
     /* File-creation mask (umask(2)), low 9 bits. */
     uint32_t umask;
     /* The execs in progress, by threads that share this, that apply set-id
@@ -344,6 +347,15 @@ struct process {
      * began (`device_fault`): a fault from user mode returns, so that the
      * thread's signals are handled, and the access runs again. */
     uint32_t fault_retry;
+    /* The regions' locks this thread holds (mm.h's `mmap_read_lock`): the
+     * address space, NULL in a free slot, how many holds it counts, and
+     * whether they are a writer's. Only the thread itself reads or writes
+     * them. */
+    struct mmap_hold {
+        struct mm *mm;
+        uint32_t depth;
+        uint32_t write;
+    } mmap_holds[2];
     /* It waits, with its registers and floating-point state saved, for the
      * core another thread of its process writes (`core_park`). */
     uint32_t core_parked;
@@ -552,6 +564,9 @@ struct process {
     uint32_t *fd_held;
     int fd_held_words;
     int fd_holding;
+    /* The next sharer of its descriptor table (`fd_table_t.sharers`). The
+     * map, this link and `fd_holding` change under the table's lock. */
+    struct process *fd_sharer_next;
     /* While the thread sleeps in `poll_wait` (io/poll.c), the queues it has
      * records on and the records, `poll_n` of each, which a close by
      * another thread may take off their queues (`close_fd`); NULL and 0 at

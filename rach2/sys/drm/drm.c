@@ -692,7 +692,7 @@ static int32_t drm_node_mmap(fd_entry_t *e, struct vma *vma)
 }
 
 static const struct file_ops drm_fops = {drm_read,       NULL,          drm_poll, drm_node_ioctl,
-                                         drm_node_close, drm_node_mmap, NULL};
+                                         drm_node_close, drm_node_mmap, NULL,     0};
 
 /** Whether the held descriptor belongs to this DRM core's node operations. */
 int drm_is_file(const fd_entry_t *entry)

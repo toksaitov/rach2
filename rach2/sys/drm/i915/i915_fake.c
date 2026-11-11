@@ -1221,7 +1221,7 @@ static void fake_file_close(fd_entry_t *e)
 }
 
 static const struct file_ops fake_file_ops = {
-    fake_file_read, fake_file_write, NULL, NULL, fake_file_close, NULL, fake_file_llseek};
+    fake_file_read, fake_file_write, NULL, NULL, fake_file_close, NULL, fake_file_llseek, 0};
 
 /** The open: the text made now, and a reference to the device, so that
  * the fake outlives the descriptor. */

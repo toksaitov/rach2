@@ -6,6 +6,8 @@
  * host-deps: tests/host/compat/vfs_name_none.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/bkl_none.c
+ * host-deps: tests/host/compat/atomic_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * The heap counts the allocations live in `allocations`; a row that sets
@@ -209,15 +211,15 @@ void wait_queue_init(wait_queue_t *wq)
 }
 
 /**
- * The wait for a busy description: check that it starts busy under one
- * namespace lock, end the other operation that holds it, as that operation
- * would while the caller sleeps, and count the wait. Returns 0.
+ * The wait for a busy description: check that it starts busy with no
+ * namespace lock held, end the other operation that holds it, as that
+ * operation would while the caller sleeps, and count the wait. Returns 0.
  */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
     check(!cond(arg), "description wait starts busy");
-    check(depth == 1, "namespace precedes description wait");
+    check(depth == 0, "the description wait holds no namespace lock");
     ((struct open_file *)arg)->busy = 0;
     check(cond(arg), "description wait ends idle");
     waits++;
@@ -241,7 +243,7 @@ void wq_wake_all(wait_queue_t *wq)
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
     if (pending) {
-        check(!reader->busy, "namespace wait precedes description lock");
+        check(reader->busy, "the description lock precedes the namespace lock");
         fd_ofd_repoint(mnt, &old_node, &new_node);
         pending = 0;
         waits++;
@@ -255,7 +257,7 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
     (void)mnt;
     check(depth > 0, "namespace unlock is balanced");
     if (depth == 1) {
-        check(!reader->busy, "description released before namespace");
+        check(reader->busy, "the namespace lock is let go before the description lock");
     }
     depth--;
 }
@@ -306,7 +308,7 @@ static void stdio_allocations(void)
         fail_after = -1;
         check(allocations == 1, "stdio releases partial allocations");
         for (i = FD_STDIN; i <= FD_STDERR; i++) {
-            fd_entry_t *e = &table.entries[i];
+            fd_entry_t *e = fd_slot(&table, i);
 
             check(e->type == FD_TYPE_NONE && !e->ofd && !e->flags,
                   "stdio failure leaves an empty table");
@@ -315,7 +317,7 @@ static void stdio_allocations(void)
         check(fd_init_stdio(&table, 0) == 0, "stdio retry succeeds");
         check(allocations == 7, "stdio allocates three descriptions and their count records");
         for (i = FD_STDIN; i <= FD_STDERR; i++) {
-            fd_entry_t *e = &table.entries[i];
+            fd_entry_t *e = fd_slot(&table, i);
 
             check(e->type == FD_TYPE_CONSOLE && e->ofd, "stdio descriptor has a description");
             check(e->flags == (FD_FLAG_READ | FD_FLAG_WRITE),
@@ -327,7 +329,7 @@ static void stdio_allocations(void)
                       !e->ofd->status_flags,
                   "stdio description starts cleared");
             for (j = FD_STDIN; j < i; j++) {
-                check(e->ofd != table.entries[j].ofd, "stdio descriptions are separate");
+                check(e->ofd != fd_slot(&table, j)->ofd, "stdio descriptions are separate");
             }
         }
         for (i = FD_STDIN; i <= FD_STDERR; i++) {
@@ -477,8 +479,9 @@ static void shared_limits(void)
         fd_free(second->fds, i);
     }
     fd_table_delete(second->fds);
-    check(fd_table_share(first->fds, second) == 0, "the table is shared");
-    second->fds = first->fds;
+    second->fds = 0;
+    check(fd_table_share(first->fds, second) == 0 && second->fds == first->fds,
+          "the table is shared");
     second->rlim[RLIM_NOFILE].cur = 4;
     current_proc = second;
     check(fd_limit(second->fds) == 4 && fd_alloc(second->fds) == 3,
@@ -491,11 +494,197 @@ static void shared_limits(void)
     current_proc = 0;
     fd_free(first->fds, 3);
     fd_free(first->fds, 4);
-    first->fds->refs--;
-    second->fds = 0;
     free_process(second);
+    check(first->fds->refs == 1 && first->fds->sharers == first && !first->fd_sharer_next,
+          "a sharer that goes leaves the table and its list of sharers");
     close_process(first);
     check(!proc_list && !allocations, "the shared table's cleanup releases all storage");
+}
+
+/**
+ * A descriptor of a shared table: a reservation is no descriptor to a
+ * lookup, a copy, a listing or a close until it is published; a close of a
+ * descriptor that another sharer's call holds only marks it closing, which
+ * no lookup or second close passes, and the end of the holder's call claims
+ * its release, as Linux's last `fput` releases a file another thread's call
+ * kept.
+ */
+static void shared_closes(void)
+{
+    process_t *first = alloc_process();
+    process_t *second = alloc_process();
+    struct open_file *ofd;
+    fd_entry_t copy;
+    int i, fd;
+
+    check(first && second, "two processes for the closes");
+    if (!first || !second) {
+        return;
+    }
+    for (i = FD_STDIN; i <= FD_STDERR; i++) {
+        fd_free(second->fds, i);
+    }
+    fd_table_delete(second->fds);
+    second->fds = 0;
+    check(fd_table_share(first->fds, second) == 0, "the table is shared for the closes");
+    current_proc = second;
+    fd = fd_alloc(second->fds);
+    check(fd == 3, "the second sharer reserves descriptor 3");
+    if (fd != 3) {
+        return;
+    }
+    fd_slot(second->fds, fd)->type = FD_TYPE_CONSOLE;
+    ofd = fd_slot(second->fds, fd)->ofd;
+    current_proc = first;
+    check(!fd_get(first->fds, fd) && fd_peek(first->fds, fd, &copy, 0) == -EBADF &&
+              fd_next_open(first->fds, fd) == -1 && fd_close_claim(first->fds, fd) == -EBADF,
+          "a reservation is no descriptor until it is published");
+    fd_install(second->fds, fd);
+    check(fd_peek(first->fds, fd, &copy, FD_PEEK_REF) == 0 && copy.ofd == ofd &&
+              ofd->refcount == 2 && fd_next_open(first->fds, 0) == FD_STDIN &&
+              fd_next_open(first->fds, fd) == fd,
+          "a published descriptor is found, and a copy holds its description");
+    fd_ofd_unref(copy.ofd);
+    check(fd_close_claim(first->fds, fd) == 0 &&
+              (fd_slot(first->fds, fd)->flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)) ==
+                  FD_FLAG_CLOSING,
+          "a close of a descriptor another sharer's call holds marks it closing");
+    check(!fd_get(first->fds, fd) && fd_close_claim(first->fds, fd) == -EBADF &&
+              fd_peek(first->fds, fd, &copy, 0) == -EBADF,
+          "no lookup, copy or second close passes a closing descriptor");
+    current_proc = second;
+    check(fd_holds_claim(0) == fd && (fd_slot(second->fds, fd)->flags & FD_FLAG_RELEASING),
+          "the end of the holder's call claims the release");
+    check(fd_holds_claim(fd + 1) == -1 && second->fd_holding == 0,
+          "and the call holds nothing more");
+    check(ofd->refcount == 1 && fd_ofd_unref_unless_last(ofd) == 0,
+          "the claimed descriptor holds the description's last reference");
+    fd_ofd_unref(ofd);
+    fd_free_after(second->fds, fd);
+    current_proc = first;
+    check(fd_holds_claim(0) == -1 && fd_alloc(first->fds) == fd,
+          "a released slot is free for the next open");
+    current_proc = 0;
+    fd_free(first->fds, fd);
+    check(!first->fds->lock.locked, "every call lets the table's lock go");
+    free_process(second);
+    close_process(first);
+    check(!proc_list && !allocations, "the closes leave nothing allocated");
+}
+
+/**
+ * A close that left a descriptor to another sharer's call takes its release
+ * over once that hold goes without the call's end, as a close does after it
+ * lets an epoll_wait asleep go of the descriptor: never while the hold
+ * stays, and once alone.
+ */
+static void close_finish(void)
+{
+    process_t *first = alloc_process();
+    process_t *second = alloc_process();
+    struct open_file *ofd;
+    int i, fd;
+
+    check(first && second, "two processes for the finished close");
+    if (!first || !second) {
+        return;
+    }
+    for (i = FD_STDIN; i <= FD_STDERR; i++) {
+        fd_free(second->fds, i);
+    }
+    fd_table_delete(second->fds);
+    second->fds = 0;
+    check(fd_table_share(first->fds, second) == 0, "the table is shared for the finished close");
+    current_proc = second;
+    fd = fd_alloc(second->fds);
+    check(fd == 3, "the second sharer holds descriptor 3");
+    if (fd != 3) {
+        return;
+    }
+    fd_slot(second->fds, fd)->type = FD_TYPE_CONSOLE;
+    ofd = fd_slot(second->fds, fd)->ofd;
+    fd_install(second->fds, fd);
+    current_proc = first;
+    check(fd_close_finish(first->fds, fd) == 0, "an open descriptor has no close to finish");
+    check(fd_close_claim(first->fds, fd) == 0 && fd_close_finish(first->fds, fd) == 0,
+          "a close does not finish while another sharer's call holds the descriptor");
+    second->fd_held[0] &= ~(1u << fd);
+    check(fd_close_finish(first->fds, fd) == 1 &&
+              (fd_slot(first->fds, fd)->flags & FD_FLAG_RELEASING),
+          "once the hold goes, the close takes the release over");
+    check(fd_close_finish(first->fds, fd) == 0, "and takes it once");
+    current_proc = second;
+    check(fd_holds_claim(0) == -1 && second->fd_holding == 0,
+          "the end of the call that lost its hold releases nothing");
+    current_proc = first;
+    check(ofd->refcount == 1 && fd_ofd_unref_unless_last(ofd) == 0,
+          "the close holds the description's last reference");
+    fd_ofd_unref(ofd);
+    fd_free_after(first->fds, fd);
+    current_proc = 0;
+    check(!first->fds->lock.locked, "the finished close lets the table's lock go");
+    free_process(second);
+    close_process(first);
+    check(!proc_list && !allocations, "the finished close leaves nothing allocated");
+}
+
+/**
+ * A growth adds a chunk as large as the table and moves no entry, so the
+ * address of an entry stays its slot's: chunk k > 0 holds the entries from
+ * FD_TABLE_FIRST << (k - 1), each chunk contiguous.
+ */
+static void table_chunks(void)
+{
+    fd_table_t table;
+    fd_entry_t *first;
+    int fd, k;
+
+    check(fd_table_init(&table) == 0, "a table for the chunks");
+    fd = fd_alloc(&table);
+    check(fd == 0, "the first descriptor");
+    if (fd != 0) {
+        return;
+    }
+    fd_slot(&table, fd)->type = FD_TYPE_CONSOLE;
+    fd_install(&table, fd);
+    first = fd_slot(&table, fd);
+    check(fd_table_reach(&table, 100) == 0 && fd_table_cap(&table) == 128,
+          "a reach of 100 grows the table to 128");
+    check(fd_slot(&table, 0) == first && fd_get(&table, 0) == first,
+          "a growth leaves an entry where it was");
+    for (k = 1; k < 4; k++) {
+        int start = FD_TABLE_FIRST << (k - 1);
+
+        check(fd_slot(&table, 2 * start - 1) == fd_slot(&table, start) + start - 1 &&
+                  table.chunks[k] == fd_slot(&table, start),
+              "each chunk holds as many entries as those before it, in order");
+    }
+    check(!table.chunks[4] && !table.lock.locked, "no chunk past the last, and the lock is free");
+    fd_free(&table, fd);
+    fd_table_free(&table);
+    check(allocations == 0, "the chunks leave nothing allocated");
+}
+
+/**
+ * Which descriptor of a description is the last is decided in one step on
+ * the count: a reference that is not the last is dropped, and the last is
+ * left for its holder to release the description's objects and then drop.
+ */
+static void description_last(void)
+{
+    struct open_file *ofd = fd_ofd_new();
+
+    check(ofd != 0, "a description for the last reference");
+    if (!ofd) {
+        return;
+    }
+    fd_ofd_ref(ofd);
+    check(fd_ofd_unref_unless_last(ofd) == 1 && ofd->refcount == 1,
+          "a reference that is not the last is dropped");
+    check(fd_ofd_unref_unless_last(ofd) == 0 && ofd->refcount == 1,
+          "the last is left for its holder");
+    fd_ofd_unref(ofd);
+    check(allocations == 0, "the last reference frees the description");
 }
 
 /**
@@ -516,18 +705,19 @@ static void table_copies(void)
     if (reserved < 0 || open < 0) {
         return;
     }
-    table.entries[open].type = FD_TYPE_CONSOLE;
+    fd_slot(&table, open)->type = FD_TYPE_CONSOLE;
+    fd_install(&table, open);
     copy = fd_table_dup(&table);
     check(copy != NULL, "table copy allocation");
     if (copy) {
-        check(copy->entries[reserved].type == FD_TYPE_NONE && !copy->entries[reserved].ofd,
+        check(fd_slot(copy, reserved)->type == FD_TYPE_NONE && !fd_slot(copy, reserved)->ofd,
               "a reserved slot is free in the copy");
-        check(copy->entries[open].type == FD_TYPE_CONSOLE &&
-                  copy->entries[open].ofd == table.entries[open].ofd,
+        check(fd_slot(copy, open)->type == FD_TYPE_CONSOLE &&
+                  fd_slot(copy, open)->ofd == fd_slot(&table, open)->ofd,
               "an open descriptor is in the copy");
         check(fd_alloc(copy) == reserved, "the copy allocates the reserved slot");
         fd_free(copy, reserved);
-        k_memset(&copy->entries[open], 0, sizeof(copy->entries[open]));
+        k_memset(fd_slot(copy, open), 0, sizeof((*fd_slot(copy, open))));
         fd_table_delete(copy);
     }
     fd_free(&table, reserved);
@@ -551,8 +741,8 @@ static void allocation_errors(void)
     fail_after = 0;
     fd = fd_alloc(&table);
     fail_after = -1;
-    check(fd == -ENOMEM && allocations == 1 && table.entries[0].type == FD_TYPE_NONE &&
-              !table.entries[0].ofd,
+    check(fd == -ENOMEM && allocations == 1 && fd_slot(&table, 0)->type == FD_TYPE_NONE &&
+              !fd_slot(&table, 0)->ofd,
           "a description the heap has no room for is ENOMEM and leaves the slot free");
     for (i = 0; i < FD_TABLE_FIRST; i++) {
         check(fd_alloc(&table) == i, "the first entries are taken in order");
@@ -561,13 +751,15 @@ static void allocation_errors(void)
     fd = fd_alloc(&table);
     fail_after = -1;
     check(fd == -ENOMEM && fd_table_cap(&table) == FD_TABLE_FIRST,
-          "a table the heap has no room to grow is ENOMEM");
-    fail_after = 2; /* the replaced array's record and the new array */
+          "a description the heap has no room for in a full table is ENOMEM");
+    i = allocations;
+    fail_after = 2; /* the description's record and its spare count */
     fd = fd_alloc(&table);
     fail_after = -1;
-    check(fd == -ENOMEM && fd_table_cap(&table) == 2 * FD_TABLE_FIRST &&
-              !table.entries[FD_TABLE_FIRST].ofd && fd_alloc(&table) == FD_TABLE_FIRST,
-          "a description the heap has no room for in a grown table is ENOMEM");
+    check(fd == -ENOMEM && fd_table_cap(&table) == FD_TABLE_FIRST && allocations == i,
+          "a table the heap has no room to grow is ENOMEM and frees the description");
+    check(fd_alloc(&table) == FD_TABLE_FIRST && fd_table_cap(&table) == 2 * FD_TABLE_FIRST,
+          "a growth adds a chunk as large as the table");
     check(fd_alloc_from(&table, fd_nr_open) == -EMFILE, "a minimum at the limit is EMFILE");
     fail_after = 0;
     fd = fd_table_reach(&table, FD_TABLE_LIMIT - 1);
@@ -658,12 +850,13 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
  * Run the rows of the functions above, then those of the description lock
  * and the namespace lock on one description:
  *
- * - on the KRFFS root's type the namespace lock comes first and completes a
- *   pending move, which updates the description's node and handle, so an
- *   operation that reads the handle after the lock gets the moved node; the
- *   description lock is let go before the outer namespace lock;
- * - a description another operation holds is waited for under the
- *   namespace lock, and a wake follows its release;
+ * - on the KRFFS root's type the description lock comes first, as Linux's
+ *   f_pos_lock comes before i_rwsem, and the namespace lock after it
+ *   completes a pending move, which updates the description's node and
+ *   handle, so an operation that reads the handle after the locks gets the
+ *   moved node; the namespace lock is let go before the description lock;
+ * - a description another operation holds is waited for with no namespace
+ *   lock held, and a wake follows its release;
  * - on another type whose descriptions take the namespace lock, a move
  *   updates the node and leaves the handle, an open record of the type's
  *   own;
@@ -687,10 +880,14 @@ int main(void)
     allocation_errors();
     description_holders();
     description_live();
+    shared_closes();
+    close_finish();
+    table_chunks();
+    description_last();
     if (fd_table_init(&table) != 0 || (fd = fd_alloc(&table)) < 0) {
         return 1;
     }
-    reader = table.entries[fd].ofd;
+    reader = fd_slot(&table, fd)->ofd;
     mnt.type = &vfs_krffs_type;
     reader->vmnt = &mnt;
     reader->vnode = &old_node;
@@ -713,7 +910,7 @@ int main(void)
     check(reader->vnode == &new_node && reader->fhandle == &old_node,
           "mounted open handle remains stable during node relocation");
     fd_ofd_lock(reader);
-    check(depth == 1, "other mounted types take the namespace before the description");
+    check(depth == 1, "other mounted types take the namespace lock after the description lock");
     fd_ofd_unlock(reader);
     mnt.type = &plain_type;
     fd_ofd_lock(reader);
@@ -727,7 +924,7 @@ int main(void)
     fd_table_free(&table);
     if (!fails) {
         printf("fd_hosttest: pass: stdio allocation, description ordering, shared limits, "
-               "allocation errors and open descriptions\n");
+               "shared closes, chunks, allocation errors and open descriptions\n");
     }
     return fails != 0;
 }

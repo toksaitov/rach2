@@ -789,13 +789,13 @@ static void forcewake_user_close(fd_entry_t *e)
 }
 
 static const struct file_ops forcewake_user_ops = {NULL, NULL, NULL, NULL, forcewake_user_close,
-                                                   NULL, NULL};
+                                                   NULL, NULL, 0};
 
 static const struct file_ops error_state_ops = {
-    state_read, error_state_write, NULL, NULL, state_close, NULL, state_llseek};
+    state_read, error_state_write, NULL, NULL, state_close, NULL, state_llseek, 0};
 
-static const struct file_ops gpu_info_ops = {state_read,  NULL, NULL,        NULL,
-                                             state_close, NULL, state_llseek};
+static const struct file_ops gpu_info_ops = {state_read,  NULL, NULL,         NULL,
+                                             state_close, NULL, state_llseek, 0};
 
 /**
  * Open i915_error_state or, with `fresh`, i915_gpu_info: the text of the

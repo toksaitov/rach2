@@ -508,7 +508,9 @@ static int large_ok(struct mm *mm, struct tdp *t, uint64_t gfn, int write,
  * and then read again from the caller's tables with nothing that sleeps
  * before the leaf is set, so that the change notice, which runs only under
  * the big lock, cannot come between the read and the leaf. The slot is
- * looked up again after each sleep, since it may have moved or gone. A
+ * looked up again after each sleep, since it may have moved or gone. The
+ * regions are read under the big lock alone, which every change of them
+ * holds (mm.h), with nothing that sleeps between the read and the leaf. A
  * page of memfd_secret is -EFAULT, as Linux's get_user_pages refuses one.
  *
  * A page that stands for the zero page (PTE_ZEROFILL) is mapped read-only
@@ -564,8 +566,7 @@ int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write)
         }
     }
     if (writable) {
-        mmu_user_table(mm->dir, (uintptr_t)s.hva, 0)[MMU_INDEX((uintptr_t)s.hva)] &=
-            ~(pte_t)PTE_ZEROFILL;
+        paging_entry_clear(mm, (uintptr_t)s.hva, (pte_t)PTE_ZEROFILL);
     }
     return map(vm, t, gfn, 1, leaf_entry(vm, phys, writable, 0, paging_frame_is_device(phys)));
 }

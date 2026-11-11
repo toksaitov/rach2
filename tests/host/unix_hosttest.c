@@ -6,6 +6,7 @@
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/fs/sleeplock.c
+ * host-deps: tests/host/compat/fd_flat.c
  *
  * `ipc/unix.c`, `ipc/pipe.c` and the checked user copy are the kernel's,
  * included whole to reach their static state. The descriptor table the
@@ -351,6 +352,39 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     return 1;
 }
 
+/** `vm_user_begin` over the model: the range brought in by
+ * `vm_prefault_range`, 1 as with the regions' lock held, which the model
+ * does not keep; 0 for an empty range and -1 where the prefault fails. */
+int vm_user_begin(uintptr_t addr, uintptr_t len, int write)
+{
+    if (len == 0) {
+        return 0;
+    }
+    return vm_prefault_range(addr, len, write) ? 1 : -1;
+}
+
+/** End what `vm_user_begin` began: nothing to give back. */
+void vm_user_end(void)
+{}
+
+/** `vm_prefault_held`: the model's prefault. */
+int vm_prefault_held(uintptr_t addr, uintptr_t len, int write)
+{
+    return vm_prefault_range(addr, len, write);
+}
+
+/** The regions' lock of the string copies: the model has none. */
+void mmap_read_lock(struct mm *mm)
+{
+    (void)mm;
+}
+
+/** Give back what `mmap_read_lock` took: nothing. */
+void mmap_unlock(struct mm *mm)
+{
+    (void)mm;
+}
+
 /** Whether every page of [addr, addr + len) is present, with no sleep: 1,
  * or 0 for a page outside the model or not present, which the caller then
  * brings in (`vm_prefault_range`). */
@@ -648,7 +682,7 @@ int fd_alloc(fd_table_t *table)
     int i;
 
     for (i = 0; i < table->cap; i++) {
-        fd_entry_t *e = &table->entries[i];
+        fd_entry_t *e = &table->chunks[0][i];
 
         if (e->type == FD_TYPE_NONE && !e->ofd) {
             e->ofd = kzalloc(sizeof(*e->ofd));
@@ -674,7 +708,7 @@ int fd_free(fd_table_t *table, int fd)
     if (fd < 0 || fd >= table->cap) {
         return -1;
     }
-    e = &table->entries[fd];
+    e = &table->chunks[0][fd];
     if (e->type == FD_TYPE_NONE && !e->ofd) {
         return -1;
     }
@@ -700,7 +734,7 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
     if (fd < 0 || fd >= table->cap) {
         return NULL;
     }
-    e = &table->entries[fd];
+    e = &table->chunks[0][fd];
     return e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING) ? NULL : e;
 }
 
@@ -718,7 +752,7 @@ static int holders(const krffs_node_t *node, const fd_entry_t *except)
     int i;
 
     for (i = 0; i < shared.cap; i++) {
-        const fd_entry_t *e = &shared.entries[i];
+        const fd_entry_t *e = &shared.chunks[0][i];
 
         if (e != except && e->type == FD_TYPE_FILE && e->node == node) {
             n++;
@@ -943,13 +977,13 @@ static uint32_t path_at(uint32_t addr, const char *path)
 /** Slot `fd` of the shared table, whatever its state. */
 static fd_entry_t *fd_at(int fd)
 {
-    return &shared.entries[fd];
+    return &shared.chunks[0][fd];
 }
 
 /** The socket of slot `fd` of the shared table. */
 static struct unix_sock *sock_at(int fd)
 {
-    return (struct unix_sock *)shared.entries[fd].priv;
+    return (struct unix_sock *)shared.chunks[0][fd].priv;
 }
 
 /** close(2) in the shared table, as `close_fd` closes a descriptor no other
@@ -978,7 +1012,7 @@ static int open_orphan(int n)
     if (fd < 0) {
         return fd;
     }
-    e = &shared.entries[fd];
+    e = &shared.chunks[0][fd];
     e->node = &nodes[n];
     e->ofd->vnode = &nodes[n];
     e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
@@ -1763,7 +1797,7 @@ int main(void)
 {
     unix_init();
     pipe_init_pool();
-    shared.entries = slots;
+    shared.chunks[0] = slots;
     shared.cap = SLOTS;
     shared.refs = 2;
     dirs.umask = 022;

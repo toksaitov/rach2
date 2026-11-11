@@ -333,6 +333,7 @@ static const struct vfs_ops pstore_vops = {
     0,                                     /* shutdown */
     0,                                     /* xattr */
     0,                                     /* cachestat */
+    0,                                     /* put_unless_last */
 };
 
 /** The constructor: every mount shows the one directory, as Linux's

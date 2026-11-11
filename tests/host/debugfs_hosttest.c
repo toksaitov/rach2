@@ -2,6 +2,7 @@
  * and read through sync/sw_sync and sync/info.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/fd_flat.c
  */
 #include "fs/debugfs.c"
 #include "dmabuf/fence.c"
@@ -111,10 +112,10 @@ int fd_alloc(fd_table_t *t)
 {
     int i;
     for (i = 0; i < 64; i++)
-        if (t->entries[i].type == FD_TYPE_NONE) {
+        if (t->chunks[0][i].type == FD_TYPE_NONE) {
             k_memset(&descriptions[i], 0, sizeof(descriptions[i]));
-            t->entries[i].ofd = &descriptions[i];
-            t->entries[i].type = FD_TYPE_ANON;
+            t->chunks[0][i].ofd = &descriptions[i];
+            t->chunks[0][i].type = FD_TYPE_ANON;
             return i;
         }
     return -EMFILE;
@@ -122,7 +123,7 @@ int fd_alloc(fd_table_t *t)
 /** Find a live model descriptor. */
 fd_entry_t *fd_get(fd_table_t *t, int fd)
 {
-    return fd >= 0 && fd < 64 && t->entries[fd].type != FD_TYPE_NONE ? &t->entries[fd] : NULL;
+    return fd >= 0 && fd < 64 && t->chunks[0][fd].type != FD_TYPE_NONE ? &t->chunks[0][fd] : NULL;
 }
 /** Release the object attached to a model descriptor. */
 int fd_free(fd_table_t *t, int fd)
@@ -246,7 +247,7 @@ static void tree_cases(struct vfs_mount *m)
     dfs_put(m, sync);
 }
 
-static const struct file_ops none_ops = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+static const struct file_ops none_ops = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0};
 static int binds;
 
 /** An open hook that counts and refuses its second call. */
@@ -366,7 +367,7 @@ int main(void)
     int i;
     current_proc = &self;
     k_memcpy(self.comm, "debugfs-test", 13);
-    table.entries = slots;
+    table.chunks[0] = slots;
     table.cap = 64;
     self.fds = &table;
     k_memset(&m, 0, sizeof(m));

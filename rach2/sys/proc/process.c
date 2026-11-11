@@ -416,7 +416,11 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
         dirs->refs++;
     }
     if (!parent) {
-        p->fds = fd_table_new();
+        fd_table_t *fds = fd_table_new();
+
+        if (fds) {
+            fd_table_join(fds, p);
+        }
         if (!p->fds || fd_init_stdio(p->fds, tty_console_vhangups()) != 0) {
             goto fail_parts;
         }
@@ -494,7 +498,7 @@ void free_process(process_t *proc)
     if (proc == proc_idle) {
         proc_idle = NULL;
     }
-    if (proc->fds && --proc->fds->refs == 0) {
+    if (proc->fds && fd_table_put(proc)) {
         fd_table_delete(proc->fds);
     }
     kfree(proc->fd_held);

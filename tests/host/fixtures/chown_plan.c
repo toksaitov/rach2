@@ -2,9 +2,9 @@
  * The set-id rules of a chown on a mounted file system.
  *
  * The rule of mk/host-fixtures.mk extracts `vfs_chown_plan` and the
- * three credential helpers it calls unchanged from rach2/sys/syscall_fs.c
- * into chown_plan.inc, with the
- * `proc_privileged` macro from rach2/sys/proc/process.h, `struct vfs_stat`
+ * four credential helpers it calls unchanged from rach2/sys/syscall_fs.c
+ * into chown_plan.inc, with the `proc_privileged` macro and the
+ * file-system id macros from rach2/sys/proc/process.h, `struct vfs_stat`
  * and the `VFS_SET_` masks from rach2/sys/fs/vfs.h and `EPERM` from
  * rach2/sys/lib/kerrno.h. The chown by path and the chown by descriptor
  * both decide through that plan for every volume but the boot root, so
@@ -28,6 +28,9 @@ struct userns {
 struct fixture_proc {
     uint32_t euid;
     uint32_t egid;
+    uint32_t fsuid; /* read only while `fs_own` says so; 0 here */
+    uint32_t fsgid;
+    uint32_t fs_own;
     uint32_t nocaps;
     struct userns *userns; /* NULL in the first user namespace */
     uint32_t ngroups;

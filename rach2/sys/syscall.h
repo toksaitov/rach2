@@ -27,8 +27,9 @@ int in_compat_syscall(void);
  * Run the calls of `abi` that dispatch to `handler` without the big lock,
  * as Linux runs every call: the handler takes the locks of what it touches.
  * Every number the table gives `handler` is marked, so the call is made
- * after `init_syscall`. A handler on no number, or an ABI this kernel does
- * not have, marks nothing.
+ * once the table is filled: in `init_syscall`, or at the end of the
+ * architecture's fill (`arch_syscall_init`, `ia32_syscall_init`). A
+ * handler on no number, or an ABI this kernel does not have, marks nothing.
  */
 void syscall_unlock(int abi, syscall_fn_t handler);
 
