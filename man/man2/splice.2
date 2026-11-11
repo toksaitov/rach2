@@ -122,7 +122,8 @@ refuses it, is not copied either: the vDSO's data page,
 .Li [vvar] ,
 a page of a mapping made without
 .Dv PROT_READ
-that the process has not written, a region of
+that is not present in the mapping or is the shared zero page, as an
+untouched page is and an anonymous page read but never written is, a region of
 .Xr memfd_secret 2 ,
 device memory or a page the caller cannot read ends the call, with the
 bytes before it or
