@@ -610,6 +610,7 @@ void probe_main(unsigned long *sp)
     for (i = 0; i < nplan; i++) {
         report_plan(plan[i]);
     }
+    pipefd[0] = pipefd[1] = -1;
     pid = syscall1(SYS_PIPE, (long)pipefd) == 0 ? syscall0(SYS_FORK) : -1;
     if (pid == 0) {
         syscall1(SYS_CLOSE, pipefd[0]);

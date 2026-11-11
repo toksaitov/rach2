@@ -890,6 +890,14 @@ int tty_is_background(struct tty *t, int sid, int pgid)
     return 0;
 }
 
+/** No process of a row is in the background, so none is stopped: 0. */
+int tty_job_check(struct tty *t, int signo)
+{
+    (void)t;
+    (void)signo;
+    return 0;
+}
+
 /** No row signals a process group. */
 void tty_signal_group(int pgid, int signo)
 {
