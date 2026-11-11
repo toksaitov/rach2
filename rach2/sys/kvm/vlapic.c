@@ -615,13 +615,14 @@ int kvm_lapic_match_dest(struct kvm_vcpu *v, uint32_t id, int logical)
 }
 
 /** Whether `target` is a destination of `irq` sent by `src`, as Linux's
- * kvm_apic_match_dest; a device's broadcast to an x2APIC is x2APIC's. */
+ * kvm_apic_match_dest; a device's broadcast to an x2APIC is x2APIC's,
+ * unless KVM_X2APIC_API_DISABLE_BROADCAST_QUIRK makes 0xFF an x2APIC id. */
 static int match_dest(const struct lapic *target, const struct lapic *src,
                       const struct kvm_lapic_irq *irq)
 {
     uint32_t mda = irq->dest_id;
 
-    if (!src && mda == APIC_BROADCAST && x2apic(target)) {
+    if (!src && mda == APIC_BROADCAST && x2apic(target) && !target->v->vm->x2apic_no_broadcast) {
         mda = X2APIC_BROADCAST;
     }
     switch (irq->shorthand) {
@@ -1538,8 +1539,9 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
 }
 
 /** KVM_GET_LAPIC: the page, with LVR and TMCCT as the guest reads them,
- * and in x2APIC mode the id in xAPIC's place, as Linux's
- * kvm_apic_state_fixup gives it without KVM_CAP_X2APIC_API. */
+ * and in x2APIC mode the id in xAPIC's place unless
+ * KVM_X2APIC_API_USE_32BIT_IDS asked for all 32 bits, as Linux's
+ * kvm_apic_state_fixup gives it. */
 static int32_t get_lapic(struct lapic *l, uintptr_t arg)
 {
     struct kvm_lapic_state s;
@@ -1551,7 +1553,7 @@ static int32_t get_lapic(struct lapic *l, uintptr_t arg)
             w = lvr_of(l->v);
         } else if (i * 4u == APIC_TMCCT) {
             w = tmcct(l);
-        } else if (i * 4u == APIC_ID && x2apic(l)) {
+        } else if (i * 4u == APIC_ID && x2apic(l) && !l->v->vm->x2apic_format) {
             w <<= 24;
         }
         s.regs[i * 4u] = (uint8_t)w;
@@ -1562,9 +1564,12 @@ static int32_t get_lapic(struct lapic *l, uintptr_t arg)
     return copy_to_user((void __user *)arg, &s, sizeof(s)) ? -EFAULT : 0;
 }
 
-/** KVM_SET_LAPIC, as Linux's kvm_apic_set_state: the page, with the
- * x2APIC id and LDR fixed up, PPR and the timer's mode and divisor
- * applied, and the count restarted from the TMCCT given. */
+/** KVM_SET_LAPIC, as Linux's kvm_apic_set_state: the page, with PPR and
+ * the timer's mode and divisor applied, and the count restarted from the
+ * TMCCT given. In x2APIC mode the id is the vCPU's, which the caller
+ * cannot change, and the LDR follows from it; with
+ * KVM_X2APIC_API_USE_32BIT_IDS an id other than the vCPU's is -EINVAL,
+ * as in Linux's kvm_apic_state_fixup. -EFAULT for a bad pointer. */
 static int32_t set_lapic(struct lapic *l, uintptr_t arg)
 {
     struct kvm_lapic_state s;
@@ -1574,14 +1579,20 @@ static int32_t set_lapic(struct lapic *l, uintptr_t arg)
     if (copy_from_user(&s, (const void __user *)arg, sizeof(s)) != 0) {
         return -EFAULT;
     }
+    p = s.regs + APIC_ID;
+    if (x2apic(l) && l->v->vm->x2apic_format &&
+        ((uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24) !=
+            l->v->id) {
+        return -EINVAL;
+    }
     for (i = 0; i < KVM_APIC_REG_SIZE / 4; i++) {
         p = s.regs + i * 4u;
         l->regs[i] =
             (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
     }
     if (x2apic(l)) {
-        reg_set(l, APIC_ID, reg_get(l, APIC_ID) >> 24);
-        reg_set(l, APIC_LDR, x2apic_ldr(reg_get(l, APIC_ID)));
+        reg_set(l, APIC_ID, l->v->id);
+        reg_set(l, APIC_LDR, x2apic_ldr(l->v->id));
     }
     reg_set(l, APIC_LVR, lvr_of(l->v));
     update_ppr(l);

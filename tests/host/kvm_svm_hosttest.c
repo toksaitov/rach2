@@ -238,9 +238,14 @@ uint8_t *kvm_map_pages(uint32_t count, uintptr_t *pa)
     (void)count, (void)pa;
     return NULL;
 }
-int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value)
+int kvm_msr_allowed(const struct kvm_vcpu *v, uint32_t index, int write)
 {
-    (void)v, (void)index, (void)value;
+    (void)v, (void)index, (void)write;
+    return 1;
+}
+int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
+{
+    (void)v, (void)index, (void)value, (void)host;
     return 0;
 }
 int kvm_msr_guest_mwait(const struct kvm_vcpu *v)
@@ -248,9 +253,15 @@ int kvm_msr_guest_mwait(const struct kvm_vcpu *v)
     (void)v;
     return 0;
 }
-int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
+int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
 {
-    (void)v, (void)index, (void)value;
+    (void)v, (void)index, (void)value, (void)host;
+    return 0;
+}
+int kvm_msr_user_exit(struct kvm_vcpu *v, uint32_t index, int write, uint64_t value, int r,
+                      uint32_t len)
+{
+    (void)v, (void)index, (void)write, (void)value, (void)r, (void)len;
     return 0;
 }
 void kvm_queue_db(struct kvm_vcpu *v, uint64_t payload)

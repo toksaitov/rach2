@@ -1,17 +1,22 @@
 /*
  * msr.c: the MSRs of a vCPU that KVM_GET_MSRS and KVM_SET_MSRS move, the
- * index lists of /dev/kvm, and the feature MSRs.
+ * index lists of /dev/kvm, the feature MSRs, and the filter and exits by
+ * which the caller takes a guest's RDMSR and WRMSR.
  */
 
 #include "kvm.h"
 
 #include "../arch/arch.h"
 #include "../arch/x86/kcpu.h"
+#include "../lib/kerrno.h"
+#include "../mm/kheap.h"
+#include "../mm/usercopy.h"
 
 #define MSR_IA32_TSC           0x010u
 #define MSR_IA32_TSC_ADJUST    0x03Bu
 #define MSR_IA32_UCODE_REV     0x08Bu
 #define MSR_PLATFORM_INFO      0x0CEu
+#define MSR_IA32_POWER_CTL     0x1FCu
 #define MSR_MTRRCAP            0x0FEu
 #define MSR_MISC_FEATURES      0x140u
 #define MSR_IA32_SYSENTER_CS   0x174u
@@ -37,6 +42,7 @@
 #define MSR_KERNEL_GS_BASE     0xC0000102u
 #define MSR_TSC_AUX            0xC0000103u
 #define MSR_AMD64_SYSCFG       0xC0010010u
+#define MSR_K7_HWCR            0xC0010015u
 #define MSR_AMD64_NB_CFG       0xC001001Fu
 
 /* The variable-range MTRRs a guest has, and MTRRcap's value: WC and the
@@ -48,6 +54,19 @@
  * gives a new vCPU. */
 #define PAT_RESET       0x0007040600070406ull
 #define MISC_ENABLE_NEW 0x1800ull
+
+/* HWCR's bits a write may set, McStatusWrEn and TscFreqSel, and those it
+ * may set to no effect, TLB cache, flush filter and IGNNE disables, as
+ * Linux's kvm_set_msr_common takes them. */
+#define HWCR_MCSTATUSWREN (1ull << 18)
+#define HWCR_VALID        (HWCR_MCSTATUSWREN | (1ull << 24))
+#define HWCR_IGNORED      ((1ull << 3) | (1ull << 6) | (1ull << 8))
+
+#define GP_VECTOR 13
+
+/* The x2APIC's MSRs, which no filter denies. */
+#define MSR_X2APIC_FIRST 0x800u
+#define MSR_X2APIC_LAST  0x8FFu
 
 /* MISC_ENABLE's MWAIT bit; PLATFORM_INFO's bit that offers CPUID
  * faulting, and MISC_FEATURES_ENABLES' that turns it on. */
@@ -63,8 +82,8 @@
 /* KVM_GET_MSR_INDEX_LIST: the MSRs a caller saves and restores, the TSC
  * deadline among them, which the local APIC keeps (vlapic.c), Linux's list
  * of Hyper-V's, which hyperv.c keeps, KVM's own that pvclock.c keeps, the
- * two of CPUID faulting, and the microcode revision. TSC_AUX is last, and
- * listed only where the host has RDTSCP. */
+ * two of CPUID faulting, POWER_CTL, HWCR and the microcode revision.
+ * TSC_AUX is last, and listed only where the host has RDTSCP. */
 static const uint32_t index_list[] = {MSR_IA32_SYSENTER_CS,
                                       MSR_IA32_SYSENTER_ESP,
                                       MSR_IA32_SYSENTER_EIP,
@@ -116,6 +135,8 @@ static const uint32_t index_list[] = {MSR_IA32_SYSENTER_CS,
                                       MSR_KVM_POLL_CONTROL,
                                       MSR_PLATFORM_INFO,
                                       MSR_MISC_FEATURES,
+                                      MSR_IA32_POWER_CTL,
+                                      MSR_K7_HWCR,
                                       MSR_IA32_UCODE_REV,
                                       MSR_TSC_AUX};
 
@@ -193,16 +214,16 @@ static int mtrr_fixed(uint32_t index)
 }
 
 /** Whether `index` is an MSR the vCPU's table keeps: one of the index
- * list but TSC, MCG_STATUS, MCG_CTL, Hyper-V's, KVM's and the two of CPUID
- * faulting, or an MTRR. */
+ * list but TSC, MCG_STATUS, MCG_CTL, Hyper-V's, KVM's, the two of CPUID
+ * faulting, POWER_CTL and HWCR, or an MTRR. */
 static int table_msr(uint32_t index)
 {
     uint32_t i;
 
     if (index == MSR_IA32_TSC || index == MSR_IA32_MCG_STATUS || index == MSR_IA32_MCG_CTL ||
-        index == MSR_PLATFORM_INFO || index == MSR_MISC_FEATURES || (index >> 12) == 0x40000u ||
-        index == MSR_KVM_SYSTEM_TIME || index == MSR_KVM_WALL_CLOCK ||
-        (index >> 8) == (MSR_KVM_WALL_CLOCK_NEW >> 8)) {
+        index == MSR_PLATFORM_INFO || index == MSR_MISC_FEATURES || index == MSR_IA32_POWER_CTL ||
+        index == MSR_K7_HWCR || (index >> 12) == 0x40000u || index == MSR_KVM_SYSTEM_TIME ||
+        index == MSR_KVM_WALL_CLOCK || (index >> 8) == (MSR_KVM_WALL_CLOCK_NEW >> 8)) {
         return 0;
     }
     for (i = 0; i < N_INDEX; i++) {
@@ -251,6 +272,8 @@ void kvm_msr_reset(struct kvm_vcpu *v)
         v->ucode_rev = kvm_backend == &kvm_svm ? UCODE_REV_SVM : UCODE_REV_VMX;
     }
     v->misc_features = 0;
+    v->hwcr = 0;
+    v->power_ctl = 0;
 }
 
 /** The value of the table's MSR `index` of `v`, 0 when it has none. */
@@ -279,42 +302,45 @@ int kvm_msr_guest_mwait(const struct kvm_vcpu *v)
     return (e->ecx >> 3) & 1u;
 }
 
-/** Whether `index` is an MSR of a machine-check bank `v` has; `*bank`
- * and `*reg` get the bank and the register, 0 CTL to 3 MISC. */
+/** Whether `index` is an MSR of the KVM_MAX_MCE_BANKS machine-check
+ * banks: 1 for one of a bank `v` has, whose bank and register, 0 CTL to
+ * 3 MISC, go in `*bank` and `*reg`; -1 for one of a bank it lacks, which
+ * Linux refuses as it refuses a value; 0 for another MSR. */
 static int mce_bank_msr(const struct kvm_vcpu *v, uint32_t index, uint32_t *bank, uint32_t *reg)
 {
     uint32_t off;
 
-    if (index < MSR_IA32_MC0_CTL) {
+    if (index < MSR_IA32_MC0_CTL || index >= MSR_IA32_MC0_CTL + 4u * KVM_MAX_MCE_BANKS) {
         return 0;
     }
     off = index - MSR_IA32_MC0_CTL;
     if (off / 4u >= (uint32_t)(v->mcg_cap & 0xFFu)) {
-        return 0;
+        return -1;
     }
     *bank = off / 4u;
     *reg = off % 4u;
     return 1;
 }
 
-int kvm_msr_mce_status(const struct kvm_vcpu *v, uint32_t index)
+/** Whether the guest of `v` may write a nonzero value to a bank's STATUS:
+ * a guest whose vendor is AMD or Hygon, with HWCR's McStatusWrEn set, as
+ * Linux's can_set_mci_status. */
+static int mci_status_writable(const struct kvm_vcpu *v)
 {
-    uint32_t bank, reg;
-
-    return mce_bank_msr(v, index, &bank, &reg) && reg == 1u;
+    return kvm_guest_amd(v) && (v->hwcr & HWCR_MCSTATUSWREN);
 }
 
-int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value)
+int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
 {
     uint32_t bank, reg;
     int r;
 
-    r = kvm_lapic_msr(v, index, 0, value, 1);
+    r = kvm_lapic_msr(v, index, 0, value, host);
     if (r == 1) {
-        r = kvm_hv_msr(v, index, 0, value, 1);
+        r = kvm_hv_msr(v, index, 0, value, host);
     }
     if (r == 1) {
-        r = kvm_pv_msr(v, index, 0, value, 1);
+        r = kvm_pv_msr(v, index, 0, value, host);
     }
     if (r != 1) {
         return r;
@@ -337,8 +363,10 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value)
         *value = v->mcg_status;
         return 0;
     case MSR_IA32_MCG_CTL:
-        if (!(v->mcg_cap & MCG_CTL_P)) {
-            return -1;
+        /* The caller reads it whatever MCG_CAP says, as Linux's
+         * get_msr_mce; the guest only with MCG_CTL_P. */
+        if (!(v->mcg_cap & MCG_CTL_P) && !host) {
+            return KVM_MSR_INVAL;
         }
         *value = v->mcg_ctl;
         return 0;
@@ -348,18 +376,28 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value)
     case MSR_MISC_FEATURES:
         *value = v->misc_features;
         return 0;
+    case MSR_IA32_POWER_CTL:
+        *value = v->power_ctl;
+        return 0;
+    case MSR_K7_HWCR:
+        *value = v->hwcr;
+        return 0;
     case MSR_IA32_UCODE_REV:
         *value = v->ucode_rev;
         return 0;
     default:
         break;
     }
-    if (mce_bank_msr(v, index, &bank, &reg)) {
+    r = mce_bank_msr(v, index, &bank, &reg);
+    if (r != 0) {
+        if (r < 0) {
+            return KVM_MSR_INVAL;
+        }
         *value = v->mce_banks[bank * 4u + reg];
         return 0;
     }
     if (!table_msr(index)) {
-        return -1;
+        return KVM_MSR_UNKNOWN;
     }
     *value = table_value(v, index);
     return 0;
@@ -409,7 +447,8 @@ static int table_value_ok(uint32_t index, uint64_t value)
  * offering CPUID faulting while the guest has it on, which it turns on
  * only while it is offered; and with KVM_X86_QUIRK_MISC_ENABLE_NO_MWAIT
  * off MISC_ENABLE's MWAIT bit, which then decides CPUID's, changes only
- * for a guest with SSE3. 0, -1 for a value refused, or 1 for another MSR.
+ * for a guest with SSE3. 0, KVM_MSR_INVAL for a value refused, or 1 for
+ * another MSR.
  */
 static int feature_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
 {
@@ -420,14 +459,14 @@ static int feature_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
     case MSR_PLATFORM_INFO:
         if (!(value & PLATFORM_INFO_CPUID_FAULT) &&
             (v->misc_features & MISC_FEATURES_CPUID_FAULT)) {
-            return -1;
+            return KVM_MSR_INVAL;
         }
         v->platform_info = value;
         return 0;
     case MSR_MISC_FEATURES:
         if ((value & ~MISC_FEATURES_CPUID_FAULT) ||
             (value && !(v->platform_info & PLATFORM_INFO_CPUID_FAULT))) {
-            return -1;
+            return KVM_MSR_INVAL;
         }
         v->misc_features = value;
         return 0;
@@ -436,12 +475,12 @@ static int feature_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
             ((table_value(v, index) ^ value) & MISC_ENABLE_MWAIT)) {
             e = kvm_cpuid_find(v, 1, 0);
             if (!e || !(e->ecx & 1u)) {
-                return -1;
+                return KVM_MSR_INVAL;
             }
         }
         slot = table_slot(v, index);
         if (slot < 0) {
-            return -1;
+            return KVM_MSR_INVAL;
         }
         v->msr_value[slot] = value;
         return 0;
@@ -450,22 +489,67 @@ static int feature_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
     }
 }
 
-int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
+/**
+ * Write `value` to the machine-check MSR `index` of `v`, as Linux's
+ * set_msr_mce: MCG_CTL 0 or all ones, and only with MCG_CTL_P but for the
+ * caller's 0; a bank's CTL 0 or all ones but for bit 10 and bit 0, which
+ * some guests clear; a bank's STATUS anything from the caller, but only 0
+ * from the guest unless `mci_status_writable`. 0, KVM_MSR_INVAL, or 1 for
+ * another MSR.
+ */
+static int mce_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
 {
     uint32_t bank, reg;
+    int r;
+
+    switch (index) {
+    case MSR_IA32_MCG_STATUS:
+        v->mcg_status = value;
+        return 0;
+    case MSR_IA32_MCG_CTL:
+        if (!(v->mcg_cap & MCG_CTL_P) && (value || !host)) {
+            return KVM_MSR_INVAL;
+        }
+        if (value != 0 && value != ~0ull) {
+            return KVM_MSR_INVAL;
+        }
+        v->mcg_ctl = value;
+        return 0;
+    default:
+        break;
+    }
+    r = mce_bank_msr(v, index, &bank, &reg);
+    if (r <= 0) {
+        return r < 0 ? KVM_MSR_INVAL : 1;
+    }
+    if (reg == 0 && value != 0 && (value | (1ull << 10) | 1ull) != ~0ull) {
+        return KVM_MSR_INVAL;
+    }
+    if (reg == 1 && !host && value != 0 && !mci_status_writable(v)) {
+        return KVM_MSR_INVAL;
+    }
+    v->mce_banks[bank * 4u + reg] = value;
+    return 0;
+}
+
+int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
+{
     int slot;
 
-    slot = kvm_lapic_msr(v, index, 1, &value, 1);
+    slot = kvm_lapic_msr(v, index, 1, &value, host);
     if (slot == 1) {
-        slot = kvm_hv_msr(v, index, 1, &value, 1);
+        slot = kvm_hv_msr(v, index, 1, &value, host);
     }
     if (slot == 1) {
-        slot = kvm_pv_msr(v, index, 1, &value, 1);
+        slot = kvm_pv_msr(v, index, 1, &value, host);
     }
     if (slot != 1) {
         return slot;
     }
     slot = feature_msr_set(v, index, value);
+    if (slot == 1) {
+        slot = mce_set(v, index, value, host);
+    }
     if (slot != 1) {
         if (slot == 0) {
             v->dirty |= KVM_PART_MSRS;
@@ -484,42 +568,220 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
     case MSR_IA32_MCG_CAP:
         if (value & ~(MCG_CTL_P | MCG_SER_P | 0xFFull | 0xFF0000ull) ||
             (value & 0xFFu) > KVM_MAX_MCE_BANKS) {
-            return -1;
+            return KVM_MSR_INVAL;
         }
         v->mcg_cap = value;
         break;
-    case MSR_IA32_MCG_STATUS:
-        v->mcg_status = value;
+    case MSR_IA32_POWER_CTL:
+        v->power_ctl = value;
         break;
-    case MSR_IA32_MCG_CTL:
-        if (!(v->mcg_cap & MCG_CTL_P) && value) {
-            return -1;
+    case MSR_K7_HWCR:
+        /* Kept for every vendor, as Linux keeps it; a write of a bit HWCR
+         * does not offer is refused, of one it ignores dropped. */
+        value &= ~HWCR_IGNORED;
+        if (value & ~HWCR_VALID) {
+            return KVM_MSR_INVAL;
         }
-        if (value != 0 && value != ~0ull) {
-            return -1;
-        }
-        v->mcg_ctl = value;
+        v->hwcr = value;
         break;
     default:
-        if (mce_bank_msr(v, index, &bank, &reg)) {
-            /* A bank's CTL is 0 or all ones, but for bit 10 and bit 0,
-             * which some guests clear. */
-            if (reg == 0 && value != 0 && (value | (1ull << 10) | 1ull) != ~0ull) {
-                return -1;
-            }
-            v->mce_banks[bank * 4u + reg] = value;
-            break;
+        if (!table_msr(index)) {
+            return KVM_MSR_UNKNOWN;
         }
-        if (!table_msr(index) || !table_value_ok(index, value)) {
-            return -1;
+        if (!table_value_ok(index, value)) {
+            return KVM_MSR_INVAL;
         }
         slot = table_slot(v, index);
         if (slot < 0) {
-            return -1;
+            return KVM_MSR_INVAL;
         }
         v->msr_value[slot] = value;
         break;
     }
     v->dirty |= KVM_PART_MSRS;
     return 0;
+}
+
+/* ---- the filter and the caller's exits ---- */
+
+/* One range of a filter, as KVM_X86_SET_MSR_FILTER gave it, with its own
+ * copy of the bitmap. */
+struct msr_range {
+    uint32_t flags; /* KVM_MSR_FILTER_READ and KVM_MSR_FILTER_WRITE */
+    uint32_t base;
+    uint32_t nmsrs;
+    uint8_t *bitmap; /* a bit for each MSR from `base`, 1 to allow */
+};
+
+/* A VM's filter, `vm->msr_filter`: the ranges with MSRs, in the order
+ * given, of which the first that names an access decides it. */
+struct msr_filter {
+    int default_allow;
+    uint32_t count;
+    struct msr_range ranges[KVM_MSR_FILTER_MAX_RANGES];
+};
+
+int kvm_msr_allowed(const struct kvm_vcpu *v, uint32_t index, int write)
+{
+    const struct msr_filter *f = (const struct msr_filter *)v->vm->msr_filter;
+    uint32_t type = write ? KVM_MSR_FILTER_WRITE : KVM_MSR_FILTER_READ;
+    uint32_t i, end;
+
+    if ((index >= MSR_X2APIC_FIRST && index <= MSR_X2APIC_LAST) || !f) {
+        return 1;
+    }
+    for (i = 0; i < f->count; i++) {
+        /* `end` wraps for a range past 0xFFFFFFFF, as Linux's does. */
+        end = f->ranges[i].base + f->ranges[i].nmsrs;
+        if (index >= f->ranges[i].base && index < end && (f->ranges[i].flags & type)) {
+            index -= f->ranges[i].base;
+            return (f->ranges[i].bitmap[index / 8u] >> (index % 8u)) & 1u;
+        }
+    }
+    return f->default_allow;
+}
+
+int kvm_msr_user_exit(struct kvm_vcpu *v, uint32_t index, int write, uint64_t value, int r,
+                      uint32_t len)
+{
+    uint32_t reason = KVM_MSR_EXIT_REASON_INVAL;
+
+    if (r == KVM_MSR_UNKNOWN) {
+        reason = KVM_MSR_EXIT_REASON_UNKNOWN;
+    } else if (r == KVM_MSR_FILTERED) {
+        reason = KVM_MSR_EXIT_REASON_FILTER;
+    }
+    if (!(v->vm->user_space_msr & reason)) {
+        return 0;
+    }
+    v->exit.kind = KVM_X_MSR;
+    v->exit.msr.write = write;
+    v->exit.msr.index = index;
+    v->exit.msr.reason = reason;
+    v->exit.msr.len = len;
+    v->exit.msr.data = write ? value : 0;
+    return 1;
+}
+
+void kvm_msr_complete(struct kvm_vcpu *v)
+{
+    const struct kvm_run_msr *m = &v->run->u.msr;
+
+    if (!v->msr_pending) {
+        return;
+    }
+    v->msr_pending = 0;
+    if (m->error) {
+        kvm_queue_exception(v, GP_VECTOR, 1, 0);
+        return;
+    }
+    if (!v->exit.msr.write) {
+        v->regs.rax = m->data & 0xFFFFFFFFull;
+        v->regs.rdx = m->data >> 32;
+    }
+    kvm_emul_skip(v, v->exit.msr.len);
+    v->dirty |= KVM_PART_REGS;
+}
+
+/** Free the filter `f`, which may be NULL, with its bitmaps. */
+static void filter_free(struct msr_filter *f)
+{
+    uint32_t i;
+
+    if (!f) {
+        return;
+    }
+    for (i = 0; i < f->count; i++) {
+        kfree(f->ranges[i].bitmap);
+    }
+    kfree(f);
+}
+
+/**
+ * Add the caller's range `u` to `f`, as Linux's kvm_add_msr_filter: a
+ * range of no MSRs is left out; one with no flag or an unknown one, or
+ * whose bitmap, rounded up to whole longs as Linux copies it, passes
+ * KVM_MSR_FILTER_MAX_BITMAP_SIZE, is -EINVAL. 0, -ENOMEM or -EFAULT.
+ */
+static int filter_add(struct msr_filter *f, const struct kvm_msr_filter_range *u)
+{
+    struct msr_range *r;
+    uint32_t bytes;
+
+    if (!u->nmsrs) {
+        return 0;
+    }
+    if (!u->flags || (u->flags & ~KVM_MSR_FILTER_RANGE_VALID_MASK)) {
+        return -EINVAL;
+    }
+    bytes = (u->nmsrs + 63u) / 64u * 8u;
+    if (!bytes || bytes > KVM_MSR_FILTER_MAX_BITMAP_SIZE) {
+        return -EINVAL;
+    }
+    r = &f->ranges[f->count];
+    r->bitmap = (uint8_t *)kmalloc(bytes);
+    if (!r->bitmap) {
+        return -ENOMEM;
+    }
+    if (copy_from_user(r->bitmap, (const void __user *)(uintptr_t)u->bitmap, bytes) != 0) {
+        kfree(r->bitmap);
+        r->bitmap = NULL;
+        return -EFAULT;
+    }
+    r->flags = u->flags;
+    r->base = u->base;
+    r->nmsrs = u->nmsrs;
+    f->count++;
+    return 0;
+}
+
+int32_t kvm_msr_set_filter(struct kvm_vm *vm, uintptr_t arg)
+{
+    struct kvm_msr_filter *u;
+    struct msr_filter *f;
+    uint32_t i;
+    int empty = 1, r = 0;
+
+    u = (struct kvm_msr_filter *)kmalloc(sizeof(*u));
+    if (!u) {
+        return -ENOMEM;
+    }
+    if (copy_from_user(u, (const void __user *)arg, sizeof(*u)) != 0) {
+        kfree(u);
+        return -EFAULT;
+    }
+    for (i = 0; i < KVM_MSR_FILTER_MAX_RANGES; i++) {
+        empty &= u->ranges[i].nmsrs == 0;
+    }
+    if ((u->flags & ~KVM_MSR_FILTER_VALID_MASK) ||
+        (empty && (u->flags & KVM_MSR_FILTER_DEFAULT_DENY))) {
+        kfree(u);
+        return -EINVAL;
+    }
+    f = (struct msr_filter *)kzalloc(sizeof(*f));
+    if (!f) {
+        kfree(u);
+        return -ENOMEM;
+    }
+    f->default_allow = !(u->flags & KVM_MSR_FILTER_DEFAULT_DENY);
+    for (i = 0; i < KVM_MSR_FILTER_MAX_RANGES && r == 0; i++) {
+        r = filter_add(f, &u->ranges[i]);
+    }
+    kfree(u);
+    if (r != 0) {
+        filter_free(f);
+        return r;
+    }
+    filter_free((struct msr_filter *)vm->msr_filter);
+    vm->msr_filter = f;
+    for (i = 0; i < vm->nr_vcpus; i++) {
+        kvm_vcpu_kick(vm->vcpus[i], KVM_REQ_MSR_FILTER);
+    }
+    return 0;
+}
+
+void kvm_msr_free_filter(struct kvm_vm *vm)
+{
+    filter_free((struct msr_filter *)vm->msr_filter);
+    vm->msr_filter = NULL;
 }

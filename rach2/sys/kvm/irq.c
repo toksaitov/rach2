@@ -73,12 +73,15 @@ static struct irq_vm *irq_of(struct kvm_vm *vm)
     return (struct irq_vm *)vm->irq;
 }
 
-/** The interrupt the MSI `r` raises, as Linux's kvm_set_msi_irq, with
- * the destination in the address's bits 19:12 alone, since no extended
- * destination is offered (KVM_CAP_X2APIC_API). */
-static void msi_irq(const struct route *r, struct kvm_lapic_irq *irq)
+/** The interrupt the MSI `r` of `vm` raises, as Linux's kvm_set_msi_irq:
+ * the destination in the address's bits 19:12, and with
+ * KVM_X2APIC_API_USE_32BIT_IDS its bits 31:8 in the high address's. */
+static void msi_irq(const struct kvm_vm *vm, const struct route *r, struct kvm_lapic_irq *irq)
 {
     irq->dest_id = (r->address_lo >> MSI_ADDR_DEST_SHIFT) & 0xFFu;
+    if (vm->x2apic_format) {
+        irq->dest_id |= r->address_hi & 0xFFFFFF00u;
+    }
     irq->vector = r->data & 0xFFu;
     irq->dest_mode = (r->address_lo & MSI_ADDR_LOGICAL) != 0;
     irq->trig_mode = (r->data & MSI_DATA_LEVEL) != 0;
@@ -88,20 +91,32 @@ static void msi_irq(const struct route *r, struct kvm_lapic_irq *irq)
     irq->shorthand = 0;
 }
 
+/** Whether the MSI `r` is one `vm` refuses, as Linux's
+ * kvm_msi_route_invalid: with KVM_X2APIC_API_USE_32BIT_IDS, one whose high
+ * address has bits below the destination's. */
+static int msi_invalid(const struct kvm_vm *vm, const struct route *r)
+{
+    return vm->x2apic_format && (r->address_hi & 0xFFu);
+}
+
 /** Raise the route `r` at `level`, as Linux's kvm_set_msi and
- * kvm_hv_set_sint: -1 for a level of 0 or no destination, else the APICs
- * that took it. Safe from an irqfd's hook. */
+ * kvm_hv_set_sint: -EINVAL for an MSI `msi_invalid` refuses, -1 for a
+ * level of 0 or no destination, else the APICs that took it. Safe from an
+ * irqfd's hook. */
 static int set_msi(struct kvm_vm *vm, const struct route *r, uint32_t level)
 {
     struct kvm_lapic_irq irq;
 
+    if (!r->sint && msi_invalid(vm, r)) {
+        return -EINVAL;
+    }
     if (!level) {
         return -1;
     }
     if (r->sint) {
         return kvm_hv_synic_set_irq(vm, r->hv_vcpu, r->hv_sint);
     }
-    msi_irq(r, &irq);
+    msi_irq(vm, r, &irq);
     return kvm_lapic_deliver(vm, NULL, &irq);
 }
 
@@ -493,6 +508,9 @@ static int route_add(struct kvm_vm *vm, struct route *t, struct kvm_irq_routing_
         t->address_lo = e.u.msi.address_lo;
         t->address_hi = e.u.msi.address_hi;
         t->data = e.u.msi.data;
+        if (msi_invalid(vm, t)) {
+            return -EINVAL;
+        }
     } else if (!t->valid && e.type == KVM_IRQ_ROUTING_HV_SINT && !e.flags) {
         t->sint = 1;
         t->hv_vcpu = e.u.hv_sint.vcpu;
@@ -717,7 +735,8 @@ static int32_t irq_line(struct kvm_vm *vm, uintptr_t arg, int status)
 
 /** KVM_SIGNAL_MSI, as Linux's kvm_send_userspace_msi: the APICs that took
  * it, -EPERM (Linux's -1) when it named none; -EINVAL with no controller
- * in the kernel or an unknown flag; -EFAULT. */
+ * in the kernel, an unknown flag or an MSI `msi_invalid` refuses;
+ * -EFAULT. */
 static int32_t signal_msi(struct kvm_vm *vm, uintptr_t arg)
 {
     struct kvm_msi m;
@@ -736,6 +755,9 @@ static int32_t signal_msi(struct kvm_vm *vm, uintptr_t arg)
     r.address_hi = m.address_hi;
     r.data = m.data;
     n = set_msi(vm, &r, 1);
+    if (n == -EINVAL) {
+        return n;
+    }
     return n < 0 ? -EPERM : n;
 }
 

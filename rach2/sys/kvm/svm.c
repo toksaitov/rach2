@@ -29,6 +29,7 @@
 #define MSR_LSTAR             0xC0000082u
 #define MSR_CSTAR             0xC0000083u
 #define MSR_SYSCALL_MASK      0xC0000084u
+#define MSR_FS_BASE           0xC0000100u
 #define MSR_KERNEL_GS_BASE    0xC0000102u
 #define MSR_TSC_AUX           0xC0000103u
 #define MSR_TSC_RATIO         0xC0000104u
@@ -341,13 +342,10 @@ static uint32_t asid_gen[NR_CPUS];
 static uint64_t host_aux[NR_CPUS];
 static uint64_t tsc_ratio[NR_CPUS];
 
-/* The I/O permission map, every port intercepted, and the MSR permission
- * map, every MSR intercepted but FS_BASE, GS_BASE and KERNEL_GS_BASE,
- * which VMLOAD and VMSAVE move with the VMCB; every vCPU shares both. */
+/* The I/O permission map, every port intercepted, which every vCPU
+ * shares; each has its own MSR permission map (`svm_msr_filter_changed`). */
 static uint8_t *iopm;
 static uintptr_t iopm_pa;
-static uint8_t *msrpm;
-static uintptr_t msrpm_pa;
 
 /* ---- a vCPU's share ---- */
 
@@ -365,6 +363,8 @@ struct svm_vcpu {
     void *host; /* the page VMSAVE keeps the host's FS, GS, TR and MSRs in */
     uint64_t host_pa;
     void *host_fpu;
+    uint8_t *msrpm; /* every MSR intercepted but those `svm_msr_filter_changed` passes */
+    uintptr_t msrpm_pa;
     int built;         /* the VMCB's lasting fields are written */
     int cpu;           /* the processor whose ASID it holds, or -1 */
     uint32_t asid_gen; /* the generation of its ASID there */
@@ -652,7 +652,7 @@ static uint64_t table_msr(struct kvm_vcpu *v, uint32_t index)
 {
     uint64_t value = 0;
 
-    if (kvm_msr_get(v, index, &value) != 0) {
+    if (kvm_msr_get(v, index, &value, 1) != 0) {
         return 0;
     }
     return value;
@@ -692,7 +692,7 @@ static void vmcb_build(struct kvm_vcpu *v)
                     INTERCEPT4_STGI | INTERCEPT4_CLGI | INTERCEPT4_SKINIT | INTERCEPT4_WBINVD |
                     INTERCEPT4_MONITOR | INTERCEPT4_MWAIT | INTERCEPT4_XSETBV | INTERCEPT4_RDPRU;
     c->iopm_pa = iopm_pa;
-    c->msrpm_pa = msrpm_pa;
+    c->msrpm_pa = s->msrpm_pa;
     c->int_ctl = INT_CTL_V_INTR_MASKING;
     c->nested_ctl = NESTED_CTL_NP;
     s->built = 1;
@@ -1927,50 +1927,65 @@ static void kgs_sync(struct kvm_vcpu *v)
     struct svm_vcpu *s = sv(v);
 
     if (!s->kgs_table) {
-        (void)kvm_msr_set(v, MSR_KERNEL_GS_BASE, s->vmcb->s.kernel_gs_base);
+        (void)kvm_msr_set(v, MSR_KERNEL_GS_BASE, s->vmcb->s.kernel_gs_base, 1);
         s->kgs_table = 1;
     }
 }
 
-/** RDMSR and WRMSR, by EXITINFO1: EFER and DEBUGCTL here, the rest through
- * `kvm_emul_msr`; #GP for an MSR neither knows or a value they refuse, as
- * Linux's default without ignore_msrs. */
-static int exit_msr(struct kvm_vcpu *v)
+/** The guest's RDMSR or WRMSR of `index`, by `write`, with `*value` its
+ * EDX:EAX: EFER and DEBUGCTL here, the rest through `kvm_emul_msr`. 0, with
+ * a read's value in `*value`, or a KVM_MSR_* failure. */
+static int msr_access(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
 {
-    struct svm_vcpu *s = sv(v);
-    int write = (s->ex.info1 & 1u) != 0, r;
-    uint32_t index = (uint32_t)v->regs.rcx;
-    uint64_t value = (v->regs.rax & 0xFFFFFFFFull) | (v->regs.rdx << 32);
-
-    v->exit.kind = KVM_X_AGAIN;
-    if (write) {
-        kgs_sync(v);
-    }
     switch (index) {
     case MSR_EFER:
         if (write) {
-            r = set_efer(v, value);
-        } else {
-            value = v->sregs.efer;
-            r = 0;
+            return set_efer(v, *value);
         }
-        break;
+        *value = v->sregs.efer;
+        return 0;
     case MSR_IA32_DEBUGCTL:
         /* No LBR and no BTF, which Linux drops with a note; any other bit
          * is #GP. */
         if (write) {
-            value &= ~(DEBUGCTL_LBR | DEBUGCTL_BTF);
-            r = value ? -1 : 0;
-        } else {
-            value = s->debugctl;
-            r = 0;
+            return (*value & ~(DEBUGCTL_LBR | DEBUGCTL_BTF)) ? KVM_MSR_INVAL : 0;
         }
-        break;
+        *value = sv(v)->debugctl;
+        return 0;
     default:
-        r = kvm_emul_msr(v, index, write, &value);
-        break;
+        return kvm_emul_msr(v, index, write, value);
     }
+}
+
+/** RDMSR and WRMSR, by EXITINFO1, as Linux's kvm_emulate_rdmsr and
+ * kvm_emulate_wrmsr: an access KVM_X86_SET_MSR_FILTER denies fails at
+ * once, any other is `msr_access`'s. A failure goes to the caller when
+ * KVM_CAP_X86_USER_SPACE_MSR asked for its reason, and is #GP otherwise,
+ * as Linux's default without ignore_msrs. */
+static int exit_msr(struct kvm_vcpu *v)
+{
+    int write = (sv(v)->ex.info1 & 1u) != 0, r;
+    uint32_t index = (uint32_t)v->regs.rcx, len;
+    uint64_t value = (v->regs.rax & 0xFFFFFFFFull) | (v->regs.rdx << 32);
+
+    v->exit.kind = KVM_X_AGAIN;
+    if (index - MSR_FS_BASE < 3u && kvm_msr_allowed(v, index, write)) {
+        /* The map predates the filter, and KVM_REQ_MSR_FILTER brings it up
+         * to date before the instruction runs again. */
+        return 0;
+    }
+    if (write) {
+        kgs_sync(v);
+    }
+    r = kvm_msr_allowed(v, index, write) ? msr_access(v, index, write, &value) : KVM_MSR_FILTERED;
     if (r != 0) {
+        if (v->vm->user_space_msr) {
+            /* The caller's answer skips the instruction. */
+            len = insn_len(v);
+            if (len == 0 || kvm_msr_user_exit(v, index, write, value, r, len)) {
+                return 0;
+            }
+        }
         gp(v);
         return 0;
     }
@@ -2550,7 +2565,8 @@ static int32_t svm_check_extension(long cap)
 }
 
 /** The backend's share of a new VM: the host save areas of the processors
- * and the permission maps, made at the first VM and kept. 0 or -ENOMEM. */
+ * and the I/O permission map, made at the first VM and kept. 0 or
+ * -ENOMEM. */
 static int svm_vm_init(struct kvm_vm *vm)
 {
     uintptr_t pa;
@@ -2562,15 +2578,6 @@ static int svm_vm_init(struct kvm_vm *vm)
         if (!iopm) {
             return -ENOMEM;
         }
-    }
-    if (!msrpm) {
-        msrpm = kvm_map_pages(2, &msrpm_pa);
-        if (!msrpm) {
-            return -ENOMEM;
-        }
-        /* MSRs 0xC0000000 to 0xC0001FFF from byte 2048, two bits each, the
-         * read's then the write's: FS_BASE, GS_BASE and KERNEL_GS_BASE. */
-        msrpm[2048 + (0x100 * 2) / 8] &= (uint8_t)~0x3Fu;
     }
     for (i = 0; i < ncpu && i < NR_CPUS; i++) {
         if (hsave[i]) {
@@ -2586,8 +2593,28 @@ static int svm_vm_init(struct kvm_vm *vm)
     return 0;
 }
 
+/**
+ * Have the guest of `v` reach FS_BASE, GS_BASE and KERNEL_GS_BASE, which
+ * VMLOAD and VMSAVE move with the VMCB, directly but for the accesses
+ * KVM_X86_SET_MSR_FILTER denies, which exit, as Linux's
+ * svm_msr_filter_changed. The MSRs from 0xC0000000 have two bits each from
+ * byte 2048 of the map, the read's then the write's.
+ */
+static void svm_msr_filter_changed(struct kvm_vcpu *v)
+{
+    uint8_t *b = sv(v)->msrpm + 2048 + (0x100 * 2) / 8;
+    uint8_t bits = 0;
+    uint32_t i;
+
+    for (i = 0; i < 3u; i++) {
+        bits |= (uint8_t)((kvm_msr_allowed(v, MSR_FS_BASE + i, 0) ? 0u : 1u) << (2u * i));
+        bits |= (uint8_t)((kvm_msr_allowed(v, MSR_FS_BASE + i, 1) ? 0u : 2u) << (2u * i));
+    }
+    *b = (uint8_t)((*b & ~0x3Fu) | bits);
+}
+
 /** Make the backend's share of `v`: the VMCB, the page of the host's
- * state, and the host's FPU area. 0 or -ENOMEM. */
+ * state, the MSR permission map and the host's FPU area. 0 or -ENOMEM. */
 static int svm_vcpu_init(struct kvm_vcpu *v)
 {
     struct svm_vcpu *s = kzalloc(sizeof(*s));
@@ -2601,12 +2628,14 @@ static int svm_vcpu_init(struct kvm_vcpu *v)
     s->vmcb_pa = pa;
     s->host = kalloc_pages(1, &pa);
     s->host_pa = pa;
+    s->msrpm = kvm_map_pages(2, &s->msrpm_pa);
     s->host_fpu = fpu_area_alloc();
-    if (!s->vmcb || !s->host || !s->host_fpu) {
+    if (!s->vmcb || !s->host || !s->msrpm || !s->host_fpu) {
         return -ENOMEM;
     }
     k_memset(s->vmcb, 0, 4096);
     k_memset(s->host, 0, 4096);
+    svm_msr_filter_changed(v);
     s->cpu = -1;
     s->kgs_table = 1;
     return 0;
@@ -2625,6 +2654,9 @@ static void svm_vcpu_free(struct kvm_vcpu *v)
     }
     if (s->host) {
         kfree_pages(s->host, 1);
+    }
+    if (s->msrpm) {
+        kfree_pages(s->msrpm, 2);
     }
     fpu_area_free(s->host_fpu);
     kfree(s);
@@ -2709,7 +2741,7 @@ static uint64_t svm_cache(int type, int ignore_guest_pat)
 static const struct kvm_tdp_format svm_tdp = {
     0x1u, 0x1u, 0x2u, 0, 1ull << 63, 0x4u, 0x80u, 0x000FFFFFFFFFF000ull, 0x20u, 0x40u, svm_cache};
 
-const struct kvm_backend kvm_svm = {"svm",         svm_probe,      svm_vm_init, NULL,
-                                    svm_vcpu_init, svm_vcpu_free,  svm_enter,   svm_exit,
-                                    svm_complete,  svm_save,       svm_inject,  svm_check_extension,
-                                    &svm_tdp,      svm_tsc_scaling};
+const struct kvm_backend kvm_svm = {
+    "svm",     svm_probe,       svm_vm_init,           NULL,     svm_vcpu_init, svm_vcpu_free,
+    svm_enter, svm_exit,        svm_complete,          svm_save, svm_inject,    svm_check_extension,
+    &svm_tdp,  svm_tsc_scaling, svm_msr_filter_changed};

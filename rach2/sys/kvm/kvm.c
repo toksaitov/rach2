@@ -130,6 +130,7 @@ void kvm_vm_put(struct kvm_vm *vm)
         kfree_pages(vm->ring, 1);
     }
     kvm_hv_vm_free(vm);
+    kvm_msr_free_filter(vm);
     kvm_tdp_free(vm);
     kvm_slots_free(vm);
     if (kvm_backend && kvm_backend->vm_free) {
@@ -212,7 +213,11 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
     case KVM_CAP_GET_TSC_KHZ:
     case KVM_CAP_KVMCLOCK_CTRL:
     case KVM_CAP_ENFORCE_PV_FEATURE_CPUID:
+    case KVM_CAP_X86_USER_SPACE_MSR:
+    case KVM_CAP_X86_MSR_FILTER:
         return 1;
+    case KVM_CAP_X2APIC_API:
+        return (int32_t)KVM_X2APIC_API_VALID_FLAGS;
     case KVM_CAP_X86_DISABLE_EXITS:
         /* PAUSE never exits here, and HLT need not; MWAIT is not offered,
          * and the C-state residency MSRs are not passed through. */
@@ -501,7 +506,10 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
  * -EINVAL for a quirk it does not name; KVM_CAP_MAX_VCPU_ID, -EINVAL for a
  * bound above KVM_MAX_VCPU_IDS, below the boot vCPU's id or other than one
  * set before; KVM_CAP_EXIT_ON_EMULATION_FAILURE, -EINVAL for a bit other
- * than 0; KVM_CAP_MSR_PLATFORM_INFO; and KVM_CAP_X86_APIC_BUS_CYCLES_NS,
+ * than 0; KVM_CAP_MSR_PLATFORM_INFO; KVM_CAP_X86_USER_SPACE_MSR, the
+ * reasons of a guest's failed RDMSR or WRMSR that go to the caller,
+ * -EINVAL for an unknown one; KVM_CAP_X2APIC_API, whose flags stay set
+ * once set, -EINVAL for an unknown one; and KVM_CAP_X86_APIC_BUS_CYCLES_NS,
  * -EINVAL for 0, a length whose longest timer count overflows 64 bits of
  * ns, or a VM with a vCPU, and -ENXIO without the local APIC in the kernel.
  * -EINVAL for a flag or any other capability, as Linux answers one it does
@@ -561,6 +569,23 @@ static int32_t vm_enable_cap(struct kvm_vm *vm, uintptr_t arg)
         return 0;
     case KVM_CAP_MSR_PLATFORM_INFO:
         vm->platform_info_hidden = cap.args[0] == 0;
+        return 0;
+    case KVM_CAP_X86_USER_SPACE_MSR:
+        if (cap.args[0] & ~(uint64_t)KVM_MSR_EXIT_REASON_VALID_MASK) {
+            return -EINVAL;
+        }
+        vm->user_space_msr = (uint32_t)cap.args[0];
+        return 0;
+    case KVM_CAP_X2APIC_API:
+        if (cap.args[0] & ~(uint64_t)KVM_X2APIC_API_VALID_FLAGS) {
+            return -EINVAL;
+        }
+        if (cap.args[0] & KVM_X2APIC_API_USE_32BIT_IDS) {
+            vm->x2apic_format = 1;
+        }
+        if (cap.args[0] & KVM_X2APIC_API_DISABLE_BROADCAST_QUIRK) {
+            vm->x2apic_no_broadcast = 1;
+        }
         return 0;
     case KVM_CAP_X86_APIC_BUS_CYCLES_NS:
         /* A count of 2^32 - 1 at TDCR's divisor 128 must fit 64 bits of
@@ -707,6 +732,8 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         return kvm_iobus_ioctl(vm, request, arg);
     case KVM_HYPERV_EVENTFD:
         return kvm_hv_eventfd(vm, arg);
+    case KVM_X86_SET_MSR_FILTER:
+        return kvm_msr_set_filter(vm, arg);
     default:
         return -ENOTTY;
     }
