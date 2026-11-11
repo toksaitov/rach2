@@ -6402,18 +6402,21 @@ static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_
 
 /**
  * The answer of a read of the file of `ofd` at `at` whose first byte the
- * caller cannot write, with the description's lock held: 0 when `at` is at
- * or past the file's end, since Linux's filemap_read returns there before
- * its copy, and -EFAULT otherwise, also when the size cannot be had.
+ * caller cannot write, with the description's lock held: 0 when the type
+ * has no byte at `at`, -EFAULT when it has one, or the type's error. The
+ * type is asked by a read of one byte into a kernel buffer, since what a
+ * read returns is not always the size getattr gives: an mqueue file's size
+ * is its queue's bytes and its read the status line. Linux's filemap_read
+ * returns 0 at the end before its copy, and simple_read_from_buffer, which
+ * an mqueue read is, returns 0 at the end of its text and -EFAULT for a
+ * copy that fails short of it (fs/libfs.c:1104-1110).
  */
 static int32_t file_read_unwritable(struct open_file *ofd, uint64_t at)
 {
-    struct vfs_stat st;
+    char byte;
+    int32_t r = vfs_read(ofd->vmnt, ofd->fhandle, &byte, 1, at);
 
-    if (vfs_getattr(ofd->vmnt, ofd->vnode, &st) == 0 && at >= st.size) {
-        return 0;
-    }
-    return -EFAULT;
+    return r > 0 ? -EFAULT : r;
 }
 
 /**
@@ -6430,7 +6433,7 @@ static int32_t file_read_unwritable(struct open_file *ofd, uint64_t at)
  * position lock; `asked` is unused with `at`. Returns the bytes read, 0 at
  * the end of the file, or a negative errno: -EBADF for a descriptor not open
  * for reading or on no file, -EINVAL for that end past 2^63-1, -EFAULT for
- * a first byte the caller cannot write short of the file's end
+ * a first byte the caller cannot write where the file has a byte to read
  * (`file_read_unwritable`), or the type's error. A read of a byte or more
  * reports IN_ACCESS to inotify. The pages mappings of the file hold are
  * read from memory (`file_read_locked`).
@@ -13350,10 +13353,11 @@ static long iov_file_elements_read(struct open_file *ofd, const struct kernel_io
  * stopping at the first element not filled, or when none was read 0 at the
  * end of the file or a negative errno: -EINVAL for a count below 0 or past
  * IOV_MAX_LOCAL, a negative length or an end past 2^63-1, -EFAULT for a
- * vector the caller cannot read or, short of the file's end, a first buffer
- * it cannot write (`file_read_unwritable`), -ENOMEM, -EBADF for no file, or
- * the type's error. The end check and the file's end come before that
- * -EFAULT, as Linux's rw_verify_area and filemap_read run before any copy.
+ * vector the caller cannot read or, where the file has a byte to read, a
+ * first buffer it cannot write (`file_read_unwritable`), -ENOMEM, -EBADF
+ * for no file, or the type's error. The end check and the file's end come
+ * before that -EFAULT, as Linux's rw_verify_area and filemap_read run
+ * before any copy.
  * A read of a byte or more reports IN_ACCESS to inotify. May sleep.
  */
 static long iov_file_read(fd_entry_t *entry, uintptr_t addr, int count, long long pos)

@@ -65,8 +65,9 @@ buffer that cannot be written, and the bytes before it are returned, as
 Linux's copy stops at its first fault; a buffer whose first page cannot
 be written gives
 .Er EFAULT
-only when the offset is short of the file's end, and zero at or past it,
-as on Linux.
+only when the file has a byte to read at the offset, and zero when it
+has none, as on Linux; the file's read decides, so an mqueue file, whose
+size is its queue's bytes, ends where its status line does.
 Descriptors shared through duplication or fork share the offset.
 Directories cannot be read with these calls: a read of any count returns
 .Er EISDIR ,
@@ -172,8 +173,8 @@ before it are returned, as Linux's read stops at the first fault of its
 copy; when the first destination cannot be written the call gives
 .Er EFAULT ,
 but for a file of a mounted file system only after the check of the
-list's end at the offset and when the offset is short of the file's end;
-at or past it the call returns zero, as on Linux.
+list's end at the offset and when the file has a byte to read at the
+offset; when it has none the call returns zero, as on Linux.
 A pipe and a stream socket answer the wait, the end of input and
 .Er EAGAIN
 before any copy, so a list whose first buffer cannot be written reads zero
