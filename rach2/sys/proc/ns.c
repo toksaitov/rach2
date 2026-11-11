@@ -702,7 +702,8 @@ int ns_owner_privileged(const process_t *p, const struct ns_common *c)
  * and those above it, as the process had them. Linux's struct pid lasts
  * while any task has it as its PID, group or session, so a group's number
  * names it in every namespace its leader was in after the leader is reaped
- * (`ns_release` keeps one, `pid_held_prune` lets it go).
+ * (`ns_release` keeps one, `pid_held_prune` lets it go). Its memory is taken
+ * at the fork (`ns_fork`, `pid_keep`), so that the reap needs none.
  */
 struct pid_held {
     struct pid_held *next;
@@ -783,17 +784,18 @@ static const struct pid_held *pid_held_find(uint32_t kid)
 }
 
 /** Keep the numbers of `p`, a record being freed in a PID namespace below
- * the first, while a group or a session has its ID. Without the memory for
- * them its group's number goes unseen in those namespaces. */
-static void pid_held_keep(const process_t *p)
+ * the first, while a group or a session has its ID, in the memory its fork
+ * took for them, `p->pid_keep`, which is otherwise freed. */
+static void pid_held_keep(process_t *p)
 {
-    struct pid_held *h;
+    struct pid_held *h = p->pid_keep;
 
-    if (!p->pidns || p->pidns == &init_pidns || !pid_held_by_group(p->pid, p)) {
+    p->pid_keep = NULL;
+    if (!h) {
         return;
     }
-    h = kzalloc(sizeof(*h));
-    if (!h) {
+    if (!p->pidns || p->pidns == &init_pidns || !pid_held_by_group(p->pid, p)) {
+        kfree(h);
         return;
     }
     h->kid = p->pid;
@@ -1231,6 +1233,12 @@ int32_t ns_fork(process_t *child, const process_t *parent, uint32_t flags)
     pns = set->pid_children;
     ns_get(&pns->c);
     child->pidns = pns == &init_pidns ? NULL : pns;
+    if (child->pidns) {
+        child->pid_keep = kzalloc(sizeof(*child->pid_keep));
+        if (!child->pid_keep) {
+            return -ENOMEM;
+        }
+    }
     return ns_number(child, pns);
 }
 
