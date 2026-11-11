@@ -2054,10 +2054,12 @@ static int32_t exec_build(struct exec_state *s)
 }
 
 /** Whether the execve in the group `arg` is the group's only live
- * thread. */
+ * thread, or SIGKILL is pending for its caller. */
 static int exec_alone(void *arg)
 {
-    return ((const struct tgroup *)arg)->live == 1;
+    const struct tgroup *tg = arg;
+
+    return tg->live == 1 || ((current_proc->sig_pending | tg->pending) & KSIG_BIT(SIGKILL)) != 0;
 }
 
 /**
@@ -2087,16 +2089,18 @@ static void exec_take_leader(void)
 /**
  * Make the current thread its process's only one before execve replaces the
  * image, as Linux's `de_thread` does: every other thread is sent SIGKILL and
- * the caller waits, whatever it is sent, until they have ended. While
- * `exec_task` is set, a thread the SIGKILL ends ends alone and does not make
- * the process end.
+ * the caller waits until they have ended or it has SIGKILL pending. A
+ * SIGKILL ends the wait with -EAGAIN after clearing `exec_task`, as Linux
+ * 6.12.115's fs/exec.c:1052-1059,1080-1085,1151-1157 does. While
+ * `exec_task` is set, a thread the SIGKILL ends ends alone and does not
+ * make the process end.
  *
  * A process that is ending, or one another of whose threads is in this wait
  * already, has sent the caller SIGKILL too. The caller then sends nothing
  * and leaves `exec_task` to its owner: the exec returns -EAGAIN, and the
  * thread ends on its way back to user mode, as Linux's `de_thread` has its
- * exec give up. Two execs that both waited would each wait for the other,
- * since neither wait acts on a signal. 0 or -EAGAIN.
+ * exec give up. Only the caller that set `exec_task` clears it. Returns 0
+ * or -EAGAIN; may sleep under the big lock.
  */
 static int32_t exec_one_thread(void)
 {
@@ -2118,6 +2122,9 @@ static int32_t exec_one_thread(void)
         }
         (void)wq_wait_event_killable(&tg->gone, exec_alone, tg, "de_thread");
         tg->exec_task = NULL;
+        if ((current_proc->sig_pending | tg->pending) & KSIG_BIT(SIGKILL)) {
+            return -EAGAIN;
+        }
     }
     return 0;
 }
@@ -4347,11 +4354,13 @@ void signal_set_blocked(uint64_t mask)
  * Post signal `signo` to the process `target` is a thread of, with the
  * siginfo `info`: set the process's pending bit, keeping `info` when the
  * signal was not already pending, and wake the thread `sig_taker` chooses,
- * whatever the signal's disposition and mask. Any thread that does not
- * block the signal may take it. A process whose threads have all ended
- * takes nothing. SIGKILL and SIGSTOP cannot be caught, so a pending SIGKILL
- * is honored even before delivery by leaving it pending for the default
- * path.
+ * whatever the signal's disposition and mask. SIGKILL also wakes an exec
+ * waiting for the other threads: the selected thread may be in a wait
+ * no signal ends. Linux 6.12.115's kernel/signal.c:1048-1055 wakes every
+ * thread on SIGKILL. Any thread that does not block the signal may take
+ * it. A process whose threads have all ended takes nothing. SIGKILL and
+ * SIGSTOP cannot be caught, so a pending SIGKILL is honored even before
+ * delivery by leaving it pending for the default path.
  */
 void signal_post_info(process_t *target, int signo, const struct k_siginfo *info)
 {
@@ -4372,6 +4381,9 @@ void signal_post_info(process_t *target, int signo, const struct k_siginfo *info
     tg->pending |= KSIG_BIT(signo);
     sig_job_control(target, signo);
     sig_wake(sig_taker(target, signo));
+    if (signo == SIGKILL) {
+        sig_wake(tg->exec_task);
+    }
     sig_irq_restore(f);
 }
 

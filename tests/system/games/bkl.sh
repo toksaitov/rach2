@@ -7,9 +7,10 @@
 # parts (dev-log/80-games/80-41.md, 80-75.md). Run as root on the trial
 # root, beside lenovo.sh; OUT/GAME gets lenovo.sh's output and calls,
 # profile, tick, stat-before and stat-after. lenovo.sh is on task/2664
-# (80-7b) until that task merges: copy it beside this script with
-# `git archive origin/task/2664 tests/system/games/lenovo.sh`. The clock's
-# minimum goes back from an exit trap, an interrupted run's too.
+# (80-7b) until that task merges: copy it beside this script by running, in
+# this script's directory,
+#   git show origin/task/2664:tests/system/games/lenovo.sh > lenovo.sh
+# The clock's minimum goes back from an exit trap, an interrupted run's too.
 set -u
 
 [ $# -ge 2 ] || { echo "usage: bkl.sh OUT GAME..." >&2; exit 2; }
