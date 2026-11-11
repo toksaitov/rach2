@@ -43,6 +43,7 @@
 #include "usb/usb.h"
 #include "tty/tty.h"
 #include "tty/pty.h"
+#include "ntp.h"
 #include "rtc.h"
 #include "block/loop.h"
 #include "fs/krffs.h"
@@ -745,20 +746,20 @@ long sys_clock_getres_time64(isr_params_t *params)
 /**
  * Set the real time to `seconds` and `nanoseconds`, the common end of
  * clock_settime, settimeofday and stime: a privileged caller's, after the
- * call has checked its own clock and time. -EPERM for any other caller and
- * -EINVAL for a time before 1970 or nanoseconds outside a second, as Linux
- * answers them.
+ * call has checked its own clock and time. -EPERM for any other caller, and
+ * -EINVAL for nanoseconds outside a second or a time the clock refuses,
+ * before 1970, past Linux's TIME_SETTOD_SEC_MAX or before the monotonic
+ * clock (`rtc_set_realtime`), as Linux answers them.
  */
 static int32_t realtime_set(int64_t seconds, int64_t nanoseconds)
 {
     if (!proc_privileged(current_proc)) {
         return -EPERM;
     }
-    if (seconds < 0 || nanoseconds < 0 || nanoseconds > 999999999) {
+    if (nanoseconds < 0 || nanoseconds > 999999999) {
         return -EINVAL;
     }
-    rtc_set_realtime(seconds, (int32_t)nanoseconds, 0);
-    return 0;
+    return rtc_set_realtime(seconds, (int32_t)nanoseconds) == 0 ? 0 : -EINVAL;
 }
 
 /**
@@ -792,158 +793,55 @@ long sys_clock_settime64(isr_params_t *params)
     return realtime_set(ts.tv_sec, ts.tv_nsec);
 }
 
-/* adjtimex's modes and states, Linux's (uapi/linux/timex.h). */
-#define ADJ_OFFSET            0x0001u
-#define ADJ_FREQUENCY         0x0002u
-#define ADJ_MAXERROR          0x0004u
-#define ADJ_ESTERROR          0x0008u
-#define ADJ_STATUS            0x0010u
-#define ADJ_TIMECONST         0x0020u
-#define ADJ_TAI               0x0080u
-#define ADJ_SETOFFSET         0x0100u
-#define ADJ_MICRO             0x1000u
-#define ADJ_NANO              0x2000u
-#define ADJ_TICK              0x4000u
-#define ADJ_OFFSET_SINGLESHOT 0x8001u
-#define ADJ_OFFSET_SS_READ    0xa001u
-#define STA_UNSYNC            0x0040
-#define STA_NANO              0x2000
-#define STA_RONLY             0xff00 /* the PPS, error, nano, mode and clock bits */
-#define TIME_OK               0
-#define TIME_ERROR            5
-/* The tick adjtimex reports and accepts, Linux's: the microseconds of a
- * tick of USER_HZ, whatever the kernel's own rate; and Linux's tolerance,
- * 500 ppm in its scaled units. */
-#define NTP_TICK_US           10000
-#define NTP_TOLERANCE         (500L << 16)
-#define NTP_FREQ_MAX          (500LL << 16)
-
-/* The clock's state as adjtimex sets and reports it: Linux's at boot, the
- * clock unsynchronized and its errors at their limit. */
-static struct {
-    int64_t freq, maxerror, esterror, constant;
-    int32_t status, tai;
-} ntp = {0, 16000000, 16000000, 2, STA_UNSYNC, 0};
-
-/* A timex in the kernel's own terms, which the three calls convert their
- * layouts to and from. */
-struct ktimex {
-    uint32_t modes;
-    int32_t status, shift, tai;
-    int64_t offset, freq, maxerror, esterror, constant, precision, tolerance;
-    int64_t sec, usec, tick;
-};
-
-/** Step the real time by `sec` seconds and `nsec` nanoseconds, each
- * earlier when negative, `nsec` less than a second either way; `slew` as
- * `rtc_set_realtime` takes it. */
-static void realtime_step(int64_t sec, int32_t nsec, int slew)
-{
-    int64_t now, now_ns;
-
-    rtc_realtime(&now, &now_ns);
-    now += sec;
-    now_ns += nsec;
-    if (now_ns < 0) {
-        now_ns += 1000000000;
-        now--;
-    } else if (now_ns >= 1000000000) {
-        now_ns -= 1000000000;
-        now++;
-    }
-    if (now >= 0) {
-        rtc_set_realtime(now, (int32_t)now_ns, slew);
-    }
-}
-
-/** An offset of `v` microseconds, or nanoseconds with `nano`, as at most the
- * half second Linux takes one to be (MAXPHASE), in nanoseconds. */
-static int32_t offset_ns(int64_t v, int nano)
-{
-    int64_t limit = nano ? 500000000 : 500000;
-
-    v = v > limit ? limit : v < -limit ? -limit : v;
-    return (int32_t)(nano ? v : v * 1000);
-}
-
 /**
- * adjtimex's work on `tx`, read and then filled in: the modes, then the
- * clock's state. The modes are Linux's, a privileged caller's alone but for
- * reading what a single-shot adjustment has left. This clock has no slew:
- * an offset, at most the half second Linux takes, a single-shot adjustment
- * and ADJ_SETOFFSET step the real time at once, so none is left in
- * progress; the two offsets, which Linux slews, cancel no
- * TFD_TIMER_CANCEL_ON_SET timerfd. The frequency, the time constant and the
- * errors are kept and reported but change nothing; a tick other than 10000
- * microseconds is -EINVAL, since the timer's period is fixed. Returns
- * Linux's state, TIME_ERROR while STA_UNSYNC is set and TIME_OK otherwise.
+ * adjtimex's work on `tx`, read and then filled in: the modes checked as
+ * Linux's timekeeping_validate_timex checks them (kernel/time/timekeeping.c:
+ * 2392-2452), then ADJ_SETOFFSET's step (`rtc_shift_realtime`), then the
+ * NTP state's modes and the clock's state (`rtc_adjtimex`), as Linux's
+ * do_adjtimex runs them (kernel/time/timekeeping.c:2473-2532). A mode but
+ * adjtime's read of what is left is a privileged caller's alone. The
+ * offsets of ADJ_OFFSET and of adjtime are slewed, and only ADJ_SETOFFSET
+ * steps the clock. Returns the clock's state, or -EPERM, or -EINVAL for an
+ * adjtime call with other modes than its own, a tick outside 9000 to 11000
+ * microseconds, a fraction of ADJ_SETOFFSET outside a second, a frequency
+ * whose scaled value would overflow, or a step to a time the clock refuses.
  */
 static int32_t ktimex_adjust(struct ktimex *tx)
 {
     uint32_t m = tx->modes;
-    int64_t sec, nsec;
+    int privileged = proc_privileged(current_proc);
 
-    if (m != 0 && m != ADJ_OFFSET_SS_READ && !proc_privileged(current_proc)) {
-        return -EPERM;
-    }
-    if (m == ADJ_OFFSET_SINGLESHOT) {
-        realtime_step(0, offset_ns(tx->offset, 0), 1);
-    } else if (m != ADJ_OFFSET_SS_READ) {
-        if ((m & ADJ_TICK) && tx->tick != NTP_TICK_US) {
+    if (m & ADJ_ADJTIME) {
+        if (!(m & ADJ_OFFSET)) {
             return -EINVAL;
         }
-        if ((m & ADJ_SETOFFSET) &&
-            (tx->usec < 0 || tx->usec >= ((m & ADJ_NANO) ? 1000000000 : 1000000))) {
+        if (!(m & ADJ_OFFSET_READONLY) && !privileged) {
+            return -EPERM;
+        }
+    } else {
+        if (m != 0 && !privileged) {
+            return -EPERM;
+        }
+        if ((m & ADJ_TICK) && (tx->tick < NTP_TICK_MIN || tx->tick > NTP_TICK_MAX)) {
             return -EINVAL;
         }
-        if (m & ADJ_STATUS) {
-            ntp.status = (ntp.status & STA_RONLY) | (tx->status & ~STA_RONLY);
+    }
+    if (m & ADJ_SETOFFSET) {
+        if (!privileged) {
+            return -EPERM;
         }
-        if (m & ADJ_NANO) {
-            ntp.status |= STA_NANO;
-        }
-        if (m & ADJ_MICRO) {
-            ntp.status &= ~STA_NANO;
-        }
-        if (m & ADJ_FREQUENCY) {
-            ntp.freq = tx->freq > NTP_FREQ_MAX    ? NTP_FREQ_MAX
-                       : tx->freq < -NTP_FREQ_MAX ? -NTP_FREQ_MAX
-                                                  : tx->freq;
-        }
-        if (m & ADJ_MAXERROR) {
-            ntp.maxerror = tx->maxerror;
-        }
-        if (m & ADJ_ESTERROR) {
-            ntp.esterror = tx->esterror;
-        }
-        if (m & ADJ_TIMECONST) {
-            ntp.constant = tx->constant;
-        }
-        if (m & ADJ_TAI) {
-            ntp.tai = (int32_t)tx->constant;
-        }
-        if (m & ADJ_SETOFFSET) {
-            realtime_step(tx->sec, (int32_t)(tx->usec * ((m & ADJ_NANO) ? 1 : 1000)), 0);
-        }
-        if (m & ADJ_OFFSET) {
-            realtime_step(0, offset_ns(tx->offset, (ntp.status & STA_NANO) != 0), 1);
+        if (tx->usec < 0 || tx->usec >= ((m & ADJ_NANO) ? 1000000000 : 1000000)) {
+            return -EINVAL;
         }
     }
-    rtc_realtime(&sec, &nsec);
-    tx->offset = 0;
-    tx->freq = ntp.freq;
-    tx->maxerror = ntp.maxerror;
-    tx->esterror = ntp.esterror;
-    tx->status = ntp.status;
-    tx->constant = ntp.constant;
-    tx->precision = 1;
-    tx->tolerance = NTP_TOLERANCE;
-    tx->sec = sec;
-    tx->usec = (ntp.status & STA_NANO) ? nsec : (int64_t)((int32_t)nsec / 1000);
-    tx->tick = NTP_TICK_US;
-    tx->shift = 0;
-    tx->tai = ntp.tai;
-    return (ntp.status & STA_UNSYNC) ? TIME_ERROR : TIME_OK;
+    if ((m & ADJ_FREQUENCY) && (tx->freq < -NTP_FREQ_LIMIT || tx->freq > NTP_FREQ_LIMIT)) {
+        return -EINVAL;
+    }
+    if ((m & ADJ_SETOFFSET) &&
+        rtc_shift_realtime(tx->sec, (int32_t)(tx->usec * ((m & ADJ_NANO) ? 1 : 1000))) != 0) {
+        return -EINVAL;
+    }
+    return rtc_adjtimex(tx);
 }
 
 /* The bytes of a timex, in the layout of the 128-byte struct timex of
@@ -991,18 +889,19 @@ static void timex_put(uint8_t *b, int wide, int field, int64_t v)
 
 /**
  * Copy the time to the CMOS clock after a change an NTP daemon made while
- * the clock is synchronized, at most once in 11 minutes, as Linux's
- * 11-minute mode does, so that the next boot starts from the time the
- * daemon kept and not from the CMOS clock's own drift. Rounded to the
- * nearest second, since the CMOS clock keeps no fraction.
+ * the clock is synchronized, its status `status` without STA_UNSYNC, at
+ * most once in 11 minutes, as Linux's 11-minute mode does, so that the
+ * next boot starts from the time the daemon kept and not from the CMOS
+ * clock's own drift. Rounded to the nearest second, since the CMOS clock
+ * keeps no fraction.
  */
-static void ntp_rtc_sync(void)
+static void ntp_rtc_sync(int32_t status)
 {
     static uint64_t last; /* kernel_ticks + 1 at the last copy, 0 for none */
     int64_t sec, nsec;
     rtc_time_t t;
 
-    if ((ntp.status & STA_UNSYNC) || (last != 0 && tick_count() + 1u - last < NTP_RTC_TICKS)) {
+    if ((status & STA_UNSYNC) || (last != 0 && tick_count() + 1u - last < NTP_RTC_TICKS)) {
         return;
     }
     rtc_realtime(&sec, &nsec);
@@ -1055,7 +954,7 @@ static int32_t timex_call(uintptr_t uaddr, int wide)
         return rc;
     }
     if (tx.modes != 0 && proc_privileged(current_proc)) {
-        ntp_rtc_sync();
+        ntp_rtc_sync(tx.status);
     }
     timex_put(b, wide, 1, tx.offset);
     timex_put(b, wide, 2, tx.freq);
@@ -1068,6 +967,10 @@ static int32_t timex_call(uintptr_t uaddr, int wide)
     timex_put(b, wide, 9, tx.sec);
     timex_put(b, wide, 10, tx.usec);
     timex_put(b, wide, 11, tx.tick);
+    /* the PPS fields, from ppsfreq to stbcnt, 0 as Linux without PPS gives
+     * them (kernel/time/ntp.c:225-236) */
+    k_memset(b + timex_off[wide][11] + (wide ? 8 : 4), 0,
+             (size_t)(timex_off[wide][13] - timex_off[wide][11] - (wide ? 8 : 4)));
     timex_put(b, wide, 12, tx.shift);
     timex_put(b, wide, 13, tx.tai);
     if (copy_to_user((void __user *)uaddr, b, size) != 0) {
@@ -1427,34 +1330,37 @@ static int time_reached(enum kclock_kind kind, const struct kernel_timespec *whe
 /**
  * Sleep until real time or time since boot, `kind`, reads `when` or later.
  *
- * Both clocks advance with the tick: real time is the clock's offset, from
- * `rtc_offset`, to the nanosecond, plus the time since boot, so a deadline
- * of real time less the offset is one of time since boot, as Linux's
- * hrtimer subtracts its base's whole offset (kernel/time/hrtimer.c:922,
- * 2140); and time since boot at a tick
- * is that tick's count in TICK_HZ parts of a second. So the sleep ends at the
- * first tick whose count reaches `when`, and a program that reads the clock
- * then reads `when` or later. Both are read to the microsecond, within the
- * tick, so a time the clock has reached returns at once, before the deadline
- * is rounded up to a tick. The tick count and the time since boot are read
- * as one reading (`tick_now`), since the tick changes both. A setting of the
- * real-time clock during a sleep on it wakes the sleep, which counts its
- * tick again from the clock as set; the step count (`rt_steps`) is read
- * before the clock, so that a setting between the two is not missed. A step
- * forward past `when` thus ends the sleep at the next tick, and a step back
- * keeps it sleeping until the clock reaches `when`, as
- * Linux's clock_was_set retriggers the hrtimer of an absolute sleep on
- * CLOCK_REALTIME (kernel/time/hrtimer.c:951-987, 2133-2142). Returns 0, or
- * -EINTR when a signal the process acts on comes first. `wchan` names the
- * sleep, as for `sleep_until`.
+ * Time since boot advances with the tick: time since boot at a tick is
+ * that tick's count in TICK_HZ parts of a second. A deadline of real time
+ * is the time since boot at which real time reaches it at its present rate
+ * (`rtc_mono_of_real`), which is real time less its offset while nothing
+ * slews the clock, as Linux's hrtimer subtracts its base's whole offset
+ * (kernel/time/hrtimer.c:922, 2140). So the sleep ends at the first tick
+ * whose count reaches `when`, and a program that reads the clock then
+ * reads `when` or later. Both are read to the microsecond, within the
+ * tick, so a time the clock has reached returns at once, before the
+ * deadline is rounded up to a tick. The tick count and the time since boot
+ * are read as one reading (`tick_now`), since the tick changes both. A
+ * setting of the real-time clock or a change of its rate during a sleep on
+ * it wakes the sleep, which counts its tick again from the clock as it
+ * then is; the step count (`rt_steps`) is read before the clock, so that a
+ * change between the two is not missed. A step forward past `when` thus
+ * ends the sleep at the next tick, and a step back keeps it sleeping until
+ * the clock reaches `when`, as Linux's clock_was_set retriggers the hrtimer
+ * of an absolute sleep on CLOCK_REALTIME (kernel/time/hrtimer.c:951-987,
+ * 2133-2142); and a sleep on real time that reaches its tick before real
+ * time reaches `when` counts again, since Linux's hrtimer never expires
+ * before its clock reaches its time. Returns 0, or -EINTR when a signal the
+ * process acts on comes first. `wchan` names the sleep, as for
+ * `sleep_until`.
  */
 static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_timespec *when,
                                 const char *wchan)
 {
     uint32_t seconds32, ticks32, steps;
     uint64_t now, base, due;
-    int64_t sec, offset_sec;
-    int32_t rc, nsec, offset_nsec;
+    int64_t sec;
+    int32_t rc, nsec;
 
     do {
         steps = rtc_step_count();
@@ -1466,27 +1372,24 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
         sec = when->tv_sec;
         nsec = (int32_t)when->tv_nsec;
         if (kind == KCLOCK_REAL) {
-            rtc_offset(&offset_sec, &offset_nsec);
-            sec -= offset_sec;
-            nsec -= offset_nsec;
-            if (nsec < 0) {
-                nsec += 1000000000;
-                sec--;
-            }
+            rtc_mono_of_real(when->tv_sec, (int32_t)when->tv_nsec, &sec, &nsec);
         }
         if (sec < 0) {
             return 0;
         }
         due = tick_span(sec, (uint32_t)nsec);
-        if (due <= now) {
+        if (due <= now && kind != KCLOCK_REAL) {
             return 0;
+        }
+        if (due <= now) {
+            due = now + 1u;
         }
         current_proc->rt_steps = kind == KCLOCK_REAL ? steps : 0;
         current_proc->wakeup_ns = sleep_ns(sec, nsec);
         rc = sleep_until(base + (due - now), 0, wchan);
         current_proc->wakeup_ns = 0;
         current_proc->rt_steps = 0;
-    } while (rc == 1);
+    } while (rc == 1 || (rc == 0 && kind == KCLOCK_REAL));
     return rc;
 }
 

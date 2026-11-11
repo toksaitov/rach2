@@ -33,10 +33,10 @@ int vclock_read_cycles(int real, uint64_t *ns, uint64_t *cycles)
     return 0;
 }
 
-void vclock_set_offset(int64_t sec, int32_t nsec)
+void vclock_set_course(const struct rtc_course *c, int step)
 {
-    (void)sec;
-    (void)nsec;
+    (void)c;
+    (void)step;
 }
 
 uint32_t vclock_resolution_ns(void)

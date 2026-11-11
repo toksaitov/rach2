@@ -274,14 +274,15 @@ static uint32_t boot_ticks_skipped;
  * Advance the tick count and the uptime by the ticks the clock says this
  * interrupt counts (`timer_tick_clock`), none for one delivered again and
  * more than one for one that came late, carry the vDSO's clock on to the
- * tick (`vclock_tick`), and measure the gap since the last pass
+ * tick (`vclock_tick`), give real time each second that passed, which its
+ * NTP state counts (`rtc_seconds`), and measure the gap since the last pass
  * (`latency_tick`). The caller holds `clock_pass_lock` with interrupts off,
  * and no big lock: readers of the tick on other processors read it inside
  * its sequence count (`tick_count`, clock.c).
  */
 static void timer_clock_pass(void)
 {
-    uint32_t due;
+    uint32_t due, seconds = 0;
 
     tick_write_begin();
     due = timer_tick_clock();
@@ -290,10 +291,14 @@ static void timer_clock_pass(void)
         if (++kernel_second_ticks >= TICK_HZ) {
             kernel_second_ticks = 0;
             ++kernel_uptime_seconds;
+            seconds++;
         }
     }
     tick_write_end();
     vclock_tick();
+    if (seconds != 0) {
+        rtc_seconds(seconds);
+    }
     latency_tick();
 }
 

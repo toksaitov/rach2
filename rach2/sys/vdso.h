@@ -9,6 +9,7 @@
 
 #include "lib/kint.h"
 
+struct rtc_course;
 struct vm_space;
 struct vm_file;
 
@@ -26,8 +27,10 @@ struct vm_file;
  * again, and reads again when it was odd or has moved. At `cycle_base`
  * counts of the TSC the monotonic clock was `mono_sec` seconds and
  * `mono_nsec` nanoseconds and real time `real_sec` and `real_nsec`; each
- * count since adds `mult` / 2^`shift` nanoseconds. The coarse clocks are
- * those two times as they are, without the counts since.
+ * count since adds `mult` / 2^`shift` nanoseconds to the first and
+ * `real_mult` / 2^`shift` to the second, which the NTP state's slew makes
+ * faster or slower. Each clock's rate is 8 bytes before its seconds. The
+ * coarse clocks are those two times as they are, without the counts since.
  */
 struct vdso_data {
     volatile uint32_t seq; /* odd while the kernel changes the page */
@@ -37,11 +40,13 @@ struct vdso_data {
     uint32_t shift;        /* at most 32 */
     int64_t mono_sec;      /* CLOCK_MONOTONIC at cycle_base */
     uint64_t mono_nsec;    /* below 10^9 */
-    int64_t real_sec;      /* CLOCK_REALTIME at cycle_base */
-    uint64_t real_nsec;    /* below 10^9 */
-    uint32_t res_ns;       /* the resolution clock_getres gives the two */
-    uint32_t getcpu;       /* 1 when `rdtscp` gives the processor's number */
-    uint32_t coarse_ns;    /* the coarse clocks' resolution, the tick */
+    uint32_t real_mult;    /* real time's nanoseconds a count, times 2^shift */
+    uint32_t pad;
+    int64_t real_sec;   /* CLOCK_REALTIME at cycle_base */
+    uint64_t real_nsec; /* below 10^9 */
+    uint32_t res_ns;    /* the resolution clock_getres gives the two */
+    uint32_t getcpu;    /* 1 when `rdtscp` gives the processor's number */
+    uint32_t coarse_ns; /* the coarse clocks' resolution, the tick */
 };
 
 /* The offsets the vDSO reads the page at. */
@@ -52,11 +57,12 @@ struct vdso_data {
 #define VDSO_DATA_SHIFT      20
 #define VDSO_DATA_MONO_SEC   24
 #define VDSO_DATA_MONO_NSEC  32
-#define VDSO_DATA_REAL_SEC   40
-#define VDSO_DATA_REAL_NSEC  48
-#define VDSO_DATA_RES_NS     56
-#define VDSO_DATA_GETCPU     60
-#define VDSO_DATA_COARSE_NS  64
+#define VDSO_DATA_REAL_MULT  40
+#define VDSO_DATA_REAL_SEC   48
+#define VDSO_DATA_REAL_NSEC  56
+#define VDSO_DATA_RES_NS     64
+#define VDSO_DATA_GETCPU     68
+#define VDSO_DATA_COARSE_NS  72
 
 /*
  * The clock behind the page, which the kernel's own clock calls read as
@@ -79,10 +85,11 @@ int vclock_running(void);
 
 /**
  * Carry the clock on at the boot processor's tick, with interrupts off: the
- * page's times are moved to the TSC's count now, and the rate is steered
- * toward the reference that keeps the tick, by at most one part in 2000,
- * so that the two cannot drift apart and no reading is earlier than one
- * before it.
+ * page's times are moved to the TSC's count now, the monotonic clock's rate
+ * is steered toward the reference that keeps the tick, and real time's
+ * toward the course (`vclock_set_course`), each by at most one part in
+ * 2000, so that neither drifts from what it follows and no reading is
+ * earlier than one before it.
  */
 void vclock_tick(void);
 
@@ -103,9 +110,16 @@ int vclock_read(int real, int coarse, int64_t *sec, int64_t *nsec);
  */
 int vclock_read_cycles(int real, uint64_t *ns, uint64_t *cycles);
 
-/** Make real time the monotonic clock plus `sec` seconds and `nsec`
- * nanoseconds, from 0 to 10^9 - 1, as clock.c's anchor and step give it. */
-void vclock_set_offset(int64_t sec, int32_t nsec);
+/**
+ * Make real time follow the course `c` (rtc.h), which clock.c gives at the
+ * anchor, at each setting with `step`, and at each change of its rate: the
+ * page's base moves to the TSC's count now, real time there is the
+ * course's with `step` and the page's own otherwise, so that a change of
+ * rate makes no jump, and its rate is the monotonic clock's times the
+ * course's. Interrupts may be on or off; the caller may hold clock.c's
+ * lock.
+ */
+void vclock_set_course(const struct rtc_course *c, int step);
 
 /** The resolution of the clock from the TSC, in nanoseconds: a count,
  * rounded up. */

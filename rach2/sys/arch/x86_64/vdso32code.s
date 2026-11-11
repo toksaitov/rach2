@@ -25,10 +25,14 @@
 .set D_MULT,       16
 .set D_SHIFT,      20
 .set D_MONO_SEC,   24
-.set D_REAL_SEC,   40
-.set D_RES_NS,     56
-.set D_GETCPU,     60
-.set D_COARSE_NS,  64
+.set D_REAL_MULT,  40
+.set D_REAL_SEC,   48
+.set D_RES_NS,     64
+.set D_GETCPU,     68
+.set D_COARSE_NS,  72
+# Each clock's rate is 8 bytes before its seconds: D_MULT before D_MONO_SEC
+# and D_REAL_MULT before D_REAL_SEC.
+.set D_RATE_BACK,  8
 
 # VCLOCK_TSC, and the i386 system calls the code makes.
 .set VCLOCK_TSC,           1
@@ -120,10 +124,11 @@ vdso32_page_at:
 # EDX:EAX and the nanoseconds, below 10^9, in ECX, as the 64-bit vDSO's
 # vdso_fine reads them. The TSC's count since the base, nought when it is
 # behind, as another processor's can be by a few counts, is multiplied by
-# the page's rate into 96 bits and shifted right by the page's shift, at
-# most 32; the base's nanoseconds are added and the sum divided by 10^9
-# into seconds and nanoseconds. The sequence count is read before and
-# after, and the reading made again while it is odd or has moved.
+# the clock's rate, 8 bytes before its seconds, into 96 bits and shifted
+# right by the page's shift, at most 32; the base's nanoseconds are added
+# and the sum divided by 10^9 into seconds and nanoseconds. The sequence
+# count is read before and after, and the reading made again while it is
+# odd or has moved.
 vdso32_fine:
     pushl %ebp
     pushl %ebx
@@ -147,11 +152,11 @@ vdso32_fine:
     xorl %edx, %edx
 2:
     movl %edx, %ebx
-    mull D_MULT(%ebp)
+    mull -D_RATE_BACK(%ebp,%edi)
     movl %eax, %esi
     movl %edx, %ecx
     movl %ebx, %eax
-    mull D_MULT(%ebp)
+    mull -D_RATE_BACK(%ebp,%edi)
     addl %ecx, %eax
     adcl $0, %edx
     movl D_SHIFT(%ebp), %ecx
