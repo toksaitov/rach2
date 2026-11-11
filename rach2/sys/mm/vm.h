@@ -100,9 +100,11 @@
  * writable segment of a program, and a private mapping that was writable
  * when it was made or that mprotect first makes writable, unless
  * VM_PROT_NORESERVE is set. The mark stays when the region stops being
- * writable, except on anonymous memory no page of which was ever written
- * (`vma_t`'s `anon`), as Linux's mprotect_fixup drops it from a region with
- * no anon_vma. This kernel keeps no commit count; only smaps reads it. */
+ * writable, except on anonymous memory no page of which was written while
+ * the region, or the one it was split from, held it (`vma_t`'s `anon`), as
+ * Linux's mprotect_fixup drops it from a region with no anon_vma when the
+ * protection changes. This kernel keeps no commit count; only smaps reads
+ * it. */
 #define VM_PROT_ACCOUNT     0x80000u
 /* Kept the same way: the mapping was made with MAP_NORESERVE, as Linux's
  * VM_NORESERVE under overcommit_memory 0, and is never VM_PROT_ACCOUNT. */
