@@ -1091,6 +1091,35 @@ static void row_play_gate(void)
     hda_stop();
 }
 
+/**
+ * An output interrupt that comes while the position still reads the period
+ * before fills nothing and leaves the stream pending (`play_irq_pending`),
+ * as Linux's azx_position_check marks one; the tick then asks for the
+ * service at each call, and the first after the position has passed into
+ * the next period fills the period played.
+ */
+static void row_play_early(void)
+{
+    unsigned next = 1;
+
+    row = "play-irq-early";
+    model_start(1u << 6, 48000, AUDIO_S16LE, 2);
+    write_blocks(&next);
+    model_play(20000);
+    hda_test_write(HDA_INTSTS, 1u << output_stream_index, 32);
+    hda_irq_handler(NULL);
+    check(play_irq_pending && hw_fill_count == 0,
+          "an interrupt before the period's end fills nothing and stays pending");
+    tick();
+    check(play_irq_pending && hw_fill_count == 0,
+          "the tick fills nothing while the position reads the first period");
+    model_play(5000);
+    tick();
+    check(!play_irq_pending && hw_fill_count == 1,
+          "the next tick fills the period once the position has passed it");
+    hda_stop();
+}
+
 /** Allocate a procfs snapshot, or inject allocation failure. */
 void *kmalloc(size_t size)
 {
@@ -2287,6 +2316,7 @@ int main(void)
     row_writer_stall();
     row_missed();
     row_play_gate();
+    row_play_early();
     row_shutdown();
     row_mix_width();
     row_capture_path();

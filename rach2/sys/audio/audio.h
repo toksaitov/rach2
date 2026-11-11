@@ -229,9 +229,11 @@ typedef struct audio_driver {
      */
 
     /* Sound `hz` until the next call, or stop with 0. With `tick` set the
-     * caller is the timer tick, with interrupts off: it only stops, and a
-     * busy device gives -EBUSY rather than a wait. The divider the
-     * generator was given, 0 for silence, or a negative errno. */
+     * caller is the timer tick, with interrupts off: it only stops, and the
+     * driver either hands the stop to its own thread, which sends it, or
+     * gives -EBUSY rather than a wait when the device is busy. The divider
+     * the generator was given, 0 for silence or a stop handed on, or a
+     * negative errno. */
     int (*beep)(uint32_t hz, int tick);
 
     /* Set the generator's level, 0 to 100, where 0 silences it; with

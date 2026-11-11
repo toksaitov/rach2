@@ -54,10 +54,10 @@ void speaker_off(void);
 void speaker_tone(uint32_t divisor, uint32_t ms);
 
 /** End a tone whose length has passed, and stop the beep generator, which
- * the tick sends in a try and again at the next tick while the generator is
- * busy: the boot processor's tick calls it once a tick, with interrupts
- * off. A tick that finds a request holding the speaker's lock tries again
- * at the next. */
+ * its driver sends from its own thread or the tick sends in a try, and again
+ * at the next tick while the generator is busy: the boot processor's tick
+ * calls it once a tick, with interrupts off. A tick that finds a request
+ * holding the speaker's lock tries again at the next. */
 void speaker_tick(void);
 
 /**
