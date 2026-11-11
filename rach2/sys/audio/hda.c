@@ -208,6 +208,11 @@ static uint32_t ring_write(const uint8_t *data, uint32_t count)
 /* Playback state */
 static bool playing = false;
 static bool stream_started = false; /* True once hardware stream is running */
+/* Whether the output stream's interrupt has come since its start, and the
+ * low half of `kernel_ticks` when it last came; `hda_tick` serves the stream
+ * only until one has come, or when the next is late (`hda_irq_late`). */
+static bool play_irq_seen = false;
+static uint32_t play_irq_tick = 0;
 static audio_callback_t user_callback = NULL;
 
 /* Requested format/rate from AUDIO_START (userspace). */
@@ -746,8 +751,9 @@ static void hda_play_signal(void)
 /**
  * Refill every DMA period played since the last call.
  *
- * Called from the stream's interrupt and from every timer tick (hda_tick),
- * both with interrupts off. The play position, from the position buffer or
+ * Called from the stream's interrupt, and from the timer tick (hda_tick)
+ * until the stream's first interrupt and whenever the next is late, both
+ * with interrupts off. The play position, from the position buffer or
  * LPIB, names the period playing; the periods from the one playing at the
  * last call up to this one have been played, and are filled in that order, so
  * that they play after the periods filled before them.
@@ -1614,6 +1620,8 @@ static uint32_t cap_pos = 0;      /* the position at the last service, bytes */
 static uint32_t cap_clock = 0;    /* the wall clock at the last service */
 static uint32_t cap_recorded = 0; /* frames recorded up to `cap_pos` */
 static uint32_t cap_handed = 0;   /* frames handed to the reader */
+static bool cap_irq_seen = false; /* the input stream's, as `play_irq_seen` */
+static uint32_t cap_irq_tick = 0; /* and `play_irq_tick` */
 
 static void hda_service_capture(void);
 static void hda_capture_stop(audio_stream_t *s);
@@ -2282,6 +2290,10 @@ static void hda_irq_handler(isr_params_t *params)
     if (num_input_streams > 0 && (intsts & (1u << input_stream_index))) {
         sd_sts = hda_read8(hda_sd_offset(input_stream_index) + HDA_SD_STS);
         hda_write8(hda_sd_offset(input_stream_index) + HDA_SD_STS, sd_sts);
+        if (cap_running) {
+            cap_irq_seen = true;
+            cap_irq_tick = (uint32_t)kernel_ticks;
+        }
         hda_service_capture();
     }
     if (!(intsts & (1 << output_stream_index))) {
@@ -2297,6 +2309,8 @@ static void hda_irq_handler(isr_params_t *params)
         return;
     }
 
+    play_irq_seen = true;
+    play_irq_tick = (uint32_t)kernel_ticks;
     hda_service_stream();
 }
 
@@ -3701,6 +3715,7 @@ static int hda_launch(uint16_t fmt)
     walclk_last = hda_read32(HDA_WALCLK);
     hda_sd_write32(stream, HDA_SD_CTL, ctl);
     stream_started = true;
+    play_irq_seen = false;
     hda_report.playing = true;
     hda_report.requested_rate = current_sample_rate;
     hda_report.programmed_rate = current_hw_sample_rate;
@@ -3899,14 +3914,41 @@ void hda_read_queue(void)
     kirq_restore(flags);
 }
 
+/**
+ * Whether a stream whose interrupt last came at tick `since`, and whose
+ * period plays for `period_us` microseconds, has gone more than one period
+ * and a half without one: the next interrupt is half a period late, and the
+ * tick serves the stream itself, since a stream of three periods plays a
+ * period again two periods after the one its service missed.
+ */
+static bool hda_irq_late(uint32_t since, uint32_t period_us)
+{
+    return (uint32_t)kernel_ticks - since > (period_us + period_us / 2u) / TICK_US + 1u;
+}
+
+/** The time one period of the input stream records for, in microseconds,
+ * at its rate; 0 before a setup. */
+static uint32_t hda_capture_period_us(void)
+{
+    uint32_t rate = hda_report.input.rate;
+    uint32_t milli;
+
+    if (rate == 0 || cap_frame == 0)
+        return 0;
+    milli = cap_period / cap_frame * 1000u;
+    return milli / rate * 1000u + milli % rate * 1000u / rate;
+}
+
 void hda_tick(void)
 {
     static uint32_t seen; /* `kernel_ticks` at the last call */
     uint32_t now = (uint32_t)kernel_ticks, passed = now - seen;
 
     seen = now;
-    hda_service_stream();
-    hda_service_capture();
+    if (!play_irq_seen || hda_irq_late(play_irq_tick, hda_bytes_us(period_bytes)))
+        hda_service_stream();
+    if (!cap_irq_seen || hda_irq_late(cap_irq_tick, hda_capture_period_us()))
+        hda_service_capture();
     hda_poll_jacks(passed);
     hda_beep_tick(passed);
 }
@@ -4470,6 +4512,7 @@ static int hda_capture_start(audio_stream_t *s)
     cap_handed = 0;
     s->lost = 0;
     cap_clock = hda_read32(HDA_WALCLK);
+    cap_irq_seen = false;
     cap_running = true;
     hda_report.input.running = true;
     hda_sd_write32(stream, HDA_SD_CTL, hda_sd_read32(stream, HDA_SD_CTL) | HDA_SD_CTL_RUN);

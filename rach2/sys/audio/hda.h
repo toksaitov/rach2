@@ -369,13 +369,16 @@ void hda_read_queue(void);
  */
 uint32_t hda_delay_frames(void);
 
-/** Refill the periods the stream has played since the last refill, hand the
- * input stream's finished periods over, and every quarter second poll the
- * jacks, moving the output and the microphone recorded as a plug goes in or
- * out. The boot processor's tick calls this, with interrupts off, so
- * playback goes on where the controller's interrupt does not arrive; the
- * jacks' and the beep's clocks count the ticks since the last call, since
- * that tick skips the call while another processor holds the big lock. */
+/** Refill the periods the stream has played since the last refill and hand
+ * the input stream's finished periods over, each only until the stream's
+ * first interrupt or while its next interrupt is late, and every quarter
+ * second poll the jacks, moving the output and the microphone recorded as a
+ * plug goes in or out. The boot processor's tick calls this, with
+ * interrupts off, so playback goes on where the controller's interrupt does
+ * not arrive, while a stream whose interrupts come is served by them alone,
+ * as Linux's `azx_interrupt` serves it; the jacks' and the beep's clocks
+ * count the ticks since the last call, since that tick skips the call while
+ * another processor holds the big lock. */
 void hda_tick(void);
 
 /*

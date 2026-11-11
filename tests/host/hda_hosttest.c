@@ -1656,7 +1656,10 @@ static void row_capture_duplex(void)
     move_input(4096 * 4);
     clock_value += 2 * 24000 * 21;
     tick();
-    check(got_transfers == 4, "capture goes on alone");
+    check(got_transfers == 2, "the tick leaves a stream whose interrupts come to them");
+    kernel_ticks += 32; /* a period and a half of 21 ms, and the next interrupt is late */
+    tick();
+    check(got_transfers == 4, "capture goes on alone, from the tick once its interrupt is late");
     check(hda_start(48000, AUDIO_S16LE, 2) == 0, "playback starts again");
     hda_driver.stream_stop(&s);
     check(playing && (hda_test_read(0xA0 + HDA_SD_CTL, 8) & HDA_SD_CTL_RUN),
