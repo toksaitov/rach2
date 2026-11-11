@@ -123,10 +123,11 @@ if [ -n "$bdf" ]; then
         echo "vtest-rach2: no gpu.sh beside the script or in tests/assign for -g" >&2
         exit 2
     }
-    # Under rach2.i915fake QEMU's edu device, vendor 0x1234 as all of
-    # QEMU's own, has the display class; in the guest it is no display.
-    case $(cat "/sys/bus/pci/devices/$bdf/class" 2>/dev/null) in
-        0x03*) [ "$(cat "/sys/bus/pci/devices/$bdf/vendor")" = 0x1234 ] || display=1 ;;
+    # The class byte of the function's own configuration space: /sys's
+    # class file gives the one its driver reports, which for the Intel
+    # driver's fake chip in QEMU is a display's.
+    case $(od -A n -t x1 -j 11 -N 1 "/sys/bus/pci/devices/$bdf/config" 2>/dev/null | tr -d ' ') in
+        03) display=1 ;;
         '') echo "vtest-rach2: no function $bdf" >&2; exit 2 ;;
     esac
 fi
