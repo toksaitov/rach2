@@ -297,22 +297,52 @@ static uintptr_t fresh(void)
 
 static int prefaults;
 
-/* The one region the model knows, of memfd_secret, while `secret_on`. */
+/* The regions the model knows: while `secret_on` only `secret`, of
+ * memfd_secret, and otherwise `plain`, the window's pages that have a
+ * region (`unmapped`), readable and as writable as `prot_w` says. */
 static vma_t secret;
 static int secret_on;
+static vma_t plain;
 
-/** The region of `addr`: the secret one, or none. */
+/** The region of `addr`: the secret one, a plain one of its page, or
+ * none. */
 vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
 {
+    size_t b, i;
+
     (void)vm;
-    return secret_on && addr >= secret.start && addr < secret.end ? &secret : NULL;
+    if (secret_on) {
+        return addr >= secret.start && addr < secret.end ? &secret : NULL;
+    }
+    if (addr < HVA || addr >= HVA + BLOCKS * MIB2) {
+        return NULL;
+    }
+    b = (addr - HVA) / MIB2;
+    i = ((addr - HVA) / 4096u) % 512u;
+    if (unmapped[b][i]) {
+        return NULL;
+    }
+    plain.start = addr & ~(uintptr_t)4095u;
+    plain.end = plain.start + 4096u;
+    plain.prot = VM_PROT_READ | (prot_w[b][i] ? VM_PROT_WRITE : 0u);
+    return &plain;
 }
 
-/** The first region that ends above `addr`: the secret one, or none. */
+/** The first region that ends above `addr`: the secret one, or a plain
+ * one of the window from `addr`'s page, or none. */
 vma_t *vm_lower(const vm_space_t *vm, uintptr_t addr)
 {
     (void)vm;
-    return secret_on && secret.end > addr ? &secret : NULL;
+    if (secret_on) {
+        return secret.end > addr ? &secret : NULL;
+    }
+    if (addr >= HVA + BLOCKS * MIB2) {
+        return NULL;
+    }
+    plain.start = addr < HVA ? HVA : addr & ~(uintptr_t)4095u;
+    plain.end = HVA + BLOCKS * MIB2;
+    plain.prot = VM_PROT_READ | VM_PROT_WRITE;
+    return &plain;
 }
 
 /** The region after `r`: none, since the model has one. */
