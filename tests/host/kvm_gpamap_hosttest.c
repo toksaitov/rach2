@@ -15,11 +15,12 @@
  * refusals, an empty, unaligned, too wide or too large run, a page in no
  * slot, in a read-only slot or not shareable, and every page of a maker
  * whose address space has ended, each with nothing held and no range on
- * the notice; a change of the maker's memory beside the runs leaving the
- * map, and one that meets a run taking it back through the owner's revoke
- * once, with every reference let go and its frames answering 0; the end of
- * the maker's memory, a slot's change over a run and the VM's end each taking
- * maps back; and a free without a revoke, after which nothing is held.
+ * the notice; a change of the maker's memory past the map's range or
+ * inside it between the runs leaving the map, and one that meets a run
+ * taking it back through the owner's revoke once, with every reference let
+ * go and its frames answering 0; the end of the maker's memory, a slot's
+ * change over a run and the VM's end each taking maps back; and a free
+ * without a revoke, after which nothing is held.
  */
 #include "kvm/gpamap.c"
 #include "mm/notify.c"
@@ -247,7 +248,15 @@ static void map_rows(struct kvm_vm *vm)
     CHECK(held() == 5 && refs[22] == 1 && refs[17] == 1, "a reference to each frame");
     CHECK(counts[KVM_COUNT_GPA_MAP] == 1 && counts[KVM_COUNT_GPA_MAP_PAGE] == 5,
           "the map and its pages counted");
-    CHECK(maker.notify == &m->note, "the map's range on the maker's change notice");
+    CHECK(maker.notify == &m->note && m->note.start == MEM_BASE &&
+              m->note.end == MEM_BASE + 24 * 4096u,
+          "the map's range on the maker's change notice, pages 0 to 23 of its memory");
+    /* Pages 2 to 16 and 18 to 21 lie inside the notice's range in no run. */
+    mmn_notify(&maker, MMN_UNMAP, MEM_BASE + 10 * 4096u, MEM_BASE + 11 * 4096u);
+    mmn_notify(&maker, MMN_PROTECT, MEM_BASE + 18 * 4096u, MEM_BASE + 22 * 4096u);
+    CHECK(m->note.seq == 2 && revokes == 0 && held() == 5 &&
+              kvm_gpamap_frame(m, 0) == mem_frame[22] && kvm_gpamap_frame(m, 4) == mem_frame[17],
+          "a change inside the notice's range between the runs leaves the map");
     kvm_gpamap_free(m);
     CHECK(revokes == 0, "a free calls no revoke");
     CHECK(held() == 0 && maker.notify == NULL, "a free lets every frame and the notice go");
@@ -311,7 +320,7 @@ static void notice_rows(struct kvm_vm *vm)
     }
     mmn_notify(&maker, MMN_UNMAP, MEM_BASE + 19 * 4096u, MEM_BASE + 20 * 4096u);
     CHECK(revokes == 0 && kvm_gpamap_frame(m, 0) == mem_frame[17],
-          "a change beside the runs leaves the map");
+          "a change past the map's range leaves the map");
     mmn_notify(&maker, MMN_COW, MEM_BASE + 18 * 4096u, MEM_BASE + 19 * 4096u);
     CHECK(revokes == 1 && seen_held == 2,
           "a copy-on-write break over a run calls the revoke while the frames are held");
