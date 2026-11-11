@@ -73,39 +73,116 @@ static uint32_t payload_dword(const struct virtio_gpu_cmd *cmd, uint32_t i)
                                              off % PAGE_SIZE);
 }
 
-/** The bytes of the box of the copy whose header is dword `i` of `cmd`'s
- * command buffer, at the format of its resource, which must be one of the
- * submission's buffers `s`; 0 otherwise. */
-static uint64_t submit_box_bytes(const struct virtio_gpu_cmd *cmd, const struct vgpu_submit *s,
-                                 uint32_t i)
-{
-    uint32_t res = payload_dword(cmd, i + 1), k;
-    struct virtio_gpu_object *bo;
+/* A listed buffer's resource and format, which submit_copied looks up by
+ * resource id in a table sorted by it. */
+struct vgpu_box_res {
+    uint32_t res_id;
+    uint32_t format;
+};
 
-    for (k = 0; k < s->nbos; k++) {
-        bo = vgpu_bo(s->bos[k]);
-        if (bo && bo->res_id == res) {
-            return vgpu_box_bytes(bo->format, payload_dword(cmd, i + 9), payload_dword(cmd, i + 10),
-                                  payload_dword(cmd, i + 11));
+/** Sort `n` entries of `t` by resource id, a heap sort, so that the
+ * submission's list sorts in n log n steps whatever its order. */
+static void box_res_sort(struct vgpu_box_res *t, uint32_t n)
+{
+    uint32_t start, end, root, child;
+    struct vgpu_box_res x;
+
+    for (start = n / 2u; start-- > 0;) {
+        for (root = start; (child = 2u * root + 1u) < n; root = child) {
+            if (child + 1u < n && t[child].res_id < t[child + 1u].res_id) {
+                child++;
+            }
+            if (t[root].res_id >= t[child].res_id) {
+                break;
+            }
+            x = t[root];
+            t[root] = t[child];
+            t[child] = x;
         }
     }
-    return 0;
+    for (end = n; end-- > 1u;) {
+        x = t[0];
+        t[0] = t[end];
+        t[end] = x;
+        for (root = 0; (child = 2u * root + 1u) < end; root = child) {
+            if (child + 1u < end && t[child].res_id < t[child + 1u].res_id) {
+                child++;
+            }
+            if (t[root].res_id >= t[child].res_id) {
+                break;
+            }
+            x = t[root];
+            t[root] = t[child];
+            t[child] = x;
+        }
+    }
+}
+
+/** The bytes of the box of the copy whose header is dword `i` of `cmd`'s
+ * command buffer, at the format of its resource, which must be one of the
+ * `n` entries of the sorted table `t`; 0 otherwise. */
+static uint64_t submit_box_bytes(const struct virtio_gpu_cmd *cmd, const struct vgpu_box_res *t,
+                                 uint32_t n, uint32_t i)
+{
+    uint32_t res = payload_dword(cmd, i + 1), lo = 0, hi = n, mid;
+
+    while (lo < hi) {
+        mid = lo + (hi - lo) / 2u;
+        if (t[mid].res_id < res) {
+            lo = mid + 1u;
+        } else {
+            hi = mid;
+        }
+    }
+    if (lo == n || t[lo].res_id != res) {
+        return 0;
+    }
+    return vgpu_box_bytes(t[lo].format, payload_dword(cmd, i + 9), payload_dword(cmd, i + 10),
+                          payload_dword(cmd, i + 11));
 }
 
 /**
- * The bytes that virgl submission `s`, whose `size` bytes of commands are in
- * `cmd`'s payload, has the device copy. Mesa's virgl encodes its uploads and
- * readbacks in the submission when the host offers encoded transfers, as
- * TRANSFER3D from a resource's backing or COPY_TRANSFER3D from a staging
- * buffer, and small ones as RESOURCE_INLINE_WRITE; each box counts at its
- * resource's format.
+ * Set `cmd->copied` to the bytes that submission `s`, whose `size` bytes of
+ * commands are in `cmd`'s payload, has the device copy, when the file's
+ * context `ctx` speaks virgl. Mesa's virgl encodes its uploads and readbacks
+ * in the submission when the host offers encoded transfers, as TRANSFER3D
+ * from a resource's backing or COPY_TRANSFER3D from a staging buffer, and
+ * small ones as RESOURCE_INLINE_WRITE; each box counts at its resource's
+ * format. A Venus or native context's stream is another protocol and counts
+ * nothing. Each copy looks its resource up by binary search in a sorted copy
+ * of the buffer list, so a parse costs commands times log buffers; Linux
+ * sends the commands unread (virtgpu_submit.c:355, :421). 0, or -ENOMEM.
  */
-static uint64_t submit_copied(const struct virtio_gpu_cmd *cmd, const struct vgpu_submit *s,
-                              uint32_t size)
+static int32_t submit_copied(struct virtio_gpu_cmd *cmd, const struct vgpu_submit *s,
+                             const struct vgpu_context *ctx, uint32_t size)
 {
-    uint32_t n = size / 4u, i = 0, hdr, op, len;
+    uint32_t n = size / 4u, i = 0, k, nt = 0, hdr, op, len;
+    uint32_t capset = ctx->context_init & VIRTIO_GPU_CONTEXT_INIT_CAPSET_ID_MASK;
     uint64_t bytes = 0, box;
+    struct vgpu_box_res *t;
+    struct virtio_gpu_object *bo;
 
+    cmd->copied = 0;
+    if ((capset != 0 && capset != VIRTIO_GPU_CAPSET_VIRGL && capset != VIRTIO_GPU_CAPSET_VIRGL2) ||
+        !s->nbos) {
+        return 0;
+    }
+    if ((uint64_t)s->nbos * sizeof(*t) > (uint64_t)(size_t)-1) {
+        return -ENOMEM;
+    }
+    t = kmalloc((size_t)s->nbos * sizeof(*t));
+    if (!t) {
+        return -ENOMEM;
+    }
+    for (k = 0; k < s->nbos; k++) {
+        bo = vgpu_bo(s->bos[k]);
+        if (bo) {
+            t[nt].res_id = bo->res_id;
+            t[nt].format = bo->format;
+            nt++;
+        }
+    }
+    box_res_sort(t, nt);
     while (i < n) {
         hdr = payload_dword(cmd, i);
         op = hdr & 0xffu;
@@ -113,14 +190,16 @@ static uint64_t submit_copied(const struct virtio_gpu_cmd *cmd, const struct vgp
         if ((op == VIRGL_CCMD_TRANSFER3D || op == VIRGL_CCMD_COPY_TRANSFER3D ||
              op == VIRGL_CCMD_RESOURCE_INLINE_WRITE) &&
             len >= VIRGL_BOX_DWORDS && len < n - i) {
-            box = submit_box_bytes(cmd, s, i);
+            box = submit_box_bytes(cmd, t, nt, i);
             if (bytes + box >= bytes) {
                 bytes += box;
             }
         }
         i += 1u + len;
     }
-    return bytes;
+    kfree(t);
+    cmd->copied = bytes;
+    return 0;
 }
 
 /**
@@ -225,16 +304,17 @@ static int32_t sync_parse(struct virtio_gpu_device *vg, struct drm_file *file,
     return 0;
 }
 
-/** Resolve and hold all submitted buffer handles before any dependency wait.
- * Return 0 or -errno; submit_free releases a partial result. */
-static int32_t submit_buffers(struct virtio_gpu_device *vg, struct drm_file *file,
-                              struct drm_virtgpu_execbuffer *a, struct vgpu_submit *s)
+/** Resolve and hold all submitted buffer handles before any dependency wait,
+ * then count the copies of the commands in `cmd`'s payload with
+ * submit_copied. Return 0 or -errno; submit_free releases a partial
+ * result. */
+static int32_t submit_buffers(struct drm_file *file, struct drm_virtgpu_execbuffer *a,
+                              struct virtio_gpu_cmd *cmd, struct vgpu_submit *s)
 {
     struct virtio_gpu_object *bo;
     uint32_t i, handle;
     int32_t rc;
 
-    (void)vg;
     if ((uint64_t)a->num_bo_handles * sizeof(*s->bos) > (uint64_t)(size_t)-1) {
         rc = -ENOMEM;
         return rc;
@@ -264,7 +344,7 @@ static int32_t submit_buffers(struct virtio_gpu_device *vg, struct drm_file *fil
             return rc;
         }
     }
-    return 0;
+    return submit_copied(cmd, s, file->driver_priv, a->size);
 }
 
 /** Wait only for foreign producers, then attach each buffer in queue order.
@@ -404,11 +484,10 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
     if (rc) {
         goto out;
     }
-    rc = submit_buffers(vg, file, a, s);
+    rc = submit_buffers(file, a, cmd, s);
     if (rc) {
         goto out;
     }
-    cmd->copied = submit_copied(cmd, s, a->size);
     rc = submit_fence_in(vg, a, context);
     if (!rc) {
         rc = sync_parse(vg, file, a, 1, context, &outs);
