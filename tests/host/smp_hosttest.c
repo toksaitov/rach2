@@ -12,26 +12,28 @@
  * processor is sent and answers each request at once, as the processor's
  * `smp_service` would, so that the caller's wait ends.
  *
- * The rows: a processor that runs a thread of the directory is interrupted
- * and asked to drop the page; an idle processor that kept the directory
- * loaded is not interrupted and has it marked stale, which its next switch
- * to a thread of the directory answers by loading it again; a processor in
- * another directory is left alone; and before the directory is freed, the
- * idle processor that kept it is interrupted and gives it up for the
- * kernel's. A stop asks every other processor and waits a second for one
- * that does not stop, then sends it an NMI, which the real `smp_stop_nmi`
- * takes, run as that processor; each processor that stops, by the
- * interrupt's `smp_service` or by the NMI, runs `k_panic_hook` before it
- * marks itself stopped. At boot the wait for a started processor ends at
- * `CPU_ONLINE_WAIT_US`, and a processor that comes after it stops,
- * neither online nor counted. The profiler's sample of a hold of the big
- * lock walks the frames of the interrupted thread's kernel stack and stops
- * at a saved frame pointer above it, the user's value that the outermost
- * kernel frame holds. The big lock's counts: each processor's calls in its
- * own tally, summed by bkl/calls; a hold charged to the entry of a thread
- * that ran without the lock; the takes after an idle wait and a switch
- * under their own keys; each thread's record of its entry frames; and the
- * ioctl slots.
+ * The rows: a processor that runs a thread of the directory is interrupted and
+ * asked to drop the page; an idle processor that kept the directory loaded is
+ * not interrupted and has it marked stale, which its next switch to a thread of
+ * the directory answers by loading it again; a processor in another directory
+ * is left alone; and before the directory is freed, the idle processor that
+ * kept it is interrupted and gives it up for the kernel's. A stop asks every
+ * other processor and waits a second for one that does not stop, then sends it
+ * an NMI, which the real `smp_stop_nmi` takes, run as that processor; each
+ * processor that stops, by the interrupt's `smp_service` or by the NMI, runs
+ * `k_panic_hook` before it marks itself stopped. A call (`smp_call`) to the
+ * caller's own processor runs at once with interrupts off; one to another
+ * processor runs in that processor's `smp_service`, whose slot is cleared only
+ * after the function returns; and the wait for one ends when the processor goes
+ * offline. At boot the wait for a started processor ends at
+ * `CPU_ONLINE_WAIT_US`, and a processor that comes after it stops, neither
+ * online nor counted. The profiler's sample of a hold of the big lock walks the
+ * frames of the interrupted thread's kernel stack and stops at a saved frame
+ * pointer above it, the user's value that the outermost kernel frame holds. The
+ * big lock's counts: each processor's calls in its own tally, summed by
+ * bkl/calls; a hold charged to the entry of a thread that ran without the lock;
+ * the takes after an idle wait and a switch under their own keys; each thread's
+ * record of its entry frames; and the ioctl slots.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -63,12 +65,18 @@ process_t *proc_idle;
 page_dir_t *_kernel_dir;
 
 /* The interrupts each processor was sent, the page of its last TLB
- * request, whether it takes a stop it is asked for, and the microseconds
+ * request, whether it takes a stop it is asked for, whether it goes offline
+ * at the next interrupt instead of answering it, and the microseconds
  * waited. */
 static int ipis[NR_CPUS];
 static uintptr_t ipi_page[NR_CPUS];
 static int takes_stop[NR_CPUS];
+static int goes_offline[NR_CPUS];
 static unsigned long waited_us;
+
+/* Whether the model's interrupts are off, which `kirq_save` and
+ * `spin_lock_irqsave` set and their restores put back. */
+static uint32_t irqs_off;
 
 /** The host model runs no code a barrier must serialize. */
 void arch_sync_core(void)
@@ -143,15 +151,20 @@ void platform_cpu_nmi(int cpu)
 }
 
 /** Count an interrupt sent to `cpu` and answer its requests at once: a
- * stop, when `takes_stop` says so, by the real `smp_service` run there; a
- * page to drop, and a directory to give up for the kernel's, as
- * `smp_service` would. */
+ * stop, when `takes_stop` says so, and a function to run, by the real
+ * `smp_service` run there; a page to drop, and a directory to give up for
+ * the kernel's, as `smp_service` would. When `goes_offline` says so, the
+ * processor goes offline instead and answers nothing. */
 void platform_cpu_ipi(int cpu)
 {
     struct percpu *c = &cpu_table[cpu];
 
     ipis[cpu]++;
-    if (c->stop_request && takes_stop[cpu]) {
+    if (goes_offline[cpu]) {
+        c->online = 0;
+        return;
+    }
+    if ((c->stop_request && takes_stop[cpu]) || c->call_fn) {
         run_as(cpu, service);
         return;
     }
@@ -336,16 +349,19 @@ void arch_tlb_flush_page(uintptr_t va)
 /* The global tick a started processor's accounting begins from. */
 volatile uint64_t kernel_ticks;
 
-/** 0: the host has no interrupt flag. */
+/** Turn the model's interrupts off; whether they were. */
 uint32_t kirq_save(void)
 {
-    return 0;
+    uint32_t was = irqs_off;
+
+    irqs_off = 1;
+    return was;
 }
 
-/** Nothing: the host has no interrupt flag. */
+/** Put the model's interrupts back as `flags` says. */
 void kirq_restore(uint32_t flags)
 {
-    (void)flags;
+    irqs_off = flags;
 }
 
 /* ---- the rows ---- */
@@ -531,6 +547,68 @@ static void row_stop(void)
           "and neither the caller nor the stuck processor runs the hook");
 }
 
+/* What the last function `smp_call` ran saw: the processor, its argument,
+ * whether interrupts were off and whether its slot still named it, and
+ * how many times it ran. */
+static struct {
+    unsigned int cpu;
+    void *arg;
+    uint32_t irqs_off;
+    int slot_set;
+    int runs;
+} called;
+
+/** The function the call rows run: record what it sees in `called`. */
+static void record_call(void *arg)
+{
+    called.cpu = host_cpu;
+    called.arg = arg;
+    called.irqs_off = irqs_off;
+    called.slot_set = cpu_table[host_cpu].call_fn == record_call;
+    called.runs++;
+}
+
+/**
+ * `smp_call`: on the caller's own processor the function runs at once with
+ * interrupts off, and they come back on after; on another processor it
+ * runs in that processor's `smp_service`, whose slot still names it while
+ * it runs and is clear once the wait ends; and the wait ends, with the
+ * function not run, when the processor goes offline instead of answering.
+ */
+static void row_call(void)
+{
+    int arg;
+
+    k_memset(&called, 0, sizeof(called));
+    irqs_off = 0;
+    smp_call(0, record_call, &arg);
+    check(called.runs == 1 && called.cpu == 0 && called.arg == &arg && called.irqs_off,
+          "a call to the caller's own processor runs there at once with interrupts off");
+    check(!irqs_off && ipis[0] == 0,
+          "and interrupts come back on after it, with no interrupt sent");
+
+    k_memset(&called, 0, sizeof(called));
+    cpu_table[2].online = 1;
+    ipis[2] = 0;
+    smp_call(2, record_call, &arg);
+    check(called.runs == 1 && called.cpu == 2 && called.arg == &arg && called.slot_set &&
+              ipis[2] == 1,
+          "a call to another processor runs in its smp_service, its slot set until it returns");
+    check(cpu_table[2].call_fn == NULL && !irqs_off && !ipi_lock.locked,
+          "and the slot is clear when the wait ends, interrupts on and the lock let go");
+
+    k_memset(&called, 0, sizeof(called));
+    cpu_table[3].online = 1;
+    goes_offline[3] = 1;
+    ipis[3] = 0;
+    smp_call(3, record_call, &arg);
+    check(called.runs == 0 && ipis[3] == 1 && !irqs_off && !ipi_lock.locked,
+          "the wait for a processor that goes offline ends, the function not run there");
+    goes_offline[3] = 0;
+    cpu_table[3].call_fn = NULL;
+    cpu_table[2].online = 0;
+}
+
 /** Take `lock`: one thread, so nothing waits. */
 void spin_lock(struct spinlock *lock)
 {
@@ -547,14 +625,14 @@ void spin_unlock(struct spinlock *lock)
 uint32_t spin_lock_irqsave(struct spinlock *lock)
 {
     lock->locked = 1;
-    return 0;
+    return kirq_save();
 }
 
-/** Give `lock` back. */
+/** Give `lock` back and put interrupts back as `flags` says. */
 void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
 {
-    (void)flags;
     lock->locked = 0;
+    kirq_restore(flags);
 }
 
 /** Copy `n` bytes from `src`: the test's user memory is its own. */
@@ -614,6 +692,7 @@ int main(void)
 
     row_sample_stack();
     row_bkl_counts();
+    row_call();
 
     while (nguarded > 0) {
         free(guarded[--nguarded]);

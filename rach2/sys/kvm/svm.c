@@ -2666,9 +2666,10 @@ static void svm_vcpu_free(struct kvm_vcpu *v)
     v->backend = NULL;
 }
 
-/** The panic hook: GIF set again and SVM off on the processor that
- * panics, when a panic comes inside a run's section, so that the panic's
- * NMIs and a reboot find the processor as outside KVM, as Linux's
+/** The panic hook: GIF set again, when a panic comes inside a run's
+ * section, and SVM off on the processor that panics, stops the machine or
+ * is halted by a stop, so that the panic's NMIs and a reboot find the
+ * processor as outside KVM, as Linux's
  * svm_emergency_disable_virtualization_cpu leaves it. */
 static void svm_panic(void)
 {

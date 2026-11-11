@@ -209,4 +209,8 @@ int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
+/** One thread: there is no one to give way to. */
+void sched_service_point(void)
+{}
+
 #endif

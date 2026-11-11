@@ -414,8 +414,9 @@ struct i915_ppgtt {
  * whole GPU's resets, which GET_RESET_STATS gives, and
  * `reset_engine_count` the engine resets by the engine's class, as Linux's
  * gpu_error counts them. `hc_next` is the tick of the next heartbeat while
- * the GT is unparked (i915_hangcheck.c). `error` is the state captured at
- * the first hang, kept until it is cleared (i915_gpu_error.c).
+ * the GT is unparked, 0 when a beat found hangcheck off and stopped the
+ * heartbeat until the next unpark (i915_hangcheck.c). `error` is the state
+ * captured at the first hang, kept until it is cleared (i915_gpu_error.c).
  * `submit_next` links the devices whose requests may wait for fences, for
  * the submission worker, and `submit_listed` says the device is on that
  * list. `ppgtt` is the aliasing PPGTT, made with the rings.
@@ -3996,7 +3997,8 @@ void i915_hangcheck_unpark(struct drm_i915_private *i915);
  * legacy ring: an armed engine whose request of the last beat has not
  * completed is hung, and each such engine is reset (`i915_handle_error`);
  * an engine that has requests on the chip is armed with its last. The
- * next beat is an interval away.
+ * next beat is an interval away. A beat that finds i915.enable_hangcheck
+ * off disarms every engine and queues none until the next unpark.
  *
  * @return the engines found hung, as a mask of 1 << index.
  */
