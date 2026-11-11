@@ -196,6 +196,25 @@ A write zeroes the profile and chooses its mode: the whole kernel for a
 write that begins with
 .Ql kernel ,
 and the big lock's holds for any other.
+.It Pa lockdep/inject
+Mode 0600, only in the kernel built with
+.Ql make rach2-lockdep .
+Reads
+.Ql abba irq ,
+the words a write takes.
+A write of
+.Ql abba
+takes two locks of its own in one order and then in the other, and
+.Ql irq
+takes one lock in an interrupt's context, a second with interrupts on,
+and then the second while it holds the first, so that the lock-order checker reports a possible deadlock and an interrupt
+inversion in the kernel log and counts them in
+.Pa /proc/lockdep_stats .
+Each report is made once a boot.
+Another text fails with
+.Er EINVAL .
+Linux has no such file; its lib/locking-selftest.c makes such orders at
+boot.
 .It Pa test_lockup
 Mode 0600.
 Reads

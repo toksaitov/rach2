@@ -8,7 +8,10 @@
 #include "../arch/arch.h"
 #include "../klog.h"
 #include "../panic.h"
+#include "kerrno.h"
+#include "kstring.h"
 #include "../mm/pressure.h"
+#include "../mm/usercopy.h"
 #include "../proc/percpu.h"
 #include "../proc/process.h"
 #include "../proc/smp.h"
@@ -1322,6 +1325,101 @@ int lockdep_stats_text(char *buf, int cap)
     raw_spin_unlock(&graph_lock);
     kirq_restore(flags);
     return t.len;
+}
+
+/* ---- debugfs's lockdep/inject ---- */
+
+/* The locks that lockdep/inject takes in wrong orders, a class each. */
+static struct spinlock inject_a = SPINLOCK_INIT_NAMED("lockdep_inject_a");
+static struct spinlock inject_b = SPINLOCK_INIT_NAMED("lockdep_inject_b");
+static struct spinlock inject_irq = SPINLOCK_INIT_NAMED("lockdep_inject_irq");
+static struct spinlock inject_on = SPINLOCK_INIT_NAMED("lockdep_inject_on");
+
+/**
+ * Take A then B, then B then A, which closes a cycle that the checker
+ * reports as a possible deadlock. One thread takes both, so nothing waits.
+ */
+static void inject_abba(void)
+{
+    spin_lock(&inject_a);
+    spin_lock(&inject_b);
+    spin_unlock(&inject_b);
+    spin_unlock(&inject_a);
+    spin_lock(&inject_b);
+    spin_lock(&inject_a);
+    spin_unlock(&inject_a);
+    spin_unlock(&inject_b);
+}
+
+/**
+ * Take IRQ in an interrupt's context, ON with interrupts on, then ON under
+ * IRQ: an interrupt that wants IRQ could stop a holder of ON whom a holder
+ * of IRQ waits for, which the checker reports as an interrupt inversion.
+ * The interrupt is the depth `in_interrupt` reads, raised with interrupts
+ * off.
+ */
+static void inject_irq_inversion(void)
+{
+    uint32_t flags = kirq_save();
+
+    irq_enter();
+    spin_lock(&inject_irq);
+    spin_unlock(&inject_irq);
+    irq_leave();
+    kirq_restore(flags);
+    spin_lock(&inject_on);
+    spin_unlock(&inject_on);
+    flags = spin_lock_irqsave(&inject_irq);
+    spin_lock(&inject_on);
+    spin_unlock(&inject_on);
+    spin_unlock_irqrestore(&inject_irq, flags);
+}
+
+/** Whether the `len` bytes at `word` are `name`, with or without a
+ * newline after it. */
+static int inject_is(const char *word, uint32_t len, const char *name)
+{
+    uint32_t i;
+
+    if (len > 0 && word[len - 1] == '\n') {
+        len--;
+    }
+    i = 0;
+    while (i < len && name[i] && word[i] == name[i]) {
+        i++;
+    }
+    return i == len && name[i] == 0;
+}
+
+int32_t lockdep_inject_show(void *data, char *buf, uint32_t cap)
+{
+    static const char text[] = "abba\nirq\n";
+    uint32_t n = sizeof(text) - 1u;
+
+    (void)data;
+    if (n > cap) {
+        n = cap;
+    }
+    k_memcpy(buf, text, n);
+    return (int32_t)n;
+}
+
+int32_t lockdep_inject_store(void *data, const char __user *buf, uint32_t len)
+{
+    char word[8];
+
+    (void)data;
+    if (len == 0 || len > sizeof(word) || copy_from_user(word, buf, len) != 0) {
+        return -EINVAL;
+    }
+    if (inject_is(word, len, "abba")) {
+        inject_abba();
+    } else if (inject_is(word, len, "irq")) {
+        inject_irq_inversion();
+    } else {
+        return -EINVAL;
+    }
+    return (int32_t)len;
 }
 
 #else /* !RACH2_LOCKDEP */

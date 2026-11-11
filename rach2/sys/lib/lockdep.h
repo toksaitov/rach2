@@ -3,6 +3,7 @@
 #define _LOCKDEP_H_
 
 #include "kint.h"
+#include "kuser.h"
 
 /*
  * A kernel built with `KEXTRA=-DRACH2_LOCKDEP` (the `rach2-lockdep`
@@ -126,6 +127,16 @@ int lockdep_proc_text(char *buf, int cap);
 /** Write /proc/lockdep_stats's text into `buf` of `cap` bytes, as
  * `lockdep_proc_text` does. */
 int lockdep_stats_text(char *buf, int cap);
+
+/** Write debugfs's lockdep/inject: the names of its triggers, a line each. */
+int32_t lockdep_inject_show(void *data, char *buf, uint32_t cap);
+
+/**
+ * Run the trigger that `buf` names, "abba" for an order that closes a cycle
+ * or "irq" for an interrupt inversion, each on locks of its own, so that a
+ * test sees the checker report both; -EINVAL for any other word.
+ */
+int32_t lockdep_inject_store(void *data, const char __user *buf, uint32_t len);
 
 /** Report a missing hold of the spinlock (or any lock with a `dep` map) at
  * `lock`. */

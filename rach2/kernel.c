@@ -29,6 +29,7 @@
 #include "sys/block/mbr.h"
 #include "sys/block/loop.h"
 #include "sys/fs/debugfs.h"
+#include "sys/lib/lockdep.h"
 #include "sys/fs/devfs.h"
 #include "sys/fs/procfs.h"
 #include "sys/fs/vfs.h"
@@ -4043,10 +4044,17 @@ static void start_network(void)
  * under it, which a write zeroes (proc/smp.c). */
 static const struct debugfs_text_ops bkl_calls_ops = {smp_calls_show, smp_calls_store};
 static const struct debugfs_text_ops bkl_profile_ops = {smp_profile_show, smp_profile_store};
+#ifdef RACH2_LOCKDEP
+/* debugfs's lockdep/inject, which makes the checker's two reports on
+ * demand (lib/lockdep.c). */
+static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
+                                                           lockdep_inject_store};
+#endif
 
 /** Start the processors past the first (`smp_start`) and the lockup
- * detectors on all of them (`watchdog_init`), then register bkl/calls and
- * bkl/profile in debugfs; a failure there is logged. */
+ * detectors on all of them (`watchdog_init`), then register bkl/calls,
+ * bkl/profile and, with the checker, lockdep/inject in debugfs; a failure
+ * there is logged. */
 static void start_processors(void)
 {
     smp_start();
@@ -4055,6 +4063,11 @@ static void start_processors(void)
         debugfs_create_text("bkl/profile", 0644u, &bkl_profile_ops, NULL) != 0) {
         klog(KLOG_WARN, "bkl", "debugfs: files not registered");
     }
+#ifdef RACH2_LOCKDEP
+    if (debugfs_create_text("lockdep/inject", 0600u, &lockdep_inject_ops, NULL) != 0) {
+        klog(KLOG_WARN, "lockdep", "debugfs: inject not registered");
+    }
+#endif
 }
 
 /**
