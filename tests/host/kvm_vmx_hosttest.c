@@ -1233,6 +1233,7 @@ struct row {
     uint32_t cs_ar; /* CS's access rights at the exit, when a far jump changed them */
     uint64_t cr4;   /* CR4's bits the guest set in the run without an exit, or 0 */
     uint64_t kgs;   /* KERNEL_GS_BASE after the guest's SWAPGS in the run, or 0 */
+    int resched;    /* a tick in the run asks for a switch (`need_resched`) */
     /* The guest's MOV to CR8 under the TPR shadow, before the exit: the
      * processor writes `tpr` to the virtual-APIC page without one. */
     int tpr_write;
@@ -1290,9 +1291,8 @@ static struct {
      * KERNEL_GS_BASE, XCR0 and the WRMSRs so far. */
     uint64_t entry_star, entry_sfmask, entry_kgs, entry_xcr0;
     int entry_msr_writes, first_msr_writes;
-    /* The turn of the run loop at which it switches away
-     * (`sched_take_preempt`), counting down, and the switches taken. */
-    int preempt, switches;
+    /* The switches the run loop took (`sched_take_preempt`). */
+    int switches;
     /* Set, the next HLT halts the vCPU in the kernel (`kvm_lapic_halt`)
      * and the run loop's next look at the halted vCPU sleeps
      * (`kvm_lapic_prepare`); and the sleeps taken. */
@@ -2014,6 +2014,9 @@ static int m_run(struct kvm_regs *regs, uint64_t *cr2, int launched)
     if (r->kgs) {
         m.msr[msr_slot(MSR_KERNEL_GS_BASE)] = r->kgs;
     }
+    if (r->resched) {
+        current_proc->need_resched = 1;
+    }
     if (r->tpr_write) {
         CHECK(f[CPU_BASED_VM_EXEC_CONTROL] & PROC_TPR_SHADOW,
               "the guest writes CR8 without an exit only under the TPR shadow");
@@ -2317,15 +2320,16 @@ static void model_lenovo(void)
     }
 }
 
-/** The switch away the run loop's `sched_take_preempt` takes when a row
- * asked for it at this turn: the thread's `sched_out`, preempted, with
- * interrupts off, as `schedule` calls it, which clears `need_resched`. */
+/** The switch away the run loop's `sched_take_preempt` takes when a run of
+ * the script asked for it (`need_resched`): the thread's `sched_out`,
+ * preempted, with interrupts off, as `schedule` calls it, which clears
+ * `need_resched`. */
 static void model_switch(void)
 {
     CHECK(!m.fpu_held || m.pkru == m.host_pkru,
           "between runs the host's PKRU is in, while the guest's FPU is held, as Linux's "
           "kvm_load_host_xsave_state puts it back after each run (x86.c:1027-1047)");
-    if (m.preempt && --m.preempt == 0) {
+    if (current_proc->need_resched) {
         CHECK(!irq_on, "the switch is taken with interrupts off");
         if (current_proc->sched_out) {
             current_proc->sched_out(current_proc->sched_out_arg, 1);
@@ -3170,9 +3174,8 @@ static void load_rows(int fd)
     saves = m.saves;
     loads = m.fpu_loads;
     switches = m.switches;
-    m.preempt = 2;
-    current_proc->need_resched = 1; /* the loop reads it at each turn's top */
     script(EXIT_CPUID, 0, 2)->kgs = 0xFFFF888000DEF000ull;
+    m.script[m.script_len - 1].resched = 1;
     script(EXIT_HLT, 0, 1);
     CHECK(run(fd) == 0 && m.switches == switches + 1 && m.saves == saves + 2 &&
               m.fpu_loads == loads + 1,
