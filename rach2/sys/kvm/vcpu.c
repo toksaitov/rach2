@@ -2071,10 +2071,22 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
     }
 }
 
+/**
+ * A vCPU's ioctl, called without the big lock as an unlocked file's
+ * operation, or with a hold the system call's entry took for its own
+ * reasons: tracing, seccomp, a held descriptor or USB work
+ * (`syscall_entry_locked`). KVM_RUN lets such a hold go for the whole
+ * run and takes it back at the same depth before it returns, so that
+ * neither the guest nor the exits the kernel handles keep the big lock, as
+ * Linux's KVM_RUN holds only the vCPU's mutex (virt/kvm/kvm_main.c:4489-4515).
+ * Every other request runs under the big lock.
+ */
 int32_t kvm_vcpu_ioctl(struct fd_entry *e, uint32_t request, uintptr_t arg)
 {
     struct kvm_vcpu *v = (struct kvm_vcpu *)e->priv;
+    uint32_t flags;
     int32_t r;
+    int depth;
 
     if (!kvm_vm_caller_ok(v->vm)) {
         return -EIO;
@@ -2082,14 +2094,22 @@ int32_t kvm_vcpu_ioctl(struct fd_entry *e, uint32_t request, uintptr_t arg)
     if (((request >> 8) & 0xFFu) != KVMIO) {
         return -EINVAL;
     }
-    vcpu_lock(v);
     if (request == KVM_RUN) {
+        flags = kirq_save();
+        depth = bkl_drop();
+        kirq_restore(flags);
+        vcpu_lock(v);
         r = vcpu_run(v, arg);
-    } else {
-        bkl_enter();
-        r = vcpu_state_ioctl(v, request, arg);
-        bkl_exit();
+        vcpu_unlock(v);
+        flags = kirq_save();
+        bkl_take(depth);
+        kirq_restore(flags);
+        return r;
     }
+    vcpu_lock(v);
+    bkl_enter();
+    r = vcpu_state_ioctl(v, request, arg);
+    bkl_exit();
     vcpu_unlock(v);
     return r;
 }
