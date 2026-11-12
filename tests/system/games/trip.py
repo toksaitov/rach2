@@ -25,19 +25,21 @@ import run
 # summary lists; Linux has only ctxt of them.
 STAT_KEYS = ("ctxt", "bkl_wait_us", "scheduler_picks", "tlb_shootdown_ipis")
 
-# debugfs's counts of the big lock's takes after a switch, by the system call
-# the thread slept in (debugfs(5)); Linux has no such file.
+# debugfs's complete holds by entry and takes after a switch, by the system
+# call the thread slept in (debugfs(5)); Linux has no such file.
 CALLS = Path("/sys/kernel/debug/bkl/calls")
 
 
 def snapshot():
-    """/proc/stat, the slept lines of debugfs's bkl/calls where it has them,
+    """/proc/stat, all entry and slept holds of debugfs's bkl/calls where read,
     and each tripprobe thread's stat and status, with the monotonic time, as
     one text."""
     text = ["time %.6f\n" % time.monotonic(), Path("/proc/stat").read_text()]
     try:
-        text += [line + "\n" for line in CALLS.read_text().splitlines()
-                 if line.startswith("slept ")]
+        calls = CALLS.read_text()
+        text += ["bkl_calls_complete\n"]
+        text += [line + "\n" for line in calls.splitlines()
+                 if line.startswith(("syscall ", "vector ", "take ", "slept "))]
     except OSError:
         pass
     for pid in os.listdir("/proc"):
@@ -59,6 +61,7 @@ def parse(text):
     """The time, the /proc/stat counters, the big lock's hold lines and each
     thread's ticks and context switches of a snapshot."""
     stat, holds, threads, tid, at = {}, {}, {}, None, 0.0
+    complete = False
     for line in text.splitlines():
         f = line.split()
         if line.startswith("time "):
@@ -68,8 +71,12 @@ def parse(text):
             threads[tid] = {}
         elif tid is None and line.startswith("bkl_hold_entry "):
             holds[f[1] + " " + f[2]] = (int(f[3]), int(f[4]))
-        elif tid is None and line.startswith("slept ") and len(f) >= 6:
-            holds["slept " + f[1]] = (int(f[4]), int(f[5]))
+        elif line == "bkl_calls_complete":
+            complete = True
+            holds.clear()
+        elif tid is None and complete and len(f) >= 6 and f[0] in (
+                "syscall", "vector", "take", "slept"):
+            holds[f[0] + " " + f[1]] = (int(f[4]), int(f[5]))
         elif tid is None and len(f) == 2 and f[1].isdigit():
             stat[f[0]] = int(f[1])
         elif tid is not None and re.match(r"\d+ \(", line):
@@ -80,22 +87,24 @@ def parse(text):
                          line)
             if m:
                 threads[tid][m.group(1)] = m.group(2)
-    return at, stat, holds, threads
+    return at, stat, holds, threads, complete
 
 
 def summary(start, end):
     """Lines that give the loop's wall time, the counters' changes, the big
     lock's holds by entry and each thread's switches between two snapshots."""
-    t0, s0, h0, a = parse(start)
-    t1, s1, h1, b = parse(end)
+    t0, s0, h0, a, c0 = parse(start)
+    t1, s1, h1, b, c1 = parse(end)
     lines = ["window %.1f ms" % ((t1 - t0) * 1000)]
     lines += ["%s %d" % (k, s1[k] - s0[k]) for k in STAT_KEYS if k in s0 and k in s1]
     # The kernel prints a slept row only after its first hold, so a row first
     # seen during the loop starts at zero.
     for key in sorted(h1, key=lambda k: -(h1[k][1] - h0.get(k, (0, 0))[1])):
-        n0, us0 = h0.get(key, (0, 0))
-        if h1[key][0] > n0:
-            n, us = h1[key][0] - n0, h1[key][1] - us0
+        if key not in h0 and not (c0 and c1):
+            continue
+        before = h0.get(key, (0, 0))
+        if h1[key][0] > before[0]:
+            n, us = h1[key][0] - before[0], h1[key][1] - before[1]
             lines.append("hold %s: %d holds, %d us, %.1f us each" % (key, n, us, us / n))
     for tid, y in sorted(b.items()):
         x = a.get(tid, {})
