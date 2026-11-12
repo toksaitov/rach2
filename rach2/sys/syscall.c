@@ -3519,6 +3519,9 @@ void init_syscall(void)
     /* The calls that take no lock but the scheduler's. */
     syscall_unlock(SYSCALL_ABI_NATIVE, sys_sched_yield);
     syscall_unlock(SYSCALL_ABI_IA32, sys_sched_yield);
+    /* getrusage takes the big lock itself for any target but the thread. */
+    syscall_unlock(SYSCALL_ABI_NATIVE, sys_getrusage);
+    syscall_unlock(SYSCALL_ABI_IA32, sys_getrusage);
     unlock_file_calls();
     syscall_mm_unlock();
     syscall_futex_unlock();

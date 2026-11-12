@@ -1014,8 +1014,8 @@ static void vmx_leave(int cpu, uint64_t cr4)
     vmx_op->write_cr4(cr4);
 }
 
-/** The panic hook: VMX off on the processor that panics, and on each
- * processor a panic's or a restart's stop halts, with every VMCS active
+/** The panic hook: VMX off on the processor that panics or stops the
+ * machine, and on each processor a stop halts, with every VMCS active
  * there cleared first, as Linux's vmx_emergency_disable_virtualization_cpu
  * (vmx.c:757-781) does. */
 static void vmx_panic(void)

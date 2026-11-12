@@ -124,8 +124,10 @@ void shmem_free(struct shmem *sh);
 /**
  * Free as `shmem_free` does, giving way to the big lock's waiters and the
  * tick's switch after each leaf of SHMEM_LEAF pages (`sched_give_way`), for
- * a caller that may sleep and whose `sh` no other thread reaches: a file in
- * memory that has lost its last name and its last hold.
+ * a caller that may sleep and whose `sh` no other thread reaches. There are
+ * two: tmpfs, for a file that has lost its last name and its last hold, and
+ * `filemap_release`, for shared anonymous memory's own pages once the
+ * mapping is off its list and its last region is gone.
  */
 void shmem_free_yielding(struct shmem *sh);
 

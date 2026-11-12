@@ -222,7 +222,10 @@ static void secret_put(struct secret_user *u)
  * mapping reaches the node then, since a mapping holds its file, and the
  * parent it holds stays held until the node is gone. A type's unlink and
  * last put may sleep, as ext2's do, so every caller already lets the big
- * lock go there.
+ * lock go there. A caller settles only once every name it changes is in
+ * place and holds no node it has not settled, since another thread may
+ * walk the tree, or close and free a node no name holds, while the big
+ * lock is let go; a directory has no pages, so its settle gives no way.
  */
 static void settle(struct tmpfs_node *n)
 {
@@ -826,7 +829,11 @@ static int is_above(const struct tmpfs_node *a, const struct tmpfs_node *d)
  * file or an empty directory there; a rename of a name to another name of
  * the same node does nothing. The new name's entry is taken from the heap
  * before either directory changes, so a rename the heap cannot serve
- * answers -ENOSPC with both names as they were. -ENOENT for a missing
+ * answers -ENOSPC with both names as they were. The replaced node is
+ * settled only after the moved one has its new name, as Linux frees the
+ * target's pages at its last iput (fs/namei.c:5123,5132), after d_move,
+ * since its free may give way: no walk then finds the moved node nameless,
+ * and a last close of it meanwhile leaves it its name. -ENOENT for a missing
  * name or a removed `newdir`, -ENOTDIR or -EISDIR for a directory and a file
  * in each other's place, -ENOTEMPTY, and -EINVAL for a directory moved below
  * itself.
@@ -839,7 +846,7 @@ static int tmpfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname
     struct tmpfs_dirent **from = find(od, oldname);
     struct tmpfs_dirent **to = find(nd, newname);
     struct tmpfs_dirent *e;
-    struct tmpfs_node *n;
+    struct tmpfs_node *n, *replaced;
 
     if (!from || removed(nd)) {
         return -ENOENT;
@@ -870,10 +877,9 @@ static int tmpfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname
     }
     remove_entry(od, find(od, oldname));
     to = find(nd, newname);
-    if (to) {
-        settle(remove_entry(nd, to));
-    }
+    replaced = to ? remove_entry(nd, to) : NULL;
     link_entry(nd, e, n);
+    settle(replaced);
     return 0;
 }
 

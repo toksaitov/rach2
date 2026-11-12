@@ -12,14 +12,15 @@
  * fail. The list is the big kernel lock's: a registration and its end are
  * made under it, and so is every call, which `mmn_notify` takes the lock
  * for when its caller runs without it; a list change is made under the
- * address space's page-table lock too. A callback must not sleep: the
- * memory manager calls it between a change to the regions and the change
- * to the page tables, and a sleep there would let another thread fault in a
- * page of a region already gone. A fault that changes a page already
- * present, a copy-on-write break, holds the big lock from the call to the
- * change of the entry whenever the address space has a range, so that a
- * driver that reads an entry under the big lock and maps what it found
- * sees the page before the change or hears of it after.
+ * address space's page-table lock too. A callback must not sleep or give
+ * way (`sched_give_way`): the memory manager calls it between a change to
+ * the regions and the change to the page tables, and either would let the
+ * big lock go and another thread fault in a page of a region already
+ * gone. A fault that changes a page already present, a copy-on-write
+ * break, holds the big lock from the call to the change of the entry
+ * whenever the address space has a range, so that a driver that reads an
+ * entry under the big lock and maps what it found sees the page before the
+ * change or hears of it after.
  */
 #ifndef _NOTIFY_H_
 #define _NOTIFY_H_

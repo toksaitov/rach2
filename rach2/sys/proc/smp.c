@@ -38,14 +38,14 @@ static uint32_t bkl_wait_max_holds;    /* holds completed during the longest wai
 /* Keep the most recent releases and copy those of a new longest wait. */
 struct bkl_hold_record {
     uint64_t cycles; /* full hold duration in TSC cycles */
-    uint32_t vector; /* entry vector, 0 for a take after a drop */
-    int32_t nr;      /* entry system call number, -1 for none */
+    uint32_t vector; /* entry vector, 0 for none */
+    int32_t nr;      /* entry system call number, -1 for none, or BKL_NR_* */
 };
 static struct bkl_hold_record bkl_recent[BKL_WAIT_HOLDS];
 static struct bkl_hold_record bkl_wait_hold[BKL_WAIT_HOLDS];
 static uint64_t bkl_hold_max_cycles;          /* the longest hold, from take to give back */
 static uint32_t bkl_hold_vector;              /* its entry's vector, 0 for none */
-static int32_t bkl_hold_nr = -1;              /* its entry's system call number, or -1 */
+static int32_t bkl_hold_nr = -1;              /* its entry's system call, -1 or BKL_NR_* */
 static uint64_t bkl_seen_max_cycles;          /* the oldest hold an interrupt has found */
 static uintptr_t bkl_seen_pc[BKL_SAMPLE_PCS]; /* that instruction, then its callers */
 
@@ -59,7 +59,7 @@ struct bkl_long_record {
     uint32_t cpu;
     uint32_t pid; /* thread interrupted, 0 when there is none */
     uint32_t vector;
-    int32_t nr; /* entry system call, -1 for none */
+    int32_t nr; /* entry system call, -1 for none, or BKL_NR_* */
     char comm[16];
     uintptr_t pc[BKL_SAMPLE_PCS];
 };
@@ -234,11 +234,6 @@ static void call_hold(struct bkl_call_count *c, uint64_t held, uint64_t waited)
     c->holds++;
 }
 
-/* The numbers in a record's `bkl_nr` that name a take with no entry of its
- * own: a thread's take after an idle wait, and after its switch. */
-#define BKL_NR_IDLE   (-2)
-#define BKL_NR_SWITCH (-3)
-
 /* The vector of a system call's entry, in a hold's record. */
 #define BKL_CALL_VECTOR 0x80u
 
@@ -260,14 +255,14 @@ static int hold_key(const struct percpu *cpu)
 
 /** Count the hold that ends now on `cpu`, which still holds the lock, under
  * its entry and against the longest. The first hold to end, the boot
- * processor's start-up, which nobody waits on, is left out. A take with no
- * entry of its own is recorded with the number -1. */
+ * processor's start-up, which nobody waits on, is left out. A take after an
+ * idle wait or a switch is recorded as BKL_NR_IDLE or BKL_NR_SWITCH. */
 static void bkl_hold_end(struct percpu *cpu)
 {
     uint64_t held = arch_cycles() - cpu->bkl_since, waited;
     int c = arch_cpu_id();
     int key = hold_key(cpu), ioctl;
-    int32_t nr = cpu->bkl_nr < -1 ? -1 : cpu->bkl_nr;
+    int32_t nr = cpu->bkl_nr;
 
     bkl_recent[bkl_releases % BKL_WAIT_HOLDS].cycles = held;
     bkl_recent[bkl_releases % BKL_WAIT_HOLDS].vector = cpu->bkl_vector;
@@ -881,12 +876,16 @@ int32_t smp_long_show(void *data, char *buf, uint32_t cap)
             text_ch(&t, ch > ' ' && ch <= '~' ? (char)ch : '?');
         }
         text_ch(&t, ' ');
-        text_dec(&t, r->vector);
-        text_ch(&t, ' ');
-        if (r->nr < 0)
-            text_str(&t, "-1");
-        else
-            text_dec(&t, (uint32_t)r->nr);
+        if (r->nr == BKL_NR_IDLE || r->nr == BKL_NR_SWITCH) {
+            text_str(&t, r->nr == BKL_NR_IDLE ? "take 0" : "take 1");
+        } else {
+            text_dec(&t, r->vector);
+            text_ch(&t, ' ');
+            if (r->nr < 0)
+                text_str(&t, "-1");
+            else
+                text_dec(&t, (uint32_t)r->nr);
+        }
         for (j = 0; j < BKL_SAMPLE_PCS; j++) {
             text_ch(&t, ' ');
             text_hex(&t, r->pc[j]);

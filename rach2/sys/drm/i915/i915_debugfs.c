@@ -1516,8 +1516,10 @@ static int32_t hangcheck_show(void *data, char *buf, uint32_t cap)
     return emit_end(&e);
 }
 
-/** A write of i915_params/enable_hangcheck, as debugfs's bool:
- * kstrtobool's words, or -EINVAL. */
+/**
+ * A write of i915_params/enable_hangcheck, as debugfs's bool: kstrtobool's
+ * words, or -EINVAL, set by `i915_hangcheck_enable`.
+ */
 static int32_t hangcheck_store(void *data, const char __user *buf, uint32_t len)
 {
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
@@ -1532,7 +1534,7 @@ static int32_t hangcheck_store(void *data, const char __user *buf, uint32_t len)
     if (rc < 0) {
         return rc;
     }
-    i915->params.hangcheck_off = (uint8_t)!b;
+    i915_hangcheck_enable(i915, b);
     return (int32_t)len;
 }
 

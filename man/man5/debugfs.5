@@ -142,12 +142,18 @@ and
 .Ql take 1
 count the holds a thread takes again after an idle wait and after its
 switch, which have no calls.
+The switch lets the lock go and the thread takes it back when it runs
+again, whatever entry it is in, so
+.Ql take 1
+counts a system call's hold after each sleep, a kernel thread's first hold
+and its holds after each sleep.
 The line
 .Ql vector 0
-counts, beside the divide error, the holds of kernel threads and of the
-lock taken again by a thread in no entry, after a run of a
+counts, beside the divide error, the holds begun in no entry other than
+after a switch: those of a kernel thread or of a thread in no entry that
+takes the lock again after a run of a
 .Xr kvm 4
-guest, another processor's claim or a processor's start.
+guest, after another processor's claim or at a processor's start.
 A system call numbered 512 or more counts as 512, a call of the i386 ABI
 under its own number.
 The times are microseconds, and 0 without an invariant time-stamp counter.
@@ -213,11 +219,13 @@ service clock-us, not uptime.
 Without calibration there are no records.
 The next columns name the processor, the interrupted thread (0 for none),
 its command (a dash for none, spaces and nonprinting characters replaced
-by question marks), and the hold's entry vector and system call number,
-as
+by question marks), and the hold's entry as
 .Pa bkl/calls
-charges the hold: -1 for none, and vector 0 with -1 for a take after a
-switch or an idle wait.
+charges the hold: its vector and system call number, -1 for none, or
+.Ql take 0
+for a take after an idle wait and
+.Ql take 1
+for a take after a switch, in the same two columns.
 The eight hexadecimal PCs are the interrupted instruction and its
 callers, zero after the end of the bounded kernel-stack walk.
 Later interrupts during a hold replace its sample.
@@ -517,6 +525,9 @@ a boolean as
 .Fn kstrtobool
 reads it, which off stops the heartbeat that finds hangs and makes new
 contexts not persistent.
+Turned on again, an engine has its heartbeat back once it next goes from
+idle to busy, or the GPU next wakes; an engine kept busy all the while has
+none until then, as on Linux.
 The rest are read-only, mode 0400, at Linux's defaults.
 .It Pa dri/DEVICE/i915_error_state
 Mode 0644.

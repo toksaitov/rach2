@@ -1259,15 +1259,14 @@ static int vshm_present(void *arg)
     return vshm_cur != NULL;
 }
 
-/**
- * The transport's thread, `vgpu-shm`: it binds virtio-gpu over an attached
- * region, which waits for the device's offer, serves the bound device on
- * each doorbell, or each tick when it polls, and carries out a detach.
- * The tick does not switch it (`no_tick_switch`): it gives way where it
- * sleeps, at the top of each pass and after each look of `vshm_await`
- * that fails, as vhost's worker calls cond_resched
- * between works (drivers/vhost/vhost.c:440 in 6.12.115), so the state its
- * steps change, which the big lock guards, never changes under it.
+/** The transport's thread, `vgpu-shm`: it binds virtio-gpu over an attached
+ * region, which waits for the device's offer, serves the bound device on each
+ * doorbell, or each tick when it polls, and carries out a detach. The tick does
+ * not switch it (`no_tick_switch`): it gives way where it sleeps, at the top of
+ * each pass and after each look of `vshm_await` that fails, as vhost's worker
+ * calls cond_resched between works (drivers/vhost/vhost.c:440 in 6.12.115),
+ * so the state its steps change, which the big lock guards, never changes
+ * under it.
  */
 static void vshm_main(void)
 {

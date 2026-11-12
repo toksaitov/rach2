@@ -336,18 +336,20 @@ static volatile int hangcheck_kicked;
 
 #ifndef RACH2_HOSTTEST
 /** The earliest heartbeat or retire pass of the devices on the worker's
- * list whose GT is awake, as a tick, or 0 for none. A wedged GT or one whose
- * hangcheck is off has no heartbeat, since i915_hangcheck returns before it
- * moves `hc_next`, and a deadline already past would keep the worker from
- * sleeping; Linux's next_heartbeat queues no beat when the interval is 0
- * (drivers/gpu/drm/i915/gt/intel_engine_heartbeat.c:56-57 in 6.12.115). */
+ * list whose GT is awake, as a tick, or 0 for none. A wedged GT has no
+ * heartbeat, since i915_hangcheck returns before it moves `hc_next`, and a
+ * deadline already past would keep the worker from sleeping. A GT whose
+ * hangcheck is off keeps its next beat, which stops the heartbeats and
+ * sets `hc_next` to 0 until the GT or an engine next unparks, as Linux's
+ * heartbeat with enable_hangcheck off queues no other
+ * (drivers/gpu/drm/i915/gt/intel_engine_heartbeat.c:234 in 6.12.115). */
 static uint64_t hangcheck_deadline(void)
 {
     struct drm_i915_private *i915;
     uint64_t at = 0;
 
     for (i915 = submit_devices; i915; i915 = i915->gt.submit_next) {
-        if (i915->gt.awake && !i915->gt.wedged && !i915->params.hangcheck_off &&
+        if (i915->gt.awake && !i915->gt.wedged && i915->gt.hc_next != 0 &&
             (at == 0 || i915->gt.hc_next < at)) {
             at = i915->gt.hc_next;
         }
@@ -1229,6 +1231,7 @@ static int32_t request_new(struct intel_context *ce, struct i915_request **out)
     struct i915_request *rq;
     uint32_t flags;
     int32_t err;
+    int idle;
 
     lockdep_assert_held(&i915->gem.lock);
     err = intel_context_pin_image(ce);
@@ -1258,10 +1261,17 @@ static int32_t request_new(struct intel_context *ce, struct i915_request **out)
      * (i915_request.c:1033) and __i915_request_create puts the request on
      * the timeline's list under it (i915_request.c:1009). */
     flags = spin_lock_irqsave(&e->lock);
+    /* The engine is awake, as Linux's engine wakeref is held, while it
+     * holds the GT awake by the parking rule. */
+    idle = !e->requests && !e->unretired && !e->building;
     e->seqno = e->seqno == 0xffffffffu ? 1u : e->seqno + 1u; /* 0 is never a seqno */
     e->unretired = 1;
     e->building = 1;
     spin_unlock_irqrestore(&e->lock, flags);
+    if (idle && i915_hangcheck_unpark_engine(i915, e)) {
+        hangcheck_kicked = 1;
+        wq_wake_all(&submit_wait);
+    }
     rq->seqno = e->seqno;
     dma_fence_init(&rq->fence.base, &i915_fence_ops, e->fence_context, rq->seqno);
     rq->fence.uabi_class = i915_engine_uabi_class(e);

@@ -1361,7 +1361,9 @@ static void writeback_rows(void)
  * otherwise the next sync's, as is any block dirtied during a sync. On
  * `vast`, with a
  * limit of 600 so that half of it holds a run of 256, the run after a first
- * miss is 256 blocks in one request and the block past it starts the next;
+ * miss is 32 blocks in one request, Linux's readahead window at its most,
+ * though the device takes 256 at once, a reader in order goes on in runs of
+ * 32, and the block past the last starts a run of the device's remainder;
  * 300 dirty blocks are written in a run of 256 and one of 44. On a cache cut
  * to 40 buffers with 21 held by six other processes, four or fewer each, a
  * read run is bounded to half the cache, and its last blocks evict its own
@@ -1897,23 +1899,23 @@ int main(void)
     b = bcache_get(&vast, 1);
     bcache_release(b);
     b = bcache_get(&vast, 2);
-    check(reads_made == 2 && last_count == 2048 && b->data[0] == 2,
-          "the miss after a first one on the vast device reads a run of 256 blocks in one request");
+    check(reads_made == 2 && last_count == 32 * 8 && b->data[0] == 2,
+          "the miss after a first one on the vast device reads a run of 32 blocks in one request");
     bcache_release(b);
     {
         int own = 0;
 
-        for (i = 3; i < 258; i++) {
+        for (i = 3; i < 290; i++) {
             b = bcache_get(&vast, (uint64_t)i);
             own += b->data[0] == (unsigned char)i && b->data[4095] == (unsigned char)i;
             bcache_release(b);
         }
-        check(reads_made == 2 && own == 255,
-              "and the 255 blocks after it are hits, each with its own bytes");
+        check(reads_made == 10 && own == 287,
+              "and a reader in order goes on in runs of 32, each block with its own bytes");
     }
-    b = bcache_get(&vast, 258);
-    check(reads_made == 3 && last_count == (WIDE_BLOCKS - 258) * 8,
-          "the block past the run starts the next run, the device's remainder");
+    b = bcache_get(&vast, 290);
+    check(reads_made == 11 && last_count == (WIDE_BLOCKS - 290) * 8,
+          "the block past the last run starts the next run, the device's remainder");
     bcache_release(b);
     bcache_invalidate(&vast);
 

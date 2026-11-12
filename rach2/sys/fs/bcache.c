@@ -871,7 +871,11 @@ static int run_stage_busy;
  * blocks are keyed, since the caller has let it go to key them and would
  * otherwise find it gone. */
 static struct bbuf *fill_keep;
-#define RUN_BLOCKS (BLOCK_REQ_MAX_SECTORS / BCACHE_BLOCK_SECTORS)
+#define RUN_BLOCKS      (BLOCK_REQ_MAX_SECTORS / BCACHE_BLOCK_SECTORS)
+/* The longest run a read fills: Linux's default readahead window of 128 KiB
+ * (VM_READAHEAD_PAGES, include/linux/pagemap.h:1375, which bdi_init gives
+ * every device, mm/backing-dev.c:1037). */
+#define READ_RUN_BLOCKS (131072u / BCACHE_BLOCK_BYTES)
 
 /**
  * Gather in `run` the blocks a run from `first` writes (`write_run`):
@@ -1287,23 +1291,28 @@ again:
 
 /**
  * Fill block `blk` of `dev` and the whole blocks after it that are not in
- * the cache, as many as one request moves, from one read into the staging
- * buffer: a file read in order then costs one request per run and not one
- * per page. Returns 1 when `blk` is in the cache afterwards, 0 when the
- * run could not be read and the block is to be filled on its own. Each
- * block is taken with the blank get and released at once, so the hold
- * rules see one buffer at a time. The blank get sleeps when it writes a
- * dirty victim, and a block another process filled meanwhile comes back
- * from it keyed already, with bytes newer than the staged ones: only a
- * buffer the get keyed fresh takes the copy. A write that reached any
- * device since the staged read, a dirty buffer of the run evicted by one
- * of these gets included, may have made the staged bytes of a block older
- * than the disk's, and no block is filled from them after one: the fill
- * stops, and a buffer keyed fresh for it is emptied again. A run is at most
- * half the cache's limit, so that its last blocks cannot evict its first,
- * and the caller's block, the first, is no victim until every block is in;
- * it is not held, since the caller may hold three buffers already and a
- * fourth would leave none for the run's own keying.
+ * the cache, as many as one request moves up to 128 KiB, from one read into
+ * the staging buffer: a file read in order then costs one request per run
+ * and not one per page. The run is Linux's readahead window at its most,
+ * which is also Linux's first window for a read of more than 32 KiB
+ * (`get_init_ra_size`, mm/readahead.c:361-372); the cache does not see the
+ * size of the read that missed, only its pages. A longer run reads what a
+ * reader that wanders through a large file never asks for: a mebibyte for
+ * each two blocks it happens to take in order. Returns 1 when `blk` is in
+ * the cache afterwards, 0 when the run could not be read and the block is
+ * to be filled on its own. Each block is taken with the blank get and
+ * released at once, so the hold rules see one buffer at a time. The blank
+ * get sleeps when it writes a dirty victim, and a block another process
+ * filled meanwhile comes back from it keyed already, with bytes newer than
+ * the staged ones: only a buffer the get keyed fresh takes the copy. A
+ * write that reached any device since the staged read, a dirty buffer of
+ * the run evicted by one of these gets included, may have made the staged
+ * bytes of a block older than the disk's, and no block is filled from them
+ * after one: the fill stops, and a buffer keyed fresh for it is emptied
+ * again. A run is at most half the cache's limit, so that its last blocks
+ * cannot evict its first, and the caller's block, the first, is no victim
+ * until every block is in; it is not held, since the caller may hold three
+ * buffers already and a fourth would leave none for the run's own keying.
  */
 static int fill_run(block_device_t *dev, uint64_t blk)
 {
@@ -1311,8 +1320,8 @@ static int fill_run(block_device_t *dev, uint64_t blk)
     uint64_t whole = dev->sector_count / BCACHE_BLOCK_SECTORS;
     uint32_t n, i, gen;
 
-    if (most > RUN_BLOCKS) {
-        most = RUN_BLOCKS;
+    if (most > READ_RUN_BLOCKS) {
+        most = READ_RUN_BLOCKS;
     }
     if (most > bcache_limit() / 2u) {
         most = bcache_limit() / 2u;

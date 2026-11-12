@@ -1419,10 +1419,9 @@ The count belongs to the same acquisition as
 It counts releases, including an idle drop, rather than distinct processors.
 .It Li bkl_wait_max_hold
 The last 32 of those completed holds, or all when fewer, oldest first:
-entry vector, system call number (\-1 for none), and full hold time in
-microseconds, as for
-.Li bkl_hold_max_entry
-and
+the entry, as for
+.Li bkl_hold_max_entry ,
+and the full hold time in microseconds, as for
 .Li bkl_hold_max_us .
 A hold already in progress when the acquisition began includes time before
 the wait, so these times need not sum to the acquisition time.
@@ -1430,9 +1429,21 @@ the wait, so these times need not sum to the acquisition time.
 Longest hold of the big kernel lock, from its take to its release, in
 microseconds since boot, measured by the same counter.
 .It Li bkl_hold_max_entry
-The kernel entry that made that hold: its interrupt vector, 0 for a kernel
-thread or a take again after an idle halt, and its system call number, or
-\-1 when the entry was no system call.
+The kernel entry that made that hold, as
+.Li bkl_hold_entry
+names it: its interrupt vector and its system call number, \-1 when the
+entry was no system call, or
+.Ql take 0
+for a take after an idle wait and
+.Ql take 1
+for a thread's take after its switch.
+The switch lets the big lock go, and the thread takes it back when it runs
+again, so a system call's hold after a sleep, a kernel thread's first hold
+and its holds after a sleep are
+.Ql take 1 .
+Vector 0 with \-1 is the divide error or a hold begun in no entry other
+than after a switch, such as a kernel thread's after it lets another
+processor's claim go first.
 .It Li bkl_hold_sample_us , bkl_hold_sample_pc
 The oldest hold of the big kernel lock that an interrupt on the holding
 processor has found, in microseconds since its take, and in hexadecimal the
@@ -1458,7 +1469,12 @@ switch, then its holds and their sum in microseconds.
 A hold counts under the entry that took the lock, or under the entry the
 thread was in when it took the lock in a call or an interrupt that runs
 without it, up to the thread's next switch, idle wait or return to user
-mode; vector 0 is a kernel thread, and
+mode; a hold begun after a switch counts under
+.Ql take 1
+whatever entry the thread is in, vector 0 counts the holds begun in no
+entry otherwise, as
+.Li bkl_hold_max_entry
+says, and
 .Li syscall -1
 gathers the system calls numbered 512 and above.
 The boot processor's start-up hold is not counted here or in

@@ -2714,7 +2714,7 @@ static void host_rows(int fd)
 {
     struct kvm_run *rp = run_of(fd);
     struct row *w;
-    int before = warnings;
+    int before = warnings, resumes;
 
     m.refuse = HOST_FS_BASE;
     script(EXIT_HLT, 0, 1);
@@ -2738,9 +2738,11 @@ static void host_rows(int fd)
           "a triple fault is KVM_EXIT_SHUTDOWN");
 
     m.fail_launch = 1;
+    resumes = m.resumes;
     CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_FAIL_ENTRY &&
-              rp->u.fail_entry.hardware_entry_failure_reason == ERR_CONTROLS,
-          "VMLAUNCH's VMfailValid is KVM_EXIT_FAIL_ENTRY with its error");
+              rp->u.fail_entry.hardware_entry_failure_reason == ERR_CONTROLS &&
+              m.resumes == resumes + 1,
+          "VMRESUME's VMfailValid is KVM_EXIT_FAIL_ENTRY with its error");
 
     set_shadow(fd, SHADOW_STI);
     {
@@ -2788,13 +2790,15 @@ static void read_fail_rows(int fd)
     on_cpu(0);
 }
 
-/** Another processor, which the VMCS moves to and back from, then
- * `read_fail_rows`. */
+/** Another processor, which the VMCS moves to and back from, a failed
+ * entry on the VMLAUNCH back, then `read_fail_rows`. */
 static void path_rows(int fd)
 {
     int calls, launches, resumes, vmptrlds;
     int invepts = m.invepts, invvpids = m.invvpids;
     struct mvmcs *c = mvmcs_of(vx(vcpu_of(fd))->vmcs_pa);
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_regs r;
 
     script(EXIT_HLT, 0, 1);
     vmptrlds = m.vmptrlds;
@@ -2820,11 +2824,21 @@ static void path_rows(int fd)
     on_cpu(0);
     launches = m.launches;
     resumes = m.resumes;
+    r = regs_of(fd);
+    r.rflags = 2;
+    fdio(fd, KVM_SET_REGS, (uintptr_t)&r);
+    set_shadow(fd, SHADOW_STI);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_FAIL_ENTRY && m.launches == launches + 1 &&
+              m.resumes == resumes && !vx(vcpu_of(fd))->launched,
+          "a VMLAUNCH that fails on the guest's state, the VMCS just moved back, leaves it "
+          "unlaunched");
+    set_shadow(fd, 0);
     script(EXIT_CPUID, 0, 2);
     script(EXIT_HLT, 0, 1);
-    run(fd);
-    CHECK(m.launches == launches + 1 && m.resumes == resumes + 1 && !m.cpus[1].on && c->active == 1,
-          "moved back, the VMCS is launched again and then resumed");
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT && m.launches == launches + 2 &&
+              m.resumes == resumes + 1 && !m.cpus[1].on && c->active == 1,
+          "so the next entry is a VMLAUNCH again, as Linux sets launched only after an exit "
+          "that is not a failed entry, and the one after it a VMRESUME");
     read_fail_rows(fd);
 }
 

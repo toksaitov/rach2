@@ -7,8 +7,10 @@
  * in the middle of a system call nests inside it. The lock is free when the
  * processor returns to user mode or waits idle (`bkl_drop`, `bkl_take`), so
  * user code runs on every processor at once, and kernel code on one at a
- * time, as Linux 2.0 and FreeBSD's Giant began. The context switch keeps the
- * lock held and hands the depth from one process to the next (sched.c).
+ * time, as Linux 2.0 and FreeBSD's Giant began. The context switch lets the
+ * lock go: each thread keeps its own depth, and the switch's tail takes the
+ * lock back at the incoming thread's depth (`schedule_tail`, sched.c), a
+ * hold counted as a take after a switch, not under the thread's entry.
  *
  * The interprocessor interrupts are taken without the lock: a TLB request
  * or a page directory to give up, which one sender at a time sends and
@@ -106,6 +108,13 @@ void smp_wait_stats(uint64_t *total_us, uint64_t *max_us, uint32_t *holds);
 /* The last outer holds completed during the longest big-lock acquisition. */
 #define BKL_WAIT_HOLDS 32u
 
+/* The system call numbers a hold's record gives a take with no entry of its
+ * own, beside -1 for an entry that is no system call: a thread's take after
+ * an idle wait, `take 0` in bkl/calls, and after its switch, `take 1`. Such
+ * a take's vector is 0. */
+#define BKL_NR_IDLE   (-2)
+#define BKL_NR_SWITCH (-3)
+
 /** Read retained hold `index`, below the smaller of BKL_WAIT_HOLDS and
  * smp_wait_stats's holds, oldest first. Return its full time in microseconds
  * and entry, as smp_hold_stats does. A hold may begin before the wait.
@@ -120,9 +129,10 @@ void smp_wait_hold(unsigned int index, uint64_t *held_us, uint32_t *vector, int3
 void bkl_note_entry(uint32_t vector, int32_t nr, int locked);
 
 /** Read the longest hold of the big lock since boot, from its take to its
- * give-back or drop, in microseconds, with its entry's vector (0 for none,
- * a kernel thread's) and system call number (-1 for none). The caller holds
- * the big lock. The time is zero without a calibrated invariant TSC. */
+ * give-back or drop, in microseconds, with its entry's vector (0 for none)
+ * and system call number: -1 for none, BKL_NR_IDLE or BKL_NR_SWITCH for a
+ * take after an idle wait or a switch. The caller holds the big lock. The
+ * time is zero without a calibrated invariant TSC. */
 void smp_hold_stats(uint64_t *max_us, uint32_t *vector, int32_t *nr);
 
 /* The keys of the holds by entry (`smp_entry_hold`): a system call's number
