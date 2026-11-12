@@ -367,7 +367,7 @@ int fixture_simple(const struct fixtures *fx)
 {
     return !fx->nids && !fx->nports && !fx->nvol && !fx->has_root && !fx->tmpfs_bytes &&
            !fx->mountns && !fx->ipcns && !fx->utsns && !fx->pty && !fx->log && !fx->peer[0] &&
-           !fx->private_dir;
+           !fx->private_dir && !fx->gpumin;
 }
 
 /** Whether `id` is field 3 of a line of the colon-separated file `path`. */

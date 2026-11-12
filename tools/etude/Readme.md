@@ -1023,7 +1023,7 @@ The verdict is a failure for any of the failures above, whatever the exemption; 
 
 ### etude-guest
 
-An init-role `exec` accepts only the workspace and staged files. It refuses other fixtures, including `private`, whose directory preparation and cleanup require an ordinary attempt.
+An init-role `exec` accepts only the workspace and staged files. It refuses other fixtures, including `private`, whose directory preparation and cleanup require an ordinary attempt, and `gpumin`, whose saved clocks only an ordinary attempt writes back.
 
 `etude-guest` is one process with one loop: it waits in `poll` for its input, a self-pipe its signal handlers write, and the next deadline among the resend interval, the attempts' deadlines and their grace periods, and handles what is ready. Children are reaped with `wait4`, which gives their usage: the processor time of the child and the descendants it reaped, `wait-reaped-descendants-v1`, and the largest resident size of any one of them, `posix-maxrss-v1`, each a lower bound. A Rach2 or Linux attempt owner also adds the usage of detached descendants that it adopts and reaps.
 
