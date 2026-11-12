@@ -44,23 +44,22 @@
 #define VENUS_DEQP                                       \
     "sh " GRAPHICS_DIR "/runners/deqp.sh -v 1.4.1.1 -i " \
     "/usr/share/vulkan/icd.d/venus_icd.x86_64.json -o " GRAPHICS_DIR "/out"
-#define VENUS_SMOKE   GRAPHICS_DIR "/deqp-vk-venus-smoke.txt"
-#define VENUS_LIST    GRAPHICS_DIR "/deqp-vk-lavapipe.txt.gz"
-#define VENUS_FLAKES  GRAPHICS_DIR "/deqp-vk-lavapipe.flakes"
-#define VENUS_PARTS   8
+#define VENUS_SMOKE     GRAPHICS_DIR "/deqp-vk-venus-smoke.txt"
+#define VENUS_LIST      GRAPHICS_DIR "/deqp-vk-lavapipe.txt.gz"
+#define VENUS_FLAKES    GRAPHICS_DIR "/deqp-vk-lavapipe.flakes"
+#define VENUS_PARTS     8
 /* The run's counts and wall time, after its result line, for the log. */
-#define VENUS_SUMMARY " && cat " GRAPHICS_DIR "/out/summary.txt"
+#define VENUS_SUMMARY   " && cat " GRAPHICS_DIR "/out/summary.txt"
 /* piglit's quick_gl subset, which the venus and virgl families each run
  * whole in one case, and its flakes; the Venus case draws with zink over
  * Venus's ICD alone and judges against the Venus references' piglit
  * results. */
 #define QUICK_GL        GRAPHICS_DIR "/piglit-quick-gl.txt.gz"
 #define QUICK_GL_FLAKES GRAPHICS_DIR "/piglit-quick-gl.flakes"
-#define QUICK_GL_JUDGE(ref)                                                     \
-    "python3 -I " GRAPHICS_DIR "/runners/judge.py results " ref                 \
-    "/piglit/piglit-quick-gl.results.gz " GRAPHICS_DIR                          \
-    "/out/piglit-quick-gl.results " GRAPHICS_DIR "/out/piglit-quick-gl.sample " \
-    QUICK_GL_FLAKES
+#define QUICK_GL_JUDGE(ref)                                     \
+    "python3 -I " GRAPHICS_DIR "/runners/judge.py results " ref \
+    "/piglit/piglit-quick-gl.results.gz " GRAPHICS_DIR          \
+    "/out/piglit-quick-gl.results " GRAPHICS_DIR "/out/piglit-quick-gl.sample " QUICK_GL_FLAKES
 #define VENUS_ZINK                                                           \
     "sh " GRAPHICS_DIR "/runners/piglit.sh -z "                              \
     "/usr/share/vulkan/icd.d/venus_icd.x86_64.json -o " GRAPHICS_DIR "/out " \
@@ -237,9 +236,9 @@ static int set_gles_subset(struct graphics_case *s, const char *text)
 
 /**
  * Read a Venus case, NAME: `smoke`, `sample`, `device-lost`,
- * `piglit-quick-gl`, `fraction-N`, part N of VENUS_PARTS of the lavapipe fraction, or
- * `deqp-SUITE-subset`, the GLES subset of SUITE on the profile's GL. Give 0
- * for another name.
+ * `piglit-quick-gl`, `fraction-N`, part N of VENUS_PARTS of the lavapipe
+ * fraction, or `deqp-SUITE-subset`, the GLES subset of SUITE on the
+ * profile's GL. Give 0 for another name.
  */
 static int parse_venus(struct graphics_case *s, const char *name)
 {
@@ -519,10 +518,7 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
         snprintf(runner, size, "sh " GRAPHICS_DIR "/runners/glmark2.sh -o " GRAPHICS_DIR "/out");
         return 0;
     case VENUS:
-        if (strcmp(s->test, "piglit-quick-gl") == 0) {
-            *pattern = "piglit: result: ";
-            snprintf(runner, size, VENUS_ZINK);
-        } else if (strcmp(s->test, "gles") == 0)
+        if (strcmp(s->test, "gles") == 0)
             snprintf(runner, size,
                      "sh " GRAPHICS_DIR "/runners/deqp.sh -v 1.4.1.1 -o " GRAPHICS_DIR
                      "/out -e %d -s 1 -l " VIRGL_DEQP " %s" VENUS_SUMMARY,
@@ -556,10 +552,6 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
             snprintf(runner, size,
                      "sh " GRAPHICS_DIR "/runners/virgl-lost.sh -o " GRAPHICS_DIR "/out");
             return 1;
-        } else if (strcmp(s->test, "piglit-quick-gl") == 0) {
-            *pattern = "piglit: result: ";
-            snprintf(runner, size,
-                     "sh " GRAPHICS_DIR "/runners/piglit.sh -g -o " GRAPHICS_DIR "/out -l " QUICK_GL);
         } else if (strcmp(s->test, "piglit") == 0) {
             *pattern = "piglit: result: ";
             snprintf(runner, size,
@@ -589,6 +581,22 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
 }
 
 /**
+ * Write the runner's command line for a quick_gl case of the venus or virgl
+ * family to `runner`, zink over Venus's ICD or virgl one test at a time,
+ * and the line that begins its result to `*pattern`. Give 0, since it runs
+ * as the test account.
+ */
+static int quick_gl_line(struct graphics_case *s, char *runner, size_t size, const char **pattern)
+{
+    *pattern = "piglit: result: ";
+    snprintf(runner, size, "%s",
+             s->runner == VENUS ? VENUS_ZINK
+                                : "sh " GRAPHICS_DIR "/runners/piglit.sh -g -o " GRAPHICS_DIR
+                                  "/out -l " QUICK_GL);
+    return 0;
+}
+
+/**
  * Run the runner, as root, once the desktop services have stopped
  * (END_DESKTOP) for IGT, modetest and virgl's device loss, or as the test
  * account, with the environment of a Done's run of its class, performance
@@ -600,7 +608,9 @@ static void run(struct graphics_case *s)
     char runner[512], env[768], command[1536], line[200];
     const char *pattern;
     struct net_run r;
-    int root = runner_line(s, runner, sizeof(runner), &pattern);
+    int root = strcmp(s->test, "piglit-quick-gl") == 0
+                   ? quick_gl_line(s, runner, sizeof(runner), &pattern)
+                   : runner_line(s, runner, sizeof(runner), &pattern);
 
     snprintf(env, sizeof(env),
              "GRAPHICS_CLASS=%s GRAPHICS_DONE=1; export GRAPHICS_CLASS GRAPHICS_DONE; "
