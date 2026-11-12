@@ -36,8 +36,8 @@
  * among them; `in_compat_syscall` still reads the real frame, so a shared
  * reader that picks the i386 layout for an i386 call (`iov_fetch`) does so
  * for the user's structures and for rwv2's retained copy of its vector.
- * The caller holds the big lock and owns `win` for the call; a null window
- * opens nothing. Returns the handler's result. The handler may sleep.
+ * The caller owns `win` for the call, a window of its own thread's; a null
+ * window opens nothing. Returns the handler's result. The handler may sleep.
  */
 long ia32_native(const isr_params_t *params, syscall_fn_t fn, void *win, uint32_t winlen,
                  unsigned long a0, unsigned long a1, unsigned long a2, unsigned long a3,

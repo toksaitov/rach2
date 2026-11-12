@@ -529,6 +529,15 @@ int fd_holds_claim_closing(int from, int keep);
 void fd_ofd_ref(struct open_file *ofd);
 void fd_ofd_unref(struct open_file *ofd);
 
+/**
+ * Clear the bits `clear` of the status flags of `ofd` (OFD_APPEND,
+ * OFD_NONBLOCK) and set `set`, in one atomic step, so that F_SETFL, which
+ * runs without the big lock, and FIONBIO and mq_setattr lose none of each
+ * other's changes, as Linux changes `f_flags` under the file's `f_lock`
+ * (fs/fcntl.c:82-84).
+ */
+void fd_ofd_status_set(struct open_file *ofd, uint32_t clear, uint32_t set);
+
 /** Drop a reference to `ofd` and return 1 when it is not the last; return
  * 0, dropping nothing, when it is, so that its holder may release what the
  * description's last descriptor releases before `fd_ofd_unref` ends it. One

@@ -367,6 +367,16 @@ void fd_ofd_ref(struct open_file *ofd)
     }
 }
 
+void fd_ofd_status_set(struct open_file *ofd, uint32_t clear, uint32_t set)
+{
+    unsigned int old;
+
+    do {
+        old = *(volatile unsigned int *)&ofd->status_flags;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)&ofd->status_flags, old,
+                                 (old & ~clear) | set) != old);
+}
+
 int fd_ofd_unref_unless_last(struct open_file *ofd)
 {
     unsigned int old;

@@ -518,6 +518,9 @@ struct thread_work {
  * which the locks allow to be one at most, and the most seen. */
 static volatile int exclusive_now;
 static volatile int exclusive_most;
+/* Set once every thread is made, which the threads wait for, so that
+ * they run together. */
+static volatile int threads_go;
 
 /**
  * One thread of `threads_row`: by turns an exclusive flock(2) lock of the
@@ -531,6 +534,8 @@ static void *thread_rounds(void *arg)
     uint64_t base = 1000u * (uint64_t)(w->index + 1);
     int i;
 
+    while (!__atomic_load_n(&threads_go, __ATOMIC_ACQUIRE)) {
+    }
     for (i = 0; i < THREAD_ROUNDS; i++) {
         int32_t rc = lock_flock(&file, &w->ofd[0], LOCK_EX | LOCK_NB);
         struct lock_req req;
@@ -586,6 +591,7 @@ static void threads_row(void)
         work[i].index = i;
         made += pthread_create(&th[i], NULL, thread_rounds, &work[i]) == 0;
     }
+    __atomic_store_n(&threads_go, 1, __ATOMIC_RELEASE);
     for (i = 0; i < made; i++) {
         pthread_join(th[i], NULL);
         errors += work[i].errors;
