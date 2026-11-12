@@ -6119,7 +6119,7 @@ static long sync_entry(fd_entry_t *e, int (*sync_op)(struct vfs_mount *mnt, void
         if (filemap_disk_mapped(e->ofd->vmnt, e->ofd->ino)) {
             int big = big_take();
 
-            mapped = filemap_sync_file(e->ofd->vmnt, e->ofd->ino);
+            mapped = filemap_sync_file(e->ofd);
             big_give(big);
         }
         rc = sync_op(e->ofd->vmnt, e->ofd->fhandle);

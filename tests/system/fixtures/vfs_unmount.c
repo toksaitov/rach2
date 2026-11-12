@@ -266,6 +266,13 @@ static void filecache_forget_mount(const struct vfs_mount *m)
     (void)m;
 }
 
+/** Free the records of `m`'s files that keep only a writeback error; the
+ * fixture maps no file. */
+static void filemap_forget_mount(const struct vfs_mount *m)
+{
+    (void)m;
+}
+
 /** Forget the name cache's entries of `m`; the fixture keeps none. */
 static void dcache_forget_mount(struct vfs_mount *m)
 {

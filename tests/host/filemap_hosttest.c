@@ -126,6 +126,9 @@ static uint64_t model_size = 2 * PAGE_SIZE;
 static int disk_writes, disk_error;
 static uint8_t disk_bytes[PAGE_SIZE];
 static struct vm_file *model_dead;
+/* A mapping whose last put lands just after the next reap has emptied the
+ * list, as another processor's unmap may drop it then. */
+static struct vm_file *model_late_put;
 /* Whether the leaf of the file's pages that a page goes in exists. */
 static int model_leaf;
 /* The lookups of the file's pages and those made under the file's lock;
@@ -467,6 +470,12 @@ void vm_file_reap(void)
         model_dead = f->dead;
         f->dead = NULL;
         f->release(f);
+    }
+    if (model_late_put) {
+        struct vm_file *f = model_late_put;
+
+        model_late_put = NULL;
+        vm_file_put(f);
     }
 }
 
@@ -822,12 +831,12 @@ static void writeback_retry_rows(void)
               backing_releases == released && dshare_count == 1,
           "a failed final write keeps its page, mark, file and mapping for retry");
     disk_error = 0;
-    check(filemap_sync_file(&mnt, ofd.ino) == -EIO && disk_bytes[0] == 0x65 &&
+    check(filemap_sync_file(&ofd) == -EIO && disk_bytes[0] == 0x65 &&
               disk_bytes[PAGE_SIZE - 1] == 0x65,
           "fsync retries the stored bytes and reports the earlier release error");
     vm_file_reap();
     check(!maps && dshare_count == 0 && shmem_frees == freed + 1 &&
-              backing_releases == released + 1 && filemap_sync_file(&mnt, ofd.ino) == 0,
+              backing_releases == released + 1 && filemap_sync_file(&ofd) == 0,
           "the successful retry frees the keeper and reports its error once");
 }
 
@@ -857,10 +866,65 @@ static void writeback_release_rows(void)
         return;
     }
     vm_file_put(f);
-    check(filemap_sync_file(&mnt, ofd.ino) == 0 && disk_writes > 0 && disk_bytes[0] == 0x65,
+    check(filemap_sync_file(&ofd) == 0 && disk_writes > 0 && disk_bytes[0] == 0x65,
           "fsync reaps a zero-reference writer before claiming all stores reached the file");
     check(!maps && !model_dead && dshare_count == 0,
           "the queued writer and the sync hold are both released");
+}
+
+/** A writer's last put after sync's reap is reaped before sync succeeds. */
+static void writeback_late_put_rows(void)
+{
+    struct vfs_mount mnt;
+    struct open_file ofd;
+    struct vm_file *f;
+
+    k_memset(&mnt, 0, sizeof(mnt));
+    k_memset(&ofd, 0, sizeof(ofd));
+    f = writeback_file(&mnt, &ofd);
+    if (!f) {
+        return;
+    }
+    model_late_put = f;
+    check(filemap_sync_file(&ofd) == 0 && disk_writes > 0 && disk_bytes[0] == 0x65 &&
+              disk_bytes[PAGE_SIZE - 1] == 0x65,
+          "a writer whose last put lands between the reap and the choice is written back");
+    check(!model_late_put && !model_dead && !maps && dshare_count == 0,
+          "sync reaped the writer it could not take");
+}
+
+/** A retry by sync(2) alone frees what a failed release kept, not its error. */
+static void writeback_sync_retry_rows(void)
+{
+    struct vfs_mount mnt;
+    struct open_file ofd;
+    struct vm_file *f;
+    struct dshare *ds;
+    int released;
+
+    k_memset(&mnt, 0, sizeof(mnt));
+    k_memset(&ofd, 0, sizeof(ofd));
+    f = writeback_file(&mnt, &ofd);
+    if (!f) {
+        return;
+    }
+    released = backing_releases;
+    disk_error = -EIO;
+    vm_file_put(f);
+    vm_file_reap();
+    check(((struct filemap *)f)->retained == 1 && maps == (struct filemap *)f,
+          "the failed final write keeps its mapping");
+    disk_error = 0;
+    filemap_sync_all();
+    ds = dshare_of(&mnt, ofd.ino);
+    check(!maps && !model_dead && backing_releases == released + 1 && disk_bytes[0] == 0x65 &&
+              dshare_count == 1 && ds && ds->users == 0 && ds->error == -EIO,
+          "a successful sync(2) frees the kept pages, descriptor and mapping, and keeps the error");
+    filemap_sync_all();
+    check(dshare_count == 1, "sync(2) leaves a record holding only an error alone");
+    check(filemap_sync_file(&ofd) == -EIO && dshare_count == 0,
+          "the next fsync reports the error and frees the record");
+    check(filemap_sync_file(&ofd) == 0, "and reports it once");
 }
 
 /** Stores beyond EOF are zeroed before a later growth can expose them. */
@@ -877,11 +941,11 @@ static void writeback_tail_rows(void)
         return;
     }
     model_size = 17;
-    check(filemap_sync_file(&mnt, ofd.ino) == 0 && model_bytes[16] == 0x65 &&
-              model_bytes[17] == 0 && model_bytes[PAGE_SIZE - 1] == 0,
+    check(filemap_sync_file(&ofd) == 0 && model_bytes[16] == 0x65 && model_bytes[17] == 0 &&
+              model_bytes[PAGE_SIZE - 1] == 0,
           "writeback zeros stores past EOF before a later growth can make them file data");
     model_size = PAGE_SIZE;
-    check(filemap_sync_file(&mnt, ofd.ino) == 0 && disk_bytes[16] == 0x65 && disk_bytes[17] == 0 &&
+    check(filemap_sync_file(&ofd) == 0 && disk_bytes[16] == 0x65 && disk_bytes[17] == 0 &&
               disk_bytes[PAGE_SIZE - 1] == 0,
           "regrowth writes only zeros from the old page's tail");
     vm_file_put(f);
@@ -896,6 +960,8 @@ int main(void)
     unlocked_rows();
     writeback_retry_rows();
     writeback_release_rows();
+    writeback_late_put_rows();
+    writeback_sync_retry_rows();
     writeback_tail_rows();
     if (fails) {
         printf("filemap-hosttest: %d failed\n", fails);

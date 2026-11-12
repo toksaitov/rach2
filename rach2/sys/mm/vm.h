@@ -465,7 +465,9 @@ int vm_file_tryget(struct vm_file *f);
 
 /** Drop a reference to `f`; NULL is ignored. The last one does not release
  * the file but puts it on the list `vm_file_reap` empties, so that a change
- * to the regions never sleeps part way through. */
+ * to the regions never sleeps part way through. The count falls to 0 under
+ * the list's lock, in the same hold that puts the file on the list, so a
+ * reap that follows a reading of 0 finds the file there or already taken. */
 void vm_file_put(struct vm_file *f);
 
 /** Whether a file waits for `vm_file_reap`; read without the list's lock,

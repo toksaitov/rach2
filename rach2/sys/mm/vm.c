@@ -21,7 +21,7 @@ int randomize_va_space = ASLR_MMAP_PAGES != 0 ? 2 : 0;
 int vm_max_map_count = VMA_LIMIT;
 static struct vm_file *vm_dead;
 /* Covers `vm_dead`, which a fault's last reference reaches without the
- * regions' write lock. */
+ * regions' write lock, and each file's count falling to 0 (`vm_file_put`). */
 static struct spinlock vm_dead_lock = SPINLOCK_INIT_NAMED("vm_dead_lock");
 /* Gap candidates examined since boot, which searches in different address
  * spaces add to at once (`gap_count`). */
@@ -76,14 +76,27 @@ int vm_file_tryget(struct vm_file *f)
 
 void vm_file_put(struct vm_file *f)
 {
+    unsigned int old;
     uint32_t flags;
 
-    if (f && ref_add(&f->refs, -1) == 0) {
-        flags = spin_lock_irqsave(&vm_dead_lock);
+    if (!f) {
+        return;
+    }
+    for (;;) {
+        old = f->refs;
+        if (old <= 1u) {
+            break;
+        }
+        if (arch_atomic_cmpxchg((volatile unsigned int *)&f->refs, old, old - 1u) == old) {
+            return;
+        }
+    }
+    flags = spin_lock_irqsave(&vm_dead_lock);
+    if (ref_add(&f->refs, -1) == 0) {
         f->dead = vm_dead;
         vm_dead = f;
-        spin_unlock_irqrestore(&vm_dead_lock, flags);
     }
+    spin_unlock_irqrestore(&vm_dead_lock, flags);
 }
 
 int vm_file_dead(void)
