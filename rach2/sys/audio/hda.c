@@ -215,14 +215,14 @@ static uint32_t ring_write(const uint8_t *data, uint32_t count)
 
 /*
  * The stream spinlock, taken with interrupts off, as Linux's PCM stream's
- * lock (_snd_pcm_stream_lock_irqsave, sound/core/pcm_native.c:164 of 6.12):
- * the interrupt's marks (play_irq_*, cap_irq_*, irq_count), the services
- * asked for (service_wanted, service_play_*, beep_next and the serving flag
- * of hda_serve), and the playback state that the position and the delay
- * read (playing, stream_started, stream_in, stream_taken, stream_pos,
- * stream_mark, hw_period_last, play_held). `cap_lock` comes before it, and
- * a stream's `period`, which takes vchan's and the dsp's locks, is called
- * under it. No verb is sent under it.
+ * lock (_snd_pcm_stream_lock_irqsave, sound/core/pcm_native.c:170 of
+ * 6.12.115): the interrupt's marks (play_irq_*, cap_irq_*, irq_count), the
+ * services asked for (service_wanted, service_play_*, beep_next and the
+ * serving flag of hda_serve), and the playback state that the position and
+ * the delay read (playing, stream_started, stream_in, stream_taken,
+ * stream_pos, stream_mark, hw_period_last, play_held). `cap_lock` comes
+ * before it, and a stream's `period`, which takes vchan's and the dsp's
+ * locks, is called under it. No verb is sent under it.
  *
  * The stream mutex is held by khda for each service and by every operation
  * of hda_driver that changes the device, which are called in process
@@ -3649,8 +3649,9 @@ static bool hda_jacks_held(void)
  * at the next poll. No hold begins while the poll runs: holds are taken by
  * the operations of hda_driver, which wait for the stream mutex that khda
  * holds throughout, or, while khda does not run, for the big lock the tick
- * holds; a beep's tone holds them only from khda, or from the caller of
- * `beep` while khda does not run (hda_beep).
+ * holds; a beep's tone holds them only from the caller of `beep` while
+ * khda does not run (hda_beep), and khda's beep service holds none and sets
+ * no pin while they are held (hda_beep_owed).
  */
 static void hda_poll_jacks(void)
 {
