@@ -806,7 +806,7 @@
     {
       "case_id": "machine.ext2.repair",
       "behavior": "One copy of the ext2 root taken through the boots that carry its state: a write and a kill, volumes made in files on the second partition, the dirty root checked and unmounted clean, a lost block kept for e2fsck with the error bit set, a fault that mounts the root read-only, a recovery boot that changes nothing without rach2.fsck and one whose init repairs both disks with it, and a clean boot after",
-      "units": ["ext2", "rach2/sys/fs/ext2.c", "utils/init.c"],
+      "units": ["ext2", "rach2/sys/fs/ext2.c", "rach2/sys/fs/ext2_alloc.c", "rach2/sys/fs/ext2_batch.c", "rach2/sys/fs/ext2_check.c", "rach2/sys/fs/ext2_dir.c", "rach2/sys/fs/ext2_file.c", "utils/init.c"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"root_mib": 96, "second_mib": 32, "lost_block": 20000, "freed": "/etc/hostname", "sector": 16383}, "repetitions": 1, "seed": null},

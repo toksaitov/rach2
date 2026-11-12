@@ -9,8 +9,8 @@
  * host-deps: rach2/sys/fs/sleeplock.c rach2/sys/fs/ext2xattr.c
  * host-deps: tests/host/compat/atomic_host.c tests/host/compat/bkl_held.c
  *
- * The test includes ext2.c whole. The mount, a group of 64 blocks and an
- * inode are built in memory, over a cache model with one buffer for each
+ * The test includes the driver's files whole. The mount, a group of 64 blocks
+ * and an inode are built in memory, over a cache model with one buffer for each
  * block, so that the writer runs without a volume made by mke2fs and
  * without the mount's check, whose calls panic here. The model can say a
  * block is not cached, and keep saying so for a number of reads, as a cache
@@ -18,6 +18,11 @@
  */
 #include "fs/vfs.h"
 #include "fs/ext2.c"
+#include "fs/ext2_alloc.c"
+#include "fs/ext2_batch.c"
+#include "fs/ext2_check.c"
+#include "fs/ext2_dir.c"
+#include "fs/ext2_file.c"
 
 extern int memcmp(const void *a, const void *b, unsigned long size);
 extern int printf(const char *format, ...);
