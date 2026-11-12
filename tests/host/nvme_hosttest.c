@@ -824,6 +824,11 @@ void latency_span(int kind, uint32_t from, uint32_t to)
 /* Whether interrupts are masked. */
 static uint32_t masked;
 
+/* The first controller's `resetting`, which `model_reset` points at, and
+ * the restores that unmasked interrupts while it was set. */
+static const int *resetting_flag;
+static unsigned unmasked_in_reset;
+
 /** Mask interrupts, and return whether they were masked. */
 uint32_t kirq_save(void)
 {
@@ -833,9 +838,13 @@ uint32_t kirq_save(void)
     return old;
 }
 
-/** Restore the mask `kirq_save` returned. */
+/** Restore the mask `kirq_save` returned, counting in `unmasked_in_reset` a
+ * restore that unmasks while the recovery runs. */
 void kirq_restore(uint32_t flags)
 {
+    if (!flags && resetting_flag && *resetting_flag) {
+        unmasked_in_reset++;
+    }
     masked = flags;
 }
 
@@ -995,6 +1004,8 @@ static void model_reset(void)
     __builtin_memset(q, 0, sizeof(q));
     __builtin_memset(nvme_ctrls, 0, sizeof(nvme_ctrls));
     nvme_nctrls = 0;
+    resetting_flag = &nvme_ctrls[0].resetting;
+    unmasked_in_reset = 0;
     nvme_messages = 0;
     m.mdts = 5;
     m.lbads = 9;
@@ -1245,6 +1256,8 @@ static void row_timeout(void)
     CHECK("the controller is reset and its queues made again",
           disables == 1 && enables == 2 && created_sq == 2 && set_queues == 2);
     CHECK("and logs that it answers again", was_logged("recovery: the controller answers again"));
+    CHECK("with interrupts masked from its locks to its end, and unmasked after",
+          unmasked_in_reset == 0 && !masked);
     m.drop_io = 0;
     CHECK("the next read works", dev->read(dev, 5, 2, big) == 0 && big[0] == medium[5 * 512]);
 
