@@ -113,6 +113,9 @@ An expiration that waits for another sender's pending signal of the same
 number leaves the timer to the ticks until that signal is taken, which
 posts the waiting timer's signal at once, the oldest first when several
 wait, as Linux queues a signal for each timer and delivers them in turn.
+Timers that one pass of the interrupt or the tick finds expired go in the
+order of their times, as Linux runs a clock's expired timers earliest
+first, so their signals are posted, or wait, in that order.
 A
 .Dv SIGEV_NONE
 timer expires at ticks alone.

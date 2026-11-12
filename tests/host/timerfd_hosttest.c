@@ -1493,6 +1493,52 @@ static void order_rows(void)
 }
 
 /**
+ * Timers that one pass finds overdue expire in the order of their ends, as
+ * Linux's hrtimer interrupt runs a base's expired timers earliest first
+ * (kernel/time/hrtimer.c:1791-1811), so their notifications wait, and are
+ * posted, in that order: timer 1 of 0.1 ms and then timer 2 of 0.2 ms,
+ * which is ahead of it on the list of armed timers, both overdue at an
+ * interrupt between ticks at 0.3 ms, and again at tick 1001, wait for a
+ * user's signal, and timer 1's is posted first. The walk of the list in
+ * its order posted timer 2's first.
+ */
+static void delayed_rows(void)
+{
+    static struct ktimer second;
+    struct setting at_one = {0, 0, 0, 100000};
+    struct setting at_two = {0, 0, 0, 200000};
+    int at_tick;
+
+    for (at_tick = 0; at_tick <= 1; at_tick++) {
+        ptimer_start(SIGEV_SIGNAL);
+        k_memset(&second, 0, sizeof(second));
+        ptimer_model(&second, 2, SIGEV_SIGNAL);
+        timer.in_group = &second;
+        user_signal(SIGALRM);
+        CHECK(arm(&timer, 0, &at_one) == 0 && arm(&second, 0, &at_two) == 0 && armed == &second,
+              "timer 1 of SIGALRM arms at 0.1 ms, then timer 2 at 0.2 ms, ahead of it on the list");
+        if (at_tick) {
+            tick(1001);
+        } else {
+            model_phase_ns = 300000;
+            timerfd_due();
+        }
+        CHECK(timer.count == 1 && second.count == 1 && posts == 0 &&
+                  timer.wait_seq < second.wait_seq,
+              at_tick ? "both expire at tick 1001 and wait, timer 1's first"
+                      : "both expire at one interrupt at 0.3 ms and wait, timer 1's first");
+        (void)take_signal(SIGALRM);
+        CHECK(posts == 1 && group.info[SIGALRM].pid == 1 && second.count == 1,
+              "the user's signal taken, timer 1's is posted");
+        (void)take_signal(SIGALRM);
+        CHECK(posts == 2 && group.info[SIGALRM].pid == 2 && second.count == 0,
+              "and once that is taken, timer 2's");
+    }
+    group.timers = NULL;
+    model_phase_ns = NS_PER_TICK / 2;
+}
+
+/**
  * A discarded signal takes its timers' waiting notifications, as Linux's
  * flush_sigqueue_mask takes every sigqueue of its number off the queues
  * (kernel/signal.c:782-798, 4249-4255). With a user's SIGALRM pending,
@@ -1749,6 +1795,7 @@ int main(void)
     waiting_rows();
     elapsed_rows();
     order_rows();
+    delayed_rows();
     discard_rows();
     exec_rows();
     ptimer_rows();

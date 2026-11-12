@@ -669,32 +669,77 @@ void ptimer_cpu_tick(const process_t *p, int user)
     spin_unlock(&timer_lock);
 }
 
+/** The place of the clock `base` in the order Linux's hrtimer interrupt runs
+ * its bases: CLOCK_MONOTONIC's, CLOCK_REALTIME's, then CLOCK_BOOTTIME's
+ * (kernel/time/hrtimer.c:71-87, 1791). */
+static int base_rank(int base)
+{
+    return base == CLOCK_MONOTONIC ? 0 : base == CLOCK_REALTIME ? 1 : 2;
+}
+
+/**
+ * Whether the timer `t`, which a pass is to expire, comes before `first`,
+ * or `first` is NULL: by its base (`base_rank`), and on one base by its
+ * end, as __hrtimer_run_queues runs each base's expired timers earliest
+ * first (kernel/time/hrtimer.c:1791-1811, include/linux/timerqueue.h:
+ * 20-26), so that their signals are posted, or wait for another sender's,
+ * in the order they expired (`ptimer_fire_later`, `wait_seq`). Of two with
+ * the same end, the one later on `armed`, which went on it first, comes
+ * first, as the timerqueue puts an equal time after those queued before it.
+ */
+static int expires_first(const struct ktimer *t, const struct ktimer *first)
+{
+    int a, b;
+
+    if (!first) {
+        return 1;
+    }
+    a = base_rank(t->base);
+    b = base_rank(first->base);
+    return a != b ? a < b : t->end <= first->end;
+}
+
 /**
  * Each base's clock is read once for the pass (`pass_read`), at the first
- * timer due on it. A timer whose time is still to come has it armed between
+ * timer due on it. A timer whose tick has come and whose clock has not
+ * reached its time has its tick moved on (`expire`); those whose clock has
+ * reached it expire in the order Linux runs them (`expires_first`), each
+ * found again on the list after the one before, since an expiration can
+ * take a timer off it. An expired timer's `due` is past `now`, so it is not
+ * found twice. A timer whose time is still to come has it armed between
  * ticks again (`arm_between`), since a processor keeps only the earliest
  * time asked of it.
  */
 void timerfd_tick(uint64_t now)
 {
     struct pass p;
-    struct ktimer *t;
+    struct ktimer *t, *first;
+    const struct reading *r;
 
     p.have = 0;
     p.have_offset = 0;
     spin_lock(&timer_lock);
-    t = armed;
-    while (t) {
-        struct ktimer *next = t->next;
-        const struct reading *r;
-
-        while (t->armed && now >= t->due && (r = pass_read(&p, t->base)) != NULL) {
-            expire(t, now, r);
+    for (;;) {
+        first = NULL;
+        for (t = armed; t; t = t->next) {
+            if (!t->armed || now < t->due || (r = pass_read(&p, t->base)) == NULL) {
+                continue;
+            }
+            if (r->clock < t->end) {
+                expire(t, now, r); /* the clock short of its time: due moves on */
+            } else if (expires_first(t, first)) {
+                first = t;
+            }
         }
+        if (!first) {
+            break;
+        }
+        expire(first, now, pass_read(&p, first->base));
+    }
+    for (t = armed; t; t = t->next) {
         if (t->armed && t->due != ~(uint64_t)0) {
             arm_between(t, &p); /* not a timerfd stopped at its expiry */
         }
-        t = next;
     }
     spin_unlock(&timer_lock);
 }
@@ -702,32 +747,41 @@ void timerfd_tick(uint64_t now)
 /**
  * Each base's clock is read once for the pass (`pass_read`), and decides,
  * not the tick count, as Linux's hrtimer_interrupt compares every timer
- * with one reading (kernel/time/hrtimer.c:1814, 1861). A timer whose time
- * is still to come, since the interrupt came a few counts before it or was
- * armed for an earlier time, has it armed again (`arm_between`).
+ * with one reading (kernel/time/hrtimer.c:1814, 1861). The timers whose
+ * clock has reached their time expire in the order Linux runs them
+ * (`expires_first`), each found again on the list after the one before; an
+ * expired timer is not armed between ticks, or not on the list, so it is
+ * not found twice. A timer whose time is still to come, since the
+ * interrupt came a few counts before it or was armed for an earlier time,
+ * has it armed again (`arm_between`).
  */
 void timerfd_due(void)
 {
     uint64_t now = tick_count();
     struct pass p;
-    struct ktimer *t;
+    struct ktimer *t, *first;
+    const struct reading *r;
 
     p.have = 0;
     p.have_offset = 0;
     spin_lock(&timer_lock);
-    t = armed;
-    while (t) {
-        struct ktimer *next = t->next;
-        const struct reading *r;
-
-        if (t->armed && t->between && (r = pass_read(&p, t->base)) != NULL) {
-            if (r->clock >= t->end) {
-                expire(t, now, r);
-            } else {
-                arm_between(t, &p);
+    for (;;) {
+        first = NULL;
+        for (t = armed; t; t = t->next) {
+            if (t->armed && t->between && (r = pass_read(&p, t->base)) != NULL &&
+                r->clock >= t->end && expires_first(t, first)) {
+                first = t;
             }
         }
-        t = next;
+        if (!first) {
+            break;
+        }
+        expire(first, now, pass_read(&p, first->base));
+    }
+    for (t = armed; t; t = t->next) {
+        if (t->armed && t->between && (r = pass_read(&p, t->base)) != NULL) {
+            arm_between(t, &p);
+        }
     }
     spin_unlock(&timer_lock);
 }
