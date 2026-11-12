@@ -457,18 +457,6 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
-/** A halted vCPU's wait, which runs without the big lock: a signal ends
- * it at once in the model. */
-int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
-{
-    (void)wq;
-    (void)cond;
-    (void)arg;
-    (void)name;
-    CHECK(bkl_depth == 0, "a halted vCPU waits without the big lock");
-    return -EINTR;
-}
-
 void wq_wake(wait_queue_t *wq, uint32_t kinds)
 {
     (void)wq;
