@@ -32,11 +32,14 @@
  *
  * The pool needs no big lock. Its list, counts and kept buffers are under
  * `req_lock`, a spinlock taken with interrupts off, which a submit takes and
- * a completion takes from the interrupt; a caller sleeps on the request's
- * own state, as Linux's `submit_bio_wait` sleeps on the bio's completion
- * (block/bio.c:1469-1481), and the completion wakes it. Every driver
- * serializes on locks of its own, as Linux's do, and is called without the
- * big lock.
+ * a completion takes from the interrupt. A caller sleeps for its answer on
+ * a queue of its own, as Linux's `submit_bio_wait` sleeps on a completion
+ * on its stack that only that bio's end completes (block/bio.c:1453-1481),
+ * and only that request's answer or quarantine wakes it. A caller waiting
+ * for room in the pool sleeps on the pool's one queue, which every answer,
+ * freed request and quarantine wakes, since each may make room. Every
+ * driver serializes on locks of its own, as Linux's do, and is called
+ * without the big lock.
  */
 
 #include "../lib/kirq.h"
@@ -78,15 +81,17 @@ static uint32_t default_deadline = REQ_DEFAULT_DEADLINE;
 
 /* The pool's lock: the list of live requests and every field the pool
  * keeps on one, the counts and the clock below, the kept buffers, each
- * device's `stalled` and `stats`. Taken with interrupts off, inside a
- * driver's own lock when a completion comes from under it, and before the
- * heap's and the drivers' counters' (block.c); a wake of `pool_wq` comes
- * after it is given back. */
+ * device's `stalled` and `stats`, and each request's `waiter`. Taken with
+ * interrupts off, inside a driver's own lock when a completion comes from
+ * under it, and before the heap's and the drivers' counters' (block.c) and
+ * a request's own queue's, which its caller's wake takes under it; a wake
+ * of `pool_wq` comes after it is given back. */
 static struct spinlock req_lock = SPINLOCK_INIT_NAMED("block_req_lock");
-static struct block_request *reqs;  /* every live request */
-static uint32_t live;               /* how many are on the list */
-static uint32_t next_generation;    /* rising; see req_new */
-static wait_queue_t pool_wq;        /* woken on any completion, freed request or quarantine */
+static struct block_request *reqs; /* every live request */
+static uint32_t live;              /* how many are on the list */
+static uint32_t next_generation;   /* rising; see req_new */
+static wait_queue_t
+    pool_wq; /* the waiters for room: woken on any completion, freed request or quarantine */
 static volatile uint32_t req_ticks; /* the deadlines' clock, in ticks */
 static uint32_t req_seen;           /* `kernel_ticks` at the last tick's call */
 static uint32_t quarantined_count;
@@ -525,13 +530,47 @@ static int req_done(void *arg)
     return r->state != BLOCK_REQ_IN_FLIGHT;
 }
 
-/** Sleep until `r` is no longer in flight, and count the wait the caller
- * finished, which a file lock held across it records (fs/sleeplock.h). */
+/**
+ * `req_lock` held. Wake `r`'s caller if it sleeps for the answer, adding the
+ * processor to interrupt to `*cpus`, which the waker passes to
+ * `sched_kick_cpus` once the lock is given back (`wq_wake_all_deferred`).
+ * The wake is under the lock because the queue is on the caller's stack,
+ * and the caller takes it back under the lock before it returns.
+ */
+static void req_wake_caller(struct block_request *r, uint64_t *cpus)
+{
+    if (r->waiter) {
+        wq_wake_all_deferred(r->waiter, cpus);
+    }
+}
+
+/**
+ * Sleep until `r` is no longer in flight, and count the wait the caller
+ * finished, which a file lock held across it records (fs/sleeplock.h).
+ *
+ * The caller sleeps on a queue on its own stack, as `submit_bio_wait`
+ * declares its completion on its stack (block/bio.c:1471-1478), so that
+ * only `r`'s answer or quarantine wakes it and no other caller's does. The
+ * queue is published in `r->waiter` under `req_lock` before the sleep and
+ * taken back under it after, and the waker wakes it under the same lock
+ * (`req_wake_caller`), so the waker is done with the queue before it goes.
+ * An answer before the queue is published is seen by the condition.
+ */
 static void req_wait(struct block_request *r)
 {
+    wait_queue_t done;
+    uint32_t flags;
+
+    wait_queue_init(&done);
+    flags = pool_lock();
+    r->waiter = &done;
+    pool_unlock(flags);
     while (!req_done(r)) {
-        wq_wait_event_nointr(&pool_wq, req_done, r);
+        wq_wait_event_nointr(&done, req_done, r);
     }
+    flags = pool_lock();
+    r->waiter = NULL;
+    pool_unlock(flags);
     current_proc->disk_waits++;
 }
 
@@ -888,13 +927,15 @@ int block_request_ended(struct block_request *r, uint32_t generation, void *buff
  * completion is stale either way. A late answer to a quarantined request
  * clears its device's stall. A completion that finds another request in
  * flight is counted for `disk-overlaps`, which a test reads to show that one
- * device's queue did not wait on another's.
+ * device's queue did not wait on another's. An answer wakes its own caller
+ * alone (`req_wake_caller`), and the waiters for room in the pool.
  */
 void block_request_complete(struct block_request *request, uint32_t generation, int status)
 {
     uint32_t flags = pool_lock();
     int answered = 0;
     uint32_t overdue;
+    uint64_t cpus = 0;
 
     if (!request || !req_is_live(request) || request->generation != generation) {
         pool_unlock(flags);
@@ -923,6 +964,7 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
     }
     request->status = status;
     request->state = BLOCK_REQ_DONE;
+    req_wake_caller(request, &cpus);
     req_count_rest(request);
     latency_span(LAT_DISK, request->taken_us, timer_now_us());
     {
@@ -938,6 +980,7 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
     overdue = request->overdue;
     req_let_go(request, 0);
     pool_unlock(flags);
+    sched_kick_cpus(cpus);
     if (overdue) {
         klog(KLOG_INFO, "block", "late answer: taken after %d deadlines", (int)overdue);
     }
@@ -1040,6 +1083,7 @@ void block_request_tick(void)
     int overdue = 0;
     int quarantined = 0;
     int stalled = 0;
+    uint64_t cpus = 0;
 
     req_seen = now;
     req_ticks += passed;
@@ -1059,6 +1103,7 @@ void block_request_tick(void)
             continue;
         }
         r->state = BLOCK_REQ_QUARANTINED;
+        req_wake_caller(r, &cpus);
         quarantined_count++;
         quarantine_total++;
         quarantined++;
@@ -1067,6 +1112,7 @@ void block_request_tick(void)
         stalled = mark_stalled();
     }
     pool_unlock(flags);
+    sched_kick_cpus(cpus);
     if (overdue) {
         klog(KLOG_WARN, "block", "request overdue: %d past a deadline, still waited for", overdue);
     }
