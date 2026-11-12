@@ -2516,7 +2516,7 @@ void vfs_desc_open(struct vfs_mount *mnt)
     vfs_mount_get(mnt);
 }
 
-static void reap_if_detached(const struct vfs_mount *mnt);
+static void reap_if_detached(const struct vfs_mount *mnt, uint32_t left);
 
 void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
 {
@@ -2531,8 +2531,7 @@ void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
     if (mnt->refs == 0) {
         k_panic("vfs: a description closed on a mount that had none");
     }
-    vfs_mount_put(mnt);
-    reap_if_detached(mnt);
+    reap_if_detached(mnt, vfs_mount_put(mnt));
 }
 
 /* Repointing, for a KRFFS relocation. */
@@ -5699,22 +5698,31 @@ void vfs_reap_detached(void)
     }
 }
 
-/** Reap the detached mounts when `mnt`, which a hold or a description just
- * let go of, is one no live namespace sees and nothing holds any more. The
- * mount array, the namespaces and the reap are under the big lock, which a
- * caller without it takes once the count says a reap may be due. */
-static void reap_if_detached(const struct vfs_mount *mnt)
+/**
+ * Reap the detached mounts when `mnt`, which a hold or a description just
+ * let go of with the put that left `left` references, is one no live
+ * namespace sees and nothing holds any more. The decision is the put's
+ * count, never a read of `mnt`: once the count is 0 an unmount or another
+ * closer's reap may free the record (`mount_release`), so `mnt` is read only
+ * under the big lock, which those take, and only once the table still has it
+ * (`vfs_mount_index`), as Linux's `mntput_no_expire` drops the count under
+ * RCU and decides under `lock_mount_hash` (fs/namespace.c:1405-1430). A
+ * record freed and made again at the same address is a live mount, judged
+ * on its own fields.
+ */
+static void reap_if_detached(const struct vfs_mount *mnt, uint32_t left)
 {
     int big;
 
-    if (mnt->refs != 0 || mnt->state != VFS_ACTIVE) {
+    if (left != 0) {
         return;
     }
     big = !bkl_held();
     if (big) {
         bkl_enter();
     }
-    if (!mount_permanent(mnt) && vfs_mount_unseen(mnt)) {
+    if (vfs_mount_index(mnt) >= 0 && mnt->refs == 0 && mnt->state == VFS_ACTIVE &&
+        !mount_permanent(mnt) && vfs_mount_unseen(mnt)) {
         vfs_reap_detached();
     }
     if (big) {
@@ -5958,8 +5966,7 @@ static void hold_release(struct vfs_mount *mnt, void *node)
     r.mnt = mnt;
     r.node = node;
     vfs_ref_put(&r);
-    vfs_mount_put(mnt);
-    reap_if_detached(mnt);
+    reap_if_detached(mnt, vfs_mount_put(mnt));
 }
 
 /**
