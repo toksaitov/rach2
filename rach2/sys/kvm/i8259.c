@@ -126,7 +126,9 @@ void kvm_pic_free(struct kvm_vm *vm)
     vm->pic = NULL;
 }
 
-/** Apply a source to a global PIC pin, 0 to 15, under the big lock. */
+/** Apply a source to a global PIC pin, 0 to 15, under the controllers' lock
+ * (`kvm_chip_lock`), which the run loop's callers hold without the big
+ * lock: -1 masked, 0 coalesced, 1 accepted. */
 int kvm_pic_set(struct kvm_vm *vm, uint32_t pin, uint32_t source, int level)
 {
     struct guest_pic *p = pic_of(vm);
