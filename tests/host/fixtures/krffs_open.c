@@ -314,6 +314,8 @@ int wq_active(const wait_queue_t *wq)
  * through this pointer, since the structure is complete only in
  * vfs_open.inc; `main` points it at `loop_table`. */
 static struct loop_device *loops;
+/* The lock `loop_backs` reads an attachment's `base` and `node` under. */
+static struct spinlock loop_lock = SPINLOCK_INIT;
 
 /** A page for a path from the host heap, where the kernel keeps a set. */
 static char *path_buf_get(void)
@@ -661,6 +663,7 @@ static void ext2_handles(void)
     check(attached != other && attached != &e2m_file && other != &e2m_file,
           "each open of an ext2 file has a handle of its own, never the node");
     loop_table[0].mnt = &e2m_mount;
+    loop_table[0].base = &e2m_mount;
     loop_table[0].node = &e2m_file;
     loop_table[0].handle = attached;
     loop_table[0].attached = 1;
@@ -1035,6 +1038,7 @@ static void publication_open(int flags, int before)
     check(handle_node(&mount, first->fhandle) == first->vnode,
           "a mounted KRFFS open record gives the node where the file now is");
     loop_table[0].mnt = &mount;
+    loop_table[0].base = &mount;
     loop_table[0].node = first->vnode;
     check(vfs_truncate(&mount, first->fhandle, 0) == -EBUSY,
           "a truncation of a mounted KRFFS loop's backing file by its open record is EBUSY");

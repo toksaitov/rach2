@@ -3526,6 +3526,7 @@ static void descriptor_errors(void)
 static void loop_handles(void)
 {
     loops[0].mnt = &mount;
+    loops[0].base = &mount;
     loops[0].attached = 1;
     loops[0].node = &node;
     loops[0].handle = &handle;
