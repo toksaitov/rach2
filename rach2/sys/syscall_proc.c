@@ -1212,9 +1212,10 @@ static int32_t exec_vec_get(char *const __user *vec, uint32_t i, uintptr_t *ptr)
 {
     if (sizeof(void *) > 4u && in_compat_syscall()) {
         uint32_t p32;
+        const void __user *at =
+            (const void __force __user *)((__force uintptr_t)vec + (uintptr_t)i * 4u);
 
-        if (copy_from_user(&p32, (const void __user *)((uintptr_t)vec + (uintptr_t)i * 4u), 4u) !=
-            0) {
+        if (copy_from_user(&p32, at, 4u) != 0) {
             return -EFAULT;
         }
         *ptr = p32;
