@@ -17228,7 +17228,11 @@ struct core_file {
 
 /** The core file's writer for `core_write`: `len` bytes of `buf` at the
  * file's place, or a hole of `len` bytes for a null `buf`. Returns 0 or the
- * write's error; a short write is a full disk, -ENOSPC. A SIGKILL sent to
+ * write's error; a short write is a full disk, -ENOSPC. A file a loop
+ * device stands on is -EBUSY, asked under the file's lock before each write
+ * as write(2) asks: the dump holds no description lock, so another process
+ * may attach the file while the dump sleeps between pieces, and an
+ * attachment publishes itself under that lock. A SIGKILL sent to
  * the dumping thread, which a SIGKILL to its process during the dump sends
  * it (`sig_complete`), stops the file with -EINTR before each piece, as
  * Linux 6.12.115's `dump_interrupted` stops it (fs/coredump.c:495-499,
@@ -17247,6 +17251,10 @@ static int32_t core_file_put(void *ctx, const void *buf, uint32_t len)
         file.mnt = cf->ofd->vmnt;
         file.node = cf->ofd->vnode;
         vfs_node_lock(&file);
+        if (loop_backs(cf->ofd->vmnt, cf->ofd->vnode)) {
+            vfs_node_unlock(&file);
+            return -EBUSY;
+        }
         n = vfs_write(cf->ofd->vmnt, cf->ofd->fhandle, buf, len, cf->pos);
         if (n > 0) {
             k_memset(&entry, 0, sizeof(entry));
