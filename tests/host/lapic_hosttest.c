@@ -411,6 +411,19 @@ int kcmdline_early(const char *name)
     return nox2apic && same(name, "nox2apic");
 }
 
+/** Whether `rach2.exits` counts: never here. */
+int exits_counting(void)
+{
+    return 0;
+}
+
+/** Count an end of interrupt: nothing is counted here. */
+void exits_count(unsigned int kind, uint32_t number)
+{
+    (void)kind;
+    (void)number;
+}
+
 /** Map the APIC's page at its usual base, and nothing else. The driver does
  * not call it with the model installed; a base it rejects is set in the
  * register instead. */
