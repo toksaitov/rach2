@@ -62,9 +62,10 @@ struct row {
 };
 
 /*
- * Each processor's ROWS rows, made by kvm_exitstat_start for the
- * processors started by then, as Linux keeps a vCPU's exits in its own
- * counters (arch/x86/kvm/x86.c:10657); NULL for any other, whose exits go
+ * Each processor's ROWS rows, made for the processors started by
+ * kvm_exitstat_start and again at each VM's creation, since the others
+ * start after KVM, as Linux keeps a vCPU's exits in its own counters
+ * (arch/x86/kvm/x86.c:10657); NULL for any other, whose exits go
  * uncounted. A processor writes only its own rows, with interrupts off, so
  * no lock guards them; a read or a clear from another processor may miss
  * an exit counted at the same time. An exit's account may close on
@@ -528,20 +529,32 @@ static int32_t exitstat_store(void *data, const char __user *buf, uint32_t len)
 
 static const struct debugfs_text_ops exitstat_ops = {exitstat_show, exitstat_store};
 
-void kvm_exitstat_start(void)
+void kvm_exitstat_cpus(void)
 {
+    struct row *made;
     uint32_t i;
-    int32_t r;
 
     for (i = 0; i < NR_CPUS; i++) {
-        if (cpu_table[i].online || i == arch_cpu_id()) {
-            rows[i] = kzalloc(ROWS * sizeof(struct row));
-            if (!rows[i]) {
-                klog(KLOG_WARN, "kvm", "failed: no memory for processor %u's exit counts",
-                     (unsigned)i);
-            }
+        if (rows[i] || !(cpu_table[i].online || i == arch_cpu_id())) {
+            continue;
+        }
+        made = kzalloc(ROWS * sizeof(struct row));
+        if (!made) {
+            klog(KLOG_WARN, "kvm", "failed: no memory for processor %u's exit counts", (unsigned)i);
+        } else if (rows[i]) {
+            kfree(made);
+        } else {
+            k_barrier();
+            rows[i] = made;
         }
     }
+}
+
+void kvm_exitstat_start(void)
+{
+    int32_t r;
+
+    kvm_exitstat_cpus();
     r = debugfs_create_text("kvm/exit_stats", 0644u, &exitstat_ops, NULL);
 
     if (r != 0) {

@@ -636,6 +636,11 @@ void kvm_start(void);
  * backend has probed. */
 void kvm_exitstat_start(void);
 
+/** Make the exit counts of each processor started since; from each VM's
+ * creation, with the big lock held. A processor left without them for want
+ * of memory is logged, and its exits go uncounted. */
+void kvm_exitstat_cpus(void);
+
 /**
  * Count the exit of the run that just ended on `v`, by `v->hw_exit`, and
  * close the account of the exit before it, if one is open, as handled in

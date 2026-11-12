@@ -425,6 +425,9 @@ static int32_t create_vm(uintptr_t type)
         r = kvm_backend->vm_init(vm);
     }
     if (r == 0) {
+        kvm_exitstat_cpus();
+    }
+    if (r == 0) {
         rec->mm = current_proc->mm;
         if (rec->mm) {
             mm_hold(rec->mm);
