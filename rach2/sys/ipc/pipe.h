@@ -125,6 +125,12 @@ typedef struct pipe {
     uint32_t buf_cap;
     uint32_t buf_first;
     uint32_t bufs;
+    /* The thread of the last write and the processor it wrote on, which a
+     * reader that finds the pipe empty spins on while that thread runs
+     * there (`pipe_read_spin`). The thread is compared, never read, so it
+     * may have exited; set under `lock`, read without it as a hint. */
+    const struct process *writer;
+    int writer_cpu;
     /* Linux's `pipe->mutex`: held by a read, a write, a splice's or a tee's
      * use of the ring, a resize, FIONREAD, a close and a FIFO's open from
      * their start to their return, across the page faults of their copies,
