@@ -391,8 +391,8 @@ int intremap_start(void)
     for (i = 0; i < vtd_nunits; i++) {
         vtd_set_gcmd(&vtd_units[i], VTD_GCMD_CFI, 0);
     }
-    if (eim) {
-        (void)vtd_hw_x2apic_enable(); /* choose_eim asked that it can */
+    if (eim && vtd_hw_x2apic_enable() == 1) { /* choose_eim asked that it can */
+        vtd_fault_retarget();
     }
     vtd_hw_lines_restore(&held);
     klog(KLOG_INFO, "vtd", "interrupt remapping: on, %s format, compatibility format refused",

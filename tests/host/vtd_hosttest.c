@@ -1940,6 +1940,10 @@ static void row_ir_x2apic_wide(void)
           "the RTL8168's");
     check(m_rte(M(1), 0xF0F8, rtes[0].low, rtes[0].high) == 33 && M(1)->last_dest == 0x103,
           "the ioapic's line");
+    check(M(0)->regs[VTD_FEADDR / 4] == 0xFEE03000u && M(0)->regs[VTD_FEUADDR / 4] == 1u &&
+              M(1)->regs[VTD_FEADDR / 4] == 0xFEE03000u && M(1)->regs[VTD_FEUADDR / 4] == 1u &&
+              M(0)->regs[VTD_FEDATA / 4] == 0x31u && M(0)->regs[VTD_FECTL / 4] == 0,
+          "the fault events aimed again after the move, the id's bits 8 to 31 in FEUADDR");
     row_end();
 
     row_begin("ir_x2apic_wide_off");
@@ -1950,6 +1954,8 @@ static void row_ir_x2apic_wide(void)
     check(vtd_start() == 2 && !intremap_active(), "remapping off");
     msi_of(0, DF(2, 0), &a, &d);
     check(a == 0xFEE03000u && d == 49, "the message keeps the low eight bits");
+    check(M(0)->regs[VTD_FEADDR / 4] == 0xFEE03000u && M(0)->regs[VTD_FEUADDR / 4] == 1u,
+          "and the unit's own fault event the rest in FEUADDR, as __irq_msi_compose_msg");
     row_end();
 }
 
