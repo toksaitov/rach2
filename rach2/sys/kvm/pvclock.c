@@ -304,7 +304,6 @@ static void master_update(struct kvm_vm *vm)
 {
     uint64_t ns, tsc, khz = kvm_tsc_khz();
     uint32_t i, n = vm->nr_vcpus;
-    int pair;
 
     vm->hv_clock_moved = 1;
     for (i = 0; i < n; i++) {
@@ -317,12 +316,13 @@ static void master_update(struct kvm_vm *vm)
         }
     }
     vm->host_clock_gen = vclock_generation();
-    pair = khz != 0 && vclock_read_cycles(VCLOCK_READ_RAW, &ns, &tsc);
-    vm->master_clock = pair && tsc_all_matched(vm) && !vm->old_kvmclock;
-    if (pair) {
+    if (khz != 0 && vclock_read_cycles(VCLOCK_READ_RAW, &ns, &tsc)) {
+        vm->master_clock = tsc_all_matched(vm) && !vm->old_kvmclock;
         vm->master_ns = ns;
         vm->master_tsc = tsc;
         time_scale(NSEC_PER_SEC, khz * 1000u, &vm->master_shift, &vm->master_mul);
+    } else {
+        vm->master_clock = 0;
     }
 }
 

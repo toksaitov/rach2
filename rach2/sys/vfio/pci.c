@@ -504,7 +504,7 @@ static int32_t device_read(fd_entry_t *e, char __user *buf, uint32_t count)
 /** write of a device's descriptor, at its position. */
 static int32_t device_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
-    return device_rw(e, (uint8_t __user *)(uintptr_t)buf, count, 1);
+    return device_rw(e, (uint8_t __force __user *)(__force uintptr_t)buf, count, 1);
 }
 
 /** The physical page `pgoff` of a mapping of a BAR, or -1 while the BAR
