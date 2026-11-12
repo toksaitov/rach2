@@ -50,6 +50,9 @@
  *   another process's allocation on the root runs in the reclaim's sleep;
  * - a read of a disk file whose pages a shared mapping holds in memory
  *   when no temporary mapping is free for one of them;
+ * - a read without the big lock whose end a sharer's seek put past 2^63-1,
+ *   which gives back the big lock it took, and an open without the big lock
+ *   that installs descriptor 1 and is not made again under it;
  * - on a model type that sets `file_locked`, with the node locks of
  *   rach2/sys/fs/nodelock.c, the order of the locks a create, an unlink,
  *   an rmdir and a rename in one directory and between two take, and a
@@ -774,6 +777,15 @@ struct vfs_mount *vfs_root_mount(void)
  * `kmap_temp` finds no free slot for, and the references its reads hold. */
 static int resident_row;
 static uint8_t resident_pages[2][PAGE_SIZE];
+/* The unlocked open's row (`unlocked_open_one`): set while it runs, when the
+ * name cache finishes the walk to `node` on a type that reads without the
+ * big lock. */
+static int unlocked_row;
+static const struct vfs_type unlocked_type = {.name = "unlocked", .reads_unlocked = 1};
+/* The big lock's model (`compat/bkl_held.c`): whether a row stands for a
+ * caller without it, and the code's takes since the row cleared them. */
+extern int bkl_host_free;
+extern int bkl_host_takes;
 static uintptr_t resident_fail;
 static int resident_refs;
 
@@ -783,6 +795,13 @@ static int resident_refs;
  * moves the file, runs then. */
 int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
 {
+    if (unlocked_row) {
+        check(mnt == &mount && at == &node, "an unlocked open checks the file its walk found");
+        k_memset(st, 0, sizeof(*st));
+        st->mode = 0100644;
+        st->ino = 78;
+        return 0;
+    }
     if (resident_row) {
         check(mnt == &mount && at == &node, "a resident read sizes the file it reads");
         k_memset(st, 0, sizeof(*st));
@@ -1770,6 +1789,30 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
         vfs_ns_lock(&mount);
     }
     return 0;
+}
+
+/** The name cache's walk: in the unlocked open's row, `node` on `mount`
+ * with no name recorded; otherwise a walk it cannot finish. */
+int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out, struct vfs_name **entry)
+{
+    (void)path;
+    (void)flags;
+    *entry = NULL;
+    if (!unlocked_row) {
+        return VFS_CACHED_MISS;
+    }
+    out->mnt = &mount;
+    out->node = &node;
+    return 0;
+}
+
+/** The working directory's path, which no unlocked row asks for, since the
+ * unlocked open's row names an absolute path: "/". */
+void proc_cwd_read(const struct process *p, char *out)
+{
+    (void)p;
+    out[0] = '/';
+    out[1] = '\0';
 }
 
 /** The walk with its path recorded, which the model does not record. */
@@ -4223,6 +4266,72 @@ static void resident_unmapped(void)
     dshare_count = 0;
 }
 
+/**
+ * A read without the big lock of a file whose description a sharer's seek
+ * left at 2^63-1, while a shared mapping of a disk file has pages, so that
+ * the read takes the big lock: the read is -EINVAL, as Linux's
+ * rw_verify_area refuses it, and gives back the big lock it took, as every
+ * answer of Linux's ksys_read releases the position (fs/read_write.c:701-714).
+ */
+static void read_end_past_unlocked(void)
+{
+    char out[2];
+    fd_entry_t *e;
+    int fd;
+
+    row_begin();
+    fd = fd_alloc(proc.fds);
+    e = fd_slot(proc.fds, fd);
+    e->type = FD_TYPE_FILE;
+    e->flags = FD_FLAG_READ;
+    e->ofd->vmnt = &mount;
+    e->ofd->vnode = &node;
+    e->ofd->offset = 0x7FFFFFFFFFFFFFFFull;
+    dshare_count = 1;
+    bkl_host_free = 1;
+    bkl_host_takes = 0;
+    check(file_read(e, (char __user *)out, sizeof(out), NULL, sizeof(out)) == -EINVAL,
+          "a read whose end a sharer's seek put past 2^63-1 is EINVAL");
+    check(bkl_host_takes == 1 && !bkl_held(), "and gives back the big lock it took");
+    bkl_host_free = 0;
+    dshare_count = 0;
+    e->ofd->vmnt = NULL;
+    e->ofd->vnode = NULL;
+    e->type = FD_TYPE_NONE;
+    row_end();
+}
+
+/**
+ * An open without the big lock that the name cache finishes, of a regular
+ * file on a type that reads without the lock, with descriptor 0 taken: it
+ * returns descriptor 1, the one it installed, and is not made again under
+ * the big lock, since the answer that sends a call there lies below every
+ * errno and descriptor, as Linux's do_sys_openat2 returns the descriptor it
+ * installs (fs/open.c:1419-1430).
+ */
+static void unlocked_open_one(void)
+{
+    int zero;
+
+    row_begin();
+    zero = fd_alloc(proc.fds);
+    check(zero == 0, "descriptor 0 is taken first");
+    mount.type = &unlocked_type;
+    unlocked_row = 1;
+    bkl_host_free = 1;
+    bkl_host_takes = 0;
+    check(open_from_user(AT_FDCWD, (const char __user *)"/f", 0, 0) == 1,
+          "an unlocked open with descriptor 0 taken returns descriptor 1");
+    check(bkl_host_takes == 0 && opens == 1,
+          "and opens the file once, never again under the big lock");
+    check(fd_get(proc.fds, 1) != NULL && fd_get(proc.fds, 2) == NULL,
+          "and installs descriptor 1 alone");
+    bkl_host_free = 0;
+    unlocked_row = 0;
+    mount.type = &mounted_type;
+    row_end();
+}
+
 /* The uids of the protection rows: the caller and another user. */
 #define PR_USER  1000u
 #define PR_OTHER 1001u
@@ -4395,6 +4504,8 @@ int main(void)
     file_locked_orders();
     file_locked_mount_rmdir();
     resident_unmapped();
+    read_end_past_unlocked();
+    unlocked_open_one();
     protected_links();
     protected_creates();
     if (!failures) {
