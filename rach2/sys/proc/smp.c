@@ -104,6 +104,12 @@ struct bkl_call_count {
 };
 static struct bkl_call_count bkl_calls[BKL_ENTRY_KEYS];
 
+/* The takes after a switch (`take 1`) divided by the system call the thread
+ * slept in, its number below BKL_ENTRY_SYSCALLS or BKL_ENTRY_SYSCALLS for
+ * any above: the rest of a call under the big lock after each sleep. They
+ * count under `take 1` as well, and in no other line. */
+static struct bkl_call_count bkl_slept[BKL_ENTRY_SYSCALLS + 1];
+
 /* The holds of each kernel thread that it takes for itself, outside any
  * interrupt or exception it is in: at its first switch and after each
  * sleep (`take 1`), after an idle wait (`take 0`) and by `bkl_enter`,
@@ -378,6 +384,11 @@ static void bkl_hold_end(struct percpu *cpu)
                ? thread_count(cpu)
                : NULL;
     call_hold(mine ? mine : &bkl_calls[key], held, waited);
+    if (key == BKL_KEY_SWITCH && cpu->bkl_slept >= 0) {
+        call_hold(
+            &bkl_slept[cpu->bkl_slept < BKL_ENTRY_SYSCALLS ? cpu->bkl_slept : BKL_ENTRY_SYSCALLS],
+            held, waited);
+    }
     if (ioctl > 0) {
         call_hold(&bkl_ioctls[ioctl - 1].count, held, waited);
     }
@@ -858,6 +869,12 @@ int32_t smp_calls_show(void *data, char *buf, uint32_t cap)
     }
     text_count(&t, "take", 0, 0, &bkl_calls[BKL_KEY_IDLE], BKL_KEY_IDLE);
     text_count(&t, "take", 1, 0, &bkl_calls[BKL_KEY_SWITCH], BKL_KEY_SWITCH);
+    for (key = 0; key <= BKL_ENTRY_SYSCALLS; key++) {
+        if (bkl_slept[key].holds != 0) {
+            text_fields(&t, "slept", (uint64_t)key, 0, &bkl_slept[key]);
+            text_ch(&t, '\n');
+        }
+    }
     for (key = 0; key < BKL_THREAD_SLOTS; key++) {
         if (bkl_threads[key].key) {
             text_thread(&t, &bkl_threads[key]);
@@ -882,6 +899,7 @@ int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len)
     (void)data;
     (void)buf;
     k_memset(bkl_calls, 0, sizeof(bkl_calls));
+    k_memset(bkl_slept, 0, sizeof(bkl_slept));
     k_memset(bkl_threads, 0, sizeof(bkl_threads));
     for (i = 0; i < BKL_IOCTL_SLOTS; i++) {
         k_memset(&bkl_ioctls[i].count, 0, sizeof(bkl_ioctls[i].count));
@@ -1315,6 +1333,9 @@ void bkl_take_as(int depth, int key)
         bkl_mark_hold(cpu);
         cpu->bkl_vector = 0;
         cpu->bkl_nr = key == BKL_KEY_IDLE ? BKL_NR_IDLE : BKL_NR_SWITCH;
+        cpu->bkl_slept = key == BKL_KEY_SWITCH && cpu->current && cpu->current->in_syscall
+                             ? cpu->current->orig_nr
+                             : -1;
         cpu->bkl_depth = depth;
     }
 }

@@ -122,14 +122,17 @@ fences:
 Mode 0644.
 The kernel's own counts of its entries and the big lock, a Rach2
 file with no Linux counterpart: a header, then a line for each system call
-by its number, each entry vector by its number, each kernel thread by its
-pid, with its name last, and each
+by its number, each entry vector by its number, the takes after an idle
+wait and after a switch, the latter by the system call slept in, each
+kernel thread by its pid, with its name last, and each
 .Xr ioctl 2
 request by its number in hex, with any count:
 .Bd -literal -offset indent
 kind number calls wall_us holds held_us wait_us
 syscall 16 1200 5400 1200 3100 900
 vector 32 800 0 800 120 40
+take 1 0 0 700 9800 2100
+slept 0 0 0 450 6300 1300
 kthread 118 0 0 400 900 300 ki915
 ioctl 0xc0406469 600 4100 600 2500 700
 ioctl_lost 0
@@ -166,6 +169,15 @@ again, whatever entry it is in, so
 .Ql take 1
 counts a system call's hold after each sleep.
 A
+.Ql slept
+line divides
+.Ql take 1
+by the system call the thread slept in, by its number, with no calls and
+no wall time: the rest of a call under the big lock after its sleeps.
+Its holds count under
+.Ql take 1
+too.
+A
 .Ql kthread
 line counts a kernel thread's own holds, those it takes outside any
 interrupt or exception it is in: its first hold, its holds after each
@@ -174,7 +186,9 @@ alone, not under
 .Ql take
 or
 .Ql vector 0
-as well, so the lines of the file never count one hold twice.
+as well, so the lines of the file, the
+.Ql slept
+lines aside, never count one hold twice.
 The processors' idle tasks count together, as one line named
 .Ql idle .
 The kernel threads named are the first 32 to take the lock since the last
