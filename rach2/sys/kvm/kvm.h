@@ -656,6 +656,9 @@ struct kvm_vcpu {
      * before the entry instruction of the run that ends in the next exit
      * (`xs_in`) and just after that exit (`xs_out`). */
     uint64_t xs_prep, xs_in, xs_out;
+    /* `xs_wait` when `xs_prep` was taken: the waits after it are the
+     * preparation's, which it does not count, as the handling does not. */
+    uint64_t xs_prep_wait;
 
     /* The steps each vector's interrupts reached, by enum kvm_vec_step,
      * which the VM's fdinfo shows; written by the vCPU's thread and by a

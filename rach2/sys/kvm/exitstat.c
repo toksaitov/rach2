@@ -355,6 +355,26 @@ static void account_close(struct row *row, struct kvm_vcpu *v, uint64_t now)
     row->handle += spent - v->xs_wait;
 }
 
+/** Count in `row` the preparation of `v`'s exit, from `v->xs_prep` to the
+ * TSC count `entry`, without the waits for the big lock inside it, as
+ * `account_close` counts the handling, of which it is a part. A span to a
+ * processor whose TSC reads lower counts as 0, as there. Before
+ * `account_close`, which may cut `v->xs_wait`. */
+static void prepare_close(struct row *row, const struct kvm_vcpu *v, uint64_t entry)
+{
+    uint64_t spent, waited;
+
+    if (!v->xs_prep) {
+        return;
+    }
+    spent = entry >= v->xs_prep ? entry - v->xs_prep : 0;
+    waited = v->xs_wait - v->xs_prep_wait;
+    if (waited > spent) {
+        waited = spent;
+    }
+    row->prepare += spent - waited;
+}
+
 void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t entry, uint64_t left)
 {
     uint32_t cpu = arch_cpu_id(), r;
@@ -369,11 +389,9 @@ void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t entry, uint64_t left)
         return;
     }
     if (v->xs_row >= 0) {
+        prepare_close(&mine[v->xs_row], v, entry);
         account_close(&mine[v->xs_row], v, entry);
         mine[v->xs_row].kernel++;
-        if (v->xs_prep) {
-            mine[v->xs_row].prepare += entry - v->xs_prep;
-        }
     }
     r = row_of(v->hw_exit);
     mine[r].exits++;
@@ -394,6 +412,7 @@ void kvm_exitstat_prepare(struct kvm_vcpu *v)
 {
     if (v->xs_row >= 0 && !v->xs_prep) {
         v->xs_prep = arch_cycles();
+        v->xs_prep_wait = v->xs_wait;
     }
 }
 
