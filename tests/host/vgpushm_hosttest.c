@@ -17,13 +17,13 @@
  * ring area and their bounds, a round trip, segments merged into one
  * descriptor, a chain too long for the device, the heap filled to ENOMEM
  * and given back, backing in one run and in pieces, partial adoption, the
- * doorbells' hooks, the reap a ring of the queue's doorbell has the
- * interrupt thread make while the driver's interrupts are on, the control
- * node's report, a device that stops running,
- * a refused setup, the detach, a backing held through a detach while
- * the same frames are attached, detached and attached again, and a
- * backing released across a missing leaf of its table while the region
- * detaches between its leaves.
+ * doorbells' hooks, an eventfd given both as a doorbell the device rings
+ * and one it is rung by refused, the reap a ring of the queue's doorbell has
+ * the interrupt thread make while the driver's interrupts are on, the
+ * control node's report, a device that stops running, a refused setup, the
+ * detach, a backing held through a detach while the same frames are
+ * attached, detached and attached again, and a backing released across a
+ * missing leaf of its table while the region detaches between its leaves.
  */
 
 #define REGION_PAGES 16u
@@ -489,6 +489,48 @@ static void bells_and_info(void)
     check(info.attached == 0 && info.epoch == 0, "info: no region");
 }
 
+/** The references on the four doorbells' eventfds, summed. */
+static unsigned bell_held(void)
+{
+    return bell_refs[0] + bell_refs[1] + bell_refs[2] + bell_refs[3];
+}
+
+/** An attach's doorbells: an eventfd given both as one the device rings and
+ * one it is rung by refused with EINVAL, and nothing held once the attach
+ * gives its record back; four distinct ones taken, and each given back. */
+static void bells_crossed(void)
+{
+    struct vgs_attach a;
+    struct vshm *v;
+
+    k_memset(&a, 0, sizeof(a));
+    a.bell_in[0] = 0;
+    a.bell_in[1] = 1;
+    a.bell_out[0] = 2;
+    a.bell_out[1] = 0;
+    v = vshm_new(0);
+    check(v != NULL && vshm_bells_get(v, &a) == -EINVAL,
+          "bells: bell_out[1] as bell_in[0] refused with EINVAL");
+    vshm_release(v);
+    vshm_free(v);
+    check(bell_held() == 0, "bells: nothing held after the refusal");
+    a.bell_out[0] = 1;
+    a.bell_out[1] = 3;
+    v = vshm_new(0);
+    check(v != NULL && vshm_bells_get(v, &a) == -EINVAL,
+          "bells: bell_out[0] as bell_in[1] refused with EINVAL");
+    vshm_release(v);
+    vshm_free(v);
+    a.bell_out[0] = 2;
+    v = vshm_new(0);
+    check(v != NULL && vshm_bells_get(v, &a) == 0 && bell_refs[0] == 1 && bell_refs[1] == 1 &&
+              bell_refs[2] == 1 && bell_refs[3] == 1,
+          "bells: four distinct eventfds taken");
+    vshm_release(v);
+    vshm_free(v);
+    check(bell_held() == 0, "bells: each given back");
+}
+
 /** The queue's doorbell has the interrupt thread reap the queues while the
  * driver's interrupts are on, never the hook itself, which runs under the
  * eventfd's lock; after their release a ring reaps nothing. */
@@ -736,6 +778,7 @@ int main(void)
     full_region();
     backing();
     bells_and_info();
+    bells_crossed();
     bell_reaps();
     fragmented_backing();
     partial_backing();
@@ -747,7 +790,8 @@ int main(void)
     if (!failures) {
         printf("vgpushm-hosttest: result: pass: layout, handshake, ring area, round trip, "
                "merged and refused chains, a full region, backing in one run and in pieces, "
-               "partial adoption, doorbells, the doorbell's reap, info, a lost device, "
+               "partial adoption, doorbells, a crossed doorbell refused, the doorbell's reap, "
+               "info, a lost device, "
                "a refused setup, the detach, a backing held through it and one released "
                "across a missing leaf and a detach\n");
     }
