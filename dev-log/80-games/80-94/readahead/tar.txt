@@ -1,0 +1,6 @@
+cat /proc/disk
+cat /sys/kernel/debug/exits
+tar cf - /t/proton | cat > /dev/null
+cat /sys/kernel/debug/exits
+cat /proc/disk
+cd /t && find proton -type f -exec md5sum {} + | LC_ALL=C sort -k2 | md5sum

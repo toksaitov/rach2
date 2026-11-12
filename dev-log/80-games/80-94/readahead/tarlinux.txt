@@ -1,0 +1,4 @@
+cat /proc/interrupts
+tar cf - /t/proton | cat > /dev/null
+cat /proc/interrupts
+cd /t && find proton -type f -exec md5sum {} + | LC_ALL=C sort -k2 | md5sum

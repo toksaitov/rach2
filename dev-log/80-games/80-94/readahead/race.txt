@@ -1,0 +1,3 @@
+cd /t/proton/files/lib/wine/x86_64-windows && { cat *.dll | md5sum & cat *.dll | md5sum & cat *.dll | head -c 1000000 | md5sum & wait; }
+cd /t/proton/files/lib/wine/x86_64-windows && md5sum *.dll | md5sum
+cd /t/proton/files/lib/wine/x86_64-windows && cat *.dll | md5sum
