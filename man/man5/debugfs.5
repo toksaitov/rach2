@@ -158,6 +158,8 @@ alone, not under
 or
 .Ql vector 0
 as well, so the lines of the file never count one hold twice.
+The processors' idle tasks count together, as one line named
+.Ql idle .
 The kernel threads named are the first 32 to take the lock since the last
 zeroing; the holds of any after them count under
 .Ql take

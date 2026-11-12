@@ -106,16 +106,17 @@ static struct bkl_call_count bkl_calls[BKL_ENTRY_KEYS];
 
 /* The holds of each kernel thread that it takes for itself, outside any
  * interrupt or exception it is in: at its first switch and after each
- * sleep (`take 1`), after an idle wait (`take 0`) and by `bkl_enter` or
- * `bkl_take` in its own code (`vector 0`). Each is counted here alone, under
- * the thread's pid and name, so that bkl/calls names the thread, and the
- * lines it shows stay disjoint. A slot is the thread's from its first such
- * hold until the counts are zeroed; a thread that finds every slot taken is
- * counted under the key as before. The big lock, which a hold's end holds,
- * guards the slots. */
+ * sleep (`take 1`), after an idle wait (`take 0`) and by `bkl_enter`,
+ * `bkl_try_enter` or `bkl_take` in its own code (`vector 0`). The
+ * processors' idle tasks count as one thread. Each hold is counted here
+ * alone, under the thread's pid and name, so that bkl/calls names the
+ * thread, and the lines it shows stay disjoint. A slot is the thread's
+ * from its first such hold until the counts are zeroed; a thread that
+ * finds every slot taken is counted under the key as before. The big
+ * lock, which a hold's end holds, guards the slots. */
 #define BKL_THREAD_SLOTS 32
 struct bkl_thread_count {
-    const struct process *proc; /* NULL for a free slot */
+    const void *key; /* its record, `cpu_table` for the idle tasks; NULL if free */
     uint32_t pid;
     char comm[16];
     struct bkl_call_count count;
@@ -306,31 +307,38 @@ static int hold_key(const struct percpu *cpu)
     return BKL_ENTRY_SYSCALLS + (int)(cpu->bkl_vector & 0xffu);
 }
 
-/** The count of kernel thread `p`'s own holds, its slot taken at its first
- * hold, or NULL when `p` is no kernel thread or every slot is another's. A
- * record used again by another thread is told apart by its pid. The big
- * lock is held. */
-static struct bkl_call_count *thread_count(const struct process *p)
+/** The count of the holds of the kernel thread `cpu` runs, its slot taken
+ * at its first hold, or NULL when the thread is no kernel thread or every
+ * slot is another's. The processors' idle tasks share one slot, whose key
+ * is `cpu_table`. A record used again by another thread is told apart by
+ * its pid. The big lock is held. */
+static struct bkl_call_count *thread_count(const struct percpu *cpu)
 {
+    const struct process *p = cpu->current;
     struct bkl_thread_count *spare = NULL, *t;
+    const void *key;
     int i;
 
-    if (!p || !p->kthread_entry) {
+    if (!p) {
+        return NULL;
+    }
+    key = p == cpu->idle ? (const void *)cpu_table : p->kthread_entry ? (const void *)p : NULL;
+    if (!key) {
         return NULL;
     }
     for (i = 0; i < BKL_THREAD_SLOTS; i++) {
         t = &bkl_threads[i];
-        if (t->proc == p && t->pid == p->pid) {
+        if (t->key == key && t->pid == p->pid) {
             return &t->count;
         }
-        if (!t->proc && !spare) {
+        if (!t->key && !spare) {
             spare = t;
         }
     }
     if (!spare) {
         return NULL;
     }
-    spare->proc = p;
+    spare->key = key;
     spare->pid = p->pid;
     k_memcpy(spare->comm, p->comm, sizeof(spare->comm));
     spare->comm[sizeof(spare->comm) - 1] = '\0';
@@ -365,7 +373,7 @@ static void bkl_hold_end(struct percpu *cpu)
     bkl_entry_cycles[key] += held;
     bkl_entry_holds[key]++;
     mine = key == BKL_ENTRY_SYSCALLS || key == BKL_KEY_SWITCH || key == BKL_KEY_IDLE
-               ? thread_count(cpu->current)
+               ? thread_count(cpu)
                : NULL;
     call_hold(mine ? mine : &bkl_calls[key], held, waited);
     if (ioctl > 0) {
@@ -846,7 +854,7 @@ int32_t smp_calls_show(void *data, char *buf, uint32_t cap)
     text_count(&t, "take", 0, 0, &bkl_calls[BKL_KEY_IDLE], BKL_KEY_IDLE);
     text_count(&t, "take", 1, 0, &bkl_calls[BKL_KEY_SWITCH], BKL_KEY_SWITCH);
     for (key = 0; key < BKL_THREAD_SLOTS; key++) {
-        if (bkl_threads[key].proc) {
+        if (bkl_threads[key].key) {
             text_thread(&t, &bkl_threads[key]);
         }
     }

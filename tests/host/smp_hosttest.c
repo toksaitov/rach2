@@ -574,13 +574,14 @@ static void kthread_model(void)
  * A kernel thread's own holds, its take after a switch and its own
  * `bkl_enter` outside any entry, count under its pid and name in bkl/calls,
  * and not under `take 1` or `vector 0` as well; an interrupt's hold while
- * it runs stays under the interrupt's vector; and a write zeroes the
- * threads' lines.
+ * it runs stays under the interrupt's vector; two processors' idle tasks
+ * count as one thread; and a write zeroes the threads' lines.
  */
 static void row_kthread_counts(void)
 {
     static char text[16384];
-    static process_t worker;
+    static process_t worker, idle_a, idle_b; /* idle tasks, pid 0 each */
+    process_t *was_idle;
 
     bkl_booted = 1;
     k_memset(&worker, 0, sizeof(worker));
@@ -609,10 +610,24 @@ static void row_kthread_counts(void)
     check(bkl_calls[BKL_ENTRY_SYSCALLS + 32].holds == 1,
           "an interrupt's hold while the kernel thread runs counts under its vector");
 
+    k_memcpy(idle_a.comm, "idle", 5);
+    k_memcpy(idle_b.comm, "idle", 5);
+    was_idle = cpu_table[0].idle;
+    cpu_table[0].current = cpu_table[0].idle = &idle_a;
+    (void)bkl_try_enter();
+    bkl_exit();
+    cpu_table[0].current = cpu_table[0].idle = &idle_b;
+    bkl_enter();
+    bkl_exit();
+    cpu_table[0].idle = was_idle;
+    cpu_table[0].current = &self;
+    text[smp_calls_show(NULL, text, sizeof(text) - 1)] = 0;
+    check(has_line(text, "kthread 0 0 0 2 ") && strstr(text, " idle\n") != NULL,
+          "the idle tasks' own holds count as one thread's, pid 0");
+
     (void)smp_calls_store(NULL, NULL, 1);
     text[smp_calls_show(NULL, text, sizeof(text) - 1)] = 0;
     check(!has_line(text, "kthread "), "a write zeroes the kernel threads' lines");
-    cpu_table[0].current = &self;
 }
 
 /* What the borrower of a loan of the big lock found while it held it, and
