@@ -1252,3 +1252,9 @@ uint64_t rtc_slewed(uint64_t ns, int64_t rate)
     (void)rate;
     return ns;
 }
+
+/** No watchdog is modeled by the APIC timer rows. */
+void watchdog_event(isr_params_t *params)
+{
+    (void)params;
+}

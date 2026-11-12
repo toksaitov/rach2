@@ -3,7 +3,7 @@
 `watchdog.c` finds the three hangs Linux's kernel/watchdog.c, watchdog_perf.c, watchdog_buddy.c and hung_task.c find, with their messages and settings: a soft lockup, a processor that has not scheduled for 2 x `watchdog_thresh` seconds, 20 by default; a hard lockup, a processor whose timer interrupts have stopped for `watchdog_thresh` seconds; and a hung task, a thread in uninterruptible sleep, the state D, for `hung_task_timeout_secs`, 120 by default. Each report gives the processor, the thread, the registers and the return addresses of the stack, and with its panic option set ends in a panic; the all-CPU backtrace options add every other processor's registers and stack from an NMI. [lockup(7)](../../man/man7/lockup.7) is the user's page.
 
 
-A processor whose scheduler tick is stopped in idle is quiescent for the hard-lockup check. On wake it touches both detectors before becoming busy, so a long idle span causes no report.
+An idle processor keeps the next watchdog sample as a local timer event while its scheduler tick is stopped. The event samples by elapsed monotonic time, without counting a scheduler tick, before any wait for the big lock. It keeps the buddy check running on idle processors too; no idle marker exempts a CPU from that check. A settings change kicks parked processors so that they restart their detectors.
 
 ## Use
 

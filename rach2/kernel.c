@@ -527,8 +527,11 @@ static uint32_t timer_service_ticks(void)
  * No lock is held and interrupts are off; failure keeps the periodic tick. */
 int timer_idle_prepare(void)
 {
-    uint32_t wait;
+    uint32_t wait = watchdog_idle_ticks();
 
+    if (wait != 0) {
+        timer_wake_tick(tick_count() + wait);
+    }
     if (arch_cpu_id() != 0) {
         if (bkl_try_enter()) {
             timer_idle_notify();

@@ -50,6 +50,17 @@ static long read_proc(const char *name, char *buf)
     return used;
 }
 
+/** Write one setting or deliberate lockup to its kernel interface. */
+static long write_proc(const char *name, const char *text, long len)
+{
+    long fd = syscall2(SYS_OPEN, (long)name, 1), rc;
+
+    if (fd < 0) { return fd; }
+    rc = syscall3(SYS_WRITE, fd, (long)text, len);
+    syscall1(SYS_CLOSE, fd);
+    return rc;
+}
+
 /** Sum the scheduler timer's counters, excluding other vectors. */
 static unsigned long counts(const char *s, const char *name)
 {
@@ -163,6 +174,14 @@ PROBE_START void _start(void)
     timex[0] = 2;
     timex[2] = 0;
     check(syscall1(SYS_ADJTIMEX, (long)timex) >= 0, "restore the clock rate");
+    check(write_proc("/proc/sys/kernel/watchdog_thresh", "1\n", 2) == 2,
+          "shorten the watchdog sample period");
+    req.sec = 1; req.ns = 0;
+    check(syscall2(SYS_NANOSLEEP, (long)&req, 0) == 0, "let idle watchdogs restart");
+    print("NOHZPROBE watchdog hard begin\n");
+    check(write_proc("/sys/kernel/debug/test_lockup", "hard 5\n", 7) == 7,
+          "the deliberate hard lockup returns");
+    print("NOHZPROBE watchdog hard end\n");
     check(read_proc("/proc/stat", after) > 0, "read idle accounting");
     print("NOHZPROBE stat\n"); print(after);
     print(failures ? "NOHZPROBE FAIL\n" : "NOHZPROBE OK\n");

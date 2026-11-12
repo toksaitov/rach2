@@ -488,7 +488,9 @@ void timer_wake_release(void)
  * only by a try, to post the POSIX timers' signals. */
 static void hr_interrupt(isr_params_t *params)
 {
-    (void)params;
+    if (hr_cpu[arch_cpu_id()].idle) {
+        watchdog_event(params);
+    }
     timer_hr_pass();
 }
 

@@ -15,6 +15,7 @@
 #include "lib/kstring.h"
 #include "mm/usercopy.h"
 #include "panic.h"
+#include "rtc.h"
 #include "platform.h"
 #include "proc/percpu.h"
 #include "proc/process.h"
@@ -88,6 +89,7 @@ struct wd_cpu {
     int hardlockup_warned;
     uint32_t ticks;
     uint64_t timer_tsc;
+    int64_t timer_ns; /* monotonic time of the last watchdog sample */
     volatile int kicked;
     volatile uint32_t touch_ts;
     volatile uint32_t report_ts;
@@ -530,11 +532,6 @@ static void watchdog_hardlockup_check(int cpu, const isr_params_t *regs)
     int me = (int)arch_cpu_id(), panicking = hardlockup_panic != 0;
     uint32_t sflags;
 
-    if (cpu_table[cpu].tick_stopped) {
-        w->hrtimer_interrupts_saved = hrint;
-        w->hardlockup_warned = 0;
-        return;
-    }
     if (w->hardlockup_touched) {
         w->hardlockup_touched = 0;
         return;
@@ -754,17 +751,6 @@ void watchdog_sched(void)
     softlockup_fn(&wd[arch_cpu_id()]);
 }
 
-/** Touch both detectors after a stopped idle tick, before the processor
- * becomes busy; no tick was needed to prove progress during that span. */
-void watchdog_idle_exit(void)
-{
-    struct wd_cpu *w = &wd[arch_cpu_id()];
-
-    update_touch_ts(w);
-    w->hardlockup_touched = 1;
-    w->tick_tsc = arch_cycles();
-}
-
 /**
  * Write out klog's kept records when the processor that holds the big lock,
  * other than this one, has been reported hard-locked and has taken no tick
@@ -796,8 +782,15 @@ static void flush_for_holder(int me)
  * timer that reads the setting then sees (`watchdog_timer_fn`). */
 void watchdog_reconfigure(void)
 {
+    int c;
+
     wd_gen++;
     k_barrier();
+    for (c = 0; c < NR_CPUS; c++) {
+        if (cpu_table[c].online) {
+            smp_kick(c);
+        }
+    }
 }
 
 /**
@@ -817,6 +810,7 @@ static void watchdog_restart(struct wd_cpu *w)
     w->kicked = 0;
     w->ticks = 0;
     w->timer_tsc = w->tick_tsc;
+    w->timer_ns = rtc_monotonic_ns();
     watchdog_enable(w, watchdog_enabled());
 }
 
@@ -834,18 +828,12 @@ static void watchdog_restart(struct wd_cpu *w)
  * Linux's hrtimer fires as soon as interrupts let it, in the context that
  * held them off.
  */
-uint32_t watchdog_idle_ticks(void)
-{
-    uint32_t half = sample_ticks() / 2u;
-
-    return half != 0 ? half : TICK_HZ;
-}
-
-void watchdog_tick(isr_params_t *params)
+static void watchdog_run(isr_params_t *params, int tick)
 {
     struct wd_cpu *w = &wd[arch_cpu_id()];
     uint32_t period = sample_ticks();
     uint64_t cycles = sample_cycles();
+    int64_t now = rtc_monotonic_ns();
 
     if (!wd_ready) {
         return;
@@ -864,13 +852,50 @@ void watchdog_tick(isr_params_t *params)
     if (FRAME_USER(params) || this_cpu()->idle_wait) {
         softlockup_fn(w);
     }
-    if (period == 0 ||
-        (++w->ticks < period && (cycles == 0 || w->tick_tsc - w->timer_tsc < cycles))) {
+    if (period == 0) {
+        return;
+    }
+    if (tick ? (++w->ticks < period && (cycles == 0 || w->tick_tsc - w->timer_tsc < cycles))
+             : now - w->timer_ns < (int64_t)period * TICK_NS) {
         return;
     }
     w->ticks = 0;
     w->timer_tsc = w->tick_tsc;
+    w->timer_ns = now;
     watchdog_timer_fn(w, params);
+}
+
+/** Run the watchdog's sample from a scheduler tick, with interrupts off. */
+void watchdog_tick(isr_params_t *params)
+{
+    watchdog_run(params, 1);
+}
+
+/** Run a sample due by monotonic time from an idle timer event, with
+ * interrupts off before any wait for the big lock. */
+void watchdog_event(isr_params_t *params)
+{
+    watchdog_run(params, 0);
+}
+
+/** Return the next sample's delay in ticks, rounded up, or zero while the
+ * detectors are off. Interrupts are off on the processor queried. */
+uint32_t watchdog_idle_ticks(void)
+{
+    struct wd_cpu *w = &wd[arch_cpu_id()];
+    int64_t left;
+
+    if (!wd_ready) {
+        return 0;
+    }
+    if (!w->primed || w->gen != wd_gen) {
+        return 1;
+    }
+    if (!watchdog_enabled()) {
+        return 0;
+    }
+    left = w->timer_ns + (int64_t)sample_ticks() * TICK_NS - rtc_monotonic_ns();
+    return left <= 0 ? 1 : (uint32_t)(tick_div64((uint64_t)left - 1, TICK_NS, NULL) + 1);
 }
 
 /**
@@ -1340,6 +1365,11 @@ void watchdog_init(void)
      * before it starts the timer (kernel/watchdog.c). */
     k_barrier();
     wd_ready = 1;
+    for (c = 0; c < NR_CPUS; c++) {
+        if (cpu_table[c].online) {
+            smp_kick(c);
+        }
+    }
     if (watchdog_hardlockup_user_enabled && watchdog_user_enabled) {
         if (wd_perf) {
             klog(KLOG_INFO, "nmi_watchdog", "enabled: permanently consumes one hw-PMU counter");
