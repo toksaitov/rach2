@@ -61,12 +61,14 @@ fetch_one()
     mkdir -p "$DL"
     if [ ! -f "$file" ]; then
         echo "fetch: $1 $2: downloading ${url##*/}" >&2
-        download "$url" "$file.part" || {
-            rm -f "$file.part"
+        # Two builds in one clone may fetch the same tarball at once.
+        part="$file.part.$$"
+        download "$url" "$part" || {
+            rm -f "$part"
             echo "fetch: $1: download failed: $url" >&2
             return 1
         }
-        mv "$file.part" "$file"
+        mv "$part" "$file"
     fi
     got="$(sha256_of "$file")"
     if [ "$got" != "$want" ]; then
