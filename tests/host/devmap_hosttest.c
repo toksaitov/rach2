@@ -294,6 +294,13 @@ uintptr_t arch_fault_address(void)
     return fault_cr2;
 }
 
+/** 0: no fault here is a kernel copy's, so none has a fixup. */
+int arch_user_copy_fixup(isr_params_t *p)
+{
+    (void)p;
+    return 0;
+}
+
 /** 0. */
 uint32_t kirq_save(void)
 {
