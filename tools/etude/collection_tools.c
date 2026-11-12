@@ -1152,6 +1152,7 @@ static int col_style(struct col_job *job, const char *arch, const char *id)
         if (source && dest && !lstat(source, &st)) {
             if (col_copy(source, dest, 0))
                 job->uncertain = 1;
+            tooling_scratch("kept", dest);
             fprintf(stderr, "etude prepare tools: evidence: %s\n", dest);
         }
         free(source);
@@ -1806,6 +1807,7 @@ int etude_collection_tools_main(int argc, char **argv)
                             : "the path is too long");
         goto done;
     }
+    tooling_scratch("made", job.work);
 #ifdef _WIN32
     setenv("MSYS2_ARG_CONV_EXCL", "*", 1);
     setenv("MSYS_NO_PATHCONV", "1", 1);
@@ -1814,9 +1816,12 @@ int etude_collection_tools_main(int argc, char **argv)
     rc = col_dispatch(&job, argc, argv);
     if (rc < 0)
         rc = 2;
-    if (job.uncertain)
+    if (job.uncertain) {
+        tooling_scratch("kept", job.work);
         fprintf(stderr, "etude prepare tools: cleanup unconfirmed; evidence: %s\n", job.work);
-    else if (col_remove(job.work)) {
+    } else if (!col_remove(job.work)) {
+        tooling_scratch("removed", job.work);
+    } else {
         int error = errno;
         if (rc != 2)
             col_step("cleanup");
