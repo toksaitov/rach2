@@ -61,6 +61,10 @@ struct loop_device {
     int index;
     uint32_t claim; /* counts the slot's claims, so a detach that slept knows its attachment */
     struct vfs_mount *mnt;
+    /* The mount whose file system the file is on (`vfs_mount_base` of
+     * `mnt`), which `loop_backs` compares and never dereferences. Written
+     * with `node` under `loop_lock`; `mnt`'s description keeps it. */
+    const struct vfs_mount *base;
     void *node;
     void *handle;
     int writable;
@@ -82,10 +86,10 @@ static struct loop_device loops[LOOP_DEVICES];
 /* The devices' state a transfer reads or changes, which the big lock does
  * not cover since the block layer calls a transfer without it: `attached`,
  * `in_flight`, `release_due`, `writes`, `syncs` and the device's
- * `unflushed`, and the attachment a transfer reads while `attached`: the
- * device's `sector_count` and the file (`mnt`,
- * `node`, `handle`, `ino`, `writable`), whose writers hold the big lock as
- * well, so a reader holding that sees them without this. Taken with
+ * `unflushed`, `base` and `node` for `loop_backs`, and the attachment a
+ * transfer reads while `attached`: the device's `sector_count` and the file
+ * (`mnt`, `node`, `handle`, `ino`, `writable`), whose writers hold the big
+ * lock as well, so a reader holding that sees them without this. Taken with
  * interrupts off, since a medium's going is reported from the USB pump; it
  * is a leaf. */
 static struct spinlock loop_lock = SPINLOCK_INIT_NAMED("loop_lock");
@@ -405,26 +409,22 @@ void loop_repoint(struct vfs_mount *mnt, const void *from, void *to)
  * The mounts are compared by the file system they show (`vfs_mount_base`):
  * a bind keeps the nodes of the mount it was made from under a record of its
  * own, so a file attached through one mount and reached through another is
- * the same file. The slot's mount is read once, since a detach clears it
- * without the lock a caller of this may hold; a mount's record is never
- * freed.
+ * the same file. The slot's side is the base the attach cached, read with
+ * the node under `loop_lock`, since a detach clears them without the lock a
+ * caller of this may hold, and the slot's own mount, a bind that the detach
+ * may let the reaper free, is never read.
  */
 int loop_backs(struct vfs_mount *mnt, void *node)
 {
     const struct vfs_mount *base = vfs_mount_base(mnt);
-    struct vfs_mount *m;
-    int i;
+    uint32_t flags = spin_lock_irqsave(&loop_lock);
+    int i, backs = 0;
 
-    for (i = 0; i < LOOP_DEVICES; i++) {
-        m = *(struct vfs_mount *const volatile *)&loops[i].mnt;
-        if (!m || vfs_mount_base(m) != base) {
-            continue;
-        }
-        if (loops[i].node == node) {
-            return 1;
-        }
+    for (i = 0; i < LOOP_DEVICES && !backs; i++) {
+        backs = loops[i].base == base && loops[i].node == node;
     }
-    return 0;
+    spin_unlock_irqrestore(&loop_lock, flags);
+    return backs;
 }
 
 /**
@@ -445,12 +445,13 @@ static void loop_release(struct loop_device *loop)
 
     loop->attached = 0;
     loop->release_due = 0;
+    loop->base = 0;
+    loop->node = 0;
     spin_unlock_irqrestore(&loop_lock, flags);
     loop->attaching = 0;
     loop->used = 0;
     loop->autoclear = 0;
     loop->mnt = 0;
-    loop->node = 0;
     loop->handle = 0;
     loop->path[0] = '\0';
     bcache_invalidate(&loop->dev);
@@ -663,11 +664,13 @@ static int loop_prepare(struct vfs_ref *ref, void *handle, struct vfs_stat *st)
 }
 
 /**
- * Fill in `loop`'s device over a file of `size` bytes on the device
- * `backing`, and publish it under `loop_lock`, after every field a transfer
- * reads is set.
+ * Fill in `loop`'s device over the file `node` of `loop->mnt`, `size` bytes
+ * on the device `backing`, and publish it under `loop_lock`, after every
+ * field a transfer reads is set. The file's identity for `loop_backs` is
+ * published with it.
  */
-static void loop_publish(struct loop_device *loop, block_device_t *backing, uint64_t size)
+static void loop_publish(struct loop_device *loop, void *node, block_device_t *backing,
+                         uint64_t size)
 {
     uint32_t flags;
 
@@ -684,6 +687,8 @@ static void loop_publish(struct loop_device *loop, block_device_t *backing, uint
     loop->dev.backing = backing;
     loop->dev.drvdata = loop;
     flags = spin_lock_irqsave(&loop_lock);
+    loop->base = vfs_mount_base(loop->mnt);
+    loop->node = node;
     loop->attached = 1;
     spin_unlock_irqrestore(&loop_lock, flags);
 }
@@ -738,7 +743,6 @@ int loop_attach(int index, const char *path, int writable)
     loop->release_due = 0;
     loop->autoclear = 0;
     loop->mnt = 0;
-    loop->node = 0;
     loop->handle = 0;
     loop->dev.backing = 0;
 
@@ -800,14 +804,13 @@ int loop_attach(int index, const char *path, int writable)
     vfs_leave(ref.mnt);
     loop->index = index;
     loop->mnt = ref.mnt;
-    loop->node = ref.node;
     loop->handle = handle;
     loop->writable = writable ? 1 : 0;
     loop->ino = (uint32_t)st.ino;
     k_strncpy(loop->path, path, sizeof(loop->path));
     loop->path[sizeof(loop->path) - 1] = '\0';
     loop->attaching = 0;
-    loop_publish(loop, ref.mnt->dev, st.size);
+    loop_publish(loop, ref.node, ref.mnt->dev, st.size);
 
     vfs_node_unlock(&ref);
 
