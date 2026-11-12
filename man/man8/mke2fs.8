@@ -76,7 +76,7 @@ and
 .Ql resize_inode .
 Upstream's defaults add
 .Ql dir_index ,
-which the kernel mounts read-only, and
+whose index the kernel drops from a directory at its first change, and
 .Ql ext_attr .
 The types
 .Ql small
@@ -85,11 +85,19 @@ and
 which upstream gives 1 KiB blocks, keep 4 KiB blocks here for the same
 reason.
 .Pp
-The kernel mounts read-only a volume with a block size below 4096,
-.Ql dir_index
-or a read-only-compatible feature it does not know, and refuses one with
-an incompatible feature other than
+The kernel mounts read-only a volume with a block size below 4096 or a
+read-only-compatible feature it does not know, and refuses one with an
+incompatible feature other than
 .Ql filetype .
+It ignores compatible features, as Linux's ext2 does, so it mounts a
+volume with
+.Ql dir_index
+writable and clears a directory's
+.Dv EXT2_INDEX_FL
+before the first change of its entries, leaving
+.Xr e2fsck 8
+.Fl D
+to build the index again.
 So
 .Fl t Cm ext4
 makes a volume this kernel does not mount, and
