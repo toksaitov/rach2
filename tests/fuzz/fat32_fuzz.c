@@ -11,6 +11,7 @@
  * fuzz-deps: tests/host/compat/pressure_host.c tests/host/mkfatfixture.c
  * fuzz-deps: tests/host/compat/bkl_held.c tests/host/compat/spinlock_host.c
  * fuzz-deps: tests/host/compat/kirq_none.c
+ * fuzz-deps: tests/host/compat/mutex_none.c tests/host/compat/kirq_on.c
  */
 #include "../../rach2/sys/fs/fat32.h"
 #include "fs_common.h"
