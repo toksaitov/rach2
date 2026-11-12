@@ -89,19 +89,20 @@ static int parse(struct kvm_case *s, const char *id)
 }
 
 /**
- * Give the list the selftests' cases run: selftests.list, or the list of
- * tests/kvm that RACH2_KVM_SELFTESTS names, such as selftests-gap.list
- * (tests/kvm/Readme.md). Give NULL for a name that is not a file name of
- * letters, digits, dots, dashes and underscores ending in `.list`, which
- * the case's shell command could not hold as one word.
+ * Give the list a case runs: `fallback`, or the list of tests/kvm that the
+ * variable `var` names, RACH2_KVM_SELFTESTS for the selftests' cases, such
+ * as selftests-gap.list, and RACH2_KVM_UNIT for kvm-unit-tests', such as
+ * requests-unit.list (tests/kvm/Readme.md). Give NULL for a name that is
+ * not a file name of letters, digits, dots, dashes and underscores ending
+ * in `.list`, which the case's shell command could not hold as one word.
  */
-static const char *selftests_list(void)
+static const char *named_list(const char *var, const char *fallback)
 {
-    const char *name = getenv("RACH2_KVM_SELFTESTS");
+    const char *name = getenv(var);
     size_t n;
 
     if (name == NULL || name[0] == '\0')
-        return "selftests.list";
+        return fallback;
     n = strspn(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-");
     if (name[n] != '\0' || n <= 5 || name[0] == '.' || strcmp(name + n - 5, ".list") != 0)
         return NULL;
@@ -202,10 +203,12 @@ static void corpus_run(struct kvm_case *s, const char *command, struct net_run *
  */
 static void runner_command(struct kvm_case *s, char *command, size_t cap)
 {
-    const char *list = selftests_list();
+    const char *list = s->runner == UNIT ? named_list("RACH2_KVM_UNIT", s->list)
+                                         : named_list("RACH2_KVM_SELFTESTS", "selftests.list");
 
-    if (s->runner == SELFTESTS && list == NULL)
-        net_fail(&s->u, "RACH2_KVM_SELFTESTS names no list of tests/kvm");
+    if ((s->runner == SELFTESTS || s->runner == UNIT) && list == NULL)
+        net_fail(&s->u, "%s names no list of tests/kvm",
+                 s->runner == UNIT ? "RACH2_KVM_UNIT" : "RACH2_KVM_SELFTESTS");
     if (s->runner == LEAK)
         snprintf(command, cap,
                  "cd " KVM_DIR " && sh leak.sh"
@@ -228,9 +231,7 @@ static void runner_command(struct kvm_case *s, char *command, size_t cap)
     else
         snprintf(command, cap, "cd " KVM_DIR " && KVM_CORPUS_OUTER=%s sh corpus.sh %s %s",
                  etude_case_accel(s->u.c), s->runner == UNIT ? "unit" : "selftests",
-                 s->runner == UNIT ? s->list
-                 : list != NULL    ? list
-                                   : "none");
+                 list != NULL ? list : "none");
 }
 
 /**
