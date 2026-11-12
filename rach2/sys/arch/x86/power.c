@@ -467,11 +467,14 @@ static void reboot_linux(void)
     int attempt = 0, i, warm;
     uint32_t tried = 0;
     uint8_t code, cf9;
+    uint16_t flag;
 
     reboot_read(&o);
     warm = k_panicking() && o.panic_warm >= 0 ? o.panic_warm : o.warm;
-    *(volatile uint16_t *)phys_to_virt(BIOS_RESET_FLAG_PHYS) =
-        (uint16_t)(warm ? BIOS_RESET_WARM : 0u);
+    /* A copy: GCC takes a store to an address in the first page, which
+     * i686 maps one to one, for a store through a null pointer. */
+    flag = (uint16_t)(warm ? BIOS_RESET_WARM : 0u);
+    k_memcpy(phys_to_virt(BIOS_RESET_FLAG_PHYS), &flag, sizeof(flag));
     type = first = o.type;
     for (;;) {
         switch (type) {

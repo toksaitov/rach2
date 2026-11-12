@@ -455,10 +455,10 @@ int wlan_data_sleep_told(const struct wlan_data *d);
  * WLAN_DATA_COOKIE set, and pass it to rate selection. Worker only. */
 void wlan_data_tx_status(struct wlan_data *d, const struct wlan_tx_status *status);
 
-/** Queue one of a job's two work records for tick `due`, or immediately at
- * zero. Returns 0, or -EBUSY when both are queued or running already, so
- * that one of them runs after this call. */
-int wlan_data_kick(struct wlan_data_work work[2], uint64_t due);
+/** Queue one of a job's two work records, `work[0]` and `work[1]`, for tick
+ * `due`, or immediately at zero. Returns 0, or -EBUSY when both are queued
+ * or running already, so that one of them runs after this call. */
+int wlan_data_kick(struct wlan_data_work *work, uint64_t due);
 
 /** Copy an Ethernet frame into the transmit queue and queue its drain;
  * the adapter's tx_ethernet calls it with net_lock, so it never sleeps.

@@ -151,7 +151,7 @@ void wlan_data_init(struct wlan_data *d, struct wlan *wlan, struct wlan_radio *r
     }
 }
 
-int wlan_data_kick(struct wlan_data_work work[2], uint64_t due)
+int wlan_data_kick(struct wlan_data_work *work, uint64_t due)
 {
     if (wlan_queue_work(&work[0].work, due) == 0)
         return 0;

@@ -393,7 +393,7 @@ static int32_t create_vm(uintptr_t type)
     struct kvm_vm *vm;
     fd_entry_t *e;
     int32_t r;
-    int fd;
+    int fd = -1;
 
     if (type != 0) {
         return -EINVAL;
