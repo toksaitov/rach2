@@ -445,6 +445,15 @@ nocopy_rows()
     for b in 4096 65536 1048576 16777216 67108864; do
         figure "$out/nocopy" serial 8 "$b"
     done
+    # A mapping's every page comes at its first fault, so no touch of a
+    # buffer takes a fault for each page.
+    faults=$(sed -n 's/^NOCOPY SERIAL: .*; touch faults most \([0-9]*\)$/\1/p' "$out/measure.txt" |
+        sort -n | tail -n 1)
+    if [ -z "$faults" ] || [ "$faults" -gt 16 ]; then
+        echo "NOCOPY FAIL: a buffer's touch took ${faults:-an unread count of} faults, over 16" \
+            >> "$out/measure.txt"
+        ok=0
+    fi
     figure "$out/nocopy" held 32 65536
     figure "$out/nocopy" bandwidth 67108864
     for b in 4096 1048576 4194304; do
