@@ -3,6 +3,7 @@
  * inside their sleeps.
  *
  * host-deps: tests/host/compat/park_host.c
+ * host-deps: tests/host/compat/kirq_none.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/fs/sleeplock.c
@@ -1190,7 +1191,7 @@ static void end_row(const char *name)
             break;
         }
     }
-    if (socks || pipes || transits || reap_head || live != 0 || i < SOCKFILES || root_depth != 0) {
+    if (socks || pipes || flights || reap_head || live != 0 || i < SOCKFILES || root_depth != 0) {
         dprintf(2, "unix-hosttest: fail: the %s row leaves something allocated\n", name);
         failures++;
     }
@@ -1495,7 +1496,7 @@ static void bind_row(void)
     name_len = path_at(AT(1, 128), "/tmp/second");
     fs_sibling = bind_sibling;
     rc = unix_bind(fd_at(0), AT(1, 0), len);
-    check(ran == 1 && parked && parked_on == &s->lock_wq,
+    check(ran == 1 && parked && parked_on == &s->bindlock.wq,
           "a second bind of a socket waits for the bind lock while the first sleeps in the file "
           "system");
     check(rc == 0 && s->bound && s->bound_fs && s->fs_ref.node == &sockfiles[0] &&
@@ -1539,7 +1540,7 @@ static void receive_row(int type, const char *waits)
     copy_needs_park = 1;
     page_sibling = receive_sibling;
     rc = unix_recvfrom(fd_at(1), AT(0, 0), 3, 0, 0, 0);
-    check(ran == 1 && parked && parked_on == &sock_at(1)->lock_wq, waits);
+    check(ran == 1 && parked && parked_on == &sock_at(1)->iolock.wq, waits);
     check(rc == 3 && bytes_are(AT(0, 0), "one"),
           "the receive whose copy slept returns its message whole");
     if (parked) {
@@ -1791,10 +1792,93 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
     return m;
 }
 
+/** Take a spinlock; a recursive take cannot make progress in this model. */
+void spin_lock(struct spinlock *lock)
+{
+    if (lock->locked) {
+        k_panic("recursive spinlock");
+    }
+    lock->locked = 1;
+}
+
+/** Take the second state lock; the caller orders sockets by address. */
+void spin_lock_nested(struct spinlock *lock, unsigned int subclass)
+{
+    (void)subclass;
+    spin_lock(lock);
+}
+
+/** Give back a held spinlock. */
+void spin_unlock(struct spinlock *lock)
+{
+    if (!lock->locked) {
+        k_panic("free spinlock");
+    }
+    lock->locked = 0;
+}
+
+/** Initialize a mutex and the queue on which a parked sibling waits. */
+void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key *key)
+{
+    (void)name;
+    (void)key;
+    m->owner = NULL;
+    wait_queue_init(&m->wq);
+}
+
+/** Whether the model mutex is free. */
+static int model_mutex_free(void *arg)
+{
+    return ((const struct mutex *)arg)->owner == NULL;
+}
+
+/** Wait for a socket's receive mutex, preserving a parked sibling's stack. */
+void mutex_lock(struct mutex *m)
+{
+    while (m->owner) {
+        wq_wait_event_nointr(&m->wq, model_mutex_free, m);
+    }
+    m->owner = m;
+}
+
+/** Wait for a bind mutex, allowing the model's signal to end the wait. */
+int mutex_lock_interruptible(struct mutex *m)
+{
+    while (m->owner) {
+        if (wq_wait_event(&m->wq, model_mutex_free, m)) {
+            return -EINTR;
+        }
+    }
+    m->owner = m;
+    return 0;
+}
+
+/** Release a mutex and wake a sibling parked on it. */
+void mutex_unlock(struct mutex *m)
+{
+    if (!m->owner) {
+        k_panic("free mutex");
+    }
+    m->owner = NULL;
+    wq_wake_all(&m->wq);
+}
+
+/** No big lock is dropped in this one-processor model. */
+int bkl_drop(void)
+{
+    return 0;
+}
+
+/** Restore the model's unchanged big-lock depth. */
+void bkl_take(int depth)
+{
+    (void)depth;
+}
+
 /** Take `lock` with interrupts off: one thread, so nothing waits. */
 uint32_t spin_lock_irqsave(struct spinlock *lock)
 {
-    lock->locked = 1;
+    spin_lock(lock);
     return 0;
 }
 
@@ -1802,7 +1886,7 @@ uint32_t spin_lock_irqsave(struct spinlock *lock)
 void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
 {
     (void)flags;
-    lock->locked = 0;
+    spin_unlock(lock);
 }
 
 /** 1: the test runs as the kernel, under the big lock. */

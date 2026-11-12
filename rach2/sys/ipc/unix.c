@@ -9,6 +9,9 @@
 #include "../fs/krffs.h"
 #include "../fs/vfs.h"
 #include "../proc/process.h"
+#include "../proc/mutex.h"
+#include "../proc/smp.h"
+#include "../lib/kirq.h"
 #include "../proc/ns.h"
 #include "../proc/wait_queue.h"
 #include "../mm/kheap.h"
@@ -17,7 +20,6 @@
 #include "../lib/kerrno.h"
 #include "../lib/ksignal.h"
 #include "../lib/kstring.h"
-#include "../lib/spinlock.h"
 #include "../network/socket/socket.h"
 #include "../rtc.h"
 #include "../timer.h"
@@ -117,6 +119,14 @@ struct unix_name {
     char path[UNIX_PATH_MAX + 1];
 };
 
+/* Descriptors in flight, under flight_lock from acquisition to installation
+ * or close, including sends and receives whose user copies may sleep. */
+struct unix_flight {
+    struct unix_flight *next;
+    uint32_t nfds;
+    fd_entry_t *fds;
+};
+
 /* A message on a receive queue: `len` bytes at `data`, after the record,
  * and the sender's credentials and name. A stream reader has taken `off`
  * bytes of it so far; the others take it whole. `fds` are the `nfds`
@@ -131,18 +141,23 @@ struct unix_msg {
     int32_t tnsec;   /* and nanoseconds */
     struct unix_cred cred;
     struct unix_name from;
-    uint32_t nfds;
-    fd_entry_t *fds;
+    struct unix_flight flight;
     uint8_t *data;
 };
 
 /*
  * A socket. `refs` counts the descriptors' side, one reference however many
  * descriptors share it; each socket connected to this one; and the accept
- * queue it waits on before accept. The descriptors' side is let go at the
+ * queue it waits on before accept; and temporary lookups and peer reads.
+ * References change atomically; table_lock keeps the last removal from
+ * racing a name lookup. The descriptors' side is let go at the
  * last close, and the record is freed when the count reaches zero.
  */
 struct unix_sock {
+    struct spinlock state_lock; /* state, peer and options */
+    struct spinlock queue_lock; /* receive queue and its counts, rcvbuf */
+    struct mutex bindlock;      /* a bind across file-system sleeps */
+    struct mutex iolock;        /* one receive or queue purge across a copy */
     struct unix_sock *next;
     /* The network namespace it was made in, whose abstract names it alone
      * finds (proc/ns.h). */
@@ -184,19 +199,11 @@ struct unix_sock {
     uint64_t rcvtimeo; /* ticks, 0 for none, UNIX_TIMEO_NOW for no wait */
     uint64_t sndtimeo;
     wait_queue_t wq;
-    /* A bind in progress, which holds the socket across the file system's
-     * sleeps (`bind_lock`); a receive, which holds its queue from choosing a
-     * message to consuming it (`recv_lock`); and the queue the waiters for
-     * either sleep on. */
-    int binding;
-    int reading;
-    wait_queue_t lock_wq;
 };
 
 /* What a send has besides its bytes: descriptors and credentials. */
 struct unix_out {
-    uint32_t nfds;
-    fd_entry_t *fds;
+    struct unix_flight flight;
     int has_cred;
     struct unix_cred cred;
 };
@@ -209,10 +216,8 @@ struct unix_in {
     uint8_t tstamp; /* the timestamp asked for, as SOCK_RX_TS* bits, or 0 */
     int64_t tsec;   /* the message's time, when `tstamp` */
     int32_t tnsec;
-    uint32_t nfds;
-    fd_entry_t *fds;
-    uint32_t flags;          /* MSG_TRUNC, MSG_CTRUNC */
-    struct unix_in *transit; /* the next on the transit list */
+    struct unix_flight flight;
+    uint32_t flags; /* MSG_TRUNC, MSG_CTRUNC */
 };
 
 static int32_t unix_read(fd_entry_t *e, char __user *buf, uint32_t count);
@@ -222,27 +227,17 @@ static int32_t unix_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg);
 static void unix_close(fd_entry_t *e);
 
 static const struct file_ops unix_ops = {unix_read,  unix_write, unix_poll, unix_ioctl,
-                                         unix_close, NULL,       NULL,      FILE_OPS_POLL_UNLOCKED};
+                                         unix_close, NULL,       NULL,      FILE_OPS_UNLOCKED};
 
-/* Every socket not yet freed. */
+/* Order: bindlock or iolock, table_lock, state_lock (two by address),
+ * queue_lock, flight_lock, wait queues. No spinlock spans a user copy,
+ * backing-file operation, reference release or sleep. */
+static struct spinlock table_lock = SPINLOCK_INIT_NAMED("unix_table");
+static struct spinlock flight_lock = SPINLOCK_INIT_NAMED("unix_flight");
+static struct unix_flight *flights;
+
+/* Every socket not yet freed, and its names, under table_lock. */
 static struct unix_sock *socks;
-
-/* Over every socket's `peer`, which a poll reads without the big lock
- * (`writable`): a change of it, whose old peer may lose its last reference
- * after, is made under this lock, so the poll reads a peer that its
- * socket's reference keeps, as Linux's unix_dgram_poll reads the peer
- * under the socket's state lock (net/unix/af_unix.c, unix_peer_get). A
- * device spinlock: nothing is taken under it. */
-static struct spinlock unix_peer_lock = SPINLOCK_INIT_NAMED("unix_peer_lock");
-
-/** Make `p` the peer of `s` under `unix_peer_lock`. */
-static void set_peer(struct unix_sock *s, struct unix_sock *p)
-{
-    uint32_t flags = spin_lock_irqsave(&unix_peer_lock);
-
-    s->peer = p;
-    spin_unlock_irqrestore(&unix_peer_lock, flags);
-}
 
 /* The messages whose descriptors are being closed, first to last, and
  * whether a call is closing them now (`msg_free`). */
@@ -250,17 +245,95 @@ static struct unix_msg *reap_head;
 static struct unix_msg *reap_tail;
 static int reaping;
 
-/* The receives in progress, whose descriptors are off their queue and not
- * yet installed or closed (`transit_enter`). */
-static struct unix_in *transits;
-
 void unix_init(void)
 {
     socks = NULL;
     reap_head = NULL;
     reap_tail = NULL;
     reaping = 0;
-    transits = NULL;
+    flights = NULL;
+}
+
+/** Add a reference to a live socket, held by the caller or table_lock. */
+static void unix_get(struct unix_sock *s)
+{
+    unsigned int old;
+
+    do {
+        old = *(volatile unsigned int *)&s->refs;
+    } while (arch_atomic_cmpxchg(&s->refs, old, old + 1u) != old);
+}
+
+/** Lock two sockets in address order, once for a self connection, with
+ * interrupts off, as Linux's unix_state_double_lock (af_unix.c:1400-1412). */
+static uint32_t state_pair(struct unix_sock *a, struct unix_sock *b)
+{
+    uint32_t flags = kirq_save();
+
+    if (!b || a == b) {
+        spin_lock(&a->state_lock);
+    } else if ((uintptr_t)a < (uintptr_t)b) {
+        spin_lock(&a->state_lock);
+        spin_lock_nested(&b->state_lock, 1);
+    } else {
+        spin_lock(&b->state_lock);
+        spin_lock_nested(&a->state_lock, 1);
+    }
+    return flags;
+}
+
+/** Release the state locks taken by state_pair and restore interrupts. */
+static void state_unpair(struct unix_sock *a, struct unix_sock *b, uint32_t flags)
+{
+    if (b && a != b) {
+        if ((uintptr_t)a < (uintptr_t)b) {
+            spin_unlock(&b->state_lock);
+            spin_unlock(&a->state_lock);
+        } else {
+            spin_unlock(&a->state_lock);
+            spin_unlock(&b->state_lock);
+        }
+    } else {
+        spin_unlock(&a->state_lock);
+    }
+    kirq_restore(flags);
+}
+
+/** Hold the current peer, or return NULL; the caller drops the reference. */
+static struct unix_sock *peer_get(struct unix_sock *s)
+{
+    uint32_t flags = spin_lock_irqsave(&s->state_lock);
+    struct unix_sock *p = s->peer;
+
+    if (p) {
+        unix_get(p);
+    }
+    spin_unlock_irqrestore(&s->state_lock, flags);
+    return p;
+}
+
+/** Track descriptors while their owner's call, message or copy can sleep. */
+static void flight_enter(struct unix_flight *f)
+{
+    uint32_t flags = spin_lock_irqsave(&flight_lock);
+
+    f->next = flights;
+    flights = f;
+    spin_unlock_irqrestore(&flight_lock, flags);
+}
+
+/** Stop tracking an empty flight before its owner leaves or is freed. */
+static void flight_leave(struct unix_flight *f)
+{
+    struct unix_flight **link;
+    uint32_t flags = spin_lock_irqsave(&flight_lock);
+
+    for (link = &flights; *link && *link != f; link = &(*link)->next) {
+    }
+    if (*link) {
+        *link = f->next;
+    }
+    spin_unlock_irqrestore(&flight_lock, flags);
 }
 
 /** The caller's descriptor table. */
@@ -285,31 +358,40 @@ static int nonblocking(const fd_entry_t *e, int flags)
 int unix_inode_used(uint32_t ino)
 {
     const struct unix_sock *s;
+    int used = 0;
+    uint32_t flags = spin_lock_irqsave(&table_lock);
 
     for (s = socks; s; s = s->next) {
         if (s->inode == ino) {
-            return 1;
+            used = 1;
+            break;
         }
     }
-    return 0;
+    spin_unlock_irqrestore(&table_lock, flags);
+    return used;
 }
 
 int unix_count(void)
 {
-    const struct unix_sock *s;
+    struct unix_sock *s;
     int n = 0;
+    uint32_t flags = spin_lock_irqsave(&table_lock);
 
     for (s = socks; s; s = s->next) {
+        spin_lock(&s->state_lock);
         n += !s->closed;
+        spin_unlock(&s->state_lock);
     }
+    spin_unlock_irqrestore(&table_lock, flags);
     return n;
 }
 
 int unix_snapshot(struct unix_row **rows)
 {
-    const struct unix_sock *s;
+    struct unix_sock *s;
     struct unix_row *out;
     int n = 0, room = unix_count();
+    uint32_t flags;
 
     *rows = NULL;
     if (room == 0) {
@@ -319,8 +401,13 @@ int unix_snapshot(struct unix_row **rows)
     if (!out) {
         return -1;
     }
+    flags = spin_lock_irqsave(&table_lock);
     for (s = socks; s && n < room; s = s->next) {
+        struct unix_sock *peer;
+
+        spin_lock(&s->state_lock);
         if (s->closed || s->ns != proc_netns(current_proc)) {
+            spin_unlock(&s->state_lock);
             continue;
         }
         out[n].refs = s->refs;
@@ -329,16 +416,26 @@ int unix_snapshot(struct unix_row **rows)
         out[n].connected = s->state == US_CONNECTED;
         out[n].inode = s->inode;
         out[n].uid = s->uid;
-        out[n].peer = s->peer ? s->peer->inode : 0;
+        peer = s->peer;
+        out[n].peer = peer ? peer->inode : 0;
+        spin_lock(&s->queue_lock);
         out[n].rqueue = s->state == US_LISTENING ? s->acc_len : s->rq_bytes;
-        out[n].wqueue = s->state == US_LISTENING ? (uint32_t)s->backlog
-                        : s->peer                ? s->peer->rq_bytes
-                                                 : 0;
+        spin_unlock(&s->queue_lock);
+        out[n].wqueue = 0;
+        if (s->state == US_LISTENING) {
+            out[n].wqueue = (uint32_t)s->backlog;
+        } else if (peer) {
+            spin_lock(&peer->queue_lock);
+            out[n].wqueue = peer->rq_bytes;
+            spin_unlock(&peer->queue_lock);
+        }
         out[n].name_len = s->name.len;
         k_memcpy(out[n].path, s->name.path, s->name.len);
         out[n].path[s->name.len] = '\0';
+        spin_unlock(&s->state_lock);
         n++;
     }
+    spin_unlock_irqrestore(&table_lock, flags);
     *rows = out;
     return n;
 }
@@ -361,14 +458,24 @@ static struct unix_sock *unix_alloc(int type)
     s->type = type;
     s->ns = proc_netns(current_proc);
     s->state = US_UNCONNECTED;
+    bkl_enter();
     s->inode = socket_inode_next();
+    bkl_exit();
     s->uid = proc_fsuid(current_proc); /* as Linux owns a socket's inode */
     s->sndbuf = UNIX_BUF;
     s->rcvbuf = UNIX_BUF;
     wait_queue_init(&s->wq);
-    wait_queue_init(&s->lock_wq);
-    s->next = socks;
-    socks = s;
+    spin_lock_init(&s->state_lock, "unix_state");
+    spin_lock_init(&s->queue_lock, "unix_queue");
+    mutex_init(&s->bindlock, "unix_bind");
+    mutex_init(&s->iolock, "unix_io");
+    {
+        uint32_t flags = spin_lock_irqsave(&table_lock);
+
+        s->next = socks;
+        socks = s;
+        spin_unlock_irqrestore(&table_lock, flags);
+    }
     return s;
 }
 
@@ -385,9 +492,18 @@ static void own_cred(struct unix_cred *c, int effective)
  * and PID namespaces. */
 static struct unix_cred cred_seen(struct unix_cred c)
 {
+    int locked =
+        proc_pidns(current_proc) != &init_pidns || proc_userns(current_proc) != &init_userns;
+
+    if (locked) {
+        bkl_enter();
+    }
     c.pid = pid_seen(c.pid);
     c.uid = uid_seen(c.uid);
     c.gid = gid_seen(c.gid);
+    if (locked) {
+        bkl_exit();
+    }
     return c;
 }
 
@@ -397,7 +513,9 @@ static void flight_hold(fd_entry_t *e)
 {
     fd_ofd_ref(e->ofd);
     if (e->type == FD_TYPE_SOCKET && e->sock) {
+        bkl_enter();
         socket_ref(e->sock);
+        bkl_exit();
     }
 }
 
@@ -432,64 +550,38 @@ static void flight_sync(fd_entry_t *e)
  */
 static void flight_drop(fd_entry_t *slot, uint32_t *count)
 {
+    int big = file_ops_lock(slot);
     struct vfs_mount *locked = fd_release_lock(slot);
-    fd_entry_t e = *slot;
+    fd_entry_t e;
+    uint32_t flags = spin_lock_irqsave(&flight_lock);
 
+    e = *slot;
     if (count) {
         (*count)--;
     } else {
         slot->type = FD_TYPE_NONE;
     }
+    spin_unlock_irqrestore(&flight_lock, flags);
     flight_sync(&e);
     fd_release_backing(&e);
     if (locked) {
         vfs_ns_unlock(locked);
     }
+    file_ops_unlock(big);
 }
 
-/**
- * Close the descriptors in flight `fds[from..n)` and free the array. The ones
- * after the descriptor being closed stay where `unix_inflight_holds` finds
- * them while its close sleeps (`flight_drop`).
- */
-static void drop_fds(fd_entry_t *fds, uint32_t from, uint32_t n)
-{
-    uint32_t i;
-
-    for (i = from; i < n; i++) {
-        flight_drop(&fds[i], NULL);
-    }
-    kfree(fds);
-}
-
-/**
- * Put the receive `in` on the transit list, before it takes descriptors
- * off a queue, and take it off with `transit_leave` once they are
- * installed or closed.
- *
- * A descriptor in flight holds its KRFFS file as a descriptor in a table
- * does, and the holder count looks for it on the queues; taken off its
- * queue, it is on neither, while installing it or closing the rest can
- * sleep, and a close of the file's last descriptor elsewhere would free a
- * file it still holds. `unix_inflight_holds` looks here too.
- */
+/** Track a receive before it takes descriptors from a message, until its
+ * installation or close ends. The flight registry also tracks outgoing
+ * sends, queued messages and messages on the reap list. */
 static void transit_enter(struct unix_in *in)
 {
-    in->transit = transits;
-    transits = in;
+    flight_enter(&in->flight);
 }
 
-/** Take `in` off the transit list. */
+/** Stop tracking a receive whose descriptors are installed or closed. */
 static void transit_leave(struct unix_in *in)
 {
-    struct unix_in **link = &transits;
-
-    while (*link && *link != in) {
-        link = &(*link)->transit;
-    }
-    if (*link) {
-        *link = in->transit;
-    }
+    flight_leave(&in->flight);
 }
 
 /** A message of `len` bytes, its data after the record and nothing else
@@ -504,6 +596,7 @@ static struct unix_msg *msg_alloc(uint32_t len)
     k_memset(m, 0, sizeof(*m));
     m->len = len;
     m->data = (uint8_t *)(m + 1);
+    flight_enter(&m->flight);
     return m;
 }
 
@@ -523,11 +616,8 @@ static struct unix_msg *msg_alloc(uint32_t len)
  */
 static void msg_free(struct unix_msg *m)
 {
-    if (m->nfds == 0) {
-        kfree(m->fds);
-        kfree(m);
-        return;
-    }
+    uint32_t flags = spin_lock_irqsave(&flight_lock);
+
     m->next = NULL;
     if (reap_tail) {
         reap_tail->next = m;
@@ -536,23 +626,33 @@ static void msg_free(struct unix_msg *m)
     }
     reap_tail = m;
     if (reaping) {
+        spin_unlock_irqrestore(&flight_lock, flags);
         return;
     }
     reaping = 1;
-    while (reap_head) {
+    for (;;) {
         m = reap_head;
-        if (m->nfds > 0) {
-            flight_drop(&m->fds[m->nfds - 1], &m->nfds);
+        if (!m) {
+            reaping = 0;
+            spin_unlock_irqrestore(&flight_lock, flags);
+            return;
+        }
+        if (m->flight.nfds) {
+            spin_unlock_irqrestore(&flight_lock, flags);
+            flight_drop(&m->flight.fds[m->flight.nfds - 1], &m->flight.nfds);
+            flags = spin_lock_irqsave(&flight_lock);
             continue;
         }
         reap_head = m->next;
         if (!reap_head) {
             reap_tail = NULL;
         }
-        kfree(m->fds);
+        spin_unlock_irqrestore(&flight_lock, flags);
+        flight_leave(&m->flight);
+        kfree(m->flight.fds);
         kfree(m);
+        flags = spin_lock_irqsave(&flight_lock);
     }
-    reaping = 0;
 }
 
 /** Whether one of the `n` descriptors in flight at `fds` is the KRFFS file
@@ -571,34 +671,20 @@ static int fds_hold(const fd_entry_t *fds, uint32_t n, const void *node)
     return 0;
 }
 
-/** Whether a message of the chain from `m` has a descriptor of the KRFFS
- * file `node` (`fds_hold`). */
-static int chain_holds(const struct unix_msg *m, const void *node)
-{
-    for (; m; m = m->next) {
-        if (fds_hold(m->fds, m->nfds, node)) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 int unix_inflight_holds(const void *node)
 {
-    const struct unix_sock *s;
-    const struct unix_in *in;
+    const struct unix_flight *f;
+    int held = 0;
+    uint32_t flags = spin_lock_irqsave(&flight_lock);
 
-    for (s = socks; s; s = s->next) {
-        if (chain_holds(s->rq_head, node)) {
-            return 1;
+    for (f = flights; f; f = f->next) {
+        if (fds_hold(f->fds, f->nfds, node)) {
+            held = 1;
+            break;
         }
     }
-    for (in = transits; in; in = in->transit) {
-        if (fds_hold(in->fds, in->nfds, node)) {
-            return 1;
-        }
-    }
-    return chain_holds(reap_head, node);
+    spin_unlock_irqrestore(&flight_lock, flags);
+    return held;
 }
 
 /** Whether `s`'s receive queue is full: at `rcvbuf` bytes charged, or for
@@ -613,11 +699,11 @@ static int queue_full(const struct unix_sock *s)
 }
 
 /** Append `m`, with its descriptors attached, to `s`'s receive queue,
- * charging it its record, bytes and descriptor array, and wake its waiters
- * for data. */
+ * charging it its record, bytes and descriptor array. queue_lock is held;
+ * the caller wakes data waiters once it releases the socket locks. */
 static void enqueue(struct unix_sock *s, struct unix_msg *m)
 {
-    m->charge = (uint32_t)sizeof(*m) + m->len + m->nfds * (uint32_t)sizeof(fd_entry_t);
+    m->charge = (uint32_t)sizeof(*m) + m->len + m->flight.nfds * (uint32_t)sizeof(fd_entry_t);
     m->next = NULL;
     if (s->rq_tail) {
         s->rq_tail->next = m;
@@ -628,7 +714,6 @@ static void enqueue(struct unix_sock *s, struct unix_msg *m)
     s->rq_bytes += m->len;
     s->rq_charge += m->charge;
     s->rq_count++;
-    wq_wake(&s->wq, WQ_DATA);
 }
 
 /**
@@ -639,21 +724,26 @@ static void enqueue(struct unix_sock *s, struct unix_msg *m)
 static void wake_writers(struct unix_sock *s)
 {
     struct unix_sock *o;
+    uint32_t flags;
 
     wq_wake(&s->wq, 0);
+    flags = spin_lock_irqsave(&table_lock);
     for (o = socks; o; o = o->next) {
+        spin_lock(&o->state_lock);
         if (o->peer == s) {
             wq_wake(&o->wq, WQ_ROOM);
         }
+        spin_unlock(&o->state_lock);
     }
+    spin_unlock_irqrestore(&table_lock, flags);
 }
 
 /** Take the head message off `s`'s queue, with whatever of it was not
- * read, and wake the writers when that makes room; the caller frees it. */
+ * read; queue_lock is held. The caller frees it and wakes writers with
+ * no socket spinlock held. */
 static struct unix_msg *dequeue(struct unix_sock *s)
 {
     struct unix_msg *m = s->rq_head;
-    int was_full = queue_full(s);
 
     s->rq_head = m->next;
     if (!s->rq_head) {
@@ -662,37 +752,54 @@ static struct unix_msg *dequeue(struct unix_sock *s)
     s->rq_bytes -= m->len - m->off;
     s->rq_charge -= m->charge;
     s->rq_count--;
-    if (was_full && !queue_full(s)) {
-        wake_writers(s);
-    }
+    m->next = NULL;
     return m;
 }
 
-/** Drop every message of `s`'s queue, closing the descriptors sent with
- * them. */
+/** Detach every message under queue_lock, then close its descriptors with
+ * no socket lock held. The socket has ended, so no receive can be active. */
 static void purge(struct unix_sock *s)
 {
-    while (s->rq_head) {
-        msg_free(dequeue(s));
+    struct unix_msg *head, *m;
+    uint32_t flags = spin_lock_irqsave(&s->queue_lock);
+
+    head = s->rq_head;
+    s->rq_head = NULL;
+    s->rq_tail = NULL;
+    s->rq_bytes = 0;
+    s->rq_charge = 0;
+    s->rq_count = 0;
+    spin_unlock_irqrestore(&s->queue_lock, flags);
+    while (head) {
+        m = head;
+        head = m->next;
+        msg_free(m);
     }
+    wake_writers(s);
 }
 
 /** Drop a reference to `s`; the last drops its queue, takes it off the
- * list and frees it. */
+ * list and frees it. No socket spinlock is held. */
 static void unix_put(struct unix_sock *s)
 {
-    struct unix_sock **link = &socks;
+    struct unix_sock **link;
+    unsigned int old;
+    uint32_t flags = spin_lock_irqsave(&table_lock);
 
-    if (--s->refs != 0) {
+    do {
+        old = *(volatile unsigned int *)&s->refs;
+    } while (arch_atomic_cmpxchg(&s->refs, old, old - 1u) != old);
+    if (old != 1) {
+        spin_unlock_irqrestore(&table_lock, flags);
         return;
     }
-    purge(s);
-    while (*link && *link != s) {
-        link = &(*link)->next;
+    for (link = &socks; *link && *link != s; link = &(*link)->next) {
     }
     if (*link) {
         *link = s->next;
     }
+    spin_unlock_irqrestore(&table_lock, flags);
+    purge(s);
     kfree(s);
 }
 
@@ -700,11 +807,22 @@ static void unix_put(struct unix_sock *s)
  * of a path stays until it is removed, as in Linux. */
 static void unbind(struct unix_sock *s)
 {
-    if (s->bound_fs) {
-        fs_socket_unbind(&s->fs_ref);
-        s->bound_fs = 0;
-    }
+    struct vfs_ref ref;
+    int bound_fs;
+    uint32_t flags = spin_lock_irqsave(&table_lock);
+
+    spin_lock(&s->state_lock);
+    bound_fs = s->bound_fs;
+    ref = s->fs_ref;
+    s->bound_fs = 0;
     s->bound = 0;
+    spin_unlock(&s->state_lock);
+    spin_unlock_irqrestore(&table_lock, flags);
+    if (bound_fs) {
+        bkl_enter();
+        fs_socket_unbind(&ref);
+        bkl_exit();
+    }
 }
 
 static void unix_release(struct unix_sock *s, int embryo);
@@ -712,15 +830,20 @@ static void unix_release(struct unix_sock *s, int embryo);
 /** End a listener's queued connections, never accepted, as if closed. */
 static void drop_embryos(struct unix_sock *s)
 {
-    while (s->acc_head) {
-        struct unix_sock *c = s->acc_head;
+    struct unix_sock *c, *head;
+    uint32_t flags = spin_lock_irqsave(&s->state_lock);
 
-        s->acc_head = c->acc_next;
+    head = s->acc_head;
+    s->acc_head = NULL;
+    s->acc_tail = NULL;
+    s->acc_len = 0;
+    spin_unlock_irqrestore(&s->state_lock, flags);
+    while (head) {
+        c = head;
+        head = c->acc_next;
         c->acc_next = NULL;
-        s->acc_len--;
         unix_release(c, 1);
     }
-    s->acc_tail = NULL;
 }
 
 /**
@@ -735,27 +858,34 @@ static void drop_embryos(struct unix_sock *s)
  */
 static void unix_release(struct unix_sock *s, int embryo)
 {
-    struct unix_sock *peer = s->peer;
+    struct unix_sock *peer;
+    int reset;
+    uint32_t flags = spin_lock_irqsave(&s->state_lock);
 
     s->closed = 1;
     s->shut = SHUT_BOTH;
+    peer = s->peer;
+    s->peer = NULL;
+    spin_lock(&s->queue_lock);
+    reset = s->rq_head != NULL || embryo;
+    spin_unlock(&s->queue_lock);
+    spin_unlock_irqrestore(&s->state_lock, flags);
     unbind(s);
-    if (s->state == US_LISTENING) {
-        drop_embryos(s);
-    }
+    drop_embryos(s);
     if (peer) {
-        set_peer(s, NULL);
+        flags = spin_lock_irqsave(&peer->state_lock);
         if (s->type != SOCK_DGRAM && peer->peer == s) {
             peer->shut = SHUT_BOTH;
-            if (s->rq_head || embryo) {
+            if (reset) {
                 peer->err = ECONNRESET;
             }
         }
+        spin_unlock_irqrestore(&peer->state_lock, flags);
         wq_wake_all(&peer->wq);
         unix_put(peer);
     }
+    wq_wake_all(&s->wq);
     purge(s);
-    wake_writers(s);
     unix_put(s);
 }
 
@@ -887,10 +1017,10 @@ int32_t unix_socket(int type, int protocol, int flags)
  * reference to the other. */
 static void join(struct unix_sock *a, struct unix_sock *b)
 {
-    b->refs++;
-    set_peer(a, b);
-    a->refs++;
-    set_peer(b, a);
+    a->peer = b;
+    unix_get(b);
+    b->peer = a;
+    unix_get(a);
     a->state = US_CONNECTED;
     b->state = US_CONNECTED;
 }
@@ -918,11 +1048,16 @@ int32_t unix_socketpair(int type, int protocol, int flags, uintptr_t sv)
         }
         return -ENOMEM;
     }
-    join(a, b);
-    own_cred(&a->peercred, 1);
-    b->peercred = a->peercred;
-    a->has_peercred = 1;
-    b->has_peercred = 1;
+    {
+        uint32_t saved = state_pair(a, b);
+
+        join(a, b);
+        own_cred(&a->peercred, 1);
+        b->peercred = a->peercred;
+        a->has_peercred = 1;
+        b->has_peercred = 1;
+        state_unpair(a, b, saved);
+    }
     fds[0] = reserve();
     fds[1] = fds[0] >= 0 ? reserve() : fds[0];
     rc = fds[1] < 0 ? fds[1] : 0;
@@ -1045,32 +1180,70 @@ static int32_t put_name(uintptr_t addr, uintptr_t lenp, const struct unix_name *
  */
 static struct unix_sock *lookup(const struct unix_name *n, int type, int32_t *err)
 {
-    struct unix_sock *s;
+    struct unix_sock *s, *found = NULL;
     struct vfs_mount *mnt = NULL;
-    uint32_t ino = 0;
+    uint32_t ino = 0, flags;
 
     if (!abstract(n)) {
-        int32_t rc = fs_socket_lookup(n->path, &mnt, &ino);
+        int32_t rc;
 
+        bkl_enter();
+        rc = fs_socket_lookup(n->path, &mnt, &ino);
         if (rc != 0) {
             *err = rc;
+            bkl_exit();
             return NULL;
         }
     }
+    flags = spin_lock_irqsave(&table_lock);
     for (s = socks; s; s = s->next) {
-        if (!s->bound || s->closed) {
-            continue;
+        spin_lock(&s->state_lock);
+        if (s->bound && !s->closed &&
+            (abstract(n) ? (!s->bound_fs && s->type == type && same_name(&s->name, n) &&
+                            s->ns == proc_netns(current_proc))
+                         : (s->bound_fs && vfs_mount_base(s->fs_ref.mnt) == vfs_mount_base(mnt) &&
+                            s->fs_ino == ino))) {
+            unix_get(s);
+            found = s;
         }
-        if (abstract(n) ? (!s->bound_fs && s->type == type && same_name(&s->name, n) &&
-                           s->ns == proc_netns(current_proc))
-                        : (s->bound_fs && vfs_mount_base(s->fs_ref.mnt) == vfs_mount_base(mnt) &&
-                           s->fs_ino == ino)) {
-            s->refs++;
-            return s;
+        spin_unlock(&s->state_lock);
+        if (found) {
+            break;
         }
     }
-    *err = -ECONNREFUSED;
-    return NULL;
+    spin_unlock_irqrestore(&table_lock, flags);
+    if (!abstract(n)) {
+        bkl_exit();
+    }
+    if (!found) {
+        *err = -ECONNREFUSED;
+    }
+    return found;
+}
+
+/** Claim an abstract name under the name table lock and the socket's state
+ * lock; bindlock is held. Return -EADDRINUSE if another live socket owns it. */
+static int32_t bind_abstract(struct unix_sock *s, const struct unix_name *n)
+{
+    struct unix_sock *o;
+    int32_t rc = 0;
+    uint32_t flags = spin_lock_irqsave(&table_lock);
+
+    for (o = socks; o; o = o->next) {
+        if (o->bound && !o->bound_fs && o->type == s->type && o->ns == s->ns &&
+            same_name(&o->name, n)) {
+            rc = -EADDRINUSE;
+            break;
+        }
+    }
+    if (rc == 0) {
+        spin_lock(&s->state_lock);
+        s->name = *n;
+        s->bound = 1;
+        spin_unlock(&s->state_lock);
+    }
+    spin_unlock_irqrestore(&table_lock, flags);
+    return rc;
 }
 
 /** Bind an unnamed socket, whose bind lock the caller holds, to a free
@@ -1081,33 +1254,22 @@ static int32_t autobind(struct unix_sock *s)
     static uint32_t order;
     static const char hex[] = "0123456789abcdef";
     struct unix_name n;
-    uint32_t tries, i, v;
-    int32_t err;
+    uint32_t tries, i, v, flags;
 
     for (tries = 0; tries < 0x100000u; tries++) {
-        struct unix_sock *other;
-
+        flags = spin_lock_irqsave(&table_lock);
         v = order++ & 0xFFFFFu;
+        spin_unlock_irqrestore(&table_lock, flags);
         k_memset(&n, 0, sizeof(n));
         n.len = 6;
         for (i = 0; i < 5; i++) {
             n.path[5 - i] = hex[(v >> (4 * i)) & 15u];
         }
-        other = lookup(&n, s->type, &err);
-        if (!other) {
-            s->name = n;
-            s->bound = 1;
+        if (bind_abstract(s, &n) == 0) {
             return 0;
         }
-        unix_put(other);
     }
     return -ENOSPC;
-}
-
-/** The wait condition of `bind_lock`. */
-static int bind_idle(void *arg)
-{
-    return !((const struct unix_sock *)arg)->binding;
 }
 
 /**
@@ -1120,26 +1282,13 @@ static int bind_idle(void *arg)
  */
 static int32_t bind_lock(struct unix_sock *s)
 {
-    while (s->binding) {
-        if (wq_wait_event(&s->lock_wq, bind_idle, s) < 0) {
-            return -EINTR;
-        }
-    }
-    s->binding = 1;
-    return 0;
+    return mutex_lock_interruptible(&s->bindlock);
 }
 
 /** Let go of `s`'s bind lock and wake its waiters. */
 static void bind_unlock(struct unix_sock *s)
 {
-    s->binding = 0;
-    wq_wake_all(&s->lock_wq);
-}
-
-/** The wait condition of `recv_lock`. */
-static int recv_idle(void *arg)
-{
-    return !((const struct unix_sock *)arg)->reading;
+    mutex_unlock(&s->bindlock);
 }
 
 /**
@@ -1154,17 +1303,13 @@ static int recv_idle(void *arg)
  */
 static void recv_lock(struct unix_sock *s)
 {
-    while (s->reading) {
-        wq_wait_event_nointr(&s->lock_wq, recv_idle, s);
-    }
-    s->reading = 1;
+    mutex_lock(&s->iolock);
 }
 
 /** Let go of `s`'s receive lock and wake its waiters. */
 static void recv_unlock(struct unix_sock *s)
 {
-    s->reading = 0;
-    wq_wake_all(&s->lock_wq);
+    mutex_unlock(&s->iolock);
 }
 
 /** Give a socket with SO_PASSCRED and no name the automatic one, before a
@@ -1172,9 +1317,12 @@ static void recv_unlock(struct unix_sock *s)
  * `autobind`. */
 static int32_t passcred_name(struct unix_sock *s)
 {
+    uint32_t flags = spin_lock_irqsave(&s->state_lock);
+    int needed = s->passcred && !s->bound;
     int32_t rc;
 
-    if (!s->passcred || s->bound) {
+    spin_unlock_irqrestore(&s->state_lock, flags);
+    if (!needed) {
         return 0;
     }
     rc = bind_lock(s);
@@ -1190,7 +1338,7 @@ static int32_t passcred_name(struct unix_sock *s)
 static int32_t bind_name(struct unix_sock *s, const struct unix_name *n)
 {
     struct vfs_ref ref;
-    uint32_t ino;
+    uint32_t ino, flags;
     int32_t rc;
 
     if (s->bound || s->closed) {
@@ -1200,23 +1348,23 @@ static int32_t bind_name(struct unix_sock *s, const struct unix_name *n)
         return autobind(s);
     }
     if (abstract(n)) {
-        struct unix_sock *other = lookup(n, s->type, &rc);
-
-        if (other) {
-            unix_put(other);
-            return -EADDRINUSE;
-        }
-    } else {
-        rc = fs_socket_bind(n->path, 0777u & ~current_proc->fs->umask, &ref, &ino);
-        if (rc != 0) {
-            return rc;
-        }
-        s->fs_ref = ref;
-        s->fs_ino = ino;
-        s->bound_fs = 1;
+        return bind_abstract(s, n);
     }
+    bkl_enter();
+    rc = fs_socket_bind(n->path, 0777u & ~current_proc->fs->umask, &ref, &ino);
+    bkl_exit();
+    if (rc != 0) {
+        return rc;
+    }
+    flags = spin_lock_irqsave(&table_lock);
+    spin_lock(&s->state_lock);
+    s->fs_ref = ref;
+    s->fs_ino = ino;
+    s->bound_fs = 1;
     s->name = *n;
     s->bound = 1;
+    spin_unlock(&s->state_lock);
+    spin_unlock_irqrestore(&table_lock, flags);
     return 0;
 }
 
@@ -1247,32 +1395,40 @@ int32_t unix_bind(fd_entry_t *e, uintptr_t addr, uint32_t addrlen)
 int32_t unix_listen(fd_entry_t *e, int backlog)
 {
     struct unix_sock *s = sock_of(e);
+    uint32_t flags;
+    int32_t rc = 0;
 
     if (s->type == SOCK_DGRAM) {
         return -EOPNOTSUPP;
     }
+    flags = spin_lock_irqsave(&s->state_lock);
     if (s->state == US_CONNECTED || !s->bound) {
-        return -EINVAL;
+        rc = -EINVAL;
+    } else {
+        if (backlog < 0 || backlog > UNIX_SOMAXCONN) {
+            backlog = UNIX_SOMAXCONN;
+        }
+        s->backlog = backlog;
+        s->state = US_LISTENING;
+        own_cred(&s->peercred, 1);
+        s->has_peercred = 1;
     }
-    if (backlog < 0 || backlog > UNIX_SOMAXCONN) {
-        backlog = UNIX_SOMAXCONN;
-    }
-    s->backlog = backlog;
-    s->state = US_LISTENING;
-    own_cred(&s->peercred, 1);
-    s->has_peercred = 1;
+    spin_unlock_irqrestore(&s->state_lock, flags);
     wq_wake_all(&s->wq);
-    return 0;
+    return rc;
 }
 
 /** Whether a connect waiting for room on the listener `l` can stop: there
  * is room, or `l` takes connections no more. */
 static int listener_has_room(void *arg)
 {
-    const struct unix_sock *l = (const struct unix_sock *)arg;
+    struct unix_sock *l = (struct unix_sock *)arg;
+    uint32_t flags = spin_lock_irqsave(&l->state_lock);
+    int ready = l->closed || l->state != US_LISTENING || (l->shut & SHUT_RCV) ||
+                (int)l->acc_len <= l->backlog;
 
-    return l->closed || l->state != US_LISTENING || (l->shut & SHUT_RCV) ||
-           (int)l->acc_len <= l->backlog;
+    spin_unlock_irqrestore(&l->state_lock, flags);
+    return ready;
 }
 
 /**
@@ -1287,22 +1443,39 @@ static int listener_has_room(void *arg)
  */
 static void dgram_repeer(struct unix_sock *s, struct unix_sock *target)
 {
-    struct unix_sock *old = s->peer;
+    struct unix_sock *old;
+    struct unix_msg *head = NULL, *m;
+    uint32_t flags;
 
-    set_peer(s, target);
-    if (!old) {
-        return;
+    recv_lock(s);
+    flags = state_pair(s, target);
+    old = s->peer;
+    s->peer = target;
+    if (old && old != target) {
+        spin_lock(&s->queue_lock);
+        head = s->rq_head;
+        s->rq_head = NULL;
+        s->rq_tail = NULL;
+        s->rq_bytes = s->rq_charge = s->rq_count = 0;
+        spin_unlock(&s->queue_lock);
     }
-    if (old != target && s->rq_head) {
-        recv_lock(s);
-        purge(s);
-        recv_unlock(s);
-        if (!old->closed && old->peer == s) {
+    state_unpair(s, target, flags);
+    recv_unlock(s);
+    if (old) {
+        flags = spin_lock_irqsave(&old->state_lock);
+        if (head && !old->closed && old->peer == s) {
             old->err = ECONNRESET;
-            wq_wake_all(&old->wq);
         }
+        spin_unlock_irqrestore(&old->state_lock, flags);
+        wq_wake_all(&old->wq);
+        unix_put(old);
     }
-    unix_put(old);
+    while (head) {
+        m = head;
+        head = m->next;
+        msg_free(m);
+    }
+    wake_writers(s);
 }
 
 /**
@@ -1314,8 +1487,10 @@ static void dgram_repeer(struct unix_sock *s, struct unix_sock *target)
 static int32_t connect_dgram(struct unix_sock *s, uintptr_t addr, uint32_t addrlen)
 {
     struct unix_name n;
-    struct unix_sock *target;
+    struct unix_sock *target, *old;
+    struct unix_msg *head = NULL, *m;
     uint8_t family[2];
+    uint32_t flags;
     int32_t rc;
 
     if (addrlen >= SUN_PATH_OFF &&
@@ -1339,16 +1514,51 @@ static int32_t connect_dgram(struct unix_sock *s, uintptr_t addr, uint32_t addrl
     if (!target) {
         return rc;
     }
+    recv_lock(s);
+    flags = state_pair(s, target);
     if (target->type != SOCK_DGRAM) {
-        unix_put(target);
-        return -EPROTOTYPE;
+        rc = -EPROTOTYPE;
+    } else if (target->closed) {
+        rc = -ECONNREFUSED;
+    } else if (target->peer && target->peer != s) {
+        rc = -EPERM;
+    } else {
+        rc = 0;
     }
-    if (target->peer && target->peer != s) {
-        unix_put(target);
-        return -EPERM;
+    old = NULL;
+    if (rc == 0) {
+        old = s->peer;
+        s->peer = target;
+        if (old && old != target) {
+            spin_lock(&s->queue_lock);
+            head = s->rq_head;
+            s->rq_head = NULL;
+            s->rq_tail = NULL;
+            s->rq_bytes = s->rq_charge = s->rq_count = 0;
+            spin_unlock(&s->queue_lock);
+        }
     }
-    dgram_repeer(s, target);
-    return 0;
+    state_unpair(s, target, flags);
+    recv_unlock(s);
+    if (rc != 0) {
+        unix_put(target);
+    }
+    if (old) {
+        flags = spin_lock_irqsave(&old->state_lock);
+        if (head && !old->closed && old->peer == s) {
+            old->err = ECONNRESET;
+        }
+        spin_unlock_irqrestore(&old->state_lock, flags);
+        wq_wake_all(&old->wq);
+        unix_put(old);
+    }
+    while (head) {
+        m = head;
+        head = m->next;
+        msg_free(m);
+    }
+    wake_writers(s);
+    return rc;
 }
 
 /**
@@ -1382,16 +1592,12 @@ int32_t unix_connect(fd_entry_t *e, uintptr_t addr, uint32_t addrlen)
     struct unix_sock *s = sock_of(e);
     struct unix_sock *target, *c;
     struct unix_name n;
+    uint32_t flags;
+    uint64_t timeo;
     int32_t rc;
 
     if (s->type == SOCK_DGRAM) {
         return connect_dgram(s, addr, addrlen);
-    }
-    if (s->state == US_CONNECTED) {
-        return -EISCONN;
-    }
-    if (s->state == US_LISTENING) {
-        return -EINVAL;
     }
     rc = get_name(addr, addrlen, &n);
     if (rc != 0) {
@@ -1404,58 +1610,67 @@ int32_t unix_connect(fd_entry_t *e, uintptr_t addr, uint32_t addrlen)
     if (rc != 0) {
         return rc;
     }
+    c = unix_alloc(s->type);
+    if (!c) {
+        return -ENOMEM;
+    }
     for (;;) {
         target = lookup(&n, s->type, &rc);
         if (!target) {
-            return rc;
-        }
-        rc = connect_refusal(s, target);
-        if (rc == 0 && (int)target->acc_len <= target->backlog) {
             break;
         }
+        flags = state_pair(s, target);
+        rc = target->closed ? -ECONNREFUSED : connect_refusal(s, target);
+        if (rc == 0 && (int)target->acc_len <= target->backlog) {
+            spin_lock_nested(&c->state_lock, 2);
+            c->uid = target->uid;
+            c->name = target->name;
+            c->passcred = target->passcred;
+            own_cred(&c->peercred, 1);
+            c->has_peercred = 1;
+            join(s, c);
+            s->peercred = target->peercred;
+            s->has_peercred = 1;
+            spin_unlock(&c->state_lock);
+            if (target->acc_tail) {
+                target->acc_tail->acc_next = c;
+            } else {
+                target->acc_head = c;
+            }
+            target->acc_tail = c;
+            target->acc_len++;
+            state_unpair(s, target, flags);
+            wq_wake(&target->wq, WQ_DATA);
+            unix_put(target);
+            return 0;
+        }
+        timeo = s->sndtimeo;
+        state_unpair(s, target, flags);
         if (rc == 0 && nonblocking(e, 0)) {
             rc = -EAGAIN;
         }
         if (rc == 0) {
-            rc = unix_wait(&target->wq, listener_has_room, target, s->sndtimeo);
+            rc = unix_wait(&target->wq, listener_has_room, target, timeo);
         }
         unix_put(target);
         if (rc != 0) {
-            return rc;
+            break;
         }
     }
-    c = unix_alloc(s->type);
-    if (!c) {
-        unix_put(target);
-        return -ENOMEM;
-    }
-    c->uid = target->uid;
-    c->name = target->name;
-    c->passcred = target->passcred;
-    own_cred(&c->peercred, 1);
-    c->has_peercred = 1;
-    join(s, c);
-    s->peercred = target->peercred;
-    s->has_peercred = 1;
-    if (target->acc_tail) {
-        target->acc_tail->acc_next = c;
-    } else {
-        target->acc_head = c;
-    }
-    target->acc_tail = c;
-    target->acc_len++;
-    wq_wake(&target->wq, WQ_DATA);
-    unix_put(target);
-    return 0;
+    unix_put(c);
+    return rc;
 }
 
 /** Whether an accept waiting on the listener `l` can stop: a connection is
  * queued, or `l` takes connections no more. */
 static int has_connection(void *arg)
 {
-    const struct unix_sock *l = (const struct unix_sock *)arg;
+    struct unix_sock *l = (struct unix_sock *)arg;
+    uint32_t flags = spin_lock_irqsave(&l->state_lock);
+    int ready = l->acc_head != NULL || l->state != US_LISTENING || (l->shut & SHUT_RCV);
 
-    return l->acc_head != NULL || l->state != US_LISTENING || (l->shut & SHUT_RCV);
+    spin_unlock_irqrestore(&l->state_lock, flags);
+    return ready;
 }
 
 /**
@@ -1470,9 +1685,10 @@ static int has_connection(void *arg)
  */
 int32_t unix_accept(fd_entry_t *e, uintptr_t addr, uintptr_t addrlen_ptr, int flags)
 {
-    static const struct unix_name none;
-    struct unix_sock *s = sock_of(e);
-    struct unix_sock *c;
+    struct unix_sock *s = sock_of(e), *c;
+    struct unix_name n;
+    uint32_t saved;
+    uint64_t timeo;
     int32_t rc;
     int fd;
 
@@ -1482,32 +1698,49 @@ int32_t unix_accept(fd_entry_t *e, uintptr_t addr, uintptr_t addrlen_ptr, int fl
     if (flags & ~(SOCK_CLOEXEC | SOCK_NONBLOCK)) {
         return -EINVAL;
     }
-    while (!s->acc_head) {
-        if (s->state != US_LISTENING || (s->shut & SHUT_RCV)) {
-            return -EINVAL;
-        }
-        if (nonblocking(e, 0)) {
-            return -EAGAIN;
-        }
-        rc = unix_wait(&s->wq, has_connection, s, s->rcvtimeo);
-        if (rc != 0) {
-            return rc;
-        }
-    }
     fd = reserve();
     if (fd < 0) {
         return fd;
     }
-    c = s->acc_head;
-    s->acc_head = c->acc_next;
-    if (!s->acc_head) {
-        s->acc_tail = NULL;
+    for (;;) {
+        saved = spin_lock_irqsave(&s->state_lock);
+        c = s->acc_head;
+        if (c) {
+            s->acc_head = c->acc_next;
+            if (!s->acc_head) {
+                s->acc_tail = NULL;
+            }
+            c->acc_next = NULL;
+            s->acc_len--;
+            spin_unlock_irqrestore(&s->state_lock, saved);
+            break;
+        }
+        rc = s->state != US_LISTENING || (s->shut & SHUT_RCV) ? -EINVAL : 0;
+        timeo = s->rcvtimeo;
+        spin_unlock_irqrestore(&s->state_lock, saved);
+        if (rc == 0 && nonblocking(e, 0)) {
+            rc = -EAGAIN;
+        }
+        if (rc == 0) {
+            rc = unix_wait(&s->wq, has_connection, s, timeo);
+        }
+        if (rc != 0) {
+            fd_free(table(), fd);
+            return rc;
+        }
     }
-    c->acc_next = NULL;
-    s->acc_len--;
     wq_wake(&s->wq, 0);
     if (addr) {
-        rc = put_name(addr, addrlen_ptr, c->peer ? &c->peer->name : &none, 0);
+        struct unix_sock *peer = peer_get(c);
+
+        k_memset(&n, 0, sizeof(n));
+        if (peer) {
+            saved = spin_lock_irqsave(&peer->state_lock);
+            n = peer->name;
+            spin_unlock_irqrestore(&peer->state_lock, saved);
+            unix_put(peer);
+        }
+        rc = put_name(addr, addrlen_ptr, &n, 0);
         if (rc != 0) {
             fd_free(table(), fd);
             unix_release(c, 0);
@@ -1520,15 +1753,20 @@ int32_t unix_accept(fd_entry_t *e, uintptr_t addr, uintptr_t addrlen_ptr, int fl
 
 int32_t unix_getname(fd_entry_t *e, uintptr_t addr, uintptr_t addrlen_ptr, int peer)
 {
-    struct unix_sock *s = sock_of(e);
+    struct unix_sock *s = sock_of(e), *p = peer ? peer_get(s) : NULL;
+    struct unix_name n;
+    uint32_t flags;
 
-    if (!peer) {
-        return put_name(addr, addrlen_ptr, &s->name, 0);
-    }
-    if (!s->peer || (s->type != SOCK_DGRAM && s->state != US_CONNECTED)) {
+    if (peer && !p) {
         return -ENOTCONN;
     }
-    return put_name(addr, addrlen_ptr, &s->peer->name, 0);
+    flags = state_pair(s, p);
+    n = peer ? p->name : s->name;
+    state_unpair(s, p, flags);
+    if (p) {
+        unix_put(p);
+    }
+    return put_name(addr, addrlen_ptr, &n, 0);
 }
 
 /**
@@ -1539,17 +1777,27 @@ int32_t unix_getname(fd_entry_t *e, uintptr_t addr, uintptr_t addrlen_ptr, int p
  */
 int32_t unix_shutdown(fd_entry_t *e, int how)
 {
-    struct unix_sock *s = sock_of(e);
+    struct unix_sock *s = sock_of(e), *p;
+    uint32_t flags;
     int mode;
 
     if (how < 0 || how > 2) {
         return -EINVAL;
     }
     mode = how + 1;
+    flags = spin_lock_irqsave(&s->state_lock);
     s->shut |= mode;
-    if (s->peer && s->type != SOCK_DGRAM) {
-        s->peer->shut |= ((mode & SHUT_RCV) << 1) | ((mode & SHUT_SEND) >> 1);
-        wq_wake_all(&s->peer->wq);
+    p = s->type != SOCK_DGRAM ? s->peer : NULL;
+    if (p) {
+        unix_get(p);
+    }
+    spin_unlock_irqrestore(&s->state_lock, flags);
+    if (p) {
+        flags = spin_lock_irqsave(&p->state_lock);
+        p->shut |= ((mode & SHUT_RCV) << 1) | ((mode & SHUT_SEND) >> 1);
+        spin_unlock_irqrestore(&p->state_lock, flags);
+        wq_wake_all(&p->wq);
+        unix_put(p);
     }
     wq_wake_all(&s->wq);
     wake_writers(s);
@@ -1599,7 +1847,8 @@ static uint32_t buf_size(int32_t v)
 int32_t unix_setsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uint32_t len)
 {
     struct unix_sock *s = sock_of(e);
-    int32_t v = 0;
+    int32_t v = 0, rc = 0;
+    uint32_t saved;
 
     if (level != SOL_SOCKET) {
         return -ENOPROTOOPT;
@@ -1608,19 +1857,21 @@ int32_t unix_setsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uint3
         name == SO_SNDTIMEO_NEW) {
         int64_t tv[2];
         uint64_t ticks;
-        int32_t rc = sock_timeo_get(name, val, len, tv);
+        int32_t err = sock_timeo_get(name, val, len, tv);
 
-        if (rc != 0) {
-            return rc;
+        if (err != 0) {
+            return err;
         }
         if (timeval_ticks(tv, &ticks) != 0) {
             return -EDOM;
         }
+        saved = spin_lock_irqsave(&s->state_lock);
         if (name == SO_RCVTIMEO_OLD || name == SO_RCVTIMEO_NEW) {
             s->rcvtimeo = ticks;
         } else {
             s->sndtimeo = ticks;
         }
+        spin_unlock_irqrestore(&s->state_lock, saved);
         return 0;
     }
     if (name == SO_LINGER) {
@@ -1632,39 +1883,49 @@ int32_t unix_setsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uint3
     if (copy_from_user(&v, (const void __user *)val, sizeof(v)) != 0) {
         return -EFAULT;
     }
+    saved = spin_lock_irqsave(&s->state_lock);
     switch (name) {
     case SO_PASSCRED:
         s->passcred = v != 0;
-        return 0;
+        break;
     case SO_TIMESTAMP_OLD:
     case SO_TIMESTAMPNS_OLD:
     case SO_TIMESTAMP_NEW:
     case SO_TIMESTAMPNS_NEW:
         s->tstamp = sock_tstamp_set(s->tstamp, name, v);
-        return 0;
+        break;
     case SO_PRIORITY:
         if ((v < 0 || v > 6) && !cred_privileged()) {
-            return -EPERM;
+            rc = -EPERM;
+            break;
         }
         s->priority = v;
-        return 0;
+        break;
     case SO_SNDBUF:
     case SO_SNDBUFFORCE:
         s->sndbuf = buf_size(v);
-        return 0;
+        break;
     case SO_RCVBUF:
     case SO_RCVBUFFORCE:
+        spin_lock(&s->queue_lock);
         s->rcvbuf = buf_size(v);
-        return 0;
+        spin_unlock(&s->queue_lock);
+        break;
     case SO_REUSEADDR:
     case SO_KEEPALIVE:
     case SO_BROADCAST:
     case SO_RCVLOWAT:
     case SO_SNDLOWAT:
-        return 0;
+        break;
     default:
-        return -ENOPROTOOPT;
+        rc = -ENOPROTOOPT;
+        break;
     }
+    spin_unlock_irqrestore(&s->state_lock, saved);
+    if (name == SO_RCVBUF || name == SO_RCVBUFFORCE) {
+        wake_writers(s);
+    }
+    return rc;
 }
 
 int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintptr_t len_ptr)
@@ -1672,7 +1933,7 @@ int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintp
     struct unix_sock *s = sock_of(e);
     struct unix_cred c;
     uint8_t out[16];
-    uint32_t n = 4;
+    uint32_t n = 4, saved;
     int32_t given, v = 0;
     int64_t tv[2];
 
@@ -1685,6 +1946,8 @@ int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintp
     if (given < 0) {
         return -EINVAL;
     }
+    saved = spin_lock_irqsave(&s->state_lock);
+    spin_lock(&s->queue_lock);
     switch (name) {
     case SO_TYPE:
         v = s->type;
@@ -1731,7 +1994,7 @@ int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintp
         c.uid = 0xFFFFFFFFu;
         c.gid = 0xFFFFFFFFu;
         if (s->has_peercred) {
-            c = cred_seen(s->peercred);
+            c = s->peercred;
         }
         n = sizeof(c);
         break;
@@ -1746,9 +2009,14 @@ int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintp
         n = sock_timeo_put(name, tv, out);
         break;
     default:
+        spin_unlock(&s->queue_lock);
+        spin_unlock_irqrestore(&s->state_lock, saved);
         return -ENOPROTOOPT;
     }
+    spin_unlock(&s->queue_lock);
+    spin_unlock_irqrestore(&s->state_lock, saved);
     if (name == SO_PEERCRED) {
+        c = cred_seen(c);
         k_memcpy(out, &c, sizeof(c));
     } else if (name != SO_RCVTIMEO_OLD && name != SO_RCVTIMEO_NEW && name != SO_SNDTIMEO_OLD &&
                name != SO_SNDTIMEO_NEW) {
@@ -1799,21 +2067,24 @@ static int iov_copy(const struct kernel_iovec *iov, uint32_t iovlen, uint32_t sk
  * -EFAULT; the ones added before an error stay in `out`. */
 static int32_t get_rights(uintptr_t data, uint32_t n, struct unix_out *out)
 {
-    fd_entry_t *grown;
-    uint32_t i;
+    fd_entry_t *grown, *old;
+    uint32_t i, flags;
 
-    if (out->nfds + n > UNIX_MAX_FDS) {
+    if (out->flight.nfds + n > UNIX_MAX_FDS) {
         return -EINVAL;
     }
-    grown = kmalloc(sizeof(fd_entry_t) * (out->nfds + n + 1u));
+    grown = kmalloc(sizeof(fd_entry_t) * (out->flight.nfds + n + 1u));
     if (!grown) {
         return -ENOMEM;
     }
-    if (out->nfds) {
-        k_memcpy(grown, out->fds, sizeof(fd_entry_t) * out->nfds);
+    flags = spin_lock_irqsave(&flight_lock);
+    old = out->flight.fds;
+    if (out->flight.nfds) {
+        k_memcpy(grown, old, sizeof(fd_entry_t) * out->flight.nfds);
     }
-    kfree(out->fds);
-    out->fds = grown;
+    out->flight.fds = grown;
+    spin_unlock_irqrestore(&flight_lock, flags);
+    kfree(old);
     for (i = 0; i < n; i++) {
         int32_t fd;
         fd_entry_t *e;
@@ -1825,10 +2096,12 @@ static int32_t get_rights(uintptr_t data, uint32_t n, struct unix_out *out)
         if (!e) {
             return -EBADF;
         }
-        out->fds[out->nfds] = *e;
-        out->fds[out->nfds].flags &= ~(uint32_t)FD_FLAG_CLOEXEC;
-        flight_hold(&out->fds[out->nfds]);
-        out->nfds++;
+        flight_hold(e);
+        flags = spin_lock_irqsave(&flight_lock);
+        out->flight.fds[out->flight.nfds] = *e;
+        out->flight.fds[out->flight.nfds].flags &= ~(uint32_t)FD_FLAG_CLOEXEC;
+        out->flight.nfds++;
+        spin_unlock_irqrestore(&flight_lock, flags);
     }
     return 0;
 }
@@ -1844,13 +2117,21 @@ static int32_t get_cred(uintptr_t data, struct unix_out *out)
     struct unix_cred c;
     int64_t uid;
     int64_t gid;
+    int locked;
 
     if (copy_from_user(&c, (const void __user *)data, sizeof(c)) != 0) {
         return -EFAULT;
     }
+    locked = proc_pidns(p) != &init_pidns || proc_userns(p) != &init_userns;
+    if (locked) {
+        bkl_enter();
+    }
     uid = uid_named(c.uid);
     gid = gid_named(c.gid);
     if (c.uid == 0xFFFFFFFFu || c.gid == 0xFFFFFFFFu || uid < 0 || gid < 0) {
+        if (locked) {
+            bkl_exit();
+        }
         return -EINVAL;
     }
     c.pid = pid_named(c.pid);
@@ -1859,7 +2140,13 @@ static int32_t get_cred(uintptr_t data, struct unix_out *out)
     if (!proc_privileged(p) &&
         (c.pid != p->tgid || (c.uid != p->ruid && c.uid != p->euid && c.uid != p->suid) ||
          (c.gid != p->rgid && c.gid != p->egid && c.gid != p->sgid))) {
+        if (locked) {
+            bkl_exit();
+        }
         return -EPERM;
+    }
+    if (locked) {
+        bkl_exit();
     }
     out->cred = c;
     out->has_cred = 1;
@@ -1905,17 +2192,23 @@ static int32_t get_control(uintptr_t control, uint32_t controllen, struct unix_o
 /** Close the descriptors in flight `out` has and forget them. */
 static void release_out(struct unix_out *out)
 {
-    drop_fds(out->fds, 0, out->nfds);
-    out->fds = NULL;
-    out->nfds = 0;
+    fd_entry_t *fds = out->flight.fds;
+    uint32_t flags;
+
+    while (out->flight.nfds) {
+        flight_drop(&fds[out->flight.nfds - 1], &out->flight.nfds);
+    }
+    flags = spin_lock_irqsave(&flight_lock);
+    out->flight.fds = NULL;
+    spin_unlock_irqrestore(&flight_lock, flags);
+    kfree(fds);
 }
 
 /** A message of `len` bytes of the caller's buffers from `skip` bytes in,
  * with the sender's name and credentials, or NULL with -ENOBUFS or -EFAULT
  * in `*err`. */
-static struct unix_msg *build(const struct unix_sock *s, const struct kernel_iovec *iov,
-                              uint32_t iovlen, uint32_t skip, uint32_t len,
-                              const struct unix_out *out, int32_t *err)
+static struct unix_msg *build(struct unix_sock *s, const struct kernel_iovec *iov, uint32_t iovlen,
+                              uint32_t skip, uint32_t len, const struct unix_out *out, int32_t *err)
 {
     struct unix_msg *m = msg_alloc(len);
 
@@ -1924,6 +2217,7 @@ static struct unix_msg *build(const struct unix_sock *s, const struct kernel_iov
         return NULL;
     }
     if (iov_copy(iov, iovlen, skip, m->data, len, 0) != 0) {
+        flight_leave(&m->flight);
         kfree(m);
         *err = -EFAULT;
         return NULL;
@@ -1933,7 +2227,12 @@ static struct unix_msg *build(const struct unix_sock *s, const struct kernel_iov
     } else {
         own_cred(&m->cred, 0);
     }
-    m->from = s->name;
+    {
+        uint32_t flags = spin_lock_irqsave(&s->state_lock);
+
+        m->from = s->name;
+        spin_unlock_irqrestore(&s->state_lock, flags);
+    }
     {
         int64_t sec, nsec;
 
@@ -1947,10 +2246,13 @@ static struct unix_msg *build(const struct unix_sock *s, const struct kernel_iov
 /** Move the descriptors in flight `out` has into `m`. */
 static void attach(struct unix_msg *m, struct unix_out *out)
 {
-    m->nfds = out->nfds;
-    m->fds = out->fds;
-    out->nfds = 0;
-    out->fds = NULL;
+    uint32_t flags = spin_lock_irqsave(&flight_lock);
+
+    m->flight.nfds = out->flight.nfds;
+    m->flight.fds = out->flight.fds;
+    out->flight.nfds = 0;
+    out->flight.fds = NULL;
+    spin_unlock_irqrestore(&flight_lock, flags);
 }
 
 /** Raise SIGPIPE in the calling thread, as Linux sends it, unless `flags`
@@ -1966,17 +2268,29 @@ static void broken_pipe(int flags)
     info.code = SI_USER;
     info.pid = current_proc->tgid;
     info.uid = current_proc->ruid;
+    bkl_enter();
     signal_post_thread(current_proc, SIGPIPE, &info);
+    bkl_exit();
 }
 
 /** The wait condition of a send on the connected socket `arg`: its peer
  * has room, or the send ends at once. */
 static int peer_has_room(void *arg)
 {
-    const struct unix_sock *s = (const struct unix_sock *)arg;
-    const struct unix_sock *p = s->peer;
+    struct unix_sock *s = (struct unix_sock *)arg, *p = peer_get(s);
+    uint32_t flags = state_pair(s, p);
+    int ready = !p || p->closed || (s->shut & SHUT_SEND) || s->err;
 
-    return !p || p->closed || (s->shut & SHUT_SEND) || s->err || !queue_full(p);
+    if (p) {
+        spin_lock(&p->queue_lock);
+        ready |= (p->shut & SHUT_RCV) || !queue_full(p);
+        spin_unlock(&p->queue_lock);
+    }
+    state_unpair(s, p, flags);
+    if (p) {
+        unix_put(p);
+    }
+    return ready;
 }
 
 /** Whether a send on the connected socket `s` to its peer `p` must end with
@@ -1984,6 +2298,23 @@ static int peer_has_room(void *arg)
 static int send_stopped(const struct unix_sock *s, const struct unix_sock *p)
 {
     return !p || p->closed || (s->shut & SHUT_SEND) || (p->shut & SHUT_RCV);
+}
+
+/** Choose a connected send's next piece under both state locks and the
+ * peer's queue lock. A packet stays whole; a stream takes the room left. */
+static uint32_t send_chunk(const struct unix_sock *s, const struct unix_sock *p, uint32_t remaining)
+{
+    uint32_t chunk = remaining;
+
+    if (s->type == SOCK_STREAM) {
+        if (chunk > p->rcvbuf - p->rq_charge) {
+            chunk = p->rcvbuf - p->rq_charge;
+        }
+        if (chunk > UNIX_CHUNK) {
+            chunk = UNIX_CHUNK;
+        }
+    }
+    return chunk;
 }
 
 /**
@@ -1998,77 +2329,121 @@ static int send_stopped(const struct unix_sock *s, const struct unix_sock *p)
 static int32_t send_conn(struct unix_sock *s, int nonblock, const struct kernel_iovec *iov,
                          uint32_t iovlen, uint32_t total, struct unix_out *out, int flags)
 {
-    uint32_t done = 0;
-    int32_t rc;
+    struct unix_sock *p;
+    struct unix_msg *m = NULL;
+    uint32_t done = 0, saved, chunk = 0;
+    uint64_t timeo;
+    int32_t rc = 0;
 
+    saved = spin_lock_irqsave(&s->state_lock);
     if (s->state != US_CONNECTED) {
-        return -ENOTCONN;
+        rc = -ENOTCONN;
+    } else if (s->type == SOCK_SEQPACKET && total > s->sndbuf - 32u) {
+        rc = -EMSGSIZE;
     }
-    if (s->type == SOCK_SEQPACKET && total > s->sndbuf - 32u) {
-        return -EMSGSIZE;
+    spin_unlock_irqrestore(&s->state_lock, saved);
+    if (rc || (s->type == SOCK_STREAM && total == 0)) {
+        return rc;
     }
-    if (s->type == SOCK_STREAM && total == 0) {
-        return 0;
-    }
+    p = peer_get(s);
     for (;;) {
-        struct unix_sock *p = s->peer;
-        struct unix_msg *m;
-        uint32_t chunk;
+        int full = 0, queued = 0;
 
+        saved = state_pair(s, p);
+        timeo = s->sndtimeo;
         if (s->err) {
             rc = -s->err;
             s->err = 0;
-            return done ? (int32_t)done : rc;
+        } else if (send_stopped(s, p)) {
+            rc = -EPIPE;
         }
-        if (send_stopped(s, p)) {
-            if (done == 0) {
-                broken_pipe(flags);
+        if (!rc) {
+            spin_lock(&p->queue_lock);
+            full = queue_full(p);
+            if (!full && m) {
+                attach(m, out);
+                enqueue(p, m);
+                done += m->len;
+                m = NULL;
+                queued = 1;
+            } else if (!full) {
+                chunk = send_chunk(s, p, total - done);
             }
-            return done ? (int32_t)done : -EPIPE;
+            spin_unlock(&p->queue_lock);
         }
-        if (queue_full(p)) {
+        state_unpair(s, p, saved);
+        if (rc) {
+            break;
+        }
+        if (full) {
             if (nonblock) {
-                return done ? (int32_t)done : -EAGAIN;
+                rc = -EAGAIN;
+                break;
             }
-            rc = unix_wait(&p->wq, peer_has_room, s, s->sndtimeo);
-            if (rc != 0) {
-                return done ? (int32_t)done : rc;
+            rc = unix_wait(&p->wq, peer_has_room, s, timeo);
+            if (rc) {
+                break;
             }
             continue;
         }
-        chunk = total - done;
-        if (s->type == SOCK_STREAM) {
-            if (chunk > p->rcvbuf - p->rq_charge) {
-                chunk = p->rcvbuf - p->rq_charge;
+        if (queued) {
+            wq_wake(&p->wq, WQ_DATA);
+            if (done >= total) {
+                break;
             }
-            if (chunk > UNIX_CHUNK) {
-                chunk = UNIX_CHUNK;
-            }
+            continue;
         }
         m = build(s, iov, iovlen, done, chunk, out, &rc);
         if (!m) {
-            return done ? (int32_t)done : rc;
-        }
-        if (s->peer != p || s->err || send_stopped(s, p) || queue_full(p)) {
-            kfree(m);
-            continue;
-        }
-        attach(m, out);
-        enqueue(p, m);
-        done += chunk;
-        if (done >= total) {
-            return (int32_t)done;
+            break;
         }
     }
+    if (m) {
+        msg_free(m);
+    }
+    if (p) {
+        unix_put(p);
+    }
+    if (rc == -EPIPE && done == 0) {
+        broken_pipe(flags);
+    }
+    return done ? (int32_t)done : rc;
 }
 
 /** Whether a datagram send waiting for room in the queue of `t` can stop:
  * there is room, or `t` is gone or takes nothing more, when the send fails. */
 static int target_has_room(void *arg)
 {
-    const struct unix_sock *t = (const struct unix_sock *)arg;
+    struct unix_sock *t = (struct unix_sock *)arg;
+    uint32_t flags = spin_lock_irqsave(&t->state_lock);
+    int ready;
 
-    return t->closed || (t->shut & SHUT_RCV) || !queue_full(t);
+    spin_lock(&t->queue_lock);
+    ready = t->closed || (t->shut & SHUT_RCV) || !queue_full(t);
+    spin_unlock(&t->queue_lock);
+    spin_unlock_irqrestore(&t->state_lock, flags);
+    return ready;
+}
+
+/** Judge a datagram send under both state locks. A closed connected peer
+ * is detached, with its reference left for the caller to drop after unlock. */
+static int32_t dgram_refusal(struct unix_sock *s, struct unix_sock *t, const struct unix_name *to,
+                             int *drop_peer)
+{
+    if (s->shut & SHUT_SEND) {
+        return -EPIPE;
+    }
+    if (t->closed) {
+        if (!to && s->peer == t) {
+            s->peer = NULL;
+            *drop_peer = 1;
+        }
+        return -ECONNREFUSED;
+    }
+    if (t->peer && t->peer != s) {
+        return -EPERM;
+    }
+    return t->shut & SHUT_RCV ? -EPIPE : 0;
 }
 
 /** A send of one message of `total` bytes of `iov` on a datagram socket, to
@@ -2080,33 +2455,32 @@ static int32_t send_dgram(struct unix_sock *s, int nonblock, const struct kernel
 {
     struct unix_sock *t;
     struct unix_msg *m;
-    int32_t rc;
+    uint32_t flags;
+    uint64_t timeo;
+    int32_t rc = 0;
+    int drop_peer = 0;
 
+    flags = spin_lock_irqsave(&s->state_lock);
     if (total > s->sndbuf - 32u) {
-        return -EMSGSIZE;
+        rc = -EMSGSIZE;
+    } else if (s->shut & SHUT_SEND) {
+        rc = -EPIPE;
     }
-    if (s->shut & SHUT_SEND) {
-        return -EPIPE;
-    }
-    rc = passcred_name(s);
-    if (rc != 0) {
+    spin_unlock_irqrestore(&s->state_lock, flags);
+    if (rc) {
         return rc;
     }
-    if (to) {
-        t = lookup(to, SOCK_DGRAM, &rc);
-        if (!t) {
-            return rc;
-        }
-        if (t->type != SOCK_DGRAM) {
-            unix_put(t);
-            return -EPROTOTYPE;
-        }
-    } else {
-        if (!s->peer) {
-            return -ENOTCONN;
-        }
-        t = s->peer;
-        t->refs++;
+    rc = passcred_name(s);
+    if (rc) {
+        return rc;
+    }
+    t = to ? lookup(to, SOCK_DGRAM, &rc) : peer_get(s);
+    if (!t) {
+        return to ? rc : -ENOTCONN;
+    }
+    if (t->type != SOCK_DGRAM) {
+        unix_put(t);
+        return -EPROTOTYPE;
     }
     m = build(s, iov, iovlen, 0, total, out, &rc);
     if (!m) {
@@ -2114,45 +2488,41 @@ static int32_t send_dgram(struct unix_sock *s, int nonblock, const struct kernel
         return rc;
     }
     for (;;) {
-        if (s->shut & SHUT_SEND) {
-            rc = -EPIPE;
-            break;
-        }
-        if (t->closed) {
-            /* As Linux: a closed peer is dropped; the next send is ENOTCONN. */
-            if (!to && s->peer == t) {
-                set_peer(s, NULL);
-                unix_put(t);
+        flags = state_pair(s, t);
+        timeo = s->sndtimeo;
+        rc = dgram_refusal(s, t, to, &drop_peer);
+        if (!rc) {
+            spin_lock(&t->queue_lock);
+            if (!queue_full(t)) {
+                attach(m, out);
+                enqueue(t, m);
+                m = NULL;
             }
-            rc = -ECONNREFUSED;
-            break;
+            spin_unlock(&t->queue_lock);
         }
-        if (t->peer && t->peer != s) {
-            rc = -EPERM;
+        state_unpair(s, t, flags);
+        if (rc || !m) {
             break;
-        }
-        if (t->shut & SHUT_RCV) {
-            rc = -EPIPE;
-            break;
-        }
-        if (!queue_full(t)) {
-            attach(m, out);
-            enqueue(t, m);
-            unix_put(t);
-            return (int32_t)total;
         }
         if (nonblock) {
             rc = -EAGAIN;
             break;
         }
-        rc = unix_wait(&t->wq, target_has_room, t, s->sndtimeo);
-        if (rc != 0) {
+        rc = unix_wait(&t->wq, target_has_room, t, timeo);
+        if (rc) {
             break;
         }
     }
-    kfree(m);
+    if (m) {
+        msg_free(m);
+    } else {
+        wq_wake(&t->wq, WQ_DATA);
+    }
+    if (drop_peer) {
+        unix_put(t);
+    }
     unix_put(t);
-    return rc;
+    return rc ? rc : (int32_t)total;
 }
 
 /** A send on `e` of `total` bytes of `iov`, to `to` or to the peer, with
@@ -2170,7 +2540,10 @@ static int32_t send_core(fd_entry_t *e, const struct kernel_iovec *iov, uint32_t
     } else if (s->type == SOCK_DGRAM) {
         rc = send_dgram(s, nonblock, iov, iovlen, total, to, out);
     } else if (to) {
+        uint32_t saved = spin_lock_irqsave(&s->state_lock);
+
         rc = s->state == US_CONNECTED ? -EISCONN : -EOPNOTSUPP;
+        spin_unlock_irqrestore(&s->state_lock, saved);
     } else {
         rc = send_conn(s, nonblock, iov, iovlen, total, out, flags);
     }
@@ -2181,9 +2554,15 @@ static int32_t send_core(fd_entry_t *e, const struct kernel_iovec *iov, uint32_t
 /** The wait condition of `wait_data`. */
 static int has_data(void *arg)
 {
-    const struct unix_sock *s = (const struct unix_sock *)arg;
+    struct unix_sock *s = (struct unix_sock *)arg;
+    uint32_t flags = spin_lock_irqsave(&s->state_lock);
+    int ready;
 
-    return s->rq_head != NULL || s->err || (s->shut & SHUT_RCV);
+    spin_lock(&s->queue_lock);
+    ready = s->rq_head != NULL || s->err || (s->shut & SHUT_RCV);
+    spin_unlock(&s->queue_lock);
+    spin_unlock_irqrestore(&s->state_lock, flags);
+    return ready;
 }
 
 /** Wait for a message: 0 with one at the head of the queue, 1 at the end of
@@ -2191,50 +2570,64 @@ static int has_data(void *arg)
 static int32_t wait_data(struct unix_sock *s, int nonblock)
 {
     int32_t rc;
+    uint32_t flags;
+    uint64_t timeo;
 
-    while (!s->rq_head) {
-        if (s->err) {
+    for (;;) {
+        flags = spin_lock_irqsave(&s->state_lock);
+        spin_lock(&s->queue_lock);
+        if (s->rq_head) {
+            rc = 0;
+        } else if (s->err) {
             rc = -s->err;
             s->err = 0;
+        } else if (s->shut & SHUT_RCV) {
+            rc = 1;
+        } else {
+            rc = -EAGAIN;
+        }
+        timeo = s->rcvtimeo;
+        spin_unlock(&s->queue_lock);
+        spin_unlock_irqrestore(&s->state_lock, flags);
+        if (rc != -EAGAIN || nonblock) {
             return rc;
         }
-        if (s->shut & SHUT_RCV) {
-            return 1;
-        }
-        if (nonblock) {
-            return -EAGAIN;
-        }
-        rc = unix_wait(&s->wq, has_data, s, s->rcvtimeo);
-        if (rc != 0) {
+        rc = unix_wait(&s->wq, has_data, s, timeo);
+        if (rc) {
             return rc;
         }
     }
-    return 0;
 }
 
 /** Move a message's descriptors into `in`, or with `peek` copies of them;
  * whether it had any. */
 static int take_fds(struct unix_msg *m, struct unix_in *in, int peek)
 {
-    uint32_t i;
+    uint32_t i, flags;
+    fd_entry_t *fds;
 
-    if (m->nfds == 0) {
+    if (m->flight.nfds == 0) {
         return 0;
     }
     if (!peek) {
-        in->fds = m->fds;
-        in->nfds = m->nfds;
-        m->fds = NULL;
-        m->nfds = 0;
+        flags = spin_lock_irqsave(&flight_lock);
+        in->flight.fds = m->flight.fds;
+        in->flight.nfds = m->flight.nfds;
+        m->flight.fds = NULL;
+        m->flight.nfds = 0;
+        spin_unlock_irqrestore(&flight_lock, flags);
         return 1;
     }
-    in->fds = kmalloc(sizeof(fd_entry_t) * m->nfds);
-    if (in->fds) {
-        for (i = 0; i < m->nfds; i++) {
-            in->fds[i] = m->fds[i];
-            flight_hold(&in->fds[i]);
+    fds = kmalloc(sizeof(fd_entry_t) * m->flight.nfds);
+    if (fds) {
+        for (i = 0; i < m->flight.nfds; i++) {
+            fds[i] = m->flight.fds[i];
+            flight_hold(&fds[i]);
         }
-        in->nfds = m->nfds;
+        flags = spin_lock_irqsave(&flight_lock);
+        in->flight.fds = fds;
+        in->flight.nfds = m->flight.nfds;
+        spin_unlock_irqrestore(&flight_lock, flags);
     }
     return 1;
 }
@@ -2267,17 +2660,19 @@ static struct unix_msg *stream_at(struct unix_sock *s, uint32_t copied, int peek
  * queue, and the message once they are all read. */
 static void stream_consume(struct unix_sock *s, struct unix_msg *m, uint32_t chunk)
 {
-    int was_full = queue_full(s);
+    struct unix_msg *dead = NULL;
+    uint32_t flags = spin_lock_irqsave(&s->queue_lock);
 
     m->off += chunk;
     m->charge -= chunk;
     s->rq_bytes -= chunk;
     s->rq_charge -= chunk;
     if (m->off == m->len) {
-        msg_free(dequeue(s));
+        dead = dequeue(s);
     }
-    if (was_full && !queue_full(s)) {
-        wake_writers(s);
+    spin_unlock_irqrestore(&s->queue_lock, flags);
+    if (dead) {
+        msg_free(dead);
     }
 }
 
@@ -2291,23 +2686,29 @@ static void stream_consume(struct unix_sock *s, struct unix_msg *m, uint32_t chu
 static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kernel_iovec *iov,
                            uint32_t iovlen, uint32_t total, int flags, struct unix_in *in)
 {
-    uint32_t copied = 0;
+    uint32_t copied = 0, saved;
     uint32_t want = (flags & MSG_WAITALL) ? total : 1u;
     int peek = (flags & MSG_PEEK) != 0;
     int32_t rc = 0;
 
-    if (s->state != US_CONNECTED) {
-        return -EINVAL;
-    }
-    if (total == 0) {
-        return 0;
+    saved = spin_lock_irqsave(&s->state_lock);
+    rc = s->state == US_CONNECTED ? 0 : -EINVAL;
+    spin_unlock_irqrestore(&s->state_lock, saved);
+    if (rc || total == 0) {
+        return rc;
     }
     recv_lock(s);
     for (;;) {
         uint32_t off, chunk;
-        struct unix_msg *m = stream_at(s, copied, peek, &off);
-        int had_fds;
+        struct unix_msg *m;
+        int had_fds, passcred;
 
+        saved = spin_lock_irqsave(&s->state_lock);
+        passcred = s->passcred;
+        spin_lock(&s->queue_lock);
+        m = stream_at(s, copied, peek, &off);
+        spin_unlock(&s->queue_lock);
+        spin_unlock_irqrestore(&s->state_lock, saved);
         if (!m) {
             if (copied >= want || (copied > 0 && (peek || nonblock))) {
                 break;
@@ -2323,7 +2724,7 @@ static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kerne
             }
             break;
         }
-        if (s->passcred && copied > 0 && !same_cred(&in->cred, &m->cred)) {
+        if (passcred && copied > 0 && !same_cred(&in->cred, &m->cred)) {
             break;
         }
         chunk = m->len - off;
@@ -2337,18 +2738,22 @@ static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kerne
         if (copied == 0) {
             in->from = m->from;
             in->cred = m->cred;
-            in->has_cred = s->passcred;
+            in->has_cred = passcred;
         }
         copied += chunk;
         had_fds = take_fds(m, in, peek);
         if (!peek) {
             stream_consume(s, m, chunk);
+            wake_writers(s);
         }
         if (had_fds || copied >= total) {
             break;
         }
     }
     recv_unlock(s);
+    if (!peek) {
+        wake_writers(s);
+    }
     return copied ? (int32_t)copied : rc;
 }
 
@@ -2364,50 +2769,54 @@ static int32_t recv_msg(struct unix_sock *s, int nonblock, const struct kernel_i
 {
     int peek = (flags & MSG_PEEK) != 0;
     struct unix_msg *m;
-    uint32_t chunk;
+    uint32_t chunk, saved;
     int32_t rc;
 
-    if (s->type == SOCK_SEQPACKET && s->state != US_CONNECTED) {
-        return -ENOTCONN;
+    saved = spin_lock_irqsave(&s->state_lock);
+    rc = s->type == SOCK_SEQPACKET && s->state != US_CONNECTED ? -ENOTCONN : 0;
+    spin_unlock_irqrestore(&s->state_lock, saved);
+    if (rc) {
+        return rc;
     }
     for (;;) {
         rc = wait_data(s, nonblock);
-        if (rc == 1) {
-            return 0;
-        }
-        if (rc < 0) {
-            return rc;
+        if (rc) {
+            return rc == 1 ? 0 : rc;
         }
         recv_lock(s);
-        if (s->rq_head) {
+        saved = spin_lock_irqsave(&s->queue_lock);
+        m = s->rq_head;
+        if (m && !peek) {
+            dequeue(s);
+        }
+        spin_unlock_irqrestore(&s->queue_lock, saved);
+        if (m) {
             break;
         }
         recv_unlock(s);
     }
-    m = s->rq_head;
     chunk = m->len < total ? m->len : total;
-    if (iov_copy(iov, iovlen, 0, m->data, chunk, 1) != 0) {
-        if (!peek) {
-            msg_free(dequeue(s));
+    rc = iov_copy(iov, iovlen, 0, m->data, chunk, 1);
+    if (!rc) {
+        if (m->len > total) {
+            in->flags |= MSG_TRUNC;
         }
-        recv_unlock(s);
-        return -EFAULT;
-    }
-    if (m->len > total) {
-        in->flags |= MSG_TRUNC;
-    }
-    in->from = m->from;
-    in->cred = m->cred;
-    in->has_cred = s->passcred;
-    in->tstamp = s->tstamp;
-    in->tsec = m->tsec;
-    in->tnsec = m->tnsec;
-    take_fds(m, in, peek);
-    rc = (flags & MSG_TRUNC) ? (int32_t)m->len : (int32_t)chunk;
-    if (!peek) {
-        msg_free(dequeue(s));
+        in->from = m->from;
+        in->cred = m->cred;
+        saved = spin_lock_irqsave(&s->state_lock);
+        in->has_cred = s->passcred;
+        in->tstamp = s->tstamp;
+        spin_unlock_irqrestore(&s->state_lock, saved);
+        in->tsec = m->tsec;
+        in->tnsec = m->tnsec;
+        take_fds(m, in, peek);
+        rc = (flags & MSG_TRUNC) ? (int32_t)m->len : (int32_t)chunk;
     }
     recv_unlock(s);
+    if (!peek) {
+        msg_free(m);
+        wake_writers(s);
+    }
     return rc;
 }
 
@@ -2431,9 +2840,16 @@ static int32_t recv_core(fd_entry_t *e, const struct kernel_iovec *iov, uint32_t
 /** Close the descriptors `in` received and forget them. */
 static void release_in(struct unix_in *in)
 {
-    drop_fds(in->fds, 0, in->nfds);
-    in->fds = NULL;
-    in->nfds = 0;
+    fd_entry_t *fds = in->flight.fds;
+    uint32_t flags;
+
+    while (in->flight.nfds) {
+        flight_drop(&fds[in->flight.nfds - 1], &in->flight.nfds);
+    }
+    flags = spin_lock_irqsave(&flight_lock);
+    in->flight.fds = NULL;
+    spin_unlock_irqrestore(&flight_lock, flags);
+    kfree(fds);
 }
 
 /**
@@ -2452,9 +2868,12 @@ static uint32_t put_rights(uintptr_t at, uint32_t room, struct unix_in *in, int 
 {
     uint32_t given = 0;
 
-    while (given < in->nfds && given < room) {
+    while (given < in->flight.nfds && given < room) {
         int fd = fd_alloc(table());
         fd_entry_t *slot;
+        struct vfs_mount *locked;
+        uint32_t saved;
+        int big;
 
         if (fd < 0) {
             break;
@@ -2463,23 +2882,41 @@ static uint32_t put_rights(uintptr_t at, uint32_t room, struct unix_in *in, int 
             fd_free(table(), fd);
             break;
         }
+        big = file_ops_lock(&in->flight.fds[given]);
+        locked = fd_release_lock(&in->flight.fds[given]);
         slot = fd_slot(table(), fd);
         fd_ofd_unref(slot->ofd);
-        *slot = in->fds[given];
+        saved = spin_lock_irqsave(&flight_lock);
+        *slot = in->flight.fds[given];
         slot->pending = 1;
-        in->fds[given++].type = FD_TYPE_NONE;
+        in->flight.fds[given++].type = FD_TYPE_NONE;
         flight_sync(slot);
         if (flags & MSG_CMSG_CLOEXEC) {
             slot->flags |= FD_FLAG_CLOEXEC;
         }
+        spin_unlock_irqrestore(&flight_lock, saved);
         fd_install(table(), fd);
+        if (locked) {
+            vfs_ns_unlock(locked);
+        }
+        file_ops_unlock(big);
     }
-    if (given < in->nfds) {
+    if (given < in->flight.nfds) {
         in->flags |= MSG_CTRUNC;
     }
-    drop_fds(in->fds, given, in->nfds);
-    in->fds = NULL;
-    in->nfds = 0;
+    while (in->flight.nfds > given) {
+        flight_drop(&in->flight.fds[in->flight.nfds - 1], &in->flight.nfds);
+    }
+    {
+        fd_entry_t *fds;
+        uint32_t saved = spin_lock_irqsave(&flight_lock);
+
+        fds = in->flight.fds;
+        in->flight.fds = NULL;
+        in->flight.nfds = 0;
+        spin_unlock_irqrestore(&flight_lock, saved);
+        kfree(fds);
+    }
     return given;
 }
 
@@ -2528,7 +2965,7 @@ static uint32_t put_control(uintptr_t control, uint32_t controllen, struct unix_
             used = used > controllen ? controllen : used;
         }
     }
-    if (in->nfds == 0) {
+    if (in->flight.nfds == 0) {
         return used;
     }
     given = put_rights(
@@ -2567,7 +3004,10 @@ int32_t unix_sendto(fd_entry_t *e, uintptr_t buf, uint32_t len, int flags, uintp
     iov.iov_base = buf;
     iov.iov_len = len;
     k_memset(&out, 0, sizeof(out));
-    return send_core(e, &iov, 1, len, addr ? &to : NULL, &out, flags);
+    flight_enter(&out.flight);
+    rc = send_core(e, &iov, 1, len, addr ? &to : NULL, &out, flags);
+    flight_leave(&out.flight);
+    return rc;
 }
 
 /** An address with no length pointer is EFAULT before anything is taken,
@@ -2607,12 +3047,19 @@ int32_t unix_readv(fd_entry_t *e, const struct kernel_iovec *iov, int count, uin
 {
     struct unix_in in;
     int32_t rc;
+    uint32_t saved = kirq_save();
+    int depth = bkl_drop();
+
+    kirq_restore(saved);
 
     k_memset(&in, 0, sizeof(in));
     transit_enter(&in);
     rc = recv_core(e, iov, (uint32_t)count, total, 0, &in);
     release_in(&in);
     transit_leave(&in);
+    saved = kirq_save();
+    bkl_take(depth);
+    kirq_restore(saved);
     return rc;
 }
 
@@ -2667,6 +3114,7 @@ int32_t unix_sendmsg(fd_entry_t *e, uintptr_t msg, int flags)
         }
     }
     k_memset(&out, 0, sizeof(out));
+    flight_enter(&out.flight);
     rc = get_iov(hdr.msg_iov, hdr.msg_iovlen, &iov, &total);
     if (rc == 0 && hdr.msg_control && hdr.msg_controllen) {
         rc = get_control(hdr.msg_control, USER_LEN32(hdr.msg_controllen), &out);
@@ -2676,6 +3124,7 @@ int32_t unix_sendmsg(fd_entry_t *e, uintptr_t msg, int flags)
     } else {
         release_out(&out);
     }
+    flight_leave(&out.flight);
     kfree(iov);
     return rc;
 }
@@ -2736,13 +3185,31 @@ int32_t unix_recvmsg(fd_entry_t *e, uintptr_t msg, int flags)
 /** read(2) of a socket: a receive with no flags (`unix_recvfrom`). */
 static int32_t unix_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
-    return unix_recvfrom(e, (__force uintptr_t)buf, count, 0, 0, 0);
+    uint32_t saved = kirq_save();
+    int depth = bkl_drop();
+    int32_t rc;
+
+    kirq_restore(saved);
+    rc = unix_recvfrom(e, (__force uintptr_t)buf, count, 0, 0, 0);
+    saved = kirq_save();
+    bkl_take(depth);
+    kirq_restore(saved);
+    return rc;
 }
 
 /** write(2) of a socket: a send with no flags (`unix_sendto`). */
 static int32_t unix_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
-    return unix_sendto(e, (__force uintptr_t)buf, count, 0, 0, 0);
+    uint32_t saved = kirq_save();
+    int depth = bkl_drop();
+    int32_t rc;
+
+    kirq_restore(saved);
+    rc = unix_sendto(e, (__force uintptr_t)buf, count, 0, 0, 0);
+    saved = kirq_save();
+    bkl_take(depth);
+    kirq_restore(saved);
+    return rc;
 }
 
 /** Whether a send would not wait: a connected socket's peer has room in its
@@ -2751,20 +3218,18 @@ static int32_t unix_write(fd_entry_t *e, const char __user *buf, uint32_t count)
  * datagram socket whose sends each give the receiver's name cannot tell
  * and says yes, as Linux does; so does a stream socket that is not
  * connected, whose send fails at once. A listener is never writable. */
-static int writable(const struct unix_sock *s)
+static int writable(struct unix_sock *s)
 {
-    const struct unix_sock *p;
-    uint32_t flags;
-    int w;
+    struct unix_sock *p = s->peer;
 
     if (s->state == US_LISTENING) {
         return 0;
     }
-    flags = spin_lock_irqsave(&unix_peer_lock);
-    p = s->peer;
-    w = !p || p->closed || (s->shut & SHUT_SEND) || (p->shut & SHUT_RCV) || !queue_full(p);
-    spin_unlock_irqrestore(&unix_peer_lock, flags);
-    return w;
+    if (!p || *(volatile int *)&p->closed || (s->shut & SHUT_SEND) ||
+        (*(volatile int *)&p->shut & SHUT_RCV)) {
+        return 1;
+    }
+    return !queue_full(p);
 }
 
 /**
@@ -2773,21 +3238,20 @@ static int writable(const struct unix_sock *s)
  * sequenced-packet socket never connected; POLLIN with POLLRDHUP once it is
  * shut down for reading, and POLLIN with a message or a connection queued;
  * POLLOUT while a send would not wait (`writable`). POLLERR and POLLHUP are
- * reported whatever `events` asks.
- *
- * It runs without the big lock (FILE_OPS_POLL_UNLOCKED), reading each word
- * of the socket once, and its peer's under `unix_peer_lock`, as Linux's
- * unix_poll reads the socket after sock_poll_wait (net/unix/af_unix.c):
- * every change a poller waits for is made before the wake of `wq`.
+ * reported whatever `events` asks. The state lock pins the peer until the
+ * snapshot ends; no reference is released here, since epoll polls under a
+ * spinlock and the last reference can close descriptors and sleep.
  */
 static short unix_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
-    struct unix_sock *s = sock_of(e);
+    struct unix_sock *s = sock_of(e), *p;
     short mask = 0;
+    uint32_t flags = spin_lock_irqsave(&s->state_lock);
 
     if (wq) {
         *wq = &s->wq;
     }
+    p = s->peer;
     if (s->err) {
         mask |= POLLERR;
     }
@@ -2797,12 +3261,21 @@ static short unix_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     if (s->shut & SHUT_RCV) {
         mask |= POLLRDHUP | POLLIN | POLLRDNORM;
     }
+    spin_lock(&s->queue_lock);
     if (s->rq_head || s->acc_head) {
         mask |= POLLIN | POLLRDNORM;
+    }
+    spin_unlock(&s->queue_lock);
+    if (p) {
+        spin_lock(&p->queue_lock);
     }
     if (writable(s)) {
         mask |= POLLOUT | POLLWRNORM;
     }
+    if (p) {
+        spin_unlock(&p->queue_lock);
+    }
+    spin_unlock_irqrestore(&s->state_lock, flags);
     return (short)((mask & events) | (mask & (POLLERR | POLLHUP)));
 }
 
@@ -2813,22 +3286,33 @@ static short unix_poll(fd_entry_t *e, short events, struct wait_queue **wq)
  * -ENOTTY for another request. */
 static int32_t unix_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
-    struct unix_sock *s = sock_of(e);
+    struct unix_sock *s = sock_of(e), *p;
     int32_t n;
+    uint32_t flags;
 
     switch (request) {
     case FIONREAD:
+        flags = spin_lock_irqsave(&s->state_lock);
         if (s->state == US_LISTENING) {
+            spin_unlock_irqrestore(&s->state_lock, flags);
             return -EINVAL;
         }
-        if (s->type == SOCK_STREAM) {
-            n = (int32_t)s->rq_bytes;
-        } else {
-            n = s->rq_head ? (int32_t)s->rq_head->len : 0;
-        }
+        spin_lock(&s->queue_lock);
+        n = s->type == SOCK_STREAM ? (int32_t)s->rq_bytes
+            : s->rq_head           ? (int32_t)s->rq_head->len
+                                   : 0;
+        spin_unlock(&s->queue_lock);
+        spin_unlock_irqrestore(&s->state_lock, flags);
         break;
     case TIOCOUTQ:
-        n = (s->type != SOCK_DGRAM && s->peer) ? (int32_t)s->peer->rq_bytes : 0;
+        p = s->type != SOCK_DGRAM ? peer_get(s) : NULL;
+        n = 0;
+        if (p) {
+            flags = spin_lock_irqsave(&p->queue_lock);
+            n = (int32_t)p->rq_bytes;
+            spin_unlock_irqrestore(&p->queue_lock, flags);
+            unix_put(p);
+        }
         break;
     default:
         return -ENOTTY;
@@ -2855,10 +3339,12 @@ void unix_ns_gone(const struct netns *ns)
 {
     static const struct netns gone;
     struct unix_sock *s;
+    uint32_t flags = spin_lock_irqsave(&table_lock);
 
     for (s = socks; s; s = s->next) {
         if (s->ns == ns) {
             s->ns = &gone;
         }
     }
+    spin_unlock_irqrestore(&table_lock, flags);
 }

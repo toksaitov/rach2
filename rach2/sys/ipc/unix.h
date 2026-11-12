@@ -14,7 +14,9 @@
  * A socket is a descriptor of type FD_TYPE_UNIX whose `priv` is the socket;
  * read, write, poll, ioctl and the last close go through its file_ops, and
  * the socket calls of syscall_net.c through the functions below. Those on
- * a socket take its descriptor `e`, and those that wait or copy may sleep.
+ * a socket take its descriptor `e`, held for the call by fd_get, and those
+ * that wait or copy may sleep. State and receive queues have spinlocks,
+ * and bind and receive copies have per-socket mutexes (Readme.md).
  */
 #ifndef _UNIX_H_
 #define _UNIX_H_
@@ -257,9 +259,9 @@ int unix_count(void);
 
 /**
  * Whether a descriptor in flight is a KRFFS file whose description has the
- * node `node`: one on a receive queue, on the list of those being closed,
- * or taken off its queue by a receive in progress. It holds the node as a
- * descriptor in a table does.
+ * node `node`: one in an outgoing send, on a receive queue, being closed,
+ * or being installed by a receive. The scan holds the flight registry lock;
+ * the descriptor holds the node as a descriptor in a table does.
  */
 int unix_inflight_holds(const void *node);
 
