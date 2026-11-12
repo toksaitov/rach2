@@ -57,7 +57,8 @@
  * across a switch at a slice's end inside KVM_RUN, none at a halted
  * vCPU's sleep at the run loop's top, which is no preemption, and never in
  * a record the guest moved into memfd_secret with the tables unchanged; the
- * vCPU attribute KVM_VCPU_TSC_OFFSET; and what Linux's selftests ask for:
+ * vCPU attribute KVM_VCPU_TSC_OFFSET; CR0's CD and NW kept across a
+ * guest's INIT; and what Linux's selftests ask for:
  * the TSC's rate set on a VM and on a vCPU, on a processor that scales
  * none and with SVM's and VMX's ratios,
  * the statistics files of a VM and a vCPU, KVM_PRE_FAULT_MEMORY, 1024
@@ -2648,6 +2649,28 @@ static void init_apic_base_row(int fd0)
           "a guest's INIT keeps the APIC base whole, so a SIPI during it is kept");
 }
 
+/** CR0 after a guest's INIT on vCPU `fd0`, from each setting of CD and NW
+ * before it: ET with CD and NW kept as they were, as Linux's
+ * kvm_vcpu_reset keeps them at an INIT and sets them only at power-on
+ * (arch/x86/kvm/x86.c:11752-11761). */
+static void init_cr0_rows(int fd0)
+{
+    static const uint64_t before[3] = {0x00000011ull, 0x40000011ull, 0x60000011ull};
+    struct kvm_vcpu *v0 = entries[fd0].priv;
+    struct kvm_sregs sregs;
+    int i, kept = 1;
+
+    for (i = 0; i < 3; i++) {
+        CHECK(fdio(fd0, KVM_GET_SREGS, (uintptr_t)&sregs) == 0, "KVM_GET_SREGS");
+        sregs.cr0 = before[i];
+        CHECK(fdio(fd0, KVM_SET_SREGS, (uintptr_t)&sregs) == 0, "KVM_SET_SREGS of CR0");
+        kvm_vcpu_init_reset(v0);
+        CHECK(fdio(fd0, KVM_GET_SREGS, (uintptr_t)&sregs) == 0, "KVM_GET_SREGS");
+        kept &= sregs.cr0 == (before[i] & 0x60000000ull) + 0x10u;
+    }
+    CHECK(kept, "a guest's INIT leaves CR0 at ET with CD and NW as they were");
+}
+
 /** The vCPU attribute KVM_VCPU_TSC_OFFSET of vCPUs `fd0` and `fd1` of the
  * VM `vm`, as system_counter_offset_test drives it and Linux's
  * kvm_arch_tsc_set_attr matches it: the guest's TSC is the host's plus the
@@ -2774,6 +2797,7 @@ static void pv_rows(void)
     steal_move_rows(fd0);
     init_pv_rows(fd0);
     init_apic_base_row(fd0);
+    init_cr0_rows(fd0);
     hv_clock_rows(vm, fd0);
     fdclose(fd1);
     fdclose(fd0);
