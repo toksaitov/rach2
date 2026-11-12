@@ -6727,6 +6727,657 @@
       }
     },
     {
+      "case_id": "machine.virgl.deqp-gles2-subset",
+      "behavior": "every 10th case of dEQP-GLES2 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz), 1,717 of its 17,165, the GLES subset that the virgl and Venus profiles both run, run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
+      "units": [
+        "tests/graphics/runners/deqp.sh",
+        "tests/graphics/runners/judge.py",
+        "VK-GL-CTS 1.4.1.1's glcts",
+        "Mesa's virgl driver",
+        "the virtio-gpu driver's 3D contexts"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "list": "tests/graphics/deqp-gles-virgl.txt.gz",
+          "suite": "gles2",
+          "every": 10,
+          "start": 1,
+          "reference": "tests/graphics/ref/virgl-wsl/deqp/gles2.csv.gz"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "graphics_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the runner runs as the guest's test account, an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment, the piglit and dEQP lists and the references, owned by the test account"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run deqp.sh -v 1.4.1.1 -e 10 -s 1 -l deqp-gles-virgl.txt.gz gles2 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, four glcts processes, through the framed guest channel"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "check that a `renderer` line of the run's record names the reference's renderer, virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER)), and run judge.py deqp on the results and the Debian reference's, with the run's flakes"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "graphics-payload",
+                "base": "graphics-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 8,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2"
+            ],
+            "display": "virgl"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "deqp.sh exits 0, every case of its sample having a status, and prints its result line",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the record names the reference's renderer and judge.py finds each case that passed in the Debian reference guest, stored under tests/graphics/ref/virgl-wsl/deqp, to pass here, a case that passes when run again aside, and prints judge: result: pass",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 7200000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 8000,
+        "cpu_ceiling_millis": 8000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "graphics-data",
+          "node": "tests/cases/graphics/graphics.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
+          "per_architecture": false
+        },
+        {
+          "name": "graphics_scenario",
+          "node": "tests/cases/machine/graphics_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case compares a QEMU guest's OpenGL on virgl with the Debian reference guest's in the same QEMU display profile, on the testing PC's GPU"
+      }
+    },
+    {
+      "case_id": "machine.virgl.deqp-gles3-subset",
+      "behavior": "every 10th case of dEQP-GLES3 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz), 4,344 of its 43,431, the GLES subset that the virgl and Venus profiles both run, run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
+      "units": [
+        "tests/graphics/runners/deqp.sh",
+        "tests/graphics/runners/judge.py",
+        "VK-GL-CTS 1.4.1.1's glcts",
+        "Mesa's virgl driver",
+        "the virtio-gpu driver's 3D contexts"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "list": "tests/graphics/deqp-gles-virgl.txt.gz",
+          "suite": "gles3",
+          "every": 10,
+          "start": 1,
+          "reference": "tests/graphics/ref/virgl-wsl/deqp/gles3.csv.gz"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "graphics_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the runner runs as the guest's test account, an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment, the piglit and dEQP lists and the references, owned by the test account"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run deqp.sh -v 1.4.1.1 -e 10 -s 1 -l deqp-gles-virgl.txt.gz gles3 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, four glcts processes, through the framed guest channel"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "check that a `renderer` line of the run's record names the reference's renderer, virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER)), and run judge.py deqp on the results and the Debian reference's, with the run's flakes"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "graphics-payload",
+                "base": "graphics-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 8,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2"
+            ],
+            "display": "virgl"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "deqp.sh exits 0, every case of its sample having a status, and prints its result line",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the record names the reference's renderer and judge.py finds each case that passed in the Debian reference guest, stored under tests/graphics/ref/virgl-wsl/deqp, to pass here, a case that passes when run again aside, and prints judge: result: pass",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 7200000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 8000,
+        "cpu_ceiling_millis": 8000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "graphics-data",
+          "node": "tests/cases/graphics/graphics.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
+          "per_architecture": false
+        },
+        {
+          "name": "graphics_scenario",
+          "node": "tests/cases/machine/graphics_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case compares a QEMU guest's OpenGL on virgl with the Debian reference guest's in the same QEMU display profile, on the testing PC's GPU"
+      }
+    },
+    {
+      "case_id": "machine.virgl.deqp-gles31-subset",
+      "behavior": "every 10th case of dEQP-GLES31 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz), 3,668 of its 36,675, the GLES subset that the virgl and Venus profiles both run, run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
+      "units": [
+        "tests/graphics/runners/deqp.sh",
+        "tests/graphics/runners/judge.py",
+        "VK-GL-CTS 1.4.1.1's glcts",
+        "Mesa's virgl driver",
+        "the virtio-gpu driver's 3D contexts"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "list": "tests/graphics/deqp-gles-virgl.txt.gz",
+          "suite": "gles31",
+          "every": 10,
+          "start": 1,
+          "reference": "tests/graphics/ref/virgl-wsl/deqp/gles31.csv.gz"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "graphics_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the runner runs as the guest's test account, an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment, the piglit and dEQP lists and the references, owned by the test account"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run deqp.sh -v 1.4.1.1 -e 10 -s 1 -l deqp-gles-virgl.txt.gz gles31 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, four glcts processes, through the framed guest channel"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "check that a `renderer` line of the run's record names the reference's renderer, virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER)), and run judge.py deqp on the results and the Debian reference's, with the run's flakes"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "graphics-payload",
+                "base": "graphics-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 8,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2"
+            ],
+            "display": "virgl"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "deqp.sh exits 0, every case of its sample having a status, and prints its result line",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the record names the reference's renderer and judge.py finds each case that passed in the Debian reference guest, stored under tests/graphics/ref/virgl-wsl/deqp, to pass here, a case that passes when run again aside, and prints judge: result: pass",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 7200000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 8000,
+        "cpu_ceiling_millis": 8000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "graphics-data",
+          "node": "tests/cases/graphics/graphics.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
+          "per_architecture": false
+        },
+        {
+          "name": "graphics_scenario",
+          "node": "tests/cases/machine/graphics_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case compares a QEMU guest's OpenGL on virgl with the Debian reference guest's in the same QEMU display profile, on the testing PC's GPU"
+      }
+    },
+    {
       "case_id": "machine.virgl.webgl-chromium-webgl1-00",
       "behavior": "pages 0 to 249 of the WebGL conformance suite's list for version 1.0.4, each run through the suite's own harness in Chromium under a headless Weston with its GL renderer, WebGL drawn on virgl over the testing PC's D3D12 adapter, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest in the same QEMU, page by page, with at least as many subtests passed",
       "units": [

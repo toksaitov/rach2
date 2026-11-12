@@ -70,13 +70,22 @@
 #define VIRGL_GLES3_PARTS  4
 #define VIRGL_GLES31_PARTS 4
 #define VIRGL_SAMPLE       200
+/* The dEQP-GLES subset that the virgl and Venus profiles both run, every
+ * GLES_SUBSETth case of each suite of the virgl list, sized to run its three
+ * suites in each profile within an hour on Rach2; the Venus profile's GL is
+ * virgl over the host's llvmpipe, and its references are the Debian guest's
+ * run of the same subset there. */
+#define GLES_SUBSET        10
+#define VENUS_GL_REF       GRAPHICS_DIR "/ref/venus-wsl/gles"
 /* Fail the judging unless a `renderer` line of the run's record names the
- * reference's renderer, virgl over the testing PC's adapter. */
-#define VIRGL_NAMED                                                            \
-    "r=$(cat " VIRGL_REF "/renderer) && { grep \"^renderer \" " GRAPHICS_DIR   \
+ * renderer in the file `ref`: virgl over the testing PC's adapter, or over
+ * the host's llvmpipe in the Venus profile. */
+#define NAMED(ref)                                                             \
+    "r=$(cat " ref ") && { grep \"^renderer \" " GRAPHICS_DIR                  \
     "/out/record | grep -qF -- \"$r\" || "                                     \
     "{ echo \"judge: result: fail no renderer line of the record names $r\"; " \
     "exit 1; }; } && "
+#define VIRGL_NAMED NAMED(VIRGL_REF "/renderer")
 /* Compare a file of the run with the reference's, line by line. */
 #define VIRGL_DIFF(ref, got)                                            \
     "if diff " VIRGL_REF "/" ref " " GRAPHICS_DIR "/out/" got "; then " \
@@ -127,10 +136,10 @@ struct graphics_case {
     char test[48];      /* IGT's test program, piglit's part, Venus's case, the
                          * game or virgl's kind: renderer, piglit, deqp, webgl
                          * or device-lost */
-    char suite[8];      /* a virgl dEQP case's suite: gles2, gles3 or gles31 */
+    char suite[8];      /* a dEQP-GLES case's suite: gles2, gles3 or gles31 */
     int part;           /* the part of the lavapipe fraction, 1 to VENUS_PARTS,
                          * or of a virgl list, 1 to its parts, 0 being the
-                         * sample */
+                         * sample and -1 the GLES subset */
     char password[128]; /* root's, at the console */
 };
 
@@ -186,9 +195,30 @@ static int set_profile(struct graphics_case *s, const char *profile)
 }
 
 /**
- * Read a Venus case, NAME: `smoke`, `sample`, `device-lost`, or
- * `fraction-N`, part N of VENUS_PARTS of the lavapipe fraction. Give 0 for
- * another name.
+ * Read a GLES suite's name and `-subset` from TEXT into the case's suite and
+ * part. Give 0 for another text.
+ */
+static int set_gles_subset(struct graphics_case *s, const char *text)
+{
+    static const char *const suites[] = {"gles2", "gles3", "gles31"};
+    size_t i, n;
+
+    for (i = 0; i < sizeof(suites) / sizeof(suites[0]); i++) {
+        n = strlen(suites[i]);
+        if (strncmp(text, suites[i], n) == 0 && strcmp(text + n, "-subset") == 0) {
+            strcpy(s->suite, suites[i]);
+            s->part = -1;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Read a Venus case, NAME: `smoke`, `sample`, `device-lost`,
+ * `fraction-N`, part N of VENUS_PARTS of the lavapipe fraction, or
+ * `deqp-SUITE-subset`, the GLES subset of SUITE on the profile's GL. Give 0
+ * for another name.
  */
 static int parse_venus(struct graphics_case *s, const char *name)
 {
@@ -197,6 +227,10 @@ static int parse_venus(struct graphics_case *s, const char *name)
         strcmp(name, "device-lost") == 0) {
         strcpy(s->test, name);
         return 1;
+    }
+    if (strncmp(name, "deqp-", 5) == 0) {
+        strcpy(s->test, "gles");
+        return set_gles_subset(s, name + 5);
     }
     if (strncmp(name, "fraction-", 9) != 0 || name[9] < '1' || name[9] > '0' + VENUS_PARTS ||
         name[10] != '\0')
@@ -229,9 +263,9 @@ static int set_part(struct graphics_case *s, const char *text, int parts)
 /**
  * Read a virgl case, NAME: `renderer`; `device-lost`; `piglit-sample` or
  * `piglit-NN`, part NN of VIRGL_PIGLIT_PARTS of the piglit list;
- * `deqp-SUITE-sample` or `deqp-SUITE-N`, a part of SUITE's cases, gles2,
- * gles3 or gles31; or `webgl-` and a chunk as parse_browser reads it. Give
- * 0 for another name.
+ * `deqp-SUITE-sample`, `deqp-SUITE-subset` or `deqp-SUITE-N`, a part of
+ * SUITE's cases, gles2, gles3 or gles31; or `webgl-` and a chunk as
+ * parse_browser reads it. Give 0 for another name.
  */
 static int parse_virgl(struct graphics_case *s, const char *name)
 {
@@ -250,6 +284,10 @@ static int parse_virgl(struct graphics_case *s, const char *name)
             return 0;
     } else if (strncmp(name, "deqp-", 5) == 0) {
         strcpy(s->test, "deqp");
+        if (set_gles_subset(s, name + 5)) {
+            strcpy(s->profile, "virgl");
+            return 1;
+        }
         for (i = 0; i < sizeof(suites) / sizeof(suites[0]); i++) {
             n = strlen(suites[i].suite);
             if (strncmp(name + 5, suites[i].suite, n) == 0 && name[5 + n] == '-')
@@ -424,7 +462,7 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
         "webgl: result: ",  "video: result: ",   "igt: result: ",  "modetest: result: ",
         "piglit: result: ", "glmark2: result: ", "deqp: result: ", "vkcube: result: ",
         "games: result: ",  "virgl: result: "};
-    int every = s->part == 0 ? VIRGL_SAMPLE : 0;
+    int every = s->part == 0 ? VIRGL_SAMPLE : s->part < 0 ? GLES_SUBSET : 0;
 
     *pattern = results[s->runner];
     switch (s->runner) {
@@ -456,7 +494,12 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
         snprintf(runner, size, "sh " GRAPHICS_DIR "/runners/glmark2.sh -o " GRAPHICS_DIR "/out");
         return 0;
     case VENUS:
-        if (strcmp(s->test, "smoke") == 0)
+        if (strcmp(s->test, "gles") == 0)
+            snprintf(runner, size,
+                     "sh " GRAPHICS_DIR "/runners/deqp.sh -v 1.4.1.1 -o " GRAPHICS_DIR
+                     "/out -e %d -s 1 -l " VIRGL_DEQP " %s" VENUS_SUMMARY,
+                     GLES_SUBSET, s->suite);
+        else if (strcmp(s->test, "smoke") == 0)
             snprintf(runner, size, VENUS_DEQP " -l " VENUS_SMOKE " vk" VENUS_SUMMARY);
         else if (strcmp(s->test, "sample") == 0)
             snprintf(runner, size,
@@ -598,6 +641,46 @@ static void run_lost(struct graphics_case *s)
     net_assert(&s->u, "ran", why == NULL, "%s: %s", why != NULL ? why : "", line);
 }
 
+/**
+ * Write the judging command line of a Venus case to `command`: a diff of
+ * what the device loss left, or judge.py on dEQP's results.
+ */
+static void judge_venus(struct graphics_case *s, char *command, size_t size)
+{
+    if (strcmp(s->test, "device-lost") == 0) {
+        /* What the guest saw of the loss is the Debian guest's. */
+        snprintf(command, size,
+                 "if diff " VENUS_LOST " " GRAPHICS_DIR "/out/lost.txt; then "
+                 "echo 'judge: result: pass'; else echo 'judge: result: fail'; fi");
+        return;
+    }
+    if (strcmp(s->test, "gles") == 0) {
+        /* The profile's GL is the Debian guest's: virgl over the host's
+         * llvmpipe. */
+        snprintf(command, size,
+                 NAMED(VENUS_GL_REF "/renderer") "python3 -I " GRAPHICS_DIR
+                                                 "/runners/judge.py deqp " VENUS_GL_REF
+                                                 "/%s.csv.gz " GRAPHICS_DIR
+                                                 "/out/results.csv.gz " GRAPHICS_DIR "/out/flakes",
+                 s->suite);
+        return;
+    }
+    /* The smoke case's device, as vulkaninfo describes it, is the
+     * Debian guest's: Venus over the same host lavapipe. */
+    snprintf(command, size,
+             "python3 -I " GRAPHICS_DIR "/runners/judge.py deqp " VENUS_REF
+             "/%s/results.csv.gz " GRAPHICS_DIR "/out/results.csv.gz " GRAPHICS_DIR "/out/flakes%s",
+             strcmp(s->test, "smoke") == 0 ? "smoke" : "fraction",
+             strcmp(s->test, "smoke") != 0
+                 ? ""
+                 : " && d() { grep -E '^[[:space:]]+(apiVersion|driverVersion|vendorID|"
+                   "deviceID|deviceType|deviceName|driverID|driverName|driverInfo|"
+                   "conformanceVersion)[[:space:]]*=' \"$1\"; } && "
+                   "d " VENUS_REF "/smoke/vulkaninfo.out > /tmp/vk.ref && "
+                   "d " GRAPHICS_DIR "/out/vulkaninfo.out > /tmp/vk.out && "
+                   "grep -q 'Virtio-GPU Venus' /tmp/vk.out && diff /tmp/vk.ref /tmp/vk.out");
+}
+
 /** Write judge.py's command line for the case to `command`. */
 static void judge_line(struct graphics_case *s, char *command, size_t size)
 {
@@ -645,27 +728,7 @@ static void judge_line(struct graphics_case *s, char *command, size_t size)
     case GAMES:
         break;
     case VENUS:
-        if (strcmp(s->test, "device-lost") == 0) {
-            /* What the guest saw of the loss is the Debian guest's. */
-            snprintf(command - n, size + (size_t)n,
-                     "if diff " VENUS_LOST " " GRAPHICS_DIR "/out/lost.txt; then "
-                     "echo 'judge: result: pass'; else echo 'judge: result: fail'; fi");
-            break;
-        }
-        /* The smoke case's device, as vulkaninfo describes it, is the
-         * Debian guest's: Venus over the same host lavapipe. */
-        snprintf(command, size,
-                 "deqp " VENUS_REF "/%s/results.csv.gz " GRAPHICS_DIR
-                 "/out/results.csv.gz " GRAPHICS_DIR "/out/flakes%s",
-                 strcmp(s->test, "smoke") == 0 ? "smoke" : "fraction",
-                 strcmp(s->test, "smoke") != 0
-                     ? ""
-                     : " && d() { grep -E '^[[:space:]]+(apiVersion|driverVersion|vendorID|"
-                       "deviceID|deviceType|deviceName|driverID|driverName|driverInfo|"
-                       "conformanceVersion)[[:space:]]*=' \"$1\"; } && "
-                       "d " VENUS_REF "/smoke/vulkaninfo.out > /tmp/vk.ref && "
-                       "d " GRAPHICS_DIR "/out/vulkaninfo.out > /tmp/vk.out && "
-                       "grep -q 'Virtio-GPU Venus' /tmp/vk.out && diff /tmp/vk.ref /tmp/vk.out");
+        judge_venus(s, command - n, size + (size_t)n);
         break;
     case VIRGL:
         /* Each case's record names the reference's renderer; the renderer
