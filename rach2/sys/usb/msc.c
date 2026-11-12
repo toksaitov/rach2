@@ -1995,7 +1995,7 @@ static void publish(struct msc_device *m, int lun)
 
     u->block.sector_size = u->block_size;
     u->block.sector_count = u->blocks;
-    u->block.flags = BLOCK_UNLOCKED | (u->write_protect ? BLOCK_READ_ONLY : 0u);
+    u->block.flags = u->write_protect ? BLOCK_READ_ONLY : 0u;
     u->block.deadline_ticks = MSC_DEADLINE_TICKS;
     u->block.max_sectors = MSC_REQ_SECTORS; /* a 512 KiB request as one command */
     u->block.read = 0;

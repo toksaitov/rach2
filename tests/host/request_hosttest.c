@@ -527,8 +527,8 @@ static void write_and_flush(void)
           "a synchronous write waits for completion");
     check(block_flush(&first.device) == 0 && waits == 2,
           "a flush uses the same wait and ownership path");
-    check(block_bkl_takes() == 2 && bkl_entries == 2 && bkl_depth == 0,
-          "a device without BLOCK_UNLOCKED is called under the big lock, taken and given back");
+    check(bkl_entries == 0 && bkl_depth == 0,
+          "the lag device is written and flushed without the big lock");
     cpu_table[0].current = 0;
 }
 
@@ -551,11 +551,12 @@ static int unlocked_submit(block_device_t *dev, struct block_request *r)
     return 0;
 }
 
-/** A driver that still needs the big lock: it is called holding it. */
+/** A driver called by a caller that holds the big lock: the lock is still
+ *  held, and taken no further. */
 static int locked_submit(block_device_t *dev, struct block_request *r)
 {
     (void)dev;
-    check(bkl_depth == 1 && !irq_depth, "a driver without BLOCK_UNLOCKED is called under it");
+    check(bkl_depth == 1 && !irq_depth, "a caller's big lock is held across the driver's call");
     k_memset(r->page, 0x6B, r->count * BLOCK_SECTOR_SIZE);
     unlocked_held = r;
     return 0;
@@ -580,19 +581,17 @@ static void interrupt_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     bkl_depth = held; /* and the wake takes it back */
 }
 
-/** A read, a flush and a view's read of a device with BLOCK_UNLOCKED take
- *  no big lock, from submit to completion to wait; a device without the flag
- *  is called under it, taken once a call for a caller without it and not at
- *  all for one that holds it. */
+/** A read, a flush and a view's read take no big lock, from submit to
+ *  completion to wait; a caller that holds the big lock calls the device
+ *  holding it, and the block layer takes it no further. */
 static void unlocked_path(void)
 {
     block_device_t own = other, plain;
     block_partition_t view;
     process_t process;
-    uint32_t takes = block_bkl_takes();
     int entries = bkl_entries;
 
-    own.flags = BLOCK_UNLOCKED;
+    own.flags = 0;
     own.submit = unlocked_submit;
     own.flush = unlocked_submit;
     own.deadline_ticks = 100;
@@ -603,21 +602,16 @@ static void unlocked_path(void)
     wait_step = interrupt_wait;
     k_memset(output, 0, sizeof(output));
     check(block_request(&own, 0, 0, 1, output) == 0 && output[0] == 0x6B,
-          "an unlocked device's read is answered from its interrupt");
-    check(block_flush(&own) == 0, "an unlocked device's flush is answered the same way");
+          "a device's read is answered from its interrupt");
+    check(block_flush(&own) == 0, "a device's flush is answered the same way");
     check(block_request(&view.device, 0, 0, 1, output) == 0 && unlocked_lba == 10,
-          "a view over an unlocked device is unlocked too");
-    check(unlocked_submits == 3 && block_bkl_takes() == takes && bkl_entries == entries,
-          "an unlocked device's read, flush and view take no big lock");
+          "a view's read takes no big lock either");
+    check(unlocked_submits == 3 && bkl_entries == entries,
+          "a device's read, flush and view take no big lock");
     plain = own;
-    plain.flags = 0;
     plain.submit = locked_submit;
-    check(block_request(&plain, 0, 0, 1, output) == 0 && block_bkl_takes() == takes + 1 &&
-              bkl_depth == 0,
-          "a caller without the big lock has it taken for a device that needs it");
     bkl_depth = 1;
-    check(block_request(&plain, 0, 0, 1, output) == 0 && block_bkl_takes() == takes + 1 &&
-              bkl_depth == 1,
+    check(block_request(&plain, 0, 0, 1, output) == 0 && bkl_entries == entries && bkl_depth == 1,
           "a caller that holds the big lock has it taken no further");
     bkl_depth = 0;
     wait_step = 0;

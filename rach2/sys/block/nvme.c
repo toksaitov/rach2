@@ -856,7 +856,7 @@ static void nvme_take_namespace(struct nvme_ctrl *c, uint32_t nsid)
     ns->dev.sector_size = BLOCK_SECTOR_SIZE;
     ns->dev.sector_count = nsze;
     ns->dev.max_sectors = c->max_sectors;
-    ns->dev.flags = BLOCK_FAULT_SAFE | BLOCK_POLLABLE | BLOCK_WRITE_THROUGH | BLOCK_UNLOCKED;
+    ns->dev.flags = BLOCK_FAULT_SAFE | BLOCK_POLLABLE | BLOCK_WRITE_THROUGH;
     ns->dev.unflushed = 0;
     ns->dev.read = nvme_read;
     ns->dev.write = nvme_write;

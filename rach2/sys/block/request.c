@@ -34,9 +34,9 @@
  * `req_lock`, a spinlock taken with interrupts off, which a submit takes and
  * a completion takes from the interrupt; a caller sleeps on the request's
  * own state, as Linux's `submit_bio_wait` sleeps on the bio's completion
- * (block/bio.c:1469-1481), and the completion wakes it. A device whose
- * driver still needs the big lock, one without `BLOCK_UNLOCKED`, is called
- * under it (`req_big_enter`).
+ * (block/bio.c:1469-1481), and the completion wakes it. Every driver
+ * serializes on locks of its own, as Linux's do, and is called without the
+ * big lock.
  */
 
 #include "../lib/kirq.h"
@@ -57,7 +57,6 @@
 #include "../timer.h"
 #include "../proc/process.h"
 #include "../proc/sched.h"
-#include "../proc/smp.h"
 #include "../proc/wait_queue.h"
 
 /* Policy: how many requests may be live at once unless `rach2.blockpool`
@@ -100,9 +99,6 @@ static uint32_t release_total;
 static uint32_t release_tick;
 static uint32_t pool_size;  /* the limit: REQ_LIMIT, or rach2.blockpool=N */
 static uint32_t device_cap; /* the most requests one device may hold */
-/* The big lock's takes for a device without `BLOCK_UNLOCKED`, counted while
- * it is held, which orders the counts (`block_bkl_takes`). */
-static uint32_t bkl_takes;
 
 /* Buffers of REQ_KEEP_PAGES heap pages that freed requests left, kept
  * mapped for the next request of more than a page and at most that many,
@@ -621,36 +617,6 @@ static void count_transfer(struct block_stats *s, int write, uint32_t count, uin
     s->busy_ms += ms;
 }
 
-/**
- * Take the big lock for a transfer or a flush on `device` when its driver
- * still needs it: a device without `BLOCK_UNLOCKED`, for a caller with
- * interrupts on that does not hold it, as `device_read` in the buffer cache
- * took it for every disk before. Returns 1 when it took the lock, which the
- * caller gives back with `bkl_exit`, and 0 otherwise. A caller with
- * interrupts off may hold a spinlock, under which the big lock is never
- * taken, and calls the device's polled functions as it is. A request's
- * sleep lets the lock go and takes it back.
- */
-static int req_big_enter(block_device_t *device)
-{
-    if ((block_flags(device) & BLOCK_UNLOCKED) || !kirq_enabled() || bkl_held()) {
-        return 0;
-    }
-    bkl_enter();
-    bkl_takes++;
-    return 1;
-}
-
-uint32_t block_bkl_takes(void)
-{
-    return bkl_takes;
-}
-
-void block_bkl_takes_reset(void)
-{
-    bkl_takes = 0;
-}
-
 /** Add `delta`, 1 or -1, to the requests in progress on `device` and on
  * `disk` under it, when that is another device. */
 static void count_in_flight(block_device_t *device, block_device_t *disk, int delta)
@@ -670,17 +636,13 @@ int block_request_flags(block_device_t *device, int write, uint64_t lba, uint32_
     block_device_t *disk = device ? block_physical(device) : 0;
     uint32_t start = timer_now_us();
     uint32_t flags;
-    int big, rc;
+    int rc;
 
     if (!device) {
         return -EIO;
     }
     count_in_flight(device, disk, 1);
-    big = req_big_enter(device);
     rc = transfer(device, write, lba, count, buffer, req_flags);
-    if (big) {
-        bkl_exit();
-    }
     count_in_flight(device, disk, -1);
     if (rc == 0) {
         uint32_t us = timer_now_us() - start;
@@ -810,10 +772,9 @@ static int transfer(block_device_t *device, int write, uint64_t lba, uint32_t co
 }
 
 /**
- * `block_flush` on `device`, the submitter, under the big lock when the
- * device needs it. A caller outside a system call, such as a page fault
- * writing through the page cache with interrupts off, flushes a
- * `BLOCK_POLLABLE` disk by polling.
+ * `block_flush` on `device`, the submitter. A caller outside a system call,
+ * such as a page fault writing through the page cache with interrupts off,
+ * flushes a `BLOCK_POLLABLE` disk by polling.
  */
 static int flush_device(block_device_t *device)
 {
@@ -865,18 +826,11 @@ static int flush_device(block_device_t *device)
 
 int block_flush(block_device_t *device)
 {
-    int big, rc;
-
     device = block_submitter(device);
     if (!device || !device->flush) {
         return 0; /* nothing of its own to flush: what was written is on it */
     }
-    big = req_big_enter(device);
-    rc = flush_device(device);
-    if (big) {
-        bkl_exit();
-    }
-    return rc;
+    return flush_device(device);
 }
 
 struct block_request *block_request_begin(block_device_t *device, uint64_t lba, uint32_t count,
@@ -884,7 +838,6 @@ struct block_request *block_request_begin(block_device_t *device, uint64_t lba, 
 {
     struct block_request *r;
     uint32_t flags;
-    int big, rc;
 
     if (!device || !device->submit || count == 0 || count > block_max_sectors(device) ||
         lba >= device->sector_count || count > device->sector_count - lba) {
@@ -895,12 +848,7 @@ struct block_request *block_request_begin(block_device_t *device, uint64_t lba, 
         return NULL;
     }
     *generation = r->generation;
-    big = req_big_enter(device);
-    rc = device->submit(device, r);
-    if (big) {
-        bkl_exit();
-    }
-    if (rc != 0) {
+    if (device->submit(device, r) != 0) {
         flags = pool_lock();
         req_refused(r);
         pool_unlock(flags);

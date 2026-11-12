@@ -48,7 +48,7 @@
  *
  * No big lock is taken. Each channel's registers and state are under its
  * own spinlock, as libata's port is under `ap->lock` (drivers/ata/
- * libata-core.c:5566), taken with interrupts off: the owner, the callers
+ * libata-core.c:5567), taken with interrupts off: the owner, the callers
  * of every processor and the interrupt and the tick meet there. A data port
  * sequence holds it from its wait for the idle drive to its last sector,
  * as libata's PIO moves a sector under the lock (libata-sff.c:1210-1250),
@@ -1236,7 +1236,7 @@ int ata_init(void)
                      !kcmdline_has("rach2.atapio");
             d->dev.sector_size = BLOCK_SECTOR_SIZE;
             d->dev.sector_count = d->sectors;
-            d->dev.flags = BLOCK_FAULT_SAFE | BLOCK_UNLOCKED;
+            d->dev.flags = BLOCK_FAULT_SAFE;
             d->dev.max_sectors = BLOCK_REQ_MAX_SECTORS;
             d->dev.read = ata_read;
             d->dev.write = ata_write;

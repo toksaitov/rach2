@@ -4178,46 +4178,9 @@ static void start_network(void)
     (void)ath9k_probe();
 }
 
-/**
- * bkl/calls: proc/smp.c's counts, then a line `disk_takes N`, the block
- * layer's takes of the big lock for a transfer or flush on a device whose
- * driver still needs it (`block_bkl_takes`). Returns the length written,
- * at most `cap`.
- */
-static int32_t bkl_calls_show(void *data, char *buf, uint32_t cap)
-{
-    static const char key[] = "disk_takes ";
-    char digits[10];
-    uint32_t len = (uint32_t)smp_calls_show(data, buf, cap);
-    uint32_t n = block_bkl_takes(), i, d = 0;
-
-    do {
-        digits[d++] = (char)('0' + n % 10u);
-        n /= 10u;
-    } while (n > 0);
-    if (len + sizeof(key) - 1u + d + 1u > cap) {
-        return (int32_t)len;
-    }
-    for (i = 0; i < sizeof(key) - 1u; i++) {
-        buf[len++] = key[i];
-    }
-    while (d > 0) {
-        buf[len++] = digits[--d];
-    }
-    buf[len++] = '\n';
-    return (int32_t)len;
-}
-
-/** A write to bkl/calls: zero proc/smp.c's counts and the disk path's. */
-static int32_t bkl_calls_store(void *data, const char __user *buf, uint32_t len)
-{
-    block_bkl_takes_reset();
-    return smp_calls_store(data, buf, len);
-}
-
 /* debugfs's big-lock counts, profile, long holds and the tick's parts, each
  * zeroed by a write (proc/smp.c). */
-static const struct debugfs_text_ops bkl_calls_ops = {bkl_calls_show, bkl_calls_store};
+static const struct debugfs_text_ops bkl_calls_ops = {smp_calls_show, smp_calls_store};
 static const struct debugfs_text_ops bkl_profile_ops = {smp_profile_show, smp_profile_store};
 static const struct debugfs_text_ops bkl_long_ops = {smp_long_show, smp_long_store};
 static const struct debugfs_text_ops bkl_tick_ops = {smp_tick_show, smp_tick_store};

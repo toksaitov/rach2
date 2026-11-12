@@ -13,9 +13,8 @@
  * wait. The big lock covers the rest, the dirty lists and every field of
  * the order the dirty marks give, and so every dirty mark, write, sync and
  * eviction of a dirty buffer. The block layer's requests need no lock of
- * the cache's: a miss reads without the big lock, which the block layer
- * takes only for a device whose driver still needs it (`BLOCK_UNLOCKED`,
- * block/block.h), and a write runs under the big lock its caller holds for
+ * the cache's: a miss reads without the big lock, which no driver needs
+ * (block/block.h), and a write runs under the big lock its caller holds for
  * the dirty lists, which the request's sleep lets go. A holder without the
  * big lock reads its buffer and marks nothing, so a buffer that no one
  * holds keeps its dirty bit while `cache_spin` is held, and a dirty one
@@ -717,8 +716,8 @@ static void unhold_wake(struct bbuf *b, uint64_t *cpus)
 /**
  * Read `sectors` sectors of `dev` at `lba` into `buf` for a miss, with or
  * without the big lock: the request waits on its own completion, as Linux's
- * `submit_bio_wait` (block/bio.c:1469-1481), and the block layer takes the
- * big lock only for a driver that still needs it. 0, or the request's error.
+ * `submit_bio_wait` (block/bio.c:1469-1481), and no driver needs the big
+ * lock. 0, or the request's error.
  */
 static int device_read(block_device_t *dev, uint64_t lba, uint32_t sectors, void *buf)
 {
@@ -1733,9 +1732,8 @@ static void key_held(struct bbuf *b, block_device_t *dev, uint64_t blk)
  * A hit and a miss that finds a clean victim near the head of the release
  * order (`victim_clean`) take `cache_spin` alone, so a caller without the
  * big lock reads a cached block without it, and fills one that the cache
- * can make room for with no write without it too, the block layer taking it
- * only for a driver that still needs it (`device_read`), as Linux's
- * `__getblk_slow` (fs/buffer.c:1117) needs no global lock. A miss
+ * can make room for with no write without it too (`device_read`), as
+ * Linux's `__getblk_slow` (fs/buffer.c:1117) needs no global lock. A miss
  * without the big lock that finds no clean victim takes the big lock for
  * the whole search, whose writes of a dirty victim keep the order the dirty
  * marks give, and lets it go at the return.
