@@ -686,32 +686,36 @@ static int ata_wait_data(struct ata_channel *ch, int held)
  * with the lock held and the state `ata_unlock` puts back in `*flags`, or
  * `-EIO`, without the lock, for a drive that never goes idle.
  *
- * The wait for idle runs without the lock, sleeping where the caller can,
- * so a caller that cannot sleep does not keep the owner, back from its DMA,
- * or a caller on another processor spinning for the lock with interrupts
- * off for as long as it polls. The status is read once more under the lock,
- * since the owner may have issued its next command between the two, and
- * the wait begins again if it did. This is `ata_sff_pio_task`'s order,
- * which busy-waits under the port lock only briefly and lets it go to
- * sleep while BSY persists (drivers/ata/libata-sff.c:1239-1247). After
- * `ATA_IDLE_TRIES` such misses the wait polls under the lock, which bounds
- * it as the polled wait's own bound does.
+ * The status is read first under the lock, which an idle drive answers
+ * at once. A busy one is waited for without the lock, sleeping where the
+ * caller can, so a caller that cannot sleep does not keep the owner, back
+ * from its DMA, or a caller on another processor spinning for the lock with
+ * interrupts off for as long as it polls; the status is then read once more
+ * under the lock, since the owner may have issued its next command between
+ * the two, and the wait begins again if it did. This is
+ * `ata_sff_pio_task`'s order, which busy-waits under the port lock only
+ * briefly and lets it go to sleep while BSY persists
+ * (drivers/ata/libata-sff.c:1239-1247). After `ATA_IDLE_TRIES` such misses
+ * the wait polls under the lock, which bounds it as the polled wait's own
+ * bound does.
  */
 static int ata_lock_idle(struct ata_channel *ch, uint32_t *flags)
 {
     int tries, rc;
 
-    for (tries = 0; tries < ATA_IDLE_TRIES; tries++) {
-        if (ata_wait_idle(ch, 0) != 0) {
-            return -EIO;
-        }
+    for (tries = 0;; tries++) {
         *flags = ata_lock(ch);
         if (ata_status_done(ch, ATA_WANT_IDLE, &rc)) {
             return 0;
         }
+        if (tries == ATA_IDLE_TRIES) {
+            break;
+        }
         ata_unlock(ch, *flags);
+        if (ata_wait_idle(ch, 0) != 0) {
+            return -EIO;
+        }
     }
-    *flags = ata_lock(ch);
     if (ata_wait_idle(ch, 1) != 0) {
         ata_unlock(ch, *flags);
         return -EIO;
