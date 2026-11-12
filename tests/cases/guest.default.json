@@ -1838,7 +1838,7 @@
         {"assertion_id": "as-eight", "checks": "Under an address-space limit of eight megabytes, a mapping of sixteen is ENOMEM, one of one is not, and the break does not move past the limit.", "source": "program"},
         {"assertion_id": "hard-limit", "checks": "Root lowers and raises the hard limit; a user lowers it, is refused a raise with EPERM, and a soft value above the hard is EINVAL.", "source": "program"},
         {"assertion_id": "sandbox", "checks": "Under OpenSSH's rlimit sandbox, limits of 0 on file size, descriptors and processes, select and poll answer a descriptor opened before as ready.", "source": "program"},
-        {"assertion_id": "fsize", "checks": "Under a file limit of 4096, a write of 8192 is cut to 4096, and the next write and a truncation to 8192 are EFBIG.", "source": "program"},
+        {"assertion_id": "fsize", "checks": "Under a file limit of 4096, a file of 16384 bytes shrinks to 12288 by ftruncate and to 8192 by truncate with no SIGXFSZ, a write of 8192 to an emptied file is cut to 4096, and the next write and a truncation to 8192 are EFBIG.", "source": "program"},
         {"assertion_id": "zombie", "checks": "A zombie's limits are read and set by root and refused to another user with EPERM, and once reaped its pid is ESRCH.", "source": "program"},
         {"assertion_id": "inherit-set", "checks": "Root sets the descriptor limit to 200.", "source": "program"},
         {"assertion_id": "inherit", "checks": "A child forked under a descriptor limit of 200 reads 200.", "source": "program"},
