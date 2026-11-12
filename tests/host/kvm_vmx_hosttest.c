@@ -579,6 +579,13 @@ void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi)
     *hi = 0;
 }
 
+/** The host PMU driver's count of its writes, which this model's
+ * constant MSRs never need to move. */
+uint32_t platform_pmu_writes(void)
+{
+    return 0;
+}
+
 /** Physical counter writes are unused by this model's fake backend. */
 void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi)
 {

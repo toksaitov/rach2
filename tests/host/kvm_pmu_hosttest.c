@@ -157,10 +157,27 @@ static uint64_t *reg(uint32_t index)
     return &physical[physical_n++];
 }
 
+/* The host PMU driver's count of writes (`platform_pmu_writes`): a new
+ * count at every call, so that each entry reads the host's controls, but
+ * `writes_count` itself while `writes_stable` is set; and the reads of the
+ * global control. */
+static int writes_stable;
+static uint32_t writes_count, global_reads;
+
+/* The processor arch_cpu_id gives under RACH2_HOST_CPU. */
+unsigned int host_cpu;
+
+/** The host PMU driver's count of its writes, as `writes_stable` asks. */
+uint32_t platform_pmu_writes(void)
+{
+    return writes_stable ? writes_count : ++writes_count;
+}
+
 /** Read the register bank used by the production switching code. */
 void kcpu_rdmsr(uint32_t index, uint32_t *lo, uint32_t *hi)
 {
     uint64_t value = *reg(index);
+    global_reads += index == GLOBAL_CTRL;
     CHECK(!model_missing, "no unchecked access to an absent PMU");
     *lo = (uint32_t)value;
     *hi = (uint32_t)(value >> 32);
@@ -753,12 +770,49 @@ static void amd_constraints(void)
     model_amd_sig = 0;
 }
 
+/** VMX's entries beside the host's watchdog read the host's global and
+ * fixed controls once, and again only after the host's PMU driver writes
+ * (`platform_pmu_writes`), as Linux takes perf's own record of them: two
+ * entries with no write between read IA32_PERF_GLOBAL_CTRL once, and the
+ * entry after a write that gives the host general counter 0 as well finds
+ * it held. */
+static void intel_host_kept(void)
+{
+    struct kvm_pmu_msr guest[KVM_PMU_LIST_MAX], host[KVM_PMU_LIST_MAX];
+    uint64_t global[2], watch_global = FIXED_BIT(1);
+    uint32_t ng, nh, reads;
+
+    setup(1, 0, 0);
+    *reg(GLOBAL_CTRL) = watch_global;
+    *reg(FIXED_CTRL) = 0xB0u;
+    writes_stable = 1;
+    writes_count++;
+    reads = global_reads;
+    kvm_pmu_prepare(&v);
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    CHECK(global_reads == reads + 1 && global[1] == watch_global,
+          "two entries with no write of the host's between read its global control once");
+    *reg(GLOBAL_CTRL) = watch_global | 1u;
+    *reg(EVENTSEL0) = 0x3Cu | EV_ENABLE | EV_OS;
+    writes_count++;
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    CHECK(global_reads == reads + 2 && global[1] == (watch_global | 1u) &&
+              *reg(GLOBAL_CTRL) == (watch_global | 1u),
+          "the entry after the host's write reads its control again and keeps its new counter");
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    writes_stable = 0;
+}
+
 /** Run each model and leave no heap allocation. */
 int main(void)
 {
     intel_registers();
     filters();
     intel_switch();
+    intel_host_kept();
     intel_placement();
     intel_lbr();
     amd_switch();

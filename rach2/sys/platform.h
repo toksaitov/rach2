@@ -183,6 +183,13 @@ void platform_pmu_cpu_setup(void);
  */
 void platform_pmu_enable(uint64_t cycles);
 
+/** The count of this driver's writes to this processor's performance
+ * monitoring registers since boot, NMIs' among them. KVM keeps the host's
+ * global and fixed counter controls that it read (kvm/pmu.c) until the
+ * count moves, as Linux's KVM takes them from perf's own record of them.
+ * Any context. */
+uint32_t platform_pmu_writes(void);
+
 /** Stop this processor's counter and mask its APIC entry, as Linux's
  * `clear_local_APIC` masks APIC_LVTPC; nothing when it is not running.
  * Called with interrupts off, by the detector, at a panic and on each
