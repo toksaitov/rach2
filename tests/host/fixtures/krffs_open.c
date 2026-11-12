@@ -1,5 +1,6 @@
 /**
- * Open mounted KRFFS at the flush that publishes a relocated node.
+ * Open mounted KRFFS at the flush that publishes a relocated node, and walk
+ * a model type's paths by the cached walk without the big lock.
  *
  * The rule of mk/host-fixtures.mk extracts complete resolver and open
  * functions unchanged, with the namespace lock and the sleeping lock of
@@ -33,6 +34,186 @@ static struct fs_struct dirs;
 static int opened_fd, publication_seen, lock_waits, opening_flags, before_publication;
 
 #define VFS_IS_DIR(mode) (((mode) & 0170000u) == 0040000u)
+
+/*
+ * The cached walk's model: a type whose names the name cache keeps, which
+ * reads without the big lock, and whose links hold their targets when
+ * `fast`, as ext2's fast links do. Its nodes are one table, each named in
+ * its parent; `refs` counts the walk's holds, which every row gives back.
+ * Reading the link `moving` moves the walker's root, as a chroot by a
+ * thread that shares it (CLONE_FS) would during the walk.
+ */
+struct cnode {
+    struct cnode *parent;
+    const char *name;
+    uint32_t mode;
+    const char *target; /* a link's target, NULL for any other node */
+    int fast;           /* the target is in the node, for `readlink_cached` */
+    int refs;
+};
+
+enum {
+    C_ROOT,
+    C_BIN,
+    C_TOOL,
+    C_REL,
+    C_ABS,
+    C_TOP,
+    C_SLOW,
+    C_COVER,
+    C_UNDER,
+    C_UNSEEN,
+    C_HERE,
+    C_UNSURE,
+    C_TARGET,
+    C_ALIAS,
+    C_MOVING,
+    C_OROOT,
+    C_INNER,
+    C_SOURCE,
+    C_NODES
+};
+
+static struct cnode cn[C_NODES];
+static struct vfs_mount croot, cother, cunseen, cunsure, cbind;
+static struct vfs_mount *cache_table[5] = {&croot, &cother, &cunseen, &cunsure, &cbind};
+/* The record the cached walk captures for a regular file's last name, and
+ * the counts of those captured and dropped. */
+static int name_record, names_taken, names_put;
+
+/** Name node `i` in `parent`, of `mode`, a link to `target` when given. */
+static void cnode_set(int i, int parent, const char *name, uint32_t mode, const char *target,
+                      int fast)
+{
+    cn[i].parent = parent < 0 ? NULL : &cn[parent];
+    cn[i].name = name;
+    cn[i].mode = mode;
+    cn[i].target = target;
+    cn[i].fast = fast;
+    cn[i].refs = 0;
+}
+
+/** Take a hold on a model node. */
+static void cache_hold(struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    ((struct cnode *)node)->refs++;
+}
+
+/** Give a hold back; a hold that was never taken fails the row. */
+static void cache_put(struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    check(((struct cnode *)node)->refs > 0, "the cached walk puts only a hold it took");
+    ((struct cnode *)node)->refs--;
+}
+
+/** Give a hold back unless it is the last, which `put` gives under the big
+ * lock: 1 when given back. */
+static int cache_put_unless_last(struct vfs_mount *mnt, void *node)
+{
+    struct cnode *n = node;
+
+    (void)mnt;
+    if (n->refs > 1) {
+        n->refs--;
+        return 1;
+    }
+    return 0;
+}
+
+/** A node's attributes: its mode and root's ownership. */
+static int cache_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
+{
+    (void)mnt;
+    k_memset(st, 0, sizeof(*st));
+    st->mode = ((struct cnode *)node)->mode;
+    st->nlink = 1;
+    return 0;
+}
+
+/** Copy a link's target into `buf`: its length, or -ENAMETOOLONG. */
+static int cache_target(const struct cnode *n, char *buf, uint32_t cap)
+{
+    uint32_t len = (uint32_t)k_strlen(n->target);
+
+    if (len + 1 > cap) {
+        return -ENAMETOOLONG;
+    }
+    k_memcpy(buf, n->target, len + 1);
+    return (int)len;
+}
+
+/** A link's target, read with the node's lock: any link. */
+static int cache_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
+{
+    (void)mnt;
+    return ((struct cnode *)node)->target ? cache_target(node, buf, cap) : -EINVAL;
+}
+
+/** A link's target without its lock, for the cached walk: a fast link only,
+ * -1 for any other. Reading `moving` moves the walker's root. */
+static int cache_readlink_cached(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
+{
+    struct cnode *n = node;
+
+    (void)mnt;
+    if (!n->target || !n->fast) {
+        return -1;
+    }
+    if (n == &cn[C_MOVING]) {
+        dirs.root_seq++;
+    }
+    return cache_target(n, buf, cap);
+}
+
+/** A name in a directory, for the full walk, which no cached row reaches. */
+static int cache_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
+{
+    (void)mnt;
+    (void)dir;
+    (void)name;
+    (void)node;
+    return -ENOENT;
+}
+
+static const struct vfs_ops cache_ops = {
+    .lookup = cache_lookup,
+    .hold = cache_hold,
+    .put = cache_put,
+    .getattr = cache_getattr,
+    .readlink = cache_readlink,
+    .put_unless_last = cache_put_unless_last,
+    .readlink_cached = cache_readlink_cached,
+};
+static const struct vfs_type cache_type = {
+    .name = "cache", .ops = &cache_ops, .name_cache = 1, .reads_unlocked = 1};
+
+/** Whether the names `a` and `b` are the same. */
+static int cache_same(const char *a, const char *b)
+{
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/** The name cache's entry for `name` in `dir` of the model, held: 0, or
+ * -EAGAIN for a name it does not keep. */
+static int cache_hit(void *dir, const char *name, void **node)
+{
+    int i;
+
+    for (i = 0; i < C_NODES; i++) {
+        if (cn[i].parent == dir && cn[i].name && cache_same(cn[i].name, name)) {
+            cn[i].refs++;
+            *node = &cn[i];
+            return 0;
+        }
+    }
+    return -EAGAIN;
+}
 
 /** Print `message` and exit 2: a lock or reference invariant of the kernel
  * code failed. */
@@ -185,11 +366,12 @@ int vfs_mount_seen(const struct vfs_mount *m)
     return 1;
 }
 
-/** And the cached walk reads that namespace's view in the set's first word. */
+/** And the cached walk reads that namespace's view in the set's first word:
+ * of the model's mounts, `cunseen` is another namespace's and whether this
+ * one sees `cunsure` the word cannot say. */
 int vfs_mount_seen_word(const struct vfs_mount *m)
 {
-    (void)m;
-    return 1;
+    return m == &cunseen ? 0 : m == &cunsure ? -1 : 1;
 }
 
 /** The fixture's types keep no name cache: each lookup goes to the type. */
@@ -220,9 +402,13 @@ static int dcache_lookup_cached(struct vfs_mount *mnt, void *dir, const char *na
     return -EAGAIN;
 }
 
-/** The cached walk never reaches the cache: KRFFS keeps no names there. */
+/** The cached walk's lookup: the model's names, and none of KRFFS's, which
+ * keeps no names in the cache. */
 static int dcache_lookup_hit(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
+    if (mnt->type == &cache_type) {
+        return cache_hit(dir, name, node);
+    }
     return dcache_lookup_cached(mnt, dir, name, node);
 }
 
@@ -245,13 +431,48 @@ static struct spinlock records_lock = SPINLOCK_INIT;
 int vfs_protected_symlinks = 1;
 const struct vfs_type vfs_debugfs_type;
 
-/** No fixture mount is detached, so a closed description reaps nothing. */
-static void reap_if_detached(const struct vfs_mount *mnt)
+/** No fixture mount is detached, so a closed description reaps nothing,
+ * whatever count `left` its put returned. */
+static void reap_if_detached(const struct vfs_mount *mnt, uint32_t left)
 {
     (void)mnt;
+    (void)left;
 }
 
+/** The count of changes of names, which none of the cached rows makes. */
+int vfs_name_seq(uint32_t *seq)
+{
+    *seq = 0;
+    return 1;
+}
+
+/** Capture a regular file's last name for the cached walk: the model's one
+ * record, counted. */
+int vfs_name_capture_at(const struct vfs_ref *parent, const char *leaf, uint32_t seq,
+                        struct vfs_name **out)
+{
+    (void)parent;
+    (void)leaf;
+    (void)seq;
+    names_taken++;
+    *out = (struct vfs_name *)&name_record;
+    return 0;
+}
+
+/** Drop the record the cached walk captured, counted; the resolver's code
+ * calls this through the name below, while fd.c keeps the stub of
+ * compat/vfs_name_none.c, which no record reaches. */
+static void fixture_name_put(struct vfs_name *name)
+{
+    if (name) {
+        check(name == (struct vfs_name *)&name_record, "a dropped record is the one captured");
+        names_put++;
+    }
+}
+
+#define vfs_name_put fixture_name_put
 #include "vfs_open.inc"
+#undef vfs_name_put
 
 /** All fixture files use the mounted KRFFS adapter. */
 static int mnt_is_root(const struct vfs_mount *mnt)
@@ -662,6 +883,141 @@ static void locked_walks(void)
     check(mount.inprogress == 0 && mount.ns.depth == 0, "failed opens release all references");
 }
 
+/** Lay out the model: its root with a directory and its file, links to
+ * that file relative, absolute and through "/", a slow link, a directory
+ * another mount of the model covers, one another namespace's mount covers,
+ * one under a mount the namespace word cannot judge, a file a file bind
+ * covers with a link to it, and the link that moves the root. */
+static void cache_layout(void)
+{
+    int i;
+
+    cnode_set(C_ROOT, -1, NULL, 0040755u, NULL, 0);
+    cnode_set(C_BIN, C_ROOT, "bin", 0040755u, NULL, 0);
+    cnode_set(C_TOOL, C_BIN, "tool", 0100644u, NULL, 0);
+    cnode_set(C_REL, C_ROOT, "rel", 0120777u, "bin/tool", 1);
+    cnode_set(C_ABS, C_ROOT, "abs", 0120777u, "/bin/tool", 1);
+    cnode_set(C_TOP, C_ROOT, "top", 0120777u, "/", 1);
+    cnode_set(C_SLOW, C_ROOT, "slow", 0120777u, "bin/tool", 0);
+    cnode_set(C_COVER, C_ROOT, "cover", 0040755u, NULL, 0);
+    cnode_set(C_UNDER, C_COVER, "inner", 0100644u, NULL, 0);
+    cnode_set(C_UNSEEN, C_ROOT, "unseen", 0040755u, NULL, 0);
+    cnode_set(C_HERE, C_UNSEEN, "here", 0100644u, NULL, 0);
+    cnode_set(C_UNSURE, C_ROOT, "unsure", 0040755u, NULL, 0);
+    cnode_set(C_TARGET, C_ROOT, "target", 0100644u, NULL, 0);
+    cnode_set(C_ALIAS, C_ROOT, "alias", 0120777u, "/target", 1);
+    cnode_set(C_MOVING, C_ROOT, "moving", 0120777u, "/bin/tool", 1);
+    cnode_set(C_OROOT, -1, NULL, 0040755u, NULL, 0);
+    cnode_set(C_INNER, C_OROOT, "inner", 0100644u, NULL, 0);
+    cnode_set(C_SOURCE, -1, NULL, 0100644u, NULL, 0);
+    for (i = 0; i < 5; i++) {
+        k_memset(cache_table[i], 0, sizeof(*cache_table[i]));
+        cache_table[i]->type = &cache_type;
+        cache_table[i]->state = VFS_ACTIVE;
+        cache_table[i]->ns.holder = -1;
+        cache_table[i]->parent = i ? &croot : NULL;
+    }
+    croot.root = &cn[C_ROOT];
+    cother.root = &cn[C_OROOT];
+    cother.covered = &cn[C_COVER];
+    cunseen.root = &cn[C_OROOT];
+    cunseen.covered = &cn[C_UNSEEN];
+    cunsure.root = &cn[C_OROOT];
+    cunsure.covered = &cn[C_UNSURE];
+    cbind.root = &cn[C_SOURCE];
+    cbind.covered = &cn[C_TARGET];
+}
+
+/** Resolve `path` by the cached walk alone, with a name record when
+ * `entry`: 0 with the walk's answer in `out` when it ends on `node` of
+ * `mnt`, given back; VFS_CACHED_MISS or another answer otherwise. */
+static int cached_at(const char *path, struct vfs_name **entry, struct vfs_mount *mnt, int node)
+{
+    struct vfs_ref out = {NULL, NULL};
+    int rc = vfs_resolve_cached(path, 0, &out, entry);
+
+    if (rc == 0) {
+        rc = out.mnt == mnt && out.node == &cn[node] ? 0 : -1;
+        vfs_ref_release(&out);
+    }
+    return rc;
+}
+
+/** Whether every hold the cached walk took and every mount it entered was
+ * given back. */
+static int cache_quiet(void)
+{
+    int i, held = 0;
+
+    for (i = 0; i < C_NODES; i++) {
+        held += cn[i].refs;
+    }
+    for (i = 0; i < 5; i++) {
+        held += (int)cache_table[i]->inprogress;
+    }
+    return held == 0;
+}
+
+/**
+ * The cached walk without the big lock, as Linux's walk under RCU
+ * (fs/namei.c): it follows a link whose target the node holds, relative
+ * from the link's directory and absolute from the root, as pick_link and
+ * nd_jump_root (fs/namei.c:970-1000, 1877-1882), "/" among them, and
+ * leaves any other link to the full walk (fs/namei.c:1860-1870); it
+ * crosses a covering mount its namespace sees, as __follow_mount_rcu
+ * (fs/namei.c:1521-1563), stays on the directory under one it does not,
+ * and leaves to the full walk one it cannot judge. A file bind's crossing
+ * drops the last name's record, which names the covered file. An absolute
+ * link met after the root moved goes to the full walk. Each row gives back
+ * every hold and mount it took.
+ */
+static void cached_walks(void)
+{
+    struct vfs_name *entry = NULL;
+    struct vfs_mount **was = mounts;
+    int was_slots = mount_slots;
+
+    current_proc = &writer;
+    writer.fs = &dirs;
+    dirs.root_mnt = NULL;
+    dirs.root_node = NULL;
+    cache_layout();
+    mounts = cache_table;
+    mount_slots = 5;
+    check(cached_at("/bin/tool", NULL, &croot, C_TOOL) == 0, "the cached walk finds a file");
+    check(cached_at("/rel", NULL, &croot, C_TOOL) == 0,
+          "and follows a fast link's relative target from the link's directory");
+    check(cached_at("/abs", NULL, &croot, C_TOOL) == 0, "and an absolute target from the root");
+    check(cached_at("/top/bin/tool", NULL, &croot, C_TOOL) == 0,
+          "and a link to \"/\", whose spliced path begins with two slashes");
+    check(cached_at("/slow", NULL, &croot, C_TOOL) == VFS_CACHED_MISS,
+          "and leaves a link whose target the node does not hold to the full walk");
+    check(cached_at("/cover/inner", NULL, &cother, C_INNER) == 0,
+          "it crosses a covering mount onto that mount's root");
+    check(cached_at("/unseen/here", NULL, &croot, C_HERE) == 0,
+          "and stays under a mount that another namespace sees");
+    check(cached_at("/unsure/here", NULL, &croot, C_HERE) == VFS_CACHED_MISS,
+          "and leaves a mount whose namespace it cannot judge to the full walk");
+    check(cached_at("/bin/tool", &entry, &croot, C_TOOL) == 0 && entry != NULL &&
+              names_taken == 1 && names_put == 0,
+          "it records a regular file's last name");
+    fixture_name_put(entry);
+    entry = NULL;
+    check(cached_at("/alias", &entry, &cbind, C_SOURCE) == 0 && entry == NULL && names_taken == 2 &&
+              names_put == 2,
+          "and drops that record when a file bind's crossing moves it onto the bind");
+    check(cached_at("/target", &entry, &cbind, C_SOURCE) == 0 && entry == NULL &&
+              names_taken == 3 && names_put == 3,
+          "whether a link or the name itself reaches the bound file");
+    check(cached_at("/moving", NULL, &croot, C_TOOL) == VFS_CACHED_MISS,
+          "an absolute link met after the root moved goes to the full walk");
+    check(cached_at("/abs", NULL, &croot, C_TOOL) == 0,
+          "and a walk that begins after the move takes the root as it now is");
+    check(cache_quiet(), "the cached walks give back every hold and mount");
+    mounts = was;
+    mount_slots = was_slots;
+}
+
 /** Run the opens at relocation publication, then the locked walks once
  * those pass: 0 when every row passes, 1 otherwise. */
 int main(void)
@@ -673,7 +1029,10 @@ int main(void)
         locked_walks();
     }
     if (!failures) {
-        printf("krffs-open: result: pass: publication open and offset reuse\n");
+        cached_walks();
+    }
+    if (!failures) {
+        printf("krffs-open: result: pass: publication open, offset reuse and cached walks\n");
     }
     return failures != 0;
 }
