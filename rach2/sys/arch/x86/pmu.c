@@ -1,7 +1,8 @@
 /*
  * pmu.c: the performance counter that raises the hard-lockup detector's NMI
  * on the PC, Intel's fixed counter 1 or general counter 0, or AMD's core
- * counter 2 on family 15h and core counter 0 on the others.
+ * counter 2 on family 15h and core counter 0 on the others; and each
+ * processor's freeze of its counters in SMM.
  */
 #include "../../platform.h"
 
@@ -28,6 +29,19 @@
 #define IA32_PERF_GLOBAL_CTRL     0x38Fu
 #define IA32_PERF_GLOBAL_OVF_CTRL 0x390u
 #define PERF_CAP_FW_WRITE         (1u << 13)
+
+/* IA32_DEBUGCTL's FREEZE_WHILE_SMM, which stops the counters while the
+ * processor is in SMM (Linux's DEBUGCTLMSR_FREEZE_IN_SMM,
+ * arch/x86/include/asm/msr-index.h:418-419); the SMM_FREEZE bit of
+ * IA32_PERF_CAPABILITIES, which says the processor has it; `cpuid` leaf
+ * 1's PDCM, which says IA32_PERF_CAPABILITIES is there; and the length of
+ * leaf 0xA's event mask below which Linux's perf takes no Intel monitor
+ * (arch/x86/events/intel/core.c:6536-6538, ARCH_PERFMON_EVENTS_COUNT). */
+#define IA32_DEBUGCTL       0x1D9u
+#define DEBUGCTL_FREEZE_SMM (1u << 14)
+#define PERF_CAP_SMM_FREEZE (1u << 12)
+#define CPUID1_PDCM         (1u << 15)
+#define ARCH_PERFMON_EVENTS 7u
 
 /* Fixed counter 1's field of IA32_FIXED_CTR_CTRL: counting in the kernel
  * and in user mode, and the interrupt on overflow; and its bit in the
@@ -298,6 +312,30 @@ static void probe_intel(void)
         count_msr = fixed ? IA32_FIXED_CTR1 : IA32_A_PMC0;
         max_period = ((uint64_t)1 << (width - 1)) - 1u;
     }
+}
+
+void platform_pmu_cpu_setup(void)
+{
+    uint32_t a, c, vendor[3];
+    uint32_t lo = 0, hi = 0;
+
+    if (!kcpu_msr_present()) {
+        return;
+    }
+    kcpu_id(0, &a, &vendor[0], &vendor[2], &vendor[1]);
+    if (!vendor_is(vendor, "GenuineIntel") || a < 0xAu) {
+        return;
+    }
+    kcpu_id(0xAu, &a, NULL, NULL, NULL);
+    if ((a & 0xFFu) < 2u || ((a >> 24) & 0xFFu) < ARCH_PERFMON_EVENTS) {
+        return;
+    }
+    kcpu_id(1, NULL, NULL, &c, NULL);
+    if ((c & CPUID1_PDCM) == 0 || (rdmsr64(IA32_PERF_CAPABILITIES) & PERF_CAP_SMM_FREEZE) == 0) {
+        return;
+    }
+    kcpu_rdmsr(IA32_DEBUGCTL, &lo, &hi);
+    kcpu_wrmsr(IA32_DEBUGCTL, lo | DEBUGCTL_FREEZE_SMM, hi);
 }
 
 /**

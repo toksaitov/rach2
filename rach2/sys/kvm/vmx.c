@@ -338,7 +338,10 @@
 #define DR7_FIXED   0x400ull
 #define DR7_ENABLES 0xFFull
 
-#define DEBUGCTL_LBR 0x1ull
+#define DEBUGCTL_LBR        0x1ull
+/* IA32_DEBUGCTL's FREEZE_WHILE_SMM, which the host owns: Linux's
+ * HOST_OWNED_DEBUGCTL (arch/x86/kvm/vmx/main.c:45). */
+#define DEBUGCTL_FREEZE_SMM 0x4000ull
 
 #define DB_VECTOR  1
 #define NMI_VECTOR 2
@@ -1678,6 +1681,7 @@ static int vmx_enter(struct kvm_vcpu *v)
     struct vmx_vcpu *x = vx(v);
     struct vmx_host host;
     uint64_t eptp, host_dr7 = 0, host_db[4] = {0, 0, 0, 0}, global[2];
+    uint64_t host_debugctl, debugctl;
     uint32_t ng, nh, gbase = caps.rdtscp ? N_GUEST_MSRS : N_GUEST_MSRS - 1u;
     uint32_t hbase = caps.rdtscp ? N_HOST_MSRS : N_HOST_MSRS - 1u;
     int cpu = (int)arch_cpu_id(), r, tlb, nmi = 0, mce = 0;
@@ -1722,8 +1726,14 @@ static int vmx_enter(struct kvm_vcpu *v)
         vmcs_write(GUEST_IA32_PERF_GLOBAL_CTRL, global[0]);
         vmcs_write(HOST_IA32_PERF_GLOBAL_CTRL, global[1]);
     }
-    if (x->debugctl != (kvm_pmu_vmcs_debugctl(v))) {
-        x->debugctl = kvm_pmu_vmcs_debugctl(v);
+    /* The host's FREEZE_WHILE_SMM rides in the guest's DEBUGCTL, read with
+     * interrupts off, as Linux's vcpu_enter_guest reads it
+     * (arch/x86/kvm/x86.c:10556-10565) and vmx_guest_debugctl_write adds
+     * it (arch/x86/kvm/vmx/vmx.h:441-447). */
+    host_debugctl = vmx_op->rdmsr(MSR_IA32_DEBUGCTL);
+    debugctl = kvm_pmu_vmcs_debugctl(v) | (host_debugctl & DEBUGCTL_FREEZE_SMM);
+    if (x->debugctl != debugctl) {
+        x->debugctl = debugctl;
         vmcs_write(GUEST_IA32_DEBUGCTL, x->debugctl);
     }
     vmcs_write(VM_ENTRY_MSR_LOAD_COUNT, gbase + ng);
@@ -1735,14 +1745,21 @@ static int vmx_enter(struct kvm_vcpu *v)
     dr_store(v, host_dr7, host_db);
     vmx_op->fpu_store(x->host_fpu, v->xsave, v->xcr0);
     vmx_op->restore_host(&host);
+    if (host_debugctl) {
+        /* The exit cleared DEBUGCTL; put the host's back, as Linux's
+         * vmx_vcpu_run (arch/x86/kvm/vmx/vmx.c:7445-7446). */
+        vmx_op->wrmsr(MSR_IA32_DEBUGCTL, host_debugctl);
+    }
     after_run(v);
     kvm_pmu_vmx_exit(v, (const struct kvm_pmu_msr *)x->msrs + gbase,
                      x->ex.failed == VMX_OK && !(x->ex.reason & EXIT_FAILED_ENTRY));
     if (x->ex.failed == VMX_OK && !(x->ex.reason & EXIT_FAILED_ENTRY) &&
         (x->debugctl & DEBUGCTL_LBR)) {
-        /* A #DB in the guest clears DEBUGCTL.LBR, and the exit saved it. */
+        /* A #DB in the guest clears DEBUGCTL.LBR, and the exit saved it.
+         * The guest never reads the host's bit, as Linux's
+         * vmx_guest_debugctl_read (arch/x86/kvm/vmx/vmx.h:449-452). */
         x->debugctl &= vmcs_read(GUEST_IA32_DEBUGCTL);
-        v->pmu.debugctl = x->debugctl;
+        v->pmu.debugctl = x->debugctl & ~DEBUGCTL_FREEZE_SMM;
     }
     if (x->ex.failed == VMX_OK) {
         nmi = exit_is_nmi(&x->ex);

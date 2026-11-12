@@ -305,7 +305,8 @@ int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
 /**
  * The order: the boot processor's page attribute table (`pat_setup`), the
  * processor's own tables, the floating-point format the boot processor chose
- * (`fpu_cpu_setup`), its APIC with the MADT's NMI inputs, the boot
+ * (`fpu_cpu_setup`), the counters' freeze in SMM (`platform_pmu_cpu_setup`),
+ * its APIC with the MADT's NMI inputs, the boot
  * processor's tick, and the number `rdtscp` gives (`tsc_cpu_setup`); then
  * `ap_alive` releases the boot processor, the two check that their TSCs
  * agree (`tsc_sync_target`), and the shared start (`smp_cpu_main`) runs.
@@ -318,6 +319,7 @@ void x86_ap_entry(int cpu)
     pat_setup();
     arch_ap_tables(cpu, ap_stack);
     fpu_cpu_setup();
+    platform_pmu_cpu_setup();
     lapic_init_ap();
     apic_lint_init(acpi_get());
     apic_timer_start(x86_tick_counts(), platform_timer_hz());

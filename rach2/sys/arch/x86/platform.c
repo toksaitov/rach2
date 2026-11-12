@@ -82,6 +82,7 @@ uint32_t x86_tick_counts(void)
 void platform_cpu_init(uintptr_t boot_stack_top)
 {
     pat_setup();
+    platform_pmu_cpu_setup();
     init_gdt();
     klog(KLOG_DEBUG, "boot", "gdt: ready");
 
