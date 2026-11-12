@@ -461,18 +461,46 @@ static int32_t disk_read_page(struct filemap *m, uint32_t pgoff, uintptr_t phys)
 }
 
 /**
+ * Read pages `first` to `first + count - 1` of the disk file of `m` into
+ * the frames `frames`, each filled whole: in one call of the type's
+ * `read_frames`, which fills them straight from the device, or a page at
+ * a time (`disk_read_page`) for a type without it. The pages filled, from
+ * the first, or a negative errno.
+ */
+static int32_t disk_read_pages(struct filemap *m, uint32_t first, uint32_t count,
+                               const uintptr_t *frames)
+{
+    int32_t got = vfs_read_frames(m->entry.ofd->vmnt, m->entry.ofd->fhandle, first, count, frames);
+    uint32_t i;
+
+    if (got != -ENOSYS) {
+        return got;
+    }
+    for (i = 0; i < count; i++) {
+        got = disk_read_page(m, first + i, frames[i]);
+        if (got <= 0) {
+            break;
+        }
+        if (got < (int32_t)PAGE_SIZE) {
+            i++;
+            break;
+        }
+    }
+    return i > 0 ? (int32_t)i : got;
+}
+
+/**
  * Read page `pgoff` of the disk file of `m`, which neither its pages in
  * memory nor the file page cache has, into the frame `phys`, and with it the
- * pages of the read-around window that neither has, in the file's order, as
- * Linux reads the window in one request (do_sync_mmap_readahead,
- * mm/filemap.c:3197-3203): the window's later pages then come from the block
- * cache's run, which the first miss in order fills, and not from one request
- * each. The other pages join the file page cache alone, its frames shared
- * as `filecache_keep` allows, for the fault around this one and the next
- * faults to take, and what the cache declines is let go. Only a file whose
- * frames may be the cache's (`stores` clear), and one the cache keeps
- * (`filecache_keeps`), reads around. The caller holds
- * the file's lock and may sleep; `size` is the file's size and `epoch` the
+ * pages of the read-around window that neither has, as Linux reads the
+ * window in one request (do_sync_mmap_readahead, mm/filemap.c:3197-3203):
+ * each run of such pages in one call (`disk_read_pages`), into frames the
+ * device fills itself. The other pages join the file page cache alone, its
+ * frames shared as `filecache_keep` allows, for the fault around this one
+ * and the next faults to take, and what the cache declines is let go. Only
+ * a file whose frames may be the cache's (`stores` clear), and one the
+ * cache keeps (`filecache_keeps`), reads around. The caller holds the
+ * file's lock and may sleep; `size` is the file's size and `epoch` the
  * cache's count taken before the read. Returns the bytes of `pgoff` read,
  * or a negative errno.
  */
@@ -483,30 +511,53 @@ static int32_t disk_read_around(struct filemap *m, uint32_t pgoff, uint64_t size
     uint32_t start = pgoff > DISK_AROUND / 2u ? pgoff - DISK_AROUND / 2u : 0;
     uint64_t pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
     uint32_t n = pages - start < DISK_AROUND ? (uint32_t)(pages - start) : DISK_AROUND;
-    uint32_t i, absent = 0;
-    int32_t got = -EIO, one;
+    uint32_t i, run, own = pgoff - start, wanted = 0, filled = 0;
+    int32_t got = -EIO;
 
     for (i = 0; i < n; i++) {
-        around[i] = start + i == pgoff ? phys : shmem_resident(m->sh, start + i);
-        absent |= around[i] ? 0 : 1u << i;
+        around[i] = i == own ? phys : shmem_resident(m->sh, start + i);
+        wanted |= around[i] ? 0 : 1u << i;
     }
     (void)filecache_lend(&m->entry, start, n, around);
+    wanted |= 1u << own;
     for (i = 0; i < n; i++) {
-        if (start + i == pgoff) {
-            got = disk_read_page(m, pgoff, phys);
-        } else if (!(absent & (1u << i))) {
+        if (i == own || !(wanted & (1u << i))) {
             continue;
-        } else if (around[i]) {
+        }
+        if (around[i]) {
             free_frame(around[i]); /* the reference the cache lent it with */
-        } else if ((around[i] = alloc_user_frame()) != 0) {
-            one = disk_read_page(m, start + i, around[i]);
-            if (one > 0) {
-                filecache_keep(&m->entry, start + i, around[i], epoch);
-            }
-            free_frame(around[i]);
+            wanted &= ~(1u << i);
+        } else if ((around[i] = alloc_user_frame()) == 0) {
+            wanted &= ~(1u << i);
         }
     }
-    return got;
+    for (i = 0; i < n; i += run) {
+        if (!(wanted & (1u << i))) {
+            run = 1;
+            continue;
+        }
+        for (run = 1; i + run < n && (wanted & (1u << (i + run))); run++) {
+        }
+        got = disk_read_pages(m, start + i, run, around + i);
+        if (got > 0) {
+            filled |= (got >= 32 ? 0xFFFFFFFFu : (1u << got) - 1u) << i;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        if (i == own || !(wanted & (1u << i))) {
+            continue;
+        }
+        if (filled & (1u << i)) {
+            filecache_keep(&m->entry, start + i, around[i], epoch);
+        }
+        free_frame(around[i]);
+    }
+    if (!(filled & (1u << own))) {
+        return disk_read_page(m, pgoff, phys);
+    }
+    return size - (uint64_t)pgoff * PAGE_SIZE < PAGE_SIZE
+               ? (int32_t)(size - (uint64_t)pgoff * PAGE_SIZE)
+               : (int32_t)PAGE_SIZE;
 }
 
 /**
