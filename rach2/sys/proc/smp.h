@@ -276,8 +276,8 @@ int32_t smp_profile_show(void *data, char *buf, uint32_t cap);
  * `kernel`, of the one thread whose ID follows it after a space, if one
  * does, and samples under the big lock alone for anything else. A thread
  * ID above 2147483647, or one cut off by the 24 bytes read, fails with
- * -EINVAL and changes nothing, as Linux's kstrtoint does. No tick samples
- * while the table and its totals are zeroed. */
+ * -EINVAL and changes nothing. No tick samples while the table and its
+ * totals are zeroed. */
 int32_t smp_profile_store(void *data, const char __user *buf, uint32_t len);
 
 /* The rows of the tick's counts (`bkl_tick_charge`, debugfs's `bkl/tick`):
