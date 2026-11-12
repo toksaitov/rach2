@@ -107,8 +107,8 @@ int32_t kvm_pmu_placed_show(void *obj, int arg, char *buf, uint32_t cap);
  * those overflows, plus each counter of a TSX-checkpointed event that
  * entry gave a PMI bit, whose own status bit a rollback may have cleared,
  * while any counter's overflow bit is set; with no counter's bit set, the
- * checkpointed counters once until the next entry, and 0 after. 0 while
- * no PMI bit is set. */
+ * checkpointed counters once from the guest's run (`kvm_pmu_vmx_run`) to
+ * the next entry, and 0 otherwise. 0 while no PMI bit is set. */
 int kvm_pmu_nmi(void);
 
 /** End the claims of the last Intel entry on this processor, when its
@@ -208,6 +208,11 @@ void kvm_pmu_svm_exit(struct kvm_vcpu *v);
  */
 void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm_pmu_msr *host,
                        uint32_t *ng, uint32_t *nh, uint64_t *global);
+
+/** Just before the run `kvm_pmu_vmx_enter` prepared, with interrupts off:
+ * from here an NMI that finds no counter's status may claim the run's
+ * TSX-checkpointed counters, once. */
+void kvm_pmu_vmx_run(void);
 
 /** After the run `kvm_pmu_vmx_enter` prepared, whose exit stopped the
  * counters: add each running counter's delta when `ran`, and take the LBR
