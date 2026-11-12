@@ -2615,7 +2615,8 @@ int32_t i915_gem_evict_something(struct drm_i915_private *i915, uint64_t size, u
  * Empty [start, start + size) of the global GTT for a binding at a fixed
  * offset, as Linux's i915_gem_evict_for_node: each binding there undone,
  * once it is idle (`i915_vma_is_active`), which is waited for unless
- * `flags` has I915_PIN_NONBLOCK; a binding of an object with no
+ * `flags` has I915_PIN_NONBLOCK, with a reference held on its object
+ * across the wait, as Linux's grab_vma; a binding of an object with no
  * references is undone with no wait, as Linux's dying_vma. With
  * I915_PIN_NOEVICT nothing is undone.
  *

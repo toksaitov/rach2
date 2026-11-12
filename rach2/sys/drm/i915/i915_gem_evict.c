@@ -101,18 +101,26 @@ static int range_reserved(const struct drm_i915_private *i915, uint64_t start, u
 /*
  * The bindings in the range are taken one at a time, since a wait lets
  * others change the list: a busy one is waited for, which an unbind in
- * Linux does, and then looked for again. A binding of an object with no
- * references is idle and goes with no wait, as Linux's grab_vma takes a
- * dying binding with no lock and its unbind waits only for the binding's
- * own requests (i915_gem_evict.c:67-83, 410-436; i915_vma.c:2123): such
- * an object is on `gem.freed`, which the wait's drop of the GEM lock lets
- * another thread free. With I915_PIN_NOEVICT the range must be free
- * already, as Linux's i915_gem_gtt_reserve asks.
+ * Linux does, and then looked for again. The wait lets the GEM lock go, and
+ * another thread's close or retirement may then drop the object's last
+ * reference, so a reference is held across it, as Linux's grab_vma takes
+ * one with i915_gem_object_get_rcu before the unbind's wait and ungrab_vma
+ * puts it (i915_gem_evict.c:66-92). The put comes with the lock retaken,
+ * so that a last put leaves the object on `gem.freed`. A binding of an
+ * object with no references is idle and goes with no wait, as Linux's
+ * grab_vma takes a dying binding with no lock and its unbind waits only for
+ * the binding's own requests (i915_gem_evict.c:67-83, 410-436;
+ * i915_vma.c:2123): such an object is on `gem.freed`, which the wait's
+ * drop of the GEM lock lets another thread free. One whose last reference
+ * goes between the test and the get is such an object too. With
+ * I915_PIN_NOEVICT the range must be free already, as Linux's
+ * i915_gem_gtt_reserve asks.
  */
 int32_t i915_gem_evict_for_node(struct drm_i915_private *i915, uint64_t start, uint64_t size,
                                 uint32_t flags)
 {
     uint64_t end = start + size;
+    struct drm_i915_gem_object *obj;
     struct i915_vma *v;
     int32_t err;
 
@@ -135,11 +143,15 @@ int32_t i915_gem_evict_for_node(struct drm_i915_private *i915, uint64_t start, u
             if (flags & I915_PIN_NONBLOCK) {
                 return -ENOSPC;
             }
-            err = i915_gem_object_wait(v->obj, 1, -1);
-            if (err != 0) {
-                return err;
+            obj = v->obj;
+            if (drm_gem_object_get_unless_zero(&obj->base)) {
+                err = i915_gem_object_wait(obj, 1, -1);
+                i915_gem_object_put(obj);
+                if (err != 0) {
+                    return err;
+                }
+                continue;
             }
-            continue;
         }
         (void)i915_vma_unbind(v, !(flags & I915_PIN_NONBLOCK));
         i915->gem.evictions++;
