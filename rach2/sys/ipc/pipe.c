@@ -21,6 +21,11 @@
 #include "../lib/spinlock.h"
 #include "../proc/smp.h"
 #include "../syscall_internal.h"
+#include "../timer.h"
+
+/* The longest a reader that finds its pipe empty spins for the next write
+ * before it sleeps, in microseconds (`pipe_read_spin`). */
+#define PIPE_SPIN_US 4u
 
 /* Linux ioctls a pipe answers. */
 #define FIONREAD 0x541B /* bytes available to read */
@@ -364,6 +369,53 @@ static int pipe_sleep(pipe_t *p, pipe_t *q, wait_queue_t *wq, wq_cond_fn cond, v
     } while (rc == -EINTR && !pipe_signal_pending());
     pipe_lock(p, q);
     return rc;
+}
+
+/** Record the caller as the last writer of `p`, on the processor it runs
+ * on, for a reader's spin (`pipe_read_spin`); the lock of `p` is held. */
+static void pipe_note_writer(pipe_t *p)
+{
+    p->writer = current_proc;
+    p->writer_cpu = (int)arch_cpu_id();
+}
+
+/**
+ * Spin, with the lock of `p` given back, until `p` is readable
+ * (`pipe_readable`), for at most PIPE_SPIN_US, while the thread that wrote
+ * it last runs on another processor (`sched_spin_on`), as Linux's
+ * mutex_optimistic_spin spins while a mutex's owner runs
+ * (kernel/locking/mutex.c:350-385). Returns 1 when it spun, with the lock
+ * held again, and the caller judges the pipe again; 0 when it did not,
+ * since no writer runs elsewhere or the counter's rate is not known.
+ *
+ * A sleep costs the writer the interprocessor interrupt that wakes the
+ * reader, an exit of 2 to 4 us under KVM, and the reader a halt, and a
+ * reader that empties a busy pipe mostly finds the next write a microsecond
+ * or two later. The bound, about what the wake costs the writer, keeps a
+ * reader from burning its processor while a writer runs long between
+ * writes, so that a spin that ends in a sleep costs at most twice what the
+ * sleep alone would.
+ */
+static int pipe_read_spin(pipe_t *p)
+{
+    const process_t *w = p->writer;
+    int cpu = p->writer_cpu;
+    uint64_t start;
+
+    if (!w || w == current_proc || cpu == (int)arch_cpu_id() || !timer_cycles_agree() ||
+        !sched_spin_on(w, cpu)) {
+        return 0;
+    }
+    pipe_unlock(p, NULL);
+    start = arch_cycles();
+    for (;;) {
+        if (pipe_readable(p) || *(volatile uint32_t *)&current_proc->sig_woken ||
+            timer_cycles_us(arch_cycles() - start) >= PIPE_SPIN_US || !sched_spin_on(w, cpu)) {
+            break;
+        }
+    }
+    pipe_lock(p, NULL);
+    return 1;
 }
 
 /** Wait until no splice holds the bytes of `p` (`pipe_splice_peek`), with
@@ -876,6 +928,7 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
     }
 
     pipe_lock(p, NULL);
+    pipe_note_writer(p);
     last = p->tail;
     while (done < count) {
         uint8_t *at;
@@ -1053,33 +1106,35 @@ static uint32_t pipe_buf_head_len(const pipe_t *p)
  * a destination page that cannot be written ends the read with the bytes of
  * the buffers before it, or -EFAULT, and the buffer keeps every byte. The
  * read goes on through the buffers while bytes are buffered, and waits only
- * before its first byte. An empty buffer a faulted write left is let go of
+ * before its first byte; a blocking read spins once for the next write
+ * while the last writer runs on another processor (`pipe_read_spin`) and
+ * sleeps if none comes. An empty buffer a faulted write left is let go of
  * when the read reaches it with room left (`pipe_buf_skip_empty`), so a
  * read of a pipe that holds only such buffers waits, or is -EAGAIN, as
  * Linux's.
  *
  * The pipe's lock is held from the start to the return but for the wait for
- * bytes (`pipe_sleep`), as Linux's `pipe_read` holds `pipe->mutex` across
- * its copies' faults and drops it only to wait (fs/pipe.c:264, 361, 393 and
- * 399 in 6.12), so while a destination page comes in no other reader takes
- * the next buffer and no writer grows the one being read: the bytes a read
- * returns are adjacent in the stream. Each page of a copy is brought in for
- * writing and copied under the address space's regions' lock, so another
- * thread's unmap comes before or after it and a page it took away ends the
- * copy with -EFAULT (`pipe_iov_fill`); the head moves past a buffer once
- * its copy is whole. The lock is the pipe's alone: the read takes no big
- * lock, and nothing but the lock holder moves the ring. The writers are
- * woken once, after the lock is given back, as Linux's `pipe_read` wakes
- * them (fs/pipe.c:399-402), and not at each buffer: a writer woken at the
- * first would run on another processor, fill the one slot and wait again,
- * at the cost of a wake for each page.
+ * bytes, the spin's and the sleep's (`pipe_sleep`), as Linux's `pipe_read`
+ * holds `pipe->mutex` across its copies' faults and drops it only to wait
+ * (fs/pipe.c:264, 361, 393 and 399 in 6.12), so while a destination page comes
+ * in no other reader takes the next buffer and no writer grows the one being
+ * read: the bytes a read returns are adjacent in the stream. Each page of a
+ * copy is brought in for writing and copied under the address space's regions'
+ * lock, so another thread's unmap comes before or after it and a page it took
+ * away ends the copy with -EFAULT (`pipe_iov_fill`); the head moves past a
+ * buffer once its copy is whole. The lock is the pipe's alone: the read takes
+ * no big lock, and nothing but the lock holder moves the ring. The writers are
+ * woken once, after the lock is given back, as Linux's `pipe_read` wakes them
+ * (fs/pipe.c:399-402), and not at each buffer: a writer woken at the first
+ * would run on another processor, fill the one slot and wait again, at the cost
+ * of a wake for each page.
  */
 static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n)
 {
     pipe_t *p = (pipe_t *)e->priv;
     uint32_t count = 0, done = 0, off = 0;
     int32_t err = 0;
-    int i, k = 0, room = 0;
+    int i, k = 0, room = 0, spun = 0;
 
     if (!(e->flags & FD_FLAG_READ)) {
         return -EBADF;
@@ -1106,6 +1161,12 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int 
             if (fd_is_nonblock(e)) {
                 err = -EAGAIN;
                 break;
+            }
+            if (!spun) {
+                spun = 1;
+                if (pipe_read_spin(p)) {
+                    continue;
+                }
             }
             if (pipe_sleep(p, NULL, &p->read_wq, pipe_readable, p, "pipe_read") < 0) {
                 err = -EINTR;
@@ -1240,6 +1301,7 @@ static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n
     }
 
     pipe_lock(p, NULL);
+    pipe_note_writer(p);
     fill = pipe_buf_merge_room(p, count);
     last = p->tail;
     while (done < count) {
@@ -1908,6 +1970,7 @@ int32_t pipe_tee(fd_entry_t *in, fd_entry_t *out, uint32_t len, int nonblock, in
         pipe_buf_link(a, b, k, n, move, whole);
         pipe_ring_produce(b, n);
         if (n > 0) {
+            pipe_note_writer(b);
             pipe_wake(b, &b->read_wq, WQ_DATA);
         }
         if (move) {

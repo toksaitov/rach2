@@ -3,7 +3,7 @@
  * user page is resolved.
  *
  * host-deps:
- * host-deps: tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/fd_flat.c tests/host/compat/spin_none.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * Pipe, ring and checked-copy code are the kernel's. User addresses refer to
@@ -164,6 +164,26 @@ static void as_peer(void (*action)(void))
     thread_now = 2;
     action();
     thread_now = was;
+}
+
+/** The cycle counter, which no row reads: a reader never spins for the next
+ * write (`pipe_read_spin`), since the counter's rate is not known here. */
+uint64_t arch_cycles(void)
+{
+    return 0;
+}
+
+/** A cycle is a microsecond here. */
+uint64_t timer_cycles_us(uint64_t cycles)
+{
+    return cycles;
+}
+
+/** The counter's rate is not known, so no reader spins: the writer runs only
+ * once the reader sleeps. */
+int timer_cycles_agree(void)
+{
+    return 0;
 }
 
 /** Make `l` a free lock, for pipe creation, which no row reaches. */
