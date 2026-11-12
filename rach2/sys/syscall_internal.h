@@ -117,13 +117,23 @@ long ksys_pread64(int fd, char __user *buf, size_t count, long long pos);
 long ksys_pwrite64(int fd, const char __user *buf, size_t count, long long pos);
 
 /**
- * The core of fadvise64 in every form: check one advice of posix_fadvise(3) and
- * ignore it; the offset does not matter to it. Returns 0, or fails as Linux's
- * does: -EBADF for a descriptor not open, -ESPIPE for a pipe or a FIFO, and
- * -EINVAL for a negative length or an advice outside POSIX_FADV_NORMAL (0) to
+ * The core of fadvise64 in every form: take one advice of posix_fadvise(3)
+ * for the `len` bytes at `offset` of `fd`, as Linux's `generic_fadvise`
+ * does (mm/fadvise.c). Returns 0, or fails as Linux's does: -EBADF for a
+ * descriptor not open, -ESPIPE for a pipe or a FIFO, and -EINVAL for a
+ * negative length or an advice outside POSIX_FADV_NORMAL (0) to
  * POSIX_FADV_NOREUSE (5).
  */
-long ksys_fadvise64(int fd, long long len, uint32_t advice);
+long ksys_fadvise64(int fd, long long offset, long long len, uint32_t advice);
+
+/**
+ * The core of readahead(2) in every form: queue the reads of the `count`
+ * bytes at `offset` of `fd`, as POSIX_FADV_WILLNEED does, and return 0
+ * without waiting for them, as Linux's `ksys_readahead` does
+ * (mm/readahead.c:677-695). -EBADF for a descriptor not open for reading,
+ * -EINVAL for one that is not a file.
+ */
+long ksys_readahead(int fd, uint64_t offset, uint64_t count);
 
 /**
  * The core of fallocate(2) in every form: give `fd` the range of `len` bytes at

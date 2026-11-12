@@ -46,9 +46,11 @@ uint32_t filecache_epoch(struct vfs_mount *mnt, void *node);
 /**
  * Read up to `count` bytes at `offset` of the file `ofd` is open on into the
  * user buffer `buf` through the cache, as read(2) does: each page the cache
- * has as the file is now is copied from it, and each page it lacks is read
- * alone with `vfs_read` into a new frame, which joins the cache when it holds
- * a whole page or the file's last part. Returns 0, with nothing done, for a
+ * has as the file is now is copied from it, and a page it lacks is read
+ * with the window the description's readahead gives (`ofd->ra`), each page
+ * into a new frame, which joins the cache; reaching a marked page queues
+ * the next window for a worker, and reaching a page a worker will read
+ * waits for it. Returns 0, with nothing done, for a
  * file the cache does not keep, which the caller reads itself; 1 with `*got`
  * the bytes read, 0 at or past the end of the file, -EFAULT for a
  * buffer that takes no byte, or the file system's error. Before each page
@@ -58,6 +60,26 @@ uint32_t filecache_epoch(struct vfs_mount *mnt, void *node);
  */
 int filecache_file_read(struct open_file *ofd, char __user *buf, uint32_t count, uint64_t offset,
                         int32_t *got, int (*cut)(const struct open_file *ofd));
+
+/**
+ * Queue the pages of the `len` bytes at `offset` of the file `ofd` is open
+ * on, all of them for a `len` of 0, for a worker to read into the cache
+ * without waiting, as Linux's POSIX_FADV_WILLNEED and readahead(2) start
+ * their reads (`force_page_cache_ra`, mm/readahead.c:327-353): at most what
+ * one request to the device moves or the description's window, whichever
+ * is larger, cut at the file's end. A file the cache does not keep is left
+ * alone. The caller may sleep.
+ */
+void filecache_willneed(struct open_file *ofd, uint64_t offset, uint64_t len);
+
+/**
+ * Drop the pages the cache has of the whole pages of the `len` bytes at
+ * `offset` of the file `ofd` is open on, and of a last partial page that
+ * ends the file, as Linux's POSIX_FADV_DONTNEED drops clean pages
+ * (mm/fadvise.c:113-167); every page here is clean, since a write drops
+ * its file's pages.
+ */
+void filecache_dontneed(struct open_file *ofd, uint64_t offset, uint64_t len);
 
 /** Keep a copy of the frame `phys`, page `pgoff` of the file `e` is open on
  * as it was just read, unless a change of the file has been recorded since

@@ -61,7 +61,8 @@ static long ksys_ftruncate(int fd, long long length);
 static long ksys_truncate(const char __user *upath, long long length);
 static long ksys_pread64(int fd, char __user *buf, size_t count, long long pos);
 static long ksys_pwrite64(int fd, const char __user *buf, size_t count, long long pos);
-static long ksys_fadvise64(int fd, long long len, uint32_t advice);
+static long ksys_fadvise64(int fd, long long offset, long long len, uint32_t advice);
+static long ksys_readahead(int fd, uint64_t offset, uint64_t count);
 static long ksys_fallocate(int fd, uint32_t mode, uint64_t offset, uint64_t len);
 static long sys_write(isr_params_t *params);
 static long sys_writev(isr_params_t *params);
@@ -179,6 +180,22 @@ static void fs_socket_unbind(struct vfs_ref *ref);
 static int32_t fs_socket_lookup(const char *path, struct vfs_mount **mnt, uint32_t *ino);
 static int32_t fs_read_at(fd_entry_t *e, void *buf, uint32_t count, uint64_t off);
 #include "syscall_fs.c"
+
+/** No row advises a read: nothing to queue. */
+void filecache_willneed(struct open_file *ofd, uint64_t offset, uint64_t len)
+{
+    (void)ofd;
+    (void)offset;
+    (void)len;
+}
+
+/** No row advises a drop: nothing to drop. */
+void filecache_dontneed(struct open_file *ofd, uint64_t offset, uint64_t len)
+{
+    (void)ofd;
+    (void)offset;
+    (void)len;
+}
 
 extern int printf(const char *format, ...);
 extern void *calloc(unsigned long count, unsigned long size);

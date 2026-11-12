@@ -439,16 +439,16 @@ long compat_sys_ia32_fallocate(isr_params_t *params)
  * length, never negative, and the advice. */
 long compat_sys_ia32_fadvise64(isr_params_t *params)
 {
-    return ksys_fadvise64((int)SC_ARG(params, 0), (long long)(uint32_t)SC_ARG(params, 3),
-                          (uint32_t)SC_ARG(params, 4));
+    return ksys_fadvise64((int)SC_ARG(params, 0), (long long)ARG64(params, 1, 2),
+                          (long long)(uint32_t)SC_ARG(params, 3), (uint32_t)SC_ARG(params, 4));
 }
 
 /** fadvise64_64 (272): the descriptor, the offset and the length in two words
  * each, and the advice. */
 long compat_sys_ia32_fadvise64_64(isr_params_t *params)
 {
-    return ksys_fadvise64((int)SC_ARG(params, 0), (long long)ARG64(params, 3, 4),
-                          (uint32_t)SC_ARG(params, 5));
+    return ksys_fadvise64((int)SC_ARG(params, 0), (long long)ARG64(params, 1, 2),
+                          (long long)ARG64(params, 3, 4), (uint32_t)SC_ARG(params, 5));
 }
 
 /** readahead (225): the descriptor, the offset in two words and the count. */

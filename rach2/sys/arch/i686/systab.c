@@ -319,7 +319,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_SYNC] = sys_sync;
     table[SYS_SYNCFS] = sys_syncfs;
     table[SYS_FALLOCATE] = sys_ia32_fallocate;
-    table[SYS_READAHEAD] = sys_readahead;
+    table[SYS_READAHEAD] = sys_ia32_readahead;
     table[SYS_FADVISE64] = sys_ia32_fadvise64;
     table[SYS_FADVISE64_64] = sys_ia32_fadvise64_64;
     table[SYS_SETXATTR] = sys_setxattr;

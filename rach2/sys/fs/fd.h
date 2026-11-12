@@ -115,6 +115,35 @@ struct vfs_mount;
 struct vfs_name;
 
 /*
+ * The readahead state of a description, Linux's `struct file_ra_state`
+ * (include/linux/fs.h), which the file page cache keeps for read(2) and
+ * its kin under the description's lock (filecache.c). The last window read
+ * ahead is the `size` pages from `start`, and the reader's arrival at the
+ * first of its last `async_size` pages, which carries the cache's mark,
+ * starts the next window without waiting for it. Zero at the open but for
+ * `prev_pos`.
+ */
+/* The pages of the default readahead window: Linux's VM_READAHEAD_PAGES,
+ * 128 KiB (include/linux/pagemap.h:1375), which `bdi_init` gives every
+ * device (mm/backing-dev.c:1037). */
+#define FILE_RA_PAGES 32u
+
+struct file_ra_state {
+    uint32_t start;      /* the first page of the last window */
+    uint32_t size;       /* its pages */
+    uint32_t async_size; /* the pages at its end that start the next one */
+    /* The most pages a window takes: 0 for FILE_RA_PAGES, and twice that
+     * after POSIX_FADV_SEQUENTIAL. */
+    uint32_t ra_pages;
+    /* The byte after the last one a read took, all ones at the open, as
+     * Linux's `file_ra_state_init` sets it (mm/readahead.c:138-142). */
+    uint64_t prev_pos;
+    /* POSIX_FADV_RANDOM, Linux's FMODE_RANDOM: a miss reads what the read
+     * asks for and no more. */
+    uint32_t random;
+};
+
+/*
  * An open file description (OFD): the state that the descriptors made from
  * one open share, the seek offset and the status flags among it. dup, dup2
  * and fork point a new descriptor at the same description and add a
@@ -136,10 +165,8 @@ struct open_file {
     uint32_t refcount;
     uint64_t offset;     /* Shared read/write offset */
     uint64_t raw_offset; /* Shared offset of a raw disk window */
-    /* The page after the last one read(2) took through the file page cache
-     * (`filecache_file_read`), by which a read that goes on from there is
-     * read ahead, as Linux keeps `f_ra.prev_pos`; 0 at the open. */
-    uint32_t ra_next;
+    /* The readahead of reads through the file page cache. */
+    struct file_ra_state ra;
     uint32_t status_flags; /* Shared O_APPEND/O_NONBLOCK (OFD_* above) */
     /* A FIFO reader's writer-open count for poll: equal to the pipe's
      * count until a writer has opened since a nonblocking read-only open
