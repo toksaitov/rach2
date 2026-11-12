@@ -246,9 +246,10 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
  * own, the limit of the reader's user namespace (proc/ns.h); the largest
  * pipe an unprivileged F_SETPIPE_SZ makes and the limits of one user's pipe
  * pages (ipc/pipe.h); what a panic does once its record is out and
- * whether an oops panics (panic.h); and the settings of the lockup
- * detectors (watchdog.h). An entry whose text is empty is procfs's, which
- * reads its value when the file is opened.
+ * whether an oops panics (panic.h); the settings of the lockup detectors
+ * (watchdog.h); and the write-back's thresholds and periods (bcache.h,
+ * writeback.h). An entry whose text is empty is procfs's, which reads its
+ * value when the file is opened.
  * A new entry goes at the end, so that the indices SYNTH_SYS_ names stay
  * the same. */
 static const struct {
@@ -331,7 +332,14 @@ static const struct {
                {1, "protected_fifos", ""},
                {1, "protected_hardlinks", ""},
                {1, "protected_regular", ""},
-               {1, "protected_symlinks", ""}};
+               {1, "protected_symlinks", ""},
+               {29, "dirty_background_bytes", ""},
+               {29, "dirty_background_ratio", ""},
+               {29, "dirty_bytes", ""},
+               {29, "dirty_expire_centisecs", ""},
+               {29, "dirty_ratio", ""},
+               {29, "dirty_writeback_centisecs", ""},
+               {29, "dirtytime_expire_seconds", ""}};
 
 /* The entries of the table. */
 #define SYNTH_SYS_TABLE ((int)(sizeof(sysents) / sizeof(sysents[0])))
@@ -382,7 +390,7 @@ int synth_sys_writable(int entry)
            (entry >= SYNTH_SYS_WATCHDOG && entry <= SYNTH_SYS_HUNG_TASK_WARNINGS &&
             (entry != SYNTH_SYS_NMI_WATCHDOG || watchdog_hardlockup_available())) ||
            (entry >= SYNTH_SYS_TCP_KEEPALIVE_TIME && entry <= SYNTH_SYS_TCP_RETRIES2) ||
-           (entry >= SYNTH_SYS_PROTECTED_FIFOS && entry <= SYNTH_SYS_PROTECTED_SYMLINKS);
+           (entry >= SYNTH_SYS_PROTECTED_FIFOS && entry <= SYNTH_SYS_DIRTYTIME_EXPIRE);
 }
 
 /* The files of /proc/net after the first four, by origin and name. */
