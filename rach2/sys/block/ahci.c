@@ -758,13 +758,15 @@ static uint32_t ahci_links_reset(uint32_t ports)
         iss = 3; /* reserved; the fastest SATA speed there is */
     }
     for (p = 0; p < 32; ++p) {
-        if (ports & (1u << p)) {
-            spd[p] =
-                (ahci_read32(ahci_port_off(p, AHCI_PxSCTL)) & AHCI_SCTL_SPD_MASK) >> AHCI_SPD_SHIFT;
-            limit[p] = (1u << iss) - 1u;
-            if (spd[p] != 0) {
-                limit[p] &= (1u << spd[p]) - 1u;
-            }
+        spd[p] = limit[p] = 0;
+        if (!(ports & (1u << p))) {
+            continue;
+        }
+        spd[p] =
+            (ahci_read32(ahci_port_off(p, AHCI_PxSCTL)) & AHCI_SCTL_SPD_MASK) >> AHCI_SPD_SHIFT;
+        limit[p] = (1u << iss) - 1u;
+        if (spd[p] != 0) {
+            limit[p] &= (1u << spd[p]) - 1u;
         }
     }
 
