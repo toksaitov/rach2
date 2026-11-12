@@ -4268,10 +4268,11 @@ static void resident_unmapped(void)
 
 /**
  * A read without the big lock of a file whose description a sharer's seek
- * left at 2^63-1, while a shared mapping of a disk file has pages, so that
- * the read takes the big lock: the read is -EINVAL, as Linux's
- * rw_verify_area refuses it, and gives back the big lock it took, as every
- * answer of Linux's ksys_read releases the position (fs/read_write.c:701-714).
+ * left at 2^63-1, while a shared mapping of a disk file in the file's bucket
+ * has pages, so that the read takes the big lock: the read is -EINVAL, as
+ * Linux's rw_verify_area refuses it, and gives back the big lock it took, as
+ * every answer of Linux's ksys_read releases the position
+ * (fs/read_write.c:701-714).
  */
 static void read_end_past_unlocked(void)
 {
@@ -4287,14 +4288,16 @@ static void read_end_past_unlocked(void)
     e->ofd->vmnt = &mount;
     e->ofd->vnode = &node;
     e->ofd->offset = 0x7FFFFFFFFFFFFFFFull;
-    dshare_count = 1;
+    e->ofd->ino = 77;
+    dshare_stores_in[dshare_index(77)] = 1;
     bkl_host_free = 1;
     bkl_host_takes = 0;
     check(file_read(e, (char __user *)out, sizeof(out), NULL, sizeof(out)) == -EINVAL,
           "a read whose end a sharer's seek put past 2^63-1 is EINVAL");
     check(bkl_host_takes == 1 && !bkl_held(), "and gives back the big lock it took");
     bkl_host_free = 0;
-    dshare_count = 0;
+    dshare_stores_in[dshare_index(77)] = 0;
+    e->ofd->ino = 0;
     e->ofd->vmnt = NULL;
     e->ofd->vnode = NULL;
     e->type = FD_TYPE_NONE;
