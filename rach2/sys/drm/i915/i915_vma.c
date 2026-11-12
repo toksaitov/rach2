@@ -658,18 +658,17 @@ void i915_vma_flush_writes(struct i915_vma *vma)
     vma->ggtt_write = 0;
 }
 
-int32_t i915_vma_unbind(struct i915_vma *vma, int may_yield)
+/**
+ * Undo `vma` whatever its pin and its object's reservation hold, as Linux's
+ * __i915_vma_evict: the caller has settled that no request of the chip's
+ * can still use it. `may_yield` is `i915_vma_unbind`'s.
+ */
+static void vma_evict(struct i915_vma *vma, int may_yield)
 {
     struct drm_i915_gem_object *obj = vma->obj;
     struct drm_i915_private *i915 = to_i915(obj->base.dev);
     struct i915_vma **link;
 
-    if (vma->pin_count) {
-        return -EAGAIN;
-    }
-    if (i915_gem_object_is_active(obj)) {
-        return -EBUSY;
-    }
     /* As Linux's __i915_vma_evict: programs fault again, the writes through
      * the aperture reach memory, and only then is the fence let go. */
     i915_vma_revoke_mmap(vma);
@@ -687,7 +686,28 @@ int32_t i915_vma_unbind(struct i915_vma *vma, int may_yield)
         }
     }
     kfree(vma);
+}
+
+int32_t i915_vma_unbind(struct i915_vma *vma, int may_yield)
+{
+    if (vma->pin_count) {
+        return -EAGAIN;
+    }
+    if (i915_gem_object_is_active(vma->obj)) {
+        return -EBUSY;
+    }
+    vma_evict(vma, may_yield);
     return 0;
+}
+
+void i915_gem_object_force_unbind(struct drm_i915_gem_object *obj, int may_yield)
+{
+    struct i915_vma *vma;
+
+    while ((vma = obj->vmas) != 0) {
+        vma->pin_count = 0;
+        vma_evict(vma, may_yield);
+    }
 }
 
 int32_t i915_gem_object_unbind(struct drm_i915_gem_object *obj, int may_yield)
