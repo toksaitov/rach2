@@ -1561,7 +1561,7 @@
     },
     {
       "case_id": "machine.kvm.unit-subset-nested",
-      "behavior": "kvm-unit-tests' tests that tests/kvm/unit-subset.list runs, the subset of unit-tests.list that runs in under an hour on the testing PC, give under Rach2's KVM, on the host-svm processor profile, the result the list expects of each, which Linux 6.12 gives as the host of the same machine (tests/kvm/linuxhost.sh)",
+      "behavior": "kvm-unit-tests' tests that tests/kvm/unit-subset.list runs, the subset of unit-tests.list that runs in under an hour on the testing PC, give under Rach2's KVM, on the host-svm processor profile, the result the list expects of each, which Linux 6.12 gives as the host of the same machine (tests/kvm/linux-corpus.sh)",
       "units": [
         "tests/kvm/corpus.sh",
         "tests/kvm/unit-subset.list",
