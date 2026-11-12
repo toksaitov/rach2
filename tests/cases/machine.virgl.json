@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.virgl",
-  "summary": "OpenGL on virgl over the testing PC's GPU on the GNU root under the virgl profile: the renderer eglinfo and glxinfo name, piglit's quick profile within OpenGL 4.2 and ES 3.1, dEQP-GLES2, GLES3 and GLES31, and the WebGL conformance suite in Chromium and Firefox ESR, each test, case and page judged against the Debian reference guest's stored result in the same QEMU, and the reset of the device under GL programs and Weston; the runners are tests/graphics/runners/glinfo.sh, piglit.sh, deqp.sh, webgl.sh and virgl-lost.sh and the scenario tests/cases/machine/graphics_scenario.c",
+  "summary": "OpenGL on virgl over the testing PC's GPU on the GNU root under the virgl profile: the renderer eglinfo and glxinfo name, piglit's quick profile within OpenGL 4.2 and ES 3.1 and its quick_gl subset, dEQP-GLES2, GLES3 and GLES31, and the WebGL conformance suite in Chromium and Firefox ESR, each test, case and page judged against the Debian reference guest's stored result in the same QEMU, and the reset of the device under GL programs and Weston; the runners are tests/graphics/runners/glinfo.sh, piglit.sh, deqp.sh, webgl.sh and virgl-lost.sh and the scenario tests/cases/machine/graphics_scenario.c",
   "cases": [
     {
       "case_id": "machine.virgl.renderer",
@@ -218,7 +218,7 @@
     },
     {
       "case_id": "machine.virgl.piglit-sample",
-      "behavior": "every 200th test of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,765 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "behavior": "every 200th test of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,757 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
       "units": [
         "tests/graphics/runners/piglit.sh",
         "tests/graphics/runners/judge.py",
@@ -435,7 +435,7 @@
     },
     {
       "case_id": "machine.virgl.piglit-01",
-      "behavior": "every 16th test from the first of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,765 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "behavior": "every 16th test from the first of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,757 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
       "units": [
         "tests/graphics/runners/piglit.sh",
         "tests/graphics/runners/judge.py",
@@ -652,7 +652,7 @@
     },
     {
       "case_id": "machine.virgl.piglit-02",
-      "behavior": "every 16th test from the second of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,765 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "behavior": "every 16th test from the second of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,757 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
       "units": [
         "tests/graphics/runners/piglit.sh",
         "tests/graphics/runners/judge.py",
@@ -869,7 +869,7 @@
     },
     {
       "case_id": "machine.virgl.piglit-03",
-      "behavior": "every 16th test from the third of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,765 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "behavior": "every 16th test from the third of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,757 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
       "units": [
         "tests/graphics/runners/piglit.sh",
         "tests/graphics/runners/judge.py",
@@ -1086,7 +1086,7 @@
     },
     {
       "case_id": "machine.virgl.piglit-04",
-      "behavior": "every 16th test from the 4th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,765 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "behavior": "every 16th test from the 4th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,757 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
       "units": [
         "tests/graphics/runners/piglit.sh",
         "tests/graphics/runners/judge.py",
@@ -1303,7 +1303,7 @@
     },
     {
       "case_id": "machine.virgl.piglit-05",
-      "behavior": "every 16th test from the 5th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,765 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "behavior": "every 16th test from the 5th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,757 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
       "units": [
         "tests/graphics/runners/piglit.sh",
         "tests/graphics/runners/judge.py",
@@ -1520,7 +1520,7 @@
     },
     {
       "case_id": "machine.virgl.piglit-06",
-      "behavior": "every 16th test from the 6th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,765 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "behavior": "every 16th test from the 6th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,757 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
       "units": [
         "tests/graphics/runners/piglit.sh",
         "tests/graphics/runners/judge.py",
@@ -1737,7 +1737,7 @@
     },
     {
       "case_id": "machine.virgl.piglit-07",
-      "behavior": "every 16th test from the 7th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,765 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "behavior": "every 16th test from the 7th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,757 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
       "units": [
         "tests/graphics/runners/piglit.sh",
         "tests/graphics/runners/judge.py",
@@ -1954,7 +1954,7 @@
     },
     {
       "case_id": "machine.virgl.piglit-08",
-      "behavior": "every 16th test from the 8th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,765 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "behavior": "every 16th test from the 8th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,757 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
       "units": [
         "tests/graphics/runners/piglit.sh",
         "tests/graphics/runners/judge.py",
@@ -2171,7 +2171,7 @@
     },
     {
       "case_id": "machine.virgl.piglit-09",
-      "behavior": "every 16th test from the 9th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,765 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "behavior": "every 16th test from the 9th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,757 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
       "units": [
         "tests/graphics/runners/piglit.sh",
         "tests/graphics/runners/judge.py",
@@ -2388,7 +2388,7 @@
     },
     {
       "case_id": "machine.virgl.piglit-10",
-      "behavior": "every 16th test from the 10th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,765 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "behavior": "every 16th test from the 10th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,757 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
       "units": [
         "tests/graphics/runners/piglit.sh",
         "tests/graphics/runners/judge.py",
@@ -2605,7 +2605,7 @@
     },
     {
       "case_id": "machine.virgl.piglit-11",
-      "behavior": "every 16th test from the 11th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,765 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "behavior": "every 16th test from the 11th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,757 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
       "units": [
         "tests/graphics/runners/piglit.sh",
         "tests/graphics/runners/judge.py",
@@ -2822,7 +2822,7 @@
     },
     {
       "case_id": "machine.virgl.piglit-12",
-      "behavior": "every 16th test from the 12th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,765 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "behavior": "every 16th test from the 12th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,757 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
       "units": [
         "tests/graphics/runners/piglit.sh",
         "tests/graphics/runners/judge.py",
@@ -3039,7 +3039,7 @@
     },
     {
       "case_id": "machine.virgl.piglit-13",
-      "behavior": "every 16th test from the 13th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,765 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "behavior": "every 16th test from the 13th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,757 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
       "units": [
         "tests/graphics/runners/piglit.sh",
         "tests/graphics/runners/judge.py",
@@ -3256,7 +3256,7 @@
     },
     {
       "case_id": "machine.virgl.piglit-14",
-      "behavior": "every 16th test from the 14th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,765 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "behavior": "every 16th test from the 14th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,757 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
       "units": [
         "tests/graphics/runners/piglit.sh",
         "tests/graphics/runners/judge.py",
@@ -3473,7 +3473,7 @@
     },
     {
       "case_id": "machine.virgl.piglit-15",
-      "behavior": "every 16th test from the 15th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,765 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "behavior": "every 16th test from the 15th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,757 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
       "units": [
         "tests/graphics/runners/piglit.sh",
         "tests/graphics/runners/judge.py",
@@ -3690,7 +3690,7 @@
     },
     {
       "case_id": "machine.virgl.piglit-16",
-      "behavior": "every 16th test from the 16th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,765 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "behavior": "every 16th test from the 16th of the piglit list for virgl (tests/graphics/piglit-virgl.txt.gz, 42,757 tests of the quick profile within OpenGL 4.2 and OpenGL ES 3.1), run by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, give each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
       "units": [
         "tests/graphics/runners/piglit.sh",
         "tests/graphics/runners/judge.py",
@@ -3812,6 +3812,223 @@
         {
           "assertion_id": "as-debian",
           "checks": "the record names the reference's renderer and judge.py finds each test and subtest of the run's sample that passed or skipped in the Debian reference guest, stored under tests/graphics/ref/virgl-wsl/piglit, to pass or skip here, a named flake aside, and prints judge: result: pass",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 7200000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 8000,
+        "cpu_ceiling_millis": 8000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "graphics-data",
+          "node": "tests/cases/graphics/graphics.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "common",
+          "node": "tests/cases/graphics/common.sh",
+          "per_architecture": false
+        },
+        {
+          "name": "graphics_scenario",
+          "node": "tests/cases/machine/graphics_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case compares a QEMU guest's OpenGL on virgl with the Debian reference guest's in the same QEMU display profile, on the testing PC's GPU"
+      }
+    },
+    {
+      "case_id": "machine.virgl.piglit-quick-gl",
+      "behavior": "piglit's quick_gl subset (tests/graphics/piglit-quick-gl.txt.gz), run whole by piglit on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform, one test at a time, gives each test and subtest Linux's result in the Debian reference guest in the same QEMU: each pass a pass and each skip a skip, the named flakes aside",
+      "units": [
+        "tests/graphics/runners/piglit.sh",
+        "tests/graphics/runners/judge.py",
+        "piglit",
+        "Mesa's virgl driver",
+        "the virtio-gpu driver's 3D contexts"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "list": "tests/graphics/piglit-quick-gl.txt.gz",
+          "every": 1,
+          "start": 1,
+          "flakes": "tests/graphics/piglit-quick-gl.flakes",
+          "reference": "tests/graphics/ref/virgl-wsl/piglit/piglit-quick-gl.results.gz"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "graphics_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the runner runs as the guest's test account, an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only graphics data disk, graphics.ext2, after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "make /tmp/graphics and copy there from the read-only graphics data disk the runners, the guest's environment, the piglit and dEQP lists and the references, owned by the test account"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run piglit.sh -g -l piglit-quick-gl.txt.gz as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "check that a `renderer` line of the run's record names the reference's renderer, virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER)), and run judge.py results on the run's results, the Debian reference's, the run's sample and piglit-quick-gl.flakes"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "graphics-payload",
+                "base": "graphics-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 8,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2"
+            ],
+            "display": "virgl"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "ran",
+          "checks": "piglit.sh exits 0, piglit having made its results, and prints its result line",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "as-debian",
+          "checks": "the record names the reference's renderer and judge.py finds each test and subtest of the run's list that passed or skipped in the Debian reference guest, stored under tests/graphics/ref/virgl-wsl/piglit, to pass or skip here, a named flake aside, and prints judge: result: pass",
           "source": "scenario"
         }
       ],
