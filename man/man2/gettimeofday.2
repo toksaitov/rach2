@@ -46,6 +46,13 @@ last set in
 .Fa tz ,
 minutes west of UTC and the kind of summer time, both 0 until one is set;
 either may be null.
+It writes
+.Fa tv
+first, so that a
+.Fa tv
+that cannot be written fails the call with
+.Fa tz
+unwritten, for an i386 program too.
 The kernel keeps the zone only to give it back: no clock reads it.
 Real time is the CMOS clock reading taken at boot plus
 .Dv CLOCK_MONOTONIC ,
