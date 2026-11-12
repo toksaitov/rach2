@@ -23,15 +23,18 @@
  * The block layer calls the device without the big lock.
  * A transfer reads the attachment and counts itself in flight under
  * `loop_lock`, and a detach or a release unpublishes the device under it
- * only when no transfer is in flight, as Linux's loop checks `lo_state` in
- * `loop_queue_rq` (drivers/block/loop.c:1815-1825) and freezes the queue
- * before it lets the file go (loop.c:1089-1160). The transfer then runs in
- * the caller, which is this device's worker, where Linux's runs on its work
- * queue (loop.c:776-869), and takes the big lock for the file system under
- * it as a descriptor's call does: for a write and a sync, and for a read
- * unless the type reads without it (`reads_unlocked`). Attaching and
- * detaching are system calls under the big lock, which serializes them as
- * Linux's `lo_mutex` does (loop.c:77).
+ * only when no transfer is in flight. Linux's loop checks `lo_state` in
+ * `loop_queue_rq` (drivers/block/loop.c:1815-1825); its `loop_clr_fd` only
+ * marks the device `Lo_rundown` (loop.c:1161-1193), and `lo_release` lets the
+ * file go at the last close (loop.c:1694-1716), when no I/O can be in flight.
+ * Here a detach does it at once and answers `EBUSY` while a transfer is in
+ * flight. The transfer then runs in the caller, which is this device's
+ * worker, where Linux's runs on its work queue (loop.c:776-869), and takes
+ * the big lock for the file system under it as a descriptor's call does: for
+ * a write and a sync, and for a read unless the type reads without it
+ * (`reads_unlocked`). Attaching and detaching are system calls under the big
+ * lock, which serializes them as Linux's `lo_mutex` does (loop.c:77), except
+ * across a detach's sync of its buffers, which sleeps (`loop_detach`).
  */
 
 #include "loop.h"
@@ -54,6 +57,7 @@ struct loop_device {
     int attaching;      /* claimed, with the steps that can sleep still to run */
     int attached;       /* the file is open and the device can be reached */
     int index;
+    uint32_t claim; /* counts the slot's claims, so a detach that slept knows its attachment */
     struct vfs_mount *mnt;
     void *node;
     void *handle;
@@ -76,7 +80,8 @@ static struct loop_device loops[LOOP_DEVICES];
 /* The devices' state a transfer reads or changes, which the big lock does
  * not cover since the block layer calls a transfer without it: `attached`,
  * `in_flight`, `release_due`, `writes`, `syncs` and the device's
- * `unflushed`, and the file a transfer reads while `attached` (`mnt`,
+ * `unflushed`, and the attachment a transfer reads while `attached`: the
+ * device's `sector_count` and the file (`mnt`,
  * `node`, `handle`, `ino`, `writable`), whose writers hold the big lock as
  * well, so a reader holding that sees them without this. Taken with
  * interrupts off, since a medium's going is reported from the USB pump; it
@@ -104,17 +109,25 @@ static void loop_unclaim(struct loop_device *loop);
 static void loop_settle(void);
 
 /**
- * Begin a transfer of `loop`: when it is attached, count the transfer in
- * flight and copy the attachment into `f`, under `loop_lock`. Returns 0, or
- * `-EIO` for a device not attached. A detach or a release waits for the
- * count to fall to 0 before it lets the file go, so `f` stays good until
- * `loop_end`.
+ * Begin a transfer of `count` sectors at `lba` of `loop`, or a flush when
+ * `count` is 0: when it is attached and has those sectors, count the
+ * transfer in flight and copy the attachment into `f`, under `loop_lock`.
+ * Returns 0, or `-EIO` for a device not attached or a range past its end.
+ *
+ * The range is checked under the lock against the attachment the transfer
+ * will use, since a detach and a new attach of a smaller file may come
+ * between a check before it and the transfer; Linux sets the size before it
+ * sets `Lo_bound` (loop_configure, loop.c:1052-1058) and checks the range
+ * against it in `bio_check_eod` (block/blk-core.c:549-564). A detach or a
+ * release waits for the count to fall to 0 before it lets the file go, so
+ * `f` stays good until `loop_end`.
  */
-static int loop_begin(struct loop_device *loop, struct loop_file *f)
+static int loop_begin(struct loop_device *loop, uint64_t lba, uint32_t count, struct loop_file *f)
 {
     uint32_t flags = spin_lock_irqsave(&loop_lock);
 
-    if (!loop->attached) {
+    if (!loop->attached ||
+        (count != 0 && (lba >= loop->dev.sector_count || count > loop->dev.sector_count - lba))) {
         spin_unlock_irqrestore(&loop_lock, flags);
         return -EIO;
     }
@@ -205,22 +218,41 @@ static int loop_quiesce(struct loop_device *loop)
 }
 
 /**
- * Whether a transfer of `count` sectors at `lba` is one this device has.
+ * Unpublish `loop` for a detach that slept since it checked the device, when
+ * no transfer is in flight. Returns 1 when this call cleared `attached`, or
+ * when the medium under the file went meanwhile and the release it owes is
+ * this caller's; 0, changing nothing, while a transfer is in flight or when
+ * the device was already unpublished otherwise. The big lock is held, and
+ * the caller has checked that the slot still holds the claim it began with.
+ */
+static int loop_unpublish(struct loop_device *loop)
+{
+    uint32_t flags = spin_lock_irqsave(&loop_lock);
+    int ours = 0;
+
+    if (loop->in_flight == 0 && loop->attached) {
+        loop->attached = 0;
+        ours = 1;
+    } else if (loop->in_flight == 0 && loop->release_due) {
+        ours = 1;
+    }
+    spin_unlock_irqrestore(&loop_lock, flags);
+    return ours;
+}
+
+/**
+ * Whether a transfer of `count` sectors is one this device can move: at
+ * least one, and few enough that the byte count does not wrap.
  *
  * The block layer bounds every request before it calls a device, and this
- * checks the same of what arrives: a device that trusted its caller would
- * read or write past the end of the file it stands on, and a count that
- * wrapped the byte arithmetic would move nothing and report success.
+ * and `loop_begin` check the same of what arrives: a device that trusted its
+ * caller would read or write past the end of the file it stands on, and a
+ * count that wrapped the byte arithmetic would move nothing and report
+ * success.
  */
-static int loop_bounded(struct loop_device *loop, uint64_t lba, uint32_t count)
+static int loop_count_ok(uint32_t count)
 {
-    if (count == 0 || count > 0x7FFFFFu) {
-        return 0;
-    }
-    if (lba >= loop->dev.sector_count || count > loop->dev.sector_count - lba) {
-        return 0;
-    }
-    return 1;
+    return count != 0 && count <= 0x7FFFFFu;
 }
 
 /**
@@ -239,7 +271,7 @@ static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void 
     int32_t got;
     int big;
 
-    if (!loop_bounded(loop, lba, count) || loop_begin(loop, &f) != 0) {
+    if (!loop_count_ok(count) || loop_begin(loop, lba, count, &f) != 0) {
         return -EIO;
     }
     big = loop_fs_enter(f.mnt, 1);
@@ -268,7 +300,7 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
     int32_t wrote;
     int big;
 
-    if (!loop_bounded(loop, lba, count) || loop_begin(loop, &f) != 0) {
+    if (!loop_count_ok(count) || loop_begin(loop, lba, count, &f) != 0) {
         return -EIO;
     }
     if (!f.writable) {
@@ -306,7 +338,7 @@ static int loop_flush(block_device_t *device, struct block_request *request)
     int big, rc;
 
     (void)request;
-    if (loop_begin(loop, &f) != 0) {
+    if (loop_begin(loop, 0, 0, &f) != 0) {
         return -EIO;
     }
     big = loop_fs_enter(f.mnt, 0);
@@ -682,6 +714,7 @@ int loop_attach(int index, const char *path, int writable)
         return -EBUSY;
     }
     loop->used = 1;
+    loop->claim++;
     loop->attaching = 1;
     loop->attached = 0;
     loop->in_flight = 0;
@@ -783,10 +816,19 @@ void loop_rename(int index, const char *path)
  * A slot claimed by an attachment still inside the steps that sleep is
  * refused: releasing it would free a claim about to publish itself, and the
  * next attach would then stand a second file under it.
+ *
+ * The sync of the device's buffers sleeps, and lets the big lock go. A
+ * second detach may finish meanwhile and a new attach claim the slot, so
+ * after the sync the detach goes on only while the slot holds the claim it
+ * began with, and answers `ENXIO` otherwise, as Linux's `loop_clr_fd`
+ * answers a device no longer `Lo_bound` (drivers/block/loop.c:1177-1180).
+ * A mount made while it slept answers `EBUSY`.
  */
 int loop_detach(int index)
 {
     struct loop_device *loop;
+    uint32_t claim;
+    int rc;
 
     if (index < 0 || index >= LOOP_DEVICES) {
         return -EINVAL;
@@ -815,13 +857,21 @@ int loop_detach(int index)
     if (loop_busy(loop)) {
         return -EBUSY; /* a transfer is inside the file system the file is on */
     }
-    if (bcache_sync(&loop->dev) != 0) {
+    claim = loop->claim;
+    rc = bcache_sync(&loop->dev);
+    if (!loop->used || loop->attaching || loop->claim != claim) {
+        return -ENXIO; /* another detach let it go while the sync slept */
+    }
+    if (rc != 0) {
         return -EIO;
+    }
+    if (vfs_device_holds(&loop->dev)) {
+        return -EBUSY;
     }
     if (bcache_invalidate(&loop->dev) != 0) {
         return -EBUSY;
     }
-    if (!loop_quiesce(loop)) {
+    if (!loop_unpublish(loop)) {
         return -EBUSY; /* a transfer began while the sync slept */
     }
     klog(KLOG_INFO, "loop", "loop%d: detached", index);
