@@ -28,6 +28,7 @@
  */
 
 #include "../../rach2/sys/arch/x86/lapic.h"
+#include "../../rach2/sys/arch/x86/kvmsteal.h"
 
 #include <setjmp.h>
 
@@ -1055,4 +1056,10 @@ int main(void)
     }
     printf("lapic_hosttest: %d failure(s)\n", fails);
     return 1;
+}
+
+/** No paravirtual EOI is enabled by these hardware-register rows. */
+int kvm_guest_eoi(void)
+{
+    return 0;
 }

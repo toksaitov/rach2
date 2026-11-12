@@ -514,3 +514,5 @@ The virtual channel rows of `dsp_hosttest.c` also cover two readers receiving th
 `timercal_hosttest --idle` runs only the stopped-tick rows: a timer stopped with no event, a stale pending tick, a long one-shot event, a whole-tick deadline, phase-preserving restart and the TSC deadline and its clear. `sched_hosttest --idle-only` runs only idle accounting: a remote projection with steal time, catch-up once on wake, the first busy tick and the phased load sample. Both sets also run in their model's ordinary invocation.
 
 `process_timer_hosttest --event-owner` runs only the event ownership row: a pass on another CPU rearms no future wake, its owner rearms it, and either may expire it once due. The idle rows of `timercal_hosttest` also force a smooth clock ahead of an uncountable coarse tick, keep an unchanged programmed event, and leave periodic mode on first idle with TSC-deadline support.
+
+`kvmguest_hosttest` models the guest's KVM records: feature gating, the aligned per-CPU EOI word, one completion per host-set bit, independent CPU words, the ordinary EOI fallback, and local and remote steal-time reads.
