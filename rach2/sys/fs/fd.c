@@ -1347,8 +1347,7 @@ int fd_peek(fd_table_t *table, int fd, fd_entry_t *out, int ref)
 
         if (fd_entry_open(e)) {
             *out = *e;
-            if (ref == FD_PEEK_REF || (ref == FD_PEEK_MOUNTED && out->ofd && out->ofd->vmnt &&
-                                       (out->type == FD_TYPE_FILE || out->type == FD_TYPE_DIR))) {
+            if (ref == FD_PEEK_REF) {
                 fd_ofd_ref(out->ofd);
             }
             rc = 0;

@@ -8818,27 +8818,25 @@ static int32_t fstat_getattr(fd_entry_t *e, struct kstat *kst);
  * What a followed /proc/PID/fd/N link reports: the stat of descriptor `fd`
  * of process `pid`; 0 on success, -ENOENT when it is absent or closing, or
  * the error of the mounted type's getattr. The entry is copied under the
- * table's lock, and a description of a file or a directory on a mount is
- * held for the length of the stat, whose getattr may sleep while the
- * process closes the descriptor and its release puts the node. The other
- * kinds are read without a sleep, under the big lock, which their release
- * takes.
+ * table's lock with what a descriptor in flight holds (`fd_peek_hold`),
+ * kept for the length of the stat and given back after it, as Linux's
+ * proc_fd_getattr holds the file (fs/proc/fd.c:182 in 6.12): the process
+ * may close the descriptor meanwhile, a file's getattr may sleep, and the
+ * last close of a pipe, or of another kind `file_ops_unlocked` admits,
+ * frees what it names without the big lock. A close
+ * that left the copy the last holder is then ended here (`fd_peek_drop`).
  */
 static int32_t synth_fd_stat(int pid, int fd, struct kstat *kst)
 {
     process_t *p = get_process((uint32_t)pid);
     fd_entry_t e;
-    int held;
     int32_t rc;
 
-    if (!p || fd_peek(p->fds, fd, &e, FD_PEEK_MOUNTED) != 0) {
+    if (!p || !p->fds || fd_peek_hold(p->fds, fd, &e) != 0) {
         return -ENOENT;
     }
-    held = (e.type == FD_TYPE_FILE || e.type == FD_TYPE_DIR) && e.ofd && e.ofd->vmnt;
     rc = fstat_getattr(&e, kst);
-    if (held) {
-        fd_ofd_unref(e.ofd);
-    }
+    fd_peek_drop(&e);
     return rc;
 }
 
