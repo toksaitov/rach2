@@ -23,6 +23,7 @@
 # TREE whose last line in the record says "made", so that what another run
 # made in the same copy and what this run kept as evidence stay. It removes
 # the run's TMPDIR, OUT/ID.tmp, too, unless the record keeps a path in it.
+# A run whose etude writes no record leaves its scratch in TREE to sweep.sh.
 # The run's own files, OUT/ID and OUT/ID.*, stay for the caller to keep or
 # remove.
 
