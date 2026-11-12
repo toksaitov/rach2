@@ -48,7 +48,9 @@
  * the TSC's rate known, KVM's CPUID leaves and capabilities, the vCPUs'
  * TSCs matched under the master clock, which a write of another TSC stops,
  * the kvmclock in guest memory reading as KVM_GET_CLOCK does, its stop
- * flag, the wall clock, the clock pairing, the old MSR, KVM_SET_CLOCK,
+ * flag, the wall clock, the clock pairing, the old MSR, KVM_SET_CLOCK, the
+ * Hyper-V reference TSC page written from a clock KVM_SET_CLOCK moved
+ * between the run loop's two preparations, with the kvmclock off,
  * KVM_CAP_ENFORCE_PV_FEATURE_CPUID and KVM_CAP_X86_DISABLE_EXITS; the
  * steal time, its writes of the thread's run_delay and its preempted flag
  * across a switch at a slice's end inside KVM_RUN, none at a halted
@@ -2266,6 +2268,62 @@ static uint64_t guest_reads(const struct kvm_vcpu *v, uint64_t now)
     return pv->system_time + (uint64_t)(((unsigned __int128)delta * pv->tsc_to_system_mul) >> 32);
 }
 
+/* The Hyper-V reference TSC page's MSR and the page in the second guest
+ * page: its sequence, scale and offset. */
+#define HV_REFERENCE_TSC 0x40000021u
+#define HV_TSC_GPA       (GUEST_PAGE + 0x1000u)
+
+/** The reference TSC page's time in 100 ns at the host's TSC `now` on
+ * `v`, by the TLFS's formula from the page at HV_TSC_GPA. */
+static uint64_t hv_page_reads(const struct kvm_vcpu *v, uint64_t now)
+{
+    const uint8_t *page = guest_page + (HV_TSC_GPA - GUEST_PAGE);
+    uint64_t scale, offset;
+
+    memcpy(&scale, page + 8, 8);
+    memcpy(&offset, page + 16, 8);
+    return (uint64_t)(((unsigned __int128)(now + (uint64_t)v->tsc_offset) * scale) >> 64) + offset;
+}
+
+/**
+ * The reference TSC page of the VM `vm` on vCPU `fd0`, whose kvmclock is
+ * off: a KVM_SET_CLOCK on another processor between the run loop's
+ * `kvm_hv_prepare` and its `kvm_clock_prepare`, whose request the second
+ * takes, has the page written from the new clock before the entry, as
+ * Linux's kvm_guest_time_update writes it (arch/x86/kvm/x86.c:2893).
+ */
+static void hv_clock_rows(int vm, int fd0)
+{
+    static const struct kvm_cpuid_entry2 hv[2] = {
+        {0x40000001u, 0, 0, 0x31237648u, 0, 0, 0, {0}},
+        {0x40000003u, 0, 0, 1u << 9, 0, 0, 0, {0}},
+    };
+    struct kvm_vcpu *v0 = entries[fd0].priv;
+    const uint8_t *page = guest_page + (HV_TSC_GPA - GUEST_PAGE);
+    struct kvm_clock_data clk;
+    uint32_t seq;
+
+    k_memset(guest_page + (HV_TSC_GPA - GUEST_PAGE), 0, 4096);
+    CHECK(!(v0->pv_time & KVM_MSR_ENABLED) && kvm_hv_set_cpuid(v0, hv, 2) == 0 &&
+              set_msr(fd0, HV_REFERENCE_TSC, HV_TSC_GPA | 1u) == 1 && kvm_hv_prepare(v0) == 0,
+          "a reference TSC page set by the caller, with the kvmclock off");
+    memcpy(&seq, page, 4);
+    get_clock(vm, &clk);
+    CHECK(seq == 1 && hv_page_reads(v0, tsc) == clk.clock / 100u, "is written at the next entry");
+    CHECK(kvm_hv_prepare(v0) == 0, "the next pass has no page to write");
+    k_memset(&clk, 0, sizeof(clk));
+    clk.clock = 9000000000000ull;
+    CHECK(fdio(vm, KVM_SET_CLOCK, (uintptr_t)&clk) == 0 && (v0->requests & KVM_REQ_CLOCK_UPDATE) &&
+              v0->vm->hv_clock_moved,
+          "KVM_SET_CLOCK just after it asks for the clock's update");
+    kvm_clock_prepare(v0);
+    memcpy(&seq, page, 4);
+    get_clock(vm, &clk);
+    CHECK(seq == 2 && hv_page_reads(v0, tsc) == clk.clock / 100u && !v0->vm->hv_clock_moved &&
+              !(v0->requests & KVM_REQ_CLOCK_UPDATE),
+          "the pass's kvm_clock_prepare takes the request and writes the page from the new clock");
+}
+
 /** The kvmclock of the VM `vm` on vCPU `fd0` and its MSRs: the copy in
  * guest memory, which reads as KVM_GET_CLOCK does, the guest's stop, the
  * wall clock, the old MSR and KVM_SET_CLOCK. */
@@ -2715,6 +2773,7 @@ static void pv_rows(void)
     steal_move_rows(fd0);
     init_pv_rows(fd0);
     init_apic_base_row(fd0);
+    hv_clock_rows(vm, fd0);
     fdclose(fd1);
     fdclose(fd0);
     fdclose(vm);

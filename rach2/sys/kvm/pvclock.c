@@ -280,9 +280,11 @@ static int tsc_all_matched(const struct kvm_vm *vm)
  * reads the old formula once another reads the new, as Linux's
  * KVM_REQ_MCLOCK_INPROGRESS holds them. `hv_clock_moved` is set before
  * the kicks, as Linux's kvm_update_masterclock asks for the reference TSC
- * page's update first (x86.c:2652-2654), so that a kicked vCPU's next pass
- * of `kvm_hv_prepare` sees it and rewrites the page from the new clock,
- * which it copies under `clock_lock`, before it enters. Under `clock_lock`.
+ * page's update first (x86.c:2652-2654), so that a kicked vCPU that takes
+ * the request sees it and rewrites the page from the new clock, which it
+ * copies under `clock_lock`, before it enters: in `kvm_clock_prepare`, which
+ * takes the request, or in `kvm_hv_prepare`, which comes before it in the
+ * run loop. Under `clock_lock`.
  */
 static void master_update(struct kvm_vm *vm)
 {
@@ -604,21 +606,23 @@ static int tsc_catch_up(struct kvm_vcpu *v)
 void kvm_clock_prepare(struct kvm_vcpu *v)
 {
     int update = kvm_vcpu_test_clear(v, KVM_REQ_CLOCK_UPDATE);
+    int pv = (v->pv_time & KVM_MSR_ENABLED) != 0;
 
     if (v->tsc_catchup && tsc_catch_up(v)) {
         update = 1;
     }
-    if (!(v->pv_time & KVM_MSR_ENABLED)) {
-        return;
-    }
-    if (!update && !v->vm->master_clock &&
+    if (pv && !update && !v->vm->master_clock &&
         (v->clock_cpu != (int32_t)arch_cpu_id() ||
          kvm_host_ns() - v->clock_ns >= KVMCLOCK_SYNC_NS)) {
         update = 1;
     }
-    if (update) {
+    if (!update) {
+        return;
+    }
+    if (pv) {
         pvclock_write(v);
     }
+    kvm_hv_clock_update(v);
 }
 
 /** A write of MSR_KVM_SYSTEM_TIME, `old`, or MSR_KVM_SYSTEM_TIME_NEW, as

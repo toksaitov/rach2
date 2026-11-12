@@ -2159,13 +2159,12 @@ static void system_event(struct kvm_run *run, uint32_t type)
     run->u.system_event.type = type;
 }
 
-/** `kvm_hv_prepare` under the big lock. */
+/** `kvm_hv_prepare` under the big lock, the reference TSC page written. */
 static int32_t hv_prepare(struct kvm_vcpu *v)
 {
     struct hv_vcpu *hv = hv_of(v);
     struct kvm_run *run = v->run;
 
-    tsc_page_setup(v);
     if (!hv) {
         return 0;
     }
@@ -2222,28 +2221,56 @@ void kvm_hv_complete(struct kvm_vcpu *v)
     bkl_exit();
 }
 
-/** The big lock is taken only for work: the kvmclock moved
- * (`hv_clock_moved`, which is taken here by an exchange), the reference
- * TSC page waits to be written, or a request of hyperv.c's is set. A
- * status another vCPU changes just after the test is seen by that vCPU's
- * own next pass. */
+/** Whether the reference TSC page of `vm` waits to be written: the kvmclock
+ * moved (`hv_clock_moved`), or the guest or the caller changed the page. A
+ * test without the big lock; a change just after it is seen at the next. */
+static int tsc_page_due(const struct kvm_vm *vm)
+{
+    const struct hv_vm *h = hvm_of(vm);
+
+    return vm->hv_clock_moved ||
+           (h && (h->tsc_status == TSC_GUEST_CHANGED || h->tsc_status == TSC_HOST_CHANGED));
+}
+
+/** Take `hv_clock_moved` by an exchange and write the reference TSC page,
+ * as Linux's kvm_guest_time_update ends in kvm_hv_setup_tsc_page
+ * (arch/x86/kvm/x86.c:2893). Under the big lock, in `v`'s thread. */
+static void tsc_page_update(struct kvm_vcpu *v)
+{
+    if (arch_atomic_xchg((volatile unsigned int *)&v->vm->hv_clock_moved, 0u)) {
+        kvm_hv_clock_changed(v->vm);
+    }
+    tsc_page_setup(v);
+}
+
+/** The big lock is taken only for work: the reference TSC page waits to be
+ * written (`tsc_page_due`), or a request of hyperv.c's is set. A status
+ * another vCPU changes just after the test is seen by that vCPU's own next
+ * pass. */
 int32_t kvm_hv_prepare(struct kvm_vcpu *v)
 {
-    const struct hv_vm *h = hvm_of(v->vm);
     int32_t r;
 
-    if (!v->vm->hv_clock_moved &&
-        (!h || (h->tsc_status != TSC_GUEST_CHANGED && h->tsc_status != TSC_HOST_CHANGED)) &&
+    if (!tsc_page_due(v->vm) &&
         !(v->requests & (KVM_REQ_HV_CRASH | KVM_REQ_HV_RESET | KVM_REQ_HV_EXIT))) {
         return 0;
     }
     kvm_bkl_enter(v);
-    if (arch_atomic_xchg((volatile unsigned int *)&v->vm->hv_clock_moved, 0u)) {
-        kvm_hv_clock_changed(v->vm);
-    }
+    tsc_page_update(v);
     r = hv_prepare(v);
     bkl_exit();
     return r;
+}
+
+/** The test for work takes no lock, as `kvm_hv_prepare`'s. */
+void kvm_hv_clock_update(struct kvm_vcpu *v)
+{
+    if (!tsc_page_due(v->vm)) {
+        return;
+    }
+    kvm_bkl_enter(v);
+    tsc_page_update(v);
+    bkl_exit();
 }
 
 void kvm_hv_vcpu_free(struct kvm_vcpu *v)
