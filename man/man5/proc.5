@@ -1,4 +1,4 @@
-.Dd November 12, 2026
+.Dd November 13, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -1224,7 +1224,35 @@ past a value written keeps what it has;
 .Pa vm/swappiness ,
 60, and
 .Pa vm/overcommit_memory ,
-0, Linux's defaults, which nothing here acts on, there being no swap; and
+0, Linux's defaults, which nothing here acts on, there being no swap;
+the settings of the kernel's write-back of dirty file data, at Linux's
+defaults, which a privileged caller's write sets at once:
+.Pa vm/dirty_expire_centisecs ,
+3000, the hundredths of a second data stays dirty before the flusher
+writes it back, and
+.Pa vm/dirty_writeback_centisecs ,
+500, the hundredths of a second between the flusher's turns, 0 for none
+but those the background threshold starts, each from 0 to 2147483647;
+.Pa vm/dirty_background_ratio ,
+10, and
+.Pa vm/dirty_ratio ,
+20, the per cent of the buffer cache's limit, the most memory dirty data
+can hold, past which the flusher writes back and past which a writer
+writes back itself, each from 0 to 100;
+.Pa vm/dirty_background_bytes
+and
+.Pa vm/dirty_bytes ,
+0, the same thresholds in bytes, which count in place of the ratio when
+not 0: a write of a byte count, at least 1 and at least 8192, sets the
+ratio to 0, and a write of a ratio sets the byte count to 0, as on Linux;
+and
+.Pa vm/dirtytime_expire_seconds ,
+43200, which Linux reads for a mount with lazy times and nothing here
+reads, since no mount keeps times lazily, from 0 to 2147483647.
+The write-back goes without the disk's cache flush;
+.Xr fsync 2 ,
+.Xr sync 2 ,
+an unmount and a shutdown flush it; and
 .Pa net/ipv4/ip_forward ,
 0, since the stack forwards nothing between interfaces: a privileged
 caller's write of 0 succeeds, and of any other number fails with

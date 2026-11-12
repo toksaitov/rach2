@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 13, 2026
 .Dt MOUNT 2
 .Os
 .Sh NAME
@@ -65,8 +65,12 @@ back as Linux's does: what an operation changes stays in the buffer cache
 until
 .Xr sync 2 ,
 .Xr fsync 2 ,
-unmount, the periodic sync, the cache's eviction, or the dirty buffers'
-reaching a quarter of the cache, and a stop before then leaves what
+unmount, the cache's eviction, or the kernel's write-back, which comes
+once the data has been dirty for
+.Pa /proc/sys/vm/dirty_expire_centisecs
+or the dirty buffers pass the thresholds
+.Xr proc 5
+gives, and a stop before then leaves what
 .Xr e2fsck 8
 repairs.
 .Dv MS_NOATIME ,
