@@ -15,6 +15,8 @@
  *
  * The rows check:
  *
+ * - a device ioctl admitted without the big lock despite its retained inode,
+ *   with the last release and an unmarked ioctl still locked;
  * - an open that truncates a file of a mounted type, and the cleanup of an
  *   open that fails;
  * - the close of a descriptor whose release sleeps, by its own thread or at
@@ -4655,6 +4657,28 @@ static void protected_creates(void)
     vfs_protected_fifos = 1;
 }
 
+/** A device's ioctl needs no inode lock; its last release still does. */
+static void ioctl_entry_lock(void)
+{
+    static const struct file_ops unlocked_ops = {.flags = FILE_OPS_UNLOCKED};
+    static const struct file_ops locked_ops = {0};
+    struct open_file ofd;
+    fd_entry_t entry;
+
+    k_memset(&ofd, 0, sizeof(ofd));
+    k_memset(&entry, 0, sizeof(entry));
+    entry.type = FD_TYPE_DEVICE;
+    entry.ofd = &ofd;
+    entry.ops = &unlocked_ops;
+    ofd.dev_mnt = &mount;
+    check(file_ioctl_unlocked(&entry), "a marked device ioctl ignores its retained inode");
+    check(!file_ops_unlocked(&entry), "a device inode's last release stays locked");
+    entry.ops = &locked_ops;
+    check(!file_ioctl_unlocked(&entry), "an unmarked device ioctl stays locked");
+    entry.ops = NULL;
+    check(!file_ioctl_unlocked(&entry), "a descriptor without device operations stays locked");
+}
+
 int main(int argc, char **argv)
 {
     mount.type = &mounted_type;
@@ -4668,6 +4692,7 @@ int main(int argc, char **argv)
         }
         return failures != 0;
     }
+    ioctl_entry_lock();
     truncation();
     close_sleeping();
     deferred_release();

@@ -44,12 +44,18 @@ static uint32_t hweight8(uint8_t v)
     return n;
 }
 
+/**
+ * Initialize the immutable topology once under the GEM mutex, which may
+ * already be held by the caller. May sleep; leaves the caller's hold as is.
+ */
 void i915_sseu_init(struct drm_i915_private *i915)
 {
     struct i915_sseu *sseu = &i915->sseu;
     uint32_t fuse1;
+    int taken = i915_gem_lock(i915);
 
     if (sseu->ready) {
+        i915_gem_unlock(i915, taken);
         return;
     }
     /* There is no register that counts slices and subslices: Linux works
@@ -74,6 +80,7 @@ void i915_sseu_init(struct drm_i915_private *i915)
     sseu->eu_total = (uint16_t)(sseu->max_slices * sseu->max_subslices * sseu->eu_per_subslice);
     sseu->edram = (i915_uncore_read(i915, HSW_EDRAM_CAP) & EDRAM_ENABLED) != 0;
     sseu->ready = 1;
+    i915_gem_unlock(i915, taken);
 }
 
 /* The parameters whose answers are the same on every Haswell GT2 with its

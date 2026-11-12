@@ -66,7 +66,9 @@ struct file_ops {
  * processor beside any other call, under the object's own locks, and so
  * does the release of its last descriptor when its description names no
  * file. The system calls take the big lock around them for every table
- * without it (`file_ops_lock`), as Linux's `unlocked_ioctl` once replaced
+ * without it (`file_ops_lock`); ioctl uses the flag alone, even when a
+ * description retains a device inode (`file_ioctl_unlocked`). Linux's
+ * `unlocked_ioctl` once replaced
  * `ioctl` under the BKL one driver at a time.
  */
 #define FILE_OPS_UNLOCKED 1u
@@ -76,6 +78,11 @@ struct file_ops {
  * no socket, its description names no file, device node or synthetic node,
  * and no operation of it moves the description's offset. */
 int file_ops_unlocked(const fd_entry_t *e);
+
+/** Whether `e`'s ioctl dispatcher sets FILE_OPS_UNLOCKED. A held device
+ * node's retained inode and offset need no lock for an ioctl; FIONBIO
+ * still changes the description under the big lock. */
+int file_ioctl_unlocked(const fd_entry_t *e);
 
 /** Whether descriptor `e` names a regular file or a directory of a type
  * that sets `reads_unlocked`, whose reads, listings and attributes run

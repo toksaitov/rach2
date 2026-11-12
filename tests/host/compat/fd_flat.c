@@ -54,6 +54,12 @@ int file_ops_lock(const fd_entry_t *e)
     return 0;
 }
 
+/** An ioctl uses its object's locks even with a retained device inode. */
+int file_ioctl_unlocked(const fd_entry_t *e)
+{
+    return e && e->ops && (e->ops->flags & FILE_OPS_UNLOCKED);
+}
+
 /** Give back what `file_ops_lock` took: nothing. */
 void file_ops_unlock(int taken)
 {

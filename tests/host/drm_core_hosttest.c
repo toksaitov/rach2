@@ -111,10 +111,11 @@ int32_t drm_atomic_worker_start(void)
 static int mode_lock_depth;
 
 /** The big lock, counted the same way (proc/smp.h). */
-static int bkl_depth;
+static int bkl_depth, bkl_enters;
 
 void bkl_enter(void)
 {
+    bkl_enters++;
     bkl_depth++;
 }
 
@@ -560,7 +561,18 @@ void krandom_bytes(void *buf, uint32_t n)
     }
 FOREIGN(drm_prime_handle_to_fd_ioctl)
 FOREIGN(drm_prime_fd_to_handle_ioctl)
-FOREIGN(drm_mode_getresources)
+static int core_mode_big, core_mode_held;
+
+/** Record the core KMS row's locks; this model has no mode objects. */
+int32_t drm_mode_getresources(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    (void)dev;
+    (void)data;
+    (void)file;
+    core_mode_big = bkl_depth;
+    core_mode_held = mode_lock_depth;
+    return -EOPNOTSUPP;
+}
 FOREIGN(drm_mode_getplane_res)
 FOREIGN(drm_mode_getcrtc)
 FOREIGN(drm_mode_getplane)
@@ -600,7 +612,15 @@ FOREIGN(drm_syncobj_destroy_ioctl)
 FOREIGN(drm_syncobj_handle_to_fd_ioctl)
 FOREIGN(drm_syncobj_fd_to_handle_ioctl)
 FOREIGN(drm_syncobj_transfer_ioctl)
-FOREIGN(drm_syncobj_wait_ioctl)
+/** A syncobj wait's model records the lock its dispatcher passed it. */
+int32_t drm_syncobj_wait_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    (void)dev;
+    (void)data;
+    (void)file;
+    CHECK("SYNCOBJ_WAIT runs without the big lock", bkl_depth == 0);
+    return -EOPNOTSUPP;
+}
 FOREIGN(drm_syncobj_timeline_wait_ioctl)
 FOREIGN(drm_syncobj_eventfd_ioctl)
 FOREIGN(drm_syncobj_reset_ioctl)
@@ -1088,15 +1108,39 @@ static void test_locks(void)
     open_node("dri/card0", &user_a, 0, &card);
     open_node("dri/renderD128", &user_b, 0, &render);
     open_node("dri/card0", &user_b, 0, &other);
+    bkl_enters = 0;
     CHECK("locks: a locked row runs under the big lock alone",
-          ioc(&render, &user_b, FAKE_IOCTL_LOCKED, &l) == 0 && l.big == 1 && l.mode == 0);
+          ioc(&render, &user_b, FAKE_IOCTL_LOCKED, &l) == 0 && l.big == 1 && l.mode == 0 &&
+              bkl_enters == 1);
+    bkl_enters = 0;
     CHECK("locks: an unlocked render row runs under neither",
-          ioc(&render, &user_b, FAKE_IOCTL_UNLOCKED, &l) == 0 && l.big == 0 && l.mode == 0);
+          ioc(&render, &user_b, FAKE_IOCTL_UNLOCKED, &l) == 0 && l.big == 0 && l.mode == 0 &&
+              bkl_enters == 0);
+    {
+        struct drm_syncobj_wait wait;
+
+        k_memset(&wait, 0, sizeof(wait));
+        bkl_enters = 0;
+        CHECK("locks: a syncobj wait enters without a big-lock take",
+              ioc(&render, &user_b, DRM_IOCTL_SYNCOBJ_WAIT, &wait) == -EOPNOTSUPP &&
+                  bkl_enters == 0);
+    }
     CHECK("locks: a KMS read runs under the big lock and the mode lock",
           ioc(&card, &user_a, FAKE_IOCTL_READ, &l) == 0 && l.big == 1 && l.mode == 1);
     CHECK("locks: ATOMIC's row keeps the big lock on a driver that does not opt out",
           ioc(&card, &user_a, FAKE_IOCTL_KMS, &l) == 0 && l.big == 1 && l.mode == 1);
-    fake_dev.features |= DRIVER_KMS_UNLOCKED;
+    {
+        struct drm_mode_card_res res;
+
+        k_memset(&res, 0, sizeof(res));
+        CHECK("locks: core KMS keeps the big lock without driver opt-in",
+              ioc(&card, &user_a, DRM_IOCTL_MODE_GETRESOURCES, &res) == -EOPNOTSUPP &&
+                  core_mode_big == 1 && core_mode_held == 1);
+        fake_dev.features |= DRIVER_KMS_UNLOCKED;
+        CHECK("locks: core KMS uses only the mode mutex with driver opt-in",
+              ioc(&card, &user_a, DRM_IOCTL_MODE_GETRESOURCES, &res) == -EOPNOTSUPP &&
+                  core_mode_big == 0 && core_mode_held == 1);
+    }
     CHECK("locks: ATOMIC's row runs under the mode lock alone with DRIVER_KMS_UNLOCKED",
           ioc(&card, &user_a, FAKE_IOCTL_KMS, &l) == 0 && l.big == 0 && l.mode == 1);
     CHECK("locks: the master rule refuses a client before the mode lock",
@@ -1113,7 +1157,7 @@ static void test_locks(void)
 }
 
 /**
- * A file-system device node enters with a big lock for its retained inode.
+ * A traced entry or a kernel caller can enter with a big lock.
  * An unlocked row gives that whole depth back across copies and the handler,
  * including failures, and restores it before returning to the caller.
  * `drm-core inherited` runs these rows alone after the device setup.
