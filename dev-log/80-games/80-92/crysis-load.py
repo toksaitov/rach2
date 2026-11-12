@@ -7,7 +7,11 @@
 # VIEW_PROFTID=1 with it, on a kernel profile-tid.py patched, profiles the
 # game's main thread alone, or with VIEW_PROFNAME=NAME the first thread so named,
 # VIEW_SAMPLE=N samples every processor's RIP N times over the load by QMP,
-# VIEW_STRACE=1 runs the game under strace -f -c.
+# VIEW_STRACE=1 runs the game under strace -f -c, or strace's options
+# VIEW_STRACEO in place of -c -w, VIEW_TRACEP=NAMES counts
+# the calls of every thread so named for VIEW_TRACET seconds of the load, game
+# naming the main thread, with strace's options VIEW_TRACEO in place of -c -w,
+# and VIEW_CPU gives QEMU's -cpu.
 import collections, hashlib, json, os, pathlib, re, shlex, signal, socket, subprocess as S, sys, threading, time
 
 w = pathlib.Path(__file__).resolve().parent
@@ -116,7 +120,7 @@ try:
     else:
         datadrv = f'file={overlay("data", w / "data-warm.ext2", "raw")},format=qcow2,if=none,id=data'
     console = open(out / 'serial.txt', 'wb')
-    common = ['-accel', 'kvm', '-cpu', 'host,invtsc=on', '-smp', '4', '-m', '4096', '-nodefaults', '-display', 'none', '-no-reboot']
+    common = ['-accel', 'kvm', '-cpu', os.environ.get('VIEW_CPU', 'host,invtsc=on'), '-smp', '4', '-m', '4096', '-nodefaults', '-display', 'none', '-no-reboot']
     if system == 'linux':
         boot = overlay('debian', ref / 'prepared.qcow2', 'qcow2')
         args = ['qemu-system-x86_64'] + common + ['-machine', 'q35', '-drive', f'file={boot},if=none,id=boot,format=qcow2', '-device', 'virtio-blk-pci,drive=boot,bootindex=0', '-device', 'virtio-vga', '-device', 'virtio-rng-pci',
@@ -166,7 +170,7 @@ try:
         say('pre:', cmd(os.environ['VIEW_PRE'], check=False).stdout.decode())
     game = 'env PULSE_SERVER=unix:/tmp/t-pulse DISPLAY=:99 LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe LP_NUM_THREADS=4 PROTON_USE_XALIA=0 MESA_SHADER_CACHE_SHOW_STATS=true ' + os.environ.get('VIEW_ENV', 'WINEDEBUG=-all') + ' crysis.sh run -devmode +r_Width 640 +r_Height 480 +sys_spec 1 +g_skipIntro 1 +load default_Contact_crysis.CRYSISJMSF'
     if os.environ.get('VIEW_STRACE') == '1':
-        game = 'strace -f -c -w -o /tmp/strace-c.txt ' + game
+        game = 'strace -f %s -o /tmp/strace-c.txt ' % os.environ.get('VIEW_STRACEO', '-c -w') + game
     sampler = Sampler() if nsample else None
     if sampler:
         sampler.start()
@@ -197,8 +201,8 @@ try:
                 (out / 'stat-a.txt').write_bytes(cmd(pre + stat, check=False).stdout)
                 if os.environ.get('VIEW_TRACEP'):
                     tr = ('G=$(for p in /proc/[0-9]*; do echo "$(ls $p/task 2>/dev/null | wc -l) ${p#/proc/}"; done | sort -n | tail -1 | cut -d" " -f2); '
-                          'for n in %s; do if [ $n = game ]; then t=$G; else t=$(grep -l "^$n\\$" /proc/[0-9]*/task/[0-9]*/comm 2>/dev/null | head -1 | cut -d/ -f5); fi; '
-                          '[ -n "$t" ] && (timeout -s INT %s strace -c -w -p $t -o /tmp/tp-$n.txt > /dev/null 2>&1 &); echo "$n $t"; done' % (os.environ['VIEW_TRACEP'], os.environ.get('VIEW_TRACET', '6')))
+                          'for n in %s; do if [ $n = game ]; then t="-p $G"; else t=$(grep -l "^$n\\$" /proc/[0-9]*/task/[0-9]*/comm 2>/dev/null | cut -d/ -f5 | sed "s/^/-p /" | tr "\\n" " "); fi; '
+                          '[ -n "$t" ] && (timeout -s INT %s strace %s $t -o /tmp/tp-$n.txt > /tmp/tp-$n.err 2>&1 &); echo "$n $t"; done' % (os.environ['VIEW_TRACEP'], os.environ.get('VIEW_TRACET', '6'), os.environ.get('VIEW_TRACEO', '-c -w')))
                     say('tracing', cmd(tr, check=False).stdout.decode())
                 if sampler:
                     sampler.go.set()
@@ -239,7 +243,7 @@ try:
     if os.environ.get('VIEW_STRACE') == '1':
         (out / 'strace-c.txt').write_bytes(cmd('cat /tmp/strace-c.txt', check=False).stdout)
     if os.environ.get('VIEW_TRACEP'):
-        (out / 'tracep.txt').write_bytes(cmd('for f in /tmp/tp-*.txt; do echo "== $f"; cat $f; done', check=False).stdout)
+        (out / 'tracep.txt').write_bytes(cmd('for f in /tmp/tp-*; do echo "== $f"; cat $f; done', check=False).stdout)
     if system == 'rach2':
         (out / 'dmesg.txt').write_bytes(cmd('dmesg', check=False).stdout)
 finally:
