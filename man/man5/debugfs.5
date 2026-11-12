@@ -279,10 +279,11 @@ and
 is the timer pass, the sleepers and timers whose time has come, on the
 tick that made the clock's pass.
 .Ql lock
-is the tick's try for the big lock, or its wait, which the boot
-processor's tick makes at every tick and waits out at its fourth failed
-try in a row, and another processor's only while signals of the tick wait
-to be posted.
+is the tick's take of the big lock, its try and any wait, counted only on
+a tick that took the lock; a try that failed is counted in no row.
+The boot processor's tick tries at every tick and waits at its fourth
+failed try in a row, and another processor's tries only while signals of
+the tick wait to be posted.
 The rows after it run under the lock:
 .Ql signals ,
 the posting of the signals of the tick, SIGALRM, SIGVTALRM, SIGPROF and
@@ -301,14 +302,16 @@ counts the ticks whose locked part ran inside a hold that the code the
 tick interrupted already had, with that part's time, which the other rows
 count too and which is the interrupted hold's, not the tick's.
 So the rows from
-.Ql lock
+.Ql signals
 to
 .Ql klog ,
 less
 .Ql nested ,
-sum to the hold that
+sum to about the hold that
 .Pa bkl/calls
-charges to vector 32.
+charges to vector 32, from the take to the give-back; the wait that
+.Ql lock
+counts is not in it.
 The microseconds are 0 without an invariant time-stamp counter; the cycles
 are not.
 A write of anything zeroes the counts: each processor zeroes its own at
