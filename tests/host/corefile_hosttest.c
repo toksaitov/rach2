@@ -1532,6 +1532,28 @@ int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino)
     return 0;
 }
 
+/** The sync of an O_SYNC or O_DSYNC write, which no row opens: 0. */
+int vfs_fsync(struct vfs_mount *mnt, void *handle)
+{
+    (void)mnt;
+    (void)handle;
+    return 0;
+}
+
+/** As `vfs_fsync`. */
+int vfs_fdatasync(struct vfs_mount *mnt, void *handle)
+{
+    (void)mnt;
+    (void)handle;
+    return 0;
+}
+
+/** The disk-backed window's sync, which no row reaches: 0. */
+int pc_sync(void)
+{
+    return 0;
+}
+
 /** The truncation of an open with O_TRUNC, which no row asks for: -EROFS. */
 int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
 {
