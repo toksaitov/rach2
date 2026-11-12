@@ -18,6 +18,7 @@
 #include "../../lib/kstring.h"
 #include "../../lib/spinlock.h"
 #include "../../mm/paging.h"
+#include "../../proc/sched.h"
 
 /* The struct's offsets, which vdsocode.s reads the page at: an array size of -1
  * fails the compile. TinyCC's build skips the check. */
@@ -483,6 +484,24 @@ static void vclock_stop(uint64_t *mono_ns, uint64_t *raw_ns)
     spin_unlock(&vclock_lock);
 }
 
+/**
+ * Interrupt every other processor once the clock stopped, so that a vCPU in
+ * its guest exits and its run loop, whose entries and fast path test the
+ * generation (`kvm_clock_host_moved`), decides its VM's master clock again
+ * before the guest reads the stable bit any longer, as Linux's
+ * pvclock_gtod_notify has every vCPU of every VM asked for
+ * KVM_REQ_MASTERCLOCK_UPDATE and kicked (arch/x86/kvm/x86.c:9166-9169). The
+ * generation went up under `vclock_lock`; the barrier puts it before the
+ * interrupts, which a write of the x2APIC's ICR would not order. Outside
+ * `vclock_lock` and clock.c's locks; this processor's own vCPU, if any, is
+ * outside its guest while the tick runs, and enters through the test.
+ */
+static void vclock_kick(void)
+{
+    sched_mb();
+    sched_kick_cpus(~(uint64_t)0);
+}
+
 void vclock_start(void)
 {
     const char *why;
@@ -581,6 +600,7 @@ void vclock_tick(void)
     }
     if (tsc_kvm_boot_withdrawn()) {
         rtc_vclock_change(vclock_stop);
+        vclock_kick();
         klog(KLOG_WARN, "vdso", "clock: the system call; kvm's clock page withdrew its stable bit");
         return;
     }

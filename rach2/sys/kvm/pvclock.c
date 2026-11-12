@@ -326,6 +326,11 @@ static void master_update(struct kvm_vm *vm)
     }
 }
 
+int kvm_clock_host_moved(const struct kvm_vm *vm)
+{
+    return vm->host_clock_gen != vclock_generation();
+}
+
 /**
  * Decide `vm`'s master clock again when the host's clock has stopped or
  * started running from the TSC since it was last decided, as Linux's
@@ -335,19 +340,20 @@ static void master_update(struct kvm_vm *vm)
  * a clock that no longer holds: `master_update` has every vCPU write its
  * kvmclock, and the reference TSC page be written, before its next entry.
  * The generation is read before the host's clock (`master_update`), so a
- * change after the read is seen at the next call. The test takes no lock;
- * the first vCPU to see the change decides for all, under `clock_lock`. In
- * a vCPU's thread or an ioctl's.
+ * change after the read is seen at the next call, and a change after a
+ * vCPU's call is seen by its entry, which `kvm_clock_host_moved` cancels.
+ * The test takes no lock; the first vCPU to see the change decides for all,
+ * under `clock_lock`. In a vCPU's thread or an ioctl's.
  */
 static void master_recheck(struct kvm_vm *vm)
 {
     uint32_t flags;
 
-    if (vm->host_clock_gen == vclock_generation()) {
+    if (!kvm_clock_host_moved(vm)) {
         return;
     }
     flags = clock_lock(vm);
-    if (vm->host_clock_gen != vclock_generation()) {
+    if (kvm_clock_host_moved(vm)) {
         master_update(vm);
     }
     clock_unlock(vm, flags);

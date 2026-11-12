@@ -400,7 +400,8 @@ struct kvm_vm {
     int old_kvmclock;    /* the boot vCPU's guest uses MSR_KVM_SYSTEM_TIME */
     /* The host clock's generation (`vclock_generation`) at which the master
      * clock was last decided; written under `clock_lock`, compared without
-     * it before each entry (`kvm_clock_prepare`). */
+     * it before each entry (`kvm_clock_prepare`) and at the entry's gates
+     * (`kvm_clock_host_moved`). */
     volatile uint32_t host_clock_gen;
     /* The vCPUs' TSCs as Linux's kvm_synchronize_tsc matches them: the
      * generation of matched writes, its offset, the vCPUs that joined it
@@ -1155,6 +1156,15 @@ int kvm_pv_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, i
  * (`kvm_hv_clock_update`), so that a request taken here leaves no page of the
  * old clock to the entry. In `v`'s thread. */
 void kvm_clock_prepare(struct kvm_vcpu *v);
+
+/** Whether the host's clock has stopped or started (`vclock_generation`)
+ * since `vm`'s master clock was last decided, which the run loop must decide
+ * again before an entry (`kvm_clock_prepare`). Without a lock; the entry's
+ * gates test it after the vCPU is IN_GUEST and a barrier, so that a stop
+ * after a vCPU's preparation cancels its entry, or ends its fast path at the
+ * exit the stop's kick (`vclock_kick`) forces, as Linux's
+ * KVM_REQ_MASTERCLOCK_UPDATE does. */
+int kvm_clock_host_moved(const struct kvm_vm *vm);
 
 /** KVM_KVMCLOCK_CTRL: the guest's next kvmclock says it was stopped. 0, or
  * -EINVAL while the kvmclock is off. */
