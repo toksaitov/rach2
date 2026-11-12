@@ -6,7 +6,29 @@
 #include "notify.h"
 
 #include "mm.h"
+#include "../arch/arch.h"
 #include "../proc/smp.h"
+
+/** Add `delta` to `*count` in one atomic step, a full barrier on x86. */
+static void count_add(volatile uint32_t *count, uint32_t delta)
+{
+    uint32_t old;
+
+    do {
+        old = *count;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)count, old, old + delta) != old);
+}
+
+void mmn_change_begin(struct mm *mm)
+{
+    count_add(&mm->changing, 1u);
+}
+
+void mmn_change_end(struct mm *mm)
+{
+    count_add(&mm->changes, 1u);
+    count_add(&mm->changing, (uint32_t)-1);
+}
 
 /** The list is changed under the page-table lock too, so that a fault that
  * changes a present page reads it in the same hold as it changes the entry

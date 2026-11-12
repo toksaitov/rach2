@@ -2,6 +2,7 @@
  * Check KVM's maps of a guest's pages into a program of the host, gpamap.c,
  * over a model of the VM's slots and of its maker's memory.
  *
+ * host-deps: tests/host/compat/atomic_host.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * gpamap.c and the change notice's mm/notify.c are the kernel's, included

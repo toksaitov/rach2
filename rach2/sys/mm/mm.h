@@ -70,6 +70,13 @@ struct mm {
      * write lock: a fault that let the lock go across a file's or a
      * device's operation maps nothing if it moved meanwhile. */
     uint32_t zaps;
+    /* The changes of present pages under way and finished whose ranges
+     * were told (`mmn_change_begin`), as Linux's mmu_invalidate_in_progress
+     * and mmu_invalidate_seq: a driver that reads entries without the big
+     * lock maps what it read only while `changing` is 0 and `changes` has
+     * not moved since before the read (KVM's fault, tdp.c). */
+    volatile uint32_t changing;
+    volatile uint32_t changes;
     struct page_dir *dir; /* NULL once the last user has gone */
     uintptr_t space_root; /* the directory's physical address; 0 with `dir` */
     vm_space_t vm;
@@ -248,8 +255,11 @@ void mm_unhold(struct mm *mm);
  * too, and every removal or downgrade of a present page holds the big
  * lock, so that code under the big lock that does not sleep may still read
  * the regions and the page tables without the regions' lock, as the older
- * callers of `vm_resident` and KVM's fault do. Code that may sleep between
- * its look and its use takes the regions' lock.
+ * callers of `vm_resident` do. Code that may sleep between its look and
+ * its use takes the regions' lock. Code without the big lock that maps
+ * what it read elsewhere, as KVM's fault does, holds the regions' lock to
+ * read and counts on `changing` and `changes` for the page changes made by
+ * other holders of it to read (notify.h).
  */
 
 /** Take `mm`'s regions' lock to read, sleeping while a writer holds it or
