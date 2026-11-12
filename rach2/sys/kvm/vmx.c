@@ -317,15 +317,21 @@
 #define CR0_CD 0x40000000ull
 #define CR0_PG 0x80000000ull
 
-#define CR4_DE    (1ull << 3)
-#define CR4_PSE   (1ull << 4)
-#define CR4_PAE   (1ull << 5)
-#define CR4_PGE   (1ull << 7)
-#define CR4_VMXE  (1ull << 13)
-#define CR4_PCIDE (1ull << 17)
-#define CR4_SMEP  (1ull << 20)
-#define CR4_SMAP  (1ull << 21)
-#define CR4_PKE   (1ull << 22)
+#define CR4_PVI        (1ull << 1)
+#define CR4_TSD        (1ull << 2)
+#define CR4_DE         (1ull << 3)
+#define CR4_PSE        (1ull << 4)
+#define CR4_PAE        (1ull << 5)
+#define CR4_PGE        (1ull << 7)
+#define CR4_PCE        (1ull << 8)
+#define CR4_OSFXSR     (1ull << 9)
+#define CR4_OSXMMEXCPT (1ull << 10)
+#define CR4_VMXE       (1ull << 13)
+#define CR4_FSGSBASE   (1ull << 16)
+#define CR4_PCIDE      (1ull << 17)
+#define CR4_SMEP       (1ull << 20)
+#define CR4_SMAP       (1ull << 21)
+#define CR4_PKE        (1ull << 22)
 
 #define GEFER_SCE 0x001ull
 #define GEFER_LME 0x100ull
@@ -881,6 +887,8 @@ struct vmx_vcpu {
     int launched;                 /* the VMCS's launch state: the next entry is VMRESUME */
     struct vmx_vcpu *next_loaded; /* the next VMCS active on `cpu` (`vmx_loaded`) */
     int fresh;                    /* the record's special registers are the VMCS's */
+    int cr_fresh;                 /* the record's CR0 and CR4 hold the guest's own bits */
+    uint64_t cr4_owned;           /* the CR4 bits the guest writes without an exit */
     int kgs_table;                /* msr.c's KERNEL_GS_BASE is the guest's (`kgs_sync`) */
     int flush_vpid;               /* drop the guest's linear translations at the entry */
     uint32_t vdirty;              /* VX_* */
@@ -990,15 +998,15 @@ static void seg_write(int n, const struct kvm_segment *s)
     vmcs_write(GUEST_ES_AR_BYTES + 2u * (uint32_t)n, seg_ar(s, n == SEG_LDTR));
 }
 
-/** Read the guest's segment register `n` into `s`, as Linux's
- * vmx_get_segment: a segment is present when it is usable. */
-static void seg_read(int n, struct kvm_segment *s)
+/** Read the access rights of the guest's segment register `n` into `s`,
+ * and not its selector, base or limit: the mode and the privilege, as
+ * Linux's vmx_get_cs_db_l_bits and vmx_get_cpl read the field alone
+ * (arch/x86/kvm/vmx/vmx.c:3599-3608). A segment is present when it is
+ * usable, as Linux's vmx_get_segment. */
+static void seg_read_ar(int n, struct kvm_segment *s)
 {
     uint32_t ar = (uint32_t)vmcs_read(GUEST_ES_AR_BYTES + 2u * (uint32_t)n);
 
-    s->selector = (uint16_t)vmcs_read(GUEST_ES_SELECTOR + 2u * (uint32_t)n);
-    s->base = vmcs_read(GUEST_ES_BASE + 2u * (uint32_t)n);
-    s->limit = (uint32_t)vmcs_read(GUEST_ES_LIMIT + 2u * (uint32_t)n);
     s->unusable = (uint8_t)((ar >> 16) & 1u);
     s->type = (uint8_t)(ar & 15u);
     s->s = (uint8_t)((ar >> 4) & 1u);
@@ -1009,6 +1017,15 @@ static void seg_read(int n, struct kvm_segment *s)
     s->db = (uint8_t)((ar >> 14) & 1u);
     s->g = (uint8_t)((ar >> 15) & 1u);
     s->padding = 0;
+}
+
+/** Read the guest's segment register `n` into `s`. */
+static void seg_read(int n, struct kvm_segment *s)
+{
+    s->selector = (uint16_t)vmcs_read(GUEST_ES_SELECTOR + 2u * (uint32_t)n);
+    s->base = vmcs_read(GUEST_ES_BASE + 2u * (uint32_t)n);
+    s->limit = (uint32_t)vmcs_read(GUEST_ES_LIMIT + 2u * (uint32_t)n);
+    seg_read_ar(n, s);
 }
 
 /** The segment registers of `v`'s record, by SEG_*. */
@@ -1034,9 +1051,42 @@ static struct kvm_segment *seg_of(struct kvm_vcpu *v, int n)
     }
 }
 
-/* The CR0 bits the guest changes without an exit: TS and WP, as Linux's
- * KVM_POSSIBLE_CR0_GUEST_BITS under EPT. Every CR4 bit exits. */
+/* The CR0 bits the guest changes without an exit, and the CR4 bits it may,
+ * as Linux's KVM_POSSIBLE_CR0_GUEST_BITS and KVM_POSSIBLE_CR4_GUEST_BITS
+ * under EPT (arch/x86/kvm/kvm_cache_regs.h:7-10). */
 #define CR0_GUEST_OWNED (CR0_TS | CR0_WP)
+#define CR4_GUEST_OWNABLE \
+    (CR4_PVI | CR4_DE | CR4_PCE | CR4_OSFXSR | CR4_OSXMMEXCPT | CR4_PGE | CR4_TSD | CR4_FSGSBASE)
+
+/** Give the guest the CR4 bits of CR4_GUEST_OWNABLE that its CPUID does
+ * not reserve, so that setting a reserved one still exits for its #GP, as
+ * Linux's set_cr4_guest_host_mask (arch/x86/kvm/vmx/vmx.c:4405-4419). The
+ * record's CR4 holds the guest's own bits (`cr_cache`), and the VMCS is
+ * current. */
+static void cr4_mask_load(struct kvm_vcpu *v)
+{
+    struct vmx_vcpu *x = vx(v);
+
+    x->cr4_owned = CR4_GUEST_OWNABLE & ~kvm_cr4_reserved(v);
+    vmcs_write(CR4_GUEST_HOST_MASK, ~x->cr4_owned);
+}
+
+/** Bring the CR0 and CR4 bits the guest owns from the VMCS into `v`'s
+ * record, once after an exit, as Linux's vmx_cache_reg reads
+ * VCPU_EXREG_CR0 and VCPU_EXREG_CR4 at the first kvm_read_cr0_bits or
+ * kvm_read_cr4_bits (arch/x86/kvm/vmx/vmx.c:2543-2563). The VMCS is
+ * current. */
+static void cr_cache(struct kvm_vcpu *v)
+{
+    struct vmx_vcpu *x = vx(v);
+
+    if (x->cr_fresh) {
+        return;
+    }
+    v->sregs.cr0 = (v->sregs.cr0 & ~CR0_GUEST_OWNED) | (vmcs_read(GUEST_CR0) & CR0_GUEST_OWNED);
+    v->sregs.cr4 = (v->sregs.cr4 & ~x->cr4_owned) | (vmcs_read(GUEST_CR4) & x->cr4_owned);
+    x->cr_fresh = 1;
+}
 
 /** CR0 as the processor runs the guest under it: never CD or NW, whose
  * effect EPT's memory types give, NE always, and the fixed bits but PE and
@@ -1347,7 +1397,7 @@ static void vmcs_build(struct kvm_vcpu *v)
     vmcs_write(VM_EXIT_MSR_LOAD_COUNT, 0);
     vmcs_write(VMCS_LINK_POINTER, ~0ull);
     vmcs_write(CR0_GUEST_HOST_MASK, ~CR0_GUEST_OWNED);
-    vmcs_write(CR4_GUEST_HOST_MASK, ~0ull);
+    cr4_mask_load(v);
     vmcs_write(HOST_CS_SELECTOR, HOST_CS);
     vmcs_write(HOST_SS_SELECTOR, HOST_SS);
     vmcs_write(HOST_DS_SELECTOR, 0);
@@ -1486,13 +1536,21 @@ static void load_dirty(struct kvm_vcpu *v)
         vmcs_write(GUEST_CR3, v->sregs.cr3);
         x->vdirty |= VX_CR0 | VX_CR4 | VX_EFER;
         x->fresh = 1;
+        x->cr_fresh = 1;
         x->flush_vpid = 1;
     }
     if (x->vdirty & VX_CR0) {
         vmcs_write(CR0_READ_SHADOW, v->sregs.cr0);
         vmcs_write(GUEST_CR0, hw_cr0(v->sregs.cr0));
     }
-    if (x->vdirty & (VX_CR0 | VX_CR4)) {
+    if (d & KVM_PART_CPUID) {
+        /* A bit the new CPUID reserves exits again, and the shadow
+         * gives the guest's own value of a bit that stops being its. */
+        cr_cache(v);
+        cr4_mask_load(v);
+        x->vdirty |= VX_CR4;
+    }
+    if (x->vdirty & VX_CR4) {
         vmcs_write(CR4_READ_SHADOW, v->sregs.cr4);
         vmcs_write(GUEST_CR4, hw_cr4(v->sregs.cr4, v->sregs.cr0));
     }
@@ -1594,39 +1652,42 @@ static void read_exit(struct vmx_vcpu *x)
 }
 
 /** Read the guest's special registers into `v`'s record: the segments,
- * the tables, CR3, CR0's bits the guest owns, DR7 and the PDPTEs. */
+ * the tables, CR3, the CR0 and CR4 bits the guest owns, DR7 and the
+ * PDPTEs, but not a part the record changed for the next entry to write,
+ * which is newer than the VMCS's. */
 static void read_sregs(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
-    uint64_t cr0;
     int n, i;
 
-    for (n = SEG_ES; n <= SEG_TR; n++) {
-        seg_read(n, seg_of(v, n));
-    }
-    v->sregs.gdt.base = vmcs_read(GUEST_GDTR_BASE);
-    v->sregs.gdt.limit = (uint16_t)vmcs_read(GUEST_GDTR_LIMIT);
-    v->sregs.idt.base = vmcs_read(GUEST_IDTR_BASE);
-    v->sregs.idt.limit = (uint16_t)vmcs_read(GUEST_IDTR_LIMIT);
-    v->sregs.cr3 = vmcs_read(GUEST_CR3);
-    cr0 = vmcs_read(GUEST_CR0);
-    v->sregs.cr0 = (v->sregs.cr0 & ~CR0_GUEST_OWNED) | (cr0 & CR0_GUEST_OWNED);
-    if (!debugging(v, KVM_GUESTDBG_USE_HW_BP)) {
-        v->debugregs.dr7 = vmcs_read(GUEST_DR7);
-    }
-    if (pae_paging(v)) {
-        for (i = 0; i < 4; i++) {
-            x->pdpte[i] = vmcs_read(GUEST_PDPTR0 + 2u * (uint32_t)i);
+    if (!(v->dirty & KVM_PART_SREGS)) {
+        for (n = SEG_ES; n <= SEG_TR; n++) {
+            seg_read(n, seg_of(v, n));
         }
+        v->sregs.gdt.base = vmcs_read(GUEST_GDTR_BASE);
+        v->sregs.gdt.limit = (uint16_t)vmcs_read(GUEST_GDTR_LIMIT);
+        v->sregs.idt.base = vmcs_read(GUEST_IDTR_BASE);
+        v->sregs.idt.limit = (uint16_t)vmcs_read(GUEST_IDTR_LIMIT);
+        v->sregs.cr3 = vmcs_read(GUEST_CR3);
+        cr_cache(v);
+        if (pae_paging(v) && !(x->vdirty & VX_PDPTE)) {
+            for (i = 0; i < 4; i++) {
+                x->pdpte[i] = vmcs_read(GUEST_PDPTR0 + 2u * (uint32_t)i);
+            }
+        }
+    }
+    if (!debugging(v, KVM_GUESTDBG_USE_HW_BP) && !(v->dirty & KVM_PART_DEBUG)) {
+        v->debugregs.dr7 = vmcs_read(GUEST_DR7);
     }
     x->fresh = 1;
 }
 
 /** Whether the exit `e` of `v` needs the special registers in the record
- * for its handling: an access to MMIO, string I/O, a control register's
- * write, a debug register, a hypercall's privilege, an exception, a task
- * switch, the APIC base's write, which vlapic.c marks as theirs, and any
- * exit under the caller's single step, whose report gives CS's base. */
+ * for its handling: an access to MMIO, string I/O, a debug register, a
+ * hypercall's privilege, an exception, a task switch, the APIC base's
+ * write, which vlapic.c marks as theirs, and any exit under the caller's
+ * single step, whose report gives CS's base. A write of CR0 or CR4 reads
+ * the bits it needs alone (`after_run`). */
 static int needs_sregs(const struct kvm_vcpu *v, const struct vmx_exit *e)
 {
     if (debugging(v, KVM_GUESTDBG_SINGLESTEP)) {
@@ -1642,8 +1703,6 @@ static int needs_sregs(const struct kvm_vcpu *v, const struct vmx_exit *e)
         return 1;
     case EXIT_IO:
         return (e->qual & 0x10u) != 0;
-    case EXIT_CR_ACCESS:
-        return (e->qual & 0xFu) != 8u;
     case EXIT_MSR_WRITE:
         return (uint32_t)v->regs.rcx == MSR_APIC_BASE;
     default:
@@ -1847,6 +1906,7 @@ static void after_run(struct kvm_vcpu *v)
     struct vmx_vcpu *x = vx(v);
 
     x->fresh = 0;
+    x->cr_fresh = 0;
     if (x->ex.failed != VMX_OK) {
         v->hw_exit = EXIT_FAILED_ENTRY;
         x->ex.insn_error =
@@ -1868,11 +1928,22 @@ static void after_run(struct kvm_vcpu *v)
     x->kgs_table = 0;
     if (needs_sregs(v, &x->ex)) {
         read_sregs(v);
-    } else {
-        /* CS gives the mode in which the kernel steps RIP, and SS the
-         * privilege, at every exit, as Linux's is_64_bit_mode reads CS. */
-        seg_read(SEG_CS, &v->sregs.cs);
-        seg_read(SEG_SS, &v->sregs.ss);
+        return;
+    }
+    /* CS's access rights give the mode in which the kernel steps RIP, and
+     * SS's the privilege, at every exit, as Linux's is_64_bit_mode and
+     * vmx_get_cpl read them. */
+    seg_read_ar(SEG_CS, &v->sregs.cs);
+    seg_read_ar(SEG_SS, &v->sregs.ss);
+    if (x->ex.reason == EXIT_RDPMC) {
+        cr_cache(v); /* for CR4.PCE */
+    } else if (x->ex.reason == EXIT_CR_ACCESS && (x->ex.qual & 0xFu) != 8u) {
+        /* A write of CR0 or CR4 starts from the guest's own bits. CR3
+         * does not exit under EPT, and the write reads it for PAE's
+         * PDPTEs and PCIDE's check, as Linux's kvm_read_cr3
+         * (arch/x86/kvm/kvm_cache_regs.h:190-195). */
+        cr_cache(v);
+        v->sregs.cr3 = vmcs_read(GUEST_CR3);
     }
 }
 
@@ -2375,10 +2446,17 @@ static int set_cr0(struct kvm_vcpu *v, uint64_t cr0)
         gp(v);
         return -1;
     }
+    /* GUEST_CR4 follows PG (`hw_cr4`), and EFER and the entry's IA32e
+     * control follow LMA, as Linux's vmx_set_cr0 writes them only then
+     * (arch/x86/kvm/vmx/vmx.c:3333-3420). */
+    x->vdirty |= VX_CR0;
     if ((old ^ cr0) & CR0_PG) {
         x->flush_vpid = 1;
+        x->vdirty |= VX_CR4;
     }
-    x->vdirty |= VX_CR0 | VX_EFER;
+    if (efer != old_efer) {
+        x->vdirty |= VX_EFER;
+    }
     return 0;
 }
 

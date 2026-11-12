@@ -1117,6 +1117,7 @@ struct row {
     int panic;      /* a panic comes inside the run */
     uint64_t rip;   /* the guest's RIP at the exit, when it moved without one */
     uint32_t cs_ar; /* CS's access rights at the exit, when a far jump changed them */
+    uint64_t cr4;   /* CR4's bits the guest set in the run without an exit, or 0 */
     uint64_t kgs;   /* KERNEL_GS_BASE after the guest's SWAPGS in the run, or 0 */
     /* The guest's MOV to CR8 under the TPR shadow, before the exit: the
      * processor writes `tpr` to the virtual-APIC page without one. */
@@ -1799,6 +1800,7 @@ static void exit_with(const struct row *r)
     if (r->cs_ar) {
         f[GUEST_ES_AR_BYTES + 2u * SEG_CS] = r->cs_ar;
     }
+    f[GUEST_CR4] |= r->cr4 & ~f[CR4_GUEST_HOST_MASK];
     f[VM_ENTRY_INTR_INFO_FIELD] &= ~(uint64_t)INTR_VALID;
 }
 
@@ -2889,6 +2891,41 @@ static void cr_rows(int fd)
     CHECK(m.injected == (GP_VECTOR | (TYPE_HW_EXC << 8) | INTR_ERRCODE | INTR_VALID) &&
               m.injected_error == 0,
           "and the next entry delivers #GP(0)");
+}
+
+/** The CR4 bits the guest owns, as Linux's set_cr4_guest_host_mask gives
+ * them: written without an exit, read back by KVM_GET_SREGS, kept by the
+ * next write of CR4, and a state KVM_SET_SREGS gave read back whole before
+ * the next entry. */
+static void cr_owned_rows(int fd)
+{
+    struct kvm_sregs s, was;
+    uint64_t *f = fields(fd);
+
+    CHECK(!(f[CR4_GUEST_HOST_MASK] & (CR4_PGE | CR4_TSD)) && (f[CR4_GUEST_HOST_MASK] & CR4_PAE),
+          "the guest owns CR4.PGE and TSD, and not PAE");
+    script(EXIT_CPUID, 0, 2)->cr4 = CR4_PGE;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && sregs_of(fd).cr4 == (CR4_PAE | CR4_PGE),
+          "KVM_GET_SREGS gives the PGE the guest set without an exit");
+    set_regs(fd, 0x1000, CR4_PAE | CR4_PGE | CR4_TSD, 0, 0);
+    script(EXIT_CR_ACCESS, 4, 3)->cr4 = CR4_TSD;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && f[CR4_READ_SHADOW] == (CR4_PAE | CR4_PGE | CR4_TSD) &&
+              f[GUEST_CR4] == (CR4_PAE | CR4_PGE | CR4_TSD | CR4_VMXE),
+          "MOV CR4 writes the value whole, the guest's bits among it");
+    set_regs(fd, 0x1000, CR4_PAE, 0, 0);
+    CHECK(exits(fd, EXIT_CR_ACCESS, 4, 3) == 0 && sregs_of(fd).cr4 == CR4_PAE &&
+              f[GUEST_CR4] == (CR4_PAE | CR4_VMXE),
+          "and clears them");
+
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0, "CPUID");
+    was = s = sregs_of(fd);
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0, "CPUID");
+    s.gdt.limit = 0x7F;
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == 0 && sregs_of(fd).gdt.limit == 0x7F,
+          "KVM_GET_SREGS after KVM_SET_SREGS gives the state set, not the VMCS's");
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&was) == 0, "KVM_SET_SREGS");
 }
 
 /** The guest's KERNEL_GS_BASE as KVM_GET_MSRS reads it. */
@@ -5413,6 +5450,7 @@ int main(void)
     io_string_rows(fd);
     ept_rows(fd);
     cr_rows(fd);
+    cr_owned_rows(fd);
     insn_rows(fd);
     load_rows(fd);
     linux_rows(fd);
