@@ -75,6 +75,18 @@ int pic_irq_pending(uint8_t irq)
     return (irr >> bit) & 1;
 }
 
+int pic_waiting(void)
+{
+    uint8_t irr;
+
+    if (retired) {
+        return 0;
+    }
+    outb(0x20, 0x0A); /* OCW3: the request register for the next read */
+    irr = inb(0x20);
+    return (irr & (uint8_t)~inb(0x21)) != 0;
+}
+
 /** Masking a slave line leaves the cascade line, 2, alone, since the other
  * slave lines still have to arrive. */
 void pic_mask_irq(uint8_t irq)

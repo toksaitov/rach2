@@ -45,6 +45,14 @@ void pic_retire(void);
 int pic_irq_pending(uint8_t irq);
 
 /**
+ * Whether the 8259 holds a request of a line it delivers, one that is not
+ * masked, while the processor's interrupts are off; 0 after `pic_retire`.
+ * The master's request register alone is read, since a slave line's request
+ * raises the master's cascade line, 2: an output and two inputs.
+ */
+int pic_waiting(void);
+
+/**
  * Mask IRQ line `irq` (0..15), master or slave; a larger `irq` is ignored.
  *
  * For a line this kernel has no handler for and that a device may assert
