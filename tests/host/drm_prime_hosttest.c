@@ -358,6 +358,81 @@ int32_t devfs_node_register(struct devfs_node *node)
     return 0;
 }
 
+/** Node withdrawal is outside these rows. */
+void devfs_node_unregister(struct devfs_node *node)
+{
+    (void)node;
+}
+
+/** No sysfs directories in this model; device startup is outside its rows. */
+int sysfs_anchor(int node, int key)
+{
+    (void)node;
+    (void)key;
+    return -ENODEV;
+}
+
+/** No child of an absent model directory. */
+int sysfs_node_child(int dir, const char *name, int len)
+{
+    (void)dir;
+    (void)name;
+    (void)len;
+    return 0;
+}
+
+/** Refuse a directory below an absent sysfs parent. */
+int sysfs_add_dir(int parent, const char *name)
+{
+    (void)parent;
+    (void)name;
+    return -ENOENT;
+}
+
+/** Refuse an attribute below an absent sysfs parent. */
+int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
+{
+    (void)parent;
+    (void)attr;
+    (void)obj;
+    (void)arg;
+    return -ENOENT;
+}
+
+/** Refuse a uevent file below an absent sysfs parent. */
+int sysfs_add_uevent(int dir, sysfs_show_t show, void *obj, int arg)
+{
+    (void)dir;
+    (void)show;
+    (void)obj;
+    (void)arg;
+    return -ENOENT;
+}
+
+/** Refuse a link below an absent sysfs parent. */
+int sysfs_add_link(int parent, const char *name, int target)
+{
+    (void)parent;
+    (void)name;
+    (void)target;
+    return -ENOENT;
+}
+
+/** No sysfs entry to remove. */
+void sysfs_remove(int handle)
+{
+    (void)handle;
+}
+
+/** Refuse an event from an absent sysfs device. */
+int32_t sysfs_uevent(int dir, const char *action, const char *env)
+{
+    (void)dir;
+    (void)action;
+    (void)env;
+    return -ENOENT;
+}
+
 /* vgem's registration, which the rows do not run. */
 int kcmdline_has(const char *flag)
 {
