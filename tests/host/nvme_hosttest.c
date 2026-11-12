@@ -587,12 +587,27 @@ static uint64_t waited_us;
 static unsigned delays;
 static void (*delay_hook)(void);
 
+/* Whether interrupts are masked; the delays made while they are, and the
+ * calls of `smp_service`, which a polled wait makes before each of them. */
+static uint32_t masked;
+static unsigned masked_delays;
+static unsigned services;
+
+/** Answer no other processor's request: there is none; count the call. */
+void smp_service(void)
+{
+    services++;
+}
+
 /** The model's delay: add `us` to `waited_us`, count it, and run the row's
  *  `delay_hook`. */
 static void model_udelay(uint32_t us)
 {
     waited_us += us;
     delays++;
+    if (masked) {
+        masked_delays++;
+    }
     if (delay_hook) {
         delay_hook();
     }
@@ -830,9 +845,6 @@ void latency_span(int kind, uint32_t from, uint32_t to)
     (void)to;
 }
 
-/* Whether interrupts are masked. */
-static uint32_t masked;
-
 /* The first controller's `resetting`, which `model_reset` points at, and
  * the restores that unmasked interrupts while it was set. */
 static const int *resetting_flag;
@@ -1015,6 +1027,7 @@ static void model_reset(void)
     nvme_nctrls = 0;
     resetting_flag = &nvme_ctrls[0].resetting;
     unmasked_in_reset = 0;
+    masked_delays = services = 0;
     nvme_messages = 0;
     m.mdts = 5;
     m.lbads = 9;
@@ -1299,6 +1312,9 @@ static void row_timeout(void)
     CHECK("a controller that does not come back fails the command",
           dev->read(dev, 0, 1, big) == -EIO);
     CHECK("and is out of use", nvme_ctrls[0].dead && was_logged("recovery: failed"));
+    CHECK("each delay with interrupts off, the recovery's ready waits among them, answers other "
+          "processors first",
+          masked_delays > NVME_CMD_STEPS_MASKED && services == masked_delays);
     io_commands = 0;
     m.drop_io = 0;
     CHECK("its next command answers EIO at once",
