@@ -127,32 +127,7 @@ const uint8_t *vtd_hw_dmar(uint32_t *len)
 
 int vtd_hw_option(const char *key, const char *value)
 {
-    char buf[64];
-    size_t n = k_strlen(value);
-    const char *p = buf;
-
-    if (!kcmdline_value(key, buf, (unsigned int)sizeof(buf))) {
-        return 0;
-    }
-    while (*p != 0) {
-        const char *end = p;
-
-        while (*end != 0 && *end != ',') {
-            end++;
-        }
-        if ((size_t)(end - p) == n) {
-            size_t i = 0;
-
-            while (i < n && p[i] == value[i]) {
-                i++;
-            }
-            if (i == n) {
-                return 1;
-            }
-        }
-        p = *end == ',' ? end + 1 : end;
-    }
-    return 0;
+    return kcmdline_value_has(key, value);
 }
 
 int vtd_hw_ioapic_off(void)
