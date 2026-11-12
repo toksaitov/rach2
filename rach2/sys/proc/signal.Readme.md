@@ -41,7 +41,7 @@ Signals 1 to 64 are accepted (`KSIG_MAX` in `lib/ksignal.h`); 1 to 31 have Linux
 * `signal_force` sends the signal of a processor exception to the faulting thread. A blocked or ignored signal goes back to its default disposition and is unblocked first, so the process dies unless a handler is installed.
 * `signal_set_blocked` is the one way a thread's blocked mask changes under the big lock, and `signal_change_blocked_unlocked` the one way without it.
 * `signal_pending` is what an interruptible wait calls before it sleeps and after it wakes, under the big lock; the wait ends with `EINTR` when it returns nonzero.
-* `deliver_signals` is called by `isr_leave` (`arch/x86/isr.c`) on each return from an exception, a device interrupt or a system call.
+* `deliver_signals` is called by `isr_leave_work` (`arch/x86/leave.c`) on each return from an exception, a device interrupt or a system call.
 * `proc_child_info` fills the siginfo of a child's `SIGCHLD`, and `tty_signal_group` (`tty/tty.c`) posts a signal to every live user process of a process group.
 
 The posting functions may be called with interrupts off and from an interrupt handler: the PS/2 keyboard posts Ctrl-C's `SIGINT` from its interrupt, and the timer `SIGALRM` from its. They change the 64-bit sets with interrupts off (`sig_irq_save`), since on i686 a read-modify-write of 64 bits is two stores.
@@ -123,13 +123,13 @@ The interruptible waits call it: `wq_wait_event` (`proc/wait_queue.h`), which pi
 
 ### Delivery
 
-`isr_leave` calls `deliver_signals` with interrupts off and the big lock held; the entries that take no lock, the interprocessor interrupt's among them, return without it ([the architectures' Readme](../arch/Readme.md)). On a return to kernel mode it does nothing. On a return to user mode it frees the records of threads that have ended (`reap_threads`), makes the stops a tracer requested of a traced thread (`ptrace_return_stops`), and then loops:
+`isr_leave_work` calls `deliver_signals` with the big lock held and interrupts on, which its user copies need; the entries that take no lock, the interprocessor interrupt's among them, return without it ([the architectures' Readme](../arch/Readme.md)). On a return to kernel mode it does nothing. On a return to user mode it frees the records of threads that have ended (`reap_threads`), makes the stops a tracer requested of a traced thread (`ptrace_return_stops`), and then loops:
 
 1. When the process is stopped and the thread has not taken the stop, the thread takes it (`group_stop_taken`): it parks in `sig_park` until a `SIGCONT` or a `SIGKILL`, or, when traced, makes a ptrace stop instead.
 2. A pending `SIGKILL`, the thread's or its process's, is taken off both sets and ends the process (`terminate_current_process`), as Linux's `get_signal` ends a thread of a process whose end has begun (`kernel/signal.c:2772-2784`), even when a lower-numbered signal with a handler is pending beside it. With it off, the thread's exit event stops for a tracer that asked for it. Otherwise it takes one signal it does not block off the pending sets (`sig_dequeue`): the lowest-numbered of its own, or when it has none, the lowest-numbered of its process's, as Linux's `dequeue_signal` takes them. With none, the loop ends.
 3. A traced thread stops for its tracer, which may replace the signal or cancel it (`ptrace_signal_stop`).
 4. An ignored signal is dropped. A default action is the one `ksig_default_action` gives, which [sigaction(2)](../../../man/man2/sigaction.2) lists: to ignore; to stop the process (`sig_group_stop`), after which the loop starts again at step 1; or to end it, with a core file for the core signals (`terminate_current_process`).
-5. A caught signal gets a frame (`sigframe_setup`), and `deliver_signals` returns. One handler is entered on each return to user mode; another pending signal is taken at the next return, which may come during the handler.
+5. A caught signal gets a frame (`sigframe_setup`), and `deliver_signals` returns. The return calls it again while the thread's signal-work flag (`sig_woken`), read with interrupts off, stays set, as Linux's `exit_to_user_mode_loop` calls `arch_do_signal_or_restart` again while `TIF_SIGPENDING` is set (`kernel/entry/common.c:90-132`): a `SIGKILL` posted while the frame was copied ends the thread before the handler runs, and another signal the handler's mask leaves deliverable, pending beside the first or posted meanwhile, gets a frame above it, whose handler runs first.
 
 For a handler, `deliver_signals` adds the action's mask to the thread's, and the signal itself unless `SA_NODEFER` is set, and with `SA_RESETHAND` puts the disposition back to the default for the next signal. The frame records the mask to restore: the thread's own, or the one a wait replaced. `SA_NOCLDSTOP` and `SA_NOCLDWAIT` are stored and do nothing; the other flags act as the sections below describe.
 
