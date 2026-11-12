@@ -1379,11 +1379,22 @@ static void sched_account_one(struct percpu *cpu, int user)
  * (steal_account_process_time and account_process_tick,
  * kernel/sched/cputime.c:253-269 and 486-492); the rest carries to the
  * next tick.
+ *
+ * A tick that finds user mode charges user time only for the ticks due
+ * since the processor last returned to user mode (`user_cycles`, which
+ * `isr_leave` notes), when the timer keeps the tick's time, `due`, and
+ * system time for those due before: a tick that came while the kernel ran
+ * with interrupts off is taken at the first user instruction after them,
+ * and would otherwise charge the kernel's time to the program. Linux's
+ * kernel runs a system call with interrupts on, so its tick is taken when
+ * it comes, in the mode it finds (`user_mode`, from update_process_times,
+ * kernel/time/timer.c:2519).
  */
-void sched_account_tick(int user)
+void sched_account_tick(int user, int64_t due)
 {
     struct percpu *cpu = this_cpu();
-    int64_t gap = rtc_monotonic_ns() - cpu->accounted_ns + (int64_t)(TICK_NS / 2u);
+    int64_t now = rtc_monotonic_ns(), since = 0;
+    int64_t gap = now - cpu->accounted_ns + (int64_t)(TICK_NS / 2u);
     uint64_t ticks, stolen;
 
     if (gap < (int64_t)TICK_NS) {
@@ -1391,6 +1402,9 @@ void sched_account_tick(int user)
     }
     ticks = tick_div64((uint64_t)gap, TICK_NS, NULL);
     cpu->accounted_ns += (int64_t)ticks * (int64_t)TICK_NS;
+    if (user && due != 0) {
+        since = timer_cycles_when(cpu->user_cycles, now);
+    }
     stolen = arch_steal_ns() - cpu->steal_ns;
     while (ticks-- > 0) {
         if (stolen >= TICK_NS) {
@@ -1400,7 +1414,8 @@ void sched_account_tick(int user)
             ++cpu->steal_ticks;
             cpu->ticks_seq++;
         } else {
-            sched_account_one(cpu, user);
+            sched_account_one(
+                cpu, user && (due == 0 || due - (int64_t)ticks * (int64_t)TICK_NS >= since));
         }
     }
 }

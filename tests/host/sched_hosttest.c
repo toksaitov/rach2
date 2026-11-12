@@ -72,6 +72,18 @@ uint64_t arch_steal_ns(void)
     return steal_clock_ns;
 }
 
+/* The modeled time of the processor's last return to user mode, which the
+ * rows set, or 0 for long ago. */
+static int64_t user_return_ns;
+
+/** The modeled time of the last return to user mode, whatever the count. */
+int64_t timer_cycles_when(uint64_t cycles, int64_t now)
+{
+    (void)cycles;
+    (void)now;
+    return user_return_ns;
+}
+
 /** Timer list membership is checked by process_timer_hosttest. */
 void proc_timer_update(process_t *p)
 {
@@ -666,33 +678,78 @@ static void accounting(void)
     steal_clock_ns = 0;
     sched_account_start();
     clock_ns += 3u * TICK_NS;
-    sched_account_tick(0);
+    sched_account_tick(0, 0);
     CHECK(cpu->idle_ticks == idle + 3 && cpu->busy_ticks == busy,
           "three ticks of the processor's clock since its last count are three idle ticks");
     clock_ns += TICK_NS / 4u;
-    sched_account_tick(0);
+    sched_account_tick(0, 0);
     CHECK(cpu->idle_ticks == idle + 3, "a quarter tick later counts none");
     cpu->idle_wait = 0;
     clock_ns += TICK_NS;
-    sched_account_tick(1);
+    sched_account_tick(1, 0);
     CHECK(cpu->busy_ticks == busy + 1 && cpu->user_ticks == user + 1 && cpu->idle_ticks == idle + 3,
           "the next tick in ring 3 is one busy tick of user time");
     cpu->idle_wait = 1;
     steal_clock_ns = 2u * TICK_NS + TICK_NS / 2u;
     clock_ns += 3u * TICK_NS;
-    sched_account_tick(0);
+    sched_account_tick(0, 0);
     CHECK(cpu->steal_ticks == steal + 2 && cpu->idle_ticks == idle + 4 &&
               cpu->busy_ticks == busy + 1,
           "two and a half ticks stolen of three are two steal ticks and one idle");
     steal_clock_ns += TICK_NS / 2u;
     clock_ns += TICK_NS;
-    sched_account_tick(0);
+    sched_account_tick(0, 0);
     CHECK(cpu->steal_ticks == steal + 3 && cpu->idle_ticks == idle + 4,
           "the stolen half tick left over joins the next to make a steal tick");
     clock_ns += 5000u * (uint64_t)TICK_NS;
-    sched_account_tick(0);
+    sched_account_tick(0, 0);
     CHECK(cpu->idle_ticks == idle + 5004 && cpu->steal_ticks == steal + 3,
           "a gap of five seconds, past 2^32 nanoseconds, is five thousand ticks");
+    cpu->current = saved;
+    clock_ns = saved_clock;
+}
+
+/**
+ * A tick taken in user mode charges system time for the ticks due before
+ * the processor's last return to user mode, which interrupts kept off in
+ * the kernel held back, and user time for those due after it.
+ */
+static void accounting_held(void)
+{
+    struct percpu *cpu = this_cpu();
+    process_t *saved = cpu->current;
+    uint64_t busy, user;
+    uint64_t saved_clock = clock_ns;
+
+    cpu->current = NULL;
+    cpu->idle_wait = 0;
+    clock_ns = 7000000000u;
+    steal_clock_ns = 0;
+    sched_account_start();
+    busy = cpu->busy_ticks;
+    user = cpu->user_ticks;
+    clock_ns += TICK_NS;
+    user_return_ns = (int64_t)(clock_ns - TICK_NS / 2u);
+    sched_account_tick(1, (int64_t)(clock_ns - TICK_NS / 4u));
+    CHECK(cpu->busy_ticks == busy + 1 && cpu->user_ticks == user + 1,
+          "a tick due after the return to user mode is user time");
+    clock_ns += TICK_NS;
+    user_return_ns = (int64_t)(clock_ns - TICK_NS / 8u);
+    sched_account_tick(1, (int64_t)(clock_ns - TICK_NS / 4u));
+    CHECK(cpu->busy_ticks == busy + 2 && cpu->user_ticks == user + 1,
+          "a tick due before it, taken at the first user instruction, is system time");
+    clock_ns += 2u * TICK_NS;
+    user_return_ns = (int64_t)(clock_ns - TICK_NS / 2u);
+    sched_account_tick(1, (int64_t)clock_ns);
+    CHECK(cpu->busy_ticks == busy + 4 && cpu->user_ticks == user + 2,
+          "of two ticks counted at once, the one due before the return is system time");
+    clock_ns += TICK_NS;
+    user_return_ns = (int64_t)clock_ns;
+    sched_account_tick(1, 0);
+    CHECK(cpu->busy_ticks == busy + 5 && cpu->user_ticks == user + 3,
+          "with no time of the tick kept, a tick in user mode is user time");
+    user_return_ns = 0;
+    cpu->idle_wait = 1;
     cpu->current = saved;
     clock_ns = saved_clock;
 }
@@ -1256,6 +1313,7 @@ int main(int argc, char **argv)
     big_lock();
     sched_out_rows();
     accounting();
+    accounting_held();
     load_phase();
     all_idle();
     ready_lists();
