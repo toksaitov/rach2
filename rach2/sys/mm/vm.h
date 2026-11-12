@@ -169,11 +169,14 @@ typedef enum {
  * `phys`, with a reference for the mapping each, and 0 for each other page,
  * reading none, and returns the count it lent; a read fault maps those
  * around its page, as Linux's do_fault_around does with a file's map_pages
- * (mm/memory.c:5254-5284 and 5300-5330). The fault calls each with the
- * regions' lock let go, and with the big lock held unless `unlocked` is set,
- * which the owner sets for a file whose operations take only locks of their
- * own, as Linux's filemap_fault takes no global lock
- * (mm/filemap.c:3305-3370).
+ * (mm/memory.c:5254-5284 and 5300-5330). With `hits` set the file counts
+ * the pages it lends as found in memory, which keeps up its read-around;
+ * the fault sets it when it asks before reading its page, and clears it
+ * when it asks again after a read, whose pages are no such sign. The
+ * fault calls each with the regions' lock let go, and with the big lock
+ * held unless `unlocked` is set, which the owner sets for a file whose
+ * operations take only locks of their own, as Linux's filemap_fault takes
+ * no global lock (mm/filemap.c:3305-3370).
  */
 struct vm_file {
     uint32_t refs;
@@ -185,7 +188,8 @@ struct vm_file {
     int (*device)(struct vm_file *f, uint32_t pgoff, uintptr_t *phys);
     int unlocked; /* `fill`, `share`, `around` and `device` run without the
                      big lock */
-    uint32_t (*around)(struct vm_file *f, uint32_t first, uint32_t count, uintptr_t *phys);
+    uint32_t (*around)(struct vm_file *f, uint32_t first, uint32_t count, uintptr_t *phys,
+                       int hits);
 };
 
 /*
