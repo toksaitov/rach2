@@ -3857,7 +3857,9 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_str(t, "intr ");
     ap_u32(t, isr_interrupt_total());
     ap_ch(t, '\n');
-    ap_str(t, "ctxt 0\n");
+    ap_str(t, "ctxt ");
+    ap_u64(t, sched_switches());
+    ap_ch(t, '\n');
     ap_str(t, "btime ");
     ap_u32(t, (uint32_t)rtc_boot_epoch());
     ap_ch(t, '\n');

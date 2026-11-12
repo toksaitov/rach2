@@ -316,6 +316,13 @@ int sched_all_idle(void);
 uint64_t sched_idle_ticks(void);
 uint64_t sched_busy_ticks(void);
 
+/** The switches from one thread to another on every processor since boot,
+ * the idle task's among them, for /proc/stat's `ctxt`, as Linux sums each
+ * run queue's `nr_switches` (`nr_context_switches`, kernel/sched/core.c).
+ * Each processor counts its own; a 64-bit count is two loads on the i686,
+ * which are read with no lock, as Linux reads them. */
+uint64_t sched_switches(void);
+
 /** Processor `c`'s ticks in user mode, busy, idle and stolen by the
  * hypervisor, which are neither busy nor idle, as one reading. Its own tick
  * changes them within its `ticks_seq`, which is odd meanwhile, so a reader

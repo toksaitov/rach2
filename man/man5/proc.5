@@ -1374,7 +1374,8 @@ The remaining lines have a name and one value:
 .It Li intr
 Total interrupt count.
 .It Li ctxt
-Zero.
+Context switches since boot, on every processor, the idle task's among
+them.
 .It Li btime
 Boot time as seconds since the epoch.
 Setting the clock moves it by the size of the step.
