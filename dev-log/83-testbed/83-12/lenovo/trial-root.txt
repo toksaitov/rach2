@@ -1,0 +1,54 @@
+rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/t4277/root-c3663d0b50de0fda.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 netconsole=6665@192.168.0.106/,6666@192.168.0.100/d0:11:e5:c8:0d:59
+bootctl: candidate: first sector 11848, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: first sector 2053, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: runs: 2053+4096 20040+4096
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: fallback
+bootctl: next_entry: empty (a trial was consumed)
+bootctl: trial root: GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/t4277/root-c3663d0b50de0fda.img
+bootctl: booted: trialroot, the candidate's kernel on a root image
+bootctl: slot size: 16777216 bytes
+bootctl: slot size: the kernel slots are smaller than this version's; move the disk to them with rach2-install --slots DISK
+/dev/loop0 / ext2 rw,relatime 0 0
+/dev/disk0p6 /data ext2 rw 0 0
+QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1)
+/usr/sbin/ivshmemd
+crw-rw---- 1 root root 10, 232 Nov 12 05:51 /dev/kvm
+-rw-r--r-- 1 root root     170 Nov 12 04:37 /usr/share/vulkan/icd.d/venus_icd.x86_64.json
+
+/dev/vfio:
+total 0
+crw------- 1 root root 242,   0 Nov 12 05:51 0
+crw------- 1 root root 242,   1 Nov 12 05:51 1
+crw------- 1 root root 242,  10 Nov 12 05:51 10
+crw------- 1 root root 242,  11 Nov 12 05:51 11
+crw------- 1 root root 242,   2 Nov 12 05:51 2
+crw------- 1 root root 242,   3 Nov 12 05:51 3
+crw------- 1 root root 242,   4 Nov 12 05:51 4
+crw------- 1 root root 242,   5 Nov 12 05:51 5
+crw------- 1 root root 242,   6 Nov 12 05:51 6
+crw------- 1 root root 242,   7 Nov 12 05:51 7
+crw------- 1 root root 242,   8 Nov 12 05:51 8
+crw------- 1 root root 242,   9 Nov 12 05:51 9
+crw-rw-rw- 1 root root  10, 196 Nov 12 05:51 vfio
+../../../bus/pci/drivers/i915
+../../../kernel/iommu_groups/0
+kvm_vms 0
+kvm_vcpus 0
+kvm_slots 0
+kvm_tdp_pages 0
+kvm_run_mappings 0
+kvm_gpa_maps 0
+kvm_gpa_map_pages 0
+kvm_ioeventfd_signals 0
+kvm_irqfd_raises 0
+vfio_groups 0
+vfio_devices 0
+vfio_dma_mappings 0
+vfio_dma_pages 0
+vfio_dma_io_pages 0
+kvm_exits 0
+iommu_dma_faults 0
+iommu_irq_faults 0
+msi_vectors_free 184

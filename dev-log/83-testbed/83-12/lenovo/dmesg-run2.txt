@@ -1,0 +1,120 @@
+[  126.412000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[  126.412000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[  126.413000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+[  126.418000] i915: dpll: enable LCPLL 1350 for pipe A (active 0x1)
+[  127.114000] i915: display: pipe A set: 1366x768 in 1366x768@60, 76300 kHz, 18 bpp, 1 lane at 270000 kHz
+[  127.157000] i915: registered: i915 1.6.0 for pci:0000:00:02.0 on card 0
+[  127.157000] i915: handoff: 0000:00:02.0: bound from a reset
+[  186.584000] console: card0: handed to a master, the keyboard off
+[  186.905000] i915: dpll: disable LCPLL 1350 for pipe A (active 0x0)
+[  186.905000] i915: dpll: enable LCPLL 1350 for pipe A (active 0x1)
+[  187.652000] i915: display: pipe A set: 1366x768 in 1366x768@60, 76300 kHz, 18 bpp, 1 lane at 270000 kHz
+[  188.125000] i915: dpll: disable LCPLL 1350 for pipe A (active 0x0)
+[  188.125000] i915: dpll: enable LCPLL 1350 for pipe A (active 0x1)
+[  188.850000] i915: display: pipe A set: 1366x768 in 1366x768@60, 76300 kHz, 18 bpp, 1 lane at 270000 kHz
+[  188.900000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[  188.900000] i915: gmbus dpb: NAK on first message, retry
+[  188.900000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[  188.900000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[  188.900000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+[  188.901000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+[  188.902000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[  188.902000] i915: gmbus dpc: NAK on first message, retry
+[  188.902000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[  188.902000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[  188.902000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[  188.903000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+[  188.933000] console: card0: taken back from a master, the keyboard on
+[  188.933000] console: card0: 1366x768, the font at 2x
+[  196.421000] vgpu-shm: attached: 32768 KiB, heap 8189 pages, peer 0, doorbells offered
+[  196.754000] i915: dpll: disable LCPLL 1350 for pipe A (active 0x0)
+[  196.754000] console: card0: left
+[  196.756000] i915: handoff: 0000:00:02.0: released: the display off, the GPU reset, interrupts and bus mastering off
+[  196.795000] vfio: bind: 0000:00:02.0 to vfio-pci, group 0
+[  196.900000] vtd: dmar0: translation on
+[  196.900000] vtd: attach: 0:2.0 to domain 2 of dmar0
+[  198.452000] pci: reset: 0:2.0 by advanced features function-level reset
+[  198.452000] vfio: igd: 0000:00:02.0: OpRegion 2.00, 8192 bytes, bridges
+[  198.560000] pci: reset: 0:2.0 by advanced features function-level reset
+[  205.666000] vfio: dma: taken back: 0xe0000000, 65536 pages, 0 of them RAM
+[  205.699000] vfio: dma: taken back: 0xfe509000, 759 pages, 0 of them RAM
+[  205.702000] vfio: dma: taken back: 0xfe400000, 264 pages, 0 of them RAM
+[  205.885000] vfio: dma: taken back: 0xe0000000, 65536 pages, 0 of them RAM
+[  205.917000] vfio: dma: taken back: 0xfe509000, 759 pages, 0 of them RAM
+[  205.917000] vfio: dma: taken back: 0xfe400000, 264 pages, 0 of them RAM
+[  206.106000] vfio: dma: taken back: 0xe0000000, 65536 pages, 0 of them RAM
+[  206.141000] vfio: dma: taken back: 0xfe509000, 759 pages, 0 of them RAM
+[  206.141000] vfio: dma: taken back: 0xfe400000, 264 pages, 0 of them RAM
+[  206.329000] vfio: dma: taken back: 0xe0000000, 65536 pages, 0 of them RAM
+[  206.362000] vfio: dma: taken back: 0xfe509000, 759 pages, 0 of them RAM
+[  206.365000] vfio: dma: taken back: 0xfe400000, 264 pages, 0 of them RAM
+[  206.549000] vfio: dma: taken back: 0xe0000000, 65536 pages, 0 of them RAM
+[  206.582000] vfio: dma: taken back: 0xfe509000, 759 pages, 0 of them RAM
+[  206.582000] vfio: dma: taken back: 0xfe400000, 264 pages, 0 of them RAM
+[  213.850000] vtd: irte: dmar0 index 0: msi of 0:2.0, vector 53 to apic 0, edge, sid 0x0010 svt 1
+[  213.850000] pci: msi: 0:2.0 on vector 53, remapped
+[  216.620000] virtio: features: vgpu-shm: offered 1:19, taken 1:19
+[  216.620000] virtio_gpu: host memory: the device's own pages, by MAP_BLOB
+[  216.620000] virtio_gpu: features: +virgl -edid +resource_blob +host_visible
+[  216.621000] virtio_gpu: features: +context_init
+[  216.621000] virtio: queue: vgpu-shm: 0 of 128 entries, vector 0
+[  216.621000] virtio: queue: vgpu-shm: 1 of 128 entries, vector 0
+[  216.621000] virtio_gpu: number of scanouts: 1
+[  216.621000] virtio_gpu: number of cap sets: 3
+[  216.622000] vgpu-shm: running: epoch 1, device peer 1, doorbells
+[  216.626000] virtio_gpu: display: scanout 0: 1024x768+0+0
+[  216.626000] drm: virtio_gpu: card0
+[  216.626000] console: card0: a native display
+[  218.011000] virtio_gpu: command 0x208: error 0x1200
+[  218.011000] virtio_gpu: resource 2: refused: its page list: error -5
+[  230.100000] vfio: release: 0000:00:02.0: 0 of 532544 pages of RAM out of the domain, the first at 0x0; 0 DMA faults
+[  230.100000] virtio_gpu: vgpu-shm: the device has gone
+[  230.103000] console: card0: left
+[  230.103000] vgpu-shm: detached: epoch 2, the device's VM died
+[  231.234000] pci: reset: 0:2.0 by advanced features function-level reset
+[  231.234000] vtd: dmar0: translation off
+[  231.463000] vfio: unbind: 0000:00:02.0
+[  231.569000] pci: reset: 0:2.0 by advanced features function-level reset
+[  232.080000] i915: stolen: [mem 0xaba00000-0xaf9fffff], 64512 KiB usable, inside the device's reserved region; DMAR active, no buffers in it
+[  232.089000] i915: gtt: 2048 MiB, 256 MiB of it through the aperture; 524288 entries to the scratch page, 0 kept
+[  232.089000] i915: opregion: version 2.0.0 at 0xaafb4018, mailboxes 0x1f; VBT in mailbox 4
+[  232.089000] i915: vbt: "$VBT HASWELL        " from the OpRegion (Mailbox #4), version 177, 3 outputs
+[  232.089000] i915: gem: 32 fences, swizzle 9/10 for X tiles and 9 for Y
+[  232.089000] vtd: irte: dmar0 index 0: msi of 0:2.0, vector 53 to apic 0, edge, sid 0x0010 svt 1
+[  232.089000] pci: msi: 0:2.0 on vector 53, remapped
+[  232.089000] i915: interrupts: messages on vector 53
+[  232.089000] i915: rps: RPn 200 MHz, RP1 200 MHz, RP0 1000 MHz, RPe 500 MHz, max 1000 MHz
+[  232.089000] i915: ppgtt: aliasing, 2048 MiB shared, directory at 0x7fde0000
+[  232.089000] i915: rings: rcs0, bcs0, vcs0 and vecs0 started: 16 KiB each at 0x7fffb000, 0x7fff6000, 0x7fff1000 and 0x7ffec000, status pages at 0x7ffff000, 0x7fffa000, 0x7fff5000 and 0x7fff0000
+[  232.089000] i915: workarounds: applied: 3 of the GT and 6 of rcs0, 0 lost
+[  232.091000] i915: pcode: read of command 0x5: error -6
+[  232.091000] i915: found: 00:02.0: haswell/ult (device id 0a16), graphics 7.5, display version 7.00, gt2, revision 0b
+[  232.091000] i915: cdclk: 450000 kHz, the most 450000 kHz, pixel clocks to 450000 kHz
+[  232.091000] i915: wm: latencies 20, 4, 36, 90 and 160 (level 0 in 0.1 us, then 0.5 us)
+[  232.091000] i915: pps: power up 200 ms, down 50 ms, cycle 500 ms, backlight on 1 ms, off 200 ms
+[  232.300000] i915: panel: the EDID's preferred fixed mode 1366x768@60, 76300 kHz
+[  232.300000] i915: edp: DPCD 1.1, eDP 1, 1 lane, rates 162000 to 270000 kHz, 6 bpc, EDID 128 bytes
+[  232.302000] i915: hdmi B: DDC pin 5, level 9, 300000 kHz TMDS
+[  232.302000] i915: display: port B: HDMI
+[  232.302000] i915: hdmi C: DDC pin 4, level 6, 300000 kHz TMDS, DP++
+[  232.302000] i915: display: port C: DP+HDMI
+[  232.302000] i915: display: no pipe lit by the firmware; the eDP panel is dark
+[  232.302000] i915: backlight: intel_backlight: levels 0 to 7500, at 0, off
+[  232.302000] drm: i915: card0
+[  232.302000] console: card0: a native display
+[  232.302000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[  232.302000] i915: gmbus dpb: NAK on first message, retry
+[  232.302000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[  232.302000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[  232.302000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+[  232.305000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+[  232.305000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[  232.305000] i915: gmbus dpc: NAK on first message, retry
+[  232.305000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[  232.305000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[  232.305000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[  232.305000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+[  232.308000] i915: dpll: enable LCPLL 1350 for pipe A (active 0x1)
+[  233.017000] i915: display: pipe A set: 1366x768 in 1366x768@60, 76300 kHz, 18 bpp, 1 lane at 270000 kHz
+[  233.058000] i915: registered: i915 1.6.0 for pci:0000:00:02.0 on card 0
+[  233.058000] i915: handoff: 0000:00:02.0: bound from a reset
