@@ -186,6 +186,13 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
+/** No waiter is ever queued: a sleeper here is resumed by its thread. */
+int wq_active(const wait_queue_t *wq)
+{
+    (void)wq;
+    return 0;
+}
+
 /** The clock, which the lock reads for its record of holds; these rows
  * make no disk wait, so no hold is recorded. */
 uint32_t timer_now_us(void)
