@@ -7676,7 +7676,7 @@ static void pcibar_put(void *obj)
     (void)obj;
 }
 
-static const struct vm_device_ops pcibar_vm_ops = {pcibar_page, pcibar_put, NULL};
+static const struct vm_device_ops pcibar_vm_ops = {pcibar_page, pcibar_put, NULL, 0};
 
 /**
  * mmap of a resourceN or resourceN_wc file, as Linux's pci_mmap_resource:

@@ -515,7 +515,7 @@ static void io_put(void *obj)
     io_object.puts++;
 }
 
-static const struct vm_device_ops io_ops = {io_page, io_put};
+static const struct vm_device_ops io_ops = {io_page, io_put, 0, 0};
 
 /** Access refusals and each end of a device mapping release its holder. */
 static void io_lifetime(uintptr_t addr, uintptr_t phys, vma_t *vma)

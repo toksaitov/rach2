@@ -708,6 +708,80 @@ static pte_t device_cache(uint32_t prot)
     return (prot & VM_PROT_UC) ? PTE_NOCACHE : 0;
 }
 
+/* The pages of a device region whose frames one look of its object gives,
+ * when a fault maps the whole region (`device_map_rest`), on the stack. */
+#define DEVICE_BATCH 64u
+
+/**
+ * Map every page of the device region around `page` that is not yet
+ * present, after a fault has mapped `page` itself, for an object whose
+ * pages a mapping may take at once (`vm_device_whole`), as Linux's
+ * remap_pfn_range does at mmap for virtio-gpu's blobs of host memory
+ * (virtgpu_vram.c:32-67) and i915's fault does for a whole object
+ * (i915_gem_mman.c:253-295): a program that touches a blob of 16,384
+ * pages then takes one fault, not 16,384. The object is asked for a batch
+ * of pages at a time with the regions' lock let go, as `device_fault` asks
+ * for one, and the batch is mapped only while the region and the count of
+ * zaps are as they were, so that no page the object took back meanwhile is
+ * mapped. The first page the object has not got, or a table that cannot be
+ * had, ends the walk and leaves the rest to their faults. The caller holds
+ * the regions' lock to read, as on entry to `device_fault`.
+ */
+static void device_map_rest(struct mm *mm, uintptr_t page, struct vm_file *f, uint32_t prot)
+{
+    const vma_t *vma = vm_find(&mm->vm, page);
+    pte_t flags = PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) | paging_prot_bits(prot) |
+                  device_cache(prot);
+    uintptr_t start, end, at, stop, phys[DEVICE_BATCH];
+    uint32_t base, seq, n, i;
+    int bkl, rc = 0;
+
+    if (!vma || vma->file != f) {
+        return;
+    }
+    start = vma->start;
+    end = vma->end;
+    base = vma->pgoff;
+    for (at = start; rc >= 0 && at < end; at = stop) {
+        stop = end - at > DEVICE_BATCH * PAGE_SIZE ? at + DEVICE_BATCH * PAGE_SIZE : end;
+        seq = mm->zaps;
+        vm_file_get(f);
+        if (!callback_begin(mm, &bkl)) {
+            vm_file_put(f);
+            break;
+        }
+        for (n = 0; at + n * PAGE_SIZE < stop; n++) {
+            if (f->device(f, base + (uint32_t)((at - start) / PAGE_SIZE) + n, &phys[n]) != 0) {
+                rc = -1;
+                break;
+            }
+        }
+        callback_end(mm, bkl);
+        vma = region_same(mm, at, f, prot, base + (uint32_t)((at - start) / PAGE_SIZE), seq)
+                  ? vm_find(&mm->vm, at)
+                  : NULL;
+        vm_file_put(f);
+        if (!vma) {
+            break;
+        }
+        if ((vma->end - at) / PAGE_SIZE < n) {
+            n = (uint32_t)((vma->end - at) / PAGE_SIZE);
+            rc = -1;
+        }
+        for (i = 0; i < n; i++) {
+            int got = install_new(mm, at + i * PAGE_SIZE, phys[i], flags);
+
+            if (got < 0) {
+                rc = -1;
+                break;
+            }
+            if (got == 0) {
+                frame_ref(phys[i]);
+            }
+        }
+    }
+}
+
 /**
  * Back a page of a device region (`vm_device_map`): map the physical
  * address the object gives for it, writable when the region is, with the
@@ -762,6 +836,9 @@ static int device_fault(struct mm *mm, const vma_t *vma, uintptr_t addr)
     }
     frame_ref(phys);
     fault_count(0);
+    if (vm_device_whole(f)) {
+        device_map_rest(mm, page, f, prot);
+    }
     return 1;
 }
 

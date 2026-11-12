@@ -527,7 +527,7 @@ static void bar_put(void *obj)
     device_put((struct vfio_device *)obj);
 }
 
-static const struct vm_device_ops bar_vm_ops = {bar_page, bar_put, NULL};
+static const struct vm_device_ops bar_vm_ops = {bar_page, bar_put, NULL, 0};
 
 /** mmap of a memory BAR of a page or more, uncached; the mapping holds the
  * device. -EINVAL for another region or a range past the BAR. */
