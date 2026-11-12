@@ -1664,8 +1664,44 @@ int drm_dev_work_cancel(struct drm_work *work)
     return 1;
 }
 
-/** Run the queued drivers' works whose time has come, each once; the
- * number run. A work that queues itself again waits for the next round. */
+#ifndef RACH2_HOSTTEST
+/** Take the big lock in the worker, which runs without it, for code that
+ * still needs it, when `needed`. */
+static void worker_bkl_enter(int needed)
+{
+    if (needed) {
+        bkl_enter();
+    }
+}
+
+/** Give back what `worker_bkl_enter` took with the same `needed`. */
+static void worker_bkl_exit(int needed)
+{
+    if (needed) {
+        bkl_exit();
+    }
+}
+#else
+int drm_worker_bkl_takes;
+
+/** Count a take the worker would make, for the host tests, which have no
+ * big lock. */
+static void worker_bkl_enter(int needed)
+{
+    drm_worker_bkl_takes += needed != 0;
+}
+
+/** The host tests have no big lock. */
+static void worker_bkl_exit(int needed)
+{
+    (void)needed;
+}
+#endif
+
+/** Run the queued drivers' works whose time has come, each once, under the
+ * big lock, which a driver's work, such as i915's hotplug probe, still
+ * needs; the number run. A work that queues itself again waits for the
+ * next round. */
 static int dev_work_run(void)
 {
     struct drm_work *work;
@@ -1690,9 +1726,11 @@ static int dev_work_run(void)
         dev_work_unlink(work);
         spin_unlock_irqrestore(&work_lock, flags);
         dev = work->dev;
+        worker_bkl_enter(1);
         if (!dev->unplugged) {
             work->fn(work);
         }
+        worker_bkl_exit(1);
         drm_dev_put(dev);
         n++;
     }
@@ -1700,7 +1738,9 @@ static int dev_work_run(void)
 }
 
 /** Send the queued hotplug events, Linux's
- * drm_kms_helper_connector_hotplug_event for each; the number sent. */
+ * drm_kms_helper_connector_hotplug_event for each, under the big lock,
+ * which the uevent and the console's client take the lock for; the number
+ * sent. */
 static int hotplug_work(void)
 {
     struct drm_connector *connector;
@@ -1717,10 +1757,12 @@ static int hotplug_work(void)
         nhotplugs--;
         k_memmove(hotplugs, hotplugs + 1, (uint32_t)nhotplugs * sizeof(hotplugs[0]));
         spin_unlock_irqrestore(&work_lock, flags);
+        worker_bkl_enter(1);
         if (!connector->dev->unplugged) {
             drm_sysfs_connector_hotplug_event(connector);
             drm_client_dev_hotplug(connector->dev);
         }
+        worker_bkl_exit(1);
         drm_dev_put(connector->dev);
         n++;
     }
@@ -1797,12 +1839,18 @@ int drm_atomic_commit_work(void)
 {
     struct commit_work *w;
     struct drm_device *dev;
-    int n = dev_work_run();
+    int n = dev_work_run(), big;
 
     n += hotplug_work();
     while ((w = work_next_ready(&dev)) != NULL) {
-        /* The commit lock orders this with a blocking commit of the device,
-         * which may finish the work meanwhile; the hold keeps the device. */
+        /* A tail reaches the driver's display hooks, which take only their
+         * own locks on a device with DRIVER_KMS_UNLOCKED and need the big
+         * lock on any other, as the ATOMIC ioctl's dispatch decides
+         * (`ioctl_call`, drm.c). The commit lock orders this with a
+         * blocking commit of the device, which may finish the work
+         * meanwhile; the hold keeps the device. */
+        big = !drm_core_check_feature(dev, DRIVER_KMS_UNLOCKED);
+        worker_bkl_enter(big);
         drm_modeset_lock_nointr(dev);
         if (work_queued(w) && w->state.dev == dev && work_due(w, rtc_ticks_now()) &&
             work_fence_progress(w)) {
@@ -1810,6 +1858,7 @@ int drm_atomic_commit_work(void)
             n++;
         }
         drm_modeset_unlock(dev);
+        worker_bkl_exit(big);
         drm_dev_put(dev);
     }
     return n;
@@ -1844,13 +1893,22 @@ static int work_ready(void *arg)
     return ready || work_next_ready(NULL) != NULL;
 }
 
-/** The worker, kdrm: sleep in an idle wait until a queued commit may run, then
- * finish what is ready, holding the big lock as kernel code does. Like every
- * kernel thread, it is not switched by the tick (`no_tick_switch`, which
- * `setup_process_stack` sets): a commit's tail and a driver's work run here as
- * they run inline in a system call, and give way only where they sleep, so a
- * driver's state, such as the transport a virtio-gpu card sits on, never
- * changes under them; the worker also gives way between passes. */
+/**
+ * The worker, kdrm: sleep in an idle wait until a queued commit may run, then
+ * finish what is ready. It gives up the big lock it starts with, as Linux's
+ * commit work runs the tail on a workqueue under no global lock
+ * (drm_atomic_helper.c:1876-1882 and 2099 of 6.12.115), and takes the big
+ * lock back only for what still needs it:
+ * a driver's work, a hotplug event, and a commit's tail on a device without
+ * DRIVER_KMS_UNLOCKED (`drm_atomic_commit_work`). So a nonblocking commit's
+ * tail on i915 runs under the device's commit lock alone, as a blocking one
+ * does in the ATOMIC ioctl. Like every kernel thread, it is not switched by
+ * the tick (`no_tick_switch`, which `setup_process_stack` sets): a commit's
+ * tail and a driver's work run here as they run inline in a system call, and
+ * give way only where they sleep, so a driver's state, such as the transport
+ * a virtio-gpu card sits on, never changes under them; the worker also gives
+ * way between passes.
+ */
 static void commit_thread_main(void)
 {
     const struct drm_work *dw;
@@ -1858,6 +1916,7 @@ static void commit_thread_main(void)
     struct worker_wait ww;
     uint32_t flags;
 
+    bkl_exit();
     arch_irq_enable();
     for (;;) {
         sched_service_point();
