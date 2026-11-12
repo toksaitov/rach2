@@ -538,6 +538,11 @@ void drm_gem_object_init(struct drm_device *dev, struct drm_gem_object *obj, uin
 /** Take a reference to `obj`, which the caller holds one to; NULL is
  * allowed. Any context. */
 void drm_gem_object_get(struct drm_gem_object *obj);
+/** Take a reference to `obj` unless its last has gone, as Linux's
+ * kref_get_unless_zero, for a caller that reaches the object through a
+ * pointer that holds none, such as a binding's. 1 when it took one, 0 when
+ * the object's free is under way. Any context. */
+int drm_gem_object_get_unless_zero(struct drm_gem_object *obj);
 /** Drop a reference; the last takes the object off its device's lists and
  * frees it through its `free`, and drops its device. NULL is allowed. */
 void drm_gem_object_put(struct drm_gem_object *obj);
