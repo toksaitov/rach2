@@ -273,6 +273,13 @@ void *vm_device_object(const struct vm_file *f)
     return 0;
 }
 
+/** 0: no row maps a device object. */
+int vm_device_whole(const struct vm_file *f)
+{
+    (void)f;
+    return 0;
+}
+
 /* The processes whose address spaces a device zap walks: none. */
 process_t *proc_list;
 

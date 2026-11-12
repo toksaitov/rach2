@@ -800,7 +800,7 @@ static void shmem_vm_put(void *obj)
     drm_gem_object_put((struct drm_gem_object *)obj);
 }
 
-static const struct vm_device_ops shmem_vm_ops = {shmem_vm_page, shmem_vm_put, NULL};
+static const struct vm_device_ops shmem_vm_ops = {shmem_vm_page, shmem_vm_put, NULL, 0};
 
 /** The `mmap` of a shmem object: a device region over its frames. */
 static int32_t shmem_obj_mmap(struct drm_gem_object *obj, vma_t *vma)

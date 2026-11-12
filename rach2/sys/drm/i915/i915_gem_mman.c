@@ -124,7 +124,7 @@ static int cpu_vm_page(void *data, uint32_t pgoff, uintptr_t *phys)
     return 0;
 }
 
-static const struct vm_device_ops cpu_vm_ops = {cpu_vm_page, mmo_vm_put, mmo_vm_access};
+static const struct vm_device_ops cpu_vm_ops = {cpu_vm_page, mmo_vm_put, mmo_vm_access, 0};
 
 int32_t i915_gem_object_mmap_cpu(struct drm_gem_object *base, vma_t *vma)
 {
@@ -248,7 +248,7 @@ static int gtt_vm_page(void *data, uint32_t pgoff, uintptr_t *phys)
     return err == 0 ? 0 : gtt_fault_error(err);
 }
 
-static const struct vm_device_ops gtt_vm_ops = {gtt_vm_page, mmo_vm_put, mmo_vm_access};
+static const struct vm_device_ops gtt_vm_ops = {gtt_vm_page, mmo_vm_put, mmo_vm_access, 0};
 
 void i915_gem_object_release_mmap_gtt(struct drm_i915_gem_object *obj)
 {

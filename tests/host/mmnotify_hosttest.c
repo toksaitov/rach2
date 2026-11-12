@@ -220,7 +220,7 @@ static void dev_put(void *obj)
     (void)obj;
 }
 
-static const struct vm_device_ops dev_ops = {dev_page, dev_put, NULL};
+static const struct vm_device_ops dev_ops = {dev_page, dev_put, NULL, 0};
 
 /** A fork's write-protection, a write's copy and a device's taking back of
  * its pages are told. The copy and the taking back, made by a holder of
@@ -453,7 +453,7 @@ static int zap_page(void *obj, uint32_t pgoff, uintptr_t *phys)
     return 0;
 }
 
-static const struct vm_device_ops zap_ops = {zap_page, dev_put, NULL};
+static const struct vm_device_ops zap_ops = {zap_page, dev_put, NULL, 0};
 
 /** Two faults of one page interleaved across a file's fill map the page
  * once, the later finding it backed and giving its own frame back; and a
