@@ -338,9 +338,13 @@ static const struct {
     {"maxcpus=", 0}, /* empty: get_option stores nothing */
     {"maxcpus", 0},
     {"nomaxcpus=0", 0},
+    {"maxcpus=4 maxcpus=0", 1}, /* each occurrence runs maxcpus() */
+    {"maxcpus=0 maxcpus=4", 1}, /* and none undoes the disable */
+    {"maxcpus=4 maxcpus= maxcpus=2", 0},
+    {"maxcpus=000000000000000000000000000000000", 1}, /* 33 bytes, read in place */
 };
 
-/** The `maxcpus=` parse, and `kcmdline_option`'s values. */
+/** The `maxcpus=` parse of every occurrence, and `kcmdline_option`'s values. */
 static void rows_parse(void)
 {
     unsigned int i;
@@ -363,6 +367,13 @@ static void rows_parse(void)
     v = 7;
     (void)kcmdline_capture("maxcpus=");
     check(kcmdline_option("maxcpus", &v) == 0 && v == 7, "option: empty, nothing stored");
+    (void)kcmdline_capture("maxcpus=4 maxcpus=0 maxcpus=2");
+    check(kcmdline_option("maxcpus", &v) == 1 && v == 2, "option: the last occurrence wins");
+    (void)kcmdline_capture("maxcpus=4 maxcpus=");
+    check(kcmdline_option("maxcpus", &v) == 1 && v == 4,
+          "option: an empty last occurrence stores nothing");
+    check(kcmdline_option_nth("maxcpus", 1, &v) == 0 && kcmdline_option_nth("maxcpus", 2, &v) == -1,
+          "option: nth, empty and absent");
 }
 
 int main(void)

@@ -40,7 +40,7 @@ struct ioapic_io {
 void ioapic_set_io(const struct ioapic_io *ops);
 
 /**
- * Whether the boot line keeps the I/O APIC off: `noapic`, or `maxcpus=0`,
+ * Whether the boot line keeps the I/O APIC off: `noapic`, or any `maxcpus=0`,
  * which Linux 6.12.115 turns into the same disable_ioapic_support
  * (arch/x86/kernel/apic/io_apic.c, lines 191 to 197; kernel/smp.c, lines
  * 975 to 982; arch/x86/kernel/smpboot.c, lines 1005 to 1008). Linux's

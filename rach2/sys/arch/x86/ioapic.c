@@ -106,17 +106,29 @@ static void reg_write(const struct ioapic *c, uint32_t reg, uint32_t value)
     kirq_restore(flags);
 }
 
-/** `maxcpus=` is read as Linux's get_option reads it (`kcmdline_option`),
- * as `smp_start` reads it, so `0`, `00`, `0x0` and a value with no digit
- * all count as 0 there. */
+/**
+ * Whether `noapic` is given, or any `maxcpus=` stores 0. Linux runs its
+ * maxcpus() once for each occurrence, and each that leaves setup_max_cpus 0
+ * calls arch_disable_smp_support, whose disable_ioapic_support no later
+ * occurrence undoes (kernel/smp.c, lines 975 to 984;
+ * arch/x86/kernel/smpboot.c, lines 1005 to 1008). Each is read as
+ * get_option reads it (`kcmdline_option_nth`), as `smp_start` reads
+ * them, so `0`, `00`, `0x0` and a value with no digit all store 0, and an
+ * empty value stores nothing.
+ */
 int ioapic_disabled(void)
 {
-    int n;
+    int nth, r, n;
 
     if (kcmdline_has("noapic")) {
         return 1;
     }
-    return kcmdline_option("maxcpus", &n) && n == 0;
+    for (nth = 0; (r = kcmdline_option_nth("maxcpus", nth, &n)) >= 0; nth++) {
+        if (r == 1 && n == 0) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /**

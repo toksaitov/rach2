@@ -1653,9 +1653,10 @@ static void smp_cpu_main(int cpu)
  * every processor: a process that blocks or ends leaves for it when nothing
  * else is ready. Its stack is laid out for a first switch into
  * `sched_idle_loop`; a started processor runs its own from its start.
- * `maxcpus=N` limits the processors to N, as Linux's does, N read as its
- * get_option reads it (`kcmdline_option`) into its unsigned setup_max_cpus,
- * so a negative N is no limit; 0 and 1 both mean the boot processor alone.
+ * `maxcpus=N` limits the processors to N, as Linux's does, each occurrence
+ * read in turn as its get_option reads it (`kcmdline_option`) into its
+ * unsigned setup_max_cpus, so the last that stores a value sets N, and a
+ * negative N is no limit; 0 and 1 both mean the boot processor alone.
  * A processor that does not answer is reported, and the next is still
  * tried. The boot admits a processor or refuses it in one
  * compare-and-exchange of its `admit`, which the processor makes too as
