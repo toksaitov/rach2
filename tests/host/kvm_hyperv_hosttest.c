@@ -208,6 +208,13 @@ void kvm_emul_skip(struct kvm_vcpu *v, uint32_t len)
     v->regs.rip += len;
 }
 
+/** The FPU image here is the guest's registers, so a fast hypercall reads
+ * its XMM inputs from the image as made. */
+void kvm_vcpu_fpu_sync(struct kvm_vcpu *v)
+{
+    (void)v;
+}
+
 void kvm_vcpu_kick(struct kvm_vcpu *v, uint32_t request)
 {
     v->requests |= request;
