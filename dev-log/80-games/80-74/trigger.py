@@ -157,11 +157,11 @@ os._exit(0)
     finally:
         # CPython 3.11 and later run a signal handler only at a call, a
         # backward jump or a function's start, so none runs between entering
-        # this block and the store; one that runs after it only records.
+        # this block and the store; one that runs after it only records in
+        # pending, which the exit below turns into status 130.  The handlers
+        # stay installed for that reason; the audio stream's own session
+        # keeps the killpg below from reaching this process.
         stopping = True
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        signal.signal(signal.SIGHUP, signal.SIG_IGN)
         for proc in (child, audio):
             if proc is not None:
                 try:
