@@ -1000,9 +1000,9 @@ static void seg_write(int n, const struct kvm_segment *s)
 
 /** Read the access rights of the guest's segment register `n` into `s`,
  * and not its selector, base or limit: the mode and the privilege, as
- * Linux's vmx_get_cs_db_l_bits and vmx_get_cpl read the field alone
- * (arch/x86/kvm/vmx/vmx.c:3599-3608). A segment is present when it is
- * usable, as Linux's vmx_get_segment. */
+ * Linux's vmx_get_cpl and vmx_get_cs_db_l_bits read the field alone
+ * (arch/x86/kvm/vmx/vmx.c:3599-3608, 3672-3678). A segment is present when
+ * it is usable, as Linux's vmx_get_segment. */
 static void seg_read_ar(int n, struct kvm_segment *s)
 {
     uint32_t ar = (uint32_t)vmcs_read(GUEST_ES_AR_BYTES + 2u * (uint32_t)n);
