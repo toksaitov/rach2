@@ -1176,12 +1176,11 @@ uint32_t vtd_hw_x2apic_id(void)
  * there, and its moves there. Whether the 8259 and the I/O APIC's lines are
  * masked with interrupts off (`vtd_hw_lines_mask`), and, at the last move,
  * whether they were and whether any unit still let the compatibility format
- * by. A level interrupt the APIC holds, which a pass through the disabled
- * state would drop; nothing here takes the APIC there, and a row checks
- * that it is still held. */
+ * by. Nothing here moves the APIC back through the disabled state, which
+ * would drop what its request register holds: the vtd interface has no
+ * such move, and the rows check that a failed start makes none. */
 static int x2_possible, x2_on, x2_moves;
 static int lines_masked, x2_moved_masked, x2_moved_cfi;
-static int level_held;
 
 /** Whether the APIC may be or is in x2APIC mode. */
 int vtd_hw_x2apic_possible(void)
@@ -1503,7 +1502,7 @@ static void row_begin(const char *name)
     flush_calls = stray_flushes = 0;
     boot_apic = boot_x2apic = 0;
     x2_possible = x2_on = x2_moves = 0;
-    lines_masked = x2_moved_masked = x2_moved_cfi = level_held = 0;
+    lines_masked = x2_moved_masked = x2_moved_cfi = 0;
     memset(ecam_mem, 0xFF, (unsigned long)ECAM_BUSES << 20);
     memset(msix_tables, 0, sizeof(msix_tables));
     pci_ecam_set((uintptr_t)ecam_mem, 0, ECAM_BUSES - 1);
@@ -1886,23 +1885,21 @@ static void row_ir_x2apic(void)
     row_begin("ir_x2apic_back");
     setup_lenovo();
     x2_possible = 1;
-    level_held = 1;
     page_fail_after = held - 1;
     (void)vtd_start();
-    check(!intremap_active() && x2_moves == 0 && !x2_on && level_held,
-          "a start whose second table fails leaves the APIC and its level interrupt as they were");
+    check(!intremap_active() && x2_moves == 0 && !x2_on,
+          "a start whose second table fails leaves the APIC in xAPIC mode, never moved");
     check(logged("vtd: ready: 2 units, interrupt remapping off"), "and runs unremapped");
     row_end();
 
     row_begin("ir_x2apic_last_step");
     setup_lenovo();
     x2_possible = 1;
-    level_held = 1;
     rtes[0].low |= 1u << 8; /* lowest priority, which ioapic_map refuses */
     check(t_msi(0, DF(2, 0), 49) == 0, "a message");
     (void)vtd_start();
     msi_of(0, DF(2, 0), &a, &d);
-    check(!intremap_active() && x2_moves == 0 && !x2_on && level_held && !lines_masked,
+    check(!intremap_active() && x2_moves == 0 && !x2_on && !lines_masked,
           "a start that fails at its last fallible step, the lines masked, leaves the APIC");
     check(a == 0xFEE00000u && d == 49, "and the message as it was");
     row_end();
