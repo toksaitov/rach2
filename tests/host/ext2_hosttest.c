@@ -5427,33 +5427,38 @@ static void snapshot(const char *img, uint64_t bytes);
 static int image_equals_snap(const char *img, uint64_t bytes);
 
 /**
- * Require the dirty volume `img`, of `bytes`, to mount read-only with
- * `fault` named by the check, to fail a create with `EROFS` and a remount
- * writable with `EROFS`, and to be, after the unmount, byte for byte as it
- * was: Linux's ext2 writes nothing to a read-only mount.
+ * Require the dirty volume `img`, of `bytes`, to mount writable with
+ * `fault` named by the check and Linux's warning for a volume with errors,
+ * the valid bit clear and the error bit set on the disk; to go read-only
+ * and writable again by remounts, the second checking it again; and to
+ * keep the error bit, without the valid bit, through the unmount.
  */
 static void fault_on(const char *img, uint64_t bytes, const char *fault, const char *what)
 {
     int rc;
 
-    snapshot(img, bytes);
     use_image(img, bytes);
     last_check[0] = 0;
+    last_warn[0] = 0;
     rc = mount_rw();
-    if (rc != 0 || (mnt.flags & VFS_MS_RDONLY) == 0 || !strstr(last_check, fault)) {
-        printf("  mount %d, flags 0x%x, check: %s\n", rc, (unsigned)mnt.flags, last_check);
+    if (rc != 0 || (mnt.flags & VFS_MS_RDONLY) != 0 || !strstr(last_check, fault) ||
+        !streq(last_warn, "mounting with errors, running e2fsck is recommended") ||
+        disk_state(img) != 2) {
+        printf("  mount %d, flags 0x%x, state %d, check: %s, warn: %s\n", rc, (unsigned)mnt.flags,
+               disk_state(img), last_check, last_warn);
         check(0, what);
     } else {
-        void *n = make_file(mnt.root, "new", &rc);
-
-        check(n == 0 && rc == -EROFS, "and refuses a create with EROFS");
-        check(OPS->remount(&mnt, rw_flags, NULL) == -EROFS, "and a remount writable with EROFS");
         check(1, what);
+        last_check[0] = 0;
+        check(OPS->remount(&mnt, rw_flags | VFS_MS_RDONLY, NULL) == 0 &&
+                  OPS->remount(&mnt, rw_flags, NULL) == 0 && strstr(last_check, fault) != 0 &&
+                  mnt.write_error == 0,
+              "and remounts read-only and writable, checked again");
     }
     if (rc == 0 || mnt.root) {
         unmount_rw();
     }
-    check(image_equals_snap(img, bytes), "and the check and the unmount write nothing");
+    check(disk_state(img) == 2, "and its unmount keeps the error bit and leaves it not valid");
 }
 
 /** Make a dirty volume with `script` applied, and require it to fault as
@@ -5470,7 +5475,9 @@ static void fault_row(const char *img, const char *script, const char *fault, co
  * - a consistent volume is checked, mounts writable, and is valid again
  *   at unmount;
  * - on a machine too short of memory for the check's workspace it mounts
- *   read-only, by name, and nothing is written;
+ *   writable unchecked, by name, and its unmount leaves the valid bit
+ *   clear;
+ * - a tree deeper than the check walks mounts writable unchecked as well;
  * - wrong free counts are recounted from the bitmaps, not used, and
  *   written back;
  * - a lost block is kept out of the allocator's reach and the error bit
@@ -5479,10 +5486,10 @@ static void fault_row(const char *img, const char *script, const char *fault, co
  * - an orphan inode is kept whole, with its blocks, for e2fsck;
  * - each fault (a used block marked free, a block claimed twice, a reached
  *   inode marked free, wrong link counts, a directory with two parents, a
- *   size or i_blocks behind its pointers, an entry of the wrong form) mounts
- *   read-only, by name, and writes nothing;
- * - a read-only mount runs no check and writes nothing, and a remount
- *   writable of it whose check finds a fault is EROFS and writes nothing.
+ *   size or i_blocks behind its pointers, an entry of the wrong form) is
+ *   named and mounts writable with the error bit set, as Linux mounts a
+ *   volume with errors;
+ * - a read-only mount runs no check and writes nothing.
  */
 static int lost_block_reported(void)
 {
@@ -5496,6 +5503,52 @@ static int orphan_reported(long ino)
     snprintf(text, sizeof text, "Unattached inode %ld", ino);
     return ext2_fixture_contains(fix_path("fsck.out"), text) &&
            !ext2_fixture_contains(fix_path("fsck.out"), "Multiply");
+}
+
+/**
+ * Mount the dirty volume `img` with a tree of 34 directories, deeper than
+ * the check walks: the check stops by name, which is no fault of the
+ * volume, the volume mounts writable unchecked with Linux's warning and
+ * takes a create, and its unmount leaves the valid bit clear, so that the
+ * next writable mount checks it again.
+ */
+static void deep_row(const char *img)
+{
+    static char script[4096];
+    uint64_t bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    void *n;
+    int at, i, j, rc;
+
+    at = snprintf(script, sizeof(script), "ssv state 0\n");
+    for (i = 1; i <= 34; i++) {
+        at += snprintf(script + at, sizeof(script) - at, "mkdir /");
+        for (j = 1; j < i; j++) {
+            at += snprintf(script + at, sizeof(script) - at, "d/");
+        }
+        at += snprintf(script + at, sizeof(script) - at, "d\n");
+    }
+    if (!debugfs_script(img, script)) {
+        check(0, "debugfs makes a tree of 34 directories");
+        return;
+    }
+    use_image(img, bytes);
+    last_check[0] = 0;
+    last_warn[0] = 0;
+    rc = mount_rw();
+    check(rc == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 &&
+              strstr(last_check, "a directory deeper than the check walks") != 0 &&
+              streq(last_warn, "mounting unchecked, running e2fsck is recommended"),
+          "a dirty tree deeper than the check walks mounts writable unchecked by name");
+    if (rc != 0) {
+        return;
+    }
+    n = make_file(mnt.root, "new", &rc);
+    check(n != 0, "and takes a create");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(unmount_rw() == 0 && disk_state(img) == 0,
+          "and its unmount leaves the valid bit clear for the next mount to check");
 }
 
 static void dirty_rows(void)
@@ -5519,22 +5572,26 @@ static void dirty_rows(void)
 
     bytes = dirty_image(img, "");
     use_image(img, bytes);
+    last_check[0] = 0;
     last_warn[0] = 0;
     host_free_frames = 0;
     rc = mount_rw();
     host_free_frames = 1u << 20;
-    if (rc != 0 || (mnt.flags & VFS_MS_RDONLY) == 0 ||
-        !streq(last_warn, "mounted read-only: not unmounted cleanly and the check's "
-                          "workspace is more than the free memory")) {
-        printf("  mount %d, flags 0x%x, warn: %s\n", rc, (unsigned)mnt.flags, last_warn);
-        check(0, "a dirty volume on a machine short of memory mounts read-only by name");
+    if (rc != 0 || (mnt.flags & VFS_MS_RDONLY) != 0 ||
+        !strstr(last_check, "check: no memory for the") ||
+        !streq(last_warn, "mounting unchecked, running e2fsck is recommended")) {
+        printf("  mount %d, flags 0x%x, check: %s, warn: %s\n", rc, (unsigned)mnt.flags, last_check,
+               last_warn);
+        check(0, "a dirty volume on a machine short of memory mounts writable unchecked by name");
     } else {
-        check(1, "a dirty volume on a machine short of memory mounts read-only by name");
+        check(1, "a dirty volume on a machine short of memory mounts writable unchecked by name");
     }
-    check(disk_state(img) == 0, "and nothing was written to it");
     if (rc == 0) {
-        unmount_rw();
+        check(unmount_rw() == 0 && disk_state(img) == 0,
+              "and its unmount leaves the valid bit clear for the next mount to check");
     }
+
+    deep_row(img);
 
     bytes = dirty_image(img, "ssv free_blocks_count 1\nssv free_inodes_count 1\n"
                              "set_bg 0 free_blocks_count 1\nset_bg 0 free_inodes_count 1\n");
@@ -5582,28 +5639,29 @@ static void dirty_rows(void)
     blk = debugfs_number(img, "blocks /hello.txt", "");
     snprintf(script, sizeof(script), "unlink /hello.txt\nunlink /hello.link\nfreeb %ld\n", blk);
     fault_row(img, script, "a used block the bitmap calls free",
-              "an orphan whose block the bitmap calls free mounts read-only");
+              "an orphan whose block the bitmap calls free mounts writable with errors");
     if (host_read(img, b, 4, 4096 + 8) == 4) {
         table = b[0] | (b[1] << 8) | (b[2] << 16) | ((long)b[3] << 24);
         snprintf(script, sizeof(script), "sif /dir/big.bin block[0] %ld\n", table);
         fault_row(img, script, "a block claimed twice",
-                  "a file pointing into the inode table mounts read-only");
+                  "a file pointing into the inode table mounts writable with errors");
     } else {
         check(0, "the descriptor read for the inode-table row");
     }
     fault_row(img, "freei /dir/big.bin\n", "a reached inode the bitmap calls free",
-              "a reached inode whose bit is clear mounts read-only");
+              "a reached inode whose bit is clear mounts writable with errors");
     fault_row(img, "sif /dir/big.bin links_count 3\n", "a link count that does not match its names",
-              "a link count above its names mounts read-only");
+              "a link count above its names mounts writable with errors");
     fault_row(img, "sif /dir links_count 9\n",
               "a directory link count that does not match its entries",
-              "a directory count above its entries mounts read-only");
+              "a directory count above its entries mounts writable with errors");
     fault_row(img, "link /dir/sub /many/twice\nsif /many links_count 3\n",
-              "a directory with two parents", "a directory named twice mounts read-only");
+              "a directory with two parents",
+              "a directory named twice mounts writable with errors");
     fault_row(img, "sif /dir/big.bin size 100\n", "past the size",
-              "a size behind its pointers mounts read-only");
+              "a size behind its pointers mounts writable with errors");
     fault_row(img, "sif /dir/big.bin i_blocks 8\n", "i_blocks that does not match its pointers",
-              "an i_blocks behind its pointers mounts read-only");
+              "an i_blocks behind its pointers mounts writable with errors");
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
     root_block = debugfs_number(img, "blocks /", "");
     if (root_block > 0) {
@@ -5611,12 +5669,8 @@ static void dirty_rows(void)
         b[1] = 0;
         bytes = dirty_image(img, "");
         poke(img, root_block * 4096 + 4, b, 2);
-        use_image(img, bytes);
-        last_check[0] = 0;
-        check(mount_rw() == 0 && (mnt.flags & VFS_MS_RDONLY) != 0 &&
-                  strstr(last_check, "an entry of the wrong form") != 0,
-              "an entry of the wrong form mounts read-only");
-        unmount_rw();
+        fault_on(img, bytes, "an entry of the wrong form",
+                 "an entry of the wrong form mounts writable with errors");
     } else {
         check(0, "the root's block for the entry-form row");
     }
@@ -5631,19 +5685,23 @@ static void dirty_rows(void)
     check(image_equals_snap(img, bytes), "and writes nothing");
 }
 
+static void sync_remount_row(void);
+
 /**
  * Mount a clean volume read-only, read a file and a deep path on it, sync
- * it, and unmount it as the VFS does; and mount a dirty volume read-only
- * and remount it writable, which its check's fault makes EROFS. Each
- * volume must be, byte for byte, as it was, since Linux's ext2 writes
- * nothing to a read-only mount.
+ * the file through a description and the volume, and unmount it as the VFS
+ * does; and mount a dirty volume read-only, which writes nothing, and
+ * remount it writable, which its check's fault leaves writable with the
+ * error bit set. The read-only mounts must leave each volume byte for byte
+ * as it was, since Linux's ext2 writes nothing to a read-only mount. Then
+ * `sync_remount_row`.
  */
 static void readonly_rows(void)
 {
     const char *img = fix_path("ro.ext2");
     uint64_t bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
     struct vfs_statfs st;
-    void *n;
+    void *n, *h = 0;
     int err, rc;
 
     snapshot(img, bytes);
@@ -5652,8 +5710,12 @@ static void readonly_rows(void)
     check(rc == 0 && (mnt.flags & VFS_MS_RDONLY) != 0, "a clean volume mounts read-only");
     if (rc == 0) {
         n = walk("/dir/big.bin", &err);
-        check(n && read_at(n, abuf, 4096, 0) == 4096 && OPS->fsync(&mnt, n) == 0,
-              "a file of it reads and syncs");
+        check(n && OPS->open(&mnt, n, 0, &h) == 0 && read_at(n, abuf, 4096, 0) == 4096 &&
+                  OPS->fsync(&mnt, h) == 0,
+              "a file of it reads and its description syncs");
+        if (h) {
+            OPS->release(&mnt, h);
+        }
         if (n) {
             OPS->put(&mnt, n);
         }
@@ -5673,14 +5735,78 @@ static void readonly_rows(void)
     use_image(img, bytes);
     last_check[0] = 0;
     rc = mount_ro();
-    check(rc == 0 && OPS->remount(&mnt, rw_flags, NULL) == -EROFS &&
-              strstr(last_check, "a link count that does not match its names") != 0 &&
-              (mnt.flags & VFS_MS_RDONLY) != 0,
-          "a remount writable of a read-only mount whose check finds a fault is EROFS");
+    check(rc == 0 && last_check[0] == 0 && image_equals_snap(img, bytes),
+          "a dirty volume mounts read-only unchecked and writes nothing");
     if (rc == 0) {
-        unmount_rw();
+        last_warn[0] = 0;
+        check(OPS->remount(&mnt, rw_flags, NULL) == 0 &&
+                  strstr(last_check, "a link count that does not match its names") != 0 &&
+                  streq(last_warn, "mounting with errors, running e2fsck is recommended") &&
+                  disk_state(img) == 2,
+              "a remount writable whose check finds a fault goes writable with the error bit set");
+        mnt.flags = rw_flags;
+        check(unmount_rw() == 0 && disk_state(img) == 2,
+              "and its unmount keeps the error bit and leaves it not valid");
     }
-    check(image_equals_snap(img, bytes), "and writes nothing");
+    sync_remount_row();
+}
+
+/* The result of process B's sync in `sync_remount_row`. */
+static int race_sync_rc;
+
+/** Process B of `sync_remount_row`: a sync of the mount. */
+static void race_sync(void)
+{
+    race_sync_rc = OPS->sync(&mnt);
+}
+
+/** At a write of block 0 under `em->super`, the remount's write of the
+ * superblock, give process B the turn, once. */
+static void race_super_turn(void)
+{
+    if (request_block == 0 && sleep_lock_held(&ext2_em_of(&mnt)->super)) {
+        write_pause = 0;
+        pass_turn();
+    }
+}
+
+/**
+ * A sync beside a remount read-only, which Linux orders by `s_umount`: the
+ * remount gives the turn to a sync at its write of the superblock, the
+ * sync sleeps on that block's buffer and resumes once the remount has
+ * made the mount read-only. The sync must note nothing and record no
+ * failure, so that a remount writable after it goes through, and the
+ * volume must unmount clean. Before the sync read `writable` again under
+ * `em->super`, its note of the superblock was refused with EROFS and
+ * recorded as the mount's write error.
+ */
+static void sync_remount_row(void)
+{
+    const char *img = fix_path("race.ext2");
+    uint64_t bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    int rc;
+
+    use_image(img, bytes);
+    rc = mount_rw();
+    check(rc == 0 && OPS->sync(&mnt) == 0, "the race volume mounts writable and syncs");
+    if (rc != 0) {
+        return;
+    }
+    race_sync_rc = 1;
+    write_pause = race_super_turn;
+    start_turns(race_sync);
+    rc = OPS->remount(&mnt, rw_flags | VFS_MS_RDONLY, NULL);
+    finish_turns();
+    write_pause = 0;
+    check(rc == 0 && second_wait && streq(second_wait, "buffer") && second_wait_block == 0,
+          "a sync run at a remount's write of the superblock sleeps on its buffer");
+    check(race_sync_rc == 0 && mnt.write_error == 0,
+          "and, resumed on a mount made read-only, records no failure");
+    mnt.flags = rw_flags | VFS_MS_RDONLY;
+    check(OPS->remount(&mnt, rw_flags, NULL) == 0, "and a remount writable after it goes through");
+    mnt.flags = rw_flags;
+    check(unmount_rw() == 0 && disk_state(img) == 1 && e2fsck_clean(img),
+          "and the volume unmounts clean");
 }
 
 /* PROFILE with `ext_attr`, for volumes whose inodes have attribute blocks. */
@@ -6101,7 +6227,7 @@ static void hardlink_check_rows(void)
           "the independent tool gives the last linked file an incorrect count");
     check(e2fsck_status(img) == 4, "independent e2fsck rejects the incorrect link count");
     fault_on(img, bytes, "a link count that does not match its names",
-             "the same large link inventory with a wrong count mounts read-only");
+             "the same large link inventory with a wrong count mounts writable with errors");
     printf("ext2-hardlinks: checked 600 exact two-name pairs and rejected the bad count\n");
 }
 
