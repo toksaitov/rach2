@@ -3,8 +3,10 @@
  * up, below HARD_MEMORY_LIMIT, and never given back. The boot's page tables
  * come from it, and on i686 the frame table. The one caller after the boot
  * is the RTL8139 driver, for its receive ring at the card's first bring-up:
- * the ring is physically contiguous, which no other allocator gives. A
- * caller whose memory is to go back takes it from the heap instead.
+ * the ring is physically contiguous and below 4 GiB, where the card's
+ * 32-bit address reaches, and `alloc_frames` promises consecutive frames
+ * but not where. A caller whose memory is to go back takes it from the
+ * heap instead, `kalloc_contig` when its frames must be consecutive.
  */
 #ifndef _HEAP_H_
 #define _HEAP_H_

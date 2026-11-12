@@ -548,6 +548,18 @@ int paging_copy_frame(uintptr_t dst, uintptr_t src);
  */
 uintptr_t alloc_frame(void);
 
+/**
+ * `count` free frames at consecutive physical addresses, each marked used
+ * with one reference, for a structure a device or the processor reads by
+ * its physical address across pages, as Linux's alloc_pages of an order
+ * above 0 gives: the physical address of the first, or 0 when no run of
+ * `count` is free or under the same refusals as `alloc_frame`. The run is
+ * sought in the frame table itself, so it does not depend on the order in
+ * which frames were freed. Each frame is given back on its own
+ * (`free_frame`). It never sleeps.
+ */
+uintptr_t alloc_frames(uint32_t count);
+
 /** Drop a reference to the frame at `phys`, as `frame_unref` does; the
  * frame goes back to the pool with its last. */
 void free_frame(uintptr_t phys);

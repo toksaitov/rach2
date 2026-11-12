@@ -1894,10 +1894,10 @@ int kvm_emul_ud(struct kvm_vcpu *v, const uint64_t info[5]);
 /**
  * `count` pages whose frames are consecutive, set to all ones, for a
  * permission map, which the processor reads by its physical address and
- * across its pages; `*pa` receives the first frame's address. The heap's
- * pages are contiguous only in virtual memory, so a run whose frames are
- * not consecutive is held until one is found, so that the allocator gives
- * other frames, and then freed. NULL after 16 such runs or without memory.
+ * across its pages; `*pa` receives the first frame's address. The frames
+ * come from `kalloc_contig`, as Linux's svm_vcpu_alloc_msrpm takes an
+ * order-1 block from alloc_pages. NULL without memory. Freed with
+ * `kfree_pages`.
  */
 uint8_t *kvm_map_pages(uint32_t count, uintptr_t *pa);
 
