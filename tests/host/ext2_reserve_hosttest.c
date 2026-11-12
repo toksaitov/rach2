@@ -277,6 +277,35 @@ int bcache_state(block_device_t *dev, uint64_t block)
     return block < TEST_BLOCKS && uncached[block] ? 0 : 1;
 }
 
+/** No row reads a file into page frames, which `read_frames` alone does. */
+int block_read_frames(block_device_t *dev, uint64_t lba, uint32_t count, const uintptr_t *frames)
+{
+    (void)dev;
+    (void)lba;
+    (void)count;
+    (void)frames;
+    return -EIO;
+}
+
+/** A host frame is mapped where it is. */
+void *kmap_temp(uintptr_t phys)
+{
+    return (void *)phys;
+}
+
+/** Nothing to unmap: `kmap_temp` maps nothing. */
+void kunmap_temp(void *va)
+{
+    (void)va;
+}
+
+/** Clear the page at `phys`. 0. */
+int paging_zero_frame(uintptr_t phys)
+{
+    k_memset((void *)phys, 0, PAGE_SIZE);
+    return 0;
+}
+
 /** Copy only resident model bytes, without changing cache state. */
 int bcache_copy_cached(block_device_t *dev, uint64_t block, uint32_t offset, void *out,
                        uint32_t count)

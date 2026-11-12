@@ -13,7 +13,7 @@
  * host-deps: rach2/sys/block/chain.c rach2/sys/fs/fd.c rach2/sys/fs/lock.c
  * host-deps: rach2/sys/fs/sleeplock.c tests/host/compat/park_host.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
- * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/kheap_host.c tests/host/compat/frames_host.c
  * host-deps: tests/host/compat/pressure_host.c tests/host/compat/fixdir_host.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
  * host-deps: tests/host/compat/bkl_held.c
