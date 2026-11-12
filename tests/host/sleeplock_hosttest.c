@@ -4,7 +4,7 @@
  * a disk wait.
  *
  * host-deps: rach2/sys/fs/sleeplock.c rach2/sys/lib/kstring.c
- * host-deps: rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/atomic_host.c
  *
  * One host thread plays every process. The stubbed wait stands for the
  * scheduler: each time a taker would sleep, it runs the next step of the
@@ -13,7 +13,8 @@
  * since nothing would ever wake the taker. The clock is a variable a row
  * moves, and a disk wait is a step of `disk_waits`, as the block layer
  * counts one. The spinlocks are counted, so that a row sees that none is
- * held across a wait or after a take or a give. Each panic row runs the
+ * held across a wait or after a take or a give. The atomic operations are
+ * the host's (`atomic_host.c`). Each panic row runs the
  * violating call in a forked child, whose exit status says whether the
  * panic came and named the rule.
  */
@@ -306,16 +307,15 @@ static void a_gives_once(void)
     sleep_lock_give(&lock);
 }
 
-/** The lock's spinlock keeps its state only inside a take or a give: B
- * waits for A with no spinlock held, has the lock once A gives it, and no
- * spinlock is left held after any row. */
+/** A take and a give pass no spinlock: B waits for A with none held, has
+ * the lock once A gives it, and none is left held after any row. */
 static void row_spin(void)
 {
     script_clear();
     sleep_lock_init(&lock, &rec_one, 0);
     cpu_table[0].current = &proc_a;
     sleep_lock_take(&lock);
-    check(spin_depth == 0 && !lock.spin.locked, "a take lets the lock's spinlock go");
+    check(spin_depth == 0, "a take holds no spinlock");
     script(a_gives_once);
     cpu_table[0].current = &proc_b;
     sleep_lock_take(&lock);
@@ -324,7 +324,7 @@ static void row_spin(void)
     check(wakes == 1, "the give with a taker asleep wakes it");
     sleep_lock_give(&lock);
     check(wakes == 1, "the give with no taker asleep wakes nobody");
-    check(spin_depth == 0 && !lock.spin.locked, "a give lets every spinlock go");
+    check(spin_depth == 0, "a give holds no spinlock");
 }
 
 /** A file lock raises its holder's file_locks once for a hold, whatever
