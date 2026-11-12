@@ -83,6 +83,26 @@ void fs_node_moved(const struct krffs_node *from, struct krffs_node *to);
  * socket or an anonymous descriptor. */
 int32_t fd_stat_ids(int pid, int fd, uint32_t *mnt_id, uint64_t *ino);
 
+struct fd_entry;
+struct fd_table;
+
+/**
+ * A copy of descriptor `fd` of `table`, another process's or the caller's
+ * own, into `*out`, taken under the table's lock with what a descriptor in
+ * flight holds: a reference to its description and to a socket. The owner
+ * may then close the descriptor, with or without the big lock, and what the
+ * copy names stays until `fd_peek_drop`, as Linux's /proc holds the file
+ * `fget_task` finds (`proc_fd_link`, fs/proc/fd.c:182) or `get_file` takes
+ * under `file_lock` (`seq_show`, fs/proc/fd.c:39-46). 0, or -EBADF for a
+ * descriptor that is not open.
+ */
+int fd_peek_hold(struct fd_table *table, int fd, struct fd_entry *out);
+
+/** Give back what `fd_peek_hold` took with the copy `copy`, as the close of
+ * a descriptor in flight does: the last holder of the description releases
+ * its objects and ends it, as Linux's `fput` does. May sleep. */
+void fd_peek_drop(struct fd_entry *copy);
+
 /** The host and domain names of the caller's UTS namespace, which uname
  * gives as its node name and domain name, for /proc/sys/kernel/hostname and
  * domainname. */

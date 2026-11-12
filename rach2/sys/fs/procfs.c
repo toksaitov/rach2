@@ -2870,8 +2870,10 @@ static void proc_file_target(struct procfs_text *t, const fd_entry_t *e)
  * descriptor that is closed, whose release waits for another thread's call
  * or is under way, has no link, as it has no entry in the directory's
  * listing and no lookup finds it. The entry is copied under its table's
- * lock, and what it names is read under the big lock, which its release
- * takes.
+ * lock with a hold on what it names (`fd_peek_hold`), since its owner may
+ * close it meanwhile without the big lock, and the hold is given back once
+ * the text is made, as Linux's `proc_fd_link` holds the file it reads
+ * (fs/proc/fd.c:182).
  */
 int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
 {
@@ -2884,7 +2886,7 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
     procfs_text_init(t);
 
     p = get_process((uint32_t)pid);
-    if (!p || p->state == PROC_UNUSED || fd_peek(p->fds, fd, &copy, 0) != 0) {
+    if (!p || p->state == PROC_UNUSED || fd_peek_hold(p->fds, fd, &copy) != 0) {
         return -ENOENT;
     }
 
@@ -2943,6 +2945,7 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         ap_str(t, "anon_inode:[device]");
         break;
     }
+    fd_peek_drop(&copy);
     if (t->nomem) {
         kfree(t->buf);
         return -ENOMEM;
@@ -9438,8 +9441,10 @@ static void procfs_kvm_irqs(struct procfs_text *t, void *vm)
  * -ENOENT for a descriptor that is not open. A dma-buf also gives its
  * supplied name, copied before appending text or the stat can sleep, and a
  * KVM VM its interrupt counts, from a reference taken then. The entry is
- * copied under its table's lock, and what it names is read under the big
- * lock, which its release takes.
+ * copied under its table's lock with a hold on what it names
+ * (`fd_peek_hold`), since its owner may close it meanwhile without the big
+ * lock, as Linux's `seq_show` takes the file under `file_lock`
+ * (fs/proc/fd.c:39-46); the hold is given back before the stat.
  */
 static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
 {
@@ -9454,7 +9459,7 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
     void *vm;
 #endif
 
-    if (!p || p->state == PROC_UNUSED || fd_peek(p->fds, fd, &copy, 0) != 0) {
+    if (!p || p->state == PROC_UNUSED || fd_peek_hold(p->fds, fd, &copy) != 0) {
         return -ENOENT;
     }
     if (is_dma_buf_file(e)) {
@@ -9485,7 +9490,7 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
     ap_str(t, "\nflags:\t0");
     ap_num_width(t, (int32_t)flags, 0, 1);
     ap_ch(t, '\n');
-    /* The stat may sleep; `e` is not read past this point. */
+    fd_peek_drop(&copy);
     if (fd_stat_ids(pid, fd, &mnt_id, &ino) == 0) {
         ap_str(t, "mnt_id:\t");
         ap_u32(t, mnt_id);
