@@ -16,7 +16,8 @@
 # under ./out. REF and GATE are files there, Linux's results for the case and
 # the speed gate's settings, or `-`, which makes the run a reference and
 # judges nothing; `exclusions`, when there, is the owner's list of approved
-# differences, which judge.py takes. The cases:
+# differences, which judge.py takes for igt, piglit, deqp and webgl. The
+# cases:
 #
 #   igt      igt.sh, as root, on the lines of LIST from its `# part PART` to
 #            the next part, or on the test program PART of LIST, with the
@@ -160,16 +161,19 @@ run()
     return "$status"
 }
 
-# judge KIND ARGUMENT...: judge.py's KIND with the exclusions when there are
-# any, and nothing for a reference run.
+# judge KIND ARGUMENT...: judge.py's KIND, with the exclusions when there are
+# any and KIND takes them: results, deqp and webgl do; glmark2's validations
+# and the gate do not, and judge.py refuses an option it does not take.
 judge()
 {
     kind=$1
     shift
     set -- "$kind" "$@"
-    if [ "$kind" != gate ] && [ -f "$here/exclusions" ]; then
-        set -- "$@" -x "$here/exclusions"
-    fi
+    case $kind in
+        results | deqp | webgl)
+            [ ! -f "$here/exclusions" ] || set -- "$@" -x "$here/exclusions"
+            ;;
+    esac
     python3 -I "$here/judge.py" "$@"
 }
 
