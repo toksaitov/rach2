@@ -303,6 +303,12 @@ void idle_wait_irq_off(void);
  * that comes between its test and the halt ends no wait. */
 void idle_wait_irq_on(void);
 
+/** End this processor's idle wait if it polls before its halt, as the
+ * interrupt that calls this would have ended the halt. Called by each
+ * router of a device's, the tick's or another processor's interrupt,
+ * with interrupts off. */
+void idle_poll_interrupt(void);
+
 /** Nonzero when every processor online is halted in an idle wait, as each
  * marks itself for the tick (`idle_wait_irq_off`, `idle_wait_irq_on`). Read
  * by the boot processor's tick, with interrupts off. */
