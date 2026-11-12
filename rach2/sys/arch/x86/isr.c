@@ -927,6 +927,7 @@ void isr_leave(isr_params_t *params)
 void isr_local_router(isr_params_t *params)
 {
     user_entry(params);
+    idle_poll_interrupt();
     if (params->vector == IPI_VECTOR) {
         smp_ipi();
         lapic_eoi();
@@ -1045,6 +1046,7 @@ void _irq_router(isr_params_t *params)
 #endif
 
     user_entry(params);
+    idle_poll_interrupt();
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);
     } else if (params->vector == IRQ_VECTOR(0) && !FRAME_USER(params)) {

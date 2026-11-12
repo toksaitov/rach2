@@ -247,6 +247,10 @@ void smp_kick(int cpu)
 void arch_irq_disable(void)
 {}
 
+/** Do nothing: no idle wait polls here. */
+void arch_irq_enable(void)
+{}
+
 /** Do nothing: no process here arms a timer of processor time. */
 void signal_post(process_t *target, int signo)
 {
