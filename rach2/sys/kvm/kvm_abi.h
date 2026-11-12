@@ -222,6 +222,7 @@
 #define KVM_CAP_SYS_ATTRIBUTES              209
 #define KVM_CAP_DISABLE_QUIRKS2             213
 #define KVM_CAP_VM_TSC_CONTROL              214
+#define KVM_CAP_VM_DISABLE_NX_HUGE_PAGES    220
 #define KVM_CAP_PRE_FAULT_MEMORY            236
 #define KVM_CAP_X86_APIC_BUS_CYCLES_NS      237
 #define KVM_CAP_PMU_EVENT_FILTER            173
