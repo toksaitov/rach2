@@ -44,7 +44,8 @@ struct sysfs_pci_ident;
  * it reads the state it replaces and keeps it until the new state is the
  * device's. ATOMIC and PAGE_FLIP hold it without the big lock on a device
  * whose driver declares DRIVER_KMS_UNLOCKED (DRM_KMS), whose display hooks
- * then take only their own locks. WAIT_VBLANK holds none of it: the
+ * then take only their own locks, and so does the commit worker for such a
+ * device's tails (`drm_atomic_commit_work`). WAIT_VBLANK holds none of it: the
  * vblanks are under the two locks below, as Linux's drm_wait_vblank_ioctl
  * takes no modeset lock (drm_vblank.c:1733-1873). User memory is copied
  * under it, so it comes before an address space's `mmap_lock`, as Linux's
@@ -1722,9 +1723,16 @@ int32_t drm_framebuffer_dirty(struct drm_device *dev, struct drm_framebuffer *fb
                               const struct drm_mode_rect *rect);
 /** Run the queued device work and hotplug events, then advance each
  * nonblocking commit's plane waits in order and finish those whose waits
- * ended. Process context under the big lock, without driver locks; returns
- * how many works, events and commit tails ran. May sleep in driver hooks. */
+ * ended. Process context without the big lock or driver locks: it takes the
+ * big lock for the device works, the hotplug events and the tails of a
+ * device without DRIVER_KMS_UNLOCKED. Returns how many works, events and
+ * commit tails ran. May sleep in driver hooks. */
 int drm_atomic_commit_work(void);
+#ifdef RACH2_HOSTTEST
+/* The takes of the big lock `drm_atomic_commit_work` would make, which the
+ * host tests count, having no big lock. */
+extern int drm_worker_bkl_takes;
+#endif
 /** Have the commit worker send `connector`'s hotplug event, to user space
  * and the console, as Linux's modeset retry work does after a link failed
  * to train: for a driver's commit, which holds the commit lock the

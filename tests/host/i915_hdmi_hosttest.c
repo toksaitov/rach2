@@ -807,9 +807,13 @@ static void row_hdmi_plug(void)
     CHECK(disp->hotplug.pulses >= 1 && (disp->hotplug.event_bits & (1u << HPD_PORT_B)),
           "plug: the pulse's interrupt asks for a probe");
     model_hotplugs = 0;
+    drm_worker_bkl_takes = 0;
     CHECK(drm_atomic_commit_work() >= 1 && hdmi->status == DRM_CONNECTOR_CONNECTED &&
               model_hotplugs == 1 && logged("hotplug: HDMI-A-1: connected"),
           "plug: HDMI-A-1 connected from the worker, with an event");
+    CHECK(drm_worker_bkl_takes == 2,
+          "plug: the worker, which runs without the big lock, takes it for the probe and for "
+          "the event");
     CHECK(disp->ddi[0].hdmi.info.is_hdmi && disp->ddi[0].hdmi.info.max_tmds_clock == 225000,
           "plug: the sink is HDMI at 225 MHz");
     CHECK(find_mode(hdmi, 1920, 1080, 60, &m) && (m.type & DRM_MODE_TYPE_PREFERRED) &&
