@@ -1,6 +1,7 @@
 /**
- * Open mounted KRFFS at the flush that publishes a relocated node, and walk
- * a model type's paths by the cached walk without the big lock.
+ * Open mounted KRFFS at the flush that publishes a relocated node, walk a
+ * model type's paths by the cached walk without the big lock, and change a
+ * model ext2 file through the VFS by an open handle that is not its node.
  *
  * The rule of mk/host-fixtures.mk extracts complete resolver and open
  * functions unchanged, with the namespace lock and the sleeping lock of
@@ -15,6 +16,7 @@
 #include "fs/synthfs.h"
 #include "fs/name.h"
 #include "proc/smp.h"
+#include "block/loop.h"
 #include "panic.h"
 
 extern void exit(int status);
@@ -290,13 +292,18 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
-/** These files do not back a loop device. */
-int loop_backs(struct vfs_mount *mnt, void *node)
+/** No waiter is ever queued: the opener is resumed by its thread, and
+ * `wq_wake_all` is a no-op. */
+int wq_active(const wait_queue_t *wq)
 {
-    (void)mnt;
-    (void)node;
+    (void)wq;
     return 0;
 }
+
+/* The loop devices, which `loop_backs` of rach2/sys/block/loop.c reads
+ * through this pointer, since the structure is complete only in
+ * vfs_open.inc; `main` points it at `loop_table`. */
+static struct loop_device *loops;
 
 /** A page for a path from the host heap, where the kernel keeps a set. */
 static char *path_buf_get(void)
@@ -358,11 +365,16 @@ static int walk_object(struct vfs_ref *cur, void *found, const char *rest, char 
     return -ENOENT;
 }
 
-/** The file page cache, which keeps no page of the fixture's files. */
+/* The mount and node the last `filecache_forget` was given. */
+static struct vfs_mount *forgot_mnt;
+static void *forgot_node;
+
+/** The file page cache, which keeps no page of the fixture's files: record
+ * what the wrapper asked it to forget. */
 static void filecache_forget(struct vfs_mount *mnt, void *node)
 {
-    (void)mnt;
-    (void)node;
+    forgot_mnt = mnt;
+    forgot_node = node;
 }
 
 /** inotify's report of a new entry, which no row watches. */
@@ -507,6 +519,176 @@ static void fixture_name_put(struct vfs_name *name)
 #define vfs_name_put fixture_name_put
 #include "vfs_open.inc"
 #undef vfs_name_put
+
+static struct loop_device loop_table[LOOP_DEVICES];
+
+/*
+ * The ext2 model of `ext2_handles`: a type whose `open` gives each open a
+ * handle of its own that holds the node, as ext2's `struct ext2_handle`
+ * does, and whose operations record the handle or node they were given.
+ */
+struct e2m_handle {
+    void *node;
+    int open;
+};
+
+static struct e2m_handle e2m_handles[2];
+static char e2m_file; /* the one file's node */
+static uint32_t e2m_flags;
+/* The last handle the data operations and the last node `getattr` got. */
+static void *e2m_data, *e2m_attr;
+static int e2m_calls;
+
+/** The model's `open`: the next free handle, holding `node`. */
+static int e2m_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
+{
+    int i;
+
+    (void)mnt;
+    (void)flags;
+    for (i = 0; i < 2 && e2m_handles[i].open; i++) {
+    }
+    check(i < 2, "the ext2 model opens no more than two handles");
+    e2m_handles[i].node = node;
+    e2m_handles[i].open = 1;
+    *handle = &e2m_handles[i];
+    return 0;
+}
+
+/** The model's `release`: the handle is free again. */
+static void e2m_release(struct vfs_mount *mnt, void *handle)
+{
+    (void)mnt;
+    ((struct e2m_handle *)handle)->open = 0;
+}
+
+/** The model's `handle_node`, as ext2's `open_node`. */
+static void *e2m_node(void *handle)
+{
+    return ((struct e2m_handle *)handle)->node;
+}
+
+/** The model's `getattr`, which knows the inode flags of its one file. */
+static int e2m_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
+{
+    (void)mnt;
+    k_memset(st, 0, sizeof(*st));
+    e2m_attr = node;
+    if (node != &e2m_file) {
+        return -EINVAL;
+    }
+    st->mode = 0100644u;
+    st->flags = e2m_flags;
+    st->flags_known = 1;
+    return 0;
+}
+
+/** The model's `write`: the count, with the handle recorded. */
+static int32_t e2m_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
+                         uint64_t offset)
+{
+    (void)mnt;
+    (void)buf;
+    (void)offset;
+    e2m_data = handle;
+    e2m_calls++;
+    return (int32_t)count;
+}
+
+/** The model's `truncate`: 0, with the handle recorded. */
+static int e2m_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
+{
+    (void)mnt;
+    (void)size;
+    e2m_data = handle;
+    e2m_calls++;
+    return 0;
+}
+
+/** The model's `fallocate`: 0, with the handle recorded. */
+static int e2m_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset,
+                         uint64_t len)
+{
+    (void)mnt;
+    (void)mode;
+    (void)offset;
+    (void)len;
+    e2m_data = handle;
+    e2m_calls++;
+    return 0;
+}
+
+static const struct vfs_ops e2m_ops = {
+    .getattr = e2m_getattr,
+    .open = e2m_open,
+    .release = e2m_release,
+    .write = e2m_write,
+    .truncate = e2m_truncate,
+    .fallocate = e2m_fallocate,
+    .handle_node = e2m_node,
+};
+static const struct vfs_type e2m_type = {.name = "ext2", .ops = &e2m_ops};
+static struct vfs_mount e2m_mount;
+
+/**
+ * Open the ext2 model's file twice, as a loop attachment and an unrelated
+ * opener of its image would, and require vfs_truncate and vfs_fallocate to
+ * refuse either handle with EBUSY while the file backs a loop device; then,
+ * with no attachment, require vfs_write, vfs_truncate and vfs_fallocate to
+ * give the type the handle and the file page cache and the flag check the
+ * node.
+ */
+static void ext2_handles(void)
+{
+    void *attached = NULL, *other = NULL;
+
+    k_memset(&e2m_mount, 0, sizeof(e2m_mount));
+    e2m_mount.type = &e2m_type;
+    e2m_mount.state = VFS_ACTIVE;
+    check(vfs_open_node(&e2m_mount, &e2m_file, 2, &attached) == 0 &&
+              vfs_open_node(&e2m_mount, &e2m_file, 2, &other) == 0,
+          "two opens of an ext2 file");
+    check(attached != other && attached != &e2m_file && other != &e2m_file,
+          "each open of an ext2 file has a handle of its own, never the node");
+    loop_table[0].mnt = &e2m_mount;
+    loop_table[0].node = &e2m_file;
+    loop_table[0].handle = attached;
+    loop_table[0].attached = 1;
+    e2m_calls = 0;
+    check(vfs_fallocate(&e2m_mount, other, 0, 0, 4096) == -EBUSY,
+          "fallocate by another open of a loop's backing file is EBUSY");
+    check(vfs_truncate(&e2m_mount, other, 0) == -EBUSY, "and so is a truncation by that open");
+    check(vfs_fallocate(&e2m_mount, attached, 0, 0, 4096) == -EBUSY &&
+              vfs_truncate(&e2m_mount, attached, 0) == -EBUSY,
+          "and by the attachment's own handle");
+    check(e2m_calls == 0, "the type never sees a change of a loop's backing file");
+    k_memset(&loop_table[0], 0, sizeof(loop_table[0]));
+    forgot_node = NULL;
+    check(vfs_write(&e2m_mount, other, "x", 1, 0) == 1 && e2m_data == other &&
+              forgot_mnt == &e2m_mount && forgot_node == &e2m_file,
+          "vfs_write gives the type the handle and forgets the node's cached pages");
+    forgot_node = NULL;
+    check(vfs_truncate(&e2m_mount, other, 0) == 0 && e2m_data == other && forgot_node == &e2m_file,
+          "and so does vfs_truncate");
+    forgot_node = NULL;
+    e2m_attr = NULL;
+    check(vfs_fallocate(&e2m_mount, other, 0, 0, 4096) == 0 && e2m_data == other &&
+              forgot_node == &e2m_file && e2m_attr == &e2m_file,
+          "and vfs_fallocate, which reads the node's flags");
+    e2m_flags = VFS_FL_IMMUTABLE;
+    e2m_calls = 0;
+    check(vfs_fallocate(&e2m_mount, other, 0, 0, 4096) == -EPERM && e2m_calls == 0,
+          "fallocate of an immutable ext2 file is EPERM by its node's flags");
+    e2m_flags = VFS_FL_APPEND;
+    check(vfs_fallocate(&e2m_mount, other, 1, 0, 4096) == 0 &&
+              vfs_fallocate(&e2m_mount, other, 2, 0, 4096) == -EPERM,
+          "and an append-only file takes only a plain or keep-size allocation");
+    e2m_flags = 0;
+    vfs_release(&e2m_mount, attached);
+    vfs_release(&e2m_mount, other);
+    check(!e2m_handles[0].open && !e2m_handles[1].open && e2m_mount.opens == e2m_mount.releases,
+          "both ext2 opens are released");
+}
 
 /** All fixture files use the mounted KRFFS adapter. */
 static int mnt_is_root(const struct vfs_mount *mnt)
@@ -831,6 +1013,13 @@ static void publication_open(int flags, int before)
     }
     second = fd_slot(reader.fds, opened_fd)->ofd;
     check(first->vnode == hole, "first relocation uses earlier free extent");
+    check(handle_node(&mount, first->fhandle) == first->vnode,
+          "a mounted KRFFS open record gives the node where the file now is");
+    loop_table[0].mnt = &mount;
+    loop_table[0].node = first->vnode;
+    check(vfs_truncate(&mount, first->fhandle, 0) == -EBUSY,
+          "a truncation of a mounted KRFFS loop's backing file by its open record is EBUSY");
+    k_memset(&loop_table[0], 0, sizeof(loop_table[0]));
     moved = first->vnode;
     k_memset(payload, 'C', sizeof(payload));
     check(kv_write(&mount, first->fhandle, payload, sizeof(payload), 0) == sizeof(payload),
@@ -1155,6 +1344,7 @@ static void cached_walks(void)
  * those pass: 0 when every row passes, 1 otherwise. */
 int main(void)
 {
+    loops = loop_table;
     publication_open(0, 0);
     publication_open(O_CREAT, 0);
     publication_open(0, 1);
@@ -1165,7 +1355,11 @@ int main(void)
         cached_walks();
     }
     if (!failures) {
-        printf("krffs-open: result: pass: publication open, offset reuse and cached walks\n");
+        ext2_handles();
+    }
+    if (!failures) {
+        printf("krffs-open: result: pass: publication open, offset reuse, cached walks and "
+               "ext2 handles\n");
     }
     return failures != 0;
 }
