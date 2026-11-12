@@ -20,6 +20,7 @@ PC_C_SRC = sys/arch/x86/boot.c \
     sys/arch/x86/serial.c \
     sys/arch/x86/module.c \
     sys/arch/x86/isr.c \
+    sys/arch/x86/leave.c \
     sys/arch/x86/vector.c \
     sys/arch/x86/pic.c \
     sys/arch/x86/board.c \

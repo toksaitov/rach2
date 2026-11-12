@@ -1306,8 +1306,9 @@ int signal_pending(void);
  * the process, or give one handler its frame; restart a restartable system
  * call a signal interrupted when no handler runs or the handler has
  * SA_RESTART; and free the records of ended threads (`proc_dead_threads`).
- * `isr_leave` calls it after every router, with interrupts off. Defined in
- * syscall_proc.c.
+ * `isr_leave_work` calls it on a return to user mode that has signal work,
+ * with interrupts on and the big lock held, and again while the thread's
+ * `sig_woken` stays set. Defined in syscall_proc.c.
  */
 struct isr_params;
 void deliver_signals(struct isr_params *tf);

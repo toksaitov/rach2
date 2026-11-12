@@ -38,8 +38,8 @@ void rseq_migrate(struct process *p);
  * registration asked for it, abort the critical section it is in and
  * write its processor into its area. An area that cannot be read or
  * written, or names a section that is not valid, is SIGSEGV, delivered at
- * once, as Linux's force_sigsegv. Interrupts are off and the big lock
- * held. */
+ * once, as Linux's force_sigsegv. Interrupts are on, for its user copies,
+ * and the big lock held (`isr_leave_work`). */
 void rseq_return(isr_params_t *params);
 
 /** The current thread's part of the delivery of `signo` to a handler, before

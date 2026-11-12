@@ -26,6 +26,7 @@
 #include "../../timer.h"
 #include "../../watchdog.h"
 #include "debugreg.h"
+#include "leave.h"
 #if defined(__x86_64__)
 #include "../x86_64/sysnr.h"
 #else
@@ -954,90 +955,6 @@ int isr_call_entry(const process_t *p, uint32_t *cmd)
 void isr_paranoid_router(isr_params_t *params)
 {
     _dispatch(params);
-}
-
-/**
- * The return to user mode's work, which the thread's work bits or threads
- * ended and not yet freed (`proc_dead_threads`) call for, with interrupts
- * off and the big lock held when `locked` says the entry took it, which
- * this gives back, as Linux's `exit_to_user_mode_loop` acts only on the
- * work its flags name (kernel/entry/common.c:90-127). The bits are cleared
- * before the work they stand for is tested, so a bit set meanwhile stays
- * for the next return. In order: the loopback ring's datagrams
- * (`syscall_loop_drain`) and a switch the thread owes
- * (`sched_take_preempt`); then, under the big lock, taken here when the
- * entry ran without it, the signals of the tick the thread has waiting
- * (`proc_tick_signals_own`), a signal to deliver and the thread's rseq
- * area (`rseq_return`), when `signal_return_work` or `rseq_notify` says so;
- * then the debug registers (`debugreg_resume`) and a timed wake's record
- * (`waketime_return`). The user copies of signal and rseq work run with
- * interrupts on; after they go off again, a migration or tick during that
- * work makes it run again, and the bits are taken again, so that a switch,
- * a datagram or an rseq notice that came meanwhile sends the work round
- * once more, as Linux rereads its flags with interrupts off before its loop
- * ends (kernel/entry/common.c:122-127). The work is marked in a call, as a
- * user fault is, so a timer defers its switch and cannot race the rseq
- * event fetch and clear; a fault may still sleep. Work that stays, a
- * tracer's and a signal flag a delivery left set, keeps its bits for the
- * next return.
- */
-K_NOINLINE static void isr_leave_work(isr_params_t *params, process_t *p, int locked)
-{
-    unsigned int work = proc_work_take(p, WORK_EXIT), keep = 0;
-    uint32_t flags;
-    uint32_t was_in_call;
-    int signalled = 0;
-
-    for (;;) {
-        if (work & WORK_LOOP) {
-            syscall_loop_drain();
-        }
-        if (work & WORK_RESCHED) {
-            sched_take_preempt();
-        }
-        if (!signal_return_work(params) && !p->rseq_notify) {
-            break;
-        }
-        if (!locked) {
-            bkl_enter();
-            locked = 1;
-        }
-        was_in_call = p->in_syscall;
-        p->in_syscall = 1;
-        flags = kirq_save();
-        do {
-            proc_tick_signals_own();
-            kirq_restore(flags | 0x200u);
-            deliver_signals(params);
-            rseq_return(params);
-            flags = kirq_save();
-        } while (p->rseq_notify || p->tick_sigs);
-        p->in_syscall = was_in_call;
-        signalled = 1;
-        work = (work & (WORK_DEBUGREG | WORK_WAKETIME)) |
-               proc_work_take(p, WORK_EXIT & ~(WORK_SIGNAL | WORK_TRACE));
-        if (!(work & (WORK_RESCHED | WORK_LOOP)) && !p->rseq_notify) {
-            break;
-        }
-    }
-    if (signalled && signal_return_work(params)) {
-        keep |= WORK_SIGNAL;
-    }
-    if (signalled && (p->ptrace & (PT_SYSCALL | PT_STEP))) {
-        keep |= WORK_TRACE;
-    }
-    if (work & WORK_DEBUGREG) {
-        debugreg_resume();
-    }
-    if (work & WORK_WAKETIME) {
-        waketime_return();
-    }
-    if (keep) {
-        proc_work_set(p, keep);
-    }
-    if (locked) {
-        bkl_exit();
-    }
 }
 
 /**

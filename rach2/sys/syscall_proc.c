@@ -6315,17 +6315,20 @@ static void sig_act_default(int signo)
 
 /**
  * Only a frame that returns to user mode is acted on, and one handler at most
- * is given a frame on each return. A pending SIGKILL ends the process before
- * anything else is taken, as Linux 6.12.115's get_signal ends a thread of a
- * process whose end has begun (kernel/signal.c:2772-2784), since the SIGKILL
- * of a fatal signal (`sig_complete`) may share the pending set with a lower
- * signal that has a handler. Otherwise a deliverable signal, one pending for
- * the thread or for its process and not blocked, is taken (`sig_dequeue`), the
- * lowest-numbered of the thread's own or, when it has none, of its process's,
- * and is ignored, gets its default action (`sig_act_default`), or gets a
- * handler frame. The handler runs with its sa_mask blocked as well, and its
- * own signal unless SA_NODEFER; the signals still pending are acted on when
- * its sigreturn comes back through here. SA_RESETHAND resets the action
+ * is given a frame on each call; the return calls this again while the
+ * thread's signal-work flag stays set (`isr_leave_work`). A pending SIGKILL
+ * ends the process before anything else is taken, as Linux 6.12.115's
+ * get_signal ends a thread of a process whose end has begun
+ * (kernel/signal.c:2772-2784), since the SIGKILL of a fatal signal
+ * (`sig_complete`) may share the pending set with a lower signal that has a
+ * handler. Otherwise a deliverable signal, one pending for the thread or for
+ * its process and not blocked, is taken (`sig_dequeue`), the lowest-numbered
+ * of the thread's own or, when it has none, of its process's, and is
+ * ignored, gets its default action (`sig_act_default`), or gets a handler
+ * frame. The handler runs with its sa_mask blocked as well, and its own
+ * signal unless SA_NODEFER; a signal still deliverable gets the next call's
+ * frame, above this one, and those the handler's mask holds back are acted
+ * on when its sigreturn comes back through here. SA_RESETHAND resets the action
  * after the frame has the handler. A thread whose process is stopped parks
  * here first; a traced one reports the stop to its tracer instead and looks
  * at the stop again when it resumes, so one its tracer detached meanwhile
