@@ -5506,12 +5506,14 @@ int fd_call_lock(int fd)
  * The release runs under the big lock, which the objects of every type not
  * marked unlocked still need; an object marked unlocked is released without
  * it, its last descriptor closing it as Linux's last `fput` releases a
- * file (`fd_release_objects`).
+ * file (`fd_release_objects`), and so is a file or directory that
+ * `file_vfs_unlocked` admits, whose description's end takes the big lock
+ * where it needs it (`fd_ofd_unref`).
  */
 static void fd_teardown(fd_table_t *table, int fd)
 {
     fd_entry_t *e = fd_slot(table, fd);
-    int big = !file_ops_unlocked(e);
+    int big = !file_ops_unlocked(e) && !file_vfs_unlocked(e);
 
     if (big) {
         bkl_enter();
@@ -5533,6 +5535,26 @@ static int epoll_wait_holds(const process_t *t, int fd)
 }
 
 /**
+ * Whether no sharer of `table` but the caller is inside an epoll_wait, read
+ * under the table's lock after the caller marked its descriptor closing. A
+ * wait sets `epoll_waiting` before its scan takes any hold, each under the
+ * table's lock, so a hold taken before the mark shows its flag here, and a
+ * scan after the mark takes no hold on the descriptor.
+ */
+static int epoll_waits_none(fd_table_t *table)
+{
+    process_t *t;
+    uint32_t flags = fd_table_lock(table);
+    int none = 1;
+
+    for (t = table->sharers; t && none; t = t->fd_sharer_next) {
+        none = t == current_proc || !t->epoll_waiting;
+    }
+    fd_table_unlock(table, flags);
+    return none;
+}
+
+/**
  * Let go of descriptor `fd` of `table` in each epoll_wait of another sharer
  * that holds it and sleeps, so that a close releases it at once, as a
  * close on Linux does while a thread waits in epoll_wait: the wait comes
@@ -5549,6 +5571,9 @@ static int epoll_wait_holds(const process_t *t, int fd)
  * the lock up, so a wait that holds `fd` is seen here asleep, with its
  * queues published, and not between its scan and its sleep, where it
  * would sleep on with the hold and the close would never end.
+ *
+ * A table whose sharers have no epoll_wait under way is passed by without
+ * the big lock (`epoll_waits_none`).
  */
 static int epoll_waits_let_go(fd_table_t *table, int fd)
 {
@@ -5556,7 +5581,7 @@ static int epoll_waits_let_go(fd_table_t *table, int fd)
     uint32_t flags;
     int any = 0;
 
-    if (table->refs < 2) {
+    if (table->refs < 2 || epoll_waits_none(table)) {
         return 0;
     }
     bkl_enter();

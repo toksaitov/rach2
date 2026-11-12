@@ -375,12 +375,35 @@ void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to)
 }
 
 /**
+ * Whether the end of description `ofd`, whose count reached 0, needs the
+ * big lock: unless it names no file, or names a file or a directory of a
+ * type that sets `reads_unlocked`, as ext2 does, with no pin, no access
+ * claim and no device or synthetic node, and in either case no record lock
+ * and no inotify watch exists. Such a type's `release` and `put` and the
+ * name record (`vfs_name_put`) take the big lock where they need it, as
+ * Linux's last `fput` of a file takes no lock but its own (`__fput`,
+ * fs/file_table.c:442). With the count at 0 no descriptor names the
+ * description, so no record lock on it can be taken after the look.
+ */
+static int ofd_end_big(const struct open_file *ofd)
+{
+    if (lock_any() || (inotify_watches && (ofd->watch_flags & OFD_WATCH_OPEN))) {
+        return 1;
+    }
+    if (ofd->vmnt) {
+        return ofd->dev_mnt || ofd->synth_mnt || ofd->pin || ofd->access ||
+               !vfs_mount_base(ofd->vmnt)->type->reads_unlocked;
+    }
+    return ofd->dev_mnt || ofd->synth_mnt || ofd->name || ofd->pin || ofd->access || ofd->dirpath ||
+           ofd->leaf;
+}
+
+/**
  * The count falls in one atomic step, so of two holders that let go at once
  * on different processors exactly one sees it reach 0 and ends the
  * description. The end may sleep, in a file system's release. It takes the
- * big lock, which the file systems, inotify and the record locks still
- * need, unless the description names no file and no lock exists, as for an
- * anonymous object's descriptor closed without the big lock.
+ * big lock, which most file systems, inotify and the record locks still
+ * need, where `ofd_end_big` says.
  */
 void fd_ofd_unref(struct open_file *ofd)
 {
@@ -388,8 +411,7 @@ void fd_ofd_unref(struct open_file *ofd)
         if (count_add(&ofd->refcount, -1) == 0) {
             struct ofd_rec **link = &ofds;
             struct ofd_rec *rec = ofd_rec_of(ofd);
-            int big = ofd->vmnt || ofd->dev_mnt || ofd->synth_mnt || ofd->name || ofd->pin ||
-                      ofd->access || ofd->dirpath || ofd->leaf || lock_any();
+            int big = ofd_end_big(ofd);
             uint32_t flags;
 
             if (big) {
@@ -401,10 +423,10 @@ void fd_ofd_unref(struct open_file *ofd)
             spin_unlock_irqrestore(&ofd_lock, flags);
             kfree(rec->spare);
             rec->spare = NULL;
-            if (lock_any()) {
+            if (big && lock_any()) {
                 lock_ofd_gone(ofd);
             }
-            if (ofd->vmnt && (ofd->watch_flags & OFD_WATCH_OPEN)) {
+            if (big && ofd->vmnt && (ofd->watch_flags & OFD_WATCH_OPEN)) {
                 inotify_desc(ofd, (ofd->watch_flags & OFD_WATCH_WRITE) ? IN_CLOSE_WRITE
                                                                        : IN_CLOSE_NOWRITE);
             }

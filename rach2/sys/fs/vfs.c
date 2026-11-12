@@ -2895,7 +2895,7 @@ int vfs_open_node(struct vfs_mount *mnt, void *node, int flags, void **handle)
     } else {
         *handle = node;
     }
-    mnt->opens++;
+    mount_count_add(&mnt->opens, 1);
     return 0;
 }
 
@@ -2904,7 +2904,7 @@ void vfs_release(struct vfs_mount *mnt, void *handle)
     if (mnt->type->ops->release) {
         mnt->type->ops->release(mount_base(mnt), handle);
     }
-    mnt->releases++;
+    mount_count_add(&mnt->releases, 1);
 }
 
 int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vfs_dirent *ent)
@@ -5645,12 +5645,25 @@ void vfs_reap_detached(void)
 }
 
 /** Reap the detached mounts when `mnt`, which a hold or a description just
- * let go of, is one no live namespace sees and nothing holds any more. */
+ * let go of, is one no live namespace sees and nothing holds any more. The
+ * namespaces and the reap are under the big lock, which a caller without it
+ * takes once the count says a reap may be due. */
 static void reap_if_detached(const struct vfs_mount *mnt)
 {
-    if (mnt->refs == 0 && !mount_permanent(mnt) && mnt->state == VFS_ACTIVE &&
-        vfs_mount_unseen(mnt)) {
+    int big;
+
+    if (mnt->refs != 0 || mount_permanent(mnt) || mnt->state != VFS_ACTIVE) {
+        return;
+    }
+    big = !bkl_held();
+    if (big) {
+        bkl_enter();
+    }
+    if (vfs_mount_unseen(mnt)) {
         vfs_reap_detached();
+    }
+    if (big) {
+        bkl_exit();
     }
 }
 
