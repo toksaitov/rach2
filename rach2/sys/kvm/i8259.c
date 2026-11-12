@@ -1,5 +1,5 @@
 /* The guest's cascaded 8259 PICs, their ports and Linux's saved state.
- * All state changes run under the big lock; irqfd callbacks defer to it. */
+ * Everything here runs under the controllers' lock (irq.c). */
 
 #include "kvm.h"
 #include "../lib/kerrno.h"
@@ -149,9 +149,15 @@ int kvm_pic_set(struct kvm_vm *vm, uint32_t pin, uint32_t source, int level)
 int kvm_pic_pending(struct kvm_vm *vm)
 {
     struct guest_pic *p = pic_of(vm);
-    int pin, chip = 0;
+    int pin, chip = 0, vector;
+    uint32_t flags;
 
-    if (!p || !p->output) {
+    if (!p || !*(volatile int *)&p->output) {
+        return -1;
+    }
+    flags = kvm_chip_lock(vm);
+    if (!p->output) {
+        kvm_chip_unlock(vm, flags);
         return -1;
     }
     pin = pic_pin(p, 0);
@@ -159,7 +165,9 @@ int kvm_pic_pending(struct kvm_vm *vm)
         chip = 1;
         pin = pic_pin(p, 1);
     }
-    return p->chip[chip].irq_base + (pin < 0 ? 7 : pin);
+    vector = p->chip[chip].irq_base + (pin < 0 ? 7 : pin);
+    kvm_chip_unlock(vm, flags);
+    return vector;
 }
 
 /** Perform INTA on the master and, for IRQ2, on the slave. */
@@ -167,10 +175,12 @@ int kvm_pic_ack(struct kvm_vm *vm)
 {
     struct guest_pic *p = pic_of(vm);
     int pin, chip = 0, vector;
+    uint32_t flags;
 
     if (!p) {
         return -1;
     }
+    flags = kvm_chip_lock(vm);
     p->output = 0;
     pin = pic_pin(p, 0);
     if (pin >= 0) {
@@ -185,6 +195,7 @@ int kvm_pic_ack(struct kvm_vm *vm)
     }
     vector = p->chip[chip].irq_base + (pin < 0 ? 7 : pin);
     pic_update(vm);
+    kvm_chip_unlock(vm, flags);
     return vector;
 }
 

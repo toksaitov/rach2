@@ -1,5 +1,5 @@
 /* The guest's 24-pin IOAPIC, with Linux's routing and EOI state.
- * Port, ioctl and deferred irqfd operations hold the big lock. */
+ * Everything here runs under the controllers' lock (irq.c). */
 
 #include "kvm.h"
 #include "../lib/kerrno.h"
@@ -123,14 +123,16 @@ static int ioapic_level(struct kvm_vm *vm, uint32_t pin, int level, int status)
 int kvm_ioapic_counts(struct kvm_vm *vm, uint32_t pin, uint32_t *counts)
 {
     struct guest_ioapic *p = ioapic_of(vm);
-    uint32_t i;
+    uint32_t i, flags;
 
     if (!p || pin >= KVM_IOAPIC_NUM_PINS) {
         return -1;
     }
+    flags = kvm_chip_lock(vm);
     for (i = 0; i < KVM_PIN_STEPS; i++) {
         counts[i] = p->counts[pin][i];
     }
+    kvm_chip_unlock(vm, flags);
     return 0;
 }
 
@@ -174,17 +176,38 @@ int kvm_ioapic_set(struct kvm_vm *vm, uint32_t pin, uint32_t source, int level, 
     return ioapic_level(vm, pin, p->sources[pin] != 0, status);
 }
 
+/** Whether the EOI of `vector` on `v` concerns `p`: a pin routes the vector,
+ * or the RTC's count waits for it on `v`. Each entry is read in one load
+ * without the lock; an entry that changes meanwhile is the guest's race
+ * with its own EOI, which Linux's scan of the routes on a request has as
+ * well. */
+static int eoi_wanted(const struct guest_ioapic *p, const struct kvm_vcpu *v, uint32_t vector)
+{
+    uint32_t pin;
+
+    if (v->index < KVM_MAX_VCPUS && p->rtc_vector[v->index] == vector) {
+        return 1;
+    }
+    for (pin = 0; pin < KVM_IOAPIC_NUM_PINS; pin++) {
+        if ((((const volatile uint64_t *)p->state.redirtbl)[pin] & 0xFFu) == vector) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** Broadcast an EOI to matching pins and then redeliver asserted levels. */
 void kvm_ioapic_eoi(struct kvm_vcpu *v, uint32_t vector, int level, int directed)
 {
     struct kvm_vm *vm = v->vm;
     struct guest_ioapic *p = ioapic_of(vm);
-    uint32_t pin;
+    uint32_t pin, flags;
     uint64_t *entry;
 
-    if (!p) {
+    if (!p || !eoi_wanted(p, v, vector)) {
         return;
     }
+    flags = kvm_chip_lock(vm);
     if (v->index < KVM_MAX_VCPUS && p->rtc_vector[v->index] == vector) {
         KVM_VCPU_CLEAR(p->rtc_pending, v->index);
     }
@@ -202,10 +225,12 @@ void kvm_ioapic_eoi(struct kvm_vcpu *v, uint32_t vector, int level, int directed
             ioapic_deliver(vm, pin, 0);
         }
     }
+    kvm_chip_unlock(vm, flags);
 }
 
-/** Reconstruct the RTC's outstanding EOI after an APIC state restore. */
-void kvm_ioapic_restore(struct kvm_vcpu *v)
+/** Reconstruct the RTC's outstanding EOI after an APIC state restore,
+ * under the controllers' lock. */
+static void rtc_restore(struct kvm_vcpu *v)
 {
     struct guest_ioapic *p = ioapic_of(v->vm);
     uint64_t entry;
@@ -225,6 +250,18 @@ void kvm_ioapic_restore(struct kvm_vcpu *v)
     } else {
         KVM_VCPU_CLEAR(p->rtc_pending, v->index);
     }
+}
+
+void kvm_ioapic_restore(struct kvm_vcpu *v)
+{
+    uint32_t flags;
+
+    if (!ioapic_of(v->vm)) {
+        return;
+    }
+    flags = kvm_chip_lock(v->vm);
+    rtc_restore(v);
+    kvm_chip_unlock(v->vm, flags);
 }
 
 /** Copy Linux's IOAPIC record; a restore reinjects its pending inputs. */
@@ -248,7 +285,7 @@ void kvm_ioapic_state(struct kvm_vm *vm, struct kvm_ioapic_state *state, int set
         }
     }
     for (pin = 0; pin < vm->nr_vcpus; pin++) {
-        kvm_ioapic_restore(vm->vcpus[pin]);
+        rtc_restore(vm->vcpus[pin]);
     }
 }
 

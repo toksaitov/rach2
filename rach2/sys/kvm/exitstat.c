@@ -1,7 +1,8 @@
 /*
  * exitstat.c: the guests' exits counted by the processor's exit code since
- * boot, with the TSC cycles of each kind's entry, run and exit, its wait for
- * the big lock and its handling, read from the debug file kvm/exit_stats.
+ * boot, with the TSC cycles each kind waits for the big lock and spends in
+ * the kernel, read from the debug file kvm/exit_stats. KVM_RUN runs without
+ * the big lock, so the counts are kept under a spinlock of their own.
  */
 
 #include "kvm.h"
@@ -14,7 +15,7 @@
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
-#include "../proc/percpu.h"
+#include "../proc/smp.h"
 
 /*
  * The rows. A code below ROW_HIGH has the row of its number, SVM's
@@ -33,46 +34,19 @@
 /*
  * One kind's counts. `kernel` exits were handled in the kernel and the
  * guest entered again; `user` ended KVM_RUN, most of them for the caller
- * to answer. The rest are TSC cycles, of the run each exit ends and of the
- * exit's handling after it, in the order they pass:
- *
- *   entry    from just before the run loop lets the big lock go for the
- *            run to the entry instruction: the lock let go, the guest's
- *            state loaded and the VMCS or VMCB brought up to date;
- *   run      from the entry instruction to the exit: the processor's
- *            entry and exit and the guest's own run;
- *   exit     from the exit to the backend's return: the host's state put
- *            back and the exit read;
- *   wait     from there to the big lock taken back;
- *   handle   from there to just before the big lock is let go for the
- *            next entry, or to KVM_RUN's return;
- *   prepare  the part of `handle` from the run loop's first pass over its
- *            top after the exit was handled to the end of `handle`: a
- *            switch to another thread at the slice's end, the requests,
- *            the local APIC's work, a halted vCPU's sleep until an
- *            interrupt, and the event to inject.
- *
- * A HLT the kernel handles only marks the vCPU halted, and its sleep comes
- * at the loop's top, so both `handle` and `prepare` count it. entry, run
- * and exit count only the runs whose backend timed them; `prepare` only the
- * exits handled in the kernel.
+ * to answer. `wait` is the TSC cycles the exit's handling spent waiting for
+ * the big lock (`kvm_bkl_enter`), and `handle` the rest of the time from
+ * the end of the guest's run to the next entry or to KVM_RUN's return; a
+ * HLT the kernel handles counts its sleep until an interrupt in `handle`.
  */
 struct row {
     uint64_t exits, kernel, user, wait, handle, prepare, entry, run, exit;
 };
 
-/*
- * Each processor's ROWS rows, made for the processors started by
- * kvm_exitstat_start and again at each VM's creation, since the others
- * start after KVM, as Linux keeps a vCPU's exits in its own counters
- * (arch/x86/kvm/x86.c:10657); NULL for any other, whose exits go
- * uncounted. A processor writes only its own rows, with interrupts off, so
- * no lock guards them; a read or a clear from another processor may miss
- * an exit counted at the same time. An exit's account may close on
- * another processor than the one that opened it, so only the sums over
- * the processors, which kvm/exit_stats shows, mean anything.
- */
-static struct row *rows[NR_CPUS];
+/* The rows and the entries since boot, under `rows_lock`. */
+static struct row rows[ROWS];
+static uint64_t guest_exits;
+static struct spinlock rows_lock = SPINLOCK_INIT_NAMED("kvm_exitstat");
 
 /* A code and its name, as Linux's SVM_EXIT_REASONS and VMX_EXIT_REASONS
  * give them to its kvm_exit trace event. */
@@ -306,64 +280,66 @@ static const char *name_of(uint32_t code)
     return NULL;
 }
 
-void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t entry, uint64_t left, uint64_t held)
+uint64_t kvm_exit_count(void)
 {
-    struct row *mine = rows[arch_cpu_id()];
-    uint32_t r;
+    uint32_t flags = spin_lock_irqsave(&rows_lock);
+    uint64_t n = guest_exits;
 
-    if (!mine) {
-        v->xs_row = -1;
-        v->xs_prep = 0;
-        v->xs_in = 0;
-        v->xs_out = 0;
-        return;
-    }
-    if (v->xs_row >= 0) {
-        mine[v->xs_row].handle += entry - v->xs_mark;
-        mine[v->xs_row].kernel++;
-        if (v->xs_prep) {
-            mine[v->xs_row].prepare += entry - v->xs_prep;
-        }
-    }
-    r = row_of(v->hw_exit);
-    mine[r].exits++;
-    mine[r].wait += held - left;
-    if (v->xs_in && v->xs_in >= entry && v->xs_out >= v->xs_in && left >= v->xs_out) {
-        mine[r].entry += v->xs_in - entry;
-        mine[r].run += v->xs_out - v->xs_in;
-        mine[r].exit += left - v->xs_out;
-    }
-    v->xs_prep = 0;
-    v->xs_in = 0;
-    v->xs_out = 0;
+    spin_unlock_irqrestore(&rows_lock, flags);
+    return n;
+}
+
+void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t left)
+{
+    uint32_t r = row_of(v->hw_exit), flags;
+
+    flags = spin_lock_irqsave(&rows_lock);
+    guest_exits++;
+    rows[r].exits++;
+    spin_unlock_irqrestore(&rows_lock, flags);
     v->xs_row = (int32_t)r;
-    v->xs_mark = held;
+    v->xs_mark = left;
+    v->xs_wait = 0;
 }
 
 void kvm_exitstat_prepare(struct kvm_vcpu *v)
 {
-    if (v->xs_row >= 0 && !v->xs_prep) {
-        v->xs_prep = arch_cycles();
-    }
-}
-
-void kvm_exitstat_done(struct kvm_vcpu *v)
-{
+    uint64_t spent;
     uint32_t flags;
-    struct row *mine;
+    struct row *r;
 
     if (v->xs_row < 0) {
         return;
     }
-    flags = kirq_save();
-    mine = rows[arch_cpu_id()];
-    if (mine) {
-        mine[v->xs_row].handle += arch_cycles() - v->xs_mark;
-        mine[v->xs_row].user++;
+    spent = arch_cycles() - v->xs_mark;
+    if (v->xs_wait > spent) {
+        v->xs_wait = spent; /* the TSCs of two processors differ a little */
     }
-    v->xs_prep = 0;
+    flags = spin_lock_irqsave(&rows_lock);
+    r = &rows[v->xs_row];
+    r->wait += v->xs_wait;
+    r->handle += spent - v->xs_wait;
+    if (to_user) {
+        r->user++;
+    } else {
+        r->kernel++;
+    }
+    spin_unlock_irqrestore(&rows_lock, flags);
     v->xs_row = -1;
     kirq_restore(flags);
+}
+
+void kvm_bkl_enter(struct kvm_vcpu *v)
+{
+    uint64_t start;
+
+    if (!v || v->xs_row < 0 || bkl_held()) {
+        bkl_enter();
+        return;
+    }
+    start = arch_cycles();
+    bkl_enter();
+    v->xs_wait += arch_cycles() - start;
 }
 
 /* A text being written: `len` bytes so far, of which those below `cap`
@@ -449,25 +425,15 @@ static int32_t exitstat_show(void *data, char *buf, uint32_t cap)
     put_str(&o, "\ncode exits kernel user wait_cycles handle_cycles prepare_cycles entry_cycles "
                 "run_cycles exit_cycles name\n");
     for (i = 0; i < ROWS; i++) {
-        struct row sum;
-        uint32_t code = code_of(i);
+        uint32_t code = code_of(i), flags;
         const char *name = i == ROW_OTHER ? "other" : name_of(code);
+        struct row row;
+        const struct row *r = &row;
 
-        k_memset(&sum, 0, sizeof(sum));
-        for (c = 0; c < NR_CPUS; c++) {
-            if (rows[c]) {
-                sum.exits += rows[c][i].exits;
-                sum.kernel += rows[c][i].kernel;
-                sum.user += rows[c][i].user;
-                sum.wait += rows[c][i].wait;
-                sum.handle += rows[c][i].handle;
-                sum.prepare += rows[c][i].prepare;
-                sum.entry += rows[c][i].entry;
-                sum.run += rows[c][i].run;
-                sum.exit += rows[c][i].exit;
-            }
-        }
-        if (sum.exits == 0) {
+        flags = spin_lock_irqsave(&rows_lock);
+        row = rows[i];
+        spin_unlock_irqrestore(&rows_lock, flags);
+        if (r->exits == 0) {
             continue;
         }
         put_hex(&o, code);
@@ -506,6 +472,7 @@ static int32_t exitstat_show(void *data, char *buf, uint32_t cap)
  * account. */
 static int32_t exitstat_store(void *data, const char __user *buf, uint32_t len)
 {
+    uint32_t flags;
     char c[2];
     uint32_t i;
 
@@ -519,11 +486,9 @@ static int32_t exitstat_store(void *data, const char __user *buf, uint32_t len)
     if (c[0] != '0' || (len == 2 && c[1] != '\n')) {
         return -EINVAL;
     }
-    for (i = 0; i < NR_CPUS; i++) {
-        if (rows[i]) {
-            k_memset(rows[i], 0, ROWS * sizeof(struct row));
-        }
-    }
+    flags = spin_lock_irqsave(&rows_lock);
+    k_memset(rows, 0, sizeof(rows));
+    spin_unlock_irqrestore(&rows_lock, flags);
     return (int32_t)len;
 }
 

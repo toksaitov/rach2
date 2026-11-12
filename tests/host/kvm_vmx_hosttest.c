@@ -5,8 +5,8 @@
  * host-deps: rach2/sys/kvm/msr.c rach2/sys/kvm/emulate.c rach2/sys/kvm/decode.c
  * host-deps: rach2/sys/kvm/hyperv.c rach2/sys/kvm/pvclock.c
  * host-deps: rach2/sys/kvm/binstats.c rach2/sys/kvm/exitstat.c
- * host-deps: rach2/sys/kvm/pmu.c
- * host-deps: tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/fd_flat.c tests/host/compat/mutex_none.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * vmx.c is the kernel's, included whole, so that its table of operations
@@ -323,21 +323,32 @@ uint64_t arch_cycles(void)
     return model_tsc;
 }
 
-/* The big lock's depth, the interrupt flag and a pending signal. */
-static int bkl_depth = 1, irq_on = 1;
+/* The big lock's depth and the interrupt flag. KVM_RUN is called without
+ * the big lock, as the system call layer calls an unlocked file's
+ * operations. */
+static int bkl_depth, irq_on = 1;
 
-int bkl_drop(void)
+/** Take the big lock: one level deeper. */
+void bkl_enter(void)
 {
-    int d = bkl_depth;
-
-    bkl_depth = 0;
-    return d;
+    bkl_depth++;
 }
 
-void bkl_take(int depth)
+/** Give back one level of the big lock. */
+void bkl_exit(void)
 {
-    bkl_depth = depth;
+    bkl_depth--;
 }
+
+/** Whether this thread holds the big lock. */
+int bkl_held(void)
+{
+    return bkl_depth > 0;
+}
+
+/** Nothing waits on this processor's requests in a test of one thread. */
+void smp_service(void)
+{}
 
 uint32_t kirq_save(void)
 {
@@ -438,14 +449,27 @@ int vm_device_map(vma_t *vma, const struct vm_device_ops *ops, void *obj, uint32
     return 0;
 }
 
-unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
-{
-    unsigned int cur = *p;
+/* The caller's region over guest memory, which is never memfd_secret's. */
+static vma_t guest_vma;
 
-    if (cur == old) {
-        *p = value;
-    }
-    return cur;
+/** The region at `addr`: always the plain one. */
+vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
+{
+    (void)vm;
+    (void)addr;
+    return &guest_vma;
+}
+
+/** Nothing to wait for in a test of one thread. */
+void mmap_read_lock(struct mm *mm)
+{
+    (void)mm;
+}
+
+/** Give back `mmap_read_lock`: nothing. */
+void mmap_unlock(struct mm *mm)
+{
+    (void)mm;
 }
 
 /* The CPUID of a Haswell, as tests/host/kvm_hosttest.c gives it, with leaf
@@ -630,12 +654,14 @@ int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range)
 }
 
 /** No thread here is switched away, so the steal time is never marked. */
-int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n)
+int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n,
+                          uint32_t seq)
 {
     (void)vm;
     (void)gpa;
     (void)buf;
     (void)n;
+    (void)seq;
     return 1;
 }
 
@@ -1733,8 +1759,7 @@ static int m_run(struct kvm_regs *regs, uint64_t *cr2, int launched)
 
     (void)regs;
     (void)cr2;
-    CHECK(!irq_on && bkl_depth == 0, "the guest runs with interrupts off and the big lock let go");
-    model_tsc += tsc_steps ? 1000u : 0u;
+    CHECK(!irq_on && bkl_depth == 0, "the guest runs with interrupts off and no big lock held");
     if (!m.on) {
         return not_on();
     }
@@ -2218,7 +2243,7 @@ static int32_t run(int fd)
               m.pkru == HOST_PKRU_MODEL,
           "KVM_RUN ends with the host's FPU, XCR0 and PKRU back");
     CHECK(m.script_at == m.script_len, "every run the script gives is entered");
-    CHECK(irq_on && bkl_depth == 1, "KVM_RUN ends with interrupts on and the big lock held");
+    CHECK(irq_on && bkl_depth == 0, "KVM_RUN ends with interrupts on and no big lock held");
     if (m.why && m.launches + m.resumes > runs && run_of(fd)->exit_reason != KVM_EXIT_FAIL_ENTRY) {
         printf("kvm-vmx-hosttest: entry check: %s\n", m.why);
     }
@@ -3467,21 +3492,9 @@ static void vpid_panic_rows(int vm, int first)
           "a panic in the run clears every VMCS active there, turns VMX off and puts CR4 back");
     /* The panic left the host's state and FPU with the guest's. */
     irq_on = 1;
-    bkl_depth = 1;
+    bkl_depth = 0;
     v->mode = KVM_MODE_OUTSIDE;
-    v->busy = 0;
-    current_proc->sched_out = NULL;
-    m.saved = 0;
-    m.restores = m.saves;
-    m.fpu_held = 0;
-    m.fpu_stores = m.fpu_loads;
-    m.xcr0 = HOST_XCR0_MODEL;
-    m.pkru = HOST_PKRU_MODEL;
-    for (i = 0; i < 5; i++) {
-        m.msr[i] = HOST_MSR(kept_msrs[i]);
-    }
-    k_memset(uret_curr, 0, sizeof(uret_curr));
-    k_memset(uret_read, 0, sizeof(uret_read));
+    mutex_init(&v->mutex, "kvm_vcpu"); /* the run's hold, left by the jump */
     m.script_len = 0;
     m.script_at = 0;
     fdclose(fd);
