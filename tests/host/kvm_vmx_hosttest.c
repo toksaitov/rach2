@@ -762,9 +762,13 @@ int kvm_lapic_ready(struct kvm_vcpu *v)
     return 0;
 }
 
+static void model_block(struct kvm_vcpu *v);
+
+/** The local APIC's work before an entry: a halted vCPU's sleep when a
+ * row asks for one. */
 int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
 {
-    (void)v;
+    model_block(v);
     return 0;
 }
 
@@ -1042,6 +1046,9 @@ static struct {
     /* The turn of the run loop at which it switches away
      * (`sched_take_preempt`), counting down, and the switches taken. */
     int preempt, switches;
+    /* The pass over the run loop's top at which a halted vCPU sleeps
+     * (`kvm_lapic_prepare`), counting down, and the sleeps taken. */
+    int block, blocks;
     int fail_vmxon, fail_vmptrld, fail_launch;
     uint32_t refuse; /* a field whose VMWRITE fails as unsupported, or 0 */
     uint64_t cr0;    /* the host's CR0 */
@@ -2038,6 +2045,33 @@ static void model_switch(void)
         }
         m.switches++;
     }
+}
+
+/** A halted vCPU's sleep at the run loop's top, when a row asked for it
+ * at this pass: the thread blocks, and `schedule` calls its `sched_out`
+ * with interrupts off, not preempted. The host's state and MSRs must be
+ * back by then and the guest's FPU left to the switch, and the steal time
+ * must count no preemption, as Linux's kvm_sched_out marks only a task
+ * still on its run queue. */
+static void model_block(struct kvm_vcpu *v)
+{
+    uint64_t reported = v->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED];
+    uint64_t other = v->stat[KVM_VCPU_STAT_PREEMPTION_OTHER];
+
+    if (!m.block || --m.block != 0) {
+        return;
+    }
+    CHECK(irq_on && current_proc->sched_out,
+          "a halted vCPU sleeps with interrupts on, its thread's sched_out set");
+    irq_on = 0;
+    current_proc->sched_out(current_proc->sched_out_arg, 0);
+    irq_on = 1;
+    CHECK(!m.saved && host_msrs() && m.fpu_held,
+          "a sleep's switch puts the host's state and MSRs back, the guest's FPU left to it");
+    CHECK(v->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported &&
+              v->stat[KVM_VCPU_STAT_PREEMPTION_OTHER] == other && !v->st_preempted,
+          "and is not a preemption of the vCPU");
+    m.blocks++;
 }
 
 /* ---- the rows ---- */
@@ -4848,6 +4882,36 @@ static void xsaves_rows(int vm)
     caps.proc2 = had;
 }
 
+/** A halted vCPU's sleep between two runs of one KVM_RUN, with the local
+ * APIC in the kernel: the switch away puts the host's state back, the next
+ * entry saves and loads it again, and the guest's FPU stays loaded. */
+static void block_rows(void)
+{
+    struct kvm_userspace_memory_region region = {0, 0, 0, sizeof(ram), 0};
+    int vm, fd, saves, loads, blocks;
+
+    vm = dev(KVM_CREATE_VM, 0);
+    region.userspace_addr = (uint64_t)(uintptr_t)ram;
+    CHECK(fdio(vm, KVM_SET_USER_MEMORY_REGION, (uintptr_t)&region) == 0 &&
+              vm_cap(vm, KVM_CAP_SPLIT_IRQCHIP, 24) == 0,
+          "a VM of a slot and the local APIC in the kernel");
+    k_memset((void *)apic_page, 0, sizeof(apic_page));
+    apic_irr = -1;
+    fd = make_vcpu(vm, 0);
+    saves = m.saves;
+    loads = m.fpu_loads;
+    blocks = m.blocks;
+    m.block = 2;
+    script(EXIT_CPUID, 0, 2);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.blocks == blocks + 1 && m.saves == saves + 2 &&
+              m.fpu_loads == loads + 1,
+          "a halted vCPU's sleep between two runs puts the host's state back, and the next "
+          "entry saves it again; the guest's FPU goes with the thread");
+    fdclose(fd);
+    fdclose(vm);
+}
+
 /**
  * The TPR shadow, as Linux's vmx.c keeps it, on a VM with the local APIC in
  * the kernel: CR8's exits off and the APIC's page the virtual-APIC page;
@@ -4992,6 +5056,7 @@ int main(void)
     hv_rows(vm);
     selftest_rows(vm);
     tpr_rows();
+    block_rows();
     CHECK(m.ud == 0 && m.gp == 0 && m.bad_writes == 0 && m.bad_reads == 0,
           "no VMX instruction outside VMX operation and no field the VMCS lacks, over every row");
     fdclose(fd);
