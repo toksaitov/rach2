@@ -8,9 +8,10 @@
 # Over the same window, histograms of the VM exits by reason and of the MSR
 # accesses by number and direction go to kvm-hist.txt, from hist triggers
 # on the kvm_exit and kvm_msr trace events, which count every VM's.
-# Ends once the file STOP names holds STOPWORD.
+# Ends once the file STOP names holds STOPWORD, or on SIGINT, SIGTERM or
+# SIGHUP, and removes the triggers it installed on every exit.
 # Usage: kvmstat.py WORKDIR STOP STOPWORD
-import os, pathlib, re, sys, time
+import os, pathlib, re, signal, sys, time
 
 w, stop, word = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
 kvm = pathlib.Path('/sys/kernel/debug/kvm')
@@ -19,6 +20,7 @@ n = 0
 tr = pathlib.Path('/sys/kernel/tracing/events/kvm')
 hists = {'kvm_exit': 'hist:keys=exit_reason:sort=hitcount:size=256',
          'kvm_msr': 'hist:keys=ecx,write:sort=hitcount:size=256'}
+installed = []  # the events whose trigger is this run's to remove
 
 
 def trigger(ev, text):
@@ -28,57 +30,82 @@ def trigger(ev, text):
         f.write(text + '\n')
 
 
-for ev, h in hists.items():
-    try:
-        trigger(ev, h)
-    except FileExistsError:
-        pass  # left by a run that ended without removing it
-
-
 def hist_clear():
-    for ev, h in hists.items():
-        trigger(ev, h + ':clear')
+    for ev in installed:
+        trigger(ev, hists[ev] + ':clear')
 
 
 def hist_keep(path):
     path.write_text(''.join('== %s\n%s' % (ev, (tr / ev / 'hist').read_text()) for ev in hists))
     os.chown(path, os.stat(path.parent).st_uid, os.stat(path.parent).st_gid)
 
-while True:
-    vms = list(kvm.glob('*-*'))
-    qemus = []
-    for p in pathlib.Path('/proc').glob('[0-9]*'):
+
+def vm_rows(d):
+    """Give one line for each of KVM's counters of the VM D, or None once
+    its directory has gone, as it does when QEMU ends."""
+    rows = []
+    try:
+        for f in sorted(d.iterdir()):
+            if f.is_file():
+                try:
+                    rows.append('%s %s\n' % (f.name, f.read_text().strip()))
+                except OSError:
+                    pass
+    except OSError:
+        return None
+    return rows
+
+
+def ended(sig, frame):
+    raise SystemExit(128 + sig)
+
+
+for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    signal.signal(s, ended)
+
+try:
+    for ev, h in hists.items():
         try:
-            cmd = (p / 'cmdline').read_bytes().decode(errors='replace')
-        except OSError:
-            continue
-        m = re.search(r'qmp-([A-Za-z0-9-]+)\.sock', cmd)
-        if m and cmd.startswith('qemu-system') and str(w) in cmd:
-            qemus.append(m.group(1))
-    for d in vms if len(vms) == 1 and len(qemus) == 1 else ():
-        m = re.match('(.*)', qemus[0])
-        out = w / ('out-' + m.group(1))
-        for side in 'ab':
-            key = (d.name, side)
-            if key in done or not (out / f'host-{side}.txt').exists():
+            trigger(ev, h)
+        except FileExistsError:
+            pass  # left by a run that ended without removing it; ours to remove
+        installed.append(ev)
+    while True:
+        vms = list(kvm.glob('*-*'))
+        qemus = []
+        for p in pathlib.Path('/proc').glob('[0-9]*'):
+            try:
+                cmd = (p / 'cmdline').read_bytes().decode(errors='replace')
+            except OSError:
                 continue
-            rows = []
-            for f in sorted(d.iterdir()):
-                if f.is_file():
-                    try:
-                        rows.append('%s %s\n' % (f.name, f.read_text().strip()))
-                    except OSError:
-                        pass
-            if side == 'a':
-                hist_clear()
-            else:
-                hist_keep(out / 'kvm-hist.txt')
-            (out / f'kvm-{side}.txt').write_text(''.join(rows))
-            os.chown(out / f'kvm-{side}.txt', os.stat(out).st_uid, os.stat(out).st_gid)
-            done.add(key)
-    n += 1
-    if n % 100 == 0 and stop.exists() and word in stop.read_text():
-        break
-    time.sleep(0.02)
-for ev, h in hists.items():
-    trigger(ev, '!' + h)
+            m = re.search(r'qmp-([A-Za-z0-9-]+)\.sock', cmd)
+            if m and cmd.startswith('qemu-system') and str(w) in cmd:
+                qemus.append(m.group(1))
+        for d in vms if len(vms) == 1 and len(qemus) == 1 else ():
+            out = w / ('out-' + qemus[0])
+            for side in 'ab':
+                key = (d.name, side)
+                if key in done or not (out / f'host-{side}.txt').exists():
+                    continue
+                rows = vm_rows(d)
+                if rows is None:
+                    break
+                if side == 'a':
+                    hist_clear()
+                else:
+                    hist_keep(out / 'kvm-hist.txt')
+                (out / f'kvm-{side}.txt').write_text(''.join(rows))
+                os.chown(out / f'kvm-{side}.txt', os.stat(out).st_uid, os.stat(out).st_gid)
+                done.add(key)
+        n += 1
+        if n % 100 == 0 and stop.exists() and word in stop.read_text():
+            break
+        time.sleep(0.02)
+finally:
+    for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(s, signal.SIG_IGN)
+    for ev in installed:
+        try:
+            trigger(ev, '!' + hists[ev])
+        except OSError as e:
+            sys.stderr.write('kvmstat: %s: trigger left installed: %s\n' % (ev, e))
