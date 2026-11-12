@@ -264,18 +264,24 @@ static void dshare_unlink(struct dshare *ds)
 }
 
 /** A mapping of `ds`, through a descriptor open for writing when `writer`,
- * whose copy of the descriptor writes the pages back or flushes the file;
- * NULL when none is left. A mapping whose last reference has gone is
- * waiting for `vm_file_reap` or being released, and is not taken again. */
+ * whose copy of the descriptor writes the pages back or flushes the file,
+ * held for the caller to put; NULL when none is left. A mapping whose last
+ * reference has gone is waiting for `vm_file_reap` or being released, and
+ * is not taken again (`vm_file_tryget`): a region's last put runs under the
+ * regions' lock alone, so the count may fall to 0 while the list is walked
+ * under the big lock, but the record stays until its release under it. */
 static struct filemap *dshare_mapping(const struct dshare *ds, int writer)
 {
     struct filemap *m;
 
-    for (m = maps; m && !(m->ds == ds && m->vf.refs > 0 && !m->going &&
-                          (!writer || (m->shared && (m->entry.flags & FD_FLAG_WRITE))));
-         m = m->next) {
+    for (m = maps; m; m = m->next) {
+        if (m->ds == ds && !m->going &&
+            (!writer || (m->shared && (m->entry.flags & FD_FLAG_WRITE))) &&
+            vm_file_tryget(&m->vf)) {
+            return m;
+        }
     }
-    return m;
+    return NULL;
 }
 
 /** Let go of a hold on `ds`, a mapping's or a write-back's, and free it
@@ -399,7 +405,6 @@ static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, int flus
         m = dshare_mapping(ds, 0);
     }
     if (m) {
-        vm_file_get(&m->vf);
         if (m->shared && (m->entry.flags & FD_FLAG_WRITE)) {
             rc = dshare_write_back(ds, m, first, end);
         }

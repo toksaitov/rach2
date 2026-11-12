@@ -52,6 +52,19 @@ void vm_file_get(struct vm_file *f)
     }
 }
 
+int vm_file_tryget(struct vm_file *f)
+{
+    unsigned int old;
+
+    do {
+        old = f->refs;
+        if (old == 0) {
+            return 0;
+        }
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)&f->refs, old, old + 1u) != old);
+    return 1;
+}
+
 void vm_file_put(struct vm_file *f)
 {
     uint32_t flags;
