@@ -108,6 +108,11 @@
 #define EXT2_VALID_FS 0x0001u
 #define EXT2_ERROR_FS 0x0002u
 
+/* s_errors and the `errors=` option: what a fault met at run time does. */
+#define EXT2_ERRORS_CONTINUE 1
+#define EXT2_ERRORS_RO       2
+#define EXT2_ERRORS_PANIC    3
+
 #define S_IFMT_   0170000u
 #define S_IFREG_  0100000u
 #define S_IFDIR_  0040000u
@@ -353,12 +358,17 @@ struct ext2_mount {
     uint32_t compat, incompat, ro_compat;
     uint32_t new_extra; /* the i_extra_isize of an inode made here, 0 on 128-byte inodes */
     uint32_t state;     /* s_state: EXT2_VALID_FS and EXT2_ERROR_FS */
+    /* What a fault met at run time does, an EXT2_ERRORS_ value: s_errors,
+     * or `errors=` of the mount's or a remount's options; 0 only before
+     * the constructor reads the superblock. */
+    int errors;
     /* The generation the next inode made gets, counted from the mount's
      * second, so a number reused for another file has another generation. */
     uint32_t next_generation;
     /* Whether the mount writes. A remount read-only clears it under
      * `em->super`, where a sync reads it again before it notes the
-     * superblock (`ext2_sync`). */
+     * superblock (`ext2_sync`), and under `count_lock` in one step with its
+     * last look at `state` (`finish_writes`). */
     int writable;
     /* Set while a writable mount or remount checks and opens the volume,
      * before `writable` is: the only time a mount that is not writable may
@@ -578,6 +588,7 @@ int ext2_gd_store(struct ext2_mount *em, uint32_t g);
 int ext2_bit_first_clear(struct ext2_mount *em, uint32_t bitmap_block, uint32_t from,
                          uint32_t count, uint32_t *out);
 int ext2_may_use_reserved(void);
+int ext2_block_refused(struct ext2_mount *em, uint32_t bitmap, uint32_t bit, uint32_t b);
 int ext2_inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, struct ext2_node *n);
 int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir);
 int ext2_attr_release(struct ext2_mount *em, uint32_t ino, uint32_t b);
