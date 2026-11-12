@@ -32,6 +32,7 @@ struct kvm_case {
     struct net_boot b;
     enum runner runner;
     int rach2;          /* boot the i686 Rach2 guest instead of Debian */
+    const char *list;   /* a unit case's list in KVM_DIR */
     char accel[8];      /* a boot case's accelerator inside Rach2 */
     char password[128]; /* root's, at the console */
 };
@@ -40,7 +41,8 @@ struct kvm_case {
  * Read the case from the last part of its identity: `boot-debian-ACCEL`,
  * the Debian guest under ACCEL, `kvm` or `tcg`, or `unit-tests` and
  * `selftests`, each with an optional `-nested`, the corpus on the processor
- * profile of its machine. Give 0 for an identity of no such form.
+ * profile of its machine, or `unit-subset-nested`, unit-subset.list's tests
+ * of kvm-unit-tests. Give 0 for an identity of no such form.
  */
 static int parse(struct kvm_case *s, const char *id)
 {
@@ -71,6 +73,12 @@ static int parse(struct kvm_case *s, const char *id)
     }
     if (strcmp(name, "unit-tests") == 0 || strcmp(name, "unit-tests-nested") == 0) {
         s->runner = UNIT;
+        s->list = "unit-tests.list";
+        return 1;
+    }
+    if (strcmp(name, "unit-subset-nested") == 0) {
+        s->runner = UNIT;
+        s->list = "unit-subset.list";
         return 1;
     }
     if (strcmp(name, "selftests") == 0 || strcmp(name, "selftests-nested") == 0) {
@@ -203,7 +211,7 @@ static void run(struct kvm_case *s)
     else
         snprintf(command, sizeof(command), "cd " KVM_DIR " && sh corpus.sh %s %s",
                  s->runner == UNIT ? "unit" : "selftests",
-                 s->runner == UNIT ? "unit-tests.list"
+                 s->runner == UNIT ? s->list
                  : list != NULL    ? list
                                    : "none");
     if (net_step(&s->u, "run") == ETUDE_OK)
