@@ -525,6 +525,9 @@ a boolean as
 .Fn kstrtobool
 reads it, which off stops the heartbeat that finds hangs and makes new
 contexts not persistent.
+Turned on again, an engine has its heartbeat back once it next goes from
+idle to busy, or the GPU next wakes; an engine kept busy all the while has
+none until then, as on Linux.
 The rest are read-only, mode 0400, at Linux's defaults.
 .It Pa dri/DEVICE/i915_error_state
 Mode 0644.
