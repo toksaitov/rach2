@@ -504,6 +504,22 @@ static void fault_count(int major)
 }
 
 /**
+ * Mark the current process's fault as out of memory when no page table
+ * could be had for it, as a refused frame marks it (`alloc_user_frame`), so
+ * that the fault handler ends the process (`fault_oom`) instead of raising
+ * SIGSEGV for a legal access, as Linux answers a failed table allocation
+ * with VM_FAULT_OOM (mm/memory.c:5274) and the out-of-memory path
+ * (arch/x86/mm/fault.c:1440). A pin reads the failure as -ENOMEM
+ * (`pin_resolve`).
+ */
+static void table_refused(void)
+{
+    if (current_proc) {
+        current_proc->frame_refused = 1;
+    }
+}
+
+/**
  * Install `phys` at the user page `page` of `mm` with the entry bits
  * `flags`, the second phase of a fault, whose frame was had, filled and
  * zeroed outside every lock: under the page-table lock the entry is read
@@ -512,8 +528,9 @@ static void fault_count(int major)
  * Linux's do_anonymous_page checks pte_none under the lock
  * (mm/memory.c:4805-4810). 0 once installed; 1 when the entry is not empty,
  * after which the caller gives its frame back and resolves again; -1 with
- * no memory for a table. x86 caches no translation of an entry that is not
- * present, so nothing is flushed.
+ * no memory for a table, marked as out of memory (`table_refused`). x86
+ * caches no translation of an entry that is not present, so nothing is
+ * flushed.
  */
 static int install_new(struct mm *mm, uintptr_t page, uintptr_t phys, pte_t flags)
 {
@@ -529,6 +546,9 @@ static int install_new(struct mm *mm, uintptr_t page, uintptr_t phys, pte_t flag
         }
     }
     mm_ptl_unlock(mm, lock);
+    if (!table) {
+        table_refused();
+    }
     return rc;
 }
 
@@ -674,7 +694,8 @@ static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write
  * count the pages it lends as found in memory (`struct vm_file`). Called
  * from `shared_fault` with the regions' lock held to read, which it lets go
  * and takes again. 1 when it mapped `page` itself, which with `hits`
- * counts the fault as minor, -1 when the table could not be made, else 0.
+ * counts the fault as minor, -1 when the table could not be made, marked
+ * as out of memory (`table_refused`), else 0.
  */
 static int share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t flags, int hits)
 {
@@ -708,6 +729,7 @@ static int share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t 
     table = mmu_user_table(mm->dir, from, 1);
     mm_ptl_unlock(mm, lock);
     if (!table) {
+        table_refused();
         return -1;
     }
     prot = vma->prot;
