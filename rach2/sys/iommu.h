@@ -41,6 +41,12 @@ int iommu_irq_remapped(void);
  * metal (`lapic_x2apic_settle`). */
 int iommu_irq_remapped_x2apic(void);
 
+/** Hold the units' fault events, which are messages of their own (`hold`
+ * 1), and send what came meanwhile (`hold` 0): across the late x2APIC
+ * leave, which drops a message that comes while the local APIC is moved
+ * (`lapic_x2apic_settle`). */
+void iommu_fault_hold(int hold);
+
 /** The unit whose scope has the device at (bus, devfn), its index, or -1;
  * the devices of one unit are translated or not together. */
 int iommu_unit_of(uint8_t bus, uint8_t devfn);

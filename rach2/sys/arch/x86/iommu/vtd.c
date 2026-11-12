@@ -1280,3 +1280,8 @@ int iommu_irq_remapped_x2apic(void)
 {
     return intremap_x2apic();
 }
+
+void iommu_fault_hold(int hold)
+{
+    vtd_fault_hold(hold);
+}
