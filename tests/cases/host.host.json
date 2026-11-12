@@ -871,6 +871,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "ioapic",
+          "checks": "tests/host/ioapic_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "lapic",
           "checks": "tests/host/lapic_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -953,6 +958,11 @@
         {
           "assertion_id": "n_tty",
           "checks": "tests/host/n_tty_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "name",
+          "checks": "tests/host/name_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
@@ -1518,6 +1528,11 @@
         {
           "assertion_id": "wait_queue",
           "checks": "tests/host/wait_queue_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "watchdog_nmi",
+          "checks": "tests/host/watchdog_nmi_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {

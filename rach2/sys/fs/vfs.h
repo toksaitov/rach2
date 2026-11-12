@@ -731,7 +731,8 @@ int vfs_mount_gone(const struct vfs_mount *mnt);
  * base mount through every mount that shows it. */
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m);
 
-/** Whether a root is installed at entry zero, of any type. */
+/** Whether a root is installed at entry zero, of any type, read under the
+ * mount table's lock, so a caller needs no lock of its own. */
 int vfs_root_mounted(void);
 
 /**

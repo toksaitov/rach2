@@ -279,10 +279,11 @@ and
 is the timer pass, the sleepers and timers whose time has come, on the
 tick that made the clock's pass.
 .Ql lock
-is the tick's try for the big lock, or its wait, which the boot
-processor's tick makes at every tick and waits out at its fourth failed
-try in a row, and another processor's only while signals of the tick wait
-to be posted.
+is the tick's take of the big lock, its try and any wait, counted only on
+a tick that took the lock; a try that failed is counted in no row.
+The boot processor's tick tries at every tick and waits at its fourth
+failed try in a row, and another processor's tries only while signals of
+the tick wait to be posted.
 The rows after it run under the lock:
 .Ql signals ,
 the posting of the signals of the tick, SIGALRM, SIGVTALRM, SIGPROF and
@@ -301,14 +302,16 @@ counts the ticks whose locked part ran inside a hold that the code the
 tick interrupted already had, with that part's time, which the other rows
 count too and which is the interrupted hold's, not the tick's.
 So the rows from
-.Ql lock
+.Ql signals
 to
 .Ql klog ,
 less
 .Ql nested ,
-sum to the hold that
+sum to about the hold that
 .Pa bkl/calls
-charges to vector 32.
+charges to vector 32, from the take to the give-back; the wait that
+.Ql lock
+counts is not in it.
 The microseconds are 0 without an invariant time-stamp counter; the cycles
 are not.
 A write of anything zeroes the counts: each processor zeroes its own at
@@ -378,12 +381,21 @@ exits were handled in the kernel and the guest entered again;
 ended
 .Dv KVM_RUN .
 .Ar WAIT
-is the cycles from the end of the guest's run to the big kernel lock
-taken back, and
+is the cycles from the backend's return from the guest's run to the big
+kernel lock taken back, and
 .Ar HANDLE
-from there to the next entry or to
+from there to the big kernel lock let go for the next entry, or to
 .Dv KVM_RUN Ns 's
 return; a HLT the kernel handles counts its sleep until an interrupt there.
+The backend's own switch, its loads of the guest's state, FPU and debug
+registers before VMRUN or VMLAUNCH and its stores of them after, is in
+neither.
+An exit whose next entry does not come, because a request or an error
+ends
+.Dv KVM_RUN
+first, ended
+.Dv KVM_RUN .
+Each processor keeps its own counts, and the file shows their sums.
 The code is SVM's EXITCODE or VMX's exit reason, and a failed entry is
 0xffffffff under SVM and 0x80000000 under VMX.
 SVM's codes from 0xb0 to 0x3ff and above 0x40f, and VMX's from 0xb0 on, share

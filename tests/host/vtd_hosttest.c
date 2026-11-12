@@ -122,8 +122,11 @@ void kirq_restore(uint32_t flags)
     (void)flags;
 }
 
-/* The boot processor's APIC id, the destination of every message. */
-static uint32_t boot_apic;
+/* The boot processor's APIC id in the mode it is in, the destination of
+ * every message, and its x2APIC id, which the APIC takes as its id when it
+ * moves to x2APIC mode; in xAPIC mode the first is the second's low eight
+ * bits, as the SDM has them. */
+static uint32_t boot_apic, boot_x2apic;
 
 /** The boot processor, which every message goes to. */
 uint32_t lapic_id(void)
@@ -1157,22 +1160,37 @@ int vtd_hw_fault_vector(void)
     return 0x31;
 }
 
+/* The clock of fault.c's rate limit, in milliseconds. Each row starts a
+ * minute on, so that no row shares a window with the one before it. */
+static uint32_t now_ms;
+
+/** The model's clock. */
+uint32_t vtd_hw_ms(void)
+{
+    return now_ms;
+}
+
 /** The boot processor. */
 uint32_t vtd_hw_apic_id(void)
 {
     return boot_apic;
 }
 
+/** The boot processor's x2APIC id. */
+uint32_t vtd_hw_x2apic_id(void)
+{
+    return boot_x2apic;
+}
+
 /* The local APIC's mode: whether it may enter x2APIC mode, whether it is
  * there, and its moves there. Whether the 8259 and the I/O APIC's lines are
  * masked with interrupts off (`vtd_hw_lines_mask`), and, at the last move,
  * whether they were and whether any unit still let the compatibility format
- * by. A level interrupt the APIC holds, which a pass through the disabled
- * state would drop; nothing here takes the APIC there, and a row checks
- * that it is still held. */
+ * by. Nothing here moves the APIC back through the disabled state, which
+ * would drop what its request register holds: the vtd interface has no
+ * such move, and the rows check that a failed start makes none. */
 static int x2_possible, x2_on, x2_moves;
 static int lines_masked, x2_moved_masked, x2_moved_cfi;
-static int level_held;
 
 /** Whether the APIC may be or is in x2APIC mode. */
 int vtd_hw_x2apic_possible(void)
@@ -1191,6 +1209,7 @@ int vtd_hw_x2apic_enable(void)
     }
     x2_on = 1;
     x2_moves++;
+    boot_apic = boot_x2apic;
     x2_moved_masked = lines_masked;
     x2_moved_cfi =
         (M(0)->gsts & VTD_GCMD_CFI) != 0 || (nmodels > 1 && (M(1)->gsts & VTD_GCMD_CFI) != 0);
@@ -1491,9 +1510,10 @@ static void row_begin(const char *name)
     opt_noapic = 0;
     page_fail_after = -1;
     flush_calls = stray_flushes = 0;
-    boot_apic = 0;
+    boot_apic = boot_x2apic = 0;
+    now_ms += 60000u;
     x2_possible = x2_on = x2_moves = 0;
-    lines_masked = x2_moved_masked = x2_moved_cfi = level_held = 0;
+    lines_masked = x2_moved_masked = x2_moved_cfi = 0;
     memset(ecam_mem, 0xFF, (unsigned long)ECAM_BUSES << 20);
     memset(msix_tables, 0, sizeof(msix_tables));
     pci_ecam_set((uintptr_t)ecam_mem, 0, ECAM_BUSES - 1);
@@ -1825,7 +1845,7 @@ static void row_ir_x2apic(void)
 
     row_begin("ir_x2apic");
     setup_lenovo();
-    boot_apic = 2;
+    boot_apic = boot_x2apic = 2;
     x2_possible = 1;
     check(t_msi(0, DF(2, 0), 49) == 0 && t_msix(2, DF(0, 0), 1, 51) == 0, "messages");
     check(vtd_start() == 2 && intremap_active(), "on");
@@ -1848,7 +1868,7 @@ static void row_ir_x2apic(void)
     setup_lenovo();
     tb[37] |= DMAR_X2APIC_OUT;
     tb[9] = (uint8_t)(tb[9] - DMAR_X2APIC_OUT); /* the checksum still sums to zero */
-    boot_apic = 2;
+    boot_apic = boot_x2apic = 2;
     x2_possible = 1;
     check(t_msi(0, DF(2, 0), 49) == 0, "a message");
     check(vtd_start() == 2 && intremap_active(), "on");
@@ -1876,23 +1896,21 @@ static void row_ir_x2apic(void)
     row_begin("ir_x2apic_back");
     setup_lenovo();
     x2_possible = 1;
-    level_held = 1;
     page_fail_after = held - 1;
     (void)vtd_start();
-    check(!intremap_active() && x2_moves == 0 && !x2_on && level_held,
-          "a start whose second table fails leaves the APIC and its level interrupt as they were");
+    check(!intremap_active() && x2_moves == 0 && !x2_on,
+          "a start whose second table fails leaves the APIC in xAPIC mode, never moved");
     check(logged("vtd: ready: 2 units, interrupt remapping off"), "and runs unremapped");
     row_end();
 
     row_begin("ir_x2apic_last_step");
     setup_lenovo();
     x2_possible = 1;
-    level_held = 1;
     rtes[0].low |= 1u << 8; /* lowest priority, which ioapic_map refuses */
     check(t_msi(0, DF(2, 0), 49) == 0, "a message");
     (void)vtd_start();
     msi_of(0, DF(2, 0), &a, &d);
-    check(!intremap_active() && x2_moves == 0 && !x2_on && level_held && !lines_masked,
+    check(!intremap_active() && x2_moves == 0 && !x2_on && !lines_masked,
           "a start that fails at its last fallible step, the lines masked, leaves the APIC");
     check(a == 0xFEE00000u && d == 49, "and the message as it was");
     row_end();
@@ -1900,9 +1918,12 @@ static void row_ir_x2apic(void)
 
 /**
  * An identity of 255 or more, which only remapping in the x2APIC format
- * reaches: the compatibility-format message and redirection entry carry its
- * low eight bits, and the entries take the whole of it; without remapping
- * the message's address holds the eight bits and nothing above bit 19.
+ * reaches. The APIC starts in xAPIC mode, as `lapic_init` leaves it on bare
+ * metal, so its id there is the low eight bits; the compatibility-format
+ * message and redirection entry carry those, and the entries take the
+ * whole x2APIC id, which the processor answers to after the move. Without
+ * remapping the message's address holds the eight bits and nothing above
+ * bit 19.
  */
 static void row_ir_x2apic_wide(void)
 {
@@ -1910,7 +1931,8 @@ static void row_ir_x2apic_wide(void)
 
     row_begin("ir_x2apic_wide");
     setup_lenovo();
-    boot_apic = 0x103;
+    boot_apic = 0x03;
+    boot_x2apic = 0x103;
     x2_possible = 1;
     rtes[0].dest = 0x03;
     rtes[0].high = 0x03u << 24;
@@ -1926,16 +1948,22 @@ static void row_ir_x2apic_wide(void)
           "the RTL8168's");
     check(m_rte(M(1), 0xF0F8, rtes[0].low, rtes[0].high) == 33 && M(1)->last_dest == 0x103,
           "the ioapic's line");
+    check(M(0)->regs[VTD_FEADDR / 4] == 0xFEE03000u && M(0)->regs[VTD_FEUADDR / 4] == 1u &&
+              M(1)->regs[VTD_FEADDR / 4] == 0xFEE03000u && M(1)->regs[VTD_FEUADDR / 4] == 1u &&
+              M(0)->regs[VTD_FEDATA / 4] == 0x31u && M(0)->regs[VTD_FECTL / 4] == 0,
+          "the fault events aimed again after the move, the id's bits 8 to 31 in FEUADDR");
     row_end();
 
     row_begin("ir_x2apic_wide_off");
     setup_lenovo();
-    boot_apic = 0x103;
+    boot_apic = boot_x2apic = 0x103; /* a firmware's x2APIC mode, kept */
     opt_intremap = "off";
     check(t_msi(0, DF(2, 0), 49) == 0, "a message");
     check(vtd_start() == 2 && !intremap_active(), "remapping off");
     msi_of(0, DF(2, 0), &a, &d);
     check(a == 0xFEE03000u && d == 49, "the message keeps the low eight bits");
+    check(M(0)->regs[VTD_FEADDR / 4] == 0xFEE03000u && M(0)->regs[VTD_FEUADDR / 4] == 1u,
+          "and the unit's own fault event the rest in FEUADDR, as __irq_msi_compose_msg");
     row_end();
 }
 
@@ -2329,7 +2357,9 @@ static void row_read_only(void)
     row_end();
 }
 
-/** Faults past the limit are counted, and one lost is counted too. */
+/** Faults past the rate limit, 10 lines in 5 seconds for every unit, are
+ * counted, and one lost is counted too; the next window says how many
+ * lines were held back. */
 static void row_fault_limit(void)
 {
     struct iommu_domain *d;
@@ -2351,9 +2381,14 @@ static void row_fault_limit(void)
         vtd_fault_all();
     }
     check(iommu_dma_faults() == 42, "every fault counted");
-    check(log_count("vtd: fault: dmar0: dma read from 0:3.0") == 32 &&
-              log_count("further faults counted, not logged") == 1,
-          "32 logged");
+    check(log_count("vtd: fault: dmar0: dma read from 0:3.0") == 9,
+          "10 lines logged in the window, the loss's among them, and 32 held back");
+    now_ms += 5001u;
+    (void)m_dma(M(0), 0, DF(3, 0), 0x800000, 0, &phys);
+    vtd_fault_all();
+    check(iommu_dma_faults() == 43 && logged("vtd: fault: 32 lines suppressed") &&
+              log_count("vtd: fault: dmar0: dma read from 0:3.0") == 10,
+          "the next window logs the count held back, then the fault");
     check(logged("vtd: fault: dmar0: dma read from 0:3.0 at 0x1000: reason 0x6, PTE Read access is "
                  "not set"),
           "in Linux's words");
@@ -2386,16 +2421,21 @@ static void row_fault_bound(void)
           "the tick reads the other 9");
     iommu_tick();
     check(iommu_dma_faults() == 41, "and the next tick none");
-    check(log_count("vtd: fault: dmar0: dma read from 0:3.0") == 32 &&
-              log_count("further faults counted, not logged") == 1,
-          "32 logged");
+    check(log_count("vtd: fault: dmar0: dma read from 0:3.0") == 10, "10 logged");
+    now_ms += 5001u;
+    (void)m_dma(M(0), 0, DF(3, 0), 0x800000, 0, &phys);
+    vtd_fault_all();
+    check(iommu_dma_faults() == 42 && logged("vtd: fault: 31 lines suppressed") &&
+              log_count("vtd: fault: dmar0: dma read from 0:3.0") == 11,
+          "and a fault in the next window logged after the 31 held back");
     iommu_detach(d, 0, DF(3, 0));
     iommu_domain_free(d);
     row_end();
 }
 
 /** A device that keeps faulting loses a fault on every pass: each loss is
- * counted, and the first 32 passes that find one are logged. */
+ * counted, and the lines of a record and of a loss share the rate limit,
+ * so the first 5 passes are logged, and a pass in the next window again. */
 static void row_fault_lost_limit(void)
 {
     struct iommu_domain *d;
@@ -2413,11 +2453,19 @@ static void row_fault_lost_limit(void)
         vtd_fault_all();
     }
     check(vtd_units[0].overflows == 40 && iommu_dma_faults() == 80, "every loss counted");
-    check(log_count("vtd: fault: dmar0: faults lost, every record full") == 32 &&
-              logged("vtd: fault: dmar0: faults lost, every record full: 32 times, so 64 DMA "
+    check(log_count("vtd: fault: dmar0: faults lost, every record full") == 5 &&
+              logged("vtd: fault: dmar0: faults lost, every record full: 5 times, so 10 DMA "
                      "faults is a floor") &&
-              log_count("further losses counted, not logged") == 1,
-          "32 losses logged");
+              !logged("lines suppressed"),
+          "5 losses logged");
+    now_ms += 5001u;
+    (void)m_dma(M(0), 0, DF(3, 0), 0x800000, 0, &phys);
+    (void)m_dma(M(0), 0, DF(3, 0), 0x801000, 0, &phys);
+    vtd_fault_all();
+    check(logged("vtd: fault: 70 lines suppressed") &&
+              logged("vtd: fault: dmar0: faults lost, every record full: 41 times, so 82 DMA "
+                     "faults is a floor"),
+          "the next window's loss logged after the 70 lines held back");
     iommu_detach(d, 0, DF(3, 0));
     iommu_domain_free(d);
     row_end();

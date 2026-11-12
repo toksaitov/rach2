@@ -26,6 +26,7 @@
 #include "../../klog.h"
 #include "../../lib/kirq.h"
 #include "../../mm/paging.h"
+#include "lapic.h"
 
 #define IOAPIC_SELECT 0
 #define IOAPIC_WINDOW 4 /* in 32-bit words: byte offset 0x10 */
@@ -62,15 +63,27 @@ static struct {
 /* The interrupt remapper in place, or NULL. */
 static const struct ioapic_remap *remap;
 
+/* A host test's access to the registers, or NULL. */
+static const struct ioapic_io *io;
+
+void ioapic_set_io(const struct ioapic_io *ops)
+{
+    io = ops;
+}
+
 /** Read the internal register `reg` of `c` through its select register and
- * window. */
+ * window, or through `io` when a host test gave one. */
 static uint32_t reg_read(const struct ioapic *c, uint32_t reg)
 {
     uint32_t flags = kirq_save();
     uint32_t v;
 
-    c->regs[IOAPIC_SELECT] = reg;
-    v = c->regs[IOAPIC_WINDOW];
+    if (io) {
+        v = io->read(c->id, reg);
+    } else {
+        c->regs[IOAPIC_SELECT] = reg;
+        v = c->regs[IOAPIC_WINDOW];
+    }
     kirq_restore(flags);
     return v;
 }
@@ -80,31 +93,26 @@ static void reg_write(const struct ioapic *c, uint32_t reg, uint32_t value)
 {
     uint32_t flags = kirq_save();
 
-    c->regs[IOAPIC_SELECT] = reg;
-    c->regs[IOAPIC_WINDOW] = value;
+    if (io) {
+        io->write(c->id, reg, value);
+    } else {
+        c->regs[IOAPIC_SELECT] = reg;
+        c->regs[IOAPIC_WINDOW] = value;
+    }
     kirq_restore(flags);
 }
 
-/** `maxcpus=` counts as 0 when its value begins with decimal digits that
- * read 0, as `smp_start` reads them; a value that begins with no digit is
- * passed over, as Linux's get_option passes it over. */
+/** `maxcpus=` is read as Linux's get_option reads it (`kcmdline_option`),
+ * as `smp_start` reads it, so `0`, `00`, `0x0` and a value with no digit
+ * all count as 0 there. */
 int ioapic_disabled(void)
 {
-    char v[12];
-    int i;
+    int n;
 
     if (kcmdline_has("noapic")) {
         return 1;
     }
-    if (!kcmdline_value("maxcpus", v, sizeof(v)) || v[0] < '0' || v[0] > '9') {
-        return 0;
-    }
-    for (i = 0; v[i] >= '0' && v[i] <= '9'; i++) {
-        if (v[i] != '0') {
-            return 0;
-        }
-    }
-    return 1;
+    return kcmdline_option("maxcpus", &n) && n == 0;
 }
 
 /** Only the x86-64 kernel builds VT-d (platform.c). */
@@ -243,20 +251,37 @@ uint16_t ioapic_mask_routed(void)
     return was;
 }
 
+/**
+ * An ISA device's edge line stays asserted until its handler reads the
+ * device (the 8042 until its byte is read, a UART until its cause is, the
+ * CMOS clock until its register C is), and raises no new edge before then;
+ * so an edge the masked input dropped would leave the device silent for
+ * good. Raising the vector once costs a handler call that finds nothing
+ * when no edge was lost, which every one of them allows. Linux raises an
+ * edge interrupt again the same way, by a self-interrupt, and leaves a level
+ * one to the hardware, which asserts it while it is active
+ * (`check_irq_resend`, kernel/irq/resend.c, lines 124 to 153, and
+ * `apic_retrigger_irq`, arch/x86/kernel/apic/vector.c, lines 895 to 905).
+ * Every routed line goes to the boot processor, which runs this.
+ */
 void ioapic_unmask_lines(uint16_t which)
 {
     int line;
 
     for (line = 0; line < 16; line++) {
         const struct ioapic *c;
-        uint32_t reg;
+        uint32_t reg, low;
 
         if ((which & (1u << line)) == 0 || lines[line].chip < 0) {
             continue;
         }
         c = &chips[lines[line].chip];
         reg = IOAPIC_REG_TABLE + 2u * lines[line].input;
-        reg_write(c, reg, reg_read(c, reg) & ~RTE_MASKED);
+        low = reg_read(c, reg) & ~RTE_MASKED;
+        reg_write(c, reg, low);
+        if ((low & RTE_LEVEL) == 0) {
+            lapic_self_ipi((uint8_t)(low & 0xFFu));
+        }
     }
 }
 

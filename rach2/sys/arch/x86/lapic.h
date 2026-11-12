@@ -91,7 +91,9 @@ int lapic_x2apic_enable(void);
  * where it can be neither, with an identity of 255 or more. Nothing when
  * no such mode was kept. The devices' interrupts are live by then, so the
  * leave masks the lines and lets the handlers take what was sent before
- * it passes the disabled state. Called once, on the boot processor before
+ * it passes the disabled state; a device's message that comes after the
+ * request register is read, or while the APIC is disabled, is lost, since
+ * the messages are not masked. Called once, on the boot processor before
  * the others start, after the VT-d units (platform.c), with interrupts on.
  */
 void lapic_x2apic_settle(int remapped);
@@ -160,6 +162,12 @@ int lapic_pending(uint8_t vector);
  * or changed its mode: the destination of a device's message and of an I/O
  * APIC input. */
 uint32_t lapic_id(void);
+
+/** The boot processor's whole x2APIC identity, in either mode: the one it
+ * answers to once in x2APIC mode, whose low eight bits are its xAPIC
+ * identity (SDM, CPUID leaf 0BH), and which a remapping entry in the
+ * x2APIC format names it by. */
+uint32_t lapic_x2apic_id(void);
 
 /** The APIC identity of the processor running this; 0 while the APIC is
  * not enabled. */

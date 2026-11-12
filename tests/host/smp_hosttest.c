@@ -251,11 +251,10 @@ void *kalloc_guarded(uint32_t count)
 }
 
 /** 0: the command line has no values. */
-int kcmdline_value(const char *key, char *out, unsigned int outlen)
+int kcmdline_option(const char *key, int *out)
 {
     (void)key;
     (void)out;
-    (void)outlen;
     return 0;
 }
 

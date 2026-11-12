@@ -105,16 +105,22 @@ static uint64_t irte_low(unsigned int vector, unsigned int apic, unsigned int le
 /**
  * The APIC id of the processor a compatibility-format interrupt names by
  * the eight bits `dest8`: in the x2APIC format, the boot processor's whole
- * id when its low eight bits are these, since every interrupt goes to it
- * and that format's message and redirection entry hold no more. Linux's
- * prepare_irte writes the whole 32-bit destination the same way
- * (irq_remapping.c, lines 61 and 1107).
+ * x2APIC id when its low eight bits are these, since every interrupt goes
+ * to it and that format's message and redirection entry hold no more.
+ * The x2APIC id, not the id of the mode the APIC is in: the entries are
+ * written while it is still in xAPIC mode, whose id is eight bits, and
+ * read once it is in x2APIC mode. Linux's prepare_irte writes the whole
+ * 32-bit destination the same way (irq_remapping.c, lines 61 and 1107).
  */
 static unsigned int irte_dest(unsigned int dest8)
 {
-    uint32_t boot = vtd_hw_apic_id();
+    uint32_t boot;
 
-    return (eim && (boot & 0xFFu) == dest8) ? (unsigned int)boot : dest8;
+    if (!eim) {
+        return dest8;
+    }
+    boot = vtd_hw_x2apic_id();
+    return (boot & 0xFFu) == dest8 ? (unsigned int)boot : dest8;
 }
 
 /**
@@ -385,8 +391,8 @@ int intremap_start(void)
     for (i = 0; i < vtd_nunits; i++) {
         vtd_set_gcmd(&vtd_units[i], VTD_GCMD_CFI, 0);
     }
-    if (eim) {
-        (void)vtd_hw_x2apic_enable(); /* choose_eim asked that it can */
+    if (eim && vtd_hw_x2apic_enable() == 1) { /* choose_eim asked that it can */
+        vtd_fault_retarget();
     }
     vtd_hw_lines_restore(&held);
     klog(KLOG_INFO, "vtd", "interrupt remapping: on, %s format, compatibility format refused",

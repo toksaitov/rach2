@@ -29,9 +29,18 @@
 #include "../../../iommu.h"
 #include "../../../klog.h"
 
-/* A unit's faults logged before the rest are only counted, and its passes
- * that found faults lost logged before the rest are only counted. */
-#define FAULT_LOG_LIMIT 32u
+/* Linux's dmar_fault rate-limits its lines with one state for every unit,
+ * at the defaults DEFAULT_RATELIMIT_BURST lines in each
+ * DEFAULT_RATELIMIT_INTERVAL, 10 in 5 seconds
+ * (include/linux/ratelimit_types.h, lines 9 and 10). */
+#define FAULT_LOG_BURST     10u
+#define FAULT_LOG_WINDOW_MS 5000u
+
+/* That state: when the window opened, by `vtd_hw_ms`, whether one has, and
+ * the lines logged and held back in it. */
+static struct spinlock fault_rs_lock = SPINLOCK_INIT_NAMED("vtd_fault_rs");
+static uint32_t fault_rs_begin, fault_rs_printed, fault_rs_missed;
+static int fault_rs_open;
 
 /* The records one pass of a unit reads before it leaves the rest to the
  * next tick. */
@@ -82,10 +91,57 @@ const char *vtd_fault_reason(unsigned int reason, int *interrupt)
 }
 
 /**
- * Count the fault of record `hi` of `u`, under `u->lock`: whether to log
- * it, 1, to log that further faults go unlogged, 2, or neither, 0.
+ * Whether a fault's line may be logged now, as Linux's ___ratelimit answers
+ * (lib/ratelimit.c, lines 27 to 75): 1 for the first FAULT_LOG_BURST lines
+ * of a window, 0 for the rest, which are counted. The first line asked for
+ * after a window ends opens the next, and `*missed` is then the count the
+ * last one held back, for the caller to log first, as ___ratelimit logs its
+ * "callbacks suppressed"; otherwise 0. A caller that finds the state taken
+ * is held back uncounted, as ___ratelimit's trylock holds it back. Called
+ * with interrupts off, under a unit's lock.
  */
-static int fault_count(struct vtd_unit *u, uint64_t hi)
+static int fault_ratelimit(uint32_t *missed)
+{
+    uint32_t now = vtd_hw_ms();
+    int ok;
+
+    *missed = 0;
+    if (!spin_trylock(&fault_rs_lock)) {
+        return 0;
+    }
+    if (!fault_rs_open) {
+        fault_rs_open = 1;
+        fault_rs_begin = now;
+    }
+    if (now - fault_rs_begin > FAULT_LOG_WINDOW_MS) {
+        *missed = fault_rs_missed;
+        fault_rs_missed = 0;
+        fault_rs_begin = now;
+        fault_rs_printed = 0;
+    }
+    ok = fault_rs_printed < FAULT_LOG_BURST;
+    if (ok) {
+        fault_rs_printed++;
+    } else {
+        fault_rs_missed++;
+    }
+    spin_unlock(&fault_rs_lock);
+    return ok;
+}
+
+/** Log that `missed` lines were held back, when there were any. */
+static void fault_log_missed(uint32_t missed)
+{
+    if (missed != 0) {
+        klog(KLOG_WARN, "vtd", "fault: %u lines suppressed", (unsigned int)missed);
+    }
+}
+
+/**
+ * Count the fault of record `hi` of `u`, under `u->lock`: whether to log
+ * it, as `fault_ratelimit` answers with `*missed`.
+ */
+static int fault_count(struct vtd_unit *u, uint64_t hi, uint32_t *missed)
 {
     int interrupt;
 
@@ -95,26 +151,20 @@ static int fault_count(struct vtd_unit *u, uint64_t hi)
     } else {
         u->dma_faults++;
     }
-    if (u->logged > FAULT_LOG_LIMIT) {
-        return 0;
-    }
-    return u->logged++ == FAULT_LOG_LIMIT ? 2 : 1;
+    return fault_ratelimit(missed);
 }
 
 /** Log the fault of record (lo, hi) of `u` as `fault_count` said, `what`,
- * without the unit's lock. */
-static void fault_log(const struct vtd_unit *u, uint64_t lo, uint64_t hi, int what)
+ * after the count of lines held back before it, without the unit's lock. */
+static void fault_log(const struct vtd_unit *u, uint64_t lo, uint64_t hi, int what, uint32_t missed)
 {
     unsigned int reason = (unsigned int)(hi >> 32) & 0xFFu;
     unsigned int sid = (unsigned int)hi & 0xFFFFu;
     int read = (int)((hi >> 62) & 1u), interrupt;
     const char *why = vtd_fault_reason(reason, &interrupt);
 
+    fault_log_missed(missed);
     if (what == 0) {
-        return;
-    }
-    if (what == 2) {
-        klog(KLOG_ERR, "vtd", "fault: dmar%d: further faults counted, not logged", u->index);
         return;
     }
     if (interrupt) {
@@ -133,11 +183,11 @@ static void fault_log(const struct vtd_unit *u, uint64_t lo, uint64_t hi, int wh
  * to FAULT_PASS_RECORDS of them, and the status bits that say so. A pass
  * that reaches the bound sets `u->fault_again`, and `iommu_tick` reads the
  * rest. A lost fault (PFO) counts as one DMA fault, since the unit does
- * not say how many it lost, and the log says the count is then a floor, for
- * the first FAULT_LOG_LIMIT passes that find one; a device that keeps
- * faulting sets PFO on nearly every pass, which then runs on every tick, so
- * the rest are only counted, as Linux rate-limits dmar_fault's line of the
- * status, which shows PFO, and of each record (drivers/iommu/intel/dmar.c:
+ * not say how many it lost, and the log says the count is then a floor. A
+ * device that keeps faulting sets PFO on nearly every pass, which then
+ * runs on every tick, so every line here, of a record or of a loss, passes
+ * `fault_ratelimit`, as Linux rate-limits dmar_fault's line of the status,
+ * which shows PFO, and of each record (drivers/iommu/intel/dmar.c:
  * 1964-1971, :1980 in 6.12.115).
  * An error of a device's invalidation is counted and cleared; a refused
  * descriptor of the queue is left to the queue's submitter, which waits on
@@ -146,7 +196,7 @@ static void fault_log(const struct vtd_unit *u, uint64_t lo, uint64_t hi, int wh
  */
 void vtd_fault_unit(struct vtd_unit *u)
 {
-    uint32_t flags, fsts;
+    uint32_t flags, fsts, missed;
     unsigned int index, read = 0, fro = VTD_CAP_FRO(u->cap), nfr = VTD_CAP_NFR(u->cap);
 
     if (u->regs == 0) {
@@ -178,10 +228,10 @@ void vtd_fault_unit(struct vtd_unit *u)
             }
             lo = vtd_hw_read64(u->regs, at);
             vtd_hw_write32(u->regs, at + 12u, 0x80000000u);
-            what = fault_count(u, hi);
+            what = fault_count(u, hi, &missed);
             read++;
             spin_unlock_irqrestore(&u->lock, flags);
-            fault_log(u, lo, hi, what);
+            fault_log(u, lo, hi, what, missed);
             index = (index + 1u) % nfr;
             flags = spin_lock_irqsave(&u->lock);
         }
@@ -191,14 +241,12 @@ void vtd_fault_unit(struct vtd_unit *u)
     if ((fsts & VTD_FSTS_PFO) != 0) {
         u->overflows++;
         u->dma_faults++;
-        if (u->overflows <= FAULT_LOG_LIMIT) {
+        if (fault_ratelimit(&missed)) {
+            fault_log_missed(missed);
             klog(KLOG_ERR, "vtd",
                  "fault: dmar%d: faults lost, every record full: %lu times, so %lu DMA faults is "
                  "a floor",
                  u->index, u->overflows, u->dma_faults);
-        }
-        if (u->overflows == FAULT_LOG_LIMIT) {
-            klog(KLOG_ERR, "vtd", "fault: dmar%d: further losses counted, not logged", u->index);
         }
     }
     vtd_hw_write32(u->regs, VTD_FSTS, (fsts & VTD_FSTS_PFO) | VTD_FSTS_PPF | VTD_FSTS_PRO);
@@ -226,6 +274,36 @@ void iommu_tick(void)
     }
 }
 
+/* The fault events' vector, or -1 while `vtd_fault_start` has taken none. */
+static int fault_vector = -1;
+
+/**
+ * Point every unit's fault event at `fault_vector` of the boot processor,
+ * by the id it answers to in the mode it is in now. A unit's fault event is
+ * not remapped, so its message names the processor itself: the id's low
+ * eight bits in FEADDR and bits 8 to 31 in FEUADDR, the upper half of the
+ * message's address, as Linux composes the IOMMU's own message
+ * (`__irq_msi_compose_msg`, arch/x86/kernel/apic/apic.c, lines 2301 and
+ * 2302). The event is masked across the writes, so none goes to a half
+ * written address; one that comes meanwhile waits in FECTL.IP and is sent
+ * as it is unmasked.
+ */
+static void fault_aim(void)
+{
+    uint32_t id = vtd_hw_apic_id();
+    int i;
+
+    for (i = 0; i < vtd_nunits; i++) {
+        struct vtd_unit *u = &vtd_units[i];
+
+        vtd_hw_write32(u->regs, VTD_FECTL, VTD_FECTL_IM);
+        vtd_hw_write32(u->regs, VTD_FEDATA, (uint32_t)fault_vector);
+        vtd_hw_write32(u->regs, VTD_FEADDR, 0xFEE00000u | ((id & 0xFFu) << 12));
+        vtd_hw_write32(u->regs, VTD_FEUADDR, id >> 8);
+        vtd_hw_write32(u->regs, VTD_FECTL, 0);
+    }
+}
+
 /**
  * Point every unit's fault event at one message vector of this processor,
  * after reading the faults the firmware's time left: 0, or -1 when no
@@ -234,23 +312,22 @@ void iommu_tick(void)
  */
 int vtd_fault_start(void)
 {
-    int i, vector;
-
     vtd_fault_all();
-    vector = vtd_hw_fault_vector();
-    if (vector < 0) {
+    fault_vector = vtd_hw_fault_vector();
+    if (fault_vector < 0) {
         klog(KLOG_WARN, "vtd", "fault: no vector: faults go unreported");
         return -1;
     }
-    for (i = 0; i < vtd_nunits; i++) {
-        struct vtd_unit *u = &vtd_units[i];
-
-        vtd_hw_write32(u->regs, VTD_FECTL, VTD_FECTL_IM);
-        vtd_hw_write32(u->regs, VTD_FEDATA, (uint32_t)vector);
-        vtd_hw_write32(u->regs, VTD_FEADDR, 0xFEE00000u | (vtd_hw_apic_id() << 12));
-        vtd_hw_write32(u->regs, VTD_FEUADDR, 0);
-        vtd_hw_write32(u->regs, VTD_FECTL, 0);
-    }
+    fault_aim();
     vtd_fault_all();
     return 0;
+}
+
+/** The move to x2APIC mode gives the processor its whole x2APIC id, which
+ * may be wider than the eight bits `vtd_fault_start` aimed at. */
+void vtd_fault_retarget(void)
+{
+    if (fault_vector >= 0) {
+        fault_aim();
+    }
 }

@@ -584,8 +584,8 @@ static void rows_x2apic_firmware_late(void)
           "and a message that came in the last moment is sent again to this processor");
 }
 
-/** A firmware's x2APIC mode with an identity past 254, and where no
- * remapping can come. */
+/** A firmware's x2APIC mode with an identity past 254, where no remapping
+ * can come, and under a hypervisor that allows the mode. */
 static void rows_x2apic_firmware_wide(void)
 {
     reset_model(0x8700);
@@ -625,6 +625,28 @@ static void rows_x2apic_firmware_wide(void)
     x2_id = 0x1FF;
     check(lapic_init() == -1 && !lapic_ready() && wrmsr_calls == 0 && faults == 0,
           "and refused with an identity past 254, nothing written");
+
+    reset_model(0x8700);
+    has_x2apic = 1;
+    hypervisor = 1;
+    apic_base_lo |= 1u << 10;
+    x2_id = 0x1FF;
+    check(lapic_init() == 0 && lapic_x2apic() && lapic_id() == 0x1FF,
+          "under a hypervisor an identity past 254 is kept");
+    if (setjmp(panic_return) == 0) {
+        lapic_x2apic_settle(0);
+    }
+    check(lapic_x2apic() && panics == 0 && wrmsr_calls == 0,
+          "and stays without remapping, as Linux's try_to_enable_x2apic keeps it");
+
+    reset_model(0x8700);
+    has_x2apic = 1;
+    hypervisor = 1;
+    apic_base_lo |= 1u << 10;
+    ioapic_off = 1;
+    x2_id = 0x1FF;
+    check(lapic_init() == 0 && lapic_x2apic() && wrmsr_calls == 0 && faults == 0,
+          "and where no remapping can come it is kept, not refused");
 }
 
 /** A firmware's x2APIC mode kept where it is locked or a hypervisor allows

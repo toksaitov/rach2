@@ -449,8 +449,10 @@ static void timer_locked_work(uint64_t t)
  * has come (`timer_wake_pass`). A signal the accounting or the timer pass
  * finds due, SIGALRM, SIGVTALRM, SIGPROF or a POSIX timer's, is left for a
  * holder of the big lock to post (`proc_tick_signal`, `ptimer_fire_later`,
- * timerfd.c), since signals are posted under it; the timer is set again
- * only once its signal is posted.
+ * timerfd.c), since signals are posted under it. The real-time timer is set
+ * again only once its SIGALRM is posted; the timers of SIGVTALRM and
+ * SIGPROF and the POSIX timers are set again at the tick, and expirations
+ * before the post go into the one signal, a POSIX timer's into its overrun.
  *
  * The second part takes the big lock, by a try, for the work that still
  * needs it (`timer_lock_take`): the signals of the tick are posted, and on

@@ -110,13 +110,25 @@ void i915_ppgtt_clear_range(struct drm_i915_private *i915, uint64_t offset, uint
     (void)size;
 }
 
-/* The pool of shadow batches, which execbuffer fills: empty here, so the
- * shrinker's trim frees nothing. */
+/* The pool of shadow batches, which execbuffer fills: here only an object
+ * a row parks in it, with the pool's reference, which a trim puts and
+ * whose frames it counts; with none parked, a trim frees nothing. */
+static struct drm_i915_gem_object *pool_parked;
+
 uint32_t i915_gem_pool_trim(struct drm_i915_private *i915, int how)
 {
+    struct drm_i915_gem_object *obj = pool_parked;
+    uint32_t freed;
+
     (void)i915;
     (void)how;
-    return 0;
+    if (!obj) {
+        return 0;
+    }
+    pool_parked = 0;
+    freed = obj->pages.held;
+    i915_gem_object_put(obj);
+    return freed;
 }
 #endif
 
@@ -599,11 +611,22 @@ void shmem_free(struct shmem *sh)
     sh->held = 0;
 }
 
-/** An object's free that took the GEM lock itself frees its pages giving
- * way; here one leaf holds them all, so it frees them as `shmem_free`. */
+/* The frees of pages that gave way, and the give-ways of a free list. */
+static int frees_yielding, give_ways;
+
+/** An object's free by the holder that took the GEM lock frees its pages
+ * giving way; here one leaf holds them all, so it frees them as
+ * `shmem_free`, and counts. */
 void shmem_free_yielding(struct shmem *sh)
 {
+    frees_yielding++;
     shmem_free(sh);
+}
+
+/** A give-way, which one thread has no one to give to: counted. */
+void sched_give_way(void)
+{
+    give_ways++;
 }
 
 int pin_frames(struct mm *mm, const uintptr_t *frames, uint32_t count,

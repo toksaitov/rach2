@@ -118,6 +118,52 @@ int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
     return 0;
 }
 
+/** The value of the digit `c` in bases up to 16, or 16 for none. */
+static unsigned int digit_value(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return (unsigned int)(c - '0');
+    }
+    if (c >= 'a' && c <= 'f') {
+        return (unsigned int)(c - 'a') + 10u;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return (unsigned int)(c - 'A') + 10u;
+    }
+    return 16u;
+}
+
+/** The base is chosen as Linux's _parse_integer_fixup_radix chooses it
+ * (lib/kstrtox.c, lines 26 to 40), and the digits wrap as its unsigned
+ * long long does, whose low 32 bits are what the int keeps. */
+int kcmdline_option(const char *key, int *out)
+{
+    char v[32];
+    const char *s = v;
+    unsigned int base = 10u, value = 0u, d;
+    int neg = 0;
+
+    if (!kcmdline_value(key, v, sizeof(v)) || v[0] == '\0') {
+        return 0;
+    }
+    if (*s == '-') {
+        neg = 1;
+        s++;
+    }
+    if (s[0] == '0') {
+        base = 8u;
+        if ((s[1] == 'x' || s[1] == 'X') && digit_value(s[2]) < 16u) {
+            base = 16u;
+            s += 2;
+        }
+    }
+    for (; (d = digit_value(*s)) < base; s++) {
+        value = value * base + d;
+    }
+    *out = (int)(neg ? 0u - value : value);
+    return 1;
+}
+
 /**
  * Set `*out` from the first two bytes of a boolean value, `c0` and `c1`, the
  * second 0 when the value is shorter, as Linux's kstrtobool reads them

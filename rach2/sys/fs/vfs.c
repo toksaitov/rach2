@@ -1723,13 +1723,15 @@ static int walk_finish(const struct vfs_ref *cur, int flags)
 
 /** Whether the cached walk may stand on `mnt`: a type whose names the name
  * cache keeps, which a walk needs no namespace lock for and which looks
- * names up one at a time. */
+ * names up one at a time, and whose `getattr`, `hold` and `put` run without
+ * the big lock (`reads_unlocked`), since the walk and `stat_at_unlocked`
+ * call them without it. */
 static int walk_cacheable(const struct vfs_mount *mnt)
 {
     const struct vfs_type *t = mnt->type;
 
-    return t->name_cache && !t->ns_serialised && !t->ops->lookup_rest && t->ops->hold &&
-           t->ops->put && t->ops->put_unless_last && t->ops->getattr;
+    return t->name_cache && t->reads_unlocked && !t->ns_serialised && !t->ops->lookup_rest &&
+           t->ops->hold && t->ops->put && t->ops->put_unless_last && t->ops->getattr;
 }
 
 /** Drop the cached walk's hold on `node` of `mnt`: without the big lock
@@ -2359,7 +2361,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
 {
     int rc;
 
-    if (path && out && !record && mounts[0]->state == VFS_ACTIVE &&
+    if (path && out && !record && vfs_root_mounted() &&
         !(flags & ~(VFS_WALK_NOFOLLOW | VFS_WALK_REAL_IDS | VFS_WALK_LOCK)) &&
         !(current_proc && current_proc->walk_replay)) {
         rc = resolve_cached(start, path, flags, out, NULL);
@@ -2380,7 +2382,7 @@ int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out, struct 
     if (entry) {
         *entry = NULL;
     }
-    if (!path || path[0] != '/' || mounts[0]->state != VFS_ACTIVE ||
+    if (!path || path[0] != '/' || !vfs_root_mounted() ||
         (flags & ~(VFS_WALK_NOFOLLOW | VFS_WALK_REAL_IDS | VFS_WALK_LOCK)) ||
         (current_proc && current_proc->walk_replay)) {
         return VFS_CACHED_MISS;
@@ -2516,7 +2518,7 @@ void vfs_desc_open(struct vfs_mount *mnt)
     vfs_mount_get(mnt);
 }
 
-static void reap_if_detached(const struct vfs_mount *mnt);
+static void reap_if_detached(const struct vfs_mount *mnt, uint32_t left);
 
 void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
 {
@@ -2531,8 +2533,7 @@ void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
     if (mnt->refs == 0) {
         k_panic("vfs: a description closed on a mount that had none");
     }
-    vfs_mount_put(mnt);
-    reap_if_detached(mnt);
+    reap_if_detached(mnt, vfs_mount_put(mnt));
 }
 
 /* Repointing, for a KRFFS relocation. */
@@ -4550,9 +4551,19 @@ struct vfs_mount *vfs_memfd_mount(void)
 
 static int root_installed;
 
+/**
+ * The table is read under its lock, since a caller without the big lock,
+ * the cached walk and getdents64 among them, may run while a mount grows
+ * the array and frees the old one (`mount_new_slot`) or a new root takes
+ * entry zero (`vfs_root_over_image`).
+ */
 int vfs_root_mounted(void)
 {
-    return mounts && mounts[0] && mounts[0]->state == VFS_ACTIVE;
+    uint32_t flags = spin_lock_irqsave(&mount_table_lock);
+    int active = mounts && mounts[0] && mounts[0]->state == VFS_ACTIVE;
+
+    spin_unlock_irqrestore(&mount_table_lock, flags);
+    return active;
 }
 
 void vfs_init(void)
@@ -5699,22 +5710,31 @@ void vfs_reap_detached(void)
     }
 }
 
-/** Reap the detached mounts when `mnt`, which a hold or a description just
- * let go of, is one no live namespace sees and nothing holds any more. The
- * mount array, the namespaces and the reap are under the big lock, which a
- * caller without it takes once the count says a reap may be due. */
-static void reap_if_detached(const struct vfs_mount *mnt)
+/**
+ * Reap the detached mounts when `mnt`, which a hold or a description just
+ * let go of with the put that left `left` references, is one no live
+ * namespace sees and nothing holds any more. The decision is the put's
+ * count, never a read of `mnt`: once the count is 0 an unmount or another
+ * closer's reap may free the record (`mount_release`), so `mnt` is read only
+ * under the big lock, which those take, and only once the table still has it
+ * (`vfs_mount_index`), as Linux's `mntput_no_expire` drops the count under
+ * RCU and decides under `lock_mount_hash` (fs/namespace.c:1405-1430). A
+ * record freed and made again at the same address is a live mount, judged
+ * on its own fields.
+ */
+static void reap_if_detached(const struct vfs_mount *mnt, uint32_t left)
 {
     int big;
 
-    if (mnt->refs != 0 || mnt->state != VFS_ACTIVE) {
+    if (left != 0) {
         return;
     }
     big = !bkl_held();
     if (big) {
         bkl_enter();
     }
-    if (!mount_permanent(mnt) && vfs_mount_unseen(mnt)) {
+    if (vfs_mount_index(mnt) >= 0 && mnt->refs == 0 && mnt->state == VFS_ACTIVE &&
+        !mount_permanent(mnt) && vfs_mount_unseen(mnt)) {
         vfs_reap_detached();
     }
     if (big) {
@@ -5958,8 +5978,7 @@ static void hold_release(struct vfs_mount *mnt, void *node)
     r.mnt = mnt;
     r.node = node;
     vfs_ref_put(&r);
-    vfs_mount_put(mnt);
-    reap_if_detached(mnt);
+    reap_if_detached(mnt, vfs_mount_put(mnt));
 }
 
 /**

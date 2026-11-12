@@ -689,16 +689,18 @@ static int32_t run_exit(struct kvm_vcpu *v)
  * the backend's `enter` needs, and take both back after: 0, -EAGAIN when a
  * request came between the check and the entry, or the backend's error.
  * The vCPU is IN_GUEST from before its requests are read, so a kick that
- * comes after the read finds it there and interrupts the processor.
+ * comes after the read finds it there and interrupts the processor. The
+ * last exit's account closes as handled in the kernel only once the guest
+ * ran; after -EAGAIN or an error it stays open, and closes as one that
+ * ended KVM_RUN if KVM_RUN returns before the next entry.
  */
 static int32_t run_enter(struct kvm_vcpu *v)
 {
     uint32_t flags = kirq_save();
-    uint64_t left;
+    uint64_t entry, left;
     int depth;
     int32_t r;
 
-    kvm_exitstat_done(v, 0);
     v->cpu = (int32_t)arch_cpu_id();
     v->mode = KVM_MODE_IN_GUEST;
     if (v->requests & (KVM_REQ_EXIT | KVM_REQ_TRIPLE_FAULT | KVM_REQ_PMU)) {
@@ -707,13 +709,14 @@ static int32_t run_enter(struct kvm_vcpu *v)
         return -EAGAIN;
     }
     v->has_run = 1;
+    entry = arch_cycles();
     depth = bkl_drop();
     r = kvm_backend->enter(v);
     v->mode = KVM_MODE_OUTSIDE;
     left = arch_cycles();
     bkl_take(depth);
     if (r == 0) {
-        kvm_exitstat_exit(v, left, arch_cycles());
+        kvm_exitstat_exit(v, entry, left, arch_cycles());
     }
     kirq_restore(flags);
     return r;
@@ -927,7 +930,7 @@ static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
             current_proc->sched_out = NULL;
         }
     }
-    kvm_exitstat_done(v, 1);
+    kvm_exitstat_done(v);
     if (v->has_sigmask) {
         signal_set_blocked(old);
     }

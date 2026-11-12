@@ -619,16 +619,19 @@ void kvm_start(void);
 void kvm_exitstat_start(void);
 
 /**
- * Count the exit of the run that just ended on `v`, by `v->hw_exit`: the
- * TSC count `left`, read as the guest's run ended, and `held`, read once
- * the big lock was taken back, time the wait for the lock. Under the big
- * lock, with interrupts off.
+ * Count the exit of the run that just ended on `v`, by `v->hw_exit`, and
+ * close the account of the exit before it, if one is open, as handled in
+ * the kernel: `entry`, read just before the big lock was let go for the
+ * run, ends that exit's handling; `left`, read as the backend's entry
+ * returned, and `held`, read once the big lock was taken back, time the
+ * wait for the lock. Only after a run that entered the guest; under the
+ * big lock, with interrupts off.
  */
-void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t left, uint64_t held);
+void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t entry, uint64_t left, uint64_t held);
 
-/** End the account of `v`'s exit, if one is open: the kernel enters the
- * guest again (`to_user` 0) or KVM_RUN returns (1). Under the big lock. */
-void kvm_exitstat_done(struct kvm_vcpu *v, int to_user);
+/** End the account of `v`'s exit, if one is open, as one that ended
+ * KVM_RUN; when KVM_RUN returns, under the big lock. */
+void kvm_exitstat_done(struct kvm_vcpu *v);
 
 /** Whether the caller runs in the address space that made `vm`; Linux
  * answers EIO to an ioctl of a VM or its vCPUs from any other. */

@@ -174,7 +174,6 @@ struct vtd_unit {
     unsigned long ir_faults;
     unsigned long overflows; /* passes that found PFO set: faults lost */
     unsigned long errors;    /* invalidation errors */
-    unsigned int logged;     /* faults logged, for the limit */
     int fault_again;         /* a pass left full records for the next tick */
     struct spinlock lock;    /* the registers and the tables */
 };
@@ -220,6 +219,10 @@ int intremap_x2apic(void);
 
 /* fault.c */
 int vtd_fault_start(void);
+
+/** Point the units' fault events again at the boot processor, by the id it
+ * answers to after its APIC changed mode. */
+void vtd_fault_retarget(void);
 void vtd_fault_unit(struct vtd_unit *u);
 void vtd_fault_all(void);
 const char *vtd_fault_reason(unsigned int reason, int *interrupt);
@@ -283,8 +286,16 @@ int vtd_hw_ioapics(uint8_t *ids, int max);
  * on it: the vector, or -1. */
 int vtd_hw_fault_vector(void);
 
+/** Milliseconds since the boot, by the tick, wrapping at 2^32: the clock
+ * of the fault log's rate limit. */
+uint32_t vtd_hw_ms(void);
+
 /** The local APIC id the units' fault events go to. */
 uint32_t vtd_hw_apic_id(void);
+
+/** The boot processor's whole x2APIC id, which the x2APIC format's entries
+ * name it by, whichever mode its APIC is in (`lapic_x2apic_id`). */
+uint32_t vtd_hw_x2apic_id(void);
 
 /** Whether the local APIC is in x2APIC mode or may be moved there
  * (`lapic_x2apic_possible`). */

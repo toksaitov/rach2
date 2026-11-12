@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "etude/report.h"
 #include "netcase.h"
 
 /* The records of the boot the cases wait for: the root mounted and the
@@ -123,6 +124,25 @@ static void stage(struct kvm_case *s)
 }
 
 /**
+ * Print `out`, what a runner printed, for the run's log, without the lines
+ * of an etude report: this program's standard output is the case's report
+ * (tools/etude/Readme.md), which the case's own assertion alone makes, and
+ * a program the runner starts may write records for a case of its own.
+ */
+static void print_output(const char *out)
+{
+    static const char prefix[] = ETUDE_REPORT_PREFIX;
+    const char *line, *end;
+
+    for (line = out; *line != '\0'; line = end) {
+        end = strchr(line, '\n');
+        end = end != NULL ? end + 1 : line + strlen(line);
+        if (strncmp(line, prefix, sizeof(prefix) - 1) != 0)
+            fwrite(line, 1, (size_t)(end - line), stdout);
+    }
+}
+
+/**
  * Run the case's runner, assert its result line, the one assertion of the
  * case, and print what it printed for the run's log.
  */
@@ -175,7 +195,7 @@ static void run(struct kvm_case *s)
                net_copy_line(result != NULL ? result : (r.err != NULL ? r.err : r.out), line,
                              sizeof(line)));
     if (r.out != NULL)
-        fputs(r.out, stdout);
+        print_output(r.out);
     net_run_free(&r);
 }
 

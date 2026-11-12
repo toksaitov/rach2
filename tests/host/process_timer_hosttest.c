@@ -21,20 +21,22 @@
  * At its tick a due timer is marked, not posted: the pass runs without the
  * big lock, and a later pass marks it no second time. The post, under the
  * lock, sends SIGALRM to its process, blocked or running, and only then
- * arms the timer again for its interval from the tick of the post, an
- * interval of one tick included, or leaves it disarmed when it has no
- * interval; a timer not yet due is not marked. A setting made between the
- * mark and the post drops the marked SIGALRM. A thread's own return posts
+ * arms the timer again at the first tick of its interval's grid after the
+ * post, counted from the tick it was due, an interval of one tick included,
+ * or leaves it disarmed when it has no interval; a timer not yet due is not
+ * marked. A setting made between the mark and the post posts the marked
+ * SIGALRM, once, as Linux sends it at expiry. A thread's own return posts
  * its SIGVTALRM and SIGPROF and takes it off the list. A sleeper is made
  * runnable at its deadline tick and not before, under the run queues' lock,
  * a blocked process with no deadline is never made runnable by the tick,
  * and a running process is left as it is whatever its wakeup tick says. A
  * tick that wakes a sleeper still marks the sleeper's alarm and a later
  * process's. More sleepers due than one hold of the lock wakes are all
- * woken by one pass. The count is 64 bits wide: a timer armed again across
- * 2^32 ticks is due at 2^32, the tick before serves nothing due after it,
- * and tick 2^32 + 5 marks that timer and wakes the sleeper, whose deadline
- * it is. `proc_alarm_at` gives a tick past 2^32 whole.
+ * woken by one pass, which still marks a timer linked behind them. The
+ * count is 64 bits wide: a timer armed again across 2^32 ticks is due at
+ * 2^32, the tick before serves nothing due after it, and tick 2^32 + 5
+ * marks that timer and wakes the sleeper, whose deadline it is.
+ * `proc_alarm_at` gives a tick past 2^32 whole.
  */
 #include "lib/kint.h"
 #include "compat/waketime_none.h"
@@ -164,7 +166,8 @@ static void tick_at(uint64_t now)
 }
 
 /** A due real-time timer is marked by the pass, posted by a holder, and
- * armed again only after its post; a setting between drops the mark. */
+ * armed again on its grid only after its post; a setting between posts the
+ * mark. */
 static void alarm_rows(void)
 {
     proc_list = &sleeper;
@@ -191,9 +194,9 @@ static void alarm_rows(void)
     proc_tick_signals_post();
     CHECK(runner_posts == 1, "the post sends SIGALRM to a process that is running");
     CHECK(sleeper_posts == 1, "and to one that is asleep, once though two passes saw it due");
-    CHECK(runner.alarm_tick == 1030 && sleeper.alarm_tick == 1015 && !runner.alarm_due &&
+    CHECK(runner.alarm_tick == 1029 && sleeper.alarm_tick == 1014 && !runner.alarm_due &&
               !proc_tick_signals_due(),
-          "and only then arms each again for its interval from the tick of the post");
+          "and only then arms each again for its interval from the tick it was due");
 
     proc_alarm_set(&runner, 1100, 0);
     proc_alarm_set(&sleeper, 0, 0);
@@ -203,13 +206,23 @@ static void alarm_rows(void)
     tick_at(1101);
     CHECK(runner_posts == 2, "and posts nothing after");
 
-    proc_alarm_set(&runner, 1110, 5);
+    proc_alarm_set(&runner, 1110, 3);
     kernel_ticks = 1110;
     proc_wake_sleepers(1110);
-    proc_alarm_set(&runner, 1150, 0);
+    kernel_ticks = 1117;
     proc_tick_signals_post();
-    CHECK(runner_posts == 2 && runner.alarm_tick == 1150 && !runner.tick_sigs,
-          "a setting made between the mark and the post drops the marked SIGALRM");
+    CHECK(runner_posts == 3 && runner.alarm_tick == 1119,
+          "a post seven ticks late arms the timer at the first tick of its grid after the post");
+
+    proc_alarm_set(&runner, 1130, 5);
+    kernel_ticks = 1130;
+    proc_wake_sleepers(1130);
+    proc_alarm_set(&runner, 1150, 0);
+    CHECK(runner_posts == 4 && runner.alarm_tick == 1150 && !runner.tick_sigs &&
+              !runner.tick_post_linked,
+          "a setting made between the mark and the post posts the marked SIGALRM");
+    proc_tick_signals_post();
+    CHECK(runner_posts == 4, "and the post sends no second");
     proc_alarm_set(&runner, 0, 0);
 }
 
@@ -257,7 +270,7 @@ static void sleeper_rows(void)
     proc_alarm_set(&sleeper, 1400, 1);
     proc_alarm_set(&runner, 1400, 0);
     tick_at(1400);
-    CHECK(sleeper.state == PROC_READY && sleeper_posts == 2 && runner_posts == 3,
+    CHECK(sleeper.state == PROC_READY && sleeper_posts == 2 && runner_posts == 5,
           "a tick that wakes a sleeper still marks its alarm and a later process's");
     CHECK(sleeper.alarm_tick == 1401, "an interval of one tick is armed again");
 }
@@ -270,13 +283,13 @@ static void wide_rows(void)
     proc_alarm_set(&sleeper, 0, 0);
     proc_alarm_set(&runner, 0xFFFFFFFEu, 2);
     tick_at(0xFFFFFFFEu);
-    CHECK(runner_posts == 4 && runner.alarm_tick == 0x100000000ull,
+    CHECK(runner_posts == 6 && runner.alarm_tick == 0x100000000ull,
           "a timer armed again across 2^32 ticks is due at 2^32");
     tick_at(0xFFFFFFFFu);
-    CHECK(runner_posts == 4 && sleeper.state == PROC_BLOCKED,
+    CHECK(runner_posts == 6 && sleeper.state == PROC_BLOCKED,
           "a timer and a sleeper due past 2^32 ticks wait for them");
     tick_at(0x100000005ull);
-    CHECK(runner_posts == 5 && sleeper.state == PROC_READY, "and are served after");
+    CHECK(runner_posts == 7 && sleeper.state == PROC_READY, "and are served after");
 
     CHECK(proc_alarm_at(1000, 25) == 1025, "an alarm 25 ticks after tick 1000 is due at 1025");
     CHECK(proc_alarm_at(0xFFFFFFFFu, 1) == 0x100000000ull, "an alarm past 2^32 ticks is due whole");
@@ -288,13 +301,14 @@ static void crowd_rows(void)
     int i, woken;
 
     proc_alarm_set(&runner, 0, 0);
+    /* linked first, so the twenty put at the list's head come before it */
+    follower.state = PROC_RUNNING;
+    proc_alarm_set(&follower, 1600, 0);
     for (i = 0; i < 20; i++) {
         crowd[i].state = PROC_BLOCKED;
         crowd[i].wakeup_tick = 1600;
         proc_timer_update(&crowd[i]);
     }
-    follower.state = PROC_RUNNING;
-    proc_alarm_set(&follower, 1600, 0);
     tick_at(1600);
     for (i = 0, woken = 0; i < 20; i++) {
         woken += crowd[i].state == PROC_READY && !crowd[i].timer_linked;

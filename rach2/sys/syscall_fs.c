@@ -2123,8 +2123,11 @@ static int path_from_user_dir(int dirfd, const char __user *upath, char **out, i
 }
 
 /* The answer of a call's path without the big lock when the call must run
- * again under it, with nothing done that a caller sees. */
-#define CALL_LOCKED 1
+ * again under it, with nothing done that a caller sees: below every errno,
+ * whose least is -MAX_ERRNO (Linux's include/linux/err.h:18), and every
+ * descriptor, since `open_unlocked` returns a descriptor on success and
+ * Linux's do_sys_openat2 returns the one it installs (fs/open.c:1419-1430). */
+#define CALL_LOCKED (-4095 - 1)
 
 /**
  * The path a caller named, as `path_from_user_dir` makes it, for a call
@@ -2779,7 +2782,7 @@ static int32_t proc_fd_share(fd_table_t *fds, int procfd, int flags)
  * of /proc compares. The copy is taken under the table's lock and holds what
  * a descriptor in flight holds, a reference to its description and to a
  * socket, since its owner may close it meanwhile without the big lock; the
- * caller gives them back with `proc_fd_drop`. 0, -ENOENT for no such
+ * caller gives them back with `fd_peek_drop`. 0, -ENOENT for no such
  * process or descriptor, or -EACCES.
  */
 static int32_t proc_fd_entry(const struct vpath *vp, process_t **owner, fd_entry_t *src)
@@ -2793,22 +2796,27 @@ static int32_t proc_fd_entry(const struct vpath *vp, process_t **owner, fd_entry
     if (p->fds != current_proc->fds && !cred_privileged() && p->euid != proc_fsuid(current_proc)) {
         return -EACCES;
     }
-    if (fd_peek(p->fds, vp->procfd, src, FD_PEEK_REF) != 0) {
+    if (fd_peek_hold(p->fds, vp->procfd, src) != 0) {
         return -ENOENT;
-    }
-    if (src->type == FD_TYPE_SOCKET && src->sock) {
-        socket_ref(src->sock);
     }
     *owner = p;
     return 0;
 }
 
-/** Give back what `proc_fd_entry` took with the copy `src`, as the close of
- * a descriptor in flight does; the last holder of the description releases
- * its object. May sleep. */
-static void proc_fd_drop(fd_entry_t *src)
+int fd_peek_hold(struct fd_table *table, int fd, struct fd_entry *out)
 {
-    fd_release_objects(src);
+    if (fd_peek(table, fd, out, FD_PEEK_REF) != 0) {
+        return -EBADF;
+    }
+    if (out->type == FD_TYPE_SOCKET && out->sock) {
+        socket_ref(out->sock);
+    }
+    return 0;
+}
+
+void fd_peek_drop(struct fd_entry *copy)
+{
+    fd_release_objects(copy);
 }
 
 /** Check a descriptor target against NO_XDEV's mount, or allow no rule.
@@ -2931,7 +2939,7 @@ static int32_t proc_fd_open(const struct vpath *vp, int flags)
         return rc;
     }
     rc = proc_fd_open_from(vp, p, &src, flags);
-    proc_fd_drop(&src);
+    fd_peek_drop(&src);
     return rc;
 }
 
@@ -2978,12 +2986,12 @@ int32_t proc_fd_file(const struct vpath *vp, struct vfs_ref *ref, struct open_fi
         return rc;
     }
     if (!src.ofd || !src.ofd->vmnt || (src.type != FD_TYPE_FILE && src.type != FD_TYPE_DIR)) {
-        proc_fd_drop(&src);
+        fd_peek_drop(&src);
         return -EACCES;
     }
     *held = src.ofd;
     fd_ofd_ref(*held);
-    proc_fd_drop(&src);
+    fd_peek_drop(&src);
     mnt = (*held)->vmnt;
     if (vfs_enter(mnt) != 0) {
         fd_ofd_unref(*held);
@@ -4945,7 +4953,12 @@ static void open_done(int fd, const char *name, int flags)
  * and `entry` for, in the slot `fd` it reserved, made as `open_install`
  * makes one for a read-only open of a mounted type: the description takes
  * the hold, the record and a reference on the mount, and the entry is
- * published last. The descriptor, or a negative errno with everything
+ * published last. What `open_done` does for such an open, the description's
+ * watch flags and inotify's report of the open, under the big lock while a
+ * watch exists, is done to the description before the entry is published,
+ * as Linux's `vfs_open` reports the open before `fd_install` (fs/open.c):
+ * once published, another thread may close the descriptor and open another
+ * file in its slot. The descriptor, or a negative errno with everything
  * given back.
  */
 static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry, int fd,
@@ -4978,6 +4991,13 @@ static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry
     }
     e->node = NULL;
     e->type = (st->mode & S_IFMT) == S_IFDIR ? FD_TYPE_DIR : FD_TYPE_FILE;
+    e->ofd->watch_flags = OFD_WATCH_OPEN | (e->type == FD_TYPE_DIR ? OFD_WATCH_DIR : 0u);
+    if (inotify_watches) {
+        bkl_enter();
+        open_record_parent(e->ofd, name);
+        inotify_desc(e->ofd, IN_OPEN);
+        bkl_exit();
+    }
     fd_install(current_proc->fds, fd);
     return fd;
 }
@@ -4994,7 +5014,8 @@ static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry
  * descriptor is reserved before the walk, as `do_open` reserves it. The
  * descriptor or a negative errno; or CALL_LOCKED with nothing done, for
  * every other open, which `do_open` makes under the big lock. inotify's
- * report of the open takes the big lock while a watch exists.
+ * report of the open takes the big lock while a watch exists
+ * (`open_install_unlocked`).
  */
 static int32_t open_unlocked(int dirfd, const char __user *upath, int flags)
 {
@@ -5051,17 +5072,6 @@ static int32_t open_unlocked(int dirfd, const char __user *upath, int flags)
         return rc;
     }
     rc = open_install_unlocked(&ref, entry, fd, name, flags, &st);
-    if (rc >= 0) {
-        int big = inotify_watches != 0;
-
-        if (big) {
-            bkl_enter();
-        }
-        open_done(rc, name, flags);
-        if (big) {
-            bkl_exit();
-        }
-    }
     path_buf_put(path);
     return rc;
 }
@@ -5387,7 +5397,7 @@ static int openat2_magic(const struct vpath *vp, struct vfs_mount *mnt, uint32_t
     rc = proc_fd_entry(vp, &owner, &src);
     if (rc == 0) {
         rc = proc_fd_xdev(&src, mnt);
-        proc_fd_drop(&src);
+        fd_peek_drop(&src);
     }
     return rc;
 }
@@ -6895,7 +6905,10 @@ static int32_t file_read_unwritable(struct open_file *ofd, uint64_t at)
  *
  * A file `file_vfs_unlocked` admits is read without the big lock, which the
  * read takes while a shared mapping of a disk file has pages, to look for
- * the file's among them, and for inotify's report.
+ * the file's among them, and for inotify's report. Every return after the
+ * description's lock leaves by one path, which lets go of both locks, as
+ * Linux's ksys_read releases the position on every answer of vfs_read
+ * (fs/read_write.c:701-714).
  */
 static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, const uint64_t *at,
                          size_t asked)
@@ -6921,10 +6934,8 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
     }
     fd_ofd_lock(ofd);
     if (!at && rw_offset_end(entry, asked) != 0) {
-        fd_ofd_unlock(ofd);
-        return -EINVAL;
-    }
-    if (room == 0 && count > 0) {
+        bytes_read = -EINVAL;
+    } else if (room == 0 && count > 0) {
         bytes_read = file_read_unwritable(ofd, at ? *at : ofd->offset);
     } else {
         bytes_read = file_read_locked(ofd, buf, room, at ? *at : ofd->offset);
@@ -9453,7 +9464,7 @@ static int32_t proc_fd_open_path(const struct vpath *vp, int flags)
         return rc;
     }
     rc = proc_fd_open_path_from(vp, p, &src, flags);
-    proc_fd_drop(&src);
+    fd_peek_drop(&src);
     return rc;
 }
 
@@ -11887,7 +11898,7 @@ static int32_t chmod_synth(const struct vpath *vp, uint32_t mode)
 
         if (rc == 0) {
             rc = chmod_fd(&src, mode);
-            proc_fd_drop(&src);
+            fd_peek_drop(&src);
         }
         return rc;
     }
@@ -12036,7 +12047,7 @@ static int32_t chown_synth(const struct vpath *vp, uint32_t uid, uint32_t gid)
 
         if (rc == 0) {
             rc = chown_fd(&src, uid, gid);
-            proc_fd_drop(&src);
+            fd_peek_drop(&src);
         }
         return rc;
     }

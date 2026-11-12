@@ -796,6 +796,24 @@ void fd_ofd_unref(struct open_file *file)
     (void)file;
     file_holds--;
 }
+/* A peek with a hold, as syscall_fs.c's: the copy and a hold on its
+ * description, which the matching drop gives back. */
+int fd_peek_hold(struct fd_table *table, int fd, struct fd_entry *out)
+{
+    if (fd_peek(table, fd, out, FD_PEEK_REF) != 0) {
+        return -EBADF;
+    }
+    if (out->ofd) {
+        fd_ofd_ref(out->ofd);
+    }
+    return 0;
+}
+void fd_peek_drop(struct fd_entry *copy)
+{
+    if (copy->ofd) {
+        fd_ofd_unref(copy->ofd);
+    }
+}
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
     (void)mnt;
