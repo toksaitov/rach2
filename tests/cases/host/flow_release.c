@@ -1953,27 +1953,48 @@ static int windows_stop_rows(struct release *r)
 }
 /*
  * The driver of claim_rows: it runs release.sh's claim functions here, with
- * ssh, setsid and etude-launch from DIR/bin, on DIR's files, and prints what
- * scenario SCENARIO saw. Usage: sh driver DIR RELEASE SCENARIO.
+ * ssh, setsid, etude-launch and etude from DIR/bin, on DIR's files, and
+ * prints what scenario SCENARIO saw. No process of a claim is its child, so
+ * it signals none by number at its exit: the claim's stop token and the end
+ * files end them, and it only waits for them. Usage: sh driver DIR RELEASE
+ * SCENARIO.
  */
 static const char claim_driver[] =
     "W=$1 R=$2 how=$3\n"
-    "PATH=$W/bin:/usr/bin:/bin FAKE_DIR=$W RACH2_CLAIM_LEDGER=$W/ledger RACH2_CLAIM_ETUDE=true\n"
-    "case $how in dead) FAKE_LAUNCH=grant ;; late) FAKE_LAUNCH=wait ;; orphan) "
-    "FAKE_LAUNCH=stubborn ;; *) FAKE_LAUNCH=$how ;; esac\n"
-    "export PATH FAKE_DIR FAKE_LAUNCH RACH2_CLAIM_LEDGER RACH2_CLAIM_ETUDE\n"
+    "PATH=$W/bin:/usr/bin:/bin FAKE_DIR=$W RACH2_CLAIM_LEDGER=$W/ledger "
+    "RACH2_CLAIM_ETUDE=$W/bin/etude\n"
+    "FAKE_HOLD='' FAKE_ETUDE_RC=0\n"
+    "case $how in\n"
+    "dead | cleanup | ledger) FAKE_LAUNCH=grant ;;\n"
+    "late | retry) FAKE_LAUNCH=wait ;;\n"
+    "orphan) FAKE_LAUNCH=stubborn ;;\n"
+    "*) FAKE_LAUNCH=$how ;;\n"
+    "esac\n"
+    "[ \"$how\" != cleanup ] || FAKE_LAUNCH=linger FAKE_HOLD=1\n"
+    "export PATH FAKE_DIR FAKE_LAUNCH FAKE_HOLD FAKE_ETUDE_RC RACH2_CLAIM_LEDGER "
+    "RACH2_CLAIM_ETUDE\n"
     "wheld=$W/held wlock=$W/locks state=$W/state WSL=wsl\n"
-    "rm -rf \"$wheld\" \"$wlock\" \"$state\" \"$W/launcher\"\n"
-    "mkdir -p \"$wheld\" \"$state\"\n"
-    "trap 'if read -r p l < \"$W/launcher\" 2> /dev/null; then kill -KILL \"$l\" \"$p\" 2> "
-    "/dev/null; "
-    "fi' EXIT\n"
+    "rm -rf \"$wheld\" \"$wlock\" \"$state\" \"$W/ledger\" \"$W/launcher\" \"$W/end\" \"$W/ended\" "
+    "\"$W/launch-go\" \"$W/etude-go\"\n"
+    "mkdir -p \"$wheld\" \"$state\" \"$W/ledger\"\n"
+    "pause() { perl -e 'select(undef, undef, undef, 0.1)'; }\n"
+    "gone() {\n"
+    "    i=0\n"
+    "    while kill -0 \"$1\" 2> /dev/null && [ \"$i\" -lt 150 ]; do i=$((i + 1)); pause; done\n"
+    "    kill -0 \"$1\" 2> /dev/null || echo \"gone $2\"\n"
+    "}\n"
+    "# No process of a claim is this driver's child, so none is signalled by its\n"
+    "# number here: a stop token and the end file end them all, and the wait only\n"
+    "# looks.\n"
+    "trap '[ ! -d \"$wlock\" ] || echo stop > \"$wlock/m7.claim.token\"\n"
+    "    : > \"$W/end\" \"$W/launch-go\" \"$W/etude-go\"\n"
+    "    if read -r p l < \"$W/launcher\" 2> /dev/null; then gone \"$l\" > /dev/null; gone \"$p\" "
+    "> /dev/null; fi' EXIT\n"
     "eval \"$(sed -n '/^tssh()$/,/^}$/p' \"$R\")\"\n"
     "eval \"$(sed -n '/^# claim_runner: print/,/^# beat ID/p' \"$R\")\"\n"
-    "pause() { perl -e 'select(undef, undef, undef, 0.1)'; }\n"
     "look() {\n"
     "    i=0\n"
-    "    while s=$(claim_state m7 claim 1 m7.claimed); do\n"
+    "    while s=$(claim_state m7 claim \"${2:-1}\" m7.claimed); do\n"
     "        case $1 in +) [ -z \"$s\" ] || break ;; *) [ \"$s\" != \"$1\" ] || break ;; esac\n"
     "        [ \"$i\" -lt 150 ] || break\n"
     "        i=$((i + 1))\n"
@@ -1982,11 +2003,6 @@ static const char claim_driver[] =
     "    echo \"state ${s:-none}\"\n"
     "}\n"
     "until_file() { i=0; until [ -e \"$1\" ] || [ \"$i\" -ge 150 ]; do i=$((i + 1)); pause; done; "
-    "}\n"
-    "gone() {\n"
-    "    i=0\n"
-    "    while kill -0 \"$1\" 2> /dev/null && [ \"$i\" -lt 150 ]; do i=$((i + 1)); pause; done\n"
-    "    kill -0 \"$1\" 2> /dev/null || echo \"gone $2\"\n"
     "}\n"
     "touch \"$wheld/m7.alive\"\n"
     "claim_start m7 claim 1 'etude-launch alone' m7.claimed m7.prepared > /dev/null 2>&1\n"
@@ -1997,13 +2013,43 @@ static const char claim_driver[] =
     "    look granted\n"
     "    claim_stop m7 claim\n"
     "    echo \"stop $?\"\n"
-    "    [ -e \"$wlock/m7.claim.lock\" ] || [ -e \"$wlock/m7.claim.token\" ] || echo 'lock "
-    "removed'\n"
+    "    [ -e \"$wlock/m7.claim.lock\" ] || [ -e \"$wlock/m7.claim.grant\" ] || [ -e "
+    "\"$wlock/m7.claim.token\" ] ||\n"
+    "        echo 'lock removed'\n"
     "    gone \"$l\" launcher ;;\n"
     "dead)\n"
     "    look granted\n"
     "    rm -f \"$wheld/m7.alive\"\n"
     "    look dead ;;\n"
+    "cleanup)\n"
+    "    look granted\n"
+    "    touch \"$wheld/m7.prepared\"\n"
+    "    until_file \"$W/ended\"\n"
+    "    s=$(claim_state m7 claim 1 m7.claimed)\n"
+    "    echo \"linger ${s:-none}\"\n"
+    "    touch \"$W/launch-go\"\n"
+    "    until_file \"$wheld/m7.claim.1.reaped\"\n"
+    "    s=$(claim_state m7 claim 1 m7.claimed)\n"
+    "    echo \"cleanup ${s:-none}\"\n"
+    "    touch \"$W/etude-go\"\n"
+    "    look dead ;;\n"
+    "ledger)\n"
+    "    look granted\n"
+    "    touch \"$wheld/m7.prepared\"\n"
+    "    until_file \"$wheld/m7.claim.1.rc\"\n"
+    "    printf 'etude-ledger 1\\nclaim launch:x\\nowner %s 123 0\\n' \"$l\" > "
+    "\"$W/ledger/claims\"\n"
+    "    o=$(claim_stop m7 claim)\n"
+    "    echo \"stop $? $(printf '%s\\n' \"$o\" | sed 's/^process [0-9]* keeps a claim or request "
+    "in .*/kept/')\"\n"
+    "    rm -f \"$W/ledger/claims\"\n"
+    "    FAKE_ETUDE_RC=1\n"
+    "    o=$(claim_stop m7 claim)\n"
+    "    echo \"stop $? $(printf '%s\\n' \"$o\" | sed 's/^etude status could not recover "
+    ".*/unrecovered/')\"\n"
+    "    FAKE_ETUDE_RC=0\n"
+    "    claim_stop m7 claim\n"
+    "    echo \"stop $?\" ;;\n"
     "wait)\n"
     "    pause\n"
     "    s=$(claim_state m7 claim 1 m7.claimed)\n"
@@ -2025,14 +2071,31 @@ static const char claim_driver[] =
     "    echo \"stop $?\"\n"
     "    rm -f \"$wheld/m7.claim.1.started\" \"$wheld/m7.claim.1.rc\" \"$W/launcher\"\n"
     "    perl \"$wheld/m7.claim.1.pl\" \"$wlock/m7.claim.lock\" \"$wlock/m7.claim.token\" 'go 1' "
-    "\"$wheld/m7.claim.1\" env etude-launch alone true\n"
+    "\\\n"
+    "        \"$wheld/m7.claim.1\" env etude-launch alone true\n"
     "    [ -e \"$wheld/m7.claim.1.started\" ] || [ -e \"$W/launcher\" ] || echo 'late started "
     "nothing'\n"
     "    look + ;;\n"
+    "retry)\n"
+    "    claim_stop m7 claim\n"
+    "    echo \"stop $?\"\n"
+    "    rm -f \"$W/launcher\"\n"
+    "    claim_start m7 claim 2 'etude-launch alone' m7.claimed m7.prepared > /dev/null 2>&1\n"
+    "    until_file \"$W/launcher\"\n"
+    "    read -r p l < \"$W/launcher\"\n"
+    "    claim_start m7 claim 1 'etude-launch alone' m7.claimed m7.prepared > /dev/null 2>&1\n"
+    "    echo \"late $? $(cat \"$wlock/m7.claim.token\")\"\n"
+    "    kill -0 \"$l\" 2> /dev/null && echo 'retry waits'\n"
+    "    claim_stop m7 claim\n"
+    "    echo \"stop $?\"\n"
+    "    gone \"$l\" launcher ;;\n"
     "esac\n";
 /* The launcher of claim_rows, as FAKE_LAUNCH says: `grant` runs its command,
- * `wait` waits for admission, `stubborn` too, ignoring TERM, and `refuse`
- * refuses. It writes its parent, the attempt's runner, and itself. */
+ * `linger` too, as a child, and then waits for DIR/launch-go, as etude's
+ * launcher outlives its command until it has released its admission, `wait`
+ * waits for admission, `stubborn` too, ignoring TERM, and `refuse` refuses.
+ * It writes its parent, the attempt's runner, and itself; each wait ends at
+ * DIR/end too. */
 static const char claim_launcher[] =
     "#!/bin/sh\n"
     "echo \"$PPID $$\" > \"$FAKE_DIR/launcher.part\" && mv \"$FAKE_DIR/launcher.part\" "
@@ -2040,10 +2103,24 @@ static const char claim_launcher[] =
     "case $1 in build) shift 2 ;; *) shift ;; esac\n"
     "case $FAKE_LAUNCH in\n"
     "grant) exec \"$@\" ;;\n"
-    "wait) exec sleep 1000 ;;\n"
-    "stubborn) trap '' TERM; while :; do sleep 1; done ;;\n"
+    "linger)\n"
+    "    \"$@\"\n"
+    "    : > \"$FAKE_DIR/ended\"\n"
+    "    while [ ! -e \"$FAKE_DIR/launch-go\" ]; do sleep 1; done ;;\n"
+    "wait) while [ ! -e \"$FAKE_DIR/end\" ]; do sleep 1; done ;;\n"
+    "stubborn) trap '' TERM; while [ ! -e \"$FAKE_DIR/end\" ]; do sleep 1; done ;;\n"
     "*) echo 'etude-launch: result: refused: admission: no room'; exit 1 ;;\n"
     "esac\n";
+/* The etude of claim_rows: `status` succeeds, or exits FAKE_ETUDE_RC, once
+ * DIR/etude-go exists while FAKE_HOLD is set, half a minute at most. */
+static const char claim_etude[] =
+    "#!/bin/sh\n"
+    "i=0\n"
+    "while [ -n \"$FAKE_HOLD\" ] && [ ! -e \"$FAKE_DIR/etude-go\" ] && [ \"$i\" -lt 300 ]; do\n"
+    "    perl -e 'select(undef, undef, undef, 0.1)'\n"
+    "    i=$((i + 1))\n"
+    "done\n"
+    "exit \"${FAKE_ETUDE_RC:-0}\"\n";
 /** Run claim_driver's SCENARIO, and succeed when it printed WANT whole. */
 static int claim_saw(struct release *r, const char *scenario, const char *want)
 {
@@ -2059,13 +2136,18 @@ static int claim_saw(struct release *r, const char *scenario, const char *want)
     return 0;
 }
 /**
- * release.sh's claims of WSL's admission on a real lock: a granted claim
- * reads granted only while its lock is held, and reads dead once its holder
- * has ended though GOT stays (j79 3); claim_stop ends a granted claim and one
- * that waits, through the token, and confirms it by the lock; a launcher
- * whose runner was killed keeps the lock, so the claim reads neither free nor
- * dead until it ends (j79 4); a late runner of a stopped attempt starts
- * nothing; and a refused claim reads refused.
+ * release.sh's claims of WSL's admission on real locks: a granted claim
+ * reads granted only while its grant lock is held, neither while its
+ * launcher outlives its command nor while its runner cleans up after the
+ * launcher, though GOT stays and the claim's lock is held (j90 3), and reads
+ * dead once its holder has ended (j79 3); claim_stop ends a granted claim and
+ * one that waits, through the token, and confirms it by the lock and by a
+ * recovered ledger that names no attempt's launcher, failing while it names
+ * one or recovery fails (j90 4); a launcher whose runner was killed keeps the
+ * lock, so the claim reads neither free nor dead until it ends (j79 4); a
+ * late runner of a stopped attempt starts nothing, and a late start of an
+ * earlier attempt neither replaces a retry's token nor starts (j90 2); and a
+ * refused claim reads refused.
  */
 static int claim_rows(struct release *r)
 {
@@ -2075,6 +2157,7 @@ static int claim_rows(struct release *r)
     if (!flow_put(f, "claims/driver", claim_driver) ||
         !fx_write(flow_path(f, "claims/bin/etude-launch"), claim_launcher, strlen(claim_launcher),
                   0700) ||
+        !fx_write(flow_path(f, "claims/bin/etude"), claim_etude, strlen(claim_etude), 0700) ||
         !fx_write(flow_path(f, "claims/bin/ssh"), "#!/bin/sh\nexec /bin/sh -s\n", 26, 0700) ||
         !fx_write(
             flow_path(f, "claims/bin/setsid"),
@@ -2085,10 +2168,19 @@ static int claim_rows(struct release *r)
             0700))
         return check(r, 0, "the claim rows' files are written");
     ok = check(r, claim_saw(r, "grant", "state granted\nstop 0\nlock removed\ngone launcher\n"),
-               "a granted claim reads granted, and claim_stop ends it and removes its lock");
+               "a granted claim reads granted, and claim_stop ends it and removes its locks");
     ok = check(r, claim_saw(r, "dead", "state granted\nstate dead\n"),
                "a granted claim whose holder ended reads dead, though GOT stays") &&
          ok;
+    ok = check(r, claim_saw(r, "cleanup", "state granted\nlinger none\ncleanup none\nstate dead\n"),
+               "a claim whose command has ended reads neither granted nor dead while its "
+               "launcher or its runner still holds the lock") &&
+         ok;
+    ok =
+        check(r, claim_saw(r, "ledger", "state granted\nstop 1 kept\nstop 1 unrecovered\nstop 0\n"),
+              "claim_stop confirms an end only once recovery succeeded and the ledger names "
+              "no attempt's launcher") &&
+        ok;
     ok = check(r, claim_saw(r, "wait", "state none\nstop 0\ngone launcher\n"),
                "a claim that waits for admission reads nothing, and claim_stop ends it") &&
          ok;
@@ -2100,6 +2192,11 @@ static int claim_rows(struct release *r)
                "a late runner of a stopped attempt starts nothing, and the attempt reads "
                "unstarted") &&
          ok;
+    ok =
+        check(r, claim_saw(r, "retry", "stop 0\nlate 1 go 2\nretry waits\nstop 0\ngone launcher\n"),
+              "a late start of an earlier attempt neither replaces a retry's token nor "
+              "starts") &&
+        ok;
     fx_remove(flow_path(f, "claims"));
     return ok;
 }
@@ -2186,6 +2283,39 @@ static int winclean_token_stops(struct release *r, const char *part)
 static int winclean_more_rows(struct release *r);
 static int winclean_mode_rows(struct release *r);
 /**
+ * winclean.sh replaces a part's token by rename and never truncates it in
+ * place: a start that has created the token and not yet written its nonce
+ * holds the file open, and its write must not land in the token after a stop
+ * has confirmed the part ended (j90 1). A second link to the token stands for
+ * that open file, and keeps the nonce.
+ */
+static int winclean_renamed_row(struct release *r)
+{
+    struct fixture *f = r->f;
+    const char *args[] = {NULL, NULL, WINCLEAN_ID, NULL};
+    char token[4200], *held;
+    int linked, ok;
+    args[0] = flow_path(f, "windows/tree");
+    args[1] = flow_path(f, "windows/out");
+    fx_remove(flow_path(f, "windows"));
+    fx_remove(flow_path(f, "jobs"));
+    fx_mkdir(flow_path(f, "jobs"));
+    flow_put(f, "calls", "");
+    flow_put(f, WINCLEAN_OUT ".prepare.token", "a1b2c3\n");
+    snprintf(token, sizeof(token), "%s", flow_path(f, WINCLEAN_OUT ".prepare.token"));
+    linked = link(token, flow_path(f, "windows/held")) == 0;
+    winclean_run(r, "", args);
+    held = fx_read(flow_path(f, "windows/held"));
+    ok = check(r,
+               linked && f->status == 0 && winclean_token_stops(r, "prepare") && held &&
+                   !strcmp(held, "a1b2c3\n") &&
+                   called(r, "^winjob stop " WINCLEAN_JOB ".prepare token=stop$"),
+               "winclean.sh puts a new stop token in place of the part's token, leaving the file "
+               "that a start may hold open as it was");
+    free(held);
+    return ok;
+}
+/**
  * winclean.sh stops a run's part by its job, after it has written `stop` to
  * the part's token, so that a start in flight starts nothing; it marks the
  * part stopped and removes the run's scratch once the job is absent, and
@@ -2227,6 +2357,7 @@ static int winclean_rows(struct release *r)
                "winclean.sh leaves a stop token for a part that has not started, so that its "
                "start, which fails when the token exists, starts nothing") &&
          ok;
+    ok = winclean_renamed_row(r) && ok;
     ok = winclean_more_rows(r) && ok;
     return winclean_mode_rows(r) && ok;
 }
@@ -2281,10 +2412,35 @@ static int winclean_more_rows(struct release *r)
     return ok;
 }
 /**
+ * winclean.sh -a makes the current run none and stops every run that may
+ * still run, the last gate's among them, so that a start a dead release left
+ * on its way starts nothing after stop.sh (j90 5). X is its arguments.
+ */
+static int winclean_none_row(struct release *r, const char *const *x)
+{
+    struct fixture *f = r->f;
+    char *current;
+    int ok;
+    fx_remove(flow_path(f, "windows"));
+    flow_put(f, "windows/out/windows.current", "milestone7-new\n");
+    flow_put(f, "windows/out/milestone7-new.prepare.token", "n\n");
+    flow_put(f, "windows/out/milestone7-e.cases.token", "n\n");
+    winclean_run(r, "", x);
+    current = fx_read(flow_path(f, "windows/out/windows.current"));
+    ok = check(r,
+               f->status == 0 && f->out && !*f->out && current && !strcmp(current, "none\n") &&
+                   fx_exists(flow_path(f, "windows/out/milestone7-new.prepare.stopped")) &&
+                   fx_exists(flow_path(f, "windows/out/milestone7-e.cases.stopped")),
+               "winclean.sh -a makes the current run none and stops every run that may still "
+               "run, the last gate's among them (j90 5)");
+    free(current);
+    return ok;
+}
+/**
  * winclean.sh -l lists each run of OUT with a part whose token exists and
  * that has not ended, and fails when OUT cannot be read; -s says each part's
  * state; -g writes the gate's run before it stops every other listed run, and
- * names each that stays.
+ * names each that stays; -a writes none and stops every listed run.
  */
 static int winclean_mode_rows(struct release *r)
 {
@@ -2292,11 +2448,16 @@ static int winclean_mode_rows(struct release *r)
     const char *a[] = {"/bin/sh", NULL, "-l", NULL, NULL, NULL};
     const char *s[] = {"-s", NULL, NULL, "milestone7-a", NULL};
     const char *g[] = {"-g", NULL, NULL, "milestone7-new", NULL};
-    char *current;
+    const char *x[] = {"-a", NULL, NULL, NULL};
+    char script[4200], tree[4200], out[4200], *current;
     int ok;
-    a[1] = flow_source(f, "tools/flow/winclean.sh");
-    a[3] = flow_path(f, "windows/tree");
-    a[4] = flow_path(f, "windows/out");
+    /* flow_path's results are reused after a few dozen calls. */
+    snprintf(script, sizeof(script), "%s", flow_source(f, "tools/flow/winclean.sh"));
+    snprintf(tree, sizeof(tree), "%s", flow_path(f, "windows/tree"));
+    snprintf(out, sizeof(out), "%s", flow_path(f, "windows/out"));
+    a[1] = script;
+    a[3] = tree;
+    a[4] = out;
     fx_remove(flow_path(f, "windows"));
     fx_remove(flow_path(f, "jobs"));
     fx_mkdir(flow_path(f, "jobs"));
@@ -2311,8 +2472,10 @@ static int winclean_mode_rows(struct release *r)
     fx_run(f, a, f->work, NULL, NULL);
     ok = check(r,
                f->status == 0 && f->out &&
-                   !strcmp(f->out, "orphan milestone7-a\norphan milestone7-new\n"),
-               "winclean.sh -l lists the runs of OUT with a token and no end");
+                   !strcmp(f->out, "orphan milestone7-a\norphan milestone7-b\n"
+                                   "orphan milestone7-new\n"),
+               "winclean.sh -l lists the runs of OUT with a token and no stopped file, one "
+               "with a status file among them, since its job may outlive it (j90 6)");
     flow_put(f, "jobs/rach2-milestone7-a.prepare", "active 2\n");
     s[1] = a[3];
     s[2] = a[4];
@@ -2323,8 +2486,8 @@ static int winclean_mode_rows(struct release *r)
                                    "state milestone7-a.cases absent\n"),
                "winclean.sh -s says the state of each part's job") &&
          ok;
-    g[1] = a[3];
-    g[2] = a[4];
+    g[1] = x[1] = a[3];
+    g[2] = x[2] = a[4];
     flow_put(f, "calls", "");
     winclean_run(r, "stuck", g);
     current = fx_read(flow_path(f, "windows/out/windows.current"));
@@ -2343,6 +2506,7 @@ static int winclean_mode_rows(struct release *r)
                    fx_exists(flow_path(f, "windows/out/milestone7-a.prepare.stopped")),
                "winclean.sh -g stops every earlier run that may still run") &&
          ok;
+    ok = winclean_none_row(r, x) && ok;
     fx_remove(flow_path(f, "windows"));
     fx_run(f, a, f->work, NULL, NULL);
     ok = check(r, f->status == 1, "winclean.sh -l fails when it cannot read OUT") && ok;
