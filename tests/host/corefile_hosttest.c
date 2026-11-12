@@ -9,7 +9,7 @@
  * host-deps: tests/host/compat/nodelock_none.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
  * host-deps: tests/host/compat/bkl_none.c
- * host-deps: tests/host/compat/atomic_host.c
+ * host-deps: tests/host/compat/atomic_host.c tests/host/compat/fsize_none.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * `syscall_fs.c` is included whole, its unused exports private so that the
