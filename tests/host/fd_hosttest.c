@@ -8,6 +8,7 @@
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
  * host-deps: tests/host/compat/atomic_host.c
+ * host-deps: tests/host/compat/host_threads.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  * host-cflags: -pthread
  *
@@ -25,6 +26,7 @@
 #include "mm/kheap.h"
 #include "proc/process.c"
 #include "ns_first.h"
+#include "host_threads.h"
 
 extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *ptr);
@@ -92,20 +94,10 @@ static void check(int ok, const char *what)
     }
 }
 
-/* The host's threads, declared here since the kernel's integer types stand
- * in the way of <pthread.h>; a pthread_t is one word on Linux and macOS. */
-typedef unsigned long host_thread_t;
-extern int pthread_create(host_thread_t *thread, const void *attr, void *(*start)(void *),
-                          void *arg);
-extern int pthread_join(host_thread_t thread, void **ret);
-
 /* The description both threads of `status_flags_row` change, and the
  * changes each saw lost. */
 static struct open_file status_ofd;
 static volatile int status_lost[2];
-/* Set once both threads are made, which they wait for, so that they run
- * together. */
-static volatile int status_go;
 
 /** One thread of `status_flags_row`: set and clear its own bit of the
  * status flags, OFD_NONBLOCK or OFD_APPEND, and count each change the other
@@ -116,8 +108,6 @@ static void *status_rounds(void *arg)
     uint32_t bit = me ? OFD_APPEND : OFD_NONBLOCK;
     int i;
 
-    while (!__atomic_load_n(&status_go, __ATOMIC_ACQUIRE)) {
-    }
     for (i = 0; i < 1000000; i++) {
         fd_ofd_status_set(&status_ofd, bit, bit);
         status_lost[me] += !(*(volatile uint32_t *)&status_ofd.status_flags & bit);
@@ -135,14 +125,11 @@ static void *status_rounds(void *arg)
  */
 static void status_flags_row(void)
 {
-    host_thread_t th[2];
-    int made = 0;
+    static void *const args[2] = {(void *)0, (void *)1};
 
-    made += pthread_create(&th[0], NULL, status_rounds, (void *)0) == 0;
-    made += pthread_create(&th[1], NULL, status_rounds, (void *)1) == 0;
-    __atomic_store_n(&status_go, 1, __ATOMIC_RELEASE);
-    while (made > 0) {
-        pthread_join(th[--made], NULL);
+    if (host_threads_run(2, status_rounds, args) != 0) {
+        check(0, "both threads of the status flags' row start and are joined");
+        return;
     }
     check(status_lost[0] == 0 && status_lost[1] == 0 && status_ofd.status_flags == 0,
           "two threads change a description's status flags without losing a change");
