@@ -1267,9 +1267,11 @@ static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_o
  * returns; 0 when there has been none. The call takes no node lock, as
  * Linux's takes none (`ext2_fsync` and `generic_buffers_fsync`,
  * fs/ext2/file.c:153-163 and fs/buffer.c:595-622 in 6.12.115): a write
- * that races it lands on either side. A caller without the big lock has it
- * taken here for the cache's syncs (`ext2_big_enter`), which their waits
- * let go.
+ * that races it lands on either side, since a writer dirties a block before
+ * it lists it, as Linux's `mark_buffer_dirty_inode` does. A caller without
+ * the big lock has it taken here (`ext2_big_enter`) for the node table,
+ * which the look at the neighbours in the node's table block walks
+ * (`table_unsynced`), and for the mount's error; the waits let it go.
  */
 static int file_sync(struct vfs_mount *mnt, void *handle, int data_only)
 {

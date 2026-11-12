@@ -4006,10 +4006,10 @@ static int listing(void *h)
  * another description's write waits in the batch, a read and a listing
  * take no lock but the batch's own and read the pending bytes from its
  * images, a hold that is not the last is dropped without it
- * (`ext2_put_unless_last`), and a release takes it to drain the batch into
- * the cache (`ext2_writeback_drain`). Once the batch is empty a read, a
- * listing and a release take it never, and a last put takes it once
- * (`ext2_put`).
+ * (`ext2_put_unless_last`), and a release drains the batch into the cache
+ * without it too (`ext2_writeback_drain`), the cache's write side having a
+ * lock of its own. Once the batch is empty a read, a listing and a release
+ * take it never, and a last put takes it once (`ext2_put`).
  */
 static void unlocked_reader_row(void)
 {
@@ -4058,8 +4058,8 @@ static void unlocked_reader_row(void)
     check(bkl_host_takes == 0, "a hold that is not the last is dropped without the big lock");
     writes_made = 0;
     OPS->release(&mnt, rh);
-    check(bkl_host_takes == 1 && writes_made > 0,
-          "a release beside a busy batch takes the big lock and drains it");
+    check(bkl_host_takes == 0 && writes_made > 0,
+          "a release beside a busy batch drains it without the big lock");
 
     bkl_host_takes = 0;
     writes_made = 0;

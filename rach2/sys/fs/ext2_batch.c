@@ -835,17 +835,15 @@ static int drain_lock(struct ext2_mount *em)
  * holds are put and the cache balanced (`ext2_em_balance`). A failure keeps the
  * images and the stage, so that the next drain resumes there, and is
  * recorded by `ext2_writeback_error`; a removed device fails at once. The
- * reserve and the copies into the cache run under the big lock, which the
- * cache's write side keeps and the drain takes when its caller lacks it
- * (`ext2_big_enter`), let go and taken back at each sleep. The caller holds
- * no `em->batch`. 0, or -errno.
+ * drain runs with or without the big lock, which the cache's write side
+ * does not need (bcache.h). The caller holds no `em->batch`. 0, or -errno.
  */
 int ext2_writeback_drain(struct ext2_mount *em)
 {
     struct ext2_writeback *wb = em->wb;
     struct ext2_node *held[EXT2_WB_NODES];
     uint32_t copied = 0, flags;
-    int i, count, rc, big;
+    int i, count, rc;
 
     if (em->dev->flags & BLOCK_GONE) {
         return ext2_writeback_error(em, -EIO);
@@ -853,12 +851,10 @@ int ext2_writeback_drain(struct ext2_mount *em)
     if (!ext2_batch_pending(em)) {
         return 0;
     }
-    big = ext2_big_enter();
     if (!ext2_em_strict(em)) {
         (void)bcache_reserve(em->dev, writeback_dirty(wb));
     }
     if (!drain_lock(em)) {
-        ext2_big_exit(big);
         return 0;
     }
     for (i = 0; i < wb->count; i++) {
@@ -918,7 +914,6 @@ int ext2_writeback_drain(struct ext2_mount *em)
     wb->bytes = 0;
     wb->stage = 0;
     ext2_batch_unlock(em);
-    ext2_big_exit(big);
     for (i = 0; i < count; i++) {
         ext2_put(em->mnt, held[i]);
     }
@@ -927,7 +922,6 @@ int ext2_writeback_drain(struct ext2_mount *em)
 fail:
     rc = ext2_writeback_error(em, rc);
     ext2_batch_unlock(em);
-    ext2_big_exit(big);
     return rc;
 }
 
