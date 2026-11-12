@@ -876,11 +876,47 @@ static int map_point(struct ext2_mount *em, uint32_t owner, uint64_t slot_at, ui
 }
 
 /**
+ * Write block `b`, just allocated in `owner`'s tree for a pointer block at
+ * `level` or, at 0, a data block, zeroed before anything points at it. On a
+ * strict mount the zeros are written through. On a mount that writes back
+ * they are marked to go after the device's `first` blocks, the pointers and
+ * inodes a free cleared (`ext2_punch`), so that a block freed and taken
+ * again is not overwritten on the device while an old pointer there still
+ * names it, and are written to the device now, since a block that names
+ * others does not wait for an `after` one (bcache.h). The mark comes with
+ * the block's first dirty mark since it was taken, so that no write of it
+ * can reach the device ahead of those firsts. 0; -EROFS without a write
+ * once a write on the device has failed; or -errno.
+ */
+static int map_zero(struct ext2_mount *em, uint32_t owner, uint32_t b, int level)
+{
+    uint64_t off = (uint64_t)b * em->block_size;
+    uint64_t blk;
+    int rc;
+
+    if (ext2_em_strict(em)) {
+        return ext2_write_owned(em, owner, off, 0, em->block_size,
+                                WRITE_LEVEL(level) | WRITE_THROUGH);
+    }
+    if (em->dev->flags & BLOCK_WRITE_FAILED) {
+        return -EROFS;
+    }
+    rc = ext2_write_owned(em, owner, off, 0, em->block_size, WRITE_AFTER);
+    for (blk = off >> BCACHE_BLOCK_SHIFT;
+         rc == 0 && blk <= (off + em->block_size - 1) >> BCACHE_BLOCK_SHIFT; blk++) {
+        rc = bcache_sync_block(em->dev, blk);
+    }
+    return rc;
+}
+
+/**
  * The block for data index `index` of `n`, allocated when missing, into
  * `*out`, with `*fresh` set for a new data block. A missing pointer block is
- * allocated and its zeros written before the pointer to it, so that the
- * pointer cannot reach the disk over what the block held before; an inode
- * that has that pointer is stored at once. A data block's pointer is
+ * allocated and its zeros written before the pointer to it (`map_zero`), so
+ * that the pointer cannot reach the disk over what the block held before;
+ * an inode that has that pointer is stored at once. So is a new data block
+ * that a pointer block names; one the inode names directly is the caller's
+ * to write, before it stores the inode. A data block's pointer is
  * written after the block is in the bitmap, and a pointer block's after the
  * block's zeros. Each pointer block is marked at its level (`WRITE_LEVEL`),
  * so that a mount that writes back keeps that order too. A directory's
@@ -935,8 +971,7 @@ int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, u
                     return rc;
                 }
                 ext2_node_share_group(em, n, (b - em->first_data) / em->bpg, 0);
-                rc = ext2_write_owned(em, owner, (uint64_t)b * em->block_size, 0, em->block_size,
-                                      WRITE_LEVEL(level) | WRITE_THROUGH);
+                rc = map_zero(em, owner, b, level);
                 if (rc != 0) {
                     return rc;
                 }
@@ -981,8 +1016,7 @@ int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, u
         ext2_node_share_group(em, n, (b - em->first_data) / em->bpg, 0);
         n->blocks += sectors;
         if (slot_at != 0) {
-            rc = ext2_write_owned(em, owner, (uint64_t)b * em->block_size, 0, em->block_size,
-                                  WRITE_THROUGH);
+            rc = map_zero(em, owner, b, 0);
             if (rc == 0) {
                 rc = map_point(em, owner, slot_at, b, 1);
             }

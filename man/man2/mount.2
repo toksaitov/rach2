@@ -61,8 +61,14 @@ and
 make ext2 put each metadata write on the medium before the next, with a
 flush of the disk's cache, in an order that a stop between two writes
 leaves repairable without losing a file's data; without them ext2 writes
-back as Linux's does: what an operation changes stays in the buffer cache
-until
+back as Linux's does.
+A change of a directory's entries, and a block a directory or a symbolic
+link takes, are written to the device during the call that makes them, as
+is the directory's inode where the call's next step depends on it, such
+as a rename's new name in a block the directory just took: the device has
+answered each write before the call goes on, but the disk's cache is not
+flushed, so a write may still be in it.
+Anything else an operation changes stays in the buffer cache until
 .Xr sync 2 ,
 .Xr fsync 2 ,
 unmount, the cache's eviction, or the kernel's write-back, which comes
