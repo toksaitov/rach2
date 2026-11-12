@@ -8737,8 +8737,9 @@ static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, 
     mmn_notify(current_proc->mm, MMN_UNMAP, addr, addr + len);
     vm_file_get(like.file);
     (void)vm_policy_get(like.policy);
-    vm_remove(vm, addr, addr + len);
+    (void)vm_detach(vm, addr, addr + len);
     unmap_user_range(_curr_dir, addr, addr + len);
+    vm_release_detached(vm);
     rc = vm_insert_like(vm, to, to + new_len, &like, pgoff);
     vm_file_put(like.file);
     vm_policy_put(like.policy);

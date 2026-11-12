@@ -325,7 +325,7 @@ static int vm_nodes_reserve(vm_space_t *vm, uint32_t n)
     struct vm_chunk *chunk;
     uint32_t i;
 
-    while (vm->cap - vm->count < n) {
+    while (vm->cap - vm->count - vm->held < n) {
         chunk = kmalloc(sizeof(*chunk));
         if (!chunk) {
             return -1;
@@ -402,8 +402,10 @@ static vma_t *vm_link(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t p
     return r;
 }
 
-/** Remove r without moving any surviving region, and return its node. */
-static void vm_delete(vm_space_t *vm, vma_t *r)
+/** Remove r without moving any surviving region, and return its node: to
+ * the spare nodes, dropping its file, or, when `hold`, to the detached
+ * list with its file still held (`vm_detach`). */
+static void vm_delete(vm_space_t *vm, vma_t *r, int hold)
 {
     vma_t *parent = r->parent;
     vma_t *s;
@@ -437,11 +439,17 @@ static void vm_delete(vm_space_t *vm, vma_t *r)
     }
     vm->count--;
     vm->total -= r->end - r->start;
-    vm_file_put(r->file);
     vm_policy_put(r->policy);
     r->policy = NULL;
-    r->next = vm->spare;
-    vm->spare = r;
+    if (hold) {
+        r->next = vm->detached;
+        vm->detached = r;
+        vm->held++;
+    } else {
+        vm_file_put(r->file);
+        r->next = vm->spare;
+        vm->spare = r;
+    }
     vm_balance(vm, parent);
 }
 
@@ -477,17 +485,33 @@ static int vm_merge(vm_space_t *vm, vma_t *r)
     }
     end = s->end;
     r->anon |= s->anon;
-    vm_delete(vm, s);
+    vm_delete(vm, s, 0); /* r holds the file still */
     vm->total += end - r->end;
     r->end = end;
     return 1;
 }
 
+void vm_release_detached(vm_space_t *vm)
+{
+    vma_t *r;
+
+    while ((r = vm->detached) != NULL) {
+        vm->detached = r->next;
+        vm->held--;
+        vm_file_put(r->file);
+        r->file = NULL;
+        r->next = vm->spare;
+        vm->spare = r;
+    }
+}
+
 void vm_init(vm_space_t *vm)
 {
-    vma_t *r = vm->first;
+    vma_t *r;
     vma_t *next;
 
+    vm_release_detached(vm);
+    r = vm->first;
     while (r) {
         next = r->next;
         vm_file_put(r->file);
@@ -525,9 +549,9 @@ int vm_copy(vm_space_t *dst, const vm_space_t *src)
     vma_t *copy;
 
     *dst = *src;
-    dst->root = dst->first = dst->last = dst->spare = NULL;
+    dst->root = dst->first = dst->last = dst->spare = dst->detached = NULL;
     dst->chunks = NULL;
-    dst->count = dst->cap = 0;
+    dst->count = dst->cap = dst->held = 0;
     dst->total = 0;
     dst->gap_len = 0;
     dst->def_prot = 0;
@@ -623,7 +647,7 @@ int vm_set_policy(vm_space_t *vm, uintptr_t start, uintptr_t end, struct vm_poli
     return 0;
 }
 
-int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
+int vm_detach(vm_space_t *vm, uintptr_t start, uintptr_t end)
 {
     vma_t *r, *next;
 
@@ -644,7 +668,7 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
     while (r && r->start < end) {
         next = vm_next(r);
         if (start <= r->start && end >= r->end) {
-            vm_delete(vm, r);
+            vm_delete(vm, r, 1);
         } else if (start <= r->start) {
             vm->total -= end - r->start;
             if (r->file) {
@@ -659,6 +683,14 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
         r = next;
     }
     return 0;
+}
+
+int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
+{
+    int rc = vm_detach(vm, start, end);
+
+    vm_release_detached(vm);
+    return rc;
 }
 
 /* Options of `vm_change`, above every protection bit: a region with

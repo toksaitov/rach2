@@ -33,6 +33,10 @@
  * thread runs between the removal and the insertion, finds the gap, and
  * the row fails. `--regions-only` runs those two rows alone.
  *
+ * A row removes a mapped file's region through mm/regions.c and checks that
+ * the region holds the file while the entries are cleared, and lets it go
+ * for vm_file_reap only after; `--unmap-only` runs it alone.
+ *
  * host-deps: rach2/sys/mm/regions.c
  */
 
@@ -539,6 +543,9 @@ static void (*pending)(void);
 static int other_waited, other_ran, other_found;
 static uintptr_t other_size;
 static int big_lock, reaps, unmaps, notices;
+/* The file whose references `unmap_user_range` reads, and what it read. */
+static struct vm_file *unmapped_file;
+static uint32_t refs_at_unmap;
 
 /** Take `mm`'s regions' lock to write: the changer is the only writer. */
 void mmap_write_lock(struct mm *mm)
@@ -668,6 +675,9 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
     (void)start;
     (void)end;
     unmaps++;
+    if (unmapped_file) {
+        refs_at_unmap = unmapped_file->refs;
+    }
     if (work) {
         other_runs();
         other_work = work; /* `other_runs` may still owe it */
@@ -715,14 +725,51 @@ static void regions_rows(void)
     CHECK(other_size == 0x5000);
 }
 
-/** Run the rows `option` names alone, `--dead-only` or `--regions-only`:
- * the failures, at most 100, or 100 for an option of neither. */
+/** A region that munmap removes through regions.c holds its file until the
+ * range's entries are cleared: the file's last reference, which lets another
+ * thread's reap release a device's memory, goes only after the clearing,
+ * and the node comes back for a later insertion. */
+static void unmap_rows(void)
+{
+    struct vm_file file = {1, no_fill, NULL, count_release};
+    struct mm *mm;
+
+    vm_init(&space.vm);
+    vm_file_reap();
+    released = 0;
+    CHECK(vm_insert_file(&space.vm, 0x50000, 0x54000, VM_PROT_READ, VM_SHARED, &file, 0) == 0);
+    vm_file_put(&file);
+    CHECK(file.refs == 1);
+    changer.mm = &space;
+    cpu_table[0].current = &changer;
+    other_work = NULL;
+    big_lock = reaps = unmaps = notices = 0;
+    unmapped_file = &file;
+    refs_at_unmap = 0;
+
+    mm = regions_begin();
+    CHECK(regions_unmap(mm, 0x50000, 0x54000) == 0);
+    CHECK(unmaps == 1 && refs_at_unmap == 1);
+    CHECK(file.refs == 0 && vm_file_dead() && released == 0);
+    CHECK(mm->vm.count == 0 && mm->vm.held == 0 && mm->vm.detached == NULL);
+    regions_end(mm);
+    unmapped_file = NULL;
+    vm_file_reap();
+    CHECK(released == 1 && !vm_file_dead());
+    cpu_table[0].current = NULL;
+    vm_free(&space.vm);
+}
+
+/** Run the rows `option` names alone, `--dead-only`, `--regions-only` or
+ * `--unmap-only`: the failures, at most 100, or 100 for another option. */
 static int rows_alone(const char *option)
 {
     if (__builtin_strcmp(option, "--dead-only") == 0) {
         dead_rows();
     } else if (__builtin_strcmp(option, "--regions-only") == 0) {
         regions_rows();
+    } else if (__builtin_strcmp(option, "--unmap-only") == 0) {
+        unmap_rows();
     } else {
         return 100;
     }
@@ -973,5 +1020,6 @@ int main(int argc, char **argv)
     tree_rows();
     limit_rows();
     regions_rows();
+    unmap_rows();
     return (fails > 100) ? 100 : fails;
 }

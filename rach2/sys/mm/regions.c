@@ -38,10 +38,11 @@ void regions_balance(void)
 int regions_unmap(struct mm *mm, uintptr_t start, uintptr_t end)
 {
     mm_note_anon(mm, start, end);
-    if (vm_remove(&mm->vm, start, end) != 0) {
+    if (vm_detach(&mm->vm, start, end) != 0) {
         return -1;
     }
     mmn_notify(mm, MMN_UNMAP, start, end);
     unmap_user_range(mm->dir, start, end);
+    vm_release_detached(&mm->vm);
     return 0;
 }
