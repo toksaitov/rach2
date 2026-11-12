@@ -1,0 +1,81 @@
+booted rach2 kernel-fix
+== sleep 2  2.00 s
+[?2004h
+<6>[5.370000] net: eth0: IPv6 fec0::6955:628b:f8ef:577b/64 added
+<6>[5.370000] net: eth0: IPv6 fec0::de6b:bbe7:afc8:80fd/64 added
+<7>[6.132000] virtio_gpu: worker: pid 75
+<6>[6.132000] console: card0: handed to a master, the keyboard off
+[?2004l
+__END__0
+   exits=4363 halt_exits=2014 io_exits=105 mmio_exits=0 irq_exits=5 irq_window_exits=3 request_irq_exits=0 nmi_window_exits=0 insn_emulation=168 hypercalls=0 irq_injections=2021 halt_successful_poll=0 halt_wakeup=2014 req_event=4048 unnamed=2236
+== sleep 10  10.00 s
+[?2004h[?2004l
+__END__0
+   exits=20651 halt_exits=10049 io_exits=140 mmio_exits=0 irq_exits=129 irq_window_exits=7 request_irq_exits=0 nmi_window_exits=0 insn_emulation=168 hypercalls=0 irq_injections=10056 halt_successful_poll=0 halt_wakeup=10048 req_event=20103 unnamed=10326
+== /t/load sleep 5000  5.37 s
+[?2004h[?2004l
+__END__0
+   exits=32415 halt_exits=10113 io_exits=179 mmio_exits=108 irq_exits=467 irq_window_exits=554 request_irq_exits=0 nmi_window_exits=0 insn_emulation=276 hypercalls=0 irq_injections=10664 halt_successful_poll=19 halt_wakeup=10061 req_event=21662 unnamed=20994
+== /t/load pingpong 50000  0.16 s
+[?2004h[?2004l
+__END__0
+   exits=56804 halt_exits=27437 io_exits=135 mmio_exits=0 irq_exits=508 irq_window_exits=306 request_irq_exits=0 nmi_window_exits=0 insn_emulation=168 hypercalls=0 irq_injections=27768 halt_successful_poll=24216 halt_wakeup=173 req_event=28893 unnamed=28418
+== tar cf - /opt/proton | cat > /dev/null  9.17 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+__END__0
+   exits=482696 halt_exits=128968 io_exits=289 mmio_exits=154776 irq_exits=18073 irq_window_exits=11035 request_irq_exits=0 nmi_window_exits=0 insn_emulation=155067 hypercalls=0 irq_injections=142200 halt_successful_poll=93502 halt_wakeup=27569 req_event=219067 unnamed=169555
+== /t/load munmapspin 20000  0.37 s
+[?2004h[?2004l
+__END__0
+   exits=85722 halt_exits=21 io_exits=141 mmio_exits=0 irq_exits=60915 irq_window_exits=2024 request_irq_exits=0 nmi_window_exits=0 insn_emulation=168 hypercalls=0 irq_injections=61408 halt_successful_poll=6 halt_wakeup=14 req_event=65128 unnamed=22621
+== cat /sys/kernel/debug/exits  0.07 s
+[?2004h[?2004l
+in 0x3fd 1602 1194 147 0 261
+out 0x3f8 1180 772 147 0 261
+wrmsr 0xc0000100 289142 116912 102872 63325 6033
+wrmsr 0xc0000102 289079 116880 102852 63319 6028
+rdmsr 0xc0000100 289090 116879 102859 63318 6034
+rdmsr 0xc0000102 289103 116889 102862 63318 6034
+hlt 0 189488 84699 57039 42287 5463
+wrmsr 0x830 144565 72141 57449 13691 1284
+wrmsr 0x80b 5343 2472 1159 1290 422
+in 0xc03e 66 66 0 0 0
+out 0xc03e 34 34 0 0 0
+in 0xc03a 15 15 0 0 0
+in 0xc037 33 33 0 0 0
+out 0xc02c 7 6 1 0 0
+out 0xc01c 7 6 1 0 0
+out 0xc038 18 18 0 0 0
+in 0x3f8 364 364 0 0 0
+out 0x3d4 138 86 12 0 40
+out 0x3d5 138 86 12 0 40
+out 0x3fa 2 1 0 0 1
+rdmsr 0x839 4 1 1 1 1
+rdmsr 0x821 4 1 1 1 1
+wrmsr 0x83e 4 1 1 1 1
+wrmsr 0x832 10052 10017 31 3 1
+wrmsr 0x838 60119 36972 11872 9257 2018
+out 0xc028 7 4 2 0 1
+out 0xc018 7 4 2 0 1
+out 0xcf8 1430 1410 3 0 17
+in 0xcfc 1430 1410 3 0 17
+in 0xc058 19 19 0 0 0
+in 0xc062 19 19 0 0 0
+out 0xc020 7 3 3 0 1
+out 0xc010 7 3 3 0 1
+out 0xc024 6 3 3 0 0
+out 0xc014 6 3 3 0 0
+out 0x70 10 10 0 0 0
+in 0x71 1 1 0 0 0
+out 0x71 9 9 0 0 0
+ipi kick 125106 72489 37527 13769 1321
+ipi tlb 59877 4 59873 0 0
+ipi kernel_tlb 12 6 6 0 0
+ipi barrier 0 0 0 0 0
+ipi space 20 11 2 5 2
+ipi call 0 0 0 0 0
+ipi stop 0 0 0 0 0
+lost 0 0 0 0 0
+__END__0
+   exits=8264 halt_exits=27 io_exits=2884 mmio_exits=0 irq_exits=97 irq_window_exits=31 request_irq_exits=0 nmi_window_exits=0 insn_emulation=5023 hypercalls=0 irq_injections=99 halt_successful_poll=0 halt_wakeup=23 req_event=253 unnamed=5225

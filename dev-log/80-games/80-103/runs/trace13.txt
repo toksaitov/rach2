@@ -1,0 +1,74 @@
+# 13: python3 sites.py trace13.out kernel-trace.debug cls 40
+== tar cf - /opt/proton | cat > /dev/null  5.22 s
+   exits=403489 halt_exits=119921 io_exits=275 mmio_exits=154776 irq_exits=7912 irq_window_exits=7158 request_irq_exits=0 nmi_window_exits=0 insn_emulation=155067 hypercalls=0 irq_injections=127491 halt_successful_poll=91659 halt_wakeup=20426 req_event=192606 unnamed=113447
+total 129503
+  1533 ('kirq_restore', 'schedule:sched.c:1050', 2)
+   977 ('kirq_restore', 'ahci_submit:ahci.c:1852', 2)
+   741 ('outb', 'serial_out:serial.c:221', 2)
+   676 ('kirq_restore', 'console_putc_raw:klog.c:1545', 2)
+   395 ('kirq_restore', 'pipe_wake:pipe.c:417', 2)
+   310 ('inb', '_serial_lsr:serial.c:88', 2)
+   299 ('kirq_restore', 'wq_wake_all:wait_queue.c:406', 2)
+   230 ('kirq_restore', 'schedule:sched.c:1050', 1)
+   149 ('kirq_restore', 'fc_job_read:filecache.c:903', 2)
+   140 ('kirq_restore', 'fc_job_read:filecache.c:903', 49)
+   110 ('arch_user_copy', 'copy_from_user:usercopy.c:108', 2)
+    90 ('arch_user_copy', 'copy_to_user:usercopy.c:117', 2)
+    88 ('kirq_restore', 'wq_wake_all:wait_queue.c:406', 49)
+    88 ('kirq_restore', 'file_read:syscall_fs.c:7565', 2)
+    86 ('_syscall_handler', '_dispatch:isr.c:727', 2)
+    82 ('kirq_restore', 'pipe_wake:pipe.c:417', 49)
+    77 ('arch_copy_words', 'pipe_ring_copy:pipe.c:1568', 2)
+    63 ('arch_relax', 'sleep_spin:sleeplock.c:131', 2)
+    39 ('kirq_restore', 'file_read:syscall_fs.c:7565', 49)
+    36 ('kirq_restore', 'schedule:sched.c:1050', 49)
+    32 ('kirq_restore', 'get:bcache.c:2041', 2)
+    32 ('arch_copy_words', 'pipe_ring_copy:pipe.c:1568', 49)
+    29 ('kirq_restore', 'bcache_release:bcache.c:2244', 2)
+    28 ('arch_user_copy', 'copy_to_user:usercopy.c:117', 49)
+    27 ('kirq_restore', 'bcache_cached:bcache.c:1863', 2)
+    23 ('arch_user_copy', 'copy_from_user:usercopy.c:108', 49)
+    22 ('kirq_restore', 'req_run_frames:request.c:762', 2)
+    22 ('kirq_restore', 'ext2_writeback_copy:ext2_batch.c:95', 2)
+    22 ('kirq_restore', 'isr_leave:isr.c:1077', 2)
+    20 ('kirq_restore', 'fc_read_page:filecache.c:1345', 2)
+    20 ('kirq_restore', 'sched_spin_on:sched.c:1423', 2)
+    18 ('_syscall_handler', 'syscall_run:isr.c:860', 2)
+    17 ('arch_copy_words', 'ext2_read_bytes:ext2.c:838', 2)
+    16 ('_syscall_handler', '_dispatch:isr.c:727', 49)
+    15 ('kirq_restore', 'fc_get:filecache.c:1313', 2)
+    14 ('kirq_restore', 'req_take:request.c:518', 2)
+    13 ('kirq_restore', 'file_read:syscall_fs.c:7568', 2)
+phase 0 cycles 45451395 n 248679
+phase 1 cycles 451897191 n 209971
+phase 2 cycles 251183205 n 209971
+phase 3 cycles 214513962 n 209967
+phase 4 cycles 334903303 n 209967
+phase 5 cycles 1075821781 n 126790
+phase 6 cycles 911307115 n 188089
+phase 7 cycles 6025214335 n 217224
+ipi before=221 lock=8 select=0 drop+wait=0 switch=0 tail=0 membarrier=0 after=0 unstamped=0
+timer 1516
+device 34
+device row: wakecls 1 ipi 2 timer 3 dev; 6 = kick sent before halt ended [34, 0, 13, 143, 73, 8, 221, 0, 0]
+timer row [1516, 0, 221, 8, 0, 0, 0, 0, 0]
+kick-state row (1 halted, 2 idle awake, 3 busy; +4 many) [0, 1023, 1, 0, 0, 85208, 1469, 1, 0]
+landed-in-schedule latency us buckets <1,<2,<4.. [0, 0, 0, 0, 5, 21, 126, 65, 9, 2, 1, 0]
+all IPIs latency us buckets [4, 4, 7, 63344, 5167, 1806, 16653, 603, 18, 2, 2, 0]
+tick due in phase before=1479 lock=2 select=11 drop+wait=2 switch=5 tail=15 membarrier=1 after=1
+bkl wait   5324483461 cycles     127 takes IF off timer_handler kernel.c:579
+bkl wait    501919547 cycles  191897 takes IF off syscall_run isr.c:850
+bkl wait    322617243 cycles  162523 takes IF on file_read syscall_fs.c:7565
+bkl wait    178706936 cycles      28 takes IF on unix_alloc unix.c:462
+bkl wait    144609152 cycles       4 takes IF off scan_pass epoll.c:499
+bkl wait    136340623 cycles     165 takes IF on rw_call_lock syscall_fs.c:5982
+bkl wait    103476499 cycles    7044 takes IF on path_from_user_dir syscall_fs.c:2413
+bkl wait     86550498 cycles      24 takes IF on fd_teardown syscall_fs.c:6055
+bkl wait     76523791 cycles       1 takes IF on names_end ext2.c:2863
+bkl wait     60286647 cycles   25192 takes IF off isr_leave_work isr.c:1004
+bkl wait      7172720 cycles    7029 takes IF on fd_ofd_unref fd.c:553
+bkl wait      4453441 cycles    9014 takes IF on sys_fstatat64 syscall_fs.c:11609
+bkl wait      1655167 cycles    1953 takes IF on path_from_user_dir syscall_fs.c:2413
+bkl wait      1024424 cycles       4 takes IF off _irq_router isr.c:1358
+bkl wait       228312 cycles       1 takes IF on mm_reap mm.c:265
+back-to-back after: tick=679 ipi=8 dev=76 tick-waited=1 ipi-waited=0 dev-waited=0 entries=129648
