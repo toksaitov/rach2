@@ -14,6 +14,7 @@
 #include "../../../lib/kstring.h"
 #include "../../../mm/paging.h"
 #include "../../../pci.h"
+#include "../../../timer.h"
 #include "../../../udelay.h"
 #include "../../arch.h"
 #include "../acpi.h"
@@ -186,6 +187,13 @@ int vtd_hw_fault_vector(void)
     }
     register_isr_handler((uint8_t)v, fault_isr, "dmar");
     return v;
+}
+
+/** The low half of the tick count, which any processor reads in one load,
+ * in milliseconds. */
+uint32_t vtd_hw_ms(void)
+{
+    return (uint32_t)kernel_ticks * (1000u / TICK_HZ);
 }
 
 uint32_t vtd_hw_apic_id(void)

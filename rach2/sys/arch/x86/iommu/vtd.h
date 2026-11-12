@@ -174,7 +174,6 @@ struct vtd_unit {
     unsigned long ir_faults;
     unsigned long overflows; /* passes that found PFO set: faults lost */
     unsigned long errors;    /* invalidation errors */
-    unsigned int logged;     /* faults logged, for the limit */
     int fault_again;         /* a pass left full records for the next tick */
     struct spinlock lock;    /* the registers and the tables */
 };
@@ -286,6 +285,10 @@ int vtd_hw_ioapics(uint8_t *ids, int max);
 /** Take a message vector for the units' fault events, with `vtd_fault_all`
  * on it: the vector, or -1. */
 int vtd_hw_fault_vector(void);
+
+/** Milliseconds since the boot, by the tick, wrapping at 2^32: the clock
+ * of the fault log's rate limit. */
+uint32_t vtd_hw_ms(void);
 
 /** The local APIC id the units' fault events go to. */
 uint32_t vtd_hw_apic_id(void);

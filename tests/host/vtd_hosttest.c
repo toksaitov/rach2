@@ -1160,6 +1160,16 @@ int vtd_hw_fault_vector(void)
     return 0x31;
 }
 
+/* The clock of fault.c's rate limit, in milliseconds. Each row starts a
+ * minute on, so that no row shares a window with the one before it. */
+static uint32_t now_ms;
+
+/** The model's clock. */
+uint32_t vtd_hw_ms(void)
+{
+    return now_ms;
+}
+
 /** The boot processor. */
 uint32_t vtd_hw_apic_id(void)
 {
@@ -1501,6 +1511,7 @@ static void row_begin(const char *name)
     page_fail_after = -1;
     flush_calls = stray_flushes = 0;
     boot_apic = boot_x2apic = 0;
+    now_ms += 60000u;
     x2_possible = x2_on = x2_moves = 0;
     lines_masked = x2_moved_masked = x2_moved_cfi = 0;
     memset(ecam_mem, 0xFF, (unsigned long)ECAM_BUSES << 20);
@@ -2346,7 +2357,9 @@ static void row_read_only(void)
     row_end();
 }
 
-/** Faults past the limit are counted, and one lost is counted too. */
+/** Faults past the rate limit, 10 lines in 5 seconds for every unit, are
+ * counted, and one lost is counted too; the next window says how many
+ * lines were held back. */
 static void row_fault_limit(void)
 {
     struct iommu_domain *d;
@@ -2368,9 +2381,14 @@ static void row_fault_limit(void)
         vtd_fault_all();
     }
     check(iommu_dma_faults() == 42, "every fault counted");
-    check(log_count("vtd: fault: dmar0: dma read from 0:3.0") == 32 &&
-              log_count("further faults counted, not logged") == 1,
-          "32 logged");
+    check(log_count("vtd: fault: dmar0: dma read from 0:3.0") == 9,
+          "10 lines logged in the window, the loss's among them, and 32 held back");
+    now_ms += 5001u;
+    (void)m_dma(M(0), 0, DF(3, 0), 0x800000, 0, &phys);
+    vtd_fault_all();
+    check(iommu_dma_faults() == 43 && logged("vtd: fault: 32 lines suppressed") &&
+              log_count("vtd: fault: dmar0: dma read from 0:3.0") == 10,
+          "the next window logs the count held back, then the fault");
     check(logged("vtd: fault: dmar0: dma read from 0:3.0 at 0x1000: reason 0x6, PTE Read access is "
                  "not set"),
           "in Linux's words");
@@ -2403,16 +2421,21 @@ static void row_fault_bound(void)
           "the tick reads the other 9");
     iommu_tick();
     check(iommu_dma_faults() == 41, "and the next tick none");
-    check(log_count("vtd: fault: dmar0: dma read from 0:3.0") == 32 &&
-              log_count("further faults counted, not logged") == 1,
-          "32 logged");
+    check(log_count("vtd: fault: dmar0: dma read from 0:3.0") == 10, "10 logged");
+    now_ms += 5001u;
+    (void)m_dma(M(0), 0, DF(3, 0), 0x800000, 0, &phys);
+    vtd_fault_all();
+    check(iommu_dma_faults() == 42 && logged("vtd: fault: 31 lines suppressed") &&
+              log_count("vtd: fault: dmar0: dma read from 0:3.0") == 11,
+          "and a fault in the next window logged after the 31 held back");
     iommu_detach(d, 0, DF(3, 0));
     iommu_domain_free(d);
     row_end();
 }
 
 /** A device that keeps faulting loses a fault on every pass: each loss is
- * counted, and the first 32 passes that find one are logged. */
+ * counted, and the lines of a record and of a loss share the rate limit,
+ * so the first 5 passes are logged, and a pass in the next window again. */
 static void row_fault_lost_limit(void)
 {
     struct iommu_domain *d;
@@ -2430,11 +2453,19 @@ static void row_fault_lost_limit(void)
         vtd_fault_all();
     }
     check(vtd_units[0].overflows == 40 && iommu_dma_faults() == 80, "every loss counted");
-    check(log_count("vtd: fault: dmar0: faults lost, every record full") == 32 &&
-              logged("vtd: fault: dmar0: faults lost, every record full: 32 times, so 64 DMA "
+    check(log_count("vtd: fault: dmar0: faults lost, every record full") == 5 &&
+              logged("vtd: fault: dmar0: faults lost, every record full: 5 times, so 10 DMA "
                      "faults is a floor") &&
-              log_count("further losses counted, not logged") == 1,
-          "32 losses logged");
+              !logged("lines suppressed"),
+          "5 losses logged");
+    now_ms += 5001u;
+    (void)m_dma(M(0), 0, DF(3, 0), 0x800000, 0, &phys);
+    (void)m_dma(M(0), 0, DF(3, 0), 0x801000, 0, &phys);
+    vtd_fault_all();
+    check(logged("vtd: fault: 70 lines suppressed") &&
+              logged("vtd: fault: dmar0: faults lost, every record full: 41 times, so 82 DMA "
+                     "faults is a floor"),
+          "the next window's loss logged after the 70 lines held back");
     iommu_detach(d, 0, DF(3, 0));
     iommu_domain_free(d);
     row_end();
