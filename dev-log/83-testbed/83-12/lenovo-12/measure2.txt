@@ -1,0 +1,40 @@
+QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1)
+Linux 6.18.0-rach2
+NOCOPY DEVICE: Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), vendor 0x8086, integrated GPU, memory type 1
+NOCOPY SERIAL: 8 of 4096 bytes: make, map and touch mean 1070 us, first 992, largest 2163; unmap and free mean 27 us; touch faults most 1
+NOCOPY OK
+NOCOPY DEVICE: Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), vendor 0x8086, integrated GPU, memory type 1
+NOCOPY SERIAL: 8 of 65536 bytes: make, map and touch mean 950 us, first 2434, largest 2434; unmap and free mean 39 us; touch faults most 1
+NOCOPY OK
+NOCOPY DEVICE: Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), vendor 0x8086, integrated GPU, memory type 1
+NOCOPY SERIAL: 8 of 1048576 bytes: make, map and touch mean 2923 us, first 4060, largest 4542; unmap and free mean 78 us; touch faults most 1
+NOCOPY OK
+NOCOPY DEVICE: Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), vendor 0x8086, integrated GPU, memory type 1
+NOCOPY SERIAL: 8 of 16777216 bytes: make, map and touch mean 8639 us, first 9233, largest 14142; unmap and free mean 555 us; touch faults most 1
+NOCOPY OK
+NOCOPY DEVICE: Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), vendor 0x8086, integrated GPU, memory type 1
+NOCOPY SERIAL: 8 of 67108864 bytes: make, map and touch mean 30598 us, first 28916, largest 34382; unmap and free mean 2597 us; touch faults most 1
+NOCOPY OK
+NOCOPY DEVICE: Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), vendor 0x8086, integrated GPU, memory type 1
+NOCOPY HELD-MAPS: kvm_gpa_maps 36, kvm_gpa_map_pages 2850
+NOCOPY HELD: 32 of 65536 bytes: make, map and touch mean 1386 us, first 915, largest 1952; all unmapped and freed in 1177 us
+NOCOPY NEXT: one more of 65536 bytes made, mapped and touched in 24181 us
+NOCOPY OK
+NOCOPY DEVICE: Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), vendor 0x8086, integrated GPU, memory type 1
+NOCOPY BANDWIDTH: 67108864 bytes: mapped write 10389 MB/s, read 4915 MB/s; own write 10394 MB/s, read 4698 MB/s; GPU copy 40787 us (0)
+NOCOPY OK
+VGSHMPROBE MEASURE: copy to the VM 4096 bytes: 15264 us
+VGSHMPROBE MEASURE: copy from the VM 4096 bytes: 176 us
+VGSHMPROBE MEASURE: region blob made, mapped and touched, mean of 8, 4096 bytes: 27 us
+VGSHMPROBE MEASURE: region blob unmapped and freed, mean of 8, 4096 bytes: 14 us
+VGSHMPROBE OK
+VGSHMPROBE MEASURE: copy to the VM 1048576 bytes: 95067 us
+VGSHMPROBE MEASURE: copy from the VM 1048576 bytes: 64005 us
+VGSHMPROBE MEASURE: region blob made, mapped and touched, mean of 8, 1048576 bytes: 946 us
+VGSHMPROBE MEASURE: region blob unmapped and freed, mean of 8, 1048576 bytes: 35 us
+VGSHMPROBE OK
+VGSHMPROBE MEASURE: copy to the VM 4194304 bytes: 336491 us
+VGSHMPROBE MEASURE: copy from the VM 4194304 bytes: 255284 us
+VGSHMPROBE MEASURE: region blob made, mapped and touched, mean of 8, 4194304 bytes: 3253 us
+VGSHMPROBE MEASURE: region blob unmapped and freed, mean of 8, 4194304 bytes: 85 us
+VGSHMPROBE OK
