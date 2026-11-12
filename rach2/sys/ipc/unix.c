@@ -2894,7 +2894,7 @@ static uint32_t put_rights(uintptr_t at, uint32_t room, struct unix_in *in, int 
 
     while (given < in->flight.nfds && given < room) {
         int fd = fd_alloc(table());
-        fd_entry_t *slot;
+        fd_entry_t *slot, copy;
         struct vfs_mount *locked;
         uint32_t saved;
         int big;
@@ -2911,8 +2911,9 @@ static uint32_t put_rights(uintptr_t at, uint32_t room, struct unix_in *in, int 
         slot = fd_slot(table(), fd);
         fd_ofd_unref(slot->ofd);
         saved = spin_lock_irqsave(&flight_lock);
-        *slot = in->flight.fds[given];
-        slot->pending = 1;
+        copy = in->flight.fds[given];
+        copy.pending = 1;
+        *slot = copy;
         in->flight.fds[given++].type = FD_TYPE_NONE;
         flight_sync(slot);
         if (flags & MSG_CMSG_CLOEXEC) {
