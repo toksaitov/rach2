@@ -63,7 +63,7 @@ The runners draw on the guest's GPU when told to: `piglit.sh -g` and `webgl.sh -
 
 On Rach2 the `virgl` suite, `tests/run virgl`, runs them, a case such as `machine.virgl.renderer`, `machine.virgl.piglit-07`, `machine.virgl.deqp-gles31-sample`, `machine.virgl.webgl-chromium-webgl2-03` or `machine.virgl.device-lost` ([virgl's GL](#virgls-gl)).
 
-[`runners/vkcube.sh`](runners/vkcube.sh) presents vkcube to a Weston of its own on the guest's card, as root, holds it at two frames and reads each back inside the guest; `-i` names the Vulkan ICD file to use alone, `-m OUTPUT=MODE` a mode of the connector's list for Weston's output, such as `Virtual-1=1360x768@60`, through a `weston.ini` of that one `[output]` section, kept in the output, in place of `--no-config`, and `-o` the output. `debian.sh vkcube` runs it in the Debian guest, as the reference was made, and the `vkpresent` suite, `tests/run vkpresent`, on Rach2, as the case `machine.vkpresent.vkcube` ([vkcube presenting](#vkcube-presenting)):
+[`runners/vkcube.sh`](runners/vkcube.sh) presents vkcube to a Weston of its own on the guest's card, as root, holds it at two frames and reads each back inside the guest; `-i` names the Vulkan ICD file to use alone, `-m OUTPUT=MODE` a mode of the connector's list for Weston's output, such as `Virtual-1=1360x768@60`, through a `weston.ini` of that one `[output]` section, kept in the output and passed by its absolute name, in place of `--no-config`, and `-o` the output. Weston drives the preferred mode, and says nothing, when the connector lists no such mode or output, so the runner reads the mode Weston marks current in `weston.log` and fails unless its name, and its rate to the nearest hertz when MODE gives one, are MODE's. `debian.sh vkcube` runs it in the Debian guest, as the reference was made, and the `vkpresent` suite, `tests/run vkpresent`, on Rach2, as the case `machine.vkpresent.vkcube` ([vkcube presenting](#vkcube-presenting)):
 
     sh tests/graphics/runners/debian.sh vkcube -p venus -c 8 OUT \
         -i /usr/share/vulkan/icd.d/venus_icd.x86_64.json
@@ -108,7 +108,7 @@ The display and GL runners write the same record, without the browser's lines an
 
 `judge.py deqp` prints each change of status from the reference's as `judge: change: FROM -> TO N`, each worse case and `judge: result: pass` or `fail`.
 
-`vkcube.sh` writes the record, begun as `deqp.sh`'s, then the case, the `icd`, vkcube's version, the `compositor`, Weston's GL `renderer`, the `gpu` vkcube chose and the layer's `timing`. It writes `frames`, a line a held frame, `frame N WxH crc32 0xCRC`; `frame-N.png`, the shot that gave it; `timing`, the layer's line and `rate R`, the presents a second; `gpu`, vkcube's line that names the device; and the logs of Weston, vkcube, the screenshooter and the layer. It prints one line:
+`vkcube.sh` writes the record, begun as `deqp.sh`'s, then the case, the `icd`, vkcube's version, the `compositor`, with `-m` the `mode` Weston drives, as `OUTPUT=CHOSEN, asked MODE`, Weston's GL `renderer`, the `gpu` vkcube chose and the layer's `timing`. It writes `frames`, a line a held frame, `frame N WxH crc32 0xCRC`; `frame-N.png`, the shot that gave it; `timing`, the layer's line and `rate R`, the presents a second; `gpu`, vkcube's line that names the device; and the logs of Weston, vkcube, the screenshooter and the layer. It prints one line:
 
     vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 2.502 s, 119.90 a second
 

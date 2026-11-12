@@ -11,7 +11,10 @@
 # MODE, one of the modes the connector lists, as weston.ini's [output] mode
 # names it, such as 1360x768@60, through a configuration of that one
 # section in place of --no-config; without it Weston takes the preferred
-# mode. -d takes no -m.
+# mode. -d takes no -m. Weston drives the preferred mode in place of a mode
+# or an output the connector does not list, and says nothing, so the runner
+# reads the mode it chose from its log and fails when its name, or its rate
+# to the nearest hertz when MODE gives one, is not MODE's.
 #
 # Ends any Weston that runs, such as Rach2's boot session, whose supervisor
 # then waits, and starts a Weston of its own on the DRM card with its GL
@@ -90,6 +93,49 @@ vkcube_version()
     dpkg-query -W -f '${Version}' vulkan-tools 2> /dev/null ||
         gzip -dc /usr/share/doc/vulkan-tools/changelog.Debian.gz 2> /dev/null |
         sed -n '1s/^[^(]*(\([^)]*\)).*/\1/p'
+}
+
+# weston_mode OUTPUT: the mode Weston drives OUTPUT in, as its log's list of
+# the output's modes marks it current, such as 1360x768@60.0, or nothing when
+# the log lists no such output.
+weston_mode()
+{
+    awk -v want="Output $1 (crtc " '
+        index($0, want) { listing = 1; next }
+        listing && /^[ \t]/ {
+            if (index($0, ", current")) {
+                sub(/^[ \t]+/, "")
+                sub(/,.*/, "")
+                print
+                exit
+            }
+            next
+        }
+        { listing = 0 }
+    ' "$out/weston.log"
+}
+
+# mode_is WANT GOT: whether the mode GOT of weston_mode is the mode WANT of
+# -m, as Weston matches a configured mode to the connector's: the name before
+# @, p or P, and the rate after it, when WANT gives one, to the nearest hertz.
+mode_is()
+{
+    awk -v want="$1" -v got="$2" 'BEGIN {
+        name = want
+        sub(/[@pP].*/, "", name)
+        rate = substr(want, length(name) + 1)
+        if (match(rate, /[0-9]+/)) {
+            rate = substr(rate, RSTART, RLENGTH)
+        } else {
+            rate = ""
+        }
+        at = index(got, "@")
+        if (at == 0) {
+            exit 1
+        }
+        exit !(substr(got, 1, at - 1) == name &&
+            (rate == "" || int(substr(got, at + 1) + 0.5) == rate + 0))
+    }'
 }
 
 # shot N: read the screen back until two shots in a row give one sum, and
@@ -174,7 +220,8 @@ if [ "$display" = 0 ]; then
     config=--no-config
     if [ -n "$mode" ]; then
         printf '[output]\nname=%s\nmode=%s\n' "${mode%%=*}" "${mode#*=}" > "$out/weston.ini"
-        config=--config=$out/weston.ini
+        # Weston looks for a relative name in its configuration directories.
+        config=--config=$(cd "$out" && pwd)/weston.ini
     fi
     LIBSEAT_BACKEND=noop setsid weston --backend=drm --renderer=gl --shell=kiosk --idle-time=0 \
         "$config" --debug --socket="$WAYLAND_DISPLAY" --log="$out/weston.log" < /dev/null > /dev/null 2>&1 &
@@ -187,7 +234,12 @@ if [ "$display" = 0 ]; then
         sleep 0.1
     done
     runner_record "compositor $(weston --version 2>/dev/null) drm gl kiosk"
-    [ -z "$mode" ] || runner_record "mode $mode"
+    if [ -n "$mode" ]; then
+        chosen=$(weston_mode "${mode%%=*}")
+        [ -n "$chosen" ] || runner_die "weston drove no output ${mode%%=*}: $(tail -n 3 "$out/weston.log")"
+        runner_record "mode ${mode%%=*}=$chosen, asked ${mode#*=}"
+        mode_is "${mode#*=}" "$chosen" || runner_die "weston drove ${mode%%=*} in $chosen, not ${mode#*=}"
+    fi
     runner_record "renderer $(sed -n 's/.*GL renderer: *//p' "$out/weston.log" | head -n 1)"
 else
     [ -S "${XDG_RUNTIME_DIR:?}/${WAYLAND_DISPLAY:?}" ] || runner_die "no caller's Wayland display"
