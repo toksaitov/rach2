@@ -3,8 +3,8 @@
  * model of the caller's page tables.
  *
  * host-deps: tests/host/compat/atomic_host.c tests/host/compat/spinlock_host.c
- * host-deps: tests/host/compat/kirq_none.c
- * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
+ * host-deps: tests/host/compat/kirq_none.c tests/host/compat/host_threads.c
+ * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU -pthread
  *
  * slots.c, tdp.c, dirty.c and mm/notify.c are the kernel's, included
  * whole. The caller's memory is a model: a window of user addresses whose
@@ -55,7 +55,10 @@
  * of the counts and its leaf each making it map nothing and look again,
  * and a copy-on-write break there giving it the new frame; a flush waiting
  * for a vCPU in the guest only until it takes the request; a slot moved,
- * its flags changed and deleted with its leaves and tables gone; and every
+ * its flags changed and deleted with its leaves and tables gone; two
+ * replacements of the read side at once, on host threads that pass one
+ * baton, the second coming while the first waits for a reader from before
+ * both, and ending while new readers keep overlapping; and every
  * allocation and frame given back.
  */
 /* A zap's batch of 16 entries, so that the rows' zaps break. */
@@ -72,7 +75,10 @@ static void unlock_hook(struct spinlock *lock, uint32_t flags);
 #include "kvm/tdp.c"
 #include "mm/notify.c"
 
+#include "host_threads.h"
+
 extern int printf(const char *format, ...);
+extern int sched_yield(void);
 extern void *malloc(unsigned long n);
 extern void free(void *p);
 extern int posix_memalign(void **out, unsigned long align, unsigned long n);
@@ -413,13 +419,75 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
+/* While `gp_threads` is set, the threads of `gp_rows` run one at a time:
+ * the one whose number `gp_turn` holds, 0 for the row's own, which plays
+ * the readers, and 1 and 2 for the replacements, whose waits and takes of
+ * a held mutex give the turn back to 0 (`gp_yield`). */
+static int gp_threads;
+static volatile int gp_turn;
+
+/** Give the turn back to the row's thread and wait to be given it again,
+ * as a sleeper of thread `me` does until it is woken. */
+static void gp_yield(int me)
+{
+    __atomic_store_n(&gp_turn, 0, __ATOMIC_SEQ_CST);
+    while (__atomic_load_n(&gp_turn, __ATOMIC_SEQ_CST) != me) {
+        (void)sched_yield();
+    }
+}
+
+/* The holders of a mutex: the thread of each turn. */
+static int gp_holder[3];
+
+/** Make `m` free. */
+void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key *key)
+{
+    (void)name;
+    (void)key;
+    m->owner = NULL;
+}
+
+/** Take `m`: while `gp_rows` runs, a held one gives the turn back until it
+ * is free, as a sleeper on it does; otherwise it must be free. */
+void mutex_lock(struct mutex *m)
+{
+    int me = gp_threads ? __atomic_load_n(&gp_turn, __ATOMIC_SEQ_CST) : 0;
+
+    while (m->owner) {
+        if (!gp_threads || m->owner == &gp_holder[me]) {
+            __builtin_trap();
+        }
+        gp_yield(me);
+    }
+    m->owner = &gp_holder[me];
+}
+
+/** Give `m` back; it must be held. */
+void mutex_unlock(struct mutex *m)
+{
+    if (!m->owner) {
+        __builtin_trap();
+    }
+    m->owner = NULL;
+}
+
 /** A change's wait for a count: the rest of the copy under way runs, and
- * must end its section; with none to run, the count must be 0. */
+ * must end its section; with none to run, the count must be 0. While
+ * `gp_rows` runs, the replacement gives the turn back until the count is
+ * 0. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     void (*rest)(void) = copy_rest;
 
     (void)wq;
+    if (gp_threads) {
+        int me = __atomic_load_n(&gp_turn, __ATOMIC_SEQ_CST);
+
+        while (!cond(arg)) {
+            gp_yield(me);
+        }
+        return 0;
+    }
     if (!cond(arg) && rest) {
         copy_rest = NULL;
         rest();
@@ -1607,9 +1675,136 @@ static void dirty_ring_rows(void)
           "reset without a ring is refused");
 }
 
-int main(void)
+/* The readers of `gp_rows`, the counts they joined, oldest first. */
+#define GP_READERS 8
+static uint32_t gp_reader[GP_READERS];
+static int gp_readers;
+
+/* The most rounds of overlapping readers a replacement is given to end:
+ * one that waits for two counts no new reader joins ends in 3. */
+#define GP_ROUNDS 8
+
+/* Whether each replacement has returned. */
+static volatile int gp_done[3];
+
+/** A reader begins a section, which joins the count of `srcu_gen`. */
+static void gp_join(void)
+{
+    gp_reader[gp_readers++] = kvm_srcu_read_lock(&vm);
+}
+
+/** The oldest reader ends its section. */
+static void gp_leave(void)
+{
+    int i;
+
+    kvm_srcu_read_unlock(&vm, gp_reader[0]);
+    for (i = 1; i < gp_readers; i++) {
+        gp_reader[i - 1] = gp_reader[i];
+    }
+    gp_readers--;
+}
+
+/** Give the turn to replacement `w` and wait until it gives it back, by a
+ * wait, a take of a held mutex or its return. */
+static void gp_run(int w)
+{
+    __atomic_store_n(&gp_turn, w, __ATOMIC_SEQ_CST);
+    while (__atomic_load_n(&gp_turn, __ATOMIC_SEQ_CST) != 0) {
+        (void)sched_yield();
+    }
+}
+
+/** A replacement's thread: at its first turn, `kvm_srcu_synchronize`. */
+static void *gp_writer(void *arg)
+{
+    int me = (int)(intptr_t)arg;
+
+    while (__atomic_load_n(&gp_turn, __ATOMIC_SEQ_CST) != me) {
+        (void)sched_yield();
+    }
+    kvm_srcu_synchronize(&vm);
+    gp_done[me] = 1;
+    __atomic_store_n(&gp_turn, 0, __ATOMIC_SEQ_CST);
+    return NULL;
+}
+
+/**
+ * The readers' thread, in the order of j71's finding: replacement 1
+ * waits for count 0, which a reader from before it holds; replacement 2
+ * comes meanwhile; the reader ends and 1 returns; a new reader joins, and
+ * then readers keep overlapping, each new one joining before the oldest
+ * ends. Without `srcu_gp_lock`, 2 changes `srcu_gen` under 1 and is left
+ * waiting for count 0, which each new reader joins, and never ends.
+ */
+static void *gp_script(void *arg)
+{
+    int round;
+
+    (void)arg;
+    gp_join();
+    gp_run(1);
+    gp_run(2);
+    gp_leave();
+    gp_run(1);
+    CHECK(gp_done[1], "the first replacement ends once the reader from before it has");
+    gp_join();
+    for (round = 0; round < GP_ROUNDS && !gp_done[2]; round++) {
+        gp_run(2);
+        if (!gp_done[2]) {
+            gp_join();
+            gp_leave();
+        }
+    }
+    CHECK(gp_done[2], "the second replacement ends while new readers keep overlapping");
+    while (gp_readers) {
+        gp_leave();
+    }
+    while (!gp_done[1] || !gp_done[2]) {
+        gp_run(gp_done[1] ? 2 : 1);
+    }
+    return NULL;
+}
+
+/** A thread of `gp_rows`: 0 the readers', 1 and 2 the replacements'. */
+static void *gp_thread(void *arg)
+{
+    return arg ? gp_writer(arg) : gp_script(arg);
+}
+
+/** Two replacements of the read side at once, which wait one at a time,
+ * so that neither waits for a count new readers join. */
+static void gp_rows(void)
+{
+    void *args[3];
+
+    args[0] = NULL;
+    args[1] = (void *)(intptr_t)1;
+    args[2] = (void *)(intptr_t)2;
+    gp_turn = 0;
+    gp_threads = 1;
+    CHECK(host_threads_run(3, gp_thread, args) == 0, "the replacements' threads");
+    gp_threads = 0;
+    CHECK(vm.srcu_readers[0] == 0 && vm.srcu_readers[1] == 0 && vm.srcu_waiting == 0 &&
+              vm.srcu_gp_lock.owner == NULL,
+          "the read side idle after both");
+}
+
+/** Whether `a` and `b` are the same string. */
+static int same(const char *a, const char *b)
+{
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/** `--grace-only` runs `gp_rows` alone. */
+int main(int argc, char **argv)
 {
     uint32_t i;
+    int grace_only = argc > 1 && same(argv[1], "--grace-only");
 
     if (posix_memalign((void **)&ram, MIB2, 8 * MIB2) != 0) {
         printf("kvm-slots-hosttest: failed: no memory\n");
@@ -1622,6 +1817,17 @@ int main(void)
     }
     caller.mm = &the_mm;
     CHECK(kvm_slots_init(&vm) == 0 && kvm_tdp_init(&vm) == 0, "the VM's tables");
+    if (grace_only) {
+        gp_rows();
+        kvm_tdp_free(&vm);
+        kvm_slots_free(&vm);
+        free(ram);
+        if (failures) {
+            return 1;
+        }
+        printf("kvm-slots-hosttest: ok\n");
+        return 0;
+    }
     capability_rows();
     region_rows();
     many_rows();
@@ -1637,6 +1843,7 @@ int main(void)
     zap_batch_rows();
     stale_rows();
     flush_wait_rows();
+    gp_rows();
     dirty_ring_rows();
     release_rows();
     CHECK(((struct tdp *)vm.tdp)->tables == 1, "no table below the top once every slot went");
