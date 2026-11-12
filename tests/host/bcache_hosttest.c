@@ -83,9 +83,12 @@ int vfs_ns_held_by_caller(void)
 
 /* The takes of the big lock the calls hold, 1 for a caller that holds it,
    as every row but `reader_rows` calls; 0 for a reader without it, which
-   must take it to write a dirty victim. `big_takes` counts the takes. */
+   must take it to write a dirty victim or read the device. `big_takes`
+   counts the takes, and `reads_unlocked` the device reads made without
+   it. */
 static int big_held = 1;
 static int big_takes;
+static int reads_unlocked;
 
 /** The big lock's answer: whether the caller holds it. */
 int bkl_held(void)
@@ -234,6 +237,7 @@ static int fake_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
         return -5;
     }
     reads_made++;
+    reads_unlocked += big_held == 0;
     last_count = count;
     if (fail_reads) {
         return -5;
@@ -1423,10 +1427,10 @@ static void fill_forty(unsigned clean)
 }
 
 /**
- * The calls of a reader without the big lock: a hit, and a miss that finds a
- * clean buffer near the head of the release order, take no big lock and
- * write nothing; a miss that finds only dirty buffers takes the big lock to
- * write one, and gives it back.
+ * The calls of a reader without the big lock: a hit takes no big lock, a
+ * miss that finds a clean buffer near the head of the release order takes it
+ * only for the device's read and writes nothing, and a miss that finds only
+ * dirty buffers takes it to write one; each gives it back.
  */
 static void reader_rows(void)
 {
@@ -1438,10 +1442,14 @@ static void reader_rows(void)
     big_takes = 0;
     writes_made = 0;
     reads_made = 0;
+    reads_unlocked = 0;
     b = bcache_get(&vast, 300);
-    check(b != 0 && big_takes == 0 && writes_made == 0 && reads_made == 1 && b->data[0] == 0x5A,
-          "a reader's miss takes a clean buffer without the big lock or a write");
+    check(
+        b != 0 && big_takes == 1 && big_held == 0 && writes_made == 0 && reads_made == 1 &&
+            reads_unlocked == 0 && b->data[0] == 0x5A,
+        "a reader's miss takes a clean buffer with no write, and the big lock for the read alone");
     bcache_release(b);
+    big_takes = 0;
     b = bcache_get(&vast, 300);
     check(b != 0 && big_takes == 0 && reads_made == 1, "and its hit takes no big lock");
     bcache_release(b);
