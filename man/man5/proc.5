@@ -1434,14 +1434,31 @@ the wait, so these times need not sum to the acquisition time.
 Longest hold of the big kernel lock, from its take to its release, in
 microseconds since boot, measured by the same counter.
 .It Li bkl_hold_max_entry
-The kernel entry that made that hold, as
+The kernel entry that made that hold, the one it counts under in
+.Li bkl_hold_entry ,
+printed as two numbers: its interrupt vector, 128 for a system call,
+and its system call number, \-1 when the entry was no system call.
+Where
 .Li bkl_hold_entry
-names it: its interrupt vector and its system call number, \-1 when the
-entry was no system call, or
+prints
+.Li syscall 4
+or
+.Li vector 32 ,
+this field prints
+.Li 128 4
+or
+.Li 32 \-1 ;
+a system call numbered 512 or above, which
+.Li bkl_hold_entry
+gathers under
+.Li syscall -1 ,
+prints its own number, or 512 when the hold was taken in such a call that
+runs without the big lock.
+Only
 .Ql take 0
 for a take after an idle wait and
 .Ql take 1
-for a thread's take after its switch.
+for a thread's take after its switch read the same in both.
 The switch lets the big lock go, and the thread takes it back when it runs
 again, so a system call's hold after a sleep, a kernel thread's first hold
 and its holds after a sleep are
