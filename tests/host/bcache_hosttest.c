@@ -7,7 +7,7 @@
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/blockmax_host.c
  * host-deps: tests/host/compat/pressure_host.c
- * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * The fake devices are polled and fault-safe, and each is backed by a memory
  * image. `block_request` is stubbed to call the device's own read or write,
@@ -15,7 +15,9 @@
  * other callers acting while a transfer sleeps: a device that goes, a block
  * written or keyed by another process, a torn or dropped write. The rows are
  * listed with `main`. The busy-buffer wait needs a scheduler; the stubbed
- * wait fails the test if any row reaches it.
+ * wait fails the test if any row reaches it. The interrupt flag's restore,
+ * which follows every give of `cache_spin`, runs a hook a row sets, which
+ * stands for another processor that takes the lock the moment it is free.
  *
  * No hosted headers: the kernel headers define the fixed-width types, and
  * the libc calls used here are declared by hand. Each panic row runs the
@@ -25,6 +27,7 @@
 
 #include "../../rach2/sys/fs/bcache.h"
 #include "../../rach2/sys/lib/kerrno.h"
+#include "../../rach2/sys/lib/kirq.h"
 #include "../../rach2/sys/proc/process.h"
 
 extern int printf(const char *fmt, ...);
@@ -139,6 +142,48 @@ void wait_queue_init(wait_queue_t *wq)
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
+}
+
+/* The wakes of buffers' queues, the last queue woken, and the processors
+   the last kick of the woken interrupted. */
+static int wakes_made;
+static wait_queue_t *last_woken;
+static uint64_t last_kicked;
+/* The processor a wake reports it would interrupt, one bit. */
+#define WAKE_CPU 4u
+
+/** Count a wake made under a spinlock, which has nobody to wake, and
+ *  report `WAKE_CPU` to be interrupted. */
+void wq_wake_all_deferred(wait_queue_t *wq, uint64_t *cpus)
+{
+    wakes_made++;
+    last_woken = wq;
+    *cpus |= WAKE_CPU;
+}
+/** Record the processors a waker kicks once its lock is let go. */
+void sched_kick_cpus(uint64_t cpus)
+{
+    last_kicked = cpus;
+}
+
+/* Run once at the next restore of the interrupt flag, then cleared. */
+static void (*restore_hook)(void);
+
+/** No interrupt can come, so there is no flag to save. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+/** Run and clear `restore_hook`, if a row set one. */
+void kirq_restore(uint32_t flags)
+{
+    void (*fn)(void) = restore_hook;
+
+    (void)flags;
+    if (fn) {
+        restore_hook = 0;
+        fn();
+    }
 }
 /** The sleeping wait, which no row may reach: one process runs here, so a
  *  wait would never end. Record the fault, print it and exit 1. */
@@ -1508,6 +1553,66 @@ static int setup(int argc, char **argv)
     return argc > 1 && argv[1][0] == 'r';
 }
 
+/* The buffer `reclaim_after_release` stands for a waiter of, the wakes made
+   when it ran, and the buffers its shrink gave back. */
+static struct bbuf *reclaim_buffer;
+static int wakes_at_reclaim;
+static uint32_t reclaimed;
+
+/** The release's give of `cache_spin` seen by another processor: the
+ *  waiter `reclaim_buffer` counted finds it unheld and leaves, and a
+ *  shrink under the big lock takes the lock at once and frees every clean
+ *  buffer nobody holds or waits for, as a reclaim would. */
+static void reclaim_after_release(void)
+{
+    uint32_t written = 0;
+
+    wakes_at_reclaim = wakes_made;
+    reclaim_buffer->waiters--;
+    bkl_enter();
+    reclaimed = bcache_shrink(BCACHE_BUFFERS, 0, &written);
+    bkl_exit();
+}
+
+/**
+ * The rows of a release's wake: a release wakes the queue of a buffer with
+ * a waiter before it lets `cache_spin` go, since a shrink that takes the
+ * lock after may free the buffer once its waiter has left, and kicks the
+ * processors the wake reported only after; a release of a buffer nobody
+ * waits for wakes nothing.
+ */
+static void release_wake_rows(void)
+{
+    struct bbuf *b;
+    wait_queue_t *queue;
+
+    bcache_invalidate(&fake);
+    wakes_made = 0;
+    b = bcache_get(&fake, 3);
+    bcache_release(b);
+    check(b != 0 && wakes_made == 0, "a release of a buffer nobody waits for wakes nothing");
+
+    b = bcache_get(&fake, 3);
+    if (!b) {
+        check(0, "the buffer of the wake rows is read");
+        return;
+    }
+    queue = &b->wq;
+    b->waiters++; /* a sleeper, counted as `wait_unheld` counts it */
+    reclaim_buffer = b;
+    reclaimed = 0;
+    last_kicked = 0;
+    wakes_at_reclaim = -1;
+    restore_hook = reclaim_after_release;
+    bcache_release(b);
+    check(restore_hook == 0, "the release gives `cache_spin` back");
+    check(reclaimed > 0 && !bcache_cached(&fake, 3),
+          "a shrink as the lock goes frees the buffer whose waiter left");
+    check(wakes_made == 1 && last_woken == queue, "the release wakes the buffer's queue once");
+    check(wakes_at_reclaim == 1, "before the lock goes and the shrink can free the buffer");
+    check(last_kicked == WAKE_CPU, "and kicks the processor the wake reported after it");
+}
+
 int main(int argc, char **argv)
 {
     struct bbuf *b, *c, *d;
@@ -2108,6 +2213,7 @@ int main(int argc, char **argv)
           "and are written in two runs of twenty");
     writeback_rows();
     reader_rows();
+    release_wake_rows();
 
     if (fails == 0) {
         printf("bcache_hosttest: OK\n");

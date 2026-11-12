@@ -376,6 +376,19 @@ const hda_report_t *hda_get_report(void);
 void hda_read_queue(void);
 
 /**
+ * Read the queue again (hda_read_queue) and copy the report into `out` and
+ * the routing mode into `*mode`, at one moment: under the stream mutex, so
+ * that no service of khda and no operation of hda_driver runs during the
+ * copy, and under cap_lock and the stream lock, with interrupts off, so that
+ * no capture service and no interrupt changes it either. Call it in process
+ * context with no spinlock held, since it may sleep for the mutex. Linux's
+ * /proc/asound status read holds the PCM's open_mutex and then the stream
+ * lock in the same way (sound/core/pcm.c:441 and sound/core/pcm_native.c:1036
+ * of 6.12.115).
+ */
+void hda_copy_report(hda_report_t *out, int *mode);
+
+/**
  * The frames a sample written now waits behind, at the rate the stream was
  * started with: the write ring's and the DMA buffer's ahead of the position,
  * the latter converted from the programmed rate. At most three periods of

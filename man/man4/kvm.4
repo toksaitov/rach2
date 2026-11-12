@@ -102,6 +102,7 @@ and
 the registers
 .Pq Dv KVM_GET_REGS , KVM_GET_SREGS , KVM_GET_FPU , KVM_GET_XSAVE , KVM_GET_XCRS , KVM_GET_DEBUGREGS
 and their sets,
+.Dv KVM_GET_XSAVE2 ,
 .Dv KVM_GET_MSRS ,
 .Dv KVM_SET_MSRS ,
 .Dv KVM_SET_CPUID2 ,
@@ -143,6 +144,10 @@ for their single stepping and event injection.
 accepts address zero with a local APIC in the kernel, to disable the optional
 shared VAPIC page; the kernel does not offer
 .Dv KVM_CAP_VAPIC .
+.Dv KVM_CAP_XSAVE2
+answers 4096, the bytes
+.Dv KVM_GET_XSAVE2
+writes, as Linux's does where no component needs more.
 .Pp
 The bounds are Linux's:
 .Dv KVM_CAP_MAX_VCPUS
@@ -1063,7 +1068,7 @@ such as a machine type other than 0, a vCPU id of 4096 or more or past
 .Dv KVM_CAP_MAX_VCPU_ID ,
 a TSS past
 4 GiB less three pages, register state the processor would refuse, an
-XSAVE image past the guest's XCR0, or a flag Linux does not define;
+XSAVE image with a component KVM does not support, or a flag Linux does not define;
 .Dv KVM_SET_USER_MEMORY_REGION
 of an address or size not page-aligned, a range past user space or the
 host's physical width, the deletion of no slot, or a change of a slot's

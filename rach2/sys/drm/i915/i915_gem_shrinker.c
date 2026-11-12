@@ -108,17 +108,20 @@ uint32_t i915_gem_shrink(struct drm_i915_private *i915, uint32_t want)
 }
 
 /** The shrinker's `shrink`, which reclaim calls under the big kernel lock:
- * the pool's idle shadows dropped first, as Linux's pool_retire makes an
- * idle shadow purgeable for its shrinker (gt/intel_gt_buffer_pool.c:
- * 107-112), then the purgeable objects purged. Neither sleeps, and their
- * unbinds give no way (`i915_gem_object_unbind`), so `may_sleep` changes
- * nothing and the big lock stays held throughout. It only tries the GEM
- * lock, as Linux's shrinker only tries each object's lock
- * (gem/i915_gem_shrinker.c:216-220), and frees nothing while another
+ * the objects on `gem.freed` undone first, as Linux's shrinker reaches the
+ * pages of an object its free worker has not yet freed
+ * (gem/i915_gem_shrinker.c:186-192), then the pool's idle shadows dropped,
+ * as Linux's pool_retire makes an idle shadow purgeable for its shrinker
+ * (gt/intel_gt_buffer_pool.c:107-112), then the purgeable objects purged.
+ * None sleeps, and their unbinds give no way (`i915_gem_object_unbind`),
+ * so `may_sleep` changes nothing and the big lock stays held throughout.
+ * It only tries the GEM lock, as Linux's shrinker only tries each object's
+ * lock (gem/i915_gem_shrinker.c:216-220), and frees nothing while another
  * holds it; a caller that holds it already, whose allocation reclaims,
- * frees under it. An object whose last put comes here is freed at once,
- * with no give-way (`gem.no_yield`), so that its frames count now, and the
- * lock goes back with `gem.freed` left to its next taker. */
+ * frees under it, its own deferred frees among them, which Linux's worker
+ * would run beside it. An object whose last put comes here is freed at
+ * once, with no give-way (`gem.no_yield`), so that its frames count now,
+ * and the lock goes back with the list empty. */
 static uint32_t i915_gem_shrinker_scan(struct mem_shrinker *s, uint32_t want, int may_sleep)
 {
     struct drm_i915_private *i915 = ((struct i915_shrinker *)s)->i915;
@@ -135,7 +138,8 @@ static uint32_t i915_gem_shrinker_scan(struct mem_shrinker *s, uint32_t want, in
     }
     no_yield = i915->gem.no_yield;
     i915->gem.no_yield = 1;
-    got = i915_gem_pool_trim(i915, I915_POOL_IDLE);
+    got = i915_gem_free_deferred_atomic(i915);
+    got += i915_gem_pool_trim(i915, I915_POOL_IDLE);
     if (got < want) {
         got += i915_gem_shrink(i915, want - got);
     }

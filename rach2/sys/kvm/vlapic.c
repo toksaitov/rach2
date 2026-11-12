@@ -133,10 +133,16 @@
  * but for LVR, which follows the guest's CPUID, and TMCCT, which the timer
  * gives; in x2APIC mode ID holds the whole x2APIC id. IRR and TMR change
  * by atomic operations, since another processor's delivery sets them; the
- * rest change under the big lock on the vCPU's own thread.
+ * rest change under the big lock on the vCPU's own thread, but for TPR,
+ * which the processor writes itself while the guest runs under VMX's TPR
+ * shadow. The page is a page of its own, at `regs_pa`, since the shadow
+ * takes it as the virtual-APIC page, as Linux's kvm_create_lapic gives
+ * `apic->regs` a page.
  */
 struct lapic {
-    volatile uint32_t regs[KVM_APIC_REG_SIZE / 4];
+    volatile uint32_t *regs; /* KVM_APIC_REG_SIZE bytes at the start of `page` */
+    void *page;              /* the page, as `kalloc_pages` gave it */
+    uintptr_t regs_pa;       /* the page's physical address */
     struct kvm_vcpu *v;
     uint32_t divide;          /* the timer's divisor, 1 to 128 */
     uint32_t timer_mode;      /* TIMER_*, as last applied */
@@ -1076,6 +1082,13 @@ int kvm_lapic_create(struct kvm_vcpu *v)
     if (!l) {
         return -ENOMEM;
     }
+    l->page = kalloc_pages(1, &l->regs_pa);
+    if (!l->page) {
+        kfree(l);
+        return -ENOMEM;
+    }
+    k_memset(l->page, 0, 4096);
+    l->regs = (volatile uint32_t *)l->page;
     l->v = v;
     wait_queue_init(&l->wq);
     v->lapic = l;
@@ -1085,7 +1098,12 @@ int kvm_lapic_create(struct kvm_vcpu *v)
 
 void kvm_lapic_free(struct kvm_vcpu *v)
 {
-    kfree(v->lapic);
+    struct lapic *l = apic_of(v);
+
+    if (l) {
+        kfree_pages(l->page, 1);
+        kfree(l);
+    }
     v->lapic = NULL;
 }
 
@@ -1270,6 +1288,33 @@ void kvm_lapic_set_cr8(struct kvm_vcpu *v, uint64_t cr8)
 
     if (l) {
         set_tpr(l, (uint32_t)(cr8 & 0xFu) << 4);
+    }
+}
+
+uintptr_t kvm_lapic_page(struct kvm_vcpu *v)
+{
+    struct lapic *l = apic_of(v);
+
+    return l ? l->regs_pa : 0;
+}
+
+int kvm_lapic_highest_irr(struct kvm_vcpu *v)
+{
+    struct lapic *l = apic_of(v);
+
+    if (!l || !hw_enabled(l)) {
+        return -1;
+    }
+    return vec_highest(l, APIC_IRR);
+}
+
+void kvm_lapic_update_ppr(struct kvm_vcpu *v)
+{
+    struct lapic *l = apic_of(v);
+
+    if (l) {
+        update_ppr(l);
+        kvm_vcpu_kick(v, KVM_REQ_EVENT);
     }
 }
 

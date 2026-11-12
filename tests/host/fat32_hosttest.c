@@ -92,6 +92,18 @@ void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
 }
+/** The wake of a waker that holds a spinlock, which, as `wq_wake_all`
+ *  here, has nobody to wake. */
+void wq_wake_all_deferred(wait_queue_t *wq, uint64_t *cpus)
+{
+    (void)wq;
+    (void)cpus;
+}
+/** Interrupt no processor: the test runs on one. */
+void sched_kick_cpus(uint64_t cpus)
+{
+    (void)cpus;
+}
 /** Return -1 at once, as an interrupted wait does. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {

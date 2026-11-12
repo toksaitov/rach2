@@ -268,12 +268,15 @@ struct kvm_tdp_format {
  * base, the TSC deadline and the x2APIC registers go to `kvm_lapic_msr`,
  * and a backend that lets the guest write CR8 without an exit gives the
  * value to `kvm_lapic_set_cr8` after each exit and loads `kvm_lapic_cr8`'s
- * before each entry, since CR8 is the APIC's TPR. A guest's VMCALL or
- * VMMCALL goes to `kvm_hv_hypercall` while `kvm_hv_hypercall_enabled`; the
- * flush KVM_REQ_TLB_FLUSH asks for must drop the guest's own translations
- * as well, since the Hyper-V TLB flush hypercalls ask for it to flush the
- * guest's TLB. `check_extension` answers
- * the capabilities whose truth depends on the processor, such as
+ * before each entry, since CR8 is the APIC's TPR, or has the processor
+ * keep TPR in the APIC's register page itself (`kvm_lapic_page`) and
+ * calls `kvm_lapic_update_ppr` when the guest lowers TPR below the
+ * priority of the highest vector waiting (`kvm_lapic_highest_irr`). A
+ * guest's VMCALL or VMMCALL goes to `kvm_hv_hypercall` while
+ * `kvm_hv_hypercall_enabled`; the flush KVM_REQ_TLB_FLUSH asks for must
+ * drop the guest's own translations as well, since the Hyper-V TLB flush
+ * hypercalls ask for it to flush the guest's TLB. `check_extension`
+ * answers the capabilities whose truth depends on the processor, such as
  * KVM_CAP_X86_ROBUST_SINGLESTEP: the value KVM_CHECK_EXTENSION gives, 0
  * for none. `tdp` is the format of its guest-physical entries.
  * `tsc_scaling`, NULL for a backend without it, gives the largest ratio
@@ -750,6 +753,12 @@ const struct kvm_cpuid_entry2 *kvm_cpuid_find(const struct kvm_vcpu *v, uint32_t
 
 /** The XCR0 bits the host offers a guest: those the kernel saves. */
 uint64_t kvm_xcr0_supported(void);
+
+#ifdef RACH2_HOSTTEST
+/** Forget the answer `kvm_xcr0_supported` keeps, so that a host test's
+ * model processor may lose XSAVE and gain it back between rows. */
+void kvm_xcr0_forget(void);
+#endif
 
 /** The XCR0 bits `v`'s CPUID allows: leaf 0xD's within the host's, and
  * x87 always. */
@@ -1384,6 +1393,26 @@ uint64_t kvm_lapic_cr8(struct kvm_vcpu *v);
 
 /** Set the TPR of `v` from CR8 `cr8`. */
 void kvm_lapic_set_cr8(struct kvm_vcpu *v, uint64_t cr8);
+
+/** The physical address of `v`'s APIC register page, which a backend may
+ * give the processor to keep TPR in, as VMX's virtual-APIC page; 0 with
+ * no local APIC in the kernel. The page lasts as long as the vCPU. */
+uintptr_t kvm_lapic_page(struct kvm_vcpu *v);
+
+/** The highest vector in `v`'s IRR, or -1 with none, with no local APIC
+ * in the kernel, or with the APIC off in IA32_APIC_BASE, where no vector
+ * in IRR can be delivered. SPIV's enable bit does not hide IRR, since
+ * `kvm_lapic_pending` still delivers from it: Linux's
+ * kvm_lapic_find_highest_irr (lapic.c:830-838) checks no enable, and
+ * kvm_apic_has_interrupt (lapic.c:3021-3031) asks only kvm_apic_present
+ * (lapic.h:208-211). */
+int kvm_lapic_highest_irr(struct kvm_vcpu *v);
+
+/** Bring PPR up to date after the guest changed TPR without an exit, and
+ * ask for an injection, which a lower TPR may let through: VMX's
+ * TPR-below-threshold exit, as Linux's handle_tpr_below_threshold calls
+ * kvm_apic_update_ppr. */
+void kvm_lapic_update_ppr(struct kvm_vcpu *v);
 
 /**
  * Ready `v` for an entry, before each one, with the local APIC in the

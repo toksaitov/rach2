@@ -112,6 +112,11 @@ struct acpi_table {
     int ok;
 };
 
+/* The DMAR table's flags (VT-d specification, 8.1): the units remap
+ * interrupts, and the firmware asks that x2APIC mode not be used. */
+#define ACPI_DMAR_INTR_REMAP     0x01u
+#define ACPI_DMAR_X2APIC_OPT_OUT 0x02u
+
 /* The FADT's flags this kernel reads. */
 #define ACPI_FADT_TMR_VAL_EXT   (1u << 8)
 #define ACPI_FADT_RESET_REG_SUP (1u << 10)
@@ -185,6 +190,9 @@ struct acpi_info {
 
     int necam;
     struct acpi_ecam ecam[ACPI_MAX_ECAM];
+
+    int dmar;           /* a DMAR table, the VT-d units' list, was read */
+    uint8_t dmar_flags; /* its flags: ACPI_DMAR_INTR_REMAP and the opt-out */
 };
 
 /*
@@ -207,8 +215,8 @@ uint64_t acpi_rsdp_search(acpi_map_fn map);
 /**
  * Read the tables the RSDP at `rsdp` leads to into `out`: the XSDT when the
  * RSDP has one and it passes, the RSDT otherwise, and from it the MADT, the
- * FADT, the HPET, the MCFG and the FADT's DSDT. 0 when the RSDP was good,
- * -1 when it was not and `out` is empty.
+ * FADT, the HPET, the MCFG, the DMAR's flags and the FADT's DSDT. 0 when
+ * the RSDP was good, -1 when it was not and `out` is empty.
  */
 int acpi_parse(acpi_map_fn map, uint64_t rsdp, struct acpi_info *out);
 

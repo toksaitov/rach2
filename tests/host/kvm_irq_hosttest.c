@@ -52,6 +52,7 @@
 
 extern int printf(const char *format, ...);
 extern void *malloc(unsigned long n);
+extern void *aligned_alloc(unsigned long align, unsigned long n);
 extern void free(void *p);
 extern int strcmp(const char *a, const char *b);
 
@@ -110,6 +111,35 @@ void kfree(void *p)
         live--;
         free(p);
     }
+}
+
+/** kalloc_pages over the host's allocator, counted as kmalloc counts: the
+ * APIC's register page. A host address is its own physical address. */
+void *kalloc_pages(uint32_t count, uintptr_t *phys)
+{
+    void *p;
+
+    if (allocation_fail == 0) {
+        return NULL;
+    }
+    if (allocation_fail > 0) {
+        allocation_fail--;
+    }
+    p = aligned_alloc(4096, 4096ul * count);
+    if (p) {
+        live++;
+    }
+    if (phys) {
+        *phys = (uintptr_t)p;
+    }
+    return p;
+}
+
+/** kfree_pages, counted. */
+void kfree_pages(void *p, uint32_t count)
+{
+    (void)count;
+    kfree(p);
 }
 
 void *k_memcpy(void *dst, const void *src, size_t n)
@@ -605,6 +635,62 @@ static void priority_rows(void)
     wr(v, APIC_TASKPRI, 0);
     CHECK(signal(msi_addr(1, 0), msi_data(0x50, 0, 1) & ~0x4000u) == 1,
           "an MSI's assert bit is ignored, as Linux's kvm_set_msi_irq");
+}
+
+/**
+ * The parts a backend's TPR shadow uses, as Linux's lapic.c gives them:
+ * the register page, page-aligned at the physical address the backend
+ * hands the processor, and 0 with no APIC in the kernel; the highest
+ * vector in IRR, which SPIV's enable bit does not hide, as
+ * kvm_lapic_find_highest_irr (lapic.c:830-838) checks no enable, and -1
+ * with the APIC off in IA32_APIC_BASE; and the PPR update after the
+ * guest lowered TPR on the page, which asks for an injection, as
+ * handle_tpr_below_threshold calls kvm_apic_update_ppr (vmx.c:5653-5657).
+ */
+static void tpr_shadow_rows(void)
+{
+    struct kvm_vcpu *v = vcpu[1];
+    struct kvm_vcpu bare;
+    struct lapic *l = apic_of(v);
+
+    k_memset(&bare, 0, sizeof(bare));
+    bare.vm = &vm;
+    CHECK(kvm_lapic_page(v) == l->regs_pa && l->regs_pa != 0 && (l->regs_pa & 0xFFFu) == 0 &&
+              (uintptr_t)l->regs == l->regs_pa && kvm_lapic_page(vcpu[2]) != l->regs_pa,
+          "each APIC's register page is a page of its own, at the address the backend is given");
+    CHECK(kvm_lapic_page(&bare) == 0 && kvm_lapic_highest_irr(&bare) == -1,
+          "with no APIC in the kernel there is no page and no vector");
+
+    enable_all();
+    clear_vectors();
+    CHECK(kvm_lapic_highest_irr(v) == -1, "nothing in IRR is -1");
+    wr(v, APIC_TASKPRI, 0x60);
+    signal(msi_addr(1, 0), msi_data(0x51, 0, 0));
+    signal(msi_addr(1, 0), msi_data(0x32, 0, 0));
+    CHECK(kvm_lapic_highest_irr(v) == 0x51 && kvm_lapic_pending(v) == -1,
+          "the highest vector in IRR, 0x51, which TPR 0x60 holds back");
+    wr(v, APIC_SPIV, 0xFF);
+    CHECK(kvm_lapic_highest_irr(v) == 0x51,
+          "SPIV's enable bit off, the vector still waits in IRR and is still the highest");
+
+    v->requests = 0;
+    l->regs[APIC_TASKPRI >> 2] = 0x40;
+    CHECK(reg_get(l, APIC_PROCPRI) == 0x60 && !(v->requests & KVM_REQ_EVENT),
+          "TPR lowered on the page, as the processor writes it, leaves PPR until the update");
+    kvm_lapic_update_ppr(v);
+    CHECK(reg_get(l, APIC_PROCPRI) == 0x40 && (v->requests & KVM_REQ_EVENT),
+          "the update lowers PPR to TPR 0x40 and asks for an injection");
+    CHECK(kvm_lapic_pending(v) == 0x51, "and the vector is pending, with SPIV's enable bit off");
+
+    CHECK(kvm_lapic_set_base(v, BASE, 0) == 0 && kvm_lapic_highest_irr(v) == -1,
+          "the APIC off in IA32_APIC_BASE gives -1, with the vector still in IRR");
+    CHECK(kvm_lapic_set_base(v, BASE | APIC_BASE_ENABLE, 0) == 0 &&
+              kvm_lapic_highest_irr(v) == 0x51,
+          "and back on, the vector again");
+    enable_all();
+    wr(v, APIC_TASKPRI, 0);
+    clear_vectors();
+    v->requests = 0;
 }
 
 /** Destinations and delivery modes. */
@@ -1925,6 +2011,7 @@ int main(int argc, char **argv)
         vm_make(0);
         reset_rows();
         priority_rows();
+        tpr_shadow_rows();
         delivery_rows();
         init_rows();
         timer_rows();

@@ -106,9 +106,10 @@ void sched_lock_give(uint32_t flags);
  * `PTRACE_INTERRUPT` wakes it: Linux's `signal_wake_up_state` wakes through
  * `try_to_wake_up`'s test (kernel/signal.c:759-773). The test and the
  * clearing are under the run queues' lock, as `sched_wake_blocked`'s; a wait
- * that goes on arms its own deadline again. The thread is not marked woken.
- * The interrupt is sent before this returns, so the caller holds no
- * spinlock. Interrupts may be on or off.
+ * that goes on arms its own deadline again. The thread is marked woken, as
+ * `sched_wake_blocked` marks it, so that the current thread's slice gives
+ * way to it (`sched_tick`). The interrupt is sent before this returns, so
+ * the caller holds no spinlock. Interrupts may be on or off.
  */
 void sched_wake_signal(process_t *p);
 
@@ -117,8 +118,8 @@ void sched_wake_signal(process_t *p);
  * deadline, if it is blocked with a deadline at or before the tick `now`,
  * as Linux's `hrtimer_wakeup` wakes a sleeper through `wake_up_process`
  * (kernel/time/hrtimer.c:1981-1992). The test is under the run queues' lock,
- * as `sched_wake_blocked`'s. The thread is not marked woken. The interrupt is
- * sent before this returns, so the caller holds no spinlock.
+ * as `sched_wake_blocked`'s, and the thread is marked woken as there. The
+ * interrupt is sent before this returns, so the caller holds no spinlock.
  */
 void sched_wake_due(process_t *p, uint64_t now);
 
@@ -203,6 +204,12 @@ void sched_wait_off_cpu(const process_t *p);
  * service point, or a thread inside klog.
  */
 void sched_preempt(void);
+
+/** From the end of an interrupt, the tick's or a device's: switch this
+ * processor as `sched_preempt` does, once its current thread has run its
+ * slice since it was switched in, or sooner when a woken or real-time
+ * thread waits on its queue. Called with interrupts off. */
+void sched_tick(void);
 
 /** Take the switch an interrupt asked for (`need_resched`), if one did;
  * `schedule` clears the request at its selection. Called with interrupts

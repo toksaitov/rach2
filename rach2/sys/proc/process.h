@@ -318,8 +318,11 @@ struct process {
     /* The buffer cache's list of the buffers this process holds, kept by
      * the cache so its hold rules are checked against them alone. */
     struct bbuf *bcache_held;
-    /* Set by a wait-queue wake (`wq_wake`): the scheduler may prefer the
-     * process once at its next selection, and clears it when it selects the
+    /* Set by a wake from a sleep: a wait queue's (`sched_wake_blocked`), its
+     * deadline's (`sched_wake_due`) or a signal's (`sched_wake_signal`).
+     * The scheduler may prefer the process once at its next selection, an
+     * interrupt switches to it within the current thread's slice
+     * (`sched_tick`), and the flag clears when the scheduler selects the
      * process or the process blocks again. */
     uint32_t woken;
     /* The switches away from it while it was blocked or stopped, and while
@@ -341,6 +344,10 @@ struct process {
      * a queue since `queued_ns`, the monotonic clock in nanoseconds. */
     uint64_t run_delay;
     uint64_t queued_ns;
+    /* The monotonic clock in nanoseconds when `schedule` last switched it
+     * onto a processor, from which the tick measures its slice
+     * (`sched_tick`); 0 before its first switch. */
+    uint64_t slice_ns;
     unsigned long pcount;
     uint8_t run_queued;
     /* Whether its sleep is one no signal ends (`wq_wait_event_nointr`),

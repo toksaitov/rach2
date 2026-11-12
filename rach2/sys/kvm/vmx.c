@@ -92,6 +92,7 @@
 #define VM_EXIT_MSR_LOAD_ADDR         0x2008u
 #define VM_ENTRY_MSR_LOAD_ADDR        0x200Au
 #define TSC_OFFSET                    0x2010u
+#define VIRTUAL_APIC_PAGE_ADDR        0x2012u
 #define TSC_MULTIPLIER                0x2032u
 #define XSS_EXIT_BITMAP               0x202Cu
 #define EPT_POINTER                   0x201Au
@@ -119,6 +120,7 @@
 #define VM_ENTRY_INTR_INFO_FIELD      0x4016u
 #define VM_ENTRY_EXCEPTION_ERROR_CODE 0x4018u
 #define VM_ENTRY_INSTRUCTION_LEN      0x401Au
+#define TPR_THRESHOLD                 0x401Cu
 #define SECONDARY_VM_EXEC_CONTROL     0x401Eu
 #define VM_INSTRUCTION_ERROR          0x4400u
 #define VM_EXIT_REASON                0x4402u
@@ -195,6 +197,7 @@
 #define PROC_CR3_STORE   0x00010000u
 #define PROC_CR8_LOAD    0x00080000u
 #define PROC_CR8_STORE   0x00100000u
+#define PROC_TPR_SHADOW  0x00200000u
 #define PROC_NMI_WINDOW  0x00400000u
 #define PROC_MOV_DR      0x00800000u
 #define PROC_UNCOND_IO   0x01000000u
@@ -283,6 +286,7 @@
 #define EXIT_MONITOR          39
 #define EXIT_PAUSE            40
 #define EXIT_MCE_DURING_ENTRY 41
+#define EXIT_TPR_BELOW        43
 #define EXIT_EPT_VIOLATION    48
 #define EXIT_EPT_MISCONFIG    49
 #define EXIT_INVEPT           50
@@ -732,6 +736,7 @@ static struct {
     int ins_outs;         /* the exit describes INS and OUTS */
     int ad;               /* EPT's accessed and dirty bits */
     int rdtscp;           /* the host has RDTSCP, and so TSC_AUX */
+    int tpr_shadow;       /* the TPR shadow, with CR8's exits allowed off */
     int perf_global;      /* the controls that load IA32_PERF_GLOBAL_CTRL */
 } caps;
 
@@ -793,6 +798,11 @@ struct vmx_vcpu {
     uint64_t debugctl; /* GUEST_IA32_DEBUGCTL as the VMCS has it */
     int guest_dr;      /* DR0 to DR3 were loaded for the run */
     int tf_set;        /* the entry set RFLAGS.TF for KVM_GUESTDBG_SINGLESTEP */
+    /* The guest runs under the TPR shadow: its TPR is the byte at 0x80 of
+     * the APIC's register page (`kvm_lapic_page`), which CR8 reads and
+     * writes without an exit. */
+    int tpr_shadow;
+    uint32_t tpr_threshold; /* TPR_THRESHOLD as the VMCS has it */
     struct vmx_exit ex;
 };
 
@@ -1174,6 +1184,23 @@ fail:
 
 /* ---- the VMCS built ---- */
 
+/**
+ * The primary controls of `v` with no window armed: HLT's exit off for a
+ * guest that halts in place, and under the TPR shadow CR8's exits off, as
+ * Linux's vmx_exec_control (vmx.c:4521-4531) takes the shadow whenever the
+ * processor has it and the local APIC is in the kernel, and exits for CR8
+ * otherwise.
+ */
+static uint32_t proc_base(const struct kvm_vcpu *v)
+{
+    uint32_t p = caps.proc & ~(v->hlt_in_guest ? PROC_HLT : 0u);
+
+    if (vx(v)->tpr_shadow) {
+        p = (p & ~(PROC_CR8_LOAD | PROC_CR8_STORE)) | PROC_TPR_SHADOW;
+    }
+    return p;
+}
+
 /** Whether the VMCS switches IA32_PERF_GLOBAL_CTRL, as Linux's
  * add_atomic_switch_msr does with the processor's controls; without them
  * the MSR lists do. */
@@ -1183,8 +1210,9 @@ static int perf_switched(void)
 }
 
 /** Write the VMCS fields that last for the vCPU's life: the controls, the
- * MSR lists and bitmap, the host's constant state, and the guest's state
- * no part of the record holds. */
+ * MSR lists and bitmap, the host's constant state, the guest's state no
+ * part of the record holds, and under the TPR shadow the APIC's register
+ * page as the virtual-APIC page, as Linux's init_vmcs (vmx.c:4858-4864). */
 static void vmcs_build(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
@@ -1194,8 +1222,13 @@ static void vmcs_build(struct kvm_vcpu *v)
         vmcs_write(VIRTUAL_PROCESSOR_ID, x->vpid);
     }
     vmcs_write(PIN_BASED_VM_EXEC_CONTROL, caps.pin);
-    x->proc = caps.proc & ~(v->hlt_in_guest ? PROC_HLT : 0u);
+    x->proc = proc_base(v);
     vmcs_write(CPU_BASED_VM_EXEC_CONTROL, x->proc);
+    if (x->tpr_shadow) {
+        vmcs_write(VIRTUAL_APIC_PAGE_ADDR, kvm_lapic_page(v));
+        x->tpr_threshold = 0;
+        vmcs_write(TPR_THRESHOLD, 0);
+    }
     x->proc2 = caps.proc2 & ~(PROC2_RDTSCP | PROC2_INVPCID | PROC2_XSAVES);
     vmcs_write(SECONDARY_VM_EXEC_CONTROL, x->proc2);
     if (caps.proc2 & PROC2_XSAVES) {
@@ -1409,8 +1442,9 @@ static void load_dirty(struct kvm_vcpu *v)
         vmcs_write(SECONDARY_VM_EXEC_CONTROL, x->proc2);
     }
     /* KVM_PART_FPU is the image and XCR0, loaded at every entry;
-     * KVM_PART_CR8 the TPR, which every CR8 access exits for; KVM_PART_MP
-     * the run state, which the run loop keeps. */
+     * KVM_PART_CR8 the TPR, which the processor reads from the APIC's page
+     * under the TPR shadow and every CR8 access exits for without it;
+     * KVM_PART_MP the run state, which the run loop keeps. */
     v->dirty = 0;
     x->vdirty = 0;
 }
@@ -1566,13 +1600,40 @@ static uint64_t eptp_of(const struct kvm_vcpu *v)
     return kvm_tdp_root(v->vm) | (3u << 3) | 6u | (caps.ad ? 0x40u : 0u);
 }
 
-/** Write the controls and the guest state of the next entry: the window
- * the caller's run page asks for without the local APIC in the kernel,
- * while the guest cannot take an interrupt now; the event to inject; RSP,
- * RIP and RFLAGS; and the preemption timer, which bounds the run. */
+/**
+ * The TPR threshold of `v`'s next entry under the TPR shadow, as Linux's
+ * kvm_lapic_update_cr8_intercept (lapic.c:2613-2637) and
+ * vmx_update_cr8_intercept (vmx.c:6708-6721) choose it: the priority class
+ * of the highest vector waiting in IRR while TPR holds it back, so that
+ * the guest's lowering TPR below it exits, and 0 otherwise. It is never
+ * above TPR's class, which the entry checks.
+ */
+static uint32_t tpr_threshold(struct kvm_vcpu *v)
+{
+    int irr = kvm_lapic_highest_irr(v);
+    uint32_t tpr = (uint32_t)kvm_lapic_cr8(v);
+
+    if (irr < 0 || tpr < ((uint32_t)irr >> 4)) {
+        return 0;
+    }
+    return (uint32_t)irr >> 4;
+}
+
+/**
+ * Write the controls and the guest state of the next entry: the window the
+ * caller's run page asks for without the local APIC in the kernel, while
+ * the guest cannot take an interrupt now; the TPR threshold under the TPR
+ * shadow; the event to inject; RSP, RIP and RFLAGS; and the preemption
+ * timer, which bounds the run. The threshold is chosen at every entry,
+ * where Linux chooses it at a KVM_REQ_EVENT (x86.c:10468-10471) and at
+ * each PPR update that asks for none (lapic.c:990-999): TPR changes here
+ * through MMIO, KVM_SET_LAPIC and KVM_SET_SREGS as well as CR8, and an
+ * entry whose threshold is above TPR's class fails.
+ */
 static void entry_fields(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
+    uint32_t threshold;
 
     if (v->vm->irqchip == KVM_IRQCHIP_NONE) {
         x->proc_want &= ~PROC_INTR_WINDOW;
@@ -1584,6 +1645,13 @@ static void entry_fields(struct kvm_vcpu *v)
     if (x->proc_want != x->proc) {
         x->proc = x->proc_want;
         vmcs_write(CPU_BASED_VM_EXEC_CONTROL, x->proc);
+    }
+    if (x->tpr_shadow) {
+        threshold = tpr_threshold(v);
+        if (threshold != x->tpr_threshold) {
+            x->tpr_threshold = threshold;
+            vmcs_write(TPR_THRESHOLD, threshold);
+        }
     }
     vmcs_write(VM_ENTRY_INTR_INFO_FIELD, x->inj_info);
     /* A guest halted in HLT of its own wakes to the event, as Linux's
@@ -1964,7 +2032,8 @@ static uint64_t get_cr8(struct kvm_vcpu *v)
 
 /** A control register's access (exit 28), whose qualification names the
  * register, the kind and the general register: MOV to CR0, CR4 and CR8,
- * MOV from CR8, and LMSW. CR3 and CLTS do not exit. */
+ * MOV from CR8, and LMSW. CR3 and CLTS do not exit, nor CR8 under the TPR
+ * shadow. */
 static int exit_cr(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
@@ -2517,6 +2586,11 @@ static int exit_reason(struct kvm_vcpu *v)
         return exit_ept(v);
     case EXIT_TASK_SWITCH:
         return exit_task_switch(v);
+    case EXIT_TPR_BELOW:
+        /* A trap after the guest's MOV to CR8, which has completed, as
+         * Linux's handle_tpr_below_threshold (vmx.c:5653-5657). */
+        kvm_lapic_update_ppr(v);
+        return 0;
     default:
         break;
     }
@@ -2791,7 +2865,8 @@ static void vmx_msr_filter_changed(struct kvm_vcpu *v)
 }
 
 /** Make the backend's share of `v`: the VMCS, the MSR area and bitmap,
- * the host's FPU area and the VPID. 0 or -ENOMEM. */
+ * the host's FPU area and the VPID, and the TPR shadow's choice, which
+ * the local APIC made before it decides. 0 or -ENOMEM. */
 static int vmx_vcpu_init(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = kzalloc(sizeof(*x));
@@ -2818,7 +2893,8 @@ static int vmx_vcpu_init(struct kvm_vcpu *v)
     x->vpid = vpid_alloc();
     x->last_cpu = -1;
     x->kgs_table = 1;
-    x->proc_want = caps.proc & ~(v->hlt_in_guest ? PROC_HLT : 0u);
+    x->tpr_shadow = caps.tpr_shadow && kvm_lapic_page(v) != 0;
+    x->proc_want = proc_base(v);
     return 0;
 }
 
@@ -2899,7 +2975,7 @@ static int vmx_probe(void)
     uint32_t proc2_need = PROC2_EPT | PROC2_UG;
     uint32_t exit_need = EXIT_HOST_64 | EXIT_SAVE_DEBUG | EXIT_LOAD_PAT | EXIT_LOAD_EFER;
     uint32_t entry_need = ENTRY_LOAD_DEBUG | ENTRY_LOAD_PAT | ENTRY_LOAD_EFER;
-    uint32_t forbid, windows, perf_exit, perf_entry, sig;
+    uint32_t forbid, windows, shadow, perf_exit, perf_entry, sig;
 
 #ifndef RACH2_HOSTTEST
     vmx_op = &vmx_hw;
@@ -2959,6 +3035,11 @@ static int vmx_probe(void)
         caps.proc2 &= ~PROC2_VPID;
     }
     caps.ad = (caps.ept_vpid & EPT_CAP_AD) != 0;
+    /* The TPR shadow where the processor has it and lets CR8's exits be
+     * off, as Linux's setup_vmcs_config (vmx.c:2639-2643) takes it. */
+    (void)controls(MSR_IA32_VMX_PROCBASED, MSR_IA32_VMX_TRUE_PROC,
+                   (proc_need & ~(PROC_CR8_LOAD | PROC_CR8_STORE)) | PROC_TPR_SHADOW, 0, &shadow);
+    caps.tpr_shadow = (shadow & PROC_TPR_SHADOW) && !(shadow & (PROC_CR8_LOAD | PROC_CR8_STORE));
     misc = vmx_op->rdmsr(MSR_IA32_VMX_MISC);
     caps.timer_shift = (uint32_t)(misc & 0x1Fu);
     caps.cr0_fixed0 = vmx_op->rdmsr(MSR_IA32_VMX_CR0_FIXED0);

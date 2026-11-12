@@ -84,6 +84,36 @@ int kcmdline_value(const char *key, char *out, unsigned int outlen)
     return kcmdline_value_nth(key, 0, out, outlen);
 }
 
+int kcmdline_value_has(const char *key, const char *item)
+{
+    char buf[64];
+    size_t n = k_strlen(item);
+    const char *p = buf;
+
+    if (!kcmdline_value(key, buf, (unsigned int)sizeof(buf))) {
+        return 0;
+    }
+    while (*p != 0) {
+        const char *end = p;
+
+        while (*end != 0 && *end != ',') {
+            end++;
+        }
+        if ((size_t)(end - p) == n) {
+            size_t i = 0;
+
+            while (i < n && p[i] == item[i]) {
+                i++;
+            }
+            if (i == n) {
+                return 1;
+            }
+        }
+        p = *end == ',' ? end + 1 : end;
+    }
+    return 0;
+}
+
 int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
 {
     size_t klen = k_strlen(key);
@@ -133,17 +163,42 @@ static unsigned int digit_value(char c)
     return 16u;
 }
 
+/**
+ * The value of the `nth` `key=value` token, counting from zero, as a pointer
+ * into the line, so that a value of any length is read in place; NULL when
+ * the line has no such token. The value ends at the token's end, a space, a
+ * tab or the NUL.
+ */
+static const char *value_in_place(const char *key, int nth)
+{
+    size_t klen = k_strlen(key);
+    const char *p = kcmdline;
+    const char *tok;
+    size_t len;
+    int seen = 0;
+
+    while (next_token(&p, &tok, &len)) {
+        if (token_has_key(tok, len, key, klen) && seen++ == nth) {
+            return tok + klen + 1;
+        }
+    }
+    return 0;
+}
+
 /** The base is chosen as Linux's _parse_integer_fixup_radix chooses it
  * (lib/kstrtox.c, lines 26 to 40), and the digits wrap as its unsigned
- * long long does, whose low 32 bits are what the int keeps. */
-int kcmdline_option(const char *key, int *out)
+ * long long does, whose low 32 bits are what the int keeps. A space or a
+ * tab is no digit, so the digits stop at the token's end. */
+int kcmdline_option_nth(const char *key, int nth, int *out)
 {
-    char v[32];
-    const char *s = v;
+    const char *s = value_in_place(key, nth);
     unsigned int base = 10u, value = 0u, d;
     int neg = 0;
 
-    if (!kcmdline_value(key, v, sizeof(v)) || v[0] == '\0') {
+    if (s == 0) {
+        return -1;
+    }
+    if (*s == '\0' || *s == ' ' || *s == '\t') {
         return 0;
     }
     if (*s == '-') {
@@ -162,6 +217,16 @@ int kcmdline_option(const char *key, int *out)
     }
     *out = (int)(neg ? 0u - value : value);
     return 1;
+}
+
+int kcmdline_option(const char *key, int *out)
+{
+    int nth, r, stored = 0;
+
+    for (nth = 0; (r = kcmdline_option_nth(key, nth, out)) >= 0; nth++) {
+        stored |= r;
+    }
+    return stored;
 }
 
 /**

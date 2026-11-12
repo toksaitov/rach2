@@ -40,7 +40,7 @@ struct ioapic_io {
 void ioapic_set_io(const struct ioapic_io *ops);
 
 /**
- * Whether the boot line keeps the I/O APIC off: `noapic`, or `maxcpus=0`,
+ * Whether the boot line keeps the I/O APIC off: `noapic`, or any `maxcpus=0`,
  * which Linux 6.12.115 turns into the same disable_ioapic_support
  * (arch/x86/kernel/apic/io_apic.c, lines 191 to 197; kernel/smp.c, lines
  * 975 to 982; arch/x86/kernel/smpboot.c, lines 1005 to 1008). Linux's
@@ -50,9 +50,11 @@ void ioapic_set_io(const struct ioapic_io *ops);
  */
 int ioapic_disabled(void);
 
-/** Whether interrupt remapping may yet start, and with it the x2APIC
- * format that lets the local APIC stay in x2APIC mode (lapic.c): not on
- * the i686 kernel, and not while `ioapic_disabled`. */
+/** Whether interrupt remapping may yet start in the x2APIC format, which
+ * lets the local APIC stay in x2APIC mode (lapic.c): not on the i686
+ * kernel, not while `ioapic_disabled`, and only where the firmware's DMAR
+ * table offers remapping without opting out of the format, as the boot
+ * line's `intremap=` lets it. */
 int ioapic_remappable(void);
 
 /** Map the I/O APICs the MADT lists and mask every input: the count made

@@ -281,12 +281,15 @@ static int fault_vector = -1;
  * Point every unit's fault event at `fault_vector` of the boot processor,
  * by the id it answers to in the mode it is in now. A unit's fault event is
  * not remapped, so its message names the processor itself: the id's low
- * eight bits in FEADDR and bits 8 to 31 in FEUADDR, the upper half of the
- * message's address, as Linux composes the IOMMU's own message
- * (`__irq_msi_compose_msg`, arch/x86/kernel/apic/apic.c, lines 2301 and
- * 2302). The event is masked across the writes, so none goes to a half
- * written address; one that comes meanwhile waits in FECTL.IP and is sent
- * as it is unmasked.
+ * eight bits in FEADDR's bits 12 to 19, and bits 8 to 31 in place in
+ * FEUADDR, the upper half of the message's address, whose low eight bits
+ * are reserved. Linux composes the IOMMU's own message so
+ * (`__irq_msi_compose_msg`, arch/x86/kernel/apic/apic.c, line 2302, into
+ * the `destid_8_31` field of arch/x86/include/asm/msi.h, lines 55 and 56)
+ * and writes it to FEUADDR whole (`dmar_msi_write`,
+ * drivers/iommu/intel/dmar.c, line 1904). The event is masked across the
+ * writes, so none goes to a half written address; one that comes meanwhile
+ * waits in FECTL.IP and is sent as it is unmasked.
  */
 static void fault_aim(void)
 {
@@ -299,7 +302,7 @@ static void fault_aim(void)
         vtd_hw_write32(u->regs, VTD_FECTL, VTD_FECTL_IM);
         vtd_hw_write32(u->regs, VTD_FEDATA, (uint32_t)fault_vector);
         vtd_hw_write32(u->regs, VTD_FEADDR, 0xFEE00000u | ((id & 0xFFu) << 12));
-        vtd_hw_write32(u->regs, VTD_FEUADDR, id >> 8);
+        vtd_hw_write32(u->regs, VTD_FEUADDR, id & 0xFFFFFF00u);
         vtd_hw_write32(u->regs, VTD_FECTL, 0);
     }
 }
@@ -321,6 +324,22 @@ int vtd_fault_start(void)
     fault_aim();
     vtd_fault_all();
     return 0;
+}
+
+/** A fault event that comes while FECTL.IM is set waits in FECTL.IP and is
+ * sent as the mask is cleared (VT-d specification, the fault event control
+ * register), so none is lost
+ * across the hold. Nothing while no vector was taken. */
+void vtd_fault_hold(int hold)
+{
+    int i;
+
+    if (fault_vector < 0) {
+        return;
+    }
+    for (i = 0; i < vtd_nunits; i++) {
+        vtd_hw_write32(vtd_units[i].regs, VTD_FECTL, hold ? VTD_FECTL_IM : 0u);
+    }
 }
 
 /** The move to x2APIC mode gives the processor its whole x2APIC id, which

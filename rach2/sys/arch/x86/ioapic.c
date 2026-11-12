@@ -52,13 +52,17 @@ static int nchips;
 
 /* Where each ISA line was routed: its chip, the input on it, the local APIC
  * it goes to, and the remapper's entry or -1; chip -1 for a line not
- * routed. */
+ * routed. Every line starts so, since the late x2APIC leave and
+ * remapping's start mask the routed lines on a machine where `ioapic_init`
+ * never ran (lapic.c). */
+#define UNROUTED {-1, 0, 0, -1}
 static struct {
     int chip;
     uint32_t input;
     uint8_t dest;
     int handle;
-} lines[16];
+} lines[16] = {UNROUTED, UNROUTED, UNROUTED, UNROUTED, UNROUTED, UNROUTED, UNROUTED, UNROUTED,
+               UNROUTED, UNROUTED, UNROUTED, UNROUTED, UNROUTED, UNROUTED, UNROUTED, UNROUTED};
 
 /* The interrupt remapper in place, or NULL. */
 static const struct ioapic_remap *remap;
@@ -102,24 +106,54 @@ static void reg_write(const struct ioapic *c, uint32_t reg, uint32_t value)
     kirq_restore(flags);
 }
 
-/** `maxcpus=` is read as Linux's get_option reads it (`kcmdline_option`),
- * as `smp_start` reads it, so `0`, `00`, `0x0` and a value with no digit
- * all count as 0 there. */
+/**
+ * Whether `noapic` is given, or any `maxcpus=` stores 0. Linux runs its
+ * maxcpus() once for each occurrence, and each that leaves setup_max_cpus 0
+ * calls arch_disable_smp_support, whose disable_ioapic_support no later
+ * occurrence undoes (kernel/smp.c, lines 975 to 984;
+ * arch/x86/kernel/smpboot.c, lines 1005 to 1008). Each is read as
+ * get_option reads it (`kcmdline_option_nth`), as `smp_start` reads
+ * them, so `0`, `00`, `0x0` and a value with no digit all store 0, and an
+ * empty value stores nothing.
+ */
 int ioapic_disabled(void)
 {
-    int n;
+    int nth, r, n;
 
     if (kcmdline_has("noapic")) {
         return 1;
     }
-    return kcmdline_option("maxcpus", &n) && n == 0;
+    for (nth = 0; (r = kcmdline_option_nth("maxcpus", nth, &n)) >= 0; nth++) {
+        if (r == 1 && n == 0) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
-/** Only the x86-64 kernel builds VT-d (platform.c). */
+/**
+ * Only the x86-64 kernel builds VT-d (platform.c). The DMAR table's flags
+ * are read before ACPICA, which iommu/vtd.c reads the units through, so the
+ * answer is Linux's own early one: intel_prepare_irq_remapping goes on only
+ * when the DMAR offers remapping (`dmar_ir_support`, dmar.c, lines 2124 to
+ * 2131) and the boot line does not say `intremap=off` (irq_remapping.c,
+ * lines 66 to 68), and takes the x2APIC format only when the firmware does
+ * not opt out of it or `intremap=no_x2apic_optout` overrides it
+ * (intel/irq_remapping.c, lines 678 to 685 and 739 to 745). A unit without
+ * the format, or one that fails, is known only once remapping starts, and
+ * the mode is then left late (`lapic_x2apic_settle`).
+ */
 int ioapic_remappable(void)
 {
 #if defined(__x86_64__)
-    return !ioapic_disabled();
+    const struct acpi_info *a = acpi_get();
+
+    if (ioapic_disabled() || !a->dmar || (a->dmar_flags & ACPI_DMAR_INTR_REMAP) == 0 ||
+        kcmdline_value_has("intremap", "off")) {
+        return 0;
+    }
+    return (a->dmar_flags & ACPI_DMAR_X2APIC_OPT_OUT) == 0 ||
+           kcmdline_value_has("intremap", "no_x2apic_optout");
 #else
     return 0;
 #endif

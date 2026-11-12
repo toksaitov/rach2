@@ -374,20 +374,34 @@ static void fc_free(struct fc_page *p)
     kfree(p);
 }
 
-/** Put `p`, which `fc_new` gave and whose frame holds page `pgoff` of `f`
- * as just read, into the cache in place of any page it had there, unless a
+/**
+ * Put `p`, which `fc_new` gave and whose frame holds page `pgoff` of `f` as
+ * just read, into the cache in place of any page it had there, unless a
  * change of the file has been recorded since `epoch`; a page read from the
  * file as it was before is dropped with the rest of the file's pages. 1, or
- * 0 when `p` stays the caller's. */
+ * 0 when `p` stays the caller's.
+ *
+ * A new file record is allocated with `fc_lock` let go, which keeps the
+ * heap's work out of the hold. Whether one is needed is read under the
+ * first hold, and nothing of the record found there is read after it,
+ * since an `fc_unlink` of the file's last page may free the record in
+ * between; the second hold looks the file up again. Linux's
+ * `__filemap_add_folio` reads the mapping's entries only under the
+ * `i_pages` lock, and after an allocation made with the lock let go takes
+ * it again and checks them anew (mm/filemap.c:867-933, the allocations at
+ * 922 and 932, the check again at 886).
+ */
 static int fc_insert(const struct fc_file *f, uint32_t pgoff, struct fc_page *p, uint32_t epoch)
 {
     struct fc_page *old, **bucket;
     struct fc_inode *file, *spare = NULL;
     uint32_t flags = spin_lock_irqsave(&fc_lock);
+    int need_spare;
 
     file = fc_find(f->mnt, f->ino);
+    need_spare = !file || !fc_current(file, f);
     spin_unlock_irqrestore(&fc_lock, flags);
-    if (!file || !fc_current(file, f)) {
+    if (need_spare) {
         spare = kzalloc(sizeof(*spare));
         if (!spare) {
             return 0;

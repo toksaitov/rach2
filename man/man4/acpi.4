@@ -174,7 +174,12 @@ limits the processors to N, the boot processor counted; 0 and 1 leave the
 kernel on the boot processor.
 N is read as Linux reads it: hexadecimal after
 .Ql 0x ,
-octal after a leading 0, and a value that begins with no digit as 0.
+octal after a leading 0, a value that begins with no digit as 0, and an
+empty one as none.
+Each occurrence is read in turn, as on Linux: the last that gives a value
+sets N, and any that gives 0 also keeps the I/O APIC off, as
+.Ql noapic
+does.
 A machine whose local APIC does not tick, that has neither an HPET nor a
 PM timer, whose memory map does not give the pages at 0x8000 as free
 memory, or whose MADT gives a processor an

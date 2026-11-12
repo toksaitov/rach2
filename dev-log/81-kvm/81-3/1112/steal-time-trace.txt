@@ -1,0 +1,24 @@
+pid 47010
+== /proc/47010/task/47010
+47010 (steal_time) R 4282 22256
+265390000000 1038554 265
+State:	R (running)
+Cpus_allowed_list:	0
+0
+/proc/47010/task/47010 268413000000 1038554 265
+4
+Wed Nov 11 23:47:14 UTC 2026
+Wed Nov 11 23:48:25 UTC 2026
+339719000000 1038554 265
+339719000000 1038554 265
+47010 (steal_time) R 47009 602 602 0 -1 0 0 0 0 0 5498 28473 0 0 20 0 1 0 120972 12627968 593
+47010
+Threads:	1
+voluntary_ctxt_switches:	258
+nonvoluntary_ctxt_switches:	6
+Wed Nov 11 23:48:53 UTC 2026
+[   10.069000] net: eth0: IPv6 fd91:381e:e667:4a0c:8a90:122d:f03d:4fa5/64 added
+[   10.069000] net: eth0: IPv6 fd91:381e:e667:4a0c:395e:c8da:7f05:5cb2/64 added
+[   12.420000] console: card0: handed to a master, the keyboard off
+[  906.350000] usb: device: port 10: gone
+[  906.350000] usb: slot: 5: given back

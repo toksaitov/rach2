@@ -1,0 +1,145 @@
+kvm-corpus: asyncpf: excluded: asynchronous page faults, deferred by the owner's decision of 2026-11-10 to a later milestone
+kvm-corpus: cmpxchg8b: excluded: i386: built only for i386, and the staged tests are x86-64's
+kvm-corpus: ept: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: ept-mbec: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: pmu: excluded: PMU: Rach2's KVM gives its guests no performance counters
+kvm-corpus: pmu_lbr: excluded: PMU: Rach2's KVM gives its guests no performance counters
+kvm-corpus: pmu_pebs: excluded: PMU: Rach2's KVM gives its guests no performance counters
+kvm-corpus: svm: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: svm_no_npt: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: svm_npt: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: svm_pause_filter: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: svm_unsupported_instruction_intercept_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: taskswitch: excluded: i386: built only for i386, and the staged tests are x86-64's
+kvm-corpus: taskswitch2: excluded: i386: built only for i386, and the staged tests are x86-64's
+kvm-corpus: vmx: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: vmx_apic_passthrough_thread: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: vmx_apic_passthrough_tpr_threshold_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: vmx_apicv_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: vmx_eoi_bitmap_ioapic_scan: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: vmx_hlt_with_rvi_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: vmx_init_signal_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: vmx_pf_exception_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: vmx_pf_exception_test_fep: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: vmx_pf_exception_test_reduced_maxphyaddr: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: vmx_pf_invvpid_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: vmx_pf_no_vpid_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: vmx_pf_vpid_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: vmx_posted_intr_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: vmx_sipi_signal_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+kvm-corpus: vmx_vmcs_shadow_test: excluded: nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
+PASS x2apic (56 tests)
+PASS xapic (45 tests, 1 skipped)
+PASS ioapic (30 tests)
+PASS smptest (1 tests)
+PASS smptest3 (1 tests)
+PASS vmexit_cpuid 
+PASS vmexit_vmcall 
+PASS vmexit_mov_from_cr8 
+PASS vmexit_mov_to_cr8 
+PASS vmexit_inl_pmtimer 
+PASS vmexit_ipi 
+PASS vmexit_ipi_halt 
+PASS vmexit_ple_round_robin 
+PASS vmexit_tscdeadline 
+PASS vmexit_tscdeadline_immed 
+PASS vmexit_cr0_wp 
+PASS vmexit_cr4_pge 
+PASS access (1 tests)
+SKIP access_fep (1 tests, 1 skipped)
+SKIP access-reduced-maxphyaddr (/sys/module/kvm_intel/parameters/allow_smaller_maxphyaddr not equal to Y)
+SKIP smap (0 tests)
+SKIP pku (0 tests)
+SKIP pks (1 tests, 1 skipped)
+PASS emulator (151 tests, 2 skipped)
+PASS eventinj (13 tests)
+PASS hypercall (4 tests)
+PASS idt_test (4 tests)
+PASS memory (7 tests, 3 skipped)
+PASS msr (1838 tests)
+PASS msr64 (1838 tests)
+SKIP vmware_backdoors (/sys/module/kvm/parameters/enable_vmware_backdoor not equal to Y)
+PASS realmode 
+PASS s3 
+PASS setjmp (10 tests)
+PASS sieve 
+PASS syscall (2 tests)
+PASS tsc (3 tests)
+PASS tsc_adjust (6 tests)
+PASS xsave (386 tests)
+PASS rmap_chain 
+PASS kvmclock_test (1 tests)
+PASS pcid-enabled (2 tests)
+PASS pcid-disabled (2 tests)
+PASS pcid-asymmetric (2 tests)
+PASS rdpru (1 tests)
+PASS umip (11 tests)
+PASS la57 (56 tests, 4 skipped)
+PASS debug (25 tests)
+PASS hyperv_synic (1 tests)
+FAIL hyperv_connections (7 tests, 1 unexpected failures)
+PASS hyperv_stimer (12 tests)
+PASS hyperv_stimer_direct (8 tests)
+PASS hyperv_clock (3 tests)
+PASS intel_iommu (11 tests)
+SKIP tsx-ctrl (1 tests, 1 skipped)
+SKIP cet (1 tests, 1 skipped)
+PASS lam (19 tests)
+kvm-corpus: access: pass: as expected
+kvm-corpus: access-reduced-maxphyaddr: skip: as expected
+kvm-corpus: access_fep: skip: as expected
+kvm-corpus: cet: skip: as expected
+kvm-corpus: debug: pass: as expected
+kvm-corpus: emulator: pass: as expected
+kvm-corpus: eventinj: pass: as expected
+kvm-corpus: hypercall: pass: as expected
+kvm-corpus: hyperv_clock: pass: as expected
+kvm-corpus: hyperv_connections: fail: as expected
+kvm-corpus: hyperv_stimer: pass: as expected
+kvm-corpus: hyperv_stimer_direct: pass: as expected
+kvm-corpus: hyperv_synic: pass: as expected
+kvm-corpus: idt_test: pass: as expected
+kvm-corpus: intel_iommu: pass: as expected
+kvm-corpus: ioapic: pass: as expected
+kvm-corpus: kvmclock_test: pass: as expected
+kvm-corpus: la57: pass: as expected
+kvm-corpus: lam: pass: as expected
+kvm-corpus: memory: pass: as expected
+kvm-corpus: msr: pass: as expected
+kvm-corpus: msr64: pass: as expected
+kvm-corpus: pcid-asymmetric: pass: as expected
+kvm-corpus: pcid-disabled: pass: as expected
+kvm-corpus: pcid-enabled: pass: as expected
+kvm-corpus: pks: skip: as expected
+kvm-corpus: pku: skip: as expected
+kvm-corpus: rdpru: pass: as expected
+kvm-corpus: realmode: pass: as expected
+kvm-corpus: rmap_chain: pass: as expected
+kvm-corpus: s3: pass: as expected
+kvm-corpus: setjmp: pass: as expected
+kvm-corpus: sieve: pass: as expected
+kvm-corpus: smap: skip: as expected
+kvm-corpus: smptest: pass: as expected
+kvm-corpus: smptest3: pass: as expected
+kvm-corpus: syscall: pass: as expected
+kvm-corpus: tsc: pass: as expected
+kvm-corpus: tsc_adjust: pass: as expected
+kvm-corpus: tsx-ctrl: skip: as expected
+kvm-corpus: umip: pass: as expected
+kvm-corpus: vmexit_cpuid: pass: as expected
+kvm-corpus: vmexit_cr0_wp: pass: as expected
+kvm-corpus: vmexit_cr4_pge: pass: as expected
+kvm-corpus: vmexit_inl_pmtimer: pass: as expected
+kvm-corpus: vmexit_ipi: pass: as expected
+kvm-corpus: vmexit_ipi_halt: pass: as expected
+kvm-corpus: vmexit_mov_from_cr8: pass: as expected
+kvm-corpus: vmexit_mov_to_cr8: pass: as expected
+kvm-corpus: vmexit_ple_round_robin: pass: as expected
+kvm-corpus: vmexit_tscdeadline: pass: as expected
+kvm-corpus: vmexit_tscdeadline_immed: pass: as expected
+kvm-corpus: vmexit_vmcall: pass: as expected
+kvm-corpus: vmware_backdoors: skip: as expected
+kvm-corpus: x2apic: pass: as expected
+kvm-corpus: xapic: pass: as expected
+kvm-corpus: xsave: pass: as expected
+kvm-corpus: result: pass: 57 as expected, 30 excluded

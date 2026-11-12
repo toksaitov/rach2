@@ -218,6 +218,7 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
     case KVM_CAP_ENFORCE_PV_FEATURE_CPUID:
     case KVM_CAP_X86_USER_SPACE_MSR:
     case KVM_CAP_X86_MSR_FILTER:
+    case KVM_CAP_XSAVE: /* FXSAVE's image without XSAVE, as Linux's x86.c:4216 */
         return 1;
     case KVM_CAP_X2APIC_API:
         return (int32_t)KVM_X2APIC_API_VALID_FLAGS;
@@ -227,9 +228,11 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
         return (int32_t)(KVM_X86_DISABLE_EXITS_PAUSE | KVM_X86_DISABLE_EXITS_HLT);
     case KVM_CAP_PMU_CAPABILITY:
         return KVM_PMU_CAP_DISABLE;
-    case KVM_CAP_XSAVE:
     case KVM_CAP_XCRS:
         return kvm_xcr0_supported() != 0;
+    case KVM_CAP_XSAVE2:
+        /* Linux's floor, sizeof(struct kvm_xsave); no component needs more. */
+        return (int32_t)KVM_XSAVE_SIZE;
     case KVM_CAP_MCE:
         return KVM_MAX_MCE_BANKS;
     case KVM_CAP_ADJUST_CLOCK:

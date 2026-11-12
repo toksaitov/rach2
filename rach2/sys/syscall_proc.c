@@ -4415,8 +4415,8 @@ static void sig_irq_restore(uint32_t flags)
  * Linux 6.12.115's signal_wake_up_state marks TIF_SIGPENDING
  * (kernel/signal.c:759-773).
  * A wake for a blocked signal marks no work.
- * Make `t` runnable if it sleeps, clearing its timed wake, with the state
- * tested and the deadline cleared under the run queues' lock
+ * Make `t` runnable and woken if it sleeps, clearing its timed wake, with
+ * the state tested and the deadline cleared under the run queues' lock
  * (`sched_wake_signal`), as signal_wake_up_state wakes through
  * `try_to_wake_up`'s test: a wait queue's waker and this one do not both
  * make it ready. An interruptible wait then calls `signal_pending` to learn
@@ -10088,9 +10088,10 @@ long sys_sched_get_priority_min(isr_params_t *params)
 
 /**
  * A process's round-robin time slice (sched_rr_get_interval, a timespec of
- * two longs): one tick, since the timer takes the processor from every
- * process at each tick, and 0 for SCHED_FIFO and SCHED_DEADLINE, which
- * Linux gives no slice. -EINVAL for a negative pid, -ESRCH, -EFAULT.
+ * two longs): one tick, since the tick takes the processor from a process
+ * switched in at the last one (`sched_tick`), and 0 for SCHED_FIFO and
+ * SCHED_DEADLINE, which Linux gives no slice. -EINVAL for a negative pid,
+ * -ESRCH, -EFAULT.
  */
 long sys_sched_rr_get_interval(isr_params_t *params)
 {

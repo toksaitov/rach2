@@ -438,10 +438,16 @@ void platform_board_init(void)
     itco_init();
 }
 
-/** ACPICA first, since the VT-d units are found through its tables, and
- * the 8042's PNP IDs it found given to its serio ports in /sys; the units
- * only on x86-64, whose VMs are given devices. A firmware's x2APIC mode
- * that `lapic_init` kept is settled once remapping's format is known. */
+/**
+ * ACPICA first, since the VT-d units are found through its tables, and the
+ * 8042's PNP IDs it found given to its serio ports in /sys; the units only
+ * on x86-64, whose VMs are given devices. A firmware's x2APIC mode that
+ * `lapic_init` kept is settled once remapping's format is known, with the
+ * units' fault events held, since leaving the mode drops a message that
+ * comes meanwhile. The kernel calls this before any driver enables a
+ * device's message (kernel.c), so the fault events are the only messages
+ * there are, and `lapic_x2apic_settle` quiets the other sources itself.
+ */
 void platform_firmware_start(void)
 {
     acpica_boot(acpi_get()->found ? acpi_get()->rsdp : 0);
@@ -449,7 +455,9 @@ void platform_firmware_start(void)
     evdev_sysfs_serio_firmware_id(I8042_AUX_PORT, i8042_firmware_id(I8042_AUX_PORT));
 #if defined(__x86_64__)
     iommu_boot();
+    iommu_fault_hold(1);
     lapic_x2apic_settle(iommu_irq_remapped_x2apic());
+    iommu_fault_hold(0);
 #endif
 }
 

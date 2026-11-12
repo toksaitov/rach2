@@ -113,6 +113,7 @@
 #define KVM_SET_DEBUGREGS    KVM_IOW(0xA2u, 128u)
 #define KVM_GET_XSAVE        KVM_IOR(0xA4u, 4096u)
 #define KVM_SET_XSAVE        KVM_IOW(0xA5u, 4096u)
+#define KVM_GET_XSAVE2       KVM_IOR(0xCFu, 4096u)
 #define KVM_GET_XCRS         KVM_IOR(0xA6u, 392u)
 #define KVM_SET_XCRS         KVM_IOW(0xA7u, 392u)
 #define KVM_KVMCLOCK_CTRL    KVM_IO(0xADu)
@@ -217,6 +218,7 @@
 #define KVM_CAP_SET_GUEST_DEBUG2            195
 #define KVM_CAP_BINARY_STATS_FD             203
 #define KVM_CAP_EXIT_ON_EMULATION_FAILURE   204
+#define KVM_CAP_XSAVE2                      208
 #define KVM_CAP_SYS_ATTRIBUTES              209
 #define KVM_CAP_DISABLE_QUIRKS2             213
 #define KVM_CAP_VM_TSC_CONTROL              214
