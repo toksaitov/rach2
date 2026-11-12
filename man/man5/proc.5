@@ -1252,6 +1252,10 @@ and
 0, the same thresholds in bytes, which count in place of the ratio when
 not 0: a write of a byte count, at least 1 and at least 8192, sets the
 ratio to 0, and a write of a ratio sets the byte count to 0, as on Linux;
+a new byte count that rounds up to more than 4294967295 pages, which only
+x86-64 can write, fails with
+.Er ERANGE
+and leaves the setting as it was;
 and
 .Pa vm/dirtytime_expire_seconds ,
 43200, which Linux reads for a mount with lazy times and nothing here

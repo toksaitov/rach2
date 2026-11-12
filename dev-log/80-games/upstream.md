@@ -199,3 +199,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: nothing; the steps set `mixer vol 1` themselves.
 * Status: unreported.
 * Next: read `pa_oss_set_volume` and `pa_oss_get_volume` in PulseAudio's current source for the conversion and its rounding; then report, with a patch that makes a read value written back unchanged.
+
+## Linux's dirty byte settings take a count within a page of ULONG_MAX
+
+* Project: Linux 6.12.115, `mm/page-writeback.c` and `include/uapi/linux/const.h`.
+* Fails: `dirty_background_bytes_handler` (line 520) and `dirty_bytes_handler` (line 552) refuse with ERANGE a byte count whose pages pass UINT_MAX, but count the pages with `DIV_ROUND_UP` (`__KERNEL_DIV_ROUND_UP`, const.h line 51), whose `n + d - 1` wraps on a 64-bit kernel for a count above ULONG_MAX - 4095, so such a count reads as 0 pages and is taken. `proc_doulongvec_minmax` sets no upper bound of its own, since neither table entry has `extra2` (page-writeback.c lines 2313 and 2330, kernel/sysctl.c line 1037). `domain_dirty_limits` then rounds the stored count the same way, and the threshold comes out 0.
+* Found: 2026-11-13, on the Mac, milestone 80, task 80-99, while giving Rach2's dirty byte settings Linux's upper bound, from reading the source; not run.
+* Reproduction: not run. On x86-64 Linux 6.12, `echo 18446744073709551615 > /proc/sys/vm/dirty_bytes` should succeed and `cat /proc/sys/vm/dirty_bytes` read it back, where 17592186044416 fails with ERANGE.
+* Evidence: the source lines above, in `build/research/linux-6.12.115-full/` on the Mac.
+* Rach2: `dirty_bytes_too_many` in `rach2/sys/fs/procfs.c` counts the pages without the addition and refuses every such count with ERANGE.
+* Status: unreported.
+* Next: run the reproduction on Linux 6.12 and on current mainline; then report to linux-mm, with a patch that counts the pages with `DIV_ROUND_UP_POW2` or compares the bytes with `(u64)UINT_MAX * PAGE_SIZE`.
