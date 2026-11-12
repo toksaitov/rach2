@@ -1,0 +1,10 @@
+# Linux's video references on the Lenovo
+
+Debian's output of the three video checks of `tests/graphics/lenovo/video-gpu.sh` on the Lenovo's Intel HD 4400, against which the native cases `video/decode`, `video/browsers` and `video/hang` (`tests/native/gpuvideo.sh`) judge Rach2's. They were taken on 2026-11-11 under Debian 13.7 on the Lenovo's p5, kernel 6.12.115+deb13.1, Mesa 25.0.7-2+deb13u1, i965-va-driver 2.4.1, libavcodec61 7.1.5, Chromium 156.0.8078.79 and Firefox ESR 153.6.0, booted with `intel_iommu=off`, the IOMMU's translation off. The files are the tools' own output, unedited.
+
+## Results
+
+* `linux.tar.gz`: `linux/` and `linux-decode.out`, `linux-browsers.out` and `linux-hang.out` of `tests/graphics/lenovo/video-gpu.sh`, with each check's exit status, 0 for all three. `linux/decode/` has each clip's frames in software (`.sw`) and through VA-API (`.va`), a line of Y, U and V MD5s a frame, and `vainfo.txt`; `linux/chromium/` and `linux/firefox/` each clip's `.plays`, `.decoders` and log; `linux/hang/` the decode alone, the decode during piglit's eight `read-front` triggers, the triggers' output and the kernel's hangs and resets.
+* `data.sha256`: the SHA-256 of the clips and of vahash, which the cases read from the data partition, in `native/video/clips`, since vahash links Debian's FFmpeg headers and the clips are some 45 MiB. vahash and the MPEG-2 and JPEG clips are the ones that boot built and made; the H.264, VP9 and AV1 clips are `runners/clips.sha256`'s, and the VC-1 clips FFmpeg's conformance samples.
+
+In that boot the six decodes gave the same frame count in software and through VA-API, with H.264 and VC-1's Advanced profile bit for bit as software, and MPEG-2, JPEG and 7 of WMV3's 24 frames differing from it; every browser play had three counted plays and no error; and the eight triggers hung and reset rcs0 eight times, with no reset of vcs0 or the chip, while the decode beside them had 0 frames differing.

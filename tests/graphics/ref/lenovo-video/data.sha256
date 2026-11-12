@@ -1,0 +1,17 @@
+# data.sha256: the clips and vahash that the native cases video/* read from
+# the Lenovo's data partition, /dev/disk0p6, in native/video/clips, in
+# `sha256sum -c` form with names relative to that directory. vahash was
+# built on the Lenovo's Debian 13.7 against FFmpeg 7.1.5's headers of the
+# snapshot the GNU root pins, and the MPEG-2 and JPEG clips were made there
+# by `video-gpu.sh make`, in the boot whose output is linux.tar.gz.
+1fa10e70195c8f37142c77f8a7dd303a96ef40e368331dd7b6742abb97ed572f  h264-720p.mp4
+8e566274514deb59d29e5163c00684f5907795a5bd4e74bd5c80239981f9c114  h264-1080p.mp4
+89b813d1ff8464dd5c407b73697e2cc6290e5542509bb1a10cada3947abfff69  vp9-720p.webm
+d8894694e9dcaed9c484b67eb1ba75bbc25655b3f07fae207fc379f7146ccf00  vp9-1080p.webm
+9191128f69d42283d345bfc81809f4122f2359b484dad977816e8249ececa3da  av1-720p.webm
+1aa8f6f66a8087710b0689c7da25402ab96b64b8c7990fd2a2544da88e032402  av1-1080p.webm
+9234e76bd1411d94a22a2713e7f37bb8cf24926cfa513125c0a30c32c72d12b3  mpeg2-720p.m2v
+31db55c41c08442949fe7f44a3234951c9e0865d4d9df682acfc9d6260abc4e7  jpeg-720p.mkv
+c60a0da89873b40d7e436f1c29757c6cc71f3c51f2ac2ea8c6bd023762c94b6c  SA10091.vc1
+2de6e6efe960bb0d93b0bfc0229e0b3b1fcdca72eb4b3e290de5f24fafa456f9  SMM0005.rcv
+81d76a96fec2a07d18401a42e66e5099ccab74758c640b546edd099b12919912  vahash
