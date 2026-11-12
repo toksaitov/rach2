@@ -492,13 +492,16 @@ static int level_requested(void)
  * already sent level-triggered is taken by its handler, interrupts being
  * on; an edge a masked line dropped is raised again as the line is
  * unmasked (`ioapic_unmask_lines`), and the 8259 keeps a masked edge in its
- * own request register. With interrupts off, the timer's and the error's
- * local-vector entries are masked; what either raised before is in the
- * request register, which is then read. The timer goes on counting, and a
- * count that came to zero while it was masked raised nothing, so its
- * vector is raised once after the move when the count reloaded, or ran out
- * in one-shot mode, between the mask and the move, a window of a few
- * register accesses, far shorter than a tick. The move resets the count,
+ * own request register. With interrupts off, the error's local-vector
+ * entry is masked, the timer's count read, and the timer's entry masked;
+ * what either raised before is in the request register, which is then
+ * read. The timer goes on counting, and a count that came to zero while it
+ * was masked raised nothing, so its vector is raised once after the move
+ * when the count reloaded, or ran out in one-shot mode, between the first
+ * read of the count and the last, which comes a few instructions before
+ * the move; a window far shorter than a tick. A reload just before the
+ * mask raised the vector already, and raising it again is the same
+ * request, which the processor takes once. The move resets the count,
  * which starts again from the initial count in periodic mode and from what
  * it had left in one-shot mode.
  *
@@ -531,9 +534,9 @@ static void x2apic_leave_live(void)
     flags = kirq_save();
     timer = apic_read(LAPIC_TIMER);
     error = apic_read(LAPIC_ERROR);
-    apic_write(LAPIC_TIMER, timer | LVT_MASKED);
     apic_write(LAPIC_ERROR, error | LVT_MASKED);
     before = apic_read(LAPIC_CURRENT);
+    apic_write(LAPIC_TIMER, timer | LVT_MASKED);
     for (i = 0; i < 8u; i++) {
         irr[i] = apic_read(LAPIC_IRR + i * 0x10u);
     }
