@@ -1395,8 +1395,10 @@ static int fill_run(block_device_t *dev, uint64_t blk);
 static int firsts_pending(const block_device_t *dev);
 
 /* The answer of `firsts_pending` for the device last asked about, kept for
- * one walk of the release order, since it cannot change before the walk
- * sleeps. */
+ * one walk of the release order. It is a hint: a walk that lets
+ * `cache_spin` go keeps it meanwhile, when a reader without the big lock
+ * may take or let go of a `first`, and the write of an `after` checks again
+ * through `write_firsts`. */
 struct first_ask {
     const block_device_t *dev;
     int pending;
