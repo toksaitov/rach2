@@ -12,18 +12,20 @@
 # left running on the Mac, in WSL and on Windows: QEMU guests, test runs, the
 # worker scripts and the board's watches, selecting and signalling each in
 # one pass, so that no process number waits between the two. On Windows it
-# looks only at programs under D:\rach2 and at MSYS2's bash running a release
-# run's part, so that Hyper-V and its machines are never touched: winclean.sh
-# first stops, with what it started, each release run that may still run
-# there, found by its etude or bash or listed by `winclean.sh -l` from
-# Windows' output directory and the release's records, and removes the run's
-# scratch there; then each other program under D:\rach2 is stopped through its
-# own handle. Then it brings the board up to date, runs sweep.sh, with -a
-# unless a release still runs, and prints what is still there: a line `stop:
-# left: MACHINE: WHAT` for each process and each claim of the admission
-# ledger. It ends with `stop: everything is stopped` and status 0, or `stop: N
-# left` and status 1. dev-log/84-locks/84-111-lifecycle.md gives the states
-# and guards of a release's Windows parts and WSL claims that this follows.
+# looks only at programs under D:\rach2 and at the Job Objects of release
+# runs' parts, so that Hyper-V and its machines are never touched: winclean.sh
+# first stops each release run that `winclean.sh -l` lists from Windows'
+# output directory, by its parts' jobs, which end everything the parts
+# started, and removes the run's scratch there; then each other program under
+# D:\rach2 is stopped through its own handle. Then it brings the board up to
+# date, runs sweep.sh, with -a unless a release still runs, and prints what is
+# still there: a line `stop: left: MACHINE: WHAT` for each process, each job
+# and each claim of the admission ledger, and a line `stop: left: MACHINE:
+# unknown: WHY` for each look that cannot be read and each list or stop on
+# Windows that failed. It ends with `stop: everything is stopped` and status
+# 0, or `stop: N left` and status 1. dev-log/84-locks/84-111-lifecycle.md
+# gives the model of a release's Windows parts and WSL claims that this
+# follows.
 #
 # -n changes nothing and prints only what runs now, in the same form. A running
 # release is left alone and counts as left, since it costs hours to repeat:
@@ -38,10 +40,10 @@
 # claims, and waits up to ten minutes for them to end before it stops the
 # rest; a release still running then stays, as without -r. `release.sh -r`
 # goes on from it later. The session of a claim of WSL's admission that a
-# Windows run holds, whose leader runs OUT/ID.KIND.N.sh or whose number an
-# OUT/ID.KIND.N.pid names, is never stopped here: it ends by itself ten
-# minutes after the run's last touch of ID.alive, so that WSL admits other
-# work only once Windows has stopped. The two GitHub runners stay on, since
+# Windows run holds, whose leader is the perl that runs OUT/ID.KIND.N.pl, is
+# never stopped here: it ends by itself ten minutes after the run's last
+# touch of ID.alive, so that WSL admits other work only once Windows has
+# stopped. The two GitHub runners stay on, since
 # they are idle unless a release runs; -g stops them too and turns them off
 # at boot, which `systemctl enable --now` undoes.
 #
@@ -84,17 +86,36 @@ ssh_host()
     ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" "$@"
 }
 
-# wsl: run standard input as a script as root in WSL on the testing host.
+# wsl: run standard input as a script as root in WSL on the testing host, and
+# print `wsl: unknown: WHY` when the host does not answer or the script fails,
+# so that what cannot be read counts as left.
 wsl()
 {
-    ssh_host "$TESTING" 'MSYS_NO_PATHCONV=1 wsl.exe -u root -- sh -s' 2> /dev/null | tr -d '\000\r'
+    ws_out=$(ssh_host "$TESTING" 'MSYS_NO_PATHCONV=1 wsl.exe -u root -- sh -s' 2> /dev/null)
+    ws_rc=$?
+    [ -z "$ws_out" ] || printf '%s\n' "$ws_out" | tr -d '\000\r'
+    unknown wsl "$ws_rc"
 }
 
-# windows: run standard input as a PowerShell script on the testing host.
+# windows: run standard input as a PowerShell script on the testing host, and
+# print `windows: unknown: WHY` as wsl does.
 windows()
 {
-    ssh_host "$TESTING" 'powershell -NoProfile -NonInteractive -Command -' 2> /dev/null |
-        tr -d '\000\r'
+    wn_out=$(ssh_host "$TESTING" 'powershell -NoProfile -NonInteractive -Command -' 2> /dev/null)
+    wn_rc=$?
+    [ -z "$wn_out" ] || printf '%s\n' "$wn_out" | tr -d '\000\r'
+    unknown windows "$wn_rc"
+}
+
+# unknown MACHINE STATUS: print `MACHINE: unknown: WHY` for a look at MACHINE
+# that ended with STATUS, unless STATUS is 0.
+unknown()
+{
+    case $2 in
+        0) ;;
+        255) echo "$1: unknown: the testing host did not answer" ;;
+        *) echo "$1: unknown: the look there ended with status $2" ;;
+    esac
 }
 
 # machine NAME: print the value that the machines file gives Windows' NAME.
@@ -167,13 +188,6 @@ macrun()
     esac
 }
 
-# held: print Windows' output directory as WSL sees it.
-held()
-{
-    o=$(machine out)
-    echo "/mnt/$(echo "$o" | cut -c 1 | tr '[:upper:]' '[:lower:]')$(echo "$o" | cut -c 3-)"
-}
-
 # mac_procs [kill]: print a line `mac: PID ARGS` for each process on the Mac
 # that WHAT names, and with `kill` send it TERM as it is read, so that no
 # number waits between the selection and the signal (G19). A command line
@@ -221,21 +235,21 @@ mac_procs()
 # wsl_procs [kill]: print a line `wsl: PID USER ARGS` for each process in WSL
 # that WHAT names, and with `kill` signal it as it is read (G19). A command
 # line that merely holds release.sh is never one (G12). The session of a
-# claim of WSL's admission never counts: the sessions of the live leaders
-# that run OUT/ID.KIND.N.sh and those that each OUT/ID.KIND.N.pid names, as
-# words (G15). Without -r, while a release runs, the GitHub runners' jobs and
-# the copy of -p's preparation are its own and do not count.
+# claim of WSL's admission never counts: each session whose leader, in the
+# same reading of ps, is the perl that runs OUT/ID.KIND.N.pl, as release.sh's
+# claim_start starts it (G15). Without -r, while a release runs, the GitHub
+# runners' jobs and the copy of -p's preparation are its own and do not
+# count.
 wsl_procs()
 {
     {
-        echo "release='$release' live='$(releases | head -n 1)' copy='$prepare' mode='${1-}' held='$(held)'"
+        echo "release='$release' live='$(releases | head -n 1)' copy='$prepare' mode='${1-}'"
         echo "what='$WHAT'"
         cat << 'END'
-claims=" $({
-    ps -eo sid=,args= | awk '$2 == "sh" && $3 ~ /\.(claim|hold)(\.[0-9]+)?\.sh$/ { print $1 }'
-    cat "$held"/*.claim*.pid "$held"/*.hold*.pid 2> /dev/null
-} | tr -s '\n ' '  ') "
-ps -eo pid=,sid=,user=,args= | grep -E "$what" | grep -v -E 'grep|stop\.sh|release\.sh' |
+p=$(ps -eo pid=,sid=,user=,args=) || exit 1
+claims=" $(printf '%s\n' "$p" |
+    awk '$1 == $2 && $4 == "perl" && $5 ~ /\.(claim|hold)\.[0-9]+\.pl$/ { print $2 }' | tr -s '\n' ' ') "
+printf '%s\n' "$p" | grep -E "$what" | grep -v -E 'grep|stop\.sh|release\.sh' |
     while read -r pid sid user args; do
         case $claims in *" $sid "*) continue ;; esac
         if [ -z "$release" ]; then
@@ -254,12 +268,12 @@ END
 }
 
 # windows_procs [kill]: print a line `windows: PID NAME` for each program
-# under D:\rach2 on Windows and `windows: PID bash COMMAND` for each MSYS2
-# bash that runs a release run's part, OUT/ID.PART.sh; with `kill`, stop each
-# program under D:\rach2 through its own handle as it is selected (G19). The
-# parts' bashes are winclean.sh's to stop, with what they started. Hyper-V
-# and its machines are never touched. A release that stays keeps what it
-# runs on Windows.
+# under D:\rach2 on Windows and `windows: job ID.PART STATE` for each job of
+# a release run's part that `winclean.sh -l` lists and whose state is not
+# absent; with `kill`, stop each program under D:\rach2 through its own
+# handle as it is selected (G19). The parts' jobs are winclean.sh's to stop.
+# Hyper-V and its machines are never touched. A release that stays keeps
+# what it runs on Windows.
 windows_procs()
 {
     [ -n "$release" ] || [ -z "$(releases)" ] || return 0
@@ -267,9 +281,25 @@ windows_procs()
     [ "${1-}" != kill ] || k='; try { $_.Kill() } catch { }'
     echo "Get-Process | Where-Object { \$_.Path -like 'D:\\rach2\\*' -or \$_.Path -like 'D:/rach2/*' } |
         ForEach-Object { 'windows: {0} {1}' -f \$_.Id, \$_.ProcessName$k }" | windows
-    echo "Get-CimInstance Win32_Process -Filter \"Name = 'bash.exe'\" |
-        Where-Object { \$_.CommandLine -like '* $(machine out)/*.sh' } |
-        ForEach-Object { 'windows: {0} bash {1}' -f \$_.ProcessId, \$_.CommandLine }" | windows
+    [ "${1-}" != kill ] || return 0
+    if ! wp_ids=$(orphans); then
+        echo "windows: unknown: the release runs that may still run could not be listed"
+        return
+    fi
+    [ -n "$wp_ids" ] || return 0
+    # shellcheck disable=SC2086 # the ids are a word each
+    wp_out=$(winclean -s $wp_ids 2> /dev/null) ||
+        echo "windows: unknown: winclean.sh -s could not say whether $wp_ids run"
+    printf '%s\n' "$wp_out" | tr -d '\r' |
+        awk '$1 == "state" && $3 != "absent" { $1 = "windows: job"; print }'
+}
+
+# orphans: print, a line each, the release runs that `winclean.sh -l` lists,
+# and fail when it cannot list them.
+orphans()
+{
+    or_out=$(winclean -l 2> /dev/null) || return 1
+    printf '%s\n' "$or_out" | tr -d '\r' | sed -n 's/^orphan //p' | sort -u
 }
 
 # running: print a line `MACHINE: PID ARGS` for each process the header names.
@@ -281,39 +311,35 @@ running()
 }
 
 # winclean ARG...: run winclean.sh on Windows with Windows' copy and output
-# directory before ARGs, for twenty minutes at most.
+# directory after its mode, after the lines that build its winjob program, for
+# twenty minutes at most.
 winclean()
 {
-    case $1 in
-        -l) shift; set -- -l "$(machine tree)" "$(machine out)" "$@" ;;
-        *) set -- "$(machine tree)" "$(machine out)" "$@" ;;
-    esac
-    perl -e 'alarm shift; exec @ARGV' 1200 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
-        "C:/msys64/usr/bin/bash.exe -l -s $*" < "$here/winclean.sh"
+    wc_mode=
+    case $1 in -s | -l | -g) wc_mode=$1; shift ;; esac
+    {
+        sh "$here/winjob.sh" "$(machine out)"
+        cat "$here/winclean.sh"
+    } | perl -e 'alarm shift; exec @ARGV' 1200 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
+        "C:/msys64/usr/bin/bash.exe -l -s $wc_mode $(machine tree) $(machine out) $*"
 }
 
 # stragglers: stop what `running` lists, but a release that may stay. On
 # Windows, while no release runs, winclean.sh first stops each release run
-# that may still run there, with what it started, and removes what it made
-# outside its own files: each whose etude or part's bash runs, and each that
-# `winclean.sh -l` lists from OUT, the record's `windows started` lines and
-# -p's STATE/prepare/windows (V9); then each other program under D:\rach2 is
-# stopped.
+# that may still run there, each that `winclean.sh -l` lists from OUT, with
+# what it started, and removes what it made outside its own files (V9); a
+# list or a stop that fails is kept in unsure, which `left` counts. Then each
+# other program under D:\rach2 is stopped.
 stragglers()
 {
     if [ -n "$release" ] || [ -z "$(releases)" ]; then
-        known=$({
-            sed -n 's/^windows started //p' "$top/build/flow/release/record" 2> /dev/null
-            cat "$top/build/flow/release/prepare/windows" 2> /dev/null
-        } | sort -u | tr '\n' ' ')
-        # shellcheck disable=SC2086 # the ids are a word each
-        ids=$({
-            windows_procs | sed -n -e 's/^windows: [0-9]* etude-\(milestone[^ ]*\)$/\1/p' \
-                -e 's/^windows: [0-9]* bash .*\/\(milestone[^ /.]*\)\.[a-z]*\.sh$/\1/p'
-            winclean -l $known 2> /dev/null | tr -d '\r' | sed -n 's/^orphan //p'
-        } | sort -u | tr '\n' ' ')
-        # shellcheck disable=SC2086 # the ids are a word each
-        [ -z "$ids" ] || winclean $ids > /dev/null 2>&1
+        if ! ids=$(orphans); then
+            unsure="${unsure}windows: unknown: the release runs that may still run could not be listed$nl"
+        elif [ -n "$ids" ]; then
+            # shellcheck disable=SC2086 # the ids are a word each
+            winclean $ids > /dev/null 2>&1 ||
+                unsure="${unsure}windows: unknown: winclean.sh did not confirm that $(printf "%s" "$ids" | tr "\n" " ") stopped$nl"
+        fi
         windows_procs kill > /dev/null
     fi
     mac_procs kill > /dev/null
@@ -334,8 +360,9 @@ runners()
     echo "stop: the GitHub runners are off; \`systemctl enable --now\` starts them"
 }
 
-# left: print what `running` lists and the claims of the admission ledger, as
-# the header says, and the count last.
+# left: print what `running` lists, the claims of the admission ledger and
+# what stragglers could not confirm, as the header says, and the count last.
+# A look that cannot be read counts as one thing left.
 left()
 {
     out=$({
@@ -343,8 +370,12 @@ left()
             echo "mac: $p $(ps -o command= -p "$p" 2> /dev/null)"
         done | cut -c 1-160 | sed 's/^/stop: left: /'
         running | cut -c 1-160 | sed 's/^/stop: left: /'
-        echo 'grep -v "^etude-ledger" /var/lib/rach2-etude/ledger/claims 2> /dev/null' | wsl |
-            sed 's/^/stop: left: wsl: claim /'
+        # shellcheck disable=SC2016 # the remote shell expands these
+        echo 'f=/var/lib/rach2-etude/ledger/claims
+            if [ -e "$f" ]; then [ -r "$f" ] || exit 1; grep -v "^etude-ledger" "$f"; fi
+            exit 0' | wsl |
+            sed -e '/^wsl: unknown: /s/^/stop: left: /' -e '/^stop: left: /!s/^/stop: left: wsl: claim /'
+        printf '%s' "$unsure" | sed 's/^/stop: left: /'
     })
     [ -z "$out" ] || printf '%s\n' "$out"
     n=$(printf '%s' "$out" | grep -c '^stop: left')
@@ -356,7 +387,9 @@ left()
     return "$n"
 }
 
-dry='' github='' release=''
+dry='' github='' release='' unsure=''
+nl='
+'
 while getopts ngr o; do
     case $o in
         n) dry=1 ;;
