@@ -18,6 +18,7 @@
 #include "../mm/kheap.h"
 #include "../mm/mm.h"
 #include "../mm/usercopy.h"
+#include "../proc/ns.h"
 #include "../proc/process.h"
 #include "../proc/smp.h"
 #include "../rtc.h"
@@ -226,6 +227,7 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
     case KVM_CAP_X86_USER_SPACE_MSR:
     case KVM_CAP_X86_MSR_FILTER:
     case KVM_CAP_XSAVE: /* FXSAVE's image without XSAVE, as Linux's x86.c:4216 */
+    case KVM_CAP_VM_DISABLE_NX_HUGE_PAGES:
         return 1;
     case KVM_CAP_X2APIC_API:
         return (int32_t)KVM_X2APIC_API_VALID_FLAGS;
@@ -518,6 +520,25 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 }
 
 /**
+ * KVM_CAP_VM_DISABLE_NX_HUGE_PAGES, as Linux 6.12's x86.c: -EPERM for a
+ * caller without CAP_SYS_BOOT in the first user namespace, since a guest
+ * that meets the iTLB multihit erratum stops the whole machine; then
+ * -EINVAL for an argument other than 0 or a VM with a vCPU. The VM keeps
+ * nothing: tdp.c maps every leaf executable, a 2 MiB one too, and so has
+ * no split of an executed large page for the capability to turn off.
+ */
+static int32_t disable_nx_huge_pages(struct kvm_vm *vm, const struct kvm_enable_cap *cap)
+{
+    if (!current_proc || current_proc->userns || !cap_holds(current_proc, CAP_SYS_BOOT)) {
+        return -EPERM;
+    }
+    if (cap->args[0] || vm->nr_vcpus) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+/**
  * KVM_ENABLE_CAP of a VM, as Linux 6.12's kvm_vm_ioctl_enable_cap:
  * KVM_CAP_SPLIT_IRQCHIP, irq.c's; KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2,
  * dirty.c's; KVM_CAP_X86_DISABLE_EXITS, which may come after vCPUs are
@@ -531,7 +552,8 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
  * -EINVAL for an unknown one; KVM_CAP_X2APIC_API, whose flags stay set
  * once set, -EINVAL for an unknown one; and KVM_CAP_X86_APIC_BUS_CYCLES_NS,
  * -EINVAL for 0, a length whose longest timer count overflows 64 bits of
- * ns, or a VM with a vCPU, and -ENXIO without the local APIC in the kernel.
+ * ns, or a VM with a vCPU, and -ENXIO without the local APIC in the kernel;
+ * and KVM_CAP_VM_DISABLE_NX_HUGE_PAGES (`disable_nx_huge_pages`).
  * -EINVAL for a flag or any other capability, as Linux answers one it does
  * not enable; -EFAULT for a bad pointer.
  */
@@ -610,6 +632,8 @@ static int32_t vm_enable_cap(struct kvm_vm *vm, uintptr_t arg)
             vm->x2apic_no_broadcast = 1;
         }
         return 0;
+    case KVM_CAP_VM_DISABLE_NX_HUGE_PAGES:
+        return disable_nx_huge_pages(vm, &cap);
     case KVM_CAP_X86_APIC_BUS_CYCLES_NS:
         /* A count of 2^32 - 1 at TDCR's divisor 128 must fit 64 bits of
          * ns, as Linux guards its tmict_to_ns. */

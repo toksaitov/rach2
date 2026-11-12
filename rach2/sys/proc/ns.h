@@ -311,7 +311,9 @@ void ns_exec(process_t *p);
  * file's mode bits where a check of them is written out, CAP_SETPCAP
  * controls PR_CAPBSET_DROP, CAP_SYS_CHROOT controls chroot, and
  * CAP_SYS_ADMIN controls namespace operations and global privilege
- * (`nocaps` in process.h); CAP_SYS_TTY_CONFIG controls vhangup. */
+ * (`nocaps` in process.h); CAP_SYS_BOOT, held in the first user namespace,
+ * controls KVM_CAP_VM_DISABLE_NX_HUGE_PAGES; CAP_SYS_TTY_CONFIG controls
+ * vhangup. */
 #define CAP_LAST_CAP        40
 #define CAP_HIGH_WORD       0x1FFu
 #define CAP_DAC_OVERRIDE    1
@@ -319,6 +321,7 @@ void ns_exec(process_t *p);
 #define CAP_SETPCAP         8
 #define CAP_SYS_CHROOT      18
 #define CAP_SYS_ADMIN       21
+#define CAP_SYS_BOOT        22
 #define CAP_SYS_TTY_CONFIG  26
 
 /**

@@ -278,6 +278,15 @@ void mm_unhold(struct mm *mm)
     holds--;
 }
 
+/* The capabilities the caller has given up, by number below 32. */
+static uint32_t caps_lost;
+
+/** The caller's capabilities: those of root, less `caps_lost`. */
+int cap_holds(const process_t *p, uint32_t cap)
+{
+    return p->euid == 0 && (cap >= 32u || !(caps_lost & (1u << cap)));
+}
+
 /* The clocks: the raw clock, which the kvmclock counts, the real
  * nanoseconds, and the TSC. */
 static uint64_t mono_ns = 5000000000ull, real_ns = 1800000000000000000ull, tsc = 1000000;
@@ -2759,7 +2768,8 @@ static void cr4_rows(void)
 
 /** The capabilities a VM enables: the quirks,
  * KVM_CAP_EXIT_ON_EMULATION_FAILURE, KVM_CAP_MSR_PLATFORM_INFO with the
- * MSRs of CPUID faulting, and KVM_CAP_X86_APIC_BUS_CYCLES_NS. */
+ * MSRs of CPUID faulting, KVM_CAP_X86_APIC_BUS_CYCLES_NS and
+ * KVM_CAP_VM_DISABLE_NX_HUGE_PAGES. */
 static void vm_cap_rows(void)
 {
     int vm = dev(KVM_CREATE_VM, 0), fd;
@@ -2797,11 +2807,29 @@ static void vm_cap_rows(void)
           "KVM_CAP_X86_APIC_BUS_CYCLES_NS sets the cycle");
     k->irqchip = KVM_IRQCHIP_NONE;
 
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_VM_DISABLE_NX_HUGE_PAGES) == 1,
+          "KVM_CAP_VM_DISABLE_NX_HUGE_PAGES answers 1");
+    caps_lost = 1u << CAP_SYS_BOOT;
+    CHECK(vm_cap(vm, KVM_CAP_VM_DISABLE_NX_HUGE_PAGES, 1) == -EPERM,
+          "it needs CAP_SYS_BOOT, before the argument is looked at");
+    caps_lost = 0;
+    caller.userns = (struct userns *)&caps_lost;
+    CHECK(vm_cap(vm, KVM_CAP_VM_DISABLE_NX_HUGE_PAGES, 0) == -EPERM,
+          "held in the first user namespace");
+    caller.userns = NULL;
+    CHECK(vm_cap(vm, KVM_CAP_VM_DISABLE_NX_HUGE_PAGES, 1) == -EINVAL,
+          "it takes only the argument 0");
+    CHECK(vm_cap(vm, KVM_CAP_VM_DISABLE_NX_HUGE_PAGES, 0) == 0 &&
+              vm_cap(vm, KVM_CAP_VM_DISABLE_NX_HUGE_PAGES, 0) == 0,
+          "and is taken again before a vCPU");
+
     fd = fdio(vm, KVM_CREATE_VCPU, 0);
     v = (struct kvm_vcpu *)entries[fd].priv;
     k->irqchip = KVM_IRQCHIP_SPLIT;
     CHECK(vm_cap(vm, KVM_CAP_X86_APIC_BUS_CYCLES_NS, 8) == -EINVAL, "but not after a vCPU");
     k->irqchip = KVM_IRQCHIP_NONE;
+    CHECK(vm_cap(vm, KVM_CAP_VM_DISABLE_NX_HUGE_PAGES, 0) == -EINVAL,
+          "nor is KVM_CAP_VM_DISABLE_NX_HUGE_PAGES");
 
     CHECK(get_msr(fd, 0xCE, &value) == 1 && value == 0,
           "with the feature MSRs left to the caller, PLATFORM_INFO starts at 0");

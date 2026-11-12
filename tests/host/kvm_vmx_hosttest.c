@@ -307,6 +307,14 @@ void mm_unhold(struct mm *mm)
     (void)mm;
 }
 
+/** The caller holds every capability, as root does. */
+int cap_holds(const process_t *p, uint32_t cap)
+{
+    (void)p;
+    (void)cap;
+    return 1;
+}
+
 void rtc_raw_monotonic(int64_t *s, int64_t *ns)
 {
     *s = 5;

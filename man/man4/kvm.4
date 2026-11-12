@@ -171,7 +171,13 @@ and
 below; and
 .Dv KVM_CAP_X86_APIC_BUS_CYCLES_NS ,
 the length of the APIC timer's tick, 1 ns unless set, with the local APIC
-in the kernel and before the first vCPU.
+in the kernel and before the first vCPU; and
+.Dv KVM_CAP_VM_DISABLE_NX_HUGE_PAGES ,
+with argument 0, before the first vCPU and from a caller with
+.Dv CAP_SYS_BOOT
+in the first user namespace, which changes nothing, since every leaf of
+the guest-physical tables is executable and no large page is split for an
+instruction fetch.
 .Pp
 .Dv KVM_CAP_DISABLE_QUIRKS2
 names the quirks that
@@ -1092,6 +1098,8 @@ a second time with another bound, above 4096 or below the boot vCPU's id;
 .Dv KVM_CAP_X86_APIC_BUS_CYCLES_NS
 of 0, of a length at which the longest timer count, 2^32 - 1 at the divisor
 128, overflows 64 bits of ns, or once the VM has a vCPU;
+.Dv KVM_CAP_VM_DISABLE_NX_HUGE_PAGES
+of an argument other than 0 or once the VM has a vCPU;
 synchronized registers
 .Dv KVM_CAP_SYNC_REGS
 does not name;
@@ -1198,7 +1206,11 @@ or
 on a bus that holds 1000 zones.
 .It Bq Er EPERM
 .Dv KVM_SIGNAL_MSI
-that no APIC took.
+that no APIC took;
+.Dv KVM_CAP_VM_DISABLE_NX_HUGE_PAGES
+from a caller without
+.Dv CAP_SYS_BOOT
+in the first user namespace.
 .It Bq Er EIO
 An ioctl from an address space other than the VM's.
 .It Bq Er EINTR

@@ -42,7 +42,13 @@ What only a privileged thread may do, the kernel allows a thread that has
 thread without it is refused, whatever its user IDs.
 .Dv CAP_SETPCAP
 (8) also allows a drop from the bounding set
-.Pq see Xr prctl 2 ;
+.Pq see Xr prctl 2 ,
+and
+.Dv CAP_SYS_BOOT
+(22), held in the first user namespace,
+.Dv KVM_CAP_VM_DISABLE_NX_HUGE_PAGES
+of
+.Xr kvm 4 ;
 the other capabilities guard nothing of their own.
 .Pp
 The header gives the version of the structures and a thread:
