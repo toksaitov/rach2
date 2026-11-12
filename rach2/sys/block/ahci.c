@@ -1,6 +1,7 @@
 /*
  * ahci.c: the AHCI driver: the SATA disks on the first controller in AHCI
  * mode, polled at boot and on the fault path, driven by its message after.
+ * Each port's state is under the port's own lock, never the big lock.
  */
 
 #include "../arch/arch.h"
@@ -17,6 +18,7 @@
 #include "../mm/paging.h"
 #include "../irq.h"
 #include "../lib/kirq.h"
+#include "../lib/spinlock.h"
 #include "../timer.h"
 #include "../cmdline.h"
 #include "../latency.h"
@@ -166,11 +168,23 @@ struct ahci_bounce;
 /**
  * One disk on one port: its DMA areas, its capacity, and the device the
  * block layer sees, whose `drvdata` points back here.
+ *
+ * `lock` is the port's lock, as libata's `ap->lock` (drivers/ata/
+ * libata-core.c:5567), taken with interrupts off by `submit`, the interrupt
+ * and a polled command's claim. It covers the command slot and its tables,
+ * `active`, `active_generation`, `flushing`, `polling`, the queue, the
+ * bounce pages and the device's `unflushed`. Libata's is the host's lock,
+ * one for all of a controller's ports; here each port has its own, since
+ * ports share no state but the controller's interrupt status, whose bits
+ * each port clears for itself alone. A completion is reported to the block
+ * layer under it, as `ata_qc_complete` runs under `ap->lock`
+ * (libata-core.c:4915-4927); the request pool's lock nests inside.
  */
 struct ahci_disk {
     volatile uint8_t cmdlist[AHCI_CMDLIST_SIZE] __attribute__((aligned(1024)));
     volatile uint8_t recv_fis[AHCI_RECV_FIS_SIZE] __attribute__((aligned(256)));
     volatile uint8_t cmdtable[AHCI_CMDTABLE_SIZE] __attribute__((aligned(128)));
+    struct spinlock lock;
     int port;
     uint64_t sectors; /* IDENTIFY words 100-103, 0 until known */
     block_device_t dev;
@@ -181,10 +195,12 @@ struct ahci_disk {
     struct block_request *active;
     uint32_t active_generation;
     int flushing;
-    /* A polled command is in flight on this port and its status belongs
-     * to the caller polling for it. The handler leaves the port alone
-     * while this is set, since acknowledging would clear the error bits
-     * that the caller reads. */
+    /* A polled command has the port: its caller claimed the slot under
+     * `lock` and runs the command without it, and its status belongs to
+     * that caller. The handler leaves the port alone while this is set,
+     * since acknowledging would clear the error bits that the caller
+     * reads, no queued request starts, and a second polled caller waits
+     * for the claim to end (`ahci_claim`). */
     int polling;
     struct block_request *queue_head, *queue_tail;
     /* The pages a controller without 64-bit addressing moves a buffer's
@@ -199,7 +215,6 @@ static int ahci_ndisks;
    switched the disks to the interrupt-driven path, -1 before and under
    `rach2.ahcipoll`, which keeps every transfer polled. */
 static int ahci_vector = -1;
-static uint32_t ahci_messages; /* messages the handler has taken */
 
 /* The areas a port is pointed at while it is reset, before the scan knows
    whether it has a disk. Nothing reads them: a port that is kept gets its
@@ -1053,7 +1068,6 @@ static void ahci_acknowledge(struct ahci_disk *d)
 
 static void ahci_drain(struct ahci_disk *d);
 static void ahci_start_next(struct ahci_disk *d);
-static int ahci_polled_failed(struct ahci_disk *d, uint8_t command, const char *why);
 static int ahci_flush(struct ahci_disk *d);
 
 /** The polled wait's bound in steps: `AHCI_CMD_STEPS` with interrupts on, and
@@ -1064,7 +1078,61 @@ static uint32_t ahci_cmd_steps(void)
 }
 
 /**
- * Issue one polled command on `d`'s port and spin to completion.
+ * Claim `d`'s slot for a polled command, as libata's internal command takes
+ * the port from its queue under `ap->lock` and runs with the lock let go
+ * (drivers/ata/libata-core.c:1546-1597, 1663). Under the port's lock, a
+ * claim another polled caller holds is waited out with the lock let go, the
+ * active queued command is finished by polling and its request completed
+ * (`ahci_drain`), and `polling` is set. The lock is then let go: the claim
+ * keeps the interrupt off the port and the queue stopped until
+ * `ahci_release`, so the command runs with interrupts as the caller had
+ * them. Never sleeps.
+ */
+static void ahci_claim(struct ahci_disk *d)
+{
+    uint32_t flags = spin_lock_irqsave(&d->lock);
+
+    while (d->polling) {
+        spin_unlock_irqrestore(&d->lock, flags);
+        k_udelay(AHCI_CMD_POLL_US);
+        flags = spin_lock_irqsave(&d->lock);
+    }
+    ahci_drain(d);
+    d->polling = 1;
+    spin_unlock_irqrestore(&d->lock, flags);
+}
+
+/** End `d`'s polled claim and start its queue again, under the port's lock;
+ * a command that could not be built ends here too, or the queue would wait
+ * for a command that never comes to advance it. */
+static void ahci_release(struct ahci_disk *d)
+{
+    uint32_t flags = spin_lock_irqsave(&d->lock);
+
+    d->polling = 0;
+    ahci_start_next(d);
+    spin_unlock_irqrestore(&d->lock, flags);
+}
+
+/**
+ * End a polled command that failed, `why` saying how: recover the port and
+ * log the failure, since the caller sees only `-EIO`. The claim's release
+ * starts the queue behind it again, or every request in it would wait out
+ * its deadline and the disk be declared stalled with nothing wrong. Returns
+ * `-EIO`.
+ */
+static int ahci_polled_failed(struct ahci_disk *d, uint8_t command, const char *why)
+{
+    int rc = ahci_io_error(d);
+
+    klog(KLOG_WARN, "ahci", "port %d: command 0x%X failed: %s", d->port, (unsigned)command, why);
+    ahci_acknowledge(d);
+    return rc;
+}
+
+/**
+ * Issue one polled command on `d`'s port, which the caller has claimed
+ * (`ahci_claim`), and spin to completion within `steps`.
  *
  * Builds the command through ahci_build_command, waits for the task file to
  * go idle, sets the slot's `PxCI` bit, and busy-polls it clear, watching the
@@ -1076,31 +1144,22 @@ static uint32_t ahci_cmd_steps(void)
  * it may be called with interrupts off, which the page-cache window's fault
  * needs.
  *
- * On a port with a queued command active, the active command is finished
- * first by polling and its request completed (`ahci_drain`), and the queue
- * is started again after this command, or after a command that could not be
- * built, which would otherwise leave the queue with no command to advance it.
- *
  * Returns 0 on success, `-EIO` on an error or an expiry, and -1 when the
  * command could not be built: a command the disk policy does not allow, or a
  * buffer the table cannot describe.
  */
-static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, uint32_t count,
-                            volatile uint8_t *buf, uint32_t bytes, int write)
+static int ahci_command_claimed(struct ahci_disk *d, uint8_t command, uint64_t lba, uint32_t count,
+                                volatile uint8_t *buf, uint32_t bytes, int write, uint32_t steps)
 {
     uint32_t ci_off = ahci_port_off(d->port, AHCI_PxCI);
     uint32_t tfd_off = ahci_port_off(d->port, AHCI_PxTFD);
     uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
-    uint32_t steps = ahci_cmd_steps();
     uint32_t spin;
     int rc;
 
-    ahci_drain(d);
     if (ahci_build_command(d, command, lba, count, buf, bytes, write) != 0) {
-        ahci_start_next(d);
         return -1;
     }
-    d->polling = 1;
 
     /* The task file must be idle before a command issues (AHCI 5.5.1). */
     spin = steps;
@@ -1138,27 +1197,28 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
         k_udelay(AHCI_CMD_POLL_US);
     }
     rc = ahci_judge(d, bytes, buf, write);
-    d->polling = 0;
     ahci_acknowledge(d);
-    ahci_start_next(d);
     return rc;
 }
 
 /**
- * End a polled command that failed, `why` saying how: recover the port, log
- * the failure, since the caller sees only `-EIO`, and start the queue behind
- * it again, or every request in it waits out its deadline and the disk is
- * declared stalled with nothing wrong. Returns `-EIO`.
+ * Issue one polled command on `d`'s port and spin to completion, from any
+ * context: claim the port, run the command (`ahci_command_claimed`), and
+ * release it. On a port with a queued command active, the claim finishes
+ * that command first by polling and completes its request, and the release
+ * starts the queue again after this command, or after one that could not
+ * be built. The bound is the caller's: thirty seconds with interrupts on,
+ * five with them off. Returns as `ahci_command_claimed` does.
  */
-static int ahci_polled_failed(struct ahci_disk *d, uint8_t command, const char *why)
+static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, uint32_t count,
+                            volatile uint8_t *buf, uint32_t bytes, int write)
 {
-    int rc = ahci_io_error(d);
+    uint32_t steps = ahci_cmd_steps();
+    int rc;
 
-    klog(KLOG_WARN, "ahci", "port %d: command 0x%X failed: %s", d->port, (unsigned)command, why);
-
-    d->polling = 0;
-    ahci_acknowledge(d);
-    ahci_start_next(d);
+    ahci_claim(d);
+    rc = ahci_command_claimed(d, command, lba, count, buf, bytes, write, steps);
+    ahci_release(d);
     return rc;
 }
 
@@ -1172,10 +1232,15 @@ static int ahci_polled_failed(struct ahci_disk *d, uint8_t command, const char *
  * next, so the processor runs another process during a transfer and two
  * disks progress independently. A write is the transfer and then a flush,
  * unless its request has `BLOCK_REQ_NOFLUSH`, so a completed write is on the
- * medium as the polled path's is.
+ * medium as the polled path's is. Everything here runs under the port's
+ * lock: `submit` takes it as libata's `ata_scsi_queuecmd` takes `ap->lock`
+ * (drivers/ata/libata-scsi.c:4627-4648), and the interrupt as
+ * `ahci_single_level_irq_intr` takes the host's (drivers/ata/
+ * libahci.c:2023-2056), with no big lock.
  */
 
-/** Issue the command built in `d`'s slot without waiting. */
+/** Issue the command built in `d`'s slot without waiting. The port's lock
+ * is held. */
 static void ahci_issue(struct ahci_disk *d)
 {
     uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
@@ -1187,8 +1252,8 @@ static void ahci_issue(struct ahci_disk *d)
 
 /**
  * Start the request `r` on `d`: a read, the transfer half of a write, or a
- * flush alone. Returns 0, or -1 when the command could not be built. Called
- * with interrupts masked and the port idle.
+ * flush alone. Returns 0, or -1 when the command could not be built. The
+ * port's lock is held and the port is idle.
  */
 static int ahci_start_request(struct ahci_disk *d, struct block_request *r)
 {
@@ -1218,7 +1283,8 @@ static int ahci_start_request(struct ahci_disk *d, struct block_request *r)
  * then finish its request or start the flush half of a write. A write whose
  * request has `BLOCK_REQ_NOFLUSH` is finished at its transfer, and the disk is
  * marked `unflushed` until a flush, of a write or alone, has finished.
- * Runs from the interrupt, and from the polled path draining the port.
+ * Runs from the interrupt, and from the polled path draining the port,
+ * under the port's lock, inside which the request is completed.
  */
 static void ahci_finish_active(struct ahci_disk *d)
 {
@@ -1250,22 +1316,20 @@ static void ahci_finish_active(struct ahci_disk *d)
 }
 
 /**
- * Start queued requests, oldest first, while the port is idle: until one is
- * active, or none is left. A request whose command cannot be built is
- * completed with `-EIO`.
+ * Start queued requests, oldest first, while the port is idle and no polled
+ * command has claimed it: until one is active, or none is left. A request
+ * whose command cannot be built is completed with `-EIO`.
  *
- * Interrupts are masked across the whole of it. Taking a request off the
+ * The port's lock is held across the whole of it. Taking a request off the
  * queue makes it the active one before its command is issued, and an
- * interrupt arriving in that window would find a request whose command has
- * not been sent and the slot's bit clear, and complete it as though the disk
- * had answered; the queue would then hold requests nothing starts, each
- * waiting out its deadline. The polled path calls this with interrupts on.
+ * interrupt arriving in that window, on any processor, would find a request
+ * whose command has not been sent and the slot's bit clear, and complete it
+ * as though the disk had answered; the queue would then hold requests
+ * nothing starts, each waiting out its deadline.
  */
 static void ahci_start_next(struct ahci_disk *d)
 {
-    uint32_t flags = kirq_save();
-
-    while (!d->active && d->queue_head) {
+    while (!d->active && !d->polling && d->queue_head) {
         struct block_request *r = d->queue_head;
 
         d->queue_head = r->queued;
@@ -1277,25 +1341,23 @@ static void ahci_start_next(struct ahci_disk *d)
             block_request_complete(r, r->generation, -EIO);
         }
     }
-    kirq_restore(flags);
 }
 
 /**
- * Finish the active command by polling, with interrupts masked, for a caller
- * that needs the port at once and cannot take an interrupt: the fault path
- * with interrupts off. A write's flush half is finished too. A command that
- * does not leave the slot within five seconds has its request completed with
- * `-EIO` after the port's recovery. The interrupt that would have completed
- * the command finds nothing active. Each command found active is counted for
+ * Finish the active command by polling, under the port's lock with
+ * interrupts masked, for a polled caller that needs the port at once and
+ * may be unable to take an interrupt: the fault path with interrupts off.
+ * A write's flush half is finished too. A command that does not leave the
+ * slot within five seconds has its request completed with `-EIO` after the
+ * port's recovery. The interrupt that would have completed the command
+ * finds nothing active. Each command found active is counted for
  * `disk-drains` (`block_count_drain`).
  */
 static void ahci_drain(struct ahci_disk *d)
 {
     uint32_t ci_off = ahci_port_off(d->port, AHCI_PxCI);
     uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
-    uint32_t flags;
 
-    flags = kirq_save();
     if (d->active) {
         block_count_drain();
     }
@@ -1330,11 +1392,11 @@ static void ahci_drain(struct ahci_disk *d)
         }
         ahci_finish_active(d);
     }
-    kirq_restore(flags);
 }
 
-/** The device's `submit`: queue `r`, and start it when the port is idle.
- * Returns 0, or `-EIO` for a range past the disk. */
+/** The device's `submit`: queue `r`, and start it when the port is idle,
+ * under the port's lock, which is held only for that. Returns 0, or `-EIO`
+ * for a range past the disk. */
 static int ahci_submit(block_device_t *device, struct block_request *r)
 {
     struct ahci_disk *d = (struct ahci_disk *)device->drvdata;
@@ -1344,8 +1406,8 @@ static int ahci_submit(block_device_t *device, struct block_request *r)
         r->count > device->sector_count - r->lba) {
         return -EIO;
     }
-    flags = kirq_save();
     r->queued = 0;
+    flags = spin_lock_irqsave(&d->lock);
     if (d->queue_tail) {
         d->queue_tail->queued = r;
     } else {
@@ -1353,7 +1415,7 @@ static int ahci_submit(block_device_t *device, struct block_request *r)
     }
     d->queue_tail = r;
     ahci_start_next(d);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&d->lock, flags);
     return 0;
 }
 
@@ -1370,44 +1432,54 @@ static int ahci_flush_submit(block_device_t *device, struct block_request *r)
 }
 
 /**
- * The controller's interrupt: every port with a disk whose command has
- * left the slot is finished, and its interrupt status cleared. A port with
- * a polled command in flight is left to its caller, and a fatal error with
- * the command still in the slot recovers the port and fails the request.
+ * One port's part of the interrupt, under its lock: a command that has left
+ * the slot is finished and the next started, and the port's interrupt
+ * status cleared. A port a polled command has claimed is left to its
+ * caller, and a fatal error with the command still in the slot recovers the
+ * port and fails the request.
+ */
+static void ahci_port_interrupt(struct ahci_disk *d)
+{
+    uint32_t is = ahci_read32(ahci_port_off(d->port, AHCI_PxIS));
+
+    if (d->polling || is == 0) {
+        return;
+    }
+    if (d->active && !(ahci_read32(ahci_port_off(d->port, AHCI_PxCI)) & (1u << AHCI_SLOT))) {
+        ahci_finish_active(d);
+        ahci_start_next(d);
+        return;
+    }
+    if (d->active && (is & AHCI_PxIS_FATAL)) {
+        struct block_request *r = d->active;
+
+        (void)ahci_io_error(d);
+        d->active = 0;
+        block_request_complete(r, d->active_generation, -EIO);
+        ahci_acknowledge(d);
+        ahci_start_next(d);
+        return;
+    }
+    ahci_acknowledge(d);
+}
+
+/**
+ * The controller's interrupt, which runs without the big lock
+ * (ISR_UNLOCKED): each port with a disk is handled under its own lock
+ * (`ahci_port_interrupt`), as Linux's `ahci_handle_port_intr` handles each
+ * port under the host's (drivers/ata/libahci.c:1996-2019, 2041-2056).
  */
 static void ahci_handler(isr_params_t *params)
 {
     int i;
 
     (void)params;
-    ahci_messages++;
     for (i = 0; i < ahci_ndisks; i++) {
         struct ahci_disk *d = &ahci_disks[i];
-        uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
-        uint32_t is = ahci_read32(is_off);
+        uint32_t flags = spin_lock_irqsave(&d->lock);
 
-        if (d->polling) {
-            continue;
-        }
-        if (is == 0) {
-            continue;
-        }
-        if (d->active && !(ahci_read32(ahci_port_off(d->port, AHCI_PxCI)) & (1u << AHCI_SLOT))) {
-            ahci_finish_active(d);
-            ahci_start_next(d);
-            continue;
-        }
-        if (d->active && (is & AHCI_PxIS_FATAL)) {
-            struct block_request *r = d->active;
-
-            (void)ahci_io_error(d);
-            d->active = 0;
-            block_request_complete(r, d->active_generation, -EIO);
-            ahci_acknowledge(d);
-            ahci_start_next(d);
-            continue;
-        }
-        ahci_acknowledge(d);
+        ahci_port_interrupt(d);
+        spin_unlock_irqrestore(&d->lock, flags);
     }
 }
 
@@ -1423,6 +1495,7 @@ void ahci_start(void)
         return;
     }
     register_isr_handler((uint8_t)ahci_vector, ahci_handler, "ahci");
+    isr_register_flags((uint8_t)ahci_vector, ahci_handler, ISR_UNLOCKED);
     if (pci_msi_enable(&ahci_pci, (uint8_t)ahci_vector) != 0) {
         klog(KLOG_INFO, "ahci", "polled: the controller has no message capability");
         isr_free_vector(ahci_vector);
@@ -1484,19 +1557,23 @@ static int ahci_identify(struct ahci_disk *d)
 /**
  * Flush the device's write cache by polling, so a completed write is on the
  * medium, as the buffer cache's dirty flags and `pc_sync` expect. Returns as
- * `ahci_run_command` does. The `unflushed` mark is cleared before the
- * command, because the queue starts again before the command returns and a
- * write answered then must leave it set; a failed flush sets it again.
+ * `ahci_run_command` does. The `unflushed` mark is cleared under the claim,
+ * which keeps the queue and the interrupt off the port, and so every write
+ * answered before it is under this flush; a failed flush sets it again,
+ * and a write answered once the claim is released sets it after.
  */
 static int ahci_flush(struct ahci_disk *d)
 {
+    uint32_t steps = ahci_cmd_steps();
     int rc;
 
+    ahci_claim(d);
     d->dev.unflushed = 0;
-    rc = ahci_run_command(d, ATA_FLUSH_EXT, 0, 0, 0, 0, 0);
+    rc = ahci_command_claimed(d, ATA_FLUSH_EXT, 0, 0, 0, 0, 0, steps);
     if (rc != 0) {
         d->dev.unflushed = 1;
     }
+    ahci_release(d);
     return rc;
 }
 
@@ -1579,6 +1656,10 @@ int ahci_init(void)
     for (i = 0; i < ahci_ndisks; i++) {
         struct ahci_disk *d = &ahci_disks[i];
 
+        spin_lock_init(&d->lock, "ahci_port");
+        d->polling = 0;
+        d->active = 0;
+        d->queue_head = d->queue_tail = 0;
         if (!ahci_dma64 && !d->bounce) {
             d->bounce = kzalloc(sizeof(*d->bounce));
         }
@@ -1594,7 +1675,7 @@ int ahci_init(void)
         d->dev.sector_size = BLOCK_SECTOR_SIZE;
         d->dev.sector_count = d->sectors;
         d->dev.max_sectors = AHCI_REQ_SECTORS;
-        d->dev.flags = BLOCK_FAULT_SAFE | BLOCK_POLLABLE | BLOCK_WRITE_THROUGH;
+        d->dev.flags = BLOCK_FAULT_SAFE | BLOCK_POLLABLE | BLOCK_WRITE_THROUGH | BLOCK_UNLOCKED;
         d->dev.unflushed = 0;
         d->dev.read = ahci_read;
         d->dev.write = ahci_write;
@@ -1602,8 +1683,6 @@ int ahci_init(void)
         d->dev.flush = 0;
         d->dev.backing = 0;
         d->dev.drvdata = d;
-        d->active = 0;
-        d->queue_head = d->queue_tail = 0;
         if (!block0) {
             block0 = &d->dev;
             ahci_port = d->port;

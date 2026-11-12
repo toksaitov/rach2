@@ -3,6 +3,7 @@
  * of a controller, for the failures QEMU's ich9-ahci does not produce.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * The disk suites boot the driver on QEMU's ich9-ahci, which resets when
  * told, answers the handoff, brings its link up and completes every command.
@@ -606,6 +607,14 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     (void)name;
 }
 
+/** Mark no handler: no vector is ever given. */
+void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flags)
+{
+    (void)vector;
+    (void)handler;
+    (void)flags;
+}
+
 /** What the controller does when a command completes: write `moved_bytes`
  *  back into the command header's byte count. */
 static void complete_command(void)
@@ -743,6 +752,7 @@ static void stuck_recovery(int path)
             reg[P0 + P_IS] = AHCI_PxIS_FATAL;
             ahci_handler(0);
         } else if (path == 1) {
+            (void)spin_lock_irqsave(&d->lock);
             ahci_drain(d);
         } else if (path == 2) {
             reg[P0 + P_CI] = 0;
