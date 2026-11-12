@@ -139,6 +139,13 @@ static int flusher_due(void *arg)
  * is published busy, and the sleep ends at once when it has moved since:
  * a kick that came during the turn, whose wake the turn's being busy kept
  * back, may have come after the turn's last look at the cache.
+ *
+ * A turn runs marked as in a call (`in_syscall`), as sync(2) does the same
+ * writes, so that a disk sleeps the thread for its answer and a loop device,
+ * which sleeps every caller, takes its writes; outside a call the request
+ * layer polls a disk that can be polled and stops the kernel at any other.
+ * The mark is off while the thread sleeps between turns, since a kernel
+ * thread so marked counts as one that is exiting (`proc_is_kthread`).
  */
 static void flusher_main(void)
 {
@@ -150,6 +157,7 @@ static void flusher_main(void)
     arch_irq_enable();
     for (;;) {
         flusher_busy = 1;
+        current_proc->in_syscall = 1;
         sched_mb();
         arg.gen = flusher_gen;
         now = tick_count();
@@ -170,6 +178,7 @@ static void flusher_main(void)
             }
         }
         write_background();
+        current_proc->in_syscall = 0;
         flusher_busy = 0;
         sched_mb();
         flags = kirq_save();
