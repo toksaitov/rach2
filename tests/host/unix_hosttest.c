@@ -49,8 +49,8 @@
  * sleeping call holds without waiting; no row has it take one. Where the
  * row's own thread sleeps in a socket's wait, a row's `own_wait` moves the
  * model's clock, queues bytes or has a sibling take the signal, and the
- * deadline each wait arms is kept, so that the rows of SO_RCVTIMEO judge
- * the time limit by ticks.
+ * deadline each wait arms is kept, so that the rows of SO_RCVTIMEO and
+ * SO_SNDTIMEO judge the time limit by ticks.
  */
 #include "ipc/unix.c"
 #include "ipc/pipe.c"
@@ -2075,16 +2075,22 @@ static void mutex_signal_row(void)
     end_row("ignored mutex signal");
 }
 
-/** Set SO_RCVTIMEO of `fd` to `usec` microseconds, 0 for none, from page
- * 5: 0, or `unix_setsockopt`'s error. */
-static int32_t set_rcvtimeo(int fd, long usec)
+/** Set the time limit `name` of `fd` to `usec` microseconds, 0 for none,
+ * from page 5: 0, or `unix_setsockopt`'s error. */
+static int32_t set_timeo(int fd, int name, long usec)
 {
     long tv[2];
 
     tv[0] = usec / 1000000;
     tv[1] = usec % 1000000;
     k_memcpy(user(AT(5, 256)), tv, sizeof(tv));
-    return unix_setsockopt(fd_at(fd), SOL_SOCKET, SO_RCVTIMEO_OLD, AT(5, 256), sizeof(tv));
+    return unix_setsockopt(fd_at(fd), SOL_SOCKET, name, AT(5, 256), sizeof(tv));
+}
+
+/** Set SO_RCVTIMEO of `fd` to `usec` microseconds, 0 for none. */
+static int32_t set_rcvtimeo(int fd, long usec)
+{
+    return set_timeo(fd, SO_RCVTIMEO_OLD, usec);
 }
 
 /** A signal ends the wait: the clock moves 10 ticks first. */
@@ -2106,6 +2112,20 @@ static int wait_out(void)
 static void rcvtimeo_sibling(void)
 {
     sibling_rc[0] = set_rcvtimeo(0, 400000);
+}
+
+/** The sibling's SO_SNDTIMEO taken off socket 1, while the send's lookup
+ * of the path sleeps. */
+static void sndtimeo_sibling(void)
+{
+    sibling_rc[0] = set_timeo(1, SO_SNDTIMEO_OLD, 0);
+}
+
+/** A wait ends at its deadline; one with none ends with a signal, since
+ * nothing in the row would wake it. */
+static int wait_out_or_signal(void)
+{
+    return current_proc->wakeup_tick == 0 ? 1 : wait_out();
 }
 
 /** A page fault that takes 250 ticks. */
@@ -2251,11 +2271,49 @@ static void timeo_limit_row(void)
     end_row("timeo waitall");
 }
 
+/**
+ * The time limit of SO_SNDTIMEO on a send to a full queue named by a path,
+ * as Linux 6.12 takes it (net/unix/af_unix.c:2063-2075): after the copy of
+ * the message and before the lookup of the path, so that a sibling's
+ * clearing of the limit while the lookup sleeps leaves the send its 100 ms,
+ * and the send ends with EAGAIN at that deadline instead of waiting for
+ * ever.
+ */
+static void sndtimeo_lookup_row(void)
+{
+    uint64_t t0;
+    uint32_t len;
+    int32_t rc;
+    int n;
+
+    setup();
+    check(unix_socket(SOCK_DGRAM, 0, 0) == 0 && unix_socket(SOCK_DGRAM, 0, 0) == 1,
+          "timeo: two datagram sockets");
+    len = path_at(AT(1, 0), "/tmp/sink");
+    check(unix_bind(fd_at(0), AT(1, 0), len) == 0 && set_timeo(1, SO_SNDTIMEO_OLD, 100000) == 0,
+          "timeo: a socket named by a path and a sender with SO_SNDTIMEO");
+    set_bytes(AT(2, 0), "d");
+    for (n = 0; n < 1024 && unix_sendto(fd_at(1), AT(2, 0), 1, MSG_DONTWAIT, AT(1, 0), len) == 1;
+         n++) {
+    }
+    check(n > 0 && queue_full(sock_at(0)), "timeo: the named socket's queue is full");
+    fs_sibling = sndtimeo_sibling;
+    own_wait = wait_out_or_signal;
+    t0 = kernel_ticks;
+    rc = unix_sendto(fd_at(1), AT(2, 0), 1, 0, AT(1, 0), len);
+    check(rc == -EAGAIN && ran == 1 && sibling_rc[0] == 0 && own_waits == 1 &&
+              own_deadline[0] == t0 + 101u,
+          "a named datagram send keeps the SO_SNDTIMEO it had before its lookup of the path when "
+          "the limit is taken off while the lookup sleeps");
+    end_row("timeo taken before the lookup");
+}
+
 /** The rows of the time limits and signals of a socket call's waits. */
 static void timeo_row(void)
 {
     timeo_signal_row();
     timeo_limit_row();
+    sndtimeo_lookup_row();
 }
 
 /** Set up the process and its shared table, and run every row; 0 when
