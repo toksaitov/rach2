@@ -936,23 +936,31 @@ static void hv_stimers(struct kvm_vcpu *v, struct hv_vcpu *hv, uint64_t now)
 }
 
 /** The timers are the vCPU's own, which only its thread changes, so the
- * test for one due takes no lock. */
+ * test for one due takes no lock. The clock is read only while a timer is
+ * armed, as Linux's vcpu_enter_guest runs the timers only at the request
+ * their hrtimer makes (arch/x86/kvm/x86.c:10425-10426, hyperv.c:594): a
+ * vCPU whose caller only read Hyper-V's MSRs has the record and no timer. */
 void kvm_hv_stimers(struct kvm_vcpu *v)
 {
     struct hv_vcpu *hv = hv_of(v);
-    uint64_t now;
+    uint64_t now = 0;
     int i, due;
 
     if (!hv) {
         return;
     }
-    now = kvm_host_ns();
     due = hv->stimer_pending != 0;
     for (i = 0; !due && i < HV_STIMERS; i++) {
-        due = hv->stimer[i].due_ns && now >= hv->stimer[i].due_ns;
+        if (hv->stimer[i].due_ns) {
+            now = now ? now : kvm_host_ns();
+            due = now >= hv->stimer[i].due_ns;
+        }
     }
     if (!due) {
         return;
+    }
+    if (!now) {
+        now = kvm_host_ns();
     }
     kvm_bkl_enter(v);
     hv_stimers(v, hv, now);

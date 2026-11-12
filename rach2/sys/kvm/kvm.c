@@ -22,6 +22,7 @@
 #include "../proc/process.h"
 #include "../proc/smp.h"
 #include "../rtc.h"
+#include "../vdso.h"
 
 /* The identity map's address before KVM_SET_IDENTITY_MAP_ADDR, Linux's
  * VMX_EPT_IDENTITY_PAGETABLE_ADDR. */
@@ -87,12 +88,21 @@ struct mm *kvm_vm_mm(struct kvm_vm *vm)
     return vm_rec(vm)->mm;
 }
 
+/** The raw clock, as Linux's get_kvmclock_base_ns reads ktime_get_raw
+ * (arch/x86/kvm/x86.c:1870-1874): from the vDSO's page with no lock while
+ * the clock runs from the TSC, since the run loop reads it at every entry
+ * for the PIT and the local APIC's timer and `rtc_raw_monotonic` takes a
+ * lock every processor shares. */
 uint64_t kvm_host_ns(void)
 {
-    int64_t s, ns;
+    uint64_t ns, cycles;
+    int64_t s, n;
 
-    rtc_raw_monotonic(&s, &ns);
-    return (uint64_t)s * 1000000000ull + (uint64_t)ns;
+    if (vclock_read_cycles(VCLOCK_READ_RAW, &ns, &cycles)) {
+        return ns;
+    }
+    rtc_raw_monotonic(&s, &n);
+    return (uint64_t)s * 1000000000ull + (uint64_t)n;
 }
 
 void kvm_vm_get(struct kvm_vm *vm)
