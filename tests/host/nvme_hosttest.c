@@ -2,7 +2,7 @@
  * nvme_hosttest.c: the NVMe driver of rach2/sys/block/nvme.c against a model
  * of a controller.
  *
- * host-deps:
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * QEMU's NVMe controller resets when told, becomes ready, answers every
  * command and keeps its namespace in 512-byte blocks unless asked otherwise.
@@ -757,7 +757,8 @@ uintptr_t map_mmio(uintptr_t phys, size_t size)
 static int lapic_ok, vector_free, nvmepoll;
 static isr_handler_t handler;
 static const char *handler_name;
-static int freed_vector; /* the vector last given back, -1 for none */
+static unsigned int handler_flags; /* what isr_register_flags gave it */
+static int freed_vector;           /* the vector last given back, -1 for none */
 
 /** Whether the local APIC takes messages: `lapic_ok`. */
 int isr_msi_ready(void)
@@ -777,6 +778,14 @@ void register_isr_handler(uint8_t vector, isr_handler_t h, const char *name)
     (void)vector;
     handler = h;
     handler_name = name;
+}
+
+/** Keep the handler's flags: ISR_UNLOCKED, which the driver gives it. */
+void isr_register_flags(uint8_t vector, isr_handler_t h, unsigned int flags)
+{
+    (void)vector;
+    (void)h;
+    handler_flags = flags;
 }
 
 /** Record `vector` as given back, and drop the handler registered on it. */
@@ -1348,6 +1357,9 @@ static void row_queued(void)
     CHECK("and is no longer fault-safe, but still pollable",
           (dev->flags & (BLOCK_FAULT_SAFE | BLOCK_POLLABLE)) == BLOCK_POLLABLE &&
               dev->submit != 0 && dev->flush != 0);
+    CHECK("its handler runs without the big lock and the block layer calls it without it",
+          handler_flags == ISR_UNLOCKED && (dev->flags & BLOCK_UNLOCKED) != 0 &&
+              nvme_ctrls[0].sq_lock.locked == 0 && nvme_ctrls[0].cq_poll_lock.locked == 0);
     m.defer = 1;
     make_requests(10, 200, 0, 0);
     for (i = 0; i < 10; i++) {
