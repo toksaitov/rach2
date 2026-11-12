@@ -28,7 +28,9 @@
  * input, the XMM registers read only once synced from the processor to the
  * image, the exits to the caller and their completion, HvSignalEvent over
  * KVM_HYPERV_EVENTFD, the extended and debug hypercalls; the IPI and TLB
- * flush hypercalls with simple and sparse sets; and every allocation and
+ * flush hypercalls with simple and sparse sets; each entry point that
+ * KVM_RUN calls without the big lock taking it once, around the work it
+ * covers, and giving it back, checked apart; and every allocation and
  * eventfd reference given back.
  */
 #include "kvm/hyperv.c"
@@ -51,6 +53,54 @@ static int failures;
 static process_t caller;
 struct percpu cpu_table[NR_CPUS] = {{.current = &caller}};
 unsigned int host_cpu;
+
+/* The entry points that take the big lock around hyperv.c's state, each
+ * checked apart: a call begins and ends with the lock free and takes it at
+ * most once (`ep_takes`), and the work the lock covers, the stubs that call
+ * `ep_work`, runs at depth 1. `ep_bad` counts the breaches. */
+enum { EP_MSR, EP_HCALL, EP_COMPLETE, EP_PREPARE, EP_STIMERS, EP_N };
+static int bkl_depth, bkl_takes, ep_now = -1, ep_start;
+static int ep_takes[EP_N], ep_work_runs[EP_N], ep_bad[EP_N];
+
+/** Take the big lock for `v`'s exit: one level deeper. */
+void kvm_bkl_enter(struct kvm_vcpu *v)
+{
+    (void)v;
+    bkl_depth++;
+    bkl_takes++;
+}
+
+/** Give back one level of the big lock. */
+void bkl_exit(void)
+{
+    bkl_depth--;
+}
+
+/** Note that the entry point running, if any, has reached work its lock
+ * covers. */
+static void ep_work(void)
+{
+    if (ep_now >= 0) {
+        ep_work_runs[ep_now]++;
+        ep_bad[ep_now] += bkl_depth != 1;
+    }
+}
+
+/** Begin a call of the entry point `ep`, with the big lock free. */
+static void ep_begin(int ep)
+{
+    ep_bad[ep] += bkl_depth != 0;
+    ep_now = ep;
+    ep_start = bkl_takes;
+}
+
+/** End the call `ep_begin` began: the lock free again, taken at most once. */
+static void ep_end(void)
+{
+    ep_bad[ep_now] += bkl_depth != 0 || bkl_takes - ep_start > 1;
+    ep_takes[ep_now] += bkl_takes - ep_start;
+    ep_now = -1;
+}
 
 /* The heap's live allocations, which the VM's end must bring back. */
 static int live;
@@ -169,6 +219,7 @@ static uint8_t mem[MEM_BYTES];
 int kvm_guest_phys_rw(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t n, int write)
 {
     (void)v;
+    ep_work();
     if (gpa >= MEM_BYTES || n > MEM_BYTES - gpa) {
         return 1;
     }
@@ -200,6 +251,7 @@ void kvm_queue_exception(struct kvm_vcpu *v, uint8_t nr, int has_error, uint32_t
     (void)v;
     (void)has_error;
     (void)error;
+    ep_work();
     if (nr == 6) {
         ud_queued++;
     }
@@ -207,6 +259,7 @@ void kvm_queue_exception(struct kvm_vcpu *v, uint8_t nr, int has_error, uint32_t
 
 void kvm_emul_skip(struct kvm_vcpu *v, uint32_t len)
 {
+    ep_work();
     v->regs.rip += len;
 }
 
@@ -231,30 +284,13 @@ void kvm_vcpu_fpu_sync(struct kvm_vcpu *v)
 
 void kvm_vcpu_kick(struct kvm_vcpu *v, uint32_t request)
 {
+    ep_work();
     v->requests |= request;
-}
-
-/* The big lock's depth, which hyperv.c takes around its state; `bkl_most`
- * is the deepest it went. */
-static int bkl_depth, bkl_most;
-
-/** Take the big lock for `v`'s exit: one level deeper. */
-void kvm_bkl_enter(struct kvm_vcpu *v)
-{
-    (void)v;
-    if (++bkl_depth > bkl_most) {
-        bkl_most = bkl_depth;
-    }
-}
-
-/** Give back one level of the big lock. */
-void bkl_exit(void)
-{
-    bkl_depth--;
 }
 
 int kvm_vcpu_test_clear(struct kvm_vcpu *v, uint32_t request)
 {
+    ep_work();
     int set = (v->requests & request) != 0;
 
     v->requests &= ~request;
@@ -275,6 +311,7 @@ static uint64_t apic_value;
 
 int kvm_lapic_set_irq(struct kvm_vcpu *v, uint32_t vector)
 {
+    ep_work();
     if (no_apic) {
         return -1;
     }
@@ -286,6 +323,7 @@ int kvm_lapic_set_irq(struct kvm_vcpu *v, uint32_t vector)
 int kvm_lapic_hv_msr(struct kvm_vcpu *v, uint32_t reg, int write, uint64_t *value)
 {
     (void)v;
+    ep_work();
     apic_reg = reg;
     apic_write = write;
     if (write) {
@@ -333,8 +371,67 @@ void eventfd_put(struct eventfd *ev)
 
 void eventfd_signal(struct eventfd *ev)
 {
+    ep_work();
     ev->signals++;
 }
+
+/* The entry points, each called through a wrapper of the records above;
+ * the names below stand for the wrappers in the rows. */
+
+/** `kvm_hv_msr`, recorded as EP_MSR. */
+static int msr_entry(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host)
+{
+    int r;
+
+    ep_begin(EP_MSR);
+    r = kvm_hv_msr(v, index, write, value, host);
+    ep_end();
+    return r;
+}
+
+/** `kvm_hv_hypercall`, recorded as EP_HCALL. */
+static int hcall_entry(struct kvm_vcpu *v, uint32_t len)
+{
+    int r;
+
+    ep_begin(EP_HCALL);
+    r = kvm_hv_hypercall(v, len);
+    ep_end();
+    return r;
+}
+
+/** `kvm_hv_complete`, recorded as EP_COMPLETE. */
+static void complete_entry(struct kvm_vcpu *v)
+{
+    ep_begin(EP_COMPLETE);
+    kvm_hv_complete(v);
+    ep_end();
+}
+
+/** `kvm_hv_prepare`, recorded as EP_PREPARE. */
+static int32_t prepare_entry(struct kvm_vcpu *v)
+{
+    int32_t r;
+
+    ep_begin(EP_PREPARE);
+    r = kvm_hv_prepare(v);
+    ep_end();
+    return r;
+}
+
+/** `kvm_hv_stimers`, recorded as EP_STIMERS. */
+static void stimers_entry(struct kvm_vcpu *v)
+{
+    ep_begin(EP_STIMERS);
+    kvm_hv_stimers(v);
+    ep_end();
+}
+
+#define kvm_hv_msr       msr_entry
+#define kvm_hv_hypercall hcall_entry
+#define kvm_hv_complete  complete_entry
+#define kvm_hv_prepare   prepare_entry
+#define kvm_hv_stimers   stimers_entry
 
 /** Make the VM of NV vCPUs, with the split controller unless `none`. */
 static void vm_make(int none)
@@ -1444,8 +1541,16 @@ int main(void)
     hcall_rows();
     ipi_rows();
     flush_rows();
-    CHECK(bkl_most == 1 && bkl_depth == 0,
-          "each entry point takes the big lock once around its state and gives it back");
+    CHECK(ep_takes[EP_MSR] && ep_work_runs[EP_MSR] && !ep_bad[EP_MSR],
+          "kvm_hv_msr takes the big lock once around its state and gives it back");
+    CHECK(ep_takes[EP_HCALL] && ep_work_runs[EP_HCALL] && !ep_bad[EP_HCALL],
+          "kvm_hv_hypercall takes the big lock once around its state and gives it back");
+    CHECK(ep_takes[EP_COMPLETE] && ep_work_runs[EP_COMPLETE] && !ep_bad[EP_COMPLETE],
+          "kvm_hv_complete takes the big lock once around its state and gives it back");
+    CHECK(ep_takes[EP_PREPARE] && ep_work_runs[EP_PREPARE] && !ep_bad[EP_PREPARE],
+          "kvm_hv_prepare takes the big lock once around its state and gives it back");
+    CHECK(ep_takes[EP_STIMERS] && ep_work_runs[EP_STIMERS] && !ep_bad[EP_STIMERS],
+          "kvm_hv_stimers takes the big lock once around its state and gives it back");
     printf("kvm-hyperv-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }
