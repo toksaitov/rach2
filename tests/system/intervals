@@ -39,7 +39,6 @@ tests/cases/host/fixture.c: poll the fixture state every 20 ms
 tests/cases/host/flow_release.c: poll the Mac run's times file every 50 ms
 tests/cases/host/flow_release.c: poll the detached run's result every 50 ms
 tests/cases/host/flow_release.c: poll for the release's end every 20 ms
-tests/cases/host/flow_release.c: poll for the process's end every 10 ms
 tests/cases/host/host_suite_probe.c: poll the meeting directory every millisecond
 tests/host/etude_step_hosttest.c: a fixture's file is looked at again every 10 ms
 tests/rawprobe.c: the ICMP count every 10 ms, and time for each reply
