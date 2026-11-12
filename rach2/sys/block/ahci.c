@@ -249,6 +249,11 @@ static volatile uint8_t ahci_reset_fis[AHCI_RECV_FIS_SIZE] __attribute__((aligne
    every command ends with, and the fatal ones. */
 #define AHCI_PxIS_DHRS   0x00000001u
 #define AHCI_PxIE_WANTED (AHCI_PxIS_DHRS | AHCI_PxIS_FATAL)
+/* The status byte of the last D2H register FIS, which the HBA writes into
+   the received-FIS area at 0x40 before it raises DHRS (Linux's
+   RX_FIS_D2H_REG, drivers/ata/ahci.h:65); for a DMA or non-data command,
+   which ends with that FIS, it is the status PxTFD holds. */
+#define AHCI_RFIS_STATUS (0x40 + 2)
 
 /* The H2D Register FIS and the ATA commands this driver issues. */
 #define AHCI_FIS_H2D      0x27u
@@ -392,21 +397,6 @@ static void ahci_write32(uint32_t offset, uint32_t value)
 static uint32_t ahci_port_off(int port, uint32_t reg)
 {
     return AHCI_PORT_BASE + (uint32_t)port * AHCI_PORT_STRIDE + reg;
-}
-
-/**
- * Write back and evict the lines of [addr, addr+size), so a descriptor the
- * HBA is about to read, or a buffer it has just written that the processor
- * is about to read, is in memory and not in a stale line. x86 bus-master DMA
- * snoops the caches, so on a PC this changes nothing; it is kept for a
- * machine that does not snoop, and costs one pass over a small buffer.
- */
-static void ahci_dma_sync(const volatile void *addr, uint32_t size)
-{
-    if (!addr || size == 0) {
-        return;
-    }
-    arch_dma_flush(addr, size);
 }
 
 /**
@@ -1020,48 +1010,48 @@ static int ahci_build_command(struct ahci_disk *d, uint8_t command, uint64_t lba
     hdr->prdbc = 0;
     hdr->ctba = (uint32_t)virt_to_phys(d->cmdtable);
     hdr->ctbau = ahci_hi(virt_to_phys(d->cmdtable));
-
-    ahci_dma_sync(d->cmdtable, AHCI_CMDTABLE_SIZE);
-    ahci_dma_sync(d->cmdlist, sizeof(ahci_cmd_header_t));
-    if (write && bytes > 0) {
-        ahci_dma_sync(buf, bytes);
-    }
     return 0;
 }
 
 /**
- * Judge the command that has left the slot: 0 when it completed and moved
+ * Judge the command that has left the slot from its port's interrupt status
+ * `is` and its task-file status `status`: 0 when it completed and moved
  * `bytes`, `-EIO` after the port's recovery otherwise. The HBA counts the
  * bytes it moved into `prdbc`; a completion that moved fewer than requested
  * without raising an error would otherwise pass, and a short write that
  * pc_sync then marks clean is silent data loss. A fatal PxIS error can
- * clear PxCI without setting PxTFD.ERR, so both are tested. A read's bytes
- * in `buf` are evicted from the cache and copied back from the pool's pages.
+ * clear PxCI without setting the status's ERR, so both are tested. A read's
+ * bytes in a bounce page are copied back to `buf`. Neither the descriptors
+ * nor the buffer need the cache written back or evicted: x86 bus-master DMA
+ * snoops the caches, and Linux's DMA sync does nothing for a coherent device
+ * (kernel/dma/direct.h:56-75, include/linux/dma-map-ops.h:244-247).
  */
-static int ahci_judge(struct ahci_disk *d, uint32_t bytes, volatile uint8_t *buf, int write)
+static int ahci_judge(struct ahci_disk *d, uint32_t is, uint32_t status, uint32_t bytes, int write)
 {
     volatile ahci_cmd_header_t *hdr = (volatile ahci_cmd_header_t *)d->cmdlist;
-    uint32_t tfd_off = ahci_port_off(d->port, AHCI_PxTFD);
-    uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
 
-    if ((ahci_read32(is_off) & AHCI_PxIS_FATAL) ||
-        (ahci_read32(tfd_off) & (AHCI_PxTFD_ERR | AHCI_PxTFD_DF))) {
+    if ((is & AHCI_PxIS_FATAL) || (status & (AHCI_PxTFD_ERR | AHCI_PxTFD_DF))) {
         klog(KLOG_WARN, "ahci", "port %d: a command failed: the device reported an error", d->port);
         return ahci_io_error(d);
     }
-    if (bytes > 0) {
-        ahci_dma_sync(d->cmdlist, sizeof(ahci_cmd_header_t));
-        if (hdr->prdbc != bytes) {
-            klog(KLOG_WARN, "ahci", "port %d: a command failed: it moved %d of %d bytes", d->port,
-                 (unsigned)hdr->prdbc, (unsigned)bytes);
-            return ahci_io_error(d);
-        }
+    if (bytes > 0 && hdr->prdbc != bytes) {
+        klog(KLOG_WARN, "ahci", "port %d: a command failed: it moved %d of %d bytes", d->port,
+             (unsigned)hdr->prdbc, (unsigned)bytes);
+        return ahci_io_error(d);
     }
     if (!write && bytes > 0) {
-        ahci_dma_sync(buf, bytes); /* evict stale lines; CPU reads fresh */
         ahci_unbounce(d);
     }
     return 0;
+}
+
+/** Judge the command that has left the slot of a polled caller, from the
+ * port's registers, as `ahci_judge` does. */
+static int ahci_judge_polled(struct ahci_disk *d, uint32_t bytes, int write)
+{
+    uint32_t is = ahci_read32(ahci_port_off(d->port, AHCI_PxIS));
+
+    return ahci_judge(d, is, ahci_read32(ahci_port_off(d->port, AHCI_PxTFD)), bytes, write);
 }
 
 /**
@@ -1291,7 +1281,7 @@ static int ahci_command_claimed(struct ahci_disk *d, uint8_t command, uint64_t l
         }
         ahci_poll_step();
     }
-    rc = ahci_judge(d, bytes, buf, write);
+    rc = ahci_judge_polled(d, bytes, write);
     ahci_acknowledge(d);
     return rc;
 }
@@ -1338,13 +1328,12 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
  * libahci.c:2023-2056), with no big lock.
  */
 
-/** Issue the command built in `d`'s slot without waiting. The port's lock
- * is held. */
+/** Issue the command built in `d`'s slot without waiting, by its bit in
+ * PxCI alone, as Linux's `ahci_qc_issue` (drivers/ata/libahci.c:2061-2084):
+ * the interrupt or the polled path that ended the last command has cleared
+ * the port's status already. The port's lock is held. */
 static void ahci_issue(struct ahci_disk *d)
 {
-    uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
-
-    ahci_write32(is_off, 0xFFFFFFFFu);
     block_count_command();
     ahci_write32(ahci_port_off(d->port, AHCI_PxCI), 1u << AHCI_SLOT);
 }
@@ -1382,20 +1371,28 @@ static int ahci_start_request(struct ahci_disk *d, struct block_request *r)
  * then finish its request or start the flush half of a write. A write whose
  * request has `BLOCK_REQ_NOFLUSH` is finished at its transfer, and the disk is
  * marked `unflushed` until a flush, of a write or alone, has finished.
- * Runs from the interrupt, and from the polled path draining the port,
- * under the port's lock, inside which the request is completed.
+ * Runs from the interrupt, which has read and cleared the port's status
+ * into `is` and passes `irq` nonzero, so that the command is judged by that
+ * status and the received D2H FIS; and from the polled path draining the
+ * port, with `irq` zero, which reads the registers and acknowledges here.
+ * Under the port's lock, inside which the request is completed.
  */
-static void ahci_finish_active(struct ahci_disk *d)
+static void ahci_finish_active(struct ahci_disk *d, int irq, uint32_t is)
 {
     struct block_request *r = d->active;
+    uint32_t bytes;
     int rc;
 
     if (!r) {
         return;
     }
-    rc = ahci_judge(d, d->flushing ? 0 : r->count * BLOCK_SECTOR_SIZE, (volatile uint8_t *)r->page,
-                    r->write);
-    ahci_acknowledge(d);
+    bytes = d->flushing ? 0 : r->count * BLOCK_SECTOR_SIZE;
+    if (irq) {
+        rc = ahci_judge(d, is, d->recv_fis[AHCI_RFIS_STATUS], bytes, r->write);
+    } else {
+        rc = ahci_judge_polled(d, bytes, r->write);
+        ahci_acknowledge(d);
+    }
     if (rc == 0 && r->write && !d->flushing && (r->flags & BLOCK_REQ_NOFLUSH)) {
         d->dev.unflushed = 1;
     } else if (rc == 0 && r->write && !d->flushing) {
@@ -1489,7 +1486,7 @@ static void ahci_drain(struct ahci_disk *d)
             block_request_complete(r, d->active_generation, -EIO);
             break;
         }
-        ahci_finish_active(d);
+        ahci_finish_active(d, 0, 0);
     }
 }
 
@@ -1531,23 +1528,32 @@ static int ahci_flush_submit(block_device_t *device, struct block_request *r)
 }
 
 /**
- * One port's part of the interrupt, under its lock: a command that has left
- * the slot is finished and the next started, and the port's interrupt
- * status cleared. A port a polled command has claimed is left to its
- * caller, and a fatal error with the command still in the slot recovers the
- * port and fails the request.
+ * One port's part of the interrupt, under its lock: the port's interrupt
+ * status read and cleared first, as Linux's `ahci_port_intr`
+ * (drivers/ata/libahci.c:1970-1979), then a command that has left the slot
+ * finished and the next started. A fatal error with the command still in
+ * the slot recovers the port and fails the request. A port a polled command
+ * has claimed is left to its caller. Returns 1 when the port was handled,
+ * so that its bit of the controller's status is cleared, and 0 for one left
+ * to its polled caller.
  */
-static void ahci_port_interrupt(struct ahci_disk *d)
+static int ahci_port_interrupt(struct ahci_disk *d)
 {
-    uint32_t is = ahci_read32(ahci_port_off(d->port, AHCI_PxIS));
+    uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
+    uint32_t is;
 
-    if (d->polling || is == 0) {
-        return;
+    if (d->polling) {
+        return 0;
     }
+    is = ahci_read32(is_off);
+    if (is == 0) {
+        return 1;
+    }
+    ahci_write32(is_off, is);
     if (d->active && !(ahci_read32(ahci_port_off(d->port, AHCI_PxCI)) & (1u << AHCI_SLOT))) {
-        ahci_finish_active(d);
+        ahci_finish_active(d, 1, is);
         ahci_start_next(d);
-        return;
+        return 1;
     }
     if (d->active && (is & AHCI_PxIS_FATAL)) {
         struct block_request *r = d->active;
@@ -1555,30 +1561,42 @@ static void ahci_port_interrupt(struct ahci_disk *d)
         (void)ahci_io_error(d);
         d->active = 0;
         block_request_complete(r, d->active_generation, -EIO);
-        ahci_acknowledge(d);
         ahci_start_next(d);
-        return;
     }
-    ahci_acknowledge(d);
+    return 1;
 }
 
 /**
  * The controller's interrupt, which runs without the big lock
- * (ISR_UNLOCKED): each port with a disk is handled under its own lock
- * (`ahci_port_interrupt`), as Linux's `ahci_handle_port_intr` handles each
- * port under the host's (drivers/ata/libahci.c:1996-2019, 2041-2056).
+ * (ISR_UNLOCKED): each port with a disk whose bit the controller's status
+ * has is handled under its own lock (`ahci_port_interrupt`), and the bits
+ * of the ports handled are cleared after them, as Linux's
+ * `ahci_single_level_irq_intr` reads HOST_IRQ_STAT once, handles the ports
+ * it names and writes it back (drivers/ata/libahci.c:1997-2019, 2023-2056).
+ * A port a polled command has claimed is left set for its caller, whose
+ * acknowledgement clears it.
  */
 static void ahci_handler(isr_params_t *params)
 {
+    uint32_t pending = ahci_read32(AHCI_IS), done = 0;
     int i;
 
     (void)params;
-    for (i = 0; i < ahci_ndisks; i++) {
+    for (i = 0; i < ahci_ndisks && pending; i++) {
         struct ahci_disk *d = &ahci_disks[i];
-        uint32_t flags = spin_lock_irqsave(&d->lock);
+        uint32_t flags;
 
-        ahci_port_interrupt(d);
+        if (!(pending & (1u << d->port))) {
+            continue;
+        }
+        flags = spin_lock_irqsave(&d->lock);
+        if (ahci_port_interrupt(d)) {
+            done |= 1u << d->port;
+        }
         spin_unlock_irqrestore(&d->lock, flags);
+    }
+    if (done) {
+        ahci_write32(AHCI_IS, done);
     }
 }
 
