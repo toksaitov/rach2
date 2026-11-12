@@ -929,6 +929,13 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
     return 0;
 }
 
+/** The run's bound with no APIC timer armed, as the model never arms one. */
+uint64_t kvm_lapic_run_bound(struct kvm_vcpu *v, uint64_t max)
+{
+    (void)v;
+    return max;
+}
+
 int kvm_lapic_pending(struct kvm_vcpu *v)
 {
     (void)v;
@@ -1167,7 +1174,7 @@ struct row {
 };
 
 /* The VMCSes the model knows, one for each vCPU any row has run. */
-#define MVMCS_MAX 16
+#define MVMCS_MAX 32
 
 static struct {
     /* The capability MSRs and IA32_FEATURE_CONTROL. */
