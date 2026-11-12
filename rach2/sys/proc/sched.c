@@ -920,9 +920,12 @@ void sched_preempt(void)
     schedule();
 }
 
-/* The least a thread runs once switched onto a processor before the tick
- * gives the processor to another thread of its queue: Linux's base slice,
- * sysctl_sched_base_slice (kernel/sched/fair.c), 0.75 ms. */
+/* The least a thread runs once switched onto a processor before an
+ * interrupt gives the processor to another thread of its queue that no wake
+ * marked: a chosen value, under the 1 ms tick, so that a thread switched in
+ * at a tick still gives way at the next one. Linux's base slice is 0.70 ms
+ * times 1 + ilog2(min(online processors, 8)), 2.1 ms with four
+ * (kernel/sched/fair.c:76, 191-220). */
 #define SCHED_SLICE_NS 750000u
 
 /**
@@ -930,10 +933,22 @@ void sched_preempt(void)
  * left of the tick, and the next tick would hand the processor back to a
  * thread that yielded to it, as KVM's steal_time selftest yields to a
  * thread that runs for 200 us and waits for its own run_delay to grow by
- * as much. Linux's tick ends a thread's turn only once its slice has run
- * (update_deadline, kernel/sched/fair.c); a thread woken from a sleep, or
- * a real-time one, takes the processor at once all the same, as Linux's
- * wakeup preemption gives it.
+ * as much. So the tick and a device's interrupt end a thread's turn only
+ * once it has run SCHED_SLICE_NS since its switch in, as Linux's tick ends
+ * one only once its slice has run (update_deadline and update_curr,
+ * kernel/sched/fair.c:1022-1045, 1271-1274); Linux keeps the deadline
+ * across switches where this measures from each switch in.
+ *
+ * A thread a wake marked (`woken`), or a real-time one, takes the
+ * processor at once all the same. Linux protects the current thread's
+ * slice against a woken one too (RUN_TO_PARITY: set_next_entity's
+ * set_protect_slice, fair.c:5633, and pick_eevdf, fair.c:943), and
+ * check_preempt_wakeup_fair (fair.c:8862-8951) preempts the current
+ * thread within it only once that thread is no longer eligible, or when the
+ * woken thread's shorter custom slice cancels the protection; this kernel
+ * preempts on every wake, so that a reader runs as soon as its data comes.
+ *
+ * Called with interrupts off, at the end of an interrupt's handler.
  */
 void sched_tick(void)
 {
