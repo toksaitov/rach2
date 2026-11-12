@@ -1132,7 +1132,7 @@ $(KVM_FUZZ): ask-the-sub-make
 	$(MAKE) --no-print-directory -C tests ARCH=x86_64 ../$@
 endif
 KVM_FILES = tests/kvm/leak.sh tests/kvm/kvm-boot.sh tests/kvm/exits.sh tests/kvm/corpus.sh tests/kvm/unit-tests.list \
-            tests/kvm/selftests.list
+            tests/kvm/selftests.list tests/kvm/selftests-gap.list
 build/tests/cases/kvm/kvm.tar: $(KVM_FILES) $(KVM_GUEST_DIR)/initrd $(KVM_GUEST_DIR)/vmlinuz $(KVM_ENTRY) \
                              $(KVM_RACH2_DIR)/kernel $(KVM_RACH2_DIR)/ram.krffs $(KVM_FUZZ)
 	@mkdir -p $(@D)
