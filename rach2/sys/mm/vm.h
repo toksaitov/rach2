@@ -183,10 +183,13 @@ typedef enum {
  * no global lock (mm/filemap.c:3305-3370). A file with `share` whose
  * shared mappings' stores it must count, a disk file's, sets `mkwrite`,
  * Linux's page_mkwrite: a writable shared region then maps each page
- * read-only until a write fault calls `mkwrite` for page `pgoff`, which
- * returns 0 before the page gains write access, or a negative errno, which
- * leaves it read-only and fails the access; it may sleep, and runs as
- * `share` does.
+ * read-only until a write fault calls `mkwrite` for page `pgoff` and its
+ * held frame `phys`. It returns 0 before the page gains write access, or a
+ * negative errno, which leaves it read-only and fails the access. -EAGAIN
+ * retries a removed or replaced page. It validates that the frame still
+ * belongs to this page before marking it. Kernel process-memory writes
+ * call it too. It may
+ * sleep, and runs as `share` does.
  */
 struct vm_file {
     uint32_t refs;
@@ -200,7 +203,7 @@ struct vm_file {
                      big lock */
     uint32_t (*around)(struct vm_file *f, uint32_t first, uint32_t count, uintptr_t *phys,
                        int hits);
-    int (*mkwrite)(struct vm_file *f, uint32_t pgoff);
+    int (*mkwrite)(struct vm_file *f, uint32_t pgoff, uintptr_t phys);
 };
 
 /*

@@ -29,7 +29,9 @@
  * under the file's lock alone, and reads a page that is not there under the
  * file's lock, then adds it to the file's pages under the big lock as well,
  * which it gives back. A hit in the page cache supplies the page without
- * reading the file or storing the cached bytes again.
+ * reading the file or storing the cached bytes again. A delayed write mark
+ * after truncation refuses both an absent page and its replacement, so
+ * writeback leaves the regrown clean hole unallocated.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -120,6 +122,8 @@ void fd_ofd_ref(struct open_file *ofd)
 static uint8_t model_bytes[PAGE_SIZE];
 static uintptr_t model_page;
 static int file_locked;
+static uint64_t model_size = 2 * PAGE_SIZE;
+static int disk_writes;
 /* Whether the leaf of the file's pages that a page goes in exists. */
 static int model_leaf;
 /* The lookups of the file's pages and those made under the file's lock;
@@ -154,13 +158,13 @@ void vfs_node_unlock(const struct vfs_ref *ref)
     file_locked--;
 }
 
-/** The file is two pages long. */
+/** The current file size, which a truncation row changes. */
 int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     (void)mnt;
     (void)node;
     k_memset(st, 0, sizeof(*st));
-    st->size = 2 * PAGE_SIZE;
+    st->size = model_size;
     return 0;
 }
 
@@ -337,14 +341,14 @@ void free_frame(uintptr_t phys)
     (void)phys;
 }
 
-/** Not reached. */
+/** Count a writeback of the model file. */
 int32_t fs_write_at(fd_entry_t *e, const void *buf, uint32_t count, uint64_t off)
 {
     (void)e;
     (void)buf;
-    (void)count;
     (void)off;
-    return -EIO;
+    disk_writes++;
+    return (int32_t)count;
 }
 
 /** Not reached. */
@@ -392,11 +396,12 @@ int shmem_quota_full(const struct shmem *sh)
     return 0;
 }
 
-/** Not reached. */
+/** A truncation removes the model page before returning. */
 int shmem_truncate(struct shmem *sh, uint64_t size)
 {
     (void)sh;
-    (void)size;
+    model_size = size;
+    model_page = 0;
     return 0;
 }
 
@@ -611,6 +616,35 @@ static void cached_fault_row(struct vm_file *f)
     model_cached = 0;
 }
 
+/** A delayed mark cannot dirty a removed frame or a regrown hole's page. */
+static void late_mark_rows(struct vm_file *f)
+{
+    struct filemap *m = (struct filemap *)f;
+    struct dshare *ds = m->ds;
+    uint8_t buf[PAGE_SIZE];
+    uintptr_t old = MODEL_FRAME;
+
+    model_page = old;
+    check(f->mkwrite(f, 1, old) == 0 && dshare_stored(ds, 1),
+          "a resident frame is marked before stores may reach it");
+    filemap_file_truncated(ds->mnt, ds->ino, PAGE_SIZE);
+    check(!model_page && !dshare_stored(ds, 1),
+          "truncation removes the page and its writeback mark");
+    check(f->mkwrite(f, 1, old) == -EAGAIN && !dshare_stored(ds, 1),
+          "a delayed fault cannot restore the removed frame's mark");
+    model_size = 2 * PAGE_SIZE;
+    model_page = old + PAGE_SIZE;
+    check(f->mkwrite(f, 1, old) == -EAGAIN && !dshare_stored(ds, 1),
+          "a delayed mark also refuses a replacement at the same file offset");
+    disk_writes = 0;
+    check(dshare_write_page(ds, m, 1, buf) == 0 && disk_writes == 0,
+          "writeback leaves a regrown clean hole unallocated");
+    check(f->mkwrite(f, 1, model_page) == 0 && dshare_stored(ds, 1),
+          "a new fault may mark the replacement frame itself");
+    dshare_unmark_from(ds, 0);
+    model_page = 0;
+}
+
 /** The faults of `unlocked_rows` through `f`, a private mapping, and
  * `shared`, a shared one, of a file whose reads run without the big lock. */
 static void fault_rows(struct vm_file *f, struct vm_file *shared)
@@ -641,6 +675,7 @@ static void fault_rows(struct vm_file *f, struct vm_file *shared)
     check(lookups == 1 && lookups_locked == 1 && bkl_host_takes == 0 && file_locked == 0,
           "under the file's lock alone");
     cached_fault_row(f);
+    late_mark_rows(shared);
     bkl_host_free = 0;
 }
 

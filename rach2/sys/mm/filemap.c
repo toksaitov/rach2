@@ -806,10 +806,12 @@ static int filemap_share_disk(struct vm_file *f, uint32_t pgoff, uintptr_t *phys
  * as Linux's do_page_mkwrite and the dirtying of the folio come before a
  * shared mapping's page gains write access (mm/memory.c), under the file's
  * lock, with sleep enabled across it as `filemap_share_disk` enables it.
- * The caller holds the mapping. 0, -ENOMEM, or -EIO when the fault may not
- * sleep.
+ * The caller holds the mapping and frame `phys`. Refuse a frame truncation
+ * removed or replaced before the lock was taken, as Linux checks the
+ * folio's mapping in filemap_page_mkwrite. 0, -EAGAIN for that stale frame,
+ * -ENOMEM, or -EIO when the fault may not sleep.
  */
-static int filemap_mkwrite_disk(struct vm_file *f, uint32_t pgoff)
+static int filemap_mkwrite_disk(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
 {
     struct filemap *m = (struct filemap *)f;
     struct vfs_ref file;
@@ -823,7 +825,7 @@ static int filemap_mkwrite_disk(struct vm_file *f, uint32_t pgoff)
     file.mnt = m->entry.ofd->vmnt;
     file.node = m->entry.ofd->vnode;
     vfs_node_lock(&file);
-    rc = dshare_mark(m->ds, pgoff);
+    rc = shmem_resident(m->sh, pgoff) == phys ? dshare_mark(m->ds, pgoff) : -EAGAIN;
     vfs_node_unlock(&file);
     disk_call_end(entered, flags);
     return rc;

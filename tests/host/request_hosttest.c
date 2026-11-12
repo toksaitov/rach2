@@ -1143,7 +1143,7 @@ static void frames_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 
     check(r == frames_held && !cond(arg) && !irq_depth && wq == r->waiter,
           "the caller of a read into frames waits on its own request's queue");
-    check(frame_refs[0] == 2 && frame_refs[1] == 2,
+    check(frame_refs[frame_index(r->frames[0])] == 2 && frame_refs[frame_index(r->frames[1])] == 2,
           "the request holds a reference on each of its frames");
     if (frames_expire) {
         advance(8);

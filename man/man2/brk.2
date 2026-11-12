@@ -207,9 +207,17 @@ process ends, and before a
 of the bytes they hold, and the bytes a
 .Xr write 2
 puts in the file are copied into them.
-A page goes back whole, up to the file's size, since the kernel does not
-ask the page tables which pages were stored to, and never past the size:
-an access to a page wholly past the end raises
+Only a page marked for a shared store goes back, whole up to the file's
+size.
+Writes through
+.Xr ptrace 2 ,
+.Pa /proc/PID/mem
+and
+.Xr process_vm_writev 2
+mark the page too.
+A delayed mark after truncation cannot mark a replacement page, so a hole
+read after the file grows stays unallocated until a store reaches it.
+An access to a page wholly past the end raises
 .Dv SIGBUS .
 A truncation takes the pages past the new end out of every mapping.
 A page that cannot go back when its last mapping goes is lost, and the
