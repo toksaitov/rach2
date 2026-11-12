@@ -60,6 +60,9 @@ int etude_scenario(struct etude_case *c);
 const char *etude_case_id(const struct etude_case *c);
 /** The selected target architecture, or "none" for a host-only case. */
 const char *etude_case_architecture(const struct etude_case *c);
+/** The name QEMU gives the site's accelerator, which the case's machines
+ * run under: "kvm", "hvf", "whpx" or "tcg". */
+const char *etude_case_accel(const struct etude_case *c);
 
 /** Report assertion `id`: held when `held` is nonzero, else failed with
  * `detail`. */

@@ -910,6 +910,11 @@ const char *etude_case_architecture(const struct etude_case *c)
     return c->arch;
 }
 
+const char *etude_case_accel(const struct etude_case *c)
+{
+    return etude_accel_name(c->site.accel);
+}
+
 /** Find the declared assertion `id` of the scenario's, or NULL. */
 static struct assertion *find_assertion(struct etude_case *c, const char *id)
 {
