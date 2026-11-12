@@ -40,10 +40,15 @@
  * withdrawal, leaves the clock stopped and the floors where they were; and
  * that the clock started again while the tick's clock is still behind the
  * stop's time goes on from the stop's time at KVM's rate (`stop_rows`);
- * and that the code of both vDSOs, the x86-64 one and the 32-bit one,
- * converts the TSC through KVM's page, its stamp, rate, shift either way
- * and system time, while the page has its stable bit, and makes the system
- * call once it is withdrawn (`abi_rows`).
+ * that readings without the bit, one behind another, and then the bit set
+ * again before any tick, with the boot processor's page behind the last
+ * reading the kernel gave, read no earlier than that reading, in the
+ * kernel and in both vDSOs (`recovery_rows`, `abi_rows`); that the code of
+ * both vDSOs, the x86-64 one and the 32-bit one, converts the TSC through
+ * KVM's page, its stamp, rate, shift either way and system time, while the
+ * page has its stable bit, and makes the system call once it is withdrawn
+ * (`abi_rows`); and that a boot whose start finds the bit withdrawn starts
+ * the clock at the tick once the bit is back (`boot_rows`).
  */
 
 #include "arch/x86_64/vclock.c"
@@ -64,11 +69,13 @@ static int fails;
 /* The machine: KVM's clock in nanoseconds; how far the running processor's
  * TSC is ahead of the boot processor's, and the counts every TSC is held
  * back by, in counts; how far behind KVM's clock the running processor's
- * page reads it; and whether KVM's pages are kept. */
+ * page and the boot processor's page read it; and whether KVM's pages are
+ * kept. */
 static uint64_t now_ns;
 static uint64_t tsc_ahead;
 static uint64_t tsc_held;
 static uint64_t kvm_back_ns;
+static uint64_t kvm_boot_back_ns;
 static int kvm_kept_model;
 
 /* Whether the boot processor's page, which the vDSO and the clock's stop
@@ -133,14 +140,14 @@ int tsc_kvm_read(struct tsc_kvm_sample *s)
 }
 
 /** The TSC and KVM's clock it converts to by the boot processor's page,
- * while that page keeps its stable bit. */
+ * `kvm_boot_back_ns` behind, while that page keeps its stable bit. */
 int tsc_kvm_boot_read(uint64_t *tsc, uint64_t *ns)
 {
     if (!kvm_kept_model || kvm_boot_withdrawn) {
         return 0;
     }
     *tsc = tsc_ordered();
-    *ns = now_ns;
+    *ns = now_ns - kvm_boot_back_ns;
     return 1;
 }
 
@@ -344,6 +351,18 @@ static uint64_t syscall_mono(void)
     return ns;
 }
 
+/** The monotonic clock as the kernel reads it, `vclock_read`, without
+ * clock.c's floor, in nanoseconds; 0 while it does not run. */
+static uint64_t kernel_mono(void)
+{
+    int64_t sec, nsec;
+
+    if (!vclock_read(VCLOCK_READ_MONO, 0, &sec, &nsec)) {
+        return 0;
+    }
+    return (uint64_t)sec * NSEC_PER_SEC + (uint64_t)nsec;
+}
+
 /** The monotonic clock as the vDSO reads it, `vclock_pass` as vdsocode.s
  * makes it, in nanoseconds into `*ns`: what the pass found. */
 static int vdso_mono(uint64_t *ns)
@@ -490,6 +509,52 @@ static void stop_rows(void)
     now_ns += 1000u;
     found = vdso_mono(&ns);
     CHECK(found == VREAD_OK && ns == floor_mono + 1000u, "and on from there at KVM's rate");
+}
+
+/* The time the kernel gave without the bit that `recovery_rows` leaves the
+ * page's base at, which no vDSO's reading after it may go behind. */
+static uint64_t recovered_ns;
+
+/**
+ * KVM's stable bit withdrawn on every page a tick after the clock ran on,
+ * and a reading 100 ns past the base the tick left; then a second reading
+ * without the bit, of KVM's clock 50 ns behind the first and so still past
+ * that base: it reads no earlier than the first. The bit set again before
+ * any tick, with the boot processor's page converting to KVM's clock 50 ns
+ * behind the first reading: the vDSO's reading of that page and the
+ * kernel's read no earlier than the first, the time a system call gave,
+ * where a base left at the tick's count would have them read 50 ns
+ * earlier. The page is left so for `abi_rows`.
+ */
+static void recovery_rows(void)
+{
+    uint64_t base0, t1, t2, ns;
+    int found;
+
+    now_ns += TICK_NS;
+    vclock_tick();
+    base0 = data->cycle_base;
+    kvm_boot_withdrawn = 1;
+    kvm_here_withdrawn = 1;
+    now_ns += 100u;
+    t1 = kernel_mono();
+    CHECK(t1 != 0 && data->cycle_base == base0 + 100u,
+          "a reading without the bit reads the clock 100 ns past the tick's base");
+    kvm_back_ns = 50u;
+    t2 = kernel_mono();
+    CHECK(t2 >= t1, "a second reading without the bit, of KVM's clock 50 ns behind the first "
+                    "and past the tick's base, reads no earlier than the first");
+    kvm_back_ns = 0;
+    kvm_boot_withdrawn = 0;
+    kvm_here_withdrawn = 0;
+    kvm_boot_back_ns = 50u;
+    found = vdso_mono(&ns);
+    CHECK(found == VREAD_OK && ns >= t1,
+          "the bit set again before any tick, the vDSO's reading of the boot processor's page "
+          "50 ns behind reads no earlier than the system call's without the bit");
+    CHECK(kernel_mono() >= t1, "and neither does the kernel's");
+    kvm_boot_back_ns = 0;
+    recovered_ns = t1;
 }
 
 /*
@@ -698,16 +763,11 @@ static void put_le(unsigned char *p, uint64_t v, int n)
     }
 }
 
-/**
- * The layout at `at`: KVM's page, its version even, its fields `f` and its
- * stable bit `stable`, and the clock's data page as the kernel keeps it, in
- * VCLOCK_PVCLOCK with its base at KVM's clock ABI_BASE and each clock's
- * rate one nanosecond a count, so that a reading is each clock's base plus
- * KVM's clock's time since ABI_BASE.
- */
-static void abi_pages(uint32_t at, int stable, const struct pvti_fields *f)
+/** The layout at `at`: KVM's page, its version even, its fields `f` and
+ * its stable bit `stable`, and the clock's data page as the kernel keeps
+ * it. */
+static void abi_kvm_page(uint32_t at, int stable, const struct pvti_fields *f)
 {
-    struct vdso_data *page = (struct vdso_data *)(low + at + PAGE_SIZE);
     unsigned int i;
 
     for (i = 0; i < 32u; i++) {
@@ -720,6 +780,19 @@ static void abi_pages(uint32_t at, int stable, const struct pvti_fields *f)
     low[at + 28u] = (unsigned char)(signed char)f->shift;
     low[at + 29u] = stable ? 1u : 0u;
     low_copy(at + PAGE_SIZE, (const unsigned char *)data, PAGE_SIZE);
+}
+
+/**
+ * The layout at `at`: KVM's page as `abi_kvm_page` lays it out, and the
+ * clock's data page in VCLOCK_PVCLOCK with its base at KVM's clock
+ * ABI_BASE and each clock's rate one nanosecond a count, so that a reading
+ * is each clock's base plus KVM's clock's time since ABI_BASE.
+ */
+static void abi_pages(uint32_t at, int stable, const struct pvti_fields *f)
+{
+    struct vdso_data *page = (struct vdso_data *)(low + at + PAGE_SIZE);
+
+    abi_kvm_page(at, stable, f);
     page->mode = VCLOCK_PVCLOCK;
     page->cycle_base = ABI_BASE;
     page->shift = ABI_SHIFT;
@@ -780,6 +853,26 @@ static int abi_code64(uint32_t at, const unsigned char *start, const unsigned ch
         }
     }
     return made;
+}
+
+/** The layout at `at` for the recovery: the clock's data page as
+ * `recovery_rows` left it, and KVM's page with its stable bit, converting
+ * every TSC count to KVM's clock 50 ns behind the page's base. */
+static void abi_recovered(uint32_t at)
+{
+    struct pvti_fields f;
+
+    f.stamp = 0u;
+    f.system = data->cycle_base - 50u;
+    f.mul = 0u;
+    f.shift = 0;
+    abi_kvm_page(at, 1, &f);
+}
+
+/** Whether the time `sec` and `nsec` is no earlier than `recovered_ns`. */
+static int abi_not_before(int64_t sec, int64_t nsec)
+{
+    return (uint64_t)sec * NSEC_PER_SEC + (uint64_t)nsec >= recovered_ns;
 }
 
 /** The address below 4 GiB of the function `fn` of the code from `start`
@@ -849,6 +942,10 @@ static void abi64_rows(void)
     if (!ok) {
         return;
     }
+    abi_recovered(LOW_ABI64);
+    ok = vhost_call64(cgt, 1, (uint64_t)(uintptr_t)&ts) == 0 && abi_not_before(ts.sec, ts.nsec);
+    CHECK(ok, "the bit set again, the x86-64 vDSO's reading of a page behind the base reads no "
+              "earlier than the system call's without the bit");
     abi_pages(LOW_ABI64, 1, &abi_fields[0]);
     ok = vhost_call64(cgt, 1, (uint64_t)(uintptr_t)&ts) == 0 && ts.sec == data->mono_sec + 1 &&
          (uint64_t)ts.nsec == data->mono_nsec;
@@ -916,6 +1013,10 @@ static void abi32_rows(void)
     }
     call[4] = 0xF7;
     call[5] = 0xD0;
+    abi_recovered(LOW_ABI32);
+    ok = gate_call(cgt64, 1, out, 0, 0) == 0 && abi_not_before(t64->sec, t64->nsec);
+    CHECK(ok, "the bit set again, the 32-bit vDSO's reading of a page behind the base reads no "
+              "earlier than the system call's without the bit");
     abi_pages(LOW_ABI32, 1, &abi_fields[0]);
     ok = gate_call(cgt, 1, out, 0, 0) == 0 && t32->sec == (int32_t)data->mono_sec + 1 &&
          (uint64_t)t32->nsec == data->mono_nsec;
@@ -944,7 +1045,7 @@ static void abi32_rows(void)
     CHECK(ok, "with the bit withdrawn the 32-bit vDSO makes the system call for each");
 }
 
-/** The rows of both vDSOs' code, on the clock as stop_rows leaves it,
+/** The rows of both vDSOs' code, on the clock as recovery_rows leaves it,
  * running in VCLOCK_PVCLOCK. */
 static void abi_rows(void)
 {
@@ -973,13 +1074,56 @@ static void abi_rows(void)
 }
 #endif
 
+/**
+ * A second boot, the clock's state cleared, whose start finds the boot
+ * processor's page without its stable bit: the clock does not start, and
+ * the tick leaves it stopped while the bit stays withdrawn; the bit set
+ * again starts it at the next tick, from the tick's clock, where a refusal
+ * the tick does not try again would leave the system call to every
+ * reading until the next boot.
+ */
+static void boot_rows(void)
+{
+    int64_t sec, nsec;
+
+    running = 0;
+    kvm_stopped = 0;
+    data = 0;
+    floor_mono = 0;
+    floor_raw = 0;
+    tick_lag_ns = 0;
+    tsc_ahead = 0;
+    tsc_held = 0;
+    kvm_back_ns = 0;
+    kvm_here_withdrawn = 0;
+    now_ns = 7000000000ULL;
+    kvm_boot_withdrawn = 1;
+    vclock_start();
+    CHECK(!vclock_running() && data && data->mode == VCLOCK_NONE,
+          "a start at boot that finds the boot processor's bit withdrawn leaves the clock "
+          "stopped");
+    now_ns += TICK_NS;
+    vclock_tick();
+    CHECK(!vclock_running(), "and the tick leaves it stopped while the bit stays withdrawn");
+    kvm_boot_withdrawn = 0;
+    now_ns += TICK_NS;
+    vclock_tick();
+    CHECK(vclock_running() && data->mode == VCLOCK_PVCLOCK,
+          "the bit set again starts the clock at the next tick");
+    CHECK(vclock_read(VCLOCK_READ_MONO, 0, &sec, &nsec) && sec == 7 &&
+              nsec == (int64_t)(2u * TICK_NS),
+          "and it reads the tick's clock");
+}
+
 /** Run the rows: 0 when every check passes, 1 otherwise. */
 int main(void)
 {
     page_rows();
     stop_rows();
+    recovery_rows();
 #ifdef VCLOCK_ABI_ROWS
     abi_rows();
 #endif
+    boot_rows();
     return fails != 0;
 }
