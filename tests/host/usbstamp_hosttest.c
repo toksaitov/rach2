@@ -199,6 +199,16 @@ int timer_idle_enter(void)
 void timer_idle_work(void)
 {}
 
+/** The recorder has no deferred timer hardware change. */
+int timer_idle_pending(void)
+{
+    return 0;
+}
+
+/** The recorder keeps its periodic timer without a hardware write. */
+void timer_idle_retain(void)
+{}
+
 /** The model's periodic scheduler uses millisecond units. */
 uint32_t timer_tick_period(void)
 {
