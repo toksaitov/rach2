@@ -4,3 +4,11 @@
 # tests/native/gpu.cases print beside Rach2's native-rach2 lines. A line is
 # the harness's last line as it printed it, after a comment naming the boot,
 # its kernel and its IOMMU setting. The Debian boot of 83-15 adds them.
+# 83-15's Debian boot of 2026-11-12 on the Lenovo's p5, Debian 13.7 with
+# kernel 6.12.115+deb13.1 and Mesa 25.0.7-2+deb13u1, intel_iommu=on: the
+# IOMMU's translation on, as the release boots Rach2. The webgl scene drew
+# on the HD 4400 through ANGLE, under Weston's Pixman renderer.
+measure: result: glmark2 native-linux frames 76439 frame_ms 0.523 p50 0.492 p99 1.825 cpu_ms_per_frame 0.400 latency_ms 0.090 copied_bytes - exits 0 round_trips - seconds 40.7 passed -
+measure: result: piglit native-linux frames 10 frame_ms 1126.949 p50 386.567 p99 969.759 cpu_ms_per_frame 2134.000 latency_ms 0.137 copied_bytes - exits 0 round_trips - seconds 21.9 passed 10/10
+measure: result: game native-linux frames 6039 frame_ms 14.905 p50 14.440 p99 19.360 cpu_ms_per_frame 13.929 latency_ms 0.210 copied_bytes - exits 0 round_trips - seconds 107.1 passed -
+measure: result: webgl native-linux frames 599 frame_ms 19.774 p50 20.000 p99 35.200 cpu_ms_per_frame 35.109 latency_ms 0.457 copied_bytes - exits 0 round_trips - seconds 13.6 passed -
