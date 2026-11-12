@@ -2,12 +2,14 @@
  * block_hosttest.c: the partition view of rach2/sys/block/block.c, over a
  * backing device that records each request.
  *
- * host-deps:
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * The test includes block.c whole and stubs the driver and command-line
  * calls that `block_probe` makes, so the static bounds checks of the view's
  * reads and writes are reachable.
  */
+
+#include "lib/kirq.h"
 
 /* The stubs below answer the calls of block_probe, which no row runs. */
 
@@ -29,6 +31,16 @@ int kcmdline_has(const char *token)
 {
     (void)token;
     return 0;
+}
+/** One processor with interrupts on: the counters' lock masks nothing. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+/** Nothing was masked. */
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
 }
 /** The kernel log; the records are dropped. */
 void klog(int level, const char *subsystem, const char *format, ...)

@@ -1,5 +1,6 @@
 /* The real block request pool and lag queue under explicit completion control.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/spinlock_host.c
  */
 
 #ifndef REQUEST_SOURCE
@@ -90,6 +91,30 @@ void kirq_restore(uint32_t flags)
 int kirq_enabled(void)
 {
     return irq_depth == 0;
+}
+
+/* The model big lock: its depth on the one processor, and its takes. */
+static int bkl_depth;
+static int bkl_entries;
+
+/** Whether the model processor holds the big lock. */
+int bkl_held(void)
+{
+    return bkl_depth > 0;
+}
+
+/** Take the model big lock, counting the take. */
+void bkl_enter(void)
+{
+    bkl_depth++;
+    bkl_entries++;
+}
+
+/** Give back the model big lock, which only its holder may. */
+void bkl_exit(void)
+{
+    check(bkl_depth > 0, "only a holder gives the big lock back");
+    bkl_depth--;
 }
 
 /** Run with the scheduler on, so that a caller-sync device must be reached
@@ -420,11 +445,10 @@ static void quarantine(struct block_request *fresh, uint32_t gf)
           "the caller can leave a quarantined request");
     check(record_count == 1 && frame_count == 1 && fresh->held_by_device && !fresh->held_by_caller,
           "caller release cannot free a page still owned by the device");
-    check(refused(&first.device) && (lag->flags & BLOCK_STALLED),
-          "a quarantined device admits no further request");
+    check(refused(&first.device) && lag->stalled, "a quarantined device admits no further request");
     b = begin(&other, &gb);
     check(block_lag_answer(gf, 0) == 0, "a late answer releases quarantine");
-    check(record_count == 1 && frame_count == 1 && !(lag->flags & BLOCK_STALLED),
+    check(record_count == 1 && frame_count == 1 && !lag->stalled,
           "late completion frees the abandoned page and clears the stall");
     a = begin(&first.device, &ga);
     check(a == fresh && ga != gf, "a freed quarantine slot can be reused");
@@ -544,8 +568,7 @@ static void deadline_edges(uint32_t start)
     for (period = 1; period < 4; period++) {
         r = begin(lag, &gen);
         advance(period * 4);
-        check(r->state == BLOCK_REQ_IN_FLIGHT && r->overdue == period &&
-                  !(lag->flags & BLOCK_STALLED),
+        check(r->state == BLOCK_REQ_IN_FLIGHT && r->overdue == period && !lag->stalled,
               "each nonfinal deadline keeps the request in flight and the device usable");
         answer_read(r, gen);
     }
@@ -658,11 +681,10 @@ static void flush_deadlines(void)
           "a flush answered after one deadline succeeds and releases its page");
     check(block_lag_answer(flush_generation, 1) == 0, "discard the late flush duplicate");
     flush_expires = 1;
-    check(block_flush(lag) == -EIO && record_count == 1 && frame_count == 1 &&
-              (lag->flags & BLOCK_STALLED),
+    check(block_flush(lag) == -EIO && record_count == 1 && frame_count == 1 && lag->stalled,
           "a flush at its final deadline fails without freeing the device's page");
     check(block_lag_answer(flush_generation, 0) == 0 && record_count == 0 && frame_count == 0 &&
-              !(lag->flags & BLOCK_STALLED),
+              !lag->stalled,
           "the quarantined flush's late completion frees its page and clears the stall");
     check(block_lag_answer(flush_generation, 1) == 0, "discard the quarantined flush duplicate");
     wait_step = 0;
@@ -741,14 +763,15 @@ static void finish_other(struct block_request *r, uint32_t gen, uint32_t count)
           "a multi-page read returns the device's bytes to its caller");
 }
 
-/** Interrupts off, as the pool frees a request: both holders let `r` go. */
+/** Under the pool's lock, as the pool frees a request: both holders let
+ *  `r` go. */
 static void drop_both(struct block_request *r)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = pool_lock();
 
     req_let_go(r, 1);
     req_let_go(r, 0);
-    kirq_restore(flags);
+    pool_unlock(flags);
 }
 
 /** A read of two pages takes a new buffer of 32, kept when it is freed; a

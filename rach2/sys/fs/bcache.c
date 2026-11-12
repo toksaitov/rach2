@@ -12,11 +12,14 @@
  * those change or are read for a decision, never across a request or a
  * wait. The big lock covers the rest, the dirty lists and every field of
  * the order the dirty marks give, and so every dirty mark, write, sync and
- * eviction of a dirty buffer, and the block layer's requests, which a miss
- * without it takes it for (`device_read`). A holder without the big lock
- * reads its buffer and marks nothing, so a buffer that no one holds keeps
- * its dirty bit while `cache_spin` is held, and a dirty one keeps its key
- * while the big lock is.
+ * eviction of a dirty buffer. The block layer's requests need no lock of
+ * the cache's: a miss reads without the big lock, which the block layer
+ * takes only for a device whose driver still needs it (`BLOCK_UNLOCKED`,
+ * block/block.h), and a write runs under the big lock its caller holds for
+ * the dirty lists, which the request's sleep lets go. A holder without the
+ * big lock reads its buffer and marks nothing, so a buffer that no one
+ * holds keeps its dirty bit while `cache_spin` is held, and a dirty one
+ * keeps its key while the big lock is.
  */
 
 #include "bcache.h"
@@ -708,24 +711,14 @@ static void unhold_wake(struct bbuf *b, uint64_t *cpus)
 }
 
 /**
- * Read `sectors` sectors of `dev` at `lba` into `buf` for a miss, under the
- * big lock, which the block layer's requests still run under: a caller
- * without it takes it for the transfer alone, and the request's sleep lets
- * it go. 0, or the request's error.
+ * Read `sectors` sectors of `dev` at `lba` into `buf` for a miss, with or
+ * without the big lock: the request waits on its own completion, as Linux's
+ * `submit_bio_wait` (block/bio.c:1469-1481), and the block layer takes the
+ * big lock only for a driver that still needs it. 0, or the request's error.
  */
 static int device_read(block_device_t *dev, uint64_t lba, uint32_t sectors, void *buf)
 {
-    int big = !bkl_held();
-    int rc;
-
-    if (big) {
-        bkl_enter();
-    }
-    rc = block_request(dev, 0, lba, sectors, buf);
-    if (big) {
-        bkl_exit();
-    }
-    return rc;
+    return block_request(dev, 0, lba, sectors, buf);
 }
 
 /** Panic when the caller, taking block `blk` of `dev`, would break a rule
@@ -1718,8 +1711,9 @@ static void key_held(struct bbuf *b, block_device_t *dev, uint64_t blk)
  * A hit and a miss that finds a clean victim near the head of the release
  * order (`victim_clean`) take `cache_spin` alone, so a caller without the
  * big lock reads a cached block without it, and fills one that the cache
- * can make room for with no write taking it only for the device's read, as
- * Linux's `__getblk_slow` (fs/buffer.c:1117) needs no global lock. A miss
+ * can make room for with no write without it too, the block layer taking it
+ * only for a driver that still needs it (`device_read`), as Linux's
+ * `__getblk_slow` (fs/buffer.c:1117) needs no global lock. A miss
  * without the big lock that finds no clean victim takes the big lock for
  * the whole search, whose writes of a dirty victim keep the order the dirty
  * marks give, and lets it go at the return.

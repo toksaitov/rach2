@@ -14,6 +14,7 @@
 
 #include "../cmdline.h"
 #include "../lib/kerrno.h"
+#include "../lib/spinlock.h"
 
 block_device_t *block0 = 0;
 
@@ -169,63 +170,84 @@ int block_probe(void)
 /*
  * The drivers' counters, for /proc/disk. A request of any size returns the
  * same answer however many commands carried it, and only the time differs;
- * these let a test require the batching without timing it.
+ * these let a test require the batching without timing it. Drivers count
+ * from under their own locks on several processors at once, so the counts
+ * are under `count_lock`, taken with interrupts off after any other.
  */
+static struct spinlock count_lock = SPINLOCK_INIT_NAMED("block_count_lock");
 static uint64_t cmd_count;
 static uint64_t flush_count;
-
-void block_count_command(void)
-{
-    cmd_count++;
-}
-
-void block_count_flush(void)
-{
-    flush_count++;
-}
-
-uint64_t block_commands(void)
-{
-    return cmd_count;
-}
-
-uint64_t block_flushes(void)
-{
-    return flush_count;
-}
-
 static uint64_t poll_count;
 static uint64_t wait_tick_count;
 static uint64_t drain_count;
 
+/** Add `n` to the counter `*c` under `count_lock`. */
+static void count_add(uint64_t *c, uint32_t n)
+{
+    uint32_t flags = spin_lock_irqsave(&count_lock);
+
+    *c += n;
+    spin_unlock_irqrestore(&count_lock, flags);
+}
+
+/** The counter `*c`, read whole under `count_lock`. */
+static uint64_t count_read(const uint64_t *c)
+{
+    uint32_t flags = spin_lock_irqsave(&count_lock);
+    uint64_t n = *c;
+
+    spin_unlock_irqrestore(&count_lock, flags);
+    return n;
+}
+
+void block_count_command(void)
+{
+    count_add(&cmd_count, 1);
+}
+
+void block_count_flush(void)
+{
+    count_add(&flush_count, 1);
+}
+
+uint64_t block_commands(void)
+{
+    return count_read(&cmd_count);
+}
+
+uint64_t block_flushes(void)
+{
+    return count_read(&flush_count);
+}
+
 void block_count_poll(void)
 {
-    poll_count++;
+    count_add(&poll_count, 1);
 }
 
 void block_count_drain(void)
 {
-    drain_count++;
+    count_add(&drain_count, 1);
 }
 
 uint64_t block_drains(void)
 {
-    return drain_count;
+    return count_read(&drain_count);
 }
 
 void block_count_wait_ticks(uint32_t n)
 {
-    wait_tick_count += n;
+    count_add(&wait_tick_count, n);
 }
 
 uint64_t block_polls(void)
 {
-    return poll_count;
+    return count_read(&poll_count);
 }
 
 uint64_t block_wait_ticks(void)
 {
-    return wait_tick_count;
+    return count_read(&wait_tick_count);
 }
 
 block_device_t *block_submitter(block_device_t *dev)
