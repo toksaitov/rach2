@@ -59,7 +59,9 @@ void ioapic_mask_line(int line);
  * is not kept; a level stays asserted until the line is unmasked. */
 uint16_t ioapic_mask_routed(void);
 
-/** Unmask the routed lines whose bits are set in `which`. */
+/** Unmask the routed lines whose bits are set in `which`, and raise the
+ * vector of each edge-triggered one among them once on this processor, by
+ * a self-interrupt, for an edge the masked input dropped. */
 void ioapic_unmask_lines(uint16_t which);
 
 /** Whether the input of `line` has an interrupt it has not yet sent; 0 for

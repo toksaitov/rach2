@@ -26,6 +26,7 @@
 #include "../../klog.h"
 #include "../../lib/kirq.h"
 #include "../../mm/paging.h"
+#include "lapic.h"
 
 #define IOAPIC_SELECT 0
 #define IOAPIC_WINDOW 4 /* in 32-bit words: byte offset 0x10 */
@@ -243,20 +244,37 @@ uint16_t ioapic_mask_routed(void)
     return was;
 }
 
+/**
+ * An ISA device's edge line stays asserted until its handler reads the
+ * device (the 8042 until its byte is read, a UART until its cause is, the
+ * CMOS clock until its register C is), and raises no new edge before then;
+ * so an edge the masked input dropped would leave the device silent for
+ * good. Raising the vector once costs a handler call that finds nothing
+ * when no edge was lost, which every one of them allows. Linux raises an
+ * edge interrupt again the same way, by a self-interrupt, and leaves a level
+ * one to the hardware, which asserts it while it is active
+ * (`check_irq_resend`, kernel/irq/resend.c, lines 124 to 153, and
+ * `apic_retrigger_irq`, arch/x86/kernel/apic/vector.c, lines 895 to 905).
+ * Every routed line goes to the boot processor, which runs this.
+ */
 void ioapic_unmask_lines(uint16_t which)
 {
     int line;
 
     for (line = 0; line < 16; line++) {
         const struct ioapic *c;
-        uint32_t reg;
+        uint32_t reg, low;
 
         if ((which & (1u << line)) == 0 || lines[line].chip < 0) {
             continue;
         }
         c = &chips[lines[line].chip];
         reg = IOAPIC_REG_TABLE + 2u * lines[line].input;
-        reg_write(c, reg, reg_read(c, reg) & ~RTE_MASKED);
+        low = reg_read(c, reg) & ~RTE_MASKED;
+        reg_write(c, reg, low);
+        if ((low & RTE_LEVEL) == 0) {
+            lapic_self_ipi((uint8_t)(low & 0xFFu));
+        }
     }
 }
 
