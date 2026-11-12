@@ -10,7 +10,12 @@
 # the machines file names them. For each run ID it stops each process of the
 # run's etude, OUT/etude-ID.exe, with its tree, which a stopped ssh leaves
 # running, and waits until tasklist shows none; while one still runs, it
-# removes nothing of that run.
+# removes nothing of that run. Before that it stops each part of the run
+# that release.sh started apart from its ssh session, whose output,
+# OUT/ID.PART.out, has no status line yet: it kills the MSYS2 process group
+# that OUT/ID.PART.pid names after the bash's Windows process, since
+# taskkill's tree misses what MSYS2's exec starts, and that process with its
+# tree while it runs.
 #
 # The run's etude and the etude programs under it note each scratch path they
 # make, keep as evidence or remove in the run's scratch record,
@@ -72,6 +77,17 @@ abandoned()
 }
 
 for id; do
+    set +f
+    parts=$(ls "$id".*.pid 2> /dev/null)
+    set -f
+    for pid in $parts; do
+        ! grep -aq '^status ' "${pid%.pid}.out" 2> /dev/null || continue
+        read -r p g < "$pid"
+        [ -z "$g" ] || kill -KILL "-$g" 2> /dev/null
+        case $(MSYS_NO_PATHCONV=1 tasklist /NH /FO CSV /FI "PID eq $p" /FI "IMAGENAME eq bash.exe" 2> /dev/null) in
+        *'"bash.exe"'*) MSYS_NO_PATHCONV=1 taskkill /F /T /PID "$p" > /dev/null 2>&1 ;;
+        esac
+    done
     MSYS_NO_PATHCONV=1 taskkill /F /T /IM "etude-$id.exe" > /dev/null 2>&1
     if ! stopped "$id"; then
         echo "winclean: etude-$id.exe still runs; its scratch stays" >&2
