@@ -87,6 +87,9 @@ int ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short typ
 static unsigned note_rx_errors;
 static unsigned note_rx_drops;
 
+/* The link changes the driver reported (`netdev_carrier_changed`). */
+static int carrier_changes;
+
 /** Count a frame in error. */
 void ethernet_note_rx_error(struct netdev *nd)
 {
@@ -99,6 +102,13 @@ void ethernet_note_rx_drop(struct netdev *nd)
 {
     (void)nd;
     note_rx_drops++;
+}
+
+/** Count a link change the driver reported. */
+void netdev_carrier_changed(struct netdev *nd)
+{
+    (void)nd;
+    carrier_changes++;
 }
 
 /* The network lock's balance: locks taken and not released, and whether a

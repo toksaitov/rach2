@@ -220,6 +220,12 @@ void netdev_leave6(struct netdev *nd, const uint8_t *group)
     CHECK(0, "no row leaves an IPv6 group");
 }
 
+/** A change of an interface's state forgets its carrier: nothing to do. */
+void netdev_carrier_changed(struct netdev *nd)
+{
+    (void)nd;
+}
+
 /** No row brings an interface up, which joins the all-nodes group. */
 int netdev_member6(const struct netdev *nd, const uint8_t *group)
 {

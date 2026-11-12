@@ -28,6 +28,9 @@ extern int printf(const char *fmt, ...);
 
 static int fails;
 
+/* The tick count netdev.c keeps a carrier reading by; the test moves it. */
+volatile uint64_t kernel_ticks;
+
 #define CHECK(cond, what)                   \
     do {                                    \
         if (!(cond)) {                      \
@@ -341,6 +344,43 @@ static void injected_failure(void)
     CHECK(same(netdev_error(), m_second.reason), "a later failure supplies its own reason");
 }
 
+/** A card's link decides whether it runs; a live link stands for its
+ * window without a reading of the card, across the tick count's wrap; a
+ * dead link is read at every look; and a change the driver reports makes
+ * the next look read the card. */
+static void check_carrier(void)
+{
+    reset(NETDEV_UP, NETDEV_UP, NETDEV_UP);
+    CHECK(netdev_probe() == 1, "a card is bound before the running checks");
+    m_first.state.up = 1;
+    CHECK(netdev_running(netdev_first()) == 1, "a card reporting a live link is running");
+    m_first.state.up = 0;
+    netdev_carrier_changed(netdev_first());
+    CHECK(netdev_running(netdev_first()) == 0,
+          "a card reporting a dead link is not running, which is the whole point: "
+          "a bound card and a working one are different things");
+
+    reset(NETDEV_UP, NETDEV_UP, NETDEV_UP);
+    CHECK(netdev_probe() == 1, "a card is bound before the carrier checks");
+    kernel_ticks = 0xFFFFFF00u;
+    CHECK(netdev_running(netdev_first()) == 1, "a live link is read from the card");
+    m_first.state.up = 0;
+    kernel_ticks += NETDEV_CARRIER_TICKS - 1;
+    CHECK(netdev_running(netdev_first()) == 1,
+          "a live link stands for its window without a reading, across the low "
+          "half's wrap, as Linux's carrier stands between its watchdog's runs");
+    kernel_ticks++;
+    CHECK(netdev_running(netdev_first()) == 0, "a link that dropped is read at the window's end");
+    m_first.state.up = 1;
+    CHECK(netdev_running(netdev_first()) == 1,
+          "a dead link is read at every look, so one coming back is seen at once");
+    m_first.state.up = 0;
+    netdev_carrier_changed(netdev_first());
+    CHECK(netdev_running(netdev_first()) == 0,
+          "a change the driver reports makes the next look read the card");
+    kernel_ticks = 0;
+}
+
 /**
  * Run injected_failure, then the rows of the walk: every card of every
  * driver becomes an interface, in the table's order, numbered from 1 and
@@ -458,14 +498,7 @@ int main(void)
         CHECK(link.up == 42, "and leaves the caller's answer untouched");
     }
 
-    reset(NETDEV_UP, NETDEV_UP, NETDEV_UP);
-    CHECK(netdev_probe() == 1, "a card is bound before the running checks");
-    m_first.state.up = 1;
-    CHECK(netdev_running(netdev_first()) == 1, "a card reporting a live link is running");
-    m_first.state.up = 0;
-    CHECK(netdev_running(netdev_first()) == 0,
-          "a card reporting a dead link is not running, which is the whole point: "
-          "a bound card and a working one are different things");
+    check_carrier();
 
     reset(NETDEV_ABSENT, NETDEV_ABSENT, NETDEV_UP);
     CHECK(netdev_probe() == 1, "the driver with no link report is bound");

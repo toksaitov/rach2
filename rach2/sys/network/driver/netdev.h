@@ -274,6 +274,12 @@ struct netdev {
      * unaffected. */
     int up;
 
+    /* The carrier a reading of the card's link found up, which stands while
+     * `carrier_kept` is set and the low half of `kernel_ticks` is before
+     * `carrier_until` (`netdev_running`). */
+    uint32_t carrier_until;
+    int carrier_kept;
+
     /* The card's PCI function as bus << 8 | device << 3 | function, which
      * its driver sets when it finds the card, or -1; /sys/class/net links
      * the interface's `device` to it. */
@@ -579,9 +585,18 @@ int netdev_link(const struct netdev *nd, struct netdev_link *out);
  * Whether the interface is running: the link's state where the card
  * reports one, and 1 where it cannot, `lo` included; 0 for NULL. An
  * interface that is up and running reports `IFF_RUNNING`. ethernet.c sends
- * no frame on an interface that is not running.
+ * no frame on an interface that is not running. A card's link found up is
+ * taken as up for two seconds (NETDEV_CARRIER_TICKS, netdev.c) without
+ * asking the card again, unless its driver reports a change
+ * (`netdev_carrier_changed`); a link found down is asked about at each
+ * call, so that one coming up is seen at once.
  */
 int netdev_running(const struct netdev *nd);
+
+/** Forget the carrier `nd`'s last reading kept, so that the next
+ * `netdev_running` asks the card: a driver calls it at a link change's
+ * interrupt. Nothing for NULL. */
+void netdev_carrier_changed(struct netdev *nd);
 
 /** Find a stable interface index, independent of enumeration order. */
 static __inline__ struct netdev *netdev_by_index(int index)

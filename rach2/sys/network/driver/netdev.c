@@ -18,6 +18,7 @@
 #include "../../klog.h"
 #include "../../lib/kstring.h"
 #include "../../lib/kerrno.h"
+#include "../../timer.h"
 
 /* The interfaces: the `niface` cards the probe brought up, in the order it
  * found them, and `lo` after them. */
@@ -493,17 +494,61 @@ int netdev_link(const struct netdev *nd, struct netdev_link *out)
     return 0;
 }
 
+/* The ticks a reading of a card's link that found it up stands for, as
+ * Linux's e1000 reads its link from its watchdog every two seconds and at a
+ * link change's interrupt, and `netif_carrier_ok` reads only the state
+ * kept (drivers/net/ethernet/intel/e1000/e1000_main.c:2547 and 3757,
+ * include/linux/netdevice.h:4257, Linux 6.12.115). */
+#define NETDEV_CARRIER_TICKS (2u * TICK_HZ)
+
+/**
+ * Whether `nd`'s carrier is up, as netdev.h describes it. A reading that
+ * found the link up stands for NETDEV_CARRIER_TICKS, and a reading that
+ * found it down for none, so the card's register is read at most once a
+ * window while the link stays up: under KVM it is a register access that
+ * QEMU serves in its own process, which waits for QEMU's main lock and
+ * took some 300 us in each pass of IPv6's timers during a graphics round.
+ * Only the probe's cards keep a reading, each written through the table,
+ * whose records are not const; an interface registered beside them, a
+ * radio's, reports a state its driver keeps in memory and is asked each
+ * time. The words need no
+ * lock of their own: a lost write costs one more reading, and a reading
+ * that raced a link change keeps the old state one window at most, as
+ * Linux's watchdog does between its runs.
+ */
 int netdev_running(const struct netdev *nd)
 {
     struct netdev_link link;
+    struct netdev *card = 0;
+    uint32_t now = (uint32_t)kernel_ticks;
+    int i;
 
     if (!nd) {
         return 0;
     }
+    if (nd->carrier_kept && (int32_t)(nd->carrier_until - now) > 0) {
+        return 1;
+    }
     if (netdev_link(nd, &link)) {
+        for (i = 0; i < niface; i++) {
+            if (&ifaces[i] == nd) {
+                card = &ifaces[i];
+            }
+        }
+        if (card) {
+            card->carrier_until = now + NETDEV_CARRIER_TICKS;
+            card->carrier_kept = link.up ? 1 : 0;
+        }
         return link.up ? 1 : 0;
     }
     return 1;
+}
+
+void netdev_carrier_changed(struct netdev *nd)
+{
+    if (nd) {
+        nd->carrier_kept = 0;
+    }
 }
 
 /** Attach a non-PCI interface without moving any existing interface record. */
