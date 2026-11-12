@@ -20,6 +20,7 @@
 #include "../lib/kirq.h"
 #include "../lib/spinlock.h"
 #include "../timer.h"
+#include "../rtc.h"
 #include "../cmdline.h"
 #include "../latency.h"
 #include "../panic.h"
@@ -1104,10 +1105,68 @@ static int ahci_can_sleep(void)
     return kirq_enabled() && proc_in_syscall() && sched_is_enabled();
 }
 
-/** The condition a caller sleeping for the port waits on: no claim. */
+/* Microseconds in a timer tick, which converts a polled bound in steps to
+   a sleep's deadline in ticks and back. */
+#define AHCI_TICK_US (1000000u / TICK_HZ)
+
+/** A sleep for the port: the port, and the tick at which the caller's bound
+ * ends. */
+struct ahci_claim_wait {
+    struct ahci_disk *d;
+    uint64_t due;
+};
+
+/** The condition a caller sleeping for the port waits on: no claim, or the
+ * end of its bound. */
 static int ahci_unclaimed(void *arg)
 {
-    return !((struct ahci_disk *)arg)->polling;
+    const struct ahci_claim_wait *w = (const struct ahci_claim_wait *)arg;
+
+    return !w->d->polling || rtc_ticks_now() >= w->due;
+}
+
+/**
+ * Sleep once for another caller's claim on `d`, within the bound the
+ * caller's command shares with its waits, as libata's internal command
+ * waits with `wait_for_completion_timeout` (drivers/ata/libata-core.c:1616).
+ * The first sleep turns `*steps` into a deadline in ticks, `*due`, which
+ * every later sleep of the same command keeps: a claim another caller takes
+ * before this one runs sends it to sleep again with only what is left. After
+ * each sleep `*steps` is cut to what is left, so the command that follows
+ * runs within the same bound. The process's timer is armed for the deadline
+ * and restored after. Returns 0, or -1 when the bound has run out.
+ * Process context, with the port's lock let go. May sleep.
+ */
+static int ahci_claim_sleep(struct ahci_disk *d, uint64_t *due, uint32_t *steps)
+{
+    struct ahci_claim_wait w;
+    uint64_t now = rtc_ticks_now();
+    uint64_t saved;
+    uint32_t ticks = (*steps * AHCI_CMD_POLL_US + AHCI_TICK_US - 1u) / AHCI_TICK_US;
+
+    if (*due == 0) {
+        /* A tick more, so that a sleep begun late in a tick is never short. */
+        *due = now + ticks + 1u;
+    }
+    if (now >= *due) {
+        return -1;
+    }
+    w.d = d;
+    w.due = *due;
+    saved = current_proc->wakeup_tick;
+    current_proc->wakeup_tick = *due;
+    (void)wq_wait_event_nointr(&d->claim_wq, ahci_unclaimed, &w);
+    current_proc->wakeup_tick = saved;
+    current_proc->disk_waits++;
+
+    now = rtc_ticks_now();
+    if (now >= *due) {
+        return -1;
+    }
+    if (*due - now < ticks) {
+        *steps = (uint32_t)(*due - now) * (AHCI_TICK_US / AHCI_CMD_POLL_US);
+    }
+    return 0;
 }
 
 /**
@@ -1139,15 +1198,16 @@ static void ahci_claim_step(int cpu, const struct process *owner)
  * `ahci_release`, so the command runs with interrupts as the caller had
  * them.
  *
+ * The wait takes from `*steps`, the caller's bound for the whole command,
+ * as libata bounds an internal command by one timeout (libata-core.c:1616).
  * A caller that can sleep (`ahci_can_sleep`) sleeps for another caller's
- * claim on the port's queue, which the claim's release wakes, and the
- * switch lets the big lock go, as libata gives back the port's lock and the
- * error handler's mutex before its internal command waits
- * (libata-core.c:1596, 1607-1616): the holder may need the lock to go on,
- * for an interrupt it took. Any other caller spins, lending the big lock
- * to the holder's processor when it holds it (`ahci_claim_step`), and takes
- * the steps from `*steps`, the caller's bound for the whole command, as
- * libata bounds an internal command by one timeout (libata-core.c:1616): a
+ * claim on the port's queue, which the claim's release wakes, until a
+ * deadline that its retries share (`ahci_claim_sleep`), and the switch lets
+ * the big lock go, as libata gives back the port's lock and the error
+ * handler's mutex before its internal command waits (libata-core.c:1596,
+ * 1607-1616): the holder may need the lock to go on, for an interrupt it
+ * took. Any other caller spins, lending the big lock to the holder's
+ * processor when it holds it (`ahci_claim_step`), a step at a time: a
  * caller with interrupts off, whose bound is five seconds, cannot spin for
  * the thirty seconds and more of a holder's with them on. Returns 0 with
  * the port claimed and `*steps` what is left, or `-EIO`, logged, with
@@ -1156,21 +1216,26 @@ static void ahci_claim_step(int cpu, const struct process *owner)
 static int ahci_claim(struct ahci_disk *d, uint8_t command, uint32_t *steps)
 {
     uint32_t flags = spin_lock_irqsave(&d->lock);
+    uint64_t due = 0;
 
     while (d->polling) {
         int cpu = d->polling_cpu;
         const struct process *owner = d->polling_proc;
+        int expired;
 
         spin_unlock_irqrestore(&d->lock, flags);
         if (ahci_can_sleep()) {
-            wq_wait_event_nointr(&d->claim_wq, ahci_unclaimed, d);
-            current_proc->disk_waits++;
-        } else if (--*steps == 0) {
+            expired = ahci_claim_sleep(d, &due, steps) != 0;
+        } else {
+            expired = --*steps == 0;
+            if (!expired) {
+                ahci_claim_step(cpu, owner);
+            }
+        }
+        if (expired) {
             klog(KLOG_WARN, "ahci", "port %d: command 0x%X failed: %s", d->port, (unsigned)command,
                  "another polled command held the port");
             return -EIO;
-        } else {
-            ahci_claim_step(cpu, owner);
         }
         flags = spin_lock_irqsave(&d->lock);
     }
