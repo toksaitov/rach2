@@ -144,8 +144,9 @@ static int flusher_due(void *arg)
  * writes, so that a disk sleeps the thread for its answer and a loop device,
  * which sleeps every caller, takes its writes; outside a call the request
  * layer polls a disk that can be polled and stops the kernel at any other.
- * The mark is off while the thread sleeps between turns, since a kernel
- * thread so marked counts as one that is exiting (`proc_is_kthread`).
+ * The mark is off while the thread sleeps between turns; with it or
+ * without, the thread is a kernel thread, which takes no signal
+ * (`proc_is_kthread`).
  */
 static void flusher_main(void)
 {
