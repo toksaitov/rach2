@@ -1116,11 +1116,13 @@ static void console_deliver(void);
  */
 void tty_console_poll(void)
 {
-    static uint32_t read_at; /* the low half of `kernel_ticks` at the next reading */
-    uint32_t now = (uint32_t)kernel_ticks;
+    /* The tick count of the next reading: whole, so that no quiet spell
+     * wraps it into the future, as Linux's timer arms from the present. */
+    static uint64_t read_at;
+    uint64_t now = tick_count();
 
     blank_tick();
-    if (!serial_rx_irq_on() || (serial_rx_line_high() && (int32_t)(now - read_at) >= 0)) {
+    if (!serial_rx_irq_on() || (serial_rx_line_high() && now >= read_at)) {
         read_at = now + CONSOLE_BACKUP_TICKS;
         serial_rx_service(TTY_PUMP_BUDGET);
     }
