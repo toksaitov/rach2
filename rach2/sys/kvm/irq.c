@@ -60,7 +60,7 @@ struct irqfd {
 
 /*
  * irq.c's share of a VM. `chip`, the controllers' lock, is over the routes,
- * the irqfds' list, the EOI exits' vectors and the controllers themselves,
+ * the irqfds' list and the controllers themselves,
  * the PIC, the I/O APIC and the PIT, which call each other: an EOI calls
  * the ack notifiers, which resample and raise pins again. Linux gives each
  * controller a spinlock of its own and drops the I/O APIC's around those
@@ -73,10 +73,6 @@ struct irq_vm {
     struct route *routes; /* by GSI, `nr_routes` of them */
     uint32_t nr_routes;
     struct irqfd *irqfds;
-    /* The vectors whose EOI goes to the caller's I/O APIC, a bit each, kept
-     * from the routes under `chip` and read without it, as Linux's
-     * ioapic_handled_vectors (`kvm_irq_eoi_exits`). */
-    volatile uint32_t eoi_exit[8];
     struct spinlock chip;
     int pending;          /* any irqfd waits for the run loop, under `lock` */
     struct spinlock lock; /* the irqfds' `route` */
@@ -583,24 +579,30 @@ static int route_add(struct kvm_vm *vm, struct route *t, struct kvm_irq_routing_
     return 0;
 }
 
-/** Keep `iv`'s EOI exits from its routes: the vectors of the level-triggered
- * MSIs among the GSIs KVM_CAP_SPLIT_IRQCHIP reserved for the caller's I/O
- * APIC's pins, as Linux's kvm_scan_ioapic_routes. Under `chip`. */
-static void eoi_exits_scan(struct kvm_vm *vm, struct irq_vm *iv)
+void kvm_irq_scan_eoi_exits(struct kvm_vcpu *v, uint32_t map[8])
 {
-    uint32_t map[8], i, n, vector;
+    struct kvm_vm *vm = v->vm;
+    struct irq_vm *iv = irq_of(vm);
+    struct kvm_lapic_irq irq;
+    uint32_t i, n, flags;
 
-    k_memset(map, 0, sizeof(map));
+    k_memset(map, 0, 8u * sizeof(map[0]));
+    if (!iv || vm->irqchip != KVM_IRQCHIP_SPLIT) {
+        return;
+    }
+    flags = spin_lock_irqsave(&iv->chip);
     n = iv->ioapic_pins < iv->nr_routes ? iv->ioapic_pins : iv->nr_routes;
-    for (i = 0; vm->irqchip == KVM_IRQCHIP_SPLIT && i < n; i++) {
-        if (iv->routes[i].valid && !iv->routes[i].sint && (iv->routes[i].data & MSI_DATA_LEVEL)) {
-            vector = iv->routes[i].data & 0xFFu;
-            map[vector >> 5] |= 1u << (vector & 31u);
+    for (i = 0; i < n; i++) {
+        if (!iv->routes[i].valid || iv->routes[i].sint || iv->routes[i].chips) {
+            continue; /* Linux's entry->type != KVM_IRQ_ROUTING_MSI */
+        }
+        msi_irq(vm, &iv->routes[i], &irq);
+        if (irq.trig_mode &&
+            (kvm_lapic_match_irq(v, &irq) || kvm_lapic_pending_eoi(v, irq.vector))) {
+            map[irq.vector >> 5] |= 1u << (irq.vector & 31u);
         }
     }
-    for (i = 0; i < 8u; i++) {
-        iv->eoi_exit[i] = map[i];
-    }
+    spin_unlock_irqrestore(&iv->chip, flags);
 }
 
 /**
@@ -671,8 +673,13 @@ static int32_t set_routing(struct kvm_vm *vm, uintptr_t arg)
     for (f = iv->irqfds; f; f = f->next) {
         irqfd_update(iv, f);
     }
-    eoi_exits_scan(vm, iv);
     spin_unlock_irqrestore(&iv->chip, flags);
+    /* Each vCPU finds its EOI exits again before its next entry, as
+     * Linux's kvm_arch_post_irq_routing_update asks
+     * (arch/x86/kvm/irq_comm.c:397-403). */
+    for (i = 0; vm->irqchip == KVM_IRQCHIP_SPLIT && i < vm->nr_vcpus; i++) {
+        kvm_vcpu_kick(vm->vcpus[i], KVM_REQ_SCAN_IOAPIC);
+    }
     r = 0;
 out:
     kfree(table);
@@ -885,16 +892,6 @@ int32_t kvm_irq_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
     default:
         return -ENOTTY;
     }
-}
-
-int kvm_irq_eoi_exits(struct kvm_vm *vm, uint32_t vector)
-{
-    struct irq_vm *iv = irq_of(vm);
-
-    if (!iv || vm->irqchip != KVM_IRQCHIP_SPLIT || vector > 255u) {
-        return 0;
-    }
-    return (iv->eoi_exit[vector >> 5] >> (vector & 31u)) & 1u;
 }
 
 /** The host's TSC-deadline timer, which Linux requires to offer the
