@@ -885,10 +885,9 @@ static int dirent_split(struct ext2_mount *em, uint64_t off, const struct ext2_s
  * progress stops there; or the write's -errno, with the block still dirty.
  *
  * As in Linux, the disk's cache is not flushed. Linux next writes the
- * directory's inode; here it writes back in the cache's order, which keeps
- * a table block back until the blocks it may name are written
- * (`bcache_sync_last`), so that writing it now would write the blocks of
- * every inode beside it, and no step after a change depends on it.
+ * directory's inode; here `inode_commit` writes it where a later step
+ * depends on it, and otherwise it writes back, since a stop that loses
+ * what is left, its times or its link count, loses no name.
  */
 static int dir_commit(struct ext2_mount *em, uint64_t off, uint32_t len)
 {
@@ -909,15 +908,46 @@ static int dir_commit(struct ext2_mount *em, uint64_t off, uint32_t len)
 }
 
 /**
- * Write the new block of directory `d` at byte `off` of the volume zeroed,
- * with `head`, its first `len` bytes, over the zeros, and on a mount that
- * writes back to the device before anything names it (`dir_commit`). There
- * the zeros are marked to go after the device's `first` blocks, the
- * pointers and inodes a free cleared, so that a block freed and taken
- * again is not overwritten on the device while an old pointer there still
- * names it. 0, or -errno.
+ * Write the table block that holds inode `n`, which the caller has just
+ * stored, to the device now on a mount that writes back, as Linux's
+ * `ext2_handle_dirsync` follows a directory's pages with
+ * `sync_inode_metadata` (fs/ext2/dir.c:440-447 in Linux 6.12.115), for a
+ * step that depends on the inode: a grown directory's new pointer, size and
+ * `i_blocks` before a name in the new block lets another go, a cleared
+ * index flag before the entries change, and a new directory before its
+ * parent names it. The cache writes the block after the dirty blocks it may
+ * name (`bcache_sync_last`, `table_names`): the shared blocks dirtied
+ * before its last mark that are not `after`, such as bitmaps, descriptors
+ * and directory and pointer blocks, and the blocks of a regular file beside
+ * it in the table block that allocated or freed since its last write.
+ * Those are what the write costs past its own request: a directory's own
+ * blocks were written as they changed (`dir_commit`). A strict mount wrote
+ * the inode through already. 0; -EROFS without a write once a write on the
+ * device has failed; or the write's -errno, with the block still dirty.
  */
-static int dir_block_new(struct ext2_mount *em, uint64_t off, const void *head, uint32_t len)
+static int inode_commit(struct ext2_mount *em, const struct ext2_node *n)
+{
+    if (ext2_em_strict(em)) {
+        return 0;
+    }
+    if (em->dev->flags & BLOCK_WRITE_FAILED) {
+        return -EROFS;
+    }
+    return bcache_sync_block(em->dev, ext2_inode_offset(em, n->ino) >> BCACHE_BLOCK_SHIFT);
+}
+
+/**
+ * Write the new block at byte `off` of the volume, a directory's or a
+ * symlink's target's, zeroed, with `head`, its first `len` bytes, over the
+ * zeros, and on a mount that writes back to the device before anything
+ * names it (`dir_commit`). There the zeros are marked to go after the
+ * device's `first` blocks, the pointers and inodes a free cleared, so that
+ * a block freed and taken again is not overwritten on the device while an
+ * old pointer there still names it; and since a block that names others
+ * does not wait for an `after` one (bcache.h), the write is made now, not
+ * left to the order of writing back. 0, or -errno.
+ */
+static int shared_block_new(struct ext2_mount *em, uint64_t off, const void *head, uint32_t len)
 {
     int rc = ext2_write_bytes(em, off, 0, em->block_size, ext2_em_strict(em) ? 0 : WRITE_AFTER);
 
@@ -932,8 +962,8 @@ static int dir_block_new(struct ext2_mount *em, uint64_t off, const void *head, 
 
 /**
  * Clear the hashed-index flag of directory `d`, whose entries are about to
- * change, and store its inode with WRITE_THROUGH before they do. 0, or
- * -errno.
+ * change, and store its inode with WRITE_THROUGH before they do, on a mount
+ * that writes back to the device (`inode_commit`). 0, or -errno.
  *
  * This driver keeps the linear entries only, which an index leaves readable
  * as they are: the index root lies in the slack of `..`, and each index
@@ -943,16 +973,16 @@ static int dir_block_new(struct ext2_mount *em, uint64_t off, const void *head, 
  * e2fsck -D builds the index again. Storing the inode first means that no
  * stop leaves a changed directory marked indexed.
  *
- * A failed store, such as a failed read of the inode table before any
- * write, puts the flag back in memory, so that the next change stores the
- * cleared flag again before it touches an entry; a flag left cleared in
- * memory would let that change skip the store and write over the index
- * root in the slack of `..` while the disk still marks it indexed. Linux's
- * ext2 has no such store to fail: it clears i_flags in memory as it
- * changes the entries, and writeback copies the flags to the disk later
- * (fs/ext2/dir.c:468 and fs/ext2/inode.c:1567 in Linux 6.12.115). Should
- * the failed store have reached the disk, the entries are unchanged, and
- * the next store of the inode marks it indexed again, which is still true.
+ * A failed store, such as a failed read of the inode table before any write, or
+ * a failed write of it, puts the flag back in memory, so that the next change
+ * stores the cleared flag again before it touches an entry; a flag left cleared
+ * in memory would let that change skip the store and write over the index root
+ * in the slack of `..` while the disk still marks it indexed. Linux's ext2 has
+ * no such store to fail: it clears i_flags in memory as it changes the entries,
+ * and writeback copies the flags to the disk later (fs/ext2/dir.c:468 and
+ * fs/ext2/inode.c:1567 in Linux 6.12.115). Should the failed store have reached
+ * the disk, the entries are unchanged, and the next store of the inode marks it
+ * indexed again, which is still true.
  */
 static int dir_unindex(struct ext2_mount *em, struct ext2_node *d)
 {
@@ -963,6 +993,9 @@ static int dir_unindex(struct ext2_mount *em, struct ext2_node *d)
     }
     d->flags &= ~EXT2_INDEX_FL;
     rc = ext2_inode_store(em, d);
+    if (rc == 0) {
+        rc = inode_commit(em, d);
+    }
     if (rc != 0) {
         d->flags |= EXT2_INDEX_FL;
     }
@@ -971,12 +1004,19 @@ static int dir_unindex(struct ext2_mount *em, struct ext2_node *d)
 
 /**
  * Add `name`, of `name_len` bytes, naming `ino` of file type `ftype`, to
- * directory `d` in a new block at its end, for `dir_add`, which found no
- * room: the block allocated and written with one empty entry spanning it
- * (`dir_block_new`), chained with `i_blocks` and covered by the size in one
- * store of the inode, and the entry written last. 0, -EFBIG for a directory
- * that would pass 4 GiB less a block, -ENOSPC, decided before any block is
- * taken for the block and the pointer blocks its index can need, or -errno.
+ * directory `d` in a new block at its end, for `dir_add`, which found no room:
+ * the block allocated and written with one empty entry spanning it
+ * (`shared_block_new`), chained with `i_blocks` and covered by the size in one
+ * store of the inode, and the entry written last. On a mount that writes back
+ * the inode reaches the device before the entry is written (`inode_commit`), so
+ * that a name the caller's next step depends on, such as a rename's new one
+ * before the old goes, is reachable on the device when it is; a failure there
+ * leaves an empty block and no name, so that a caller that frees the inode it
+ * would have named frees one with no name. Linux writes the inode after the
+ * entry (`ext2_handle_dirsync`), which puts both on the device before the next
+ * step too. 0, -EFBIG for a directory that would pass 4 GiB less a block,
+ * -ENOSPC, decided before any block is taken for the block and the pointer
+ * blocks its index can need, or -errno.
  */
 static int dir_grow(struct ext2_mount *em, struct ext2_node *d, const char *name, uint32_t name_len,
                     uint32_t ino, uint32_t ftype)
@@ -1004,13 +1044,16 @@ static int dir_grow(struct ext2_mount *em, struct ext2_node *d, const char *name
     LE16_PUT(head + 4, em->block_size);
     head[6] = 0;
     head[7] = 0;
-    rc = dir_block_new(em, off, head, 8);
+    rc = shared_block_new(em, off, head, 8);
     if (rc != 0) {
         return rc;
     }
     ext2_node_size_set(d, d->size + em->block_size);
     ext2_stamp(d, T_MTIME | T_CTIME);
     rc = ext2_inode_store(em, d);
+    if (rc == 0) {
+        rc = inode_commit(em, d);
+    }
     if (rc != 0) {
         return rc;
     }
@@ -1605,14 +1648,17 @@ int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 
 /**
  * The `mkdir` of `vfs_ops`: a new directory `name` in `dir`, with the
- * permission bits of `mode`. Its block is written with `.` and `..`, then
- * its inode with a count of two, then the parent's raised count, and the
- * parent's entry last; a stop before the inode leaves a set bit with
- * nothing behind it. A failure frees the new inode, and lowers the parent's
- * count again when the entry was not written. The batch is drained first.
- * The caller holds the parent's lock, and the new directory's is held
- * until it is named. 0, -ENOENT for a removed parent, -EEXIST, -EMLINK at
- * 65000 links, -ENAMETOOLONG, -EROFS, -ENOSPC, -ENOMEM, or -errno.
+ * permission bits of `mode`. Its block is written with `.` and `..`, then its
+ * inode with a count of two, then the parent's raised count, and the parent's
+ * entry last; a stop before the inode leaves a set bit with nothing behind it.
+ * On a mount that writes back the block and the inode reach the device before
+ * the parent's entry names them (`shared_block_new`, `inode_commit`), as
+ * Linux's `ext2_make_empty` writes both (fs/ext2/dir.c:650 in Linux 6.12.115).
+ * A failure frees the new inode, and lowers the parent's count again when the
+ * entry was not written. The batch is drained first. The caller holds the
+ * parent's lock, and the new directory's is held until it is named. 0, -ENOENT
+ * for a removed parent, -EEXIST, -EMLINK at 65000 links, -ENAMETOOLONG, -EROFS,
+ * -ENOSPC, -ENOMEM, or -errno.
  */
 int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
@@ -1667,11 +1713,14 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         head[19] = head[7];
         head[20] = '.';
         head[21] = '.';
-        rc = dir_block_new(em, (uint64_t)b * em->block_size, head, 24);
+        rc = shared_block_new(em, (uint64_t)b * em->block_size, head, 24);
     }
     if (rc == 0) {
         ext2_node_size_set(n, em->block_size);
         rc = ext2_inode_store(em, n);
+    }
+    if (rc == 0) {
+        rc = inode_commit(em, n);
     }
     if (rc == 0) {
         d->nlink++;
@@ -1839,13 +1888,16 @@ int ext2_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
 
 /**
  * The `symlink` of `vfs_ops`: a link `name` in `dir` to `target`. A target
- * shorter than 60 bytes is kept in the inode's pointer words, and a longer
- * one in a block of its own, written first; then the inode, then the entry,
- * then the directory's times. A failure frees the inode. The batch is
- * drained first. The caller holds the directory's lock, and the link's is
- * held until it is named. 0, -ENOENT for a removed directory,
- * -ENAMETOOLONG for a name past 255 bytes or for a target that is empty or
- * of a block or more, -EEXIST, -EROFS, -ENOSPC, -ENOMEM, or -errno.
+ * shorter than 60 bytes is kept in the inode's pointer words, and a longer one
+ * in a block of its own, written first (`shared_block_new`); then the inode,
+ * then the entry, then the directory's times. A failure to add the entry frees
+ * the inode; a failure to store the times sets the error bit and is not the
+ * call's, since the entry, on the device on a mount that writes back, names the
+ * inode, as in `ext2_create`. The batch is drained first. The caller holds the
+ * directory's lock, and the link's is held until it is named. 0, -ENOENT for a
+ * removed directory, -ENAMETOOLONG for a name past 255 bytes or for a target
+ * that is empty or of a block or more, -EEXIST, -EROFS, -ENOSPC, -ENOMEM, or
+ * -errno.
  */
 int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *target)
 {
@@ -1898,10 +1950,7 @@ int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char 
 
         rc = ext2_map_alloc(em, n, 0, &b, &fresh);
         if (rc == 0) {
-            rc = ext2_write_bytes(em, (uint64_t)b * em->block_size, 0, em->block_size, 0);
-        }
-        if (rc == 0) {
-            rc = ext2_write_bytes(em, (uint64_t)b * em->block_size, target, tlen, 1);
+            rc = shared_block_new(em, (uint64_t)b * em->block_size, target, tlen);
         }
     }
     if (rc == 0) {
@@ -1911,16 +1960,17 @@ int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char 
     if (rc == 0) {
         rc = dir_add(em, d, name, n->ino, 7);
     }
-    if (rc == 0) {
-        ext2_stamp(d, T_MTIME | T_CTIME);
-        rc = ext2_inode_times_later(em, d);
-    }
     if (rc != 0) {
         n->nlink = 0;
         ext2_release_inode(em, n);
         ext2_node_unlock(n);
         ext2_node_unhold(em, n);
         return rc;
+    }
+    ext2_stamp(d, T_MTIME | T_CTIME);
+    rc = ext2_inode_times_later(em, d);
+    if (rc != 0) {
+        ext2_mark_error(em);
     }
     ext2_node_unlock(n);
     ext2_node_unhold(em, n);
