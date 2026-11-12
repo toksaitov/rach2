@@ -88,7 +88,9 @@ int vfs_child_lock(const struct vfs_ref *dir, const char *name, struct vfs_ref *
         return rc == -ENOENT ? 0 : rc;
     }
     child->node = found;
+    sleep_lock_subclass(2);
     vfs_node_lock(child);
+    sleep_lock_subclass(0);
     return 0;
 }
 

@@ -906,11 +906,30 @@ static int timed_ready(void *arg)
     return t->cond(t->arg) || (t->timed && tick_count() >= t->deadline);
 }
 
+/** Test the signal-work flag's pending signal under the big lock, which
+ * protects signal_pending's queue changes, with no socket lock held. */
+static int unix_signal_pending(void)
+{
+    int big = !bkl_held();
+    int pending;
+
+    if (big) {
+        bkl_enter();
+    }
+    pending = signal_pending();
+    if (big) {
+        bkl_exit();
+    }
+    return pending;
+}
+
 /**
  * Wait on `wq` until `cond(arg)`, a signal, or the end of the socket time
  * limit `timeo` in ticks, 0 for none and UNIX_TIMEO_NOW for no wait at all.
  * Returns 0 when the condition holds, -EINTR for a signal, -EAGAIN when the
- * time ran out, as Linux reports it.
+ * time ran out, as Linux reports it. The wait tests only the signal-work
+ * flag, as Linux tests TIF_SIGPENDING; signal_pending runs after it under
+ * the big lock, since it changes the signal queues (unix_signal_pending).
  */
 static int unix_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, uint64_t timeo)
 {
@@ -927,7 +946,9 @@ static int unix_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, uint64_t time
     if (t.timed) {
         current_proc->wakeup_tick = t.deadline;
     }
-    rc = wq_wait_event(wq, timed_ready, &t);
+    do {
+        rc = wq_wait_event_sigflag(wq, timed_ready, &t, "unix_wait");
+    } while (rc == -EINTR && !unix_signal_pending());
     if (t.timed) {
         current_proc->wakeup_tick = 0;
     }
