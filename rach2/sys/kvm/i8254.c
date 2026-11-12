@@ -164,7 +164,10 @@ static int pit_due(const struct guest_pit *p, uint64_t now)
     return (q->active && now >= q->expires) || (q->reinject && q->pending && !q->inflight);
 }
 
-/** A new tick or an acknowledged backlog may produce one IRQ0 pulse. */
+/** A new tick or an acknowledged backlog may produce one IRQ0 pulse. The
+ * clock is read only while a timer is armed, since the run loop checks at
+ * every entry where Linux's PIT has an hrtimer (arch/x86/kvm/i8254.c:268,
+ * 361). */
 void kvm_pit_check(struct kvm_vm *vm)
 {
     struct guest_pit *p = pit_of(vm);
@@ -174,7 +177,7 @@ void kvm_pit_check(struct kvm_vm *vm)
     if (!p) {
         return;
     }
-    now = kvm_host_ns();
+    now = ((const volatile struct guest_pit *)p)->active ? kvm_host_ns() : 0;
     if (!pit_due(p, now)) {
         return;
     }
