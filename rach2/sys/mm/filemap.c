@@ -18,6 +18,7 @@
 #include "../block/loop.h"
 #include "../klog.h"
 #include "../proc/process.h"
+#include "../proc/smp.h"
 #include "../proc/wait_queue.h"
 #include "../lib/kerrno.h"
 #include "../lib/kirq.h"
@@ -34,6 +35,13 @@
  * size, which a mapping does not change. Shared writers write every page
  * back, since the kernel does not read the page tables' dirty bits. The
  * mount and inode number identify the file to descriptor operations.
+ *
+ * The table of `sh` changes only under both the file's lock
+ * (`vfs_node_lock`) and the big lock: a page joins it at a fault, and a
+ * truncation or the last release takes pages out. So a reader holds either:
+ * a fault without the big lock looks a page up under the file's lock, as
+ * Linux's filemap_fault finds the folio and locks it with no global lock
+ * (mm/filemap.c:3326-3370), and a reader under the big lock needs no more.
  */
 struct dshare {
     struct dshare *next;
@@ -383,17 +391,22 @@ static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, int flus
     return rc;
 }
 
-/** Read or borrow disk page `pgoff` under its file's lock, which excludes
- * a write or truncation until the page joins the file's resident pages.
- * Returns 0 with a resident mapping reference in `phys`, 1 after reading
- * the file, or a negative errno. */
+/**
+ * Read or borrow disk page `pgoff` under its file's lock, which excludes a
+ * write or truncation until the page joins the file's resident pages. A
+ * caller without the big lock, a fault of a file whose reads run without it
+ * (`unlocked`), finds a resident page under the file's lock alone and takes
+ * the big lock only to add a page it read to the table, which readers under
+ * the big lock alone read (struct dshare). Returns 0 with a resident mapping
+ * reference in `phys`, 1 after reading the file, or a negative errno.
+ */
 static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
 {
     struct vfs_ref file;
     struct vfs_stat st;
     uint8_t *page;
     int32_t got;
-    int rc = 0;
+    int rc = 0, big;
 
     file.mnt = m->entry.ofd->vmnt;
     file.node = m->entry.ofd->vnode;
@@ -423,7 +436,14 @@ static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
             *phys = 0;
             rc = got;
         } else {
+            big = !bkl_held();
+            if (big) {
+                bkl_enter();
+            }
             *phys = shmem_adopt(m->sh, pgoff, *phys);
+            if (big) {
+                bkl_exit();
+            }
             rc = *phys ? 1 : -ENOMEM;
         }
     }
@@ -525,6 +545,27 @@ static void filemap_release(struct vm_file *f)
     kfree(m);
 }
 
+/**
+ * Whether the faults of a mapping of the file `e` is open on may read it
+ * without the big lock (`struct vm_file`'s `unlocked`): a regular file of a
+ * type that reads without it, ext2 (`reads_unlocked`), reached through no
+ * device or synthetic node and not the KRFFS root's, whose fill and share
+ * then take only the file's lock, the file cache's and the block layer's,
+ * as `file_vfs_unlocked` admits a read(2) of it.
+ */
+static int filemap_reads_unlocked(const fd_entry_t *e)
+{
+    const struct open_file *ofd = e->ofd;
+    const struct vfs_type *t;
+
+    if (e->type != FD_TYPE_FILE || e->node || !ofd || !ofd->vmnt || ofd->dev_mnt ||
+        ofd->synth_mnt) {
+        return 0;
+    }
+    t = vfs_mount_base(ofd->vmnt)->type;
+    return t && t->reads_unlocked && !t->ns_serialised;
+}
+
 struct vm_file *filemap_new(const fd_entry_t *e)
 {
     struct filemap *m = kzalloc(sizeof(*m));
@@ -535,6 +576,7 @@ struct vm_file *filemap_new(const fd_entry_t *e)
     m->vf.refs = 1;
     m->vf.fill = filemap_fill;
     m->vf.release = filemap_release;
+    m->vf.unlocked = filemap_reads_unlocked(e);
     m->entry = *e;
     m->entry.flags &= ~(uint32_t)FD_FLAG_CLOEXEC;
     fd_ofd_ref(m->entry.ofd);
@@ -581,6 +623,7 @@ struct vm_file *filemap_shared(const fd_entry_t *e, struct shmem *sh)
         sh->maps++;
         f->fill = NULL;
         f->share = filemap_share;
+        f->unlocked = 0;
     }
     return f;
 }

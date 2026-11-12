@@ -164,6 +164,10 @@ typedef enum {
  * gives the physical address of page `pgoff` in `*phys` and returns 0, -1
  * when the object has no page there now, which raises SIGBUS, or 1 to run
  * the access again, as `struct vm_device_ops`'s `page` says; it may sleep.
+ * The fault calls each with the regions' lock let go, and with the big lock
+ * held unless `unlocked` is set, which the owner sets for a file whose
+ * operations take only locks of their own, as Linux's filemap_fault takes
+ * no global lock (mm/filemap.c:3305-3370).
  */
 struct vm_file {
     uint32_t refs;
@@ -173,6 +177,7 @@ struct vm_file {
     char *path;           /* the file's path for /proc/PID/maps, or NULL */
     struct vm_file *dead; /* the next file waiting for `vm_file_reap` */
     int (*device)(struct vm_file *f, uint32_t pgoff, uintptr_t *phys);
+    int unlocked; /* `fill`, `share` and `device` run without the big lock */
 };
 
 /*
