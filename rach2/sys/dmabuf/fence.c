@@ -648,21 +648,42 @@ struct dma_fence *dma_fence_unwrap_merge(struct dma_fence **fences, uint32_t cou
     return out;
 }
 
-/** Read the earliest requested deadline of a fence. */
+/** Read the earliest requested deadline of a fence under its lock, as
+ * Linux's sw_sync_ioctl_get_deadline (drivers/dma-buf/sw_sync.c:452-458 of
+ * 6.12.115), since the 64-bit value is two words on i686. */
 int64_t dma_fence_deadline(struct dma_fence *f)
 {
-    return f ? f->deadline_ns : 0x7fffffffffffffffll;
+    uint32_t flags;
+    int64_t deadline;
+
+    if (!f)
+        return 0x7fffffffffffffffll;
+    flags = spin_lock_irqsave(&f->lock);
+    deadline = f->deadline_ns;
+    spin_unlock_irqrestore(&f->lock, flags);
+    return deadline;
 }
 
-/** Pass a deadline hint to all children without changing completion. */
+/**
+ * Pass a deadline hint to all children without changing completion. The
+ * fence keeps the earliest hint, compared and stored under its lock as
+ * Linux's timeline_fence_set_deadline (drivers/dma-buf/sw_sync.c:195-209 of
+ * 6.12.115), so that two waiters on different processors cannot lose the
+ * earlier one. The lock is given back before the children are visited, as
+ * Linux's array and chain hooks (dma-fence-array.c:152-160,
+ * dma-fence-chain.c:210-218) visit them under none.
+ */
 void dma_fence_set_deadline(struct dma_fence *f, int64_t deadline)
 {
     struct dma_fence_unwrap u;
     struct dma_fence *leaf;
+    uint32_t flags;
     if (!f)
         return;
+    flags = spin_lock_irqsave(&f->lock);
     if (deadline < f->deadline_ns)
         f->deadline_ns = deadline;
+    spin_unlock_irqrestore(&f->lock, flags);
     if (f->ops == &array_ops || f->ops == &chain_ops)
         for (leaf = dma_fence_unwrap_first(f, &u); leaf; leaf = dma_fence_unwrap_next(&u))
             dma_fence_set_deadline(leaf, deadline);
@@ -870,13 +891,30 @@ static const char *stub_name(struct dma_fence *f)
 
 static const struct dma_fence_ops stub_ops = {stub_name, stub_name, NULL, NULL, NULL, NULL};
 
-/** Return a reference to the shared signalled stub, made at first use. */
+/* The shared stub, and the lock over its making, as Linux's
+ * dma_fence_stub and dma_fence_stub_lock (drivers/dma-buf/dma-fence.c:27-28
+ * of 6.12.115). */
+static struct spinlock stub_lock = SPINLOCK_INIT_NAMED("dma_fence_stub");
+static struct dma_fence stub;
+
+/**
+ * Return a reference to the shared signalled stub, made at first use, as
+ * Linux's dma_fence_get_stub (drivers/dma-buf/dma-fence.c:131-148). The
+ * stub is made and signalled under `stub_lock`, so that two first callers
+ * on different processors make it once and neither takes a reference
+ * before it is whole: a second dma_fence_init would clear the references
+ * the first caller took, and a later put could then free the static
+ * record. Any context that may take a spinlock; the stub's own lock is
+ * taken under `stub_lock` once, at the signal.
+ */
 struct dma_fence *dma_fence_get_stub(void)
 {
-    static struct dma_fence stub;
+    uint32_t flags = spin_lock_irqsave(&stub_lock);
+
     if (!stub.ops) {
         dma_fence_init(&stub, &stub_ops, dma_fence_context_alloc(1), 0);
         dma_fence_signal(&stub);
     }
+    spin_unlock_irqrestore(&stub_lock, flags);
     return dma_fence_get(&stub);
 }
