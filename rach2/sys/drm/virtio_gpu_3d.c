@@ -318,11 +318,12 @@ int32_t vgpu_context_open(struct virtio_gpu_device *vg, struct drm_file *file)
 }
 
 /**
- * Queue the file's CTX_CREATE once, with the capability set and the name
- * CONTEXT_INIT gave, if any, else the device's default set and the calling
- * thread's name, as Linux's virtio_gpu_create_context_locked names it
- * (virtgpu_ioctl.c:42-60 in 6.12.115); return 0 or -errno without a fence
- * wait.
+ * Queue the file's CTX_CREATE once, with the capability set CONTEXT_INIT
+ * gave, else the device's default set, and the name it gave, an empty one
+ * included, else the calling thread's, as Linux's
+ * virtio_gpu_create_context_locked keeps the name's presence apart from
+ * its contents with explicit_debug_name (virtgpu_ioctl.c:42-60 and
+ * 655-667 in 6.12.115); return 0 or -errno without a fence wait.
  */
 int32_t vgpu_context_ensure(struct virtio_gpu_device *vg, struct drm_file *file)
 {
@@ -346,7 +347,7 @@ int32_t vgpu_context_ensure(struct virtio_gpu_device *vg, struct drm_file *file)
     req = (struct virtio_gpu_ctx_create *)(void *)cmd->page;
     req->hdr.ctx_id = ctx->id;
     req->context_init = ctx->context_init;
-    name = ctx->debug_name[0] ? ctx->debug_name : current_proc ? current_proc->comm : "";
+    name = ctx->explicit_debug_name ? ctx->debug_name : current_proc ? current_proc->comm : "";
     req->nlen = (uint32_t)k_strlen(name);
     k_memcpy(req->debug_name, name, req->nlen);
     vgpu_cmd_send(cmd, NULL, NULL);
