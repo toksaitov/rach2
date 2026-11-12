@@ -9,6 +9,7 @@
 #include "../fs/file.h"
 #include "../fs/krffs.h"
 #include "../proc/process.h"
+#include "../proc/sched.h"
 #include "../mm/usercopy.h"
 #include "../mm/paging.h"
 #include "../mm/mm.h"
@@ -386,11 +387,29 @@ static int fd_is_nonblock(fd_entry_t *e)
     return e->ofd && (e->ofd->status_flags & OFD_NONBLOCK);
 }
 
-/** Wake the waiters on one end's queue `wq` for a change of the kinds
+/**
+ * Wake the waiters on one end's queue `wq` for a change of the kinds
  * `kinds` (`wq_wake`), and the pollers of a FIFO's descriptions open on both
- * ends, whose readiness any change can move. */
+ * ends, whose readiness any change can move. A pipe no poll has asked about
+ * (`polled`) has no pollers and no count of wakes that anyone reads, so the
+ * change wakes `wq` only with a sleeper on it, as Linux's `pipe_write`
+ * wakes the readers only of a pipe that was empty or has been polled, and
+ * `pipe_read` the writers only of one that was full (fs/pipe.c in 6.12): a
+ * wake of an empty queue costs a pass with interrupts off. The barrier
+ * orders the change before the reads of `polled` and the queue, as the
+ * unlock of the queue a sleeper files itself on (`wq_wait`) and the barrier
+ * after `pipe_poll` sets `polled` order theirs before they read the pipe:
+ * either they see the change or this sees them.
+ */
 static void pipe_wake(pipe_t *p, wait_queue_t *wq, uint32_t kinds)
 {
+    sched_mb();
+    if (!p->polled) {
+        if (wq_active(wq)) {
+            wq_wake(wq, kinds);
+        }
+        return;
+    }
     wq_wake(wq, kinds);
     if (p->rdwr_open) {
         wq_wake(&p->rdwr_wq, kinds);
@@ -1299,7 +1318,9 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
  * after poll_wait (fs/pipe.c:656-705): every change a poller waits for is
  * made before the wake of the queue named here, whose lock the poller's
  * record went on under before this read, so the read sees the change or the
- * wake finds the poller.
+ * wake finds the poller. The first poll marks the pipe polled, and passes
+ * a barrier before it reads, so that every change after it wakes and
+ * counts (`pipe_wake`).
  */
 static short pipe_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
@@ -1309,6 +1330,10 @@ static short pipe_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     int readers, writers;
     short revents = 0;
 
+    if (!p->polled) {
+        p->polled = 1;
+        sched_mb();
+    }
     if (wq) {
         if ((e->flags & FD_FLAG_READ) && (e->flags & FD_FLAG_WRITE)) {
             *wq = &p->rdwr_wq;
