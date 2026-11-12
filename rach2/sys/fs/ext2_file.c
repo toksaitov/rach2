@@ -428,10 +428,14 @@ static int frame_copy(const struct frame_read *fr, uint32_t i, uint64_t at)
  *
  * With `fr->done` a run goes to the device without a wait (`frame_start`),
  * and the completion is called for each page once: by the device's answer
- * for a run so started, and here for a hole, a copied page, a run the
- * device takes no such read of and the file's last page, which is cleared
- * past the size after its transfer. The pages counted then are those the
- * completion was or will be called for, a failed one among them.
+ * for a run so started, and here for a hole, a copied page and a run the
+ * device takes no such read of. A run so started takes the file's last
+ * page as the device has it, with no clearing after: the bytes of a block
+ * past the size are zeros on the device, since a truncation clears them
+ * and a new block's image starts as zeros, as Linux's `do_mpage_readpage`
+ * reads the last block whole and clears only the blocks past it
+ * (fs/mpage.c). The pages counted then are those the completion was or
+ * will be called for, a failed one among them.
  */
 static uint32_t frame_fill(const struct frame_read *fr, uint32_t pg, uint32_t left, int *err)
 {
@@ -456,11 +460,7 @@ static uint32_t frame_fill(const struct frame_read *fr, uint32_t pg, uint32_t le
                           plan[i + run] == plan[i] + run * (PAGE_SIZE / BLOCK_SECTOR_SIZE);
                  run++) {
             }
-            if (fr->done && at + (uint64_t)run * PAGE_SIZE > size && run > 1) {
-                run--; /* the last page, cleared past the size, is read in the call */
-            }
-            rc = fr->done && at + (uint64_t)run * PAGE_SIZE <= size ? frame_start(fr, i, run)
-                                                                    : -EAGAIN;
+            rc = fr->done ? frame_start(fr, i, run) : -EAGAIN;
             if (rc != -EAGAIN) {
                 i += run;
                 if (rc != 0) {
