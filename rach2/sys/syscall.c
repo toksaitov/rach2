@@ -194,6 +194,8 @@ long compat_sys_ioctl(isr_params_t *params);
 /* i386's rt_sigprocmask (arch/x86_64/ia32_signal.c), which calls the native
  * handler and runs without the big lock as it does (`init_syscall`). */
 long compat_sys_rt_sigprocmask(isr_params_t *params);
+/* i386 socketcall uses the same per-family lock dispatch as native calls. */
+long compat_sys_socketcall(isr_params_t *params);
 #endif
 
 /* The numbers of each table whose calls run without the big lock
@@ -3619,7 +3621,7 @@ static void _syscall_handler(isr_params_t *params)
  * handlers (`syscall_unlock`): read, write, pread64, pwrite64, ioctl, fstat
  * and close run a descriptor's operations without the big lock only for a
  * type that declares FILE_OPS_UNLOCKED (`fd_call_lock`, `file_ops_lock`),
- * and readv and writev for a pipe end (`vec_call_lock`),
+ * and readv and writev for a pipe end or Unix socket (`vec_call_lock`),
  * or for a file or directory of a type that sets `reads_unlocked`
  * (`file_vfs_unlocked`); getdents64 lists such a directory, fstatat and
  * newfstatat stat a path the name cache finishes (`stat_at_unlocked`), and
@@ -3683,6 +3685,30 @@ static void syscall_epoll_unlock(void)
     }
 }
 
+/**
+ * Mark socket entries unlocked: Unix sockets have their own locks and
+ * socket_call takes the big lock for another family alone. Argument and
+ * message-vector conversions touch only the caller's state and use the
+ * address space's lock for user copies.
+ */
+static void syscall_socket_unlock(void)
+{
+    static syscall_fn_t const calls[] = {
+        sys_socketcall, sys_socket,   sys_socketpair,  sys_bind,           sys_connect,
+        sys_listen,     sys_accept4,  sys_getsockname, sys_getpeername,    sys_sendto,
+        sys_recvfrom,   sys_sendmsg,  sys_recvmsg,     sys_shutdown,       sys_setsockopt,
+        sys_getsockopt, sys_sendmmsg, sys_recvmmsg,    sys_recvmmsg_time64};
+    uint32_t i;
+
+    for (i = 0; i < sizeof(calls) / sizeof(calls[0]); i++) {
+        syscall_unlock(SYSCALL_ABI_NATIVE, calls[i]);
+        syscall_unlock(SYSCALL_ABI_IA32, calls[i]);
+    }
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    syscall_unlock(SYSCALL_ABI_IA32, compat_sys_socketcall);
+#endif
+}
+
 void init_syscall(void)
 {
     uint32_t i;
@@ -3711,6 +3737,7 @@ void init_syscall(void)
 #endif
     unlock_file_calls();
     syscall_epoll_unlock();
+    syscall_socket_unlock();
     syscall_mm_unlock();
     syscall_futex_unlock();
 
