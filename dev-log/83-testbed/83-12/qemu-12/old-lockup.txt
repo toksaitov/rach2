@@ -1,0 +1,32 @@
+<6>[7.460000] nmi_watchdog: counter: amd core version 0, 48 bits, 4192 MHz
+<6>[7.463000] nmi_watchdog: enabled: permanently consumes one hw-PMU counter
+<2>[222.459000] watchdog: watchdog detected hard LOCKUP on cpu 0
+<3>[222.459000] watchdog: CPU: 0 PID: 0 Comm: idle Not tainted 6.18.0-rach2
+<3>[222.459000] watchdog: RIP: 0010:0xffffffff803ba7ae
+<3>[222.459000] watchdog: RSP: 0018:ffffc00000669d88 EFLAGS: 00000096
+<3>[222.459000] watchdog: RAX: 0000000000000086 RBX: 0000000000000000 RCX: ffffffff809c8d0c
+<3>[222.459000] watchdog: RDX: 0000000000000001 RSI: 0000000000000000 RDI: 0000000000000086
+<3>[222.459000] watchdog: RBP: ffffc00000669da0 R08: 0000000000000000 R09: 0000000000000000
+<3>[222.459000] watchdog: R10: 0000000000000000 R11: 0000000000000246 R12: 0000000000000000
+<3>[222.459000] watchdog: R13: 0000000000000000 R14: 0000000000000000 R15: 0000000000000000
+<3>[222.459000] watchdog: Call Trace:
+<3>[222.459000] watchdog:  0xffffffff801f68c0
+<3>[222.459000] watchdog:  0xffffffff801f757b
+<3>[222.459000] watchdog:  0xffffffff80102120
+<3>[222.459000] watchdog:  0xffffffff80102273
+<3>[222.459000] watchdog:  0xffffffff80395350
+<3>[222.459000] watchdog:  0xffffffff8039599a
+<3>[222.459000] watchdog:  0xffffffff80395c49
+<3>[222.459000] watchdog:  0xffffffff80335ba5
+<3>[222.459000] watchdog:  0xffffffff801003af
+<3>[222.459000] watchdog:  0xffffffff801fa73b
+<3>[222.459000] watchdog:  0xffffffff801f9c87
+<3>[222.459000] watchdog:  0xffffffff801f7e5b
+run: starting: architecture x86_64, workers 8, accelerator kvm, a selection of 1 case
+run: bed-shm: machine.bed-shm.nocopy: starting
+run: bed-shm: machine.bed-shm.nocopy: evidence: /home/toksaitov-m/rach2/build/worktrees/t4277/build/tests/failed/tests.x86_64.20261112T064405Z.2138457.machine.bed-shm.nocopy.r0
+run: bed-shm: machine.bed-shm.nocopy on x86_64: failure: attach failed: Rach2 SSH client: the case was stopped
+run: bed-shm: FAIL in 1278s
+run: result: failed: bed-shm
+run: result: failed
+run: result: interrupted by term
