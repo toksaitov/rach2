@@ -805,11 +805,11 @@
     },
     {
       "case_id": "machine.ext2.repair",
-      "behavior": "One copy of the ext2 root taken through the boots that carry its state: a write and a kill, volumes made in files on the second partition, the dirty root checked and unmounted clean, a lost block kept for e2fsck with the error bit set, a fault that mounts the root writable with the error bit set, as Linux, a recovery boot that changes nothing without rach2.fsck and one whose init repairs both disks with it, and a clean boot after",
+      "behavior": "One copy of the ext2 root taken through the boots that carry its state: a write and a kill, volumes made in files on the second partition, the dirty root checked and unmounted clean, a lost block kept for e2fsck with the error bit set, a fault that mounts the root writable with the error bit set, as Linux, and leaves its file whole through the boot's writes and the repair, a recovery boot that changes nothing without rach2.fsck and one whose init repairs both disks with it, and a clean boot after",
       "units": ["ext2", "rach2/sys/fs/ext2.c", "rach2/sys/fs/ext2_alloc.c", "rach2/sys/fs/ext2_batch.c", "rach2/sys/fs/ext2_check.c", "rach2/sys/fs/ext2_dir.c", "rach2/sys/fs/ext2_file.c", "utils/init.c"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"root_mib": 96, "second_mib": 32, "lost_block": 20000, "freed": "/etc/hostname", "sector": 16383}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": [], "inputs": {"root_mib": 96, "second_mib": 32, "lost_block": 20000, "miscounted": "/etc/hostname", "sector": 16383}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["root-disk"]}, {"fixture": "disk", "names": ["image-disk", "image-transfer"]}], "children": "none", "cleanup": "libetude-case ends the machines and removes the disk copy, the second disk and the volumes read out of the copy, which it keeps after a failure"},
       "steps": [
@@ -819,10 +819,10 @@
         {"step_id": "dirty", "stage": "execute", "machine": "root", "does": "read the superblock's state, boot the copy, read /root/first and /proc/mounts, power off, and run e2fsck on the first partition"},
         {"step_id": "lose", "stage": "execute", "does": "mark block 20000 used and clear the valid bit with debugfs"},
         {"step_id": "lost", "stage": "execute", "machine": "root", "does": "boot the copy, read /proc/mounts, write /root/again, power off, read the superblock's state and run e2fsck"},
-        {"step_id": "damage", "stage": "execute", "does": "mark the inode of /etc/hostname free with debugfs"},
+        {"step_id": "damage", "stage": "execute", "does": "read /etc/hostname and set its link count to 3 with debugfs"},
         {"step_id": "fault", "stage": "execute", "machine": "root", "does": "boot the copy, read /proc/mounts and power off"},
         {"step_id": "look", "stage": "execute", "machine": "look", "does": "hash the copy, boot the recovery system on it without rach2.fsck, reach its shell, end the machine and hash the copy again"},
-        {"step_id": "repair", "stage": "execute", "machine": "repair", "does": "copy the disk into the second disk, boot the recovery system with rach2.fsck on both, write a sector of the second partition through its node and back, end the machine, and run e2fsck"},
+        {"step_id": "repair", "stage": "execute", "machine": "repair", "does": "copy the disk into the second disk, boot the recovery system with rach2.fsck on both, write a sector of the second partition through its node and back, end the machine, run e2fsck and read /etc/hostname with debugfs"},
         {"step_id": "clean", "stage": "execute", "machine": "root", "does": "boot the repaired copy, read /proc/mounts and /root/again, and power off"}
       ],
       "machines": [
@@ -859,8 +859,8 @@
         {"assertion_id": "lost-error-bit", "checks": "the poweroff left the superblock's state 2, the error bit", "source": "scenario"},
         {"assertion_id": "lost-e2fsck", "checks": "the host's e2fsck -fn exits 4 on the first partition", "source": "scenario"},
         {"assertion_id": "lost-bitmap", "checks": "e2fsck names the block bitmap's differences", "source": "scenario"},
-        {"assertion_id": "fault-writable", "checks": "with an inode in use marked free, /proc/mounts has /dev/disk0p1 / ext2 rw,relatime 0 0, as Linux mounts a volume with errors", "source": "scenario"},
-        {"assertion_id": "fault-record", "checks": "the kernel says ext2: check: inode N: a reached inode the bitmap calls free", "source": "scenario"},
+        {"assertion_id": "fault-writable", "checks": "with a link count above its names, /proc/mounts has /dev/disk0p1 / ext2 rw,relatime 0 0, as Linux mounts a volume with errors", "source": "scenario"},
+        {"assertion_id": "fault-record", "checks": "the kernel says ext2: check: inode N: a link count that does not match its names", "source": "scenario"},
         {"assertion_id": "fault-reason", "checks": "the kernel says ext2: mounting with errors, running e2fsck is recommended", "source": "scenario"},
         {"assertion_id": "fault-error-bit", "checks": "the poweroff left the superblock's state 2, the error bit", "source": "scenario"},
         {"assertion_id": "look-same", "checks": "a recovery boot without rach2.fsck reaches its shell and leaves every byte of the disk as it was", "source": "scenario"},
@@ -872,6 +872,7 @@
         {"assertion_id": "repair-e2fsck", "checks": "the host's e2fsck -fn exits 0 on the repaired partition", "source": "scenario"},
         {"assertion_id": "repair-valid", "checks": "the repair left the superblock's state 1", "source": "scenario"},
         {"assertion_id": "repair-changed", "checks": "the repair changed the disk", "source": "scenario"},
+        {"assertion_id": "repair-kept", "checks": "after the writable boot with the fault and the repair, debugfs reads /etc/hostname as it read it before the damage", "source": "scenario"},
         {"assertion_id": "clean-mounted", "checks": "the repaired root mounts rw", "source": "scenario"},
         {"assertion_id": "clean-kept", "checks": "it reads again from /root/again, which the lost block's boot wrote", "source": "scenario"},
         {"assertion_id": "clean-unchecked", "checks": "the kernel never says ext2: check of the repaired root", "source": "scenario"}
