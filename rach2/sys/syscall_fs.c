@@ -1456,7 +1456,8 @@ static uint32_t iov_prefix(struct kernel_iovec *iov, int count, int into);
 
 /** Import the vector once and write it whole to a pty master, under the
  * pair's lock (`pty_master_writev`), or to a pipe end as one write
- * (`pipe_writev`). `entry` is held and open for writing, and `count` is in
+ * (`pipe_writev`), or a Unix socket as one send (`unix_writev`).
+ * `entry` is held and open for writing, and `count` is in
  * range. Return the bytes written or an import, allocation or write error. */
 static long writev_whole(fd_entry_t *entry, uintptr_t addr, int count)
 {
@@ -1471,8 +1472,13 @@ static long writev_whole(fd_entry_t *entry, uintptr_t addr, int count)
     }
     rc = iov_import(iov, addr, count, -1);
     if (rc > 0) {
-        rc = entry->type == FD_TYPE_PTM ? pty_master_writev(entry, iov, count)
-                                        : pipe_writev(entry, iov, count);
+        if (entry->type == FD_TYPE_PTM) {
+            rc = pty_master_writev(entry, iov, count);
+        } else if (entry->type == FD_TYPE_UNIX) {
+            rc = unix_writev(entry, iov, count, (uint32_t)rc);
+        } else {
+            rc = pipe_writev(entry, iov, count);
+        }
     }
     if (iov != local) {
         kfree(iov);
@@ -1487,8 +1493,9 @@ static long writev_whole(fd_entry_t *entry, uintptr_t addr, int count)
  * would grow a sealed tmpfs file is cut to the whole 2 MiB chunks before its
  * end (`iov_file_write`). A pty master imports the vector once and holds its
  * write lock across it, and a pipe end takes it as one write, as Linux's
- * `pipe_write` takes it (`writev_whole`). Otherwise elements are written in
- * order (`writev_elements`). The vector is checked whole first
+ * `pipe_write` takes it; a Unix socket sends the vector as one send, as
+ * Linux's sock_write_iter does (`writev_whole`). Otherwise elements are
+ * written in order (`writev_elements`). The vector is checked whole first
  * (`iov_import`), and its total cut at MAX_RW_COUNT. The descriptor is
  * checked before the count and the vector, as Linux tests FMODE_WRITE
  * first, and a vector of no bytes then returns 0 without a write
@@ -1515,7 +1522,7 @@ static long writev(int fd, uintptr_t iov_user, int iovcnt)
         return -EINVAL;
     }
     entry = fd_get(current_proc->fds, fd);
-    if (entry && (entry->type == FD_TYPE_PTM || pipe_is(entry))) {
+    if (entry && (entry->type == FD_TYPE_PTM || entry->type == FD_TYPE_UNIX || pipe_is(entry))) {
         return writev_whole(entry, iov_user, iovcnt);
     }
     if (iov_mount_file(entry)) {

@@ -193,6 +193,11 @@ struct kernel_iovec;
  */
 int32_t unix_readv(fd_entry_t *e, const struct kernel_iovec *iov, int count, uint32_t total);
 
+/** writev(2) on a socket, with the imported `count` elements of `iov` and
+ * their `total` bytes: one message for a datagram or sequenced packet, and
+ * one send across the vector for a stream, as unix_sendto sends it. */
+int32_t unix_writev(fd_entry_t *e, const struct kernel_iovec *iov, int count, uint32_t total);
+
 /**
  * sendmsg(2) of the caller's struct msghdr at `msg`: the bytes of its
  * vectors, to its name when it has one, as `unix_sendto` sends them, with
