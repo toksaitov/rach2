@@ -90,7 +90,10 @@ struct fs_struct {
      * and `..` stops there. */
     struct vfs_mount *root_mnt;
     void *root_node;
-    /* Guards the two pairs above, which change under the big lock and this,
+    /* The count of changes of the root, under `lock`, by which a walk
+     * without the big lock sees that the root it began with has moved. */
+    uint32_t root_seq;
+    /* Guards the members above, which change under the big lock and this,
      * for a walk that reads the root without the big lock (vfs.c). */
     struct spinlock lock;
     /* File-creation mask (umask(2)), low 9 bits. */
