@@ -9,13 +9,16 @@
 #include "../arch/arch.h"
 #include "../arch/x86/kcpu.h"
 #include "../lib/kerrno.h"
+#include "../lib/kirq.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
+#include "../proc/percpu.h"
 
 #define MSR_IA32_P5_MC_ADDR    0x000u
 #define MSR_IA32_P5_MC_TYPE    0x001u
 #define MSR_IA32_TSC           0x010u
 #define MSR_IA32_TSC_ADJUST    0x03Bu
+#define MSR_IA32_PRED_CMD      0x049u
 #define MSR_IA32_UCODE_REV     0x08Bu
 #define MSR_PLATFORM_INFO      0x0CEu
 #define MSR_IA32_POWER_CTL     0x1FCu
@@ -24,6 +27,7 @@
 #define MSR_IA32_SYSENTER_CS   0x174u
 #define MSR_IA32_SYSENTER_ESP  0x175u
 #define MSR_IA32_SYSENTER_EIP  0x176u
+#define MSR_IA32_FLUSH_CMD     0x10Bu
 #define MSR_IA32_MCG_CAP       0x179u
 #define MSR_IA32_MCG_STATUS    0x17Au
 #define MSR_IA32_MCG_CTL       0x17Bu
@@ -51,6 +55,7 @@
 #define MSR_AMD64_SYSCFG       0xC0010010u
 #define MSR_K7_HWCR            0xC0010015u
 #define MSR_AMD64_NB_CFG       0xC001001Fu
+#define MSR_AMD64_VIRT_SPEC    0xC001011Fu
 
 #define EFER_SCE 0x001ull
 #define EFER_LMA 0x400ull
@@ -73,6 +78,12 @@
 #define HWCR_IGNORED      ((1ull << 3) | (1ull << 6) | (1ull << 8))
 
 #define GP_VECTOR 13
+
+/* SPEC_CTRL's and VIRT_SPEC_CTRL's SSBD; PRED_CMD's IBPB, the one command
+ * offered; FLUSH_CMD's L1D flush. */
+#define SPEC_CTRL_SSBD (1ull << 2)
+#define PRED_CMD_IBPB  1ull
+#define L1D_FLUSH      1ull
 
 /* The x2APIC's MSRs, which no filter denies. */
 #define MSR_X2APIC_FIRST 0x800u
@@ -171,9 +182,52 @@ static int host_rdtscp(void)
     return (d >> 27) & 1u;
 }
 
+/**
+ * Whether the host takes `value` in IA32_SPEC_CTRL: written and the old
+ * value put back, as Linux's kvm_spec_ctrl_test_value (x86.c:12867-12890),
+ * which leaves to the processor which bits it has. 0 where the host has no
+ * such MSR.
+ */
+static int spec_ctrl_ok(uint64_t value)
+{
+    uint64_t saved;
+    uint32_t flags = kirq_save();
+    int ok = 0;
+
+    if (kcpu_rdmsr_safe(MSR_IA32_SPEC_CTRL, &saved) == 0 &&
+        kcpu_wrmsr_safe(MSR_IA32_SPEC_CTRL, value) == 0) {
+        (void)kcpu_wrmsr_safe(MSR_IA32_SPEC_CTRL, saved);
+        ok = 1;
+    }
+    kirq_restore(flags);
+    return ok;
+}
+
+/* Each processor's IA32_SPEC_CTRL, once `spec_host_read` is set there. The
+ * kernel never writes it. */
+static uint64_t spec_host[NR_CPUS];
+static uint8_t spec_host_read[NR_CPUS];
+
+uint64_t kvm_spec_ctrl_host(int cpu)
+{
+    if (!spec_host_read[cpu]) {
+        if (kcpu_rdmsr_safe(MSR_IA32_SPEC_CTRL, &spec_host[cpu]) != 0) {
+            spec_host[cpu] = 0;
+        }
+        spec_host_read[cpu] = 1;
+    }
+    return spec_host[cpu];
+}
+
+uint64_t kvm_spec_ctrl_guest(const struct kvm_vcpu *v)
+{
+    return v->spec_ctrl | (v->virt_spec_ctrl & SPEC_CTRL_SSBD);
+}
+
 const uint32_t *kvm_msr_list(int feature, uint32_t *n)
 {
-    static uint32_t list[N_INDEX + 32u];
+    static uint32_t list[N_INDEX + 40u];
+    uint64_t probe;
     uint32_t i;
 
     if (feature) {
@@ -189,6 +243,14 @@ const uint32_t *kvm_msr_list(int feature, uint32_t *n)
      * the four last-branch MSRs beside it (x86.c:324-325) wherever AMD's
      * host has them. */
     list[(*n)++] = MSR_IA32_DEBUGCTL;
+    /* SPEC_CTRL where the host has it, as Linux's kvm_probe_msr_to_save,
+     * and SVM's VIRT_SPEC_CTRL among the emulated MSRs (x86.c:313, 403). */
+    if (kcpu_rdmsr_safe(MSR_IA32_SPEC_CTRL, &probe) == 0) {
+        list[(*n)++] = MSR_IA32_SPEC_CTRL;
+    }
+    if (kvm_backend == &kvm_svm) {
+        list[(*n)++] = MSR_AMD64_VIRT_SPEC;
+    }
     for (i = 0; kvm_backend == &kvm_svm && i < N_LASTBRANCH; i++) {
         list[(*n)++] = MSR_LASTBRANCH_FROM + i;
     }
@@ -302,6 +364,8 @@ void kvm_msr_reset(struct kvm_vcpu *v)
     v->misc_features = 0;
     v->hwcr = 0;
     v->power_ctl = 0;
+    v->spec_ctrl = 0;
+    v->virt_spec_ctrl = 0;
 }
 
 /** The value of the table's MSR `index` of `v`, 0 when it has none. */
@@ -382,6 +446,93 @@ static int guest_xsaves(const struct kvm_vcpu *v)
     return e && (e->eax & CPUID_D1_XSAVES);
 }
 
+/** Whether `v`'s CPUID has any of `bits` in leaf 7's EDX, or with `amd` in
+ * leaf 0x80000008's EBX. */
+static int guest_spec(const struct kvm_vcpu *v, int amd, uint32_t bits)
+{
+    const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(v, amd ? 0x80000008u : 7u, 0);
+
+    return e && ((amd ? e->ebx : e->edx) & bits) != 0;
+}
+
+/** Whether `v`'s guest has IA32_SPEC_CTRL, as Linux's
+ * guest_has_spec_ctrl_msr (arch/x86/kvm/cpuid.h:153-159). */
+static int guest_spec_ctrl(const struct kvm_vcpu *v)
+{
+    return guest_spec(v, 0, CPUID_7_SPEC_CTRL) ||
+           guest_spec(v, 1, CPUID_X8_IBRS | CPUID_X8_STIBP | CPUID_X8_SSBD);
+}
+
+/**
+ * Write the command `value` to PRED_CMD or FLUSH_CMD, `index`, for the
+ * caller with `host` or the guest, as Linux's kvm_set_msr_common
+ * (x86.c:3381-3421): IBPB where the guest's CPUID and the host have the
+ * barrier, the L1D flush where both have it, and 0 as no command. The
+ * command runs on the host's processor. 0, or KVM_MSR_INVAL.
+ */
+static int command_set(const struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
+{
+    if (index == MSR_IA32_PRED_CMD) {
+        if (!host && !guest_spec(v, 0, CPUID_7_SPEC_CTRL) && !guest_spec(v, 1, CPUID_X8_IBPB)) {
+            return KVM_MSR_INVAL;
+        }
+        if ((value & ~PRED_CMD_IBPB) || (value && !kvm_cpuid_host_has(0x80000008u, 1, 12))) {
+            return KVM_MSR_INVAL;
+        }
+    } else {
+        if (!host && !guest_spec(v, 0, CPUID_7_FLUSH_L1D)) {
+            return KVM_MSR_INVAL;
+        }
+        if ((value & ~L1D_FLUSH) || !kvm_cpuid_host_has(7, 3, 28)) {
+            return KVM_MSR_INVAL;
+        }
+    }
+    if (value) {
+        (void)kcpu_wrmsr_safe(index, value);
+    }
+    return 0;
+}
+
+/**
+ * Read or, with `write`, write `v`'s speculation control `index` for the
+ * caller with `host` or the guest: SPEC_CTRL, which the backend loads
+ * around each run and every access of which exits, PRED_CMD and FLUSH_CMD,
+ * which only take a write, and SVM's VIRT_SPEC_CTRL, whose SSBD the backend
+ * adds to SPEC_CTRL while the guest runs. As Linux's svm_get_msr,
+ * svm_set_msr (svm/svm.c:2987-3002, 3120-3156) and vmx's: a guest's access
+ * needs the CPUID that offers the register, and SPEC_CTRL takes a value the
+ * host's register takes. 0, KVM_MSR_INVAL, or 1 when `index` is none of
+ * them, or PRED_CMD or FLUSH_CMD read.
+ */
+static int spec_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host)
+{
+    uint64_t *reg = &v->spec_ctrl;
+
+    if (index == MSR_IA32_PRED_CMD || index == MSR_IA32_FLUSH_CMD) {
+        return write ? command_set(v, index, *value, host) : 1;
+    }
+    if (index == MSR_IA32_SPEC_CTRL) {
+        if ((!host && !guest_spec_ctrl(v)) || (write && !spec_ctrl_ok(*value))) {
+            return KVM_MSR_INVAL;
+        }
+    } else if (index == MSR_AMD64_VIRT_SPEC && kvm_backend == &kvm_svm) {
+        if ((!host && !guest_spec(v, 1, CPUID_X8_VIRT_SSBD)) ||
+            (write && (*value & ~SPEC_CTRL_SSBD))) {
+            return KVM_MSR_INVAL;
+        }
+        reg = &v->virt_spec_ctrl;
+    } else {
+        return 1;
+    }
+    if (!write) {
+        *value = *reg;
+        return 0;
+    }
+    *reg = *value;
+    v->dirty |= KVM_PART_MSRS;
+    return 0;
+}
+
 int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
 {
     uint32_t bank, reg;
@@ -396,6 +547,9 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
     }
     if (r == 1) {
         r = kvm_pmu_msr(v, index, 0, value, 1);
+    }
+    if (r == 1) {
+        r = spec_msr(v, index, 0, value, host);
     }
     if (r != 1) {
         return r;
@@ -654,6 +808,9 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
     }
     if (slot == 1) {
         slot = kvm_pmu_msr(v, index, 1, &value, 1);
+    }
+    if (slot == 1) {
+        slot = spec_msr(v, index, 1, &value, host);
     }
     if (slot != 1) {
         return slot;

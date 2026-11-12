@@ -2186,31 +2186,42 @@ static void host_crs(struct vmx_vcpu *x)
     }
 }
 
+/** Put `v`'s IA32_SPEC_CTRL in force on processor `cpu` before an entry
+ * with `in`, or the host's back after the exit without, where the two
+ * differ, as Linux's __vmx_vcpu_run and vmx_spec_ctrl_restore_host. Every
+ * access of the guest's exits, so the two calls of a run see one value. */
+static void spec_switch(const struct kvm_vcpu *v, int cpu, int in)
+{
+    uint64_t guest = kvm_spec_ctrl_guest(v), host = kvm_spec_ctrl_host(cpu);
+
+    if (guest != host) {
+        vmx_op->wrmsr(MSR_IA32_SPEC_CTRL, in ? guest : host);
+    }
+}
+
 /**
- * Run the guest until its next exit, with interrupts off and without the
- * big lock, as Linux's vmx_vcpu_run (vmx.c:7338-7476): the VMCS current
- * (`vmx_load`) and brought up to date; the host's state saved and the
- * guest's MSRs and floating-point state loaded at the first entry of a
- * KVM_RUN or after a switch away, to stay until `vmx_put`; the guest's
- * XCR0, PKRU and debug registers in; HOST_CR3, HOST_CR4 and the EPT
- * pointer written only where they changed; VMLAUNCH, or VMRESUME once an
- * entry of the VMCS succeeded, as Linux's __vmx_vcpu_run_flags chooses
- * (vmx.c:948-953); at the exit the host's XCR0, PKRU and debug registers
- * back and the exit read, with the VMCS left current and VMX on. The
- * selectors, tables and MSRs the exit leaves the guest's or changed wait
- * for `vmx_put`: the kernel between two runs uses none of them. The launch
- * state is set after an exit that is no failed entry, as Linux's
- * vmx_vcpu_run sets `launched` (vmx.c:7476-7488). An NMI or a machine
- * check the run took from the host reaches the host's own handler after
- * the exit is read, as Linux's vmx_do_nmi_irqoff and kvm_machine_check
- * pass them on; the host's interrupt that ended the run waits until the
- * run loop turns interrupts on. Under the caller's single step the STI and
- * MOV SS shadow ends before the entry, as Linux's vmx_vcpu_run ends it:
+ * Run the guest until its next exit, with interrupts off and without the big
+ * lock, as Linux's vmx_vcpu_run (vmx.c:7338-7476): the VMCS current
+ * (`vmx_load`) and brought up to date; the host's state saved and the guest's
+ * MSRs and floating-point state loaded at the first entry of a KVM_RUN or after
+ * a switch away, to stay until `vmx_put`; the guest's XCR0, PKRU, debug
+ * registers and SPEC_CTRL in; HOST_CR3, HOST_CR4 and the EPT pointer written
+ * only where they changed; VMLAUNCH, or VMRESUME once an entry of the VMCS
+ * succeeded, as Linux's __vmx_vcpu_run_flags chooses (vmx.c:948-953); at the
+ * exit the host's XCR0, PKRU, debug registers and SPEC_CTRL back and the exit
+ * read, with the VMCS left current and VMX on. The selectors, tables and MSRs
+ * the exit leaves the guest's or changed wait for `vmx_put`: the kernel between
+ * two runs uses none of them. The launch state is set after an exit that is no
+ * failed entry, as Linux's vmx_vcpu_run sets `launched` (vmx.c:7476-7488). An
+ * NMI or a machine check the run took from the host reaches the host's own
+ * handler after the exit is read, as Linux's vmx_do_nmi_irqoff and
+ * kvm_machine_check pass them on; the host's interrupt that ended the run waits
+ * until the run loop turns interrupts on. Under the caller's single step the
+ * STI and MOV SS shadow ends before the entry, as Linux's vmx_vcpu_run ends it:
  * the step over STI or MOV SS has been taken by the caller, and the shadow
- * under TF would make the entry fail for want of a pending single-step
- * trap. While `v->emul.resume` is set no guest runs: the next step of the
- * instruction under way is `exit`'s. 0, or -EIO when VMX cannot be turned
- * on here.
+ * under TF would make the entry fail for want of a pending single-step trap.
+ * While `v->emul.resume` is set no guest runs: the next step of the instruction
+ * under way is `exit`'s. 0, or -EIO when VMX cannot be turned on here.
  */
 static int vmx_enter(struct kvm_vcpu *v)
 {
@@ -2264,9 +2275,11 @@ static int vmx_enter(struct kvm_vcpu *v)
     host_debugctl = pmu_enter(v);
     fpu_enter(v, fpu_dirty);
     dr_load(v, host_db);
+    spec_switch(v, cpu, 1);
     v->xs_in = arch_cycles();
     x->ex.failed = vmx_op->run(&v->regs, &v->sregs.cr2, x->launched);
     v->xs_out = arch_cycles();
+    spec_switch(v, cpu, 0);
     dr_store(v, host_db);
     fpu_leave(v);
     if (host_debugctl) {

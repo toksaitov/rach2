@@ -57,17 +57,22 @@
  * PKU, since a guest's XCR0 may not name PKRU (XCR0_KERNEL), nor LA57
  * before the guest-physical tables have five levels, nor WAITPKG or
  * SGX_LC. EDX: the
- * AVX-512 and string extensions, MD_CLEAR, SERIALIZE and TSXLDTRK; not
- * the speculation controls or ARCH_CAPABILITIES, whose MSRs are not
- * offered, nor AMX, whose state the kernel does not save. */
+ * AVX-512 and string extensions, MD_CLEAR, SERIALIZE and TSXLDTRK, and the
+ * speculation controls, which `spec_bits` completes; not ARCH_CAPABILITIES,
+ * whose value names the host's flaws, which the kernel does not track, nor
+ * AMX, whose state the kernel does not save. */
 #define L7_EBX        0xFDBF2FFBu
 #define L7_ECX        0x1B405F46u
-#define L7_EDX        0x0081451Cu
+#define L7_EDX        0x9C81451Cu
 /* The bits of leaf 7 that need AVX-512's state, and AVX2, AVX's. */
 #define L7_EBX_AVX512 0xDC230000u
 #define L7_ECX_AVX512 0x00005842u
 #define L7_EDX_AVX512 0x0080010Cu
 #define L7_EBX_AVX2   0x00000020u
+
+/* Leaf 0x80000008's EBX: the speculation controls, AMD's names of Intel's,
+ * STIBP always on, SSB_NO and PSFD. */
+#define LX8_EBX 0x1502D000u
 
 /* Leaf 0x80000001. ECX: LAHF_LM, CMP_LEGACY, CR8_LEGACY, ABM, SSE4A,
  * MISALIGNSSE, 3DNOWPREFETCH, XOP, FMA4 and TBM; not SVM, the extended
@@ -97,6 +102,58 @@ static void host_leaf(struct kvm_cpuid_entry2 *e, uint32_t leaf, uint32_t sub, u
     e->index = sub;
     e->flags = flags;
     kcpu_id_sub(leaf, sub, &e->eax, &e->ebx, &e->ecx, &e->edx);
+}
+
+/** The host's leaf 7 EDX, or leaf 0x80000008's EBX with `amd`, 0 where
+ * the leaf is past the host's highest. */
+static uint32_t host_spec(int amd)
+{
+    uint32_t leaf = amd ? 0x80000008u : 7u, a = 0, b = 0, c = 0, d = 0;
+
+    kcpu_id(leaf & 0x80000000u, &a, &b, &c, &d);
+    if (a < leaf) {
+        return 0;
+    }
+    kcpu_id_sub(leaf, 0, &a, &b, &c, &d);
+    return amd ? b : d;
+}
+
+/**
+ * Complete the speculation controls of `e`, leaf 7 or 0x80000008, whose
+ * mask has kept the host's own bits: each named as well in the other
+ * vendor's terms where the host has it in either, as Linux's
+ * kvm_set_cpu_caps (arch/x86/kvm/cpuid.c:713-719, 787-794), and SVM's
+ * VIRT_SSBD where SPEC_CTRL has SSBD, which msr.c's VIRT_SPEC_CTRL sets
+ * there, as svm_set_cpu_caps (svm/svm.c:5423-5425).
+ */
+static void spec_bits(struct kvm_cpuid_entry2 *e)
+{
+    uint32_t l7 = host_spec(0), x8 = host_spec(1);
+
+    if (e->function == 7u) {
+        if ((l7 & CPUID_7_SPEC_CTRL) || ((x8 & CPUID_X8_IBPB) && (x8 & CPUID_X8_IBRS))) {
+            e->edx |= CPUID_7_SPEC_CTRL;
+        }
+        if ((l7 & CPUID_7_STIBP) || (x8 & CPUID_X8_STIBP)) {
+            e->edx |= CPUID_7_STIBP;
+        }
+        if ((l7 & CPUID_7_SSBD) || (x8 & CPUID_X8_SSBD)) {
+            e->edx |= CPUID_7_SSBD;
+        }
+        return;
+    }
+    if (l7 & CPUID_7_SPEC_CTRL) {
+        e->ebx |= CPUID_X8_IBPB | CPUID_X8_IBRS;
+    }
+    if (l7 & CPUID_7_STIBP) {
+        e->ebx |= CPUID_X8_STIBP;
+    }
+    if (l7 & CPUID_7_SSBD) {
+        e->ebx |= CPUID_X8_SSBD;
+    }
+    if (kvm_backend == &kvm_svm && (e->ebx & CPUID_X8_SSBD)) {
+        e->ebx |= CPUID_X8_VIRT_SSBD;
+    }
 }
 
 /* The host's answer to `kvm_xcr0_supported` once `xcr0_known` is set. A
@@ -178,6 +235,7 @@ static int filter(struct kvm_cpuid_entry2 *e, uint64_t xcr0)
             e->ebx &= L7_EBX;
             e->ecx &= L7_ECX;
             e->edx &= L7_EDX;
+            spec_bits(e);
             if ((xcr0 & XFEATURE_AVX512) != XFEATURE_AVX512) {
                 e->ebx &= ~L7_EBX_AVX512;
                 e->ecx &= ~L7_ECX_AVX512;
@@ -221,7 +279,9 @@ static int filter(struct kvm_cpuid_entry2 *e, uint64_t xcr0)
         e->edx &= 1u << 8; /* the invariant TSC alone */
         return 1;
     case 0x80000008u:
-        e->ebx = e->ecx = e->edx = 0;
+        e->ebx &= LX8_EBX;
+        spec_bits(e);
+        e->ecx = e->edx = 0;
         e->eax &= 0xFFFFu; /* the address sizes */
         return 1;
     case 0:
