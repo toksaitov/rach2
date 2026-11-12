@@ -298,7 +298,10 @@ struct i915_irq {
  * engine busy, and `hc_seqno` is then the last request given to the chip
  * at that beat, which must complete before the next beat, as Linux's
  * heartbeat request must; `hc_acthd` and `hc_hws` are ACTHD and the
- * breadcrumb the last beat read.
+ * breadcrumb the last beat read. `hc_stopped` is set by a beat that found
+ * i915.enable_hangcheck off and cleared when the GT or the engine next
+ * unparks, the engine going from idle to busy: no beat judges or arms the
+ * engine while it is set, as Linux's engine has no heartbeat then.
  *
  * Submission. RING_TAIL moves past a request only once every fence it
  * waits for has signalled and every request before it has gone, as the
@@ -351,6 +354,7 @@ struct i915_engine {
     uint32_t hc_seqno;
     uint32_t hc_acthd;
     uint32_t hc_hws;
+    uint8_t hc_stopped;
 };
 
 /* The aliasing PPGTT's shape (gt/intel_gtt.h): 512 directory entries, each
@@ -414,8 +418,9 @@ struct i915_ppgtt {
  * whole GPU's resets, which GET_RESET_STATS gives, and
  * `reset_engine_count` the engine resets by the engine's class, as Linux's
  * gpu_error counts them. `hc_next` is the tick of the next heartbeat while
- * the GT is unparked, 0 when a beat found hangcheck off and stopped the
- * heartbeat until the next unpark (i915_hangcheck.c). `error` is the state
+ * the GT is unparked, 0 when a beat found hangcheck off and stopped every
+ * engine's heartbeat, until the GT or an engine next unparks
+ * (i915_hangcheck.c). `error` is the state
  * captured at the first hang, kept until it is cleared (i915_gpu_error.c).
  * `submit_next` links the devices whose requests may wait for fences, for
  * the submission worker, and `submit_listed` says the device is on that
@@ -3996,8 +4001,29 @@ void i915_requests_cancel(struct drm_i915_private *i915);
 #define I915_HEARTBEAT_INTERVAL_MS 2500u
 
 /** Start the heartbeat as the GT unparks: the first beat an interval
- * away, every engine unarmed. */
+ * away, every engine unarmed and its heartbeat running. */
 void i915_hangcheck_unpark(struct drm_i915_private *i915);
+
+/**
+ * Start the heartbeat of `e` again as it goes from idle to busy with the
+ * GT awake, under the GEM lock, as Linux's __engine_unpark calls
+ * intel_engine_unpark_heartbeat (gt/intel_engine_pm.c:95 and
+ * gt/intel_engine_heartbeat.c:242-248 in 6.12.115): the engine unarmed,
+ * its heartbeat running, and the next beat an interval away if a beat with
+ * hangcheck off had stopped them all.
+ *
+ * @return 1 when it set the next beat, for the worker to be told.
+ */
+int i915_hangcheck_unpark_engine(struct drm_i915_private *i915, struct i915_engine *e);
+
+/**
+ * Set i915.enable_hangcheck to `on`, under the GEM lock. Turned on, it
+ * disarms every engine, so that no beat judges a request armed before
+ * hangcheck went off, whose heartbeat Linux drops at its next beat
+ * (gt/intel_engine_heartbeat.c:234-238 in 6.12.115); an engine whose
+ * heartbeat a beat stopped gets it back only when it next unparks.
+ */
+void i915_hangcheck_enable(struct drm_i915_private *i915, int on);
 
 /**
  * Beat once if the heartbeat is due, as Linux's heartbeat worker on a
@@ -4005,7 +4031,9 @@ void i915_hangcheck_unpark(struct drm_i915_private *i915);
  * completed is hung, and each such engine is reset (`i915_handle_error`);
  * an engine that has requests on the chip is armed with its last. The
  * next beat is an interval away. A beat that finds i915.enable_hangcheck
- * off disarms every engine and queues none until the next unpark.
+ * off judges and resets the armed engines too, but arms none, then stops
+ * every engine's heartbeat and queues no beat, until the GT or an engine
+ * next unparks. An engine whose heartbeat is stopped is not judged.
  *
  * @return the engines found hung, as a mask of 1 << index.
  */

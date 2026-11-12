@@ -34,7 +34,32 @@ void i915_hangcheck_unpark(struct drm_i915_private *i915)
     i915->gt.hc_next = rtc_ticks_now() + MS_TO_TICKS(I915_HEARTBEAT_INTERVAL_MS);
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         i915->gt.engine[i].hc_armed = 0;
+        i915->gt.engine[i].hc_stopped = 0;
     }
+}
+
+int i915_hangcheck_unpark_engine(struct drm_i915_private *i915, struct i915_engine *e)
+{
+    e->hc_armed = 0;
+    e->hc_stopped = 0;
+    if (i915->gt.hc_next != 0) {
+        return 0;
+    }
+    i915->gt.hc_next = rtc_ticks_now() + MS_TO_TICKS(I915_HEARTBEAT_INTERVAL_MS);
+    return 1;
+}
+
+void i915_hangcheck_enable(struct drm_i915_private *i915, int on)
+{
+    int i, taken = i915_gem_lock(i915);
+
+    if (on && i915->params.hangcheck_off) {
+        for (i = 0; i < I915_NUM_ENGINES; i++) {
+            i915->gt.engine[i].hc_armed = 0;
+        }
+    }
+    i915->params.hangcheck_off = (uint8_t)!on;
+    i915_gem_unlock(i915, taken);
 }
 
 /** The last request of `e` given to the chip whose breadcrumb is not yet
@@ -57,7 +82,7 @@ uint32_t i915_hangcheck(struct drm_i915_private *i915)
     struct i915_request *rq;
     uint32_t hung = 0, hws, acthd;
     uint64_t now = rtc_ticks_now();
-    int i, taken;
+    int i, taken, off;
 
     if (!gt->awake || gt->wedged || gt->hc_next == 0 || now < gt->hc_next) {
         return 0;
@@ -69,22 +94,17 @@ uint32_t i915_hangcheck(struct drm_i915_private *i915)
         i915_gem_unlock(i915, taken);
         return 0;
     }
-    if (i915->params.hangcheck_off) {
-        /* Linux's beat with enable_hangcheck off drops its heartbeat and
-         * queues no other until the next unpark (gt/intel_engine_heartbeat.c
-         * :234-238 and :242-248 in 6.12.115). */
-        gt->hc_next = 0;
-        for (i = 0; i < I915_NUM_ENGINES; i++) {
-            gt->engine[i].hc_armed = 0;
-        }
-        i915_gem_unlock(i915, taken);
-        return 0;
-    }
-    gt->hc_next = now + MS_TO_TICKS(I915_HEARTBEAT_INTERVAL_MS);
+    /* With i915.enable_hangcheck off the beat still judges the heartbeat
+     * of the last and resets an engine that missed it, but sends no new
+     * one, and then drops the engine's heartbeat until the engine next
+     * unparks (gt/intel_engine_heartbeat.c:167-209 and :234-238 in
+     * 6.12.115). */
+    off = i915->params.hangcheck_off;
+    gt->hc_next = off ? 0 : now + MS_TO_TICKS(I915_HEARTBEAT_INTERVAL_MS);
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         struct i915_engine *e = &gt->engine[i];
 
-        if (!e->running) {
+        if (!e->running || e->hc_stopped) {
             continue;
         }
         hws = e->hws ? ((volatile uint32_t *)e->hws)[I915_GEM_HWS_SEQNO] : 0;
@@ -98,7 +118,7 @@ uint32_t i915_hangcheck(struct drm_i915_private *i915)
             hung |= 1u << i;
         } else {
             e->hc_armed = 0;
-            rq = last_on_chip(e);
+            rq = off ? 0 : last_on_chip(e);
             if (rq) {
                 e->hc_armed = 1;
                 e->hc_seqno = rq->seqno;
@@ -112,6 +132,12 @@ uint32_t i915_hangcheck(struct drm_i915_private *i915)
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         if ((hung & (1u << i)) && gt->engine[i].hc_armed) {
             i915_handle_error(i915, 1u << i, heartbeat_msg[i]);
+        }
+    }
+    if (off) {
+        for (i = 0; i < I915_NUM_ENGINES; i++) {
+            gt->engine[i].hc_armed = 0;
+            gt->engine[i].hc_stopped = 1;
         }
     }
     i915_gem_unlock(i915, taken);
