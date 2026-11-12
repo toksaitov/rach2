@@ -172,7 +172,7 @@ struct graphics_case {
 };
 
 /**
- * Read a browser case from the last part of its identity, NAME:
+ * Read a browser case from its name after its family, NAME:
  * BROWSER-webglV-NN, a chunk of WebGL V's list, or BROWSER-CODEC-SIZE, a
  * clip. Give 0 for a name of neither form.
  */
@@ -340,31 +340,29 @@ static int parse_virgl(struct graphics_case *s, const char *name)
 }
 
 /**
- * Read the case from the last part of its identity, after its family:
- * webgl's and video's as parse_browser says; igt's TEST-PROFILE, IGT's test
- * program TEST, whose name has no dash, on PROFILE; modetest's PROFILE;
- * piglit's PART, on virtio-vga; glmark2's `wayland`, on virtio-vga;
- * venus's as parse_venus says; vkpresent's `vkcube`, on venus;
- * games-native's `supertuxkart`, `supertuxkart-i386` or `0ad`, on
- * virtio-vga; and virgl's as parse_virgl says. Give 0 for an identity of
- * no such form.
+ * Read the case from what follows its family in its identity, which may
+ * hold a dot, as piglit's `gl-1.0` does: webgl's and video's as
+ * parse_browser says; igt's TEST-PROFILE, IGT's test program TEST, whose
+ * name has no dash, on PROFILE; modetest's PROFILE; piglit's PART, on
+ * virtio-vga; glmark2's `wayland`, on virtio-vga; venus's as parse_venus
+ * says; vkpresent's `vkcube`, on venus; games-native's `supertuxkart`,
+ * `supertuxkart-i386` or `0ad`, on virtio-vga; and virgl's as parse_virgl
+ * says. Give 0 for an identity of no such form.
  */
 static int parse(struct graphics_case *s, const char *id)
 {
     static const char *const families[] = {".webgl.",        ".video.",   ".igt.",   ".modetest.",
                                            ".piglit.",       ".glmark2.", ".venus.", ".vkpresent.",
                                            ".games-native.", ".virgl."};
-    const char *name = strrchr(id, '.'), *dash;
+    const char *name = NULL, *dash;
     size_t i, n;
 
+    for (i = 0; i < sizeof(families) / sizeof(families[0]); i++)
+        if ((name = strstr(id, families[i])) != NULL)
+            break;
     if (name == NULL)
         return 0;
-    name++;
-    for (i = 0; i < sizeof(families) / sizeof(families[0]); i++)
-        if (strstr(id, families[i]) != NULL)
-            break;
-    if (i == sizeof(families) / sizeof(families[0]))
-        return 0;
+    name += strlen(families[i]);
     s->runner = (enum runner)i;
     switch (s->runner) {
     case WEBGL:
