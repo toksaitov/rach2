@@ -14,7 +14,7 @@ Debian's results on the Lenovo's Intel HD 4400, the reference that Rach2's resul
 
 The Lenovo's GPU cases ([tests/native/gpu.cases](../../../native/gpu.cases)) judge against these and against what is made from them, which the graphics tests' Readme describes ([the Lenovo's conformance](../../Readme.md#the-lenovos-conformance)):
 
-* `expect/`: the per-case expectations. `igt-kms.rows` and `piglit-quick.rows.gz`, `NAME RESULT` a line, are made from `igt/` and `piglit/` by `lenovo-expect.py`; `igt-gem.rows`, `glmark2-gl.validations`, `glmark2-es2.validations`, `webgl-chromium.pages` and `webgl-firefox.pages` are the runners' own output from the conformance step's Debian boot, Debian 13.7 on p5 with the IOMMU's translation off, which also gives the probe's lines of `gate`.
+* `expect/`: the per-case expectations. `igt-kms.rows` and `piglit-quick.rows.gz`, `NAME RESULT` a line, are made from `igt/` and `piglit/` by `lenovo-expect.py`; `igt-gem.rows`, `glmark2-gl.validations`, `glmark2-es2.validations`, `webgl-chromium.pages` and `webgl-firefox.pages` are the runners' own output from a Debian boot of 2026-11-12, Debian 13.7 on p5 with the IOMMU's translation on (`intel_iommu=on`), as the release boots Rach2; `webgl-chromium.pages` gives the 362 `deqp/` pages that boot ran before `runners/webgl-lenovo.omit` left them out the line an omitted page has, and the measured file is kept with the development log's record of that boot. The probe's lines of `gate` come from that day's second Debian boot, with translation off.
 * `gate`: the speed gate's settings, the most a measure may lose against Linux with translation off and Linux's value of each measure.
 * `exclusions`: the differences from Linux that the owner has approved, `NAME REASON` a line.
 
