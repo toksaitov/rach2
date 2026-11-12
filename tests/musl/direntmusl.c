@@ -25,7 +25,11 @@
  * and by the old lstat, and a file named that way is ENOTDIR. The probe's own
  * directory and /proc/self, read to their end, list as many entries again
  * after rewinddir, and seekdir to the place telldir gave after the first
- * entry lists the second next.
+ * entry lists the second next. In a directory of ext2, whose places are
+ * bytes, the place a listing gave after a, once a and b are removed and a
+ * name of twelve bytes is made in their space, is taken by lseek and by
+ * seekdir and lists c and then the end, as Linux's ext2 does; lseek there
+ * also takes SEEK_END and a place past 4 GiB, from which nothing is listed.
  *
  * The other calls that take a path answer one that names a directory by its end
  * as Linux does, in the probe's own directory and in one of /dev/shm: a regular
@@ -78,7 +82,9 @@
  * have a row each in the probe's own directory, `own-*`, and in /dev/shm,
  * `shm-*`. Three groups of branches say which rows ran: `arch`, `i686` with
  * `proc-self-dot-old` or `x86-64` without it; `dir`, `given` with
- * `root-bin-types` or `default` without it; and `links`, `links` with
+ * `root-bin-types` or `default` without it; `seek`, `bytes` with
+ * `ext2-lseek-reuse` and `ext2-seekdir-reuse` on ext2, or `places` without
+ * them; and `links`, `links` with
  * `own-link-followed` and `own-link-unlink-enotdir`, or `none`, for a file
  * system with no symbolic links. A failure before the probe has tried a
  * symbolic link reports no branch of `links`.
@@ -108,6 +114,13 @@
 
 /* The directory the probe makes, and its entries. */
 static char base[256], file[300], sub[300], link_name[300];
+
+/* The directory of `reuse_rows`, in `base`, and the names it holds. */
+static char reuse_dir[300];
+static const char *const reuse_names[] = {"a", "b", "c", "abcdefghijkl"};
+
+/* ext2's f_type, which statfs gives a directory of ext2. */
+#define EXT2_MAGIC 0xEF53
 
 /*
  * A group of rows of etude's report, checked in order until one fails: its
@@ -163,6 +176,7 @@ static const char *const start_ids[] = {"symlink-or-eperm",   "own-dir-types",  
 #endif
                                         "file-slash-enotdir", "file-dot-enotdir", "own-rewind",
                                         "own-seekdir",        "proc-self-rewind"};
+static const char *const reuse_ids[] = {"ext2-lseek-reuse", "ext2-seekdir-reuse"};
 static const char *const root_ids[] = {"root-ebusy", "root-eexist", "root-bind"};
 static const char *const synth_ids[] = {"proc-dot-rename", "dev-noreplace", "synth-new-slash"};
 static const char *const taken_ids[] = {"synth-taken"};
@@ -243,6 +257,7 @@ static const char *const texts_ids[] = {"cpuinfo",     "self-mounts",     "loada
 #define GROUP(ids) {ids, (int)(sizeof(ids) / sizeof(ids[0])), 0}
 
 static struct group group_start_rows = GROUP(start_ids);
+static struct group group_reuse = GROUP(reuse_ids);
 static struct group group_root = GROUP(root_ids);
 static struct group group_synth = GROUP(synth_ids);
 static struct group group_taken = GROUP(taken_ids);
@@ -256,8 +271,8 @@ static struct group group_texts = GROUP(texts_ids);
 
 /* Every group, for the rows `finish` reports not run. */
 static struct group *const groups[] = {
-    &group_start_rows, &group_root, &group_synth, &group_taken, &group_unreadable, &group_devices,
-    &group_own,        &group_shm,  &group_types, &group_given, &group_texts};
+    &group_start_rows, &group_reuse, &group_root, &group_synth, &group_taken, &group_unreadable,
+    &group_devices,    &group_own,   &group_shm,  &group_types, &group_given, &group_texts};
 
 /* The rows of `link_ends`, the last of `dir_end_calls`, which the probe's own
  * directory has only where the file system has symbolic links. */
@@ -449,6 +464,193 @@ static int rewinds(const char *dir)
         return 2;
     }
     return 0;
+}
+
+/** Remove `reuse_dir` and what `reuse_make` and `reuse_change` made in it. */
+static void reuse_tidy(void)
+{
+    char path[400];
+    unsigned i;
+
+    for (i = 0; i < sizeof(reuse_names) / sizeof(reuse_names[0]); i++) {
+        snprintf(path, sizeof(path), "%s/%s", reuse_dir, reuse_names[i]);
+        unlink(path);
+    }
+    rmdir(reuse_dir);
+}
+
+/** Make the regular file `name` in `reuse_dir`. 0 or -1. */
+static int reuse_file(const char *name)
+{
+    char path[400];
+    int fd;
+
+    snprintf(path, sizeof(path), "%s/%s", reuse_dir, name);
+    fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0644);
+    if (fd < 0) {
+        return -1;
+    }
+    close(fd);
+    return 0;
+}
+
+/** Make `reuse_dir` anew with a, b and c, which ext2 lists in that order
+ * after . and .., each in a record of 12 bytes. 0 or -1. */
+static int reuse_make(void)
+{
+    reuse_tidy();
+    if (mkdir(reuse_dir, 0755) != 0 || reuse_file("a") != 0 || reuse_file("b") != 0 ||
+        reuse_file("c") != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/**
+ * Remove a and b and make a name of twelve bytes, which ext2 puts in the 24
+ * bytes they held, so that the place a listing gave after a, the start of
+ * b's record, now lies inside the new name's record. 0 or -1.
+ */
+static int reuse_change(void)
+{
+    char path[400];
+
+    snprintf(path, sizeof(path), "%s/a", reuse_dir);
+    if (unlink(path) != 0) {
+        return -1;
+    }
+    snprintf(path, sizeof(path), "%s/b", reuse_dir);
+    if (unlink(path) != 0) {
+        return -1;
+    }
+    return reuse_file("abcdefghijkl");
+}
+
+/**
+ * Read one getdents64 batch of `fd` into `buf`, and the names it holds into
+ * `names`, separated by spaces. Returns the batch's length, or -1.
+ */
+static long dents_names(int fd, char *buf, size_t cap, char *names, size_t ncap)
+{
+    long n = syscall(SYS_getdents64, fd, buf, cap);
+    long at;
+
+    names[0] = '\0';
+    for (at = 0; at < n; at += ((struct dirent *)(buf + at))->d_reclen) {
+        snprintf(names + strlen(names), ncap - strlen(names), "%s%s", names[0] ? " " : "",
+                 ((struct dirent *)(buf + at))->d_name);
+    }
+    return n;
+}
+
+/**
+ * Whether lseek(2) of an ext2 directory takes the d_off that getdents64
+ * gave after a, once a and b are gone and a new name covers that byte, and
+ * the next getdents64 lists c alone, as Linux's ext2 does; whether
+ * SEEK_END lands at the directory's size and a place past 4 GiB is taken,
+ * each listing nothing. 0, or 1 once the failure is reported.
+ */
+static int lseek_reuse(void)
+{
+    char buf[2048], names[512];
+    struct stat st;
+    long long place = -1;
+    long n, at;
+    int fd;
+
+    if (reuse_make() != 0 || (fd = open(reuse_dir, O_RDONLY | O_DIRECTORY)) < 0) {
+        return fail("make the directory of the reused place");
+    }
+    n = dents_names(fd, buf, sizeof(buf), names, sizeof(names));
+    for (at = 0; at < n; at += ((struct dirent *)(buf + at))->d_reclen) {
+        if (strcmp(((struct dirent *)(buf + at))->d_name, "a") == 0) {
+            place = ((struct dirent *)(buf + at))->d_off;
+        }
+    }
+    if (place <= 0 || reuse_change() != 0) {
+        close(fd);
+        printf("direntmusl: %s lists %s\n", reuse_dir, names);
+        return fail("remove a and b and reuse their space");
+    }
+    if (lseek(fd, place, SEEK_SET) != place) {
+        printf("direntmusl: lseek to %lld: %s\n", place, strerror(errno));
+        close(fd);
+        return fail("lseek of an ext2 directory to a place a listing gave before reuse");
+    }
+    n = dents_names(fd, buf, sizeof(buf), names, sizeof(names));
+    if (n <= 0 || strcmp(names, "c") != 0 || syscall(SYS_getdents64, fd, buf, sizeof(buf)) != 0) {
+        printf("direntmusl: from %lld: %ld bytes, '%s'\n", place, n, names);
+        close(fd);
+        return fail("getdents64 from a reused place lists c alone");
+    }
+    if (fstat(fd, &st) != 0 || lseek(fd, 0, SEEK_END) != st.st_size ||
+        syscall(SYS_getdents64, fd, buf, sizeof(buf)) != 0 ||
+        lseek(fd, 0x100000000LL, SEEK_SET) != 0x100000000LL ||
+        syscall(SYS_getdents64, fd, buf, sizeof(buf)) != 0) {
+        printf("direntmusl: SEEK_END or 4 GiB: %s\n", strerror(errno));
+        close(fd);
+        return fail("lseek of an ext2 directory to its end and past 4 GiB");
+    }
+    close(fd);
+    held();
+    return 0;
+}
+
+/**
+ * Whether seekdir of an ext2 directory to the place telldir gave after a,
+ * once a and b are gone and a new name covers that byte, lists c and then
+ * the end, as musl's seekdir and Linux's ext2 give. 0, or 1 once the failure
+ * is reported.
+ */
+static int seekdir_reuse(void)
+{
+    struct dirent *de;
+    long place = -1;
+    int ok;
+    DIR *d;
+
+    if (reuse_make() != 0 || (d = opendir(reuse_dir)) == NULL) {
+        return fail("make the directory of the reused place");
+    }
+    while ((de = readdir(d)) != NULL) {
+        if (strcmp(de->d_name, "a") == 0) {
+            place = telldir(d);
+        }
+    }
+    if (place <= 0 || reuse_change() != 0) {
+        closedir(d);
+        return fail("remove a and b and reuse their space");
+    }
+    seekdir(d, place);
+    de = readdir(d);
+    ok = de != NULL && strcmp(de->d_name, "c") == 0;
+    if (!ok) {
+        printf("direntmusl: seekdir to %ld lists %s\n", place, de ? de->d_name : strerror(errno));
+    }
+    ok = ok && readdir(d) == NULL;
+    closedir(d);
+    if (!ok) {
+        return fail("seekdir to a place telldir gave before reuse lists c and the end");
+    }
+    held();
+    return 0;
+}
+
+/**
+ * The rows of a place in an ext2 directory that a removal and a new name
+ * have covered (`lseek_reuse`, `seekdir_reuse`), which a directory of
+ * another file system does not have. 0, or 1 once a failure is reported.
+ */
+static int reuse_rows(void)
+{
+    int rc = 0;
+
+    if (group_reuse.n > 0) {
+        rc = lseek_reuse();
+        rc = rc ? rc : seekdir_reuse();
+    }
+    reuse_tidy();
+    return rc;
 }
 
 /** Whether a call returned -1 with `err`. */
@@ -1261,8 +1463,10 @@ static int own_dir_rows(void)
         return fail("rewinddir and seekdir of /proc/self");
     }
     held();
+    group_start(&group_reuse);
+    rc = reuse_rows();
     group_start(&group_root);
-    rc = root_rows();
+    rc |= root_rows();
     group_start(&group_synth);
     rc |= synth_name_rows();
     group_start(&group_taken);
@@ -1283,6 +1487,7 @@ static void tidy(void)
     unlink(link_name);
     unlink(file);
     rmdir(sub);
+    reuse_tidy();
     rmdir(base);
 }
 
@@ -1411,6 +1616,7 @@ static int name_files(const char *dir)
     snprintf(file, sizeof(file), "%s/f", base);
     snprintf(sub, sizeof(sub), "%s/s", base);
     snprintf(link_name, sizeof(link_name), "%s/l", base);
+    snprintf(reuse_dir, sizeof(reuse_dir), "%s/r", base);
     return 0;
 }
 
@@ -1422,6 +1628,7 @@ static int name_files(const char *dir)
  */
 static int own_rows(int given, int *links)
 {
+    struct statfs sfs;
     int fd;
 
     group_start(&group_start_rows);
@@ -1434,6 +1641,8 @@ static int own_rows(int given, int *links)
         return fail("make the directory");
     }
     close(fd);
+    group_reuse.n = statfs(base, &sfs) == 0 && sfs.f_type == EXT2_MAGIC ? group_reuse.n : 0;
+    report_branch("seek", group_reuse.n > 0 ? "bytes" : "places");
     *links = symlink("f", link_name) == 0;
     if (!*links && (given || errno != EPERM)) {
         tidy();

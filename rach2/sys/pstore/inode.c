@@ -374,7 +374,7 @@ static int pstore_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t fla
     return 0;
 }
 
-const struct vfs_type vfs_pstore_type = {"pstore", pstore_mount, &pstore_vops, 1, 1, 0, 0, 0, 0};
+const struct vfs_type vfs_pstore_type = {"pstore", pstore_mount, &pstore_vops, 1, 1, 0, 0, 0, 0, 0};
 
 void pstore_start(void)
 {

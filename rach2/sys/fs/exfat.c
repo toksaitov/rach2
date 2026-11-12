@@ -4427,4 +4427,4 @@ static const struct vfs_ops exfat_ops = {
     0,                         /* read_frames */
 };
 
-const struct vfs_type vfs_exfat_type = {"exfat", ex_mount, &exfat_ops, 0, 0, 0, 0, 0, 0};
+const struct vfs_type vfs_exfat_type = {"exfat", ex_mount, &exfat_ops, 0, 0, 0, 0, 0, 0, 0};
