@@ -1,7 +1,7 @@
 /*
  * bcache_lock_hosttest.c: the buffer cache's write side under its own lock,
- * with host threads that dirty, write, sync and reserve the buffers of one
- * device at once and no big lock anywhere.
+ * with host threads that dirty, write, sync, reserve and shrink one
+ * device's buffers at once and no big lock anywhere.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/host_threads.c
@@ -71,6 +71,11 @@ static int fails;
 /* Set from the environment: the mutex does nothing. */
 static int no_wb;
 
+/* A deterministic clean reclaim at the release of a just-written buffer. */
+static struct bbuf *reclaim_target;
+static uint32_t release_reclaims;
+static int release_hooks;
+
 /** The kernel's panic: print the text and stop. */
 void k_panic(const char *s)
 {
@@ -100,8 +105,20 @@ uint32_t spin_lock_irqsave(struct spinlock *lock)
 /** Release `lock`. */
 void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
 {
+    int reclaim = lock == &cache_spin && reclaim_target && reclaim_target->holder == -1 &&
+                  !reclaim_target->dirty;
+
     (void)flags;
+    if (reclaim) {
+        reclaim_target = 0;
+    }
     __atomic_store_n(&lock->locked, 0u, __ATOMIC_RELEASE);
+    if (reclaim) {
+        uint32_t written = 0;
+
+        release_hooks++;
+        release_reclaims += bcache_shrink(100000, 0, &written);
+    }
 }
 
 /** Take `m`, yielding while another thread holds it; a thread that holds it
@@ -431,6 +448,7 @@ struct worker {
 #define ROLE_WRITER  1
 #define ROLE_SYNCER  2
 #define ROLE_RESERVE 3
+#define ROLE_SHRINK  4
 
 /** The next of `w`'s choices, below `n`. */
 static uint32_t choose(struct worker *w, uint32_t n)
@@ -542,6 +560,15 @@ static void reserve_step(struct worker *w)
     CHECK(bcache_reserve(&disk, want) <= want, "a reserve answers at most what it was asked");
 }
 
+/** One step of a shrinker: reclaim clean buffers or write dirty victims. */
+static void shrink_step(struct worker *w)
+{
+    uint32_t written = 0, want = 1 + choose(w, 8);
+
+    CHECK(bcache_shrink(want, (int)choose(w, 2), &written) <= want,
+          "a shrink frees no more buffers than requested");
+}
+
 /** A thread of a row: be its process and take its steps. */
 static void *worker_run(void *arg)
 {
@@ -555,6 +582,8 @@ static void *worker_run(void *arg)
             write_step(w);
         } else if (w->role == ROLE_SYNCER) {
             sync_step(w);
+        } else if (w->role == ROLE_SHRINK) {
+            shrink_step(w);
         } else {
             reserve_step(w);
         }
@@ -634,6 +663,52 @@ static void run_row(const char *row, int n, const int *roles, uint32_t first, ui
     printf("bcache_lock_hosttest: %s: %d threads, %d steps each\n", row, n, steps);
 }
 
+/**
+ * Force clean reclaim at each last release: a sync's multi-block run must
+ * save its last block before releasing it, and a writing shrink must keep
+ * its buffer until its final decision. The old paths read freed storage;
+ * AddressSanitizer reports either without depending on thread timing.
+ */
+static void release_reclaim_rows(void)
+{
+    struct bbuf *b;
+    uint32_t written = 0;
+    int i;
+
+    CHECK(bcache_invalidate(&disk) == 0, "the release rows start with no disk buffers");
+    (void)bcache_shrink(100000, 0, &written);
+    bcache_sync_last(&disk, 0, 0, 0);
+    for (i = 0; i < 2; i++) {
+        b = bcache_get_blank(&disk, (uint64_t)i);
+        CHECK(b != 0, "a release row gets its block");
+        if (!b) {
+            return;
+        }
+        bcache_dirty(b);
+        bcache_release(b);
+    }
+    reclaim_target = b;
+    CHECK(bcache_sync(&disk) == 0, "a run survives reclaim at its last release");
+    CHECK(release_hooks == 1 && release_reclaims == 2,
+          "the run's last buffer was freed at its release");
+    CHECK(bcache_invalidate(&disk) == 0, "the run leaves nothing dirty");
+    (void)bcache_shrink(100000, 0, &written);
+    b = bcache_get_blank(&disk, 3);
+    CHECK(b != 0, "the writing shrink gets its block");
+    if (!b) {
+        return;
+    }
+    bcache_dirty(b);
+    bcache_release(b);
+    reclaim_target = b;
+    written = 0;
+    CHECK(bcache_shrink(1, 1, &written) == 1 && written == 1,
+          "a writing shrink keeps its buffer through the last look");
+    CHECK(release_hooks == 2 && release_reclaims == 2,
+          "clean reclaim cannot free the buffer kept by a writing shrink");
+    reclaim_target = 0;
+}
+
 int main(void)
 {
     static const int dirty_and_sync[6] = {ROLE_WRITER, ROLE_WRITER, ROLE_WRITER,
@@ -641,12 +716,16 @@ int main(void)
     static const int one_buffer[4] = {ROLE_WRITER, ROLE_SYNCER, ROLE_SYNCER, ROLE_SYNCER};
     static const int reserves[6] = {ROLE_WRITER,  ROLE_WRITER,  ROLE_WRITER,
                                     ROLE_RESERVE, ROLE_RESERVE, ROLE_SYNCER};
+    static const int shrinkers[6] = {ROLE_WRITER, ROLE_WRITER, ROLE_SYNCER,
+                                     ROLE_SYNCER, ROLE_SHRINK, ROLE_SHRINK};
     static process_t main_proc;
 
     no_wb = getenv("RACH2_BCACHE_NO_WB") != 0;
     main_proc.pid = 1;
     thread_proc = &main_proc;
+    release_reclaim_rows();
     bcache_set_limit(48);
+    __builtin_memset(image, 0, sizeof(image));
     bcache_sync_last(&disk, yield_last, 0, 0);
 
     /* Several threads dirty, write and sync the buffers of one device, more
@@ -657,6 +736,8 @@ int main(void)
     run_row("one buffer", 4, one_buffer, 5, 1, 20000);
     /* Reserves run beside writers and a sync. */
     run_row("reserve", 6, reserves, 0, BLOCKS, 20000);
+
+    run_row("shrink", 6, shrinkers, 0, BLOCKS, 20000);
 
     if (fails) {
         printf("bcache_lock_hosttest: %d failures\n", fails);
