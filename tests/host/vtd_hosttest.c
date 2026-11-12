@@ -122,8 +122,11 @@ void kirq_restore(uint32_t flags)
     (void)flags;
 }
 
-/* The boot processor's APIC id, the destination of every message. */
-static uint32_t boot_apic;
+/* The boot processor's APIC id in the mode it is in, the destination of
+ * every message, and its x2APIC id, which the APIC takes as its id when it
+ * moves to x2APIC mode; in xAPIC mode the first is the second's low eight
+ * bits, as the SDM has them. */
+static uint32_t boot_apic, boot_x2apic;
 
 /** The boot processor, which every message goes to. */
 uint32_t lapic_id(void)
@@ -1163,6 +1166,12 @@ uint32_t vtd_hw_apic_id(void)
     return boot_apic;
 }
 
+/** The boot processor's x2APIC id. */
+uint32_t vtd_hw_x2apic_id(void)
+{
+    return boot_x2apic;
+}
+
 /* The local APIC's mode: whether it may enter x2APIC mode, whether it is
  * there, and its moves there. Whether the 8259 and the I/O APIC's lines are
  * masked with interrupts off (`vtd_hw_lines_mask`), and, at the last move,
@@ -1191,6 +1200,7 @@ int vtd_hw_x2apic_enable(void)
     }
     x2_on = 1;
     x2_moves++;
+    boot_apic = boot_x2apic;
     x2_moved_masked = lines_masked;
     x2_moved_cfi =
         (M(0)->gsts & VTD_GCMD_CFI) != 0 || (nmodels > 1 && (M(1)->gsts & VTD_GCMD_CFI) != 0);
@@ -1491,7 +1501,7 @@ static void row_begin(const char *name)
     opt_noapic = 0;
     page_fail_after = -1;
     flush_calls = stray_flushes = 0;
-    boot_apic = 0;
+    boot_apic = boot_x2apic = 0;
     x2_possible = x2_on = x2_moves = 0;
     lines_masked = x2_moved_masked = x2_moved_cfi = level_held = 0;
     memset(ecam_mem, 0xFF, (unsigned long)ECAM_BUSES << 20);
@@ -1825,7 +1835,7 @@ static void row_ir_x2apic(void)
 
     row_begin("ir_x2apic");
     setup_lenovo();
-    boot_apic = 2;
+    boot_apic = boot_x2apic = 2;
     x2_possible = 1;
     check(t_msi(0, DF(2, 0), 49) == 0 && t_msix(2, DF(0, 0), 1, 51) == 0, "messages");
     check(vtd_start() == 2 && intremap_active(), "on");
@@ -1848,7 +1858,7 @@ static void row_ir_x2apic(void)
     setup_lenovo();
     tb[37] |= DMAR_X2APIC_OUT;
     tb[9] = (uint8_t)(tb[9] - DMAR_X2APIC_OUT); /* the checksum still sums to zero */
-    boot_apic = 2;
+    boot_apic = boot_x2apic = 2;
     x2_possible = 1;
     check(t_msi(0, DF(2, 0), 49) == 0, "a message");
     check(vtd_start() == 2 && intremap_active(), "on");
@@ -1900,9 +1910,12 @@ static void row_ir_x2apic(void)
 
 /**
  * An identity of 255 or more, which only remapping in the x2APIC format
- * reaches: the compatibility-format message and redirection entry carry its
- * low eight bits, and the entries take the whole of it; without remapping
- * the message's address holds the eight bits and nothing above bit 19.
+ * reaches. The APIC starts in xAPIC mode, as `lapic_init` leaves it on bare
+ * metal, so its id there is the low eight bits; the compatibility-format
+ * message and redirection entry carry those, and the entries take the
+ * whole x2APIC id, which the processor answers to after the move. Without
+ * remapping the message's address holds the eight bits and nothing above
+ * bit 19.
  */
 static void row_ir_x2apic_wide(void)
 {
@@ -1910,7 +1923,8 @@ static void row_ir_x2apic_wide(void)
 
     row_begin("ir_x2apic_wide");
     setup_lenovo();
-    boot_apic = 0x103;
+    boot_apic = 0x03;
+    boot_x2apic = 0x103;
     x2_possible = 1;
     rtes[0].dest = 0x03;
     rtes[0].high = 0x03u << 24;
@@ -1930,7 +1944,7 @@ static void row_ir_x2apic_wide(void)
 
     row_begin("ir_x2apic_wide_off");
     setup_lenovo();
-    boot_apic = 0x103;
+    boot_apic = boot_x2apic = 0x103; /* a firmware's x2APIC mode, kept */
     opt_intremap = "off";
     check(t_msi(0, DF(2, 0), 49) == 0, "a message");
     check(vtd_start() == 2 && !intremap_active(), "remapping off");

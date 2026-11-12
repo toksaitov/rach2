@@ -116,6 +116,7 @@
 static volatile uint32_t *apic;
 static const struct lapic_io *io;
 static uint32_t apic_id;
+static uint32_t x2apic_id; /* the boot processor's x2APIC identity */
 static int ready;
 static int x2apic;
 
@@ -362,6 +363,7 @@ int lapic_init(void)
         kcpu_wrmsr(IA32_APIC_BASE, lo | APIC_BASE_X2APIC, hi);
     }
     apic_id = lapic_this_id_raw();
+    x2apic_id = x2apic ? apic_id : kcpu_x2apic_id();
 
     apic_write(LAPIC_SVR, lapic_svr(apic_read(LAPIC_SVR)));
     apic_write(LAPIC_TPR, 0);
@@ -559,6 +561,11 @@ void lapic_repair_lint0(void)
 uint32_t lapic_id(void)
 {
     return apic_id;
+}
+
+uint32_t lapic_x2apic_id(void)
+{
+    return x2apic_id;
 }
 
 uint32_t lapic_this_id(void)

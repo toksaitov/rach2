@@ -193,6 +193,11 @@ uint32_t vtd_hw_apic_id(void)
     return lapic_id();
 }
 
+uint32_t vtd_hw_x2apic_id(void)
+{
+    return lapic_x2apic_id();
+}
+
 int vtd_hw_x2apic_possible(void)
 {
     return lapic_x2apic_possible();

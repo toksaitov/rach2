@@ -286,6 +286,10 @@ int vtd_hw_fault_vector(void);
 /** The local APIC id the units' fault events go to. */
 uint32_t vtd_hw_apic_id(void);
 
+/** The boot processor's whole x2APIC id, which the x2APIC format's entries
+ * name it by, whichever mode its APIC is in (`lapic_x2apic_id`). */
+uint32_t vtd_hw_x2apic_id(void);
+
 /** Whether the local APIC is in x2APIC mode or may be moved there
  * (`lapic_x2apic_possible`). */
 int vtd_hw_x2apic_possible(void);

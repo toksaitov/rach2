@@ -161,6 +161,12 @@ int lapic_pending(uint8_t vector);
  * APIC input. */
 uint32_t lapic_id(void);
 
+/** The boot processor's whole x2APIC identity, in either mode: the one it
+ * answers to once in x2APIC mode, whose low eight bits are its xAPIC
+ * identity (SDM, CPUID leaf 0BH), and which a remapping entry in the
+ * x2APIC format names it by. */
+uint32_t lapic_x2apic_id(void);
+
 /** The APIC identity of the processor running this; 0 while the APIC is
  * not enabled. */
 uint32_t lapic_this_id(void);
