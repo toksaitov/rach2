@@ -580,13 +580,22 @@ static void model_w32(uintptr_t base, uint32_t off, uint32_t v)
 }
 
 /* The microseconds the driver has waited, which the timeout rows check
- * against the driver's limits of thirty and five seconds. */
+ * against the driver's limits of thirty and five seconds; the delays it
+ * made; and what a row does at each delay, standing for another processor,
+ * or NULL. */
 static uint64_t waited_us;
+static unsigned delays;
+static void (*delay_hook)(void);
 
-/** The model's delay: add `us` to `waited_us`. */
+/** The model's delay: add `us` to `waited_us`, count it, and run the row's
+ *  `delay_hook`. */
 static void model_udelay(uint32_t us)
 {
     waited_us += us;
+    delays++;
+    if (delay_hook) {
+        delay_hook();
+    }
 }
 
 /* The register interface `model_reset` gives the driver. */
@@ -1033,10 +1042,25 @@ static void model_reset(void)
     nvmepoll = 0;
     policy_allows = 1;
     block0 = 0;
+    delays = 0;
+    delay_hook = 0;
     for (i = 0; i < sizeof(medium); i++) {
         medium[i] = (uint8_t)(i * 7u + (i >> 9));
     }
     nvme_set_io(&model_io_ops);
+}
+
+/** Whether every slot of the first controller is free. */
+static int slots_free(void)
+{
+    unsigned i;
+
+    for (i = 0; i < NVME_SLOTS; i++) {
+        if (nvme_ctrls[0].slots[i].busy) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /** The first namespace of the first controller. */
@@ -1279,6 +1303,95 @@ static void row_timeout(void)
     m.drop_io = 0;
     CHECK("its next command answers EIO at once",
           dev->read(dev, 0, 1, big) == -EIO && io_commands == 0);
+    CHECK("and no timeout left a slot taken", slots_free());
+}
+
+/** Answer the dropped command at the polled wait's last delay, as the
+ *  handler on another processor or a missed completion would. */
+static void answer_at_last_delay(void)
+{
+    if (delays == NVME_CMD_STEPS) {
+        model_post_now(1, last_cid, 0, 0);
+    }
+}
+
+/* Whether the polled slot was still taken, and marked done, while another
+ * caller's recovery that failed it ran. */
+static int busy_in_recovery;
+
+/** Begin another caller's recovery at the tenth delay, failing every slot
+ *  and leaving `resetting` set, as it is while that recovery resets the
+ *  controller. */
+static void recover_elsewhere_early(void)
+{
+    unsigned i;
+
+    if (delays == 10) {
+        nvme_ctrls[0].resetting = 1;
+        for (i = 0; i < NVME_SLOTS; i++) {
+            nvme_slot_fail(&nvme_ctrls[0].slots[i]);
+        }
+        busy_in_recovery = nvme_ctrls[0].slots[0].busy && nvme_ctrls[0].slots[0].done;
+    }
+}
+
+/** Begin another caller's recovery at the polled wait's last delay, and end
+ *  it, with every slot failed, five delays later. */
+static void recover_elsewhere_late(void)
+{
+    unsigned i;
+
+    if (delays == NVME_CMD_STEPS) {
+        nvme_ctrls[0].resetting = 1;
+    }
+    if (delays == NVME_CMD_STEPS + 5u) {
+        for (i = 0; i < NVME_SLOTS; i++) {
+            nvme_slot_fail(&nvme_ctrls[0].slots[i]);
+        }
+        nvme_ctrls[0].resetting = 0;
+    }
+}
+
+/**
+ * A polled command at the end of its wait, beside other callers: one
+ * answered after its last test is taken without a reset; one that another
+ * caller's recovery fails answers EIO, its slot kept until it frees it;
+ * and one whose wait runs out while another recovery runs waits for that
+ * recovery instead of resetting the controller again.
+ */
+static void row_timeout_beside_recovery(void)
+{
+    block_device_t *dev;
+
+    model_reset();
+    CHECK("the recovery row brings a controller up", nvme_init() == 0);
+    dev = &ns0()->dev;
+    m.drop_io = 1;
+    delays = 0;
+    delay_hook = answer_at_last_delay;
+    CHECK("a command answered during the wait's last delay succeeds",
+          dev->read(dev, 0, 1, big) == 0);
+    CHECK("without a reset, and its slot is free", disables == 0 && slots_free());
+
+    delays = 0;
+    busy_in_recovery = 0;
+    delay_hook = recover_elsewhere_early;
+    CHECK("a command another caller's recovery fails answers EIO",
+          dev->read(dev, 0, 1, big) == -EIO);
+    CHECK("its slot stayed taken while that recovery ran, and it freed it",
+          busy_in_recovery && slots_free());
+    CHECK("and it reset nothing itself", disables == 0);
+    nvme_ctrls[0].resetting = 0;
+
+    delays = 0;
+    delay_hook = recover_elsewhere_late;
+    CHECK("a command whose wait runs out during another's recovery answers EIO",
+          dev->read(dev, 0, 1, big) == -EIO);
+    CHECK("after waiting that recovery out, with no reset of its own",
+          delays > NVME_CMD_STEPS + 4u && disables == 0 && !nvme_ctrls[0].resetting);
+    CHECK("and its slot is free", slots_free());
+    delay_hook = 0;
+    m.drop_io = 0;
 }
 
 /** The controller does not stop for the recovery: a panic, with interrupts
@@ -1665,6 +1778,7 @@ int main(void)
     row_split_and_bounce();
     row_failed_command();
     row_timeout();
+    row_timeout_beside_recovery();
     row_stuck();
     row_queued();
     row_flushes();

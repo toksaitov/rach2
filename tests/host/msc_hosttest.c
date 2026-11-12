@@ -1026,6 +1026,7 @@ static struct block_request *make_request(int write, uint64_t lba, uint32_t coun
  * stands for a caller without it, and `bkl_host_takes` counts the driver's
  * takes. */
 extern int bkl_host_free;
+extern int bkl_host_elsewhere;
 extern int bkl_host_takes;
 
 /** A read handed over by a caller without the big lock is admitted under
@@ -1048,6 +1049,72 @@ static void unlocked_submit(void)
         pump(1);
     }
     CHECK("and completes", block.completions == 1 && block.last_status == 0);
+}
+
+/** A read handed over while another processor holds the big lock waits in
+ * the intake, with no take of the lock, and the next pump pass admits it
+ * and sends it. */
+static void deferred_submit(void)
+{
+    static unsigned char buf[8 * SECTOR];
+    struct block_request *r = make_request(0, 2, 8, buf);
+    int i;
+
+    block.completions = 0;
+    bkl_host_free = 1;
+    bkl_host_elsewhere = 1;
+    bkl_host_takes = 0;
+    CHECK("a read while another processor holds the big lock is taken",
+          msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+    CHECK("and waits in the intake, unsent, with no take of the lock",
+          bkl_host_takes == 0 && sticks[0].intake_count == 1 && sticks[0].request == 0 &&
+              sticks[0].queue_count == 0);
+    bkl_host_elsewhere = 0;
+    bkl_host_free = 0;
+    pump(1);
+    CHECK("and the next pump pass admits it and sends it",
+          sticks[0].intake_count == 0 && sticks[0].request == r);
+    for (i = 0; i < 20 && block.completions == 0; i++) {
+        pump(1);
+    }
+    CHECK("and it completes",
+          block.completions == 1 && block.last_status == 0 && buf[0] == dev.medium[2 * SECTOR]);
+}
+
+/** A read admitted while the stick recovers waits in the queue, unsent by
+ * the admission and by the pump, until the recovery has ended. The stick is
+ * put in recovery by hand, waiting for a class reset that never comes, so
+ * that it is idle with no request of its own. */
+static void submit_in_recovery(void)
+{
+    static unsigned char buf[8 * SECTOR];
+    struct block_request *r = make_request(0, 2, 8, buf);
+    int i;
+
+    block.completions = 0;
+    sticks[0].recover = RECOVER_RESET;
+    sticks[0].deadline = MSC_STEP_MS;
+    CHECK("a read while the stick recovers is taken",
+          msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+    CHECK("and admitted to the queue, unsent",
+          sticks[0].intake_count == 0 && sticks[0].queue_count == 1 && sticks[0].request == 0);
+    pump(1);
+    CHECK("and the pump does not send it during the recovery",
+          sticks[0].queue_count == 1 && sticks[0].request == 0);
+    sticks[0].recover = RECOVER_NONE;
+    for (i = 0; i < 20 && block.completions == 0; i++) {
+        pump(1);
+    }
+    CHECK("and it completes once the recovery has ended",
+          block.completions == 1 && block.last_status == 0 && buf[0] == dev.medium[2 * SECTOR]);
+}
+
+/** The rows of a request's admission, on the ready stick. */
+static void admission_rows(void)
+{
+    unlocked_submit();
+    deferred_submit();
+    submit_in_recovery();
 }
 
 /**
@@ -1252,7 +1319,7 @@ int main(void)
               page[0] == dev.medium[2 * SECTOR] && page[SECTOR] == dev.medium[3 * SECTOR]);
         CHECK("as one command, counted", commands_counted == 1);
     }
-    unlocked_submit();
+    admission_rows();
 
     /* A read of the driver's largest request, 1024 sectors. */
     {
