@@ -1,0 +1,137 @@
+--- a/rach2/sys/arch/x86/apictimer.c
++++ b/rach2/sys/arch/x86/apictimer.c
+@@ -73,6 +73,7 @@
+ #define HR_BEHIND_MAX 4000u
+ 
+ static struct hr_state hr_cpu[NR_CPUS];
++static volatile uint64_t hr_diag[NR_CPUS][6][6];
+ /* The vector of the timer's interrupts between ticks, 0 until
+  * `apic_hr_init` takes it; the counts of a tick then. */
+ static int hr_vector;
+@@ -286,14 +287,16 @@
+  * The caller has interrupts off; a zero idle expiry stops the device.
+  * Idle callbacks retain requests until final preparation (`idle_commit`)
+  * or selection of a non-idle thread. The hardware cache is kept meanwhile. */
+-static void hr_program(struct hr_state *c, int64_t now, int idle_commit)
++static void hr_program(struct hr_state *c, int64_t now, int idle_commit, int reason)
+ {
+     int64_t at = c->idle ? 0 : c->tick, delta;
+     uint8_t vector = APIC_TIMER_VECTOR;
+     uint32_t counts, rate;
+     uint64_t span;
+ 
++    hr_diag[arch_cpu_id()][reason][0]++;
+     if (c->idle && !idle_commit) {
++        hr_diag[arch_cpu_id()][reason][1]++;
+         return;
+     }
+     if (c->want != 0 && (at == 0 || c->want < at)) {
+@@ -301,8 +304,10 @@
+     }
+     if (at == 0) {
+         if (c->programmed == 0) {
++            hr_diag[arch_cpu_id()][reason][2]++;
+             return;
+         }
++        hr_diag[arch_cpu_id()][reason][3]++;
+         if (hr_deadline) {
+             if (c->lvt == 0) {
+                 lapic_timer_deadline(APIC_TIMER_VECTOR);
+@@ -316,8 +321,10 @@
+         return;
+     }
+     if (c->programmed == at && c->lvt == vector) {
+-        return;
+-    }
++        hr_diag[arch_cpu_id()][reason][2]++;
++        return;
++    }
++    hr_diag[arch_cpu_id()][reason][at == c->tick ? 4 : 5]++;
+     c->programmed = at;
+     delta = at - now;
+     if (hr_deadline) {
+@@ -381,7 +388,7 @@
+ /** Keep an absolute request and its whole-tick tag, zero for a direct
+  * time. Each winning pair moves together.
+  * The caller has interrupts off. */
+-static void hr_wake_at(int64_t ns, uint64_t tick)
++static void hr_wake_at(int64_t ns, uint64_t tick, int reason)
+ {
+     struct hr_state *c = &hr_cpu[arch_cpu_id()];
+     int64_t now;
+@@ -396,10 +403,10 @@
+         c->want_tick = tick;
+         if (!c->oneshot) {
+             now = hr_oneshot(c);
+-            hr_program(c, now, 0);
++            hr_program(c, now, 0, reason);
+         } else if (c->idle || ns < c->tick) {
+             now = rtc_monotonic_ns();
+-            hr_program(c, now, 0);
++            hr_program(c, now, 0, reason);
+         }
+     }
+ }
+@@ -412,7 +419,7 @@
+         return;
+     }
+     flags = kirq_save();
+-    hr_wake_at(ns, 0);
++    hr_wake_at(ns, 0, 0);
+     kirq_restore(flags);
+ }
+ 
+@@ -473,7 +480,7 @@
+             at = rtc_monotonic_ns() + (int64_t)rtc_slewed(TICK_NS - raw_phase, rtc_mono_rate()) + 1;
+         }
+     }
+-    hr_wake_at(at > 0 ? at : 1, tick);
++    hr_wake_at(at > 0 ? at : 1, tick, 0);
+     kirq_restore(flags);
+ }
+ 
+@@ -494,7 +501,7 @@
+     c->held = 0;
+     c->held_tick = 0;
+     if (ns != 0) {
+-        hr_wake_at(ns, tick);
++        hr_wake_at(ns, tick, 1);
+     }
+ }
+ 
+@@ -507,7 +514,7 @@
+         watchdog_event(params);
+     }
+     timer_hr_pass();
+-    hr_program(&hr_cpu[arch_cpu_id()], rtc_monotonic_ns(), 0);
++    hr_program(&hr_cpu[arch_cpu_id()], rtc_monotonic_ns(), 0, 2);
+ }
+ 
+ int apic_hr_entry(uint32_t vector)
+@@ -543,7 +550,7 @@
+         result |= APIC_HR_EVENT;
+     }
+     if ((result & APIC_HR_TICK) != 0 || (c->idle && c->want == 0 && result == 0)) {
+-        hr_program(c, now, 0);
++        hr_program(c, now, 0, 3);
+     } else {
+         result |= APIC_HR_EVENT;
+     }
+@@ -584,7 +591,7 @@
+     now = c->oneshot ? rtc_monotonic_ns() : hr_oneshot(c);
+     c->idle = 1;
+     timer_wake_release();
+-    hr_program(c, now, 1);
++    hr_program(c, now, 1, 4);
+     return 1;
+ }
+ 
+@@ -601,7 +608,7 @@
+     if (c->tick <= now) {
+         hr_forward(c, now);
+     }
+-    hr_program(c, now, 0);
++    hr_program(c, now, 0, 5);
+ }
+ 
+ void apic_hr_init(uint32_t counts)
