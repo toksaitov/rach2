@@ -4824,8 +4824,9 @@ static int removal_run(int kind, int way, uint64_t *reused)
     return rc == 0 ? OPS->sync(&mnt) : rc;
 }
 
-/** Whether every question in findings.txt is one of `removal_findings`. */
-static int removal_findings_allowed(void)
+/** Whether every question in findings.txt is one of the `count` patterns
+ * of `allowed` (`matches_pattern`), each other one printed. */
+static int findings_among(const char *const *allowed, unsigned count)
 {
     void *f = fopen(fix_path("findings.txt"), "r");
     char line[512];
@@ -4838,16 +4839,22 @@ static int removal_findings_allowed(void)
         unsigned k;
         int any = 0;
 
-        for (k = 0; k < sizeof(removal_findings) / sizeof(removal_findings[0]); k++) {
-            any |= matches_pattern(line, removal_findings[k]);
+        for (k = 0; k < count; k++) {
+            any |= matches_pattern(line, allowed[k]);
         }
         if (!any) {
-            printf("  a repair the removal's order does not allow: %s", line);
+            printf("  a repair the order of writes does not allow: %s", line);
             ok = 0;
         }
     }
     fclose(f);
     return ok;
+}
+
+/** Whether every question in findings.txt is one of `removal_findings`. */
+static int removal_findings_allowed(void)
+{
+    return findings_among(removal_findings, sizeof(removal_findings) / sizeof(removal_findings[0]));
 }
 
 /** Whether `gone` and `src`, where the root of `img` still lists them, name
@@ -4894,6 +4901,19 @@ static int removal_mount(int kind, uint64_t *ino)
     return rc;
 }
 
+/** Drop the mount and its cache as a crash would, the device whole again
+ * and the image what the writes before the stop left. */
+static void drop_as_crash(void)
+{
+    OPS->put(&mnt, mnt.root);
+    OPS->unmount(&mnt);
+    mnt.root = 0;
+    bcache_device_gone(&dev);
+    dev.flags = BLOCK_FAULT_SAFE;
+    stop_after = -1;
+    use_image(wimg, wbytes);
+}
+
 /**
  * Drop the mount and its cache as a crash would, after `kind` was removed
  * in `way` and stopped after write `k` of `n`, and judge the volume left:
@@ -4905,13 +4925,7 @@ static void removal_judge(int kind, int way, int k, int n)
     char what[240];
     int ok;
 
-    OPS->put(&mnt, mnt.root);
-    OPS->unmount(&mnt);
-    mnt.root = 0;
-    bcache_device_gone(&dev);
-    dev.flags = BLOCK_FAULT_SAFE;
-    stop_after = -1;
-    use_image(wimg, wbytes);
+    drop_as_crash();
     snprintf(what, sizeof what,
              "%s %s on a mount that writes back, stopped after write %d of %d, "
              "leaves e2fsck counts, bitmaps and unnamed inodes to repair",
@@ -6913,6 +6927,429 @@ static void hardlink_check_rows(void)
     printf("ext2-hardlinks: checked 600 exact two-name pairs and rejected the bad count\n");
 }
 
+/* ---- a directory's inode, and a reused block, before the next step ---- */
+
+/* The repairs e2fsck may ask for after a stop of a rename into a directory
+   that grows, on a mount that writes back: counts, bitmaps, and the link
+   count of the renamed file, raised before its new name and lowered after
+   its old one goes. No orphan, and no size or block count of the grown
+   directory, is among them. `#` is a run of digits. */
+static const char *const growth_findings[] = {
+    "Free inodes count wrong",  "Free blocks count wrong",  "Directories count wrong",
+    "Block bitmap differences", "Inode bitmap differences", "Inode # ref count is",
+};
+
+/**
+ * Make /dst with its first `blocks` blocks full, so that the next name
+ * takes block `blocks`: entries of 256 bytes, names of 248 linked to /many,
+ * sixteen to a block, but in the first, after `.` and `..`, fifteen of them
+ * and one name of 224 bytes, whose 232-byte entry takes the room left.
+ * Returns 0, or the first error.
+ */
+static int growth_fill(int blocks)
+{
+    char name[256];
+    void *many, *dst = 0;
+    int i, len, rc;
+
+    many = make_file(mnt.root, "many", &rc);
+    if (many) {
+        rc = OPS->mkdir(&mnt, mnt.root, "dst", 0755);
+    }
+    if (rc == 0) {
+        dst = walk("/dst", &rc);
+    }
+    for (i = 0; dst && rc == 0 && i < 16 * blocks; i++) {
+        len = i == 15 ? 224 : 248;
+        memset(name, i == 15 ? 'b' : 'a', (unsigned long)len);
+        snprintf(name + len - 4, 5, "%04d", i);
+        rc = OPS->link(&mnt, dst, name, many);
+    }
+    if (dst) {
+        OPS->put(&mnt, dst);
+    }
+    if (many) {
+        OPS->put(&mnt, many);
+    }
+    return rc;
+}
+
+/**
+ * Make a fresh volume, mount it so that it writes back, and give it an
+ * empty /src and a /dst whose first `blocks` blocks are full
+ * (`growth_fill`), synced. Returns 0, or the first error, with the volume
+ * unmounted.
+ */
+static int growth_mount(int blocks)
+{
+    void *n;
+    int rc;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    stop_after = -1;
+    rc = mount_flags(0);
+    if (rc == 0) {
+        n = make_file(mnt.root, "src", &rc);
+        if (n) {
+            OPS->put(&mnt, n);
+            rc = growth_fill(blocks);
+        }
+    }
+    if (rc == 0) {
+        rc = OPS->sync(&mnt);
+    }
+    if (rc != 0) {
+        printf("  rc %d\n", rc);
+        unmount_image();
+    }
+    return rc;
+}
+
+/** Rename /src to /dst/moved, which grows /dst, and sync; /dst's size in
+ * `*size`. Returns 0, or the first error. */
+static int growth_run(uint64_t *size)
+{
+    struct vfs_stat st;
+    void *dst;
+    int rc;
+
+    *size = 0;
+    dst = walk("/dst", &rc);
+    if (!dst) {
+        return rc;
+    }
+    rc = OPS->rename(&mnt, mnt.root, "src", dst, "moved");
+    if (rc == 0 && OPS->getattr(&mnt, dst, &st) == 0) {
+        *size = st.size;
+    }
+    OPS->put(&mnt, dst);
+    return rc == 0 ? OPS->sync(&mnt) : rc;
+}
+
+/** Whether /src or /dst/moved is on `img`, and each that is names an inode
+ * its bitmap marks in use. */
+static int growth_named(const char *img)
+{
+    int src = debugfs_lists(img, "/", "src");
+    int moved = debugfs_lists(img, "/dst", "moved");
+
+    if (!src && !moved) {
+        printf("  neither /src nor /dst/moved is on the disk\n");
+        return 0;
+    }
+    if ((src && !debugfs_says(img, "testi /src", "is marked in use")) ||
+        (moved && !debugfs_says(img, "testi /dst/moved", "is marked in use"))) {
+        printf("  a name of the renamed file names an inode its bitmap calls free\n");
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * Rename an empty file into a directory whose first `blocks` blocks are
+ * full, once whole, counting its writes, and then once stopped after each
+ * of them, judged after a crash: e2fsck run to its end asking only for
+ * `growth_findings`, and the file named by one of its names. Returns the
+ * stops walked, or -1 when a volume would not mount or take its files.
+ */
+static int growth_row(int blocks)
+{
+    char what[240];
+    uint64_t size;
+    int k, n, rc, ok;
+
+    if (growth_mount(blocks) != 0) {
+        return -1;
+    }
+    writes_made = 0;
+    rc = growth_run(&size);
+    n = writes_made;
+    snprintf(what, sizeof what,
+             "on a mount that writes back, a rename into a directory of %d full blocks "
+             "grows it by one",
+             blocks);
+    check(rc == 0 && size == (uint64_t)(blocks + 1) * 4096u, what);
+    if (rc != 0 || size != (uint64_t)(blocks + 1) * 4096u) {
+        printf("  rc %d, size %lu\n", rc, (unsigned long)size);
+    }
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume is clean");
+    for (k = 0; k <= n; k++) {
+        if (growth_mount(blocks) != 0) {
+            return -1;
+        }
+        writes_made = 0;
+        stop_after = k;
+        (void)growth_run(&size);
+        drop_as_crash();
+        snprintf(what, sizeof what,
+                 "a rename into a directory grown past %d blocks, stopped after write %d "
+                 "of %d, leaves e2fsck counts and bitmaps to repair",
+                 blocks, k, n);
+        ok = fsck_judged(wimg) >= 0 &&
+             findings_among(growth_findings, sizeof(growth_findings) / sizeof(growth_findings[0]));
+        check(ok, what);
+        if (!ok) {
+            ext2_fixture_head(fix_path("fsck.out"), 30);
+        }
+        snprintf(what, sizeof what,
+                 "a rename into a directory grown past %d blocks, stopped after write %d of "
+                 "%d, leaves the file a name",
+                 blocks, k, n);
+        check(growth_named(wimg), what);
+    }
+    return n + 1;
+}
+
+/* The volume block whose every read fails while a row sets it, or -1, and
+   the reads failed so. */
+static int64_t fail_read_block = -1;
+static int fail_read_hits;
+
+/** Fail the read that covers `fail_read_block`, each time one does. */
+static void fail_block_reads(void)
+{
+    if (fail_read_block >= 0 && (uint64_t)fail_read_block >= request_block &&
+        (uint64_t)fail_read_block < request_block + request_blocks) {
+        fail_read_hits++;
+        read_fails = 1;
+    }
+}
+
+/**
+ * A symlink whose name is on the device keeps its inode when the store of
+ * the directory's times fails after it, as create and mknod keep theirs.
+ * On a mount that writes back, files are made in the root until the next
+ * inode lies in another table block than the root's; the cache is emptied,
+ * and every read of the root's table block fails while a fast symlink is
+ * made. The entry is written to the device before the times are stored
+ * (`dir_commit`), so the store's read fails after the name is out: the
+ * call must succeed, and after a sync and an unmount the name must name an
+ * inode in use, with no finding of e2fsck about it.
+ */
+static void symlink_kept_row(void)
+{
+    char name[16];
+    void *n;
+    uint64_t ino = 0;
+    int64_t table;
+    int i, rc = 0, published;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    stop_after = -1;
+    table = inode_block_of(wimg, "<2>");
+    if (table <= 0 || mount_flags(0) != 0) {
+        check(0, "the kept-symlink row's volume mounts so that it writes back");
+        return;
+    }
+    for (i = 0; rc == 0 && ino < 32 && i < 64; i++) {
+        snprintf(name, sizeof name, "full%d", i);
+        n = make_file(mnt.root, name, &rc);
+        if (n) {
+            ino = held_ino(&mnt, n);
+            OPS->put(&mnt, n);
+        }
+    }
+    check(rc == 0 && OPS->sync(&mnt) == 0 && bcache_invalidate(&dev) == 0,
+          "the kept-symlink row's files reach the disk and the cache is emptied");
+    fail_read_block = table;
+    fail_read_hits = 0;
+    read_pause = fail_block_reads;
+    rc = OPS->symlink(&mnt, mnt.root, "link", "hello.txt");
+    read_pause = 0;
+    read_fails = 0;
+    fail_read_block = -1;
+    fflush(image);
+    published = debugfs_lists(wimg, "/", "link");
+    check(rc == 0 && fail_read_hits > 0 && published,
+          "a symlink whose directory's times fail at the root's table block, after its "
+          "name reached the device, succeeds");
+    if (rc != 0 || fail_read_hits == 0 || !published) {
+        printf("  rc %d, failed reads %d, name on the device %d\n", rc, fail_read_hits, published);
+    }
+    rc = unmount_rw();
+    fflush(image);
+    check(rc == 0 && inode_block_of(wimg, "/link") != table,
+          "and its inode lies in another table block than the root's");
+    check(fsck_judged(wimg) >= 0 && !ext2_fixture_contains(fix_path("fsck.out"), "'link'") &&
+              debugfs_says(wimg, "testi /link", "is marked in use") &&
+              debugfs_says(wimg, "stat /link", "Fast link dest: \"hello.txt\""),
+          "and its name names the inode it made, in use and whole");
+}
+
+/* Set when process A of `reuse_row` is done, for process B to end. */
+static int reuse_done;
+
+/** Process B of `reuse_row`: the memory reclaim, which gives back every
+ * buffer nobody holds and writes the dirty ones, at each turn. */
+static void reuse_reclaim(void)
+{
+    uint32_t written = 0;
+
+    while (!reuse_done) {
+        (void)bcache_shrink(bcache_resident(), 1, &written);
+        pass_turn();
+    }
+}
+
+/** The read hook of `reuse_row`: a turn for the reclaim. */
+static void reuse_turn(void)
+{
+    pass_turn();
+}
+
+/**
+ * Bring `reuse_row`'s volume to its truncate: /src, a /dst whose twelve
+ * direct blocks are full (`growth_fill`), /big of twelve blocks of the
+ * pattern, and /fill over every block left (`fill_volume`), synced and
+ * mounted again, so that the allocator starts at the volume's first
+ * block. /big's inode number, the block of its table and its blocks go in
+ * `*ino`, `*table` and `freed`, `*nfreed` of them. Returns 0, or the first
+ * error, with the volume mounted on success.
+ */
+static int reuse_mount(uint64_t *ino, int64_t *table, uint64_t *freed, int *nfreed)
+{
+    char cmd[64];
+    void *n;
+    int rc;
+
+    *nfreed = 0;
+    if (growth_mount(12) != 0) {
+        return -1;
+    }
+    n = make_file(mnt.root, "big", &rc);
+    if (n) {
+        rc = write_at(n, pattern, 12 * 4096, 0);
+        *ino = held_ino(&mnt, n);
+        OPS->put(&mnt, n);
+    }
+    if (rc == 0) {
+        rc = fill_volume();
+    }
+    if (rc == 0) {
+        rc = unmount_rw();
+    }
+    if (rc != 0) {
+        unmount_image();
+        return rc;
+    }
+    fflush(image);
+    snprintf(cmd, sizeof cmd, "<%lu>", (unsigned long)*ino);
+    *table = inode_block_of(wimg, cmd);
+    snprintf(cmd, sizeof cmd, "blocks <%lu>", (unsigned long)*ino);
+    *nfreed = debugfs_list(cmd, "", freed, 16);
+    return mount_flags(0);
+}
+
+/**
+ * A block a truncate freed and the growth of a directory takes again is not
+ * written while the truncate's pointers to it are not on the disk. On a
+ * mount that writes back, a volume left no free block but /big's has /big
+ * truncated to nothing, its cleared inode only in the cache, `first`, and
+ * its blocks free. A rename into /dst, whose twelve direct blocks are full,
+ * then takes two of them, for the single indirect block and the
+ * directory's thirteenth, while another process reclaims the whole cache,
+ * writing what is dirty, at each read the rename makes. In the order of
+ * the device's writes, the first write of /big's table block after the
+ * truncate must come before any write of a block it freed (`map_zero`,
+ * `shared_block_new`).
+ */
+static void reuse_row(void)
+{
+    uint64_t freed[16], ino = 0;
+    int64_t table = -1;
+    void *n, *dst, *handle = 0;
+    int i, nfreed, rc, t, w, reused = 0, early = 0;
+
+    if (reuse_mount(&ino, &table, freed, &nfreed) != 0) {
+        check(0, "the reuse row's volume fills, mounts again and writes back");
+        return;
+    }
+    check(nfreed == 12 && table > 0, "debugfs names /big's twelve blocks and its table block");
+    n = walk("/big", &rc);
+    dst = n ? walk("/dst", &rc) : 0;
+    if (!dst || OPS->open(&mnt, n, 2, &handle) != 0) {
+        check(0, "the reuse row's file and directory are held");
+        if (dst) {
+            OPS->put(&mnt, dst);
+        }
+        if (n) {
+            OPS->put(&mnt, n);
+        }
+        unmount_image();
+        return;
+    }
+    wlog_reset();
+    OPS->lock_node(&mnt, n);
+    rc = OPS->truncate(&mnt, handle, 0);
+    OPS->unlock_node(&mnt, n);
+    OPS->release(&mnt, handle);
+    OPS->put(&mnt, n);
+    if (rc == 0) {
+        reuse_done = 0;
+        read_pause = reuse_turn;
+        start_turns(reuse_reclaim);
+        rc = OPS->rename(&mnt, mnt.root, "src", dst, "moved");
+        read_pause = 0;
+        reuse_done = 1;
+        finish_turns();
+    }
+    OPS->put(&mnt, dst);
+    if (rc == 0) {
+        rc = OPS->sync(&mnt);
+    }
+    t = first_write_of((uint64_t)table);
+    for (i = 0; i < nfreed; i++) {
+        w = first_write_of(freed[i]);
+        if (w >= 0) {
+            reused++;
+            early += t < 0 || w < t;
+        }
+    }
+    check(rc == 0 && t >= 0 && !wlog_overflow,
+          "a truncate and a rename that grows a directory past its direct blocks run whole "
+          "under reclaim at every read");
+    check(reused > 0, "and the directory takes blocks the truncate freed");
+    check(early == 0, "and no block the truncate freed is written before the table block that "
+                      "clears its pointer");
+    if (rc != 0 || t < 0 || reused == 0 || early != 0) {
+        printf("  rc %d, table write %d, blocks taken again %d, written early %d\n", rc, t, reused,
+               early);
+    }
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume is clean");
+}
+
+/**
+ * The rows of what a change of names puts on the device before its next
+ * step on a mount that writes back: a rename into a directory that grows,
+ * its second direct block and its first behind the single indirect,
+ * stopped after each write (`growth_row`), as Linux's `ext2_handle_dirsync`
+ * writes the directory's inode before the rename removes the old name
+ * (fs/ext2/dir.c:440-447 and namei.c:376-390 in Linux 6.12.115); a symlink
+ * whose name reached the device and whose directory's times then fail
+ * (`symlink_kept_row`); and a block freed by a truncate and taken again
+ * by a directory under reclaim (`reuse_row`).
+ */
+static void dir_commit_rows(void)
+{
+    int got, total = 0;
+
+    got = growth_row(1);
+    if (got >= 0) {
+        total += got;
+        got = growth_row(12);
+    }
+    if (got < 0) {
+        check(0, "the volume of the growth rows mounts and takes its files");
+        return;
+    }
+    total += got;
+    printf("ext2_hosttest: %d stops of renames into a growing directory walked\n", total);
+    symlink_kept_row();
+    reuse_row();
+}
+
 /** The timestamp rows, with 128-byte and with 256-byte inodes. */
 static void time_rows(void)
 {
@@ -6941,6 +7378,7 @@ static const struct {
     {"--readonly-only", readonly_rows},
     {"--ftype-only", ftype_rows},
     {"--removal-only", removal_rows},
+    {"--dir-commit-only", dir_commit_rows},
 };
 
 /**
@@ -6948,7 +7386,8 @@ static const struct {
  * and run the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes
  * and at 2 KiB, the 1 KiB levels, the failures, the write sequences, the
  * types of replaced entries, the removals stopped on a mount that writes
- * back, the order rows, the writer's failures, the dirty volumes, the
+ * back, the directory's inode and a reused block before the next step, the
+ * order rows, the writer's failures, the dirty volumes, the
  * read-only volumes, the matrix and the batch rows, the node rows, the
  * fsync rows, the group rows, the rows of one file's writes and the rows of
  * operations on names, both without the big lock. An option
@@ -6994,6 +7433,7 @@ int main(int argc, char **argv)
     write_rows();
     ftype_rows();
     removal_rows();
+    dir_commit_rows();
     time_rows();
     order_row();
     refusal_write_rows();
