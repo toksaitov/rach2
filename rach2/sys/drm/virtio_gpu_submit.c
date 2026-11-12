@@ -427,6 +427,23 @@ static int32_t submit_fence_in(struct virtio_gpu_device *vg, const struct drm_vi
 }
 
 /**
+ * Prepare the submission `cmd` with its fence where something reads the
+ * fence, an out-fence sync file, an output syncobj, a buffer's reservation
+ * or a polled ring's event, and take the fence off otherwise, as Linux's
+ * virtio_gpu_init_submit (virtgpu_submit.c:383-397): QEMU answers a fenced
+ * command only at its next poll of virgl's fences.
+ */
+static void submit_prepare(struct virtio_gpu_cmd *cmd, const struct drm_virtgpu_execbuffer *a,
+                           const struct vgpu_submit *s)
+{
+    if (!(a->flags & VIRTGPU_EXECBUF_FENCE_FD_OUT) && !a->num_out_syncobjs && !a->num_bo_handles &&
+        !s->event) {
+        vgpu_cmd_unfence(cmd);
+    }
+    vgpu_cmd_prepare(cmd);
+}
+
+/**
  * Submit copied commands asynchronously after foreign dependencies, as
  * Linux's virtio_gpu_execbuffer_ioctl: with VIRTGPU_EXECBUF_RING_IDX on a
  * ring CONTEXT_INIT gave the file's context, whose fence context the
@@ -502,7 +519,7 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
     if (rc) {
         goto out;
     }
-    vgpu_cmd_prepare(cmd);
+    submit_prepare(cmd, a, s);
     for (i = 0; i < s->nbos; i++) {
         rc = dma_resv_add_fence(s->bos[i]->resv, cmd->fence, 1);
         if (rc) {
