@@ -1514,6 +1514,25 @@ static struct nvme_slot *nvme_slot_wait(struct nvme_ctrl *c)
 }
 
 /**
+ * End a polled command whose slot `s` is done, with both of `c`'s locks
+ * held from `nvme_lock`'s `flags`: free the slot, give the locks back and
+ * set `*rc` to 0 for success or `-EIO`, and return 1. A slot not done is
+ * left as it is, the locks are given back, and the answer is 0.
+ */
+static int nvme_polled_done(struct nvme_ctrl *c, struct nvme_slot *s, uint32_t flags, int *rc)
+{
+    if (!s->done) {
+        nvme_unlock(c, flags);
+        return 0;
+    }
+    *rc = s->status ? -EIO : 0;
+    s->busy = 0;
+    nvme_start_next(c);
+    nvme_unlock(c, flags);
+    return 1;
+}
+
+/**
  * Issue `xf` and poll for its answer: 0 when the controller answered
  * success, `-EIO` when it answered an error or did not answer within the
  * wait, after recovery, and -1 when the command could not be built.
@@ -1524,6 +1543,15 @@ static struct nvme_slot *nvme_slot_wait(struct nvme_ctrl *c)
  * a recovery that took it (`nvme_slot_fail`), or after its own recovery
  * once the wait ran out, which has aborted the command. The wait neither
  * sleeps nor allocates, so it serves a page fault with interrupts off.
+ *
+ * When the wait runs out, the slot is reaped and tested once more under
+ * both locks before the recovery, since the handler on another processor,
+ * or another caller's recovery that has just ended, may have marked it done
+ * after the last test; only a command still in flight resets the
+ * controller, as Linux's `nvme_timeout` polls for a missed completion first
+ * (drivers/nvme/host/pci.c:1458-1471). After the recovery the slot answers
+ * with its own status: the reset fails only a command not yet answered
+ * (`nvme_slot_fail`), so one answered just before it keeps its success.
  */
 static int nvme_polled(struct nvme_ctrl *c, const struct nvme_xfer *xf)
 {
@@ -1532,14 +1560,14 @@ static int nvme_polled(struct nvme_ctrl *c, const struct nvme_xfer *xf)
     int masked = !kirq_enabled();
     uint32_t steps = nvme_cmd_steps();
     uint32_t flags;
+    int rc;
 
     if (!s) {
         return -EIO;
     }
     flags = spin_lock_irqsave(&c->sq_lock);
     if (c->resetting || c->dead || s->done || nvme_build(c, s, xf, &cmd) != 0) {
-        int rc = c->resetting || c->dead || s->done ? -EIO : -1;
-
+        rc = c->resetting || c->dead || s->done ? -EIO : -1;
         s->busy = 0;
         nvme_start_next(c);
         spin_unlock_irqrestore(&c->sq_lock, flags);
@@ -1554,26 +1582,29 @@ static int nvme_polled(struct nvme_ctrl *c, const struct nvme_xfer *xf)
         }
         spin_lock(&c->sq_lock);
         block_count_poll();
-        if (s->done) {
-            uint16_t status = s->status;
-
-            s->busy = 0;
-            nvme_start_next(c);
-            nvme_unlock(c, flags);
-            return status ? -EIO : 0;
+        if (nvme_polled_done(c, s, flags, &rc)) {
+            return rc;
         }
-        nvme_unlock(c, flags);
         nvme_io->udelay(NVME_POLL_US);
+    }
+    flags = spin_lock_irqsave(&c->cq_poll_lock);
+    if (!c->resetting) {
+        nvme_reap(c);
+    }
+    spin_lock(&c->sq_lock);
+    if (nvme_polled_done(c, s, flags, &rc)) {
+        return rc;
     }
     klog(KLOG_WARN, "nvme", "%d: namespace %d: command 0x%X failed: %s", c->number,
          (int)xf->ns->nsid, (unsigned)xf->opcode,
          masked ? "no answer in five seconds with interrupts off" : "no answer in thirty seconds");
     nvme_recover(c, "a command was not answered");
     flags = spin_lock_irqsave(&c->sq_lock);
+    rc = s->done && s->status == 0 ? 0 : -EIO;
     s->busy = 0;
     nvme_start_next(c);
     spin_unlock_irqrestore(&c->sq_lock, flags);
-    return -EIO;
+    return rc;
 }
 
 /**
