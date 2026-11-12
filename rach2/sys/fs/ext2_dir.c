@@ -872,6 +872,65 @@ static int dirent_split(struct ext2_mount *em, uint64_t off, const struct ext2_s
 }
 
 /**
+ * Write bytes [off, off + len) of the volume, a directory's entries just
+ * changed, to the device now on a mount that writes back, as Linux's
+ * `ext2_handle_dirsync` writes a directory's pages after every change of
+ * its entries, with no test of `dirsync` (fs/ext2/dir.c:440-447, called at
+ * 470, 557, 611 and 650 in Linux 6.12.115). So a removed name is on the
+ * device before the inode it named loses its count, is freed and is given
+ * to another file, and a new name, a pointed entry or a new `..` before
+ * the operation's next step. A strict mount wrote the bytes through
+ * already. 0; -EROFS without a write once a write on the device has
+ * failed, as a strict mount's next write is, so that an operation in
+ * progress stops there; or the write's -errno, with the block still dirty.
+ *
+ * As in Linux, the disk's cache is not flushed. Linux next writes the
+ * directory's inode; here it writes back in the cache's order, which keeps
+ * a table block back until the blocks it may name are written
+ * (`bcache_sync_last`), so that writing it now would write the blocks of
+ * every inode beside it, and no step after a change depends on it.
+ */
+static int dir_commit(struct ext2_mount *em, uint64_t off, uint32_t len)
+{
+    uint64_t blk = off >> BCACHE_BLOCK_SHIFT;
+    uint64_t end = (off + len - 1) >> BCACHE_BLOCK_SHIFT;
+    int rc = 0;
+
+    if (ext2_em_strict(em)) {
+        return 0;
+    }
+    if (em->dev->flags & BLOCK_WRITE_FAILED) {
+        return -EROFS;
+    }
+    for (; rc == 0 && blk <= end; blk++) {
+        rc = bcache_sync_block(em->dev, blk);
+    }
+    return rc;
+}
+
+/**
+ * Write the new block of directory `d` at byte `off` of the volume zeroed,
+ * with `head`, its first `len` bytes, over the zeros, and on a mount that
+ * writes back to the device before anything names it (`dir_commit`). There
+ * the zeros are marked to go after the device's `first` blocks, the
+ * pointers and inodes a free cleared, so that a block freed and taken
+ * again is not overwritten on the device while an old pointer there still
+ * names it. 0, or -errno.
+ */
+static int dir_block_new(struct ext2_mount *em, uint64_t off, const void *head, uint32_t len)
+{
+    int rc = ext2_write_bytes(em, off, 0, em->block_size, ext2_em_strict(em) ? 0 : WRITE_AFTER);
+
+    if (rc == 0) {
+        rc = ext2_write_bytes(em, off, head, len, WRITE_THROUGH);
+    }
+    if (rc == 0) {
+        rc = dir_commit(em, off, em->block_size);
+    }
+    return rc;
+}
+
+/**
  * Clear the hashed-index flag of directory `d`, whose entries are about to
  * change, and store its inode with WRITE_THROUGH before they do. 0, or
  * -errno.
@@ -911,11 +970,61 @@ static int dir_unindex(struct ext2_mount *em, struct ext2_node *d)
 }
 
 /**
+ * Add `name`, of `name_len` bytes, naming `ino` of file type `ftype`, to
+ * directory `d` in a new block at its end, for `dir_add`, which found no
+ * room: the block allocated and written with one empty entry spanning it
+ * (`dir_block_new`), chained with `i_blocks` and covered by the size in one
+ * store of the inode, and the entry written last. 0, -EFBIG for a directory
+ * that would pass 4 GiB less a block, -ENOSPC, decided before any block is
+ * taken for the block and the pointer blocks its index can need, or -errno.
+ */
+static int dir_grow(struct ext2_mount *em, struct ext2_node *d, const char *name, uint32_t name_len,
+                    uint32_t ino, uint32_t ftype)
+{
+    uint32_t index = (uint32_t)(d->size >> em->block_shift);
+    uint32_t b;
+    uint64_t off, free;
+    uint8_t head[8];
+    int rc, fresh;
+
+    if (d->size + em->block_size > 0xFFFFFFFFu) {
+        return -EFBIG;
+    }
+    free = ext2_free_blocks(em);
+    if (1 + ext2_pointer_levels(em, index) > free ||
+        (!ext2_may_use_reserved() && free - (1 + ext2_pointer_levels(em, index)) < em->r_blocks)) {
+        return -ENOSPC;
+    }
+    rc = ext2_map_alloc(em, d, index, &b, &fresh);
+    if (rc != 0) {
+        return rc;
+    }
+    off = (uint64_t)b * em->block_size;
+    LE32_PUT(head, 0);
+    LE16_PUT(head + 4, em->block_size);
+    head[6] = 0;
+    head[7] = 0;
+    rc = dir_block_new(em, off, head, 8);
+    if (rc != 0) {
+        return rc;
+    }
+    ext2_node_size_set(d, d->size + em->block_size);
+    ext2_stamp(d, T_MTIME | T_CTIME);
+    rc = ext2_inode_store(em, d);
+    if (rc != 0) {
+        return rc;
+    }
+    d->add_from = index << em->block_shift;
+    rc = dirent_write(em, off, ino, em->block_size, name, name_len, ftype);
+    return rc == 0 ? dir_commit(em, off, dirent_len(name_len)) : rc;
+}
+
+/**
  * Add `name` naming `ino`, of file type `ftype`, to directory `d`: in the
  * first empty record with room, whole, or the first entry with room behind
- * its name, split; else in a new block, allocated, written zeroed with one
- * empty entry spanning it, and chained with `i_blocks` and covered by the
- * size in one write of the inode. The entry itself is the last write. 0,
+ * its name, split; else in a new block (`dir_grow`). The entry itself is
+ * the last write, and on a mount that writes back reaches the device before
+ * the call returns (`dir_commit`). 0,
  * -ENOENT for a removed directory, -ENAMETOOLONG, -EFBIG for a directory
  * that would pass 4 GiB less a block, -ENOSPC, decided before any block is
  * taken for the block and the pointer blocks its index can need, or -errno.
@@ -935,7 +1044,7 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
     struct ext2_scan sc;
     struct ext2_window w;
     uint8_t entry[8 + EXT2_NAME_MAX + 4];
-    int rc, fresh;
+    int rc;
 
     if (d->unlinked) {
         return -ENOENT;
@@ -980,54 +1089,16 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
         }
         d->add_from = here & ~(em->block_size - 1u);
         if (used == 0) {
-            return dirent_write(em, off, ino, sc.rec_len, name, name_len, ftype);
+            rc = dirent_write(em, off, ino, sc.rec_len, name, name_len, ftype);
+        } else {
+            used = dirent_encode(entry, ino, room, name, name_len,
+                                 (em->incompat & EXT2_INCOMPAT_FILETYPE) ? ftype : 0);
+            rc = dirent_split(em, off, &sc, entry, used);
         }
-        used = dirent_encode(entry, ino, room, name, name_len,
-                             (em->incompat & EXT2_INCOMPAT_FILETYPE) ? ftype : 0);
-        return dirent_split(em, off, &sc, entry, used);
+        return rc == 0 ? dir_commit(em, off, sc.rec_len) : rc;
     }
     window_close(&w);
-    {
-        uint32_t index = (uint32_t)(d->size >> em->block_shift);
-        uint32_t b;
-        uint64_t off, free;
-        uint8_t head[8];
-
-        if (d->size + em->block_size > 0xFFFFFFFFu) {
-            return -EFBIG;
-        }
-        free = ext2_free_blocks(em);
-        if (1 + ext2_pointer_levels(em, index) > free ||
-            (!ext2_may_use_reserved() &&
-             free - (1 + ext2_pointer_levels(em, index)) < em->r_blocks)) {
-            return -ENOSPC;
-        }
-        rc = ext2_map_alloc(em, d, index, &b, &fresh);
-        if (rc != 0) {
-            return rc;
-        }
-        off = (uint64_t)b * em->block_size;
-        rc = ext2_write_bytes(em, off, 0, em->block_size, 0);
-        if (rc != 0) {
-            return rc;
-        }
-        LE32_PUT(head, 0);
-        LE16_PUT(head + 4, em->block_size);
-        head[6] = 0;
-        head[7] = 0;
-        rc = ext2_write_bytes(em, off, head, 8, 1);
-        if (rc != 0) {
-            return rc;
-        }
-        ext2_node_size_set(d, d->size + em->block_size);
-        ext2_stamp(d, T_MTIME | T_CTIME);
-        rc = ext2_inode_store(em, d);
-        if (rc != 0) {
-            return rc;
-        }
-        d->add_from = index << em->block_shift;
-        return dirent_write(em, off, ino, em->block_size, name, name_len, ftype);
-    }
+    return dir_grow(em, d, name, name_len, ino, ftype);
 }
 
 /** Remove the entry `sc` at byte `at` of `d`, whose predecessor in its block
@@ -1048,10 +1119,10 @@ static int dir_remove_at(struct ext2_mount *em, struct ext2_node *d, uint32_t at
         uint8_t zero[4] = {0, 0, 0, 0};
 
         rc = dir_block_at(em, d, at, &off);
-        if (rc != 0) {
-            return rc;
+        if (rc == 0) {
+            rc = ext2_write_bytes(em, off, zero, 4, 1);
         }
-        return ext2_write_bytes(em, off, zero, 4, 1);
+        return rc == 0 ? dir_commit(em, off, 4) : rc;
     } else {
         struct ext2_scan ps;
         uint32_t cursor = prev_at;
@@ -1066,7 +1137,8 @@ static int dir_remove_at(struct ext2_mount *em, struct ext2_node *d, uint32_t at
             return rc;
         }
         LE16_PUT(raw, ps.rec_len + sc->rec_len);
-        return ext2_write_bytes(em, off + 4, raw, 2, 1);
+        rc = ext2_write_bytes(em, off + 4, raw, 2, 1);
+        return rc == 0 ? dir_commit(em, off + 4, 2) : rc;
     }
 }
 
@@ -1121,7 +1193,8 @@ static int dir_set_dotdot(struct ext2_mount *em, struct ext2_node *d, uint32_t p
             }
             dir_changed(d);
             LE32_PUT(raw, parent);
-            return ext2_write_bytes(em, off, raw, 4, 1);
+            rc = ext2_write_bytes(em, off, raw, 4, 1);
+            return rc == 0 ? dir_commit(em, off, 4) : rc;
         }
     }
 }
@@ -1581,9 +1654,6 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
     sleep_lock_subclass(0);
     rc = ext2_map_alloc(em, n, 0, &b, &fresh);
     if (rc == 0) {
-        rc = ext2_write_bytes(em, (uint64_t)b * em->block_size, 0, em->block_size, 0);
-    }
-    if (rc == 0) {
         dir_changed(n);
         k_memset(head, 0, sizeof(head));
         LE32_PUT(head, n->ino);
@@ -1597,7 +1667,7 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         head[19] = head[7];
         head[20] = '.';
         head[21] = '.';
-        rc = ext2_write_bytes(em, (uint64_t)b * em->block_size, head, 24, 1);
+        rc = dir_block_new(em, (uint64_t)b * em->block_size, head, 24);
     }
     if (rc == 0) {
         ext2_node_size_set(n, em->block_size);
@@ -2029,6 +2099,9 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
             raw[6] = (uint8_t)nsc->name_len;
             raw[7] = (em->incompat & EXT2_INCOMPAT_FILETYPE) ? (uint8_t)ext2_ftype_of(n->mode) : 0;
             rc = ext2_write_bytes(em, off, raw, 8, WRITE_THROUGH);
+        }
+        if (rc == 0) {
+            rc = dir_commit(em, off, 8);
         }
         if (rc != 0) {
             return rc;
