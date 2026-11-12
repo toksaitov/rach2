@@ -2589,6 +2589,23 @@ static void hda_msi_start(void)
 }
 
 /**
+ * Register the handler, without the big lock (ISR_UNLOCKED), on the
+ * controller's PCI interrupt line when the line is 1 to 15, and on a message
+ * vector of its own (hda_msi_start), as Linux requests azx_interrupt, which
+ * runs under no global lock (sound/pci/hda/hda_intel.c:778 of 6.12.115).
+ */
+static void hda_irq_start(void)
+{
+    if (hda_pci.irq > 0 && hda_pci.irq < 16) {
+        register_isr_handler((uint8_t)IRQ_VECTOR(hda_pci.irq), hda_irq_handler, "hda");
+        isr_register_flags((uint8_t)IRQ_VECTOR(hda_pci.irq), hda_irq_handler, ISR_UNLOCKED);
+
+        hda_write32(HDA_INTCTL, hda_intctl());
+    }
+    hda_msi_start();
+}
+
+/**
  * Choose the controller to drive into hda_pci: the first PCI audio function
  * that is not an HDMI controller, else the first audio function. Log every
  * other audio function as not driven, since this kernel drives one, and a
@@ -2719,14 +2736,7 @@ static int hda_init(void)
     if (adc_nid)
         hda_input_ready();
 
-    if (hda_pci.irq > 0 && hda_pci.irq < 16) {
-        register_isr_handler((uint8_t)IRQ_VECTOR(hda_pci.irq), hda_irq_handler, "hda");
-        isr_register_flags((uint8_t)IRQ_VECTOR(hda_pci.irq), hda_irq_handler, ISR_UNLOCKED);
-
-        hda_write32(HDA_INTCTL, hda_intctl());
-    }
-
-    hda_msi_start();
+    hda_irq_start();
     hda_build_boot_status();
     return 0;
 }

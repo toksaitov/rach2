@@ -68,6 +68,10 @@ static unsigned intsts_reads, intsts_locked, verbs_stream_locked;
 /* The stream mutex's takes, which every operation of hda_driver that
  * changes the device makes once. */
 static unsigned mutex_takes;
+/* The handlers registered, those without the big lock among them, and
+ * whether the model has message-signalled interrupts. */
+static unsigned isr_regs, isr_unlocked;
+static int msi_model;
 static unsigned delays, delays_irqs_off, ics_reads_irqs_on;
 static int refuse_alloc; /* kmalloc fails */
 extern void *malloc(unsigned long size);
@@ -882,16 +886,32 @@ static void run_khda(void)
     mutex_unlock(&stream_mutex);
 }
 
+/** Check that the operation of hda_driver just called took the stream mutex
+ * once since `*takes` and gave it back, and count it. */
+static void took_mutex(unsigned *takes, const char *message)
+{
+    check(mutex_takes == *takes + 1 && !stream_mutex.owner, message);
+    *takes = mutex_takes;
+}
+
 /**
  * The locks of 84-6c: the interrupt reads INTSTS under the stream lock and
- * leaves it free, and no verb is sent under it; each operation of
- * hda_driver that changes the device takes the stream mutex once and gives
- * it back, while the readers, called with interrupts off, take none; and
- * the delay counts what the resampler held at the last fill (play_held).
+ * leaves it free, and no verb is sent under it; the delay counts what the
+ * resampler held at the last fill (play_held), not what it holds while a
+ * fill is under way; the readers, called with interrupts off, take no
+ * mutex; the handler is registered without the big lock (ISR_UNLOCKED) on
+ * the line and on a message vector; and each operation of hda_driver that
+ * changes the device takes the stream mutex once and gives it back, a start
+ * while the stream plays among them, whose stop runs under the mutex the
+ * start holds.
  */
 static void row_locks(void)
 {
+    static resampler_t saved;
+    audio_stream_t s;
     unsigned next = 1, takes;
+    uint32_t pos, queued, ahead;
+    uint8_t irq = hda_pci.irq;
     int level;
 
     row = "locks";
@@ -905,6 +925,19 @@ static void row_locks(void)
           "the interrupt reads INTSTS under the stream lock and lets it go");
     check(play_held == resample_held(&hda_rs),
           "the delay's count of the resampler is the fill's last");
+
+    /* A fill under way moves hda_rs before it sets play_held again. */
+    queued = hda_driver.delay(NULL);
+    pos = hda_stream_position();
+    ahead = hda_play_delay(pos);
+    saved = hda_rs;
+    hda_rs.owed = 0;
+    hda_rs.span = play_held + 5;
+    check(resample_held(&hda_rs) == play_held + 5 && hda_driver.delay(NULL) == queued &&
+              hda_play_delay(pos) == ahead,
+          "the delay counts play_held, not the resampler in the middle of a fill");
+    hda_rs = saved;
+
     takes = mutex_takes;
     irqs_on = 0;
     (void)hda_driver.is_playing();
@@ -913,13 +946,54 @@ static void row_locks(void)
     irqs_on = 1;
     check(mutex_takes == takes && !stream_lock.locked,
           "the readers take no mutex with interrupts off");
+
+    hda_pci.irq = 11;
+    msi_model = 1;
+    isr_regs = isr_unlocked = 0;
+    hda_irq_start();
+    check(isr_regs == 2 && isr_unlocked == 2,
+          "the handler is registered without the big lock on the line and the message vector");
+    hda_pci.irq = irq;
+    msi_model = 0;
+    msi_vector = -1;
+
+    k_memset(&s, 0, sizeof(s));
+    s.dir = AUDIO_PLAYBACK;
+    check(hda_driver.is_playing(), "the write path plays before the start");
+    hda_driver.start(44100, AUDIO_S16LE, 2);
+    took_mutex(&takes, "a start while the stream plays takes the stream mutex once");
+    check(hda_driver.is_playing(), "the start plays again");
+    hda_driver.write((const uint8_t *)block, 4);
+    took_mutex(&takes, "write takes the stream mutex once");
+    hda_driver.set_callback(NULL);
+    took_mutex(&takes, "set_callback takes the stream mutex once");
     level = hda_driver.get_volume();
     hda_driver.set_volume(level > 10 ? level - 10 : level + 10);
+    took_mutex(&takes, "set_volume takes the stream mutex once");
     hda_driver.set_volume(level);
+    took_mutex(&takes, "set_volume takes the stream mutex once again");
+    check(hda_driver.stream_open(&s) == -EBUSY,
+          "a stream does not open while the write path plays");
+    took_mutex(&takes, "stream_open takes the stream mutex once");
+    (void)hda_driver.stream_setup(&s);
+    took_mutex(&takes, "stream_setup takes the stream mutex once");
+    (void)hda_driver.stream_start(&s);
+    took_mutex(&takes, "stream_start takes the stream mutex once");
+    hda_driver.stream_stop(&s);
+    took_mutex(&takes, "stream_stop takes the stream mutex once");
+    hda_driver.stream_close(&s);
+    took_mutex(&takes, "stream_close takes the stream mutex once");
+    (void)hda_driver.input_select(in_src);
+    took_mutex(&takes, "input_select takes the stream mutex once");
+    (void)hda_driver.input_level(AUDIO_IN_GAIN, -1, -1);
+    took_mutex(&takes, "input_level takes the stream mutex once");
+    (void)hda_driver.beep_level(-1);
+    took_mutex(&takes, "beep_level takes the stream mutex once");
     hda_driver.stop();
-    check(mutex_takes == takes + 3 && !stream_mutex.owner,
-          "each operation that changes the device takes the stream mutex once");
+    took_mutex(&takes, "stop takes the stream mutex once");
     check(verbs_stream_locked == 0, "no verb is sent under the stream lock");
+    hda_driver.shutdown();
+    took_mutex(&takes, "shutdown takes the stream mutex once");
 }
 
 /**
@@ -2938,27 +3012,27 @@ void pci_write_config16(uint8_t b, uint8_t d, uint8_t f, uint8_t o, uint16_t v)
     (void)o;
     (void)v;
 }
-/** No interrupt allocation is used. */
+/** A message vector while the model has messages (msi_model), else -1. */
 int isr_alloc_vector(void)
 {
-    return -1;
+    return msi_model ? 0x41 : -1;
 }
-/** No vector is given out, so none comes back. */
+/** A vector given back needs nothing of the model. */
 void isr_free_vector(int vector)
 {
     (void)vector;
 }
-/** The model has no APIC. */
+/** The model has an APIC only while it has messages. */
 int isr_msi_ready(void)
 {
-    return 0;
+    return msi_model;
 }
-/** The model has no MSI capability. */
+/** The controller accepts a vector only while the model has messages. */
 int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
 {
     (void)dev;
     (void)vector;
-    return -1;
+    return msi_model ? 0 : -1;
 }
 /** Interrupt service is outside these rows. */
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
@@ -2967,13 +3041,15 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     (void)handler;
     (void)name;
 }
-/** The flags a handler runs with: the driver's carries ISR_UNLOCKED. */
-static unsigned isr_flags;
+/** Count the handlers registered, and those that run without the big lock
+ * (ISR_UNLOCKED), as the driver's must. */
 void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flags)
 {
     (void)vector;
     (void)handler;
-    isr_flags = flags;
+    isr_regs++;
+    if (flags & ISR_UNLOCKED)
+        isr_unlocked++;
 }
 /** MMIO accesses use the test hooks. */
 uintptr_t map_mmio(uintptr_t addr, size_t size)
