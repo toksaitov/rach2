@@ -122,10 +122,11 @@ one included, becomes nameless and remains accessible through that
 descriptor until the last close.
 It is absent from path lookup and directory listings.
 Without a descriptor, its storage is freed at unlink.
-A file on the boot root which backs an attached loop device instead
-returns
-.Er EBUSY .
-On ext2, the loop device retains the inode and the file may be unlinked.
+A file which backs an attached loop device, on any file system,
+instead returns
+.Er EBUSY :
+the device would then stand on a file no name reaches.
+Linux unlinks it and the device keeps the inode.
 .Pp
 .Fn unlinkat
 resolves a relative
@@ -232,8 +233,7 @@ selected a mount point,
 .Fn unlinkat
 with
 .Dv AT_REMOVEDIR
-selected the root, or the file on the KRFFS boot root backs an attached
-loop device.
+selected the root, or the file backs an attached loop device.
 .It Bq Er EEXIST
 The ext2 destination name already exists, or a
 .Fn link

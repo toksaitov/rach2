@@ -176,12 +176,12 @@ under
 to a name that no device has, within the directories that
 .Xr mkdir 2
 names.
-On the KRFFS boot root, replacing a different file that backs an attached
-loop device returns
-.Er EBUSY .
-This is a check on the destination, not the source.
-Ext2 permits renaming or replacing a loop-backed file because the loop
-device retains its inode.
+Replacing a different file that backs an attached loop device returns
+.Er EBUSY
+on every file system, where Linux replaces it and the device keeps the
+inode.
+This is a check on the destination, not the source: a file a loop device
+stands on may be renamed, since the device keeps it.
 .Pp
 The i386 system call numbers are 38 for
 .Nm rename ,
@@ -229,8 +229,7 @@ or
 .Pa \&..
 as its last component, or on FAT32 or exFAT a destination
 directory is in use: a descriptor or a working directory refers to it.
-On the KRFFS boot root, a different destination file backs an attached
-loop device.
+A different destination file backs an attached loop device.
 .It Er EFAULT
 A path cannot be read from user memory, or there is no current process.
 .It Er EFBIG
