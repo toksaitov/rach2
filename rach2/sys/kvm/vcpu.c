@@ -138,33 +138,47 @@ static void reset_seg(struct kvm_segment *s, uint16_t sel, uint64_t base, uint8_
     s->s = 1;
 }
 
-/** The architectural state a reset and an INIT both give, as Linux's
+/**
+ * The architectural state a reset and an INIT both give, as Linux's
  * kvm_vcpu_reset: real mode at 0xFFFF0 below the reset vector's segment,
  * EDX the family, model and stepping of the guest's CPUID, or 0x600 before
  * KVM_SET_CPUID2, CR0 with CD, NW and ET, no event waiting, and the debug
- * registers at reset; the APIC base cleared for the caller to set. */
+ * registers at reset; the APIC base as it was.
+ *
+ * The segments are built aside and copied in whole, so that the APIC base
+ * never reads other than it was: another processor's delivery reads it
+ * without a lock (vlapic.c's `hw_enabled` and `x2apic`), and a SIPI sent
+ * just after the INIT that this reset takes would otherwise find the APIC
+ * off and be dropped, leaving the vCPU waiting for it for ever. Linux's
+ * INIT leaves the base alone (arch/x86/kvm/lapic.c:2814-2826) and its
+ * delivery reads the APIC map, rebuilt under `apic_map_lock`
+ * (lapic.c:385-495, 1234-1269).
+ */
 static void reset_arch(struct kvm_vcpu *v)
 {
     const struct kvm_cpuid_entry2 *l1 = kvm_cpuid_find(v, 1, 0);
+    struct kvm_sregs s;
 
     k_memset(&v->regs, 0, sizeof(v->regs));
-    k_memset(&v->sregs, 0, sizeof(v->sregs));
+    k_memset(&s, 0, sizeof(s));
     v->regs.rdx = l1 ? l1->eax : 0x600;
     v->regs.rip = 0xFFF0;
     v->regs.rflags = 0x2;
-    reset_seg(&v->sregs.cs, 0xF000, 0xFFFF0000ull, 0xB);
-    reset_seg(&v->sregs.ds, 0, 0, 0x3);
-    reset_seg(&v->sregs.es, 0, 0, 0x3);
-    reset_seg(&v->sregs.fs, 0, 0, 0x3);
-    reset_seg(&v->sregs.gs, 0, 0, 0x3);
-    reset_seg(&v->sregs.ss, 0, 0, 0x3);
-    reset_seg(&v->sregs.tr, 0, 0, 0xB);
-    v->sregs.tr.s = 0;
-    reset_seg(&v->sregs.ldt, 0, 0, 0x2);
-    v->sregs.ldt.s = 0;
-    v->sregs.gdt.limit = 0xFFFF;
-    v->sregs.idt.limit = 0xFFFF;
-    v->sregs.cr0 = CR0_CD | CR0_NW | CR0_ET;
+    reset_seg(&s.cs, 0xF000, 0xFFFF0000ull, 0xB);
+    reset_seg(&s.ds, 0, 0, 0x3);
+    reset_seg(&s.es, 0, 0, 0x3);
+    reset_seg(&s.fs, 0, 0, 0x3);
+    reset_seg(&s.gs, 0, 0, 0x3);
+    reset_seg(&s.ss, 0, 0, 0x3);
+    reset_seg(&s.tr, 0, 0, 0xB);
+    s.tr.s = 0;
+    reset_seg(&s.ldt, 0, 0, 0x2);
+    s.ldt.s = 0;
+    s.gdt.limit = 0xFFFF;
+    s.idt.limit = 0xFFFF;
+    s.cr0 = CR0_CD | CR0_NW | CR0_ET;
+    s.apic_base = v->sregs.apic_base;
+    v->sregs = s;
     k_memset(&v->events, 0, sizeof(v->events));
     v->nmi_queued = 0;
     k_memset(&v->debugregs, 0, sizeof(v->debugregs));
@@ -206,10 +220,7 @@ static void vcpu_reset(struct kvm_vcpu *v)
 
 void kvm_vcpu_init_reset(struct kvm_vcpu *v)
 {
-    uint64_t base = v->sregs.apic_base;
-
     reset_arch(v);
-    v->sregs.apic_base = base;
     kvm_pmu_reset(v);
     /* As Linux's kvm_vcpu_reset at INIT: the steal time and the kvmclock
      * are off. */
