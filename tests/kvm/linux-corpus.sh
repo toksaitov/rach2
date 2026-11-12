@@ -15,7 +15,10 @@
 # build/x86_64/images/gnu-test.disk, and kvm.ext2, each behind a qcow2 overlay
 # of its own, under ACCEL, `kvm` by default, on the processor of the
 # `host-svm` profile with two processors and 6 GiB, as the KVM suite's nested
-# cases give Rach2, and with `linuxhost=KIND:LIST` on its command line runs
+# cases give Rach2, or under another accelerator on `max` with SVM and one
+# processor, as etude gives Rach2 a machine with SVM under TCG
+# (tools/etude/Readme.md), so that the two hosts run in the same machine; and
+# with `linuxhost=KIND:LIST` on its command line runs
 # `corpus.sh KIND LIST` in the root and powers off (guests/linux-host-init).
 # Each line of the console is written to standard output after the seconds
 # since the epoch at which it came, for the record; corpus.sh gives each
@@ -79,8 +82,9 @@ qemu-img create -q -f qcow2 -F raw -b "$data" "$work/kvm.qcow2" || exit 1
 # TSC that rach2.tscreliable stands for on Rach2's side.
 cpu=host,svm=on,npt=on,nrip-save=on,tsc-scale=on,vmcb-clean=on,flushbyasid=on
 cpu=$cpu,pause-filter=on,decodeassists=off,v-vmsave-vmload=off,vgif=off,invtsc=on
-[ "$accel" = kvm ] || cpu=max,svm=on,npt=on
-qemu-system-x86_64 -accel "$accel" -machine q35 -cpu "$cpu" -smp 2 -m 6144 \
+smp=2
+[ "$accel" = kvm ] || { cpu=max,svm=on,npt=on; smp=1; }
+qemu-system-x86_64 -accel "$accel" -machine q35 -cpu "$cpu" -smp "$smp" -m 6144 \
     -nodefaults -no-reboot -display none -monitor none -serial stdio \
     -kernel "$host/vmlinuz" -initrd "$host/initrd" \
     -append "console=ttyS0 linuxhost=$kind:$list" \
