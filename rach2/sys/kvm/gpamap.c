@@ -132,7 +132,9 @@ static int count_parts(struct kvm_vm *vm, const struct kvm_gpa_run *runs, uint32
             return -EINVAL;
         }
         total += runs[i].pages;
-        for (gfn = runs[i].gpa / 4096u, left = runs[i].pages; left > 0; gfn += take, left -= take) {
+        gfn = runs[i].gpa / 4096u;
+        left = runs[i].pages;
+        while (left > 0) {
             if (!kvm_slot_find(vm, gfn, &v) || (v.flags & KVM_MEM_READONLY)) {
                 return -EFAULT;
             }
@@ -142,6 +144,8 @@ static int count_parts(struct kvm_vm *vm, const struct kvm_gpa_run *runs, uint32
                 return -ENOMEM; /* overflow guard; GPAMAP_MAX_PAGES keeps it unreached */
             }
             (*parts)++;
+            gfn += take;
+            left -= take;
         }
     }
     *pages = total;
@@ -161,7 +165,9 @@ static int fill_parts(struct kvm_gpamap *m, struct kvm_vm *vm, const struct kvm_
     uint32_t i, k = 0;
 
     for (i = 0; i < n; i++) {
-        for (gfn = runs[i].gpa / 4096u, left = runs[i].pages; left > 0; gfn += take, left -= take) {
+        gfn = runs[i].gpa / 4096u;
+        left = runs[i].pages;
+        while (left > 0) {
             (void)kvm_slot_find(vm, gfn, &v);
             take = v.base_gfn + v.npages - gfn;
             take = take < left ? take : left;
@@ -173,6 +179,8 @@ static int fill_parts(struct kvm_gpamap *m, struct kvm_vm *vm, const struct kvm_
                 return -EFAULT;
             }
             page += take;
+            gfn += take;
+            left -= take;
         }
     }
     return 0;

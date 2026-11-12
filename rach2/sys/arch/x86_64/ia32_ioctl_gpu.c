@@ -24,7 +24,7 @@ static bool is_i915(unsigned int fd)
     } v;
 
     k_memset(&v, 0, sizeof(v));
-    v.version.name = v.name;
+    v.version.name = (char __force __user *)v.name;
     v.version.name_len = sizeof(v.name);
     return ia32_ioctl_native(fd, DRM_IOCTL_VERSION, &v, sizeof(v)) == 0 &&
            v.version.name_len == sizeof(v.name) && v.name[0] == 'i' && v.name[1] == '9' &&

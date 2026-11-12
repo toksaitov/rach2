@@ -3293,12 +3293,14 @@ static int h_ret_far(struct xc *x)
     uint64_t ip, cs;
     int r = x_pop(x, &ip, x->in->size);
 
-    if (r == X_OK) {
-        r = x_pop(x, &cs, x->in->size);
+    if (r != X_OK) {
+        return r;
     }
-    if (r == X_OK) {
-        r = seg_load(x, KVM_SEG_CS, (uint16_t)cs, XFER_RET);
+    r = x_pop(x, &cs, x->in->size);
+    if (r != X_OK) {
+        return r;
     }
+    r = seg_load(x, KVM_SEG_CS, (uint16_t)cs, XFER_RET);
     if (r == X_OK) {
         r = x_jump(x, ip, x->in->size);
     }
