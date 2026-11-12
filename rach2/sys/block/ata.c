@@ -215,8 +215,11 @@ void ata_set_io(const struct ata_io *ops)
  * `lock` covers the channel's registers, command and control block and bus
  * master alike, and `owner`, `sleepers`, `sleep_from`, `error_seen`,
  * `ticks`, `seen` and `irqs`; the descriptor and the bounce buffer are the
- * owner's. It is taken after the drivers' wait queue's and before the
- * drivers' counters', and a wake of `wq` comes after it is given back.
+ * owner's. It comes before any wait queue's lock, as proc/Readme.md's row
+ * 11 puts a device's spinlock before row 12's, and is never taken under
+ * one: `wq_wait` tests a sleeper's condition after it lets its queue's lock
+ * go (proc/wait_queue.c), and a wake of `wq` comes after this lock is given
+ * back. The drivers' counters' lock is taken under it.
  */
 struct ata_channel {
     struct spinlock lock;
