@@ -2359,7 +2359,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
 {
     int rc;
 
-    if (path && out && !record && mounts[0]->state == VFS_ACTIVE &&
+    if (path && out && !record && vfs_root_mounted() &&
         !(flags & ~(VFS_WALK_NOFOLLOW | VFS_WALK_REAL_IDS | VFS_WALK_LOCK)) &&
         !(current_proc && current_proc->walk_replay)) {
         rc = resolve_cached(start, path, flags, out, NULL);
@@ -2380,7 +2380,7 @@ int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out, struct 
     if (entry) {
         *entry = NULL;
     }
-    if (!path || path[0] != '/' || mounts[0]->state != VFS_ACTIVE ||
+    if (!path || path[0] != '/' || !vfs_root_mounted() ||
         (flags & ~(VFS_WALK_NOFOLLOW | VFS_WALK_REAL_IDS | VFS_WALK_LOCK)) ||
         (current_proc && current_proc->walk_replay)) {
         return VFS_CACHED_MISS;
@@ -4549,9 +4549,19 @@ struct vfs_mount *vfs_memfd_mount(void)
 
 static int root_installed;
 
+/**
+ * The table is read under its lock, since a caller without the big lock,
+ * the cached walk and getdents64 among them, may run while a mount grows
+ * the array and frees the old one (`mount_new_slot`) or a new root takes
+ * entry zero (`vfs_root_over_image`).
+ */
 int vfs_root_mounted(void)
 {
-    return mounts && mounts[0] && mounts[0]->state == VFS_ACTIVE;
+    uint32_t flags = spin_lock_irqsave(&mount_table_lock);
+    int active = mounts && mounts[0] && mounts[0]->state == VFS_ACTIVE;
+
+    spin_unlock_irqrestore(&mount_table_lock, flags);
+    return active;
 }
 
 void vfs_init(void)
