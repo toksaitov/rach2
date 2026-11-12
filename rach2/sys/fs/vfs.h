@@ -361,6 +361,9 @@ struct vfs_ops {
      * reads no page so, whose caller reads with `read`. */
     int32_t (*read_frames)(struct vfs_mount *mnt, void *handle, uint32_t first, uint32_t count,
                            const uintptr_t *frames);
+    /* The node an open handle holds, for a type whose `open` gives a handle
+     * of its own; NULL for a type whose handle is its node. */
+    void *(*handle_node)(void *handle);
 };
 
 /* What cachestat(2) counts over a file's range of pages, in the order and

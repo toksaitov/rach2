@@ -3159,6 +3159,12 @@ static int32_t open_read_frames(struct vfs_mount *mnt, void *handle, uint32_t fi
     return ext2_read_frames(mnt, h->node, first, count, frames);
 }
 
+/** The `handle_node` of `vfs_ops`: the node the open handle holds. */
+static void *open_node(void *handle)
+{
+    return ((struct ext2_handle *)handle)->node;
+}
+
 static const struct vfs_ops ext2_ops = {
     ext2_lookup,
     0, /* lookup_rest */
@@ -3201,6 +3207,7 @@ static const struct vfs_ops ext2_ops = {
     ext2_put_unless_last,
     ext2_readlink_cached,
     open_read_frames,
+    open_node,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 0, 0, 1, 1, 1, 1, 1};
