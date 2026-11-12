@@ -15,6 +15,7 @@
 #include "../io/poll.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
+#include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
@@ -894,6 +895,13 @@ static int32_t ioctl_permit(uint32_t flags, const struct drm_file *file)
     return 0;
 }
 
+/** Whether `row` needs no big lock on `dev`, as ioctl_call judges it. */
+static int ioctl_unlocked(struct drm_device *dev, const struct drm_ioctl_desc *row)
+{
+    return (row->flags & DRM_UNLOCKED) &&
+           (!(row->flags & DRM_KMS) || drm_core_check_feature(dev, DRIVER_KMS_UNLOCKED));
+}
+
 /**
  * Call `row`'s handler on `kdata` for `file` if the file may call it. The
  * master rules and every handler not marked DRM_UNLOCKED run under the big
@@ -907,8 +915,7 @@ static int32_t ioctl_permit(uint32_t flags, const struct drm_file *file)
 static int32_t ioctl_call(struct drm_device *dev, const struct drm_ioctl_desc *row, void *kdata,
                           struct drm_file *file)
 {
-    int unlocked = (row->flags & DRM_UNLOCKED) &&
-                   (!(row->flags & DRM_KMS) || drm_core_check_feature(dev, DRIVER_KMS_UNLOCKED));
+    int unlocked = ioctl_unlocked(dev, row);
     int big = !unlocked || (row->flags & DRM_MASTER);
     int mode = (row->flags & DRM_MODESET_LOCK) != 0;
     int32_t rc;
@@ -942,14 +949,22 @@ static int32_t ioctl_call(struct drm_device *dev, const struct drm_ioctl_desc *r
     return rc;
 }
 
+/**
+ * Dispatch `cmd` for the held file, copying its argument at `arg`: 0 or a
+ * negative errno. An unlocked row runs without an inherited big lock too,
+ * from its argument's copy in through its copy out, restoring the caller's
+ * depth on every return; ioctl_call takes the lock for master permission.
+ */
 int32_t drm_ioctl(struct drm_file *file, uint32_t cmd, uintptr_t arg)
 {
     struct drm_device *dev = file->dev;
     const struct drm_ioctl_desc *row;
     uint32_t nr = UAPI_IOC_NR(cmd);
     uint32_t in_size, out_size, ksize;
+    uint32_t irqflags;
     char stack[DRM_IOCTL_STACK];
     char *kdata;
+    int depth = 0;
     int32_t rc;
 
     if (dev->unplugged) {
@@ -967,6 +982,13 @@ int32_t drm_ioctl(struct drm_file *file, uint32_t cmd, uintptr_t arg)
     if (!row || !row->func) {
         return -EINVAL;
     }
+    /* A file-system device node's description keeps its inode, so its
+     * caller may hold the big lock even for this unlocked DRM file. */
+    if (ioctl_unlocked(dev, row)) {
+        irqflags = kirq_save();
+        depth = bkl_drop();
+        kirq_restore(irqflags);
+    }
     in_size = out_size = UAPI_IOC_SIZE(cmd);
     if (!(UAPI_IOC_DIR(cmd) & UAPI_IOC_DIR(row->cmd) & UAPI_IOC_WRITE)) {
         in_size = 0;
@@ -980,7 +1002,8 @@ int32_t drm_ioctl(struct drm_file *file, uint32_t cmd, uintptr_t arg)
     }
     kdata = ksize <= sizeof(stack) ? stack : (char *)kmalloc(ksize);
     if (!kdata) {
-        return -ENOMEM;
+        rc = -ENOMEM;
+        goto restore;
     }
     if (in_size && copy_from_user(kdata, (const void __user *)arg, in_size) != 0) {
         rc = -EFAULT;
@@ -996,6 +1019,12 @@ int32_t drm_ioctl(struct drm_file *file, uint32_t cmd, uintptr_t arg)
 out:
     if (kdata != stack) {
         kfree(kdata);
+    }
+restore:
+    if (depth) {
+        irqflags = kirq_save();
+        bkl_take(depth);
+        kirq_restore(irqflags);
     }
     return rc;
 }
