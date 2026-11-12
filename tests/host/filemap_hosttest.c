@@ -8,8 +8,8 @@
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * filemap.c is included whole, so that a row reads the list of mappings.
- * The pages, the descriptors and the file systems are stubs that no row
- * reaches but the release's; tmpfs gives inode numbers from 41 on.
+ * The pages, the descriptors and the file systems are models; tmpfs gives
+ * inode numbers from 41 on.
  *
  * The rows: shared anonymous memory is named "/dev/zero (deleted)", keeps
  * no descriptor, so that /proc/PID/maps finds no entry and no description
@@ -28,7 +28,8 @@
  * does not. A fault without the big lock finds a disk file's page in memory
  * under the file's lock alone, and reads a page that is not there under the
  * file's lock, then adds it to the file's pages under the big lock as well,
- * which it gives back.
+ * which it gives back. A hit in the page cache supplies the page without
+ * reading the file or storing the cached bytes again.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -126,6 +127,8 @@ static int model_leaf;
  * and those under the file's lock alone; the references taken; and the
  * reads of the file. */
 static int lookups, lookups_locked, adopts, adopts_locked, adopts_file, refs, reads;
+/* Whether the page cache has the page, and its reads and stores. */
+static int model_cached, cache_reads, cache_stores;
 /* The big lock's model (`compat/bkl_held.c`): whether a row stands for a
  * caller without it, and the code's takes since the row cleared them. */
 extern int bkl_host_free;
@@ -220,6 +223,39 @@ int32_t fs_read_at(fd_entry_t *e, void *buf, uint32_t count, uint64_t off)
     return (int32_t)count;
 }
 
+/** The page cache's stable epoch. */
+uint32_t filecache_epoch(struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    (void)node;
+    return 0;
+}
+
+/** Count a cache read; copy bytes of 0xa5 on a hit, or return 0 on a miss. */
+int filecache_read(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys)
+{
+    (void)e;
+    (void)pgoff;
+    cache_reads++;
+    if (!model_cached) {
+        return 0;
+    }
+    check(phys == MODEL_FRAME && file_locked > 0,
+          "the cache fills the frame under the file's lock");
+    k_memset(model_bytes, 0xa5, sizeof(model_bytes));
+    return 1;
+}
+
+/** Count a page stored after a file read. */
+void filecache_store(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, uint32_t epoch)
+{
+    (void)e;
+    (void)pgoff;
+    (void)phys;
+    (void)epoch;
+    cache_stores++;
+}
+
 /* ---- what no row reaches ---- */
 
 /** Not reached. */
@@ -246,32 +282,6 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     (void)src;
     (void)n;
     return -EFAULT;
-}
-
-/** Not reached. */
-uint32_t filecache_epoch(struct vfs_mount *mnt, void *node)
-{
-    (void)mnt;
-    (void)node;
-    return 0;
-}
-
-/** Not reached. */
-int filecache_read(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys)
-{
-    (void)e;
-    (void)pgoff;
-    (void)phys;
-    return -EIO;
-}
-
-/** Not reached. */
-void filecache_store(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, uint32_t epoch)
-{
-    (void)e;
-    (void)pgoff;
-    (void)phys;
-    (void)epoch;
 }
 
 /** Not reached. */
@@ -528,6 +538,25 @@ static void disk_stores_rows(void)
           "the private mappings' releases free their file's pages");
 }
 
+/** After two cache misses, fill a private mapping's frame from the cache
+ * under the file's lock alone, without another file read or cache store. */
+static void cached_fault_row(struct vm_file *f)
+{
+    uintptr_t phys = 0;
+
+    model_page = 0;
+    model_leaf = 1;
+    model_cached = 1;
+    k_memset(model_bytes, 0, sizeof(model_bytes));
+    check(f->share(f, 1, &phys) == 0 && phys == MODEL_FRAME && reads == 2 && cache_reads == 3 &&
+              cache_stores == 2 && model_bytes[0] == 0xa5 && model_bytes[PAGE_SIZE - 1] == 0xa5,
+          "a cache hit supplies the page without a file read or another cache store");
+    check(model_page == MODEL_FRAME && adopts == 3 && adopts_file == 2 && bkl_host_takes == 0 &&
+              !bkl_held() && file_locked == 0,
+          "and adds it to the existing leaf under the file's lock alone");
+    model_cached = 0;
+}
+
 /** The faults of `unlocked_rows` through `f`, a private mapping, and
  * `shared`, a shared one, of a file whose reads run without the big lock. */
 static void fault_rows(struct vm_file *f, struct vm_file *shared)
@@ -557,6 +586,7 @@ static void fault_rows(struct vm_file *f, struct vm_file *shared)
           "a page in memory is lent with a reference and no read");
     check(lookups == 1 && lookups_locked == 1 && bkl_host_takes == 0 && file_locked == 0,
           "under the file's lock alone");
+    cached_fault_row(f);
     bkl_host_free = 0;
 }
 
