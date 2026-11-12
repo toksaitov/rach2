@@ -386,10 +386,26 @@ int64_t rtc_monotonic_ns(void)
     return t;
 }
 
-/** A failure: no interrupt between ticks comes. */
+static int64_t pass_next;
+
+/** Model the timer queue's next event at the end of the pass. */
 void timer_hr_pass(void)
 {
-    CHECK(0, "no interrupt between ticks comes");
+    if (pass_next != 0) {
+        timer_wake_at(pass_next);
+        pass_next = 0;
+    }
+}
+
+/** Take the device entry and its unlocked handler as the IRQ router does. */
+static int take_hr_event(uint32_t vector)
+{
+    int result = apic_hr_entry(vector);
+
+    if (result && vector == (uint32_t)apic_hr_vector()) {
+        hr_interrupt(NULL);
+    }
+    return result;
 }
 
 uintptr_t map_mmio(uintptr_t phys, size_t size)
@@ -667,10 +683,10 @@ static void hr_wake_rows(void)
           "and counts to the time asked, rounded up, on the vector between ticks");
 
     now_ns = MS(10.599);
-    CHECK(apic_hr_entry(64) && c->want == (int64_t)MS(10.6) && apic_initial == 1001u,
+    CHECK(take_hr_event(64) && c->want == (int64_t)MS(10.6) && apic_initial == 1001u,
           "an interrupt a microsecond early counts to the time again");
     now_ns = MS(10.6);
-    CHECK(apic_hr_entry(64) && c->want == 0 && apic_vector == APIC_TIMER_VECTOR &&
+    CHECK(take_hr_event(64) && c->want == 0 && apic_vector == APIC_TIMER_VECTOR &&
               apic_initial == 400001u,
           "the one at the time serves it and counts to the tick");
 
@@ -681,7 +697,7 @@ static void hr_wake_rows(void)
     CHECK(c->want == (int64_t)MS(10.8) && apic_vector == 64 && apic_initial == 100001u,
           "a time asked while one is armed replaces it only when earlier");
     now_ns = MS(10.8);
-    CHECK(apic_hr_entry(64) && apic_vector == APIC_TIMER_VECTOR && apic_initial == 200001u,
+    CHECK(take_hr_event(64) && apic_vector == APIC_TIMER_VECTOR && apic_initial == 200001u,
           "its interrupt counts to the tick");
 }
 
@@ -692,32 +708,32 @@ static void hr_tick_rows(void)
     struct hr_state *c = &hr_cpu[0];
 
     now_ns = MS(11.2);
-    CHECK(apic_hr_entry(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(12) && apic_initial == 800001u,
+    CHECK(take_hr_event(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(12) && apic_initial == 800001u,
           "a tick 0.2 ms late is the tick, and the next is at 12 ms, its phase kept");
     now_ns = MS(11.5);
-    CHECK(!apic_hr_entry(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(12) &&
+    CHECK(!take_hr_event(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(12) &&
               apic_initial == 500001u,
           "an interrupt at the tick's vector half a tick before its time is not the tick");
 
     now_ns = MS(11.99);
     timer_wake_at((int64_t)MS(11.995));
     now_ns = MS(12.01);
-    CHECK(apic_hr_entry(64) && c->want == 0 && c->tick == (int64_t)MS(12) &&
+    CHECK(take_hr_event(64) && c->want == 0 && c->tick == (int64_t)MS(12) &&
               apic_vector == APIC_TIMER_VECTOR && apic_initial == 1u,
           "the interrupt between ticks at the tick's time counts to the tick at once");
     now_ns = MS(12.011);
-    CHECK(apic_hr_entry(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(13),
+    CHECK(take_hr_event(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(13),
           "which comes once, the next at 13 ms");
 
     now_ns = MS(13.95);
-    CHECK(apic_hr_entry(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(14) && apic_initial == 50001u,
+    CHECK(take_hr_event(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(14) && apic_initial == 50001u,
           "a tick 0.95 ms late moves the next to 14 ms, 50 us away, not past it");
     now_ns = MS(13.97);
-    CHECK(apic_hr_entry(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(15),
+    CHECK(take_hr_event(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(15),
           "an interrupt 30 us before the tick's time is that tick, and the next is at 15 ms");
 
     now_ns = MS(5013);
-    CHECK(apic_hr_entry(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(5014),
+    CHECK(take_hr_event(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(5014),
           "a processor 5000 ticks behind starts its tick a tick from the clock");
 }
 
@@ -737,13 +753,13 @@ static void hr_switch_rows(void)
           "a tick raised and not taken as it turns one-shot is the tick before the count's next");
     raised = 0;
     now_ns = MS(21.0003);
-    CHECK(apic_hr_entry(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(22) && apic_vector == 64,
+    CHECK(take_hr_event(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(22) && apic_vector == 64,
           "taken, it is the tick, once, and the timer counts to the time asked");
     now_ns = MS(21.5);
-    CHECK(apic_hr_entry(64) && apic_vector == APIC_TIMER_VECTOR && apic_initial == 500001u,
+    CHECK(take_hr_event(64) && apic_vector == APIC_TIMER_VECTOR && apic_initial == 500001u,
           "whose interrupt counts to the tick at 22 ms");
     now_ns = MS(22);
-    CHECK(apic_hr_entry(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(23) && !apic_periodic,
+    CHECK(take_hr_event(APIC_TIMER_VECTOR) && c->tick == (int64_t)MS(23) && !apic_periodic,
           "which is the tick, the timer one-shot still");
 
     now_ns = MS(30);
@@ -785,7 +801,7 @@ static void hr_hold_rows(void)
               c->hold == 0 && apic_vector == 64 && apic_initial == 400001u,
           "the outermost release programs the earliest once, 0.4 ms away");
     now_ns = MS(40.5);
-    CHECK(apic_hr_entry(64) && c->want == 0 && apic_vector == APIC_TIMER_VECTOR,
+    CHECK(take_hr_event(64) && c->want == 0 && apic_vector == APIC_TIMER_VECTOR,
           "and its interrupt serves it");
 }
 
@@ -1039,7 +1055,7 @@ static void idle_rows(void)
     CHECK(timer_idle_enter() && c->idle && c->oneshot && apic_initial == 0,
           "an idle processor with no event stops its timer");
     now_ns = MS(101);
-    CHECK(!apic_hr_entry(APIC_TIMER_VECTOR), "a stale pending tick does not count in idle");
+    CHECK(!take_hr_event(APIC_TIMER_VECTOR), "a stale pending tick does not count in idle");
     timer_wake_at((int64_t)MS(250));
     CHECK(apic_vector == 64 && apic_initial == 149000001u,
           "the next event is armed for its full interval without intervening ticks");
@@ -1047,18 +1063,26 @@ static void idle_rows(void)
     CHECK(timer_idle_enter() && apic_writes == writes,
           "an unchanged idle event is not written to the device again");
     now_ns = MS(250) + 1;
-    CHECK(apic_hr_entry(64) && !c->want && lapic_timer_current() == 0,
+    CHECK(take_hr_event(64) && !c->want && lapic_timer_current() == 0,
           "the event is served and the timer stops again");
     timer_idle_exit();
     CHECK(!c->idle && c->tick > (int64_t)now_ns && c->tick <= (int64_t)now_ns + TICK_NS &&
               apic_vector == APIC_TIMER_VECTOR,
           "waking restarts the phased tick without replaying idle ticks");
+    timer_wake_at((int64_t)MS(250.1));
+    now_ns = MS(250.1) + 1;
+    pass_next = (int64_t)MS(250.2);
+    writes = apic_writes;
+    CHECK(take_hr_event(64) && c->want == (int64_t)MS(250.2) && apic_writes == writes + 1,
+          "a busy event programs once after its queues choose an earlier deadline");
+    now_ns = MS(250.2) + 1;
+    CHECK(take_hr_event(64), "the queued event is taken before the next idle wait");
     now_ns = MS(250.25);
     CHECK(timer_idle_enter(), "a later idle wait stops the tick again");
     timer_wake_tick(300);
     CHECK(c->want == (int64_t)MS(300), "a whole-tick deadline keeps its absolute time");
     now_ns = MS(301);
-    CHECK(apic_hr_entry(64), "the whole-tick event is taken");
+    CHECK(take_hr_event(64), "the whole-tick event is taken");
     hr_deadline = 1;
     tsc_per_tick = 2000000u;
     tsc_measured = 1;
@@ -1068,7 +1092,7 @@ static void idle_rows(void)
           "TSC-deadline mode uses the TSC rate for the event");
     now_ns = MS(400) + 1;
     deadline_at = 0; /* The APIC clears the MSR when it raises the interrupt. */
-    CHECK(apic_hr_entry(64) && deadline_at == 0, "an idle TSC deadline is cleared after its event");
+    CHECK(take_hr_event(64) && deadline_at == 0, "an idle TSC deadline is cleared after its event");
     timer_idle_exit();
     CHECK(deadline_at > tsc_ordered(), "a busy processor has its next deadline armed");
     hr_deadline = 0;
@@ -1085,7 +1109,7 @@ static void idle_rows(void)
           "a coarse tick still to count waits for the raw edge, not a time already passed");
     coarse_model = (uint64_t)-1;
     now_ns = MS(601.001);
-    CHECK(apic_hr_entry(64) && c->want == 0, "the deferred whole-tick event is taken");
+    CHECK(take_hr_event(64) && c->want == 0, "the deferred whole-tick event is taken");
     timer_idle_exit();
     apic_timer_start(1000000u, TICK_HZ);
     hr_deadline = 1;
