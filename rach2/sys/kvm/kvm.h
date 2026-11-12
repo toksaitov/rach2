@@ -382,11 +382,14 @@ struct kvm_vm {
      * the slots, `msr_filter` and `pmu_filter`, which a guest's
      * exits read with no lock: a reader joins `srcu_readers[srcu_gen]`;
      * `srcu_waiting` counts the replacements waiting on `srcu_wq` for a
-     * count to reach 0. Zero is idle, so a zeroed VM needs no init. */
+     * count to reach 0. Zero is idle. `srcu_gp_lock`, Linux's
+     * srcu_gp_mutex, is held by one replacement from its first change of
+     * `srcu_gen` to the end of its second wait (`kvm_srcu_synchronize`). */
     volatile uint32_t srcu_gen;
     volatile uint32_t srcu_readers[2];
     volatile uint32_t srcu_waiting;
     wait_queue_t srcu_wq;
+    struct mutex srcu_gp_lock;
     struct kvm_vcpu *vcpus[KVM_MAX_VCPUS];
     uint32_t nr_vcpus;
     uint64_t tss_addr;    /* KVM_SET_TSS_ADDR */
@@ -1227,8 +1230,9 @@ void kvm_srcu_read_unlock(struct kvm_vm *vm, uint32_t idx);
 
 /** Wait until no section of `vm`'s readers that began before the call is
  * under way, as Linux's synchronize_srcu_expedited: the caller has
- * published the replacement of what it will free. Sleeps, letting the big
- * lock go; not under a spinlock. */
+ * published the replacement of what it will free. Replacements wait one
+ * at a time, under `srcu_gp_lock`, so none waits for a count new readers
+ * join. Sleeps, letting the big lock go; not under a spinlock. */
 void kvm_srcu_synchronize(struct kvm_vm *vm);
 
 /**
