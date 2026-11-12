@@ -1,0 +1,9 @@
+sleep 2
+sleep 10
+/t/load sleep 5000
+/t/load pingpong 50000
+cat /sys/kernel/debug/exits
+tar cf - /opt/proton | cat > /dev/null
+cat /sys/kernel/debug/exits
+/t/load munmapspin 20000
+head -5 /proc/stat

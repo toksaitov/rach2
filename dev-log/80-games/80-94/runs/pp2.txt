@@ -1,0 +1,6 @@
+sleep 2
+cat /sys/kernel/debug/exits
+/t/load pingpong 50000
+cat /sys/kernel/debug/exits
+/t/load pingpong 50000
+/t/load pingpong 50000
