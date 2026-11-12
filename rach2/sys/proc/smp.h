@@ -56,6 +56,21 @@ void bkl_yield(void);
 void bkl_exit(void);
 
 /**
+ * Lend the big lock this processor holds to processor `cpu`, when `cpu`
+ * waits for it while it runs `thread`, and wait until it gives the lock
+ * back at its outermost exit or drop: for a holder that cannot sleep or let
+ * the lock go, as a page-cache fill with interrupts off cannot, and that
+ * waits for what `thread` holds while an interrupt there waits for the lock.
+ * The lock goes to `cpu` alone and comes back to this processor alone, its
+ * depth here unchanged, so the borrower runs inside this hold as a handler
+ * of an interrupt taken here would. Returns 1 when the lock was lent and is
+ * back, and 0 when nothing was lent: this processor does not hold it, or
+ * `cpu` is this one, does not wait for it, or runs another thread.
+ * Interrupts are off, and the caller holds no spinlock the borrower may take.
+ */
+int bkl_lend(int cpu, const struct process *thread);
+
+/**
  * Record that the router of the entry under way took the big lock, for
  * `locked` 1, or ran its handlers without it, for 0, which `isr_leave` reads
  * back with `bkl_frame_pop`. The record is the current thread's, a bit for

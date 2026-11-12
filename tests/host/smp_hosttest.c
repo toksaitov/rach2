@@ -35,7 +35,8 @@
  * big lock's counts: each processor's calls in its own tally, summed by
  * bkl/calls; a hold charged to the entry of a thread that ran without the lock;
  * the takes after an idle wait and a switch under their own keys; each thread's
- * record of its entry frames; and the ioctl slots.
+ * record of its entry frames; the ioctl slots; and a loan of the lock to
+ * one waiting processor alone, which gives it back with the word never clear.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -82,6 +83,9 @@ static unsigned long waited_us;
  * at all has lost the test that ends it. */
 #define RELAX_BOUND 1000
 static int relax_turns;
+/* What another processor does at the next turn of a wait, once, in place of
+ * counting it: the borrower of a loan of the big lock. */
+static void (*relax_hook)(void);
 
 /* Whether the model's interrupts are off, which `kirq_save` and
  * `spin_lock_irqsave` set and their restores put back. */
@@ -333,8 +337,14 @@ unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
  */
 void arch_relax(void)
 {
+    void (*hook)(void) = relax_hook;
     int c;
 
+    if (hook) {
+        relax_hook = NULL;
+        hook();
+        return;
+    }
     if (++relax_turns <= RELAX_BOUND) {
         return;
     }
@@ -555,6 +565,75 @@ static void row_bkl_counts(void)
     bkl_tally[1] = NULL;
 }
 
+/* What the borrower of a loan of the big lock found while it held it, and
+ * after it gave it back. */
+static int borrowed, returned;
+
+/** Run as processor 1, which waits for the big lock: take it by the loan,
+ *  find the word still set and the lender's depth unchanged, and give it
+ *  back at the outermost exit, which leaves the word set. */
+static void borrow_turn(void)
+{
+    unsigned int was = host_cpu;
+
+    host_cpu = 1;
+    bkl_enter();
+    borrowed = bkl_held() && bkl_word == 1u && bkl_lent == (2u | BKL_LENT_TAKEN) &&
+               cpu_table[0].bkl_depth == 2;
+    bkl_exit();
+    returned = !bkl_held() && bkl_lent == 0u && bkl_word == 1u;
+    host_cpu = was;
+}
+
+/** Processor 1 stops waiting for the big lock without taking the loan. */
+static void stop_waiting(void)
+{
+    cpu_table[1].wake_bkl_waiting = 0;
+}
+
+/**
+ * A loan of the big lock goes to the processor named alone, and only while
+ * it waits for the lock and runs the thread named; the borrower takes it
+ * with the word still set, gives it back at its outermost exit, and the
+ * lender holds it again at its own depth, with no moment the word was
+ * clear. A loan the borrower stopped waiting for is withdrawn.
+ */
+static void row_bkl_lend(void)
+{
+    bkl_tally[0] = tally_rows[0];
+    bkl_tally[1] = tally_rows[1];
+    cpu_table[0].current = &self;
+    cpu_table[1].current = &user_a;
+    cpu_table[0].bkl_depth = 0;
+    cpu_table[1].bkl_depth = 0;
+    cpu_table[1].wake_bkl_waiting = 0;
+    check(bkl_lend(1, &user_a) == 0, "a processor that does not hold the big lock lends nothing");
+    bkl_enter();
+    bkl_enter();
+    check(bkl_lend(1, &user_a) == 0 && bkl_lent == 0u,
+          "nothing is lent to a processor that does not wait for the lock");
+    cpu_table[1].wake_bkl_waiting = 1;
+    check(bkl_lend(1, &user_b) == 0 && bkl_lend(0, &self) == 0 && bkl_lent == 0u,
+          "or to one that runs another thread, or to the lender itself");
+    relax_hook = borrow_turn;
+    borrowed = returned = 0;
+    check(bkl_lend(1, &user_a) == 1 && borrowed && returned,
+          "the waiter takes the lent lock with the word set and gives it back");
+    check(cpu_table[0].bkl_depth == 2 && bkl_word == 1u && bkl_lent == 0u &&
+              !cpu_table[1].wake_bkl_waiting,
+          "and the lender holds it again at its own depth");
+    cpu_table[1].wake_bkl_waiting = 1;
+    relax_hook = stop_waiting;
+    check(bkl_lend(1, &user_a) == 0 && bkl_lent == 0u && bkl_word == 1u,
+          "a loan its borrower stopped waiting for is withdrawn");
+    bkl_exit();
+    bkl_exit();
+    check(!bkl_held() && bkl_word == 0u, "the lender's last exit frees the lock");
+    cpu_table[1].current = NULL;
+    bkl_tally[0] = bkl_tally_boot;
+    bkl_tally[1] = NULL;
+}
+
 /**
  * A stop asks every other processor: processor 1 takes the interrupt, 2
  * does not and takes the NMI, and 3 takes neither. Each that stops runs
@@ -726,6 +805,7 @@ int main(void)
 
     row_sample_stack();
     row_bkl_counts();
+    row_bkl_lend();
     row_call();
 
     while (nguarded > 0) {

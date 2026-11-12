@@ -23,7 +23,10 @@
 #include "../cmdline.h"
 #include "../latency.h"
 #include "../panic.h"
+#include "../proc/process.h"
+#include "../proc/sched.h"
 #include "../proc/smp.h"
+#include "../proc/wait_queue.h"
 
 #include "../lib/kerrno.h"
 #include "../lib/kint.h"
@@ -201,8 +204,15 @@ struct ahci_disk {
      * that caller. The handler leaves the port alone while this is set,
      * since acknowledging would clear the error bits that the caller
      * reads, no queued request starts, and a second polled caller waits
-     * for the claim to end, within its own bound (`ahci_claim`). */
+     * for the claim to end (`ahci_claim`). */
     int polling;
+    /* The claim's holder, the processor it claimed on and the thread it
+     * runs, for a waiter that holds the big lock and cannot sleep
+     * (`bkl_lend`); and the callers that sleep for the claim to end, which
+     * its release wakes. */
+    int polling_cpu;
+    const struct process *polling_proc;
+    wait_queue_t claim_wq;
     struct block_request *queue_head, *queue_tail;
     /* The pages a controller without 64-bit addressing moves a buffer's
      * pieces above 4 GiB through, or NULL on one with it. */
@@ -1094,6 +1104,41 @@ static void ahci_poll_step(void)
 }
 
 /**
+ * Whether a wait for another caller's claim may sleep: interrupts on, inside
+ * a system call, and the scheduler running, as the ATA driver's waits ask
+ * (`ata_can_sleep`). Such a caller sleeps for the port in the queued path
+ * too, so it holds nothing that a sleep may not let go.
+ */
+static int ahci_can_sleep(void)
+{
+    return kirq_enabled() && proc_in_syscall() && sched_is_enabled();
+}
+
+/** The condition a caller sleeping for the port waits on: no claim. */
+static int ahci_unclaimed(void *arg)
+{
+    return !((struct ahci_disk *)arg)->polling;
+}
+
+/**
+ * One step of the wait for the claim that thread `owner` took on processor
+ * `cpu`, by a caller that cannot sleep. When the caller holds the big lock
+ * and an interrupt that `owner` took waits for it, the owner cannot go on
+ * until the lock is free, and the caller, which cannot let the lock go,
+ * would wait out its bound for nothing; it lends the lock to that processor
+ * alone (`bkl_lend`), which gives it back at the interrupt's end. Then the
+ * poll step.
+ */
+static void ahci_claim_step(int cpu, const struct process *owner)
+{
+    uint32_t flags = kirq_save();
+
+    (void)bkl_lend(cpu, owner);
+    kirq_restore(flags);
+    ahci_poll_step();
+}
+
+/**
  * Claim `d`'s slot for polled command `command`, as libata's internal
  * command takes the port from its queue under `ap->lock` and runs with the
  * lock let go (drivers/ata/libata-core.c:1546-1597, 1663). Under the port's
@@ -1102,39 +1147,55 @@ static void ahci_poll_step(void)
  * completed (`ahci_drain`), and `polling` is set. The lock is then let go:
  * the claim keeps the interrupt off the port and the queue stopped until
  * `ahci_release`, so the command runs with interrupts as the caller had
- * them. Never sleeps.
+ * them.
  *
- * The wait for another claim takes its steps from `*steps`, the caller's
- * bound for the whole command, as libata bounds an internal command by one
- * timeout (`wait_for_completion_timeout`, libata-core.c:1616): a caller with
- * interrupts off, whose bound is five seconds, cannot spin for the thirty
- * seconds and more of a holder's with them on. Returns 0 with the port
- * claimed and `*steps` what is left, or `-EIO`, logged, with nothing
- * claimed and the port untouched, since its state is the holder's.
+ * A caller that can sleep (`ahci_can_sleep`) sleeps for another caller's
+ * claim on the port's queue, which the claim's release wakes, and the
+ * switch lets the big lock go, as libata gives back the port's lock and the
+ * error handler's mutex before its internal command waits
+ * (libata-core.c:1596, 1607-1616): the holder may need the lock to go on,
+ * for an interrupt it took. Any other caller spins, lending the big lock
+ * to the holder's processor when it holds it (`ahci_claim_step`), and takes
+ * the steps from `*steps`, the caller's bound for the whole command, as
+ * libata bounds an internal command by one timeout (libata-core.c:1616): a
+ * caller with interrupts off, whose bound is five seconds, cannot spin for
+ * the thirty seconds and more of a holder's with them on. Returns 0 with
+ * the port claimed and `*steps` what is left, or `-EIO`, logged, with
+ * nothing claimed and the port untouched, since its state is the holder's.
  */
 static int ahci_claim(struct ahci_disk *d, uint8_t command, uint32_t *steps)
 {
     uint32_t flags = spin_lock_irqsave(&d->lock);
 
     while (d->polling) {
+        int cpu = d->polling_cpu;
+        const struct process *owner = d->polling_proc;
+
         spin_unlock_irqrestore(&d->lock, flags);
-        if (--*steps == 0) {
+        if (ahci_can_sleep()) {
+            wq_wait_event_nointr(&d->claim_wq, ahci_unclaimed, d);
+            current_proc->disk_waits++;
+        } else if (--*steps == 0) {
             klog(KLOG_WARN, "ahci", "port %d: command 0x%X failed: %s", d->port, (unsigned)command,
                  "another polled command held the port");
             return -EIO;
+        } else {
+            ahci_claim_step(cpu, owner);
         }
-        ahci_poll_step();
         flags = spin_lock_irqsave(&d->lock);
     }
     ahci_drain(d);
     d->polling = 1;
+    d->polling_cpu = (int)arch_cpu_id();
+    d->polling_proc = current_proc;
     spin_unlock_irqrestore(&d->lock, flags);
     return 0;
 }
 
-/** End `d`'s polled claim and start its queue again, under the port's lock;
- * a command that could not be built ends here too, or the queue would wait
- * for a command that never comes to advance it. */
+/** End `d`'s polled claim and start its queue again, under the port's lock,
+ * and wake the callers that sleep for the port; a command that could not be
+ * built ends here too, or the queue would wait for a command that never
+ * comes to advance it. */
 static void ahci_release(struct ahci_disk *d)
 {
     uint32_t flags = spin_lock_irqsave(&d->lock);
@@ -1142,6 +1203,9 @@ static void ahci_release(struct ahci_disk *d)
     d->polling = 0;
     ahci_start_next(d);
     spin_unlock_irqrestore(&d->lock, flags);
+    if (wq_active(&d->claim_wq)) {
+        wq_wake_all(&d->claim_wq);
+    }
 }
 
 /**
