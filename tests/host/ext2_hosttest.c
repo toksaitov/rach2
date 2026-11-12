@@ -1093,6 +1093,41 @@ static uint64_t build_image(const char *img, int block, int inode, const char *f
 }
 
 /**
+ * The links the cached walk reads without the node's lock
+ * (`readlink_cached`): a fast link's target from the pointer words, which a
+ * buffer one byte short refuses, and none of a slow link's, which it leaves
+ * to the full walk.
+ */
+static void cached_link_rows(void)
+{
+    char linkbuf[300];
+    void *n;
+    int err;
+
+    n = walk("/fast", &err);
+    check(n && OPS->readlink_cached(&mnt, n, linkbuf, sizeof(linkbuf)) == 9 &&
+              streq(linkbuf, "hello.txt") && OPS->readlink_cached(&mnt, n, linkbuf, 9) == -1,
+          "the cached walk reads a fast link's target without its lock");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    n = walk("/slow", &err);
+    check(n && OPS->readlink_cached(&mnt, n, linkbuf, sizeof(linkbuf)) == -1,
+          "and leaves a slow link to the full walk");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+}
+
+/** The rows of the profile's volume alone: the host's reader against the
+ * driver (`against_reader`), and the cached walk's links. */
+static void profile_rows(const char *img)
+{
+    against_reader(img);
+    cached_link_rows();
+}
+
+/**
  * Mount `img` and read it: each file against the tree; the mode, owner and
  * links debugfs wrote; the paths of directories, rebuilt from `..`; fast and
  * slow links; devices in the old and the new encoding (debugfs writes only
@@ -1226,7 +1261,7 @@ static void read_rows(const char *img, uint64_t bytes, const char *what, int on_
     }
 
     if (on_profile) {
-        against_reader(img);
+        profile_rows(img);
     }
     {
         struct vfs_statfs sf;
@@ -5422,9 +5457,21 @@ static void attr_rows(void)
     n = walk("/fast", &rc);
     check(n && OPS->readlink(&mnt, n, linkbuf, sizeof(linkbuf)) == 9 && streq(linkbuf, "hello.txt"),
           "a fast link with an attribute block reads its target from the pointer words");
+    check(n && OPS->readlink_cached(&mnt, n, linkbuf, sizeof(linkbuf)) == 9 &&
+              streq(linkbuf, "hello.txt"),
+          "and the cached walk reads it too");
     if (n) {
         OPS->put(&mnt, n);
     }
+    check(OPS->symlink(&mnt, mnt.root, "quick", "hello.txt") == 0, "a fast link is made");
+    n = walk("/quick", &rc);
+    check(n && OPS->readlink_cached(&mnt, n, linkbuf, sizeof(linkbuf)) == 9 &&
+              streq(linkbuf, "hello.txt"),
+          "and the cached walk reads the link it made from the pointer words");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(unlink_in("/", "quick") == 0, "and it unlinks");
     check(unlink_in("/dir/sub", "deep.txt") == 0 && unlink_in("/", "fast") == 0 &&
               unlink_in("/", "cold") == 0 && unlink_in("/many", "file1.txt") == 0 &&
               unmount_rw() == 0,
