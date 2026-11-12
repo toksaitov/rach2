@@ -12,7 +12,8 @@
 # loop state directory under this checkout's build/flow, which a loop
 # itself prunes only while it runs and holds no task; and runs `scratch.pl`
 # with the stems of master's scratch names, here on this checkout's
-# build/tmp and as root on the testing host on its /tmp and on the build/tmp
+# build/tmp and on that of the Mac's release copy, build/machines/mac/tree,
+# and as root on the testing host on its /tmp and on the build/tmp
 # of the owner's copy and of each account's clone, which removes the scratch
 # of tests that were killed before their traps ran. It then runs
 # `leftovers.pl`, through `leftovers` in lib.sh, on the host and here, which
@@ -112,7 +113,8 @@ main()
     clones
     stems=$(stems origin/master | tr '\n' ' ')
     # shellcheck disable=SC2086 # the stems are a word each
-    perl "$(dirname "$0")/scratch.pl" -d "$repo/build/tmp" "$age" $stems 2>&1 |
+    perl "$(dirname "$0")/scratch.pl" -d "$repo/build/tmp" \
+        -d "$repo/build/machines/mac/tree/build/tmp" "$age" $stems 2>&1 |
         sed "s/^/$(hostname -s): /"
     dirs='-d /tmp'
     for h in $HOMES; do

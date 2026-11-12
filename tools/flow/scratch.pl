@@ -7,9 +7,10 @@
 #
 # sweep.sh runs this as root in WSL on the testing host, for /tmp, whose
 # tmpfs is the host's memory, and the build/tmp of each account's clone, and
-# here for this checkout's build/tmp, with the stems that `stems` in lib.sh
-# reads from master's tests and tools. A DIR that does not exist is passed
-# over. An entry of a DIR is removed when all of these hold:
+# here for this checkout's build/tmp and that of the Mac's release copy, with
+# the stems that `stems` in lib.sh reads from master's tests and tools. A DIR
+# that does not exist is passed over. An entry of a DIR is removed when all of
+# these hold:
 #
 # * its name is one of the STEMs that begin with `rach2`, a dot and six to
 #   eight letters, digits or underscores, as mktemp(1) makes from a template
