@@ -17,7 +17,8 @@
 # `kvm_lbr`, where the PERF_CAPABILITIES that /dev/kvm offers has an LBR
 # format, bits 5:0, which perl reads with KVM_GET_MSRS;
 # `kvm_pmu`, where /sys/module/kvm/parameters/enable_pmu reads Y; and
-# `intel`, where /proc/cpuinfo's vendor_id is GenuineIntel. Each test whose
+# `intel`, where /proc/cpuinfo's vendor_id is GenuineIntel. A result A|B
+# takes either, for a test whose result the clock decides. Each test whose
 # EXPECT is not `excluded` runs, in the order of the list:
 #
 # * `unit`: kvm-unit-tests' run_tests.sh, once a test, from a copy of
@@ -193,7 +194,11 @@ while read -r name expect; do
     got=${got:-missing}
     secs=$(awk -v n="$name" '$1 == n { print $2; exit }' "$work/secs")
     total=$((total + 1))
-    if [ "$got" = "$expect" ]; then
+    case "|$expect|" in
+        *"|$got|"*) ok=1 ;;
+        *) ok=0 ;;
+    esac
+    if [ "$ok" = 1 ]; then
         echo "kvm-corpus: $name: $got: as expected, ${secs:-0} s"
     else
         echo "kvm-corpus: $name: $got: expected $expect, ${secs:-0} s"
