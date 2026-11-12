@@ -9,6 +9,7 @@
 .Op Fl -source Ar DIR
 .Nm
 .Op Fl -console Cm term
+.Op Fl -i915
 .Fl -update Ar IMAGE DISK
 .Nm
 .Fl -data Ar DISK SIZE
@@ -291,17 +292,25 @@ sets the installed root's candidate, fallback and text boot lines in
 on partition 1 to carry
 .Ql rach2.console=term
 exactly once, replacing any previous console setting on those lines.
+The optional
+.Fl -i915
+sets the same lines to carry
+.Ql rach2.i915
+exactly once, which binds the Intel graphics driver to the machine's chip
+.Pq Xr i915 4 .
 Recovery lines are unchanged.
 The new menu is written beside the old one, synced and renamed over it,
 then the partition is unmounted and checked with
 .Ql bootctl --target DISKp1 status
 before the trial is armed.
 A failed write or check stops the update.
-Repeating the option leaves the same menu; without it the update leaves
-the boot lines as they were.
-The option requires
-.Fl -update
-and accepts only
+Repeating either option leaves the same menu; without either the update
+leaves the boot lines as they were.
+Both options require
+.Fl -update ,
+and
+.Fl -console
+accepts only
 .Cm term .
 .Pp
 Before replacing a readable root, the installer copies its account files,
