@@ -673,8 +673,8 @@ static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write
  * another fault mapped meanwhile is left as it is. `hits` asks the file to
  * count the pages it lends as found in memory (`struct vm_file`). Called
  * from `shared_fault` with the regions' lock held to read, which it lets go
- * and takes again. 1 when it mapped `page` itself, which counts the fault as
- * minor, -1 when the table could not be made, else 0.
+ * and takes again. 1 when it mapped `page` itself, which with `hits`
+ * counts the fault as minor, -1 when the table could not be made, else 0.
  */
 static int share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t flags, int hits)
 {
@@ -741,7 +741,7 @@ static int share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t 
         }
     }
     vm_file_put(f);
-    if (mapped) {
+    if (mapped && hits) {
         fault_count(0);
     }
     return mapped;
