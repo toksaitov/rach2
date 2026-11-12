@@ -29,8 +29,8 @@ struct wake_record {
 
 struct process;
 
-/** A cheap microsecond clock, modulo 2^32, from the calibrated TSC, or
- * the platform timer when no TSC was calibrated. Interrupts are off. */
+/** The monotonic clock in microseconds, modulo 2^32, one continuous clock
+ * whatever reads it underneath, or 0 before the scheduler runs. */
 uint32_t waketime_clock(void);
 
 /** Start a timed wake of blocked user thread `p` at tick `due`.
