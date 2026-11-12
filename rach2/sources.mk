@@ -63,6 +63,11 @@ C_SRC_SHARED = kernel.c \
     sys/fs/fatcommon.c \
     sys/fs/exfat.c \
     sys/fs/ext2.c \
+    sys/fs/ext2_alloc.c \
+    sys/fs/ext2_batch.c \
+    sys/fs/ext2_check.c \
+    sys/fs/ext2_dir.c \
+    sys/fs/ext2_file.c \
     sys/fs/ext2xattr.c \
     sys/block/mbr.c \
     sys/block/gpt.c \

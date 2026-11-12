@@ -9,6 +9,11 @@
       "units": [
         "ext2",
         "rach2/sys/fs/ext2.c",
+        "rach2/sys/fs/ext2_alloc.c",
+        "rach2/sys/fs/ext2_batch.c",
+        "rach2/sys/fs/ext2_check.c",
+        "rach2/sys/fs/ext2_dir.c",
+        "rach2/sys/fs/ext2_file.c",
         "rach2/sys/fs/bcache.c",
         "rach2/kernel.c",
         "utils/init.c"

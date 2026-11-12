@@ -9,6 +9,9 @@
  * host-deps: tools/etude/posix/keeper.c tools/etude/posix/process.c
  * host-cflags: -I tools/etude/include
  * host-deps: rach2/sys/fs/ext2xattr.c
+ * host-deps: rach2/sys/fs/ext2_alloc.c rach2/sys/fs/ext2_batch.c
+ * host-deps: rach2/sys/fs/ext2_check.c rach2/sys/fs/ext2_dir.c
+ * host-deps: rach2/sys/fs/ext2_file.c
  * host-deps: rach2/sys/fs/ext2.c rach2/sys/fs/bcache.c rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/block/chain.c rach2/sys/fs/fd.c rach2/sys/fs/lock.c
  * host-deps: rach2/sys/fs/sleeplock.c tests/host/compat/park_host.c
