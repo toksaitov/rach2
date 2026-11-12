@@ -1,0 +1,171 @@
+booted rach2 kernel-new3
+== cat /proc/disk  0.04 s
+[?2004h
+<6>[5.381000] net: eth0: IPv6 fec0::886a:94e1:79df:674e/64 added
+<6>[5.381000] net: eth0: IPv6 fec0::6e1d:4cd1:7d1e:f896/64 added
+[?2004l
+state not-asked
+driver ahci
+policy read-write
+disk-commands 513
+disk-flushes 10
+disk-polls 1176
+disk-wait-ticks 271
+disk-in-flight 0
+disk-overlaps 346
+disk-drains 0
+disk-quarantines 0
+disk-releases 0
+disk-release-tick 0
+lag-completions 0
+cache-hits 7161
+cache-fills 659
+cache-waits 7
+cache-visits 17753
+cache-buffers 667
+cache-limit 65024
+cache-buckets 4096
+disk 0 ahci 0 25169920 mbr QEMU HARDDISK
+identity 0 512 fixed mounted QM00005
+part 0 1 2048 25165824 mbr:83 
+disk 1 ahci 1 12582912 none QEMU HARDDISK
+identity 1 512 fixed mounted QM00007
+__END__0
+   exits=4311 halt_exits=11 io_exits=1377 mmio_exits=18 irq_exits=27 irq_window_exits=14 request_irq_exits=0 nmi_window_exits=0 insn_emulation=2786 hypercalls=0 irq_injections=54 halt_successful_poll=0 halt_wakeup=11 req_event=132 unnamed=2864
+== cat /sys/kernel/debug/exits  0.07 s
+[?2004h[?2004l
+wrmsr 0x830 434 377 25 10 22
+in 0x3fd 1523 1469 41 13 0
+out 0x3f8 1318 1264 41 13 0
+wrmsr 0xc0000100 1232 489 366 212 165
+wrmsr 0xc0000102 1210 477 361 209 163
+rdmsr 0xc0000100 1209 482 361 205 161
+rdmsr 0xc0000102 1209 482 361 205 161
+hlt 0 7188 6499 295 240 154
+wrmsr 0x80b 158 136 14 4 4
+rdmsr 0x839 4 1 1 1 1
+rdmsr 0x821 4 1 1 1 1
+wrmsr 0x83e 4 1 1 1 1
+wrmsr 0x832 4 1 1 1 1
+wrmsr 0x838 6292 6114 91 25 62
+out 0xc024 7 6 0 1 0
+out 0xc014 7 6 0 1 0
+in 0xc03e 70 70 0 0 0
+out 0xc03e 36 36 0 0 0
+in 0xc03a 15 15 0 0 0
+in 0xc037 35 35 0 0 0
+out 0xc028 7 4 0 3 0
+out 0xc018 7 4 0 3 0
+out 0xc038 20 20 0 0 0
+out 0xc02c 7 4 0 3 0
+out 0xc01c 7 4 0 3 0
+in 0x3f8 176 176 0 0 0
+out 0x3d4 124 114 8 2 0
+out 0x3d5 124 114 8 2 0
+out 0xc020 7 5 0 2 0
+out 0xc010 7 5 0 2 0
+in 0xc058 3 3 0 0 0
+in 0xc062 3 3 0 0 0
+out 0x70 10 10 0 0 0
+in 0x71 1 1 0 0 0
+out 0x71 9 9 0 0 0
+out 0x3fa 2 0 1 1 0
+ipi kick 431 374 26 9 22
+ipi tlb 1 1 0 0 0
+ipi kernel_tlb 0 0 0 0 0
+ipi barrier 0 0 0 0 0
+ipi space 7 5 0 1 1
+ipi call 0 0 0 0 0
+ipi stop 0 0 0 0 0
+lost 0 0 0 0 0
+__END__0
+   exits=7537 halt_exits=22 io_exits=2518 mmio_exits=0 irq_exits=93 irq_window_exits=33 request_irq_exits=0 nmi_window_exits=0 insn_emulation=4686 hypercalls=0 irq_injections=89 halt_successful_poll=0 halt_wakeup=18 req_event=237 unnamed=4871
+== tar cf - /t/proton | cat > /dev/null  4.49 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+<6>[11.681000] block: request pool: waiting for a slot: the device holds its share
+__END__0
+   exits=317982 halt_exits=65390 io_exits=440 mmio_exits=154458 irq_exits=11750 irq_window_exits=13215 request_irq_exits=0 nmi_window_exits=0 insn_emulation=154749 hypercalls=0 irq_injections=78644 halt_successful_poll=52046 halt_wakeup=8788 req_event=138742 unnamed=72729
+== cat /sys/kernel/debug/exits  0.10 s
+[?2004h[?2004l
+wrmsr 0x830 55031 33263 20647 1099 22
+in 0x3fd 2905 1729 1163 13 0
+out 0x3f8 2591 1415 1163 13 0
+wrmsr 0xc0000100 120174 47753 69845 2411 165
+wrmsr 0xc0000102 120149 47740 69838 2408 163
+rdmsr 0xc0000100 120148 47747 69836 2404 161
+rdmsr 0xc0000102 120148 47747 69836 2404 161
+hlt 0 72605 36719 33822 1892 172
+wrmsr 0x80b 3262 1927 1290 41 4
+rdmsr 0x839 4 1 1 1 1
+rdmsr 0x821 4 1 1 1 1
+wrmsr 0x83e 4 1 1 1 1
+wrmsr 0x832 4 1 1 1 1
+wrmsr 0x838 19002 10605 7925 408 64
+out 0xc024 7 6 0 1 0
+out 0xc014 7 6 0 1 0
+in 0xc03e 70 70 0 0 0
+out 0xc03e 36 36 0 0 0
+in 0xc03a 15 15 0 0 0
+in 0xc037 35 35 0 0 0
+out 0xc028 7 4 0 3 0
+out 0xc018 7 4 0 3 0
+out 0xc038 20 20 0 0 0
+out 0xc02c 7 4 0 3 0
+out 0xc01c 7 4 0 3 0
+in 0x3f8 273 273 0 0 0
+out 0x3d4 250 130 118 2 0
+out 0x3d5 250 130 118 2 0
+out 0xc020 7 5 0 2 0
+out 0xc010 7 5 0 2 0
+in 0xc058 5 5 0 0 0
+in 0xc062 5 5 0 0 0
+out 0x70 10 10 0 0 0
+in 0x71 1 1 0 0 0
+out 0x71 9 9 0 0 0
+out 0x3fa 2 0 1 1 0
+ipi kick 55025 33257 20648 1098 22
+ipi tlb 3 3 0 0 0
+ipi kernel_tlb 0 0 0 0 0
+ipi barrier 0 0 0 0 0
+ipi space 8 6 0 1 1
+ipi call 0 0 0 0 0
+ipi stop 0 0 0 0 0
+lost 0 0 0 0 0
+__END__0
+   exits=11658 halt_exits=26 io_exits=2653 mmio_exits=1920 irq_exits=137 irq_window_exits=39 request_irq_exits=0 nmi_window_exits=0 insn_emulation=8596 hypercalls=0 irq_injections=101 halt_successful_poll=0 halt_wakeup=22 req_event=259 unnamed=6883
+== cat /proc/disk  0.04 s
+[?2004h[?2004l
+state not-asked
+driver ahci
+policy read-write
+disk-commands 26256
+disk-flushes 10
+disk-polls 1176
+disk-wait-ticks 4077
+disk-in-flight 0
+disk-overlaps 11832
+disk-drains 0
+disk-quarantines 0
+disk-releases 0
+disk-release-tick 0
+lag-completions 0
+cache-hits 3255222
+cache-fills 10970
+cache-waits 7
+cache-visits 6987934
+cache-buffers 10978
+cache-limit 65024
+cache-buckets 65536
+disk 0 ahci 0 25169920 mbr QEMU HARDDISK
+identity 0 512 fixed mounted QM00005
+part 0 1 2048 25165824 mbr:83 
+disk 1 ahci 1 12582912 none QEMU HARDDISK
+identity 1 512 fixed mounted QM00007
+__END__0
+   exits=4414 halt_exits=17 io_exits=1408 mmio_exits=0 irq_exits=54 irq_window_exits=26 request_irq_exits=0 nmi_window_exits=0 insn_emulation=2783 hypercalls=0 irq_injections=59 halt_successful_poll=0 halt_wakeup=16 req_event=155 unnamed=2909
+== cd /t && find proton -type f -exec md5sum {} + | LC_ALL=C sort -k2 | md5sum  1.93 s
+[?2004h[?2004l
+4d5280d85249c1af2fb1feef68349eb5  -
+__END__0
+   exits=22633 halt_exits=6764 io_exits=321 mmio_exits=168 irq_exits=4393 irq_window_exits=362 request_irq_exits=0 nmi_window_exits=0 insn_emulation=405 hypercalls=0 irq_injections=8914 halt_successful_poll=3813 halt_wakeup=2897 req_event=13167 unnamed=10625

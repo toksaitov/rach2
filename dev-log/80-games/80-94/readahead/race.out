@@ -1,0 +1,25 @@
+booted rach2 kernel-new3
+== cd /t/proton/files/lib/wine/x86_64-windows && { cat *.dll | md5sum & cat *.dll | md5sum & cat *.dll | head -c 1000000 | md5sum & wait; }  1.58 s
+[?2004h
+<6>[5.269000] net: eth0: IPv6 fec0::84aa:bdc6:4549:4ddb/64 added
+<6>[5.269000] net: eth0: IPv6 fec0::a8cd:8dee:ed67:60ce/64 added
+[?2004l
+[1] 27
+[2] 29
+[3] 32
+cfca7ca2a5cbb60afb1c1e0ac7e8acf5  -
+af2726731c604aed7cc65773c236eb10  -
+af2726731c604aed7cc65773c236eb10  -
+[1]   Done                       cat *.dll | md5sum
+__END__0
+   exits=60632 halt_exits=11846 io_exits=797 mmio_exits=20200 irq_exits=6093 irq_window_exits=2872 request_irq_exits=0 nmi_window_exits=0 insn_emulation=21102 hypercalls=0 irq_injections=16931 halt_successful_poll=7170 halt_wakeup=4281 req_event=30510 unnamed=18824
+== cd /t/proton/files/lib/wine/x86_64-windows && md5sum *.dll | md5sum  0.35 s
+[?2004h[?2004l
+1a6d77c0c34d516b6524f1b6ff7ca678  -
+__END__0
+   exits=3967 halt_exits=875 io_exits=303 mmio_exits=0 irq_exits=798 irq_window_exits=87 request_irq_exits=0 nmi_window_exits=0 insn_emulation=230 hypercalls=0 irq_injections=1284 halt_successful_poll=93 halt_wakeup=777 req_event=2256 unnamed=1904
+== cd /t/proton/files/lib/wine/x86_64-windows && cat *.dll | md5sum  0.45 s
+[?2004h[?2004l
+af2726731c604aed7cc65773c236eb10  -
+__END__0
+   exits=17837 halt_exits=7459 io_exits=325 mmio_exits=0 irq_exits=1008 irq_window_exits=269 request_irq_exits=0 nmi_window_exits=0 insn_emulation=283 hypercalls=0 irq_injections=8211 halt_successful_poll=7014 halt_wakeup=397 req_event=9617 unnamed=8776
