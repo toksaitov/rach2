@@ -495,6 +495,9 @@ static void timer_locked_work(uint64_t t)
 /* The boot processor's next service tick while parked, written under the
  * big lock and compared there by other processors before they release it. */
 static volatile uint32_t idle_boot_until;
+static volatile uint32_t service_kicked; /* an earlier target awaits CPU0's IPI */
+
+static void timer_service_install(void);
 
 /** Read each service's next deadline, under the big lock with interrupts
  * off. The one-second bound extends the reference counter before it wraps
@@ -550,7 +553,7 @@ static void timer_service_event(void)
         return;
     }
     if ((int32_t)((uint32_t)kernel_ticks - idle_boot_until) < 0) {
-        timer_service_ipi();
+        timer_service_install();
         return;
     }
     t = timer_own_work(arch_cycles());
@@ -566,7 +569,7 @@ static void timer_service_event(void)
 /** Install the boot processor's service target after an interprocessor
  * notification, without the big lock. A due service gets an immediate
  * event; a future whole-tick target stays armed until its coarse expiry. */
-void timer_service_ipi(void)
+static void timer_service_install(void)
 {
     uint64_t now;
     int32_t left;
@@ -581,6 +584,16 @@ void timer_service_ipi(void)
     } else {
         timer_wake_at(rtc_monotonic_ns() + 1);
     }
+}
+
+/** Install a target published by another CPU; unrelated kicks leave the
+ * service timer alone. Interrupts are off and no lock is held. */
+void timer_service_ipi(void)
+{
+    if (arch_cpu_id() != 0 || !service_kicked || arch_atomic_xchg(&service_kicked, 0u) == 0) {
+        return;
+    }
+    timer_service_install();
 }
 
 /** Whether the idle task must return to selection, with interrupts off.
@@ -636,6 +649,7 @@ void timer_idle_notify(void)
     next = (uint32_t)kernel_ticks + timer_service_ticks();
     if ((int32_t)(next - idle_boot_until) < 0) {
         idle_boot_until = next;
+        service_kicked = 1;
         smp_kick(0);
     }
 }
