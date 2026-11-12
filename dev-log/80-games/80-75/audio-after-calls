@@ -1,0 +1,38 @@
+142.34 373.06
+driver Intel HD Audio
+hda ready 1 playing 1
+codec 0 vendor 0x14F1510F afg 1
+primary pin 23 index 0 mixer 0 index 0 dac 16 enabled 1
+headphone pin 22 index 0 dac 16 enabled 0 mode auto
+jack headphone pin 22 state out polls 563 failed 0 changes 1
+jack mic pin 25 state out polls 563 failed 0 changes 1
+beep widget 18 divider 0 path 0 tones 0
+stream requested 48000 programmed 48000 format 0x0031 dac-format 0x0031 hp-format 0x0031 bits 24
+caps dac 16 source 16 pcm 0x000A0560 formats 0x00000001
+caps dac 16 source 16 pcm 0x000A0560 formats 0x00000001
+input adc 19 index 1 mid 0 index 0 pin 26 int-mic 26 jack-mic 25 inv-dmic 1 level 74 pin-ctl 0x20
+caps adc 19 source 19 pcm 0x000A0160 formats 0x00000001
+capture running 1 requested 44100 rate 44100 format 0x4011 period 4096 periods 16 frames 5720064 overruns 0 lpib 8224
+service calls 13488 usec 14467385 max-usec 5852 missed 0 clock-us 0 gap-us 0 asked-us 0 asked-valid 0 moved-us 0 revolution-us 0
+connections nid 23 long 0 raw 0x10 0x11
+expanded 16 17
+connections nid 22 long 0 raw 0x10 0x11
+expanded 16 17
+queue fill 0 high 0 delay-ms 50 written 0 dropped 0 periods 5641 underruns 0 missed 0 lpib 15776
+gpio count 3 caps 0x40000003
+widget 16 type out caps 0x00000C1D amp-in 0x00000000 amp-out 0x80034A4A conn
+widget 17 type out caps 0x00000C1D amp-in 0x00000000 amp-out 0x80034A4A conn
+widget 18 type beep caps 0x0070000C amp-in 0x00000000 amp-out 0x000F0707 conn
+widget 19 type in caps 0x00100D1B amp-in 0x8003504A amp-out 0x00000000 conn 24 26 25
+widget 20 type in caps 0x00100D1B amp-in 0x8003504A amp-out 0x00000000 conn 25 26 21
+widget 21 type mix caps 0x0020050B amp-in 0x80034A4A amp-out 0x00000000 conn 16 17
+widget 22 type pin caps 0x00400581 amp-in 0x00000000 amp-out 0x00000000 pin-caps 0x0000001C config 0x04211040 sense 0x00000000 conn 16 17
+widget 23 type pin caps 0x00400501 amp-in 0x00000000 amp-out 0x00000000 pin-caps 0x00000010 config 0x94170110 conn 16 17
+widget 24 type pin caps 0x0040048B amp-in 0x002F0300 amp-out 0x00000000 pin-caps 0x00001124 config 0x40F001F0 sense 0x00000000 conn 16 17
+widget 25 type pin caps 0x0040048B amp-in 0x002F0300 amp-out 0x00000000 pin-caps 0x00001124 config 0x04A11030 sense 0x00000000 conn
+widget 26 type pin caps 0x0040048B amp-in 0x002F0300 amp-out 0x00000000 pin-caps 0x00000020 config 0x94A70120 conn
+widget 27 type vendor caps 0x00F00000 amp-in 0x00000000 amp-out 0x00000000 conn
+widget 28 type vendor caps 0x00F00000 amp-in 0x00000000 amp-out 0x00000000 conn
+adcs 19 20
+17245000000 120588755 12839
+48:	11227	MSI	hda
