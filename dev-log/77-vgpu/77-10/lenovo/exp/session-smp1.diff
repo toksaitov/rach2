@@ -1,0 +1,20 @@
+--- dev-log/77-vgpu/77-10/session.py	2026-11-11 19:05:06
++++ build/runs/2662/exp/session-smp1.py	2026-11-11 19:38:35
+@@ -67,7 +67,7 @@
+     identity()
+     assets = args.assets.resolve()
+     assert assets.is_relative_to(Path("/data/build")), "assets must be under /data/build"
+-    tag = args.system + "-" + args.display
++    tag = args.system + "-" + args.display + "-smp1"
+     out = assets / "runs" / tag
+     out.mkdir(parents=True, exist_ok=False)
+     scratch = assets / "tmp"
+@@ -97,7 +97,7 @@
+         if args.display == "gtk":
+             display += ",show-menubar=off"
+         qargs = ["qemu-system-x86_64", "-name", "venus-77-10-" + tag,
+-                 "-accel", "kvm", "-cpu", "host", "-smp", "4", "-m", "6G",
++                 "-accel", "kvm", "-cpu", "host", "-smp", "1", "-m", "6G",
+                  "-object", "memory-backend-memfd,id=mem,size=6G,share=on",
+                  "-machine", "q35,memory-backend=mem", "-no-reboot",
+                  "-vga", "none", "-device", "virtio-vga-gl,venus=on,blob=on,hostmem=4G",

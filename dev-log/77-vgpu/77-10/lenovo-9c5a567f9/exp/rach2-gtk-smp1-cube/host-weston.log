@@ -1,0 +1,127 @@
+Date: 2026-11-11 UTC
+[20:34:24.153] weston 14.0.2
+               https://wayland.freedesktop.org
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+               Build: 14.0.2
+[20:34:24.154] Command line: weston --backend=drm --renderer=gl --shell=kiosk --no-config --idle-time=0 --socket=wayland-77-10 --log=/data/build/77-10/runs/rach2-gtk-smp1-cube/host-weston.log
+[20:34:24.154] OS: Linux, 6.12.115+deb13.1-amd64, #1 SMP PREEMPT_DYNAMIC Debian 6.12.115-2 (2026-11-01), x86_64
+[20:34:24.154] Flight recorder: enabled
+[20:34:24.154] Starting with no config file.
+[20:34:24.154] Output repaint window is 7 ms maximum.
+[20:34:24.154] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/drm-backend.so'
+[20:34:24.155] initializing drm backend
+[20:34:24.155] Trying libseat launcher...
+[20:34:24.156] [libseat/libseat.c:62] Seat opened with backend 'seatd'
+[20:34:24.156] [libseat/backend/seatd.c:212] Enabling seat
+[20:34:24.156] libseat: session control granted
+[20:34:24.157] using /dev/dri/card0
+[20:34:24.157] DRM: supports atomic modesetting
+[20:34:24.157] DRM: supports GBM modifiers
+[20:34:24.157] DRM: supports Atomic async page flip
+[20:34:24.157] DRM: supports picture aspect ratio
+[20:34:24.200] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/gl-renderer.so'
+[20:34:24.203] Using rendering device: /dev/dri/renderD128
+[20:34:24.203] EGL version: 1.5
+[20:34:24.203] EGL vendor: Mesa Project
+[20:34:24.203] EGL client APIs: OpenGL OpenGL_ES 
+[20:34:24.203] EGL features:
+               EGL Wayland extension: yes
+               context priority: yes
+               buffer age: yes
+               partial update: no
+               swap buffers with damage: no
+               configless context: yes
+               surfaceless context: yes
+               dmabuf support: modifiers
+[20:34:24.207] GL version: OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1
+[20:34:24.207] GLSL version: OpenGL ES GLSL ES 3.20
+[20:34:24.207] GL vendor: Intel
+[20:34:24.207] GL renderer: Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+[20:34:24.241] GL ES 3.2 - renderer features:
+               read-back format: ARGB8888
+               glReadPixels supports y-flip: yes
+               glReadPixels supports PBO: yes
+               wl_shm 10 bpc formats: yes
+               wl_shm 16 bpc formats: yes
+               wl_shm half-float formats: yes
+               internal R and RG formats: yes
+               OES_EGL_image_external: yes
+[20:34:24.241] Using GL renderer
+[20:34:24.251] event7  - Power Button: is tagged by udev as: Keyboard
+[20:34:24.251] event7  - Power Button: device is a keyboard
+[20:34:24.253] event9  - Video Bus: is tagged by udev as: Keyboard
+[20:34:24.253] event9  - Video Bus: device is a keyboard
+[20:34:24.254] event6  - Power Button: is tagged by udev as: Keyboard
+[20:34:24.254] event6  - Power Button: device is a keyboard
+[20:34:24.256] event5  - Lid Switch: is tagged by udev as: Switch
+[20:34:24.256] event5  - Lid Switch: device is a switch device
+[20:34:24.258] event2  - Logitech USB Keyboard: is tagged by udev as: Keyboard
+[20:34:24.258] event2  - Logitech USB Keyboard: device is a keyboard
+[20:34:24.261] event3  - Logitech USB Keyboard: is tagged by udev as: Keyboard
+[20:34:24.261] event3  - Logitech USB Keyboard: device is a keyboard
+[20:34:24.263] event4  - Logitech USB Optical Mouse: is tagged by udev as: Mouse
+[20:34:24.263] event4  - Logitech USB Optical Mouse: device is a pointer
+[20:34:24.265] event8  - Ideapad extra buttons: is tagged by udev as: Keyboard
+[20:34:24.265] event8  - Ideapad extra buttons: device is a keyboard
+[20:34:24.266] event0  - AT Translated Set 2 keyboard: is tagged by udev as: Keyboard
+[20:34:24.267] event0  - AT Translated Set 2 keyboard: device is a keyboard
+[20:34:24.269] event1  - SynPS/2 Synaptics TouchPad: is tagged by udev as: Touchpad
+[20:34:24.271] event1  - SynPS/2 Synaptics TouchPad: device is a touchpad
+[20:34:24.277] libinput: configuring device "Power Button".
+[20:34:24.277] libinput: configuring device "Video Bus".
+[20:34:24.277] libinput: configuring device "Power Button".
+[20:34:24.277] libinput: configuring device "Lid Switch".
+[20:34:24.277] libinput: configuring device "Logitech USB Keyboard".
+[20:34:24.277] libinput: configuring device "Logitech USB Keyboard".
+[20:34:24.277] libinput: configuring device "Logitech USB Optical Mouse".
+[20:34:24.277] libinput: configuring device "Ideapad extra buttons".
+[20:34:24.277] libinput: configuring device "AT Translated Set 2 keyboard".
+[20:34:24.277] libinput: configuring device "SynPS/2 Synaptics TouchPad".
+[20:34:24.279] DRM: head 'eDP-1' found, connector 81 is connected, EDID make 'AU Optronics', model '0x40EC', serial ''
+               Supported EOTF modes: SDR
+               Supported colorimetry modes: default
+[20:34:24.281] DRM: head 'HDMI-A-1' found, connector 88 is disconnected.
+[20:34:24.285] DRM: head 'DP-1' found, connector 95 is disconnected.
+[20:34:24.286] DRM: head 'HDMI-A-2' found, connector 102 is disconnected.
+[20:34:24.287] Registered plugin API 'weston_drm_output_api_v1' of size 40
+[20:34:24.287] Registered plugin API 'weston_drm_virtual_output_api_v2' of size 48
+[20:34:24.287] Color manager: no-op
+                 protocol support: no
+[20:34:24.287] Output 'eDP-1' attempts EOTF mode SDR and colorimetry mode default.
+[20:34:24.287] Output 'eDP-1' using color profile: stock sRGB color profile
+[20:34:24.287] Chosen EGL config details: id:  28 rgba: 8 8 8 0 buf: 24 dep:  0 stcl: 0 int: 1-1 type: win vis_id: XRGB8888 (0x34325258)
+[20:34:24.287] Output eDP-1 (crtc 47) video modes:
+               1366x768@60.0, preferred, current, 76.3 MHz
+[20:34:24.287] associating input device event7 with output eDP-1 (none by udev)
+[20:34:24.287] associating input device event9 with output eDP-1 (none by udev)
+[20:34:24.287] associating input device event6 with output eDP-1 (none by udev)
+[20:34:24.287] associating input device event5 with output eDP-1 (none by udev)
+[20:34:24.287] associating input device event2 with output eDP-1 (none by udev)
+[20:34:24.287] associating input device event3 with output eDP-1 (none by udev)
+[20:34:24.287] associating input device event4 with output eDP-1 (none by udev)
+[20:34:24.287] associating input device event8 with output eDP-1 (none by udev)
+[20:34:24.287] associating input device event0 with output eDP-1 (none by udev)
+[20:34:24.287] associating input device event1 with output eDP-1 (none by udev)
+[20:34:24.287] Output 'eDP-1' enabled with head(s) eDP-1
+[20:34:24.287] Compositor capabilities:
+               arbitrary surface rotation: yes
+               screen capture uses y-flip: yes
+               cursor planes: yes
+               arbitrary resolutions: no
+               view mask clipping: yes
+               explicit sync: yes
+               color operations: yes
+               presentation clock: CLOCK_MONOTONIC, id 1
+               presentation clock resolution: 0.000000001 s
+[20:34:24.287] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+[20:35:55.248] caught signal 15
+[20:35:55.248] event7  - Power Button: device removed
+[20:35:55.273] event9  - Video Bus: device removed
+[20:35:55.333] event6  - Power Button: device removed
+[20:35:55.353] event5  - Lid Switch: device removed
+[20:35:55.369] event2  - Logitech USB Keyboard: device removed
+[20:35:55.393] event3  - Logitech USB Keyboard: device removed
+[20:35:55.417] event4  - Logitech USB Optical Mouse: device removed
+[20:35:55.457] event8  - Ideapad extra buttons: device removed
+[20:35:55.501] event0  - AT Translated Set 2 keyboard: device removed
+[20:35:55.517] event1  - SynPS/2 Synaptics TouchPad: device removed

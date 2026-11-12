@@ -1,0 +1,34 @@
+02:07:30 start rach2-base-smp4
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.553 s, 84.44 a second
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.627 s, 82.71 a second
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.607 s, 83.17 a second
+frames 834, vkcube submissions a frame 2.64
+total mean 11.230 median  9.206
+A     mean  2.737 median  2.733
+B     mean  4.786 median  4.669
+C     mean  1.374 median  1.323
+D     mean  0.044 median  0.042
+E     mean  0.608 median  0.394
+02:08:11 start rach2-hr-smp4
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.289 s, 91.21 a second
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.450 s, 86.96 a second
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.406 s, 88.08 a second
+frames 830, vkcube submissions a frame 2.42
+total mean 10.502 median  8.600
+A     mean  2.652 median  2.551
+B     mean  4.349 median  4.083
+C     mean  1.309 median  1.269
+D     mean  0.045 median  0.042
+E     mean  0.480 median  0.400
+02:08:52 start debian-smp4
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 2.566 s, 116.91 a second
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 2.498 s, 120.10 a second
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 2.489 s, 120.53 a second
+frames 839, vkcube submissions a frame 2.11
+total mean  7.847 median  7.800
+A     mean  2.337 median  2.306
+B     mean  3.845 median  3.860
+C     mean  1.297 median  1.264
+D     mean  0.059 median  0.061
+E     mean  0.167 median  0.145
+02:09:21 done

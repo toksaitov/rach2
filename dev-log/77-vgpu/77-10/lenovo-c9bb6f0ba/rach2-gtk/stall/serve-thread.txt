@@ -1,0 +1,70 @@
+Warning: Permanently added '[127.0.0.1]:22662' (ED25519) to the list of known hosts.
+1203.54 4387.82
+task 1275
+1275 (python3) S 1225 73 73 0 -1 0 0 0 0 0 21 115 178 6801 20 0 2 0 14142 264339456 5816
+
+202 0x7ffeab9e65c0 0x189 0x0 0x0 0x0 0xffffffff 0x7ffeab9e64a8 0x7e9fe60a446e
+State:	S (sleeping)
+SigQ:	0/64
+SigPnd:	0000000000000000
+SigBlk:	0000000000000000
+SigIgn:	0000000001001000
+SigCgt:	0000000100004003
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	626
+nonvoluntary_ctxt_switches:	75
+task 1277
+1277 (Thread-1 _serve) S 1225 73 73 0 -1 0 0 0 0 0 0 29 178 6801 20 0 2 0 14247 264339456 5816
+
+7 0x7e9fe5c98b40 0x1 0x1f4 0x0 0x0 0x0 0x7e9fe4bab4d8 0x7e9fe60a446e
+State:	S (sleeping)
+SigQ:	0/64
+SigPnd:	0000000000000000
+SigBlk:	0000000000000000
+SigIgn:	0000000001001000
+SigCgt:	0000000100004003
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	233
+nonvoluntary_ctxt_switches:	68
+total 0
+dr-x------ 1 test test 4 Nov 12 03:23 .
+dr-xr-xr-x 1 test test 0 Nov 12 03:23 ..
+lrwxrwxrwx 1 test test 0 Nov 12 03:23 0 -> pipe:[29]
+lrwxrwxrwx 1 test test 0 Nov 12 03:23 1 -> pipe:[30]
+lrwxrwxrwx 1 test test 0 Nov 12 03:23 2 -> pipe:[31]
+lrwxrwxrwx 1 test test 0 Nov 12 03:23 3 -> socket:[757]
+=== poll
+[] 0.5010917899999185
+bkl
+dri
+sync
+test_lockup
+acpi
+audio
+cmdline
+console
+cpuinfo
+disk
+diskstats
+filesystems
+fs
+interrupts
+loadavg
+locks
+loop
+meminfo
+mounts
+net
+partitions
+self
+slabinfo
+stat
+swaps
+sys
+sysvipc
+uptime
+usb
+version
+vmstat

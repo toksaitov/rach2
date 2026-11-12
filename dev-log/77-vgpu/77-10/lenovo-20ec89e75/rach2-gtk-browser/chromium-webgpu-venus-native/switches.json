@@ -1,0 +1,39 @@
+{
+  "argv": [
+    "chromium",
+    "--ozone-platform=wayland",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--password-store=basic",
+    "--start-fullscreen",
+    "--ignore-certificate-errors",
+    "--remote-debugging-port=0",
+    "--user-data-dir=/tmp/77-10/build/tmp/browser.K5TpaO/profile",
+    "--disable-background-networking",
+    "--disable-hang-monitor",
+    "--disable-background-timer-throttling",
+    "--disable-renderer-backgrounding",
+    "--autoplay-policy=no-user-gesture-required",
+    "--ignore-gpu-blocklist",
+    "--enable-unsafe-webgpu",
+    "--enable-logging=stderr",
+    "--v=0",
+    "--vmodule=*webgpu*=3,*dawn*=3,*gpu_info*=2,*gpu_init*=2",
+    "--use-vulkan=native",
+    "about:blank"
+  ],
+  "certificate": "ephemeral local HTTPS certificate accepted by automation",
+  "environment": {
+    "GRAPHICS_CLASS": "performance",
+    "GRAPHICS_CPUS": "4",
+    "GRAPHICS_DONE": "1",
+    "LP_NUM_THREADS": "4",
+    "MESA_SHADER_CACHE_DIR": "/tmp/77-10/build/tmp/cache-webgpu-venus-native",
+    "MOZ_ENABLE_WAYLAND": "1",
+    "VK_DRIVER_FILES": "/usr/share/vulkan/icd.d/venus_icd.x86_64.json",
+    "WAYLAND_DISPLAY": "wayland-runner",
+    "XDG_RUNTIME_DIR": "/tmp/77-10/build/tmp/browser.K5TpaO/run"
+  },
+  "prefs": {},
+  "version": "Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)"
+}

@@ -1,0 +1,117 @@
+Date: 2026-11-11 UTC
+[20:35:34.932] weston 14.0.2
+               https://wayland.freedesktop.org
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+               Build: 14.0.2
+[20:35:34.935] Command line: weston --backend=drm --renderer=gl --shell=kiosk --idle-time=0 --no-config --debug --socket=wayland-vkcube --log=/tmp/77-10/build/runs/results/cube-3/weston.log
+[20:35:34.936] OS: Linux, 6.18.0-rach2, #1 Rach2 1.0.0, x86_64
+[20:35:34.936] Flight recorder: enabled
+[20:35:34.938] Starting with no config file.
+[20:35:34.940] Output repaint window is 7 ms maximum.
+[20:35:34.942] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/drm-backend.so'
+[20:35:34.974] initializing drm backend
+[20:35:34.974] Trying libseat launcher...
+[20:35:34.974] [libseat/libseat.c:62] Seat opened with backend 'noop'
+[20:35:34.975] libseat: session control granted
+[20:35:34.989] using /dev/dri/card0
+[20:35:34.990] DRM: supports atomic modesetting
+[20:35:34.990] DRM: does not support GBM modifiers
+[20:35:34.990] DRM: does not support Atomic async page flip
+[20:35:34.990] DRM: supports picture aspect ratio
+[20:35:35.448] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/gl-renderer.so'
+[20:35:35.504] Using rendering device: /dev/dri/renderD128
+[20:35:35.504] EGL version: 1.5
+[20:35:35.505] EGL vendor: Mesa Project
+[20:35:35.505] EGL client APIs: OpenGL OpenGL_ES 
+[20:35:35.506] EGL features:
+               EGL Wayland extension: yes
+               context priority: no
+               buffer age: yes
+               partial update: no
+               swap buffers with damage: no
+               configless context: yes
+               surfaceless context: yes
+               dmabuf support: modifiers
+[20:35:35.556] GL version: OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1
+[20:35:35.556] GLSL version: OpenGL ES GLSL ES 3.20
+[20:35:35.556] GL vendor: Mesa
+[20:35:35.557] GL renderer: virgl (Mesa Intel(R) HD Graphics 4400 (HSW GT2))
+[20:35:35.840] GL ES 3.2 - renderer features:
+               read-back format: ARGB8888
+               glReadPixels supports y-flip: yes
+               glReadPixels supports PBO: yes
+               wl_shm 10 bpc formats: yes
+               wl_shm 16 bpc formats: yes
+               wl_shm half-float formats: yes
+               internal R and RG formats: yes
+               OES_EGL_image_external: yes
+[20:35:35.842] Using GL renderer
+[20:35:35.895] event0  - AT Translated Set 2 keyboard: is tagged by udev as: Keyboard
+[20:35:35.896] event0  - AT Translated Set 2 keyboard: device is a keyboard
+[20:35:35.917] event2  - ImExPS/2 Generic Explorer Mouse: is tagged by udev as: Mouse
+[20:35:35.919] event2  - ImExPS/2 Generic Explorer Mouse: device is a pointer
+[20:35:35.933] event1  - Power Button: is tagged by udev as: Keyboard
+[20:35:35.933] event1  - Power Button: device is a keyboard
+[20:35:35.959] libinput: configuring device "AT Translated Set 2 keyboard".
+[20:35:35.960] libinput: configuring device "ImExPS/2 Generic Explorer Mouse".
+[20:35:35.960] libinput: configuring device "Power Button".
+[20:35:35.963] DRM: EDID for the following head fails conformity:
+Block 1, CTA-861 Extension Block:
+  Padding: Contains non-zero bytes.
+
+[20:35:35.964] DRM: head 'Virtual-1' found, connector 36 is connected, EDID make 'Red Hat, Inc.', model 'QEMU Monitor', serial ''
+               Supported EOTF modes: SDR
+               Supported colorimetry modes: default
+[20:35:35.965] Registered plugin API 'weston_drm_output_api_v1' of size 40
+[20:35:35.965] Registered plugin API 'weston_drm_virtual_output_api_v2' of size 48
+[20:35:35.965] Color manager: no-op
+                 protocol support: no
+[20:35:35.966] Output 'Virtual-1' attempts EOTF mode SDR and colorimetry mode default.
+[20:35:35.966] Output 'Virtual-1' using color profile: stock sRGB color profile
+[20:35:35.968] Chosen EGL config details: id:  61 rgba: 8 8 8 0 buf: 24 dep:  0 stcl: 0 int: 1-1 type: win vis_id: XRGB8888 (0x34325258)
+[20:35:35.968] Output Virtual-1 (crtc 35) video modes:
+               1366x768@60.0, preferred, current, 87.9 MHz
+               5120x2160@50.0 64:27, 742.5 MHz
+               4096x2160@50.0 256:135, 594.0 MHz
+               3840x2160@60.0 16:9, 594.0 MHz
+               3840x2160@59.9 16:9, 593.4 MHz
+               3840x2160@50.0 16:9, 594.0 MHz
+               1920x1440@60.0, 234.0 MHz
+               2560x1080@50.0 64:27, 185.6 MHz
+               1856x1392@60.0, 218.2 MHz
+               1792x1344@60.0, 204.8 MHz
+               2048x1152@60.0, 162.0 MHz
+               1920x1200@59.9, 193.2 MHz
+               1920x1080@60.0, 148.5 MHz
+               1920x1080@50.0 16:9, 148.5 MHz
+               1600x1200@60.0, 162.0 MHz
+               1680x1050@60.0, 146.2 MHz
+               1400x1050@60.0, 121.8 MHz
+               1280x1024@60.0, 108.0 MHz
+               1440x900@59.9, 106.5 MHz
+               1280x960@60.0, 108.0 MHz
+               1360x768@60.0, 85.5 MHz
+               1280x768@59.9, 79.5 MHz
+               1024x768@60.0, 65.0 MHz
+               800x600@60.3, 40.0 MHz
+               640x480@60.0 4:3, 25.2 MHz
+               640x480@59.9, 25.2 MHz
+[20:35:35.970] associating input device event0 with output Virtual-1 (none by udev)
+[20:35:35.970] associating input device event2 with output Virtual-1 (none by udev)
+[20:35:35.970] associating input device event1 with output Virtual-1 (none by udev)
+[20:35:35.971] Output 'Virtual-1' enabled with head(s) Virtual-1
+[20:35:35.971] Compositor capabilities:
+               arbitrary surface rotation: yes
+               screen capture uses y-flip: yes
+               cursor planes: yes
+               arbitrary resolutions: no
+               view mask clipping: yes
+               explicit sync: yes
+               color operations: yes
+               presentation clock: CLOCK_MONOTONIC, id 1
+               presentation clock resolution: 0.000000010 s
+[20:35:35.973] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+[20:35:54.266] caught signal 15
+[20:35:54.268] event0  - AT Translated Set 2 keyboard: device removed
+[20:35:54.268] event2  - ImExPS/2 Generic Explorer Mouse: device removed
+[20:35:54.269] event1  - Power Button: device removed

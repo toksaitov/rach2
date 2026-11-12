@@ -1,0 +1,10 @@
+Linux lenovo-debian 6.12.115+deb13.1-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.115-2 (2026-11-01) x86_64 GNU/Linux
+BOOT_IMAGE=/run2/vmlinuz root=PARTUUID=f640712e-b236-4c5a-b7d8-1b149d598ec0 ro ds=nocloud modprobe.blacklist=ath9k,snd_hda_intel panic=10 intel_iommu=off
+0.47 0.27 0.11 1/137 860
+always within_size advise [never] deny force
+QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1)
+Copyright (c) 2003-2025 Fabrice Bellard and the QEMU Project developers
+libgl1-mesa-dri:amd64	25.0.7-2+deb13u1
+libvirglrenderer1:amd64	1.1.0-2
+mesa-vulkan-drivers:amd64	25.0.7-2+deb13u1
+weston	14.0.2-1

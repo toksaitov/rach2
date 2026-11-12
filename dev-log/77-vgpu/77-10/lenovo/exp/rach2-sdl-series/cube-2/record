@@ -1,0 +1,221 @@
+runner vkcube
+system Rach2 1.0.0 with the GNU system
+kernel Linux 6.18.0-rach2
+cpus 4
+memory_kib 6272748
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in /tmp/77-10/build/tmp/cache-cube-2, emptied at start: 1
+load start 0.90 0.24 0.08
+processes start 29
+kernel_before cpu  1160 0 5004 9399 0 0 0 0 0 0
+kernel_before cpu0 310 0 1935 2354 0 0 0 0 0 0
+kernel_before cpu1 328 0 1115 2212 0 0 0 0 0 0
+kernel_before cpu2 265 0 963 2425 0 0 0 0 0 0
+kernel_before cpu3 255 0 990 2407 0 0 0 0 0 0
+kernel_before intr 149697
+kernel_before ctxt 0
+kernel_before btime 1794405261
+kernel_before processes 620
+kernel_before sleeps_interrupted 0
+kernel_before process_pid_steps 77239
+kernel_before process_uid_steps 632
+kernel_before process_timer_steps 168537
+kernel_before process_timer_passes 34006
+kernel_before timer_passes_late 2271
+kernel_before tlb_shootdowns 1
+kernel_before tlb_shootdown_ipis 1
+kernel_before scheduler_picks 165660
+kernel_before scheduler_steps 20576
+kernel_before vm_gap_steps 144458
+kernel_before clock_calls 4
+kernel_before vdso_tsc 1
+kernel_before bkl_wait_us 27864131
+kernel_before bkl_wait_max_us 99035
+kernel_before bkl_wait_max_holds 1
+kernel_before bkl_wait_max_hold 0 -1 448236
+kernel_before bkl_hold_max_us 448236
+kernel_before bkl_hold_max_entry 0 -1
+kernel_before bkl_hold_sample_us 9269707
+kernel_before bkl_hold_sample_pc ffffffff80385ebc ffffffff803888ac ffffffff80112451 ffffffff801127a4 ffffffff8011280b ffffffff8037da74 ffffffff8010a16f ffffffff80384aa6
+kernel_before bkl_hold_max_mark 1 0
+kernel_before bkl_hold_max_mark 2 0
+kernel_before bkl_hold_max_mark 4 0
+kernel_before bkl_hold_max_mark 8 0
+kernel_before bkl_hold_max_mark 16 0
+kernel_before bkl_hold_entry vector 14 270857 5034589
+kernel_before bkl_hold_entry vector 32 66685 3242190
+kernel_before bkl_hold_entry vector 0 119190 2839325
+kernel_before bkl_hold_entry syscall 9 8906 2546048
+kernel_before bkl_hold_entry vector 48 5142 1373922
+kernel_before bkl_hold_entry syscall 257 12364 1107310
+kernel_before bkl_hold_entry syscall 16 7195 671180
+kernel_before bkl_hold_entry syscall 1 6477 431179
+kernel_before bkl_hold_entry syscall 0 13261 331089
+kernel_before bkl_hold_entry syscall 59 539 302555
+kernel_before bkl_hold_entry syscall 202 3703 244775
+kernel_before bkl_hold_entry syscall 56 591 199833
+kernel_before bkl_hold_entry syscall 231 587 169622
+kernel_before bkl_hold_entry syscall 262 5109 151811
+kernel_before bkl_hold_entry syscall 3 16492 141189
+kernel_before bkl_hold_entry vector 43 116 85897
+kernel_before kvm_vms 0
+kernel_before kvm_vcpus 0
+kernel_before kvm_slots 0
+kernel_before kvm_tdp_pages 0
+kernel_before kvm_run_mappings 0
+kernel_before kvm_gpa_maps 0
+kernel_before kvm_gpa_map_pages 0
+kernel_before kvm_ioeventfd_signals 0
+kernel_before kvm_irqfd_raises 0
+kernel_before vfio_groups 0
+kernel_before vfio_devices 0
+kernel_before vfio_dma_mappings 0
+kernel_before vfio_dma_pages 0
+kernel_before vfio_dma_io_pages 0
+kernel_before kvm_exits 0
+kernel_before iommu_dma_faults 0
+kernel_before iommu_irq_faults 0
+kernel_before msi_vectors_free 187
+kernel_before latency_timer_us 3010998
+kernel_before latency_disk_us 16914
+kernel_before latency_diskwait_us 9428
+kernel_before latency_console_us 0
+kernel_before wlan_refused_tcp 0
+kernel_before wlan_refused_ack 0
+kernel_before wlan_refused_other 0
+kernel_before wlan_rx_held 0
+kernel_before wlan_rx_wait_most 0
+kernel_before wlan_tx_status_lost 0
+kernel_before wlan_rescue_key 0
+kernel_before wlan_rescue_message4 0
+kernel_before wlan_rescue_silent 0
+kernel_before wlan_rescue_saved 0
+kernel_before wlan_rx_old_far 0
+kernel_before loopback_dropped 0
+kernel_before loopback_peak 0
+kernel_before loopback_delivered_tick 0
+kernel_before loopback_delivered_idle 0
+kernel_before loopback_delivered_call 0
+kernel_before loopback_left_idle 0
+kernel_before namecache_hits 69044
+kernel_before namecache_misses 2031
+kernel_before namecache_entries 1501
+kernel_before namecache_negative 328
+kernel_before ext2_node_visits 34395
+kernel_before procs_running 2
+kernel_before procs_blocked 0
+env GRAPHICS_CLASS=performance
+env GRAPHICS_CPUS=4
+env GRAPHICS_MEMORY_KIB=6272748
+env LP_NUM_THREADS=4
+env MESA_SHADER_CACHE_DIR=/tmp/77-10/build/tmp/cache-cube-2
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
+case vkcube 346 frames in FIFO, held after 300 345, the first 300 timed
+icd /usr/share/vulkan/icd.d/venus_icd.x86_64.json
+vkcube 1.4.304.0+dfsg1-1
+compositor weston 14.0.2 (Rach2 14.0.2-1+rach2.1: kiosk-active-tree, kiosk-fullscreen-centre, xwm-emulated-mode, xwm-mapped-managed, pointer-constraint-view) drm gl kiosk
+renderer virgl (Mesa Intel(R) HD Graphics 4400 (HSW GT2))
+load end 1.07 0.33 0.11
+busy 29.4%
+kernel_after cpu  2133 0 6475 15272 0 0 0 0 0 0
+kernel_after cpu0 810 0 2268 3600 0 0 0 0 0 0
+kernel_after cpu1 549 0 1606 3580 0 0 0 0 0 0
+kernel_after cpu2 302 0 1315 4115 0 0 0 0 0 0
+kernel_after cpu3 470 0 1286 3976 0 0 0 0 0 0
+kernel_after intr 231402
+kernel_after ctxt 0
+kernel_after btime 1794405261
+kernel_after processes 1000
+kernel_after sleeps_interrupted 0
+kernel_after process_pid_steps 132414
+kernel_after process_uid_steps 1012
+kernel_after process_timer_steps 276818
+kernel_after process_timer_passes 50470
+kernel_after timer_passes_late 3557
+kernel_after tlb_shootdowns 3
+kernel_after tlb_shootdown_ipis 3
+kernel_after scheduler_picks 259433
+kernel_after scheduler_steps 28974
+kernel_after vm_gap_steps 201674
+kernel_after clock_calls 4
+kernel_after vdso_tsc 1
+kernel_after bkl_wait_us 36346193
+kernel_after bkl_wait_max_us 99035
+kernel_after bkl_wait_max_holds 1
+kernel_after bkl_wait_max_hold 0 -1 448236
+kernel_after bkl_hold_max_us 448236
+kernel_after bkl_hold_max_entry 0 -1
+kernel_after bkl_hold_sample_us 9269707
+kernel_after bkl_hold_sample_pc ffffffff80385ebc ffffffff803888ac ffffffff80112451 ffffffff801127a4 ffffffff8011280b ffffffff8037da74 ffffffff8010a16f ffffffff80384aa6
+kernel_after bkl_hold_max_mark 1 0
+kernel_after bkl_hold_max_mark 2 0
+kernel_after bkl_hold_max_mark 4 0
+kernel_after bkl_hold_max_mark 8 0
+kernel_after bkl_hold_max_mark 16 0
+kernel_after bkl_hold_entry vector 14 429194 6775061
+kernel_after bkl_hold_entry vector 32 115677 5144058
+kernel_after bkl_hold_entry syscall 9 13716 3581766
+kernel_after bkl_hold_entry vector 0 186998 3485253
+kernel_after bkl_hold_entry syscall 257 18450 1621934
+kernel_after bkl_hold_entry vector 48 5142 1373922
+kernel_after bkl_hold_entry syscall 16 12536 1369850
+kernel_after bkl_hold_entry syscall 59 882 511335
+kernel_after bkl_hold_entry syscall 1 6982 462256
+kernel_after bkl_hold_entry syscall 202 7149 459022
+kernel_after bkl_hold_entry syscall 0 19510 414326
+kernel_after bkl_hold_entry syscall 56 964 347603
+kernel_after bkl_hold_entry syscall 231 963 258020
+kernel_after bkl_hold_entry syscall 3 26029 205927
+kernel_after bkl_hold_entry syscall 262 7775 202100
+kernel_after bkl_hold_entry vector 50 1955 116652
+kernel_after kvm_vms 0
+kernel_after kvm_vcpus 0
+kernel_after kvm_slots 0
+kernel_after kvm_tdp_pages 0
+kernel_after kvm_run_mappings 0
+kernel_after kvm_gpa_maps 0
+kernel_after kvm_gpa_map_pages 0
+kernel_after kvm_ioeventfd_signals 0
+kernel_after kvm_irqfd_raises 0
+kernel_after vfio_groups 0
+kernel_after vfio_devices 0
+kernel_after vfio_dma_mappings 0
+kernel_after vfio_dma_pages 0
+kernel_after vfio_dma_io_pages 0
+kernel_after kvm_exits 0
+kernel_after iommu_dma_faults 0
+kernel_after iommu_irq_faults 0
+kernel_after msi_vectors_free 187
+kernel_after latency_timer_us 3010998
+kernel_after latency_disk_us 16914
+kernel_after latency_diskwait_us 9428
+kernel_after latency_console_us 0
+kernel_after wlan_refused_tcp 0
+kernel_after wlan_refused_ack 0
+kernel_after wlan_refused_other 0
+kernel_after wlan_rx_held 0
+kernel_after wlan_rx_wait_most 0
+kernel_after wlan_tx_status_lost 0
+kernel_after wlan_rescue_key 0
+kernel_after wlan_rescue_message4 0
+kernel_after wlan_rescue_silent 0
+kernel_after wlan_rescue_saved 0
+kernel_after wlan_rx_old_far 0
+kernel_after loopback_dropped 0
+kernel_after loopback_peak 0
+kernel_after loopback_delivered_tick 0
+kernel_after loopback_delivered_idle 0
+kernel_after loopback_delivered_call 0
+kernel_after loopback_left_idle 0
+kernel_after namecache_hits 107395
+kernel_after namecache_misses 2338
+kernel_after namecache_entries 1669
+kernel_after namecache_negative 328
+kernel_after ext2_node_visits 50341
+kernel_after procs_running 2
+kernel_after procs_blocked 0
+gpu Selected GPU 0: Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), type: IntegratedGpu
+timing vkhold: timed: 300 presents in 7.623 s

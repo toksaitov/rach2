@@ -1,0 +1,3 @@
+cases 193 of 96037 (every 500th from case 1), wall 16 s, jobs 4
+NotSupported 125
+Pass 68

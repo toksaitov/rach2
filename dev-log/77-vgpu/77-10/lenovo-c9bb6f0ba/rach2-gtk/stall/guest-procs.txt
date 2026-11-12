@@ -1,0 +1,42 @@
+Warning: Permanently added '[127.0.0.1]:22662' (ED25519) to the list of known hosts.
+== 73 ppid=72 uid=Uid: 0 0 0 0
+sh dev-log/77-vgpu/77-10/guest.sh rach2 gtk 
+  /proc/73/task/73 S wchan=do_wait
+== 1225 ppid=73 uid=Uid: 1000 1000 1000 1000
+sh tests/graphics/browser/run.sh chromium webgpu-venus /tmp/77-10/build/runs/results/chromium-webgpu-venus 
+  /proc/1225/task/1225 S wchan=do_wait
+== 1270 ppid=1225 uid=Uid: 1000 1000 1000 1000
+weston --no-config --backend=headless --renderer=pixman --width=1280 --height=800 --shell=kiosk --idle-time=0 --socket=wayland-runner --log=/tmp/77-10/build/runs/results/chromium-webgpu-venus/weston.log 
+  /proc/1270/task/1270 S wchan=ep_poll
+== 1275 ppid=1225 uid=Uid: 1000 1000 1000 1000
+python3 /tmp/77-10/tests/graphics/browser/run.py chromium webgpu-venus /tmp/77-10/build/runs/results/chromium-webgpu-venus /tmp/77-10/build/tmp/browser.A9HuYS 
+  /proc/1275/task/1275 S wchan=futex_wait_queue
+  /proc/1275/task/1277 _serve) wchan=do_sys_poll
+browser.A9HuYS
+cache-cube-1
+cache-cube-2
+cache-cube-3
+cache-sample
+cache-smoke
+cache-webgpu-venus
+org.chromium.Chromium.Ud50Ru
+root             13          1  0 03:23 ?        00:00:00 sshd: /usr/sbin/sshd -D -e -o PermitRootLogin=prohibit-pas
+message+         15          1  0 03:23 ?        00:00:01 /usr/bin/dbus-daemon --system --nofork --nopidfile --nosyslog
+root             16          1  0 03:23 ?        00:00:00 /usr/sbin/crond -n
+root             17          1  0 03:23 ?        00:00:00 ntpd -n
+root             18          1  0 03:23 ?        00:00:01 /bin/bash /usr/libexec/rach2-desktop
+root             22         18  0 03:23 ?        00:00:01 /usr/lib/systemd/systemd-udevd --resolve-names=early
+root             45         18  0 03:23 ?        00:00:00 seatd -g seat
+root             67          0  0 03:23 ?        00:00:07 virtio_gpu
+root             69         13  0 03:23 ?        00:00:00 sshd-session: root [postauth]
+root             72         69  0 03:23 ?        00:00:00 sshd-session: root@notty
+root             73         72  0 03:23 ?        00:00:00 sh dev-log/77-vgpu/77-10/guest.sh rach2 gtk
+root            217          0  0 03:23 ?        00:00:01 kdrmcon
+test           1225         73  0 03:25 ?        00:00:00 sh tests/graphics/browser/run.sh chromium webgpu-venus /tmp/77-10/build/runs/results/chromium-webgpu-venus
+test           1270       1225  0 03:25 ?        00:00:00 weston --no-config --backend=headless --renderer=pixman --width=1280 --height=800 --shell=kiosk --idle-time=0 --socket=wayland-runner --log=/tmp/77-10/build/runs/results/chromium-webgpu-venus/weston.log
+test           1275       1225  0 03:25 ?        00:00:01 python3 /tmp/77-10/tests/graphics/browser/run.py chromium webgpu-venus /tmp/77-10/build/runs/results/chromium-webgpu-venus /tmp/77-10/build/tmp/browser.A9HuYS
+root           1632         13 10 03:43 ?        00:00:00 sshd-session: root [postauth]
+root           1634       1632 22 03:43 ?        00:00:00 sshd-session: root@notty
+root           1635       1634 24 03:43 ?        00:00:00 bash -c for p in 73 1225 1270 1275; do echo == $p ppid=$(cut -d" " -f4 /proc/$p/stat) uid=$(grep Uid /proc/$p/status); tr "\\0" " " < /proc/$p/cmdline; echo; for t in /proc/$p/task/*; do echo "  $t $(cut -d" " -f3 $t/stat) wchan=$(cat $t/wchan)"; done; done; ls /tmp/77-10/build/tmp 2>/dev/null | tail; ps -ef 2>/dev/null | tail -20
+root           1660       1635 99 03:43 ?        00:00:00 ps -ef
+root           1661       1635 66 03:43 ?        00:00:00 tail -20

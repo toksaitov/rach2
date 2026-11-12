@@ -1,0 +1,34 @@
+01:49:38 start rach2-base-smp1
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.589 s, 83.59 a second
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.532 s, 84.94 a second
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.442 s, 87.16 a second
+frames 820, vkcube submissions a frame 2.50
+total mean 10.745 median  9.111
+A     mean  2.725 median  2.622
+B     mean  5.465 median  4.640
+C     mean  1.384 median  1.308
+D     mean  0.049 median  0.044
+E     mean  0.565 median  0.384
+01:50:19 start rach2-4k-smp1
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.818 s, 78.58 a second
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.815 s, 78.64 a second
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 4.893 s, 61.31 a second
+frames 550, vkcube submissions a frame 2.94
+total mean 11.490 median  8.744
+A     mean  3.112 median  2.905
+B     mean  4.139 median  3.679
+C     mean  1.580 median  1.455
+D     mean  0.046 median  0.045
+E     mean  0.476 median  0.404
+01:51:06 start debian-smp1
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 2.546 s, 117.83 a second
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 2.521 s, 119.00 a second
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 2.488 s, 120.58 a second
+frames 839, vkcube submissions a frame 2.26
+total mean  7.720 median  7.697
+A     mean  2.370 median  2.334
+B     mean  3.526 median  3.642
+C     mean  1.294 median  1.254
+D     mean  0.055 median  0.060
+E     mean  0.169 median  0.105
+01:51:36 done

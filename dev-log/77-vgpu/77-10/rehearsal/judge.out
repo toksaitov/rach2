@@ -1,0 +1,12 @@
+judge: rate: 74.81 here, 115.21 in the reference, ratio 0.65
+judge: result: pass vkcube 2 frames in the reference, 2 here, 0 worse than Debian's
+judge: rate: 76.14 here, 115.12 in the reference, ratio 0.66
+judge: result: pass vkcube 2 frames in the reference, 2 here, 0 worse than Debian's
+judge: rate: 60.14 here, 114.2 in the reference, ratio 0.53
+judge: result: pass vkcube 2 frames in the reference, 2 here, 0 worse than Debian's
+judge: result: pass deqp 9 cases, 0 worse than the reference's, 0 flakes named
+judge: result: pass deqp 193 cases, 0 worse than the reference's, 0 flakes named
+browser-judge: Venus readback passes: 0
+browser-judge: result: pass chromium webgpu-venus
+browser-judge: Venus readback passes: 0
+browser-judge: result: pass chromium webgpu-venus-native

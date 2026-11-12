@@ -1,0 +1,23 @@
+02:01:51 start rach2-base-smp1
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.468 s, 86.51 a second
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.508 s, 85.52 a second
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.552 s, 84.46 a second
+frames 837, vkcube submissions a frame 2.45
+total mean 10.637 median  9.094
+A     mean  2.655 median  2.596
+B     mean  5.598 median  4.659
+C     mean  1.325 median  1.293
+D     mean  0.050 median  0.048
+E     mean  0.436 median  0.390
+02:02:32 start rach2-hr-smp1
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.196 s, 93.87 a second
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.186 s, 94.16 a second
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.252 s, 92.25 a second
+frames 833, vkcube submissions a frame 2.10
+total mean  9.814 median  8.334
+A     mean  2.616 median  2.573
+B     mean  4.674 median  3.910
+C     mean  1.339 median  1.296
+D     mean  0.050 median  0.048
+E     mean  0.660 median  0.400
+02:03:11 done

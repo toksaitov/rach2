@@ -1,0 +1,12 @@
+Linux debian-ref 6.12.115+deb13.1-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.115-2 (2026-11-01) x86_64 GNU/Linux
+BOOT_IMAGE=/boot/vmlinuz-6.12.115+deb13.1-amd64 root=PARTUUID=138f3e8b-bdeb-47ac-84b8-f9df1662abc8 ro console=tty0 console=ttyS0,115200 earlyprintk=ttyS0,115200 consoleblank=0
+{
+    "ICD": {
+        "api_version": "1.4.354",
+        "library_path": "/usr/lib/x86_64-linux-gnu/venus/libvulkan_virtio.so"
+    },
+    "file_format_version": "1.0.1"
+}af0035199d89d04a30d5ecf41096348843023fa580c04fa94dc03aa16b6ed635  /usr/lib/x86_64-linux-gnu/venus/libvulkan_virtio.so
+1b3c48a5ae03ebac4ab5de3ad0f19bf9ccef99e57de28aec2750495511e901ed  /usr/bin/vkcube
+weston 14.0.2
+Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)

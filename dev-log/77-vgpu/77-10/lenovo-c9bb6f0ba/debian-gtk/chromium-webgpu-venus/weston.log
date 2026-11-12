@@ -1,0 +1,30 @@
+Date: 2026-11-12 UTC
+[03:22:35.626] weston 14.0.2
+               https://wayland.freedesktop.org
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+               Build: 14.0.2
+[03:22:35.626] Command line: weston --no-config --backend=headless --renderer=pixman --width=1280 --height=800 --shell=kiosk --idle-time=0 --socket=wayland-runner --log=/tmp/77-10/build/runs/results/chromium-webgpu-venus/weston.log
+[03:22:35.626] OS: Linux, 6.12.115+deb13.1-amd64, #1 SMP PREEMPT_DYNAMIC Debian 6.12.115-2 (2026-11-01), x86_64
+[03:22:35.626] Flight recorder: enabled
+[03:22:35.626] Starting with no config file.
+[03:22:35.627] Output repaint window is 7 ms maximum.
+[03:22:35.628] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/headless-backend.so'
+[03:22:35.654] Using Pixman renderer
+[03:22:35.654] Registered plugin API 'weston_windowed_output_api_headless_v2' of size 16
+[03:22:35.654] Color manager: no-op
+                 protocol support: no
+[03:22:35.654] Output 'headless' attempts EOTF mode SDR and colorimetry mode default.
+[03:22:35.654] Output 'headless' using color profile: stock sRGB color profile
+[03:22:35.655] Output 'headless' enabled with head(s) headless
+[03:22:35.655] Compositor capabilities:
+               arbitrary surface rotation: yes
+               screen capture uses y-flip: no
+               cursor planes: no
+               arbitrary resolutions: no
+               view mask clipping: yes
+               explicit sync: no
+               color operations: no
+               presentation clock: CLOCK_MONOTONIC_RAW, id 4
+               presentation clock resolution: 0.000000001 s
+[03:22:35.655] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+[03:22:43.424] caught signal 15

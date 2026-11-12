@@ -1,0 +1,25 @@
+	deviceName         = Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))
+	deviceName         = Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))
+venus-lenovo: vkcube: rach2 gtk round 1
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 4.010 s, 74.81 a second
+venus-lenovo: vkcube: rach2 gtk round 2
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 3.940 s, 76.14 a second
+venus-lenovo: vkcube: rach2 gtk round 3
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 4.988 s, 60.14 a second
+venus-lenovo: deqp: rach2 smoke
+deqp: running 9 of 9 cases of vk in 4 processes
+deqp: result: vk 1.4.1.1 cases 9 of 9 every 1 jobs 4 pass 9 fail 0 notsupported 0 warning 0 crash 0 timeout 0 other 0 missing 0 flake 0
+venus-lenovo: deqp: rach2 sample
+deqp: running 193 of 96037 cases of vk in 4 processes
+deqp: result: vk 1.4.1.1 cases 193 of 96037 every 500 jobs 4 pass 68 fail 0 notsupported 125 warning 0 crash 0 timeout 0 other 0 missing 0 flake 0
+venus-lenovo: browser: rach2 webgpu-venus
+grep: warning: stray \ before -
+browser: action: chromium webgpu-venus
+browser: adapters: {"platform": "wayland", "requests": {"default": {"adapter": {"architecture": "swiftshader", "description": "", "device": "", "fallback": true, "vendor": "google"}, "readback": null}, "fallback": {"adapter": {"architecture": "swiftshader", "description": "", "device": "", "fallback": true, "vendor": "google"}, "readback": null}}, "venus_passes": 0}
+browser: result: chromium webgpu-venus pass
+venus-lenovo: browser: rach2 webgpu-venus-native
+grep: warning: stray \ before -
+browser: action: chromium webgpu-venus-native
+browser: adapters: {"platform": "wayland", "requests": {"default": {"adapter": {"architecture": "swiftshader", "description": "", "device": "", "fallback": true, "vendor": "google"}, "readback": null}, "fallback": {"adapter": {"architecture": "swiftshader", "description": "", "device": "", "fallback": true, "vendor": "google"}, "readback": null}}, "venus_passes": 0}
+browser: result: chromium webgpu-venus-native pass
+venus-lenovo: result: collected rach2 gtk

@@ -1,0 +1,45 @@
+runner vkcube
+system Debian GNU/Linux 13 (trixie)
+kernel Linux 6.12.115+deb13.1-amd64
+cpus 1
+memory_kib 6074476
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in /tmp/77-10/build/tmp/cache-cube-2, emptied at start: 1
+load start 0.77 0.20 0.07
+processes start 105
+kernel_before cpu  1319 0 1278 757 86 0 51 6 0 0
+kernel_before cpu0 1319 0 1278 757 86 0 51 6 0 0
+kernel_before intr 22207 30 9 0 0 660 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 4159 0 5371 0 7 0 0 0 0 0 1615 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_before ctxt 64736
+kernel_before btime 1794429193
+kernel_before processes 1180
+kernel_before procs_running 1
+kernel_before procs_blocked 0
+kernel_before softirq 22704 0 3246 6 3502 0 0 1 0 0 15949
+env GRAPHICS_CLASS=performance
+env GRAPHICS_CPUS=1
+env GRAPHICS_MEMORY_KIB=6074476
+env LP_NUM_THREADS=1
+env MESA_SHADER_CACHE_DIR=/tmp/77-10/build/tmp/cache-cube-2
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
+case vkcube 346 frames in FIFO, held after 300 345, the first 300 timed
+icd /usr/share/vulkan/icd.d/venus_icd.x86_64.json
+vkcube 1.4.304.0+dfsg1-1
+compositor weston 14.0.2 drm gl kiosk
+renderer virgl (Mesa Intel(R) HD Graphics 4400 (HSW GT2))
+load end 0.89 0.26 0.09
+busy 66.3%
+kernel_after cpu  2055 0 1495 1240 86 0 52 6 0 0
+kernel_after cpu0 2055 0 1495 1240 86 0 52 6 0 0
+kernel_after intr 28998 30 9 0 0 660 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 4177 0 5398 0 8 0 0 0 0 0 3092 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_after ctxt 79114
+kernel_after btime 1794429194
+kernel_after processes 1464
+kernel_after procs_running 2
+kernel_after procs_blocked 0
+kernel_after softirq 26331 0 4001 6 3519 0 0 1 0 0 18804
+gpu Selected GPU 0: Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), type: IntegratedGpu
+timing vkhold: timed: 300 presents in 5.555 s

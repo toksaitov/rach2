@@ -1,0 +1,54 @@
+runner deqp
+system Debian GNU/Linux 13 (trixie)
+kernel Linux 6.12.115+deb13.1-amd64
+cpus 4
+memory_kib 6073660
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in /tmp/77-10/build/tmp/cache-smoke, emptied at start: 1
+load start 0.56 0.18 0.06
+processes start 135
+kernel_before cpu  2946 0 2137 20374 280 0 311 362 0 0
+kernel_before cpu0 766 0 633 4961 95 0 79 83 0 0
+kernel_before cpu1 537 0 472 5402 57 0 42 83 0 0
+kernel_before cpu2 1161 0 470 4688 96 0 93 84 0 0
+kernel_before cpu3 480 0 561 5321 30 0 95 110 0 0
+kernel_before intr 123893 35 9 0 0 451 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 2951 0 5255 0 9 0 0 0 0 0 4576 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_before ctxt 113479
+kernel_before btime 1794453644
+kernel_before processes 2008
+kernel_before procs_running 1
+kernel_before procs_blocked 0
+kernel_before softirq 56573 0 5064 6 2270 4754 0 264 19703 0 24512
+env GRAPHICS_CLASS=conformance
+env GRAPHICS_CPUS=4
+env GRAPHICS_MEMORY_KIB=6073660
+env LP_NUM_THREADS=0
+env MESA_SHADER_CACHE_DIR=/tmp/77-10/build/tmp/cache-smoke
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
+case deqp vk 1.4.1.1 every 1 from 1 of tests/graphics/deqp-vk-venus-smoke.txt, 4 processes
+list tests/graphics/deqp-vk-venus-smoke.txt 9 cases sha256 2eb89257d58f50c55fc0404c6f64d8b7b7358904828ace9fcbfd4efb2d3ecfb4
+sample 9 cases sha256 2eb89257d58f50c55fc0404c6f64d8b7b7358904828ace9fcbfd4efb2d3ecfb4
+program /opt/vk-gl-cts-1.4.1.1/vulkan/deqp-vk vulkan-cts-1.4.1.1
+options --deqp-watchdog=enable --deqp-log-images=disable --deqp-log-shader-sources=disable 
+env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/venus_icd.x86_64.json
+env LP_NUM_THREADS=0
+renderer deviceName Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2))
+renderer apiVersion 1.2.305
+renderer driverVersion 0x06801006
+load end 0.59 0.19 0.07
+busy 15.5%
+kernel_after cpu  3070 0 2257 21857 281 0 316 386 0 0
+kernel_after cpu0 795 0 660 5332 95 0 80 89 0 0
+kernel_after cpu1 566 0 501 5777 58 0 44 89 0 0
+kernel_after cpu2 1193 0 509 5055 96 0 94 91 0 0
+kernel_after cpu3 514 0 586 5691 30 0 96 115 0 0
+kernel_after intr 134364 35 9 0 0 451 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 2954 0 5261 0 9 0 0 0 0 0 4779 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_after ctxt 130287
+kernel_after btime 1794453644
+kernel_after processes 2113
+kernel_after procs_running 1
+kernel_after procs_blocked 0
+kernel_after softirq 59293 0 5374 6 2273 4760 0 264 20995 0 25621

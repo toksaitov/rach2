@@ -1,0 +1,5 @@
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: candidate
+bootctl: next_entry: empty (a trial was consumed)
+bootctl: booted: candidate
+0cd3882a0f67e7bb7f309c2176d65ecb347d9f78e7c89dcb8ee85a2c7eccfd64  /dev/bootpart

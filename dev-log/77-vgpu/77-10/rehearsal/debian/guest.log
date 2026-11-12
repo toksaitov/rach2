@@ -1,0 +1,58 @@
+	deviceName         = Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))
+	deviceName         = Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))
+venus-lenovo: vkcube: debian gtk round 1
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 2.604 s, 115.21 a second
+venus-lenovo: vkcube: debian gtk round 2
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 2.606 s, 115.12 a second
+venus-lenovo: vkcube: debian gtk round 3
+vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 2.627 s, 114.20 a second
+venus-lenovo: deqp: debian smoke
+deqp: running 9 of 9 cases of vk in 4 processes
+deqp: result: vk 1.4.1.1 cases 9 of 9 every 1 jobs 4 pass 9 fail 0 notsupported 0 warning 0 crash 0 timeout 0 other 0 missing 0 flake 0
+venus-lenovo: deqp: debian sample
+deqp: running 193 of 96037 cases of vk in 4 processes
+deqp: result: vk 1.4.1.1 cases 193 of 96037 every 500 jobs 4 pass 68 fail 0 notsupported 125 warning 0 crash 0 timeout 0 other 0 missing 0 flake 0
+venus-lenovo: browser: debian webgpu-venus
+browser: action: chromium webgpu-venus
+browser: adapters: {"platform": "wayland", "requests": {"default": {"adapter": {"architecture": "swiftshader", "description": "", "device": "", "fallback": true, "vendor": "google"}, "readback": null}, "fallback": {"adapter": {"architecture": "swiftshader", "description": "", "device": "", "fallback": true, "vendor": "google"}, "readback": null}}, "venus_passes": 0}
+browser: result: chromium webgpu-venus pass
+venus-lenovo: browser: debian webgpu-venus-native
+browser: action: chromium webgpu-venus-native
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 51324)
+Traceback (most recent call last):
+  File "/usr/lib/python3.13/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/77-10/tests/graphics/browser/run.py", line 48, in __init__
+    super().__init__(*args, directory=str(HERE), **kwargs)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/http/server.py", line 672, in __init__
+    super().__init__(*args, **kwargs)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/http/server.py", line 436, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/http/server.py", line 404, in handle_one_request
+    self.raw_requestline = self.rfile.readline(65537)
+                           ~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/usr/lib/python3.13/socket.py", line 719, in readinto
+    return self._sock.recv_into(b)
+           ~~~~~~~~~~~~~~~~~~~~^^^
+  File "/usr/lib/python3.13/ssl.py", line 1304, in recv_into
+    return self.read(nbytes, buffer)
+           ~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/ssl.py", line 1138, in read
+    return self._sslobj.read(len, buffer)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+browser: adapters: {"platform": "wayland", "requests": {"default": {"adapter": {"architecture": "swiftshader", "description": "", "device": "", "fallback": true, "vendor": "google"}, "readback": null}, "fallback": {"adapter": {"architecture": "swiftshader", "description": "", "device": "", "fallback": true, "vendor": "google"}, "readback": null}}, "venus_passes": 0}
+browser: result: chromium webgpu-venus-native pass
+venus-lenovo: result: collected debian gtk

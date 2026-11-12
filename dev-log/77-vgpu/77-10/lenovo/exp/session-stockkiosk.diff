@@ -1,0 +1,20 @@
+--- dev-log/77-vgpu/77-10/session.py	2026-11-11 19:05:06
++++ build/runs/2662/exp/session-stockkiosk.py	2026-11-11 19:57:31
+@@ -67,7 +67,7 @@
+     identity()
+     assets = args.assets.resolve()
+     assert assets.is_relative_to(Path("/data/build")), "assets must be under /data/build"
+-    tag = args.system + "-" + args.display
++    tag = args.system + "-" + args.display + "-stockkiosk"
+     out = assets / "runs" / tag
+     out.mkdir(parents=True, exist_ok=False)
+     scratch = assets / "tmp"
+@@ -163,6 +163,8 @@
+                 if args.system == "debian":
+                     with (assets / "cts.tar.gz").open("rb") as payload:
+                         command(ssh + ["sudo tar -xzf - -C /opt"], stdin=payload)
++                with open("/data/build/77-10/exp/stockweston/kiosk-shell.so", "rb") as so:
++                    command(ssh + ["cat > /usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so && sha256sum /usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so"], stdin=so)
+                 remote = "cd /tmp/77-10 && " + privilege + "sh dev-log/77-vgpu/77-10/guest.sh "
+                 remote += shlex.join([args.system, args.display])
+                 with (out / "guest.log").open("w") as log:
