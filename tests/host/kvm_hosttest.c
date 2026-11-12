@@ -401,8 +401,12 @@ void smp_kick(int cpu)
     kicked = cpu;
 }
 
+/** A signal the row posts: `run_signal` calls this only once the
+ * caller's signal-work flag is set, and only under the big lock, which
+ * the signal code needs. */
 int signal_pending(void)
 {
+    CHECK(bkl_depth > 0, "signal_pending runs under the big lock");
     return sig_pending;
 }
 
@@ -1854,11 +1858,13 @@ static void interrupt_rows(int fd)
     struct kvm_run *run = run_of(fd);
 
     sig_pending = 1;
+    caller.sig_woken = 1;
     entries_made = 0;
     CHECK(fdio(fd, KVM_RUN, 0) == -EINTR && run->exit_reason == KVM_EXIT_INTR,
           "a signal ends KVM_RUN with KVM_EXIT_INTR");
     CHECK(entries_made == 0, "the signal is seen before the entry");
     sig_pending = 0;
+    caller.sig_woken = 0;
     CHECK(fdio(fd, KVM_RUN, 1) == -EINVAL, "KVM_RUN takes no argument");
 
     v->mode = KVM_MODE_IN_GUEST;
@@ -3097,9 +3103,11 @@ static void stats_count_rows(int vcpu, int vcpu_stats)
               stat_of(vcpu_stats, "halt_exits") == 1 && stat_of(vcpu_stats, "exits") == 5,
           "halt_exits counts the HLT");
     sig_pending = 1;
+    caller.sig_woken = 1;
     CHECK(fdio(vcpu, KVM_RUN, 0) == -EINTR && stat_of(vcpu_stats, "signal_exits") == 1,
           "signal_exits counts a run a signal ended");
     sig_pending = 0;
+    caller.sig_woken = 0;
     v->stat[KVM_VCPU_STAT_HALT_WAIT_HIST + 31] = 9;
     CHECK(stat_of(vcpu_stats, "blocking") == 0 && v->stat[KVM_VCPU_STAT_BLOCKING] == 0,
           "a histogram's 32 values end before the next statistic");
