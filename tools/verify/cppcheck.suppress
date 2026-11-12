@@ -66,6 +66,11 @@ unusedStructMember:*tests/musl/callsmusl.c
 # and the members around them are the layout.
 unusedStructMember:*tests/musl/kvmslotmusl.c
 
+# The KVM wake load's `struct region`, `struct enable_cap`, `struct
+# cpuid_entry` and `struct run_head` are Linux's KVM ABI layouts; the members
+# the load does not read hold their offsets.
+unusedStructMember:*tests/musl/kvmipimusl.c
+
 # The DRM, vgem and timespec structs in the lock stress program are Linux's
 # struct drm_version, drm_mode_create_dumb, drm_vgem_fence_attach and
 # drm_vgem_fence_signal, which their ioctls copy whole, and the 64-bit
