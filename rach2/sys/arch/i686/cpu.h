@@ -102,10 +102,12 @@ typedef uint32_t pte_t;
  * means "shared, copy on the next write"; the fault handler tells a
  * copy-on-write write from a write to a read-only region by this bit. */
 #define PTE_COW           0x200u
-/* Bit 10: a resident page of a PROT_NONE region. The page stays present,
- * with its frame and contents, but supervisor-only and read-only, so any
- * user access faults; fork and teardown own it as a user page by this bit,
- * and mprotect makes it a user page again. */
+/* Bit 10: a resident page of a PROT_NONE region. The entry keeps its frame
+ * and the page its contents, but the present and user bits are clear, so
+ * any access faults, the kernel's too; fork and teardown own it as a user
+ * page by this bit, and mprotect makes it present again. With the user bit
+ * and no present bit it marks an entry an unmap is taking away
+ * (mm/paging.h, PTE_PROTNONE and PTE_GOING). */
 #define PTE_NONE          0x400u
 /* Bit 11: a page of anonymous memory that a read brought in zeroed. While
  * PTE_DIRTY is clear beside it nothing has stored into the page, and it is

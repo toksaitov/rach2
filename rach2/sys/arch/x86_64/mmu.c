@@ -574,7 +574,7 @@ void free_user_pages(page_dir_t *dir)
                 for (i1 = 0; i1 < MMU_TABLE_ENTRIES; i1++) {
                     pte_t pte = pt[i1];
 
-                    if (!(pte & PTE_P) || !(pte & (PTE_U | PTE_NONE))) {
+                    if (!PTE_MAPPED(pte) || !(pte & (PTE_U | PTE_NONE))) {
                         continue;
                     }
                     if (PTE_ADDR(pte) != 0) {

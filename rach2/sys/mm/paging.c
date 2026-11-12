@@ -479,15 +479,16 @@ static int pte_writable(page_dir_t *dir, uintptr_t addr)
 }
 
 /**
- * Whether the page at `addr` is present in `dir`. The resolver backs only a
- * page that is not: a second frame for a page exec loaded or a pre-fault
- * backed would leak the first and lose the page's contents.
+ * Whether the page at `addr` is present in `dir`, a page of a PROT_NONE
+ * region among them (PTE_MAPPED). The resolver backs only a page that is
+ * not: a second frame for a page exec loaded or a pre-fault backed would
+ * leak the first and lose the page's contents.
  */
 static int pte_present(page_dir_t *dir, uintptr_t addr)
 {
     pte_t *e = user_pte(dir, addr);
 
-    return e && (*e & PTE_P) != 0;
+    return e && PTE_MAPPED(*e);
 }
 
 /** Count a page fault the current thread took, a major one when `major`
@@ -1878,7 +1879,7 @@ static int page_private(struct mm *mm, uintptr_t addr, int writable)
     addr &= ~(uintptr_t)(PAGE_SIZE - 1);
     for (;;) {
         e = user_pte(dir, addr);
-        if (!e || !((pte = *e) & PTE_P)) {
+        if (!e || !PTE_MAPPED(pte = *e)) {
             return -1;
         }
         if ((pte & PTE_COW) && writable) {
@@ -1934,7 +1935,7 @@ void paging_entry_clear(struct mm *mm, uintptr_t addr, pte_t bits)
     uint32_t flags = mm_ptl_lock(mm);
     pte_t *e = user_pte(mm->dir, addr);
 
-    if (e && (*e & PTE_P)) {
+    if (e && PTE_MAPPED(*e)) {
         *e &= ~bits;
     }
     mm_ptl_unlock(mm, flags);
@@ -3078,7 +3079,7 @@ uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va)
 {
     pte_t *e = user_pte(dir, va);
 
-    if (!e || !(*e & PTE_P)) {
+    if (!e || !PTE_MAPPED(*e)) {
         return 0;
     }
     return PTE_ADDR(*e) | (va & (PAGE_SIZE - 1));
@@ -3106,7 +3107,7 @@ int paging_user_page(page_dir_t *dir, uintptr_t va)
 {
     pte_t *e = user_pte(dir, va);
 
-    if (!e || !(*e & PTE_P)) {
+    if (!e || !PTE_MAPPED(*e)) {
         return PAGING_PAGE_NONE;
     }
     if (PTE_IS_ZERO(*e)) {
@@ -3130,7 +3131,7 @@ void paging_user_frames(page_dir_t *dir, uintptr_t start, uintptr_t end,
         for (; table && va < next; va += PAGE_SIZE) {
             pte_t e = table[MMU_INDEX(va)];
 
-            if (!(e & PTE_P) || PTE_IS_ZERO(e) || paging_frame_is_device(PTE_ADDR(e))) {
+            if (!PTE_MAPPED(e) || PTE_IS_ZERO(e) || paging_frame_is_device(PTE_ADDR(e))) {
                 continue;
             }
             counts->frames++;
@@ -3153,7 +3154,7 @@ void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned
         for (; table && va < next; va += PAGE_SIZE) {
             pte_t e = table[MMU_INDEX(va)];
 
-            if (e & PTE_P) {
+            if (PTE_MAPPED(e)) {
                 (*present)++;
                 *dirty += (e & PTE_DIRTY) != 0;
                 *anon += frame_is_anon(PTE_ADDR(e));
@@ -3515,7 +3516,7 @@ int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, pte_t flags)
 
     old = table[MMU_INDEX(virt)];
     table[MMU_INDEX(virt)] = PTE_ADDR((pte_t)phys) | (flags & (pte_t)PTE_FLAGS);
-    mm_resident_add(dir, ((flags & PTE_P) != 0) - ((old & PTE_P) != 0));
+    mm_resident_add(dir, PTE_MAPPED(flags) - PTE_MAPPED(old));
     /* x86 caches no translation of an entry that is not present. */
     if (old & PTE_P) {
         paging_flush_dir(dir, virt);
@@ -3609,9 +3610,10 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
 }
 
 /**
- * Two walks: the first takes the present bit from each present entry and
- * leaves its frame in it, marked PTE_NONE, and the second, after the one
- * flush, clears those entries and drops their frames. So no processor can
+ * Two walks: the first marks each entry that holds a page, present or
+ * PROT_NONE, as one going (PTE_GOING), which takes its present bit and
+ * leaves its frame in it, and the second, after the one flush, clears those
+ * entries and drops their frames. So no processor can
  * reach a frame after it is freed, and a large unmap costs one shootdown,
  * not one a page. The caller holds the space's lock to write, or the space
  * is no thread's, so no fault installs an entry meanwhile, or holds it to
@@ -3626,7 +3628,7 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
 void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
 {
     struct flush_batch b;
-    uintptr_t addr, next, lo, hi;
+    uintptr_t addr, next, lo = end, hi = start;
     long gone = 0;
 
     if (!dir) {
@@ -3640,17 +3642,20 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
         for (; table && addr < next; addr += PAGE_SIZE) {
             pte_t *e = &table[MMU_INDEX(addr)];
 
-            if (*e & PTE_P) {
-                *e = PTE_ADDR(*e) | PTE_NONE;
-                batch_add(&b, addr);
-                gone++;
+            if (!PTE_MAPPED(*e)) {
+                continue;
             }
+            if (*e & PTE_P) {
+                batch_add(&b, addr); /* a PROT_NONE entry is in no TLB */
+            }
+            *e = PTE_ADDR(*e) | PTE_NONE | PTE_U;
+            gone++;
+            lo = addr < lo ? addr : lo;
+            hi = addr + PAGE_SIZE;
         }
     }
     bkl_exit();
     mm_resident_add(dir, -gone);
-    lo = b.lo;
-    hi = b.hi;
     batch_flush(&b);
     for (addr = lo; addr < hi; addr = next) {
         pte_t *table = user_span(dir, addr, hi, &next);
@@ -3658,7 +3663,7 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
         for (; table && addr < next; addr += PAGE_SIZE) {
             pte_t *e = &table[MMU_INDEX(addr)];
 
-            if ((*e & (PTE_P | PTE_NONE)) == PTE_NONE) {
+            if (PTE_GOING(*e)) {
                 uintptr_t phys = PTE_ADDR(*e);
 
                 *e = 0;
@@ -3834,6 +3839,8 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
 
                 if (*dst & PTE_P) {
                     batch_add(&replaced, to + (addr - from));
+                }
+                if (PTE_MAPPED(*dst)) {
                     gone++;
                 }
                 *dst = *e;
@@ -3851,22 +3858,26 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
     return 0;
 }
 
-/** Give the present user page `addr`, whose entry is `e`, the protection
- * `prot`, for `paging_protect_range`, and add it to the batch `b` to flush;
- * a page not present is left alone, since its fault reads the region's
- * protection. */
+/** Give the user page `addr`, whose entry is `e`, the protection `prot`,
+ * for `paging_protect_range`, and add it to the batch `b` to flush when the
+ * processor could reach it; a page not there is left alone, since its fault
+ * reads the region's protection. No access makes the entry PROT_NONE, not
+ * present to the processor (PTE_PROTNONE), and any access makes it present
+ * again. */
 static void protect_page(struct flush_batch *b, pte_t *e, uintptr_t addr, uint32_t prot)
 {
     pte_t pte = *e;
+    pte_t was = pte;
     uintptr_t frame;
 
-    if (!(pte & PTE_P)) {
+    if (!PTE_MAPPED(pte)) {
         return;
     }
     if (!(prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC))) {
-        pte = (pte & ~(pte_t)(PTE_W | PTE_U)) | PTE_NONE;
+        pte = (pte & ~(pte_t)(PTE_P | PTE_W | PTE_U)) | PTE_NONE;
     } else {
-        pte = (pte & ~(pte_t)(PTE_NONE | PTE_NOEXEC | PTE_PKEY)) | PTE_U | paging_prot_bits(prot);
+        pte = (pte & ~(pte_t)(PTE_NONE | PTE_NOEXEC | PTE_PKEY)) | PTE_P | PTE_U |
+              paging_prot_bits(prot);
         frame = PTE_ADDR(pte) / PAGE_SIZE;
         if (!(prot & VM_PROT_WRITE)) {
             pte &= ~(pte_t)PTE_W;
@@ -3881,7 +3892,9 @@ static void protect_page(struct flush_batch *b, pte_t *e, uintptr_t addr, uint32
         }
     }
     *e = pte;
-    batch_add(b, addr);
+    if (was & PTE_P) {
+        batch_add(b, addr);
+    }
 }
 
 /** The caller holds the space's lock to write; the big lock is taken over
@@ -3927,7 +3940,7 @@ static int fork_copy_page(struct flush_batch *b, page_dir_t *child_dir, pte_t *e
     uintptr_t parent_phys = PTE_ADDR(pte);
     uintptr_t copy;
 
-    if (!(pte & PTE_P) || !(pte & (PTE_U | PTE_NONE)) || parent_phys == 0) {
+    if (!PTE_MAPPED(pte) || !(pte & (PTE_U | PTE_NONE)) || parent_phys == 0) {
         return 0;
     }
     if (type != VM_SHARED && frame_pinned(parent_phys)) {

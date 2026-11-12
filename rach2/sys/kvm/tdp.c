@@ -459,7 +459,8 @@ static int map(struct kvm_vm *vm, struct tdp *t, uint64_t gfn, int level, uint64
 
 /** The caller's entry for the page at `hva` of `mm`, 0 when it has none;
  * the page is the caller's to touch when the entry has PTE_P and PTE_U,
- * since a page of a PROT_NONE region keeps PTE_P and loses PTE_U. */
+ * since a page of a PROT_NONE region loses both (mm/paging.h,
+ * PTE_PROTNONE). */
 static pte_t host_pte(struct mm *mm, uintptr_t hva)
 {
     pte_t *table = mmu_user_table(mm->dir, hva, 0);
