@@ -13,9 +13,8 @@
 /* The XCR0 components a guest may have: x87, SSE, AVX and AVX-512's three
  * (arch/x86/fpu.h). Not PKRU, which the kernel saves for its own threads:
  * a guest is offered no PKU, may not set CR4.PKE, and so never changes
- * PKRU, which keeps through a run the value the guest's image loads, and
- * the host's comes back with the rest of its state after the run
- * (vmx.c's and svm.c's `fpu_store`). */
+ * PKRU, and runs under the host's, which the backends leave out of their
+ * XSAVE and XRSTOR of its image (KVM_XFEATURE_PKRU in kvm.h). */
 #define XCR0_KERNEL 0xE7ull
 
 #define XFEATURE_YMM    0x4ull

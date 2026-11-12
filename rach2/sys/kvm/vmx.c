@@ -444,11 +444,11 @@ struct vmx_host {
  * WRMSR that returns -1 where the processor refuses the value with #GP,
  * and 0 once written. The floating-point
  * operations work under the host's XCR0: `fpu_load` saves the host's state
- * into `host`, unless `host` is NULL, and loads the guest's image `guest`;
- * `fpu_store` saves the registers into `guest`, unless `guest` is NULL,
- * and loads the host's state from `host`, unless `host` is NULL. `xgetbv`
- * and `xsetbv` read and write XCR0, and `rdpkru` and `wrpkru` PKRU, which
- * read as 0 and are not written where the host's protection keys are off.
+ * into `host`, unless `host` is NULL, and loads the guest's image `guest`
+ * but its PKRU; `fpu_store` saves the registers but PKRU into `guest`,
+ * unless `guest` is NULL, and loads the host's state from `host`, unless
+ * `host` is NULL (KVM_XFEATURE_PKRU). `xgetbv` and `xsetbv` read and write
+ * XCR0.
  * `nmi` and `machine_check` raise the host's own vector 2 or 18, for an
  * exit that took one from the host.
  */
@@ -475,8 +475,6 @@ struct vmx_ops {
     void (*fpu_store)(void *host, void *guest);
     uint64_t (*xgetbv)(void);
     void (*xsetbv)(uint64_t value);
-    uint32_t (*rdpkru)(void);
-    void (*wrpkru)(uint32_t value);
     void (*nmi)(void);
     void (*machine_check)(void);
     void (*wbinvd)(void);
@@ -662,7 +660,7 @@ static void hw_xsetbv(uint64_t v)
 }
 
 /** Save the host's floating-point state into `host`, unless it is NULL,
- * and load the guest's image `guest`, under the host's XCR0. */
+ * and load the guest's image `guest`, under the host's XCR0 but PKRU. */
 static void hw_fpu_load(void *host, const void *guest)
 {
     uint64_t mask;
@@ -671,7 +669,7 @@ static void hw_fpu_load(void *host, const void *guest)
         fpu_save(host);
     }
     if (kvm_xcr0_supported()) {
-        mask = hw_xgetbv();
+        mask = hw_xgetbv() & ~KVM_XFEATURE_PKRU;
         /* XRSTOR checks the whole header against XCR0, including saved
          * components that the guest currently has disabled. */
         __asm__ __volatile__(XRSTOR64
@@ -684,14 +682,14 @@ static void hw_fpu_load(void *host, const void *guest)
 }
 
 /** Save the registers into the guest's image `guest`, unless it is NULL,
- * under the host's XCR0, and load the host's state from `host`, unless it
- * is NULL. */
+ * under the host's XCR0 but PKRU, whose part of the image XSAVE leaves as
+ * it was, and load the host's state from `host`, unless it is NULL. */
 static void hw_fpu_store(void *host, void *guest)
 {
     uint64_t mask;
 
     if (guest && kvm_xcr0_supported()) {
-        mask = hw_xgetbv();
+        mask = hw_xgetbv() & ~KVM_XFEATURE_PKRU;
         __asm__ __volatile__(XSAVE64
                              :
                              : "D"(guest), "a"((uint32_t)mask), "d"((uint32_t)(mask >> 32))
@@ -701,28 +699,6 @@ static void hw_fpu_store(void *host, void *guest)
     }
     if (host) {
         fpu_restore(host);
-    }
-}
-
-/** PKRU, or 0 where the host's protection keys are off: `rdpkru`, 0F 01
- * EE, with ECX 0. */
-static uint32_t hw_rdpkru(void)
-{
-    uint32_t v, d;
-
-    if (!fpu_pkeys()) {
-        return 0;
-    }
-    __asm__ __volatile__(".byte 0x0f, 0x01, 0xee" : "=a"(v), "=d"(d) : "c"(0u));
-    return v;
-}
-
-/** Write PKRU where the host's protection keys are on: `wrpkru`, 0F 01 EF,
- * with ECX and EDX 0. */
-static void hw_wrpkru(uint32_t v)
-{
-    if (fpu_pkeys()) {
-        __asm__ __volatile__(".byte 0x0f, 0x01, 0xef" : : "a"(v), "c"(0u), "d"(0u) : "memory");
     }
 }
 
@@ -751,12 +727,12 @@ static uint64_t hw_exit_rip(void)
 }
 
 static const struct vmx_ops vmx_hw = {
-    kvm_vmx_vmxon,    kvm_vmx_vmxoff,  kvm_vmx_vmclear, kvm_vmx_vmptrld, kvm_vmx_vmread,
-    kvm_vmx_vmwrite,  kvm_vmx_invept,  kvm_vmx_invvpid, kvm_vmx_vmrun,   msr_read,
-    msr_write,        kcpu_wrmsr_safe, hw_read_cr,      hw_write_cr4,    hw_read_dr,
-    hw_write_dr,      hw_save_host,    hw_restore_host, hw_fpu_load,     hw_fpu_store,
-    hw_xgetbv,        hw_xsetbv,       hw_rdpkru,       hw_wrpkru,       hw_nmi,
-    hw_machine_check, hw_wbinvd,       hw_exit_rip};
+    kvm_vmx_vmxon,   kvm_vmx_vmxoff,  kvm_vmx_vmclear, kvm_vmx_vmptrld,  kvm_vmx_vmread,
+    kvm_vmx_vmwrite, kvm_vmx_invept,  kvm_vmx_invvpid, kvm_vmx_vmrun,    msr_read,
+    msr_write,       kcpu_wrmsr_safe, hw_read_cr,      hw_write_cr4,     hw_read_dr,
+    hw_write_dr,     hw_save_host,    hw_restore_host, hw_fpu_load,      hw_fpu_store,
+    hw_xgetbv,       hw_xsetbv,       hw_nmi,          hw_machine_check, hw_wbinvd,
+    hw_exit_rip};
 
 static const struct vmx_ops *vmx_op = &vmx_hw;
 
@@ -877,11 +853,9 @@ struct vmx_vcpu {
     uint64_t host_dr7; /* the host's DR7 at the load, which an exit clears */
     /* The guest's floating-point state in the registers, the host's in
      * `host_fpu`, from the first entry of a KVM_RUN to its end; the host's
-     * XCR0 and PKRU, which hold outside the guest's run, and the guest's
-     * PKRU, which its image gave and which a guest without PKU keeps. */
+     * XCR0, which holds outside the guest's run. */
     int fpu_loaded;
     uint64_t host_xcr0;
-    uint32_t host_pkru, guest_pkru;
     struct vmx_cache c;
     int inj_armed;   /* VM_ENTRY_INTR_INFO_FIELD may hold a valid event */
     uint32_t ptimer; /* VMX_PREEMPTION_TIMER_VALUE as last written */
@@ -2052,45 +2026,32 @@ static void guest_msrs_load(struct kvm_vcpu *v, int cpu, int kgs)
  * at the first entry of a KVM_RUN the host's saved into `host_fpu` and the
  * guest's image loaded, as Linux's kvm_load_guest_fpu does once per
  * KVM_RUN (x86.c:11061-11066); the image loaded again when `fpu_dirty` says
- * it changed; then the guest's XCR0 and PKRU, which the host's replace
- * after each run, as Linux's kvm_load_guest_xsave_state (x86.c:1004-1025).
- * With interrupts off.
+ * it changed; then the guest's XCR0, which the host's replaces after each
+ * run, as Linux's kvm_load_guest_xsave_state (x86.c:1004-1025). PKRU stays
+ * the host's (KVM_XFEATURE_PKRU). With interrupts off.
  */
 static void fpu_enter(struct kvm_vcpu *v, int fpu_dirty)
 {
     struct vmx_vcpu *x = vx(v);
-    int fresh = 1;
 
     if (!x->fpu_loaded) {
         x->host_xcr0 = kvm_xcr0_supported() ? vmx_op->xgetbv() : 0;
-        x->host_pkru = vmx_op->rdpkru();
         vmx_op->fpu_load(x->host_fpu, v->xsave);
         x->fpu_loaded = 1;
     } else if (fpu_dirty) {
         vmx_op->fpu_load(NULL, v->xsave);
-    } else {
-        fresh = 0;
-    }
-    if (fresh) {
-        x->guest_pkru = vmx_op->rdpkru();
-    } else if (x->guest_pkru != x->host_pkru) {
-        vmx_op->wrpkru(x->guest_pkru);
     }
     if (kvm_xcr0_supported() && v->xcr0 != x->host_xcr0) {
         vmx_op->xsetbv(v->xcr0);
     }
 }
 
-/** Give the host its XCR0 and PKRU back after the run, as Linux's
- * kvm_load_host_xsave_state (x86.c:1027-1047); the guest's PKRU, which a
- * guest without PKU cannot change, is kept. With interrupts off. */
+/** Give the host its XCR0 back after the run, as Linux's
+ * kvm_load_host_xsave_state (x86.c:1027-1047). With interrupts off. */
 static void fpu_leave(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
 
-    if (x->guest_pkru != x->host_pkru) {
-        vmx_op->wrpkru(x->host_pkru);
-    }
     if (kvm_xcr0_supported() && v->xcr0 != x->host_xcr0) {
         vmx_op->xsetbv(x->host_xcr0);
     }
@@ -2098,9 +2059,8 @@ static void fpu_leave(struct kvm_vcpu *v)
 
 /**
  * Save the guest's floating-point registers into its image while they
- * are loaded and the image is not newer, the guest's PKRU in it, for a
- * reader of the image during KVM_RUN; the registers keep the state. Any
- * context.
+ * are loaded and the image is not newer, for a reader of the image during
+ * KVM_RUN; the registers keep the state. Any context.
  */
 static void fpu_sync(struct kvm_vcpu *v)
 {
@@ -2108,13 +2068,7 @@ static void fpu_sync(struct kvm_vcpu *v)
     uint32_t flags = kirq_save();
 
     if (x->fpu_loaded && !(v->dirty & KVM_PART_FPU)) {
-        if (x->guest_pkru != x->host_pkru) {
-            vmx_op->wrpkru(x->guest_pkru);
-        }
         vmx_op->fpu_store(NULL, v->xsave);
-        if (x->guest_pkru != x->host_pkru) {
-            vmx_op->wrpkru(x->host_pkru);
-        }
     }
     kirq_restore(flags);
 }
@@ -2204,11 +2158,11 @@ static void spec_switch(const struct kvm_vcpu *v, int cpu, int in)
  * lock, as Linux's vmx_vcpu_run (vmx.c:7338-7476): the VMCS current
  * (`vmx_load`) and brought up to date; the host's state saved and the guest's
  * MSRs and floating-point state loaded at the first entry of a KVM_RUN or after
- * a switch away, to stay until `vmx_put`; the guest's XCR0, PKRU, debug
- * registers and SPEC_CTRL in; HOST_CR3, HOST_CR4 and the EPT pointer written
+ * a switch away, to stay until `vmx_put`; the guest's XCR0, debug registers
+ * and SPEC_CTRL in; HOST_CR3, HOST_CR4 and the EPT pointer written
  * only where they changed; VMLAUNCH, or VMRESUME once an entry of the VMCS
  * succeeded, as Linux's __vmx_vcpu_run_flags chooses (vmx.c:948-953); at the
- * exit the host's XCR0, PKRU, debug registers and SPEC_CTRL back and the exit
+ * exit the host's XCR0, debug registers and SPEC_CTRL back and the exit
  * read, with the VMCS left current and VMX on. The selectors, tables and MSRs
  * the exit leaves the guest's or changed wait for `vmx_put`: the kernel between
  * two runs uses none of them. The launch state is set after an exit that is no
@@ -2349,9 +2303,6 @@ static void vmx_put(struct kvm_vcpu *v, int fpu)
         x->loaded = 0;
     }
     if (fpu && x->fpu_loaded) {
-        if (!(v->dirty & KVM_PART_FPU) && x->guest_pkru != x->host_pkru) {
-            vmx_op->wrpkru(x->guest_pkru);
-        }
         vmx_op->fpu_store(x->host_fpu, (v->dirty & KVM_PART_FPU) ? NULL : v->xsave);
         x->fpu_loaded = 0;
     }

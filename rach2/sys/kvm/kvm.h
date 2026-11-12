@@ -955,6 +955,15 @@ const struct kvm_cpuid_entry2 *kvm_cpuid_find(const struct kvm_vcpu *v, uint32_t
 /** The XCR0 bits the host offers a guest: those the kernel saves. */
 uint64_t kvm_xcr0_supported(void);
 
+/* XCR0's PKRU, bit 9. The backends leave it out of the masks of their
+ * XSAVE and XRSTOR of a guest's image, as Linux's swap of a vCPU's FPU
+ * restores XFEATURE_MASK_FPSTATE, which lacks PKRU (fpu_swap_kvm_fpstate,
+ * arch/x86/kernel/fpu/core.c:349-388; asm/fpu/xstate.h:46-47, 94-95): a
+ * guest is offered no PKU (cpuid.c), so it runs under the host's PKRU, as
+ * Linux runs a guest whose XCR0 lacks PKRU and whose CR4 lacks PKE
+ * (kvm_load_guest_xsave_state, arch/x86/kvm/x86.c:1019-1023). */
+#define KVM_XFEATURE_PKRU 0x200ull
+
 #ifdef RACH2_HOSTTEST
 /** Forget the answer `kvm_xcr0_supported` keeps, so that a host test's
  * model processor may lose XSAVE and gain it back between rows. */
