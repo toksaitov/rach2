@@ -18486,11 +18486,18 @@ static long getdents(int fd_num, char *buf, uint32_t count, int format)
     return (int32_t)bytes_written;
 }
 
-/** Read Linux's 64-bit directory records under the description lock. */
+/** Read Linux's 64-bit directory records under the description lock: without
+ * the big lock for a directory `file_vfs_unlocked` admits, whose `readdir`
+ * fills a kernel record, as Linux's `iterate_dir` takes the directory's
+ * shared lock alone (fs/readdir.c:101), and under it for any other. */
 long sys_getdents64(isr_params_t *params)
 {
-    return getdents((int)SC_ARG(params, 0), (char *)SC_ARG(params, 1),
-                    USER_LEN32(SC_ARG(params, 2)), DIRENT_NATIVE);
+    int fd = (int)SC_ARG(params, 0);
+    int big = file_read_lock(current_proc ? fd_get(current_proc->fds, fd) : NULL);
+    long rc = getdents(fd, (char *)SC_ARG(params, 1), USER_LEN32(SC_ARG(params, 2)), DIRENT_NATIVE);
+
+    file_ops_unlock(big);
+    return rc;
 }
 
 /** Read i386 directory records, one old record when `old` is nonzero. */
