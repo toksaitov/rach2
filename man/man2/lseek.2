@@ -133,18 +133,29 @@ work;
 .Dv SEEK_END
 is
 .Er EINVAL ,
-as it is on Linux's tmpfs.
+as it is on Linux's tmpfs, except on ext2.
 A directory of
 .Pa /dev
 or
 .Pa /proc
 takes the place of any entry through 2147483647.
-A directory of a file system takes 0 and each place its listing gives,
-which the kernel finds by reading the listing from its start, and no
-other place, since what a place means is the file system's own; Linux
+A directory of ext2, whose place is a byte of the directory, takes any
+place, as on Linux, and
+.Dv SEEK_END ,
+.Dv SEEK_DATA
+and
+.Dv SEEK_HOLE
+from the directory's size.
+Its listing goes on from the first record that starts at that byte or
+after it in the same block, so a place a listing gave stays valid after
+entries are removed and their space is reused by another name.
+A place past the directory's end lists nothing.
+A directory of another file system takes 0 and each place its listing
+gives, which the kernel finds by reading the listing from its start, and
+no other place, since what a place means is the file system's own; Linux
 takes any place and leaves it to the file system.
-A place a listing gave may be refused once entries have been added or
-removed since.
+On such a file system a place a listing gave may be refused once entries
+have been added or removed since.
 .Pp
 A
 .Pa /proc
@@ -231,9 +242,9 @@ a boot-log position exceeds 4294967295, or the file system cannot
 supply the file's attributes.
 The origin is
 .Dv SEEK_END
-on a directory or a
+on a directory of a file system other than ext2 or on a
 .Pa /proc
-file, the position is not a place in a directory's listing, or it is
+file, the position is not a place in the listing of such a directory, or it is
 past 4294967295 on a
 .Pa /proc
 file other than

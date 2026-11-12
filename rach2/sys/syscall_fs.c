@@ -6721,6 +6721,40 @@ static int dir_cursor_valid(fd_entry_t *entry, uint32_t target)
 }
 
 /**
+ * SEEK_DATA and SEEK_HOLE, `whence` 3 and 4, from `off` in a file of `size`
+ * bytes, into `*at`, as Linux answers them for a file system that keeps no
+ * map of its holes: the whole file is data, and its one hole is its end.
+ * SEEK_DATA lands at `off` and SEEK_HOLE at the end; an `off` below 0 or at
+ * or past the end is -ENXIO. Returns 0 or -ENXIO.
+ */
+static int seek_data_hole(uint64_t size, long long off, int whence, long long *at)
+{
+    if (off < 0 || (uint64_t)off >= size) {
+        return -ENXIO;
+    }
+    *at = whence == 3 ? off : (long long)size;
+    return 0;
+}
+
+/**
+ * SEEK_END, SEEK_DATA or SEEK_HOLE, `whence` 2 through 4, by `off` in the
+ * directory `entry` is open on, whose type's cursor is a byte
+ * (`dir_seeks_bytes`), from the size its getattr gives, into `*at`. The
+ * caller holds the description's lock. Returns 0, or the error of the
+ * getattr or of `seek_add` or `seek_data_hole`.
+ */
+static int dir_seek_size(fd_entry_t *entry, long long off, int whence, long long *at)
+{
+    struct vfs_stat st;
+    int rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &st);
+
+    if (rc != 0) {
+        return rc;
+    }
+    return whence == 2 ? seek_add(st.size, off, at) : seek_data_hole(st.size, off, whence, at);
+}
+
+/**
  * lseek(2) and _llseek(2) on a directory or a /proc file: the offset
  * `whence` and `off` give, stored in the description under its lock and
  * returned in `*out`, or a negative errno with the offset unchanged. A read
@@ -6728,15 +6762,19 @@ static int dir_cursor_valid(fd_entry_t *entry, uint32_t target)
  * seek waits for one that sleeps.
  *
  * SEEK_SET and SEEK_CUR move the offset; SEEK_END is -EINVAL, as Linux's /proc
- * files and tmpfs directories answer, since neither has a size to seek from. A
+ * files and tmpfs directories answer, since neither has a size to seek from,
+ * except on a directory of a type whose cursor is a byte (`dir_seek_size`). A
  * /proc file's offset is a byte of its text, the snapshot its open took or the
  * text a read of oom_score_adj makes, through 0xFFFFFFFF, or, for
  * /proc/PID/mem, an address, so it takes any place through the last address,
  * 0xFFFFFFFF on i686. A directory's offset is the cursor of its listing, which
  * getdents64 reports after each entry as the entry's d_off: a directory of /dev
- * or /proc takes the index of any entry through 0x7FFFFFFF, and one of a file
- * system the places `dir_cursor_valid` finds, so rewinddir, and seekdir to a
- * place telldir gave, move it, and no type's `readdir` is given a place it did
+ * or /proc takes the index of any entry through 0x7FFFFFFF; one of ext2,
+ * whose cursor is a byte (`dir_seeks_bytes`), any place, as Linux's
+ * `generic_file_llseek` gives an ext2 directory, which its `readdir` moves to
+ * the next record that starts there or after; and one of another file system
+ * the places `dir_cursor_valid` finds, so rewinddir, and seekdir to a place
+ * telldir gave, move it, and no such type's `readdir` is given a place it did
  * not give. Any other place is -EINVAL, and one past `limit`, the largest
  * offset the call can return, -EOVERFLOW. A directory removed by a route
  * that did not look for its descriptors is -EBADF (`fd_node_check`).
@@ -6746,7 +6784,7 @@ static int seek_listing(fd_entry_t *entry, long long off, int whence, uint64_t l
 {
     uint64_t most = entry->type == FD_TYPE_SYNTH_DIR ? 0x7FFFFFFFull : 0xFFFFFFFFull;
     long long at = off;
-    int rc = 0;
+    int bytes, rc = 0;
 
     if (procfs_is_mem(entry)) {
         most = (uint64_t)(uintptr_t)-1;
@@ -6758,16 +6796,22 @@ static int seek_listing(fd_entry_t *entry, long long off, int whence, uint64_t l
     if (entry->type == FD_TYPE_DIR && fd_node_check(entry) != 0) {
         return -EBADF;
     }
+    bytes = entry->type == FD_TYPE_DIR && entry->ofd->vmnt->type->dir_seeks_bytes;
+    if (bytes) {
+        most = ~0ull;
+    }
     fd_ofd_lock(entry->ofd);
     if (whence == 1) {
         rc = seek_add(entry->ofd->offset, off, &at);
+    } else if (bytes && whence >= 2 && whence <= 4) {
+        rc = dir_seek_size(entry, off, whence, &at);
     } else if (whence != 0) {
         rc = -EINVAL;
     }
     if (rc == 0 && (at < 0 || (uint64_t)at > most)) {
         rc = -EINVAL;
     }
-    if (rc == 0 && entry->type == FD_TYPE_DIR) {
+    if (rc == 0 && entry->type == FD_TYPE_DIR && !bytes) {
         rc = dir_cursor_valid(entry, (uint32_t)at);
     }
     if (rc == 0 && (uint64_t)at > limit) {
@@ -6863,22 +6907,6 @@ static int seek_framebuffer(fd_entry_t *entry, long long off, int whence, uint64
     }
     fd_ofd_unlock(entry->ofd);
     return rc;
-}
-
-/**
- * SEEK_DATA and SEEK_HOLE, `whence` 3 and 4, from `off` in a file of `size`
- * bytes, into `*at`, as Linux answers them for a file system that keeps no
- * map of its holes: the whole file is data, and its one hole is its end.
- * SEEK_DATA lands at `off` and SEEK_HOLE at the end; an `off` below 0 or at
- * or past the end is -ENXIO. Returns 0 or -ENXIO.
- */
-static int seek_data_hole(uint64_t size, long long off, int whence, long long *at)
-{
-    if (off < 0 || (uint64_t)off >= size) {
-        return -ENXIO;
-    }
-    *at = whence == 3 ? off : (long long)size;
-    return 0;
 }
 
 /** Seek one of devfs's windows, logs or zero-position devices. */
@@ -19385,6 +19413,11 @@ static long getdents(int fd_num, char *buf, uint32_t count, int format)
             return -EBADF;
         }
         fd_ofd_lock(ofd);
+        if (ofd->offset > 0xFFFFFFFFull) {
+            /* past any directory a 32-bit cursor reaches (`dir_seeks_bytes`) */
+            fd_ofd_unlock(ofd);
+            return 0;
+        }
         cursor = (uint32_t)ofd->offset;
         for (;;) {
             struct vfs_dirent de;

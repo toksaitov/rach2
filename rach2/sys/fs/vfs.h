@@ -424,6 +424,13 @@ struct vfs_type {
      * fdatasync then run without it on the type's regular files. A type
      * that sets it sets `reads_unlocked`. */
     int writes_unlocked;
+    /* Nonzero for a type whose directory cursor is a byte of the directory,
+     * which its `readdir` moves to the next record's start when a seek or a
+     * change of the directory leaves it elsewhere: lseek(2) takes any place
+     * in such a directory, and SEEK_END, SEEK_DATA and SEEK_HOLE from its
+     * size, as Linux's `generic_file_llseek` does on an ext2 directory. Any
+     * other type's `readdir` is given only a place it gave. */
+    int dir_seeks_bytes;
 };
 
 /* One table entry. `covered` is the held node of the directory this mount

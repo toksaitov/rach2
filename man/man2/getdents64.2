@@ -151,8 +151,19 @@ ext2 lists its stored directory entries, including
 and
 .Ql .. ,
 and skips unused entries.
+Its
+.Va d_off
+is a byte of the directory.
 After a directory change or a seek, it advances a cursor inside a record
-to the next current record boundary in that block.
+to the next current record boundary in that block, so a
+.Va d_off
+saved before entries were removed and their space reused for another name
+goes on from the first record at or after that byte, as Linux's ext2
+does; the
+.Xr lseek 2
+that
+.Fn seekdir
+makes takes such a place.
 A name created or moved during enumeration can be omitted or repeated.
 .Pp
 FAT32 lists live entries, using a valid long name when it fits or the
