@@ -44,6 +44,12 @@ void vclock_set_wall(int64_t sec, int32_t nsec)
     (void)nsec;
 }
 
+void vclock_set_tz(int32_t minuteswest, int32_t dsttime)
+{
+    (void)minuteswest;
+    (void)dsttime;
+}
+
 uint32_t vclock_resolution_ns(void)
 {
     return 0;
