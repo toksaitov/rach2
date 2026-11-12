@@ -7,6 +7,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/kirq.h"
 #include "../lib/kstring.h"
+#include "../lib/spinlock.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
 
@@ -1063,10 +1064,9 @@ static int filter_match(const struct pmu_filter *f, uint64_t word, uint64_t sele
            (selector & ((word >> 48) & 0xFF00u)) == (word & 0xFF00u);
 }
 
-/** Whether the VM's filter permits this general or fixed counter. */
-static int allowed(struct kvm_vcpu *v, uint32_t i, int fixed)
+/** Whether the filter `f` permits this general or fixed counter of `v`. */
+static int filter_allows(const struct pmu_filter *f, struct kvm_vcpu *v, uint32_t i, int fixed)
 {
-    const struct pmu_filter *f = v->vm->pmu_filter;
     uint32_t n;
     int include = 0, exclude = 0, match;
 
@@ -1092,12 +1092,27 @@ static int allowed(struct kvm_vcpu *v, uint32_t i, int fixed)
     return f->head.action == KVM_PMU_EVENT_ALLOW ? match : !match;
 }
 
+/**
+ * Whether the VM's filter permits this general or fixed counter. The filter
+ * is read under the VM's `filter_lock`, which its replacement takes before
+ * it frees the old one, as Linux's check_pmu_event_filter reads it under
+ * kvm->srcu (arch/x86/kvm/pmu.c:429-447).
+ */
+static int allowed(struct kvm_vcpu *v, uint32_t i, int fixed)
+{
+    uint32_t flags = spin_lock_irqsave(&v->vm->filter_lock);
+    int ok = filter_allows((const struct pmu_filter *)v->vm->pmu_filter, v, i, fixed);
+
+    spin_unlock_irqrestore(&v->vm->filter_lock, flags);
+    return ok;
+}
+
 int32_t kvm_pmu_filter(struct kvm_vm *vm, uintptr_t arg)
 {
     struct kvm_pmu_event_filter head;
     struct pmu_filter *f, *old;
     uint64_t valid = (pmu_host.intel ? 0xFFu : AMD_EVENT) | 0xFF00u | FILTER_MASK | FILTER_EXCLUDE;
-    uint32_t i;
+    uint32_t i, flags;
 
     if (copy_from_user(&head, (const void __user *)arg, sizeof(head)) != 0) {
         return -EFAULT;
@@ -1126,8 +1141,12 @@ int32_t kvm_pmu_filter(struct kvm_vm *vm, uintptr_t arg)
             }
         }
     }
+    /* The swap and the free after it, as Linux's rcu_replace_pointer and
+     * synchronize_srcu_expedited (arch/x86/kvm/pmu.c:1023-1035). */
+    flags = spin_lock_irqsave(&vm->filter_lock);
     old = vm->pmu_filter;
     vm->pmu_filter = f;
+    spin_unlock_irqrestore(&vm->filter_lock, flags);
     for (i = 0; i < vm->nr_vcpus; i++) {
         kvm_vcpu_kick(vm->vcpus[i], KVM_REQ_PMU);
     }

@@ -1,4 +1,5 @@
 /* Check guest PMUs against Intel and AMD register models.
+ * host-deps: tests/host/compat/spinlock_host.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  */
 #include "kvm/pmu.c"
