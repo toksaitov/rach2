@@ -158,12 +158,12 @@ case games/supertuxkart-i386 alone log \
 # first two loops judged against 24 frames a second, and 80-9's save loaded
 # after this release's update, through a copy of the game's prefix and a new
 # one (80-9, native/crysis.sh).
-case games/crysis.flyby-umu alone log mountns \
+case games/crysis.flyby-umu alone log mountns private \
     file:tests/system/games/crysis.py file:tests/system/games/wm.py \
     -- native/crysis.sh flyby umu
-case games/crysis.flyby-direct alone log mountns \
+case games/crysis.flyby-direct alone log mountns private \
     file:tests/system/games/crysis.py file:tests/system/games/wm.py \
     -- native/crysis.sh flyby direct
-case games/crysis.load alone log mountns \
+case games/crysis.load alone log mountns private \
     file:tests/system/games/crysis.py file:tests/system/games/wm.py \
     -- native/crysis.sh load default_accept_s2.CRYSISJMSF
