@@ -599,11 +599,22 @@ void shmem_free(struct shmem *sh)
     sh->held = 0;
 }
 
-/** An object's free that took the GEM lock itself frees its pages giving
- * way; here one leaf holds them all, so it frees them as `shmem_free`. */
+/* The frees of pages that gave way, and the give-ways of a free list. */
+static int frees_yielding, give_ways;
+
+/** An object's free by the holder that took the GEM lock frees its pages
+ * giving way; here one leaf holds them all, so it frees them as
+ * `shmem_free`, and counts. */
 void shmem_free_yielding(struct shmem *sh)
 {
+    frees_yielding++;
     shmem_free(sh);
+}
+
+/** A give-way, which one thread has no one to give to: counted. */
+void sched_give_way(void)
+{
+    give_ways++;
 }
 
 int pin_frames(struct mm *mm, const uintptr_t *frames, uint32_t count,
