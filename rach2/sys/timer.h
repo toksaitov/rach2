@@ -248,6 +248,18 @@ uint32_t timer_calibrate(void);
  * This conversion reads no hardware and is safe with interrupts off. */
 uint64_t timer_cycles_us(uint64_t cycles);
 
+/** The time on the monotonic clock, in nanoseconds since boot, at which the
+ * tick this processor is taking was due, or 0 when its timer keeps none, as
+ * a periodic timer does: the local APIC's timer once it is one-shot
+ * (`apic_hr_entry`). For the tick's handler, with interrupts off. */
+int64_t timer_tick_due(void);
+
+/** The time on the monotonic clock at which this processor's counter read
+ * `cycles` (`arch_cycles`), given that the clock reads `now`, at the
+ * calibrated rate; 0, the clock's start, when the rate was not measured or
+ * the reading is more than a second old. Interrupts are off. */
+int64_t timer_cycles_when(uint64_t cycles, int64_t now);
+
 /** Whether a span of processor cycles can be timed by `timer_cycles_us`:
  * the counter's rate was measured and every processor started so far
  * passed the check that its counter agrees with the boot processor's

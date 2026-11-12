@@ -560,7 +560,7 @@ static void timer_handler(isr_params_t *params)
         passed = timer_clock_try(0);
         t = bkl_tick_charge(BKL_TICK_CLOCK, t);
     }
-    sched_account_tick(FRAME_USER(params) != 0);
+    sched_account_tick(FRAME_USER(params) != 0, timer_tick_due());
     t = bkl_tick_charge(BKL_TICK_ACCOUNT, t);
     if (!boot && timer_pass_late()) {
         passed = timer_clock_try(1);

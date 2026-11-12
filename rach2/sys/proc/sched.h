@@ -328,9 +328,12 @@ void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle, uint
  * and charge each busy one to the current process as user time
  * when `user` is set and as system time when it is not, and to its
  * process's virtual, profiling and POSIX CPU-time timers, whose signals it
- * leaves for a holder of the big lock to post. Called by each processor's
- * timer tick alone, without the big lock and with interrupts off. */
-void sched_account_tick(int user);
+ * leaves for a holder of the big lock to post; a tick found in user mode
+ * that was due, at `due` on the monotonic clock, before the processor's
+ * last return to user mode is charged as system time, and `due` is 0 when
+ * the timer keeps no such time. Called by each processor's timer tick
+ * alone, without the big lock and with interrupts off. */
+void sched_account_tick(int user, int64_t due);
 
 /** Start this processor's counts at the clock's time now: an application
  * processor's, as it comes online, before its first tick. */

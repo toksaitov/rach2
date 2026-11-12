@@ -891,7 +891,7 @@ void isr_paranoid_router(isr_params_t *params)
  * a call, as a user fault is, so a timer defers its switch and cannot race
  * the rseq event fetch and clear; a fault may still sleep.
  */
-void isr_leave(isr_params_t *params)
+static void isr_leave_work(isr_params_t *params)
 {
     uint32_t flags;
     uint32_t was_in_call;
@@ -923,6 +923,21 @@ void isr_leave(isr_params_t *params)
         waketime_return();
     }
     bkl_exit();
+}
+
+/**
+ * Leave the router as `isr_leave_work` says, and for a return to user mode
+ * note the cycle count it returns at (`user_cycles`), so that a tick held
+ * while interrupts were off in the kernel and taken at the return's first
+ * user instruction charges the kernel's time as system time
+ * (`sched_account_tick`). Interrupts are off.
+ */
+void isr_leave(isr_params_t *params)
+{
+    isr_leave_work(params);
+    if (FRAME_USER(params)) {
+        this_cpu()->user_cycles = arch_cycles();
+    }
 }
 
 /**

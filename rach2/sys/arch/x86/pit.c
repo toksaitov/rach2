@@ -613,6 +613,16 @@ uint64_t timer_cycles_us(uint64_t cycles)
     return ticks * TICK_US + refclock_scale((uint32_t)rem, TICK_US, tsc_per_tick);
 }
 
+int64_t timer_cycles_when(uint64_t cycles, int64_t now)
+{
+    uint64_t gone = arch_cycles() - cycles;
+
+    if (!tsc_per_tick || gone >= (uint64_t)tsc_per_tick * TICK_HZ) {
+        return 0;
+    }
+    return now - (int64_t)tick_div64(gone * TICK_NS, tsc_per_tick, NULL);
+}
+
 int timer_cycles_agree(void)
 {
     uint64_t behind;
