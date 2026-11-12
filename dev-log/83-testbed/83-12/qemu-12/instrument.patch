@@ -1,0 +1,116 @@
+diff --git a/rach2/sys/drm/virtio_gpu_blob.c b/rach2/sys/drm/virtio_gpu_blob.c
+index 6d2f845ac..979d95115 100644
+--- a/rach2/sys/drm/virtio_gpu_blob.c
++++ b/rach2/sys/drm/virtio_gpu_blob.c
+@@ -15,6 +15,8 @@
+ #include "../mm/paging.h"
+ #include "../mm/usercopy.h"
+ #include "../virtio/vgpushm.h"
++#include "../arch/x86/tsc.h"
++static uint64_t t4277_c[4];
+ 
+ /* The bytes of the pages MAP_BLOB's answer of a page list is written to,
+  * and the runs it holds after its heads: 3836, so that a blob of 64 MiB
+@@ -253,6 +255,8 @@ static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
+     int big, i;
+     int32_t rc;
+ 
++    uint64_t ta = tsc_ordered(), tb, tc;
++
+     for (i = 0; i < 2; i++) {
+         cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB, sizeof(*req));
+         if (!cmd) {
+@@ -268,10 +272,16 @@ static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
+         }
+         vgpu_cmd_free(cmd); /* the payload's pages, part of them had */
+     }
++    tb = tsc_ordered();
++    t4277_c[0] += tb - ta;
+     if (!big) {
+-        return vgpu_cmd_send_wait_map(cmd, answer, PAGE_SIZE - VIRTIO_GPU_RESP_OFF, got);
++        rc = vgpu_cmd_send_wait_map(cmd, answer, PAGE_SIZE - VIRTIO_GPU_RESP_OFF, got);
++        t4277_c[1] += tsc_ordered() - tb;
++        return rc;
+     }
+     rc = vgpu_cmd_send_wait_map(cmd, NULL, 0, NULL);
++    tc = tsc_ordered();
++    t4277_c[1] += tc - tb;
+     if (rc == -ETIMEDOUT) {
+         return rc; /* the reaper frees the command once the device answers */
+     }
+@@ -282,6 +292,7 @@ static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
+         k_memcpy(answer, cmd->payload[page].page, here);
+     }
+     vgpu_cmd_free(cmd);
++    t4277_c[2] += tsc_ordered() - tc;
+     return rc;
+ }
+ 
+@@ -299,9 +310,13 @@ static int32_t blob_map_pages(struct virtio_gpu_device *vg, struct virtio_gpu_ob
+ {
+     struct pages_gather g;
+     uint32_t got;
++    uint64_t t0 = tsc_ordered(), t1, t2, t3;
+     uint8_t *answer = (uint8_t *)kmalloc(VGPU_MAP_ANSWER);
+     int32_t rc = answer ? 0 : -ENOMEM;
+ 
++    t1 = tsc_ordered();
++    t4277_c[0] = t4277_c[1] = t4277_c[2] = 0;
++
+     k_memset(&g, 0, sizeof(g));
+     g.total = bo->shmem.base.size >> PAGE_SHIFT;
+     while (rc == 0 && g.first < g.total) {
+@@ -328,8 +343,13 @@ static int32_t blob_map_pages(struct virtio_gpu_device *vg, struct virtio_gpu_ob
+         klog(KLOG_WARN, "virtio_gpu", "resource %u: refused: its page list: error %d",
+              (unsigned)bo->res_id, (int)rc);
+     }
++    t2 = tsc_ordered();
+     kfree(g.runs);
+     kfree(answer);
++    t3 = tsc_ordered();
++    klog(KLOG_INFO, "t4277", "map %u pages: kmalloc %u ask-alloc %u wait %u copy-free %u kfree %u total %u cycles",
++         (unsigned)g.total, (unsigned)(t1 - t0), (unsigned)t4277_c[0], (unsigned)t4277_c[1],
++         (unsigned)t4277_c[2], (unsigned)(t3 - t2), (unsigned)(t3 - t0));
+     return rc;
+ }
+ 
+diff --git a/rach2/sys/mm/paging.c b/rach2/sys/mm/paging.c
+index 8f18e99b0..d03dda904 100644
+--- a/rach2/sys/mm/paging.c
++++ b/rach2/sys/mm/paging.c
+@@ -9,6 +9,7 @@
+ #include "../fpu.h"
+ #include "../klog.h"
+ #include "paging.h"
++#include "../arch/x86/tsc.h"
+ #include "kheap.h"
+ #include "pagecache.h"
+ #include "frame.h"
+@@ -837,7 +838,15 @@ static int device_fault(struct mm *mm, const vma_t *vma, uintptr_t addr)
+     frame_ref(phys);
+     fault_count(0);
+     if (vm_device_whole(f)) {
++        uint64_t t0 = tsc_ordered();
++        const vma_t *v4 = vm_find(&mm->vm, page);
++        uint32_t np = v4 ? (uint32_t)((v4->end - v4->start) / PAGE_SIZE) : 0;
++
+         device_map_rest(mm, page, f, prot);
++        if (np <= 256) {
++            klog(KLOG_INFO, "t4277", "fault rest %u pages: %u cycles", (unsigned)np,
++                 (unsigned)(tsc_ordered() - t0));
++        }
+     }
+     return 1;
+ }
+diff --git a/tests/kvm/bed-shm.sh b/tests/kvm/bed-shm.sh
+index e24f330e6..0d99dc3eb 100644
+--- a/tests/kvm/bed-shm.sh
++++ b/tests/kvm/bed-shm.sh
+@@ -385,6 +385,7 @@ else
+     virgl_rows
+ fi
+ handoff
++dmesg | grep t4277 | sed "s/^/bed-shm: t4277: /"
+ 
+ if [ "$bad" -eq 0 ]; then
+     echo "bed-shm: result: pass"

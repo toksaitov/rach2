@@ -1,0 +1,266 @@
+run: starting: architecture x86_64, workers 8, accelerator kvm, a selection of 1 case
+run: bed-shm: machine.bed-shm.nocopy: starting
+bed-shm: attach: pass: attached once, refused twice
+bed-shm: build: pass: nocopy built
+bed-shm: pages: pass: 6 blobs pinned, 6 maps, kvm_gpa_maps 6, kvm_gpa_map_pages 2850
+bed-shm: coherent: pass: 16 rounds of 1048576 bytes in 1161643 us, 0 words copied wrong, 0 filled wrong; Virtio-GPU Venus (llvmpipe (LLVM 19.1.7, 256 bits)), vendor 0x10005, CPU, memory type 0
+bed-shm: release: pass: kvm_gpa_maps 0, kvm_gpa_map_pages 0, map_live 0
+bed-shm: refuse: pass: not exported: error -5;not mappable: map error -22;
+bed-shm: figure: QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1)
+bed-shm: figure: Linux 6.18.0-rach2
+bed-shm: measuring: /tmp/bed-shm-run/out/nocopy serial 8 4096
+bed-shm: figure: NOCOPY DEVICE: Virtio-GPU Venus (llvmpipe (LLVM 19.1.7, 256 bits)), vendor 0x10005, CPU, memory type 0
+bed-shm: figure: NOCOPY SERIAL: 8 of 4096 bytes: make, map and touch mean 215034 us, first 102034, largest 362900; unmap and free mean 2411 us; touch faults most 1
+bed-shm: figure: NOCOPY OK
+bed-shm: measuring: /tmp/bed-shm-run/out/nocopy serial 8 65536
+bed-shm: figure: NOCOPY DEVICE: Virtio-GPU Venus (llvmpipe (LLVM 19.1.7, 256 bits)), vendor 0x10005, CPU, memory type 0
+bed-shm: figure: NOCOPY SERIAL: 8 of 65536 bytes: make, map and touch mean 142099 us, first 95490, largest 207303; unmap and free mean 3928 us; touch faults most 1
+bed-shm: figure: NOCOPY OK
+bed-shm: measuring: /tmp/bed-shm-run/out/nocopy serial 8 1048576
+bed-shm: figure: NOCOPY DEVICE: Virtio-GPU Venus (llvmpipe (LLVM 19.1.7, 256 bits)), vendor 0x10005, CPU, memory type 0
+bed-shm: figure: NOCOPY SERIAL: 8 of 1048576 bytes: make, map and touch mean 156759 us, first 131019, largest 246176; unmap and free mean 3684 us; touch faults most 1
+bed-shm: figure: NOCOPY OK
+bed-shm: measuring: /tmp/bed-shm-run/out/nocopy serial 8 16777216
+bed-shm: figure: NOCOPY DEVICE: Virtio-GPU Venus (llvmpipe (LLVM 19.1.7, 256 bits)), vendor 0x10005, CPU, memory type 0
+bed-shm: figure: NOCOPY SERIAL: 8 of 16777216 bytes: make, map and touch mean 485284 us, first 408047, largest 838226; unmap and free mean 2331 us; touch faults most 1
+bed-shm: figure: NOCOPY OK
+bed-shm: measuring: /tmp/bed-shm-run/out/nocopy serial 8 67108864
+bed-shm: figure: NOCOPY DEVICE: Virtio-GPU Venus (llvmpipe (LLVM 19.1.7, 256 bits)), vendor 0x10005, CPU, memory type 0
+bed-shm: figure: NOCOPY SERIAL: 8 of 67108864 bytes: make, map and touch mean 416658 us, first 938397, largest 938397; unmap and free mean 2571 us; touch faults most 1
+bed-shm: figure: NOCOPY OK
+bed-shm: measuring: /tmp/bed-shm-run/out/nocopy held 32 65536
+bed-shm: figure: NOCOPY DEVICE: Virtio-GPU Venus (llvmpipe (LLVM 19.1.7, 256 bits)), vendor 0x10005, CPU, memory type 0
+bed-shm: figure: NOCOPY HELD-MAPS: kvm_gpa_maps 36, kvm_gpa_map_pages 2850
+bed-shm: figure: NOCOPY HELD: 32 of 65536 bytes: make, map and touch mean 134403 us, first 184926, largest 733140; all unmapped and freed in 12815 us
+bed-shm: figure: NOCOPY NEXT: one more of 65536 bytes made, mapped and touched in 1756792 us
+bed-shm: figure: NOCOPY OK
+bed-shm: measuring: /tmp/bed-shm-run/out/nocopy bandwidth 67108864
+bed-shm: figure: NOCOPY DEVICE: Virtio-GPU Venus (llvmpipe (LLVM 19.1.7, 256 bits)), vendor 0x10005, CPU, memory type 0
+bed-shm: figure: NOCOPY BANDWIDTH: 67108864 bytes: mapped write 8923 MB/s, read 4823 MB/s; own write 16126 MB/s, read 9573 MB/s; GPU copy 237851 us (0)
+bed-shm: figure: NOCOPY OK
+bed-shm: measuring: /tmp/bed-shm-run/vgshmprobe measure 4096
+bed-shm: figure: VGSHMPROBE MEASURE: copy to the VM 4096 bytes: 233477 us
+bed-shm: figure: VGSHMPROBE MEASURE: copy from the VM 4096 bytes: 10803 us
+bed-shm: figure: VGSHMPROBE MEASURE: region blob made, mapped and touched, mean of 8, 4096 bytes: 364 us
+bed-shm: figure: VGSHMPROBE MEASURE: region blob unmapped and freed, mean of 8, 4096 bytes: 207 us
+bed-shm: figure: VGSHMPROBE OK
+bed-shm: measuring: /tmp/bed-shm-run/vgshmprobe measure 1048576
+bed-shm: figure: VGSHMPROBE MEASURE: copy to the VM 1048576 bytes: 313341 us
+bed-shm: figure: VGSHMPROBE MEASURE: copy from the VM 1048576 bytes: 21056 us
+bed-shm: figure: VGSHMPROBE MEASURE: region blob made, mapped and touched, mean of 8, 1048576 bytes: 1537 us
+bed-shm: figure: VGSHMPROBE MEASURE: region blob unmapped and freed, mean of 8, 1048576 bytes: 455 us
+bed-shm: figure: VGSHMPROBE OK
+bed-shm: measuring: /tmp/bed-shm-run/vgshmprobe measure 4194304
+bed-shm: figure: VGSHMPROBE MEASURE: copy to the VM 4194304 bytes: 1467544 us
+bed-shm: figure: VGSHMPROBE MEASURE: copy from the VM 4194304 bytes: 50437 us
+bed-shm: figure: VGSHMPROBE MEASURE: region blob made, mapped and touched, mean of 8, 4194304 bytes: 17743 us
+bed-shm: figure: VGSHMPROBE MEASURE: region blob unmapped and freed, mean of 8, 4194304 bytes: 369 us
+bed-shm: figure: VGSHMPROBE OK
+bed-shm: measure: pass: 27 figures
+bed-shm: revoke: pass: after 402309 touches, kvm_gpa_maps 5, kvm_gpa_map_pages 2594
+bed-shm: leak: pass: kvm_gpa_map_pages 0, 2594 while held, 0 after
+bed-shm: t4277: [373.078000] t4277: map 33 pages: kmalloc 2772 ask-alloc 3864 wait 1018895558 copy-free 0 kfree 294 total 1019146760 cycles
+bed-shm: t4277: [373.086000] t4277: fault rest 33 pages: 7434 cycles
+bed-shm: t4277: [373.539000] t4277: map 256 pages: kmalloc 420 ask-alloc 8610 wait 1865325112 copy-free 102690 kfree 336 total 1865850616 cycles
+bed-shm: t4277: [373.741000] t4277: fault rest 256 pages: 1150212 cycles
+bed-shm: t4277: [388.286000] t4277: map 1 pages: kmalloc 140280 ask-alloc 108024 wait 245334936 copy-free 0 kfree 34314 total 246327354 cycles
+bed-shm: t4277: [388.293000] t4277: fault rest 1 pages: 882 cycles
+bed-shm: t4277: [391.717000] t4277: map 2048 pages: kmalloc 3990 ask-alloc 24192 wait 1442026251 copy-free 13146 kfree 285558 total 1446013983 cycles
+bed-shm: t4277: [391.913000] t4277: map 256 pages: kmalloc 462 ask-alloc 56532 wait 727539514 copy-free 71358 kfree 588 total 728070982 cycles
+bed-shm: t4277: [392.121000] t4277: map 256 pages: kmalloc 588 ask-alloc 546966 wait 812461753 copy-free 8274 kfree 336 total 813404443 cycles
+bed-shm: t4277: [392.141000] t4277: fault rest 256 pages: 62538 cycles
+bed-shm: t4277: [392.382000] t4277: fault rest 256 pages: 51324 cycles
+bed-shm: t4277: [398.556000] t4277: map 16 pages: kmalloc 33474 ask-alloc 45738 wait 3070302553 copy-free 0 kfree 75978 total 3080570293 cycles
+bed-shm: t4277: [400.116000] t4277: map 33 pages: kmalloc 285936 ask-alloc 208446 wait 428121554 copy-free 0 kfree 1008 total 429012584 cycles
+bed-shm: t4277: [400.124000] t4277: fault rest 33 pages: 19152 cycles
+bed-shm: t4277: [400.351000] t4277: map 256 pages: kmalloc 672 ask-alloc 8274 wait 927978879 copy-free 85638 kfree 1386 total 930397777 cycles
+bed-shm: t4277: [400.447000] t4277: fault rest 256 pages: 612864 cycles
+bed-shm: t4277: [405.012000] t4277: map 1 pages: kmalloc 59850 ask-alloc 170520 wait 372048102 copy-free 0 kfree 462 total 372839718 cycles
+bed-shm: t4277: [405.021000] t4277: fault rest 1 pages: 336 cycles
+bed-shm: t4277: [405.237000] t4277: map 2048 pages: kmalloc 312606 ask-alloc 23604 wait 882155920 copy-free 165354 kfree 497868 total 887585344 cycles
+bed-shm: t4277: [405.346000] t4277: map 1 pages: kmalloc 756 ask-alloc 5166 wait 395267949 copy-free 0 kfree 378 total 396363981 cycles
+bed-shm: t4277: [405.353000] t4277: fault rest 1 pages: 378 cycles
+bed-shm: t4277: [405.708000] t4277: map 1 pages: kmalloc 39774 ask-alloc 113526 wait 1483692042 copy-free 0 kfree 378 total 1485004416 cycles
+bed-shm: t4277: [405.716000] t4277: fault rest 1 pages: 630 cycles
+bed-shm: t4277: [405.905000] t4277: map 1 pages: kmalloc 840 ask-alloc 6384 wait 771761581 copy-free 0 kfree 252 total 772165033 cycles
+bed-shm: t4277: [405.913000] t4277: fault rest 1 pages: 630 cycles
+bed-shm: t4277: [406.096000] t4277: map 1 pages: kmalloc 756 ask-alloc 368046 wait 728254338 copy-free 0 kfree 88914 total 729874530 cycles
+bed-shm: t4277: [406.105000] t4277: fault rest 1 pages: 336 cycles
+bed-shm: t4277: [406.267000] t4277: map 1 pages: kmalloc 756 ask-alloc 10542 wait 675737679 copy-free 0 kfree 252 total 676160577 cycles
+bed-shm: t4277: [406.276000] t4277: fault rest 1 pages: 294 cycles
+bed-shm: t4277: [406.487000] t4277: map 1 pages: kmalloc 1008 ask-alloc 5544 wait 857870786 copy-free 0 kfree 672 total 858684200 cycles
+bed-shm: t4277: [406.496000] t4277: fault rest 1 pages: 966 cycles
+bed-shm: t4277: [406.666000] t4277: map 1 pages: kmalloc 840 ask-alloc 4662 wait 687061458 copy-free 0 kfree 378 total 689049864 cycles
+bed-shm: t4277: [406.677000] t4277: fault rest 1 pages: 462 cycles
+bed-shm: t4277: [406.982000] t4277: map 1 pages: kmalloc 1302 ask-alloc 351288 wait 1265476973 copy-free 0 kfree 1806 total 1266453347 cycles
+bed-shm: t4277: [406.990000] t4277: fault rest 1 pages: 336 cycles
+bed-shm: t4277: [407.587000] t4277: map 33 pages: kmalloc 45234 ask-alloc 3654 wait 1198518894 copy-free 0 kfree 41622 total 1201103658 cycles
+bed-shm: t4277: [407.596000] t4277: fault rest 33 pages: 22134 cycles
+bed-shm: t4277: [407.725000] t4277: map 256 pages: kmalloc 462 ask-alloc 369936 wait 504143971 copy-free 197022 kfree 59094 total 508396723 cycles
+bed-shm: t4277: [408.360000] t4277: fault rest 256 pages: 95298 cycles
+bed-shm: t4277: [415.863000] t4277: map 1 pages: kmalloc 924 ask-alloc 530418 wait 115546326 copy-free 0 kfree 42126 total 117296802 cycles
+bed-shm: t4277: [415.872000] t4277: fault rest 1 pages: 378 cycles
+bed-shm: t4277: [416.337000] t4277: map 2048 pages: kmalloc 442470 ask-alloc 218022 wait 1926620956 copy-free 204834 kfree 1296204 total 1934634262 cycles
+bed-shm: t4277: [416.441000] t4277: map 16 pages: kmalloc 714 ask-alloc 4746 wait 346932143 copy-free 0 kfree 420 total 347848121 cycles
+bed-shm: t4277: [416.448000] t4277: fault rest 16 pages: 1138746 cycles
+bed-shm: t4277: [416.576000] t4277: map 16 pages: kmalloc 714 ask-alloc 6048 wait 526751277 copy-free 0 kfree 33642 total 528379575 cycles
+bed-shm: t4277: [416.583000] t4277: fault rest 16 pages: 14700 cycles
+bed-shm: t4277: [416.735000] t4277: map 16 pages: kmalloc 1050 ask-alloc 58842 wait 603847824 copy-free 0 kfree 210 total 604593072 cycles
+bed-shm: t4277: [416.743000] t4277: fault rest 16 pages: 7896 cycles
+bed-shm: t4277: [416.864000] t4277: map 16 pages: kmalloc 60606 ask-alloc 374094 wait 479262878 copy-free 0 kfree 546 total 480517628 cycles
+bed-shm: t4277: [416.875000] t4277: fault rest 16 pages: 51282 cycles
+bed-shm: t4277: [417.079000] t4277: map 16 pages: kmalloc 6762 ask-alloc 14280 wait 834196881 copy-free 0 kfree 420 total 834421623 cycles
+bed-shm: t4277: [417.087000] t4277: fault rest 16 pages: 7308 cycles
+bed-shm: t4277: [417.188000] t4277: map 16 pages: kmalloc 756 ask-alloc 5040 wait 422721122 copy-free 0 kfree 336 total 423568976 cycles
+bed-shm: t4277: [417.195000] t4277: fault rest 16 pages: 24990 cycles
+bed-shm: t4277: [417.348000] t4277: map 16 pages: kmalloc 966 ask-alloc 3612 wait 616505534 copy-free 0 kfree 83412 total 618319808 cycles
+bed-shm: t4277: [417.355000] t4277: fault rest 16 pages: 5880 cycles
+bed-shm: t4277: [417.507000] t4277: map 16 pages: kmalloc 1176 ask-alloc 116046 wait 605193119 copy-free 0 kfree 378 total 606285413 cycles
+bed-shm: t4277: [417.515000] t4277: fault rest 16 pages: 24276 cycles
+bed-shm: t4277: [418.091000] t4277: map 33 pages: kmalloc 561036 ask-alloc 225330 wait 1168483393 copy-free 0 kfree 378 total 1170172843 cycles
+bed-shm: t4277: [418.100000] t4277: fault rest 33 pages: 8190 cycles
+bed-shm: t4277: [418.224000] t4277: map 256 pages: kmalloc 294 ask-alloc 1131438 wait 497628978 copy-free 1406706 kfree 1134 total 501837504 cycles
+bed-shm: t4277: [418.248000] t4277: fault rest 256 pages: 152250 cycles
+bed-shm: t4277: [419.259000] t4277: map 1 pages: kmalloc 2100 ask-alloc 10164 wait 170406395 copy-free 0 kfree 378 total 170688929 cycles
+bed-shm: t4277: [419.267000] t4277: fault rest 1 pages: 336 cycles
+bed-shm: t4277: [419.356000] t4277: map 2048 pages: kmalloc 468804 ask-alloc 274512 wait 354473454 copy-free 425880 kfree 303870 total 359170818 cycles
+bed-shm: t4277: [419.485000] t4277: map 256 pages: kmalloc 462 ask-alloc 322308 wait 492681714 copy-free 60564 kfree 252 total 493437084 cycles
+bed-shm: t4277: [419.496000] t4277: fault rest 256 pages: 56112 cycles
+bed-shm: t4277: [419.587000] t4277: map 256 pages: kmalloc 336 ask-alloc 208950 wait 355810860 copy-free 154140 kfree 378 total 356595294 cycles
+bed-shm: t4277: [419.596000] t4277: fault rest 256 pages: 3794742 cycles
+bed-shm: t4277: [419.813000] t4277: map 256 pages: kmalloc 840 ask-alloc 205926 wait 891250046 copy-free 182868 kfree 504 total 893009300 cycles
+bed-shm: t4277: [419.822000] t4277: fault rest 256 pages: 81312 cycles
+bed-shm: t4277: [420.067000] t4277: map 256 pages: kmalloc 1092 ask-alloc 503874 wait 992554252 copy-free 14154 kfree 294 total 993371320 cycles
+bed-shm: t4277: [420.075000] t4277: fault rest 256 pages: 647934 cycles
+bed-shm: t4277: [420.235000] t4277: map 256 pages: kmalloc 37464 ask-alloc 378756 wait 662384314 copy-free 670698 kfree 630 total 664135504 cycles
+bed-shm: t4277: [420.243000] t4277: fault rest 256 pages: 65688 cycles
+bed-shm: t4277: [420.300000] t4277: map 256 pages: kmalloc 58254 ask-alloc 482328 wait 219302224 copy-free 104538 kfree 420 total 220169566 cycles
+bed-shm: t4277: [420.309000] t4277: fault rest 256 pages: 747138 cycles
+bed-shm: t4277: [420.492000] t4277: map 256 pages: kmalloc 350826 ask-alloc 402360 wait 708483596 copy-free 40572 kfree 252 total 709440692 cycles
+bed-shm: t4277: [420.499000] t4277: fault rest 256 pages: 3357480 cycles
+bed-shm: t4277: [420.636000] t4277: map 256 pages: kmalloc 220962 ask-alloc 559188 wait 541002992 copy-free 627396 kfree 378 total 544368200 cycles
+bed-shm: t4277: [420.643000] t4277: fault rest 256 pages: 61908 cycles
+bed-shm: t4277: [421.210000] t4277: map 33 pages: kmalloc 246456 ask-alloc 261072 wait 790625184 copy-free 0 kfree 462 total 792577344 cycles
+bed-shm: t4277: [421.218000] t4277: fault rest 33 pages: 18900 cycles
+bed-shm: t4277: [421.266000] t4277: map 256 pages: kmalloc 1260 ask-alloc 7644 wait 166358955 copy-free 756882 kfree 462 total 168394653 cycles
+bed-shm: t4277: [421.399000] t4277: fault rest 256 pages: 64428 cycles
+bed-shm: t4277: [422.971000] t4277: map 1 pages: kmalloc 840 ask-alloc 643188 wait 85202036 copy-free 0 kfree 504 total 85991678 cycles
+bed-shm: t4277: [422.977000] t4277: fault rest 1 pages: 294 cycles
+bed-shm: t4277: [423.064000] t4277: map 2048 pages: kmalloc 9366 ask-alloc 19656 wait 345397126 copy-free 15666 kfree 139104 total 348190882 cycles
+bed-shm: t4277: [423.467000] t4277: map 4096 pages: kmalloc 129906 ask-alloc 35700 wait 1628380702 copy-free 26250 kfree 221718 total 1631767372 cycles
+bed-shm: t4277: [423.846000] t4277: map 4096 pages: kmalloc 113820 ask-alloc 59976 wait 1499928780 copy-free 841554 kfree 956676 total 1506139614 cycles
+bed-shm: t4277: [423.997000] t4277: map 4096 pages: kmalloc 6678 ask-alloc 30198 wait 581754557 copy-free 187950 kfree 436758 total 586362503 cycles
+bed-shm: t4277: [424.262000] t4277: map 4096 pages: kmalloc 9576 ask-alloc 93492 wait 1040458487 copy-free 90888 kfree 308952 total 1047491723 cycles
+bed-shm: t4277: [424.664000] t4277: map 4096 pages: kmalloc 7392 ask-alloc 229110 wait 1624459079 copy-free 768558 kfree 164808 total 1627713365 cycles
+bed-shm: t4277: [425.363000] t4277: map 4096 pages: kmalloc 900942 ask-alloc 1259412 wait 2827618274 copy-free 543858 kfree 351750 total 2840566538 cycles
+bed-shm: t4277: [426.209000] t4277: map 4096 pages: kmalloc 10080 ask-alloc 1456644 wait 3455492314 copy-free 43302 kfree 323400 total 3460723162 cycles
+bed-shm: t4277: [426.964000] t4277: map 4096 pages: kmalloc 69006 ask-alloc 107604 wait 3099949651 copy-free 685734 kfree 509292 total 3103660351 cycles
+bed-shm: t4277: [427.505000] t4277: map 33 pages: kmalloc 302400 ask-alloc 4200 wait 403985616 copy-free 0 kfree 45402 total 406187507 cycles
+bed-shm: t4277: [427.513000] t4277: fault rest 33 pages: 15834 cycles
+bed-shm: t4277: [427.806000] t4277: map 256 pages: kmalloc 33516 ask-alloc 91812 wait 1192699032 copy-free 26712 kfree 378 total 1193047590 cycles
+bed-shm: t4277: [427.860000] t4277: fault rest 256 pages: 321090 cycles
+bed-shm: t4277: [429.540000] t4277: map 1 pages: kmalloc 924 ask-alloc 41874 wait 203110699 copy-free 0 kfree 1638 total 203345605 cycles
+bed-shm: t4277: [429.548000] t4277: fault rest 1 pages: 336 cycles
+bed-shm: t4277: [429.645000] t4277: map 2048 pages: kmalloc 357546 ask-alloc 347382 wait 403483295 copy-free 705600 kfree 377454 total 408829050 cycles
+bed-shm: t4277: [430.556000] t4277: map 16384 pages: kmalloc 9660 ask-alloc 32928 wait 3769807839 copy-free 490224 kfree 362166 total 3774852333 cycles
+bed-shm: t4277: [430.832000] t4277: map 16384 pages: kmalloc 103950 ask-alloc 173964 wait 983121657 copy-free 75138 kfree 260904 total 989833467 cycles
+bed-shm: t4277: [431.196000] t4277: map 16384 pages: kmalloc 56532 ask-alloc 1795752 wait 1368539767 copy-free 2771874 kfree 1147398 total 1397125422 cycles
+bed-shm: t4277: [431.404000] t4277: map 16384 pages: kmalloc 379050 ask-alloc 370944 wait 772080188 copy-free 441672 kfree 407821 total 778083207 cycles
+bed-shm: t4277: [431.815000] t4277: map 16384 pages: kmalloc 213570 ask-alloc 530040 wait 1618699090 copy-free 954912 kfree 318528 total 1627960804 cycles
+bed-shm: t4277: [432.219000] t4277: map 16384 pages: kmalloc 145026 ask-alloc 290010 wait 1622953070 copy-free 174258 kfree 558348 total 1632118278 cycles
+bed-shm: t4277: [432.740000] t4277: map 16384 pages: kmalloc 292236 ask-alloc 1379112 wait 2057090428 copy-free 1321068 kfree 502698 total 2075770012 cycles
+bed-shm: t4277: [432.990000] t4277: map 16384 pages: kmalloc 123480 ask-alloc 224658 wait 960807625 copy-free 1074402 kfree 307776 total 968273503 cycles
+bed-shm: t4277: [433.737000] t4277: map 33 pages: kmalloc 1097544 ask-alloc 439824 wait 519839761 copy-free 0 kfree 149562 total 524552287 cycles
+bed-shm: t4277: [433.747000] t4277: fault rest 33 pages: 14322 cycles
+bed-shm: t4277: [433.899000] t4277: map 256 pages: kmalloc 714 ask-alloc 141036 wait 607482838 copy-free 919044 kfree 37674 total 609990910 cycles
+bed-shm: t4277: [434.131000] t4277: fault rest 256 pages: 799512 cycles
+bed-shm: t4277: [437.370000] t4277: map 1 pages: kmalloc 86730 ask-alloc 81648 wait 149812635 copy-free 0 kfree 37044 total 150530877 cycles
+bed-shm: t4277: [437.376000] t4277: fault rest 1 pages: 294 cycles
+bed-shm: t4277: [437.508000] t4277: map 2048 pages: kmalloc 80976 ask-alloc 20580 wait 555047204 copy-free 21462 kfree 151242 total 561467492 cycles
+bed-shm: t4277: [437.700000] t4277: map 16 pages: kmalloc 2814 ask-alloc 72450 wait 741078450 copy-free 0 kfree 420 total 741746166 cycles
+bed-shm: t4277: [437.708000] t4277: fault rest 16 pages: 10458 cycles
+bed-shm: t4277: [437.826000] t4277: map 16 pages: kmalloc 1470 ask-alloc 295848 wait 475676187 copy-free 0 kfree 62748 total 477182685 cycles
+bed-shm: t4277: [437.835000] t4277: fault rest 16 pages: 505848 cycles
+bed-shm: t4277: [437.898000] t4277: map 16 pages: kmalloc 966 ask-alloc 5586 wait 243435116 copy-free 0 kfree 336 total 245010242 cycles
+bed-shm: t4277: [437.908000] t4277: fault rest 16 pages: 7434 cycles
+bed-shm: t4277: [437.961000] t4277: map 16 pages: kmalloc 1302 ask-alloc 5292 wait 224792548 copy-free 0 kfree 336 total 225554092 cycles
+bed-shm: t4277: [437.968000] t4277: fault rest 16 pages: 5712 cycles
+bed-shm: t4277: [438.010000] t4277: map 16 pages: kmalloc 840 ask-alloc 4032 wait 170491528 copy-free 0 kfree 336 total 170768812 cycles
+bed-shm: t4277: [438.017000] t4277: fault rest 16 pages: 1796975 cycles
+bed-shm: t4277: [438.069000] t4277: map 16 pages: kmalloc 1386 ask-alloc 5796 wait 194156380 copy-free 0 kfree 420 total 194397670 cycles
+bed-shm: t4277: [438.075000] t4277: fault rest 16 pages: 7560 cycles
+bed-shm: t4277: [438.133000] t4277: map 16 pages: kmalloc 2184 ask-alloc 6216 wait 220211718 copy-free 0 kfree 294 total 220754988 cycles
+bed-shm: t4277: [438.140000] t4277: fault rest 16 pages: 4746 cycles
+bed-shm: t4277: [438.230000] t4277: map 16 pages: kmalloc 378 ask-alloc 43848 wait 376278927 copy-free 0 kfree 672 total 376841097 cycles
+bed-shm: t4277: [438.237000] t4277: fault rest 16 pages: 8358 cycles
+bed-shm: t4277: [438.282000] t4277: map 16 pages: kmalloc 462 ask-alloc 3234 wait 167203594 copy-free 0 kfree 1229298 total 169751482 cycles
+bed-shm: t4277: [438.288000] t4277: fault rest 16 pages: 4830 cycles
+bed-shm: t4277: [438.360000] t4277: map 16 pages: kmalloc 73794 ask-alloc 436128 wait 284671673 copy-free 0 kfree 336 total 285425405 cycles
+bed-shm: t4277: [438.371000] t4277: fault rest 16 pages: 699174 cycles
+bed-shm: t4277: [438.487000] t4277: map 16 pages: kmalloc 67368 ask-alloc 326340 wait 471386922 copy-free 0 kfree 294 total 472560990 cycles
+bed-shm: t4277: [438.495000] t4277: fault rest 16 pages: 5670 cycles
+bed-shm: t4277: [438.560000] t4277: map 16 pages: kmalloc 714 ask-alloc 4872 wait 261069717 copy-free 0 kfree 168 total 261362751 cycles
+bed-shm: t4277: [438.568000] t4277: fault rest 16 pages: 4872 cycles
+bed-shm: t4277: [438.633000] t4277: map 16 pages: kmalloc 546 ask-alloc 3276 wait 255907385 copy-free 0 kfree 378 total 256287149 cycles
+bed-shm: t4277: [438.640000] t4277: fault rest 16 pages: 161616 cycles
+bed-shm: t4277: [438.674000] t4277: map 16 pages: kmalloc 630 ask-alloc 3276 wait 140944781 copy-free 0 kfree 294 total 141148229 cycles
+bed-shm: t4277: [438.682000] t4277: fault rest 16 pages: 73878 cycles
+bed-shm: t4277: [438.746000] t4277: map 16 pages: kmalloc 882 ask-alloc 7476 wait 265063051 copy-free 0 kfree 378 total 265936903 cycles
+bed-shm: t4277: [438.753000] t4277: fault rest 16 pages: 5880 cycles
+bed-shm: t4277: [438.979000] t4277: map 16 pages: kmalloc 1722 ask-alloc 787038 wait 924578678 copy-free 0 kfree 252 total 925536404 cycles
+bed-shm: t4277: [438.986000] t4277: fault rest 16 pages: 6678 cycles
+bed-shm: t4277: [439.170000] t4277: map 16 pages: kmalloc 756 ask-alloc 3696 wait 765352855 copy-free 0 kfree 1344 total 765899317 cycles
+bed-shm: t4277: [439.176000] t4277: fault rest 16 pages: 5628 cycles
+bed-shm: t4277: [439.280000] t4277: map 16 pages: kmalloc 798 ask-alloc 58464 wait 433094548 copy-free 0 kfree 294 total 433659994 cycles
+bed-shm: t4277: [439.289000] t4277: fault rest 16 pages: 1062096 cycles
+bed-shm: t4277: [439.428000] t4277: map 16 pages: kmalloc 798 ask-alloc 82152 wait 566947001 copy-free 0 kfree 336 total 567920015 cycles
+bed-shm: t4277: [439.437000] t4277: fault rest 16 pages: 397572 cycles
+bed-shm: t4277: [439.542000] t4277: map 16 pages: kmalloc 840 ask-alloc 39774 wait 438541199 copy-free 0 kfree 39438 total 439970333 cycles
+bed-shm: t4277: [439.549000] t4277: fault rest 16 pages: 12096 cycles
+bed-shm: t4277: [440.273000] t4277: map 16 pages: kmalloc 336 ask-alloc 5334 wait 3011808744 copy-free 0 kfree 3024 total 3012776038 cycles
+bed-shm: t4277: [440.282000] t4277: fault rest 16 pages: 8652 cycles
+bed-shm: t4277: [440.365000] t4277: map 16 pages: kmalloc 207732 ask-alloc 393666 wait 326678123 copy-free 0 kfree 294 total 327602459 cycles
+bed-shm: t4277: [440.371000] t4277: fault rest 16 pages: 6132 cycles
+bed-shm: t4277: [440.427000] t4277: map 16 pages: kmalloc 714 ask-alloc 4662 wait 228231681 copy-free 0 kfree 378 total 228751683 cycles
+bed-shm: t4277: [440.434000] t4277: fault rest 16 pages: 39522 cycles
+bed-shm: t4277: [440.494000] t4277: map 16 pages: kmalloc 1302 ask-alloc 6552 wait 233842727 copy-free 0 kfree 504 total 234997853 cycles
+bed-shm: t4277: [440.503000] t4277: fault rest 16 pages: 13860 cycles
+bed-shm: t4277: [440.645000] t4277: map 16 pages: kmalloc 756 ask-alloc 7602 wait 576346890 copy-free 0 kfree 924 total 577330866 cycles
+bed-shm: t4277: [440.653000] t4277: fault rest 16 pages: 4956 cycles
+bed-shm: t4277: [440.803000] t4277: map 16 pages: kmalloc 1764 ask-alloc 4788 wait 620974863 copy-free 0 kfree 336 total 621296541 cycles
+bed-shm: t4277: [440.810000] t4277: fault rest 16 pages: 7434 cycles
+bed-shm: t4277: [440.992000] t4277: map 16 pages: kmalloc 840 ask-alloc 5628 wait 750182705 copy-free 0 kfree 546 total 750449993 cycles
+bed-shm: t4277: [441.002000] t4277: fault rest 16 pages: 7980 cycles
+bed-shm: t4277: [441.159000] t4277: map 16 pages: kmalloc 840 ask-alloc 6594 wait 645007356 copy-free 0 kfree 294 total 645548190 cycles
+bed-shm: t4277: [441.167000] t4277: fault rest 16 pages: 14826 cycles
+bed-shm: t4277: [441.273000] t4277: map 16 pages: kmalloc 924 ask-alloc 5292 wait 445022218 copy-free 0 kfree 252 total 445196434 cycles
+bed-shm: t4277: [441.280000] t4277: fault rest 16 pages: 6720 cycles
+bed-shm: t4277: [441.388000] t4277: map 16 pages: kmalloc 882 ask-alloc 148302 wait 442712131 copy-free 0 kfree 519036 total 445319239 cycles
+bed-shm: t4277: [441.398000] t4277: fault rest 16 pages: 729666 cycles
+bed-shm: t4277: [441.651000] t4277: map 16 pages: kmalloc 1050 ask-alloc 5964 wait 1010651711 copy-free 0 kfree 252 total 1011415439 cycles
+bed-shm: t4277: [441.661000] t4277: fault rest 16 pages: 551166 cycles
+bed-shm: t4277: [441.814000] t4277: map 16 pages: kmalloc 1638 ask-alloc 6174 wait 619300130 copy-free 0 kfree 294 total 619536926 cycles
+bed-shm: t4277: [441.823000] t4277: fault rest 16 pages: 7980 cycles
+bed-shm: t4277: [443.593000] t4277: map 16 pages: kmalloc 714 ask-alloc 3318 wait 3036328222 copy-free 0 kfree 252 total 3037109884 cycles
+bed-shm: t4277: [443.602000] t4277: fault rest 16 pages: 7224 cycles
+bed-shm: t4277: [444.026000] t4277: map 33 pages: kmalloc 3444 ask-alloc 58842 wait 158999358 copy-free 0 kfree 5964 total 159827052 cycles
+bed-shm: t4277: [444.032000] t4277: fault rest 33 pages: 201894 cycles
+bed-shm: t4277: [444.105000] t4277: map 256 pages: kmalloc 35616 ask-alloc 24192 wait 281829448 copy-free 43386 kfree 378 total 282530974 cycles
+bed-shm: t4277: [444.234000] t4277: fault rest 256 pages: 76818 cycles
+bed-shm: t4277: [450.178000] t4277: map 1 pages: kmalloc 1050 ask-alloc 17472 wait 253368743 copy-free 0 kfree 336 total 255084107 cycles
+bed-shm: t4277: [450.187000] t4277: fault rest 1 pages: 294 cycles
+bed-shm: t4277: [450.688000] t4277: map 2048 pages: kmalloc 126000 ask-alloc 19950 wait 2086177742 copy-free 351288 kfree 271950 total 2091142940 cycles
+bed-shm: t4277: [452.143000] t4277: map 16384 pages: kmalloc 150906 ask-alloc 91014 wait 1708393508 copy-free 120456 kfree 534240 total 1714849370 cycles
+bed-shm: t4277: [471.357000] t4277: map 16384 pages: kmalloc 625800 ask-alloc 429660 wait 3189332935 copy-free 137718 kfree 148974 total 3200532655 cycles
+bed-shm: t4277: [476.987000] t4277: map 33 pages: kmalloc 8568 ask-alloc 11508 wait 121183489 copy-free 0 kfree 378 total 121403275 cycles
+bed-shm: t4277: [476.994000] t4277: fault rest 33 pages: 33096 cycles
+bed-shm: t4277: [477.022000] t4277: map 256 pages: kmalloc 714 ask-alloc 18396 wait 114244263 copy-free 36960 kfree 13860 total 115194135 cycles
+bed-shm: t4277: [477.041000] t4277: fault rest 256 pages: 1303638 cycles
+bed-shm: t4277: [479.482000] t4277: map 1 pages: kmalloc 1428 ask-alloc 3318 wait 114833754 copy-free 0 kfree 294 total 115025988 cycles
+bed-shm: t4277: [479.489000] t4277: fault rest 1 pages: 336 cycles
+bed-shm: t4277: [479.579000] t4277: map 2048 pages: kmalloc 301896 ask-alloc 17556 wait 365828023 copy-free 353808 kfree 233688 total 369394957 cycles
+bed-shm: t4277: [479.752000] t4277: map 256 pages: kmalloc 1848 ask-alloc 41496 wait 673720450 copy-free 295386 kfree 62244 total 676469938 cycles
+bed-shm: t4277: [479.760000] t4277: fault rest 256 pages: 76944 cycles
+bed-shm: result: pass
+run: bed-shm: PASS in 486s
+run: result: all 1 suites passed
