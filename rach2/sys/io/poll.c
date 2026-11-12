@@ -246,7 +246,7 @@ static int deadline_passed(struct poll_deadline *d)
 /* The lock over each process's published poll arrays (`poll_wqs`,
  * `poll_recs`, `poll_n`): a sleeper publishes and takes back its arrays
  * under it, and `poll_let_go` takes another thread's records off their
- * queues under it. It comes before the wait queues' lock. */
+ * queues under it. It comes before each queue's own lock. */
 static struct spinlock poll_lock = SPINLOCK_INIT_NAMED("poll_lock");
 
 /** Put the current process's records on the `n` queues of `wqs` and
