@@ -946,3 +946,28 @@ uint32_t rtc_step_count(void)
 {
     return rtc_steps;
 }
+
+#if defined(RACH2_HOSTTEST)
+/**
+ * Every floor the clocks keep goes back to 0: the monotonic, raw and coarse
+ * clocks' and real time's last reading, which leaves real time to the
+ * offset alone. A host test whose clock starts its ticks again, as a boot
+ * does, calls it first, so that no reading of an earlier row holds the
+ * clocks of the next.
+ */
+void rtc_forget_floors(void)
+{
+    uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
+
+    spin_lock(&rtc_mono_lock);
+    rtc_mono_seconds = 0;
+    rtc_mono_nanoseconds = 0;
+    rtc_raw_seconds = 0;
+    rtc_raw_nanoseconds = 0;
+    rtc_coarse_floor_ns = 0;
+    spin_unlock(&rtc_mono_lock);
+    rtc_last_seconds = 0;
+    rtc_last_nanoseconds = 0;
+    spin_unlock_irqrestore(&rtc_realtime_lock, flags);
+}
+#endif

@@ -203,11 +203,13 @@ static void pass(int n)
     }
 }
 
-/** Start the clocks at a tick's edge, 100 s after boot, set real time to
+/** Start the clocks at a tick's edge, 100 s after boot, with no floor an
+ * earlier row's readings raised (`rtc_forget_floors`), set real time to
  * `sec` seconds there, which takes the NTP state's tick length at once,
  * and return real time in nanoseconds. */
 static int64_t restart(int64_t sec)
 {
+    rtc_forget_floors();
     kernel_ticks = 100000;
     kernel_uptime_seconds = 100;
     kernel_second_ticks = 0;
