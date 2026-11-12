@@ -3558,7 +3558,8 @@ static void _syscall_handler(isr_params_t *params)
  * newfstatat stat a path the name cache finishes (`stat_at_unlocked`), and
  * open and openat make a read-only descriptor of such a file
  * (`open_unlocked`), and access, faccessat and faccessat2 check a path the
- * name cache finishes (`access_unlocked`), each taking the big lock for
+ * name cache finishes (`access_unlocked`), and readlink and readlinkat
+ * read a link it finds (`readlink_unlocked`), each taking the big lock for
  * anything else; poll and
  * ppoll scan their descriptors the same way and sleep without it, taking it
  * for the signal state when the thread is marked for a signal or the call
@@ -3579,7 +3580,7 @@ static void unlock_file_calls(void)
         sys_read,    sys_write,  sys_pread64,   sys_pwrite64,   sys_ioctl,      sys_fstat64,
         sys_close,   sys_poll,   sys_ppoll,     sys_fstatat64,  sys_getdents64, sys_open,
         sys_openat,  sys_readv,  sys_writev,    sys_flock,      sys_fcntl64,    sys_lseek,
-        sys__llseek, sys_access, sys_faccessat, sys_faccessat2,
+        sys__llseek, sys_access, sys_faccessat, sys_faccessat2, sys_readlink,   sys_readlinkat,
     };
     uint32_t i;
 

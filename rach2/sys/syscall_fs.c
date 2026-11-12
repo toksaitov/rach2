@@ -9918,6 +9918,86 @@ static int32_t readlink_put(int n, char *link, char __user *ubuf, uint32_t bufsi
 }
 
 /**
+ * `do_readlink` for a caller without the big lock: a link the name cache
+ * finds by a path absolute or relative to the working directory
+ * (`vfs_resolve_cached`, `path_from_user_unlocked`), on a type that sets
+ * `reads_unlocked`, whose `readlink` reads the link under its own lock, as
+ * Linux's readlinkat walks a path under RCU first and reads an ext2 link
+ * under no global lock (fs/stat.c:504-538, fs/namei.c:2651-2653). The
+ * count copied, a negative errno, or CALL_LOCKED with nothing done, for
+ * `do_readlink` under the big lock: a path that names a directory by its
+ * end among them.
+ */
+static int32_t readlink_unlocked(int dirfd, const char __user *upath, char __user *ubuf,
+                                 uint32_t bufsiz)
+{
+    struct vfs_ref ref;
+    char *path, *link;
+    int dir = 0, n;
+    int32_t rc;
+
+    if (!ubuf || bufsiz == 0) {
+        return -EINVAL;
+    }
+    rc = path_from_user_unlocked(dirfd, upath, &path, &dir);
+    if (rc != 0) {
+        return rc;
+    }
+    if (dir) {
+        path_buf_put(path);
+        return CALL_LOCKED;
+    }
+    rc = vfs_resolve_cached(path, VFS_WALK_NOFOLLOW, &ref, NULL);
+    path_buf_put(path);
+    if (rc != 0) {
+        return rc == VFS_CACHED_MISS ? CALL_LOCKED : rc;
+    }
+    link = NULL;
+    if (vfs_mount_base(ref.mnt)->type->reads_unlocked && ref.mnt->type->ops->readlink) {
+        link = path_buf_get();
+        if (!link) {
+            vfs_ref_release(&ref);
+            return -ENOMEM;
+        }
+    }
+    n = link ? ref.mnt->type->ops->readlink(ref.mnt, ref.node, link, VFS_PATH_MAX) : CALL_LOCKED;
+    vfs_ref_release(&ref);
+    return link ? readlink_put(n, link, ubuf, bufsiz) : CALL_LOCKED;
+}
+
+/**
+ * The target of the link at the user's path `upath`, relative to `dirfd`,
+ * into the user's `ubuf` of `bufsiz` bytes (`do_readlink`): without the big
+ * lock where `readlink_unlocked` finishes it, and under it otherwise. The
+ * count copied or a negative errno.
+ */
+static int32_t readlink_path(int dirfd, const char __user *upath, char __user *ubuf,
+                             uint32_t bufsiz)
+{
+    char *path;
+    int dir, big;
+    int32_t rc;
+
+    big = !bkl_held();
+    if (big) {
+        rc = readlink_unlocked(dirfd, upath, ubuf, bufsiz);
+        if (rc != CALL_LOCKED) {
+            return rc;
+        }
+        bkl_enter();
+    }
+    rc = path_from_user_dir(dirfd, upath, &path, &dir);
+    if (rc == 0) {
+        rc = do_readlink(path_name(path), ubuf, bufsiz, dir);
+        path_buf_put(path);
+    }
+    if (big) {
+        bkl_exit();
+    }
+    return rc;
+}
+
+/**
  * readlinkat(2) with an empty path: the target of the link the descriptor
  * `dirfd` is open on, an O_PATH descriptor opened with O_NOFOLLOW, into the
  * user's `ubuf` of `bufsiz` bytes, as `do_readlink` copies it.
@@ -9973,28 +10053,20 @@ static int32_t fd_readlink(int dirfd, char __user *ubuf, uint32_t bufsiz)
 
 /**
  * readlink(2): copy the target of the link at the user's path in argument 0
- * into the buffer in argument 1, of the size in argument 2 (`do_readlink`);
- * the bytes copied, or a negative errno, -EFAULT for a NULL path.
+ * into the buffer in argument 1, of the size in argument 2 (`readlink_path`);
+ * the bytes copied, or a negative errno, -EFAULT for a NULL path. The call
+ * runs without the big lock, which `readlink_path` takes for what the name
+ * cache leaves.
  */
 long sys_readlink(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
-    char __user *ubuf = (char __user *)SC_ARG(params, 1);
-    uint32_t bufsiz = USER_LEN32(SC_ARG(params, 2));
-    char *path;
-    int dir;
-    int32_t rc;
 
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    rc = path_from_user_dir(AT_FDCWD, upath, &path, &dir);
-    if (rc != 0) {
-        return rc;
-    }
-    rc = do_readlink(path_name(path), ubuf, bufsiz, dir);
-    path_buf_put(path);
-    return rc;
+    return readlink_path(AT_FDCWD, upath, (char __user *)SC_ARG(params, 1),
+                         USER_LEN32(SC_ARG(params, 2)));
 }
 
 /**
@@ -10002,7 +10074,8 @@ long sys_readlink(isr_params_t *params)
  * in argument 0, or to the working directory for AT_FDCWD; the path, the
  * buffer and its size are arguments 1 to 3. An empty path reads the link
  * the descriptor itself is open on (`fd_readlink`), as Linux does without
- * a flag.
+ * a flag, under the big lock; any other runs without it where the name
+ * cache finishes it (`readlink_path`).
  */
 long sys_readlinkat(isr_params_t *params)
 {
@@ -10010,23 +10083,27 @@ long sys_readlinkat(isr_params_t *params)
     const char __user *upath = (const char __user *)SC_ARG(params, 1);
     char __user *ubuf = (char __user *)SC_ARG(params, 2);
     uint32_t bufsiz = USER_LEN32(SC_ARG(params, 3));
-    char *path;
-    int dir;
     int32_t rc;
+    int big;
 
     if (!current_proc || !upath) {
         return -EFAULT;
     }
     rc = user_path_empty(upath);
-    if (rc != 0) {
-        return rc < 0 ? rc : fd_readlink(dirfd, ubuf, bufsiz);
+    if (rc == 0) {
+        return readlink_path(dirfd, upath, ubuf, bufsiz);
     }
-    rc = path_from_user_dir(dirfd, upath, &path, &dir);
-    if (rc != 0) {
+    if (rc < 0) {
         return rc;
     }
-    rc = do_readlink(path_name(path), ubuf, bufsiz, dir);
-    path_buf_put(path);
+    big = !bkl_held();
+    if (big) {
+        bkl_enter();
+    }
+    rc = fd_readlink(dirfd, ubuf, bufsiz);
+    if (big) {
+        bkl_exit();
+    }
     return rc;
 }
 
@@ -11676,7 +11753,7 @@ static int32_t do_access(const char *name, int mode, int dir, int flags)
  * directory (`path_from_user_unlocked`), to a file of a type that sets
  * `reads_unlocked`, whose attributes and permission are read under the
  * file's own lock, as Linux's faccessat walks a path under RCU first
- * (fs/open.c:466-490, fs/namei.c:2651-2653). The walk charges search
+ * (fs/open.c:465-535, fs/namei.c:2651-2653). The walk charges search
  * permission to the real ids unless `flags` has AT_EACCESS, as
  * `do_access`'s does. 0, a negative errno, or CALL_LOCKED with nothing
  * done, for `do_access` under the big lock: a `mode` with another bit, whose

@@ -2524,19 +2524,24 @@ static int link_target(struct ext2_mount *em, const struct ext2_node *n, char *b
  * the length; -ENAMETOOLONG when `cap` cannot hold it; -EINVAL for a node
  * that is not a link; or -EIO for a size of a block or more, a link of 60
  * bytes or more without blocks, a long link without its block, or a failed
- * read. Takes the link's lock (`link_target`).
+ * read. Takes the link's lock (`link_target`), and the big lock while the
+ * batch is not empty (`batch_guard`), as a read does.
  */
 static int ext2_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     struct ext2_node *n = node;
-    int rc;
+    int rc, big;
 
     if ((n->mode & S_IFMT_) != S_IFLNK_) {
         return -EINVAL;
     }
     node_lock(n);
+    big = batch_guard(em_of(mnt));
     rc = link_target(em_of(mnt), n, buf, cap);
     node_unlock(n);
+    if (big) {
+        bkl_exit();
+    }
     return rc;
 }
 
