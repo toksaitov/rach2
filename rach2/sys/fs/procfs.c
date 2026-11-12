@@ -2240,12 +2240,16 @@ static void ap_ns_pids(struct procfs_text *t, const char *head, const process_t 
 }
 
 /** The five signal sets of `p`'s status: pending for the thread and for
- * the process, blocked, ignored and caught. */
+ * the process, blocked, ignored and caught. The first three are copied
+ * together under the signal state's lock (`signal_sets_of`). */
 static void ap_signal_sets(struct procfs_text *t, const process_t *p)
 {
+    uint64_t pending, shared, blocked;
     uint64_t ignored = 0;
     uint64_t caught = 0;
     int sig;
+
+    signal_sets_of(p, &pending, &shared, &blocked);
 
     for (sig = 1; sig <= KSIG_MAX; sig++) {
         if (p->sigacts[sig].handler == KSIG_IGN) {
@@ -2254,9 +2258,9 @@ static void ap_signal_sets(struct procfs_text *t, const process_t *p)
             caught |= KSIG_BIT(sig);
         }
     }
-    ap_set(t, "SigPnd", p->sig_pending);
-    ap_set(t, "ShdPnd", p->tg->pending);
-    ap_set(t, "SigBlk", p->sig_blocked);
+    ap_set(t, "SigPnd", pending);
+    ap_set(t, "ShdPnd", shared);
+    ap_set(t, "SigBlk", blocked);
     ap_set(t, "SigIgn", ignored);
     ap_set(t, "SigCgt", caught);
 }

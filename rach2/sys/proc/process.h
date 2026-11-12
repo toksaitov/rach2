@@ -1174,6 +1174,13 @@ int signal_change_blocked_unlocked(int how, uint64_t set);
  * Defined in syscall_proc.c. */
 uint64_t signal_blocked_now(void);
 
+/** Copy the pending set of thread `t`, its process's pending set and its
+ * blocked mask under the signal state's lock, as Linux 6.12.115's task_sig
+ * reads them under the signal lock (fs/proc/array.c:278), for a reader of
+ * another thread's sets: `rt_sigprocmask` changes a mask without the big
+ * lock, and a mask is two words on i686. Defined in syscall_proc.c. */
+void signal_sets_of(const process_t *t, uint64_t *pending, uint64_t *shared, uint64_t *blocked);
+
 /** The siginfo of the SIGCHLD a child's end sends to `receiver`, its parent
  * or its tracer: CLD_EXITED with the exit code, or CLD_KILLED or CLD_DUMPED
  * with the signal, from its wait status, and the child's pid and real uid as
