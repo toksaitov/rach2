@@ -64,6 +64,7 @@ static uint32_t nbufs;        /* how many */
 static struct bbuf *lru_head; /* the keyed buffers, least recently released first */
 static struct bbuf *lru_tail;
 static struct bbuf *empties;      /* the buffers keyed to nothing */
+static uint32_t nempties;         /* how many */
 static struct dirty_list dirties; /* the dirty buffers but the firsts */
 static struct dirty_list firsts;  /* the dirty buffers of the first class */
 static uint32_t ndirty;           /* how many */
@@ -434,6 +435,7 @@ static void make_empty(struct bbuf *b)
     b->order = 0;
     b->empty_next = empties;
     empties = b;
+    nempties++;
 }
 
 /** An empty buffer off the empties, or NULL when there is none;
@@ -445,6 +447,7 @@ static struct bbuf *take_empty(void)
     if (b) {
         empties = b->empty_next;
         b->empty_next = 0;
+        nempties--;
     }
     return b;
 }
@@ -2629,6 +2632,7 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
         }
         *link = b->empty_next;
         b->empty_next = 0;
+        nempties--;
         buffer_unlink(b, &reap);
         got++;
     }
@@ -2672,27 +2676,22 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
  * write, as far as `want`: the empties, the room under the limit, and the
  * clean buffers `victim_find` reaches first. Returns the first dirty buffer
  * in the way, which a miss would write, or NULL when `want` were found or
- * the release order has ended. `cache_spin` is let go every WALK_BATCH
- * buffers of the release order (`walk_pause`), and the walk ends where the
- * buffer it goes on from has left the order meanwhile. The empties are
- * counted in one hold, since a count of them reads no buffer's state and
- * needs at most `want` steps. The caller holds the big lock.
+ * the release order has ended. The empties are their count, `nempties`,
+ * and no walk. `cache_spin` is let go every WALK_BATCH buffers of the
+ * release order (`walk_pause`), and the walk ends where the buffer it goes
+ * on from has left the order meanwhile. The caller holds the big lock.
  */
 static struct bbuf *reserve_walk(block_device_t *dev, uint32_t want, uint32_t *ready)
 {
     struct first_ask ask = {0, 0};
     uint32_t limit = bcache_limit(), flags = cache_lock();
     uint32_t have = nbufs < limit ? limit - nbufs : 0, n = 0;
-    const struct bbuf *e;
     struct bbuf *b;
 
     if (have > want) {
         have = want;
     }
-    for (e = empties; e && have < want; e = e->empty_next) {
-        stat_visits++;
-        have++;
-    }
+    have += nempties < want - have ? nempties : want - have;
     for (b = lru_head; b && have < want; b = b->lru_next) {
         if (++n % WALK_BATCH == 0) {
             flags = walk_pause(b, 0, flags);
