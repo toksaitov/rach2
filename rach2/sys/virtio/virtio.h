@@ -300,6 +300,10 @@ struct virtio_dev {
     /* The device maps its buffers from its own pages (`map_pages`), as
      * the transport and the device have agreed; set by the transport. */
     int pages;
+    /* `notify` is one register write that takes no lock and wakes no
+     * thread, so a driver may make it without the big lock; set by the
+     * transport, as virtio-pci sets it. */
+    int notify_unlocked;
     struct virtqueue *queues[VIRTIO_MAX_QUEUES];
     uint32_t config_events;
 };

@@ -311,8 +311,7 @@ int32_t vgpu_blob_unmap(struct virtio_gpu_device *vg, struct virtio_gpu_object *
     if (!cmd) {
         return -ENOMEM;
     }
-    kfree(cmd->fence);
-    cmd->fence = NULL;
+    vgpu_cmd_unfence(cmd);
     ((struct virtio_gpu_resource_unref *)(void *)cmd->page)->resource_id = bo->res_id;
     vgpu_cmd_send(cmd, NULL, NULL);
     return 0;

@@ -501,7 +501,9 @@ struct drm_virtgpu_context_init {
  * request from offset 0, with the memory entries of ATTACH_BACKING after it
  * up to VIRTIO_GPU_RESP_OFF and on in `extra` pages, and the answer at
  * VIRTIO_GPU_RESP_OFF. A command on the control queue carries a fence,
- * which the device's answer signals, with -EIO when it answered an error.
+ * which the device's answer signals, with -EIO when it answered an error,
+ * but those that Linux sends unfenced and nobody waits for: SET_SCANOUT,
+ * SET_SCANOUT_BLOB, RESOURCE_FLUSH and RESOURCE_UNMAP_BLOB.
  *
  * A command is the waiter's while `waited` is set: the waiter reads the
  * answer and frees it. Otherwise the answer puts it on the device's done
@@ -544,7 +546,7 @@ struct virtio_gpu_cmd {
     uint32_t response_len;  /* bytes the device returned */
     uint32_t nin;
     uint32_t nout;           /* segments the device reads, then one it writes */
-    struct dma_fence *fence; /* held; NULL on the cursor queue */
+    struct dma_fence *fence; /* held; NULL on the cursor queue and unfenced */
     uint64_t fence_ctx;      /* the fence's context, 0 for the device's */
     uint32_t ring_idx;       /* with `ring`, the context's ring it goes on */
     int ring;                /* the fence is on a ring of a context */
@@ -553,6 +555,8 @@ struct virtio_gpu_cmd {
     int queued;              /* started: its fence is live */
     int done;
     int waited;
+    int sleepable; /* its sender may sleep: the notify lets the big lock go */
+    int quiet;     /* published with no notify; a later command's carries it */
     void (*complete)(struct virtio_gpu_cmd *cmd);
     void *arg; /* for `complete` */
 };
@@ -640,6 +644,7 @@ struct virtio_gpu_device {
     struct vgpu_context *contexts;
     struct virtio_gpu_object *resources; /* includes objects awaiting UNREF */
     uint32_t unrefs;                     /* UNREFs sent and not yet answered */
+    uint32_t kicking;                    /* notifies made without the big lock */
     char reset_path[48];
     int has_edid;
     int has_indirect;
@@ -658,6 +663,9 @@ struct virtio_gpu_device {
     uint32_t *res_ids;  /* a bit for each resource id in use, id 1 at bit 0 */
     struct spinlock lock;
     struct virtio_gpu_cmd *pending[2], *pending_tail[2]; /* by queue */
+    /* By queue: a quiet command went in that no notify has carried yet, so
+     * the next command that is not quiet notifies even when it is held. */
+    int unkicked[2];
     struct virtio_gpu_cmd *done_list;
     struct virtio_gpu_cmd *live;
     volatile int display_pending;
@@ -712,6 +720,8 @@ struct virtio_gpu_cmd *vgpu_cmd_new(struct virtio_gpu_device *vg, struct virtque
                                     uint32_t type, uint32_t bytes);
 /** Free an unsubmitted or completed command and its DMA pages. */
 void vgpu_cmd_free(struct virtio_gpu_cmd *cmd);
+/** Send a new control command without a fence; nobody may wait for it. */
+void vgpu_cmd_unfence(struct virtio_gpu_cmd *cmd);
 /** Number and initialize a command's fence once, before exporting it. */
 void vgpu_cmd_prepare(struct virtio_gpu_cmd *cmd);
 /**
@@ -720,6 +730,19 @@ void vgpu_cmd_prepare(struct virtio_gpu_cmd *cmd);
  */
 void vgpu_cmd_send(struct virtio_gpu_cmd *cmd, void (*complete)(struct virtio_gpu_cmd *),
                    void *arg);
+/** Start `cmd`, unwaited and with no completion, without notifying the
+ * device, as Linux's virtio_gpu_queue_ctrl_sgs before its
+ * virtio_gpu_notify: the next command sent on its queue, which the caller
+ * makes sure of, notifies for both, even when a full queue holds it, so
+ * that the device takes them in one exit. */
+void vgpu_cmd_queue(struct virtio_gpu_cmd *cmd);
+/**
+ * As vgpu_cmd_send, from a caller that may sleep, which the notify then
+ * lets the big lock go for (`vgpu_notify`): the caller holds nothing the
+ * big lock alone keeps whole, and touches `cmd` no more.
+ */
+void vgpu_cmd_send_sleepable(struct virtio_gpu_cmd *cmd, void (*complete)(struct virtio_gpu_cmd *),
+                             void *arg);
 /** Send, wait, copy an inline response and free the command; 0 or -errno. */
 int32_t vgpu_cmd_send_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t bytes);
 /**

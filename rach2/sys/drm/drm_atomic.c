@@ -2159,11 +2159,13 @@ static int32_t stall_checks(struct drm_atomic_state *state, int nonblock)
  * Give each plane of `state` that shows a framebuffer and has no in-fence
  * the pending writes of the framebuffer's objects as its fence, Linux's
  * drm_gem_plane_helper_prepare_fb, which drm_atomic_helper_prepare_planes
- * runs for every GEM driver without a prepare_fb of its own and i915's
- * intel_prepare_plane_fb runs too. A flip then waits for the render job
- * that draws the buffer, which a compositor that passes no IN_FENCE_FD
- * relies on; an in-fence overrules them, as on Linux. Returns 0, or
- * -ENOMEM when two objects' writes could not be merged into one fence.
+ * runs for every GEM driver without a prepare_fb of its own and which
+ * i915's intel_prepare_plane_fb and virtio-gpu's virtio_gpu_plane_prepare_fb
+ * (virtgpu_plane.c:281 in Linux 6.12.115) run too. A flip then waits for
+ * the render job that draws the buffer, which a compositor that passes no
+ * IN_FENCE_FD relies on; an in-fence overrules them, as on Linux. Returns
+ * 0, or -ENOMEM when two objects' writes could not be merged into one
+ * fence.
  */
 static int32_t implicit_fences(struct drm_atomic_state *state)
 {
