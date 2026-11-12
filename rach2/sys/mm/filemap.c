@@ -640,6 +640,11 @@ int filemap_disk_shared_mapped(const struct vfs_mount *mnt, uint64_t ino)
     return 0;
 }
 
+int filemap_disk_any(void)
+{
+    return *(volatile uint32_t *)&dshare_count != 0;
+}
+
 int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino)
 {
     return dshare_of(mnt, ino) != NULL;

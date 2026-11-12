@@ -77,6 +77,11 @@ struct file_ops {
  * and no operation of it moves the description's offset. */
 int file_ops_unlocked(const fd_entry_t *e);
 
+/** Whether descriptor `e` names a regular file or a directory of a type
+ * that sets `reads_unlocked`, whose reads, listings and attributes run
+ * without the big lock (vfs.h). */
+int file_vfs_unlocked(const fd_entry_t *e);
+
 /** Take the big lock for a call on `e` unless `file_ops_unlocked` says
  * otherwise, and return whether it was taken, for `file_ops_unlock`. */
 int file_ops_lock(const fd_entry_t *e);

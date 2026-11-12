@@ -46,6 +46,7 @@
 #include "../fs/vfs.h"
 #include "../lib/kerrno.h"
 #include "../lib/spinlock.h"
+#include "../proc/smp.h"
 #include "../klog.h"
 
 /* The fewest lists that each table has. */
@@ -487,15 +488,33 @@ int filecache_read_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, void 
     return pages && fc_file_of(mnt, node, &f) && fc_read(&f, pgoff, 0, buf);
 }
 
+/** Read `left` bytes at `at` of the file open as `ofd` straight into the
+ * user buffer `dst`, under the big lock, since the file system then writes
+ * the user's buffer itself; the type's answer. */
+static int32_t fc_read_direct(struct open_file *ofd, uint64_t at, char __user *dst, uint32_t left)
+{
+    int big = !bkl_held();
+    int32_t rc;
+
+    if (big) {
+        bkl_enter();
+    }
+    rc = vfs_read(ofd->vmnt, ofd->fhandle, (void __force *)dst, left, at);
+    if (big) {
+        bkl_exit();
+    }
+    return rc;
+}
+
 /**
  * Read up to `left` bytes at `at` of `f`, open as `ofd`, inside one page,
  * into the user buffer `dst`: from the cache's frame, with a reference taken
  * so that a drop meanwhile does not free it, or into a new frame read from
  * the file, which then joins the cache when it holds a whole page or the
  * last part of the file. With no frame to be had the file system reads the
- * whole `left` into `dst` itself. The bytes read, which stop short of the
- * page's end or of `left` only at the end of the file; -EFAULT; or the file
- * system's error.
+ * whole `left` into `dst` itself (`fc_read_direct`). The bytes read, which
+ * stop short of the page's end or of `left` only at the end of the file;
+ * -EFAULT; or the file system's error.
  */
 static int32_t fc_read_page(struct open_file *ofd, const struct fc_file *f, uint64_t at,
                             char __user *dst, uint32_t left)
@@ -525,7 +544,7 @@ static int32_t fc_read_page(struct open_file *ofd, const struct fc_file *f, uint
         } else if (phys) {
             free_frame(phys);
         }
-        return vfs_read(ofd->vmnt, ofd->fhandle, (void __force *)dst, left, at);
+        return fc_read_direct(ofd, at, dst, left);
     }
     if (p) {
         epoch = *fc_changes(f->mnt, f->ino);

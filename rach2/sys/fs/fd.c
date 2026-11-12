@@ -269,14 +269,18 @@ static int ofd_idle(void *arg)
  * The description lock comes before the namespace lock, as Linux's
  * `f_pos_lock` (fs/file.c:1167) comes before `i_rwsem`: a read(2) holds the
  * description and may fault into a file mapping, whose fill takes the
- * namespace lock (`fs_read_at`).
+ * namespace lock (`fs_read_at`). `busy` is taken by an atomic exchange,
+ * since a read of a file of a type that sets `reads_unlocked` takes it
+ * without the big lock; the waiter is on the queue before it looks again,
+ * so the give's wake does not pass it by.
  */
 void fd_ofd_lock(struct open_file *ofd)
 {
-    while (ofd->busy) {
+    volatile unsigned int *busy = (volatile unsigned int *)&ofd->busy;
+
+    while (arch_atomic_cmpxchg(busy, 0, 1) != 0) {
         wq_wait_event_nointr(&ofd_rec_of(ofd)->wq, ofd_idle, ofd);
     }
-    ofd->busy = 1;
     if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {
         vfs_ns_lock(ofd->vmnt);
     }
@@ -287,7 +291,7 @@ void fd_ofd_unlock(struct open_file *ofd)
     if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {
         vfs_ns_unlock(ofd->vmnt);
     }
-    ofd->busy = 0;
+    (void)arch_atomic_xchg((volatile unsigned int *)&ofd->busy, 0);
     wq_wake_all(&ofd_rec_of(ofd)->wq);
 }
 

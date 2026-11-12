@@ -146,7 +146,8 @@ struct open_file {
      * hold the description for the length of the operation, so a sharer
      * cannot use the offset while another sleeps in a disk request with it;
      * pread64 and pwrite64 hold it on a regular file and leave the offset
-     * alone. The lock's wait queue is in the description's record in fd.c. */
+     * alone. The lock's wait queue is in the description's record in fd.c,
+     * and the lock is taken by an atomic exchange (`fd_ofd_lock`). */
     int busy;
     /* For a file of a mount other than the KRFFS root, the canonical path
      * it was opened by, from the heap, or NULL when the heap had no room
