@@ -660,6 +660,11 @@ int lapic_requested(uint8_t vector)
     return (apic_read(LAPIC_IRR + word) & (1u << ((uint32_t)vector % 32u))) != 0;
 }
 
+uint32_t lapic_request_word(uint32_t word)
+{
+    return ready ? apic_read(LAPIC_IRR + word * 0x10u) : 0;
+}
+
 void lapic_set_lint(int lint, uint32_t entry)
 {
     if (ready) {

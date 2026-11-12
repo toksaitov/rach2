@@ -183,6 +183,11 @@ void lapic_eoi(void);
  * `lapic_pending`, a vector whose handler is running is not counted. */
 int lapic_requested(uint8_t vector);
 
+/** Word `word`, 0 to 7, of this processor's request register: vectors
+ * 32 * `word` to 32 * `word` + 31, one bit each; 0 while the APIC is not
+ * enabled. */
+uint32_t lapic_request_word(uint32_t word);
+
 /** Write local-vector entry `LINT0` (`lint` 0) or `LINT1` (`lint` 1). */
 void lapic_set_lint(int lint, uint32_t entry);
 

@@ -1508,22 +1508,25 @@ void sched_loadavg(uint32_t avg[3])
 }
 
 /**
- * Wait for a wake with the big lock let go; entered and left with interrupts
- * off. Poll this processor's `idle_poll` for `idle_poll_us`, then halt
- * unless a wake turned it to CPU_POLL_KICKED meanwhile: another processor's
- * (`smp_kick`), or any interrupt taken here (`idle_poll_interrupt`), which
- * would have ended the halt. The poll runs with interrupts on, so that a
- * tick, a disk or a network interrupt is taken at once rather than after
- * the poll, and the requests of other processors come by their interrupt;
- * Linux's poll_idle enables them for its poll and disables them before it
- * clears its polling flag (drivers/cpuidle/poll_state.c:22-43, 6.12.115).
- *
- * No wake is lost between the poll and the halt. Interrupts go off before
- * the exchange that ends the poll, so an interrupt taken after the loop
- * left had already marked the word KICKED, which the exchange returns, and
- * one that comes after the exchange stays pending until the `sti; hlt`,
- * which it ends. A kick from another processor after the exchange finds
- * the word off and sends an interrupt, which ends the halt the same way.
+ * Wait for a wake with interrupts off and the big lock let go: poll this
+ * processor's `idle_poll` for `idle_poll_us`, then halt unless a wake
+ * turned it to CPU_POLL_KICKED meanwhile (`smp_kick`). A kick that comes
+ * after the poll finds it off and sends the interrupt that ends the halt.
+ * The poll answers the requests other processors leave (`smp_service`), as
+ * a wait for the big lock does, so that their interrupts, pending
+ * meanwhile, are taken once at its end: taken one by one inside the poll,
+ * as Linux's poll_idle takes them with interrupts on
+ * (drivers/cpuidle/poll_state.c:22-41), each cost a guest's interrupt and
+ * its exits, and a churn of short processes, whose exits flush every
+ * processor, ran 1.5 times as long. Linux sends no such flush to an idle
+ * processor in lazy TLB mode (should_flush_tlb, arch/x86/mm/tlb.c:
+ * 912-914). A device's completion, which Linux's poll would take at once,
+ * the poll looks for every IDLE_POLL_CHECK_US (`arch_irq_waiting`), and
+ * halts on it, which takes it: held to the poll's end, it made each of a
+ * disk's random reads some 90 us longer. The tick and the other processors'
+ * interrupts it holds are taken once the processor runs the thread it
+ * switched to; taken inside the wait, before the switch, they made each
+ * wake of the churn later.
  *
  * The length adapts as Linux 6.12.115's haltpoll governor adapts its own
  * (adjust_poll_limit, drivers/cpuidle/governors/haltpoll.c): a wait the
@@ -1542,7 +1545,7 @@ static void idle_halt(void)
 {
     struct percpu *cpu = this_cpu();
     uint32_t per_us = timer_calibrate() / TICK_US;
-    uint64_t start, limit, gone;
+    uint64_t start, limit, now, look, gone;
     uint32_t grow;
 
     if (per_us == 0 || !arch_guest()) {
@@ -1552,12 +1555,22 @@ static void idle_halt(void)
     start = arch_cycles();
     if (cpu->idle_poll_us != 0) {
         limit = (uint64_t)cpu->idle_poll_us * per_us;
+        look = (uint64_t)IDLE_POLL_CHECK_US * per_us;
         (void)arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_ON);
-        arch_irq_enable();
-        while (cpu->idle_poll == CPU_POLL_ON && arch_cycles() - start < limit) {
+        for (;;) {
+            now = arch_cycles() - start;
+            if (cpu->idle_poll != CPU_POLL_ON || now >= limit) {
+                break;
+            }
+            if (now >= look) {
+                if (arch_irq_waiting()) {
+                    break;
+                }
+                look = now + (uint64_t)IDLE_POLL_CHECK_US * per_us;
+            }
+            smp_service();
             arch_relax();
         }
-        arch_irq_disable();
         if (arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_NONE) == CPU_POLL_KICKED) {
             return;
         }
@@ -1575,21 +1588,6 @@ static void idle_halt(void)
             grow = IDLE_POLL_START_US;
         }
         cpu->idle_poll_us = grow > IDLE_POLL_MAX_US ? IDLE_POLL_MAX_US : grow;
-    }
-}
-
-/**
- * The poll's word is written here only while interrupts are on, between
- * the poll's two exchanges, which run with them off; another processor
- * writes it only from CPU_POLL_ON to CPU_POLL_KICKED. A plain store of
- * CPU_POLL_KICKED therefore loses nothing.
- */
-void idle_poll_interrupt(void)
-{
-    struct percpu *cpu = this_cpu();
-
-    if (cpu->idle_poll == CPU_POLL_ON) {
-        cpu->idle_poll = CPU_POLL_KICKED;
     }
 }
 
