@@ -1088,22 +1088,23 @@ void tty_console_counters(struct console_counters *out)
 }
 
 /* The ticks between two readings of the port by the tick while its receive
- * interrupt is enabled, a fifth of a second: Rach2's own fallback for
- * an edge the interrupt lost, which the handler's loop makes rare. Linux
- * reads an 8250 that has an interrupt from no timer; its backup timer only
- * sends, for a UART with the THRE bug (8250_core.c:269-275), and a port
- * without an interrupt is polled every uart_poll_timeout
- * (8250_core.c:207-213). */
+ * interrupt is enabled and its handler left the line high at its pass
+ * limit (`serial_rx_line_high`), a fifth of a second. Linux reads an 8250
+ * that has an interrupt from no timer; its backup timer only sends, for a
+ * UART with the THRE bug (8250_core.c:269-275), and a port without an
+ * interrupt is polled every uart_poll_timeout (8250_core.c:207-213). */
 #define CONSOLE_BACKUP_TICKS (TICK_HZ / 5)
 
 static void console_deliver(void);
 
 /**
  * The UART's bytes go to the ring first, so a port whose interrupt is not
- * enabled is still read every tick; while it is enabled, the tick reads the
- * port every CONSOLE_BACKUP_TICKS, and the interrupt takes the rest: under KVM
- * a reading is a port access that QEMU serves in its own process, some 200 us,
- * which a reading every tick took from each millisecond. A reader or poller
+ * enabled is still read every tick; while it is enabled, the interrupt
+ * takes them, and the tick reads the port, every CONSOLE_BACKUP_TICKS, only
+ * while the handler has left the line high at its pass limit: under KVM a
+ * reading is a port access that QEMU serves in its own process, which
+ * waits for QEMU's main lock, some 200 us and up to 8 ms while a virtio GPU
+ * works, with the big lock held. A reader or poller
  * parked on the console, which nothing else would tell of serial input while
  * another process runs, is then only woken: it drains and echoes the ring in
  * its own context (console_pump). With nobody parked and a session owning the
@@ -1119,7 +1120,7 @@ void tty_console_poll(void)
     uint32_t now = (uint32_t)kernel_ticks;
 
     blank_tick();
-    if (!serial_rx_irq_on() || (int32_t)(now - read_at) >= 0) {
+    if (!serial_rx_irq_on() || (serial_rx_line_high() && (int32_t)(now - read_at) >= 0)) {
         read_at = now + CONSOLE_BACKUP_TICKS;
         serial_rx_service(TTY_PUMP_BUDGET);
     }
