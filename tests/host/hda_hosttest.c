@@ -844,6 +844,16 @@ static void tick(void)
     hda_tick();
 }
 
+/** Run the services asked for since the last call, as khda does once the
+ * host test stands for it (hda_test_threaded). */
+static void run_khda(void)
+{
+    uint32_t wanted = service_wanted;
+
+    service_wanted = 0;
+    hda_serve(wanted);
+}
+
 /**
  * Run `ticks` timer ticks 10 ms apart on the model, writing blocks after each
  * when `next` is not NULL, and check after each that the delay stays within
@@ -1146,6 +1156,49 @@ static void row_play_refilled(void)
     tick();
     check(hw_fill_count == 1 && !play_irq_pending, "the tick then leaves the stream alone");
     hda_stop();
+}
+
+/**
+ * khda delayed from one output interrupt until the next has come early:
+ * its refill fills the period the first stands for and leaves the stream
+ * pending, the position being in the second half of a period, so the tick
+ * asks for the period the second stands for once the position has passed
+ * it, and refills do not fall a period behind. A stop clears the flag.
+ */
+static void row_play_delayed(void)
+{
+    unsigned next = 1;
+
+    row = "play-irq-delayed";
+    model_start(1u << 6, 48000, AUDIO_S16LE, 2);
+    write_blocks(&next);
+    hda_test_threaded = true;
+    service_wanted = 0;
+    model_play(24000);
+    hda_test_write(HDA_INTSTS, 1u << output_stream_index, 32);
+    hda_irq_handler(NULL);
+    check(hw_fill_count == 0 && (service_wanted & HDA_SERVE_PLAY),
+          "an interrupt with khda running only asks for it");
+    model_play(21000);
+    hda_irq_handler(NULL);
+    hda_test_write(HDA_INTSTS, 0, 32);
+    run_khda();
+    check(hw_fill_count == 1 && play_irq_pending,
+          "khda, run after the next interrupt came early, fills one period and stays pending");
+    model_play(2000);
+    tick();
+    run_khda();
+    check(hw_fill_count == 2 && !play_irq_pending,
+          "the tick has the next period filled once the position has passed it");
+    model_play(20000);
+    hda_test_write(HDA_INTSTS, 1u << output_stream_index, 32);
+    hda_irq_handler(NULL);
+    hda_test_write(HDA_INTSTS, 0, 32);
+    check(play_irq_pending, "another early interrupt leaves the stream pending");
+    hda_stop();
+    check(!play_irq_pending, "a stop clears the flag");
+    hda_test_threaded = false;
+    service_wanted = 0;
 }
 
 /** Allocate a procfs snapshot, or inject allocation failure. */
@@ -1858,6 +1911,60 @@ static void row_capture_early(void)
     clock_stopped = 0;
 }
 
+/**
+ * khda delayed from one input interrupt until the next has come early: it
+ * hands over the period the first stands for and leaves the stream pending,
+ * so the tick asks for the period the second stands for once the position
+ * has passed it. A stop clears the flag.
+ */
+static void row_capture_delayed(void)
+{
+    audio_stream_t s;
+
+    row = "capture-irq-delayed";
+    reset_model();
+    model_adc();
+    check(hda_find_output(), "enumeration succeeds");
+    /* 1024 frames a period at 48 kHz, 21.3 ms. */
+    check(open_capture(&s, 48000, AUDIO_S16LE, 2, 4096) == 0, "capture set up");
+    clock_stopped = 1;
+    check(hda_driver.stream_start(&s) == 0, "capture starts");
+    hda_test_threaded = true;
+    service_wanted = 0;
+    move_input(4096 + 100);
+    clock_value += 24000 * 22;
+    hda_test_write(HDA_INTSTS, 1u << input_stream_index, 32);
+    hda_irq_handler(NULL);
+    check(got_transfers == 0 && (service_wanted & HDA_SERVE_CAPTURE),
+          "an interrupt with khda running only asks for it");
+    move_input(4096 + 3000);
+    clock_value += 24000 * 15;
+    hda_irq_handler(NULL);
+    hda_test_write(HDA_INTSTS, 0, 32);
+    run_khda();
+    check(got_transfers == 1 && cap_irq_pending,
+          "khda, run after the next interrupt came early, hands one period over and stays "
+          "pending");
+    move_input(2 * 4096 + 100);
+    clock_value += 24000 * 6;
+    tick();
+    run_khda();
+    check(got_transfers == 2 && !cap_irq_pending,
+          "the tick has the next period handed over once the position has passed it");
+    move_input(2 * 4096 + 3000);
+    clock_value += 24000 * 15;
+    hda_test_write(HDA_INTSTS, 1u << input_stream_index, 32);
+    hda_irq_handler(NULL);
+    hda_test_write(HDA_INTSTS, 0, 32);
+    check(cap_irq_pending, "another early interrupt leaves the stream pending");
+    hda_driver.stream_stop(&s);
+    check(!cap_irq_pending, "a stop clears the flag");
+    hda_test_threaded = false;
+    service_wanted = 0;
+    hda_driver.stream_close(&s);
+    clock_stopped = 0;
+}
+
 /** Run the ticks of `n` jack polls, a quarter second each. */
 static void poll_jacks(unsigned n)
 {
@@ -2235,16 +2342,6 @@ static void beep_ticks(unsigned n)
     }
 }
 
-/** Run the services asked for since the last call, as khda does once the
- * host test stands for it (hda_test_threaded). */
-static void run_khda(void)
-{
-    uint32_t wanted = service_wanted;
-
-    service_wanted = 0;
-    hda_serve(wanted);
-}
-
 /**
  * The G50-70's beep with khda running: a tone and the tick's stop each hand
  * their divider to khda and send no verb, khda sends it, turning the
@@ -2463,6 +2560,7 @@ int main(void)
     row_play_gate();
     row_play_early();
     row_play_refilled();
+    row_play_delayed();
     row_shutdown();
     row_mix_width();
     row_capture_path();
@@ -2472,6 +2570,7 @@ int main(void)
     row_capture_duplex();
     row_capture_overrun();
     row_capture_early();
+    row_capture_delayed();
     row_capture_fails();
     row_input_controls();
     row_jack_switch();
