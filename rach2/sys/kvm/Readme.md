@@ -245,6 +245,7 @@ AMD's SYSCFG and NB_CFG MSRs read as zero, and NB_CFG writes are ignored, as Lin
 * Of KVM_GET_STATS_FD's statistics only those [Interfaces](#interfaces) names count. The rest read 0, the halt polling's times and histograms among them.
 * The TSC's rate is not scaled on a processor without the feature, where a rate below the host's is refused, as on Linux.
 * No EPT misconfiguration is expected, since the tables use one memory type for each leaf, and one would be an internal error. A task switch whose TSS or tables are in no slot is the internal error Linux reports too, and a TSS's T bit raises no #DB in the new task, as in Linux.
+* A guest's counters are placed among the counters of one processor. Linux also keeps two hyperthreads from counting Sandy Bridge's, Ivy Bridge's and Haswell's memory events on the same counter, and AMD family 10h's processors of one node from counting northbridge events on the same counter, by sharing state between them, which Rach2 does not.
 
 ## Tests
 
