@@ -35,7 +35,10 @@
 # and print their big-lock held share, waits in entries, idle-take waits
 # and system/user ratio. The raw snapshots go to stdout too, since a
 # native case removes its workspace. Their GPU minimum is 1000 MHz for
-# the run and restored on exit, as 84's measurement requires.
+# the run and restored on exit, as 84's measurement requires; a forced stop
+# skips this script's exit trap, so the native cases also take the gpumin
+# fixture, with which etude-guest writes the minimum back once every
+# process of the case has ended (tests/native/gpu.cases).
 # Each run prints its
 # games.sh result line and then one line:
 #

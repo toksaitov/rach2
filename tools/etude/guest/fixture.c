@@ -1,9 +1,10 @@
 /*
  * fixture.c: the fixtures of a native case beyond its workspace: mapped ids
  * and ports, volumes on loop devices, a tmpfs, namespaces, a private root,
- * a pseudo-terminal and the kernel's records. etude-guest parses them with
- * the invocation, makes them before the child runs and removes them after
- * it ends; tools/etude/Readme.md, "Native runs", gives the contract.
+ * a pseudo-terminal, the kernel's records and the GPU's minimum clock.
+ * etude-guest parses them with the invocation, makes them before the child
+ * runs and removes them after it ends; tools/etude/Readme.md, "Native
+ * runs", gives the contract.
  */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -25,10 +26,10 @@
 #include <unistd.h>
 
 /*
- * The fixtures volume, root, tmpfs, mountns, ipcns, utsns, log and private
- * need the kernel's loop devices, mounts, namespaces or log, or its table of
- * mounts, which keeps the removal of `private` out of a mount left in it.
- * The code that makes them
+ * The fixtures volume, root, tmpfs, mountns, ipcns, utsns, log, private and
+ * gpumin need the kernel's loop devices, mounts, namespaces, log or /sys, or
+ * its table of mounts, which keeps the removal of `private` out of a mount
+ * left in it. The code that makes them
  * compiles where FIX_KERNEL is 1: on Linux, and on Rach2, whose cross
  * compiler defines no operating system and whose build of etude-guest
  * defines __rach2__. macOS has none of them, and the host tests compile this
@@ -286,6 +287,7 @@ static int read_flag(struct reading *r, const char *kind)
                 : strcmp(kind, "alone") == 0   ? &fx->alone
                 : strcmp(kind, "console") == 0 ? &fx->console
                 : strcmp(kind, "private") == 0 ? &fx->private_dir
+                : strcmp(kind, "gpumin") == 0  ? &fx->gpumin
                                                : NULL;
 
     if (!flag || r->n != 0)
@@ -303,11 +305,11 @@ static const struct {
                {"tmpfs", read_tmpfs},         {"peer", read_peer}};
 
 /** Whether the fixture `kind` needs the kernel's loop devices, mounts,
- * namespaces or log. */
+ * namespaces, log or /sys. */
 static int kernel_kind(const char *kind)
 {
-    static const char *const kinds[] = {"volume", "root",  "tmpfs", "mountns",
-                                        "ipcns",  "utsns", "log",   "private"};
+    static const char *const kinds[] = {"volume", "root", "tmpfs",   "mountns", "ipcns",
+                                        "utsns",  "log",  "private", "gpumin"};
     size_t i;
 
     for (i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
@@ -830,6 +832,127 @@ static int remove_private(const char *dir)
     return remove_below(path, st.st_dev);
 }
 
+/* The directory of the DRM cards whose minimum clocks `gpumin` keeps, each
+ * cardN/gt_min_freq_mhz of i915's, as Linux's. */
+#define GPU_CLASS "/sys/class/drm"
+
+/**
+ * Record the minimum GPU clock of each card in GPU_CLASS that has one in the
+ * attempt's record `DIR/fixtures`, as `gpumin PATH MHZ`, before the case
+ * starts, so that fixture_cleanup, or fixture_settle when etude-guest ends
+ * before the case, writes it back. A machine without such a card records
+ * nothing.
+ *
+ * @return 0, or -1 when a clock cannot be read or recorded.
+ */
+static int save_gpumin(const char *dir)
+{
+    DIR *d = opendir(GPU_CLASS);
+    struct dirent *e;
+    int rc = 0;
+
+    if (!d)
+        return errno == ENOENT ? 0 : -1;
+    while (rc == 0 && (e = readdir(d)) != NULL) {
+        char path[FIX_PATH], line[FIX_PATH + 32], mhz[16];
+        const char *digits = e->d_name + 4;
+        ssize_t n;
+        int fd;
+
+        if (strncmp(e->d_name, "card", 4) != 0 || !*digits ||
+            strspn(digits, "0123456789") != strlen(digits))
+            continue;
+        if (fpath(path, GPU_CLASS "/%s/gt_min_freq_mhz%s", e->d_name, "") < 0) {
+            rc = -1;
+            break;
+        }
+        if ((fd = open(path, O_RDONLY | O_CLOEXEC)) < 0) {
+            rc = errno == ENOENT ? 0 : -1;
+            continue;
+        }
+        n = read(fd, mhz, sizeof(mhz) - 1);
+        close(fd);
+        if (n <= 0) {
+            rc = -1;
+            break;
+        }
+        mhz[n] = '\0';
+        mhz[strcspn(mhz, "\n")] = '\0';
+        if (!mhz[0] || strspn(mhz, "0123456789") != strlen(mhz) ||
+            snprintf(line, sizeof(line), "gpumin %s %s", path, mhz) >= (int)sizeof(line))
+            rc = -1;
+        else
+            rc = remember(dir, line);
+    }
+    closedir(d);
+    return rc;
+}
+
+/** Write back the clock of a record's line `gpumin PATH MHZ`; 0, or -1 when
+ * the line does not parse or the write fails. */
+static int restore_gpumin(const char *line)
+{
+    char path[FIX_PATH], mhz[16];
+    const char *at = line + 7;
+    const char *sp = strrchr(at, ' ');
+    size_t len = sp ? (size_t)(sp - at) : 0;
+    int n, fd, rc;
+
+    if (!len || len >= sizeof(path) || strlen(sp + 1) + 2 > sizeof(mhz))
+        return -1;
+    memcpy(path, at, len);
+    path[len] = '\0';
+    n = snprintf(mhz, sizeof(mhz), "%s\n", sp + 1);
+    if ((fd = open(path, O_WRONLY | O_CLOEXEC)) < 0)
+        return -1;
+    rc = write(fd, mhz, (size_t)n) == n ? 0 : -1;
+    if (close(fd) < 0)
+        rc = -1;
+    return rc;
+}
+
+/**
+ * Read the attempt's record `DIR/fixtures` into `text`, of `cap` bytes,
+ * and point `line`, of `max` entries, at its lines.
+ *
+ * @return the count of lines, 0 when there is no record, or -1 when it
+ * exists and cannot be read.
+ */
+static int read_record(const char *dir, char *text, size_t cap, char **line, int max)
+{
+    char path[FIX_PATH];
+    ssize_t len;
+    int n = 0, fd;
+
+    if (fpath(path, "%s/fixtures%s", dir, "") < 0)
+        return -1;
+    if ((fd = open(path, O_RDONLY | O_CLOEXEC)) < 0)
+        return errno == ENOENT ? 0 : -1;
+    len = read(fd, text, cap - 1);
+    close(fd);
+    if (len < 0)
+        return -1;
+    text[len] = '\0';
+    line[0] = strtok(text, "\n");
+    while (n < max - 1 && line[n])
+        line[++n] = strtok(NULL, "\n");
+    return n;
+}
+
+/** Write back every GPU clock the attempt's record names, as fixture_cleanup
+ * does once the case has ended; 0, or -1 when one is not written back. */
+static int restore_gpumins(const char *dir)
+{
+    char text[8192];
+    char *line[64];
+    int n = read_record(dir, text, sizeof(text), line, 64), rc = n < 0 ? -1 : 0;
+
+    while (n-- > 0)
+        if (strncmp(line[n], "gpumin ", 7) == 0 && restore_gpumin(line[n]) < 0)
+            rc = -1;
+    return rc;
+}
+
 /** Make the fixtures of `fx` that need the kernel, as fixture_prepare
  * says; 0 or -1. */
 static int kernel_prepare(struct fixtures *fx, const char *dir)
@@ -839,6 +962,8 @@ static int kernel_prepare(struct fixtures *fx, const char *dir)
     if (fx->log && !(fx->log_before = read_log(&fx->log_before_len)))
         return -1;
     if (fx->private_dir && make_private(dir) < 0)
+        return -1;
+    if (fx->gpumin && save_gpumin(dir) < 0)
         return -1;
     for (i = 0; i < fx->nvol; i++) {
         char name[16];
@@ -1145,6 +1270,8 @@ static int kernel_cleanup(struct fixtures *fx, const char *dir)
     }
     if (fx->private_dir && remove_private(dir) < 0)
         rc = -1;
+    if (fx->gpumin && restore_gpumins(dir) < 0)
+        rc = -1;
     if (detach_left(dir) < 0)
         rc = -1;
     if (fx->log && keep_log(fx, dir) < 0)
@@ -1161,8 +1288,9 @@ static int kernel_cleanup(struct fixtures *fx, const char *dir)
  * Make the fixtures of the attempt in `dir`, whose workspace has the
  * invocation's files, in etude-guest itself: check that each id is no
  * account's and no process's, and that each port is free; read the
- * kernel's log; make the directory `private` of the workspace; attach each
- * volume and the root's image; mount the volumes
+ * kernel's log; make the directory `private` of the workspace; record each
+ * card's minimum GPU clock; attach each volume and the root's image; mount
+ * the volumes
  * and the tmpfs of a case without a mount namespace of its own; and open the
  * pseudo-terminal. What is made is written to `DIR/fixtures` as it is made.
  *
@@ -1260,8 +1388,9 @@ int fixture_enter(const struct fixtures *fx, const char *work, char *prog, size_
 /**
  * Remove the fixtures of the attempt in `dir` once its processes have
  * ended: close the pseudo-terminal, unmount what etude-guest mounted, remove
- * the directory `private` of the workspace with all it holds, detach the
- * loop devices on files of the attempt, its program's among them, and keep
+ * the directory `private` of the workspace with all it holds, write back
+ * each card's minimum GPU clock as it was before the case, detach the loop
+ * devices on files of the attempt, its program's among them, and keep
  * the kernel's records as `DIR/log`. A mount namespace of the case's
  * own has ended with its last process, and the kernel unmounted its mounts
  * then.
@@ -1285,11 +1414,12 @@ int fixture_cleanup(struct fixtures *fx, const char *dir)
 /**
  * Remove what an attempt whose etude-guest ended before it could left: the
  * mounts the record `DIR/fixtures` names, in the order opposite to their
- * making, and the directory `private` of the workspace when it names that,
- * then every loop device on a file under `DIR`. A mount is recorded
- * before it is made, so a name of the record that is not a mount point is
- * passed by. Only the fixtures that need the kernel write the record, so
- * where FIX_KERNEL is 0 there is nothing to remove.
+ * making, the directory `private` of the workspace when it names that, and
+ * each GPU clock it names written back, then every loop device on a file
+ * under `DIR`. A mount is recorded before it is made, so a name of the
+ * record that is not a mount point is passed by. Only the fixtures that
+ * need the kernel write the record, so where FIX_KERNEL is 0 there is
+ * nothing to remove.
  *
  * @return 0, or -1 when something is left, or when the record exists and
  * cannot be read, since the mounts it names are then unknown.
@@ -1300,26 +1430,17 @@ int fixture_settle(const char *dir)
     char path[FIX_PATH];
     char text[8192];
     char *line[64];
-    int n = 0, rc = 0, fd;
-    ssize_t len;
+    int n = read_record(dir, text, sizeof(text), line, 64), rc = 0;
 
-    if (fpath(path, "%s/fixtures%s", dir, "") < 0)
+    if (n < 0 || fpath(path, "%s/fixtures%s", dir, "") < 0)
         return -1;
-    if ((fd = open(path, O_RDONLY | O_CLOEXEC)) < 0)
-        return errno == ENOENT ? detach_left(dir) : -1;
-    len = read(fd, text, sizeof(text) - 1);
-    close(fd);
-    if (len < 0)
-        return -1;
-    text[len] = '\0';
-    line[0] = strtok(text, "\n");
-    while (n < 63 && line[n])
-        line[++n] = strtok(NULL, "\n");
     while (n-- > 0) {
         if (strncmp(line[n], "mount ", 6) == 0 && umount2(line[n] + 6, 0) < 0 && errno != EINVAL &&
             errno != ENOENT)
             rc = -1;
         if (strcmp(line[n], "private") == 0 && remove_private(dir) < 0)
+            rc = -1;
+        if (strncmp(line[n], "gpumin ", 7) == 0 && restore_gpumin(line[n]) < 0)
             rc = -1;
     }
     if (detach_left(dir) < 0)

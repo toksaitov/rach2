@@ -234,7 +234,7 @@
       "required": ["fixture"],
       "properties": {
         "fixture": {"enum": ["scratch", "workspace", "stage", "volume", "tmpfs", "mountns", "root", "ids",
-                             "ipcns", "utsns", "pty", "ports", "peer", "log", "alone", "console", "private", "disk"]},
+                             "ipcns", "utsns", "pty", "ports", "peer", "log", "alone", "console", "private", "gpumin", "disk"]},
         "names": {"$ref": "#/$defs/names"},
         "type": {"enum": ["krffs", "ext2", "vfat", "exfat", "ext2-dir"]},
         "size_bytes": {"$ref": "#/$defs/positive"},
