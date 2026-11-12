@@ -82,6 +82,9 @@ struct mm {
      * not moved (KVM's fault, tdp.c). */
     volatile uint32_t changing;
     volatile uint32_t changes;
+    /* The walk of `paging_zap_where` that last changed the space, under the
+     * big lock, so that a walk changes a space its threads share once. */
+    uint32_t zap_walk;
     struct page_dir *dir; /* NULL once the last user has gone */
     uintptr_t space_root; /* the directory's physical address; 0 with `dir` */
     vm_space_t vm;
