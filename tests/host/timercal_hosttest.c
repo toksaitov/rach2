@@ -1276,9 +1276,10 @@ static void idle_guest_period(void)
     apic_hr_init(1000000u);
     now_ns = MS(10000.2);
     apic_timer_start(1000000u, TICK_HZ);
+    CHECK(timer_tick_period() == 1, "a periodic timer exposes no one-shot prediction period");
     now_ns = MS(10001.2);
     CHECK(take_hr_event(APIC_TIMER_VECTOR) == APIC_HR_EVENT && c->oneshot &&
-              c->tick == (int64_t)MS(10004),
+              c->tick == (int64_t)MS(10004) && timer_tick_period() == 4,
           "a busy guest joins the four-millisecond phase on its first interrupt");
     now_ns = MS(10004);
     CHECK((take_hr_event(APIC_TIMER_VECTOR) & APIC_HR_TICK) != 0 && c->due == (int64_t)MS(10004) &&

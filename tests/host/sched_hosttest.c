@@ -40,9 +40,12 @@ static uint32_t irq_flags;
 static unsigned switches;
 static int failures;
 static int idle_timer_ready, idle_timer_exits, idle_timer_enters, idle_halts;
-static int idle_wake_on_enter, poll_wake;
+static int idle_wake_on_enter, poll_wake, poll_tick;
 static uint32_t poll_rate;
 static uint64_t poll_cycles;
+static uint32_t halt_cycles;
+static int halt_tick;
+static int64_t tick_due_model;
 static int affinity_step;
 static unsigned int affinity_kicks;
 static uint32_t rseq_area[8];
@@ -134,6 +137,22 @@ static unsigned int idle_halts, irq_windows;
 void arch_idle_masked(void)
 {
     idle_halts++;
+    poll_cycles += halt_cycles;
+    if (halt_tick) {
+        tick_due_model += 4000000;
+    }
+}
+
+/** The model selects the guest's four-millisecond scheduler period. */
+uint32_t timer_tick_period(void)
+{
+    return 4;
+}
+
+/** Return the last modeled scheduler tick's expiry. */
+int64_t timer_tick_due(void)
+{
+    return tick_due_model;
 }
 
 /** Nothing: the host model has no lockup detector. */
@@ -1518,6 +1537,12 @@ static void nohz_ready_entry(void)
 /** Deliver a ready thread from another modeled CPU during the poll. */
 static void poll_wake_step(void)
 {
+    if (poll_tick) {
+        poll_tick = 0;
+        tick_due_model += 4000000;
+        sched_account_tick(0, tick_due_model);
+        this_cpu()->idle_poll = CPU_POLL_KICKED;
+    }
     if (poll_wake) {
         poll_wake = 0;
         host_cpu = 1;
@@ -1566,6 +1591,63 @@ static void nohz_poll_before_stop(void)
     idle_timer_ready = 0;
 }
 
+/** A short non-tick wake retains the next tick; that tick clears the
+ * prediction and the next quiet idle entry stops it. */
+static void nohz_short_waits(void)
+{
+    unsigned int i;
+
+    setup();
+    for (i = 1; i < 7; i++) {
+        sched_forget(&procs[i]);
+    }
+    this_cpu()->idle = &procs[0];
+    this_cpu()->idle_short = 1;
+    this_cpu()->idle_poll_us = 0;
+    poll_rate = TICK_US;
+    halt_cycles = 100;
+    halt_tick = 0;
+    idle_timer_ready = 1;
+    idle_timer_enters = idle_halts = 0;
+    idle_wait_irq_off();
+    CHECK(!idle_timer_enters && idle_halts == 1 && this_cpu()->idle_short &&
+              !this_cpu()->tick_stopped,
+          "a predicted short wait retains the running tick without programming it");
+    halt_tick = 1;
+    idle_wait_irq_off();
+    CHECK(!idle_timer_enters && idle_halts == 2 && !this_cpu()->idle_short,
+          "a scheduler tick clears the short-wait prediction even on an early phase");
+    halt_tick = 0;
+    idle_wait_irq_off();
+    CHECK(idle_timer_enters == 1 && idle_halts == 3 && this_cpu()->tick_stopped,
+          "a quiet CPU stops at the next idle entry after its retained tick");
+    halt_cycles = halt_tick = 0;
+    poll_rate = 0;
+    idle_timer_ready = 0;
+}
+
+/** A logical tick during an open poll clears a retained-tick prediction
+ * even though the poll returns without another halt. */
+static void nohz_poll_tick(void)
+{
+    unsigned int i;
+
+    setup();
+    for (i = 1; i < 7; i++) {
+        sched_forget(&procs[i]);
+    }
+    this_cpu()->idle = &procs[0];
+    this_cpu()->idle_short = 1;
+    this_cpu()->idle_poll_us = 20;
+    poll_rate = TICK_US;
+    poll_tick = 1;
+    idle_timer_enters = idle_halts = 0;
+    idle_wait_irq_off();
+    CHECK(!poll_tick && !idle_timer_enters && !idle_halts && !this_cpu()->idle_short,
+          "a tick in the open poll clears the prediction before returning to selection");
+    poll_rate = 0;
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(int argc, char **argv)
 {
@@ -1574,6 +1656,8 @@ int main(int argc, char **argv)
         nohz_switch();
         nohz_ready_entry();
         nohz_poll_before_stop();
+        nohz_short_waits();
+        nohz_poll_tick();
         dprintf(1, "sched-hosttest: idle: %s\n", failures ? "fail" : "pass");
         return failures != 0;
     }
@@ -1604,6 +1688,8 @@ int main(int argc, char **argv)
     nohz_switch();
     nohz_ready_entry();
     nohz_poll_before_stop();
+    nohz_short_waits();
+    nohz_poll_tick();
     if (failures) {
         return 1;
     }

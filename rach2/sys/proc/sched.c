@@ -1564,6 +1564,9 @@ void sched_account_tick(int user, int64_t due)
                                                     : ACCOUNT_SYSTEM;
     int held = found;
 
+    if (due != 0 && cpu->idle_wait) {
+        cpu->idle_short = 0;
+    }
     if (gap < (int64_t)TICK_NS) {
         return;
     }
@@ -1736,6 +1739,34 @@ static int idle_stop_tick(void)
     return !current_proc->need_resched;
 }
 
+/** Halt with the idle tick stopped for a long wait, or retained after a
+ * short non-tick wake, as Linux's idle governors retain it for a predicted
+ * interval below one tick. IRQs are off and no lock is held. Return one
+ * after a halt, zero when ready work declines it. A real scheduler tick
+ * clears the prediction, so a quiet CPU stops at its next idle entry. */
+static int idle_sleep(int stop_tick, uint32_t per_us)
+{
+    struct percpu *cpu = this_cpu();
+    uint64_t begin = 0;
+    int64_t tick = timer_tick_due();
+
+    if (stop_tick && (cpu->tick_stopped || !cpu->idle_short) && !idle_stop_tick()) {
+        return 0;
+    }
+    if (stop_tick && current_proc->need_resched) {
+        return 0;
+    }
+    if (stop_tick && per_us != 0) {
+        begin = arch_cycles();
+    }
+    arch_idle_masked();
+    if (stop_tick && per_us != 0) {
+        cpu->idle_short = timer_tick_period() > 1u && timer_tick_due() == tick &&
+                          arch_cycles() - begin < (uint64_t)timer_tick_period() * TICK_US * per_us;
+    }
+    return 1;
+}
+
 /**
  * Wait with the big lock let go. The scheduler idle task polls with its
  * existing tick and interrupts on: the interrupt routers mark the poll kicked,
@@ -1818,10 +1849,9 @@ static void idle_halt(int stop_tick)
             return;
         }
     }
-    if (stop_tick && !idle_stop_tick()) {
+    if (!idle_sleep(stop_tick, per_us)) {
         return;
     }
-    arch_idle_masked();
     if (!polling) {
         return;
     }
