@@ -353,19 +353,91 @@ static int frame_plan(struct ext2_mount *em, const struct ext2_node *n, uint32_t
     return 0;
 }
 
-/**
- * Read `left` pages from page `pg` of `n`, whose plans are `plan`, into
- * `frames`, under `n`'s lock: a run of pages whose sectors follow each
- * other in one transfer straight into the frames (`block_read_frames`), a
- * hole as zeros and a copied page through `ext2_read`; the bytes past the
- * file's size are cleared. The pages filled, from the first; or the first
- * page's error.
- */
-static int32_t frame_fill(struct vfs_mount *mnt, struct ext2_node *n, uint32_t pg, uint32_t left,
-                          const uint64_t *plan, const uintptr_t *frames)
+/* The pages one call of `frame_fill` reads and how. */
+struct frame_read {
+    struct vfs_mount *mnt;
+    struct ext2_node *n;
+    const uint64_t *plan;    /* `frame_plan`'s answer for each page */
+    const uintptr_t *frames; /* a frame for each page */
+    /* The completion of a read that does not wait, its `index` that of
+     * `frames[0]`; NULL for a read that waits. */
+    const struct block_frames_done *done;
+};
+
+/** Report pages `i` to `i + run - 1` of `fr` ended, with `status`, to its
+ * completion. */
+static void frame_done(const struct frame_read *fr, uint32_t i, uint32_t run, int status)
 {
-    struct ext2_mount *em = ext2_em_of(mnt);
-    uint64_t size = n->size;
+    fr->done->fn(fr->done->arg, fr->done->index + i, fr->frames + i, run, status);
+}
+
+/**
+ * Start the `run` pages from page `i` of `fr`, whose sectors follow each
+ * other from `fr->plan[i]`, without a wait (`block_read_frames_async`),
+ * and read in the call and report what the device took no request for.
+ * -EAGAIN when the device or the caller takes no read so, nothing read;
+ * otherwise 0, or the error the pages not started were reported with.
+ */
+static int frame_start(const struct frame_read *fr, uint32_t i, uint32_t run)
+{
+    block_device_t *dev = ext2_em_of(fr->mnt)->dev;
+    struct block_frames_done at = *fr->done;
+    uint32_t sectors = run * (PAGE_SIZE / BLOCK_SECTOR_SIZE), started;
+    int got, rc;
+
+    at.index += i;
+    got = block_read_frames_async(dev, fr->plan[i], sectors, fr->frames + i, &at);
+    if (got == -EAGAIN) {
+        return got;
+    }
+    started = got > 0 ? (uint32_t)got / (PAGE_SIZE / BLOCK_SECTOR_SIZE) : 0;
+    rc = got < 0 ? got : 0;
+    if (rc == 0 && started < run) {
+        rc = block_read_frames(dev, fr->plan[i] + (uint32_t)got, sectors - (uint32_t)got,
+                               fr->frames + i + started);
+    }
+    if (started < run) {
+        frame_done(fr, i + started, run - started, rc);
+    }
+    return rc;
+}
+
+/** Read page `i` of `fr`, at byte `at` of its node, as `ext2_read` reads
+ * it, with zeros past what it gives. 0 or the error. */
+static int frame_copy(const struct frame_read *fr, uint32_t i, uint64_t at)
+{
+    uint8_t *page = kmap_temp(fr->frames[i]);
+    int32_t rc = page ? ext2_read(fr->mnt, fr->n, page, PAGE_SIZE, at) : -EIO;
+
+    if (rc >= 0 && rc < (int32_t)PAGE_SIZE) {
+        k_memset(page + rc, 0, PAGE_SIZE - (uint32_t)rc);
+    }
+    if (page) {
+        kunmap_temp(page);
+    }
+    return rc < 0 ? rc : 0;
+}
+
+/**
+ * Read `left` pages of `fr` from page `pg` of its node, under the node's
+ * lock: a run of pages whose sectors follow each other in one transfer
+ * straight into the frames (`block_read_frames`), a hole as zeros and a
+ * copied page through `ext2_read`; the bytes past the file's size are
+ * cleared. The pages filled, from the first, with `*err` the error that
+ * stopped the fill, or 0.
+ *
+ * With `fr->done` a run goes to the device without a wait (`frame_start`),
+ * and the completion is called for each page once: by the device's answer
+ * for a run so started, and here for a hole, a copied page, a run the
+ * device takes no such read of and the file's last page, which is cleared
+ * past the size after its transfer. The pages counted then are those the
+ * completion was or will be called for, a failed one among them.
+ */
+static uint32_t frame_fill(const struct frame_read *fr, uint32_t pg, uint32_t left, int *err)
+{
+    struct ext2_mount *em = ext2_em_of(fr->mnt);
+    const uint64_t *plan = fr->plan;
+    uint64_t size = fr->n->size;
     uint32_t i = 0, run;
     int32_t rc = 0;
     uint8_t *page;
@@ -374,44 +446,60 @@ static int32_t frame_fill(struct vfs_mount *mnt, struct ext2_node *n, uint32_t p
         uint64_t at = (uint64_t)(pg + i) * PAGE_SIZE;
 
         if (plan[i] == EXT2_PAGE_HOLE) {
-            rc = paging_zero_frame(frames[i]) == 0 ? 0 : -EIO;
+            rc = paging_zero_frame(fr->frames[i]) == 0 ? 0 : -EIO;
             run = 1;
         } else if (plan[i] == EXT2_PAGE_COPY) {
-            page = kmap_temp(frames[i]);
-            rc = page ? ext2_read(mnt, n, page, PAGE_SIZE, at) : -EIO;
-            if (rc >= 0 && rc < (int32_t)PAGE_SIZE) {
-                k_memset(page + rc, 0, PAGE_SIZE - (uint32_t)rc);
-            }
-            if (page) {
-                kunmap_temp(page);
-            }
-            rc = rc < 0 ? rc : 0;
+            rc = frame_copy(fr, i, at);
             run = 1;
         } else {
             for (run = 1; i + run < left && plan[i + run] > EXT2_PAGE_COPY &&
                           plan[i + run] == plan[i] + run * (PAGE_SIZE / BLOCK_SECTOR_SIZE);
                  run++) {
             }
+            if (fr->done && at + (uint64_t)run * PAGE_SIZE > size && run > 1) {
+                run--; /* the last page, cleared past the size, is read in the call */
+            }
+            rc = fr->done && at + (uint64_t)run * PAGE_SIZE <= size ? frame_start(fr, i, run)
+                                                                    : -EAGAIN;
+            if (rc != -EAGAIN) {
+                i += run;
+                if (rc != 0) {
+                    break;
+                }
+                continue;
+            }
             rc = block_read_frames(em->dev, plan[i], run * (PAGE_SIZE / BLOCK_SECTOR_SIZE),
-                                   frames + i);
+                                   fr->frames + i);
         }
         if (rc != 0) {
+            if (fr->done) {
+                frame_done(fr, i, run, rc);
+                i += run;
+            }
             break;
         }
         i += run;
         if (at + (uint64_t)run * PAGE_SIZE > size && plan[i - 1] > EXT2_PAGE_COPY) {
-            page = kmap_temp(frames[i - 1]);
+            page = kmap_temp(fr->frames[i - 1]);
             if (!page) {
                 rc = -EIO;
-                i--;
+                if (fr->done) {
+                    frame_done(fr, i - run, run, rc);
+                } else {
+                    i--;
+                }
                 break;
             }
             k_memset(page + (uint32_t)(size & (PAGE_SIZE - 1)), 0,
                      PAGE_SIZE - (uint32_t)(size & (PAGE_SIZE - 1)));
             kunmap_temp(page);
         }
+        if (fr->done) {
+            frame_done(fr, i - run, run, 0);
+        }
     }
-    return i > 0 ? (int32_t)i : rc;
+    *err = rc;
+    return i;
 }
 
 /**
@@ -433,16 +521,23 @@ static int32_t frame_fill(struct vfs_mount *mnt, struct ext2_node *n, uint32_t p
  * is read, as Linux's locked folio holds off a truncation of its page until
  * its read ends (`truncate_inode_pages_range`, mm/truncate.c). The pages
  * filled, 0 at or past the end, -EISDIR, or the first page's error.
+ *
+ * With `done_with` not NULL the runs go to the device without a wait and the
+ * answer is the pages started, its completion being called for each as
+ * `frame_fill` says, from page `first` on as `vfs_ops` says; a read still in
+ * flight then holds no lock, and a free of its blocks waits for it instead
+ * (`ext2_punch`).
  */
 int32_t ext2_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, uint32_t count,
-                         const uintptr_t *frames)
+                         const uintptr_t *frames, const struct block_frames_done *done_with)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
     struct ext2_node *n = handle;
+    struct block_frames_done at;
+    struct frame_read fr;
     uint64_t small[EXT2_FRAMES_PLAN], *plan = small, size;
-    uint32_t done = 0, pages, left, i, room = EXT2_FRAMES_PLAN;
-    int32_t got;
-    int rc = 0;
+    uint32_t done = 0, pages, left, i, room = EXT2_FRAMES_PLAN, got;
+    int rc = 0, err;
 
     if ((n->mode & S_IFMT_) != S_IFREG_) {
         return (n->mode & S_IFMT_) == S_IFDIR_ ? -EISDIR : -EINVAL;
@@ -479,13 +574,23 @@ int32_t ext2_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, ui
         if (i == 0) {
             break;
         }
-        got = frame_fill(mnt, n, first + done, i, plan, frames + done);
-        if (got <= 0) {
-            rc = got;
+        fr.mnt = mnt;
+        fr.n = n;
+        fr.plan = plan;
+        fr.frames = frames + done;
+        fr.done = NULL;
+        if (done_with) {
+            at = *done_with;
+            at.index += done;
+            fr.done = &at;
+        }
+        got = frame_fill(&fr, first + done, i, &err);
+        if (got == 0) {
+            rc = err;
             break;
         }
-        done += (uint32_t)got;
-        if ((uint32_t)got < i || rc != 0) {
+        done += got;
+        if (got < i || err != 0 || rc != 0) {
             break;
         }
     }
@@ -659,6 +764,25 @@ static int punch_from(struct ext2_mount *em, struct ext2_node *n, uint32_t keep,
     return 0;
 }
 
+/** Wait for the reads started without a wait (`ext2_read_frames`) that are
+ * still in flight over the blocks of `list`, from the lowest to the
+ * highest, before they go back to the allocator, since such a read holds
+ * no lock of the file's. */
+static void punch_settle(struct ext2_mount *em, const struct punch_list *list)
+{
+    uint32_t lo = 0xFFFFFFFFu, hi = 0;
+    int i;
+
+    for (i = 0; i < list->count; i++) {
+        lo = list->blocks[i] < lo ? list->blocks[i] : lo;
+        hi = list->blocks[i] > hi ? list->blocks[i] : hi;
+    }
+    if (list->count > 0) {
+        block_settle(em->dev, ((uint64_t)lo << em->block_shift) >> 9,
+                     ((uint64_t)(hi - lo + 1u) << em->block_shift) >> 9);
+    }
+}
+
 /**
  * Free the blocks of `n` from data index `keep` on, in two phases a round,
  * under `n`'s lock. First up to PUNCH_BLOCKS pointers are cleared from the
@@ -673,16 +797,18 @@ static int punch_from(struct ext2_mount *em, struct ext2_node *n, uint32_t keep,
  * a block.
  *
  * A batch that holds `n` is drained first, so that no block is freed while a
- * pending piece names it. A failure still frees what its round listed, in
- * the same order, once the inode is stored and a strict mount's sync has
- * put the pointers on the medium; otherwise the blocks stay taken, lost
- * blocks for e2fsck, and the free counts stay exact. A device that failed a
- * write is -EIO and not written to again: the blocks go to the cache first
- * and would reach the device at the sync that ends the round, past the check
- * a write through makes. A round ends at a service point, since a file of
- * gigabytes in the cache frees with no sleep and what is ready on the
- * processor waits for it; a device that failed meanwhile stops the next
- * round. The caller holds `n`'s lock and not `em->batch`. 0, or -errno.
+ * pending piece names it, and a round's blocks are freed only once no read of
+ * them started without a wait is still in flight (`punch_settle`). A failure
+ * still frees what its round listed, in the same order, once the inode is
+ * stored and a strict mount's sync has put the pointers on the medium;
+ * otherwise the blocks stay taken, lost blocks for e2fsck, and the free counts
+ * stay exact. A device that failed a write is -EIO and not written to again:
+ * the blocks go to the cache first and would reach the device at the sync that
+ * ends the round, past the check a write through makes. A round ends at a
+ * service point, since a file of gigabytes in the cache frees with no sleep and
+ * what is ready on the processor waits for it; a device that failed meanwhile
+ * stops the next round. The caller holds `n`'s lock and not `em->batch`. 0, or
+ * -errno.
  */
 int ext2_punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
 {
@@ -716,6 +842,7 @@ int ext2_punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
             err = ext2_em_sync(em);
         }
         if (err == 0) {
+            punch_settle(em, &list);
             err = ext2_punch_free(em, n, &list);
         }
         if (err == 0) {

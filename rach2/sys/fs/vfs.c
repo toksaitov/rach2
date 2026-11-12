@@ -3023,7 +3023,7 @@ int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
 }
 
 int32_t vfs_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, uint32_t count,
-                        const uintptr_t *frames)
+                        const uintptr_t *frames, const struct block_frames_done *done)
 {
     if (vfs_mount_gone(mnt)) {
         return -EIO;
@@ -3031,7 +3031,7 @@ int32_t vfs_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, uin
     if (!mnt->type->ops->read_frames) {
         return -ENOSYS;
     }
-    return mnt->type->ops->read_frames(mount_base(mnt), handle, first, count, frames);
+    return mnt->type->ops->read_frames(mount_base(mnt), handle, first, count, frames, done);
 }
 
 /** The node behind `handle`, a handle the open of a file on `mnt` gave:
