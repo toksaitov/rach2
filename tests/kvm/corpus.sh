@@ -134,10 +134,12 @@ fi
 if [ "$kind" = unit ]; then
     cp -R "$tree" "$work/kut" || exit 1
     # One run of the runner a test, so that each test's seconds are known.
+    # Each run empties the runner's log directory, so each test has its own.
+    mkdir "$work/logs" || exit 1
     while read -r name _; do
         start=$(date +%s)
         (cd "$work/kut" && ACCEL=kvm,kernel-irqchip=split TIMEOUT=0 \
-            ./run_tests.sh -a "$name") >> "$work/out" 2>&1
+            unittest_log_dir="$work/logs/$name" ./run_tests.sh -a "$name") >> "$work/out" 2>&1
         echo "$name $(($(date +%s) - start))" >> "$work/secs"
         # A sign of progress while the run goes on.
         echo "kvm-corpus: $name: ran" >&2
@@ -181,7 +183,7 @@ while read -r name expect; do
     else
         echo "kvm-corpus: $name: $got: expected $expect, ${secs:-0} s"
         # The runner's log of the test names each subtest's result.
-        log=$work/kut/logs/$name.log
+        log=$work/logs/$name/$name.log
         [ "$kind" != unit ] || [ ! -f "$log" ] ||
             sed "s/$(printf '\033')\\[[0-9;]*m//g" "$log" >&2
         bad=$((bad + 1))
