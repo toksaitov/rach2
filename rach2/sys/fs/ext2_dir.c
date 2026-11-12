@@ -1984,14 +1984,21 @@ static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
 
 /**
  * The rename of file `n` from `r->oldname` in `r->od` to `r->newname` in
- * `r->nd`, over the file `victim` at `nat` when it is not NULL, for
- * `ext2_rename`, whose caller holds every lock: the count raised, the new
- * entry written or the victim's entry pointed at `n`, the victim's count
- * lowered as unlink lowers it, the old entry removed and the count lowered
- * again. 0, -ENOENT, or -errno.
+ * `r->nd`, over the file `victim` whose entry is `nsc` at `nat` when it is
+ * not NULL, for `ext2_rename`, whose caller holds every lock: the count
+ * raised, the new entry written or the victim's entry pointed at `n`, the
+ * victim's count lowered as unlink lowers it, the old entry removed and the
+ * count lowered again. 0, -ENOENT, or -errno.
+ *
+ * The victim's entry takes `n`'s inode number and file type, 0 on a volume
+ * without the filetype feature, in one write of its 8-byte header, as
+ * Linux's `ext2_set_link` sets both and commits them as one chunk
+ * (fs/ext2/dir.c:463-465 in Linux 6.12.115), so that no stop on a strict
+ * mount leaves the entry naming `n` with the victim's type, which e2fsck
+ * calls a fault when a link is renamed over a regular file.
  */
 static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
-                       struct ext2_node *victim, uint32_t nat)
+                       struct ext2_node *victim, const struct ext2_scan *nsc, uint32_t nat)
 {
     struct ext2_mount *em = r->em;
     struct ext2_node *od = r->od;
@@ -2009,7 +2016,7 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
     }
     if (victim) {
         uint64_t off;
-        uint8_t raw[4];
+        uint8_t raw[8];
 
         rc = dir_block_at(em, nd, nat, &off);
         if (rc == 0) {
@@ -2018,12 +2025,10 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
         if (rc == 0) {
             dir_changed(nd);
             LE32_PUT(raw, n->ino);
-            rc = ext2_write_bytes(em, off, raw, 4, 1);
-        }
-        if (rc == 0 && (em->incompat & EXT2_INCOMPAT_FILETYPE)) {
-            uint8_t ft = (uint8_t)ext2_ftype_of(n->mode);
-
-            rc = ext2_write_bytes(em, off + 7, &ft, 1, 1);
+            LE16_PUT(raw + 4, nsc->rec_len);
+            raw[6] = (uint8_t)nsc->name_len;
+            raw[7] = (em->incompat & EXT2_INCOMPAT_FILETYPE) ? (uint8_t)ext2_ftype_of(n->mode) : 0;
+            rc = ext2_write_bytes(em, off, raw, 8, WRITE_THROUGH);
         }
         if (rc != 0) {
             return rc;
@@ -2172,7 +2177,7 @@ int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *
         if (rc == 0 && (n->mode & S_IFMT_) == S_IFDIR_) {
             rc = rename_dir(&names, n, victim, &nsc, nat, nprev);
         } else if (rc == 0) {
-            rc = rename_file(&names, n, victim, nat);
+            rc = rename_file(&names, n, victim, &nsc, nat);
         }
         if (second) {
             ext2_node_unlock(second);
