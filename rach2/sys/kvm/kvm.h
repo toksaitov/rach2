@@ -347,8 +347,8 @@ struct kvm_vm {
      * page is written again (`kvm_hv_clock_changed`). Set by pvclock.c,
      * taken by an exchange under the big lock (`kvm_hv_prepare`). */
     volatile uint32_t hv_clock_moved;
-    /* Over `msr_filter`, which a guest's MSR exit reads (msr.c), as
-     * Linux's kvm->srcu over its filter. */
+    /* Over `msr_filter` and `pmu_filter`, which a guest's exits read
+     * (msr.c, pmu.c), as Linux's kvm->srcu over both filters. */
     struct spinlock filter_lock;
     struct kvm_vcpu *vcpus[KVM_MAX_VCPUS];
     uint32_t nr_vcpus;
@@ -401,7 +401,7 @@ struct kvm_vm {
     struct kvm_coalesced_mmio_ring *ring; /* the page of coalesced writes, every vCPU's third */
     void *vfio;                           /* vfio.c's bridge; holds a VM reference */
     void *hv;                             /* hyperv.c's */
-    void *pmu_filter;                     /* pmu.c's event filter, read under the big lock */
+    void *pmu_filter;                     /* pmu.c's event filter, under `filter_lock` */
     int pmu_disabled;                     /* KVM_CAP_PMU_CAPABILITY, set before vCPUs exist */
     void *backend;                        /* the backend's */
     void *gpamap;                /* gpamap.c's: the maps of the guest's pages into programs */
