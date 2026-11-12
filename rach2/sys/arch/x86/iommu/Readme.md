@@ -21,7 +21,7 @@ Words of the boot line change this, as Linux's do ([the command line](../../../.
 
 With both words, as on Linux, no unit is programmed: each unit's version, capabilities and status are read and logged, translation is turned off only if the firmware left it on, and nothing else is written. The log says `vtd: off by intel_iommu=off intremap=off: N units read`.
 
-A blocked DMA request or interrupt is logged with Linux's words for its reason, up to 32 for each unit, and every one recorded is counted in `/proc/stat` (`iommu_dma_faults`, `iommu_irq_faults`). How the handler reads the records is in Fault reports, below. A fault that finds every record full is lost; the unit says so only by its overflow bit, which counts as one DMA fault and is logged as `vtd: fault: dmarN: faults lost, every record full: K times, so F DMA faults is a floor`:
+A blocked DMA request or interrupt is logged with Linux's words for its reason, up to 32 for each unit, and every one recorded is counted in `/proc/stat` (`iommu_dma_faults`, `iommu_irq_faults`). How the handler reads the records is in Fault reports, below. A fault that finds every record full is lost; the unit says so only by its overflow bit, which counts as one DMA fault and is logged as `vtd: fault: dmarN: faults lost, every record full: K times, so F DMA faults is a floor`, for the first 32 passes of each unit that find it set; after them `vtd: fault: dmarN: further losses counted, not logged`:
 
     vtd: fault: dmar0: dma write from 0:2.0 at 0x200000: reason 0x5, PTE Write access is not set
     vtd: fault: dmar0: interrupt from 0:1f.2, index 0x3: reason 0x26, Blocked an interrupt request due to source-id verification failure
@@ -77,7 +77,7 @@ QEMU's intel-iommu does not reflect GCMD.CFI in its status register, so the driv
 
 ### Fault reports
 
-Each unit's fault event is a message on one vector of the boot processor, whose handler reads every unit's fault recording registers from the one the status register gives until one is empty, clearing each and dropping the unit's lock to log it, as Linux's `dmar_fault` does. A fault lost while every record was full (FSTS.PFO) is counted and logged once each time. The Lenovo's units have one record each, which a device that keeps faulting refills as fast as the handler reads it; so a pass reads at most 32 records, unlike `dmar_fault`, and leaves the rest to the next tick (`iommu_tick`), since a record left full keeps PPF set and the unit raises no new event for it.
+Each unit's fault event is a message on one vector of the boot processor, whose handler reads every unit's fault recording registers from the one the status register gives until one is empty, clearing each and dropping the unit's lock to log it, as Linux's `dmar_fault` does. A fault lost while every record was full (FSTS.PFO) is counted once each pass that finds it, and logged for a unit's first 32 such passes only, since a device that keeps faulting sets it on nearly every pass and the passes then run on every tick, 1000 a second; Linux rate-limits `dmar_fault`'s lines for the same reason (`drivers/iommu/intel/dmar.c:1964-1971` in 6.12.115). The Lenovo's units have one record each, which a device that keeps faulting refills as fast as the handler reads it; so a pass reads at most 32 records, unlike `dmar_fault`, and leaves the rest to the next tick (`iommu_tick`), since a record left full keeps PPF set and the unit raises no new event for it.
 
 ### Why Debian translates DMA on the Lenovo without `intel_iommu=on`
 
@@ -119,6 +119,7 @@ So every device of the Lenovo is translated, the GPU in a group of its own with 
 * `intel_iommu=off` and `intremap=off`, and both: the Lenovo's units read and no register written, or one command where the firmware left translation on. `noapic`: translation offered, remapping off, the local APIC not moved and a message as it was.
 * 42 faults: one lost while the record was full, 32 logged and the rest counted.
 * A device that refills the one record as fast as it is read: a pass reads 32 records and leaves the full one, and the next tick reads the other 9.
+* 40 passes that each find a fault lost: every loss counted, the first 32 logged and one line saying the rest are only counted.
 * A full remapping table: the message refused and not enabled.
 
 The boot checks were run by hand in QEMU 10.2.1 with `-machine q35 -device intel-iommu,intremap=on` and `rach2.rescue`, under the x86-64 kernel: with an AHCI disk, an NVMe disk and an e1000, every message and line was remapped; disk reads through the request queue raised the AHCI controller's MSI and the NVMe controller's MSI-X once each, pings over the e1000 were answered on its I/O APIC line, and no unit recorded a fault.

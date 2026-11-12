@@ -2394,6 +2394,35 @@ static void row_fault_bound(void)
     row_end();
 }
 
+/** A device that keeps faulting loses a fault on every pass: each loss is
+ * counted, and the first 32 passes that find one are logged. */
+static void row_fault_lost_limit(void)
+{
+    struct iommu_domain *d;
+    uint64_t phys;
+    int i;
+
+    row_begin("fault_lost_limit");
+    setup_qemu(CAP_QEMU, ECAP_QEMU);
+    check(vtd_start() == 1, "up");
+    d = iommu_domain_alloc();
+    check(iommu_attach(d, 0, DF(3, 0)) == 0, "NVMe attached to an empty domain");
+    for (i = 0; i < 40; i++) {
+        (void)m_dma(M(0), 0, DF(3, 0), 0x10000ull * (unsigned int)(i + 1), 0, &phys);
+        (void)m_dma(M(0), 0, DF(3, 0), 0x10000ull * (unsigned int)(i + 1) + 0x1000u, 0, &phys);
+        vtd_fault_all();
+    }
+    check(vtd_units[0].overflows == 40 && iommu_dma_faults() == 80, "every loss counted");
+    check(log_count("vtd: fault: dmar0: faults lost, every record full") == 32 &&
+              logged("vtd: fault: dmar0: faults lost, every record full: 32 times, so 64 DMA "
+                     "faults is a floor") &&
+              log_count("further losses counted, not logged") == 1,
+          "32 losses logged");
+    iommu_detach(d, 0, DF(3, 0));
+    iommu_domain_free(d);
+    row_end();
+}
+
 /** A full remapping table refuses a message, and the device keeps none. */
 static void row_irt_full(void)
 {
@@ -2450,6 +2479,7 @@ int main(void)
     row_read_only();
     row_fault_limit();
     row_fault_bound();
+    row_fault_lost_limit();
     row_irt_full();
     free(ecam_mem);
     if (fails != 0) {

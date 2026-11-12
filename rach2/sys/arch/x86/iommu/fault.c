@@ -29,7 +29,8 @@
 #include "../../../iommu.h"
 #include "../../../klog.h"
 
-/* A unit's faults logged before the rest are only counted. */
+/* A unit's faults logged before the rest are only counted, and its passes
+ * that found faults lost logged before the rest are only counted. */
 #define FAULT_LOG_LIMIT 32u
 
 /* The records one pass of a unit reads before it leaves the rest to the
@@ -132,7 +133,12 @@ static void fault_log(const struct vtd_unit *u, uint64_t lo, uint64_t hi, int wh
  * to FAULT_PASS_RECORDS of them, and the status bits that say so. A pass
  * that reaches the bound sets `u->fault_again`, and `iommu_tick` reads the
  * rest. A lost fault (PFO) counts as one DMA fault, since the unit does
- * not say how many it lost, and the log says the count is then a floor.
+ * not say how many it lost, and the log says the count is then a floor, for
+ * the first FAULT_LOG_LIMIT passes that find one; a device that keeps
+ * faulting sets PFO on nearly every pass, which then runs on every tick, so
+ * the rest are only counted, as Linux rate-limits dmar_fault's line of the
+ * status, which shows PFO, and of each record (drivers/iommu/intel/dmar.c:
+ * 1964-1971, :1980 in 6.12.115).
  * An error of a device's invalidation is counted and cleared; a refused
  * descriptor of the queue is left to the queue's submitter, which waits on
  * it. Takes `u->lock`, and drops it to log each record, as Linux's
@@ -185,10 +191,15 @@ void vtd_fault_unit(struct vtd_unit *u)
     if ((fsts & VTD_FSTS_PFO) != 0) {
         u->overflows++;
         u->dma_faults++;
-        klog(KLOG_ERR, "vtd",
-             "fault: dmar%d: faults lost, every record full: %lu times, so %lu DMA faults is a "
-             "floor",
-             u->index, u->overflows, u->dma_faults);
+        if (u->overflows <= FAULT_LOG_LIMIT) {
+            klog(KLOG_ERR, "vtd",
+                 "fault: dmar%d: faults lost, every record full: %lu times, so %lu DMA faults is "
+                 "a floor",
+                 u->index, u->overflows, u->dma_faults);
+        }
+        if (u->overflows == FAULT_LOG_LIMIT) {
+            klog(KLOG_ERR, "vtd", "fault: dmar%d: further losses counted, not logged", u->index);
+        }
     }
     vtd_hw_write32(u->regs, VTD_FSTS, (fsts & VTD_FSTS_PFO) | VTD_FSTS_PPF | VTD_FSTS_PRO);
     spin_unlock_irqrestore(&u->lock, flags);
