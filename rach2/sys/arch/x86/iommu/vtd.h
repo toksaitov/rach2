@@ -220,6 +220,10 @@ int intremap_x2apic(void);
 
 /* fault.c */
 int vtd_fault_start(void);
+
+/** Point the units' fault events again at the boot processor, by the id it
+ * answers to after its APIC changed mode. */
+void vtd_fault_retarget(void);
 void vtd_fault_unit(struct vtd_unit *u);
 void vtd_fault_all(void);
 const char *vtd_fault_reason(unsigned int reason, int *interrupt);

@@ -226,6 +226,36 @@ void iommu_tick(void)
     }
 }
 
+/* The fault events' vector, or -1 while `vtd_fault_start` has taken none. */
+static int fault_vector = -1;
+
+/**
+ * Point every unit's fault event at `fault_vector` of the boot processor,
+ * by the id it answers to in the mode it is in now. A unit's fault event is
+ * not remapped, so its message names the processor itself: the id's low
+ * eight bits in FEADDR and bits 8 to 31 in FEUADDR, the upper half of the
+ * message's address, as Linux composes the IOMMU's own message
+ * (`__irq_msi_compose_msg`, arch/x86/kernel/apic/apic.c, lines 2301 and
+ * 2302). The event is masked across the writes, so none goes to a half
+ * written address; one that comes meanwhile waits in FECTL.IP and is sent
+ * as it is unmasked.
+ */
+static void fault_aim(void)
+{
+    uint32_t id = vtd_hw_apic_id();
+    int i;
+
+    for (i = 0; i < vtd_nunits; i++) {
+        struct vtd_unit *u = &vtd_units[i];
+
+        vtd_hw_write32(u->regs, VTD_FECTL, VTD_FECTL_IM);
+        vtd_hw_write32(u->regs, VTD_FEDATA, (uint32_t)fault_vector);
+        vtd_hw_write32(u->regs, VTD_FEADDR, 0xFEE00000u | ((id & 0xFFu) << 12));
+        vtd_hw_write32(u->regs, VTD_FEUADDR, id >> 8);
+        vtd_hw_write32(u->regs, VTD_FECTL, 0);
+    }
+}
+
 /**
  * Point every unit's fault event at one message vector of this processor,
  * after reading the faults the firmware's time left: 0, or -1 when no
@@ -234,23 +264,22 @@ void iommu_tick(void)
  */
 int vtd_fault_start(void)
 {
-    int i, vector;
-
     vtd_fault_all();
-    vector = vtd_hw_fault_vector();
-    if (vector < 0) {
+    fault_vector = vtd_hw_fault_vector();
+    if (fault_vector < 0) {
         klog(KLOG_WARN, "vtd", "fault: no vector: faults go unreported");
         return -1;
     }
-    for (i = 0; i < vtd_nunits; i++) {
-        struct vtd_unit *u = &vtd_units[i];
-
-        vtd_hw_write32(u->regs, VTD_FECTL, VTD_FECTL_IM);
-        vtd_hw_write32(u->regs, VTD_FEDATA, (uint32_t)vector);
-        vtd_hw_write32(u->regs, VTD_FEADDR, 0xFEE00000u | (vtd_hw_apic_id() << 12));
-        vtd_hw_write32(u->regs, VTD_FEUADDR, 0);
-        vtd_hw_write32(u->regs, VTD_FECTL, 0);
-    }
+    fault_aim();
     vtd_fault_all();
     return 0;
+}
+
+/** The move to x2APIC mode gives the processor its whole x2APIC id, which
+ * may be wider than the eight bits `vtd_fault_start` aimed at. */
+void vtd_fault_retarget(void)
+{
+    if (fault_vector >= 0) {
+        fault_aim();
+    }
 }
