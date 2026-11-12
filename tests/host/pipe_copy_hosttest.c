@@ -68,6 +68,19 @@ static int lock_waits;
 /* The model's takes of the big lock, which the calls run without. */
 static int bkl_depth;
 static process_t writing_thread;
+/* Waits that end -EINTR before `wait_action` runs, which a row sets; a wait
+ * with no action ends so too. */
+static int interrupts;
+/* The ignored signals `signal_pending` discards, answering 0, before it
+ * answers 1, and the times it was asked. */
+static int ignored, pending_asks;
+/* The pool a growth's new ring comes from while `resizing` is set; with
+ * `poll_on_wake`, what a poller of the write end reads as a wake of the
+ * writers reaches it, -1 before one does. */
+static int resizing, poll_on_wake;
+static short woken_poll;
+static uint8_t grown_bytes[2 * PIPE_BUF_SIZE];
+static struct pipe_page grown_pages[2 * (2 * PIPE_BUF_SIZE / PAGE_SIZE) + 2];
 struct percpu cpu_table[NR_CPUS] = {{.current = &writing_thread}};
 
 #define CHECK(condition, detail)                                \
@@ -273,15 +286,21 @@ int paging_pin_allows(struct mm *mm, uintptr_t addr, int write)
     return 1;
 }
 
-/** A wait on a pipe's queue: run `wait_action` once, as a peer would run
- * while the caller sleeps, and return 0; -EINTR when no action is set. */
-int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+/** A sleep on a pipe's queue: -EINTR, the signal-work flag set, while
+ * `interrupts` counts one; otherwise run `wait_action` once, as a peer would
+ * run while the caller sleeps, and return 0, or -EINTR when no action is
+ * set. */
+static int model_sleep(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     void (*action)(void) = wait_action;
 
     CHECK(wq == &ring.read_wq || wq == &ring.write_wq, "wait uses pipe queue");
     CHECK(!cond(arg), "wait starts without readiness");
     waits++;
+    if (interrupts > 0) {
+        interrupts--;
+        return -EINTR;
+    }
     wait_action = NULL;
     if (!action) {
         return -EINTR;
@@ -291,6 +310,20 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
+/** A wait that judges a signal itself, as the kernel's `wq_wait_event` asks
+ * `signal_pending` in its sleep (proc/wait_queue.c) with no lock but its
+ * caller's: a sleep that the flag ends asks it, and sleeps again when it
+ * answers 0. */
+int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    int rc;
+
+    do {
+        rc = model_sleep(wq, cond, arg);
+    } while (rc == -EINTR && !signal_pending());
+    return rc;
+}
+
 /** A named wait, which the model takes as `wq_wait_event`. */
 int wq_wait_event_as(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
 {
@@ -298,22 +331,34 @@ int wq_wait_event_as(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *n
     return wq_wait_event(wq, cond, arg);
 }
 
-/** A wait the signal-work flag ends, which the model takes as
- * `wq_wait_event`: its -EINTR stands for the flag set. */
+/** A wait the signal-work flag ends, which asks nothing of the signal state:
+ * its -EINTR stands for the flag set. */
 int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
 {
     (void)name;
-    return wq_wait_event(wq, cond, arg);
+    return model_sleep(wq, cond, arg);
 }
 
-/** 1: the signal that set the flag ends the wait. */
+/** Whether a signal ends the wait whose flag was set: 0 for each signal
+ * `ignored` counts, which the kernel discards, and 1 after them. It reads
+ * and changes the signal state, so it is asked under the big lock, and with
+ * the pipes' locks given back, since the big lock comes before them. */
 int signal_pending(void)
 {
+    CHECK(bkl_depth == 1, "signal_pending is asked under the big lock");
+    CHECK(ring.lock.depth == 0 && out_ring.lock.depth == 0,
+          "signal_pending is asked with the pipes' locks given back");
+    pending_asks++;
+    if (ignored > 0) {
+        ignored--;
+        return 0;
+    }
     return 1;
 }
 
 /** Count the wakeups of each end's queue and the kinds of change they name,
- * waking nothing. */
+ * waking nothing; with `poll_on_wake`, poll the write end as a poller that
+ * a wake of the writers reaches, without the pipe's lock. */
 void wq_wake(wait_queue_t *wq, uint32_t kinds)
 {
     if (wq == &ring.read_wq) {
@@ -322,6 +367,9 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds)
     } else if (wq == &ring.write_wq) {
         write_wakes++;
         write_kinds |= kinds;
+        if (poll_on_wake) {
+            woken_poll = pipe_poll(&writer, PIPE_POLLOUT, NULL);
+        }
     } else {
         CHECK(0, "wake uses pipe queue");
     }
@@ -366,10 +414,16 @@ void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
     lock->locked = 0;
 }
 
-/** A failure: the test's pipe has its ring already. */
+/** A growth's new ring or slots from the pool while `resizing` is set;
+ * otherwise a failure, since the test's pipe has its ring already. */
 void *kmalloc(size_t n)
 {
-    (void)n;
+    if (resizing && n == sizeof(grown_bytes)) {
+        return grown_bytes;
+    }
+    if (resizing && n == sizeof(grown_pages)) {
+        return grown_pages;
+    }
     CHECK(0, "unexpected ring allocation");
     return NULL;
 }
@@ -382,10 +436,13 @@ void *kzalloc(size_t n)
     return NULL;
 }
 
-/** A failure: no row frees a pipe end. */
+/** The old ring and slots a growth gives back while `resizing` is set;
+ * otherwise a failure, since no row frees a pipe end. */
 void kfree(void *ptr)
 {
-    (void)ptr;
+    if (resizing && (ptr == ring_bytes || ptr == ring_pages)) {
+        return;
+    }
     CHECK(0, "unexpected pipe release");
 }
 
@@ -453,6 +510,9 @@ static void setup(uint32_t head)
     lock_waiter = NULL;
     lock_waits = 0;
     bkl_depth = 0;
+    interrupts = ignored = pending_asks = 0;
+    resizing = poll_on_wake = 0;
+    woken_poll = -1;
 }
 
 /** Read `peer_count` bytes through `pipe_read` into PEER_PAGE, as a peer
@@ -842,6 +902,75 @@ static void link_ends(void)
     }
 }
 
+/**
+ * A blocking read or write whose sleep the signal-work flag ends asks
+ * `signal_pending` once, under the big lock with the pipe's lock given
+ * back, and gives the big lock back after it: a signal that ends the wait
+ * makes the call -EINTR, and an ignored one sends it back to sleep, where a
+ * peer's write or read ends the wait with bytes or room. A wait that judged
+ * the signal itself (`wq_wait_event`) asked with no big lock, and a pipe's
+ * call holds none.
+ */
+static void interrupted_waits(void)
+{
+    uint8_t bytes[PIPE_BUF_SIZE];
+
+    setup(0);
+    read_ofd.status_flags = 0;
+    CHECK(pipe_read(&reader, user_at(0), 1) == -EINTR, "a read whose wait a signal ends is eintr");
+    CHECK(waits == 1 && pending_asks == 1 && bkl_depth == 0,
+          "an interrupted read asks signal_pending once and gives the big lock back");
+
+    setup(0);
+    read_ofd.status_flags = 0;
+    interrupts = ignored = 1;
+    peer_count = 2;
+    wait_action = peer_write;
+    CHECK(pipe_read(&reader, user_at(0), 8) == 2,
+          "a read whose wait an ignored signal ends sleeps again");
+    CHECK(waits == 2 && pending_asks == 1 && peer_result == 2 && bkl_depth == 0,
+          "a read asks signal_pending once for the ignored signal and reads the peer's bytes");
+
+    setup(0);
+    write_ofd.status_flags = 0;
+    k_memset(bytes, 0x11, sizeof(bytes));
+    pipe_ring_put(&ring, bytes, PIPE_BUF_SIZE);
+    interrupts = ignored = 1;
+    peer_count = PIPE_BUF_SIZE;
+    wait_action = peer_read;
+    CHECK(pipe_write(&writer, user_at(0), 3) == 3,
+          "a write whose wait an ignored signal ends sleeps again");
+    CHECK(waits == 2 && pending_asks == 1 && peer_result == PIPE_BUF_SIZE && bkl_depth == 0,
+          "a write asks signal_pending once for the ignored signal and takes the room a peer's "
+          "read gives");
+}
+
+/**
+ * F_SETPIPE_SZ that doubles a full pipe wakes its writers for room once the
+ * new size is stored, so a poller that the wake reaches, reading the pipe
+ * without its lock, finds the room, as Linux's `pipe_resize_ring` sets
+ * `max_usage` before its wake (fs/pipe.c:1322 and 1329 in 6.12); a wake
+ * before the store read the old size, found the pipe full and slept again.
+ * The bytes stay buffered in the new ring.
+ */
+static void grown_room(void)
+{
+    setup(0);
+    ring.buf_pages = ring_pages;
+    ring.buf_cap = pipe_buf_slots(ring.size);
+    pipe_ring_put(&ring, memory, PIPE_BUF_SIZE);
+    CHECK(pipe_poll(&writer, PIPE_POLLOUT, NULL) == 0, "a full pipe polls no room");
+    resizing = poll_on_wake = 1;
+    CHECK(pipe_set_size(&writer, 2 * PIPE_BUF_SIZE, 1) == 2 * PIPE_BUF_SIZE,
+          "a privileged F_SETPIPE_SZ doubles the pipe");
+    CHECK(write_wakes == 1 && write_kinds == WQ_ROOM, "a growth wakes the writers for room");
+    CHECK(woken_poll == PIPE_POLLOUT, "a poller the growth's wake reaches finds room");
+    CHECK(ring.buf == grown_bytes && ring.size == 2 * PIPE_BUF_SIZE &&
+              pipe_available(&ring) == PIPE_BUF_SIZE,
+          "a growth keeps the bytes in the new ring");
+    resizing = poll_on_wake = 0;
+}
+
 /** Whether the model's thread holds the big lock. */
 int bkl_held(void)
 {
@@ -875,6 +1004,8 @@ int main(void)
     later_page();
     fault_holds_pipe();
     link_ends();
+    interrupted_waits();
+    grown_room();
     printf("pipe-copy-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }
