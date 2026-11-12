@@ -1,0 +1,22 @@
+kvm-corpus: pmu: ran
+FAIL pmu (77 tests, 22 unexpected failures, 10 skipped)
+kvm-exits: kernel: linux 6.12.107+deb13-cloud-amd64
+kvm-exits: code 0x0 exits 1
+kvm-exits: code 0x4 exits 3
+kvm-exits: code 0x10 exits 1
+kvm-exits: code 0x14 exits 2
+kvm-exits: code 0x46 exits 1
+kvm-exits: code 0x60 exits 212
+kvm-exits: code 0x61 exits 3
+kvm-exits: code 0x64 exits 4
+kvm-exits: code 0x65 exits 31
+kvm-exits: code 0x6f exits 10
+kvm-exits: code 0x72 exits 602
+kvm-exits: code 0x73 exits 1
+kvm-exits: code 0x7b exits 7266
+kvm-exits: code 0x7c exits 410
+kvm-exits: code 0x89 exits 2
+kvm-exits: code 0x400 exits 280
+kvm-exits: total: 8829 exits in 6 s
+kvm-exits: debugfs: exits 0
+kvm-corpus: pmu: fail: as expected, 6 s

@@ -1,0 +1,59 @@
+FAIL pmu (77 tests, 26 unexpected failures, 10 skipped)
+kvm-exits: kernel: rach2 6.18.0-rach2
+kvm-exits: backend svm tsc_khz 4192043
+kvm-exits: code 0x0 exits 1 kernel 1 user 0 wait_cycles 0 handle_cycles 255360 prepare_cycles 63294 entry_cycles 75222 run_cycles 673554 exit_cycles 261954 read_cr0
+kvm-exits: code 0x4 exits 3 kernel 3 user 0 wait_cycles 0 handle_cycles 847854 prepare_cycles 129192 entry_cycles 240114 run_cycles 2050608 exit_cycles 564606 read_cr4
+kvm-exits: code 0x10 exits 1 kernel 1 user 0 wait_cycles 0 handle_cycles 412062 prepare_cycles 62832 entry_cycles 129948 run_cycles 761670 exit_cycles 228396 write_cr0
+kvm-exits: code 0x14 exits 2 kernel 2 user 0 wait_cycles 0 handle_cycles 2873934 prepare_cycles 67116 entry_cycles 170100 run_cycles 1286796 exit_cycles 350112 write_cr4
+kvm-exits: code 0x46 exits 1 kernel 1 user 0 wait_cycles 0 handle_cycles 142842 prepare_cycles 33180 entry_cycles 69636 run_cycles 777756 exit_cycles 143430 UD excp
+kvm-exits: code 0x60 exits 4548 kernel 4547 user 1 wait_cycles 2352 handle_cycles 1537393748 prepare_cycles 384704339 entry_cycles 1267616654 run_cycles 5403065052 exit_cycles 1754138546 interrupt
+kvm-exits: code 0x6f exits 10 kernel 10 user 0 wait_cycles 0 handle_cycles 1102542 prepare_cycles 800478 entry_cycles 1453620 run_cycles 7410312 exit_cycles 1801506 rdpmc
+kvm-exits: code 0x72 exits 602 kernel 598 user 4 wait_cycles 24360 handle_cycles 125997816 prepare_cycles 64085532 entry_cycles 144690714 run_cycles 510448869 exit_cycles 162987468 cpuid
+kvm-exits: code 0x7b exits 7528 kernel 24 user 7504 wait_cycles 0 handle_cycles 778713221 prepare_cycles 1599191 entry_cycles 553861759 run_cycles 5939646624 exit_cycles 1441654063 io
+kvm-exits: code 0x7c exits 490 kernel 490 user 0 wait_cycles 0 handle_cycles 114705696 prepare_cycles 49828968 entry_cycles 152503806 run_cycles 521490015 exit_cycles 142896937 msr
+kvm-exits: code 0x89 exits 1 kernel 1 user 0 wait_cycles 0 handle_cycles 181608 prepare_cycles 170268 entry_cycles 65268 run_cycles 709086 exit_cycles 118398 wbinvd
+kvm-exits: code 0x400 exits 16047 kernel 16043 user 4 wait_cycles 25368 handle_cycles 9911952287 prepare_cycles 1037664995 entry_cycles 1289636947 run_cycles 14436313945 exit_cycles 3315946950 npf
+kvm-exits: total: 29234 exits in 15 s
+FAIL: 10000000 <= 10400951 <= 10200000
+FAIL: AMD: instructions-0
+FAIL: 10000000 <= 10483984 <= 10200000
+FAIL: AMD: instructions-1
+FAIL: 10000000 <= 10453559 <= 10200000
+FAIL: AMD: instructions-2
+FAIL: 10000000 <= 10400061 <= 10200000
+FAIL: AMD: instructions-3
+FAIL: 10000000 <= 10503300 <= 10200000
+FAIL: AMD: instructions-4
+FAIL: 10000000 <= 10411691 <= 10200000
+FAIL: AMD: instructions-5
+FAIL: 1000000 <= 1112218 <= 1100000
+FAIL: AMD: branches-3
+FAIL: 1000000 <= 91189401 <= 50000000
+FAIL: AMD: all counters
+FAIL: AMD: overflow: cntr-0
+FAIL: AMD: overflow: cntr-1
+FAIL: AMD: overflow: cntr-2
+FAIL: AMD: overflow: cntr-3
+FAIL: AMD: overflow: cntr-4
+FAIL: AMD: overflow: cntr-5
+FAIL: 10000000 <= 10394800 <= 10200000
+FAIL: AMD: K7: instructions-0
+FAIL: 10000000 <= 10366810 <= 10200000
+FAIL: AMD: K7: instructions-1
+FAIL: 10000000 <= 10569655 <= 10200000
+FAIL: AMD: K7: instructions-2
+FAIL: 10000000 <= 10477438 <= 10200000
+FAIL: AMD: K7: instructions-3
+FAIL: 1000000 <= 1123342 <= 1100000
+FAIL: AMD: K7: branches-1
+FAIL: 1000000 <= 1104255 <= 1100000
+FAIL: AMD: K7: branches-2
+FAIL: 1000000 <= 1116348 <= 1100000
+FAIL: AMD: K7: branches-3
+FAIL: 10000000 <= 13011898 <= 10200000
+FAIL: AMD: K7: all counters
+FAIL: AMD: K7: overflow: cntr-0
+FAIL: AMD: K7: overflow: cntr-1
+FAIL: AMD: K7: overflow: cntr-2
+FAIL: AMD: K7: overflow: cntr-3
+SUMMARY: 77 tests, 26 unexpected failures, 10 skipped
