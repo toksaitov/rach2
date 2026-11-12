@@ -621,7 +621,7 @@ static void boundary_rows(void)
         check(ext2_write(&mount, &file, payload, sizeof(payload), offset) == sizeof(payload) &&
                   volume.free_blocks == 8 && file.blocks == rows[i].needed * 8,
               "boundary exact quota counts each missing pointer once");
-        check(read_data(&volume, &file, offset, result, sizeof(result)) == 0 &&
+        check(ext2_read_data(&volume, &file, offset, result, sizeof(result)) == 0 &&
                   memcmp(result, payload, sizeof(result)) == 0,
               "accepted boundary bytes read back");
         check(ext2_write(&mount, &file, payload, sizeof(payload), offset) == sizeof(payload),
@@ -669,8 +669,8 @@ static void reservation_rows(void)
     int metas, datas;
 
     reset(11);
-    node_lock(&file);
-    meta_lock(&volume);
+    ext2_node_lock(&file);
+    ext2_meta_lock(&volume);
     check(writeback_piece(&volume, &file, 0, payload, 4096) == 0, "accept an earlier piece");
     before = file;
     remaining = (uint32_t)volume.free_blocks;
@@ -681,21 +681,22 @@ static void reservation_rows(void)
     check(volume.free_blocks == remaining && memcmp(&before, &file, sizeof(file)) == 0 &&
               batch.metas == metas && batch.datas == datas && batch.count == 1 && writes == 0,
           "refused piece preserves the earlier pending piece");
-    check(writeback_drain(&volume) == 0 && read_data(&volume, &file, 0, result, 4096) == 0 &&
+    check(ext2_writeback_drain(&volume) == 0 &&
+              ext2_read_data(&volume, &file, 0, result, 4096) == 0 &&
               memcmp(result, payload, 4096) == 0,
           "earlier piece survives a refused reservation");
-    meta_unlock(&volume);
-    node_unlock(&file);
+    ext2_meta_unlock(&volume);
+    ext2_node_unlock(&file);
 
     reset(2);
     process.euid = 0;
-    node_lock(&file);
-    meta_lock(&volume);
+    ext2_node_lock(&file);
+    ext2_meta_lock(&volume);
     check(writeback_piece(&volume, &file, (uint64_t)1036 * 4096, payload, 4096) == -ENOSPC &&
               volume.free_blocks == 2 && batch.count == 0,
           "root cannot reserve more blocks than are free");
-    meta_unlock(&volume);
-    node_unlock(&file);
+    ext2_meta_unlock(&volume);
+    ext2_node_unlock(&file);
 }
 
 /** Whether block `b`'s bit is set in the model disk's block bitmap. */
@@ -721,8 +722,9 @@ static void miss_rows(void)
     check(misses == 1, "meets the miss once and restarts");
     check(batch.metas == 3 && batch.datas == 1 && batch.count == 1,
           "and keeps one image of each block it took");
-    check(writeback_drain(&volume) == 0 && bit_on(TEST_BLOCKS - 20) &&
-              read_data(&volume, &file, 0, result, 4096) == 0 && memcmp(result, payload, 4096) == 0,
+    check(ext2_writeback_drain(&volume) == 0 && bit_on(TEST_BLOCKS - 20) &&
+              ext2_read_data(&volume, &file, 0, result, 4096) == 0 &&
+              memcmp(result, payload, 4096) == 0,
           "and the restarted piece drains and reads back");
 
     reset(20);
@@ -730,8 +732,9 @@ static void miss_rows(void)
     refetch[2] = 1000;
     check(ext2_write(&mount, &file, payload, 4096, 0) == 4096 && misses == PLAN_TRIES,
           "a bitmap the cache keeps losing is met PLAN_TRIES times");
-    check(batch.metas == 3 && writeback_drain(&volume) == 0 &&
-              read_data(&volume, &file, 0, result, 4096) == 0 && memcmp(result, payload, 4096) == 0,
+    check(batch.metas == 3 && ext2_writeback_drain(&volume) == 0 &&
+              ext2_read_data(&volume, &file, 0, result, 4096) == 0 &&
+              memcmp(result, payload, 4096) == 0,
           "and the last plan reads it under the lock");
 }
 
@@ -747,16 +750,17 @@ static void busy_rows(void)
     busy[2] = 1;
     check(ext2_write(&mount, &file, payload, 4096, 0) == 4096 && busy_waits == 1 && busy_gets == 0,
           "a plan waits for a held bitmap with em->meta let go");
-    check(writeback_drain(&volume) == 0 && bit_on(TEST_BLOCKS - 20) &&
-              read_data(&volume, &file, 0, result, 4096) == 0 && memcmp(result, payload, 4096) == 0,
+    check(ext2_writeback_drain(&volume) == 0 && bit_on(TEST_BLOCKS - 20) &&
+              ext2_read_data(&volume, &file, 0, result, 4096) == 0 &&
+              memcmp(result, payload, 4096) == 0,
           "and the restarted piece drains and reads back");
 
     reset(20);
     check(ext2_write(&mount, &file, payload, 4096, 0) == 4096, "a pending piece");
     busy[2] = busy[4] = 1;
-    check(writeback_drain(&volume) == 0 && busy_waits == 2 && busy_gets == 0,
+    check(ext2_writeback_drain(&volume) == 0 && busy_waits == 2 && busy_gets == 0,
           "a drain waits for its held blocks with em->meta let go");
-    check(bit_on(TEST_BLOCKS - 20) && le32(disk[4] + (file.ino - 1) * 128 + 4) == 4096,
+    check(bit_on(TEST_BLOCKS - 20) && ext2_le32(disk[4] + (file.ino - 1) * 128 + 4) == 4096,
           "and then copies the bitmap and the inode");
 }
 
@@ -776,21 +780,21 @@ static void held_block_rows(void)
     check(ext2_write(&mount, &file, payload, 4096, 0) == 4096 && batch.count == 1,
           "a pending piece holds the inode table's block");
     other.size = 77;
-    node_lock(&other);
-    check(inode_store(&volume, &other) == 0, "another inode of that block is stored");
-    node_unlock(&other);
-    im = writeback_find(&volume, 4);
-    check(im && le16(im->data + at) == other.mode && le32(im->data + at + 4) == 77,
+    ext2_node_lock(&other);
+    check(ext2_inode_store(&volume, &other) == 0, "another inode of that block is stored");
+    ext2_node_unlock(&other);
+    im = ext2_writeback_find(&volume, 4);
+    check(im && ext2_le16(im->data + at) == other.mode && ext2_le32(im->data + at + 4) == 77,
           "into the batch's image as well as the cache");
-    meta_lock(&volume);
-    check(alloc_block(&volume, volume.alloc_hint, &b) == 0 && b == TEST_BLOCKS - 19,
+    ext2_meta_lock(&volume);
+    check(ext2_alloc_block(&volume, volume.alloc_hint, &b) == 0 && b == TEST_BLOCKS - 19,
           "a block is allocated beside the batch's reservation");
-    meta_unlock(&volume);
-    check(writeback_drain(&volume) == 0, "the batch drains");
-    check(le16(disk[4] + at) == other.mode && le32(disk[4] + at + 4) == 77 &&
-              le32(disk[4] + (file.ino - 1) * 128 + 4) == 4096,
+    ext2_meta_unlock(&volume);
+    check(ext2_writeback_drain(&volume) == 0, "the batch drains");
+    check(ext2_le16(disk[4] + at) == other.mode && ext2_le32(disk[4] + at + 4) == 77 &&
+              ext2_le32(disk[4] + (file.ino - 1) * 128 + 4) == 4096,
           "and the table block has both inodes");
-    check(bit_on(TEST_BLOCKS - 20) && bit_on(TEST_BLOCKS - 19) && le16(disk[1] + 12) == 18 &&
+    check(bit_on(TEST_BLOCKS - 20) && bit_on(TEST_BLOCKS - 19) && ext2_le16(disk[1] + 12) == 18 &&
               volume.free_blocks == 18,
           "and the bitmap and descriptor both allocations");
 }
@@ -803,7 +807,7 @@ static void drain_reserve_row(void)
 {
     reset(20);
     check(ext2_write(&mount, &file, payload, 4096, 0) == 4096, "a pending piece of four images");
-    check(writeback_drain(&volume) == 0 && reserve_calls == 1 && reserve_n == 4,
+    check(ext2_writeback_drain(&volume) == 0 && reserve_calls == 1 && reserve_n == 4,
           "a drain reserves a buffer for each changed image");
     check(reserve_at != 0 && blank_at > reserve_at, "before its first copy");
 }
@@ -818,18 +822,18 @@ static void balance_rows(void)
     reset(20);
     unflushed_syncs = 0;
     process.fs_written = EXT2_BALANCE_SHARE;
-    em_balance(&volume);
+    ext2_em_balance(&volume);
     check(unflushed_syncs == 0 && process.fs_written == 0,
           "a light cache writes nothing back and forgets the share");
     dirty_heavy = 1;
-    em_balance(&volume);
+    ext2_em_balance(&volume);
     check(unflushed_syncs == 0, "a process that wrote nothing pays for no other's writes");
     process.fs_written = EXT2_BALANCE_SHARE - 1;
-    em_balance(&volume);
+    ext2_em_balance(&volume);
     check(unflushed_syncs == 0 && process.fs_written == EXT2_BALANCE_SHARE - 1,
           "nor does one short of its share");
     process.fs_written = EXT2_BALANCE_SHARE;
-    em_balance(&volume);
+    ext2_em_balance(&volume);
     check(unflushed_syncs == 1 && process.fs_written == 0,
           "a writer past its share writes back once and begins a new share");
     dirty_heavy = 0;
@@ -838,9 +842,9 @@ static void balance_rows(void)
 /* The nested punch's file, freed while the outer punch fetches a bitmap. */
 static void punch_other(void)
 {
-    node_lock(&other);
-    check(punch(&volume, &other, 0) == 0, "the nested punch frees its blocks");
-    node_unlock(&other);
+    ext2_node_lock(&other);
+    check(ext2_punch(&volume, &other, 0) == 0, "the nested punch frees its blocks");
+    ext2_node_unlock(&other);
 }
 
 /**
@@ -857,17 +861,18 @@ static void overlap_punch_row(void)
 
     reset(20);
     check(ext2_write(&mount, &file, payload, 8192, 0) == 8192 &&
-              ext2_write(&mount, &other, payload, 8192, 0) == 8192 && writeback_drain(&volume) == 0,
+              ext2_write(&mount, &other, payload, 8192, 0) == 8192 &&
+              ext2_writeback_drain(&volume) == 0,
           "two files of two blocks each");
     check(volume.free_blocks == 16, "take four blocks");
     k_memset(order_of, 0, sizeof(order_of));
     k_memset(unordered, 0, sizeof(unordered));
     uncached[2] = 1;
     fetch_hook = punch_other;
-    node_lock(&file);
-    check(punch(&volume, &file, 0) == 0 && !fetch_hook, "the outer punch frees its blocks");
-    node_unlock(&file);
-    check(volume.free_blocks == 20 && le16(disk[1] + 12) == 20 && file.blocks == 0 &&
+    ext2_node_lock(&file);
+    check(ext2_punch(&volume, &file, 0) == 0 && !fetch_hook, "the outer punch frees its blocks");
+    ext2_node_unlock(&file);
+    check(volume.free_blocks == 20 && ext2_le16(disk[1] + 12) == 20 && file.blocks == 0 &&
               other.blocks == 0,
           "and the counts are whole");
     for (i = 0; i < 4; i++) {
@@ -926,7 +931,7 @@ static void inode_rows(void)
     check(inode_new(&volume, &file, S_IFREG_ | 0600, 1, &n) == 0 && n && n->ino == 128 * 32 + 1,
           "an inode comes from a group two cold blocks away");
     check(misses == 2, "whose bitmap and descriptor block a search meets and fetches");
-    check((disk[6][0] & 1) && volume.free_inodes == 4 && le16(disk[2] + 14) == 4,
+    check((disk[6][0] & 1) && volume.free_inodes == 4 && ext2_le16(disk[2] + 14) == 4,
           "and the bit and the counts reach them");
     nodes_free(&volume);
 
@@ -945,7 +950,7 @@ static void lock_holder_gives(void)
 {
     writers_at_wait = (int)volume.writers;
     process.pid = 2;
-    node_unlock(&file);
+    ext2_node_unlock(&file);
     process.pid = 1;
 }
 
@@ -954,7 +959,7 @@ static void lock_held_elsewhere(void)
 {
     reset(20);
     process.pid = 2;
-    node_lock(&file);
+    ext2_node_lock(&file);
     process.pid = 1;
     wait_hook = lock_holder_gives;
     writers_at_wait = -1;
