@@ -31,14 +31,15 @@ arch_user_copy_bytes:
     ret
 .size arch_user_copy, .-arch_user_copy
 
-# A fault in the words leaves ECX words and the EDX bytes after them; one in
-# the bytes leaves ECX bytes.
+# A fault in the words leaves ECX words and the EDX bytes after them, which
+# the bytes then copy one at a time from the faulting word, so that the copy
+# ends at the exact byte, as Linux's clear_user_original retries a faulting
+# quadword byte by byte (arch/x86/lib/clear_page_64.S). A fault in the bytes
+# leaves ECX bytes.
 .global arch_user_copy_words_fault
 arch_user_copy_words_fault:
-    leal (%edx,%ecx,4), %eax
-    popl %edi
-    popl %esi
-    ret
+    leal (%edx,%ecx,4), %ecx
+    jmp arch_user_copy_bytes
 
 .global arch_user_copy_bytes_fault
 arch_user_copy_bytes_fault:

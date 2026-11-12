@@ -26,12 +26,15 @@ arch_user_copy_bytes:
     ret
 .size arch_user_copy, .-arch_user_copy
 
-# A fault in the words leaves RCX words and the RDX bytes after them; one in
-# the bytes leaves RCX bytes.
+# A fault in the words leaves RCX words and the RDX bytes after them, which
+# the bytes then copy one at a time from the faulting word, so that the copy
+# ends at the exact byte, as Linux's clear_user_original retries a faulting
+# quadword byte by byte (arch/x86/lib/clear_page_64.S). A fault in the bytes
+# leaves RCX bytes.
 .global arch_user_copy_words_fault
 arch_user_copy_words_fault:
-    leaq (%rdx,%rcx,8), %rax
-    ret
+    leaq (%rdx,%rcx,8), %rcx
+    jmp arch_user_copy_bytes
 
 .global arch_user_copy_bytes_fault
 arch_user_copy_bytes_fault:

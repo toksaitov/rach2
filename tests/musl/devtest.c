@@ -13,6 +13,9 @@
  * `access` succeeds for F_OK and R_OK; for W_OK of a read-only proc file it
  * succeeds for root, as on Linux, and fails with EACCES for anyone else; it
  * fails with ENOENT for a missing device and EINVAL for a bad mode.
+ * A read of 16 bytes from /dev/zero or /dev/full into the last 3 bytes of a
+ * page below one of PROT_NONE returns 3, the bytes before the fault, as on
+ * Linux, though the kernel copies in words of 4 or 8 bytes.
  * /proc/self is a symbolic link to the caller's pid: lstat sees the link, stat
  * follows it to the directory, and /proc/self/fd/0 leads to the console's
  * character device.
@@ -28,6 +31,7 @@
 #include <errno.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 
 static int fails;
 
@@ -52,6 +56,36 @@ static void check_proc_write(void)
     }
 }
 
+/** Read 16 bytes of `dev` into the last 3 bytes of a writable page below a
+ * page of PROT_NONE: 3 zero bytes, as Linux's read_zero counts what
+ * clear_user cleared before the fault. */
+static void check_short_read(const char *dev)
+{
+    long page = sysconf(_SC_PAGESIZE);
+    char *m, why[96];
+    ssize_t n;
+    int fd;
+
+    m = mmap(NULL, 2 * page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    check(m != MAP_FAILED, "mmap two pages");
+    if (m == MAP_FAILED) {
+        return;
+    }
+    memset(m, 0xAB, page);
+    check(mprotect(m + page, page, PROT_NONE) == 0, "mprotect the second page PROT_NONE");
+    fd = open(dev, O_RDONLY);
+    check(fd >= 0, "open the device for the short read");
+    n = read(fd, m + page - 3, 16);
+    snprintf(why, sizeof(why), "%s read of 16 bytes 3 before PROT_NONE -> 3 (got %ld)", dev,
+             (long)n);
+    check(n == 3, why);
+    snprintf(why, sizeof(why), "%s short read zeroes its 3 bytes and no others", dev);
+    check(m[page - 4] == (char)0xAB && m[page - 3] == 0 && m[page - 2] == 0 && m[page - 1] == 0,
+          why);
+    close(fd);
+    munmap(m, 2 * page);
+}
+
 int main(void)
 {
     int fd, i, allzero;
@@ -73,6 +107,8 @@ int main(void)
     }
     check(allzero, "/dev/zero is all zeros");
     close(fd);
+    check_short_read("/dev/zero");
+    check_short_read("/dev/full");
 
     /* /dev/null reads EOF. */
     fd = open("/dev/null", O_RDONLY);
