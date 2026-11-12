@@ -8,30 +8,31 @@
 #
 # It runs `tidy` from lib.sh in this checkout, which removes its landed
 # worktrees and branches that no process and no run evidence or loop state
-# keeps; prunes, as `prune_logs` in lib.sh does, the session logs of each
-# loop state directory under this checkout's build/flow, which a loop
-# itself prunes only while it runs and holds no task; and runs `scratch.pl`
-# with the stems of master's scratch names, here on this checkout's
-# build/tmp and as root on the testing host on its /tmp and on the build/tmp
-# of the owner's copy and of each account's clone, which removes the scratch
-# of tests that were killed before their traps ran. It then runs
-# `leftovers.pl`, through `leftovers` in lib.sh, on the host and here, which
-# removes failed tests' directories, loose scratch in home directories and
-# copies of the repository whose work master has; and runs `store_expire`,
-# which removes the entries of the host's store of step outputs that no copy
-# uses. It runs `tidy` in each worker's clone too, since a loop tidies only
-# while it runs. `outputs` removes what a build or a run makes again and what
-# nothing needs once its run has ended: in each tree on the testing host whose
-# loop holds no session, the images, test output and scratch unchanged for a
-# day, but `build/tests/failed`, and the run files of `build/runs` unchanged
-# for two weeks; on Windows the test collections, tooling job directories,
-# case images and scratch unchanged for a day; and here the entries of
-# `build/tests` unchanged for two weeks. The caches, the build copies of the
-# release and of Windows, and the tooling work disks stay. Each removal, and
-# each step's total, is a line on stdout. Each step that reaches the host stops
-# itself after ten minutes. With -a, which stop.sh passes once nothing runs,
-# what has lain unused for a day or less goes too, so that the checks of age of
-# a day count for nothing; the two weeks of `build/runs` and `build/tests` stay.
+# keeps; prunes, as `prune_logs` in lib.sh does, the session logs of each loop
+# state directory under this checkout's build/flow, which a loop itself prunes
+# only while it runs and holds no task; and runs `scratch.pl` with the stems of
+# master's scratch names, here on this checkout's build/tmp and as root on the
+# testing host on its /tmp and on the build/tmp of the owner's copy and of each
+# account's clone, which removes the scratch of tests that were killed before
+# their traps ran. It then runs `leftovers.pl`, through `leftovers` in lib.sh,
+# on the host and here, which removes failed tests' directories, loose scratch
+# in home directories and copies of the repository whose work master has; and
+# runs `store_expire`, which removes the entries of the host's store of step
+# outputs that no copy uses. It runs `tidy` in each worker's clone too, since a
+# loop tidies only while it runs. `outputs` removes what a build or a run makes
+# again and what nothing needs once its run has ended: in each tree on the
+# testing host whose loop holds no session, the images, test output and scratch
+# unchanged for a day, but `build/tests/failed`, and the run files of
+# `build/runs` unchanged for two weeks; on Windows the test collections,
+# tooling job directories, case images and scratch unchanged for a day, and
+# each release run, with its files and its etude, of a milestone whose release
+# closed; and here the entries of `build/tests` unchanged for two weeks. The
+# caches, the build copies of the release and of Windows, and the tooling work
+# disks stay. Each removal, and each step's total, is a line on stdout. Each
+# step that reaches the host stops itself after ten minutes. With -a, which
+# stop.sh passes once nothing runs, what has lain unused for a day or less goes
+# too, so that the checks of age of a day count for nothing; the two weeks of
+# `build/runs` and `build/tests` stay.
 
 TESTING=testing
 
@@ -53,6 +54,16 @@ stale()
 }
 '
 
+# closed: print, a line each, the milestones whose release closed, as the
+# records release.sh keeps of the releases that ended say.
+closed()
+{
+    for r in "$repo"/build/flow/release/[0-9]*-*; do
+        case $r in *.sha256 | *.sweep) continue ;; esac
+        grep -q '^closed ' "$r" 2> /dev/null && basename "$r" | sed 's/-.*//'
+    done | sort -un
+}
+
 # outputs: remove what the header says from each machine.
 outputs()
 {
@@ -73,6 +84,12 @@ outputs()
         # shellcheck disable=SC2016 # the dollars are the remote shell's
         echo "stale $days \$b/tests/rach2-collection.* \$b/tooling/job-* \$b/images/cases/*" \
             '$b/x86_64/images/cases/* $b/tmp/*'
+        # A milestone whose release closed runs nothing on Windows again, so
+        # its runs there, failed ones with their evidence among them, go
+        # whatever their age.
+        for m in $(closed); do
+            echo "stale 0 \$b/release/milestone$m-*-windows-* \$b/release/etude-milestone$m-*-windows-*"
+        done
     } | perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         'bash -s' 2>&1 | tr -d '\000\r' | sed 's/^/windows: /'
     eval "$stale"
