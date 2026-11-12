@@ -1561,8 +1561,11 @@ static int wake_cond(void *arg)
 /** Wait, interruptibly, until the vCPU `v` has an event or its timer's
  * tick comes: 0, or -EINTR when the thread's signal-work flag is set. The
  * caller holds no big lock, so the wait reads the flag alone, as Linux's
- * kvm_vcpu_check_block (virt/kvm/kvm_main.c:3729-3747), and the KVM_RUN
- * that returns -EINTR leaves the signal to the system call's return. */
+ * kvm_vcpu_check_block (virt/kvm/kvm_main.c:3729-3747). On -EINTR the
+ * caller ends KVM_RUN with KVM_EXIT_INTR, as Linux's vcpu_run takes the
+ * signal after vcpu_block in kvm_handle_signal_exit
+ * (include/linux/kvm_host.h:2405-2409, kernel/entry/kvm.c:11-13), and
+ * leaves the signal to the system call's return. */
 static int32_t block(struct kvm_vcpu *v)
 {
     struct lapic *l = apic_of(v);
@@ -1617,9 +1620,6 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
         }
         r = block(v);
         if (r != 0) {
-            /* Linux's vcpu_run takes the signal after vcpu_block, in
-             * kvm_handle_signal_exit (include/linux/kvm_host.h:2405-2409,
-             * kernel/entry/kvm.c:11-13). */
             v->run->exit_reason = KVM_EXIT_INTR;
             v->stat[KVM_VCPU_STAT_SIGNAL_EXITS]++;
             return -EINTR;
