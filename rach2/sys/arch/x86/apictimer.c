@@ -292,8 +292,10 @@ static void hr_program(struct hr_state *c, int64_t now, int idle_commit)
     uint8_t vector = APIC_TIMER_VECTOR;
     uint32_t counts, rate;
     uint64_t span;
+    struct percpu *cpu = this_cpu();
 
-    if (c->idle && !idle_commit) {
+    if (!idle_commit &&
+        (c->idle || (cpu->current != NULL && cpu->current == cpu->idle && cpu->idle_wait))) {
         return;
     }
     if (c->want != 0 && (at == 0 || c->want < at)) {
@@ -602,6 +604,7 @@ int apic_hr_entry(uint32_t vector)
     return result;
 }
 
+/** Return the current scheduler period in millisecond clock units. */
 uint32_t timer_tick_period(void)
 {
     return hr_vector != 0 && timer_tick_shared() && hr_cpu[arch_cpu_id()].oneshot
@@ -634,10 +637,10 @@ int timer_idle_enter(void)
     timer_wake_hold();
     prepared = timer_idle_prepare();
     if (prepared <= 0) {
+        timer_wake_release();
         if (prepared == 0) {
             timer_idle_exit();
         }
-        timer_wake_release();
         return c->idle;
     }
     now = c->oneshot ? rtc_monotonic_ns() : hr_oneshot(c);
@@ -652,7 +655,7 @@ void timer_idle_exit(void)
     struct hr_state *c = &hr_cpu[arch_cpu_id()];
     int64_t now;
 
-    if (!c->idle) {
+    if (!c->oneshot) {
         return;
     }
     now = rtc_monotonic_ns();
@@ -660,7 +663,33 @@ void timer_idle_exit(void)
     if (c->tick <= now) {
         hr_forward(c, now);
     }
-    hr_program(c, now, 0);
+    hr_program(c, now, 1);
+}
+
+/** Whether desired hardware differs from the installed local event.
+ * Interrupts are off. */
+int timer_idle_pending(void)
+{
+    struct hr_state *c = &hr_cpu[arch_cpu_id()];
+    int64_t at = c->idle ? 0 : c->tick;
+
+    if (!c->oneshot) {
+        return 0;
+    }
+    if (c->want != 0 && (at == 0 || c->want < at)) {
+        at = c->want;
+    }
+    return c->programmed != at || (at != 0 && c->lvt != APIC_TIMER_VECTOR);
+}
+
+/** Commit the retained idle timer before halting, with IRQs off. */
+void timer_idle_retain(void)
+{
+    struct hr_state *c = &hr_cpu[arch_cpu_id()];
+
+    if (c->oneshot) {
+        hr_program(c, rtc_monotonic_ns(), 1);
+    }
 }
 
 void apic_hr_init(uint32_t counts)

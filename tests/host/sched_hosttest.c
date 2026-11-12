@@ -45,6 +45,7 @@ static uint32_t poll_rate;
 static uint64_t poll_cycles;
 static uint32_t halt_cycles;
 static int halt_tick;
+static int idle_hw_pending, idle_retains;
 static int64_t tick_due_model;
 static int affinity_step;
 static unsigned int affinity_kicks;
@@ -141,6 +142,19 @@ void arch_idle_masked(void)
     if (halt_tick) {
         tick_due_model += 4000000;
     }
+}
+
+/** This model normally has no deferred hardware change. */
+int timer_idle_pending(void)
+{
+    return idle_hw_pending;
+}
+
+/** No hardware is programmed by the retained-tick model. */
+void timer_idle_retain(void)
+{
+    idle_retains++;
+    idle_hw_pending = 0;
 }
 
 /** The model selects the guest's four-millisecond scheduler period. */
@@ -1648,6 +1662,30 @@ static void nohz_poll_tick(void)
     poll_rate = 0;
 }
 
+/** A deferred earlier event skips the poll even when an older nonzero
+ * device deadline remains; final retained entry commits it before HLT. */
+static void nohz_dirty_poll(void)
+{
+    unsigned int i;
+
+    setup();
+    for (i = 1; i < 7; i++) {
+        sched_forget(&procs[i]);
+    }
+    this_cpu()->idle = &procs[0];
+    this_cpu()->idle_short = 1;
+    this_cpu()->idle_poll_us = 20;
+    poll_rate = TICK_US;
+    poll_wake = 1;
+    idle_hw_pending = 1;
+    idle_retains = idle_halts = 0;
+    idle_wait_irq_off();
+    CHECK(poll_wake && idle_retains == 1 && idle_halts == 1 && !idle_hw_pending,
+          "a dirty retained timer skips polling and commits before halting");
+    poll_wake = 0;
+    poll_rate = 0;
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(int argc, char **argv)
 {
@@ -1658,6 +1696,7 @@ int main(int argc, char **argv)
         nohz_poll_before_stop();
         nohz_short_waits();
         nohz_poll_tick();
+        nohz_dirty_poll();
         dprintf(1, "sched-hosttest: idle: %s\n", failures ? "fail" : "pass");
         return failures != 0;
     }
@@ -1690,6 +1729,7 @@ int main(int argc, char **argv)
     nohz_poll_before_stop();
     nohz_short_waits();
     nohz_poll_tick();
+    nohz_dirty_poll();
     if (failures) {
         return 1;
     }

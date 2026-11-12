@@ -218,7 +218,15 @@ int timer_wakes_between(void);
  * are off and no lock is held. */
 int timer_idle_enter(void);
 
-/** Restart the scheduler tick after an idle wait, with its phase preserved
+/** Whether the idle task has a deferred hardware change. Interrupts are
+ * off. Skip an enabled-IRQ poll until final preparation commits it. */
+int timer_idle_pending(void);
+
+/** Commit deferred events before a halt which retains its running tick.
+ * Interrupts are off and no lock is held. */
+void timer_idle_retain(void);
+
+/** Commit the scheduler tick after an idle wait, with its phase preserved
  * and missed ticks skipped. Interrupts are off and no lock is held. */
 void timer_idle_exit(void);
 

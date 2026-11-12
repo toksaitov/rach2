@@ -1298,6 +1298,44 @@ static void idle_guest_period(void)
     hr_sched_ns = TICK_NS;
 }
 
+/** Deferred requests in a retained idle wait are committed at a halt or
+ * selection, including held events when stopped preparation fails. The
+ * process pointer is used only as a unique identity by this clock model. */
+static void idle_context_rows(void)
+{
+    struct hr_state *c = &hr_cpu[0];
+    uint32_t writes;
+
+    now_ns = MS(16000);
+    apic_timer_start(1000000u, TICK_HZ);
+    timer_wake_at((int64_t)MS(16050));
+    cpu_table[0].current = cpu_table[0].idle = (struct process *)(void *)c;
+    cpu_table[0].idle_wait = 1;
+    writes = apic_writes;
+    timer_wake_at((int64_t)MS(16000.1));
+    CHECK(apic_writes == writes && c->programmed != 0 && timer_idle_pending(),
+          "an earlier retained-idle request is dirty despite an older nonzero device expiry");
+    timer_idle_retain();
+    CHECK(apic_writes == writes + 1 && !timer_idle_pending() && !c->idle,
+          "retained halt commits the desired event once without stopping the tick");
+    prepare_first = (int64_t)MS(16000.02);
+    prepare_second = (int64_t)MS(16000.03);
+    idle_allowed = 0;
+    writes = apic_writes;
+    CHECK(!timer_idle_enter() && c->want == prepare_first && !timer_idle_pending() &&
+              apic_writes == writes + 1,
+          "failed stopped preparation merges held requests before committing the running timer");
+    prepare_first = prepare_second = 0;
+    timer_wake_at((int64_t)MS(16000.01));
+    writes = apic_writes;
+    timer_idle_exit();
+    CHECK(apic_writes == writes + 1 && !timer_idle_pending(),
+          "selection commits a retained idle timer even when its tick was never stopped");
+    cpu_table[0].current = cpu_table[0].idle = NULL;
+    cpu_table[0].idle_wait = 0;
+    idle_allowed = 1;
+}
+
 /** Run the idle-event scenario and restore the calibration model. */
 static void idle_rows(void)
 {
@@ -1307,6 +1345,7 @@ static void idle_rows(void)
     idle_phase();
     idle_prepare_rows();
     idle_guest_period();
+    idle_context_rows();
     hr_model = 0;
     ref_kind = REF_NONE;
     hr_vector = 0;

@@ -844,6 +844,22 @@ static int sched_prepare_old(process_t *old, struct percpu *cpu, int me)
     return kick;
 }
 
+/** Finish a stopped idle account and commit the incoming thread's timer.
+ * The scheduler has published its new current thread and released its
+ * lock. IRQs are off; no callback or global device service runs here. */
+static void sched_idle_leave(struct percpu *cpu)
+{
+    if (cpu->tick_stopped) {
+        sched_account_tick(0, 0);
+    }
+    timer_idle_exit();
+    if (cpu->tick_stopped) {
+        cpu->ticks_seq++;
+        cpu->tick_stopped = 0;
+        cpu->ticks_seq++;
+    }
+}
+
 /**
  * A preferred selection consumes its wake mark without passing over earlier
  * ready entries, and the next selection is ordinary, so the head advances at
@@ -1008,12 +1024,8 @@ void schedule(void)
     cpu->current = next;
     cpu->switch_prev = old;
     spin_unlock(&sched_lock);
-    if (old == cpu->idle && cpu->tick_stopped) {
-        sched_account_tick(0, 0);
-        timer_idle_exit();
-        cpu->ticks_seq++;
-        cpu->tick_stopped = 0;
-        cpu->ticks_seq++;
+    if (old == cpu->idle) {
+        sched_idle_leave(cpu);
     }
     old->bkl_depth = bkl_drop();
     sched_wait_off_cpu(next);
@@ -1756,6 +1768,9 @@ static int idle_sleep(int stop_tick, uint32_t per_us)
     if (stop_tick && current_proc->need_resched) {
         return 0;
     }
+    if (stop_tick && !cpu->tick_stopped) {
+        timer_idle_retain();
+    }
     if (stop_tick && per_us != 0) {
         begin = arch_cycles();
     }
@@ -1815,7 +1830,7 @@ static void idle_halt(int stop_tick)
     uint64_t start, limit, now, look, gone;
     uint32_t grow;
     int open = stop_tick;
-    int polling = per_us != 0 && arch_idle_poll() && !cpu->tick_stopped;
+    int polling = per_us != 0 && arch_idle_poll() && !cpu->tick_stopped && !timer_idle_pending();
 
     start = polling ? arch_cycles() : 0;
     if (polling && cpu->idle_poll_us != 0) {
