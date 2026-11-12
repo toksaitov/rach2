@@ -83,6 +83,14 @@ struct file_ops {
  */
 #define FILE_OPS_POLL_UNLOCKED 2u
 
+/*
+ * The `llseek` operation alone is called without the big lock, the others
+ * with it: it reads what does not change while the object lives, as a
+ * dma-buf's size, and the call stores the offset it gives. lseek and
+ * _llseek then seek the descriptor without the big lock.
+ */
+#define FILE_OPS_SEEK_UNLOCKED 4u
+
 /** Whether a call on `e`, and the release of its last descriptor, may run
  * without the big lock: its operations are marked FILE_OPS_UNLOCKED, it is
  * no socket, its description names no file, device node or synthetic node,
@@ -93,6 +101,11 @@ int file_ops_unlocked(const fd_entry_t *e);
  * table sets FILE_OPS_POLL_UNLOCKED, or `file_ops_unlocked` holds. A
  * descriptor with no poll operation answers no. */
 int file_poll_unlocked(const fd_entry_t *e);
+
+/** Whether the llseek operation of `e` may run without the big lock: its
+ * table sets FILE_OPS_SEEK_UNLOCKED, or `file_ops_unlocked` holds. A
+ * descriptor with no llseek operation answers no. */
+int file_seek_unlocked(const fd_entry_t *e);
 
 /** Whether `e`'s ioctl dispatcher sets FILE_OPS_UNLOCKED. A held device
  * node's retained inode and offset need no lock for an ioctl; FIONBIO
