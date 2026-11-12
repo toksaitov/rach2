@@ -1131,6 +1131,8 @@ static void abi_rows(void)
           "KVM_SET_USER_MEMORY_REGION2");
     CHECK(KVM_GET_XSAVE == 0x9000AEA4u && KVM_GET_XCRS == 0x8188AEA6u,
           "KVM_GET_XSAVE and KVM_GET_XCRS");
+    CHECK(KVM_GET_XSAVE2 == 0x9000AECFu && KVM_CAP_XSAVE2 == 208,
+          "KVM_GET_XSAVE2 and KVM_CAP_XSAVE2");
     CHECK(KVM_GET_VCPU_EVENTS == 0x8040AE9Fu && KVM_GET_CLOCK == 0x8030AE7Cu,
           "KVM_GET_VCPU_EVENTS and KVM_GET_CLOCK");
 }
@@ -3425,6 +3427,74 @@ static void xsaves_rows(void)
     model_xsaves = 0;
 }
 
+/**
+ * The XSAVE image x86_64/state_test moves, on the Lenovo's model, whose
+ * XCR0 is x87, SSE and AVX: KVM_CAP_XSAVE2 sizes KVM_GET_XSAVE2 at 4096
+ * bytes; the image of a vCPU whose CPUID allows all three loads by
+ * KVM_SET_XSAVE into a vCPU given no CPUID, and then into one given an
+ * empty CPUID, as Linux checks it against what KVM supports and not the
+ * guest's CPUID, while AVX-512, which KVM does not support here, is
+ * refused; a vCPU with no CPUID gives x87 and SSE still; and MXCSR is
+ * checked with x87 alone marked and kept with none of x87, SSE and AVX.
+ */
+static void xsave_move_rows(void)
+{
+    static uint8_t img[4096] __attribute__((aligned(64)));
+    struct kvm_xcrs xcrs;
+    uint64_t bv;
+    uint32_t mxcsr, n = pv_cpuid();
+    int vm = dev(KVM_CREATE_VM, 0), a = fdio(vm, KVM_CREATE_VCPU, 0);
+    int b = fdio(vm, KVM_CREATE_VCPU, 1);
+
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_XSAVE2) == 4096 &&
+              fdio(vm, KVM_CHECK_EXTENSION, KVM_CAP_XSAVE2) == 4096,
+          "KVM_CAP_XSAVE2 is 4096 bytes on /dev/kvm and on a VM");
+    buf.cpuid.nent = n;
+    CHECK(fdio(a, KVM_SET_CPUID2, (uintptr_t)&buf) == 0, "KVM_SET_CPUID2 of the supported CPUID");
+    fdio(a, KVM_GET_XCRS, (uintptr_t)&xcrs);
+    xcrs.xcrs[0].value = 7;
+    CHECK(fdio(a, KVM_SET_XCRS, (uintptr_t)&xcrs) == 0, "XCR0 of x87, SSE and AVX");
+    fdio(a, KVM_GET_XSAVE2, (uintptr_t)img);
+    bv = 0x7;
+    k_memcpy(img + 512, &bv, 8);
+    CHECK(fdio(a, KVM_SET_XSAVE, (uintptr_t)img) == 0,
+          "AVX marked in use, as the guest's code has");
+    k_memset(img, 0, sizeof(img));
+    CHECK(fdio(a, KVM_GET_XSAVE2, (uintptr_t)img) == 0, "KVM_GET_XSAVE2");
+    k_memcpy(&bv, img + 512, 8);
+    CHECK(bv == 0x7 && img[25] == 0x1F, "it gives x87, SSE and AVX, and MXCSR 0x1F80");
+    CHECK(fdio(b, KVM_SET_XSAVE, (uintptr_t)img) == 0, "a vCPU given no CPUID takes the image");
+    bv = 0x27;
+    k_memcpy(img + 512, &bv, 8);
+    CHECK(fdio(b, KVM_SET_XSAVE, (uintptr_t)img) == -EINVAL,
+          "but not with AVX-512 marked, which KVM does not support here");
+    buf.cpuid.nent = 0;
+    CHECK(fdio(b, KVM_SET_CPUID2, (uintptr_t)&buf) == 0, "KVM_SET_CPUID2 with no entry");
+    bv = 0x7;
+    k_memcpy(img + 512, &bv, 8);
+    CHECK(fdio(b, KVM_SET_XSAVE, (uintptr_t)img) == 0, "a vCPU given an empty CPUID takes it too");
+    CHECK(fdio(b, KVM_GET_XSAVE, (uintptr_t)img) == 0, "KVM_GET_XSAVE of that vCPU");
+    k_memcpy(&bv, img + 512, 8);
+    CHECK(bv == 0x3, "it gives x87 and SSE, without the AVX its CPUID lacks");
+    bv = 0x1;
+    k_memcpy(img + 512, &bv, 8);
+    mxcsr = 0x10000; /* a reserved bit */
+    k_memcpy(img + 24, &mxcsr, 4);
+    CHECK(fdio(b, KVM_SET_XSAVE, (uintptr_t)img) == -EINVAL,
+          "MXCSR is checked with x87 alone marked");
+    bv = 0;
+    k_memcpy(img + 512, &bv, 8);
+    mxcsr = 0xFFFFFFFFu;
+    k_memcpy(img + 24, &mxcsr, 4);
+    CHECK(fdio(b, KVM_SET_XSAVE, (uintptr_t)img) == 0, "with none of x87, SSE and AVX it is not");
+    fdio(b, KVM_GET_XSAVE, (uintptr_t)img);
+    k_memcpy(&mxcsr, img + 24, 4);
+    CHECK(mxcsr == 0x1F80, "and the vCPU keeps its own MXCSR");
+    fdclose(b);
+    fdclose(a);
+    fdclose(vm);
+}
+
 /** The capabilities and bounds Linux's selftests ask for, each in VMs of
  * its own. */
 static void selftest_rows(void)
@@ -3439,6 +3509,7 @@ static void selftest_rows(void)
     svm_debugctl_rows();
     mce_hwcr_rows();
     xsaves_rows();
+    xsave_move_rows();
     user_msr_rows();
     attr_rows();
     sync_rows();

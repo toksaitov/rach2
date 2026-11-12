@@ -1160,17 +1160,20 @@ static int32_t set_fpu(struct kvm_vcpu *v, uintptr_t arg)
     return 0;
 }
 
-/** KVM_GET_XSAVE: the XSAVE image in its standard form, with only the
- * components the guest's CPUID allows marked in use. */
+/**
+ * KVM_GET_XSAVE and KVM_GET_XSAVE2: the XSAVE image in its standard form,
+ * KVM_XSAVE_SIZE bytes, with x87, SSE and the components the guest's CPUID
+ * allows marked in use, as Linux's kvm_vcpu_ioctl_x86_get_xsave2 marks
+ * them: a component this host has and the guest does not would make
+ * KVM_SET_XSAVE fail on a host without it. Without XSAVE the image is
+ * FXSAVE's, with x87 and SSE marked. 0, -ENOMEM or -EFAULT.
+ */
 static int32_t get_xsave(struct kvm_vcpu *v, uintptr_t arg)
 {
     uint64_t bv;
     int32_t r;
     uint8_t *ex;
 
-    if (kvm_xcr0_supported() == 0) {
-        return -EINVAL;
-    }
     vcpu_save(v, KVM_PART_FPU);
     ex = kmalloc(KVM_XSAVE_SIZE);
     if (!ex) {
@@ -1178,7 +1181,12 @@ static int32_t get_xsave(struct kvm_vcpu *v, uintptr_t arg)
     }
     k_memcpy(ex, v->xsave, KVM_XSAVE_SIZE);
     k_memcpy(&bv, ex + XSAVE_HDR, sizeof(bv));
-    bv &= kvm_xcr0_guest(v);
+    if (kvm_xcr0_supported() != 0) {
+        bv &= kvm_xcr0_guest(v) | XFEATURE_SSE;
+    } else {
+        k_memset(ex + 512, 0, KVM_XSAVE_SIZE - 512);
+        bv = XFEATURE_X87 | XFEATURE_SSE;
+    }
     k_memcpy(ex + XSAVE_HDR, &bv, sizeof(bv));
     r = copy_to_user((void __user *)arg, ex, KVM_XSAVE_SIZE) ? -EFAULT : 0;
     kfree(ex);
@@ -1186,21 +1194,25 @@ static int32_t get_xsave(struct kvm_vcpu *v, uintptr_t arg)
 }
 
 /**
- * KVM_SET_XSAVE: an XSAVE image in its standard form, which Linux takes
- * when its header marks only components the guest's CPUID allows, its
- * compaction word and reserved bytes are zero, and, with SSE or AVX marked,
- * its MXCSR sets no reserved bit. 0, -EINVAL, -ENOMEM or -EFAULT.
+ * KVM_SET_XSAVE: an XSAVE image in its standard form, which Linux's
+ * fpu_copy_uabi_to_guest_fpstate takes when its header marks only
+ * components KVM supports on this host, whatever the guest's CPUID allows,
+ * so that a vCPU's state loads into one not yet given its CPUID, its
+ * compaction word and reserved bytes are zero, and, with x87, SSE or AVX
+ * marked, its MXCSR sets no reserved bit. With none of those three marked
+ * the vCPU keeps its MXCSR, as Linux's copy_uabi_to_xstate keeps it, since
+ * XRSTOR loads MXCSR whenever SSE or AVX is asked for. Without XSAVE only
+ * x87 and SSE may be marked, and the 512 bytes of FXSAVE's image are
+ * taken. 0, -EINVAL, -ENOMEM or -EFAULT.
  */
 static int32_t set_xsave(struct kvm_vcpu *v, uintptr_t arg)
 {
-    uint64_t bv, comp;
+    const uint64_t legacy = XFEATURE_X87 | XFEATURE_SSE | XFEATURE_YMM;
+    uint64_t bv, comp, xcr0 = kvm_xcr0_supported();
     uint32_t mxcsr, i;
     int32_t r = -EINVAL;
     uint8_t *ex;
 
-    if (kvm_xcr0_supported() == 0) {
-        return -EINVAL;
-    }
     ex = kmalloc(KVM_XSAVE_SIZE);
     if (!ex) {
         return -ENOMEM;
@@ -1212,7 +1224,17 @@ static int32_t set_xsave(struct kvm_vcpu *v, uintptr_t arg)
     k_memcpy(&bv, ex + XSAVE_HDR, sizeof(bv));
     k_memcpy(&comp, ex + XSAVE_HDR + 8, sizeof(comp));
     k_memcpy(&mxcsr, ex + 24, sizeof(mxcsr));
-    if ((bv & ~kvm_xcr0_guest(v)) || comp != 0) {
+    if (xcr0 == 0) {
+        if ((bv & ~(XFEATURE_X87 | XFEATURE_SSE)) || (mxcsr & ~MXCSR_MASK)) {
+            goto out;
+        }
+        vcpu_save(v, KVM_PART_FPU);
+        k_memcpy(v->xsave, ex, 512);
+        v->dirty |= KVM_PART_FPU;
+        r = 0;
+        goto out;
+    }
+    if ((bv & ~xcr0) || comp != 0) {
         goto out;
     }
     for (i = XSAVE_HDR + 16; i < XSAVE_HDR + 64; i++) {
@@ -1220,8 +1242,12 @@ static int32_t set_xsave(struct kvm_vcpu *v, uintptr_t arg)
             goto out;
         }
     }
-    if ((bv & (XFEATURE_SSE | XFEATURE_YMM)) && (mxcsr & ~MXCSR_MASK)) {
+    if ((bv & legacy) && (mxcsr & ~MXCSR_MASK)) {
         goto out;
+    }
+    if (!(bv & legacy)) {
+        vcpu_save(v, KVM_PART_FPU);
+        k_memcpy(ex + 24, v->xsave + 24, 8); /* MXCSR and MXCSR_MASK */
     }
     k_memcpy(v->xsave, ex, KVM_XSAVE_SIZE);
     v->dirty |= KVM_PART_FPU;
@@ -1920,6 +1946,7 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
     case KVM_SET_FPU:
         return set_fpu(v, arg);
     case KVM_GET_XSAVE:
+    case KVM_GET_XSAVE2:
         return get_xsave(v, arg);
     case KVM_SET_XSAVE:
         return set_xsave(v, arg);
