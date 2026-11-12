@@ -219,11 +219,12 @@ static bool stream_started = false; /* True once hardware stream is running */
  * low half of `kernel_ticks` when it last came; `hda_tick` asks for the
  * stream's service only until one has come, when the next is late
  * (`hda_irq_late`), and while play_irq_pending is set. That is set by the
- * interrupt and cleared by a service that finds a period played: an
- * interrupt that comes while the position still reads the period before,
- * as Linux's azx_position_check finds one (sound/pci/hda/hda_intel.c:612-625
- * of 6.12.115), leaves it set, and the tick asks again until the position
- * has passed into the next period. */
+ * interrupt and cleared by a service that finds a period played, or the
+ * position in the first half of its period: an interrupt that comes while
+ * the position still reads the second half of the period before, as Linux's
+ * azx_position_check finds one (sound/pci/hda/hda_intel.c:612-625 and
+ * 689-691 of 6.12.115), leaves it set, and the tick asks again until the
+ * position has passed into the next period. */
 static bool play_irq_seen = false;
 static bool play_irq_pending = false;
 static uint32_t play_irq_tick = 0;
@@ -314,16 +315,17 @@ static volatile uint32_t missed_revolutions = 0;
  * writer, whose own call copies into the ring
  * (sound/pci/hda/hda_controller.c:1056 and 1070, sound/core/pcm_lib.c:232
  * and 2274, Linux 6.12.115). The thread also polls the jacks
- * (HDA_SERVE_JACKS) and stops the beep generator and turns off the pins a
- * beep opened (HDA_SERVE_BEEP), which the tick asks for when they are due,
- * as Linux polls the jacks from a delayed work and sends the beep's verbs
- * from a work (sound/pci/hda/hda_codec.c:645-659,
- * sound/pci/hda/hda_beep.c:45-51 and 118 of 6.12.115). `service_wanted`
- * holds the HDA_SERVE_ bits asked for since the thread last took them; the
- * interrupt, the tick and the thread all hold the big lock. service_thread
- * is NULL until the first program has its pid, and always in the host test;
- * until then, and while the scheduler is off, the service runs where it is
- * asked for.
+ * (HDA_SERVE_JACKS), and sends the beep generator the divider a tone or a
+ * stop asked for and turns off the pins a beep opened (HDA_SERVE_BEEP),
+ * which a tone, a stop and the tick ask for when they are due, as Linux
+ * polls the jacks from a delayed work and sends the beep's verbs from a work
+ * (sound/pci/hda/hda_codec.c:645-659, sound/pci/hda/hda_beep.c:45-51 and
+ * 118 of 6.12.115). `service_wanted` holds the HDA_SERVE_ bits asked for
+ * since the thread last took them; whoever asks, and the thread, hold the
+ * big lock. service_thread is NULL until the first program has its pid, and
+ * always in the host test, where hda_test_threaded stands for it; until
+ * then, and while the scheduler is off, the service runs where it is asked
+ * for.
  */
 #define HDA_SERVE_CAPTURE   1u
 #define HDA_SERVE_PLAY      2u
@@ -335,7 +337,11 @@ static volatile uint32_t missed_revolutions = 0;
  * behind the programs a period's wait would let run. */
 #define HDA_THREAD_PRIORITY 50
 static volatile uint32_t service_wanted = 0;
-#ifndef RACH2_HOSTTEST
+#ifdef RACH2_HOSTTEST
+/* The host test's thread: while set, a request only joins service_wanted,
+ * and the test runs the services as khda would. */
+static bool hda_test_threaded = false;
+#else
 static process_t *service_thread = NULL;
 static wait_queue_t service_wq; /* the thread sleeps here */
 static uint64_t service_cycles, service_max_cycles;
@@ -812,7 +818,12 @@ static void hda_play_signal(void)
  * them off. Either the interrupt asks for it, or the tick does until the
  * stream's first interrupt, while an interrupt is pending and whenever the
  * next is late (hda_tick). A call that finds a period played clears
- * play_irq_pending; one that finds none leaves it as the interrupt set it.
+ * play_irq_pending, and so does one that finds none with the position in
+ * the first half of its period, since the period whose interrupt set the
+ * flag was then refilled before it came; one that finds none with the
+ * position in the second half leaves the flag set, the interrupt having come
+ * before the position reached the boundary, as azx_position_ok tests
+ * (sound/pci/hda/hda_intel.c:689-691 of Linux 6.12.115).
  * The play position, from the position buffer or LPIB, names the period
  * playing; the periods from the one playing at the last call up to this one
  * have been played, and are filled in that order, so that they play after
@@ -907,7 +918,7 @@ static void hda_service_stream(void)
     lpib_last = pos;
     walclk_last = now;
     hw_period_last = first % HDA_PERIODS;
-    if (count > 0)
+    if (count > 0 || pos % period_bytes <= period_bytes / 2)
         play_irq_pending = false;
 
     for (i = 0; i < count; i++) {
@@ -3264,11 +3275,11 @@ static uint8_t mic_left = 0;        /* the pin capture moved from, whose input t
 /*
  * The beep generator (hda_beep), found at enumeration. With no stream
  * playing the output pins are off, so a beep turns them on as a start does,
- * and the service the tick asks for turns them off again once the generator
- * has been silent for HDA_BEEP_IDLE_TICKS (hda_beep_service), so that a run
- * of bells does not switch the pins between bells. The pins and beep_opened
- * change only with the jacks held or in that service, which runs only when
- * nothing holds them.
+ * in the beep's service while khda runs, and that service turns them off
+ * again once the generator has been silent for HDA_BEEP_IDLE_TICKS
+ * (hda_beep_service), so that a run of bells does not switch the pins
+ * between bells. The pins and beep_opened change only with the jacks held
+ * or in that service, which sets them only when nothing holds them.
  */
 #define HDA_BEEP_IDLE_TICKS (TICK_HZ > 0 ? TICK_HZ : 1) /* one second */
 
@@ -3281,8 +3292,10 @@ static volatile uint8_t beep_div = 0;     /* the divider sounding; 0 silent */
 static volatile bool beep_opened = false; /* a beep turned the output pins on
                                              with no stream playing */
 static uint32_t beep_quiet = 0;           /* ticks silent since, while opened */
-static volatile bool beep_stop = false;   /* the tick's stop of the generator
-                                             waits for the beep's service */
+static volatile bool beep_owed = false;   /* beep_next waits for the beep's
+                                             service */
+static volatile uint8_t beep_next = 0;    /* the divider a tone or a stop
+                                             handed to khda; 0 a stop */
 
 static bool hda_input_program(int vmode, bool live);
 static uint8_t hda_source_route(int source, bool take);
@@ -4111,13 +4124,14 @@ static bool hda_service_threaded(void)
 #ifndef RACH2_HOSTTEST
     return service_thread != NULL && sched_is_enabled();
 #else
-    return false;
+    return hda_test_threaded;
 #endif
 }
 
 /** Ask for the services `wanted` asks for, HDA_SERVE_ bits: wake the
  * service's thread, or run them here while it does not run them. From the
- * interrupt and the tick, with interrupts off and the big lock held. */
+ * interrupt, the tick and a tone (hda_beep), with interrupts off and the big
+ * lock held. */
 static void hda_service_kick(uint32_t wanted)
 {
     if (!hda_service_threaded()) {
@@ -4129,7 +4143,9 @@ static void hda_service_kick(uint32_t wanted)
         service_play_requested = hda_read32(HDA_WALCLK);
         service_play_pending = true;
     }
+#endif
     service_wanted |= wanted;
+#ifndef RACH2_HOSTTEST
     wq_wake_all(&service_wq);
 #endif
 }
@@ -4184,7 +4200,7 @@ void hda_tick(void)
                 wanted |= HDA_SERVE_JACKS;
         }
     }
-    if (beep_stop) {
+    if (beep_owed) {
         wanted |= HDA_SERVE_BEEP;
     } else if (beep_opened && !beep_div) {
         if (!playing)
@@ -4537,8 +4553,8 @@ static uint32_t hda_capture_convert(const audio_stream_t *s, const uint8_t *src)
  * device writes is lost and the rest, from the one after it, are handed
  * over: the newest whole revolution, in order. A service already under way
  * elsewhere is left to finish alone. A call that finds a period to hand
- * over clears cap_irq_pending, as hda_service_stream clears
- * play_irq_pending.
+ * over, or none with the position in the first half of its period, clears
+ * cap_irq_pending, as hda_service_stream clears play_irq_pending.
  *
  * `cap_lock` and interrupts are held around the reads and updates of the
  * position, cap_next and the counts, and around `period`; each period's
@@ -4578,7 +4594,7 @@ static void hda_service_capture(void)
     /* The frames up to period `cur` that are neither handed nor to be. */
     s->lost = cap_recorded - pos % cap_period / cap_frame - cap_handed -
               (cur + cap_periods - cap_next) % cap_periods * (cap_period / cap_frame);
-    if (cap_next != cur)
+    if (cap_next != cur || pos % cap_period <= cap_period / 2)
         cap_irq_pending = false;
     while (cap_next != cur) {
         const uint8_t *src = cap_buffer + cap_next * cap_period;
@@ -5257,6 +5273,7 @@ static void hda_find_beep(void)
 
     beep_nid = 0;
     beep_div = 0;
+    beep_owed = false;
     beep_opened = false;
     beep_quiet = 0;
     hda_report.beep = hda_report.beep_divider = hda_report.beep_path = 0;
@@ -5294,18 +5311,47 @@ static void hda_find_beep(void)
 }
 
 /**
- * Stop the beep generator in a try, for the tick's stop: 0 when it is
- * stopped, or -EBUSY when the verb found the interface in use or failed,
- * and the stop is still owed.
+ * Stop the beep generator in a try, for the tick's stop while khda does not
+ * run: 0 when it is stopped, or -EBUSY when the verb found the interface in
+ * use or failed, and the stop is still owed.
  */
 static int hda_beep_stop(void)
 {
     if (hda_verb(codec_addr, beep_nid, HDA_VERB_SET_BEEP | 0, HDA_VERB_TRY, NULL) != 0)
         return -EBUSY;
-    beep_stop = false;
+    beep_owed = false;
     beep_div = 0;
     hda_report.beep_divider = 0;
     return 0;
+}
+
+/** Record divider `div` as the generator's, counting a tone, and restart
+ * the silence that turns the pins a beep opened off. */
+static void hda_beep_sent(uint32_t div)
+{
+    beep_quiet = 0;
+    beep_div = (uint8_t)div;
+    hda_report.beep_divider = (uint8_t)div;
+    if (div)
+        hda_report.beeps++;
+}
+
+/** Set EAPD on every EAPD-capable pin, as hda_set_eapd does, or clear it,
+ * in tries (hda_put), for the beep's service. */
+static void hda_beep_eapd(bool on, bool *ok)
+{
+    int i;
+
+    for (i = 0; i < hda_report.widget_count; i++) {
+        const hda_widget_report_t *w = &hda_report.widgets[i];
+
+        if (w->type == HDA_WIDGET_PIN && (w->pin_caps & 0x10000)) /* EAPD capable */
+            hda_put(w->nid,
+                    HDA_VERB_SET_EAPD | (!on                         ? 0x00
+                                         : w->nid == speaker_pin_nid ? 0x03
+                                                                     : 0x02),
+                    HDA_VERB_TRY, ok);
+    }
 }
 
 /**
@@ -5314,12 +5360,15 @@ static int hda_beep_stop(void)
  * between 1 and 255, so that 750 Hz is 16; a level of 0 sends 0. With no
  * stream playing, a tone first turns the output pins on for the output mode
  * and EAPD, as a start does (hda_route_output), and hda_beep_service turns
- * them off a second after the generator stops. A stop from the tick sends
- * only the stop: khda sends it, as Linux's snd_hda_beep_event leaves the
- * verb to a work (sound/pci/hda/hda_beep.c:118 of 6.12.115), and the tick
- * asks again while the verb finds the interface in use (hda_tick); while
- * khda does not run, the tick sends it here in a try (hda_beep_stop). The
- * divider sent, 0 for a stop the tick handed to khda, or -ENODEV, or
+ * them off a second after the generator stops. While khda runs, a tone or a
+ * stop only records its divider in beep_next and asks for the beep's
+ * service, which sends it with interrupts on, as Linux's snd_hda_beep_event
+ * records the tone and queues the work that sends it
+ * (sound/pci/hda/hda_beep.c:45-51 and 118 of 6.12.115); the newest request
+ * replaces one not yet sent. While khda does not run, a tone is sent here,
+ * waiting for the codec with interrupts off, and the tick's stop in a try
+ * (hda_beep_stop), which the tick sends again at the next tick while it
+ * finds the interface in use. The divider, sent or handed on; -ENODEV; or
  * -EBUSY from the tick.
  */
 static int hda_beep(uint32_t hz, int tick)
@@ -5335,48 +5384,78 @@ static int hda_beep(uint32_t hz, int tick)
         if (div < 1)
             div = 1;
     }
-    if (tick) {
-        if (!hda_service_threaded())
-            return hda_beep_stop();
-        beep_stop = true;
+    if (hda_service_threaded()) {
+        beep_next = (uint8_t)div;
+        beep_owed = true;
         hda_service_kick(HDA_SERVE_BEEP);
-        return 0;
+        return (int)div;
     }
+    if (tick)
+        return hda_beep_stop();
     hda_jack_hold();
-    beep_stop = false;
+    beep_owed = false;
     if (div && !playing && !beep_opened) {
         hda_route_output(HDA_VERB_WAIT);
         hda_set_eapd(true);
         beep_opened = true;
         hda_report.beep_path = 1;
     }
-    beep_quiet = 0;
     hda_send_verb(codec_addr, beep_nid, HDA_VERB_SET_BEEP | div);
-    beep_div = (uint8_t)div;
-    hda_report.beep_divider = (uint8_t)div;
-    if (div)
-        hda_report.beeps++;
+    hda_beep_sent(div);
     hda_jack_release();
     return (int)div;
 }
 
 /**
- * The beep's service, which the tick asks for (hda_tick) and which runs in
- * khda, or in the tick while khda does not run, as hda_poll_jacks does:
- * send the stop the tick owes (hda_beep_stop); then, once a stream plays,
- * leave the pins a beep turned on to it, and with none, turn them and EAPD
- * off when the generator has been silent for HDA_BEEP_IDLE_TICKS, in
- * tries. The tick asks again while a verb fails or code outside the service
- * holds the jacks, as Linux's generate_tone sends the stop and powers the
- * codec down from the beep's work (sound/pci/hda/hda_beep.c:24-51 of
- * 6.12.115).
+ * Send the divider a tone or a stop handed to the beep's service
+ * (beep_next), in tries: a tone with no stream playing first turns the
+ * output pins and EAPD on, as hda_beep does, which waits while code outside
+ * the service holds the jacks. True when it was sent; false when the tick
+ * is to ask again. A request that comes while this runs, the tick's stop on
+ * this processor, replaces beep_next and stays owed.
+ */
+static bool hda_beep_owed(void)
+{
+    uint32_t flags = kirq_save();
+    uint8_t div = beep_next;
+    bool ok = true;
+
+    kirq_restore(flags);
+    if (div && !playing && !beep_opened) {
+        if (hda_jacks_held() || !hda_route_output(HDA_VERB_TRY))
+            return false;
+        hda_beep_eapd(true, &ok);
+        if (!ok)
+            return false;
+        beep_opened = true;
+        hda_report.beep_path = 1;
+    }
+    if (hda_verb(codec_addr, beep_nid, HDA_VERB_SET_BEEP | div, HDA_VERB_TRY, NULL) != 0)
+        return false;
+    flags = kirq_save();
+    hda_beep_sent(div);
+    if (beep_next == div)
+        beep_owed = false;
+    kirq_restore(flags);
+    return !beep_owed;
+}
+
+/**
+ * The beep's service, which a tone, a stop and the tick ask for (hda_beep,
+ * hda_tick) and which runs in khda, or in the tick while khda does not run,
+ * as hda_poll_jacks does: send the divider a tone or a stop handed on
+ * (hda_beep_owed); then, once a stream plays, leave the pins a beep turned
+ * on to it, and with none, turn them and EAPD off when the generator has
+ * been silent for HDA_BEEP_IDLE_TICKS, in tries. The tick asks again while
+ * a verb fails or code outside the service holds the jacks, as Linux's
+ * generate_tone sends the divider and powers the codec down from the beep's
+ * work (sound/pci/hda/hda_beep.c:24-51 of 6.12.115).
  */
 static void hda_beep_service(void)
 {
     bool ok = true;
-    int i;
 
-    if (beep_stop && hda_beep_stop() != 0)
+    if (beep_owed && !hda_beep_owed())
         return;
     if (!beep_opened || beep_div)
         return;
@@ -5391,12 +5470,7 @@ static void hda_beep_service(void)
         hda_put(pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00, HDA_VERB_TRY, &ok);
     if (hp_pin_nid && hp_pin_nid != pin_nid)
         hda_put(hp_pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00, HDA_VERB_TRY, &ok);
-    for (i = 0; i < hda_report.widget_count; i++) {
-        const hda_widget_report_t *w = &hda_report.widgets[i];
-
-        if (w->type == HDA_WIDGET_PIN && (w->pin_caps & 0x10000)) /* EAPD capable */
-            hda_put(w->nid, HDA_VERB_SET_EAPD | 0x00, HDA_VERB_TRY, &ok);
-    }
+    hda_beep_eapd(false, &ok);
     if (ok) {
         beep_opened = false;
         hda_report.beep_path = 0;
