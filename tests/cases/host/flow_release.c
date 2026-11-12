@@ -289,6 +289,27 @@ static int wsl_mock(void)
     return 0;
 }
 /**
+ * Answer windows_gate's list of the runs whose parts may still run: while
+ * RELEASE_TEST_HOLD begins with `stuck`, as when winclean.sh cannot stop
+ * them, each run whose preparation a start of the calls so far began, as
+ * `orphan ID`; otherwise none.
+ */
+static int gate_mock(void)
+{
+    char *s, *p, *e;
+    if (strncmp(ev("RELEASE_TEST_HOLD"), "stuck", 5))
+        return 0;
+    s = fx_read(ev("RELEASE_TEST_CALLS"));
+    for (p = s; p && (p = strstr(p, "\nwindows b=D:/o/")) != NULL; p = e) {
+        p += 17;
+        e = strchr(p, '\n');
+        if (e && e - p > 8 && !strncmp(e - 8, ".prepare", 8))
+            printf("orphan %.*s\n", (int)(e - p - 8), p);
+    }
+    free(s);
+    return 0;
+}
+/**
  * Answer a script for Windows' shell, whose lines are recorded: the start of
  * a part that windows_detach runs apart from its session prints its start's
  * status, and a poll of the part, OUT/ID.PART.launch naming it, prints the
@@ -296,14 +317,15 @@ static int wsl_mock(void)
  * preparation and RELEASE_TEST_WINDOWS for the cases, as `poll done` when it
  * has a status line and as `poll ended`, with an empty console, when it has
  * none. winclean.sh fails, as when a part it stops still runs, while
- * RELEASE_TEST_HOLD begins with `stuck`. Any other script prints
+ * RELEASE_TEST_HOLD begins with `stuck`, and windows_gate's list is
+ * gate_mock's. Any other script prints
  * nothing.
  */
 static int windows_mock(void)
 {
     char line[20000], b[4096];
     const char *out;
-    int start = 0, poll = 0, prepare = 0, clean = 0;
+    int start = 0, poll = 0, prepare = 0, clean = 0, gate = 0;
     while (fgets(b, sizeof(b), stdin)) {
         snprintf(line, sizeof(line), "windows %s", b);
         append(ev("RELEASE_TEST_CALLS"), line);
@@ -311,9 +333,12 @@ static int windows_mock(void)
         poll |= !strncmp(b, "echo \"poll $a\"", 14);
         prepare |= strstr(b, ".prepare.launch ") != NULL;
         clean |= !strncmp(b, "# winclean.sh: ", 15);
+        gate |= !strncmp(b, "for f in *.prepare.sh *.cases.sh; do", 36);
     }
     if (clean)
         return !strncmp(ev("RELEASE_TEST_HOLD"), "stuck", 5);
+    if (gate)
+        return gate_mock();
     if (start)
         puts("start: status 0");
     if (!poll)
@@ -659,11 +684,12 @@ static int tasklist_mock(int argc, char **argv)
 #define BASH_STARTED "133700000000000000"
 /**
  * Answer winclean.sh's PowerShell look at one process, `Get-Process -Id N`,
- * as Windows would when each number that RELEASE_TEST_BASH lists is a bash
- * that started at BASH_STARTED: until its kill, or always when
- * RELEASE_TEST_WINCLEAN is `stuck`. The look compares the start time it is
- * given and, with `kill`, kills a match with taskkill, recorded as
- * `taskkill /F /T /PID N`. Any other command prints nothing.
+ * as Windows would when each number that RELEASE_TEST_BASH lists is the
+ * part's bash, which started at BASH_STARTED and runs the part's script:
+ * until its kill, or always when RELEASE_TEST_WINCLEAN is `stuck`. The look
+ * compares the start time it is given, or with none the command line, and
+ * with `kill` kills a match with taskkill, recorded as `taskkill /F /T /PID
+ * N`. Any other command prints nothing.
  */
 static int powershell_mock(int argc, char **argv)
 {
@@ -671,7 +697,7 @@ static int powershell_mock(int argc, char **argv)
     const char *c = argc > 0 ? argv[argc - 1] : "", *p, *q;
     if ((p = strstr(c, "Get-Process -Id ")) != NULL)
         snprintf(pid, sizeof(pid), "%.*s", (int)strspn(p + 16, "0123456789"), p + 16);
-    if ((p = strstr(c, "if ('")) != NULL && (q = strstr(p, "' -eq '')")) != NULL)
+    if ((p = strstr(c, "if ('")) != NULL && (q = strstr(p, "' -ne '')")) != NULL)
         snprintf(started, sizeof(started), "%.*s", (int)(q - p - 5), p + 5);
     if (!*pid)
         return 0;
@@ -680,9 +706,7 @@ static int powershell_mock(int argc, char **argv)
     if (!strstr(ev("RELEASE_TEST_BASH"), listed) ||
         (strcmp(ev("RELEASE_TEST_WINCLEAN"), "stuck") && fx_has(ev("RELEASE_TEST_CALLS"), killed)))
         puts("gone");
-    else if (!*started)
-        puts("unknown");
-    else if (strcmp(started, BASH_STARTED))
+    else if (*started && strcmp(started, BASH_STARTED))
         puts("gone");
     else if (!strstr(c, "if ('kill' -ne 'kill')"))
         puts("runs");
@@ -1739,13 +1763,14 @@ static int windows_failure_rows(struct release *r)
                                  .prepare = "building",
                                  .windows = "status 0"});
     machine_line(r, "windows started ", id, sizeof(id));
-    snprintf(last, sizeof(last), "failure windows %s runner", id);
+    snprintf(last, sizeof(last), "waiting: the Windows runs %s are not confirmed stopped there",
+             id);
     ok = check(r,
-               f->status == 1 && count(flow_path(f, "calls"), " run routine-prepare ") == 1 &&
-                   fx_has(record(r), last) && !called(r, " run routine-collect ") &&
-                   strstr(f->out, " is not confirmed stopped on Windows; ") != NULL,
-               "a preparation without a status that winclean.sh cannot confirm stopped fails, "
-               "and no other starts in its copy") &&
+               f->status == 75 && count(flow_path(f, "calls"), " run routine-prepare ") == 1 &&
+                   count(flow_path(f, "calls"), "^windows # winclean.sh: ") == 2 &&
+                   !called(r, " run routine-collect ") && strstr(f->out, last) != NULL,
+               "a preparation without a status that winclean.sh cannot confirm stopped keeps "
+               "the release waiting, and no other starts in its copy") &&
          ok;
     run(r, &(struct release_row){.record = r->head,
                                  .git = "yes",
@@ -1863,10 +1888,11 @@ static int windows_stop_rows(struct release *r)
 /**
  * Run winclean.sh on the run WINCLEAN_ID, with OUT and TREE under the work
  * directory, as RELEASE_TEST_WINCLEAN says, with the preparation's launch
- * record LAUNCH and PID file PID, each missing when NULL. Each claim's PID
- * file names a number of Windows' bash too.
+ * record LAUNCH, PID file PID and status file RC, each missing when NULL,
+ * and output OUT. Each claim's PID file names a number of Windows' bash too.
  */
-static void winclean(struct release *r, const char *how, const char *launch, const char *pid)
+static void winclean(struct release *r, const char *how, const char *launch, const char *pid,
+                     const char *rc, const char *out)
 {
     struct fixture *f = r->f;
     const char *a[6] = {"/bin/sh"};
@@ -1882,7 +1908,9 @@ static void winclean(struct release *r, const char *how, const char *launch, con
         flow_put(f, WINCLEAN_OUT ".prepare.launch", launch);
     if (pid)
         flow_put(f, WINCLEAN_OUT ".prepare.pid", pid);
-    flow_put(f, WINCLEAN_OUT ".prepare.out", "building\n");
+    if (rc)
+        flow_put(f, WINCLEAN_OUT ".prepare.rc", rc);
+    flow_put(f, WINCLEAN_OUT ".prepare.out", out);
     flow_put(f, "windows/tree/build/tmp/" WINCLEAN_ID "/tmp/scratch", "");
     fx_env("RELEASE_TEST_CALLS", flow_path(f, "calls"));
     fx_env("RELEASE_TEST_HOLD", "");
@@ -1915,18 +1943,20 @@ static int winclean_kept(struct release *r, const char *why)
  * it fails and keeps the run's scratch. It kills no process that has the
  * preparation's number but another start time, fails while a start has not
  * said what it created, and marks each part cancelled before it looks, so
- * that a start that has not begun starts nothing.
+ * that a start that has not begun starts nothing. A part has ended only once
+ * its status file exists, whatever its output says, and a bash whose start
+ * time no file gives is known by its command line.
  */
 static int winclean_rows(struct release *r)
 {
     struct fixture *f = r->f;
     int ok;
-    winclean(r, "", "4003 " BASH_STARTED "\n", "4003\n");
+    winclean(r, "", "4003 " BASH_STARTED "\n", "4003\n", NULL, "building\n");
     ok = check(r,
                winclean_removed(r) && called(r, "^taskkill /F /T /PID 4003$") &&
                    !called(r, "^taskkill .*/PID 400[12]$"),
                "winclean.sh stops the preparation and leaves the numbers of WSL's claims alone");
-    winclean(r, "stuck", "4003 " BASH_STARTED "\n", "4003\n");
+    winclean(r, "stuck", "4003 " BASH_STARTED "\n", "4003\n", NULL, "building\n");
     ok = check(r,
                winclean_kept(r, "winclean: the prepare of " WINCLEAN_ID
                                 ", bash 4003, may still run") &&
@@ -1934,23 +1964,39 @@ static int winclean_rows(struct release *r)
                    !called(r, "^taskkill .*/PID 400[12]$"),
                "winclean.sh fails and keeps the scratch of a preparation that still runs") &&
          ok;
-    winclean(r, "", "4003 133600000000000000\n", NULL);
+    winclean(r, "", "4003 133600000000000000\n", NULL, NULL, "building\n");
     ok = check(r, winclean_removed(r) && !called(r, "^taskkill .*/PID 4003$"),
                "winclean.sh kills no bash that took the number of a preparation that ended") &&
          ok;
-    winclean(r, "", "", NULL);
+    winclean(r, "", "", NULL, NULL, "building\n");
     ok = check(r,
                winclean_kept(r, "winclean: the prepare of " WINCLEAN_ID
                                 ", bash unknown, may still run") &&
                    fx_exists(flow_path(f, WINCLEAN_OUT ".prepare.cancel")),
                "winclean.sh fails while a preparation's start has not said what it created") &&
          ok;
-    winclean(r, "", NULL, NULL);
+    winclean(r, "", NULL, NULL, NULL, "building\n");
     ok = check(r,
                winclean_removed(r) && fx_exists(flow_path(f, WINCLEAN_OUT ".prepare.cancel")) &&
                    fx_exists(flow_path(f, WINCLEAN_OUT ".cases.cancel")),
                "winclean.sh marks a run's parts cancelled, so that a start on its way starts "
                "nothing") &&
+         ok;
+    winclean(r, "", "4003 " BASH_STARTED "\n", "4003\n", NULL, "status 0\n");
+    ok = check(r,
+               winclean_removed(r) && called(r, "^taskkill /F /T /PID 4003$") &&
+                   fx_exists(flow_path(f, WINCLEAN_OUT ".prepare.stopped")),
+               "winclean.sh stops a preparation whose output has a line `status ` but whose "
+               "bash wrote no status file, and marks it stopped") &&
+         ok;
+    winclean(r, "", "4003 " BASH_STARTED "\n", "4003\n", "0\n", "status 0\n");
+    ok = check(r, winclean_removed(r) && !called(r, "^taskkill .*/PID 4003$"),
+               "winclean.sh leaves alone a preparation whose bash wrote its status file") &&
+         ok;
+    winclean(r, "", NULL, "4003\n", NULL, "building\n");
+    ok = check(r, winclean_removed(r) && called(r, "^taskkill /F /T /PID 4003$"),
+               "winclean.sh stops by its command line a bash whose start recorded no start "
+               "time") &&
          ok;
     return ok;
 }
