@@ -871,7 +871,7 @@ void vfs_walk_unlock(struct vfs_mount *mnt)
  */
 static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node, int locked)
 {
-    struct vfs_ref next;
+    struct vfs_ref next = {NULL, NULL};
 
     next.mnt = mnt;
     next.node = node;
@@ -2156,7 +2156,7 @@ static int cached_dotdot(struct vfs_ref *cur, struct cached_dots *dd,
 static int cached_dots_step(struct vfs_ref *cur, const char *comp, struct cached_dots *dd,
                             const struct cached_root *seen)
 {
-    struct vfs_ref next;
+    struct vfs_ref next = {NULL, NULL};
     int rc;
 
     if (streq(comp, ".")) {
