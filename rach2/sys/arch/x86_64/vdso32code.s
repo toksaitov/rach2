@@ -130,7 +130,11 @@ vdso32_page_at:
 # right by the page's shift, at most 32; the base's nanoseconds are added
 # and the sum divided by 10^9 into seconds and nanoseconds. The sequence
 # count is read before and after, and the reading made again while it is
-# odd or has moved.
+# odd or has moved. Each pass checks the page's mode after the count, as
+# Linux's do_hres does (lib/vdso/gettimeofday.c:141-169), and returns with
+# the carry set and nothing read when the clock has stopped, so that a
+# reading the stop overtakes makes the system call; the carry is clear
+# otherwise.
 vdso32_fine:
     pushl %ebp
     pushl %ebx
@@ -144,6 +148,8 @@ vdso32_fine:
     testl $1, %eax
     jnz 5f
     movl %eax, (%esp)
+    cmpl $VCLOCK_TSC, D_MODE(%ebp)
+    jne 6f
     lfence
     rdtsc
     lfence
@@ -195,13 +201,24 @@ vdso32_fine:
     popl %esi
     popl %ebx
     popl %ebp
+    clc
     ret
 5:
     pause
     jmp 1b
+6:
+    addl $4, %esp
+    popl %edi
+    popl %esi
+    popl %ebx
+    popl %ebp
+    stc
+    ret
 
-# The same clock as of the last tick, without the TSC: EDX:EAX and ECX as
-# `vdso32_fine` gives them.
+# The same clock as of the last tick, without the TSC: EDX:EAX and ECX and
+# the carry as `vdso32_fine` gives them, the mode checked in each pass as
+# there; Linux's do_coarse needs no check, since its page is kept while the
+# clock is stopped, and this one is not.
 vdso32_coarse:
     pushl %ebx
     pushl %esi
@@ -210,6 +227,8 @@ vdso32_coarse:
     movl D_SEQ(%ecx), %edi
     testl $1, %edi
     jnz 2f
+    cmpl $VCLOCK_TSC, D_MODE(%ecx)
+    jne 3f
     movl (%ecx,%eax), %ebx
     movl 4(%ecx,%eax), %esi
     movl 8(%ecx,%eax), %edx
@@ -221,17 +240,26 @@ vdso32_coarse:
     popl %edi
     popl %esi
     popl %ebx
+    clc
     ret
 2:
     pause
     jmp 1b
+3:
+    popl %edi
+    popl %esi
+    popl %ebx
+    stc
+    ret
 
 # The clock whose id is in EAX, read into EDX:EAX and ECX as `vdso32_fine`
 # gives it, with the carry flag clear: CLOCK_REALTIME and its coarse form,
 # CLOCK_MONOTONIC, whose reading CLOCK_BOOTTIME shares, as in the kernel's
 # clock_read, and its coarse form, and CLOCK_MONOTONIC_RAW.
 # The carry flag is set, with nothing read, for any other clock and while
-# the clock does not run from the TSC.
+# the clock does not run from the TSC, which each reading checks again
+# inside its sequence-count loop; the readings are tail calls, so that their
+# carry is this routine's.
 vdso32_clock:
     call vdso32_page
     cmpl $VCLOCK_TSC, D_MODE(%ecx)
@@ -253,29 +281,19 @@ vdso32_clock:
     ret
 5:
     movl $D_RAW_SEC, %eax
-    call vdso32_fine
-    clc
-    ret
+    jmp vdso32_fine
 1:
     movl $D_REAL_SEC, %eax
-    call vdso32_fine
-    clc
-    ret
+    jmp vdso32_fine
 2:
     movl $D_MONO_SEC, %eax
-    call vdso32_fine
-    clc
-    ret
+    jmp vdso32_fine
 3:
     movl $D_REAL_SEC, %eax
-    call vdso32_coarse
-    clc
-    ret
+    jmp vdso32_coarse
 4:
     movl $D_MONO_SEC, %eax
-    call vdso32_coarse
-    clc
-    ret
+    jmp vdso32_coarse
 
 # The system call in EAX with the first two arguments of the function that
 # jumps here, made through __kernel_vsyscall, whose result the function
