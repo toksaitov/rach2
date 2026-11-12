@@ -401,13 +401,23 @@ void loop_repoint(struct vfs_mount *mnt, const void *from, void *to)
  * Whether the file `node` of `mnt` backs a loop device. A caller with an
  * open handle asks with its node (`handle_node` in vfs.c), since another
  * open of the same file has a handle of its own.
+ *
+ * The mounts are compared by the file system they show (`vfs_mount_base`):
+ * a bind keeps the nodes of the mount it was made from under a record of its
+ * own, so a file attached through one mount and reached through another is
+ * the same file. The slot's mount is read once, since a detach clears it
+ * without the lock a caller of this may hold; a mount's record is never
+ * freed.
  */
 int loop_backs(struct vfs_mount *mnt, void *node)
 {
+    const struct vfs_mount *base = vfs_mount_base(mnt);
+    struct vfs_mount *m;
     int i;
 
     for (i = 0; i < LOOP_DEVICES; i++) {
-        if (loops[i].mnt != mnt) {
+        m = *(struct vfs_mount *const volatile *)&loops[i].mnt;
+        if (!m || vfs_mount_base(m) != base) {
             continue;
         }
         if (loops[i].node == node) {

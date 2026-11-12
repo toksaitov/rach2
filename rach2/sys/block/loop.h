@@ -66,9 +66,10 @@ int loop_attach(int index, const char *path, int writable);
  */
 int loop_detach(int index);
 
-/** Whether the file at (`mnt`, `node`) backs a loop device. `node` is the
- * file's node, never an open handle of it, which differs for each open on a
- * type with a `handle_node`. */
+/** Whether the file at (`mnt`, `node`) backs a loop device, through `mnt`
+ * or any other mount that shows the same file system, a bind of it among
+ * them. `node` is the file's node, never an open handle of it, which differs
+ * for each open on a type with a `handle_node`. */
 int loop_backs(struct vfs_mount *mnt, void *node);
 
 /** Follow a node the file system moved, for `vfs_repoint`, which owns that
