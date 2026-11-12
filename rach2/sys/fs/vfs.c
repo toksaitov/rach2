@@ -1723,13 +1723,15 @@ static int walk_finish(const struct vfs_ref *cur, int flags)
 
 /** Whether the cached walk may stand on `mnt`: a type whose names the name
  * cache keeps, which a walk needs no namespace lock for and which looks
- * names up one at a time. */
+ * names up one at a time, and whose `getattr`, `hold` and `put` run without
+ * the big lock (`reads_unlocked`), since the walk and `stat_at_unlocked`
+ * call them without it. */
 static int walk_cacheable(const struct vfs_mount *mnt)
 {
     const struct vfs_type *t = mnt->type;
 
-    return t->name_cache && !t->ns_serialised && !t->ops->lookup_rest && t->ops->hold &&
-           t->ops->put && t->ops->put_unless_last && t->ops->getattr;
+    return t->name_cache && t->reads_unlocked && !t->ns_serialised && !t->ops->lookup_rest &&
+           t->ops->hold && t->ops->put && t->ops->put_unless_last && t->ops->getattr;
 }
 
 /** Drop the cached walk's hold on `node` of `mnt`: without the big lock
