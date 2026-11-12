@@ -136,6 +136,14 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return -EINTR;
 }
 
+/** Nothing: the model keeps no wake records. */
+void wq_each_waiter(wait_queue_t *wq, void (*fn)(struct process *p, uint64_t arg), uint64_t arg)
+{
+    (void)wq;
+    (void)fn;
+    (void)arg;
+}
+
 /** Count a wakeup of the timer's readers. */
 void wq_wake_all(wait_queue_t *wq)
 {

@@ -290,6 +290,25 @@ void wq_poll_remove(wait_queue_t *wq, struct wq_waiter *w)
     }
 }
 
+void wq_each_waiter(wait_queue_t *wq, void (*fn)(struct process *p, uint64_t arg), uint64_t arg)
+{
+    struct wq_waiter *w;
+    uint32_t flags;
+
+    if (!wq || !fn) {
+        return;
+    }
+    flags = irq_save();
+    wq_lock(wq);
+    for (w = wq->head; w; w = w->next) {
+        if (w->proc) {
+            fn(w->proc, arg);
+        }
+    }
+    wq_unlock(wq);
+    irq_restore(flags);
+}
+
 int wq_active(const wait_queue_t *wq)
 {
     return wq != NULL && wq->head != NULL;

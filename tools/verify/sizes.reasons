@@ -529,7 +529,6 @@ tests/host/pipe_ring_hosttest.c:main lines 104 a test's rows, each a case, read 
 
 tests/host/poll_select_hosttest.c:main lines 183 a test's rows, each a case, read as one table
 
-tests/host/process_timer_hosttest.c:main lines 116 a test's rows, each a case, read as one table
 
 tests/host/pwauth_hosttest.c:check_fork complexity 31 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_fork lines 101 a test's rows, each a case, read as one table

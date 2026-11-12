@@ -77,6 +77,8 @@ struct ktimer {
     struct tgroup *cpu_tg; /* held: the process whose time it counts, or NULL */
     uint32_t cpu_tid;
     int cpu_user;
+    struct ktimer *fire_next; /* the list of timers whose signal is due */
+    int fire_queued;          /* on that list */
 };
 
 /* A setting as the call gives and takes it, whichever width of time: the
@@ -98,6 +100,11 @@ struct setting {
 static struct spinlock timer_lock = SPINLOCK_INIT_NAMED("timer_lock");
 static struct ktimer *armed;
 static struct ktimer *cpu_armed;
+/* The POSIX timers whose signal the tick found due and left for a holder of
+ * the big lock (`ptimer_fire_later`), first expired first, under
+ * `timer_lock`; and whether there are any, read without it. */
+static struct ktimer *fire_head, **fire_tail = &fire_head;
+static volatile int fire_due;
 
 /** Take `t` off the list of armed timers it is on and mark it disarmed. The
  * caller holds `timer_lock`. */
@@ -123,20 +130,85 @@ static uint64_t ticks_of(uint32_t sec, uint32_t sub)
 static void ptimer_fire(struct ktimer *t);
 static void ptimer_free(struct ktimer **link);
 
+/**
+ * Leave the expiration of the POSIX timer `t` for a holder of the big lock
+ * to signal (`ptimer_post_due`), since the tick runs without it and a
+ * signal is posted under it; the expirations counted meanwhile go into the
+ * one signal and its overrun, as they would into a signal still pending.
+ * Linux posts a timer's signal from its timer's callback
+ * (kernel/time/posix-timers.c:318-377). The caller holds `timer_lock`.
+ */
+static void ptimer_fire_later(struct ktimer *t)
+{
+    if (t->fire_queued) {
+        return;
+    }
+    t->fire_next = NULL;
+    *fire_tail = t;
+    fire_tail = &t->fire_next;
+    t->fire_queued = 1;
+    fire_due = 1;
+}
+
+/** Take `t` off the list of timers whose signal is due; the caller holds
+ * `timer_lock`. */
+static void ptimer_fire_cancel(struct ktimer *t)
+{
+    struct ktimer **link = &fire_head;
+
+    if (!t->fire_queued) {
+        return;
+    }
+    while (*link && *link != t) {
+        link = &(*link)->fire_next;
+    }
+    if (*link) {
+        *link = t->fire_next;
+        if (fire_tail == &t->fire_next) {
+            fire_tail = link;
+        }
+    }
+    t->fire_queued = 0;
+    t->fire_next = NULL;
+    fire_due = fire_head != NULL;
+}
+
+int ptimer_posts_due(void)
+{
+    return fire_due;
+}
+
+void ptimer_post_due(void)
+{
+    uint32_t irq;
+
+    if (!fire_due) {
+        return;
+    }
+    irq = spin_lock_irqsave(&timer_lock);
+    while (fire_head) {
+        struct ktimer *t = fire_head;
+
+        fire_head = t->fire_next;
+        if (!fire_head) {
+            fire_tail = &fire_head;
+        }
+        t->fire_next = NULL;
+        t->fire_queued = 0;
+        ptimer_fire(t);
+    }
+    fire_due = 0;
+    spin_unlock_irqrestore(&timer_lock, irq);
+}
+
 /** An expiration of `t`, due by the tick `now`: counted, with those of an
  * interval missed since, and the timer armed again by its interval or
  * disarmed; then its readers woken, or its signal posted. The caller holds
  * `timer_lock`. */
 static void expire(struct ktimer *t, uint64_t now)
 {
-    struct wq_waiter *w;
-
     if (!t->tg) {
-        for (w = t->wq.head; w; w = w->next) {
-            if (w->proc) {
-                waketime_expire(w->proc, t->due);
-            }
-        }
+        wq_each_waiter(&t->wq, waketime_expire, t->due);
     }
     if (t->isec != 0 || t->isub != 0) {
         uint64_t interval = ticks_of(t->isec, t->isub);
@@ -151,7 +223,7 @@ static void expire(struct ktimer *t, uint64_t now)
         disarm(t);
     }
     if (t->tg) {
-        ptimer_fire(t);
+        ptimer_fire_later(t);
     } else {
         wq_wake_all(&t->wq);
     }
@@ -183,7 +255,7 @@ void ptimer_cpu_tick(const process_t *p, int user)
             } else {
                 disarm(t);
             }
-            ptimer_fire(t);
+            ptimer_fire_later(t);
         }
         t = next;
     }
@@ -794,6 +866,7 @@ static void ptimer_free(struct ktimer **link)
     if (t->armed) {
         disarm(t);
     }
+    ptimer_fire_cancel(t);
     *link = t->in_group;
     spin_unlock_irqrestore(&timer_lock, irq);
     tgroup_put(t->cpu_tg);

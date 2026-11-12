@@ -278,10 +278,6 @@ static process_t *sched_find_rt(int cpu)
     return best;
 }
 
-/* The ticks in a row a processor passes without the big lock while a process
- * waits on its queue, in ms: a slice's end may wait this long for the lock. */
-#define SCHED_TICK_PASSES 4u
-
 uint32_t sched_work_count(unsigned int index)
 {
     return index == 0 ? pick_count : index == 1 ? pick_steps : 0;
@@ -491,6 +487,16 @@ int sched_wake_blocked(process_t *p)
     return kick;
 }
 
+uint32_t sched_lock_take(void)
+{
+    return spin_lock_irqsave(&sched_lock);
+}
+
+void sched_lock_give(uint32_t flags)
+{
+    spin_unlock_irqrestore(&sched_lock, flags);
+}
+
 void sched_wake_signal(process_t *p)
 {
     uint32_t flags = spin_lock_irqsave(&sched_lock);
@@ -506,16 +512,21 @@ void sched_wake_signal(process_t *p)
     }
 }
 
+int sched_wake_due_locked(process_t *p, uint64_t now)
+{
+    if (p->state != PROC_BLOCKED || p->wakeup_tick == 0 || now < p->wakeup_tick) {
+        return -1;
+    }
+    waketime_expire(p, p->wakeup_tick);
+    p->wakeup_tick = 0;
+    return sched_ready_locked(p);
+}
+
 void sched_wake_due(process_t *p, uint64_t now)
 {
     uint32_t flags = spin_lock_irqsave(&sched_lock);
-    int kick = -1;
+    int kick = sched_wake_due_locked(p, now);
 
-    if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 && now >= p->wakeup_tick) {
-        waketime_expire(p, p->wakeup_tick);
-        p->wakeup_tick = 0;
-        kick = sched_ready_locked(p);
-    }
     spin_unlock_irqrestore(&sched_lock, flags);
     if (kick >= 0) {
         smp_kick(kick);
@@ -1029,16 +1040,31 @@ int sched_all_idle(void)
     return 1;
 }
 
-/** Count a tick of `p`'s processor time against its process's timer `k`
- * when `counts`, and post `signo` when the timer runs out, arming it again
- * for its interval. */
+/**
+ * Count a tick of `p`'s processor time against its process's timer `k`
+ * when `counts`, and when the timer runs out arm it again for its interval
+ * and leave `signo` for a holder of the big lock to post
+ * (`proc_tick_signal`). The group's timers are under its `cpu_lock`, since
+ * the ticks of its threads on every processor count them, as Linux's
+ * `check_cpu_itimer` runs under the signal handler's lock
+ * (kernel/time/posix-cpu-timers.c:972-994).
+ */
 static void cpu_timer_tick(process_t *p, int k, int counts, int signo)
 {
     struct tgroup *tg = p->tg;
+    int fired = 0;
 
-    if (counts && tg->cpu_left[k] != 0 && --tg->cpu_left[k] == 0) {
+    if (!counts) {
+        return;
+    }
+    spin_lock(&tg->cpu_lock);
+    if (tg->cpu_left[k] != 0 && --tg->cpu_left[k] == 0) {
         tg->cpu_left[k] = tg->cpu_interval[k];
-        signal_post(p, signo);
+        fired = 1;
+    }
+    spin_unlock(&tg->cpu_lock);
+    if (fired) {
+        proc_tick_signal(p, signo);
     }
 }
 
@@ -1087,9 +1113,11 @@ static void sched_account_one(struct percpu *cpu, int user)
  * processor calls this after it has counted its tick and any the
  * clock found lost, and so charges all of them. Another processor's tick is
  * out of step with the boot processor's and charges the global ticks since
- * its last, none or more than one. A tick lost while an interrupt was held
- * off, which the big lock can hold for longer than a tick, is charged to
- * what the processor was doing when the next one came.
+ * its last, none or more than one. A tick lost while interrupts were off
+ * for longer than a tick is charged to what the processor was doing when
+ * the next one came. Each processor writes only its own counts and its
+ * current thread's times, so this needs no lock but the group's for its
+ * CPU timers (`cpu_timer_tick`).
  */
 void sched_account_tick(int user)
 {
@@ -1097,25 +1125,10 @@ void sched_account_tick(int user)
     uint32_t now = (uint32_t)kernel_ticks;
     uint32_t ticks = now - cpu->accounted_tick;
 
-    cpu->ticks_passed = 0;
     cpu->accounted_tick = now;
     while (ticks-- > 0) {
         sched_account_one(cpu, user);
     }
-}
-
-int sched_tick_waits(void)
-{
-    struct percpu *cpu = this_cpu();
-    uint32_t flags = spin_lock_irqsave(&sched_lock);
-    int queued = run_queues[arch_cpu_id()].count != 0;
-
-    spin_unlock_irqrestore(&sched_lock, flags);
-    if (!queued) {
-        cpu->ticks_passed = 0;
-        return 0;
-    }
-    return ++cpu->ticks_passed >= SCHED_TICK_PASSES;
 }
 
 /* The load averages, Linux's: in fixed point, sampled every LOAD_FREQ
