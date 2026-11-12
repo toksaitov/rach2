@@ -1,6 +1,7 @@
 /**
  * Check the fast i386 entry's copy of the saved EBP before the call's entry,
- * and the return of a call whose copy fails.
+ * inside the call's time, and the return and count of a call whose copy
+ * fails.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -DRACH2_HOST_X86_64
  */
@@ -10,7 +11,7 @@ extern int printf(const char *format, ...);
 struct percpu cpu_table[NR_CPUS];
 static process_t proc;
 static struct mm space;
-static int bad, entered, pushed, left, fault;
+static int bad, entered, pushed, left, fault, clocked, counted;
 
 /* Image labels stand in for the linked assembler; this test builds no image. */
 const char vdso32_text_start[1] = {0};
@@ -61,7 +62,7 @@ uint32_t vdso_elf_hash(const char *name)
     return 0;
 }
 
-/* The cycle account, off as by default (sched.c). */
+/* The cycle account (sched.c), off by default; the test runs both ways. */
 int sched_cycle_account;
 
 /** Account for the frame record a failed copy pushes for the return. */
@@ -78,7 +79,8 @@ int copy_from_user(void *dst, const void __user *src, size_t size)
 {
     uint32_t ebp = 0x12345678u;
 
-    if (entered != 0 || (uintptr_t)src != 0x40001000u || size != sizeof(ebp)) {
+    if (entered != 0 || clocked != sched_cycle_account || (uintptr_t)src != 0x40001000u ||
+        size != sizeof(ebp)) {
         bad++;
     }
     if (fault) {
@@ -88,22 +90,37 @@ int copy_from_user(void *dst, const void __user *src, size_t size)
     return 0;
 }
 
-/** The call's entry receives the sixth argument intact and the landing pad
- * as its return. */
-void isr_syscall(isr_params_t *p)
+/** The call's entry receives the sixth argument intact and the cycle count
+ * the fast entry read before its copy; it counts the call itself. */
+void isr_syscall_at(isr_params_t *p, uint64_t start)
 {
-    if (p->rbp != 0x12345678u || p->rax != 192) {
+    if (p->rbp != 0x12345678u || p->rax != 192 || start != (sched_cycle_account ? 1000u : 0u)) {
         bad++;
     }
     entered++;
+    counted++;
     p->rax = 17;
 }
 
-/** No clock is read with the cycle account off. */
+/** The clock is read once, before the copy, and only with the cycle account
+ * on. */
 uint64_t arch_cycles(void)
 {
-    bad++;
+    if (!sched_cycle_account || clocked != 0) {
+        bad++;
+    }
+    clocked++;
     return 1000;
+}
+
+/** A failed copy counts the call once under its number, with the time from
+ * before the copy. */
+void smp_call_end(uint32_t nr, int ioctl, uint64_t start)
+{
+    if (!fault || nr != 192 || ioctl != 0 || start != (sched_cycle_account ? 1000u : 0u)) {
+        bad++;
+    }
+    counted++;
 }
 
 /** Every call returns once, after its entry or its failed copy. */
@@ -116,8 +133,9 @@ void isr_leave(isr_params_t *p)
     left++;
 }
 
-/** Both fast instructions copy the saved EBP before the entry, and a failed
- * copy answers -EFAULT without the call. */
+/** Both fast instructions copy the saved EBP before the entry, with the cycle
+ * account off and on, and a failed copy answers -EFAULT without the call
+ * and counts it once. */
 int main(void)
 {
     isr_params_t p;
@@ -127,21 +145,28 @@ int main(void)
     proc.mm = &space;
     space.compat = 1;
     space.vdso = 0x70000000u;
-    for (entry = 0; entry < 2; entry++) {
-        for (fault = 0; fault < 2; fault++) {
-            k_memset(&p, 0, sizeof(p));
-            p.cs = GDT_USER_CODE32;
-            p.ss = GDT_USER_DATA;
-            p.rax = 192;
-            p.rsp = entry ? 0 : 0x40001000u;
-            p.rbp = entry ? 0x40001000u : 0;
-            entered = 0;
-            pushed = 0;
-            left = 0;
-            ia32_fast_syscall(&p, entry);
-            if (left != 1 || entered != !fault || pushed != fault || p.rsp != 0x40001000u ||
-                (fault && ((int64_t)p.rax != -EFAULT || proc.orig_nr != 192))) {
-                bad++;
+    for (sched_cycle_account = 0; sched_cycle_account < 2; sched_cycle_account++) {
+        for (entry = 0; entry < 2; entry++) {
+            for (fault = 0; fault < 2; fault++) {
+                k_memset(&p, 0, sizeof(p));
+                p.cs = GDT_USER_CODE32;
+                p.ss = GDT_USER_DATA;
+                p.rax = 192;
+                p.rsp = entry ? 0 : 0x40001000u;
+                p.rbp = entry ? 0x40001000u : 0;
+                entered = 0;
+                pushed = 0;
+                left = 0;
+                clocked = 0;
+                counted = 0;
+                cpu_table[0].entry_cycles = 0;
+                ia32_fast_syscall(&p, entry);
+                if (left != 1 || entered != !fault || pushed != fault || counted != 1 ||
+                    clocked != sched_cycle_account || p.rsp != 0x40001000u ||
+                    cpu_table[0].entry_cycles != (sched_cycle_account ? 1000u : 0u) ||
+                    (fault && ((int64_t)p.rax != -EFAULT || proc.orig_nr != 192))) {
+                    bad++;
+                }
             }
         }
     }
