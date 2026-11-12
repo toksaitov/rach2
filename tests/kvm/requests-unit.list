@@ -1,0 +1,28 @@
+# requests-unit.list: the kvm-unit-tests that run each source of work the
+# vCPU's request word drives before an entry (rach2/sys/kvm/Readme.md), in
+# unit-tests.list's format, for the case unit-tests with the variable
+# RACH2_KVM_UNIT: the local APIC and its timer, the PIT, Hyper-V's clock
+# and synthetic timers, the kvmclock, the PMU, NMIs, INIT and SIPI, a
+# halted vCPU's wake, and the exits whose handling 84-110 measured. EXPECT
+# is unit-tests.list's.
+#
+# NAME EXPECT LINUX REASON
+x2apic outer_kvm?fail:pass timeout Linux: timeout; duration=30; inside a machine of KVM nmi-after-sti fails, as under Linux 6.12 as the host there
+vmexit_tscdeadline pass pass
+vmexit_tscdeadline_immed pass pass
+vmexit_ipi_halt pass pass
+vmexit_inl_pmtimer pass pass
+eventinj pass pass
+smptest pass pass
+smptest3 pass pass
+ioapic pass pass
+hyperv_stimer pass pass
+hyperv_stimer_direct pass pass
+hyperv_synic pass pass
+hyperv_clock pass pass
+kvmclock_test pass pass
+tsc pass pass
+tsc_adjust pass pass
+pmu kvm_pmu?hypervisor?fail:pass:skip fail Linux: AMD's overflow subtests fail, 7 to 10 of 10 by turns; under a hypervisor whose own work on each exit the counters count, the counts and overflows fail on Linux 6.12 too; skips without a host PMU, which its config requires
+vmexit_cpuid pass pass
+vmexit_vmcall pass pass

@@ -1,0 +1,20 @@
+# requests-selftests.list: Linux's KVM selftests that run each source of
+# work the vCPU's request word drives before an entry
+# (rach2/sys/kvm/Readme.md), in selftests.list's format, for the case
+# selftests with the variable RACH2_KVM_SELFTESTS: the steal time, the
+# kvmclock, Hyper-V's clock and IPIs, the APIC's bus clock, IPIs and state,
+# the TSC's MSRs, the synchronized registers and immediate exit, the dirty
+# log and ring, and the PMU's event filter. EXPECT is selftests.list's.
+#
+# NAME EXPECT LINUX REASON
+steal_time pass pass
+x86_64/kvm_clock_test pass pass
+x86_64/hyperv_clock outer_kvm?excluded:pass pass not run inside a machine of KVM, where the outer host's scheduling decides it: it compares the guest's TSC with KVM's clock across exits, and with the testing PC loaded Linux 6.12 as the KVM host of the same machine failed it 2 times in 280 runs of it and apic_bus_clock_test, and Rach2 5 (dev-log/84-locks/84-33.md)
+x86_64/hyperv_ipi pass pass
+x86_64/apic_bus_clock_test outer_kvm?excluded:pass pass not run inside a machine of KVM, where the outer host's scheduling decides it: it compares the guest's TSC with KVM's clock across exits, and with the testing PC loaded Linux 6.12 as the KVM host of the same machine failed it 2 times in 280 runs of it and hyperv_clock, and Rach2 5 (dev-log/84-locks/84-33.md)
+x86_64/xapic_ipi_test pass pass
+x86_64/xapic_state_test pass pass
+x86_64/tsc_msrs_test pass pass
+x86_64/sync_regs_test pass pass
+dirty_log_test,-i,4 pass fail Linux: Set page 369 value 1 incorrect (iteration=3)
+x86_64/pmu_event_filter_test kvm_pmu?pass:skip pass Guest event filters; skips without a host PMU
