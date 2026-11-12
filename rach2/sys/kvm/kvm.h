@@ -592,13 +592,16 @@ struct kvm_vcpu {
     uint64_t st_last;
     unsigned long st_pcount;
     int st_preempted;
-    /* The record was last written whole, and found in no region of
-     * memfd_secret, when the VM's `mmu_seq` was `st_seq` (`st_ok`), so that
-     * `kvm_steal_preempted`, which cannot look at the caller's regions,
-     * writes only while no zap has come since, as Linux's
-     * kvm_steal_time_set_preempted checks its cache's slots generation. */
+    /* The record at the guest-physical `st_gpa` was last written whole,
+     * and found in no region of memfd_secret, when the VM's `mmu_seq` was
+     * `st_seq` (`st_ok`), so that `kvm_steal_preempted`, which cannot look
+     * at the caller's regions, writes only while no zap has come since and
+     * the MSR still names that address, as Linux's
+     * kvm_steal_time_set_preempted checks its cache's slots generation and
+     * gpa (arch/x86/kvm/x86.c:4647-4650). */
     int st_ok;
     uint32_t st_seq;
+    uint64_t st_gpa;
     int pv_stopped;    /* KVM_KVMCLOCK_CTRL: the next write sets PVCLOCK_GUEST_STOPPED */
     int32_t clock_cpu; /* the processor the kvmclock was last written on, -1 for none */
     uint64_t clock_ns; /* the host's ns at that write */
