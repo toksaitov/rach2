@@ -29,7 +29,7 @@ debug outer_kvm?excluded:hypervisor?fail:pass fail Linux: unhandled #PF at ffff0
 emulator pass pass
 ept excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 ept-mbec excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
-eventinj pass pass
+eventinj outer_kvm?pass:hypervisor?fail:pass pass under another hypervisor, as under the testing PC's and the Mac's TCG, fails NP exception, NP PF exceptions and int 33 with shadowed stack, 10 of 13 passing, as under Debian's Linux 6.12 as the host there
 hypercall pass pass
 hyperv_clock pass pass
 hyperv_connections outer_kvm?fail:pass fail Linux: 7 tests, 1 unexpected failures; inside a machine of KVM fails receive pending message: 0/2, as under Linux 6.12 as the host of the same machine (dev-log/84-locks/84-33.md)
