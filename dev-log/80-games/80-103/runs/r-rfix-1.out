@@ -1,0 +1,14 @@
+booted rach2 kernel-rfix
+== sleep 2  2.01 s
+[?2004h
+<7>[6.358000] virtio_gpu: worker: pid 75
+<6>[6.360000] console: card0: handed to a master, the keyboard off
+[?2004l
+__END__0
+   exits=4351 halt_exits=2011 io_exits=105 mmio_exits=0 irq_exits=4 irq_window_exits=3 request_irq_exits=0 nmi_window_exits=0 insn_emulation=168 hypercalls=0 irq_injections=2017 halt_successful_poll=0 halt_wakeup=2012 req_event=4040 unnamed=2228
+== tar cf - /opt/proton | cat > /dev/null  4.25 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+<6>[12.651000] block: request pool: waiting for a slot: the device holds its share
+__END__0
+   exits=305691 halt_exits=71136 io_exits=447 mmio_exits=154776 irq_exits=8721 irq_window_exits=7800 request_irq_exits=0 nmi_window_exits=0 insn_emulation=155067 hypercalls=0 irq_injections=80277 halt_successful_poll=59219 halt_wakeup=8329 req_event=128362 unnamed=62811
