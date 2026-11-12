@@ -697,6 +697,7 @@ int kvm_pv_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, i
             return -1;
         }
         v->st_msr = *value;
+        v->st_ok = 0; /* the address `steal_vouch` checked may be another */
         if (*value & KVM_MSR_ENABLED) {
             kvm_vcpu_kick(v, KVM_REQ_STEAL_UPDATE);
         }
@@ -757,11 +758,11 @@ static int steal_write(struct kvm_vcpu *v)
     return kvm_guest_phys_rw(v, gpa + ST_VERSION, &version, 4, 1) != 0 ? -1 : 0;
 }
 
-/** Find whether `v`'s steal time record lies in no region of memfd_secret,
- * with `mmu_seq` read first, so that `kvm_steal_preempted` may write it
- * while no zap has come since (`st_ok`, `st_seq`). In `v`'s thread; may
- * sleep. */
-static void steal_vouch(struct kvm_vcpu *v)
+/** Find whether `v`'s steal time record at `gpa` lies in no region of
+ * memfd_secret, with `mmu_seq` read first, so that `kvm_steal_preempted`
+ * may write it while no zap has come since and the MSR names `gpa` still
+ * (`st_ok`, `st_seq`, `st_gpa`). In `v`'s thread; may sleep. */
+static void steal_vouch(struct kvm_vcpu *v, uint64_t gpa)
 {
     struct kvm_vm *vm = v->vm;
     struct mm *mm = kvm_vm_mm(vm);
@@ -771,29 +772,32 @@ static void steal_vouch(struct kvm_vcpu *v)
 
     k_barrier();
     v->st_ok = 0;
-    if (!mm || !kvm_slot_find(vm, (v->st_msr & KVM_STEAL_VALID_BITS) >> 12, &s)) {
+    if (!mm || !kvm_slot_find(vm, gpa >> 12, &s)) {
         return;
     }
     mmap_read_lock(mm);
     r = vm_find(&mm->vm, (uintptr_t)s.hva);
+    v->st_gpa = gpa;
+    v->st_seq = seq;
     v->st_ok = r && !(r->prot & VM_PROT_SECRET);
     mmap_unlock(mm);
-    v->st_seq = seq;
 }
 
 void kvm_steal_prepare(struct kvm_vcpu *v)
 {
     int update = kvm_vcpu_test_clear(v, KVM_REQ_STEAL_UPDATE);
+    uint64_t gpa;
 
     if (current_proc->pcount != v->st_pcount) {
         v->st_pcount = current_proc->pcount;
         update = 1;
     }
     if ((update || v->st_preempted) && (v->st_msr & KVM_MSR_ENABLED)) {
+        gpa = v->st_msr & KVM_STEAL_VALID_BITS;
         if (steal_write(v) != 0) {
             v->st_ok = 0;
-        } else if (!v->st_ok || v->st_seq != v->vm->mmu_seq) {
-            steal_vouch(v);
+        } else if (!v->st_ok || v->st_seq != v->vm->mmu_seq || v->st_gpa != gpa) {
+            steal_vouch(v, gpa);
         }
     }
 }
@@ -801,17 +805,17 @@ void kvm_steal_prepare(struct kvm_vcpu *v)
 void kvm_steal_preempted(struct kvm_vcpu *v)
 {
     uint8_t preempted = KVM_VCPU_PREEMPTED;
+    uint64_t gpa = v->st_msr & KVM_STEAL_VALID_BITS;
 
     if (!v->at_boundary) {
         v->stat[KVM_VCPU_STAT_PREEMPTION_OTHER]++;
         return;
     }
     v->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED]++;
-    if (!(v->st_msr & KVM_MSR_ENABLED) || v->st_preempted || !v->st_ok) {
+    if (!(v->st_msr & KVM_MSR_ENABLED) || v->st_preempted || !v->st_ok || v->st_gpa != gpa) {
         return;
     }
-    if (kvm_tdp_write_nofault(v->vm, (v->st_msr & KVM_STEAL_VALID_BITS) + ST_PREEMPTED, &preempted,
-                              1, v->st_seq) == 0) {
+    if (kvm_tdp_write_nofault(v->vm, gpa + ST_PREEMPTED, &preempted, 1, v->st_seq) == 0) {
         v->st_preempted = 1;
     }
 }
