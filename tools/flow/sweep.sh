@@ -13,33 +13,27 @@
 # only while it runs and holds no task; and runs `scratch.pl` with the stems of
 # master's scratch names, here on this checkout's build/tmp and on that of the
 # Mac's release copy, build/machines/mac/tree, with the release runs'
-# directories there that hold no KEPT, and as root on the testing host on its
-# /tmp and on the build/tmp of the owner's copy and of each account's clone,
-# which removes the scratch of tests that were killed before their traps ran.
-# It then runs `leftovers.pl`, through `leftovers` in lib.sh, on the host and
-# here, which removes failed tests' directories, loose scratch in home
-# directories and copies of the repository whose work master has; and runs
-# `store_expire`, which removes the entries of the host's store of step outputs
-# that no copy uses. It runs `tidy` in each worker's clone too, since a loop
-# tidies only while it runs. `outputs` removes what a build or a run makes
+# directories there that hold no KEPT, and as root on the
+# testing host on its /tmp and on the build/tmp of the owner's copy and of each
+# account's clone, which removes the scratch of tests that were killed before
+# their traps ran. It then runs `leftovers.pl`, through `leftovers` in lib.sh,
+# on the host and here, which removes failed tests' directories, loose scratch
+# in home directories and copies of the repository whose work master has; and
+# runs `store_expire`, which removes the entries of the host's store of step
+# outputs that no copy uses. It runs `tidy` in each worker's clone too, since a
+# loop tidies only while it runs. `outputs` removes what a build or a run makes
 # again and what nothing needs once its run has ended: in each tree on the
-# testing host where no session's supervisor holds STATE/session.live and
-# no STATE/session is left, which a killed supervisor leaves while its
-# session may still run, the images, test output and scratch unchanged for a
-# day, but
-# `build/tests/failed`, and the run files of
+# testing host whose loop holds no session, the images, test output and scratch
+# unchanged for a day, but `build/tests/failed`, and the run files of
 # `build/runs` unchanged for two weeks; on Windows the test collections,
 # tooling job directories, case images and scratch, the old shared TMPDIR of
 # the release runs among it, unchanged for a day, but what the record or KEPT
 # of a release run that is live or kept names, and the release runs'
-# directories in build/tmp unchanged for a day that hold no KEPT, whose parts'
-# jobs are absent and whose parts have ended; each release run,
-# with its files, its etude and its kept directory, of a milestone whose
-# release closed; in WSL the files of such a run's claims of WSL's admission
-# in build/flow/claims of the owner's clone, but those of the run that
-# Windows' windows.current names and those of a claim whose lock a process
-# holds; and here the entries of `build/tests` unchanged for two weeks
-# and the Mac's kept run directories of a milestone whose release closed. The
+# directories in build/tmp unchanged for a day that hold no KEPT and whose
+# etude no longer runs; each release run, with its files, its etude and its
+# kept directory, of a milestone whose release closed; and here the entries of
+# `build/tests` unchanged for two weeks and the Mac's kept run directories of
+# a milestone whose release closed. The
 # caches, the build copies of the release and of Windows, and the tooling work
 # disks stay. Each removal, and each step's total, is a line on stdout. Each
 # step that reaches the host stops itself after ten minutes. With -a, which
@@ -55,14 +49,6 @@ TESTING=testing
 # kept run uses, whatever its age.
 # shellcheck disable=SC2016 # the dollars are the function's
 stale='
-# busy LOCK: succeed while a process holds the lock LOCK, as a session'"'"'s
-# supervisor holds STATE/session.live; a lock that cannot be probed counts as
-# held.
-busy()
-{
-    perl -MFcntl=:flock -e '"'"'open(L, "<", shift) or exit($!{ENOENT} ? 1 : 0);
-        exit(flock(L, LOCK_SH | LOCK_NB) ? 1 : 0)'"'"' "$1"
-}
 stale()
 {
     days=$1
@@ -98,88 +84,34 @@ outputs()
         printf '%s\n' "$stale"
         for h in $HOMES; do
             b=$h/rach2/build
-            printf '%s\n' "busy $b/flow/claude/session.live || [ -e $b/flow/claude/session ] || stale $days $b/images/* $b/x86_64/images/*" \
+            printf '%s\n' "[ -s $b/flow/claude/session ] || stale $days $b/images/* $b/x86_64/images/*" \
                 "$b/i686/images/* $b/tests/* $b/x86_64/tests/* $b/i686/tests/* $b/tmp/*" |
                 paste -s -d ' ' -
             echo "stale 14 $b/runs/*"
         done
-        # The files of a closed milestone's claims of WSL's admission, which
-        # release.sh's claim_start and claim.pl make in LOCKS, but those of
-        # the run that OUT/windows.current names, which a late start reads,
-        # and those of a claim with an attempt whose lock is held; none while
-        # OUT/windows.current cannot be read.
-        echo "closed=' $(closed | tr '\n' ' ')' locks=/home/testing/rach2/build/flow/claims"
-        o=$(awk '$1 == "windows" && $2 == "out" { print $3; exit }' "$(dirname "$0")/machines")
-        echo "current=/mnt/$(echo "$o" | cut -c 1 | tr '[:upper:]' '[:lower:]')$(echo "$o" | cut -c 3-)/windows.current"
-        cat << 'END'
-current=$(tr -d '\r' < "$current" 2> /dev/null) || closed=
-for m in $closed; do
-    for f in "$locks"/milestone"$m"-*-windows-*.*; do
-        [ -e "$f" ] || continue
-        n=${f##*/}
-        id=${n%%.*} kind=${n#*.}
-        kind=${kind%%.*}
-        [ "$id" != "$current" ] || continue
-        # Held while a process holds a lock of the claim; a lock that cannot
-        # be opened counts as held.
-        perl -MFcntl=:flock -e 'for (@ARGV) {
-                open(my $l, "<", $_) or ($!{ENOENT} ? next : exit 0);
-                flock($l, LOCK_SH | LOCK_NB) or exit 0;
-            }
-            exit 1' "$locks/$id.$kind".*.live "$locks/$id.$kind".*.granted && continue
-        rm -f "$f" && echo "sweep: removed $f"
-    done
-done
-END
-    } | perl "$(dirname "$0")/bound.pl" 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
+    } | perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         'MSYS_NO_PATHCONV=1 wsl.exe -u root -- sh -s' 2>&1 | tr -d '\000\r' | sed "s/^/$TESTING: /"
     {
         printf '%s\n' "$stale"
         echo 'b=/d/rach2/build'
         echo "closed=' $(closed | tr '\n' ' ')'"
-        sh "$(dirname "$0")/winjob.sh" "$(awk '$1 == "windows" && $2 == "out" { print $3; exit }' \
-            "$(dirname "$0")/machines")"
-        # A run in build/tmp is live while the job of one of its parts is
-        # not absent, as winjob.c says, or one of its parts has a token in
-        # OUT and has not ended, as winclean.sh -l lists it, and every run is
-        # while Windows cannot say which. Each path that the record or KEPT
-        # of a live or kept run names, such as a tooling job directory of
-        # the cache, which cannot move into the run's directory, goes into
-        # keep before any age rule, unless the run's milestone closed its
-        # release.
+        # A run in build/tmp is live while its etude runs, and every run is
+        # while tasklist cannot say which. Each path that the record or KEPT
+        # of a live or kept run names, such as a tooling job directory of the
+        # cache, which cannot move into the run's directory, goes into keep
+        # before any age rule, unless the run's milestone closed its release.
         cat << 'END'
 nl='
 '
 keep= live=
-# unended ID: succeed when a part of run ID has a token in OUT and no
-# stopped file, as winclean.sh -l judges it: a status file comes before the
-# job's end.
-unended()
-{
-    for u in prepare cases; do
-        u=$b/release/$1.$u
-        [ -e "$u.token" ] || continue
-        [ -e "$u.stopped" ] || return 0
-    done
-    return 1
-}
-# running ID: succeed when the job of a part of run ID is not absent, or
-# Windows cannot say.
-running()
-{
-    for u in prepare cases; do
-        [ "$("$winjob" state "Global\\rach2-$1.$u" 2> /dev/null)" = absent ] || return 0
-    done
-    return 1
-}
-[ ! -x "${winjob-}" ] || live=1
+t=$(MSYS_NO_PATHCONV=1 tasklist /NH /FO CSV 2> /dev/null) && live=1
 for d in $b/tmp/*; do
     [ -d "$d" ] || continue
     id=${d##*/}
     m=${id#milestone}
     case $closed in *" ${m%%-*} "*) continue ;; esac
-    if [ -n "$live" ] && [ ! -e "$d/KEPT" ] && ! unended "$id" && ! running "$id"; then
-        continue
+    if [ -n "$live" ] && [ ! -e "$d/KEPT" ]; then
+        case $t in *"\"etude-$id.exe\""*) ;; *) continue ;; esac
     fi
     keep=$keep$nl$(sed -n 's/^\(made\|removed\|kept\) //p' "$d/record" "$d/KEPT" 2> /dev/null |
         sed 's,.*/,,')
@@ -188,14 +120,13 @@ END
         # shellcheck disable=SC2016 # the dollars are the remote shell's
         echo "stale $days \$b/tests/rach2-collection.* \$b/tooling/job-* \$b/images/cases/*" \
             '$b/x86_64/images/cases/* $b/release/tmp/*'
-        # A run's directory stays while it holds KEPT or it is live, and all
-        # of build/tmp while Windows cannot say which run is.
+        # A run's directory stays while it holds KEPT or its etude runs, and
+        # all of build/tmp while tasklist cannot say which run.
         # shellcheck disable=SC2016 # the dollars are the remote shell's
         printf '%s\n' 'if [ -n "$live" ]; then' \
             '    for d in $b/tmp/*; do' \
             '        [ ! -e "$d/KEPT" ] || continue' \
-            '        ! unended "${d##*/}" || continue' \
-            '        ! running "${d##*/}" || continue' \
+            '        case $t in *"\"etude-${d##*/}.exe\""*) continue ;; esac' \
             "        stale $days \"\$d\"" \
             '    done' \
             'fi'
@@ -206,7 +137,7 @@ END
             echo "stale 0 \$b/release/milestone$m-*-windows-* \$b/release/etude-milestone$m-*-windows-*" \
                 "\$b/tmp/milestone$m-*-windows-*"
         done
-    } | perl "$(dirname "$0")/bound.pl" 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
+    } | perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         'bash -s' 2>&1 | tr -d '\000\r' | sed 's/^/windows: /'
     eval "$stale"
     stale 14 "$repo"/build/tests/* 2>&1 | sed "s/^/$(hostname -s): /"
@@ -227,7 +158,7 @@ clones()
             cat "$(dirname "$0")/lib.sh"
             # shellcheck disable=SC2016 # the dollar is the remote shell's
             printf '%s\n' 'log() { echo "$*"; }' 'cd rach2 && git fetch -q origin && tidy'
-        } | perl "$(dirname "$0")/bound.pl" 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" \
+        } | perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" \
             sh -s 2>&1 | sed "s/^/$name: /"
     done
 }
@@ -257,7 +188,7 @@ main()
     for h in $HOMES; do
         dirs="$dirs -d $h/rach2/build/tmp"
     done
-    perl "$(dirname "$0")/bound.pl" 600 \
+    perl -e 'alarm shift; exec @ARGV' 600 \
         ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         "MSYS_NO_PATHCONV=1 wsl.exe -u root -- perl - $dirs $age $stems" \
         < "$(dirname "$0")/scratch.pl" 2>&1 | sed "s/^/$TESTING: /"
