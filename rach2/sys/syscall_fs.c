@@ -2123,8 +2123,11 @@ static int path_from_user_dir(int dirfd, const char __user *upath, char **out, i
 }
 
 /* The answer of a call's path without the big lock when the call must run
- * again under it, with nothing done that a caller sees. */
-#define CALL_LOCKED 1
+ * again under it, with nothing done that a caller sees: below every errno,
+ * whose least is -MAX_ERRNO (Linux's include/linux/err.h:18), and every
+ * descriptor, since `open_unlocked` returns a descriptor on success and
+ * Linux's do_sys_openat2 returns the one it installs (fs/open.c:1419-1430). */
+#define CALL_LOCKED (-4095 - 1)
 
 /**
  * The path a caller named, as `path_from_user_dir` makes it, for a call
