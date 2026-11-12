@@ -10,6 +10,7 @@
 #include "kcpu.h"
 
 #include "../arch.h"
+#include "../../cmdline.h"
 
 void arch_irq_enable(void)
 {
@@ -39,19 +40,26 @@ void arch_idle_masked(void)
                          : "memory");
 }
 
-/* arch_guest's answer: -1 until read, then 0 or 1. Every processor reads
- * the same bit, so two that read it at once store the same. */
-static volatile int guest = -1;
+/* KVM's hint that each of the guest's processors has a host processor of
+ * its own, bit 0 of leaf 0x40000001's EDX (KVM_HINTS_REALTIME,
+ * arch/x86/include/uapi/asm/kvm_para.h:40). */
+#define KVM_HINTS_REALTIME (1u << 0)
 
-int arch_guest(void)
+/* arch_idle_poll's answer: -1 until read, then 0 or 1. Every processor
+ * reads the same, so two that read it at once store the same. */
+static volatile int idle_poll = -1;
+
+/** Without the hint KVM's processors share the host's, and the host's own
+ * poll before it sleeps a halted processor (halt_poll_ns) answers a quick
+ * wake; a poll in the guest then costs host time and, here, the exits of
+ * its reads of the APIC (`arch_irq_waiting`). */
+int arch_idle_poll(void)
 {
-    uint32_t c = 0;
-
-    if (guest < 0) {
-        kcpu_id(1, NULL, NULL, &c, NULL);
-        guest = (c >> 31) & 1u;
+    if (idle_poll < 0) {
+        idle_poll = (kcpu_kvm_hints() & KVM_HINTS_REALTIME) != 0 ||
+                    kcmdline_param_bool("cpuidle_haltpoll.force", 0);
     }
-    return guest;
+    return idle_poll;
 }
 
 void arch_stop(void)

@@ -138,8 +138,8 @@ uint32_t timer_calibrate(void)
     return 0;
 }
 
-/** 0: the model is no guest, the other reason an idle wait does not poll. */
-int arch_guest(void)
+/** 0: the model's idle waits do not poll, the other reason they do not. */
+int arch_idle_poll(void)
 {
     return 0;
 }

@@ -125,9 +125,12 @@ void arch_idle_masked(void);
  * count. */
 int arch_irq_waiting(void);
 
-/** Whether this processor runs under a hypervisor, as `cpuid` leaf 1
- * reports in ECX bit 31; read once, since in a guest `cpuid` is an exit. */
-int arch_guest(void);
+/** Whether an idle processor polls before it halts: under a hypervisor
+ * that says its processors are the guest's alone, as KVM's
+ * KVM_HINTS_REALTIME says, or with `cpuidle_haltpoll.force`, as Linux
+ * loads cpuidle-haltpoll (drivers/cpuidle/cpuidle-haltpoll.c:96-111). Read
+ * once, since in a guest `cpuid` is an exit. */
+int arch_idle_poll(void);
 
 /** Hold interrupts off and stop this processor for good. */
 void arch_stop(void) K_NORETURN;
