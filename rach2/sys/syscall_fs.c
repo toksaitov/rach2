@@ -775,38 +775,13 @@ static void big_give(int taken)
 }
 
 /**
- * Whether the caller's RLIMIT_FSIZE lets a file reach `end` bytes: 0, or
- * -EFBIG with SIGXFSZ sent to the calling thread, as Linux answers a write
- * that starts at the limit and a truncation past it. The signal is sent
- * under the big lock, which is taken when the caller lacks it.
- */
-static int32_t fsize_refused(uint64_t end)
-{
-    unsigned long limit = current_proc->rlim[RLIM_FSIZE].cur;
-    struct k_siginfo info;
-    int big;
-
-    if (limit == RLIM_INFINITY || end <= limit) {
-        return 0;
-    }
-    k_memset(&info, 0, sizeof(info));
-    info.code = SI_USER;
-    info.pid = current_proc->tgid;
-    info.uid = current_proc->ruid;
-    big = big_take();
-    signal_post_thread(current_proc, SIGXFSZ, &info);
-    big_give(big);
-    return -EFBIG;
-}
-
-/**
- * Whether the caller's RLIMIT_FSIZE refuses a truncate(2) or fallocate(2)
- * that sets the size of the file of `ofd` to `end` bytes: 0, or -EFBIG with
- * SIGXFSZ (`fsize_refused`) only when `end` is past both the limit and the
- * file's size, since Linux checks the limit for growth alone
- * (inode_newsize_ok, fs/attr.c:258 in 6.12). The caller holds the lock that
- * covers a change of the file's size (`file_lock`), so that the size read
- * here is the size changed. A size that cannot be read is that error.
+ * Whether the caller's RLIMIT_FSIZE refuses a truncate(2) that sets the size
+ * of the file of `ofd` to `end` bytes: `vfs_newsize_ok` of the file's size,
+ * which refuses growth past the limit alone. The caller holds the lock that
+ * covers a change of the file's size (`file_lock`, or `size_ns_lock` on a
+ * type that takes neither it nor the description's namespace lock), so that
+ * the size read here is the size changed. A size that cannot be read is
+ * that error.
  */
 static int32_t fsize_growth_refused(const struct open_file *ofd, uint64_t end)
 {
@@ -821,7 +796,7 @@ static int32_t fsize_growth_refused(const struct open_file *ofd, uint64_t end)
     if (rc != 0) {
         return rc;
     }
-    return end > st.size ? fsize_refused(end) : 0;
+    return vfs_newsize_ok(st.size, end);
 }
 
 /** The part of `count` bytes written at `pos` that the caller's
@@ -862,6 +837,34 @@ static void file_unlock(const struct vfs_ref *file, int own)
 {
     if (own) {
         vfs_node_unlock(file);
+    }
+}
+
+/**
+ * Take the namespace lock of the mount of `ofd` for a change of the file's
+ * size on a type that neither takes it with the description's lock
+ * (`ns_serialised`) nor locks each file (`file_locked`): FAT32 and exFAT,
+ * whose `truncate` takes it only for itself. Held from before the size is
+ * read for the RLIMIT_FSIZE check to after the change, it keeps another
+ * truncation from moving the size between the two, as Linux holds the
+ * inode's lock across both (fs/open.c:63 in 6.12). 1 when taken, which
+ * `size_ns_unlock` gives back, and 0 on any other type. The caller holds
+ * the description's lock, which comes first.
+ */
+static int size_ns_lock(const struct open_file *ofd)
+{
+    if (ofd->vmnt->type->ns_serialised || vfs_file_locked(ofd->vmnt)) {
+        return 0;
+    }
+    vfs_ns_lock(ofd->vmnt);
+    return 1;
+}
+
+/** Give back the lock `size_ns_lock` took when `held` says it did. */
+static void size_ns_unlock(const struct open_file *ofd, int held)
+{
+    if (held) {
+        vfs_ns_unlock(ofd->vmnt);
     }
 }
 
@@ -979,7 +982,7 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
             }
             *pos = vst.size;
             if (fsize_fit(*pos, count - done) == 0) {
-                n = done > 0 ? 0 : fsize_refused(*pos + 1);
+                n = done > 0 ? 0 : vfs_fsize_refused(*pos + 1);
                 break;
             }
             count = done + fsize_fit(*pos, count - done);
@@ -1028,7 +1031,7 @@ static int32_t file_write_locked(fd_entry_t *entry, const char __user *buf, uint
         }
         pos = vst.size;
     }
-    if (count > 0 && fsize_refused(pos + 1) != 0) {
+    if (count > 0 && vfs_fsize_refused(pos + 1) != 0) {
         written = -EFBIG;
         goto out;
     }
@@ -1112,7 +1115,7 @@ static long write_synced(fd_entry_t *entry, long written)
  * file's lock, held from before the write, so that no write-back of the
  * pages comes between the two (`filemap_file_written`). Under
  * RLIMIT_FSIZE a write that would pass the limit writes what fits, and one
- * that starts at it fails (`fsize_refused`).
+ * that starts at it fails (`vfs_fsize_refused`).
  *
  * A file `file_vfs_writes_unlocked` admits is written without the big lock,
  * under the description's lock and the file's, as Linux's
@@ -1409,14 +1412,14 @@ static int rw_call_lock(const fd_entry_t *e, uint32_t free);
  * pages are cut under the big lock, taken when the caller lacks it, as is
  * inotify's report. A length that grows the file past the caller's
  * RLIMIT_FSIZE is -EFBIG with SIGXFSZ, judged under the same locks
- * (`fsize_growth_refused`); a shrink is never refused. 0 or a negative
- * errno.
+ * (`fsize_growth_refused`), and on FAT32 and exFAT under the namespace lock
+ * (`size_ns_lock`); a shrink is never refused. 0 or a negative errno.
  */
 static long ftruncate_fd(int fd, long long length)
 {
     fd_entry_t *entry;
     struct vfs_ref file;
-    int own, big = 0;
+    int own, ns, big = 0;
     int rc;
 
     if (!current_proc) {
@@ -1448,10 +1451,12 @@ static long ftruncate_fd(int fd, long long length)
         fd_ofd_unlock(entry->ofd);
         return -EBUSY;
     }
+    ns = size_ns_lock(entry->ofd);
     rc = fsize_growth_refused(entry->ofd, (uint64_t)length);
     if (rc == 0) {
         rc = vfs_truncate(entry->ofd->vmnt, entry->ofd->fhandle, (uint64_t)length);
     }
+    size_ns_unlock(entry->ofd, ns);
     if (rc == 0 && !cred_fs_privileged()) {
         if (entry->node) {
             cred_kill_setid(entry->node);
@@ -13486,7 +13491,8 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
  * caller finds the file where it is now, and a loop attachment sees the
  * truncation in progress, as it sees an ftruncate. A length that grows the
  * file past the caller's RLIMIT_FSIZE is -EFBIG with SIGXFSZ, judged under
- * the file's lock (`fsize_growth_refused`); a shrink is never refused. A
+ * the file's lock, or on FAT32 and exFAT the namespace lock
+ * (`fsize_growth_refused`); a shrink is never refused. A
  * file reserved for execution gives -ETXTBSY, as on Linux.
  */
 static int32_t truncate_path(const char *path, long long length, int dir)
@@ -13495,7 +13501,7 @@ static int32_t truncate_path(const char *path, long long length, int dir)
     struct vfs_mount *locked;
     struct open_file *desc = NULL;
     int32_t rc;
-    int own;
+    int own, ns;
 
     rc = resolve_named(path_name(path), VFS_WALK_LOCK, dir, &ref);
     if (rc != 0) {
@@ -13522,6 +13528,7 @@ static int32_t truncate_path(const char *path, long long length, int dir)
     vfs_leave(ref.mnt);
     fd_ofd_lock(desc);
     own = file_lock(desc, &file);
+    ns = size_ns_lock(desc);
     rc = -EBUSY;
     if (!loop_backs(desc->vmnt, desc->vnode)) {
         rc = fsize_growth_refused(desc, (uint64_t)length);
@@ -13529,6 +13536,7 @@ static int32_t truncate_path(const char *path, long long length, int dir)
     if (rc == 0) {
         rc = vfs_truncate(desc->vmnt, desc->fhandle, (uint64_t)length);
     }
+    size_ns_unlock(desc, ns);
     if (rc == 0 && !cred_fs_privileged()) {
         if (mnt_is_root(desc->vmnt)) {
             cred_kill_setid(desc->vnode);
@@ -16299,8 +16307,10 @@ static uint32_t fallocate_type(fd_entry_t *entry)
  * The body of fallocate(2), which `ksys_fallocate` locks: 0 or a negative
  * errno, by Linux's vfs_fallocate's checks in its order and then the
  * type's operation under the description's lock and the file's
- * (`file_lock`), which also cover the RLIMIT_FSIZE check of a call that
- * grows the file (`fsize_growth_refused`). The file's lock is held from
+ * (`file_lock`). The type checks RLIMIT_FSIZE itself (`vfs_newsize_ok`)
+ * once it has taken the mode, as Linux's shmem_fallocate does
+ * (mm/shmem.c:3459-3498 in 6.12), so that a mode or a type that takes no
+ * allocation is -EOPNOTSUPP with no SIGXFSZ. The file's lock is held from
  * before `vfs_fallocate` asks whether a loop device stands on the file to
  * the end of the change, since an attachment publishes itself under that
  * lock (`loop_attach`): a check made before it could pass a file attached
@@ -16348,10 +16358,7 @@ static long fallocate_fd(int fd, uint32_t mode, uint64_t offset, uint64_t len)
     }
     fd_ofd_lock(entry->ofd);
     own = file_lock(entry->ofd, &file);
-    rc = mode & FALLOC_FL_KEEP_SIZE ? 0 : fsize_growth_refused(entry->ofd, offset + len);
-    if (rc == 0) {
-        rc = vfs_fallocate(entry->ofd->vmnt, entry->ofd->fhandle, mode, offset, len);
-    }
+    rc = vfs_fallocate(entry->ofd->vmnt, entry->ofd->fhandle, mode, offset, len);
     file_unlock(&file, own);
     fd_ofd_unlock(entry->ofd);
     return rc;

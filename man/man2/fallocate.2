@@ -104,10 +104,17 @@ is not a regular file or a block device.
 .It Bq Er EFBIG
 The range passes the largest offset.
 .It Bq Er EFBIG
-The range grows the file past
+The range passes the file's size and
 .Dv RLIMIT_FSIZE ,
 with
-.Dv SIGXFSZ .
+.Dv SIGXFSZ :
+on tmpfs with or without
+.Dv FALLOC_FL_KEEP_SIZE ,
+and on ext2 without it, as on Linux.
+A hole is never refused for the limit, and a mode or a file system
+that takes no allocation is
+.Er EOPNOTSUPP
+with no signal.
 .It Bq Er ENOSPC
 The file system has no room for the range, or a tmpfs's
 .Ql size=

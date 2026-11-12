@@ -89,6 +89,22 @@ void get_current_time(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = 0;
 }
 
+/* The RLIMIT_FSIZE the stub of `vfs_newsize_ok` judges by, all ones for
+ * none, and the SIGXFSZ it has counted in place of sending. */
+static uint64_t fsize_limit = ~(uint64_t)0;
+static int fsize_signals;
+
+/** `vfs_newsize_ok` against `fsize_limit`: -EFBIG, with a SIGXFSZ counted,
+ * for an `end` past both the size and the limit, else 0. */
+int32_t vfs_newsize_ok(uint64_t size, uint64_t end)
+{
+    if (end <= size || end <= fsize_limit) {
+        return 0;
+    }
+    fsize_signals++;
+    return -EFBIG;
+}
+
 /* The frames: page i of `pool` is the frame at physical address
  * (i + 1) * PAGE_SIZE, so that no frame is at 0, and `refs[i]` counts its
  * references, 0 for a free frame. */
@@ -748,7 +764,11 @@ static void sizes(void)
  * fallocate: the range's pages made and the size grown to its end, or kept
  * with FALLOC_FL_KEEP_SIZE; a punched hole reads as zeros, frees the pages
  * it covers whole and keeps the size; a growth the grow seal forbids is
- * -EPERM, and a mode tmpfs does not take -EOPNOTSUPP.
+ * -EPERM, with the size kept or not, and a mode tmpfs does not take
+ * -EOPNOTSUPP. Under RLIMIT_FSIZE an allocation past the size and the
+ * limit is -EFBIG with SIGXFSZ, with the size kept or not, and allocates
+ * nothing; a hole is punched past the limit, and a mode tmpfs does not
+ * take is -EOPNOTSUPP with no signal.
  */
 static void allocation(void)
 {
@@ -770,8 +790,25 @@ static void allocation(void)
     CHECK(tmpfs_fallocate(&mnt, f, 0x02, 0, PAGE_SIZE) == -EOPNOTSUPP);
     n->seals |= TMPFS_SEAL_GROW;
     CHECK(tmpfs_fallocate(&mnt, f, 0, 0, 9 * PAGE_SIZE) == -EPERM);
+    CHECK(tmpfs_fallocate(&mnt, f, 0x01, 0, 9 * PAGE_SIZE) == -EPERM);
     n->seals &= ~TMPFS_SEAL_GROW;
     CHECK(tmpfs_unlink(&mnt, NULL, "fa") == 0);
+    tmpfs_put(&mnt, f);
+    CHECK(frames_in_use() == frames);
+
+    f = make(NULL, "fl", 0644);
+    n = (struct tmpfs_node *)f;
+    fsize_limit = PAGE_SIZE;
+    CHECK(tmpfs_fallocate(&mnt, f, 0x01, 0, 2 * PAGE_SIZE) == -EFBIG && fsize_signals == 1 &&
+          frames_in_use() == frames);
+    CHECK(tmpfs_fallocate(&mnt, f, 0, 0, 2 * PAGE_SIZE) == -EFBIG && fsize_signals == 2 &&
+          n->data.size == 0 && frames_in_use() == frames);
+    CHECK(tmpfs_fallocate(&mnt, f, 0x08, 0, 2 * PAGE_SIZE) == -EOPNOTSUPP && fsize_signals == 2);
+    CHECK(tmpfs_fallocate(&mnt, f, 0x03, 0, 2 * PAGE_SIZE) == 0 && fsize_signals == 2);
+    CHECK(tmpfs_fallocate(&mnt, f, 0, 0, PAGE_SIZE) == 0 && n->data.size == PAGE_SIZE &&
+          frames_in_use() == frames + 1);
+    fsize_limit = ~(uint64_t)0;
+    CHECK(tmpfs_unlink(&mnt, NULL, "fl") == 0);
     tmpfs_put(&mnt, f);
     CHECK(frames_in_use() == frames);
 }
