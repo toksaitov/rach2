@@ -2707,10 +2707,12 @@ long sys_vhangup(isr_params_t *params)
  * reopened onto a regular file never reaches the speaker. `ioctl_fd` is the
  * call with its arguments taken out of the frame.
  *
- * A type whose operations run without the big lock (`file_ops_unlocked`)
- * has every request but those three go to its own `ioctl` without it, as
- * Linux's `unlocked_ioctl`; the type answers the rest of the list itself,
- * if it is a terminal. Every other type's requests run under the big lock.
+ * A type whose ioctl runs without the big lock (`file_ioctl_unlocked`) has
+ * every request but those three go to its own `ioctl` without it, as
+ * Linux's `unlocked_ioctl`, but for FICLONE and FICLONERANGE and a Unix
+ * socket's interface requests (`ioctl_unlocked`); the type answers the
+ * rest of the list itself, if it is a terminal. Every other type's
+ * requests run under the big lock.
  */
 long sys_ioctl(isr_params_t *params)
 {
@@ -2779,6 +2781,40 @@ static long ioctl_locked(fd_entry_t *entry, uint32_t request, uintptr_t arg)
     return -ENOTTY;
 }
 
+/**
+ * The requests of `ioctl_fd` after FIOCLEX, FIONCLEX and FIONBIO on
+ * `entry`, whose type's ioctl runs without the big lock
+ * (`file_ioctl_unlocked`), in Linux's order: FICLONE and FICLONERANGE,
+ * which `do_vfs_ioctl` answers for a descriptor of any type
+ * (fs/ioctl.c); the type's own ioctl; and for a Unix socket a
+ * request that ioctl does not answer goes to the interface requests
+ * (`netif_ioctl`), as `sock_do_ioctl` passes it to `dev_ioctl`
+ * (net/socket.c), which musl's if_nametoindex reaches through
+ * an AF_UNIX socket. The first and the last take the big lock.
+ */
+static long ioctl_unlocked(fd_entry_t *entry, uint32_t request, uintptr_t arg)
+{
+    int handled = 0;
+    long rc;
+
+    if (fs_clone_request(request)) {
+        bkl_enter();
+        rc = fs_clone_ioctl(entry, request, arg, &handled);
+        bkl_exit();
+        return rc;
+    }
+    rc = entry->ops->ioctl ? entry->ops->ioctl(entry, request, arg) : -ENOTTY;
+    if (rc == -ENOTTY && entry->type == FD_TYPE_UNIX) {
+        bkl_enter();
+        rc = netif_ioctl(request, arg, 1, &handled);
+        bkl_exit();
+        if (!handled) {
+            rc = -ENOTTY;
+        }
+    }
+    return rc;
+}
+
 long ioctl_fd(int fd_num, uint32_t request, uintptr_t arg)
 {
     fd_entry_t *entry;
@@ -2798,7 +2834,7 @@ long ioctl_fd(int fd_num, uint32_t request, uintptr_t arg)
         return 0;
     }
     if (request != FIONBIO && file_ioctl_unlocked(entry)) {
-        return entry->ops->ioctl ? entry->ops->ioctl(entry, request, arg) : -ENOTTY;
+        return ioctl_unlocked(entry, request, arg);
     }
     bkl_enter();
     rc = request == FIONBIO ? fd_ioctl_nbio(entry, arg) : ioctl_locked(entry, request, arg);

@@ -6581,6 +6581,11 @@ static const void *clone_fs(const fd_entry_t *e)
     return e->ops;
 }
 
+int fs_clone_request(uint32_t request)
+{
+    return request == FICLONE || request == FICLONERANGE;
+}
+
 int32_t fs_clone_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *handled)
 {
     fd_entry_t *src;
