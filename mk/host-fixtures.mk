@@ -125,11 +125,11 @@ ifeq ($(OS),Windows_NT)
 endif
 -include $(HOST_FIXTURE_PREFIX)/kstack-sources/00-kstack.o.d
 
-$(HOST_FIXTURE_PREFIX)/endothers-sources/endothers.inc: rach2/sys/syscall_proc.c $(HOST_EXTRACT)
+$(HOST_FIXTURE_PREFIX)/endothers-sources/endothers.inc: rach2/sys/proc/process.c rach2/sys/syscall_proc.c $(HOST_EXTRACT)
 	@mkdir -p $(@D)
-	$(HOST_EXTRACT) $@ -f rach2/sys/syscall_proc.c proc_end_others exec_alone exec_one_thread
+	$(HOST_EXTRACT) $@ -f rach2/sys/proc/process.c proc_is_kthread -f rach2/sys/syscall_proc.c proc_end_others exec_alone exec_one_thread
 
-$(HOST_FIXTURE_PREFIX)/endothers: tests/host/fixtures/endothers.c $(HOST_FIXTURE_PREFIX)/endothers-sources/endothers.inc $(HOST_EXTRACT) rach2/sys/syscall_proc.c $(HOST_KERNEL_FIXTURE_INPUTS)
+$(HOST_FIXTURE_PREFIX)/endothers: tests/host/fixtures/endothers.c $(HOST_FIXTURE_PREFIX)/endothers-sources/endothers.inc $(HOST_EXTRACT) rach2/sys/proc/process.c rach2/sys/syscall_proc.c $(HOST_KERNEL_FIXTURE_INPUTS)
 	@mkdir -p $(HOST_FIXTURE_PREFIX)/endothers-sources
 	$(HOSTCC) $(HOST_KERNEL_COMMON) -Wall -Wextra -Werror -I $(HOST_FIXTURE_PREFIX)/endothers-sources -MMD -MP -MF $(HOST_FIXTURE_PREFIX)/endothers-sources/00-endothers.o.d -MT $@ -c tests/host/fixtures/endothers.c -o $(HOST_FIXTURE_PREFIX)/endothers-sources/00-endothers.o
 	$(HOSTCC) $(filter -fsanitize=% -g -pthread -static,$(HOST_KERNEL_COMMON) $(HOST_KERNEL_THREADS)) $(HOST_KERNEL_REPRODUCIBLE) -o $@ $(HOST_FIXTURE_PREFIX)/endothers-sources/00-endothers.o
