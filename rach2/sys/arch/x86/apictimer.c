@@ -602,6 +602,13 @@ int apic_hr_entry(uint32_t vector)
     return result;
 }
 
+uint32_t timer_tick_period(void)
+{
+    return hr_vector != 0 && timer_tick_shared() && hr_cpu[arch_cpu_id()].oneshot
+               ? hr_sched_ns / TICK_NS
+               : 1u;
+}
+
 int64_t timer_tick_due(void)
 {
     return hr_vector != 0 ? hr_cpu[arch_cpu_id()].due : 0;

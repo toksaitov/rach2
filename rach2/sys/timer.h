@@ -282,6 +282,11 @@ uint32_t timer_calibrate(void);
  * This conversion reads no hardware and is safe with interrupts off. */
 uint64_t timer_cycles_us(uint64_t cycles);
 
+/** The current scheduler period in millisecond clock units. One for the
+ * legacy timer and native APIC, four for a guest's one-shot APIC. Any
+ * context; this reads no hardware. */
+uint32_t timer_tick_period(void);
+
 /** The time on the monotonic clock, in nanoseconds since boot, at which the
  * tick this processor is taking was due, the last of them when it came
  * ticks late, or 0 when its timer keeps none, as a periodic timer does: the
