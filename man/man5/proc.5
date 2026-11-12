@@ -1380,7 +1380,8 @@ Maps of a guest's pages into a program of the host, and the frames
 they hold, on x86-64: the blobs of a VM's memory that the shared-memory
 GPU transport maps from the VM's own pages
 .Pq Xr vgpu-shm 4 ,
-counted until their blobs are freed, after the VM's end too.
+counted until the driver frees the map, at the blob's free or the
+device's reset or removal, after the VM's end too.
 .It Li kvm_ioeventfd_signals , kvm_irqfd_raises
 Guest writes that an ioeventfd took, and MSIs that an irqfd raised, since
 boot, modulo 2^32, on x86-64: the work KVM did for a guest without an exit
