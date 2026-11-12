@@ -652,6 +652,53 @@ void rtc_raw_monotonic(int64_t *seconds, int64_t *nanoseconds)
     kirq_restore(flags);
 }
 
+/** The time `sec` seconds and `nsec` nanoseconds, a floor's, in
+ * nanoseconds, 0 for one before 0. */
+static uint64_t rtc_floor_ns(int64_t sec, int64_t nsec)
+{
+    int64_t ns = sec * 1000000000ll + nsec;
+
+    return ns > 0 ? (uint64_t)ns : 0u;
+}
+
+/**
+ * Real time's lock and the floors' are held across `change`, so that no
+ * reading of real time is under way, and none that could hold a floor below
+ * what `change` gives; neither lock's holder waits for the vDSO's page, as
+ * real time's does in `rtc_realtime` when it is not the holder here.
+ */
+void rtc_vclock_change(void (*change)(uint64_t *mono_ns, uint64_t *raw_ns))
+{
+    uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
+    uint64_t mono, raw;
+    int64_t sec, nsec, real_sec, real_nsec, real_mono;
+    int32_t ns;
+
+    spin_lock(&rtc_mono_lock);
+    mono = rtc_floor_ns(rtc_mono_seconds, rtc_mono_nanoseconds);
+    real_mono =
+        (rtc_last_seconds - rtc_wall_sec) * 1000000000ll + rtc_last_nanoseconds - rtc_wall_nsec;
+    if (real_mono > 0 && (uint64_t)real_mono > mono) {
+        mono = (uint64_t)real_mono;
+    }
+    raw = rtc_floor_ns(rtc_raw_seconds, rtc_raw_nanoseconds);
+    change(&mono, &raw);
+    rtc_normalize(0, (int64_t)mono, &sec, &ns);
+    nsec = ns;
+    rtc_floor(&sec, &nsec, &rtc_mono_seconds, &rtc_mono_nanoseconds);
+    rtc_normalize(0, (int64_t)raw, &sec, &ns);
+    nsec = ns;
+    rtc_floor(&sec, &nsec, &rtc_raw_seconds, &rtc_raw_nanoseconds);
+    spin_unlock(&rtc_mono_lock);
+    rtc_real_of_mono(0, (int64_t)mono, &real_sec, &real_nsec);
+    if (real_sec > rtc_last_seconds ||
+        (real_sec == rtc_last_seconds && real_nsec > rtc_last_nanoseconds)) {
+        rtc_last_seconds = real_sec;
+        rtc_last_nanoseconds = real_nsec;
+    }
+    spin_unlock_irqrestore(&rtc_realtime_lock, flags);
+}
+
 int64_t rtc_monotonic_ns(void)
 {
     int64_t sec, nsec;

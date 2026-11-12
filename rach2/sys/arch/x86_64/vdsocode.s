@@ -48,17 +48,22 @@ vdso_text_start:
 
 # A reading of the clock whose base seconds are at %rdi in the data page
 # at %r8, the nanoseconds after them and its rate before them, from the
-# TSC: the seconds in %rax and the nanoseconds, below 10^9, in %rdx. It
-# reads the page's sequence count before and after, and again while it is
-# odd or has moved; the TSC is
-# read between two lfences, so that it is taken after the loads before it
-# and before the count's second load. A count behind the base, as another
-# processor's can be by a few counts, reads as the base. Changes %rcx and
-# %r9 to %r11.
+# TSC: the seconds in %rax and the nanoseconds, below 10^9, in %rdx, with
+# the carry clear. It reads the page's sequence count before and after,
+# and again while it is odd or has moved; the TSC is read between two
+# lfences, so that it is taken after the loads before it and before the
+# count's second load. A count behind the base, as another processor's can
+# be by a few counts, reads as the base. Each reading checks the page's
+# mode after the count, as Linux's do_hres does (lib/vdso/gettimeofday.c:
+# 141-169), and returns with the carry set and nothing read when the clock
+# has stopped, so that a reading the stop overtakes makes the system call.
+# Changes %rcx and %r9 to %r11.
 vdso_fine:
     movl D_SEQ(%r8), %r11d
     testl $1, %r11d
     jnz 3f
+    cmpl $VCLOCK_TSC, D_MODE(%r8)
+    jne 4f
     movq (%r8,%rdi), %r9
     movq 8(%r8,%rdi), %r10
     lfence
@@ -87,31 +92,42 @@ vdso_fine:
     divq %rcx
     addq %r9, %rax
 2:
+    clc
     ret
 3:
     pause
     jmp vdso_fine
+4:
+    stc
+    ret
 
-# The same clock as of the last tick, without the TSC: %rax and %rdx as
-# `vdso_fine` gives them. Changes %r11.
+# The same clock as of the last tick, without the TSC: %rax and %rdx and
+# the carry as `vdso_fine` gives them. Changes %r11.
 vdso_coarse:
     movl D_SEQ(%r8), %r11d
     testl $1, %r11d
     jnz 1f
+    cmpl $VCLOCK_TSC, D_MODE(%r8)
+    jne 2f
     movq (%r8,%rdi), %rax
     movq 8(%r8,%rdi), %rdx
     cmpl D_SEQ(%r8), %r11d
     jne vdso_coarse
+    clc
     ret
 1:
     pause
     jmp vdso_coarse
+2:
+    stc
+    ret
 
 # int clock_gettime(clockid_t clk, struct timespec *ts)
 #
 # CLOCK_REALTIME and its coarse form, CLOCK_MONOTONIC, whose reading
 # CLOCK_BOOTTIME shares, as in the kernel's clock_read, and its coarse
-# form, and CLOCK_MONOTONIC_RAW; any other clock is the kernel's.
+# form, and CLOCK_MONOTONIC_RAW; any other clock is the kernel's, and so is
+# a reading the clock's stop overtakes, with the clock in %edi again.
 .globl vdso_clock_gettime
 vdso_clock_gettime:
     leaq vdso_text_start-VDSO_BACK(%rip), %r8
@@ -131,24 +147,31 @@ vdso_clock_gettime:
     je 4f
     jmp 9f
 6:
-    movl $D_RAW_SEC, %edi
-    call vdso_fine
-    jmp 5f
+    movl $D_RAW_SEC, %eax
+    jmp 7f
 1:
-    movl $D_REAL_SEC, %edi
-    call vdso_fine
-    jmp 5f
+    movl $D_REAL_SEC, %eax
+    jmp 7f
 2:
-    movl $D_MONO_SEC, %edi
+    movl $D_MONO_SEC, %eax
+7:
+    pushq %rdi
+    movl %eax, %edi
     call vdso_fine
+    popq %rdi
+    jc 9f
     jmp 5f
 3:
-    movl $D_REAL_SEC, %edi
-    call vdso_coarse
-    jmp 5f
+    movl $D_REAL_SEC, %eax
+    jmp 8f
 4:
-    movl $D_MONO_SEC, %edi
+    movl $D_MONO_SEC, %eax
+8:
+    pushq %rdi
+    movl %eax, %edi
     call vdso_coarse
+    popq %rdi
+    jc 9f
 5:
     movq %rax, (%rsi)
     movq %rdx, 8(%rsi)
@@ -177,6 +200,7 @@ vdso_gettimeofday:
     movq %rdi, %rsi
     movl $D_REAL_SEC, %edi
     call vdso_fine
+    jc 8f
     movq %rax, (%rsi)
     movq %rdx, %rax
     xorl %edx, %edx
@@ -186,6 +210,9 @@ vdso_gettimeofday:
 1:
     xorl %eax, %eax
     ret
+8:
+    movq %rsi, %rdi
+    xorl %esi, %esi
 9:
     movl $SYS_gettimeofday, %eax
     syscall
@@ -205,11 +232,14 @@ vdso_time:
     movq %rdi, %rsi
     movl $D_REAL_SEC, %edi
     call vdso_fine
+    jc 8f
     testq %rsi, %rsi
     je 1f
     movq %rax, (%rsi)
 1:
     ret
+8:
+    movq %rsi, %rdi
 9:
     movl $SYS_time, %eax
     syscall
