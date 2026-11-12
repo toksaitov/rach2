@@ -231,6 +231,11 @@ void kvm_vcpu_init_reset(struct kvm_vcpu *v)
      * are off. */
     v->st_msr = 0;
     v->pv_time = 0;
+    /* SPEC_CTRL and VIRT_SPEC_CTRL are cleared, as Linux's vmx_vcpu_reset
+     * and svm_vcpu_reset do at INIT too (vmx/vmx.c:4909, svm/svm.c:1402-1403);
+     * each entry loads them from here. */
+    v->spec_ctrl = 0;
+    v->virt_spec_ctrl = 0;
     v->dirty |= KVM_PART_REGS | KVM_PART_SREGS | KVM_PART_EVENTS | KVM_PART_DEBUG | KVM_PART_CR8;
 }
 
