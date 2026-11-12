@@ -122,6 +122,16 @@ uint64_t tick_count(void)
     return kernel_ticks;
 }
 
+/** `n` divided by `d`, with the remainder in `*rem` when it is not NULL:
+ * the host's division, which the kernel's `tick_div64` gives. */
+uint64_t tick_div64(uint64_t n, uint64_t d, uint64_t *rem)
+{
+    if (rem) {
+        *rem = n % d;
+    }
+    return n / d;
+}
+
 /** The model's run queues' lock: counted, one processor. */
 uint32_t sched_lock_take(void)
 {
