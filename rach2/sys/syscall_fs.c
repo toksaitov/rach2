@@ -19373,6 +19373,25 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count, int form
 }
 
 /**
+ * getdents64's answer for the directory `ofd` is open on at an offset past
+ * 0xFFFFFFFF, which only a type whose cursor is a byte (`dir_seeks_bytes`)
+ * takes and which lies past any directory a 32-bit cursor reaches: the
+ * type's `readdir` is asked at 0xFFFFFFFF all the same, so that a failed
+ * mount answers -EIO and a removed directory -ENOENT, as Linux's
+ * `iterate_dir` checks both before the listing's end (fs/readdir.c:105),
+ * and anything else is 0, the end, with the offset kept. The caller holds
+ * the description's lock.
+ */
+static int dir_past_end(struct open_file *ofd)
+{
+    struct vfs_dirent de;
+    uint32_t cursor = 0xFFFFFFFFu;
+    int got = vfs_readdir(ofd->vmnt, ofd->fhandle, &cursor, &de);
+
+    return got < 0 ? got : 0;
+}
+
+/**
  * getdents64(2): the descriptor, the buffer and its size. Packs a struct
  * linux_dirent64 for each entry into the buffer from the description's
  * offset on, and moves the offset past each. A record's `d_type` is the type
@@ -19394,12 +19413,8 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count, int form
  * Any other directory is read under the description's lock through its
  * type's `readdir`, whose cursor is the type's own: on the KRFFS root the
  * byte offset of the last node returned plus one, and on a mounted type
- * whatever its `readdir` keeps. An offset past 0xFFFFFFFF, which only a
- * directory whose cursor is a byte (`dir_seeks_bytes`) takes, lies past its
- * end; the type's `readdir` is asked at 0xFFFFFFFF all the same, so that a
- * failed mount answers -EIO and a removed directory -ENOENT, as Linux's
- * `iterate_dir` checks both before the listing's end (fs/readdir.c:105),
- * and anything else ends the listing with the offset kept.
+ * whatever its `readdir` keeps. An offset past 0xFFFFFFFF lies past the
+ * directory's end (`dir_past_end`).
  *
  * The offset takes the cursor only with the record copied, so an entry that
  * does not fit is read again by the next call. A cursor is not a count of
@@ -19462,7 +19477,6 @@ static long getdents(int fd_num, char *buf, uint32_t count, int format)
 
     {
         struct open_file *ofd = entry->ofd;
-        struct vfs_dirent de;
         uint32_t cursor;
 
         if (!ofd || !ofd->vmnt) {
@@ -19470,16 +19484,14 @@ static long getdents(int fd_num, char *buf, uint32_t count, int format)
         }
         fd_ofd_lock(ofd);
         if (ofd->offset > 0xFFFFFFFFull) {
-            int got;
+            int rc = dir_past_end(ofd);
 
-            /* past any directory a 32-bit cursor reaches (`dir_seeks_bytes`) */
-            cursor = 0xFFFFFFFFu;
-            got = vfs_readdir(ofd->vmnt, ofd->fhandle, &cursor, &de);
             fd_ofd_unlock(ofd);
-            return got < 0 ? got : 0;
+            return rc;
         }
         cursor = (uint32_t)ofd->offset;
         for (;;) {
+            struct vfs_dirent de;
             long n;
             int got;
 
