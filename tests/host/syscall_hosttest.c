@@ -249,6 +249,13 @@ void proc_alarm_set(process_t *p, uint64_t tick, uint64_t interval)
     p->alarm_interval = tick != 0 ? interval : 0;
 }
 
+/** The real-time timer's due tick as the kernel reads it, 0 when it is
+ * disarmed or its SIGALRM is marked. */
+uint64_t proc_alarm_due_tick(const process_t *p)
+{
+    return p->alarm_due ? 0 : p->alarm_tick;
+}
+
 /**
  * Take the interrupt mask, as the clock read, the sleep and the timer do. With
  * `tick_at_save` armed, a tick comes in the moment before the mask, as the
