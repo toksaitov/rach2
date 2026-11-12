@@ -1524,14 +1524,16 @@ static void page_change_end(struct mm *mm, const struct page_change *c)
  * regions', and the entry is read again under the page-table lock and
  * replaced only while it is the one copied (`page_change_begin`). The
  * caller balanced memory before it looked at the page, so nothing here
- * sleeps. Returns 1 if it resolved the page; -1 when the entry changed
- * meanwhile and the resolution runs again, as when another thread's fault on
- * the page made it writable after this one found it read-only, which the
- * faults of one address space may do at once, each under its regions' lock
- * held to read, as Linux's handle_pte_fault leaves an entry that is no
- * longer the one it read and calls do_wp_page only for one not writable
- * (mm/memory.c:5799-5805); and 0 if the page is not present or not
- * copy-on-write or no frame could be had or copied for it.
+ * sleeps. Every caller found the page present. Returns 1 if it resolved
+ * the page; -1 when the entry changed meanwhile and the resolution runs
+ * again: another thread's fault on the page made it writable after this one
+ * found it read-only, which the faults of one address space may do at once,
+ * each under its regions' lock held to read, or a zap made it absent, which
+ * `paging_zap_where` may do while its caller holds that lock to read, as
+ * Linux's handle_pte_fault leaves an entry that is no longer the one it read
+ * and calls do_wp_page only for one present and not writable
+ * (mm/memory.c:5799-5805); and 0 if the page is not copy-on-write or no
+ * frame could be had or copied for it.
  */
 static int cow_fault(struct mm *mm, uintptr_t addr)
 {
@@ -1543,15 +1545,12 @@ static int cow_fault(struct mm *mm, uintptr_t addr)
     uintptr_t new_phys = 0;
     int rc = 1;
 
-    if (!e) {
-        return 0;
-    }
     addr &= ~(uintptr_t)(PAGE_SIZE - 1);
-    pte = *e;
-    if ((pte & (PTE_P | PTE_W)) == (PTE_P | PTE_W)) {
+    pte = e ? *e : 0;
+    if (!(pte & PTE_P) || (pte & PTE_W)) {
         return -1;
     }
-    if (!(pte & PTE_P) || !(pte & PTE_COW)) {
+    if (!(pte & PTE_COW)) {
         return 0;
     }
     old_phys = PTE_ADDR(pte);
