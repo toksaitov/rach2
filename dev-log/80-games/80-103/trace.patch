@@ -1,0 +1,657 @@
+diff --git a/rach2/sys/arch/x86/apictimer.c b/rach2/sys/arch/x86/apictimer.c
+index f801fe424..a4ad79c4c 100644
+--- a/rach2/sys/arch/x86/apictimer.c
++++ b/rach2/sys/arch/x86/apictimer.c
+@@ -449,6 +449,14 @@ void timer_idle_exit(void)
+     hr_program(c, now);
+ }
+ 
++int64_t trace_hr_tick(void);
++int64_t trace_hr_tick(void)
++{
++    return hr_cpu[arch_cpu_id()].want != 0 && hr_cpu[arch_cpu_id()].want < hr_cpu[arch_cpu_id()].tick
++               ? hr_cpu[arch_cpu_id()].want
++               : hr_cpu[arch_cpu_id()].tick;
++}
++
+ int timer_tick_stopped(int cpu)
+ {
+     return hr_cpu[cpu].stopped;
+diff --git a/rach2/sys/arch/x86/exits.c b/rach2/sys/arch/x86/exits.c
+index 2eae7ebc2..43b835055 100644
+--- a/rach2/sys/arch/x86/exits.c
++++ b/rach2/sys/arch/x86/exits.c
+@@ -8,6 +8,7 @@
+ #include "../../proc/percpu.h"
+ #include "../../proc/smp.h"
+ #include "../../cmdline.h"
++#include "../../lib/kstring.h"
+ 
+ /* The kinds and numbers one processor has counted, in the order it first
+  * met them; a running system fills a few dozen. */
+@@ -210,3 +211,257 @@ int32_t exits_show(void *data, char *buf, uint32_t cap)
+     put_counts(&t, per, ncpu);
+     return (int32_t)t.len;
+ }
++
++/* TRACE (80-103): kernel-mode interrupts by the interrupted pc and the
++ * three return addresses above it. */
++#define SITES_SLOTS 1024
++#define SITES_PCS 4
++struct site_slot {
++    uintptr_t pc[SITES_PCS];
++    uint32_t count;
++};
++static struct site_slot sites[NR_CPUS][SITES_SLOTS];
++static uint32_t sites_lost[NR_CPUS];
++uint64_t trace_phase[NR_CPUS][8];
++volatile uint64_t trace_kick[NR_CPUS];
++volatile int trace_kstate[NR_CPUS];
++volatile int trace_wakecls[NR_CPUS];
++uint32_t trace_lat[NR_CPUS][2][12];
++uint64_t trace_ts[NR_CPUS][8];
++volatile int trace_mark[NR_CPUS];
++uint32_t trace_hit[NR_CPUS][4][9];
++uint32_t trace_tick_at[NR_CPUS][9];
++int64_t trace_hr_tick(void);
++int64_t rtc_monotonic_ns(void);
++
++static uint64_t b2b_pc[NR_CPUS], b2b_sp[NR_CPUS];
++static int b2b_cls[NR_CPUS];
++int trace_b2b_wait[NR_CPUS];
++static uint32_t b2b[NR_CPUS][8];
++
++/* An interrupt entry at the frame of the last one: it was pending at that
++ * one's return. Counted by the last one's class: 0 tick, 1 IPI, 2 device,
++ * +3 when it waited long for the big lock; 7 counts entries. */
++void trace_b2b(uint64_t pc, uint64_t sp, int cls)
++{
++    int c = arch_cpu_id();
++
++    b2b[c][7]++;
++    if (pc != 0 && pc == b2b_pc[c] && sp == b2b_sp[c]) {
++        b2b[c][b2b_cls[c] + (trace_b2b_wait[c] ? 3 : 0)]++;
++    }
++    b2b_pc[c] = pc;
++    b2b_sp[c] = sp;
++    b2b_cls[c] = cls;
++    trace_b2b_wait[c] = 0;
++}
++
++static struct {
++    uintptr_t ra;
++    uint64_t cycles;
++    uint32_t n;
++    uint32_t on;
++} trace_callers[NR_CPUS][64];
++
++void trace_caller(uintptr_t ra, int on, uint64_t cycles)
++{
++    int c = arch_cpu_id(), i;
++
++    for (i = 0; i < 64; i++) {
++        if ((trace_callers[c][i].ra == ra && trace_callers[c][i].on == (uint32_t)on) ||
++            trace_callers[c][i].ra == 0) {
++            trace_callers[c][i].ra = ra;
++            trace_callers[c][i].on = (uint32_t)on;
++            trace_callers[c][i].cycles += cycles;
++            trace_callers[c][i].n++;
++            return;
++        }
++    }
++}
++
++/* An interrupt of class `cls` (0 the IPI, 1 the timer, 2 a device) that
++ * landed at schedule's restore: for an IPI, the phase its send fell in,
++ * 0 before the region, 1..7 after trace_ts[k-1], 8 unstamped. */
++void trace_landed(int cls)
++{
++    int c = arch_cpu_id(), k = 0;
++    uint64_t t;
++
++    if (!trace_mark[c]) {
++        return;
++    }
++    trace_mark[c] = 0;
++    if (cls != 0) {
++        trace_hit[c][cls][0]++;
++        if (cls == 1) {
++            int64_t late = rtc_monotonic_ns() - trace_hr_tick();
++            uint64_t due = arch_cycles() - (late > 0 ? (uint64_t)late * 4192u / 1000u : 0);
++
++            while (k < 7 && due >= trace_ts[c][k]) {
++                k++;
++            }
++            trace_hit[c][3][k] += 0;
++            trace_tick_at[c][k]++;
++        }
++        return;
++    }
++    t = trace_kick[c];
++    if (t == 0) {
++        trace_hit[c][0][8]++;
++        return;
++    }
++    while (k < 7 && t >= trace_ts[c][k]) {
++        k++;
++    }
++    trace_hit[c][0][k]++;
++    {
++        uint64_t us = (arch_cycles() - t) / 4192u;
++        int b = 0;
++
++        while (b < 11 && us >= (1u << b)) {
++            b++;
++        }
++        trace_lat[c][0][b]++;
++        trace_hit[c][1][1 + (trace_kstate[c] & 3)]++;
++        trace_hit[c][2][1 + (trace_wakecls[c] & 3)]++;
++        trace_hit[c][2][5 + (t < this_cpu()->idle_end_cycles ? 1 : 0)]++;
++    }
++}
++uint32_t trace_phase_n[NR_CPUS][8];
++
++int trace_cls;
++void exits_irq_site(uintptr_t pc, uintptr_t fp, uintptr_t top)
++{
++    uintptr_t chain[SITES_PCS];
++    uintptr_t low = fp;
++    uint32_t h;
++    int i, c;
++    struct site_slot *s;
++
++    if (!exits_on) {
++        return;
++    }
++    chain[0] = pc;
++    for (i = 1; i < SITES_PCS; i++) {
++        if (top < 0x4000u || fp < top - 0x4000u || fp > top - 2 * sizeof(uintptr_t) ||
++            fp % sizeof(uintptr_t) != 0 || fp < low) {
++            break;
++        }
++        chain[i] = ((const uintptr_t *)fp)[1];
++        low = fp + 2 * sizeof(uintptr_t);
++        fp = ((const uintptr_t *)fp)[0];
++    }
++    for (; i < SITES_PCS; i++) {
++        chain[i] = 0;
++    }
++    chain[3] = (uintptr_t)trace_cls;
++    c = arch_cpu_id();
++    h = (uint32_t)(chain[0] ^ (chain[1] * 31u) ^ (chain[2] * 131u) ^ (chain[3] * 1031u));
++    for (i = 0; i < SITES_SLOTS; i++) {
++        s = &sites[c][(h + (uint32_t)i) % SITES_SLOTS];
++        if (s->count == 0) {
++            k_memcpy(s->pc, chain, sizeof(chain));
++            s->count = 1;
++            return;
++        }
++        if (s->pc[0] == chain[0] && s->pc[1] == chain[1] && s->pc[2] == chain[2] &&
++            s->pc[3] == chain[3]) {
++            s->count++;
++            return;
++        }
++    }
++    sites_lost[c]++;
++}
++
++static void put_hex(struct exits_text *t, uint64_t v)
++{
++    char tmp[17];
++    int n;
++
++    for (n = 15; n >= 0; n--) {
++        tmp[n] = "0123456789abcdef"[v & 15u];
++        v >>= 4;
++    }
++    tmp[16] = '\0';
++    put_str(t, tmp);
++}
++
++int32_t exits_sites_show(void *data, char *buf, uint32_t cap)
++{
++    struct exits_text t;
++    int ncpu = smp_cpu_count();
++    int c, i, k;
++
++    (void)data;
++    t.buf = buf;
++    t.cap = buf ? cap : 0;
++    t.len = 0;
++    if (ncpu > NR_CPUS) {
++        ncpu = NR_CPUS;
++    }
++    for (c = 0; c < ncpu; c++) {
++        for (i = 0; i < SITES_SLOTS; i++) {
++            const struct site_slot *s = &sites[c][i];
++
++            if (s->count == 0) {
++                continue;
++            }
++            put_num(&t, s->count, 0);
++            for (k = 0; k < SITES_PCS; k++) {
++                put_str(&t, " ");
++                put_hex(&t, s->pc[k]);
++            }
++            put_str(&t, "\n");
++        }
++        put_str(&t, "lost ");
++        put_num(&t, sites_lost[c], 0);
++        put_str(&t, "\n");
++        for (k = 0; k < 4 * 9; k++) {
++            put_str(&t, "hit ");
++            put_num(&t, (uint32_t)k, 0);
++            put_str(&t, " ");
++            put_num(&t, trace_hit[c][k / 9][k % 9], 0);
++            put_str(&t, "\n");
++        }
++        for (k = 0; k < 64 && trace_callers[c][k].ra; k++) {
++            put_str(&t, "caller ");
++            put_hex(&t, trace_callers[c][k].ra);
++            put_str(&t, " ");
++            put_hex(&t, trace_callers[c][k].cycles);
++            put_str(&t, " ");
++            put_num(&t, trace_callers[c][k].n, 0);
++            put_str(&t, trace_callers[c][k].on ? " on\n" : " off\n");
++        }
++        for (k = 0; k < 8; k++) {
++            put_str(&t, "b2b ");
++            put_num(&t, (uint32_t)k, 0);
++            put_str(&t, " ");
++            put_num(&t, b2b[c][k], 0);
++            put_str(&t, "\n");
++        }
++        for (k = 0; k < 9; k++) {
++            put_str(&t, "tickat ");
++            put_num(&t, (uint32_t)k, 0);
++            put_str(&t, " ");
++            put_num(&t, trace_tick_at[c][k], 0);
++            put_str(&t, "\n");
++        }
++        for (k = 0; k < 24; k++) {
++            put_str(&t, "lat ");
++            put_num(&t, (uint32_t)k, 0);
++            put_str(&t, " ");
++            put_num(&t, trace_lat[c][k / 12][k % 12], 0);
++            put_str(&t, "\n");
++        }
++        for (k = 0; k < 8; k++) {
++            put_str(&t, "phase ");
++            put_num(&t, (uint32_t)k, 0);
++            put_str(&t, " ");
++            put_hex(&t, trace_phase[c][k]);
++            put_str(&t, " ");
++            put_num(&t, trace_phase_n[c][k], 0);
++            put_str(&t, "\n");
++        }
++    }
++    return (int32_t)t.len;
++}
+diff --git a/rach2/sys/arch/x86/exits.h b/rach2/sys/arch/x86/exits.h
+index aa6ea94c7..5c82f83a7 100644
+--- a/rach2/sys/arch/x86/exits.h
++++ b/rach2/sys/arch/x86/exits.h
+@@ -44,4 +44,21 @@ void exits_count(unsigned int kind, uint32_t number);
+  * found a processor's table full. */
+ int32_t exits_show(void *data, char *buf, uint32_t cap);
+ 
++extern int trace_cls;
++void exits_irq_site(uintptr_t pc, uintptr_t fp, uintptr_t top);
++int32_t exits_sites_show(void *data, char *buf, uint32_t cap);
++extern uint64_t trace_phase[][8];
++extern volatile uint64_t trace_kick[];
++extern volatile int trace_kstate[];
++extern volatile int trace_wakecls[];
++extern uint32_t trace_lat[][2][12];
++extern uint64_t trace_ts[][8];
++extern volatile int trace_mark[];
++extern uint32_t trace_hit[][4][9];
++void trace_landed(int cls);
++void trace_b2b(uint64_t pc, uint64_t sp, int cls);
++extern int trace_b2b_wait[];
++void trace_caller(uintptr_t ra, int on, uint64_t cycles);
++extern uint32_t trace_phase_n[][8];
++
+ #endif /* _X86_EXITS_H_ */
+diff --git a/rach2/sys/arch/x86/isr.c b/rach2/sys/arch/x86/isr.c
+index d60f79de2..25e712e3f 100644
+--- a/rach2/sys/arch/x86/isr.c
++++ b/rach2/sys/arch/x86/isr.c
+@@ -26,6 +26,7 @@
+ #include "../../timer.h"
+ #include "../../watchdog.h"
+ #include "debugreg.h"
++#include "exits.h"
+ #if defined(__x86_64__)
+ #include "../x86_64/sysnr.h"
+ #else
+@@ -1101,7 +1102,31 @@ void isr_leave(isr_params_t *params)
+ void isr_local_router(isr_params_t *params)
+ {
+     user_entry(params);
++    trace_b2b(FRAME_PC(params) == (unsigned long)arch_idle_resume ? 0 : (uint64_t)FRAME_PC(params), (uint64_t)FRAME_SP(params), 1);
++    trace_cls = 1;
++    if (!FRAME_USER(params)) {
++#if defined(__x86_64__)
++        exits_irq_site((uintptr_t)FRAME_PC(params), (uintptr_t)params->rbp,
++#else
++        exits_irq_site((uintptr_t)FRAME_PC(params), (uintptr_t)params->ebp,
++#endif
++                       current_proc ? current_proc->kernel_stack : 0);
++    }
+     if (params->vector == IPI_VECTOR) {
++        if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
++            trace_wakecls[arch_cpu_id()] = 1;
++        }
++        trace_landed(0);
++        {
++            int c = arch_cpu_id();
++            uint64_t us = trace_kick[c] ? (arch_cycles() - trace_kick[c]) / 4192u : 0;
++            int b = 0;
++
++            while (b < 11 && us >= (1u << b)) {
++                b++;
++            }
++            trace_lat[c][1][b]++;
++        }
+         lapic_eoi();
+         smp_ipi();
+         if (FRAME_USER(params) && current_proc &&
+@@ -1292,8 +1317,23 @@ void _irq_router(isr_params_t *params)
+ #endif
+ 
+     user_entry(params);
++    if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
++        trace_wakecls[arch_cpu_id()] = timer ? 2 : 3;
++    }
++    trace_b2b(FRAME_PC(params) == (unsigned long)arch_idle_resume ? 0 : (uint64_t)FRAME_PC(params), (uint64_t)FRAME_SP(params), timer ? 0 : 2);
++    trace_landed(timer ? 1 : 2);
++    trace_cls = timer ? 2 : (int)params->vector;
++    if (!FRAME_USER(params)) {
++#if defined(__x86_64__)
++        exits_irq_site((uintptr_t)FRAME_PC(params), (uintptr_t)params->rbp,
++#else
++        exits_irq_site((uintptr_t)FRAME_PC(params), (uintptr_t)params->ebp,
++#endif
++                       current_proc ? current_proc->kernel_stack : 0);
++    }
+     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
+         FRAME_IRQ_OFF(params);
++        sched_idle_awake();
+     } else if (params->vector == IRQ_VECTOR(0) && !FRAME_USER(params)) {
+         bkl_profile_sample((uintptr_t)FRAME_PC(params), fp);
+     }
+diff --git a/rach2/sys/arch/x86/platform.c b/rach2/sys/arch/x86/platform.c
+index 109e95d8e..bf2e57ee8 100644
+--- a/rach2/sys/arch/x86/platform.c
++++ b/rach2/sys/arch/x86/platform.c
+@@ -477,6 +477,13 @@ void platform_threads_start(void)
+     if (exits_start() && debugfs_create_text("exits", 0444u, &exits_ops, NULL) != 0) {
+         klog(KLOG_WARN, "exits", "debugfs: not registered");
+     }
++    {
++        static const struct debugfs_text_ops sites_ops = {exits_sites_show, NULL};
++
++        if (exits_start()) {
++            (void)debugfs_create_text("irqsites", 0444u, &sites_ops, NULL);
++        }
++    }
+     acpica_thread_start();
+     wlan_work_threads_start();
+     ps2mouse_thread_start();
+diff --git a/rach2/sys/proc/percpu.h b/rach2/sys/proc/percpu.h
+index 94efa7948..c93dceb57 100644
+--- a/rach2/sys/proc/percpu.h
++++ b/rach2/sys/proc/percpu.h
+@@ -21,9 +21,10 @@ struct page_dir;
+  * to be dropped. */
+ #define CPU_TLB_ALL ((uintptr_t)-1)
+ 
+-/* An idle wait's `idle_poll`: not polling, polling before its halt, or
+- * kicked by a wake while it polled, which then sent no interrupt
+- * (`smp_kick`). */
++/* An idle task's `idle_poll`: not polling; polling before its halt, or
++ * awake with interrupts off after an interrupt ended it
++ * (`sched_idle_awake`); or kicked by a wake meanwhile, which then sent no
++ * interrupt (`smp_kick`). */
+ #define CPU_POLL_NONE   0u
+ #define CPU_POLL_ON     1u
+ #define CPU_POLL_KICKED 2u
+@@ -66,7 +67,7 @@ struct percpu {
+     volatile unsigned int admit;                /* CPU_STARTING, ADMITTED or REFUSED */
+     volatile int idle_wait;                     /* halted in an idle wait, for a tick to see */
+     int tick_may_stop;                          /* its idle task waits: a tick may stop it */
+-    volatile unsigned int idle_poll;            /* CPU_POLL_: polling before a halt, or kicked */
++    volatile unsigned int idle_poll;            /* CPU_POLL_: polling or awake, or kicked */
+     uint32_t idle_poll_us;                      /* the poll's length now, 0 to IDLE_POLL_MAX_US */
+     volatile int in_nmi;                        /* NMIs it is handling, nested */
+     volatile unsigned int tlb_request;          /* drop the translations from `tlb_page` */
+diff --git a/rach2/sys/proc/sched.c b/rach2/sys/proc/sched.c
+index 7a65128a0..504d33f63 100644
+--- a/rach2/sys/proc/sched.c
++++ b/rach2/sys/proc/sched.c
+@@ -18,6 +18,9 @@
+ #include "../lib/ksignal.h"
+ 
+ #include "../lib/kirq.h"
++#include "../arch/x86/exits.h"
++static uint64_t trace_t0[64], trace_t1[64];
++#define TPH(k, a) do { uint64_t _n = arch_cycles(); trace_phase[arch_cpu_id()][k] += _n - (a); trace_phase_n[arch_cpu_id()][k]++; } while (0)
+ #include "../lib/spinlock.h"
+ #include "../mm/pressure.h"
+ #include "smp.h"
+@@ -463,6 +466,14 @@ static int sched_place(const process_t *p)
+  * The interrupt switches in user mode only on that request
+  * (`isr_local_router`), and a request to the caller's own processor, whose
+  * interrupt does nothing, is taken at the call's exit (`sched_take_preempt`).
++ *
++ * An idle processor is asked once: its idle task's `need_resched` marks the
++ * request, and a later wake before its selection, which clears it, asks
++ * nothing, as Linux's resched_curr sends no interrupt to a task whose
++ * TIF_NEED_RESCHED is set (kernel/sched/core.c:1101-1102). The selection
++ * takes every thread queued meanwhile. Under KVM an interrupt takes
++ * microseconds to reach a halted vCPU, and a second one came during the
++ * switch the first had started, with interrupts off.
+  * The run queues' lock is held.
+  */
+ static int sched_preempt_cpu(const process_t *p, int cpu)
+@@ -470,6 +481,10 @@ static int sched_preempt_cpu(const process_t *p, int cpu)
+     process_t *cur = cpu_table[cpu].current;
+ 
+     if (sched_cpu_idle(cpu)) {
++        if (cur->need_resched) {
++            return -1;
++        }
++        cur->need_resched = 1;
+         return cpu;
+     }
+     if (sched_priority(p) > sched_priority(cur)) {
+@@ -918,14 +933,21 @@ void schedule(void)
+     uint32_t saved_flags;
+     int me;
+     int kick = -1;
++    uint64_t t_start;
+ 
+     if (!_sched_enabled || !current_proc) {
+         return;
+     }
+     lockdep_switch((uintptr_t)(const char *)__builtin_return_address(0));
+ 
++    t_start = arch_cycles();
+     saved_flags = spin_lock_irqsave(&sched_lock);
+     me = (int)arch_cpu_id();
++    TPH(0, t_start);
++    trace_ts[me][0] = t_start;
++    trace_ts[me][1] = arch_cycles();
++    trace_t0[me] = t_start;
++    trace_t1[me] = arch_cycles();
+     cpu = &cpu_table[me];
+     old = cpu->current;
+     pick_count++;
+@@ -990,21 +1012,41 @@ void schedule(void)
+         fpu_restore(next->fpu);
+     }
+     arch_debug_switch(next);
++    if (old == cpu->idle) {
++        (void)arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_NONE);
++    }
+     cpu->current = next;
+     cpu->switch_prev = old;
+     spin_unlock(&sched_lock);
++    TPH(1, trace_t1[me]);
++    trace_t1[me] = arch_cycles();
++    trace_ts[me][2] = trace_t1[me];
+     if (old == cpu->idle) {
+         timer_idle_exit();
+     }
+     old->bkl_depth = bkl_drop();
+     sched_wait_off_cpu(next);
+     next->on_cpu = 1;
++    TPH(2, trace_t1[me]);
++    trace_t1[me] = arch_cycles();
++    trace_ts[me][3] = trace_t1[me];
+ 
+     switch_context(old, next);
+ 
++    TPH(3, trace_t1[arch_cpu_id()]);
++    trace_t1[arch_cpu_id()] = arch_cycles();
++    trace_ts[arch_cpu_id()][4] = trace_t1[arch_cpu_id()];
+     schedule_tail();
++    TPH(4, trace_t1[arch_cpu_id()]);
++    trace_ts[arch_cpu_id()][5] = arch_cycles();
+     membarrier_switch(old);
++    if (saved_flags & 0x200u) {
++        TPH(5, trace_t0[arch_cpu_id()]);
++        trace_ts[arch_cpu_id()][6] = arch_cycles();
++        trace_mark[arch_cpu_id()] = 1;
++    }
+     kirq_restore(saved_flags);
++    trace_mark[arch_cpu_id()] = 0;
+ }
+ 
+ /**
+@@ -1078,6 +1120,15 @@ void sched_idle_loop(void)
+     }
+ }
+ 
++void sched_idle_awake(void)
++{
++    struct percpu *cpu = this_cpu();
++
++    if (cpu->idle && cpu->current == cpu->idle) {
++        (void)arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_ON);
++    }
++}
++
+ void sched_idle_balance(void)
+ {
+     int me = (int)arch_cpu_id(), c, kick = -1;
+@@ -1655,6 +1706,8 @@ void sched_loadavg(uint32_t avg[3])
+  * processor's `idle_poll` for `idle_poll_us`, then halt unless a wake
+  * turned it to CPU_POLL_KICKED meanwhile (`smp_kick`). A kick that comes
+  * after the poll finds it off and sends the interrupt that ends the halt.
++ * One that came while the idle task was awake (`sched_idle_awake`) ends
++ * the wait at once, with no poll or halt, so that its caller selects again.
+  * The poll answers the requests other processors leave (`smp_service`), as
+  * a wait for the big lock does, so that their interrupts, pending
+  * meanwhile, are taken once at its end: taken one by one inside the poll,
+@@ -1697,6 +1750,9 @@ static void idle_halt(void)
+     uint64_t start, limit, now, look, gone;
+     uint32_t grow;
+ 
++    if (arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_NONE) == CPU_POLL_KICKED) {
++        return;
++    }
+     if (per_us == 0 || !arch_idle_poll()) {
+         arch_idle_masked();
+         return;
+diff --git a/rach2/sys/proc/sched.h b/rach2/sys/proc/sched.h
+index 15d6d4383..0ee8c6f8c 100644
+--- a/rach2/sys/proc/sched.h
++++ b/rach2/sys/proc/sched.h
+@@ -182,6 +182,20 @@ void sched_idle_loop(void);
+  */
+ void sched_idle_balance(void);
+ 
++/**
++ * Mark this processor's idle task awake when an interrupt ends its halt:
++ * from then until it switches to a thread or halts again it runs with
++ * interrupts off, and a wake needs no interrupt to reach it, since its
++ * selection comes next. A kick then turns `idle_poll` to CPU_POLL_KICKED
++ * and sends none (`smp_kick`), as Linux's idle task keeps its polling bit
++ * set outside the halt itself while it is current (kernel/sched/idle.c:257,
++ * 282-290). The switch to a thread clears the mark under the run queues'
++ * lock, and the next halt clears it first and does not halt when a kick
++ * came (`idle_halt`). From the interrupt that ended the halt, with
++ * interrupts off; a thread halted in place is not marked.
++ */
++void sched_idle_awake(void);
++
+ /**
+  * The tail of a switch, run by the incoming thread on its own stack with
+  * interrupts off: where `schedule` returns past `switch_context`, at a
+diff --git a/rach2/sys/proc/smp.c b/rach2/sys/proc/smp.c
+index 2918a1b8a..27ae00702 100644
+--- a/rach2/sys/proc/smp.c
++++ b/rach2/sys/proc/smp.c
+@@ -4,6 +4,7 @@
+  */
+ 
+ #include "smp.h"
++#include "../arch/x86/exits.h"
+ 
+ #include "process.h"
+ #include "sched.h"
+@@ -239,6 +240,9 @@ static const char *const ipi_names[SMP_IPI_KINDS] = {"kick",  "tlb",  "kernel_tl
+ static void ipi_send(int cpu, int kind)
+ {
+     ipi_counts[arch_cpu_id()][kind]++;
++    trace_kick[cpu] = arch_cycles();
++    trace_kstate[cpu] = cpu_table[cpu].idle_wait ? 1 : cpu_table[cpu].current == cpu_table[cpu].idle ? 2 : 3;
++    trace_hit[arch_cpu_id()][3][trace_kstate[cpu]]++;
+     platform_cpu_ipi(cpu);
+ }
+ 
+@@ -254,6 +258,12 @@ static void ipi_send_many(uint64_t cpus, int kind)
+     }
+     for (; left != 0; left &= left - 1u) {
+         ipi_counts[arch_cpu_id()][kind]++;
++        trace_kick[__builtin_ctzll(left)] = arch_cycles();
++        {
++            int t = __builtin_ctzll(left);
++            trace_kstate[t] = cpu_table[t].idle_wait ? 1 : cpu_table[t].current == cpu_table[t].idle ? 2 : 3;
++            trace_hit[arch_cpu_id()][3][4 + trace_kstate[t]]++;
++        }
+     }
+     platform_cpu_ipi_many(cpus);
+ }
+@@ -1297,8 +1307,15 @@ void bkl_enter(void)
+     struct percpu *cpu = this_cpu();
+ 
+     if (cpu->bkl_depth == 0) {
++        uint64_t t0 = arch_cycles();
+         lockdep_bkl_acquire((uintptr_t)(const char *)__builtin_return_address(0));
+         bkl_acquire(cpu);
++        trace_phase[arch_cpu_id()][(flags & 0x200u) ? 6 : 7] += arch_cycles() - t0;
++        trace_caller((uintptr_t)(const char *)__builtin_return_address(0), (flags & 0x200u) ? 1 : 0, arch_cycles() - t0);
++        if (!(flags & 0x200u) && arch_cycles() - t0 > 400000u) {
++            trace_b2b_wait[arch_cpu_id()] = 1;
++        }
++        trace_phase_n[arch_cpu_id()][(flags & 0x200u) ? 6 : 7]++;
+         bkl_mark_hold(cpu);
+     }
+     cpu->bkl_depth++;
+diff --git a/rach2/sys/proc/smp.h b/rach2/sys/proc/smp.h
+index 685e2745f..fa3647f36 100644
+--- a/rach2/sys/proc/smp.h
++++ b/rach2/sys/proc/smp.h
+@@ -365,7 +365,8 @@ void smp_ipi(void);
+ 
+ /** End an idle wait on processor `cpu`, unless it is this one or not
+  * online, so that it selects from its run queue now rather than at its
+- * tick: a wait that polls before its halt sees its `idle_poll` turn to
++ * tick: a wait that polls before its halt, or an idle task awake after
++ * its halt (`sched_idle_awake`), sees its `idle_poll` turn to
+  * CPU_POLL_KICKED and needs no interrupt, as Linux sends none to a
+  * processor that polls its flags; any other gets an interprocessor
+  * interrupt. */
