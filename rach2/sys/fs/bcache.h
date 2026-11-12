@@ -23,9 +23,17 @@
  * against the device through `vfs_device_failed`: the mounts on it go
  * read-only, and the buffer stays dirty for a later sync to try again.
  *
- * A held buffer is busy. The kernel does not preempt inside a syscall, so a
- * second process reaches a busy buffer only while the holder is asleep in a
- * request; the second sleeps on the buffer's queue and is woken at release.
+ * A held buffer is busy: a second process that asks for it sleeps on the
+ * buffer's queue and is woken at release, as Linux's `lock_buffer` sleeps.
+ *
+ * Locks: a get that finds its block cached, or a clean buffer to fill, a
+ * release, and the questions `bcache_cached`, `bcache_state`,
+ * `bcache_copy_cached`, `bcache_busy` and `bcache_wait_unheld` need no big
+ * lock, and take the cache's own spinlock for their bookkeeping. A dirty
+ * mark, a write, a sync, a reserve, a shrink, an invalidation and the
+ * removal of a device run under the big lock, which keeps the order the
+ * dirty marks give, and a get without it that must write a dirty victim
+ * takes the big lock for that. A holder without the big lock only reads.
  * Deadlock is kept out by two checked rules: a process holds at most
  * `BCACHE_HOLD_MAX` buffers, and while it holds any it may take only a higher
  * block on the same device. A release or a dirty mark by a process that does

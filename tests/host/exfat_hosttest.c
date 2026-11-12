@@ -13,6 +13,8 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/devmodel.c
  * host-deps: tests/host/compat/pressure_host.c tests/host/compat/fixdir_host.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
+ * host-deps: tests/host/compat/bkl_held.c
  * host-first: its interruption matrices run for minutes
  *
  * The builder is compiled and run on every run, in the test's own fixture
