@@ -8880,16 +8880,29 @@ static int sysctl_parse_ulong(const char *s, unsigned long limit, unsigned long 
     return 0;
 }
 
+/** Whether `bytes` round up to more pages than an unsigned int counts,
+ * which Linux's dirty byte settings refuse with ERANGE, keeping the value
+ * they had (`dirty_bytes_handler`, mm/page-writeback.c:560). The count is
+ * taken without Linux's addition, which wraps for a value within a page of
+ * ULONG_MAX and lets it through. */
+static int dirty_bytes_too_many(unsigned long bytes)
+{
+    uint64_t pages = (uint64_t)bytes / PAGE_SIZE + (bytes % PAGE_SIZE != 0);
+
+    return pages > (uint64_t)0xFFFFFFFFu;
+}
+
 /**
  * Write the NUL-ended text `text` to the /proc/sys file `entry` when its
  * value is an unsigned long: fs/file-max, up to LONG_MAX; fs/pipe-max-size,
  * up to 2^31 and rounded (`pipe_round_size`); fs/pipe-user-pages-hard and
  * fs/pipe-user-pages-soft, any; vm/dirty_background_bytes from 1 and
- * vm/dirty_bytes from two pages, as Linux's minimums are, which clear
+ * vm/dirty_bytes from two pages, as Linux's minimums are, and up to what
+ * rounds to 2^32 - 1 pages (`dirty_bytes_too_many`), which clear
  * dirty_background_ratio and, when changed, dirty_ratio, and wake the
  * flusher (`dirty_background_bytes_handler`, `dirty_bytes_handler`,
  * mm/page-writeback.c). Returns 0 for any other file, and otherwise 1, with
- * 0 or -EINVAL in `*rc`.
+ * 0, -EINVAL or -ERANGE in `*rc`.
  */
 static int sysctl_ulong_write(int entry, const char *text, int *rc)
 {
@@ -8919,6 +8932,9 @@ static int sysctl_ulong_write(int entry, const char *text, int *rc)
         if (*rc == 0 && v < 1ul) {
             *rc = -EINVAL;
         }
+        if (*rc == 0 && dirty_bytes_too_many(v)) {
+            *rc = -ERANGE;
+        }
         if (*rc == 0) {
             dirty_background_bytes = v;
             dirty_background_ratio = 0;
@@ -8929,6 +8945,9 @@ static int sysctl_ulong_write(int entry, const char *text, int *rc)
         *rc = sysctl_parse_ulong(text, ~0ul, &v);
         if (*rc == 0 && v < 2ul * PAGE_SIZE) {
             *rc = -EINVAL;
+        }
+        if (*rc == 0 && v != vm_dirty_bytes && dirty_bytes_too_many(v)) {
+            *rc = -ERANGE;
         }
         if (*rc == 0) {
             if (v != vm_dirty_bytes) {
@@ -9557,7 +9576,7 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
     rw = e->flags & (FD_FLAG_READ | FD_FLAG_WRITE);
     flags = rw == (FD_FLAG_READ | FD_FLAG_WRITE) ? 2u : (rw == FD_FLAG_WRITE ? 1u : 0u);
     if (e->ofd) {
-        flags |= e->ofd->status_flags & (OFD_APPEND | OFD_NONBLOCK);
+        flags |= e->ofd->status_flags & (OFD_APPEND | OFD_NONBLOCK | OFD_SYNC);
     }
     if (e->flags & FD_FLAG_PATH) {
         flags |= 010000000u;

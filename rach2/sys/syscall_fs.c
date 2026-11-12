@@ -4281,6 +4281,15 @@ static int open_truncate(struct open_file *ofd, struct vfs_mount *mnt)
     return rc;
 }
 
+/** The sync status flags of a description opened with `flags`: O_SYNC's
+ * two bits when __O_SYNC is among them, alone or with O_DSYNC, as Linux's
+ * build_open_flags adds O_DSYNC to __O_SYNC (fs/open.c), else O_DSYNC's
+ * bit when set. */
+static uint32_t open_sync_flags(int flags)
+{
+    return ((uint32_t)flags & (OFD_SYNC & ~OFD_DSYNC)) ? OFD_SYNC : (uint32_t)flags & OFD_DSYNC;
+}
+
 /**
  * The descriptor for an opened node, in the slot `fd` the open reserved,
  * with `name`, the path without its leading slash, recorded for a node of a
@@ -4381,7 +4390,7 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
         if (flags & O_NONBLOCK) {
             entry->ofd->status_flags |= OFD_NONBLOCK;
         }
-        entry->ofd->status_flags |= (uint32_t)flags & OFD_SYNC;
+        entry->ofd->status_flags |= open_sync_flags(flags);
     }
     if (flags & O_CLOEXEC) {
         entry->flags |= FD_FLAG_CLOEXEC;
@@ -5263,6 +5272,7 @@ static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry
     if (flags & O_NONBLOCK) {
         e->ofd->status_flags |= OFD_NONBLOCK;
     }
+    e->ofd->status_flags |= open_sync_flags(flags);
     e->node = NULL;
     e->type = (st->mode & S_IFMT) == S_IFDIR ? FD_TYPE_DIR : FD_TYPE_FILE;
     e->ofd->watch_flags = OFD_WATCH_OPEN | (e->type == FD_TYPE_DIR ? OFD_WATCH_DIR : 0u);

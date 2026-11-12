@@ -125,6 +125,7 @@ The bullets state only what the records show. A fact the records do not hold, su
 | Linux's protection keys selftest exits 0 before most of its tests have run | Linux 6.12 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#linuxs-protection-keys-selftest-exits-0-before-most-of-its-tests-have-run) |
 | Linux's move_pages reads a 32-bit program's addresses past the first 16 from the wrong place | Linux 6.12.115 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#linuxs-move_pages-reads-a-32-bit-programs-addresses-past-the-first-16-from-the-wrong-place) |
 | PulseAudio's OSS sink writes 1% as 0 to the mixer | PulseAudio 17.0 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#pulseaudios-oss-sink-writes-1-as-0-to-the-mixer) |
+| Linux's dirty byte settings take a count within a page of ULONG_MAX | Linux 6.12.115 | 80 | unreported | [80-games/upstream.md](80-games/upstream.md#linuxs-dirty-byte-settings-take-a-count-within-a-page-of-ulong_max) |
 | Linux's KVM drops the faults of an emulated task switch | Linux 6.12 | 81 | unreported | [81-kvm/upstream.md](81-kvm/upstream.md#linuxs-kvm-drops-the-faults-of-an-emulated-task-switch) |
 | QEMU's TCG gives no exit for an intercepted CR3 read | QEMU 10.2.1 | 81 | unreported | [81-kvm/upstream.md](81-kvm/upstream.md#qemus-tcg-gives-no-exit-for-an-intercepted-cr3-read) |
 | QEMU's TCG gives no selective CR0 write exit for LMSW | QEMU 10.2.1 | 81 | unreported | [81-kvm/upstream.md](81-kvm/upstream.md#qemus-tcg-gives-no-selective-cr0-write-exit-for-lmsw) |
