@@ -1,0 +1,6 @@
+sleep 2
+cat /sys/kernel/debug/exits
+tar cf - /opt/proton | /t/rcat
+cat /sys/kernel/debug/exits
+tar cf - /opt/proton | /t/rcat
+cat /sys/kernel/debug/exits

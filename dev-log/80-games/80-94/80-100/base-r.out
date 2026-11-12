@@ -1,0 +1,170 @@
+booted rach2 /home/toksaitov-a/rach2/build/worktrees/task-4826/build/x86_64/rach2/kernel
+== sleep 2  2.00 s
+[?2004h
+<7>[6.170000] virtio_gpu: worker: pid 60
+<6>[6.171000] console: card0: handed to a master, the keyboard off
+[?2004l
+__END__0
+   exits=4498 halt_exits=2018 io_exits=105 mmio_exits=0 irq_exits=80 irq_window_exits=4 request_irq_exits=0 nmi_window_exits=0 insn_emulation=168 hypercalls=0 irq_injections=2025 halt_successful_poll=0 halt_wakeup=2020 req_event=4054 unnamed=2291
+== cat /sys/kernel/debug/exits  0.07 s
+[?2004h[?2004l
+wrmsr 0x830 1579 1086 198 178 117
+in 0x3fd 1350 1104 0 83 163
+out 0x3f8 1151 905 0 83 163
+wrmsr 0xc0000100 7559 4258 1270 1128 903
+wrmsr 0xc0000102 7509 4235 1253 1123 898
+rdmsr 0xc0000100 7512 4241 1248 1128 895
+rdmsr 0xc0000102 7521 4250 1248 1128 895
+hlt 0 11988 10110 773 624 481
+wrmsr 0x80b 303 215 34 31 23
+out 0x3d4 66 44 0 0 22
+out 0x3d5 66 44 0 0 22
+rdmsr 0x839 4 1 1 1 1
+rdmsr 0x821 4 1 1 1 1
+wrmsr 0x83e 4 1 1 1 1
+wrmsr 0x832 40 15 9 6 10
+wrmsr 0x838 8899 8135 353 230 181
+in 0xc03e 56 56 0 0 0
+out 0xc03e 29 29 0 0 0
+in 0xc03a 12 12 0 0 0
+in 0xc037 25 25 0 0 0
+out 0xc028 6 6 0 0 0
+out 0xc018 6 6 0 0 0
+out 0xc038 13 13 0 0 0
+in 0x3f8 169 169 0 0 0
+out 0xc020 5 5 0 0 0
+out 0xc010 5 5 0 0 0
+out 0xc024 6 5 0 1 0
+out 0xc014 6 5 0 1 0
+out 0xc02c 5 4 0 1 0
+out 0xc01c 5 4 0 1 0
+out 0xcf8 1700 1288 395 0 17
+in 0xcfc 1700 1288 395 0 17
+in 0xc058 7 4 3 0 0
+in 0xc062 7 4 3 0 0
+out 0x70 10 10 0 0 0
+in 0x71 1 1 0 0 0
+out 0x71 9 9 0 0 0
+out 0x3fa 2 0 0 0 2
+ipi kick 1698 1127 218 202 151
+ipi tlb 5 3 2 0 0
+ipi kernel_tlb 12 3 0 3 6
+ipi barrier 0 0 0 0 0
+ipi space 7 5 2 0 0
+ipi call 0 0 0 0 0
+ipi stop 0 0 0 0 0
+lost 0 0 0 0 0
+__END__0
+   exits=8003 halt_exits=25 io_exits=2705 mmio_exits=0 irq_exits=101 irq_window_exits=35 request_irq_exits=0 nmi_window_exits=0 insn_emulation=4934 hypercalls=0 irq_injections=94 halt_successful_poll=0 halt_wakeup=21 req_event=248 unnamed=5137
+== tar cf - /opt/proton | /t/rcat  4.75 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 91125 bytes 1610649600 nvcsw 58081 nivcsw 5 by 10k: 51705 29386 3458 1039 939 1427 3171 0
+__END__0
+   exits=465228 halt_exits=126378 io_exits=477 mmio_exits=154859 irq_exits=18857 irq_window_exits=17873 request_irq_exits=0 nmi_window_exits=0 insn_emulation=155411 hypercalls=0 irq_injections=145152 halt_successful_poll=98438 halt_wakeup=19451 req_event=225717 unnamed=146784
+== cat /sys/kernel/debug/exits  0.08 s
+[?2004h[?2004l
+wrmsr 0x830 118091 66311 33456 17464 860
+in 0x3fd 2836 1349 1241 83 163
+out 0x3f8 2535 1048 1241 83 163
+wrmsr 0xc0000100 229741 86003 79626 60984 3128
+wrmsr 0xc0000102 229688 85978 79608 60979 3123
+rdmsr 0xc0000100 229691 85985 79602 60984 3120
+rdmsr 0xc0000102 229700 85994 79602 60984 3120
+hlt 0 138392 49744 44461 40827 3360
+wrmsr 0x80b 5958 1884 1901 2056 117
+out 0x3d4 202 64 116 0 22
+out 0x3d5 202 64 116 0 22
+rdmsr 0x839 4 1 1 1 1
+rdmsr 0x821 4 1 1 1 1
+wrmsr 0x83e 4 1 1 1 1
+wrmsr 0x832 2942 17 1427 1377 121
+wrmsr 0x838 28638 12912 8413 6510 803
+in 0xc03e 56 56 0 0 0
+out 0xc03e 29 29 0 0 0
+in 0xc03a 12 12 0 0 0
+in 0xc037 25 25 0 0 0
+out 0xc028 6 6 0 0 0
+out 0xc018 6 6 0 0 0
+out 0xc038 13 13 0 0 0
+in 0x3f8 260 260 0 0 0
+out 0xc020 5 5 0 0 0
+out 0xc010 5 5 0 0 0
+out 0xc024 6 5 0 1 0
+out 0xc014 6 5 0 1 0
+out 0xc02c 5 4 0 1 0
+out 0xc01c 5 4 0 1 0
+out 0xcf8 1700 1288 395 0 17
+in 0xcfc 1700 1288 395 0 17
+in 0xc058 9 6 3 0 0
+in 0xc062 9 6 3 0 0
+out 0x70 10 10 0 0 0
+in 0x71 1 1 0 0 0
+out 0x71 9 9 0 0 0
+out 0x3fa 2 0 0 0 2
+ipi kick 118561 66619 33533 17512 897
+ipi tlb 6 4 2 0 0
+ipi kernel_tlb 12 3 0 3 6
+ipi barrier 0 0 0 0 0
+ipi space 10 8 2 0 0
+ipi call 0 0 0 0 0
+ipi stop 0 0 0 0 0
+lost 0 0 0 0 0
+__END__0
+   exits=8143 halt_exits=3 io_exits=2879 mmio_exits=0 irq_exits=61 irq_window_exits=36 request_irq_exits=0 nmi_window_exits=0 insn_emulation=5012 hypercalls=0 irq_injections=82 halt_successful_poll=0 halt_wakeup=3 req_event=228 unnamed=5164
+== tar cf - /opt/proton | /t/rcat  1.03 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 115259 bytes 1610649600 nvcsw 75376 nivcsw 0 by 10k: 87390 23741 494 397 326 367 2544 0
+__END__0
+   exits=167223 halt_exits=76644 io_exits=471 mmio_exits=0 irq_exits=3841 irq_window_exits=2329 request_irq_exits=0 nmi_window_exits=0 insn_emulation=550 hypercalls=0 irq_injections=79667 halt_successful_poll=72165 halt_wakeup=2627 req_event=86785 unnamed=83938
+== cat /sys/kernel/debug/exits  0.10 s
+[?2004h[?2004l
+wrmsr 0x830 196526 100071 62304 29900 4251
+in 0x3fd 4399 2867 1241 128 163
+out 0x3f8 3995 2463 1241 128 163
+wrmsr 0xc0000100 382043 144332 145510 82609 9592
+wrmsr 0xc0000102 381987 144307 145490 82603 9587
+rdmsr 0xc0000100 381990 144317 145482 82607 9584
+rdmsr 0xc0000102 381999 144326 145482 82607 9584
+hlt 0 215043 79206 77210 51929 6698
+wrmsr 0x80b 7346 2663 2382 2154 147
+out 0x3d4 338 192 116 8 22
+out 0x3d5 338 192 116 8 22
+rdmsr 0x839 4 1 1 1 1
+rdmsr 0x821 4 1 1 1 1
+wrmsr 0x83e 4 1 1 1 1
+wrmsr 0x832 2942 17 1427 1377 121
+wrmsr 0x838 32167 14018 9818 7279 1052
+in 0xc03e 56 56 0 0 0
+out 0xc03e 29 29 0 0 0
+in 0xc03a 12 12 0 0 0
+in 0xc037 25 25 0 0 0
+out 0xc028 6 6 0 0 0
+out 0xc018 6 6 0 0 0
+out 0xc038 13 13 0 0 0
+in 0x3f8 351 351 0 0 0
+out 0xc020 5 5 0 0 0
+out 0xc010 5 5 0 0 0
+out 0xc024 6 5 0 1 0
+out 0xc014 6 5 0 1 0
+out 0xc02c 5 4 0 1 0
+out 0xc01c 5 4 0 1 0
+out 0xcf8 1700 1288 395 0 17
+in 0xcfc 1700 1288 395 0 17
+in 0xc058 10 7 3 0 0
+in 0xc062 10 7 3 0 0
+out 0x70 10 10 0 0 0
+in 0x71 1 1 0 0 0
+out 0x71 9 9 0 0 0
+out 0x3fa 2 0 0 0 2
+ipi kick 196993 100376 62381 29948 4288
+ipi tlb 7 5 2 0 0
+ipi kernel_tlb 12 3 0 3 6
+ipi barrier 0 0 0 0 0
+ipi space 12 10 2 0 0
+ipi call 0 0 0 0 0
+ipi stop 0 0 0 0 0
+lost 0 0 0 0 0
+__END__0
+   exits=12189 halt_exits=24 io_exits=2899 mmio_exits=1920 irq_exits=134 irq_window_exits=38 request_irq_exits=0 nmi_window_exits=0 insn_emulation=8872 hypercalls=0 irq_injections=102 halt_successful_poll=1 halt_wakeup=19 req_event=269 unnamed=7174

@@ -1,0 +1,7 @@
+sleep 2
+tar cf - /opt/proton > /dev/null
+taskset -c 0 tar cf - /opt/proton | taskset -c 3 /t/rcat
+taskset -c 2 tar cf - /opt/proton | taskset -c 3 /t/rcat
+taskset -c 0 tar cf - /opt/proton | taskset -c 3 /t/rcat
+taskset -c 2 tar cf - /opt/proton | taskset -c 3 /t/rcat
+cat /sys/kernel/debug/exits

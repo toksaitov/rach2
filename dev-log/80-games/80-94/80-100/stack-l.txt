@@ -1,0 +1,4 @@
+sleep 2
+mount -t tracefs nodev /sys/kernel/tracing 2>/dev/null; T=/sys/kernel/tracing/events/sched; echo 'hist:keys=common_stacktrace:sort=hitcount if prev_comm=="rcat" && prev_state != 0' > $T/sched_switch/trigger && echo ok
+tar cf - /opt/proton | /t/rcat
+cat /sys/kernel/tracing/events/sched/sched_switch/hist | grep -v "^#" | head -150

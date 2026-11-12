@@ -1,0 +1,38 @@
+diff --git a/rach2/sys/proc/smp.c b/rach2/sys/proc/smp.c
+index 2918a1b8a..0bc8d1a17 100644
+--- a/rach2/sys/proc/smp.c
++++ b/rach2/sys/proc/smp.c
+@@ -1580,11 +1580,25 @@ void smp_ipi(void)
+     smp_service();
+ }
+ 
++static void kick_probe(int c)
++{
++    struct percpu *o = &cpu_table[c];
++
++    if (o->current == o->idle) {
++        if (!o->idle_wait) {
++            ipi_counts[arch_cpu_id()][SMP_IPI_STOP]++;
++        }
++    } else {
++        ipi_counts[arch_cpu_id()][SMP_IPI_CALL]++;
++    }
++}
++
+ void smp_kick(int cpu)
+ {
+     if (cpu != (int)arch_cpu_id() && cpu_table[cpu].online &&
+         arch_atomic_cmpxchg(&cpu_table[cpu].idle_poll, CPU_POLL_ON, CPU_POLL_KICKED) !=
+             CPU_POLL_ON) {
++        kick_probe(cpu);
+         ipi_send(cpu, SMP_IPI_KICK);
+     }
+ }
+@@ -1599,6 +1613,7 @@ void smp_kick_many(uint64_t cpus)
+             arch_atomic_cmpxchg(&cpu_table[c].idle_poll, CPU_POLL_ON, CPU_POLL_KICKED) !=
+                 CPU_POLL_ON) {
+             send |= (uint64_t)1 << c;
++            kick_probe(c);
+         }
+     }
+     ipi_send_many(send, SMP_IPI_KICK);
