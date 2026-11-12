@@ -794,8 +794,17 @@ static void accounting_held(void)
     cpu->idle_wait = 0;
     CHECK(cpu->busy_ticks == busy + 8 && cpu->idle_ticks == idle + 2,
           "a tick due in an idle wait, delivered in the next, is idle");
+    clock_ns += TICK_NS;
+    idle_start_ns = (int64_t)(clock_ns - 3u * TICK_NS / 4u);
+    idle_end_ns = (int64_t)(clock_ns - TICK_NS / 2u);
+    user_entry_ns = (int64_t)(clock_ns - TICK_NS / 4u);
+    user_return_ns = (int64_t)(clock_ns - TICK_NS / 8u);
+    sched_account_tick(1, (int64_t)(clock_ns - 3u * TICK_NS / 8u));
+    CHECK(cpu->busy_ticks == busy + 9 && cpu->user_ticks == user + 6,
+          "below a return and an entry, which older pairs may hide, a tick is user time");
     idle_start_ns = 0;
     idle_end_ns = 0;
+    user_entry_ns = 0;
     user_return_ns = 0;
     user_entry_ns = 0;
     cpu->idle_wait = 1;

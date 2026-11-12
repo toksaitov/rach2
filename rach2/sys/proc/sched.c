@@ -1361,24 +1361,35 @@ static void sched_account_one(struct percpu *cpu, int mode)
     }
 }
 
-/* The changes of mode a processor notes (`account_stretches`): the mode
- * each begins and the mode before it. */
+/* The changes of mode a processor notes (`account_stretches`): a return to
+ * user mode, an entry from it, and an idle wait's start and end; for each,
+ * the mode it begins, the mode before it, and the changes that can come
+ * just before it. */
+#define ACCOUNT_BACK  0
+#define ACCOUNT_ENTRY 1
+#define ACCOUNT_HALT  2
+#define ACCOUNT_WAKE  3
 static const int account_began[4] = {ACCOUNT_USER, ACCOUNT_SYSTEM, ACCOUNT_IDLE, ACCOUNT_SYSTEM};
 static const int account_before[4] = {ACCOUNT_SYSTEM, ACCOUNT_USER, ACCOUNT_SYSTEM, ACCOUNT_IDLE};
+static const int account_after[4] = {(1 << ACCOUNT_ENTRY) | (1 << ACCOUNT_WAKE), 1 << ACCOUNT_BACK,
+                                     (1 << ACCOUNT_ENTRY) | (1 << ACCOUNT_WAKE), 1 << ACCOUNT_HALT};
 
 /**
  * Give the processor's last changes of mode before the tick that counts,
  * as monotonic times, latest first: `from[i]` is when a stretch in
  * `mode[i]` began, and a time before the last of the `n` returned is in
- * `mode[n]`. The changes are the last return to user mode (`user_cycles`,
- * which `isr_leave` notes), the last entry from it (`entry_cycles`, which
- * the entry notes, or `user_entered`, which the return noted, when the tick
+ * `mode[n]`, or with none returned, `mode[0]` is the mode the tick found.
+ *
+ * The changes are the last return to user mode (`user_cycles`, which
+ * `isr_leave` notes), the last entry from it (`entry_cycles`, which the
+ * entry notes, or `user_entered`, which the return noted, when the tick
  * found user mode, since the tick's own entry is the latest), and the last
  * idle wait's start and end (`idle_cycles`, `idle_end_cycles`). Only the
- * latest of each is kept, so the stretches before the second latest may
- * hide older changes; ticks due that far back are rare. A change too old
- * to time (`timer_cycles_when`) is left out, and with none left `mode[0]`
- * is the mode the tick found.
+ * latest of each is kept, so older changes may hide between them: the walk
+ * starts at the change into the mode the tick found, goes back only while
+ * each change can come just before the one after it, and stops at the
+ * second of a return and an entry, below which older pairs may hide. A
+ * change too old to time (`timer_cycles_when`) is left out.
  */
 static int account_stretches(const struct percpu *cpu, int user, int64_t now, int64_t *from,
                              int *mode)
@@ -1386,12 +1397,13 @@ static int account_stretches(const struct percpu *cpu, int user, int64_t now, in
     uint64_t cycles[4];
     int kind[4];
     int64_t t;
-    int k, i, n = 0;
+    int k, i, n = 0, seen;
+    int found = cpu->idle_wait ? ACCOUNT_IDLE : user ? ACCOUNT_USER : ACCOUNT_SYSTEM;
 
-    cycles[0] = cpu->user_cycles;
-    cycles[1] = user ? cpu->user_entered : cpu->entry_cycles;
-    cycles[2] = cpu->idle_cycles;
-    cycles[3] = cpu->idle_end_cycles;
+    cycles[ACCOUNT_BACK] = cpu->user_cycles;
+    cycles[ACCOUNT_ENTRY] = user ? cpu->user_entered : cpu->entry_cycles;
+    cycles[ACCOUNT_HALT] = cpu->idle_cycles;
+    cycles[ACCOUNT_WAKE] = cpu->idle_end_cycles;
     for (k = 0; k < 4; k++) {
         t = timer_cycles_when(cycles[k], now);
         if (t == 0) {
@@ -1405,14 +1417,22 @@ static int account_stretches(const struct percpu *cpu, int user, int64_t now, in
         kind[i] = k;
         n++;
     }
+    mode[0] = found;
+    if (n == 0 || account_began[kind[0]] != found) {
+        return 0;
+    }
+    seen = 1 << kind[0];
+    for (i = 1; i < n && (account_after[kind[i - 1]] & (1 << kind[i])) != 0; i++) {
+        if ((seen & (1 << ACCOUNT_BACK)) && (seen & (1 << ACCOUNT_ENTRY))) {
+            break;
+        }
+        seen |= 1 << kind[i];
+    }
+    n = i;
     for (i = 0; i < n; i++) {
         mode[i] = account_began[kind[i]];
     }
-    if (n == 0) {
-        mode[0] = cpu->idle_wait ? ACCOUNT_IDLE : user ? ACCOUNT_USER : ACCOUNT_SYSTEM;
-    } else {
-        mode[n] = account_before[kind[n - 1]];
-    }
+    mode[n] = account_before[kind[n - 1]];
     return n;
 }
 
