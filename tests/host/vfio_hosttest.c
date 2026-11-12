@@ -1005,6 +1005,7 @@ static struct devfs_node *dev_node(const char *name)
 static const struct vm_device_ops *mapped_ops;
 static void *mapped_obj;
 static int zaps;
+static uint32_t zap_pgoff, zap_count; /* the last zap's pages */
 
 int vm_device_map(vma_t *vma, const struct vm_device_ops *ops, void *obj, uint32_t cache)
 {
@@ -1018,8 +1019,8 @@ int vm_device_map(vma_t *vma, const struct vm_device_ops *ops, void *obj, uint32
 void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count)
 {
     (void)obj;
-    (void)pgoff;
-    (void)count;
+    zap_pgoff = pgoff;
+    zap_count = count;
     zaps++;
 }
 
@@ -1520,8 +1521,9 @@ static void config_rows(void)
     CHECK((m->cfg[5] & 0x04) && (m->cfg[4] & 0x06) == 0x06, "decoding and mastering go through");
     w = 0x0004;
     v = (uint32_t)zaps;
-    CHECK(pwrite_at(device, cfg + 4, &w, 2) == 2 && zaps == (int)v + 2,
-          "turning memory off takes the BARs from the mappings");
+    CHECK(pwrite_at(device, cfg + 4, &w, 2) == 2 && zaps == (int)v + 1 && zap_pgoff == 0 &&
+              zap_count == 6u << VFIO_PCI_PGOFF_SHIFT,
+          "turning memory off takes every BAR from the mappings in one walk");
     CHECK((m->cfg[5] & 0x04) != 0, "the line stays off while the owner has no interrupt");
     w = 0x0406;
     (void)pwrite_at(device, cfg + 4, &w, 2);
