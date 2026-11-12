@@ -495,6 +495,7 @@ struct model {
     unsigned int last_dest, last_level;
     unsigned long wbf, inv_cc, inv_tlb, inv_iec, waits, iqe;
     unsigned long writes;     /* register writes of every kind */
+    int fectl_posted;         /* a FECTL write no read of the unit has flushed */
     unsigned long violations; /* commands the specification forbids */
     unsigned long stray;      /* reads of memory no table is in */
 };
@@ -773,11 +774,13 @@ uintptr_t vtd_hw_map(uint64_t base)
     return 0;
 }
 
-/** A 32-bit register: status registers are computed, the rest stored. */
+/** A 32-bit register: status registers are computed, the rest stored. A
+ * read flushes the unit's posted writes. */
 uint32_t vtd_hw_read32(uintptr_t regs, unsigned int off)
 {
-    const struct model *m = (const struct model *)(void *)regs;
+    struct model *m = (struct model *)(void *)regs;
 
+    m->fectl_posted = 0;
     if (off == VTD_GSTS) {
         return m->gsts;
     }
@@ -822,6 +825,7 @@ void vtd_hw_write32(uintptr_t regs, unsigned int off, uint32_t v)
         m->regs[off / 4] = (v & 0x80000000u) | (v >> 31);
     } else {
         m->regs[off / 4] = v;
+        m->fectl_posted = m->fectl_posted || off == VTD_FECTL;
     }
 }
 
@@ -2393,11 +2397,14 @@ static void row_fault_hold(void)
     iommu_fault_hold(1);
     check(M(0)->regs[VTD_FECTL / 4] == VTD_FECTL_IM && M(1)->regs[VTD_FECTL / 4] == VTD_FECTL_IM,
           "held: each unit's fault event masked");
+    check(!M(0)->fectl_posted && !M(1)->fectl_posted,
+          "and the mask read back, so the posted write reached the unit before the APIC moves");
     check(M(0)->regs[VTD_FEDATA / 4] == 0x31u && M(1)->regs[VTD_FEDATA / 4] == 0x31u,
           "and still aimed at its vector");
     iommu_fault_hold(0);
-    check(M(0)->regs[VTD_FECTL / 4] == 0 && M(1)->regs[VTD_FECTL / 4] == 0,
-          "let go: each unmasked, which sends an event held meanwhile");
+    check(M(0)->regs[VTD_FECTL / 4] == 0 && M(1)->regs[VTD_FECTL / 4] == 0 && !M(0)->fectl_posted &&
+              !M(1)->fectl_posted,
+          "let go: each unmasked and read back, which sends an event held meanwhile");
     row_end();
 
     row_begin("fault_hold_none");
