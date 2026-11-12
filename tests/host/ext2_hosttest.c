@@ -5238,15 +5238,20 @@ static uint64_t dirty_image(const char *img, const char *script)
     return bytes;
 }
 
+static void snapshot(const char *img, uint64_t bytes);
+static int image_equals_snap(const char *img, uint64_t bytes);
+
 /**
  * Require the dirty volume `img`, of `bytes`, to mount read-only with
- * `fault` named by the check, and to fail a create with `EROFS` with the
- * error bit set on disk.
+ * `fault` named by the check, to fail a create with `EROFS` and a remount
+ * writable with `EROFS`, and to be, after the unmount, byte for byte as it
+ * was: Linux's ext2 writes nothing to a read-only mount.
  */
 static void fault_on(const char *img, uint64_t bytes, const char *fault, const char *what)
 {
     int rc;
 
+    snapshot(img, bytes);
     use_image(img, bytes);
     last_check[0] = 0;
     rc = mount_rw();
@@ -5256,13 +5261,14 @@ static void fault_on(const char *img, uint64_t bytes, const char *fault, const c
     } else {
         void *n = make_file(mnt.root, "new", &rc);
 
-        check(n == 0 && rc == -EROFS && (disk_state(img) & 2) != 0,
-              "and refuses a create with EROFS, the error bit set on disk");
+        check(n == 0 && rc == -EROFS, "and refuses a create with EROFS");
+        check(OPS->remount(&mnt, rw_flags, NULL) == -EROFS, "and a remount writable with EROFS");
         check(1, what);
     }
     if (rc == 0 || mnt.root) {
         unmount_rw();
     }
+    check(image_equals_snap(img, bytes), "and the check and the unmount write nothing");
 }
 
 /** Make a dirty volume with `script` applied, and require it to fault as
@@ -5289,8 +5295,9 @@ static void fault_row(const char *img, const char *script, const char *fault, co
  * - each fault (a used block marked free, a block claimed twice, a reached
  *   inode marked free, wrong link counts, a directory with two parents, a
  *   size or i_blocks behind its pointers, an entry of the wrong form) mounts
- *   read-only, by name;
- * - a read-only mount runs no check and writes nothing.
+ *   read-only, by name, and writes nothing;
+ * - a read-only mount runs no check and writes nothing, and a remount
+ *   writable of it whose check finds a fault is EROFS and writes nothing.
  */
 static int lost_block_reported(void)
 {
@@ -5435,7 +5442,59 @@ static void dirty_rows(void)
     last_check[0] = 0;
     check(mount_ro() == 0 && last_check[0] == 0,
           "a read-only mount of a dirty volume is not checked");
-    unmount_image();
+    unmount_rw();
+    check(image_equals_snap(img, bytes), "and writes nothing");
+}
+
+/**
+ * Mount a clean volume read-only, read a file and a deep path on it, sync
+ * it, and unmount it as the VFS does; and mount a dirty volume read-only
+ * and remount it writable, which its check's fault makes EROFS. Each
+ * volume must be, byte for byte, as it was, since Linux's ext2 writes
+ * nothing to a read-only mount.
+ */
+static void readonly_rows(void)
+{
+    const char *img = fix_path("ro.ext2");
+    uint64_t bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    struct vfs_statfs st;
+    void *n;
+    int err, rc;
+
+    snapshot(img, bytes);
+    use_image(img, bytes);
+    rc = mount_ro();
+    check(rc == 0 && (mnt.flags & VFS_MS_RDONLY) != 0, "a clean volume mounts read-only");
+    if (rc == 0) {
+        n = walk("/dir/big.bin", &err);
+        check(n && read_at(n, abuf, 4096, 0) == 4096 && OPS->fsync(&mnt, n) == 0,
+              "a file of it reads and syncs");
+        if (n) {
+            OPS->put(&mnt, n);
+        }
+        n = walk("/dir/sub/deep.txt", &err);
+        if (n) {
+            OPS->put(&mnt, n);
+        }
+        check(n != 0 && OPS->statfs(&mnt, &st) == 0 && OPS->sync(&mnt) == 0 &&
+                  make_file(mnt.root, "new", &rc) == 0 && rc == -EROFS,
+              "a deep file is found, statfs and sync answer, and a create is EROFS");
+        check(unmount_rw() == 0, "and it unmounts");
+    }
+    check(image_equals_snap(img, bytes), "and the volume is byte for byte as it was");
+
+    bytes = dirty_image(img, "sif /dir/big.bin links_count 3\n");
+    snapshot(img, bytes);
+    use_image(img, bytes);
+    last_check[0] = 0;
+    rc = mount_ro();
+    check(rc == 0 && OPS->remount(&mnt, rw_flags, NULL) == -EROFS &&
+              strstr(last_check, "a link count that does not match its names") != 0 &&
+              (mnt.flags & VFS_MS_RDONLY) != 0,
+          "a remount writable of a read-only mount whose check finds a fault is EROFS");
+    if (rc == 0) {
+        unmount_rw();
+    }
     check(image_equals_snap(img, bytes), "and writes nothing");
 }
 
@@ -5885,17 +5944,19 @@ static const struct {
     {"--times-only", time_rows},
     {"--cache-partial-only", cache_partial_row},
     {"--xattr-only", xattr_rows},
+    {"--dirty-only", dirty_rows},
+    {"--readonly-only", readonly_rows},
 };
 
 /**
  * Make the native fixture tree using the prepared independent tools,
  * and run the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes
  * and at 2 KiB, the 1 KiB levels, the failures, the write sequences, the
- * order rows, the writer's failures, the dirty volumes, the matrix and the
- * batch rows, the node rows, the fsync rows, the group rows, the rows of
- * one file's writes and the rows of operations on names, both without the
- * big lock. An option
- * of `only_rows` runs its rows alone; `--capture-only` checks independent
+ * order rows, the writer's failures, the dirty volumes, the read-only
+ * volumes, the matrix and the batch rows, the node rows, the fsync rows,
+ * the group rows, the rows of one file's writes and the rows of operations
+ * on names, both without the big lock. An option of `only_rows` runs its
+ * rows alone; `--capture-only` checks independent
  * tool output capture alone. Returns 0, and calls `fix_passed`, when every
  * row passed.
  */
@@ -5939,6 +6000,7 @@ int main(int argc, char **argv)
     order_row();
     refusal_write_rows();
     dirty_rows();
+    readonly_rows();
     hardlink_check_rows();
     attr_rows();
     xattr_rows();
