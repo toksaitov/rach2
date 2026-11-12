@@ -43,4 +43,8 @@ uint32_t latency_max(int kind);
  * processor makes it (kernel.c); the first call only starts the measure. */
 void latency_tick(void);
 
+/** Exclude the next timer gap after the boot processor stops its idle tick.
+ * Any context; it changes no measurement already recorded. */
+void latency_idle_begin(void);
+
 #endif /* _LATENCY_H_ */

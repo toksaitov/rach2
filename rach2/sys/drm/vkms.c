@@ -5,6 +5,7 @@
  * rate, and a CRC of each frame composed in memory. `rach2.vkms` starts it.
  */
 
+#include "../idle_timer.h"
 #include "drm.h"
 
 #include "../cmdline.h"
@@ -936,4 +937,20 @@ int32_t vkms_probe(void)
     klog(KLOG_INFO, "vkms", "registered: vkms, %u planes%s%s, card %d", (unsigned)v->nplanes,
          cursor ? ", cursor" : "", overlay ? ", overlays" : "", v->drm.index);
     return 1;
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t vkms_idle_ticks(void)
+{
+    struct vkms_device *v = vkms_dev;
+    int64_t gap;
+
+    if (!v || !v->timer_on) {
+        return TICK_HZ;
+    }
+    gap = v->next_ns - vkms_now();
+    return gap <= 0 ? 1u
+           : gap >= (int64_t)1000000000
+               ? TICK_HZ
+               : (uint32_t)tick_div64((uint64_t)gap + TICK_NS - 1u, TICK_NS, NULL);
 }

@@ -184,6 +184,11 @@ uint32_t timer_late_passes(void);
  */
 void timer_wake_at(int64_t ns);
 
+/** Arm this processor for a whole-tick deadline, using the current clock's
+ * pending ticks and phase so that a stopped global tick does not delay it.
+ * Any context; interrupts are left as they were. Zero is no deadline. */
+void timer_wake_tick(uint64_t tick);
+
 /**
  * Begin a pass over many sleepers or timers on this processor, during which
  * `timer_wake_at` only keeps the earliest time asked of it, until the
@@ -206,6 +211,29 @@ void timer_wake_release(void);
  * its interrupts between ticks, and a reference keeps the clock. Any
  * context. */
 int timer_wakes_between(void);
+
+/** Stop this processor's scheduler tick for a scheduler idle wait, keeping
+ * its earliest timer event armed; 1 when stopped, 0 when unavailable.
+ * Interrupts are off and no lock is held. */
+int timer_idle_enter(void);
+
+/** Restart the scheduler tick after an idle wait, with its phase preserved
+ * and missed ticks skipped. Interrupts are off and no lock is held. */
+void timer_idle_exit(void);
+
+/** Arm the boot processor's next device-service event before its tick is
+ * stopped; 0 when another processor holds the big lock and the periodic
+ * tick must stay. No lock is held; interrupts are off. */
+int timer_idle_prepare(void);
+
+/** Compare service deadlines with the sleeping boot processor's event and
+ * kick it when an earlier one was added. The caller holds the big lock
+ * with interrupts off and no other lock. */
+void timer_idle_notify(void);
+
+/** Catch up the global clock, timers and device services when the boot
+ * processor leaves idle. No lock is held; interrupts are off. */
+void timer_idle_work(void);
 
 /**
  * The pass of an interrupt `timer_wake_at` armed: make ready the timed

@@ -235,6 +235,9 @@ void lapic_self_ipi(uint8_t vector);
 void lapic_timer_set(uint8_t vector, int periodic, int masked, uint32_t initial);
 void lapic_timer_oneshot(uint8_t vector, uint32_t initial);
 void lapic_timer_count(uint32_t initial);
+/** Select TSC-deadline mode at `vector`; the caller writes IA32_TSC_DEADLINE
+ * after ordering this LVT write. Requires CPUID.01H:ECX[24]. */
+void lapic_timer_deadline(uint8_t vector);
 void lapic_timer_stop(void);
 uint32_t lapic_timer_current(void);
 uint32_t lapic_timer_initial(void);

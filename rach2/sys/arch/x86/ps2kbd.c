@@ -5,6 +5,7 @@
  * USB keyboard's keys too and treats them the same.
  */
 
+#include "../../idle_timer.h"
 #include "i8042.h"
 #include "isr.h"
 #include "pic.h"
@@ -182,4 +183,20 @@ void kbd_init(void)
     pic_unmask_irq(1);
     leds.shown = -1;
     leds.ready = 1;
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t ps2kbd_idle_ticks(void)
+{
+    uint32_t wait = TICK_HZ, now = (uint32_t)kernel_ticks;
+
+    if (!leds.ready) {
+        return wait;
+    }
+    if (leds.stage != LEDS_IDLE) {
+        IDLE_TIMER_MIN(wait, leds.out ? leds.at + LEDS_WAIT_TICKS : now, now);
+    } else if ((int)input_leds() != leds.shown) {
+        IDLE_TIMER_MIN(wait, leds.at + LEDS_GAP_TICKS, now);
+    }
+    return wait;
 }

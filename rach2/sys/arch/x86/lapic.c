@@ -886,6 +886,12 @@ void lapic_timer_count(uint32_t initial)
     apic_write(LAPIC_INITIAL, initial);
 }
 
+/** Select the TSC-deadline clock event; its deadline MSR arms it. */
+void lapic_timer_deadline(uint8_t vector)
+{
+    apic_write(LAPIC_TIMER, vector | (2u << 17));
+}
+
 void lapic_timer_stop(void)
 {
     if (!ready) {

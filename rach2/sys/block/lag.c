@@ -23,6 +23,7 @@
  * the disk's polled functions, which take the disk's own locks.
  */
 
+#include "../idle_timer.h"
 #include "block.h"
 
 #include "../lib/kstring.h"
@@ -396,4 +397,22 @@ block_device_t *block_lag_wrap(block_device_t *backing)
     klog(KLOG_INFO, "block", "lag: %d hundredths of a second behind the boot disk",
          (int)(lag_delay / LAG_UNIT));
     return &lag_device;
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t block_lag_idle_ticks(void)
+{
+    uint32_t wait = TICK_HZ, flags = spin_lock_irqsave(&lag_lock);
+    uint32_t now = lag_clock();
+    int i;
+
+    if (lag_backing && !lag_held) {
+        for (i = 0; i < LAG_QUEUE; i++) {
+            if (queue[i].used && queue[i].ready) {
+                IDLE_TIMER_MIN(wait, queue[i].due, now);
+            }
+        }
+    }
+    spin_unlock_irqrestore(&lag_lock, flags);
+    return wait;
 }

@@ -4,6 +4,7 @@
  * speaker, the audio driver's beep generator sounds each tone too, and the
  * tick ends a tone of a given length.
  */
+#include "../../idle_timer.h"
 #include "portio.h"
 #include "../../speaker.h"
 #include "../../timer.h"
@@ -159,4 +160,16 @@ void speaker_get_counters(struct speaker_counters *out)
 
     *out = counters;
     spin_unlock_irqrestore(&speaker_lock, flags);
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t speaker_idle_ticks(void)
+{
+    uint32_t wait = TICK_HZ, flags = spin_lock_irqsave(&speaker_lock);
+
+    if (tone_timed) {
+        IDLE_TIMER_MIN(wait, tone_end, (uint32_t)kernel_ticks);
+    }
+    spin_unlock_irqrestore(&speaker_lock, flags);
+    return wait;
 }

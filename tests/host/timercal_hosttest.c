@@ -56,6 +56,8 @@
 extern int printf(const char *fmt, ...);
 extern int strcmp(const char *a, const char *b);
 
+static uint64_t deadline_at;
+
 static int fails;
 
 #define CHECK(cond, what)                   \
@@ -1017,10 +1019,66 @@ static void hr_rows(void)
     apic_running = 0;
 }
 
+/** Check stopped ticks, the kept event, long counts, restart and a TSC
+ * deadline. */
+static void idle_rows(void)
+{
+    struct hr_state *c = &hr_cpu[0];
+
+    hr_model = 1;
+    apic_khz = 1000000u;
+    ref_kind = REF_TSC;
+    raised = 0;
+    now_ns = MS(100);
+    apic_timer_start(1000000u, TICK_HZ);
+    apic_hr_init(1000000u);
+    CHECK(timer_idle_enter() && c->idle && c->oneshot && apic_initial == 0,
+          "an idle processor with no event stops its timer");
+    now_ns = MS(101);
+    CHECK(!apic_hr_entry(APIC_TIMER_VECTOR), "a stale pending tick does not count in idle");
+    timer_wake_at((int64_t)MS(250));
+    CHECK(apic_vector == 64 && apic_initial == 149000001u,
+          "the next event is armed for its full interval without intervening ticks");
+    now_ns = MS(250);
+    CHECK(apic_hr_entry(64) && !c->want && apic_initial == 0,
+          "the event is served and the timer stops again");
+    timer_idle_exit();
+    CHECK(!c->idle && c->tick > (int64_t)now_ns && c->tick <= (int64_t)now_ns + TICK_NS &&
+              apic_vector == APIC_TIMER_VECTOR,
+          "waking restarts the phased tick without replaying idle ticks");
+    now_ns = MS(250.25);
+    CHECK(timer_idle_enter(), "a later idle wait stops the tick again");
+    timer_wake_tick(300);
+    CHECK(c->want == (int64_t)MS(300), "a whole-tick deadline keeps its absolute time");
+    now_ns = MS(301);
+    CHECK(apic_hr_entry(64), "the whole-tick event is taken");
+    hr_deadline = 1;
+    tsc_per_tick = 2000000u;
+    tsc_measured = 1;
+    tsc_khz = 2000000u;
+    timer_wake_at((int64_t)MS(400));
+    CHECK(deadline_at == tsc_ordered() + 198000001u,
+          "TSC-deadline mode uses the TSC rate for the event");
+    now_ns = MS(400);
+    CHECK(apic_hr_entry(64) && deadline_at == 0, "an idle TSC deadline is cleared after its event");
+    timer_idle_exit();
+    CHECK(deadline_at > tsc_ordered(), "a busy processor has its next deadline armed");
+    hr_deadline = 0;
+    hr_model = 0;
+    ref_kind = REF_NONE;
+    hr_vector = 0;
+}
+
 /** Run the rows: 0 when every check passes, 1 otherwise. */
-int main(void)
+int main(int argc, char **argv)
 {
     uint32_t counts;
+
+    if (argc == 2 && strcmp(argv[1], "--idle") == 0) {
+        idle_rows();
+        printf("timercal idle: %s\n", fails ? "FAIL" : "OK");
+        return fails != 0;
+    }
 
     printf("timercal\n");
 
@@ -1090,6 +1148,7 @@ int main(void)
 
     kvm_rows();
     hr_rows();
+    idle_rows();
 
     if (fails) {
         printf("timercal_hosttest: %d check(s) failed\n", fails);
@@ -1097,4 +1156,48 @@ int main(void)
     }
     printf("timercal_hosttest: all checks passed\n");
     return 0;
+}
+
+/** No device services constrain the modeled idle timer. */
+int timer_idle_prepare(void)
+{
+    return 1;
+}
+
+/** The host can divide a 64-bit count directly. */
+uint64_t tick_div64(uint64_t n, uint64_t d, uint64_t *rem)
+{
+    if (rem) {
+        *rem = n % d;
+    }
+    return n / d;
+}
+
+/** The model's TSC, without an access delay. */
+uint64_t tsc_ordered(void)
+{
+    return tsc_base + now_ns * tsc_khz / 1000000u;
+}
+
+/** The deadline written to the modeled TSC's timer. */
+
+/** Keep the deadline MSR; no other MSR is used by the timer. */
+void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi)
+{
+    CHECK(msr == 0x6E0u, "only the TSC deadline is written");
+    deadline_at = ((uint64_t)hi << 32) | lo;
+}
+
+/** Select the model's deadline mode. */
+void lapic_timer_deadline(uint8_t vector)
+{
+    apic_vector = vector;
+    apic_periodic = 0;
+}
+
+/** The modeled clock's whole ticks and fractional tick. */
+void rtc_tick_phase(uint64_t *ticks, uint32_t *phase)
+{
+    *ticks = now_ns / TICK_NS;
+    *phase = (uint32_t)(now_ns % TICK_NS);
 }

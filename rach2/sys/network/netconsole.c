@@ -70,6 +70,7 @@
  * checksum over the pseudo-header, 0xffff in place of 0.
  */
 
+#include "../idle_timer.h"
 #include "../klog.h"
 #include "../panic.h"
 #include "../timer.h"
@@ -1542,4 +1543,24 @@ void netconsole_print_info(void)
              (int)t->remote_port, t->nd->name, (int)t->datagrams, t->held ? ", held" : "",
              (int)(nc_dropped + t->skipped));
     }
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t netconsole_idle_ticks(void)
+{
+    struct nc_target *t;
+    uint32_t wait = TICK_HZ;
+    int starting = nc_enabled && nc_frames_start.begun != 0;
+
+    for (t = nc_targets; t && !starting; t = t->next) {
+        starting = t->start.begun != 0;
+    }
+    if (starting && !nc_sending) {
+        uint64_t now = tick_count();
+
+        wait = nc_tick_next > now && nc_tick_next - now < TICK_HZ ? (uint32_t)(nc_tick_next - now)
+               : nc_tick_next <= now                              ? 1u
+                                                                  : TICK_HZ;
+    }
+    return wait;
 }

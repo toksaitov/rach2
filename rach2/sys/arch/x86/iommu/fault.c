@@ -24,6 +24,7 @@
  * and the unit raises no new fault event for it.
  */
 
+#include "../../../idle_timer.h"
 #include "vtd.h"
 
 #include "../../../iommu.h"
@@ -354,4 +355,17 @@ void vtd_fault_retarget(void)
     if (fault_vector >= 0) {
         fault_aim();
     }
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t iommu_idle_ticks(void)
+{
+    int i;
+
+    for (i = 0; i < vtd_nunits; i++) {
+        if (vtd_units[i].fault_again) {
+            return 1;
+        }
+    }
+    return TICK_HZ;
 }

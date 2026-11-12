@@ -1,4 +1,5 @@
 /* Intel TCO version 2 watchdog and Linux's /dev/watchdog interface. */
+#include "../../idle_timer.h"
 #include "itco.h"
 #include "../../lib/kint.h"
 #include "../../lib/kerrno.h"
@@ -700,3 +701,9 @@ void itco_shutdown(void)
     }
 }
 #endif
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t itco_idle_ticks(void)
+{
+    return registered && itco_feeding(&watchdog) ? 1u : TICK_HZ;
+}

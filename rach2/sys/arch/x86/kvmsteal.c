@@ -105,7 +105,12 @@ void kvm_steal_cpu_setup(int cpu)
 
 uint64_t arch_steal_ns(void)
 {
-    int cpu = arch_cpu_id();
+    return arch_cpu_steal_ns((int)arch_cpu_id());
+}
+
+/** Read any processor's steal page within the hypervisor's sequence count. */
+uint64_t arch_cpu_steal_ns(int cpu)
+{
     const volatile struct kvm_steal_time *st;
     uint32_t version;
     uint64_t steal;

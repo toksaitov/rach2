@@ -191,7 +191,19 @@ uint32_t proc_user_records(const process_t *p)
  * alarms. The caller holds `timer_list_lock`. */
 static void timer_update_locked(process_t *p)
 {
-    int active =
+    int active;
+
+    if (p->state == PROC_BLOCKED && p->wakeup_tick != 0) {
+        if (p->wakeup_ns != 0) {
+            timer_wake_at(p->wakeup_ns);
+        } else {
+            timer_wake_tick(p->wakeup_tick);
+        }
+    }
+    if (p->alarm_tick != 0 && !p->alarm_due) {
+        timer_wake_tick(p->alarm_tick);
+    }
+    active =
         p->state != PROC_UNUSED && (p->alarm_tick || (p->state == PROC_BLOCKED && p->wakeup_tick));
 
     if (active == p->timer_linked) {
@@ -848,8 +860,15 @@ static void timer_pass(int why, uint64_t now)
                     break;
                 }
                 due[n++] = p;
-            } else if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 && p->wakeup_ns != 0) {
-                timer_wake_at(p->wakeup_ns);
+            } else if (p->state == PROC_BLOCKED && p->wakeup_tick != 0) {
+                if (p->wakeup_ns != 0) {
+                    timer_wake_at(p->wakeup_ns);
+                } else {
+                    timer_wake_tick(p->wakeup_tick);
+                }
+            }
+            if (p->alarm_tick != 0 && !p->alarm_due && now < p->alarm_tick) {
+                timer_wake_tick(p->alarm_tick);
             }
             if ((why & PASS_TICK) && p->alarm_tick != 0 && now >= p->alarm_tick && !p->alarm_due) {
                 p->alarm_due = 1;

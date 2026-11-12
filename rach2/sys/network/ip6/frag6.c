@@ -3,6 +3,7 @@
  * fragments received and the fragmenting of a datagram past its path MTU.
  */
 
+#include "../../idle_timer.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "../../lib/krandom.h"
@@ -445,4 +446,18 @@ void frag6_tick(void)
         }
         frag6_free(q);
     }
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t frag6_idle_ticks(void)
+{
+    uint32_t wait = TICK_HZ, now = (uint32_t)kernel_ticks;
+    int i;
+
+    for (i = 0; i < FRAG6_QUEUES; i++) {
+        if (frag6_queues[i].used) {
+            IDLE_TIMER_MIN(wait, frag6_queues[i].expires, now);
+        }
+    }
+    return wait;
 }

@@ -70,6 +70,7 @@
  * waited are counted for `/proc/disk`.
  */
 
+#include "../idle_timer.h"
 #include "../arch/x86/portio.h"
 #include "../cmdline.h"
 #include "../klog.h"
@@ -1314,4 +1315,17 @@ int ata_init(void)
         }
     }
     return found > 0 ? 0 : -1;
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t ata_idle_ticks(void)
+{
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        if (wq_active(&channels[i].wq)) {
+            return 1;
+        }
+    }
+    return TICK_HZ;
 }

@@ -10,6 +10,7 @@
  * the HID driver.
  */
 
+#include "idle_timer.h"
 #include "proc/suspend.h"
 #include "input.h"
 
@@ -515,4 +516,23 @@ void input_set1_event(struct input_keyboard *kb, uint8_t code)
     }
     input_key_event(kb, scan, kb->keymap ? kb->keymap[scan] : (unsigned int)set1_keycode(scan),
                     !(code & 0x80));
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t input_idle_ticks(void)
+{
+    uint32_t wait = TICK_HZ;
+    uint32_t flags = spin_lock_irqsave(&input_lock);
+
+    if (repeat_kb && repeat_period_ms > 0) {
+        uint32_t now = now_ms();
+        uint32_t left = repeat_due - now;
+        uint32_t due = (int32_t)left <= 0 ? 1u : left >= 1000u ? TICK_HZ : MS_TO_TICKS(left);
+
+        if (due < wait) {
+            wait = due;
+        }
+    }
+    spin_unlock_irqrestore(&input_lock, flags);
+    return wait;
 }

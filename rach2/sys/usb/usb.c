@@ -12,6 +12,7 @@
  * that routing as the firmware left it.
  */
 
+#include "../idle_timer.h"
 #include "usb.h"
 
 #include "../cmdline.h"
@@ -554,4 +555,10 @@ void usb_stop(void)
         xhci_interrupts_disable(xhci_controller(n));
         xhci_stop(xhci_controller(n));
     }
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t usb_idle_ticks(void)
+{
+    return usb_up ? 1u : TICK_HZ;
 }

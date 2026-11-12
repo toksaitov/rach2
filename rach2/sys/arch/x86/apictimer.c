@@ -13,6 +13,8 @@
 #include "ioapic.h"
 #include "lapic.h"
 #include "refclock.h"
+#include "kcpu.h"
+#include "tsc.h"
 
 #include "../arch.h"
 #include "../../irq.h"
@@ -70,19 +72,18 @@ static uint32_t tick_hz = TICK_HZ;
  * the clock, and does not stop.
  */
 struct hr_state {
-    int64_t want;             /* the earliest time asked for and not yet served, in
-                               * nanoseconds since boot, or 0 for none */
-    int64_t tick;             /* with `oneshot`, the time of the next tick */
-    int64_t due;              /* the time the last tick the clock passed was due,
-                               * as the tick being taken found it, or 0 */
-    uint8_t oneshot;          /* the timer is one-shot */
-    uint8_t lvt;              /* with `oneshot`, the vector its entry was last
-                               * written with, 0 before the first */
-    uint32_t hold;            /* the passes under way (`timer_wake_hold`): while
-                               * nonzero, a time asked for only lowers `held` */
-    int64_t held;             /* the earliest time asked for while held, 0 for none */
-    volatile uint8_t stopped; /* the tick is stopped in an idle wait */
-    int64_t resume;           /* with `stopped`, the time of the tick it skipped */
+    int64_t want;    /* the earliest time asked for and not yet served, in
+                      * nanoseconds since boot, or 0 for none */
+    int64_t tick;    /* with `oneshot`, the time of the next tick */
+    int64_t due;     /* the time the last tick the clock passed was due,
+                      * as the tick being taken found it, or 0 */
+    uint8_t oneshot; /* the timer is one-shot */
+    uint8_t idle;    /* the scheduler tick is stopped during an idle wait */
+    uint8_t lvt;     /* with `oneshot`, the vector its entry was last
+                      * written with, 0 before the first */
+    uint32_t hold;   /* the passes under way (`timer_wake_hold`): while
+                      * nonzero, a time asked for only lowers `held` */
+    int64_t held;    /* the earliest time asked for while held, 0 for none */
 };
 
 /* The time before a tick's time at which an interrupt still counts as the
@@ -100,6 +101,17 @@ static struct hr_state hr_cpu[NR_CPUS];
  * `apic_hr_init` takes it; the counts of a tick then. */
 static int hr_vector;
 static uint32_t hr_tick_counts;
+static int hr_deadline;
+
+/** Write this processor's TSC deadline, ordering the LVT's write before
+ * the MSR as Intel's local APIC requires in xAPIC mode. Interrupts are off. */
+static void hr_set_deadline(uint64_t at)
+{
+#ifndef RACH2_HOSTTEST
+    __asm__ __volatile__("mfence" ::: "memory");
+#endif
+    kcpu_wrmsr(0x6E0u, (uint32_t)at, (uint32_t)(at >> 32));
+}
 
 void apic_lint_init(const struct acpi_info *a)
 {
@@ -224,6 +236,9 @@ void apic_timer_start(uint32_t counts, uint32_t hz)
 
     tick_hz = hz;
     c->oneshot = 0;
+    c->idle = 0;
+    c->due = 0;
+    c->lvt = 0;
     c->want = 0;
     lapic_timer_set(APIC_TIMER_VECTOR, 1, 0, counts);
 }
@@ -254,39 +269,65 @@ static void hr_forward(struct hr_state *c, int64_t now)
 }
 
 /**
- * Count this processor's one-shot timer to the earlier of its next tick and
- * the time asked for, from the clock's reading `now`, at the vector of the
- * one it counts to. A time passed is one count away, so that its interrupt
- * comes at once; the counts are rounded up, so that the interrupt never
- * comes before its time by the rounding. The entry is written only when its
- * vector changes, and the divide register only at the first count, since
- * each write exits under KVM. A time ticks away, as a stopped tick's is, is
- * counted in whole ticks and the rest, up to the 32-bit count's limit,
- * past which the interrupt comes early and counts again. Interrupts are
- * off.
+ * Convert a nanosecond interval to counts at `rate` counts per tick,
+ * rounded up, at least one and at most ten seconds. Whole ticks and a
+ * fraction are converted apart so their product cannot overflow even at
+ * the largest rate, and short intervals need only 32-bit division.
  */
+static uint64_t hr_counts(int64_t delta, uint32_t rate)
+{
+    uint64_t ticks, rem;
+
+    if (delta <= 0) {
+        return 1;
+    }
+    if (delta > (int64_t)10 * 1000000000) {
+        delta = (int64_t)10 * 1000000000;
+    }
+    if ((uint64_t)delta <= 0xFFFFFFFFu) {
+        ticks = (uint32_t)delta / TICK_NS;
+        rem = (uint32_t)delta % TICK_NS;
+    } else {
+        ticks = tick_div64((uint64_t)delta, TICK_NS, &rem);
+    }
+    return ticks * rate + refclock_scale((uint32_t)rem, rate, TICK_NS) + 1u;
+}
+
+/** Program the earlier event once, keeping the LVT until its vector changes.
+ * The caller has interrupts off; a zero idle expiry stops the device. */
 static void hr_program(struct hr_state *c, int64_t now)
 {
-    int64_t at = c->tick, delta;
+    int64_t at = c->idle ? 0 : c->tick, delta;
     uint8_t vector = APIC_TIMER_VECTOR;
-    uint32_t counts;
+    uint32_t counts, rate;
+    uint64_t span;
 
-    if (c->want != 0 && c->want < at) {
+    if (c->want != 0 && (at == 0 || c->want < at)) {
         at = c->want;
         vector = (uint8_t)hr_vector;
     }
-    delta = at - now;
-    if (delta <= 0) {
-        counts = 1;
-    } else if (delta >= 2 * (int64_t)TICK_NS) {
-        uint64_t rem, whole = tick_div64((uint64_t)delta, TICK_NS, &rem) * hr_tick_counts;
-
-        whole += refclock_scale((uint32_t)rem, hr_tick_counts, TICK_NS) + 1u;
-        counts = whole >= 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)whole;
-    } else {
-        counts = refclock_scale((uint32_t)delta, hr_tick_counts, TICK_NS) + 1u;
+    if (at == 0) {
+        if (hr_deadline) {
+            hr_set_deadline(0);
+        } else {
+            lapic_timer_count(0);
+        }
+        return;
     }
-    if (c->lvt == 0) {
+    delta = at - now;
+    if (hr_deadline) {
+        rate = timer_calibrate();
+        span = hr_counts(delta, rate);
+        if (c->lvt != vector) {
+            lapic_timer_deadline(vector);
+            c->lvt = vector;
+        }
+        hr_set_deadline(tsc_ordered() + span);
+        return;
+    }
+    span = hr_counts(delta, hr_tick_counts);
+    counts = span >= 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)span;
+    if (c->lvt != vector) {
         lapic_timer_set(vector, 0, 0, counts);
         c->lvt = vector;
     } else if (c->lvt != vector) {
@@ -348,6 +389,26 @@ int timer_wakes_between(void)
     return hr_vector != 0 && timer_tick_shared();
 }
 
+void timer_wake_tick(uint64_t tick)
+{
+    uint64_t now, left;
+    uint32_t phase, flags;
+    int64_t at;
+
+    if (tick == 0 || !timer_wakes_between()) {
+        return;
+    }
+    flags = kirq_save();
+    rtc_tick_phase(&now, &phase);
+    left = tick > now ? tick - now : 0;
+    if (left > (uint64_t)TICK_HZ * 60u) {
+        left = (uint64_t)TICK_HZ * 60u;
+    }
+    at = rtc_monotonic_ns() + (int64_t)left * TICK_NS - phase;
+    timer_wake_at(at > 0 ? at : 1);
+    kirq_restore(flags);
+}
+
 void timer_wake_at(int64_t ns)
 {
     struct hr_state *c;
@@ -368,7 +429,7 @@ void timer_wake_at(int64_t ns)
         if (!c->oneshot) {
             now = hr_oneshot(c);
             hr_program(c, now);
-        } else if (ns < c->tick) {
+        } else if (c->idle || ns < c->tick) {
             now = rtc_monotonic_ns();
             hr_program(c, now);
         }
@@ -468,7 +529,7 @@ int apic_hr_entry(uint32_t vector)
         return 1;
     }
     now = rtc_monotonic_ns();
-    if (vector == APIC_TIMER_VECTOR && now + HR_SLACK_NS >= c->tick) {
+    if (!c->idle && vector == APIC_TIMER_VECTOR && now + HR_SLACK_NS >= c->tick) {
         c->due = c->tick;
         hr_forward(c, now);
         if (c->tick - (int64_t)TICK_NS > c->due) {
@@ -493,14 +554,47 @@ int apic_hr_vector(void)
     return hr_vector;
 }
 
+int timer_idle_enter(void)
+{
+    struct hr_state *c = &hr_cpu[arch_cpu_id()];
+    int64_t now;
+
+    if (!timer_wakes_between() || !timer_idle_prepare()) {
+        return 0;
+    }
+    now = c->oneshot ? rtc_monotonic_ns() : hr_oneshot(c);
+    c->idle = 1;
+    hr_program(c, now);
+    return 1;
+}
+
+void timer_idle_exit(void)
+{
+    struct hr_state *c = &hr_cpu[arch_cpu_id()];
+    int64_t now;
+
+    if (!c->idle) {
+        return;
+    }
+    now = rtc_monotonic_ns();
+    c->idle = 0;
+    if (c->tick <= now) {
+        hr_forward(c, now);
+    }
+    hr_program(c, now);
+}
+
 void apic_hr_init(uint32_t counts)
 {
     int v = isr_alloc_vector();
+    uint32_t a, b, c, d;
 
     if (v < 0 || counts == 0) {
         return;
     }
     hr_tick_counts = counts;
+    kcpu_id(1, &a, &b, &c, &d);
+    hr_deadline = (c & (1u << 24)) != 0 && timer_calibrate() != 0;
     set_isr_handler((uint8_t)v, hr_interrupt, "hrtimer");
     isr_register_flags((uint8_t)v, hr_interrupt, ISR_UNLOCKED);
     hr_vector = v;
