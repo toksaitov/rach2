@@ -123,7 +123,9 @@ static uint8_t model_bytes[PAGE_SIZE];
 static uintptr_t model_page;
 static int file_locked;
 static uint64_t model_size = 2 * PAGE_SIZE;
-static int disk_writes;
+static int disk_writes, disk_error;
+static uint8_t disk_bytes[PAGE_SIZE];
+static struct vm_file *model_dead;
 /* Whether the leaf of the file's pages that a page goes in exists. */
 static int model_leaf;
 /* The lookups of the file's pages and those made under the file's lock;
@@ -345,9 +347,14 @@ void free_frame(uintptr_t phys)
 int32_t fs_write_at(fd_entry_t *e, const void *buf, uint32_t count, uint64_t off)
 {
     (void)e;
-    (void)buf;
-    (void)off;
     disk_writes++;
+    if (disk_error) {
+        return disk_error;
+    }
+    check(off + count <= PAGE_SIZE, "writeback stays within the model file");
+    if (off + count <= PAGE_SIZE) {
+        k_memcpy(disk_bytes + (uint32_t)off, buf, count);
+    }
     return (int32_t)count;
 }
 
@@ -425,23 +432,42 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
     (void)mnt;
 }
 
-/** Not reached. */
+/** Hold a mapped file or a failed release's own reference. */
 void vm_file_get(struct vm_file *f)
 {
-    (void)f;
+    f->refs++;
 }
 
-/** Not reached. */
+/** A zero-reference mapping is queued for release and cannot be taken. */
 int vm_file_tryget(struct vm_file *f)
 {
-    (void)f;
-    return 0;
+    if (!f->refs) {
+        return 0;
+    }
+    f->refs++;
+    return 1;
 }
 
-/** Not reached. */
+/** Queue the last put for a release with no regions' lock held. */
 void vm_file_put(struct vm_file *f)
 {
-    (void)f;
+    check(f->refs > 0, "the mapping has a reference to put");
+    if (--f->refs == 0) {
+        f->dead = model_dead;
+        model_dead = f;
+    }
+}
+
+/** Run queued releases, which may keep their own hold after an error. */
+void vm_file_reap(void)
+{
+    while (model_dead) {
+        struct vm_file *f = model_dead;
+
+        model_dead = f->dead;
+        f->dead = NULL;
+        f->release(f);
+    }
 }
 
 /** Not reached. */
@@ -621,12 +647,16 @@ static void late_mark_rows(struct vm_file *f)
 {
     struct filemap *m = (struct filemap *)f;
     struct dshare *ds = m->ds;
-    uint8_t buf[PAGE_SIZE];
     uintptr_t old = MODEL_FRAME;
 
     model_page = old;
     check(f->mkwrite(f, 1, old) == 0 && dshare_stored(ds, 1),
           "a resident frame is marked before stores may reach it");
+    dshare_unmark_from(ds, 0);
+    model_size = PAGE_SIZE;
+    check(f->mkwrite(f, 1, old) == -EAGAIN && !dshare_stored(ds, 1),
+          "a frame still resident past the current EOF cannot be marked");
+    model_size = 2 * PAGE_SIZE;
     filemap_file_truncated(ds->mnt, ds->ino, PAGE_SIZE);
     check(!model_page && !dshare_stored(ds, 1),
           "truncation removes the page and its writeback mark");
@@ -637,7 +667,7 @@ static void late_mark_rows(struct vm_file *f)
     check(f->mkwrite(f, 1, old) == -EAGAIN && !dshare_stored(ds, 1),
           "a delayed mark also refuses a replacement at the same file offset");
     disk_writes = 0;
-    check(dshare_write_page(ds, m, 1, buf) == 0 && disk_writes == 0,
+    check(dshare_write_page(ds, m, 1) == 0 && disk_writes == 0,
           "writeback leaves a regrown clean hole unallocated");
     check(f->mkwrite(f, 1, model_page) == 0 && dshare_stored(ds, 1),
           "a new fault may mark the replacement frame itself");
@@ -740,11 +770,133 @@ static void unlocked_rows(void)
     check(maps == NULL && dshare_count == 0, "the releases leave no mapping");
 }
 
+/** Make one dirty shared page for release, retry and EOF-tail rows. */
+static struct vm_file *writeback_file(struct vfs_mount *mnt, struct open_file *ofd)
+{
+    fd_entry_t e;
+    struct vm_file *f;
+    struct filemap *m;
+
+    k_memset(&e, 0, sizeof(e));
+    e.type = FD_TYPE_FILE;
+    e.flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    e.ofd = ofd;
+    ofd->vmnt = mnt;
+    ofd->ino = 93;
+    f = filemap_disk_shared(&e);
+    check(f != NULL, "a shared writeback mapping is made");
+    if (!f) {
+        return NULL;
+    }
+    m = (struct filemap *)f;
+    m->ds->sh.npages = 1;
+    model_page = MODEL_FRAME;
+    model_size = PAGE_SIZE;
+    k_memset(model_bytes, 0x65, sizeof(model_bytes));
+    k_memset(disk_bytes, 0, sizeof(disk_bytes));
+    disk_writes = disk_error = 0;
+    check(f->mkwrite(f, 0, model_page) == 0, "the page is marked for a shared store");
+    return f;
+}
+
+/** Failed unmaps keep stores; fsync reports the error after a good retry. */
+static void writeback_retry_rows(void)
+{
+    struct vfs_mount mnt;
+    struct open_file ofd;
+    struct vm_file *f;
+    int freed, released;
+
+    k_memset(&mnt, 0, sizeof(mnt));
+    k_memset(&ofd, 0, sizeof(ofd));
+    f = writeback_file(&mnt, &ofd);
+    if (!f) {
+        return;
+    }
+    freed = shmem_frees;
+    released = backing_releases;
+    disk_error = -EIO;
+    vm_file_put(f);
+    vm_file_reap();
+    check(f->refs == 1 && ((struct filemap *)f)->retained == 1 && shmem_frees == freed &&
+              backing_releases == released && dshare_count == 1,
+          "a failed final write keeps its page, mark, file and mapping for retry");
+    disk_error = 0;
+    check(filemap_sync_file(&mnt, ofd.ino) == -EIO && disk_bytes[0] == 0x65 &&
+              disk_bytes[PAGE_SIZE - 1] == 0x65,
+          "fsync retries the stored bytes and reports the earlier release error");
+    vm_file_reap();
+    check(!maps && dshare_count == 0 && shmem_frees == freed + 1 &&
+              backing_releases == released + 1 && filemap_sync_file(&mnt, ofd.ino) == 0,
+          "the successful retry frees the keeper and reports its error once");
+}
+
+/** Final release allocates no buffer and fsync drains deferred writers. */
+static void writeback_release_rows(void)
+{
+    struct vfs_mount mnt;
+    struct open_file ofd;
+    struct vm_file *f;
+    extern unsigned long kheap_host_largest;
+
+    k_memset(&mnt, 0, sizeof(mnt));
+    k_memset(&ofd, 0, sizeof(ofd));
+    f = writeback_file(&mnt, &ofd);
+    if (!f) {
+        return;
+    }
+    kheap_host_largest = 1;
+    vm_file_put(f);
+    vm_file_reap();
+    kheap_host_largest = 0;
+    check(!maps && disk_writes > 0 && disk_bytes[PAGE_SIZE - 1] == 0x65,
+          "final unmap needs no heap allocation to write its dirty page");
+
+    f = writeback_file(&mnt, &ofd);
+    if (!f) {
+        return;
+    }
+    vm_file_put(f);
+    check(filemap_sync_file(&mnt, ofd.ino) == 0 && disk_writes > 0 && disk_bytes[0] == 0x65,
+          "fsync reaps a zero-reference writer before claiming all stores reached the file");
+    check(!maps && !model_dead && dshare_count == 0,
+          "the queued writer and the sync hold are both released");
+}
+
+/** Stores beyond EOF are zeroed before a later growth can expose them. */
+static void writeback_tail_rows(void)
+{
+    struct vfs_mount mnt;
+    struct open_file ofd;
+    struct vm_file *f;
+
+    k_memset(&mnt, 0, sizeof(mnt));
+    k_memset(&ofd, 0, sizeof(ofd));
+    f = writeback_file(&mnt, &ofd);
+    if (!f) {
+        return;
+    }
+    model_size = 17;
+    check(filemap_sync_file(&mnt, ofd.ino) == 0 && model_bytes[16] == 0x65 &&
+              model_bytes[17] == 0 && model_bytes[PAGE_SIZE - 1] == 0,
+          "writeback zeros stores past EOF before a later growth can make them file data");
+    model_size = PAGE_SIZE;
+    check(filemap_sync_file(&mnt, ofd.ino) == 0 && disk_bytes[16] == 0x65 && disk_bytes[17] == 0 &&
+              disk_bytes[PAGE_SIZE - 1] == 0,
+          "regrowth writes only zeros from the old page's tail");
+    vm_file_put(f);
+    vm_file_reap();
+    check(!maps && dshare_count == 0 && !model_dead, "writeback rows leave no retained file");
+}
+
 int main(void)
 {
     anon_shared_rows();
     disk_stores_rows();
     unlocked_rows();
+    writeback_retry_rows();
+    writeback_release_rows();
+    writeback_tail_rows();
     if (fails) {
         printf("filemap-hosttest: %d failed\n", fails);
         return 1;

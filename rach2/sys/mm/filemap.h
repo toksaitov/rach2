@@ -74,7 +74,8 @@ struct vm_file *filemap_disk_shared(const fd_entry_t *e);
 /** Whether `f` is a shared mapping of a file on a disk, as
  * `filemap_disk_shared` made it, whose reference keeps the file's pages in
  * memory and the copy of its descriptor; 0 for NULL and any other file.
- * A long-term pin holds it so (mm/pin.c). */
+ * A short-term write pin and an i915 userptr pin hold it until the device
+ * has finished (mm/pin.c, drm/i915/i915_gem_userptr.c). */
 int filemap_disk_pages(const struct vm_file *f);
 
 /** Whether the file `ino` of `mnt` has resident pages for any private or
@@ -132,8 +133,9 @@ void filemap_file_written(fd_entry_t *e, uint64_t off, uint32_t len);
  * (`shmem_truncate`). */
 void filemap_file_truncated(const struct vfs_mount *mnt, uint64_t ino, uint64_t size);
 
-/** For fsync, write back the file's pages in memory; 0 or the first failed
- * write's error. */
+/** For fsync, reap pending mapping releases and retry the file's pages;
+ * 0, or the first unreported writeback error, consumed by this call. A
+ * failed last unmap keeps its file and pages until retry and reporting. */
 int filemap_sync_file(const struct vfs_mount *mnt, uint64_t ino);
 
 /** For sync, write back the pages in memory of every file a shared mapping

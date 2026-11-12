@@ -5735,6 +5735,7 @@
         {"assertion_id": "ext2-readv", "checks": "with AB written at offset 200, a readv at 200 into the mapping's byte 201 and then a buffer returns 2, and both hold A, as Linux reads the vector from the shared page in order", "source": "program"},
         {"assertion_id": "ext2-msync", "checks": "msync of the mapping succeeds", "source": "program"},
         {"assertion_id": "ext2-reach-file", "checks": "the mapping's stores reach the file after munmap and after a mapper's exit", "source": "program"},
+        {"assertion_id": "ext2-cached-truncate", "checks": "after a cache-warmed private read and a shared store, truncation removes both aliases with SIGBUS and regrowth preserves the prefix with a zero tail", "source": "program"},
         {"assertion_id": "krffs-enodev", "checks": "on the KRFFS root, a writable shared mapping of the file fails with ENODEV", "source": "program"},
         {"assertion_id": "krffs-readonly", "checks": "a read-only shared mapping of the file, open for writing, cannot be made writable", "source": "program"},
         {"assertion_id": "trunc-file", "checks": "a file in /dev/shm to truncate is made", "source": "program"},
@@ -5800,7 +5801,7 @@
       ],
       "branches": [
         {"group_id": "arch", "decided_by": "report", "alternatives": [{"alternative_id": "x86-64", "when": null, "assertions": ["wide-file", "wide-mmap", "wide-first-page", "wide-last-page", "wide-eoverflow", "wide-less-one", "huge-mmap", "huge-last-page", "huge-mprotect-reach", "huge-mprotect", "huge-getrusage", "huge-shrink-child", "huge-shrink", "huge-shrink-cut", "huge-munmap", "huge-move-mmap", "huge-move", "huge-move-munmap"]}, {"alternative_id": "i686", "when": null, "assertions": []}]},
-        {"group_id": "root", "decided_by": "report", "alternatives": [{"alternative_id": "ext2", "when": null, "assertions": ["ext2-mmap", "ext2-child", "ext2-read", "ext2-write", "ext2-readv", "ext2-msync", "ext2-reach-file"]}, {"alternative_id": "krffs", "when": null, "assertions": ["krffs-enodev", "krffs-readonly"]}]}
+        {"group_id": "root", "decided_by": "report", "alternatives": [{"alternative_id": "ext2", "when": null, "assertions": ["ext2-mmap", "ext2-child", "ext2-read", "ext2-write", "ext2-readv", "ext2-msync", "ext2-reach-file", "ext2-cached-truncate"]}, {"alternative_id": "krffs", "when": null, "assertions": ["krffs-enodev", "krffs-readonly"]}]}
       ],
       "termination": {"end": "exited", "value": 0},
       "progress": [],

@@ -108,6 +108,8 @@ A probe that etude judges writes etude's report records (`tools/etude/Readme.md`
 
 `pidfdmusl` waits for a sibling to block in poll with no requested events on an unreaped child's pidfd, then reaps the child and requires POLLHUP. It sends siginfo through each queued-signal call from fresh file-backed pages, checks the counted faults and received fields, and checks copy ordering and the restriction on kernel signal codes.
 
+`mapmusl` also warms an ext2 file's cache, reads a private mapping before making a writable shared alias, stores through the alias, and truncates below the page. Both aliases must raise SIGBUS there; regrowth keeps the prefix and exposes only zeros.
+
 `privatefilemusl` checks clean private mappings on tmpfs, and also on the directory given as its argument. It touches a private page before a shared mapping exists, then checks shared stores, descriptor writes, copy-on-write, fork isolation, truncation of a dirty private page with SIGBUS, MADV_DONTNEED and mapped-file lifetime after close and unlink. The Direct3D suite runs it on tmpfs and ext2.
 
 `threadscaling` creates, holds, releases and joins batches of 16, 64 and 256 threads through a condition variable. It checks every creation result and bounds the pid, real-user and VMA gap work per creation by `/proc/stat` counters. During a nanosleep by the parent, timer entries examined stay within sixteen per timer pass, with one pass of slack. This permits the installed system's background timers while detecting scans over the held threads.

@@ -51,6 +51,10 @@ which returns
 .Er EBADF
 before anything is flushed, as on Linux; it does not check the
 descriptor's type.
+It first writes resident shared-mapping pages of the file.
+A failed write at the last unmap keeps its pages and file open for retry;
+the next fsync reports that error once even if its retry succeeds.
+A pending mapping release is completed before fsync chooses its writer.
 For a descriptor on a mounted file system, it runs that file system's
 fsync operation, or writes the device's dirty buffers if the file
 system has no such operation.
