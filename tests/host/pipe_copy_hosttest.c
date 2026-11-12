@@ -35,6 +35,16 @@ unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, uns
     return was;
 }
 
+/** The exchange of the barrier before a pipe's wake (`sched_mb`), on the
+ * host's one thread. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    unsigned int was = *p;
+
+    *p = value;
+    return was;
+}
+
 extern int printf(const char *format, ...);
 
 #define USER_BASE  0x04000000u
@@ -403,6 +413,14 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds)
     } else {
         CHECK(0, "wake uses pipe queue");
     }
+}
+
+/** Every queue of the model has a waiter, so that each change of an
+ * unpolled pipe wakes its queue (`pipe_wake`) and the rows count it. */
+int wq_active(const wait_queue_t *wq)
+{
+    (void)wq;
+    return 1;
 }
 
 /** A notification of every kind of change. */
