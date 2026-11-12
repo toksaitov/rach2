@@ -336,13 +336,24 @@ static int poll_quiet(void)
     return quiet;
 }
 
-/** `signal_pending` under the big lock, which the signal state needs and a
- * poll or ppoll, which run without it, takes for the question; interrupts
- * are off. */
+/**
+ * Whether a signal ends the wait, with interrupts off: 0 without the big lock
+ * while the thread's signal-work flag (`sig_woken`) is clear, as Linux's
+ * signal_pending tests TIF_SIGPENDING alone (include/linux/sched/signal.h:
+ * 379-382, 404-416), and otherwise `signal_pending` under the big lock, which
+ * the signal state needs and a poll, ppoll or epoll wait, which run without
+ * it, takes for the question. A post sets the flag, then a full barrier, then
+ * reads the sleeper's state (`sig_wake`), which the wait sets before its
+ * second check.
+ */
 static int poll_signal_pending(void)
 {
-    int big = !bkl_held(), pending;
+    int big, pending;
 
+    if (!*(volatile uint32_t *)&current_proc->sig_woken) {
+        return 0;
+    }
+    big = !bkl_held();
     if (big) {
         bkl_enter();
     }
