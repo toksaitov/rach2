@@ -1,0 +1,28 @@
+booted rach2 R/build/tmp/4850/kernel-spin10
+== sleep 2  2.00 s
+[?2004h
+<6>[5.164000] net: eth0: IPv6 fec0::5cc7:16f:ea0:f487/64 added
+<6>[5.164000] net: eth0: IPv6 fec0::9249:49e9:462c:7952/64 added
+<7>[6.111000] virtio_gpu: worker: pid 77
+<6>[6.111000] console: card0: handed to a master, the keyboard off
+[?2004l
+__END__0
+   exits=4369 halt_exits=2013 io_exits=106 mmio_exits=0 irq_exits=14 irq_window_exits=4 request_irq_exits=0 nmi_window_exits=0 insn_emulation=168 hypercalls=0 irq_injections=2018 halt_successful_poll=0 halt_wakeup=2012 req_event=4045 unnamed=2232
+== tar cf - /opt/proton | /t/rcat  4.52 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 120837 bytes 1610649600 nvcsw 25728 nivcsw 1 by 10k: 106233 7074 1949 830 765 1327 2659 0
+__END__0
+   exits=393189 halt_exits=94913 io_exits=481 mmio_exits=154576 irq_exits=18110 irq_window_exits=15042 request_irq_exits=0 nmi_window_exits=0 insn_emulation=155128 hypercalls=0 irq_injections=111497 halt_successful_poll=72271 halt_wakeup=19844 req_event=188596 unnamed=110067
+== tar cf - /opt/proton | /t/rcat  0.63 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 152029 bytes 1610649600 nvcsw 6042 nivcsw 0 by 10k: 150151 879 126 89 98 131 555 0
+__END__0
+   exits=18491 halt_exits=6538 io_exits=459 mmio_exits=0 irq_exits=1952 irq_window_exits=505 request_irq_exits=0 nmi_window_exits=0 insn_emulation=545 hypercalls=0 irq_injections=7818 halt_successful_poll=5717 halt_wakeup=671 req_event=10150 unnamed=9037
+== tar cf - /opt/proton | /t/rcat  0.64 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 151859 bytes 1610649600 nvcsw 6166 nivcsw 0 by 10k: 149894 939 122 99 90 118 597 0
+__END__0
+   exits=19094 halt_exits=6720 io_exits=466 mmio_exits=0 irq_exits=2138 irq_window_exits=512 request_irq_exits=0 nmi_window_exits=0 insn_emulation=545 hypercalls=0 irq_injections=8011 halt_successful_poll=5814 halt_wakeup=734 req_event=10417 unnamed=9258

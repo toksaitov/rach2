@@ -1,0 +1,80 @@
+mounted
+
+booted linux none
+== sleep 2  2.14 s
+__END__0
+   exits=2974 halt_exits=577 io_exits=0 mmio_exits=776 irq_exits=149 irq_window_exits=41 request_irq_exits=0 nmi_window_exits=0 insn_emulation=801 hypercalls=0 irq_injections=634 halt_successful_poll=128 halt_wakeup=448 req_event=994 unnamed=1431
+== tar cf - /opt/proton | /t/rcat  5.53 s
+tar: Removing leading `/' from member names
+rcat: reads 101509 bytes 1610649600 nvcsw 43073 nivcsw 3 by 10k: 72621 19087 3097 1020 980 1921 2783 0
+__END__0
+   exits=349914 halt_exits=84104 io_exits=1 mmio_exits=179797 irq_exits=5950 irq_window_exits=5346 request_irq_exits=0 nmi_window_exits=0 insn_emulation=179820 hypercalls=0 irq_injections=91313 halt_successful_poll=60863 halt_wakeup=15363 req_event=141392 unnamed=74716
+== mount -t tracefs nodev /sys/kernel/tracing 2>/dev/null; T=/sys/kernel/tracing; echo 'wakelat u64 lat' > $T/synthetic_events && echo 'wdur u64 lat' >> $T/synthetic_events && echo 'wgap u64 lat' >> $T/synthetic_events && echo ok  0.13 s
+ok
+__END__0
+   exits=1542 halt_exits=298 io_exits=0 mmio_exits=154 irq_exits=36 irq_window_exits=27 request_irq_exits=0 nmi_window_exits=0 insn_emulation=171 hypercalls=0 irq_injections=344 halt_successful_poll=30 halt_wakeup=262 req_event=434 unnamed=1027
+== T=/sys/kernel/tracing/events; echo 'hist:keys=pid:ts0=common_timestamp if comm=="rcat"' > $T/sched/sched_waking/trigger && echo 'hist:keys=next_pid:lat=common_timestamp-$ts0:onmatch(sched.sched_waking).trace(wakelat,$lat) if next_comm=="rcat"' > $T/sched/sched_switch/trigger && echo 'hist:keys=lat.log2:sort=lat' > $T/synthetic/wakelat/trigger && echo ok  0.29 s
+ok
+__END__0
+   exits=1768 halt_exits=557 io_exits=0 mmio_exits=1 irq_exits=24 irq_window_exits=17 request_irq_exits=0 nmi_window_exits=0 insn_emulation=21 hypercalls=0 irq_injections=588 halt_successful_poll=144 halt_wakeup=407 req_event=645 unnamed=1169
+== T=/sys/kernel/tracing/events; echo 'hist:keys=common_pid:ts1=common_timestamp if count==10240' > $T/syscalls/sys_enter_write/trigger && echo 'hist:keys=common_pid:lat=common_timestamp-$ts1:onmatch(syscalls.sys_enter_write).trace(wdur,$lat) if ret==10240' > $T/syscalls/sys_exit_write/trigger && echo 'hist:keys=lat.log2:sort=lat' > $T/synthetic/wdur/trigger && echo ok  0.28 s
+ok
+__END__0
+   exits=1614 halt_exits=434 io_exits=0 mmio_exits=1 irq_exits=28 irq_window_exits=23 request_irq_exits=0 nmi_window_exits=0 insn_emulation=18 hypercalls=0 irq_injections=470 halt_successful_poll=42 halt_wakeup=381 req_event=535 unnamed=1128
+== T=/sys/kernel/tracing/events; echo 'hist:keys=common_pid:ts2=common_timestamp if ret==10240' >> $T/syscalls/sys_exit_write/trigger && echo 'hist:keys=common_pid:lat=common_timestamp-$ts2:onmatch(syscalls.sys_exit_write).trace(wgap,$lat) if count==10240' >> $T/syscalls/sys_enter_write/trigger && echo 'hist:keys=lat.log2:sort=lat' > $T/synthetic/wgap/trigger && echo ok  0.29 s
+ok
+__END__0
+   exits=1574 halt_exits=396 io_exits=0 mmio_exits=2 irq_exits=32 irq_window_exits=22 request_irq_exits=0 nmi_window_exits=0 insn_emulation=20 hypercalls=0 irq_injections=433 halt_successful_poll=26 halt_wakeup=369 req_event=495 unnamed=1122
+== tar cf - /opt/proton | /t/rcat  1.42 s
+tar: Removing leading `/' from member names
+rcat: reads 152402 bytes 1610649600 nvcsw 79689 nivcsw 2 by 10k: 149347 2081 453 265 174 33 49 0
+__END__0
+   exits=163923 halt_exits=80212 io_exits=0 mmio_exits=14 irq_exits=1197 irq_window_exits=440 request_irq_exits=0 nmi_window_exits=0 insn_emulation=32 hypercalls=0 irq_injections=80936 halt_successful_poll=78447 halt_wakeup=601 req_event=82072 unnamed=82060
+== T=/sys/kernel/tracing/events/synthetic; for e in wakelat wdur wgap; do echo "## $e"; grep -v '^#' $T/$e/hist | grep -v '^$'; done  0.13 s
+## wakelat
+{ lat: ~ 2^11 } hitcount:         34
+{ lat: ~ 2^12 } hitcount:         41
+{ lat: ~ 2^13 } hitcount:      76176
+{ lat: ~ 2^14 } hitcount:       2280
+{ lat: ~ 2^15 } hitcount:       1009
+{ lat: ~ 2^16 } hitcount:        139
+{ lat: ~ 2^17 } hitcount:          6
+{ lat: ~ 2^20 } hitcount:          4
+Totals:
+    Hits: 79689
+    Entries: 8
+    Dropped: 0
+## wdur
+{ lat: ~ 2^11 } hitcount:       1178
+{ lat: ~ 2^12 } hitcount:      75460
+{ lat: ~ 2^13 } hitcount:      76351
+{ lat: ~ 2^14 } hitcount:       2672
+{ lat: ~ 2^15 } hitcount:       1150
+{ lat: ~ 2^16 } hitcount:        240
+{ lat: ~ 2^17 } hitcount:        225
+{ lat: ~ 2^18 } hitcount:          7
+{ lat: ~ 2^19 } hitcount:          1
+{ lat: ~ 2^20 } hitcount:          1
+{ lat: ~ 2^21 } hitcount:          5
+Totals:
+    Hits: 157290
+    Entries: 11
+    Dropped: 0
+## wgap
+{ lat: ~ 2^11 } hitcount:      28745
+{ lat: ~ 2^12 } hitcount:     121367
+{ lat: ~ 2^13 } hitcount:       2866
+{ lat: ~ 2^14 } hitcount:       3406
+{ lat: ~ 2^15 } hitcount:        517
+{ lat: ~ 2^16 } hitcount:        319
+{ lat: ~ 2^17 } hitcount:         52
+{ lat: ~ 2^18 } hitcount:         10
+{ lat: ~ 2^19 } hitcount:          1
+{ lat: ~ 2^20 } hitcount:          4
+{ lat: ~ 2^21 } hitcount:          2
+Totals:
+    Hits: 157289
+    Entries: 11
+    Dropped: 0
+__END__0
+   exits=1733 halt_exits=324 io_exits=0 mmio_exits=76 irq_exits=41 irq_window_exits=26 request_irq_exits=0 nmi_window_exits=0 insn_emulation=96 hypercalls=0 irq_injections=370 halt_successful_poll=30 halt_wakeup=291 req_event=459 unnamed=1266

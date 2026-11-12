@@ -1,0 +1,26 @@
+booted rach2 R/build/tmp/4850/kernel-spin4
+== sleep 2  2.01 s
+[?2004h
+<7>[6.177000] virtio_gpu: worker: pid 77
+<6>[6.178000] console: card0: handed to a master, the keyboard off
+[?2004l
+__END__0
+   exits=4377 halt_exits=2020 io_exits=107 mmio_exits=0 irq_exits=7 irq_window_exits=2 request_irq_exits=0 nmi_window_exits=0 insn_emulation=168 hypercalls=0 irq_injections=2027 halt_successful_poll=0 halt_wakeup=2021 req_event=4057 unnamed=2241
+== tar cf - /opt/proton | /t/rcat  4.91 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 116058 bytes 1610649600 nvcsw 27005 nivcsw 2 by 10k: 99811 7948 1939 853 688 1465 3354 0
+__END__0
+   exits=399397 halt_exits=98047 io_exits=475 mmio_exits=154583 irq_exits=16919 irq_window_exits=15123 request_irq_exits=0 nmi_window_exits=0 insn_emulation=155134 hypercalls=0 irq_injections=114567 halt_successful_poll=72622 halt_wakeup=22370 req_event=191372 unnamed=114250
+== tar cf - /opt/proton | /t/rcat  0.64 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 151723 bytes 1610649600 nvcsw 6882 nivcsw 0 by 10k: 149569 1141 140 86 70 103 614 0
+__END__0
+   exits=20401 halt_exits=7557 io_exits=492 mmio_exits=0 irq_exits=1891 irq_window_exits=464 request_irq_exits=0 nmi_window_exits=0 insn_emulation=546 hypercalls=0 irq_injections=8806 halt_successful_poll=6725 halt_wakeup=684 req_event=11197 unnamed=9997
+== tar cf - /opt/proton | /t/rcat  0.64 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 151805 bytes 1610649600 nvcsw 6566 nivcsw 0 by 10k: 149718 1085 132 81 72 106 611 0
+__END__0
+   exits=19712 halt_exits=7225 io_exits=461 mmio_exits=0 irq_exits=1944 irq_window_exits=458 request_irq_exits=0 nmi_window_exits=0 insn_emulation=546 hypercalls=0 irq_injections=8481 halt_successful_poll=6403 halt_wakeup=696 req_event=10893 unnamed=9624

@@ -1,0 +1,452 @@
+booted rach2 R/build/tmp/4850/kernel-probe
+== sleep 2  2.00 s
+[?2004h
+<6>[5.372000] net: eth0: IPv6 fec0::65f2:c9ce:7a7:4701/64 added
+<6>[5.372000] net: eth0: IPv6 fec0::791c:cb21:bf36:4386/64 added
+<7>[6.213000] virtio_gpu: worker: pid 77
+<6>[6.214000] console: card0: handed to a master, the keyboard off
+[?2004l
+__END__0
+   exits=4385 halt_exits=2013 io_exits=106 mmio_exits=0 irq_exits=21 irq_window_exits=9 request_irq_exits=0 nmi_window_exits=0 insn_emulation=168 hypercalls=0 irq_injections=2020 halt_successful_poll=0 halt_wakeup=2010 req_event=4051 unnamed=2236
+== cat /sys/kernel/debug/exits | grep -E '^(ipi kick|pp |hlt)'  0.14 s
+[?2004h[?2004l
+hlt 0 12160 9929 1060 724 447
+ipi kick 1820 1121 350 234 115
+pp 0 0 0 0 0 0
+pp 1 0 0 0 0 0
+pp 2 0 0 0 0 0
+pp 3 0 0 0 0 0
+pp 4 0 0 0 0 0
+pp 5 0 0 0 0 0
+pp 6 0 0 0 0 0
+pp 7 0 0 0 0 0
+pp 8 0 0 0 0 0
+pp 9 0 0 0 0 0
+pp 10 0 0 0 0 0
+pp 11 0 0 0 0 0
+pp 12 0 0 0 0 0
+pp 13 0 0 0 0 0
+pp 14 0 0 0 0 0
+pp 15 0 0 0 0 0
+pp 16 0 0 0 0 0
+pp 17 0 0 0 0 0
+pp 18 0 0 0 0 0
+pp 19 0 0 0 0 0
+pp 20 0 0 0 0 0
+pp 21 0 0 0 0 0
+pp 22 0 0 0 0 0
+pp 23 0 0 0 0 0
+pp 24 0 0 0 0 0
+pp 25 0 0 0 0 0
+pp 26 0 0 0 0 0
+pp 27 0 0 0 0 0
+pp 28 0 0 0 0 0
+pp 29 0 0 0 0 0
+pp 30 0 0 0 0 0
+pp 31 0 0 0 0 0
+pp 32 0 0 0 0 0
+pp 33 0 0 0 0 0
+pp 34 0 0 0 0 0
+pp 35 0 0 0 0 0
+pp 36 0 0 0 0 0
+pp 37 0 0 0 0 0
+pp 38 0 0 0 0 0
+pp 39 0 0 0 0 0
+pp 40 0 0 0 0 0
+pp 41 0 0 0 0 0
+pp 42 0 0 0 0 0
+pp 43 0 0 0 0 0
+pp 44 0 0 0 0 0
+pp 45 0 0 0 0 0
+pp 46 0 0 0 0 0
+pp 47 0 0 0 0 0
+pp 48 0 0 0 0 0
+pp 49 0 0 0 0 0
+pp 50 0 0 0 0 0
+pp 51 0 0 0 0 0
+pp 52 0 0 0 0 0
+pp 53 0 0 0 0 0
+pp 54 0 0 0 0 0
+pp 55 0 0 0 0 0
+pp 56 0 0 0 0 0
+pp 57 0 0 0 0 0
+pp 58 0 0 0 0 0
+pp 59 0 0 0 0 0
+pp 60 0 0 0 0 0
+pp 61 0 0 0 0 0
+pp 62 0 0 0 0 0
+pp 63 0 0 0 0 0
+pp 64 0 0 0 0 0
+pp 65 0 0 0 0 0
+pp 66 0 0 0 0 0
+pp 67 0 0 0 0 0
+pp 68 0 0 0 0 0
+pp 69 0 0 0 0 0
+pp 70 0 0 0 0 0
+pp 71 0 0 0 0 0
+pp 72 0 0 0 0 0
+pp 73 0 0 0 0 0
+pp 74 0 0 0 0 0
+pp 75 0 0 0 0 0
+pp 76 0 0 0 0 0
+pp 77 0 0 0 0 0
+pp 78 0 0 0 0 0
+pp 79 0 0 0 0 0
+pp 80 0 0 0 0 0
+pp 81 0 0 0 0 0
+pp 82 0 0 0 0 0
+pp 83 0 0 0 0 0
+pp 84 0 0 0 0 0
+pp 85 0 0 0 0 0
+pp 86 0 0 0 0 0
+pp 87 0 0 0 0 0
+pp 88 0 0 0 0 0
+pp 89 0 0 0 0 0
+pp 90 0 0 0 0 0
+pp 91 0 0 0 0 0
+pp 92 0 0 0 0 0
+pp 93 0 0 0 0 0
+pp 94 0 0 0 0 0
+pp 95 0 0 0 0 0
+__END__0
+   exits=14456 halt_exits=33 io_exits=4360 mmio_exits=90 irq_exits=138 irq_window_exits=77 request_irq_exits=0 nmi_window_exits=0 insn_emulation=9587 hypercalls=0 irq_injections=183 halt_successful_poll=14 halt_wakeup=19 req_event=494 unnamed=9758
+== tar cf - /opt/proton | /t/rcat  4.58 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 92082 bytes 1610649600 nvcsw 60595 nivcsw 3 by 10k: 52164 30498 3056 1132 959 1424 2849 0
+__END__0
+   exits=465528 halt_exits=128460 io_exits=476 mmio_exits=154580 irq_exits=18512 irq_window_exits=17524 request_irq_exits=0 nmi_window_exits=0 insn_emulation=155132 hypercalls=0 irq_injections=146692 halt_successful_poll=102177 halt_wakeup=18012 req_event=225904 unnamed=145976
+== tar cf - /opt/proton > /dev/zero  0.45 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+__END__0
+   exits=2570 halt_exits=451 io_exits=260 mmio_exits=0 irq_exits=496 irq_window_exits=106 request_irq_exits=0 nmi_window_exits=0 insn_emulation=291 hypercalls=0 irq_injections=904 halt_successful_poll=1 halt_wakeup=452 req_event=1942 unnamed=1257
+== tar cf - /opt/proton > /dev/zero  0.48 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+__END__0
+   exits=2240 halt_exits=10 io_exits=259 mmio_exits=0 irq_exits=1076 irq_window_exits=118 request_irq_exits=0 nmi_window_exits=0 insn_emulation=244 hypercalls=0 irq_injections=491 halt_successful_poll=0 halt_wakeup=9 req_event=1129 unnamed=777
+== cat /sys/kernel/debug/exits | grep -E '^(ipi kick|pp |hlt)'  0.17 s
+[?2004h[?2004l
+hlt 0 141109 50152 45052 42596 3309
+ipi kick 120644 67547 34859 17127 1111
+pp 0 157290 79522 50719 25400 1649
+pp 1 89234 44516 28760 14988 970
+pp 2 61249 30732 19808 10027 682
+pp 3 92083 20322 33196 37294 1271
+pp 4 60568 14797 21836 23097 838
+pp 5 1572900 371412 559912 615208 26368
+pp 6 5209 3200 1424 555 30
+pp 7 27 6 10 11 0
+pp 8 27 16 7 4 0
+pp 9 0 0 0 0 0
+pp 10 0 0 0 0 0
+pp 11 0 0 0 0 0
+pp 12 0 0 0 0 0
+pp 13 0 0 0 0 0
+pp 14 0 0 0 0 0
+pp 15 0 0 0 0 0
+pp 16 582 76 222 281 3
+pp 17 75 21 27 24 3
+pp 18 18 6 4 8 0
+pp 19 150 123 13 14 0
+pp 20 957 680 160 106 11
+pp 21 1854 933 481 415 25
+pp 22 39467 6568 14736 17784 379
+pp 23 8621 2995 2743 2646 237
+pp 24 5589 2509 1904 1084 92
+pp 25 3100 857 1462 700 81
+pp 26 139 24 78 33 4
+pp 27 10 1 6 0 3
+pp 28 2 1 0 1 0
+pp 29 0 0 0 0 0
+pp 30 0 0 0 0 0
+pp 31 0 0 0 0 0
+pp 32 0 0 0 0 0
+pp 33 0 0 0 0 0
+pp 34 0 0 0 0 0
+pp 35 1940 1040 630 258 12
+pp 36 70618 34954 22857 12110 697
+pp 37 10000 5105 3341 1389 165
+pp 38 39725 18797 13031 7446 451
+pp 39 5459 2727 1807 808 117
+pp 40 7654 4143 2547 890 74
+pp 41 1334 879 287 138 30
+pp 42 7587 3955 2333 1265 34
+pp 43 9358 5765 2731 806 56
+pp 44 3055 1755 1026 265 9
+pp 45 426 297 103 22 4
+pp 46 122 94 26 2 0
+pp 47 11 10 0 1 0
+pp 48 25444 3987 9386 11804 267
+pp 49 5956 1504 1952 2336 164
+pp 50 36113 6244 12906 16603 360
+pp 51 5989 1841 2152 1939 57
+pp 52 16179 6163 5446 4205 365
+pp 53 382 82 166 117 17
+pp 54 519 126 294 90 9
+pp 55 929 243 536 135 15
+pp 56 426 87 272 53 14
+pp 57 114 32 69 11 2
+pp 58 28 10 15 2 1
+pp 59 1 0 1 0 0
+pp 60 0 0 0 0 0
+pp 61 1 0 1 0 0
+pp 62 0 0 0 0 0
+pp 63 1 0 1 0 0
+pp 64 0 0 0 0 0
+pp 65 5 3 1 1 0
+pp 66 287 146 93 48 0
+pp 67 386 199 112 70 5
+pp 68 12 4 3 5 0
+pp 69 3 1 2 0 0
+pp 70 50919 24715 16812 8822 570
+pp 71 1708 850 524 312 22
+pp 72 7428 4491 2163 707 67
+pp 73 442 274 94 58 16
+pp 74 49 39 4 4 2
+pp 75 7 7 0 0 0
+pp 76 3 3 0 0 0
+pp 77 0 0 0 0 0
+pp 78 0 0 0 0 0
+pp 79 0 0 0 0 0
+pp 80 491 266 147 75 3
+pp 81 41 14 16 11 0
+pp 82 3 1 2 0 0
+pp 83 2 0 0 2 0
+pp 84 2 1 1 0 0
+pp 85 4775 1961 1730 1064 20
+pp 86 45555 22785 14362 7823 585
+pp 87 340 194 84 53 9
+pp 88 5073 3619 1201 243 10
+pp 89 107 90 14 3 0
+pp 90 4 2 0 2 0
+pp 91 0 0 0 0 0
+pp 92 0 0 0 0 0
+pp 93 0 0 0 0 0
+pp 94 0 0 0 0 0
+pp 95 4856 1799 2251 751 55
+__END__0
+   exits=20501 halt_exits=144 io_exits=5666 mmio_exits=1920 irq_exits=135 irq_window_exits=81 request_irq_exits=0 nmi_window_exits=0 insn_emulation=13980 hypercalls=0 irq_injections=288 halt_successful_poll=0 halt_wakeup=130 req_event=714 unnamed=12555
+== tar cf - /opt/proton | /t/rcat  1.03 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 115086 bytes 1610649600 nvcsw 74741 nivcsw 0 by 10k: 87193 23582 710 378 342 359 2522 0
+__END__0
+   exits=166106 halt_exits=76135 io_exits=469 mmio_exits=0 irq_exits=3725 irq_window_exits=2293 request_irq_exits=0 nmi_window_exits=0 insn_emulation=550 hypercalls=0 irq_injections=79044 halt_successful_poll=71398 halt_wakeup=2958 req_event=86181 unnamed=83484
+== cat /sys/kernel/debug/exits | grep -E '^(ipi kick|pp |hlt)'  0.17 s
+[?2004h[?2004l
+hlt 0 217395 81201 74486 54204 7504
+ipi kick 198431 96939 64465 32742 4285
+pp 0 314580 138617 110500 57272 8191
+pp 1 201846 86601 71557 38180 5508
+pp 2 135962 58915 48088 25225 3734
+pp 3 207170 67742 77758 54243 7427
+pp 4 135251 45052 51139 34200 4860
+pp 5 3145800 995358 1181000 855574 113868
+pp 6 7242 3898 2349 869 126
+pp 7 97 43 30 20 4
+pp 8 82 39 26 16 1
+pp 9 0 0 0 0 0
+pp 10 0 0 0 0 0
+pp 11 0 0 0 0 0
+pp 12 0 0 0 0 0
+pp 13 0 0 0 0 0
+pp 14 0 0 0 0 0
+pp 15 0 0 0 0 0
+pp 16 601 81 228 286 6
+pp 17 81 23 30 25 3
+pp 18 21 8 5 8 0
+pp 19 152 124 13 15 0
+pp 20 1030 725 177 112 16
+pp 21 1916 980 487 424 25
+pp 22 108212 34687 41741 27769 4015
+pp 23 11243 3867 3708 3215 453
+pp 24 7644 3231 2828 1388 197
+pp 25 4139 1271 1820 912 136
+pp 26 189 47 95 41 6
+pp 27 13 2 7 1 3
+pp 28 2 1 0 1 0
+pp 29 0 0 0 0 0
+pp 30 0 0 0 0 0
+pp 31 0 0 0 0 0
+pp 32 0 0 0 0 0
+pp 33 0 0 0 0 0
+pp 34 0 0 0 0 0
+pp 35 1940 1040 630 258 12
+pp 36 115767 52087 40074 21012 2594
+pp 37 43652 17553 16200 8336 1563
+pp 38 105768 43638 37951 21130 3049
+pp 39 9141 4014 3104 1640 383
+pp 40 11792 5766 4180 1596 250
+pp 41 4764 2174 1650 741 199
+pp 42 8340 4245 2651 1374 70
+pp 43 9615 5886 2846 825 58
+pp 44 3179 1805 1075 290 9
+pp 45 481 302 112 63 4
+pp 46 125 94 27 4 0
+pp 47 14 11 0 3 0
+pp 48 63065 20031 23748 17067 2219
+pp 49 8614 2585 2785 2906 338
+pp 50 104663 34079 39997 26573 4014
+pp 51 8077 2597 2997 2279 204
+pp 52 18864 7313 6336 4698 517
+pp 53 541 131 228 152 30
+pp 54 774 231 380 142 21
+pp 55 1671 513 817 290 51
+pp 56 692 195 355 113 29
+pp 57 156 46 87 21 2
+pp 58 48 18 26 2 2
+pp 59 1 0 1 0 0
+pp 60 0 0 0 0 0
+pp 61 1 0 1 0 0
+pp 62 0 0 0 0 0
+pp 63 1 0 1 0 0
+pp 64 0 0 0 0 0
+pp 65 5 3 1 1 0
+pp 66 294 148 95 51 0
+pp 67 408 209 119 72 8
+pp 68 14 4 4 6 0
+pp 69 3 1 2 0 0
+pp 70 121181 51089 43326 23314 3452
+pp 71 3632 1506 1432 579 115
+pp 72 9599 5482 2918 1074 125
+pp 73 752 412 184 124 32
+pp 74 64 51 7 4 2
+pp 75 7 7 0 0 0
+pp 76 3 3 0 0 0
+pp 77 0 0 0 0 0
+pp 78 0 0 0 0 0
+pp 79 0 0 0 0 0
+pp 80 510 274 153 79 4
+pp 81 48 14 20 13 1
+pp 82 5 3 2 0 0
+pp 83 2 0 0 2 0
+pp 84 2 1 1 0 0
+pp 85 41034 12973 16627 9795 1639
+pp 86 81685 38977 26942 13847 1919
+pp 87 871 412 300 129 30
+pp 88 5971 4002 1498 435 36
+pp 89 151 115 23 9 4
+pp 90 5 3 0 2 0
+pp 91 0 0 0 0 0
+pp 92 0 0 0 0 0
+pp 93 0 0 0 0 0
+pp 94 0 0 0 0 0
+pp 95 5678 2141 2522 914 101
+__END__0
+   exits=20711 halt_exits=135 io_exits=5792 mmio_exits=1920 irq_exits=130 irq_window_exits=84 request_irq_exits=0 nmi_window_exits=0 insn_emulation=14053 hypercalls=0 irq_injections=294 halt_successful_poll=1 halt_wakeup=125 req_event=721 unnamed=12650
+== tar cf - /opt/proton | /t/rcat  1.02 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 116236 bytes 1610649600 nvcsw 75230 nivcsw 0 by 10k: 87986 24429 543 361 331 320 2266 0
+__END__0
+   exits=165933 halt_exits=76670 io_exits=471 mmio_exits=0 irq_exits=3484 irq_window_exits=1988 request_irq_exits=0 nmi_window_exits=0 insn_emulation=550 hypercalls=0 irq_injections=79359 halt_successful_poll=72322 halt_wakeup=2758 req_event=85951 unnamed=83320
+== tar cf - /opt/proton | /t/rcat  1.03 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 116208 bytes 1610649600 nvcsw 75704 nivcsw 0 by 10k: 88738 23394 566 433 354 342 2381 0
+__END__0
+   exits=167728 halt_exits=77224 io_exits=473 mmio_exits=0 irq_exits=3633 irq_window_exits=2144 request_irq_exits=0 nmi_window_exits=0 insn_emulation=550 hypercalls=0 irq_injections=79999 halt_successful_poll=72876 halt_wakeup=2860 req_event=86943 unnamed=84254
+== cat /sys/kernel/debug/exits | grep -E '^(ipi kick|pp |hlt)'  0.15 s
+[?2004h[?2004l
+hlt 0 371424 137810 142734 74126 16754
+ipi kick 354981 168661 112279 60323 13718
+pp 0 629160 280722 207483 113249 27706
+pp 1 429731 190448 140550 79178 19555
+pp 2 286839 128427 93553 51987 12872
+pp 3 439616 154692 180595 83387 20942
+pp 4 286063 100324 118790 53216 13733
+pp 5 6291600 2135984 2574870 1275334 305412
+pp 6 10884 5191 3864 1485 344
+pp 7 233 105 79 35 14
+pp 8 184 80 61 35 8
+pp 9 0 0 0 0 0
+pp 10 0 0 0 0 0
+pp 11 0 0 0 0 0
+pp 12 0 0 0 0 0
+pp 13 0 0 0 0 0
+pp 14 0 0 0 0 0
+pp 15 0 0 0 0 0
+pp 16 643 92 247 294 10
+pp 17 95 27 35 29 4
+pp 18 25 9 7 9 0
+pp 19 159 131 13 15 0
+pp 20 1131 773 204 130 24
+pp 21 2050 1072 513 433 32
+pp 22 247030 85539 104816 44762 11913
+pp 23 16841 5826 5816 4197 1002
+pp 24 11649 4662 4503 2020 464
+pp 25 6138 2100 2498 1267 273
+pp 26 264 76 127 53 8
+pp 27 16 3 8 2 3
+pp 28 3 1 0 2 0
+pp 29 1 1 0 0 0
+pp 30 0 0 0 0 0
+pp 31 0 0 0 0 0
+pp 32 0 0 0 0 0
+pp 33 0 0 0 0 0
+pp 34 0 0 0 0 0
+pp 35 1941 1040 631 258 12
+pp 36 203812 91891 68176 35804 7941
+pp 37 109530 46289 36537 20757 5947
+pp 38 239092 105169 77814 44876 11233
+pp 39 18979 8215 6042 3649 1073
+pp 40 20168 9450 6947 3017 754
+pp 41 11532 5253 3757 1974 548
+pp 42 9815 4912 3166 1615 122
+pp 43 10123 6134 3056 871 62
+pp 44 3428 1906 1160 352 10
+pp 45 586 351 165 66 4
+pp 46 133 97 30 6 0
+pp 47 17 11 2 4 0
+pp 48 139201 49555 57110 26125 6411
+pp 49 13849 4604 4526 3945 774
+pp 50 243261 84388 103110 43715 12048
+pp 51 12284 4145 4793 2853 493
+pp 52 24159 9603 8051 5623 882
+pp 53 835 245 336 204 50
+pp 54 1236 423 539 229 45
+pp 55 3253 1179 1429 489 156
+pp 56 1206 426 543 163 74
+pp 57 247 84 123 33 7
+pp 58 76 34 32 8 2
+pp 59 2 0 2 0 0
+pp 60 0 0 0 0 0
+pp 61 1 0 1 0 0
+pp 62 1 1 0 0 0
+pp 63 1 0 1 0 0
+pp 64 0 0 0 0 0
+pp 65 6 3 1 2 0
+pp 66 310 160 97 53 0
+pp 67 450 230 133 76 11
+pp 68 22 8 8 6 0
+pp 69 3 1 2 0 0
+pp 70 263600 116933 85804 48758 12105
+pp 71 7183 2749 2901 1162 371
+pp 72 13872 7608 4235 1713 316
+pp 73 1298 663 357 211 67
+pp 74 81 61 12 6 2
+pp 75 11 8 3 0 0
+pp 76 3 3 0 0 0
+pp 77 0 0 0 0 0
+pp 78 0 0 0 0 0
+pp 79 0 0 0 0 0
+pp 80 557 303 164 83 7
+pp 81 59 18 24 16 1
+pp 82 5 3 2 0 0
+pp 83 2 0 0 2 0
+pp 84 3 1 2 0 0
+pp 85 111422 41575 39613 23749 6485
+pp 86 157802 77893 48110 25901 5898
+pp 87 1767 746 571 273 177
+pp 88 7643 4766 2031 736 110
+pp 89 232 161 41 25 5
+pp 90 9 4 3 2 0
+pp 91 0 0 0 0 0
+pp 92 0 0 0 0 0
+pp 93 0 0 0 0 0
+pp 94 0 0 0 0 0
+pp 95 7338 2957 2992 1200 189
+__END__0
+   exits=17022 halt_exits=143 io_exits=5938 mmio_exits=0 irq_exits=91 irq_window_exits=74 request_irq_exits=0 nmi_window_exits=0 insn_emulation=10286 hypercalls=0 irq_injections=288 halt_successful_poll=1 halt_wakeup=135 req_event=701 unnamed=10776
