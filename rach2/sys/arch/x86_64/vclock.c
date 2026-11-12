@@ -85,6 +85,11 @@ static uint64_t kvm_base_ns;
 static int kvm_base_read;
 static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
 
+/* The count of the clock's stops and starts (`vclock_generation`), raised
+ * under `vclock_lock` after the page's count goes odd, so that a reader
+ * that sees the new count reads the page's new mode. */
+static volatile uint32_t generation;
+
 /** `delta` counts of the TSC at `mult` / 2^`shift` nanoseconds a count, for
  * `shift` at most 32, as vdsocode.s's 128-bit product shifted gives it: the
  * product of each half, the high one's moved up by 32 - `shift`. */
@@ -395,6 +400,7 @@ static void vclock_begin(uint64_t *mono_ns, uint64_t *raw_ns)
     data->res_ns = vclock_resolution_ns();
     vclock_write_times();
     data->mode = at.kvm ? VCLOCK_PVCLOCK : VCLOCK_TSC;
+    generation++;
     vclock_write_end();
     running = 1;
     kvm_stopped = 0;
@@ -420,6 +426,7 @@ static void vclock_stop(uint64_t *mono_ns, uint64_t *raw_ns)
     spin_lock(&vclock_lock);
     vclock_write_begin();
     data->mode = VCLOCK_NONE;
+    generation++;
     vclock_advance(0, 0);
     vclock_write_times();
     if (mono_base_ns > *mono_ns) {
@@ -455,6 +462,11 @@ void vclock_start(void)
 int vclock_running(void)
 {
     return running;
+}
+
+uint32_t vclock_generation(void)
+{
+    return generation;
 }
 
 /** The step forward of a clock that reads `clock_ns` where the tick's

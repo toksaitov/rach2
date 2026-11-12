@@ -17,21 +17,21 @@
  * APIC in the kernel, and its refusals; the capabilities and
  * KVM_ENABLE_CAP's answers; each MSR, from the guest and from the caller,
  * before and after the CPUID names Hyper-V and under
- * KVM_CAP_HYPERV_ENFORCE_CPUID: the guest's id and the hypercall page on
- * VMX and SVM, the VP index, the reference counter and the TSC page by
- * Linux's formula, the frequencies, the crash and reset MSRs ending the
- * run, the APIC MSRs, the VP assist page, the runtime, the invariant TSC,
- * the synthetic debugger and the SynIC's; the SINTs raised through a
- * route, their vectors and auto-EOI; the synthetic timers one-shot,
- * periodic, auto-enabled, direct, held by a full slot and retried at EOM
- * and at EOI; the hypercalls' #UD, statuses, 32-bit results, fast and XMM
- * input, the XMM registers read only once synced from the processor to the
- * image, the exits to the caller and their completion, HvSignalEvent over
- * KVM_HYPERV_EVENTFD, the extended and debug hypercalls; the IPI and TLB
- * flush hypercalls with simple and sparse sets; each entry point that
- * KVM_RUN calls without the big lock taking it once, around the work it
- * covers, and giving it back, checked apart; and every allocation and
- * eventfd reference given back.
+ * KVM_CAP_HYPERV_ENFORCE_CPUID: the guest's id and the hypercall page on VMX
+ * and SVM, the VP index, the reference counter and the TSC page by Linux's
+ * formula, left at sequence 0 without the master clock, the frequencies, the
+ * crash and reset MSRs ending the run, the APIC MSRs, the VP assist page,
+ * the runtime, the invariant TSC, the synthetic debugger and the SynIC's;
+ * the SINTs raised through a route, their vectors and auto-EOI; the
+ * synthetic timers one-shot, periodic, auto-enabled, direct, held by a full
+ * slot and retried at EOM and at EOI; the hypercalls' #UD, statuses, 32-bit
+ * results, fast and XMM input, the XMM registers read only once synced from
+ * the processor to the image, the exits to the caller and their completion,
+ * HvSignalEvent over KVM_HYPERV_EVENTFD, the extended and debug hypercalls;
+ * the IPI and TLB flush hypercalls with simple and sparse sets; each entry
+ * point that KVM_RUN calls without the big lock taking it once, around the
+ * work it covers, and giving it back, checked apart; and every allocation
+ * and eventfd reference given back.
  */
 #include "kvm/hyperv.c"
 
@@ -202,10 +202,29 @@ uint64_t kvm_tsc_hz(const struct kvm_vcpu *v)
     return (uint64_t)tsc_per_tick * TICK_HZ;
 }
 
-/* The kvmclock with no master clock, as pvclock.c reads it. */
+/* The kvmclock, the host's ns plus the VM's offset, and whether it runs
+ * from the master clock, which the reference TSC page needs. */
+static int master_on = 1;
+
 uint64_t kvm_clock_ns(struct kvm_vm *vm)
 {
     return kvm_host_ns() + (uint64_t)vm->clock_offset;
+}
+
+int kvm_clock_stable_read(struct kvm_vm *vm, uint64_t *ns, uint64_t *host_tsc)
+{
+    if (!master_on) {
+        return 0;
+    }
+    *host_tsc = arch_cycles();
+    *ns = kvm_clock_ns(vm);
+    return 1;
+}
+
+uint64_t kvm_tsc_scale(const struct kvm_vcpu *v, uint64_t tsc)
+{
+    (void)v;
+    return tsc;
 }
 
 /* The backends: only their addresses count. */
@@ -688,6 +707,30 @@ static void vp_index_rows(struct kvm_vcpu *v)
     wr(&vcpus[1], HV_MSR_VP_INDEX, 1, 1);
 }
 
+/** The TSC page of `v`'s VM, set, without the master clock: left at
+ * sequence 0 and broken, as Linux's compute_tsc_page_parameters refuses a
+ * kvmclock without PVCLOCK_TSC_STABLE_BIT, until the guest writes its MSR
+ * again. */
+static void tsc_master_rows(struct kvm_vcpu *v)
+{
+    struct hv_vm *h = hvm_of(&vm);
+    int r;
+
+    master_on = 0;
+    kvm_hv_clock_changed(&vm);
+    CHECK(kvm_hv_prepare(v) == 0 && h->tsc_status == TSC_BROKEN && mem32(0x4000) == 0,
+          "without the master clock the page is left at sequence 0, as Linux's");
+    CHECK(rd(v, HV_MSR_TIME_REF_COUNT, 0, &r) == (mono_ns + 123456789u) / 100u,
+          "and the counter is the kvmclock's");
+    master_on = 1;
+    kvm_hv_clock_changed(&vm);
+    CHECK(h->tsc_status == TSC_BROKEN && kvm_hv_prepare(v) == 0 && mem32(0x4000) == 0,
+          "the master clock back leaves the page broken, as Linux's");
+    CHECK(wr(v, HV_MSR_REFERENCE_TSC, 0x4001, 0) == 0 && kvm_hv_prepare(v) == 0 &&
+              h->tsc_status == TSC_SET && mem32(0x4000) == 1,
+          "until the guest writes the MSR again");
+}
+
 /** The reference counter and the TSC page. */
 static void tsc_rows(struct kvm_vcpu *v)
 {
@@ -721,6 +764,7 @@ static void tsc_rows(struct kvm_vcpu *v)
     kvm_hv_clock_changed(&vm);
     CHECK(h->tsc_status == TSC_HOST_CHANGED && kvm_hv_prepare(v) == 0 && mem32(0x4000) == 2,
           "a change of the clock writes the page again, sequence 2");
+    tsc_master_rows(v);
     k_memset(mem + 0x4000, 0xFF, 4);
     kvm_hv_clock_changed(&vm);
     kvm_hv_prepare(v);

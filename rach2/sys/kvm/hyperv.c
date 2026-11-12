@@ -406,15 +406,21 @@ static uint64_t tsc_scale(uint64_t hz)
  * Write the reference TSC page of `v`'s VM once the guest or the caller
  * changed it, as Linux's kvm_hv_setup_tsc_page: its sequence 0 first, so
  * that the guest reads the MSR meanwhile, then the scale and offset that
- * make the page's formula the kvmclock's in 100 ns, then the next sequence,
- * which is never 0 or 0xFFFFFFFF. A page the guest asked to keep while it
- * emulates the TSC is read back as it stands. In `v`'s thread.
+ * make the page's formula the kvmclock's in 100 ns, from one reading of the
+ * host's TSC, then the next sequence, which is never 0 or 0xFFFFFFFF. Only
+ * a kvmclock that runs from the master clock, which the guests read with
+ * PVCLOCK_TSC_STABLE_BIT, is published, as Linux's
+ * compute_tsc_page_parameters refuses one without the bit (hyperv.c:1125):
+ * otherwise the sequence stays 0 and the page is broken, so that the guest
+ * reads the MSR until it or the caller writes the page's MSR again. A page
+ * the guest asked to keep while it emulates the TSC is read back as it
+ * stands. In `v`'s thread.
  */
 static void tsc_page_setup(struct kvm_vcpu *v)
 {
     struct hv_vm *h = hvm_of(v->vm);
     uint8_t page[24];
-    uint64_t gpa, hz, ns, tsc;
+    uint64_t gpa, hz, ns, host_tsc, tsc;
     uint32_t seq;
 
     if (!h || (h->tsc_status != TSC_GUEST_CHANGED && h->tsc_status != TSC_HOST_CHANGED)) {
@@ -440,7 +446,7 @@ static void tsc_page_setup(struct kvm_vcpu *v)
     if (kvm_guest_phys_rw(v, gpa, page, 4, 1) != 0) {
         goto broken;
     }
-    if (v->vm->nr_vcpus == 0) {
+    if (v->vm->nr_vcpus == 0 || !kvm_clock_stable_read(v->vm, &ns, &host_tsc)) {
         goto broken;
     }
     hz = kvm_tsc_hz(v->vm->vcpus[0]);
@@ -448,8 +454,7 @@ static void tsc_page_setup(struct kvm_vcpu *v)
     if (h->tsc_scale == 0) {
         goto broken;
     }
-    tsc = guest_tsc(v->vm->vcpus[0]);
-    ns = kvm_clock_ns(v->vm);
+    tsc = kvm_tsc_scale(v->vm->vcpus[0], host_tsc) + (uint64_t)v->vm->vcpus[0]->tsc_offset;
     h->tsc_offset = (int64_t)(ns / 100u - mul_hi(tsc, h->tsc_scale));
     k_memcpy(page + 8, &h->tsc_scale, 8);
     k_memcpy(page + 16, &h->tsc_offset, 8);

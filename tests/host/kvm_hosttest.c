@@ -52,7 +52,8 @@
  * the kvmclock in guest memory reading as KVM_GET_CLOCK does, its stop
  * flag, the wall clock, the clock pairing, the old MSR, KVM_SET_CLOCK, the
  * Hyper-V reference TSC page written from a clock KVM_SET_CLOCK moved
- * between the run loop's two preparations, with the kvmclock off,
+ * between the run loop's two preparations, with the kvmclock off, the
+ * master clock decided again when the host's clock stops and starts,
  * KVM_CAP_ENFORCE_PV_FEATURE_CPUID and KVM_CAP_X86_DISABLE_EXITS; the
  * steal time, its writes of the thread's run_delay and its preempted flag
  * across a switch at a slice's end inside KVM_RUN, none at a halted
@@ -342,6 +343,15 @@ static uint32_t tick_counts;
 int vclock_running(void)
 {
     return vclock_on;
+}
+
+/* The count of the clock's stops and starts, which a row raises with each
+ * change of `vclock_on` that KVM is to see. */
+static uint32_t vclock_gen;
+
+uint32_t vclock_generation(void)
+{
+    return vclock_gen;
 }
 
 /** The TSC's clock `which` and the TSC read together. The kvmclock counts
@@ -2404,7 +2414,8 @@ static void hv_clock_rows(int vm, int fd0)
     uint32_t seq;
 
     k_memset(guest_page + (HV_TSC_GPA - GUEST_PAGE), 0, 4096);
-    CHECK(!(v0->pv_time & KVM_MSR_ENABLED) && kvm_hv_set_cpuid(v0, hv, 2) == 0 &&
+    CHECK(v0->vm->master_clock && !(v0->pv_time & KVM_MSR_ENABLED) &&
+              kvm_hv_set_cpuid(v0, hv, 2) == 0 &&
               set_msr(fd0, HV_REFERENCE_TSC, HV_TSC_GPA | 1u) == 1 && kvm_hv_prepare(v0) == 0,
           "a reference TSC page set by the caller, with the kvmclock off");
     memcpy(&seq, page, 4);
@@ -2422,6 +2433,54 @@ static void hv_clock_rows(int vm, int fd0)
     CHECK(seq == 2 && hv_page_reads(v0, tsc) == clk.clock / 100u && !v0->vm->hv_clock_moved &&
               !(v0->requests & KVM_REQ_CLOCK_UPDATE),
           "the pass's kvm_clock_prepare takes the request and writes the page from the new clock");
+}
+
+/**
+ * The host's clock stopping and starting under the VM `vm` on vCPU `fd0`,
+ * whose reference TSC page `hv_clock_rows` set: KVM_GET_CLOCK, or the next
+ * entry, decides the master clock again, as Linux's pvclock_gtod_notify
+ * asks every vCPU for KVM_REQ_MASTERCLOCK_UPDATE, so the kvmclock's copy
+ * loses PVCLOCK_TSC_STABLE_BIT and the reference TSC page is left at
+ * sequence 0, as Linux's compute_tsc_page_parameters refuses it; the
+ * clock's start brings the master clock and the bit back, and the page stays
+ * broken until the guest writes its MSR again, as in Linux.
+ */
+static void host_clock_rows(int vm, int fd0)
+{
+    const struct pvclock_vcpu_time_info *pv = (const void *)guest_page;
+    const uint8_t *page = guest_page + (HV_TSC_GPA - GUEST_PAGE);
+    struct kvm_vcpu *v0 = entries[fd0].priv;
+    struct kvm_clock_data clk;
+    uint32_t seq, version;
+
+    CHECK(set_msr(fd0, MSR_KVM_SYSTEM_TIME_NEW, GUEST_PAGE | KVM_MSR_ENABLED) == 1,
+          "the kvmclock on again");
+    kvm_clock_prepare(v0);
+    memcpy(&seq, page, 4);
+    CHECK(v0->vm->master_clock && (pv->flags & PVCLOCK_TSC_STABLE_BIT) && seq != 0,
+          "under the master clock, the stable bit and the reference TSC page");
+    vclock_on = 0;
+    vclock_gen++;
+    get_clock(vm, &clk);
+    CHECK(clk.flags == 0 && !v0->vm->master_clock && (v0->requests & KVM_REQ_CLOCK_UPDATE),
+          "the host's clock stopped: KVM_GET_CLOCK decides the master clock again, without it");
+    kvm_clock_prepare(v0);
+    memcpy(&seq, page, 4);
+    CHECK(!(pv->flags & PVCLOCK_TSC_STABLE_BIT) && seq == 0 && !v0->vm->hv_clock_moved,
+          "the next entry writes the kvmclock without the stable bit, and the page at sequence 0");
+    vclock_on = 1;
+    vclock_gen++;
+    version = pv->version;
+    kvm_clock_prepare(v0);
+    memcpy(&seq, page, 4);
+    CHECK(v0->vm->master_clock && (pv->flags & PVCLOCK_TSC_STABLE_BIT) &&
+              pv->version == version + 2u && seq == 0,
+          "the clock's start: the next entry decides it again, with the master clock");
+    version = pv->version;
+    kvm_clock_prepare(v0);
+    CHECK(pv->version == version, "and the entry after it has nothing to write");
+    get_clock(vm, &clk);
+    CHECK(clk.flags & KVM_CLOCK_TSC_STABLE, "KVM_GET_CLOCK under the master clock again");
 }
 
 /** The kvmclock of the VM `vm` on vCPU `fd0` and its MSRs: the copy in
@@ -2897,6 +2956,7 @@ static void pv_rows(void)
     init_apic_base_row(fd0);
     init_cr0_rows(fd0);
     hv_clock_rows(vm, fd0);
+    host_clock_rows(vm, fd0);
     fdclose(fd1);
     fdclose(fd0);
     fdclose(vm);

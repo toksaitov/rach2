@@ -110,6 +110,13 @@ void vclock_start(void);
 /** Whether the clock runs from the TSC. */
 int vclock_running(void);
 
+/** The clock's generation: a count that goes up each time the clock stops
+ * or starts running from the TSC, after the page shows the change, so that
+ * KVM decides its VMs' master clocks again (kvm/pvclock.c), as Linux's
+ * pvclock_gtod_notify does when the host's clocksource leaves the TSC.
+ * Read without a lock. */
+uint32_t vclock_generation(void);
+
 /**
  * Carry the clock on at the boot processor's tick, with interrupts off: the
  * page's times are moved to the TSC's count now, and the monotonic clock's

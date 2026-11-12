@@ -13,6 +13,11 @@ int vclock_running(void)
     return 0;
 }
 
+uint32_t vclock_generation(void)
+{
+    return 0;
+}
+
 void vclock_tick(void)
 {}
 
