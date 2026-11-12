@@ -27,25 +27,26 @@ static const char *const heartbeat_msg[I915_NUM_ENGINES] = {
     "stopped heartbeat on rcs0", "stopped heartbeat on bcs0", "stopped heartbeat on vcs0",
     "stopped heartbeat on vecs0"};
 
-void i915_hangcheck_unpark(struct drm_i915_private *i915)
+void i915_hangcheck_unpark(struct drm_i915_private *i915, uint64_t now)
 {
     int i;
 
-    i915->gt.hc_next = rtc_ticks_now() + MS_TO_TICKS(I915_HEARTBEAT_INTERVAL_MS);
+    i915->gt.hc_next = now + MS_TO_TICKS(I915_HEARTBEAT_INTERVAL_MS);
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         i915->gt.engine[i].hc_armed = 0;
         i915->gt.engine[i].hc_stopped = 0;
     }
 }
 
-int i915_hangcheck_unpark_engine(struct drm_i915_private *i915, struct i915_engine *e)
+int i915_hangcheck_unpark_engine(struct drm_i915_private *i915, struct i915_engine *e, uint64_t now)
 {
     e->hc_armed = 0;
     e->hc_stopped = 0;
+    e->hc_first = now + MS_TO_TICKS(I915_HEARTBEAT_INTERVAL_MS);
     if (i915->gt.hc_next != 0) {
         return 0;
     }
-    i915->gt.hc_next = rtc_ticks_now() + MS_TO_TICKS(I915_HEARTBEAT_INTERVAL_MS);
+    i915->gt.hc_next = e->hc_first;
     return 1;
 }
 
@@ -117,8 +118,11 @@ uint32_t i915_hangcheck(struct drm_i915_private *i915)
                  (unsigned)e->hc_seqno, (unsigned)acthd, (unsigned)e->hc_acthd);
             hung |= 1u << i;
         } else {
+            /* An engine is armed no sooner than its own first beat, an
+             * interval after it unparked, as Linux's next_heartbeat queues
+             * it (gt/intel_engine_heartbeat.c:59-62 in 6.12.115). */
             e->hc_armed = 0;
-            rq = off ? 0 : last_on_chip(e);
+            rq = off || now < e->hc_first ? 0 : last_on_chip(e);
             if (rq) {
                 e->hc_armed = 1;
                 e->hc_seqno = rq->seqno;

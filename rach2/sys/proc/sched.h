@@ -69,22 +69,63 @@ void schedule(void);
  * idle, or its affinity no longer has it; a process still current on its
  * processor, woken before its switch away, stays there. That processor is
  * sent an interrupt when it is idle, or halted in place with `p` current,
- * so that it selects now rather than at its tick. Every wake of a process
- * goes through here, an interrupt handler's among them.
+ * so that it selects now rather than at its tick. The state is not tested
+ * again: this is for a new thread, and for a stopped one, which only the big
+ * lock's holder stops and makes ready. A blocked thread, which wakers without
+ * the big lock may race for, is woken by `sched_wake_blocked`,
+ * `sched_wake_signal` or `sched_wake_due`, which test the state under the
+ * run queues' lock, so that one of them makes it ready.
  */
 void sched_make_ready(process_t *p);
 
 /**
  * Make `p` ready as `sched_make_ready` does, and mark it woken, if it is
- * blocked; a thread in any other state is left as it is. The state is
+ * blocked; a thread in any other state is left as it is. This is a wait
+ * queue's wake, and a child's exit's wake of its parent. The state is
  * tested under the run queues' lock, as Linux's `try_to_wake_up` tests it
  * under the task's `pi_lock` (kernel/sched/core.c:4191-4193), so that of two
- * wakers on two queues of one poller, or a queue's and a signal's, one makes
- * it ready. Returns the processor to interrupt, which the caller passes to
- * `smp_kick`, or to `sched_kick_cpus` in a set, once it has let its own
- * spinlocks go, or -1 when none needs it. Interrupts may be on or off.
+ * wakers on two queues of one poller, or a queue's and a signal's or a
+ * deadline's, one makes it ready. Returns the processor to interrupt, which
+ * the caller passes to `smp_kick`, or to `sched_kick_cpus` in a set, once it
+ * has let its own spinlocks go, or -1 when none needs it. Interrupts may be
+ * on or off.
  */
 int sched_wake_blocked(process_t *p);
+
+/** Turn interrupts off and take the run queues' lock, for a caller that
+ * must keep the records it wakes from being freed across several wakes, as
+ * the timer pass does (`proc_wake_sleepers`): `free_process` takes the lock
+ * before it frees. Returns the flags `sched_lock_give` restores. */
+uint32_t sched_lock_take(void);
+
+/** Let the run queues' lock go and restore the interrupt flag `flags`. */
+void sched_lock_give(uint32_t flags);
+
+/**
+ * Make `p` ready, clearing its deadline, if it is blocked, as a signal or
+ * `PTRACE_INTERRUPT` wakes it: Linux's `signal_wake_up_state` wakes through
+ * `try_to_wake_up`'s test (kernel/signal.c:759-773). The test and the
+ * clearing are under the run queues' lock, as `sched_wake_blocked`'s; a wait
+ * that goes on arms its own deadline again. The thread is not marked woken.
+ * The interrupt is sent before this returns, so the caller holds no
+ * spinlock. Interrupts may be on or off.
+ */
+void sched_wake_signal(process_t *p);
+
+/**
+ * Make `p` ready, recording its expiry (`waketime_expire`) and clearing its
+ * deadline, if it is blocked with a deadline at or before the tick `now`,
+ * as Linux's `hrtimer_wakeup` wakes a sleeper through `wake_up_process`
+ * (kernel/time/hrtimer.c:1981-1992). The test is under the run queues' lock,
+ * as `sched_wake_blocked`'s. The thread is not marked woken. The interrupt is
+ * sent before this returns, so the caller holds no spinlock.
+ */
+void sched_wake_due(process_t *p, uint64_t now);
+
+/** `sched_wake_due` for a caller that holds the run queues' lock
+ * (`sched_lock_take`): the processor to interrupt, which the caller passes
+ * to `sched_kick_cpus` once it has let the lock go, or -1. */
+int sched_wake_due_locked(process_t *p, uint64_t now);
 
 /** `smp_kick` each processor whose bit is set in `cpus`: the interrupts a
  * waker's `sched_wake_blocked` calls asked for, sent after its locks, as
@@ -260,17 +301,10 @@ void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle);
  * busy, so that its idle and busy ticks add up to the uptime since it
  * started, and charge each busy one to the current process as user time
  * when `user` is set and as system time when it is not, and to its
- * process's virtual, profiling and POSIX CPU-time timers. Called by each
- * processor's timer tick alone. */
+ * process's virtual, profiling and POSIX CPU-time timers, whose signals it
+ * leaves for a holder of the big lock to post. Called by each processor's
+ * timer tick alone, without the big lock and with interrupts off. */
 void sched_account_tick(int user);
-
-/**
- * Whether a tick of this processor that found the big lock held must wait
- * for the lock: true at the `SCHED_TICK_PASSES`th such tick in a row with a
- * process on this processor's queue, which only the tick's switch would let
- * run. Called with interrupts off.
- */
-int sched_tick_waits(void);
 
 /** Fold the processes running or ready to run into the load averages every
  * five seconds and a tick (`sched_loadavg`). Called by the boot

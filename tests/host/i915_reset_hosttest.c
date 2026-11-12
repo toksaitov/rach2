@@ -39,6 +39,8 @@
  * GT's and the render engine's workarounds, written at the start and again
  * after each reset. Two are 84-13's: the heartbeat's stop when a beat finds
  * i915.enable_hangcheck off, and its return per engine when it is on again.
+ * One is 84-13b's: an engine that goes busy while another keeps the GT
+ * awake, armed no sooner than an interval after it went busy.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -888,6 +890,68 @@ static void row_hangcheck_rearm(void)
     done(&m);
 }
 
+/* ---- 84-13b: an engine's first beat ---- */
+
+/** 84-13b.1: with rcs kept busy and the GT awake, bcs going busy between
+ * two beats is not armed by the first, which comes before an interval has
+ * passed, as Linux's next_heartbeat queues the engine's first beat an
+ * interval after its unpark; its stuck request is reset no sooner than
+ * Linux's 5 s, within 7.5 s and a step of the beat. */
+static void row_hangcheck_first(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = ready(&m);
+    struct i915_engine *rcs = &i915->gt.engine[I915_RCS0], *bcs = &i915->gt.engine[I915_BCS0];
+    struct i915_model_ring *rr = i915_model_ring_state(&m, 0), *br = i915_model_ring_state(&m, 1);
+    uint32_t ida = make_context(&file_a), idb = make_context(&file_b), hung = 0, early = 0;
+    struct intel_context *a = engine_of(&file_a, ida, I915_RCS0);
+    struct intel_context *blt = engine_of(&file_b, idb, I915_BCS0);
+    struct i915_request *rqa, *rqc;
+    uint64_t t0, beat;
+
+    rr->stuck = 1;
+    t0 = rtc_ticks_now();
+    rqa = submit(a, TEST_REG, 0xa);
+    while (rqa && !rcs->hc_armed && rtc_ticks_now() < t0 + 10000u) {
+        run_ms(10);
+        hung |= i915_hangcheck(&dev);
+    }
+    run_ms(1000);
+    CHECK("first beat: a beat armed the render engine, which keeps the GT awake",
+          rqa && rcs->hc_armed && hung == 0 && i915->gt.awake);
+    br->stuck = 1;
+    t0 = rtc_ticks_now();
+    rqc = submit(blt, 0, 0);
+    beat = i915->gt.hc_next;
+    CHECK("first beat: the blitter goes busy with the next beat less than an interval away",
+          rqc && beat != 0 && beat < t0 + I915_HEARTBEAT_INTERVAL_MS && !bcs->hc_armed);
+    while (rqc && rtc_ticks_now() + 10u < t0 + I915_HEARTBEAT_INTERVAL_MS) {
+        run_ms(10);
+        hung |= i915_hangcheck(&dev);
+        early |= bcs->hc_armed;
+    }
+    CHECK("first beat: the beat within its first interval does not arm the blitter",
+          i915->gt.hc_next != beat && !early && !(hung & 2u));
+    while (rqc && !(hung & 2u) && rtc_ticks_now() < t0 + 10000u) {
+        run_ms(10);
+        hung |= i915_hangcheck(&dev);
+    }
+    CHECK("first beat: its stuck request is hung between Linux's 5 and 7.5 s",
+          (hung & 2u) && rtc_ticks_now() >= t0 + 5000u && rtc_ticks_now() <= t0 + 7510u &&
+              logged("reset: bcs0 for stopped heartbeat on bcs0"));
+    run_ms(1);
+    CHECK("first beat: the blitter's request failed with EIO", ended(rqc, -EIO));
+    if (rqc) {
+        i915_request_put(rqc);
+    }
+    if (rqa) {
+        i915_request_put(rqa);
+    }
+    intel_context_put(a);
+    intel_context_put(blt);
+    done(&m);
+}
+
 /* ---- 78-6a.4: the error state ---- */
 
 /** Check the error state `err` of a hang of the render ring, whose
@@ -1405,6 +1469,7 @@ int main(void)
     row_ban();
     row_hangcheck_off();
     row_hangcheck_rearm();
+    row_hangcheck_first();
     CHECK("the heap: every record freed", heap_live == 0);
     if (fails) {
         printf("i915-reset-test: %d failures\n", fails);

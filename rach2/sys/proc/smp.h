@@ -263,20 +263,22 @@ int32_t smp_profile_show(void *data, char *buf, uint32_t cap);
 int32_t smp_profile_store(void *data, const char __user *buf, uint32_t len);
 
 /* The rows of the tick's counts (`bkl_tick_charge`, debugfs's `bkl/tick`):
- * the parts of a tick in the order it runs them. `ENTRY` is the router's
- * work from the take of the lock to the handler; the boot processor's
- * services follow, then another processor's own two; `RETURN` is the time
- * from the tick's `sched_preempt` to the end of the hold, in the same
- * thread, and `SWITCH` the same when the hold ended in another thread, the
- * switch and what that thread did under the lock before it gave the lock
- * back. `NESTED` counts the ticks that came while this processor already
- * held the lock, with their handler's time, which the service rows count
- * too: such a tick's time is the interrupted hold's, not vector 32's. */
+ * the parts of a tick in the order it runs them. `CLOCK`, `ACCOUNT` and
+ * `WAKE` run without the big lock, on every processor for the accounting
+ * and on the one that makes the clock's pass for the other two; `LOCK` is
+ * the tick's try for the big lock, or its wait, and the rows after it run
+ * under the lock: the signals of the tick posted, the load average, and the
+ * boot processor's services. `NESTED` counts the ticks whose locked part
+ * ran inside a hold the interrupted code already had, with that part's
+ * time, which the rows count too: such time is the interrupted hold's, not
+ * vector 32's. */
 enum bkl_tick_row {
-    BKL_TICK_ENTRY,
     BKL_TICK_CLOCK,
     BKL_TICK_ACCOUNT,
     BKL_TICK_WAKE,
+    BKL_TICK_LOCK,
+    BKL_TICK_SIGNALS,
+    BKL_TICK_LOAD,
     BKL_TICK_HDA,
     BKL_TICK_NETDEV,
     BKL_TICK_NETCONSOLE,
@@ -295,34 +297,24 @@ enum bkl_tick_row {
     BKL_TICK_SPEAKER,
     BKL_TICK_CONSOLE,
     BKL_TICK_KLOG,
-    BKL_TICK_AP_ACCOUNT,
-    BKL_TICK_AP_LATE_PASS,
-    BKL_TICK_RETURN,
-    BKL_TICK_SWITCH,
     BKL_TICK_NESTED,
     BKL_TICK_ROWS
 };
 
-/** Charge the cycles from `start` to now to the tick's row `row` and return
- * now, the next part's start. The caller holds the big lock with
- * interrupts off. */
+/** Charge the cycles from `start` to now to this processor's row `row` of
+ * the tick's counts and return now, the next part's start. Interrupts are
+ * off; no lock is needed, since each processor keeps its own rows. */
 uint64_t bkl_tick_charge(int row, uint64_t start);
-
-/** Mark the tick's `sched_preempt` on this processor, whose tick took the
- * big lock for itself: the hold's end charges the time from now to
- * `BKL_TICK_RETURN`, or to `BKL_TICK_SWITCH` when it ends in a thread other
- * than the current one. */
-void bkl_tick_tail(void);
 
 /** Write the tick's counts as debugfs's `bkl/tick` shows them: for each row,
  * its calls, their time in TSC cycles and in microseconds, and the longest
- * in microseconds, from one copy taken with interrupts off so that a tick
- * on this processor tears no row. The caller holds the big lock. */
+ * in microseconds, summed over the processors, each one's rows read whole
+ * inside its sequence count. The caller holds the big lock. */
 int32_t smp_tick_show(void *data, char *buf, uint32_t cap);
 
-/** Zero the tick's counts with interrupts off, so that a tick on this
- * processor leaves no row half cleared; `len`. The caller holds the big
- * lock. */
+/** Zero the tick's counts: each processor zeroes its own rows at its next
+ * charge, and a read counts them as zero until then; `len`. The caller
+ * holds the big lock. */
 int32_t smp_tick_store(void *data, const char __user *buf, uint32_t len);
 
 /** Answer the requests other processors left this one: stop for good, drop

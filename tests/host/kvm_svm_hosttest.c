@@ -254,6 +254,11 @@ void kvm_lapic_set_cr8(struct kvm_vcpu *v, uint64_t cr8)
 {
     (void)v, (void)cr8;
 }
+int kvm_pmu_rdpmc(struct kvm_vcpu *v)
+{
+    (void)v;
+    return -1;
+}
 uint8_t *kvm_map_pages(uint32_t count, uintptr_t *pa)
 {
     (void)count, (void)pa;

@@ -16,7 +16,7 @@
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/pressure_host.c tests/host/compat/fixdir_host.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
- * host-deps: tests/host/compat/bkl_none.c
+ * host-deps: tests/host/compat/bkl_held.c
  * host-deps: tests/host/compat/atomic_host.c
  * host-first: its interruption matrices run for minutes
  *
@@ -5135,6 +5135,9 @@ static void matrix_rows(void)
         unmount_image();
     }
 }
+
+/** The count of inotify watches, which fd.c reads at a close: none. */
+int inotify_watches;
 
 /** Do nothing: fd.c reports a close to inotify, and no row watches. */
 void inotify_desc(struct open_file *ofd, uint32_t mask)

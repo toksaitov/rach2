@@ -31,6 +31,11 @@ int kcpu_apic_present(void);
 /** Whether `cpuid` reports x2APIC mode (leaf 1, ECX bit 21). */
 int kcpu_x2apic_present(void);
 
+/** The running processor's x2APIC identity, which xAPIC mode shows only
+ * the low eight bits of: leaf 0xB's EDX where the leaf describes a level,
+ * else the initial APIC id of leaf 1's EBX bits 31:24. */
+uint32_t kcpu_x2apic_id(void);
+
 /** Whether the processor has x2APIC mode and runs under a hypervisor that
  * delivers interrupts to it without interrupt remapping: KVM, Hyper-V or
  * Xen, as Linux's `x86_init.hyper.x2apic_available` answers. */
@@ -46,6 +51,15 @@ void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi);
 
 /** Write `hi` and `lo` to the model-specific register `msr`. */
 void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi);
+
+#if defined(__x86_64__) || defined(RACH2_HOST_X86_64)
+/** Read an optional MSR into value on x86-64. Return 0, or -1 on #GP,
+ * leaving value unchanged. The fault fixup is local to the instruction. */
+int kcpu_rdmsr_safe(uint32_t msr, uint64_t *value);
+
+/** Write an optional MSR on x86-64. Return 0, or -1 on #GP. */
+int kcpu_wrmsr_safe(uint32_t msr, uint64_t value);
+#endif
 
 /** Whether XSAVES may be used (xsaves.c): leaf 0xD subleaf 1 reports it,
  * and the part is not an AMD Zen 1 or Zen 2, family 0x17, whose XSAVES

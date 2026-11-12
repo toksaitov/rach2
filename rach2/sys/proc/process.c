@@ -31,8 +31,18 @@ struct proc_user_count {
     struct proc_user_count *next;
 };
 static struct proc_user_count *user_table[USER_BUCKETS];
+/* The timer list: the records with an active timed wait or a real alarm.
+ * Its lock comes after the run queues' lock, which the wakes and the switch
+ * hold when they change a record's membership, as Linux's timer base lock
+ * comes after the run queue's; nothing is taken under it but the list of
+ * the tick's signals, below. */
 static process_t *timers;
-static process_t *timer_cursor; /* the next entry of a tick already in progress */
+static struct spinlock timer_list_lock = SPINLOCK_INIT_NAMED("timer_list");
+/* The records with signals of the tick to post (`proc_tick_signal`), and
+ * whether any has some; the list's lock is the innermost of the timers'. */
+static process_t *tick_post_head;
+static volatile int tick_posts_due;
+static struct spinlock tick_post_lock = SPINLOCK_INIT_NAMED("tick_post");
 static uint32_t work_count[4];
 
 /** Read one process-index work counter. */
@@ -175,15 +185,13 @@ uint32_t proc_user_records(const process_t *p)
 }
 
 /** Keep on the timer list only the records with active timed waits or real
- * alarms. */
-void proc_timer_update(process_t *p)
+ * alarms. The caller holds `timer_list_lock`. */
+static void timer_update_locked(process_t *p)
 {
-    uint32_t flags = kirq_save();
     int active =
         p->state != PROC_UNUSED && (p->alarm_tick || (p->state == PROC_BLOCKED && p->wakeup_tick));
 
     if (active == p->timer_linked) {
-        kirq_restore(flags);
         return;
     }
     if (active) {
@@ -194,9 +202,6 @@ void proc_timer_update(process_t *p)
         }
         timers = p;
     } else {
-        if (timer_cursor == p) {
-            timer_cursor = p->timer_next;
-        }
         if (p->timer_prev) {
             p->timer_prev->timer_next = p->timer_next;
         } else {
@@ -208,7 +213,130 @@ void proc_timer_update(process_t *p)
         p->timer_next = p->timer_prev = NULL;
     }
     p->timer_linked = active;
-    kirq_restore(flags);
+}
+
+void proc_timer_update(process_t *p)
+{
+    uint32_t flags = spin_lock_irqsave(&timer_list_lock);
+
+    timer_update_locked(p);
+    spin_unlock_irqrestore(&timer_list_lock, flags);
+}
+
+/** Take `p` off the list of the tick's signals and return the signals it
+ * had waiting; the caller holds `tick_post_lock`. */
+static uint32_t tick_post_unlink(process_t *p)
+{
+    process_t **link = &tick_post_head;
+    uint32_t sigs = p->tick_sigs;
+
+    if (!p->tick_post_linked) {
+        return 0;
+    }
+    while (*link && *link != p) {
+        link = &(*link)->tick_post_next;
+    }
+    if (*link) {
+        *link = p->tick_post_next;
+    }
+    p->tick_post_next = NULL;
+    p->tick_post_linked = 0;
+    p->tick_sigs = 0;
+    if (!tick_post_head) {
+        tick_posts_due = 0;
+    }
+    return sigs;
+}
+
+void proc_tick_signal(process_t *p, int signo)
+{
+    uint32_t flags = spin_lock_irqsave(&tick_post_lock);
+
+    if (!p->tick_post_linked) {
+        p->tick_post_next = tick_post_head;
+        tick_post_head = p;
+        p->tick_post_linked = 1;
+    }
+    p->tick_sigs |= 1u << signo;
+    tick_posts_due = 1;
+    spin_unlock_irqrestore(&tick_post_lock, flags);
+}
+
+int proc_tick_signals_due(void)
+{
+    return tick_posts_due;
+}
+
+void proc_alarm_set(process_t *p, uint64_t tick, uint64_t interval)
+{
+    uint32_t flags = spin_lock_irqsave(&timer_list_lock);
+
+    p->alarm_tick = tick;
+    p->alarm_interval = tick != 0 ? interval : 0;
+    if (p->alarm_due) {
+        p->alarm_due = 0;
+        spin_lock(&tick_post_lock);
+        p->tick_sigs &= ~(1u << SIGALRM);
+        if (!p->tick_sigs) {
+            (void)tick_post_unlink(p);
+        }
+        spin_unlock(&tick_post_lock);
+    }
+    timer_update_locked(p);
+    spin_unlock_irqrestore(&timer_list_lock, flags);
+}
+
+/**
+ * Post the signals `sigs` of the tick to `p`, SIGVTALRM and SIGPROF as
+ * they come and SIGALRM followed by its timer's next setting, its interval
+ * after the tick now or none, as the tick posted and armed it before it ran
+ * without the big lock. Only now is the timer set again, so no tick marks
+ * a second SIGALRM for a setting whose first is not yet posted. The caller
+ * holds the big lock, under which a record is freed, and no spinlock.
+ */
+static void tick_signals_send(process_t *p, uint32_t sigs)
+{
+    if (sigs & (1u << SIGVTALRM)) {
+        signal_post(p, SIGVTALRM);
+    }
+    if (sigs & (1u << SIGPROF)) {
+        signal_post(p, SIGPROF);
+    }
+    if (sigs & (1u << SIGALRM)) {
+        uint64_t interval = p->alarm_interval;
+
+        signal_post(p, SIGALRM);
+        proc_alarm_set(p, interval != 0 ? proc_alarm_at(tick_count(), interval) : 0, interval);
+    }
+}
+
+void proc_tick_signals_post(void)
+{
+    while (tick_posts_due) {
+        uint32_t flags = spin_lock_irqsave(&tick_post_lock);
+        process_t *p = tick_post_head;
+        uint32_t sigs = p ? tick_post_unlink(p) : 0;
+
+        spin_unlock_irqrestore(&tick_post_lock, flags);
+        if (!p) {
+            return;
+        }
+        tick_signals_send(p, sigs);
+    }
+}
+
+void proc_tick_signals_own(void)
+{
+    process_t *p = current_proc;
+    uint32_t flags, sigs;
+
+    if (!p || !p->tick_sigs) {
+        return;
+    }
+    flags = spin_lock_irqsave(&tick_post_lock);
+    sigs = tick_post_unlink(p);
+    spin_unlock_irqrestore(&tick_post_lock, flags);
+    tick_signals_send(p, sigs);
 }
 
 struct percpu cpu_table[NR_CPUS];
@@ -472,12 +600,17 @@ process_t *alloc_process_fork(const process_t *parent, int thread, int share_fs)
 
 void free_process(process_t *proc)
 {
+    uint32_t flags;
+
     if (!proc) {
         return;
     }
     bkl_assert_held();
     proc->state = PROC_UNUSED;
     proc_timer_update(proc);
+    flags = spin_lock_irqsave(&tick_post_lock);
+    (void)tick_post_unlink(proc);
+    spin_unlock_irqrestore(&tick_post_lock, flags);
     pid_remove(proc);
     if (proc->pid == proc->tgid) {
         wq_wake_all(&proc->tg->exited);
@@ -517,6 +650,10 @@ void free_process(process_t *proc)
     kfree(proc);
 }
 
+/* The sleepers one hold of the run queues' lock wakes, at most, before it
+ * lets the lock go and walks the list again. */
+#define WAKE_BATCH 16
+
 /**
  * The timed sleepers are nanosleep, poll with a deadline and a wait-queue
  * wait with one, such as the kernel's ping. `signal_post` makes a blocked
@@ -525,28 +662,58 @@ void free_process(process_t *proc)
  * returns 0 if it first runs at that tick or later; a wait that goes on
  * arms its deadline again. The tick count is 64 bits wide and does not wrap,
  * so a deadline is compared with it as it stands.
+ *
+ * The pass runs without the big lock, in three steps under the run queues'
+ * lock, as Linux's timer base expires its timers under its own lock and
+ * wakes each sleeper through `try_to_wake_up` (kernel/time/timer.c:1772-
+ * 1789, 2389-2410): the records due are collected under the timer list's
+ * lock, which is let go, and then each is woken as `sched_wake_due` wakes
+ * it, its state and deadline tested again, so a wait queue's waker and the
+ * tick do not both make one ready, and not marked woken. The run queues'
+ * lock is held across the three, so that no record collected is freed
+ * before its wake: `free_process` takes that lock (`sched_forget`) before
+ * it frees. A real-time timer that is due is marked for a holder of the
+ * big lock (`proc_tick_signal`), since a signal is posted under it, and
+ * stays due until then; `alarm_due` keeps the next passes from marking it
+ * again. The interrupts the wakes ask for go out after the lock.
  */
 void proc_wake_sleepers(uint64_t now)
 {
+    process_t *due[WAKE_BATCH];
     process_t *p;
+    int n, i;
 
-    work_count[3]++;
-    timer_cursor = timers;
-    while (timer_cursor) {
-        p = timer_cursor;
-        timer_cursor = p->timer_next;
-        work_count[2]++;
-        if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 && now >= p->wakeup_tick) {
-            waketime_expire(p, p->wakeup_tick);
-            p->wakeup_tick = 0;
-            sched_make_ready(p);
+    do {
+        uint32_t flags = sched_lock_take();
+        uint64_t kicks = 0;
+
+        n = 0;
+        spin_lock(&timer_list_lock);
+        work_count[3]++;
+        for (p = timers; p; p = p->timer_next) {
+            work_count[2]++;
+            if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 && now >= p->wakeup_tick) {
+                if (n == WAKE_BATCH) {
+                    break;
+                }
+                due[n++] = p;
+            }
+            if (p->alarm_tick != 0 && now >= p->alarm_tick && !p->alarm_due) {
+                p->alarm_due = 1;
+                proc_tick_signal(p, SIGALRM);
+            }
         }
-        if (p->alarm_tick != 0 && now >= p->alarm_tick) {
-            p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, p->alarm_interval) : 0;
-            signal_post(p, SIGALRM);
+        spin_unlock(&timer_list_lock);
+        for (i = 0; i < n; i++) {
+            int kick = sched_wake_due_locked(due[i], now);
+
+            if (kick >= 0) {
+                kicks |= (uint64_t)1 << kick;
+            }
         }
-        proc_timer_update(p);
-    }
+        sched_lock_give(flags);
+        sched_kick_cpus(kicks);
+    } while (n == WAKE_BATCH);
 }
 
 uint64_t proc_alarm_at(uint64_t now, uint64_t ticks)
@@ -564,6 +731,7 @@ struct tgroup *tgroup_new(struct process *leader)
         tg->refs = 1;
         tg->live = 1;
         tg->leader = leader;
+        spin_lock_init(&tg->cpu_lock, "tg->cpu_lock");
         wait_queue_init(&tg->chld);
         wait_queue_init(&tg->gone);
         wait_queue_init(&tg->sigfd);

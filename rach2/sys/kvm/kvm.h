@@ -11,6 +11,7 @@
 #include "../lib/kint.h"
 #include "kvm_abi.h"
 #include "decode.h"
+#include "pmu.h"
 #include "../io/anon.h"
 #include "../proc/wait_queue.h"
 
@@ -376,6 +377,8 @@ struct kvm_vm {
     struct kvm_coalesced_mmio_ring *ring; /* the page of coalesced writes, every vCPU's third */
     void *vfio;                           /* vfio.c's bridge; holds a VM reference */
     void *hv;                             /* hyperv.c's */
+    void *pmu_filter;                     /* pmu.c's event filter, read under the big lock */
+    int pmu_disabled;                     /* KVM_CAP_PMU_CAPABILITY, set before vCPUs exist */
     void *backend;                        /* the backend's */
     void *gpamap;                /* gpamap.c's: the maps of the guest's pages into programs */
     struct kvm_vm *next_vm;      /* kvm.c's list of live VMs */
@@ -404,6 +407,7 @@ struct kvm_vm {
 #define KVM_REQ_CLOCK_UPDATE 0x100u /* write the kvmclock again (pvclock.c) */
 #define KVM_REQ_STEAL_UPDATE 0x200u /* write the steal time again (pvclock.c) */
 #define KVM_REQ_MSR_FILTER   0x400u /* the backend's `msr_filter_changed` */
+#define KVM_REQ_PMU          0x800u /* refresh the event filter before entry */
 
 /* The most MSRs a vCPU keeps, those of the index list, the MTRRs and the
  * machine-check banks. */
@@ -564,6 +568,7 @@ struct kvm_vcpu {
     uint64_t stat[KVM_VCPU_STATS]; /* by enum kvm_vcpu_stat */
     char stats_id[KVM_STATS_NAME_SIZE];        /* "kvm-PID/vcpu-ID", its maker's */
     uint64_t mce_banks[KVM_MAX_MCE_BANKS * 4]; /* CTL, STATUS, ADDR, MISC of each */
+    struct kvm_pmu pmu;
 
     /* Set by the backend after each exit, for the run page. */
     int if_flag;     /* RFLAGS.IF */
@@ -573,6 +578,14 @@ struct kvm_vcpu {
      * entry, Linux's at_instruction_boundary: the guest stopped between
      * two instructions, so its record may say it was preempted. */
     int at_boundary;
+
+    /* The processor's code for the last run's exit, which the backend's
+     * `enter` writes: SVM's EXITCODE, low 32 bits, or VMX's exit reason. */
+    uint32_t hw_exit;
+    /* exitstat.c's account of the exit the kernel handles now: its row, or
+     * -1 for none, and the TSC count since which its handling is timed. */
+    int32_t xs_row;
+    uint64_t xs_mark;
 
     /* The steps each vector's interrupts reached, by enum kvm_vec_step,
      * which the VM's fdinfo shows; written by the vCPU's thread and by a
@@ -598,6 +611,24 @@ struct kvm_vcpu {
 
 /** Register /dev/kvm when a backend probes; at boot, once. */
 void kvm_start(void);
+
+/* exitstat.c */
+
+/** Register the debug file `kvm/exit_stats`; from `kvm_start`, once a
+ * backend has probed. */
+void kvm_exitstat_start(void);
+
+/**
+ * Count the exit of the run that just ended on `v`, by `v->hw_exit`: the
+ * TSC count `left`, read as the guest's run ended, and `held`, read once
+ * the big lock was taken back, time the wait for the lock. Under the big
+ * lock, with interrupts off.
+ */
+void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t left, uint64_t held);
+
+/** End the account of `v`'s exit, if one is open: the kernel enters the
+ * guest again (`to_user` 0) or KVM_RUN returns (1). Under the big lock. */
+void kvm_exitstat_done(struct kvm_vcpu *v, int to_user);
 
 /** Whether the caller runs in the address space that made `vm`; Linux
  * answers EIO to an ioctl of a VM or its vCPUs from any other. */
@@ -1335,6 +1366,10 @@ int kvm_lapic_mmio(struct kvm_vcpu *v);
  * not the APIC's.
  */
 int kvm_lapic_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host);
+
+/** Deliver a performance-counter overflow through the local LVTPC entry,
+ * if it is enabled. Under the big lock, never from the backend's entry. */
+void kvm_lapic_pmi(struct kvm_vcpu *v);
 
 /** Set the APIC base of `v` to `value`, with the checks of Linux's
  * kvm_set_apic_base: 0, or -1 for reserved bits, an invalid mode, or, from

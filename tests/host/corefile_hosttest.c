@@ -1230,6 +1230,21 @@ struct vfs_mount *vfs_mount_at(int idx)
     return NULL;
 }
 
+/** The slot of `m` in the mount table, which has none here: -1. */
+int vfs_mount_index(const struct vfs_mount *m)
+{
+    (void)m;
+    return -1;
+}
+
+/** The device a stat reports for mount `i`, which no row reads: 0. */
+uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)
+{
+    (void)i;
+    (void)m;
+    return 0;
+}
+
 /** The inode number of /proc, which no row reads: 0. */
 uint32_t procfs_ino_dir(void)
 {

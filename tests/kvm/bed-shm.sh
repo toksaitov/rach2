@@ -27,11 +27,12 @@
 # touch after must raise SIGBUS, and every map and the frames it held must
 # be gone (`revoke`, `leak`).
 #
-# With -g the VM also has the host's PCI function BDF, the Lenovo's GPU:
-# gpu.sh, beside this script, takes it from Rach2's Intel driver, starts
-# QEMU with it on vfio-pci and the disk on AHCI, kills QEMU when this
-# script sends it SIGUSR1, and gives the function back to the driver,
-# which must pass gpu.sh's own checks once the VM has gone (`handoff`).
+# With -g, which needs -k, the VM also has the host's PCI function BDF, the
+# Lenovo's GPU: gpu.sh, beside this script, takes it from Rach2's Intel
+# driver, starts QEMU with it on vfio-pci and the disk on AHCI, kills QEMU
+# when this script sends it SIGUSR1, and gives the function back to the
+# driver, which must pass gpu.sh's own checks once the VM has gone
+# (`handoff`).
 #
 # Each check prints one line, `bed-shm: CHECK: pass` or `fail` with the
 # reason, and the last line is `bed-shm: result: pass` or `fail`, after the
@@ -58,14 +59,17 @@ done
     echo "usage: bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY] [-g BDF] [-o DIR] [-m MIB] [-n CPUS]" >&2
     exit 2
 }
+# The GPU's MSIs reach the VM through irqfds and would count as doorbells
+# Rach2 rang, so -g runs only the nocopy rows, which check no doorbell.
+[ -z "$bdf" ] || [ -n "$nocopy" ] || { echo "bed-shm: -g needs -k" >&2; exit 2; }
 [ -z "$bdf" ] || [ -f "$gpush" ] || { echo "bed-shm: no $gpush for -g" >&2; exit 2; }
 daemon='' qemu='' gpu='' waiter='' holder='' pid='' bad=0
 # gpu.sh, sent SIGTERM, kills its QEMU and gives the function back.
 trap 'kill -9 $qemu $waiter $holder $pid 2>/dev/null; kill $daemon $gpu 2>/dev/null; wait 2>/dev/null' EXIT
 rm -rf "$out"
 mkdir -p "$out"
-console=$out/console.log
-[ -z "$bdf" ] || console=$out/gpu/console
+console=$out/console.log qemu_err=$out/qemu.out
+[ -z "$bdf" ] || console=$out/gpu/console qemu_err=$out/gpu/qemu.err
 
 pass() { echo "bed-shm: $1: pass${2:+: $2}"; }
 fail() { echo "bed-shm: $1: fail: $2"; bad=$((bad + 1)); }
@@ -127,7 +131,8 @@ fi
 # The VM, under Rach2's KVM, with the region on its doorbell device. Its
 # disk takes no ioeventfd, and QEMU raises a disk's interrupts without an
 # irqfd, so that both counts are the doorbells'. With -g, gpu.sh starts it
-# with the function, and $qemu is QEMU's own process, from its pid file.
+# with the function, and $qemu is QEMU's own process, from its pid file;
+# QEMU's messages are then in gpu.sh's DIR/gpu/qemu.err.
 if [ -z "$bdf" ]; then
     TMPDIR=$out qemu-system-x86_64 -accel kvm -machine q35,kernel-irqchip=split -cpu host -smp "$cpus" \
         -m "${mib}M" -nodefaults -no-reboot -display none -monitor none \
@@ -147,7 +152,6 @@ else
         quiet "$out/gpu.log" 120 "$gpu" || break
     done
     qemu=$(cat "$out/qemu.pid" 2>/dev/null)
-    : > "$out/qemu.out"
 fi
 
 # kill_vm: kill QEMU and wait for its end; with -g, through gpu.sh, which
@@ -219,7 +223,7 @@ nocopy_rows()
 {
     if [ "$(info bound)" != 1 ]; then
         for c in build pages coherent release refuse measure revoke leak; do
-            fail "$c" "virtio-gpu did not bind over the region: $(tail -n 2 "$console" "$out/qemu.out" 2>&1 | tr '\n' ' ')"
+            fail "$c" "virtio-gpu did not bind over the region: $(tail -n 2 "$console" "$qemu_err" 2>&1 | tr '\n' ' ')"
         done
         return
     fi
@@ -321,7 +325,7 @@ nocopy_rows()
 virgl_rows()
 {
     if [ "$(info bound)" != 1 ]; then
-        fail draw "virtio-gpu did not bind over the region: $(tail -n 2 "$console" "$out/qemu.out" 2>&1 | tr '\n' ' ')"
+        fail draw "virtio-gpu did not bind over the region: $(tail -n 2 "$console" "$qemu_err" 2>&1 | tr '\n' ' ')"
         fail doorbell "no device"
     else
         io0=$(stat kvm_ioeventfd_signals) irq0=$(stat kvm_irqfd_raises)

@@ -100,10 +100,20 @@ long sys_timer_delete(struct isr_params *params);
  * ends. */
 void ptimer_delete_all(struct tgroup *tg);
 
-/** Count the expirations due by the tick `now`, and wake the readers or post
- * the signals; called from the boot processor's timer interrupt, with
- * interrupts off. */
+/** Count the expirations due by the tick `now`, and wake the readers or
+ * leave the signals for a holder of the big lock to post
+ * (`ptimer_post_due`); called from the timer interrupt that made the
+ * clock's pass, without the big lock and with interrupts off. */
 void timerfd_tick(uint64_t now);
+
+/** Nonzero while a POSIX timer has an expiration whose signal waits to be
+ * posted; read without a lock by a tick deciding whether to try the big
+ * lock. */
+int ptimer_posts_due(void);
+
+/** Post the signals of the POSIX timers that expired since the last call,
+ * in the order they expired. The caller holds the big lock. */
+void ptimer_post_due(void);
 
 /**
  * The clocks' part, in syscall.c: the time on clock `clk` as clock_gettime
@@ -122,8 +132,9 @@ int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec);
 int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *tid, int *user_only);
 
 /** Count a tick of processor time of the thread `p`, user time when `user`,
- * against the POSIX timers that count it; called from the timer tick of the
- * processor that runs `p`. */
+ * against the POSIX timers that count it, leaving each signal due for
+ * `ptimer_post_due`; called from the timer tick of the processor that runs
+ * `p`, without the big lock and with interrupts off. */
 void ptimer_cpu_tick(const struct process *p, int user);
 
 #endif /* _TIMERFD_H_ */

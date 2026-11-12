@@ -36,6 +36,11 @@ int iommu_present(void);
 /** Whether the host's interrupts go through the units' remapping tables. */
 int iommu_irq_remapped(void);
 
+/** Whether they do, with the entries naming processors by their 32-bit
+ * x2APIC ids, so that the local APIC may stay in x2APIC mode on bare
+ * metal (`lapic_x2apic_settle`). */
+int iommu_irq_remapped_x2apic(void);
+
 /** The unit whose scope has the device at (bus, devfn), its index, or -1;
  * the devices of one unit are translated or not together. */
 int iommu_unit_of(uint8_t bus, uint8_t devfn);

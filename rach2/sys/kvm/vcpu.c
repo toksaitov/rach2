@@ -196,6 +196,7 @@ static void vcpu_reset(struct kvm_vcpu *v)
     v->mp_state = KVM_MP_STATE_RUNNABLE;
     v->tsc_offset = -(int64_t)kvm_tsc_scale(v, arch_cycles());
     kvm_msr_reset(v);
+    kvm_pmu_init(v);
     v->dirty = KVM_PART_ALL;
 }
 
@@ -205,6 +206,7 @@ void kvm_vcpu_init_reset(struct kvm_vcpu *v)
 
     reset_arch(v);
     v->sregs.apic_base = base;
+    kvm_pmu_reset(v);
     /* As Linux's kvm_vcpu_reset at INIT: the steal time and the kvmclock
      * are off. */
     v->st_msr = 0;
@@ -424,6 +426,7 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
     v->index = vm->nr_vcpus;
     v->cpu = -1;
     v->clock_cpu = -1;
+    v->xs_row = -1;
     v->hlt_in_guest = (vm->disable_exits & KVM_X86_DISABLE_EXITS_HLT) != 0;
     k_memcpy(v->name, "kvm-vcpu:", 9);
     kvm_decimal(v->name + 9, id);
@@ -691,12 +694,14 @@ static int32_t run_exit(struct kvm_vcpu *v)
 static int32_t run_enter(struct kvm_vcpu *v)
 {
     uint32_t flags = kirq_save();
+    uint64_t left;
     int depth;
     int32_t r;
 
+    kvm_exitstat_done(v, 0);
     v->cpu = (int32_t)arch_cpu_id();
     v->mode = KVM_MODE_IN_GUEST;
-    if (v->requests & (KVM_REQ_EXIT | KVM_REQ_TRIPLE_FAULT)) {
+    if (v->requests & (KVM_REQ_EXIT | KVM_REQ_TRIPLE_FAULT | KVM_REQ_PMU)) {
         v->mode = KVM_MODE_OUTSIDE;
         kirq_restore(flags);
         return -EAGAIN;
@@ -705,7 +710,11 @@ static int32_t run_enter(struct kvm_vcpu *v)
     depth = bkl_drop();
     r = kvm_backend->enter(v);
     v->mode = KVM_MODE_OUTSIDE;
+    left = arch_cycles();
     bkl_take(depth);
+    if (r == 0) {
+        kvm_exitstat_exit(v, left, arch_cycles());
+    }
     kirq_restore(flags);
     return r;
 }
@@ -836,6 +845,7 @@ static int32_t run_loop(struct kvm_vcpu *v)
         if (r != 0) {
             return 0;
         }
+        kvm_pmu_prepare(v);
         if (in_kernel) {
             r = kvm_lapic_prepare(v);
             if (r != 0) {
@@ -917,6 +927,7 @@ static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
             current_proc->sched_out = NULL;
         }
     }
+    kvm_exitstat_done(v, 1);
     if (v->has_sigmask) {
         signal_set_blocked(old);
     }
@@ -1384,6 +1395,7 @@ static int32_t set_cpuid(struct kvm_vcpu *v, uintptr_t arg)
     v->cpuid_nent = head.nent;
     v->cpuid_set = 1;
     kvm_pv_cpuid_update(v, 1);
+    kvm_pmu_refresh(v);
     v->dirty |= KVM_PART_CPUID;
     return 0;
 }

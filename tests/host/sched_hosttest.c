@@ -111,6 +111,14 @@ void signal_post(process_t *target, int signo)
     (void)signo;
 }
 
+/** Nothing: no process arms a timer of processor time, whose signal the
+ * tick would leave for a holder of the big lock. */
+void proc_tick_signal(process_t *p, int signo)
+{
+    (void)p;
+    (void)signo;
+}
+
 /** 1: no suspend to idle holds a process. */
 int suspend_lets_run(const struct process *p)
 {
@@ -702,26 +710,68 @@ static void ready_lists(void)
     CHECK(run_queues[0].count == 5, "removal is idempotent");
 }
 
-/** A tick that finds the big lock held passes while nothing is queued, and
- * waits for the lock at the last of SCHED_TICK_PASSES with work queued. */
-static void tick_waits(void)
+/**
+ * Of two wakes of one blocked record, the first makes it ready, marks it
+ * woken and asks for an interrupt to the processor it outranks the current
+ * thread of; the second, finding it ready under the run queues' lock, asks
+ * for none and leaves it where it is in its list, ahead of a record made
+ * ready after the first, as Linux's `try_to_wake_up` leaves a task whose
+ * state no longer matches (kernel/sched/core.c:4191-4193). A running or a
+ * stopped record is left as it was. A signal's wake clears the deadline and
+ * marks nothing; the tick's wakes a sleeper only once its deadline is due.
+ */
+static void wake_twice(void)
 {
-    unsigned int i;
+    process_t *p = &procs[3];
 
     setup();
-    CHECK(run_queues[0].count > 0, "work is queued");
-    for (i = 1; i < SCHED_TICK_PASSES; i++) {
-        CHECK(!sched_tick_waits(), "the first ticks pass");
-    }
-    CHECK(sched_tick_waits(), "the last one waits");
-    sched_account_tick(1);
-    CHECK(!sched_tick_waits(), "a tick that had the lock starts the count again");
-    while (run_queues[0].head) {
-        sched_forget(run_queues[0].head);
-    }
-    for (i = 0; i < SCHED_TICK_PASSES * 2; i++) {
-        CHECK(!sched_tick_waits(), "with nothing queued no tick waits");
-    }
+    sched_forget(p);
+    sched_forget(&procs[4]);
+    p->state = PROC_BLOCKED;
+    procs[4].state = PROC_BLOCKED;
+    p->rt_priority = 1;
+    CHECK(sched_wake_blocked(p) == 0, "the first wake asks for the outranked processor");
+    CHECK(p->state == PROC_READY && p->woken && p->ready_linked, "the first wake queues and marks");
+    CHECK(run_queues[0].count == 5 && run_queues[0].tail == p, "the first wake queues at the tail");
+    CHECK(sched_wake_blocked(&procs[4]) == -1, "an equal record asks for no interrupt");
+    CHECK(sched_wake_blocked(p) == -1, "the second wake asks for no interrupt");
+    CHECK(run_queues[0].count == 6 && run_queues[0].tail == &procs[4],
+          "the second wake leaves the record ahead of a later one");
+    p->rt_priority = 0;
+    CHECK(sched_wake_blocked(current_proc) == -1, "a running record asks for nothing");
+    CHECK(current_proc->state == PROC_RUNNING && !current_proc->woken &&
+              !current_proc->ready_linked,
+          "a running record is left as it was");
+    sched_forget(&procs[2]);
+    procs[2].state = PROC_STOPPED;
+    CHECK(sched_wake_blocked(&procs[2]) == -1, "a stopped record asks for nothing");
+    CHECK(procs[2].state == PROC_STOPPED && !procs[2].woken && !procs[2].ready_linked,
+          "a stopped record is left as it was");
+
+    sched_forget(&procs[5]);
+    procs[5].state = PROC_BLOCKED;
+    procs[5].woken = 0;
+    procs[5].wakeup_tick = 9;
+    sched_wake_due(&procs[5], 8);
+    CHECK(procs[5].state == PROC_BLOCKED && procs[5].wakeup_tick == 9,
+          "the tick leaves a sleeper not yet due");
+    sched_wake_signal(&procs[5]);
+    CHECK(procs[5].state == PROC_READY && procs[5].wakeup_tick == 0 && !procs[5].woken &&
+              run_queues[0].tail == &procs[5],
+          "a signal's wake queues the sleeper, clears its deadline and marks nothing");
+    sched_forget(&procs[4]);
+    procs[4].state = PROC_BLOCKED;
+    procs[4].woken = 0;
+    procs[4].wakeup_tick = 9;
+    sched_wake_due(&procs[4], 9);
+    CHECK(procs[4].state == PROC_READY && procs[4].wakeup_tick == 0 && !procs[4].woken &&
+              run_queues[0].tail == &procs[4],
+          "the tick's wake queues a due sleeper and clears its deadline");
+    procs[5].wakeup_tick = 9;
+    sched_wake_signal(&procs[5]);
+    sched_wake_due(&procs[5], 9);
+    CHECK(procs[5].wakeup_tick == 9 && run_queues[0].tail == &procs[4],
+          "a ready record is left in place, its deadline as it was");
 }
 
 /** Affinity moves queued work, and an idle processor steals eligible work. */
@@ -908,7 +958,6 @@ int main(int argc, char **argv)
         dprintf(1, "sched-hosttest: affinity: %s\n", failures ? "fail" : "pass");
         return failures != 0;
     }
-    tick_waits();
     priority();
     fairness();
     states();
@@ -919,6 +968,7 @@ int main(int argc, char **argv)
     load_phase();
     all_idle();
     ready_lists();
+    wake_twice();
     migration();
     run_delay();
     affinity_rows();
@@ -929,7 +979,7 @@ int main(int argc, char **argv)
                "preempt due, "
                "accounting, "
                "load phase, "
-               "idle machine, ready lists, migration, run delay\n");
+               "idle machine, ready lists, wake twice, migration, run delay\n");
     return 0;
 }
 

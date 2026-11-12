@@ -3,10 +3,11 @@
  * program of one processor, which includes the transport through this file:
  * a region of REGION_PAGES static pages with made-up frames, a clock that
  * moves a tick for each pass of a sleep, references to the region's frames
- * counted, a memory object of SH_PAGES pages in a directory of leaves, no
- * eventfds, a hook that runs once interrupts are let in with vshm_lock free,
- * and a sleep that lets the includer's model device look at the region until
- * its condition holds. The includer defines REGION_PAGES, `check` and
+ * counted, a memory object of SH_PAGES pages in a directory of leaves, four
+ * eventfds whose references are counted and which are never rung or hooked,
+ * a hook that runs once interrupts are let in with vshm_lock free, and a
+ * sleep that lets the includer's model device look at the region until its
+ * condition holds. The includer defines REGION_PAGES, `check` and
  * `model_step`.
  */
 #ifndef VGPUSHM_ENV_H
@@ -203,21 +204,43 @@ void shmem_free(struct shmem *sh)
     sh->nleaves = sh->npages = 0;
 }
 
-/** No eventfd is held: the rows poll. */
+/** No eventfd is rung: the rows poll. */
 void eventfd_signal(struct eventfd *ev)
 {
     (void)ev;
     check(0, "a doorbell rung while the transport polls");
 }
 
-/** No eventfd is held. */
-void eventfd_put(struct eventfd *ev)
+/* The eventfds descriptors 0 to 3 are open on, for an attach's doorbells,
+ * and the references taken on each. */
+static char bell_fds[4];
+static unsigned bell_refs[4];
+
+/** A reference to descriptor `fd`'s eventfd, or NULL with -EBADF past 3. */
+struct eventfd *eventfd_get(int fd, int32_t *err)
 {
-    (void)ev;
-    check(0, "an eventfd put that was never taken");
+    if (fd < 0 || fd > 3) {
+        *err = -EBADF;
+        return NULL;
+    }
+    bell_refs[fd]++;
+    return (struct eventfd *)(void *)&bell_fds[fd];
 }
 
-/** No eventfd is held. */
+/** Drop a reference eventfd_get took. */
+void eventfd_put(struct eventfd *ev)
+{
+    int i;
+
+    for (i = 0; i < 4 && ev != (struct eventfd *)(void *)&bell_fds[i]; i++) {
+    }
+    check(i < 4 && bell_refs[i] > 0, "an eventfd put that was never taken");
+    if (i < 4 && bell_refs[i] > 0) {
+        bell_refs[i]--;
+    }
+}
+
+/** No eventfd is hooked. */
 int eventfd_hook_remove(struct eventfd *ev, struct eventfd_hook *h, uint64_t *cnt)
 {
     (void)ev;

@@ -108,10 +108,33 @@ void fpu_area_free(void *area)
     kfree(area);
 }
 
-/** A wake makes the process ready; there is one processor and no queue. */
-void sched_make_ready(process_t *p)
+/** The run queues' lock of the timer pass; one processor, no lock. */
+uint32_t sched_lock_take(void)
 {
+    return 0;
+}
+
+/** Let the model's run queues' lock go. */
+void sched_lock_give(uint32_t flags)
+{
+    (void)flags;
+}
+
+/** A timed wake makes a due blocked process ready, as `sched_wake_due`. */
+int sched_wake_due_locked(process_t *p, uint64_t now)
+{
+    if (p->state != PROC_BLOCKED || p->wakeup_tick == 0 || now < p->wakeup_tick) {
+        return -1;
+    }
+    p->wakeup_tick = 0;
     p->state = PROC_READY;
+    return -1;
+}
+
+/** No processor to interrupt in the model. */
+void sched_kick_cpus(uint64_t cpus)
+{
+    (void)cpus;
 }
 
 /** These processes never enter the scheduler. */
@@ -189,6 +212,9 @@ void lock_ofd_gone(const struct open_file *ofd)
 {
     (void)ofd;
 }
+
+/** The count of inotify watches, which fd.c reads at a close: none. */
+int inotify_watches;
 
 /** fd.c reports a description's close to inotify, and no row watches. */
 void inotify_desc(struct open_file *ofd, uint32_t mask)

@@ -87,10 +87,21 @@ void schedule(void)
     child.state = PROC_RUNNING;
 }
 
-/** A wake makes the process ready; there is one processor and no queue. */
-void sched_make_ready(process_t *p)
+/** The parent's wake: make `p` ready and woken if it is blocked; no
+ * processor needs an interrupt. */
+int sched_wake_blocked(process_t *p)
 {
-    p->state = PROC_READY;
+    if (p->state == PROC_BLOCKED) {
+        p->woken = 1;
+        p->state = PROC_READY;
+    }
+    return -1;
+}
+
+/** No other processor: no row asks for an interrupt. */
+void smp_kick(int cpu)
+{
+    (void)cpu;
 }
 
 /** Exit cleanup must not ask; a call fails the row. */

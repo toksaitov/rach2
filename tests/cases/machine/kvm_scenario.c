@@ -2,8 +2,8 @@
  * kvm_scenario.c: the cases of the KVM suite (machine.kvm.json). Each boots
  * an overlay of the GNU root with the suite's data disk and runs one runner
  * of tests/kvm on it: kvm-boot.sh, which boots a guest in the root's QEMU to
- * its token, or corpus.sh, which runs kvm-unit-tests or the KVM selftests
- * under Rach2's KVM as their lists say.
+ * its token, corpus.sh, which runs kvm-unit-tests or the KVM selftests
+ * under Rach2's KVM as their lists say, or drmfuzz's KVM mode.
  */
 #include <stdio.h>
 #include <string.h>
@@ -22,7 +22,7 @@
 #define KVM_DATA "/tmp/kvm-data"
 
 /* The runners, by the last part of the case's identity. */
-enum runner { BOOT, UNIT, SELFTESTS, ENTRY, SLOTS, LEAK };
+enum runner { BOOT, UNIT, SELFTESTS, ENTRY, SLOTS, LEAK, FUZZ };
 
 /* What one attempt shares among its steps. */
 struct kvm_case {
@@ -49,6 +49,10 @@ static int parse(struct kvm_case *s, const char *id)
     name++;
     if (strcmp(name, "leak") == 0) {
         s->runner = LEAK;
+        return 1;
+    }
+    if (strcmp(name, "fuzz") == 0) {
+        s->runner = FUZZ;
         return 1;
     }
     if (strcmp(name, "entry") == 0 || strcmp(name, "slots") == 0) {
@@ -124,14 +128,15 @@ static void stage(struct kvm_case *s)
  */
 static void run(struct kvm_case *s)
 {
-    static const char *const assertion[] = {"token", "as-listed", "as-listed",
-                                            "entry", "slots",     "leak"};
+    static const char *const assertion[] = {"token", "as-listed", "as-listed", "entry",
+                                            "slots", "leak",      "fuzz"};
     static const char *const pattern[] = {"kvm-boot: result: pass",
                                           "kvm-corpus: result: pass",
                                           "kvm-corpus: result: pass",
                                           "SVMENTRY OK",
                                           "KVMOBJECT OK",
-                                          "kvm-leak: result: pass"};
+                                          "kvm-leak: result: pass",
+                                          "DRMFUZZ OK"};
     char command[512], line[200];
     const char *result;
     struct net_run r;
@@ -140,6 +145,8 @@ static void run(struct kvm_case *s)
         snprintf(command, sizeof(command),
                  "cd " KVM_DIR " && sh leak.sh"
                  " -k guests/debian/vmlinuz -i guests/debian/initrd");
+    else if (s->runner == FUZZ)
+        snprintf(command, sizeof(command), KVM_DIR "/drmfuzz kvm 20000 1");
     else if (s->runner == ENTRY || s->runner == SLOTS)
         snprintf(command, sizeof(command), KVM_DIR "/svm-entry%s",
                  s->runner == SLOTS ? " slots" : "");

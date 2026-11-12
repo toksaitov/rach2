@@ -606,17 +606,22 @@ left; see
 The number of the last uevent sent.
 .It Pa /sys/module/kvm/parameters
 On a processor with VMX or SVM, the read-only parameters of KVM that
-Linux's KVM selftests read, each a value and a newline:
+Linux's KVM selftests and kvm-unit-tests read, each a value and a newline:
 .Pa force_emulation_prefix ,
 .Ql 0 ;
 .Pa enable_pmu ,
-.Ql N ,
-since guests are given no performance counters;
+.Ql Y
+when the host has usable performance counters and
+.Ql N
+otherwise;
 .Pa tdp_mmu ,
 .Ql Y ;
-and
 .Pa eager_page_split ,
-.Ql N .
+.Ql N ;
+and
+.Pa ignore_msrs ,
+.Ql N ,
+since a guest's access to an MSR KVM does not have raises #GP.
 Beside it,
 .Pa /sys/module/kvm_intel/parameters
 has

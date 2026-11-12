@@ -4,6 +4,19 @@
  * block, made as they are needed up to the cache's limit and given back
  * under memory pressure, least-recently-released replacement, and the two
  * hold rules checked on every acquisition.
+ *
+ * Two locks guard the state. `cache_spin` covers what a reader without the
+ * big lock touches: the index and each buffer's key, the release order, the
+ * empties and the list of all buffers, each buffer's holder, waiters, stamp
+ * and discard mark, and the run state of a fill. It is held only while
+ * those change or are read for a decision, never across a request or a
+ * wait. The big lock covers the rest, the dirty lists and every field of
+ * the order the dirty marks give, and so every dirty mark, write, sync and
+ * eviction of a dirty buffer, and the block layer's requests, which a miss
+ * without it takes it for (`device_read`). A holder without the big lock
+ * reads its buffer and marks nothing, so a buffer that no one holds keeps
+ * its dirty bit while `cache_spin` is held, and a dirty one keeps its key
+ * while the big lock is.
  */
 
 #include "bcache.h"
@@ -20,12 +33,28 @@
 #include "../panic.h"
 #include "../proc/process.h"
 #include "../proc/sched.h"
+#include "../proc/smp.h"
 
 /* Dirty buffers linked both ways, the latest to go dirty at the head. */
 struct dirty_list {
     struct bbuf *head;
     struct bbuf *tail;
 };
+
+/* The cache's spinlock, as the comment at the top of the file says. */
+static struct spinlock cache_spin = SPINLOCK_INIT_NAMED("bcache");
+
+/** Take `cache_spin` with interrupts off; the flags to give back. */
+static uint32_t cache_lock(void)
+{
+    return spin_lock_irqsave(&cache_spin);
+}
+
+/** Give back `cache_spin`, which `cache_lock` took with `flags`. */
+static void cache_unlock(uint32_t flags)
+{
+    spin_unlock_irqrestore(&cache_spin, flags);
+}
 
 static struct bbuf *bufs;     /* every buffer, newest first, linked both ways */
 static uint32_t nbufs;        /* how many */
@@ -39,7 +68,7 @@ static uint64_t marks;            /* counts the dirty marks, for `dirtied` and `
 static struct bbuf *kernel_held;  /* held with no process current */
 static block_device_t *ahead_dev; /* the device and block a sequential reader */
 static uint64_t ahead_next;       /* reaches next; a miss there fills a run */
-static uint32_t write_gen;        /* counts the writes that reached a device */
+static uint32_t write_gen;        /* counts the writes that reached a device, under `cache_spin` */
 static uint32_t limit_set;        /* a limit given by `bcache_set_limit`, or 0 */
 static uint32_t clock_stamp;
 static uint64_t stat_hits, stat_fills, stat_waits;
@@ -49,6 +78,16 @@ static uint64_t stat_hits, stat_fills, stat_waits;
  * choice and a sync cost in bookkeeping, and a host test holds it under a
  * bound. */
 static uint64_t stat_visits;
+
+/** Count a write that reached a device, which a fill whose staged read it
+ * may have overtaken checks (`fill_run`). */
+static void wrote_one(void)
+{
+    uint32_t flags = cache_lock();
+
+    write_gen++;
+    cache_unlock(flags);
+}
 
 /** The most buffers the cache makes: half of what the caches together may
  * hold under pressure, and never fewer than the floor, since a file system
@@ -403,7 +442,8 @@ static void set_clean(struct bbuf *b)
 }
 
 /** Take `b` off the index and the release order, keyed to nothing, and put
- * it on the empties. */
+ * it on the empties; `cache_spin` is held, and the big lock too unless `b`
+ * is clean. */
 static void make_empty(struct bbuf *b)
 {
     index_del(b);
@@ -416,7 +456,8 @@ static void make_empty(struct bbuf *b)
     empties = b;
 }
 
-/** An empty buffer off the empties, or NULL when there is none. */
+/** An empty buffer off the empties, or NULL when there is none;
+ * `cache_spin` is held. */
 static struct bbuf *take_empty(void)
 {
     struct bbuf *b = empties;
@@ -429,7 +470,8 @@ static struct bbuf *take_empty(void)
 }
 
 /** An unheld buffer off the cache's lists and back to the heap: a clean
- * keyed one, or an empty one the caller has taken off the empties. */
+ * keyed one, or an empty one the caller has taken off the empties;
+ * `cache_spin` is held. */
 static void buffer_free(struct bbuf *b)
 {
     stat_visits++;
@@ -472,7 +514,8 @@ static struct bbuf **held_list(void)
     return &kernel_held;
 }
 
-/** Mark `b` held by the caller and put it on the caller's list. */
+/** Mark `b`, which nobody holds, held by the caller and put it on the
+ * caller's list; `cache_spin` is held. */
 static void hold(struct bbuf *b)
 {
     struct bbuf **head = held_list();
@@ -482,7 +525,8 @@ static void hold(struct bbuf *b)
     *head = b;
 }
 
-/** Take `b` off the caller's list and mark it unheld. */
+/** Take `b` off the caller's list and mark it unheld; `cache_spin` is
+ * held. */
 static void unhold(struct bbuf *b)
 {
     struct bbuf **link;
@@ -496,6 +540,27 @@ static void unhold(struct bbuf *b)
     }
     b->hold_next = 0;
     b->holder = -1;
+}
+
+/**
+ * Read `sectors` sectors of `dev` at `lba` into `buf` for a miss, under the
+ * big lock, which the block layer's requests still run under: a caller
+ * without it takes it for the transfer alone, and the request's sleep lets
+ * it go. 0, or the request's error.
+ */
+static int device_read(block_device_t *dev, uint64_t lba, uint32_t sectors, void *buf)
+{
+    int big = !bkl_held();
+    int rc;
+
+    if (big) {
+        bkl_enter();
+    }
+    rc = block_request(dev, 0, lba, sectors, buf);
+    if (big) {
+        bkl_exit();
+    }
+    return rc;
 }
 
 /** Panic when the caller, taking block `blk` of `dev`, would break a rule
@@ -583,20 +648,55 @@ static int victim_may_be_written(block_device_t *victim, block_device_t *filling
     return !vfs_ns_held_by_caller();
 }
 
-/** The wait condition for a busy buffer: nobody holds it. */
+/** The wait condition for a busy buffer: nobody holds it. The wait files
+ * the sleeper before it tests, and a release clears `holder` before it
+ * wakes, so the read needs no lock. */
 static int busy_gone(void *arg)
 {
     struct bbuf *b = arg;
     return b->holder == -1;
 }
 
-/** Sleep until nobody holds `b`, counted among its waiters until this runs
- * again, so that reclaim leaves it. */
-static void wait_unheld(struct bbuf *b)
+/** Sleep until nobody holds `b`, which the caller found held under
+ * `cache_spin`, taken with `flags`, and counted among its waiters from that
+ * look until the wait ends, so that a shrink does not free it meanwhile.
+ * Returns with the lock given back. */
+static void wait_unheld(struct bbuf *b, uint32_t flags)
 {
     b->waiters++;
+    cache_unlock(flags);
     wq_wait_event_nointr(&b->wq, busy_gone, b);
+    flags = cache_lock();
     b->waiters--;
+    cache_unlock(flags);
+}
+
+/** Hold `b` for the caller when nobody holds it, under `cache_spin`: 1 when
+ * held, 0 when another holds it. */
+static int try_hold(struct bbuf *b)
+{
+    uint32_t flags = cache_lock();
+    int got = b->holder == -1;
+
+    if (got) {
+        hold(b);
+    }
+    cache_unlock(flags);
+    return got;
+}
+
+/** Sleep until nobody holds `b`, unless the caller does or nobody holds it
+ * now: 1 after a wait, 0 with nothing done. */
+static int wait_other(struct bbuf *b)
+{
+    uint32_t flags = cache_lock();
+
+    if (b->holder == -1 || b->holder == caller_pid()) {
+        cache_unlock(flags);
+        return 0;
+    }
+    wait_unheld(b, flags);
+    return 1;
 }
 
 /* What a sync writes and how. */
@@ -751,7 +851,7 @@ static int write_buffer_flags(struct bbuf *b, uint32_t flags)
     set_clean(b);
     b->write_failed = 0;
     b->order = 0;
-    write_gen++;
+    wrote_one();
     return 0;
 }
 
@@ -785,7 +885,10 @@ static int order_flush(block_device_t *dev)
 /** Let go of `b`, held by the caller, and wake whoever waits for it. */
 static void let_go(struct bbuf *b)
 {
+    uint32_t flags = cache_lock();
+
     unhold(b);
+    cache_unlock(flags);
     wq_wake_all(&b->wq);
 }
 
@@ -803,8 +906,10 @@ static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags,
  * neighbours when it waits for nothing itself; then, on a
  * write-through disk, the flush; then `b`. One of them held by another
  * process lets `b` go for the wait, since that holder may be waiting for
- * `b`, and the caller looks again. At most two buffers are held at once:
- * `b`, and the `first` an `after` waits for while it is written.
+ * `b`, and the caller looks again; so does a `b` that a reader took since
+ * the caller's look. At most two buffers are held at once: `b`, and the
+ * `first` an `after` waits for while it is written. The caller holds the
+ * big lock.
  *
  * @return 0 with `b` written; 1 after a wait, with `b` unwritten; or the
  *         -errno of a failed write or flush, which leaves `b` dirty, or
@@ -819,14 +924,28 @@ static int write_follower(struct bbuf *b, uint32_t flags)
 
     k_memset(&any, 0, sizeof(any));
 
-    hold(b);
+    if (!try_hold(b)) {
+        (void)wait_other(b);
+        return 1;
+    }
     while (rc == 0 && (d = way_to(b)) != 0) {
-        if (d->holder == caller_pid()) {
-            rc = -EIO;
-        } else if (d->holder != -1) {
-            let_go(b);
-            wait_unheld(d);
+        uint32_t lf = cache_lock();
+        int holder = d->holder;
+
+        if (holder != -1 && holder != caller_pid()) {
+            unhold(b);
+            d->waiters++;
+            cache_unlock(lf);
+            wq_wake_all(&b->wq);
+            wq_wait_event_nointr(&d->wq, busy_gone, d);
+            lf = cache_lock();
+            d->waiters--;
+            cache_unlock(lf);
             return 1;
+        }
+        cache_unlock(lf);
+        if (holder != -1) {
+            rc = -EIO;
         } else if (follows(d)) {
             rc = write_one(d, 0);
         } else {
@@ -846,7 +965,9 @@ static int write_follower(struct bbuf *b, uint32_t flags)
 
 /** Write the unheld buffer `b` alone, held across the write, with the
  * request `flags`, and wake whoever waits for it; one that `follows` goes
- * after what it waits for (`write_follower`), which may answer 1. */
+ * after what it waits for (`write_follower`). 1 after a wait for a holder
+ * that took `b` since the caller's look, or one `write_follower` gave.
+ * The caller holds the big lock. */
 static int write_one(struct bbuf *b, uint32_t flags)
 {
     int rc;
@@ -854,7 +975,10 @@ static int write_one(struct bbuf *b, uint32_t flags)
     if (follows(b)) {
         return write_follower(b, flags);
     }
-    hold(b);
+    if (!try_hold(b)) {
+        (void)wait_other(b);
+        return 1;
+    }
     rc = write_buffer_flags(b, flags);
     let_go(b);
     return rc;
@@ -866,12 +990,21 @@ static int write_one(struct bbuf *b, uint32_t flags)
  * would overwrite them in that window; a writer that finds it in use writes
  * its blocks one at a time, and a read fills its block alone. */
 static uint8_t *run_stage;
-static int run_stage_busy;
+static int run_stage_busy; /* under `cache_spin`, as `run_stage`'s first set */
 /* The block a run is being filled for: not a victim while the run's later
  * blocks are keyed, since the caller has let it go to key them and would
- * otherwise find it gone. */
+ * otherwise find it gone. Under `cache_spin`. */
 static struct bbuf *fill_keep;
-#define RUN_BLOCKS      (BLOCK_REQ_MAX_SECTORS / BCACHE_BLOCK_SECTORS)
+#define RUN_BLOCKS (BLOCK_REQ_MAX_SECTORS / BCACHE_BLOCK_SECTORS)
+
+/** Give the staging buffer back for the next run. */
+static void stage_free(void)
+{
+    uint32_t flags = cache_lock();
+
+    run_stage_busy = 0;
+    cache_unlock(flags);
+}
 /* The longest run a read fills: Linux's default readahead window of 128 KiB
  * (VM_READAHEAD_PAGES, include/linux/pagemap.h:1375, which bdi_init gives
  * every device, mm/backing-dev.c:1037). */
@@ -881,13 +1014,17 @@ static struct bbuf *fill_keep;
  * Gather in `run` the blocks a run from `first` writes (`write_run`):
  * `first`, then the dirty, unheld blocks after it that `scope` takes, of its
  * place in the order and its kind, as far as one request moves and half the
- * cache, while the staging buffer is free. Returns how many, at least 1.
+ * cache, while the staging buffer is free and nobody holds `first`. Returns
+ * how many, at least 1; a run of two or more is held whole and has the
+ * staging buffer, all in one step under `cache_spin`, so that no reader
+ * takes one of its blocks between the look and the hold.
  */
 static int run_gather(struct bbuf *first, struct bbuf **run, const struct sync_scope *scope)
 {
     block_device_t *dev = first->dev;
     uint32_t most = block_max_sectors(dev) / BCACHE_BLOCK_SECTORS;
-    int n = 1;
+    uint32_t flags;
+    int n = 1, i;
 
     run[0] = first;
     if (most > RUN_BLOCKS) {
@@ -896,10 +1033,11 @@ static int run_gather(struct bbuf *first, struct bbuf **run, const struct sync_s
     if (most > bcache_limit() / 2u) {
         most = bcache_limit() / 2u;
     }
+    flags = cache_lock();
     if (!run_stage && most > 1 && !run_stage_busy) {
         run_stage = kalloc_pages_try(RUN_BLOCKS * BCACHE_BLOCK_BYTES / PAGE_SIZE, 0);
     }
-    if (run_stage_busy || (follows(first) && way_to(first))) {
+    if (run_stage_busy || first->holder != -1 || (follows(first) && way_to(first))) {
         most = 1;
     }
     while ((uint32_t)n < most && run_stage && run[n - 1]->bytes == BCACHE_BLOCK_BYTES) {
@@ -912,6 +1050,13 @@ static int run_gather(struct bbuf *first, struct bbuf **run, const struct sync_s
         }
         run[n++] = b;
     }
+    if (n > 1) {
+        for (i = 0; i < n; i++) {
+            hold(run[i]);
+        }
+        run_stage_busy = 1;
+    }
+    cache_unlock(flags);
     return n;
 }
 
@@ -951,13 +1096,9 @@ static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags,
     if (n == 1) {
         return write_one(first, flags);
     }
-    run_stage_busy = 1;
-    for (i = 0; i < n; i++) {
-        hold(run[i]);
-    }
     rc = follows(first) ? order_flush(dev) : 0;
     if (rc != 0) {
-        run_stage_busy = 0;
+        stage_free();
         for (i = 0; i < n; i++) {
             let_go(run[i]);
         }
@@ -969,7 +1110,7 @@ static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags,
     }
     rc = block_request_flags(dev, 1, first->blk * BCACHE_BLOCK_SECTORS, bytes / BLOCK_SECTOR_SIZE,
                              run_stage, flags);
-    run_stage_busy = 0;
+    stage_free();
     if (rc != 0) {
         klog(KLOG_WARN, "bcache", "write: sector %d failed (%d), %d blocks kept dirty",
              (int)(first->blk * BCACHE_BLOCK_SECTORS), rc, n);
@@ -986,7 +1127,7 @@ static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags,
         let_go(run[i]);
     }
     if (rc == 0) {
-        write_gen++;
+        wrote_one();
     }
     *last = run[n - 1]->blk;
     return rc;
@@ -1058,7 +1199,8 @@ static int victim_fit(const struct bbuf *b, block_device_t *filling, struct firs
  * that stays unfit, such as one whose device fails its writes, costs a
  * read for each turn of the whole cache and not one for every miss. The
  * search stops at the first buffer it moved, which means every buffer was
- * passed over.
+ * passed over. `cache_spin` is held, and the big lock, which the tests of a
+ * dirty buffer read under.
  */
 static struct bbuf *victim_find(block_device_t *filling)
 {
@@ -1074,6 +1216,39 @@ static struct bbuf *victim_find(block_device_t *filling)
         lru_add_tail(b);
         if (!moved) {
             moved = b;
+        }
+    }
+    return 0;
+}
+
+/* The buffers at the head of the release order a miss without the big lock
+ * reads for a clean victim, before it takes the lock for the whole search. */
+#define CLEAN_LOOK 32
+
+/**
+ * A victim a miss may take without the big lock: an empty buffer, a new one
+ * while the cache is under its limit, or the least recently released clean
+ * buffer among the first CLEAN_LOOK of the release order that nobody holds
+ * and no fill keeps; NULL otherwise, for the search under the big lock,
+ * which writes a dirty one. A buffer nobody holds stays clean while
+ * `cache_spin` is held, since only a holder marks one dirty. `cache_spin`
+ * is held.
+ */
+static struct bbuf *victim_clean(void)
+{
+    struct bbuf *b = take_empty();
+    int n = 0;
+
+    if (!b && nbufs < bcache_limit()) {
+        b = buffer_new();
+    }
+    if (b) {
+        return b;
+    }
+    for (b = lru_head; b && n < CLEAN_LOOK; b = b->lru_next, n++) {
+        stat_visits++;
+        if (b->holder == -1 && b != fill_keep && !b->dirty) {
+            return b;
         }
     }
     return 0;
@@ -1133,42 +1308,60 @@ again:
 
 int bcache_cached(block_device_t *dev, uint64_t blk)
 {
-    return index_find(dev, blk) != 0;
+    uint32_t flags = cache_lock();
+    int cached = index_find(dev, blk) != 0;
+
+    cache_unlock(flags);
+    return cached;
 }
 
 int bcache_state(block_device_t *dev, uint64_t blk)
 {
+    uint32_t flags = cache_lock();
     struct bbuf *b = index_find(dev, blk);
+    int state = b == 0 ? 0 : b->dirty ? 2 : 1;
 
-    return b == 0 ? 0 : b->dirty ? 2 : 1;
+    cache_unlock(flags);
+    return state;
 }
 
 int bcache_copy_cached(block_device_t *dev, uint64_t blk, uint32_t offset, void *out,
                        uint32_t count)
 {
+    uint32_t flags = cache_lock();
     struct bbuf *b = index_find(dev, blk);
+    int copied = 0;
 
-    if (!b || b->discard || b->holder != -1 || offset > b->bytes || count > b->bytes - offset) {
-        return 0;
+    if (b && !b->discard && b->holder == -1 && offset <= b->bytes && count <= b->bytes - offset) {
+        k_memcpy(out, b->data + offset, count);
+        copied = 1;
     }
-    k_memcpy(out, b->data + offset, count);
-    return 1;
+    cache_unlock(flags);
+    return copied;
 }
 
 int bcache_busy(block_device_t *dev, uint64_t blk)
 {
+    uint32_t flags = cache_lock();
     struct bbuf *b = index_find(dev, blk);
+    int busy = b != 0 && b->holder != -1;
 
-    return b != 0 && b->holder != -1;
+    cache_unlock(flags);
+    return busy;
 }
 
 void bcache_wait_unheld(block_device_t *dev, uint64_t blk)
 {
-    struct bbuf *b;
+    for (;;) {
+        uint32_t flags = cache_lock();
+        struct bbuf *b = index_find(dev, blk);
 
-    while ((b = index_find(dev, blk)) != 0 && b->holder != -1) {
+        if (!b || b->holder == -1) {
+            cache_unlock(flags);
+            return;
+        }
         stat_waits++;
-        wait_unheld(b);
+        wait_unheld(b, flags);
     }
 }
 
@@ -1180,6 +1373,26 @@ struct bbuf *bcache_get(block_device_t *dev, uint64_t blk)
 struct bbuf *bcache_get_blank(block_device_t *dev, uint64_t blk)
 {
     return get(dev, blk, 1, 0);
+}
+
+/**
+ * Key clean buffer `b` to block `blk` of `dev` and hold it, under
+ * `cache_spin`; its bytes are not yet the block's.
+ */
+static void key_held(struct bbuf *b, block_device_t *dev, uint64_t blk)
+{
+    index_del(b);
+    b->dev = dev;
+    b->blk = blk;
+    index_add(b);
+    if (!b->lru_prev && lru_head != b) {
+        lru_add_tail(b);
+    }
+    set_clean(b);
+    b->order = 0;
+    b->discard = 0;
+    hold(b);
+    b->bytes = block_bytes(dev, blk);
 }
 
 /**
@@ -1202,13 +1415,22 @@ struct bbuf *bcache_get_blank(block_device_t *dev, uint64_t blk)
  * by a device that went while the buffer was held is cleared. NULL for a
  * block past the device's end, a cache with no buffer to give, or a failed
  * read.
+ *
+ * A hit and a miss that finds a clean victim near the head of the release
+ * order (`victim_clean`) take `cache_spin` alone, so a caller without the
+ * big lock reads a cached block without it, and fills one that the cache
+ * can make room for with no write taking it only for the device's read, as
+ * Linux's `__getblk_slow` (fs/buffer.c:1117) needs no global lock. A miss
+ * without the big lock that finds no clean victim takes the big lock for
+ * the whole search, whose writes of a dirty victim keep the order the dirty
+ * marks give, and lets it go at the return.
  */
 static struct bbuf *get(block_device_t *dev, uint64_t blk, int blank, int *fresh)
 {
-    struct bbuf *victim = 0;
-    struct bbuf *b;
+    struct bbuf *victim, *b;
+    uint32_t flags;
+    int big = 0, filled = blank;
 
-    bkl_assert_held();
     if (fresh) {
         *fresh = 0;
     }
@@ -1218,24 +1440,34 @@ static struct bbuf *get(block_device_t *dev, uint64_t blk, int blank, int *fresh
     check_hold_rules(dev, blk);
 
 again:
+    flags = cache_lock();
     b = index_find(dev, blk);
     if (b) {
-        while (b->holder != -1) {
+        if (b->holder != -1) {
             stat_waits++;
-            wait_unheld(b);
+            wait_unheld(b, flags);
+            goto again;
         }
-        if (b->dev == dev && b->blk == blk) {
-            hold(b);
-            stat_hits++;
-            return b;
-        }
+        hold(b);
+        stat_hits++;
+        cache_unlock(flags);
+        goto done;
+    }
+    if (!filled && dev == ahead_dev && blk == ahead_next) {
+        cache_unlock(flags);
+        filled = 1;
+        (void)fill_run(dev, blk);
         goto again;
     }
-    if (!blank && dev == ahead_dev && blk == ahead_next && fill_run(dev, blk)) {
-        goto again;
-    }
-
-    for (;;) {
+    if (!big && !bkl_held()) {
+        victim = victim_clean();
+        if (!victim) {
+            cache_unlock(flags);
+            bkl_enter();
+            big = 1;
+            goto again;
+        }
+    } else {
         victim = take_empty();
         if (!victim && nbufs < bcache_limit()) {
             victim = buffer_new();
@@ -1244,49 +1476,48 @@ again:
             victim = victim_find(dev);
         }
         if (!victim) {
+            cache_unlock(flags);
             klog(KLOG_WARN, "bcache", "get: no free buffer");
-            return 0;
+            goto done;
         }
-        if (!victim->dirty) {
-            break;
-        }
-        if (victim->order == BCACHE_ORDER_AFTER && write_firsts(victim->dev) != 0) {
-            goto again;
-        }
-        if (write_one(victim, 0) >= 0) {
+        if (victim->dirty) {
+            cache_unlock(flags);
+            if (victim->order != BCACHE_ORDER_AFTER || write_firsts(victim->dev) == 0) {
+                (void)write_one(victim, 0);
+            }
             goto again;
         }
     }
-    index_del(victim);
-    victim->dev = dev;
-    victim->blk = blk;
-    index_add(victim);
-    if (!victim->lru_prev && lru_head != victim) {
-        lru_add_tail(victim);
-    }
-    set_clean(victim);
-    victim->order = 0;
-    victim->discard = 0;
-    hold(victim);
-    victim->bytes = block_bytes(dev, blk);
+    key_held(victim, dev, blk);
+    cache_unlock(flags);
     if (fresh) {
         *fresh = 1;
     }
     if (blank) {
         k_memset(victim->data, 0, victim->bytes);
-        return victim;
+        b = victim;
+        goto done;
     }
-    if (block_request(dev, 0, blk * BCACHE_BLOCK_SECTORS, victim->bytes / BLOCK_SECTOR_SIZE,
-                      victim->data) != 0) {
+    if (device_read(dev, blk * BCACHE_BLOCK_SECTORS, victim->bytes / BLOCK_SECTOR_SIZE,
+                    victim->data) != 0) {
+        flags = cache_lock();
         unhold(victim);
         make_empty(victim);
+        cache_unlock(flags);
         wq_wake_all(&victim->wq);
-        return 0;
+        goto done;
     }
+    flags = cache_lock();
     stat_fills++;
     ahead_dev = dev;
     ahead_next = blk + 1;
-    return victim;
+    cache_unlock(flags);
+    b = victim;
+done:
+    if (big) {
+        bkl_exit();
+    }
+    return b;
 }
 
 /**
@@ -1313,12 +1544,15 @@ again:
  * cannot evict its first, and the caller's block, the first, is no victim
  * until every block is in; it is not held, since the caller may hold three
  * buffers already and a fourth would leave none for the run's own keying.
+ * The staging buffer and the count of writes are taken under `cache_spin`,
+ * so a fill runs with or without the big lock.
  */
 static int fill_run(block_device_t *dev, uint64_t blk)
 {
     uint32_t most = block_max_sectors(dev) / BCACHE_BLOCK_SECTORS;
     uint64_t whole = dev->sector_count / BCACHE_BLOCK_SECTORS;
-    uint32_t n, i, gen;
+    uint32_t n, i, gen, flags;
+    int in;
 
     if (most > READ_RUN_BLOCKS) {
         most = READ_RUN_BLOCKS;
@@ -1326,67 +1560,82 @@ static int fill_run(block_device_t *dev, uint64_t blk)
     if (most > bcache_limit() / 2u) {
         most = bcache_limit() / 2u;
     }
-    if (most <= 1 || run_stage_busy || blk >= whole) {
+    if (most <= 1 || blk >= whole) {
         return 0;
-    }
-    if (!run_stage) {
-        run_stage = kalloc_pages_try(RUN_BLOCKS * BCACHE_BLOCK_BYTES / PAGE_SIZE, 0);
-        if (!run_stage) {
-            return 0;
-        }
     }
     n = whole - blk < most ? (uint32_t)(whole - blk) : most;
     if (n <= 1) {
         return 0;
     }
+    flags = cache_lock();
+    if (!run_stage && !run_stage_busy) {
+        run_stage = kalloc_pages_try(RUN_BLOCKS * BCACHE_BLOCK_BYTES / PAGE_SIZE, 0);
+    }
+    if (run_stage_busy || !run_stage) {
+        cache_unlock(flags);
+        return 0;
+    }
     run_stage_busy = 1;
     gen = write_gen;
-    if (block_request(dev, 0, blk * BCACHE_BLOCK_SECTORS, n * BCACHE_BLOCK_SECTORS, run_stage) !=
-        0) {
-        run_stage_busy = 0;
+    cache_unlock(flags);
+    if (device_read(dev, blk * BCACHE_BLOCK_SECTORS, n * BCACHE_BLOCK_SECTORS, run_stage) != 0) {
+        stage_free();
         return 0;
     }
     for (i = 0; i < n; i++) {
         struct bbuf *b;
         int fresh;
 
-        if (index_find(dev, blk + i)) {
+        if (bcache_cached(dev, blk + i)) {
             continue;
         }
         b = get(dev, blk + i, 1, &fresh);
         if (!b) {
             break;
         }
+        flags = cache_lock();
         if (fresh && write_gen != gen) {
             unhold(b);
             make_empty(b);
+            cache_unlock(flags);
             wq_wake_all(&b->wq);
             break;
         }
         if (fresh) {
-            k_memcpy(b->data, run_stage + i * BCACHE_BLOCK_BYTES, BCACHE_BLOCK_BYTES);
             stat_fills++;
         }
         if (i == 0) {
             fill_keep = b;
         }
+        cache_unlock(flags);
+        if (fresh) {
+            k_memcpy(b->data, run_stage + i * BCACHE_BLOCK_BYTES, BCACHE_BLOCK_BYTES);
+        }
         bcache_release(b);
     }
+    flags = cache_lock();
     fill_keep = 0;
     run_stage_busy = 0;
     ahead_dev = dev;
     ahead_next = blk + n;
-    return index_find(dev, blk) != 0;
+    in = index_find(dev, blk) != 0;
+    cache_unlock(flags);
+    return in;
 }
 
 /* The stamp orders the buffers for the shrink; the release order is the
- * list. */
+ * list. A holder without the big lock has marked nothing dirty, so a
+ * discarded buffer it lets go of is clean, and emptying it needs no more
+ * than `cache_spin`. */
 void bcache_release(struct bbuf *b)
 {
+    uint32_t flags;
+
     if (!b || b->holder != caller_pid()) {
         k_panic("bcache: hold rule: a release by a process that does not hold the buffer");
         return;
     }
+    flags = cache_lock();
     unhold(b);
     b->stamp = ++clock_stamp;
     if (b->discard) {
@@ -1395,15 +1644,18 @@ void bcache_release(struct bbuf *b)
         lru_del(b);
         lru_add_tail(b);
     }
+    cache_unlock(flags);
     wq_wake_all(&b->wq);
 }
 
+/* The dirty lists are the big lock's. */
 void bcache_dirty(struct bbuf *b)
 {
     if (!b || b->holder != caller_pid()) {
         k_panic("bcache: hold rule: a dirty mark by a process that does not hold the buffer");
         return;
     }
+    bkl_assert_held();
     set_dirty(b);
 }
 
@@ -1447,6 +1699,7 @@ static int write_held(struct bbuf *b, uint32_t flags)
         k_panic("bcache: hold rule: a write by a process that does not hold the buffer");
         return -EIO;
     }
+    bkl_assert_held();
     if (b->dev->flags & BLOCK_WRITE_FAILED) {
         return -EROFS;
     }
@@ -1628,7 +1881,7 @@ static void check_sync_holds(const struct bbuf *b, block_device_t *dev)
  * The batch is gathered again from the start when a scan past the last
  * block written finds nothing, for what a wait passed over. After a wait
  * the batch goes on from the same block, since a gather reads every dirty
- * buffer with the big lock held. A block written, emptied or keyed again
+ * buffer. A block written, emptied or keyed again
  * while the batch's writes slept is skipped. A block that waits for others
  * goes after them (`write_run`). A sync that holds the last blocks leaves
  * the afters too while any `first` is dirty, since their firsts may be
@@ -1659,17 +1912,20 @@ static int sync_batches(block_device_t *dev, int pass, struct sync_scope *scope,
             continue;
         }
         for (i = 0; i < n; i++) {
+            uint32_t flags = cache_lock();
             struct bbuf *next = index_find(dev, batch[i]);
             uint64_t last = 0;
             int rc;
 
             if (!next || !sync_wants(next, pass, scope) || next->blk < from) {
+                cache_unlock(flags);
                 continue;
             }
             if (next->holder != -1 && next->holder != caller_pid()) {
-                wait_unheld(next);
+                wait_unheld(next, flags);
                 rc = 1;
             } else {
+                cache_unlock(flags);
                 check_sync_holds(next, dev);
                 rc = write_run(
                     next, &last,
@@ -1845,16 +2101,19 @@ int bcache_sync_owned(block_device_t *dev, uint64_t owner)
  * the caller looks at its own state between the calls. */
 int bcache_sync_block_ready(block_device_t *dev, uint64_t blk)
 {
+    uint32_t flags = cache_lock();
     struct bbuf *b = index_find(dev, blk), *d;
     int rc;
 
     if (!b || !b->dirty) {
+        cache_unlock(flags);
         return 0;
     }
     if (b->holder != -1 && b->holder != caller_pid()) {
-        wait_unheld(b);
+        wait_unheld(b, flags);
         return 1;
     }
+    cache_unlock(flags);
     d = way_to(b);
     if (!d) {
         return 0;
@@ -1862,8 +2121,7 @@ int bcache_sync_block_ready(block_device_t *dev, uint64_t blk)
     if (d->holder == caller_pid()) {
         return -EIO;
     }
-    if (d->holder != -1) {
-        wait_unheld(d);
+    if (wait_other(d)) {
         return 1;
     }
     rc = write_one(d, d->order == BCACHE_ORDER_FIRST ? 0 : unflushed_flags(dev));
@@ -1876,16 +2134,19 @@ int bcache_sync_block_ready(block_device_t *dev, uint64_t blk)
 int bcache_sync_block(block_device_t *dev, uint64_t blk)
 {
     for (;;) {
+        uint32_t flags = cache_lock();
         struct bbuf *b = index_find(dev, blk);
         int rc;
 
         if (!b || !b->dirty) {
+            cache_unlock(flags);
             return 0;
         }
         if (b->holder != -1 && b->holder != caller_pid()) {
-            wait_unheld(b);
+            wait_unheld(b, flags);
             continue;
         }
+        cache_unlock(flags);
         check_sync_holds(b, dev);
         rc = write_one(b, b->order == BCACHE_ORDER_FIRST ? 0 : unflushed_flags(dev));
         if (rc <= 0) {
@@ -1897,9 +2158,12 @@ int bcache_sync_block(block_device_t *dev, uint64_t blk)
 void bcache_device_gone(block_device_t *dev)
 {
     struct bbuf *b;
+    uint32_t flags;
 
+    bkl_assert_held();
     vfs_device_failed(dev, 0, -EIO);
     dev->flags |= BLOCK_GONE;
+    flags = cache_lock();
     for (b = bufs; b; b = b->next) {
         stat_visits++;
         if (b->dev != dev) {
@@ -1912,11 +2176,13 @@ void bcache_device_gone(block_device_t *dev)
         }
         make_empty(b);
     }
+    cache_unlock(flags);
 }
 
 int bcache_device_holds(block_device_t *dev)
 {
     const struct bbuf *b;
+    uint32_t flags = cache_lock();
     int held = 0;
 
     for (b = bufs; b; b = b->next) {
@@ -1925,12 +2191,13 @@ int bcache_device_holds(block_device_t *dev)
             held++;
         }
     }
+    cache_unlock(flags);
     return held;
 }
 
 /** The least recently released dirty buffer the shrink may write and
  * free, or NULL: unheld, unwaited for, and one the eviction too could
- * write. */
+ * write. `cache_spin` is held, and the big lock. */
 static struct bbuf *shrink_dirty(void)
 {
     struct bbuf *b;
@@ -1960,15 +2227,19 @@ static struct bbuf *shrink_dirty(void)
  * process waits for is left, woken or not, since the waiter has its
  * address; so is one dirtied again or waited for while its write slept.
  * The writing pass has a budget, so a buffer dirtied again as fast as it is
- * written cannot keep the shrink here.
+ * written cannot keep the shrink here. A written buffer is freed only if,
+ * under `cache_spin` again, it is clean and nobody holds it or waits for
+ * it, since a reader may have taken it once its write let it go. The
+ * caller holds the big lock, as reclaim does.
  */
 uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
 {
     struct bbuf **link = &empties;
     struct bbuf *b, *next;
-    uint32_t got = 0;
+    uint32_t got = 0, flags;
     int budget = (int)nbufs * 2;
 
+    flags = cache_lock();
     while (got < want && *link) {
         b = *link;
         stat_visits++;
@@ -1990,10 +2261,13 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
         buffer_free(b);
         got++;
     }
+    cache_unlock(flags);
     while (can_write && got < want && budget-- > 0) {
         int rc;
 
+        flags = cache_lock();
         b = shrink_dirty();
+        cache_unlock(flags);
         if (!b) {
             break;
         }
@@ -2001,12 +2275,18 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
             continue;
         }
         rc = write_one(b, 0);
-        if (rc != 0 || b->dirty || b->waiters > 0) {
+        if (rc != 0) {
+            continue;
+        }
+        flags = cache_lock();
+        if (b->dirty || b->holder != -1 || b->waiters > 0) {
+            cache_unlock(flags);
             continue;
         }
         (*written)++;
         buffer_free(b);
         got++;
+        cache_unlock(flags);
     }
     return got;
 }
@@ -2016,12 +2296,12 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
  * write, as far as `want`: the empties, the room under the limit, and the
  * clean buffers `victim_find` reaches first. Returns the first dirty buffer
  * in the way, which a miss would write, or NULL when `want` were found or
- * the release order has ended.
+ * the release order has ended. The caller holds the big lock.
  */
 static struct bbuf *reserve_walk(block_device_t *dev, uint32_t want, uint32_t *ready)
 {
     struct first_ask ask = {0, 0};
-    uint32_t limit = bcache_limit();
+    uint32_t limit = bcache_limit(), flags = cache_lock();
     uint32_t have = nbufs < limit ? limit - nbufs : 0;
     const struct bbuf *e;
     struct bbuf *b;
@@ -2040,11 +2320,13 @@ static struct bbuf *reserve_walk(block_device_t *dev, uint32_t want, uint32_t *r
         }
         if (b->dirty) {
             *ready = have;
+            cache_unlock(flags);
             return b;
         }
         have++;
     }
     *ready = have;
+    cache_unlock(flags);
     return 0;
 }
 
@@ -2089,10 +2371,12 @@ uint32_t bcache_reserve(block_device_t *dev, uint32_t n)
 int bcache_invalidate(block_device_t *dev)
 {
     struct bbuf *b;
+    uint32_t flags = cache_lock();
 
     for (b = bufs; b; b = b->next) {
         stat_visits++;
         if (b->dev == dev && (b->holder != -1 || b->dirty)) {
+            cache_unlock(flags);
             return -EBUSY;
         }
     }
@@ -2102,6 +2386,7 @@ int bcache_invalidate(block_device_t *dev)
             make_empty(b);
         }
     }
+    cache_unlock(flags);
     dev->flags &= ~BLOCK_WRITE_FAILED;
     return 0;
 }

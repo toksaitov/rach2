@@ -1,0 +1,120 @@
+FAIL pmu (77 tests, 30 unexpected failures, 10 skipped)
+SKIP pmu_lbr (1 tests, 1 skipped)
+SKIP pmu_pebs (1 tests, 1 skipped)
+kvm-corpus: pmu: fail: expected pass
+/bin/qemu-system-x86_64 --no-reboot -nodefaults -global kvm-pit.lost_tick_policy=discard -device pc-testdev -device isa-debug-exit,iobase=0xf4,iosize=0x4 -display none -serial stdio -device pci-testdev -machine accel=kvm,kernel-irqchip=split -kernel x86/pmu.flat -smp 1 -cpu max # -initrd /tmp/tmp.LjGdW8l3nw
+enabling apic
+smp: waiting for 0 APs
+paging enabled
+cr0 = 80010011
+cr3 = 1047000
+cr4 = 20
+PASS: Expected #GP on RDPMC(64)
+PMU version:         0
+GP counters:         6
+GP counter width:    48
+Event Mask length:   32
+Arch Events (mask):  0xffffffff
+Fixed counters:      0
+Fixed counter width: 0
+PASS: AMD: core cycles-0
+PASS: AMD: core cycles-1
+PASS: AMD: core cycles-2
+PASS: AMD: core cycles-3
+PASS: AMD: core cycles-4
+PASS: AMD: core cycles-5
+FAIL: 10000000 <= 10441189 <= 10200000
+FAIL: AMD: instructions-0
+FAIL: 10000000 <= 10410014 <= 10200000
+FAIL: AMD: instructions-1
+FAIL: 10000000 <= 10454123 <= 10200000
+FAIL: AMD: instructions-2
+FAIL: 10000000 <= 10524962 <= 10200000
+FAIL: AMD: instructions-3
+FAIL: 10000000 <= 10425954 <= 10200000
+FAIL: AMD: instructions-4
+FAIL: 10000000 <= 10700628 <= 10200000
+FAIL: AMD: instructions-5
+PASS: AMD: branches-0
+FAIL: 1000000 <= 1104240 <= 1100000
+FAIL: AMD: branches-1
+FAIL: 1000000 <= 1105294 <= 1100000
+FAIL: AMD: branches-2
+FAIL: 1000000 <= 1103547 <= 1100000
+FAIL: AMD: branches-3
+FAIL: 1000000 <= 1109756 <= 1100000
+FAIL: AMD: branches-4
+FAIL: 1000000 <= 1108219 <= 1100000
+FAIL: AMD: branches-5
+PASS: AMD: branch misses-0
+PASS: AMD: branch misses-1
+PASS: AMD: branch misses-2
+PASS: AMD: branch misses-3
+PASS: AMD: branch misses-4
+PASS: AMD: branch misses-5
+PASS: AMD: rdpmc: cntr-0
+SKIP: AMD: rdpmc: fast-0
+PASS: AMD: rdpmc: cntr-1
+SKIP: AMD: rdpmc: fast-1
+PASS: AMD: rdpmc: cntr-2
+SKIP: AMD: rdpmc: fast-2
+PASS: AMD: rdpmc: cntr-3
+SKIP: AMD: rdpmc: fast-3
+PASS: AMD: rdpmc: cntr-4
+SKIP: AMD: rdpmc: fast-4
+PASS: AMD: rdpmc: cntr-5
+SKIP: AMD: rdpmc: fast-5
+FAIL: 10000000 <= 12759413 <= 10200000
+FAIL: AMD: all counters
+FAIL: AMD: overflow: cntr-0
+FAIL: AMD: overflow: cntr-1
+FAIL: AMD: overflow: cntr-2
+FAIL: AMD: overflow: cntr-3
+FAIL: AMD: overflow: cntr-4
+FAIL: AMD: overflow: cntr-5
+PASS: AMD: cmask
+PASS: AMD: running counter wrmsr: cntr
+PASS: AMD: K7: core cycles-0
+PASS: AMD: K7: core cycles-1
+PASS: AMD: K7: core cycles-2
+PASS: AMD: K7: core cycles-3
+FAIL: 10000000 <= 10441244 <= 10200000
+FAIL: AMD: K7: instructions-0
+FAIL: 10000000 <= 10767419 <= 10200000
+FAIL: AMD: K7: instructions-1
+FAIL: 10000000 <= 10452981 <= 10200000
+FAIL: AMD: K7: instructions-2
+FAIL: 10000000 <= 10396086 <= 10200000
+FAIL: AMD: K7: instructions-3
+FAIL: 1000000 <= 1104350 <= 1100000
+FAIL: AMD: K7: branches-0
+PASS: AMD: K7: branches-1
+FAIL: 1000000 <= 1110673 <= 1100000
+FAIL: AMD: K7: branches-2
+FAIL: 1000000 <= 1140045 <= 1100000
+FAIL: AMD: K7: branches-3
+PASS: AMD: K7: branch misses-0
+PASS: AMD: K7: branch misses-1
+PASS: AMD: K7: branch misses-2
+PASS: AMD: K7: branch misses-3
+PASS: AMD: K7: rdpmc: cntr-0
+SKIP: AMD: K7: rdpmc: fast-0
+PASS: AMD: K7: rdpmc: cntr-1
+SKIP: AMD: K7: rdpmc: fast-1
+PASS: AMD: K7: rdpmc: cntr-2
+SKIP: AMD: K7: rdpmc: fast-2
+PASS: AMD: K7: rdpmc: cntr-3
+SKIP: AMD: K7: rdpmc: fast-3
+FAIL: 10000000 <= 11064944 <= 10200000
+FAIL: AMD: K7: all counters
+FAIL: AMD: K7: overflow: cntr-0
+FAIL: AMD: K7: overflow: cntr-1
+FAIL: AMD: K7: overflow: cntr-2
+FAIL: AMD: K7: overflow: cntr-3
+PASS: AMD: K7: cmask
+PASS: AMD: K7: running counter wrmsr: cntr
+SUMMARY: 77 tests, 30 unexpected failures, 10 skipped
+
+kvm-corpus: pmu_lbr: skip: as expected
+kvm-corpus: pmu_pebs: skip: as expected
+kvm-corpus: result: fail: 1 of 3: pmu

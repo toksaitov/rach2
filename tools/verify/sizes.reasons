@@ -94,7 +94,6 @@ rach2/sys/drm/i915/i915_vma.c:i915_ggtt_find params 7 the parameters are one sea
 
 rach2/sys/drm/i915/intel_vblank.c:crtc_scanoutpos params 7 the parameters are Linux's get_scanout_position's, the hook the DRM core's timestamp helper calls
 
-rach2/sys/fs/bcache.c:get complexity 35 one file system operation over the on-disk format, each step a rule of the format
 
 rach2/sys/fs/dcache.c:keep params 7 the parameters are one lookup's directory, name, hash and answer, and the generation it was made under
 
@@ -530,7 +529,6 @@ tests/host/pipe_ring_hosttest.c:main lines 104 a test's rows, each a case, read 
 
 tests/host/poll_select_hosttest.c:main lines 183 a test's rows, each a case, read as one table
 
-tests/host/process_timer_hosttest.c:main lines 116 a test's rows, each a case, read as one table
 
 tests/host/pwauth_hosttest.c:check_fork complexity 31 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_fork lines 101 a test's rows, each a case, read as one table

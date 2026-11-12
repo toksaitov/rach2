@@ -378,6 +378,18 @@ struct process {
      * zero, since the child inherits no timer; an exec keeps them. */
     uint64_t alarm_tick;
     uint64_t alarm_interval;
+    /* The signals of the tick, as bits `1u << signo` of SIGALRM, SIGVTALRM
+     * and SIGPROF, that a tick found due without the big lock and left for a
+     * holder of it to post (`proc_tick_signal`), and the link of the list of
+     * records with any (`tick_post_next`, `tick_post_linked`), under the
+     * list's spinlock in process.c. `alarm_due` is set, under the timer
+     * list's lock, while the real-time timer's SIGALRM waits there, so that
+     * the timer pass marks it once, and cleared when the alarm is set again
+     * (`proc_alarm_set`). */
+    uint32_t tick_sigs;
+    int tick_post_linked;
+    struct process *tick_post_next;
+    int alarm_due;
     /* The user address set_tid_address and CLONE_CHILD_CLEARTID name, whose
      * word is cleared and woken when the thread ends and another thread
      * shares the address space; 0 for none. */
@@ -642,7 +654,7 @@ struct process {
     struct process *pid_next;
     struct proc_user_count *user_count;
     /* Active timed waits and real alarms only; timer_linked marks
-     * membership. */
+     * membership. Under the timer list's spinlock in process.c. */
     struct process *timer_prev, *timer_next;
     int timer_linked;
     /* The waits for the disk this thread has finished in the block layer,
@@ -784,10 +796,44 @@ int proc_set_ruid(process_t *p, uint32_t uid);
 /** Records charged to p's real uid, under the big kernel lock. */
 uint32_t proc_user_records(const process_t *p);
 
-/** Refresh membership after changing a deadline, alarm or state.
- * Hold the big kernel lock; this masks local interrupts while changing links.
- */
+/** Refresh membership after changing a deadline, alarm or state. The
+ * list has a spinlock of its own, which this takes with interrupts off, and
+ * which comes after the run queues' lock: the caller may hold that lock, or
+ * none, or the big lock. */
 void proc_timer_update(process_t *p);
+
+/**
+ * Set `p`'s real-time timer: its SIGALRM due at the tick `tick`, 0 to
+ * disarm it, and again every `interval` ticks after, 0 for one signal.
+ * Under the timer list's lock, since the tick reads the timer without the
+ * big lock; a SIGALRM of the old setting that the tick marked and no holder
+ * has posted yet is dropped, as Linux's setitimer cancels its timer before
+ * it sets the new one. The caller holds the big lock.
+ */
+void proc_alarm_set(process_t *p, uint64_t tick, uint64_t interval);
+
+/**
+ * Leave the signal `signo` of the tick, SIGALRM, SIGVTALRM or SIGPROF, for
+ * `p`, to be posted by the next holder of the big lock: a tick's locked
+ * part (`proc_tick_signals_post`) or `p`'s own return to user mode
+ * (`proc_tick_signals_own`), as Linux 6.12.115 hands a CPU timer's expiry to
+ * the task's own return (kernel/time/posix-cpu-timers.c:1274). The tick
+ * calls it without the big lock, with interrupts off; `p` is alive by the
+ * caller's lock or because it is the processor's current thread.
+ */
+void proc_tick_signal(process_t *p, int signo);
+
+/** Nonzero while some record has signals of the tick waiting to be posted;
+ * read without a lock by a tick deciding whether to try the big lock. */
+int proc_tick_signals_due(void);
+
+/** Post the signals of the tick every record has waiting, each SIGALRM
+ * followed by its timer's next setting. The caller holds the big lock. */
+void proc_tick_signals_post(void);
+
+/** Post the signals of the tick the current thread has waiting, at its
+ * return to user mode. The caller holds the big lock. */
+void proc_tick_signals_own(void);
 
 /** Work since boot: pid bucket entries, uid bucket entries, timer entries
  * and timer passes. The index is 0, 1, 2 or 3; counters wrap modulo 2^32.
@@ -944,9 +990,11 @@ void proc_set_comm(process_t *p, const char *path);
 
 /**
  * Make ready each process BLOCKED in a timed sleep whose `wakeup_tick` has
- * come by the tick `now`, clearing it, and post SIGALRM to each process
- * whose real-time timer is due, arming it again for its interval or leaving
- * a single alarm disarmed. The boot processor's timer tick calls it.
+ * come by the tick `now`, clearing it, and mark the SIGALRM of each process
+ * whose real-time timer is due for a holder of the big lock to post
+ * (`proc_tick_signal`), which arms the timer again for its interval or
+ * leaves a single alarm disarmed. The tick that makes the clock's pass
+ * calls it, without the big lock and with interrupts off.
  */
 void proc_wake_sleepers(uint64_t now);
 

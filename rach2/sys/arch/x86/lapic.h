@@ -11,10 +11,12 @@
  * `lapic_init` enables it or refuses with the reason in the kernel log: a
  * processor without an APIC or without the model-specific registers, one
  * the firmware left in x2APIC mode with an identity xAPIC mode cannot
- * address, a base address this driver cannot map, or `rach2.nomsi` on the
- * boot line. It runs the APIC in x2APIC mode under a hypervisor that allows
- * it, and in xAPIC mode elsewhere until interrupt remapping moves it
- * (`lapic_x2apic_enable`). Every device driver asks `isr_msi_ready`, which is
+ * address where no remapping can come, a base address this driver cannot
+ * map, or `rach2.nomsi` on the boot line. It runs the APIC in x2APIC mode
+ * under a hypervisor that allows it, and in xAPIC mode elsewhere until
+ * interrupt remapping moves it (`lapic_x2apic_enable`); a firmware's x2APIC
+ * mode it keeps until remapping's format is known (`lapic_x2apic_settle`).
+ * Every device driver asks `isr_msi_ready`, which is
  * `lapic_ready`, before it programs a message, and stays on its legacy line
  * when the answer is no.
  *
@@ -57,27 +59,42 @@ int lapic_init(void);
 int lapic_x2apic(void);
 
 /** Whether the APIC is enabled and may run in x2APIC mode: it does, or the
- * processor offers it and the boot line has no `nox2apic`. Interrupt
+ * processor offers it and `nox2apic` did not take effect. Interrupt
  * remapping asks this before it chooses its x2APIC format. */
 int lapic_x2apic_possible(void);
+
+/** Whether `nox2apic` took effect: it is on the boot line, and the firmware
+ * did not leave the APIC in an x2APIC mode it locked or with an identity
+ * of 255 or more, where Linux's setup_nox2apic ignores it (apic.c, lines
+ * 1733 to 1754). /proc/cpuinfo then leaves out `x2apic`. */
+int lapic_nox2apic(void);
 
 /**
  * Move the boot processor's APIC to x2APIC mode, and every processor
  * started after it: 1 when it moved, 0 when it was in x2APIC mode already,
  * and -1 when `lapic_x2apic_possible` says no.
  *
- * For interrupt remapping (iommu/intremap.c), before it writes an entry in
- * the x2APIC format, as Linux's enable_IR_x2apic enables x2APIC mode only
- * once remapping is on. Called on the boot processor before the others
- * start; interrupts are off across the move.
+ * For interrupt remapping (iommu/intremap.c), once it is on in the x2APIC
+ * format and refuses the compatibility format, with the 8259 and the I/O
+ * APIC's lines masked, as Linux's enable_IR_x2apic moves it (apic.c, lines
+ * 1913 to 1926). The move keeps every register, the request and
+ * in-service registers among them; nothing moves the APIC back. Called on
+ * the boot processor before the others start, with interrupts off.
  */
 int lapic_x2apic_enable(void);
 
-/** Move the boot processor's APIC back to xAPIC mode, for interrupt
- * remapping that failed after `lapic_x2apic_enable`; nothing under a
- * hypervisor that allows x2APIC mode unremapped, or where the firmware
- * locked it. */
-void lapic_x2apic_disable(void);
+/**
+ * Keep or leave the x2APIC mode a firmware left, which `lapic_init` kept
+ * until now, once interrupt remapping has started in the x2APIC format
+ * (`remapped`) or has not, as Linux's try_to_enable_x2apic does (apic.c,
+ * lines 1820 to 1857): kept when remapped, left otherwise, and a panic
+ * where it can be neither, with an identity of 255 or more. Nothing when
+ * no such mode was kept. The devices' interrupts are live by then, so the
+ * leave masks the lines and lets the handlers take what was sent before
+ * it passes the disabled state. Called once, on the boot processor before
+ * the others start, after the VT-d units (platform.c), with interrupts on.
+ */
+void lapic_x2apic_settle(int remapped);
 
 /* The vector of the interprocessor interrupt (proc/smp.c): in the highest
  * priority class, so that a device's interrupt in service does not hold it

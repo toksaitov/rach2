@@ -158,6 +158,16 @@ void sched_make_ready(process_t *t)
     wakes++;
 }
 
+/** A signal's wake: make `t` ready, clearing its deadline, if it is blocked,
+ * and count the wakeup. */
+void sched_wake_signal(process_t *t)
+{
+    if (t->state == PROC_BLOCKED) {
+        t->wakeup_tick = 0;
+        sched_make_ready(t);
+    }
+}
+
 /** Reset the tracer, pid 10 with uid 5, as the current thread, and its
  * tracee, pid 11 with uid 7, seized and in a group stop. */
 static void setup(void)

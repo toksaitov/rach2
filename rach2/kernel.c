@@ -251,19 +251,33 @@ static void test_preempt(void);
 static void exec_program(int argc, char *argv[]);
 static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uintptr_t sp);
 
-/* For each processor past the boot one, the tick count its last tick with
- * the big lock saw, and how many of its ticks since saw it unchanged
- * (`timer_pass_late`); and the timer passes those processors made. */
+/* For each processor past the boot one, the tick count its last tick saw,
+ * and how many of its ticks since saw it unchanged (`timer_pass_late`); and
+ * the timer passes those processors made, under `clock_pass_lock`. */
 static uint64_t timer_seen[NR_CPUS];
 static uint32_t timer_unmoved[NR_CPUS];
 static uint32_t timer_passes_late;
+
+/* The clock's pass has one writer at a time, as Linux's `jiffies_lock`
+ * (kernel/time/tick-sched.c:91); a tick that finds another processor in the
+ * pass leaves the pass to it, since that one counts the ticks due from the
+ * reference whoever's tick it is. Row 11 of the lock order. */
+static struct spinlock clock_pass_lock = SPINLOCK_INIT_NAMED("clock_pass");
+
+/* The boot processor's ticks in a row whose try for the big lock failed,
+ * and the count at which its tick waits for the lock all the same, so that
+ * its periodic work runs at most this many ticks late. */
+static uint32_t boot_ticks_skipped;
+#define BOOT_TICK_SKIPS 4u
 
 /**
  * Advance the tick count and the uptime by the ticks the clock says this
  * interrupt counts (`timer_tick_clock`), none for one delivered again and
  * more than one for one that came late, carry the vDSO's clock on to the
  * tick (`vclock_tick`), and measure the gap since the last pass
- * (`latency_tick`). The caller holds the big lock with interrupts off.
+ * (`latency_tick`). The caller holds `clock_pass_lock` with interrupts off,
+ * and no big lock: readers of the tick on other processors read it inside
+ * its sequence count (`tick_count`, clock.c).
  */
 static void timer_clock_pass(void)
 {
@@ -284,31 +298,31 @@ static void timer_clock_pass(void)
 }
 
 /** Wake the timed sleepers and expire the timerfds whose tick has come; a
- * second pass at the same tick finds none. The caller holds the big lock. */
+ * second pass at the same tick finds none. Each has a lock of its own, and
+ * the caller holds no lock, the big lock included. */
 static void timer_wake_pass(void)
 {
-    proc_wake_sleepers(kernel_ticks);
-    timerfd_tick(kernel_ticks);
+    proc_wake_sleepers(tick_count());
+    timerfd_tick(tick_count());
 }
 
 /**
- * Whether this processor, not the boot one, whose tick has the big lock,
- * should make the timer pass: the tick count has not moved over two of its
- * ticks, so the boot processor's pass is a tick or more late, as when its
- * tick found the lock held, by a long call on this processor or another,
- * and ended without it (`_irq_router`, arch/x86/isr.c); and a
- * reference keeps the clock, so that any processor may count the tick
- * (`timer_tick_shared`), whose count then comes from the reference and not
- * from this processor's ticks. Linux's timers fire from whichever
- * processor's tick comes, and no futex, poll, epoll or timerfd timeout
- * waits on one processor's tick here either.
+ * Whether this processor, not the boot one, should make the clock's pass
+ * and the timer pass: the tick count has not moved over two of its ticks,
+ * so the boot processor's pass is a tick or more late, as when it runs with
+ * interrupts off; and a reference keeps the clock, so that any processor
+ * may count the tick (`timer_tick_shared`), whose count then comes from the
+ * reference and not from this processor's ticks. Linux's timers fire from
+ * whichever processor's tick comes, and no futex, poll, epoll or timerfd
+ * timeout waits on one processor's tick here either.
  */
 static int timer_pass_late(void)
 {
     uint32_t c = arch_cpu_id();
+    uint64_t now = tick_count();
 
-    if (timer_seen[c] != kernel_ticks) {
-        timer_seen[c] = kernel_ticks;
+    if (timer_seen[c] != now) {
+        timer_seen[c] = now;
         timer_unmoved[c] = 0;
         return 0;
     }
@@ -316,7 +330,6 @@ static int timer_pass_late(void)
         return 0;
     }
     timer_unmoved[c] = 0;
-    timer_passes_late++;
     return 1;
 }
 
@@ -325,104 +338,60 @@ uint32_t timer_late_passes(void)
     return timer_passes_late;
 }
 
-/**
- * End a tick's handler with `sched_preempt`. A tick that took the big lock
- * for itself marks the preempt (`bkl_tick_tail`), whose time to the hold's
- * end the hold's end charges; a tick that came inside a hold charges its
- * whole handler, from `start`, to `BKL_TICK_NESTED` first, since what it
- * does after is the interrupted hold's.
- */
-static void timer_preempt(int nested, uint64_t start)
+/** Make the clock's pass unless another processor is making it; 1 when
+ * this tick made it. `late` counts a pass made for a late boot processor. */
+static int timer_clock_try(int late)
 {
-    if (nested) {
-        (void)bkl_tick_charge(BKL_TICK_NESTED, start);
-    } else {
-        bkl_tick_tail();
+    if (!spin_trylock(&clock_pass_lock)) {
+        return 0;
     }
-    sched_preempt();
+    if (late) {
+        timer_passes_late++;
+    }
+    timer_clock_pass();
+    spin_unlock(&clock_pass_lock);
+    return 1;
 }
 
 /**
- * Service a processor's tick, TICK_HZ a second, and preempt its current
- * process.
- *
- * Every processor has its own tick; a processor other than the boot one
- * accounts it and preempts, and makes the timer pass below only when the
- * boot processor's is late (`timer_pass_late`). The boot processor's tick
- * makes the timer pass, which advances the tick count, carries the vDSO's
- * clock on and wakes the sleepers and timerfds whose time has come
- * (`timer_clock_pass`, `timer_wake_pass`), and runs the periodic work of
- * the kernel: the HDA tick for a controller whose
- * interrupts do not arrive, the network device that is polled, the TCP
- * timers, IPv6 neighbour discovery's and MLD's timers, the loopback
- * delivery, the USB controller's event ring, the
- * keyboards' repeat, after the USB reports that may press or release a key,
- * the block layer's lagged requests and deadlines, the platform's devices,
- * vkms's vblank timer, the end of a speaker's tone and the console's serial
- * port; last it writes out the log records kept for a holder of the big lock
- * (`klog_flush`).
- *
- * The tick is accounted as idle or busy first, before anything below can
- * wake a process: the accounting records what the processor was doing when
- * this tick arrived, not what it is about to do, and a busy tick is charged
- * to the process it interrupted, as user time when the interrupted code
- * segment is ring 3's and as system time otherwise. The datagrams on the
- * loopback ring when every processor is halted in an idle wait are counted
- * then too, before the TCP timers can send onto it (`ip_loop_count_idle`).
- * The sleepers are woken whether or not the current process is in a system
- * call, so one parked inside its call becomes runnable on time. A polled
- * network device has its turn before the layers above, so a frame that
- * arrived since the last tick is delivered in the tick that acts on it; a
- * device that raises interrupts has no poll, and the call costs it a null
- * check. The handler runs with interrupts off, which the network stack's
- * shared buffers require, and nothing it calls waits on hardware.
- *
- * Then the handler reschedules through `sched_preempt`: at once when the
- * current process is in user mode, and at the call's exit when it is
- * inside a system call, since a switch in the middle of one is unsafe;
- * timer IRQs stay enabled during a call to keep the clock, the timers and
- * the HDA service's wake requests going.
- * A kernel thread defers the switch to its next sleep or service point
- * (`no_tick_switch`), as Linux without CONFIG_PREEMPTION does, since its
- * work changes state that only the big lock guards. Process 0 and the
- * debug shell's test threads are switched at once, unless inside klog
- * (`klog_inside`), in a record, a console write or a console byte, as
- * process 0 is while the debug shell prints a line; such a thread gives way
- * at a later tick.
+ * Take the big lock for the tick's locked part, or return 0 to leave that
+ * part to a later tick. Another processor's tick tries the lock only when
+ * signals of the tick wait to be posted, and only tries it. The boot
+ * processor's tries it every tick for its periodic work, and waits for it
+ * at the BOOT_TICK_SKIPS'th try in a row that failed, so that the work is
+ * at most that late. Interrupts are off.
  */
-static void timer_handler(isr_params_t *params)
+static int timer_lock_take(int boot)
 {
-    struct percpu *cpu = this_cpu();
-    int nested = cpu->bkl_depth > 1;
-    uint64_t start = arch_cycles(), t = start;
-
-    if (!nested) {
-        t = bkl_tick_charge(BKL_TICK_ENTRY, cpu->bkl_since);
-        start = t;
+    if (!boot && !proc_tick_signals_due() && !ptimer_posts_due()) {
+        return 0;
     }
-    if (arch_cpu_id() != 0) {
-        sched_account_tick(FRAME_USER(params) != 0);
-        t = bkl_tick_charge(BKL_TICK_AP_ACCOUNT, t);
-        if (timer_pass_late()) {
-            timer_clock_pass();
-            timer_wake_pass();
+    if (bkl_try_enter()) {
+        if (boot) {
+            boot_ticks_skipped = 0;
         }
-        (void)bkl_tick_charge(BKL_TICK_AP_LATE_PASS, t);
-        timer_preempt(nested, start);
-        return;
+        return 1;
     }
-    timer_clock_pass();
-    t = bkl_tick_charge(BKL_TICK_CLOCK, t);
+    if (!boot || ++boot_ticks_skipped < BOOT_TICK_SKIPS) {
+        return 0;
+    }
+    boot_ticks_skipped = 0;
+    bkl_enter();
+    return 1;
+}
 
-    sched_account_tick(FRAME_USER(params) != 0);
+/**
+ * The boot processor's work under the big lock, from the cycle count `t`:
+ * the load average and the idle count of the loopback ring, then the
+ * periodic services, each charged to its row. The caller holds the lock.
+ */
+static void timer_locked_work(uint64_t t)
+{
     sched_load_tick();
     if (sched_all_idle()) {
         ip_loop_count_idle();
     }
-    t = bkl_tick_charge(BKL_TICK_ACCOUNT, t);
-
-    timer_wake_pass();
-    t = bkl_tick_charge(BKL_TICK_WAKE, t);
+    t = bkl_tick_charge(BKL_TICK_LOAD, t);
 
     hda_tick();
     t = bkl_tick_charge(BKL_TICK_HDA, t);
@@ -460,8 +429,112 @@ static void timer_handler(isr_params_t *params)
     t = bkl_tick_charge(BKL_TICK_CONSOLE, t);
     klog_flush();
     (void)bkl_tick_charge(BKL_TICK_KLOG, t);
+}
 
-    timer_preempt(nested, start);
+/**
+ * Service a processor's tick, TICK_HZ a second, and preempt its current
+ * process.
+ *
+ * The tick runs without the big lock, as Linux's does
+ * (`tick_sched_handle`, kernel/time/tick-sched.c:253-278, and
+ * `update_process_times`, kernel/time/timer.c:2514-2529), in two parts. The
+ * first runs on every tick, each step under a spinlock of its own. The boot
+ * processor's tick makes the clock's pass, which advances the tick count
+ * and carries the vDSO's clock on (`timer_clock_pass`), under
+ * `clock_pass_lock`, one writer at a time; another processor's tick makes
+ * it only when the boot processor's is late (`timer_pass_late`), and none
+ * makes it while another is in it. Every tick then accounts itself as idle
+ * or busy (`sched_account_tick`), and the tick that made the clock's pass
+ * makes the timer pass, which wakes the sleepers and timerfds whose time
+ * has come (`timer_wake_pass`). A signal the accounting or the timer pass
+ * finds due, SIGALRM, SIGVTALRM, SIGPROF or a POSIX timer's, is left for a
+ * holder of the big lock to post (`proc_tick_signal`, `ptimer_fire_later`,
+ * timerfd.c), since signals are posted under it; the timer is set again
+ * only once its signal is posted.
+ *
+ * The second part takes the big lock, by a try, for the work that still
+ * needs it (`timer_lock_take`): the signals of the tick are posted, and on
+ * the boot processor the load average is folded and the kernel's periodic
+ * work runs: the HDA tick for a controller whose interrupts do not arrive,
+ * the network device that is polled, the TCP timers, IPv6 neighbour
+ * discovery's and MLD's timers, the loopback delivery, the USB
+ * controller's event ring, the keyboards' repeat, after the USB reports
+ * that may press or release a key, the block layer's lagged requests and
+ * deadlines, the platform's devices, vkms's vblank timer, the end of a
+ * speaker's tone and the console's serial port; last it writes out the log
+ * records kept for a holder of the big lock (`klog_flush`). A tick that
+ * does not get the lock leaves this part to a later one, and a thread's own
+ * return to user mode posts its signals of the tick (`isr_leave`).
+ *
+ * The tick is accounted as idle or busy before the timer pass can wake a
+ * process: the accounting records what the processor was doing when this
+ * tick arrived, not what it is about to do, and a busy tick is charged to
+ * the process it interrupted, as user time when the interrupted code
+ * segment is ring 3's and as system time otherwise; on the boot processor
+ * the clock's pass comes first, so that the ticks it counts are charged by
+ * this tick. The datagrams on the loopback ring when every processor is
+ * halted in an idle wait are counted in the locked part, before the TCP
+ * timers can send onto it (`ip_loop_count_idle`). The sleepers are woken
+ * whether or not the current process is in a system call, so one parked
+ * inside its call becomes runnable on time. A polled network device has
+ * its turn before the layers above, so a frame that arrived since the last
+ * tick is delivered in the tick that acts on it; a device that raises
+ * interrupts has no poll, and the call costs it a null check. The handler
+ * runs with interrupts off, which the network stack's shared buffers
+ * require, and nothing it calls waits on hardware.
+ *
+ * Then the handler reschedules through `sched_preempt`, with the lock let
+ * go: at once when the current process is in user mode, and at the call's
+ * exit when it is inside a system call, since a switch in the middle of one
+ * is unsafe; timer IRQs stay enabled during a call to keep the clock, the
+ * timers and the HDA service's wake requests going. A kernel thread defers
+ * the switch to its next sleep or service point (`no_tick_switch`), as
+ * Linux without CONFIG_PREEMPTION does, since its work changes state that
+ * only the big lock guards. Process 0 and the debug shell's test threads
+ * are switched at once, unless inside klog (`klog_inside`), in a record, a
+ * console write or a console byte, as process 0 is while the debug shell
+ * prints a line; such a thread gives way at a later tick.
+ *
+ * Each part's time is charged to its row of `bkl/tick` (`bkl_tick_charge`);
+ * a locked part that ran inside a hold of the code the tick interrupted is
+ * also charged to `nested`, since its time is that hold's.
+ */
+static void timer_handler(isr_params_t *params)
+{
+    int boot = arch_cpu_id() == 0;
+    int nested = this_cpu()->bkl_depth > 0;
+    int passed = 0;
+    uint64_t t = arch_cycles(), start;
+
+    if (boot) {
+        passed = timer_clock_try(0);
+        t = bkl_tick_charge(BKL_TICK_CLOCK, t);
+    }
+    sched_account_tick(FRAME_USER(params) != 0);
+    t = bkl_tick_charge(BKL_TICK_ACCOUNT, t);
+    if (!boot && timer_pass_late()) {
+        passed = timer_clock_try(1);
+        t = bkl_tick_charge(BKL_TICK_CLOCK, t);
+    }
+    if (passed) {
+        timer_wake_pass();
+        t = bkl_tick_charge(BKL_TICK_WAKE, t);
+    }
+
+    if (timer_lock_take(boot)) {
+        start = t = bkl_tick_charge(BKL_TICK_LOCK, t);
+        proc_tick_signals_post();
+        ptimer_post_due();
+        t = bkl_tick_charge(BKL_TICK_SIGNALS, t);
+        if (boot) {
+            timer_locked_work(t);
+        }
+        if (nested) {
+            (void)bkl_tick_charge(BKL_TICK_NESTED, start);
+        }
+        bkl_exit();
+    }
+    sched_preempt();
 }
 
 /**

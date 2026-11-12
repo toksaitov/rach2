@@ -23,7 +23,9 @@ struct speaker_counters {
     uint32_t cuts;         /* tones and sounds a later request ended or replaced */
     uint32_t divisor;      /* the last tone's or sound's divisor */
     uint32_t ms;           /* the last tone's length in ms; 0 for a sound */
-    uint32_t beeps;        /* tones and sounds the beep generator began */
+    uint32_t beeps;        /* tones and sounds the beep generator began; while
+                              its driver's thread runs, those handed to the
+                              thread, sent or replaced before it sent them */
     uint32_t beep_divider; /* the generator's divider as last given, sent or
                               handed to its driver's thread; 0 silent */
     uint32_t beep_retries; /* stops the tick found the generator busy for and

@@ -25,6 +25,14 @@
  * every four to eight frames the machine has, a power of two set at boot, so
  * that a list stays a few entries long when the cache holds all the frames it
  * may take.
+ *
+ * `fc_lock`, a spinlock taken with interrupts off, covers both tables, the
+ * use order, the count and the counters of changes; the copies of pages and
+ * the reads of files run outside it, the frame of a page being read held by
+ * a reference. It comes after the page-table locks and before the temporary
+ * kernel slots, whose `kmap_temp` a hit copies under it, as Linux takes the
+ * `i_pages` lock under the page-table lock (mm/filemap.c:89-92), and no
+ * caller needs the big lock.
  */
 
 #include "filecache.h"
@@ -37,7 +45,8 @@
 #include "../fs/fd.h"
 #include "../fs/vfs.h"
 #include "../lib/kerrno.h"
-#include "../lib/kirq.h"
+#include "../lib/spinlock.h"
+#include "../proc/smp.h"
 #include "../klog.h"
 
 /* The fewest lists that each table has. */
@@ -74,6 +83,7 @@ struct fc_page {
     uint32_t pfn; /* the frame's number, its address over PAGE_SIZE */
 };
 
+static struct spinlock fc_lock = SPINLOCK_INIT_NAMED("filecache");
 static struct fc_page **buckets;
 static struct fc_inode **files;
 static uint32_t table_mask; /* the lists of each table, less one */
@@ -165,7 +175,7 @@ static uint32_t *fc_changes(const struct vfs_mount *mnt, uint64_t ino)
 }
 
 /** The record of the file `ino` of `mnt`, or NULL when the cache has none
- * of its pages. Interrupts must be off. */
+ * of its pages. Under `fc_lock`. */
 static struct fc_inode *fc_find(const struct vfs_mount *mnt, uint64_t ino)
 {
     struct fc_inode *file;
@@ -184,7 +194,7 @@ static int fc_current(const struct fc_inode *file, const struct fc_file *f)
     return file->generation == f->generation && file->size == f->size && file->mtime == f->mtime;
 }
 
-/** Page `pgoff` of `f` as the file is now, or NULL. Interrupts must be off. */
+/** Page `pgoff` of `f` as the file is now, or NULL. Under `fc_lock`. */
 static struct fc_page *fc_lookup(const struct fc_file *f, uint32_t pgoff)
 {
     struct fc_page *p;
@@ -308,7 +318,7 @@ static int fc_copy(uintptr_t to, void *to_buf, uintptr_t from, const void *from_
 static int fc_read(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, void *buf)
 {
     struct fc_page *p;
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&fc_lock);
     int hit = 0;
 
     p = fc_lookup(f, pgoff);
@@ -318,7 +328,7 @@ static int fc_read(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, void
             fc_use(p);
         }
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&fc_lock, flags);
     return hit;
 }
 
@@ -327,7 +337,7 @@ static int fc_read(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, void
  * records fit in an eighth of the heap; past either, the least recently used
  * page's record, whose frame goes back, while a sixteenth of the frames are
  * free, above the reserve that `mem_may_take` keeps, so that the new frame
- * is had; NULL otherwise. Interrupts must be off. */
+ * is had; NULL otherwise. Under `fc_lock`. */
 static struct fc_page *fc_new(void)
 {
     struct fc_page *p;
@@ -373,19 +383,19 @@ static int fc_insert(const struct fc_file *f, uint32_t pgoff, struct fc_page *p,
 {
     struct fc_page *old, **bucket;
     struct fc_inode *file, *spare = NULL;
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&fc_lock);
 
     file = fc_find(f->mnt, f->ino);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&fc_lock, flags);
     if (!file || !fc_current(file, f)) {
         spare = kzalloc(sizeof(*spare));
         if (!spare) {
             return 0;
         }
     }
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&fc_lock);
     if (epoch != *fc_changes(f->mnt, f->ino)) {
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&fc_lock, flags);
         kfree(spare);
         return 0;
     }
@@ -404,7 +414,7 @@ static int fc_insert(const struct fc_file *f, uint32_t pgoff, struct fc_page *p,
     }
     if (!file && !spare) {
         /* The file's record went since the look without the lock. */
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&fc_lock, flags);
         return 0;
     }
     if (!file) {
@@ -434,7 +444,7 @@ static int fc_insert(const struct fc_file *f, uint32_t pgoff, struct fc_page *p,
     file->pages = p;
     fc_add_use(p);
     pages++;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&fc_lock, flags);
     kfree(spare);
     return 1;
 }
@@ -451,9 +461,9 @@ static void fc_store(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, co
     if (!buckets) {
         return;
     }
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&fc_lock);
     p = fc_new();
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&fc_lock, flags);
     if (!p) {
         return;
     }
@@ -478,15 +488,33 @@ int filecache_read_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, void 
     return pages && fc_file_of(mnt, node, &f) && fc_read(&f, pgoff, 0, buf);
 }
 
+/** Read `left` bytes at `at` of the file open as `ofd` straight into the
+ * user buffer `dst`, under the big lock, since the file system then writes
+ * the user's buffer itself; the type's answer. */
+static int32_t fc_read_direct(struct open_file *ofd, uint64_t at, char __user *dst, uint32_t left)
+{
+    int big = !bkl_held();
+    int32_t rc;
+
+    if (big) {
+        bkl_enter();
+    }
+    rc = vfs_read(ofd->vmnt, ofd->fhandle, (void __force *)dst, left, at);
+    if (big) {
+        bkl_exit();
+    }
+    return rc;
+}
+
 /**
  * Read up to `left` bytes at `at` of `f`, open as `ofd`, inside one page,
  * into the user buffer `dst`: from the cache's frame, with a reference taken
  * so that a drop meanwhile does not free it, or into a new frame read from
  * the file, which then joins the cache when it holds a whole page or the
  * last part of the file. With no frame to be had the file system reads the
- * whole `left` into `dst` itself. The bytes read, which stop short of the
- * page's end or of `left` only at the end of the file; -EFAULT; or the file
- * system's error.
+ * whole `left` into `dst` itself (`fc_read_direct`). The bytes read, which
+ * stop short of the page's end or of `left` only at the end of the file;
+ * -EFAULT; or the file system's error.
  */
 static int32_t fc_read_page(struct open_file *ofd, const struct fc_file *f, uint64_t at,
                             char __user *dst, uint32_t left)
@@ -498,7 +526,7 @@ static int32_t fc_read_page(struct open_file *ofd, const struct fc_file *f, uint
     int32_t got = PAGE_SIZE, rc = 0;
     uint8_t *page;
 
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&fc_lock);
     hit = pages ? fc_lookup(f, pgoff) : NULL;
     if (hit) {
         phys = (uintptr_t)hit->pfn * PAGE_SIZE;
@@ -508,7 +536,7 @@ static int32_t fc_read_page(struct open_file *ofd, const struct fc_file *f, uint
         p = fc_new();
         phys = p ? (uintptr_t)p->pfn * PAGE_SIZE : 0;
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&fc_lock, flags);
     page = phys ? kmap_temp(phys) : NULL;
     if (!page) {
         if (p) {
@@ -516,7 +544,7 @@ static int32_t fc_read_page(struct open_file *ofd, const struct fc_file *f, uint
         } else if (phys) {
             free_frame(phys);
         }
-        return vfs_read(ofd->vmnt, ofd->fhandle, (void __force *)dst, left, at);
+        return fc_read_direct(ofd, at, dst, left);
     }
     if (p) {
         epoch = *fc_changes(f->mnt, f->ino);
@@ -619,19 +647,19 @@ void filecache_forget(struct vfs_mount *mnt, void *node)
     if (!fc_file_of(mnt, node, &f)) {
         return;
     }
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&fc_lock);
     (*fc_changes(f.mnt, f.ino))++;
     file = pages ? fc_find(f.mnt, f.ino) : NULL;
     if (file) {
         fc_drop_file(file);
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&fc_lock, flags);
 }
 
 void filecache_forget_mount(const struct vfs_mount *mnt)
 {
     struct fc_inode *file, *next;
-    uint32_t i, flags = kirq_save();
+    uint32_t i, flags = spin_lock_irqsave(&fc_lock);
 
     mnt = vfs_mount_base(mnt);
     for (i = 0; i < FC_EPOCHS; i++) {
@@ -645,7 +673,7 @@ void filecache_forget_mount(const struct vfs_mount *mnt)
             }
         }
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&fc_lock, flags);
 }
 
 uint32_t filecache_pages(void)
@@ -655,11 +683,11 @@ uint32_t filecache_pages(void)
 
 uint32_t filecache_shrink(uint32_t want)
 {
-    uint32_t given = 0, flags = kirq_save();
+    uint32_t given = 0, flags = spin_lock_irqsave(&fc_lock);
 
     while (oldest && given < want) {
         given += (uint32_t)fc_drop(oldest);
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&fc_lock, flags);
     return given;
 }

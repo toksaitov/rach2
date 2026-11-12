@@ -7,6 +7,7 @@
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/blockmax_host.c
  * host-deps: tests/host/compat/pressure_host.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
  *
  * The fake devices are polled and fault-safe, and each is backed by a memory
  * image. `block_request` is stubbed to call the device's own read or write,
@@ -78,6 +79,34 @@ static int ns_held;
 int vfs_ns_held_by_caller(void)
 {
     return ns_held;
+}
+
+/* The takes of the big lock the calls hold, 1 for a caller that holds it,
+   as every row but `reader_rows` calls; 0 for a reader without it, which
+   must take it to write a dirty victim or read the device. `big_takes`
+   counts the takes, and `reads_unlocked` the device reads made without
+   it. */
+static int big_held = 1;
+static int big_takes;
+static int reads_unlocked;
+
+/** The big lock's answer: whether the caller holds it. */
+int bkl_held(void)
+{
+    return big_held > 0;
+}
+
+/** Take the big lock, counted in `big_takes`. */
+void bkl_enter(void)
+{
+    big_takes++;
+    big_held++;
+}
+
+/** Give back a take of the big lock. */
+void bkl_exit(void)
+{
+    big_held--;
 }
 
 /** The kernel log; the records are dropped. */
@@ -208,6 +237,7 @@ static int fake_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
         return -5;
     }
     reads_made++;
+    reads_unlocked += big_held == 0;
     last_count = count;
     if (fail_reads) {
         return -5;
@@ -1295,7 +1325,8 @@ static void writeback_rows(void)
 }
 
 /**
- * Run the rows in order, and return the count of failed checks, at most 255.
+ * Run the rows in order, and return the count of failed checks, at most 255;
+ * with the argument `reader`, run `reader_rows` alone.
  *
  * A get reads a block by one device read and holds it, and a second get is
  * a counted hit. A blank get of an uncached block makes no read and returns
@@ -1374,9 +1405,73 @@ static void writeback_rows(void)
  * the reserve, of a reclaim after a failed write and of a sort end the run
  * (`writeback_rows`).
  */
-int main(void)
+/** Fill the cache of forty with blocks 1 to 40 of `vast`, the first `clean`
+ * of them clean and the rest dirty, as a caller with the big lock. */
+static void fill_forty(unsigned clean)
 {
-    struct bbuf *b, *c, *d;
+    uint32_t written = 0;
+    unsigned i;
+
+    (void)bcache_sync(&vast);
+    (void)bcache_invalidate(&vast);
+    (void)bcache_shrink(100000, 1, &written);
+    bcache_set_limit(40);
+    for (i = 1; i <= 40; i++) {
+        struct bbuf *b = bcache_get_blank(&vast, (uint64_t)i);
+
+        if (i > clean) {
+            bcache_dirty(b);
+        }
+        bcache_release(b);
+    }
+}
+
+/**
+ * The calls of a reader without the big lock: a hit takes no big lock, a
+ * miss that finds a clean buffer near the head of the release order takes it
+ * only for the device's read and writes nothing, and a miss that finds only
+ * dirty buffers takes it to write one; each gives it back.
+ */
+static void reader_rows(void)
+{
+    struct bbuf *b;
+
+    fill_forty(10);
+    image_vast[300 * 4096] = 0x5A;
+    big_held = 0;
+    big_takes = 0;
+    writes_made = 0;
+    reads_made = 0;
+    reads_unlocked = 0;
+    b = bcache_get(&vast, 300);
+    check(
+        b != 0 && big_takes == 1 && big_held == 0 && writes_made == 0 && reads_made == 1 &&
+            reads_unlocked == 0 && b->data[0] == 0x5A,
+        "a reader's miss takes a clean buffer with no write, and the big lock for the read alone");
+    bcache_release(b);
+    big_takes = 0;
+    b = bcache_get(&vast, 300);
+    check(b != 0 && big_takes == 0 && reads_made == 1, "and its hit takes no big lock");
+    bcache_release(b);
+    big_held = 1;
+
+    fill_forty(0);
+    big_held = 0;
+    big_takes = 0;
+    writes_made = 0;
+    b = bcache_get(&vast, 300);
+    check(b != 0 && big_takes == 1 && writes_made == 1 && big_held == 0,
+          "a reader's miss among dirty buffers takes the big lock to write one, and gives it back");
+    bcache_release(b);
+    big_held = 1;
+    (void)bcache_sync(&vast);
+    (void)bcache_invalidate(&vast);
+}
+
+/** Fill the small and big images with their sector numbers and name the two
+ * processes; 1 when the arguments ask for `reader_rows` alone. */
+static int setup(int argc, char **argv)
+{
     unsigned i;
 
     bcache_set_limit(BCACHE_BUFFERS);
@@ -1388,6 +1483,18 @@ int main(void)
     }
     proc_a.pid = 1;
     proc_b.pid = 2;
+    return argc > 1 && argv[1][0] == 'r';
+}
+
+int main(int argc, char **argv)
+{
+    struct bbuf *b, *c, *d;
+    unsigned i;
+
+    if (setup(argc, argv)) {
+        reader_rows();
+        return fails > 255 ? 255 : fails;
+    }
 
     b = bcache_get(&fake, 0);
     check(b != 0, "a block is read and held");
@@ -1978,6 +2085,7 @@ int main(void)
               writes_lba[1] == 8 + 20 * 8 && last_write_count == 20 * 8,
           "and are written in two runs of twenty");
     writeback_rows();
+    reader_rows();
 
     if (fails == 0) {
         printf("bcache_hosttest: OK\n");

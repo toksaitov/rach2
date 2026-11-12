@@ -66,21 +66,16 @@ struct percpu {
     volatile uint64_t busy_ticks;               /* ticks that found it running code */
     volatile uint64_t user_ticks;               /* of those, ticks that found it in user mode */
     uint32_t accounted_tick;                    /* low word of the global tick its counts reach */
-    int tick_unlocked;                          /* the tick under way took no big lock */
-    volatile uint32_t ticks_unlocked;           /* ticks that found the big lock held */
-    uint32_t ticks_passed;                      /* of those in a row, with work queued */
     uint64_t bkl_since;                         /* cycle count when it last took the big lock */
     uint32_t bkl_vector;                        /* the vector of the entry that holds it, or 0 */
     int32_t bkl_nr;                             /* its system call, -1 or BKL_NR_* (smp.h) */
     uint64_t bkl_waited;                        /* cycles the hold under way waited for the lock */
     int bkl_ioctl;                              /* its ioctl request's slot plus one, or 0 */
-    uint64_t tick_tail;                         /* cycles at its tick's preempt, 0 for none */
-    struct process *tick_tail_proc;             /* the thread that tick interrupted */
     volatile uint32_t wake_bkl_start;           /* current lock wait's clock, microseconds */
     volatile uint32_t wake_bkl_waiting;         /* published after start, cleared under the lock */
     uint32_t wake_bkl_total;                    /* completed lock waits, microseconds modulo 2^32 */
-    uint32_t wake_irq_start;  /* latest serviced timer interrupt before its lock */
-    uint32_t wake_irq_locked; /* the same interrupt after taking its lock */
+    uint32_t wake_irq_start;                    /* latest serviced timer interrupt, at its entry */
+    uint32_t wake_irq_locked;                   /* the same interrupt at its router's end */
 #ifdef RACH2_LOCKDEP
     /* The lock-order checker's (lib/lockdep.c): the spinlocks this
      * processor holds, in interrupts and out, since a spinlock is held

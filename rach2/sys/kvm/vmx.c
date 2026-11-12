@@ -98,11 +98,13 @@
 #define GUEST_PHYSICAL_ADDRESS        0x2400u
 #define VMCS_LINK_POINTER             0x2800u
 #define GUEST_IA32_DEBUGCTL           0x2802u
+#define GUEST_IA32_PERF_GLOBAL_CTRL   0x2808u
 #define GUEST_IA32_PAT                0x2804u
 #define GUEST_IA32_EFER               0x2806u
 #define GUEST_PDPTR0                  0x280Au
 #define HOST_IA32_PAT                 0x2C00u
 #define HOST_IA32_EFER                0x2C02u
+#define HOST_IA32_PERF_GLOBAL_CTRL    0x2C04u
 #define PIN_BASED_VM_EXEC_CONTROL     0x4000u
 #define CPU_BASED_VM_EXEC_CONTROL     0x4002u
 #define EXCEPTION_BITMAP              0x4004u
@@ -217,12 +219,14 @@
 /* The exit controls. */
 #define EXIT_SAVE_DEBUG 0x00000004u
 #define EXIT_HOST_64    0x00000200u
+#define EXIT_LOAD_PERF  0x00001000u
 #define EXIT_LOAD_PAT   0x00080000u
 #define EXIT_LOAD_EFER  0x00200000u
 
 /* The entry controls. */
 #define ENTRY_LOAD_DEBUG 0x00000004u
 #define ENTRY_IA32E      0x00000200u
+#define ENTRY_LOAD_PERF  0x00002000u
 #define ENTRY_LOAD_PAT   0x00004000u
 #define ENTRY_LOAD_EFER  0x00008000u
 
@@ -335,7 +339,6 @@
 #define DR7_ENABLES 0xFFull
 
 #define DEBUGCTL_LBR 0x1ull
-#define DEBUGCTL_BTF 0x2ull
 
 #define DB_VECTOR  1
 #define NMI_VECTOR 2
@@ -726,6 +729,7 @@ static struct {
     int ins_outs;         /* the exit describes INS and OUTS */
     int ad;               /* EPT's accessed and dirty bits */
     int rdtscp;           /* the host has RDTSCP, and so TSC_AUX */
+    int perf_global;      /* the controls that load IA32_PERF_GLOBAL_CTRL */
 } caps;
 
 /* Each processor's VMXON region, made at the first VM, and whether its
@@ -783,9 +787,9 @@ struct vmx_vcpu {
     uint32_t proc_want;                      /* the primary controls for the next entry */
     uint32_t inj_info, inj_error, inj_len;   /* the event the next entry injects */
     uint64_t pdpte[4];
-    uint64_t debugctl;
-    int guest_dr; /* DR0 to DR3 were loaded for the run */
-    int tf_set;   /* the entry set RFLAGS.TF for KVM_GUESTDBG_SINGLESTEP */
+    uint64_t debugctl; /* GUEST_IA32_DEBUGCTL as the VMCS has it */
+    int guest_dr;      /* DR0 to DR3 were loaded for the run */
+    int tf_set;        /* the entry set RFLAGS.TF for KVM_GUESTDBG_SINGLESTEP */
     struct vmx_exit ex;
 };
 
@@ -1167,6 +1171,14 @@ fail:
 
 /* ---- the VMCS built ---- */
 
+/** Whether the VMCS switches IA32_PERF_GLOBAL_CTRL, as Linux's
+ * add_atomic_switch_msr does with the processor's controls; without them
+ * the MSR lists do. */
+static int perf_switched(void)
+{
+    return caps.perf_global && kvm_pmu_global();
+}
+
 /** Write the VMCS fields that last for the vCPU's life: the controls, the
  * MSR lists and bitmap, the host's constant state, and the guest's state
  * no part of the record holds. */
@@ -1187,8 +1199,8 @@ static void vmcs_build(struct kvm_vcpu *v)
         /* No component of IA32_XSS makes XSAVES or XRSTORS exit. */
         vmcs_write(XSS_EXIT_BITMAP, 0);
     }
-    vmcs_write(VM_EXIT_CONTROLS, caps.exit);
-    x->entry = caps.entry & ~ENTRY_IA32E;
+    vmcs_write(VM_EXIT_CONTROLS, caps.exit | (perf_switched() ? EXIT_LOAD_PERF : 0u));
+    x->entry = (caps.entry & ~ENTRY_IA32E) | (perf_switched() ? ENTRY_LOAD_PERF : 0u);
     vmcs_write(VM_ENTRY_CONTROLS, x->entry);
     x->exc_bitmap = EXC_ALWAYS;
     vmcs_write(EXCEPTION_BITMAP, x->exc_bitmap);
@@ -1215,7 +1227,8 @@ static void vmcs_build(struct kvm_vcpu *v)
     vmcs_write(HOST_RIP, vmx_op->exit_rip());
     vmcs_write(GUEST_ACTIVITY_STATE, 0);
     vmcs_write(GUEST_PENDING_DBG_EXCEPTIONS, 0);
-    vmcs_write(GUEST_IA32_DEBUGCTL, 0);
+    x->debugctl = kvm_pmu_vmcs_debugctl(v);
+    vmcs_write(GUEST_IA32_DEBUGCTL, x->debugctl);
     x->built = 1;
     x->vdirty = VX_ALL;
 }
@@ -1616,12 +1629,14 @@ static void after_run(struct kvm_vcpu *v)
 
     x->fresh = 0;
     if (x->ex.failed != VMX_OK) {
+        v->hw_exit = EXIT_FAILED_ENTRY;
         x->ex.insn_error =
             x->ex.failed == VMX_FAIL_VALID ? (uint32_t)vmcs_read(VM_INSTRUCTION_ERROR) : 0;
         return;
     }
     x->inj_info = 0;
     read_exit(x);
+    v->hw_exit = x->ex.reason;
     v->regs.rsp = vmcs_read(GUEST_RSP);
     v->regs.rip = vmcs_read(GUEST_RIP);
     v->regs.rflags = vmcs_read(GUEST_RFLAGS);
@@ -1662,7 +1677,9 @@ static int vmx_enter(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
     struct vmx_host host;
-    uint64_t eptp, host_dr7 = 0, host_db[4] = {0, 0, 0, 0};
+    uint64_t eptp, host_dr7 = 0, host_db[4] = {0, 0, 0, 0}, global[2];
+    uint32_t ng, nh, gbase = caps.rdtscp ? N_GUEST_MSRS : N_GUEST_MSRS - 1u;
+    uint32_t hbase = caps.rdtscp ? N_HOST_MSRS : N_HOST_MSRS - 1u;
     int cpu = (int)arch_cpu_id(), r, tlb, nmi = 0, mce = 0;
 
     if (v->emul.resume) {
@@ -1698,6 +1715,20 @@ static int vmx_enter(struct kvm_vcpu *v)
         x->flush_vpid = 0;
     }
     entry_fields(v);
+    kvm_pmu_vmx_enter(v, (struct kvm_pmu_msr *)x->msrs + gbase,
+                      (struct kvm_pmu_msr *)x->msrs + HOST_LIST + hbase, &ng, &nh,
+                      perf_switched() ? global : NULL);
+    if (perf_switched()) {
+        vmcs_write(GUEST_IA32_PERF_GLOBAL_CTRL, global[0]);
+        vmcs_write(HOST_IA32_PERF_GLOBAL_CTRL, global[1]);
+    }
+    if (x->debugctl != (kvm_pmu_vmcs_debugctl(v))) {
+        x->debugctl = kvm_pmu_vmcs_debugctl(v);
+        vmcs_write(GUEST_IA32_DEBUGCTL, x->debugctl);
+    }
+    vmcs_write(VM_ENTRY_MSR_LOAD_COUNT, gbase + ng);
+    vmcs_write(VM_EXIT_MSR_STORE_COUNT, gbase + ng);
+    vmcs_write(VM_EXIT_MSR_LOAD_COUNT, hbase + nh);
     vmx_op->fpu_load(x->host_fpu, v->xsave, v->xcr0);
     dr_load(v, &host_dr7, host_db);
     x->ex.failed = vmx_op->run(&v->regs, &v->sregs.cr2, x->launched);
@@ -1705,6 +1736,14 @@ static int vmx_enter(struct kvm_vcpu *v)
     vmx_op->fpu_store(x->host_fpu, v->xsave, v->xcr0);
     vmx_op->restore_host(&host);
     after_run(v);
+    kvm_pmu_vmx_exit(v, (const struct kvm_pmu_msr *)x->msrs + gbase,
+                     x->ex.failed == VMX_OK && !(x->ex.reason & EXIT_FAILED_ENTRY));
+    if (x->ex.failed == VMX_OK && !(x->ex.reason & EXIT_FAILED_ENTRY) &&
+        (x->debugctl & DEBUGCTL_LBR)) {
+        /* A #DB in the guest clears DEBUGCTL.LBR, and the exit saved it. */
+        x->debugctl &= vmcs_read(GUEST_IA32_DEBUGCTL);
+        v->pmu.debugctl = x->debugctl;
+    }
     if (x->ex.failed == VMX_OK) {
         nmi = exit_is_nmi(&x->ex);
         mce = exit_is_mce(&x->ex);
@@ -2097,8 +2136,6 @@ static void kgs_sync(struct kvm_vcpu *v)
  * a read's value in `*value`, or a KVM_MSR_* failure. */
 static int msr_access(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
 {
-    struct vmx_vcpu *x = vx(v);
-
     switch (index) {
     case MSR_EFER:
         if (write) {
@@ -2107,17 +2144,7 @@ static int msr_access(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *v
         *value = v->sregs.efer;
         return 0;
     case MSR_IA32_DEBUGCTL:
-        /* No LBR and no BTF, which Linux drops with a note; any other bit
-         * is #GP. */
-        if (write) {
-            if (*value & ~(DEBUGCTL_LBR | DEBUGCTL_BTF)) {
-                return KVM_MSR_INVAL;
-            }
-            x->debugctl = 0;
-            return 0;
-        }
-        *value = x->debugctl;
-        return 0;
+        return kvm_pmu_debugctl(v, write, value, 0) ? KVM_MSR_INVAL : 0;
     default:
         return kvm_emul_msr(v, index, write, value);
     }
@@ -2380,8 +2407,9 @@ static int exit_insn(struct kvm_vcpu *v, uint32_t reason)
         kvm_emul_skip(v, len);
         return 1;
     case EXIT_RDPMC:
-        /* No performance counter is offered, so every counter is #GP. */
-        gp(v);
+        if (kvm_pmu_rdpmc(v) == 0) {
+            kvm_emul_skip(v, len);
+        }
         return 1;
     case EXIT_XSETBV:
         if (kvm_emul_xsetbv(v) == 0) {
@@ -2816,6 +2844,24 @@ static int controls(uint32_t msr, uint32_t true_msr, uint32_t want, uint32_t nee
 }
 
 /**
+ * Whether the processor of CPUID leaf 1 signature `sig` is one of the five
+ * on which a VM exit may clear IA32_PERF_GLOBAL_CTRL bits 34-32 under the
+ * controls that load it: Nehalem EP, Nehalem, Westmere, Westmere EP and
+ * Nehalem EX (errata AAK155, AAP115, AAT100, BC86/AAY89/BD102 and BA97).
+ * Linux drops the controls there and switches the register by the MSR
+ * lists (arch/x86/kvm/vmx/vmx.c:2740-2759).
+ */
+static int perf_global_erratum(uint32_t sig)
+{
+    uint32_t model = ((sig >> 4) & 0xFu) | ((sig >> 12) & 0xF0u);
+
+    if (((sig >> 8) & 0xFu) != 6u) {
+        return 0;
+    }
+    return model == 0x1Au || model == 0x1Eu || model == 0x25u || model == 0x2Cu || model == 0x2Eu;
+}
+
+/**
  * Whether the processor has VMX as this backend needs it, the firmware
  * leaves it usable, and the controls are chosen: VMX in CPUID,
  * IA32_FEATURE_CONTROL locked with VMX outside SMX on, or not locked, when
@@ -2836,7 +2882,7 @@ static int vmx_probe(void)
     uint32_t proc2_need = PROC2_EPT | PROC2_UG;
     uint32_t exit_need = EXIT_HOST_64 | EXIT_SAVE_DEBUG | EXIT_LOAD_PAT | EXIT_LOAD_EFER;
     uint32_t entry_need = ENTRY_LOAD_DEBUG | ENTRY_LOAD_PAT | ENTRY_LOAD_EFER;
-    uint32_t forbid, windows;
+    uint32_t forbid, windows, perf_exit, perf_entry, sig;
 
 #ifndef RACH2_HOSTTEST
     vmx_op = &vmx_hw;
@@ -2845,6 +2891,7 @@ static int vmx_probe(void)
     if (!(c & (1u << 5))) {
         return 0;
     }
+    sig = a;
     fc = vmx_op->rdmsr(MSR_IA32_FEATURE_CONTROL);
     if ((fc & FC_LOCKED) && !(fc & FC_VMX_OUTSIDE_SMX)) {
         return 0;
@@ -2879,6 +2926,11 @@ static int vmx_probe(void)
                  &caps.entry)) {
         return 0;
     }
+    caps.perf_global = !controls(MSR_IA32_VMX_EXIT, MSR_IA32_VMX_TRUE_EXIT, EXIT_LOAD_PERF,
+                                 EXIT_LOAD_PERF, &perf_exit) &&
+                       !controls(MSR_IA32_VMX_ENTRY, MSR_IA32_VMX_TRUE_ENTRY, ENTRY_LOAD_PERF,
+                                 ENTRY_LOAD_PERF, &perf_entry) &&
+                       !perf_global_erratum(sig);
     caps.ept_vpid = vmx_op->rdmsr(MSR_IA32_VMX_EPT_VPID);
     if (!(caps.ept_vpid & EPT_CAP_WALK4) || !(caps.ept_vpid & EPT_CAP_WB) ||
         !(caps.ept_vpid & EPT_CAP_INVEPT) ||

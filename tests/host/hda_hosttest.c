@@ -44,6 +44,9 @@ static uint16_t eapd[128]; /* each pin's EAPD/BTL payload, with 0x100 once set *
  * once set, and the beep verbs sent. */
 static uint16_t beep_ctl[128], power[128];
 static unsigned beep_verbs;
+/* The next Set Beep Generation runs one tick of the boot processor once the
+ * codec has it, as a tick that comes while khda waits for the response. */
+static int beep_verb_ticks;
 /* The PC speaker's ports: port 0x61, and the PIT channel 2's count with the
  * bytes written to it. */
 static uint8_t port61;
@@ -59,6 +62,12 @@ static int clock_stopped; /* the wall clock does not advance */
 /* The interrupt flag kirq_save and kirq_restore keep; the delays made and
  * those made with interrupts off; the reads of ICS with interrupts on. */
 static int irqs_on = 1;
+/* INTSTS's reads, those made under the stream lock, and the verbs sent
+ * under it, which none should be. */
+static unsigned intsts_reads, intsts_locked, verbs_stream_locked;
+/* The stream mutex's takes, which every operation of hda_driver that
+ * changes the device makes once. */
+static unsigned mutex_takes;
 static unsigned delays, delays_irqs_off, ics_reads_irqs_on;
 static int refuse_alloc; /* kmalloc fails */
 extern void *malloc(unsigned long size);
@@ -133,6 +142,12 @@ static void model_set(unsigned nid, unsigned verb, unsigned offset)
     if ((verb & 0xFFF00) == HDA_VERB_SET_BEEP) {
         beep_ctl[nid] = (uint16_t)(0x100 | offset);
         beep_verbs++;
+        if (beep_verb_ticks) {
+            beep_verb_ticks = 0;
+            kernel_ticks++;
+            hda_tick();
+            speaker_tick();
+        }
     }
     if ((verb & 0xFFF00) == HDA_VERB_SET_POWER)
         power[nid] = (uint16_t)(0x100 | offset);
@@ -146,6 +161,8 @@ static uint32_t model_verb(uint32_t command)
     unsigned offset = verb & 255;
 
     verbs++;
+    if (stream_lock.locked)
+        verbs_stream_locked++;
     if (log_count < VERB_LOG) {
         log_command[log_count] = command & 0xFFFFFFF;
         log_clock[log_count++] = clock_value;
@@ -174,6 +191,11 @@ uint32_t hda_test_read(uint32_t offset, int bits)
     int i;
 
     mmio_reads++;
+    if (offset == HDA_INTSTS) {
+        intsts_reads++;
+        if (stream_lock.locked)
+            intsts_locked++;
+    }
     if (offset == HDA_WALCLK) {
         clock_reads++;
         return clock_stopped || dma_model ? clock_value : (clock_value += 24000);
@@ -239,6 +261,7 @@ static void reset_model(void)
     k_memset(beep_ctl, 0, sizeof(beep_ctl));
     k_memset(power, 0, sizeof(power));
     beep_verbs = 0;
+    beep_verb_ticks = 0;
     conn_reads = verbs = bad_offsets = sense_triggers = 0;
     log_count = 0;
     run_at = ~0u;
@@ -845,13 +868,58 @@ static void tick(void)
 }
 
 /** Run the services asked for since the last call, as khda does once the
- * host test stands for it (hda_test_threaded). */
+ * host test stands for it (hda_test_threaded): take them under the stream
+ * lock, and serve under the stream mutex. */
 static void run_khda(void)
 {
+    uint32_t flags = spin_lock_irqsave(&stream_lock);
     uint32_t wanted = service_wanted;
 
     service_wanted = 0;
+    spin_unlock_irqrestore(&stream_lock, flags);
+    mutex_lock(&stream_mutex);
     hda_serve(wanted);
+    mutex_unlock(&stream_mutex);
+}
+
+/**
+ * The locks of 84-6c: the interrupt reads INTSTS under the stream lock and
+ * leaves it free, and no verb is sent under it; each operation of
+ * hda_driver that changes the device takes the stream mutex once and gives
+ * it back, while the readers, called with interrupts off, take none; and
+ * the delay counts what the resampler held at the last fill (play_held).
+ */
+static void row_locks(void)
+{
+    unsigned next = 1, takes;
+    int level;
+
+    row = "locks";
+    model_start(1u << 6, 44100, AUDIO_S16LE, 2);
+    write_blocks(&next);
+    model_play(25000);
+    intsts_reads = intsts_locked = 0;
+    hda_test_write(HDA_INTSTS, 1u << output_stream_index, 32);
+    hda_irq_handler(NULL);
+    check(intsts_reads == 1 && intsts_locked == 1 && !stream_lock.locked,
+          "the interrupt reads INTSTS under the stream lock and lets it go");
+    check(play_held == resample_held(&hda_rs),
+          "the delay's count of the resampler is the fill's last");
+    takes = mutex_takes;
+    irqs_on = 0;
+    (void)hda_driver.is_playing();
+    (void)hda_driver.get_volume();
+    (void)hda_driver.delay(NULL);
+    irqs_on = 1;
+    check(mutex_takes == takes && !stream_lock.locked,
+          "the readers take no mutex with interrupts off");
+    level = hda_driver.get_volume();
+    hda_driver.set_volume(level > 10 ? level - 10 : level + 10);
+    hda_driver.set_volume(level);
+    hda_driver.stop();
+    check(mutex_takes == takes + 3 && !stream_mutex.owner,
+          "each operation that changes the device takes the stream mutex once");
+    check(verbs_stream_locked == 0, "no verb is sent under the stream lock");
 }
 
 /**
@@ -1133,9 +1201,10 @@ static void row_play_early(void)
 /**
  * An output interrupt for a period the tick already refilled, before the
  * stream's first interrupt, finds the position in the first half of the
- * next period: its service fills nothing and clears the pending flag, as
- * Linux's azx_position_ok passes such a position, so the tick does not ask
- * for the stream again until the next interrupt is late.
+ * next period: it is not early and leaves the stream not pending, as
+ * Linux's azx_position_ok passes such a position, its service fills
+ * nothing, and the tick does not ask for the stream again until the next
+ * interrupt is late.
  */
 static void row_play_refilled(void)
 {
@@ -1161,9 +1230,10 @@ static void row_play_refilled(void)
 /**
  * khda delayed from one output interrupt until the next has come early:
  * its refill fills the period the first stands for and leaves the stream
- * pending, the position being in the second half of a period, so the tick
- * asks for the period the second stands for once the position has passed
- * it, and refills do not fall a period behind. A stop clears the flag.
+ * pending for the second, the position being short of its boundary, so the
+ * tick asks for the period the second stands for once the position has
+ * passed it, and refills do not fall a period behind. A stop clears the
+ * flag.
  */
 static void row_play_delayed(void)
 {
@@ -1197,6 +1267,51 @@ static void row_play_delayed(void)
     check(play_irq_pending, "another early interrupt leaves the stream pending");
     hda_stop();
     check(!play_irq_pending, "a stop clears the flag");
+    hda_test_threaded = false;
+    service_wanted = 0;
+}
+
+/**
+ * khda delayed from an output interrupt that came past its boundary to a
+ * period and three quarters, with no interrupt between: its refill fills
+ * the period that interrupt stands for and leaves the stream not pending,
+ * though the position is in the second half of a period, so the tick does
+ * not ask for it at each call. An interrupt more than a period and a quarter
+ * after the boundary last passed is late, not early, though the position is
+ * in the second half of a period, as azx_position_ok's wall-clock test
+ * takes one (sound/pci/hda/hda_intel.c:689-692 of Linux 6.12.115).
+ */
+static void row_play_served(void)
+{
+    unsigned next = 1;
+
+    row = "play-irq-served";
+    model_start(1u << 6, 48000, AUDIO_S16LE, 2);
+    write_blocks(&next);
+    hda_test_threaded = true;
+    service_wanted = 0;
+    model_play(24000);
+    hda_test_write(HDA_INTSTS, 1u << output_stream_index, 32);
+    hda_irq_handler(NULL);
+    hda_test_write(HDA_INTSTS, 0, 32);
+    check(!play_irq_pending && (service_wanted & HDA_SERVE_PLAY),
+          "an interrupt past its boundary asks for khda and is not pending");
+    model_play(17000); /* 41 ms, a period of 23.3 ms and three quarters */
+    run_khda();
+    check(hw_fill_count == 1 && !play_irq_pending,
+          "khda run in the second half of the next period fills one and is not pending");
+    tick();
+    check(!(service_wanted & HDA_SERVE_PLAY) && !play_irq_pending,
+          "the tick does not ask for the stream");
+    model_play(24000); /* 65 ms, 41 ms after the boundary last passed */
+    hda_test_write(HDA_INTSTS, 1u << output_stream_index, 32);
+    hda_irq_handler(NULL);
+    hda_test_write(HDA_INTSTS, 0, 32);
+    check(!play_irq_pending && (service_wanted & HDA_SERVE_PLAY),
+          "an interrupt a period and a quarter late is not pending, in a period's second half");
+    run_khda();
+    check(hw_fill_count == 2 && !play_irq_pending, "and khda fills the period it stands for");
+    hda_stop();
     hda_test_threaded = false;
     service_wanted = 0;
 }
@@ -1868,7 +1983,7 @@ static void row_capture_overrun(void)
  * (`cap_irq_pending`); the tick asks at each call and hands the period over
  * once the position has passed it. An interrupt for a period the tick
  * already handed over, after a late one, finds the position in the first
- * half of the next and clears the flag.
+ * half of the next and leaves the flag clear.
  */
 static void row_capture_early(void)
 {
@@ -1959,6 +2074,55 @@ static void row_capture_delayed(void)
     check(cap_irq_pending, "another early interrupt leaves the stream pending");
     hda_driver.stream_stop(&s);
     check(!cap_irq_pending, "a stop clears the flag");
+    hda_test_threaded = false;
+    service_wanted = 0;
+    hda_driver.stream_close(&s);
+    clock_stopped = 0;
+}
+
+/**
+ * khda delayed from an input interrupt that came past its boundary to a
+ * period and three quarters, with no interrupt between: it hands over the
+ * period that interrupt stands for and leaves the stream not pending. An
+ * interrupt more than a period and a quarter after the boundary last
+ * passed is late, not early, though the position is in the second half of
+ * a period, as row play-irq-served checks for the output stream.
+ */
+static void row_capture_served(void)
+{
+    audio_stream_t s;
+
+    row = "capture-irq-served";
+    reset_model();
+    model_adc();
+    check(hda_find_output(), "enumeration succeeds");
+    /* 1024 frames a period at 48 kHz, 21.3 ms. */
+    check(open_capture(&s, 48000, AUDIO_S16LE, 2, 4096) == 0, "capture set up");
+    clock_stopped = 1;
+    check(hda_driver.stream_start(&s) == 0, "capture starts");
+    hda_test_threaded = true;
+    service_wanted = 0;
+    move_input(4096 + 100);
+    clock_value += 24000 * 22;
+    hda_test_write(HDA_INTSTS, 1u << input_stream_index, 32);
+    hda_irq_handler(NULL);
+    hda_test_write(HDA_INTSTS, 0, 32);
+    check(!cap_irq_pending && (service_wanted & HDA_SERVE_CAPTURE),
+          "an interrupt past its boundary asks for khda and is not pending");
+    move_input(4096 + 3000);
+    clock_value += 24000 * 15;
+    run_khda();
+    check(got_transfers == 1 && !cap_irq_pending,
+          "khda run in the second half of the next period hands one over and is not pending");
+    move_input(2 * 4096 + 3000);
+    clock_value += 24000 * 21; /* 36 ms after the boundary last passed */
+    hda_test_write(HDA_INTSTS, 1u << input_stream_index, 32);
+    hda_irq_handler(NULL);
+    hda_test_write(HDA_INTSTS, 0, 32);
+    check(!cap_irq_pending && (service_wanted & HDA_SERVE_CAPTURE),
+          "an interrupt a period and a quarter late is not pending, in a period's second half");
+    run_khda();
+    check(got_transfers == 2 && !cap_irq_pending, "and khda hands over the period it stands for");
     hda_test_threaded = false;
     service_wanted = 0;
     hda_driver.stream_close(&s);
@@ -2329,16 +2493,16 @@ static void row_input_controls(void)
           "a codec with no adc has no sources");
 }
 
-/** Run `n` ticks of the boot processor: the clock, then the speaker's and
- * HDA's work, as the kernel's tick does. */
+/** Run `n` ticks of the boot processor: the clock, then HDA's work and the
+ * speaker's, in the order the kernel's tick runs them (timer_handler). */
 static void beep_ticks(unsigned n)
 {
     unsigned i;
 
     for (i = 0; i < n; i++) {
         kernel_ticks++;
-        speaker_tick();
         hda_tick();
+        speaker_tick();
     }
 }
 
@@ -2347,12 +2511,14 @@ static void beep_ticks(unsigned n)
  * their divider to khda and send no verb, khda sends it, turning the
  * speaker's pin on first, and waits while code outside its service holds
  * the jacks; a tone that comes before khda sends a stop replaces it, so the
- * stop is never sent after the tone; a second of silence turns the pin off.
+ * stop is never sent after the tone; a second of silence turns the pin off;
+ * and the tick's stop that comes while khda sends a tone stays owed, and
+ * khda sends it next.
  */
 static void beep_threaded(void)
 {
     const hda_report_t *r = hda_get_report();
-    struct speaker_counters c;
+    struct speaker_counters c, c0;
     unsigned before;
 
     reset_model();
@@ -2364,36 +2530,50 @@ static void beep_threaded(void)
     service_wanted = 0;
     before = beep_verbs;
     hda_jack_hold();
+    speaker_get_counters(&c0);
     speaker_tone(SPEAKER_CLOCK / 750, 100);
     speaker_get_counters(&c);
-    check(beep_verbs == before && beep_owed && (service_wanted & HDA_SERVE_BEEP),
+    check(beep_verbs == before && beep_queued && (service_wanted & HDA_SERVE_BEEP),
           "a tone hands divider 16 to khda and sends no verb");
-    check(c.beeps == 1 && c.beep_divider == 16, "the counters name the divider handed on");
+    check(c.beeps == c0.beeps + 1 && c.beep_divider == 16,
+          "the counters name the divider handed on");
     run_khda();
-    check(beep_verbs == before && pin_ctl[23] == 0 && beep_owed,
+    check(beep_verbs == before && pin_ctl[23] == 0 && beep_queued,
           "khda leaves the pins and the tone while the jacks are held");
     hda_jack_release();
     beep_ticks(1);
     run_khda();
-    check(beep_ctl[18] == (0x100 | 16) && pin_ctl[23] == 0x40 && r->beep_path && !beep_owed,
+    check(beep_ctl[18] == (0x100 | 16) && pin_ctl[23] == 0x40 && r->beep_path && !beep_queued,
           "once they are not, the tick asks again and khda turns the pin on and sends it");
     beep_ticks(99);
     speaker_get_counters(&c);
-    check(beep_ctl[18] == (0x100 | 16) && beep_owed && c.ends == 1 && c.beep_retries == 0 &&
-              c.beep_divider == 0,
+    check(beep_ctl[18] == (0x100 | 16) && beep_queued && c.ends == c0.ends + 1 &&
+              c.beep_retries == c0.beep_retries && c.beep_divider == 0,
           "the tick ending the tone hands the stop to khda and sends no verb");
     before = beep_verbs;
     speaker_tone(SPEAKER_CLOCK / 1000, 100);
     run_khda();
-    check(beep_ctl[18] == (0x100 | 12) && beep_verbs == before + 1 && !beep_owed,
+    check(beep_ctl[18] == (0x100 | 12) && beep_verbs == before + 1 && !beep_queued,
           "a tone before khda sends the stop replaces it");
     speaker_tone(0, 0);
     run_khda();
-    check(beep_ctl[18] == 0x100 && pin_ctl[23] == 0x40 && !beep_owed,
+    check(beep_ctl[18] == 0x100 && pin_ctl[23] == 0x40 && !beep_queued,
           "khda sends a request's stop and leaves the pin on");
     beep_ticks(HDA_BEEP_IDLE_TICKS);
     run_khda();
     check(pin_ctl[23] == 0 && !r->beep_path, "and turns it off after a second of silence");
+
+    speaker_get_counters(&c0);
+    speaker_tone(SPEAKER_CLOCK / 750, 100);
+    beep_ticks(99);
+    beep_verb_ticks = 1;
+    run_khda();
+    speaker_get_counters(&c);
+    check(beep_ctl[18] == (0x100 | 16) && pin_ctl[23] == 0x40 && c.ends == c0.ends + 1 &&
+              beep_queued && beep_next == 0 && (service_wanted & HDA_SERVE_BEEP),
+          "the tick's stop that comes while khda sends the tone stays owed");
+    run_khda();
+    check(beep_ctl[18] == 0x100 && !beep_queued, "and khda sends it next");
     hda_test_threaded = false;
     service_wanted = 0;
 }
@@ -2468,7 +2648,8 @@ static void beep_other_codecs(void)
  * silence turns the pin off again. KIOCSOUND 0 stops a sound, a level of 0
  * sends 0, and a stop of playback during a tone leaves the pin on until the
  * tone ends. With khda running, a tone and the tick's stop are handed to
- * it, and a tone replaces a stop not yet sent. A widget with power control
+ * it, a tone replaces a stop not yet sent, and the tick's stop that comes
+ * while khda sends a tone stays owed. A widget with power control
  * is powered, a mixer that lists the widget has that input unmuted at 0 dB,
  * and a codec without one leaves the PIT alone to sound.
  */
@@ -2558,9 +2739,11 @@ int main(void)
     row_writer_stall();
     row_missed();
     row_play_gate();
+    row_locks();
     row_play_early();
     row_play_refilled();
     row_play_delayed();
+    row_play_served();
     row_shutdown();
     row_mix_width();
     row_capture_path();
@@ -2571,6 +2754,7 @@ int main(void)
     row_capture_overrun();
     row_capture_early();
     row_capture_delayed();
+    row_capture_served();
     row_capture_fails();
     row_input_controls();
     row_jack_switch();
@@ -2645,6 +2829,28 @@ void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
 void spin_unlock(struct spinlock *lock)
 {
     lock->locked = 0;
+}
+/** Make `m` a free mutex. */
+void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key *key)
+{
+    (void)name;
+    (void)key;
+    m->owner = NULL;
+}
+/** The model has one thread, which never waits: a mutex taken is free, and
+ * it is never taken in an interrupt or under a spinlock. */
+void mutex_lock(struct mutex *m)
+{
+    check(!m->owner, "a mutex taken is free");
+    check(irqs_on, "a mutex is taken with interrupts on");
+    m->owner = m;
+    mutex_takes++;
+}
+/** Give `m` back. */
+void mutex_unlock(struct mutex *m)
+{
+    check(m->owner == m, "a mutex given back is held");
+    m->owner = NULL;
 }
 /** Model the speaker's ports: 0x61, and channel 2's count, low byte first. */
 void outb(uint16_t port, uint8_t val)
@@ -2760,6 +2966,14 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     (void)vector;
     (void)handler;
     (void)name;
+}
+/** The flags a handler runs with: the driver's carries ISR_UNLOCKED. */
+static unsigned isr_flags;
+void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flags)
+{
+    (void)vector;
+    (void)handler;
+    isr_flags = flags;
 }
 /** MMIO accesses use the test hooks. */
 uintptr_t map_mmio(uintptr_t addr, size_t size)

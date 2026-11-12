@@ -239,10 +239,12 @@ void pci_io_write32(uint16_t port, uint32_t value)
 /**
  * The message is a write to the local APIC of the processor that enabled
  * the APIC, the boot processor (`lapic_id`), with the vector in the data's
- * low byte, fixed delivery and edge trigger.
+ * low byte, fixed delivery and edge trigger. The address holds the low
+ * eight bits of the identity; a larger one is reached only through
+ * remapping in x2APIC format, which takes the rest (iommu/intremap.c).
  */
 void pci_msi_message(uint8_t vector, uint32_t *address, uint32_t *data)
 {
-    *address = PCI_MSI_ADDRESS_BASE | (lapic_id() << 12);
+    *address = PCI_MSI_ADDRESS_BASE | ((lapic_id() & 0xFFu) << 12);
     *data = vector;
 }

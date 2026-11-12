@@ -1,0 +1,49 @@
+kvm-corpus: x86_64/pmu_counters_test: run
+Random seed: 0x6b8b4567
+Testing arch events, PMU version 0, perf_caps = 0
+Testing GP counters, PMU version 0, perf_caps = 0
+Testing fixed counters, PMU version 0, perf_caps = 0
+Testing arch events, PMU version 0, perf_caps = 2000
+Testing GP counters, PMU version 0, perf_caps = 2000
+Testing fixed counters, PMU version 0, perf_caps = 2000
+Testing arch events, PMU version 1, perf_caps = 0
+==== Test Assertion Failure ====
+  x86_64/pmu_counters_test.c:113: count == NUM_INSNS_RETIRED
+  pid=1795 tid=1795 errno=4 - Interrupted system call
+     1	0x0000000000412891: assert_on_unhandled_exception at ??:?
+     2	0x000000000040876f: vcpu_run at ??:?
+     3	0x0000000000403b0e: run_vcpu at ??:?
+     4	0x0000000000403cfd: test_arch_events.part.0 at ??:?
+     5	0x00000000004035dc: main at ??:?
+     6	0x000000000041c793: __libc_start_call_main at ??:?
+     7	0x000000000041e65d: __libc_start_main_impl at ??:?
+     8	0x0000000000403760: _start at ??:?
+  0x26 != 0x23 (count != NUM_INSNS_RETIRED)
+kvm-corpus: x86_64/pmu_event_filter_test: run
+Random seed: 0x6b8b4567
+kvm-corpus: x86_64/vmx_pmu_caps_test: run
+Random seed: 0x6b8b4567
+TAP version 13
+1..5
+# Starting 5 tests from 1 test cases.
+#  RUN           vmx_pmu_caps.guest_wrmsr_perf_capabilities ...
+#            OK  vmx_pmu_caps.guest_wrmsr_perf_capabilities
+ok 1 vmx_pmu_caps.guest_wrmsr_perf_capabilities
+#  RUN           vmx_pmu_caps.basic_perf_capabilities ...
+#            OK  vmx_pmu_caps.basic_perf_capabilities
+ok 2 vmx_pmu_caps.basic_perf_capabilities
+#  RUN           vmx_pmu_caps.fungible_perf_capabilities ...
+#            OK  vmx_pmu_caps.fungible_perf_capabilities
+ok 3 vmx_pmu_caps.fungible_perf_capabilities
+#  RUN           vmx_pmu_caps.immutable_perf_capabilities ...
+#            OK  vmx_pmu_caps.immutable_perf_capabilities
+ok 4 vmx_pmu_caps.immutable_perf_capabilities
+#  RUN           vmx_pmu_caps.lbr_perf_capabilities ...
+#            OK  vmx_pmu_caps.lbr_perf_capabilities
+ok 5 vmx_pmu_caps.lbr_perf_capabilities
+# PASSED: 5 / 5 tests passed.
+# Totals: pass:5 fail:0 xfail:0 xpass:0 skip:0 error:0
+kvm-corpus: x86_64/pmu_counters_test: fail: expected pass
+kvm-corpus: x86_64/pmu_event_filter_test: pass: as expected
+kvm-corpus: x86_64/vmx_pmu_caps_test: pass: as expected
+kvm-corpus: result: fail: 1 of 3: x86_64/pmu_counters_test

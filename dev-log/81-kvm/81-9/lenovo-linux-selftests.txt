@@ -1,0 +1,62 @@
+== pmu_counters_test: exit 0
+Random seed: 0x6b8b4567
+Testing arch events, PMU version 0, perf_caps = 0
+Testing GP counters, PMU version 0, perf_caps = 0
+Testing fixed counters, PMU version 0, perf_caps = 0
+Testing arch events, PMU version 0, perf_caps = 2000
+Testing GP counters, PMU version 0, perf_caps = 2000
+Testing fixed counters, PMU version 0, perf_caps = 2000
+Testing arch events, PMU version 1, perf_caps = 0
+Testing GP counters, PMU version 1, perf_caps = 0
+Testing fixed counters, PMU version 1, perf_caps = 0
+Testing arch events, PMU version 1, perf_caps = 2000
+Testing GP counters, PMU version 1, perf_caps = 2000
+Testing fixed counters, PMU version 1, perf_caps = 2000
+Testing arch events, PMU version 2, perf_caps = 0
+Testing GP counters, PMU version 2, perf_caps = 0
+Testing fixed counters, PMU version 2, perf_caps = 0
+Testing arch events, PMU version 2, perf_caps = 2000
+Testing GP counters, PMU version 2, perf_caps = 2000
+Testing fixed counters, PMU version 2, perf_caps = 2000
+Testing arch events, PMU version 3, perf_caps = 0
+Testing GP counters, PMU version 3, perf_caps = 0
+Testing fixed counters, PMU version 3, perf_caps = 0
+Testing arch events, PMU version 3, perf_caps = 2000
+Testing GP counters, PMU version 3, perf_caps = 2000
+Testing fixed counters, PMU version 3, perf_caps = 2000
+Testing arch events, PMU version 4, perf_caps = 0
+Testing GP counters, PMU version 4, perf_caps = 0
+Testing fixed counters, PMU version 4, perf_caps = 0
+Testing arch events, PMU version 4, perf_caps = 2000
+Testing GP counters, PMU version 4, perf_caps = 2000
+Testing fixed counters, PMU version 4, perf_caps = 2000
+Testing arch events, PMU version 5, perf_caps = 0
+Testing GP counters, PMU version 5, perf_caps = 0
+Testing fixed counters, PMU version 5, perf_caps = 0
+Testing arch events, PMU version 5, perf_caps = 2000
+Testing GP counters, PMU version 5, perf_caps = 2000
+Testing fixed counters, PMU version 5, perf_caps = 2000
+== pmu_event_filter_test: exit 0
+Random seed: 0x6b8b4567
+== vmx_pmu_caps_test: exit 0
+Random seed: 0x6b8b4567
+TAP version 13
+1..5
+# Starting 5 tests from 1 test cases.
+#  RUN           vmx_pmu_caps.guest_wrmsr_perf_capabilities ...
+#            OK  vmx_pmu_caps.guest_wrmsr_perf_capabilities
+ok 1 vmx_pmu_caps.guest_wrmsr_perf_capabilities
+#  RUN           vmx_pmu_caps.basic_perf_capabilities ...
+#            OK  vmx_pmu_caps.basic_perf_capabilities
+ok 2 vmx_pmu_caps.basic_perf_capabilities
+#  RUN           vmx_pmu_caps.fungible_perf_capabilities ...
+#            OK  vmx_pmu_caps.fungible_perf_capabilities
+ok 3 vmx_pmu_caps.fungible_perf_capabilities
+#  RUN           vmx_pmu_caps.immutable_perf_capabilities ...
+#            OK  vmx_pmu_caps.immutable_perf_capabilities
+ok 4 vmx_pmu_caps.immutable_perf_capabilities
+#  RUN           vmx_pmu_caps.lbr_perf_capabilities ...
+#            OK  vmx_pmu_caps.lbr_perf_capabilities
+ok 5 vmx_pmu_caps.lbr_perf_capabilities
+# PASSED: 5 / 5 tests passed.
+# Totals: pass:5 fail:0 xfail:0 xpass:0 skip:0 error:0

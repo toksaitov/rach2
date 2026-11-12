@@ -78,8 +78,13 @@ struct vm_file *filemap_disk_shared(const fd_entry_t *e);
 int filemap_disk_pages(const struct vm_file *f);
 
 /** Whether the file `ino` of `mnt` has resident pages for any private or
- * shared mapping, which descriptor writes must update. */
+ * shared mapping, which descriptor writes must update. Under the big lock. */
 int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino);
+
+/** Whether any file on a disk has a shared mapping's pages in memory, read
+ * as one word without the big lock: a read that finds none reads no
+ * mapping's pages, and one that finds some takes the lock to look. */
+int filemap_disk_any(void);
 
 /** Whether any shared mapping holds this disk file's pages. Private
  * mappings alone do not prevent a loop device attaching the file. */

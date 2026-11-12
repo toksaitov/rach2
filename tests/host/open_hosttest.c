@@ -8,7 +8,7 @@
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/park_host.c
  * host-deps: rach2/sys/fs/nodelock.c rach2/sys/mm/notify.c
- * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/bkl_none.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/bkl_held.c
  * host-deps: tests/host/compat/atomic_host.c
  * host-deps: tests/host/compat/mmap_lock_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
@@ -383,12 +383,6 @@ uint32_t kirq_save(void)
     return flags;
 }
 
-/** 1: the test runs as the one thread, which holds the big lock. */
-int bkl_held(void)
-{
-    return 1;
-}
-
 /** Restore the model's saved flags. */
 void kirq_restore(uint32_t flags)
 {
@@ -537,6 +531,12 @@ int vfs_mount_slots(void)
 struct vfs_mount *vfs_mount_at(int idx)
 {
     return idx == 0 ? &mount : 0;
+}
+
+/** The slot of `m` in the mount table: 0 for the model's one mount. */
+int vfs_mount_index(const struct vfs_mount *m)
+{
+    return m == &mount ? 0 : -1;
 }
 
 /** The open model's descriptors never refer to exported dma-bufs. */

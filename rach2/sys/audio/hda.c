@@ -24,6 +24,7 @@
 #include "../lib/kstd.h"
 #include "../lib/kstring.h"
 #include "../mm/paging.h"
+#include "../proc/mutex.h"
 #ifndef RACH2_HOSTTEST
 #include "../proc/percpu.h"
 #include "../proc/process.h"
@@ -212,23 +213,49 @@ static uint32_t ring_write(const uint8_t *data, uint32_t count)
     return to_write;
 }
 
+/*
+ * The stream spinlock, taken with interrupts off, as Linux's PCM stream's
+ * lock (_snd_pcm_stream_lock_irqsave, sound/core/pcm_native.c:164 of 6.12):
+ * the interrupt's marks (play_irq_*, cap_irq_*, irq_count), the services
+ * asked for (service_wanted, service_play_*, beep_next and the serving flag
+ * of hda_serve), and the playback state that the position and the delay
+ * read (playing, stream_started, stream_in, stream_taken, stream_pos,
+ * stream_mark, hw_period_last, play_held). `cap_lock` comes before it, and
+ * a stream's `period`, which takes vchan's and the dsp's locks, is called
+ * under it. No verb is sent under it.
+ *
+ * The stream mutex is held by khda for each service and by every operation
+ * of hda_driver that changes the device, which are called in process
+ * context with no spinlock held, as Linux's PCM operations hold the
+ * runtime's buffer_mutex (sound/core/pcm_native.c:715 of 6.12): so the
+ * service runs without the big lock and no operation runs in the middle of
+ * it (hda_service_thread). It is the lock order's row 8.
+ */
+static struct spinlock stream_lock = SPINLOCK_INIT_NAMED("hda_stream");
+static struct mutex stream_mutex;
+
 /* Playback state */
 static bool playing = false;
 static bool stream_started = false; /* True once hardware stream is running */
 /* Whether the output stream's interrupt has come since its start, and the
  * low half of `kernel_ticks` when it last came; `hda_tick` asks for the
  * stream's service only until one has come, when the next is late
- * (`hda_irq_late`), and while play_irq_pending is set. That is set by the
- * interrupt and cleared by a service that finds the position in the first
- * half of its period: an interrupt that comes while the position still reads
- * the second half of the period before, as Linux's azx_position_check finds
- * one (sound/pci/hda/hda_intel.c:612-625 and 689-691 of 6.12.115), leaves it
- * set, though a late service of an earlier interrupt fills the periods
- * played, and the tick asks again until the position has passed into the
- * next period. A start and a stop clear it. */
+ * (`hda_irq_late`), and while play_irq_pending is set. The interrupt sets
+ * that when it comes early (hda_irq_early), the position still in the
+ * second half of the period before its boundary, as Linux's
+ * azx_position_check marks one (sound/pci/hda/hda_intel.c:612-625 and
+ * 689-692 of 6.12.115), and records in play_irq_period the period that
+ * boundary begins; the tick asks until a service finds the position there
+ * or past it, which clears it. An interrupt not early clears it. A start
+ * and a stop clear it. play_irq_clock is the wall clock at the boundary
+ * last taken as passed, by an interrupt not early or a service that found
+ * the position past an early one's, and at the start before the first, as
+ * Linux's start_wallclk (sound/hda/hdac_stream.c:137, hda_intel.c:693). */
 static bool play_irq_seen = false;
 static bool play_irq_pending = false;
 static uint32_t play_irq_tick = 0;
+static uint32_t play_irq_period = 0;
+static uint32_t play_irq_clock = 0;
 static audio_callback_t user_callback = NULL;
 
 /* Requested format/rate from AUDIO_START (userspace). */
@@ -252,6 +279,10 @@ static int current_hw_channels = 2;
 static bool resample_enabled = false;
 static uint32_t resample_step_fp = 0; /* input_rate / hw_rate */
 static resampler_t hda_rs;
+/* The frames hda_rs held past its next one at the end of the last fill,
+ * which the delay counts: a fill of a stream moves hda_rs outside the stream
+ * lock, and the delay's readers take only that lock. */
+static uint32_t play_held = 0;
 
 /* Persistent diagnostics. */
 static volatile uint32_t total_bytes_written = 0;
@@ -322,11 +353,13 @@ static volatile uint32_t missed_revolutions = 0;
  * polls the jacks from a delayed work and sends the beep's verbs from a work
  * (sound/pci/hda/hda_codec.c:645-659, sound/pci/hda/hda_beep.c:45-51 and
  * 118 of 6.12.115). `service_wanted` holds the HDA_SERVE_ bits asked for
- * since the thread last took them; whoever asks, and the thread, hold the
- * big lock. service_thread is NULL until the first program has its pid, and
- * always in the host test, where hda_test_threaded stands for it; until
- * then, and while the scheduler is off, the service runs where it is asked
- * for.
+ * since the thread last took them, under the stream lock. The interrupt
+ * runs without the big lock, and the thread drops it at its start and
+ * serves under the stream mutex; the tick asks from its locked part.
+ * service_thread is NULL until the first program has its pid, and always in
+ * the host test, where hda_test_threaded stands for it; until then, and
+ * while the scheduler is off, the service runs where it is asked for, under
+ * the big lock, which the interrupt tries for (hda_service_inline).
  */
 #define HDA_SERVE_CAPTURE   1u
 #define HDA_SERVE_PLAY      2u
@@ -764,11 +797,11 @@ static uint32_t hda_fill_period(uint32_t index)
 /**
  * The frames of the stream taken and not yet played at byte `pos` of the DMA
  * buffer: those of each period filled ahead of the one playing, the part of
- * the one playing past `pos`, in proportion, and those hda_rs holds past
- * the time of its next frame, which play after them. The periods filled are
- * those from the one playing round to the one playing at the last service,
- * as hda_delay_at says. Interrupts are off, so that the service does not
- * move them between the reads.
+ * the one playing past `pos`, in proportion, and those hda_rs held past
+ * the time of its next frame at the last fill (play_held), which play after
+ * them. The periods filled are those from the one playing round to the one
+ * playing at the last service, as hda_delay_at says. The caller holds the
+ * stream lock, so that the service does not move them between the reads.
  */
 static uint32_t hda_play_delay(uint32_t pos)
 {
@@ -782,12 +815,12 @@ static uint32_t hda_play_delay(uint32_t pos)
     ahead = (hw_period_last + 2 * HDA_PERIODS - cur - 1) % HDA_PERIODS;
     for (i = 1; i <= ahead; i++)
         frames += stream_in[(cur + i) % HDA_PERIODS];
-    return frames + resample_held(&hda_rs);
+    return frames + play_held;
 }
 
 /** The stream's frames played since its start, silence among them: those
  * taken less those not played, and never less than the last given out.
- * Interrupts are off and the stream runs. */
+ * The caller holds the stream lock and the stream runs. */
 static uint32_t hda_play_played(void)
 {
     uint32_t pos = stream_taken - hda_play_delay(hda_stream_position());
@@ -818,32 +851,31 @@ static void hda_play_signal(void)
  * from the stream's interrupt and the timer tick (hda_service_kick) with
  * them off. Either the interrupt asks for it, or the tick does until the
  * stream's first interrupt, while an interrupt is pending and whenever the
- * next is late (hda_tick). A call that finds the position in the first half
- * of its period clears play_irq_pending: the boundary the latest interrupt
- * stands for has passed, and the call fills up to it, or a call before it,
- * the tick's before the interrupt came, has. One that finds the position in
- * the second half leaves the flag set, though it fills the periods played:
- * the latest interrupt may have come before the position reached its
- * boundary, as azx_position_ok takes such a position for one short of the
- * boundary (sound/pci/hda/hda_intel.c:689-691 of Linux 6.12.115), and the
- * tick asks again until a call finds the position past it.
+ * next is late (hda_tick). A call that finds the position in the period an
+ * early interrupt's boundary begins (play_irq_period), or past it, clears
+ * play_irq_pending, as azx_irq_pending_work clears irq_pending once
+ * azx_position_ok passes the position (sound/pci/hda/hda_intel.c:742-746 of
+ * Linux 6.12.115); one that finds it still in the period before leaves the
+ * flag set, though it fills the periods played, and the tick asks again.
  * The play position, from the position buffer or LPIB, names the period
  * playing; the periods from the one playing at the last call up to this one
  * have been played, and are filled in that order, so that they play after
  * the periods filled before them.
  *
- * Interrupts are off only around the reads and updates of the state that
+ * The stream lock is held around the reads and updates of the state that
  * hda_play_delay and hda_delay_at read, the position, hw_period_last,
- * stream_in and stream_taken, and around the `period` calls; each period's
- * fill, the mix's `transfer` and the rate conversion, runs with them as the
- * caller has them, as Linux's __snd_pcm_lib_xfer drops the stream's lock,
- * and with it the interrupts it turned off, around the writer's copy
- * (sound/core/pcm_lib.c:2380-2387, Linux 6.12.115). hw_period_last moves
- * on after each fill to the period after it, so that the periods it counts
- * as filled ahead are always those whose stream_in is current. A fill also
- * moves hda_rs and the ring, which the delay's readers read; those are
- * system calls, which run only once the service has ended, since khda
- * holds the big lock and is not switched while it serves.
+ * stream_in, stream_taken and play_held, and around the `period` calls; a
+ * stream's fill, the mix's `transfer` and the rate conversion, runs without
+ * it, with interrupts as the caller has them, as Linux's __snd_pcm_lib_xfer
+ * drops the stream's lock, and with it the interrupts it turned off, around
+ * the writer's copy (sound/core/pcm_lib.c:2380-2387, Linux 6.12.115).
+ * hw_period_last moves on after each fill to the period after it, so that
+ * the periods it counts as filled ahead are always those whose stream_in is
+ * current, and play_held takes what hda_rs holds then, so a reader on
+ * another processor counts a fill under way in neither. A fill from the
+ * write path's ring, whose reader counts the ring itself, runs under the
+ * lock; the callback's, whose reader counts only the DMA buffer, runs
+ * without it.
  *
  * The position cannot show a whole revolution of the buffer between two
  * calls, after which every period but the one playing has been played again.
@@ -864,9 +896,9 @@ static void hda_service_stream(void)
     uint32_t cbl, pos, now, period, elapsed, moved, rev, half, first, count, i;
     uint32_t flags, index, taken;
 
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&stream_lock);
     if (!playing || !stream_started || !hda_base) {
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&stream_lock, flags);
         return;
     }
 
@@ -911,6 +943,7 @@ static void hda_service_stream(void)
             session_bytes_dropped += ring_available();
             ring_read_ptr = ring_write_ptr;
             resample_init(&hda_rs, current_sample_rate, current_hw_sample_rate);
+            play_held = resample_held(&hda_rs);
         }
         first = period + 1;
         count = HDA_PERIODS - 1;
@@ -921,24 +954,31 @@ static void hda_service_stream(void)
     lpib_last = pos;
     walclk_last = now;
     hw_period_last = first % HDA_PERIODS;
-    if (pos % period_bytes <= period_bytes / 2)
+    if (play_irq_pending && period != (play_irq_period + HDA_PERIODS - 1) % HDA_PERIODS) {
         play_irq_pending = false;
+        play_irq_clock = now;
+    }
 
     for (i = 0; i < count; i++) {
         index = (first + i) % HDA_PERIODS;
-        kirq_restore(flags);
-        taken = hda_fill_period(index);
-        flags = kirq_save();
+        if (play_stream || user_callback) {
+            spin_unlock_irqrestore(&stream_lock, flags);
+            taken = hda_fill_period(index);
+            flags = spin_lock_irqsave(&stream_lock);
+        } else {
+            taken = hda_fill_period(index);
+        }
         if (play_stream) {
             stream_in[index] = taken;
             stream_taken += taken;
         }
+        play_held = resample_held(&hda_rs);
         hw_period_last = (index + 1) % HDA_PERIODS;
         hw_fill_count++;
     }
     if (play_stream)
         hda_play_signal();
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&stream_lock, flags);
 }
 
 /**
@@ -1745,10 +1785,13 @@ static uint32_t cap_pos = 0;
 static uint32_t cap_clock = 0;
 static uint32_t cap_recorded = 0;
 static uint32_t cap_handed = 0;
-/* The input stream's play_irq_seen, play_irq_pending and play_irq_tick. */
+/* The input stream's play_irq_seen, play_irq_pending, play_irq_tick,
+ * play_irq_period and play_irq_clock. */
 static bool cap_irq_seen = false;
 static bool cap_irq_pending = false;
 static uint32_t cap_irq_tick = 0;
+static uint32_t cap_irq_period = 0;
+static uint32_t cap_irq_clock = 0;
 
 static void hda_service_capture(void);
 static uint32_t hda_input_position(void);
@@ -2396,38 +2439,73 @@ static uint32_t hda_intctl(void)
 }
 
 static void hda_service_kick(uint32_t wanted);
+static bool hda_service_ask(uint32_t wanted);
+static void hda_service_inline(uint32_t wanted);
+static uint32_t hda_capture_period_us(void);
+
+/**
+ * Whether a stream's interrupt came early: the position, `pos` bytes into a
+ * period of `period` bytes, is in the second half of the period before the
+ * boundary, and less than a period and a quarter, of `period_us`, has passed
+ * since the boundary last taken as passed, `since_us` ago. So
+ * azx_position_ok refuses a position (sound/pci/hda/hda_intel.c:689-692 of
+ * Linux 6.12.115); one that comes later is a late interrupt for the boundary
+ * behind the position, which has passed.
+ */
+static bool hda_irq_early(uint32_t pos, uint32_t period, uint32_t since_us, uint32_t period_us)
+{
+    return pos % period > period / 2 && since_us < period_us + period_us / 4u;
+}
 
 /**
  * HDA interrupt handler: acknowledge each stream's interrupt and ask for its
  * service.
  *
- * Returns immediately after shutdown. For each stream INTSTS flags, the
- * input stream and then the output stream, it clears the stream's status
- * register (write-1-to-clear) and asks for the stream's service, which runs
- * in the service's thread (hda_service_kick): the input stream hands its
- * finished periods to the reader, the output stream refills the periods
- * played. So the interrupt holds the big lock for its register accesses
- * and a wake, as Linux's azx_interrupt acknowledges each stream and calls
- * snd_pcm_period_elapsed (sound/hda/hdac_controller.c:684,
- * sound/pci/hda/hda_controller.c:1070).
+ * Returns immediately after shutdown. Under the stream lock, for each
+ * stream INTSTS flags, the input stream and then the output stream, it
+ * clears the stream's status register (write-1-to-clear), sets the stream's
+ * marks and asks for its service (hda_service_ask), which reads the wall
+ * clock for the output stream's; it wakes khda after the lock. The input
+ * stream's service hands its finished periods to the reader, the output
+ * stream's refills the periods played. So the handler runs without the big
+ * lock (ISR_UNLOCKED) and takes only the stream lock and khda's wait
+ * queue's, as Linux's azx_interrupt acknowledges each stream under the
+ * bus's reg_lock and calls snd_pcm_period_elapsed, which wakes the writer
+ * (sound/hda/hdac_controller.c:684, sound/pci/hda/hda_controller.c:1070).
+ * It reads the stream's position and the wall clock, as azx_position_check
+ * does from Linux's interrupt, to mark an early interrupt pending with the
+ * period its boundary begins (hda_irq_early), or to take the boundary
+ * behind the position as passed. While khda does not run, the service runs
+ * here under the big lock, when a try takes it (hda_service_inline).
  */
 static void hda_irq_handler(isr_params_t *params)
 {
-    uint32_t intsts, wanted = 0;
+    uint32_t intsts, wanted = 0, buf, pos, now, flags;
     uint8_t sd_sts;
+    bool wake = false;
     (void)params;
 
+    flags = spin_lock_irqsave(&stream_lock);
     if (!hda_base) {
+        spin_unlock_irqrestore(&stream_lock, flags);
         return;
     }
-
     intsts = hda_read32(HDA_INTSTS);
     if (num_input_streams > 0 && (intsts & (1u << input_stream_index))) {
         sd_sts = hda_read8(hda_sd_offset(input_stream_index) + HDA_SD_STS);
         hda_write8(hda_sd_offset(input_stream_index) + HDA_SD_STS, sd_sts);
-        if (cap_running) {
-            cap_irq_seen = cap_irq_pending = true;
+        if (cap_running && cap_period != 0 && cap_periods != 0) {
+            buf = cap_period * cap_periods;
+            pos = hda_input_position() % buf;
+            now = hda_read32(HDA_WALCLK);
+            cap_irq_seen = true;
             cap_irq_tick = (uint32_t)kernel_ticks;
+            cap_irq_pending = hda_irq_early(pos, cap_period, (now - cap_irq_clock) / 24u,
+                                            hda_capture_period_us());
+            if (cap_irq_pending)
+                cap_irq_period = (pos / cap_period + 1) % cap_periods;
+            else
+                cap_irq_clock = now;
         }
         wanted |= HDA_SERVE_CAPTURE;
     }
@@ -2435,14 +2513,30 @@ static void hda_irq_handler(isr_params_t *params)
         sd_sts = hda_read8(hda_sd_offset(output_stream_index) + HDA_SD_STS);
         hda_write8(hda_sd_offset(output_stream_index) + HDA_SD_STS, sd_sts);
         irq_count++;
-        if (playing && stream_started) {
-            play_irq_seen = play_irq_pending = true;
+        if (playing && stream_started && period_bytes != 0) {
+            buf = period_bytes * HDA_PERIODS;
+            pos = hda_stream_position() % buf;
+            now = hda_read32(HDA_WALCLK);
+            play_irq_seen = true;
             play_irq_tick = (uint32_t)kernel_ticks;
+            play_irq_pending = hda_irq_early(pos, period_bytes, (now - play_irq_clock) / 24u,
+                                             hda_bytes_us(period_bytes));
+            if (play_irq_pending)
+                play_irq_period = (pos / period_bytes + 1) % HDA_PERIODS;
+            else
+                play_irq_clock = now;
             wanted |= HDA_SERVE_PLAY;
         }
     }
     if (wanted)
-        hda_service_kick(wanted);
+        wake = hda_service_ask(wanted);
+    spin_unlock_irqrestore(&stream_lock, flags);
+#ifndef RACH2_HOSTTEST
+    if (wake)
+        wq_wake_all(&service_wq);
+#endif
+    if (wanted && !wake)
+        hda_service_inline(wanted);
 }
 
 /**
@@ -2483,6 +2577,7 @@ static void hda_msi_start(void)
         return;
     }
     register_isr_handler((uint8_t)msi_vector, hda_irq_handler, "hda");
+    isr_register_flags((uint8_t)msi_vector, hda_irq_handler, ISR_UNLOCKED);
     if (pci_msi_enable(&hda_pci, (uint8_t)msi_vector) != 0) {
         isr_free_vector(msi_vector);
         msi_vector = -1;
@@ -2563,6 +2658,7 @@ static int hda_init(void)
 
     k_strncpy(hda_boot_status, "Intel HD Audio", sizeof(hda_boot_status) - 1);
     hda_boot_status[sizeof(hda_boot_status) - 1] = '\0';
+    mutex_init(&stream_mutex, "hda_stream_mutex");
 
     if (!hda_find_controller()) {
         return -1;
@@ -2624,6 +2720,7 @@ static int hda_init(void)
 
     if (hda_pci.irq > 0 && hda_pci.irq < 16) {
         register_isr_handler((uint8_t)IRQ_VECTOR(hda_pci.irq), hda_irq_handler, "hda");
+        isr_register_flags((uint8_t)IRQ_VECTOR(hda_pci.irq), hda_irq_handler, ISR_UNLOCKED);
 
         hda_write32(HDA_INTCTL, hda_intctl());
     }
@@ -2639,6 +2736,8 @@ static int hda_init(void)
  */
 static void hda_shutdown(void)
 {
+    uint32_t flags;
+
     if (!hda_base) {
         return;
     }
@@ -2651,7 +2750,9 @@ static void hda_shutdown(void)
     hda_write32(HDA_INTCTL, 0); /* disable all interrupts */
     hda_write32(HDA_GCTL, 0);   /* assert controller reset */
 
+    flags = spin_lock_irqsave(&stream_lock);
     hda_base = 0;
+    spin_unlock_irqrestore(&stream_lock, flags);
 }
 
 /** Print on the console, the screen and the serial port, and not to the
@@ -3301,9 +3402,11 @@ static int beep_level = 0;                /* the mixer's level, 0 to 100; 0
 static volatile uint8_t beep_div = 0;     /* the divider sounding; 0 silent */
 static volatile bool beep_opened = false; /* a beep turned the output pins on
                                              with no stream playing */
-static uint32_t beep_quiet = 0;           /* ticks silent since, while opened */
-static volatile bool beep_owed = false;   /* beep_next waits for the beep's
-                                             service */
+static uint32_t beep_silent = 0;          /* `kernel_ticks` when the
+                                             generator last fell silent */
+static volatile bool beep_queued = false; /* beep_next waits for the beep's
+                                             service; under the stream lock
+                                             while khda runs */
 static volatile uint8_t beep_next = 0;    /* the divider a tone or a stop
                                              handed to khda; 0 a stop */
 
@@ -3533,8 +3636,10 @@ static bool hda_jacks_held(void)
  * tick while khda does not run. Nothing is done while code outside the
  * service holds the jacks, and what a failed verb left undone is done again
  * at the next poll. No hold begins while the poll runs: holds are taken by
- * system calls, which wait for the big lock that khda, or the tick, holds
- * throughout, and khda is not switched in the middle of a service.
+ * the operations of hda_driver, which wait for the stream mutex that khda
+ * holds throughout, or, while khda does not run, for the big lock the tick
+ * holds; a beep's tone holds them only from khda, or from the caller of
+ * `beep` while khda does not run (hda_beep).
  */
 static void hda_poll_jacks(void)
 {
@@ -3556,10 +3661,13 @@ static void hda_poll_jacks(void)
  * total_bytes_written goes on. */
 static void hda_session_reset(void)
 {
+    uint32_t flags = spin_lock_irqsave(&stream_lock);
+
 #ifndef RACH2_HOSTTEST
     service_play_pending = service_play_active = false;
 #endif
     irq_count = 0;
+    spin_unlock_irqrestore(&stream_lock, flags);
     underrun_count = 0;
     underrun_samples = 0;
     hw_fill_count = 0;
@@ -3621,6 +3729,7 @@ static void hda_out_buffers(int stream, uint16_t fmt)
         /* Write path silence is signed 16-bit zeros. */
         fill_silence((uint8_t *)audio_buffer, period_bytes * HDA_PERIODS, true);
     }
+    play_held = resample_held(&hda_rs);
 
     /* Push initial samples to RAM for DMA (matters on some laptops). */
     hda_dma_sync_range(audio_buffer, period_bytes * HDA_PERIODS);
@@ -3838,7 +3947,7 @@ static void hda_out_codec(uint16_t fmt)
 static int hda_launch(uint16_t fmt)
 {
     int stream = output_stream_index;
-    uint32_t ctl;
+    uint32_t ctl, flags;
 
     hda_session_reset();
     if (!hda_stream_reset(stream)) {
@@ -3858,6 +3967,7 @@ static int hda_launch(uint16_t fmt)
         dma_posbuf[stream * 2] = 0;
         hda_dma_sync_range(&dma_posbuf[stream * 2], (uint32_t)sizeof(uint32_t));
     }
+    flags = spin_lock_irqsave(&stream_lock);
     lpib_last = 0;
     lpib_wraps = 0;
     hw_period_last = 0;
@@ -3868,6 +3978,8 @@ static int hda_launch(uint16_t fmt)
     hda_sd_write32(stream, HDA_SD_CTL, ctl);
     stream_started = true;
     play_irq_seen = play_irq_pending = false;
+    play_irq_clock = walclk_last;
+    spin_unlock_irqrestore(&stream_lock, flags);
     hda_report.playing = true;
     hda_report.requested_rate = current_sample_rate;
     hda_report.programmed_rate = current_hw_sample_rate;
@@ -3935,10 +4047,11 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
 
 /**
  * Halt the output stream, mute the DAC, turn the output pins and EAPD off,
- * and reset the ring buffer. The service is turned off first, with
- * interrupts off, so that no fill, and no `transfer` or `period` of a
- * stream, is made once the run bit is cleared. The next start turns the
- * pins and EAPD on again.
+ * and reset the ring buffer. The service is turned off first, under the
+ * stream lock, so that no fill, and no `transfer` or `period` of a stream,
+ * is made once the run bit is cleared: khda waits for the stream mutex the
+ * caller holds, and an inline service checks the flags under the lock. The
+ * next start turns the pins and EAPD on again.
  */
 static void hda_halt(void)
 {
@@ -3949,11 +4062,11 @@ static void hda_halt(void)
         return;
     }
 
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&stream_lock);
     playing = false;
     stream_started = false;
     play_irq_pending = false;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&stream_lock, flags);
     walclk_end = hda_read32(HDA_WALCLK);
 
     hda_sd_write8(stream, HDA_SD_CTL, 0);
@@ -3965,7 +4078,6 @@ static void hda_halt(void)
     if (beep_div) {
         /* A beep sounds through the pins; its service turns them off after. */
         beep_opened = true;
-        beep_quiet = 0;
         hda_report.beep_path = 1;
     } else {
         if (pin_nid)
@@ -4011,13 +4123,12 @@ static uint32_t hda_stream_position(void)
 /**
  * The frames queued at position `pos`, in frames at the caller's rate: the
  * ring's, those hda_rs holds past the time of its next frame, and the DMA
- * buffer's from `pos` to the end of the samples the
- * service has put there, converted from the programmed rate. That end is the
- * start of the period playing at the last service, since every period after
- * it has been filled; a distance of 0 is the whole buffer. For a stream of
- * audio.h, hda_play_delay's count. 0 when no stream plays. The caller keeps
- * interrupts off, so that the service does not move the end between the
- * reads.
+ * buffer's from `pos` to the end of the samples the service has put there,
+ * converted from the programmed rate. That end is the start of the period
+ * playing at the last service, since every period after it has been filled;
+ * a distance of 0 is the whole buffer. For a stream of audio.h,
+ * hda_play_delay's count. 0 when no stream plays. The caller holds the
+ * stream lock, so that the service does not move the end between the reads.
  */
 static uint32_t hda_delay_at(uint32_t pos)
 {
@@ -4034,24 +4145,24 @@ static uint32_t hda_delay_at(uint32_t pos)
     dma /= hda_out_frame();
     if (user_callback)
         return dma;
-    return ring_available() / hda_in_frame() + resample_held(&hda_rs) + hda_frames_in(dma, false);
+    return ring_available() / hda_in_frame() + play_held + hda_frames_in(dma, false);
 }
 
 uint32_t hda_delay_frames(void)
 {
     uint32_t flags, frames = 0;
 
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&stream_lock);
     if (hda_base && playing && stream_started)
         frames = hda_delay_at(hda_stream_position());
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&stream_lock, flags);
     return frames;
 }
 
 void hda_read_queue(void)
 {
     hda_queue_report_t *q = &hda_report.queue;
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&stream_lock);
 
     q->lpib = hda_base && hda_report.ready ? hda_stream_position() : 0;
     q->fill = ring_available();
@@ -4069,7 +4180,7 @@ void hda_read_queue(void)
     hda_report.service.usec = timer_cycles_us(service_cycles);
     hda_report.service.max_usec = timer_cycles_us(service_max_cycles);
 #endif
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&stream_lock, flags);
 }
 
 /**
@@ -4099,24 +4210,26 @@ static uint32_t hda_capture_period_us(void)
 
 /** Run the services `wanted` asks for, HDA_SERVE_ bits, the input
  * stream's first, as the interrupt acknowledges it first, and the jacks' and
- * the beep's last: from khda with interrupts on, or from the interrupt or
- * the tick with them off. A call that comes while a service is under way,
- * which only an interrupt in khda's services could make, returns at once;
- * the service under way refills up to the position it read, and each later
- * service refills every period played since, so the stream's next
- * interrupt, or the tick once that interrupt is late, refills the rest, and
- * the tick asks again for a poll or a beep's verbs that are still due. */
+ * the beep's last: from khda with interrupts on and the stream mutex held,
+ * or, while khda does not run, from the interrupt or the tick with them off
+ * and the big lock held. A call that comes while a service is under way,
+ * which only an interrupt in a service on the same processor could make,
+ * returns at once; the service under way refills up to the position it
+ * read, and each later service refills every period played since, so the
+ * stream's next interrupt, or the tick once that interrupt is late, refills
+ * the rest, and the tick asks again for a poll or a beep's verbs that are
+ * still due. */
 static void hda_serve(uint32_t wanted)
 {
-    static volatile bool serving = false;
-    uint32_t flags = kirq_save();
+    static bool serving = false; /* under the stream lock */
+    uint32_t flags = spin_lock_irqsave(&stream_lock);
 
     if (serving) {
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&stream_lock, flags);
         return;
     }
     serving = true;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&stream_lock, flags);
     if (wanted & HDA_SERVE_CAPTURE)
         hda_service_capture();
     if (wanted & HDA_SERVE_PLAY)
@@ -4125,7 +4238,9 @@ static void hda_serve(uint32_t wanted)
         hda_poll_jacks();
     if (wanted & HDA_SERVE_BEEP)
         hda_beep_service();
+    flags = spin_lock_irqsave(&stream_lock);
     serving = false;
+    spin_unlock_irqrestore(&stream_lock, flags);
 }
 
 /** Whether the service's thread runs the services: it is made and the
@@ -4139,16 +4254,15 @@ static bool hda_service_threaded(void)
 #endif
 }
 
-/** Ask for the services `wanted` asks for, HDA_SERVE_ bits: wake the
- * service's thread, or run them here while it does not run them. From the
- * interrupt, the tick and a tone (hda_beep), with interrupts off and the big
- * lock held. */
-static void hda_service_kick(uint32_t wanted)
+/** Ask the service's thread for the services `wanted` asks for, HDA_SERVE_
+ * bits, under the stream lock: true when the caller is to wake it after the
+ * lock, false when the thread does not run them and the caller is to run
+ * them itself (hda_service_inline). The output stream's request stamps the
+ * wall clock, which a missed revolution reports. */
+static bool hda_service_ask(uint32_t wanted)
 {
-    if (!hda_service_threaded()) {
-        hda_serve(wanted);
-        return;
-    }
+    if (!hda_service_threaded())
+        return false;
 #ifndef RACH2_HOSTTEST
     if ((wanted & HDA_SERVE_PLAY) && playing && stream_started && !service_play_pending) {
         service_play_requested = hda_read32(HDA_WALCLK);
@@ -4156,6 +4270,39 @@ static void hda_service_kick(uint32_t wanted)
     }
 #endif
     service_wanted |= wanted;
+    return true;
+}
+
+/** Run the services `wanted` asks for here, while the service's thread
+ * does not run them, under the big lock: from the tick, which holds it,
+ * or from the interrupt, which tries for it and leaves the marks it set to
+ * the tick when another processor holds it. */
+static void hda_service_inline(uint32_t wanted)
+{
+#ifndef RACH2_HOSTTEST
+    if (!bkl_try_enter())
+        return;
+    hda_serve(wanted);
+    bkl_exit();
+#else
+    hda_serve(wanted);
+#endif
+}
+
+/** Ask for the services `wanted` asks for, HDA_SERVE_ bits: wake the
+ * service's thread, or run them here while it does not run them. From the
+ * tick, with interrupts off and the big lock held, and from a tone or a
+ * stop (hda_beep), under the speaker's spinlock. */
+static void hda_service_kick(uint32_t wanted)
+{
+    uint32_t flags = spin_lock_irqsave(&stream_lock);
+    bool wake = hda_service_ask(wanted);
+
+    spin_unlock_irqrestore(&stream_lock, flags);
+    if (!wake) {
+        hda_service_inline(wanted);
+        return;
+    }
 #ifndef RACH2_HOSTTEST
     wq_wake_all(&service_wq);
 #endif
@@ -4192,14 +4339,16 @@ void hda_tick(void)
 {
     static uint32_t seen; /* `kernel_ticks` at the last call */
     uint32_t now = (uint32_t)kernel_ticks, passed = now - seen;
-    uint32_t wanted = 0;
+    uint32_t wanted = 0, flags;
 
     seen = now;
+    flags = spin_lock_irqsave(&stream_lock);
     if (!play_irq_seen || play_irq_pending ||
         hda_irq_late(play_irq_tick, hda_bytes_us(period_bytes)))
         wanted |= HDA_SERVE_PLAY;
     if (!cap_irq_seen || cap_irq_pending || hda_irq_late(cap_irq_tick, hda_capture_period_us()))
         wanted |= HDA_SERVE_CAPTURE;
+    spin_unlock_irqrestore(&stream_lock, flags);
     if (wanted && hda_service_threaded())
         wanted = hda_service_due(wanted);
     if (hda_base && hda_report.ready) {
@@ -4211,14 +4360,9 @@ void hda_tick(void)
                 wanted |= HDA_SERVE_JACKS;
         }
     }
-    if (beep_owed) {
+    if (beep_queued ||
+        (beep_opened && !beep_div && (playing || now - beep_silent >= HDA_BEEP_IDLE_TICKS)))
         wanted |= HDA_SERVE_BEEP;
-    } else if (beep_opened && !beep_div) {
-        if (!playing)
-            beep_quiet += passed;
-        if (playing || beep_quiet >= HDA_BEEP_IDLE_TICKS)
-            wanted |= HDA_SERVE_BEEP;
-    }
     if (wanted)
         hda_service_kick(wanted);
 }
@@ -4232,54 +4376,52 @@ static int hda_service_asked(void *arg)
 }
 
 /**
- * The service's thread, khda: sleep until the interrupt or the tick asks for
- * a service, then run it with interrupts on, as Linux's writer copies into
- * the ring with them on (hda_service_stream). The services keep them off
- * only around the stream's position and period state.
+ * The service's thread, khda: sleep until the interrupt, the tick or a beep
+ * asks for a service, then run it with interrupts on, as Linux's writer
+ * copies into the ring with them on (hda_service_stream). The services take
+ * the stream lock only around the stream's position and period state.
  *
- * No switch comes between two refills: as a kernel thread, khda is not
- * switched by an interrupt (`no_tick_switch`), which only asks for a switch
- * (sched_preempt), and it takes the switch asked for at the service point
- * after each service (sched_service_point), as Linux's worker calls
- * cond_resched between works (kernel/workqueue.c:3290-3299). So no system
- * call runs on this processor in the middle of a service, and none on
- * another, since the thread holds the big lock throughout.
- *
- * A service counts in `bkl/calls` under the hold it runs in, under no entry:
- * `take 1` when the thread took the big lock in the tail of a switch to it
- * (schedule_tail), after its sleep or at a service point that switched, and
- * `vector 0` when the service point let the lock go to another processor's
- * claim and took it back without a switch (bkl_yield), as when the thread's
- * FIFO priority keeps it selected. A service asked for during the last one
- * runs in the same hold, since the wait finds its condition true at once.
- * The scheduler counts the thread's time in /proc/PID/schedstat.
+ * The thread gives up the big lock it starts with, as Linux's interrupt
+ * threads and workers hold no global lock, and holds the stream mutex for
+ * each service, so that no operation of hda_driver, each of which takes the
+ * mutex, runs in the middle of one, on this processor or another; the
+ * position and delay readers take the stream lock instead. As a kernel
+ * thread, khda is not switched by an interrupt (`no_tick_switch`), which
+ * only asks for a switch (sched_preempt), and it takes the switch asked for
+ * at the service point after each service, with the mutex given back
+ * (sched_service_point), as Linux's worker calls cond_resched between works
+ * (kernel/workqueue.c:3290-3299). The scheduler counts the thread's time in
+ * /proc/PID/schedstat.
  */
 static void hda_service_thread(void)
 {
     uint32_t flags, wanted;
     uint64_t start, elapsed;
 
+    bkl_exit();
     arch_irq_enable();
     for (;;) {
         (void)wq_wait_event_idle(&service_wq, hda_service_asked, NULL);
-        flags = kirq_save();
+        flags = spin_lock_irqsave(&stream_lock);
         wanted = service_wanted;
         service_wanted = 0;
         service_play_active = (wanted & HDA_SERVE_PLAY) && service_play_pending;
         service_play_asked = service_play_requested;
         if (wanted & HDA_SERVE_PLAY)
             service_play_pending = false;
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&stream_lock, flags);
+        mutex_lock(&stream_mutex);
         start = arch_cycles();
         hda_serve(wanted);
         elapsed = arch_cycles() - start;
-        flags = kirq_save();
+        mutex_unlock(&stream_mutex);
+        flags = spin_lock_irqsave(&stream_lock);
         service_calls++;
         service_cycles += elapsed;
         if (elapsed > service_max_cycles)
             service_max_cycles = elapsed;
         service_play_active = false;
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&stream_lock, flags);
         sched_service_point();
     }
 }
@@ -4564,15 +4706,16 @@ static uint32_t hda_capture_convert(const audio_stream_t *s, const uint8_t *src)
  * device writes is lost and the rest, from the one after it, are handed
  * over: the newest whole revolution, in order. A service already under way
  * elsewhere is left to finish alone. A call that finds the position in the
- * first half of its period clears cap_irq_pending, as hda_service_stream
- * clears play_irq_pending.
+ * period an early interrupt's boundary begins, or past it, clears
+ * cap_irq_pending, as hda_service_stream clears play_irq_pending.
  *
  * `cap_lock` and interrupts are held around the reads and updates of the
  * position, cap_next and the counts, and around `period`; each period's
  * conversion and `transfer` run outside them, with interrupts as the caller
  * has them, as hda_service_stream says. Nothing changes the stream while
- * they run: the stream operations are system calls, which wait for the big
- * lock that the service holds.
+ * they run: the stream operations wait for the stream mutex that khda
+ * holds, or, while khda does not run, for the big lock that the interrupt
+ * or the tick holds.
  */
 static void hda_service_capture(void)
 {
@@ -4605,8 +4748,12 @@ static void hda_service_capture(void)
     /* The frames up to period `cur` that are neither handed nor to be. */
     s->lost = cap_recorded - pos % cap_period / cap_frame - cap_handed -
               (cur + cap_periods - cap_next) % cap_periods * (cap_period / cap_frame);
-    if (pos % cap_period <= cap_period / 2)
+    spin_lock(&stream_lock);
+    if (cap_irq_pending && cur != (cap_irq_period + cap_periods - 1) % cap_periods) {
         cap_irq_pending = false;
+        cap_irq_clock = now;
+    }
+    spin_unlock(&stream_lock);
     while (cap_next != cur) {
         const uint8_t *src = cap_buffer + cap_next * cap_period;
 
@@ -4896,7 +5043,10 @@ static int hda_capture_start(audio_stream_t *s)
     cap_handed = 0;
     s->lost = 0;
     cap_clock = hda_read32(HDA_WALCLK);
+    spin_lock(&stream_lock);
     cap_irq_seen = cap_irq_pending = false;
+    cap_irq_clock = cap_clock;
+    spin_unlock(&stream_lock);
     cap_running = true;
     hda_report.input.running = true;
     hda_sd_write32(stream, HDA_SD_CTL, hda_sd_read32(stream, HDA_SD_CTL) | HDA_SD_CTL_RUN);
@@ -4925,7 +5075,9 @@ static void hda_capture_stop(audio_stream_t *s)
     spin_lock(&cap_lock);
     was = cap_running;
     cap_running = false;
+    spin_lock(&stream_lock);
     cap_irq_pending = false;
+    spin_unlock(&stream_lock);
     hda_report.input.running = false;
     if (was && hda_base) {
         hda_sd_write8(stream, HDA_SD_CTL, 0);
@@ -5114,12 +5266,12 @@ static void hda_play_close(audio_stream_t *s)
  * last count given while it is stopped. Safe with interrupts off. */
 static uint32_t hda_play_frames(audio_stream_t *s)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&stream_lock);
     uint32_t pos = stream_pos;
 
     if (s == play_stream && hda_base && playing && stream_started)
         pos = hda_play_played();
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&stream_lock, flags);
     return pos;
 }
 
@@ -5285,9 +5437,9 @@ static void hda_find_beep(void)
 
     beep_nid = 0;
     beep_div = 0;
-    beep_owed = false;
+    beep_queued = false;
     beep_opened = false;
-    beep_quiet = 0;
+    beep_silent = (uint32_t)kernel_ticks;
     hda_report.beep = hda_report.beep_divider = hda_report.beep_path = 0;
     hda_report.beeps = 0;
     for (i = 0; i < hda_report.widget_count && !b; i++)
@@ -5331,17 +5483,19 @@ static int hda_beep_stop(void)
 {
     if (hda_verb(codec_addr, beep_nid, HDA_VERB_SET_BEEP | 0, HDA_VERB_TRY, NULL) != 0)
         return -EBUSY;
-    beep_owed = false;
+    beep_queued = false;
     beep_div = 0;
+    beep_silent = (uint32_t)kernel_ticks;
     hda_report.beep_divider = 0;
     return 0;
 }
 
-/** Record divider `div` as the generator's, counting a tone, and restart
+/** Record divider `div` as the generator's, counting a tone; a stop starts
  * the silence that turns the pins a beep opened off. */
 static void hda_beep_sent(uint32_t div)
 {
-    beep_quiet = 0;
+    if (!div)
+        beep_silent = (uint32_t)kernel_ticks;
     beep_div = (uint8_t)div;
     hda_report.beep_divider = (uint8_t)div;
     if (div)
@@ -5386,7 +5540,7 @@ static void hda_beep_eapd(bool on, bool *ok)
  */
 static int hda_beep(uint32_t hz, int tick)
 {
-    uint32_t div = 0;
+    uint32_t div = 0, flags;
 
     if (!beep_nid)
         return -ENODEV;
@@ -5398,15 +5552,17 @@ static int hda_beep(uint32_t hz, int tick)
             div = 1;
     }
     if (hda_service_threaded()) {
+        flags = spin_lock_irqsave(&stream_lock);
         beep_next = (uint8_t)div;
-        beep_owed = true;
+        beep_queued = true;
+        spin_unlock_irqrestore(&stream_lock, flags);
         hda_service_kick(HDA_SERVE_BEEP);
         return (int)div;
     }
     if (tick)
         return hda_beep_stop();
     hda_jack_hold();
-    beep_owed = false;
+    beep_queued = false;
     if (div && !playing && !beep_opened) {
         hda_route_output(HDA_VERB_WAIT);
         hda_set_eapd(true);
@@ -5429,11 +5585,11 @@ static int hda_beep(uint32_t hz, int tick)
  */
 static bool hda_beep_owed(void)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&stream_lock);
     uint8_t div = beep_next;
-    bool ok = true;
+    bool ok = true, queued;
 
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&stream_lock, flags);
     if (div && !playing && !beep_opened) {
         if (hda_jacks_held() || !hda_route_output(HDA_VERB_TRY))
             return false;
@@ -5445,12 +5601,13 @@ static bool hda_beep_owed(void)
     }
     if (hda_verb(codec_addr, beep_nid, HDA_VERB_SET_BEEP | div, HDA_VERB_TRY, NULL) != 0)
         return false;
-    flags = kirq_save();
     hda_beep_sent(div);
+    flags = spin_lock_irqsave(&stream_lock);
     if (beep_next == div)
-        beep_owed = false;
-    kirq_restore(flags);
-    return !beep_owed;
+        beep_queued = false;
+    queued = beep_queued;
+    spin_unlock_irqrestore(&stream_lock, flags);
+    return !queued;
 }
 
 /**
@@ -5468,7 +5625,7 @@ static void hda_beep_service(void)
 {
     bool ok = true;
 
-    if (beep_owed && !hda_beep_owed())
+    if (beep_queued && !hda_beep_owed())
         return;
     if (!beep_opened || beep_div)
         return;
@@ -5477,7 +5634,7 @@ static void hda_beep_service(void)
         hda_report.beep_path = 0;
         return;
     }
-    if (beep_quiet < HDA_BEEP_IDLE_TICKS || hda_jacks_held())
+    if ((uint32_t)kernel_ticks - beep_silent < HDA_BEEP_IDLE_TICKS || hda_jacks_held())
         return;
     if (pin_nid)
         hda_put(pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00, HDA_VERB_TRY, &ok);
@@ -5582,13 +5739,161 @@ static uint32_t hda_stream_delay(audio_stream_t *s)
     return hda_delay_frames();
 }
 
+/*
+ * The operations of hda_driver that change the device, each under the
+ * stream mutex, so that none runs in the middle of khda's service
+ * (hda_service_thread). They are called in process context with no
+ * spinlock held. The driver's own calls use the functions they wrap. The
+ * readers, is_playing, get_volume, stream_frames, stream_delay and
+ * input_caps, take at most the stream lock or cap_lock, since a caller may
+ * have interrupts off; `beep` is called under the speaker's spinlock and
+ * leaves its verbs to khda (hda_beep).
+ */
+
+/** hda_shutdown under the stream mutex. */
+static void hda_m_shutdown(void)
+{
+    mutex_lock(&stream_mutex);
+    hda_shutdown();
+    mutex_unlock(&stream_mutex);
+}
+
+/** hda_start under the stream mutex. */
+static int hda_m_start(uint32_t sample_rate, audio_format_t format, int channels)
+{
+    int rc;
+
+    mutex_lock(&stream_mutex);
+    rc = hda_start(sample_rate, format, channels);
+    mutex_unlock(&stream_mutex);
+    return rc;
+}
+
+/** hda_stop under the stream mutex. */
+static void hda_m_stop(void)
+{
+    mutex_lock(&stream_mutex);
+    hda_stop();
+    mutex_unlock(&stream_mutex);
+}
+
+/** hda_set_callback under the stream mutex. */
+static void hda_m_set_callback(audio_callback_t fn)
+{
+    mutex_lock(&stream_mutex);
+    hda_set_callback(fn);
+    mutex_unlock(&stream_mutex);
+}
+
+/** hda_write under the stream mutex. */
+static int hda_m_write(const uint8_t *buffer, size_t size)
+{
+    int rc;
+
+    mutex_lock(&stream_mutex);
+    rc = hda_write(buffer, size);
+    mutex_unlock(&stream_mutex);
+    return rc;
+}
+
+/** hda_set_volume under the stream mutex. */
+static void hda_m_set_volume(int volume)
+{
+    mutex_lock(&stream_mutex);
+    hda_set_volume(volume);
+    mutex_unlock(&stream_mutex);
+}
+
+/** hda_stream_open under the stream mutex. */
+static int hda_m_stream_open(audio_stream_t *s)
+{
+    int rc;
+
+    mutex_lock(&stream_mutex);
+    rc = hda_stream_open(s);
+    mutex_unlock(&stream_mutex);
+    return rc;
+}
+
+/** hda_stream_setup under the stream mutex. */
+static int hda_m_stream_setup(audio_stream_t *s)
+{
+    int rc;
+
+    mutex_lock(&stream_mutex);
+    rc = hda_stream_setup(s);
+    mutex_unlock(&stream_mutex);
+    return rc;
+}
+
+/** hda_stream_start under the stream mutex. */
+static int hda_m_stream_start(audio_stream_t *s)
+{
+    int rc;
+
+    mutex_lock(&stream_mutex);
+    rc = hda_stream_start(s);
+    mutex_unlock(&stream_mutex);
+    return rc;
+}
+
+/** hda_stream_stop under the stream mutex. */
+static void hda_m_stream_stop(audio_stream_t *s)
+{
+    mutex_lock(&stream_mutex);
+    hda_stream_stop(s);
+    mutex_unlock(&stream_mutex);
+}
+
+/** hda_stream_close under the stream mutex. */
+static void hda_m_stream_close(audio_stream_t *s)
+{
+    mutex_lock(&stream_mutex);
+    hda_stream_close(s);
+    mutex_unlock(&stream_mutex);
+}
+
+/** hda_input_select under the stream mutex. */
+static int hda_m_input_select(int source)
+{
+    int rc;
+
+    mutex_lock(&stream_mutex);
+    rc = hda_input_select(source);
+    mutex_unlock(&stream_mutex);
+    return rc;
+}
+
+/** hda_input_level under the stream mutex. */
+static int hda_m_input_level(int ctl, int source, int level)
+{
+    int rc;
+
+    mutex_lock(&stream_mutex);
+    rc = hda_input_level(ctl, source, level);
+    mutex_unlock(&stream_mutex);
+    return rc;
+}
+
+/** hda_beep_level under the stream mutex. */
+static int hda_m_beep_level(int level)
+{
+    int rc;
+
+    mutex_lock(&stream_mutex);
+    rc = hda_beep_level(level);
+    mutex_unlock(&stream_mutex);
+    return rc;
+}
+
 /* The audio_driver_t fields, in the order audio.h declares them: name,
    type, init, shutdown, start, stop, is_playing, set_callback, write,
    set_volume, get_volume, the seven stream operations, the three input
    controls, then the two of the beep generator. */
-audio_driver_t hda_driver = {"Intel HD Audio",  AUDIO_DRIVER_HDA, hda_init,        hda_shutdown,
-                             hda_start,         hda_stop,         hda_is_playing,  hda_set_callback,
-                             hda_write,         hda_set_volume,   hda_get_volume,  hda_stream_open,
-                             hda_stream_setup,  hda_stream_start, hda_stream_stop, hda_stream_close,
-                             hda_stream_frames, hda_stream_delay, hda_input_caps,  hda_input_select,
-                             hda_input_level,   hda_beep,         hda_beep_level};
+audio_driver_t hda_driver = {
+    "Intel HD Audio",   AUDIO_DRIVER_HDA,   hda_init,          hda_m_shutdown,
+    hda_m_start,        hda_m_stop,         hda_is_playing,    hda_m_set_callback,
+    hda_m_write,        hda_m_set_volume,   hda_get_volume,    hda_m_stream_open,
+    hda_m_stream_setup, hda_m_stream_start, hda_m_stream_stop, hda_m_stream_close,
+    hda_stream_frames,  hda_stream_delay,   hda_input_caps,    hda_m_input_select,
+    hda_m_input_level,  hda_beep,           hda_m_beep_level};

@@ -2108,8 +2108,7 @@ static void exec_take_leader(void)
     process_t *old = tg->leader;
 
     proc_exchange_pids(current_proc, old);
-    current_proc->alarm_tick = old->alarm_tick;
-    current_proc->alarm_interval = old->alarm_interval;
+    proc_alarm_set(current_proc, old->alarm_tick, old->alarm_interval);
     current_proc->jc_status = old->jc_status;
     proc_thread_fold(old);
     tg->leader = current_proc;
@@ -2117,7 +2116,6 @@ static void exec_take_leader(void)
     mm_drop(old);
     kstack_free(old->kernel_stack);
     free_process(old);
-    proc_timer_update(current_proc);
 }
 
 /**
@@ -4417,11 +4415,14 @@ static void sig_irq_restore(uint32_t flags)
  * Linux 6.12.115's signal_wake_up_state marks TIF_SIGPENDING
  * (kernel/signal.c:759-773).
  * A wake for a blocked signal marks no work.
- * Make `t` runnable if it sleeps, clearing its timed wake: an
- * interruptible wait then calls `signal_pending` to learn whether to end
- * with -EINTR, and any wait that goes on arms its own deadline again. A
- * full barrier comes between the post and the read of the state, which a
- * sleeper sets before it tests (`sched_set_current_state`). */
+ * Make `t` runnable if it sleeps, clearing its timed wake, with the state
+ * tested and the deadline cleared under the run queues' lock
+ * (`sched_wake_signal`), as signal_wake_up_state wakes through
+ * `try_to_wake_up`'s test: a wait queue's waker and this one do not both
+ * make it ready. An interruptible wait then calls `signal_pending` to learn
+ * whether to end with -EINTR, and any wait that goes on arms its own
+ * deadline again. A full barrier comes between the post and the read of the
+ * state, which a sleeper sets before it tests (`sched_set_current_state`). */
 static void sig_wake(process_t *t, uint64_t bits)
 {
     if (t && (bits & ~t->sig_blocked) != 0) {
@@ -4429,8 +4430,7 @@ static void sig_wake(process_t *t, uint64_t bits)
     }
     sched_mb();
     if (t && t->state == PROC_BLOCKED) {
-        t->wakeup_tick = 0;
-        sched_make_ready(t);
+        sched_wake_signal(t);
     }
 }
 
@@ -6197,7 +6197,8 @@ int signal_return_work(const isr_params_t *tf)
         return 0;
     }
     return proc_dead_threads != 0 || p->restart_due || p->ptrace || p->sigmask_saved ||
-           p->sig_woken || p->tg->stop || (sig_pending_now() & ~p->sig_blocked) != 0;
+           p->sig_woken || p->tick_sigs || p->tg->stop ||
+           (sig_pending_now() & ~p->sig_blocked) != 0;
 }
 
 /**

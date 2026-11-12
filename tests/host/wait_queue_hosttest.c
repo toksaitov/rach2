@@ -341,15 +341,14 @@ static void own_locks(void)
 int main(void)
 {
     wait_queue_t wq;
-    process_t a, b, c;
+    /* Static, so that each record is whole before it is queued: a wake
+     * reads its `cpu` to pick the processor to interrupt. */
+    static process_t a, b, c;
     int i;
 
     wait_queue_init(&wq);
     CHECK(total_queued(&wq) == 0);
 
-    a.waiter.next = 0;
-    b.waiter.next = 0;
-    c.waiter.next = 0;
     a.state = PROC_BLOCKED;
     b.state = PROC_BLOCKED;
     c.state = PROC_BLOCKED;

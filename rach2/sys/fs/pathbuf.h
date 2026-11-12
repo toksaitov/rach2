@@ -27,8 +27,13 @@ char *path_buf_get(void);
 /** Give back a page `path_buf_get` returned; NULL is ignored. */
 void path_buf_put(char *buf);
 
-/** The working directory's absolute, canonical path. */
+/** The working directory's absolute, canonical path, for a caller that
+ * holds the big lock, under which it changes. */
 const char *proc_cwd(const struct process *p);
+
+/** Copy the working directory's path into `out`, a path page, under the
+ * lock of `p`'s `fs_struct`, for a caller without the big lock. */
+void proc_cwd_read(const struct process *p, char *out);
 
 /**
  * Make `path` the working directory's path: 0, `-ENAMETOOLONG` past
