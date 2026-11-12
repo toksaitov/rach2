@@ -1889,7 +1889,7 @@ static uint64_t itimer_ticks(long sec, long usec)
  * value read in the timer's last tick and passed straight back to setitimer
  * comes due a tick later: the read reports one tick where less than one is
  * left, and the set adds a tick for the tick in progress. Interrupts are
- * off: the tick rearms the timer.
+ * off: the tick marks the timer.
  */
 static uint64_t itimer_left(void)
 {
