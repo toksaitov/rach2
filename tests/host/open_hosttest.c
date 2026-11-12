@@ -39,7 +39,8 @@
  *   moves;
  * - an open that truncates while another thread sharing its table takes the
  *   table's last free slot;
- * - a loop device's handle when its node moves;
+ * - a loop device's handle when its node moves, and its attachment found by
+ *   its node alone;
  * - the key a file's locks are found by on each kind of mount;
  * - a seek of a /proc file's or /dev/bootlog's description while a read or
  *   a write of it sleeps, and the log's seeks past the offsets they can
@@ -3480,19 +3481,21 @@ static void descriptor_errors(void)
     row_end();
 }
 
-/** Check node repointing without changing a mounted open identity. */
+/** Check node repointing without changing a mounted open identity, and
+ * that an attachment is found by its node alone. */
 static void loop_handles(void)
 {
     loops[0].mnt = &mount;
     loops[0].attached = 1;
     loops[0].node = &node;
-    loops[0].handle = &node;
+    loops[0].handle = &handle;
     loop_repoint(&mount, &node, &moved);
-    check(loops[0].node == &moved && loops[0].handle == &node,
+    check(loops[0].node == &moved && loops[0].handle == &handle,
           "mounted loop handle stays stable when node moves");
-    check(loop_backs(&mount, &node) && loop_backs(&mount, &moved),
-          "loop attachment recognizes node and open handle");
+    check(loop_backs(&mount, &moved) && !loop_backs(&mount, &node) && !loop_backs(&mount, &handle),
+          "a loop attachment is found by the node where its file is, never by a handle");
     mount.type = &vfs_krffs_type;
+    loops[0].handle = &node;
     loops[0].node = &node;
     loop_repoint(&mount, &node, &moved);
     check(loops[0].node == &moved && loops[0].handle == &moved,

@@ -3065,7 +3065,7 @@ int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
-    if (loop_backs(mnt, handle)) {
+    if (loop_backs(mnt, handle_node(mnt, handle))) {
         return -EBUSY;
     }
     if (mount_rdonly(mnt) || !mnt->type->ops->truncate) {
@@ -3103,7 +3103,7 @@ int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t o
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
-    if (loop_backs(mnt, handle)) {
+    if (loop_backs(mnt, handle_node(mnt, handle))) {
         return -EBUSY;
     }
     if (mount_rdonly(mnt)) {
