@@ -1961,10 +1961,14 @@ struct cached_links {
  * The target must be one the node holds (`readlink_cached`), as Linux's walk
  * under RCU reads `i_link` and leaves any other link to the walk with
  * references (fs/namei.c:1860-1870). An absolute target moves `cur` to the
- * caller's root (`cached_start`); a relative one goes on from `cur`. 0, with
- * the walk to go on at `lk->linkpath`; or WALK_FULL, with `cur` held as it
- * was, past VFS_LINK_MAX links, for a target the node does not hold, a root
- * it cannot take or an error, which the full walk reports.
+ * caller's root, as the full walk's `walk_move` does and Linux's pick_link
+ * calls `nd_jump_root` (fs/namei.c:970-1000, 1877-1882), whatever slashes
+ * the spliced path begins with: a target of "/" splices to "//rest", which
+ * `cached_start` would leave to the full walk. A relative target goes on
+ * from `cur`. 0, with the walk to go on at `lk->linkpath`; or WALK_FULL,
+ * with `cur` held as it was, past VFS_LINK_MAX links, for a target the node
+ * does not hold, a root it cannot take or an error, which the full walk
+ * reports.
  */
 static int cached_link(struct vfs_ref *cur, void *found, const char *rest, struct cached_links *lk)
 {
@@ -1978,7 +1982,7 @@ static int cached_link(struct vfs_ref *cur, void *found, const char *rest, struc
     }
     cached_put(cur->mnt, found);
     rc = tlen < 0 ? -1 : walk_splice(lk->linkpath, lk->target, tlen, rest);
-    if (rc < 0 || (rc == 1 && cached_start(NULL, lk->linkpath, &root) != 0)) {
+    if (rc < 0 || (rc == 1 && cached_start(NULL, "/", &root) != 0)) {
         return WALK_FULL;
     }
     if (rc == 1) {
