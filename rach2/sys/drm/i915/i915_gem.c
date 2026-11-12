@@ -319,19 +319,21 @@ void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj, int le
 
 /**
  * Undo `obj`, whose last reference is gone, with the GEM lock held: every
- * binding undone, its mmap offsets taken out of the device's space, its
- * pages unpinned and freed, a userptr object's range taken off. With
- * `may_yield`, for a holder that took the lock for the free and may sleep,
- * it gives way every 512 entries of its clears and every leaf of its pages,
- * as Linux's free worker calls cond_resched between batches of its pages
- * (gem/i915_gem_shmem.c:29). No other thread reaches the object, its last
- * reference gone, and the GEM lock keeps its bindings' range whole.
+ * binding undone whatever its reservation holds
+ * (`i915_gem_object_force_unbind`), its mmap offsets taken out of the
+ * device's space, its pages unpinned and freed, a userptr object's range
+ * taken off. With `may_yield`, for a holder that took the lock for the
+ * free and may sleep, it gives way every 512 entries of its clears and
+ * every leaf of its pages, as Linux's free worker calls cond_resched
+ * between batches of its pages (gem/i915_gem_shmem.c:29). No other
+ * thread reaches the object, its last reference gone, and the GEM lock
+ * keeps its bindings' range whole.
  */
 static void object_release(struct drm_i915_gem_object *obj, int may_yield)
 {
     int i;
 
-    (void)i915_gem_object_unbind(obj, may_yield);
+    i915_gem_object_force_unbind(obj, may_yield);
     if (i915_gem_object_is_userptr(obj)) {
         i915_gem_userptr_release(obj);
     }

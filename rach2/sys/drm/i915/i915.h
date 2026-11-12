@@ -2552,6 +2552,18 @@ int32_t i915_vma_unbind(struct i915_vma *vma, int may_yield);
  * `may_yield`: 0, or -EAGAIN when one is pinned or the object is active. */
 int32_t i915_gem_object_unbind(struct drm_i915_gem_object *obj, int may_yield);
 
+/**
+ * Undo every binding of `obj`, whose last reference is gone, whatever its
+ * pins and its reservation hold, as Linux's force_unbind at the free
+ * (i915_vma.c:1760-1768, 1831-1835; gem/i915_gem_object.c:350-360). A
+ * request of the driver's holds every object it uses until it retires, so
+ * none can still use the bindings; a fence another device put on a shared
+ * reservation, an import's, is that device's and keeps none of them, as
+ * Linux's unbind waits only for the binding's own activity
+ * (i915_vma.c:2123). `may_yield` is `i915_vma_unbind`'s.
+ */
+void i915_gem_object_force_unbind(struct drm_i915_gem_object *obj, int may_yield);
+
 /** The object's binding inside the aperture that maps page `pgoff`, or
  * NULL; a remapped view is never one. */
 struct i915_vma *i915_vma_for_page(struct drm_i915_gem_object *obj, uint32_t pgoff);
