@@ -1,12 +1,17 @@
-# The Lenovo's GPU conformance cases (Readme.md): each runner of
-# tests/graphics on the machine's own HD 4400 and display, judged case by
-# case against Linux's run on the same machine, and the speed gate against
-# Linux with the IOMMU's translation off. A program named graphics/ is a
-# script of tests/graphics, which lenovo.sh runs with the files the case
-# names beside it; tests/graphics/Readme.md's Lenovo section says what each
-# case runs and where its reference came from. Every case runs alone, with
-# the kernel's records kept, the silent ones first and those that take the
-# panel last.
+# The Lenovo's cases of its GPU and display (Readme.md), which the release's
+# trial boot runs with the Intel driver bound: each runner of tests/graphics
+# on the machine's own HD 4400 and display, judged case by case against
+# Linux's run on the same machine, and the speed gate against Linux with the
+# IOMMU's translation off; then the test bed's harness, the display's rows of
+# 76's slice, the native games and Crysis, each from a state that starts at
+# once: a benchmark, a fixed replay, a flyby or a saved game. A program named
+# graphics/ is a script of tests/graphics, which lenovo.sh runs with the
+# files the case names beside it; tests/graphics/Readme.md's Lenovo section
+# says what each such case runs and where its reference came from, and the
+# scripts of native/ and system/ say what theirs do. Every case runs alone,
+# with the kernel's records kept, the silent ones first and those that take
+# the panel or play sound last. The cases whose Linux references are not yet
+# in the tree wait in gpu-waiting.cases.
 
 # dEQP-GLES of VK-GL-CTS 1.4.7.1, as root on the render node.
 case gpu/deqp-gles2 alone log \
@@ -103,3 +108,58 @@ case gpu/gate-glmark2.es2 alone log \
     file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
     file:tests/graphics/runners/glmark2.sh file:tests/graphics/ref/lenovo/gate \
     -- graphics/runners/lenovo.sh gate glmark2 es2 gate
+
+# The test bed's harness on the GPU, the rung native-rach2, each scene under
+# a headless Weston of its own, set beside Linux's native-linux line (83-7).
+# The webgl scene waits for its fault, Chromium's lost context on Rach2's
+# Mesa (dev-log/83-testbed/83-7.md, "The WebGL scene").
+case testbed/glmark2 alone log \
+    file:bed/measure/measure.sh file:bed/measure/piglit.txt file:bed/measure/latency.c file:bed/measure/webgl.html \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/games.sh file:tests/graphics/runners/piglit.sh \
+    file:bed/measure/ref/lenovo-linux.lines \
+    -- native/testbed.sh glmark2 lenovo-linux.lines
+case testbed/piglit alone log \
+    file:bed/measure/measure.sh file:bed/measure/piglit.txt file:bed/measure/latency.c file:bed/measure/webgl.html \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/games.sh file:tests/graphics/runners/piglit.sh \
+    file:bed/measure/ref/lenovo-linux.lines \
+    -- native/testbed.sh piglit lenovo-linux.lines
+case testbed/game alone log \
+    file:bed/measure/measure.sh file:bed/measure/piglit.txt file:bed/measure/latency.c file:bed/measure/webgl.html \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/games.sh file:tests/graphics/runners/piglit.sh \
+    file:bed/measure/ref/lenovo-linux.lines \
+    -- native/testbed.sh game lenovo-linux.lines
+
+# The panel, the touchpad and the data partition: the rows of 76's
+# checkpoint slice that need the machine, on i915's mode at 1366x768
+# (native/display.sh).
+case display/touchpad alone log stage:evprobe -- native/display.sh touchpad
+case display/kept alone mountns -- native/display.sh kept
+case display/drm alone log stage:drmprobe -- native/display.sh drm
+case display/weston alone log -- native/display.sh weston
+
+# The native games' fixed replays, twice each, on the desktop's session on
+# the panel with sound at volume 1, judged against Linux's frame times
+# (80-7b, tests/system/games/lenovo.sh); the i386 game is not judged.
+case games/supertuxkart alone log \
+    file:tests/graphics/runners/games.sh file:tests/graphics/runners/common.sh \
+    -- system/games/lenovo.sh -r . out supertuxkart
+case games/0ad alone log \
+    file:tests/graphics/runners/games.sh file:tests/graphics/runners/common.sh \
+    -- system/games/lenovo.sh -r . out 0ad
+case games/supertuxkart-i386 alone log \
+    file:tests/graphics/runners/games.sh file:tests/graphics/runners/common.sh \
+    -- system/games/lenovo.sh -n 1 -r . out supertuxkart-i386
+
+# Crysis on the game of the data partition, with sound at volume 1: the
+# flyby through umu and directly, four loops judged against 24 frames a
+# second, and 80-9's save loaded after this release's update, through the
+# game's prefix and a new one (80-9, native/crysis.sh).
+case games/crysis.flyby-umu alone log mountns \
+    file:tests/system/games/crysis.py file:tests/system/games/wm.py \
+    -- native/crysis.sh flyby umu
+case games/crysis.flyby-direct alone log mountns \
+    file:tests/system/games/crysis.py file:tests/system/games/wm.py \
+    -- native/crysis.sh flyby direct
+case games/crysis.load alone log mountns \
+    file:tests/system/games/crysis.py file:tests/system/games/wm.py \
+    -- native/crysis.sh load default_accept_s2.CRYSISJMSF

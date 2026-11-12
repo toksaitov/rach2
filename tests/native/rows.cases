@@ -96,3 +96,7 @@ case agents/opencode ids:1000 file:tests/system/agents/opencode.sh -- \
 
 case tccbuild.pass -- native/tccbuild.sh pass
 case tccbuild.fail end:exit:1 -- native/tccbuild.sh fail
+
+# kvm-unit-tests' vmexit group on the machine's KVM, each exit's cycles set
+# beside Linux's on the same Lenovo (native/vmexit.sh).
+case kvm/vmexit alone log file:tests/kvm/ref/linux-vmexit.txt -- native/vmexit.sh linux-vmexit.txt
