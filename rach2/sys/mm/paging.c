@@ -646,6 +646,86 @@ static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write
     return rc;
 }
 
+/* The pages a read fault of a file maps at most, its own among them:
+ * Linux's fault_around_bytes, 64 KiB (mm/memory.c:5194-5195). */
+#define FAULT_AROUND 16u
+
+/**
+ * Map the pages of the file `f` around `page`, which a read fault of its
+ * region has just mapped with the entry bits `flags`, that the file has in
+ * memory, with the same bits, as Linux's do_fault_around maps the pages a
+ * file's map_pages finds in the page cache (mm/memory.c:5254-5284 and
+ * 5300-5330): a program that reads its text and its libraries a page at a
+ * time then takes one fault in sixteen pages, not one a page. The window is
+ * FAULT_AROUND pages from the multiple of FAULT_AROUND pages at or below
+ * `page`, or from the region's start when that is higher, cut at the
+ * region's end and at the end of the page table, so that one table holds
+ * it. The file is asked with the regions' lock let go, as for its share,
+ * and its pages are mapped only while the region still maps the whole
+ * window of the file as it did and no unmap of a truncated file's pages has
+ * come since; a page another fault mapped meanwhile is left as it is.
+ * Called, as `shared_fault` returns, with the regions' lock held to read.
+ */
+static void share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t flags)
+{
+    const vma_t *vma = vm_find(&mm->vm, page);
+    uintptr_t phys[FAULT_AROUND];
+    uintptr_t from, to, end;
+    uint32_t prot, pgoff, seq, n, i, lock;
+    pte_t *table;
+    int bkl;
+
+    if (!vma || vma->file != f || !f->around) {
+        return;
+    }
+    from = page & ~(FAULT_AROUND * PAGE_SIZE - 1);
+    if (from < vma->start) {
+        from = vma->start;
+    }
+    end = (page & ~(MMU_TABLE_SPAN - 1)) + MMU_TABLE_SPAN;
+    to = from + FAULT_AROUND * PAGE_SIZE;
+    if (end != 0 && to > end) {
+        to = end;
+    }
+    if (to > vma->end) {
+        to = vma->end;
+    }
+    n = (uint32_t)((to - from) / PAGE_SIZE);
+    if (n <= 1) {
+        return;
+    }
+    prot = vma->prot;
+    pgoff = vma->pgoff + (uint32_t)((from - vma->start) / PAGE_SIZE);
+    seq = mm->zaps;
+    vm_file_get(f);
+    if (!callback_begin(mm, f, &bkl)) {
+        vm_file_put(f);
+        return;
+    }
+    i = f->around(f, pgoff, n, phys);
+    callback_end(mm, bkl);
+    vma = vm_find(&mm->vm, from);
+    if (i != 0 && region_same(mm, from, f, prot, pgoff, seq) && vma->end >= to) {
+        lock = mm_ptl_lock(mm);
+        table = mmu_user_table(mm->dir, from, 0);
+        for (i = 0; table && i < n; i++) {
+            if (phys[i] && table[MMU_INDEX(from + i * PAGE_SIZE)] == 0) {
+                table[MMU_INDEX(from + i * PAGE_SIZE)] =
+                    PTE_ADDR((pte_t)phys[i]) | (flags & (pte_t)PTE_FLAGS);
+                mm_resident_add(mm->dir, 1);
+                phys[i] = 0;
+            }
+        }
+        mm_ptl_unlock(mm, lock);
+    }
+    for (i = 0; i < n; i++) {
+        if (phys[i]) {
+            free_frame(phys[i]);
+        }
+    }
+    vm_file_put(f);
+}
+
 /**
  * Borrow a resident file or shared-memory page. A shared region maps it
  * writable when allowed; a private region maps it copy-on-write and copies
@@ -654,9 +734,10 @@ static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write
  * The share of a disk file's pages reads a page from the file the first
  * time, which may sleep, so it runs as `file_fault`'s fill does, with the
  * file held across it and the region looked up again after: a region that
- * changed, or a page backed meanwhile, has the resolution run again. 1 with
- * the page mapped, 0 when no frame could be had or the lock could not be
- * let go, -1 to resolve again.
+ * changed, or a page backed meanwhile, has the resolution run again. A read
+ * then maps the file's pages in memory around the page (`share_around`). 1
+ * with the page mapped, 0 when no frame could be had or the lock could not
+ * be let go, -1 to resolve again.
  */
 static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write)
 {
@@ -667,6 +748,7 @@ static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int wri
     uint32_t prot = vma->prot;
     uint32_t seq = mm->zaps;
     uintptr_t phys = 0;
+    pte_t flags;
     int got, bkl, rc = 1;
 
     vm_file_get(f);
@@ -687,13 +769,16 @@ static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int wri
         return rc < 0 ? -1 : 0;
     }
     if (rc == 1) {
-        rc =
-            install_new(mm, page, phys,
-                        PTE_P | PTE_U | (private ? PTE_COW : ((prot & VM_PROT_WRITE) ? PTE_W : 0)) |
-                            paging_prot_bits(prot));
+        flags = PTE_P | PTE_U | (private ? PTE_COW : ((prot & VM_PROT_WRITE) ? PTE_W : 0)) |
+                paging_prot_bits(prot);
+        rc = install_new(mm, page, phys, flags);
         if (rc == 0) {
             fault_count(got > 0);
-            return private && write ? cow_fault(mm, page) : 1;
+            if (write) {
+                return private ? cow_fault(mm, page) : 1;
+            }
+            share_around(mm, page, f, flags);
+            return 1;
         }
         rc = rc > 0 ? -1 : 0;
     }

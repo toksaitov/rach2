@@ -478,6 +478,38 @@ static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
     return rc;
 }
 
+/**
+ * Let a fault of the disk file of `m` sleep on the file's lock and in its
+ * read, as `filemap_read` lets one: a fault outside a system call enters
+ * one for the time of the call, with interrupts on, and `disk_call_end`
+ * leaves it. 1 when it entered one, with the interrupt state in `*flags`;
+ * 0 when the fault may already sleep or the file reads without sleeping;
+ * -1 when it may not sleep and the file needs to.
+ */
+static int disk_call_begin(const struct filemap *m, uint32_t *flags)
+{
+    if (kirq_enabled() && proc_in_syscall()) {
+        return 0;
+    }
+    if (current_proc && !current_proc->in_syscall) {
+        current_proc->in_syscall = 1;
+        *flags = kirq_save();
+        arch_irq_enable();
+        return 1;
+    }
+    return filemap_fault_readable(m->entry.ofd->vmnt) ? 0 : -1;
+}
+
+/** End what `disk_call_begin` began, given its result `entered` and the
+ * `flags` it saved. */
+static void disk_call_end(int entered, uint32_t flags)
+{
+    if (entered > 0) {
+        kirq_restore(flags);
+        current_proc->in_syscall = 0;
+    }
+}
+
 /** Borrow the file's disk page, enabling sleep across its lock and read
  * when faulting outside a system call, as `filemap_read` does. The caller
  * holds the mapping. Returns 0 for a resident page, 1 after a read, ENXIO
@@ -485,27 +517,56 @@ static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
 static int filemap_share_disk(struct vm_file *f, uint32_t pgoff, uintptr_t *phys)
 {
     struct filemap *m = (struct filemap *)f;
-    const struct vfs_mount *mnt = m->entry.ofd->vmnt;
     uint32_t flags = 0;
-    int entered = 0;
+    int entered = disk_call_begin(m, &flags);
     int rc;
 
-    if (!(kirq_enabled() && proc_in_syscall())) {
-        if (current_proc && !current_proc->in_syscall) {
-            current_proc->in_syscall = 1;
-            flags = kirq_save();
-            arch_irq_enable();
-            entered = 1;
-        } else if (!filemap_fault_readable(mnt)) {
-            return -EIO;
-        }
+    if (entered < 0) {
+        return -EIO;
     }
     rc = filemap_disk_page(m, pgoff, phys);
-    if (entered) {
-        kirq_restore(flags);
-        current_proc->in_syscall = 0;
-    }
+    disk_call_end(entered, flags);
     return rc;
+}
+
+/**
+ * Lend the pages `first` to `first + count - 1` of the disk file of `f`
+ * that are in memory, each in `phys[i]` with a reference for a mapping, and
+ * 0 in `phys[i]` for a page that is not, which is left to its own fault and
+ * read then: the pages a fault maps around the one it reads, as Linux's
+ * filemap_map_pages maps only the folios already in the page cache and
+ * reads none (mm/filemap.c:3634-3719). A page past the file's end is never
+ * in memory, since a truncation takes those out under the file's lock,
+ * under which the pages are looked up here, as `filemap_disk_page` looks
+ * one up. Returns the pages lent.
+ */
+static uint32_t filemap_around_disk(struct vm_file *f, uint32_t first, uint32_t count,
+                                    uintptr_t *phys)
+{
+    struct filemap *m = (struct filemap *)f;
+    struct vfs_ref file;
+    uint32_t flags = 0, i, lent = 0;
+    int entered = disk_call_begin(m, &flags);
+
+    for (i = 0; i < count; i++) {
+        phys[i] = 0;
+    }
+    if (entered < 0) {
+        return 0;
+    }
+    file.mnt = m->entry.ofd->vmnt;
+    file.node = m->entry.ofd->vnode;
+    vfs_node_lock(&file);
+    for (i = 0; i < count; i++) {
+        phys[i] = shmem_resident(m->sh, first + i);
+        if (phys[i]) {
+            frame_ref(phys[i]);
+            lent++;
+        }
+    }
+    vfs_node_unlock(&file);
+    disk_call_end(entered, flags);
+    return lent;
 }
 
 /**
@@ -702,6 +763,7 @@ static struct vm_file *filemap_disk_map(const fd_entry_t *e, int shared)
     }
     m->vf.fill = NULL;
     m->vf.share = filemap_share_disk;
+    m->vf.around = filemap_around_disk;
     return &m->vf;
 }
 
