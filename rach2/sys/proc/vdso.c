@@ -64,12 +64,12 @@ static void vdso_release(struct vm_file *f)
  */
 static char vdso_data_name[] = "[vvar]";
 static char vdso_image_name[] = "[vdso]";
-static struct vm_file vdso_data_file = {1, 0, vdso_share_data, vdso_release, vdso_data_name, 0, 0,
-                                        1, 0};
+static struct vm_file vdso_data_file = {
+    1, 0, vdso_share_data, vdso_release, vdso_data_name, 0, 0, 1, 0, 0};
 static struct vm_file vdso_image_file = {
-    1, 0, vdso_share_image, vdso_release, vdso_image_name, 0, 0, 1, 0};
+    1, 0, vdso_share_image, vdso_release, vdso_image_name, 0, 0, 1, 0, 0};
 static struct vm_file vdso_image32_file = {
-    1, 0, vdso_share_image32, vdso_release, vdso_image_name, 0, 0, 1, 0};
+    1, 0, vdso_share_image32, vdso_release, vdso_image_name, 0, 0, 1, 0, 0};
 
 uintptr_t vdso_span(int abi)
 {

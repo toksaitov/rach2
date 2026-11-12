@@ -33,9 +33,10 @@
  * A disk file's resident pages belong to its private and shared mappings.
  * A shared store reaches every clean mapping; a private store copies first.
  * A page is read on first touch and written back whole, up to the file's
- * size, which a mapping does not change. Shared writers write every page
- * back, since the kernel does not read the page tables' dirty bits. The
- * mount and inode number identify the file to descriptor operations.
+ * size, which a mapping does not change. A shared writer writes back only
+ * the pages a store has reached (`stored`), which a shared mapping maps
+ * read-only until its first write fault (`mkwrite`). The mount and inode
+ * number identify the file to descriptor operations.
  *
  * The table of `sh` changes only under the file's lock (`vfs_node_lock`):
  * a page joins it at a fault, and a truncation or the last release takes
@@ -67,7 +68,19 @@ struct dshare {
     uint32_t misses;
     wait_queue_t left;
     struct shmem sh;
+    /* The pages a shared mapping may have stored into, a bit each, in
+     * leaves of SHMEM_LEAF bits made at a page's first write fault
+     * (`filemap_mkwrite_disk`), as Linux marks a folio dirty at
+     * page_mkwrite: only these are written back, so that a page read from a
+     * hole and never stored to leaves the hole a hole. A bit stays once
+     * set, and a truncation clears the bits of the pages it frees. Under
+     * the file's lock. */
+    uint32_t **stored;
+    uint32_t nstored; /* the leaves `stored` reaches */
 };
+
+/* The words of a leaf of `stored`. */
+#define DSHARE_STORED_WORDS (SHMEM_LEAF / 32u)
 
 /* The record: the region map's part first, so the one is found from the
  * other, and the copy of the descriptor; for a shared mapping, the pages it
@@ -284,6 +297,74 @@ static struct filemap *dshare_mapping(const struct dshare *ds, int writer)
     return NULL;
 }
 
+/** Whether page `i` of `ds` may hold a store of a shared mapping
+ * (`stored`). Under the file's lock. */
+static int dshare_stored(const struct dshare *ds, uint32_t i)
+{
+    uint32_t leaf = i / SHMEM_LEAF, bit = i % SHMEM_LEAF;
+
+    return leaf < ds->nstored && ds->stored[leaf] &&
+           (ds->stored[leaf][bit / 32u] >> (bit % 32u) & 1u);
+}
+
+/** Mark page `i` of `ds` as one a shared mapping may store into, making
+ * the leaf and growing the directory as needed. Under the file's lock.
+ * 0, or -ENOMEM with nothing changed. */
+static int dshare_mark(struct dshare *ds, uint32_t i)
+{
+    uint32_t leaf = i / SHMEM_LEAF, bit = i % SHMEM_LEAF, n;
+    uint32_t **dir;
+
+    if (leaf >= ds->nstored) {
+        n = leaf + 1u > ds->nstored * 2u ? leaf + 1u : ds->nstored * 2u;
+        dir = kzalloc((size_t)n * sizeof(*dir));
+        if (!dir) {
+            return -ENOMEM;
+        }
+        if (ds->stored) {
+            k_memcpy(dir, ds->stored, ds->nstored * sizeof(*dir));
+            kfree(ds->stored);
+        }
+        ds->stored = dir;
+        ds->nstored = n;
+    }
+    if (!ds->stored[leaf]) {
+        ds->stored[leaf] = kzalloc(DSHARE_STORED_WORDS * sizeof(uint32_t));
+        if (!ds->stored[leaf]) {
+            return -ENOMEM;
+        }
+    }
+    ds->stored[leaf][bit / 32u] |= 1u << (bit % 32u);
+    return 0;
+}
+
+/** Clear the marks of `ds` (`stored`) from page `first` on, the pages a
+ * truncation freed, so that a page read again after the file grows back is
+ * clean. Under the file's lock. */
+static void dshare_unmark_from(struct dshare *ds, uint32_t first)
+{
+    uint32_t leaf, w;
+
+    for (leaf = first / SHMEM_LEAF; leaf < ds->nstored; leaf++) {
+        if (!ds->stored[leaf]) {
+            continue;
+        }
+        if (leaf > first / SHMEM_LEAF || first % SHMEM_LEAF == 0) {
+            kfree(ds->stored[leaf]);
+            ds->stored[leaf] = NULL;
+            continue;
+        }
+        w = (first % SHMEM_LEAF) / 32u;
+        if (first % 32u) {
+            ds->stored[leaf][w] &= (1u << (first % 32u)) - 1u;
+            w++;
+        }
+        for (; w < DSHARE_STORED_WORDS; w++) {
+            ds->stored[leaf][w] = 0;
+        }
+    }
+}
+
 /** Let go of a hold on `ds`, a mapping's or a write-back's, and free it
  * with the last. Nothing here sleeps. */
 static void dshare_put(struct dshare *ds)
@@ -293,6 +374,8 @@ static void dshare_put(struct dshare *ds)
     }
     dshare_unlink(ds);
     shmem_free(&ds->sh);
+    dshare_unmark_from(ds, 0);
+    kfree(ds->stored);
     kfree(ds);
 }
 
@@ -304,9 +387,12 @@ static void dshare_put(struct dshare *ds)
  * the end of the write, so a truncation, which takes it too, runs wholly
  * before or after: the write never reaches past the size it leaves, and the
  * page, looked up after the size is read and copied with nothing between that
- * sleeps, is one a truncation has not freed. A file a loop device stands on
- * is not written, as write(2) does not write it. 0, -EBUSY, or the write's
- * error.
+ * sleeps, is one a truncation has not freed. A page no store has reached
+ * (`dshare_stored`) is not written, as Linux's write-back passes a clean
+ * folio by (`write_cache_pages`, mm/page-writeback.c): it equals the file,
+ * and writing a page read from a hole would allocate the hole's blocks. A
+ * file a loop device stands on is not written, as write(2) does not write
+ * it. 0, -EBUSY, or the write's error.
  */
 static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i, uint8_t *buf)
 {
@@ -323,7 +409,9 @@ static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i, u
     file.mnt = mnt;
     file.node = m->entry.ofd->vnode;
     vfs_node_lock(&file);
-    if (loop_backs(mnt, m->entry.ofd->vnode)) {
+    if (!dshare_stored(ds, i)) {
+        rc = 0;
+    } else if (loop_backs(mnt, m->entry.ofd->vnode)) {
         rc = -EBUSY;
     } else if (vfs_getattr(mnt, m->entry.ofd->vnode, &st) != 0) {
         rc = -EIO;
@@ -713,6 +801,35 @@ static int filemap_share_disk(struct vm_file *f, uint32_t pgoff, uintptr_t *phys
 }
 
 /**
+ * The `mkwrite` of a shared mapping of a disk file: mark page `pgoff` as one
+ * its stores may reach (`dshare_mark`) before the fault maps it writable,
+ * as Linux's do_page_mkwrite and the dirtying of the folio come before a
+ * shared mapping's page gains write access (mm/memory.c), under the file's
+ * lock, with sleep enabled across it as `filemap_share_disk` enables it.
+ * The caller holds the mapping. 0, -ENOMEM, or -EIO when the fault may not
+ * sleep.
+ */
+static int filemap_mkwrite_disk(struct vm_file *f, uint32_t pgoff)
+{
+    struct filemap *m = (struct filemap *)f;
+    struct vfs_ref file;
+    uint32_t flags = 0;
+    int entered = disk_call_begin(m, &flags);
+    int rc;
+
+    if (entered < 0) {
+        return -EIO;
+    }
+    file.mnt = m->entry.ofd->vmnt;
+    file.node = m->entry.ofd->vnode;
+    vfs_node_lock(&file);
+    rc = dshare_mark(m->ds, pgoff);
+    vfs_node_unlock(&file);
+    disk_call_end(entered, flags);
+    return rc;
+}
+
+/**
  * Lend the pages `first` to `first + count - 1` of the disk file of `f`
  * that are in memory, each in `phys[i]` with a reference for a mapping, and
  * 0 in `phys[i]` for a page that is not, which is left to its own fault and
@@ -970,6 +1087,7 @@ static struct vm_file *filemap_disk_map(const fd_entry_t *e, int shared)
     m->vf.fill = NULL;
     m->vf.share = filemap_share_disk;
     m->vf.around = filemap_around_disk;
+    m->vf.mkwrite = shared ? filemap_mkwrite_disk : NULL;
     return &m->vf;
 }
 
@@ -1138,6 +1256,7 @@ void filemap_file_truncated(const struct vfs_mount *mnt, uint64_t ino, uint64_t 
 
     if (ds) {
         (void)shmem_truncate(&ds->sh, size);
+        dshare_unmark_from(ds, (uint32_t)((size + PAGE_SIZE - 1) / PAGE_SIZE));
     }
 }
 

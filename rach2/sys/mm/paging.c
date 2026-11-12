@@ -737,8 +737,10 @@ static int share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t 
 
 /**
  * Borrow a resident file or shared-memory page. A shared region maps it
- * writable when allowed; a private region maps it copy-on-write and copies
- * immediately when resolving a store. ENXIO raises SIGBUS past EOF.
+ * writable when allowed, except that a file with `mkwrite` has a read map
+ * it read-only and a store first call `mkwrite`; a private region maps it
+ * copy-on-write and copies immediately when resolving a store. ENXIO
+ * raises SIGBUS past EOF.
  *
  * The share of a disk file's pages reads a page from the file the first
  * time, which may sleep, so it runs as `file_fault`'s fill does, with the
@@ -762,7 +764,9 @@ static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int wri
     uint32_t prot = vma->prot;
     uint32_t seq = mm->zaps;
     uintptr_t phys = 0;
-    pte_t flags = PTE_P | PTE_U | (private ? PTE_COW : ((prot & VM_PROT_WRITE) ? PTE_W : 0)) |
+    int notify = !private && (prot & VM_PROT_WRITE) && f->mkwrite;
+    pte_t flags = PTE_P | PTE_U |
+                  (private ? PTE_COW : ((prot & VM_PROT_WRITE) && (write || !notify) ? PTE_W : 0)) |
                   paging_prot_bits(prot);
     int got, bkl, rc = 1;
 
@@ -777,6 +781,10 @@ static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int wri
         return 0;
     }
     got = f->share(f, pgoff, &phys);
+    if (got >= 0 && notify && write && f->mkwrite(f, pgoff) != 0) {
+        free_frame(phys);
+        got = -ENOMEM;
+    }
     callback_end(mm, bkl);
     if (!region_same(mm, page, f, prot, pgoff, seq)) {
         rc = -1;
@@ -801,6 +809,56 @@ static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int wri
         rc = rc > 0 ? -1 : 0;
     }
     free_frame(phys);
+    return rc;
+}
+
+/**
+ * Give write access to the present, read-only page at `addr` of the
+ * writable shared region `vma`, whose file counts its stores (`mkwrite`),
+ * once the file has marked the page, as Linux's do_shared_fault and
+ * wp_page_shared call page_mkwrite before they make the entry writable
+ * (mm/memory.c). `mkwrite` may sleep, so it runs as `shared_fault`'s
+ * share does, with the file held and the region looked up again after; an
+ * entry changed meanwhile is left as it is and the access runs again. No
+ * flush follows: a processor that kept the read-only entry faults on it,
+ * which drops it, and finds the page writable. 1 with the page writable, 0
+ * when the file could not mark it or the lock could not be let go, -1 to
+ * resolve again.
+ */
+static int shared_mkwrite(struct mm *mm, const vma_t *vma, uintptr_t addr)
+{
+    struct vm_file *f = vma->file;
+    uintptr_t page = addr & ~(PAGE_SIZE - 1);
+    uint32_t pgoff = vma->pgoff + (uint32_t)((page - vma->start) / PAGE_SIZE);
+    uint32_t prot = vma->prot, seq = mm->zaps, lock;
+    pte_t before = *user_pte(mm->dir, page), *e;
+    int bkl, got, rc = 1;
+
+    vm_file_get(f);
+    if (!callback_begin(mm, f, &bkl)) {
+        vm_file_put(f);
+        return 0;
+    }
+    got = f->mkwrite(f, pgoff);
+    callback_end(mm, bkl);
+    if (!region_same(mm, page, f, prot, pgoff, seq)) {
+        rc = -1;
+    }
+    vm_file_put(f);
+    if (rc < 0 || got != 0) {
+        return rc < 0 ? -1 : 0;
+    }
+    lock = mm_ptl_lock(mm);
+    e = user_pte(mm->dir, page);
+    if (!e || *e != before) {
+        rc = -1;
+    } else {
+        *e = before | PTE_W;
+    }
+    mm_ptl_unlock(mm, lock);
+    if (rc == 1) {
+        fault_count(0);
+    }
     return rc;
 }
 
@@ -1113,6 +1171,9 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
     if (pte_present(dir, addr)) {
         if (!write || pte_writable(dir, addr)) {
             return 1;
+        }
+        if (vma->type == VM_SHARED && vma->file && vma->file->mkwrite) {
+            return shared_mkwrite(mm, vma, addr);
         }
         rc = cow_fault(mm, addr);
         if (rc > 0) {
@@ -3708,7 +3769,7 @@ static void protect_page(struct flush_batch *b, pte_t *e, uintptr_t addr, uint32
         if (!(prot & VM_PROT_WRITE)) {
             pte &= ~(pte_t)PTE_W;
         } else if (prot & VM_PROT_SHARED) {
-            pte |= PTE_W;
+            pte |= (prot & VM_PROT_MKWRITE) ? 0 : PTE_W; /* else at its write fault */
         } else if (pte & PTE_COW) {
             /* Still shared: the first write copies or takes it. */
         } else if (frame_maps(frame) > 1) {
