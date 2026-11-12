@@ -70,11 +70,10 @@ more pages just before it than the read wants, as many pages as those and
 the read's together, counting those twice when they reach the file's
 start, up to the most; and else only the pages the read wants.
 A page near the window's end is marked, and a read that reaches it starts
-the next window, two to four times larger up to the most, which a kernel
-thread,
-.Sy kreadahead ,
-reads while the reader goes on; a read that reaches a page such a thread
-is reading waits for that read.
+the next window, two to four times larger up to the most.
+The reader starts a window's disk reads itself and goes on without
+waiting for them, the window's pages held in the cache until their reads
+end; a read that reaches such a page waits for its read.
 Only the ext2 file system's regular files have a page cache that reads
 ahead; for any other file the advice is checked and returns 0.
 .Pp
