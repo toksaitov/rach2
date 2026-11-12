@@ -5701,20 +5701,20 @@ void vfs_reap_detached(void)
 
 /** Reap the detached mounts when `mnt`, which a hold or a description just
  * let go of, is one no live namespace sees and nothing holds any more. The
- * namespaces and the reap are under the big lock, which a caller without it
- * takes once the count says a reap may be due. */
+ * mount array, the namespaces and the reap are under the big lock, which a
+ * caller without it takes once the count says a reap may be due. */
 static void reap_if_detached(const struct vfs_mount *mnt)
 {
     int big;
 
-    if (mnt->refs != 0 || mount_permanent(mnt) || mnt->state != VFS_ACTIVE) {
+    if (mnt->refs != 0 || mnt->state != VFS_ACTIVE) {
         return;
     }
     big = !bkl_held();
     if (big) {
         bkl_enter();
     }
-    if (vfs_mount_unseen(mnt)) {
+    if (!mount_permanent(mnt) && vfs_mount_unseen(mnt)) {
         vfs_reap_detached();
     }
     if (big) {
