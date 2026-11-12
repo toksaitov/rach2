@@ -136,8 +136,8 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds);
 
 /** Call `fn` with the process of each waiter on `wq` and `arg`, under the
  * queue's lock, with interrupts off, as timerfd's expiry starts each
- * waiter's wake record (`waketime_expire`); `fn` must not sleep or take the
- * queue's lock. */
+ * waiter's wake record under the run queues' lock (`waketime_expire`); `fn`
+ * must not sleep or take the queue's lock. */
 void wq_each_waiter(wait_queue_t *wq, void (*fn)(struct process *p, uint64_t arg), uint64_t arg);
 
 /**

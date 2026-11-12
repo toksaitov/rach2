@@ -35,8 +35,9 @@ uint32_t waketime_clock(void);
 
 /** Start a timed wake of blocked user thread `p` at tick `due`.
  * A kernel thread has no user return and starts no record.
- * The caller holds the run queues' lock or the waiter's queue's lock, with
- * interrupts off. An unfinished wake keeps
+ * The caller holds the run queues' lock, under which a wake moves the
+ * record's stage, with interrupts off; a waiter's queue's lock, when held,
+ * comes before it. An unfinished wake keeps
  * its first deadline, including a later block before returning to user. */
 void waketime_expire(struct process *p, uint64_t due);
 

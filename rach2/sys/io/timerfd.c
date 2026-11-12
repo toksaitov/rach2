@@ -12,7 +12,9 @@
 #include "../fs/fd.h"
 #include "../fs/file.h"
 #include "../proc/process.h"
+#include "../proc/sched.h"
 #include "../proc/tgroup.h"
+#include "../proc/waketime.h"
 #include "../lib/ksignal.h"
 #include "../proc/wait_queue.h"
 #include "../lib/spinlock.h"
@@ -202,6 +204,24 @@ void ptimer_post_due(void)
     spin_unlock_irqrestore(&timer_lock, irq);
 }
 
+/**
+ * Start the wake record of the reader `p` of an expiring timerfd due at
+ * `due` (`waketime_expire`), under the run queues' lock, taken after the
+ * queue's, which the caller holds: a wake of `p` from elsewhere, a signal or
+ * another descriptor it polls, moves the record's stage under that lock, and
+ * the record is begun only while `p` is blocked and has none, so neither
+ * overwrites the other. Linux's waker likewise tests a task's state under
+ * the task's `pi_lock`, which every waker takes (`try_to_wake_up`,
+ * kernel/sched/core.c:4191-4194).
+ */
+static void timerfd_wake_record(process_t *p, uint64_t due)
+{
+    uint32_t flags = sched_lock_take();
+
+    waketime_expire(p, due);
+    sched_lock_give(flags);
+}
+
 /** An expiration of `t`, due by the tick `now`: counted, with those of an
  * interval missed since, and the timer armed again by its interval or
  * disarmed; then its readers woken, or its signal posted. The caller holds
@@ -209,7 +229,7 @@ void ptimer_post_due(void)
 static void expire(struct ktimer *t, uint64_t now)
 {
     if (!t->tg) {
-        wq_each_waiter(&t->wq, waketime_expire, t->due);
+        wq_each_waiter(&t->wq, timerfd_wake_record, t->due);
     }
     if (t->isec != 0 || t->isub != 0) {
         uint64_t interval = ticks_of(t->isec, t->isub);
