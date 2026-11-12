@@ -813,6 +813,13 @@ static uint8_t vpid_used[8192];
 #define VX_INTR  0x10u /* the interruptibility state */
 #define VX_ALL   0x1Fu
 
+/* The control registers whose guest-owned bits the record holds since the
+ * last exit (`cr_fresh`), as Linux marks VCPU_EXREG_CR0 and VCPU_EXREG_CR4
+ * available one by one. */
+#define CRF_CR0 0x1u
+#define CRF_CR4 0x2u
+#define CRF_ALL 0x3u
+
 /* One exit, read while the VMCS is loaded. */
 struct vmx_exit {
     uint32_t reason;
@@ -888,7 +895,7 @@ struct vmx_vcpu {
     int launched;                 /* the VMCS's launch state: the next entry is VMRESUME */
     struct vmx_vcpu *next_loaded; /* the next VMCS active on `cpu` (`vmx_loaded`) */
     int fresh;                    /* the record's special registers are the VMCS's */
-    int cr_fresh;                 /* the record's CR0 and CR4 hold the guest's own bits */
+    uint32_t cr_fresh;            /* CRF_*: the record's registers that hold the guest's own bits */
     uint64_t cr4_owned;           /* the CR4 bits the guest writes without an exit */
     int kgs_table;                /* msr.c's KERNEL_GS_BASE is the guest's (`kgs_sync`) */
     int flush_vpid;               /* drop the guest's linear translations at the entry */
@@ -1072,21 +1079,36 @@ static void cr4_mask_load(struct kvm_vcpu *v)
     vmcs_write(CR4_GUEST_HOST_MASK, ~x->cr4_owned);
 }
 
-/** Bring the CR0 and CR4 bits the guest owns from the VMCS into `v`'s
- * record, once after an exit, as Linux's vmx_cache_reg reads
- * VCPU_EXREG_CR0 and VCPU_EXREG_CR4 at the first kvm_read_cr0_bits or
- * kvm_read_cr4_bits (arch/x86/kvm/vmx/vmx.c:2543-2563). The VMCS is
- * current. */
-static void cr_cache(struct kvm_vcpu *v)
+/** Bring the bits the guest owns of the registers `which` (CRF_*) from
+ * the VMCS into `v`'s record, each once after an exit, as Linux's
+ * vmx_cache_reg reads VCPU_EXREG_CR0 or VCPU_EXREG_CR4 alone at the first
+ * kvm_read_cr0_bits or kvm_read_cr4_bits that asks for a guest-owned bit
+ * (arch/x86/kvm/vmx/vmx.c:2543-2563, arch/x86/kvm/kvm_cache_regs.h:151-202).
+ * The VMCS is current. */
+static void cr_cache(struct kvm_vcpu *v, uint32_t which)
 {
     struct vmx_vcpu *x = vx(v);
 
-    if (x->cr_fresh) {
-        return;
+    which &= ~x->cr_fresh;
+    if (which & CRF_CR0) {
+        v->sregs.cr0 = (v->sregs.cr0 & ~CR0_GUEST_OWNED) | (vmcs_read(GUEST_CR0) & CR0_GUEST_OWNED);
     }
-    v->sregs.cr0 = (v->sregs.cr0 & ~CR0_GUEST_OWNED) | (vmcs_read(GUEST_CR0) & CR0_GUEST_OWNED);
-    v->sregs.cr4 = (v->sregs.cr4 & ~x->cr4_owned) | (vmcs_read(GUEST_CR4) & x->cr4_owned);
-    x->cr_fresh = 1;
+    if (which & CRF_CR4) {
+        v->sregs.cr4 = (v->sregs.cr4 & ~x->cr4_owned) | (vmcs_read(GUEST_CR4) & x->cr4_owned);
+    }
+    x->cr_fresh |= which;
+}
+
+/** Bring CR3 from the VMCS into `v`'s record for a CR exit's write, which
+ * needs it only for PAE's PDPTEs and PCIDE's check, as Linux's
+ * kvm_read_cr3 reads GUEST_CR3 at its first use after an exit
+ * (arch/x86/kvm/kvm_cache_regs.h:190-195): unless the record holds the
+ * VMCS's special registers already, or a KVM_SET_SREGS newer than them. */
+static void cr3_cache(struct kvm_vcpu *v)
+{
+    if (!vx(v)->fresh && !(v->dirty & KVM_PART_SREGS)) {
+        v->sregs.cr3 = vmcs_read(GUEST_CR3);
+    }
 }
 
 /** CR0 as the processor runs the guest under it: never CD or NW, whose
@@ -1129,6 +1151,7 @@ static int pdpte_load(struct kvm_vcpu *v)
     uint64_t p[4];
     int i;
 
+    cr3_cache(v);
     if (kvm_guest_pdptes(v, v->sregs.cr3, p) != 0) {
         return -1;
     }
@@ -1538,7 +1561,7 @@ static void load_dirty(struct kvm_vcpu *v)
         vmcs_write(GUEST_CR3, v->sregs.cr3);
         x->vdirty |= VX_CR0 | VX_CR4 | VX_EFER;
         x->fresh = 1;
-        x->cr_fresh = 1;
+        x->cr_fresh = CRF_ALL;
         x->flush_vpid = 1;
     }
     if (x->vdirty & VX_CR0) {
@@ -1548,7 +1571,7 @@ static void load_dirty(struct kvm_vcpu *v)
     if (d & KVM_PART_CPUID) {
         /* A bit the new CPUID reserves exits again, and the shadow
          * gives the guest's own value of a bit that stops being its. */
-        cr_cache(v);
+        cr_cache(v, CRF_ALL);
         cr4_mask_load(v);
         x->vdirty |= VX_CR4;
     }
@@ -1556,7 +1579,11 @@ static void load_dirty(struct kvm_vcpu *v)
         vmcs_write(CR4_READ_SHADOW, v->sregs.cr4);
         vmcs_write(GUEST_CR4, hw_cr4(v->sregs.cr4, v->sregs.cr0));
     }
-    if (x->vdirty & (VX_CR0 | VX_EFER)) {
+    /* EFER and the entry's IA32e control change only with EFER, which a
+     * write of CR0 marks when it changes LMA, as Linux's vmx_set_cr0 calls
+     * enter_lmode or exit_lmode only then (arch/x86/kvm/vmx/vmx.c:3361-3368);
+     * neither field is among those a VMCS shadows for a nested guest. */
+    if (x->vdirty & VX_EFER) {
         vmcs_write(GUEST_IA32_EFER, v->sregs.efer);
         x->entry =
             (v->sregs.efer & GEFER_LMA) ? (x->entry | ENTRY_IA32E) : (x->entry & ~ENTRY_IA32E);
@@ -1671,7 +1698,7 @@ static void read_sregs(struct kvm_vcpu *v)
         v->sregs.idt.base = vmcs_read(GUEST_IDTR_BASE);
         v->sregs.idt.limit = (uint16_t)vmcs_read(GUEST_IDTR_LIMIT);
         v->sregs.cr3 = vmcs_read(GUEST_CR3);
-        cr_cache(v);
+        cr_cache(v, CRF_ALL);
         if (pae_paging(v) && !(x->vdirty & VX_PDPTE)) {
             for (i = 0; i < 4; i++) {
                 x->pdpte[i] = vmcs_read(GUEST_PDPTR0 + 2u * (uint32_t)i);
@@ -1945,14 +1972,14 @@ static void after_run(struct kvm_vcpu *v)
     seg_read_ar(SEG_CS, &v->sregs.cs);
     seg_read_ar(SEG_SS, &v->sregs.ss);
     if (x->ex.reason == EXIT_RDPMC) {
-        cr_cache(v); /* for CR4.PCE */
+        cr_cache(v, CRF_CR4); /* for CR4.PCE */
     } else if (x->ex.reason == EXIT_CR_ACCESS && (x->ex.qual & 0xFu) != 8u) {
-        /* A write of CR0 or CR4 starts from the guest's own bits. CR3
-         * does not exit under EPT, and the write reads it for PAE's
-         * PDPTEs and PCIDE's check, as Linux's kvm_read_cr3
-         * (arch/x86/kvm/kvm_cache_regs.h:190-195). */
-        cr_cache(v);
-        v->sregs.cr3 = vmcs_read(GUEST_CR3);
+        /* A write of CR0, or LMSW, starts from the guest's own bits of
+         * CR0 alone, and one of CR4 from CR4's, as Linux's kvm_set_cr0
+         * and kvm_set_cr4 read only the register they write
+         * (arch/x86/kvm/regs.c:260-262, 404-406); CR3 waits for
+         * `cr3_cache`. */
+        cr_cache(v, (x->ex.qual & 0xFu) == 4u ? CRF_CR4 : CRF_CR0);
     }
 }
 
@@ -2416,10 +2443,14 @@ static void gp(struct kvm_vcpu *v)
 }
 
 /**
- * The guest's write of `cr0` to CR0, with Linux's checks of kvm_set_cr0:
- * #GP for high bits, NW without CD, PG without PE, long mode's PG without
- * PAE or with a 64-bit CS, and PAE's PDPTEs that do not load. Long mode
- * begins and ends with PG while EFER.LME is set. 0, or -1 with #GP queued.
+ * The guest's write of `cr0` to CR0, with Linux's checks of kvm_set_cr0
+ * (arch/x86/kvm/regs.c:260-302): #GP for high bits, NW without CD, PG
+ * without PE, long mode's PG without PAE or with a 64-bit CS, PG cleared
+ * under PCIDE, and PAE's PDPTEs that do not load. Long mode
+ * begins and ends with PG while EFER.LME is set. A change of WP alone, the
+ * commonest, writes the two CR0 fields and nothing more, as Linux's
+ * kvm_post_set_cr0 under EPT drops no translation for it (regs.c:218-235).
+ * 0, or -1 with #GP queued.
  */
 static int set_cr0(struct kvm_vcpu *v, uint64_t cr0)
 {
@@ -2460,6 +2491,7 @@ static int set_cr0(struct kvm_vcpu *v, uint64_t cr0)
      * (arch/x86/kvm/vmx/vmx.c:3333-3420). */
     x->vdirty |= VX_CR0;
     if ((old ^ cr0) & CR0_PG) {
+        cr_cache(v, CRF_CR4);
         x->flush_vpid = 1;
         x->vdirty |= VX_CR4;
     }
@@ -2470,11 +2502,16 @@ static int set_cr0(struct kvm_vcpu *v, uint64_t cr0)
 }
 
 /**
- * The guest's write of `cr4` to CR4, with Linux's checks of kvm_set_cr4:
- * #GP for a bit the guest's CPUID reserves, PAE cleared in long mode, PCIDE
- * set outside long mode or with CR3's PCID nonzero, and PDPTEs that do not
- * load. A change of PGE, PCIDE, PAE, PSE or SMEP drops the guest's linear
- * translations, as the processor does. 0, or -1 with #GP queued.
+ * The guest's write of `cr4` to CR4, with Linux's checks of kvm_set_cr4
+ * (arch/x86/kvm/regs.c:404-432): #GP for a bit the guest's CPUID reserves,
+ * PAE cleared in long mode, PCIDE set outside long mode or
+ * with CR3's PCID nonzero, and PDPTEs that do not load. A change of PGE,
+ * PCIDE, PAE, PSE or SMEP drops the guest's linear translations at the
+ * entry, by INVVPID of its VPID, as the processor does and as Linux's
+ * kvm_post_set_cr4 asks KVM_REQ_TLB_FLUSH_GUEST for PGE (regs.c:362-402).
+ * The guest writes PGE itself, without an exit, where its CPUID allows
+ * (`cr4_mask_load`), and the processor flushes then. 0, or -1 with #GP
+ * queued.
  */
 static int set_cr4(struct kvm_vcpu *v, uint64_t cr4)
 {
@@ -2482,6 +2519,9 @@ static int set_cr4(struct kvm_vcpu *v, uint64_t cr4)
     uint64_t old = v->sregs.cr4;
     int lma = (v->sregs.efer & GEFER_LMA) != 0;
 
+    if ((cr4 & CR4_PCIDE) && !(old & CR4_PCIDE)) {
+        cr3_cache(v);
+    }
     if ((cr4 & kvm_cr4_reserved(v)) || (lma && !(cr4 & CR4_PAE)) ||
         ((cr4 & CR4_PCIDE) && !(old & CR4_PCIDE) && (!lma || (v->sregs.cr3 & 0xFFFu)))) {
         gp(v);
