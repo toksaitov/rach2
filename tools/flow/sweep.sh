@@ -29,8 +29,8 @@
 # tooling job directories, case images and scratch, the old shared TMPDIR of
 # the release runs among it, unchanged for a day, but what the record or KEPT
 # of a release run that is live or kept names, and the release runs'
-# directories in build/tmp unchanged for a day that hold no KEPT, whose etude
-# and parts' bash no longer run and whose parts have ended; each release run,
+# directories in build/tmp unchanged for a day that hold no KEPT, whose parts'
+# jobs are absent and whose parts have ended; each release run,
 # with its files, its etude and its kept directory, of a milestone whose
 # release closed; and here the entries of `build/tests` unchanged for two weeks
 # and the Mac's kept run directories of a milestone whose release closed. The
@@ -95,12 +95,13 @@ outputs()
         printf '%s\n' "$stale"
         echo 'b=/d/rach2/build'
         echo "closed=' $(closed | tr '\n' ' ')'"
-        # A run in build/tmp is live while its etude runs, the bash of one
-        # of its parts runs OUT/ID.PART.sh, as stop.sh finds it, or one of
-        # its parts has a script or launch file in OUT and has not ended, as
-        # winclean.sh -l lists it (V12), and every run is while Windows
-        # cannot say which. Each path that the record or
-        # KEPT of a live or kept run names, such as a tooling job directory of
+        sh "$(dirname "$0")/winjob.sh" "$(awk '$1 == "windows" && $2 == "out" { print $3; exit }' \
+            "$(dirname "$0")/machines")"
+        # A run in build/tmp is live while the job of one of its parts is
+        # not absent, as winjob.c says, or one of its parts has a token in
+        # OUT and has not ended, as winclean.sh -l lists it, and every run is
+        # while Windows cannot say which. Each path that the record or KEPT
+        # of a live or kept run names, such as a tooling job directory of
         # the cache, which cannot move into the run's directory, goes into
         # keep before any age rule, unless the run's milestone closed its
         # release.
@@ -108,28 +109,34 @@ outputs()
 nl='
 '
 keep= live=
-# unended ID: succeed when a part of run ID has a script or launch file in
-# OUT and neither a status file nor a stopped file.
+# unended ID: succeed when a part of run ID has a token in OUT and neither a
+# status file nor a stopped file.
 unended()
 {
     for u in prepare cases; do
         u=$b/release/$1.$u
-        [ -e "$u.sh" ] || [ -e "$u.launch" ] || continue
+        [ -e "$u.token" ] || continue
         [ -e "$u.rc" ] || [ -e "$u.stopped" ] || return 0
     done
     return 1
 }
-t=$(MSYS_NO_PATHCONV=1 tasklist /NH /FO CSV 2> /dev/null) &&
-    t=$t$nl$(MSYS_NO_PATHCONV=1 powershell.exe -NoProfile -NonInteractive -Command \
-        "Get-CimInstance Win32_Process -Filter \"Name = 'bash.exe'\" | ForEach-Object { \$_.CommandLine }" \
-        < /dev/null 2> /dev/null) && live=1
+# running ID: succeed when the job of a part of run ID is not absent, or
+# Windows cannot say.
+running()
+{
+    for u in prepare cases; do
+        [ "$("$winjob" state "Global\\rach2-$1.$u" 2> /dev/null)" = absent ] || return 0
+    done
+    return 1
+}
+[ ! -x "${winjob-}" ] || live=1
 for d in $b/tmp/*; do
     [ -d "$d" ] || continue
     id=${d##*/}
     m=${id#milestone}
     case $closed in *" ${m%%-*} "*) continue ;; esac
-    if [ -n "$live" ] && [ ! -e "$d/KEPT" ] && ! unended "$id"; then
-        case $t in *"\"etude-$id.exe\""* | *"/$id.prepare.sh"* | *"/$id.cases.sh"*) ;; *) continue ;; esac
+    if [ -n "$live" ] && [ ! -e "$d/KEPT" ] && ! unended "$id" && ! running "$id"; then
+        continue
     fi
     keep=$keep$nl$(sed -n 's/^\(made\|removed\|kept\) //p' "$d/record" "$d/KEPT" 2> /dev/null |
         sed 's,.*/,,')
@@ -145,7 +152,7 @@ END
             '    for d in $b/tmp/*; do' \
             '        [ ! -e "$d/KEPT" ] || continue' \
             '        ! unended "${d##*/}" || continue' \
-            '        case $t in *"\"etude-${d##*/}.exe\""* | *"/${d##*/}.prepare.sh"* | *"/${d##*/}.cases.sh"*) continue ;; esac' \
+            '        ! running "${d##*/}" || continue' \
             "        stale $days \"\$d\"" \
             '    done' \
             'fi'
