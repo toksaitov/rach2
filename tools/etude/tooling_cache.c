@@ -1,4 +1,7 @@
-/* tooling_cache.c: remove completed machines with no job or evidence. */
+/*
+ * tooling_cache.c: remove completed machines with no job or evidence, and
+ * note a run's scratch in its run directory.
+ */
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
 #if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
@@ -393,61 +396,110 @@ void tooling_cache_prune(const struct etude_tooling_site *site, const char *cons
 }
 
 /**
- * Append "VERB PATH" to the scratch record that ETUDE_SCRATCH_RECORD names.
+ * Give the run directory that ETUDE_RUN_DIR names, or NULL when it names none.
  *
- * A release run on Windows names the record, and tools/flow/winclean.sh
- * removes each path whose last line says "made" once the run's processes are
- * stopped: what a process stopped by force leaves, never what it kept as
- * evidence or what another run made. PATH is made absolute, with forward
- * slashes on Windows. Each line is one append on a handle opened for it, so
- * the run's processes may note at once. Does nothing when the variable is
- * unset; a line that cannot be written is reported on stderr.
+ * A caller that names one, as tools/flow/release.sh does for each run, puts
+ * the run's scratch in it and removes it whole when the run ends, unless a
+ * file KEPT in it says the run kept evidence there or elsewhere.
  */
-void tooling_scratch(const char *verb, const char *path)
+const char *tooling_run_dir(void)
 {
-    const char *record = getenv("ETUDE_SCRATCH_RECORD");
-    char line[CACHE_PATH + 16], cwd[CACHE_PATH];
-    int n, ok;
+    const char *run = getenv("ETUDE_RUN_DIR");
 
-    if (!record || !*record || !path || !*path || strchr(path, '\n'))
-        return;
+    return run && *run ? run : NULL;
+}
+
+/** Make `path` absolute in `out`, with forward slashes on Windows. */
+static int absolute_of(char out[CACHE_PATH], const char *path)
+{
+    char cwd[CACHE_PATH];
+    int n;
+
 #ifdef _WIN32
     if (etude_win_absolute(path))
 #else
     if (path[0] == '/')
 #endif
-        n = snprintf(line, sizeof(line), "%s %s\n", verb, path);
+        n = snprintf(out, CACHE_PATH, "%s", path);
     else if (getcwd(cwd, sizeof(cwd)) != NULL)
-        n = snprintf(line, sizeof(line), "%s %s/%s\n", verb, cwd, path);
+        n = snprintf(out, CACHE_PATH, "%s/%s", cwd, path);
     else
-        n = -1;
-    ok = n > 0 && n < (int)sizeof(line);
+        return -1;
+    if (n <= 0 || n >= CACHE_PATH)
+        return -1;
 #ifdef _WIN32
-    if (ok) {
-        HANDLE h;
-        DWORD wrote = 0;
-        int i;
-
-        for (i = 0; i < n; i++)
-            if (line[i] == '\\')
-                line[i] = '/';
-        /* FILE_APPEND_DATA alone makes each write an atomic append. */
-        h = CreateFileA(record, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                        OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-        ok = h != INVALID_HANDLE_VALUE && WriteFile(h, line, (DWORD)n, &wrote, NULL) &&
-             wrote == (DWORD)n;
-        if (h != INVALID_HANDLE_VALUE)
-            CloseHandle(h);
-    }
-#else
-    if (ok) {
-        int fd = open(record, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0600);
-
-        ok = fd >= 0 && write(fd, line, (size_t)n) == (ssize_t)n;
-        if (fd >= 0)
-            close(fd);
-    }
+    for (char *p = out; *p; p++)
+        if (*p == '\\')
+            *p = '/';
 #endif
-    if (!ok)
-        fprintf(stderr, "etude: scratch record: cannot note %s %s in %s\n", verb, path, record);
+    return 0;
+}
+
+/**
+ * Append `line` to `file` in one write on a handle opened for it, so that the
+ * processes of a run may append at once; return 0, or -1 when the whole line
+ * was not written.
+ */
+static int append_line(const char *file, const char *line)
+{
+    size_t n = strlen(line);
+    int ok;
+#ifdef _WIN32
+    DWORD wrote = 0;
+    /* FILE_APPEND_DATA alone makes each write an atomic append. */
+    HANDLE h = CreateFileA(file, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+    ok = h != INVALID_HANDLE_VALUE && WriteFile(h, line, (DWORD)n, &wrote, NULL) &&
+         wrote == (DWORD)n;
+    if (h != INVALID_HANDLE_VALUE)
+        CloseHandle(h);
+#else
+    int fd = open(file, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0600);
+
+    ok = fd >= 0 && write(fd, line, n) == (ssize_t)n;
+    if (fd >= 0)
+        close(fd);
+#endif
+    return ok ? 0 : -1;
+}
+
+/**
+ * Note in the run directory that this process made, kept as evidence or
+ * removed the scratch PATH, when ETUDE_RUN_DIR names one.
+ *
+ * VERB "kept" appends "kept PATH" to RUN/KEPT, which keeps the whole run
+ * directory and the record's paths from removal. A PATH outside RUN, which
+ * cannot move into it, as a tooling job directory in the cache pins its
+ * machine and a partial machine disk lies beside its backing image, is also
+ * noted as "VERB PATH" in RUN/record, from which tools/flow/winclean.sh
+ * removes each path whose last line says "made" once the run's processes are
+ * stopped and RUN has no KEPT. PATH is made absolute, with forward slashes on
+ * Windows. A line that cannot be written is reported on stderr.
+ */
+void tooling_scratch(const char *verb, const char *path)
+{
+    const char *run = tooling_run_dir();
+    char where[CACHE_PATH], what[CACHE_PATH], note[CACHE_PATH], line[CACHE_PATH + 16];
+    size_t n;
+    int inside;
+
+    if (!run || !path || !*path || strchr(path, '\n'))
+        return;
+    if (absolute_of(where, run) != 0 || absolute_of(what, path) != 0) {
+        fprintf(stderr, "etude: run directory: cannot note %s %s in %s\n", verb, path, run);
+        return;
+    }
+    n = strlen(where);
+#ifdef _WIN32
+    inside = _strnicmp(what, where, n) == 0 && what[n] == '/';
+#else
+    inside = strncmp(what, where, n) == 0 && what[n] == '/';
+#endif
+    snprintf(line, sizeof(line), "%s %s\n", verb, what);
+    if (!strcmp(verb, "kept") && (!path_of(note, where, "KEPT") || append_line(note, line)))
+        fprintf(stderr, "etude: run directory: cannot note %s %s in %s/KEPT\n", verb, what, where);
+    if (!inside && (!path_of(note, where, "record") || append_line(note, line)))
+        fprintf(stderr, "etude: run directory: cannot note %s %s in %s/record\n", verb, what,
+                where);
 }

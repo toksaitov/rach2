@@ -1798,7 +1798,11 @@ int etude_collection_tools_main(int argc, char **argv)
     col_stop = 0;
     col_signals();
     col_step("work directory");
-    int n = snprintf(job.work, sizeof job.work, "%s/build/tests/rach2-collection.XXXXXX", root);
+    /* In the run's directory, if any, which its caller removes whole. */
+    const char *run = tooling_run_dir();
+    int n =
+        run ? snprintf(job.work, sizeof job.work, "%s/rach2-collection.XXXXXX", run)
+            : snprintf(job.work, sizeof job.work, "%s/build/tests/rach2-collection.XXXXXX", root);
     if (col_stop || n < 0 || n >= (int)sizeof job.work || col_dirs(job.work, 1) ||
         !mkdtemp(job.work)) {
         col_failed("cannot make %s: %s", job.work,
