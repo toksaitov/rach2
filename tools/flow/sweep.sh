@@ -109,14 +109,15 @@ outputs()
 nl='
 '
 keep= live=
-# unended ID: succeed when a part of run ID has a token in OUT and neither a
-# status file nor a stopped file.
+# unended ID: succeed when a part of run ID has a token in OUT and no
+# stopped file, as winclean.sh -l judges it: a status file comes before the
+# job's end.
 unended()
 {
     for u in prepare cases; do
         u=$b/release/$1.$u
         [ -e "$u.token" ] || continue
-        [ -e "$u.rc" ] || [ -e "$u.stopped" ] || return 0
+        [ -e "$u.stopped" ] || return 0
     done
     return 1
 }

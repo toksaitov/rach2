@@ -2,12 +2,13 @@
 # shellcheck disable=SC2086 # the paths are a line each
 # winclean.sh: on the testing host's Windows, stop what is left of a Windows
 # release run and remove its run directory, say whether a run's parts run,
-# list the runs that may still run, or let one run start alone.
+# list the runs that may still run, let one run start alone, or let none.
 #
 # Usage: winclean.sh TREE OUT ID...
 #        winclean.sh -s TREE OUT ID...
 #        winclean.sh -l TREE OUT
 #        winclean.sh -g TREE OUT ID
+#        winclean.sh -a TREE OUT
 #
 # release.sh, stop.sh and sweep.sh pipe it to the host's MSYS2 bash with
 # `bash -l -s ARG...`, TREE being Windows' copy and OUT its output directory,
@@ -20,12 +21,17 @@
 # with it. Its start writes its nonce to OUT/ID.PART.token, failing when that
 # file exists, before it creates the helper, and the helper starts the part
 # only once it holds the job and the token still holds its nonce. A stop
-# writes `stop` to the token and then terminates the job, so that a start in
-# flight either holds a job that the stop ends or reads a token not its own;
-# the part is stopped once `winjob stop` says the job is absent, and then
+# replaces the token with a file that holds `stop`, by rename, and then
+# terminates the job, so that a start in flight either holds a job that the
+# stop ends or reads a token not its own; a start that has created the token
+# and not yet written its nonce writes into the file the rename unlinked.
+# The part is stopped once `winjob stop` says the job is absent, and then
 # winclean.sh touches OUT/ID.PART.stopped. etude runs inside the part that
-# started it, so its end comes with the part's. A part has ended once its
-# bash wrote its status to OUT/ID.PART.rc or a stop wrote OUT/ID.PART.stopped.
+# started it, so its end comes with the part's. OUT/ID.PART.rc, which its
+# bash writes before it exits, gives the part's result and not its end: the
+# helper ends the job after it. A part has ended only once a stop wrote
+# OUT/ID.PART.stopped, which a stop of a part whose job is already absent
+# writes at once.
 #
 # Each session of the run has the run directory TREE/build/tmp/ID, which
 # ETUDE_RUN_DIR names and which holds the run's TMPDIR and etude's scratch.
@@ -42,7 +48,8 @@
 # STATE being what `winjob state` says: `absent`, `active N` or `unknown`.
 #
 # -l lists, a line `orphan ID` each, the runs of OUT that may still run:
-# each with a part whose token exists and that has not ended.
+# each with a part whose token exists and that has not ended, a part with a
+# status file among them until a stop has confirmed its job absent.
 #
 # -g writes ID to OUT/windows.current, which a part's start reads after it
 # has written its token and before it creates the helper, starting nothing
@@ -51,20 +58,26 @@
 # starts nothing. It prints a line `left ID` for each run not confirmed
 # stopped.
 #
+# -a does as -g for no run: it writes `none` to OUT/windows.current, so that
+# a start that has not yet read it starts nothing, and then stops each run
+# that -l lists, printing `left ID` for each not confirmed stopped. stop.sh
+# uses it, so that a start still on its way when the release died, before
+# its token, starts nothing after the stop.
+#
 # Exit 0 once nothing of any run ID is left running or can start and its
 # scratch is gone or kept, with -s or -l once the answer is whole, and with
-# -g once every other run is stopped; exit 1 when a part may still run,
+# -g or -a once every other run is stopped; exit 1 when a part may still run,
 # Windows cannot say, OUT cannot be read or written, the helper is missing or
 # the scratch cannot be removed, so that the caller keeps the run's claims in
 # WSL while Windows may still use what they hold.
 
 mode=
-case ${1-} in -s | -l | -g) mode=$1; shift ;; esac
+case ${1-} in -s | -l | -g | -a) mode=$1; shift ;; esac
 case $mode in
-    -l) [ "$#" -eq 2 ] ;;
+    -l | -a) [ "$#" -eq 2 ] ;;
     -g) [ "$#" -eq 3 ] ;;
     *) [ "$#" -ge 3 ] ;;
-esac || { echo 'usage: winclean.sh [-s | -l | -g] TREE OUT [ID...]' >&2; exit 2; }
+esac || { echo 'usage: winclean.sh [-s | -l | -g | -a] TREE OUT [ID...]' >&2; exit 2; }
 tree=$1 out=$2
 shift 2
 cd "$out" || { echo "winclean: cannot enter $out" >&2; exit 1; }
@@ -82,21 +95,34 @@ job()
     printf 'Global\\rach2-%s.%s' "$1" "$2"
 }
 
-# halt ID PART: write `stop` to the token of part PART of run ID, terminate
-# its job, and succeed once the job is absent, with the part's stopped file.
+# halt ID PART: replace the token of part PART of run ID with `stop`,
+# terminate its job, and succeed once the job is absent, with the part's
+# stopped file. A start may hold the token open, so the token is never
+# truncated in place; a rename that a reader holding the file refuses is
+# tried again.
 halt()
 {
     v=
-    echo stop > "$1.$2.token" || return 1
+    i=0
+    until { echo stop > "$1.$2.token.$$" && mv -f "$1.$2.token.$$" "$1.$2.token"; } 2> /dev/null; do
+        if [ "$i" -ge 5 ]; then
+            rm -f "$1.$2.token.$$"
+            v='no stop token'
+            return 1
+        fi
+        i=$((i + 1))
+        sleep 1
+    done
     v=$("$winjob" stop "$(job "$1" "$2")" 2> /dev/null)
     [ "$v" = absent ] || return 1
     : > "$1.$2.stopped"
 }
 
-# ended ID PART: succeed when the part PART of run ID has ended.
+# ended ID PART: succeed when a stop has confirmed the part PART of run ID
+# ended.
 ended()
 {
-    [ -e "$1.$2.rc" ] || [ -e "$1.$2.stopped" ]
+    [ -e "$1.$2.stopped" ]
 }
 
 # orphans: print, a line each, the runs that -l lists.
@@ -203,12 +229,16 @@ case $mode in
             done
         done
         ;;
-    -g)
-        valid "$1" || exit 1
-        { echo "$1" > windows.current.part && mv windows.current.part windows.current; } ||
+    -g | -a)
+        own=none
+        if [ "$mode" = -g ]; then
+            valid "$1" || exit 1
+            own=$1
+        fi
+        { echo "$own" > windows.current.$$ && mv -f windows.current.$$ windows.current; } ||
             { echo "winclean: cannot write $out/windows.current" >&2; exit 1; }
         for id in $(orphans | sort -u); do
-            [ "$id" != "$1" ] || continue
+            [ "$mode" = -a ] || [ "$id" != "$own" ] || continue
             clean "$id" || { echo "left $id"; status=1; }
         done
         ;;

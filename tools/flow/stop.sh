@@ -14,18 +14,19 @@
 # one pass, so that no process number waits between the two. On Windows it
 # looks only at programs under D:\rach2 and at the Job Objects of release
 # runs' parts, so that Hyper-V and its machines are never touched: winclean.sh
-# first stops each release run that `winclean.sh -l` lists from Windows'
-# output directory, by its parts' jobs, which end everything the parts
-# started, and removes the run's scratch there; then each other program under
-# D:\rach2 is stopped through its own handle. Then it brings the board up to
-# date, runs sweep.sh, with -a unless a release still runs, and prints what is
-# still there: a line `stop: left: MACHINE: WHAT` for each process, each job
-# and each claim of the admission ledger, and a line `stop: left: MACHINE:
-# unknown: WHY` for each look that cannot be read and each list or stop on
-# Windows that failed. It ends with `stop: everything is stopped` and status
-# 0, or `stop: N left` and status 1. dev-log/84-locks/84-111-lifecycle.md
-# gives the model of a release's Windows parts and WSL claims that this
-# follows.
+# -a first makes the current run none, so that a part's start still on its
+# way starts nothing, and then stops each release run that `winclean.sh -l`
+# lists from Windows' output directory, by its parts' jobs, which end
+# everything the parts started, and removes the run's scratch there; then
+# each other program under D:\rach2 is stopped through its own handle. Then
+# it brings the board up to date, runs sweep.sh, with -a unless a release
+# still runs, and prints what is still there: a line `stop: left: MACHINE:
+# WHAT` for each process, each job and each claim of the admission ledger,
+# and a line `stop: left: MACHINE: unknown: WHY` for each look that cannot
+# be read and each list or stop on Windows that failed. It ends with
+# `stop: everything is stopped` and status 0, or `stop: N left` and status
+# 1. dev-log/84-locks/84-111-lifecycle.md gives the model of a release's
+# Windows parts and WSL claims that this follows.
 #
 # -n changes nothing and prints only what runs now, in the same form. A running
 # release is left alone and counts as left, since it costs hours to repeat:
@@ -316,7 +317,7 @@ running()
 winclean()
 {
     wc_mode=
-    case $1 in -s | -l | -g) wc_mode=$1; shift ;; esac
+    case $1 in -s | -l | -g | -a) wc_mode=$1; shift ;; esac
     {
         sh "$here/winjob.sh" "$(machine out)"
         cat "$here/winclean.sh"
@@ -325,20 +326,21 @@ winclean()
 }
 
 # stragglers: stop what `running` lists, but a release that may stay. On
-# Windows, while no release runs, winclean.sh first stops each release run
-# that may still run there, each that `winclean.sh -l` lists from OUT, with
-# what it started, and removes what it made outside its own files (V9); a
-# list or a stop that fails is kept in unsure, which `left` counts. Then each
-# other program under D:\rach2 is stopped.
+# Windows, while no release runs, `winclean.sh -a` first makes the current
+# run none, which a part's start reads after it has written its token, so
+# that a start that a dead release left on its way starts nothing, and then
+# stops each release run that may still run there, each that
+# `winclean.sh -l` lists from OUT, with what it started, and removes what it
+# made outside its own files (V9); a stop that fails or cannot say is kept
+# in unsure, which `left` counts. Then each other program under D:\rach2 is
+# stopped.
 stragglers()
 {
     if [ -n "$release" ] || [ -z "$(releases)" ]; then
-        if ! ids=$(orphans); then
-            unsure="${unsure}windows: unknown: the release runs that may still run could not be listed$nl"
-        elif [ -n "$ids" ]; then
-            # shellcheck disable=SC2086 # the ids are a word each
-            winclean $ids > /dev/null 2>&1 ||
-                unsure="${unsure}windows: unknown: winclean.sh did not confirm that $(printf "%s" "$ids" | tr "\n" " ") stopped$nl"
+        if ! st_out=$(winclean -a 2> /dev/null); then
+            st_ids=$(printf '%s\n' "$st_out" | tr -d '\r' | sed -n 's/^left //p' | sort -u | tr '\n' ' ' |
+                sed 's/ $//')
+            unsure="${unsure}windows: unknown: winclean.sh -a did not confirm that every release run stopped${st_ids:+: $st_ids}$nl"
         fi
         windows_procs kill > /dev/null
     fi
