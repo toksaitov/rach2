@@ -1,6 +1,14 @@
 /*
  * cmdline.h: the kernel command line, kept in a buffer of the kernel's own,
  * and the lookups of its flags and `key=value` options.
+ *
+ * Every lookup splits the line into words as Linux's next_arg does
+ * (lib/cmdline.c, lines 227 to 274): words are parted by spaces, which are
+ * the bytes Linux's isspace takes, but not inside double quotes, and the
+ * quotes around a word or a value are dropped, so `"maxcpus=4"` and
+ * `maxcpus="4"` both give `maxcpus` the value 4. A word's name ends at its
+ * first `=`. The lookups stop at a bare `--`, as Linux's parse_args does
+ * (kernel/params.c, lines 181 to 184), since the words after it are init's.
  */
 #ifndef _CMDLINE_H_
 #define _CMDLINE_H_
@@ -10,8 +18,9 @@
  * every lookup here reads; the shared boot calls it once, early.
  *
  * The buffer holds `BOOT_CMDLINE_MAX` - 2 bytes, 510. A longer line is cut
- * at the last space or tab that fits, so that no token is kept in part: a cut
- * `rach2.disk=ahcix` would otherwise read as `rach2.disk=ahci`. A line of
+ * before the last word that fits, unless a space ends that word, so that no
+ * word is kept in part: a cut `rach2.disk=ahcix` would otherwise read as
+ * `rach2.disk=ahci`. A quoted value's spaces do not end its word. A line of
  * exactly 511 bytes is cut too, since the boot record may have cut a longer
  * one there. A NULL `cmdline` leaves the line empty.
  *
@@ -20,10 +29,9 @@
 int kcmdline_capture(const char *cmdline);
 
 /**
- * Non-zero if the captured command line contains `flag` as a whole token.
- *
- * Tokens are delimited by spaces and tabs, so `kcmdline_has("rach2.rescue")`
- * matches the standalone argument and not a substring of a longer one.
+ * Non-zero if the captured command line contains `flag` as a whole word,
+ * with no `=`, so that `kcmdline_has("rach2.rescue")` matches the standalone
+ * argument and not a substring of a longer one.
  */
 int kcmdline_has(const char *flag);
 
