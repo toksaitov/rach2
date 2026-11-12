@@ -121,6 +121,14 @@ void lapic_init_ap(void);
  */
 void lapic_send_ipi(uint32_t target, uint8_t vector);
 
+/** In x2APIC mode, send `vector` to the processors whose logical IDs are
+ * the bits of `mask` in cluster `cluster`, with one write of the command
+ * register, as Linux's x2apic_cluster sends one message to a cluster
+ * (arch/x86/kernel/apic/x2apic_cluster.c:41-77); a processor's logical ID
+ * is fixed by its x2APIC ID, the cluster its bits 19:4 and the bit its bits
+ * 3:0. Nothing in xAPIC mode. */
+void lapic_send_ipi_cluster(uint32_t cluster, uint32_t mask, uint8_t vector);
+
 /** Send that processor a non-maskable interrupt, which no masking of its
  * own holds back: the watchdog's backtrace request and the panic's stop of
  * a processor that keeps interrupts off. */

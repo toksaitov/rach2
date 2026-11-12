@@ -242,6 +242,22 @@ static void ipi_send(int cpu, int kind)
     platform_cpu_ipi(cpu);
 }
 
+/** Send each processor of the set `cpus` the interprocessor interrupt,
+ * counted under `kind` once for each, in as few messages as the platform
+ * allows (`platform_cpu_ipi_many`). */
+static void ipi_send_many(uint64_t cpus, int kind)
+{
+    uint64_t left = cpus;
+
+    if (cpus == 0) {
+        return;
+    }
+    for (; left != 0; left &= left - 1u) {
+        ipi_counts[arch_cpu_id()][kind]++;
+    }
+    platform_cpu_ipi_many(cpus);
+}
+
 uint32_t smp_ipi_count(int cpu, int kind)
 {
     if (cpu < 0 || cpu >= NR_CPUS || kind < 0 || kind >= SMP_IPI_KINDS) {
@@ -1573,17 +1589,31 @@ void smp_kick(int cpu)
     }
 }
 
+void smp_kick_many(uint64_t cpus)
+{
+    uint64_t send = 0;
+    int c;
+
+    for (c = 0; cpus != 0; c++, cpus >>= 1) {
+        if ((cpus & 1u) && c != (int)arch_cpu_id() && cpu_table[c].online &&
+            arch_atomic_cmpxchg(&cpu_table[c].idle_poll, CPU_POLL_ON, CPU_POLL_KICKED) !=
+                CPU_POLL_ON) {
+            send |= (uint64_t)1 << c;
+        }
+    }
+    ipi_send_many(send, SMP_IPI_KICK);
+}
+
 /** Leave processor `c` a request to drop the translations of [`start`,
- * `end`), or every one for CPU_TLB_ALL, and interrupt it, counted under
- * `kind`; `ipi_lock` is held. */
-static void tlb_send(int c, uintptr_t start, uintptr_t end, int kind)
+ * `end`), or every one for CPU_TLB_ALL, for an interrupt the caller sends;
+ * `ipi_lock` is held. */
+static void tlb_request(int c, uintptr_t start, uintptr_t end)
 {
     struct percpu *other = &cpu_table[c];
 
     other->tlb_page = start;
     other->tlb_end = end;
     other->tlb_request = 1;
-    ipi_send(c, kind);
 }
 
 /** Wait until every processor sent a TLB request has answered it,
@@ -1634,6 +1664,7 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t en
     int me = (int)arch_cpu_id();
     int c, sent = 0;
     uint32_t flags;
+    uint64_t send = 0;
 
     if (cpus_online < 2) {
         return;
@@ -1652,9 +1683,11 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t en
                 continue;
             }
         }
-        tlb_send(c, start, end, SMP_IPI_TLB);
+        tlb_request(c, start, end);
+        send |= (uint64_t)1 << c;
         sent++;
     }
+    ipi_send_many(send, SMP_IPI_TLB);
     if (sent) {
         tlb_counts[0]++;
         tlb_counts[1] += (uint32_t)sent;
@@ -1680,6 +1713,7 @@ void smp_kernel_flush(uintptr_t start, uintptr_t end)
     int me = (int)arch_cpu_id();
     int c;
     uint32_t flags;
+    uint64_t send = 0;
 
     if (cpus_online < 2) {
         return;
@@ -1690,9 +1724,11 @@ void smp_kernel_flush(uintptr_t start, uintptr_t end)
     flags = spin_lock_irqsave(&ipi_lock);
     for (c = 0; c < NR_CPUS; c++) {
         if (c != me && cpu_table[c].online) {
-            tlb_send(c, start, end, SMP_IPI_KERNEL_TLB);
+            tlb_request(c, start, end);
+            send |= (uint64_t)1 << c;
         }
     }
+    ipi_send_many(send, SMP_IPI_KERNEL_TLB);
     tlb_wait();
     spin_unlock_irqrestore(&ipi_lock, flags);
 }

@@ -341,6 +341,42 @@ void platform_cpu_ipi(int cpu)
     lapic_send_ipi(cpu_apic[cpu], IPI_VECTOR);
 }
 
+/**
+ * In x2APIC mode a processor's logical ID is its x2APIC ID's cluster, bits
+ * 19:4, and one bit of 16 for bits 3:0, as the x2APIC fixes it, so each
+ * cluster of the set takes one message; the clusters are gathered in one
+ * pass over a set of at most NR_CPUS processors.
+ */
+void platform_cpu_ipi_many(uint64_t cpus)
+{
+    uint32_t cluster, mask;
+    uint64_t left = cpus, bit;
+    int c;
+
+    if (!lapic_x2apic()) {
+        for (c = 0; left != 0; c++, left >>= 1) {
+            if (left & 1u) {
+                lapic_send_ipi(cpu_apic[c], IPI_VECTOR);
+            }
+        }
+        return;
+    }
+    while (cpus != 0) {
+        for (c = 0; !((cpus >> c) & 1u); c++) {
+        }
+        cluster = cpu_apic[c] >> 4;
+        mask = 0;
+        for (; c < NR_CPUS; c++) {
+            bit = (uint64_t)1 << c;
+            if ((cpus & bit) && cpu_apic[c] >> 4 == cluster) {
+                mask |= 1u << (cpu_apic[c] & 15u);
+                cpus &= ~bit;
+            }
+        }
+        lapic_send_ipi_cluster(cluster, mask, IPI_VECTOR);
+    }
+}
+
 void platform_cpu_nmi(int cpu)
 {
     lapic_send_nmi(cpu_apic[cpu]);

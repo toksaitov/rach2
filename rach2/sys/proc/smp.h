@@ -371,6 +371,12 @@ void smp_ipi(void);
  * interrupt. */
 void smp_kick(int cpu);
 
+/** End the idle waits of the set `cpus`, bit N for processor N, as
+ * `smp_kick` ends one, with as few messages as the platform allows
+ * (`platform_cpu_ipi_many`): one for each x2APIC cluster, where a kick of
+ * each was a write of the command register, which exits under KVM. */
+void smp_kick_many(uint64_t cpus);
+
 /**
  * Drop the translations of the user pages [`start`, `end`), or every user
  * translation when `start` is CPU_TLB_ALL, on each other processor that

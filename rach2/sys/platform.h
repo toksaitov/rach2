@@ -138,6 +138,12 @@ int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu));
  * `smp_ipi` (proc/smp.h). */
 void platform_cpu_ipi(int cpu);
 
+/** Send each processor of the set `cpus`, bit N for processor N, the
+ * interprocessor interrupt, with as few messages as the controller allows:
+ * one for each cluster of processors in x2APIC mode, one for each
+ * processor otherwise. */
+void platform_cpu_ipi_many(uint64_t cpus);
+
 /** Send processor `cpu` a non-maskable interrupt, which reaches it with its
  * interrupts off: the watchdog's backtrace request (watchdog.c) and the
  * panic's stop of a processor that did not take the interprocessor

@@ -204,6 +204,18 @@ void platform_cpu_ipi(int cpu)
     }
 }
 
+/** Interrupt each processor of the set as `platform_cpu_ipi` does one. */
+void platform_cpu_ipi_many(uint64_t cpus)
+{
+    int c;
+
+    for (c = 0; cpus != 0; c++, cpus >>= 1) {
+        if (cpus & 1u) {
+            platform_cpu_ipi(c);
+        }
+    }
+}
+
 /** The host model has no watchdog. */
 void watchdog_wait(void)
 {}

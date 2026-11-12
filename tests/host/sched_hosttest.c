@@ -370,6 +370,18 @@ void smp_kick(int cpu)
     }
 }
 
+/** Count each processor of the set as `smp_kick` counts one. */
+void smp_kick_many(uint64_t cpus)
+{
+    int c;
+
+    for (c = 0; cpus != 0; c++, cpus >>= 1) {
+        if (cpus & 1u) {
+            smp_kick(c);
+        }
+    }
+}
+
 /** Nothing: no row runs the idle task's loop. */
 void arch_irq_disable(void)
 {}
