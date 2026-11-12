@@ -5802,6 +5802,31 @@ static int file_read_lock(const fd_entry_t *e)
     return file_vfs_unlocked(e) ? 0 : file_ops_lock(e);
 }
 
+/**
+ * Whether a read or a write of `e`, and nothing else, may run without the
+ * big lock: `file_ops_unlocked`'s test but for the mounts of a device node
+ * and of a synthetic node, which a read or a write of the object does not
+ * touch and the description's end releases under the big lock itself
+ * (`ofd_end_big`). /dev/null and /dev/zero opened by path hold one, and are
+ * read and written without the lock, as Linux's read_zero and write_null
+ * take none (drivers/char/mem.c).
+ */
+static int file_rw_unlocked(const fd_entry_t *e)
+{
+    if (!e || !e->ops || !(e->ops->flags & FILE_OPS_UNLOCKED) || e->type == FD_TYPE_SOCKET ||
+        ops_offset_held((fd_entry_t *)(uintptr_t)e)) {
+        return 0;
+    }
+    return !e->ofd || !e->ofd->vmnt;
+}
+
+/** The big lock for read(2) and pread64(2) of `e`: none for an object
+ * `file_rw_unlocked` admits, and `file_read_lock`'s answer otherwise. */
+static int rw_read_lock(const fd_entry_t *e)
+{
+    return file_rw_unlocked(e) ? 0 : file_read_lock(e);
+}
+
 int file_ops_lock(const fd_entry_t *e)
 {
     if (file_ops_unlocked(e)) {
@@ -5836,12 +5861,13 @@ int file_vfs_writes_unlocked(const fd_entry_t *e)
 }
 
 /** `fd_call_lock` for a write of descriptor `fd`: no big lock for a file
- * `file_vfs_writes_unlocked` admits. */
+ * `file_vfs_writes_unlocked` admits or an object `file_rw_unlocked`
+ * admits. */
 static int fd_write_lock(int fd)
 {
     fd_entry_t *e = current_proc ? fd_get(current_proc->fds, fd) : NULL;
 
-    return file_vfs_writes_unlocked(e) ? 0 : file_ops_lock(e);
+    return file_vfs_writes_unlocked(e) || file_rw_unlocked(e) ? 0 : file_ops_lock(e);
 }
 
 /** The big lock for a truncation, fallocate or sync of descriptor `fd`,
@@ -7561,7 +7587,7 @@ static int32_t read_fd(int fd, char __user *buf, size_t requested)
 long sys_read(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
-    int big = file_read_lock(current_proc ? fd_get(current_proc->fds, fd) : NULL);
+    int big = rw_read_lock(current_proc ? fd_get(current_proc->fds, fd) : NULL);
     long rc = read_fd(fd, (char __user *)SC_ARG(params, 1), SC_ARG(params, 2));
 
     file_ops_unlock(big);
@@ -14177,7 +14203,7 @@ static long pwrite_at(int fd, const char __user *buf, size_t requested, long lon
  * (`fd_call_lock`) or it names a file whose reads do (`file_vfs_unlocked`). */
 long ksys_pread64(int fd, char __user *buf, size_t requested, long long pos)
 {
-    int big = file_read_lock(current_proc ? fd_get(current_proc->fds, fd) : NULL);
+    int big = rw_read_lock(current_proc ? fd_get(current_proc->fds, fd) : NULL);
     long rc = pread_at(fd, buf, requested, pos);
 
     file_ops_unlock(big);

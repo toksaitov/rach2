@@ -1215,12 +1215,29 @@ static int32_t dev_mem_mmap(fd_entry_t *e, struct vma *vma)
 
 static const struct file_ops mem_ops = {dev_mem_read, dev_mem_write, dev_poll, dev_ioctl,
                                         NULL,         dev_mem_mmap,  NULL,     0};
-static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll, dev_ioctl,
-                                         NULL,         NULL,           NULL,     0};
-static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll, dev_ioctl,
-                                         NULL,          NULL,           NULL,     0};
-static const struct file_ops full_ops = {dev_zero_read, dev_full_write, dev_poll, dev_ioctl,
-                                         NULL,          NULL,           NULL,     0};
+
+/** ioctl of /dev/null, /dev/zero and /dev/full: -ENOTTY for every request,
+ * which is `dev_ioctl`'s answer for a device with no size, with no state
+ * read, as Linux's have no ioctl (drivers/char/mem.c:649-688). */
+static int32_t dev_notty_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
+{
+    (void)e;
+    (void)request;
+    (void)arg;
+    return -ENOTTY;
+}
+
+/* /dev/null, /dev/zero and /dev/full read, write, poll and answer an ioctl
+ * from no state but the caller's buffer, so their calls run without the big
+ * lock (FILE_OPS_UNLOCKED), as Linux's drivers/char/mem.c takes no lock for
+ * them. The random devices keep it: krandom's generator has no lock of its
+ * own. */
+static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll, dev_notty_ioctl,
+                                         NULL,         NULL,           NULL,     FILE_OPS_UNLOCKED};
+static const struct file_ops zero_ops = {
+    dev_zero_read, dev_sink_write, dev_poll, dev_notty_ioctl, NULL, NULL, NULL, FILE_OPS_UNLOCKED};
+static const struct file_ops full_ops = {
+    dev_zero_read, dev_full_write, dev_poll, dev_notty_ioctl, NULL, NULL, NULL, FILE_OPS_UNLOCKED};
 static const struct file_ops rand_ops = {dev_rand_read, dev_sink_write, dev_poll, dev_ioctl,
                                          NULL,          NULL,           NULL,     0};
 
