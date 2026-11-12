@@ -388,11 +388,17 @@ static int same(const char *a, const char *b)
     return *a == *b;
 }
 
-/** Whether the command line has `flag`: rach2.nomsi when `nomsi` is set,
- * nox2apic when `nox2apic` is. */
+/** Whether the command line has `flag`: rach2.nomsi when `nomsi` is set. */
 int kcmdline_has(const char *flag)
 {
-    return (nomsi && same(flag, "rach2.nomsi")) || (nox2apic && same(flag, "nox2apic"));
+    return nomsi && same(flag, "rach2.nomsi");
+}
+
+/** Whether the command line names the early parameter `name`: nox2apic when
+ * `nox2apic` is set. */
+int kcmdline_early(const char *name)
+{
+    return nox2apic && same(name, "nox2apic");
 }
 
 /** Map the APIC's page at its usual base, and nothing else. The driver does

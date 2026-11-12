@@ -1277,10 +1277,10 @@ static void read_options(void)
 
     opt_nmi_watchdog();
     opt_int("softlockup_panic", &softlockup_panic, 0, 0x7FFFFFFF);
-    if (kcmdline_has("nowatchdog")) {
+    if (kcmdline_setup("nowatchdog")) {
         watchdog_user_enabled = 0;
     }
-    if (kcmdline_has("nosoftlockup")) {
+    if (kcmdline_setup("nosoftlockup")) {
         watchdog_softlockup_user_enabled = 0;
     }
     opt_int("watchdog_thresh", &watchdog_thresh, 0, 60);
