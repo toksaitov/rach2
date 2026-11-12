@@ -2329,6 +2329,24 @@ static int ext2_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t 
     return rc;
 }
 
+/**
+ * The `readlink_cached` of `vfs_ops`: the target of a fast link, which the
+ * inode's pointer words hold, as Linux's ext2 points `i_link` at them
+ * (fs/ext2/inode.c:1489-1491); -1 for any other node, a slow link among
+ * them, or a `cap` too small. A link's mode, size and words do not change
+ * while a hold keeps it, so this takes no lock.
+ */
+static int ext2_readlink_cached(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *n = node;
+
+    if (!fast_link(em, n) || n->size >= EXT2_FAST_LINK || n->size + 1 > cap) {
+        return -1;
+    }
+    return link_target(em, n, buf, cap);
+}
+
 /** The blocks the volume's own structures take: those before the first
  * group, each superblock copy and descriptor table, and each group's two
  * bitmaps and inode table, as Linux's ext2 counts them. */
@@ -8833,6 +8851,7 @@ static const struct vfs_ops ext2_ops = {
     ext2_xattr,
     ext2_cachestat,
     ext2_put_unless_last,
+    ext2_readlink_cached,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 0, 0, 1, 1, 1};

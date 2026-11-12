@@ -4933,7 +4933,7 @@ static void open_done(int fd, const char *name, int flags)
     if (truncated && !vfs_file_locked(ofd->vmnt)) {
         filemap_file_truncated(ofd->vmnt, ofd->ino, 0); /* else under the file's lock */
     }
-    if (!inotify_watches) {
+    if (!inotify_mount_watched(ofd->vmnt)) {
         return;
     }
     open_record_parent(ofd, name);
@@ -4955,7 +4955,7 @@ static void open_done(int fd, const char *name, int flags)
  * the hold, the record and a reference on the mount, and the entry is
  * published last. What `open_done` does for such an open, the description's
  * watch flags and inotify's report of the open, under the big lock while a
- * watch exists, is done to the description before the entry is published,
+ * watch is on the file's file system, is done to the description before the entry is published,
  * as Linux's `vfs_open` reports the open before `fd_install` (fs/open.c):
  * once published, another thread may close the descriptor and open another
  * file in its slot. The descriptor, or a negative errno with everything
@@ -4992,7 +4992,7 @@ static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry
     e->node = NULL;
     e->type = (st->mode & S_IFMT) == S_IFDIR ? FD_TYPE_DIR : FD_TYPE_FILE;
     e->ofd->watch_flags = OFD_WATCH_OPEN | (e->type == FD_TYPE_DIR ? OFD_WATCH_DIR : 0u);
-    if (inotify_watches) {
+    if (inotify_mount_watched(ref->mnt)) {
         bkl_enter();
         open_record_parent(e->ofd, name);
         inotify_desc(e->ofd, IN_OPEN);
@@ -5014,8 +5014,8 @@ static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry
  * descriptor is reserved before the walk, as `do_open` reserves it. The
  * descriptor or a negative errno; or CALL_LOCKED with nothing done, for
  * every other open, which `do_open` makes under the big lock. inotify's
- * report of the open takes the big lock while a watch exists
- * (`open_install_unlocked`).
+ * report of the open takes the big lock while a watch is on the file's
+ * file system (`open_install_unlocked`).
  */
 static int32_t open_unlocked(int dirfd, const char __user *upath, int flags)
 {
@@ -6944,7 +6944,7 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
         ofd->offset += (uint64_t)bytes_read;
     }
     fd_ofd_unlock(ofd);
-    if (bytes_read > 0 && inotify_watches) {
+    if (bytes_read > 0 && inotify_mount_watched(ofd->vmnt)) {
         if (!bkl_held()) {
             bkl_enter();
             big = 1;

@@ -5270,6 +5270,13 @@ void inotify_desc(struct open_file *ofd, uint32_t mask)
     (void)mask;
 }
 
+/** No row's file system is watched. */
+int inotify_mount_watched(const struct vfs_mount *mnt)
+{
+    (void)mnt;
+    return 0;
+}
+
 /** A mount is its own base here: no row makes a bind mount. */
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {

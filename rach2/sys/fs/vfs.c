@@ -221,6 +221,18 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
     return m->bind_of ? m->bind_of : m;
 }
 
+void vfs_mount_watches(const struct vfs_mount *m, int delta)
+{
+    int i;
+
+    for (i = 0; i < mount_slots; i++) {
+        if (mounts[i] == m) {
+            mounts[i]->inotify_watched += delta;
+            return;
+        }
+    }
+}
+
 /** Whether a write through `mnt` is refused for a read-only mount: its own
  * flags, or for a bind mount those of the file system it shows. */
 static int mount_rdonly(struct vfs_mount *mnt)
@@ -1777,22 +1789,39 @@ struct cached_record {
     uint32_t seq;
 };
 
+/* The cached walk's answer for a symbolic link it follows (`cached_found`). */
+#define WALK_LINK 2
+
 /**
  * The cached walk's checks on `found`, the node of the name `leaf` it just
  * looked up in `cur`, with `rest` the path after it: 0, with a regular
- * file's entry recorded at the last name as `rec` asks (`cached_entry`); or
- * WALK_FULL, with `found` put, for a symbolic link the walk would follow, a
- * failed `getattr` or an entry it cannot record.
+ * file's entry recorded at the last name as `rec` asks (`cached_entry`);
+ * WALK_LINK, with `found` held, for a symbolic link the walk follows,
+ * which fs.protected_symlinks allows at the last name (`may_follow_link`),
+ * as Linux's pick_link asks (fs/namei.c:1837); or WALK_FULL, with `found`
+ * put, for a link it refuses, a failed `getattr` or an entry it cannot
+ * record.
  */
 static int cached_found(const struct vfs_ref *cur, void *found, const char *leaf, const char *rest,
                         int flags, const struct cached_record *rec)
 {
     struct vfs_stat st;
 
-    if ((cur->mnt->type->ops->readlink &&
-         (cur->mnt->type->ops->getattr(mount_base(cur->mnt), found, &st) != 0 ||
-          ((st.mode & 0170000u) == 0120000u && (*rest || !(flags & VFS_WALK_NOFOLLOW))))) ||
-        (rec->entry && !*rest && cached_entry(cur, found, leaf, rec->seq, rec->entry) != 0)) {
+    if (cur->mnt->type->ops->readlink) {
+        if (cur->mnt->type->ops->getattr(mount_base(cur->mnt), found, &st) != 0) {
+            cached_put(cur->mnt, found);
+            return WALK_FULL;
+        }
+        if ((st.mode & 0170000u) == 0120000u && (*rest || !(flags & VFS_WALK_NOFOLLOW))) {
+            if (*rest ||
+                may_follow_link(cur->mnt, cur->node, &st, (flags & VFS_WALK_REAL_IDS) != 0) == 0) {
+                return WALK_LINK;
+            }
+            cached_put(cur->mnt, found);
+            return WALK_FULL;
+        }
+    }
+    if (rec->entry && !*rest && cached_entry(cur, found, leaf, rec->seq, rec->entry) != 0) {
         cached_put(cur->mnt, found);
         return WALK_FULL;
     }
@@ -1918,6 +1947,48 @@ static int cached_cross(struct vfs_ref *cur)
     }
 }
 
+/* What the cached walk keeps while it follows links: the two path pages,
+ * taken at the first link (`walk_pages`), and the count of links. */
+struct cached_links {
+    char *linkpath;
+    char *target;
+    int links;
+};
+
+/**
+ * Splice the target of the link `found` on `cur`'s mount in front of `rest`
+ * in `lk->linkpath`, as `walk_link` does for the full walk; `found` is put.
+ * The target must be one the node holds (`readlink_cached`), as Linux's walk
+ * under RCU reads `i_link` and leaves any other link to the walk with
+ * references (fs/namei.c:1860-1870). An absolute target moves `cur` to the
+ * caller's root (`cached_start`); a relative one goes on from `cur`. 0, with
+ * the walk to go on at `lk->linkpath`; or WALK_FULL, with `cur` held as it
+ * was, past VFS_LINK_MAX links, for a target the node does not hold, a root
+ * it cannot take or an error, which the full walk reports.
+ */
+static int cached_link(struct vfs_ref *cur, void *found, const char *rest, struct cached_links *lk)
+{
+    struct vfs_ref root;
+    int tlen = -1, rc;
+
+    if (cur->mnt->type->ops->readlink_cached && ++lk->links <= VFS_LINK_MAX &&
+        walk_pages(&lk->linkpath, &lk->target) == 0) {
+        tlen = cur->mnt->type->ops->readlink_cached(mount_base(cur->mnt), found, lk->target,
+                                                    VFS_PATH_MAX);
+    }
+    cached_put(cur->mnt, found);
+    rc = tlen < 0 ? -1 : walk_splice(lk->linkpath, lk->target, tlen, rest);
+    if (rc < 0 || (rc == 1 && cached_start(NULL, lk->linkpath, &root) != 0)) {
+        return WALK_FULL;
+    }
+    if (rc == 1) {
+        cached_put(cur->mnt, cur->node);
+        vfs_leave(cur->mnt);
+        *cur = root;
+    }
+    return 0;
+}
+
 /**
  * Resolve `path` from the name cache alone, without the big lock, as Linux
  * first walks a path under RCU and walks it again with references when that
@@ -1927,15 +1998,17 @@ static int cached_cross(struct vfs_ref *cur)
  * walk to take the path whole.
  *
  * Each step must stand on a mount of a type `walk_cacheable` admits, find
- * its name in the cache, pass the search check, which reads the held
- * directory alone (`name_cache`), and reach no symbolic link it would
- * follow; a directory a mount covers it crosses (`cached_cross`), but a
- * nameless mount entered by name it leaves to the full walk. Anything
- * else, `..`, a failed search check among
- * them, which the full walk may excuse on the way to the working directory
- * (`toward_cwd`), goes to the full walk, which gives the same answer for
- * every path this one finishes. The walk takes no namespace lock, since its
- * type needs none, and a mount it ends on is the one `walk_unlock` leaves.
+ * its name in the cache and pass the search check, which reads the held
+ * directory alone (`name_cache`). A symbolic link whose target the node
+ * holds it follows (`cached_link`), from the root for an absolute target
+ * and from the link's directory for a relative one, and a directory a
+ * mount covers it crosses (`cached_cross`); a nameless mount entered by
+ * name it leaves to the full walk. Anything else, `..`, any other link and
+ * a failed search check among them, which the full walk may excuse on the
+ * way to the working directory (`toward_cwd`), goes to the full walk, which
+ * gives the same answer for every path this one finishes. The walk takes no
+ * namespace lock, since its type needs none, and a mount it ends on is the
+ * one `walk_unlock` leaves.
  */
 static int resolve_cached(const struct vfs_ref *start, const char *path, int flags,
                           struct vfs_ref *out, struct vfs_name **entry)
@@ -1944,6 +2017,7 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
     struct vfs_ref cur;
     int use_real = (flags & VFS_WALK_REAL_IDS) != 0;
     struct cached_record rec;
+    struct cached_links lk = {NULL, NULL, 0};
     uint32_t found_names = 0;
     int rc;
 
@@ -1987,6 +2061,8 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
             dcache_count_hits(found_names + 1);
             cached_put(cur.mnt, cur.node);
             vfs_leave(cur.mnt);
+            path_buf_put(lk.linkpath);
+            path_buf_put(lk.target);
             return rc;
         }
         if (rc != 0) {
@@ -1995,7 +2071,15 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
         found_names++;
         for (rest = p; *rest == '/'; rest++) {
         }
-        if (cached_found(&cur, found, comp, rest, flags, &rec) != 0) {
+        rc = cached_found(&cur, found, comp, rest, flags, &rec);
+        if (rc == WALK_LINK) {
+            rc = cached_link(&cur, found, rest, &lk);
+            p = lk.linkpath;
+            if (rc == 0) {
+                continue;
+            }
+        }
+        if (rc != 0) {
             goto full;
         }
         cached_put(cur.mnt, cur.node);
@@ -2009,15 +2093,19 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
     }
     dcache_count_hits(found_names);
     *out = cur;
+    path_buf_put(lk.linkpath);
+    path_buf_put(lk.target);
     return 0;
 
 full:
+    cached_put(cur.mnt, cur.node);
+    vfs_leave(cur.mnt);
     if (entry) {
         vfs_name_put(*entry);
         *entry = NULL;
     }
-    cached_put(cur.mnt, cur.node);
-    vfs_leave(cur.mnt);
+    path_buf_put(lk.linkpath);
+    path_buf_put(lk.target);
     return WALK_FULL;
 }
 
@@ -3742,6 +3830,7 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* xattr */
     0,                           /* cachestat */
     0,                           /* put_unless_last */
+    0,                           /* readlink_cached */
 };
 
 /** The constructor of the root's entry: the mount's root is the image's root
@@ -4365,6 +4454,7 @@ static const struct vfs_ops devfs_vops = {
     0, /* xattr */
     0, /* cachestat */
     0, /* put_unless_last */
+    0, /* readlink_cached */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -4407,6 +4497,7 @@ static const struct vfs_ops procfs_vops = {
     0, /* xattr */
     0, /* cachestat */
     0, /* put_unless_last */
+    0, /* readlink_cached */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -4449,6 +4540,7 @@ static const struct vfs_ops sysfs_vops = {
     0, /* xattr */
     0, /* cachestat */
     0, /* put_unless_last */
+    0, /* readlink_cached */
 };
 
 /** The constructor of a synthetic mount: its root is a node of the
