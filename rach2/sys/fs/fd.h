@@ -105,8 +105,10 @@ typedef enum {
  * belongs to one descriptor. The values are Linux's O_* bits, the same on
  * i386 and x86-64, so fcntl passes them through.
  */
-#define OFD_APPEND   02000 /* O_APPEND: every write goes to end-of-file */
-#define OFD_NONBLOCK 04000 /* O_NONBLOCK: a would-block returns -EAGAIN */
+#define OFD_APPEND   02000    /* O_APPEND: every write goes to end-of-file */
+#define OFD_NONBLOCK 04000    /* O_NONBLOCK: a would-block returns -EAGAIN */
+#define OFD_DSYNC    010000   /* O_DSYNC: a write ends with an fdatasync */
+#define OFD_SYNC     04010000 /* O_SYNC, O_DSYNC's bit with __O_SYNC: an fsync */
 
 struct krffs_node;
 struct socket;
@@ -167,7 +169,7 @@ struct open_file {
     uint64_t raw_offset; /* Shared offset of a raw disk window */
     /* The readahead of reads through the file page cache. */
     struct file_ra_state ra;
-    uint32_t status_flags; /* Shared O_APPEND/O_NONBLOCK (OFD_* above) */
+    uint32_t status_flags; /* Shared O_APPEND, O_NONBLOCK, O_SYNC (OFD_* above) */
     /* A FIFO reader's writer-open count for poll: equal to the pipe's
      * count until a writer has opened since a nonblocking read-only open
      * with no writer. Other FIFO opens start with a different count. */
