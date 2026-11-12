@@ -32,7 +32,10 @@
 # driver, starts QEMU with it on vfio-pci and the disk on AHCI, kills QEMU
 # when this script sends it SIGUSR1, and gives the function back to the
 # driver, which must pass gpu.sh's own checks once the VM has gone
-# (`handoff`).
+# (`handoff`). Every run of NOCOPY must then be on the GPU, Venus's
+# integrated GPU of Intel's, not on lavapipe, to which the VM falls back
+# when its driver does not bind: NOCOPY fails without one, and `coherent`
+# fails unless the device it names is one.
 #
 # Each check prints one line, `bed-shm: CHECK: pass` or `fail` with the
 # reason, and the last line is `bed-shm: result: pass` or `fail`, after the
@@ -64,6 +67,9 @@ done
 [ -z "$bdf" ] || [ -n "$nocopy" ] || { echo "bed-shm: -g needs -k" >&2; exit 2; }
 [ -z "$bdf" ] || [ -f "$gpush" ] || { echo "bed-shm: no $gpush for -g" >&2; exit 2; }
 daemon='' qemu='' gpu='' waiter='' holder='' pid='' bad=0
+# NOCOPY_INTEL, for nocopy: with -g, the GPU's Venus device or a failure.
+intel=''
+[ -z "$bdf" ] || intel=1
 # gpu.sh, sent SIGTERM, kills its QEMU and gives the function back.
 trap 'kill -9 $qemu $waiter $holder $pid 2>/dev/null; kill $daemon $gpu 2>/dev/null; wait 2>/dev/null' EXIT
 rm -rf "$out"
@@ -200,7 +206,7 @@ ivshmemd -i > "$out/info-bound.txt" 2>&1
 figure()
 {
     echo "bed-shm: measuring: $*"
-    VK_DRIVER_FILES=$icd "$@" > "$out/figure.out" 2>&1 &
+    VK_DRIVER_FILES=$icd NOCOPY_INTEL=$intel "$@" > "$out/figure.out" 2>&1 &
     pid=$! s=0
     while kill -0 "$pid" 2>/dev/null; do
         sleep 1
@@ -234,7 +240,7 @@ nocopy_rows()
     fi
     maps0=$(stat kvm_gpa_maps) pages0=$(stat kvm_gpa_map_pages)
     round_bytes=1048576
-    VK_DRIVER_FILES=$icd "$out/nocopy" rounds 16 "$round_bytes" > "$out/rounds.out" 2>&1
+    VK_DRIVER_FILES=$icd NOCOPY_INTEL=$intel "$out/nocopy" rounds 16 "$round_bytes" > "$out/rounds.out" 2>&1
     ivshmemd -i > "$out/info-rounds.txt" 2>&1
     pins=$(grep -c 'backend: pin: resource' "$console")
     if awk -v maps="$maps0" -v pages="$pages0" -v bytes="$round_bytes" '
@@ -247,8 +253,11 @@ nocopy_rows()
     else
         fail pages "pins $pins: $(grep 'NOCOPY' "$out/rounds.out" | tr '\n' ' ')"
     fi
-    if grep -q '^NOCOPY OK' "$out/rounds.out"; then
-        pass coherent "$(sed -n 's/^NOCOPY ROUNDS: //p' "$out/rounds.out"); $(sed -n 's/^NOCOPY DEVICE: //p' "$out/rounds.out")"
+    device=$(sed -n 's/^NOCOPY DEVICE: //p' "$out/rounds.out")
+    if [ -n "$intel" ] && ! echo "$device" | grep -q ', vendor 0x8086, integrated GPU, '; then
+        fail coherent "not on the GPU: ${device:-no device}: $(grep 'NOCOPY' "$out/rounds.out" | tr '\n' ' ')"
+    elif grep -q '^NOCOPY OK' "$out/rounds.out"; then
+        pass coherent "$(sed -n 's/^NOCOPY ROUNDS: //p' "$out/rounds.out"); $device"
     else
         fail coherent "$(grep 'NOCOPY' "$out/rounds.out" | tr '\n' ' ')"
     fi
@@ -295,7 +304,7 @@ nocopy_rows()
     fi
 
     # The VM's death with a mapping live and touched.
-    VK_DRIVER_FILES=$icd "$out/nocopy" hold 1048576 > "$out/hold.out" 2>&1 &
+    VK_DRIVER_FILES=$icd NOCOPY_INTEL=$intel "$out/nocopy" hold 1048576 > "$out/hold.out" 2>&1 &
     holder=$!
     until_line "$out/hold.out" 'NOCOPY HELD\|NOCOPY FAIL' 120 "$holder" || true
     ivshmemd -i > "$out/info-held.txt" 2>&1
