@@ -194,10 +194,10 @@ struct bkl_tick_cpu {
 static struct bkl_tick_cpu bkl_ticks[NR_CPUS];
 static volatile uint32_t bkl_tick_gen;
 static const char *const bkl_tick_names[BKL_TICK_ROWS] = {
-    "clock",   "account",    "wake",  "lock",      "signals",       "load",     "hda",
-    "netdev",  "netconsole", "ath9k", "tcp",       "ip_frag",       "ip6",      "netlink",
-    "ip_loop", "usb",        "input", "block_lag", "block_request", "platform", "vkms",
-    "speaker", "console",    "klog",  "nested"};
+    "clock",   "account", "wake",    "hda",     "block_lag",  "block_request", "speaker",
+    "lock",    "signals", "load",    "netdev",  "netconsole", "ath9k",         "tcp",
+    "ip_frag", "ip6",     "netlink", "ip_loop", "usb",        "input",         "platform",
+    "vkms",    "console", "klog",    "nested"};
 
 /* The probes an open-addressed table makes before it gives up. */
 #define BKL_PROBES 32

@@ -1242,11 +1242,10 @@ uint32_t block_release_tick(void)
  * since the last call, at its completion (`req_count_rest`); the suites bound
  * that count on every device. A request quarantined keeps its generation, so
  * the late completion still matches it. The clock advances by the ticks counted
- * since the last call, not by one a call: the boot processor's tick that finds
- * the big lock held ends without calling this (`timer_lock_take`, kernel.c),
- * and a late interrupt counts several ticks. A request taken between two
- * calls counts only the ticks since it was taken, read from the clock as
- * `req_clock` gives it then.
+ * since the last call, not by one a call: a late interrupt of the boot
+ * processor's tick counts several ticks (`timer_own_work`, kernel.c). A
+ * request taken between two calls counts only the ticks since it was taken,
+ * read from the clock as `req_clock` gives it then.
  */
 void block_request_tick(void)
 {

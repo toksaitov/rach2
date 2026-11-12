@@ -355,7 +355,8 @@ static volatile uint32_t missed_revolutions = 0;
  * 118 of 6.12.115). `service_wanted` holds the HDA_SERVE_ bits asked for
  * since the thread last took them, under the stream lock. The interrupt
  * runs without the big lock, and the thread drops it at its start and
- * serves under the stream mutex; the tick asks from its locked part.
+ * serves under the stream mutex; the tick asks from its part that takes no
+ * big lock.
  * service_thread is NULL until the first program has its pid, and always in
  * the host test, where hda_test_threaded stands for it; until then, and
  * while the scheduler is off, the service runs where it is asked for, under
@@ -4314,9 +4315,9 @@ static bool hda_service_ask(uint32_t wanted)
 }
 
 /** Run the services `wanted` asks for here, while the service's thread
- * does not run them, under the big lock: from the tick, which holds it,
- * or from the interrupt, which tries for it and leaves the marks it set to
- * the tick when another processor holds it. */
+ * does not run them, under the big lock: from the tick or the interrupt,
+ * which try for it and, when another processor holds it, leave the marks
+ * they set to a later tick. */
 static void hda_service_inline(uint32_t wanted)
 {
 #ifndef RACH2_HOSTTEST
@@ -4331,7 +4332,7 @@ static void hda_service_inline(uint32_t wanted)
 
 /** Ask for the services `wanted` asks for, HDA_SERVE_ bits: wake the
  * service's thread, or run them here while it does not run them. From the
- * tick, with interrupts off and the big lock held, and from a tone or a
+ * tick, with interrupts off and no lock held, and from a tone or a
  * stop (hda_beep), under the speaker's spinlock. */
 static void hda_service_kick(uint32_t wanted)
 {

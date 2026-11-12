@@ -307,10 +307,13 @@ and a line follows for each part, in the order the tick runs them:
 .Ql clock ,
 .Ql account ,
 .Ql wake ,
+.Ql hda ,
+.Ql block_lag ,
+.Ql block_request ,
+.Ql speaker ,
 .Ql lock ,
 .Ql signals ,
 .Ql load ,
-.Ql hda ,
 .Ql netdev ,
 .Ql netconsole ,
 .Ql ath9k ,
@@ -321,17 +324,14 @@ and a line follows for each part, in the order the tick runs them:
 .Ql ip_loop ,
 .Ql usb ,
 .Ql input ,
-.Ql block_lag ,
-.Ql block_request ,
 .Ql platform ,
 .Ql vkms ,
-.Ql speaker ,
 .Ql console ,
 .Ql klog
 and
 .Ql nested .
 .Pp
-The first three run without the big lock:
+The first seven run without the big lock:
 .Ql clock
 is the count of the tick and the clock's pass, which the boot processor's
 tick makes, or another processor's when the boot processor's is late,
@@ -341,7 +341,14 @@ is the time charged to the process the tick interrupted, on every tick;
 and
 .Ql wake
 is the timer pass, the sleepers and timers whose time has come, on the
-tick that made the clock's pass.
+tick that made the clock's pass; and
+.Ql hda ,
+.Ql block_lag ,
+.Ql block_request
+and
+.Ql speaker
+are the boot processor's periodic services that take only locks of their
+own, on each of its ticks.
 .Ql lock
 is the tick's take of the big lock, its try and any wait, counted only on
 a tick that took the lock; a try that failed is counted in no row.
@@ -354,8 +361,8 @@ the posting of the signals of the tick, SIGALRM, SIGVTALRM, SIGPROF and
 the POSIX timers', that the accounting and the timer pass left;
 .Ql load ,
 the load average and the idle count of the loopback ring; and the boot
-processor's periodic services, from
-.Ql hda
+processor's other periodic services, from
+.Ql netdev
 to
 .Ql console ,
 and
