@@ -334,6 +334,26 @@ int block_read_frames(block_device_t *dev, uint64_t lba, uint32_t count, const u
     return -EIO;
 }
 
+/** No row reads a file into page frames without a wait either. */
+int block_read_frames_async(block_device_t *dev, uint64_t lba, uint32_t count,
+                            const uintptr_t *frames, const struct block_frames_done *done)
+{
+    (void)dev;
+    (void)lba;
+    (void)count;
+    (void)frames;
+    (void)done;
+    return -EAGAIN;
+}
+
+/** No read is in flight without a waiter, so a punch waits for none. */
+void block_settle(block_device_t *dev, uint64_t lba, uint64_t count)
+{
+    (void)dev;
+    (void)lba;
+    (void)count;
+}
+
 /** A host frame is mapped where it is. */
 void *kmap_temp(uintptr_t phys)
 {

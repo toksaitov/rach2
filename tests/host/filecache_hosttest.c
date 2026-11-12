@@ -23,20 +23,17 @@
  * record though the old one is freed between the holds; and every frame
  * goes back.
  *
- * The readahead row queues a window of a file as a read past its mark does
- * and runs the job in `fc_worker`, made as `fc_worker_start` makes it,
- * until it sleeps for the next. The mount counts the operations in it, as
- * `vfs_enter` and `vfs_leave` do, and the description its references; the
- * description's last unref stands for `vfs_desc_close`, which reaps a
- * lazily unmounted mount only when no operation is in it, as
- * `vfs_reap_detached` does, while a leave reaps nothing. The volume is
- * lazily unmounted and its file's last descriptor closed while the job
- * reads, and the job's end must reap the mount.
+ * The readahead rows start a window of a file as a read past its mark
+ * does (`fc_read_async`), with a file system whose `read_frames` keeps the
+ * completion and a reference on each frame, as a request does, and ends
+ * the reads when the row says: the window's pages are in the cache locked,
+ * and neither read nor lent, until the completion unlocks them; a failed
+ * read drops them; and a read whose pages a change of the file dropped
+ * while it was in flight finds no page to unlock, and its frames come back
+ * when its request lets them go.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
-
-#include <setjmp.h>
 
 #include "mm/filecache.c"
 
@@ -207,42 +204,62 @@ int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
     return -EIO;
 }
 
-/* The readahead row's mount and description: the operations in the mount,
-   whether it is lazily unmounted and whether it was reaped, and the
-   description's references. Set while the row runs, which the stubs below
-   allow alone. */
-static int ra_row;
-static uint32_t ra_inprogress, ra_refs;
-static int ra_detached, ra_reaped;
-static struct open_file ra_ofd;
-
-/* The byte the readahead row's pages are filled with. */
+/* The byte the readahead rows' pages are filled with. */
 #define RA_FILL 0x66
 
+/* The read the readahead rows' file system has started and not ended: its
+   completion, first page, count and frames, each frame with a reference of
+   the read's own, as a request holds one. */
+static struct block_frames_done ra_done;
+static uint32_t ra_count;
+static uintptr_t ra_frames[8];
+static int ra_started;
+
 /**
- * Fill the frames of the readahead row's job with RA_FILL. The first call
- * also unmounts the volume lazily and closes the file's last descriptor,
- * the row's, so that only the job holds the description as it ends.
+ * Start the read of the readahead rows' frames: keep the completion and a
+ * reference on each frame, as `block_read_frames_async` does, and answer
+ * that every page is started. A read that waits is no row's.
  */
 int32_t vfs_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, uint32_t count,
-                        const uintptr_t *frames)
+                        const uintptr_t *frames, const struct block_frames_done *done)
 {
     uint32_t i;
 
+    (void)mnt;
     (void)handle;
     (void)first;
-    if (!ra_row || mnt != ra_ofd.vmnt) {
-        check(0, "only the readahead row reads through the file system");
+    if (!done || ra_started || count > 8u) {
+        check(0, "only a readahead row reads through the file system, one read at a time");
         return -EIO;
     }
-    if (!ra_detached) {
-        ra_detached = 1;
-        fd_ofd_unref(&ra_ofd);
-    }
+    ra_done = *done;
+    ra_count = count;
     for (i = 0; i < count; i++) {
-        __builtin_memset(kmap_temp(frames[i]), RA_FILL, PAGE_SIZE);
+        ra_frames[i] = frames[i];
+        frame_ref(frames[i]);
     }
+    ra_started = 1;
     return (int32_t)count;
+}
+
+/** End the started read with `status`, its frames filled with RA_FILL when
+ * it is 0, as the device's answer does, and let go of its references. */
+static void ra_end(int status)
+{
+    uint32_t i;
+
+    if (!ra_started) {
+        check(0, "a read was started");
+        return;
+    }
+    for (i = 0; status == 0 && i < ra_count; i++) {
+        __builtin_memset(kmap_temp(ra_frames[i]), RA_FILL, PAGE_SIZE);
+    }
+    ra_done.fn(ra_done.arg, ra_done.index, ra_frames, ra_count, status);
+    for (i = 0; i < ra_count; i++) {
+        free_frame(ra_frames[i]);
+    }
+    ra_started = 0;
 }
 
 /** A request's most sectors. */
@@ -252,75 +269,13 @@ uint32_t block_max_sectors(block_device_t *device)
     return BLOCK_REQ_MAX_SECTORS;
 }
 
-/** Enter the readahead row's mount, unless it was reaped, as a mount no
- *  longer active refuses. */
-int vfs_enter(struct vfs_mount *mnt)
-{
-    if (!ra_row || mnt != ra_ofd.vmnt) {
-        check(0, "only the readahead row enters a mount");
-        return -EBUSY;
-    }
-    if (ra_reaped) {
-        return -EBUSY;
-    }
-    ra_inprogress++;
-    return 0;
-}
-
-/** Leave the readahead row's mount, which reaps nothing. */
-void vfs_leave(struct vfs_mount *mnt)
-{
-    check(ra_row && mnt == ra_ofd.vmnt && ra_inprogress > 0,
-          "a leave is of the readahead row's mount, which it entered");
-    if (ra_inprogress > 0) {
-        ra_inprogress--;
-    }
-}
-
-/** Hold the readahead row's description. */
-void fd_ofd_ref(struct open_file *ofd)
-{
-    check(ra_row && ofd == &ra_ofd, "only the readahead row holds a description");
-    ra_refs++;
-}
-
-/** Let the readahead row's description go; the last unref is
- *  `vfs_desc_close`, whose put reaps a lazily unmounted mount that no
- *  operation is in. */
-void fd_ofd_unref(struct open_file *ofd)
-{
-    check(ra_row && ofd == &ra_ofd && ra_refs > 0,
-          "an unref is of the readahead row's description, which is held");
-    if (ra_refs > 0 && --ra_refs == 0 && ra_detached && ra_inprogress == 0) {
-        ra_reaped = 1;
-    }
-}
-
-/** No row waits for a job. */
+/** No row waits for a locked page. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
     (void)cond;
     (void)arg;
-    check(0, "no row waits for a readahead");
-    return 0;
-}
-
-/* Where the readahead row's worker goes once no job waits. */
-static jmp_buf worker_stop;
-
-/** A worker's sleep for a job: none while one waits, and once none does,
- *  back to the row, which takes the worker's next sleep as its end. */
-int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg)
-{
-    (void)wq;
-    if (!ra_row) {
-        check(0, "a worker runs only in the readahead row");
-        return 0;
-    }
-    if (!cond(arg)) {
-        longjmp(worker_stop, 1);
-    }
+    check(0, "no row waits for a locked page");
     return 0;
 }
 
@@ -328,60 +283,6 @@ int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
-}
-
-/** No interrupt comes. */
-void arch_irq_enable(void)
-{}
-
-/** Nothing else runs. */
-void sched_service_point(void)
-{}
-
-/* The readahead row's worker, the address its stack is given at, and the
-   entry `setup_process_stack` gave it. */
-static process_t worker_proc;
-#define WORKER_STACK 0x10000u
-static void (*worker_entry)(void);
-
-/** A stack for the readahead row's worker; its address is never read. */
-uintptr_t kstack_alloc(void)
-{
-    check(ra_row, "a worker is made only in the readahead row");
-    return ra_row ? WORKER_STACK : 0;
-}
-
-/** No stack is given back. */
-void kstack_free(uintptr_t top)
-{
-    (void)top;
-    check(0, "no worker's stack is given back");
-}
-
-/** The readahead row's worker's record. */
-process_t *alloc_process(void)
-{
-    return ra_row ? &worker_proc : NULL;
-}
-
-/** The worker's name is not read. */
-void proc_set_comm(process_t *p, const char *path)
-{
-    (void)p;
-    (void)path;
-}
-
-/** Note the worker's entry, which the row calls itself. */
-void setup_process_stack(process_t *proc, void (*entry_point)(void))
-{
-    check(proc == &worker_proc, "the worker's record is the one made");
-    worker_entry = entry_point;
-}
-
-/** The row runs the worker itself. */
-void sched_make_ready(process_t *p)
-{
-    (void)p;
 }
 
 /* Run once at the restore `restore_countdown` counts down to, then
@@ -472,43 +373,78 @@ static int reads_as(struct fake_file *node, uint32_t pgoff, int fill)
     return 1;
 }
 
-/**
- * Queue both pages of `file_b` as a read past its mark does, unmount its
- * volume lazily and close its last descriptor while the worker reads them,
- * and check that the job's end lets go of the mount and the description
- * and reaps the mount, as Linux's last `mntput` of a detached mount does.
- */
-static void row_readahead_reaps(void)
+/** Whether page `pgoff` of `node` is in the cache locked for its read,
+ * marked when `mark` is 1. */
+static int locked_page(struct fake_file *node, uint32_t pgoff, int mark)
 {
-    static process_t reader;
+    struct fc_file f;
+    struct fc_page *p;
+
+    p = fc_file_of(&mount, node, &f) ? fc_lookup(&f, pgoff) : NULL;
+    return p && (p->pfn & FC_LOCK) && ((p->pfn & FC_MARK) != 0) == mark;
+}
+
+/** Start a window of both pages of `file_b`, page 1 marked, as a read past
+ * its mark does; 1 when its read was started. */
+static int ra_start(void)
+{
+    static struct open_file ofd;
     struct fc_file f;
 
-    ra_row = 1;
-    ra_ofd.vmnt = &mount;
-    ra_ofd.vnode = &file_b;
-    ra_ofd.fhandle = &file_b;
-    ra_refs = 1;
-    reader.pid = 2;
-    current_proc = &reader;
+    ofd.vmnt = &mount;
+    ofd.vnode = &file_b;
+    ofd.fhandle = &file_b;
     if (!fc_file_of(&mount, &file_b, &f)) {
         check(0, "the readahead row's file is a cached file");
-        return;
+        return 0;
     }
-    fc_queue(&ra_ofd, &f, 0, 2, FC_NO_MARK, filecache_epoch(&mount, &file_b));
-    check(ra_inprogress == 1 && ra_refs == 2 && worker_entry == fc_worker,
-          "a queued window enters its mount, holds its description and makes a worker");
+    fc_read_async(&ofd, &f, 0, 2, 1, filecache_epoch(&mount, &file_b));
+    return ra_started && ra_count == 2;
+}
 
-    current_proc = &worker_proc;
-    if (setjmp(worker_stop) == 0) {
-        worker_entry();
-    }
-    current_proc = NULL;
-    check(ra_detached && reads_as(&file_b, 0, RA_FILL) && reads_as(&file_b, 1, RA_FILL),
-          "the worker reads the window while the volume is unmounted lazily");
-    check(ra_refs == 0 && ra_inprogress == 0,
-          "the job's end leaves the mount and lets the description go");
-    check(ra_reaped, "and the description's last close reaps the lazily unmounted mount");
-    ra_row = 0;
+/**
+ * A window's pages are in the cache locked, page 1 marked, and neither
+ * read, lent nor started again while its read runs; its answer unlocks
+ * them. A failed read drops its pages. A change of the file while its read
+ * runs drops them, and the answer then finds no page and lets the frames
+ * go.
+ */
+static void row_readahead_locks(void)
+{
+    uintptr_t lent[2] = {0, 0};
+    uint32_t before = filecache_pages(), free_before;
+    struct fc_file f;
+
+    check(ra_start() && filecache_pages() == before + 2 && locked_page(&file_b, 0, 0) &&
+              locked_page(&file_b, 1, 1),
+          "a window's pages go into the cache locked, its mark among them");
+    check(!reads_as(&file_b, 0, 0) && !reads_as(&file_b, 0, RA_FILL),
+          "a locked page is not read from the cache");
+    check(fc_file_of(&mount, &file_b, &f) && fc_lend(&f, 0, 2, lent) == 0 && lent[0] == 0,
+          "nor lent to a mapping");
+    ra_started = 0;
+    fc_read_async(NULL, &f, 0, 2, FC_NO_MARK, filecache_epoch(&mount, &file_b));
+    check(!ra_started, "and a window over them starts no read");
+    ra_started = 1;
+    ra_end(0);
+    check(reads_as(&file_b, 0, RA_FILL) && reads_as(&file_b, 1, RA_FILL) &&
+              !locked_page(&file_b, 0, 0) && !locked_page(&file_b, 1, 0),
+          "the read's answer unlocks the pages, which then read back");
+
+    filecache_forget(&mount, &file_b);
+    check(ra_start(), "a window is started again");
+    ra_end(-EIO);
+    check(filecache_pages() == before && !reads_as(&file_b, 0, RA_FILL),
+          "a failed read drops its pages");
+
+    free_before = (uint32_t)frame_free_count();
+    check(ra_start(), "and again");
+    filecache_forget(&mount, &file_b);
+    check(filecache_pages() == before && frame_free_count() == free_before - 2u,
+          "a change of the file drops the locked pages, whose frames the read still holds");
+    ra_end(0);
+    check(filecache_pages() == before && frame_free_count() == free_before,
+          "and the read's answer finds no page and lets the frames go");
 }
 
 int main(void)
@@ -541,7 +477,7 @@ int main(void)
     check(reads_as(&file_a, 1, 0x44) && !reads_as(&file_a, 0, 0x33),
           "which has the new page and not the old");
 
-    row_readahead_reaps();
+    row_readahead_locks();
 
     filecache_forget_mount(&mount);
     check(filecache_pages() == 0 && frame_free_count() == FRAMES,
