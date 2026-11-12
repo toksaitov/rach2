@@ -227,6 +227,10 @@ returning its handle and resource id.
 With virgl it passes the target, format, bind flags, dimensions, array size,
 levels, samples and flags to the host.
 Without virgl it accepts a 2D resource, target 2, alone.
+The backing's attach joins the buffer's reservation, for a 2D resource and
+a virgl one alike, so WAIT waits for the host to have made the resource; a
+dumb buffer has no such fence, since the host takes every later command on
+it after the attach.
 .It Dv DRM_IOCTL_VIRTGPU_RESOURCE_INFO
 A buffer's size and resource id, and for a blob
 .Dv VIRTGPU_BLOB_MEM_GUEST
