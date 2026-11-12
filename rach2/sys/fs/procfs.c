@@ -608,7 +608,8 @@ static void ap_tty(struct procfs_text *t, const process_t *p)
  * units, which ps subtracts from the uptime for its elapsed time, and the
  * virtual size in
  * bytes and the resident pages are the address space's, as statm has them.
- * The fields end at the 24th, rss; the flags, the fault counts and
+ * The page faults are counted as the CPU times are, the children's being
+ * the process's in both. The fields end at the 24th, rss; the flags and
  * itrealvalue, which the kernel does not keep, are 0.
  */
 static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
@@ -617,6 +618,7 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
     struct mm *mm;
     uint64_t user;
     uint64_t sys;
+    unsigned long minor, major;
     int i;
 
     p = get_process((uint32_t)pid);
@@ -643,14 +645,25 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
     ap_ch(t, ' ');
     ap_int(t, (int)pid_seen(p->sid)); /* 6 session */
     ap_tty(t, p);                     /* 7 tty_nr, 8 tpgid */
-    /* 9-13 flags, minflt, cminflt, majflt, cmajflt; 14-17 the CPU times */
-    ap_str(t, " 0 0 0 0 0 ");
     if (whole) {
         proc_cpu_time(p, &user, &sys);
+        proc_faults(p, &minor, &major);
     } else {
         user = p->utime;
         sys = p->stime;
+        minor = p->min_flt;
+        major = p->maj_flt;
     }
+    /* 9 flags; 10-13 minflt, cminflt, majflt, cmajflt; 14-17 the CPU times */
+    ap_str(t, " 0 ");
+    ap_u64(t, (uint64_t)minor);
+    ap_ch(t, ' ');
+    ap_u64(t, (uint64_t)p->tg->cmin_flt);
+    ap_ch(t, ' ');
+    ap_u64(t, (uint64_t)major);
+    ap_ch(t, ' ');
+    ap_u64(t, (uint64_t)p->tg->cmaj_flt);
+    ap_ch(t, ' ');
     ap_u64(t, TICKS_TO_CLOCK(user));
     ap_ch(t, ' ');
     ap_u64(t, TICKS_TO_CLOCK(sys));
