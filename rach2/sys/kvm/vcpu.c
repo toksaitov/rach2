@@ -411,6 +411,8 @@ void kvm_vcpu_free(struct kvm_vcpu *v)
     kfree(v);
 }
 
+static uint64_t cr4_reserved_by(const struct kvm_vcpu *v);
+
 int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
 {
     struct kvm_vcpu *v;
@@ -447,6 +449,7 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
     v->clock_cpu = -1;
     v->xs_row = -1;
     v->hlt_in_guest = (vm->disable_exits & KVM_X86_DISABLE_EXITS_HLT) != 0;
+    v->cr4_reserved = cr4_reserved_by(NULL);
     k_memcpy(v->name, "kvm-vcpu:", 9);
     kvm_decimal(v->name + 9, id);
     kvm_stats_id(v->stats_id, v);
@@ -1114,9 +1117,7 @@ static uint64_t cr4_reserved_by(const struct kvm_vcpu *v)
 
 uint64_t kvm_cr4_reserved(const struct kvm_vcpu *v)
 {
-    uint64_t reserved = cr4_reserved_by(NULL);
-
-    return v->cpuid_set ? reserved | cr4_reserved_by(v) : reserved;
+    return v->cr4_reserved;
 }
 
 /** Whether `s` is a state KVM_SET_SREGS takes, as Linux's
@@ -1532,6 +1533,7 @@ static int32_t set_cpuid(struct kvm_vcpu *v, uintptr_t arg)
     v->cpuid = ent;
     v->cpuid_nent = head.nent;
     v->cpuid_set = 1;
+    v->cr4_reserved = cr4_reserved_by(NULL) | cr4_reserved_by(v);
     kvm_pv_cpuid_update(v, 1);
     kvm_pmu_refresh(v);
     v->dirty |= KVM_PART_CPUID;
