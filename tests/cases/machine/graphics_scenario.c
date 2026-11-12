@@ -45,13 +45,19 @@
 #define VENUS_DEQP                                       \
     "sh " GRAPHICS_DIR "/runners/deqp.sh -v 1.4.1.1 -i " \
     "/usr/share/vulkan/icd.d/venus_icd.x86_64.json -o " GRAPHICS_DIR "/out"
-#define VENUS_SMOKE     GRAPHICS_DIR "/deqp-vk-venus-smoke.txt"
-#define VENUS_LIST      GRAPHICS_DIR "/deqp-vk-lavapipe.txt.gz"
-#define VENUS_FLAKES    GRAPHICS_DIR "/deqp-vk-lavapipe.flakes"
-#define VENUS_GROUPS    GRAPHICS_DIR "/deqp-vk-groups.txt.gz"
-#define VENUS_PARTS     8
-/* The run's counts and wall time, after its result line, for the log. */
-#define VENUS_SUMMARY   " && cat " GRAPHICS_DIR "/out/summary.txt"
+#define VENUS_SMOKE  GRAPHICS_DIR "/deqp-vk-venus-smoke.txt"
+#define VENUS_LIST   GRAPHICS_DIR "/deqp-vk-lavapipe.txt.gz"
+#define VENUS_FLAKES GRAPHICS_DIR "/deqp-vk-lavapipe.flakes"
+#define VENUS_GROUPS GRAPHICS_DIR "/deqp-vk-groups.txt.gz"
+#define VENUS_PARTS  8
+/* The run's counts and wall time, after its result line, for the log; on
+ * Venus's Vulkan also the flakes and each case that did not pass, which a
+ * passing case's log alone keeps. */
+#define DEQP_SUMMARY " && cat " GRAPHICS_DIR "/out/summary.txt"
+#define VENUS_SUMMARY                                                    \
+    DEQP_SUMMARY " " GRAPHICS_DIR "/out/flakes"                          \
+                 " && { gzip -dc " GRAPHICS_DIR "/out/results.csv.gz | " \
+                 "grep -v -e ,Pass$ -e ,NotSupported$ || true; }"
 /* piglit's quick_gl subset, which the venus and virgl families each run
  * whole in one case, and its flakes; the Venus case draws with zink over
  * Venus's ICD alone and judges against the Venus references' piglit
@@ -523,7 +529,7 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
         if (strcmp(s->test, "gles") == 0)
             snprintf(runner, size,
                      "sh " GRAPHICS_DIR "/runners/deqp.sh -v 1.4.1.1 -o " GRAPHICS_DIR
-                     "/out -e %d -s 1 -l " VIRGL_DEQP " %s" VENUS_SUMMARY,
+                     "/out -e %d -s 1 -l " VIRGL_DEQP " %s" DEQP_SUMMARY,
                      GLES_SUBSET, s->suite);
         else if (strcmp(s->test, "smoke") == 0)
             snprintf(runner, size, VENUS_DEQP " -l " VENUS_SMOKE " vk" VENUS_SUMMARY);
@@ -571,7 +577,7 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
             *pattern = "deqp: result: ";
             snprintf(runner, size,
                      "sh " GRAPHICS_DIR "/runners/deqp.sh -v 1.4.1.1 -o " GRAPHICS_DIR
-                     "/out -e %d -s %d -l " VIRGL_DEQP " %s" VENUS_SUMMARY,
+                     "/out -e %d -s %d -l " VIRGL_DEQP " %s" DEQP_SUMMARY,
                      every != 0 ? every : parts, every != 0 ? 1 : s->part, s->suite);
         } else {
             *pattern = "webgl: result: ";
