@@ -56,7 +56,9 @@
  * exit and after it with port 0x7E's quirk, an emulation failure above
  * CPL 0 under KVM_CAP_EXIT_ON_EMULATION_FAILURE, DR7.GD under the
  * caller's breakpoints, and the TSC multiplier on a model whose controls
- * have TSC scaling.
+ * have TSC scaling; and the claim of an empty NMI for a TSX-checkpointed
+ * counter, from the guest's run alone and never by an NMI another source
+ * took.
  */
 #include "kvm/vmx.c"
 
@@ -482,10 +484,14 @@ void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
     kcpu_id_sub(leaf, 0, a, b, c, d);
 }
 
+/* IA32_PERF_GLOBAL_STATUS's low half, which `nmi_claim_rows` sets. */
+static uint32_t global_status = 0x5;
+
+/** The counters' MSRs as pmu.c reads them: `global_status` in
+ * IA32_PERF_GLOBAL_STATUS and 0x5 in every other. */
 void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi)
 {
-    (void)msr;
-    *lo = 0x5;
+    *lo = msr == 0x38Eu ? global_status : 0x5;
     *hi = 0;
 }
 
@@ -520,10 +526,14 @@ int kcpu_wrmsr_safe(uint32_t msr, uint64_t value)
 /* The NMI handler's hook, which kvm_pmu_start sets. */
 int (*watchdog_guest_nmi)(int others);
 
-/** The hard-lockup detector's counter does not run here. */
+/* Whether the hard-lockup detector's counter runs, keeping the counters'
+ * APIC entry unmasked, so that an entry may give a counter its PMI bit;
+ * only `nmi_claim_rows` sets it. */
+static int model_armed;
+
 int platform_pmu_armed(void)
 {
-    return 0;
+    return model_armed;
 }
 
 /** No virtual APIC is armed for a performance interrupt here. */
@@ -1544,6 +1554,24 @@ static void exit_with(const struct row *r)
     f[VM_ENTRY_INTR_INFO_FIELD] &= ~(uint64_t)INTR_VALID;
 }
 
+/* With `nmi_probe`, NMIs that find no counter's overflow are taken in
+ * the entry's last steps before the guest's run (`m_fpu_load`) and in the
+ * run (`m_run`), and the sources pmu.c's hook claims for each are added
+ * up: before the run; in it, one that another source, a backtrace request,
+ * took; then two more, of no other source. */
+static int nmi_probe, nmi_runs, nmi_before, nmi_taken, nmi_first, nmi_second;
+
+/** Take the NMIs `nmi_probe` asks for in the guest's run. */
+static void probe_run_nmis(void)
+{
+    if (nmi_probe) {
+        nmi_runs++;
+        nmi_taken += kvm_pmu_nmi(1);
+        nmi_first += kvm_pmu_nmi(0);
+        nmi_second += kvm_pmu_nmi(0);
+    }
+}
+
 /** VMLAUNCH or VMRESUME: the checks, then the script's next run. */
 static int m_run(struct kvm_regs *regs, uint64_t *cr2, int launched)
 {
@@ -1554,6 +1582,7 @@ static int m_run(struct kvm_regs *regs, uint64_t *cr2, int launched)
     (void)regs;
     (void)cr2;
     CHECK(!irq_on && bkl_depth == 0, "the guest runs with interrupts off and the big lock let go");
+    probe_run_nmis();
     if (!m.on) {
         return not_on();
     }
@@ -1717,7 +1746,8 @@ static void m_restore_host(const struct vmx_host *h)
     m.restores++;
 }
 
-/** Load the guest's FPU, which happens only inside VMX operation. */
+/** Load the guest's FPU, which happens only inside VMX operation, taking
+ * the NMI before the run that `nmi_probe` asks for. */
 static void m_fpu_load(void *host, const void *guest, uint64_t xcr0)
 {
     (void)host;
@@ -1725,6 +1755,9 @@ static void m_fpu_load(void *host, const void *guest, uint64_t xcr0)
     (void)xcr0;
     CHECK(m.on, "the guest's FPU is loaded inside the run's section");
     m.fpu_loads++;
+    if (nmi_probe) {
+        nmi_before += kvm_pmu_nmi(0);
+    }
 }
 
 /** Store the guest's FPU, counted. */
@@ -4490,6 +4523,49 @@ static void smm_freeze_rows(int vm)
     kvm_pmu_start();
 }
 
+/**
+ * The claim of an NMI that finds no counter's overflow for a counter of a
+ * TSX-checkpointed event, whose status the rollback its PMI causes clears,
+ * on a vCPU of its own on `vm` on the model with Haswell's PMU, under
+ * pmu_steps' 0x05 with the detector's counter armed: an NMI in the entry's
+ * steps before `kvm_pmu_vmx_run`, the last before vmx_op->run, spends
+ * nothing, nor does one in the run that another source took, as Linux's
+ * nmi_handle gives each NMI to every handler (arch/x86/kernel/nmi.c:
+ * 136-179); the next NMI of the run is claimed, once. The rows fail
+ * without vmx.c's call of `kvm_pmu_vmx_run` or with it moved before the
+ * entry's other steps.
+ */
+static void nmi_claim_rows(int vm)
+{
+    struct kvm_vcpu *v;
+    int fd;
+
+    model_pmu = 1;
+    kvm_pmu_start();
+    fd = make_vcpu(vm, 13);
+    v = vcpu_of(fd);
+    v->pmu.eventsel[2] = 0xC4u | (1ull << 22) | (1ull << 17) | (1ull << 33); /* in_tx_cp */
+    v->pmu.global_ctrl = 4;
+    model_armed = 1;
+    global_status = 0;
+    CHECK(kvm_pmu_steps_store(NULL, 0, "0x05", 4) == 4, "pmu_steps takes 0x05");
+    nmi_probe = 1;
+    nmi_runs = nmi_before = nmi_taken = nmi_first = nmi_second = 0;
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 && nmi_runs == 2,
+          "a checkpointed counter runs through a CPUID exit to a HLT");
+    CHECK(nmi_before == 0, "an NMI before vmx_op->run spends no claim");
+    CHECK(nmi_taken == 0, "nor does one in the run that another source took");
+    CHECK(nmi_first == 2 && nmi_second == 0,
+          "the run's next empty NMI is claimed for the counter, once a run");
+    nmi_probe = 0;
+    CHECK(kvm_pmu_steps_store(NULL, 0, "0", 1) == 1, "pmu_steps takes 0 again");
+    global_status = 0x5;
+    model_armed = 0;
+    fdclose(fd);
+    model_pmu = 0;
+    kvm_pmu_start();
+}
+
 /** What Linux's selftests ask of the guest's side, on a vCPU of its own
  * on `vm` in protected mode. The rows change the VM's capabilities, so
  * they come last. */
@@ -4507,6 +4583,7 @@ static void selftest_rows(int vm)
     tsc_scale_rows(vm);
     xsaves_rows(vm);
     smm_freeze_rows(vm);
+    nmi_claim_rows(vm);
 }
 
 /** Run the rows; 0 when every check passed, 1 otherwise. */

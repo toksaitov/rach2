@@ -40,7 +40,9 @@
  * flag, the wall clock, the clock pairing, the old MSR, KVM_SET_CLOCK,
  * KVM_CAP_ENFORCE_PV_FEATURE_CPUID and KVM_CAP_X86_DISABLE_EXITS; the
  * steal time, its writes of the thread's run_delay and its preempted flag
- * across a switch at a slice's end inside KVM_RUN; the vCPU attribute
+ * across a switch at a slice's end inside KVM_RUN; the PMU's record of the
+ * counters an entry gave a PMI bit, ended at the loop's next turn, at a
+ * switch in an exit's handling and at KVM_RUN's return; the vCPU attribute
  * KVM_VCPU_TSC_OFFSET; and what Linux's selftests ask for: the TSC's rate
  * set on a VM and on a vCPU, on a processor that scales none and with SVM's
  * and VMX's ratios,
@@ -513,11 +515,15 @@ void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
     kcpu_id_sub(leaf, 0, a, b, c, d);
 }
 
+/* IA32_PERF_GLOBAL_STATUS's low half, which `pmu_record_rows` sets. */
+static uint32_t global_status = 0x5;
+
 /** The model's MSRs: the Haswell's microcode revision 0x28 in
- * UCODE_REV's high half, and 0x5 for every other. */
+ * UCODE_REV's high half, `global_status` in IA32_PERF_GLOBAL_STATUS, and
+ * 0x5 for every other. */
 void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi)
 {
-    *lo = msr == 0x8Bu ? 0 : 0x5;
+    *lo = msr == 0x8Bu ? 0 : msr == 0x38Eu ? global_status : 0x5;
     *hi = msr == 0x8Bu ? 0x28 : 0;
 }
 
@@ -564,19 +570,52 @@ static int fake_probe(void)
     return 1;
 }
 
-/** Enter: with interrupts off and without the big lock, refuse, or count. */
+/* With `pmu_entry`, each entry switches the counters through pmu.c as
+ * VMX's does; `pmu_before` and `pmu_after` are whether the processor's
+ * record of the counters given a PMI bit named one as the last entry began
+ * and once its run was over (`pmu_recorded`). */
+static int pmu_entry, pmu_before = -1, pmu_after = -1;
+static struct kvm_pmu_msr pmu_guest[KVM_PMU_LIST_MAX], pmu_host_list[KVM_PMU_LIST_MAX];
+
+/** Whether this processor's record names a counter: an NMI that finds
+ * every general counter's overflow bit set (`global_status`) is KVM's
+ * only for those the record names. */
+static int pmu_recorded(void)
+{
+    return kvm_pmu_nmi(0) != 0;
+}
+
+/** Enter: with interrupts off and without the big lock, refuse, or count,
+ * switching the counters with `pmu_entry`. */
 static int fake_enter(struct kvm_vcpu *v)
 {
-    (void)v;
+    uint32_t ng, nh;
+
     CHECK(!irq_on && bkl_depth == 0, "the entry runs with interrupts off and no big lock");
     CHECK(v->mode == KVM_MODE_IN_GUEST, "the vCPU is in the guest during the entry");
     entries_made++;
-    return refusing ? -EOPNOTSUPP : 0;
+    if (refusing) {
+        return -EOPNOTSUPP;
+    }
+    if (pmu_entry) {
+        pmu_before = pmu_recorded();
+        kvm_pmu_vmx_enter(v, pmu_guest, pmu_host_list, &ng, &nh, NULL);
+        kvm_pmu_vmx_run();
+        kvm_pmu_vmx_exit(v, pmu_guest, 1);
+        pmu_after = pmu_recorded();
+    }
+    return 0;
 }
 
 /* An exit the kernel takes for a host interrupt, KVM_X_AGAIN, is one at an
  * instruction boundary whose interrupt asks for a switch, when set. */
 static int tick_exits;
+
+/* With `exit_switch` 0 or 1, the handling of each exit switches the
+ * thread away, as `schedule` does, while it sleeps or, preempted, while it
+ * can still run; `exit_switch_recorded` is `pmu_recorded` just after. -1
+ * for no switch. */
+static int exit_switch = -1, exit_switch_recorded = -1;
 
 /** The next exit of the script. */
 static int fake_exit(struct kvm_vcpu *v)
@@ -588,6 +627,18 @@ static int fake_exit(struct kvm_vcpu *v)
     v->exit = script[script_at++];
     v->if_flag = 1;
     v->irq_allowed = 1;
+    if (exit_switch >= 0) {
+        CHECK(caller.sched_out != NULL, "a vCPU's thread has its sched_out across KVM_RUN");
+        irq_on = 0;
+        if (exit_switch) {
+            caller.nivcsw++;
+        } else {
+            caller.nvcsw++;
+        }
+        caller.sched_out(caller.sched_out_arg, exit_switch);
+        exit_switch_recorded = pmu_recorded();
+        irq_on = 1;
+    }
     if (tick_exits && v->exit.kind == KVM_X_AGAIN) {
         v->at_boundary = 1;
         caller.need_resched = 1;
@@ -3408,10 +3459,96 @@ static void selftest_rows(void)
 /* The NMI handler's hook, which kvm_pmu_start sets. */
 int (*watchdog_guest_nmi)(int others);
 
-/** The hard-lockup detector's counter does not run here. */
+/* Whether the hard-lockup detector's counter runs here, keeping the
+ * counters' APIC entry unmasked, so that an entry may give a counter its
+ * PMI bit; only `pmu_record_rows` sets it. */
+static int pmu_armed;
+
 int platform_pmu_armed(void)
 {
-    return 0;
+    return pmu_armed;
+}
+
+/**
+ * The record of the physical counters an entry gave a PMI bit, which
+ * `kvm_pmu_nmi` claims, and its claims end before the vCPU's thread can
+ * sleep or leave the processor, as Linux stops a task's perf events at
+ * every switch (kernel/sched/core.c:5161): at the next turn of KVM_RUN's
+ * loop after an exit the kernel answered, at a switch away from the thread
+ * in an exit's handling, a sleep or a preemption, and when KVM_RUN
+ * returns. Each row fails without its `kvm_pmu_leave` of vcpu.c. The fake
+ * backend switches a guest's general counter 0 through pmu.c under
+ * pmu_steps' 0x05, as VMX's entry does, and the record is read with every
+ * general counter's overflow bit set (`pmu_recorded`).
+ */
+static void pmu_record_rows(void)
+{
+    struct kvm_vcpu *v;
+    struct kvm_run *run;
+    uint64_t other, reported;
+    int vm, fd;
+
+    vm = dev(KVM_CREATE_VM, 0);
+    fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    v = (struct kvm_vcpu *)entries[fd].priv;
+    run = v->run;
+    v->pmu.version = 2;
+    v->pmu.nr_gp = 4;
+    v->pmu.gp_mask = (1ull << 48) - 1u;
+    v->pmu.eventsel[0] = 0xC4u | (1u << 22) | (1u << 17); /* branches, enabled, in ring 0 */
+    v->pmu.global_ctrl = 1;
+    pmu_armed = 1;
+    global_status = 0xF;
+    CHECK(kvm_pmu_steps_store(NULL, 0, "0x05", 4) == 4, "pmu_steps takes 0x05");
+    refusing = 0;
+    pmu_entry = 1;
+    script_len = 0;
+    script_at = 0;
+    scripted(KVM_X_AGAIN);
+    scripted(KVM_X_HLT);
+    run->immediate_exit = 0;
+    CHECK(fdio(fd, KVM_RUN, 0) == 0 && run->exit_reason == KVM_EXIT_HLT,
+          "KVM_RUN through an exit the kernel answers, to a HLT");
+    CHECK(pmu_after == 1, "the run's record names the guest's counter");
+    CHECK(pmu_before == 0, "and the next turn of the loop ended it before the second entry");
+    CHECK(!pmu_recorded(), "KVM_RUN's return ends the record of the last entry");
+
+    script_len = 0;
+    script_at = 0;
+    scripted(KVM_X_HLT);
+    exit_switch = 0;
+    exit_switch_recorded = -1;
+    other = v->stat[KVM_VCPU_STAT_PREEMPTION_OTHER];
+    reported = v->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED];
+    CHECK(fdio(fd, KVM_RUN, 0) == 0 && run->exit_reason == KVM_EXIT_HLT && pmu_after == 1,
+          "KVM_RUN to a HLT whose handling sleeps");
+    CHECK(exit_switch_recorded == 0,
+          "the switch of a sleep in the exit's handling ends the record");
+    CHECK(v->stat[KVM_VCPU_STAT_PREEMPTION_OTHER] == other &&
+              v->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported,
+          "and is no preemption");
+    script_len = 0;
+    script_at = 0;
+    scripted(KVM_X_HLT);
+    exit_switch = 1;
+    exit_switch_recorded = -1;
+    CHECK(fdio(fd, KVM_RUN, 0) == 0 && run->exit_reason == KVM_EXIT_HLT && pmu_after == 1,
+          "KVM_RUN to a HLT whose handling is preempted");
+    CHECK(exit_switch_recorded == 0,
+          "the switch of a preemption in the exit's handling ends it too");
+    CHECK(v->stat[KVM_VCPU_STAT_PREEMPTION_OTHER] == other + 1,
+          "and is a preemption away from an instruction boundary");
+
+    exit_switch = -1;
+    pmu_entry = 0;
+    refusing = 1;
+    script_len = 0;
+    script_at = 0;
+    CHECK(kvm_pmu_steps_store(NULL, 0, "0", 1) == 1, "pmu_steps takes 0 again");
+    global_status = 0x5;
+    pmu_armed = 0;
+    fdclose(fd);
+    fdclose(vm);
 }
 
 /** Run the rows; 0 when every check passed, 1 otherwise. */
@@ -3434,6 +3571,7 @@ int main(void)
     vm_rows(vm, vcpu);
     pv_rows();
     selftest_rows();
+    pmu_record_rows();
     printf("kvm-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }
