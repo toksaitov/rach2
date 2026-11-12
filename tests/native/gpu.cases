@@ -140,7 +140,9 @@ case display/weston alone log -- native/display.sh weston
 # The native games' fixed replays, once each with Mesa's shader cache
 # empty, on the desktop's session on the panel with sound at volume 1,
 # judged against the mean of Linux's two runs (80-7b,
-# tests/system/games/lenovo.sh); the i386 game is not judged.
+# tests/system/games/lenovo.sh). The two 64-bit cases also print 84's
+# big-lock counter deltas with the GPU minimum at 1000 MHz, restored on
+# exit; the i386 game is not judged.
 case games/supertuxkart alone log \
     file:tests/graphics/runners/games.sh file:tests/graphics/runners/common.sh \
     -- system/games/lenovo.sh -n 1 -r . out supertuxkart
