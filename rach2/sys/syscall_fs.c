@@ -10819,7 +10819,10 @@ static int32_t stat_at_unlocked(int dirfd, const char __user *upath, int flags, 
     if (empty) {
         fd_entry_t *entry = dirfd == AT_FDCWD ? NULL : fd_get(current_proc->fds, dirfd);
 
-        return file_vfs_unlocked(entry) ? fstat_getattr(entry, kst) : CALL_LOCKED;
+        if (!entry || !file_vfs_unlocked(entry)) {
+            return CALL_LOCKED;
+        }
+        return fstat_getattr(entry, kst);
     }
     if (!upath) {
         return -EFAULT;
