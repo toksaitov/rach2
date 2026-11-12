@@ -23,8 +23,20 @@
  * record though the old one is freed between the holds; and every frame
  * goes back.
  *
+ * The readahead row queues a window of a file as a read past its mark does
+ * and runs the job in `fc_worker`, made as `fc_worker_start` makes it,
+ * until it sleeps for the next. The mount counts the operations in it, as
+ * `vfs_enter` and `vfs_leave` do, and the description its references; the
+ * description's last unref stands for `vfs_desc_close`, which reaps a
+ * lazily unmounted mount only when no operation is in it, as
+ * `vfs_reap_detached` does, while a leave reaps nothing. The volume is
+ * lazily unmounted and its file's last descriptor closed while the job
+ * reads, and the job's end must reap the mount.
+ *
  * Returns 0 when every row passes, 1 otherwise.
  */
+
+#include <setjmp.h>
 
 #include "mm/filecache.c"
 
@@ -195,56 +207,93 @@ int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
     return -EIO;
 }
 
-/** No row reads through the file system's frames either. */
+/* The readahead row's mount and description: the operations in the mount,
+   whether it is lazily unmounted and whether it was reaped, and the
+   description's references. Set while the row runs, which the stubs below
+   allow alone. */
+static int ra_row;
+static uint32_t ra_inprogress, ra_refs;
+static int ra_detached, ra_reaped;
+static struct open_file ra_ofd;
+
+/* The byte the readahead row's pages are filled with. */
+#define RA_FILL 0x66
+
+/**
+ * Fill the frames of the readahead row's job with RA_FILL. The first call
+ * also unmounts the volume lazily and closes the file's last descriptor,
+ * the row's, so that only the job holds the description as it ends.
+ */
 int32_t vfs_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, uint32_t count,
                         const uintptr_t *frames)
 {
-    (void)mnt;
+    uint32_t i;
+
     (void)handle;
     (void)first;
-    (void)count;
-    (void)frames;
-    check(0, "no row reads through the file system");
-    return -EIO;
+    if (!ra_row || mnt != ra_ofd.vmnt) {
+        check(0, "only the readahead row reads through the file system");
+        return -EIO;
+    }
+    if (!ra_detached) {
+        ra_detached = 1;
+        fd_ofd_unref(&ra_ofd);
+    }
+    for (i = 0; i < count; i++) {
+        __builtin_memset(kmap_temp(frames[i]), RA_FILL, PAGE_SIZE);
+    }
+    return (int32_t)count;
 }
 
-/* The readahead's workers and the calls they make. No row reads a file,
-   so no job is queued, and `current_proc` is NULL, which queues none. */
-
-/** A request's most sectors; no row asks. */
+/** A request's most sectors. */
 uint32_t block_max_sectors(block_device_t *device)
 {
     (void)device;
     return BLOCK_REQ_MAX_SECTORS;
 }
 
-/** No row enters a mount. */
+/** Enter the readahead row's mount, unless it was reaped, as a mount no
+ *  longer active refuses. */
 int vfs_enter(struct vfs_mount *mnt)
 {
-    (void)mnt;
-    check(0, "no row queues a readahead");
-    return -EBUSY;
+    if (!ra_row || mnt != ra_ofd.vmnt) {
+        check(0, "only the readahead row enters a mount");
+        return -EBUSY;
+    }
+    if (ra_reaped) {
+        return -EBUSY;
+    }
+    ra_inprogress++;
+    return 0;
 }
 
-/** No row leaves a mount. */
+/** Leave the readahead row's mount, which reaps nothing. */
 void vfs_leave(struct vfs_mount *mnt)
 {
-    (void)mnt;
-    check(0, "no row queues a readahead");
+    check(ra_row && mnt == ra_ofd.vmnt && ra_inprogress > 0,
+          "a leave is of the readahead row's mount, which it entered");
+    if (ra_inprogress > 0) {
+        ra_inprogress--;
+    }
 }
 
-/** No row holds a description. */
+/** Hold the readahead row's description. */
 void fd_ofd_ref(struct open_file *ofd)
 {
-    (void)ofd;
-    check(0, "no row queues a readahead");
+    check(ra_row && ofd == &ra_ofd, "only the readahead row holds a description");
+    ra_refs++;
 }
 
-/** No row lets one go. */
+/** Let the readahead row's description go; the last unref is
+ *  `vfs_desc_close`, whose put reaps a lazily unmounted mount that no
+ *  operation is in. */
 void fd_ofd_unref(struct open_file *ofd)
 {
-    (void)ofd;
-    check(0, "no row queues a readahead");
+    check(ra_row && ofd == &ra_ofd && ra_refs > 0,
+          "an unref is of the readahead row's description, which is held");
+    if (ra_refs > 0 && --ra_refs == 0 && ra_detached && ra_inprogress == 0) {
+        ra_reaped = 1;
+    }
 }
 
 /** No row waits for a job. */
@@ -257,13 +306,21 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
-/** No worker runs. */
+/* Where the readahead row's worker goes once no job waits. */
+static jmp_buf worker_stop;
+
+/** A worker's sleep for a job: none while one waits, and once none does,
+ *  back to the row, which takes the worker's next sleep as its end. */
 int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
-    (void)cond;
-    (void)arg;
-    check(0, "no worker runs");
+    if (!ra_row) {
+        check(0, "a worker runs only in the readahead row");
+        return 0;
+    }
+    if (!cond(arg)) {
+        longjmp(worker_stop, 1);
+    }
     return 0;
 }
 
@@ -273,48 +330,55 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
-/** No worker runs. */
+/** No interrupt comes. */
 void arch_irq_enable(void)
 {}
 
-/** No worker runs. */
+/** Nothing else runs. */
 void sched_service_point(void)
 {}
 
-/** No worker is made. */
+/* The readahead row's worker, the address its stack is given at, and the
+   entry `setup_process_stack` gave it. */
+static process_t worker_proc;
+#define WORKER_STACK 0x10000u
+static void (*worker_entry)(void);
+
+/** A stack for the readahead row's worker; its address is never read. */
 uintptr_t kstack_alloc(void)
 {
-    check(0, "no worker is made");
-    return 0;
+    check(ra_row, "a worker is made only in the readahead row");
+    return ra_row ? WORKER_STACK : 0;
 }
 
-/** No worker is made. */
+/** No stack is given back. */
 void kstack_free(uintptr_t top)
 {
     (void)top;
+    check(0, "no worker's stack is given back");
 }
 
-/** No worker is made. */
+/** The readahead row's worker's record. */
 process_t *alloc_process(void)
 {
-    return NULL;
+    return ra_row ? &worker_proc : NULL;
 }
 
-/** No worker is made. */
+/** The worker's name is not read. */
 void proc_set_comm(process_t *p, const char *path)
 {
     (void)p;
     (void)path;
 }
 
-/** No worker is made. */
+/** Note the worker's entry, which the row calls itself. */
 void setup_process_stack(process_t *proc, void (*entry_point)(void))
 {
-    (void)proc;
-    (void)entry_point;
+    check(proc == &worker_proc, "the worker's record is the one made");
+    worker_entry = entry_point;
 }
 
-/** No worker is made. */
+/** The row runs the worker itself. */
 void sched_make_ready(process_t *p)
 {
     (void)p;
@@ -355,6 +419,7 @@ static void shrink_all(void)
 
 static struct vfs_mount mount;
 static struct fake_file file_a = {7, 1, 3 * PAGE_SIZE, 100};
+static struct fake_file file_b = {8, 1, 2 * PAGE_SIZE, 100};
 
 /**
  * Insert page `pgoff` of `node`, filled with `fill`, as `fc_store` does,
@@ -407,6 +472,45 @@ static int reads_as(struct fake_file *node, uint32_t pgoff, int fill)
     return 1;
 }
 
+/**
+ * Queue both pages of `file_b` as a read past its mark does, unmount its
+ * volume lazily and close its last descriptor while the worker reads them,
+ * and check that the job's end lets go of the mount and the description
+ * and reaps the mount, as Linux's last `mntput` of a detached mount does.
+ */
+static void row_readahead_reaps(void)
+{
+    static process_t reader;
+    struct fc_file f;
+
+    ra_row = 1;
+    ra_ofd.vmnt = &mount;
+    ra_ofd.vnode = &file_b;
+    ra_ofd.fhandle = &file_b;
+    ra_refs = 1;
+    reader.pid = 2;
+    current_proc = &reader;
+    if (!fc_file_of(&mount, &file_b, &f)) {
+        check(0, "the readahead row's file is a cached file");
+        return;
+    }
+    fc_queue(&ra_ofd, &f, 0, 2, FC_NO_MARK, filecache_epoch(&mount, &file_b));
+    check(ra_inprogress == 1 && ra_refs == 2 && worker_entry == fc_worker,
+          "a queued window enters its mount, holds its description and makes a worker");
+
+    current_proc = &worker_proc;
+    if (setjmp(worker_stop) == 0) {
+        worker_entry();
+    }
+    current_proc = NULL;
+    check(ra_detached && reads_as(&file_b, 0, RA_FILL) && reads_as(&file_b, 1, RA_FILL),
+          "the worker reads the window while the volume is unmounted lazily");
+    check(ra_refs == 0 && ra_inprogress == 0,
+          "the job's end leaves the mount and lets the description go");
+    check(ra_reaped, "and the description's last close reaps the lazily unmounted mount");
+    ra_row = 0;
+}
+
 int main(void)
 {
     mount.type = &vfs_ext2_type;
@@ -436,6 +540,8 @@ int main(void)
     check(shrunk == 1 && filecache_pages() == 1, "under the record the insertion made");
     check(reads_as(&file_a, 1, 0x44) && !reads_as(&file_a, 0, 0x33),
           "which has the new page and not the old");
+
+    row_readahead_reaps();
 
     filecache_forget_mount(&mount);
     check(filecache_pages() == 0 && frame_free_count() == FRAMES,
