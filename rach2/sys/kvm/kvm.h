@@ -1096,6 +1096,13 @@ void kvm_slots_read_unlock(struct kvm_vm *vm);
  * KVM_MEM_SLOTS, the deletion of a slot that does not exist, or a change of
  * a slot's address, size or READONLY flag; -EEXIST for a new or moved slot
  * that overlaps another; -ENOMEM.
+ *
+ * Under the big lock. A move, a change of flags and a deletion sleep: they
+ * wait for the copies through the slot as it was (`kvm_slots_read_lock`),
+ * letting the big lock go meanwhile, so the VM's other ioctls, another
+ * KVM_SET_USER_MEMORY_REGION among them, may run in the middle of the
+ * call. The table is whole each time the lock is let go, and a slot or log
+ * is freed only after the wait.
  */
 int32_t kvm_slots_set(struct kvm_vm *vm, const struct kvm_userspace_memory_region *r);
 
@@ -1119,7 +1126,11 @@ struct kvm_slot_view {
  * guest-physical tables, VFIO's mappings and the transport's buffers: 1
  * with it in `*out`, or 0 for a frame no slot holds. Takes `mmu_lock`;
  * the copy may be out of date once the lock is let go, as a reader of
- * Linux's slots under kvm->srcu may see the slots of before a change. */
+ * Linux's slots under kvm->srcu may see the slots of before a change. A
+ * caller that copies through `out->hva` or marks `out->dirty` after the
+ * lock is let go holds `kvm_slots_read_lock` from before the call to its
+ * last use, so that a change of the slot waits for it before it frees the
+ * log or returns to a caller that unmaps the memory. */
 int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out);
 
 /** `kvm_slot_find` for a caller that holds `mmu_lock`. */
