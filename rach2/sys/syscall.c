@@ -1728,24 +1728,30 @@ static uint64_t itimer_ticks(long sec, long usec)
     return tick_span(sec, (uint32_t)usec * 1000u);
 }
 
-/** The ticks left before the current process's timer is due, 0 when it is
- * disarmed. Part of the tick in progress has passed, so the time left lies
- * between the whole ticks to the due tick less one and that number; the
- * lower end is what is reported, and a timer due within a tick reads as one
- * tick left, since zero means disarmed. So a value read in the timer's last
- * tick and passed straight back to setitimer comes due a tick later: the
- * read reports one tick where less than one is left, and the set adds a tick
- * for the tick in progress. Interrupts are off: the tick rearms the timer. */
+/**
+ * The ticks left before the current process's timer is due, 0 when it is
+ * disarmed or the tick has marked its SIGALRM (`proc_alarm_due_tick`), as
+ * Linux's `itimer_get_remtime` reports 0 for a timer that has sent its
+ * signal (kernel/time/itimer.c:29-45, 156-166), and so alarm returns 0
+ * (`alarm_setitimer`, :263-280). Part of the tick in progress has passed,
+ * so the time left lies between the whole ticks to the due tick less one
+ * and that number; the lower end is what is reported, and a timer due
+ * within a tick reads as one tick left, since zero means disarmed. So a
+ * value read in the timer's last tick and passed straight back to setitimer
+ * comes due a tick later: the read reports one tick where less than one is
+ * left, and the set adds a tick for the tick in progress. Interrupts are
+ * off: the tick rearms the timer.
+ */
 static uint64_t itimer_left(void)
 {
-    const process_t *p = current_proc->tg->leader;
+    uint64_t due = proc_alarm_due_tick(current_proc->tg->leader);
     uint64_t now;
 
-    if (p->alarm_tick == 0) {
+    if (due == 0) {
         return 0;
     }
     now = tick_count();
-    return p->alarm_tick > now + 1u ? p->alarm_tick - now - 1u : 1u;
+    return due > now + 1u ? due - now - 1u : 1u;
 }
 
 /** `ticks` as the seconds and microseconds of an itimerval, cut to the

@@ -2,7 +2,7 @@
  * Check the timer tick's part of `proc/process.c`: `proc_wake_sleepers`,
  * the signals of the tick it leaves for a holder of the big lock
  * (`proc_tick_signal`, `proc_tick_signals_post`, `proc_tick_signals_own`),
- * `proc_alarm_set` and `proc_alarm_at`.
+ * `proc_alarm_set`, `proc_alarm_due_tick` and `proc_alarm_at`.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
@@ -24,8 +24,10 @@
  * arms the timer again at the first tick of its interval's grid after the
  * post, counted from the tick it was due, an interval of one tick included,
  * or leaves it disarmed when it has no interval; a timer not yet due is not
- * marked. A setting made between the mark and the post posts the marked
- * SIGALRM, once, as Linux sends it at expiry. A thread's own return posts
+ * marked. A marked timer reports no due tick, so no time left, as Linux's
+ * timer is inactive once it has sent SIGALRM. A setting made between the
+ * mark and the post posts the marked SIGALRM, once, as Linux sends it at
+ * expiry. A thread's own return posts
  * its SIGVTALRM and SIGPROF and takes it off the list. A sleeper is made
  * runnable at its deadline tick and not before, under the run queues' lock,
  * a blocked process with no deadline is never made runnable by the tick,
@@ -182,6 +184,7 @@ static void alarm_rows(void)
     CHECK(sleeper_posts == 0 && runner_posts == 0 && runner.alarm_tick == 1004 &&
               !proc_tick_signals_due(),
           "a timer not yet due is not marked");
+    CHECK(proc_alarm_due_tick(&runner) == 1004, "an armed timer reports its due tick");
     kernel_ticks = 1004;
     proc_wake_sleepers(1004);
     CHECK(runner_posts == 0 && sleeper_posts == 0 && runner.alarm_due && sleeper.alarm_due &&
@@ -189,6 +192,8 @@ static void alarm_rows(void)
           "a due timer is marked for a holder of the big lock, not posted");
     CHECK(runner.alarm_tick == 1004 && sleeper.alarm_tick == 1004,
           "and is not armed again before its post");
+    CHECK(proc_alarm_due_tick(&runner) == 0,
+          "a marked timer reports no time left, as Linux's inactive timer does");
     CHECK(sched_takes > 0, "the pass takes the run queues' lock");
     kernel_ticks = 1005;
     proc_wake_sleepers(1005);
