@@ -3,6 +3,7 @@
 #include "vfs.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../lib/spinlock.h"
 #include "../mm/kheap.h"
 
 struct vfs_name {
@@ -13,7 +14,17 @@ struct vfs_name {
     char leaf[VFS_NAME_MAX + 1];
 };
 
+/*
+ * The list's links and every record's `refs` are under `names_lock`, a
+ * spinlock taken with interrupts off and held only while they change or
+ * the list is searched, so that an open or the last close of an ext2 file
+ * makes or ends its record without the big lock. A record's parent, leaf
+ * and `deleted` change under the big lock alone, while the record is held,
+ * and are read under it; the walks that change them hold the spinlock or a
+ * reference to each record they reach.
+ */
 static struct vfs_name *names;
+static struct spinlock names_lock = SPINLOCK_INIT_NAMED("names");
 
 /** The mutable base whose operations implement this mount's file system. */
 static struct vfs_mount *name_base(struct vfs_mount *mnt)
@@ -24,6 +35,7 @@ static struct vfs_mount *name_base(struct vfs_mount *mnt)
 static struct vfs_name *name_new(const struct vfs_ref *parent, const char *leaf)
 {
     struct vfs_name *name = kzalloc(sizeof(*name));
+    uint32_t flags;
 
     if (name) {
         name->parent = *parent;
@@ -32,8 +44,10 @@ static struct vfs_name *name_new(const struct vfs_ref *parent, const char *leaf)
         name->refs = 1;
         k_strncpy(name->leaf, leaf, sizeof(name->leaf));
         name->leaf[sizeof(name->leaf) - 1] = '\0';
+        flags = spin_lock_irqsave(&names_lock);
         name->next = names;
         names = name;
+        spin_unlock_irqrestore(&names_lock, flags);
     }
     return name;
 }
@@ -50,17 +64,33 @@ int vfs_name_capture(const struct vfs_ref *parent, const char *leaf, struct vfs_
 
 struct vfs_name *vfs_name_ref(struct vfs_name *name)
 {
+    uint32_t flags;
+
     if (name) {
+        flags = spin_lock_irqsave(&names_lock);
         name->refs++;
+        spin_unlock_irqrestore(&names_lock, flags);
     }
     return name;
 }
 
+/**
+ * The last put takes the record off the list under the spinlock and then
+ * closes its parent, which may sleep, with the lock let go. A record of a
+ * type that sets `reads_unlocked`, whose parent's `put` takes the big lock
+ * where it needs it, may end without the big lock; any other needs it.
+ */
 void vfs_name_put(struct vfs_name *name)
 {
     struct vfs_name **link = &names;
+    uint32_t flags;
 
-    if (!name || --name->refs != 0) {
+    if (!name) {
+        return;
+    }
+    flags = spin_lock_irqsave(&names_lock);
+    if (--name->refs != 0) {
+        spin_unlock_irqrestore(&names_lock, flags);
         return;
     }
     while (*link && *link != name) {
@@ -69,6 +99,7 @@ void vfs_name_put(struct vfs_name *name)
     if (*link) {
         *link = name->next;
     }
+    spin_unlock_irqrestore(&names_lock, flags);
     vfs_desc_close(name->parent.mnt, name->parent.node, NULL);
     kfree(name);
 }
@@ -154,12 +185,14 @@ static int names_entry(const struct vfs_name *name, struct vfs_mount *mnt, void 
 void vfs_name_unlink(struct vfs_mount *mnt, void *dir, const char *leaf)
 {
     struct vfs_name *name;
+    uint32_t flags = spin_lock_irqsave(&names_lock);
 
     for (name = names; name; name = name->next) {
         if (names_entry(name, mnt, dir, leaf)) {
             name->deleted = 1;
         }
     }
+    spin_unlock_irqrestore(&names_lock, flags);
 }
 
 int vfs_name_same(struct vfs_mount *mnt, void *from, const char *old, void *to, const char *leaf)
@@ -167,6 +200,7 @@ int vfs_name_same(struct vfs_mount *mnt, void *from, const char *old, void *to, 
     struct vfs_ref a, b;
     struct vfs_mount *base = name_base(mnt);
     struct vfs_name *name;
+    uint32_t flags = spin_lock_irqsave(&names_lock);
     int same = 0;
 
     for (name = names; name; name = name->next) {
@@ -174,6 +208,7 @@ int vfs_name_same(struct vfs_mount *mnt, void *from, const char *old, void *to, 
             break;
         }
     }
+    spin_unlock_irqrestore(&names_lock, flags);
     if (!name || base->type->ops->lookup(base, from, old, &a.node) != 0) {
         return 0;
     }
@@ -186,9 +221,23 @@ int vfs_name_same(struct vfs_mount *mnt, void *from, const char *old, void *to, 
     return same;
 }
 
+/** The record after `name`, or the list's first for NULL, held; NULL at the
+ * end. */
+static struct vfs_name *name_next(struct vfs_name *name)
+{
+    uint32_t flags = spin_lock_irqsave(&names_lock);
+    struct vfs_name *next = name ? name->next : names;
+
+    if (next) {
+        next->refs++;
+    }
+    spin_unlock_irqrestore(&names_lock, flags);
+    return next;
+}
+
 void vfs_name_rename(struct vfs_mount *mnt, void *from, const char *old, void *to, const char *leaf)
 {
-    struct vfs_name *name = vfs_name_ref(names), *next;
+    struct vfs_name *name = name_next(NULL), *next;
 
     while (name) {
         if (names_entry(name, mnt, from, old)) {
@@ -202,7 +251,7 @@ void vfs_name_rename(struct vfs_mount *mnt, void *from, const char *old, void *t
         } else if (names_entry(name, mnt, to, leaf)) {
             name->deleted = 1;
         }
-        next = vfs_name_ref(name->next);
+        next = name_next(name);
         vfs_name_put(name);
         name = next;
     }
@@ -211,10 +260,12 @@ void vfs_name_rename(struct vfs_mount *mnt, void *from, const char *old, void *t
 void vfs_name_repoint(struct vfs_mount *mnt, const void *from, void *to)
 {
     struct vfs_name *name;
+    uint32_t flags = spin_lock_irqsave(&names_lock);
 
     for (name = names; name; name = name->next) {
         if (name->parent.mnt == mnt && name->parent.node == from) {
             name->parent.node = to;
         }
     }
+    spin_unlock_irqrestore(&names_lock, flags);
 }
