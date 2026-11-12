@@ -1389,7 +1389,7 @@ void sched_account_tick(int user)
     if (gap < (int64_t)TICK_NS) {
         return;
     }
-    ticks = tick_div((uint64_t)gap, TICK_NS, NULL);
+    ticks = tick_div64((uint64_t)gap, TICK_NS, NULL);
     cpu->accounted_ns += (int64_t)ticks * (int64_t)TICK_NS;
     stolen = arch_steal_ns() - cpu->steal_ns;
     while (ticks-- > 0) {
