@@ -63,9 +63,12 @@ def frames(picture):
     late = sum(1 for i in range(STEADY, len(times) - 1) if times[i + 1] - times[i] > 25)
     return {"gap_ms": round(gaps[k], 1), "after_frame": k,
             "first_gaps_ms": [round(g, 1) for g in gaps],
-            # The page's own work around the gap: callback k's return, then
-            # callback k+1's entry, against the frame times it was given.
-            "callback_end_ms": ends[k], "next_start_ms": starts[k + 1], "next_time_ms": times[k + 1],
+            # The page's own work around the gap: callback k's entry and
+            # return, then callback k+1's entry, against the frame times it
+            # was given; the return tells the callback's work from the wait
+            # between callbacks.
+            "callback_start_ms": starts[k], "callback_end_ms": ends[k],
+            "next_start_ms": starts[k + 1], "next_time_ms": times[k + 1],
             "steady_fps": round((len(times) - 1 - STEADY) * 1000 / (times[-1] - times[STEADY]), 2),
             "late_after_steady": late, "seconds": picture["seconds"], "frames": picture["frames"],
             "phases": picture["phases"]}
@@ -193,16 +196,22 @@ def main():
             parts = header[0].split()
             offset = int(parts[5].replace(".", "")) - int(parts[3].replace(".", ""))
             origin = (picture["timeOrigin"] + picture["start"]) * 1e6
-            low = int(origin + picture["frameEnds"][k] * 1e6) - offset
+            # The window runs from callback k's entry to callback k+1's, so
+            # that a wait inside callback k's own WebGPU calls falls inside it.
+            low = int(origin + picture["frameStarts"][k] * 1e6) - offset
             high = int(origin + picture["frameStarts"][k + 1] * 1e6) - offset
+            report.append("callback %d returned %.1f ms after its entry; callback %d entered %.1f ms after "
+                          "that return" % (k, picture["frameEnds"][k] - picture["frameStarts"][k], k + 1,
+                                           picture["frameStarts"][k + 1] - picture["frameEnds"][k]))
             if kind == "traced":
                 mark_low, mark_high, rows = traced(here / "browser/trace.json.gz", k)
                 if mark_low is not None:
                     report.append("trace: frames %d and %d marked %.1f ms apart; the epoch's mapping put "
-                                  "callback %d's return %+.1f ms from its mark" % (
+                                  "callback %d's entry %+.1f ms from its mark" % (
                                       k, k + 1, (mark_high - mark_low) / 1000, k,
                                       (low / 1000 - mark_low) / 1000))
-                    # The trace's clock is the sampler's: CLOCK_MONOTONIC.
+                    # The marks are made at each callback's entry, on the
+                    # trace's clock, which is the sampler's: CLOCK_MONOTONIC.
                     low, high = int(mark_low * 1000), int(mark_high * 1000)
                 report += ["trace: " + line for line in rows]
             header, before, inside = watched(log, low - MARGIN, high + MARGIN)

@@ -57,8 +57,9 @@
     try {
      times.push(Math.round((now - start) * 10) / 10);
      starts.push(Math.round((performance.now() - start) * 10) / 10);
-     // A trace's user timing marks give the first frames on its own clock.
-     if (frames < 10) performance.mark('hasvk-frame-' + frames);
+     // A trace's user timing marks give, on its own clock, the first 16
+     // frames, which stall.py searches for the slowest gap.
+     if (frames < 16) performance.mark('hasvk-frame-' + frames);
      if (result.error) throw Error(result.error);
      const encoder = device.createCommandEncoder();
      const pass = encoder.beginRenderPass({colorAttachments: [{
