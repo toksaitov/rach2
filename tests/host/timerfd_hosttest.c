@@ -19,6 +19,11 @@
  * and expires at its tick; an interval of 200 days is reported and waited
  * whole; and a time past the most seconds a setting keeps is taken as that
  * most.
+ *
+ * A POSIX timer's expiration posts no signal from the tick, which runs
+ * without the big lock: it is queued once, the expirations meanwhile going
+ * into its count, and a holder's `ptimer_post_due` posts one signal with
+ * the rest as its overrun; a timer deleted while queued posts nothing.
  */
 #include "io/timerfd.c"
 #include "compat/waketime_none.h"
@@ -68,13 +73,22 @@ process_t *get_process(uint32_t pid)
     return 0;
 }
 
-/** A failure: a timerfd posts no signal. */
+/* The POSIX timer rows' process and its signals posted: while `posts_ok`
+ * is set a post is counted and kept, and otherwise it is a failure. */
+static struct tgroup group;
+static int posts_ok, posts, post_signo;
+static struct k_siginfo post_info;
+
+/** Count a POSIX timer's signal to `target` while the rows allow one; a
+ * failure otherwise, since a timerfd posts none. */
 void signal_post_info(process_t *target, int signo, const struct k_siginfo *info)
 {
-    (void)target;
-    (void)signo;
-    (void)info;
-    CHECK(0, "a timerfd posted a signal");
+    CHECK(posts_ok, "a timerfd posted a signal");
+    CHECK(target == group.leader, "a timer's signal goes to its process's leader");
+    CHECK(masked > 0, "a timer's signal is posted under timer_lock");
+    posts++;
+    post_signo = signo;
+    post_info = *info;
 }
 
 /** A failure: a timerfd posts no signal. */
@@ -189,10 +203,15 @@ void *kzalloc(size_t n)
     return NULL;
 }
 
-/** Nothing: no row makes a descriptor. */
+/* The POSIX timer of the rows, which `ptimer_free` gives back here. */
+static struct ktimer *posix_timer;
+static int posix_freed;
+
+/** Count the POSIX timer's free; no row frees anything else. */
 void kfree(void *ptr)
 {
-    (void)ptr;
+    if (ptr && ptr == posix_timer)
+        posix_freed++;
 }
 
 /** -1: no row makes a descriptor. */
@@ -334,6 +353,61 @@ static void long_rows(void)
  * none, a copy that fails loses the count it took, and a read shorter than
  * eight bytes gives -EINVAL.
  */
+/**
+ * A POSIX timer of one tick's interval that expires at two ticks posts no
+ * signal from either: it is queued once and counts both. `ptimer_post_due`
+ * posts one SIGALRM with the timer's id, value and an overrun of one, and
+ * empties the queue; a third expiration queued and the timer then deleted
+ * takes it off the queue, and nothing is posted.
+ */
+static void posix_rows(void)
+{
+    static struct ktimer pt;
+    static process_t leader;
+
+    reset();
+    k_memset(&pt, 0, sizeof(pt));
+    k_memset(&group, 0, sizeof(group));
+    group.leader = &leader;
+    leader.tg = &group;
+    pt.tg = &group;
+    pt.id = 7;
+    pt.notify = SIGEV_SIGNAL;
+    pt.signo = SIGALRM;
+    pt.value = 0x55;
+    pt.isub = 1;
+    pt.due = kernel_ticks + 1;
+    pt.armed = 1;
+    pt.next = armed;
+    armed = &pt;
+    group.timers = &pt;
+    posix_timer = &pt;
+    posts = posix_freed = 0;
+    posts_ok = 0;
+    timerfd_tick(++kernel_ticks);
+    timerfd_tick(++kernel_ticks);
+    CHECK(ptimer_posts_due() && pt.fire_queued && pt.count == 2,
+          "a POSIX timer's expirations are queued once and counted, posting nothing");
+    posts_ok = 1;
+    ptimer_post_due();
+    CHECK(posts == 1 && post_signo == SIGALRM && post_info.code == SI_TIMER && post_info.pid == 7 &&
+              post_info.value == 0x55 && post_info.uid == 1,
+          "a holder posts one signal with the timer's id and value and an overrun of one");
+    CHECK(!ptimer_posts_due() && !pt.fire_queued && pt.count == 0 && fire_head == NULL,
+          "and the queue is empty");
+    timerfd_tick(++kernel_ticks);
+    CHECK(ptimer_posts_due() && pt.fire_queued, "the next expiration is queued");
+    ptimer_delete_all(&group);
+    CHECK(posix_freed == 1 && group.timers == NULL && !armed,
+          "deleting the timer frees it and disarms it");
+    CHECK(!ptimer_posts_due() && fire_head == NULL && fire_tail == &fire_head,
+          "and takes it off the queue");
+    ptimer_post_due();
+    CHECK(posts == 1, "so a holder posts nothing for it");
+    posts_ok = 0;
+    posix_timer = NULL;
+}
+
 int main(void)
 {
     setup();
@@ -355,6 +429,7 @@ int main(void)
     CHECK(timerfd_read(&entry, (char *)user, 7) == -EINVAL, "a read shorter than eight bytes");
     pending_rows();
     long_rows();
+    posix_rows();
     CHECK(masked == 0, "every interrupt mask is taken back");
 
     printf("timerfd-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);

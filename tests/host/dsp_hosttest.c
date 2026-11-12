@@ -1786,6 +1786,40 @@ static void row_close_while_playing(void)
     check(mixed(wave_a, 1536, a_end, wave_b, 1024, 512), "A until its close, B throughout");
 }
 
+/**
+ * The device's service, which runs without the big lock, calls the mix's
+ * `transfer` with interrupts on and its `period` under the device's stream
+ * lock with them off, as HD Audio's khda does: the callbacks take only the
+ * mix's and the open's spinlocks, which they give back, wait for nothing,
+ * call no operation of the driver, and wake the writer.
+ */
+static void row_service_context(void)
+{
+    uint32_t starts, stops, w, k;
+
+    begin("service context");
+    check(open_dsp(1) == 0, "open");
+    cd_quality();
+    check(put(0, 2048) == 2048 && m.starts == 1, "two periods start the device");
+    starts = m.starts;
+    stops = m.stops;
+    w = waits;
+    k = wakes;
+    masked = 0;
+    model_fill((int)m.next);
+    check(masked == 0, "transfer gives back the locks it takes, interrupts on");
+    m.next = (m.next + 1) % m.periods;
+    masked = 1;
+    m.s->period(m.s);
+    check(masked == 1, "period gives back its locks under the device's, interrupts off");
+    masked = 0;
+    check(waits == w && m.starts == starts && m.stops == stops,
+          "neither waits nor calls the driver");
+    check(wakes > k, "period wakes the writer");
+    check(ask(DSP_SYNC, 0) == 0 && !m.running, "SYNC drains");
+    close_dsp();
+}
+
 /** Two readers receive the same periods. One falls behind and resets;
  * neither event stops or discards the other reader's frames. */
 static void row_two_readers(void)
@@ -2057,6 +2091,7 @@ int main(void)
     row_process_pcm();
     row_console_client();
     row_loopback();
+    row_service_context();
     if (failures) {
         printf("dsp-hosttest: %d failures\n", failures);
         return 1;
