@@ -361,7 +361,10 @@ speaker, and the divider it was last given, 0 for silence; both stay 0 on
 a machine whose driver has no generator.
 While the driver's thread runs, a request or the kernel's stop hands the
 divider to that thread, and this line has it as soon as it is handed on,
-before the codec has it.
+before the codec has it; the count is then of tones handed to the thread,
+sent or replaced by a later request before the thread sent them, where
+.Pa /proc/audio
+counts the tones the codec was sent.
 .It Li speaker-beep-retries
 Stops of the generator that the tick found the codec busy for and sent
 again at a later tick; 0 while the driver's thread sends the generator's
