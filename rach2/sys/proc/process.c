@@ -267,13 +267,18 @@ int proc_tick_signals_due(void)
     return tick_posts_due;
 }
 
-void proc_alarm_set(process_t *p, uint64_t tick, uint64_t interval)
+/** Set `p`'s real-time timer as `proc_alarm_set` does, and return whether
+ * the tick had marked a SIGALRM of the old setting that no holder of the big
+ * lock has posted yet, which this takes off the list of the tick's signals.
+ * The caller holds the big lock and no spinlock. */
+static int alarm_set(process_t *p, uint64_t tick, uint64_t interval)
 {
     uint32_t flags = spin_lock_irqsave(&timer_list_lock);
+    int marked = p->alarm_due;
 
     p->alarm_tick = tick;
     p->alarm_interval = tick != 0 ? interval : 0;
-    if (p->alarm_due) {
+    if (marked) {
         p->alarm_due = 0;
         spin_lock(&tick_post_lock);
         p->tick_sigs &= ~(1u << SIGALRM);
@@ -284,15 +289,40 @@ void proc_alarm_set(process_t *p, uint64_t tick, uint64_t interval)
     }
     timer_update_locked(p);
     spin_unlock_irqrestore(&timer_list_lock, flags);
+    return marked;
+}
+
+void proc_alarm_set(process_t *p, uint64_t tick, uint64_t interval)
+{
+    if (alarm_set(p, tick, interval)) {
+        signal_post(p, SIGALRM);
+    }
+}
+
+/** The tick a periodic real-time timer due at `due` is due at next: the
+ * first `due` plus a whole number of `interval`s after the tick `now`, so
+ * that a SIGALRM posted late does not move the timer off its grid, as
+ * Linux's `hrtimer_forward` steps from the old expiry
+ * (kernel/time/hrtimer.c:1046-1078, from kernel/signal.c:654-662). The post
+ * comes a few ticks after `due`, so the loop runs a few times. */
+static uint64_t alarm_next(uint64_t due, uint64_t interval, uint64_t now)
+{
+    uint64_t next = due + interval;
+
+    while (next <= now) {
+        next += interval;
+    }
+    return next != 0 ? next : 1u;
 }
 
 /**
  * Post the signals `sigs` of the tick to `p`, SIGVTALRM and SIGPROF as
- * they come and SIGALRM followed by its timer's next setting, its interval
- * after the tick now or none, as the tick posted and armed it before it ran
- * without the big lock. Only now is the timer set again, so no tick marks
- * a second SIGALRM for a setting whose first is not yet posted. The caller
- * holds the big lock, under which a record is freed, and no spinlock.
+ * they come and SIGALRM followed by its timer's next setting, the first
+ * tick of its interval's grid after the tick now, or none, as the tick
+ * posted and armed it before it ran without the big lock. Only now is the
+ * timer set again, so no tick marks a second SIGALRM for a setting whose
+ * first is not yet posted. The caller holds the big lock, under which a
+ * record is freed, and no spinlock.
  */
 static void tick_signals_send(process_t *p, uint32_t sigs)
 {
@@ -306,7 +336,8 @@ static void tick_signals_send(process_t *p, uint32_t sigs)
         uint64_t interval = p->alarm_interval;
 
         signal_post(p, SIGALRM);
-        proc_alarm_set(p, interval != 0 ? proc_alarm_at(tick_count(), interval) : 0, interval);
+        (void)alarm_set(p, interval != 0 ? alarm_next(p->alarm_tick, interval, tick_count()) : 0,
+                        interval);
     }
 }
 
