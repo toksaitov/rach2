@@ -507,7 +507,7 @@ void rtc_set_realtime(int64_t seconds, int32_t nanoseconds, int slew)
     rtc_last_nanoseconds = nanoseconds;
     rtc_offset_locked(&kept_seconds, &nanoseconds);
     vclock_set_offset(kept_seconds, nanoseconds);
-    rtc_steps = rtc_steps + 1u != 0 ? rtc_steps + 1u : 1u;
+    rtc_steps = rtc_steps % 0xffffffffu + 1u; /* 1 to 2^32-1, never 0 */
     spin_unlock_irqrestore(&rtc_realtime_lock, flags);
     timerfd_clock_was_set(!slew);
 }

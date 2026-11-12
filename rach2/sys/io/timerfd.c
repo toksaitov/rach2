@@ -203,9 +203,7 @@ static unsigned int fire_cpu;
  * `timer_lock`. */
 static uint32_t next_gen(void)
 {
-    if (++timer_gens == 0) {
-        timer_gens = 1;
-    }
+    timer_gens = timer_gens % 0xffffffffu + 1u; /* 1 to 2^32-1, never 0 */
     return timer_gens;
 }
 
