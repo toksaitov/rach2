@@ -240,22 +240,6 @@ void sched_adopt(process_t *p)
 
 static int sched_may_run(const process_t *p, int cpu);
 
-void sched_priority_changed(process_t *p)
-{
-    uint32_t flags = spin_lock_irqsave(&sched_lock);
-
-    if (p->ready_linked) {
-        struct ready_queue *q = &run_queues[p->cpu];
-
-        q->rt_count -= p->ready_rt;
-        p->ready_rt = sched_priority(p) != 0;
-        q->rt_count += p->ready_rt;
-    }
-    p->need_resched = 1;
-    spin_unlock_irqrestore(&sched_lock, flags);
-    smp_kick(p->cpu);
-}
-
 /** Find the highest-priority eligible RT thread; equal priorities keep
  * queue order. Ordinary queues need no scan. The run queue lock is held. */
 static process_t *sched_find_rt(int cpu)
@@ -286,7 +270,10 @@ static process_t *sched_find_rt(int cpu)
  * time slice has run out (task_tick_rt, kernel/sched/rt.c:2586-2602), and
  * one queued behind a higher thread on another processor counts, as Linux
  * pushes it to a processor that runs lower work and has that one
- * reschedule (push_rt_task and find_lowest_rq, rt.c:1807, 1982-2092).
+ * reschedule (push_rt_task and find_lowest_rq, rt.c:1807, 1982-2092). A
+ * wake places a real-time thread on such a processor at once
+ * (`sched_rt_place`); this finds one queued behind a thread raised above
+ * it, or one whose processor started lower work since.
  * Counts no selection work. The run queues' lock is held.
  */
 static int sched_rt_outranks(int cpu, const process_t *cur)
@@ -467,40 +454,108 @@ static int sched_place(const process_t *p)
 }
 
 /**
- * Make `p` ready, on the queue `sched_place` gives it, and return the
- * processor to interrupt so that it selects now: one that is idle, or
- * halted in place with `p` current, or runs a thread `p` outranks; -1 when
- * none needs it. An outranked thread gets `need_resched`, as Linux's
- * wakeup_preempt_rt and wakeup_preempt call resched_curr
- * (kernel/sched/rt.c:1657-1658, core.c:2151-2156, 1094-1116): the
- * interrupt switches in user mode only on that request (`isr_local_router`),
- * and a wake on the waker's own processor, whose interrupt does nothing,
- * is taken at the call's exit (`sched_take_preempt`). `sched_lock` is held.
+ * Ask processor `cpu`, on whose queue `p` has just been put, to select now
+ * when it should: return `cpu` when it is idle, or when `p` outranks the
+ * thread it runs, whose `need_resched` is then set, as Linux's
+ * wakeup_preempt calls resched_curr for a task of a higher class, and
+ * wakeup_preempt_rt for a real-time task of a higher priority
+ * (kernel/sched/core.c:2151-2156, rt.c:1657-1658); return -1 otherwise.
+ * The interrupt switches in user mode only on that request
+ * (`isr_local_router`), and a request to the caller's own processor, whose
+ * interrupt does nothing, is taken at the call's exit (`sched_take_preempt`).
+ * The run queues' lock is held.
+ */
+static int sched_preempt_cpu(const process_t *p, int cpu)
+{
+    process_t *cur = cpu_table[cpu].current;
+
+    if (sched_cpu_idle(cpu)) {
+        return cpu;
+    }
+    if (sched_priority(p) > sched_priority(cur)) {
+        cur->need_resched = 1;
+        return cpu;
+    }
+    return -1;
+}
+
+/** Whether `p` may run on one started processor only. The run queues' lock
+ * is held. */
+static int sched_pinned(const process_t *p)
+{
+    int c, n = 0;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        n += sched_allowed(p, c);
+    }
+    return n < 2;
+}
+
+/**
+ * The processor a woken real-time thread `p` goes to instead of `target`,
+ * whose current thread is real-time and either ranks with `p` or above it,
+ * or may run nowhere else, as Linux's select_task_rq_rt tests it
+ * (kernel/sched/rt.c:1577-1597): of the started processors `p` may run on,
+ * one whose current thread ranks lowest, `target` first among equals, then
+ * the waker's, then the lowest number, as find_lowest_rq prefers the task's
+ * last processor and then this one (rt.c:1807-1880). That one is taken
+ * only when `p` outranks its current thread; otherwise `target` stays. The
+ * run queues' lock is held.
+ */
+static int sched_rt_place(const process_t *p, int target)
+{
+    process_t *cur = cpu_table[target].current;
+    int me = (int)arch_cpu_id();
+    int best = -1, c;
+    unsigned int rank, best_rank = 0;
+
+    if (sched_priority(p) == 0 || sched_priority(cur) == 0 ||
+        (sched_priority(cur) < sched_priority(p) && !sched_pinned(cur))) {
+        return target;
+    }
+    for (c = 0; c < NR_CPUS; c++) {
+        if (!sched_allowed(p, c)) {
+            continue;
+        }
+        /* Priority first, then target, the waker's and the lowest number. */
+        rank = sched_priority(cpu_table[c].current) * 4u + (c == target ? 0u : c == me ? 1u : 2u);
+        if (best < 0 || rank < best_rank) {
+            best = c;
+            best_rank = rank;
+        }
+    }
+    if (best >= 0 && sched_priority(p) > sched_priority(cpu_table[best].current)) {
+        return best;
+    }
+    return target;
+}
+
+/**
+ * Make `p` ready, on the queue `sched_place` gives it, or for a real-time
+ * thread that does not outrank the real-time thread running there, on a
+ * processor running lower work (`sched_rt_place`), and return the
+ * processor to interrupt so that it selects now, as `sched_preempt_cpu`
+ * gives it, or the one where `p` is halted in place as current; -1 when
+ * none needs it. `sched_lock` is held.
  */
 static int sched_ready_locked(process_t *p)
 {
-    process_t *cur;
     int target;
 
     sched_remove(p);
     p->state = PROC_READY;
     proc_timer_update(p);
     target = sched_place(p);
-    sched_move(p, target);
-    if (cpu_table[target].current != p) {
-        sched_append(p);
-    } else {
+    if (cpu_table[target].current == p) {
         waketime_state(p, 2, target);
-    }
-    cur = cpu_table[target].current;
-    if (sched_cpu_idle(target) || cur == p) {
         return target;
     }
-    if (sched_priority(p) > sched_priority(cur)) {
-        cur->need_resched = 1;
-        return target;
+    if (!sched_cpu_idle(target)) {
+        target = sched_rt_place(p, target);
     }
-    return -1;
+    sched_move(p, target);
+    sched_append(p);
+    return sched_preempt_cpu(p, target);
 }
 
 void sched_make_ready(process_t *p)
@@ -508,6 +563,44 @@ void sched_make_ready(process_t *p)
     uint32_t flags = spin_lock_irqsave(&sched_lock);
     int kick = sched_ready_locked(p);
 
+    spin_unlock_irqrestore(&sched_lock, flags);
+    if (kick >= 0) {
+        smp_kick(kick);
+    }
+}
+
+/**
+ * A queued thread asks the thread it now outranks on its processor to
+ * switch, as Linux's prio_changed_rt and switched_to_rt call resched_curr
+ * on the queue's current task (kernel/sched/rt.c:2486-2492, 2526-2533). A
+ * running thread asks itself when a queued thread that selection on its
+ * processor could take now outranks it, as prio_changed_rt reschedules a
+ * running task once the queue's highest priority is above its own
+ * (rt.c:2512-2513); one that left the real-time policy with only ordinary
+ * threads queued gives way at the tick once its slice has run, where
+ * Linux's switched_to_fair asks at once (fair.c:13366-13367). A blocked
+ * thread asks nothing.
+ */
+void sched_priority_changed(process_t *p)
+{
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+    int kick = -1;
+
+    if (p->ready_linked) {
+        struct ready_queue *q = &run_queues[p->cpu];
+
+        q->rt_count -= p->ready_rt;
+        p->ready_rt = sched_priority(p) != 0;
+        q->rt_count += p->ready_rt;
+    }
+    if (cpu_table[p->cpu].current == p) {
+        if (sched_rt_outranks(p->cpu, p)) {
+            p->need_resched = 1;
+            kick = p->cpu;
+        }
+    } else if (p->ready_linked) {
+        kick = sched_preempt_cpu(p, p->cpu);
+    }
     spin_unlock_irqrestore(&sched_lock, flags);
     if (kick >= 0) {
         smp_kick(kick);
@@ -606,9 +699,7 @@ void sched_set_affinity(process_t *p, uint64_t mask)
         sched_remove(p);
         sched_move(p, sched_choose(p));
         sched_append(p);
-        if (sched_cpu_idle(p->cpu)) {
-            kick = p->cpu;
-        }
+        kick = sched_preempt_cpu(p, p->cpu);
     }
     if (remote) {
         p->need_resched = 1;
@@ -670,7 +761,8 @@ static process_t *sched_select(int me, process_t *old)
 }
 
 /** Refresh the outgoing task's state and placement before selection.
- * Returns an idle processor to kick after selection, or -1. */
+ * Returns the processor a moved task asks to select (`sched_preempt_cpu`),
+ * to kick after selection, or -1. */
 static int sched_prepare_old(process_t *old, struct percpu *cpu, int me)
 {
     int kick = -1;
@@ -686,9 +778,7 @@ static int sched_prepare_old(process_t *old, struct percpu *cpu, int me)
         !((old->affinity >> me) & 1u)) {
         old->state = PROC_READY;
         sched_move(old, sched_choose(old));
-        if (sched_cpu_idle(old->cpu)) {
-            kick = old->cpu;
-        }
+        kick = sched_preempt_cpu(old, old->cpu);
     }
     if (cpu->idle && old != cpu->idle && old->state == PROC_RUNNING && !suspend_lets_run(old)) {
         old->state = PROC_READY;
@@ -979,22 +1069,33 @@ void sched_preempt(void)
  * kernel/sched/fair.c:1022-1045, 1271-1274); Linux keeps the deadline
  * across switches where this measures from each switch in.
  *
- * A thread a wake marked (`woken`) waiting on this processor's queue, or a
- * real-time one selection could take here that outranks the current thread
- * (`sched_rt_outranks`), lets the interrupt select within the slice all the
- * same. A woken thread is then one candidate: selection alternates between
- * a woken thread and the head of the queue (`_wake_turn`), so the woken
- * reader may run only at the next selection. Linux ends a turn within the
- * slice in more cases than the deadline: its tick reschedules once the
- * current thread has lost its slice's protection and is no longer eligible
- * (did_preempt_short, fair.c:1180-1188, 1271-1274), and a wake preempts
- * the current thread within its protected slice only when that thread is of
- * the idle policy and the woken one is not, or when the woken thread's
- * shorter custom slice cancels the protection and the woken thread is then
- * the most eligible (check_preempt_wakeup_fair, fair.c:8862-8951, 8911-8917,
- * 8939; RUN_TO_PARITY in pick_eevdf, fair.c:943, set at set_next_entity,
- * fair.c:5633). Here every wake lets the interrupt select, so that a reader
- * runs soon after its data comes.
+ * A real-time thread that selection could take here, from any processor's
+ * queue, and that outranks the current thread (`sched_rt_outranks`) lets
+ * the interrupt select within the slice all the same, as Linux's
+ * wakeup_preempt_rt asks a lower current task to switch
+ * (kernel/sched/rt.c:1657-1658); an equal one waits for the slice, as
+ * task_tick_rt requeues an RR task only once its time slice has run out
+ * (rt.c:2586-2602). Under an ordinary current thread, a thread a wake
+ * marked (`woken`) waiting on this processor's queue does too; under a
+ * real-time one it does not, since selection would not take it, and a
+ * real-time thread gives way within its slice only to one that outranks
+ * it. A woken thread is then one candidate: selection alternates between a
+ * woken thread and the head of the queue (`_wake_turn`), so the woken
+ * reader may run only at the next selection.
+ *
+ * Linux ends an ordinary turn within the slice in more cases than the
+ * deadline. Its tick reschedules once the current thread has lost its
+ * slice's protection and is no longer eligible (did_preempt_short,
+ * fair.c:1180-1188, 1271-1274). A wake preempts the current thread when the
+ * woken one is the most eligible (check_preempt_wakeup_fair,
+ * fair.c:8862-8951, 8944), and within the current thread's protected slice
+ * (RUN_TO_PARITY in pick_eevdf, fair.c:943, set at set_next_entity,
+ * fair.c:5633) only when the current thread is no longer eligible, which
+ * drops it from the pick, protection and all (fair.c:940-941), when it is
+ * of the idle policy and the woken one is not (fair.c:8911-8917), or when
+ * the woken thread's shorter custom slice cancels the protection
+ * (fair.c:8938-8939). Here every wake lets the interrupt select, so that a
+ * reader runs soon after its data comes.
  *
  * Called with interrupts off, at the end of an interrupt's handler.
  */
@@ -1008,7 +1109,7 @@ void sched_tick(void)
         flags = spin_lock_irqsave(&sched_lock);
         q = run_queues[arch_cpu_id()].head;
         due = sched_rt_outranks((int)arch_cpu_id(), p);
-        for (; q && !due; q = q->ready_next) {
+        for (; q && !due && sched_priority(p) == 0; q = q->ready_next) {
             due = q->woken;
         }
         spin_unlock_irqrestore(&sched_lock, flags);
