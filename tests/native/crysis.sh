@@ -6,9 +6,10 @@
 #   crysis.sh flyby ROUTE
 #   crysis.sh load SAVE
 #
-# Run as root by etude-guest in the case's workspace, which holds crysis.py
-# and wm.py, in a mount namespace of the case's own, on the GNU root whose
-# desktop session runs. The checks:
+# Run as root by etude-guest in the case's workspace, which holds crysis.py,
+# wm.py and the empty directory `private` of the private fixture, in a mount
+# namespace of the case's own, on the GNU root whose desktop session runs.
+# The checks:
 #
 #   flyby  Linux's island flyby through ROUTE, umu or direct, its first two
 #          loops, each judged by crysis.py against 24 frames a second beside
@@ -37,10 +38,12 @@
 #   logs     a new directory for Proton's logs
 #
 # The load's new prefix is /data/native/crysis-compat, in the same /data. On
-# every exit the script ends the game's mounts, removes `private`, which is
-# all the case made on the root besides `out`, puts back the session's
+# every exit the script ends the game's mounts, puts back the session's
 # weston.ini and rach2-session, which crysis.py's `prepare` writes, and
-# starts the session again.
+# starts the session again. `private`, all the case makes on the root
+# besides `out`, is the fixture's: etude-guest removes it once every process
+# of the case has ended, after a pass, a failure or a kill that skips this
+# trap alike.
 #
 # Prints crysis.py's lines and `crysis-case: result: pass` or `fail: why`, and
 # exits 0 on a pass.
@@ -56,7 +59,7 @@ ini=/etc/xdg/weston/weston.ini
 session=/usr/libexec/rach2-session
 pidfile=/run/rach2-desktop.pid
 uid=1001
-made=0 bound=0 mounted=0 kept=0 failed=''
+bound=0 mounted=0 kept=0 failed=''
 
 say() { echo "crysis-case: $*"; }
 
@@ -84,11 +87,6 @@ cleanup()
     [ "$mounted" = 0 ] || umount "$owner" 2> /dev/null || umount -l "$owner" ||
         failed="$failed umount-owner"
     [ "$bound" = 0 ] || umount /data 2> /dev/null || umount -l /data || failed="$failed umount"
-    # --one-file-system keeps rm out of the owner's partition, read-only as
-    # it is, should its mount still show below `private`.
-    if [ "$made" = 1 ]; then
-        rm -rf --one-file-system "$private" || failed="$failed remove-private"
-    fi
     if [ -n "$failed" ]; then
         say "result: fail:$failed"
         exit 1
@@ -119,9 +117,9 @@ case $1 in flyby | load) ;; *) fail "no check $1" ;; esac
 command -v crysis.sh > /dev/null || fail "no crysis.sh on this root"
 [ -d /data ] && [ -b "$data" ] || fail "no /data or no $data"
 awk '$2 == "/data" { found = 1 } END { exit found }' /proc/mounts || fail "/data is mounted already"
+[ -d "$private" ] && [ -z "$(ls -A "$private")" ] ||
+    fail "no empty $private; the case runs with the private fixture"
 
-mkdir "$private"
-made=1
 mkdir "$private/owner"
 mount --bind "$private" /data || fail "the workspace would not bind on /data"
 bound=1
