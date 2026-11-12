@@ -3,6 +3,7 @@
  * never end, stops the test with a trap, as does the release of a free one.
  * No host header is included, since the kernel's define the same types. */
 #include "../../../rach2/sys/proc/mutex.h"
+#include "../../../rach2/sys/lib/kerrno.h"
 
 /** Make `m` free. */
 void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key *key)
@@ -25,6 +26,18 @@ void mutex_lock(struct mutex *m)
 int mutex_lock_interruptible(struct mutex *m)
 {
     mutex_lock(m);
+    return 0;
+}
+
+/** Take `m` if it is free and return 0; a held one, which in one thread only
+ * a SIGKILL for the waiter could let go, returns -EINTR as that kill
+ * would. */
+int mutex_lock_killable(struct mutex *m)
+{
+    if (m->owner) {
+        return -EINTR;
+    }
+    m->owner = m;
     return 0;
 }
 

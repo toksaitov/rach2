@@ -84,13 +84,14 @@
 #define KVM_MP_STATE_MAX 10u
 
 /** Take `v` for one ioctl, waiting while another holds it, as Linux's
- * kvm_vcpu_ioctl takes vcpu->mutex (virt/kvm/kvm_main.c:4489). A signal
- * does not end the wait: the holder is a KVM_RUN, which a signal of its
- * own ends, or a state ioctl, which does not sleep long; a SIGKILL ends
- * both threads' runs together. */
-static void vcpu_lock(struct kvm_vcpu *v)
+ * kvm_vcpu_ioctl takes vcpu->mutex (virt/kvm/kvm_main.c:4489): 0 once held,
+ * or -EINTR with `v` not taken when SIGKILL comes for the waiter. No other
+ * signal ends the wait. The holder may be a thread of another process that
+ * shares the VM's memory and descriptors (CLONE_VM | CLONE_FILES without
+ * CLONE_THREAD), which the waiter's SIGKILL does not reach. */
+static int vcpu_lock(struct kvm_vcpu *v)
 {
-    mutex_lock(&v->mutex);
+    return mutex_lock_killable(&v->mutex);
 }
 
 /** Let go of `v`. */
@@ -2095,7 +2096,8 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
  * run and takes it back at the same depth before it returns, so that
  * neither the guest nor the exits the kernel handles keep the big lock, as
  * Linux's KVM_RUN holds only the vCPU's mutex (virt/kvm/kvm_main.c:4489-4515).
- * Every other request runs under the big lock.
+ * Every other request runs under the big lock. -EINTR when SIGKILL ends the
+ * wait for the vCPU's mutex, with the entry's hold back at its depth.
  */
 int32_t kvm_vcpu_ioctl(struct fd_entry *e, uint32_t request, uintptr_t arg)
 {
@@ -2114,15 +2116,19 @@ int32_t kvm_vcpu_ioctl(struct fd_entry *e, uint32_t request, uintptr_t arg)
         flags = kirq_save();
         depth = bkl_drop();
         kirq_restore(flags);
-        vcpu_lock(v);
-        r = vcpu_run(v, arg);
-        vcpu_unlock(v);
+        r = vcpu_lock(v);
+        if (r == 0) {
+            r = vcpu_run(v, arg);
+            vcpu_unlock(v);
+        }
         flags = kirq_save();
         bkl_take(depth);
         kirq_restore(flags);
         return r;
     }
-    vcpu_lock(v);
+    if (vcpu_lock(v) != 0) {
+        return -EINTR;
+    }
     bkl_enter();
     r = vcpu_state_ioctl(v, request, arg);
     bkl_exit();

@@ -77,6 +77,12 @@ void mutex_lock(struct mutex *m);
  * taken. */
 int mutex_lock_interruptible(struct mutex *m);
 
+/** Take `m` as `mutex_lock` does, but end the wait at SIGKILL pending for
+ * the thread or its process, as Linux's `mutex_lock_killable`
+ * (kernel/locking/mutex.c:1014): 0 once held, or -EINTR with `m` not taken.
+ * Any other signal leaves the wait asleep. From a thread. */
+int mutex_lock_killable(struct mutex *m);
+
 /** Take `m` if it is free and return 1, or return 0 at once. Any context
  * but an interrupt. */
 int mutex_trylock(struct mutex *m);
