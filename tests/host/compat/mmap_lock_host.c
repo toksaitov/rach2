@@ -5,9 +5,17 @@
  * `mmap_may_drop` answer as on the machine, and the page-table lock is a
  * word the holder sets. A wait could only be for the test itself, so a write
  * hold wanted under a read hold, a release of no hold and a third address
- * space stop the test at once.
+ * space stop the test at once. A row may name a lock another thread holds
+ * (`host_busy`): a write trylock of it fails, and the write lock that waits
+ * for it runs the row's `host_wait` first, as that thread would run while
+ * this one sleeps.
  */
 #include "../../../rach2/sys/mm/mm.h"
+
+/* The address space whose regions' lock another thread holds until a write
+ * lock waits for it, or NULL; and what that thread does meanwhile, or NULL. */
+struct mm *host_busy;
+void (*host_wait)(struct mm *mm);
 
 /* The holds of the one thread: the address space, its depth and whether the
  * first hold was to write. Two at once, as on the machine. */
@@ -64,19 +72,27 @@ int mmap_read_trylock(struct mm *mm)
     return 1;
 }
 
-/** Take `mm`'s regions' lock to write: count the hold. */
+/** Take `mm`'s regions' lock to write: count the hold, after `host_wait`
+ * when `mm` is `host_busy`, which it then no longer is. */
 void mmap_write_lock(struct mm *mm)
 {
+    if (mm == host_busy) {
+        host_busy = NULL;
+        if (host_wait) {
+            host_wait(mm);
+        }
+    }
     host_take(mm, 1);
 }
 
 /** Take `mm`'s regions' lock to write if that needs no wait: 0 under a
- * read hold, which on the machine would wait for the test itself. */
+ * read hold, which on the machine would wait for the test itself, and for
+ * `host_busy`. */
 int mmap_write_trylock(struct mm *mm)
 {
     int i = host_hold(mm);
 
-    if (i >= 0 && !host_holds[i].write) {
+    if ((i >= 0 && !host_holds[i].write) || mm == host_busy) {
         return 0;
     }
     host_take(mm, 1);
