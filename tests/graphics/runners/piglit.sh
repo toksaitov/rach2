@@ -3,8 +3,8 @@
 # guest's Mesa, inside a graphics guest, Rach2's or Debian's, as an ordinary
 # user.
 #
-#   piglit.sh [-g] [-p surfaceless|gbm] [-o OUT] PART...|all
-#   piglit.sh [-g] [-p surfaceless|gbm] [-o OUT] -l LIST [-e N] [-s START]
+#   piglit.sh [-g|-z ICD] [-p surfaceless|gbm] [-o OUT] PART...|all
+#   piglit.sh [-g|-z ICD] [-p surfaceless|gbm] [-o OUT] -l LIST [-e N] [-s START]
 #
 # Runs the tests of piglit's `quick` profile whose names each PART's pattern
 # matches, or every QEMU part's with `all`, or with -l the tests LIST names,
@@ -27,8 +27,14 @@
 # display profile, one test at a time (`piglit run -1`): QEMU draws every
 # context of the guest in one thread, so tests at once gain little there,
 # and on the testing PC eight heavy ones at once lose the host's D3D12
-# device, which ends QEMU (dev-log/77-vgpu/upstream.md). Through GBM they
-# run a process on each CPU, or one at a time with -g. The record's
+# device, which ends QEMU (dev-log/77-vgpu/upstream.md). With -z, on the
+# surfaceless platform alone, they draw on zink over the Vulkan driver that
+# the ICD file ICD names, alone, a test process on each CPU:
+# LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=zink VK_DRIVER_FILES=ICD. Zink
+# takes a device of the CPU type only in software mode, and Venus over the
+# host's lavapipe is one; without LIBGL_ALWAYS_SOFTWARE zink fails with
+# "failed to choose pdev". Through GBM they run a process on each CPU, or
+# one at a time with -g. The record's
 # `renderer` line is what `eglinfo -B` names on the same platform with the
 # same environment: the renderer, and the OpenGL and OpenGL ES versions.
 #
@@ -120,17 +126,18 @@ parts='gl-1.0 gl-1.1 glsl-1.10 glsl-1.20 fbo sync dmabuf'
 
 usage()
 {
-    echo "usage: piglit.sh [-g] [-p surfaceless|gbm] [-o OUT] PART...|all" \
-        "| piglit.sh [-g] [-p surfaceless|gbm] [-o OUT] -l LIST [-e N] [-s START]" >&2
+    echo "usage: piglit.sh [-g|-z ICD] [-p surfaceless|gbm] [-o OUT] PART...|all" \
+        "| piglit.sh [-g|-z ICD] [-p surfaceless|gbm] [-o OUT] -l LIST [-e N] [-s START]" >&2
     exit 2
 }
 
-out=. gpu=0 list='' every=1 start=1 platform=surfaceless
-while getopts o:gp:l:e:s: o; do
+out=. gpu=0 icd='' list='' every=1 start=1 platform=surfaceless
+while getopts o:gz:p:l:e:s: o; do
     case $o in
         o) out=$OPTARG ;;
         p) platform=$OPTARG ;;
         g) gpu=1 ;;
+        z) icd=$OPTARG ;;
         l) list=$OPTARG ;;
         e) every=$OPTARG ;;
         s) start=$OPTARG ;;
@@ -140,6 +147,8 @@ done
 shift $((OPTIND - 1))
 case $every$start in *[!0-9]*) usage ;; esac
 case $platform in surfaceless | gbm) ;; *) usage ;; esac
+[ -z "$icd" ] || { [ "$gpu" -eq 0 ] && [ "$platform" = surfaceless ]; } || usage
+[ -z "$icd" ] || [ -f "$icd" ] || { echo "piglit: no ICD file $icd" >&2; exit 1; }
 if [ -n "$list" ]; then
     [ $# -eq 0 ] && [ "$every" -ge 1 ] && [ "$start" -ge 1 ] && [ "$start" -le "$every" ] || usage
     [ -f "$list" ] || { echo "piglit: no list $list" >&2; exit 1; }
@@ -184,6 +193,11 @@ if [ "$platform" = gbm ]; then
 elif [ "$gpu" -eq 1 ]; then
     piglit_platform=surfaceless_egl
     runner_record "env PIGLIT_NO_FAST_SKIP=1"
+elif [ -n "$icd" ]; then
+    piglit_platform=surfaceless_egl
+    LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=zink VK_DRIVER_FILES=$icd
+    export LIBGL_ALWAYS_SOFTWARE GALLIUM_DRIVER VK_DRIVER_FILES
+    runner_record "env LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=zink VK_DRIVER_FILES=$icd PIGLIT_NO_FAST_SKIP=1"
 else
     piglit_platform=surfaceless_egl
     LIBGL_ALWAYS_SOFTWARE=1
