@@ -2379,31 +2379,31 @@ static void beep_threaded(void)
     speaker_get_counters(&c0);
     speaker_tone(SPEAKER_CLOCK / 750, 100);
     speaker_get_counters(&c);
-    check(beep_verbs == before && beep_owed && (service_wanted & HDA_SERVE_BEEP),
+    check(beep_verbs == before && beep_queued && (service_wanted & HDA_SERVE_BEEP),
           "a tone hands divider 16 to khda and sends no verb");
     check(c.beeps == c0.beeps + 1 && c.beep_divider == 16,
           "the counters name the divider handed on");
     run_khda();
-    check(beep_verbs == before && pin_ctl[23] == 0 && beep_owed,
+    check(beep_verbs == before && pin_ctl[23] == 0 && beep_queued,
           "khda leaves the pins and the tone while the jacks are held");
     hda_jack_release();
     beep_ticks(1);
     run_khda();
-    check(beep_ctl[18] == (0x100 | 16) && pin_ctl[23] == 0x40 && r->beep_path && !beep_owed,
+    check(beep_ctl[18] == (0x100 | 16) && pin_ctl[23] == 0x40 && r->beep_path && !beep_queued,
           "once they are not, the tick asks again and khda turns the pin on and sends it");
     beep_ticks(99);
     speaker_get_counters(&c);
-    check(beep_ctl[18] == (0x100 | 16) && beep_owed && c.ends == c0.ends + 1 &&
+    check(beep_ctl[18] == (0x100 | 16) && beep_queued && c.ends == c0.ends + 1 &&
               c.beep_retries == c0.beep_retries && c.beep_divider == 0,
           "the tick ending the tone hands the stop to khda and sends no verb");
     before = beep_verbs;
     speaker_tone(SPEAKER_CLOCK / 1000, 100);
     run_khda();
-    check(beep_ctl[18] == (0x100 | 12) && beep_verbs == before + 1 && !beep_owed,
+    check(beep_ctl[18] == (0x100 | 12) && beep_verbs == before + 1 && !beep_queued,
           "a tone before khda sends the stop replaces it");
     speaker_tone(0, 0);
     run_khda();
-    check(beep_ctl[18] == 0x100 && pin_ctl[23] == 0x40 && !beep_owed,
+    check(beep_ctl[18] == 0x100 && pin_ctl[23] == 0x40 && !beep_queued,
           "khda sends a request's stop and leaves the pin on");
     beep_ticks(HDA_BEEP_IDLE_TICKS);
     run_khda();
@@ -2416,10 +2416,10 @@ static void beep_threaded(void)
     run_khda();
     speaker_get_counters(&c);
     check(beep_ctl[18] == (0x100 | 16) && pin_ctl[23] == 0x40 && c.ends == c0.ends + 1 &&
-              beep_owed && beep_next == 0 && (service_wanted & HDA_SERVE_BEEP),
+              beep_queued && beep_next == 0 && (service_wanted & HDA_SERVE_BEEP),
           "the tick's stop that comes while khda sends the tone stays owed");
     run_khda();
-    check(beep_ctl[18] == 0x100 && !beep_owed, "and khda sends it next");
+    check(beep_ctl[18] == 0x100 && !beep_queued, "and khda sends it next");
     hda_test_threaded = false;
     service_wanted = 0;
 }

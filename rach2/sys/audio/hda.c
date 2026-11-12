@@ -3302,8 +3302,8 @@ static volatile uint8_t beep_div = 0;     /* the divider sounding; 0 silent */
 static volatile bool beep_opened = false; /* a beep turned the output pins on
                                              with no stream playing */
 static uint32_t beep_quiet = 0;           /* ticks silent since, while opened */
-static volatile bool beep_owed = false;   /* beep_next waits for the beep's
-                                             service */
+static volatile bool beep_queued = false; /* beep_next waits for the beep's
+                                            service */
 static volatile uint8_t beep_next = 0;    /* the divider a tone or a stop
                                              handed to khda; 0 a stop */
 
@@ -4211,7 +4211,7 @@ void hda_tick(void)
                 wanted |= HDA_SERVE_JACKS;
         }
     }
-    if (beep_owed) {
+    if (beep_queued) {
         wanted |= HDA_SERVE_BEEP;
     } else if (beep_opened && !beep_div) {
         if (!playing)
@@ -5285,7 +5285,7 @@ static void hda_find_beep(void)
 
     beep_nid = 0;
     beep_div = 0;
-    beep_owed = false;
+    beep_queued = false;
     beep_opened = false;
     beep_quiet = 0;
     hda_report.beep = hda_report.beep_divider = hda_report.beep_path = 0;
@@ -5331,7 +5331,7 @@ static int hda_beep_stop(void)
 {
     if (hda_verb(codec_addr, beep_nid, HDA_VERB_SET_BEEP | 0, HDA_VERB_TRY, NULL) != 0)
         return -EBUSY;
-    beep_owed = false;
+    beep_queued = false;
     beep_div = 0;
     hda_report.beep_divider = 0;
     return 0;
@@ -5399,14 +5399,14 @@ static int hda_beep(uint32_t hz, int tick)
     }
     if (hda_service_threaded()) {
         beep_next = (uint8_t)div;
-        beep_owed = true;
+        beep_queued = true;
         hda_service_kick(HDA_SERVE_BEEP);
         return (int)div;
     }
     if (tick)
         return hda_beep_stop();
     hda_jack_hold();
-    beep_owed = false;
+    beep_queued = false;
     if (div && !playing && !beep_opened) {
         hda_route_output(HDA_VERB_WAIT);
         hda_set_eapd(true);
@@ -5448,9 +5448,9 @@ static bool hda_beep_owed(void)
     flags = kirq_save();
     hda_beep_sent(div);
     if (beep_next == div)
-        beep_owed = false;
+        beep_queued = false;
     kirq_restore(flags);
-    return !beep_owed;
+    return !beep_queued;
 }
 
 /**
@@ -5468,7 +5468,7 @@ static void hda_beep_service(void)
 {
     bool ok = true;
 
-    if (beep_owed && !hda_beep_owed())
+    if (beep_queued && !hda_beep_owed())
         return;
     if (!beep_opened || beep_div)
         return;
