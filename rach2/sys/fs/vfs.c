@@ -3125,7 +3125,12 @@ int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t o
  * the device's sync for a type with neither, then the device's flush. A
  * flush that fails is reported to the mounts on the device
  * (`vfs_device_failed`) under the big lock, which is taken when the caller,
- * a sync of a type that sets `writes_unlocked`, lacks it. */
+ * a sync of a type that sets `writes_unlocked`, lacks it. Once a write on
+ * the device has failed, the mount's `write_error` is the answer, whatever
+ * the type's: a write the flusher or an eviction made and that failed is
+ * kept only there, and a later write of the same block that succeeds would
+ * hide it, as Linux's fsync reports a mapping's kept error after the
+ * buffers it syncs (`sync_mapping_buffers`, fs/buffer.c:618). */
 static int sync_handle(struct vfs_mount *mnt, void *handle,
                        int (*op)(struct vfs_mount *mnt, void *handle))
 {
@@ -3148,6 +3153,9 @@ static int sync_handle(struct vfs_mount *mnt, void *handle,
                 bkl_exit();
             }
         }
+    }
+    if (mount_base(mnt)->write_error) {
+        rc = mount_base(mnt)->write_error;
     }
     return rc;
 }
