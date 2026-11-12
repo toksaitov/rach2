@@ -376,10 +376,18 @@ static void fc_free(struct fc_page *p)
 
 /**
  * Put `p`, which `fc_new` gave and whose frame holds page `pgoff` of `f` as
- * just read, into the cache in place of any page it had there, unless a
- * change of the file has been recorded since `epoch`; a page read from the
- * file as it was before is dropped with the rest of the file's pages. 1, or
- * 0 when `p` stays the caller's.
+ * just read, into the cache, unless a change of the file has been recorded
+ * since `epoch` or the cache holds that page of the file already; a page
+ * read from the file as it was before is dropped with the rest of the
+ * file's pages. 1, or 0 when `p` stays the caller's.
+ *
+ * A page already held is kept, since a change of the file drops its pages
+ * and so the one there is as current as `p`: two readers that miss the same
+ * page both read it, and the second's copy goes. Linux's
+ * `__filemap_add_folio` likewise fails with -EEXIST on a folio present in
+ * the mapping (mm/filemap.c:872-876), and `filemap_create_folio` then puts
+ * its own folio and has its caller look the page up again
+ * (mm/filemap.c:2495-2511).
  *
  * A new file record is allocated with `fc_lock` let go, which keeps the
  * heap's work out of the hold. Whether one is needed is read under the
@@ -388,8 +396,8 @@ static void fc_free(struct fc_page *p)
  * between; the second hold looks the file up again. Linux's
  * `__filemap_add_folio` reads the mapping's entries only under the
  * `i_pages` lock, and after an allocation made with the lock let go takes
- * it again and checks them anew (mm/filemap.c:867-933, the allocations at
- * 922 and 932, the check again at 886).
+ * it again and checks them anew (mm/filemap.c:867-937, the allocations at
+ * 926 and 935, the check again at 872-887).
  */
 static int fc_insert(const struct fc_file *f, uint32_t pgoff, struct fc_page *p, uint32_t epoch)
 {
@@ -421,9 +429,9 @@ static int fc_insert(const struct fc_file *f, uint32_t pgoff, struct fc_page *p,
     bucket = fc_bucket(f->mnt, f->ino, pgoff);
     for (old = file ? *bucket : NULL; old; old = old->next) {
         if (old->file == file && old->pgoff == pgoff) {
-            fc_drop(old);
-            file = fc_find(f->mnt, f->ino);
-            break;
+            spin_unlock_irqrestore(&fc_lock, flags);
+            kfree(spare);
+            return 0;
         }
     }
     if (!file && !spare) {
