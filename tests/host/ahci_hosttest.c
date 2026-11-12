@@ -65,6 +65,8 @@ static const char *logged_why;
    the block layer's completions. */
 static unsigned issued;
 static unsigned stale_issues;
+/* The driver's writes of port 0's PxIS. */
+static unsigned is_writes;
 static unsigned completed;
 static struct block_request *last_completed;
 static uint32_t last_generation;
@@ -188,7 +190,9 @@ static void model_issue(uint32_t base, uint32_t v)
  * brings it up when `link_comes_up`, so a port that starts with no link gets
  * one only through a reset. PxCMD.CR and FR follow ST and FRE, except that a
  * stuck engine keeps CR; an engine that stops clears PxCI. IS, PxIS and
- * PxSERR are write-one-to-clear. A write of PxCI issues commands.
+ * PxSERR are write-one-to-clear, and a bit of IS cleared while its port's
+ * PxIS is still set comes back, since IS latches the ports' status (AHCI
+ * 1.3.1, 10.6.2). A write of PxCI issues commands.
  */
 static void model_w32(uint32_t off, uint32_t v)
 {
@@ -238,8 +242,14 @@ static void model_w32(uint32_t off, uint32_t v)
         reg[off] = v;
         return;
     }
+    if (off == P0 + P_IS) {
+        is_writes++;
+    }
     if (off == R_IS || off == base + P_IS || off == base + P_SERR) {
         reg[off] &= ~v;
+        if (off == R_IS) {
+            reg[R_IS] |= (reg[P0 + P_IS] ? 1u : 0u) | (reg[P1 + P_IS] ? 2u : 0u);
+        }
         return;
     }
     if (off == base + P_CI) {
@@ -778,7 +788,7 @@ static void model_reset(void)
     fatal_status = 0;
     engine_stuck = 0;
     immediate_interrupt = 0;
-    stop_reads = issued = completed = stale_issues = 0;
+    stop_reads = issued = completed = stale_issues = is_writes = 0;
     interrupts_masked = 0;
     reg[R_CAP2] = 0u;
     block0 = 0;
@@ -855,6 +865,7 @@ static void stuck_recovery(int path)
         reg[P0 + P_CI] = 1;
         if (path == 0) {
             reg[P0 + P_IS] = AHCI_PxIS_FATAL;
+            reg[R_IS] = 1;
             ahci_handler(0);
         } else if (path == 1) {
             (void)spin_lock_irqsave(&d->lock);
@@ -862,6 +873,7 @@ static void stuck_recovery(int path)
         } else if (path == 2) {
             reg[P0 + P_CI] = 0;
             reg[P0 + P_IS] = AHCI_PxIS_FATAL;
+            reg[R_IS] = 1;
             ahci_handler(0);
         } else {
             ahci_polled_failed(d, ATA_IDENTIFY, "the row's recovery");
@@ -876,10 +888,11 @@ static void stuck_recovery(int path)
  * Check the interrupt handler when completions arrive at once.
  *
  * A completed write issues its flush, and the flush completes before the
- * handler returns. The handler leaves that completion, and another port's
- * bit of IS, pending; its next call completes the request and starts the
- * queued read, and the call after that completes the read and notes its
- * delay from the time it was taken.
+ * handler returns. The handler clears the port's status before it handles
+ * the port, so that completion stays pending, with another port's bit of
+ * IS; its next call completes the request and starts the queued read, and
+ * the call after that completes the read and notes its delay from the time
+ * it was taken. The issues write PxCI alone.
  */
 static void quick_completions(void)
 {
@@ -901,6 +914,7 @@ static void quick_completions(void)
     reg[P0 + P_CI] = 0;
     reg[R_IS] = 3;
     immediate_interrupt = 1;
+    is_writes = 0;
     ahci_handler(0);
     CHECK("the completed write issued its flush", issued == 1 && ahci_disks[0].flushing);
     CHECK("the quick flush completion is still pending", (reg[P0 + P_IS] & 1) != 0);
@@ -918,6 +932,43 @@ static void quick_completions(void)
     CHECK("and its delay is noted from the time it was taken",
           disk_spans == 1 && disk_span_from == 4200);
     CHECK("the other port remains pending", reg[R_IS] == 2);
+    CHECK("no issue cleared the port's status", is_writes == 3);
+}
+
+/**
+ * Check that the interrupt judges a completed command by the status of the
+ * D2H register FIS the controller wrote, where PxTFD reads clean: an error
+ * or a device fault there fails the request with -EIO after the port's
+ * recovery, and a clean status completes it.
+ */
+static void received_status(void)
+{
+    static const uint8_t bad[2] = {0x41, 0x60};
+    static uint8_t buf[512];
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        model_reset();
+        CHECK("the received status row starts a port",
+              ahci_select_port() == 0 && ahci_port_start(&ahci_disks[0]) == 0);
+        k_memset(&active_request, 0, sizeof(active_request));
+        active_request.count = 1;
+        active_request.page = buf;
+        ahci_disks[0].active = &active_request;
+        ahci_disks[0].flushing = 0;
+        ((volatile ahci_cmd_header_t *)ahci_disks[0].cmdlist)->prdbc = 512;
+        ahci_disks[0].recv_fis[AHCI_RFIS_STATUS] = i < 2 ? bad[i] : 0x40;
+        reg[P0 + P_TFD] = 0x40;
+        reg[P0 + P_CI] = 0;
+        reg[P0 + P_IS] = 1;
+        reg[R_IS] = 1;
+        ahci_handler(0);
+        CHECK("a completion is judged by the received FIS's status",
+              completed == 1 && last_completed == &active_request &&
+                  last_status == (i < 2 ? -EIO : 0) && !ahci_disks[0].active);
+        CHECK("and the port's and the controller's status are cleared",
+              reg[P0 + P_IS] == 0 && reg[R_IS] == 0);
+    }
 }
 
 /** Complete a selected port's command without advancing time. */
@@ -1315,6 +1366,7 @@ static void claim_wait_rows(void)
 static void interrupt_rows(void)
 {
     quick_completions();
+    received_status();
     independent_ports(0);
     independent_ports(1);
     polled_queue_restart(0);
