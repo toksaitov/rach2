@@ -1606,10 +1606,13 @@ void sched_loadavg(uint32_t avg[3])
  * hand work back and forth, as a renderer's do, then takes each wake in the
  * poll, without an interrupt sent under the big lock, a halt and its exit;
  * one that stays idle, which its tick wakes every millisecond, soon halts at
- * once again. As Linux polls only in a guest, so does this: on a machine
- * of its own an interrupt and a halt cost a few microseconds, and a poll
- * the power of a busy processor. Without a measured counter there is no
- * poll either.
+ * once again. The wait polls only where `arch_idle_poll` says, as Linux
+ * loads cpuidle-haltpoll only where KVM hints that the guest's processors
+ * are its own, or the boot line forces it: on a machine of its own an
+ * interrupt and a halt cost a few microseconds and a poll the power of a
+ * busy processor, and under a host that shares its processors each look
+ * at the request register is an exit. Without a measured counter there is
+ * no poll either.
  */
 static void idle_halt(void)
 {
@@ -1618,7 +1621,7 @@ static void idle_halt(void)
     uint64_t start, limit, now, look, gone;
     uint32_t grow;
 
-    if (per_us == 0 || !arch_guest()) {
+    if (per_us == 0 || !arch_idle_poll()) {
         arch_idle_masked();
         return;
     }

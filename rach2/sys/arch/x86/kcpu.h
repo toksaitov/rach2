@@ -46,6 +46,10 @@ int kcpu_x2apic_unremapped(void);
  * kvm_arch_para_features (arch/x86/include/asm/kvm_para.h). */
 uint32_t kcpu_kvm_features(void);
 
+/** KVM's hints, the same leaf's EDX, as Linux's kvm_arch_para_hints
+ * (arch/x86/kernel/kvm.c:934-937); 0 without KVM. */
+uint32_t kcpu_kvm_hints(void);
+
 /** Whether the firmware locked the APIC in x2APIC mode, so that it cannot
  * be returned to xAPIC mode. */
 int kcpu_x2apic_locked(void);

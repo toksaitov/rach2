@@ -170,24 +170,40 @@ int kcpu_x2apic_unremapped(void)
 }
 
 /**
- * Linux's kvm_arch_para_features (arch/x86/include/asm/kvm_para.h): EAX of
- * the leaf after the base that holds KVM's signature, which may sit at any
- * base from 0x40000000 when another hypervisor's leaves come first.
+ * The leaf after the base that holds KVM's signature, which may sit at any
+ * base from 0x40000000 when another hypervisor's leaves come first: its EAX
+ * in `*a` and EDX in `*d`, both 0 without KVM beneath.
  */
-uint32_t kcpu_kvm_features(void)
+static void kvm_leaf(uint32_t *a, uint32_t *d)
 {
-    uint32_t c = 0, a = 0, base;
+    uint32_t c = 0, base;
 
+    *a = 0;
+    *d = 0;
     kcpu_id(1, 0, 0, &c, 0);
     if ((c & (1u << 31)) == 0) {
-        return 0; /* no hypervisor beneath */
+        return; /* no hypervisor beneath */
     }
     base = hypervisor_base("KVMKVMKVM\0\0\0", 0);
-    if (base == 0) {
-        return 0;
+    if (base != 0) {
+        kcpu_id(base + 1u, a, 0, 0, d);
     }
-    kcpu_id(base + 1u, &a, 0, 0, 0);
+}
+
+uint32_t kcpu_kvm_features(void)
+{
+    uint32_t a, d;
+
+    kvm_leaf(&a, &d);
     return a;
+}
+
+uint32_t kcpu_kvm_hints(void)
+{
+    uint32_t a, d;
+
+    kvm_leaf(&a, &d);
+    return d;
 }
 
 /**
