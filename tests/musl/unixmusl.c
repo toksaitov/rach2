@@ -36,9 +36,11 @@
  * with EFAULT and leaves the message for the next receive. A descriptor of a
  * KRFFS file in /tmp, sent before a write moves the file and received after
  * the sender's close and the unlink, has the file's size and reads its bytes.
- * A receive under SO_RCVTIMEO whose waking signals a sibling thread takes
- * still times out with EAGAIN. SO_PEERCRED of a socket with no peer gives pid
- * 0 and ids -1 inside a user namespace with no maps.
+ * A receive under SO_RCVTIMEO whose waking signal a sibling thread takes
+ * still times out with EAGAIN, and a MSG_WAITALL receive under it ends at
+ * its limit with part of its bytes when they come slowly. SO_PEERCRED of a
+ * socket with no peer gives pid 0 and ids -1 inside a user namespace with no
+ * maps.
  *
  * It prints "UNIXMUSL OK" and exits 0 on success, or prints "UNIXMUSL FAIL
  * (detail: errno N)" and exits 1 at the first failure. Ids 1000 and 65534 are
@@ -173,8 +175,10 @@ static const char *const assertion_id[] = {"stream-pair",
                                            "short-creds-setup",
                                            "short-creds-length",
                                            "timeo-setup",
-                                           "timeo-eagain",
                                            "timeo-sibling",
+                                           "timeo-eagain",
+                                           "waitall-setup",
+                                           "waitall-partial",
                                            "nopeer-userns",
                                            "nopeer-ids"};
 
@@ -1377,77 +1381,106 @@ static int short_control(void)
     return 0;
 }
 
-/* The rounds of `sibling_signals`, a signal each, and the time limit in
- * microseconds of the receive they interrupt. */
+/* The rounds `timed_after_signals` tries for one whose waking signal the
+ * sibling takes, and the time limit in microseconds of each receive. */
 #define SIBLING_ROUNDS 50
 #define SIBLING_TIMEO  100000
 
-/* The thread that sends `timed_after_signals`' signals, the number of them
- * it took itself, and whether it has sent the last. */
-static pthread_t sibling;
+/* The leader of `timed_after_signals`, the SIGUSR1s that other threads
+ * took, the round whose receive has begun, the round whose signal the
+ * sibling has sent or passed over, whether the sibling took that signal, the
+ * round whose receive has ended, and whether the rounds are over. */
+static pthread_t sibling_leader;
 static volatile sig_atomic_t sibling_took;
-static volatile sig_atomic_t sibling_done;
+static volatile int round_begun;
+static volatile int round_sent;
+static volatile int round_took;
+static volatile int round_ended;
+static volatile int rounds_over;
 
-/** Count a SIGUSR1 that the sibling thread takes. */
+/** Count a SIGUSR1 that a thread other than the leader takes. */
 static void took_usr1(int signo)
 {
     (void)signo;
-    if (pthread_equal(pthread_self(), sibling)) {
+    if (!pthread_equal(pthread_self(), sibling_leader)) {
         sibling_took++;
     }
 }
 
 /**
- * The sibling of `timed_after_signals`: once the leader, `*arg`, is seen
- * asleep, send SIGUSR1 to the process, which wakes the sleeping leader, and
- * at once unblock SIGUSR1 again, which makes this thread see the signal
- * pending and take it itself, most often before the leader looks.
+ * The sibling of `timed_after_signals`: in each round, once the leader,
+ * `*arg`, is asleep in the round's receive, send SIGUSR1 to the process
+ * while this thread blocks it, so that its wake goes to the leader, and at
+ * once unblock it, which most often makes this thread take it before the
+ * leader looks. It then sends nothing and stays runnable, yielding, until
+ * the receive ends, so a signal it took is that receive's only wake, and no
+ * idle processor stands in for a lost deadline.
  */
 static void *sibling_signals(void *arg)
 {
     pid_t leader = *(pid_t *)arg;
+    sig_atomic_t before;
     char path[64];
     sigset_t usr1;
-    int i, j;
+    int round, j;
 
     snprintf(path, sizeof(path), "/proc/self/task/%d/stat", (int)leader);
     sigemptyset(&usr1);
     sigaddset(&usr1, SIGUSR1);
-    for (i = 0; i < SIBLING_ROUNDS; i++) {
-        while (stat_state(path) != 'S') {
+    for (round = 1; round <= SIBLING_ROUNDS; round++) {
+        while (round_begun != round && !rounds_over) {
             sched_yield();
         }
-        kill(leader, SIGUSR1);
-        for (j = 0; j < 64; j++) {
-            sigprocmask(SIG_UNBLOCK, &usr1, NULL);
+        if (rounds_over) {
+            break;
+        }
+        while (stat_state(path) != 'S' && round_ended != round) {
+            sched_yield();
+        }
+        round_took = 0;
+        if (round_ended != round) {
+            before = sibling_took;
+            pthread_sigmask(SIG_BLOCK, &usr1, NULL);
+            kill(leader, SIGUSR1);
+            for (j = 0; j < 64; j++) {
+                pthread_sigmask(SIG_UNBLOCK, &usr1, NULL);
+            }
+            round_took = sibling_took != before;
+        }
+        round_sent = round;
+        while (round_ended != round) {
+            sched_yield();
         }
     }
-    sibling_done = 1;
     return NULL;
 }
 
 /**
  * Check that a receive under SO_RCVTIMEO still ends with EAGAIN when the
- * signals that wake it are taken by a sibling thread: its wait then goes on,
- * and must keep its deadline, as Linux's does (net/unix/af_unix.c:2608). The
- * leader receives again after each EINTR it takes itself, until a receive
- * after the sibling's last signal times out; a wait that lost its deadline
- * sleeps for ever, and the case's watchdog ends it. Returns 0, or 1 after
- * the failure is printed.
+ * signal that wakes it is taken by a sibling thread: its wait then goes on,
+ * and must keep its deadline, as Linux's does (net/unix/af_unix.c:2608).
+ * Each round is one receive and one signal; the leader takes some of them,
+ * which end its receive with EINTR, and the first round whose signal the
+ * sibling took is judged. Nothing else wakes that receive, so a wait that
+ * lost its deadline sleeps for ever, and the case's watchdog ends it.
+ * Returns 0, or 1 after the failure is printed.
  */
 static int timed_after_signals(void)
 {
     struct sigaction sa, old;
     struct timeval tv;
+    pthread_t sibling;
     pid_t self = getpid();
+    int sv[2], round, took = 0, err = 0;
+    ssize_t n = 0;
     char byte;
-    int sv[2];
 
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = took_usr1;
     sigemptyset(&sa.sa_mask);
     tv.tv_sec = 0;
     tv.tv_usec = SIBLING_TIMEO;
+    sibling_leader = pthread_self();
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
         setsockopt(sv[0], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0 ||
         sigaction(SIGUSR1, &sa, &old) != 0 ||
@@ -1455,20 +1488,111 @@ static int timed_after_signals(void)
         return fail("setup for a timed receive under a sibling's signals");
     }
     row_held();
-    for (;;) {
-        if (recv(sv[0], &byte, 1, 0) != -1 || (errno != EINTR && errno != EAGAIN)) {
-            return fail("a timed receive under signals ended other than EINTR or EAGAIN");
+    for (round = 1; round <= SIBLING_ROUNDS && !took; round++) {
+        round_begun = round;
+        n = recv(sv[0], &byte, 1, 0);
+        err = errno;
+        round_ended = round;
+        while (round_sent != round) {
+            sched_yield();
         }
-        if (errno == EAGAIN && sibling_done) {
+        if (n != -1 || (err != EINTR && err != EAGAIN)) {
             break;
         }
+        took = round_took;
     }
-    row_held();
-    if (pthread_join(sibling, NULL) != 0 || sibling_took == 0) {
-        return fail("no signal of the process was taken by the sibling thread");
-    }
-    row_held();
+    rounds_over = 1;
+    pthread_join(sibling, NULL);
     sigaction(SIGUSR1, &old, NULL);
+    errno = err;
+    if (n != -1 || (err != EINTR && err != EAGAIN)) {
+        return fail("a timed receive under signals ended other than EINTR or EAGAIN");
+    }
+    if (!took) {
+        return fail("in no round did the sibling thread take the signal that woke the receive");
+    }
+    row_held();
+    if (err != EAGAIN) {
+        return fail("a timed receive whose waking signal the sibling took did not end with EAGAIN");
+    }
+    row_held();
+    close(sv[0]);
+    close(sv[1]);
+    return 0;
+}
+
+/* The bytes a MSG_WAITALL receive asks for, the time limit in microseconds
+ * of that receive, and the interval in microseconds at which the writer
+ * sends them a byte at a time. */
+#define WAITALL_BYTES 8
+#define WAITALL_TIMEO 200000
+#define WAITALL_GAP   50000
+
+/* The receiving thread of `timed_waitall`, the process's leader, and
+ * whether its receive ended. */
+static pid_t waitall_reader;
+static volatile int waitall_ended;
+
+/**
+ * The writer of `timed_waitall`: once the reader is asleep in its receive,
+ * send WAITALL_BYTES bytes to the socket `*arg`, one each WAITALL_GAP, each
+ * well before the receive's time limit after the one before.
+ */
+static void *waitall_writer(void *arg)
+{
+    int fd = *(int *)arg;
+    char path[64];
+    int i;
+
+    snprintf(path, sizeof(path), "/proc/self/task/%d/stat", (int)waitall_reader);
+    while (stat_state(path) != 'S' && !waitall_ended) {
+        sched_yield();
+    }
+    for (i = 0; i < WAITALL_BYTES; i++) {
+        if (send(fd, "w", 1, 0) != 1) {
+            break;
+        }
+        /* interval: the bytes are paced, a quarter of the time limit apart */
+        usleep(WAITALL_GAP);
+    }
+    return NULL;
+}
+
+/**
+ * Check that a MSG_WAITALL receive under SO_RCVTIMEO ends at its one time
+ * limit with the bytes it has, as Linux carries the remaining timeout
+ * through each wait for more (net/unix/af_unix.c:2817, 2874): bytes that
+ * come a quarter of the limit apart do not stretch the receive until it has
+ * them all, which takes nearly twice the limit. A writer held off past the
+ * limit leaves the receive nothing, EAGAIN, which is right too. Returns 0,
+ * or 1 after the failure is printed.
+ */
+static int timed_waitall(void)
+{
+    char buf[WAITALL_BYTES];
+    struct timeval tv;
+    pthread_t writer;
+    ssize_t n;
+    int sv[2], err;
+
+    tv.tv_sec = 0;
+    tv.tv_usec = WAITALL_TIMEO;
+    waitall_reader = getpid();
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
+        setsockopt(sv[0], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0 ||
+        pthread_create(&writer, NULL, waitall_writer, &sv[1]) != 0) {
+        return fail("setup for a timed MSG_WAITALL receive");
+    }
+    row_held();
+    n = recv(sv[0], buf, sizeof(buf), MSG_WAITALL);
+    err = errno;
+    waitall_ended = 1;
+    pthread_join(writer, NULL);
+    errno = err;
+    if (n >= WAITALL_BYTES || n == 0 || (n < 0 && err != EAGAIN)) {
+        return fail("a MSG_WAITALL receive did not end at its time limit with part of its bytes");
+    }
+    row_held();
     close(sv[0]);
     close(sv[1]);
     return 0;
@@ -1521,7 +1645,7 @@ int main(int argc, char **argv)
         listening() || backlog_growth() || datagram_peers() || full_receiver_shut() ||
         full_with_fds() || chain_close() || datagram_names() || waiting() || shut_writable() ||
         recvfrom_no_length() || moved_in_flight() || short_control() || timed_after_signals() ||
-        no_peer_userns()) {
+        timed_waitall() || no_peer_userns()) {
         return 1;
     }
     report_end();

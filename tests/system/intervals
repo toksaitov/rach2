@@ -100,3 +100,4 @@ tests/musl/wakelatmusl.c: the measured 5 ms deadline is the workload
 tests/wow64probe.c: a long sleep that the timer's signal ends
 tests/wow64probe.c: a sleep of a millisecond that completes
 tests/musl/kvmipimusl.c: the guest's counts are looked at every 50 ms
+tests/musl/unixmusl.c: the bytes are paced, a quarter of the time limit apart
