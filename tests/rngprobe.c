@@ -29,6 +29,15 @@
 
 #include "../rach2/sys/arch/x86/kcpu.c"
 
+/** The kernel's count of the instructions a hypervisor may take as exits,
+ * which `kcpu_id_sub` and the MSR accesses make (exits.c); a program has no
+ * such count, so it counts nothing. */
+void exits_count(unsigned int kind, uint32_t number)
+{
+    (void)kind;
+    (void)number;
+}
+
 #define O_RDONLY      0
 #define GRND_INSECURE 0x0004u
 #define EIO           5
