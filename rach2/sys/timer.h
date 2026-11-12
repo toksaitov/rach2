@@ -212,8 +212,9 @@ int timer_wakes_between(void);
  * sleepers whose time of the monotonic clock has come before their tick
  * (`proc_wake_due`), and expire the timers whose clock has reached their
  * time (`timerfd_due`), each of which arms again every time still to come,
- * however far. kernel.c defines it; the caller holds the big lock with
- * interrupts off.
+ * however far, and post the POSIX timers' signals when the big lock is
+ * free, leaving them to a tick when it is not. kernel.c defines it; the
+ * caller holds no lock, the big lock included, with interrupts off.
  */
 void timer_hr_pass(void);
 

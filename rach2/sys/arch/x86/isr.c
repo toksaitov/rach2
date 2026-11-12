@@ -1018,14 +1018,13 @@ static int timer_vector(uint32_t vector)
  * tick's vector that the clock says is not the tick is acknowledged and
  * goes no further, returning as a tick does, with a frame of its own that
  * holds no lock, so that `isr_leave` pops no frame of the code it
- * interrupted. The timer's
- * interrupts, the tick and the one between ticks, note when they came and
- * when they went on, which a timed wake they make is measured from
- * (`waketime_expire`). The interrupt between ticks takes the big lock, as a
- * device's does, so that it posts the signals of the POSIX timers it
- * expires at once (`timer_hr_pass`). Every tick runs the lockup detectors'
- * part (`watchdog_tick`) first, since a processor locked up with interrupts
- * off may hold the big lock for good.
+ * interrupted. The timer's interrupts, the tick and the one between
+ * ticks, note when they came and when they went on, which a timed wake
+ * they make is measured from (`waketime_expire`). The interrupt between
+ * ticks is registered ISR_UNLOCKED and takes the big lock only by a try,
+ * to post the signals of the POSIX timers it expires (`timer_hr_pass`).
+ * Every tick runs the lockup detectors' part (`watchdog_tick`) first, since
+ * a processor locked up with interrupts off may hold the big lock for good.
  *
  * An interrupt that ended a halt, which it knows by the frame's address,
  * resumes with interrupts off. Otherwise a tick already pending at the

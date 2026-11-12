@@ -313,17 +313,27 @@ static void timer_wake_pass(void)
     timer_wake_release();
 }
 
-/** The pass of an interrupt between ticks: the sleepers and timers whose
+/**
+ * The pass of an interrupt between ticks: the sleepers and timers whose
  * time of their clock has come before their tick, with the interrupt
- * programmed once for the earliest time still to come. The router has
- * taken the big lock for it, so the signals of the POSIX timers it expired
- * are posted now, and not left for a tick (`ptimer_post_due`). */
+ * programmed once for the earliest time still to come. The wakes take only
+ * their own locks, as Linux's hrtimer_interrupt takes only its processor's
+ * base lock (kernel/time/hrtimer.c:1849, 1860). The signals of the POSIX
+ * timers it expired are posted under the big lock, taken by a try, as the
+ * tick takes it (`timer_lock_take`): when another processor holds it, they
+ * wait for the next tick on any processor that takes it (`ptimer_post_due`),
+ * so that a holder elsewhere delays no wake and no tick here. Interrupts
+ * are off and no lock is held.
+ */
 void timer_hr_pass(void)
 {
     timer_wake_hold();
     proc_wake_due();
     timerfd_due();
-    ptimer_post_due();
+    if (ptimer_posts_due() && bkl_try_enter()) {
+        ptimer_post_due();
+        bkl_exit();
+    }
     timer_wake_release();
 }
 
