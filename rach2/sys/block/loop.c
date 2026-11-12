@@ -398,9 +398,9 @@ void loop_repoint(struct vfs_mount *mnt, const void *from, void *to)
 }
 
 /**
- * A file goes by either name: callers that have a node ask with a node, and
- * callers that have a description ask with the handle the file system gave
- * its open.
+ * Whether the file `node` of `mnt` backs a loop device. A caller with an
+ * open handle asks with its node (`handle_node` in vfs.c), since another
+ * open of the same file has a handle of its own.
  */
 int loop_backs(struct vfs_mount *mnt, void *node)
 {
@@ -410,7 +410,7 @@ int loop_backs(struct vfs_mount *mnt, void *node)
         if (loops[i].mnt != mnt) {
             continue;
         }
-        if (loops[i].node == node || loops[i].handle == node) {
+        if (loops[i].node == node) {
             return 1;
         }
     }
