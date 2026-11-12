@@ -1361,6 +1361,8 @@ static void sched_account_one(struct percpu *cpu, int mode)
     }
 }
 
+int sched_cycle_account;
+
 /**
  * Each tick is counted as `sched_account_one` counts one. A processor
  * counts the ticks of its own clock, the monotonic time since its last
@@ -1386,7 +1388,9 @@ static void sched_account_one(struct percpu *cpu, int mode)
  * next tick.
  *
  * A tick is charged to the mode it finds, as Linux's is (`user_mode`, from
- * update_process_times, kernel/time/timer.c:2519). One that comes while
+ * update_process_times, kernel/time/timer.c:2519), and with the cycle
+ * account off (`sched_cycle_account`) that is all: the Debian kernel 80-92
+ * measured, without nohz_full, charges its tick so. One that comes while
  * interrupts are off is held and taken as they come back on. A system
  * call's handler runs with them on, and its entry runs with them off until
  * the dispatcher turns them on. Its exit turns them off after the handler
@@ -1398,18 +1402,19 @@ static void sched_account_one(struct percpu *cpu, int mode)
  * interrupt's handler run with them off too. A tick held to the first user
  * instruction after the call, or to the start of an idle wait's halt, would
  * be charged to the program or to idle although it came in the kernel.
- * When the timer keeps the tick's time, `due`, the ticks that would have
- * come before that point (`user_cycles`, which `isr_leave` notes, or
- * `idle_cycles`) are charged where a tick that came on time would have
- * been taken: as system time, or as idle when the stretch that held them
- * began at the end of an idle wait (`idle_end_cycles`) and not at an entry
- * from user mode (`entry_cycles`), since Linux's idle task loops there.
- * The rest are charged to the mode the tick found. A tick comes after its
- * time by the delay of its interrupt, which a hypervisor makes microseconds
- * long, so the time a tick would have come is its time plus the processor's
- * average delay (`tick_late_ns`), which ticks that came with interrupts on
- * measure; comparing the bare time would charge the ticks due in the kernel
- * that came in user mode to the kernel, which Linux charges to the program.
+ * With the cycle account on, when the timer keeps the tick's time, `due`,
+ * the ticks that would have come before that point (`user_cycles`, which
+ * `isr_leave` notes, or `idle_cycles`) are charged where a tick that came
+ * on time would have been taken: as system time, or as idle when the
+ * stretch that held them began at the end of an idle wait
+ * (`idle_end_cycles`) and not at an entry from user mode (`entry_cycles`),
+ * since Linux's idle task loops there. The rest are charged to the mode
+ * the tick found. A tick comes after its time by the delay of its
+ * interrupt, which a hypervisor makes microseconds long, so the time a tick
+ * would have come is its time plus the processor's average delay
+ * (`tick_late_ns`), which ticks that came with interrupts on measure;
+ * comparing the bare time would charge the ticks due in the kernel that
+ * came in user mode to the kernel, which Linux charges to the program.
  */
 void sched_account_tick(int user, int64_t due)
 {
@@ -1425,7 +1430,7 @@ void sched_account_tick(int user, int64_t due)
     }
     ticks = tick_div64((uint64_t)gap, TICK_NS, NULL);
     cpu->accounted_ns += (int64_t)ticks * (int64_t)TICK_NS;
-    if (due != 0 && found != ACCOUNT_SYSTEM) {
+    if (due != 0 && found != ACCOUNT_SYSTEM && sched_cycle_account) {
         on = timer_cycles_when(user ? cpu->user_cycles : cpu->idle_cycles, arch_cycles(), now);
         if (due >= on && now >= due && now - due < (int64_t)TICK_NS) {
             cpu->tick_late_ns += (now - due - cpu->tick_late_ns) / 8;
