@@ -127,6 +127,33 @@ static void ia32_unlock_mm_calls(void)
     syscall_unlock(SYSCALL_ABI_IA32, compat_sys_futex_time32);
 }
 
+/** Mark the i386 id getters with 16-bit ids to run without the big lock,
+ * as the native handlers they call are (`syscall_ids_unlock` in
+ * syscall.c); their conversion uses the thread's own window
+ * (`ia32_native`). */
+static void ia32_unlock_id_calls(void)
+{
+    static syscall_fn_t const calls[] = {
+        compat_sys_getuid16,    compat_sys_geteuid16,   compat_sys_getgid16,
+        compat_sys_getegid16,   compat_sys_getresuid16, compat_sys_getresgid16,
+        compat_sys_getgroups16,
+    };
+    uint32_t i;
+
+    for (i = 0; i < sizeof(calls) / sizeof(calls[0]); i++) {
+        syscall_unlock(SYSCALL_ABI_IA32, calls[i]);
+    }
+}
+
+/** Mark the i386 forms that run without the big lock; the table is
+ * filled. */
+static void ia32_unlock_calls(void)
+{
+    ia32_unlock_file_calls();
+    ia32_unlock_mm_calls();
+    ia32_unlock_id_calls();
+}
+
 /** The rows, one for each i386 number Linux has; `init_syscall` cleared
  * the table first, so a NULL row only says so. */
 void ia32_syscall_init(syscall_fn_t *table)
@@ -583,8 +610,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_LSM_SET_SELF_ATTR] = NULL;
     table[SYS_LSM_LIST_MODULES] = NULL;
     table[SYS_MSEAL] = sys_mseal;
-    ia32_unlock_file_calls();
-    ia32_unlock_mm_calls();
+    ia32_unlock_calls();
 }
 
 #endif /* RACH2_IA32 */
