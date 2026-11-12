@@ -164,7 +164,9 @@ struct ktimer {
                                * taken (`ptimer_rearm`) */
     uint64_t fire_fresh;      /* the expirations the tick counted and left for
                                * a holder of the big lock to signal
-                               * (`ptimer_fire_later`) */
+                               * (`ptimer_fire_later`), or, when the signal
+                               * pending is taken first, to count in its
+                               * overrun (`ptimer_rearm`) */
     struct ktimer *fire_next; /* the list of timers whose signal is due */
     int fire_queued;          /* on that list */
 };
@@ -1676,8 +1678,10 @@ static void timer_unlock(uint32_t irq)
  * (kernel/time/posix-timers.c:267), the intervals the timer's clock has
  * passed are counted, its time moves past the clock and is armed between
  * ticks again, and the setting's expirations since its signal was queued
- * (`set_count`), less the one the signal stands for, are added to the
- * signal's overrun and become the timer's `overrun`, as posixtimer_rearm
+ * (`set_count`), with those a tick counted and left for a holder of the big
+ * lock to post (`ptimer_fire_later`), less the one the signal stands for,
+ * are added to the signal's overrun and become the timer's `overrun`, so
+ * that they post no second signal at once, as posixtimer_rearm
  * forwards and restarts the timer, sets it_overrun_last from it_overrun and
  * adds that to si_overrun, for a periodic timer alone (kernel/time/
  * posix-timers.c:237-242, 244-251, 258-279). A signal of an earlier
@@ -1709,6 +1713,7 @@ void ptimer_rearm(struct tgroup *tg, int signo, struct k_siginfo *info)
             info->timer_key != t->key || info->timer_gen != t->gen) {
             continue;
         }
+        t->set_count += ptimer_fire_cancel(t);
         if (!t->armed || !periodic) {
             t->set_count = 0;
         } else if (t->cpu_tg || read_now(t->base, &r) == 0) {
