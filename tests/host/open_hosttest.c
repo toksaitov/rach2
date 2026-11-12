@@ -3973,7 +3973,7 @@ static void orphan_dup2(void)
 static void orphan_table_end(void)
 {
     fd_release_backing(fd_slot(proc.fds, orphan_fd));
-    fd_free(proc.fds, orphan_fd);
+    fd_free_after(proc.fds, orphan_fd);
 }
 
 /** The close of the descriptor while another process's call holds it, which
