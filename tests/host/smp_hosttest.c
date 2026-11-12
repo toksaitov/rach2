@@ -25,7 +25,9 @@
  * caller's own processor runs at once with interrupts off; one to another
  * processor runs in that processor's `smp_service`, whose slot is cleared only
  * after the function returns; and the wait for one ends when the processor goes
- * offline. At boot the wait for a started processor ends at
+ * offline. A wait that spins `RELAX_BOUND` turns of `arch_relax` has lost the
+ * test that ends it: the model fails the run and ends the wait, instead of
+ * stalling the suite. At boot the wait for a started processor ends at
  * `CPU_ONLINE_WAIT_US`, and a processor that comes after it stops, neither
  * online nor counted. The profiler's sample of a hold of the big lock walks the
  * frames of the interrupted thread's kernel stack and stops at a saved frame
@@ -73,6 +75,13 @@ static uintptr_t ipi_page[NR_CPUS];
 static int takes_stop[NR_CPUS];
 static int goes_offline[NR_CPUS];
 static unsigned long waited_us;
+
+/* The turns a wait may spin since the last interrupt sent before the model
+ * ends it. Every request the model is sent is answered, or its processor
+ * gone offline, before the sender's wait first looks, so a wait that spins
+ * at all has lost the test that ends it. */
+#define RELAX_BOUND 1000
+static int relax_turns;
 
 /* Whether the model's interrupts are off, which `kirq_save` and
  * `spin_lock_irqsave` set and their restores put back. */
@@ -160,6 +169,7 @@ void platform_cpu_ipi(int cpu)
     struct percpu *c = &cpu_table[cpu];
 
     ipis[cpu]++;
+    relax_turns = 0;
     if (goes_offline[cpu]) {
         c->online = 0;
         return;
@@ -313,9 +323,34 @@ unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
     return old;
 }
 
-/** Nothing: the host's one thread does not spin. */
+/**
+ * Count a turn of a wait for another processor and, past `RELAX_BOUND`
+ * turns, count a failure and end the wait: every processor but the one
+ * running is marked offline and its requests cleared, so that a wait that
+ * lost its test of `online`, or whose processor never clears its slot,
+ * fails the row instead of stalling the suite, which sets no time limit.
+ * Linux's CSD lock debugging reports a call whose wait passes its bound in
+ * the same way (`csd_lock_wait_toolong`, kernel/smp.c:229-312, 318-331).
+ */
 void arch_relax(void)
-{}
+{
+    int c;
+
+    if (++relax_turns <= RELAX_BOUND) {
+        return;
+    }
+    check(0, "a wait for another processor ends without the model's bound");
+    for (c = 0; c < NR_CPUS; c++) {
+        if ((unsigned int)c != host_cpu) {
+            cpu_table[c].online = 0;
+            cpu_table[c].call_fn = NULL;
+            cpu_table[c].tlb_request = 0;
+            cpu_table[c].barrier_request = 0;
+            cpu_table[c].space_drop = NULL;
+        }
+    }
+    relax_turns = 0;
+}
 
 /** Compare and exchange `*p` on the host's one thread; the old value. */
 unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
