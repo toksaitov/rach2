@@ -933,7 +933,10 @@ static void tick_slice(void)
  * would not take, as wakeup_preempt_rt preempts only a lower current task
  * (rt.c:1655-1660). A priority raise of the queued peer asks the running
  * one to switch, not itself, as prio_changed_rt calls resched_curr
- * (rt.c:2526-2533), and the tick switches.
+ * (rt.c:2526-2533), and the tick switches. A fall of the running one below
+ * the queued one asks the running one, as prio_changed_rt reschedules a
+ * running task once the queue's highest priority is above its own
+ * (rt.c:2519-2520), and the tick switches back.
  */
 static void tick_rr(void)
 {
@@ -965,6 +968,13 @@ static void tick_rr(void)
     sched_tick();
     CHECK(current_proc == &procs[1] && switches == 1 && !procs[0].need_resched,
           "a higher real-time thread takes the processor at the tick within the slice");
+    procs[1].rt_priority = 9;
+    sched_priority_changed(&procs[1]);
+    CHECK(procs[1].need_resched && !procs[0].need_resched,
+          "a running thread lowered below a queued one asks itself to switch");
+    sched_tick();
+    CHECK(current_proc == &procs[0] && switches == 2,
+          "and the tick gives the processor to the queued one");
     clock_ns = 0;
 }
 
@@ -1004,7 +1014,13 @@ static void two_cpus(uint64_t affinity)
  * slice takes it once its affinity widens, as Linux's push_rt_task moves
  * it to a processor running lower work (rt.c:1982-2092). An affinity that
  * moves it off processor 1 asks processor 0's thread to switch, as
- * move_queued_task calls wakeup_preempt (core.c:2462-2463).
+ * move_queued_task calls wakeup_preempt (core.c:2462-2463). Processor 1's
+ * FIFO thread lowered to 10 and pinned there sends the 50 to processor 0
+ * all the same, as select_task_rq_rt searches when the running task has
+ * nr_cpus_allowed < 2. A processor ranks by the highest real-time priority
+ * of its running and queued threads, as find_lowest_rq ranks it by
+ * highest_prio.curr: with a FIFO 90 queued on processor 0 and a third
+ * processor running FIFO 10, the 50 goes to the third.
  */
 static void tick_rt(void)
 {
@@ -1033,6 +1049,32 @@ static void tick_rt(void)
     sched_set_affinity(&procs[2], 1);
     CHECK(run_queues[0].count == 1 && procs[2].cpu == 0 && procs[0].need_resched,
           "an affinity move onto processor 0 asks its ordinary thread to switch");
+
+    two_cpus(~(uint64_t)0);
+    procs[1].rt_priority = 10;
+    procs[1].affinity = 2;
+    sched_make_ready(&procs[2]);
+    CHECK(run_queues[0].count == 1 && run_queues[1].count == 0 && procs[2].cpu == 0 &&
+              procs[0].need_resched && !procs[1].need_resched,
+          "a FIFO 50 thread whose processor runs a pinned FIFO 10 one goes to the ordinary one");
+
+    two_cpus(~(uint64_t)0);
+    procs[3].sched_policy = procs[4].sched_policy = SCHED_FIFO;
+    procs[3].rt_priority = 90;
+    procs[3].affinity = 1;
+    procs[3].cpu = 0;
+    sched_make_ready(&procs[3]);
+    procs[0].need_resched = 0;
+    cpu_table[2].online = 1;
+    cpu_table[2].current = &procs[4];
+    procs[4].state = PROC_RUNNING;
+    procs[4].cpu = 2;
+    procs[4].rt_priority = 10;
+    sched_make_ready(&procs[2]);
+    CHECK(run_queues[0].count == 1 && run_queues[2].count == 1 && procs[2].cpu == 2 &&
+              procs[4].need_resched && !procs[0].need_resched,
+          "a FIFO 50 thread passes over an ordinary processor with a FIFO 90 one queued");
+    cpu_table[2].online = 0;
     cpu_table[1].online = 0;
     init_sched();
     clock_ns = 0;
