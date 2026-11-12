@@ -1114,6 +1114,11 @@ int vclock_running(void)
     return 0;
 }
 
+uint32_t vclock_generation(void)
+{
+    return 0;
+}
+
 int vclock_read_cycles(int which, uint64_t *ns, uint64_t *cycles)
 {
     (void)which;

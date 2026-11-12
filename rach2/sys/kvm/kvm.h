@@ -398,6 +398,10 @@ struct kvm_vm {
     int8_t master_shift;
     uint64_t wall_clock; /* the last value of MSR_KVM_WALL_CLOCK(_NEW) */
     int old_kvmclock;    /* the boot vCPU's guest uses MSR_KVM_SYSTEM_TIME */
+    /* The host clock's generation (`vclock_generation`) at which the master
+     * clock was last decided; written under `clock_lock`, compared without
+     * it before each entry (`kvm_clock_prepare`). */
+    volatile uint32_t host_clock_gen;
     /* The vCPUs' TSCs as Linux's kvm_synchronize_tsc matches them: the
      * generation of matched writes, its offset, the vCPUs that joined it
      * after its first, and the last write's ns, value, rate and offset. */
@@ -1096,6 +1100,13 @@ void kvm_clock_vm_init(struct kvm_vm *vm);
  * monotonic clock plus the VM's offset. */
 uint64_t kvm_clock_ns(struct kvm_vm *vm);
 
+/** Read the kvmclock of `vm` with the host's TSC count it is read at, into
+ * `*ns` and `*host_tsc`, while the master clock runs, as the guests read it
+ * with PVCLOCK_TSC_STABLE_BIT: 1, or 0 with nothing read without it. For
+ * the reference TSC page, which Linux publishes only from a kvmclock with
+ * that bit (compute_tsc_page_parameters, arch/x86/kvm/hyperv.c:1125). */
+int kvm_clock_stable_read(struct kvm_vm *vm, uint64_t *ns, uint64_t *host_tsc);
+
 /** KVM_GET_CLOCK, as Linux's: with the master clock, the kvmclock at a TSC
  * count read with the real time, and KVM_CLOCK_TSC_STABLE,
  * KVM_CLOCK_REALTIME and KVM_CLOCK_HOST_TSC; else the kvmclock and no
@@ -1135,12 +1146,14 @@ void kvm_tsc_moved(struct kvm_vcpu *v);
  * KVM's. */
 int kvm_pv_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host);
 
-/** Write `v`'s kvmclock into guest memory before an entry, when it was
- * asked for (KVM_REQ_CLOCK_UPDATE) or, without the master clock, when the
- * vCPU moved to another processor or KVMCLOCK_SYNC_NS passed, as Linux's
- * kvm_guest_time_update, and with it the reference TSC page, kvmclock or
- * not (`kvm_hv_clock_update`), so that a request taken here leaves no page
- * of the old clock to the entry. In `v`'s thread. */
+/** Write `v`'s kvmclock into guest memory before an entry, when it was asked
+ * for (KVM_REQ_CLOCK_UPDATE), as it is for every vCPU once the host's clock has
+ * stopped or started since the master clock was decided, which decides it again
+ * (`vclock_generation`), or, without the master clock, when the vCPU moved to
+ * another processor or KVMCLOCK_SYNC_NS passed, as Linux's
+ * kvm_guest_time_update, and with it the reference TSC page, kvmclock or not
+ * (`kvm_hv_clock_update`), so that a request taken here leaves no page of the
+ * old clock to the entry. In `v`'s thread. */
 void kvm_clock_prepare(struct kvm_vcpu *v);
 
 /** KVM_KVMCLOCK_CTRL: the guest's next kvmclock says it was stopped. 0, or

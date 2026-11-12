@@ -261,6 +261,19 @@ uint64_t kvm_clock_ns(struct kvm_vm *vm)
     return kvm_host_ns() + (uint64_t)m.offset;
 }
 
+int kvm_clock_stable_read(struct kvm_vm *vm, uint64_t *ns, uint64_t *host_tsc)
+{
+    struct master m;
+
+    master_copy(vm, &m);
+    if (!m.on) {
+        return 0;
+    }
+    *host_tsc = arch_cycles();
+    *ns = master_at(&m, *host_tsc);
+    return 1;
+}
+
 /** Whether every vCPU of `vm` has joined the generation of matched TSCs,
  * Linux's nr_vcpus_matched_tsc + 1 == online_vcpus. */
 static int tsc_all_matched(const struct kvm_vm *vm)
@@ -273,18 +286,19 @@ static int tsc_all_matched(const struct kvm_vm *vm)
  * from it, as Linux's pvclock_update_vm_gtod_copy between
  * kvm_start_pvclock_update and kvm_end_pvclock_update: it does where the
  * host's clock runs from the TSC, every vCPU's TSC is of one generation and
- * the boot vCPU's guest uses the new MSR. Every vCPU first leaves the guest
- * with a request to write its kvmclock, which it cannot act on before the
- * caller lets `clock_lock` go, since the write copies the master clock
- * under it and a request cancels an entry (KVM_REQ_NOENTER), so that none
- * reads the old formula once another reads the new, as Linux's
- * KVM_REQ_MCLOCK_INPROGRESS holds them. `hv_clock_moved` is set before
- * the kicks, as Linux's kvm_update_masterclock asks for the reference TSC
- * page's update first (x86.c:2652-2654), so that a kicked vCPU that takes
- * the request sees it and rewrites the page from the new clock, which it
- * copies under `clock_lock`, before it enters: in `kvm_clock_prepare`, which
- * takes the request, or in `kvm_hv_prepare`, which comes before it in the
- * run loop. Under `clock_lock`.
+ * the boot vCPU's guest uses the new MSR, and it is decided again when the
+ * host's clock stops or starts (`master_recheck`). Every vCPU first leaves
+ * the guest with a request to write its kvmclock, which it cannot act on
+ * before the caller lets `clock_lock` go, since the write copies the master
+ * clock under it and a request cancels an entry (KVM_REQ_NOENTER), so that
+ * none reads the old formula once another reads the new, as Linux's
+ * KVM_REQ_MCLOCK_INPROGRESS holds them. `hv_clock_moved` is set before the
+ * kicks, as Linux's kvm_update_masterclock asks for the reference TSC page's
+ * update first (x86.c:2652-2654), so that a kicked vCPU that takes the
+ * request sees it and rewrites the page from the new clock, which it copies
+ * under `clock_lock`, before it enters: in `kvm_clock_prepare`, which takes
+ * the request, or in `kvm_hv_prepare`, which comes before it in the run
+ * loop. Under `clock_lock`.
  */
 static void master_update(struct kvm_vm *vm)
 {
@@ -302,6 +316,7 @@ static void master_update(struct kvm_vm *vm)
             arch_relax();
         }
     }
+    vm->host_clock_gen = vclock_generation();
     pair = khz != 0 && vclock_read_cycles(VCLOCK_READ_RAW, &ns, &tsc);
     vm->master_clock = pair && tsc_all_matched(vm) && !vm->old_kvmclock;
     if (pair) {
@@ -309,6 +324,33 @@ static void master_update(struct kvm_vm *vm)
         vm->master_tsc = tsc;
         time_scale(NSEC_PER_SEC, khz * 1000u, &vm->master_shift, &vm->master_mul);
     }
+}
+
+/**
+ * Decide `vm`'s master clock again when the host's clock has stopped or
+ * started running from the TSC since it was last decided, as Linux's
+ * pvclock_gtod_notify asks every vCPU for KVM_REQ_MASTERCLOCK_UPDATE once
+ * the host's clocksource leaves the TSC (arch/x86/kvm/x86.c:9159-9204), so
+ * that no guest keeps PVCLOCK_TSC_STABLE_BIT, or a reference TSC page, from
+ * a clock that no longer holds: `master_update` has every vCPU write its
+ * kvmclock, and the reference TSC page be written, before its next entry.
+ * The generation is read before the host's clock (`master_update`), so a
+ * change after the read is seen at the next call. The test takes no lock;
+ * the first vCPU to see the change decides for all, under `clock_lock`. In
+ * a vCPU's thread or an ioctl's.
+ */
+static void master_recheck(struct kvm_vm *vm)
+{
+    uint32_t flags;
+
+    if (vm->host_clock_gen == vclock_generation()) {
+        return;
+    }
+    flags = clock_lock(vm);
+    if (vm->host_clock_gen != vclock_generation()) {
+        master_update(vm);
+    }
+    clock_unlock(vm, flags);
 }
 
 void kvm_clock_vm_init(struct kvm_vm *vm)
@@ -327,6 +369,7 @@ int32_t kvm_clock_get(struct kvm_vm *vm, uintptr_t arg)
     uint64_t real;
 
     k_memset(&d, 0, sizeof(d));
+    master_recheck(vm);
     master_copy(vm, &m);
     if (m.on) {
         if (vclock_read_cycles(VCLOCK_READ_REAL, &real, &d.host_tsc)) {
@@ -605,9 +648,10 @@ static int tsc_catch_up(struct kvm_vcpu *v)
 
 void kvm_clock_prepare(struct kvm_vcpu *v)
 {
-    int update = kvm_vcpu_test_clear(v, KVM_REQ_CLOCK_UPDATE);
-    int pv = (v->pv_time & KVM_MSR_ENABLED) != 0;
+    int update, pv = (v->pv_time & KVM_MSR_ENABLED) != 0;
 
+    master_recheck(v->vm);
+    update = kvm_vcpu_test_clear(v, KVM_REQ_CLOCK_UPDATE);
     if (v->tsc_catchup && tsc_catch_up(v)) {
         update = 1;
     }
