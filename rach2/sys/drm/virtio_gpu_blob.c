@@ -117,21 +117,47 @@ void vgpu_blob_release(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
 }
 
 /**
+ * The zap a revoke queued: take every program's mapping of the blob of
+ * `work` away. In the commit worker, under the big lock. It may sleep for
+ * a space's regions' lock, and reads nothing of the object once the walk
+ * starts, since the object's free may run meanwhile; that free comes only
+ * once no mapping holds the object, and takes the work off the queue.
+ */
+static void revoked_zap(struct drm_work *work)
+{
+    struct virtio_gpu_object *bo =
+        (struct virtio_gpu_object *)(void *)((char *)work -
+                                             offsetof(struct virtio_gpu_object, revoke_zap));
+
+    paging_zap_device(&bo->shmem.base, 0, (uint32_t)(bo->shmem.base.size >> PAGE_SHIFT));
+}
+
+/**
  * The transport took the frames of `bo`'s page list back, the device's
- * memory having changed or its VM gone: every program's mapping of the blob
- * goes, and the next touch of one raises SIGBUS, as a revoked mapping does
- * on Linux. Under the big lock; does not sleep.
+ * memory having changed or its VM gone: no fault maps a page of the blob
+ * again (`host_phys`), and the commit worker takes every program's mapping
+ * of it away, after which the next touch of one raises SIGBUS, as a
+ * revoked mapping does on Linux. The zap is queued, not run, since this
+ * runs inside a change notice (`map_invalidate`), which must not sleep
+ * (mm/notify.h), as Linux's interval notifier may not when its range is
+ * not blockable (include/linux/mmu_notifier.h:236-241), and a zap waits for
+ * every space's regions' lock. The transport keeps its references to the
+ * frames until `vgpu_blob_pages_drop` frees the map, so a page mapped before
+ * the zap, by a fault that read its frame before the revoke too, is never
+ * a frame reused since. Under the big lock; does not sleep.
  */
 static void pages_revoked(void *owner)
 {
     struct virtio_gpu_object *bo = (struct virtio_gpu_object *)owner;
 
-    paging_zap_device(&bo->shmem.base, 0, (uint32_t)(bo->shmem.base.size >> PAGE_SHIFT));
     bo->map_ok = 0;
+    bo->revoke_zap.fn = revoked_zap;
+    drm_dev_work_later(bo->shmem.base.dev, &bo->revoke_zap);
 }
 
 void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, int zap)
 {
+    (void)drm_dev_work_cancel(&bo->revoke_zap);
     if (!bo->pages_map) {
         return;
     }

@@ -1718,10 +1718,12 @@ struct kvm_gpa_run {
  * through the slot that holds it in the caller's memory, the VM's maker's,
  * as a RAM page that memory maps writable outside an I/O, guard or
  * memfd_secret region (`paging_user_ram_frame`), and held by a reference.
- * The map is taken back, its frames let go of after `revoke(owner)` has
- * stopped every use of them, when the caller's memory behind any of them
- * changes or ends, when a slot over them moves or goes, and when the VM
- * ends; `kvm_gpamap_frame` then answers 0. Under the big lock; does not
+ * The map is taken back, with a call of `revoke(owner)`, which must not
+ * sleep and stops every new use of the frames, when the caller's memory
+ * behind any of them changes or ends, when a slot over them moves or goes,
+ * and when the VM ends; `kvm_gpamap_frame` then answers 0, and the frames
+ * stay held until `kvm_gpamap_free`, so that a use begun before the revoke
+ * never reaches a frame reused since. Under the big lock; does not
  * sleep, so that no change can come between the slots' answer and the
  * frames. 0 with the map in `*out`; -EINVAL for a run that is empty, not
  * page-aligned or past the guest-physical width, or for too many pages;
@@ -1737,9 +1739,9 @@ int kvm_gpamap_new(struct kvm_vm *vm, const struct kvm_gpa_run *runs, uint32_t n
  * back. */
 uintptr_t kvm_gpamap_frame(const struct kvm_gpamap *m, uint64_t i);
 
-/** Let go of `m`'s frames, if it still holds them, without its `revoke`,
- * and free it: its owner's call, once nothing uses the frames. NULL is
- * ignored. Under the big lock. */
+/** Let go of `m`'s frames without its `revoke`, and free it: its owner's
+ * call, once nothing uses the frames, whether or not the map was taken
+ * back. NULL is ignored. Under the big lock. */
 void kvm_gpamap_free(struct kvm_gpamap *m);
 
 /** Take back every map of `vm` with a page in the `npages` frames from
