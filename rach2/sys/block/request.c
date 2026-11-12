@@ -29,9 +29,18 @@
  * device leaves the other half to the healthy ones; at `rach2.blockpool=1`
  * the half is the whole pool. A waiter that finds every live request
  * quarantined gets `EIO` too.
+ *
+ * The pool needs no big lock. Its list, counts and kept buffers are under
+ * `req_lock`, a spinlock taken with interrupts off, which a submit takes and
+ * a completion takes from the interrupt; a caller sleeps on the request's
+ * own state, as Linux's `submit_bio_wait` sleeps on the bio's completion
+ * (block/bio.c:1469-1481), and the completion wakes it. A device whose
+ * driver still needs the big lock, one without `BLOCK_UNLOCKED`, is called
+ * under it (`req_big_enter`).
  */
 
 #include "../lib/kirq.h"
+#include "../lib/spinlock.h"
 #include "../arch/arch.h"
 #include "block.h"
 
@@ -48,6 +57,7 @@
 #include "../timer.h"
 #include "../proc/process.h"
 #include "../proc/sched.h"
+#include "../proc/smp.h"
 #include "../proc/wait_queue.h"
 
 /* Policy: how many requests may be live at once unless `rach2.blockpool`
@@ -67,6 +77,13 @@
 #define REQ_DEADLINE_MAX_S    600u
 static uint32_t default_deadline = REQ_DEFAULT_DEADLINE;
 
+/* The pool's lock: the list of live requests and every field the pool
+ * keeps on one, the counts and the clock below, the kept buffers, each
+ * device's `stalled` and `stats`. Taken with interrupts off, inside a
+ * driver's own lock when a completion comes from under it, and before the
+ * heap's and the drivers' counters' (block.c); a wake of `pool_wq` comes
+ * after it is given back. */
+static struct spinlock req_lock = SPINLOCK_INIT_NAMED("block_req_lock");
 static struct block_request *reqs;  /* every live request */
 static uint32_t live;               /* how many are on the list */
 static uint32_t next_generation;    /* rising; see req_new */
@@ -83,6 +100,9 @@ static uint32_t release_total;
 static uint32_t release_tick;
 static uint32_t pool_size;  /* the limit: REQ_LIMIT, or rach2.blockpool=N */
 static uint32_t device_cap; /* the most requests one device may hold */
+/* The big lock's takes for a device without `BLOCK_UNLOCKED`, counted while
+ * it is held, which orders the counts (`block_bkl_takes`). */
+static uint32_t bkl_takes;
 
 /* Buffers of REQ_KEEP_PAGES heap pages that freed requests left, kept
  * mapped for the next request of more than a page and at most that many,
@@ -91,8 +111,8 @@ static uint32_t device_cap; /* the most requests one device may hold */
  * TLB, costs more than the transfer itself under a hypervisor; Linux reads
  * into the page cache's own pages and maps none, and its mempools keep
  * freed elements in the same way (mm/mempool.c:560-561). Reclaim takes the
- * kept buffers back (`req_keep_shrink`). The list is under the big lock
- * and interrupts off, as the list of live requests is. */
+ * kept buffers back (`req_keep_shrink`). The list is under `req_lock`, as
+ * the list of live requests is. */
 #define REQ_KEEP_PAGES 32u
 #define REQ_KEEP       4u
 static void *kept_bufs[REQ_KEEP];
@@ -109,7 +129,7 @@ static uint32_t req_clock(void)
 }
 
 /**
- * Interrupts off. Count toward `disk-wait-ticks` the ticks request `r`,
+ * `req_lock` held. Count toward `disk-wait-ticks` the ticks request `r`,
  * leaving flight now, spent in flight since `block_request_tick` last
  * counted: from the later of `taken_tick` and that call to the clock now,
  * which the next call, finding it no longer in flight, would leave out.
@@ -124,16 +144,18 @@ static void req_count_rest(const struct block_request *r)
     }
 }
 
-/** Mask interrupts and return the state `irq_restore` puts back. */
-static uint32_t irq_save(void)
+/** Take `req_lock` with interrupts off and return the state `pool_unlock`
+ * puts back. */
+static uint32_t pool_lock(void)
 {
-    return kirq_save();
+    return spin_lock_irqsave(&req_lock);
 }
 
-/** Put back the interrupt state `irq_save` returned. */
-static void irq_restore(uint32_t flags)
+/** Give `req_lock` back and put back the interrupt state `pool_lock`
+ * returned. */
+static void pool_unlock(uint32_t flags)
 {
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&req_lock, flags);
 }
 
 /**
@@ -187,7 +209,7 @@ void block_request_init(void)
     pool_size = n;
 }
 
-/** Interrupts off. Whether `r` is on the list of live requests. */
+/** `req_lock` held. Whether `r` is on the list of live requests. */
 static int req_is_live(const struct block_request *r)
 {
     const struct block_request *p;
@@ -200,7 +222,7 @@ static int req_is_live(const struct block_request *r)
     return 0;
 }
 
-/** Interrupts off. A kept buffer, or NULL when none is kept. */
+/** `req_lock` held. A kept buffer, or NULL when none is kept. */
 static void *keep_take(void)
 {
     return keep_count ? kept_bufs[--keep_count] : NULL;
@@ -219,10 +241,10 @@ static uint32_t req_keep_shrink(struct mem_shrinker *s, uint32_t want, int may_s
     (void)want;
     (void)may_sleep;
     for (;;) {
-        uint32_t flags = irq_save();
+        uint32_t flags = pool_lock();
         void *buf = keep_take();
 
-        irq_restore(flags);
+        pool_unlock(flags);
         if (!buf) {
             return pages;
         }
@@ -231,7 +253,7 @@ static uint32_t req_keep_shrink(struct mem_shrinker *s, uint32_t want, int may_s
     }
 }
 
-/** Interrupts off. Take `r` off the list and give its page and record back:
+/** `req_lock` held. Take `r` off the list and give its page and record back:
  * a buffer of REQ_KEEP_PAGES to the kept ones while they are fewer than
  * REQ_KEEP. */
 static void req_drop(struct block_request *r)
@@ -253,7 +275,7 @@ static void req_drop(struct block_request *r)
 }
 
 /**
- * Interrupts off. One holder lets go: the caller when it has read the
+ * `req_lock` held. One holder lets go: the caller when it has read the
  * answer or given up, the device when it has answered. The last one out
  * frees the request.
  */
@@ -270,7 +292,7 @@ static void req_let_go(struct block_request *r, int caller)
 }
 
 /**
- * Interrupts off. How many requests `owner` holds: in flight or quarantined.
+ * `req_lock` held. How many requests `owner` holds: in flight or quarantined.
  *
  * `owner` is the device a request is accounted to, `block_submitter` of the
  * device the request named: a stick's partition views share the stick's
@@ -290,7 +312,7 @@ static uint32_t device_held(const block_device_t *owner)
     return held;
 }
 
-/** Interrupts off. How many of `owner`'s requests are still in flight. */
+/** `req_lock` held. How many of `owner`'s requests are still in flight. */
 static uint32_t device_in_flight(const block_device_t *owner)
 {
     const struct block_request *r;
@@ -305,7 +327,7 @@ static uint32_t device_in_flight(const block_device_t *owner)
 }
 
 /**
- * Interrupts off. Whether no request is in flight or answered and not yet
+ * `req_lock` held. Whether no request is in flight or answered and not yet
  * freed: every live request is quarantined, and nothing but a late answer
  * can free one.
  */
@@ -322,7 +344,7 @@ static int nothing_pending(void)
 }
 
 /**
- * Interrupts off. A fresh request on the list for `count` sectors, held by
+ * `req_lock` held. A fresh request on the list for `count` sectors, held by
  * its caller and its device, or NULL when the heap or the DMA pool has no
  * room for one. A transfer of a page or less takes a frame of the DMA pool,
  * below `HARD_MEMORY_LIMIT`, whose address every device can reach; a larger
@@ -380,11 +402,11 @@ static struct block_request *req_new(uint32_t count)
 static int slot_ready(void *arg)
 {
     block_device_t *owner = arg;
-    uint32_t flags = irq_save();
-    int ready = (owner->flags & BLOCK_STALLED) != 0 || nothing_pending() ||
+    uint32_t flags = pool_lock();
+    int ready = owner->stalled || nothing_pending() ||
                 (live < pool_size && device_held(owner) < device_cap);
 
-    irq_restore(flags);
+    pool_unlock(flags);
     return ready;
 }
 
@@ -425,16 +447,16 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
 
     block_request_init();
     for (;;) {
-        uint32_t flags = irq_save();
+        uint32_t flags = pool_lock();
         struct block_request *r = NULL;
         int share_taken;
 
-        if (owner->flags & BLOCK_STALLED) {
+        if (owner->stalled) {
             if (waited) {
                 release_total++;
                 release_tick = req_ticks;
             }
-            irq_restore(flags);
+            pool_unlock(flags);
             klog(KLOG_WARN, "block", "device stalled: %s",
                  waited ? "waiter released with EIO" : "request refused");
             return NULL;
@@ -443,7 +465,7 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
         if (!share_taken && live < pool_size) {
             r = req_new(count);
             if (!r) {
-                irq_restore(flags);
+                pool_unlock(flags);
                 if (why) {
                     *why = -ENOMEM; /* the caller asks again at half the size */
                 }
@@ -467,20 +489,20 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
             if (waited) {
                 latency_span(LAT_DISK_WAIT, wait_from, r->taken_us);
             }
-            irq_restore(flags);
+            pool_unlock(flags);
             return r;
         }
         if (!wait) {
-            irq_restore(flags);
+            pool_unlock(flags);
             return NULL;
         }
         if (nothing_pending()) {
-            irq_restore(flags);
+            pool_unlock(flags);
             klog(KLOG_WARN, "block", "request pool stalled: %d quarantined, waiter released",
                  (int)quarantined_count);
             return NULL;
         }
-        irq_restore(flags);
+        pool_unlock(flags);
         if (!waited) {
             waited = 1;
             klog(KLOG_INFO, "block", "request pool: waiting for a slot: %s",
@@ -491,7 +513,7 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
 }
 
 /**
- * Interrupts off. The device refused `submit`, so it never held the
+ * `req_lock` held. The device refused `submit`, so it never held the
  * request: the caller alone lets go and the request is freed.
  */
 static void req_refused(struct block_request *r)
@@ -546,29 +568,29 @@ static int req_run_one(block_device_t *device, int write, uint64_t lba, uint32_t
         k_memcpy(r->page, buffer, count * BLOCK_SECTOR_SIZE);
     }
     if (device->submit(device, r) != 0) {
-        flags = irq_save();
+        flags = pool_lock();
         req_refused(r);
-        irq_restore(flags);
+        pool_unlock(flags);
         wq_wake_all(&pool_wq);
         return -EIO;
     }
     req_wait(r);
-    flags = irq_save();
+    flags = pool_lock();
     if (r->state == BLOCK_REQ_QUARANTINED) {
         release_total++;
         release_tick = req_ticks;
         req_let_go(r, 1);
-        irq_restore(flags);
+        pool_unlock(flags);
         return -EIO;
     }
     status = r->status;
-    irq_restore(flags);
+    pool_unlock(flags);
     if (status == 0 && !write) {
         k_memcpy(buffer, r->page, count * BLOCK_SECTOR_SIZE);
     }
-    flags = irq_save();
+    flags = pool_lock();
     req_let_go(r, 1);
-    irq_restore(flags);
+    pool_unlock(flags);
     wq_wake_all(&pool_wq);
     return status;
 }
@@ -599,32 +621,76 @@ static void count_transfer(struct block_stats *s, int write, uint32_t count, uin
     s->busy_ms += ms;
 }
 
+/**
+ * Take the big lock for a transfer or a flush on `device` when its driver
+ * still needs it: a device without `BLOCK_UNLOCKED`, for a caller with
+ * interrupts on that does not hold it, as `device_read` in the buffer cache
+ * took it for every disk before. Returns 1 when it took the lock, which the
+ * caller gives back with `bkl_exit`, and 0 otherwise. A caller with
+ * interrupts off may hold a spinlock, under which the big lock is never
+ * taken, and calls the device's polled functions as it is. A request's
+ * sleep lets the lock go and takes it back.
+ */
+static int req_big_enter(block_device_t *device)
+{
+    if ((block_flags(device) & BLOCK_UNLOCKED) || !kirq_enabled() || bkl_held()) {
+        return 0;
+    }
+    bkl_enter();
+    bkl_takes++;
+    return 1;
+}
+
+uint32_t block_bkl_takes(void)
+{
+    return bkl_takes;
+}
+
+void block_bkl_takes_reset(void)
+{
+    bkl_takes = 0;
+}
+
+/** Add `delta`, 1 or -1, to the requests in progress on `device` and on
+ * `disk` under it, when that is another device. */
+static void count_in_flight(block_device_t *device, block_device_t *disk, int delta)
+{
+    uint32_t flags = pool_lock();
+
+    device->stats.in_flight += (uint32_t)delta;
+    if (disk && disk != device) {
+        disk->stats.in_flight += (uint32_t)delta;
+    }
+    pool_unlock(flags);
+}
+
 int block_request_flags(block_device_t *device, int write, uint64_t lba, uint32_t count,
                         void *buffer, uint32_t req_flags)
 {
     block_device_t *disk = device ? block_physical(device) : 0;
     uint32_t start = timer_now_us();
-    int rc;
+    uint32_t flags;
+    int big, rc;
 
     if (!device) {
         return -EIO;
     }
-    device->stats.in_flight++;
-    if (disk && disk != device) {
-        disk->stats.in_flight++;
-    }
+    count_in_flight(device, disk, 1);
+    big = req_big_enter(device);
     rc = transfer(device, write, lba, count, buffer, req_flags);
-    device->stats.in_flight--;
-    if (disk && disk != device) {
-        disk->stats.in_flight--;
+    if (big) {
+        bkl_exit();
     }
+    count_in_flight(device, disk, -1);
     if (rc == 0) {
         uint32_t us = timer_now_us() - start;
 
+        flags = pool_lock();
         count_transfer(&device->stats, write, count, us);
         if (disk && disk != device) {
             count_transfer(&disk->stats, write, count, us);
         }
+        pool_unlock(flags);
     }
     return rc;
 }
@@ -744,19 +810,17 @@ static int transfer(block_device_t *device, int write, uint64_t lba, uint32_t co
 }
 
 /**
- * A caller outside a system call, such as a page fault writing through the
- * page cache with interrupts off, flushes a `BLOCK_POLLABLE` disk by polling.
+ * `block_flush` on `device`, the submitter, under the big lock when the
+ * device needs it. A caller outside a system call, such as a page fault
+ * writing through the page cache with interrupts off, flushes a
+ * `BLOCK_POLLABLE` disk by polling.
  */
-int block_flush(block_device_t *device)
+static int flush_device(block_device_t *device)
 {
     struct block_request *r;
     uint32_t flags;
     int status;
 
-    device = block_submitter(device);
-    if (!device || !device->flush) {
-        return 0; /* nothing of its own to flush: what was written is on it */
-    }
     if ((device->flags & BLOCK_WRITE_THROUGH) && !device->unflushed) {
         return 0; /* every write it answered was flushed before the answer */
     }
@@ -777,26 +841,42 @@ int block_flush(block_device_t *device)
     }
     r->flags = BLOCK_REQ_FLUSH;
     if (device->flush(device, r) != 0) {
-        flags = irq_save();
+        flags = pool_lock();
         req_refused(r);
-        irq_restore(flags);
+        pool_unlock(flags);
         wq_wake_all(&pool_wq);
         return -EIO;
     }
     req_wait(r);
-    flags = irq_save();
+    flags = pool_lock();
     if (r->state == BLOCK_REQ_QUARANTINED) {
         release_total++;
         release_tick = req_ticks;
         req_let_go(r, 1);
-        irq_restore(flags);
+        pool_unlock(flags);
         return -EIO;
     }
     status = r->status;
     req_let_go(r, 1);
-    irq_restore(flags);
+    pool_unlock(flags);
     wq_wake_all(&pool_wq);
     return status;
+}
+
+int block_flush(block_device_t *device)
+{
+    int big, rc;
+
+    device = block_submitter(device);
+    if (!device || !device->flush) {
+        return 0; /* nothing of its own to flush: what was written is on it */
+    }
+    big = req_big_enter(device);
+    rc = flush_device(device);
+    if (big) {
+        bkl_exit();
+    }
+    return rc;
 }
 
 struct block_request *block_request_begin(block_device_t *device, uint64_t lba, uint32_t count,
@@ -804,6 +884,7 @@ struct block_request *block_request_begin(block_device_t *device, uint64_t lba, 
 {
     struct block_request *r;
     uint32_t flags;
+    int big, rc;
 
     if (!device || !device->submit || count == 0 || count > block_max_sectors(device) ||
         lba >= device->sector_count || count > device->sector_count - lba) {
@@ -814,10 +895,15 @@ struct block_request *block_request_begin(block_device_t *device, uint64_t lba, 
         return NULL;
     }
     *generation = r->generation;
-    if (device->submit(device, r) != 0) {
-        flags = irq_save();
+    big = req_big_enter(device);
+    rc = device->submit(device, r);
+    if (big) {
+        bkl_exit();
+    }
+    if (rc != 0) {
+        flags = pool_lock();
         req_refused(r);
-        irq_restore(flags);
+        pool_unlock(flags);
         wq_wake_all(&pool_wq);
         return NULL;
     }
@@ -826,15 +912,15 @@ struct block_request *block_request_begin(block_device_t *device, uint64_t lba, 
 
 int block_request_ended(struct block_request *r, uint32_t generation, void *buffer, int *status)
 {
-    uint32_t flags = irq_save();
+    uint32_t flags = pool_lock();
 
     if (r->state == BLOCK_REQ_IN_FLIGHT && r->generation == generation) {
-        irq_restore(flags);
+        pool_unlock(flags);
         return 0;
     }
     if (r->state != BLOCK_REQ_DONE || r->generation != generation) {
         req_let_go(r, 1);
-        irq_restore(flags);
+        pool_unlock(flags);
         *status = -EIO;
         return 1;
     }
@@ -843,7 +929,7 @@ int block_request_ended(struct block_request *r, uint32_t generation, void *buff
         k_memcpy(buffer, r->page, r->count * BLOCK_SECTOR_SIZE);
     }
     req_let_go(r, 1);
-    irq_restore(flags);
+    pool_unlock(flags);
     wq_wake_all(&pool_wq);
     return 1;
 }
@@ -858,24 +944,24 @@ int block_request_ended(struct block_request *r, uint32_t generation, void *buff
  */
 void block_request_complete(struct block_request *request, uint32_t generation, int status)
 {
-    uint32_t flags = irq_save();
+    uint32_t flags = pool_lock();
     int answered = 0;
     uint32_t overdue;
 
     if (!request || !req_is_live(request) || request->generation != generation) {
-        irq_restore(flags);
+        pool_unlock(flags);
         klog(KLOG_WARN, "block", "completion dropped: stale generation");
         return;
     }
     if (request->state == BLOCK_REQ_QUARANTINED) {
         quarantined_count--;
-        if (request->owner->flags & BLOCK_STALLED) {
-            request->owner->flags &= ~BLOCK_STALLED;
+        if (request->owner->stalled) {
+            request->owner->stalled = 0;
             answered = 1;
         }
         request->state = BLOCK_REQ_DONE;
         req_let_go(request, 0);
-        irq_restore(flags);
+        pool_unlock(flags);
         klog(KLOG_INFO, "block", "late completion: quarantined slot freed");
         if (answered) {
             klog(KLOG_INFO, "block", "device answered: stall cleared");
@@ -884,7 +970,7 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
         return;
     }
     if (request->state != BLOCK_REQ_IN_FLIGHT) {
-        irq_restore(flags);
+        pool_unlock(flags);
         return;
     }
     request->status = status;
@@ -903,7 +989,7 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
     }
     overdue = request->overdue;
     req_let_go(request, 0);
-    irq_restore(flags);
+    pool_unlock(flags);
     if (overdue) {
         klog(KLOG_INFO, "block", "late answer: taken after %d deadlines", (int)overdue);
     }
@@ -912,7 +998,7 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
 
 int block_device_holds(block_device_t *device)
 {
-    uint32_t flags = irq_save();
+    uint32_t flags = pool_lock();
     const struct block_request *r;
     int held = 0;
 
@@ -922,12 +1008,12 @@ int block_device_holds(block_device_t *device)
             held++;
         }
     }
-    irq_restore(flags);
+    pool_unlock(flags);
     return held;
 }
 
 /**
- * Interrupts off. A device holding requests with none of them in flight has
+ * `req_lock` held. A device holding requests with none of them in flight has
  * stopped answering: it is marked stalled, once, so its waiters are
  * released and its later callers refused until a late answer clears it.
  * Returns how many devices were marked by this tick.
@@ -940,11 +1026,11 @@ static int mark_stalled(void)
     for (r = reqs; r; r = r->next) {
         block_device_t *owner = r->owner;
 
-        if (r->state != BLOCK_REQ_QUARANTINED || (owner->flags & BLOCK_STALLED)) {
+        if (r->state != BLOCK_REQ_QUARANTINED || owner->stalled) {
             continue;
         }
         if (device_in_flight(owner) == 0) {
-            owner->flags |= BLOCK_STALLED;
+            owner->stalled = 1;
             marked++;
         }
     }
@@ -958,7 +1044,7 @@ uint32_t block_overlaps(void)
 
 uint32_t block_in_flight(void)
 {
-    uint32_t flags = irq_save();
+    uint32_t flags = pool_lock();
     const struct block_request *r;
     uint32_t n = 0;
 
@@ -967,7 +1053,7 @@ uint32_t block_in_flight(void)
             n++;
         }
     }
-    irq_restore(flags);
+    pool_unlock(flags);
     return n;
 }
 
@@ -1001,10 +1087,11 @@ uint32_t block_release_tick(void)
 void block_request_tick(void)
 {
     struct block_request *r;
+    uint32_t flags = pool_lock();
     uint32_t now = (uint32_t)kernel_ticks, passed = now - req_seen;
     int overdue = 0;
     int quarantined = 0;
-    int stalled;
+    int stalled = 0;
 
     req_seen = now;
     req_ticks += passed;
@@ -1028,6 +1115,10 @@ void block_request_tick(void)
         quarantine_total++;
         quarantined++;
     }
+    if (quarantined) {
+        stalled = mark_stalled();
+    }
+    pool_unlock(flags);
     if (overdue) {
         klog(KLOG_WARN, "block", "request overdue: %d past a deadline, still waited for", overdue);
     }
@@ -1035,7 +1126,6 @@ void block_request_tick(void)
         return;
     }
     klog(KLOG_WARN, "block", "request deadline: %d slots quarantined", quarantined);
-    stalled = mark_stalled();
     if (stalled) {
         klog(KLOG_WARN, "block", "device stalled: every slot it holds is past its deadline");
     }
