@@ -390,18 +390,20 @@ exits were handled in the kernel and the guest entered again;
 ended
 .Dv KVM_RUN .
 .Ar ENTRY
-runs from just before the run loop lets the big kernel lock go for the run
-to the backend's entry instruction, and so holds the lock's release, the
-guest's state loaded and the VMCS or VMCB brought up to date;
+runs from just before the run loop enters the guest to the backend's entry
+instruction: the guest's state loaded and the VMCS or VMCB brought up to
+date;
 .Ar RUN
 from there to the exit, the processor's entry and exit and the guest's
 own run;
 .Ar EXIT
 from the exit to the backend's return;
 .Ar WAIT
-from there to the big kernel lock taken back; and
+is the part of the exit's handling spent waiting for the big kernel lock,
+which an exit the kernel handles without it never does; and
 .Ar HANDLE
-from there to just before the lock is let go for the next entry, or to
+the rest of the time from the backend's return to just before the next
+entry, or to
 .Dv KVM_RUN Ns 's
 return.
 .Ar PREPARE
