@@ -1,9 +1,7 @@
 # Lenovo GPU cases that wait for their Linux references (gpu.cases), which
 # the Debian boot of 83-15 makes on the same Lenovo: IGT's buffer and
 # submission rows, glmark2's validations, both browsers' WebGL pages and the
-# gate's eight WebGL probe measures, the video checks' output with the
-# digests of the clips and vahash that boot leaves on the data partition,
-# and the digests of the test bed's VM disks it leaves there.
+# gate's eight WebGL probe measures.
 # etude reads probes.cases, musl.cases, rows.cases and gpu.cases, never this
 # file, since native preparation copies every file a case declares and these
 # references are not yet in the tree. The task that commits a case's
@@ -136,56 +134,3 @@ case gpu/gate-probe.firefox alone log \
     file:tests/graphics/runners/common.sh file:tests/graphics/runners/judge.py file:tests/graphics/guest-env.sh file:tests/graphics/ref/lenovo/exclusions \
     file:tests/graphics/runners/probe.sh file:tests/graphics/runners/probe.html file:tests/graphics/runners/server.py file:tests/graphics/runners/events.py file:tests/graphics/ref/lenovo/gate \
     -- graphics/runners/lenovo.sh gate probe firefox gate
-
-# Video on the GPU against Linux's decodes, browser plays and hangs (78-14b,
-# native/gpuvideo.sh); the clips and vahash are on the data partition, under
-# native/video/clips, and the hang check goes last, since it hangs the
-# render ring on purpose.
-case video/decode alone log mountns \
-    file:tests/graphics/lenovo/video-gpu.sh file:tests/graphics/guest-env.sh \
-    file:tests/graphics/runners/video.sh file:tests/graphics/runners/common.sh file:tests/graphics/runners/server.py \
-    file:tests/graphics/runners/cdp.py file:tests/graphics/runners/events.py file:tests/graphics/runners/video.html \
-    file:tests/graphics/runners/clips.sha256 file:tests/graphics/runners/judge.py file:tests/graphics/runners/video.limits \
-    file:tests/graphics/ref/lenovo-video/data.sha256 file:tests/graphics/ref/lenovo-video/linux.tar.gz \
-    -- native/gpuvideo.sh decode data.sha256 linux.tar.gz
-case video/browsers alone log mountns \
-    file:tests/graphics/lenovo/video-gpu.sh file:tests/graphics/guest-env.sh \
-    file:tests/graphics/runners/video.sh file:tests/graphics/runners/common.sh file:tests/graphics/runners/server.py \
-    file:tests/graphics/runners/cdp.py file:tests/graphics/runners/events.py file:tests/graphics/runners/video.html \
-    file:tests/graphics/runners/clips.sha256 file:tests/graphics/runners/judge.py file:tests/graphics/runners/video.limits \
-    file:tests/graphics/ref/lenovo-video/data.sha256 file:tests/graphics/ref/lenovo-video/linux.tar.gz \
-    -- native/gpuvideo.sh browsers data.sha256 linux.tar.gz
-case video/hang alone log mountns \
-    file:tests/graphics/lenovo/video-gpu.sh file:tests/graphics/guest-env.sh \
-    file:tests/graphics/runners/video.sh file:tests/graphics/runners/common.sh file:tests/graphics/runners/server.py \
-    file:tests/graphics/runners/cdp.py file:tests/graphics/runners/events.py file:tests/graphics/runners/video.html \
-    file:tests/graphics/runners/clips.sha256 file:tests/graphics/runners/judge.py file:tests/graphics/runners/video.limits \
-    file:tests/graphics/ref/lenovo-video/data.sha256 file:tests/graphics/ref/lenovo-video/linux.tar.gz \
-    -- native/gpuvideo.sh hang data.sha256 linux.tar.gz
-
-# The test bed's rungs through a VM on the GPU (83-7, native/bed.sh): the
-# shared region's session, figures and the VM's death under load, then the
-# forward guest's glmark2 through virgl and Venus. The VMs' disks are on the
-# data partition, under native/bed, which tests/kvm/ref/lenovo-bed.sha256
-# pins.
-case bed/shm alone log mountns stage:vgshmprobe \
-    file:tests/kvm/bed-shm.sh file:tests/assign/gpu.sh file:bed/forward/forward.sh \
-    file:dev-log/82-assign/82-4/check.sh file:dev-log/78-intel/78-10d/crcmodes.c \
-    file:bed/measure/measure.sh file:bed/measure/piglit.txt file:bed/measure/latency.c file:bed/measure/webgl.html \
-    file:tests/graphics/runners/common.sh file:tests/graphics/runners/games.sh file:tests/graphics/runners/piglit.sh \
-    file:tests/kvm/ref/lenovo-bed.sha256 \
-    -- native/bed.sh shm lenovo-bed.sha256
-case bed/forward.virgl alone log mountns stage:vgshmprobe \
-    file:tests/kvm/bed-shm.sh file:tests/assign/gpu.sh file:bed/forward/forward.sh \
-    file:dev-log/82-assign/82-4/check.sh file:dev-log/78-intel/78-10d/crcmodes.c \
-    file:bed/measure/measure.sh file:bed/measure/piglit.txt file:bed/measure/latency.c file:bed/measure/webgl.html \
-    file:tests/graphics/runners/common.sh file:tests/graphics/runners/games.sh file:tests/graphics/runners/piglit.sh \
-    file:tests/kvm/ref/lenovo-bed.sha256 \
-    -- native/bed.sh forward virgl lenovo-bed.sha256
-case bed/forward.venus alone log mountns stage:vgshmprobe \
-    file:tests/kvm/bed-shm.sh file:tests/assign/gpu.sh file:bed/forward/forward.sh \
-    file:dev-log/82-assign/82-4/check.sh file:dev-log/78-intel/78-10d/crcmodes.c \
-    file:bed/measure/measure.sh file:bed/measure/piglit.txt file:bed/measure/latency.c file:bed/measure/webgl.html \
-    file:tests/graphics/runners/common.sh file:tests/graphics/runners/games.sh file:tests/graphics/runners/piglit.sh \
-    file:tests/kvm/ref/lenovo-bed.sha256 \
-    -- native/bed.sh forward venus lenovo-bed.sha256
