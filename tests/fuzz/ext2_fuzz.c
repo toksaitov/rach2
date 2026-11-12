@@ -82,6 +82,14 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     return 1;
 }
 
+/** A write-back error recorded for the syncs to report: ignored, since
+ * no input syncs through the VFS. */
+void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
+{
+    (void)mnt;
+    (void)rc;
+}
+
 /** Take `lock` with interrupts off: one thread, so nothing waits. */
 uint32_t spin_lock_irqsave(struct spinlock *lock)
 {
