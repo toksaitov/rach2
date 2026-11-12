@@ -462,6 +462,12 @@ static void current_setting(const struct ktimer *t, struct setting *s)
  * the expirations not read; 0, -EINVAL for a time out of range, or
  * `clock_now`'s error. A relative time counts from the next tick, so the
  * part of the tick in progress does not shorten it.
+ *
+ * A POSIX timer whose expiration the tick left for posting keeps that one
+ * expiration for `ptimer_fire`, so the signal it posts carries an overrun of
+ * 0, and `timer_getoverrun` reads 0 until then: Linux sends the signal at
+ * expiry, where it stays queued across a set, and the set resets the
+ * overrun (`posix_timer_set_common`, kernel/time/posix-timers.c:878-882).
  */
 static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
 {
@@ -494,7 +500,8 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
     if (t->armed) {
         disarm(t);
     }
-    t->count = 0;
+    t->count = t->fire_queued ? 1u : 0u;
+    t->overrun = 0;
     if (on && t->cpu_tg) {
         t->due = cpu_ticks_of(sec, sub);
         t->isec = isec;
