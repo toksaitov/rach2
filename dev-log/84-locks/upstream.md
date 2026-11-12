@@ -34,3 +34,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: the KVM layer builds the selftests with `vendor/gnu/kvm/max-guest-memory-one-cpu.patch`, which makes the default at least one vCPU and keeps the assertion for an empty mask; Linux's reference runs the same patched program from the same root.
 * Status: unreported.
 * Next: read `max_guest_memory_test.c` in a current kernel to see whether the default still rounds one processor down to none, then send the patch to the KVM list.
+
+## Linux lowers a link whose speed it has not seen to a reserved SPD
+
+* Project: Linux 6.12.115, `linux-6.12.115.tar.xz` (SHA-256 0ec90fe4b20422b1b664b77e6d2dde22b40bd41e7eb2cad8ac8739a4749cb1bb), `drivers/ata/libata-sata.c`, `drivers/ata/libata-core.c` and `drivers/ata/libata-eh.c`.
+* Fails: the first speed step down of a SATA link whose speed is unknown writes SControl.SPD 15, a reserved value, and not a lower speed. `sata_link_init_spd` leaves `hw_sata_spd_limit` at UINT_MAX when SControl.SPD is 0, as firmware leaves it (`libata-core.c:5496` and 5534-5540). When a reset fails with -EPIPE, `ata_eh_reset` calls `sata_down_spd_limit` (`libata-eh.c:3020-3025`), which takes the speed from SStatus only while DET reads 3 and otherwise from `link->sata_spd`, 0 before any reset has succeeded (`libata-sata.c:551-555`); with no speed known it only clears the limit's top bit, which its comment intends as a step down from the fastest speed allowed, but the top bit of UINT_MAX is no speed, and the limit becomes 0x7FFFFFFF (`libata-sata.c:561-577`). `__sata_set_spd_needed` then writes `fls(limit) & 0xf`, 31 & 15 = 15, to SControl.SPD (`libata-sata.c:455-461`), and `sata_link_hardreset` applies it (`libata-sata.c:634-646`); a second such step writes 14. SATA and AHCI 1.3.1 (3.3.11) define SPD 0 to 3 only.
+* Found: 2026-11-12, the testing PC, milestone 84, task 84-96, reading Linux's link recovery while porting it to Rach2's AHCI driver after Codex's review j53.
+* Reproduction: not yet run; it needs a link that flaps past the debounce's 2 s deadline and reads DET other than 3 when `sata_down_spd_limit` reads SStatus, under a kernel with SControl.SPD 0 at boot, and a print of SControl after the next hardreset.
+* Evidence: `rach2/sys/block/ahci.c` (`ahci_link_slow`); Codex's review j53, `build/flow/manager/review-161/j53/sol.md` in the main checkout on the Mac.
+* Rach2: `ahci_links_reset` starts the limit at the controller's speeds, CAP.ISS, so a step with no speed known drops the fastest of those.
+* Status: unreported.
+* Next: read `sata_down_spd_limit` in a current kernel to see whether it still lets the top bit of UINT_MAX stand for a step down, confirm on hardware or QEMU what SControl reads after such a step, then propose that the limit start at the host's supported speeds or that the step return when no speed is known.
