@@ -9,6 +9,7 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/network/socket/address.c rach2/sys/network/ip6/addr6.c
  * host-deps: rach2/sys/tick.c tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/spinlock_host.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
  * The system calls no row makes are declared static before the sources are
