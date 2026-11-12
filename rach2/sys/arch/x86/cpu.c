@@ -7,6 +7,7 @@
  * under `#if defined(__x86_64__)`.
  */
 
+#include "exits.h"
 #include "kcpu.h"
 
 #include "../arch.h"
@@ -31,6 +32,7 @@ void arch_invalid_opcode(void)
  * pending at the `sti` is taken once `hlt` has begun waiting, and wakes it. */
 void arch_idle_masked(void)
 {
+    exits_count(EXIT_HLT, 0);
     __asm__ __volatile__("sti; hlt\n"
                          ".globl arch_idle_resume\n"
                          "arch_idle_resume:\n"

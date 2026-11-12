@@ -410,6 +410,26 @@ void smp_kernel_flush(uintptr_t start, uintptr_t end);
  * second. */
 uint32_t smp_tlb_count(int which);
 
+/* The kinds of interprocessor interrupt a processor sends: a wake of an
+ * idle wait (`smp_kick`), a drop of user translations (`smp_tlb_shootdown`)
+ * or of kernel ones (`smp_kernel_flush`), a barrier, a release of a page
+ * directory, a call and a stop. */
+#define SMP_IPI_KICK       0
+#define SMP_IPI_TLB        1
+#define SMP_IPI_KERNEL_TLB 2
+#define SMP_IPI_BARRIER    3
+#define SMP_IPI_SPACE      4
+#define SMP_IPI_CALL       5
+#define SMP_IPI_STOP       6
+#define SMP_IPI_KINDS      7
+
+/** The interprocessor interrupts of `kind` processor `cpu` has sent since
+ * boot, modulo 2^32, which debugfs's `exits` prints (arch/x86/exits.c). */
+uint32_t smp_ipi_count(int cpu, int kind);
+
+/** The name of `kind`, as `exits` prints it. */
+const char *smp_ipi_name(int kind);
+
 /* A barrier request's kinds: a full memory barrier, or one and a
  * serializing instruction. */
 #define SMP_BARRIER      1u

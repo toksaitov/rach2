@@ -1,4 +1,4 @@
-.Dd November 12, 2026
+.Dd November 13, 2026
 .Dt DEBUGFS 5
 .Os
 .Sh NAME
@@ -431,6 +431,42 @@ while one sleeps with
 .Er EBUSY .
 Linux has no such file; its lib/test_lockup.c is a module that takes the
 same choices as parameters.
+.It Pa exits
+Mode 0444, on a PC booted with
+.Ql rach2.exits ,
+which alone has the file; a Rach2 file with no Linux counterpart.
+The instructions each processor ran that a hypervisor may take as a VM
+exit, counted since the first program started, one line for each:
+.Ql KIND NUMBER TOTAL CPU0 CPU1 ... ,
+where KIND is
+.Ql rdmsr ,
+.Ql wrmsr ,
+.Ql cpuid ,
+.Ql in ,
+.Ql out
+or
+.Ql hlt ,
+and NUMBER, in hexadecimal, the MSR, the leaf or the port, or 0 for
+.Ql hlt .
+Then a line
+.Ql ipi KIND TOTAL CPU0 ...
+for each kind of interprocessor interrupt each processor sent,
+.Ql kick ,
+.Ql tlb ,
+.Ql kernel_tlb ,
+.Ql barrier ,
+.Ql space ,
+.Ql call
+and
+.Ql stop ,
+and
+.Ql lost TOTAL CPU0 ... ,
+the counts that found a processor's 64 kinds and numbers taken.
+An access exits under KVM unless KVM gives the register to the guest, as
+it gives the FS and GS bases, so the counts name the exits that KVM's
+own counters
+.Pq Xr kvm 4
+leave unnamed.
 .It Pa kvm/exit_stats
 Mode 0644, present when
 .Pa /dev/kvm
