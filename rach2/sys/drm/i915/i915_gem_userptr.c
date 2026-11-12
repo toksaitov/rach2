@@ -9,6 +9,7 @@
 
 #include "../../lib/kerrno.h"
 #include "../../mm/kheap.h"
+#include "../../mm/filemap.h"
 #include "../../mm/mm.h"
 #include "../../mm/paging.h"
 #include "../../mm/pin.h"
@@ -28,9 +29,14 @@ void i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj)
     if (obj->frames) {
         for (i = 0; i < n; i++) {
             frame_unpin(obj->frames[i]);
+            if (obj->userptr.files[i]) {
+                vm_file_put(obj->userptr.files[i]);
+            }
         }
         kfree(obj->frames);
+        kfree(obj->userptr.files);
         obj->frames = 0;
+        obj->userptr.files = 0;
     }
     obj->userptr.stale = 0;
 }
@@ -162,11 +168,45 @@ static void userptr_invalidate(struct mmn_range *r, int event, uintptr_t start, 
 
 static const struct mmn_ops userptr_mmn_ops = {userptr_invalidate};
 
+/** Drop an attempt's file holds; every element was zeroed or held. */
+static void userptr_files_put(struct vm_file **files, uint32_t n)
+{
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        if (files[i]) {
+            vm_file_put(files[i]);
+            files[i] = NULL;
+        }
+    }
+}
+
+/**
+ * Keep the mapped disk file of each pinned page until the GPU gives its
+ * frame back. Under the regions' read lock, after the pin's sequence check,
+ * so a release writes back stores made after an unmap revoked a busy pin.
+ */
+static void userptr_files_get(struct mm *mm, uintptr_t start, uint32_t n, struct vm_file **files)
+{
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        const vma_t *vma = vm_find(&mm->vm, start + (uintptr_t)i * PAGE_SIZE);
+
+        if (vma && filemap_disk_pages(vma->file)) {
+            vm_file_get(vma->file);
+            files[i] = vma->file;
+        }
+    }
+}
+
 int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 {
     uint32_t i, n = (uint32_t)(obj->base.size >> PAGE_SHIFT);
     uintptr_t start = obj->userptr.ptr, end = start + (uintptr_t)obj->base.size;
     uintptr_t *frames;
+    struct vm_file **files;
+    struct mm *mm;
     uint32_t seq;
     int tries, err;
 
@@ -186,16 +226,26 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
     if (!obj->userptr.range.mm || !current_proc || current_proc->mm != obj->userptr.range.mm) {
         return -EFAULT;
     }
+    mm = obj->userptr.range.mm;
     frames = (uintptr_t *)kmalloc((size_t)n * sizeof(*frames));
     if (!frames) {
         return -ENOMEM;
     }
+    files = kzalloc((size_t)n * sizeof(*files));
+    if (!files) {
+        kfree(frames);
+        return -ENOMEM;
+    }
     for (tries = 0; tries < USERPTR_PIN_TRIES; tries++) {
         seq = obj->userptr.range.seq;
-        mmap_read_lock(obj->userptr.range.mm);
-        err = paging_pin_range(obj->userptr.range.mm, start, end, PIN_WRITE, frames);
-        mmap_unlock(obj->userptr.range.mm);
+        mmap_read_lock(mm);
+        err = paging_pin_range(mm, start, end, PIN_WRITE, frames);
+        if (err == 0 && seq == obj->userptr.range.seq) {
+            userptr_files_get(mm, start, n, files);
+        }
+        mmap_unlock(mm);
         if (err != 0) {
+            kfree(files);
             kfree(frames);
             return err;
         }
@@ -205,6 +255,8 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
             for (i = 0; i < n; i++) {
                 frame_unpin(frames[i]);
             }
+            userptr_files_put(files, n);
+            kfree(files);
             kfree(frames);
             if (obj->userptr.stale) {
                 return -EAGAIN;
@@ -214,9 +266,11 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
         }
         if (seq == obj->userptr.range.seq) {
             obj->frames = frames;
+            obj->userptr.files = files;
             obj->pages_pin_count = 1;
             return 0;
         }
+        userptr_files_put(files, n);
         /* The range changed while the pin slept: its frames may be old. */
         for (i = 0; i < n; i++) {
             frame_unpin(frames[i]);
@@ -225,6 +279,7 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
             break;
         }
     }
+    kfree(files);
     kfree(frames);
     return obj->userptr.range.mm ? -EAGAIN : -EFAULT;
 }

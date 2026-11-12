@@ -722,6 +722,7 @@ static vma_t user_regions[USER_REGIONS];
 static int user_nregions;
 static struct mm user_mm;
 static struct vm_file device_file;
+static struct vm_file tracked_file;
 static int user_pins;
 static void (*pin_sleep)(void);
 
@@ -748,6 +749,25 @@ vma_t *vm_next(const vma_t *r)
 void *vm_device_object(const struct vm_file *f)
 {
     return f == &device_file ? (void *)&device_file : 0;
+}
+
+/** The model file whose shared stores wait for its mapping's release. */
+int filemap_disk_pages(const struct vm_file *f)
+{
+    return f == &tracked_file;
+}
+
+/** Count a file held until the GPU drops its pinned frame. */
+void vm_file_get(struct vm_file *f)
+{
+    f->refs++;
+}
+
+/** Drop a model file hold; its storage belongs to the row. */
+void vm_file_put(struct vm_file *f)
+{
+    CHECK(f->refs > 0, "a userptr file hold is given back once");
+    f->refs--;
 }
 
 int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t flags,

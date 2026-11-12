@@ -393,9 +393,12 @@ An object over
 bytes of the caller's memory at
 .Fa user_ptr ,
 both whole pages, and its handle.
-Its pages are pinned on its first use and let go before what the caller
-maps there changes, by an unmap, a change of protection, a fork or a
-copy-on-write break; its next use pins them again, or fails with
+Its pages are pinned on its first use.
+An unmap, a change of protection, a fork or a copy-on-write break revokes
+the bindings; a busy GPU keeps its frames until its work ends.
+Each pinned shared disk page also keeps its mapped file until then, so
+writeback includes the device's final stores after unmap.
+Its next use pins the range again, or fails with
 .Er EFAULT
 once they are unmapped.
 Only the address space that made it may pin them.
