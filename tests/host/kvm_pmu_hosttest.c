@@ -74,6 +74,26 @@ void kfree(void *p)
     }
 }
 
+/** The VM's read side: one thread, so a section needs nothing. */
+uint32_t kvm_srcu_read_lock(struct kvm_vm *vm)
+{
+    (void)vm;
+    return 0;
+}
+
+/** The end of a section. */
+void kvm_srcu_read_unlock(struct kvm_vm *vm, uint32_t idx)
+{
+    (void)vm;
+    (void)idx;
+}
+
+/** A replacement's wait for the sections: none is under way. */
+void kvm_srcu_synchronize(struct kvm_vm *vm)
+{
+    (void)vm;
+}
+
 /** Model an absent caller mapping, including the filter's second copy. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {

@@ -392,54 +392,43 @@ void mmap_unlock(struct mm *mm)
 void smp_service(void)
 {}
 
-/* The slots' readers' lock: the waits of a change for the copies through
- * a slot, which the rows count, and the rest of a copy under way, which a
- * row sets to run while a change waits for it, as another thread's copy
- * would end then. */
+/* The slots' read side: the waits of a change for the sections that may
+ * have the old index, which the rows count, two for each change, one for
+ * each count, and the rest of a copy under way, which a row sets to run
+ * while a change waits for it, as another thread's copy would end then. */
+#define SYNC_WAITS 2
 static int slot_syncs;
 static void (*copy_rest)(void);
 
-/** Make `s` free. */
-void rwsem_init_key(struct rwsem *s, const char *name, const struct lockdep_key *key)
+/** Make `wq` empty: the model keeps no sleepers. */
+void wait_queue_init(wait_queue_t *wq)
 {
-    (void)name;
-    (void)key;
-    s->count = 0;
+    (void)wq;
 }
 
-/** A copy's hold: one thread, so no writer waits. */
-void down_read(struct rwsem *s)
+/** A section's end wakes a waiting change; the model's change has already
+ * run the rest it waits for. */
+void wq_wake_all(wait_queue_t *wq)
 {
-    s->count++;
+    (void)wq;
 }
 
-/** The end of a copy's hold. */
-void up_read(struct rwsem *s)
-{
-    s->count--;
-}
-
-/** A change's wait for the copies: the rest of the one under way runs,
- * and must give its hold back; with none to run, none may be held. */
-void down_write(struct rwsem *s)
+/** A change's wait for a count: the rest of the copy under way runs, and
+ * must end its section; with none to run, the count must be 0. */
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     void (*rest)(void) = copy_rest;
 
-    if (s->count != 0 && rest) {
+    (void)wq;
+    if (!cond(arg) && rest) {
         copy_rest = NULL;
         rest();
     }
-    if (s->count != 0) {
+    if (!cond(arg)) {
         __builtin_trap();
     }
-    s->count = -1;
     slot_syncs++;
-}
-
-/** The end of the change's wait. */
-void up_write(struct rwsem *s)
-{
-    s->count = 0;
+    return 0;
 }
 
 /** Take `mm`'s page-table lock, around the notice list's changes: the
@@ -656,11 +645,11 @@ static void region_rows(void)
     CHECK(set(0, 0, 0x100000, 0x10000, HVA) == 0 && zaps == 0, "no change, and no map taken back");
     CHECK(set(0, 0, 0x118000, 0x10000, HVA) == -EEXIST && zaps == 0, "a move into another slot");
     syncs = slot_syncs;
-    CHECK(set(0, 0, 0x200000, 0x10000, HVA) == 0 && slot_syncs == syncs + 1,
+    CHECK(set(0, 0, 0x200000, 0x10000, HVA) == 0 && slot_syncs == syncs + SYNC_WAITS,
           "a move, which waits for the copies through the slot");
     CHECK(zapped(0x100, 16), "a move takes back the guest page maps over the slot's old frames");
     CHECK(set(0, 0, 1ull << 39, 0x10000, HVA) == -EINVAL, "a move past the physical width");
-    CHECK(set(0, 0, 0, 0, 0) == 0 && zapped(0x200, 16) && slot_syncs == syncs + 2,
+    CHECK(set(0, 0, 0, 0, 0) == 0 && zapped(0x200, 16) && slot_syncs == syncs + 2 * SYNC_WAITS,
           "a deletion takes back the guest page maps over the slot and waits for the copies");
     CHECK(set(1, 0, 0, 0, 0) == 0 && zapped(0x110, 16), "the other deletion");
     CHECK(((struct slots *)vm.slots)->pages == 0 && the_mm.notify == NULL,
@@ -1062,12 +1051,15 @@ static int32_t clear_dirty(uint32_t slot, uint64_t first, uint32_t n, uint64_t *
 static struct kvm_slot_view copy_view;
 static uint64_t copy_gfn;
 
+/* Its section's number. */
+static uint32_t copy_idx;
+
 /** The end of that write, as `gpa_rw_page` ends it: the mark in the slot it
- * copied through, then the readers' lock given back. */
+ * copied through, then the section ended. */
 static void copy_mark(void)
 {
     kvm_dirty_mark(&vcpu[0], &copy_view, copy_gfn);
-    kvm_slots_read_unlock(&vm);
+    kvm_srcu_read_unlock(&vm, copy_idx);
 }
 
 /** Begin a kernel's write to the frame `gfn`, as `gpa_rw_page` does, whose
@@ -1075,10 +1067,10 @@ static void copy_mark(void)
  * holds the frame. */
 static int copy_begin(uint64_t gfn)
 {
-    kvm_slots_read_lock(&vm);
+    copy_idx = kvm_srcu_read_lock(&vm);
     copy_gfn = gfn;
-    if (!kvm_slot_find(&vm, gfn, &copy_view)) {
-        kvm_slots_read_unlock(&vm);
+    if (!kvm_slot_find_read(&vm, gfn, &copy_view)) {
+        kvm_srcu_read_unlock(&vm, copy_idx);
         return 0;
     }
     copy_rest = copy_mark;
@@ -1105,12 +1097,12 @@ static void overtaken_rows(uint64_t gfn, uintptr_t a)
     syncs = slot_syncs;
     CHECK(copy_begin(gfn + 9), "a kernel's write finds its slot");
     CHECK(set(5, KVM_MEM_LOG_DIRTY_PAGES, (gfn + 0x100) * 4096u, 100 * 4096u, a) == 0 &&
-              copy_rest == NULL && slot_syncs == syncs + 1,
+              copy_rest == NULL && slot_syncs == syncs + SYNC_WAITS,
           "a move of the slot waits for the write");
     CHECK(get_dirty(5, bits) == 0 && bits[0] == 1ull << 9 && bits[1] == 0,
           "which is logged at the page it wrote");
     CHECK(copy_begin(gfn + 0x100 + 3), "a write at the slot's new place");
-    CHECK(set(5, 0, 0, 0, 0) == 0 && copy_rest == NULL && slot_syncs == syncs + 2,
+    CHECK(set(5, 0, 0, 0, 0) == 0 && copy_rest == NULL && slot_syncs == syncs + 2 * SYNC_WAITS,
           "deleted, once the write through it has ended");
 }
 

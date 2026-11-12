@@ -362,12 +362,11 @@ extern const struct kvm_backend *kvm_backend;
 struct kvm_vm {
     struct anon_obj anon; /* "kvm-vm", for /proc/PID/fd */
     uint32_t refs;
-    /* Over the slots, their dirty logs, the guest-physical tables and the
-     * VM's page counts (slots.c, tdp.c, dirty.c): Linux's mmu_lock, and its
-     * kvm->srcu for the slots' readers, since a lookup here copies the
-     * slot out under the lock. `mmu_seq` counts the zaps, each under the
-     * lock, as Linux's mmu_invalidate_seq: a fault reads it before it
-     * looks at the caller's page and maps nothing when it moved. */
+    /* Over the slots' trees, their dirty logs, the guest-physical tables
+     * and the VM's page counts (slots.c, tdp.c, dirty.c): Linux's mmu_lock.
+     * `mmu_seq` counts the zaps, each under the lock, as Linux's
+     * mmu_invalidate_seq: a fault reads it before it looks at the caller's
+     * page and maps nothing when it moved. */
     struct spinlock mmu_lock;
     volatile uint32_t mmu_seq;
     /* Over the master clock, the TSCs' matching, `clock_offset` and
@@ -379,9 +378,15 @@ struct kvm_vm {
      * taken by an exchange under the big lock (`kvm_hv_prepare`,
      * `kvm_hv_clock_update`). */
     volatile uint32_t hv_clock_moved;
-    /* Over `msr_filter` and `pmu_filter`, which a guest's exits read
-     * (msr.c, pmu.c), as Linux's kvm->srcu over both filters. */
-    struct spinlock filter_lock;
+    /* The VM's read side, Linux's kvm->srcu (`kvm_srcu_read_lock`), over
+     * the slots, `msr_filter` and `pmu_filter`, which a guest's
+     * exits read with no lock: a reader joins `srcu_readers[srcu_gen]`;
+     * `srcu_waiting` counts the replacements waiting on `srcu_wq` for a
+     * count to reach 0. Zero is idle, so a zeroed VM needs no init. */
+    volatile uint32_t srcu_gen;
+    volatile uint32_t srcu_readers[2];
+    volatile uint32_t srcu_waiting;
+    wait_queue_t srcu_wq;
     struct kvm_vcpu *vcpus[KVM_MAX_VCPUS];
     uint32_t nr_vcpus;
     uint64_t tss_addr;    /* KVM_SET_TSS_ADDR */
@@ -419,7 +424,7 @@ struct kvm_vm {
     int exit_on_emulation_error; /* KVM_CAP_EXIT_ON_EMULATION_FAILURE */
     int platform_info_hidden;    /* KVM_CAP_MSR_PLATFORM_INFO 0: the guest's read is #GP */
     uint32_t user_space_msr;     /* KVM_CAP_X86_USER_SPACE_MSR: KVM_MSR_EXIT_REASON_* */
-    void *msr_filter;            /* KVM_X86_SET_MSR_FILTER's, msr.c's, under `filter_lock` */
+    void *msr_filter;            /* KVM_X86_SET_MSR_FILTER's, msr.c's, read under `srcu_gen` */
     int x2apic_format;           /* KVM_X2APIC_API_USE_32BIT_IDS */
     int x2apic_no_broadcast;     /* KVM_X2APIC_API_DISABLE_BROADCAST_QUIRK */
     uint64_t apic_bus_ns;        /* KVM_CAP_X86_APIC_BUS_CYCLES_NS: an APIC timer's tick in ns */
@@ -439,7 +444,7 @@ struct kvm_vm {
     struct kvm_coalesced_mmio_ring *ring; /* the page of coalesced writes, every vCPU's third */
     void *vfio;                           /* vfio.c's bridge; holds a VM reference */
     void *hv;                             /* hyperv.c's */
-    void *pmu_filter;                     /* pmu.c's event filter, under `filter_lock` */
+    void *pmu_filter;                     /* pmu.c's event filter, read under `srcu_gen` */
     int pmu_disabled;                     /* KVM_CAP_PMU_CAPABILITY, set before vCPUs exist */
     void *backend;                        /* the backend's */
     void *gpamap;                /* gpamap.c's: the maps of the guest's pages into programs */
@@ -1204,17 +1209,27 @@ int kvm_slots_init(struct kvm_vm *vm);
 void kvm_slots_free(struct kvm_vm *vm);
 
 /**
- * Begin a copy through the caller's address of a slot that a lookup gives:
- * a slot's change waits for it to end (`kvm_slots_read_unlock`) before it
- * returns or frees the slot or its log, as Linux's readers of the slots
- * hold kvm->srcu (arch/x86/kvm/x86.c:10673). Readers do not wait for each
- * other; one waits while a change waits. May sleep; not nested, and not
- * under a spinlock.
+ * Begin a section of `vm`'s readers, Linux's srcu_read_lock(&kvm->srcu):
+ * a slot the section finds, the MSR filter or the PMU's event filter it
+ * loads, and a copy through a slot's address it found, stays until
+ * the section ends (`kvm_srcu_read_unlock`), since a replacement waits for
+ * it before it frees the old one or returns (`kvm_srcu_synchronize`), as
+ * Linux's readers hold kvm->srcu (arch/x86/kvm/x86.c:10673). The section
+ * takes no lock and turns no interrupts off, and nothing waits for it to
+ * begin; sections nest, and one may begin with interrupts off. The number
+ * to give `kvm_srcu_read_unlock`. The section may sleep, as a copy that
+ * faults does.
  */
-void kvm_slots_read_lock(struct kvm_vm *vm);
+uint32_t kvm_srcu_read_lock(struct kvm_vm *vm);
 
-/** End what `kvm_slots_read_lock` began. */
-void kvm_slots_read_unlock(struct kvm_vm *vm);
+/** End the section `kvm_srcu_read_lock` began, which gave `idx`. */
+void kvm_srcu_read_unlock(struct kvm_vm *vm, uint32_t idx);
+
+/** Wait until no section of `vm`'s readers that began before the call is
+ * under way, as Linux's synchronize_srcu_expedited: the caller has
+ * published the replacement of what it will free. Sleeps, letting the big
+ * lock go; not under a spinlock. */
+void kvm_srcu_synchronize(struct kvm_vm *vm);
 
 /**
  * KVM_SET_USER_MEMORY_REGION, with Linux's checks and answers: a slot
@@ -1228,11 +1243,11 @@ void kvm_slots_read_unlock(struct kvm_vm *vm);
  * that overlaps another; -ENOMEM.
  *
  * Under the big lock. A move, a change of flags and a deletion sleep: they
- * wait for the copies through the slot as it was (`kvm_slots_read_lock`),
- * letting the big lock go meanwhile, so the VM's other ioctls, another
- * KVM_SET_USER_MEMORY_REGION among them, may run in the middle of the
- * call. The table is whole each time the lock is let go, and a slot or log
- * is freed only after the wait.
+ * wait for the sections that may have found the slot as it was
+ * (`kvm_srcu_synchronize`), letting the big lock go meanwhile, so the VM's
+ * other ioctls, another KVM_SET_USER_MEMORY_REGION among them, may run in
+ * the middle of the call. The table is whole each time the lock is let go,
+ * and a slot or log is freed only after the wait.
  */
 int32_t kvm_slots_set(struct kvm_vm *vm, const struct kvm_userspace_memory_region *r);
 
@@ -1242,9 +1257,9 @@ int32_t kvm_slots_set(struct kvm_vm *vm, const struct kvm_userspace_memory_regio
  * a bit for each page from `base_gfn` in 64-bit words, or NULL when it does
  * not log or uses a dirty ring. A change frees the bitmap, so it is used in
  * one of two ways: under `mmu_lock` held from the lookup to the last use;
- * or under `kvm_slots_read_lock` held from before the lookup to the last
- * use, which the change waits for, with `mmu_lock` held at each read or
- * write of the log, as `kvm_dirty_mark` does.
+ * or inside a `kvm_srcu_read_lock` section from before the lookup to the
+ * last use, which the change waits for, with `mmu_lock` held at each read
+ * or write of the log, as `kvm_dirty_mark` does.
  */
 struct kvm_slot_view {
     uint64_t base_gfn;
@@ -1257,14 +1272,20 @@ struct kvm_slot_view {
 
 /** The slot that holds the guest-physical frame `gfn` of `vm`, for the
  * guest-physical tables, VFIO's mappings and the transport's buffers: 1
- * with it in `*out`, or 0 for a frame no slot holds. Takes `mmu_lock`;
- * the copy may be out of date once the lock is let go, as a reader of
- * Linux's slots under kvm->srcu may see the slots of before a change. A
- * caller that copies through `out->hva` or marks `out->dirty` after the
- * lock is let go holds `kvm_slots_read_lock` from before the call to its
- * last use, so that a change of the slot waits for it before it frees the
- * log or returns to a caller that unmaps the memory. */
+ * with it in `*out`, or 0 for a frame no slot holds. Walks the tree in a
+ * section of its own, with no lock; the copy may be out of date
+ * once it returns, as a reader of Linux's slots under kvm->srcu may see the
+ * slots of before a change. A caller that copies through `out->hva` or
+ * marks `out->dirty` after the call holds a `kvm_srcu_read_lock` section
+ * from before the call to its last use, so that a change of the slot waits
+ * for it before it frees the log or returns to a caller that unmaps the
+ * memory. */
 int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out);
+
+/** `kvm_slot_find` for a caller inside a `kvm_srcu_read_lock` section,
+ * which may have interrupts off; it walks again while a change is under
+ * way or came during the walk. */
+int kvm_slot_find_read(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out);
 
 /** `kvm_slot_find` for a caller that holds `mmu_lock`. */
 int kvm_slot_find_locked(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out);
@@ -1413,7 +1434,7 @@ int kvm_dirty_mark_locked(struct kvm_vm *vm, const struct kvm_slot_view *s, uint
 /** Reserve a ring entry before a software copy to a page in `s`: 0 and
  * *entry NULL without a ring, 0 with a reserved entry, or -ENOSPC before
  * a copy that would overrun the ring. Holds mmu_lock only for the reserve;
- * the caller holds the vCPU's mutex and the slots' readers' lock. */
+ * the caller holds the vCPU's mutex and a `kvm_srcu_read_lock` section. */
 int kvm_dirty_reserve(struct kvm_vcpu *v, const struct kvm_slot_view *s, uint64_t gfn,
                       struct kvm_dirty_gfn **entry);
 

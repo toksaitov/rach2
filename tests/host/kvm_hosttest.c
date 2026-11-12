@@ -1204,6 +1204,26 @@ int kvm_guest_phys_rw(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t n, i
  * memfd_secret's. */
 static vma_t guest_vma, secret_vma;
 
+/** The VM's read side: one thread, so a section needs nothing. */
+uint32_t kvm_srcu_read_lock(struct kvm_vm *vm)
+{
+    (void)vm;
+    return 0;
+}
+
+/** The end of a section. */
+void kvm_srcu_read_unlock(struct kvm_vm *vm, uint32_t idx)
+{
+    (void)vm;
+    (void)idx;
+}
+
+/** A replacement's wait for the sections: none is under way. */
+void kvm_srcu_synchronize(struct kvm_vm *vm)
+{
+    (void)vm;
+}
+
 /** The slot of a guest page, which the steal time's record vouches for: 1
  * with `out` filled while guest_mem is set, or 0. */
 int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
