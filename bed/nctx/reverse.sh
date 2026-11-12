@@ -27,7 +27,17 @@ guest()
 cleanup()
 {
     if [ -n "$vm" ]; then
-        guest 'sudo poweroff' 2>/dev/null || true
+        # A guest that takes SSH but no longer runs commands would hold the
+        # request open, so it gets 20 seconds before the VM is stopped.
+        guest 'sudo poweroff' > /dev/null 2>&1 &
+        stop=$!
+        n=0
+        while kill -0 "$stop" 2>/dev/null && [ "$n" -lt 20 ]; do
+            sleep 1
+            n=$((n + 1))
+        done
+        kill -TERM "$stop" 2>/dev/null || true
+        wait "$stop" 2>/dev/null || true
         kill -TERM "$vm" 2>/dev/null || true
         wait "$vm" 2>/dev/null || true
     fi
