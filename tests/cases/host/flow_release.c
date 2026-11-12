@@ -1672,6 +1672,20 @@ static int windows_collected(struct release *r)
            called(r, "^wsl touch " WINDOWS_HELD "[0-9a-f-]+\\.end$") &&
            !called(r, "PREPARATION_CLEAN=1");
 }
+/**
+ * Succeed when the preparation's start marks its launch before it reads the
+ * cancel mark that winclean.sh makes and creates the bash only after both,
+ * and when the bash writes its PID file before it reads that mark and does
+ * any work.
+ */
+static int windows_launch_ordered(struct release *r)
+{
+    return before(r, "\nwindows : > \"$b.launch\"\n",
+                  "\nwindows if [ -e \"$b.cancel\" ]; then\n") &&
+           before(r, "\nwindows if [ -e \"$b.cancel\" ]; then\n", " Invoke-CimMethod ") &&
+           before(r, ".prepare.pid.part && mv ", ".prepare.cancel ] || exit 0\n") &&
+           before(r, ".prepare.cancel ] || exit 0\n", ".alive; sleep 60; done &\n");
+}
 static int windows_pass_row(struct release *r)
 {
     struct fixture *f = r->f;
@@ -1679,6 +1693,7 @@ static int windows_pass_row(struct release *r)
                .record = r->head, .git = "yes", .machines = WINDOWS, .windows = "status 0"});
     return check(r,
                  f->status == 75 && windows_prepared(r) && windows_collected(r) &&
+                     windows_launch_ordered(r) &&
                      called(r, "^git -C .* bundle create .*/state/windows.bundle "
                                "refs/remotes/origin/" BRANCH "$") &&
                      called(r, "^scp -q -o BatchMode=yes .*/state/windows.bundle "
