@@ -328,8 +328,8 @@ int vtd_fault_start(void)
 
 /** A fault event that comes while FECTL.IM is set waits in FECTL.IP and is
  * sent as the mask is cleared (VT-d specification, the fault event control
- * register), so none is lost
- * across the hold. Nothing while no vector was taken. */
+ * register), so none is lost across the hold. Nothing while no vector was
+ * taken. */
 void vtd_fault_hold(int hold)
 {
     int i;
