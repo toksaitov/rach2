@@ -49,8 +49,10 @@ void regions_balance(void);
  * Remove [start, end) from the regions of `mm`, whose lock the caller holds
  * to write, and take its pages away: the regions first, so that a fault
  * after the call finds none there, then the change notice, then the entries
- * and the frames (`unmap_user_range`). Nothing is removed when a split
- * finds no room for its region. 0, or -1 for no room.
+ * and the frames (`unmap_user_range`), and last the removed regions' files,
+ * which they hold until no processor can reach their pages (`vm_detach`).
+ * Nothing is removed when a split finds no room for its region. 0, or -1
+ * for no room.
  */
 int regions_unmap(struct mm *mm, uintptr_t start, uintptr_t end);
 

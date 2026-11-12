@@ -284,9 +284,13 @@ struct vm_chunk;
 typedef struct vm_space {
     vma_t *root;
     vma_t *first, *last;
-    vma_t *spare;            /* unoccupied nodes, through next */
+    vma_t *spare; /* unoccupied nodes, through next */
+    /* Nodes of regions `vm_detach` took out, through next, each still
+     * holding its file until `vm_release_detached`; `held` counts them. */
+    vma_t *detached;
+    uint32_t held;
     struct vm_chunk *chunks; /* allocations owned by this space */
-    uint32_t cap;            /* allocated nodes, including spares */
+    uint32_t cap;            /* allocated nodes: live, detached and spare */
     uint32_t count;
     uintptr_t total;       /* bytes covered by all regions */
     uintptr_t heap_start;  /* initial program break (base of the heap VMA) */
@@ -474,10 +478,32 @@ int vm_file_dead(void);
  */
 void vm_file_reap(void);
 
-/** Take [start, end) out of every region it meets, as munmap does: a region
+/**
+ * Take [start, end) out of every region it meets, as munmap does: a region
  * it covers goes, one it overlaps at one end is trimmed, and one that holds
  * it is split in two. An empty range changes nothing. 0, or -1 when the
- * split has no room, with nothing changed. */
+ * split has no room, with nothing changed.
+ *
+ * A region that goes keeps its reference to the file it maps, on the
+ * space's detached list, until `vm_release_detached`, which the caller runs
+ * once the range's entries are cleared and their translations flushed from
+ * every processor. The last reference would otherwise reach the dead list
+ * first, and another thread's `vm_file_reap`, which no lock of this space
+ * holds off, could release a device object or a buffer whose memory a
+ * processor still reaches through the old entries. Linux's munmap frees
+ * the detached regions only after unmap_region has cleared the entries and
+ * finished the TLB gather (mm/vma.c:1122,1164,1180 in Linux 6.12.115).
+ */
+int vm_detach(vm_space_t *vm, uintptr_t start, uintptr_t end);
+
+/** Drop the file references of the regions `vm_detach` took out of `vm`
+ * and give their nodes back; the caller holds the regions' lock to write,
+ * and the range's entries are gone from every processor. */
+void vm_release_detached(vm_space_t *vm);
+
+/** `vm_detach` and `vm_release_detached` at once, for a range no entry
+ * maps, or whose files the caller holds across the clearing of its
+ * entries. */
 int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end);
 
 /**
