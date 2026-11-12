@@ -107,7 +107,9 @@ void bkl_take(int depth);
 
 /** `bkl_take` with the hold charged to `key`: BKL_KEY_SWITCH for a thread's
  * take after its switch (`schedule_tail`), BKL_KEY_IDLE for one after an idle
- * wait, so that bkl/calls tells those holds apart. */
+ * wait, so that bkl/calls tells those holds apart. A switch take by a
+ * thread in a system call also charges the call's slept row; a kernel thread
+ * marked in a call (`flusher_main`) charges none, since it has no call. */
 void bkl_take_as(int depth, int key);
 
 /** The processors started and taking work, the boot processor counted. */
