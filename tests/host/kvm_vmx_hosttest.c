@@ -66,6 +66,7 @@
 
 #include <setjmp.h>
 
+#include "fs/debugfs.h"
 #include "fs/devfs.h"
 #include "fs/fd.h"
 #include "fs/file.h"
@@ -250,17 +251,18 @@ int sysfs_add_dir(int parent, const char *name)
     return ++sysfs_handles;
 }
 
-/* exitstat.c's debug file, which kvm_hosttest reads. */
-struct debugfs_text_ops;
-int32_t debugfs_create_text(const char *path, uint32_t mode, const struct debugfs_text_ops *ops,
-                            void *data);
+/* exitstat.c's debug file kvm/exit_stats: its hooks and their data, which
+ * exitstat_rows reads and writes through. */
+static const struct debugfs_text_ops *exitstat_ops;
+static void *exitstat_data;
+
 int32_t debugfs_create_text(const char *path, uint32_t mode, const struct debugfs_text_ops *ops,
                             void *data)
 {
     (void)path;
     (void)mode;
-    (void)ops;
-    (void)data;
+    exitstat_ops = ops;
+    exitstat_data = data;
     return 0;
 }
 
@@ -295,9 +297,16 @@ void rtc_realtime(int64_t *s, int64_t *ns)
     *ns = 0;
 }
 
+/* The TSC that arch_cycles reads. While `tsc_steps` is set, the entry's
+ * RDMSR of DEBUGCTL adds 3 to it, the guest's run 1000 and the exit's
+ * VMREAD of its reason 7, so the cycles kvm/exit_stats gives a run's
+ * entry, run and exit are known. */
+static uint64_t model_tsc = 1000000;
+static int tsc_steps;
+
 uint64_t arch_cycles(void)
 {
-    return 1000000;
+    return model_tsc;
 }
 
 /* The big lock's depth, the interrupt flag and a pending signal. */
@@ -1321,6 +1330,7 @@ static int m_vmread(uint64_t field, uint64_t *value)
         return VMX_FAIL_VALID;
     }
     *value = m.cur->f[field];
+    model_tsc += tsc_steps && field == VM_EXIT_REASON ? 7u : 0u;
     return VMX_OK;
 }
 
@@ -1701,6 +1711,7 @@ static int m_run(struct kvm_regs *regs, uint64_t *cr2, int launched)
     (void)regs;
     (void)cr2;
     CHECK(!irq_on && bkl_depth == 0, "the guest runs with interrupts off and the big lock let go");
+    model_tsc += tsc_steps ? 1000u : 0u;
     if (!m.on) {
         return not_on();
     }
@@ -1774,6 +1785,7 @@ static int m_run(struct kvm_regs *regs, uint64_t *cr2, int launched)
  * MSRs; any other MSR reads as a value of its own. */
 static uint64_t m_rdmsr(uint32_t msr)
 {
+    model_tsc += tsc_steps && msr == MSR_IA32_DEBUGCTL ? 3u : 0u;
     if (msr_slot(msr) >= 0) {
         return m.msr[msr_slot(msr)];
     }
@@ -4882,6 +4894,109 @@ static void xsaves_rows(int vm)
     caps.proc2 = had;
 }
 
+/** Whether the `len` bytes at `a` and `b` are the same. */
+static int same(const char *a, const char *b, size_t len)
+{
+    while (len && *a == *b) {
+        a++;
+        b++;
+        len--;
+    }
+    return len == 0;
+}
+
+/** The length of the string `s`. */
+static size_t length(const char *s)
+{
+    size_t len = 0;
+
+    while (s[len]) {
+        len++;
+    }
+    return len;
+}
+
+/** The line of kvm/exit_stats in `text` whose code is `code`, its nine
+ * counts after the code read into `n`: 1 when it is there whole, with the
+ * name `name` last, and 0 otherwise. */
+static int stat_line(const char *text, const char *code, const char *name, uint64_t n[9])
+{
+    const char *p = text;
+    size_t len = length(code), i;
+
+    while (*p && !(p > text && p[-1] == '\n' && same(p, code, len) && p[len] == ' ')) {
+        p++;
+    }
+    if (!*p) {
+        return 0;
+    }
+    p += len;
+    for (i = 0; i < 9; i++) {
+        if (*p++ != ' ' || *p < '0' || *p > '9') {
+            return 0;
+        }
+        for (n[i] = 0; *p >= '0' && *p <= '9'; p++) {
+            n[i] = n[i] * 10u + (uint64_t)(*p - '0');
+        }
+    }
+    len = length(name);
+    return *p == ' ' && same(p + 1, name, len) && p[1 + len] == '\n';
+}
+
+/**
+ * kvm/exit_stats through the VMX backend: a CPUID exit the kernel handles,
+ * then a HLT for the caller. Each line gives, in this order, the code, the
+ * exits, those handled in the kernel, those that ended KVM_RUN, the wait,
+ * the handling and its preparation, and the entry, run and exit the backend
+ * timed around VMLAUNCH and VMRESUME, which the model's TSC steps make 3,
+ * 1000 and 7 cycles.
+ */
+static void exitstat_rows(void)
+{
+    static const char columns[] = "\ncode exits kernel user wait_cycles handle_cycles "
+                                  "prepare_cycles entry_cycles run_cycles exit_cycles name\n";
+    static char buf[2048];
+    struct kvm_userspace_memory_region region = {0, 0, 0, sizeof(ram), 0};
+    unsigned int was_cpu = host_cpu;
+    const char *nl;
+    uint64_t n[9];
+    int32_t len;
+    int vm, fd;
+
+    on_cpu(0);
+    vm = dev(KVM_CREATE_VM, 0);
+    region.userspace_addr = (uint64_t)(uintptr_t)ram;
+    CHECK(fdio(vm, KVM_SET_USER_MEMORY_REGION, (uintptr_t)&region) == 0, "a VM of a slot");
+    fd = make_vcpu(vm, 0);
+    CHECK(exitstat_ops && exitstat_ops->store(exitstat_data, (const char __user *)"0", 1) == 1,
+          "kvm/exit_stats is registered and cleared");
+    set_regs(fd, 0x1000, 0, 0, 0);
+    script(EXIT_CPUID, 0, 2);
+    script(EXIT_HLT, 0, 1);
+    tsc_steps = 1;
+    CHECK(run(fd) == 0, "a CPUID exit handled in the kernel, then a HLT for the caller");
+    tsc_steps = 0;
+    len = exitstat_ops->show(exitstat_data, buf, sizeof(buf) - 1u);
+    CHECK(len > 0 && len < (int32_t)sizeof(buf), "kvm/exit_stats fits its buffer");
+    buf[len > 0 && len < (int32_t)sizeof(buf) ? len : 0] = '\0';
+    for (nl = buf; *nl && *nl != '\n'; nl++) {
+    }
+    CHECK(same(buf, "backend vmx tsc_khz ", 20) && same(nl, columns, sizeof(columns) - 1u),
+          "kvm/exit_stats names its backend and its ten columns, in order");
+    CHECK(stat_line(buf, "0xa", "CPUID", n) && n[0] == 1 && n[1] == 1 && n[2] == 0 && n[6] == 3 &&
+              n[7] == 1000 && n[8] == 7,
+          "CPUID's line: one exit, handled in the kernel, whose run's entry, run and exit "
+          "took 3, 1000 and 7 cycles");
+    CHECK(stat_line(buf, "0xc", "HLT", n) && n[0] == 1 && n[1] == 0 && n[2] == 1 && n[5] == 0 &&
+              n[6] == 3 && n[7] == 1000 && n[8] == 7,
+          "HLT's line: one exit that ended KVM_RUN, with no preparation, and the same three");
+    exitstat_ops->store(exitstat_data, (const char __user *)"0", 1);
+    fdclose(fd);
+    fdclose(vm);
+    model_tsc = 1000000;
+    on_cpu((int)was_cpu);
+}
+
 /** A halted vCPU's sleep between two runs of one KVM_RUN, with the local
  * APIC in the kernel: the switch away puts the host's state back, the next
  * entry saves and loads it again, and the guest's FPU stays loaded. */
@@ -5057,6 +5172,7 @@ int main(void)
     selftest_rows(vm);
     tpr_rows();
     block_rows();
+    exitstat_rows();
     CHECK(m.ud == 0 && m.gp == 0 && m.bad_writes == 0 && m.bad_reads == 0,
           "no VMX instruction outside VMX operation and no field the VMCS lacks, over every row");
     fdclose(fd);

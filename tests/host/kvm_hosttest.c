@@ -32,8 +32,10 @@
  * going to the caller with no local APIC in the kernel, immediate_exit, a
  * signal, a kick from another processor and a triple fault; the big lock
  * let go and interrupts off for the entry; kvm/exit_stats's rows for VMX's
- * and SVM's codes, summed over two processors, its clear, and an exit with
- * no entry after it counted as one that ended KVM_RUN; the signal mask
+ * and SVM's codes, summed over two processors, its clear, the entry, run
+ * and exit counted only from marks in order, the preparation only for an
+ * exit the kernel handled, and an exit with no entry after it counted as
+ * one that ended KVM_RUN; the signal mask
  * swapped for the run; the refusals of the state ioctls Linux makes; EIO
  * from another address space; every allocation given back when the last
  * reference to the VM goes, the mapping's among them; and, in a VM of
@@ -232,7 +234,8 @@ int sysfs_add_dir(int parent, const char *name)
 }
 
 /* exitstat.c's debug file kvm/exit_stats: its hooks and their data, which
- * exitstat_alone_rows and exitstat_run_rows read and write through. */
+ * exitstat_alone_rows, exitstat_part_rows and exitstat_run_rows read and
+ * write through. */
 static const struct debugfs_text_ops *exitstat_ops_kept;
 static void *exitstat_data_kept;
 
@@ -3640,7 +3643,8 @@ static void selftest_rows(void)
  * fit or its headings are not those of the backend named `backend`. */
 static const char *exit_stats(char *buf, int32_t cap, const char *backend)
 {
-    static const char columns[] = "code exits kernel user wait_cycles handle_cycles name\n";
+    static const char columns[] = "code exits kernel user wait_cycles handle_cycles "
+                                  "prepare_cycles entry_cycles run_cycles exit_cycles name\n";
     int32_t n = exitstat_ops_kept->show(exitstat_data_kept, buf, (uint32_t)cap - 1u);
     char *p;
     unsigned long len = 0;
@@ -3709,9 +3713,9 @@ static void exitstat_alone_rows(void)
     tsc = 2000;
     kvm_exitstat_done(&x);
     t = exit_stats(buf, sizeof(buf), "vmx");
-    CHECK(t && strcmp(t, "0x1e 1 1 0 50 150 IO_INSTRUCTION\n"
-                         "0x0 1 0 1 10 290 other\n"
-                         "0x80000000 1 1 0 20 80 FAILED_VMENTRY\n") == 0,
+    CHECK(t && strcmp(t, "0x1e 1 1 0 50 150 0 0 0 0 IO_INSTRUCTION\n"
+                         "0x0 1 0 1 10 290 0 0 0 0 other\n"
+                         "0x80000000 1 1 0 20 80 0 0 0 0 FAILED_VMENTRY\n") == 0,
           "VMX's rows: each exit's wait, its handling to the next entry or to KVM_RUN's "
           "return, a failed entry under bit 31 and a reason past the table in other, "
           "summed over the processors that opened and closed the accounts");
@@ -3740,15 +3744,63 @@ static void exitstat_alone_rows(void)
     tsc = 125;
     kvm_exitstat_done(&x);
     t = exit_stats(buf, sizeof(buf), "svm");
-    CHECK(t && strcmp(t, "0xaf 1 0 1 5 10 0xaf\n"
-                         "0x400 1 1 0 5 5 npf\n"
-                         "0x403 1 1 0 1 9 vmgexit\n"
-                         "0x0 2 2 0 7 13 other\n"
-                         "0xffffffff 1 1 0 2 8 invalid_guest_state\n") == 0,
+    CHECK(t && strcmp(t, "0xaf 1 0 1 5 10 0 0 0 0 0xaf\n"
+                         "0x400 1 1 0 5 5 0 0 0 0 npf\n"
+                         "0x403 1 1 0 1 9 0 0 0 0 vmgexit\n"
+                         "0x0 2 2 0 7 13 0 0 0 0 other\n"
+                         "0xffffffff 1 1 0 2 8 0 0 0 0 invalid_guest_state\n") == 0,
           "SVM's rows: a code Linux does not name, NPF and VMGEXIT from 0x400, 0xb0 and "
           "0x410 in other, and a failed entry");
     exit_stats_write("0");
     kvm_backend = was;
+    tsc = tsc_was;
+}
+
+/** kvm/exit_stats's columns of an exit's parts, on one processor: the
+ * entry, run and exit the backend timed, counted only when the marks run
+ * in order, and the preparation, from the run loop's first pass over its
+ * top after an exit to the next entry, counted only for an exit the kernel
+ * handled. The marks of three CPUID exits and KVM_RUN's return give the
+ * line's ten numbers. */
+static void exitstat_part_rows(void)
+{
+    static char buf[2048];
+    uint64_t tsc_was = tsc;
+    struct kvm_vcpu x;
+    const char *t;
+
+    exit_stats_write("0");
+    k_memset(&x, 0, sizeof(x));
+    x.xs_row = -1;
+    host_cpu = 0;
+    x.hw_exit = 10;
+    x.xs_in = 120;
+    x.xs_out = 180;
+    kvm_exitstat_exit(&x, 100, 200, 250);
+    CHECK(x.xs_in == 0 && x.xs_out == 0, "an exit's count takes the backend's marks");
+    tsc = 300;
+    kvm_exitstat_prepare(&x);
+    tsc = 350;
+    kvm_exitstat_prepare(&x);
+    CHECK(x.xs_prep == 300, "the preparation starts at the loop's first pass after the exit");
+    x.xs_in = 420;
+    x.xs_out = 470;
+    kvm_exitstat_exit(&x, 400, 500, 530);
+    x.xs_in = 650;
+    x.xs_out = 640;
+    kvm_exitstat_exit(&x, 600, 700, 710);
+    tsc = 750;
+    kvm_exitstat_prepare(&x);
+    tsc = 800;
+    kvm_exitstat_done(&x);
+    CHECK(x.xs_prep == 0 && x.xs_row == -1,
+          "KVM_RUN's return ends the account and its preparation");
+    t = exit_stats(buf, sizeof(buf), "vmx");
+    CHECK(t && strcmp(t, "0xa 3 2 1 90 310 100 40 110 50 CPUID\n") == 0,
+          "CPUID's line: three exits, two handled in the kernel and one that ended KVM_RUN, "
+          "the waits, the handling, the one preparation that ran to an entry, and the entry, "
+          "run and exit of the two runs whose marks are in order");
+    exit_stats_write("0");
     tsc = tsc_was;
 }
 
@@ -3775,8 +3827,8 @@ static void exitstat_run_rows(int fd)
     CHECK(fdio(fd, KVM_RUN, 0) == 0 && run->exit_reason == KVM_EXIT_HLT,
           "an interrupt's exit, then a HLT for the caller");
     t = exit_stats(buf, sizeof(buf), "vmx");
-    CHECK(t && strcmp(t, "0x1 1 1 0 0 0 EXTERNAL_INTERRUPT\n"
-                         "0xc 1 0 1 0 0 HLT\n") == 0,
+    CHECK(t && strcmp(t, "0x1 1 1 0 0 0 0 0 0 0 EXTERNAL_INTERRUPT\n"
+                         "0xc 1 0 1 0 0 0 0 0 0 HLT\n") == 0,
           "the interrupt's exit counts in kernel, the HLT's in user");
 
     exit_stats_write("0");
@@ -3790,7 +3842,7 @@ static void exitstat_run_rows(int fd)
               entries_made == 1 && !late_request,
           "a request that comes after the loop's look ends KVM_RUN at the entry");
     t = exit_stats(buf, sizeof(buf), "vmx");
-    CHECK(t && strcmp(t, "0x1 1 0 1 0 0 EXTERNAL_INTERRUPT\n") == 0,
+    CHECK(t && strcmp(t, "0x1 1 0 1 0 0 0 0 0 0 EXTERNAL_INTERRUPT\n") == 0,
           "and the exit before it counts in user, with no entry after it");
 
     exit_stats_write("0");
@@ -3803,7 +3855,8 @@ static void exitstat_run_rows(int fd)
     CHECK(fdio(fd, KVM_RUN, 0) == -EOPNOTSUPP && entries_made == 2,
           "the backend refuses the entry after an exit the kernel handled");
     t = exit_stats(buf, sizeof(buf), "vmx");
-    CHECK(t && strcmp(t, "0x1 1 0 1 0 0 EXTERNAL_INTERRUPT\n") == 0, "and the exit counts in user");
+    CHECK(t && strcmp(t, "0x1 1 0 1 0 0 0 0 0 0 EXTERNAL_INTERRUPT\n") == 0,
+          "and the exit counts in user");
     refuse_at_end = 0;
     exit_stats_write("0");
     script_len = 0;
@@ -3835,6 +3888,7 @@ int main(void)
     vcpu = qemu_startup(&vm);
     exit_rows(vcpu);
     exitstat_alone_rows();
+    exitstat_part_rows();
     exitstat_run_rows(vcpu);
     state_rows(vcpu);
     vm_rows(vm, vcpu);
