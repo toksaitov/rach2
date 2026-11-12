@@ -11,6 +11,7 @@
 #include "../kernel.h"
 #include "mm/filecache.h"
 #include "mm/kheap.h"
+#include "mm/regions.h"
 #include "klog.h"
 #include "syscall.h"
 #include "power.h"
@@ -7661,42 +7662,6 @@ static int mlock_allowed(void)
 }
 
 /**
- * Begin a change of the current address space's regions, by a call of the
- * mmap family, which runs without the big lock: the regions' lock to
- * write, as Linux's mmap family takes mmap_lock (mm/mmap.c), and then the
- * big lock, which the files, the counts of committed and locked memory and
- * the code that reads user memory under it still need. The space, for
- * `regions_end`.
- */
-static struct mm *regions_begin(void)
-{
-    struct mm *mm = current_proc->mm;
-
-    mmap_write_lock(mm);
-    bkl_enter();
-    return mm;
-}
-
-/** End what `regions_begin` began, and let go of the files whose last
- * region the change removed (`mm_reap`). */
-static void regions_end(struct mm *mm)
-{
-    bkl_exit();
-    mmap_unlock(mm);
-    mm_reap();
-}
-
-/** Have the caches give frames back before a call maps memory, under the
- * big lock, which they need, and before the regions' lock is taken, since
- * a write back may wait for a file (`mem_balance`). */
-static void regions_balance(void)
-{
-    bkl_enter();
-    mem_balance();
-    bkl_exit();
-}
-
-/**
  * The change of `sys_brk` to the break `req` of the regions `vm`, under
  * the regions' lock held to write: the break the call returns, with
  * `*populate` set when [*old_top, *new_top) is to be brought in once the
@@ -7734,12 +7699,10 @@ static long brk_change(vm_space_t *vm, uintptr_t req, uintptr_t *old_top_out,
         }
         *populate = (vm->def_prot & VM_PROT_LOCKS) == VM_PROT_LOCKED;
     } else if (new_top < old_top) {
-        mm_note_anon(current_proc->mm, new_top, old_top);
-        if (vm_sealed_at(vm, new_top, old_top) < old_top || vm_remove(vm, new_top, old_top) != 0) {
+        if (vm_sealed_at(vm, new_top, old_top) < old_top ||
+            regions_unmap(current_proc->mm, new_top, old_top) != 0) {
             return (long)vm->brk;
         }
-        mmn_notify(current_proc->mm, MMN_UNMAP, new_top, old_top);
-        unmap_user_range(_curr_dir, new_top, old_top);
     }
 
     vm->brk = req;
@@ -8211,29 +8174,31 @@ static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_
  * Put the region `src` describes, `len` bytes, where `mmap_place` finds for
  * `addr` and `flags`, replacing what a MAP_FIXED range held, or failing with
  * EPERM when a region of that range is sealed (mseal). The region takes its
- * own reference to the file, and the caller's is put here.
- * The regions' lock is held to write across the placing and the insertion
- * (`regions_begin`). Returns the address, or -errno.
+ * own reference to the file, and the caller's is put here. `mprot` is mmap's
+ * protection, whose PROT_EXEC alone gives the region the execute-only key
+ * (`mmap_key`), or 0 for a caller that maps no such region. The regions'
+ * lock is held to write across the key's allocation, the placing and the
+ * insertion (`regions_begin`), since the keys of the address space are
+ * under it too (`pkey_take`). Returns the address, or -errno.
  * Under MAP_FIXED the two entries that a split in the removal and the new
  * region take are reserved before the old mapping is removed, so that a
  * failure leaves the old mapping in place.
  */
-static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct map_source *src)
+static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, uint32_t mprot,
+                         struct map_source *src)
 {
     struct mm *mm = regions_begin();
     vm_space_t *vm = &mm->vm;
     uintptr_t base = 0;
     int32_t rc = mmap_place(vm, addr, len, flags, &base);
 
+    src->prot |= mmap_key(mprot);
     if (rc == 0 && (flags & MAP_FIXED) && vm_sealed_at(vm, base, base + len) < base + len) {
         rc = -EPERM;
     }
     if (rc == 0 && (flags & MAP_FIXED)) {
         if (vm_reserve(vm, 2) == 0) {
-            mm_note_anon(current_proc->mm, base, base + len);
-            vm_remove(vm, base, base + len);
-            mmn_notify(current_proc->mm, MMN_UNMAP, base, base + len);
-            unmap_user_range(_curr_dir, base, base + len);
+            (void)regions_unmap(mm, base, base + len);
         } else {
             rc = -ENOMEM;
             vma_exhausted("mmap");
@@ -8348,8 +8313,10 @@ long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t f
         }
     }
     regions_balance();
-    src.prot = vm_prot_of(prot) | mmap_key(prot);
+    src.prot = vm_prot_of(prot);
     src.pgoff = (uint32_t)pgoff;
+    /* The descriptor's entry, a driver's mmap, the list of mappings and the
+     * shared disk files' pages have no lock of their own (filemap.c). */
     bkl_enter();
     rc = mmap_backing(flags, fd, len, &src);
     bkl_exit();
@@ -8360,7 +8327,7 @@ long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t f
         src.prot |= locks;
     }
     src.prot |= mmap_charge(flags, &src);
-    base = mmap_install(addr, len, flags, &src);
+    base = mmap_install(addr, len, flags, prot, &src);
     if ((unsigned long)base < (unsigned long)-4095L &&
         ((locks & VM_PROT_LOCKS) == VM_PROT_LOCKED ||
          (flags & (MAP_POPULATE | MAP_NONBLOCK)) == MAP_POPULATE)) {
@@ -8418,7 +8385,7 @@ long mmap_shm(struct open_file *ofd, uintptr_t addr, uintptr_t len, uint32_t acc
     }
     src.file->path = path;
     mem_balance();
-    return mmap_install(addr, PAGE_UP(len), places[place], &src);
+    return mmap_install(addr, PAGE_UP(len), places[place], 0, &src);
 }
 
 long mmap_device(uintptr_t len, uint32_t prot, int32_t (*map)(vma_t *vma, void *arg), void *arg)
@@ -8446,7 +8413,7 @@ long mmap_device(uintptr_t len, uint32_t prot, int32_t (*map)(vma_t *vma, void *
     src.prot = vma.prot;
     src.pgoff = vma.pgoff;
     mem_balance();
-    return mmap_install(0, PAGE_UP(len), MAP_SHARED, &src);
+    return mmap_install(0, PAGE_UP(len), MAP_SHARED, 0, &src);
 }
 
 /** The unmap of `munmap_shm` in the regions `vm`, whose lock the caller
@@ -8472,13 +8439,11 @@ static int32_t munmap_shm_locked(vm_space_t *vm, uintptr_t addr, const struct sh
             addr = next; /* kept, as Linux's shmdt ignores the unmap's EPERM */
             continue;
         }
-        if (vm_remove(vm, addr, next) != 0) {
+        if (regions_unmap(current_proc->mm, addr, next) != 0) {
             vma_exhausted("shmdt");
             rc = rc == 0 ? 0 : -ENOMEM; /* 0 once a region went */
             break;
         }
-        mmn_notify(current_proc->mm, MMN_UNMAP, addr, next);
-        unmap_user_range(_curr_dir, addr, next);
         rc = 0;
         addr = next;
     }
@@ -8571,15 +8536,9 @@ long sys_munmap(isr_params_t *params)
     rc = 0;
     if (vm_sealed_at(vm, start, end) < end) {
         rc = -EPERM;
-    } else {
-        mm_note_anon(mm, start, end);
-        if (vm_remove(vm, start, end) != 0) {
-            vma_exhausted("munmap");
-            rc = -ENOMEM;
-        } else {
-            mmn_notify(mm, MMN_UNMAP, start, end);
-            unmap_user_range(_curr_dir, start, end);
-        }
+    } else if (regions_unmap(mm, start, end) != 0) {
+        vma_exhausted("munmap");
+        rc = -ENOMEM;
     }
     regions_end(mm);
     return rc;
@@ -8817,10 +8776,7 @@ static long remap_fixed(vm_space_t *vm, uintptr_t addr, uintptr_t old_len, uintp
         vma_exhausted("mremap");
         return -ENOMEM;
     }
-    mm_note_anon(current_proc->mm, to, to + new_len);
-    vm_remove(vm, to, to + new_len);
-    mmn_notify(current_proc->mm, MMN_UNMAP, to, to + new_len);
-    unmap_user_range(_curr_dir, to, to + new_len);
+    (void)regions_unmap(current_proc->mm, to, to + new_len);
     return remap_move(vm, vm_find(vm, addr), addr, old_len, to, new_len);
 }
 
@@ -8859,13 +8815,10 @@ static long remap_resize(vma_t *r, uintptr_t addr, uintptr_t old_len, uintptr_t 
         return remap_fixed(vm, addr, old_len, to, new_len);
     }
     if (new_len <= old_len) {
-        mm_note_anon(current_proc->mm, addr + new_len, addr + old_len);
-        if (vm_remove(vm, addr + new_len, addr + old_len) != 0) {
+        if (regions_unmap(current_proc->mm, addr + new_len, addr + old_len) != 0) {
             vma_exhausted("mremap");
             return -ENOMEM;
         }
-        mmn_notify(current_proc->mm, MMN_UNMAP, addr + new_len, addr + old_len);
-        unmap_user_range(_curr_dir, addr + new_len, addr + old_len);
         return (long)addr;
     }
     if (vm_total(vm) + (new_len - old_len) > current_proc->rlim[RLIM_AS].cur) {
