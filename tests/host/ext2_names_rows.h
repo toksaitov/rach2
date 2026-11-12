@@ -663,6 +663,73 @@ static void names_lookup_reuse_row(void)
     names_end_volume(d, 0, "e2fsck finds the volume of the retried lookup clean");
 }
 
+/* The changes `names_lookup_churn` has made, and the most it makes, so that
+ * a lookup that would go round for ever under them ends. */
+static int names_churns;
+#define NAMES_CHURN_MAX 64
+
+/** At each release of the big lock while the lookup's directory is not
+ * locked, make the name x if it is absent and remove it if present: a change
+ * of a name the lookup does not seek, on every round of it. The hook is off
+ * while it changes the directory. */
+static void names_lookup_churn(void)
+{
+    void *n;
+    int rc;
+
+    if (names_churns >= NAMES_CHURN_MAX ||
+        sleep_lock_held(&((struct ext2_node *)names_b_dir)->lock)) {
+        return;
+    }
+    bkl_host_gone = 0;
+    if (names_churns++ % 2 == 0) {
+        n = make_file(names_b_dir, "x", &rc);
+        if (n) {
+            OPS->put(&mnt, n);
+        }
+    } else {
+        rc = OPS->unlink(&mnt, names_b_dir, "x");
+    }
+    names_b_rc[0] = names_b_rc[0] ? names_b_rc[0] : rc;
+    bkl_host_gone = names_lookup_churn;
+}
+
+/** A lookup of a name that stays while another name of its directory
+ * changes on every round must end, with that name's node, after a bounded
+ * number of changes and not at the hook's limit. */
+static void names_lookup_churn_row(void)
+{
+    void *d = names_volume("churn"), *c = 0, *found = 0;
+    int rc;
+
+    if (!d) {
+        return;
+    }
+    c = make_file(d, "c", &rc);
+    check(c != 0, "a file for a lookup in a directory that keeps changing is made");
+    if (c) {
+        names_b_dir = d;
+        names_b_rc[0] = 0;
+        names_churns = 0;
+        bkl_host_free = 1;
+        bkl_host_gone = names_lookup_churn;
+        rc = OPS->lookup(&mnt, d, "c", &found);
+        bkl_host_gone = 0;
+        bkl_host_free = 0;
+        check(rc == 0 && found == c && names_b_rc[0] == 0,
+              "a lookup finds its name while another name changes on every round");
+        check(names_churns > 0 && names_churns < NAMES_CHURN_MAX,
+              "and ends after a bounded number of changes, holding the directory's lock");
+    }
+    if (found) {
+        OPS->put(&mnt, found);
+    }
+    if (c) {
+        OPS->put(&mnt, c);
+    }
+    names_end_volume(d, 0, "e2fsck finds the volume of the lookup under changes clean");
+}
+
 /** The rows of operations on names without the big lock. */
 static void names_rows(void)
 {
@@ -672,6 +739,7 @@ static void names_rows(void)
     names_rmdir_row();
     names_readdir_reuse_row();
     names_lookup_reuse_row();
+    names_lookup_churn_row();
 }
 
 #endif

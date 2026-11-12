@@ -217,11 +217,17 @@ static int dir_names_at(struct ext2_mount *em, struct ext2_node *d, uint32_t at,
  * or -EIO.
  *
  * The entry is found under the directory's lock, which the caller may hold
- * already, and the node is had with the lock let go, so that the read of a
- * cold inode holds up no other lookup in the directory and a second lookup
- * of the name waits on the load itself (`ext2_node_for`). When the lock did go,
- * the entry is read again under it: a name removed or moved meanwhile, whose
- * inode may have been freed or given to another file, is looked up anew.
+ * already. The first try has the node with the lock let go, so that the read
+ * of a cold inode holds up no other lookup in the directory and a second
+ * lookup of the name waits on the load itself (`ext2_node_for`); the entry is
+ * then read again under the lock, and any change of the directory meanwhile,
+ * since it may have removed or moved the name and freed its inode or given it
+ * to another file, sends the lookup to a second try. That one holds the lock
+ * from the search until it has the node, as Linux's lookup holds the
+ * directory's `i_rwsem` across `ext2_lookup` and `ext2_iget` (fs/namei.c:1761,
+ * fs/ext2/namei.c:71), so changes of other names in a busy directory cannot
+ * send it round for ever. The node table's big lock, which `ext2_node_for`
+ * takes, comes after a node's lock, and the load takes no node lock.
  */
 int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
@@ -229,32 +235,38 @@ int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
     struct ext2_node *d = dir ? dir : mnt->root;
     struct ext2_node *n;
     uint32_t ino = 0, at = 0;
-    uint64_t version = 0;
-    int rc, kept;
+    uint64_t version;
+    int rc, kept, held;
 
     if ((d->mode & S_IFMT_) != S_IFDIR_) {
         return -ENOTDIR;
     }
-    for (;;) {
-        if (name[0] == '.' && name[1] == '\0') {
-            rc = 1;
-            ino = d->ino;
-        } else {
-            ext2_node_lock(d);
-            rc = dir_lookup(em, d, name, &ino, &at);
-            version = d->dir_version;
+    if (name[0] == '.' && name[1] == '\0') {
+        ext2_node_ref(d, 1);
+        *node = d;
+        return 0;
+    }
+    for (held = 0;; held = 1) {
+        ext2_node_lock(d);
+        rc = dir_lookup(em, d, name, &ino, &at);
+        version = d->dir_version;
+        if (rc > 0 && ino == d->ino) {
+            ext2_node_ref(d, 1);
+            ext2_node_unlock(d);
+            *node = d;
+            return 0;
+        }
+        if (rc <= 0 || !held) {
             ext2_node_unlock(d);
         }
         if (rc <= 0) {
             return rc < 0 ? rc : -ENOENT;
         }
-        if (ino == d->ino) {
-            ext2_node_ref(d, 1);
-            *node = d;
-            return 0;
-        }
-        kept = sleep_lock_held(&d->lock);
+        kept = held || sleep_lock_held(&d->lock);
         n = ext2_node_for(em, ino, &rc);
+        if (held) {
+            ext2_node_unlock(d);
+        }
         if (!n) {
             return rc;
         }
