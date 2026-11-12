@@ -2132,10 +2132,10 @@ static struct virtio_gpu_object *kill_hold(struct virtio_gpu_device *vg,
  * (`obj_vm_page`); frames a transport gave from its own heap go back to it,
  * and such a mapping takes new pages at its next touch, except an exported
  * object's, which it keeps until it is freed, since an importer may hold
- * them. The walk that zaps holds each object it zaps, since a zap may sleep
+ * them. A notify made without the big lock ends first (`vgpu_notify`).
+ * The walk that zaps holds each object it zaps, since a zap may sleep
  * and the object's last reference go meanwhile; the put that ends the
- * object's turn may free it. A notify made without the big lock ends first
- * (`vgpu_notify`). Process context.
+ * object's turn may free it. Process context.
  */
 void vgpu_kill(struct virtio_gpu_device *vg)
 {
