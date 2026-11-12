@@ -74,6 +74,10 @@ or
 is cut the same way, its elements taken as one run of bytes.
 A write with no whole chunk before the end fails with nothing written,
 so on a file under 2 MiB any write past the end does.
+An
+.Xr fallocate 2
+past the end is refused with or without
+.Dv FALLOC_FL_KEEP_SIZE .
 .It Dv F_SEAL_WRITE , F_SEAL_FUTURE_WRITE
 Refuse a
 .Xr write 2 ,

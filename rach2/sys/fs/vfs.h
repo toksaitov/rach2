@@ -1262,6 +1262,24 @@ void vfs_cachestat(struct vfs_mount *mnt, void *node, uint64_t first, uint64_t l
  * other than FALLOC_FL_KEEP_SIZE on an append-only one. */
 int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset,
                   uint64_t len);
+/**
+ * Whether the caller's RLIMIT_FSIZE lets a file reach `end` bytes: 0, or
+ * -EFBIG with SIGXFSZ sent to the calling thread, as Linux answers a write
+ * that starts at the limit and a truncation past it. The signal is sent
+ * under the big lock, which is taken when the caller lacks it. 0 outside a
+ * process.
+ */
+int32_t vfs_fsize_refused(uint64_t end);
+/**
+ * Whether the caller's RLIMIT_FSIZE lets a file of `size` bytes be set to
+ * or allocated up to `end`, the growth half of Linux's inode_newsize_ok
+ * (fs/attr.c:258 in 6.12): 0, or `vfs_fsize_refused`'s -EFBIG with SIGXFSZ
+ * when `end` is past both the size and the limit, since only growth is
+ * checked. A type's `fallocate` calls it once it has taken the mode and
+ * holds the lock that keeps `size` current, so that a mode it refuses is
+ * -EOPNOTSUPP with no signal, as on Linux.
+ */
+int32_t vfs_newsize_ok(uint64_t size, uint64_t end);
 /** The type's fsync, or for a type without one a write of the device's
  * dirty buffers, then the device's flush, a failure of which makes the
  * device's mounts read-only (`vfs_device_failed`). 0 or a negative errno. */

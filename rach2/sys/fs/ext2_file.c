@@ -1470,10 +1470,13 @@ static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, 
  * block the file has is written only past its size, and without
  * FALLOC_FL_KEEP_SIZE the size grows to the range's end; with it the range
  * stops at the size. A punched hole and any other mode are -EOPNOTSUPP, as
- * Linux's ext2 returns for every mode. The node's lock is held throughout,
- * so that the size and the map do not change between the look at a block
- * and its write. 0, -ENODEV for a file that is not regular, -EFBIG,
- * -ENOMEM, or the errors of `ext2_write`.
+ * Linux's ext2 returns for every mode. A growth past the caller's
+ * RLIMIT_FSIZE is -EFBIG with SIGXFSZ (`vfs_newsize_ok`), judged once the
+ * mode is taken, as ext4_fallocate judges it; with FALLOC_FL_KEEP_SIZE the
+ * file does not grow and the limit is not asked. The node's lock is held
+ * from that check on, so that the size and the map do not change between
+ * the look at a block and its write. 0, -ENODEV for a file that is not
+ * regular, -EFBIG, -ENOMEM, or the errors of `ext2_write`.
  */
 int ext2_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset,
                    uint64_t len)
@@ -1490,14 +1493,17 @@ int ext2_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t 
     if ((n->mode & S_IFMT_) != S_IFREG_) {
         return -ENODEV;
     }
-    if (end > em->file_limit) {
-        return past_limit(em, "fallocate", offset);
-    }
     zero = kzalloc(em->block_size);
     if (!zero) {
         return -ENOMEM;
     }
     ext2_node_lock(n);
+    if (!(mode & 0x01u)) {
+        rc = vfs_newsize_ok(n->size, end);
+    }
+    if (rc == 0 && end > em->file_limit) {
+        rc = past_limit(em, "fallocate", offset);
+    }
     if ((mode & 0x01u) && end > n->size) {
         end = n->size;
     }

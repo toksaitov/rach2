@@ -954,11 +954,15 @@ static int tmpfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
  * fallocate(2), as Linux's tmpfs takes it: the pages of the range made, the
  * size grown to its end unless FALLOC_FL_KEEP_SIZE, and with
  * FALLOC_FL_PUNCH_HOLE the range made to read as zeros and its whole pages
- * freed. A growth a seal forbids, or a hole in a file sealed against
- * writing, is -EPERM, any other mode -EOPNOTSUPP, as is every call on a
- * file of memfd_secret, and a node that is not a regular file -ENODEV; a
- * failed allocation answers the error of
- * `shmem_allocate`.
+ * freed. An allocation past the size and the caller's RLIMIT_FSIZE, with
+ * the size kept or not, is -EFBIG with SIGXFSZ (`vfs_newsize_ok`), judged
+ * after the mode and never for a hole, as in Linux's shmem_fallocate
+ * (mm/shmem.c:3459-3498 in 6.12); the namespace lock the description holds
+ * keeps the size current. An allocation past the size of a file sealed
+ * against growth, with the size kept or not, or a hole in a file sealed
+ * against writing, is -EPERM, any other mode -EOPNOTSUPP, as is every call
+ * on a file of memfd_secret, and a node that is not a regular file -ENODEV;
+ * a failed allocation answers the error of `shmem_allocate`.
  */
 static int tmpfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset,
                            uint64_t len)
@@ -985,7 +989,11 @@ static int tmpfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, u
     if (mode & ~FALLOC_KEEP_SIZE) {
         return -EOPNOTSUPP;
     }
-    if (!(mode & FALLOC_KEEP_SIZE) && end > n->data.size && (n->seals & TMPFS_SEAL_GROW)) {
+    rc = vfs_newsize_ok(n->data.size, end);
+    if (rc != 0) {
+        return rc;
+    }
+    if (end > n->data.size && (n->seals & TMPFS_SEAL_GROW)) {
         return -EPERM;
     }
     rc = shmem_allocate(&n->data, offset, len);
