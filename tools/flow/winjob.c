@@ -115,19 +115,25 @@ static int state(const char *name)
 
 /**
  * Succeed when the file PATH holds NONCE, alone on its first line; a missing
- * or unreadable file holds nothing.
+ * or unreadable file holds nothing. The file is opened sharing delete, so
+ * that a stop's rename of a new token over it is not refused while it is
+ * read.
  */
 static int token_is(const char *path, const char *nonce)
 {
     char buf[256];
+    DWORD got = 0;
     size_t n;
-    FILE *f;
+    HANDLE f;
 
-    f = fopen(path, "rb");
-    if (f == NULL)
+    f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE)
         return 0;
-    n = fread(buf, 1, sizeof buf - 1, f);
-    fclose(f);
+    if (!ReadFile(f, buf, sizeof buf - 1, &got, NULL))
+        got = 0;
+    CloseHandle(f);
+    n = got;
     buf[n] = '\0';
     while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
         buf[--n] = '\0';
