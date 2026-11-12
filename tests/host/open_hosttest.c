@@ -1475,6 +1475,19 @@ void lock_close(const struct lock_key *key)
     lock_closer = current_proc;
 }
 
+/** The clock, which no row reads. */
+uint64_t tick_count(void)
+{
+    return 0;
+}
+
+/** The age of a shared mapping's written stores, which no row reads. */
+void vfs_writeback_aged(const struct vfs_mount *mnt, uint64_t born)
+{
+    (void)mnt;
+    (void)born;
+}
+
 /** The fsync of a file whose shared mapping is synced, which no row makes. */
 int vfs_fsync(struct vfs_mount *mnt, void *handle)
 {
