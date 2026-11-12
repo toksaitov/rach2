@@ -171,7 +171,7 @@ void *k_memcpy(void *dst, const void *src, size_t n)
 }
 
 /* A word no `k_memset` may cover, and how many have since it was set: an
- * INIT's reset leaves the APIC base unwritten, which another processor's
+ * INIT's reset keeps the APIC base whole, which another processor's
  * delivery reads without a lock. */
 static const volatile void *memset_watch;
 static int memset_watch_hits;
@@ -2572,7 +2572,7 @@ static void init_apic_base_row(int fd0)
     memset_watch = NULL;
     CHECK(base & 0x800u, "the vCPU's APIC is enabled before its INIT");
     CHECK(memset_watch_hits == 0 && v0->sregs.apic_base == base,
-          "a guest's INIT leaves the APIC base unwritten, so a SIPI during it is kept");
+          "a guest's INIT keeps the APIC base whole, so a SIPI during it is kept");
 }
 
 /** The vCPU attribute KVM_VCPU_TSC_OFFSET of vCPUs `fd0` and `fd1` of the
