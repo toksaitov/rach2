@@ -1,0 +1,23 @@
+# modetest.faults: the pictures of the Debian guest's modetest run that
+# Linux's bochs-drm spoiled, `WxH LINUX-CRC CRC` a line, which judge.py modes
+# takes: a mode read back at WxH with LINUX-CRC in the reference must read
+# back here with CRC, the checksum of modetest's whole SMPTE pattern.
+#
+# Linux 6.12's bochs_hw_setmode enables the DISPI without NOCLEARMEM
+# (drivers/gpu/drm/tiny/bochs.c, lines 339 to 351), so QEMU zeroes the new
+# mode's size of video memory from offset 0. The fbdev console's 1280x800
+# buffer, 4,096,000 bytes, lies at offset 0, and TTM puts modetest's buffer
+# right after it, so in each mode larger than 1280x800 the mode set zeroes
+# the first (W * H * 4 - 4,096,000) bytes of modetest's picture after
+# modetest drew it. Rach2 enables with NOCLEARMEM, as
+# dev-log/76-display/upstream.md records. Each CRC here is that of libdrm
+# 2.4.124's util_fill_pattern(XRGB8888, SMPTE) at WxH, the reference's
+# modetest; zeroing those bytes of it gives LINUX-CRC in every line.
+1920x1080 0x0e36b6a0 0xb077fdbc
+1600x1200 0x089e367e 0x7a1a90a0
+1680x1050 0xcc6fe178 0x79749a55
+1400x1050 0x5966b27e 0x2da5a8c0
+1280x1024 0x6e9e1ce5 0xdaef6d6c
+1440x900 0x9e874b73 0x5ba60fe5
+1280x960 0x66bf7e11 0x7361a93a
+1360x768 0xc7b91e72 0x21d55ea1

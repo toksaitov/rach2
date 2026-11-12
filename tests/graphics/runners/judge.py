@@ -4,7 +4,7 @@ Usage:
   python3 -I judge.py webgl REF GOT [-x EXCLUSIONS]
   python3 -I judge.py video REF GOT DECODERS-REF DECODERS-GOT [LIMITS]
   python3 -I judge.py results REF GOT [SAMPLE [FLAKES]] [-s SCOPE] [-x EXCLUSIONS]
-  python3 -I judge.py modes REF GOT
+  python3 -I judge.py modes REF GOT [FAULTS]
   python3 -I judge.py glmark2 REF GOT
   python3 -I judge.py deqp REF GOT [FLAKES] [-x EXCLUSIONS]
   python3 -I judge.py vkcube REF GOT [TIMING-REF TIMING-GOT]
@@ -46,7 +46,11 @@ line of a SCOPE is not compared.
 
 `modes` compares two modes files of modetest.sh by mode: the same modes in
 the same order, and each mode that the reference set and read back set here
-too, read back at its size with the reference's checksum.
+too, read back at its size with the reference's checksum. FAULTS,
+modetest.faults, names the pictures Linux's fault spoiled in the reference,
+`WxH LINUX-CRC CRC` a line: a mode the reference read back at WxH with
+LINUX-CRC must be read back here with CRC, the checksum of modetest's whole
+pattern, which is printed as `judge: upstream: ...` and is not worse.
 
 `glmark2` compares two validations files of glmark2.sh by scene: the same
 scenes, and each that the reference validated as Success a Success here.
@@ -279,8 +283,9 @@ def results(ref_path, got_path, sample_path=None, flakes_path=None,
     return verdict == "pass"
 
 
-def modes(ref_path, got_path):
+def modes(ref_path, got_path, faults_path=None):
     ref, got = lines(ref_path), lines(got_path)
+    faults = {(f[0], f[1]): f[2] for f in lines(faults_path)} if faults_path else {}
     worse = []
     if [f[:4] for f in ref] != [f[:4] for f in got]:
         worse.append("modes %s here, %s in the reference" %
@@ -288,9 +293,20 @@ def modes(ref_path, got_path):
                       " ".join("%s@%s" % (f[2], f[3]) for f in ref)))
     else:
         for r, g in zip(ref, got):
-            if r[4] == "set" and g[4:] != r[4:]:
-                worse.append("%s mode %s %s: %s here, %s in the reference" %
-                             (r[0], r[1], r[2], " ".join(g[4:]), " ".join(r[4:])))
+            if r[4] != "set":
+                continue
+            want = r[4:]
+            right = faults.get((r[5], r[6])) if len(r) == 7 else None
+            if right is not None:
+                want = [r[4], r[5], right]
+            if g[4:] != want:
+                worse.append("%s mode %s %s: %s here, %s in the reference%s" %
+                             (r[0], r[1], r[2], " ".join(g[4:]), " ".join(r[4:]),
+                              ", whose whole pattern is %s" % right if right else ""))
+            elif right is not None:
+                print("judge: upstream: %s mode %s %s: %s here, %s in the reference,"
+                      " where Linux's mode set cleared its top" %
+                      (r[0], r[1], r[2], " ".join(g[4:]), " ".join(r[4:])))
     for w in worse:
         print("judge: worse: %s" % w)
     verdict = "fail" if worse else "pass"
@@ -435,8 +451,10 @@ def main():
         ok = video(*args[1:])
     elif len(args) in (3, 4, 5) and kind == "results":
         ok = results(*args[1:], scope_path=s, exclusions_path=x)
-    elif len(args) == 3 and kind in ("modes", "glmark2") and not opts:
-        ok = {"modes": modes, "glmark2": glmark2}[kind](*args[1:3])
+    elif len(args) in (3, 4) and kind == "modes" and not opts:
+        ok = modes(*args[1:])
+    elif len(args) == 3 and kind == "glmark2" and not opts:
+        ok = glmark2(*args[1:3])
     elif len(args) in (3, 4) and kind == "deqp" and not s:
         ok = deqp(args[1], args[2], args[3] if len(args) == 4 else None, x)
     elif len(args) in (3, 5) and kind == "vkcube" and not opts:
@@ -447,7 +465,7 @@ def main():
         sys.exit("usage: judge.py webgl REF GOT [-x EXCLUSIONS]"
                  " | video REF GOT DECODERS-REF DECODERS-GOT [LIMITS]"
                  " | results REF GOT [SAMPLE [FLAKES]] [-s SCOPE] [-x EXCLUSIONS]"
-                 " | modes|glmark2 REF GOT"
+                 " | modes REF GOT [FAULTS] | glmark2 REF GOT"
                  " | deqp REF GOT [FLAKES] [-x EXCLUSIONS]"
                  " | vkcube REF GOT [TIMING-REF TIMING-GOT] | gate GATE MEASURES")
     sys.exit(0 if ok else 1)

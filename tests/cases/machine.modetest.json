@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.modetest.std-vga",
-      "behavior": "every mode of the connected connector of the std-vga display, set by libdrm's modetest through Rach2's bochs-drm and read back with drmcapture, is set as in the Debian reference guest on the same QEMU profile, at the same size with the same checksum of its pixels",
+      "behavior": "every mode of the connected connector of the std-vga display, set by libdrm's modetest through Rach2's bochs-drm and read back with drmcapture, is set as in the Debian reference guest on the same QEMU profile, at the same size with the same checksum of its pixels, but for the modes whose picture Linux's mode set cleared in part, which tests/graphics/runners/modetest.faults names with the checksum of the whole pattern",
       "units": [
         "tests/graphics/runners/modetest.sh",
         "tests/graphics/capture/drmcapture.c",
@@ -71,7 +71,7 @@
           "step_id": "judge",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run judge.py modes on the modes and the Debian reference's"
+          "does": "run judge.py modes on the modes and the Debian reference's, with modetest.faults"
         },
         {
           "step_id": "collect",
@@ -291,7 +291,7 @@
           "step_id": "judge",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run judge.py modes on the modes and the Debian reference's"
+          "does": "run judge.py modes on the modes and the Debian reference's, with modetest.faults"
         },
         {
           "step_id": "collect",
