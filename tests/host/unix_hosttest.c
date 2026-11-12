@@ -46,7 +46,11 @@
  * row ends with nothing allocated. A pipe's sleeping lock is the kernel's
  * (`fs/sleeplock.c`). The sibling runs as the row's own process, which that
  * lock takes for its holder, so a sibling would take a pipe's lock that the
- * sleeping call holds without waiting; no row has it take one.
+ * sleeping call holds without waiting; no row has it take one. Where the
+ * row's own thread sleeps in a socket's wait, a row's `own_wait` moves the
+ * model's clock, queues bytes or has a sibling take the signal, and the
+ * deadline each wait arms is kept, so that the rows of SO_RCVTIMEO judge
+ * the time limit by ticks.
  */
 #include "ipc/unix.c"
 #include "ipc/pipe.c"
@@ -202,6 +206,18 @@ static int failures, live, sigpipes;
 static int model_big, signal_checks, signal_without_big, ignore_signal;
 static int check_signal_context;
 static struct mutex *signal_unlock;
+
+/* What the row's own thread meets while it sleeps in a flag wait, which no
+ * sibling can end: run at each such sleep, it may move the clock, queue
+ * bytes or have a sibling take the signal, and gives 1 for the signal flag,
+ * which ends the wait with -EINTR, or 0 for a wake, after which the wait
+ * tests its condition again. With none, the flag ends the wait at once. */
+static int (*own_wait)(void);
+/* The sleeps `own_wait` saw, and the deadline armed for each, the tick in
+ * `wakeup_tick`, 0 for none. */
+#define OWN_WAITS 8
+static int own_waits;
+static uint64_t own_deadline[OWN_WAITS];
 static uint32_t inodes;
 
 /** Report `detail` when `condition` is false, and return the condition, so
@@ -637,7 +653,14 @@ int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const ch
     (void)name;
     while (!cond(arg)) {
         if (!park_active()) {
-            return -EINTR;
+            if (!own_wait || own_waits >= OWN_WAITS) {
+                return -EINTR;
+            }
+            own_deadline[own_waits++] = current_proc->wakeup_tick;
+            if (own_wait()) {
+                return -EINTR;
+            }
+            continue;
         }
         sleep_on(wq);
     }
@@ -1205,6 +1228,11 @@ static void setup(void)
     closing_on_get = -1;
     signal_checks = signal_without_big = ignore_signal = check_signal_context = 0;
     signal_unlock = NULL;
+    own_wait = NULL;
+    own_waits = 0;
+    k_memset(own_deadline, 0, sizeof(own_deadline));
+    self.wakeup_tick = 0;
+    self.restart_kind = RESTART_SYS;
 }
 
 /**
@@ -2008,6 +2036,189 @@ static void mutex_signal_row(void)
     end_row("ignored mutex signal");
 }
 
+/** Set SO_RCVTIMEO of `fd` to `usec` microseconds, 0 for none, from page
+ * 5: 0, or `unix_setsockopt`'s error. */
+static int32_t set_rcvtimeo(int fd, long usec)
+{
+    long tv[2];
+
+    tv[0] = usec / 1000000;
+    tv[1] = usec % 1000000;
+    k_memcpy(user(AT(5, 256)), tv, sizeof(tv));
+    return unix_setsockopt(fd_at(fd), SOL_SOCKET, SO_RCVTIMEO_OLD, AT(5, 256), sizeof(tv));
+}
+
+/** A signal ends the wait: the clock moves 10 ticks first. */
+static int signal_wait(void)
+{
+    kernel_ticks += 10;
+    return 1;
+}
+
+/** Each wait ends at its deadline, with nothing come. */
+static int wait_out(void)
+{
+    kernel_ticks = current_proc->wakeup_tick;
+    return 0;
+}
+
+/** The sibling's SO_RCVTIMEO of 400 ms on socket 0, while the receive's
+ * copy sleeps. */
+static void rcvtimeo_sibling(void)
+{
+    sibling_rc[0] = set_rcvtimeo(0, 400000);
+}
+
+/** A page fault that takes 250 ticks. */
+static void slow_fault(void)
+{
+    kernel_ticks += 250;
+}
+
+/** The first wait: a byte comes on socket 0 after 50 ticks. The second
+ * ends at its deadline. */
+static int byte_then_out(void)
+{
+    if (own_waits == 1) {
+        kernel_ticks += 50;
+        return send_text(1, "a") != 1;
+    }
+    return wait_out();
+}
+
+/** The first wait: after 30 ticks a signal's wake clears the deadline,
+ * and a sibling thread takes the signal before this one looks. The second
+ * ends at its deadline, or with a signal when it has none. */
+static int sibling_takes_signal(void)
+{
+    if (own_waits == 1) {
+        kernel_ticks += 30;
+        current_proc->wakeup_tick = 0;
+        ignore_signal = 1;
+        return 1;
+    }
+    if (current_proc->wakeup_tick == 0) {
+        return 1;
+    }
+    return wait_out();
+}
+
+/** Each wait: a byte comes on socket 0 after 50 ticks. */
+static int byte_each_50(void)
+{
+    kernel_ticks += 50;
+    return send_text(1, "w") != 1;
+}
+
+/**
+ * A signal in a socket's wait, as Linux 6.12 ends it: under SO_RCVTIMEO the
+ * call is EINTR whatever SA_RESTART says, and with no limit the dispatcher
+ * may restart it (sock_intr_errno, include/net/sock.h:2542-2545); a signal
+ * in the wait for the bind lock is EINTR, as mutex_lock_interruptible's
+ * is in Linux (net/unix/af_unix.c:1201).
+ */
+static void timeo_signal_row(void)
+{
+    struct unix_sock *s;
+    uint32_t len;
+    int32_t rc;
+
+    setup();
+    check(pair(SOCK_STREAM) == 0 && set_rcvtimeo(0, 100000) == 0, "timeo: a stream pair");
+    own_wait = signal_wait;
+    rc = unix_recvfrom(fd_at(0), AT(3, 0), 1, 0, 0, 0);
+    check(rc == -EINTR && own_waits == 1 && current_proc->restart_kind == RESTART_NONE,
+          "a signal in a receive's wait under SO_RCVTIMEO is EINTR, never restarted");
+    current_proc->restart_kind = RESTART_SYS;
+    check(set_rcvtimeo(0, 0) == 0, "timeo: the limit taken off");
+    rc = unix_recvfrom(fd_at(0), AT(3, 0), 1, 0, 0, 0);
+    check(rc == -EINTR && own_waits == 2 && current_proc->restart_kind == RESTART_SYS,
+          "a signal in a receive's wait with no limit leaves the dispatcher to restart it");
+    end_row("timeo signal");
+
+    setup();
+    check(unix_socket(SOCK_STREAM, 0, 0) == 0, "timeo: a stream socket");
+    s = sock_at(0);
+    mutex_lock(&s->bindlock);
+    len = path_at(AT(1, 0), "/tmp/held");
+    rc = unix_bind(fd_at(0), AT(1, 0), len);
+    check(rc == -EINTR && current_proc->restart_kind == RESTART_NONE,
+          "a signal in the wait for the bind lock is EINTR, never restarted");
+    mutex_unlock(&s->bindlock);
+    end_row("timeo bind lock");
+}
+
+/**
+ * The time limit of SO_RCVTIMEO, as Linux 6.12 keeps it (net/unix/af_unix.c):
+ * the limit is the one set when the call began, not one set while its copy
+ * slept (2785); a wait after a slow copy has what the earlier waits left,
+ * the copy costing nothing (2841); a wait woken by a signal that a sibling
+ * thread took sleeps on to the same deadline; and a MSG_WAITALL receive
+ * whose bytes come a quarter of its limit apart ends at the limit with what
+ * it has. Each wait's deadline is read in `own_deadline`.
+ */
+static void timeo_limit_row(void)
+{
+    uint64_t t0;
+    int32_t rc;
+
+    setup();
+    check(pair(SOCK_STREAM) == 0 && set_rcvtimeo(0, 100000) == 0 && send_text(1, "a") == 1,
+          "timeo: a stream pair with a byte queued");
+    pages[3] = PAGE_MISSING;
+    page_sibling = rcvtimeo_sibling;
+    own_wait = wait_out;
+    t0 = kernel_ticks;
+    rc = unix_recvfrom(fd_at(0), AT(3, 0), 2, MSG_WAITALL, 0, 0);
+    check(rc == 1 && ran == 1 && sibling_rc[0] == 0 && own_waits == 1 &&
+              own_deadline[0] == t0 + 101u,
+          "a receive keeps the SO_RCVTIMEO it began with when another is set while its copy "
+          "sleeps");
+    end_row("timeo taken at the start");
+
+    setup();
+    check(pair(SOCK_STREAM) == 0 && set_rcvtimeo(0, 200000) == 0, "timeo: a stream pair");
+    pages[3] = PAGE_MISSING;
+    page_sibling = slow_fault;
+    own_wait = byte_then_out;
+    t0 = kernel_ticks;
+    rc = unix_recvfrom(fd_at(0), AT(3, 0), 2, MSG_WAITALL, 0, 0);
+    check(rc == 1 && ran == 1 && own_waits == 2 && own_deadline[0] == t0 + 201u &&
+              own_deadline[1] == t0 + 300u + 151u,
+          "a wait after a copy that sleeps 250 ticks has the 150 the first wait left");
+    end_row("timeo spent asleep");
+
+    setup();
+    check(pair(SOCK_STREAM) == 0 && set_rcvtimeo(0, 100000) == 0, "timeo: a stream pair");
+    own_wait = sibling_takes_signal;
+    t0 = kernel_ticks;
+    rc = unix_recvfrom(fd_at(0), AT(3, 0), 1, 0, 0, 0);
+    check(own_waits == 2 && own_deadline[0] == t0 + 101u && own_deadline[1] == own_deadline[0],
+          "a wait woken by a signal a sibling took sleeps on to the deadline it had");
+    check(rc == -EAGAIN, "a receive whose waking signal a sibling took ends with EAGAIN");
+    end_row("timeo sibling signal");
+
+    setup();
+    check(pair(SOCK_STREAM) == 0 && set_rcvtimeo(0, 200000) == 0, "timeo: a stream pair");
+    own_wait = byte_each_50;
+    t0 = kernel_ticks;
+    rc = unix_recvfrom(fd_at(0), AT(3, 0), 8, MSG_WAITALL, 0, 0);
+    check(own_waits == 4 && own_deadline[0] == t0 + 201u && own_deadline[1] == t0 + 201u &&
+              own_deadline[2] == t0 + 201u && own_deadline[3] == t0 + 201u,
+          "each wait of a MSG_WAITALL receive has what the waits before it left");
+    check(rc == 4 && bytes_are(AT(3, 0), "wwww"),
+          "a MSG_WAITALL receive whose bytes come 50 ticks apart ends at its 200-tick limit "
+          "with four");
+    end_row("timeo waitall");
+}
+
+/** The rows of the time limits and signals of a socket call's waits. */
+static void timeo_row(void)
+{
+    timeo_signal_row();
+    timeo_limit_row();
+}
+
 /** Set up the process and its shared table, and run every row; 0 when
  * each passes, 1 otherwise. */
 int main(int argc, char **argv)
@@ -2031,6 +2242,11 @@ int main(int argc, char **argv)
     if (argc == 2 && same(argv[1], "rights-close")) {
         rights_close_row();
         dprintf(1, "unix-hosttest: result: rights-close: %d failures\n", failures);
+        return failures ? 1 : 0;
+    }
+    if (argc == 2 && same(argv[1], "timeo")) {
+        timeo_row();
+        dprintf(1, "unix-hosttest: result: timeo: %d failures\n", failures);
         return failures ? 1 : 0;
     }
     if (argc == 2 && same(argv[1], "mutex-signal")) {
@@ -2060,6 +2276,7 @@ int main(int argc, char **argv)
     vector_row();
     vector_write_row();
     mutex_signal_row();
+    timeo_row();
     dprintf(1, "unix-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }
