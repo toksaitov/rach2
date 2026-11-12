@@ -527,7 +527,103 @@ static void write_and_flush(void)
           "a synchronous write waits for completion");
     check(block_flush(&first.device) == 0 && waits == 2,
           "a flush uses the same wait and ownership path");
+    check(block_bkl_takes() == 2 && bkl_entries == 2 && bkl_depth == 0,
+          "a device without BLOCK_UNLOCKED is called under the big lock, taken and given back");
     cpu_table[0].current = 0;
+}
+
+static struct block_request *unlocked_held;
+static int unlocked_submits;
+static uint64_t unlocked_lba; /* the sector the last unlocked submit was given */
+
+/** A driver on a lock of its own: its submit and flush run with neither the
+ *  big lock nor interrupts off, and it holds the request for its
+ *  interrupt. */
+static int unlocked_submit(block_device_t *dev, struct block_request *r)
+{
+    (void)dev;
+    check(!bkl_depth && !irq_depth,
+          "an unlocked driver is called without the big lock and with interrupts on");
+    k_memset(r->page, 0x6B, r->count * BLOCK_SECTOR_SIZE);
+    unlocked_held = r;
+    unlocked_lba = r->lba;
+    unlocked_submits++;
+    return 0;
+}
+
+/** A driver that still needs the big lock: it is called holding it. */
+static int locked_submit(block_device_t *dev, struct block_request *r)
+{
+    (void)dev;
+    check(bkl_depth == 1 && !irq_depth, "a driver without BLOCK_UNLOCKED is called under it");
+    k_memset(r->page, 0x6B, r->count * BLOCK_SECTOR_SIZE);
+    unlocked_held = r;
+    return 0;
+}
+
+/** The caller sleeps on its own request, and the driver's interrupt, with
+ *  interrupts off and no big lock, completes it, which ends the wait. */
+static void interrupt_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    struct block_request *r = arg;
+    int held = bkl_depth;
+    uint32_t flags;
+
+    (void)wq;
+    check(r == unlocked_held && !cond(arg) && !irq_depth,
+          "the caller waits on its own request with interrupts on");
+    bkl_depth = 0; /* the sleep lets the big lock go */
+    flags = kirq_save();
+    block_request_complete(r, r->generation, 0);
+    kirq_restore(flags);
+    check(cond(arg), "a completion from the interrupt without the big lock ends the wait");
+    bkl_depth = held; /* and the wake takes it back */
+}
+
+/** A read, a flush and a view's read of a device with BLOCK_UNLOCKED take
+ *  no big lock, from submit to completion to wait; a device without the flag
+ *  is called under it, taken once a call for a caller without it and not at
+ *  all for one that holds it. */
+static void unlocked_path(void)
+{
+    block_device_t own = other, plain;
+    block_partition_t view;
+    process_t process;
+    uint32_t takes = block_bkl_takes();
+    int entries = bkl_entries;
+
+    own.flags = BLOCK_UNLOCKED;
+    own.submit = unlocked_submit;
+    own.flush = unlocked_submit;
+    own.deadline_ticks = 100;
+    block_partition_init(&view, &own, 10, 100);
+    k_memset(&process, 0, sizeof(process));
+    process.in_syscall = 1;
+    cpu_table[0].current = &process;
+    wait_step = interrupt_wait;
+    k_memset(output, 0, sizeof(output));
+    check(block_request(&own, 0, 0, 1, output) == 0 && output[0] == 0x6B,
+          "an unlocked device's read is answered from its interrupt");
+    check(block_flush(&own) == 0, "an unlocked device's flush is answered the same way");
+    check(block_request(&view.device, 0, 0, 1, output) == 0 && unlocked_lba == 10,
+          "a view over an unlocked device is unlocked too");
+    check(unlocked_submits == 3 && block_bkl_takes() == takes && bkl_entries == entries,
+          "an unlocked device's read, flush and view take no big lock");
+    plain = own;
+    plain.flags = 0;
+    plain.submit = locked_submit;
+    check(block_request(&plain, 0, 0, 1, output) == 0 && block_bkl_takes() == takes + 1 &&
+              bkl_depth == 0,
+          "a caller without the big lock has it taken for a device that needs it");
+    bkl_depth = 1;
+    check(block_request(&plain, 0, 0, 1, output) == 0 && block_bkl_takes() == takes + 1 &&
+              bkl_depth == 1,
+          "a caller that holds the big lock has it taken no further");
+    bkl_depth = 0;
+    wait_step = 0;
+    cpu_table[0].current = 0;
+    check(live == 0 && record_count == 0 && frame_count == 0,
+          "the unlocked rows leave no request behind");
 }
 
 /** Advance only the real request pool's logical clock. */
@@ -928,6 +1024,7 @@ int main(void)
     other.flags = 0;
     completion();
     write_and_flush();
+    unlocked_path();
     deadline_edges(100);
     deadline_edges(0xFFFFFFF8u);
     skipped_ticks();
