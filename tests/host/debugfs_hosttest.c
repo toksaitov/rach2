@@ -33,14 +33,6 @@ static fd_entry_t slots[64];
 static struct open_file descriptions[64];
 static int failures;
 
-/** This tree model has no global description list. */
-int32_t fd_files_creators(char *buf, uint32_t cap)
-{
-    (void)buf;
-    (void)cap;
-    return 0;
-}
-
 #define CHECK(c, s)                                \
     do {                                           \
         if (!(c)) {                                \

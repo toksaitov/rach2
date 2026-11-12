@@ -3,6 +3,14 @@
 #include "fs/fd.h"
 #include "fs/file.h"
 
+/** These flat-table models have no global description list. */
+int32_t fd_files_creators(char *buf, uint32_t cap)
+{
+    (void)buf;
+    (void)cap;
+    return 0;
+}
+
 /** The entry of `fd`, which the test keeps below the array's length. */
 fd_entry_t *fd_slot(const fd_table_t *table, int fd)
 {
