@@ -1425,8 +1425,7 @@ void sched_account_tick(int user, int64_t due)
         }
         on -= cpu->tick_late_ns;
         held = ACCOUNT_SYSTEM;
-        if (!user && timer_cycles_when(cpu->idle_end_cycles, now) >
-                         timer_cycles_when(cpu->entry_cycles, now)) {
+        if (!user && cpu->idle_end_cycles > cpu->entry_cycles) {
             held = ACCOUNT_IDLE;
         }
     }
