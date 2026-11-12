@@ -125,11 +125,16 @@ Name the file without opening it; see
 .Pp
 Other flag bits are not checked by the ordinary-file open handler and
 have no effect there.
-.Dv O_APPEND
+.Dv O_APPEND ,
+.Dv O_NONBLOCK ,
+.Dv O_SYNC
 and
-.Dv O_NONBLOCK
-belong to the open file description and are shared by duplicated or
-inherited descriptors.
+.Dv O_DSYNC
+belong to the open file description, which keeps them whatever kind of
+file it opens, a device, a FIFO or a file of
+.Pa /proc
+among them, as Linux does, and are shared by duplicated or inherited
+descriptors.
 The close-on-exec flag belongs to the individual descriptor.
 .Pp
 By default, a final symbolic link is followed.

@@ -110,6 +110,16 @@ typedef enum {
 #define OFD_DSYNC    010000   /* O_DSYNC: a write ends with an fdatasync */
 #define OFD_SYNC     04010000 /* O_SYNC, O_DSYNC's bit with __O_SYNC: an fsync */
 
+/* The status flags an open with Linux's open flags `f` gives the
+ * description it makes, before the description is published, whatever the
+ * kind of file: O_APPEND and O_NONBLOCK, and O_SYNC's two bits when __O_SYNC
+ * is among them, alone or with O_DSYNC, as Linux's build_open_flags adds
+ * O_DSYNC to __O_SYNC (fs/open.c:1296) and keeps them in f_flags for
+ * F_GETFL; else O_DSYNC's bit. An O_PATH open keeps none of them. */
+#define OFD_OPEN_STATUS(f)                           \
+    (((uint32_t)(f) & (OFD_APPEND | OFD_NONBLOCK)) | \
+     (((uint32_t)(f) & (OFD_SYNC & ~OFD_DSYNC)) ? OFD_SYNC : ((uint32_t)(f) & OFD_DSYNC)))
+
 struct krffs_node;
 struct socket;
 struct file_ops;

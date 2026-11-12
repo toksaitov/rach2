@@ -3609,6 +3609,7 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     e->ops = NULL;
     e->priv = sd;
     e->ofd->offset = 0;
+    e->ofd->status_flags |= OFD_OPEN_STATUS(flags); /* none for O_PATH's open */
     e->flags = (flags & O_PATH) ? FD_FLAG_PATH : FD_FLAG_READ;
     if (flags & O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
@@ -3664,8 +3665,9 @@ static int name_is(const char *name, const char *lit)
  * last close compare too, so any of its threads may use it. The open takes
  * the display at mode 13h for a new owner (`fb_take`), unblanking it first;
  * a second open by the same owner keeps its mode. The console's
- * backlight would stay off under the picture. O_CLOEXEC and O_NONBLOCK are
- * kept; the access mode is not, since the descriptor reads and writes.
+ * backlight would stay off under the picture. O_CLOEXEC and the status
+ * flags (`OFD_OPEN_STATUS`) are kept; the access mode is not, since the
+ * descriptor reads and writes.
  */
 static int32_t open_framebuffer(int flags)
 {
@@ -3689,7 +3691,7 @@ static int32_t open_framebuffer(int flags)
     entry->node = NULL;
     entry->ops = &fb_file_ops;
     entry->ofd->offset = 0;
-    entry->ofd->status_flags = (flags & O_NONBLOCK) ? OFD_NONBLOCK : 0u;
+    entry->ofd->status_flags = OFD_OPEN_STATUS(flags);
     entry->flags = FD_FLAG_READ | FD_FLAG_WRITE | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0u);
 
     fd_install(current_proc->fds, fd);
@@ -3699,7 +3701,8 @@ static int32_t open_framebuffer(int flags)
 /**
  * The mouse descriptor, read-only, for an open of the name "mouse" with the
  * open's `flags`, with the packets queued before the open dropped; -ENODEV
- * when no mouse of any kind was found. O_CLOEXEC and O_NONBLOCK are kept.
+ * when no mouse of any kind was found. O_CLOEXEC and the status flags
+ * (`OFD_OPEN_STATUS`) are kept.
  */
 static int32_t open_mouse(int flags)
 {
@@ -3719,7 +3722,7 @@ static int32_t open_mouse(int flags)
     entry->type = FD_TYPE_MOUSE;
     entry->node = NULL;
     entry->ofd->offset = 0;
-    entry->ofd->status_flags = (flags & O_NONBLOCK) ? OFD_NONBLOCK : 0u;
+    entry->ofd->status_flags = OFD_OPEN_STATUS(flags);
     entry->flags = FD_FLAG_READ | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0u);
 
     mouse_clear_packets();
@@ -3754,8 +3757,8 @@ static int device_name(const char *name, const char *lit)
  * `name` is one of the two, 0 when it is not. Neither device is a
  * directory, so the name with a last "." or "..", and O_DIRECTORY, which a
  * trailing slash sets (`open_named`), are -ENOTDIR, before the display or
- * the mouse is touched. O_CLOEXEC and O_NONBLOCK are kept, and the other
- * flags ignored.
+ * the mouse is touched. O_CLOEXEC and the status flags are kept, and the
+ * other flags ignored.
  */
 static int open_device_name(const char *name, int flags, int *result)
 {
@@ -4314,15 +4317,6 @@ static int open_truncate(struct open_file *ofd, struct vfs_mount *mnt)
     return rc;
 }
 
-/** The sync status flags of a description opened with `flags`: O_SYNC's
- * two bits when __O_SYNC is among them, alone or with O_DSYNC, as Linux's
- * build_open_flags adds O_DSYNC to __O_SYNC (fs/open.c), else O_DSYNC's
- * bit when set. */
-static uint32_t open_sync_flags(int flags)
-{
-    return ((uint32_t)flags & (OFD_SYNC & ~OFD_DSYNC)) ? OFD_SYNC : (uint32_t)flags & OFD_DSYNC;
-}
-
 /**
  * The descriptor for an opened node, in the slot `fd` the open reserved,
  * with `name`, the path without its leading slash, recorded for a node of a
@@ -4417,13 +4411,7 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
         entry->flags = FD_FLAG_READ;
     }
     if (entry->ofd) {
-        if (flags & O_APPEND) {
-            entry->ofd->status_flags |= OFD_APPEND;
-        }
-        if (flags & O_NONBLOCK) {
-            entry->ofd->status_flags |= OFD_NONBLOCK;
-        }
-        entry->ofd->status_flags |= open_sync_flags(flags);
+        entry->ofd->status_flags |= OFD_OPEN_STATUS(flags);
     }
     if (flags & O_CLOEXEC) {
         entry->flags |= FD_FLAG_CLOEXEC;
@@ -5299,13 +5287,7 @@ static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry
     vfs_leave(ref->mnt);
     fd_ofd_access_drop(e->ofd);
     e->flags = FD_FLAG_READ | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0);
-    if (flags & O_APPEND) {
-        e->ofd->status_flags |= OFD_APPEND;
-    }
-    if (flags & O_NONBLOCK) {
-        e->ofd->status_flags |= OFD_NONBLOCK;
-    }
-    e->ofd->status_flags |= open_sync_flags(flags);
+    e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
     e->node = NULL;
     e->type = (st->mode & S_IFMT) == S_IFDIR ? FD_TYPE_DIR : FD_TYPE_FILE;
     e->ofd->watch_flags = OFD_WATCH_OPEN | (e->type == FD_TYPE_DIR ? OFD_WATCH_DIR : 0u);

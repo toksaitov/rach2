@@ -1609,6 +1609,7 @@ int32_t nsfs_open(struct ns_common *c, uint32_t oflag)
     e->ops = &nsfs_ops;
     e->priv = f;
     e->flags = FD_FLAG_READ | ((oflag & NS_O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0u);
+    e->ofd->status_flags |= OFD_OPEN_STATUS(oflag);
     fd_install(current_proc->fds, fd);
     return fd;
 }

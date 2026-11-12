@@ -2081,8 +2081,8 @@ int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint64_t ino, int flags)
     if (flags & O_CLOEXEC_FLAG) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
-    if (nonblock && e->ofd) {
-        e->ofd->status_flags |= OFD_NONBLOCK;
+    if (e->ofd) {
+        e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
     }
     e->ofd->fifo_write_opens = p->write_opens;
     if (acc != 0 || !nonblock || p->write_open) {

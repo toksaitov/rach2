@@ -7517,6 +7517,7 @@ static int procfs_open_pciconfig(const struct vpath *vp, int flags)
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
     fd_install(current_proc->fds, fd);
     return fd;
 }
@@ -7772,6 +7773,7 @@ static int procfs_open_pcibar(const struct vpath *vp, int flags)
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
     fd_install(current_proc->fds, fd);
     return fd;
 }
@@ -7926,6 +7928,7 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
     fd_install(current_proc->fds, fd);
     return fd;
 }
@@ -8484,6 +8487,7 @@ static int procfs_open_idmap(const struct vpath *vp, int file, int pid, int flag
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
     fd_install(current_proc->fds, fd);
     return fd;
 }
@@ -8538,6 +8542,7 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
     fd_install(current_proc->fds, fd);
     return fd;
 }
@@ -9353,6 +9358,7 @@ static int procfs_open_sysattr(int node, int key, int attr, int flags)
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
     fd_install(current_proc->fds, fd);
     return fd;
 }
@@ -9443,6 +9449,7 @@ static int procfs_open_acpicall(int flags)
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
     fd_install(current_proc->fds, fd);
     return fd;
 }
@@ -9493,6 +9500,7 @@ static int procfs_open_sysctl(int entry, int flags)
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
     fd_install(current_proc->fds, fd);
     return fd;
 }
@@ -9981,6 +9989,7 @@ int procfs_open(const struct vpath *vp, int flags)
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
     fd_install(current_proc->fds, fd);
     return fd;
 }
