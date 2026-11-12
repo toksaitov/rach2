@@ -1015,8 +1015,9 @@ build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
 # `tests/run venus`: dEQP-VK through Venus over the testing PC's lavapipe on
 # the GNU root under the venus profile, its smoke cases and vulkaninfo's
 # device, every 500th case of Mesa 25.0.7's lavapipe fraction and that
-# fraction whole in eight parts, each case judged against the Debian
-# reference guest's stored result, and the loss of the host's render server
+# fraction whole in eight parts, and piglit's quick_gl subset on zink over
+# Venus, each case judged against the Debian reference guest's stored
+# result, and the loss of the host's render server
 # under four dEQP-VK processes, as the Debian guest sees it, as the cases of
 # tests/cases/machine.venus.json.
 # `tests/run vkpresent`: vkcube presenting through Venus to Weston on the GNU
@@ -1027,7 +1028,8 @@ build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
 # `tests/run virgl`: OpenGL on virgl over the testing PC's GPU on the GNU
 # root under the virgl profile: the renderer eglinfo and glxinfo name;
 # piglit's quick profile within OpenGL 4.2 and ES 3.1, every 200th test and
-# the list whole in sixteen parts; dEQP-GLES2, GLES3 and GLES31, every 200th
+# the list whole in sixteen parts, and piglit's quick_gl subset whole;
+# dEQP-GLES2, GLES3 and GLES31, every 200th
 # case of each and each whole in two or four parts; the WebGL conformance
 # suite in Chromium and Firefox ESR in chunks of 250 pages; each test, case
 # and page judged against the Debian reference guest's stored result; and the

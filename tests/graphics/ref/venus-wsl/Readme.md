@@ -25,6 +25,7 @@ The run that took `vulkaninfo/`, from the top of the tree, with the outputs then
         sh tests/graphics/runners/debian.sh deqp -p venus -c 8 -m 8192 OUT -v 1.4.1.1 -e 10 -s 1 \
             -l /tmp/deqp-gles-virgl.txt.gz SUITE
 
+* `piglit/piglit-quick-gl.results.gz`, taken on 2026-11-12, is the 3,941 tests of [`piglit-quick-gl.txt.gz`](../../piglit-quick-gl.txt.gz) run by Debian's piglit 0.0~git20250409.af62c0dea-2 on surfaceless EGL on zink over Venus's ICD alone, `zink Vulkan 1.4(Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits)) (MESA_LLVMPIPE))`, OpenGL 4.6 and OpenGL ES 3.2, a process on each of the 8 CPUs, from `debian.sh piglit -z`: the run's `piglit-quick-gl.results`, a line a test or subtest with its result, sorted by name. Its 14,198 lines give 13,141 pass, 725 skip, 210 crash, 106 fail, 12 notrun and 4 warn, in 1210 s with the host's load at 15 to 24 ([piglit's quick_gl](../../Readme.md#piglits-quick_gl)).
 * Rates, taken on 2026-11-10, each run in the same QEMU profile with 8 CPUs, 8 GiB, KVM and 4 dEQP processes, as each run's summary line gives them; the suite records rates and judges none, and only their ratio means anything, since the host runs other work beside them:
 
 | Cases | Debian guest | Rach2 | Rach2's rate of Linux's |
@@ -58,6 +59,11 @@ The rates' Debian runs are the fraction's command with `-e 8 -s 1` and with `-e 
     sh tests/graphics/runners/debian.sh vkcube -p venus -c 8 OUT \
         -i /usr/share/vulkan/icd.d/venus_icd.x86_64.json
     RACH2_QEMU_ACCEL=kvm ARCH=x86_64 RACH2_CASES=machine.vkpresent.vkcube tests/run vkpresent
+
+`piglit/` comes from this, with the output's `piglit-quick-gl.results` then compressed:
+
+    sh tests/graphics/runners/debian.sh piglit -p venus -c 8 OUT \
+        -z /usr/share/vulkan/icd.d/venus_icd.x86_64.json -l /tmp/piglit-quick-gl.txt.gz
 
 The Direct3D results are stored in `../d3d-venus-wsl/` by the task that takes them on this guest.
 

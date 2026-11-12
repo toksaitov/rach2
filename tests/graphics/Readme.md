@@ -51,7 +51,7 @@ Its options are the release (`-v`, 1.4.7.1, the Lenovo's references, or 1.4.1.1,
 
 On Rach2 the `venus` suite, `tests/run venus`, runs the same lists through Venus, a case such as `machine.venus.smoke` or `machine.venus.fraction-3`, and kills the host's render server under it in `machine.venus.device-lost` ([Venus's dEQP](#venuss-deqp)).
 
-The runners draw on the guest's GPU when told to: `piglit.sh -g` and `webgl.sh -g`, and `deqp.sh` whenever EGL finds one. [`runners/glinfo.sh`](runners/glinfo.sh) names the renderer that `eglinfo` and `glxinfo` see, and [`runners/virgl-lost.sh`](runners/virgl-lost.sh), as root, resets the virtio-gpu device under GL programs and a Weston. `piglit.sh -l LIST` runs the tests of a list, every Nth with `-e` and `-s` as `deqp.sh` takes them. `debian.sh` runs each in the Debian guest on the `virgl` profile, as the references of [`ref/virgl-wsl`](ref/virgl-wsl/Readme.md) were made:
+The runners draw on the guest's GPU when told to: `piglit.sh -g` and `webgl.sh -g`, and `deqp.sh` whenever EGL finds one; `piglit.sh -z ICD` draws on zink over the Vulkan driver of the ICD file alone, Venus's on the `venus` profile. [`runners/glinfo.sh`](runners/glinfo.sh) names the renderer that `eglinfo` and `glxinfo` see, and [`runners/virgl-lost.sh`](runners/virgl-lost.sh), as root, resets the virtio-gpu device under GL programs and a Weston. `piglit.sh -l LIST` runs the tests of a list, every Nth with `-e` and `-s` as `deqp.sh` takes them. `debian.sh` runs each in the Debian guest on the `virgl` profile, as the references of [`ref/virgl-wsl`](ref/virgl-wsl/Readme.md) were made:
 
     sh tests/graphics/runners/debian.sh glinfo -p virgl -c 8 OUT
     sh tests/graphics/runners/debian.sh piglit -p virgl -c 8 OUT -g -l /tmp/piglit-virgl.txt.gz -e 16 -s 1
@@ -60,6 +60,14 @@ The runners draw on the guest's GPU when told to: `piglit.sh -g` and `webgl.sh -
     sh tests/graphics/runners/debian.sh webgl -p virgl -c 8 OUT -b firefox -v 2.0.1 -g \
         -x /tmp/runners/webgl-virgl.omit all
     sh tests/graphics/runners/debian.sh virgl-lost -p virgl -c 8 OUT
+
+The quick_gl subset, [`piglit-quick-gl.txt.gz`](piglit-quick-gl.txt.gz), runs whole in one guest on each profile, as the references of `ref/virgl-wsl/piglit` and `ref/venus-wsl/piglit` were made:
+
+    sh tests/graphics/runners/debian.sh piglit -p virgl -c 8 OUT -g -l /tmp/piglit-quick-gl.txt.gz
+    sh tests/graphics/runners/debian.sh piglit -p venus -c 8 OUT \
+        -z /usr/share/vulkan/icd.d/venus_icd.x86_64.json -l /tmp/piglit-quick-gl.txt.gz
+
+and on Rach2 as the cases `machine.virgl.piglit-quick-gl` and `machine.venus.piglit-quick-gl`, which `RACH2_QEMU_ACCEL=kvm ARCH=x86_64 RACH2_CASES='machine.virgl.piglit-quick-gl machine.venus.piglit-quick-gl' tests/run virgl venus` runs alone, under KVM as the references were taken ([piglit's quick_gl](#piglits-quick_gl)).
 
 On Rach2 the `virgl` suite, `tests/run virgl`, runs them, a case such as `machine.virgl.renderer`, `machine.virgl.piglit-07`, `machine.virgl.deqp-gles31-sample`, `machine.virgl.webgl-chromium-webgl2-03` or `machine.virgl.device-lost` ([virgl's GL](#virgls-gl)).
 
@@ -344,6 +352,15 @@ Each case boots the x86-64 GNU root with the `virgl` display, 8 CPUs and 8 GiB, 
 
 [`runners/virgl-lost.sh`](runners/virgl-lost.sh) makes the loss. It starts a Weston of its own on the card with its GL renderer, weston-simple-egl on it, and `glreset`, which draws with the most robust context the driver gives; once the client has drawn for five seconds it resets the device, on Rach2 by writing 1 to the driver's `virtio_gpu_reset` in debugfs and on Linux by unbinding the card's virtio device from its driver. In both guests virgl's driver gives no context that reports a reset, so `glreset` draws on with no error and wrong pixels and its new context is llvmpipe's; Weston and its client go on with no device under them, the card's nodes are gone, and a new Weston on the DRM backend fails to start. The case compares those lines with the Debian guest's.
 
+### piglit's quick_gl
+
+The `virgl` and `venus` suites each run piglit's `quick_gl` subset whole in one case, so that the gaps against Linux of both drivers show in under an hour each. [`piglit-quick-gl.txt.gz`](piglit-quick-gl.txt.gz) is every second test of Debian's piglit's `quick_gl` profile, 3,941 of its 7,888, without the six that end the testing PC's QEMU on virgl or leave its device to be removed under the next test, as its header says; every name is a test of the `quick` profile that `piglit.sh` runs.
+
+* `machine.virgl.piglit-quick-gl` runs it with `piglit.sh -g`, one test at a time on virgl over the RTX 4080 SUPER, OpenGL 4.2, and asks that the record's renderer be [`ref/virgl-wsl/renderer`](ref/virgl-wsl/renderer)'s.
+* `machine.venus.piglit-quick-gl` runs it with `piglit.sh -z /usr/share/vulkan/icd.d/venus_icd.x86_64.json`, a process on each CPU on zink over Venus over the host's lavapipe, OpenGL 4.6 and OpenGL ES 3.2, and asks that the record's renderer name zink over `Virtio-GPU Venus`. Zink takes Venus there only in software mode, `LIBGL_ALWAYS_SOFTWARE=1`, since Venus gives the host's device type, the CPU type of lavapipe; without it zink fails with "failed to choose pdev" and EGL falls back to llvmpipe.
+
+Each boots the x86-64 GNU root with its display, 8 CPUs and 8 GiB, and `judge.py results` compares each test and subtest with the Debian guest's in the same profile, [`ref/virgl-wsl/piglit`](ref/virgl-wsl/Readme.md) and [`ref/venus-wsl/piglit`](ref/venus-wsl/Readme.md), with [`piglit-quick-gl.flakes`](piglit-quick-gl.flakes) not judged.
+
 ### The Lenovo's conformance
 
 [`tests/native/gpu.cases`](../native/gpu.cases) runs the runners on the Lenovo's own HD 4400 and panel and judges each case against Linux's run on the same machine, Debian 13.7's ([`ref/lenovo`](ref/lenovo/Readme.md)), by case, never by count; the whole comparison runs at a release's Lenovo step, as the native collection runs every case of the inventory. Each case is [`runners/lenovo.sh`](runners/lenovo.sh), run as root by etude-guest with the runner, `common.sh`, `judge.py`, `guest-env.sh`, the owner's exclusions and the case's reference beside it in its workspace. It copies the runners into a directory of its own that an ordinary user can write, runs the runner there in `guest-env.sh`'s environment with Mesa's shader cache emptied, copies the output to the workspace's `out` and runs `judge.py` with the exclusions. Every case runs alone and keeps the kernel's records.
@@ -367,6 +384,7 @@ A reference is made again whole when the guest's packages, a runner or a browser
 
 * `virgl` and `venus` are the testing PC's alone: the render node's path, the adapter's name and the libraries' paths are its own, the test engine's QEMU on Windows has no GL display, and etude refuses both there.
 * virgl's lists leave out what ends the testing PC's QEMU, so a fault of Rach2's own on those cases would go unseen there: tessellation in the isolines domain, copies into RGB9_E5 from another format, the 1,340 cases of transform feedback, the 20 lookups in integer cube arrays through a sampler array with an index that is not constant, the 15 texture buffer cases that recreate the buffer's data after a draw, the nine geometry shader cases that emit no vertex, the five piglit tests after which the next one ends QEMU, five context pages in Firefox and 25 pages in Chromium that upload an ImageBitmap into RGB9_E5 or make and sample an RGB9_E5 texture.
+* The quick_gl subset is half of `quick_gl` and leaves out on Venus too the six tests that end QEMU or remove the host's device on virgl, so that one list serves both families; a gap in the other half would show only in a run of the whole profile.
 * `venus` needs the udmabuf module, which a restart of WSL unloads until root loads it again; `grep '^udmabuf ' /proc/modules` says whether it is loaded, and `/sys/module/udmabuf/parameters/size_limit_mb` must read 16384, as `load.sh` sets it.
 * On Rach2 `drmcapture` needs a DRM CRTC with a valid mode and a framebuffer; an output without a framebuffer has nothing to capture.
 * The Debian guest's packages come from the snapshot of one date; a newer reference takes a new date in `debian-ref/image` and a new `prepare`.
