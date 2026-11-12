@@ -15,7 +15,7 @@ Inside the kernel, `open` calls `fifo_attach`, the KRFFS holder count `unix_infl
 
 ## Design
 
-The code takes no spinlock. Every entry to the kernel runs under its one big lock (`proc/smp.h`), which a context switch passes on, so an object here changes under a call only while that call sleeps, in a wait, a page fault or a file system call, and each path checks again after a sleep what it judged before.
+Every call on these objects but a poll runs under the kernel's big lock (`proc/smp.h`), which a context switch passes on, so an object here changes under a call only while that call sleeps, in a wait, a page fault or a file system call, and each path checks again after a sleep what it judged before. The poll of a pipe end and of a unix socket runs without it (`FILE_OPS_POLL_UNLOCKED`, `fs/file.h`): it names its queue and then reads each word of the object once, as Linux's pipe_poll and unix_poll do after poll_wait, and a change it waits for is made before the wake of that queue. A unix socket's peer, whose fields the poll reads, changes under `unix_peer_lock`, which the poll takes, so the peer it reads is one its socket's reference keeps.
 
 ### Pipes
 

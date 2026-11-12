@@ -5806,7 +5806,8 @@ static int epoll_waits_let_go(fd_table_t *table, int fd)
  * EBADF. An epoll_wait asleep does not keep the descriptors it watches
  * (`epoll_waits_let_go`), since Linux's epoll takes no reference to them:
  * when the holds that kept the slot were such waits', the close releases
- * it itself (`fd_close_finish`). The claim comes first, so that no wait
+ * it itself (`fd_close_finish`), or the last of them does, when one was in
+ * the middle of its scan. The claim comes first, so that no wait
  * takes a hold after the close has looked. Runs without the big lock but
  * where a step needs it. 0, or -EBADF.
  */
