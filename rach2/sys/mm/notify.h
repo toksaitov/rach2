@@ -13,10 +13,14 @@
  * made under it, and so is every call, which `mmn_notify` takes the lock
  * for when its caller runs without it; a list change is made under the
  * address space's page-table lock too. A callback must not sleep or give
- * way (`sched_give_way`): the memory manager calls it between a change to
- * the regions and the change to the page tables, and either would let the
- * big lock go and another thread fault in a page of a region already
- * gone. A fault that changes a page already present, a copy-on-write
+ * way (`sched_give_way`), since its callers hold the big lock across it.
+ * A change made under the regions' lock held to write, an unmap, a change
+ * of protection, a move or a drop, calls before its entries change and
+ * holds the big lock across the call and again across the change of the
+ * entries, not between them: a driver that reads entries holds the
+ * regions' lock to read (`pin_user`, KVM's fault, i915's userptr,
+ * `kvm_gpamap_new`), which keeps such a change out from its notice to its
+ * last entry. A fault that changes a page already present, a copy-on-write
  * break, holds the big lock from the call to the change of the entry
  * whenever the address space has a range, so that a driver that reads an
  * entry under the big lock and maps what it found sees the page before the

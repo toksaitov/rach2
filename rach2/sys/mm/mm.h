@@ -259,15 +259,17 @@ void mm_unhold(struct mm *mm);
  * as Linux's fault drops it around a read of a file; it finds what it
  * looked up again after.
  *
- * Every change of the regions holds the lock to write and the big lock
- * too, and every removal or downgrade of a present page holds the big
- * lock, so that code under the big lock that does not sleep may still read
- * the regions and the page tables without the regions' lock, as the older
- * callers of `vm_resident` do. Code that may sleep between its look and
- * its use takes the regions' lock. Code without the big lock that maps
- * what it read elsewhere, as KVM's fault does, holds the regions' lock to
- * read and counts on `changing` and `changes` for the page changes made by
- * other holders of it to read (notify.h).
+ * Every change of the regions holds the lock to write and is made without
+ * the big lock (regions.h), so every reader of the regions holds the lock,
+ * to read or, for a walk that changes them, to write. The change of
+ * entries that takes a present page away or takes a right from it holds
+ * the big lock as well (`unmap_user_range`, `paging_protect_range`,
+ * `paging_move_range`), so that code under the big lock that does not
+ * sleep may touch user memory after a residency check that let the
+ * regions' lock go, as the callers of `vm_resident` do. Code without the
+ * big lock that maps what it read elsewhere, as KVM's fault does, holds
+ * the regions' lock to read and counts on `changing` and `changes` for the
+ * page changes made by other holders of it to read (notify.h).
  */
 
 /** Take `mm`'s regions' lock to read, sleeping while a writer holds it or
