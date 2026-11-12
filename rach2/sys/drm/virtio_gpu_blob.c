@@ -120,10 +120,16 @@ void vgpu_blob_release(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
 
 /**
  * The zap a revoke queued: take every program's mapping of the blob of
- * `work` away. In the commit worker, under the big lock. It may sleep for
- * a space's regions' lock, and reads nothing of the object once the walk
- * starts, since the object's free may run meanwhile; that free comes only
- * once no mapping holds the object, and takes the work off the queue.
+ * `work` away. In the commit worker, under the big lock, which the worker
+ * took before the work left its queue, so the blob is not yet freed: its
+ * free cancels the work under the lock first. The zap may sleep for a
+ * space's regions' lock, and the blob's last reference go meanwhile; the
+ * walk matches mappings by the object's address, which a new object could
+ * take once the blob was freed, so the zap holds a reference to the blob,
+ * as Linux's drm_gem_lru_scan holds one across its unlocked body
+ * (drivers/gpu/drm/drm_gem.c:1514-1527), and its put may free the blob. A
+ * blob at count 0 has no mapping left, since each held a reference, and
+ * its free is under way: it is passed over.
  */
 static void revoked_zap(struct drm_work *work)
 {
@@ -131,7 +137,11 @@ static void revoked_zap(struct drm_work *work)
         (struct virtio_gpu_object *)(void *)((char *)work -
                                              offsetof(struct virtio_gpu_object, revoke_zap));
 
+    if (!drm_gem_object_get_unless_zero(&bo->shmem.base)) {
+        return;
+    }
     paging_zap_device(&bo->shmem.base, 0, (uint32_t)(bo->shmem.base.size >> PAGE_SHIFT));
+    drm_gem_object_put(&bo->shmem.base);
 }
 
 /**
