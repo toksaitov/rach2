@@ -707,7 +707,8 @@ struct i915_vma {
  */
 struct i915_userptr {
     uintptr_t ptr;
-    struct vm_file **files; /* one held mapped disk file per pinned page, or NULL */
+    /* One held disk mapping per frame; NULL entries for other pages. */
+    struct vm_file **files;
     struct mmn_range range;
     uint8_t set;
     uint8_t stale;
