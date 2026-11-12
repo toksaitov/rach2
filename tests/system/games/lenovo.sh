@@ -30,7 +30,13 @@
 # and frame times, `freq`, the clock's samples, `rps-boost-info`, the GPU's
 # boost counters when i915 exposes them, and `dmesg`, the kernel's log
 # at the run's end, which holds the lines of rach2.trace=enosys before the
-# log's 16 KiB turn over. Each run prints its
+# log's 16 KiB turn over. The 64-bit games also save calls-before,
+# calls-after, stat-before, stat-after, uptime-before and uptime-after,
+# and print their big-lock held share, waits in entries, idle-take waits
+# and system/user ratio. The raw snapshots go to stdout too, since a
+# native case removes its workspace. Their GPU minimum is 1000 MHz for
+# the run and restored on exit, as 84's measurement requires.
+# Each run prints its
 # games.sh result line and then one line:
 #
 #   lenovo-games: result: GAME-N median A p90 B p99 C against Linux's
@@ -108,6 +114,8 @@ done
 
 sample=''
 volumes=''
+clock_file=''
+clock_min=''
 # stop: end the samplers.
 stop()
 {
@@ -117,7 +125,69 @@ stop()
     done
     sample='' volumes=''
 }
-trap stop EXIT
+# cleanup: restore the GPU minimum after ending the samplers.
+cleanup()
+{
+    stop
+    if [ -n "$clock_file" ]; then
+        echo "$clock_min" > "$clock_file"
+    fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# lock_snapshot: keep counters without resetting another reader's window.
+lock_snapshot()
+{
+    cat /sys/kernel/debug/bkl/calls > "$dir/calls-$1"
+    cat /proc/stat > "$dir/stat-$1"
+    cat /proc/uptime > "$dir/uptime-$1"
+}
+
+# lock_result: delta the counters; ioctl rows duplicate their syscall row.
+lock_result()
+{
+    lock_status=0
+    for snapshot in calls-before calls-after stat-before stat-after uptime-before uptime-after; do
+        sed "s/^/lenovo-games: $game-$n $snapshot: /" "$dir/$snapshot" || lock_status=1
+    done
+    awk -v game="$game-$n" '
+        FILENAME == ARGV[1] || FILENAME == ARGV[2] {
+            sign = FILENAME == ARGV[1] ? -1 : 1
+            if ($1 == "syscall" || $1 == "vector" || $1 == "take" || $1 == "kthread") {
+                held += sign * $6
+                if ($1 != "take") waits += sign * $7
+                if ($1 == "take" && $2 == 0) idle += sign * $7
+            }
+            next
+        }
+        FILENAME == ARGV[3] || FILENAME == ARGV[4] {
+            if ($1 == "cpu") {
+                sign = FILENAME == ARGV[3] ? -1 : 1
+                user += sign * ($2 + $3) / 100
+                system += sign * $4 / 100
+            }
+            next
+        }
+        FILENAME == ARGV[5] { wall -= $1; next }
+        FILENAME == ARGV[6] { wall += $1 }
+        END {
+            busy = user + system
+            if (wall <= 0 || busy <= 0 || user <= 0 || held < 0 || waits < 0 || idle < 0) {
+                print "lenovo-games: invalid big-lock counter window" > "/dev/stderr"
+                exit 1
+            }
+            printf "lenovo-games: result: %s bkl held %.3f s / %.3f s wall = %.2f%% (under 15%%), ",
+                game, held / 1000000, wall, 100 * held / 1000000 / wall
+            printf "waits in entries %.3f s / %.3f s busy = %.2f%% (under 3%%), ",
+                waits / 1000000, busy, 100 * waits / 1000000 / busy
+            printf "idle-take waits %.3f s (under 5 s), system/user %.3f (under 0.5)\n",
+                idle / 1000000, system / user
+        }' "$dir/calls-before" "$dir/calls-after" "$dir/stat-before" "$dir/stat-after" \
+        "$dir/uptime-before" "$dir/uptime-after" || lock_status=1
+    return "$lock_status"
+}
 
 failed=0
 for game in "$@"; do
@@ -126,6 +196,23 @@ for game in "$@"; do
         dir=$out/$game-$n
         rm -rf "$dir"
         install -d -o "$user" -m 0755 "$dir"
+        measure=0
+        case $game in
+            supertuxkart | 0ad)
+                measure=1
+                [ -r /sys/kernel/debug/bkl/calls ] || {
+                    echo "lenovo-games: no big-lock counters" >&2
+                    exit 1
+                }
+                if [ -z "$clock_file" ]; then
+                    [ -n "$freq" ] || { echo "lenovo-games: no GPU clock" >&2; exit 1; }
+                    minimum=${freq%gt_act_freq_mhz}gt_min_freq_mhz
+                    clock_min=$(cat "$minimum")
+                    clock_file=$minimum
+                    echo 1000 > "$clock_file"
+                fi
+                ;;
+        esac
         mixer vol 1 > /dev/null
         echo "$(date +%T) $game-$n start, volume $(mixer vol)" >> "$out/volume"
         if [ -n "$freq" ]; then
@@ -133,6 +220,7 @@ for game in "$@"; do
                 > "$dir/freq" &
             sample=$!
         fi
+        if [ "$measure" = 1 ]; then lock_snapshot before; fi
         # shellcheck disable=SC2016 # the user's shell expands the words
         su -s /bin/sh "$user" -c 'cd "$1" && XDG_RUNTIME_DIR=$2 WAYLAND_DISPLAY=wayland-0 \
             PULSE_SERVER=unix:$2/pulse/native MESA_SHADER_CACHE_DIR=$7 \
@@ -154,7 +242,9 @@ for game in "$@"; do
         volumes=$!
         status=0
         wait "$game_pid" || status=$?
+        if [ "$measure" = 1 ]; then lock_snapshot after; fi
         stop
+        if [ "$measure" = 1 ]; then lock_result || failed=1; fi
         echo "$(date +%T) $game-$n end, status $status, volume $(mixer vol)" >> "$out/volume"
         dmesg > "$dir/dmesg" 2>&1 || :
         if [ -r /sys/kernel/debug/dri/0/i915_rps_boost_info ]; then
