@@ -4556,6 +4556,8 @@
         {"assertion_id": "proc-self-rewind", "checks": "rewinddir and seekdir of /proc/self work.", "source": "program"},
         {"assertion_id": "ext2-lseek-reuse", "checks": "On ext2, lseek to the d_off getdents64 gave after a, once a and b are removed and a longer name reuses their space, lists c alone, and SEEK_END and a place past 4 GiB list nothing.", "source": "program"},
         {"assertion_id": "ext2-seekdir-reuse", "checks": "On ext2, seekdir to the place telldir gave after a, once a and b are removed and a longer name reuses their space, lists c and then the end.", "source": "program"},
+        {"assertion_id": "ext2-lseek-limit", "checks": "On ext2, lseek of a directory takes the volume's largest file offset, Linux's s_maxbytes for its block size, by SEEK_SET and SEEK_END, and a byte past it is EINVAL by SEEK_SET, SEEK_CUR and SEEK_END and leaves the offset.", "source": "program"},
+        {"assertion_id": "ext2-getdents-removed", "checks": "On ext2, getdents64 of an empty directory past 4 GiB lists nothing, and once the directory is removed is ENOENT.", "source": "program"},
         {"assertion_id": "root-ebusy", "checks": "rmdir and rename of the root are EBUSY.", "source": "program"},
         {"assertion_id": "root-eexist", "checks": "link, symlink and mknod with the root as the new name are EEXIST.", "source": "program"},
         {"assertion_id": "root-bind", "checks": "A bind to the root is EADDRINUSE.", "source": "program"},
@@ -4645,7 +4647,7 @@
       "branches": [
         {"group_id": "arch", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["proc-self-dot-old"]}, {"alternative_id": "x86-64", "when": null, "assertions": []}]},
         {"group_id": "dir", "decided_by": "report", "alternatives": [{"alternative_id": "given", "when": null, "assertions": ["root-bin-types"]}, {"alternative_id": "default", "when": null, "assertions": []}]},
-        {"group_id": "seek", "decided_by": "report", "alternatives": [{"alternative_id": "bytes", "when": null, "assertions": ["ext2-lseek-reuse", "ext2-seekdir-reuse"]}, {"alternative_id": "places", "when": null, "assertions": []}]},
+        {"group_id": "seek", "decided_by": "report", "alternatives": [{"alternative_id": "bytes", "when": null, "assertions": ["ext2-lseek-reuse", "ext2-seekdir-reuse", "ext2-lseek-limit", "ext2-getdents-removed"]}, {"alternative_id": "places", "when": null, "assertions": []}]},
         {"group_id": "links", "decided_by": "report", "alternatives": [{"alternative_id": "links", "when": null, "assertions": ["own-link-followed", "own-link-unlink-enotdir"]}, {"alternative_id": "none", "when": null, "assertions": []}]}
       ],
       "termination": {"end": "exited", "value": 0},
