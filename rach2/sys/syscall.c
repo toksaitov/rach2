@@ -1240,7 +1240,7 @@ static int32_t nanosleep_interrupted(int rem, uint64_t target)
     }
     if (end != 0 && timer_wakes_between()) {
         int64_t to = end - rtc_monotonic_ns();
-        uint32_t rest;
+        uint32_t rest = 0;
 
         left.tv_sec = to > 0 ? (long)tick_div((uint64_t)to, 1000000000u, &rest) : 0;
         left.tv_nsec = to > 0 ? (long)rest : 0;
