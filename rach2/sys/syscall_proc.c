@@ -4979,6 +4979,8 @@ static void sender_info(struct k_siginfo *info, int32_t code, const process_t *t
     info->uid = current_proc ? ns_uid_from_kernel(proc_userns(target), current_proc->ruid) : 0;
 }
 
+static int sig_dequeue(uint64_t wanted, struct k_siginfo *info);
+
 /** A stop the tracer asked for with PTRACE_INTERRUPT ends a wait as a stop
  * signal would, so the stop is taken on the way back to user mode
  * (`ptrace_return_stops`). A traced thread counts an ignored signal too, as
@@ -4988,16 +4990,22 @@ static void sender_info(struct k_siginfo *info, int32_t code, const process_t *t
  * group stop not yet taken also ends the wait, as Linux 6.12.115's pending
  * job control does (kernel/signal.c:157-164). Before a wait goes back to
  * sleep, discard the ignored signals it passed over, from the thread and
- * from its process, as get_signal discards each it dequeues after the wait
- * ends (kernel/signal.c:2821, 2838-2839, 2853-2854), and recompute the
- * signal-work flag, as recalc_sigpending then does (kernel/signal.c:
- * 173-178); kept, they would mark the thread again, and a later signal to
- * the process would pass over it (`sig_wants_now`). No wait queue is
+ * from its process, each taken as a delivery takes it (`sig_dequeue`), as
+ * get_signal dequeues each and then drops it (kernel/signal.c:2821,
+ * 2838-2839, 2853-2854): a POSIX timer's signal has its timer forwarded and
+ * its setting's count started again, and the timers' notifications that
+ * waited for the signal's number are posted, each dropped in turn when the
+ * process ignores it (`ptimer_rearm`), as dequeue_signal calls
+ * posixtimer_rearm for each (kernel/signal.c:686-699). Then recompute the
+ * signal-work flag, as recalc_sigpending does (kernel/signal.c:173-178);
+ * kept, the signals would mark the thread again, and a later signal to the
+ * process would pass over it (`sig_wants_now`). No wait queue is
  * changed. */
 int signal_pending(void)
 {
+    struct k_siginfo info;
     uint64_t deliverable;
-    uint64_t ignored = 0;
+    uint64_t ignored;
     uint32_t flags;
     int signo;
     int pending = 0;
@@ -5011,22 +5019,27 @@ int signal_pending(void)
         sig_irq_restore(flags);
         return 1;
     }
-    deliverable = sig_pending_now() & ~current_proc->sig_blocked;
-    for (signo = 1; signo <= KSIG_MAX; signo++) {
-        if (!(deliverable & KSIG_BIT(signo))) {
-            continue;
+    for (;;) {
+        deliverable = sig_pending_now() & ~current_proc->sig_blocked;
+        ignored = 0;
+        for (signo = 1; signo <= KSIG_MAX; signo++) {
+            if (!(deliverable & KSIG_BIT(signo))) {
+                continue;
+            }
+            if (!(current_proc->ptrace & PT_TRACED) &&
+                sig_handler_ignored(current_proc->sigacts[signo].handler, signo)) {
+                ignored |= KSIG_BIT(signo);
+                continue;
+            }
+            pending = 1;
+            break;
         }
-        if (!(current_proc->ptrace & PT_TRACED) &&
-            sig_handler_ignored(current_proc->sigacts[signo].handler, signo)) {
-            ignored |= KSIG_BIT(signo);
-            continue;
+        if (pending || ignored == 0) {
+            break;
         }
-        pending = 1;
-        break;
+        (void)sig_dequeue(ignored, &info);
     }
     if (!pending) {
-        current_proc->sig_pending &= ~ignored;
-        current_proc->tg->pending &= ~ignored;
         sig_recalc();
     }
     sig_irq_restore(flags);
