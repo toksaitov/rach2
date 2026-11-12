@@ -23,11 +23,13 @@
 # script such as qmpstats.py, gets QEMU's QMP socket, OUT's kvm-stats and
 # QEMU's PID, and runs beside the guest. PHASES, a count, runs phases.py
 # with it in place of the rounds, which times each phase of a round's start
-# alone, and PHASE_PROFILE names the phase it profiles. The guest powers off
-# on every exit path.
+# alone, and PHASE_PROFILE names the phase it profiles. MEASURE=1 keeps all
+# of the measured round's figures around the first round, the one after boot,
+# in place of the second. The guest powers off on every exit path.
 set -eu
 system=$1 image=$2 extra=$3 out=$4
 frames=${FRAMES:-3346}
+measure=${MEASURE:-2}
 tree=$(cd "$(dirname "$0")/../../.." && pwd)
 mkdir -p "$out" "$tree/build/tmp"
 TMPDIR=$tree/build/tmp
@@ -115,7 +117,7 @@ else
             ( GRAPHICS_CLASS=performance GRAPHICS_DONE=1 MESA_SHADER_CACHE_DIR=\$TMPDIR/cache
               . ./tests/graphics/guest-env.sh; graphics_env > /tmp/graphics.env
               cube=tests/graphics/runners/vkcube.sh
-              if [ \$round = 2 ]; then
+              if [ \$round = $measure ]; then
                   sed s/^FRAMES=346/FRAMES=$frames/ \$cube > tests/graphics/runners/vkcube-long.sh
                   cube=tests/graphics/runners/vkcube-long.sh
                   if [ -e /sys/kernel/debug/bkl/calls ]; then
@@ -134,7 +136,7 @@ else
                   fi
               fi
               sh \$cube -i $icd -o results/cube-\$round
-              if [ \$round = 2 ]; then
+              if [ \$round = $measure ]; then
                   cat /proc/stat > \$m/stat-after; cat /proc/vmstat > \$m/vmstat-after 2>/dev/null || true; threads > \$m/threads-after
                   if [ -n \"\${perf:-}\" ]; then
                       kill -INT \$perf; wait \$perf || true
