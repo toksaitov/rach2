@@ -77,7 +77,8 @@
 #   its place, and ending that login once the run is over starts `term`
 #   again. A run that ends without a status,
 #   in Windows' preparation or its cases, runs again, at most three runs in
-#   all.
+#   all, once winclean.sh has confirmed that it stopped; while that is not
+#   confirmed, the run fails, since the next would run in the same copy.
 # * A failed run adds a line `failure MACHINE RUN WORD...` to the record, the
 #   WORDs being the failed `ARCH:SUITE`s or native cases, or `runner` when
 #   the run named none, and the release goes on with the other machines'
@@ -1266,34 +1267,79 @@ lost()
 # process of a session when the session ends, by the session's Job Object, so
 # a run fed to a session's bash ends with a dropped link. The script goes to
 # OUT/ID.PART.sh, which WMI's Win32_Process.Create starts in bash, in no Job
-# Object; it writes its output to OUT/ID.PART.out and its Windows process
-# number and MSYS2 process group to OUT/ID.PART.pid, and touches OUT/ID.alive
-# each minute while it runs, which keeps WSL's claims for ID. A poll each
-# minute reads whether the process runs and its output. A poll that ssh ends
-# with any status but 0 is never read, since its reply may lack its end: FILE
-# notes it, as a lost link when the status is 255, with ssh's own lines, and
-# the next poll connects again; after an hour without a whole answer the run
-# is given up, and windows_clean stops it once the host answers. FILE ends
-# with the output's `status N` line, or, when the process ended without one,
-# did not start or was given up, with a line `lost: WHY` and, when the host
-# answers, the last 40 lines of CONSOLE, the run's console under OUT.
+# Object; the bash writes its output to OUT/ID.PART.out and touches
+# OUT/ID.alive each minute while it runs, which keeps WSL's claims for ID.
+# The start makes OUT/ID.PART.launch, then starts nothing when
+# OUT/ID.PART.cancel exists, and writes to OUT/ID.PART.launch the number and
+# start time of the bash it created; the bash writes its Windows process
+# number and MSYS2 process group to OUT/ID.PART.pid, then does no work when
+# OUT/ID.PART.cancel exists. winclean.sh touches that file before it reads
+# the other two, so that a stop either finds the part or the part does
+# nothing. A TERM while the start runs ends the start's ssh before this
+# ends. A poll each minute reads whether the bash of that number and start
+# time runs, and its output. A poll that ssh ends with any status but 0 is
+# never read, since its reply may lack its end: FILE notes it, as a lost link
+# when the status is 255, with ssh's own lines, and the next poll connects
+# again; after an hour without a whole answer the run is given up, and
+# windows_clean stops it once the host answers. FILE ends with the output's
+# `status N` line, or, when the process ended without one, did not start or
+# was given up, with a line `lost: WHY` and, when the host answers, the last
+# 40 lines of CONSOLE, the run's console under OUT.
 windows_detach()
 {
     wd_base=$wout/$1.$2 wd_file=$3 wd_console=$wout/$4
-    wd_poll=$state/$1.$2.poll wd_err=$state/$1.$2.err
+    wd_poll=$state/$1.$2.poll wd_err=$state/$1.$2.err wd_start=''
     : > "$wd_file"
+    exec 3<&0
+    trap '[ -z "$wd_start" ] || { kill "$wd_start" 2> /dev/null; wait "$wd_start"; }; exit 143' TERM
     {
-        echo "rm -f $wd_base.out $wd_base.pid"
+        echo "b=$wd_base"
+        cat << 'END'
+rm -f "$b.out" "$b.pid"
+: > "$b.launch"
+if [ -e "$b.cancel" ]; then
+    rm -f "$b.launch"
+    echo 'start: cancelled'
+    exit 0
+fi
+END
         echo "cat > $wd_base.sh << 'END_OF_RUN'"
         echo "exec > $wd_base.out 2>&1 < /dev/null"
         echo "echo \$(cat /proc/\$\$/winpid /proc/\$\$/pgid) > $wd_base.pid.part && mv $wd_base.pid.part $wd_base.pid"
+        echo "[ ! -e $wd_base.cancel ] || exit 0"
         echo "while kill -0 \$\$ 2> /dev/null; do touch $wout/$1.alive; sleep 60; done &"
-        cat
+        cat <&3
         echo "END_OF_RUN"
-        echo "MSYS_NO_PATHCONV=1 powershell.exe -NoProfile -NonInteractive -Command '\$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=\"C:/msys64/usr/bin/bash.exe -l $wd_base.sh\"}; exit \$r.ReturnValue' < /dev/null"
-        # shellcheck disable=SC2016 # the remote shell expands these
-        echo 'echo "start: status $?"'
-    } | tssh 'C:/msys64/usr/bin/bash.exe -l -s' > "$wd_err.start" 2>&1
+        # shellcheck disable=SC2016 # the remote shells expand these
+        cat << 'END'
+l=$(MSYS_NO_PATHCONV=1 powershell.exe -NoProfile -NonInteractive -Command "
+    \$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='C:/msys64/usr/bin/bash.exe -l $b.sh'}
+    if (\$r.ReturnValue -ne 0) { 'failed {0}' -f \$r.ReturnValue; exit }
+    \$p = Get-Process -Id \$r.ProcessId -ErrorAction SilentlyContinue
+    \$t = 0
+    if (\$p) { \$t = \$p.StartTime.ToFileTimeUtc() }
+    '{0} {1}' -f \$r.ProcessId, \$t" < /dev/null | tr -d '[:cntrl:]')
+case $l in
+'failed '*)
+    rm -f "$b.launch"
+    echo "start: status ${l#failed }" ;;
+[0-9]*' '[0-9]*)
+    echo "$l" > "$b.launch.part" && mv "$b.launch.part" "$b.launch"
+    echo 'start: status 0' ;;
+*) echo "start: no process number from Win32_Process.Create: $l" ;;
+esac
+END
+    } | tssh 'C:/msys64/usr/bin/bash.exe -l -s' > "$wd_err.start" 2>&1 &
+    wd_start=$!
+    wait "$wd_start"
+    wd_start=
+    trap - TERM
+    exec 3<&-
+    if grep -q '^start: cancelled' "$wd_err.start"; then
+        echo "lost: it did not start, since winclean.sh had stopped the run" >> "$wd_file"
+        rm -f "$wd_err.start"
+        return
+    fi
     wd_since=$(date +%s) wd_seen=$(date +%s)
     while :; do
         sleep 60 9>&- &
@@ -1302,10 +1348,19 @@ windows_detach()
         wd_sleep=
         {
             echo "cd $wout || exit 1"
-            echo "p=\$(cut -d ' ' -f 1 $wd_base.pid 2> /dev/null) a=running"
-            # shellcheck disable=SC2016 # the remote shell expands these
-            echo '[ -n "$p" ] || a=unstarted'
-            echo "[ -z \"\$p\" ] || ! MSYS_NO_PATHCONV=1 tasklist /NH /FO CSV /FI \"PID eq \$p\" /FI 'IMAGENAME eq bash.exe' | grep -q '^INFO: ' || a=ended"
+            echo "p='' t=''; read -r p t < $wd_base.launch 2> /dev/null; a=running"
+            # shellcheck disable=SC2016 # the remote shells expand these
+            cat << 'END'
+[ -n "$p" ] || a=unstarted
+if [ -n "$p" ]; then
+    case $(MSYS_NO_PATHCONV=1 powershell.exe -NoProfile -NonInteractive -Command "
+        \$q = Get-Process -Id $p -ErrorAction SilentlyContinue
+        if (\$q -and -not \$q.HasExited -and \$q.StartTime.ToFileTimeUtc() -eq '$t') { 'runs' } else { 'gone' }" \
+        < /dev/null 2> /dev/null | tr -d '[:cntrl:]') in
+    gone) a=ended ;;
+    esac
+fi
+END
             echo "! grep -aq '^status ' $wd_base.out 2> /dev/null || a=done"
             # shellcheck disable=SC2016 # the remote shell expands these
             echo 'echo "poll $a"'
@@ -1378,6 +1433,7 @@ windows_stop()
     fi
     if [ -n "$wobs" ]; then
         kill "$wobs" 2> /dev/null
+        wait "$wobs"
         wobs='' wstopped=1
     fi
     if [ -n "$wbeat" ]; then
@@ -1591,6 +1647,7 @@ windows_prepare()
 {
     id=$1 beater='' wd_sleep='' wd_obs='' wstarted=''
     trap 'kill $beater $wd_sleep $wd_obs 2> /dev/null
+        [ -z "$wd_obs" ] || wait "$wd_obs"
         if [ -z "$wstarted" ] || windows_clean "$id"; then
             wsl "touch $wheld/$id.prepared" > /dev/null 2>&1
             claim_stop "$id" claim >> "$state/$id.claim" 2>&1
@@ -1690,7 +1747,9 @@ windows_bundle()
 # windows_start: start Windows' run of the words that `selection windows`
 # prints, its preparation in the background, which windows_stop stops when the
 # release exits first. Mark the run done when only style failed, and record
-# its failure when three runs have started; return 1 in both cases.
+# a failure of the last run when three runs have started or when windows_clean
+# cannot confirm that it stopped, since the next would run in the same copy;
+# return 1 in each case.
 windows_start()
 {
     windows_settings
@@ -1704,8 +1763,14 @@ windows_start()
     if [ -n "$wgiven" ]; then
         wid=$wgiven
     else
+        wlast=$(sed -n 's/^windows started //p' "$state/record" | tail -n 1)
+        if [ -n "$wlast" ] && ! windows_clean "$wlast"; then
+            say "windows: $(unstopped "$wlast"), so no other run starts in Windows' copy"
+            failure windows "$wlast" runner
+            return 1
+        fi
         if [ "$(starts windows)" -ge 3 ]; then
-            failure windows "$(sed -n 's/^windows started //p' "$state/record" | tail -n 1)" runner
+            failure windows "$wlast" runner
             return 1
         fi
         wid=milestone$milestone-$(echo "$sha" | cut -c 1-12)-windows-$(stamp)
@@ -1727,7 +1792,7 @@ windows_start()
 # routine-collect` while a claim of the whole host in WSL's admission keeps
 # WSL's tests from starting, and mark it done or record its failure. A run
 # whose preparation or cases end without a status runs again, three runs in
-# all.
+# all, once windows_start has confirmed that it stopped.
 windows()
 {
     step=windows
@@ -1744,7 +1809,6 @@ windows()
         rc=$(tr -d '\r' < "$state/$id.prepare" 2> /dev/null | sed -n 's/^status //p' | tail -n 1)
         if [ -z "$rc" ]; then
             say "windows: the preparation of $id ended without a status: $(lost "$state/$id.prepare")"
-            windows_clean "$id"
             continue
         fi
         if [ "$rc" != 0 ]; then
@@ -2032,7 +2096,9 @@ END
 # Windows, which a stopped ssh leaves running, and once windows_clean has
 # confirmed that it has stopped, end its claim in WSL, and remove its files
 # there once claim_stop has confirmed that the claim and any request of it
-# have left WSL's ledger; otherwise say what stays and keep them.
+# have left WSL's ledger; otherwise say what stays and keep them. The marks
+# OUT/ID.PART.cancel stay, so that a start still on its way starts nothing,
+# until sweep.sh removes them with the milestone's other files there.
 prepare_windows_clean()
 {
     if ! windows_clean "$pwid"; then
@@ -2040,7 +2106,7 @@ prepare_windows_clean()
         return
     fi
     if pw_left=$(claim_stop "$pwid" claim); then
-        echo "cd $wout && rm -rf $pwid $pwid.* etude-$pwid.exe" |
+        echo "cd $wout && rm -rf $pwid etude-$pwid.exe \$(ls -d $pwid.* | grep -v '[.]cancel\$')" |
             tssh 'C:/msys64/usr/bin/bash.exe -l -s' > /dev/null 2>&1
     else
         printf '%s\n' "$pw_left" | while read -r line; do say "prepare: windows: $line"; done
