@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 13, 2026
 .Dt INIT 8
 .Os
 .Sh NAME
@@ -289,9 +289,10 @@ lists it.
 It sets these resource limits on itself before starting any child;
 see
 .Xr limits 7 .
-It starts
-.Pa /bin/update
-and keeps it running.
+No periodic sync runs: the kernel writes dirty data back by itself, as
+.Xr proc 5
+describes under
+.Pa vm/dirty_expire_centisecs .
 .Pp
 Every build keeps BusyBox's
 .Xr acpid 1
@@ -671,6 +672,5 @@ init: ipv6: CARD: cannot restart IPv6 with the stable secret: ERROR
 .Xr netup 8 ,
 .Xr rfkill 8 ,
 .Xr sshd 8 ,
-.Xr update 8 ,
 .Xr wpa_cli 8 ,
 .Xr wpa_supplicant 8

@@ -9,10 +9,11 @@
  * continue a child that is stopped, since nothing else can. Beside that it
  * clears `/var/run`, writes the boot's utmp record, sets the resource limits,
  * applies /etc/sysctl.conf, keeps each backlight's level and the mixer's
- * across a reboot, and keeps `/bin/update` running and, on an image with its
- * configuration, BusyBox's acpid, which acts on the power, volume and
- * brightness keys. It never exits; if it did, the kernel would have no
- * reaper, so the kernel panics if init dies.
+ * across a reboot, and keeps, on an image with its configuration, BusyBox's
+ * acpid running, which acts on the power, volume and brightness keys. The
+ * kernel writes dirty data back by itself, so no periodic sync runs here.
+ * It never exits; if it did, the kernel would have no reaper, so the kernel
+ * panics if init dies.
  *
  * Four artifacts are built from this one source, and none of them is named
  * plain `init`: `init-shell` runs a shell on the console, `init-login` puts
@@ -2879,29 +2880,6 @@ static void make_utmp(void)
 }
 
 /**
- * Start the periodic sync (`/bin/update`), which sleeps thirty seconds and
- * calls sync(2) for ever, so written data reaches the disk without anyone
- * asking. Returns its pid, or -1 when the fork failed.
- */
-static pid_t spawn_update(void)
-{
-    pid_t pid = fork();
-
-    if (pid != 0) {
-        return pid;
-    }
-    service_output();
-    {
-        char *argv[2];
-
-        argv[0] = (char *)"update";
-        argv[1] = 0;
-        execve("/bin/update", argv, environ);
-        _exit(127);
-    }
-}
-
-/**
  * Parse one limit value of `/etc/rach2/limits` into `*value`: a decimal
  * number, or `unlimited`, which is `RLIM_INFINITY`. Returns 0, or -1 for any
  * other word, a number with a sign, or a number at or past `RLIM_INFINITY`.
@@ -3150,14 +3128,14 @@ static pid_t child_wait(int *status)
  * Each turn respawns what is missing: the console session, whose failed fork
  * (a full process table) is retried after a second so the loop does not spin,
  * and each start of which as `term` is said on the console, which COM1 shows;
- * `/bin/update`; acpid while `acpid_wanted`; and on the metal builds the
+ * acpid while `acpid_wanted`; and on the metal builds the
  * network, once, after the console
  * session and before the SSH server that needs it, then the server wherever
  * `anyone_to_let_in` allows one, D-Bus's system bus and the cron daemon
  * where the image has them (`services_found`), and ntpd while
- * /etc/ntp.conf names a server. A failed fork of a service or
- * of `update` is left for the next turn, so the loop keeps reaping the
- * orphans that filled the process table.
+ * /etc/ntp.conf names a server. A failed fork of a service is left for
+ * the next turn, so the loop keeps reaping the orphans that filled the
+ * process table.
  *
  * The wait is `child_wait`, which reaps a child as soon as its SIGCHLD comes
  * and otherwise ends the turn after a second, because init must also bound
@@ -3178,7 +3156,6 @@ static pid_t child_wait(int *status)
 int main(void)
 {
     pid_t shell = -1;
-    pid_t updater = -1;
     time_t spawned = 0;
 #ifdef INIT_METAL
     struct services services;
@@ -3215,9 +3192,6 @@ int main(void)
             }
 #endif
         }
-        if (updater < 0) {
-            updater = spawn_update();
-        }
         start_acpid(&acpid);
 
 #ifdef INIT_METAL
@@ -3244,11 +3218,6 @@ int main(void)
         }
         if (reaped > 0 && WIFSTOPPED(status)) {
             kill(reaped, SIGCONT);
-            continue;
-        }
-        if (reaped > 0 && reaped == updater) {
-            updater = -1;
-            sleep(1);
             continue;
         }
         if (service_ended(&acpid, reaped)) {

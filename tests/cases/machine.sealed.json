@@ -16,7 +16,7 @@
         {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",
          "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
         {"step_id": "first-boot", "stage": "boot", "machine": "sealed",
-         "does": "read the copy's GUID table, mark a copy of the kernel, boot the disk until init starts the SSH server and the server answers, and read the update process, a volume made with mke2fs, bootctl status, the command line, the mounts, the console and the lease"},
+         "does": "read the copy's GUID table, mark a copy of the kernel, boot the disk until init starts the SSH server and the server answers, and read the write-back periods, a volume made with mke2fs, bootctl status, the command line, the mounts, the console and the lease"},
         {"step_id": "update", "stage": "execute", "machine": "sealed",
          "does": "send the marked kernel, install it, try a commit, reboot into the trial, commit it, write it as the fallback, arm the fallback, reboot into it and power off"},
         {"step_id": "fallback", "stage": "execute", "machine": "sealed",
@@ -47,7 +47,7 @@
       "assertions": [
         {"assertion_id": "layout", "checks": "the copy's GUID table has a boot partition first and an ext2 root, the first partition whose superblock has 0xEF53 at byte 56", "source": "scenario"},
         {"assertion_id": "marked-kernel", "checks": "a copy of the kernel has its banner Rach2 Booting rewritten as Rach2 SEALED! by binfind, and elfcheck --kernel takes the copy", "source": "scenario"},
-        {"assertion_id": "update", "checks": "after init says it started the SSH server and the server answers, ps on the installed root shows the update process", "source": "scenario"},
+        {"assertion_id": "writeback", "checks": "after init says it started the SSH server and the server answers, /proc/sys/vm/dirty_expire_centisecs and dirty_writeback_centisecs on the installed root read Linux's 3000 and 500", "source": "scenario"},
         {"assertion_id": "mke2fs", "checks": "mke2fs makes a volume in a file on the installed root that a loop device mounts, takes a file on and gives back after a remount", "source": "scenario"},
         {"assertion_id": "first-candidate", "checks": "bootctl status at the first boot says booted: candidate", "source": "scenario"},
         {"assertion_id": "candidate-extent", "checks": "bootctl status gives the candidate slot's first sector, which the fallback step destroys", "source": "scenario"},

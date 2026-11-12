@@ -129,8 +129,6 @@ file 0755 /sbin/init build/utils/sbin/init-login
 # mke2fs makes an ext2 volume in a file, which a loop device then mounts,
 # since the kernel's disk nodes refuse writes outside a recovery build.
 file 0755 /bin/mke2fs build/vendor/e2fsprogs/mke2fs
-# The periodic sync init keeps running: sleep thirty seconds, sync(2), for ever.
-file 0755 /bin/update build/utils/update
 
 # bootctl puts a kernel the machine built into the boot partition's
 # candidate slot for one trial boot (bootctl(8)). Only root can use it, since

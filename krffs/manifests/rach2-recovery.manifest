@@ -98,8 +98,6 @@ dir 0700 /root/.ssh
 # it is there and skips it when it is not, and that decides whether the
 # recovery system answers the network.
 optional-file 0600 /root/.ssh/authorized_keys krffs/recovery_authorized_keys
-# The periodic sync init keeps running: sleep thirty seconds, sync(2), for ever.
-file 0755 /bin/update build/utils/update
 
 dir 0755 /etc
 text 0644 /etc/motd Rach2 recovery. This machine mounts nothing from the disk it is repairing: /dev/disk0 is the whole drive and reflash writes it.\n

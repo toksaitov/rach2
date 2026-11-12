@@ -644,11 +644,11 @@ $(BOOTLINE_LOOP_DISK): tests/system/mkrootdisk.sh tools/setup/e2fsprogs_path.sh 
 # target here.
 SERVICELOG_ROOT_DISK = $(ARCH_CASE_DIR)/servicelog/root.disk
 $(SERVICELOG_ROOT_DISK): tests/system/mkrootdisk.sh tools/setup/e2fsprogs_path.sh $(MKMBR) \
-                         $(ARCH_BUILD)/utils/sbin/init-shell $(ARCH_BUILD)/utils/update \
+                         $(ARCH_BUILD)/utils/sbin/init-shell \
                          $(BUSYBOX_STAMP) | preflight utils check-busybox
 	@mkdir -p $(@D)
 	sh tests/system/mkrootdisk.sh servicelog $@ $(MKMBR) $(ARCH_BUILD)/utils/sbin/init-shell \
-	    $(ARCH_BUILD)/utils/update $(BUSYBOX_BIN)
+	    $(BUSYBOX_BIN)
 # `tests/run acpid`: BusyBox's acpid on os-real acting on the volume keys and
 # the power button. On an Intel HDA controller, logged in as root, the volume
 # keys QMP presses on the PS/2 keyboard move mixer's reading and the mute key

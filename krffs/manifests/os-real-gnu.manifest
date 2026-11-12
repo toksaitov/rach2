@@ -120,7 +120,6 @@ file 0755 /sbin/e2fsck build/vendor/e2fsprogs/e2fsck
 file 0755 /sbin/resize2fs build/vendor/e2fsprogs/resize2fs
 file 0755 /sbin/tune2fs build/vendor/e2fsprogs/tune2fs
 file 0755 /sbin/dumpe2fs build/vendor/e2fsprogs/dumpe2fs
-file 0755 /bin/update build/utils/update
 
 file 0755 /bin/bootctl build/utils/sbin/bootctl
 
