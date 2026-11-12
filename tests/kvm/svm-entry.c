@@ -403,7 +403,10 @@ struct resources {
     unsigned long files;
 };
 
-/** Count live descriptions allocated by pid, even after it has been reaped. */
+/** Count live descriptions allocated by pid, even after it has been reaped.
+ * The kernel lists the file in batches, which lists exactly once each
+ * description live through the read; the callers count while their own
+ * descriptions do not change. */
 static int files_read(pid_t pid, unsigned long *count)
 {
     FILE *f = fopen("/sys/kernel/debug/files/creators", "r");

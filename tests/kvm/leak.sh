@@ -29,6 +29,10 @@ counts()
 }
 # A creator stays on a description until its last reference goes, even
 # after the process has been reaped and its descriptors have disappeared.
+# The kernel lists the file in batches: a description made during the read
+# is left out and one released during it may still be listed. QEMU's KVM,
+# VM and vCPU descriptions live through the first count, and after the reap
+# nothing of QEMU's changes.
 files()
 {
     awk -v pid="$1" '

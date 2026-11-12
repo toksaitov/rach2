@@ -77,7 +77,10 @@ Each line is the decimal process id of the thread group that allocated
 one live open file description, in the initial PID namespace;
 0 means that no process was current at allocation.
 There is no header.
-The snapshot holds the description list's lock.
+The kernel walks the description list in batches of 32, holding its lock
+for one batch at a time, so the text is not one atomic snapshot:
+a description live through the whole read is listed once,
+one allocated during it is not, and one released during it may be.
 The id stays with the description through dup, fork and transfers,
 and after its creator exits, until its last reference goes.
 It is an allocation's creator, not its current holder;
