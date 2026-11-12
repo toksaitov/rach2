@@ -1353,7 +1353,9 @@ struct intel_crtc {
 /*
  * The device's display. `crtc` are the pipes A to C, `encoder` DDI A and
  * `connector` its eDP panel, `dp` the panel, and `ddi` DDI B to D, by port less
- * one. `gmbus` are the PCH's GMBUS pins, by pin, and `dpll` the PLLs, by
+ * one. `gmbus` are the PCH's GMBUS pins, by pin; `gmbus_mutex` keeps the
+ * controller and the pins' modes for a transfer on one of them, which may
+ * sleep, as Linux's gmbus.mutex (intel_gmbus.c). `dpll` are the PLLs, by
  * DPLL_ID_, with `dpll_nssc` the non-SSC reference in kHz of a non-ULT part, 24
  * or 135 MHz as FUSE_STRAP3 says. `hotplug` is the ports' hotplug. `pps` is the
  * sequencer's readout. `cdclk` is the CD clock in kHz and `max_cdclk` the most
@@ -1392,6 +1394,7 @@ struct intel_display {
     struct intel_dp dp;
     struct intel_ddi_port ddi[3];
     struct intel_gmbus gmbus[GMBUS_NUM_PINS];
+    struct mutex gmbus_mutex;
     struct intel_dpll dpll[INTEL_NUM_DPLLS];
     uint32_t dpll_nssc;
     struct intel_hotplug hotplug;
@@ -2521,10 +2524,11 @@ void i915_vma_flush_writes(struct i915_vma *vma);
  * entries and pages must stay until the work is done: a caller that may
  * sleep waits with `i915_gem_object_wait_idle` first, where Linux's
  * unbind waits itself. Never sleeps. `may_yield` is the clear's
- * (`i915_ggtt_clear_range`): set by a caller that may sleep, the ioctls
- * and eviction, and clear in an MMU notifier's revoke, an object's free,
- * an unpin and the shrinker, as Linux's shrinker and notifier never reach
- * a cond_resched.
+ * (`i915_ggtt_clear_range`): set by a caller that may sleep, the ioctls,
+ * eviction and an object's free that took the GEM lock itself, and clear
+ * in an MMU notifier's revoke, a free under its caller's GEM lock, an
+ * unpin and the shrinker, as Linux's shrinker and notifier never reach a
+ * cond_resched.
  *
  * @return 0, -EAGAIN while it is pinned, or -EBUSY while its object is
  *         active.
@@ -3266,7 +3270,7 @@ struct intel_i2c_bus *intel_gmbus_bus(struct drm_i915_private *i915, int pin);
 
 /** Make GMBUS pin `pin` bit-bang while `force` callers want it, Linux's
  * intel_gmbus_force_bit: a call with `force` set adds one, without takes
- * one away. */
+ * one away. Sleeps while a transfer holds the controller. */
 void intel_gmbus_force_bit(struct drm_i915_private *i915, int pin, int force);
 
 /** Whether GMBUS pin `pin` bit-bangs, Linux's intel_gmbus_is_forced_bit. */

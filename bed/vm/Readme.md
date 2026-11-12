@@ -12,7 +12,7 @@
 
 `check` builds the peer into `build/bed/vm` and starts it as QEMU's ivshmem server with a region of 32 MiB, boots a new overlay with 4 CPUs and 4096 MiB (`-c`, `-m`) and the region on an `ivshmem-doorbell` of two vectors, copies the tree's `module/`, `backend/` and `rach2/sys/virtio/vgpushm.h` into the VM and builds them there, and runs the backend as the device while the peer drives it. With `-V` the backend takes the device through vfio-pci under QEMU's emulated intel-iommu in place of the module. The accelerator is KVM where `/dev/kvm` opens, as [`rach2/qemu_devices.sh`](../../rach2/qemu_devices.sh) chooses.
 
-`rach2` makes the VM that Rach2 drives over its own transport under its own KVM: `rach2.qcow2` beside the prepared image, an overlay of it with the tree's module and backend built and installed and a service, `bed-vm-backend`, that at each boot loads the module and runs `vgpu-backend -v` surfaceless on the ivshmem device, writing each of its lines to the console after `bed-vm: `. With `-o` it also writes the image whole as the raw disk `RAW`, which `tests/run bed-shm` boots ([kvm](../../tests/kvm/Readme.md)).
+`rach2` makes the VM that Rach2 drives over its own transport under its own KVM: `rach2.qcow2` beside the prepared image, an overlay of it with the tree's module and backend built and installed and a service, `bed-vm-backend`, that at each boot loads the module and runs `vgpu-backend -v` surfaceless on the ivshmem device, writing each of its lines to the console after `bed-vm: `. When the VM has an Intel display function, a GPU given to it through vfio-pci as on the Lenovo, the service waits up to 60 s for i915's render node and runs the backend with `VK_DRIVER_FILES` naming Mesa's two Intel Vulkan drivers, hasvk and anv, so that Venus renders on the GPU and not on lavapipe, and prints `bed-vm: gpu: BDF on i915, Venus on FILES`; GL stays on llvmpipe. With `-o` it also writes the image whole as the raw disk `RAW`, which `tests/run bed-shm` boots ([kvm](../../tests/kvm/Readme.md)).
 
 In the VM the backend runs as root, so that it can be the KMS device's master:
 
@@ -102,7 +102,7 @@ The peer's frame comes from `peer -W`, a stream that clears a 1024 by 768 scanou
 * A pin holds a shmem file's pages by a reference each, which keeps them from being freed or moved while pinned, and marks them dirty as it lets go, as i915 does with its shmem pages. Unlike i915 it does not mark the file unevictable, since the file is virglrenderer's, so reclaim still scans the pinned pages, and keeps them for their extra reference.
 * A pin is at most 1 GiB, so a Venus allocation larger than that cannot be mapped, and the backend answers its map with `ERR_UNSPEC`.
 * The dma-buf pin reads each page from the importer's scatterlist, which dma-buf scrambles under `CONFIG_DMABUF_DEBUG`, so it needs that option off, as Debian 13's kernel 6.12.115+deb13.1 has it, and refuses with `EOPNOTSUPP` otherwise.
-* The VM renders on llvmpipe and lavapipe, which a GPU passed to the VM would replace.
+* The VM renders GL on llvmpipe, and Venus on lavapipe unless it has an Intel GPU.
 
 ## Tests
 

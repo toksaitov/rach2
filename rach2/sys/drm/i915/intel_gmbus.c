@@ -9,6 +9,8 @@
 #include "intel_dp.h"
 
 #include "../../klog.h"
+#include "../../rtc.h"
+#include "../../timer.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 
@@ -18,9 +20,12 @@
 #define DDC_TRIES        5
 
 /* GMBUS's waits: 50 ms for a byte or a phase, 10 ms for the controller to
- * go idle (gmbus_wait, gmbus_wait_idle). */
+ * go idle (gmbus_wait, gmbus_wait_idle). Each spins GMBUS_SPIN_US, the
+ * time of a cycle of four bytes at 100 kHz with room, and sleeps a
+ * millisecond at a time after it. */
 #define GMBUS_WAIT_US 50000u
 #define GMBUS_IDLE_US 10000u
+#define GMBUS_SPIN_US 500u
 
 /* i2c-algo-bit's timing as Linux's GPIO buses set it: 10 us for a line to
  * rise or fall, I2C_RISEFALL_TIME, and 2.2 ms for a sink that stretches
@@ -166,6 +171,56 @@ static void gmbus_reset(struct drm_i915_private *i915)
     i915_write(&i915->hw, GMBUS4, 0);
 }
 
+/**
+ * Wait up to `bound_us` until `done` says so, as Linux's wait_for: GMBUS
+ * waits sleep (intel_gmbus.c:394 in 6.12.115, wait_for's usleep_range at
+ * i915_utils.h:237), so that a transfer that stalls for its whole bound
+ * keeps no processor. The first GMBUS_SPIN_US are spun, since a sleep is
+ * at least a tick here where Linux's first are 10 us; then `done` is read
+ * after each sleep of a millisecond, the transfer kept whole meanwhile by
+ * the controller's lock (gmbus_lock). The wait ends at a deadline on the
+ * monotonic clock, as wait_for's `end__` (i915_utils.h:220), since a sleep
+ * lasts two ticks or more; it ends sooner only when the time it counted,
+ * which is never more than the time that passed, reaches the bound, as on
+ * a clock that does not move while the scheduler is off. Whether the wait
+ * has expired is read before `done`, so that a last read always follows
+ * the deadline (i915_utils.h:225-236). 0, or -ETIMEDOUT, counted and
+ * logged as `what`, as i915_wait_until does.
+ */
+static int32_t gmbus_poll(struct intel_gmbus *bus, const char *what,
+                          int (*done)(struct i915_hw *, void *), void *arg, uint32_t bound_us)
+{
+    struct i915_hw *hw = &bus->i915->hw;
+    uint64_t due =
+        rtc_ticks_now() + drm_div64((uint64_t)bound_us * TICK_HZ + 999999u, 1000000u) + 1u;
+    uint32_t waited = 0, step = 1;
+    int expired;
+
+    for (;;) {
+        expired = waited >= bound_us || rtc_ticks_now() >= due;
+        if (done(hw, arg)) {
+            return 0;
+        }
+        if (expired) {
+            hw->timeouts++;
+            hw->last_timeout = what;
+            klog(KLOG_ERR, "i915", "%s: timeout after %u us", what, (unsigned)bound_us);
+            return -ETIMEDOUT;
+        }
+        if (waited < GMBUS_SPIN_US) {
+            if (step > GMBUS_SPIN_US - waited) {
+                step = GMBUS_SPIN_US - waited;
+            }
+            i915_delay_us(hw, step);
+            waited += step;
+            step *= 2u;
+        } else {
+            intel_display_msleep(bus->i915, 1);
+            waited += 1000u;
+        }
+    }
+}
+
 /* What `gmbus_status_done` waits for: the GMBUS2 bit, and the last read. */
 struct gmbus_wait_arg {
     uint32_t bit;
@@ -183,7 +238,8 @@ static int gmbus_status_done(struct i915_hw *hw, void *arg)
 
 /**
  * Wait for GMBUS2's `bit`, Linux's gmbus_wait, which waits on the GMBUS
- * interrupt where this polls: 0, -ENXIO for a NAK, or -ETIMEDOUT.
+ * interrupt where this polls: 0, -ENXIO for a NAK, or -ETIMEDOUT. May
+ * sleep.
  */
 static int32_t gmbus_wait(struct intel_gmbus *bus, uint32_t bit)
 {
@@ -191,17 +247,24 @@ static int32_t gmbus_wait(struct intel_gmbus *bus, uint32_t bit)
 
     w.bit = bit;
     w.status = 0;
-    if (i915_wait_until(&bus->i915->hw, "gmbus", gmbus_status_done, &w, GMBUS_WAIT_US) != 0) {
+    if (gmbus_poll(bus, "gmbus", gmbus_status_done, &w, GMBUS_WAIT_US) != 0) {
         return -ETIMEDOUT;
     }
     return (w.status & GMBUS_SATOER) ? -ENXIO : 0;
 }
 
+/** Whether GMBUS2 shows the controller no longer active. */
+static int gmbus_idle_done(struct i915_hw *hw, void *arg)
+{
+    (void)arg;
+    return (i915_read(hw, GMBUS2) & GMBUS_ACTIVE) == 0;
+}
+
 /** Wait for the controller to finish, Linux's gmbus_wait_idle: 0 or
- * -ETIMEDOUT. */
+ * -ETIMEDOUT. May sleep. */
 static int32_t gmbus_wait_idle(struct intel_gmbus *bus)
 {
-    return i915_wait_for(&bus->i915->hw, "gmbus idle", GMBUS2, GMBUS_ACTIVE, 0, GMBUS_IDLE_US);
+    return gmbus_poll(bus, "gmbus idle", gmbus_idle_done, NULL, GMBUS_IDLE_US);
 }
 
 /** Read `len` bytes, 256 at most, from the sink at `addr` into `buf`,
@@ -693,10 +756,29 @@ bailout:
  */
 
 /**
+ * Take the GMBUS controller and the pins' modes for a transfer, Linux's
+ * gmbus_lock_bus, which takes gmbus.mutex (intel_gmbus.c:842-849 and :972 in
+ * 6.12.115, made at :895): a mutex, since the transfer's waits sleep and
+ * another probe, a system call's or a worker's, may run meanwhile. Taken under
+ * the commit lock where the caller holds it, never the other way round. Process
+ * context or boot.
+ */
+static void gmbus_lock(struct drm_i915_private *i915)
+{
+    mutex_lock(&i915->display.gmbus_mutex);
+}
+
+/** Let the controller go, Linux's gmbus_unlock_bus. */
+static void gmbus_unlock(struct drm_i915_private *i915)
+{
+    mutex_unlock(&i915->display.gmbus_mutex);
+}
+
+/**
  * Transfer `n` messages on the bus `ctx`, Linux's gmbus_xfer under the I2C
- * core's one retry of -EAGAIN: GMBUS, or bit-banging while the bus is
- * forced to it; a GMBUS timeout forces bit-banging until a bit-banged
- * transfer fails.
+ * core's bus lock and one retry of -EAGAIN: GMBUS, or bit-banging while
+ * the bus is forced to it; a GMBUS timeout forces bit-banging until a
+ * bit-banged transfer fails. May sleep.
  */
 static int32_t gmbus_xfer(void *ctx, struct intel_i2c_msg *msgs, int n)
 {
@@ -704,6 +786,7 @@ static int32_t gmbus_xfer(void *ctx, struct intel_i2c_msg *msgs, int n)
     int32_t ret = -EAGAIN;
     int try;
 
+    gmbus_lock(bus->i915);
     for (try = 0; try < 2 && ret == -EAGAIN; try++) {
         if (bus->force_bit) {
             bus->bit_xfers++;
@@ -719,6 +802,7 @@ static int32_t gmbus_xfer(void *ctx, struct intel_i2c_msg *msgs, int n)
             }
         }
     }
+    gmbus_unlock(bus->i915);
     return ret;
 }
 
@@ -748,6 +832,7 @@ void intel_gmbus_setup(struct drm_i915_private *i915)
         bus->bus.ctx = bus;
         bus->bus.name = bus->name;
     }
+    mutex_init(&i915->display.gmbus_mutex, "gmbus");
     gmbus_reset(i915);
 }
 
@@ -767,11 +852,13 @@ void intel_gmbus_force_bit(struct drm_i915_private *i915, int pin, int force)
         return;
     }
     bus = &i915->display.gmbus[pin];
+    gmbus_lock(i915);
     if (force) {
         bus->force_bit++;
     } else if (bus->force_bit & ~GMBUS_FORCE_BIT_RETRY) {
         bus->force_bit--;
     }
+    gmbus_unlock(i915);
     klog(KLOG_DEBUG, "i915", "%s: %sabling bit-banging, force_bit %u", bus->name,
          bus->force_bit ? "en" : "dis", (unsigned)(bus->force_bit & ~GMBUS_FORCE_BIT_RETRY));
 }

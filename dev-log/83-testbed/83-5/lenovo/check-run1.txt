@@ -1,0 +1,18 @@
+check: run1: driver i915, card0, renderD128
+check: run1: connector: card0-DP-1 disconnected
+check: run1: connector: card0-HDMI-A-1 disconnected
+check: run1: connector: card0-HDMI-A-2 disconnected
+check: run1: connector: card0-eDP-1 connected
+check: run1: backlight: 0 of 7500, actual 7500
+check: run1: crcmodes: panel 1366x768@60 76300 kHz on CRTC 44 (index 0), scaling mode found
+check: run1: crcmodes: mode 1366x768 aspect crc 0xeeb1bf37 frames 8
+check: run1: crcmodes: result: 1 modes: stable 1 unstable 0 failed 0
+check: run1: eglinfo: libEGL debug: using driver i915 for 3
+check: run1: eglinfo: libEGL debug: pci id for fd 3: 8086:0a16, driver crocus
+check: run1: eglinfo: OpenGL core profile renderer: Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+check: run1: eglinfo: OpenGL compatibility profile renderer: Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+check: run1: eglinfo: OpenGL ES profile renderer: Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+check: run1: piglit: gl-1.0-readpixsanity: exit 0: PIGLIT: {"result": "pass" }
+check: run1: piglit: fbo-readpixels: exit 0: PIGLIT: {"result": "pass" }
+check: run1: counts: kvm_vms 0 kvm_vcpus 0 kvm_slots 0 kvm_tdp_pages 0 kvm_run_mappings 0 kvm_gpa_maps 0 kvm_gpa_map_pages 0 kvm_ioeventfd_signals 449 kvm_irqfd_raises 1274 vfio_groups 0 vfio_devices 0 vfio_dma_mappings 0 vfio_dma_pages 0 vfio_dma_io_pages 0 kvm_exits 451974 iommu_dma_faults 0 iommu_irq_faults 0 msi_vectors_free 184 
+check: run1: result: pass

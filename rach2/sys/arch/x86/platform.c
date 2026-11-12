@@ -511,6 +511,9 @@ void platform_tick(void)
     ps2kbd_tick();
     alps_tick();
     itco_tick();
+#if defined(__x86_64__)
+    iommu_tick();
+#endif
 }
 
 void platform_disks_probe(void)

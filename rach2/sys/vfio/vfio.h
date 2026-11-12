@@ -185,6 +185,7 @@ int32_t vfio_container_open(struct devfs_node *node, struct fd_entry *e, int fla
 int vfio_container_attach(struct vfio_container *c, struct vfio_group *g);
 void vfio_container_detach(struct vfio_group *g);
 int vfio_container_check_extension(const struct vfio_container *c, uintptr_t ext);
+void vfio_container_audit(const struct vfio_container *c, const char *name);
 
 /* pci.c */
 int32_t vfio_device_open_fd(struct vfio_device *d);

@@ -2,8 +2,8 @@
 # bed-shm.sh: Rach2's virtio-gpu over the region it shares with the test
 # bed's VM, run under Rach2's KVM (tests/cases/machine.bed-shm.json).
 #
-#   sh bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY] [-o DIR] [-m MIB]
-#       [-n CPUS]
+#   sh bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY] [-g BDF] [-o DIR]
+#       [-m MIB] [-n CPUS]
 #
 # ivshmemd attaches a region of 32 MiB to /dev/vgpu-shm, and two more
 # attaches are refused; QEMU boots DISK, the VM that `bed/vm/image/vm.sh
@@ -27,19 +27,27 @@
 # touch after must raise SIGBUS, and every map and the frames it held must
 # be gone (`revoke`, `leak`).
 #
+# With -g the VM also has the host's PCI function BDF, the Lenovo's GPU:
+# gpu.sh, beside this script, takes it from Rach2's Intel driver, starts
+# QEMU with it on vfio-pci and the disk on AHCI, kills QEMU when this
+# script sends it SIGUSR1, and gives the function back to the driver,
+# which must pass gpu.sh's own checks once the VM has gone (`handoff`).
+#
 # Each check prints one line, `bed-shm: CHECK: pass` or `fail` with the
 # reason, and the last line is `bed-shm: result: pass` or `fail`, after the
 # VM's last 80 lines of console, `bed-shm: vm: LINE`, on a failure. The
 # console of the VM, ivshmemd's output and the counters are kept in DIR.
 set -u
-disk='' probe=./vgshmprobe crc=6e8e217c out=/tmp/bed-shm mib=2048 cpus=2 nocopy=''
+disk='' probe=./vgshmprobe crc=6e8e217c out=/tmp/bed-shm mib=2048 cpus=2 nocopy='' bdf=''
 icd=/usr/share/vulkan/icd.d/venus_icd.x86_64.json
-while getopts d:p:c:k:o:m:n: o; do
+gpush=$(dirname "$0")/gpu.sh
+while getopts d:p:c:k:g:o:m:n: o; do
     case $o in
         d) disk=$OPTARG ;;
         p) probe=$OPTARG ;;
         c) crc=$OPTARG ;;
         k) nocopy=$OPTARG ;;
+        g) bdf=$OPTARG ;;
         o) out=$OPTARG ;;
         m) mib=$OPTARG ;;
         n) cpus=$OPTARG ;;
@@ -47,13 +55,17 @@ while getopts d:p:c:k:o:m:n: o; do
     esac
 done
 [ -n "$disk" ] || {
-    echo "usage: bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY] [-o DIR] [-m MIB] [-n CPUS]" >&2
+    echo "usage: bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY] [-g BDF] [-o DIR] [-m MIB] [-n CPUS]" >&2
     exit 2
 }
-daemon='' qemu='' waiter='' holder='' pid='' bad=0
-trap 'kill -9 $qemu $waiter $holder $pid 2>/dev/null; kill $daemon 2>/dev/null; wait 2>/dev/null' EXIT
+[ -z "$bdf" ] || [ -f "$gpush" ] || { echo "bed-shm: no $gpush for -g" >&2; exit 2; }
+daemon='' qemu='' gpu='' waiter='' holder='' pid='' bad=0
+# gpu.sh, sent SIGTERM, kills its QEMU and gives the function back.
+trap 'kill -9 $qemu $waiter $holder $pid 2>/dev/null; kill $daemon $gpu 2>/dev/null; wait 2>/dev/null' EXIT
 rm -rf "$out"
 mkdir -p "$out"
+console=$out/console.log
+[ -z "$bdf" ] || console=$out/gpu/console
 
 pass() { echo "bed-shm: $1: pass${2:+: $2}"; }
 fail() { echo "bed-shm: $1: fail: $2"; bad=$((bad + 1)); }
@@ -114,20 +126,63 @@ fi
 
 # The VM, under Rach2's KVM, with the region on its doorbell device. Its
 # disk takes no ioeventfd, and QEMU raises a disk's interrupts without an
-# irqfd, so that both counts are the doorbells'.
-TMPDIR=$out qemu-system-x86_64 -accel kvm -machine q35,kernel-irqchip=split -cpu host -smp "$cpus" \
-    -m "${mib}M" -nodefaults -no-reboot -display none -monitor none \
-    -drive file="$disk",if=none,id=vm,format=raw,snapshot=on \
-    -device virtio-blk-pci,drive=vm,ioeventfd=off \
-    -chardev socket,path="$out/ivs.sock",id=ivs -device ivshmem-doorbell,chardev=ivs,vectors=2 \
-    -serial file:"$out/console.log" > "$out/qemu.out" 2>&1 &
-qemu=$!
+# irqfd, so that both counts are the doorbells'. With -g, gpu.sh starts it
+# with the function, and $qemu is QEMU's own process, from its pid file.
+if [ -z "$bdf" ]; then
+    TMPDIR=$out qemu-system-x86_64 -accel kvm -machine q35,kernel-irqchip=split -cpu host -smp "$cpus" \
+        -m "${mib}M" -nodefaults -no-reboot -display none -monitor none \
+        -drive file="$disk",if=none,id=vm,format=raw,snapshot=on \
+        -device virtio-blk-pci,drive=vm,ioeventfd=off \
+        -chardev socket,path="$out/ivs.sock",id=ivs -device ivshmem-doorbell,chardev=ivs,vectors=2 \
+        -serial file:"$console" > "$out/qemu.out" 2>&1 &
+    qemu=$!
+else
+    TMPDIR=$out bash "$gpush" -d "$bdf" -m "$mib" -s "$cpus" -w 0 -o "$out/gpu" -D "$disk" -- \
+        -pidfile "$out/qemu.pid" \
+        -chardev socket,path="$out/ivs.sock",id=ivs -device ivshmem-doorbell,chardev=ivs,vectors=2 \
+        > "$out/gpu.log" 2>&1 &
+    gpu=$!
+    last=-1 still=0
+    until [ -s "$out/qemu.pid" ]; do
+        quiet "$out/gpu.log" 120 "$gpu" || break
+    done
+    qemu=$(cat "$out/qemu.pid" 2>/dev/null)
+    : > "$out/qemu.out"
+fi
+
+# kill_vm: kill QEMU and wait for its end; with -g, through gpu.sh, which
+# then gives the function back.
+kill_vm()
+{
+    if [ -n "$gpu" ]; then
+        kill -USR1 "$gpu" 2>/dev/null
+        gpu_status=0
+        wait "$gpu" 2>/dev/null || gpu_status=$?
+        gpu=''
+    else
+        kill -9 "$qemu" 2>/dev/null
+        wait "$qemu" 2>/dev/null
+    fi
+    qemu=''
+}
+
+# handoff: with -g, gpu.sh's verdict on the function's return to the driver.
+handoff()
+{
+    [ -n "$bdf" ] || return 0
+    [ -z "$gpu" ] || kill_vm
+    if [ "${gpu_status:-1}" = 0 ] && grep -q '^gpu: result: pass' "$out/gpu.log"; then
+        pass handoff "$(sed -n 's/^gpu: result: pass: //p' "$out/gpu.log")"
+    else
+        fail handoff "status ${gpu_status:-none}: $(grep '^gpu: result\|^gpu: evidence' "$out/gpu.log" | tr '\n' ' ')"
+    fi
+}
 # The VM's backend binds virtio-gpu once its service starts, before the
 # VM's boot has ended.
 if until_line "$out/ivshmemd.out" 'QEMU connected' 60 "$qemu"; then
     last=-1 still=0
     until [ "$(info bound)" = 1 ]; do
-        quiet "$out/console.log" 600 "$qemu" || break
+        quiet "$console" 600 "$qemu" || break
     done
 fi
 ivshmemd -i > "$out/info-bound.txt" 2>&1
@@ -148,7 +203,7 @@ figure()
         s=$((s + 1))
         [ $((s % 30)) -ne 0 ] && continue
         echo "bed-shm: running: $s s: $(ivshmemd -i 2>&1 | tr '\n' ' ')"
-        tr -d '\r' < "$out/console.log" | tail -n 3 | sed 's/^/bed-shm: running: vm: /'
+        tr -d '\r' < "$console" | tail -n 3 | sed 's/^/bed-shm: running: vm: /'
     done
     figure_status=0
     wait "$pid" || figure_status=$?
@@ -164,7 +219,7 @@ nocopy_rows()
 {
     if [ "$(info bound)" != 1 ]; then
         for c in build pages coherent release refuse measure revoke leak; do
-            fail "$c" "virtio-gpu did not bind over the region: $(tail -n 2 "$out/console.log" "$out/qemu.out" 2>&1 | tr '\n' ' ')"
+            fail "$c" "virtio-gpu did not bind over the region: $(tail -n 2 "$console" "$out/qemu.out" 2>&1 | tr '\n' ' ')"
         done
         return
     fi
@@ -177,7 +232,7 @@ nocopy_rows()
     round_bytes=1048576
     VK_DRIVER_FILES=$icd "$out/nocopy" rounds 16 "$round_bytes" > "$out/rounds.out" 2>&1
     ivshmemd -i > "$out/info-rounds.txt" 2>&1
-    pins=$(grep -c 'backend: pin: resource' "$out/console.log")
+    pins=$(grep -c 'backend: pin: resource' "$console")
     if awk -v maps="$maps0" -v pages="$pages0" -v bytes="$round_bytes" '
         /^NOCOPY MAPPED: kvm_gpa_maps [0-9]+, kvm_gpa_map_pages [0-9]+$/ {
             held = $4 + 0 > maps && $6 >= pages + 2 * bytes / 4096
@@ -189,7 +244,7 @@ nocopy_rows()
         fail pages "pins $pins: $(grep 'NOCOPY' "$out/rounds.out" | tr '\n' ' ')"
     fi
     if grep -q '^NOCOPY OK' "$out/rounds.out"; then
-        pass coherent "$(sed -n 's/^NOCOPY ROUNDS: //p' "$out/rounds.out")"
+        pass coherent "$(sed -n 's/^NOCOPY ROUNDS: //p' "$out/rounds.out"); $(sed -n 's/^NOCOPY DEVICE: //p' "$out/rounds.out")"
     else
         fail coherent "$(grep 'NOCOPY' "$out/rounds.out" | tr '\n' ' ')"
     fi
@@ -201,10 +256,10 @@ nocopy_rows()
     fi
     # The VM's console comes behind its work, at the serial port's pace.
     "$probe" refuse > "$out/refuse.out" 2>&1
-    until_line "$out/console.log" 'backend: map: resource .*: refused: not exported' 60 "$qemu" ||
+    until_line "$console" 'backend: map: resource .*: refused: not exported' 60 "$qemu" ||
         true
     if grep -q 'VGSHMPROBE OK' "$out/refuse.out" &&
-        grep -q 'backend: map: resource .*: refused: not exported' "$out/console.log"; then
+        grep -q 'backend: map: resource .*: refused: not exported' "$console"; then
         pass refuse "$(sed -n 's/^VGSHMPROBE REFUSE: //p' "$out/refuse.out" | tr '\n' ';')"
     else
         fail refuse "$(grep 'VGSHMPROBE' "$out/refuse.out" | tr '\n' ' ')"
@@ -232,9 +287,7 @@ nocopy_rows()
     until_line "$out/hold.out" 'NOCOPY HELD\|NOCOPY FAIL' 120 "$holder" || true
     ivshmemd -i > "$out/info-held.txt" 2>&1
     held=$(stat kvm_gpa_map_pages)
-    kill -9 "$qemu" 2>/dev/null
-    wait "$qemu" 2>/dev/null
-    qemu=''
+    kill_vm
     until_line "$out/hold.out" 'NOCOPY SIGBUS\|NOCOPY FAIL' 60 "$holder" || true
     kill -9 "$holder" 2>/dev/null
     wait "$holder" 2>/dev/null
@@ -259,7 +312,7 @@ nocopy_rows()
 virgl_rows()
 {
     if [ "$(info bound)" != 1 ]; then
-        fail draw "virtio-gpu did not bind over the region: $(tail -n 2 "$out/console.log" "$out/qemu.out" 2>&1 | tr '\n' ' ')"
+        fail draw "virtio-gpu did not bind over the region: $(tail -n 2 "$console" "$out/qemu.out" 2>&1 | tr '\n' ' ')"
         fail doorbell "no device"
     else
         io0=$(stat kvm_ioeventfd_signals) irq0=$(stat kvm_irqfd_raises)
@@ -291,9 +344,7 @@ virgl_rows()
     "$probe" pending 4 > "$out/pending.out" 2>&1 &
     waiter=$!
     until_line "$out/pending.out" 'VGSHMPROBE PENDING\|VGSHMPROBE FAIL' 30 || true
-    kill -9 "$qemu" 2>/dev/null
-    wait "$qemu" 2>/dev/null
-    qemu=''
+    kill_vm
     wait "$waiter" 2>/dev/null
     waiter=''
     wait "$daemon" 2>/dev/null
@@ -311,13 +362,14 @@ if [ -n "$nocopy" ]; then
 else
     virgl_rows
 fi
+handoff
 
 if [ "$bad" -eq 0 ]; then
     echo "bed-shm: result: pass"
 else
     # The VM's console is lost with the machine; its last lines but the
     # backend's for each pin go with the result.
-    tr -d '\r' < "$out/console.log" 2>/dev/null |
+    tr -d '\r' < "$console" 2>/dev/null |
         grep -v 'backend: pin: resource' | tail -n 80 |
         sed 's/^/bed-shm: vm: /'
     echo "bed-shm: result: fail: $bad check(s)"

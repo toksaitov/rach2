@@ -33,10 +33,11 @@
 #
 # The script reads the console once a second. TOKEN, when given, must appear
 # there before QEMU ends. With -K the script kills QEMU with SIGKILL when
-# its TOKEN appears, the death under load; otherwise it waits for the guest
-# to power off. SECONDS without a byte on the console, 600 by default, stops
-# QEMU and fails the run; 0 waits for ever, for a guest whose console is
-# quiet while its desktop runs.
+# its TOKEN appears, the death under load, and SIGUSR1 to the script does
+# the same at once, for a caller that judges the moment by what it sees on
+# the host; otherwise it waits for the guest to power off. SECONDS without a
+# byte on the console, 600 by default, stops QEMU and fails the run; 0 waits
+# for ever, for a guest whose console is quiet while its desktop runs.
 #
 # When QEMU has ended, however it ended, and on every failure after the
 # unbind, the script takes the function back from vfio-pci, restores its
@@ -181,6 +182,8 @@ trap cleanup EXIT
 trap 'failed=1; exit 129' HUP
 trap 'failed=1; exit 130' INT
 trap 'failed=1; exit 143' TERM
+stop=0
+trap 'stop=1' USR1
 fail()
 {
     echo "gpu: result: fail: $*" >&2
@@ -257,12 +260,17 @@ echo "gpu: start: $qemu -machine q35,kernel-irqchip=split -accel $accel -cpu $cp
     2> "$out/qemu.err" < /dev/null &
 pid=$!
 
-# Read the console until QEMU's end, the token that kills it, or the bound
-# on its silence.
+# Read the console until QEMU's end, the token or SIGUSR1 that kills it, or
+# the bound on its silence.
 seen=0 killed=0 quiet=0 waited=0 last='' reason=''
 while kill -0 "$pid" 2>/dev/null; do
-    if [ -n "$kill_token" ] && grep -q -F -e "$kill_token" "$out/console"; then
-        echo "gpu: kill: QEMU on $kill_token; $(counts | tr '\n' ' ')"
+    if [ "$stop" = 1 ] ||
+        { [ -n "$kill_token" ] && grep -q -F -e "$kill_token" "$out/console"; }; then
+        if [ "$stop" = 1 ]; then
+            echo "gpu: kill: QEMU on SIGUSR1; $(counts | tr '\n' ' ')"
+        else
+            echo "gpu: kill: QEMU on $kill_token; $(counts | tr '\n' ' ')"
+        fi
         kill -KILL "$pid" 2>/dev/null || :
         killed=1
         break
@@ -309,4 +317,6 @@ after=$(counts)
 echo "gpu: after: $bdf on $card_after; $(echo "$after" | tr '\n' ' ')"
 [ "$(faults)" = "$faults_before" ] || fail "IOMMU faults counted: $(faults | tr '\n' ' ')"
 [ "$before" = "$after" ] || fail 'assignment resources leaked'
-echo "gpu: result: pass: $bdf to the guest and back to i915 after $waited s${kill_token:+, QEMU killed}"
+how=''
+[ "$killed" = 0 ] || how=', QEMU killed'
+echo "gpu: result: pass: $bdf to the guest and back to i915 after $waited s$how"

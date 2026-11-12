@@ -1,0 +1,28 @@
+/home/toksaitov-d/rach2/build/x86_64/rach2/kernel rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/t2668/root-03c2280a21537f76.img rach2.slot=trialroot rach2.i915fake
+/dev/loop0 / ext2 rw,relatime 0 0
+/dev/disk0p6 /data ext2 rw 0 0
+QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1)
+../../../bus/pci/drivers/i915
+card1
+renderD129
+kvm_vms 0
+kvm_vcpus 0
+kvm_slots 0
+kvm_tdp_pages 0
+kvm_run_mappings 0
+kvm_gpa_maps 0
+kvm_gpa_map_pages 0
+kvm_ioeventfd_signals 0
+kvm_irqfd_raises 0
+vfio_groups 0
+vfio_devices 0
+vfio_dma_mappings 0
+vfio_dma_pages 0
+vfio_dma_io_pages 0
+kvm_exits 0
+iommu_dma_faults 0
+iommu_irq_faults 0
+msi_vectors_free 188
+2730268 -rw-r--r-- 1 root root 17179869184 Nov 11 08:10 vm.disk
+Filesystem     1K-blocks     Used Available Use% Mounted on
+/dev/disk0p6    49541936 17937884  29087472  39% /data

@@ -565,6 +565,11 @@ uint64_t iommu_iova_to_phys(const struct iommu_domain *d, uint64_t iova)
     return ~0ull;
 }
 
+unsigned long iommu_dma_faults(void)
+{
+    return 0;
+}
+
 int iommu_attach(struct iommu_domain *d, uint8_t bus, uint8_t devfn)
 {
     (void)d;
@@ -630,7 +635,7 @@ int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
     (void)mm;
     CHECK((flags & PIN_IO) != 0, "VFIO accepts device pages beside pinned RAM");
     CHECK(holder->flags == PIN_KEEP_PAST_END,
-          "VFIO keeps a mapping of RAM past the end of the address space");
+          "VFIO keeps a mapping past the end of the address space");
     CHECK((flags & PIN_LONGTERM) != 0, "VFIO's pin is long-term, as FOLL_LONGTERM");
     if (addr == 0) {
         return -EFAULT;

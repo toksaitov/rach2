@@ -196,6 +196,7 @@ void vfio_device_release(struct vfio_device *d)
     struct pci_saved_state now;
     int r = 0, i, bad = 0;
 
+    vfio_container_audit(vfio_groups[d->group].container, d->name);
     vfio_irq_disable(d);
     pci_write_config16(
         DEV(d), PCI_COMMAND,

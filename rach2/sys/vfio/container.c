@@ -396,19 +396,66 @@ static int32_t get_info(struct vfio_container *c, uintptr_t arg)
     return copy_to_user((void __user *)arg, &info, minsz) != 0 ? -EFAULT : 0;
 }
 
-/** What a mapping does when an unmap, or for device pages the end of the
- * address space, takes its pages back: the device no longer reaches them,
- * as the pin requires. A mapping of RAM outlives the end of the address
- * space (PIN_KEEP_PAST_END) until the container's release, after the
- * device's own release at the close of its descriptor has reset it. */
+/** What a mapping does when an unmap, a revocation of its device pages or a
+ * protection change takes its pages back: the device no longer reaches
+ * them, as the pin requires. A mapping outlives the end of the address
+ * space (PIN_KEEP_PAST_END), device pages and all, until the last group
+ * leaves the container (type1_release), after the device's own release at
+ * the close of its descriptor has reset it, so that no unmap or IOTLB
+ * invalidation reaches the domain while the device runs, as Linux's type1,
+ * which takes them in vfio_iommu_type1_detach_group (vfio_iommu_type1.c:2455,
+ * :2508 in 6.12.115), called from vfio_group_detach_container
+ * (container.c:480) after the device's release. */
 static void dma_released(struct pin *pin, void *owner)
 {
     struct vfio_dma *dma = (struct vfio_dma *)owner;
 
-    (void)pin;
     if (dma->container->domain != NULL) {
+        klog(KLOG_INFO, "vfio", "dma: taken back: 0x%lx, %lu pages, %lu of them RAM",
+             (unsigned long)dma->iova, (unsigned long)pin_count(pin),
+             (unsigned long)pin_ram_count(pin));
         (void)iommu_unmap(dma->container->domain, dma->iova, dma->size);
     }
+}
+
+/**
+ * Log, as `vfio: release: NAME: ...`, how many pages of `c`'s live
+ * mappings of RAM its domain no longer maps to their pinned frames, the
+ * first of them, and the DMA faults counted so far. A device of `c` that
+ * still runs has had its reads and writes of such a page blocked since it
+ * went. Called at the release of the device NAME, before its reset, with
+ * the big kernel lock held; reads the domain's tables page by page and
+ * takes no lock, since nothing maps or unmaps in `c` meanwhile.
+ */
+void vfio_container_audit(const struct vfio_container *c, const char *name)
+{
+    const struct vfio_dma *dma;
+    unsigned long pages = 0, lost = 0;
+    uint64_t first = 0, iova;
+    uint32_t i, n;
+
+    if (c == NULL || c->domain == NULL) {
+        return;
+    }
+    for (dma = c->dmas; dma != NULL; dma = dma->next) {
+        if (dma->pin == NULL || !pin_live(dma->pin) ||
+            pin_ram_count(dma->pin) != pin_count(dma->pin)) {
+            continue;
+        }
+        n = pin_count(dma->pin);
+        for (i = 0; i < n; i++) {
+            iova = dma->iova + (uint64_t)i * PAGE_4K;
+            if (iommu_iova_to_phys(c->domain, iova) != (uint64_t)pin_phys(dma->pin, i) &&
+                lost++ == 0) {
+                first = iova;
+            }
+        }
+        pages += n;
+    }
+    klog(lost != 0 ? KLOG_WARN : KLOG_INFO, "vfio",
+         "release: %s: %lu of %lu pages of RAM out of the domain, the first at 0x%lx; %lu DMA "
+         "faults",
+         name, lost, pages, (unsigned long)first, iommu_dma_faults());
 }
 
 /** Map the pinned pages of `dma` at its IOVA, each run of physically

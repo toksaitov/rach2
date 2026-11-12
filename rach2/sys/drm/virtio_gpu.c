@@ -687,7 +687,9 @@ static int32_t vgpu_get_edid(struct virtio_gpu_device *vg, uint32_t i)
 }
 
 /** Read every scanout's EDID, when the device gives them, and then the
- * displays, as Linux asks for them at probe and on a display change. */
+ * displays, as Linux asks for them at probe and on a display change. Each
+ * query may sleep, and a device found dead after one is asked nothing
+ * more. The caller holds a reference on the device. */
 static void vgpu_read_displays(struct virtio_gpu_device *vg)
 {
     uint32_t i;
@@ -695,10 +697,12 @@ static void vgpu_read_displays(struct virtio_gpu_device *vg)
     if (!vg->num_scanouts) {
         return;
     }
-    for (i = 0; vg->has_edid && i < vg->num_scanouts; i++) {
+    for (i = 0; vg->has_edid && i < vg->num_scanouts && !vg->dead; i++) {
         (void)vgpu_get_edid(vg, i);
     }
-    (void)vgpu_get_display_info(vg);
+    if (!vg->dead) {
+        (void)vgpu_get_display_info(vg);
+    }
 }
 
 /** SET_SCANOUT: scanout `scanout` shows rectangle `r` of resource `res`, or
@@ -1118,17 +1122,22 @@ void vgpu_obj_init(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, u
  * `width` by `height` pixels over its pages, which are given now, or with
  * `virgl` the 3D resource `params` describes: the RESOURCE_CREATE and the
  * ATTACH_BACKING are queued without a wait, as Linux's
- * virtio_gpu_object_create, and the attach's fence is put in the object's
- * reservation, so that a wait on the object waits for both, however slow
- * the host. An error answer is logged, as Linux does, and the object's
- * UNREF undoes the id. One reference, the caller's; NULL with *err -ENODEV
- * for a dead device, -EINVAL for a size of 0 or past the shmem helper's
- * reach, -ENOSPC when every resource id is taken, -ENOMEM or -E2BIG. May
- * sleep.
+ * virtio_gpu_object_create. With `fenced`, as RESOURCE_CREATE asks for 2D
+ * and 3D alike (virtgpu_ioctl.c:172-175 and virtgpu_object.c:226-233 in
+ * Linux 6.12.115), the attach's fence is put in the object's reservation,
+ * so that a wait on the object waits for both, however slow the host.
+ * A dumb buffer's has none, as Linux's virtio_gpu_gem_create passes none
+ * (virtgpu_gem.c:42), since a commit's implicit wait for it would rest on
+ * a reap of the queue, which over the shared region the waiting thread may
+ * be the one to do. An error answer is logged, as Linux does, and the
+ * object's UNREF undoes the id. One reference, the caller's; NULL with
+ * *err -ENODEV for a dead device, -EINVAL for a size of 0 or past the
+ * shmem helper's reach, -ENOSPC when every resource id is taken, -ENOMEM
+ * or -E2BIG. May sleep.
  */
 struct virtio_gpu_object *vgpu_obj_create(struct virtio_gpu_device *vg, uint64_t size,
                                           const struct drm_virtgpu_resource_create *params,
-                                          int virgl, int32_t *err)
+                                          int virgl, int fenced, int32_t *err)
 {
     struct virtio_gpu_resource_create_2d *req;
     struct virtio_gpu_cmd *create, *attach;
@@ -1200,8 +1209,11 @@ struct virtio_gpu_object *vgpu_obj_create(struct virtio_gpu_device *vg, uint64_t
      * the create, and any command on the object follows both. */
     vgpu_cmd_send(create, NULL, NULL);
     bo->res_id = id;
-    vgpu_cmd_prepare(attach);
-    *err = dma_resv_add_fence(bo->shmem.base.resv, attach->fence, 1);
+    *err = 0;
+    if (fenced) {
+        vgpu_cmd_prepare(attach);
+        *err = dma_resv_add_fence(bo->shmem.base.resv, attach->fence, 1);
+    }
     vgpu_cmd_send(attach, NULL, NULL);
     if (*err != 0) {
         drm_gem_object_put(&bo->shmem.base);
@@ -1234,7 +1246,7 @@ static int32_t vgpu_dumb_create(struct drm_file *file, struct drm_device *dev,
     params.format = VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM;
     params.width = args->width;
     params.height = args->height;
-    bo = vgpu_obj_create(to_vg(dev), size, &params, 0, &rc);
+    bo = vgpu_obj_create(to_vg(dev), size, &params, 0, 0, &rc);
     if (!bo) {
         return rc;
     }
@@ -1619,7 +1631,9 @@ static void vgpu_config_changed(struct virtio_dev *d)
  * Linux's virtio_gpu_config_changed_work_func: on VIRTIO_GPU_EVENT_DISPLAY,
  * reread the EDIDs and the displays and tell user space with a hotplug
  * uevent, as Linux's display-info answer does on a device that is not
- * polled; then clear the events read. May sleep.
+ * polled; then clear the events read. May sleep; the caller holds a
+ * reference on the device, and a device that a query's wait finds dead is
+ * neither announced nor written, its transport torn down.
  */
 static void vgpu_display_changed(struct virtio_gpu_device *vg)
 {
@@ -1629,6 +1643,9 @@ static void vgpu_display_changed(struct virtio_gpu_device *vg)
     if (events & VIRTIO_GPU_EVENT_DISPLAY) {
         if (vg->num_scanouts) {
             vgpu_read_displays(vg);
+            if (vg->dead) {
+                return;
+            }
             drm_kms_hotplug_event(&vg->drm);
         }
         clear |= VIRTIO_GPU_EVENT_DISPLAY;
@@ -1651,8 +1668,16 @@ static int work_pending(void *arg)
 }
 
 #ifndef RACH2_HOSTTEST
-/** The worker: serve each device's display change, then free what its
- * queues answered, and sleep in an idle wait until the next change. */
+/** The worker: serve each device's display change, then free what its queues
+ * answered, and sleep in an idle wait until the next change. Like every kernel
+ * thread, it is not switched by the tick (`no_tick_switch`, which
+ * `setup_process_stack` sets), so the driver's and its transport's state, which
+ * the big lock guards, holds through each pass, as in a system call; it gives
+ * way where it sleeps and between passes. A display query sleeps, and an unplug
+ * meanwhile may drop every other reference, so the worker holds one on the
+ * device from its table to the pass's end, as Linux's virtio_gpu_deinit flushes
+ * config_changed_work before the device goes
+ * (drivers/gpu/drm/virtio/virtgpu_kms.c:283-290 in 6.12.115). */
 static void vgpu_worker(void)
 {
     struct virtio_gpu_device *vg;
@@ -1665,11 +1690,13 @@ static void vgpu_worker(void)
         for (i = 0; i < VGPU_DEVICES; i++) {
             vg = vgpu_devices[i];
             if (vg && !vg->dead) {
+                drm_dev_get(&vg->drm);
                 if (vg->display_pending) {
                     vg->display_pending = 0;
                     vgpu_display_changed(vg);
                 }
                 vgpu_reap(vg);
+                drm_dev_put(&vg->drm);
             }
         }
     }
@@ -1798,7 +1825,7 @@ static int32_t vgpu_resource_create_ioctl(struct drm_device *dev, void *data, st
             return err;
         }
     }
-    bo = vgpu_obj_create(to_vg(dev), rc->size ? rc->size : PAGE_SIZE, rc, to_vg(dev)->has_virgl,
+    bo = vgpu_obj_create(to_vg(dev), rc->size ? rc->size : PAGE_SIZE, rc, to_vg(dev)->has_virgl, 1,
                          &err);
     if (!bo) {
         return err;

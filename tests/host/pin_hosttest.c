@@ -31,9 +31,9 @@
  * shared copy-on-write makes it the parent's own first; an unmap of a
  * pinned page and the end of the address space tell the holder once and
  * drop the frames and the charge, while a pin charged to no one stays;
- * a pin of RAM whose holder keeps it past the end loses only its charge,
- * and holds each shared mapping of a disk file its range meets until
- * unpin.
+ * a pin whose holder keeps it past the end, of RAM or device pages,
+ * loses only its charge, and holds each shared mapping of a disk file its
+ * range meets until unpin.
  * Device pages accepted by VFIO carry no RAM charge; mixed ranges,
  * protection, revocation and cleanup preserve that distinction.
  * mlock's regions split and merge, count in VmLck, lose their lock in a
@@ -164,7 +164,7 @@ static void on_release(struct pin *pin, void *owner)
 
 static uint32_t holder_count;
 static const struct pin_holder holder = {on_release, &holder_count, 0};
-/* VFIO's holder, whose pins of RAM outlive the end of the address space. */
+/* VFIO's holder, whose pins outlive the end of the address space. */
 static const struct pin_holder keeper = {on_release, &holder_count, PIN_KEEP_PAST_END};
 
 /** Make A unprivileged with RLIMIT_MEMLOCK `pages` pages, or privileged
@@ -548,10 +548,15 @@ static void io_lifetime(uintptr_t addr, uintptr_t phys, vma_t *vma)
     mmn_notify(&mm_a, MMN_UNMAP, addr, addr + P);
     check(!pin_live(p) && released == before + 2, "unmap drops the BAR pin once");
     unpin(p);
-    check(pin_user(&mm_a, addr, P, PIN_IO, &keeper, &p) == 0, "a keeping BAR pin before exit");
+    check(pin_user(&mm_a, addr, P, PIN_IO, &holder, &tmp) == 0 &&
+              pin_user(&mm_a, addr, P, PIN_IO, &keeper, &p) == 0,
+          "a BAR pin and a keeping one before exit");
     mmn_release(&mm_a);
-    check(!pin_live(p) && released == before + 3 && mm_a.pinned == 0,
-          "exit drops a BAR pin, kept or not, without subtracting a RAM charge");
+    check(!pin_live(tmp) && released_pin == tmp && released == before + 3 && mm_a.pinned == 0,
+          "exit drops a BAR pin, telling its holder, without subtracting a RAM charge");
+    check(pin_live(p) && pin_phys(p, 0) == phys,
+          "exit leaves a keeping BAR pin live and its holder untold, as Linux's type1");
+    unpin(tmp);
     unpin(p);
     vm_remove(&mm_a.vm, addr, addr + 2 * P);
     unmap_user_range(&dir_a, addr, addr + 2 * P);

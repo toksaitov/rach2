@@ -170,11 +170,13 @@ struct vtd_unit {
     unsigned int assigned;         /* devices given to a VM's domain */
     int translating;               /* TE is set */
     int host_built;                /* the host's context entries exist */
-    unsigned long dma_faults;
+    unsigned long dma_faults;      /* records read, plus one for each overflow */
     unsigned long ir_faults;
-    unsigned long errors; /* invalidation errors */
-    unsigned int logged;  /* faults logged, for the limit */
-    struct spinlock lock; /* the registers and the tables */
+    unsigned long overflows; /* passes that found PFO set: faults lost */
+    unsigned long errors;    /* invalidation errors */
+    unsigned int logged;     /* faults logged, for the limit */
+    int fault_again;         /* a pass left full records for the next tick */
+    struct spinlock lock;    /* the registers and the tables */
 };
 
 /* A domain: one address space of second-level tables. */

@@ -163,26 +163,64 @@ void free_kernel_frame(void *p)
     abort();
 }
 
-/** These rows use only one-page requests. */
+/* The model heap of multi-page buffers: HEAP_SLOTS runs of up to
+ * REQ_KEEP_PAGES pages, the first free one given out whole and its address
+ * reused at once. */
+#define HEAP_SLOTS 6
+static uint8_t heap[HEAP_SLOTS][REQ_KEEP_PAGES * PAGE_SIZE];
+static uint32_t heap_pages[HEAP_SLOTS];    /* the pages given, 0 for a free run */
+static uint32_t heap_run = REQ_KEEP_PAGES; /* the longest run the heap gives */
+static int heap_count;                     /* runs given out */
+static int heap_calls;                     /* allocations asked for, given or not */
+
+/** Give the first free run for `count` pages, or NULL when `count` is
+ *  longer than `heap_run` or every run is out. */
 void *kalloc_pages_try(uint32_t count, uintptr_t *phys)
 {
-    (void)count;
-    (void)phys;
-    abort();
+    int i;
+
+    check(count > 1 && count <= REQ_KEEP_PAGES && !phys,
+          "a request asks the heap for 2 to 32 pages and no physical address");
+    heap_calls++;
+    if (count > heap_run) {
+        return 0;
+    }
+    for (i = 0; i < HEAP_SLOTS; i++) {
+        if (!heap_pages[i]) {
+            heap_pages[i] = count;
+            heap_count++;
+            return heap[i];
+        }
+    }
+    return 0;
 }
 
-/** No multi-page allocation may be freed. */
+/** Take back a run given out, which must come back at the length it was
+ *  given. */
 void kfree_pages(void *p, uint32_t count)
 {
-    (void)p;
-    (void)count;
+    int i;
+
+    for (i = 0; i < HEAP_SLOTS; i++) {
+        if (p == heap[i] && heap_pages[i]) {
+            check(heap_pages[i] == count, "a run is given back at the length it was given");
+            heap_pages[i] = 0;
+            heap_count--;
+            return;
+        }
+    }
     abort();
 }
 
-/** Reclaim never runs in these rows. */
+/** The shrinker the pool registered, which the kept-buffer rows call as
+ *  reclaim would. */
+static struct mem_shrinker *registered_shrinker;
+
+/** Record the pool's shrinker; reclaim runs only when a row calls it. */
 void mem_shrinker_register(struct mem_shrinker *s)
 {
-    (void)s;
+    check(!registered_shrinker, "the pool registers its shrinker once");
+    registered_shrinker = s;
 }
 
 /** The model clock, advanced only by explicit request ticks. */
@@ -689,6 +727,161 @@ static void pool_deadline(void)
           "the second held device completes after the waiting reader");
 }
 
+static uint8_t big_output[24 * BLOCK_SECTOR_SIZE];
+
+/** Complete a read of `count` sectors begun on the other device and consume
+ *  it, checking that its bytes reach the caller. */
+static void finish_other(struct block_request *r, uint32_t gen, uint32_t count)
+{
+    int status;
+
+    block_request_complete(r, gen, 0);
+    check(block_request_ended(r, gen, big_output, &status) && status == 0 &&
+              big_output[count * BLOCK_SECTOR_SIZE - 1] == 0x6B,
+          "a multi-page read returns the device's bytes to its caller");
+}
+
+/** Interrupts off, as the pool frees a request: both holders let `r` go. */
+static void drop_both(struct block_request *r)
+{
+    uint32_t flags = kirq_save();
+
+    req_let_go(r, 1);
+    req_let_go(r, 0);
+    kirq_restore(flags);
+}
+
+/** A read of two pages takes a new buffer of 32, kept when it is freed; a
+ *  read of three takes the kept one, and a read of a page a DMA frame.
+ *  Returns the kept buffer. */
+static uint8_t *kept_take(void)
+{
+    struct block_request *r;
+    uint8_t *first;
+    uint32_t gen;
+
+    r = block_request_begin(&other, 0, 16, &gen);
+    check(r && r->pages == REQ_KEEP_PAGES && heap_count == 1 && heap_calls == 1 && frame_count == 0,
+          "a read of two pages takes a new buffer of 32 pages from the heap");
+    first = r->page;
+    finish_other(r, gen, 16);
+    check(keep_count == 1 && kept_bufs[0] == first && heap_count == 1 && record_count == 0,
+          "the freed request's buffer is kept, not given back to the heap");
+
+    r = block_request_begin(&other, 0, 24, &gen);
+    check(r && r->page == first && r->pages == REQ_KEEP_PAGES && keep_count == 0 && heap_calls == 1,
+          "a read of three pages takes the kept buffer and asks the heap for nothing");
+    finish_other(r, gen, 24);
+    check(keep_count == 1 && kept_bufs[0] == first && heap_count == 1,
+          "the buffer is kept again when its second request is freed");
+
+    r = block_request_begin(&other, 0, 8, &gen);
+    check(r && r->pages == 1 && frame_count == 1 && keep_count == 1 && heap_calls == 1,
+          "a read of one page takes a DMA frame and leaves the kept buffer");
+    finish_other(r, gen, 8);
+    check(frame_count == 0 && keep_count == 1, "the frame goes back and the buffer stays kept");
+    return first;
+}
+
+/** Of five requests of two pages live at once, the first takes the kept
+ *  buffer `first`; freed, four keep their buffers and the fifth gives its
+ *  back. Returns the buffer kept last. */
+static uint8_t *kept_limit(uint8_t *first)
+{
+    struct block_request *five[5];
+    uint8_t *pages[5];
+    uint32_t flags;
+    int i;
+
+    flags = kirq_save();
+    for (i = 0; i < 5; i++) {
+        five[i] = req_new(16);
+        check(five[i] && five[i]->pages == REQ_KEEP_PAGES, "each of five requests gets 32 pages");
+        pages[i] = five[i]->page;
+    }
+    kirq_restore(flags);
+    check(pages[0] == first && keep_count == 0 && heap_count == 5 && heap_calls == 5 && live == 5,
+          "of five live requests the first takes the kept buffer and four take new ones");
+    for (i = 0; i < 4; i++) {
+        drop_both(five[i]);
+    }
+    check(keep_count == REQ_KEEP && heap_count == 5 && kept_bufs[0] == pages[0] &&
+              kept_bufs[3] == pages[3],
+          "four freed requests leave their four buffers kept");
+    drop_both(five[4]);
+    check(keep_count == REQ_KEEP && heap_count == 4 && record_count == 0 && live == 0,
+          "the fifth freed request gives its buffer back to the heap");
+    for (i = 0; i < (int)REQ_KEEP; i++) {
+        check(kept_bufs[i] != pages[4], "the buffer given back is not among the kept");
+    }
+    return pages[3];
+}
+
+/** The buffer kept last, `last`, is taken first; reclaim then gets all four
+ *  back and, with none kept, nothing. */
+static void kept_drain(uint8_t *last)
+{
+    struct block_request *r;
+    uint32_t flags = kirq_save();
+
+    r = req_new(16);
+    kirq_restore(flags);
+    check(r && r->page == last && keep_count == 3 && heap_calls == 5,
+          "the buffer kept last is taken first");
+    drop_both(r);
+    check(keep_count == REQ_KEEP && kept_bufs[3] == last, "and it is kept again when freed");
+
+    check(registered_shrinker == &keep_shrinker, "the pool registered its shrinker at init");
+    check(registered_shrinker->shrink(registered_shrinker, 1, 0) == REQ_KEEP * REQ_KEEP_PAGES &&
+              keep_count == 0 && heap_count == 0 && irq_depth == 0,
+          "reclaim gets every kept buffer back, 128 pages, though it asked for one");
+    check(registered_shrinker->shrink(registered_shrinker, 1, 0) == 0 && heap_count == 0,
+          "with none kept, reclaim gets nothing");
+}
+
+/** With no kept buffer and no run of 32 pages, a read takes its own length,
+ *  which is never kept; with no run of that either, it is refused. */
+static void kept_fallback(void)
+{
+    struct block_request *r;
+    uint32_t gen;
+
+    heap_run = 3;
+    r = block_request_begin(&other, 0, 24, &gen);
+    check(r && r->pages == 3 && heap_count == 1 && heap_calls == 7,
+          "with no kept buffer and no run of 32 pages, a read of three pages takes three");
+    finish_other(r, gen, 24);
+    check(keep_count == 0 && heap_count == 0,
+          "a buffer of other than 32 pages goes back to the heap, never kept");
+
+    heap_run = 2;
+    check(!block_request_begin(&other, 0, 24, &gen) && heap_calls == 9 && record_count == 0 &&
+              heap_count == 0 && live == 0,
+          "a read the heap cannot hold even at its own length is refused and frees its record");
+    heap_run = REQ_KEEP_PAGES;
+}
+
+/**
+ * Check the kept buffers of REQ_KEEP_PAGES heap pages against Linux 6.12.115's
+ * mempool: a freed element is kept while fewer than the minimum are and given
+ * back to the allocator past it (mempool_free, mm/mempool.c:559-568), the
+ * last kept is the first taken (remove_element, mm/mempool.c:167), and the
+ * pool's end gives every element back (mempool_exit, mm/mempool.c:188-191).
+ * The pool takes a kept buffer before it asks the heap, where mempool_alloc
+ * asks its allocator first (mm/mempool.c:422-431), since a new buffer is
+ * mapped and unmapped at a cost the transfer does not have. The rows count
+ * the heap's calls from the first, so they run in this order.
+ */
+static void kept_buffers(void)
+{
+    check(live == 0 && keep_count == 0 && heap_count == 0 && heap_calls == 0,
+          "the kept-buffer rows start with no request and no buffer");
+    other.max_sectors = 24;
+    kept_drain(kept_limit(kept_take()));
+    kept_fallback();
+    other.max_sectors = 0;
+}
+
 /** Install the fixture, run the lifecycle rows and check every release. */
 int main(void)
 {
@@ -717,8 +910,10 @@ int main(void)
     skipped_ticks();
     flush_deadlines();
     pool_deadline();
-    check(record_count == 0 && frame_count == 0 && live == 0 && quarantined_count == 0,
-          "every request and page is released at the end");
+    kept_buffers();
+    check(record_count == 0 && frame_count == 0 && heap_count == 0 && keep_count == 0 &&
+              live == 0 && quarantined_count == 0,
+          "every request, page and buffer is released at the end");
     for (i = 0; i < LAG_QUEUE; i++) {
         check(!queue[i].used, "every captured answer and duplicate is consumed");
     }
