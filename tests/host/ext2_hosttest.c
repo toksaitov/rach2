@@ -854,20 +854,23 @@ static void held_ops_init(void)
 /* The kind of the mount's rename lock, as nodelock.c names it. */
 static struct sleep_lock_record rename_record = SLEEP_LOCK_RECORD("rename");
 
-/** Mount the device with `flags` on a cleared `mnt`, its rename lock free;
- * the mount's result. */
-static int mount_flags(uint32_t flags)
+/** Mount the device with `flags` and the option string `options` on a
+ * cleared `mnt`, its rename lock free; the mount's result. */
+static int mount_options(uint32_t flags, const char *options)
 {
-    int rc;
-
     __builtin_memset(&mnt, 0, sizeof(mnt));
     mnt.type = &vfs_ext2_type;
     mnt.dev = &dev;
     mnt.flags = flags;
     mnt.ns.holder = -1;
     sleep_lock_init(&mnt.rename, &rename_record, 0);
-    rc = vfs_ext2_type.mount(&mnt, &dev, flags, "");
-    return rc;
+    return vfs_ext2_type.mount(&mnt, &dev, flags, options);
+}
+
+/** Mount the device with `flags` and no options; the mount's result. */
+static int mount_flags(uint32_t flags)
+{
+    return mount_options(flags, "");
 }
 
 /** Mount the device with no flags; the driver may make it read-only. */
@@ -5835,6 +5838,60 @@ static void deep_row(const char *img)
           "and its unmount leaves the valid bit clear for the next mount to check");
 }
 
+/**
+ * Clear the bit of the inode table's last block on a dirty volume, as a
+ * damaged bitmap has it: the check names the fault and the volume mounts
+ * writable with errors, as Linux's. A mkdir, whose directory block the
+ * allocator of the operations on names takes from the first clear bit,
+ * which is that one, must refuse it by name, as Linux's `ext2_new_blocks`
+ * refuses a block in the system zone, and take another; the block must be
+ * as it was, its bit set again, and the error bit kept through the
+ * unmount.
+ */
+static void structural_alloc_row(const char *img)
+{
+    uint64_t bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    static unsigned char was[4096], now[4096];
+    unsigned char b[12];
+    char script[64];
+    long table, bitmap, per, last;
+    int rc, bit;
+
+    per = debugfs_number(img, "stats", "Inode blocks per group:");
+    if (host_read(img, b, 12, 4096) != 12 || per <= 0) {
+        check(0, "the descriptor and the table's size for the structural-block row");
+        return;
+    }
+    bitmap = b[0] | (b[1] << 8) | (b[2] << 16) | ((long)b[3] << 24);
+    table = b[8] | (b[9] << 8) | (b[10] << 16) | ((long)b[11] << 24);
+    last = table + per - 1;
+    snprintf(script, sizeof(script), "freeb %ld\n", last);
+    bytes = dirty_image(img, script);
+    if (host_read(img, was, sizeof(was), last * 4096) != (long)sizeof(was) ||
+        (image_byte(img, bitmap * 4096 + last / 8) >> (last % 8) & 1) != 0) {
+        check(0, "the inode table's last block reads with its bit clear");
+        return;
+    }
+    use_image(img, bytes);
+    last_check[0] = 0;
+    rc = mount_rw();
+    check(rc == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 &&
+              strstr(last_check, "a used block the bitmap calls free") != 0,
+          "a dirty volume whose inode table has a free block mounts writable with errors");
+    if (rc != 0) {
+        return;
+    }
+    last_warn[0] = 0;
+    rc = OPS->mkdir(&mnt, mnt.root, "grown", 0755);
+    check(rc == 0 && strstr(last_warn, "is free in its bitmap but holds the volume's tables") != 0,
+          "a mkdir there refuses the inode table's block by name and takes another");
+    check(unmount_rw() == 0 && disk_state(img) == 2, "and the unmount keeps the error bit");
+    bit = (int)image_byte(img, bitmap * 4096 + last / 8);
+    check(host_read(img, now, sizeof(now), last * 4096) == (long)sizeof(now) &&
+              memcmp(was, now, sizeof(now)) == 0 && (bit >> (last % 8) & 1) == 1,
+          "and the table's block is as it was, its bit set again");
+}
+
 static void dirty_rows(void)
 {
     const char *img = fix_path("dirty.ext2");
@@ -5958,6 +6015,7 @@ static void dirty_rows(void)
     } else {
         check(0, "the root's block for the entry-form row");
     }
+    structural_alloc_row(img);
 
     bytes = dirty_image(img, "setb 4000\n");
     snapshot(img, bytes);
@@ -5970,6 +6028,8 @@ static void dirty_rows(void)
 }
 
 static void sync_remount_row(void);
+static void fault_remount_row(void);
+static void error_policy_rows(void);
 
 /**
  * Mount a clean volume read-only, read a file and a deep path on it, sync
@@ -6033,6 +6093,8 @@ static void readonly_rows(void)
               "and its unmount keeps the error bit and leaves it not valid");
     }
     sync_remount_row();
+    fault_remount_row();
+    error_policy_rows();
 }
 
 /* The result of process B's sync in `sync_remount_row`. */
@@ -6091,6 +6153,181 @@ static void sync_remount_row(void)
     mnt.flags = rw_flags;
     check(unmount_rw() == 0 && disk_state(img) == 1 && e2fsck_clean(img),
           "and the volume unmounts clean");
+}
+
+/* The root directory's first block in the volumes of `policy_image`. */
+static long policy_root;
+
+/**
+ * Make the tree volume `img` with s_errors `errors`, 1 for continue, 2 for
+ * remount-ro and 3 for panic, and its root's first entry malformed, a `rec_len`
+ * past its block, which a lookup reports as a fault of the volume. Returns
+ * the image's size, or 0 with a failed row.
+ */
+static uint64_t policy_image(const char *img, int errors)
+{
+    uint64_t bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    unsigned char b[2] = {0x00, 0x20};
+    char script[64];
+
+    policy_root = debugfs_number(img, "blocks /", "");
+    snprintf(script, sizeof(script), "ssv errors %d\n", errors);
+    if (policy_root <= 0 || !debugfs_script(img, script)) {
+        check(0, "the policy volume is made");
+        return 0;
+    }
+    poke(img, policy_root * 4096 + 4, b, 2);
+    return bytes;
+}
+
+/** Look up /hello.txt behind the malformed entry; whether it failed with
+ * EIO and the driver's record of the entry. */
+static int policy_fault(void)
+{
+    int err = 0;
+
+    last_warn[0] = 0;
+    return walk("/hello.txt", &err) == 0 && err == -EIO &&
+           memcmp(last_warn, "directory 2: entry at 0 is malformed", 36) == 0;
+}
+
+/**
+ * Mount the policy volume `img` made with s_errors `errors` writable with
+ * `options`, meet the fault, and require the error bit on the disk and the
+ * mount read-only exactly when `readonly` is set, then the bit kept by the
+ * unmount; `what` names the row.
+ */
+static void policy_row(const char *img, int errors, const char *options, int readonly,
+                       const char *what)
+{
+    uint64_t bytes = policy_image(img, errors);
+    int rc;
+
+    if (bytes == 0) {
+        return;
+    }
+    use_image(img, bytes);
+    rc = mount_options(rw_flags, options);
+    check(rc == 0 && policy_fault() && ((mnt.flags & VFS_MS_RDONLY) != 0) == readonly &&
+              disk_state(img) == 2,
+          what);
+    if (rc == 0) {
+        check(unmount_rw() == 0 && disk_state(img) == 2, "and the unmount keeps the error bit");
+    }
+}
+
+/**
+ * Meet a fault on a writable mount under each error policy, as Linux's
+ * `ext2_error` applies `errors=` (fs/ext2/super.c:49-80), each time:
+ *
+ * - with s_errors 1, `continue`, mke2fs's own, the error bit reaches the
+ *   disk at once and the mount stays writable, through a second fault too;
+ * - `errors=remount-ro` makes the mount read-only at once, by name, with
+ *   the error bit on the disk, and the unmount keeps it;
+ * - s_errors 2, remount-ro, does the same with no option, and s_errors 3,
+ *   panic, is overridden by `errors=continue`;
+ * - a remount with `errors=remount-ro` on a mount whose error bit a first
+ *   fault set makes the next fault remount it read-only: the policy
+ *   applies whatever the bit was;
+ * - `errors=` of another value is EINVAL by name, for a mount and for a
+ *   remount, which then changes nothing.
+ *
+ * `errors=panic` stops the kernel, which a host row cannot survive.
+ */
+static void error_policy_rows(void)
+{
+    const char *img = fix_path("policy.ext2");
+    uint64_t bytes = policy_image(img, 1);
+    int rc;
+
+    if (bytes == 0) {
+        return;
+    }
+    use_image(img, bytes);
+    rc = mount_rw();
+    check(rc == 0 && policy_fault() && (mnt.flags & VFS_MS_RDONLY) == 0 && disk_state(img) == 2,
+          "a fault under continue writes the error bit at once and leaves the mount writable");
+    check(rc == 0 && policy_fault() && (mnt.flags & VFS_MS_RDONLY) == 0,
+          "and a second fault leaves it writable too");
+    check(rc == 0 && OPS->remount(&mnt, rw_flags, "errors=bogus") == -EINVAL &&
+              streq(last_warn, "refused: errors="),
+          "a remount with errors= of another value is EINVAL by name");
+    check(rc == 0 && policy_fault() && (mnt.flags & VFS_MS_RDONLY) == 0, "and changes no policy");
+    check(rc == 0 && OPS->remount(&mnt, rw_flags, "noatime,errors=remount-ro") == 0 &&
+              policy_fault() && (mnt.flags & VFS_MS_RDONLY) != 0 &&
+              streq(last_log, "error: remounting read-only"),
+          "after a remount with errors=remount-ro, a fault on a volume whose error bit is set "
+          "makes the mount read-only by name");
+    if (rc == 0) {
+        check(unmount_rw() == 0 && disk_state(img) == 2, "and the unmount keeps the error bit");
+    }
+    policy_row(
+        img, 1, "errors=remount-ro", 1,
+        "under errors=remount-ro a fault writes the error bit and makes the mount read-only");
+    policy_row(img, 2, "", 1, "s_errors 2 makes a fault remount read-only with no option");
+    policy_row(img, 3, "errors=continue", 0, "errors=continue overrides s_errors 3, panic");
+    use_image(img, policy_image(img, 1));
+    last_warn[0] = 0;
+    rc = mount_options(rw_flags, "errors=never");
+    check(rc == -EINVAL && streq(last_warn, "refused: errors="),
+          "a mount with errors= of another value is EINVAL by name");
+    if (rc == 0) {
+        unmount_rw();
+    }
+}
+
+/* The result of process B's lookup in `fault_remount_row`. */
+static int race_fault_ok;
+
+/** Process B of `fault_remount_row`: a lookup that meets the malformed
+ * entry. */
+static void race_fault(void)
+{
+    race_fault_ok = policy_fault();
+}
+
+/**
+ * A fault met beside a remount read-only: the remount gives the turn at
+ * its write of the superblock, under `em->super`, to a lookup that meets
+ * a malformed entry, sets the error bit and sleeps on that lock. The
+ * remount must write the state again with the bit before the mount stops
+ * writing, as Linux's `ext2_error` writes the bit while a remount syncs,
+ * so the disk must have the error bit and no valid bit after the remount
+ * and after the unmount, and a mount after it checks the volume.
+ */
+static void fault_remount_row(void)
+{
+    const char *img = fix_path("race.ext2");
+    uint64_t bytes = policy_image(img, 1);
+    int rc;
+
+    if (bytes == 0) {
+        return;
+    }
+    use_image(img, bytes);
+    rc = mount_rw();
+    check(rc == 0 && OPS->sync(&mnt) == 0, "the faulty race volume mounts writable and syncs");
+    if (rc != 0) {
+        return;
+    }
+    race_fault_ok = 0;
+    write_pause = race_super_turn;
+    start_turns(race_fault);
+    rc = OPS->remount(&mnt, rw_flags | VFS_MS_RDONLY, NULL);
+    finish_turns();
+    write_pause = 0;
+    check(rc == 0 && race_fault_ok && second_wait && streq(second_wait, "ext2 super"),
+          "a fault met at a remount's write of the superblock sleeps on em->super");
+    check(disk_state(img) == 2, "and the remount writes the error bit, without the valid bit");
+    mnt.flags = rw_flags | VFS_MS_RDONLY;
+    check(unmount_rw() == 0 && disk_state(img) == 2, "and the unmount keeps it");
+    use_image(img, bytes);
+    last_check[0] = 0;
+    rc = mount_rw();
+    check(rc == 0 && last_check[0] != 0, "and the next writable mount checks the volume");
+    if (rc == 0) {
+        unmount_rw();
+    }
 }
 
 /* PROFILE with `ext_attr`, for volumes whose inodes have attribute blocks. */
