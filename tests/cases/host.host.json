@@ -961,6 +961,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "name",
+          "checks": "tests/host/name_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "ncport",
           "checks": "tests/host/ncport_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
