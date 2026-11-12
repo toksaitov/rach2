@@ -1082,6 +1082,14 @@ static int run_gather(struct bbuf *first, struct bbuf **run, const struct sync_s
  * would reach the device together. A failure is recorded on `first` as
  * `write_buffer_flags` does. A run of one, or a device that takes a page,
  * is `write_buffer_flags`.
+ *
+ * The write is counted (`wrote_one`) before the run's buffers are let go,
+ * as `write_buffer_flags` counts it before its caller's `let_go`: a fill
+ * without the big lock may take a written buffer as its victim once it is
+ * let go, find the block uncached and, with the count unmoved, keep bytes
+ * its staged read took before the write, where Linux's readahead puts each
+ * folio in the page cache, locked, before it reads (mm/readahead.c:268,
+ * 273, 290).
  */
 static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags,
                      const struct sync_scope *scope)
@@ -1118,16 +1126,16 @@ static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags,
         first->write_failed = 1;
         vfs_device_failed(dev, first->blk * BCACHE_BLOCK_SECTORS, rc);
     }
-    for (i = 0; i < n; i++) {
-        if (rc == 0) {
+    if (rc == 0) {
+        for (i = 0; i < n; i++) {
             set_clean(run[i]);
             run[i]->write_failed = 0;
             run[i]->order = 0;
         }
-        let_go(run[i]);
+        wrote_one(); /* before the let_go: a fill may take a buffer once let go */
     }
-    if (rc == 0) {
-        wrote_one();
+    for (i = 0; i < n; i++) {
+        let_go(run[i]);
     }
     *last = run[n - 1]->blk;
     return rc;
