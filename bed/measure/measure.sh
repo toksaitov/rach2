@@ -71,7 +71,8 @@
 # a line, `counts`, the readings before and after, and `line`, the last
 # line; a run first removes what an earlier run wrote there. The scene runs
 # in a process group of its own, which the script ends, TERM and then KILL,
-# on every exit and on SIGTERM, SIGINT or SIGHUP. The status is 0 when the
+# with the groups of the helpers the scene starts with setsid, on every exit
+# and on SIGTERM, SIGINT or SIGHUP. The status is 0 when the
 # scene ran to its end and gave frames, and 1 otherwise; the script sets no
 # time limit of its own.
 set -eu
@@ -374,12 +375,47 @@ stop_copy()
     copy_pid=''
 }
 
-# stop_scene: end the scene's half, TERM and after 15 seconds KILL, without
-# waiting for it. Under -u the half is USER's own shell, after the execs of
-# setsid and BusyBox's su, which USER may trace; a traced child's end goes to
-# its tracer, and the parent's wait passes over it until the tracer collects
-# it (kernel/exit.c:1476-1484 of 6.12.115), so a wait could block. As with
-# stop_copy, this shell's reaper takes the half once the shell exits.
+# helpers PID: the process groups of PID's descendants, a group a line,
+# never this shell's own. The scene's half starts Weston, the browser and the
+# server with setsid, in groups of their own, which a KILL to the half's
+# group leaves running.
+helpers()
+{
+    root=$1
+    st=$(tr '\n' ' ' < "/proc/$$/stat")
+    # shellcheck disable=SC2086 # state, ppid, pgrp and the rest are words
+    set -- ${st##*) }
+    self=$3
+    for d in /proc/[0-9]*; do
+        st=$(tr '\n' ' ' 2>/dev/null < "$d/stat") || continue
+        # shellcheck disable=SC2086 # state, ppid, pgrp and the rest are words
+        set -- ${st##*) }
+        echo "${d#/proc/} ${2:-0} ${3:-0}"
+    done | awk -v root="$root" -v self="$self" '
+        { parent[$1] = $2; group[$1] = $3 }
+        END {
+            in_tree[root] = 1
+            do {
+                more = 0
+                for (p in parent)
+                    if (!(p in in_tree) && (parent[p] in in_tree)) { in_tree[p] = 1; more = 1 }
+            } while (more)
+            for (p in in_tree) if (p != root && group[p] > 1 && group[p] != self) out[group[p]] = 1
+            for (g in out) print g
+        }'
+}
+
+# stop_scene: end the scene's half, TERM and CONT and after 15 seconds KILL,
+# without waiting for it. A stopped task takes no TERM until it runs again,
+# so CONT goes to the half's group and to its helpers' groups, which the
+# half's own cleanup sends TERM. When the half has not ended by then, KILL
+# goes to its group and to every group of its descendants, read from /proc
+# just before, while the half still holds them as its children. Under -u
+# the half is USER's own shell, after the execs of setsid and BusyBox's su,
+# which USER may trace; a traced child's end goes to its tracer, and the
+# parent's wait passes over it until the tracer collects it (kernel/exit.c:
+# 1476-1484 of 6.12.115), so a wait could block. As with stop_copy, this
+# shell's reaper takes the half once the shell exits.
 # shellcheck disable=SC2317 # the traps call it
 stop_scene()
 {
@@ -388,12 +424,17 @@ stop_scene()
     [ "$under_su" = 0 ] || group=$(inner_group "$scene_pid")
     if [ -n "$group" ]; then term=-$group; else term=-$scene_pid; fi
     kill -TERM "$term" 2>/dev/null || true
+    kill -CONT "$term" 2>/dev/null || true
+    for g in $(helpers "$scene_pid"); do kill -CONT "-$g" 2>/dev/null || true; done
     n=150
     while [ "$n" -gt 0 ] && kill -0 "$term" 2>/dev/null; do
         sleep 0.1
         n=$((n - 1))
     done
-    if kill -0 "$term" 2>/dev/null; then kill -KILL "$term" 2>/dev/null || true; fi
+    if kill -0 "$term" 2>/dev/null; then
+        for g in $(helpers "$scene_pid"); do kill -KILL "-$g" 2>/dev/null || true; done
+        kill -KILL "$term" 2>/dev/null || true
+    fi
     kill -KILL "-$scene_pid" 2>/dev/null || true
     scene_pid=''
 }
