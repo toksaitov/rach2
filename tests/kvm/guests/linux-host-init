@@ -1,8 +1,9 @@
 #!/bin/busybox sh
 # linux-host-init: /init of the Linux host that mklinuxhost.sh makes. It
-# loads the AHCI and KVM modules of Debian's kernel, mounts the GNU root of
-# the first disk read-only, binds its directories into a tmpfs with a tmpfs
-# on /tmp, copies the KVM suite's data disk, the second, to /tmp/kvm, and
+# loads the AHCI and KVM modules of Debian's kernel, mounts the GNU root,
+# the first partition of the disk that has one, read-only, binds its
+# directories into a tmpfs with a tmpfs on /tmp, copies the KVM suite's data
+# disk, the other disk, which has no partition table, to /tmp/kvm, and
 # runs there, in a chroot of that tmpfs, under Linux's KVM: with no
 # `linuxhost=` on the kernel's command line, the guest boots under exits.sh
 # that the measurements of Rach2's KVM run, the Debian guest twice and the
@@ -18,16 +19,25 @@ $B mount -t devtmpfs devtmpfs /dev
 for m in scsi_common scsi_mod libata libahci ahci sd_mod irqbypass kvm kvm-amd; do
     $B insmod /lib/modules/$m.ko || echo "linuxhost: insmod: failed: $m"
 done
+# The disks are named in the order their probes end, not by their ports.
 i=0
-while { [ ! -b /dev/sda1 ] || [ ! -b /dev/sdb ]; } && [ $i -lt 60 ]; do
-    $B sleep 1
-    i=$((i + 1))
+root=
+data=
+while [ -z "$root" ] && [ $i -lt 60 ]; do
+    if [ -b /dev/sda1 ] && [ -b /dev/sdb ]; then
+        root=/dev/sda1 data=/dev/sdb
+    elif [ -b /dev/sdb1 ] && [ -b /dev/sda ]; then
+        root=/dev/sdb1 data=/dev/sda
+    else
+        $B sleep 1
+        i=$((i + 1))
+    fi
 done
 # The GNU root has no /dev, /proc or /sys of its own, which Rach2 makes, and
 # is read-only, so the chroot is a tmpfs with its directories bound in.
 g=/gnu
 r=/root
-if ! $B mount -t ext4 -o ro /dev/sda1 $g; then
+if [ -z "$root" ] || ! $B mount -t ext4 -o ro "$root" $g; then
     echo "linuxhost: the GNU root did not mount"
     $B poweroff -f
 fi
@@ -55,7 +65,7 @@ $B mount -t sysfs sysfs $r/sys
 $B mount -t debugfs debugfs $r/sys/kernel/debug
 $B mount -t tracefs tracefs $r/sys/kernel/tracing
 $B mkdir -p $r/tmp/kd $r/tmp/kvm
-$B mount -t ext4 -o ro /dev/sdb $r/tmp/kd && $B cp -R $r/tmp/kd/. $r/tmp/kvm && $B umount $r/tmp/kd
+$B mount -t ext4 -o ro "$data" $r/tmp/kd && $B cp -R $r/tmp/kd/. $r/tmp/kvm && $B umount $r/tmp/kd
 echo "linuxhost: kernel: $($B uname -r), $($B grep -c ^processor /proc/cpuinfo) processor(s)"
 echo "linuxhost: kvm: $($B ls -l /dev/kvm 2>&1)"
 case ${linuxhost:-} in
