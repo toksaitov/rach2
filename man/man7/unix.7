@@ -120,10 +120,10 @@ and an accept there that finds none queued fails with
 .Er EINVAL ,
 as in Linux.
 .Ss Data
-A receiver's queue is charged each message's bytes, its record, of 156
-bytes on i686 and 168 on x86-64, and its descriptors, of 32 bytes each on
-i686 and 64 on x86-64, and takes a message while it has been charged
-fewer than 212992 bytes, or the size
+A receiver's queue is charged each message's bytes, the kernel's record of
+the message, of under 256 bytes, and a descriptor table's entry, of at most
+64 bytes, for each descriptor it carries, and takes a message while it has
+been charged fewer than 212992 bytes, or the size
 .Dv SO_RCVBUF
 set.
 A stream is sent in pieces of at most 64 KiB as the receiver's queue has
@@ -141,8 +141,7 @@ A datagram or sequenced-packet receiver takes a message while it has at
 most 512 queued and room in its charge, so it holds up to 513 small
 messages, as Linux under systemd's
 .Va net.unix.max_dgram_qlen
-of 512 allows, and 26 on i686 or 14 on x86-64 that each carry 253
-descriptors; otherwise a sender waits for room, or fails with
+of 512 allows, and at least 13 that each carry 253 descriptors; otherwise a sender waits for room, or fails with
 .Er EAGAIN .
 A datagram socket may be connected to one peer; a socket connected to
 another refuses the send, and the connect, with
