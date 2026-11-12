@@ -5,6 +5,7 @@
  */
 
 #include "ext2_internal.h"
+#include "../lib/kirq.h"
 
 /* The kinds of ext2's locks, as `sleep_lock_records` lists them. */
 static struct sleep_lock_record node_record = SLEEP_LOCK_RECORD("ext2 node");
@@ -112,15 +113,19 @@ uint32_t ext2_node_ref(struct ext2_node *n, int delta)
  * reads it whole without the lock: on i686 the 64-bit store is two, and a
  * reader between them would see half of each. `size_seq` is odd while the
  * size changes, as Linux's `i_size_write` keeps a sequence around the size
- * of a 32-bit kernel (include/linux/fs.h:976-981).
+ * of a 32-bit kernel (include/linux/fs.h:976-981). Interrupts stay off
+ * while the count is odd: an interrupt waiting for the big lock must not
+ * stop a writer whose reader holds that lock.
  */
 void ext2_node_size_set(struct ext2_node *n, uint64_t size)
 {
     volatile unsigned int *seq = (volatile unsigned int *)&n->size_seq;
+    uint32_t flags = kirq_save();
 
     (void)arch_atomic_xchg(seq, *seq + 1u);
     n->size = size;
     (void)arch_atomic_xchg(seq, *seq + 1u);
+    kirq_restore(flags);
 }
 
 /** The size of `n`, read whole without its lock, as Linux's `i_size_read`
@@ -2230,8 +2235,9 @@ static int inode_time_byte(uint32_t at)
 }
 
 /** Set `n->dirty_meta` under `em->share_lock`, which an `fsync` clears
- * without `n`'s lock. */
-static void node_meta_dirty(struct ext2_mount *em, struct ext2_node *n)
+ * without `n`'s lock. Call after the table buffer's store attempt, so a
+ * sync cannot take a completed store's mark before that store. */
+void ext2_node_meta_dirty(struct ext2_mount *em, struct ext2_node *n)
 {
     uint32_t flags = spin_lock_irqsave(&em->share_lock);
 
@@ -2239,10 +2245,10 @@ static void node_meta_dirty(struct ext2_mount *em, struct ext2_node *n)
     spin_unlock_irqrestore(&em->share_lock, flags);
 }
 
-/** `inode_encode` of `n` over the `len` bytes of its slot at `raw`, setting
- * `n->dirty_meta` when a byte other than a time's changes. */
-void ext2_inode_encode_noting(struct ext2_mount *em, struct ext2_node *n, uint8_t *raw,
-                              uint32_t len)
+/** `inode_encode` of `n` over the `len` bytes of its slot at `raw`; return
+ * 1 when a byte other than a time's changes, else 0. The caller publishes
+ * that change with `ext2_node_meta_dirty` after storing the table buffer. */
+int ext2_inode_encode(struct ext2_mount *em, struct ext2_node *n, uint8_t *raw, uint32_t len)
 {
     uint8_t was[EXT2_LARGE];
     uint32_t i;
@@ -2251,10 +2257,10 @@ void ext2_inode_encode_noting(struct ext2_mount *em, struct ext2_node *n, uint8_
     inode_encode(em, n, raw);
     for (i = 0; i < len; i++) {
         if (raw[i] != was[i] && !inode_time_byte(i)) {
-            node_meta_dirty(em, n);
-            break;
+            return 1;
         }
     }
+    return 0;
 }
 
 /**
@@ -2272,9 +2278,11 @@ void ext2_inode_encode_noting(struct ext2_mount *em, struct ext2_node *n, uint8_
  * device with any neighbour's sync. The drain encodes the node. A strict
  * mount drains the batch before any store but the batch's own
  * (`ext2_assert_writable`). A change of a field but the times sets
- * `n->dirty_meta`, and the superblock is listed among `n`'s shared blocks
- * when `large_file` is set for it. The caller holds `n`'s lock, or has `n`
- * alone, a new inode or one freed at its last put; that keeps the slot's
+ * `n->dirty_meta` after the store, even on error so a retry covers any
+ * dirty buffer left by the failed write. The superblock is listed among
+ * `n`'s shared blocks when `large_file` is set for it. The caller holds
+ * `n`'s lock, or has `n` alone, a new inode or one freed at its last put;
+ * that keeps the slot's
  * bytes and the batch's hold on `n` from changing under the read, the batch
  * test and the write, so it needs no big lock. 0, or -errno.
  */
@@ -2283,19 +2291,18 @@ int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int 
     uint8_t raw[256];
     uint64_t at = ext2_inode_offset(em, n->ino);
     uint32_t len = em->inode_size > EXT2_GOOD_OLD ? EXT2_LARGE : EXT2_GOOD_OLD;
-    int rc;
+    int rc, changed = fresh;
 
     if (fresh) {
         len = em->inode_size;
         k_memset(raw, 0, len);
-        node_meta_dirty(em, n);
         inode_encode(em, n, raw);
     } else {
         rc = ext2_read_bytes(em, at, raw, len);
         if (rc != 0) {
             return rc;
         }
-        ext2_inode_encode_noting(em, n, raw, len);
+        changed = ext2_inode_encode(em, n, raw, len);
     }
     if ((n->mode & S_IFMT_) == S_IFREG_ && n->size >= 0x80000000u &&
         !(em->ro_compat & EXT2_RO_LARGE_FILE)) {
@@ -2308,7 +2315,11 @@ int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int 
     if (!fresh && ext2_writeback_keeps(em, n)) {
         return 0;
     }
-    return ext2_write_bytes(em, at, raw, len, how);
+    rc = ext2_write_bytes(em, at, raw, len, how);
+    if (changed) {
+        ext2_node_meta_dirty(em, n);
+    }
+    return rc;
 }
 
 /** Write inode `n` as `ext2_inode_write` does with WRITE_THROUGH: the fields

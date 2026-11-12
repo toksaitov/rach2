@@ -310,6 +310,7 @@ struct ext2_writeback {
     uint8_t *slot[EXT2_WB_DATA + EXT2_WB_META];
     int datas, metas, count;
     uint32_t bytes;
+    uint32_t inode_dirty; /* bit per `nodes` entry, until its table buffer is stored */
     int stage, error;
     /* Kept by `em->batch` and this spinlock together: `datas`, `metas`,
      * `count`, `nodes` and each image's `block` and `stage`; a holder of
@@ -537,8 +538,8 @@ int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const 
 int ext2_write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uint32_t len, int sync);
 int ext2_assert_writable(struct vfs_mount *mnt, struct ext2_mount *em);
 uint64_t ext2_inode_offset(const struct ext2_mount *em, uint32_t ino);
-void ext2_inode_encode_noting(struct ext2_mount *em, struct ext2_node *n, uint8_t *raw,
-                              uint32_t len);
+void ext2_node_meta_dirty(struct ext2_mount *em, struct ext2_node *n);
+int ext2_inode_encode(struct ext2_mount *em, struct ext2_node *n, uint8_t *raw, uint32_t len);
 int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int how);
 int ext2_inode_store(struct ext2_mount *em, struct ext2_node *n);
 int ext2_inode_times_later(struct ext2_mount *em, struct ext2_node *d);

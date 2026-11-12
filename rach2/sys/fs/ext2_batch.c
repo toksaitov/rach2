@@ -807,6 +807,28 @@ static int drain_lock(struct ext2_mount *em)
     }
 }
 
+/** Publish the changed inodes of table image `im` after its cache buffer
+ * is dirtied. The caller holds `em->batch` and that buffer. Other stages
+ * have no inode marks; a failed drain retains the unpublished bits. */
+static void drain_inode_marks(struct ext2_mount *em, const struct ext2_image *im)
+{
+    struct ext2_writeback *wb = em->wb;
+    int i;
+
+    if (im->stage != WB_INODE) {
+        return;
+    }
+    for (i = 0; i < wb->count; i++) {
+        struct ext2_node *n = wb->nodes[i];
+
+        if ((wb->inode_dirty & (1u << i)) &&
+            ext2_inode_offset(em, n->ino) >> BCACHE_BLOCK_SHIFT == im->block) {
+            ext2_node_meta_dirty(em, n);
+            wb->inode_dirty &= ~(1u << i);
+        }
+    }
+}
+
 /**
  * Write the batch out, stage by stage, under `em->batch`: the inodes encoded
  * into their table images, then each stage's changed images copied into the
@@ -815,7 +837,9 @@ static int drain_lock(struct ext2_mount *em)
  * pointer blocks tagged as its own and each pointer block marked at its
  * level after the blocks below it, so that the cache writes it after them
  * (`bcache_dirty_pointer`). No buffer is held across a sync, which may
- * reach a backing file.
+ * reach a backing file. Changed inode fields are kept in `inode_dirty`,
+ * a bit per node, across a failed drain; each mark is published under
+ * `em->share_lock` only after its table image is dirty in the cache.
  *
  * On a mount that writes back the copies are all the work: the cache first
  * writes dirty victims with no lock taken until it can give a buffer for
@@ -862,8 +886,10 @@ int ext2_writeback_drain(struct ext2_mount *em)
         uint64_t at = ext2_inode_offset(em, n->ino);
         struct ext2_image *im = writeback_find(wb, (uint32_t)(at >> 12));
 
-        ext2_inode_encode_noting(em, n, im->data + ((uint32_t)at & 4095u),
-                                 em->inode_size > EXT2_GOOD_OLD ? EXT2_LARGE : EXT2_GOOD_OLD);
+        if (ext2_inode_encode(em, n, im->data + ((uint32_t)at & 4095u),
+                              em->inode_size > EXT2_GOOD_OLD ? EXT2_LARGE : EXT2_GOOD_OLD)) {
+            wb->inode_dirty |= 1u << i;
+        }
     }
     for (; wb->stage <= WB_INODE; wb->stage++) {
         struct ext2_image *images = wb->stage == WB_DATA ? wb->data : wb->meta;
@@ -888,6 +914,7 @@ int ext2_writeback_drain(struct ext2_mount *em)
             }
             k_memcpy(b->data, im->data, BCACHE_BLOCK_BYTES);
             drain_mark(b, im);
+            drain_inode_marks(em, im);
             bcache_release(b);
             wrote = 1;
             if (++copied % EXT2_SERVICE_BLOCKS == 0) {

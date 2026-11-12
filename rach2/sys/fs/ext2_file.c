@@ -26,8 +26,8 @@ int ext2_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
 /** The `release` of `vfs_ops`, at a description's last close: the batch
  * drained, a failure kept for the next `fsync`, and the hold `ext2_open`
  * took put. The drain, of a batch that is not empty or of a device that
- * went, which records the failure, takes the big lock for the cache's
- * write side when the caller lacks it, and the put for a last hold. */
+ * went, which records the failure, runs under the batch and buffer locks;
+ * a final put takes the big lock for the node table. */
 void ext2_release(struct vfs_mount *mnt, void *handle)
 {
     (void)ext2_writeback_drain(ext2_em_of(mnt));
@@ -1075,8 +1075,9 @@ static struct ext2_node *table_unsynced(struct ext2_mount *em, uint32_t ino)
 
 /**
  * Empty the batch and wait out another call's write of `n`'s list, until
- * neither slept, so that the caller's `node_blocks_write` of `n` runs in the
- * same step as the last check. A mount's failure stops it. A list that keeps
+ * neither slept. A later writer can fill the batch again; the table
+ * buffer's dependency check orders any pointers it publishes. A mount's
+ * failure stops the call. A list that keeps
  * being written, or a batch that keeps being filled, past EXT2_TABLE_TRIES
  * sets `*whole`. 0, or -errno.
  */
@@ -1108,10 +1109,11 @@ static int node_write_ready(struct ext2_mount *em, struct ext2_node *n, int *who
  * that block is written, with a hold on each node: its shared and own
  * blocks are written here, or, while another call writes them, waited for.
  *
- * Every round that sleeps starts over, and the last one sleeps at nothing:
- * the batch is empty, no neighbour has a list and the cache starts the write
- * of `table` without a wait (`bcache_sync_block_ready`), so that the
- * caller's `bcache_sync_block` runs in the same step as those checks. A
+ * Every round that sleeps starts over until the batch is empty, no
+ * neighbour has a list and the cache finds no dependency or wait for
+ * `table` (`bcache_sync_block_ready`). Writers can still change it before
+ * `bcache_sync_block`, which checks dependencies again with the buffer
+ * held until its write ends. A
  * failure on the mount, here or in a call this one waited for, is returned
  * first: the block would publish a pointer to what failed.
  *
@@ -1199,12 +1201,14 @@ static int table_write_ready(struct ext2_mount *em, struct ext2_node *n, uint64_
  * A list that overflowed, or went with its node or to a write of the whole
  * device under way, makes it the whole device's `bcache_sync`, as a table
  * block's neighbours may. A failure is recorded as the batch's error and
- * leaves the next call the whole device. The caller holds the big lock,
- * which the cache's syncs keep, and which makes each check and the step of
- * the cache that follows it one step against the stores of other writers:
- * a writer lists a block for its node before the store that names it
- * (`ext2_node_share`), and every store into the cache holds the big lock
- * (`ext2_write_owned`). 0, or -errno.
+ * leaves the next call the whole device. The caller holds the big lock
+ * for the node table, but writers need not hold it. The lists and dirty
+ * marks are taken under `em->share_lock`; a completed inode store sets
+ * its mark after dirtying the table buffer. The cache checks dependencies
+ * under its write lock and holds each buffer across that check and its
+ * write. A writer dirties and lists a block before storing a pointer to
+ * it, so a concurrent store either precedes the table write and has its
+ * dependencies checked, or waits for the held buffer. 0, or -errno.
  */
 static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_only)
 {
