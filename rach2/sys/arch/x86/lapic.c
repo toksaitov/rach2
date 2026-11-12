@@ -475,9 +475,10 @@ static int level_requested(void)
  * I/O APIC line are masked first, and what they already sent is taken by
  * its handler, interrupts being on, before the move; a message that comes
  * in the last moment, waiting in the request register, is sent again to
- * this processor once it is back in xAPIC mode. Linux leaves the mode only
- * before any device has an interrupt (`enable_IR_x2apic`, apic.c, lines
- * 1913 to 1926) and needs none of this.
+ * this processor once it is back in xAPIC mode, and an edge a masked line
+ * dropped is raised again as the line is unmasked (`ioapic_unmask_lines`).
+ * Linux leaves the mode only before any device has an interrupt
+ * (`enable_IR_x2apic`, apic.c, lines 1913 to 1926) and needs none of this.
  */
 static void x2apic_leave_live(void)
 {
