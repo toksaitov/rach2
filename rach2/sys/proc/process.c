@@ -561,6 +561,7 @@ static struct fs_struct *fs_new(void)
     struct fs_struct *fs = kzalloc(sizeof(*fs));
 
     if (fs) {
+        spin_lock_init(&fs->lock, "fs->lock");
         fs->refs = 1;
         fs->cwd[0] = '/';
         fs->umask = 022;
