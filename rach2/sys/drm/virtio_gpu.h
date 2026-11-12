@@ -706,6 +706,11 @@ struct virtio_gpu_object {
      * page lists named, held by the transport, which takes them back first
      * when the device's memory changes or its VM ends. */
     struct virtio_map *pages_map;
+    /* The zap of every program's mapping of the blob, queued to the commit
+     * worker when the transport takes `pages_map`'s frames back, since the
+     * change notice that takes them must not sleep; the map holds the
+     * frames until it is freed. */
+    struct drm_work revoke_zap;
     uintptr_t vmap;
     int uuid_ok; /* ASSIGN_UUID answered with `uuid` */
     uint8_t uuid[16];
