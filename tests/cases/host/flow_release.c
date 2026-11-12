@@ -1957,10 +1957,11 @@ static int windows_stop_rows(struct release *r)
  * prints what scenario SCENARIO saw. No process of a claim is its child, so
  * it signals none by number: the orphan row's runner is killed by the
  * supervisor that setsid keeps as its unreaped parent, and at its exit the
- * claim's stop token and the end files end them all, and it prints a line
- * `left` unless the claim's lock, which every process of the claim holds,
- * and the supervisor's lock are free within a minute. Usage: sh driver DIR
- * RELEASE SCENARIO.
+ * end files end the fake waits, it waits for its own background jobs, the
+ * claim's stop token ends the rest, and it prints a line `left` unless the
+ * claim's lock, which every process of the claim holds, and the
+ * supervisor's lock are free within a minute. Usage: sh driver DIR RELEASE
+ * SCENARIO.
  */
 static const char claim_driver[] =
     "W=$1 R=$2 how=$3\n"
@@ -1968,7 +1969,7 @@ static const char claim_driver[] =
     "RACH2_CLAIM_ETUDE=$W/bin/etude\n"
     "FAKE_HOLD='' FAKE_ETUDE_RC=0\n"
     "case $how in\n"
-    "dead | cleanup | ledger | publish) FAKE_LAUNCH=grant ;;\n"
+    "dead | cleanup | ledger | publish | stall) FAKE_LAUNCH=grant ;;\n"
     "late | retry) FAKE_LAUNCH=wait ;;\n"
     "orphan) FAKE_LAUNCH=stubborn ;;\n"
     "*) FAKE_LAUNCH=$how ;;\n"
@@ -1976,12 +1977,17 @@ static const char claim_driver[] =
     "[ \"$how\" != cleanup ] || FAKE_LAUNCH=linger FAKE_HOLD=1\n"
     "FAKE_SUPERVISE=\n"
     "[ \"$how\" != orphan ] || FAKE_SUPERVISE=1\n"
+    "# A stalled publication is killed after three seconds, any other after half a\n"
+    "# minute, as in WSL.\n"
+    "RACH2_CLAIM_PUBLISH=30\n"
+    "[ \"$how\" != stall ] || RACH2_CLAIM_PUBLISH=3\n"
     "export PATH FAKE_DIR FAKE_LAUNCH FAKE_HOLD FAKE_ETUDE_RC FAKE_SUPERVISE RACH2_CLAIM_LEDGER "
-    "RACH2_CLAIM_ETUDE\n"
+    "RACH2_CLAIM_ETUDE RACH2_CLAIM_PUBLISH\n"
     "wheld=$W/held wlock=$W/locks state=$W/state WSL=wsl\n"
     "rm -rf \"$wheld\" \"$wlock\" \"$state\" \"$W/ledger\" \"$W/launcher\" \"$W/end\" \"$W/ended\" "
     "\"$W/launch-go\" \"$W/etude-go\" \"$W/kill-runner\" \"$W/runner-gone\" \"$W/supervisor\" "
-    "\"$W/publish-pause\" \"$W/publish-paused\" \"$W/publish-go\" \"$W/stop.out\"\n"
+    "\"$W/publish-pause\" \"$W/publish-paused\" \"$W/publish-go\" \"$W/publish-stall\" "
+    "\"$W/stop.out\" \"$W/start.out\"\n"
     "mkdir -p \"$wheld\" \"$state\" \"$W/ledger\"\n"
     "pause() { perl -e 'select(undef, undef, undef, 0.1)'; }\n"
     "gone() {\n"
@@ -1999,8 +2005,12 @@ static const char claim_driver[] =
     "# No process of a claim is this driver's child, so none is signalled by its\n"
     "# number here: a stop token and the end files end them all, and the claim's\n"
     "# lock, which each of them holds, says when they have.\n"
-    "trap '[ ! -d \"$wlock\" ] || echo stop > \"$wlock/m7.claim.token\"\n"
-    "    touch \"$W/end\" \"$W/launch-go\" \"$W/etude-go\" \"$W/publish-go\"\n"
+    "# The background jobs, a publication and a stop, have ended before the\n"
+    "# locks are read, so that nothing changes the files after this exit.\n"
+    "s1='' s2=''\n"
+    "trap 'touch \"$W/end\" \"$W/launch-go\" \"$W/etude-go\" \"$W/publish-go\"\n"
+    "    [ -z \"$s1$s2\" ] || wait $s1 $s2 2> /dev/null\n"
+    "    [ ! -d \"$wlock\" ] || echo stop > \"$wlock/m7.claim.token\"\n"
     "    settled \"$wlock/m7.claim.lock\" || echo \"left: a process of the claim holds its lock\"\n"
     "    settled \"$W/supervisor\" || echo \"left: the supervisor of the runner\"' EXIT\n"
     "eval \"$(sed -n '/^tssh()$/,/^}$/p' \"$R\")\"\n"
@@ -2035,7 +2045,30 @@ static const char claim_driver[] =
     "    wait \"$s1\"\n"
     "    wait \"$s2\"\n"
     "    echo \"stop $?\"\n"
+    "    s1='' s2=''\n"
     "    rm -f \"$W/launcher\"\n"
+    "    claim_start m7 claim 2 'etude-launch alone' m7.claimed m7.prepared > /dev/null 2>&1\n"
+    "    look granted 2\n"
+    "    exit\n"
+    "fi\n"
+    "if [ \"$how\" = stall ]; then\n"
+    "    # Attempt 1's publication never resumes once its token is linked.\n"
+    "    touch \"$W/publish-stall\"\n"
+    "    claim_start m7 claim 1 'etude-launch alone' m7.claimed m7.prepared > \"$W/start.out\" "
+    "2>&1 &\n"
+    "    s1=$!\n"
+    "    until_file \"$W/publish-paused\"\n"
+    "    claim_stop m7 claim > \"$W/stop.out\" 2>&1 &\n"
+    "    s2=$!\n"
+    "    wait \"$s1\"\n"
+    "    echo \"start $?\"\n"
+    "    wait \"$s2\"\n"
+    "    echo \"stop $?\"\n"
+    "    s1='' s2=''\n"
+    "    ! grep -q '^publish: killed the publication: it did not end within 3 seconds$' "
+    "\"$W/start.out\" ||\n"
+    "        echo 'publication killed'\n"
+    "    rm -f \"$W/launcher\" \"$W/publish-stall\"\n"
     "    claim_start m7 claim 2 'etude-launch alone' m7.claimed m7.prepared > /dev/null 2>&1\n"
     "    look granted 2\n"
     "    exit\n"
@@ -2184,16 +2217,20 @@ static const char claim_setsid[] =
 /* The ln of claim_rows: the system's, which then waits for DIR/publish-go,
  * half a minute at most, while DIR/publish-pause exists, having touched
  * DIR/publish-paused, as a publication that a lost link holds up between
- * its token and its removal of GOT. */
-static const char claim_ln[] = "#!/bin/sh\n"
-                               "/bin/ln \"$@\" || exit\n"
-                               "[ -e \"$FAKE_DIR/publish-pause\" ] || exit 0\n"
-                               ": > \"$FAKE_DIR/publish-paused\"\n"
-                               "i=0\n"
-                               "while [ ! -e \"$FAKE_DIR/publish-go\" ] && [ \"$i\" -lt 300 ]; do\n"
-                               "    perl -e 'select(undef, undef, undef, 0.1)'\n"
-                               "    i=$((i + 1))\n"
-                               "done\n";
+ * its token and its removal of GOT, and ten minutes at most while
+ * DIR/publish-stall exists, as a publication that never resumes. */
+static const char claim_ln[] =
+    "#!/bin/sh\n"
+    "/bin/ln \"$@\" || exit\n"
+    "n=300\n"
+    "[ ! -e \"$FAKE_DIR/publish-stall\" ] || n=6000\n"
+    "[ -e \"$FAKE_DIR/publish-pause\" ] || [ \"$n\" = 6000 ] || exit 0\n"
+    ": > \"$FAKE_DIR/publish-paused\"\n"
+    "i=0\n"
+    "while [ ! -e \"$FAKE_DIR/publish-go\" ] && [ \"$i\" -lt \"$n\" ]; do\n"
+    "    perl -e 'select(undef, undef, undef, 0.1)'\n"
+    "    i=$((i + 1))\n"
+    "done\n";
 /** Run claim_driver's SCENARIO, and succeed when it printed WANT whole. */
 static int claim_saw(struct release *r, const char *scenario, const char *want)
 {
@@ -2222,7 +2259,9 @@ static int claim_saw(struct release *r, const char *scenario, const char *want)
  * stopped attempt starts nothing, and a late start of an earlier attempt
  * neither replaces a retry's token nor starts (j90 2); claim_stop waits for a
  * publication that a lost link holds up, so that it cannot remove a retry's
- * GOT (j102 2); and a refused claim reads refused.
+ * GOT (j102 2), and a publication that never resumes is killed at its limit,
+ * so that it cannot keep claim_stop from its token (j110 1); and a refused
+ * claim reads refused.
  */
 static int claim_rows(struct release *r)
 {
@@ -2270,6 +2309,11 @@ static int claim_rows(struct release *r)
     ok = check(r, claim_saw(r, "publish", "token go 1\nstop 0\nstate granted\n"),
                "claim_stop writes its token only once a publication held up between its token "
                "and its removal of GOT has ended, so that the retry's GOT stays (j102 2)") &&
+         ok;
+    ok = check(r, claim_saw(r, "stall", "start 1\nstop 0\npublication killed\nstate granted\n"),
+               "a publication that never resumes is killed at its limit, with every process "
+               "that holds its lock, so that claim_stop ends the claim and a retry is "
+               "granted (j110 1)") &&
          ok;
     fx_remove(flow_path(f, "claims"));
     return ok;
