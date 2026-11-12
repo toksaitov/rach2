@@ -647,7 +647,7 @@ static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write
 }
 
 /* The pages a read fault of a file maps at most, its own among them:
- * Linux's fault_around_bytes, 64 KiB (mm/memory.c:5194-5195). */
+ * Linux's fault_around_pages, 64 KiB (mm/memory.c:5194-5195). */
 #define FAULT_AROUND      16u
 #define FAULT_AROUND_SPAN ((uintptr_t)FAULT_AROUND * PAGE_SIZE)
 
