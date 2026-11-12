@@ -1043,6 +1043,7 @@ static void hr_rows(void)
 
 /* Whether the service query allows the model to stop the tick. */
 static int idle_allowed = 1;
+static int64_t prepare_first, prepare_second;
 
 /** Check idle timer transitions against the modeled device. */
 static void idle_transitions(void)
@@ -1227,6 +1228,38 @@ static void idle_phase(void)
           "a pending periodic interrupt serves the previous common edge once");
 }
 
+/** Keep an already idle CPU stopped when ready work declines the halt,
+ * and combine its service requests into one device write. */
+static void idle_prepare_rows(void)
+{
+    struct hr_state *c = &hr_cpu[0];
+    uint32_t writes;
+
+    now_ns = MS(7000);
+    raised = 0;
+    apic_timer_start(1000000u, TICK_HZ);
+    idle_allowed = -1;
+    writes = apic_writes;
+    CHECK(!timer_idle_enter() && !c->idle && apic_writes == writes,
+          "ready work declines a first idle stop without writing the timer");
+    idle_allowed = 1;
+    CHECK(timer_idle_enter(), "enter idle before testing a declined reentry");
+    idle_allowed = -1;
+    writes = apic_writes;
+    CHECK(timer_idle_enter() && c->idle && apic_writes == writes,
+          "a declined reentry preserves the stopped device until selection");
+    timer_wake_at((int64_t)MS(9500));
+    CHECK(c->want == (int64_t)MS(9500) && apic_writes == writes,
+          "a woken idle CPU keeps a new desired event without writing the device");
+    idle_allowed = 1;
+    prepare_first = (int64_t)MS(9000);
+    prepare_second = (int64_t)MS(8000);
+    writes = apic_writes;
+    CHECK(timer_idle_enter() && c->want == prepare_second && apic_writes == writes + 1,
+          "idle preparation programs its earliest service once after the queries");
+    prepare_first = prepare_second = 0;
+}
+
 /** Run the idle-event scenario and restore the calibration model. */
 static void idle_rows(void)
 {
@@ -1234,6 +1267,7 @@ static void idle_rows(void)
     idle_coarse();
     idle_tick_cache();
     idle_phase();
+    idle_prepare_rows();
     hr_model = 0;
     ref_kind = REF_NONE;
     hr_vector = 0;
@@ -1328,9 +1362,19 @@ int main(int argc, char **argv)
     return 0;
 }
 
+/** The model's declined idle preparation represents pending ready work. */
+int timer_idle_woken(void)
+{
+    return idle_allowed < 0;
+}
+
 /** No device services constrain the modeled idle timer. */
 int timer_idle_prepare(void)
 {
+    if (prepare_first) {
+        timer_wake_at(prepare_first);
+        timer_wake_at(prepare_second);
+    }
     return idle_allowed;
 }
 

@@ -289,6 +289,9 @@ static void hr_program(struct hr_state *c, int64_t now)
     uint32_t counts, rate;
     uint64_t span;
 
+    if (c->idle && timer_idle_woken()) {
+        return;
+    }
     if (c->want != 0 && (at == 0 || c->want < at)) {
         at = c->want;
     }
@@ -374,7 +377,8 @@ int timer_wakes_between(void)
 }
 
 /** Keep an absolute request and its whole-tick tag, zero for a direct
- * time. The caller has interrupts off; each winning pair moves together. */
+ * time. Each winning pair moves together.
+ * The caller has interrupts off. */
 static void hr_wake_at(int64_t ns, uint64_t tick)
 {
     struct hr_state *c = &hr_cpu[arch_cpu_id()];
@@ -601,20 +605,30 @@ int apic_hr_vector(void)
     return hr_vector;
 }
 
+/** Prepare an idle event once after its queries, or keep the current
+ * state when ready work makes the caller return straight to selection. */
 int timer_idle_enter(void)
 {
     struct hr_state *c = &hr_cpu[arch_cpu_id()];
     int64_t now;
+    int prepared;
 
-    if (!timer_wakes_between() || !timer_idle_prepare()) {
+    if (!timer_wakes_between()) {
         timer_idle_exit();
         return 0;
     }
-    if (c->idle) {
-        return 1;
+    timer_wake_hold();
+    prepared = timer_idle_prepare();
+    if (prepared <= 0) {
+        if (prepared == 0) {
+            timer_idle_exit();
+        }
+        timer_wake_release();
+        return c->idle;
     }
     now = c->oneshot ? rtc_monotonic_ns() : hr_oneshot(c);
     c->idle = 1;
+    timer_wake_release();
     hr_program(c, now);
     return 1;
 }
