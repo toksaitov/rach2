@@ -1427,11 +1427,14 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # The os-real image: the BusyBox shell and tools, the Dropbear SSH server and
 # client, TinyCC and pdpmake, sox_ng, the Wi-Fi station and iw, Doom, the
 # manual, the sources under /src, and an /etc and /root tree. The image is
-# 35 MiB on i686 and 37 on x86-64, of which the tree with Doom's WAD takes
-# 32.9 MiB on i686 and 34.9 on x86-64, whose programs are larger; wpa_supplicant
-# and its tools take 3.3 MiB and 4.4 of that, and the small /bin/sh launcher
-# keeps one copy of BusyBox beside sox_ng. Each size leaves 1.6 MiB beyond the
-# free space the build requires, below, for the sources under /src to grow.
+# 38 MiB on i686 and 40 on x86-64, of which the tree with Doom's WAD takes
+# 35.3 MiB on i686 and 37.2 on x86-64, whose programs are larger, as WSL builds
+# them; wpa_supplicant and its tools take 3.3 MiB and 4.4 of that, and the
+# small /bin/sh launcher keeps one copy of BusyBox beside sox_ng. Each size is
+# the tree, the free space the build requires, below, and at least 2 MiB more,
+# rounded up to a MiB: 2.2 MiB on i686 and 2.3 on x86-64, for the programs and
+# the sources under /src to grow. stageimage names the bytes the tree needs
+# when it outgrows the image.
 # ACPICA's core is staged as an archive of 0.45 MiB to keep the tree small
 # (vendor/acpica/build_acpica.sh).
 # The image is the root the running system writes, /tmp among it, so the build
@@ -1444,12 +1447,12 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # and the frames whose address a device is given, which alloc_kernel_frame
 # takes from the window's top for the block requests, the page cache and the
 # drivers' buffers; the kernel stacks and the heap come from above the window
-# first. Booted by QEMU with 128 MiB, the kernel ends at 7.8 MiB on i686 and
-# 9.1 MiB on x86-64, the module follows it to 42.8 MiB and 46.1 MiB, the
-# boot's tables take 1.2 MiB and 0.5 MiB, and 20.0 MiB and 17.4 MiB are left
+# first. Booted by QEMU with 128 MiB, the kernel ends at 8.7 MiB on i686 and
+# 10.2 MiB on x86-64, the module follows it to 46.7 MiB and 50.2 MiB, the
+# boot's tables take 1.2 MiB and 0.5 MiB, and 16.1 MiB and 13.3 MiB are left
 # for those frames. On i686 the frame table, 4 bytes for each 4 KiB frame
 # below the top of usable memory, is among the boot's tables, so a machine
-# with 4 GiB takes 3 MiB more of the window and leaves 17.0 MiB; the module
+# with 4 GiB takes 3 MiB more of the window and leaves 13.1 MiB; the module
 # is kept well below the window for that reason. The manual's aliases are a
 # table and not files, since the RAM root and a KRFFS disk walk every node on
 # a lookup and hundreds of alias files would make the self-build suite five
@@ -1457,9 +1460,9 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # gen_demo_password.sh the account passwords and /etc/shadow, each when
 # absent; the check targets require each vendored binary it stages.
 ifeq ($(ARCH),x86_64)
-OS_REAL_MIB = 37
+OS_REAL_MIB = 40
 else
-OS_REAL_MIB = 35
+OS_REAL_MIB = 38
 endif
 OS_REAL_FREE_KIB = 512
 OS_REAL_WAD_KIB = 4100
