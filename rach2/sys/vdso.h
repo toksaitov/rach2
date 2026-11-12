@@ -108,7 +108,9 @@ int vclock_running(void);
  * offset (`vclock_set_wall`). On x86 it follows KVM's clock page as the
  * tick last read it: a new rate is the measured one from then on, and the
  * clock stops while the page withdraws its stable bit and starts again
- * once the bit is back.
+ * once the bit is back, each inside `rtc_vclock_change`, so that the
+ * tick's clocks go on from the stopped clock's last time and the started
+ * clock from the latest reading given.
  */
 void vclock_tick(void);
 
@@ -116,8 +118,10 @@ void vclock_tick(void);
  * The clock `which` now, VCLOCK_READ_MONO, VCLOCK_READ_REAL or
  * VCLOCK_READ_RAW, from the TSC, or with `coarse` as of the last tick, in
  * `*sec` and `*nsec`, which is below 10^9; the raw clock has no coarse
- * reading. 0 with nothing read when the clock does not run from the TSC.
- * Any processor and any context may call it.
+ * reading. 0 with nothing read when the clock does not run from the TSC,
+ * which each pass of the reading checks on the page, so that a reading the
+ * clock's stop overtakes reads nothing. Any processor and any context may
+ * call it.
  */
 int vclock_read(int which, int coarse, int64_t *sec, int64_t *nsec);
 

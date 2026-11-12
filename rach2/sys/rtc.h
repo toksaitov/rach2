@@ -152,6 +152,20 @@ int64_t rtc_monotonic_ns(void);
  * monotonic one, which the NTP state does not slew. */
 void rtc_raw_monotonic(int64_t *seconds, int64_t *nanoseconds);
 
+/**
+ * Run `change`, which stops or starts the vDSO's clock (vclock.c), with no
+ * reading of the kernel's clocks under way across it, so that the clock it
+ * stops hands its last time to the tick's and the clock it starts begins at
+ * or past every reading given. `change` is given in `*mono_ns` the latest
+ * monotonic time a reading has given, the monotonic floor or real time's
+ * less the offset, and in `*raw_ns` the raw clock's floor, in nanoseconds
+ * since boot; it may move either later, to the last time of the clock it
+ * stops or the time of the clock it starts, and each floor is then raised
+ * to them, real time's to the monotonic time plus the offset. Interrupts
+ * may be on or off; `change` runs with them off.
+ */
+void rtc_vclock_change(void (*change)(uint64_t *mono_ns, uint64_t *raw_ns));
+
 /** The monotonic clock at the last tick, without the timer's place within
  * it: the coarse monotonic clock, which reads no timer; the TSC's clock as
  * of its last tick while that one runs. */

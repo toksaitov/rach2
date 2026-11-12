@@ -209,20 +209,24 @@ static const char *vclock_refusal(void)
     return 0;
 }
 
-/** Start the clock from the tick's clocks now at the TSC's rate now, and
- * have the vDSO read it. */
-static void vclock_begin(void)
+/**
+ * Start the clock from the tick's clocks now at the TSC's rate now, and
+ * have the vDSO read it: at clock.c's floors, `*mono_ns` and `*raw_ns`,
+ * where a clock stopped before is still ahead of the tick's, so that no
+ * reading is earlier than one before the start. The bases go back into
+ * them. Given to `rtc_vclock_change`.
+ */
+static void vclock_begin(uint64_t *mono_ns, uint64_t *raw_ns)
 {
     uint64_t cycles, mono, raw;
-    uint32_t flags;
 
     mono = vclock_reference(&cycles, &raw);
-    flags = spin_lock_irqsave(&vclock_lock);
+    spin_lock(&vclock_lock);
     vclock_write_begin();
     per_tick_used = tsc_counts_per_tick();
     vclock_rate(per_tick_used, &mult_measured, &data->shift);
-    mono_base_ns = mono;
-    raw_base_ns = raw;
+    mono_base_ns = mono > *mono_ns ? mono : *mono_ns;
+    raw_base_ns = raw > *raw_ns ? raw : *raw_ns;
     data->cycle_base = cycles;
     data->mult = (uint32_t)rtc_slewed(mult_measured, rtc_mono_rate());
     data->raw_mult = mult_measured;
@@ -232,27 +236,37 @@ static void vclock_begin(void)
     vclock_write_end();
     running = 1;
     kvm_stopped = 0;
-    spin_unlock_irqrestore(&vclock_lock, flags);
+    *mono_ns = mono_base_ns;
+    *raw_ns = raw_base_ns;
+    spin_unlock(&vclock_lock);
 }
 
 /**
  * Stop the clock, so that the vDSO makes the system call and the kernel's
  * clock calls read the tick's clocks, as Linux's vDSO falls back once
  * KVM's clock page withdraws PVCLOCK_TSC_STABLE_BIT (arch/x86/include/asm/
- * vdso/gettimeofday.h:219-229). Each clock is read first, from the TSC, so
- * that its floor in clock.c holds the kernel's readings after the stop at
- * or past the last one the TSC gave.
+ * vdso/gettimeofday.h:219-229). The page's count goes odd first, and the
+ * clock's last times are read at a TSC count after it, past every reading a
+ * reader has finished, and go into `*mono_ns` and `*raw_ns` while readers
+ * still wait, so that clock.c's floors hold the tick's clocks after the
+ * stop at or past them. Given to `rtc_vclock_change`.
  */
-static void vclock_stop(void)
+static void vclock_stop(uint64_t *mono_ns, uint64_t *raw_ns)
 {
-    int64_t sec, nsec;
+    uint64_t cycles, mono, raw;
 
-    rtc_monotonic(&sec, &nsec);
-    rtc_raw_monotonic(&sec, &nsec);
-    rtc_realtime(&sec, &nsec);
     spin_lock(&vclock_lock);
     vclock_write_begin();
     data->mode = VCLOCK_NONE;
+    cycles = tsc_ordered();
+    mono = vclock_at(cycles);
+    raw = vclock_raw_at(cycles);
+    if (mono > *mono_ns) {
+        *mono_ns = mono;
+    }
+    if (raw > *raw_ns) {
+        *raw_ns = raw;
+    }
     vclock_write_end();
     running = 0;
     kvm_stopped = 1;
@@ -273,7 +287,7 @@ void vclock_start(void)
         klog(KLOG_INFO, "vdso", "clock: the system call; %s", why);
         return;
     }
-    vclock_begin();
+    rtc_vclock_change(vclock_begin);
     klog(KLOG_INFO, "vdso", "clock: the tsc, %d counts a tick", (int)tsc_counts_per_tick());
 }
 
@@ -316,11 +330,12 @@ static uint32_t vclock_steer(uint32_t mult, uint64_t ref_ns, uint64_t clock_ns, 
  * quarter of a tick. Real time goes with the monotonic clock, a step
  * forward of it included.
  *
- * KVM's clock page, which the tick has just read (`tsc_kvm_poll`, pit.c),
- * is followed as Linux's reader takes it at every reading (arch/x86/
- * kernel/pvclock.c:75-88): a new rate is the measured rate from the new
- * base on, a withdrawn stable bit stops the clock, and the bit set again
- * starts it afresh from the tick's clocks.
+ * KVM's clock page, which the tick has just read (`tsc_kvm_sample`,
+ * pit.c), is followed as Linux's reader takes it at every reading
+ * (arch/x86/kernel/pvclock.c:75-88): a new rate is the measured rate from
+ * the new base on, a withdrawn stable bit stops the clock, and the bit set
+ * again starts it afresh from the tick's clocks, or from the last time a
+ * reading gave where that is later (`rtc_vclock_change`).
  */
 void vclock_tick(void)
 {
@@ -329,13 +344,13 @@ void vclock_tick(void)
 
     if (!running) {
         if (kvm_stopped && !vclock_refusal()) {
-            vclock_begin();
+            rtc_vclock_change(vclock_begin);
             klog(KLOG_INFO, "vdso", "clock: the tsc again, %d counts a tick", (int)per_tick_used);
         }
         return;
     }
     if (tsc_kvm_withdrawn()) {
-        vclock_stop();
+        rtc_vclock_change(vclock_stop);
         klog(KLOG_WARN, "vdso", "clock: the system call; kvm's clock page withdrew its stable bit");
         return;
     }
@@ -385,7 +400,7 @@ int vclock_read(int which, int coarse, int64_t *sec, int64_t *nsec)
     uint32_t seq, mult;
     int64_t s;
 
-    if (!running) {
+    if (!data) {
         return 0;
     }
     do {
@@ -393,6 +408,9 @@ int vclock_read(int which, int coarse, int64_t *sec, int64_t *nsec)
             __asm__ __volatile__("pause");
         }
         __asm__ __volatile__("" : : : "memory");
+        if (data->mode != VCLOCK_TSC) {
+            return 0;
+        }
         vclock_fields(which, &s, &ns, &mult);
         if (!coarse) {
             cycles = tsc_ordered();
@@ -415,7 +433,7 @@ int vclock_read_cycles(int which, uint64_t *ns, uint64_t *cycles)
     uint32_t seq, mult;
     int64_t sec;
 
-    if (!running) {
+    if (!data) {
         return 0;
     }
     do {
@@ -423,6 +441,9 @@ int vclock_read_cycles(int which, uint64_t *ns, uint64_t *cycles)
             __asm__ __volatile__("pause");
         }
         __asm__ __volatile__("" : : : "memory");
+        if (data->mode != VCLOCK_TSC) {
+            return 0;
+        }
         vclock_fields(which, &sec, &nsec, &mult);
         base = (uint64_t)sec * NSEC_PER_SEC + nsec;
         c = tsc_ordered();
