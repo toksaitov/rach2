@@ -929,6 +929,112 @@ static void free_busy_shared(void)
     dma_fence_put(f);
 }
 
+/* ---- 84-17e.2: a dying import's binding goes with no wait ---- */
+
+/** The page of the other device's buffer, as vgem's: one host page. */
+static uintptr_t vgem_page(struct dma_buf *buf, uint32_t pgoff)
+{
+    return pgoff == 0 ? (uintptr_t)buf->priv : 0;
+}
+
+/** The other device's release: its page goes with its last reference. */
+static void vgem_release(struct dma_buf *buf)
+{
+    free(buf->priv);
+}
+
+static const struct dma_buf_ops vgem_ops = {0, vgem_release, 0, vgem_page};
+
+/**
+ * Bind an import of a page of another device's, put a fence of that
+ * device's on the reservation, as vgem's, and close the import under the
+ * GEM lock, which is taken and left held in `*taken`: the object's last
+ * reference is gone and it waits on `gem.freed` with its binding, as one
+ * that another thread closes during a wait. The binding, with the fence
+ * in `*f`, which the caller signals and puts.
+ */
+static struct i915_vma *dying_import(struct dma_fence **f, int *taken)
+{
+    struct drm_i915_gem_object *obj;
+    struct i915_vma *v = 0, *bound;
+    struct dma_buf *buf;
+    void *page = 0;
+    uint32_t h;
+    int fd;
+
+    CHECK(posix_memalign(&page, 4096, 4096) == 0, "dying: the other device's page");
+    k_memset(page, 0, 4096);
+    buf = dma_buf_export(4096, &vgem_ops, page, 0);
+    fd = dma_buf_fd(buf, 0);
+    dma_buf_put(buf);
+    h = import_fd(&file_a, fd);
+    fd_free(&table, fd);
+    obj = object(&file_a, h);
+    CHECK(obj && obj->base.import == buf && pin_whole(obj, 0, &v) == 0, "dying: the import bound");
+    bound = v;
+    drop_pin(&v);
+    *f = busy_fence(obj);
+    *taken = i915_gem_lock(dev_a);
+    close_handle(&file_a, h);
+    CHECK(
+        *taken && obj->base.refs == 0 && dev_a->gem.freed == obj && whole(obj) == bound &&
+            !dma_fence_is_signaled(*f) && i915_gem_object_is_active(obj),
+        "dying: the import closed under the lock waits on the list, bound, the fence unsignalled");
+    return bound;
+}
+
+/**
+ * A binding of an object whose last reference has gone is idle whatever
+ * fence another device left on its reservation (`i915_vma_is_active`), as
+ * Linux's dying_vma (i915_gem_evict.c:41-44, 78-81): eviction at a fixed
+ * offset and by scan undo it with no wait, the fence still unsignalled. A
+ * wait would signal the fence here (`signal_on_wait`) or idle the GPU
+ * (`idle_waits`).
+ */
+static void evict_dying(void)
+{
+    struct drm_i915_gem_object *obj;
+    struct dma_fence *f;
+    struct i915_vma *v;
+    uint64_t start, size;
+    int taken;
+    int32_t err;
+
+    v = dying_import(&f, &taken);
+    obj = v->obj;
+    start = v->start;
+    size = v->node_size;
+    signal_on_wait = f;
+    idle_waits = 0;
+    dev_a->gem.evictions = 0;
+    err = i915_gem_evict_for_node(dev_a, start, size, 0);
+    CHECK(err == 0 && !obj->vmas && dev_a->gem.evictions == 1 && signal_on_wait == f &&
+              !dma_fence_is_signaled(f) && idle_waits == 0,
+          "dying: at a fixed offset, a closed import's binding goes with no wait for its fence");
+    signal_on_wait = 0;
+    i915_gem_unlock(dev_a, taken);
+    CHECK(!dev_a->gem.freed, "dying: the object freed as the lock goes");
+    dma_fence_signal(f);
+    dma_fence_put(f);
+
+    v = dying_import(&f, &taken);
+    obj = v->obj;
+    start = v->start;
+    size = v->node_size;
+    signal_on_wait = f;
+    idle_waits = 0;
+    dev_a->gem.evictions = 0;
+    err = i915_gem_evict_something(dev_a, size, 4096, start, start + size, 0);
+    CHECK(err == 0 && !obj->vmas && dev_a->gem.evictions == 1 && signal_on_wait == f &&
+              !dma_fence_is_signaled(f) && idle_waits == 0,
+          "dying: by scan, a closed import's binding goes with no wait for its fence or the GPU");
+    signal_on_wait = 0;
+    i915_gem_unlock(dev_a, taken);
+    CHECK(!dev_a->gem.freed, "dying: the object freed as the lock goes");
+    dma_fence_signal(f);
+    dma_fence_put(f);
+}
+
 /** Run every row: 0 when each passed. */
 /* ---- RPS's waitboost and interactive mode, which the driver calls ---- */
 
@@ -981,6 +1087,7 @@ int main(void)
     free_under_shrinker();
     free_shrinker_holder();
     free_busy_shared();
+    evict_dying();
     CHECK(!dev_a->drm.objects && !dev_a->gem.bound && !frames_live && !pins_live && !user_pins,
           "the end: no object, binding, page or pin left");
     CHECK(allocations == before, "the end: every record freed");
