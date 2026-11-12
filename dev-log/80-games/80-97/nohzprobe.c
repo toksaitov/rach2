@@ -101,7 +101,7 @@ PROBE_START void _start(void)
     check(syscall2(SYS_NANOSLEEP, (long)&req, 0) == 0, "settle");
     check(read_proc("/proc/interrupts", before) > 0, "read interrupt baseline");
     syscall2(SYS_CLOCK_GETTIME, 1, (long)&a);
-    req.sec = 2; req.ns = 0;
+    req.sec = 6; req.ns = 0;
     check(syscall2(SYS_NANOSLEEP, (long)&req, 0) == 0, "idle nanosleep");
     syscall2(SYS_CLOCK_GETTIME, 1, (long)&b);
     check(read_proc("/proc/interrupts", after) > 0, "read idle interrupts");
@@ -109,7 +109,7 @@ PROBE_START void _start(void)
     print("NOHZPROBE interrupts before\n"); print(before);
     print("NOHZPROBE interrupts after\n"); print(after);
     check(t0 != ~0ul && t1 != ~0ul && t1 >= t0 && t1 - t0 < 16, "idle interval takes no periodic tick");
-    check(b.sec - a.sec > 2 || (b.sec - a.sec == 2 && b.ns >= a.ns), "idle clock advances");
+    check(b.sec - a.sec > 6 || (b.sec - a.sec == 6 && b.ns >= a.ns), "idle clock advances");
     check(syscall3(SYS_POLL, 0, 0, 17) == 0, "poll timeout with no runnable thread");
     req.sec = 0; req.ns = 3100000;
     rc = syscall6(SYS_FUTEX, (long)&word, 128, 1, (long)&req, 0, 0);
