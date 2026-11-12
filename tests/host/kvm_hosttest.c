@@ -386,7 +386,7 @@ void sched_take_preempt(void)
         }
         CHECK(caller.sched_out != NULL, "a vCPU's thread has its sched_out across KVM_RUN");
         caller.nivcsw++;
-        caller.sched_out(caller.sched_out_arg);
+        caller.sched_out(caller.sched_out_arg, 1);
         caller.run_delay += preempt_wait;
         caller.pcount++;
         preempt_seen = preempt_seen_at ? *preempt_seen_at : -1;

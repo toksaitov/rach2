@@ -1058,7 +1058,9 @@ static int svm_enter(struct kvm_vcpu *v)
     }
     svm_in_run[cpu] = 1;
     kvm_pmu_svm_enter(v);
+    v->xs_in = arch_cycles();
     (void)kvm_svm_vmrun(&v->regs, s->vmcb_pa, s->host_pa);
+    v->xs_out = arch_cycles();
     kvm_pmu_svm_exit(v);
     svm_in_run[cpu] = 0;
     if (caps.rdtscp && s->tsc_aux != host_aux[cpu]) {
@@ -2746,9 +2748,21 @@ static uint64_t svm_cache(int type, int ignore_guest_pat)
 static const struct kvm_tdp_format svm_tdp = {
     0x1u, 0x1u, 0x2u, 0, 1ull << 63, 0x4u, 0x80u, 0x000FFFFFFFFFF000ull, 0x20u, 0x40u, svm_cache};
 
-const struct kvm_backend kvm_svm = {"svm",     svm_probe,       svm_vm_init,
-                                    NULL,      svm_vcpu_init,   svm_vcpu_free,
-                                    svm_enter, svm_exit,        svm_complete,
-                                    svm_save,  svm_inject,      svm_check_extension,
-                                    &svm_tdp,  svm_tsc_scaling, svm_msr_filter_changed,
-                                    svm_xsaves};
+/* No `put`: svm_enter gives the host its state back after each run. */
+const struct kvm_backend kvm_svm = {"svm",
+                                    svm_probe,
+                                    svm_vm_init,
+                                    NULL,
+                                    svm_vcpu_init,
+                                    svm_vcpu_free,
+                                    svm_enter,
+                                    svm_exit,
+                                    svm_complete,
+                                    svm_save,
+                                    svm_inject,
+                                    svm_check_extension,
+                                    &svm_tdp,
+                                    svm_tsc_scaling,
+                                    svm_msr_filter_changed,
+                                    svm_xsaves,
+                                    NULL};

@@ -122,6 +122,25 @@ static void vcpu_save(struct kvm_vcpu *v, uint32_t parts)
     }
 }
 
+void kvm_vcpu_fpu_sync(struct kvm_vcpu *v)
+{
+    vcpu_save(v, KVM_PART_FPU);
+}
+
+/** Give the host back what the backend left the guest's, with `fpu` the
+ * floating-point registers too: the backend's `put`, with interrupts
+ * off. */
+static void vcpu_put(struct kvm_vcpu *v, int fpu)
+{
+    uint32_t flags;
+
+    if (kvm_backend && kvm_backend->put) {
+        flags = kirq_save();
+        kvm_backend->put(v, fpu);
+        kirq_restore(flags);
+    }
+}
+
 /** A segment of the reset state. */
 static void reset_seg(struct kvm_segment *s, uint16_t sel, uint64_t base, uint8_t type)
 {
@@ -783,12 +802,21 @@ static int32_t run_begin(struct kvm_vcpu *v)
 }
 
 /** The `sched_out` of a vCPU's thread across KVM_RUN, as Linux's
- * kvm_sched_out with `wants_to_run`: `arg` is the vCPU, which a switch
- * away while its thread can still run marks preempted
- * (`kvm_steal_preempted`). Under the run queues' lock; does not sleep. */
-static void vcpu_sched_out(void *arg)
+ * kvm_sched_out (virt/kvm/kvm_main.c): `arg` is the vCPU, which a switch
+ * away while its thread can still run, `preempted`, marks preempted
+ * (`kvm_steal_preempted`), and whose backend gives the host back the
+ * processor's state at every switch (`put`), as kvm_arch_vcpu_put. Under
+ * the run queues' lock with interrupts off; does not sleep. */
+static void vcpu_sched_out(void *arg, int preempted)
 {
-    kvm_steal_preempted((struct kvm_vcpu *)arg);
+    struct kvm_vcpu *v = (struct kvm_vcpu *)arg;
+
+    if (preempted) {
+        kvm_steal_preempted(v);
+    }
+    if (kvm_backend && kvm_backend->put) {
+        kvm_backend->put(v, 0);
+    }
 }
 
 /**
@@ -829,6 +857,7 @@ static int32_t run_loop(struct kvm_vcpu *v)
         return r;
     }
     for (;;) {
+        kvm_exitstat_prepare(v);
         flags = kirq_save();
         sched_take_preempt();
         v->at_boundary = 0; /* the steps below may start an instruction */
@@ -929,6 +958,7 @@ static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
             current_proc->sched_out_arg = v;
             current_proc->sched_out = vcpu_sched_out;
             r = run_loop(v);
+            vcpu_put(v, 1);
             current_proc->sched_out = NULL;
         }
     }

@@ -1080,25 +1080,28 @@ static void tick_rt(void)
     clock_ns = 0;
 }
 
-/* The calls of the `sched_out` that `sched_out_rows` gives its threads. */
-static int out_calls;
+/* The calls of the `sched_out` that `sched_out_rows` gives its threads,
+ * and those of them for a switch that left the thread able to run. */
+static int out_calls, out_preempted;
 static void *out_arg;
 
 /** Count a call of a thread's `sched_out`, which comes with interrupts
  * off, the run queues' lock in this model, while the thread is current. */
-static void count_out(void *arg)
+static void count_out(void *arg, int preempted)
 {
     CHECK(!irq_flags, "sched_out with interrupts on");
     CHECK(arg == current_proc, "sched_out after the thread stopped being current");
     out_calls++;
+    out_preempted += preempted != 0;
     out_arg = arg;
 }
 
 /**
- * A thread's `sched_out` is called at a switch away from it that leaves it
- * able to run, and only then: not when selection keeps a SCHED_FIFO thread
- * over ordinary or equal ones, once when a SCHED_RR thread gives way to an
- * equal one, and not when a thread blocks.
+ * A thread's `sched_out` is called at each switch away from it, and only
+ * then, saying whether the thread can still run: not when selection keeps
+ * a SCHED_FIFO thread over ordinary or equal ones, once, preempted, when a
+ * SCHED_RR thread gives way to an equal one, and once, not preempted, when
+ * a thread blocks.
  */
 static void sched_out_rows(void)
 {
@@ -1106,6 +1109,7 @@ static void sched_out_rows(void)
 
     setup();
     out_calls = 0;
+    out_preempted = 0;
     out_arg = NULL;
     procs[0].sched_out = count_out;
     procs[0].sched_out_arg = &procs[0];
@@ -1128,15 +1132,16 @@ static void sched_out_rows(void)
     current_proc->need_resched = 1;
     nivcsw = procs[0].nivcsw;
     sched_take_preempt();
-    CHECK(current_proc == &procs[3] && switches == 1 && out_calls == 1 && out_arg == &procs[0] &&
-              procs[0].nivcsw == nivcsw + 1,
+    CHECK(current_proc == &procs[3] && switches == 1 && out_calls == 1 && out_preempted == 1 &&
+              out_arg == &procs[0] && procs[0].nivcsw == nivcsw + 1,
           "a SCHED_RR thread that gives way to an equal one is told once, at the switch");
     procs[3].sched_out = count_out;
     procs[3].sched_out_arg = &procs[3];
     procs[3].state = PROC_BLOCKED;
     schedule();
-    CHECK(current_proc != &procs[3] && switches == 2 && out_calls == 1,
-          "a thread that blocks is switched out without being told");
+    CHECK(current_proc != &procs[3] && switches == 2 && out_calls == 2 && out_preempted == 1 &&
+              out_arg == &procs[3],
+          "a thread that blocks is told at the switch, not preempted");
     procs[0].sched_out = NULL;
     procs[3].sched_out = NULL;
     procs[0].in_syscall = 0;

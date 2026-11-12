@@ -2075,6 +2075,7 @@ int kvm_hv_hypercall(struct kvm_vcpu *v, uint32_t len)
                 return 0;
             }
             /* XMM0 to XMM5 at their place in the XSAVE image's legacy area. */
+            kvm_vcpu_fpu_sync(v);
             for (i = 0; i < 2u * HV_XMM_REGISTERS; i++) {
                 k_memcpy(&hc.xmm[i], v->xsave + 160u + i * 8u, 8);
             }

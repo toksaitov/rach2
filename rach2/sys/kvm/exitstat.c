@@ -1,7 +1,7 @@
 /*
  * exitstat.c: the guests' exits counted by the processor's exit code since
- * boot, with the TSC cycles each kind waits for the big lock and spends in
- * the kernel, read from the debug file kvm/exit_stats.
+ * boot, with the TSC cycles of each kind's entry, run and exit, its wait for
+ * the big lock and its handling, read from the debug file kvm/exit_stats.
  */
 
 #include "kvm.h"
@@ -33,15 +33,32 @@
 /*
  * One kind's counts. `kernel` exits were handled in the kernel and the
  * guest entered again; `user` ended KVM_RUN, most of them for the caller
- * to answer. `wait` is the TSC cycles from the backend's return from its
- * entry to the big lock taken back, `handle` from there to the big lock
- * let go for the next entry or to KVM_RUN's return; a HLT the kernel
- * handles counts its sleep until an interrupt in `handle`. The backend's
- * own work around VMRUN or VMLAUNCH, its loads before and its stores
- * after, is in neither.
+ * to answer. The rest are TSC cycles, of the run each exit ends and of the
+ * exit's handling after it, in the order they pass:
+ *
+ *   entry    from just before the run loop lets the big lock go for the
+ *            run to the entry instruction: the lock let go, the guest's
+ *            state loaded and the VMCS or VMCB brought up to date;
+ *   run      from the entry instruction to the exit: the processor's
+ *            entry and exit and the guest's own run;
+ *   exit     from the exit to the backend's return: the host's state put
+ *            back and the exit read;
+ *   wait     from there to the big lock taken back;
+ *   handle   from there to just before the big lock is let go for the
+ *            next entry, or to KVM_RUN's return;
+ *   prepare  the part of `handle` from the run loop's first pass over its
+ *            top after the exit was handled to the end of `handle`: a
+ *            switch to another thread at the slice's end, the requests,
+ *            the local APIC's work, a halted vCPU's sleep until an
+ *            interrupt, and the event to inject.
+ *
+ * A HLT the kernel handles only marks the vCPU halted, and its sleep comes
+ * at the loop's top, so both `handle` and `prepare` count it. entry, run
+ * and exit count only the runs whose backend timed them; `prepare` only the
+ * exits handled in the kernel.
  */
 struct row {
-    uint64_t exits, kernel, user, wait, handle;
+    uint64_t exits, kernel, user, wait, handle, prepare, entry, run, exit;
 };
 
 /*
@@ -295,17 +312,38 @@ void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t entry, uint64_t left, uint64
 
     if (!mine) {
         v->xs_row = -1;
+        v->xs_prep = 0;
+        v->xs_in = 0;
+        v->xs_out = 0;
         return;
     }
     if (v->xs_row >= 0) {
         mine[v->xs_row].handle += entry - v->xs_mark;
         mine[v->xs_row].kernel++;
+        if (v->xs_prep) {
+            mine[v->xs_row].prepare += entry - v->xs_prep;
+        }
     }
     r = row_of(v->hw_exit);
     mine[r].exits++;
     mine[r].wait += held - left;
+    if (v->xs_in && v->xs_in >= entry && v->xs_out >= v->xs_in && left >= v->xs_out) {
+        mine[r].entry += v->xs_in - entry;
+        mine[r].run += v->xs_out - v->xs_in;
+        mine[r].exit += left - v->xs_out;
+    }
+    v->xs_prep = 0;
+    v->xs_in = 0;
+    v->xs_out = 0;
     v->xs_row = (int32_t)r;
     v->xs_mark = held;
+}
+
+void kvm_exitstat_prepare(struct kvm_vcpu *v)
+{
+    if (v->xs_row >= 0 && !v->xs_prep) {
+        v->xs_prep = arch_cycles();
+    }
 }
 
 void kvm_exitstat_done(struct kvm_vcpu *v)
@@ -322,6 +360,7 @@ void kvm_exitstat_done(struct kvm_vcpu *v)
         mine[v->xs_row].handle += arch_cycles() - v->xs_mark;
         mine[v->xs_row].user++;
     }
+    v->xs_prep = 0;
     v->xs_row = -1;
     kirq_restore(flags);
 }
@@ -389,9 +428,9 @@ static void put_hex(struct out *o, uint32_t n)
  * kvm/exit_stats's text: a line with the backend and the TSC's rate, a
  * line naming the columns, then one line for each kind with exits: the
  * code, the exits, those handled in the kernel and those that ended
- * KVM_RUN, the cycles waited for the big lock and spent handling, and the
- * name last, since SVM's exceptions' names have a space. Each count is the
- * sum of the processors' rows.
+ * KVM_RUN, the cycles of `struct row` from `wait` to `exit`, and the name
+ * last, since SVM's exceptions' names have a space. Each count is the sum
+ * of the processors' rows.
  */
 static int32_t exitstat_show(void *data, char *buf, uint32_t cap)
 {
@@ -406,7 +445,8 @@ static int32_t exitstat_show(void *data, char *buf, uint32_t cap)
     put_str(&o, kvm_backend ? kvm_backend->name : "none");
     put_str(&o, " tsc_khz ");
     put_dec(&o, kvm_tsc_khz());
-    put_str(&o, "\ncode exits kernel user wait_cycles handle_cycles name\n");
+    put_str(&o, "\ncode exits kernel user wait_cycles handle_cycles prepare_cycles entry_cycles "
+                "run_cycles exit_cycles name\n");
     for (i = 0; i < ROWS; i++) {
         struct row sum;
         uint32_t code = code_of(i);
@@ -420,6 +460,10 @@ static int32_t exitstat_show(void *data, char *buf, uint32_t cap)
                 sum.user += rows[c][i].user;
                 sum.wait += rows[c][i].wait;
                 sum.handle += rows[c][i].handle;
+                sum.prepare += rows[c][i].prepare;
+                sum.entry += rows[c][i].entry;
+                sum.run += rows[c][i].run;
+                sum.exit += rows[c][i].exit;
             }
         }
         if (sum.exits == 0) {
@@ -436,6 +480,14 @@ static int32_t exitstat_show(void *data, char *buf, uint32_t cap)
         put_dec(&o, sum.wait);
         put_str(&o, " ");
         put_dec(&o, sum.handle);
+        put_str(&o, " ");
+        put_dec(&o, sum.prepare);
+        put_str(&o, " ");
+        put_dec(&o, sum.entry);
+        put_str(&o, " ");
+        put_dec(&o, sum.run);
+        put_str(&o, " ");
+        put_dec(&o, sum.exit);
         put_str(&o, " ");
         if (name) {
             put_str(&o, name);

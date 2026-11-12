@@ -293,6 +293,14 @@ struct kvm_tdp_format {
  * whose CPUID offers XSAVES may run XSAVES and XRSTORS: VMX's secondary
  * control, or on SVM the host's XSAVES alone, which the guest runs
  * whenever it has XSAVE, as no intercept or control stops it.
+ * `put`, NULL for a backend that gives the processor back after each run,
+ * gives the host back what `enter` left the guest's from one run to the
+ * next, as Linux's kvm_arch_vcpu_put: the run loop calls it with interrupts
+ * off at each switch of the vCPU's thread away from its processor, with
+ * `fpu` 0, and at KVM_RUN's end, with `fpu` 1, when the floating-point
+ * registers go back to the host as well. While they hold the guest's,
+ * `save` of KVM_PART_FPU writes them into the image, and a change of the
+ * image marks KVM_PART_FPU, so that the next entry loads it.
  */
 struct kvm_backend {
     const char *name;
@@ -311,6 +319,7 @@ struct kvm_backend {
     uint64_t (*tsc_scaling)(uint32_t *frac_bits);
     void (*msr_filter_changed)(struct kvm_vcpu *v);
     int (*xsaves)(void);
+    void (*put)(struct kvm_vcpu *v, int fpu);
 };
 
 /* The two backends, svm.c's and vmx.c's. */
@@ -480,6 +489,7 @@ struct kvm_emul {
     int resume;              /* the next exit is the instruction's next step */
     int ud;                  /* a #UD exit brought the instruction */
     uint8_t fx[KVM_EMUL_FX]; /* the x87 and SSE state as the pass found it */
+    int fx_held;             /* `fx` was taken in this pass, at its first use */
     struct kvm_insn insn;    /* the instruction */
     struct kvm_emul_read rd[KVM_EMUL_READS];
     uint32_t rcount; /* the answers kept; the read that waits is the next */
@@ -589,6 +599,11 @@ struct kvm_vcpu {
      * -1 for none, and the TSC count since which its handling is timed. */
     int32_t xs_row;
     uint64_t xs_mark;
+    /* TSC counts, 0 when not taken: the run loop's at its first pass over
+     * its top once the last exit is handled (`xs_prep`); the backend's just
+     * before the entry instruction of the run that ends in the next exit
+     * (`xs_in`) and just after that exit (`xs_out`). */
+    uint64_t xs_prep, xs_in, xs_out;
 
     /* The steps each vector's interrupts reached, by enum kvm_vec_step,
      * which the VM's fdinfo shows; written by the vCPU's thread and by a
@@ -625,12 +640,19 @@ void kvm_exitstat_start(void);
  * Count the exit of the run that just ended on `v`, by `v->hw_exit`, and
  * close the account of the exit before it, if one is open, as handled in
  * the kernel: `entry`, read just before the big lock was let go for the
- * run, ends that exit's handling; `left`, read as the backend's entry
- * returned, and `held`, read once the big lock was taken back, time the
- * wait for the lock. Only after a run that entered the guest; under the
- * big lock, with interrupts off.
+ * run, ends that exit's handling and its preparation; `left`, read as the
+ * backend's entry returned, and `held`, read once the big lock was taken
+ * back, time the wait for the lock; `entry` and the run's `xs_in` and
+ * `xs_out`, where taken, time the entry, the run and the exit before
+ * `left`. Only after a run that entered the guest; under the big lock,
+ * with interrupts off.
  */
 void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t entry, uint64_t left, uint64_t held);
+
+/** Mark the TSC count at which the run loop, the exit of `v` handled, begins
+ * to prepare the next entry, if an account is open and not yet marked.
+ * Under the big lock. */
+void kvm_exitstat_prepare(struct kvm_vcpu *v);
 
 /** End the account of `v`'s exit, if one is open, as one that ended
  * KVM_RUN; when KVM_RUN returns, under the big lock. */
@@ -707,6 +729,11 @@ void kvm_vcpu_kick(struct kvm_vcpu *v, uint32_t request);
 
 /** Clear the request `request` of `v` atomically: whether it was set. */
 int kvm_vcpu_test_clear(struct kvm_vcpu *v, uint32_t request);
+
+/** Make `v`'s floating-point image hold the guest's state before it is
+ * read during KVM_RUN, while the registers may hold it (the backend's
+ * `put`); a writer of the image marks KVM_PART_FPU after. Any context. */
+void kvm_vcpu_fpu_sync(struct kvm_vcpu *v);
 
 /** Give `v` the state an INIT leaves, as Linux's kvm_vcpu_reset with
  * `init_event`: the registers, segments, control registers, events and
