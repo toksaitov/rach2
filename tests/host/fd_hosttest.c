@@ -1107,3 +1107,9 @@ int main(void)
     }
     return fails != 0;
 }
+
+/** Nothing: descriptor rows do not model the timer's hardware arming. */
+void timer_wake_tick(uint64_t tick)
+{
+    (void)tick;
+}

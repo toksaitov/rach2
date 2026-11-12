@@ -9,6 +9,7 @@
  * is.
  */
 
+#include "../idle_timer.h"
 #include "blank.h"
 
 #include "backlight.h"
@@ -168,4 +169,18 @@ void console_panic_unblank(void)
 int console_is_blank(void)
 {
     return blanked;
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t blank_idle_ticks(void)
+{
+    uint32_t wait = TICK_HZ;
+
+    if (unblank_asked) {
+        return 1;
+    }
+    if (!blanked && blank_secs != 0 && !fb_is_held()) {
+        IDLE_TIMER_MIN(wait, last_poke + (uint32_t)blank_secs * BLANK_HZ, (uint32_t)kernel_ticks);
+    }
+    return wait;
 }

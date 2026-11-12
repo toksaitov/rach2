@@ -3,6 +3,7 @@
  * fragmenting of a datagram sent is `ip_tx_opts`'s, in ip.c.
  */
 
+#include "../../idle_timer.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
 #include "../../timer.h"
@@ -306,4 +307,18 @@ void ip_frag_tick(void)
         }
         ip_frag_free(q);
     }
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t ip_frag_idle_ticks(void)
+{
+    uint32_t wait = TICK_HZ, now = (uint32_t)kernel_ticks;
+    int i;
+
+    for (i = 0; i < IP_FRAG_QUEUES; i++) {
+        if (ip_frag_queues[i].used) {
+            IDLE_TIMER_MIN(wait, ip_frag_queues[i].expires, now);
+        }
+    }
+    return wait;
 }

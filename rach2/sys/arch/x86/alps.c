@@ -28,6 +28,7 @@
  * the packet, as Linux's ALPS handler does, and goes on.
  */
 
+#include "../../idle_timer.h"
 #include "alps.h"
 
 #include "ps2mouse.h"
@@ -2698,4 +2699,15 @@ failed:
     unregister_all();
     psmouse_reset();
     return -1;
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t alps_idle_ticks(void)
+{
+    uint32_t wait = TICK_HZ;
+
+    if (flush_armed) {
+        IDLE_TIMER_MIN(wait, flush_at, (uint32_t)kernel_ticks);
+    }
+    return wait;
 }

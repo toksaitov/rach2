@@ -46,6 +46,7 @@
  * where they need it (block.h).
  */
 
+#include "../idle_timer.h"
 #include "../lib/kirq.h"
 #include "../lib/spinlock.h"
 #include "../arch/arch.h"
@@ -1488,4 +1489,20 @@ void block_request_tick(void)
         req_end_async(r, 1);
     }
     wq_wake_all(&pool_wq);
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t block_request_idle_ticks(void)
+{
+    struct block_request *r;
+    uint32_t wait = TICK_HZ, flags = pool_lock();
+    uint32_t now = req_clock();
+
+    for (r = reqs; r; r = r->next) {
+        if (r->state == BLOCK_REQ_IN_FLIGHT) {
+            IDLE_TIMER_MIN(wait, r->deadline, now);
+        }
+    }
+    pool_unlock(flags);
+    return wait;
 }

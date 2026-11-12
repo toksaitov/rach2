@@ -1,6 +1,7 @@
 /* The shared boot (`kernel_main`), the mount of the root, the kernel debug
  * shell, and the end of a process by a signal and of the machine. */
 
+#include "sys/idle_timer.h"
 #include "sys/arch/arch.h"
 #include "kernel.h"
 
@@ -272,6 +273,8 @@ static struct spinlock clock_pass_lock = SPINLOCK_INIT_NAMED("clock_pass");
 static uint32_t boot_ticks_skipped;
 #define BOOT_TICK_SKIPS 4u
 
+static int timer_clock_try(int late);
+
 /**
  * Advance the clocks since boot by the raw ticks the clock says this
  * interrupt counts (`timer_tick_clock`), none for one delivered again and
@@ -328,12 +331,19 @@ static void timer_wake_pass(void)
  */
 void timer_hr_pass(void)
 {
+    (void)timer_clock_try(0);
+    timer_wake_pass();
     timer_wake_hold();
     proc_wake_due();
     timerfd_due();
-    if (ptimer_posts_due() && bkl_try_enter()) {
-        ptimer_post_due();
-        bkl_exit();
+    if (proc_tick_signals_due() || ptimer_posts_due()) {
+        if (bkl_try_enter()) {
+            proc_tick_signals_post();
+            ptimer_post_due();
+            bkl_exit();
+        } else {
+            timer_wake_at(rtc_monotonic_ns() + TICK_NS);
+        }
     }
     timer_wake_release();
 }
@@ -477,6 +487,103 @@ static void timer_locked_work(uint64_t t)
     (void)bkl_tick_charge(BKL_TICK_KLOG, t);
 }
 
+/* The boot processor's next service tick while parked, written under the
+ * big lock and compared there by other processors before they release it. */
+static uint32_t idle_boot_until;
+
+/** Read each service's next deadline, under the big lock with interrupts
+ * off. The one-second bound extends the reference counter before it wraps
+ * and carries timekeeping and NTP through each second. */
+static uint32_t timer_service_ticks(void)
+{
+    uint32_t wait = TICK_HZ, next;
+    static uint32_t (*const queries[])(void) = {
+        netdev_idle_ticks,  ath9k_idle_ticks,      netconsole_idle_ticks,    tcp_idle_ticks,
+        ip_frag_idle_ticks, frag6_idle_ticks,      nd6_idle_ticks,           netlink_idle_ticks,
+        usb_idle_ticks,     input_idle_ticks,      ps2kbd_idle_ticks,        alps_idle_ticks,
+        itco_idle_ticks,    ata_idle_ticks,        block_request_idle_ticks, block_lag_idle_ticks,
+        speaker_idle_ticks, hda_idle_ticks,        blank_idle_ticks,         vkms_idle_ticks,
+        tty_idle_ticks,     sched_load_idle_ticks, timerfd_idle_ticks};
+    unsigned int i;
+
+    if (ip_loop_pending() || klog_kept()) {
+        return 1;
+    }
+    for (i = 0; i < sizeof(queries) / sizeof(queries[0]); i++) {
+        next = queries[i]();
+        if (next < wait) {
+            wait = next;
+        }
+    }
+#ifdef __x86_64__
+    next = iommu_idle_ticks();
+    if (next < wait) {
+        wait = next;
+    }
+#endif
+    return wait;
+}
+
+/** Arm idle device work on the boot processor, or notify it from another.
+ * No lock is held and interrupts are off; failure keeps the periodic tick. */
+int timer_idle_prepare(void)
+{
+    uint32_t wait;
+
+    if (arch_cpu_id() != 0) {
+        if (bkl_try_enter()) {
+            timer_idle_notify();
+            bkl_exit();
+        }
+        return 1;
+    }
+    if (!bkl_try_enter()) {
+        return 0;
+    }
+    wait = timer_service_ticks();
+    idle_boot_until = (uint32_t)kernel_ticks + wait;
+    timer_wake_tick(tick_count() + wait);
+    latency_idle_begin();
+    bkl_exit();
+    return 1;
+}
+
+/** Kick the idle boot processor for an earlier service under the big lock.
+ * Interrupts are off and no other lock is held. */
+void timer_idle_notify(void)
+{
+    uint32_t next;
+
+    if (arch_cpu_id() == 0 || !cpu_table[0].tick_stopped) {
+        return;
+    }
+    next = (uint32_t)kernel_ticks + timer_service_ticks();
+    if ((int32_t)(next - idle_boot_until) < 0) {
+        idle_boot_until = next;
+        smp_kick(0);
+    }
+}
+
+/** Catch up the boot processor's services after a stopped idle wait.
+ * Interrupts are off and no lock is held; locked work only tries the lock. */
+void timer_idle_work(void)
+{
+    uint64_t t;
+
+    if (arch_cpu_id() != 0 || !this_cpu()->tick_stopped) {
+        return;
+    }
+    (void)timer_clock_try(0);
+    timer_wake_pass();
+    t = timer_own_work(arch_cycles());
+    if (bkl_try_enter()) {
+        proc_tick_signals_post();
+        ptimer_post_due();
+        timer_locked_work(t);
+        bkl_exit();
+    }
+}
+
 /**
  * Service a processor's tick, TICK_HZ a second, and preempt its current
  * process.
@@ -588,7 +695,10 @@ static void timer_handler(isr_params_t *params)
         }
         bkl_exit();
     }
-    sched_idle_balance();
+    if (!boot && cpu_table[0].tick_stopped && bkl_try_enter()) {
+        timer_idle_notify();
+        bkl_exit();
+    }
     sched_tick();
 }
 

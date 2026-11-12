@@ -530,6 +530,11 @@ static void watchdog_hardlockup_check(int cpu, const isr_params_t *regs)
     int me = (int)arch_cpu_id(), panicking = hardlockup_panic != 0;
     uint32_t sflags;
 
+    if (cpu_table[cpu].tick_stopped) {
+        w->hrtimer_interrupts_saved = hrint;
+        w->hardlockup_warned = 0;
+        return;
+    }
     if (w->hardlockup_touched) {
         w->hardlockup_touched = 0;
         return;
@@ -747,6 +752,17 @@ static void softlockup_fn(struct wd_cpu *w)
 void watchdog_sched(void)
 {
     softlockup_fn(&wd[arch_cpu_id()]);
+}
+
+/** Touch both detectors after a stopped idle tick, before the processor
+ * becomes busy; no tick was needed to prove progress during that span. */
+void watchdog_idle_exit(void)
+{
+    struct wd_cpu *w = &wd[arch_cpu_id()];
+
+    update_touch_ts(w);
+    w->hardlockup_touched = 1;
+    w->tick_tsc = arch_cycles();
 }
 
 /**

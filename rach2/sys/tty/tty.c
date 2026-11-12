@@ -10,6 +10,7 @@
  * drain) completes a line; output and echo leave through each tty's sink.
  */
 
+#include "../idle_timer.h"
 #include "tty.h"
 #include "../latency.h"
 #include "../timer.h"
@@ -1097,6 +1098,8 @@ void tty_console_counters(struct console_counters *out)
 
 static void console_deliver(void);
 
+static uint64_t read_at; /* next serial backup poll, in kernel ticks */
+
 /**
  * The UART's bytes go to the ring first, so a port whose interrupt is not
  * enabled is still read every tick; while it is enabled, the interrupt
@@ -1118,7 +1121,6 @@ void tty_console_poll(void)
 {
     /* The tick count of the next reading: whole, so that no quiet spell
      * wraps it into the future, as Linux's timer arms from the present. */
-    static uint64_t read_at;
     uint64_t now = tick_count();
 
     blank_tick();
@@ -1150,4 +1152,18 @@ static void console_deliver(void)
     } else if (console_tty.sid != 0) {
         console_pump_irq(&console_tty);
     }
+}
+
+/** Return the serial backup poll's deadline for the stopped idle tick. */
+uint32_t tty_idle_ticks(void)
+{
+    uint64_t now = tick_count();
+
+    if (!serial_rx_irq_on()) {
+        return 1;
+    }
+    if (serial_rx_line_high()) {
+        return read_at <= now ? 1u : read_at - now < TICK_HZ ? (uint32_t)(read_at - now) : TICK_HZ;
+    }
+    return TICK_HZ;
 }

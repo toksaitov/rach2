@@ -4,6 +4,7 @@
  */
 #include "../arch/arch.h"
 #include "sched.h"
+#include "../idle_timer.h"
 #include "ptrace.h"
 #include "membarrier.h"
 #include "rseq.h"
@@ -1309,6 +1310,8 @@ void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle, uint
 {
     const struct percpu *cpu = &cpu_table[c];
     uint32_t seq;
+    int64_t gap;
+    uint64_t pending, stolen;
 
     for (;;) {
         seq = cpu->ticks_seq;
@@ -1324,6 +1327,18 @@ void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle, uint
         *busy = cpu->busy_ticks;
         *idle = cpu->idle_ticks;
         *steal = cpu->steal_ticks;
+        if (cpu->tick_stopped) {
+            gap = rtc_monotonic_ns() - cpu->accounted_ns + (int64_t)(TICK_NS / 2u);
+            if (gap > 0) {
+                pending = tick_div64((uint64_t)gap, TICK_NS, NULL);
+                stolen = tick_div64(arch_cpu_steal_ns(c) - cpu->steal_ns, TICK_NS, NULL);
+                if (stolen > pending) {
+                    stolen = pending;
+                }
+                *idle += pending - stolen;
+                *steal += stolen;
+            }
+        }
         if (cpu->ticks_seq == seq) {
             return;
         }
@@ -1548,8 +1563,7 @@ void sched_account_tick(int user, int64_t due)
         return;
     }
     ticks = tick_div64((uint64_t)gap, TICK_NS, NULL);
-    cpu->accounted_ns += (int64_t)ticks * (int64_t)TICK_NS;
-    if (due != 0 && found != ACCOUNT_SYSTEM && sched_cycle_account) {
+    if (due != 0 && found != ACCOUNT_SYSTEM) {
         on = timer_cycles_when(user ? cpu->user_cycles : cpu->idle_cycles, arch_cycles(), now);
         if (due >= on && now >= due && now - due < (int64_t)TICK_NS) {
             cpu->tick_late_ns += (now - due - cpu->tick_late_ns) / 8;
@@ -1561,6 +1575,21 @@ void sched_account_tick(int user, int64_t due)
         }
     }
     stolen = arch_steal_ns() - cpu->steal_ns;
+    if (found == ACCOUNT_IDLE && (due == 0 || cpu->tick_stopped)) {
+        uint64_t take = tick_div64(stolen, TICK_NS, NULL);
+
+        if (take > ticks) {
+            take = ticks;
+        }
+        cpu->ticks_seq++;
+        cpu->accounted_ns += (int64_t)ticks * (int64_t)TICK_NS;
+        cpu->steal_ticks += take;
+        cpu->steal_ns += take * TICK_NS;
+        cpu->idle_ticks += ticks - take;
+        cpu->ticks_seq++;
+        return;
+    }
+    cpu->accounted_ns += (int64_t)ticks * (int64_t)TICK_NS;
     while (ticks-- > 0) {
         if (stolen >= TICK_NS) {
             stolen -= TICK_NS;
@@ -1674,6 +1703,15 @@ void sched_loadavg(uint32_t avg[3])
     avg[1] = load_avg[1];
     avg[2] = load_avg[2];
     kirq_restore(flags);
+}
+
+/** Return the next load sample's deadline for the stopped idle tick. */
+uint32_t sched_load_idle_ticks(void)
+{
+    uint32_t passed = (uint32_t)kernel_ticks - load_tick;
+    uint32_t wait = passed >= load_wait ? 1u : load_wait - passed;
+
+    return wait < TICK_HZ ? wait : TICK_HZ;
 }
 
 /**
@@ -1830,10 +1868,27 @@ void idle_wait_irq_off(void)
     this_cpu()->idle_cycles = arch_cycles();
     this_cpu()->idle_wait = 1;
     depth = bkl_drop();
+    if (sched_is_enabled() && current_proc == this_cpu()->idle) {
+        int stopped;
+
+        this_cpu()->ticks_seq++;
+        this_cpu()->tick_stopped = 1;
+        this_cpu()->ticks_seq++;
+        stopped = timer_idle_enter();
+        this_cpu()->ticks_seq++;
+        this_cpu()->tick_stopped = stopped;
+        this_cpu()->ticks_seq++;
+    }
     idle_halt();
     this_cpu()->idle_end_cycles = arch_cycles();
-    if (timer_tick_stopped((int)arch_cpu_id())) {
-        sched_account_tick(0, 0); /* the ticks the stop skipped, as idle */
+    if (sched_is_enabled() && current_proc == this_cpu()->idle) {
+        sched_account_tick(0, 0);
+        timer_idle_exit();
+        timer_idle_work();
+        watchdog_idle_exit();
+        this_cpu()->ticks_seq++;
+        this_cpu()->tick_stopped = 0;
+        this_cpu()->ticks_seq++;
     }
     bkl_take_as(depth, BKL_KEY_IDLE);
     this_cpu()->idle_wait = 0;

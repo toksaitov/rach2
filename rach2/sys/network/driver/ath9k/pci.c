@@ -10,6 +10,7 @@
  * points `card_io` at its chip model.
  */
 
+#include "../../../idle_timer.h"
 #include "ath9k.h"
 #include "../../../klog.h"
 #include "../../../timer.h"
@@ -494,4 +495,10 @@ void ath9k_poll(void)
 {
     if (card_registered)
         ath9k_tick(&card);
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t ath9k_idle_ticks(void)
+{
+    return card_registered ? 1u : TICK_HZ;
 }

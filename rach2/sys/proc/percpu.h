@@ -85,9 +85,9 @@ struct percpu {
     volatile uint64_t busy_ticks;               /* ticks that found it running code */
     volatile uint64_t user_ticks;               /* of those, ticks that found it in user mode */
     volatile uint64_t steal_ticks;              /* ticks the hypervisor kept from it */
-    volatile uint64_t switches;                 /* switches from one thread to another */
-    uint64_t steal_ns;                          /* the steal time its counts reach, ns */
-    int64_t accounted_ns;                       /* the monotonic time its counts reach, ns */
+    volatile uint64_t steal_ns;                 /* the steal time its counts reach, ns */
+    volatile int64_t accounted_ns;              /* the monotonic time its counts reach, ns */
+    volatile int tick_stopped;                  /* idle span projected by sched_cpu_ticks */
     uint64_t user_cycles;                       /* cycle count at its last return to user mode */
     uint64_t entry_cycles;                      /* cycle count at its last entry from user mode */
     uint64_t idle_cycles;                       /* cycle count as its last idle wait began */

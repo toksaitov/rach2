@@ -1391,88 +1391,56 @@ void bkl_take_as(int depth, int key)
     }
 }
 
-/**
- * An idle task kicked while awake, after an interrupt ended its halt and
- * before its next selection (`sched_idle_awake`), ends its wait with no
- * halt and lets a pending interrupt in first, with the processor still
- * marked idle, as a kicked poll does: a tick pending there would otherwise
- * be taken after the switch and charged to the incoming thread. With no
- * kick the wait halts.
- */
-static void idle_kicked(void)
+/** Check idle projection, steal subtraction, catch-up and the first
+ * busy tick. */
+static void nohz_accounting(void)
 {
-    setup();
-    cpu_table[0].idle = current_proc;
-    irq_flags = 0;
-    idle_halts = irq_windows = 0;
-    sched_idle_awake();
-    CHECK(cpu_table[0].idle_poll == CPU_POLL_ON,
-          "an interrupt that ends the halt marks the idle task awake");
-    cpu_table[0].idle_poll = CPU_POLL_KICKED; /* a remote wake's `smp_kick` */
-    idle_wait_irq_off();
-    CHECK(irq_windows == 1 && idle_halts == 0 && !irq_flags && !cpu_table[0].idle_wait &&
-              cpu_table[0].idle_poll == CPU_POLL_NONE,
-          "a kick while awake ends the wait through the interrupt window, with no halt");
-    sched_idle_awake();
-    idle_wait_irq_off();
-    CHECK(irq_windows == 1 && idle_halts == 1 && !irq_flags &&
-              cpu_table[0].idle_poll == CPU_POLL_NONE,
-          "an idle task awake with no kick halts");
-    cpu_table[0].idle = NULL;
-    irq_flags = 0x200;
-}
+    uint64_t user, busy, idle, steal;
 
-/**
- * Two busy processors whose ticks choose one idle processor with a stopped
- * tick, before that processor's selection, kick it once: the first claims
- * its idle task's request (`need_resched`), and the second finds it set, as
- * a wake's kick finds it (`sched_preempt_cpu`). Processors 0 and 1 each
- * queue a thread that processor 2, idle, may take.
- */
-static void balance_once(void)
-{
-    unsigned int i;
-
-    setup();
-    for (i = 1; i < 7; i++) {
-        sched_forget(&procs[i]);
-        procs[i].state = PROC_BLOCKED;
-    }
-    cpu_table[1].online = 1;
-    cpu_table[1].current = &procs[1];
-    procs[1].state = PROC_RUNNING;
-    procs[1].cpu = procs[3].cpu = 1;
-    procs[2].cpu = 0;
-    sched_make_ready(&procs[2]);
-    sched_make_ready(&procs[3]);
-    CHECK(run_queues[0].count == 1 && run_queues[1].count == 1,
-          "each busy processor queues a thread");
-    cpu_table[2].online = 1;
-    cpu_table[2].current = cpu_table[2].idle = &procs[6];
-    procs[6].state = PROC_RUNNING;
-    procs[6].cpu = 2;
-    procs[6].need_resched = 0;
-    ticks_stopped = (uint64_t)1 << 2;
-    k_memset(cpu_kicks, 0, sizeof(cpu_kicks));
-    irq_flags = 0;
-    sched_idle_balance();
-    host_cpu = 1;
-    sched_idle_balance();
+    k_memset(cpu_table, 0, sizeof(cpu_table));
+    k_memset(procs, 0, sizeof(procs));
     host_cpu = 0;
-    CHECK(cpu_kicks[2] == 1 && procs[6].need_resched,
-          "two balancers that choose one idle processor kick it once");
-    CHECK(run_queues[0].count == 1 && run_queues[1].count == 1,
-          "the balancers leave the threads for the idle processor to take");
-    ticks_stopped = 0;
-    cpu_table[2].online = 0;
-    cpu_table[1].online = 0;
-    init_sched();
-    irq_flags = 0x200;
+    current_proc = &procs[0];
+    this_cpu()->idle_wait = 1;
+    this_cpu()->tick_stopped = 1;
+    this_cpu()->accounted_ns = 1000000000;
+    clock_ns = 3125000000u;
+    steal_clock_ns = 125000000u;
+    host_cpu = 1;
+    sched_cpu_ticks(0, &user, &busy, &idle, &steal);
+    CHECK(user == 0 && busy == 0 && idle == 2000 && steal == 125,
+          "a remote reading projects the idle span less its steal time");
+    CHECK(cpu_table[0].idle_ticks == 0 && cpu_table[0].steal_ticks == 0,
+          "a projected reading changes no stored account");
+    host_cpu = 0;
+    sched_account_tick(0, 0);
+    CHECK(this_cpu()->idle_ticks == 2000 && this_cpu()->steal_ticks == 125 &&
+              this_cpu()->accounted_ns == 3125000000u,
+          "waking accounts the idle span and steal time once");
+    sched_account_tick(0, 0);
+    CHECK(this_cpu()->idle_ticks == 2000, "a second accounting counts no tick twice");
+    this_cpu()->tick_stopped = 0;
+    this_cpu()->idle_wait = 0;
+    clock_ns += TICK_NS;
+    sched_account_tick(1, 0);
+    CHECK(procs[0].utime == 1 && this_cpu()->user_ticks == 1 && this_cpu()->idle_ticks == 2000,
+          "the first busy tick charges no idle span to the new thread");
+    load_tick = 1000;
+    load_wait = 5001;
+    kernel_ticks = 5999;
+    CHECK(sched_load_idle_ticks() == 2, "the next load sample keeps its phase");
+    kernel_ticks = 6001;
+    CHECK(sched_load_idle_ticks() == 1, "a load sample already due is serviced at once");
 }
 
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(int argc, char **argv)
 {
+    if (argc == 2 && __builtin_strcmp(argv[1], "--idle-only") == 0) {
+        nohz_accounting();
+        dprintf(1, "sched-hosttest: idle: %s\n", failures ? "fail" : "pass");
+        return failures != 0;
+    }
     if (argc == 2 && __builtin_strcmp(argv[1], "--affinity-only") == 0) {
         affinity_rows();
         dprintf(1, "sched-hosttest: affinity: %s\n", failures ? "fail" : "pass");
@@ -1496,8 +1464,7 @@ int main(int argc, char **argv)
     tick_rr();
     tick_rt();
     affinity_rows();
-    idle_kicked();
-    balance_once();
+    nohz_accounting();
     if (failures) {
         return 1;
     }
@@ -1515,3 +1482,28 @@ void usb_stamp_dispatch(uint32_t pid)
 {
     (void)pid;
 }
+
+/** Read the same modeled steal clock from any processor. */
+uint64_t arch_cpu_steal_ns(int cpu)
+{
+    (void)cpu;
+    return steal_clock_ns;
+}
+
+/** No timer hardware is modeled by the scheduler's rows. */
+int timer_idle_enter(void)
+{
+    return 0;
+}
+
+/** Nothing: no timer hardware is modeled. */
+void timer_idle_exit(void)
+{}
+
+/** Nothing: no device services are modeled. */
+void timer_idle_work(void)
+{}
+
+/** Nothing: no lockup detector is modeled. */
+void watchdog_idle_exit(void)
+{}

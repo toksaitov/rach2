@@ -25,6 +25,7 @@
  * a keyed hash of the connection's addresses and ports (RFC 6528).
  */
 
+#include "../../idle_timer.h"
 #include "../../klog.h"
 #include "../../lib/lockdep.h"
 #include "../../lib/kerrno.h"
@@ -4367,4 +4368,65 @@ void tcp_rx(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)
 void tcp6_rx(int ifindex, const uint8_t *src, const uint8_t *dst, const uint8_t *data, uint16_t len)
 {
     tcp_rx_addr(net_addr6(src, (uint32_t)ifindex), net_addr6(dst, (uint32_t)ifindex), data, len);
+}
+
+/** Return a connection's keepalive deadline for the idle timer query.
+ * The caller holds the big lock with interrupts off. */
+static uint32_t tcp_idle_keepalive(const struct tcb *tcb, uint32_t now)
+{
+    const struct socket *s = tcb->sock;
+    uint32_t idle, intvl, wait = TICK_HZ;
+
+    if (!s || !s->keepalive) {
+        return wait;
+    }
+    if (!tcb->ka_armed) {
+        return 1;
+    }
+    if ((tcb->state != TCP_ESTABLISHED && tcb->state != TCP_CLOSE_WAIT &&
+         tcb->state != TCP_FIN_WAIT_2) ||
+        tcb->snd_una != tcb->snd_nxt || tcb->send_tail != tcb->send_head) {
+        return wait;
+    }
+    idle = (uint32_t)(s->keepidle ? s->keepidle : tcp_keepalive_time) * TICK_HZ;
+    intvl = (uint32_t)(s->keepintvl ? s->keepintvl : tcp_keepalive_intvl) * TICK_HZ;
+    IDLE_TIMER_MIN(wait, tcb->ka_probes ? tcb->ka_probe_at + intvl : tcb->ka_since + idle, now);
+    return wait;
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t tcp_idle_ticks(void)
+{
+    struct tcb *tcb;
+    uint32_t wait = TICK_HZ, now = TCP_NOW();
+
+    for (tcb = tcbs; tcb; tcb = tcb->next) {
+        struct socket *s = tcb->sock;
+
+        if (tcb->ack_owed || tcb->send_head != tcb->send_tail) {
+            return 1;
+        }
+        if ((tcb->state == TCP_TIME_WAIT || tcb->state == TCP_FIN_WAIT_2) && !s) {
+            IDLE_TIMER_MIN(wait, tcb->timewait_until, now);
+        }
+        if (!s && (tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT ||
+                   tcb->state == TCP_FIN_WAIT_1 || tcb->state == TCP_CLOSING ||
+                   tcb->state == TCP_LAST_ACK)) {
+            IDLE_TIMER_MIN(wait, tcb->timewait_until, now);
+        }
+        if (tcb->rto_due != 0) {
+            IDLE_TIMER_MIN(wait, tcb->rto_due, now);
+        }
+        if (tcb->zwp_due != 0) {
+            IDLE_TIMER_MIN(wait, tcb->zwp_due, now);
+        }
+        {
+            uint32_t ka = tcp_idle_keepalive(tcb, now);
+
+            if (ka < wait) {
+                wait = ka;
+            }
+        }
+    }
+    return wait;
 }

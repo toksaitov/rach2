@@ -5,6 +5,7 @@
  * caches and the sockets.
  */
 
+#include "../../idle_timer.h"
 #include "netlink.h"
 #include "genetlink.h"
 #include "socket.h"
@@ -3074,4 +3075,15 @@ void netlink_note_recv(struct socket *sock, uint32_t len)
     if (st && len > st->max_recv) {
         st->max_recv = len;
     }
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t netlink_idle_ticks(void)
+{
+    uint32_t wait = TICK_HZ;
+
+    if (listening()) {
+        IDLE_TIMER_MIN(wait, watch_next, (uint32_t)kernel_ticks);
+    }
+    return wait;
 }

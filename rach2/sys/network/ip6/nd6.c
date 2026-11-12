@@ -4,6 +4,7 @@
  * describes them.
  */
 
+#include "../../idle_timer.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "../../lib/krandom.h"
@@ -1710,4 +1711,13 @@ int nd6_forget(struct netdev *nd, const uint8_t *addr)
     }
     net_unlock(lock);
     return e ? 0 : -ENOENT;
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t nd6_idle_ticks(void)
+{
+    uint32_t wait = TICK_HZ;
+
+    IDLE_TIMER_MIN(wait, nd6_next, NOW);
+    return wait;
 }

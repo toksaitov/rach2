@@ -10,6 +10,13 @@
  * 0 before the first. */
 static uint32_t worst[LAT_COUNT];
 static uint32_t last_tick_us;
+static volatile int idle_tick;
+
+/** Exclude the first timer gap after the boot processor stops its idle tick. */
+void latency_idle_begin(void)
+{
+    idle_tick = 1;
+}
 
 void latency_note(int kind, uint32_t us)
 {
@@ -34,8 +41,9 @@ void latency_tick(void)
 {
     uint32_t now = timer_now_us();
 
-    if (last_tick_us) {
+    if (last_tick_us && !idle_tick) {
         latency_span(LAT_TIMER, last_tick_us, now);
     }
+    idle_tick = 0;
     last_tick_us = now;
 }

@@ -9,6 +9,7 @@
  * the RTL8168GU, the Lenovo G50-70's card, which QEMU does not emulate.
  */
 
+#include "../../idle_timer.h"
 #include "netdev.h"
 #include "e1000.h"
 #include "rtl8139.h"
@@ -583,4 +584,17 @@ void netdev_unregister(struct netdev *nd)
     for (; i + 1 < nextra; ++i)
         extra[i] = extra[i + 1];
     extra[--nextra] = 0;
+}
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t netdev_idle_ticks(void)
+{
+    int i;
+
+    for (i = 0; i < niface; i++) {
+        if (ifaces[i].ops->poll) {
+            return 1;
+        }
+    }
+    return TICK_HZ;
 }

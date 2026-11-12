@@ -8,6 +8,7 @@
  * stream of audio.h, such as /dev/dsp's.
  */
 
+#include "../idle_timer.h"
 #include "../arch/arch.h"
 #include "../klog.h"
 #include "hda.h"
@@ -5946,3 +5947,23 @@ audio_driver_t hda_driver = {
     hda_m_stream_setup, hda_m_stream_start, hda_m_stream_stop, hda_m_stream_close,
     hda_stream_frames,  hda_stream_delay,   hda_input_caps,    hda_m_input_select,
     hda_m_input_level,  hda_beep,           hda_m_beep_level};
+
+/** Return the next service deadline for the stopped idle tick. */
+uint32_t hda_idle_ticks(void)
+{
+    uint32_t wait = TICK_HZ;
+    uint32_t flags = spin_lock_irqsave(&cap_lock);
+
+    spin_lock(&stream_lock);
+    if (playing || cap_running || beep_queued || beep_opened) {
+        wait = 1;
+    } else if (hda_base && hda_report.ready) {
+        wait = jack_ticks < HDA_JACK_TICKS ? HDA_JACK_TICKS - jack_ticks : 1u;
+        if (wait > TICK_HZ) {
+            wait = TICK_HZ;
+        }
+    }
+    spin_unlock(&stream_lock);
+    spin_unlock_irqrestore(&cap_lock, flags);
+    return wait;
+}
