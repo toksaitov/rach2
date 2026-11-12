@@ -152,6 +152,10 @@ void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
  * it; the holder waits only for its own turn, behind the waiter, and its sleep
  * is where the waiter runs.
  */
+/* The threads asleep in the lock's wait, for `wq_active`; changed only
+ * across a hand-off of the threads' mutex (krffs_open_threads.c). */
+static int asleep;
+
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -165,7 +169,9 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
             exit(2);
         }
         waiter_asleep = 1;
+        asleep++;
         open_thread_wait();
+        asleep--;
         return 0;
     }
     if (!waiter_asleep) {
@@ -174,10 +180,20 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     }
     waiter_asleep = 0;
     current_proc = &waiter;
+    asleep++;
     open_thread_finish();
+    asleep--;
     current_proc = &writer;
     check_op(cond(arg), "vfs_ns_lock", "gives the holder its turn once the waiter let the lock go");
     return 0;
+}
+
+/** Whether a thread sleeps in the lock's wait: the waiter until the holder
+ * resumes it, and the holder while the waiter runs and gives the lock. */
+int wq_active(const wait_queue_t *wq)
+{
+    (void)wq;
+    return asleep > 0;
 }
 
 /** Waking the line is a no-op: a sleeper here is resumed by its thread. */
@@ -188,13 +204,6 @@ void wq_wake_all(wait_queue_t *wq)
 
 /* kernel.lock_stat, off as at boot: the extracted lock times no hold. */
 int sleep_lock_stat;
-
-/** No waiter is ever queued: a sleeper here is resumed by its thread. */
-int wq_active(const wait_queue_t *wq)
-{
-    (void)wq;
-    return 0;
-}
 
 /** The clock, which the lock reads for its record of holds; these rows
  * make no disk wait, so no hold is recorded. */
