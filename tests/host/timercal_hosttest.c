@@ -24,7 +24,8 @@
  * against the 8254 is right when one of its three waits had none, and the
  * TSC's against the PM timer when one of its three windows had none. Other
  * rows check that a scale past 32 bits gives all ones, that a reference
- * that stops gives no calibration, and when the TSC is measured at all.
+ * that stops gives no calibration, when the TSC is measured at all, and
+ * that the clock follows KVM's clock page (`kvm_rows`).
  *
  * The rows of the timer between ticks (`hr_rows`) run the APIC timer at
  * 1 GHz, a count a nanosecond, with the clock the timer is programmed from
@@ -413,6 +414,31 @@ uint32_t tsc_kvm_counts_per_tick(void)
     return 0;
 }
 
+/* KVM's clock page as `kvm_rows` gives it: whether it has changed since
+ * the tick last read it, its rate in counts a tick, 0 outside the rows,
+ * and its stable bit. */
+static int kvm_changed;
+static uint32_t kvm_counts_model;
+static int kvm_stable_model;
+
+/** The page's rate and stable bit once the row has changed them. */
+int tsc_kvm_poll(uint32_t *counts, int *stable)
+{
+    if (!kvm_changed) {
+        return 0;
+    }
+    kvm_changed = 0;
+    *counts = kvm_counts_model;
+    *stable = kvm_stable_model;
+    return 1;
+}
+
+/** Whether the row's page states a rate and its stable bit. */
+int tsc_kvm_stable(void)
+{
+    return kvm_counts_model != 0 && kvm_stable_model;
+}
+
 /** The clock does not run from the TSC here, so the clock source named is
  * the reference's. */
 int vclock_running(void)
@@ -690,6 +716,67 @@ static void hr_hold_rows(void)
           "and its interrupt serves it");
 }
 
+/**
+ * KVM's clock page followed at the tick (`ref_follow`), with the PM timer
+ * as the platform's counter and a TSC of 2 GHz keeping the clock: a stable
+ * bit withdrawn a third of a tick into a tick hands the clock to the PM
+ * timer, and the microsecond clock goes on without a step, the device
+ * accesses' 5 us each aside; the PM timer counts the next tick; the bit
+ * set again hands the clock back; and a new rate of 2.5 GHz becomes the
+ * TSC's counts in a tick, at which the next tick is counted.
+ */
+static void kvm_rows(void)
+{
+    void (*saved_wait)(uint32_t) = udelay_wait;
+    uint32_t raw, us0, us1, us2, us3;
+    uint64_t at;
+
+    reference(1);
+    now_floor = 0;
+    tsc_base = 0;
+    tsc_khz = 2000000u;
+    tsc_per_tick = 2000000u;
+    kvm_counts_model = 2000000u;
+    kvm_stable_model = 1;
+    now_ns = MS(100);
+    ref_take(REF_TSC);
+    ref.edge = ref_count(&raw);
+    ref.frac = 0;
+    ref.ticks = 0;
+    ref_us_base = 0;
+    now_ns += MS(1.0 / 3.0);
+    us0 = timer_now_us();
+    kvm_stable_model = 0;
+    kvm_changed = 1;
+    CHECK(timer_tick_clock() == 0 && ref_kind == REF_COUNTER,
+          "a withdrawn stable bit hands the clock to the PM timer");
+    us1 = timer_now_us();
+    CHECK(us1 >= us0 && us1 - us0 <= 20u, "and the microsecond clock goes on without a step");
+    now_ns += MS(1);
+    CHECK(timer_tick_clock() == 1, "the PM timer counts the next tick");
+    us2 = timer_now_us();
+    CHECK(us2 - us1 >= 1000u && us2 - us1 <= 1020u, "a tick later by the PM timer");
+    kvm_stable_model = 1;
+    kvm_changed = 1;
+    CHECK(timer_tick_clock() == 0 && ref_kind == REF_TSC, "the bit set again hands the clock back");
+    us3 = timer_now_us();
+    CHECK(us3 >= us2 && us3 - us2 <= 20u, "again without a step");
+    at = tsc_base + now_ns * tsc_khz / 1000000u;
+    tsc_khz = 2500000u;
+    tsc_base = at - now_ns * tsc_khz / 1000000u;
+    kvm_counts_model = 2500000u;
+    kvm_changed = 1;
+    CHECK(timer_tick_clock() == 0 && tsc_per_tick == 2500000u && ref.tick == 2500000u,
+          "a new rate becomes the TSC's counts in a tick");
+    now_ns += MS(1);
+    CHECK(timer_tick_clock() == 1, "and the next tick is counted at it");
+    ref_kind = REF_NONE;
+    kvm_counts_model = 0;
+    kvm_stable_model = 0;
+    tsc_per_tick = 0;
+    udelay_wait = saved_wait;
+}
+
 /** The timer between ticks, as the header says, and the model put back. */
 static void hr_rows(void)
 {
@@ -774,6 +861,7 @@ int main(void)
           "a second calibration gives the first's counts and reads nothing");
     marking = 0;
 
+    kvm_rows();
     hr_rows();
 
     if (fails) {

@@ -107,19 +107,58 @@ static uint32_t kvm_clock_counts(uint32_t mul, int shift)
     return counts > 0xFFFFFFFFull ? 0u : (uint32_t)counts;
 }
 
+/*
+ * The page as the kernel follows it: where it is, NULL while it is not
+ * registered; the version, rate and stable bit it last gave; and the rate
+ * at the first reading, which `tsc_kvm_counts_per_tick` keeps.
+ */
+static struct kvm_clock_page *kvm_page;
+static uint32_t kvm_version;
+static uint32_t kvm_counts;
+static int kvm_stable;
+static uint32_t kvm_boot_counts;
+
+/** One reading of the page at `p` between two equal even versions, as
+ * Linux's pvclock_read_begin and pvclock_read_retry make it
+ * (arch/x86/include/asm/pvclock.h:22-38): the version into `*version`, the
+ * counts in a tick its rate gives into `*counts`, 0 for a rate that does
+ * not fit, and its PVCLOCK_TSC_STABLE_BIT into `*stable`. */
+static void kvm_clock_read(struct kvm_clock_page *p, uint32_t *version, uint32_t *counts,
+                           int *stable)
+{
+    uint32_t mul;
+    int shift;
+
+    do {
+        *version = p->version;
+        arch_dma_fence();
+        mul = p->tsc_to_system_mul;
+        shift = p->tsc_shift;
+        *stable = (p->flags & PVCLOCK_TSC_STABLE_BIT) != 0;
+        arch_dma_fence();
+    } while ((*version & 1u) != 0 || *version != p->version);
+    *counts = kvm_clock_counts(mul, shift);
+}
+
+/**
+ * The page stays registered when the first reading takes its rate, so that
+ * KVM goes on writing it: KVM recomputes the clock and the stable bit and
+ * writes the page again (Linux's arch/x86/kvm/x86.c:2604 and 2875), and
+ * Linux's reader takes the page as it is at every reading (pvclock.c:75).
+ * Given up at once when the first reading does not take it.
+ */
 uint32_t tsc_kvm_counts_per_tick(void)
 {
     static int asked;
-    static uint32_t counts;
     struct kvm_clock_page *p;
     uintptr_t at = (uintptr_t)kvm_clock_room;
     uint32_t want = KVM_FEATURE_CLOCKSOURCE2 | KVM_FEATURE_CLOCKSOURCE_STABLE_BIT;
-    uint32_t version, mul;
+    uint32_t version, counts;
     uint64_t phys;
-    int shift, stable;
+    int stable;
 
     if (asked) {
-        return counts;
+        return kvm_boot_counts;
     }
     asked = 1;
     if (kcmdline_has("rach2.notsc") || !kcpu_msr_present() ||
@@ -132,17 +171,48 @@ uint32_t tsc_kvm_counts_per_tick(void)
     p = (struct kvm_clock_page *)at;
     phys = (uint64_t)virt_to_phys(p);
     kcpu_wrmsr(MSR_KVM_SYSTEM_TIME_NEW, (uint32_t)phys | 1u, (uint32_t)(phys >> 32));
-    do {
-        version = p->version;
-        arch_dma_fence();
-        mul = p->tsc_to_system_mul;
-        shift = p->tsc_shift;
-        stable = (p->flags & PVCLOCK_TSC_STABLE_BIT) != 0;
-        arch_dma_fence();
-    } while ((version & 1u) != 0 || version != p->version);
-    kcpu_wrmsr(MSR_KVM_SYSTEM_TIME_NEW, 0, 0);
-    counts = version != 0 && stable ? kvm_clock_counts(mul, shift) : 0u;
+    kvm_clock_read(p, &version, &counts, &stable);
+    if (version == 0 || !stable || counts == 0) {
+        kcpu_wrmsr(MSR_KVM_SYSTEM_TIME_NEW, 0, 0);
+        return 0;
+    }
+    kvm_version = version;
+    kvm_counts = counts;
+    kvm_stable = 1;
+    kvm_boot_counts = counts;
+    kvm_page = p;
     return counts;
+}
+
+int tsc_kvm_poll(uint32_t *counts, int *stable)
+{
+    uint32_t version;
+
+    if (!kvm_page || kvm_page->version == kvm_version) {
+        return 0;
+    }
+    kvm_clock_read(kvm_page, &version, counts, stable);
+    kvm_version = version;
+    if (*counts == 0) {
+        *counts = kvm_counts; /* a rate that does not fit keeps no clock */
+        *stable = 0;
+    }
+    if (*counts == kvm_counts && *stable == kvm_stable) {
+        return 0;
+    }
+    kvm_counts = *counts;
+    kvm_stable = *stable;
+    return 1;
+}
+
+int tsc_kvm_withdrawn(void)
+{
+    return kvm_page != 0 && !kvm_stable;
+}
+
+int tsc_kvm_stable(void)
+{
+    return tsc_kvm_counts_per_tick() != 0 && kvm_stable;
 }
 
 int tsc_has_rdtscp(void)

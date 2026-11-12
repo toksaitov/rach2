@@ -93,9 +93,9 @@ uint32_t tsc_counts_per_tick(void);
 
 /** Whether the TSC keeps the clock even where the HPET or the PM timer
  * could, and is measured before the first tick (`platform_timer_start`):
- * under `rach2.tscreliable`, or where KVM states its rate and that it is
- * one clock on every processor (`tsc_kvm_counts_per_tick`), as Linux's
- * kvm-clock reads it with no exit. */
+ * under `rach2.tscreliable`, or where KVM's clock page states its rate and
+ * that it is one clock on every processor as of the last tick
+ * (`tsc_kvm_stable`), as Linux's kvm-clock reads it with no exit. */
 int timer_tsc_trusted(void);
 
 /*
