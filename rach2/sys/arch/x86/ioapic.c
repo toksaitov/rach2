@@ -22,6 +22,7 @@
 
 #include "ioapic.h"
 
+#include "../../cmdline.h"
 #include "../../klog.h"
 #include "../../lib/kirq.h"
 #include "../../mm/paging.h"
@@ -82,6 +83,38 @@ static void reg_write(const struct ioapic *c, uint32_t reg, uint32_t value)
     c->regs[IOAPIC_SELECT] = reg;
     c->regs[IOAPIC_WINDOW] = value;
     kirq_restore(flags);
+}
+
+/** `maxcpus=` counts as 0 when its value begins with decimal digits that
+ * read 0, as `smp_start` reads them; a value that begins with no digit is
+ * passed over, as Linux's get_option passes it over. */
+int ioapic_disabled(void)
+{
+    char v[12];
+    int i;
+
+    if (kcmdline_has("noapic")) {
+        return 1;
+    }
+    if (!kcmdline_value("maxcpus", v, sizeof(v)) || v[0] < '0' || v[0] > '9') {
+        return 0;
+    }
+    for (i = 0; v[i] >= '0' && v[i] <= '9'; i++) {
+        if (v[i] != '0') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Only the x86-64 kernel builds VT-d (platform.c). */
+int ioapic_remappable(void)
+{
+#if defined(__x86_64__)
+    return !ioapic_disabled();
+#else
+    return 0;
+#endif
 }
 
 int ioapic_init(const struct acpi_info *a)
@@ -185,6 +218,46 @@ int ioapic_line_pending(int line)
     }
     return (reg_read(&chips[lines[line].chip], IOAPIC_REG_TABLE + 2u * lines[line].input) &
             RTE_PENDING) != 0;
+}
+
+uint16_t ioapic_mask_routed(void)
+{
+    uint16_t was = 0;
+    int line;
+
+    for (line = 0; line < 16; line++) {
+        const struct ioapic *c;
+        uint32_t reg, low;
+
+        if (lines[line].chip < 0) {
+            continue;
+        }
+        c = &chips[lines[line].chip];
+        reg = IOAPIC_REG_TABLE + 2u * lines[line].input;
+        low = reg_read(c, reg);
+        if ((low & RTE_MASKED) == 0) {
+            was = (uint16_t)(was | (1u << line));
+            reg_write(c, reg, low | RTE_MASKED);
+        }
+    }
+    return was;
+}
+
+void ioapic_unmask_lines(uint16_t which)
+{
+    int line;
+
+    for (line = 0; line < 16; line++) {
+        const struct ioapic *c;
+        uint32_t reg;
+
+        if ((which & (1u << line)) == 0 || lines[line].chip < 0) {
+            continue;
+        }
+        c = &chips[lines[line].chip];
+        reg = IOAPIC_REG_TABLE + 2u * lines[line].input;
+        reg_write(c, reg, reg_read(c, reg) & ~RTE_MASKED);
+    }
 }
 
 int ioapic_remap_start(const struct ioapic_remap *ops)

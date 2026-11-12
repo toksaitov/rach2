@@ -84,6 +84,13 @@ void proc_timer_update(process_t *p)
     (void)p;
 }
 
+/** No process here arms a timer of processor time. */
+void proc_tick_signal(process_t *p, int signo)
+{
+    (void)p;
+    (void)signo;
+}
+
 /** Model interrupt masking around the diagnostic snapshot. */
 uint32_t kirq_save(void)
 {

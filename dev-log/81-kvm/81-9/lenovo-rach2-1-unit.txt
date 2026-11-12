@@ -1,0 +1,7 @@
+PASS pmu (143 tests, 14 skipped)
+SKIP pmu_lbr (1 tests, 1 skipped)
+SKIP pmu_pebs (1 tests, 1 skipped)
+kvm-corpus: pmu: pass: as expected
+kvm-corpus: pmu_lbr: skip: as expected
+kvm-corpus: pmu_pebs: skip: as expected
+kvm-corpus: result: pass: 3 as expected, 0 excluded

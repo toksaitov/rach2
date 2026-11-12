@@ -138,6 +138,7 @@ void kvm_vm_put(struct kvm_vm *vm)
     }
     kvm_hv_vm_free(vm);
     kvm_msr_free_filter(vm);
+    kvm_pmu_vm_free(vm);
     kvm_tdp_free(vm);
     kvm_slots_free(vm);
     if (kvm_backend && kvm_backend->vm_free) {
@@ -217,6 +218,8 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
     case KVM_CAP_CHECK_EXTENSION_VM:
     case KVM_CAP_GET_MSR_FEATURES:
     case KVM_CAP_SET_BOOT_CPU_ID:
+    case KVM_CAP_PMU_EVENT_FILTER:
+    case KVM_CAP_PMU_EVENT_MASKED_EVENTS:
     case KVM_CAP_GET_TSC_KHZ:
     case KVM_CAP_KVMCLOCK_CTRL:
     case KVM_CAP_ENFORCE_PV_FEATURE_CPUID:
@@ -229,6 +232,8 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
         /* PAUSE never exits here, and HLT need not; MWAIT is not offered,
          * and the C-state residency MSRs are not passed through. */
         return (int32_t)(KVM_X86_DISABLE_EXITS_PAUSE | KVM_X86_DISABLE_EXITS_HLT);
+    case KVM_CAP_PMU_CAPABILITY:
+        return KVM_PMU_CAP_DISABLE;
     case KVM_CAP_XSAVE:
     case KVM_CAP_XCRS:
         return kvm_xcr0_supported() != 0;
@@ -542,6 +547,9 @@ static int32_t vm_enable_cap(struct kvm_vm *vm, uintptr_t arg)
     if (cap.cap == KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2) {
         return kvm_dirty_enable_manual(vm, &cap);
     }
+    if (cap.cap == KVM_CAP_PMU_CAPABILITY) {
+        return kvm_pmu_enable(vm, &cap);
+    }
     if (cap.cap == KVM_CAP_X86_DISABLE_EXITS) {
         if (cap.args[0] & ~(uint64_t)KVM_X86_DISABLE_VALID_EXITS) {
             return -EINVAL;
@@ -721,6 +729,8 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         return 0;
     case KVM_ENABLE_CAP:
         return vm_enable_cap(vm, arg);
+    case KVM_SET_PMU_EVENT_FILTER:
+        return kvm_pmu_filter(vm, arg);
     case KVM_CREATE_IRQCHIP:
     case KVM_GET_IRQCHIP:
     case KVM_SET_IRQCHIP:
@@ -840,7 +850,7 @@ static struct devfs_node kvm_node = {"kvm", 10, 232, 0666, &dev_ops, NULL, NULL}
 /*
  * The module parameters Linux's KVM selftests read, as Linux's files under
  * /sys/module give them, with what Rach2's KVM does: no forced emulation
- * prefix, no performance counters for guests, the guest-physical tables
+ * prefix, host-dependent performance counters, the guest-physical tables
  * always (EPT or nested paging, with the unrestricted guest on VMX), and no
  * eager splitting of huge leaves when a dirty log starts. Every selftest
  * reads `force_emulation_prefix` before its main and skips without it.
@@ -850,15 +860,10 @@ static const char *const kvm_modules[] = {"kvm", "kvm_intel", "kvm_amd"};
 static const struct kvm_param {
     int module; /* of kvm_modules: kvm, or the backend's kvm_intel or kvm_amd */
     const char *name;
-    char value; /* the file's text is this character and a newline */
-} kvm_params[] = {{0, "force_emulation_prefix", '0'},
-                  {0, "enable_pmu", 'N'},
-                  {0, "tdp_mmu", 'Y'},
-                  {0, "eager_page_split", 'N'},
-                  {1, "ept", 'Y'},
-                  {1, "unrestricted_guest", 'Y'},
-                  {2, "npt", 'Y'},
-                  {2, "avic", 'N'}};
+    char value; /* the file's character; zero means the host PMU's Y or N */
+} kvm_params[] = {{0, "force_emulation_prefix", '0'}, {0, "enable_pmu", 0},    {0, "tdp_mmu", 'Y'},
+                  {0, "eager_page_split", 'N'},       {0, "ignore_msrs", 'N'}, {1, "ept", 'Y'},
+                  {1, "unrestricted_guest", 'Y'},     {2, "npt", 'Y'},         {2, "avic", 'N'}};
 
 #define KVM_NR_PARAMS (sizeof(kvm_params) / sizeof(kvm_params[0]))
 
@@ -868,6 +873,9 @@ static int32_t param_show(void *obj, int arg, char *buf, uint32_t cap)
     (void)obj;
     if (cap >= 2u) {
         buf[0] = kvm_params[arg].value;
+        if (!buf[0]) {
+            buf[0] = kvm_pmu_enabled() ? 'Y' : 'N';
+        }
         buf[1] = '\n';
     }
     return 2;
@@ -925,6 +933,7 @@ void kvm_start(void)
         klog(KLOG_INFO, "kvm", "none: the processor has neither VMX nor SVM");
         return;
     }
+    kvm_pmu_start();
     if (devfs_node_register(&kvm_node) != 0) {
         klog(KLOG_WARN, "kvm", "failed: /dev/kvm not registered");
         kvm_backend = NULL;

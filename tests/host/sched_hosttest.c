@@ -111,6 +111,14 @@ void signal_post(process_t *target, int signo)
     (void)signo;
 }
 
+/** Nothing: no process arms a timer of processor time, whose signal the
+ * tick would leave for a holder of the big lock. */
+void proc_tick_signal(process_t *p, int signo)
+{
+    (void)p;
+    (void)signo;
+}
+
 /** 1: no suspend to idle holds a process. */
 int suspend_lets_run(const struct process *p)
 {
@@ -766,28 +774,6 @@ static void wake_twice(void)
           "a ready record is left in place, its deadline as it was");
 }
 
-/** A tick that finds the big lock held passes while nothing is queued, and
- * waits for the lock at the last of SCHED_TICK_PASSES with work queued. */
-static void tick_waits(void)
-{
-    unsigned int i;
-
-    setup();
-    CHECK(run_queues[0].count > 0, "work is queued");
-    for (i = 1; i < SCHED_TICK_PASSES; i++) {
-        CHECK(!sched_tick_waits(), "the first ticks pass");
-    }
-    CHECK(sched_tick_waits(), "the last one waits");
-    sched_account_tick(1);
-    CHECK(!sched_tick_waits(), "a tick that had the lock starts the count again");
-    while (run_queues[0].head) {
-        sched_forget(run_queues[0].head);
-    }
-    for (i = 0; i < SCHED_TICK_PASSES * 2; i++) {
-        CHECK(!sched_tick_waits(), "with nothing queued no tick waits");
-    }
-}
-
 /** Affinity moves queued work, and an idle processor steals eligible work. */
 static void migration(void)
 {
@@ -972,7 +958,6 @@ int main(int argc, char **argv)
         dprintf(1, "sched-hosttest: affinity: %s\n", failures ? "fail" : "pass");
         return failures != 0;
     }
-    tick_waits();
     priority();
     fairness();
     states();

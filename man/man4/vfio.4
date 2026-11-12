@@ -145,8 +145,9 @@ those pages.
 When its address space ends, every mapping, of RAM or of device pages,
 stays with its pages until its unmap or until the last group leaves the
 container, as on Linux.
-A mapping containing device pages also loses its DMA access before a
-protection change or the device revokes its pages.
+While the address space lives, a mapping containing device pages also
+loses its DMA access before a protection change or the device revokes its
+pages; after its end, neither is heard.
 .Dv VFIO_IOMMU_UNMAP_DMA
 removes the mappings of a range, or every one with
 .Dv VFIO_DMA_UNMAP_FLAG_ALL ;

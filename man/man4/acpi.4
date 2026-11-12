@@ -142,9 +142,12 @@ refuses the local APIC, and with it messages and the I/O APIC.
 .Pp
 The local APIC runs in x2APIC mode, its registers model-specific
 registers, under a hypervisor that allows it without interrupt remapping,
-and on bare metal once VT-d remaps interrupts in x2APIC format; elsewhere,
-and with
+and, with the x86-64 kernel, on bare metal once VT-d remaps interrupts in
+x2APIC format; elsewhere, and with
 .Ql nox2apic ,
+.Ql noapic
+or
+.Ql maxcpus=0 ,
 it runs in xAPIC mode.
 .Pp
 The kernel runs on every processor the MADT lists as enabled, up to 64.

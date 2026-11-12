@@ -28,6 +28,9 @@
 #define MSR_IA32_MCG_STATUS    0x17Au
 #define MSR_IA32_MCG_CTL       0x17Bu
 #define MSR_IA32_MISC_ENABLE   0x1A0u
+#define MSR_IA32_DEBUGCTL      0x1D9u
+#define MSR_LASTBRANCH_FROM    0x1DBu /* then LASTBRANCHTOIP, LASTINTFROMIP, LASTINTTOIP */
+#define N_LASTBRANCH           4u
 #define MSR_MTRR_PHYS_BASE0    0x200u
 #define MSR_MTRR_FIX_64K       0x250u
 #define MSR_MTRR_FIX_16K_80000 0x258u
@@ -147,7 +150,7 @@ static const uint32_t index_list[] = {MSR_IA32_SYSENTER_CS,
                                       MSR_IA32_UCODE_REV,
                                       MSR_TSC_AUX};
 
-static const uint32_t feature_list[] = {MSR_IA32_UCODE_REV};
+static const uint32_t feature_list[] = {MSR_IA32_UCODE_REV, 0x345u}; /* PERF_CAPABILITIES */
 
 #define N_INDEX   (sizeof(index_list) / sizeof(index_list[0]))
 #define N_FEATURE (sizeof(feature_list) / sizeof(feature_list[0]))
@@ -167,12 +170,27 @@ static int host_rdtscp(void)
 
 const uint32_t *kvm_msr_list(int feature, uint32_t *n)
 {
+    static uint32_t list[N_INDEX + 32u];
+    uint32_t i;
+
     if (feature) {
         *n = N_FEATURE;
         return feature_list;
     }
     *n = (uint32_t)N_INDEX - (host_rdtscp() ? 0u : 1u);
-    return index_list;
+    for (i = 0; i < *n; i++) {
+        list[i] = index_list[i];
+    }
+    /* Linux saves DEBUGCTL among msrs_to_save_base (arch/x86/kvm/x86.c:323)
+     * wherever the host reads it, as every host with VMX or SVM does, and
+     * the four last-branch MSRs beside it (x86.c:324-325) wherever AMD's
+     * host has them. */
+    list[(*n)++] = MSR_IA32_DEBUGCTL;
+    for (i = 0; kvm_backend == &kvm_svm && i < N_LASTBRANCH; i++) {
+        list[(*n)++] = MSR_LASTBRANCH_FROM + i;
+    }
+    *n += kvm_pmu_msr_list(list + *n);
+    return list;
 }
 
 int kvm_msr_feature(uint32_t index, uint64_t *value)
@@ -186,7 +204,7 @@ int kvm_msr_feature(uint32_t index, uint64_t *value)
         *value = ((uint64_t)hi << 32) | lo;
         return 0;
     }
-    return -1;
+    return kvm_pmu_feature(index, value);
 }
 
 /** Whether `t` is a memory type an MTRR or PAT may name: UC, WC, WT, WP
@@ -373,6 +391,9 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
     if (r == 1) {
         r = kvm_pv_msr(v, index, 0, value, host);
     }
+    if (r == 1) {
+        r = kvm_pmu_msr(v, index, 0, value, 1);
+    }
     if (r != 1) {
         return r;
     }
@@ -424,8 +445,17 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
         }
         *value = 0;
         return 0;
+    case MSR_IA32_DEBUGCTL:
+        /* SVM's, which keeps no bit; VMX's is kvm_pmu_msr's. */
+        *value = 0;
+        return 0;
     default:
         break;
+    }
+    if (index - MSR_LASTBRANCH_FROM < N_LASTBRANCH && kvm_backend == &kvm_svm) {
+        /* Linux's svm_get_msr without lbrv (svm/svm.c:2969-2980). */
+        *value = 0;
+        return 0;
     }
     r = mce_bank_msr(v, index, &bank, &reg);
     if (r != 0) {
@@ -595,6 +625,9 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
     if (slot == 1) {
         slot = kvm_pv_msr(v, index, 1, &value, host);
     }
+    if (slot == 1) {
+        slot = kvm_pmu_msr(v, index, 1, &value, 1);
+    }
     if (slot != 1) {
         return slot;
     }
@@ -616,6 +649,11 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
          * Linux 6.12's kvm_caps.supported_xss; Linux lists it with
          * neither the MSRs to save nor the emulated ones. */
         return (host || guest_xsaves(v)) && value == 0 ? 0 : KVM_MSR_INVAL;
+    case MSR_IA32_DEBUGCTL:
+        /* SVM's, which does not virtualize the LBR stack: any write, the
+         * caller's or the guest's, is taken and ignored, as Linux's
+         * svm_set_msr without lbrv (arch/x86/kvm/svm/svm.c:3223-3227). */
+        return 0;
     case MSR_IA32_UCODE_REV:
         v->ucode_rev = value;
         break;
@@ -640,6 +678,13 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
         v->hwcr = value;
         break;
     default:
+        if (index - MSR_LASTBRANCH_FROM < N_LASTBRANCH && kvm_backend == &kvm_svm) {
+            /* svm_set_msr without lbrv has no such MSR: Linux takes only
+             * the caller's 0 of a listed one, and any other write is
+             * unsupported, an UNKNOWN exit for the guest's
+             * (svm/svm.c:3259-3290, x86.c:508-518, 1590). */
+            return host && value == 0 ? 0 : KVM_MSR_UNKNOWN;
+        }
         if (!table_msr(index)) {
             return KVM_MSR_UNKNOWN;
         }

@@ -16,6 +16,7 @@
 #include "../../mm/paging.h"
 #include "../../mm/pin.h"
 #include "../../mm/usercopy.h"
+#include "../../proc/sched.h"
 
 /* ------------------------------------------------------------------------
  * Pages
@@ -317,29 +318,20 @@ void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj, int le
 }
 
 /**
- * The `free` of an object, once its last reference goes, which no request
- * the chip has not passed holds: every binding undone, its mmap offsets
- * taken out of the device's space, its pages unpinned and freed, a userptr
- * object's range taken off. The DRM core has let its fences go by then.
- *
- * A free that takes the GEM lock itself, from GEM_CLOSE, a file's close, a
- * region's release (`vm_file_reap`) or an exit, may sleep in that take,
- * so it gives way every 512 entries of its clears and every leaf of its
- * pages, as Linux's free worker calls cond_resched after each object
- * (gem/i915_gem_object.c:423) and between batches of its pages
+ * Undo `obj`, whose last reference is gone, with the GEM lock held: every
+ * binding undone, its mmap offsets taken out of the device's space, its
+ * pages unpinned and freed, a userptr object's range taken off. With
+ * `may_yield`, for a holder that took the lock for the free and may sleep,
+ * it gives way every 512 entries of its clears and every leaf of its pages,
+ * as Linux's free worker calls cond_resched between batches of its pages
  * (gem/i915_gem_shmem.c:29). No other thread reaches the object, its last
- * reference gone, and the GEM lock keeps its bindings' range whole. A free
- * under its caller's GEM lock, from retirement or the shrinker, gives no
- * way, since that caller may be part way through a change that every other
- * thread must see whole.
+ * reference gone, and the GEM lock keeps its bindings' range whole.
  */
-static void i915_gem_object_free(struct drm_gem_object *base)
+static void object_release(struct drm_i915_gem_object *obj, int may_yield)
 {
-    struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)base;
-    struct drm_i915_private *i915 = to_i915(base->dev);
-    int i, taken = i915_gem_lock(i915);
+    int i;
 
-    (void)i915_gem_object_unbind(obj, taken);
+    (void)i915_gem_object_unbind(obj, may_yield);
     if (i915_gem_object_is_userptr(obj)) {
         i915_gem_userptr_release(obj);
     }
@@ -348,13 +340,67 @@ static void i915_gem_object_free(struct drm_gem_object *base)
     }
     unpin(obj->pin);
     kfree(obj->frames);
-    if (taken) {
+    if (may_yield) {
         shmem_free_yielding(&obj->pages);
     } else {
         shmem_free(&obj->pages);
     }
-    i915_gem_unlock(i915, taken);
     kfree(obj);
+}
+
+/**
+ * Undo the objects on `gem.freed`, with the GEM lock that the caller took
+ * and is about to let go, giving way in each and after each, as Linux's
+ * free worker does with its list (gem/i915_gem_object.c:406-433). An object
+ * whose last put comes meanwhile joins the list and goes too. Each holds a
+ * reference on its import, which goes after it.
+ */
+static void free_deferred(struct drm_i915_private *i915)
+{
+    struct drm_i915_gem_object *obj;
+    struct dma_buf *import;
+
+    while ((obj = i915->gem.freed) != 0) {
+        i915->gem.freed = obj->free_next;
+        obj->free_next = 0;
+        import = obj->base.import;
+        object_release(obj, 1);
+        dma_buf_put(import);
+        sched_give_way();
+    }
+}
+
+/**
+ * The `free` of an object, once its last reference goes, which no request
+ * the chip has not passed holds. The DRM core has let its fences go by
+ * then.
+ *
+ * A free that takes the GEM lock itself, from GEM_CLOSE, a file's close, a
+ * region's release (`vm_file_reap`) or an exit, may sleep in that take, so
+ * it undoes the object giving way. A free under a holder's GEM lock, from
+ * retirement or a pool's trim, puts the object on `gem.freed`, since that
+ * holder may be part way through a change that every other thread must see
+ * whole; the holder that took the lock undoes it giving way as it lets the
+ * lock go (`i915_gem_unlock`). So every free gives way, as Linux sends every
+ * free to its worker, which calls cond_resched after each object
+ * (gem/i915_gem_object.c:423, 471-472). A free under the shrinker, which may
+ * not give way, undoes the object at once with none.
+ */
+static void i915_gem_object_free(struct drm_gem_object *base)
+{
+    struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)base;
+    struct drm_i915_private *i915 = to_i915(base->dev);
+    int taken = i915_gem_lock(i915);
+
+    if (!taken && !i915->gem.no_yield) {
+        /* The DRM core puts the import once this returns. */
+        (void)dma_buf_ref(base->import);
+        obj->free_next = i915->gem.freed;
+        i915->gem.freed = obj;
+        return;
+    }
+    object_release(obj, taken);
+    i915_gem_unlock(i915, taken);
 }
 
 /** The `page` of an object for another device's import: its frame. */
@@ -1624,6 +1670,14 @@ static void gem_release(struct drm_i915_private *i915)
 }
 
 void i915_gem_unlock(struct drm_i915_private *i915, int taken)
+{
+    if (taken) {
+        free_deferred(i915);
+        gem_release(i915);
+    }
+}
+
+void i915_gem_unlock_atomic(struct drm_i915_private *i915, int taken)
 {
     if (taken) {
         gem_release(i915);

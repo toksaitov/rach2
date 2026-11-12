@@ -874,24 +874,19 @@ void isr_paranoid_router(isr_params_t *params)
 }
 
 /**
- * The return to the interrupted code, after its router: deliver a signal
- * pending for a return to user mode, update the thread's rseq area
- * (`rseq_return`), and give back the big lock the router took; a tick the
- * router took without the lock returns as it came. An entry that ran
- * without the lock takes it here only for a return to user mode with signal
- * work (`signal_return_work`) or the rseq area to update, as Linux's
- * `exit_to_user_mode_loop` acts only on the work its flags name
- * (kernel/entry/common.c:90-127). Interrupts are off. A forked child's
- * first return comes here too, with the depth its fork gave it.
+ * The return to the interrupted code, after its router: post the signals
+ * of the tick the thread has waiting (`proc_tick_signals_own`) and deliver
+ * a signal pending for a return to user mode, update the thread's rseq area
+ * (`rseq_return`), and give back the big lock the router took. An entry
+ * that ran without the lock, the tick's among them, takes it here only for
+ * a return to user mode with signal work (`signal_return_work`) or the rseq
+ * area to update, as Linux's `exit_to_user_mode_loop` acts only on the work
+ * its flags name (kernel/entry/common.c:90-127). Interrupts are off. A
+ * forked child's first return comes here too, with the depth its fork gave
+ * it.
  */
 void isr_leave(isr_params_t *params)
 {
-    struct percpu *cpu = this_cpu();
-
-    if (cpu->tick_unlocked) {
-        cpu->tick_unlocked = 0;
-        return;
-    }
     if (!bkl_frame_pop()) {
         if (!FRAME_USER(params)) {
             return;
@@ -902,6 +897,9 @@ void isr_leave(isr_params_t *params)
             return;
         }
         bkl_enter();
+    }
+    if (FRAME_USER(params)) {
+        proc_tick_signals_own();
     }
     deliver_signals(params);
     if (FRAME_USER(params)) {
@@ -942,31 +940,6 @@ void isr_local_router(isr_params_t *params)
     lapic_spurious();
 }
 
-/* The boot processor's ticks in a row that found the big lock held and
- * ended without it, and the count at which its tick waits for the lock all
- * the same, so that its periodic work (`timer_handler`, kernel.c) runs at
- * most this many ticks late. */
-static uint32_t boot_ticks_skipped;
-#define BOOT_TICK_SKIPS 4u
-
-/**
- * Whether a tick that found the big lock held by another processor must
- * wait for it: when `sched_tick_waits` says a process queued here has
- * waited long enough, and on the boot processor also when no reference
- * keeps the clock, since its tick alone counts the clock then, or when its
- * last BOOT_TICK_SKIPS - 1 ticks ended without the lock. Interrupts are
- * off.
- */
-static int tick_waits(void)
-{
-    int waits = sched_tick_waits();
-
-    if (arch_cpu_id() != 0) {
-        return waits;
-    }
-    return waits || !timer_tick_shared() || ++boot_ticks_skipped >= BOOT_TICK_SKIPS;
-}
-
 /**
  * Run the chain of a device's interrupt with the depth `in_interrupt` reads
  * kept around it: an allocation made by a handler is the kernel's, whoever
@@ -985,9 +958,9 @@ static void irq_dispatch(isr_params_t *params)
 
 /**
  * Take the big lock, unless every handler of the chain runs without it
- * (`isr_register_flags`), count a device's interrupt, run its vector's chain
- * and end it at the controller it came through; `isr_leave` gives the lock
- * back.
+ * (`isr_register_flags`) or the vector is the tick's, count a device's
+ * interrupt, run its vector's chain and end it at the controller it came
+ * through; `isr_leave` gives the lock back.
  *
  * A message from a PCI device, vector 48 and up, has no 8259 line to
  * acknowledge, and the local APIC's end-of-interrupt comes after the chain.
@@ -1016,27 +989,17 @@ static void irq_dispatch(isr_params_t *params)
  * disk's caller that slept for its command would get one command a
  * scheduler round. The tick's own handler makes its switch itself.
  *
- * A tick that finds another processor holding the big lock does nothing
- * else: it is ended and counted on this processor's record and returns, and
- * the next tick that takes the lock charges the ticks since
- * (`sched_account_tick`) and, on the boot processor, counts them from the
- * reference (`timer_tick_clock`). Waiting for the lock would take from this
- * processor's user code all the time the holder keeps it, such as the sound
- * mix's, which converts a channel's rate under it in HDA's thread; and
- * once the waits pass a tick, the next tick is pending at the return to user
- * mode and comes before the user code's next instruction, which then makes
- * no progress at all while other processors keep the lock busy. A tick
- * waits for the lock only when `tick_waits` says so: a process on this
- * processor's queue has waited long enough, since with the lock always held
- * no tick would end the running process's slice, and a busy processor does
- * not steal; or the boot processor's periodic work has waited enough
- * ticks, or only its tick keeps the clock. Meanwhile the timer pass that
- * wakes the sleepers is made by whichever processor's tick has the lock
- * (`timer_pass_late`, kernel.c).
+ * The tick takes no big lock here: its handler runs the clock's pass, the
+ * accounting and the timer pass without it, each under a spinlock of its
+ * own, and takes the lock itself, by a try, only for the work that still
+ * needs it (`timer_handler`, kernel.c), as Linux's tick takes no global
+ * lock (kernel/time/tick-sched.c:253-278, kernel/time/timer.c:2514-2529).
+ * A holder of the lock on another processor, such as the sound mix's, so
+ * takes nothing from this processor's ticks or from its user code.
  *
- * Every tick runs the lockup detectors' part first (`watchdog_tick`), with
- * or without the lock, since a processor locked up with interrupts off may
- * hold it for good.
+ * Every tick runs the lockup detectors' part first (`watchdog_tick`),
+ * since a processor locked up with interrupts off may hold the big lock for
+ * good.
  *
  * An interrupt that ended a halt, which it knows by the frame's address,
  * resumes with interrupts off. Otherwise a tick already pending at the
@@ -1069,24 +1032,11 @@ void _irq_router(isr_params_t *params)
         if (locked) {
             bkl_enter();
         }
-    } else if (!bkl_try_enter()) {
-        if (!tick_waits()) {
-            if (lines_apic || arch_cpu_id() != 0) {
-                lapic_eoi();
-            } else {
-                reset_master_pic();
-            }
-            cpu->ticks_unlocked++;
-            cpu->tick_unlocked = 1;
-            return;
-        }
-        bkl_enter();
+    } else {
+        locked = 0;
     }
     bkl_frame_push(locked);
     if (params->vector == IRQ_VECTOR(0)) {
-        if (arch_cpu_id() == 0) {
-            boot_ticks_skipped = 0;
-        }
         cpu->wake_irq_start = wake_irq;
         cpu->wake_irq_locked = waketime_clock();
     }
@@ -1134,19 +1084,6 @@ void _irq_router(isr_params_t *params)
     }
 }
 
-/** The ticks of every processor that found the big lock held, which
- * `_irq_router` counts on their records instead of `irq_count`. */
-static uint32_t isr_ticks_unlocked(void)
-{
-    uint32_t sum = 0;
-    int i;
-
-    for (i = 0; i < NR_CPUS; i++) {
-        sum += cpu_table[i].ticks_unlocked;
-    }
-    return sum;
-}
-
 /**
  * The count of interrupts taken on `vector`, for /proc/interrupts.
  *
@@ -1159,7 +1096,7 @@ uint32_t isr_vector_count(int vector)
     if (vector < 32 || vector > ISR_MSI_LAST) {
         return 0;
     }
-    return vector_count[vector - 32] + (vector == IRQ_VECTOR(0) ? isr_ticks_unlocked() : 0u);
+    return vector_count[vector - 32];
 }
 
 /**
@@ -1179,7 +1116,7 @@ const char *isr_vector_name(int vector, int slot)
 /** Every interrupt routed since the boot, for /proc/stat's `intr` line. */
 uint32_t isr_interrupt_total(void)
 {
-    return irq_count + isr_ticks_unlocked();
+    return irq_count;
 }
 
 const char *isr_vector_source(int vector)

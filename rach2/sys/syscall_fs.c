@@ -2122,6 +2122,57 @@ static int path_from_user_dir(int dirfd, const char __user *upath, char **out, i
     return 0;
 }
 
+/* The answer of a call's path without the big lock when the call must run
+ * again under it, with nothing done that a caller sees. */
+#define CALL_LOCKED 1
+
+/**
+ * The path a caller named, as `path_from_user_dir` makes it, for a call
+ * without the big lock: an absolute path, or one relative to the working
+ * directory, whose path is copied under its `fs_struct`'s lock
+ * (`proc_cwd_read`). 0 with the page in `*out`; a negative errno of
+ * `copy_path_at`'s; or CALL_LOCKED with nothing taken, for a path relative
+ * to a descriptor, whose path the type gives, one that begins with "..",
+ * which a removed working directory answers, or a working directory
+ * outside the process's root.
+ */
+static int path_from_user_unlocked(int dirfd, const char __user *upath, char **out, int *dir)
+{
+    char *buf = path_buf_get(), *cwd = NULL;
+    int len, locked = 0;
+
+    if (!buf) {
+        return -ENOMEM;
+    }
+    len = strncpy_from_user(buf, upath, VFS_PATH_MAX);
+    if (len >= 0 && dir) {
+        *dir = path_names_dir(buf, len);
+    }
+    if (len > 0 && buf[0] != '/') {
+        cwd = dirfd == AT_FDCWD && !(buf[0] == '.' && buf[1] == '.') ? path_buf_get() : NULL;
+        if (cwd) {
+            proc_cwd_read(current_proc, cwd);
+        }
+        locked = !cwd || cwd_outside(cwd);
+        if (!locked) {
+            len = path_prepend(buf, VFS_PATH_MAX, (uint32_t)len, cwd);
+        }
+        path_buf_put(cwd);
+    }
+    if (len > 0 && !locked) {
+        len = canonicalize_abs(buf);
+        if (dir && *dir == PATH_END_DOT) {
+            len = path_put_dot(buf, len);
+        }
+    }
+    if (len <= 0 || locked) {
+        path_buf_put(buf);
+        return locked ? CALL_LOCKED : len == 0 ? -ENOENT : len;
+    }
+    *out = buf;
+    return 0;
+}
+
 /** `path_from_user_dir` for a caller that does not ask how the path ends. */
 static int path_from_user(int dirfd, const char __user *upath, char **out)
 {
@@ -4884,6 +4935,137 @@ static void open_done(int fd, const char *name, int flags)
     inotify_desc(ofd, IN_OPEN);
 }
 
+/* The open flags that send an open to the big lock (`open_unlocked`): any
+ * access mode but O_RDONLY, the low two bits, and every flag that creates,
+ * truncates, opens nothing or opens a nameless file (Linux's __O_TMPFILE). */
+#define OPEN_LOCKED_FLAGS (3 | O_CREAT | O_TRUNC | O_PATH | 020000000)
+
+/**
+ * The descriptor of an open that `open_unlocked` checked and holds `ref`
+ * and `entry` for, in the slot `fd` it reserved, made as `open_install`
+ * makes one for a read-only open of a mounted type: the description takes
+ * the hold, the record and a reference on the mount, and the entry is
+ * published last. The descriptor, or a negative errno with everything
+ * given back.
+ */
+static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry, int fd,
+                                     const char *name, int flags, const struct vfs_stat *st)
+{
+    fd_entry_t *e = fd_slot(current_proc->fds, fd);
+    int rc;
+
+    e->ofd->name = entry;
+    e->ofd->ino = st->ino;
+    e->ofd->offset = 0;
+    ofd_record_path(e->ofd, name);
+    rc = vfs_open_node(ref->mnt, ref->node, flags, &e->ofd->fhandle);
+    if (rc != 0) {
+        fd_free(current_proc->fds, fd);
+        vfs_ref_release(ref);
+        return rc;
+    }
+    e->ofd->vmnt = ref->mnt;
+    e->ofd->vnode = ref->node;
+    vfs_desc_open(ref->mnt);
+    vfs_leave(ref->mnt);
+    fd_ofd_access_drop(e->ofd);
+    e->flags = FD_FLAG_READ | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0);
+    if (flags & O_APPEND) {
+        e->ofd->status_flags |= OFD_APPEND;
+    }
+    if (flags & O_NONBLOCK) {
+        e->ofd->status_flags |= OFD_NONBLOCK;
+    }
+    e->node = NULL;
+    e->type = (st->mode & S_IFMT) == S_IFDIR ? FD_TYPE_DIR : FD_TYPE_FILE;
+    fd_install(current_proc->fds, fd);
+    return fd;
+}
+
+/**
+ * `open_from_user` for a caller without the big lock: a read-only open that
+ * creates and truncates nothing, of a regular file or a directory on a type
+ * that sets `reads_unlocked`, whose path the name cache finishes
+ * (`vfs_resolve_cached`), absolute or relative to the working directory
+ * (`path_from_user_unlocked`), as Linux's `path_openat` walks under RCU
+ * first and again with references when that fails (fs/namei.c:4055-4057,
+ * `do_filp_open`). The checks are those `open_mounted_node` makes for such
+ * an open: ENOTDIR for O_DIRECTORY on a file, and read permission. The
+ * descriptor is reserved before the walk, as `do_open` reserves it. The
+ * descriptor or a negative errno; or CALL_LOCKED with nothing done, for
+ * every other open, which `do_open` makes under the big lock. inotify's
+ * report of the open takes the big lock while a watch exists.
+ */
+static int32_t open_unlocked(int dirfd, const char __user *upath, int flags)
+{
+    struct vfs_name *entry = NULL;
+    struct vfs_stat st;
+    struct vfs_ref ref;
+    const char *name;
+    char *path;
+    int end = 0, fd;
+    int32_t rc;
+
+    if (flags & OPEN_LOCKED_FLAGS) {
+        return CALL_LOCKED;
+    }
+    rc = path_from_user_unlocked(dirfd, upath, &path, &end);
+    if (rc != 0) {
+        return rc;
+    }
+    if (end) {
+        flags = (flags | O_DIRECTORY) & ~O_NOFOLLOW;
+    }
+    name = path_name(path);
+    if (device_name(name, "fb") || device_name(name, "mouse") || path_starts(name, "proc/") ||
+        path_starts(name, "dev/")) {
+        path_buf_put(path);
+        return CALL_LOCKED;
+    }
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0) {
+        path_buf_put(path);
+        return fd;
+    }
+    rc = vfs_resolve_cached(path, VFS_WALK_LOCK | ((flags & O_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0),
+                            &ref, &entry);
+    if (rc != 0) {
+        fd_free(current_proc->fds, fd);
+        path_buf_put(path);
+        return rc == VFS_CACHED_MISS ? CALL_LOCKED : rc;
+    }
+    if (!vfs_mount_base(ref.mnt)->type->reads_unlocked ||
+        vfs_getattr(ref.mnt, ref.node, &st) != 0 ||
+        ((st.mode & S_IFMT) != S_IFREG && (st.mode & S_IFMT) != S_IFDIR)) {
+        rc = CALL_LOCKED;
+    } else if ((st.mode & S_IFMT) != S_IFDIR && (flags & O_DIRECTORY)) {
+        rc = -ENOTDIR;
+    } else {
+        rc = cred_access_ref(&ref, CRED_R, 0);
+    }
+    if (rc != 0) {
+        vfs_name_put(entry);
+        vfs_ref_release(&ref);
+        fd_free(current_proc->fds, fd);
+        path_buf_put(path);
+        return rc;
+    }
+    rc = open_install_unlocked(&ref, entry, fd, name, flags, &st);
+    if (rc >= 0) {
+        int big = inotify_watches != 0;
+
+        if (big) {
+            bkl_enter();
+        }
+        open_done(rc, name, flags);
+        if (big) {
+            bkl_exit();
+        }
+    }
+    path_buf_put(path);
+    return rc;
+}
+
 /**
  * open(2) and openat(2) after their arguments: the path `upath`, a relative
  * one resolved from `dirfd`, opened by `open_named` with the Linux open
@@ -4893,11 +5075,14 @@ static void open_done(int fd, const char *name, int flags)
  * is -EINVAL before the path is read, as Linux answers it since 6.4; an
  * older Linux made a regular file. O_PATH, which drops O_CREAT, takes the
  * pair, as Linux's open and openat do.
+ *
+ * A caller without the big lock tries `open_unlocked` first and takes the
+ * big lock for what that leaves.
  */
 static int32_t open_from_user(int dirfd, const char __user *upath, int flags, uint32_t mode)
 {
     char *path;
-    int end;
+    int end, big;
     int32_t rc;
 
     if ((flags & (O_CREAT | O_DIRECTORY | O_PATH)) == (O_CREAT | O_DIRECTORY)) {
@@ -4906,15 +5091,25 @@ static int32_t open_from_user(int dirfd, const char __user *upath, int flags, ui
     if (!upath) {
         return -EFAULT;
     }
+    big = !bkl_held();
+    if (big) {
+        rc = open_unlocked(dirfd, upath, flags);
+        if (rc != CALL_LOCKED) {
+            return rc;
+        }
+        bkl_enter();
+    }
     rc = path_from_user_dir(dirfd, upath, &path, &end);
-    if (rc != 0) {
-        return rc;
+    if (rc == 0) {
+        rc = open_named(path_name(path), flags, mode, end);
+        if (rc >= 0) {
+            open_done(rc, path_name(path), flags);
+        }
+        path_buf_put(path);
     }
-    rc = open_named(path_name(path), flags, mode, end);
-    if (rc >= 0) {
-        open_done(rc, path_name(path), flags);
+    if (big) {
+        bkl_exit();
     }
-    path_buf_put(path);
     return rc;
 }
 
@@ -5390,6 +5585,31 @@ int file_ops_unlocked(const fd_entry_t *e)
     return !ofd || (!ofd->vmnt && !ofd->dev_mnt && !ofd->synth_mnt);
 }
 
+/**
+ * Whether descriptor `e` names a regular file or a directory of a type that
+ * sets `reads_unlocked`, as ext2 does, whose reads, listings and attributes
+ * then run without the big lock: the type's operations take it where they
+ * need it, as Linux reads such a file under its inode's lock alone.
+ */
+int file_vfs_unlocked(const fd_entry_t *e)
+{
+    const struct open_file *ofd;
+
+    if (!e || e->ops || (e->type != FD_TYPE_FILE && e->type != FD_TYPE_DIR)) {
+        return 0;
+    }
+    ofd = e->ofd;
+    return ofd && ofd->vmnt && !ofd->dev_mnt && !ofd->synth_mnt &&
+           vfs_mount_base(ofd->vmnt)->type->reads_unlocked;
+}
+
+/** The big lock for a read of `e`: none for a file `file_vfs_unlocked`
+ * admits, and `file_ops_lock`'s answer otherwise. */
+static int file_read_lock(const fd_entry_t *e)
+{
+    return file_vfs_unlocked(e) ? 0 : file_ops_lock(e);
+}
+
 int file_ops_lock(const fd_entry_t *e)
 {
     if (file_ops_unlocked(e)) {
@@ -5430,12 +5650,14 @@ int fd_call_lock(int fd)
  * The release runs under the big lock, which the objects of every type not
  * marked unlocked still need; an object marked unlocked is released without
  * it, its last descriptor closing it as Linux's last `fput` releases a
- * file (`fd_release_objects`).
+ * file (`fd_release_objects`), and so is a file or directory that
+ * `file_vfs_unlocked` admits, whose description's end takes the big lock
+ * where it needs it (`fd_ofd_unref`).
  */
 static void fd_teardown(fd_table_t *table, int fd)
 {
     fd_entry_t *e = fd_slot(table, fd);
-    int big = !file_ops_unlocked(e);
+    int big = !file_ops_unlocked(e) && !file_vfs_unlocked(e);
 
     if (big) {
         bkl_enter();
@@ -5457,6 +5679,26 @@ static int epoll_wait_holds(const process_t *t, int fd)
 }
 
 /**
+ * Whether no sharer of `table` but the caller is inside an epoll_wait, read
+ * under the table's lock after the caller marked its descriptor closing. A
+ * wait sets `epoll_waiting` before its scan takes any hold, each under the
+ * table's lock, so a hold taken before the mark shows its flag here, and a
+ * scan after the mark takes no hold on the descriptor.
+ */
+static int epoll_waits_none(fd_table_t *table)
+{
+    process_t *t;
+    uint32_t flags = fd_table_lock(table);
+    int none = 1;
+
+    for (t = table->sharers; t && none; t = t->fd_sharer_next) {
+        none = t == current_proc || !t->epoll_waiting;
+    }
+    fd_table_unlock(table, flags);
+    return none;
+}
+
+/**
  * Let go of descriptor `fd` of `table` in each epoll_wait of another sharer
  * that holds it and sleeps, so that a close releases it at once, as a
  * close on Linux does while a thread waits in epoll_wait: the wait comes
@@ -5473,6 +5715,9 @@ static int epoll_wait_holds(const process_t *t, int fd)
  * the lock up, so a wait that holds `fd` is seen here asleep, with its
  * queues published, and not between its scan and its sleep, where it
  * would sleep on with the hold and the close would never end.
+ *
+ * A table whose sharers have no epoll_wait under way is passed by without
+ * the big lock (`epoll_waits_none`).
  */
 static int epoll_waits_let_go(fd_table_t *table, int fd)
 {
@@ -5480,7 +5725,7 @@ static int epoll_waits_let_go(fd_table_t *table, int fd)
     uint32_t flags;
     int any = 0;
 
-    if (table->refs < 2) {
+    if (table->refs < 2 || epoll_waits_none(table)) {
         return 0;
     }
     bkl_enter();
@@ -6524,14 +6769,24 @@ static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count, siz
 
 /** Read up to `count` bytes of the file of `ofd` at `pos` into the user's
  * `buf` through the file page cache (`filecache_file_read`) or the file
- * system. The bytes read, 0 at the end, or the type's error. */
+ * system, which a caller without the big lock reaches with it, since the
+ * type then writes the user's buffer itself. The bytes read, 0 at the end,
+ * or the type's error. */
 static int32_t file_read_plain(struct open_file *ofd, char __user *buf, uint32_t count,
                                uint64_t pos)
 {
     int32_t bytes_read;
 
     if (!filecache_file_read(ofd, buf, count, pos, &bytes_read)) {
+        int big = !bkl_held();
+
+        if (big) {
+            bkl_enter();
+        }
         bytes_read = vfs_read(ofd->vmnt, ofd->fhandle, (char __force *)buf, count, pos);
+        if (big) {
+            bkl_exit();
+        }
     }
     return bytes_read;
 }
@@ -6544,9 +6799,11 @@ static int32_t file_read_plain(struct open_file *ofd, char __user *buf, uint32_t
  * to the size the file has at the call, as Linux's filemap_read reads the
  * shared folio, so that the read sees their stores, those an earlier buffer
  * of the same readv made among them; any other page, and any other file, is
- * read by `file_read_plain`. The bytes read, which stop at the first page
- * that fails after some were read, 0 at the end, or the type's error, or
- * -ENOMEM for a page in memory that no temporary mapping is free for.
+ * read by `file_read_plain`. A caller without the big lock found no shared
+ * mapping of a disk file (`file_read`). The bytes read, which stop at the
+ * first page that fails after some were read, 0 at the end, or the type's
+ * error, or -ENOMEM for a page in memory that no temporary mapping is free
+ * for.
  */
 static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_t count,
                                 uint64_t pos)
@@ -6555,7 +6812,7 @@ static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_
     uint32_t done = 0;
     int32_t r = 0;
 
-    if (count == 0 || !filemap_disk_mapped(ofd->vmnt, ofd->ino)) {
+    if (count == 0 || !bkl_held() || !filemap_disk_mapped(ofd->vmnt, ofd->ino)) {
         return file_read_plain(ofd, buf, count, pos);
     }
     r = vfs_getattr(ofd->vmnt, ofd->vnode, &st);
@@ -6635,6 +6892,10 @@ static int32_t file_read_unwritable(struct open_file *ofd, uint64_t at)
  * operation: with dup or fork sharing the offset, a second reader sleeps
  * rather than reading the same bytes while the first is in a request, and a
  * KRFFS relocation cannot move the handle while it is in use.
+ *
+ * A file `file_vfs_unlocked` admits is read without the big lock, which the
+ * read takes while a shared mapping of a disk file has pages, to look for
+ * the file's among them, and for inotify's report.
  */
 static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, const uint64_t *at,
                          size_t asked)
@@ -6643,6 +6904,7 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
     struct kernel_iovec one[1];
     int32_t bytes_read;
     uint32_t room;
+    int big = 0;
 
     if (!(entry->flags & FD_FLAG_READ)) {
         return -EBADF;
@@ -6653,6 +6915,10 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
     one[0].iov_base = (__force uintptr_t)buf;
     one[0].iov_len = count;
     room = iov_prefix(one, 1, 1);
+    if (!bkl_held() && filemap_disk_any()) {
+        bkl_enter();
+        big = 1;
+    }
     fd_ofd_lock(ofd);
     if (!at && rw_offset_end(entry, asked) != 0) {
         fd_ofd_unlock(ofd);
@@ -6668,7 +6934,14 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
     }
     fd_ofd_unlock(ofd);
     if (bytes_read > 0 && inotify_watches) {
+        if (!bkl_held()) {
+            bkl_enter();
+            big = 1;
+        }
         inotify_desc(ofd, IN_ACCESS);
+    }
+    if (big) {
+        bkl_exit();
     }
     return bytes_read;
 }
@@ -6915,12 +7188,12 @@ static int32_t read_fd(int fd, char __user *buf, size_t requested)
  * Linux. On i686 a count negative as ssize_t is EINVAL after the range
  * check; a compat call on x86-64 has the kernel's 64-bit ssize_t instead.
  * The call holds the big lock unless the descriptor's type runs without it
- * (`fd_call_lock`).
+ * (`fd_call_lock`) or it names a file whose reads do (`file_vfs_unlocked`).
  */
 long sys_read(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
-    int big = fd_call_lock(fd);
+    int big = file_read_lock(current_proc ? fd_get(current_proc->fds, fd) : NULL);
     long rc = read_fd(fd, (char __user *)SC_ARG(params, 1), SC_ARG(params, 2));
 
     file_ops_unlock(big);
@@ -8339,10 +8612,9 @@ static int32_t vfs_fill_stat64(struct kstat *kst, const struct vfs_ref *r)
         return rc;
     }
     k_memset(kst, 0, sizeof(*kst));
-    for (i = 0; i < vfs_mount_slots(); i++) {
-        if (vfs_mount_at(i) == vfs_mount_base(r->mnt)) {
-            kst->st_dev = procfs_mount_dev(i, vfs_mount_base(r->mnt));
-        }
+    i = vfs_mount_index(vfs_mount_base(r->mnt));
+    if (i >= 0) {
+        kst->st_dev = procfs_mount_dev(i, vfs_mount_base(r->mnt));
     }
     kst->st_mode = st.mode;
     kst->st_nlink = st.nlink;
@@ -10392,7 +10664,7 @@ long sys_fstat64(isr_params_t *params)
     if (!entry) {
         return -EBADF;
     }
-    big = file_ops_lock(entry);
+    big = file_read_lock(entry);
     rc = fstat_getattr(entry, &kst);
     file_ops_unlock(big);
     if (rc != 0) {
@@ -10523,6 +10795,59 @@ static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct ks
 }
 
 /**
+ * `stat_at` for a caller without the big lock: a descriptor with
+ * AT_EMPTY_PATH that `file_vfs_unlocked` admits, or a path the name cache
+ * finishes (`vfs_resolve_cached`), absolute or relative to the working
+ * directory (`path_from_user_unlocked`), as Linux's `vfs_statx` walks a path
+ * under RCU first (fs/namei.c:2651-2653). 0, a negative errno, or
+ * CALL_LOCKED with nothing done, for `stat_at` under the big lock.
+ */
+static int32_t stat_at_unlocked(int dirfd, const char __user *upath, int flags, struct kstat *kst)
+{
+    int follow = !(flags & AT_SYMLINK_NOFOLLOW);
+    struct vfs_ref ref;
+    char *pathbuf;
+    int empty = 0, dir = 0;
+    int32_t rc;
+
+    if (flags & AT_EMPTY_PATH) {
+        empty = user_path_empty(upath);
+        if (empty < 0) {
+            return empty;
+        }
+    }
+    if (empty) {
+        fd_entry_t *entry = dirfd == AT_FDCWD ? NULL : fd_get(current_proc->fds, dirfd);
+
+        if (!entry || !file_vfs_unlocked(entry)) {
+            return CALL_LOCKED;
+        }
+        return fstat_getattr(entry, kst);
+    }
+    if (!upath) {
+        return -EFAULT;
+    }
+    rc = path_from_user_unlocked(dirfd, upath, &pathbuf, &dir);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = vfs_resolve_cached(pathbuf, VFS_WALK_LOCK | (follow || dir ? 0 : VFS_WALK_NOFOLLOW), &ref,
+                            NULL);
+    path_buf_put(pathbuf);
+    if (rc != 0) {
+        return rc == VFS_CACHED_MISS ? CALL_LOCKED : rc;
+    }
+    rc = vfs_fill_stat64(kst, &ref);
+    kst->st_mnt_id = procfs_mount_id(ref.mnt);
+    vfs_walk_unlock(ref.mnt);
+    vfs_ref_release(&ref);
+    if (rc == 0 && dir && (kst->st_mode & S_IFMT) != S_IFDIR) {
+        return -ENOTDIR;
+    }
+    return rc;
+}
+
+/**
  * fstatat64(2), and newfstatat(2) on x86-64: copy out the attributes
  * `stat_at` finds for the directory descriptor, the path and the flags of
  * arguments 0, 1 and 3 to the user's buffer in argument 2, with the owner
@@ -10530,7 +10855,8 @@ static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct ks
  * AT_NO_AUTOMOUNT is accepted and means nothing here, and any other flag
  * but AT_SYMLINK_NOFOLLOW and AT_EMPTY_PATH is -EINVAL before the path is
  * read. GNU libc's fstat is this call with AT_EMPTY_PATH, on i386 when
- * statx is missing.
+ * statx is missing. The call runs without the big lock, which it takes
+ * for what `stat_at_unlocked` leaves.
  */
 long sys_fstatat64(isr_params_t *params)
 {
@@ -10545,7 +10871,20 @@ long sys_fstatat64(isr_params_t *params)
     if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_NO_AUTOMOUNT)) {
         return -EINVAL;
     }
-    rc = stat_at((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1), flags, &kst);
+    rc = bkl_held() ? CALL_LOCKED
+                    : stat_at_unlocked((int)SC_ARG(params, 0),
+                                       (const char __user *)SC_ARG(params, 1), flags, &kst);
+    if (rc == CALL_LOCKED) {
+        int big = !bkl_held();
+
+        if (big) {
+            bkl_enter();
+        }
+        rc = stat_at((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1), flags, &kst);
+        if (big) {
+            bkl_exit();
+        }
+    }
     return rc != 0 ? rc : stat64_put(st, &kst);
 }
 
@@ -13265,10 +13604,10 @@ static long pwrite_at(int fd, const char __user *buf, size_t requested, long lon
 }
 
 /** The call holds the big lock unless the descriptor's type runs without it
- * (`fd_call_lock`). */
+ * (`fd_call_lock`) or it names a file whose reads do (`file_vfs_unlocked`). */
 long ksys_pread64(int fd, char __user *buf, size_t requested, long long pos)
 {
-    int big = fd_call_lock(fd);
+    int big = file_read_lock(current_proc ? fd_get(current_proc->fds, fd) : NULL);
     long rc = pread_at(fd, buf, requested, pos);
 
     file_ops_unlock(big);
@@ -18320,11 +18659,18 @@ static long getdents(int fd_num, char *buf, uint32_t count, int format)
     return (int32_t)bytes_written;
 }
 
-/** Read Linux's 64-bit directory records under the description lock. */
+/** Read Linux's 64-bit directory records under the description lock: without
+ * the big lock for a directory `file_vfs_unlocked` admits, whose `readdir`
+ * fills a kernel record, as Linux's `iterate_dir` takes the directory's
+ * shared lock alone (fs/readdir.c:101), and under it for any other. */
 long sys_getdents64(isr_params_t *params)
 {
-    return getdents((int)SC_ARG(params, 0), (char *)SC_ARG(params, 1),
-                    USER_LEN32(SC_ARG(params, 2)), DIRENT_NATIVE);
+    int fd = (int)SC_ARG(params, 0);
+    int big = file_read_lock(current_proc ? fd_get(current_proc->fds, fd) : NULL);
+    long rc = getdents(fd, (char *)SC_ARG(params, 1), USER_LEN32(SC_ARG(params, 2)), DIRENT_NATIVE);
+
+    file_ops_unlock(big);
+    return rc;
 }
 
 /** Read i386 directory records, one old record when `old` is nonzero. */

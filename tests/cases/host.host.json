@@ -736,6 +736,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "kcpu",
+          "checks": "tests/host/kcpu_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "kd",
           "checks": "tests/host/kd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -833,6 +838,11 @@
         {
           "assertion_id": "kvm_gpamap",
           "checks": "tests/host/kvm_gpamap_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "kvm_pmu",
+          "checks": "tests/host/kvm_pmu_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {

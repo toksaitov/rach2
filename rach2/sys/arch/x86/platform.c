@@ -4,12 +4,13 @@
  *
  * The interrupt controllers are one of two arrangements, chosen once, in
  * `platform_timer_start`. When the MADT lists an I/O APIC, the local APIC is
- * up and `noapic` is not on the boot line, the I/O APIC takes lines 0 to 15
- * through the MADT's overrides, the 8259 pair is masked for good, and the
- * tick is the local APIC's timer, measured against the HPET, the PM timer or
- * the 8254. Otherwise the 8259 pair delivers the lines and the 8254 ticks,
- * through the local APIC's `LINT0` when it is enabled for messages. Either
- * way a line arrives on the vector it always had, 32 plus the line.
+ * up and neither `noapic` nor `maxcpus=0` is on the boot line
+ * (`ioapic_disabled`), the I/O APIC takes lines 0 to 15 through the MADT's
+ * overrides, the 8259 pair is masked for good, and the tick is the local
+ * APIC's timer, measured against the HPET, the PM timer or the 8254.
+ * Otherwise the 8259 pair delivers the lines and the 8254 ticks, through the
+ * local APIC's `LINT0` when it is enabled for messages. Either way a line
+ * arrives on the vector it always had, 32 plus the line.
  */
 
 #include "acpi.h"
@@ -271,8 +272,8 @@ static uint16_t pci_lines(void)
  */
 static int ioapic_wanted(const struct acpi_info *a)
 {
-    if (kcmdline_has("noapic")) {
-        klog(KLOG_INFO, "ioapic", "skipped: noapic");
+    if (ioapic_disabled()) {
+        klog(KLOG_INFO, "ioapic", "skipped: noapic or maxcpus=0");
         return 0;
     }
     if (!lapic_ready()) {
@@ -438,7 +439,8 @@ void platform_board_init(void)
 
 /** ACPICA first, since the VT-d units are found through its tables, and
  * the 8042's PNP IDs it found given to its serio ports in /sys; the units
- * only on x86-64, whose VMs are given devices. */
+ * only on x86-64, whose VMs are given devices. A firmware's x2APIC mode
+ * that `lapic_init` kept is settled once remapping's format is known. */
 void platform_firmware_start(void)
 {
     acpica_boot(acpi_get()->found ? acpi_get()->rsdp : 0);
@@ -446,6 +448,7 @@ void platform_firmware_start(void)
     evdev_sysfs_serio_firmware_id(I8042_AUX_PORT, i8042_firmware_id(I8042_AUX_PORT));
 #if defined(__x86_64__)
     iommu_boot();
+    lapic_x2apic_settle(iommu_irq_remapped_x2apic());
 #endif
 }
 

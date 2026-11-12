@@ -23,6 +23,22 @@
  * booted on.
  */
 
+/**
+ * Whether the boot line keeps the I/O APIC off: `noapic`, or `maxcpus=0`,
+ * which Linux 6.12.115 turns into the same disable_ioapic_support
+ * (arch/x86/kernel/apic/io_apic.c, lines 191 to 197; kernel/smp.c, lines
+ * 975 to 982; arch/x86/kernel/smpboot.c, lines 1005 to 1008). Linux's
+ * ioapic_is_disabled then also keeps interrupt remapping and the move to
+ * x2APIC mode from starting (apic.c, lines 1898 to 1901), and so does this
+ * kernel (lapic.c, iommu/vtd.c).
+ */
+int ioapic_disabled(void);
+
+/** Whether interrupt remapping may yet start, and with it the x2APIC
+ * format that lets the local APIC stay in x2APIC mode (lapic.c): not on
+ * the i686 kernel, and not while `ioapic_disabled`. */
+int ioapic_remappable(void);
+
 /** Map the I/O APICs the MADT lists and mask every input: the count made
  * ready, 0 when none was. */
 int ioapic_init(const struct acpi_info *a);
@@ -37,6 +53,14 @@ int ioapic_route_line(int line, int pci, uint8_t vector, uint8_t dest);
 /** Mask the input ISA line `line` was routed to; nothing for a line not
  * routed. */
 void ioapic_mask_line(int line);
+
+/** Mask every routed line, and return the lines that were unmasked, line N
+ * at bit N, for `ioapic_unmask_lines`. An edge that comes to a masked input
+ * is not kept; a level stays asserted until the line is unmasked. */
+uint16_t ioapic_mask_routed(void);
+
+/** Unmask the routed lines whose bits are set in `which`. */
+void ioapic_unmask_lines(uint16_t which);
 
 /** Whether the input of `line` has an interrupt it has not yet sent; 0 for
  * a line not routed. */

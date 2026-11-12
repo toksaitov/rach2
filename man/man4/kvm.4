@@ -72,6 +72,7 @@ the XCR0 bits a guest may have.
 .Dv KVM_GET_CLOCK ,
 .Dv KVM_SET_CLOCK ,
 .Dv KVM_SET_BOOT_CPU_ID ,
+.Dv KVM_SET_PMU_EVENT_FILTER ,
 .Dv KVM_SET_TSC_KHZ ,
 .Dv KVM_GET_TSC_KHZ ,
 .Dv KVM_GET_STATS_FD ,
@@ -932,6 +933,64 @@ whose
 the next
 .Dv KVM_RUN
 takes.
+.Ss Performance counters
+The guest PMU follows the host: Intel architectural version 2 or earlier,
+with general and fixed counters; AMD legacy counters, the core-extension
+aliases and, where present, PerfMonV2 global control and status.
+CPUID and the MSR index lists describe the registers available.
+RDPMC requires CPL 0 or CR4.PCE.
+Counter overflow sets global status and queues a virtual local APIC
+performance interrupt through LVTPC after the next guest exit.
+A guest's counters run on the physical counters the host's
+hard-lockup detector does not hold, each on one its event may use by
+Linux's event constraints for the processor's model, and a guest fixed
+counter may run on a general counter with the fixed counter's event;
+one left without a counter does not count.
+On Haswell a guest counter takes fixed counter 0 only when no general
+counter its event may use is free.
+Intel's PERF_CAPABILITIES offers full-width counter writes and, on a
+processor with a legacy LBR stack of format 4 or later, the host's LBR
+format.
+A guest with that format, CPUID.PDCM and the host's model has the
+host's LBR stack: IA32_DEBUGCTL's LBR and FREEZE_LBRS_ON_PMI, LBR_SELECT,
+LBR_TOS and each record's FROM, TO and, from Skylake, INFO registers.
+The caller writes PERF_CAPABILITIES with no LBR format but 0 or the
+host's.
+IA32_DEBUGCTL also keeps BUS_LOCK_DETECT and RTM_DEBUG where the host
+has them and the guest's CPUID offers them, and
+.Dv KVM_GET_MSR_INDEX_LIST
+lists it on both vendors.
+On AMD, IA32_DEBUGCTL reads 0 and takes and ignores any write, and
+LASTBRANCHFROMIP, LASTBRANCHTOIP, LASTINTFROMIP and LASTINTTOIP are
+listed too, read 0 and take only the caller's write of 0; any other
+write is an MSR KVM does not have, which a guest's write reports as
+.Dv KVM_MSR_EXIT_REASON_UNKNOWN .
+PEBS is not advertised.
+.Pp
+.Dv KVM_CAP_PMU_EVENT_FILTER
+and
+.Dv KVM_CAP_PMU_EVENT_MASKED_EVENTS
+advertise
+.Dv KVM_SET_PMU_EVENT_FILTER
+on a VM.
+Its Linux structure selects ALLOW or DENY for up to 300 event entries,
+a separate fixed-counter bitmap and optional masked unit matches.
+An exclusion entry overrides an inclusion.
+A replacement takes effect when each running vCPU next leaves the guest.
+.Pp
+.Dv KVM_ENABLE_CAP
+of
+.Dv KVM_CAP_PMU_CAPABILITY
+accepts
+.Dv KVM_PMU_CAP_DISABLE
+in args[0] before any vCPU has been created.
+An unsupported bit, or a request after creating a vCPU, is EINVAL.
+.Pp
+.Pa /sys/module/kvm/parameters/enable_pmu
+reads Y or N according to the host PMU probe.
+.Pa /sys/module/kvm/parameters/force_emulation_prefix
+reads 0.
+Both are read-only.
 .Sh FILES
 .Bl -tag -width /sys/module/kvm/parameters
 .It Pa /dev/kvm

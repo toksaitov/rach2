@@ -43,9 +43,9 @@ pcid-disabled pass fail Linux: FAIL: Test on INVPCID when disabled
 pcid-enabled pass pass
 pks skip skip PKS not enabled: the processor has no PKS
 pku skip skip PKU not enabled
-pmu excluded fail PMU: Rach2's KVM gives its guests no performance counters
-pmu_lbr excluded skip PMU: Rach2's KVM gives its guests no performance counters
-pmu_pebs excluded skip PMU: Rach2's KVM gives its guests no performance counters
+pmu kvm_pmu?hypervisor?fail:pass:skip fail Linux: AMD's overflow subtests fail, 7 to 10 of 10 by turns; under a hypervisor whose own work on each exit the counters count, the counts and overflows fail on Linux 6.12 too; skips without a host PMU, which its config requires
+pmu_lbr kvm_lbr?pass:skip skip Linux's on the testing PC, which offers no LBR format; the Lenovo's Debian passes it with Haswell's 16 records
+pmu_pebs skip skip Linux's on the testing PC; PEBS is not offered, and the Lenovo's Debian reference settles Intel's
 rdpru pass pass
 realmode pass pass
 rmap_chain pass pass

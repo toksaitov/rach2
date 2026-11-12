@@ -386,6 +386,14 @@ struct vfs_type {
      * changes, so that a slow request for one file stops only that file's
      * users. */
     int file_locked;
+    /* Nonzero for a type whose `read`, `readdir`, `getattr`, `open`,
+     * `release`, `hold` and `put` run without the big lock on a node the
+     * caller holds, into kernel buffers, each taking the lock itself for a
+     * step that needs it, as Linux's ext2 reads under the inode's own lock
+     * alone; the file calls then run without it on the type's regular files
+     * and directories. A type that sets it sets `file_locked` and
+     * `name_cache`. */
+    int reads_unlocked;
 };
 
 /* One table entry. `covered` is the held node of the directory this mount
@@ -536,6 +544,23 @@ void vfs_init(void);
 int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
                 char *leaf, uint32_t leafcap);
 
+/* `vfs_resolve_cached`'s answer for a path the name cache cannot finish. */
+#define VFS_CACHED_MISS 1
+
+/**
+ * Resolve the absolute path `path` as `vfs_resolve` does, from the name
+ * cache alone and without the big lock: 0 with `out` held and its mount
+ * entered, on a type that sets `name_cache`; -ENOENT for a name the cache
+ * holds as absent; or VFS_CACHED_MISS with nothing taken, for a path the
+ * caller resolves again under the big lock. `flags` takes VFS_WALK_NOFOLLOW,
+ * VFS_WALK_REAL_IDS and VFS_WALK_LOCK; any other is a miss. With `entry` not
+ * NULL a regular file at the last name has its directory entry recorded
+ * there, as `vfs_resolve_entry` records it, and a change of names that the
+ * walk may have raced makes it a miss (`vfs_name_capture_at`); `*entry` is
+ * NULL on every other answer.
+ */
+int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out, struct vfs_name **entry);
+
 /**
  * Resolve `path` from the caller's root, as `vfs_resolve` does with no
  * `start`, and put in `real`, of VFS_PATH_MAX bytes, the path the walk took
@@ -660,6 +685,10 @@ int vfs_mount_slots(void);
 /** The table entry at `idx` (0..vfs_mount_slots()-1), or NULL when free; for
  * the readers of the whole table, /proc/mounts among them. */
 struct vfs_mount *vfs_mount_at(int idx);
+
+/** The slot of mount `m` in the table, read under the table's lock, so a
+ * caller without the big lock may ask; -1 when `m` has none. */
+int vfs_mount_index(const struct vfs_mount *m);
 
 /* The mount namespaces' views of the table (vfs_ns.c). */
 

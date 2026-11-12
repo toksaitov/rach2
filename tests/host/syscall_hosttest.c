@@ -242,6 +242,13 @@ void proc_timer_update(process_t *p)
     (void)p;
 }
 
+/** Set the real-time timer as the kernel does, without a timer list. */
+void proc_alarm_set(process_t *p, uint64_t tick, uint64_t interval)
+{
+    p->alarm_tick = tick;
+    p->alarm_interval = tick != 0 ? interval : 0;
+}
+
 /**
  * Take the interrupt mask, as the clock read, the sleep and the timer do. With
  * `tick_at_save` armed, a tick comes in the moment before the mask, as the

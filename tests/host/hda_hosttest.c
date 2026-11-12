@@ -62,6 +62,12 @@ static int clock_stopped; /* the wall clock does not advance */
 /* The interrupt flag kirq_save and kirq_restore keep; the delays made and
  * those made with interrupts off; the reads of ICS with interrupts on. */
 static int irqs_on = 1;
+/* INTSTS's reads, those made under the stream lock, and the verbs sent
+ * under it, which none should be. */
+static unsigned intsts_reads, intsts_locked, verbs_stream_locked;
+/* The stream mutex's takes, which every operation of hda_driver that
+ * changes the device makes once. */
+static unsigned mutex_takes;
 static unsigned delays, delays_irqs_off, ics_reads_irqs_on;
 static int refuse_alloc; /* kmalloc fails */
 extern void *malloc(unsigned long size);
@@ -155,6 +161,8 @@ static uint32_t model_verb(uint32_t command)
     unsigned offset = verb & 255;
 
     verbs++;
+    if (stream_lock.locked)
+        verbs_stream_locked++;
     if (log_count < VERB_LOG) {
         log_command[log_count] = command & 0xFFFFFFF;
         log_clock[log_count++] = clock_value;
@@ -183,6 +191,11 @@ uint32_t hda_test_read(uint32_t offset, int bits)
     int i;
 
     mmio_reads++;
+    if (offset == HDA_INTSTS) {
+        intsts_reads++;
+        if (stream_lock.locked)
+            intsts_locked++;
+    }
     if (offset == HDA_WALCLK) {
         clock_reads++;
         return clock_stopped || dma_model ? clock_value : (clock_value += 24000);
@@ -855,13 +868,58 @@ static void tick(void)
 }
 
 /** Run the services asked for since the last call, as khda does once the
- * host test stands for it (hda_test_threaded). */
+ * host test stands for it (hda_test_threaded): take them under the stream
+ * lock, and serve under the stream mutex. */
 static void run_khda(void)
 {
+    uint32_t flags = spin_lock_irqsave(&stream_lock);
     uint32_t wanted = service_wanted;
 
     service_wanted = 0;
+    spin_unlock_irqrestore(&stream_lock, flags);
+    mutex_lock(&stream_mutex);
     hda_serve(wanted);
+    mutex_unlock(&stream_mutex);
+}
+
+/**
+ * The locks of 84-6c: the interrupt reads INTSTS under the stream lock and
+ * leaves it free, and no verb is sent under it; each operation of
+ * hda_driver that changes the device takes the stream mutex once and gives
+ * it back, while the readers, called with interrupts off, take none; and
+ * the delay counts what the resampler held at the last fill (play_held).
+ */
+static void row_locks(void)
+{
+    unsigned next = 1, takes;
+    int level;
+
+    row = "locks";
+    model_start(1u << 6, 44100, AUDIO_S16LE, 2);
+    write_blocks(&next);
+    model_play(25000);
+    intsts_reads = intsts_locked = 0;
+    hda_test_write(HDA_INTSTS, 1u << output_stream_index, 32);
+    hda_irq_handler(NULL);
+    check(intsts_reads == 1 && intsts_locked == 1 && !stream_lock.locked,
+          "the interrupt reads INTSTS under the stream lock and lets it go");
+    check(play_held == resample_held(&hda_rs),
+          "the delay's count of the resampler is the fill's last");
+    takes = mutex_takes;
+    irqs_on = 0;
+    (void)hda_driver.is_playing();
+    (void)hda_driver.get_volume();
+    (void)hda_driver.delay(NULL);
+    irqs_on = 1;
+    check(mutex_takes == takes && !stream_lock.locked,
+          "the readers take no mutex with interrupts off");
+    level = hda_driver.get_volume();
+    hda_driver.set_volume(level > 10 ? level - 10 : level + 10);
+    hda_driver.set_volume(level);
+    hda_driver.stop();
+    check(mutex_takes == takes + 3 && !stream_mutex.owner,
+          "each operation that changes the device takes the stream mutex once");
+    check(verbs_stream_locked == 0, "no verb is sent under the stream lock");
 }
 
 /**
@@ -2681,6 +2739,7 @@ int main(void)
     row_writer_stall();
     row_missed();
     row_play_gate();
+    row_locks();
     row_play_early();
     row_play_refilled();
     row_play_delayed();
@@ -2770,6 +2829,28 @@ void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
 void spin_unlock(struct spinlock *lock)
 {
     lock->locked = 0;
+}
+/** Make `m` a free mutex. */
+void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key *key)
+{
+    (void)name;
+    (void)key;
+    m->owner = NULL;
+}
+/** The model has one thread, which never waits: a mutex taken is free, and
+ * it is never taken in an interrupt or under a spinlock. */
+void mutex_lock(struct mutex *m)
+{
+    check(!m->owner, "a mutex taken is free");
+    check(irqs_on, "a mutex is taken with interrupts on");
+    m->owner = m;
+    mutex_takes++;
+}
+/** Give `m` back. */
+void mutex_unlock(struct mutex *m)
+{
+    check(m->owner == m, "a mutex given back is held");
+    m->owner = NULL;
 }
 /** Model the speaker's ports: 0x61, and channel 2's count, low byte first. */
 void outb(uint16_t port, uint8_t val)
@@ -2885,6 +2966,14 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     (void)vector;
     (void)handler;
     (void)name;
+}
+/** The flags a handler runs with: the driver's carries ISR_UNLOCKED. */
+static unsigned isr_flags;
+void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flags)
+{
+    (void)vector;
+    (void)handler;
+    isr_flags = flags;
 }
 /** MMIO accesses use the test hooks. */
 uintptr_t map_mmio(uintptr_t addr, size_t size)

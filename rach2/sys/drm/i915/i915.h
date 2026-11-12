@@ -765,6 +765,9 @@ struct drm_i915_gem_object {
      * and until a trim finds it idle; for an object of the pool alone. */
     struct drm_i915_gem_object *pool_next;
     uint64_t pool_idle;
+    /* The next object on the device's `gem.freed`, once its last put came
+     * under a holder's GEM lock. */
+    struct drm_i915_gem_object *free_next;
 };
 
 /* Whether `obj` was made by GEM_USERPTR. */
@@ -812,6 +815,13 @@ struct i915_gem {
      * holder (i915_gem_userptr.c), and the spinlock over that list. */
     struct drm_i915_gem_object *userptr_pending;
     struct spinlock userptr_lock;
+    /* The objects whose last put came under a holder's GEM lock, by
+     * `free_next`, which the holder that took the lock frees as it lets it
+     * go (`i915_gem_unlock`), as Linux's free list and worker; and whether
+     * the holder may not give way, the shrinker, whose frees run at once.
+     * Both are the GEM lock's. */
+    struct drm_i915_gem_object *freed;
+    uint8_t no_yield;
     struct i915_vma *bound;
     struct i915_vma *lru_head;
     struct i915_vma *lru_tail;
@@ -2528,10 +2538,10 @@ void i915_vma_flush_writes(struct i915_vma *vma);
  * sleep waits with `i915_gem_object_wait_idle` first, where Linux's
  * unbind waits itself. Never sleeps. `may_yield` is the clear's
  * (`i915_ggtt_clear_range`): set by a caller that may sleep, the ioctls,
- * eviction and an object's free that took the GEM lock itself, and clear
- * in an MMU notifier's revoke, a free under its caller's GEM lock, an
- * unpin and the shrinker, as Linux's shrinker and notifier never reach a
- * cond_resched.
+ * eviction and an object's free by the holder that took the GEM lock, for
+ * the free or before it (`gem.freed`), and clear in an MMU notifier's
+ * revoke, an unpin, the shrinker and a free under it, as Linux's shrinker
+ * and notifier never reach a cond_resched.
  *
  * @return 0, -EAGAIN while it is pinned, or -EBUSY while its object is
  *         active.
@@ -2622,8 +2632,13 @@ uint32_t i915_gem_shrink(struct drm_i915_private *i915, uint32_t want);
  * already: whether it was taken, for `i915_gem_unlock`. May sleep. */
 int i915_gem_lock(struct drm_i915_private *i915);
 /** Give back the GEM lock `i915_gem_lock` took when `taken` says so,
- * after the userptr invalidations that waited for it. */
+ * after the userptr invalidations that waited for it and the frees of
+ * `gem.freed`, which give way. The caller may sleep. */
 void i915_gem_unlock(struct drm_i915_private *i915, int taken);
+/** Give back the GEM lock as `i915_gem_unlock` does but leave `gem.freed`
+ * to the lock's next taker, for a holder that may not give way: an MMU
+ * notifier's callback and the shrinker, which only tried the lock. */
+void i915_gem_unlock_atomic(struct drm_i915_private *i915, int taken);
 /** Revoke the bindings and frames of each userptr object whose
  * invalidation found the GEM lock held, with the lock held. */
 void i915_gem_userptr_flush(struct drm_i915_private *i915);

@@ -1,6 +1,7 @@
 /*
  * pmu.c: the performance counter that raises the hard-lockup detector's NMI
- * on the PC, Intel's architectural monitor or AMD's core counters.
+ * on the PC, Intel's fixed counter 1 or general counter 0, or AMD's core
+ * counter 2 on family 15h and core counter 0 on the others.
  */
 #include "../../platform.h"
 
@@ -14,19 +15,29 @@
 
 /* Intel's architectural performance monitor (SDM volume 3, chapter 21):
  * general counter 0 and its event select, the full-width alias of the
- * counter, the capabilities that say whether that alias exists, and the
- * global control, status and overflow-clear registers of version 2. */
+ * counter, the capabilities that say whether that alias exists, fixed
+ * counter 1 and the fixed counters' control, and the global control,
+ * status and overflow-clear registers of version 2. */
 #define IA32_PMC0                 0x0C1u
 #define IA32_PERFEVTSEL0          0x186u
 #define IA32_PERF_CAPABILITIES    0x345u
 #define IA32_A_PMC0               0x4C1u
+#define IA32_FIXED_CTR1           0x30Au
+#define IA32_FIXED_CTR_CTRL       0x38Du
 #define IA32_PERF_GLOBAL_STATUS   0x38Eu
 #define IA32_PERF_GLOBAL_CTRL     0x38Fu
 #define IA32_PERF_GLOBAL_OVF_CTRL 0x390u
 #define PERF_CAP_FW_WRITE         (1u << 13)
 
+/* Fixed counter 1's field of IA32_FIXED_CTR_CTRL: counting in the kernel
+ * and in user mode, and the interrupt on overflow; and its bit in the
+ * global registers. */
+#define FIXED1_COUNT  (0x3u << 4)
+#define FIXED1_WATCH  (0xBu << 4)
+#define FIXED1_GLOBAL ((uint64_t)1 << 33)
+
 /* AMD's core counter 0 and its control (BKDG for family 15h, and Linux's
- * MSR_F15H_PERF_CTL and MSR_F15H_PERF_CTR). */
+ * MSR_F15H_PERF_CTL and MSR_F15H_PERF_CTR); counter i's are 2i above. */
 #define AMD_PERF_CTL0 0xC0010200u
 #define AMD_PERF_CTR0 0xC0010201u
 
@@ -46,13 +57,17 @@
 enum pmu_kind { PMU_NONE, PMU_INTEL, PMU_AMD };
 
 /* What `platform_pmu_probe` found: whether it ran and found a counter, the
- * kind, the architectural version (Intel's), the number of general
+ * kind, whether the counter is Intel's fixed counter 1 and not a general
+ * counter, the general counter's index otherwise (2 on AMD's family 15h,
+ * 0 elsewhere), the architectural version (Intel's), the number of general
  * counters, the counter's width in bits, the register a write of the count
  * goes to, the longest period one load counts, the processor's clock, and
  * the window in which an NMI of no known source is taken for the counter's
  * late one (`platform_pmu_late`), 100 ms in TSC counts. */
 static int probed, found;
 static enum pmu_kind kind;
+static int fixed;
+static uint32_t counter_index;
 static uint32_t version;
 static uint32_t counters;
 static uint32_t width;
@@ -88,16 +103,50 @@ static uint64_t rdmsr64(uint32_t msr)
     return ((uint64_t)hi << 32) | lo;
 }
 
-/** Counter 0's event-select register. */
+/** The general counter's event-select register. */
 static uint32_t evtsel_msr(void)
 {
-    return kind == PMU_AMD ? AMD_PERF_CTL0 : IA32_PERFEVTSEL0;
+    return kind == PMU_AMD ? AMD_PERF_CTL0 + 2u * counter_index : IA32_PERFEVTSEL0;
 }
 
 /** The unhalted core-cycles event, for the event-select register. */
 static uint32_t event(void)
 {
     return kind == PMU_AMD ? AMD_CYCLES : INTEL_CORE_CYCLES;
+}
+
+/** The counter's register read for its count. */
+static uint32_t read_msr(void)
+{
+    if (fixed) {
+        return IA32_FIXED_CTR1;
+    }
+    return kind == PMU_AMD ? AMD_PERF_CTR0 + 2u * counter_index : IA32_PMC0;
+}
+
+/** The counter's bit in Intel's global control, status and overflow
+ * clear. */
+static uint64_t global_bit(void)
+{
+    return fixed ? FIXED1_GLOBAL : 1u;
+}
+
+/** Start the counter counting unhalted cycles in both modes, with its
+ * interrupt on overflow when `irq`. The fixed counters' control holds the
+ * detector's field alone, as the general counter's select holds its event. */
+static void start(int irq)
+{
+    if (fixed) {
+        wrmsr64(IA32_FIXED_CTR_CTRL, irq ? FIXED1_WATCH : FIXED1_COUNT);
+    } else {
+        wrmsr64(evtsel_msr(), irq ? EVTSEL_WATCH(event()) : event() | EVTSEL_COUNT);
+    }
+}
+
+/** Stop the counter, and with it every fixed counter on Intel's. */
+static void stop(void)
+{
+    wrmsr64(fixed ? IA32_FIXED_CTR_CTRL : evtsel_msr(), 0);
 }
 
 /** The mask of the counter's `width` bits. */
@@ -135,29 +184,32 @@ static int vendor_is(const uint32_t vendor[3], const char *name)
 }
 
 /**
- * Stop every general counter but counter 0, and on Intel's version 2 enable
- * counter 0 alone in the global control. The kernel owns the counters, as
- * Linux's PMU driver does from its reset (arch/x86/events/intel/core.c,
- * `intel_pmu_reset`, and AMD's six core counters of
- * arch/x86/events/amd/core.c, `amd_core_pmu_init`): a counter the firmware
- * left counting with its interrupt on would raise an NMI through the same
- * entry that is not the watchdog's, and the NMI handler stops the machine
- * on one it cannot place.
+ * Stop every general counter but the detector's, and on Intel's version 2
+ * enable the detector's counter alone in the global control. The kernel
+ * owns the counters, as Linux's PMU driver does from its reset
+ * (arch/x86/events/intel/core.c, `intel_pmu_reset`, and AMD's six core
+ * counters of arch/x86/events/amd/core.c, `amd_core_pmu_init`): a counter
+ * the firmware left counting with its interrupt on would raise an NMI
+ * through the same entry that is not the watchdog's, and the NMI handler
+ * stops the machine on one it cannot place. The other fixed counters stop
+ * with the detector's `start` and `stop`, which write their whole control.
  */
 static void own_counters(void)
 {
     uint32_t i;
 
-    for (i = 1; i < counters; i++) {
-        wrmsr64(kind == PMU_AMD ? AMD_PERF_CTL0 + 2u * i : IA32_PERFEVTSEL0 + i, 0);
+    for (i = 0; i < counters; i++) {
+        if (fixed || i != counter_index) {
+            wrmsr64(kind == PMU_AMD ? AMD_PERF_CTL0 + 2u * i : IA32_PERFEVTSEL0 + i, 0);
+        }
     }
     if (kind == PMU_INTEL && version >= 2) {
-        wrmsr64(IA32_PERF_GLOBAL_CTRL, 1u);
+        wrmsr64(IA32_PERF_GLOBAL_CTRL, global_bit());
     }
 }
 
 /**
- * Whether counter 0, counting cycles without an interrupt, moves over a
+ * Whether the counter, counting cycles without an interrupt, moves over a
  * short wait: a hypervisor may list a PMU whose registers take writes and
  * count nothing. The counter is stopped again either way.
  */
@@ -165,15 +217,36 @@ static int counts(void)
 {
     uint64_t a, b;
 
-    wrmsr64(evtsel_msr(), 0);
+    stop();
     load_count(max_period);
     own_counters();
-    wrmsr64(evtsel_msr(), event() | EVTSEL_COUNT);
-    a = rdmsr64(kind == PMU_AMD ? AMD_PERF_CTR0 : IA32_PMC0) & width_mask();
+    start(0);
+    a = rdmsr64(read_msr()) & width_mask();
     k_udelay(100);
-    b = rdmsr64(kind == PMU_AMD ? AMD_PERF_CTR0 : IA32_PMC0) & width_mask();
-    wrmsr64(evtsel_msr(), 0);
+    b = rdmsr64(read_msr()) & width_mask();
+    stop();
     return a != b;
+}
+
+/**
+ * Whether Intel's fixed counter 1, which counts unhalted core cycles, is
+ * there, by `cpuid` leaf 0xA's ECX and EDX, `c` and `d`, as Linux's
+ * `intel_pmu_init` counts the fixed counters (arch/x86/events/intel/
+ * core.c:6536 and 6561-6567): version 5 lists them in a mask, and versions
+ * 2 to 4 give their number, at least three outside a hypervisor.
+ */
+static int has_fixed1(uint32_t c, uint32_t d)
+{
+    uint32_t ecx1 = 0;
+
+    if (version >= 5) {
+        return (c & 2u) != 0;
+    }
+    if (version < 2) {
+        return 0;
+    }
+    kcpu_id(1, NULL, NULL, &ecx1, NULL);
+    return (d & 0x1Fu) >= 2 || (ecx1 & (1u << 31)) == 0;
 }
 
 /**
@@ -194,16 +267,61 @@ static uint64_t measure_hz(void)
 }
 
 /**
- * Linux takes general counter 0's cycles event for its watchdog
- * (kernel/watchdog_perf.c:86, `wd_hw_attr`) and the period as cycles at
- * `cpu_khz` (arch/x86/kernel/apic/hw_nmi.c:27); x86's PMU drivers refuse a
- * processor without the architectural monitor on Intel
- * (arch/x86/events/intel/core.c, `intel_pmu_init`) and use the core
- * counters on AMD (arch/x86/events/amd/core.c, `amd_core_pmu_init`).
+ * Find Intel's architectural monitor by `cpuid` leaf 0xA, and its counter
+ * for the detector: fixed counter 1 where `has_fixed1` finds it, general
+ * counter 0 otherwise. Leaves `kind` PMU_NONE without a cycles counter.
+ */
+static void probe_intel(void)
+{
+    uint32_t a, b, c, d;
+
+    kcpu_id(0xAu, &a, &b, &c, &d);
+    version = a & 0xFFu;
+    width = (a >> 16) & 0xFFu;
+    /* EBX bit 0 set says the core-cycles event is absent, and the event
+     * mask is as long as EAX bits 31-24 say. */
+    if (version < 1 || ((a >> 8) & 0xFFu) < 1 || width < 32 || ((a >> 24) & 0xFFu) < 1 ||
+        (b & 1u) != 0) {
+        return;
+    }
+    kind = PMU_INTEL;
+    counters = (a >> 8) & 0xFFu;
+    fixed = has_fixed1(c, d);
+    count_msr = fixed ? IA32_FIXED_CTR1 : IA32_PMC0;
+    max_period = 0x7FFFFFFFu;
+    kcpu_id(1, NULL, NULL, &c, NULL);
+    /* With full-width writes Linux loads every counter, the fixed ones too,
+     * with up to half the width (arch/x86/events/intel/core.c,
+     * `intel_pmu_init`). */
+    if ((c & (1u << 15)) != 0 && version >= 2 &&
+        (rdmsr64(IA32_PERF_CAPABILITIES) & PERF_CAP_FW_WRITE) != 0) {
+        count_msr = fixed ? IA32_FIXED_CTR1 : IA32_A_PMC0;
+        max_period = ((uint64_t)1 << (width - 1)) - 1u;
+    }
+}
+
+/**
+ * Linux takes the cycles event for its watchdog (kernel/watchdog_perf.c:86,
+ * `wd_hw_attr`) and the period as cycles at `cpu_khz`
+ * (arch/x86/kernel/apic/hw_nmi.c:27); x86's PMU drivers refuse a processor
+ * without the architectural monitor on Intel (arch/x86/events/intel/core.c,
+ * `intel_pmu_init`) and use the core counters on AMD
+ * (arch/x86/events/amd/core.c, `amd_core_pmu_init`). Intel's cycles event,
+ * 0x3C, may run on fixed counter 1 or any general counter
+ * (arch/x86/events/intel/core.c:506 and 6353-6357), and the scheduler
+ * takes the fixed counter first (arch/x86/events/core.c:880-892), which
+ * leaves every general counter to the rest; without it, and on AMD,
+ * the event takes counter 0. On AMD's family 15h it takes core counter 2:
+ * there the cycles event, 0x76, may use counters 0 to 2, and events 0x08F,
+ * 0x187 and 0x188 counter 0 alone (arch/x86/events/amd/core.c:1153-1154
+ * and 1210-1223), which Linux's scheduler gives a guest's event by moving
+ * the watchdog (arch/x86/events/core.c:1085-1086). Every event that may use
+ * counter 2 may also use counter 0 or 1, so a guest's events find the
+ * counters free that Linux's would.
  */
 int platform_pmu_probe(void)
 {
-    uint32_t a, b, c, d, vendor[3];
+    uint32_t a, c, vendor[3];
 
     if (probed) {
         return found;
@@ -216,33 +334,19 @@ int platform_pmu_probe(void)
     }
     kcpu_id(0, &a, &vendor[0], &vendor[2], &vendor[1]);
     if (vendor_is(vendor, "GenuineIntel") && a >= 0xAu) {
-        kcpu_id(0xAu, &a, &b, &c, &d);
-        version = a & 0xFFu;
-        width = (a >> 16) & 0xFFu;
-        /* EBX bit 0 set says the core-cycles event is absent, and the
-         * event mask is as long as EAX bits 31-24 say. */
-        if (version >= 1 && ((a >> 8) & 0xFFu) >= 1 && width >= 32 && ((a >> 24) & 0xFFu) >= 1 &&
-            (b & 1u) == 0) {
-            kind = PMU_INTEL;
-            counters = (a >> 8) & 0xFFu;
-            count_msr = IA32_PMC0;
-            max_period = 0x7FFFFFFFu;
-            kcpu_id(1, NULL, NULL, &c, NULL);
-            if ((c & (1u << 15)) != 0 && version >= 2 &&
-                (rdmsr64(IA32_PERF_CAPABILITIES) & PERF_CAP_FW_WRITE) != 0) {
-                count_msr = IA32_A_PMC0;
-                max_period = ((uint64_t)1 << (width - 1)) - 1u;
-            }
-        }
+        probe_intel();
     } else if (vendor_is(vendor, "AuthenticAMD") || vendor_is(vendor, "HygonGenuine")) {
         kcpu_id(0x80000000u, &a, NULL, NULL, NULL);
         if (a >= 0x80000001u) {
             kcpu_id(0x80000001u, NULL, NULL, &c, NULL);
             if ((c & (1u << 23)) != 0) {
+                kcpu_id(1, &a, NULL, NULL, NULL);
                 kind = PMU_AMD;
                 counters = 6;
+                /* Family 15h: base family 0xF, extended family 6. */
+                counter_index = (a & 0x0FF00F00u) == 0x00600F00u ? 2u : 0u;
                 width = 48;
-                count_msr = AMD_PERF_CTR0;
+                count_msr = AMD_PERF_CTR0 + 2u * counter_index;
                 max_period = ((uint64_t)1 << 47) - 1u;
             }
         }
@@ -253,7 +357,8 @@ int platform_pmu_probe(void)
     }
     if (!counts()) {
         kind = PMU_NONE;
-        klog(KLOG_INFO, "nmi_watchdog", "no counter: counter 0 does not count");
+        klog(KLOG_INFO, "nmi_watchdog", "no counter: %s %u does not count",
+             fixed ? "fixed counter" : "counter", fixed ? 1u : counter_index);
         return 0;
     }
     if (cpu_hz == 0) {
@@ -263,8 +368,9 @@ int platform_pmu_probe(void)
     }
     found = 1;
     late_window = tick_div(cpu_hz, 10u, (uint32_t *)0);
-    klog(KLOG_INFO, "nmi_watchdog", "counter: %s version %u, %u bits, %u MHz",
-         kind == PMU_AMD ? "amd core" : "intel arch", version, width,
+    klog(KLOG_INFO, "nmi_watchdog", "counter: %s version %u, %s %u, %u bits, %u MHz",
+         kind == PMU_AMD ? "amd core" : "intel arch", version, fixed ? "fixed counter" : "counter",
+         fixed ? 1u : counter_index, width,
          (unsigned int)tick_div(tick_div(cpu_hz, 1000u, (uint32_t *)0), 1000u, (uint32_t *)0));
     return 1;
 }
@@ -282,19 +388,19 @@ void platform_pmu_enable(uint64_t cycles)
         return;
     }
     open_window(me);
-    wrmsr64(evtsel_msr(), 0);
+    stop();
     pmc[me].period = cycles;
     pmc[me].left = cycles;
     pmc[me].chunk = cycles < max_period ? cycles : max_period;
     load_count(pmc[me].chunk);
     if (kind == PMU_INTEL && version >= 2) {
-        wrmsr64(IA32_PERF_GLOBAL_OVF_CTRL, 1u);
+        wrmsr64(IA32_PERF_GLOBAL_OVF_CTRL, global_bit());
     }
     own_counters();
     /* On before the unmask, so that an NMI after it unmasks it again. */
     pmc[me].on = 1;
     lapic_set_lvtpc(LAPIC_LVT_NMI);
-    wrmsr64(evtsel_msr(), EVTSEL_WATCH(event()));
+    start(1);
 }
 
 void platform_pmu_disable(void)
@@ -306,10 +412,10 @@ void platform_pmu_disable(void)
     }
     open_window(me);
     pmc[me].on = 0;
-    wrmsr64(evtsel_msr(), 0);
+    stop();
     if (kind == PMU_INTEL && version >= 2) {
         wrmsr64(IA32_PERF_GLOBAL_CTRL, 0);
-        wrmsr64(IA32_PERF_GLOBAL_OVF_CTRL, 1u);
+        wrmsr64(IA32_PERF_GLOBAL_OVF_CTRL, global_bit());
     }
     lapic_set_lvtpc(LAPIC_LVT_MASKED | LAPIC_LVT_NMI);
 }
@@ -343,12 +449,12 @@ int platform_pmu_overflow(int *due)
         return 0;
     }
     if (kind == PMU_INTEL && version >= 2) {
-        hit = (rdmsr64(IA32_PERF_GLOBAL_STATUS) & 1u) != 0;
+        hit = (rdmsr64(IA32_PERF_GLOBAL_STATUS) & global_bit()) != 0;
         if (hit) {
-            wrmsr64(IA32_PERF_GLOBAL_OVF_CTRL, 1u);
+            wrmsr64(IA32_PERF_GLOBAL_OVF_CTRL, global_bit());
         }
     } else {
-        count = rdmsr64(kind == PMU_AMD ? AMD_PERF_CTR0 : IA32_PMC0) & width_mask();
+        count = rdmsr64(read_msr()) & width_mask();
         hit = (count & ((uint64_t)1 << (width - 1))) == 0;
     }
     if (hit) {

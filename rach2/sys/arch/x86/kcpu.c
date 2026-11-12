@@ -10,6 +10,8 @@ void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
     kcpu_id_sub(leaf, 0, a, b, c, d);
 }
 
+/* A host test gives its own `cpuid`, `rdmsr` and `wrmsr`. */
+#ifndef RACH2_HOSTTEST
 void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
 {
     uint32_t ra = leaf, rb = 0, rc = sub, rd = 0;
@@ -28,6 +30,8 @@ void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t
         *d = rd;
     }
 }
+
+#endif /* RACH2_HOSTTEST */
 
 int kcpu_msr_present(void)
 {
@@ -53,6 +57,7 @@ int kcpu_apic_present(void)
     return (d & (1u << 9)) != 0;
 }
 
+#ifndef RACH2_HOSTTEST
 void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi)
 {
     uint32_t l = 0, h = 0;
@@ -70,6 +75,7 @@ void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi)
 {
     __asm__ __volatile__("wrmsr" : : "c"(msr), "a"(lo), "d"(hi));
 }
+#endif /* RACH2_HOSTTEST */
 
 int kcpu_x2apic_present(void)
 {
@@ -81,6 +87,27 @@ int kcpu_x2apic_present(void)
     }
     kcpu_id(1, 0, 0, &c, 0);
     return (c & (1u << 21)) != 0;
+}
+
+/** Leaf 0xB describes a level when subleaf 0's EBX counts its processors,
+ * as Linux's topo_subleaf asks (arch/x86/kernel/cpu/topology_ext.c, line
+ * 75); its EDX is then the x2APIC identity whole (SDM, CPUID leaf 0BH). */
+uint32_t kcpu_x2apic_id(void)
+{
+    uint32_t a = 0, b = 0, d = 0;
+
+    kcpu_id(0, &a, 0, 0, 0);
+    if (a >= 0xBu) {
+        kcpu_id_sub(0xBu, 0, 0, &b, 0, &d);
+        if ((b & 0xFFFFu) != 0) {
+            return d;
+        }
+    }
+    if (a < 1) {
+        return 0;
+    }
+    kcpu_id(1, 0, &b, 0, 0);
+    return b >> 24;
 }
 
 /**

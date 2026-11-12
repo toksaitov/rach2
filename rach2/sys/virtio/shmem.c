@@ -115,7 +115,10 @@ struct vshm {
     struct vshm *gone_next; /* on vshm_kept, while `gone`; under vshm_lock */
     int gone;               /* detached with heap pages objects still hold;
                                under vshm_lock */
-    uintptr_t window;       /* where the window was, while `gone` */
+    uintptr_t window;       /* where the window is or was mapped: set at
+                               the attach and never cleared, so that a
+                               give-back's range check holds through the
+                               detach and after it */
     struct spinlock heap_lock;
     /* The driver's interrupts, from virtio_ready to virtio_teardown: while
      * `irq_on`, a ring of the queue's doorbell, which sets `irq_due`, has
@@ -768,7 +771,7 @@ static void vs_dma_free(struct virtio_dev *d, void *p, uint32_t bytes)
     uint32_t n = bytes / VGS_PAGE + (bytes % VGS_PAGE != 0), i, first, flags;
 
     flags = spin_lock_irqsave(&vshm_lock);
-    base = vs->gone ? vs->window : (uintptr_t)vs->base;
+    base = vs->window;
     if ((vs->attached || vs->gone) && at >= base + vs->l.heap_off && at < base + vs->size) {
         first = (uint32_t)((at - base - vs->l.heap_off) / VGS_PAGE);
         if (vs->attached) {
@@ -1335,7 +1338,9 @@ static void vshm_unreserve(struct vshm *vs)
  * but for giving back the heap pages objects still hold: under vshm_lock, the
  * record leaves `vshm_marked` and its heap, with what other records hold
  * cleared from it, either joins `vshm_kept` or has its tables freed, so a
- * give-back finds it attached or kept, never between.
+ * give-back finds it attached or kept, never between. A give-back checks its
+ * range against `window`, which stays set, so one that comes after the window
+ * is unmapped and before `attached` clears still reaches the heap.
  */
 static void vshm_release(struct vshm *vs)
 {
@@ -1358,7 +1363,6 @@ static void vshm_release(struct vshm *vs)
     }
     if (vs->base) {
         mmio_unmap((uintptr_t)vs->base, (size_t)vs->npages * VGS_PAGE);
-        vs->window = (uintptr_t)vs->base;
         vs->base = NULL;
     }
     for (i = 0; vs->frames && i < vs->npages; i++) {
@@ -1609,6 +1613,7 @@ static int32_t vshm_take_region(struct vshm *vs, uintptr_t *frames, uint32_t npa
     vs->frames = frames;
     vs->npages = npages;
     vs->base = base;
+    vs->window = (uintptr_t)base;
     vs->size = (uint64_t)npages * VGS_PAGE;
     if (vgs_layout_make(&l, vs->size, VSHM_RING_LEN) != VGS_OK) {
         return -EINVAL;
@@ -1691,30 +1696,6 @@ static void vshm_info(const struct vshm *vs, struct vgs_info *out)
     out->revoked = vs->revoked;
 }
 
-#ifndef RACH2_HOSTTEST
-/**
- * The caller's descriptor `fd` as a region: a tmpfs file, a memfd, sealed
- * against shrinking, whose size is a power of two the transport takes.
- * Returns its memory, or NULL with `*err` -EBADF or -EINVAL.
- */
-static struct shmem *vshm_region_of(int32_t fd, int32_t *err)
-{
-    fd_entry_t *e = fd_get(current_proc->fds, fd);
-    struct shmem *sh;
-
-    *err = -EBADF;
-    if (!e || (e->flags & FD_FLAG_PATH) || !e->ofd || !e->ofd->vmnt ||
-        e->ofd->vmnt->type != &vfs_tmpfs_type || !(sh = tmpfs_shmem(e->ofd->vnode))) {
-        return NULL;
-    }
-    *err = -EINVAL;
-    if (!(tmpfs_seals(e->ofd->vnode) & TMPFS_SEAL_SHRINK) || sh->size < VGS_REGION_MIN ||
-        sh->size > VGS_ATTACH_MAX || (sh->size & (sh->size - 1u)) != 0) {
-        return NULL;
-    }
-    return sh;
-}
-
 /**
  * Take the caller's four doorbells of `a` into `vs`, unhooked: 0, -EBADF
  * or -EINVAL for a descriptor that is not an eventfd, or -EINVAL for an
@@ -1741,6 +1722,30 @@ static int32_t vshm_bells_get(struct vshm *vs, const struct vgs_attach *a)
         }
     }
     return rc;
+}
+
+#ifndef RACH2_HOSTTEST
+/**
+ * The caller's descriptor `fd` as a region: a tmpfs file, a memfd, sealed
+ * against shrinking, whose size is a power of two the transport takes.
+ * Returns its memory, or NULL with `*err` -EBADF or -EINVAL.
+ */
+static struct shmem *vshm_region_of(int32_t fd, int32_t *err)
+{
+    fd_entry_t *e = fd_get(current_proc->fds, fd);
+    struct shmem *sh;
+
+    *err = -EBADF;
+    if (!e || (e->flags & FD_FLAG_PATH) || !e->ofd || !e->ofd->vmnt ||
+        e->ofd->vmnt->type != &vfs_tmpfs_type || !(sh = tmpfs_shmem(e->ofd->vnode))) {
+        return NULL;
+    }
+    *err = -EINVAL;
+    if (!(tmpfs_seals(e->ofd->vnode) & TMPFS_SEAL_SHRINK) || sh->size < VGS_REGION_MIN ||
+        sh->size > VGS_ATTACH_MAX || (sh->size & (sh->size - 1u)) != 0) {
+        return NULL;
+    }
+    return sh;
 }
 
 /**

@@ -21,7 +21,6 @@
 #define MSR_IA32_SYSENTER_CS  0x174u
 #define MSR_IA32_SYSENTER_ESP 0x175u
 #define MSR_IA32_SYSENTER_EIP 0x176u
-#define MSR_IA32_DEBUGCTL     0x1D9u
 #define MSR_IA32_CR_PAT       0x277u
 #define MSR_APIC_BASE         0x01Bu
 #define MSR_EFER              0xC0000080u
@@ -288,9 +287,6 @@ typedef char vmcb_size_check[sizeof(struct vmcb) == 4096u ? 1 : -1];
 #define DR7_FIXED      0x400ull
 #define DR7_ENABLES    0xFFull
 
-#define DEBUGCTL_LBR 0x1ull
-#define DEBUGCTL_BTF 0x2ull
-
 #define DB_VECTOR  1
 #define NMI_VECTOR 2
 #define BP_VECTOR  3
@@ -365,13 +361,12 @@ struct svm_vcpu {
     void *host_fpu;
     uint8_t *msrpm; /* every MSR intercepted but those `svm_msr_filter_changed` passes */
     uintptr_t msrpm_pa;
-    int built;         /* the VMCB's lasting fields are written */
-    int cpu;           /* the processor whose ASID it holds, or -1 */
-    uint32_t asid_gen; /* the generation of its ASID there */
-    int flush;         /* drop the guest's translations at the entry */
-    int kgs_table;     /* msr.c's KERNEL_GS_BASE is the guest's, after `save` */
-    uint64_t tsc_aux;  /* the guest's TSC_AUX, from msr.c */
-    uint64_t debugctl;
+    int built;             /* the VMCB's lasting fields are written */
+    int cpu;               /* the processor whose ASID it holds, or -1 */
+    uint32_t asid_gen;     /* the generation of its ASID there */
+    int flush;             /* drop the guest's translations at the entry */
+    int kgs_table;         /* msr.c's KERNEL_GS_BASE is the guest's, after `save` */
+    uint64_t tsc_aux;      /* the guest's TSC_AUX, from msr.c */
     uint32_t inj, inj_err; /* the event the next entry injects */
     uint64_t inj_next_rip; /* NextRIP for a software event under NRIPS */
     int soft_rewind;       /* RIP was stepped past a software event without NRIPS */
@@ -1062,7 +1057,9 @@ static int svm_enter(struct kvm_vcpu *v)
         tsc_ratio[cpu] = ratio;
     }
     svm_in_run[cpu] = 1;
+    kvm_pmu_svm_enter(v);
     (void)kvm_svm_vmrun(&v->regs, s->vmcb_pa, s->host_pa);
+    kvm_pmu_svm_exit(v);
     svm_in_run[cpu] = 0;
     if (caps.rdtscp && s->tsc_aux != host_aux[cpu]) {
         msr_write(MSR_TSC_AUX, host_aux[cpu]);
@@ -1934,8 +1931,8 @@ static void kgs_sync(struct kvm_vcpu *v)
 }
 
 /** The guest's RDMSR or WRMSR of `index`, by `write`, with `*value` its
- * EDX:EAX: EFER and DEBUGCTL here, the rest through `kvm_emul_msr`. 0, with
- * a read's value in `*value`, or a KVM_MSR_* failure. */
+ * EDX:EAX: EFER here, the rest through `kvm_emul_msr`. 0, with a read's
+ * value in `*value`, or a KVM_MSR_* failure. */
 static int msr_access(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
 {
     switch (index) {
@@ -1944,14 +1941,6 @@ static int msr_access(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *v
             return set_efer(v, *value);
         }
         *value = v->sregs.efer;
-        return 0;
-    case MSR_IA32_DEBUGCTL:
-        /* No LBR and no BTF, which Linux drops with a note; any other bit
-         * is #GP. */
-        if (write) {
-            return (*value & ~(DEBUGCTL_LBR | DEBUGCTL_BTF)) ? KVM_MSR_INVAL : 0;
-        }
-        *value = sv(v)->debugctl;
         return 0;
     default:
         return kvm_emul_msr(v, index, write, value);
@@ -2228,8 +2217,9 @@ static int exit_insn(struct kvm_vcpu *v, uint64_t code)
         (void)skip(v);
         return 1;
     case EXIT_RDPMC:
-        /* No performance counter is offered, so every counter is #GP. */
-        gp(v);
+        if (kvm_pmu_rdpmc(v) == 0) {
+            (void)skip(v);
+        }
         return 1;
     case EXIT_XSETBV:
         if (kvm_emul_xsetbv(v) == 0) {

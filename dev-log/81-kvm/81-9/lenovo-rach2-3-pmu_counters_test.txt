@@ -1,0 +1,10 @@
+kvm-corpus: x86_64/pmu_counters_test: run
+kvm-corpus: x86_64/pmu_counters_test: pass: as expected
+kvm-corpus: result: pass: 1 as expected, 0 excluded
+kvm-corpus: x86_64/pmu_counters_test: run
+kvm-corpus: x86_64/pmu_counters_test: pass: as expected
+kvm-corpus: result: pass: 1 as expected, 0 excluded
+kvm-corpus: x86_64/pmu_counters_test: run
+kvm-corpus: x86_64/pmu_counters_test: pass: as expected
+kvm-corpus: result: pass: 1 as expected, 0 excluded
+1

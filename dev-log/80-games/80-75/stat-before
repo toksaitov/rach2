@@ -1,0 +1,97 @@
+cpu  60 0 1440 9204 0 0 0 0 0 0
+cpu0 35 0 1012 2082 0 0 0 0 0 0
+cpu1 15 0 193 2319 0 0 0 0 0 0
+cpu2 6 0 130 2388 0 0 0 0 0 0
+cpu3 3 0 104 2414 0 0 0 0 0 0
+intr 130970
+ctxt 0
+btime 1794447679
+processes 257
+sleeps_interrupted 0
+process_pid_steps 12191
+process_uid_steps 286
+process_timer_steps 287589
+process_timer_passes 28452
+timer_passes_late 142
+tlb_shootdowns 3
+tlb_shootdown_ipis 3
+scheduler_picks 206760
+scheduler_steps 55219
+vm_gap_steps 79390
+clock_calls 1
+vdso_tsc 1
+bkl_wait_us 3060534
+bkl_wait_max_us 110978
+bkl_wait_max_holds 1
+bkl_wait_max_hold take 0 468246
+bkl_hold_max_us 468246
+bkl_hold_max_entry take 0
+bkl_hold_sample_us 5810539
+bkl_hold_sample_pc ffffffff803bd754 ffffffff80110df6 ffffffff80112b4c ffffffff801138a0 ffffffff80113910 ffffffff8038b847 ffffffff8010a4b1 ffffffff80392a7a
+bkl_hold_max_mark 1 0
+bkl_hold_max_mark 2 0
+bkl_hold_max_mark 4 0
+bkl_hold_max_mark 8 0
+bkl_hold_max_mark 16 0
+bkl_hold_entry take 1 50522 1935817
+bkl_hold_entry vector 14 83679 697744
+bkl_hold_entry vector 32 84282 580236
+bkl_hold_entry take 0 5 468247
+bkl_hold_entry vector 50 21462 346070
+bkl_hold_entry syscall 257 8821 234428
+bkl_hold_entry vector 0 23037 97967
+bkl_hold_entry syscall 56 209 77415
+bkl_hold_entry syscall 262 2592 66120
+bkl_hold_entry syscall 0 6339 63893
+bkl_hold_entry syscall 1 2075 54505
+bkl_hold_entry syscall 20 4848 52510
+bkl_hold_entry syscall 59 271 49772
+bkl_hold_entry syscall 231 264 37460
+bkl_hold_entry syscall 318 1387 36921
+bkl_hold_entry vector 52 1053 36596
+kvm_vms 0
+kvm_vcpus 0
+kvm_slots 0
+kvm_tdp_pages 0
+kvm_run_mappings 0
+kvm_gpa_maps 0
+kvm_gpa_map_pages 0
+kvm_ioeventfd_signals 0
+kvm_irqfd_raises 0
+vfio_groups 0
+vfio_devices 0
+vfio_dma_mappings 0
+vfio_dma_pages 0
+vfio_dma_io_pages 0
+kvm_exits 0
+iommu_dma_faults 0
+iommu_irq_faults 0
+msi_vectors_free 185
+latency_timer_us 1337975
+latency_disk_us 22320
+latency_diskwait_us 0
+latency_console_us 0
+wlan_refused_tcp 0
+wlan_refused_ack 0
+wlan_refused_other 0
+wlan_rx_held 0
+wlan_rx_wait_most 25
+wlan_tx_status_lost 0
+wlan_rescue_key 0
+wlan_rescue_message4 0
+wlan_rescue_silent 0
+wlan_rescue_saved 0
+wlan_rx_old_far 0
+loopback_dropped 0
+loopback_peak 0
+loopback_delivered_tick 0
+loopback_delivered_idle 0
+loopback_delivered_call 0
+loopback_left_idle 0
+namecache_hits 26713
+namecache_misses 1273
+namecache_entries 967
+namecache_negative 178
+ext2_node_visits 7732
+procs_running 2
+procs_blocked 0

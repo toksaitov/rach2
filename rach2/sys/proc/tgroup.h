@@ -2,6 +2,7 @@
 #ifndef _TGROUP_H_
 #define _TGROUP_H_
 
+#include "../lib/spinlock.h"
 #include "../lib/kint.h"
 #include "../lib/ksignal.h"
 #include "process.h"
@@ -100,10 +101,11 @@ struct tgroup {
      * 0 when disarmed, and the ticks to arm the timer with again, 0 for a
      * single signal. A fork starts with both disarmed and an exec keeps
      * them, as on Linux. The tick handler of each processor counts them
-     * down; on the i686 a read on another processor may tear when the low
-     * word wraps, once in 2^32 ticks. */
+     * down without the big lock, under `cpu_lock`, which setitimer and
+     * getitimer take too. */
     uint64_t cpu_left[2];
     uint64_t cpu_interval[2];
+    struct spinlock cpu_lock;
     /* The OOM score adjustment /proc/<pid>/oom_score_adj reads and writes,
      * -1000 to 1000, and the least value a caller without privilege may
      * write there, which a privileged caller's write sets to what it wrote,

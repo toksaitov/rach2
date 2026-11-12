@@ -2108,8 +2108,7 @@ static void exec_take_leader(void)
     process_t *old = tg->leader;
 
     proc_exchange_pids(current_proc, old);
-    current_proc->alarm_tick = old->alarm_tick;
-    current_proc->alarm_interval = old->alarm_interval;
+    proc_alarm_set(current_proc, old->alarm_tick, old->alarm_interval);
     current_proc->jc_status = old->jc_status;
     proc_thread_fold(old);
     tg->leader = current_proc;
@@ -2117,7 +2116,6 @@ static void exec_take_leader(void)
     mm_drop(old);
     kstack_free(old->kernel_stack);
     free_process(old);
-    proc_timer_update(current_proc);
 }
 
 /**
@@ -6199,7 +6197,8 @@ int signal_return_work(const isr_params_t *tf)
         return 0;
     }
     return proc_dead_threads != 0 || p->restart_due || p->ptrace || p->sigmask_saved ||
-           p->sig_woken || p->tg->stop || (sig_pending_now() & ~p->sig_blocked) != 0;
+           p->sig_woken || p->tick_sigs || p->tg->stop ||
+           (sig_pending_now() & ~p->sig_blocked) != 0;
 }
 
 /**
