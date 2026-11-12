@@ -343,8 +343,9 @@ struct dma_fence {
     uint64_t context;
     uint64_t seqno;
     volatile uint32_t refs; /* changed atomically */
-    /* Over `signaled`, `listened`, `cbs` and `running`, as Linux's fence
-     * lock; never held while a callback or `enable_signaling` runs. */
+    /* Over `signaled`, `listened`, `cbs`, `running` and `deadline_ns`, as
+     * Linux's fence lock; never held while a callback or
+     * `enable_signaling` runs. */
     struct spinlock lock;
     volatile int signaled;
     int32_t error; /* 0, or the -errno the work failed with */
