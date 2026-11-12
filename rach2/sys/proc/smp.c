@@ -1537,6 +1537,11 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t en
     spin_unlock_irqrestore(&ipi_lock, flags);
 }
 
+/* The most pages a kernel flush drops one at a time; a longer range drops
+ * every translation, as Linux's tlb_single_page_flush_ceiling bounds
+ * `flush_tlb_kernel_range` (arch/x86/mm/tlb.c:998, 1109-1125). */
+#define KERNEL_FLUSH_PAGES 33u
+
 void smp_kernel_flush(uintptr_t start, uintptr_t end)
 {
     int me = (int)arch_cpu_id();
@@ -1545,6 +1550,9 @@ void smp_kernel_flush(uintptr_t start, uintptr_t end)
 
     if (cpus_online < 2) {
         return;
+    }
+    if (start != CPU_TLB_ALL && end - start > (uintptr_t)KERNEL_FLUSH_PAGES * PAGE_SIZE) {
+        start = CPU_TLB_ALL;
     }
     flags = spin_lock_irqsave(&ipi_lock);
     for (c = 0; c < NR_CPUS; c++) {

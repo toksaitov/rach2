@@ -364,9 +364,10 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t en
 
 /**
  * Drop the translations of the kernel pages [`start`, `end`), or every
- * translation when `start` is CPU_TLB_ALL, on each other processor online,
- * and wait until each has, as Linux's `flush_tlb_kernel_range`
- * (arch/x86/mm/tlb.c:1099-1109). The caller has changed the entries and
+ * translation when `start` is CPU_TLB_ALL or the range is longer than 33
+ * pages, on each other processor online, and wait until each has, as
+ * Linux's `flush_tlb_kernel_range` (arch/x86/mm/tlb.c:998, 1109-1125). The
+ * caller has changed the entries and
  * dropped its own translations, and frees a frame they named only after
  * this returns. A processor reads kernel memory without the big lock, at
  * its switches and idle waits among others, so the flush is made at once,

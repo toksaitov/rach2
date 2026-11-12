@@ -1,7 +1,8 @@
 /*
  * kheap_hosttest.c: the heap's size, its page runs, the reserve for large
  * ones, the guarded runs kernel stacks come from, and the two ends the
- * cache's pages and the rest are taken from, and the freed runs it keeps.
+ * cache's pages and the rest are taken from, the freed runs it keeps, and
+ * the runs given back that wait, mapped, for one flush of them all.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
@@ -191,7 +192,25 @@ void mem_shrinker_unregister(struct mem_shrinker *s)
     }
 }
 
+/* The flushes of every other processor's translations asked for. */
+static unsigned flushes;
+
+/** Count a flush. */
+void smp_kernel_flush(uintptr_t start, uintptr_t end)
+{
+    (void)start;
+    (void)end;
+    flushes++;
+}
+
 #include "../../rach2/sys/mm/kheap.c"
+
+/** Unmap the waiting runs, as an allocation that finds no room or reclaim
+ * would, before a row counts the frames out. */
+static void settle(void)
+{
+    (void)lazy_purge();
+}
 
 static int fails;
 
@@ -237,6 +256,7 @@ static void give_singles(unsigned n)
             singles[n] = 0;
         }
     }
+    settle();
 }
 
 /**
@@ -285,6 +305,7 @@ static void ends_rows(void)
     for (i = 0; i < c; i++) {
         kfree_pages(cache[i], 1);
     }
+    settle();
     CHECK(frames_out == 0, "and every frame went back after the two ends");
 }
 
@@ -319,6 +340,7 @@ static void guard_rows(void)
     CHECK(hit == 0 && !mapped[guard], "no single page is the guard, and the guard stays unmapped");
     give_singles(n);
     kfree_guarded(stack, 4);
+    settle();
     CHECK(frames_out == 0, "the guarded free gives back the four frames");
     n = take_singles();
     CHECK(n == REGION_PAGES - RESERVE_PAGES, "and the guard's page with them");
@@ -355,6 +377,7 @@ static void guard_rows(void)
           "pages with no guard below them are refused by the guarded free, the page below kept");
     kfree_pages(plain, 4);
     kfree_pages(below, 1);
+    settle();
     CHECK(frames_out == 0, "and every frame went back after the refusal");
 }
 
@@ -428,6 +451,7 @@ static void region_rows(void)
     kfree(big);
     kfree_pages(run, pages - RESERVE_PAGES - 4);
     kfree_pages(one, 1);
+    settle();
     CHECK(frames_out == 3, "and every frame but the map's went back");
     CHECK(kmalloc((size_t)KVA_HEAP_SIZE) == 0, "an object the size of the region is refused");
 }
@@ -480,17 +504,115 @@ static void kept_rows(void)
     CHECK(frames_out == base + 2, "and is served from their frames");
     frame_limit = 0xffffffffu;
     kfree_guarded(a, 2);
+    settle();
     CHECK(frames_out == base, "and every frame went back after the kept rows");
 }
 
-/** Unmap the `count` pages from `va`, a page at a time. */
-void unmap_kernel_frames(uintptr_t va, uint32_t count)
+/** Unmap the `count` pages from `va`, a page at a time: 1 when one was
+ * mapped. */
+int unmap_kernel_frames_here(uintptr_t va, uint32_t count)
 {
     uint32_t i;
+    int present = 0;
 
     for (i = 0; i < count; i++) {
+        present |= mapped[region_page(va + (uintptr_t)i * PAGE_SIZE)];
         unmap_kernel_frame(va + (uintptr_t)i * PAGE_SIZE);
     }
+    return present;
+}
+
+/** The same, with the flush of every other processor counted. */
+void unmap_kernel_frames(uintptr_t va, uint32_t count)
+{
+    if (unmap_kernel_frames_here(va, count)) {
+        smp_kernel_flush(va, va + (uintptr_t)count * PAGE_SIZE);
+    }
+}
+
+/**
+ * The runs given back that wait, mapped, for one flush of them all. A run
+ * given back keeps its mapping and its frames and asks no processor to
+ * flush, and the next run of its length takes it back. The run that finds
+ * KHEAP_LAZY_RUNS waiting unmaps them with one flush. A cache page given
+ * back is the next cache page while it waits, and a waiting page below the
+ * cache's pages is not one. An allocation with no frame left unmaps the
+ * waiting runs and is served from their frames, and a run longer than
+ * KHEAP_LAZY_PAGES goes back at once.
+ */
+static void lazy_rows(void)
+{
+    static void *ones[KHEAP_LAZY_RUNS];
+    unsigned base, was, i;
+    char *a, *b, *c, *d, *e, *f;
+
+    frames_out = 0;
+    kheap_init(SMALL_REGION);
+    base = frames_out;
+    flushes = 0;
+    a = kalloc_pages(2, 0);
+    kfree_pages(a, 2);
+    CHECK(a != 0 && mapped[region_page((uintptr_t)a)] && frames_out == base + 2 && flushes == 0,
+          "a run given back stays mapped, with its frames, and asks no flush");
+    b = kalloc_pages(2, 0);
+    CHECK(b == a && frames_out == base + 2, "and the next run of its length takes it back");
+    for (i = 0; i < KHEAP_LAZY_RUNS; i++) {
+        ones[i] = kalloc_pages(1, 0);
+    }
+    kfree_pages(b, 2);
+    for (i = 0; i < KHEAP_LAZY_RUNS; i++) {
+        kfree_pages(ones[i], 1);
+    }
+    CHECK(flushes == 1 && frames_out == base + 1 && !mapped[region_page((uintptr_t)b)],
+          "the run that finds 64 waiting unmaps them with one flush");
+    settle();
+    CHECK(flushes == 2 && frames_out == base, "and the last one with the next");
+
+    c = kalloc_cache_page();
+    kfree_pages(c, 1);
+    d = kalloc_cache_page();
+    CHECK(c != 0 && d == c, "a cache page given back is the next cache page while it waits");
+    e = kalloc_pages(1, 0);
+    kfree_pages(e, 1);
+    f = kalloc_cache_page();
+    CHECK(e != 0 && f != 0 && f != e, "and a waiting page below the cache's pages is not one");
+    kfree_pages(d, 1);
+    kfree_pages(f, 1);
+    settle();
+    CHECK(frames_out == base, "and every frame went back after the cache pages");
+
+    a = kalloc_pages(3, 0);
+    kfree_pages(a, 3);
+    frame_limit = frames_out;
+    b = kalloc_pages(2, 0);
+    CHECK(
+        b != 0 && frames_out == base + 2,
+        "an allocation with no frame left unmaps the waiting runs and is served from their frames");
+    frame_limit = 0xffffffffu;
+    kfree_pages(b, 2);
+    settle();
+
+    a = kalloc_pages(KHEAP_LAZY_PAGES + 1u, 0);
+    was = flushes;
+    kfree_pages(a, KHEAP_LAZY_PAGES + 1u);
+    CHECK(a != 0 && flushes == was + (KHEAP_LAZY_PAGES + KHEAP_UNMAP_BATCH) / KHEAP_UNMAP_BATCH &&
+              frames_out == base,
+          "a run longer than the batch goes back at once, with a flush for each 16 pages");
+}
+
+/** With room below the reserve, a large run is taken there, and the
+ * reserve stays whole. */
+static void room_rows(void)
+{
+    void *run;
+
+    kheap_init(SMALL_REGION);
+    run = kalloc_pages(KHEAP_RUN_PAGES, 0);
+    CHECK(run != 0 && (uintptr_t)run < RESERVE_BASE,
+          "a run with room below the reserve is taken below it");
+    CHECK(run_bits == 0, "and the reserve stays whole");
+    kfree_pages(run, KHEAP_RUN_PAGES);
+    settle();
 }
 
 /**
@@ -593,13 +715,7 @@ int main(void)
     CHECK(kalloc_pages_try(1, 0) == 0 && klogs == 1, "and not by the quiet form");
     give_singles(n);
 
-    /* With room below the reserve, a large run is taken there. */
-    kheap_init(SMALL_REGION);
-    runs[0] = kalloc_pages(KHEAP_RUN_PAGES, 0);
-    CHECK(runs[0] != 0 && (uintptr_t)runs[0] < RESERVE_BASE,
-          "a run with room below the reserve is taken below it");
-    CHECK(run_bits == 0, "and the reserve stays whole");
-    kfree_pages(runs[0], KHEAP_RUN_PAGES);
+    room_rows();
 
     /* A shortage of frames inside a reserve run gives the run back. */
     kheap_init(SMALL_REGION);
@@ -620,6 +736,7 @@ int main(void)
     CHECK(frames_out == 0, "and every frame went back after the shortage");
     guard_rows();
     kept_rows();
+    lazy_rows();
     ends_rows();
     size_rows();
     region_rows();
