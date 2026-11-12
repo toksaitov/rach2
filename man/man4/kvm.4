@@ -1219,7 +1219,11 @@ ended by
 .Va immediate_exit ,
 a signal or a request to stop;
 .Dv KVM_PRE_FAULT_MEMORY
-ended by a signal before it mapped anything.
+ended by a signal before it mapped anything;
+a vCPU ioctl whose wait for the vCPU, held by another process that shares
+the VM's memory and descriptors, SIGKILL ended, as Linux's
+.Fn mutex_lock_killable
+ends it.
 .El
 .Sh SEE ALSO
 .Xr eventfd 2 ,
