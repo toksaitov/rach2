@@ -19,7 +19,8 @@
 /* The bytes of the pages MAP_BLOB's answer of a page list is written to,
  * and the runs it holds after its heads: 3836, so that a blob of 64 MiB
  * whose 16,384 pages the VM's allocator scattered is listed in 5 answers,
- * where one page's 250 runs took 66 round trips through the VM. Fifteen
+ * where the 124 runs of the 2 KiB after the command took 133 round trips
+ * through the VM. Fifteen
  * pages and the request fit the shared region's chain of 16 descriptors
  * (VGS_CHAIN_MAX) even when the pages are not one block. The device writes
  * as many runs as it has and the chain holds. */
