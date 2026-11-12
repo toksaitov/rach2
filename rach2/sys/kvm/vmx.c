@@ -326,6 +326,7 @@
 #define CR4_PCE        (1ull << 8)
 #define CR4_OSFXSR     (1ull << 9)
 #define CR4_OSXMMEXCPT (1ull << 10)
+#define CR4_LA57       (1ull << 12)
 #define CR4_VMXE       (1ull << 13)
 #define CR4_FSGSBASE   (1ull << 16)
 #define CR4_PCIDE      (1ull << 17)
@@ -2445,8 +2446,8 @@ static void gp(struct kvm_vcpu *v)
 /**
  * The guest's write of `cr0` to CR0, with Linux's checks of kvm_set_cr0
  * (arch/x86/kvm/regs.c:260-302): #GP for high bits, NW without CD, PG
- * without PE, long mode's PG without PAE or with a 64-bit CS, PG cleared
- * under PCIDE, and PAE's PDPTEs that do not load. Long mode
+ * without PE, long mode's PG without PAE or with a 64-bit CS, PG cleared in
+ * 64-bit code or under PCIDE, and PAE's PDPTEs that do not load. Long mode
  * begins and ends with PG while EFER.LME is set. A change of WP alone, the
  * commonest, writes the two CR0 fields and nothing more, as Linux's
  * kvm_post_set_cr0 under EPT drops no translation for it (regs.c:218-235).
@@ -2471,7 +2472,7 @@ static int set_cr0(struct kvm_vcpu *v, uint64_t cr0)
         efer |= GEFER_LMA;
     }
     if ((old & CR0_PG) && !(cr0 & CR0_PG)) {
-        if (v->sregs.cr4 & CR4_PCIDE) {
+        if ((v->sregs.cr4 & CR4_PCIDE) || kvm_emul_mode(v) == 64) {
             gp(v);
             return -1;
         }
@@ -2504,7 +2505,7 @@ static int set_cr0(struct kvm_vcpu *v, uint64_t cr0)
 /**
  * The guest's write of `cr4` to CR4, with Linux's checks of kvm_set_cr4
  * (arch/x86/kvm/regs.c:404-432): #GP for a bit the guest's CPUID reserves,
- * PAE cleared in long mode, PCIDE set outside long mode or
+ * PAE cleared or LA57 changed in long mode, PCIDE set outside long mode or
  * with CR3's PCID nonzero, and PDPTEs that do not load. A change of PGE,
  * PCIDE, PAE, PSE or SMEP drops the guest's linear translations at the
  * entry, by INVVPID of its VPID, as the processor does and as Linux's
@@ -2522,7 +2523,7 @@ static int set_cr4(struct kvm_vcpu *v, uint64_t cr4)
     if ((cr4 & CR4_PCIDE) && !(old & CR4_PCIDE)) {
         cr3_cache(v);
     }
-    if ((cr4 & kvm_cr4_reserved(v)) || (lma && !(cr4 & CR4_PAE)) ||
+    if ((cr4 & kvm_cr4_reserved(v)) || (lma && (!(cr4 & CR4_PAE) || ((cr4 ^ old) & CR4_LA57))) ||
         ((cr4 & CR4_PCIDE) && !(old & CR4_PCIDE) && (!lma || (v->sregs.cr3 & 0xFFFu)))) {
         gp(v);
         return -1;
