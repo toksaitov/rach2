@@ -3664,6 +3664,8 @@ static uint32_t sig_irq_save(void);
 
 static void sig_irq_restore(uint32_t flags);
 
+static void sig_idle_wait(void);
+
 /**
  * Whether `p` is a child of the caller's process that `idtype` and `id`
  * select: the leader of a process whose parent is any thread of the
@@ -4014,7 +4016,7 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
         schedule();
         flags = sig_irq_save();
         if (current_proc->state == PROC_BLOCKED) {
-            idle_wait_irq_off(); /* idle until a waker, then re-scan */
+            sig_idle_wait(); /* idle until a waker, then re-scan */
         }
         wq_poll_remove(&current_proc->tg->chld, &self);
         current_proc->state = PROC_RUNNING;
@@ -4400,20 +4402,92 @@ static uint64_t sigact_mask(const struct k_sigaction *sa)
     return (uint64_t)sa->mask[0] | ((uint64_t)sa->mask[1] << 32);
 }
 
-/** Turn interrupts off for a change of the signal sets. The signal masks are
- * 64-bit, so a read-modify-write is two stores on i386; signal_post runs from
- * IRQ context (Ctrl-C) as well as from a syscall, so a mutation an interrupt
- * can meet half done is made with interrupts off. Returns the prior IF so
- * the caller can restore it. */
+/* The lock of the signal state, as Linux 6.12.115's sighand->siglock
+ * (kernel/signal.c): the signal sets, the masks and the signal-work flags of
+ * every thread. The holder of the big lock takes it for each region of
+ * `sig_irq_save`, and rt_sigprocmask takes it alone, without the big lock
+ * (`signal_change_blocked_unlocked`). Every other holder holds the big lock,
+ * which orders them, and the one holder without it takes nothing under it,
+ * so no order through this lock can close a cycle: the holders of the big
+ * lock take it without the checker (`raw_spin_lock`), which would otherwise
+ * see it both above and below `timer_lock`, whose holder posts a timer's
+ * signal (io/timerfd.c). */
+static struct spinlock sig_lock = SPINLOCK_INIT_NAMED("sig_lock");
+
+/* The depth of the big lock's holder in the regions of `sig_irq_save`, which
+ * nest, as a post sends a parent SIGCHLD; under the big lock. */
+static uint32_t sig_lock_depth;
+
+/** Turn interrupts off for a change of the signal sets, and take `sig_lock`
+ * at the outermost region when the caller holds the big lock. The signal
+ * masks are 64-bit, so a read-modify-write is two stores on i386; signal_post
+ * runs from IRQ context (Ctrl-C) as well as from a syscall, so a mutation an
+ * interrupt can meet half done is made with interrupts off. A caller
+ * without the big lock only reads its own thread's sets, as a wait's test
+ * of `signal_pending` does, and takes no lock. Returns the prior IF so the
+ * caller can restore it. */
 static uint32_t sig_irq_save(void)
 {
-    return kirq_save();
+    uint32_t flags = kirq_save();
+
+    if (bkl_held() && sig_lock_depth++ == 0) {
+        raw_spin_lock(&sig_lock);
+    }
+    return flags;
 }
 
-/** Put back the interrupt flag `sig_irq_save` returned. */
+/** Put back the interrupt flag `sig_irq_save` returned, and let `sig_lock`
+ * go at the outermost region. */
 static void sig_irq_restore(uint32_t flags)
 {
+    if (bkl_held() && --sig_lock_depth == 0) {
+        raw_spin_unlock(&sig_lock);
+    }
     kirq_restore(flags);
+}
+
+/** Let `sig_lock` go for a switch or an idle wait made inside a region of
+ * `sig_irq_save`, which let the big lock go, and return the depth for
+ * `sig_relock` to give back: 0 when the caller has no region open. */
+static uint32_t sig_unlock_all(void)
+{
+    uint32_t depth = 0;
+
+    if (bkl_held() && sig_lock_depth != 0) {
+        depth = sig_lock_depth;
+        sig_lock_depth = 0;
+        raw_spin_unlock(&sig_lock);
+    }
+    return depth;
+}
+
+/** Take `sig_lock` back at the depth `sig_unlock_all` returned, once the big
+ * lock is back, which a switch and an idle wait take again first. */
+static void sig_relock(uint32_t depth)
+{
+    if (depth != 0) {
+        raw_spin_lock(&sig_lock);
+        sig_lock_depth = depth;
+    }
+}
+
+/** `schedule` inside a region of `sig_irq_save`, without `sig_lock`. */
+static void sig_schedule(void)
+{
+    uint32_t depth = sig_unlock_all();
+
+    schedule();
+    sig_relock(depth);
+}
+
+/** `idle_wait_irq_off` inside a region of `sig_irq_save`, without
+ * `sig_lock`. */
+static void sig_idle_wait(void)
+{
+    uint32_t depth = sig_unlock_all();
+
+    idle_wait_irq_off();
+    sig_relock(depth);
 }
 
 /* The stop signals, which SIGCONT cancels and which cancel SIGCONT. */
@@ -4596,6 +4670,40 @@ void signal_set_blocked(uint64_t mask)
     sig_retarget(self, moved);
     sig_recalc();
     sig_irq_restore(flags);
+}
+
+int signal_change_blocked_unlocked(int how, uint64_t set)
+{
+    process_t *self = current_proc;
+    uint32_t flags = spin_lock_irqsave(&sig_lock);
+    uint64_t old = self->sig_blocked;
+    uint64_t mask = how == KSIG_BLOCK ? old | set : how == KSIG_UNBLOCK ? old & ~set : set;
+    int done;
+
+    mask &= ~(uint64_t)KSIG_UNCATCHABLE;
+    done = !self->sig_woken && (self->tg->pending & mask & ~old) == 0;
+    if (done) {
+        self->sig_blocked = mask;
+        if ((self->sig_pending | self->tg->pending) & ~mask) {
+            self->sig_woken = 1;
+        }
+    }
+    spin_unlock_irqrestore(&sig_lock, flags);
+    return done;
+}
+
+uint64_t signal_blocked_now(void)
+{
+    uint32_t flags;
+    uint64_t mask;
+
+    if (bkl_held()) {
+        return current_proc->sig_blocked;
+    }
+    flags = spin_lock_irqsave(&sig_lock);
+    mask = current_proc->sig_blocked;
+    spin_unlock_irqrestore(&sig_lock, flags);
+    return mask;
 }
 
 void signal_exit_begin(void)
@@ -5460,7 +5568,7 @@ static void sig_wait(const char *name)
         schedule();
         flags = sig_irq_save();
         if (current_proc->state == PROC_BLOCKED) {
-            idle_wait_irq_off();
+            sig_idle_wait();
         }
     }
     current_proc->state = PROC_RUNNING;
@@ -5590,11 +5698,18 @@ long sys_rt_sigaction(isr_params_t *params)
 /**
  * Examine or change the blocked-signal mask (rt_sigprocmask).
  *
- * Its arguments are how (0 BLOCK/1 UNBLOCK/2 SETMASK), const set*, old set* and
- * sigsetsize. SIGKILL/SIGSTOP can never be blocked, and a signal of the process
- * that the new mask blocks is left to another thread (`signal_set_blocked`).
- * The old mask is written before the new one is read. -EINVAL for another
- * sigsetsize or an unknown `how`, -EFAULT.
+ * Its arguments are how (KSIG_BLOCK, KSIG_UNBLOCK or KSIG_SETMASK), const
+ * set*, old set* and sigsetsize. SIGKILL/SIGSTOP can never be blocked, and a
+ * signal of the process that the new mask blocks is left to another thread
+ * (`signal_set_blocked`). The old mask is written before the new one is read.
+ * -EINVAL for another sigsetsize or an unknown `how`, -EFAULT.
+ *
+ * The call runs without the big lock (`syscall_unlock`), as Linux's takes
+ * only sighand->siglock (kernel/signal.c:3205-3215, 3304-3330): the mask is
+ * read and changed under the signal state's lock
+ * (`signal_change_blocked_unlocked`), and the big lock is taken only for the
+ * change that lock alone cannot make. Only the thread itself and
+ * `signal_force`, under that lock, change a thread's mask.
  */
 long sys_rt_sigprocmask(isr_params_t *params)
 {
@@ -5612,31 +5727,34 @@ long sys_rt_sigprocmask(isr_params_t *params)
         return -EINVAL;
     }
     if (uold) {
-        words[0] = (uint32_t)current_proc->sig_blocked;
-        words[1] = (uint32_t)(current_proc->sig_blocked >> 32);
+        set = signal_blocked_now();
+        words[0] = (uint32_t)set;
+        words[1] = (uint32_t)(set >> 32);
         if (copy_to_user(uold, words, sizeof(words)) != 0) {
             return -EFAULT;
         }
     }
-    if (uset) {
-        if (copy_from_user(words, uset, sizeof(words)) != 0) {
-            return -EFAULT;
-        }
-        set = (uint64_t)words[0] | ((uint64_t)words[1] << 32);
-        switch (how) {
-        case 0: /* SIG_BLOCK */
-            set |= current_proc->sig_blocked;
-            break;
-        case 1: /* SIG_UNBLOCK */
-            set = current_proc->sig_blocked & ~set;
-            break;
-        case 2: /* SIG_SETMASK */
-            break;
-        default:
-            return -EINVAL;
-        }
-        signal_set_blocked(set);
+    if (!uset) {
+        return 0;
     }
+    if (copy_from_user(words, uset, sizeof(words)) != 0) {
+        return -EFAULT;
+    }
+    if (how != KSIG_BLOCK && how != KSIG_UNBLOCK && how != KSIG_SETMASK) {
+        return -EINVAL;
+    }
+    set = (uint64_t)words[0] | ((uint64_t)words[1] << 32);
+    if (!bkl_held() && signal_change_blocked_unlocked(how, set)) {
+        return 0;
+    }
+    bkl_enter();
+    if (how == KSIG_BLOCK) {
+        set |= current_proc->sig_blocked;
+    } else if (how == KSIG_UNBLOCK) {
+        set = current_proc->sig_blocked & ~set;
+    }
+    signal_set_blocked(set);
+    bkl_exit();
     return 0;
 }
 
@@ -5995,9 +6113,9 @@ static void sig_park(void)
             (current_proc->ptrace & PT_TRACED)) {
             break;
         }
-        schedule();
+        sig_schedule();
         if (current_proc->state == PROC_STOPPED) {
-            idle_wait_irq_off();
+            sig_idle_wait();
         }
     }
     current_proc->state = PROC_RUNNING;
@@ -6279,7 +6397,7 @@ static int32_t sigwait_take(uint64_t set, int timed, uint64_t deadline, struct k
         schedule();
         flags = sig_irq_save();
         if (current_proc->state == PROC_BLOCKED) {
-            idle_wait_irq_off();
+            sig_idle_wait();
         }
         current_proc->state = PROC_RUNNING;
     }
