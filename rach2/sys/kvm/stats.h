@@ -1,5 +1,5 @@
-/* Live KVM resources, counted under the big kernel lock, and the work done
- * for guests without an exit to the caller. */
+/* Live KVM resources and the work done for guests without an exit to the
+ * caller. */
 #ifndef _KVM_STATS_H_
 #define _KVM_STATS_H_
 
@@ -20,10 +20,10 @@ enum kvm_resource {
  * frames a map takes or lets go of. */
 void kvm_count(enum kvm_resource resource, int change);
 
-/** The live count of resource; called under the big kernel lock. */
+/** The live count of resource. */
 uint32_t kvm_resource_count(enum kvm_resource resource);
 
-/** Completed backend entries since boot; read under the big lock. */
+/** Completed backend entries since boot. */
 uint64_t kvm_exit_count(void);
 
 /* Work the kernel did for a guest without an exit to the caller, counted

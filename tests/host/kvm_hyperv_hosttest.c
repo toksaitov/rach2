@@ -2,6 +2,7 @@
  * Check KVM's Hyper-V enlightenments, rach2/sys/kvm/hyperv.c, against the
  * TLFS and Linux's arch/x86/kvm/hyperv.c.
  *
+ * host-deps: tests/host/compat/atomic_host.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * hyperv.c is the kernel's, included whole. The VM is a record of three
@@ -152,7 +153,7 @@ uint64_t kvm_tsc_hz(const struct kvm_vcpu *v)
 }
 
 /* The kvmclock with no master clock, as pvclock.c reads it. */
-uint64_t kvm_clock_ns(const struct kvm_vm *vm)
+uint64_t kvm_clock_ns(struct kvm_vm *vm)
 {
     return kvm_host_ns() + (uint64_t)vm->clock_offset;
 }
@@ -231,6 +232,25 @@ void kvm_vcpu_fpu_sync(struct kvm_vcpu *v)
 void kvm_vcpu_kick(struct kvm_vcpu *v, uint32_t request)
 {
     v->requests |= request;
+}
+
+/* The big lock's depth, which hyperv.c takes around its state; `bkl_most`
+ * is the deepest it went. */
+static int bkl_depth, bkl_most;
+
+/** Take the big lock for `v`'s exit: one level deeper. */
+void kvm_bkl_enter(struct kvm_vcpu *v)
+{
+    (void)v;
+    if (++bkl_depth > bkl_most) {
+        bkl_most = bkl_depth;
+    }
+}
+
+/** Give back one level of the big lock. */
+void bkl_exit(void)
+{
+    bkl_depth--;
 }
 
 int kvm_vcpu_test_clear(struct kvm_vcpu *v, uint32_t request)
@@ -1424,6 +1444,8 @@ int main(void)
     hcall_rows();
     ipi_rows();
     flush_rows();
+    CHECK(bkl_most == 1 && bkl_depth == 0,
+          "each entry point takes the big lock once around its state and gives it back");
     printf("kvm-hyperv-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }

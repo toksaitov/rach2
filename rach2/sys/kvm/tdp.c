@@ -2,6 +2,8 @@
  * tdp.c: a VM's guest-physical tables, the four levels that EPT and AMD's
  * nested paging both walk, built at each fault from the pages of the
  * caller's memory behind a slot, in the entry format the backend gives.
+ * The tables and their counts are the VM's `mmu_lock`'s, as Linux's
+ * kvm->mmu_lock owns the TDP MMU's (arch/x86/kvm/mmu/mmu.c:4699-4731).
  */
 
 #include "kvm.h"
@@ -14,6 +16,7 @@
 #include "../mm/mm.h"
 #include "../mm/paging.h"
 #include "../proc/process.h"
+#include "../proc/smp.h"
 
 /* The levels, the entries of a table, and the 4 KiB frames of a 2 MiB
  * leaf, which a table of the second level holds in one entry. */
@@ -22,12 +25,14 @@
 #define TDP_LARGE   0x200000ull
 
 /*
- * The tables of a VM. Each is a frame of the allocator's, reached through
- * the direct map, which covers every frame on x86-64; `tables` counts
- * them, the top one among them. A table below the top that a zap empties
- * waits on `dead`, linked through its first entry, until the flush after
- * the zap, since a vCPU in the guest may walk it, or hold it in its
- * paging-structure caches, until then; the rest go with the VM.
+ * The tables of a VM, under its `mmu_lock`. Each is a frame of the
+ * allocator's, reached through the direct map, which covers every frame on
+ * x86-64; `tables` counts them, the top one among them. A table below the
+ * top that a zap empties waits on `dead`, linked through its first entry,
+ * until the flush after the zap, since a vCPU in the guest may walk it, or
+ * hold it in its paging-structure caches, until then; the rest go with the
+ * VM. The allocator takes and frees a frame under a spinlock of its own,
+ * so a table is made and freed under `mmu_lock`.
  */
 struct tdp {
     uint64_t root; /* the top table's physical address */
@@ -197,21 +202,39 @@ uint64_t kvm_tdp_frames(void)
     return frames;
 }
 
-/** A vCPU leaves the guest within a moment of its kick, and does not
- * enter again until it has the big lock, which the caller holds. */
+uint32_t kvm_mmu_lock(struct kvm_vm *vm)
+{
+    return spin_lock_irqsave(&vm->mmu_lock);
+}
+
+void kvm_mmu_unlock(struct kvm_vm *vm, uint32_t flags)
+{
+    spin_unlock_irqrestore(&vm->mmu_lock, flags);
+}
+
+/** A vCPU leaves the guest within a moment of its kick. One that enters
+ * again takes the request first and drops its translations in the entry
+ * (the backend's `enter`), so the wait ends for a vCPU that is out of the
+ * guest or has taken the request, as Linux's kvm_make_vcpu_request kicks
+ * only a vCPU in guest mode and waits for it to take the interrupt
+ * (virt/kvm/kvm_main.c:255-320). The wait answers this processor's
+ * requests, since another may wait for its answer with `mmu_lock` wanted. */
 void kvm_tdp_flush(struct kvm_vm *vm)
 {
-    uint32_t i;
+    uint32_t i, n = vm->nr_vcpus;
+    struct kvm_vcpu *v;
 
     vm->stat[KVM_VM_STAT_REMOTE_TLB_FLUSH_REQUESTS]++;
-    if (vm->nr_vcpus) {
+    if (n) {
         vm->stat[KVM_VM_STAT_REMOTE_TLB_FLUSH]++;
     }
-    for (i = 0; i < vm->nr_vcpus; i++) {
+    for (i = 0; i < n; i++) {
         kvm_vcpu_kick(vm->vcpus[i], KVM_REQ_TLB_FLUSH);
     }
-    for (i = 0; i < vm->nr_vcpus; i++) {
-        while (vm->vcpus[i]->mode == KVM_MODE_IN_GUEST) {
+    for (i = 0; i < n; i++) {
+        v = vm->vcpus[i];
+        while (v->mode == KVM_MODE_IN_GUEST && (v->requests & KVM_REQ_TLB_FLUSH)) {
+            smp_service();
             arch_relax();
         }
     }
@@ -268,12 +291,18 @@ static int zap_level(struct tdp *t, uint64_t *table, int level, uint64_t base, u
 }
 
 /** A table on the dead list is freed only after the flush, and a table
- * that goes needs the flush even when no leaf did. */
-void kvm_tdp_zap(struct kvm_vm *vm, uint64_t gfn, uint64_t npages)
+ * that goes needs the flush even when no leaf did. The count moves first,
+ * whatever the tables held, so that a fault that read the caller's entry
+ * before the change maps nothing from it. */
+void kvm_tdp_zap_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages)
 {
     struct tdp *t = (struct tdp *)vm->tdp;
 
-    if (!t || npages == 0 || gfn >= kvm_tdp_frames()) {
+    if (!t) {
+        return;
+    }
+    vm->mmu_seq++;
+    if (npages == 0 || gfn >= kvm_tdp_frames()) {
         return;
     }
     if (zap_level(t, table_at(t->root), TDP_LEVELS, 0, gfn, gfn + npages) || t->dead) {
@@ -285,6 +314,14 @@ void kvm_tdp_zap(struct kvm_vm *vm, uint64_t gfn, uint64_t npages)
         t->dead = table_at(p)[0];
         table_free(t, p);
     }
+}
+
+void kvm_tdp_zap(struct kvm_vm *vm, uint64_t gfn, uint64_t npages)
+{
+    uint32_t flags = kvm_mmu_lock(vm);
+
+    kvm_tdp_zap_locked(vm, gfn, npages);
+    kvm_mmu_unlock(vm, flags);
 }
 
 /** The leaf that maps `gfn`, with its level in `*level`, or NULL. */
@@ -468,7 +505,7 @@ static int large_ok(struct mm *mm, struct tdp *t, uint64_t gfn, int write,
     uintptr_t hva = (uintptr_t)(s->hva - (gfn - block) * 4096u);
     uint64_t *table = table_at(t->root);
     pte_t *host;
-    uint32_t i;
+    uint32_t i, flags;
     int l, w = !(s->flags & KVM_MEM_READONLY);
 
     if (s->dirty || block < s->base_gfn || block + TDP_ENTRIES > s->base_gfn + s->npages ||
@@ -496,27 +533,70 @@ static int large_ok(struct mm *mm, struct tdp *t, uint64_t gfn, int write,
     if (!host_block(host, write, &w, out)) {
         return 0;
     }
-    for (i = 0; w && i < TDP_ENTRIES; i++) {
-        host[i] &= ~(pte_t)PTE_ZEROFILL;
+    if (w) {
+        flags = mm_ptl_lock(mm);
+        for (i = 0; i < TDP_ENTRIES; i++) {
+            if (host[i] & PTE_P) {
+                host[i] &= ~(pte_t)PTE_ZEROFILL;
+            }
+        }
+        mm_ptl_unlock(mm, flags);
     }
     out->writable = w;
     return 1;
 }
 
 /**
- * The caller's page is brought in with `vm_prefault_range`, which may sleep,
- * and then read again from the caller's tables with nothing that sleeps
- * before the leaf is set, so that the change notice, which runs only under
- * the big lock, cannot come between the read and the leaf. The slot is
- * looked up again after each sleep, since it may have moved or gone. The
- * regions are read under the big lock alone, which every change of them
- * holds (mm.h), with nothing that sleeps between the read and the leaf. A
- * page of memfd_secret is -EFAULT, as Linux's get_user_pages refuses one.
+ * Map the 4 KiB leaf of `gfn` in slot `s` from the caller's entry `pte`,
+ * for a fault that `write` names: the leaf result of `map`. Under the
+ * regions' lock held to read and `mmu_lock`, as `kvm_tdp_fault` holds them.
+ */
+static int map_small(struct kvm_vm *vm, uint64_t gfn, int write, const struct kvm_slot_view *s,
+                     pte_t pte)
+{
+    struct tdp *t = (struct tdp *)vm->tdp;
+    uint64_t phys = PTE_ADDR(pte), i;
+    int writable = (pte & PTE_W) && !(s->flags & KVM_MEM_READONLY) && (write || !host_zero(pte));
+
+    if (s->dirty) {
+        i = gfn - s->base_gfn;
+        if (write) {
+            s->dirty[i / 64u] |= 1ull << (i % 64u);
+        } else if (!((s->dirty[i / 64u] >> (i % 64u)) & 1u)) {
+            writable = 0;
+        }
+    }
+    if (writable) {
+        paging_entry_clear(kvm_vm_mm(vm), (uintptr_t)s->hva, (pte_t)PTE_ZEROFILL);
+    }
+    return map(vm, t, gfn, 1, leaf_entry(vm, phys, writable, 0, paging_frame_is_device(phys)));
+}
+
+/**
+ * The fault follows Linux's kvm_faultin_pfn, is_page_fault_stale and
+ * kvm_tdp_mmu_page_fault (arch/x86/kvm/mmu/mmu.c:4459-4598, 4699-4731):
+ * `mmu_seq` and the address space's count of finished page changes are
+ * read first, the slot looked up, and the caller's entry read under the
+ * regions' lock held to read, which keeps every change of the regions out;
+ * the leaf is set under `mmu_lock` only while neither count has moved and
+ * no page change is under way (`mm->changing`), as Linux's
+ * mmu_invalidate_retry_gfn checks mmu_invalidate_seq and
+ * mmu_invalidate_in_progress. A change of a page by a holder of the
+ * regions' lock to read, a copy-on-write break or a pin, counts itself
+ * under way from before its notice, which zaps the slot's leaves and moves
+ * `mmu_seq` under `mmu_lock`, to after the new entry, so a fault that read
+ * the old entry either sees the change under way or sees it finished and
+ * looks again, and one whose leaf came first has it zapped. A slot that
+ * moves, changes its flags or goes zaps under `mmu_lock` too.
+ *
+ * The caller's page is brought in with `vm_prefault_range`, which may
+ * sleep, with no lock held, and the fault starts again. A page of
+ * memfd_secret is -EFAULT, as Linux's get_user_pages refuses one.
  *
  * A page that stands for the zero page (PTE_ZEROFILL) is mapped read-only
  * on a read, as Linux maps its zero page, and a write fault, which maps it
- * writable, ends the host entry's mark, since the guest's stores set no
- * dirty bit in it.
+ * writable, ends the host entry's mark under the page-table lock, since
+ * the guest's stores set no dirty bit in it.
  *
  * A page of a slot that logs is mapped writable only when it is dirty
  * already: a write fault marks it, and a read leaves a clean page
@@ -529,85 +609,101 @@ int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write)
     struct kvm_slot_view s;
     struct leaf_info big;
     const vma_t *r;
-    uint64_t phys, i;
-    int writable;
+    uint32_t seq, changes, flags;
+    int rc;
     pte_t pte;
 
     for (;;) {
+        seq = vm->mmu_seq;
+        changes = mm ? mm->changes : 0;
+        k_barrier();
         if (!kvm_slot_find(vm, gfn, &s) || (write && (s.flags & KVM_MEM_READONLY))) {
             return 1;
         }
         if (!t || !mm || !current_proc || current_proc->mm != mm) {
             return -EFAULT;
         }
+        mmap_read_lock(mm);
+        if (mm->changing) {
+            mmap_unlock(mm);
+            arch_relax();
+            continue;
+        }
         r = vm_find(&mm->vm, (uintptr_t)s.hva);
         if (r && (r->prot & VM_PROT_SECRET)) {
+            mmap_unlock(mm);
             return -EFAULT;
         }
         pte = host_pte(mm, (uintptr_t)s.hva);
-        if (host_ok(pte, write)) {
+        if (!host_ok(pte, write)) {
+            mmap_unlock(mm);
+            if (!vm_prefault_range((uintptr_t)s.hva, 4096u, write)) {
+                return -EFAULT;
+            }
+            continue;
+        }
+        flags = kvm_mmu_lock(vm);
+        if (vm->mmu_seq == seq && !mm->changing && mm->changes == changes) {
             break;
         }
-        if (!vm_prefault_range((uintptr_t)s.hva, 4096u, write)) {
-            return -EFAULT;
-        }
+        kvm_mmu_unlock(vm, flags);
+        mmap_unlock(mm);
     }
     if (large_ok(mm, t, gfn, write, &s, &big)) {
-        return map(vm, t, gfn, 2, leaf_entry(vm, big.phys, big.writable, 1, big.device));
+        rc = map(vm, t, gfn, 2, leaf_entry(vm, big.phys, big.writable, 1, big.device));
+    } else {
+        rc = map_small(vm, gfn, write, &s, pte);
     }
-    phys = PTE_ADDR(pte);
-    writable = (pte & PTE_W) && !(s.flags & KVM_MEM_READONLY) && (write || !host_zero(pte));
-    if (s.dirty) {
-        i = gfn - s.base_gfn;
-        if (write) {
-            s.dirty[i / 64u] |= 1ull << (i % 64u);
-        } else if (!((s.dirty[i / 64u] >> (i % 64u)) & 1u)) {
-            writable = 0;
-        }
-    }
-    if (writable) {
-        paging_entry_clear(mm, (uintptr_t)s.hva, (pte_t)PTE_ZEROFILL);
-    }
-    return map(vm, t, gfn, 1, leaf_entry(vm, phys, writable, 0, paging_frame_is_device(phys)));
+    kvm_mmu_unlock(vm, flags);
+    mmap_unlock(mm);
+    return rc;
 }
 
 /**
- * The caller's page is read from its tables and written through the
- * kernel's map of the frame, so nothing can fault. A page not yet stored
- * into (no PTE_DIRTY) is refused with the rest, since this write would not
- * set the bit: the zero page's rules and the counts of dirty pages read it.
+ * The slot is looked up and the caller's page read from its tables under
+ * `mmu_lock`, with nothing between the read and the write that answers
+ * another processor's requests, and written through the kernel's map of
+ * the frame, so nothing can fault. A page not yet stored into (no
+ * PTE_DIRTY) is refused with the rest, since this write would not set the
+ * bit: the zero page's rules and the counts of dirty pages read it.
  */
-int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n)
+int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n,
+                          uint32_t seq)
 {
     struct mm *mm = kvm_vm_mm(vm);
     struct kvm_slot_view s;
-    const vma_t *r;
+    uint32_t flags;
     uint64_t i;
     pte_t pte;
+    int rc = 1;
 
-    if (n == 0 || (gpa & 0xFFFu) + n > 4096u || !mm || !current_proc || current_proc->mm != mm ||
-        !kvm_slot_find(vm, gpa >> 12, &s) || (s.flags & KVM_MEM_READONLY)) {
+    if (n == 0 || (gpa & 0xFFFu) + n > 4096u || !mm || !current_proc || current_proc->mm != mm) {
         return 1;
     }
-    r = vm_find(&mm->vm, (uintptr_t)s.hva);
-    if (!r || (r->prot & VM_PROT_SECRET)) {
-        return 1;
+    flags = kvm_mmu_lock(vm);
+    if (vm->mmu_seq != seq || !kvm_slot_find_locked(vm, gpa >> 12, &s) ||
+        (s.flags & KVM_MEM_READONLY)) {
+        goto out;
     }
     pte = host_pte(mm, (uintptr_t)s.hva);
     if (!host_ok(pte, 1) || !(pte & PTE_DIRTY) || paging_frame_is_device(PTE_ADDR(pte))) {
-        return 1;
+        goto out;
     }
     k_memcpy((uint8_t *)phys_to_virt(PTE_ADDR(pte)) + (gpa & 0xFFFu), buf, n);
     if (s.dirty) {
         i = (gpa >> 12) - s.base_gfn;
         s.dirty[i / 64u] |= 1ull << (i % 64u);
     }
-    return 0;
+    rc = 0;
+out:
+    kvm_mmu_unlock(vm, flags);
+    return rc;
 }
 
 int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range)
 {
     uint64_t size = range->size, step;
+    uint32_t flags;
     int32_t r = 0;
     int level;
 
@@ -626,9 +722,11 @@ int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range)
             break;
         }
         step = 4096u;
+        flags = kvm_mmu_lock(vm);
         if (find_leaf((struct tdp *)vm->tdp, range->gpa >> 12, &level) && level == 2) {
             step = TDP_LARGE - (range->gpa & (TDP_LARGE - 1u));
         }
+        kvm_mmu_unlock(vm, flags);
         if (step > range->size) {
             step = range->size;
         }
@@ -638,10 +736,13 @@ int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range)
     return size == range->size ? r : 0;
 }
 
+/** The count changes under `mmu_lock`, which a fault holds while it reads
+ * the count for a leaf's type. */
 void kvm_tdp_noncoherent(struct kvm_vm *vm, int assigned)
 {
-    uint32_t before = vm->noncoherent;
+    uint32_t before, flags = kvm_mmu_lock(vm);
 
+    before = vm->noncoherent;
     if (assigned) {
         vm->noncoherent++;
     } else if (vm->noncoherent) {
@@ -651,6 +752,7 @@ void kvm_tdp_noncoherent(struct kvm_vm *vm, int assigned)
      * type, so every leaf goes and the next fault makes it anew, as Linux's
      * kvm_noncoherent_dma_assignment_start_or_stop zaps them. */
     if ((before == 0) != (vm->noncoherent == 0)) {
-        kvm_tdp_zap(vm, 0, kvm_tdp_frames());
+        kvm_tdp_zap_locked(vm, 0, kvm_tdp_frames());
     }
+    kvm_mmu_unlock(vm, flags);
 }

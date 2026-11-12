@@ -1,6 +1,7 @@
 /*
  * kvm.c: /dev/kvm and the VM descriptor, the system and VM ioctls of
- * Linux's KVM API 12, and the answers of KVM_CHECK_EXTENSION.
+ * Linux's KVM API 12, and the answers of KVM_CHECK_EXTENSION. The VM's
+ * ioctls run under the big lock.
  */
 
 #include "kvm.h"
@@ -46,18 +47,24 @@ struct kvm_vm_rec {
     uint32_t nr_mmu_pages;
 };
 
+/* The live resources, under `resources_lock`, since a vCPU's run counts
+ * the tables it makes without the big lock. */
 static uint32_t live_resources[KVM_COUNT_TOTAL];
+static struct spinlock resources_lock = SPINLOCK_INIT_NAMED("kvm_resources");
 
 /* The live VMs, newest first, linked by `next_vm`. */
 static struct kvm_vm *live_vms;
 
-/** Count a resource at allocation or final release, under the big lock. */
+/** Count a resource at allocation or final release. Any context. */
 void kvm_count(enum kvm_resource resource, int change)
 {
+    uint32_t flags = spin_lock_irqsave(&resources_lock);
+
     live_resources[resource] += (uint32_t)change;
+    spin_unlock_irqrestore(&resources_lock, flags);
 }
 
-/** Read a live resource count under the big lock. */
+/** Read a live resource count. */
 uint32_t kvm_resource_count(enum kvm_resource resource)
 {
     return live_resources[resource];
@@ -407,6 +414,9 @@ static int32_t create_vm(uintptr_t type)
     vm->anon.name = "kvm-vm";
     kvm_stats_id(vm->stats_id, NULL);
     vm->refs = 1;
+    spin_lock_init(&vm->mmu_lock, "kvm_mmu");
+    spin_lock_init(&vm->clock_lock, "kvm_clock");
+    spin_lock_init(&vm->filter_lock, "kvm_msr_filter");
     vm->ident_addr = KVM_IDENT_ADDR_DEFAULT;
     vm->apic_bus_ns = KVM_APIC_BUS_NS_DEFAULT;
     vm->disabled_quirks = quirks_inapplicable();

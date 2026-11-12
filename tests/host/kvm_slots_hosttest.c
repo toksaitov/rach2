@@ -2,6 +2,8 @@
  * Check KVM's memory slots, guest-physical tables and dirty log over a
  * model of the caller's page tables.
  *
+ * host-deps: tests/host/compat/atomic_host.c tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/kirq_none.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * slots.c, tdp.c, dirty.c and mm/notify.c are the kernel's, included
@@ -38,11 +40,12 @@
  * with KVM_GET_DIRTY_LOG and, under KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2,
  * KVM_CLEAR_DIRTY_LOG, their refusals, and no 2 MiB leaf in a slot that
  * logs; kvm_tdp_write_nofault refusing a read-only slot, a page not yet
- * stored into, read-only, a device's, absent or memfd_secret's, a write
- * across a page or of nothing, an address of no slot and a thread of
- * another address space, and writing a stored-into page of RAM at its
- * offset, logged; a slot moved, its flags changed and deleted with its
- * leaves and tables gone; and every allocation and frame given back.
+ * stored into, read-only, a device's or absent, a write across a page or
+ * of nothing, an address of no slot, a caller's check made before the
+ * tables last changed and a thread of another address space, and writing
+ * a stored-into page of RAM at its offset, logged; a slot moved, its flags
+ * changed and deleted with its leaves and tables gone; and every
+ * allocation and frame given back.
  */
 #include "kvm/dirty.c"
 #include "kvm/slots.c"
@@ -300,6 +303,30 @@ void bkl_enter(void)
 
 /** Nothing, as `bkl_enter`. */
 void bkl_exit(void)
+{}
+
+/* The read holds of the caller's address space that the fault takes. */
+static int mmap_reads;
+
+/** Take a read hold of `mm`: one thread, so nothing to wait for. */
+void mmap_read_lock(struct mm *mm)
+{
+    (void)mm;
+    mmap_reads++;
+}
+
+/** Give back a hold of `mm`; a release of no hold stops the test. */
+void mmap_unlock(struct mm *mm)
+{
+    (void)mm;
+    if (mmap_reads == 0) {
+        __builtin_trap();
+    }
+    mmap_reads--;
+}
+
+/** Nothing waits on this processor's requests in a test of one thread. */
+void smp_service(void)
 {}
 
 /** Take `mm`'s page-table lock, around the notice list's changes: the
@@ -924,8 +951,9 @@ static void dirty_rows(void)
 
 /** kvm_tdp_write_nofault, the steal time's write from inside `schedule`:
  * it writes only a present, writable page of a slot of the caller's that
- * was already stored into, of RAM and not memfd_secret's, within one page,
- * and marks the slot's dirty log. */
+ * was already stored into, of RAM, within one page, while the tables'
+ * sequence is the one the caller checked the region at, and marks the
+ * slot's dirty log. */
 static void write_nofault_rows(void)
 {
     uintptr_t a = HVA + 5 * MIB2;
@@ -943,37 +971,36 @@ static void write_nofault_rows(void)
     k_memset(mem, 0, 4096u);
 
     CHECK(set(6, KVM_MEM_READONLY, gpa, 5 * 4096u, a) == 0, "a read-only slot to write");
-    CHECK(kvm_tdp_write_nofault(&vm, gpa + 8, buf, 4) == 1 && mem[8] == 0,
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 8, buf, 4, vm.mmu_seq) == 1 && mem[8] == 0,
           "a read-only slot is refused");
     CHECK(set(6, 0, 0, 0, 0) == 0, "deleted");
     CHECK(set(6, KVM_MEM_LOG_DIRTY_PAGES, gpa, 5 * 4096u, a) == 0, "a slot that logs, to write");
     CHECK(get_dirty(6, bits) == 0 && bits[0] == 0, "nothing logged yet");
-    CHECK(kvm_tdp_write_nofault(&vm, gpa + 4096u, buf, 4) == 1,
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 4096u, buf, 4, vm.mmu_seq) == 1,
           "a page not yet stored into is refused");
-    CHECK(kvm_tdp_write_nofault(&vm, gpa + 2 * 4096u, buf, 4) == 1, "a read-only page is refused");
-    CHECK(kvm_tdp_write_nofault(&vm, gpa + 3 * 4096u, buf, 4) == 1, "a device's frame is refused");
-    CHECK(kvm_tdp_write_nofault(&vm, gpa + 4 * 4096u, buf, 4) == 1,
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 2 * 4096u, buf, 4, vm.mmu_seq) == 1,
+          "a read-only page is refused");
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 3 * 4096u, buf, 4, vm.mmu_seq) == 1,
+          "a device's frame is refused");
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 4 * 4096u, buf, 4, vm.mmu_seq) == 1,
           "a page not present is refused");
-    CHECK(kvm_tdp_write_nofault(&vm, gpa + 4090u, buf, 8) == 1 && mem[4090] == 0,
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 4090u, buf, 8, vm.mmu_seq) == 1 && mem[4090] == 0,
           "a write across a page is refused");
-    CHECK(kvm_tdp_write_nofault(&vm, gpa + 8, buf, 0) == 1, "an empty write is refused");
-    CHECK(kvm_tdp_write_nofault(&vm, 0x7000000ull, buf, 4) == 1,
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 8, buf, 0, vm.mmu_seq) == 1,
+          "an empty write is refused");
+    CHECK(kvm_tdp_write_nofault(&vm, 0x7000000ull, buf, 4, vm.mmu_seq) == 1,
           "an address of no slot is refused");
-    secret.start = a;
-    secret.end = a + 4096u;
-    secret.prot = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_SECRET;
-    secret_on = 1;
-    CHECK(kvm_tdp_write_nofault(&vm, gpa + 8, buf, 4) == 1 && mem[8] == 0,
-          "a page of memfd_secret is refused");
-    secret_on = 0;
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 8, buf, 4, vm.mmu_seq - 1) == 1 && mem[8] == 0,
+          "a write whose caller checked the region before the tables last changed is refused, "
+          "as a memfd_secret page found since would be");
     k_memset(&other, 0, sizeof(other));
     caller.mm = &other;
-    CHECK(kvm_tdp_write_nofault(&vm, gpa + 8, buf, 4) == 1 && mem[8] == 0,
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 8, buf, 4, vm.mmu_seq) == 1 && mem[8] == 0,
           "a thread of another address space is refused");
     caller.mm = &the_mm;
     CHECK(get_dirty(6, bits) == 0 && bits[0] == 0, "no refusal was logged");
-    CHECK(kvm_tdp_write_nofault(&vm, gpa + 8, buf, 4) == 0 && mem[7] == 0 && mem[8] == 1 &&
-              mem[11] == 4 && mem[12] == 0,
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 8, buf, 4, vm.mmu_seq) == 0 && mem[7] == 0 &&
+              mem[8] == 1 && mem[11] == 4 && mem[12] == 0,
           "a stored-into page of RAM takes the write at its offset");
     CHECK(get_dirty(6, bits) == 0 && bits[0] == 1, "and the slot's log names the page");
     CHECK(set(6, 0, 0, 0, 0) == 0, "deleted");
@@ -1024,6 +1051,8 @@ int main(void)
     kvm_tdp_free(&vm);
     kvm_slots_free(&vm);
     CHECK(live == 0 && frames == 0, "every allocation and frame given back");
+    CHECK(mmap_reads == 0 && !vm.mmu_lock.locked,
+          "every hold of the address space and of mmu_lock given back");
     free(ram);
     if (failures) {
         return 1;

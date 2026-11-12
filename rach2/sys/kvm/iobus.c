@@ -4,7 +4,9 @@
  * guest's write to a port or an MMIO address that an ioeventfd names signals
  * its eventfd, one inside a coalesced zone is queued on the VM's ring, and
  * either goes no further, so the guest enters again without a trip to the
- * caller.
+ * caller. The VM's ioctls change the bus under the big lock and its own
+ * lock; a vCPU's write reads it under its lock alone, as Linux's buses are
+ * read under kvm->srcu.
  */
 
 #include "kvm.h"
@@ -47,18 +49,29 @@ struct zone {
 };
 
 /* iobus.c's share of a VM. `nzones` counts each bus's zones, which an
- * ioeventfd's add is refused beside at MAX_BUS_DEVS, as Linux's is. */
+ * ioeventfd's add is refused beside at MAX_BUS_DEVS, as Linux's is. `lock`
+ * is over the lists and the ring's writes, taken before an eventfd's. */
 struct iobus {
     struct ioeventfd *list;
     struct zone *zones;
     uint32_t nzones[NR_BUSES];
+    struct spinlock lock;
 };
 
-/** The VM's bus, made at first need, or NULL when memory is short. */
+/** The VM's bus, made at first need, or NULL when memory is short. The
+ * record is whole before a vCPU's write can find it. */
 static struct iobus *bus_get(struct kvm_vm *vm)
 {
+    struct iobus *b;
+
     if (!vm->iobus) {
-        vm->iobus = kzalloc(sizeof(struct iobus));
+        b = kzalloc(sizeof(struct iobus));
+        if (!b) {
+            return NULL;
+        }
+        spin_lock_init(&b->lock, "kvm_iobus");
+        k_barrier();
+        vm->iobus = b;
     }
     return (struct iobus *)vm->iobus;
 }
@@ -92,6 +105,7 @@ static int32_t assign(struct kvm_vm *vm, const struct kvm_ioeventfd *a)
 {
     struct iobus *b;
     struct ioeventfd *p, *q;
+    uint32_t flags;
     int32_t err = 0;
 
     switch (a->len) {
@@ -141,8 +155,10 @@ static int32_t assign(struct kvm_vm *vm, const struct kvm_ioeventfd *a)
         kfree(p);
         return err;
     }
+    flags = spin_lock_irqsave(&b->lock);
     p->next = b->list;
     b->list = p;
+    spin_unlock_irqrestore(&b->lock, flags);
     return 0;
 }
 
@@ -152,10 +168,11 @@ static int32_t assign(struct kvm_vm *vm, const struct kvm_ioeventfd *a)
 static int32_t deassign(struct kvm_vm *vm, const struct kvm_ioeventfd *a)
 {
     struct iobus *b = (struct iobus *)vm->iobus;
-    struct ioeventfd **pp, *p;
+    struct ioeventfd **pp, *p = NULL;
     struct eventfd *ev;
     int wildcard = !(a->flags & KVM_IOEVENTFD_FLAG_DATAMATCH);
     int bus = bus_of(a->flags);
+    uint32_t flags = 0;
     int32_t err = 0;
 
     ev = eventfd_get(a->fd, &err);
@@ -163,17 +180,26 @@ static int32_t deassign(struct kvm_vm *vm, const struct kvm_ioeventfd *a)
         return err;
     }
     err = -ENOENT;
+    if (b) {
+        flags = spin_lock_irqsave(&b->lock);
+    }
     for (pp = b ? &b->list : NULL; pp && *pp; pp = &(*pp)->next) {
         p = *pp;
         if (p->bus != bus || p->ev != ev || p->addr != a->addr || p->len != a->len ||
             p->wildcard != wildcard || (!wildcard && p->datamatch != a->datamatch)) {
+            p = NULL;
             continue;
         }
         *pp = p->next;
-        eventfd_put(p->ev);
-        kfree(p);
         err = 0;
         break;
+    }
+    if (b) {
+        spin_unlock_irqrestore(&b->lock, flags);
+    }
+    if (p) {
+        eventfd_put(p->ev);
+        kfree(p);
     }
     eventfd_put(ev);
     return err;
@@ -193,6 +219,7 @@ static int32_t zone_add(struct kvm_vm *vm, const struct kvm_coalesced_mmio_zone 
 {
     struct iobus *b;
     struct zone *z;
+    uint32_t flags;
 
     if (a->pio > 1u) {
         return -EINVAL;
@@ -209,9 +236,11 @@ static int32_t zone_add(struct kvm_vm *vm, const struct kvm_coalesced_mmio_zone 
         kfree(z);
         return -ENOSPC;
     }
+    flags = spin_lock_irqsave(&b->lock);
     b->nzones[z->bus]++;
     z->next = b->zones;
     b->zones = z;
+    spin_unlock_irqrestore(&b->lock, flags);
     return 0;
 }
 
@@ -222,14 +251,19 @@ static int32_t zone_add(struct kvm_vm *vm, const struct kvm_coalesced_mmio_zone 
 static int32_t zone_remove(struct kvm_vm *vm, const struct kvm_coalesced_mmio_zone *a)
 {
     struct iobus *b = (struct iobus *)vm->iobus;
-    struct zone **zp, *z;
+    struct zone **zp, *z, *gone = NULL;
     int bus = a->pio ? BUS_PIO : BUS_MMIO;
+    uint32_t flags;
 
     if (a->pio > 1u) {
         return -EINVAL;
     }
-    zp = b ? &b->zones : NULL;
-    while (zp && *zp) {
+    if (!b) {
+        return 0;
+    }
+    flags = spin_lock_irqsave(&b->lock);
+    zp = &b->zones;
+    while (*zp) {
         z = *zp;
         if (z->bus != bus || !zone_holds(z, a->addr, a->size)) {
             zp = &z->next;
@@ -237,6 +271,13 @@ static int32_t zone_remove(struct kvm_vm *vm, const struct kvm_coalesced_mmio_zo
         }
         *zp = z->next;
         b->nzones[bus]--;
+        z->next = gone;
+        gone = z;
+    }
+    spin_unlock_irqrestore(&b->lock, flags);
+    while (gone) {
+        z = gone;
+        gone = z->next;
         kfree(z);
     }
     return 0;
@@ -324,7 +365,8 @@ static int coalesce(struct kvm_vm *vm, int bus, uint64_t addr, uint32_t len, con
 }
 
 /** Give one write to the bus: an ioeventfd it hits is signalled, and
- * otherwise a zone that holds it queues it. 1 when either took it. */
+ * otherwise a zone that holds it queues it. 1 when either took it. Under
+ * the bus's lock. */
 static int bus_write(struct kvm_vm *vm, int bus, uint64_t addr, uint32_t len, const uint8_t *data)
 {
     struct ioeventfd *p = find((struct iobus *)vm->iobus, bus, addr, len, data);
@@ -340,24 +382,30 @@ static int bus_write(struct kvm_vm *vm, int bus, uint64_t addr, uint32_t len, co
 int kvm_iobus_write(struct kvm_vcpu *v)
 {
     struct kvm_exit *ex = &v->exit;
-    uint32_t i, size;
+    struct iobus *b = (struct iobus *)v->vm->iobus;
+    uint32_t i, size, flags;
+    int took = 1;
 
-    if (!v->vm->iobus) {
+    if (!b) {
         return 0;
     }
+    flags = spin_lock_irqsave(&b->lock);
     if (ex->kind == KVM_X_MMIO) {
-        return bus_write(v->vm, BUS_MMIO, ex->mmio.phys_addr, ex->mmio.len, ex->mmio.data);
-    }
-    /* A string OUT is one write for each element, as Linux's kernel_pio;
-     * only a miss on the first goes to the caller, and the elements after
-     * a later miss are dropped. */
-    size = ex->io.size;
-    for (i = 0; i < ex->io.count && (i + 1u) * size <= sizeof(ex->data); i++) {
-        if (!bus_write(v->vm, BUS_PIO, ex->io.port, size, ex->data + i * size)) {
-            return i != 0;
+        took = bus_write(v->vm, BUS_MMIO, ex->mmio.phys_addr, ex->mmio.len, ex->mmio.data);
+    } else {
+        /* A string OUT is one write for each element, as Linux's
+         * kernel_pio; only a miss on the first goes to the caller, and the
+         * elements after a later miss are dropped. */
+        size = ex->io.size;
+        for (i = 0; i < ex->io.count && (i + 1u) * size <= sizeof(ex->data); i++) {
+            if (!bus_write(v->vm, BUS_PIO, ex->io.port, size, ex->data + i * size)) {
+                took = i != 0;
+                break;
+            }
         }
     }
-    return 1;
+    spin_unlock_irqrestore(&b->lock, flags);
+    return took;
 }
 
 int32_t kvm_iobus_check_extension(long cap)

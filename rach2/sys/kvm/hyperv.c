@@ -3,6 +3,9 @@
  * Hyper-V's interface, as Linux's arch/x86/kvm/hyperv.c: the synthetic
  * MSRs, the hypercalls, the reference TSC page, the synthetic interrupt
  * controller (SynIC) and its timers, and KVM_GET_SUPPORTED_HV_CPUID.
+ * Its state is the big lock's: KVM_RUN, which runs without it, takes it
+ * for the entry points below that change it (`kvm_bkl_enter`), and only
+ * when the guest has the enlightenments and there is work for them.
  */
 
 #include "kvm.h"
@@ -14,6 +17,7 @@
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
 #include "../proc/process.h"
+#include "../proc/smp.h"
 #include "../timer.h"
 
 /* The CPUID leaves, by the TLFS's names. */
@@ -359,7 +363,7 @@ static uint64_t guest_tsc(const struct kvm_vcpu *v)
 /** HV_MSR_TIME_REF_COUNT of `vm`, in 100 ns, as Linux's
  * get_time_ref_counter: by the TSC page's formula from the first vCPU's
  * TSC while the page is set, else the kvmclock's. */
-static uint64_t ref_counter(const struct kvm_vm *vm)
+static uint64_t ref_counter(struct kvm_vm *vm)
 {
     const struct hv_vm *h = hvm_of(vm);
 
@@ -887,17 +891,13 @@ static void stimer_expire(struct kvm_vcpu *v, int n)
     }
 }
 
-void kvm_hv_stimers(struct kvm_vcpu *v)
+/** `kvm_hv_stimers` under the big lock, with `hv` the vCPU's and `now`
+ * the host's time. */
+static void hv_stimers(struct kvm_vcpu *v, struct hv_vcpu *hv, uint64_t now)
 {
-    struct hv_vcpu *hv = hv_of(v);
     struct hv_stimer *s;
-    uint64_t now;
     int i;
 
-    if (!hv) {
-        return;
-    }
-    now = kvm_host_ns();
     for (i = 0; i < HV_STIMERS; i++) {
         s = &hv->stimer[i];
         if (s->due_ns && now >= s->due_ns) {
@@ -925,6 +925,30 @@ void kvm_hv_stimers(struct kvm_vcpu *v)
             stimer_cleanup(hv, s);
         }
     }
+}
+
+/** The timers are the vCPU's own, which only its thread changes, so the
+ * test for one due takes no lock. */
+void kvm_hv_stimers(struct kvm_vcpu *v)
+{
+    struct hv_vcpu *hv = hv_of(v);
+    uint64_t now;
+    int i, due;
+
+    if (!hv) {
+        return;
+    }
+    now = kvm_host_ns();
+    due = hv->stimer_pending != 0;
+    for (i = 0; !due && i < HV_STIMERS; i++) {
+        due = hv->stimer[i].due_ns && now >= hv->stimer[i].due_ns;
+    }
+    if (!due) {
+        return;
+    }
+    kvm_bkl_enter(v);
+    hv_stimers(v, hv, now);
+    bkl_exit();
 }
 
 uint64_t kvm_hv_stimer_next(const struct kvm_vcpu *v)
@@ -1325,13 +1349,11 @@ static int msr_vcpu(struct kvm_vcpu *v, uint32_t msr, int write, uint64_t *value
     }
 }
 
-int kvm_hv_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host)
+/** `kvm_hv_msr` under the big lock, for a Hyper-V MSR. */
+static int hv_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host)
 {
     struct hv_vcpu *hv = hv_of(v);
 
-    if (!is_hv_msr(index)) {
-        return 1;
-    }
     if (!host && (!hv || !hv->enabled)) {
         return -1;
     }
@@ -2050,7 +2072,8 @@ static int hc_dispatch(struct kvm_vcpu *v, struct hcall *hc, uint64_t *ret)
     return 1;
 }
 
-int kvm_hv_hypercall(struct kvm_vcpu *v, uint32_t len)
+/** `kvm_hv_hypercall` under the big lock. */
+static int hv_hypercall(struct kvm_vcpu *v, uint32_t len)
 {
     struct hv_vcpu *hv = hv_of(v);
     struct hcall hc;
@@ -2097,14 +2120,11 @@ int kvm_hv_hypercall(struct kvm_vcpu *v, uint32_t len)
     return 0;
 }
 
-void kvm_hv_complete(struct kvm_vcpu *v)
+/** `kvm_hv_complete` under the big lock, with an answer waiting. */
+static void hv_complete(struct kvm_vcpu *v, struct hv_vcpu *hv)
 {
-    struct hv_vcpu *hv = hv_of(v);
     struct hv_vm *h = hvm_of(v->vm);
 
-    if (!hv || hv->done == DONE_NONE) {
-        return;
-    }
     if (hv->done == DONE_HCALL) {
         hc_result(v, v->run->u.hyperv.u.hcall.result);
         kvm_emul_skip(v, hv->insn_len);
@@ -2123,7 +2143,8 @@ static void system_event(struct kvm_run *run, uint32_t type)
     run->u.system_event.type = type;
 }
 
-int32_t kvm_hv_prepare(struct kvm_vcpu *v)
+/** `kvm_hv_prepare` under the big lock. */
+static int32_t hv_prepare(struct kvm_vcpu *v)
 {
     struct hv_vcpu *hv = hv_of(v);
     struct kvm_run *run = v->run;
@@ -2146,6 +2167,67 @@ int32_t kvm_hv_prepare(struct kvm_vcpu *v)
         return 1;
     }
     return 0;
+}
+
+int kvm_hv_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host)
+{
+    int r;
+
+    if (!is_hv_msr(index)) {
+        return 1;
+    }
+    kvm_bkl_enter(v);
+    r = hv_msr(v, index, write, value, host);
+    bkl_exit();
+    return r;
+}
+
+int kvm_hv_hypercall(struct kvm_vcpu *v, uint32_t len)
+{
+    int r;
+
+    kvm_bkl_enter(v);
+    r = hv_hypercall(v, len);
+    bkl_exit();
+    return r;
+}
+
+/** The answer waits on the vCPU's own record, which only its thread
+ * changes, so the test takes no lock. */
+void kvm_hv_complete(struct kvm_vcpu *v)
+{
+    struct hv_vcpu *hv = hv_of(v);
+
+    if (!hv || hv->done == DONE_NONE) {
+        return;
+    }
+    kvm_bkl_enter(v);
+    hv_complete(v, hv);
+    bkl_exit();
+}
+
+/** The big lock is taken only for work: the kvmclock moved
+ * (`hv_clock_moved`, which is taken here by an exchange), the reference
+ * TSC page waits to be written, or a request of hyperv.c's is set. A
+ * status another vCPU changes just after the test is seen by that vCPU's
+ * own next pass. */
+int32_t kvm_hv_prepare(struct kvm_vcpu *v)
+{
+    const struct hv_vm *h = hvm_of(v->vm);
+    int32_t r;
+
+    if (!v->vm->hv_clock_moved &&
+        (!h || (h->tsc_status != TSC_GUEST_CHANGED && h->tsc_status != TSC_HOST_CHANGED)) &&
+        !(v->requests & (KVM_REQ_HV_CRASH | KVM_REQ_HV_RESET | KVM_REQ_HV_EXIT))) {
+        return 0;
+    }
+    kvm_bkl_enter(v);
+    if (arch_atomic_xchg((volatile unsigned int *)&v->vm->hv_clock_moved, 0u)) {
+        kvm_hv_clock_changed(v->vm);
+    }
+    r = hv_prepare(v);
+    bkl_exit();
+    return r;
 }
 
 void kvm_hv_vcpu_free(struct kvm_vcpu *v)

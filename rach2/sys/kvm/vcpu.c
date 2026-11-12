@@ -1,6 +1,8 @@
 /*
  * vcpu.c: a VM's vCPUs: the vCPU descriptor, its run pages mapped into the
- * caller, KVM_RUN's loop, and the ioctls of the vCPU's state.
+ * caller, KVM_RUN's loop, and the ioctls of the vCPU's state. Each ioctl
+ * holds the vCPU's mutex; KVM_RUN runs without the big lock and the others
+ * under it, as kvm.c's VM ioctls do.
  */
 
 #include "kvm.h"
@@ -81,37 +83,20 @@
 /* The highest MP state Linux knows, KVM_MP_STATE_SUSPENDED. */
 #define KVM_MP_STATE_MAX 10u
 
-static uint64_t guest_exits;
-
-/** Read completed backend entries since boot, under the big lock. */
-uint64_t kvm_exit_count(void)
-{
-    return guest_exits;
-}
-
-/** Whether no ioctl of `arg`, a vCPU, is under way. */
-static int vcpu_idle(void *arg)
-{
-    return !((struct kvm_vcpu *)arg)->busy;
-}
-
-/** Take `v` for one ioctl, waiting while another holds it, as Linux takes
- * the vCPU's mutex. A signal does not end the wait: the holder is a KVM_RUN,
- * which a signal of its own ends, or a state ioctl, which does not sleep
- * long; a SIGKILL ends both threads' runs together. */
+/** Take `v` for one ioctl, waiting while another holds it, as Linux's
+ * kvm_vcpu_ioctl takes vcpu->mutex (virt/kvm/kvm_main.c:4489). A signal
+ * does not end the wait: the holder is a KVM_RUN, which a signal of its
+ * own ends, or a state ioctl, which does not sleep long; a SIGKILL ends
+ * both threads' runs together. */
 static void vcpu_lock(struct kvm_vcpu *v)
 {
-    while (v->busy) {
-        wq_wait_event_nointr(&v->wq, vcpu_idle, v);
-    }
-    v->busy = 1;
+    mutex_lock(&v->mutex);
 }
 
 /** Let go of `v`. */
 static void vcpu_unlock(struct kvm_vcpu *v)
 {
-    v->busy = 0;
-    wq_wake(&v->wq, WQ_DATA);
+    mutex_unlock(&v->mutex);
 }
 
 /** Write back the parts `parts` of `v`'s state from its backend. */
@@ -382,15 +367,20 @@ static int32_t vcpu_mmap(fd_entry_t *e, struct vma *vma)
 }
 
 /** The last close of a vCPU's descriptor: its reference to the VM goes,
- * and the vCPU lives on with the VM, as on Linux. */
+ * and the vCPU lives on with the VM, as on Linux. Called without the big
+ * lock, which the VM's release takes. */
 static void vcpu_close(fd_entry_t *e)
 {
+    bkl_enter();
     kvm_vm_put(((struct kvm_vcpu *)e->priv)->vm);
     e->priv = NULL;
+    bkl_exit();
 }
 
+/* The descriptor's calls run without the big lock (FILE_OPS_UNLOCKED):
+ * kvm_vcpu_ioctl takes it for all but KVM_RUN, and mmap runs under it. */
 static const struct file_ops vcpu_ops = {NULL,       NULL,      NULL, kvm_vcpu_ioctl,
-                                         vcpu_close, vcpu_mmap, NULL, 0};
+                                         vcpu_close, vcpu_mmap, NULL, FILE_OPS_UNLOCKED};
 
 void kvm_vcpu_free(struct kvm_vcpu *v)
 {
@@ -451,7 +441,7 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
     kvm_decimal(v->name + 9, id);
     kvm_stats_id(v->stats_id, v);
     v->anon.name = v->name;
-    wait_queue_init(&v->wq);
+    mutex_init(&v->mutex, "kvm_vcpu");
     r = -ENOMEM;
     v->run = kalloc_pages(KVM_RUN_PAGES, NULL);
     v->xsave_mem = kmalloc(KVM_XSAVE_SIZE + 64u);
@@ -480,7 +470,11 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
         r = fd;
         goto fail;
     }
-    vm->vcpus[vm->nr_vcpus++] = v;
+    /* The run loops of the other vCPUs read the array without the big
+     * lock: the entry is whole before the count takes it in. */
+    vm->vcpus[vm->nr_vcpus] = v;
+    k_barrier();
+    vm->nr_vcpus++;
     kvm_vm_get(vm);
     kvm_tsc_sync(v, NULL);
     e = fd_slot(current_proc->fds, fd);
@@ -704,41 +698,55 @@ static int32_t run_exit(struct kvm_vcpu *v)
 }
 
 /**
- * Enter the guest once, with interrupts off and without the big lock, as
- * the backend's `enter` needs, and take both back after: 0, -EAGAIN when a
- * request came between the check and the entry, or the backend's error.
- * The vCPU is IN_GUEST from before its requests are read, so a kick that
- * comes after the read finds it there and interrupts the processor. The
- * last exit's account closes as handled in the kernel only once the guest
- * ran; after -EAGAIN or an error it stays open, and closes as one that
- * ended KVM_RUN if KVM_RUN returns before the next entry.
+ * Enter the guest once, with interrupts off, as the backend's `enter`
+ * needs: 0, -EAGAIN when a request came between the check and the entry,
+ * or the backend's error. The vCPU is IN_GUEST from before its requests
+ * are read, so a kick that comes after the read finds it there and
+ * interrupts the processor, as Linux's vcpu_enter_guest sets
+ * IN_GUEST_MODE before kvm_vcpu_exit_request (arch/x86/kvm/x86.c:10491,
+ * 10519). A request the loop has not taken cancels the entry
+ * (KVM_REQ_NOENTER): one that a kick set after the loop's look would
+ * otherwise wait for the next exit.
  */
 static int32_t run_enter(struct kvm_vcpu *v)
 {
     uint32_t flags = kirq_save();
-    uint64_t entry, left;
-    int depth;
     int32_t r;
 
     v->cpu = (int32_t)arch_cpu_id();
     v->mode = KVM_MODE_IN_GUEST;
-    if (v->requests & (KVM_REQ_EXIT | KVM_REQ_TRIPLE_FAULT | KVM_REQ_PMU)) {
+    sched_mb(); /* the kick's request and mode, read in the other order */
+    if (v->requests & KVM_REQ_NOENTER) {
         v->mode = KVM_MODE_OUTSIDE;
         kirq_restore(flags);
         return -EAGAIN;
     }
     v->has_run = 1;
-    entry = arch_cycles();
-    depth = bkl_drop();
     r = kvm_backend->enter(v);
     v->mode = KVM_MODE_OUTSIDE;
-    left = arch_cycles();
-    bkl_take(depth);
     if (r == 0) {
-        kvm_exitstat_exit(v, entry, left, arch_cycles());
+        kvm_exitstat_exit(v, arch_cycles());
     }
     kirq_restore(flags);
     return r;
+}
+
+/** Whether the thread has a signal to act on, as Linux's
+ * xfer_to_guest_mode_work reads TIF_SIGPENDING (kernel/entry/kvm.c:11):
+ * the flag (`sig_woken`) is read without a lock, and only when it is set
+ * does `signal_pending`, which reads the handlers, run under the big
+ * lock. */
+static int run_signal(struct kvm_vcpu *v)
+{
+    int pending;
+
+    if (!*(volatile uint32_t *)&current_proc->sig_woken) {
+        return 0;
+    }
+    kvm_bkl_enter(v);
+    pending = signal_pending();
+    bkl_exit();
+    return pending;
 }
 
 /**
@@ -867,7 +875,7 @@ static int32_t run_loop(struct kvm_vcpu *v)
             return 0;
         }
         r = kvm_vcpu_test_clear(v, KVM_REQ_EXIT);
-        if (signal_pending()) {
+        if (run_signal(v)) {
             v->stat[KVM_VCPU_STAT_SIGNAL_EXITS]++;
             r = 1;
         }
@@ -903,7 +911,6 @@ static int32_t run_loop(struct kvm_vcpu *v)
         if (r != 0) {
             return r;
         }
-        guest_exits++;
         v->stat[KVM_VCPU_STAT_EXITS]++;
         r = kvm_backend->exit ? kvm_backend->exit(v) : -EOPNOTSUPP;
         if (r != 0) {
@@ -928,9 +935,10 @@ static int32_t run_loop(struct kvm_vcpu *v)
 static int32_t sync_take(struct kvm_vcpu *v);
 static void sync_give(struct kvm_vcpu *v);
 
-/** KVM_RUN, whose argument is 0, under the signal mask of
- * KVM_SET_SIGNAL_MASK when one is set, with the old mask back after, as
- * Linux's kvm_sigset_activate and kvm_sigset_deactivate swap them. The
+/** KVM_RUN, whose argument is 0, without the big lock, under the signal
+ * mask of KVM_SET_SIGNAL_MASK when one is set, with the old mask back
+ * after, as Linux's kvm_sigset_activate and kvm_sigset_deactivate swap
+ * them; the swap takes the big lock, which the signal code needs. The
  * run page's `kvm_dirty_regs` names the register sets taken from it first
  * and `kvm_valid_regs` those written to it last (KVM_CAP_SYNC_REGS);
  * -EINVAL for a set outside KVM_SYNC_X86_VALID_FIELDS in either, or for
@@ -947,8 +955,10 @@ static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
     /* Linux's vcpu_load asks for the steal time at each ioctl. */
     req_set(v, KVM_REQ_STEAL_UPDATE);
     if (v->has_sigmask) {
+        kvm_bkl_enter(v);
         old = current_proc->sig_blocked;
         signal_set_blocked(v->sigmask);
+        bkl_exit();
     }
     if ((run->kvm_valid_regs | run->kvm_dirty_regs) & ~(uint64_t)KVM_SYNC_X86_VALID_FIELDS) {
         r = -EINVAL;
@@ -962,10 +972,12 @@ static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
             current_proc->sched_out = NULL;
         }
     }
-    kvm_exitstat_done(v);
     if (v->has_sigmask) {
+        kvm_bkl_enter(v);
         signal_set_blocked(old);
+        bkl_exit();
     }
+    kvm_exitstat_done(v, 1);
     sync_give(v);
     run_post(v);
     return r;
@@ -1954,7 +1966,7 @@ static int32_t device_attr(struct kvm_vcpu *v, uint32_t request, uintptr_t arg)
     return 0;
 }
 
-/** The ioctls of `v` but KVM_RUN, under its lock. */
+/** The ioctls of `v` but KVM_RUN, under its mutex and the big lock. */
 static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t arg)
 {
     struct kvm_mp_state mp;
@@ -2071,7 +2083,13 @@ int32_t kvm_vcpu_ioctl(struct fd_entry *e, uint32_t request, uintptr_t arg)
         return -EINVAL;
     }
     vcpu_lock(v);
-    r = request == KVM_RUN ? vcpu_run(v, arg) : vcpu_state_ioctl(v, request, arg);
+    if (request == KVM_RUN) {
+        r = vcpu_run(v, arg);
+    } else {
+        bkl_enter();
+        r = vcpu_state_ioctl(v, request, arg);
+        bkl_exit();
+    }
     vcpu_unlock(v);
     return r;
 }
