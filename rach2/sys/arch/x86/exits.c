@@ -167,7 +167,7 @@ static void put_counts(struct exits_text *t, const uint32_t *per, int ncpu)
 int32_t exits_show(void *data, char *buf, uint32_t cap)
 {
     struct exits_text t;
-    uint32_t per[NR_CPUS];
+    uint32_t per[NR_CPUS] = {0};
     int ncpu = smp_cpu_count();
     int c, d, i, k;
 
