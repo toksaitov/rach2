@@ -67,17 +67,19 @@ static void device_put(struct vfio_device *d)
     vfio_group_put_device(&vfio_groups[d->group]);
 }
 
-/** Take the pages of every memory BAR from each mapping of them. */
+/**
+ * Take the pages of every BAR from each mapping of them, in one walk, as
+ * Linux's vfio_pci_zap_bars unmaps BAR 0 to the ROM in one
+ * unmap_mapping_range (drivers/vfio/pci/vfio_pci_core.c:1641-1649). Only the
+ * walk's last pass, which waits for nothing, runs whole under the big lock
+ * (`paging_zap_where`); a walk for each BAR would let an earlier BAR fault
+ * back in while a later one's walk waited, and stay mapped across the reset
+ * or the end of decoding that follows. The caller sets what `bar_page`
+ * refuses before it lets the big lock go.
+ */
 void vfio_device_zap(struct vfio_device *d)
 {
-    uint32_t i;
-
-    for (i = 0; i < 6; i++) {
-        if (d->bar_size[i] != 0 && !d->bar_io[i]) {
-            paging_zap_device(d, i << VFIO_PCI_PGOFF_SHIFT,
-                              (uint32_t)((d->bar_size[i] + PAGE - 1) / PAGE));
-        }
-    }
+    paging_zap_device(d, 0, 6u << VFIO_PCI_PGOFF_SHIFT);
 }
 
 /** Read the BARs: their addresses, sizes and kinds. */
