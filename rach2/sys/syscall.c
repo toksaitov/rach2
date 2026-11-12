@@ -3563,7 +3563,8 @@ static void _syscall_handler(isr_params_t *params)
  * changes its mask (`poll_signal_pending`, `poll_mask_set`); flock and
  * fcntl's lock commands take the advisory locks' own lock (fs/lock.c), and
  * the big lock only for a file keyed by its node (`fd_locks_by_node`), and
- * fcntl takes it for the commands `fcntl_big` names. Every
+ * fcntl takes it for the commands `fcntl_big` names; lseek and _llseek
+ * take it for a descriptor `seek_unlocked` does not admit. Every
  * other step those calls make takes the locks of what it touches; the
  * user-memory copies take the big lock until address spaces have locks of
  * their own. The forms of an architecture's own, i686's split offsets and
@@ -3573,9 +3574,9 @@ static void _syscall_handler(isr_params_t *params)
 static void unlock_file_calls(void)
 {
     static const syscall_fn_t calls[] = {
-        sys_read,   sys_write, sys_pread64, sys_pwrite64,  sys_ioctl,      sys_fstat64,
-        sys_close,  sys_poll,  sys_ppoll,   sys_fstatat64, sys_getdents64, sys_open,
-        sys_openat, sys_readv, sys_writev,  sys_flock,     sys_fcntl64,
+        sys_read,   sys_write, sys_pread64,   sys_pwrite64,   sys_ioctl,   sys_fstat64, sys_close,
+        sys_poll,   sys_ppoll, sys_fstatat64, sys_getdents64, sys_open,    sys_openat,  sys_readv,
+        sys_writev, sys_flock, sys_fcntl64,   sys_lseek,      sys__llseek,
     };
     uint32_t i;
 

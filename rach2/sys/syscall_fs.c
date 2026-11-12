@@ -5640,6 +5640,12 @@ int file_ops_unlocked(const fd_entry_t *e)
     return !ofd || (!ofd->vmnt && !ofd->dev_mnt && !ofd->synth_mnt);
 }
 
+int file_seek_unlocked(const fd_entry_t *e)
+{
+    return e && e->ops && e->ops->llseek &&
+           ((e->ops->flags & FILE_OPS_SEEK_UNLOCKED) || file_ops_unlocked(e));
+}
+
 int file_poll_unlocked(const fd_entry_t *e)
 {
     return e && e->ops && e->ops->poll &&
@@ -6731,8 +6737,11 @@ static long device_lseek(fd_entry_t *entry, long long offset, int whence, uint64
  *
  * The result is a register's worth: on i686 a place at 2 GiB or past it is
  * -EOVERFLOW, which _llseek reaches, and on x86-64 the offset is 64 bits.
+ *
+ * The call runs without the big lock, which `sys_lseek` takes for what
+ * `seek_unlocked` leaves.
  */
-long sys_lseek(isr_params_t *params)
+static long lseek_call(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
     long long offset = SC_SIGNED(params, 1);
@@ -6833,6 +6842,48 @@ long sys_lseek(isr_params_t *params)
     entry->ofd->offset = (uint64_t)at;
     fd_ofd_unlock(entry->ofd);
     return (long)at;
+}
+
+/**
+ * Whether a seek of descriptor `e` runs without the big lock, as Linux's
+ * llseek takes none but the file's own (`generic_file_llseek_size`,
+ * fs/read_write.c:159-185): an object whose `llseek` is marked to run
+ * without it (`file_seek_unlocked`), a file or a directory that
+ * `file_vfs_unlocked` admits, whose size and listing its type reads under
+ * the file's lock and whose offset the description's lock covers, and any
+ * descriptor the call refuses without looking at its object, an O_PATH
+ * one, a pipe, a socket or a terminal among them. A device, the
+ * framebuffer, a /dev or /proc listing and every other file take it.
+ */
+static int seek_unlocked(const fd_entry_t *e)
+{
+    if (!e || (e->flags & FD_FLAG_PATH)) {
+        return 1;
+    }
+    if (e->ops && e->ops->llseek) {
+        return file_seek_unlocked(e);
+    }
+    if (e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) {
+        return file_vfs_unlocked(e);
+    }
+    return e->type != FD_TYPE_DEVICE && e->type != FD_TYPE_FRAMEBUFFER &&
+           e->type != FD_TYPE_SYNTH_DIR && e->type != FD_TYPE_PROC;
+}
+
+/** lseek(2): `lseek_call`, under the big lock for a descriptor that
+ * `seek_unlocked` does not admit. */
+long sys_lseek(isr_params_t *params)
+{
+    long rc;
+
+    if (!current_proc || bkl_held() ||
+        seek_unlocked(fd_get(current_proc->fds, (int)SC_ARG(params, 0)))) {
+        return lseek_call(params);
+    }
+    bkl_enter();
+    rc = lseek_call(params);
+    bkl_exit();
+    return rc;
 }
 
 /**
@@ -13556,7 +13607,7 @@ static int32_t device_llseek(fd_entry_t *entry, long long off, int whence, long 
  * (`seek_data_hole`). A NULL `result` is -EFAULT for a file; musl always
  * passes one.
  */
-long sys__llseek(isr_params_t *params)
+static long llseek_call(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
     uint32_t offset_high = (uint32_t)SC_ARG(params, 1);
@@ -13652,6 +13703,22 @@ long sys__llseek(isr_params_t *params)
         return -EFAULT;
     }
     return 0;
+}
+
+/** _llseek(2): `llseek_call`, under the big lock for a descriptor that
+ * `seek_unlocked` does not admit. */
+long sys__llseek(isr_params_t *params)
+{
+    long rc;
+
+    if (!current_proc || bkl_held() ||
+        seek_unlocked(fd_get(current_proc->fds, (int)SC_ARG(params, 0)))) {
+        return llseek_call(params);
+    }
+    bkl_enter();
+    rc = llseek_call(params);
+    bkl_exit();
+    return rc;
 }
 
 /**

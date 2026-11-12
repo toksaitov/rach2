@@ -297,7 +297,9 @@ static short buf_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     return mask;
 }
 
-/** Permit only Linux's dma-buf size query and rewind. */
+/** Permit only Linux's dma-buf size query and rewind, from the size, which
+ * does not change, so without the big lock (FILE_OPS_SEEK_UNLOCKED), as
+ * Linux's dma_buf_llseek takes none (drivers/dma-buf/dma-buf.c:168-191). */
 static int64_t buf_seek(fd_entry_t *e, int64_t offset, int whence)
 {
     struct dma_buf *b = e->priv;
@@ -411,7 +413,7 @@ static void buf_close(fd_entry_t *e)
 }
 
 static const struct file_ops buf_ops = {NULL,      NULL,     buf_poll, buf_ioctl,
-                                        buf_close, buf_mmap, buf_seek, 0};
+                                        buf_close, buf_mmap, buf_seek, FILE_OPS_SEEK_UNLOCKED};
 
 /** Identify dma-bufs by their operations, including duplicated descriptors. */
 int is_dma_buf_file(const fd_entry_t *e)
