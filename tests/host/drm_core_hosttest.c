@@ -32,7 +32,8 @@
  * its object's `open` hook runs; references held by the walk over a
  * device's objects, and an object whose last put is under way passed over
  * by it and by mmap; events queued, polled, read and left by a closed
- * file; the locks each row runs under, the big lock and the mode lock, by
+ * file; the locks each row runs under, including a big lock inherited from
+ * a file-system device node, and the mode lock, by
  * its flags and the device's; unplug; and kcmp of a dup, a fork's copy and
  * two opens of a node, and its other kinds. Each row that ends with the
  * core's locks free shows that no call left one held or took one twice,
@@ -53,6 +54,7 @@ extern void free(void *p);
 extern int memcmp(const void *a, const void *b, unsigned long n);
 extern void *memcpy(void *dst, const void *src, unsigned long n);
 extern int strcmp(const char *a, const char *b);
+extern unsigned long kheap_host_largest;
 
 static int fails;
 
@@ -124,6 +126,24 @@ void bkl_exit(void)
 int bkl_held(void)
 {
     return bkl_depth > 0;
+}
+
+/** Drop the whole inherited depth, as the dispatcher does for a row. */
+int bkl_drop(void)
+{
+    int depth = bkl_depth;
+
+    bkl_depth = 0;
+    return depth;
+}
+
+/** Restore the caller's depth after the row, with no lock left by it. */
+void bkl_take(int depth)
+{
+    if (depth) {
+        CHECK("a row left no big lock before restoring its caller", bkl_depth == 0);
+        bkl_depth = depth;
+    }
 }
 
 int32_t drm_modeset_lock(struct drm_device *dev)
@@ -342,16 +362,22 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 /* Run once by the next copy_to_user before it copies: a second reader
  * whose read runs while the first's copy sleeps. */
 static void (*copy_hook)(void);
+/* A row that expects both copies without an inherited big lock. */
+static int copies_unlocked, unlocked_copies, copy_out_fault;
 
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     void (*hook)(void) = copy_hook;
 
     copy_hook = NULL;
+    if (copies_unlocked) {
+        CHECK("copy out without the inherited big lock", bkl_depth == 0);
+        unlocked_copies++;
+    }
     if (hook) {
         hook();
     }
-    if ((uintptr_t)dst < 4096) {
+    if (copy_out_fault || (uintptr_t)dst < 4096) {
         return -1;
     }
     memcpy((void *)dst, src, n);
@@ -360,6 +386,10 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
 
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
+    if (copies_unlocked) {
+        CHECK("copy in without the inherited big lock", bkl_depth == 0);
+        unlocked_copies++;
+    }
     if ((uintptr_t)src < 4096) {
         return -1;
     }
@@ -623,7 +653,7 @@ struct fake_locks {
 };
 
 #define FAKE_IOCTL_LOCKED   DRM_IOR(DRM_COMMAND_BASE + 1, struct fake_locks)
-#define FAKE_IOCTL_UNLOCKED DRM_IOR(DRM_COMMAND_BASE + 2, struct fake_locks)
+#define FAKE_IOCTL_UNLOCKED DRM_IOWR(DRM_COMMAND_BASE + 2, struct fake_locks)
 #define FAKE_IOCTL_KMS      DRM_IOR(DRM_COMMAND_BASE + 3, struct fake_locks)
 #define FAKE_IOCTL_READ     DRM_IOR(DRM_COMMAND_BASE + 4, struct fake_locks)
 
@@ -1077,6 +1107,66 @@ static void test_locks(void)
           ioc(&card, &user_a, FAKE_IOCTL_READ, &l) == -ENODEV);
     fake_dev.unplugged = 0;
     CHECK("locks: every row let both locks go", bkl_depth == 0 && mode_lock_depth == 0);
+    close_node(&other);
+    close_node(&render);
+    close_node(&card);
+}
+
+/**
+ * A file-system device node enters with a big lock for its retained inode.
+ * An unlocked row gives that whole depth back across copies and the handler,
+ * including failures, and restores it before returning to the caller.
+ * `drm-core inherited` runs these rows alone after the device setup.
+ */
+static void test_inherited(void)
+{
+    fd_entry_t card, render, other;
+    struct fake_locks l;
+    int depth;
+
+    open_node("dri/card0", &user_a, 0, &card);
+    open_node("dri/renderD128", &user_b, 0, &render);
+    open_node("dri/card0", &user_b, 0, &other);
+    k_memset(&l, 0, sizeof(l));
+    for (depth = 1; depth <= 2; depth++) {
+        bkl_depth = depth;
+        copies_unlocked = 1;
+        unlocked_copies = 0;
+        CHECK("inherited: render row and both copies without the big lock",
+              ioc(&render, &user_b, FAKE_IOCTL_UNLOCKED, &l) == 0 && l.big == 0 && l.mode == 0 &&
+                  unlocked_copies == 2 && bkl_depth == depth);
+        CHECK("inherited: copy-in failure restores the whole depth",
+              ioc(&render, &user_b, FAKE_IOCTL_UNLOCKED, (void *)16) == -EFAULT &&
+                  bkl_depth == depth);
+        copy_out_fault = 1;
+        CHECK("inherited: copy-out failure restores the whole depth",
+              ioc(&render, &user_b, FAKE_IOCTL_UNLOCKED, &l) == -EFAULT && bkl_depth == depth);
+        copy_out_fault = 0;
+        kheap_host_largest = DRM_IOCTL_STACK;
+        CHECK(
+            "inherited: allocation failure restores the whole depth",
+            ioc(&render, &user_b,
+                UAPI_IOC(UAPI_IOC_READ, DRM_IOCTL_BASE, DRM_COMMAND_BASE + 2, DRM_IOCTL_STACK + 1),
+                &l) == -ENOMEM &&
+                bkl_depth == depth);
+        kheap_host_largest = 0;
+        copies_unlocked = 0;
+        CHECK("inherited: a locked row keeps the caller's depth",
+              ioc(&render, &user_b, FAKE_IOCTL_LOCKED, &l) == 0 && l.big == (uint32_t)depth + 1 &&
+                  bkl_depth == depth);
+        fake_dev.features |= DRIVER_KMS_UNLOCKED;
+        CHECK("inherited: KMS keeps only the mode lock",
+              ioc(&card, &user_a, FAKE_IOCTL_KMS, &l) == 0 && l.big == 0 && l.mode == 1 &&
+                  bkl_depth == depth && mode_lock_depth == 0);
+        CHECK("inherited: permission failure restores the whole depth",
+              ioc(&other, &user_b, FAKE_IOCTL_KMS, &l) == -EACCES && bkl_depth == depth &&
+                  mode_lock_depth == 0);
+        fake_dev.features &= ~DRIVER_KMS_UNLOCKED;
+        CHECK("inherited: KMS without opt-in keeps the big lock",
+              ioc(&card, &user_a, FAKE_IOCTL_KMS, &l) == 0 && l.big == (uint32_t)depth + 1 &&
+                  l.mode == 1 && bkl_depth == depth);
+        bkl_depth = 0;
+    }
     close_node(&other);
     close_node(&render);
     close_node(&card);
@@ -1784,7 +1874,7 @@ done:
     child_proc.fds = NULL;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     proc_fill(&root_proc, &tg_root, &mm_root, 100, 0);
     proc_fill(&user_a, &tg_a, &mm_a, 200, 1000);
@@ -1793,6 +1883,15 @@ int main(void)
     user_a.sigacts = tg_a.action;
     child_proc.sigacts = tg_child.action;
     test_register();
+    test_inherited();
+    if (argc == 2 && strcmp(argv[1], "inherited") == 0) {
+        if (fails) {
+            printf("drm-core-test: inherited: %d failed\n", fails);
+            return 1;
+        }
+        printf("drm-core-test: inherited: ok\n");
+        return 0;
+    }
     test_identity();
     test_caps();
     test_dispatch();
