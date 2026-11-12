@@ -44,6 +44,10 @@
  * - a seek of a /proc file's or /dev/bootlog's description while a read or
  *   a write of it sleeps, and the log's seeks past the offsets they can
  *   return;
+ * - getdents64 past 4 GiB of a directory whose cursor is a byte, which asks
+ *   the type's `readdir` for a failed mount's or a removed directory's
+ *   error, and the seeks of such a directory up to its volume's largest
+ *   file offset and past it;
  * - an open of /proc/PID/fd/N for a device opened through a device node of
  *   a mounted type while another thread closes descriptor N, the device's
  *   last;
@@ -1861,13 +1865,22 @@ int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whenc
     return -EINVAL;
 }
 
-/** No row seeks a directory, whose listing a seek would read. */
+/* Nonzero while `dir_wide_rows` runs, the answer its model `readdir` gives
+ * and the cursor it was asked at. */
+static int dir_rows, dir_answer;
+static uint32_t dir_asked;
+
+/** The listing of `dir_wide_rows`, which records the cursor it is asked at
+ * and gives that row's answer; no other row lists a directory. */
 int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vfs_dirent *ent)
 {
     (void)mnt;
     (void)handle;
-    (void)cursor;
     (void)ent;
+    if (dir_rows) {
+        dir_asked = *cursor;
+        return dir_answer;
+    }
     check(0, "unexpected directory listing");
     return -EIO;
 }
@@ -3753,6 +3766,67 @@ static void log_seek_range(void)
     row_end();
 }
 
+/* A type whose directory cursor is a byte, as ext2's, for `dir_wide_rows`. */
+static const struct vfs_type bytes_type = {.name = "bytes", .dir_seeks_bytes = 1};
+
+/**
+ * A directory of a type whose cursor is a byte (`dir_seeks_bytes`) on a
+ * volume whose largest file offset is ext2's at 4 KiB blocks: getdents64
+ * at 4 GiB (`dir_past_end`) asks the type's `readdir` at 0xFFFFFFFF and
+ * passes on its -EIO,
+ * a failed mount's, and its -ENOENT, a removed directory's, and ends the
+ * listing on its end, each leaving the offset; _llseek takes the largest
+ * offset and refuses a byte past it with EINVAL by SEEK_SET and SEEK_CUR,
+ * leaving the offset.
+ */
+static void dir_wide_rows(void)
+{
+    static const int answers[] = {-EIO, -ENOENT, 0};
+    static const char *const what[] = {
+        "getdents64 past 4 GiB of a directory on a failed mount is EIO",
+        "getdents64 past 4 GiB of a removed directory is ENOENT",
+        "getdents64 past 4 GiB of a directory at its end lists nothing"};
+    const uint64_t most = 0x1FF7FDFE000ull;
+    struct vfs_mount bytes_mount;
+    long long result = 0;
+    fd_entry_t *e;
+    unsigned i;
+    long rc;
+
+    row_begin();
+    k_memset(&bytes_mount, 0, sizeof(bytes_mount));
+    bytes_mount.type = &bytes_type;
+    bytes_mount.max_bytes = most;
+    check(fd_alloc(proc.fds) == 0, "the wide-offset row's descriptor");
+    e = fd_slot(proc.fds, 0);
+    e->type = FD_TYPE_DIR;
+    e->flags = FD_FLAG_READ;
+    e->ofd->vmnt = &bytes_mount;
+    e->ofd->vnode = &node;
+    e->ofd->fhandle = &handle;
+    dir_rows = 1;
+    for (i = 0; i < sizeof(answers) / sizeof(answers[0]); i++) {
+        e->ofd->offset = 0x100000000ull;
+        dir_asked = 0;
+        dir_answer = answers[i];
+        rc = dir_past_end(e->ofd);
+        check(rc == answers[i] && dir_asked == 0xFFFFFFFFu && e->ofd->offset == 0x100000000ull,
+              what[i]);
+    }
+    rc = llseek_listing(e, (long long)most, 0, (long long __user *)&result);
+    check(rc == 0 && result == (long long)most && e->ofd->offset == most,
+          "an _llseek of a byte-cursor directory takes its volume's largest file offset");
+    rc = llseek_listing(e, 1, 1, (long long __user *)&result);
+    check(rc == -EINVAL && e->ofd->offset == most,
+          "an _llseek one byte on from it by SEEK_CUR is EINVAL and leaves the offset");
+    rc = llseek_listing(e, (long long)most + 1, 0, (long long __user *)&result);
+    check(rc == -EINVAL && e->ofd->offset == most,
+          "an _llseek one byte past it by SEEK_SET is EINVAL and leaves the offset");
+    dir_rows = 0;
+    e->ofd->vmnt = 0;
+    row_end();
+}
+
 /** The close of the device row's device, its description's last. */
 static void dev_close(fd_entry_t *e)
 {
@@ -4989,6 +5063,7 @@ int main(int argc, char **argv)
     lock_keys();
     offset_seek_waits();
     log_seek_range();
+    dir_wide_rows();
     device_reopen_closed();
     orphan_reclaims();
     mapping_reclaims();
