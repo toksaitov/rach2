@@ -162,6 +162,15 @@ static void sleep_record_hold(const struct sleep_lock *l)
     spin_unlock_irqrestore(&records_lock, irq);
 }
 
+/**
+ * The last give wakes the queue only when a waiter is on it, as Linux's
+ * __mutex_unlock_slowpath wakes only a waiter it finds on the lock's list
+ * (kernel/locking/mutex.c:937-956). The unlock of the lock's spinlock is an
+ * exchange, a full barrier, between the release and the read of the queue,
+ * and so is the unlock of the queue a waiter files itself on before it
+ * tests its turn (`wq_wait`): either the waiter's test sees the release or
+ * this read sees the waiter.
+ */
 void sleep_lock_give(struct sleep_lock *l)
 {
     uint32_t irq;
@@ -185,7 +194,9 @@ void sleep_lock_give(struct sleep_lock *l)
 #ifdef RACH2_LOCKDEP
     lockdep_release(&l->dep, DEP_CALLER);
 #endif
-    wq_wake_all(&l->wq);
+    if (wq_active(&l->wq)) {
+        wq_wake_all(&l->wq);
+    }
 }
 
 int sleep_lock_held(const struct sleep_lock *l)
