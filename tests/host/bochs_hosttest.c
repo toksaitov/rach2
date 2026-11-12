@@ -28,7 +28,9 @@
  * leaves the buffer where it was; the pages the mappings get; PRIME's
  * refusal of a foreign buffer; the PCI probe, which binds nothing under
  * `nomodeset` or with less than 4 MiB, removes the firmware's framebuffer
- * from each memory BAR and maps both; and a failed registration, which
+ * from each memory BAR and maps both; the probe under boot lines of
+ * `nomodeset` and `bochs.modeset`, which bind it or not as Linux's
+ * drm_pci_register_driver_if_modeset decides; and a failed registration, which
  * releases the device whole.
  *
  * Returns 0 when every row passes, 1 otherwise.
@@ -893,6 +895,71 @@ static void row_probe(void)
     fn_present = 0;
 }
 
+/* Boot lines and whether the probe binds under them: `nomodeset` matched by
+ * its first bytes, as Linux's obsolete_checksetup, and `bochs.modeset` read
+ * as Linux's int module parameter, the last word whose value kstrtoint
+ * takes in base 0 counting. */
+static const struct {
+    const char *line;
+    int binds;
+} modesets[] = {
+    {"", 1},
+    {"nomodeset", 0},
+    {"nomodeset=1", 0},
+    {"nomodesetx", 0},
+    {"bochs.modeset=0", 0},
+    {"bochs.modeset=0x0", 0},
+    {"bochs.modeset=x", 1},
+    {"nomodeset bochs.modeset=1", 1},
+    {"nomodeset bochs.modeset=0x10", 1},
+    {"nomodeset bochs-modeset=1", 0}, /* another name: `-` is `_` only */
+    {"nomodeset bochs.modeset=0", 0},
+    {"nomodeset bochs.modeset=0x0", 0},
+    {"nomodeset bochs.modeset=-1", 0},
+    {"nomodeset bochs.modeset=x", 0},          /* no int: -1 stays */
+    {"nomodeset bochs.modeset", 0},            /* bare: parse_one refuses it */
+    {"nomodeset bochs.modeset=", 0},           /* empty: kstrtoint refuses it */
+    {"nomodeset bochs.modeset=1x", 0},         /* trailing bytes: refused */
+    {"nomodeset bochs.modeset=4294967297", 0}, /* past an int: refused */
+    {"nomodeset bochs.modeset=1 bochs.modeset=x", 1},
+    {"nomodeset bochs.modeset=1 bochs.modeset=0", 0},
+    {"nomodeset bochs.modeset=0 bochs.modeset=1", 1},
+    {"nomodeset bochs.modeset=\"1\"", 1},
+    {"nomodeset -- bochs.modeset=1", 0}, /* init's words */
+};
+
+/** The probe under each line of `modesets`, which binds and drops the
+ * function or binds nothing. */
+static void row_modeset(void)
+{
+    unsigned int i;
+    int32_t rc;
+    int base = allocations;
+
+    fn_present = 1;
+    vga_fn.bar[2] = 0x81000000u;
+    for (i = 0; i < sizeof(modesets) / sizeof(modesets[0]); i++) {
+        model_reset(1);
+        (void)kcmdline_capture(modesets[i].line);
+        registered = 0;
+        nremoved = 0;
+        rc = bochs_probe();
+        if (rc != (modesets[i].binds ? 1 : -ENODEV) || registered != modesets[i].binds) {
+            failures++;
+            printf("%s: fail: \"%s\" should %s the driver\n", test_name, modesets[i].line,
+                   modesets[i].binds ? "bind" : "not bind");
+        }
+        if (rc == 1) {
+            take_device();
+            unbind();
+            kfree(windows);
+        }
+    }
+    (void)kcmdline_capture("");
+    CHECK(allocations == base, "the binds under the lines keep nothing");
+    fn_present = 0;
+}
+
 /** A registration that fails releases the device whole. */
 static void row_register_fails(void)
 {
@@ -921,6 +988,7 @@ int main(void)
     row_moves();
     registered = 0;
     row_probe();
+    row_modeset();
     row_register_fails();
     CHECK(allocations == base, "every allocation freed");
     free(vram);
