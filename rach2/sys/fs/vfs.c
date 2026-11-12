@@ -3154,20 +3154,96 @@ int32_t vfs_newsize_ok(uint64_t size, uint64_t end)
     return end > size ? vfs_fsize_refused(end) : 0;
 }
 
+/* The fields of a write-back error sequence, Linux's errseq_t
+ * (lib/errseq.c): the errno below MAX_ERRNO's 4096, the bit set once a
+ * sync has reported it, and the step of the count above them. */
+#define WB_ERR_MASK 0xfffu
+#define WB_ERR_SEEN 0x1000u
+#define WB_ERR_STEP 0x2000u
+
+/* Guards every mount's `wb_err` and `sb_wb_err` and every description's
+ * cursors into them, so that two syncs of one description at once report
+ * an error once, as Linux's `file_check_and_advance_wb_err` takes the
+ * file's `f_lock`. A leaf, taken with interrupts off. */
+static struct spinlock wb_err_lock = SPINLOCK_INIT_NAMED("wb_err_lock");
+
+/** Record `rc` in the sequence `seq`, as Linux's errseq_set: the errno
+ * replaced, and the count moved when the last error has been reported, so
+ * that every cursor that saw it sees this one. The caller holds
+ * `wb_err_lock`. */
+static void wb_err_record(uint32_t *seq, int rc)
+{
+    uint32_t next = (*seq & ~(WB_ERR_MASK | WB_ERR_SEEN)) | ((uint32_t)-rc & WB_ERR_MASK);
+
+    if (*seq & WB_ERR_SEEN) {
+        next += WB_ERR_STEP;
+    }
+    *seq = next;
+}
+
+/** The errno of the sequence `seq` when it has moved since the cursor
+ * `*seen` last looked, with the sequence marked reported and the cursor
+ * moved to it, else 0, as Linux's errseq_check_and_advance. The caller
+ * holds `wb_err_lock`. */
+static int wb_err_check(uint32_t *seq, uint32_t *seen)
+{
+    if (*seq == *seen) {
+        return 0;
+    }
+    *seq |= WB_ERR_SEEN;
+    *seen = *seq;
+    return -(int)(*seq & WB_ERR_MASK);
+}
+
+void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
+{
+    struct vfs_mount *base = mount_base(mnt);
+    uint32_t flags;
+
+    if (rc >= 0 || -rc > (int)WB_ERR_MASK) {
+        rc = -EIO;
+    }
+    flags = spin_lock_irqsave(&wb_err_lock);
+    wb_err_record(&base->wb_err, rc);
+    wb_err_record(&base->sb_wb_err, rc);
+    spin_unlock_irqrestore(&wb_err_lock, flags);
+}
+
+void vfs_wb_err_sample(struct vfs_mount *mnt, uint32_t *file, uint32_t *fs)
+{
+    struct vfs_mount *base = mount_base(mnt);
+    uint32_t flags = spin_lock_irqsave(&wb_err_lock);
+
+    *file = (base->wb_err & WB_ERR_SEEN) ? base->wb_err : 0u;
+    *fs = (base->sb_wb_err & WB_ERR_SEEN) ? base->sb_wb_err : 0u;
+    spin_unlock_irqrestore(&wb_err_lock, flags);
+}
+
+int vfs_syncfs_error(struct vfs_mount *mnt, uint32_t *seen)
+{
+    uint32_t flags = spin_lock_irqsave(&wb_err_lock);
+    int rc = wb_err_check(&mount_base(mnt)->sb_wb_err, seen);
+
+    spin_unlock_irqrestore(&wb_err_lock, flags);
+    return rc;
+}
+
 /** The body of `vfs_fsync` and `vfs_fdatasync`: the type's operation `op`, or
  * the device's sync for a type with neither, then the device's flush. A
  * flush that fails is reported to the mounts on the device
  * (`vfs_device_failed`) under the big lock, which is taken when the caller,
- * a sync of a type that sets `writes_unlocked`, lacks it. Once a write on
- * the device has failed, the mount's `write_error` is the answer, whatever
- * the type's: a write the flusher or an eviction made and that failed is
- * kept only there, and a later write of the same block that succeeds would
- * hide it, as Linux's fsync reports a mapping's kept error after the
- * buffers it syncs (`sync_mapping_buffers`, fs/buffer.c:618). */
+ * a sync of a type that sets `writes_unlocked`, lacks it. Then the
+ * description's cursor `seen` moves past what the file system's `wb_err`
+ * holds, whose error is the answer when the sync's own is 0: a write the
+ * flusher or an eviction made and that failed is recorded only there, and a
+ * later write of the same block that succeeds would hide it, as Linux's
+ * fsync reports a mapping's recorded error once to each file
+ * (`file_check_and_advance_wb_err`, mm/filemap.c:726). */
 static int sync_handle(struct vfs_mount *mnt, void *handle,
-                       int (*op)(struct vfs_mount *mnt, void *handle))
+                       int (*op)(struct vfs_mount *mnt, void *handle), uint32_t *seen)
 {
-    int rc, big;
+    uint32_t flags;
+    int rc, big, kept;
 
     if (!op) {
         rc = mnt->dev ? bcache_sync(mnt->dev) : 0;
@@ -3187,28 +3263,28 @@ static int sync_handle(struct vfs_mount *mnt, void *handle,
             }
         }
     }
-    if (mount_base(mnt)->write_error) {
-        rc = mount_base(mnt)->write_error;
-    }
-    return rc;
+    flags = spin_lock_irqsave(&wb_err_lock);
+    kept = wb_err_check(&mount_base(mnt)->wb_err, seen);
+    spin_unlock_irqrestore(&wb_err_lock, flags);
+    return rc != 0 ? rc : kept;
 }
 
-int vfs_fsync(struct vfs_mount *mnt, void *handle)
+int vfs_fsync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
 {
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
-    return sync_handle(mnt, handle, mnt->type->ops->fsync);
+    return sync_handle(mnt, handle, mnt->type->ops->fsync, seen);
 }
 
-int vfs_fdatasync(struct vfs_mount *mnt, void *handle)
+int vfs_fdatasync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
 {
     const struct vfs_ops *ops = mnt->type->ops;
 
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
-    return sync_handle(mnt, handle, ops->fdatasync ? ops->fdatasync : ops->fsync);
+    return sync_handle(mnt, handle, ops->fdatasync ? ops->fdatasync : ops->fsync, seen);
 }
 
 void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
@@ -3222,6 +3298,7 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
         if (!mounts[i]->write_error) {
             mounts[i]->write_error = rc;
         }
+        vfs_wb_err_set(mounts[i], rc);
         mounts[i]->flags |= VFS_MS_RDONLY;
         klog(KLOG_WARN, "vfs", "read-only: %s: write of sector %d failed (%d)",
              mounts[i]->covered_path, (int)lba, rc);

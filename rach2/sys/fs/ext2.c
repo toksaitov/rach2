@@ -1572,8 +1572,8 @@ int ext2_em_write_out(struct vfs_mount *mnt)
  * and state left dirty under `em->super`, then the device's dirty buffers
  * written and the disk's cache flushed with no lock held (`ext2_em_write_out`).
  * The caller holds no file lock. Returns this sync's result, with a failure
- * recorded as the batch's error; the mount's first failure is what `fsync`
- * reports.
+ * recorded as the batch's error and for the descriptions' syncs to report
+ * (`ext2_writeback_error`).
  */
 static int ext2_sync(struct vfs_mount *mnt)
 {

@@ -1113,6 +1113,15 @@ void vfs_desc_open(struct vfs_mount *mnt)
     refs++;
 }
 
+/** Start a description's cursors into the write-back errors at none,
+ * which no row reports. */
+void vfs_wb_err_sample(struct vfs_mount *mnt, uint32_t *file, uint32_t *fs)
+{
+    (void)mnt;
+    *file = 0;
+    *fs = 0;
+}
+
 /** Record completion of the resolution's mount operation. */
 void vfs_leave(struct vfs_mount *mnt)
 {
@@ -1505,18 +1514,20 @@ void vfs_writeback_aged(const struct vfs_mount *mnt, uint64_t born)
 }
 
 /** The fsync of a file whose shared mapping is synced, which no row makes. */
-int vfs_fsync(struct vfs_mount *mnt, void *handle)
+int vfs_fsync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
 {
     (void)mnt;
     (void)handle;
+    (void)seen;
     return 0;
 }
 
 /** The fdatasync of a file, which no row makes. */
-int vfs_fdatasync(struct vfs_mount *mnt, void *handle)
+int vfs_fdatasync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
 {
     (void)mnt;
     (void)handle;
+    (void)seen;
     return 0;
 }
 

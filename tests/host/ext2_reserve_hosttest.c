@@ -448,6 +448,13 @@ void bcache_release(struct bbuf *buffer)
     (void)buffer;
 }
 
+/** Do nothing: no row reads the write-back errors the VFS reports. */
+void vfs_wb_err_set(struct vfs_mount *m, int rc)
+{
+    (void)m;
+    (void)rc;
+}
+
 /** Count a write to the cache in `writes`, and one without an order class
  * in `unordered`. */
 void bcache_dirty(struct bbuf *buffer)

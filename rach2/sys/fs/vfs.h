@@ -482,7 +482,20 @@ struct vfs_mount {
     /* What the unmount record reports: every open matched by a release. */
     uint32_t opens;
     uint32_t releases;
-    int write_error; /* the error of the first failed write, 0 for none */
+    /* The error of the first failed write, 0 for none: the latch that
+     * keeps the mount read-only for the rest of its life, which a remount
+     * read-write refuses. A sync reports errors through `wb_err`. */
+    int write_error;
+    /* The write-back errors of the file system, on the base mount, as
+     * Linux's errseq_t (lib/errseq.c): the last error's errno in the low
+     * twelve bits, a bit set once a sync has reported it, and above them a
+     * count that moves when a new error follows a reported one. fsync and
+     * fdatasync report `wb_err`, Linux's mapping's `wb_err`, and syncfs
+     * `sb_wb_err`, the superblock's `s_wb_err`, each once to each open
+     * description, which keeps a cursor into each (`vfs_wb_err_sample`).
+     * Under `wb_err_lock` (vfs.c). */
+    uint32_t wb_err;
+    uint32_t sb_wb_err;
     /* The tick since which what a write-back of shared mappings' pages put
      * in the file system may have been dirty, the oldest kept, on the base
      * mount; 0 for none (`vfs_writeback_aged`). Under the big lock. */
@@ -1156,12 +1169,39 @@ int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options);
 
 /**
  * A write to `dev` failed at `lba` with `rc`: every mount on the device goes
- * read-only for the rest of its life, with a record in the kernel log, and
- * keeps the first such error in `write_error`. The buffer cache calls it for
- * a failed write or flush and for a device that has gone, and `vfs_fsync`,
+ * read-only for the rest of its life, with a record in the kernel log,
+ * keeps the first such error in `write_error`, and records this one for the
+ * syncs to report (`vfs_wb_err_set`). The buffer cache calls it for a failed
+ * write or flush and for a device that has gone, and `vfs_fsync`,
  * `vfs_sync_all` and the unmount for a failed flush of the device.
  */
 void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc);
+
+/**
+ * Record the write-back error `rc`, a negative errno, in the file system
+ * `mnt` shows, for each description's next fsync, fdatasync and syncfs to
+ * report, as Linux's mapping_set_error records it in the mapping and the
+ * superblock (include/linux/pagemap.h:43). Any context; takes a spinlock
+ * with interrupts off.
+ */
+void vfs_wb_err_set(struct vfs_mount *mnt, int rc);
+
+/**
+ * The cursors a new description of a file of `mnt` starts with: `*file`
+ * into the errors fsync reports and `*fs` into those syncfs reports, each
+ * at the error last reported, or before an error no sync has reported yet,
+ * so that the first description to sync after a failure sees it, as Linux's
+ * errseq_sample answers 0 for an unseen error (lib/errseq.c:122).
+ */
+void vfs_wb_err_sample(struct vfs_mount *mnt, uint32_t *file, uint32_t *fs);
+
+/**
+ * syncfs(2)'s report for a description of a file of `mnt` whose cursor is
+ * `*seen`: the errno of a write-back error recorded since the cursor last
+ * looked, with the cursor moved past it, else 0, as Linux's syncfs checks
+ * `s_wb_err` (fs/sync.c:166). Serialised with every other report.
+ */
+int vfs_syncfs_error(struct vfs_mount *mnt, uint32_t *seen);
 
 /**
  * How many holds the mounts on `dev` account for: one for each mount, and
@@ -1282,11 +1322,16 @@ int32_t vfs_fsize_refused(uint64_t end);
 int32_t vfs_newsize_ok(uint64_t size, uint64_t end);
 /** The type's fsync, or for a type without one a write of the device's
  * dirty buffers, then the device's flush, a failure of which makes the
- * device's mounts read-only (`vfs_device_failed`). 0 or a negative errno. */
-int vfs_fsync(struct vfs_mount *mnt, void *handle);
+ * device's mounts read-only (`vfs_device_failed`). `seen` is the cursor of
+ * the description that syncs (`vfs_wb_err_sample`): a write-back error
+ * recorded since it last looked is the answer when the sync itself
+ * succeeds, and the cursor moves past it whatever the sync's answer, as
+ * Linux's `file_check_and_advance_wb_err` (mm/filemap.c:726). 0 or a
+ * negative errno. */
+int vfs_fsync(struct vfs_mount *mnt, void *handle, uint32_t *seen);
 /** `vfs_fsync` by the type's fdatasync, or by its fsync for a type without
  * one. 0 or a negative errno. */
-int vfs_fdatasync(struct vfs_mount *mnt, void *handle);
+int vfs_fdatasync(struct vfs_mount *mnt, void *handle, uint32_t *seen);
 /** The type's getattr, or -EINVAL for a type without one. */
 int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st);
 /** The type's setattr of the fields `what` gives: 0, -EBUSY for a size

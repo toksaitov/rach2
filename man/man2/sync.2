@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 13, 2026
 .Dt SYNC 2
 .Os
 .Sh NAME
@@ -35,10 +35,16 @@ rest of their lifetime.
 .Fn syncfs
 flushes everything
 .Fn sync
-does, and ignores write-back errors the same way, where Linux flushes
-only the file system
+does, where Linux flushes only the file system
 .Fa fd
-is on and reports a write-back error.
+is on.
+For a descriptor of a file of a mounted file system it then reports a
+write-back error recorded on that file system, as described below, with
+a record of its own, so that
+.Fn fsync
+and
+.Fn syncfs
+each report an error once.
 It accepts any open descriptor but one opened with
 .Dv O_PATH .
 .Pp
@@ -87,9 +93,25 @@ A failed retry is returned to the caller; the device is flushed only
 after writeback succeeds.
 .Pp
 On ext2, fsync first drains all pending inodes on the mount in dependency order.
-The first delayed write or flush error remains observable by every later
-fsync until unmount, including after close, reopen and successful retry.
 A retry can finish an unmount, but the volume remains marked invalid.
+.Pp
+A failed write on a mounted file system's device, whoever made it, the
+background flusher and an eviction included, and a failed flush are
+recorded on the file system, as Linux records them in its error
+sequences.
+Each open file description keeps its own place in that record, taken
+at the open.
+Its next
+.Fn fsync
+or
+.Fn fdatasync
+whose own writes succeed returns the error recorded since that place,
+and every call moves the place past it, so each description reports a
+failure once, even when a later write of the same blocks succeeds.
+A description opened after a failure reports it only when no
+description has reported it yet.
+Two calls on one description at once report it once between them.
+The first failure also keeps the mount read-only until it is unmounted.
 .Pp
 .Fn fdatasync
 runs the file system's fdatasync operation where it has one, and
@@ -142,7 +164,8 @@ has no return value; its kernel call always returns 0.
 .Fn syncfs
 returns 0, or -1 with
 .Va errno
-set when the descriptor is not one it accepts.
+set when the descriptor is not one it accepts or a write-back error is
+reported.
 .Fn fsync
 and
 .Fn fdatasync
@@ -174,6 +197,10 @@ and
 .Fn fdatasync ,
 a write-back or device flush failed, or the mounted device was removed,
 or a KRFFS boot-root page write was already in flight.
+For all three, a write on the file system failed since the description
+last reported one; the failed write's own error is returned when it is
+not
+.Er EIO .
 .It Bq Er ESRCH
 There is no current process.
 .El

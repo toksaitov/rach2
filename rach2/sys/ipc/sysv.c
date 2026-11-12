@@ -546,6 +546,7 @@ static struct shm_seg *shm_new(size_t size)
         return NULL;
     }
     s->ofd->vmnt = mnt;
+    vfs_wb_err_sample(mnt, &s->ofd->wb_seen, &s->ofd->sb_seen);
     s->ofd->vnode = node;
     vfs_desc_open(mnt);
     k_memset(&st, 0, sizeof(st));

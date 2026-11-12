@@ -448,10 +448,11 @@ int shmem_truncate(struct shmem *sh, uint64_t size)
 }
 
 /** Not reached. */
-int vfs_fsync(struct vfs_mount *mnt, void *handle)
+int vfs_fsync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
 {
     (void)mnt;
     (void)handle;
+    (void)seen;
     return 0;
 }
 
