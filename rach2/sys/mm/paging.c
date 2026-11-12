@@ -662,16 +662,19 @@ static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write
  * FAULT_AROUND pages from the multiple of FAULT_AROUND pages at or below
  * `page`, or from the region's start when that is higher, cut at the
  * region's end and at the end of the page table, so that one table holds
- * it; a missing table is made, as Linux allocates it before fault-around
- * (mm/memory.c:5271), so that a fault whose page the file has completes
- * here and counts that page once. The file is asked with the regions' lock
- * let go, as for its share, and its pages are mapped only while the region
- * still maps the whole window of the file as it did and no unmap of a
- * truncated file's pages has come since; a page another fault mapped
- * meanwhile is left as it is. `hits` asks the file to count the pages it
- * lends as found in memory (`struct vm_file`). Called from `shared_fault`
- * with the regions' lock held to read, which it lets go and takes again. 1
- * when it mapped `page` itself, else 0.
+ * it. A missing table is made before the file is asked, as Linux allocates
+ * it before fault-around and fails the fault without it (mm/memory.c:5271),
+ * so that the file counts no page as found when none can be mapped, and a
+ * fault whose page the file has completes here and counts that page once;
+ * a user table, once made, stays until the space is freed. The file is
+ * asked with the regions' lock let go, as for its share, and its pages are
+ * mapped only while the region still maps the whole window of the file as
+ * it did and no unmap of a truncated file's pages has come since; a page
+ * another fault mapped meanwhile is left as it is. `hits` asks the file to
+ * count the pages it lends as found in memory (`struct vm_file`). Called
+ * from `shared_fault` with the regions' lock held to read, which it lets go
+ * and takes again. 1 when it mapped `page` itself, which counts the fault as
+ * minor, -1 when the table could not be made, else 0.
  */
 static int share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t flags, int hits)
 {
@@ -700,6 +703,12 @@ static int share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t 
     n = (uint32_t)((to - from) / PAGE_SIZE);
     if (n <= 1) {
         return 0;
+    }
+    lock = mm_ptl_lock(mm);
+    table = mmu_user_table(mm->dir, from, 1);
+    mm_ptl_unlock(mm, lock);
+    if (!table) {
+        return -1;
     }
     prot = vma->prot;
     pgoff = vma->pgoff + (uint32_t)((from - vma->start) / PAGE_SIZE);
@@ -732,6 +741,9 @@ static int share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t 
         }
     }
     vm_file_put(f);
+    if (mapped) {
+        fault_count(0);
+    }
     return mapped;
 }
 
@@ -752,8 +764,8 @@ static int share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t 
  * (mm/memory.c:5300-5330), so that the pages counted as found in memory are
  * those the file had before this fault's read; after a read it maps the
  * pages around once more, the ones the read brought in among them, counting
- * none. 1 with the page mapped, 0 when no frame could be had or the lock
- * could not be let go, -1 to resolve again.
+ * none. 1 with the page mapped, 0 when no frame or page table could be had
+ * or the lock could not be let go, -1 to resolve again.
  */
 static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write)
 {
@@ -771,10 +783,9 @@ static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int wri
     int got, bkl, rc = 1;
 
     vm_file_get(f);
-    if (!write && share_around(mm, page, f, flags, 1)) {
+    if (!write && (got = share_around(mm, page, f, flags, 1)) != 0) {
         vm_file_put(f);
-        fault_count(0);
-        return 1;
+        return got > 0;
     }
     if (!callback_begin(mm, f, &bkl)) {
         vm_file_put(f);
