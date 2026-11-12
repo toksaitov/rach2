@@ -950,8 +950,11 @@ static int free_reached(const char *text)
 
 /**
  * The fault of case `repair`: with an inode in use marked free, the root
- * mounts read-only, names the fault and refuses a write. Assertions
- * `fault-read-only`, `fault-refused`, `fault-record` and `fault-reason`.
+ * names the fault and mounts writable with Linux's warning for a volume
+ * with errors, and the poweroff leaves the error bit set. The boot writes
+ * no file, so that no new file takes the inode the bitmap calls free before
+ * the repair. Assertions `fault-writable`, `fault-record`, `fault-reason`
+ * and `fault-error-bit`.
  */
 static void fault(struct lc *l)
 {
@@ -962,17 +965,15 @@ static void fault(struct lc *l)
         !debugfs(l, 1, "freei /etc/hostname", vol, "freei") || !lc_step(l, "fault") ||
         !start(l, "root", 5, &b))
         return;
-    expect(l, &b, "cat /proc/mounts; echo MOUNTS\"\"END\r", "MOUNTSEND", "fault-read-only",
-           "/dev/disk0p1 / ext2 ro,relatime 0 0");
-    expect(l, &b, "echo x > /root/x; echo X\"\"END\r", "XEND", "fault-refused",
-           "Read-only file system");
+    expect(l, &b, "cat /proc/mounts; echo MOUNTS\"\"END\r", "MOUNTSEND", "fault-writable", rw_line);
     free(poweroff(l, &b));
     if ((w = window(l, b.console, 0, b.at)) == NULL)
         return;
     lc_assert(l, "fault-record", free_reached(w),
               "the kernel did not name the inode the bitmap calls free");
-    seen(l, w, "fault-reason", "ext2: mounted read-only: the check found a fault");
+    seen(l, w, "fault-reason", "ext2: mounting with errors, running e2fsck is recommended");
     free(w);
+    state(l, "fault-error-bit", 2);
 }
 
 /**
@@ -1055,8 +1056,8 @@ int etude_scenario(struct etude_case *c)
         "made-label",      "made-fat-file",   "killed-dirty",    "dirty-kept",
         "dirty-mounted",   "dirty-unmounted", "dirty-checked",   "dirty-valid",
         "dirty-e2fsck",    "lost-mounted",    "lost-write",      "lost-record",
-        "lost-error-bit",  "lost-e2fsck",     "lost-bitmap",     "fault-read-only",
-        "fault-refused",   "fault-record",    "fault-reason",    "look-same",
+        "lost-error-bit",  "lost-e2fsck",     "lost-bitmap",     "fault-writable",
+        "fault-record",    "fault-reason",    "fault-error-bit", "look-same",
         "look-no-e2fsck",  "repair-root",     "repair-second",   "repair-copy",
         "node-writes",     "repair-e2fsck",   "repair-valid",    "repair-changed",
         "clean-mounted",   "clean-kept",      "clean-unchecked", NULL};
