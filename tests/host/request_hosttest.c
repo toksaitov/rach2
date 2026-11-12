@@ -339,12 +339,19 @@ uint32_t timer_now_us(void)
 
 #include "latency.c"
 
-/** Discard diagnostic records. */
+/* What a row runs when the code under test logs a line, given the line's
+ * format: a point between two holds of the pool's lock that a row can put a
+ * device's answer into, as another processor's interrupt would come. */
+static void (*klog_step)(const char *format);
+
+/** Discard diagnostic records, after running the row's step, if any. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
     (void)subsystem;
-    (void)format;
+    if (klog_step) {
+        klog_step(format);
+    }
 }
 
 /** An unexpected path is a failed model setup. */
@@ -1226,6 +1233,209 @@ static void frames_read(void)
     cpu_table[0].current = 0;
 }
 
+/* A read started without a waiter (`block_read_frames_async`): the request
+ * the device holds, its generation, and what its completion was called
+ * with. */
+static struct block_request *async_held;
+static uint32_t async_generation;
+static uint64_t async_lba; /* the sector the device was given */
+static int async_calls;
+static int async_status;
+static uint32_t async_index, async_pages;
+
+/** A controller given frames that answers nothing by itself: it records
+ *  the request for the row to answer. */
+static int async_submit(block_device_t *dev, struct block_request *r)
+{
+    (void)dev;
+    check(r->frames && !r->page && r->done_fn, "a read without a waiter names a completion");
+    async_held = r;
+    async_generation = r->generation;
+    async_lba = r->lba;
+    return 0;
+}
+
+/** The completion the reads call: it counts its calls and checks that the
+ *  request still holds a reference on each frame it reports. */
+static void async_done(void *arg, uint32_t index, const uintptr_t *frames, uint32_t pages,
+                       int status)
+{
+    uint32_t i;
+
+    check(arg == &async_calls, "the completion gets the caller's argument");
+    for (i = 0; i < pages; i++) {
+        check(frame_refs[frame_index(frames[i])] > 0,
+              "a completion is called while the request holds its frames");
+    }
+    async_calls++;
+    async_status = status;
+    async_index = index;
+    async_pages = pages;
+}
+
+/** The device's late answer, delivered at the tick's log of its
+ *  quarantines: after the tick has let go of the pool's lock with the read
+ *  quarantined and before it calls the completions it claimed. */
+static void late_answer_step(const char *format)
+{
+    if (!same(format, "request deadline: %d slots quarantined")) {
+        return;
+    }
+    klog_step = 0;
+    check(async_held->state == BLOCK_REQ_QUARANTINED && async_calls == 0,
+          "the answer comes between the quarantine and its completion");
+    block_request_complete(async_held, async_generation, 0);
+    check(async_calls == 0 && async_held->state == BLOCK_REQ_DONE && async_held->held_by_caller &&
+              !async_held->held_by_device,
+          "a late answer leaves the claimed completion to the tick and the request to its hold");
+}
+
+/** Set `dev` up as a device given frames with its own submit, two frames
+ *  to a request, run from a system call. */
+static void async_device(block_device_t *dev, uint64_t sectors)
+{
+    *dev = other;
+    dev->flags = BLOCK_FRAMES;
+    dev->submit = async_submit;
+    dev->max_sectors = 16;
+    dev->deadline_ticks = 4;
+    dev->deadline_limit = 2;
+    dev->stalled = 0;
+    dev->sector_count = sectors;
+    k_memset(&dev->stats, 0, sizeof(dev->stats));
+}
+
+/**
+ * The quarantine of a read without a waiter against its late answer. The
+ * tick quarantines the read under the pool's lock and calls its completion
+ * after letting go of it, as it calls each with no lock of the pool's; an
+ * answer of the device's in between must not leave the completion uncalled,
+ * which would keep the caller's hold, the frames and the cache's locked
+ * pages for good. The tick claims the call in the hold that quarantines.
+ * Then the answer after the tick: the completion runs once, at the tick,
+ * and the frames stay the request's until the answer.
+ */
+static void async_quarantine(void)
+{
+    block_device_t dev;
+    uintptr_t want[2] = {PAGE_SIZE, 2 * PAGE_SIZE};
+    struct block_frames_done done;
+    process_t process;
+
+    async_device(&dev, 1000);
+    k_memset(&process, 0, sizeof(process));
+    process.in_syscall = 1;
+    cpu_table[0].current = &process;
+    frame_refs[0] = frame_refs[1] = 1;
+    done.fn = async_done;
+    done.arg = &async_calls;
+    done.index = 5;
+
+    async_calls = 0;
+    check(block_read_frames_async(&dev, 0, 16, want, &done) == 16 && async_held &&
+              frame_refs[0] == 2 && frame_refs[1] == 2,
+          "a read without a waiter is submitted holding its frames");
+    klog_step = late_answer_step;
+    advance(8);
+    check(!klog_step, "the tick quarantined the read and logged it");
+    check(async_calls == 1 && async_status == -EIO && async_index == 5 && async_pages == 2,
+          "the tick calls the completion of a read answered after its quarantine, once");
+    check(frame_refs[0] == 1 && frame_refs[1] == 1 && live == 0 && record_count == 0 &&
+              list_count == 0 && quarantined_count == 0 && !dev.stalled,
+          "the read answered late and ended gives back its frames, its list and its record");
+    check(dev.stats.in_flight == 0, "the ended read is no longer counted in flight");
+
+    async_calls = 0;
+    async_held = 0;
+    check(block_read_frames_async(&dev, 0, 16, want, &done) == 16 && async_held,
+          "a second read without a waiter is submitted");
+    advance(8);
+    check(async_calls == 1 && async_status == -EIO,
+          "the tick calls a quarantined read's completion with -EIO");
+    check(frame_refs[0] == 2 && frame_refs[1] == 2 && async_held->held_by_device &&
+              !async_held->held_by_caller && live == 1,
+          "the quarantined read keeps its frames for the device");
+    advance(8);
+    check(async_calls == 1, "a later tick calls no completion again");
+    block_request_complete(async_held, async_generation, 0);
+    check(async_calls == 1 && frame_refs[0] == 1 && frame_refs[1] == 1 && live == 0 &&
+              list_count == 0 && !dev.stalled,
+          "the late answer frees the read without a second call of its completion");
+    free_frame(want[0]);
+    free_frame(want[1]);
+    async_held = 0;
+    cpu_table[0].current = 0;
+}
+
+/* The waits `block_settle` made in the settle row. */
+static int settle_waits;
+
+/** Sleep in `block_settle`: the read in flight is answered, as its
+ *  interrupt would end the sleep. */
+static void settle_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    check(wq == &pool_wq && !cond(arg) && async_held,
+          "a settle sleeps on the pool's queue while a read overlaps its sectors");
+    settle_waits++;
+    block_request_complete(async_held, async_generation, 0);
+    async_held = 0;
+    check(cond(arg), "the read's answer ends the settle");
+}
+
+/**
+ * A settle through a partition. A partition's submit adds the view's
+ * offset to the request's `lba`, so a read of sector 80 of a view at 2048
+ * goes to the disk at 2128; a file system on the view frees sectors 80 to
+ * 87 and settles them in the view's numbers, and must wait for that read,
+ * which compares both in the disk's numbers. A settle of other sectors
+ * goes on while the read is in flight, and a settle through the disk
+ * itself, in its numbers, waits too.
+ */
+static void async_settle(void)
+{
+    block_device_t dev;
+    block_partition_t view;
+    uintptr_t want[1] = {PAGE_SIZE};
+    struct block_frames_done done;
+    process_t process;
+
+    async_device(&dev, 4096);
+    k_memset(&view, 0, sizeof(view));
+    block_partition_init(&view, &dev, 2048, 1000);
+    k_memset(&process, 0, sizeof(process));
+    process.in_syscall = 1;
+    cpu_table[0].current = &process;
+    frame_refs[0] = 1;
+    done.fn = async_done;
+    done.arg = &async_calls;
+    done.index = 0;
+    wait_step = settle_wait;
+    settle_waits = 0;
+
+    async_calls = 0;
+    check(block_read_frames_async(&view.device, 80, 8, want, &done) == 8 && async_held &&
+              async_lba == 2128 && async_held->device == &view.device,
+          "a read through the view reaches the disk at the view's offset");
+    block_settle(&view.device, 88, 8);
+    block_settle(&view.device, 0, 80);
+    block_settle(&dev, 80, 8);
+    check(settle_waits == 0 && async_held,
+          "a settle of sectors the read does not cover goes on while it is in flight");
+    block_settle(&view.device, 80, 8);
+    check(settle_waits == 1 && async_calls == 1 && async_status == 0,
+          "a settle in the view's numbers waits for the read the disk has at 2128");
+
+    check(block_read_frames_async(&view.device, 84, 8, want, &done) == 8 && async_held,
+          "a second read through the view, of its sectors 84 to 91, is submitted");
+    block_settle(&dev, 2135, 1);
+    check(settle_waits == 2 && async_calls == 2,
+          "a settle through the disk in its numbers waits for a read through the view");
+    check(frame_refs[0] == 1 && live == 0 && list_count == 0, "the settled reads leave nothing");
+    free_frame(want[0]);
+    wait_step = 0;
+    cpu_table[0].current = 0;
+}
+
 /** Install the fixture, run the lifecycle rows and check every release. */
 int main(void)
 {
@@ -1257,6 +1467,8 @@ int main(void)
     pool_deadline();
     kept_buffers();
     frames_read();
+    async_quarantine();
+    async_settle();
     check(record_count == 0 && frame_count == 0 && heap_count == 0 && keep_count == 0 &&
               list_count == 0 && live == 0 && quarantined_count == 0,
           "every request, page and buffer is released at the end");

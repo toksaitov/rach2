@@ -32,6 +32,13 @@
  * while it was in flight finds no page to unlock, and its frames come back
  * when its request lets them go.
  *
+ * The completion rows free a window between two of a completion's wakes,
+ * by the starter's put and by another completion, and check that the wakes
+ * after it read nothing of it and wake the right queues; the insertion row
+ * fails a run's second insertion, by another reader's store of that page
+ * between two of `fc_lock_run`'s, and checks that each frame left over is
+ * freed once.
+ *
  * Returns 0 when every row passes, 1 otherwise.
  */
 
@@ -279,10 +286,28 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
-/** Nobody sleeps to be woken. */
+/* The queues woken since a row cleared `woken_count`, in order, and what
+   runs at the next wake, once, as another processor would run between two
+   wakes of a completion's. */
+#define WOKEN_MOST 8u
+static wait_queue_t *woken[WOKEN_MOST];
+static uint32_t woken_count;
+static void (*wake_hook)(void);
+
+/** Nobody sleeps to be woken: record the queue, then run and clear
+ *  `wake_hook`. */
 void wq_wake_all(wait_queue_t *wq)
 {
-    (void)wq;
+    void (*fn)(void) = wake_hook;
+
+    if (woken_count < WOKEN_MOST) {
+        woken[woken_count] = wq;
+    }
+    woken_count++;
+    if (fn) {
+        wake_hook = 0;
+        fn();
+    }
 }
 
 /* Run once at the restore `restore_countdown` counts down to, then
@@ -321,6 +346,7 @@ static void shrink_all(void)
 static struct vfs_mount mount;
 static struct fake_file file_a = {7, 1, 3 * PAGE_SIZE, 100};
 static struct fake_file file_b = {8, 1, 2 * PAGE_SIZE, 100};
+static struct fake_file file_c = {9, 1, 3 * PAGE_SIZE, 100};
 
 /**
  * Insert page `pgoff` of `node`, filled with `fill`, as `fc_store` does,
@@ -447,6 +473,157 @@ static void row_readahead_locks(void)
           "and the read's answer finds no page and lets the frames go");
 }
 
+/* The window and frames of the completion rows, which their hooks end. */
+static struct fc_flight *race_w;
+static struct fc_run race_run;
+
+/** The starter's put on another processor, as `fc_read_async` makes it
+ *  once its read is submitted: its frames' references and its hold of the
+ *  window, which is the last and frees the window. */
+static void starter_put(void)
+{
+    free_frame(race_run.phys[0]);
+    free_frame(race_run.phys[1]);
+    fc_flight_put(race_w);
+}
+
+/** Another request's completion on another processor, of the window's
+ *  page 2, which ends its last page and frees the window. */
+static void other_done(void)
+{
+    fc_done(race_w, 2, race_run.phys + 2, 1, 0);
+}
+
+/**
+ * Lock pages 0 to `n - 1` of `file_c` for a read as `fc_read_async` does,
+ * filled with `fill` as the device's answer leaves them and held by the
+ * request too, and give them a window whose `pending` is `pending`; 1 when
+ * all `n` were put in.
+ */
+static int race_lock(uint32_t n, int fill, uint32_t pending)
+{
+    struct fc_file f;
+    uint32_t i;
+
+    if (!fc_file_of(&mount, &file_c, &f)) {
+        check(0, "the completion rows' file is a cached file");
+        return 0;
+    }
+    fc_run_init(&race_run, n);
+    if (fc_lock_run(&f, 0, n, FC_NO_MARK, filecache_epoch(&mount, &file_c), &race_run) != n) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        frame_ref(race_run.phys[i]); /* the request's */
+        __builtin_memset(kmap_temp(race_run.phys[i]), fill, PAGE_SIZE);
+    }
+    race_w = kmalloc(sizeof(*race_w));
+    race_w->mnt = f.mnt;
+    race_w->ino = f.ino;
+    race_w->start = 0;
+    race_w->pending = pending;
+    return 1;
+}
+
+/** Whether the completion rows woke page `pgoff`'s queue `at`th. */
+static int woke(uint32_t at, uint32_t pgoff)
+{
+    return at < woken_count && woken[at] == fc_page_wq(&mount, file_c.ino, pgoff);
+}
+
+/**
+ * A completion's wakes against the free of its window. `fc_done` gives up
+ * its pages and then wakes each page's queue: the starter's put, when only
+ * its hold is left, or the completion of the window's last other pages, may
+ * free the window on another processor between two of those wakes, and the
+ * wakes that follow must not read it, which AddressSanitizer would stop,
+ * and must still wake the pages' own queues. Each hook here frees the
+ * window at the completion's first wake.
+ */
+static void row_done_free(void)
+{
+    uint32_t free_before = (uint32_t)frame_free_count(), i;
+
+    check(race_lock(2, 0x5C, 3), "a window of two pages is locked, its starter still holding it");
+    woken_count = 0;
+    wake_hook = starter_put;
+    fc_done(race_w, 0, race_run.phys, 2, 0);
+    check(!wake_hook && woken_count == 2 && woke(0, 0) && woke(1, 1),
+          "the starter's put frees the window at the first wake, and both pages' queues are woken");
+    check(reads_as(&file_c, 0, 0x5C) && reads_as(&file_c, 1, 0x5C) && !locked_page(&file_c, 0, 0) &&
+              !locked_page(&file_c, 1, 0),
+          "the answer unlocks both pages, which read back");
+    for (i = 0; i < 2; i++) {
+        free_frame(race_run.phys[i]); /* the request lets go */
+    }
+    fc_run_free(&race_run);
+    check(frame_free_count() == free_before - 2u, "the cache alone holds the two frames");
+    filecache_forget(&mount, &file_c);
+
+    check(race_lock(3, 0x5D, 3), "a window of three pages is locked, its starter gone");
+    for (i = 0; i < 3; i++) {
+        free_frame(race_run.phys[i]); /* the starter's, given back after its put */
+    }
+    woken_count = 0;
+    wake_hook = other_done;
+    fc_done(race_w, 0, race_run.phys, 2, 0);
+    check(!wake_hook && woken_count == 3 && woke(0, 0) && woke(1, 2) && woke(2, 1),
+          "a completion of the last page frees the window at another's first wake, and every "
+          "page's queue is woken");
+    check(reads_as(&file_c, 0, 0x5D) && reads_as(&file_c, 1, 0x5D) && reads_as(&file_c, 2, 0x5D),
+          "both answers unlock their pages");
+    for (i = 0; i < 3; i++) {
+        free_frame(race_run.phys[i]);
+    }
+    fc_run_free(&race_run);
+    filecache_forget(&mount, &file_c);
+    check(frame_free_count() == free_before, "the forgotten pages give their frames back");
+}
+
+/** A concurrent reader's store of page 1 of `file_c`, between the insertions
+ *  of a run's pages 0 and 1. */
+static void store_page_1(void)
+{
+    check(insert_page(&file_c, 1, 0x77, 0), "the other reader's page 1 is kept");
+}
+
+/**
+ * An insertion failure in the middle of a run. `fc_lock_run` makes a frame
+ * for each of pages 0 to 2 and inserts them in turn; another reader's store
+ * of page 1 after page 0's insertion fails page 1's, and the run is the one
+ * page. Every frame left over holds the cache's reference and the
+ * starter's, both of which the cleanup drops: a frame with only the first
+ * would be freed by the first drop and lose another owner's reference at
+ * the second.
+ */
+static void row_lock_run_fail(void)
+{
+    uint32_t free_before = (uint32_t)frame_free_count(), epoch;
+    struct fc_file f;
+    struct fc_run r;
+    uint32_t n;
+
+    if (!fc_file_of(&mount, &file_c, &f)) {
+        check(0, "the insertion row's file is a cached file");
+        return;
+    }
+    fc_run_init(&r, 3);
+    epoch = filecache_epoch(&mount, &file_c);
+    restore_hook = store_page_1;
+    restore_countdown = 3; /* fc_lock_run's give, then page 0's insertion's two */
+    n = fc_lock_run(&f, 0, 3, FC_NO_MARK, epoch, &r);
+    check(!restore_hook && n == 1, "the run ends at the page the other reader stored");
+    check(locked_page(&file_c, 0, 0) && reads_as(&file_c, 1, 0x77),
+          "page 0 is in the cache locked, and page 1 is the other reader's");
+    check(n == 1 && frame_refs[frame_index(r.phys[0])] == 2 &&
+              frame_refs[frame_index(r.phys[1])] == 0 && frame_refs[frame_index(r.phys[2])] == 0,
+          "page 0's frame keeps both references, and the frames left over are freed once each");
+    free_frame(r.phys[0]); /* the starter's */
+    fc_run_free(&r);
+    filecache_forget(&mount, &file_c);
+    check(frame_free_count() == free_before, "every frame of the run comes back");
+}
+
 int main(void)
 {
     mount.type = &vfs_ext2_type;
@@ -478,6 +655,8 @@ int main(void)
           "which has the new page and not the old");
 
     row_readahead_locks();
+    row_done_free();
+    row_lock_run_fail();
 
     filecache_forget_mount(&mount);
     check(filecache_pages() == 0 && frame_free_count() == FRAMES,
