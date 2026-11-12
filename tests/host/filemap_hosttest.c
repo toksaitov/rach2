@@ -54,7 +54,7 @@ static void check(int ok, const char *row)
 struct percpu cpu_table[NR_CPUS];
 
 /* The calls the release makes, which the rows count. */
-static int shmem_frees, backing_releases;
+static int shmem_frees, backing_releases, backing_holds;
 
 /* The last inode number of the mount of memfds. */
 static uint64_t memfd_ino = 40;
@@ -90,7 +90,7 @@ void shmem_free_yielding(struct shmem *sh)
 /** Count the release of a mapped file's descriptor. */
 void fd_release_backing(fd_entry_t *e)
 {
-    (void)e;
+    fd_ofd_unref(e->ofd);
     backing_releases++;
 }
 
@@ -108,10 +108,21 @@ krffs_node_t *fd_root_node(const fd_entry_t *e)
     return NULL;
 }
 
-/** Take a reference to a description, which no row counts. */
+/** Count a description reference, including sync's independent hold. */
 void fd_ofd_ref(struct open_file *ofd)
 {
-    (void)ofd;
+    if (ofd) {
+        backing_holds++;
+    }
+}
+
+/** Drop a description reference without closing a mapping's descriptor. */
+void fd_ofd_unref(struct open_file *ofd)
+{
+    if (ofd) {
+        check(backing_holds > 0, "a description reference is owned before its put");
+        backing_holds--;
+    }
 }
 
 /* ---- a disk file's page, as the fault rows see it ---- */
@@ -126,6 +137,10 @@ static uint64_t model_size = 2 * PAGE_SIZE;
 static int disk_writes, disk_error;
 static uint8_t disk_bytes[PAGE_SIZE];
 static struct vm_file *model_dead;
+static uint64_t model_dead_gen;
+/* A producer in the gap after every reap, armed by the bounded-sync row. */
+static void (*model_reap_gap)(void);
+static int model_reap_rounds;
 /* A mapping whose last put lands just after the next reap has emptied the
  * list, as another processor's unmap may drop it then. */
 static struct vm_file *model_late_put;
@@ -456,18 +471,33 @@ void vm_file_put(struct vm_file *f)
 {
     check(f->refs > 0, "the mapping has a reference to put");
     if (--f->refs == 0) {
+        f->dead_gen = ++model_dead_gen;
         f->dead = model_dead;
         model_dead = f;
     }
 }
 
-/** Run queued releases, which may keep their own hold after an error. */
-void vm_file_reap(void)
+/** Snapshot the model's zero publications. */
+uint64_t vm_file_reap_start(void)
 {
-    while (model_dead) {
-        struct vm_file *f = model_dead;
+    return model_dead_gen;
+}
 
-        model_dead = f->dead;
+/** Reap only zero publications through `gen`, then let the producer run. */
+void vm_file_reap_until(uint64_t gen)
+{
+    struct vm_file **link;
+
+    for (;;) {
+        struct vm_file *f;
+
+        for (link = &model_dead; *link && (*link)->dead_gen > gen; link = &(*link)->dead) {
+        }
+        f = *link;
+        if (!f) {
+            break;
+        }
+        *link = f->dead;
         f->dead = NULL;
         f->release(f);
     }
@@ -477,6 +507,16 @@ void vm_file_reap(void)
         model_late_put = NULL;
         vm_file_put(f);
     }
+    if (model_reap_gap) {
+        model_reap_rounds++;
+        model_reap_gap();
+    }
+}
+
+/** Run queued releases, including those queued by another release. */
+void vm_file_reap(void)
+{
+    vm_file_reap_until(~(uint64_t)0);
 }
 
 /** Not reached. */
@@ -489,8 +529,7 @@ void wait_queue_init(wait_queue_t *wq)
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
-    (void)cond;
-    (void)arg;
+    check(cond(arg), "sync has no unfinished release inside its boundary");
     return 0;
 }
 
@@ -872,7 +911,7 @@ static void writeback_release_rows(void)
           "the queued writer and the sync hold are both released");
 }
 
-/** A writer's last put after sync's reap is reaped before sync succeeds. */
+/** A last put after sync's reap cannot hide the mapping's stored bytes. */
 static void writeback_late_put_rows(void)
 {
     struct vfs_mount mnt;
@@ -889,8 +928,63 @@ static void writeback_late_put_rows(void)
     check(filemap_sync_file(&ofd) == 0 && disk_writes > 0 && disk_bytes[0] == 0x65 &&
               disk_bytes[PAGE_SIZE - 1] == 0x65,
           "a writer whose last put lands between the reap and the choice is written back");
-    check(!model_late_put && !model_dead && !maps && dshare_count == 0,
-          "sync reaped the writer it could not take");
+    check(!model_late_put && model_dead == f && f->refs == 0,
+          "the later last put stays queued beyond sync's boundary");
+    vm_file_reap();
+    check(!model_dead && !maps && dshare_count == 0,
+          "a later reap frees the writer after its stores reached the file");
+}
+
+/* The description the recurring producer maps. */
+static struct open_file *producer_ofd;
+
+/** Map, store and drop the last reference in every reap-to-write gap. */
+static void writeback_produce(void)
+{
+    fd_entry_t e;
+    struct vm_file *f;
+
+    k_memset(&e, 0, sizeof(e));
+    e.type = FD_TYPE_FILE;
+    e.flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    e.ofd = producer_ofd;
+    f = filemap_disk_shared(&e);
+    check(f != NULL, "the recurring producer makes a writable mapping");
+    if (f) {
+        check(f->mkwrite(f, 0, model_page) == 0, "the producer marks its store");
+        model_bytes[0] = 0x66;
+        vm_file_put(f);
+    }
+}
+
+/** A producer after every reap cannot make sync chase its later releases. */
+static void writeback_bounded_rows(void)
+{
+    struct vfs_mount mnt;
+    struct open_file ofd;
+    struct vm_file *f;
+    int holds = backing_holds;
+
+    k_memset(&mnt, 0, sizeof(mnt));
+    k_memset(&ofd, 0, sizeof(ofd));
+    f = writeback_file(&mnt, &ofd);
+    if (!f) {
+        return;
+    }
+    vm_file_put(f);
+    producer_ofd = &ofd;
+    model_reap_rounds = 0;
+    model_reap_gap = writeback_produce;
+    check(filemap_sync_file(&ofd) == 0 && model_reap_rounds == 1 && disk_bytes[0] == 0x66 &&
+              disk_bytes[PAGE_SIZE - 1] == 0x65,
+          "fsync writes through its own description and returns after one bounded reap");
+    check(model_dead && !model_dead->refs && backing_holds == holds + 1,
+          "the later producer's mapping waits for another reap, with no leaked sync hold");
+    model_reap_gap = NULL;
+    producer_ofd = NULL;
+    vm_file_reap();
+    check(!model_dead && !maps && !dshare_count && backing_holds == holds,
+          "cleanup frees the later mapping, its pages and its description");
 }
 
 /** A retry by sync(2) alone frees what a failed release kept, not its error. */
@@ -916,6 +1010,7 @@ static void writeback_sync_retry_rows(void)
           "the failed final write keeps its mapping");
     disk_error = 0;
     filemap_sync_all();
+    vm_file_reap();
     ds = dshare_of(&mnt, ofd.ino);
     check(!maps && !model_dead && backing_releases == released + 1 && disk_bytes[0] == 0x65 &&
               dshare_count == 1 && ds && ds->users == 0 && ds->error == -EIO,
@@ -961,6 +1056,7 @@ int main(void)
     writeback_retry_rows();
     writeback_release_rows();
     writeback_late_put_rows();
+    writeback_bounded_rows();
     writeback_sync_retry_rows();
     writeback_tail_rows();
     if (fails) {

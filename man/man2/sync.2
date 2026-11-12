@@ -56,8 +56,12 @@ A failed write at the last unmap keeps its pages and file open until a
 sync, fsync or msync writes every page back;
 the next fsync of the file reports that error once, even if a retry by
 any of them succeeded.
-A pending mapping release, one whose last reference went before or
-during the call, is completed before fsync chooses its writer.
+The shared-page writeback drains and waits for mapping releases whose
+last reference went before its initial generation snapshot.
+It holds a backing-file description of its own, so a last reference
+that goes after the snapshot cannot hide earlier stores.
+Later mappings and releases do not extend that drain, and its page
+range is bounded before draining.
 For a descriptor on a mounted file system, it runs that file system's
 fsync operation, or writes the device's dirty buffers if the file
 system has no such operation.
