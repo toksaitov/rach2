@@ -27,8 +27,11 @@ static __inline__ unsigned int sched_priority(const process_t *p)
     return p->pi_priority > p->rt_priority ? p->pi_priority : p->rt_priority;
 }
 
-/** Refresh a ready entry after its priority changes and request selection.
- * The caller holds the big lock, with interrupts masked. */
+/** Refresh a ready entry after its priority changes, and ask the thread
+ * that should give way to switch: the current thread of a queued one's
+ * processor when the queued one now outranks it, or a running one when a
+ * queued thread now outranks it. The caller holds the big lock, with
+ * interrupts masked. */
 void sched_priority_changed(process_t *p);
 
 /** Initialize empty ready lists before any process is made ready, with the
@@ -67,9 +70,14 @@ void schedule(void);
  * Make `p`, blocked or stopped, ready to run, on the queue of the processor
  * it last ran on, unless that one is busy and another it may run on is
  * idle, or its affinity no longer has it; a process still current on its
- * processor, woken before its switch away, stays there. That processor is
- * sent an interrupt when it is idle, or halted in place with `p` current,
- * so that it selects now rather than at its tick. The state is not tested
+ * processor, woken before its switch away, stays there. A real-time `p`
+ * that does not outrank the real-time thread running there goes instead to
+ * the processor it may run on whose thread ranks lowest, when it outranks
+ * that one. Its processor is sent an interrupt so that it selects now
+ * rather than at its tick when it is idle, halted in place with `p`
+ * current, or runs a thread `p` outranks, whose `need_resched` is set, so
+ * that the interrupt switches it in user mode and a call on that processor
+ * switches at its exit. The state is not tested
  * again: this is for a new thread, and for a stopped one, which only the big
  * lock's holder stops and makes ready. A blocked thread, which wakers without
  * the big lock may race for, is woken by `sched_wake_blocked`,
@@ -207,8 +215,10 @@ void sched_preempt(void);
 
 /** From the end of an interrupt, the tick's or a device's: switch this
  * processor as `sched_preempt` does, once its current thread has run its
- * slice since it was switched in, or sooner when a woken or real-time
- * thread waits on its queue. Called with interrupts off. */
+ * slice since it was switched in, or sooner when a queued real-time thread
+ * that selection here could take, from any processor's queue, outranks it,
+ * or, under an ordinary current thread, a woken thread waits on this
+ * processor's queue. Called with interrupts off. */
 void sched_tick(void);
 
 /** Take the switch an interrupt asked for (`need_resched`), if one did;
