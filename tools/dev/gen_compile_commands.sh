@@ -10,10 +10,10 @@
 # C source operand (directory + file + the complete command). There is one
 # database per unit under build/compile_commands/: the four i686 kernel
 # variants (rach2, rach2-recovery, rach2-metal, rach2-harness) and the x86-64
-# kernel (rach2-x86_64), the guest programs
-# (tests, ish, utils, musl-programs, doom, native-collection), the host programs
-# (krffs, tools, collection-tools, host-tests), and the GNU product controllers
-# and routed host fixtures. The union is compile_commands.json at the root.
+# kernel (rach2-x86_64), the guest programs (tests, tests-x86_64, ish, utils,
+# musl-programs, doom, native-collection), the host programs (krffs, tools,
+# collection-tools, host-tests), and the GNU product controllers and routed
+# host fixtures. The union is compile_commands.json at the root.
 # tools/verify/dbcheck.sh requires every in-house C source to be in one of
 # them. The vendored musl, busybox, dropbear and doomgeneric trees are
 # excluded: their flags do not belong in a portable database.
@@ -32,9 +32,10 @@
 # Usage: gen_compile_commands.sh [--selftest]
 #
 set -u
-# The units are i686's but rach2-x86_64, which names its architecture; an
-# architecture taken from the environment, or from the flags of a make run
-# with ARCH=x86_64, which its makes inherit, would make every unit x86-64's.
+# The units are i686's but rach2-x86_64 and tests-x86_64, which name their
+# architecture; an architecture taken from the environment, or from the flags
+# of a make run with ARCH=x86_64, which its makes inherit, would make every
+# unit x86-64's.
 unset ARCH RACH2_ARCH MAKEFLAGS MFLAGS
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -91,7 +92,9 @@ emit_entries() {
         # shellcheck disable=SC2086 # word-splitting the command is the point
         set -- $line
         set +f
-        # The root recipes select muslgcc's architecture with this assignment.
+        # The root recipes give muslgcc its scratch directory and select its
+        # architecture with these assignments.
+        case ${1-} in TMPDIR=*) shift ;; esac
         case ${1-} in RACH2_ARCH=i686|RACH2_ARCH=x86_64) shift ;; esac
         case ${1-} in
             *i686-elf-*gcc|*x86_64-elf-*gcc|vendor/musl/muslgcc) selected=cross ;;
@@ -347,6 +350,11 @@ unit rach2-harness "$REPO/rach2" cross make -Bn COMPONENT=rach2-harness HARNESS=
 unit rach2-x86_64 "$REPO/rach2" cross make -Bn ARCH=x86_64
 # shellcheck disable=SC2086 # MUSL_FILES is a list of options
 unit tests "$REPO/tests" cross make -Bn $MUSL_FILES
+# The x86-64 programs of the tests, wow64probe and pure64probe among them,
+# which i686's build leaves out.
+musl64_files=$(printf '%s\n' "$MUSL_FILES" | sed 's#\.\./vendor/musl#../build/x86_64/vendor-work/musl#g')
+# shellcheck disable=SC2086 # musl64_files is a list of options
+unit tests-x86_64 "$REPO/tests" cross make -Bn ARCH=x86_64 $musl64_files
 unit ish "$REPO/ish" cross make -Bn
 # shellcheck disable=SC2086 # MUSL_FILES is a list of options
 unit utils "$REPO/utils" cross make -Bn $MUSL_FILES
