@@ -413,17 +413,32 @@ int sched_is_enabled(void)
 
 /* The sleeps for another's claim, and the loans of the big lock, with the
    processor and the thread the last one went to. Each ends the other
-   caller's claim, as the holder does once it can go on. */
+   caller's claim, as the holder does once it can go on, unless
+   `sleep_reclaims`, when a third caller takes the port before the sleeper
+   runs. Each sleep moves the clock, `ticks_now`, by `sleep_ticks`, and the
+   deadline the sleeper armed is the one it slept with. */
 static unsigned claim_sleeps, lends;
-static int lend_cpu, holds_bkl;
+static int lend_cpu, holds_bkl, sleep_reclaims;
 static const struct process *lend_thread;
+static uint64_t ticks_now, sleep_ticks, slept_due;
 
-/** Sleep for the port: the holder ends its claim meanwhile. */
+/** The clock in ticks: `ticks_now`. */
+uint64_t rtc_ticks_now(void)
+{
+    return ticks_now;
+}
+
+/** Sleep for the port: the holder ends its claim meanwhile, or another
+ *  takes it again when `sleep_reclaims`, and the clock moves. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
     claim_sleeps++;
-    release_other_claim();
+    slept_due = current_proc ? current_proc->wakeup_tick : 0;
+    ticks_now += sleep_ticks;
+    if (!sleep_reclaims) {
+        release_other_claim();
+    }
     return cond(arg) ? 0 : -1;
 }
 
@@ -1362,6 +1377,64 @@ static void claim_wait_rows(void)
     cpu_table[0].current = 0;
 }
 
+/**
+ * Check the deadline of a sleeping wait for another's claim. Each sleep
+ * passes ten seconds and the port is claimed again before the sleeper runs,
+ * so the sleeper's thirty seconds, and one tick, run out at its fourth
+ * sleep, with every sleep armed for the same deadline: it fails with `EIO`,
+ * the other claim and the port untouched, and its timer is as it was. A
+ * sleep of 29.5 seconds that ends with the port free leaves the command
+ * the half second that is left, which a command of 0.6 seconds outlasts.
+ */
+static void claim_deadline_rows(void)
+{
+    static uint8_t buf[512];
+    struct ahci_disk *d = &ahci_disks[0];
+
+    model_reset();
+    CHECK("the claim deadline row starts a port",
+          ahci_select_port() == 0 && ahci_port_start(d) == 0);
+    d->dev.sector_count = 1000;
+    d->dev.drvdata = d;
+    cpu_table[0].current = &caller_proc;
+    caller_proc.wakeup_tick = 7;
+    d->polling = 1;
+    d->polling_cpu = 3;
+    d->polling_proc = &holder_proc;
+    claim_sleeps = lends = 0;
+    issued_locked = issued_unlocked = 0;
+    logged_why = NULL;
+    in_call = 1;
+    ticks_now = 1000;
+    sleep_ticks = 10000;
+    sleep_reclaims = 1;
+    CHECK("a sleeper the port is claimed from again and again gives up at its deadline",
+          ahci_run_command(d, ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) == -EIO &&
+              claim_sleeps == 4 &&
+              slept_due == 1000 + AHCI_CMD_STEPS * AHCI_CMD_POLL_US / 1000 + 1 && logged_why &&
+              same_text(logged_why, "another polled command held the port"));
+    CHECK("and leaves the other claim, the port and its own timer alone",
+          d->polling && issued_locked == 0 && issued_unlocked == 0 && !d->lock.locked &&
+              caller_proc.wakeup_tick == 7);
+    sleep_reclaims = 0;
+    ticks_now = 1000;
+    sleep_ticks = 29500;
+    claim_sleeps = 0;
+    complete_after = 60000;
+    logged_why = NULL;
+    CHECK("a sleep that takes most of the bound leaves the command only the rest",
+          ahci_run_command(d, ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) == -EIO &&
+              claim_sleeps == 1 && !d->polling && logged_why &&
+              same_text(logged_why, "no answer in thirty seconds"));
+    complete_after = 0;
+    pending_reads = 0;
+    sleep_ticks = 0;
+    ticks_now = 0;
+    in_call = 0;
+    caller_proc.wakeup_tick = 0;
+    cpu_table[0].current = 0;
+}
+
 /** Check queued completions, independent ports and restart after polling. */
 static void interrupt_rows(void)
 {
@@ -1376,6 +1449,7 @@ static void interrupt_rows(void)
     port_lock_rows();
     claim_bound_rows();
     claim_wait_rows();
+    claim_deadline_rows();
 }
 
 /**
