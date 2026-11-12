@@ -180,7 +180,13 @@ uint32_t blank_idle_ticks(void)
         return 1;
     }
     if (!blanked && blank_secs != 0 && !fb_is_held()) {
-        IDLE_TIMER_MIN(wait, last_poke + (uint32_t)blank_secs * BLANK_HZ, (uint32_t)kernel_ticks);
+        uint32_t elapsed = (uint32_t)kernel_ticks - last_poke;
+        uint32_t limit = (uint32_t)blank_secs * BLANK_HZ;
+        uint32_t left = elapsed >= limit ? 1u : limit - elapsed;
+
+        if (left < wait) {
+            wait = left;
+        }
     }
     return wait;
 }
