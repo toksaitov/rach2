@@ -2329,16 +2329,16 @@ static void row_input_controls(void)
           "a codec with no adc has no sources");
 }
 
-/** Run `n` ticks of the boot processor: the clock, then the speaker's and
- * HDA's work, as the kernel's tick does. */
+/** Run `n` ticks of the boot processor: the clock, then HDA's work and the
+ * speaker's, in the order the kernel's tick runs them (timer_handler). */
 static void beep_ticks(unsigned n)
 {
     unsigned i;
 
     for (i = 0; i < n; i++) {
         kernel_ticks++;
-        speaker_tick();
         hda_tick();
+        speaker_tick();
     }
 }
 
