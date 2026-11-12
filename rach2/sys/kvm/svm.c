@@ -5,6 +5,7 @@
 #include "../arch/arch.h"
 #include "../arch/x86/debugreg.h"
 #include "../arch/x86/kcpu.h"
+#include "../arch/x86/lapic.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
@@ -1014,15 +1015,18 @@ static void after_run(struct kvm_vcpu *v)
  * back and the exit read. The host's interrupt or NMI that ended the run
  * stays pending through GIF's clear and the restored RFLAGS.IF until the
  * run loop turns interrupts on, as Linux's svm_vcpu_run leaves them; a
- * machine check the run took reaches the host's handler. While
- * `v->emul.resume` is set no guest runs: the next step of the instruction
- * under way is `exit`'s. 0, or -EIO when SVM cannot be used here.
+ * machine check the run took reaches the host's handler. An entry that
+ * injects an event while the NMI window's step is armed ends the step and
+ * sends this processor an IPI, so that it exits right after the delivery.
+ * While `v->emul.resume` is set no guest runs: the next step of the
+ * instruction under way is `exit`'s. 0, or -EIO when SVM cannot be used
+ * here.
  */
 static int svm_enter(struct kvm_vcpu *v)
 {
     struct svm_vcpu *s = sv(v);
     uint64_t host_dr7 = 0, host_db[4] = {0, 0, 0, 0}, ratio;
-    int cpu = (int)arch_cpu_id(), tlb;
+    int cpu = (int)arch_cpu_id(), tlb, exit_now;
 
     if (v->emul.resume) {
         return 0;
@@ -1048,6 +1052,16 @@ static int svm_enter(struct kvm_vcpu *v)
     if (!s->built) {
         vmcb_build(v);
     }
+    /* An event injected under the NMI window's step would push TF and RF
+     * in its frame, where the step cannot take them back once it ends, and
+     * the guest's IRET would restore them: the step stops, and the entry
+     * ends right after the delivery so that the window opens again, as
+     * Linux's svm_vcpu_run (svm/svm.c:4356-4373). */
+    exit_now = s->nmi_ss && (s->inj & EV_VALID);
+    if (exit_now) {
+        s->nmi_ss = 0;
+        kvm_vcpu_kick(v, KVM_REQ_EVENT);
+    }
     load_dirty(v);
     asid_load(s, cpu, tlb || s->flush);
     s->flush = 0;
@@ -1062,6 +1076,9 @@ static int svm_enter(struct kvm_vcpu *v)
     if (caps.tscrate && ratio != tsc_ratio[cpu]) {
         msr_write(MSR_TSC_RATIO, ratio);
         tsc_ratio[cpu] = ratio;
+    }
+    if (exit_now) {
+        lapic_self_ipi(IPI_VECTOR); /* taken as an exit once GIF is set */
     }
     svm_in_run[cpu] = 1;
     kvm_pmu_svm_enter(v);
