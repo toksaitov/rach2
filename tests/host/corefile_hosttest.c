@@ -1866,7 +1866,7 @@ static int32_t append_across_refault(uint32_t first, uint32_t grown, int previou
     state.moved = 0;
     if (previous) {
         vfs_node_lock(&state.file);
-        n = file_write_pieces(&entry, &state, 0, (const char __user *)buf, 8, &pos);
+        n = file_write_pieces(&entry, &state, (const char __user *)buf, 8, &pos);
         vfs_node_unlock(&state.file);
         check(n == 8 && state.moved, "the first vector element wrote eight bytes");
     }
@@ -1874,7 +1874,7 @@ static int32_t append_across_refault(uint32_t first, uint32_t grown, int previou
     grown_len = grown;
     self.rlim[RLIM_FSIZE].cur = APPEND_LIMIT;
     vfs_node_lock(&state.file);
-    n = file_write_pieces(&entry, &state, 0, (const char __user *)buf, sizeof(buf), &pos);
+    n = file_write_pieces(&entry, &state, (const char __user *)buf, sizeof(buf), &pos);
     vfs_node_unlock(&state.file);
     self.rlim[RLIM_FSIZE].cur = was;
     check(grown_len == (first || previous ? grown : 0),

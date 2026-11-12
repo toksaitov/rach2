@@ -200,6 +200,12 @@ static void userptr_files_get(struct mm *mm, uintptr_t start, uint32_t n, struct
     }
 }
 
+/**
+ * Pin the caller's pages for `obj`, with the GEM lock held. Returns 0 or
+ * -errno, retrying a notifier change during resolution. The sequence is
+ * read anew after a resolver that can sleep, as Linux's READ_ONCE of its
+ * interval notifier sequence; the mapping's files stay held with the pins.
+ */
 int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 {
     uint32_t i, n = (uint32_t)(obj->base.size >> PAGE_SHIFT);
@@ -207,6 +213,7 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
     uintptr_t *frames;
     struct vm_file **files;
     struct mm *mm;
+    const volatile uint32_t *seqp = &obj->userptr.range.seq;
     uint32_t seq;
     int tries, err;
 
@@ -237,10 +244,10 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
         return -ENOMEM;
     }
     for (tries = 0; tries < USERPTR_PIN_TRIES; tries++) {
-        seq = obj->userptr.range.seq;
+        seq = *seqp;
         mmap_read_lock(mm);
         err = paging_pin_range(mm, start, end, PIN_WRITE, frames);
-        if (err == 0 && seq == obj->userptr.range.seq) {
+        if (err == 0 && seq == *seqp) {
             userptr_files_get(mm, start, n, files);
         }
         mmap_unlock(mm);
@@ -249,7 +256,7 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
             kfree(frames);
             return err;
         }
-        if (seq == obj->userptr.range.seq && obj->frames) {
+        if (seq == *seqp && obj->frames) {
             /* Another caller pinned the range while this one slept: its
              * frames serve, unless a change has made them stale since. */
             for (i = 0; i < n; i++) {
@@ -264,7 +271,7 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
             obj->pages_pin_count++;
             return 0;
         }
-        if (seq == obj->userptr.range.seq) {
+        if (seq == *seqp) {
             obj->frames = frames;
             obj->userptr.files = files;
             obj->pages_pin_count = 1;
