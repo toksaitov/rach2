@@ -1,5 +1,7 @@
 # 80-27's Lenovo step
 
+This step ran on 2026-11-12 with 78-11d's and 83-6c's in a shared trial; [80-27.md](../80-27.md#the-lenovo) has its results.
+
 The step of 80-27: WineD3D's GL round trip, `tripprobe`'s 1000 Direct3D 11 clears, copies to a staging texture and maps, timed with the kernel's counters around its loop by `tests/system/games/trip.sh` (which runs `trip.py`), first under Linux, on the Debian 13.7 of the Lenovo's p5, then under Rach2, on one trial boot of this task's kernel and a trial root from the data partition. Each side runs the loop three times plain, once under `strace -f -c -w`, once with its ioctls traced and, where perf is installed, once under `perf stat`. Under Rach2 each plain run prints the big lock's waits and its holds by entry over the loop, and the probe's threads' context switches; under Linux the same threads' switches and the system's. [80-27.md](../80-27.md) has the measurements in QEMU this step follows.
 
 Silent: nothing plays, and nothing takes the screen but the boots' text. Weston runs headless on the GPU's render node, Debian's kernel has `snd_hda_intel` blacklisted, and Rach2's i915 binds with `rach2.i915.disable_display`, so the console stays the firmware's. No notice is needed.

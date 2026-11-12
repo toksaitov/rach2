@@ -1,0 +1,695 @@
+time 64.920453
+cpu  1619 0 6605 16096 0 0 0 0 0 0
+cpu0 605 0 2759 3126 0 0 0 0 0 0
+cpu1 393 0 1383 4167 0 0 0 0 0 0
+cpu2 359 0 1314 4268 0 0 0 0 0 0
+cpu3 260 0 1147 4534 0 0 0 0 0 0
+intr 557313
+ctxt 0
+btime 1794492106
+processes 555
+sleeps_interrupted 2
+process_pid_steps 46800
+process_uid_steps 931
+process_timer_steps 3404791
+process_timer_passes 166541
+timer_passes_late 124
+tlb_shootdowns 3796
+tlb_shootdown_ipis 4450
+scheduler_picks 1774000
+scheduler_steps 767681
+vm_gap_steps 2561228
+clock_calls 1
+vdso_tsc 1
+bkl_wait_us 24864248
+bkl_wait_max_us 77410
+bkl_wait_max_holds 1
+bkl_wait_max_hold 128 162 77410
+bkl_hold_max_us 340074
+bkl_hold_max_entry take 0
+bkl_hold_sample_us 5004047
+bkl_hold_sample_pc ffffffff803837b4 ffffffff801125d4 ffffffff8025edf0 ffffffff801082f7 ffffffff8035b128 ffffffff801002b4
+bkl_hold_max_mark 1 0
+bkl_hold_max_mark 2 0
+bkl_hold_max_mark 4 0
+bkl_hold_max_mark 8 0
+bkl_hold_max_mark 16 0
+bkl_hold_entry syscall 441 235023 10253584
+bkl_hold_entry take 1 573304 7944021
+bkl_hold_entry syscall 257 131583 1465401
+bkl_hold_entry syscall 89 300836 1269175
+bkl_hold_entry syscall 262 69575 1231306
+bkl_hold_entry syscall 0 682197 1152478
+bkl_hold_entry syscall 1 335067 890461
+bkl_hold_entry syscall 20 179003 880308
+bkl_hold_entry syscall 14 652439 745072
+bkl_hold_entry syscall 88 3008 690323
+bkl_hold_entry vector 0 311670 661777
+bkl_hold_entry take 0 5 340074
+bkl_hold_entry syscall 191 24960 276551
+bkl_hold_entry syscall 47 46783 259538
+bkl_hold_entry vector 32 30620 219713
+bkl_hold_entry syscall 3 132812 210443
+kvm_vms 0
+kvm_vcpus 0
+kvm_slots 0
+kvm_tdp_pages 0
+kvm_run_mappings 0
+kvm_gpa_maps 0
+kvm_gpa_map_pages 0
+kvm_ioeventfd_signals 0
+kvm_irqfd_raises 0
+vfio_groups 0
+vfio_devices 0
+vfio_dma_mappings 0
+vfio_dma_pages 0
+vfio_dma_io_pages 0
+kvm_exits 0
+iommu_dma_faults 0
+iommu_irq_faults 0
+msi_vectors_free 184
+virtio_gpu_copied_bytes 0
+latency_timer_us 1331724
+latency_disk_us 22172
+latency_diskwait_us 0
+latency_console_us 0
+wlan_refused_tcp 0
+wlan_refused_ack 0
+wlan_refused_other 0
+wlan_rx_held 0
+wlan_rx_wait_most 22
+wlan_tx_status_lost 0
+wlan_rescue_key 0
+wlan_rescue_message4 0
+wlan_rescue_silent 0
+wlan_rescue_saved 0
+wlan_rx_old_far 0
+loopback_dropped 0
+loopback_peak 2
+loopback_delivered_tick 0
+loopback_delivered_idle 0
+loopback_delivered_call 8
+loopback_left_idle 0
+namecache_hits 3624053
+namecache_misses 15076
+namecache_entries 8192
+namecache_negative 1296
+ext2_node_visits 156810
+procs_running 8
+procs_blocked 0
+== 527 527
+527 (trip64.exe) R 1 527 527 0 -1 0 0 0 0 0 26 76 0 0 20 0 5 0 6358 701464576 19721
+Name:	trip64.exe
+Umask:	0022
+State:	R (running)
+Tgid:	527
+Ngid:	0
+Pid:	527
+PPid:	1
+TracerPid:	0
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	527
+NSpid:	527
+NSpgid:	527
+NSsid:	527
+VmPeak:	  685024 kB
+VmSize:	  685024 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	   78884 kB
+VmRSS:	   78884 kB
+RssAnon:	   41460 kB
+RssFile:	   37364 kB
+RssShmem:	      60 kB
+VmData:	  403648 kB
+VmStk:	     136 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	5
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	0000000000000000
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	3717
+nonvoluntary_ctxt_switches:	361
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
+== 527 535
+535 (trip64.:disk$0) S 1 527 527 0 -1 0 0 0 0 0 0 0 0 0 39 19 5 0 6441 701464576 19721
+Name:	trip64.:disk$0
+Umask:	0022
+State:	S (sleeping)
+Tgid:	527
+Ngid:	0
+Pid:	535
+PPid:	1
+TracerPid:	0
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	527
+NSpid:	535
+NSpgid:	527
+NSsid:	527
+VmPeak:	  685024 kB
+VmSize:	  685024 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	   78884 kB
+VmRSS:	   78884 kB
+RssAnon:	   41460 kB
+RssFile:	   37364 kB
+RssShmem:	      60 kB
+VmData:	  403648 kB
+VmStk:	     136 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	5
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	fffffffe3ffbfaff
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	1
+nonvoluntary_ctxt_switches:	0
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
+== 527 539
+539 (trip64.:disk$0) S 1 527 527 0 -1 0 0 0 0 0 0 0 0 0 39 19 5 0 6451 701464576 19721
+Name:	trip64.:disk$0
+Umask:	0022
+State:	S (sleeping)
+Tgid:	527
+Ngid:	0
+Pid:	539
+PPid:	1
+TracerPid:	0
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	527
+NSpid:	539
+NSpgid:	527
+NSsid:	527
+VmPeak:	  685024 kB
+VmSize:	  685024 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	   78884 kB
+VmRSS:	   78884 kB
+RssAnon:	   41460 kB
+RssFile:	   37364 kB
+RssShmem:	      60 kB
+VmData:	  403648 kB
+VmStk:	     136 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	5
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	fffffffe3ffbfaff
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	1
+nonvoluntary_ctxt_switches:	0
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
+== 527 549
+549 (wined3d_cs) R 1 527 527 0 -1 0 0 0 0 0 6 11 0 0 20 0 5 0 6470 701464576 19721
+Name:	wined3d_cs
+Umask:	0022
+State:	R (running)
+Tgid:	527
+Ngid:	0
+Pid:	549
+PPid:	1
+TracerPid:	0
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	527
+NSpid:	549
+NSpgid:	527
+NSsid:	527
+VmPeak:	  685024 kB
+VmSize:	  685024 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	   78884 kB
+VmRSS:	   78884 kB
+RssAnon:	   41460 kB
+RssFile:	   37364 kB
+RssShmem:	      60 kB
+VmData:	  403648 kB
+VmStk:	     136 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	5
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	0000000000000000
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	259
+nonvoluntary_ctxt_switches:	44
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
+== 527 550
+550 (trip64.e:gdrv0) S 1 527 527 0 -1 0 0 0 0 0 0 0 0 0 20 0 5 0 6480 701464576 19721
+Name:	trip64.e:gdrv0
+Umask:	0022
+State:	S (sleeping)
+Tgid:	527
+Ngid:	0
+Pid:	550
+PPid:	1
+TracerPid:	0
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	527
+NSpid:	550
+NSpgid:	527
+NSsid:	527
+VmPeak:	  685024 kB
+VmSize:	  685024 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	   78884 kB
+VmRSS:	   78884 kB
+RssAnon:	   41460 kB
+RssFile:	   37364 kB
+RssShmem:	      60 kB
+VmData:	  403648 kB
+VmStk:	     136 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	5
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	fffffffe3ffbfaff
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	1
+nonvoluntary_ctxt_switches:	0
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
+
+==== end
+time 65.380687
+cpu  1687 0 6691 16126 0 0 0 0 0 0
+cpu0 625 0 2776 3135 0 0 0 0 0 0
+cpu1 413 0 1402 4174 0 0 0 0 0 0
+cpu2 370 0 1350 4268 0 0 0 0 0 0
+cpu3 277 0 1161 4548 0 0 0 0 0 0
+intr 562340
+ctxt 0
+btime 1794492106
+processes 559
+sleeps_interrupted 2
+process_pid_steps 49011
+process_uid_steps 939
+process_timer_steps 3465991
+process_timer_passes 169136
+timer_passes_late 126
+tlb_shootdowns 3800
+tlb_shootdown_ipis 4454
+scheduler_picks 1924103
+scheduler_steps 774107
+vm_gap_steps 2561254
+clock_calls 1
+vdso_tsc 1
+bkl_wait_us 25027032
+bkl_wait_max_us 77410
+bkl_wait_max_holds 1
+bkl_wait_max_hold 128 162 77410
+bkl_hold_max_us 340074
+bkl_hold_max_entry take 0
+bkl_hold_sample_us 5004047
+bkl_hold_sample_pc ffffffff803837b4 ffffffff801125d4 ffffffff8025edf0 ffffffff801082f7 ffffffff8035b128 ffffffff801002b4
+bkl_hold_max_mark 1 0
+bkl_hold_max_mark 2 0
+bkl_hold_max_mark 4 0
+bkl_hold_max_mark 8 0
+bkl_hold_max_mark 16 0
+bkl_hold_entry syscall 441 235666 10295047
+bkl_hold_entry take 1 577562 8003459
+bkl_hold_entry syscall 257 133073 1489500
+bkl_hold_entry syscall 89 301106 1271247
+bkl_hold_entry syscall 262 70286 1241250
+bkl_hold_entry syscall 0 684471 1157544
+bkl_hold_entry syscall 1 336088 893860
+bkl_hold_entry syscall 20 179674 885131
+bkl_hold_entry syscall 14 654550 748846
+bkl_hold_entry syscall 88 3008 690323
+bkl_hold_entry vector 0 314193 669309
+bkl_hold_entry take 0 5 340074
+bkl_hold_entry syscall 191 24970 276725
+bkl_hold_entry syscall 47 47223 262112
+bkl_hold_entry vector 32 30926 224569
+bkl_hold_entry syscall 3 134456 212323
+kvm_vms 0
+kvm_vcpus 0
+kvm_slots 0
+kvm_tdp_pages 0
+kvm_run_mappings 0
+kvm_gpa_maps 0
+kvm_gpa_map_pages 0
+kvm_ioeventfd_signals 0
+kvm_irqfd_raises 0
+vfio_groups 0
+vfio_devices 0
+vfio_dma_mappings 0
+vfio_dma_pages 0
+vfio_dma_io_pages 0
+kvm_exits 0
+iommu_dma_faults 0
+iommu_irq_faults 0
+msi_vectors_free 184
+virtio_gpu_copied_bytes 0
+latency_timer_us 1331724
+latency_disk_us 22172
+latency_diskwait_us 0
+latency_console_us 0
+wlan_refused_tcp 0
+wlan_refused_ack 0
+wlan_refused_other 0
+wlan_rx_held 0
+wlan_rx_wait_most 22
+wlan_tx_status_lost 0
+wlan_rescue_key 0
+wlan_rescue_message4 0
+wlan_rescue_silent 0
+wlan_rescue_saved 0
+wlan_rx_old_far 0
+loopback_dropped 0
+loopback_peak 2
+loopback_delivered_tick 0
+loopback_delivered_idle 0
+loopback_delivered_call 8
+loopback_left_idle 0
+namecache_hits 3643103
+namecache_misses 15080
+namecache_entries 8191
+namecache_negative 1298
+ext2_node_visits 157318
+procs_running 7
+procs_blocked 0
+== 527 527
+527 (trip64.exe) R 1 527 527 0 -1 0 0 0 0 0 36 107 0 0 20 0 4 0 6358 768573440 20022
+Name:	trip64.exe
+Umask:	0022
+State:	R (running)
+Tgid:	527
+Ngid:	0
+Pid:	527
+PPid:	1
+TracerPid:	0
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	527
+NSpid:	527
+NSpgid:	527
+NSsid:	527
+VmPeak:	  750560 kB
+VmSize:	  750560 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	   80088 kB
+VmRSS:	   80088 kB
+RssAnon:	   42260 kB
+RssFile:	   37760 kB
+RssShmem:	      68 kB
+VmData:	  403648 kB
+VmStk:	     136 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	4
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	0000000000000000
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	3733
+nonvoluntary_ctxt_switches:	600
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
+== 527 535
+535 (trip64.:disk$0) S 1 527 527 0 -1 0 0 0 0 0 0 0 0 0 39 19 4 0 6441 768573440 20022
+Name:	trip64.:disk$0
+Umask:	0022
+State:	S (sleeping)
+Tgid:	527
+Ngid:	0
+Pid:	535
+PPid:	1
+TracerPid:	0
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	527
+NSpid:	535
+NSpgid:	527
+NSsid:	527
+VmPeak:	  750560 kB
+VmSize:	  750560 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	   80088 kB
+VmRSS:	   80088 kB
+RssAnon:	   42260 kB
+RssFile:	   37760 kB
+RssShmem:	      68 kB
+VmData:	  403648 kB
+VmStk:	     136 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	4
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	fffffffe3ffbfaff
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	1
+nonvoluntary_ctxt_switches:	0
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
+== 527 539
+539 (trip64.:disk$0) S 1 527 527 0 -1 0 0 0 0 0 0 0 0 0 39 19 4 0 6451 768573440 20022
+Name:	trip64.:disk$0
+Umask:	0022
+State:	S (sleeping)
+Tgid:	527
+Ngid:	0
+Pid:	539
+PPid:	1
+TracerPid:	0
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	527
+NSpid:	539
+NSpgid:	527
+NSsid:	527
+VmPeak:	  750560 kB
+VmSize:	  750560 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	   80088 kB
+VmRSS:	   80088 kB
+RssAnon:	   42260 kB
+RssFile:	   37760 kB
+RssShmem:	      68 kB
+VmData:	  403648 kB
+VmStk:	     136 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	4
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	fffffffe3ffbfaff
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	6
+nonvoluntary_ctxt_switches:	1
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
+== 527 549
+549 (wined3d_cs) R 1 527 527 0 -1 0 0 0 0 0 19 34 0 0 20 0 4 0 6470 768573440 20022
+Name:	wined3d_cs
+Umask:	0022
+State:	R (running)
+Tgid:	527
+Ngid:	0
+Pid:	549
+PPid:	1
+TracerPid:	0
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	527
+NSpid:	549
+NSpgid:	527
+NSsid:	527
+VmPeak:	  750560 kB
+VmSize:	  750560 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	   80088 kB
+VmRSS:	   80088 kB
+RssAnon:	   42260 kB
+RssFile:	   37760 kB
+RssShmem:	      68 kB
+VmData:	  403648 kB
+VmStk:	     136 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	4
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	0000000000000000
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	1397
+nonvoluntary_ctxt_switches:	172
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0

@@ -1,0 +1,41 @@
+[    0.000000] i915: stolen: reserving [mem 0xaba00000-0xaf9fffff], 0 KiB of it usable memory
+[    3.799000] root: image: /trial3513/root-33668e13b31cec31.img on /dev/disk0p6, ext2 through /dev/loop0; /data is /dev/disk0p6
+[    4.991000] i915: uncore: an unclaimed access before the bind, cleared
+[    4.994000] i915: stolen: [mem 0xaba00000-0xaf9fffff], 64512 KiB usable, inside the device's reserved region
+[    5.000000] i915: gtt: pipe A's firmware surface at 0x0, 4128 KiB, kept
+[    5.005000] i915: gtt: 2048 MiB, 256 MiB of it through the aperture; 523256 entries to the scratch page, 1032 kept
+[    5.011000] i915: opregion: version 2.0.0 at 0xaafb4018, mailboxes 0x1f; VBT in mailbox 4
+[    5.014000] i915: vbt: "$VBT HASWELL        " from the OpRegion (Mailbox #4), version 177, 3 outputs
+[    5.020000] i915: gem: 32 fences, swizzle 9/10 for X tiles and 9 for Y
+[    5.023000] i915: interrupts: messages on vector 53
+[    5.026000] i915: rps: RPn 200 MHz, RP1 200 MHz, RP0 1000 MHz, RPe 500 MHz, max 1000 MHz
+[    5.029000] i915: ppgtt: aliasing, 2048 MiB shared, directory at 0x7fde0000
+[    5.032000] i915: rings: rcs0, bcs0, vcs0 and vecs0 started: 16 KiB each at 0x7fffb000, 0x7fff6000, 0x7fff1000 and 0x7ffec000, status pages at 0x7ffff000, 0x7fffa000, 0x7fff5000 and 0x7fff0000
+[    5.042000] i915: workarounds: applied: 3 of the GT and 6 of rcs0, 0 lost
+[    5.045000] i915: pcode: read of command 0x5: error -6
+[    5.045000] i915: found: 00:02.0: haswell/ult (device id 0a16), graphics 7.5, display version 7.00, gt2, revision 0b
+[    5.052000] i915: cdclk: 450000 kHz, the most 450000 kHz, pixel clocks to 450000 kHz
+[    5.055000] i915: wm: latencies 20, 4, 36, 90 and 160 (level 0 in 0.1 us, then 0.5 us)
+[    5.059000] i915: pps: power up 200 ms, down 50 ms, cycle 500 ms, backlight on 1 ms, off 200 ms
+[    5.070000] i915: panel: the EDID's preferred fixed mode 1366x768@60, 76300 kHz
+[    5.074000] i915: edp: DPCD 1.1, eDP 1, 1 lane, rates 162000 to 270000 kHz, 6 bpc, EDID 128 bytes
+[    5.077000] i915: hdmi B: DDC pin 5, level 9, 300000 kHz TMDS
+[    5.080000] i915: display: port B: HDMI
+[    5.084000] i915: hdmi C: DDC pin 4, level 6, 300000 kHz TMDS, DP++
+[    5.087000] i915: display: port C: DP+HDMI
+[    5.090000] i915: display: pipe A adopted: 1366x768 in 1366x768@60, 76300 kHz, 18 bpp, 1 lane at 270000 kHz, the firmware's framebuffer at GTT 0x0, stride 5504
+[    5.096000] i915: backlight: intel_backlight: levels 0 to 937, at 937, off with the pipe
+[    5.100000] drm: i915: card0
+[    5.106000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[    5.106000] i915: gmbus dpb: NAK on first message, retry
+[    5.106000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[    5.106000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[    5.106000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+[    5.107000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+[    5.108000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[    5.108000] i915: gmbus dpc: NAK on first message, retry
+[    5.108000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[    5.108000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[    5.108000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[    5.109000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+[    5.109000] i915: registered: i915 1.6.0 for pci:0000:00:02.0 on card 0
