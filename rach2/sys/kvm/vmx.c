@@ -2482,7 +2482,7 @@ static int exit_reason(struct kvm_vcpu *v)
 }
 
 /**
- * The backend's `exit`, under the big lock with interrupts on: the first
+ * The backend's `exit`, without the big lock, with interrupts on: the first
  * failed VMWRITE, INVEPT or INVVPID reported, once, the exit named, and an
  * instruction the kernel stepped under the caller's single step ended as
  * KVM_EXIT_DEBUG with DR6.BS, as Linux's kvm_vcpu_do_singlestep. 0, or

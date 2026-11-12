@@ -12,6 +12,8 @@
 #include "kvm_abi.h"
 #include "decode.h"
 #include "../io/anon.h"
+#include "../lib/spinlock.h"
+#include "../proc/mutex.h"
 #include "../proc/wait_queue.h"
 
 struct eventfd;
@@ -232,8 +234,11 @@ struct kvm_tdp_format {
 
 /*
  * The operations of a processor's backend, svm.c or vmx.c, which the
- * kernel picks at boot by `probe`. Each runs under the big lock with
- * interrupts on unless it says otherwise.
+ * kernel picks at boot by `probe`. Each runs with interrupts on unless it
+ * says otherwise: `probe`, `vm_init`, `vm_free`, `vcpu_init`, `vcpu_free`,
+ * `check_extension` and `tsc_scaling` under the big lock, and the rest in
+ * the thread that holds the vCPU (`mutex`), KVM_RUN's without the big
+ * lock.
  *
  * `probe` answers whether the processor has the extension and the
  * firmware leaves it usable: 1 or 0. `vm_init` and `vm_free` make and free
@@ -248,8 +253,8 @@ struct kvm_tdp_format {
  * guest-physical translations of the VM, as it does too when it enters on
  * a processor other than the one it last entered on, whose translations
  * may predate a flush; it reads the tables at `kvm_tdp_root`. `exit` then
- * turns that exit into `v->exit`, under the big lock with interrupts on,
- * and may sleep: 0, or -errno to end
+ * turns that exit into `v->exit`, with interrupts on and without the big
+ * lock, and may sleep: 0, or -errno to end
  * KVM_RUN with that error. `complete` gives the backend the answer to the
  * port or MMIO read of `v->exit` before the next entry. `save` writes the
  * parts `parts` of the backend's state into the vCPU's record. `inject`
@@ -325,6 +330,25 @@ extern const struct kvm_backend *kvm_backend;
 struct kvm_vm {
     struct anon_obj anon; /* "kvm-vm", for /proc/PID/fd */
     uint32_t refs;
+    /* Over the slots, their dirty logs, the guest-physical tables and the
+     * VM's page counts (slots.c, tdp.c, dirty.c): Linux's mmu_lock, and its
+     * kvm->srcu for the slots' readers, since a lookup here copies the
+     * slot out under the lock. `mmu_seq` counts the zaps, each under the
+     * lock, as Linux's mmu_invalidate_seq: a fault reads it before it
+     * looks at the caller's page and maps nothing when it moved. */
+    struct spinlock mmu_lock;
+    volatile uint32_t mmu_seq;
+    /* Over the master clock, the TSCs' matching, `clock_offset` and
+     * `wall_clock` (pvclock.c), as Linux's tsc_write_lock with its
+     * pvclock_sc: a reader copies the fields out under it. */
+    struct spinlock clock_lock;
+    /* The kvmclock moved since hyperv.c last looked: its reference TSC
+     * page is written again (`kvm_hv_clock_changed`). Set by pvclock.c,
+     * taken by an exchange under the big lock (`kvm_hv_prepare`). */
+    volatile uint32_t hv_clock_moved;
+    /* Over `msr_filter`, which a guest's MSR exit reads (msr.c), as
+     * Linux's kvm->srcu over its filter. */
+    struct spinlock filter_lock;
     struct kvm_vcpu *vcpus[KVM_MAX_VCPUS];
     uint32_t nr_vcpus;
     uint64_t tss_addr;    /* KVM_SET_TSS_ADDR */
@@ -357,7 +381,7 @@ struct kvm_vm {
     int exit_on_emulation_error; /* KVM_CAP_EXIT_ON_EMULATION_FAILURE */
     int platform_info_hidden;    /* KVM_CAP_MSR_PLATFORM_INFO 0: the guest's read is #GP */
     uint32_t user_space_msr;     /* KVM_CAP_X86_USER_SPACE_MSR: KVM_MSR_EXIT_REASON_* */
-    void *msr_filter;            /* KVM_X86_SET_MSR_FILTER's, msr.c's; NULL for none */
+    void *msr_filter;            /* KVM_X86_SET_MSR_FILTER's, msr.c's, under `filter_lock` */
     int x2apic_format;           /* KVM_X2APIC_API_USE_32BIT_IDS */
     int x2apic_no_broadcast;     /* KVM_X2APIC_API_DISABLE_BROADCAST_QUIRK */
     uint64_t apic_bus_ns;        /* KVM_CAP_X86_APIC_BUS_CYCLES_NS: an APIC timer's tick in ns */
@@ -404,6 +428,17 @@ struct kvm_vm {
 #define KVM_REQ_CLOCK_UPDATE 0x100u /* write the kvmclock again (pvclock.c) */
 #define KVM_REQ_STEAL_UPDATE 0x200u /* write the steal time again (pvclock.c) */
 #define KVM_REQ_MSR_FILTER   0x400u /* the backend's `msr_filter_changed` */
+
+/* The requests that cancel an entry they find set once the vCPU is
+ * IN_GUEST, as Linux's kvm_vcpu_exit_request cancels one for any pending
+ * request (arch/x86/kvm/x86.c:1715-1720): every request but the flush, which
+ * the backend's `enter` answers itself. A request a kick sets between the
+ * loop's answer and the entry, before the kick could see IN_GUEST and
+ * interrupt the processor, is answered before the guest runs: an event
+ * the kick brings, or the kvmclock's, so that no vCPU runs on the master
+ * clock's old formula while another runs on its new. Each is cleared by
+ * the loop's next pass, so the loop does not come back here forever. */
+#define KVM_REQ_NOENTER (~KVM_REQ_TLB_FLUSH)
 
 /* The most MSRs a vCPU keeps, those of the index list, the MTRRs and the
  * machine-check banks. */
@@ -506,10 +541,11 @@ struct kvm_vcpu {
     volatile uint32_t mode;     /* KVM_MODE_* */
     volatile uint32_t requests; /* KVM_REQ_* */
     volatile int32_t cpu;       /* the processor it last entered on, -1 before */
-    int busy;                   /* an ioctl of the vCPU is under way, KVM_RUN among them */
+    /* Held for each ioctl of the vCPU, KVM_RUN among them, as Linux's
+     * vcpu->mutex: the state below is its holder's. */
+    struct mutex mutex;
     int hlt_in_guest; /* the VM's KVM_X86_DISABLE_EXITS_HLT at creation: HLT does not exit */
     int has_run;      /* KVM_RUN has entered the guest */
-    wait_queue_t wq;  /* the ioctls that wait for `busy` to clear */
     int pending;      /* `exit` is a read the caller answers in the run page */
     int msr_pending;  /* `exit` is KVM_X_MSR, which the caller answers */
     int has_sigmask;
@@ -552,6 +588,13 @@ struct kvm_vcpu {
     uint64_t st_last;
     unsigned long st_pcount;
     int st_preempted;
+    /* The record was last written whole, and found in no region of
+     * memfd_secret, when the VM's `mmu_seq` was `st_seq` (`st_ok`), so that
+     * `kvm_steal_preempted`, which cannot look at the caller's regions,
+     * writes only while no zap has come since, as Linux's
+     * kvm_steal_time_set_preempted checks its cache's slots generation. */
+    int st_ok;
+    uint32_t st_seq;
     int pv_stopped;    /* KVM_KVMCLOCK_CTRL: the next write sets PVCLOCK_GUEST_STOPPED */
     int32_t clock_cpu; /* the processor the kvmclock was last written on, -1 for none */
     uint64_t clock_ns; /* the host's ns at that write */
@@ -578,9 +621,11 @@ struct kvm_vcpu {
      * `enter` writes: SVM's EXITCODE, low 32 bits, or VMX's exit reason. */
     uint32_t hw_exit;
     /* exitstat.c's account of the exit the kernel handles now: its row, or
-     * -1 for none, and the TSC count since which its handling is timed. */
+     * -1 for none, the TSC count since which its handling is timed, and
+     * the cycles it has waited for the big lock (`kvm_bkl_enter`). */
     int32_t xs_row;
     uint64_t xs_mark;
+    uint64_t xs_wait;
 
     /* The steps each vector's interrupts reached, by enum kvm_vec_step,
      * which the VM's fdinfo shows; written by the vCPU's thread and by a
@@ -614,16 +659,23 @@ void kvm_start(void);
 void kvm_exitstat_start(void);
 
 /**
- * Count the exit of the run that just ended on `v`, by `v->hw_exit`: the
- * TSC count `left`, read as the guest's run ended, and `held`, read once
- * the big lock was taken back, time the wait for the lock. Under the big
- * lock, with interrupts off.
+ * Count the exit of the run that just ended on `v`, by `v->hw_exit`, with
+ * its handling timed from the TSC count `left`, read as the guest's run
+ * ended, and count the entry among those since boot (`kvm_exit_count`). In
+ * `v`'s thread, with interrupts off.
  */
-void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t left, uint64_t held);
+void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t left);
 
 /** End the account of `v`'s exit, if one is open: the kernel enters the
- * guest again (`to_user` 0) or KVM_RUN returns (1). Under the big lock. */
+ * guest again (`to_user` 0) or KVM_RUN returns (1). The exit's waits for
+ * the big lock go to its row's wait, the rest of its time to its handling.
+ * In `v`'s thread. */
 void kvm_exitstat_done(struct kvm_vcpu *v, int to_user);
+
+/** Take the big lock for a part of KVM_RUN that still needs it, counting
+ * the cycles the take waits in the account of `v`'s exit; `v` may be NULL,
+ * for a caller outside KVM_RUN. Never under a spinlock. */
+void kvm_bkl_enter(struct kvm_vcpu *v);
 
 /** Whether the caller runs in the address space that made `vm`; Linux
  * answers EIO to an ioctl of a VM or its vCPUs from any other. */
@@ -637,7 +689,8 @@ struct mm *kvm_vm_mm(struct kvm_vm *vm);
 void kvm_vm_get(struct kvm_vm *vm);
 
 /** Drop a reference to `vm`, freeing it, its vCPUs, its slots and the
- * backend's share with the last one. Under the big lock. */
+ * backend's share with the last one. Under the big lock; no vCPU is in
+ * KVM_RUN once the last reference goes, since its descriptor holds one. */
 void kvm_vm_put(struct kvm_vm *vm);
 
 /** The live VM one of whose ioeventfds signals `ev`, the VM that rings a
@@ -689,9 +742,10 @@ void kvm_vcpu_free(struct kvm_vcpu *v);
 
 /** Ask `v` to leave guest mode and see its requests: an interrupt to the
  * processor it runs on when it is in the guest there, and nothing more
- * when it is not, since the loop reads `requests` before each entry. The
- * request is set atomically, so an interrupt handler or a hook under
- * another subsystem's spinlock may kick, without the big lock. */
+ * when it is not, since the loop reads `requests` once the vCPU is
+ * IN_GUEST, before each entry. The request is set atomically, so an
+ * interrupt handler or a holder of any spinlock may kick, without the big
+ * lock. */
 void kvm_vcpu_kick(struct kvm_vcpu *v, uint32_t request);
 
 /** Clear the request `request` of `v` atomically: whether it was set. */
@@ -851,8 +905,9 @@ int32_t kvm_msr_set_filter(struct kvm_vm *vm, uintptr_t arg);
 void kvm_msr_free_filter(struct kvm_vm *vm);
 
 /* pvclock.c: the kvmclock, its master clock, the wall clock and the
- * matching of the vCPUs' TSCs, as Linux's x86.c keeps them. Each runs
- * under the big lock. */
+ * matching of the vCPUs' TSCs, as Linux's x86.c keeps them. Each takes the
+ * VM's `clock_lock` for the VM's fields it reads or changes, and runs with
+ * or without the big lock. */
 
 /** The host's TSC rate as measured, in kHz, which a guest's TSC runs at
  * unless KVM_SET_TSC_KHZ gave it another: 0 when none was measured. */
@@ -899,7 +954,7 @@ void kvm_clock_vm_init(struct kvm_vm *vm);
 /** The kvmclock of `vm` now, in ns, as the guests read it: by the master
  * clock's formula from the host's TSC while it runs, else the host's
  * monotonic clock plus the VM's offset. */
-uint64_t kvm_clock_ns(const struct kvm_vm *vm);
+uint64_t kvm_clock_ns(struct kvm_vm *vm);
 
 /** KVM_GET_CLOCK, as Linux's: with the master clock, the kvmclock at a TSC
  * count read with the real time, and KVM_CLOCK_TSC_STABLE,
@@ -1000,7 +1055,8 @@ int32_t kvm_slots_set(struct kvm_vm *vm, const struct kvm_userspace_memory_regio
  * A slot as its users see it: its first frame, its frames, its flags, its
  * number, the caller's address of the frame asked for, and its dirty log,
  * a bit for each page from `base_gfn` in 64-bit words, or NULL when it does
- * not log.
+ * not log. The log may be read or written only under `mmu_lock`, held from
+ * the lookup, since a change of the slot frees it.
  */
 struct kvm_slot_view {
     uint64_t base_gfn;
@@ -1013,13 +1069,23 @@ struct kvm_slot_view {
 
 /** The slot that holds the guest-physical frame `gfn` of `vm`, for the
  * guest-physical tables, VFIO's mappings and the transport's buffers: 1
- * with it in `*out`, or 0 for a frame no slot holds. Under the big lock;
- * the answer holds until the lock is let go. */
+ * with it in `*out`, or 0 for a frame no slot holds. Takes `mmu_lock`;
+ * the copy may be out of date once the lock is let go, as a reader of
+ * Linux's slots under kvm->srcu may see the slots of before a change. */
 int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out);
 
+/** `kvm_slot_find` for a caller that holds `mmu_lock`. */
+int kvm_slot_find_locked(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out);
+
 /** The slot numbered `id` of `vm`, with `hva` its first page's address: 1,
- * or 0 when there is none. As `kvm_slot_find`. */
+ * or 0 when there is none. Under `mmu_lock`, which the copy's log needs. */
 int kvm_slot_get(struct kvm_vm *vm, uint32_t id, struct kvm_slot_view *out);
+
+/** Take `vm`'s `mmu_lock` with interrupts off: the flags to restore. */
+uint32_t kvm_mmu_lock(struct kvm_vm *vm);
+
+/** Give back what `kvm_mmu_lock` took. */
+void kvm_mmu_unlock(struct kvm_vm *vm, uint32_t flags);
 
 /** The capabilities of slots.c: USER_MEMORY, DESTROY_MEMORY_REGION_WORKS,
  * JOIN_MEMORY_REGIONS_WORKS, READONLY_MEM, SYNC_MMU, NR_MEMSLOTS and
@@ -1050,22 +1116,30 @@ uint64_t kvm_tdp_frames(void);
  * the caller's page and the dirty log allow, uncached under the guest's
  * PAT for a device's page and write-back with the guest's PAT ignored for
  * RAM, and as a 2 MiB page where the slot and the caller's pages allow.
- * May sleep. 0; 1 for a frame no slot holds or a write to a read-only
- * slot, which is MMIO; -EFAULT when the caller's page cannot be had;
- * -ENOMEM.
+ * Without the big lock, under the address space's regions' lock and
+ * `mmu_lock`. May sleep. 0; 1 for a frame no slot holds or a write to a
+ * read-only slot, which is MMIO; -EFAULT when the caller's page cannot be
+ * had; -ENOMEM.
  */
 int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write);
 
 /**
  * Write the `n` bytes at `buf` to `vm`'s guest-physical `gpa`, within one
  * page, without a fault or a sleep, as Linux's copy_to_user_nofault through
- * a vCPU's cache of the page: only where the current thread is in the VM's
+ * a vCPU's cache of the page, checked by the slots' generation: only while
+ * `mmu_seq` is still `seq`, where the current thread is in the VM's
  * address space and its page is present, writable and already stored into,
  * in a slot that is not read-only. The frame is marked in the dirty log.
- * 0, or 1 with nothing written. Under the big lock; for a context that may
- * not sleep, such as a thread's `sched_out`.
+ * 0, or 1 with nothing written. Takes `mmu_lock`, so interrupts are off
+ * from the read of the caller's entry to the write and no frame the
+ * caller's tables name is freed before this processor drops its
+ * translations (`smp_tlb_shootdown`); takes no regions' lock: the caller
+ * found the page in no region of memfd_secret when `mmu_seq` was `seq`,
+ * and any change of a region there has moved it since. For a context that
+ * may not sleep, such as a thread's `sched_out`.
  */
-int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n);
+int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n,
+                          uint32_t seq);
 
 /**
  * KVM_PRE_FAULT_MEMORY's work, as Linux's kvm_vcpu_pre_fault_memory: map
@@ -1081,25 +1155,29 @@ int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range)
 /** Drop what the tables map of the `npages` frames from `gfn`, and get
  * every vCPU out of the guest with its translations to drop
  * (`kvm_tdp_flush`) when anything was mapped, before a table it emptied is
- * freed. Does not sleep. */
+ * freed. Takes `mmu_lock` and moves `mmu_seq`. Does not sleep. */
 void kvm_tdp_zap(struct kvm_vm *vm, uint64_t gfn, uint64_t npages);
+
+/** `kvm_tdp_zap` for a caller that holds `mmu_lock`. */
+void kvm_tdp_zap_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages);
 
 /** Count a device that does not snoop the processor's caches assigned to
  * `vm` (`assigned` 1) or taken from it (0). While one is assigned, RAM is
  * mapped write-back with the guest's PAT in charge, not ignored, as Linux's
  * kvm_arch_register_noncoherent_dma makes it; the first and the last drop
- * every leaf. Under the big lock; does not sleep. */
+ * every leaf. Under the big lock; takes `mmu_lock`. */
 void kvm_tdp_noncoherent(struct kvm_vm *vm, int assigned);
 
 /** Take the write right from the 4 KiB leaves of the frames `gfn` + i for
  * each bit i of `mask`, for the dirty log, without a flush: whether any
- * leaf changed. Does not sleep. */
+ * leaf changed. Under `mmu_lock`; does not sleep. */
 int kvm_tdp_protect(struct kvm_vm *vm, uint64_t gfn, uint64_t mask);
 
 /** Ask every vCPU of `vm` to drop its guest-physical translations before
  * its next entry, and wait until none is in the guest, so that no
- * processor uses a translation the tables no longer hold. Under the big
- * lock, which no vCPU takes back while it waits; does not sleep. */
+ * processor uses a translation the tables no longer hold: a vCPU that
+ * enters after the kick finds the request once it is IN_GUEST, before the
+ * entry. Under `mmu_lock`; does not sleep. */
 void kvm_tdp_flush(struct kvm_vm *vm);
 
 /* dirty.c: dirty logging. */
@@ -1112,7 +1190,8 @@ int32_t kvm_dirty_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg);
 int32_t kvm_dirty_enable_manual(struct kvm_vm *vm, const struct kvm_enable_cap *cap);
 
 /** Mark the frame `gfn` of `vm` dirty in its slot's log, for a write of the
- * kernel's own to guest memory; nothing when its slot does not log. */
+ * kernel's own to guest memory; nothing when its slot does not log. Takes
+ * `mmu_lock`. */
 void kvm_dirty_mark(struct kvm_vm *vm, uint64_t gfn);
 
 /* irq.c: interrupt routing, irqfd and MSIs. */
@@ -1131,32 +1210,42 @@ int32_t kvm_irq_check_extension(long cap);
 
 /** Whether an EOI of `vector` goes to the caller's I/O APIC: some route of
  * the GSIs KVM_CAP_SPLIT_IRQCHIP reserved for its pins is a level-triggered
- * MSI of that vector, as Linux's kvm_scan_ioapic_routes finds. Under the
- * big lock. */
+ * MSI of that vector, as Linux's kvm_scan_ioapic_routes finds, from a set
+ * of vectors kept as the routes change. Takes no lock. */
 int kvm_irq_eoi_exits(struct kvm_vm *vm, uint32_t vector);
 
 /** Free irq.c's share of `vm`, its irqfds among them. */
 void kvm_irq_free(struct kvm_vm *vm);
+
+/** Take the controllers' lock of `vm`, which has irq.c's share, with
+ * interrupts off: the flags to restore. The functions below that say they
+ * run under it are called with it held; the others take it. */
+uint32_t kvm_chip_lock(struct kvm_vm *vm);
+
+/** Give back what `kvm_chip_lock` took. */
+void kvm_chip_unlock(struct kvm_vm *vm, uint32_t flags);
 
 /* Independent sources ORed at each pin, as Linux's irq_source_id bitmap. */
 #define KVM_IRQ_SRC_USER     1u
 #define KVM_IRQ_SRC_RESAMPLE 2u
 #define KVM_IRQ_SRC_PIT      4u
 
-/** Set a routed GSI's source level under the big lock; -1 or deliveries.
+/** Set a routed GSI's source level under the controllers' lock; -1 or
+ * deliveries.
  * `status` asks the IOAPIC to count an RTC pulse waiting for its EOI. */
 int kvm_irq_set(struct kvm_vm *vm, uint32_t gsi, uint32_t source, uint32_t level, int status);
 
 /** Notify a controller pin's acknowledgement or mask change under the
- * big lock, for PIT reinjection and irqfd resampling. */
+ * controllers' lock, for PIT reinjection and irqfd resampling. */
 void kvm_irq_ack(struct kvm_vm *vm, uint32_t chip, uint32_t pin);
 void kvm_irq_mask(struct kvm_vm *vm, uint32_t chip, uint32_t pin, int masked);
 
 /** Resample a pin: lower its resampling source and signal its resamplefds.
- * Returns 1 when there is a resampler, else 0; under the big lock. */
+ * Returns 1 when there is a resampler, else 0; under the controllers'
+ * lock. */
 int kvm_irq_resample(struct kvm_vm *vm, uint32_t chip, uint32_t pin);
 
-/** Process irqfds deferred from interrupt context under the big lock. */
+/** Process irqfds deferred from interrupt context. */
 void kvm_irq_process(struct kvm_vm *vm);
 
 /** Whether an irqfd awaits processing; safe in a halted wait condition. */
@@ -1170,20 +1259,24 @@ int kvm_irq_io(struct kvm_vcpu *v);
 int kvm_pic_create(struct kvm_vm *vm);
 void kvm_pic_free(struct kvm_vm *vm);
 
-/** Set a PIC pin's source under the big lock: -1 masked, 0 coalesced,
- * 1 accepted. The pin is 0 to 15 and source is KVM_IRQ_SRC_*. */
+/** Set a PIC pin's source under the controllers' lock: -1 masked, 0
+ * coalesced, 1 accepted. The pin is 0 to 15 and source is KVM_IRQ_SRC_*. */
 int kvm_pic_set(struct kvm_vm *vm, uint32_t pin, uint32_t source, int level);
 
-/** The PIC's next vector without acknowledgement, or -1 with no output. */
+/** The PIC's next vector without acknowledgement, or -1 with no output.
+ * Takes the controllers' lock; any context but an interrupt. */
 int kvm_pic_pending(struct kvm_vm *vm);
 
-/** Acknowledge the PIC, including the cascade; returns its vector. */
+/** Acknowledge the PIC, including the cascade; returns its vector. Takes
+ * the controllers' lock. */
 int kvm_pic_ack(struct kvm_vm *vm);
 
-/** Save or restore one PIC, chip 0 or 1; restore recomputes its output. */
+/** Save or restore one PIC, chip 0 or 1; restore recomputes its output.
+ * Under the controllers' lock. */
 void kvm_pic_state(struct kvm_vm *vm, uint32_t chip, struct kvm_pic_state *state, int set);
 
-/** Read or write a PIC port: 1 handled, 0 not its port. */
+/** Read or write a PIC port: 1 handled, 0 not its port. Under the
+ * controllers' lock. */
 int kvm_pic_io(struct kvm_vm *vm, uint32_t port, uint32_t size, uint32_t *value, int write);
 
 /** Make or free the IOAPIC; create returns 0 or -ENOMEM. */
@@ -1191,38 +1284,51 @@ int kvm_ioapic_create(struct kvm_vm *vm);
 void kvm_ioapic_free(struct kvm_vm *vm);
 
 /** Set an IOAPIC pin's source: -1 masked, 0 coalesced, else deliveries.
- * The pin is below KVM_IOAPIC_NUM_PINS; under the big lock. */
+ * The pin is below KVM_IOAPIC_NUM_PINS; under the controllers' lock. */
 int kvm_ioapic_set(struct kvm_vm *vm, uint32_t pin, uint32_t source, int level, int status);
 
 /** Copy the counts of `pin`, KVM_PIN_STEPS of them by enum kvm_pin_step:
- * 0, or -1 with no IOAPIC in the kernel or no such pin. */
+ * 0, or -1 with no IOAPIC in the kernel or no such pin. Takes the
+ * controllers' lock. */
 int kvm_ioapic_counts(struct kvm_vm *vm, uint32_t pin, uint32_t *counts);
 
-/** An APIC's EOI broadcast, with the vector's TMR and directed-EOI bit. */
+/** An APIC's EOI broadcast, with the vector's TMR and directed-EOI bit.
+ * Takes the controllers' lock only when a pin or the RTC's count has the
+ * vector, which it first looks for without the lock, as Linux's
+ * kvm_ioapic_handles_vector. */
 void kvm_ioapic_eoi(struct kvm_vcpu *v, uint32_t vector, int level, int directed);
 
-/** Restore the RTC EOI count after a vCPU's local APIC is restored. */
+/** Restore the RTC EOI count after a vCPU's local APIC is restored. Takes
+ * the controllers' lock. */
 void kvm_ioapic_restore(struct kvm_vcpu *v);
 
-/** Save or restore the IOAPIC, reinjecting restored pending lines. */
+/** Save or restore the IOAPIC, reinjecting restored pending lines. Under
+ * the controllers' lock. */
 void kvm_ioapic_state(struct kvm_vm *vm, struct kvm_ioapic_state *state, int set);
 
-/** Read or write IOAPIC MMIO: 1 handled, 0 not its address. */
+/** Read or write IOAPIC MMIO: 1 handled, 0 not its address. Under the
+ * controllers' lock. */
 int kvm_ioapic_io(struct kvm_vm *vm, uint64_t addr, uint32_t size, uint64_t *value, int write);
 
-/** The PIT creation, state and reinjection ioctls: 0 or -errno. */
+/** The PIT creation, state and reinjection ioctls: 0 or -errno. Under the
+ * big lock; each takes the controllers' lock for its change. */
 int32_t kvm_pit_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg);
 
-/** Read or write a PIT or dummy speaker port: 1 handled, 0 not its port. */
+/** Read or write a PIT or dummy speaker port: 1 handled, 0 not its port.
+ * Under the controllers' lock. */
 int kvm_pit_io(struct kvm_vm *vm, uint32_t port, uint32_t size, uint32_t *value, int write);
 
-/** Inject due PIT ticks under the big lock, retaining unacknowledged ones. */
+/** Inject due PIT ticks, retaining unacknowledged ones. Takes the
+ * controllers' lock only when a tick may be due, which it first asks
+ * without the lock. */
 void kvm_pit_check(struct kvm_vm *vm);
 
-/** The PIT's next host deadline in ns, or 0 while stopped. */
+/** The PIT's next host deadline in ns, or 0 while stopped. Takes the
+ * controllers' lock; any context but an interrupt. */
 uint64_t kvm_pit_next(struct kvm_vm *vm);
 
-/** Acknowledge a PIT tick, reset its queue on unmask, or free the PIT. */
+/** Acknowledge a PIT tick or reset its queue on unmask, under the
+ * controllers' lock; or free the PIT. */
 void kvm_pit_ack(struct kvm_vm *vm);
 void kvm_pit_unmask(struct kvm_vm *vm);
 void kvm_pit_free(struct kvm_vm *vm);
@@ -1330,7 +1436,8 @@ int kvm_lapic_pending_eoi(struct kvm_vcpu *v, uint32_t vector);
 /** Request event processing and wake the APIC's wait; interrupt safe. */
 void kvm_lapic_wake(struct kvm_vcpu *v);
 
-/** Wake the first vCPU that accepts PIC interrupts, under the big lock. */
+/** Wake the first vCPU that accepts PIC interrupts, under the controllers'
+ * lock. */
 void kvm_lapic_pic_wake(struct kvm_vm *vm);
 
 /** Deliver the PIT's virtual-wire NMI to unmasked LINT0s in NMI mode. */
@@ -1402,7 +1509,9 @@ int kvm_lapic_hv_msr(struct kvm_vcpu *v, uint32_t reg, int write, uint64_t *valu
 
 /* hyperv.c: Hyper-V's enlightenments, for a vCPU whose CPUID has Hyper-V's
  * interface at leaf 0x40000001. Each runs under the big lock unless it
- * says otherwise. */
+ * says otherwise; those KVM_RUN calls, `kvm_hv_prepare`, `kvm_hv_stimers`,
+ * `kvm_hv_msr`, `kvm_hv_hypercall` and `kvm_hv_complete`, take it
+ * themselves (`kvm_bkl_enter`) when there is work. */
 
 /** The capabilities of hyperv.c: HYPERV, HYPERV_VAPIC, HYPERV_SPIN,
  * HYPERV_TIME, HYPERV_SYNIC, HYPERV_SYNIC2, HYPERV_VP_INDEX,
@@ -1486,7 +1595,8 @@ int kvm_hv_synic_set_irq(struct kvm_vm *vm, uint32_t vpidx, uint32_t sint);
 int kvm_hv_invtsc_suppressed(const struct kvm_vcpu *v);
 
 /** The guest's clock or TSC of `vm` moved: the reference TSC page is
- * written again before the next entry. */
+ * written again before the next entry. pvclock.c, which runs without the
+ * big lock, sets `hv_clock_moved` instead, which `kvm_hv_prepare` takes. */
 void kvm_hv_clock_changed(struct kvm_vm *vm);
 
 /** Free hyperv.c's share of `v`. */

@@ -1,7 +1,8 @@
 /*
  * exitstat.c: the guests' exits counted by the processor's exit code since
  * boot, with the TSC cycles each kind waits for the big lock and spends in
- * the kernel, read from the debug file kvm/exit_stats.
+ * the kernel, read from the debug file kvm/exit_stats. KVM_RUN runs without
+ * the big lock, so the counts are kept under a spinlock of their own.
  */
 
 #include "kvm.h"
@@ -12,6 +13,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/usercopy.h"
+#include "../proc/smp.h"
 
 /*
  * The rows. A code below ROW_HIGH has the row of its number, SVM's
@@ -30,16 +32,19 @@
 /*
  * One kind's counts. `kernel` exits were handled in the kernel and the
  * guest entered again; `user` ended KVM_RUN, most of them for the caller
- * to answer. `wait` is the TSC cycles from the end of the guest's run to
- * the big lock taken back, `handle` from there to the next entry or to
- * KVM_RUN's return; a HLT the kernel handles counts its sleep until an
- * interrupt in `handle`.
+ * to answer. `wait` is the TSC cycles the exit's handling spent waiting for
+ * the big lock (`kvm_bkl_enter`), and `handle` the rest of the time from
+ * the end of the guest's run to the next entry or to KVM_RUN's return; a
+ * HLT the kernel handles counts its sleep until an interrupt in `handle`.
  */
 struct row {
     uint64_t exits, kernel, user, wait, handle;
 };
 
+/* The rows and the entries since boot, under `rows_lock`. */
 static struct row rows[ROWS];
+static uint64_t guest_exits;
+static struct spinlock rows_lock = SPINLOCK_INIT_NAMED("kvm_exitstat");
 
 /* A code and its name, as Linux's SVM_EXIT_REASONS and VMX_EXIT_REASONS
  * give them to its kvm_exit trace event. */
@@ -273,31 +278,65 @@ static const char *name_of(uint32_t code)
     return NULL;
 }
 
-void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t left, uint64_t held)
+uint64_t kvm_exit_count(void)
 {
-    uint32_t r = row_of(v->hw_exit);
+    uint32_t flags = spin_lock_irqsave(&rows_lock);
+    uint64_t n = guest_exits;
 
+    spin_unlock_irqrestore(&rows_lock, flags);
+    return n;
+}
+
+void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t left)
+{
+    uint32_t r = row_of(v->hw_exit), flags;
+
+    flags = spin_lock_irqsave(&rows_lock);
+    guest_exits++;
     rows[r].exits++;
-    rows[r].wait += held - left;
+    spin_unlock_irqrestore(&rows_lock, flags);
     v->xs_row = (int32_t)r;
-    v->xs_mark = held;
+    v->xs_mark = left;
+    v->xs_wait = 0;
 }
 
 void kvm_exitstat_done(struct kvm_vcpu *v, int to_user)
 {
+    uint64_t spent;
+    uint32_t flags;
     struct row *r;
 
     if (v->xs_row < 0) {
         return;
     }
+    spent = arch_cycles() - v->xs_mark;
+    if (v->xs_wait > spent) {
+        v->xs_wait = spent; /* the TSCs of two processors differ a little */
+    }
+    flags = spin_lock_irqsave(&rows_lock);
     r = &rows[v->xs_row];
-    r->handle += arch_cycles() - v->xs_mark;
+    r->wait += v->xs_wait;
+    r->handle += spent - v->xs_wait;
     if (to_user) {
         r->user++;
     } else {
         r->kernel++;
     }
+    spin_unlock_irqrestore(&rows_lock, flags);
     v->xs_row = -1;
+}
+
+void kvm_bkl_enter(struct kvm_vcpu *v)
+{
+    uint64_t start;
+
+    if (!v || v->xs_row < 0 || bkl_held()) {
+        bkl_enter();
+        return;
+    }
+    start = arch_cycles();
+    bkl_enter();
+    v->xs_wait += arch_cycles() - start;
 }
 
 /* A text being written: `len` bytes so far, of which those below `cap`
@@ -381,10 +420,14 @@ static int32_t exitstat_show(void *data, char *buf, uint32_t cap)
     put_dec(&o, kvm_tsc_khz());
     put_str(&o, "\ncode exits kernel user wait_cycles handle_cycles name\n");
     for (i = 0; i < ROWS; i++) {
-        const struct row *r = &rows[i];
-        uint32_t code = code_of(i);
+        uint32_t code = code_of(i), flags;
         const char *name = i == ROW_OTHER ? "other" : name_of(code);
+        struct row row;
+        const struct row *r = &row;
 
+        flags = spin_lock_irqsave(&rows_lock);
+        row = rows[i];
+        spin_unlock_irqrestore(&rows_lock, flags);
         if (r->exits == 0) {
             continue;
         }
@@ -416,6 +459,7 @@ static int32_t exitstat_show(void *data, char *buf, uint32_t cap)
  * account. */
 static int32_t exitstat_store(void *data, const char __user *buf, uint32_t len)
 {
+    uint32_t flags;
     char c[2];
 
     (void)data;
@@ -428,7 +472,9 @@ static int32_t exitstat_store(void *data, const char __user *buf, uint32_t len)
     if (c[0] != '0' || (len == 2 && c[1] != '\n')) {
         return -EINVAL;
     }
+    flags = spin_lock_irqsave(&rows_lock);
     k_memset(rows, 0, sizeof(rows));
+    spin_unlock_irqrestore(&rows_lock, flags);
     return (int32_t)len;
 }
 

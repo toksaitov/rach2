@@ -1,5 +1,6 @@
 /* The guest's 8254 counters, latches, silent speaker and IRQ0 reinjection.
- * The big lock serializes timer checks, port accesses and state ioctls. */
+ * The controllers' lock (irq.c) serializes timer checks, port accesses and
+ * state ioctls. */
 
 #include "kvm.h"
 #include "../lib/kerrno.h"
@@ -154,16 +155,30 @@ static void pit_load(struct kvm_vm *vm, uint32_t channel, uint32_t count, int hp
     pit_wake(vm);
 }
 
+/** Whether `p` may have work at `now`, read without the lock: an armed
+ * expiry that passed, or a retained tick the guest acknowledged. */
+static int pit_due(const struct guest_pit *p, uint64_t now)
+{
+    const volatile struct guest_pit *q = p;
+
+    return (q->active && now >= q->expires) || (q->reinject && q->pending && !q->inflight);
+}
+
 /** A new tick or an acknowledged backlog may produce one IRQ0 pulse. */
 void kvm_pit_check(struct kvm_vm *vm)
 {
     struct guest_pit *p = pit_of(vm);
     uint64_t now, ticks = 0;
+    uint32_t flags;
 
     if (!p) {
         return;
     }
     now = kvm_host_ns();
+    if (!pit_due(p, now)) {
+        return;
+    }
+    flags = kvm_chip_lock(vm);
     if (p->active && now >= p->expires) {
         ticks = p->periodic ? (now - p->expires) / p->period + 1u : 1u;
         if (p->periodic) {
@@ -182,20 +197,27 @@ void kvm_pit_check(struct kvm_vm *vm)
         kvm_irq_set(vm, 0, KVM_IRQ_SRC_PIT, 0, 0);
         kvm_lapic_pit_nmi(vm);
     }
+    kvm_chip_unlock(vm, flags);
 }
 
 /** The next timer deadline, or immediate work after an EOI of a backlog. */
 uint64_t kvm_pit_next(struct kvm_vm *vm)
 {
     struct guest_pit *p = pit_of(vm);
+    uint64_t next;
+    uint32_t flags;
 
     if (!p) {
         return 0;
     }
+    flags = kvm_chip_lock(vm);
     if (p->reinject && p->pending && !p->inflight) {
-        return kvm_host_ns();
+        next = kvm_host_ns();
+    } else {
+        next = p->active ? p->expires : 0;
     }
-    return p->active ? p->expires : 0;
+    kvm_chip_unlock(vm, flags);
+    return next;
 }
 
 /** Retire the delivered tick and wake vCPUs for any retained ticks. */
@@ -236,7 +258,7 @@ void kvm_pit_free(struct kvm_vm *vm)
 static int32_t pit_create(struct kvm_vm *vm, uint32_t flags)
 {
     struct guest_pit *p;
-    uint32_t i;
+    uint32_t i, lock;
 
     if (vm->pit) {
         return -EEXIST;
@@ -250,23 +272,27 @@ static int32_t pit_create(struct kvm_vm *vm, uint32_t flags)
     }
     p->speaker = (flags & KVM_PIT_SPEAKER_DUMMY) != 0;
     p->reinject = 1;
+    lock = kvm_chip_lock(vm);
     vm->pit = p;
     for (i = 0; i < 3u; i++) {
         p->state.channels[i].mode = 0xFF;
         p->state.channels[i].gate = i != 2;
         pit_load(vm, i, 0, 0);
     }
+    kvm_chip_unlock(vm, lock);
     return 0;
 }
 
-/** PIT creation, save/restore and reinjection, in Linux's ioctl order. */
+/** PIT creation, save/restore and reinjection, in Linux's ioctl order,
+ * under the big lock; each copies the state under the controllers' lock
+ * and the user's memory outside it. */
 int32_t kvm_pit_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
 {
     struct guest_pit *p = pit_of(vm);
     struct kvm_pit_config config;
     struct kvm_pit_state2 state;
     struct kvm_reinject_control control;
-    uint32_t i, old_flags;
+    uint32_t i, old_flags, flags;
     int hpet_start;
 
     switch (request) {
@@ -284,13 +310,18 @@ int32_t kvm_pit_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
         if (!p) {
             return -ENXIO;
         }
-        return copy_to_user((void __user *)arg, p->state.channels, sizeof(state.channels)) ? -EFAULT
-                                                                                           : 0;
+        flags = kvm_chip_lock(vm);
+        k_memcpy(state.channels, p->state.channels, sizeof(state.channels));
+        kvm_chip_unlock(vm, flags);
+        return copy_to_user((void __user *)arg, state.channels, sizeof(state.channels)) ? -EFAULT
+                                                                                        : 0;
     case KVM_GET_PIT2:
         if (!p) {
             return -ENXIO;
         }
+        flags = kvm_chip_lock(vm);
         state = p->state;
+        kvm_chip_unlock(vm, flags);
         k_memset(state.reserved, 0, sizeof(state.reserved));
         return copy_to_user((void __user *)arg, &state, sizeof(state)) ? -EFAULT : 0;
     case KVM_SET_PIT:
@@ -303,6 +334,7 @@ int32_t kvm_pit_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
         if (!p) {
             return -ENXIO;
         }
+        flags = kvm_chip_lock(vm);
         old_flags = p->state.flags;
         if (request == KVM_SET_PIT) {
             state.flags = old_flags;
@@ -313,6 +345,7 @@ int32_t kvm_pit_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
         for (i = 0; i < 3u; i++) {
             pit_load(vm, i, state.channels[i].count, hpet_start && i == 0);
         }
+        kvm_chip_unlock(vm, flags);
         return 0;
     case KVM_REINJECT_CONTROL:
         if (copy_from_user(&control, (const void __user *)arg, sizeof(control))) {
@@ -321,11 +354,13 @@ int32_t kvm_pit_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
         if (!p) {
             return -ENXIO;
         }
+        flags = kvm_chip_lock(vm);
         if (!p->reinject && control.pit_reinject) {
             p->pending = 0;
             p->inflight = 0;
         }
         p->reinject = control.pit_reinject != 0;
+        kvm_chip_unlock(vm, flags);
         return 0;
     default:
         return -ENOTTY;

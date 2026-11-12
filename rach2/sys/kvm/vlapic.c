@@ -133,7 +133,8 @@
  * but for LVR, which follows the guest's CPUID, and TMCCT, which the timer
  * gives; in x2APIC mode ID holds the whole x2APIC id. IRR and TMR change
  * by atomic operations, since another processor's delivery sets them; the
- * rest change under the big lock on the vCPU's own thread.
+ * rest change on the vCPU's own thread, under its mutex, as Linux's
+ * kvm_lapic changes in the vCPU's thread without kvm->lock.
  */
 struct lapic {
     volatile uint32_t regs[KVM_APIC_REG_SIZE / 4];

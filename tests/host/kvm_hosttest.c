@@ -5,7 +5,8 @@
  * host-deps: rach2/sys/kvm/cpuid.c rach2/sys/kvm/msr.c rach2/sys/kvm/hyperv.c
  * host-deps: rach2/sys/kvm/pvclock.c rach2/sys/kvm/binstats.c
  * host-deps: rach2/sys/kvm/exitstat.c
- * host-deps: tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/fd_flat.c tests/host/compat/atomic_host.c
+ * host-deps: tests/host/compat/mutex_none.c tests/host/compat/spinlock_host.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * kvm.c and vcpu.c are the kernel's, included whole; cpuid.c, msr.c and
@@ -29,8 +30,9 @@
  * where the refusing backend's error comes back; each exit kind through the
  * run page, with port and MMIO reads answered on the next KVM_RUN, a HLT
  * going to the caller with no local APIC in the kernel, immediate_exit, a
- * signal, a kick from another processor and a triple fault; the big lock
- * let go and interrupts off for the entry; the signal mask swapped for the
+ * signal, a kick from another processor and a triple fault; KVM_RUN and
+ * its exits without the big lock, and interrupts off for the entry; the
+ * signal mask swapped for the
  * run; the refusals of the state ioctls Linux makes; EIO from another
  * address space; every allocation given back when the last reference
  * to the VM goes, the mapping's among them; and, in a VM of their own with
@@ -313,22 +315,32 @@ static void clock_pass(uint64_t ns)
 }
 
 /* The big lock's depth on this processor, the interrupt flag, the
- * processors kicked and a pending signal. */
-static int bkl_depth = 1, irq_on = 1, kicked = -1, sig_pending;
+ * processors kicked and a pending signal. KVM_RUN is called without the big
+ * lock, as the system call layer calls an unlocked file's operations. */
+static int bkl_depth, irq_on = 1, kicked = -1, sig_pending;
 
-int bkl_drop(void)
+/** Take the big lock: one level deeper. */
+void bkl_enter(void)
 {
-    int d = bkl_depth;
-
-    CHECK(!irq_on, "the big lock is let go with interrupts off");
-    bkl_depth = 0;
-    return d;
+    bkl_depth++;
 }
 
-void bkl_take(int depth)
+/** Give back one level of the big lock. */
+void bkl_exit(void)
 {
-    bkl_depth = depth;
+    CHECK(bkl_depth > 0, "the big lock is given back only when held");
+    bkl_depth--;
 }
+
+/** Whether this thread holds the big lock. */
+int bkl_held(void)
+{
+    return bkl_depth > 0;
+}
+
+/** Nothing waits on this processor's requests in a test of one thread. */
+void smp_service(void)
+{}
 
 uint32_t kirq_save(void)
 {
@@ -565,7 +577,8 @@ static int tick_exits;
 /** The next exit of the script. */
 static int fake_exit(struct kvm_vcpu *v)
 {
-    CHECK(irq_on && bkl_depth == 1, "an exit is handled with interrupts on and the big lock");
+    CHECK(irq_on && bkl_depth == 0,
+          "an exit is handled with interrupts on and without the big lock, as Linux's");
     if (script_at == script_len) {
         return -EIO;
     }
@@ -909,13 +922,54 @@ int kvm_guest_phys_rw(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t n, i
     return 0;
 }
 
+/* The caller's region over the guest page, which a row marks
+ * VM_PROT_SECRET, as memfd_secret's. */
+static vma_t guest_vma;
+
+/** The slot of the one guest page, which the steal time's record vouches
+ * for: 1 with `out` filled while guest_mem is set, or 0. */
+int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
+{
+    (void)vm;
+    if (!guest_mem || gfn != GUEST_PAGE >> 12) {
+        return 0;
+    }
+    k_memset(out, 0, sizeof(*out));
+    out->base_gfn = gfn;
+    out->npages = 1;
+    out->hva = (uint64_t)(uintptr_t)guest_page;
+    return 1;
+}
+
+/** The region at `addr`: always the guest page's. */
+vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
+{
+    (void)vm;
+    (void)addr;
+    return &guest_vma;
+}
+
+/** Nothing to wait for in a test of one thread. */
+void mmap_read_lock(struct mm *mm)
+{
+    (void)mm;
+}
+
+/** Give back `mmap_read_lock`: nothing. */
+void mmap_unlock(struct mm *mm)
+{
+    (void)mm;
+}
+
 /* The no-fault write of the steal time's preempted byte, into the same
  * page; `nofault_refuse` stands for a page that is not present. */
 static int nofault_refuse;
 
-int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n)
+int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n,
+                          uint32_t seq)
 {
     (void)vm;
+    (void)seq;
     if (nofault_refuse || !guest_mem || gpa < GUEST_PAGE ||
         gpa + n > GUEST_PAGE + sizeof(guest_page)) {
         return 1;
@@ -1000,17 +1054,6 @@ void eventfd_signal(struct eventfd *ev)
 
 void arch_relax(void)
 {}
-
-/** The compare-and-exchange, on one processor. */
-unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
-{
-    unsigned int cur = *p;
-
-    if (cur == old) {
-        *p = value;
-    }
-    return cur;
-}
 
 /* /dev/kvm's descriptor. */
 static fd_entry_t dev_entry;
@@ -1503,7 +1546,7 @@ static void startup_run(int vcpu)
     r = fdio(vcpu, KVM_RUN, 0);
     CHECK(r == -EOPNOTSUPP && entries_made == 1,
           "KVM_RUN reaches the backend, whose refusal QEMU reports");
-    CHECK(bkl_depth == 1 && irq_on, "KVM_RUN takes the big lock back and turns interrupts on");
+    CHECK(bkl_depth == 0 && irq_on, "KVM_RUN returns with interrupts on and no big lock held");
 }
 
 /**
@@ -2177,12 +2220,21 @@ static void steal_rows(int fd0)
     tick_exits = 0;
     preempt_wait = 0;
     preempt_seen_at = NULL;
+    guest_vma.prot = VM_PROT_SECRET;
+    v0->vm->mmu_seq++;
+    caller.pcount++;
+    kvm_steal_prepare(v0);
+    kvm_steal_preempted(v0);
+    CHECK(st->version == 20 && !v0->st_ok && !v0->st_preempted && st->preempted == 0,
+          "a record in a memfd_secret region, looked at again once the tables change, is never "
+          "marked preempted without a fault");
+    guest_vma.prot = 0;
     refusing = 1;
 
     CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_GPA) == 1, "the guest turns it off");
     caller.pcount++;
     kvm_steal_prepare(v0);
-    CHECK(st->version == 18, "and nothing more is written");
+    CHECK(st->version == 20, "and nothing more is written");
 }
 
 /** A guest's INIT on vCPU `fd0`, as Linux's kvm_vcpu_reset: the steal

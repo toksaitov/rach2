@@ -1,7 +1,10 @@
 /*
  * dirty.c: dirty logging, the log of the pages of a slot the guest wrote,
  * which QEMU reads to redraw a display and to migrate, as Linux's
- * KVM_GET_DIRTY_LOG and KVM_CLEAR_DIRTY_LOG give it.
+ * KVM_GET_DIRTY_LOG and KVM_CLEAR_DIRTY_LOG give it. A log is read and
+ * written under the VM's `mmu_lock`, which a fault from a vCPU's run holds
+ * while it marks a page, as Linux's kvm_get_dirty_log_protect takes
+ * mmu_lock (virt/kvm/kvm_main.c:2202-2312).
  */
 
 #include "kvm.h"
@@ -27,17 +30,19 @@ int32_t kvm_dirty_enable_manual(struct kvm_vm *vm, const struct kvm_enable_cap *
 void kvm_dirty_mark(struct kvm_vm *vm, uint64_t gfn)
 {
     struct kvm_slot_view s;
+    uint32_t flags = kvm_mmu_lock(vm);
     uint64_t i;
 
-    if (kvm_slot_find(vm, gfn, &s) && s.dirty) {
+    if (kvm_slot_find_locked(vm, gfn, &s) && s.dirty) {
         i = gfn - s.base_gfn;
         s.dirty[i / 64u] |= 1ull << (i % 64u);
     }
+    kvm_mmu_unlock(vm, flags);
 }
 
 /** The slot of a log ioctl's `slot` into `*s`: 0, -EINVAL for an address
  * space other than 0 or a number past KVM_MEM_SLOTS, or -ENOENT for no
- * slot or one that does not log. */
+ * slot or one that does not log. Under `mmu_lock`. */
 static int32_t log_slot(struct kvm_vm *vm, uint32_t slot, struct kvm_slot_view *s)
 {
     if ((slot >> 16) != 0 || (slot & 0xFFFFu) >= KVM_MEM_SLOTS) {
@@ -55,22 +60,26 @@ static int32_t log_slot(struct kvm_vm *vm, uint32_t slot, struct kvm_slot_view *
  * the log is taken and cleared, and the pages it named write-protected
  * again before the copy, so that a write after the call is logged anew;
  * with it the log is copied as it stands, for KVM_CLEAR_DIRTY_LOG to clear.
- * The log is copied to a buffer of the kernel's first, since the copy to
- * the caller may sleep, and the slot may go meanwhile. 0, -EINVAL,
- * -ENOENT, -ENOMEM or -EFAULT.
+ * The log is copied to a buffer of the kernel's first, under `mmu_lock`,
+ * since the copy to the caller may sleep, and the slot may go meanwhile;
+ * the buffer is had before the lock, for the slot's size then, and the
+ * slot looked up again under it. 0, -EINVAL, -ENOENT, -ENOMEM or -EFAULT.
  */
 static int32_t get_log(struct kvm_vm *vm, uintptr_t arg)
 {
     struct kvm_dirty_log log;
     struct kvm_slot_view s;
     uint64_t *out, words, i;
+    uint32_t flags;
     int32_t r;
     int flush = 0;
 
     if (copy_from_user(&log, (const void __user *)arg, sizeof(log)) != 0) {
         return -EFAULT;
     }
+    flags = kvm_mmu_lock(vm);
     r = log_slot(vm, log.slot, &s);
+    kvm_mmu_unlock(vm, flags);
     if (r != 0) {
         return r;
     }
@@ -79,7 +88,12 @@ static int32_t get_log(struct kvm_vm *vm, uintptr_t arg)
     if (!out) {
         return -ENOMEM;
     }
-    for (i = 0; i < words; i++) {
+    flags = kvm_mmu_lock(vm);
+    r = log_slot(vm, log.slot, &s);
+    if (r == 0 && (s.npages + 63u) / 64u != words) {
+        r = -ENOENT; /* the slot was made anew meanwhile */
+    }
+    for (i = 0; r == 0 && i < words; i++) {
         out[i] = s.dirty[i];
         if (!(vm->dirty_manual & KVM_DIRTY_LOG_MANUAL_PROTECT_ENABLE) && out[i]) {
             s.dirty[i] = 0;
@@ -89,9 +103,11 @@ static int32_t get_log(struct kvm_vm *vm, uintptr_t arg)
     if (flush) {
         kvm_tdp_flush(vm);
     }
-    r = copy_to_user((void __user *)(uintptr_t)log.dirty_bitmap, out, (size_t)(words * 8u)) != 0
-            ? -EFAULT
-            : 0;
+    kvm_mmu_unlock(vm, flags);
+    if (r == 0 &&
+        copy_to_user((void __user *)(uintptr_t)log.dirty_bitmap, out, (size_t)(words * 8u)) != 0) {
+        r = -EFAULT;
+    }
     kfree(out);
     return r;
 }
@@ -103,14 +119,15 @@ static int32_t get_log(struct kvm_vm *vm, uintptr_t arg)
  * set, so that their next write is logged. The range must lie in the slot,
  * and end at its end when `num_pages` is not a multiple of 64; bits past
  * the slot's end are ignored. The caller's bitmap is read before the slot
- * is looked up again, since the read may sleep. 0, -EINVAL, -ENOENT,
- * -ENOMEM or -EFAULT.
+ * is looked up again under `mmu_lock`, since the read may sleep. 0,
+ * -EINVAL, -ENOENT, -ENOMEM or -EFAULT.
  */
 static int32_t clear_log(struct kvm_vm *vm, uintptr_t arg)
 {
     struct kvm_clear_dirty_log c;
     struct kvm_slot_view s;
     uint64_t *in, words, i;
+    uint32_t flags;
     int32_t r;
     int flush = 0;
 
@@ -120,7 +137,9 @@ static int32_t clear_log(struct kvm_vm *vm, uintptr_t arg)
     if ((c.slot >> 16) != 0 || (c.slot & 0xFFFFu) >= KVM_MEM_SLOTS || (c.first_page & 63u)) {
         return -EINVAL;
     }
+    flags = kvm_mmu_lock(vm);
     r = log_slot(vm, c.slot, &s);
+    kvm_mmu_unlock(vm, flags);
     if (r != 0) {
         return r;
     }
@@ -141,6 +160,7 @@ static int32_t clear_log(struct kvm_vm *vm, uintptr_t arg)
         kfree(in);
         return -EFAULT;
     }
+    flags = kvm_mmu_lock(vm);
     r = log_slot(vm, c.slot, &s);
     if (r == 0 && c.first_page + c.num_pages > s.npages) {
         r = -EINVAL;
@@ -157,6 +177,7 @@ static int32_t clear_log(struct kvm_vm *vm, uintptr_t arg)
     if (flush) {
         kvm_tdp_flush(vm);
     }
+    kvm_mmu_unlock(vm, flags);
     kfree(in);
     return r;
 }

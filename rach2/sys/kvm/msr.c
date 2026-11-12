@@ -669,7 +669,10 @@ struct msr_range {
 };
 
 /* A VM's filter, `vm->msr_filter`: the ranges with MSRs, in the order
- * given, of which the first that names an access decides it. */
+ * given, of which the first that names an access decides it. A vCPU reads
+ * it under `filter_lock`, which a new filter takes the old one's place
+ * under, as Linux's readers hold kvm->srcu and kvm_vm_ioctl_set_msr_filter
+ * frees the old filter after synchronize_srcu (arch/x86/kvm/x86.c:6416). */
 struct msr_filter {
     int default_allow;
     uint32_t count;
@@ -678,22 +681,29 @@ struct msr_filter {
 
 int kvm_msr_allowed(const struct kvm_vcpu *v, uint32_t index, int write)
 {
-    const struct msr_filter *f = (const struct msr_filter *)v->vm->msr_filter;
+    struct kvm_vm *vm = v->vm;
+    const struct msr_filter *f;
     uint32_t type = write ? KVM_MSR_FILTER_WRITE : KVM_MSR_FILTER_READ;
-    uint32_t i, end;
+    uint32_t i, end, flags;
+    int allowed;
 
-    if ((index >= MSR_X2APIC_FIRST && index <= MSR_X2APIC_LAST) || !f) {
+    if ((index >= MSR_X2APIC_FIRST && index <= MSR_X2APIC_LAST) || !vm->msr_filter) {
         return 1;
     }
-    for (i = 0; i < f->count; i++) {
+    flags = spin_lock_irqsave(&vm->filter_lock);
+    f = (const struct msr_filter *)vm->msr_filter;
+    allowed = f ? f->default_allow : 1;
+    for (i = 0; f && i < f->count; i++) {
         /* `end` wraps for a range past 0xFFFFFFFF, as Linux's does. */
         end = f->ranges[i].base + f->ranges[i].nmsrs;
         if (index >= f->ranges[i].base && index < end && (f->ranges[i].flags & type)) {
             index -= f->ranges[i].base;
-            return (f->ranges[i].bitmap[index / 8u] >> (index % 8u)) & 1u;
+            allowed = (f->ranges[i].bitmap[index / 8u] >> (index % 8u)) & 1u;
+            break;
         }
     }
-    return f->default_allow;
+    spin_unlock_irqrestore(&vm->filter_lock, flags);
+    return allowed;
 }
 
 uint32_t kvm_msr_user_reason(const struct kvm_vcpu *v, int r)
@@ -800,8 +810,8 @@ static int filter_add(struct msr_filter *f, const struct kvm_msr_filter_range *u
 int32_t kvm_msr_set_filter(struct kvm_vm *vm, uintptr_t arg)
 {
     struct kvm_msr_filter *u;
-    struct msr_filter *f;
-    uint32_t i;
+    struct msr_filter *f, *old;
+    uint32_t i, flags;
     int empty = 1, r = 0;
 
     u = (struct kvm_msr_filter *)kmalloc(sizeof(*u));
@@ -834,8 +844,11 @@ int32_t kvm_msr_set_filter(struct kvm_vm *vm, uintptr_t arg)
         filter_free(f);
         return r;
     }
-    filter_free((struct msr_filter *)vm->msr_filter);
+    flags = spin_lock_irqsave(&vm->filter_lock);
+    old = (struct msr_filter *)vm->msr_filter;
     vm->msr_filter = f;
+    spin_unlock_irqrestore(&vm->filter_lock, flags);
+    filter_free(old);
     for (i = 0; i < vm->nr_vcpus; i++) {
         kvm_vcpu_kick(vm->vcpus[i], KVM_REQ_MSR_FILTER);
     }
