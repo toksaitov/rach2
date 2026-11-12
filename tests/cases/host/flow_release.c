@@ -295,20 +295,25 @@ static int wsl_mock(void)
  * part's output, RELEASE_TEST_PREPARE, `status 0` by default, for the
  * preparation and RELEASE_TEST_WINDOWS for the cases, as `poll done` when it
  * has a status line and as `poll ended`, with an empty console, when it has
- * none. Any other script prints nothing.
+ * none. winclean.sh fails, as when a part it stops still runs, while
+ * RELEASE_TEST_HOLD is `stuck` or `stuck-cases`. Any other script prints
+ * nothing.
  */
 static int windows_mock(void)
 {
     char line[20000], b[4096];
     const char *out;
-    int start = 0, poll = 0, prepare = 0;
+    int start = 0, poll = 0, prepare = 0, clean = 0;
     while (fgets(b, sizeof(b), stdin)) {
         snprintf(line, sizeof(line), "windows %s", b);
         append(ev("RELEASE_TEST_CALLS"), line);
         start |= !strncmp(b, "END_OF_RUN", 10);
         poll |= !strncmp(b, "echo \"poll $a\"", 14);
         prepare |= strstr(b, ".prepare.pid ") != NULL;
+        clean |= !strncmp(b, "# winclean.sh: ", 15);
     }
+    if (clean)
+        return !strncmp(ev("RELEASE_TEST_HOLD"), "stuck", 5);
     if (start)
         puts("start: status 0");
     if (!poll)
@@ -596,6 +601,60 @@ static int git_mock(int argc, char **argv)
     }
     return 1;
 }
+/**
+ * Stop the release while a Windows part runs, as RELEASE_TEST_HOLD says:
+ * `stop` and `stuck` while the preparation runs, `stuck-cases` while the
+ * cases run. The first sleep of the part's poll that windows_detach waits for
+ * sends TERM to the release, the leader of the process group that the
+ * fixture starts, and lasts until the release has ended, so that the part is
+ * still running when the release stops it.
+ */
+static void stop_release(void)
+{
+    const char *hold = ev("RELEASE_TEST_HOLD");
+    struct timespec pause = {0, 20000000};
+    pid_t release = getpgrp();
+    int i;
+    if (strcmp(hold, "stop") && strcmp(hold, "stuck") && strcmp(hold, "stuck-cases"))
+        return;
+    if (!fx_has(ev("RELEASE_TEST_CALLS"),
+                strcmp(hold, "stuck-cases") ? " run routine-prepare " : " run routine-collect ") ||
+        fx_has(ev("RELEASE_TEST_CALLS"), "\nrelease stopped\n"))
+        return;
+    append(ev("RELEASE_TEST_CALLS"), "release stopped\n");
+    kill(release, SIGTERM);
+    for (i = 0; i < 6000 && kill(release, 0) == 0; i++) {
+        /* interval: poll for the release's end every 20 ms */
+        nanosleep(&pause, NULL);
+    }
+}
+/**
+ * Answer tasklist's query of one process number, `PID eq N`, as Windows
+ * would when each number that RELEASE_TEST_BASH lists is a bash.exe: until
+ * taskkill has stopped it, or always when RELEASE_TEST_WINCLEAN is `stuck`.
+ * Any other query finds no task.
+ */
+static int tasklist_mock(int argc, char **argv)
+{
+    char killed[200], listed[200];
+    const char *pid = NULL;
+    int i;
+    call("tasklist ", argc, argv, 1);
+    for (i = 1; i < argc; i++)
+        if (!strncmp(argv[i], "PID eq ", 7))
+            pid = argv[i] + 7;
+    if (pid) {
+        snprintf(killed, sizeof(killed), "\ntaskkill /F /T /PID %s\n", pid);
+        snprintf(listed, sizeof(listed), " %s ", pid);
+    }
+    if (pid && strstr(ev("RELEASE_TEST_BASH"), listed) &&
+        (!strcmp(ev("RELEASE_TEST_WINCLEAN"), "stuck") ||
+         !fx_has(ev("RELEASE_TEST_CALLS"), killed)))
+        printf("\"bash.exe\",\"%s\",\"Console\",\"1\",\"4,096 K\"\n", pid);
+    else
+        puts("INFO: No tasks are running which match the specified criteria.");
+    return 0;
+}
 int flow_release_mock(int argc, char **argv)
 {
     const char *name = strrchr(argv[0], '/');
@@ -638,6 +697,14 @@ int flow_release_mock(int argc, char **argv)
         if (argc > 1 && !strcmp(argv[1], "30") && !strcmp(ev("RELEASE_TEST_HOLD"), "wait") &&
             fx_has(ev("RELEASE_TEST_CALLS"), "etude-launch alone "))
             kill(getppid(), SIGTERM);
+        if (argc > 1 && !strcmp(argv[1], "60"))
+            stop_release();
+        return 0;
+    }
+    if (!strcmp(name, "tasklist"))
+        return tasklist_mock(argc, argv);
+    if (!strcmp(name, "taskkill")) {
+        call("taskkill ", argc, argv, 1);
         return 0;
     }
     return 97;
@@ -660,7 +727,7 @@ static int setup(struct release *r, struct fixture *f)
 {
     char path[4096];
     unsigned i;
-    const char *mock[] = {"sh", "gh", "ssh", "git", "make", "sleep", "scp"};
+    const char *mock[] = {"sh", "gh", "ssh", "git", "make", "sleep", "scp", "tasklist", "taskkill"};
     memset(r, 0, sizeof(*r));
     r->f = f;
     snprintf(r->tree, sizeof(r->tree), "%s/tree", f->work);
@@ -675,7 +742,7 @@ static int setup(struct release *r, struct fixture *f)
     flow_put(f, "tree/tools/flow/sweep.sh", "# native sweep fixture\n");
     if (!fx_mkdir(flow_path(f, "tree/.git")) || !fx_mkdir(flow_path(f, "tree/build/flow")))
         return 0;
-    for (i = 0; i < 7; i++)
+    for (i = 0; i < sizeof(mock) / sizeof(mock[0]); i++)
         if (!fx_mock(f, mock[i]))
             return 0;
     fx_env("FLOW_RELEASE", "1");
@@ -1659,6 +1726,113 @@ static int windows_hold_rows(struct release *r)
          ok;
     return ok;
 }
+/** Succeed when the release ended by the TERM that stop_release sent. */
+static int stopped_by_term(struct release *r)
+{
+    return r->f->status != 0 && r->f->status != 1 && r->f->status != 75 &&
+           called(r, "^release stopped$");
+}
+/**
+ * A release stopped while a Windows part runs ends the part's claim in WSL
+ * only once winclean.sh has confirmed that the part has stopped, and keeps
+ * the claim while it cannot.
+ */
+static int windows_stop_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    int ok = 1;
+    run(r, &(struct release_row){.record = r->head,
+                                 .git = "yes",
+                                 .machines = WINDOWS,
+                                 .hold = "stop",
+                                 .windows = "status 0"});
+    ok = check(r,
+               stopped_by_term(r) && before(r, "\nwindows # winclean.sh: ", ".prepared\n") &&
+                   before(r, "\nwindows # winclean.sh: ", "\nwsl c=" WINDOWS_HELD) &&
+                   called(r, "^wsl c=" WINDOWS_HELD "[0-9a-f-]+\\.claim$") &&
+                   !called(r, " run routine-collect "),
+               "a release stopped while Windows prepares stops the preparation before it "
+               "ends the preparation's claim") &&
+         ok;
+    run(r, &(struct release_row){.record = r->head,
+                                 .git = "yes",
+                                 .machines = WINDOWS,
+                                 .hold = "stuck",
+                                 .windows = "status 0"});
+    ok = check(r,
+               stopped_by_term(r) && called(r, "^windows # winclean.sh: ") &&
+                   !called(r, "^wsl touch " WINDOWS_HELD "[0-9a-f-]+\\.prepared$") &&
+                   !called(r, "^wsl c=" WINDOWS_HELD) &&
+                   strstr(f->out, " is not confirmed stopped on Windows; ") != NULL,
+               "a preparation that winclean.sh cannot confirm stopped keeps its claim") &&
+         ok;
+    run(r, &(struct release_row){.record = r->head,
+                                 .git = "yes",
+                                 .machines = WINDOWS,
+                                 .hold = "stuck-cases",
+                                 .windows = "status 0"});
+    ok = check(r,
+               stopped_by_term(r) && called(r, " run routine-collect ") &&
+                   called(r, "^windows # winclean.sh: ") &&
+                   !called(r, "^wsl touch " WINDOWS_HELD "[0-9a-f-]+\\.end$") &&
+                   !called(r, "^wsl c=" WINDOWS_HELD "[0-9a-f-]+\\.hold$") &&
+                   strstr(f->out, " is not confirmed stopped on Windows; ") != NULL,
+               "cases that winclean.sh cannot confirm stopped keep the whole host's claim") &&
+         ok;
+    return ok;
+}
+#define WINCLEAN_ID "milestone7-111111111111-windows-20261010-ab12"
+/** Run winclean.sh on the run WINCLEAN_ID, with OUT and TREE under the work
+ * directory, as RELEASE_TEST_WINCLEAN says. */
+static void winclean(struct release *r, const char *how)
+{
+    struct fixture *f = r->f;
+    const char *a[6] = {"/bin/sh"};
+    a[1] = flow_source(f, "tools/flow/winclean.sh");
+    a[2] = flow_path(f, "windows/tree");
+    a[3] = flow_path(f, "windows/out");
+    a[4] = WINCLEAN_ID;
+    fx_remove(flow_path(f, "windows"));
+    flow_put(f, "calls", "");
+    flow_put(f, "windows/out/" WINCLEAN_ID ".claim.pid", "4001\n");
+    flow_put(f, "windows/out/" WINCLEAN_ID ".hold.pid", "4002\n");
+    flow_put(f, "windows/out/" WINCLEAN_ID ".prepare.pid", "4003\n");
+    flow_put(f, "windows/out/" WINCLEAN_ID ".prepare.out", "building\n");
+    flow_put(f, "windows/tree/build/tmp/" WINCLEAN_ID "/tmp/scratch", "");
+    fx_env("RELEASE_TEST_CALLS", flow_path(f, "calls"));
+    fx_env("RELEASE_TEST_HOLD", "");
+    fx_env("RELEASE_TEST_BASH", " 4001 4002 4003 ");
+    fx_env("RELEASE_TEST_WINCLEAN", how);
+    fx_run(f, a, f->work, NULL, NULL);
+    fx_env("RELEASE_TEST_BASH", NULL);
+    fx_env("RELEASE_TEST_WINCLEAN", NULL);
+}
+/**
+ * winclean.sh stops a run's preparation by its PID file and takes neither
+ * claim's PID file in the same directory, whose numbers are WSL's, for a
+ * Windows process, though Windows has a bash.exe of each number; while the
+ * preparation still runs, it fails and keeps the run's scratch.
+ */
+static int winclean_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    int ok;
+    winclean(r, "");
+    ok = check(r,
+               f->status == 0 && called(r, "^taskkill /F /T /PID 4003$") &&
+                   !called(r, "^taskkill .*/PID 400[12]$") &&
+                   !fx_exists(flow_path(f, "windows/tree/build/tmp/" WINCLEAN_ID)),
+               "winclean.sh stops the preparation and leaves the numbers of WSL's claims alone");
+    winclean(r, "stuck");
+    ok = check(r,
+               f->status == 1 && called(r, "^taskkill /F /T /PID 4003$") &&
+                   !called(r, "^taskkill .*/PID 400[12]$") &&
+                   fx_exists(flow_path(f, "windows/tree/build/tmp/" WINCLEAN_ID "/tmp/scratch")) &&
+                   f->err && strstr(f->err, "winclean: " WINCLEAN_ID " still runs; "),
+               "winclean.sh fails and keeps the scratch of a preparation that still runs") &&
+         ok;
+    return ok;
+}
 static int windows_rows(struct release *r)
 {
     struct fixture *f = r->f;
@@ -1666,6 +1840,8 @@ static int windows_rows(struct release *r)
     int ok = windows_pass_row(r);
     ok = windows_failure_rows(r) && ok;
     ok = windows_hold_rows(r) && ok;
+    ok = windows_stop_rows(r) && ok;
+    ok = winclean_rows(r) && ok;
     snprintf(text, sizeof(text),
              "milestone 7\nsha %s\nbranch %s\nchosen %s\ntouched %s\ndispatched "
              "1760054400\nrun 101 failure\n",
@@ -1797,6 +1973,28 @@ static int prepare_rows(struct release *r)
                "-p names the part that failed and the lines that say why") &&
          ok;
     return ok;
+}
+/**
+ * -p stopped while Windows prepares keeps the claim in WSL and the files on
+ * Windows of a preparation that winclean.sh cannot confirm stopped.
+ */
+static int prepare_stop_row(struct release *r)
+{
+    struct fixture *f = r->f;
+    run(r,
+        &(struct release_row){
+            .git = "yes", .machines = WINDOWS, .testing = "pass", .preparing = 1, .hold = "stuck"});
+    return check(r,
+                 stopped_by_term(r) && called(r, "^windows # winclean.sh: ") &&
+                     !called(r, "^windows cd D:/o && rm -rf " PREPARED "windows-prepare-") &&
+                     !called(r, "^wsl touch /mnt/d/o/" PREPARED "windows-prepare-[0-9a-f-]+"
+                                "\\.prepared$") &&
+                     !called(r, "^wsl c=/mnt/d/o/" PREPARED "windows-prepare-") &&
+                     strstr(f->out, "release: prepare: windows: the run " PREPARED
+                                    "windows-prepare-") != NULL &&
+                     strstr(f->out, ", and its files in D:/o stay\n") != NULL,
+                 "-p stopped while Windows prepares keeps the claim and the files of a "
+                 "preparation that winclean.sh cannot confirm stopped");
 }
 /** -o leaves out the Mac and Windows, which the machines file names. */
 static int only_rows(struct release *r)
@@ -1992,6 +2190,7 @@ int flow_release(struct fixture *f)
     ok = lenovo_rows(&r) && ok;
     ok = mac_rows(&r) && ok;
     ok = prepare_rows(&r) && ok;
+    ok = prepare_stop_row(&r) && ok;
     ok = only_rows(&r) && ok;
     ok = restart_refusal_rows(&r) && ok;
     ok = restart_mac_rows(&r) && ok;
