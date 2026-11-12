@@ -37,7 +37,9 @@
  * processors, with each exit's wait for the big lock, its clear, the
  * entry, run and exit counted only from marks in order, the preparation
  * only for an exit the kernel handled, and an exit with no entry after it
- * counted as one that ended KVM_RUN; the signal mask swapped for the run;
+ * counted as one that ended KVM_RUN; a KVM_REQ_CLOCK_UPDATE or KVM_REQ_EVENT
+ * left after the run loop's look cancelling the entry, and a
+ * KVM_REQ_TLB_FLUSH left to it; the signal mask swapped for the run;
  * the refusals of the state ioctls Linux makes; EIO from another address
  * space; every allocation given back when the last reference to the VM
  * goes, the mapping's among them; and, in a VM of their own with
@@ -433,8 +435,18 @@ static const uint8_t *preempt_seen_at;
 static int preempt_seen = -1;
 static int preempt_alone;
 
+/* The run loop's passes over its top, each of which takes a switch here,
+ * counted while `pass_guard` is set. Past 1000 passes the loop would never
+ * enter: the guard takes back that vCPU's KVM_REQ_TLB_FLUSH, so that the
+ * row fails on what its entry found instead. */
+static struct kvm_vcpu *pass_guard;
+static int loop_passes;
+
 void sched_take_preempt(void)
 {
+    if (pass_guard && ++loop_passes > 1000) {
+        pass_guard->requests &= ~KVM_REQ_TLB_FLUSH;
+    }
     if (caller.need_resched) {
         caller.need_resched = 0;
         if (preempt_alone) {
@@ -639,10 +651,12 @@ void kvm_lapic_pmi(struct kvm_vcpu *v)
 /* The fake backend's mode: refuse every entry, or report the exits of
  * `script` in turn, each with the processor's exit code of its slot in
  * `script_hw`; with `refuse_at_end`, refuse the entry that would run past
- * the script. With `late_request`, an exit asks for an event, and the
- * event's injection once the script is spent asks for KVM_REQ_EXIT after
- * the run loop has looked for it, so the entry that follows finds it. */
-static int refusing = 1, refuse_at_end, late_request;
+ * the script. With `late_request` set, an exit asks for an event, and the
+ * event's injection once the script is spent leaves `late_request`'s
+ * request after the run loop has looked for it, so the entry that follows
+ * finds it. `entry_requests` are the vCPU's requests at the last entry. */
+static int refusing = 1, refuse_at_end;
+static uint32_t late_request, entry_requests;
 static struct kvm_exit script[16];
 static uint32_t script_hw[16];
 static int script_len, script_at, entries_made, completes, injects;
@@ -661,6 +675,7 @@ static int fake_enter(struct kvm_vcpu *v)
     CHECK(!irq_on && bkl_depth == 0, "the entry runs with interrupts off and no big lock");
     CHECK(v->mode == KVM_MODE_IN_GUEST, "the vCPU is in the guest during the entry");
     entries_made++;
+    entry_requests = v->requests;
     if (refusing || (refuse_at_end && script_at == script_len)) {
         return -EOPNOTSUPP;
     }
@@ -705,8 +720,8 @@ static void fake_inject(struct kvm_vcpu *v)
 {
     injects++;
     if (late_request && script_at == script_len) {
+        req_set(v, late_request);
         late_request = 0;
-        req_set(v, KVM_REQ_EXIT);
     }
 }
 
@@ -1311,13 +1326,16 @@ static union {
 
 /* The MSRs QEMU puts at a full reset for this model: the list's, the
  * MTRRs, and the machine-check registers of its ten banks. */
-static uint32_t put_msrs[128];
+static uint32_t put_msrs[256];
 static int n_put;
 
 /** Add `index` to QEMU's list of MSRs to put. */
 static void put_msr(uint32_t index)
 {
-    put_msrs[n_put++] = index;
+    CHECK(n_put < (int)(sizeof(put_msrs) / sizeof(put_msrs[0])), "QEMU's list of MSRs fits");
+    if (n_put < (int)(sizeof(put_msrs) / sizeof(put_msrs[0]))) {
+        put_msrs[n_put++] = index;
+    }
 }
 
 /** QEMU's first steps: the API version and the VM. Returns the VM's
@@ -2426,16 +2444,17 @@ static void steal_rows(int fd0)
     caller.pcount++;
     kvm_steal_prepare(v0);
     kvm_steal_preempted(v0);
-    CHECK(st->version == 20 && !v0->st_ok && !v0->st_preempted && st->preempted == 0,
-          "a record in a memfd_secret region, looked at again once the tables change, is never "
-          "marked preempted without a fault");
+    CHECK(st->version == 26 && !v0->st_ok && !v0->st_preempted && st->preempted == 0,
+          "a record in a memfd_secret region, looked at again once the tables change, is written "
+          "through the caller's address, as Linux's record_steal_time, and never marked "
+          "preempted without a fault");
     guest_vma.prot = 0;
     refusing = 1;
 
     CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_GPA) == 1, "the guest turns it off");
     caller.pcount++;
     kvm_steal_prepare(v0);
-    CHECK(st->version == 24, "and nothing more is written");
+    CHECK(st->version == 26, "and nothing more is written");
 }
 
 /* A steal time record in the guest's second page, of memfd_secret. */
@@ -4029,7 +4048,7 @@ static void exitstat_run_rows(int fd)
     script_at = 0;
     scripted(KVM_X_AGAIN);
     script_hw[0] = 1;
-    late_request = 1;
+    late_request = KVM_REQ_EXIT;
     entries_made = 0;
     CHECK(fdio(fd, KVM_RUN, 0) == -EINTR && run->exit_reason == KVM_EXIT_INTR &&
               entries_made == 1 && !late_request,
@@ -4058,6 +4077,61 @@ static void exitstat_run_rows(int fd)
     script_hw[1] = 0;
 }
 
+/** Run the vCPU `fd` through one exit the kernel handles, after which the
+ * event's injection leaves `request`, to the backend's refusal of the next
+ * entry: whether it reached that entry, the second, after `injected`
+ * injections. `request` is taken back after, so that no row leaves it to
+ * the next. */
+static int late_run(int fd, uint32_t request, int injected)
+{
+    int was = injects, ok;
+
+    script_len = 0;
+    script_at = 0;
+    scripted(KVM_X_AGAIN);
+    script_hw[0] = 1;
+    late_request = request;
+    entries_made = 0;
+    entry_requests = 0;
+    loop_passes = 0;
+    pass_guard = (struct kvm_vcpu *)entries[fd].priv;
+    ok = fdio(fd, KVM_RUN, 0) == -EOPNOTSUPP && entries_made == 2 && !late_request &&
+         injects == was + injected && loop_passes <= 1000;
+    pass_guard->requests &= ~request;
+    return ok;
+}
+
+/**
+ * A request that comes after the run loop's look and before the entry,
+ * once the vCPU is in the guest, cancels the entry (KVM_REQ_NOENTER), so
+ * the loop takes it before it enters, as Linux's kvm_vcpu_exit_request
+ * cancels one for any pending request (arch/x86/kvm/x86.c:1715-1720,
+ * 10519-10527): a KVM_REQ_CLOCK_UPDATE is written, and a KVM_REQ_EVENT
+ * injected, before the entry that follows. A KVM_REQ_TLB_FLUSH does not
+ * cancel it, since the backend's entry takes that request itself and drops
+ * the translations.
+ */
+static void entry_cancel_rows(int fd)
+{
+    host_cpu = 0;
+    refusing = 0;
+    refuse_at_end = 1;
+    CHECK(late_run(fd, KVM_REQ_CLOCK_UPDATE, 1) && !(entry_requests & KVM_REQ_CLOCK_UPDATE),
+          "a KVM_REQ_CLOCK_UPDATE after the loop's look cancels the entry, and the loop takes it "
+          "before the next");
+    CHECK(late_run(fd, KVM_REQ_EVENT, 2) && !(entry_requests & KVM_REQ_EVENT),
+          "a KVM_REQ_EVENT after the loop's look cancels the entry, and the event is injected "
+          "before the next");
+    CHECK(late_run(fd, KVM_REQ_TLB_FLUSH, 1) && (entry_requests & KVM_REQ_TLB_FLUSH),
+          "a KVM_REQ_TLB_FLUSH after the loop's look leaves the entry to drop the translations");
+    pass_guard = NULL;
+    refuse_at_end = 0;
+    exit_stats_write("0");
+    script_len = 0;
+    script_at = 0;
+    script_hw[0] = 0;
+}
+
 /** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
@@ -4083,6 +4157,7 @@ int main(void)
     exitstat_alone_rows();
     exitstat_part_rows();
     exitstat_run_rows(vcpu);
+    entry_cancel_rows(vcpu);
     state_rows(vcpu);
     vm_rows(vm, vcpu);
     pv_rows();

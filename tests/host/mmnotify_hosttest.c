@@ -24,7 +24,9 @@
  * each range and calls it with MMN_RELEASE and its whole range, an empty
  * range among them. paging.c tells a fork's write-protection of a private
  * region (MMN_PROTECT), each copy a write makes of a shared page (MMN_COW)
- * and a device's taking back of its pages (MMN_TRUNCATE). Below the low
+ * and a device's taking back of its pages (MMN_TRUNCATE), the last two
+ * counted under way across the notice (`mmn_change_begin`) and the first,
+ * under the write lock, not. Below the low
  * mark, reclaim asks the shrinkers, the last registered first, for what the
  * caches did not give, until the high mark, and says whether they may
  * sleep; above it no one is asked. Two faults of one page interleaved
@@ -94,11 +96,12 @@ int proc_in_syscall(void)
 
 #define CALLS 16
 
-/* A call a range had. */
+/* A call a range had, with mm_a's count of page changes under way then. */
 struct call {
     struct mmn_range *r;
     int event;
     uintptr_t start, end;
+    uint32_t changing;
 };
 
 static struct call calls[CALLS];
@@ -112,6 +115,7 @@ static void record(struct mmn_range *r, int event, uintptr_t start, uintptr_t en
         calls[ncalls].event = event;
         calls[ncalls].start = start;
         calls[ncalls].end = end;
+        calls[ncalls].changing = mm_a.changing;
     }
     ncalls++;
 }
@@ -219,11 +223,16 @@ static void dev_put(void *obj)
 static const struct vm_device_ops dev_ops = {dev_page, dev_put, NULL};
 
 /** A fork's write-protection, a write's copy and a device's taking back of
- * its pages are told. */
+ * its pages are told. The copy and the taking back, made by a holder of
+ * the regions' lock to read, count themselves under way across the notice
+ * (`mmn_change_begin`), as Linux's mmu_notifier_invalidate_range_start and
+ * _end bracket them (mm/memory.c:3384, 3460); the fork, under the
+ * write lock, does not. */
 static void paging_rows(void)
 {
     struct mmn_range ra, rd;
     vma_t vma;
+    uint32_t changes;
 
     check(vm_insert(&mm_a.vm, VA, VA + 4 * P, RW, VM_ANON) == 0 &&
               resolve_held(&mm_a, VA, 1, ~(uintptr_t)0) == 1 &&
@@ -243,13 +252,18 @@ static void paging_rows(void)
     mmn_register(&mm_a, &ra, VA, VA + 4 * P, &ops, NULL);
     mmn_register(&mm_a, &rd, VD, VD + 4 * P, &ops, NULL);
     ncalls = 0;
+    changes = mm_a.changes;
     check(paging_fork_copy(&mm_a, &dir_b) == 0 && vm_copy(&mm_b.vm, &mm_a.vm) == 0, "fork copies");
     check(ncalls == 1 && had(0, &ra, MMN_PROTECT, VA, VA + 4 * P),
           "the fork tells the private region's write-protection, and not the shared device's");
+    check(calls[0].changing == 0 && mm_a.changes == changes,
+          "the fork, under the write lock, counts no page change");
     ncalls = 0;
     check(resolve_held(&mm_a, VA + P, 1, ~(uintptr_t)0) == 1 &&
               had(0, &ra, MMN_COW, VA + P, VA + 2 * P) && ncalls == 1,
           "a write to a shared page copies it and tells its page");
+    check(calls[0].changing == 1 && mm_a.changing == 0 && mm_a.changes == changes + 1,
+          "the copy is counted under way at its notice and finished after its entry");
     check(resolve_held(&mm_b, VA, 1, ~(uintptr_t)0) == 1 && ncalls == 1,
           "a copy in the child tells the parent's range nothing");
     check(resolve_held(&mm_a, VA, 1, ~(uintptr_t)0) == 1 && ncalls == 1 &&
@@ -257,10 +271,13 @@ static void paging_rows(void)
           "a write to a page now the parent's alone makes no copy and tells nothing");
 
     ncalls = 0;
+    changes = mm_a.changes;
     paging_zap_device(&dev_obj, 1, 2);
     check(ncalls == 1 && had(0, &rd, MMN_TRUNCATE, VD + P, VD + 3 * P) &&
               pte_of(&dir_a, VD + 2 * P) == 0,
           "a device's taking back of two pages tells their range and unmaps them");
+    check(calls[0].changing == 1 && mm_a.changing == 0 && mm_a.changes == changes + 1,
+          "the taking back is counted under way at its notice and finished after its unmap");
     mmn_release(&mm_a);
 }
 
