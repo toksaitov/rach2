@@ -37,7 +37,8 @@
  * does not finish; a wedge when that does not either, and the reset that
  * ends it; the guilty context's bans and counts. One row is 78-6c.1's: the
  * GT's and the render engine's workarounds, written at the start and again
- * after each reset.
+ * after each reset. Two are 84-13's: the heartbeat's stop when a beat finds
+ * i915.enable_hangcheck off, and its return per engine when it is on again.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -776,6 +777,117 @@ static void row_engine_reset(void)
     done(&m);
 }
 
+/* ---- 84-13: the heartbeat with i915.enable_hangcheck off ---- */
+
+/** 84-13.1 and .3, with rcs kept busy by a stuck request across a beat
+ * that stopped every heartbeat and hangcheck on again: bcs going from idle
+ * to busy gets its heartbeat back, as Linux's __engine_unpark restarts it,
+ * is armed by the beat after, and its stuck request is reset, rcs left. */
+static void restart_on_busy(struct i915_model *m, struct drm_i915_private *i915,
+                            struct i915_request *rqa)
+{
+    struct i915_engine *rcs = &i915->gt.engine[I915_RCS0], *bcs = &i915->gt.engine[I915_BCS0];
+    struct i915_model_ring *rr = i915_model_ring_state(m, 0), *br = i915_model_ring_state(m, 1);
+    uint32_t idb = make_context(&file_b), hung, run;
+    struct intel_context *blt = engine_of(&file_b, idb, I915_BCS0);
+    struct i915_request *rqc;
+
+    br->stuck = 1;
+    rqc = submit(blt, 0, 0);
+    CHECK("hangcheck on: an engine going busy gets its heartbeat back, the other not",
+          rqc && i915->gt.hc_next != 0 && !bcs->hc_stopped && !bcs->hc_armed && rcs->hc_stopped);
+    CHECK("hangcheck on: the beat after arms it and does not reset it",
+          beat_until_hung(3000, &hung) == 3000 && hung == 0 && bcs->hc_armed &&
+              bcs->hc_seqno == rqc->seqno && !rcs->hc_armed &&
+              i915->gt.reset_engine_count[I915_ENGINE_CLASS_COPY] == 0);
+    run = 3000u + beat_until_hung(10000, &hung);
+    CHECK("hangcheck on: its stuck request is hung between Linux's 5 and 7.5 s",
+          hung == 2u && run >= 5000u && run <= 7500u &&
+              logged("reset: bcs0 for stopped heartbeat on bcs0"));
+    CHECK("hangcheck on: the blitter alone reset",
+          i915->gt.reset_engine_count[I915_ENGINE_CLASS_COPY] == 1 &&
+              i915->gt.reset_engine_count[I915_ENGINE_CLASS_RENDER] == 0 && rr->stuck);
+    run_ms(1);
+    CHECK("hangcheck on: the blitter's request failed with EIO, the render one still stuck",
+          ended(rqc, -EIO) && !br->stuck && !rqa->fence.base.signaled);
+    i915_request_put(rqc);
+    intel_context_put(blt);
+}
+
+/** 84-13.1 and .3: a beat with hangcheck off resets nothing and stops every
+ * engine's heartbeat; turned on again, an engine kept busy all the while
+ * has none until it next unparks, and another engine's comes back as it
+ * goes busy (restart_on_busy). */
+static void row_hangcheck_off(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = ready(&m);
+    struct i915_engine *rcs = &i915->gt.engine[I915_RCS0], *bcs = &i915->gt.engine[I915_BCS0];
+    struct i915_model_ring *rr = i915_model_ring_state(&m, 0);
+    uint32_t ida = make_context(&file_a), hung;
+    struct intel_context *a = engine_of(&file_a, ida, I915_RCS0);
+    struct i915_request *rqa;
+
+    rr->stuck = 1;
+    rqa = submit(a, TEST_REG, 0xa);
+    i915_hangcheck_enable(i915, 0);
+    CHECK("hangcheck off: a beat resets nothing",
+          rqa && i915->gt.hc_next != 0 && beat_until_hung(3000, &hung) == 3000 && hung == 0 &&
+              i915->gt.reset_engine_count[I915_ENGINE_CLASS_RENDER] == 0);
+    CHECK("hangcheck off: and stops every engine's heartbeat",
+          i915->gt.hc_next == 0 && rcs->hc_stopped && bcs->hc_stopped && !rcs->hc_armed);
+    CHECK("hangcheck off: the stuck request is not found",
+          beat_until_hung(10000, &hung) == 10000 && hung == 0 && !rqa->fence.base.signaled &&
+              i915->gt.awake && i915->gt.reset_engine_count[I915_ENGINE_CLASS_RENDER] == 0);
+    i915_hangcheck_enable(i915, 1);
+    CHECK("hangcheck on: an engine kept busy all the while has no heartbeat",
+          i915->gt.hc_next == 0 && beat_until_hung(10000, &hung) == 10000 && hung == 0 &&
+              rcs->hc_stopped && i915->gt.reset_engine_count[I915_ENGINE_CLASS_RENDER] == 0);
+    restart_on_busy(&m, i915, rqa);
+    i915_request_put(rqa);
+    intel_context_put(a);
+    done(&m);
+}
+
+/** 84-13.2 and .3: turning hangcheck on disarms an engine armed before, the
+ * beat after arms it again without a reset, and a beat that finds hangcheck
+ * off still resets an engine that missed its heartbeat before it stops, as
+ * Linux's heartbeat judges the systole before it reads the parameter. */
+static void row_hangcheck_rearm(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = ready(&m);
+    struct i915_engine *rcs = &i915->gt.engine[I915_RCS0], *bcs = &i915->gt.engine[I915_BCS0];
+    struct i915_model_ring *rr = i915_model_ring_state(&m, 0);
+    uint32_t ida = make_context(&file_a), hung;
+    struct intel_context *a = engine_of(&file_a, ida, I915_RCS0);
+    struct i915_request *rqa;
+
+    rr->stuck = 1;
+    rqa = submit(a, TEST_REG, 0xa);
+    CHECK("rearm: the first beat arms the busy engine",
+          rqa && beat_until_hung(3000, &hung) == 3000 && hung == 0 && rcs->hc_armed);
+    i915_hangcheck_enable(i915, 0);
+    i915_hangcheck_enable(i915, 1);
+    CHECK("rearm: turning hangcheck on disarms it", !rcs->hc_armed && i915->gt.hc_next != 0);
+    CHECK("rearm: the beat after arms it again and does not reset it",
+          beat_until_hung(2500, &hung) == 2500 && hung == 0 && rcs->hc_armed &&
+              i915->gt.reset_engine_count[I915_ENGINE_CLASS_RENDER] == 0);
+    i915_hangcheck_enable(i915, 0);
+    (void)beat_until_hung(3000, &hung);
+    CHECK("rearm: a beat with hangcheck off resets the engine that missed its heartbeat",
+          hung == 1u && logged("reset: rcs0 for stopped heartbeat on rcs0") &&
+              i915->gt.reset_engine_count[I915_ENGINE_CLASS_RENDER] == 1);
+    CHECK("rearm: and then stops every engine's heartbeat",
+          i915->gt.hc_next == 0 && rcs->hc_stopped && bcs->hc_stopped && !rcs->hc_armed);
+    run_ms(1);
+    CHECK("rearm: the guilty request failed with EIO", ended(rqa, -EIO));
+    i915_hangcheck_enable(i915, 1);
+    i915_request_put(rqa);
+    intel_context_put(a);
+    done(&m);
+}
+
 /* ---- 78-6a.4: the error state ---- */
 
 /** Check the error state `err` of a hang of the render ring, whose
@@ -1291,6 +1403,8 @@ int main(void)
     row_wedge_queued();
     row_fence_timeout();
     row_ban();
+    row_hangcheck_off();
+    row_hangcheck_rearm();
     CHECK("the heap: every record freed", heap_live == 0);
     if (fails) {
         printf("i915-reset-test: %d failures\n", fails);
