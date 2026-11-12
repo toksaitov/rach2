@@ -30,10 +30,10 @@
 # the release runs among it, unchanged for a day, but what the record or KEPT
 # of a release run that is live or kept names, and the release runs'
 # directories in build/tmp unchanged for a day that hold no KEPT and whose
-# etude no longer runs; each release run, with its files, its etude and its
-# kept directory, of a milestone whose release closed; and here the entries of
-# `build/tests` unchanged for two weeks and the Mac's kept run directories of
-# a milestone whose release closed. The
+# etude and parts' bash no longer run; each release run, with its files, its
+# etude and its kept directory, of a milestone whose release closed; and here
+# the entries of `build/tests` unchanged for two weeks and the Mac's kept run
+# directories of a milestone whose release closed. The
 # caches, the build copies of the release and of Windows, and the tooling work
 # disks stay. Each removal, and each step's total, is a line on stdout. Each
 # step that reaches the host stops itself after ten minutes. With -a, which
@@ -95,23 +95,28 @@ outputs()
         printf '%s\n' "$stale"
         echo 'b=/d/rach2/build'
         echo "closed=' $(closed | tr '\n' ' ')'"
-        # A run in build/tmp is live while its etude runs, and every run is
-        # while tasklist cannot say which. Each path that the record or KEPT
-        # of a live or kept run names, such as a tooling job directory of the
-        # cache, which cannot move into the run's directory, goes into keep
-        # before any age rule, unless the run's milestone closed its release.
+        # A run in build/tmp is live while its etude runs or the bash of one
+        # of its parts runs OUT/ID.PART.sh, as stop.sh finds it, and every
+        # run is while Windows cannot say which. Each path that the record or
+        # KEPT of a live or kept run names, such as a tooling job directory of
+        # the cache, which cannot move into the run's directory, goes into
+        # keep before any age rule, unless the run's milestone closed its
+        # release.
         cat << 'END'
 nl='
 '
 keep= live=
-t=$(MSYS_NO_PATHCONV=1 tasklist /NH /FO CSV 2> /dev/null) && live=1
+t=$(MSYS_NO_PATHCONV=1 tasklist /NH /FO CSV 2> /dev/null) &&
+    t=$t$nl$(MSYS_NO_PATHCONV=1 powershell.exe -NoProfile -NonInteractive -Command \
+        "Get-CimInstance Win32_Process -Filter \"Name = 'bash.exe'\" | ForEach-Object { \$_.CommandLine }" \
+        < /dev/null 2> /dev/null) && live=1
 for d in $b/tmp/*; do
     [ -d "$d" ] || continue
     id=${d##*/}
     m=${id#milestone}
     case $closed in *" ${m%%-*} "*) continue ;; esac
     if [ -n "$live" ] && [ ! -e "$d/KEPT" ]; then
-        case $t in *"\"etude-$id.exe\""*) ;; *) continue ;; esac
+        case $t in *"\"etude-$id.exe\""* | *"/$id.prepare.sh"* | *"/$id.cases.sh"*) ;; *) continue ;; esac
     fi
     keep=$keep$nl$(sed -n 's/^\(made\|removed\|kept\) //p' "$d/record" "$d/KEPT" 2> /dev/null |
         sed 's,.*/,,')
@@ -120,13 +125,13 @@ END
         # shellcheck disable=SC2016 # the dollars are the remote shell's
         echo "stale $days \$b/tests/rach2-collection.* \$b/tooling/job-* \$b/images/cases/*" \
             '$b/x86_64/images/cases/* $b/release/tmp/*'
-        # A run's directory stays while it holds KEPT or its etude runs, and
-        # all of build/tmp while tasklist cannot say which run.
+        # A run's directory stays while it holds KEPT or it is live, and all
+        # of build/tmp while Windows cannot say which run is.
         # shellcheck disable=SC2016 # the dollars are the remote shell's
         printf '%s\n' 'if [ -n "$live" ]; then' \
             '    for d in $b/tmp/*; do' \
             '        [ ! -e "$d/KEPT" ] || continue' \
-            '        case $t in *"\"etude-${d##*/}.exe\""*) continue ;; esac' \
+            '        case $t in *"\"etude-${d##*/}.exe\""* | *"/${d##*/}.prepare.sh"* | *"/${d##*/}.cases.sh"*) continue ;; esac' \
             "        stale $days \"\$d\"" \
             '    done' \
             'fi'
