@@ -73,13 +73,18 @@ cleanup()
             failed="$failed originals-changed"
         fi
     fi
-    [ "$mounted" = 0 ] || umount /data || failed="$failed umount"
+    # A process of the game's that has not yet ended may hold the partition;
+    # the namespace's mount goes with the case's last process.
+    [ "$mounted" = 0 ] || umount /data 2> /dev/null || umount -l /data || failed="$failed umount"
     if [ -n "$failed" ]; then
         say "result: fail:$failed"
         exit 1
     fi
-    [ "$status" = 0 ] && say "result: pass"
-    exit "$status"
+    if [ "$status" != 0 ]; then
+        say "result: fail: status $status"
+        exit "$status"
+    fi
+    say "result: pass"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -104,7 +109,9 @@ mounted=1
 [ -f "$base/game/Bin64/Crysis.exe" ] || fail "no game in $base/game"
 
 digests > before.sha256
-tar -cpf kept.tar -C / "${base#/}/saves" "${base#/}/game/system.cfg"
+[ -f "$base/game/system.cfg" ] && cfg=${base#/}/game/system.cfg || cfg=''
+# shellcheck disable=SC2086 # empty or one path
+tar -cpf kept.tar -C / "${base#/}/saves" $cfg
 cp -p "$ini" weston.ini
 cp -p "$session" rach2-session
 kept=1
