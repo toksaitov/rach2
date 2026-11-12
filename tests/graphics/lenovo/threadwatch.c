@@ -359,6 +359,58 @@ static void usage(void)
     exit(2);
 }
 
+/* The sampler's own timing, which shows a stall of itself or the machine. */
+struct timing {
+    long long total, passes;       /* the passes' summed time, in ns, and count */
+    long long longest, longest_at; /* the longest pass and its start, in ns */
+    long long prev;                /* the last pass's start, 0 before the first */
+    long long widest, widest_at;   /* the longest start-to-start time and its first start */
+};
+
+/**
+ * Count the pass that began at T and took PASS ns, of a sampler that sleeps
+ * INTERVAL us between passes, and log a `P` line for a pass, or a `G` line
+ * for a time from the last pass's start to T, over 20 intervals.
+ *
+ * The start-to-start time covers the sleep too, so a stall of the machine
+ * during nanosleep shows there where the pass's own time misses it.
+ */
+static void timed(struct timing *tm, long long t, long long pass, long interval)
+{
+    long long limit = 20LL * interval * 1000, gap;
+
+    if (tm->prev != 0) {
+        gap = t - tm->prev;
+        if (gap > tm->widest) {
+            tm->widest = gap;
+            tm->widest_at = tm->prev;
+        }
+        if (gap > limit)
+            note("G %lld.%09lld %lld us\n", tm->prev / 1000000000LL, tm->prev % 1000000000LL,
+                 gap / 1000);
+    }
+    tm->prev = t;
+    tm->total += pass;
+    tm->passes++;
+    if (pass > tm->longest) {
+        tm->longest = pass;
+        tm->longest_at = t;
+    }
+    if (pass > limit)
+        note("P %lld.%09lld %lld us\n", t / 1000000000LL, t % 1000000000LL, pass / 1000);
+}
+
+/** Log the sampler's totals for the run that began at T0 and ends at T. */
+static void totals(const struct timing *tm, long long t0, long long t)
+{
+    note("# threadwatch: %lld passes in %lld ms, mean pass %lld us, longest %lld us "
+         "at %lld.%09lld, widest gap between passes %lld us at %lld.%09lld, %d threads%s\n",
+         tm->passes, (t - t0) / 1000000, tm->passes ? tm->total / tm->passes / 1000 : 0,
+         tm->longest / 1000, tm->longest_at / 1000000000LL, tm->longest_at % 1000000000LL,
+         tm->widest / 1000, tm->widest_at / 1000000000LL, tm->widest_at % 1000000000LL, nthreads,
+         logfull ? ", log full" : "");
+}
+
 /**
  * Sample the named programs' threads for SECONDS or until a signal, then
  * write the log to OUT; exit 0 once it is written, 1 when it cannot be.
@@ -366,8 +418,8 @@ static void usage(void)
 int main(int argc, char **argv)
 {
     long interval = 1000, rescan = 20;
-    long long t0, t, end, last_scan = 0, pass, longest = 0, longest_at = 0;
-    long long total = 0, passes = 0;
+    long long t0, t, end, last_scan = 0;
+    struct timing tm;
     struct timespec mono, real, nap;
     struct sigaction sa;
     unsigned gen = 0;
@@ -428,6 +480,7 @@ int main(int argc, char **argv)
     end += t0;
     nap.tv_sec = interval / 1000000;
     nap.tv_nsec = (interval % 1000000) * 1000;
+    memset(&tm, 0, sizeof tm);
     while (!stop && (t = now_ns()) < end) {
         if (t - last_scan >= rescan * 1000000LL) {
             scan(++gen, t);
@@ -437,25 +490,10 @@ int main(int argc, char **argv)
             sample(&threads[i], t);
         for (i = 0; i < nfiles; i++)
             watch_file(&files[i], t);
-        pass = now_ns() - t;
-        total += pass;
-        passes++;
-        if (pass > longest) {
-            longest = pass;
-            longest_at = t;
-        }
-        /* A pass much longer than the interval is a stall of the sampler
-         * itself, which a stall of the whole machine also shows. */
-        if (pass > 20LL * interval * 1000)
-            note("P %lld.%09lld %lld us\n", t / 1000000000LL, t % 1000000000LL, pass / 1000);
+        timed(&tm, t, now_ns() - t, interval);
         nanosleep(&nap, NULL);
     }
-    t = now_ns();
-    note("# threadwatch: %lld passes in %lld ms, mean pass %lld us, longest %lld us "
-         "at %lld.%09lld, %d threads%s\n",
-         passes, (t - t0) / 1000000, passes ? total / passes / 1000 : 0, longest / 1000,
-         longest_at / 1000000000LL, longest_at % 1000000000LL, nthreads,
-         logfull ? ", log full" : "");
+    totals(&tm, t0, now_ns());
     if (loglen && fwrite(logbuf, 1, loglen, fp) != loglen) {
         fprintf(stderr, "threadwatch: %s: %s\n", out, strerror(errno));
         return 1;
