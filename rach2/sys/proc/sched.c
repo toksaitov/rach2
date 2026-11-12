@@ -463,6 +463,14 @@ static int sched_place(const process_t *p)
  * The interrupt switches in user mode only on that request
  * (`isr_local_router`), and a request to the caller's own processor, whose
  * interrupt does nothing, is taken at the call's exit (`sched_take_preempt`).
+ *
+ * An idle processor is asked once: its idle task's `need_resched` marks the
+ * request, and a later wake before its selection, which clears it, asks
+ * nothing, as Linux's resched_curr sends no interrupt to a task whose
+ * TIF_NEED_RESCHED is set (kernel/sched/core.c:1101-1102). The selection
+ * takes every thread queued meanwhile. Under KVM an interrupt takes
+ * microseconds to reach a halted vCPU, and a second one came during the
+ * switch the first had started, with interrupts off.
  * The run queues' lock is held.
  */
 static int sched_preempt_cpu(const process_t *p, int cpu)
@@ -470,6 +478,10 @@ static int sched_preempt_cpu(const process_t *p, int cpu)
     process_t *cur = cpu_table[cpu].current;
 
     if (sched_cpu_idle(cpu)) {
+        if (cur->need_resched) {
+            return -1;
+        }
+        cur->need_resched = 1;
         return cpu;
     }
     if (sched_priority(p) > sched_priority(cur)) {
