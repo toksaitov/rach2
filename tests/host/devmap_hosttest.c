@@ -32,6 +32,9 @@
  * a moved page faults in at its new frame and a revoked one raises SIGBUS
  * with BUS_ADRERR at the address, from the page fault handler; and
  * paging_access reaches a device region through its object's `access`.
+ * A fault calls a file's fill or share without the big lock when the file
+ * sets `unlocked`, and under it otherwise, with the regions' lock let go
+ * either way.
  * Before them, the index of the free frames is searched up and down over
  * groups with no free frame.
  *
@@ -202,19 +205,33 @@ void smp_kernel_flush(uintptr_t start, uintptr_t end)
     (void)end;
 }
 
-/** 1: the test runs as the kernel, under the big lock. */
+/* Nonzero while a row stands for a fault that runs without the big lock,
+ * and the depth of the code's own takes of it then. */
+static int bkl_free, bkl_depth;
+
+/** Whether the big lock is held: always, as the kernel's callers hold it,
+ * unless a row stands for a fault without it (`bkl_free`), and then only
+ * inside the code's own takes. */
 int bkl_held(void)
 {
-    return 1;
+    return !bkl_free || bkl_depth > 0;
 }
 
-/** Nothing: there is no big lock. */
+/** Take the big lock: counted while a row stands for a fault without it. */
 void bkl_enter(void)
-{}
+{
+    if (bkl_free) {
+        bkl_depth++;
+    }
+}
 
-/** Nothing: there is no big lock. */
+/** Give back a take of `bkl_enter`. */
 void bkl_exit(void)
-{}
+{
+    if (bkl_free) {
+        bkl_depth--;
+    }
+}
 
 /** Nothing: the test has no interrupt flag. */
 void arch_irq_enable(void)
@@ -649,6 +666,122 @@ static void fault_rows(void)
           "a private mapping of device memory is refused");
 }
 
+/* ---- files a fault reads with or without the big lock ---- */
+
+/* The frame a model file lends, past the RAM object's. */
+#define SHARE_FRAME (RAM_FRAME0 + OBJ_PAGES)
+#define VA_FILE     (WIN_BASE + 48 * PAGE_SIZE)
+
+/* A file a region maps, which counts its operations: all of them, those
+ * made with the big lock held, and those made with the regions' lock held. */
+struct model_file {
+    struct vm_file vf; /* first, so that the file is the record */
+    int calls, locked, regions;
+};
+
+/** Count an operation of the file `f` and how it was called. */
+static void model_count(struct vm_file *f)
+{
+    struct model_file *m = (struct model_file *)f;
+
+    m->calls++;
+    m->locked += bkl_held();
+    m->regions += mmap_held(&mm_a, 0);
+}
+
+/** A private mapping's fill: counted, the frame left as it is. */
+static int model_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
+{
+    (void)pgoff;
+    (void)phys;
+    model_count(f);
+    return 0;
+}
+
+/** A share: counted, and SHARE_FRAME lent with a reference. */
+static int model_share(struct vm_file *f, uint32_t pgoff, uintptr_t *phys)
+{
+    (void)pgoff;
+    model_count(f);
+    *phys = (uintptr_t)SHARE_FRAME * PAGE_SIZE;
+    frame_ref(*phys);
+    return 0;
+}
+
+/** Nothing: the files are the test's own, held from the start. */
+static void model_release(struct vm_file *f)
+{
+    (void)f;
+}
+
+/**
+ * Map the model file `m` one page long at `va` of `mm_a`, as a region of
+ * `type`, its file's operations run without the big lock when `unlocked`;
+ * then fault the page in by a read from a fault that holds no big lock. 1
+ * when it is mapped.
+ */
+static int file_fault_row(struct model_file *m, uintptr_t va, vm_type_t type, int unlocked)
+{
+    int rc;
+
+    m->vf.refs = 1;
+    m->vf.release = model_release;
+    m->vf.unlocked = unlocked;
+    if (vm_insert_file(&mm_a.vm, va, va + PAGE_SIZE, VM_PROT_READ, type, &m->vf, 0) != 0) {
+        return 0;
+    }
+    bkl_free = 1;
+    rc = resolve_held(&mm_a, va, 0, ~(uintptr_t)0);
+    bkl_free = 0;
+    return rc == 1 && bkl_depth == 0 && (pte_of(&dir_a, va) & PTE_P);
+}
+
+/**
+ * A fault calls a file's fill or share with the regions' lock let go, and
+ * with the big lock only for a file whose operations need it: an ext2
+ * file's mapping sets `unlocked`, as Linux's filemap_fault takes no global
+ * lock (mm/filemap.c:3305-3370), and a driver's or another type's does not.
+ * Each fault gives back every take of the big lock it made.
+ */
+static void file_rows(void)
+{
+    static struct model_file fill_free, fill_locked, share_free, share_locked;
+
+    fill_free.vf.fill = model_fill;
+    fill_locked.vf.fill = model_fill;
+    share_free.vf.share = model_share;
+    share_locked.vf.share = model_share;
+    _frames[SHARE_FRAME] = 1;
+    _frames[0] = 1; /* frame 0's address is 0, which an allocator never gives */
+
+    check(file_fault_row(&fill_free, VA_FILE, VM_FILE, 1),
+          "a read of a file whose reads need no big lock faults in");
+    check(fill_free.calls == 1 && fill_free.locked == 0 && fill_free.regions == 0,
+          "and its fill runs with neither the big lock nor the regions' lock");
+    check(file_fault_row(&fill_locked, VA_FILE + 2 * PAGE_SIZE, VM_FILE, 0),
+          "a read of a file whose reads need the big lock faults in");
+    check(fill_locked.calls == 1 && fill_locked.locked == 1 && fill_locked.regions == 0,
+          "and its fill runs under the big lock, the regions' lock let go");
+    check(file_fault_row(&share_free, VA_FILE + 4 * PAGE_SIZE, VM_SHARED, 1),
+          "a read of a shared file whose pages need no big lock faults in");
+    check(share_free.calls == 1 && share_free.locked == 0 && share_free.regions == 0,
+          "and its share runs with neither the big lock nor the regions' lock");
+    check(file_fault_row(&share_locked, VA_FILE + 6 * PAGE_SIZE, VM_SHARED, 0),
+          "a read of a shared file whose pages need the big lock faults in");
+    check(share_locked.calls == 1 && share_locked.locked == 1 && share_locked.regions == 0,
+          "and its share runs under the big lock, the regions' lock let go");
+    check(frame_count((uintptr_t)SHARE_FRAME * PAGE_SIZE) == 3,
+          "each shared page holds a reference to the frame lent");
+
+    vm_remove(&mm_a.vm, VA_FILE, VA_FILE + 8 * PAGE_SIZE);
+    unmap_user_range(&dir_a, VA_FILE, VA_FILE + 8 * PAGE_SIZE);
+    vm_file_reap();
+    check(frame_count((uintptr_t)SHARE_FRAME * PAGE_SIZE) == 1 && fill_free.vf.refs == 1 &&
+              share_locked.vf.refs == 1,
+          "the unmap drops the pages' and the regions' references");
+    _frames[0] = 0;
+}
+
 /**
  * paging_access, ptrace's and /proc/PID/mem's reach, goes through the
  * object's `access` at the byte of the object, a page at a time, and its
@@ -892,6 +1025,7 @@ int main(void)
 
     index_rows();
     fault_rows();
+    file_rows();
     access_rows();
     fork_rows();
     zap_rows();

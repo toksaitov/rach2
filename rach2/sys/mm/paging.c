@@ -532,24 +532,27 @@ static int install_new(struct mm *mm, uintptr_t page, uintptr_t phys, pte_t flag
 }
 
 /**
- * Let go of `mm`'s regions' lock and take the big lock, before a file's or
- * a device object's operation, which may sleep and runs code of a file
- * system or a driver that the big lock still guards: a fill may wait for a
- * file's lock, which comes before the regions' lock, so the lock goes
+ * Let go of `mm`'s regions' lock before an operation of the file `f`, a
+ * fill, a share or a device object's page, which may sleep: a fill may wait
+ * for a file's lock, which comes before the regions' lock, so the lock goes
  * across the operation, as Linux's fault lets it go across a read
- * (`lock_folio_maybe_drop_mmap`, mm/filemap.c:3094-3119). `*bkl` says
- * whether the big lock was taken here. 1 when the lock was let go; 0 when
- * the caller holds it more than once or to write (`mmap_may_drop`), and the
- * operation is not made, since it could then wait for a file whose holder
- * waits for the regions' lock.
+ * (`lock_folio_maybe_drop_mmap`, mm/filemap.c:3094-3119). The big lock is
+ * taken too unless the file's operations run without it (`unlocked`), as
+ * an ext2 file's do, whose fault Linux makes under the folio's lock and the
+ * mapping's invalidate lock alone (mm/filemap.c:3326-3370); a driver's or
+ * another file system's still runs under it. `*bkl` says whether the big
+ * lock was taken here. 1 when the lock was let go; 0 when the caller holds
+ * it more than once or to write (`mmap_may_drop`), and the operation is not
+ * made, since it could then wait for a file whose holder waits for the
+ * regions' lock.
  */
-static int callback_begin(struct mm *mm, int *bkl)
+static int callback_begin(struct mm *mm, const struct vm_file *f, int *bkl)
 {
     if (!mmap_may_drop(mm)) {
         return 0;
     }
     mmap_unlock(mm);
-    *bkl = !bkl_held();
+    *bkl = !f->unlocked && !bkl_held();
     if (*bkl) {
         bkl_enter();
     }
@@ -589,10 +592,11 @@ static int region_same(struct mm *mm, uintptr_t page, const struct vm_file *f, u
  * the frame, never the file. The fault counts as
  * major when the fill read the page through the file system.
  *
- * The fill may sleep in the disk and runs with the regions' lock let go and
- * the big lock held (`callback_begin`). The file is held from before the
- * fill, so a thread that unmaps the region meanwhile cannot free it under
- * the read, and the region is looked up again after it: a region that
+ * The fill may sleep in the disk and runs with the regions' lock let go, and
+ * with the big lock held unless the file's reads run without it
+ * (`callback_begin`). The file is held from before the fill, so a thread
+ * that unmaps the region meanwhile cannot free it under the read, and the
+ * region is looked up again after it: a region that
  * changed in any way, its protection included, leaves the frame unused, and
  * the resolution runs again against what is there now, so a page is never
  * mapped with rights its region no longer gives; so does a page another
@@ -614,7 +618,7 @@ static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write
         return 0;
     }
     vm_file_get(f);
-    if (!callback_begin(mm, &bkl)) {
+    if (!callback_begin(mm, f, &bkl)) {
         vm_file_put(f);
         free_frame(phys);
         return 0;
@@ -666,7 +670,7 @@ static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int wri
     int got, bkl, rc = 1;
 
     vm_file_get(f);
-    if (!callback_begin(mm, &bkl)) {
+    if (!callback_begin(mm, f, &bkl)) {
         vm_file_put(f);
         return 0;
     }
@@ -748,7 +752,7 @@ static void device_map_rest(struct mm *mm, uintptr_t page, struct vm_file *f, ui
         stop = end - at > DEVICE_BATCH * PAGE_SIZE ? at + DEVICE_BATCH * PAGE_SIZE : end;
         seq = mm->zaps;
         vm_file_get(f);
-        if (!callback_begin(mm, &bkl)) {
+        if (!callback_begin(mm, f, &bkl)) {
             vm_file_put(f);
             break;
         }
@@ -809,7 +813,7 @@ static int device_fault(struct mm *mm, const vma_t *vma, uintptr_t addr)
     int got, bkl, rc;
 
     vm_file_get(f);
-    if (!callback_begin(mm, &bkl)) {
+    if (!callback_begin(mm, f, &bkl)) {
         vm_file_put(f);
         return 0;
     }

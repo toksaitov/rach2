@@ -58,15 +58,17 @@ static void vdso_release(struct vm_file *f)
  * The files the regions map: the data page and each image. Their reference
  * counts start at one, the kernel's, so that the last region to let one go
  * never releases it. Each lends the kernel's frame (`share`), so a fork's
- * child maps the same frames and no fill is needed.
+ * child maps the same frames and no fill is needed; the loan takes only the
+ * frame's count, so a fault makes it without the big lock (`unlocked`).
  */
 static char vdso_data_name[] = "[vvar]";
 static char vdso_image_name[] = "[vdso]";
-static struct vm_file vdso_data_file = {1, 0, vdso_share_data, vdso_release, vdso_data_name, 0, 0};
-static struct vm_file vdso_image_file = {1, 0, vdso_share_image, vdso_release, vdso_image_name,
-                                         0, 0};
-static struct vm_file vdso_image32_file = {1, 0, vdso_share_image32, vdso_release, vdso_image_name,
-                                           0, 0};
+static struct vm_file vdso_data_file = {1, 0, vdso_share_data, vdso_release, vdso_data_name, 0,
+                                        0, 1};
+static struct vm_file vdso_image_file = {1, 0, vdso_share_image, vdso_release, vdso_image_name, 0,
+                                         0, 1};
+static struct vm_file vdso_image32_file = {
+    1, 0, vdso_share_image32, vdso_release, vdso_image_name, 0, 0, 1};
 
 uintptr_t vdso_span(int abi)
 {
