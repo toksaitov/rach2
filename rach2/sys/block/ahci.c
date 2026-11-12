@@ -929,7 +929,8 @@ static void ahci_unbounce(struct ahci_disk *d)
  * whose pages may lie anywhere, and gets an entry per page with the page's
  * physical address, both halves, up to the AHCI_PRDT_MAX entries of the
  * table, a piece above 4 GiB moving through the DMA pool on a controller
- * without 64-bit addressing (`ahci_piece`).
+ * without 64-bit addressing (`ahci_piece`). A read into page frames has
+ * its table from `ahci_frames_table` after this.
  *
  * Returns 0, or -1 when the disk policy does not allow the command or the
  * table cannot describe the buffer. Every command this driver sends is built
@@ -1376,6 +1377,37 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
     return rc;
 }
 
+/**
+ * Describe `bytes` in the page frames `frames` in the table of the command
+ * `ahci_build_command` built in `d`'s slot without a buffer: an entry per
+ * frame with its address, as Linux's `ahci_fill_sg` writes an entry per
+ * segment of the request's pages (drivers/ata/libahci.c).
+ * `ahci_start` offers such reads only where every frame is in the
+ * controller's reach (`BLOCK_FRAMES`). Returns 0, or -1 for more pages
+ * than the table holds.
+ */
+static int ahci_frames_table(struct ahci_disk *d, const uintptr_t *frames, uint32_t bytes)
+{
+    volatile ahci_cmd_header_t *hdr = (volatile ahci_cmd_header_t *)d->cmdlist;
+    volatile ahci_prdt_t *prdt = (volatile ahci_prdt_t *)(d->cmdtable + AHCI_PRDT_OFFSET);
+    uint32_t n;
+
+    if (bytes == 0 || bytes > AHCI_PRDT_MAX * PAGE_SIZE) {
+        klog(KLOG_WARN, "ahci", "refused: a buffer the command table cannot describe");
+        return -1;
+    }
+    for (n = 0; n * PAGE_SIZE < bytes; n++) {
+        uint32_t chunk = bytes - n * PAGE_SIZE < PAGE_SIZE ? bytes - n * PAGE_SIZE : PAGE_SIZE;
+
+        prdt[n].dba = (uint32_t)frames[n];
+        prdt[n].dbau = ahci_hi((uint64_t)frames[n]);
+        prdt[n].reserved = 0;
+        prdt[n].dbc = (chunk - 1) & AHCI_DBC_MASK;
+    }
+    hdr->dw0 |= n << 16;
+    return 0;
+}
+
 /*
  * The interrupt-driven path.
  *
@@ -1420,7 +1452,8 @@ static int ahci_start_request(struct ahci_disk *d, struct block_request *r)
         block_count_flush();
     } else {
         if (ahci_build_command(d, r->write ? ATA_WRITE_DMA_EXT : ATA_READ_DMA_EXT, r->lba, r->count,
-                               (volatile uint8_t *)r->page, bytes, r->write) != 0) {
+                               (volatile uint8_t *)r->page, r->frames ? 0 : bytes, r->write) != 0 ||
+            (r->frames && ahci_frames_table(d, r->frames, bytes) != 0)) {
             return -1;
         }
         d->flushing = 0;
@@ -1690,6 +1723,10 @@ void ahci_start(void)
         ahci_write32(ahci_port_off(d->port, AHCI_PxIS), 0xFFFFFFFFu);
         ahci_write32(ahci_port_off(d->port, AHCI_PxIE), AHCI_PxIE_WANTED);
         d->dev.flags &= ~BLOCK_FAULT_SAFE;
+        /* A frame above 4 GiB needs the controller's 64-bit addressing. */
+        if (ahci_dma64 || sizeof(uintptr_t) == 4) {
+            d->dev.flags |= BLOCK_FRAMES;
+        }
         d->dev.submit = ahci_submit;
         d->dev.flush = ahci_flush_submit;
     }
