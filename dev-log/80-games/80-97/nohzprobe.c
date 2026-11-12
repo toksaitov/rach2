@@ -2,9 +2,11 @@
 #include "../../../tests/probe.h"
 
 #ifdef __x86_64__
+#define SYS_ADJTIMEX 159
 #define SYS_TIMERFD_CREATE 283
 #define SYS_TIMERFD_SETTIME 286
 #else
+#define SYS_ADJTIMEX 124
 #define SYS_TIMERFD_CREATE 322
 #define SYS_TIMERFD_SETTIME 325
 #endif
@@ -49,20 +51,24 @@ static long read_proc(const char *name, char *buf)
 }
 
 /** Sum the scheduler timer's counters, excluding other vectors. */
-static unsigned long ticks(const char *s)
+static unsigned long counts(const char *s, const char *name)
 {
     const char *line = s, *p, *end;
     unsigned long n, sum;
-    int i, match;
+    int i, j, match, length = 0;
+
+    while (name[length]) { length++; }
 
     while (*line) {
         end = line;
         while (*end && *end != '\n') { end++; }
         match = 0;
-        for (p = line; p + 5 <= end; p++) {
-            if ((p == line || p[-1] == ' ' || p[-1] == '\t') &&
-                p[0] == 't' && p[1] == 'i' && p[2] == 'm' && p[3] == 'e' &&
-                p[4] == 'r' && (p + 5 == end || p[5] == ' ')) { match = 1; }
+        for (p = line; p + length <= end; p++) {
+            if (p != line && p[-1] != ' ' && p[-1] != '\t') { continue; }
+            for (j = 0; j < length && p[j] == name[j]; j++) {}
+            if (j == length && (p + length == end || p[length] == ' ' || p[length] == '\t')) {
+                match = 1;
+            }
         }
         if (match) {
             p = line;
@@ -93,6 +99,8 @@ PROBE_START void _start(void)
     unsigned long t0, t1;
     unsigned int word = 0;
     long fd, rc, count[2] = {0, 0};
+    long timex[32] = {0};
+    int round;
     unsigned long long blocked = 1ull << 13;
     unsigned long long pending = 0;
 
@@ -105,7 +113,7 @@ PROBE_START void _start(void)
     check(syscall2(SYS_NANOSLEEP, (long)&req, 0) == 0, "idle nanosleep");
     syscall2(SYS_CLOCK_GETTIME, 1, (long)&b);
     check(read_proc("/proc/interrupts", after) > 0, "read idle interrupts");
-    t0 = ticks(before); t1 = ticks(after);
+    t0 = counts(before, "timer"); t1 = counts(after, "timer");
     print("NOHZPROBE interrupts before\n"); print(before);
     print("NOHZPROBE interrupts after\n"); print(after);
     check(t0 != ~0ul && t1 != ~0ul && t1 >= t0 && t1 - t0 < 16, "idle interval takes no periodic tick");
@@ -136,6 +144,25 @@ PROBE_START void _start(void)
           real.value.us == 0, "real alarm expires without periodic ticks");
     check(syscall2(SYS_RT_SIGPENDING, (long)&pending, 8) == 0 && (pending & blocked),
           "real alarm posts its signal without a periodic tick");
+    check(read_proc("/proc/interrupts", before) > 0, "read slew baseline");
+    t0 = counts(before, "timer") + counts(before, "hrtimer");
+    timex[0] = 2;
+    timex[2] = 32768000;
+    check(syscall1(SYS_ADJTIMEX, (long)timex) >= 0, "set a 500 ppm slew");
+    for (round = 0; round < 4096; round++) {
+        if (syscall3(SYS_POLL, 0, 0, 1) != 0) {
+            check(0, "one-tick timeout during a slew");
+            break;
+        }
+    }
+    check(read_proc("/proc/interrupts", after) > 0, "read slew interrupts");
+    t1 = counts(after, "timer") + counts(after, "hrtimer");
+    print("NOHZPROBE slew interrupts before\n"); print(before);
+    print("NOHZPROBE slew interrupts after\n"); print(after);
+    check(t1 >= t0 && t1 - t0 < 4096 * 4 + 128, "one-tick waits take bounded events during a slew");
+    timex[0] = 2;
+    timex[2] = 0;
+    check(syscall1(SYS_ADJTIMEX, (long)timex) >= 0, "restore the clock rate");
     check(read_proc("/proc/stat", after) > 0, "read idle accounting");
     print("NOHZPROBE stat\n"); print(after);
     print(failures ? "NOHZPROBE FAIL\n" : "NOHZPROBE OK\n");

@@ -57,6 +57,7 @@ extern int printf(const char *fmt, ...);
 extern int strcmp(const char *a, const char *b);
 
 static uint64_t deadline_at;
+static uint64_t coarse_model = (uint64_t)-1;
 
 static int fails;
 
@@ -1019,11 +1020,14 @@ static void hr_rows(void)
     apic_running = 0;
 }
 
-/** Check stopped ticks, the kept event, long counts, restart and a TSC
- * deadline. */
+/* Whether the service query allows the model to stop the tick. */
+static int idle_allowed = 1;
+
+/** Check idle timer transitions against the modeled device. */
 static void idle_rows(void)
 {
     struct hr_state *c = &hr_cpu[0];
+    uint32_t writes;
 
     hr_model = 1;
     apic_khz = 1000000u;
@@ -1039,8 +1043,11 @@ static void idle_rows(void)
     timer_wake_at((int64_t)MS(250));
     CHECK(apic_vector == 64 && apic_initial == 149000001u,
           "the next event is armed for its full interval without intervening ticks");
-    now_ns = MS(250);
-    CHECK(apic_hr_entry(64) && !c->want && apic_initial == 0,
+    writes = apic_writes;
+    CHECK(timer_idle_enter() && apic_writes == writes,
+          "an unchanged idle event is not written to the device again");
+    now_ns = MS(250) + 1;
+    CHECK(apic_hr_entry(64) && !c->want && lapic_timer_current() == 0,
           "the event is served and the timer stops again");
     timer_idle_exit();
     CHECK(!c->idle && c->tick > (int64_t)now_ns && c->tick <= (int64_t)now_ns + TICK_NS &&
@@ -1059,10 +1066,35 @@ static void idle_rows(void)
     timer_wake_at((int64_t)MS(400));
     CHECK(deadline_at == tsc_ordered() + 198000001u,
           "TSC-deadline mode uses the TSC rate for the event");
-    now_ns = MS(400);
+    now_ns = MS(400) + 1;
+    deadline_at = 0; /* The APIC clears the MSR when it raises the interrupt. */
     CHECK(apic_hr_entry(64) && deadline_at == 0, "an idle TSC deadline is cleared after its event");
     timer_idle_exit();
     CHECK(deadline_at > tsc_ordered(), "a busy processor has its next deadline armed");
+    hr_deadline = 0;
+    now_ns = MS(600.75);
+    apic_timer_start(1000000u, TICK_HZ);
+    CHECK(timer_idle_enter(), "idle stops before a tick-only expiry during a slew");
+    ref.mult = 1;
+    ref.tick = 2000000u;
+    ref.edge = tsc_ordered() - 1500000u;
+    ref.frac = 0;
+    coarse_model = 599;
+    timer_wake_tick(600);
+    CHECK(c->want == (int64_t)MS(601) + 1 && c->want > (int64_t)now_ns,
+          "a coarse tick still to count waits for the raw edge, not a time already passed");
+    coarse_model = (uint64_t)-1;
+    now_ns = MS(601.001);
+    CHECK(apic_hr_entry(64) && c->want == 0, "the deferred whole-tick event is taken");
+    timer_idle_exit();
+    apic_timer_start(1000000u, TICK_HZ);
+    hr_deadline = 1;
+    CHECK(timer_idle_enter() && !apic_periodic && deadline_at == 0,
+          "first idle without work leaves periodic mode before clearing a TSC deadline");
+    idle_allowed = 0;
+    CHECK(!timer_idle_enter() && !c->idle && deadline_at > tsc_ordered(),
+          "a failed prepare restarts an already stopped idle timer");
+    idle_allowed = 1;
     hr_deadline = 0;
     hr_model = 0;
     ref_kind = REF_NONE;
@@ -1161,7 +1193,7 @@ int main(int argc, char **argv)
 /** No device services constrain the modeled idle timer. */
 int timer_idle_prepare(void)
 {
-    return 1;
+    return idle_allowed;
 }
 
 /** The host can divide a 64-bit count directly. */
@@ -1200,4 +1232,23 @@ void rtc_tick_phase(uint64_t *ticks, uint32_t *phase)
 {
     *ticks = now_ns / TICK_NS;
     *phase = (uint32_t)(now_ns % TICK_NS);
+}
+
+/** The model's coarse count, or its explicit lag behind the smooth clock. */
+uint64_t tick_count(void)
+{
+    return coarse_model == (uint64_t)-1 ? now_ns / TICK_NS : coarse_model;
+}
+
+/** No slew of the model's raw interval; its coarse lag is set separately. */
+int64_t rtc_mono_rate(void)
+{
+    return 0;
+}
+
+/** Convert a raw interval in the model's unchanged rate. */
+uint64_t rtc_slewed(uint64_t ns, int64_t rate)
+{
+    (void)rate;
+    return ns;
 }

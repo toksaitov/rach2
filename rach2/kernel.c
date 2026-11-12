@@ -331,10 +331,9 @@ static void timer_wake_pass(void)
  */
 void timer_hr_pass(void)
 {
+    timer_wake_hold();
     (void)timer_clock_try(0);
     timer_wake_pass();
-    timer_wake_hold();
-    proc_wake_due();
     timerfd_due();
     if (proc_tick_signals_due() || ptimer_posts_due()) {
         if (bkl_try_enter()) {
@@ -573,6 +572,7 @@ void timer_idle_work(void)
     if (arch_cpu_id() != 0 || !this_cpu()->tick_stopped) {
         return;
     }
+    timer_wake_hold();
     (void)timer_clock_try(0);
     timer_wake_pass();
     t = timer_own_work(arch_cycles());
@@ -582,6 +582,7 @@ void timer_idle_work(void)
         timer_locked_work(t);
         bkl_exit();
     }
+    timer_wake_release();
 }
 
 /**

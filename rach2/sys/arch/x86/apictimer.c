@@ -72,18 +72,19 @@ static uint32_t tick_hz = TICK_HZ;
  * the clock, and does not stop.
  */
 struct hr_state {
-    int64_t want;    /* the earliest time asked for and not yet served, in
-                      * nanoseconds since boot, or 0 for none */
-    int64_t tick;    /* with `oneshot`, the time of the next tick */
-    int64_t due;     /* the time the last tick the clock passed was due,
-                      * as the tick being taken found it, or 0 */
-    uint8_t oneshot; /* the timer is one-shot */
-    uint8_t idle;    /* the scheduler tick is stopped during an idle wait */
-    uint8_t lvt;     /* with `oneshot`, the vector its entry was last
-                      * written with, 0 before the first */
-    uint32_t hold;   /* the passes under way (`timer_wake_hold`): while
-                      * nonzero, a time asked for only lowers `held` */
-    int64_t held;    /* the earliest time asked for while held, 0 for none */
+    int64_t want;       /* the earliest time asked for and not yet served, in
+                         * nanoseconds since boot, or 0 for none */
+    int64_t tick;       /* with `oneshot`, the time of the next tick */
+    int64_t due;        /* the time the last tick the clock passed was due,
+                         * as the tick being taken found it, or 0 */
+    int64_t programmed; /* device expiry, 0 when stopped, -1 before one-shot */
+    uint8_t oneshot;    /* the timer is one-shot */
+    uint8_t idle;       /* the scheduler tick is stopped during an idle wait */
+    uint8_t lvt;        /* with `oneshot`, the vector its entry was last
+                         * written with, 0 before the first */
+    uint32_t hold;      /* the passes under way (`timer_wake_hold`): while
+                         * nonzero, a time asked for only lowers `held` */
+    int64_t held;       /* the earliest time asked for while held, 0 for none */
 };
 
 /* The time before a tick's time at which an interrupt still counts as the
@@ -240,6 +241,7 @@ void apic_timer_start(uint32_t counts, uint32_t hz)
     c->due = 0;
     c->lvt = 0;
     c->want = 0;
+    c->programmed = -1;
     lapic_timer_set(APIC_TIMER_VECTOR, 1, 0, counts);
 }
 
@@ -307,13 +309,25 @@ static void hr_program(struct hr_state *c, int64_t now)
         vector = (uint8_t)hr_vector;
     }
     if (at == 0) {
+        if (c->programmed == 0) {
+            return;
+        }
         if (hr_deadline) {
+            if (c->lvt == 0) {
+                lapic_timer_deadline(APIC_TIMER_VECTOR);
+                c->lvt = APIC_TIMER_VECTOR;
+            }
             hr_set_deadline(0);
         } else {
             lapic_timer_count(0);
         }
+        c->programmed = 0;
         return;
     }
+    if (c->programmed == at && c->lvt == vector) {
+        return;
+    }
+    c->programmed = at;
     delta = at - now;
     if (hr_deadline) {
         rate = timer_calibrate();
@@ -381,6 +395,7 @@ static int64_t hr_oneshot(struct hr_state *c)
     }
     c->oneshot = 1;
     c->lvt = 0;
+    c->programmed = -1;
     return after;
 }
 
@@ -405,6 +420,18 @@ void timer_wake_tick(uint64_t tick)
         left = (uint64_t)TICK_HZ * 60u;
     }
     at = rtc_monotonic_ns() + (int64_t)left * TICK_NS - phase;
+    if (left == 0 && tick > tick_count()) {
+        int pending;
+        uint32_t raw_phase, seq;
+
+        do {
+            seq = tick_read_begin();
+            timer_phase(&pending, &raw_phase);
+        } while (tick_read_retry(seq));
+        if (pending == 0) {
+            at = rtc_monotonic_ns() + (int64_t)rtc_slewed(TICK_NS - raw_phase, rtc_mono_rate()) + 1;
+        }
+    }
     timer_wake_at(at > 0 ? at : 1);
     kirq_restore(flags);
 }
@@ -528,6 +555,7 @@ int apic_hr_entry(uint32_t vector)
     if (!c->oneshot) {
         return 1;
     }
+    c->programmed = 0;
     now = rtc_monotonic_ns();
     if (!c->idle && vector == APIC_TIMER_VECTOR && now + HR_SLACK_NS >= c->tick) {
         c->due = c->tick;
@@ -560,7 +588,11 @@ int timer_idle_enter(void)
     int64_t now;
 
     if (!timer_wakes_between() || !timer_idle_prepare()) {
+        timer_idle_exit();
         return 0;
+    }
+    if (c->idle) {
+        return 1;
     }
     now = c->oneshot ? rtc_monotonic_ns() : hr_oneshot(c);
     c->idle = 1;
