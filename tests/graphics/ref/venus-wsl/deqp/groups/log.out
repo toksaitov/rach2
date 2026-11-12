@@ -1,0 +1,13 @@
+deqp: running 91437 of 91437 cases of vk in 4 processes
+Killed
+Killed
+virgl_render_server[3241440]: vkr: destroying context 2 (deqp) with a valid instance
+virgl_render_server[3241440]: vkr: destroying device with valid objects
+deqp: running 2 cases again
+virgl_render_server[3365871]: vkr: vkAllocateDescriptorSets resulted in CS error
+virgl_render_server[3365871]: vkr: vkExecuteCommandStreamsMESA resulted in CS error
+virgl_render_server[3365871]: vkr: ring_submit_cmd: vn_dispatch_command failed
+Killed
+deqp: result: vk 1.4.1.1 cases 91437 of 91437 every 1 jobs 4 pass 27081 fail 0 notsupported 64353 warning 1 crash 0 timeout 2 other 0 missing 0 flake 1
+debian: result: deqp status 0 in build/runs/deb4
+deb4: exit 0
