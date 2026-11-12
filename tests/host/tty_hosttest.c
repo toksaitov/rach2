@@ -721,7 +721,8 @@ static void raw_serial(void)
  * The tick reads COM1 at every call while the port's receive interrupt is
  * off; while it is on, never while the line is low, and every
  * CONSOLE_BACKUP_TICKS, a fifth of a second, while the handler has left it
- * high.
+ * high, the first time at the next tick even after a quiet spell longer
+ * than 2^31 ticks, which a 32-bit deadline would wrap into the future.
  */
 static void console_poll_backup(void)
 {
@@ -757,6 +758,16 @@ static void console_poll_backup(void)
     kernel_ticks++;
     tty_console_poll();
     CHECK(serial_services == 2, "and then again, until a reading empties the port");
+    serial_line_high = 0;
+    kernel_ticks++;
+    tty_console_poll();
+    kernel_ticks += 0x80000000UL + TICK_HZ;
+    tty_console_poll();
+    CHECK(serial_services == 2, "a low line is not read through a quiet spell of 2^31 ticks");
+    serial_line_high = 1;
+    kernel_ticks++;
+    tty_console_poll();
+    CHECK(serial_services == 3, "and a line left high after it is read at the next tick");
     serial_line_high = 0;
     serial_irq_on = 0;
     irq_enabled = 1;
