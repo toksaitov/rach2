@@ -73,11 +73,26 @@ struct file_ops {
  */
 #define FILE_OPS_UNLOCKED 1u
 
+/*
+ * The `poll` operation alone is called without the big lock, the others
+ * with it: it names its queue and reads the object's state without the
+ * lock, each word once, or under a spinlock of the object's, and takes no
+ * sleeping lock, as Linux's pipe_poll and eventfd_poll read their state
+ * after poll_wait (fs/pipe.c:656-705, fs/eventfd.c:118-174). poll, ppoll,
+ * select and epoll_wait then scan the descriptor without the big lock.
+ */
+#define FILE_OPS_POLL_UNLOCKED 2u
+
 /** Whether a call on `e`, and the release of its last descriptor, may run
  * without the big lock: its operations are marked FILE_OPS_UNLOCKED, it is
  * no socket, its description names no file, device node or synthetic node,
  * and no operation of it moves the description's offset. */
 int file_ops_unlocked(const fd_entry_t *e);
+
+/** Whether the poll operation of `e` may run without the big lock: its
+ * table sets FILE_OPS_POLL_UNLOCKED, or `file_ops_unlocked` holds. A
+ * descriptor with no poll operation answers no. */
+int file_poll_unlocked(const fd_entry_t *e);
 
 /** Whether `e`'s ioctl dispatcher sets FILE_OPS_UNLOCKED. A held device
  * node's retained inode and offset need no lock for an ioctl; FIONBIO
@@ -100,5 +115,11 @@ int fd_call_lock(int fd);
 
 /** Give back the big lock `file_ops_lock` took when `taken` says so. */
 void file_ops_unlock(int taken);
+
+/** Let go of the calling thread's holds of descriptors being closed, but
+ * `keep`'s, and release each that no other call holds, as a call's end
+ * does (`fd_holds_claim_closing`): for an epoll wait that a close asked to
+ * give them back (`poll_let_go`). May sleep. */
+void fd_holds_release_closing(int keep);
 
 #endif /* _FILE_H_ */

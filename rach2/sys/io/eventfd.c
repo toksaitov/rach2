@@ -187,19 +187,28 @@ static int32_t eventfd_write(fd_entry_t *e, const char __user *buf, uint32_t cou
 }
 
 /** poll of an eventfd: POLLIN while the counter is not zero and POLLOUT
- * while it is below EFD_MAX, among `events`, and its wait queue. */
+ * while it is below EFD_MAX, among `events`, and its wait queue. It runs
+ * without the big lock (FILE_OPS_POLL_UNLOCKED) and reads the counter under
+ * the counter's lock, since a 64-bit word is two loads on i686, where
+ * Linux's eventfd_poll reads it once after poll_wait (fs/eventfd.c:
+ * 118-174). */
 static short eventfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct eventfd *ev = (struct eventfd *)e->priv;
     short mask = 0;
+    uint64_t count;
+    uint32_t flags;
 
     if (wq) {
         *wq = &ev->wq;
     }
-    if (ev->count != 0) {
+    flags = spin_lock_irqsave(&ev->lock);
+    count = ev->count;
+    spin_unlock_irqrestore(&ev->lock, flags);
+    if (count != 0) {
         mask |= POLLIN;
     }
-    if (ev->count < EFD_MAX) {
+    if (count < EFD_MAX) {
         mask |= POLLOUT;
     }
     return (short)(mask & events);
@@ -229,8 +238,9 @@ static void eventfd_close(fd_entry_t *e)
     eventfd_put(ev);
 }
 
-static const struct file_ops eventfd_ops = {eventfd_read,  eventfd_write, eventfd_poll, NULL,
-                                            eventfd_close, NULL,          NULL,         0};
+static const struct file_ops eventfd_ops = {eventfd_read, eventfd_write,         eventfd_poll,
+                                            NULL,         eventfd_close,         NULL,
+                                            NULL,         FILE_OPS_POLL_UNLOCKED};
 
 /** A new eventfd with the counter `count` and the flags `flags`, and a
  * descriptor of the caller's on it: the descriptor, -EINVAL for another

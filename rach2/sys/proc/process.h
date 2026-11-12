@@ -622,6 +622,13 @@ struct process {
     struct wait_queue **poll_wqs;
     struct wq_waiter *poll_recs;
     uint32_t poll_n;
+    /* Under `poll_lock` (io/poll.c): `poll_quiet` is set from the end of
+     * the scan before a sleep until the thread takes its records back, so
+     * that a close may take them and the thread's holds then; `poll_drop`
+     * asks a thread not quiet to give back its holds of descriptors being
+     * closed (`poll_let_go`), and its wait clears it. */
+    int poll_quiet;
+    int poll_drop;
     /* Set while the thread waits in epoll_wait on the set at descriptor
      * `epoll_wait_fd`. */
     int epoll_waiting;

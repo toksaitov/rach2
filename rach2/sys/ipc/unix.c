@@ -17,6 +17,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/ksignal.h"
 #include "../lib/kstring.h"
+#include "../lib/spinlock.h"
 #include "../network/socket/socket.h"
 #include "../rtc.h"
 #include "../timer.h"
@@ -221,10 +222,27 @@ static int32_t unix_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg);
 static void unix_close(fd_entry_t *e);
 
 static const struct file_ops unix_ops = {unix_read,  unix_write, unix_poll, unix_ioctl,
-                                         unix_close, NULL,       NULL,      0};
+                                         unix_close, NULL,       NULL,      FILE_OPS_POLL_UNLOCKED};
 
 /* Every socket not yet freed. */
 static struct unix_sock *socks;
+
+/* Over every socket's `peer`, which a poll reads without the big lock
+ * (`writable`): a change of it, whose old peer may lose its last reference
+ * after, is made under this lock, so the poll reads a peer that its
+ * socket's reference keeps, as Linux's unix_dgram_poll reads the peer
+ * under the socket's state lock (net/unix/af_unix.c, unix_peer_get). A
+ * device spinlock: nothing is taken under it. */
+static struct spinlock unix_peer_lock = SPINLOCK_INIT_NAMED("unix_peer_lock");
+
+/** Make `p` the peer of `s` under `unix_peer_lock`. */
+static void set_peer(struct unix_sock *s, struct unix_sock *p)
+{
+    uint32_t flags = spin_lock_irqsave(&unix_peer_lock);
+
+    s->peer = p;
+    spin_unlock_irqrestore(&unix_peer_lock, flags);
+}
 
 /* The messages whose descriptors are being closed, first to last, and
  * whether a call is closing them now (`msg_free`). */
@@ -726,7 +744,7 @@ static void unix_release(struct unix_sock *s, int embryo)
         drop_embryos(s);
     }
     if (peer) {
-        s->peer = NULL;
+        set_peer(s, NULL);
         if (s->type != SOCK_DGRAM && peer->peer == s) {
             peer->shut = SHUT_BOTH;
             if (s->rq_head || embryo) {
@@ -869,10 +887,10 @@ int32_t unix_socket(int type, int protocol, int flags)
  * reference to the other. */
 static void join(struct unix_sock *a, struct unix_sock *b)
 {
-    a->peer = b;
     b->refs++;
-    b->peer = a;
+    set_peer(a, b);
     a->refs++;
+    set_peer(b, a);
     a->state = US_CONNECTED;
     b->state = US_CONNECTED;
 }
@@ -1271,7 +1289,7 @@ static void dgram_repeer(struct unix_sock *s, struct unix_sock *target)
 {
     struct unix_sock *old = s->peer;
 
-    s->peer = target;
+    set_peer(s, target);
     if (!old) {
         return;
     }
@@ -2103,7 +2121,7 @@ static int32_t send_dgram(struct unix_sock *s, int nonblock, const struct kernel
         if (t->closed) {
             /* As Linux: a closed peer is dropped; the next send is ENOTCONN. */
             if (!to && s->peer == t) {
-                s->peer = NULL;
+                set_peer(s, NULL);
                 unix_put(t);
             }
             rc = -ECONNREFUSED;
@@ -2735,15 +2753,18 @@ static int32_t unix_write(fd_entry_t *e, const char __user *buf, uint32_t count)
  * connected, whose send fails at once. A listener is never writable. */
 static int writable(const struct unix_sock *s)
 {
-    const struct unix_sock *p = s->peer;
+    const struct unix_sock *p;
+    uint32_t flags;
+    int w;
 
     if (s->state == US_LISTENING) {
         return 0;
     }
-    if (!p || p->closed || (s->shut & SHUT_SEND) || (p->shut & SHUT_RCV)) {
-        return 1;
-    }
-    return !queue_full(p);
+    flags = spin_lock_irqsave(&unix_peer_lock);
+    p = s->peer;
+    w = !p || p->closed || (s->shut & SHUT_SEND) || (p->shut & SHUT_RCV) || !queue_full(p);
+    spin_unlock_irqrestore(&unix_peer_lock, flags);
+    return w;
 }
 
 /**
@@ -2753,6 +2774,11 @@ static int writable(const struct unix_sock *s)
  * shut down for reading, and POLLIN with a message or a connection queued;
  * POLLOUT while a send would not wait (`writable`). POLLERR and POLLHUP are
  * reported whatever `events` asks.
+ *
+ * It runs without the big lock (FILE_OPS_POLL_UNLOCKED), reading each word
+ * of the socket once, and its peer's under `unix_peer_lock`, as Linux's
+ * unix_poll reads the socket after sock_poll_wait (net/unix/af_unix.c):
+ * every change a poller waits for is made before the wake of `wq`.
  */
 static short unix_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {

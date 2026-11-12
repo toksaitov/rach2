@@ -1102,6 +1102,43 @@ int fd_holds_claim(int from)
     return -1;
 }
 
+int fd_holds_claim_closing(int from, int keep)
+{
+    process_t *p = current_proc;
+    fd_table_t *table = p ? p->fds : NULL;
+    uint32_t flags;
+    int fd;
+
+    if (!table) {
+        return -1;
+    }
+    flags = fd_table_lock(table);
+    for (fd = from; fd / 32 < p->fd_holding && fd < table->cap; fd++) {
+        uint32_t *word = &p->fd_held[fd / 32];
+        fd_entry_t *e;
+
+        if (*word == 0) {
+            fd = (fd / 32) * 32 + 31;
+            continue;
+        }
+        if (fd == keep || !(*word & (1u << (fd % 32)))) {
+            continue;
+        }
+        e = fd_slot(table, fd);
+        if (!(e->flags & FD_FLAG_CLOSING)) {
+            continue;
+        }
+        *word &= ~(1u << (fd % 32));
+        if (!(e->flags & FD_FLAG_RELEASING) && !fd_held_elsewhere(table, fd)) {
+            e->flags |= FD_FLAG_RELEASING;
+            fd_table_unlock(table, flags);
+            return fd;
+        }
+    }
+    fd_table_unlock(table, flags);
+    return -1;
+}
+
 int fd_table_reach(fd_table_t *table, int fd)
 {
     uint32_t flags;

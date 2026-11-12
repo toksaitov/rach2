@@ -509,6 +509,16 @@ int fd_dup_target(fd_table_t *table, int fd);
 int fd_holds_claim(int from);
 
 /**
+ * `fd_holds_claim` for the holds of descriptors being closed alone, but
+ * `keep`'s: each such hold of the calling thread from `from` up is let
+ * go, and the first descriptor no other sharer holds is returned, marked
+ * releasing for the caller to release, or -1 once none is left. The other
+ * holds stay. An epoll wait that a close asked to give back its holds
+ * (`poll_let_go`) calls it, keeping its set's descriptor.
+ */
+int fd_holds_claim_closing(int from, int keep);
+
+/**
  * Add or drop a reference to an open file description, each in one atomic
  * step. The last unref drops the description's record locks, reports its
  * close to inotify, unpins an O_PATH node, closes a description of a

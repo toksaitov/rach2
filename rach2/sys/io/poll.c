@@ -96,17 +96,23 @@ static short poll_locked(fd_entry_t *e, short events, struct wait_queue **wq)
     return (short)(events & (POLLIN | POLLOUT));
 }
 
-/** The question runs under the big lock unless the descriptor's type runs
- * without it (`file_ops_lock`); the caller holds no spinlock. */
+/** The question runs under the big lock unless the descriptor's poll runs
+ * without it (`file_poll_unlocked`); the caller holds no spinlock. */
 short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
 {
-    int big = file_ops_lock(e);
+    int big = !file_poll_unlocked(e) && file_ops_lock(e);
     short revents;
 
     *wq = NULL;
     revents = poll_locked(e, events, wq);
     file_ops_unlock(big);
     return revents;
+}
+
+short poll_fd_held(fd_entry_t *e, short events, struct wait_queue **wq)
+{
+    *wq = NULL;
+    return poll_locked(e, events, wq);
 }
 
 /* A poll's or a select's descriptors, for the scan of `poll_wait`: the
@@ -244,9 +250,11 @@ static int deadline_passed(struct poll_deadline *d)
 }
 
 /* The lock over each process's published poll arrays (`poll_wqs`,
- * `poll_recs`, `poll_n`): a sleeper publishes and takes back its arrays
- * under it, and `poll_let_go` takes another thread's records off their
- * queues under it. It comes before each queue's own lock. */
+ * `poll_recs`, `poll_n`) and its `poll_quiet` and `poll_drop`: a sleeper
+ * publishes and takes back its arrays under it and marks itself quiet
+ * under it before it sleeps, and `poll_let_go` takes another thread's
+ * records off their queues under it. It comes before each queue's own
+ * lock. */
 static struct spinlock poll_lock = SPINLOCK_INIT_NAMED("poll_lock");
 
 /** Put the current process's records on the `n` queues of `wqs` and
@@ -280,21 +288,52 @@ static void poll_unfile(struct wait_queue **wqs, struct wq_waiter *recs, uint32_
     current_proc->poll_wqs = NULL;
     current_proc->poll_recs = NULL;
     current_proc->poll_n = 0;
+    current_proc->poll_quiet = 0;
     spin_unlock(&poll_lock);
 }
 
-void poll_let_go(process_t *t)
+int poll_let_go(process_t *t)
 {
     uint32_t flags = spin_lock_irqsave(&poll_lock);
     uint32_t i;
+    int quiet = t->poll_quiet && t->poll_wqs;
 
-    if (t->poll_wqs) {
+    if (quiet) {
         for (i = 0; i < t->poll_n; i++) {
             wq_poll_remove(t->poll_wqs[i], &t->poll_recs[i]);
             t->poll_wqs[i] = NULL;
         }
+    } else {
+        t->poll_drop = 1;
     }
     spin_unlock_irqrestore(&poll_lock, flags);
+    return quiet;
+}
+
+int poll_drop_take(void)
+{
+    uint32_t flags = spin_lock_irqsave(&poll_lock);
+    int drop = current_proc->poll_drop;
+
+    current_proc->poll_drop = 0;
+    spin_unlock_irqrestore(&poll_lock, flags);
+    return drop;
+}
+
+/** Mark the current process quiet for `poll_let_go`, unless a close has
+ * asked its epoll wait to give back its holds meanwhile: 1 when marked, 0
+ * when the wait is to scan again, which ends it (`poll_drop_take`). A
+ * request left from an epoll wait that has ended does not stop another
+ * wait. Interrupts are off. */
+static int poll_quiet(void)
+{
+    int quiet;
+
+    spin_lock(&poll_lock);
+    quiet = !current_proc->poll_drop || !current_proc->epoll_waiting;
+    current_proc->poll_quiet = quiet;
+    spin_unlock(&poll_lock);
+    return quiet;
 }
 
 /** `signal_pending` under the big lock, which the signal state needs and a
@@ -343,7 +382,11 @@ static int poll_expired(struct poll_deadline *d)
  * on them (`poll_wqs`), so that a close by another thread can take it off
  * them all, with each queue set to NULL, before it frees what an epoll
  * wait sleeps on (`poll_let_go`); the process publishes and takes back the
- * arrays under the lock that call takes.
+ * arrays under the lock that call takes. It marks itself quiet under that
+ * lock once its last scan before the sleep is done (`poll_quiet`), so
+ * that a close never takes what a scan is reading, and a close that came
+ * while it was not quiet has it scan again, which ends an epoll wait for
+ * its holds to go back (`poll_drop_take`).
  */
 int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d, const char *wchan)
 {
@@ -396,7 +439,7 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d,
             changed |= again[i] != wqs[i];
         }
         if (ready > 0 || poll_signal_pending() || poll_expired(d) || changed ||
-            current_proc->state != PROC_BLOCKED) {
+            current_proc->state != PROC_BLOCKED || !poll_quiet()) {
             poll_unfile(wqs, recs, n);
             current_proc->state = PROC_RUNNING;
             if (ready > 0) {
