@@ -893,19 +893,14 @@ struct kvm_vcpu *kvm_running_vcpu(struct kvm_vm *vm)
     return v && v->vm == vm ? v : NULL;
 }
 
-/** Whether `v` must return to its caller to collect and reset its ring.
- * The reserve covers software writes while completing an exit, as
- * Linux's soft_limit; neither backend has a hardware dirty-page buffer. */
-static int dirty_ring_full(struct kvm_vcpu *v)
-{
-    uint32_t entries = v->vm->dirty_ring_size / sizeof(struct kvm_dirty_gfn);
-
-    return entries && v->dirty_ring_put - v->dirty_ring_reset >= entries - KVM_DIRTY_RING_RESERVED;
-}
-
 /** Prepare timers, clocks, filters and events for an entry: 1 when ready,
  * 0 for an exit to the caller, or a negative error. Without the big lock;
- * the helpers take the locks they need, and may write logged guest pages. */
+ * the helpers take the locks they need, and may write logged guest pages.
+ * A ring the Hyper-V pages' writes filled ends the call with
+ * KVM_EXIT_DIRTY_RING_FULL before the local APIC's work, whose halted wait
+ * would otherwise sleep with the ring full, as Linux's vcpu_enter_guest
+ * takes the soft-full request first (arch/x86/kvm/x86.c:10294) through
+ * kvm_dirty_ring_check_request (virt/kvm/dirty_ring.c:194). */
 static int32_t run_prepare(struct kvm_vcpu *v)
 {
     int32_t r;
@@ -915,6 +910,10 @@ static int32_t run_prepare(struct kvm_vcpu *v)
         return 0;
     }
     kvm_pmu_prepare(v);
+    if (kvm_dirty_ring_full(v)) {
+        v->run->exit_reason = KVM_EXIT_DIRTY_RING_FULL;
+        return 0;
+    }
     if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
         r = kvm_lapic_prepare(v);
         if (r != 0) {
@@ -989,7 +988,7 @@ static int32_t run_loop(struct kvm_vcpu *v)
             run->exit_reason = KVM_EXIT_INTR;
             return -EINTR;
         }
-        if (dirty_ring_full(v)) {
+        if (kvm_dirty_ring_full(v)) {
             run->exit_reason = KVM_EXIT_DIRTY_RING_FULL;
             return 0;
         }
@@ -997,7 +996,7 @@ static int32_t run_loop(struct kvm_vcpu *v)
         if (r != 1) {
             return r;
         }
-        if (dirty_ring_full(v)) {
+        if (kvm_dirty_ring_full(v)) {
             run->exit_reason = KVM_EXIT_DIRTY_RING_FULL;
             return 0;
         }

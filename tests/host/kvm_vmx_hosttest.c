@@ -730,6 +730,13 @@ int kvm_dirty_reserve(struct kvm_vcpu *v, const struct kvm_slot_view *s, uint64_
     return 0;
 }
 
+/** No dirty ring in this model, so it is never full. */
+int kvm_dirty_ring_full(const struct kvm_vcpu *v)
+{
+    (void)v;
+    return 0;
+}
+
 /** Ring publication is checked by kvm_slots_hosttest. */
 void kvm_dirty_publish(struct kvm_dirty_gfn *entry)
 {

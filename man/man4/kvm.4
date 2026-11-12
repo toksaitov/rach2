@@ -374,7 +374,8 @@ are skipped but counted.
 .Dv KVM_RUN
 returns
 .Dv KVM_EXIT_DIRTY_RING_FULL
-when 64 entries remain, and enters no guest until enough entries are reset.
+when 64 entries remain, and neither enters the guest nor waits for a
+halted vCPU's wake-up until enough entries are reset; the vCPU stays halted.
 The 64 entries are reserved for writes made while handling an exit.
 The bitmap ioctls fail with
 .Er ENXIO

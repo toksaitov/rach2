@@ -1380,6 +1380,15 @@ int kvm_dirty_reserve_locked(struct kvm_vm *vm, const struct kvm_slot_view *s, u
  * that may have stored a prefix. Until then RESET stops at this entry. */
 void kvm_dirty_publish(struct kvm_dirty_gfn *entry);
 
+/** Whether `v`'s dirty ring is soft-full: its uncollected entries reach
+ * the ring's size less KVM_DIRTY_RING_RESERVED, which covers software
+ * writes while an exit completes, as Linux's kvm_dirty_ring_soft_full
+ * (virt/kvm/dirty_ring.c). KVM_RUN then ends with KVM_EXIT_DIRTY_RING_FULL
+ * before any entry or halted wait, until KVM_RESET_DIRTY_RINGS collects
+ * them; neither backend has a hardware dirty-page buffer. 0 without a
+ * ring. Reads the counters without a lock, in `v`'s thread. */
+int kvm_dirty_ring_full(const struct kvm_vcpu *v);
+
 /** Mark the frame `gfn` of `v`'s VM dirty in the log of `s`, the view of
  * the slot a kernel write to guest memory found, as Linux's
  * mark_page_dirty_in_slot (virt/kvm/kvm_main.c:3624):
@@ -1717,7 +1726,9 @@ void kvm_lapic_update_ppr(struct kvm_vcpu *v);
  * timer (`kvm_hv_stimers`), take an INIT or a SIPI, wait while the
  * vCPU is halted or waits for a SIPI until an event wakes it, and make
  * an interrupt waiting an event to inject (KVM_REQ_EVENT). 0 to enter; 1
- * to go to the caller with the run page's exit set, KVM_EXIT_IOAPIC_EOI;
+ * to go to the caller with the run page's exit set, KVM_EXIT_IOAPIC_EOI,
+ * or KVM_EXIT_DIRTY_RING_FULL in place of a wait while the dirty ring is
+ * full, the vCPU left halted;
  * -EINTR for a signal or a request to leave, with KVM_EXIT_INTR. May sleep.
  */
 int32_t kvm_lapic_prepare(struct kvm_vcpu *v);
