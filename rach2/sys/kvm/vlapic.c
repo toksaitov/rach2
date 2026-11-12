@@ -134,7 +134,11 @@
  * gives; in x2APIC mode ID holds the whole x2APIC id. IRR and TMR change
  * by atomic operations, since another processor's delivery sets them; the
  * rest change on the vCPU's own thread, under its mutex, as Linux's
- * kvm_lapic changes in the vCPU's thread without kvm->lock.
+ * kvm_lapic changes in the vCPU's thread without kvm->lock, but for TPR,
+ * which the processor writes itself while the guest runs under VMX's TPR
+ * shadow. The page is a page of its own, at `regs_pa`, since the shadow
+ * takes it as the virtual-APIC page, as Linux's kvm_create_lapic gives
+ * `apic->regs` a page.
  */
 struct lapic {
     volatile uint32_t *regs; /* KVM_APIC_REG_SIZE bytes at the start of `page` */

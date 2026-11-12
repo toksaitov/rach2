@@ -323,7 +323,7 @@ int32_t kvm_clock_get(struct kvm_vm *vm, uintptr_t arg)
     k_memset(&d, 0, sizeof(d));
     master_copy(vm, &m);
     if (m.on) {
-        if (vclock_read_cycles(1, &real, &d.host_tsc)) {
+        if (vclock_read_cycles(VCLOCK_READ_REAL, &real, &d.host_tsc)) {
             d.realtime = real;
             d.flags = KVM_CLOCK_REALTIME | KVM_CLOCK_HOST_TSC;
         } else {
@@ -484,7 +484,7 @@ static uint64_t wall_epoch(struct kvm_vm *vm)
     int64_t s, ns;
 
     master_copy(vm, &m);
-    if (m.on && vclock_read_cycles(1, &real, &tsc)) {
+    if (m.on && vclock_read_cycles(VCLOCK_READ_REAL, &real, &tsc)) {
         return real - master_at(&m, tsc);
     }
     rtc_realtime(&s, &ns);
@@ -549,7 +549,7 @@ static void pvclock_write(struct kvm_vcpu *v)
     if (m.on) {
         host_tsc = m.tsc;
         ns = m.ns;
-    } else if (!vclock_read_cycles(0, &ns, &host_tsc)) {
+    } else if (!vclock_read_cycles(VCLOCK_READ_RAW, &ns, &host_tsc)) {
         host_tsc = arch_cycles();
         ns = kvm_host_ns();
     }

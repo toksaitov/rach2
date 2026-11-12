@@ -5,6 +5,7 @@
  * host-deps: rach2/sys/kvm/cpuid.c rach2/sys/kvm/msr.c rach2/sys/kvm/hyperv.c
  * host-deps: rach2/sys/kvm/pvclock.c rach2/sys/kvm/binstats.c
  * host-deps: rach2/sys/kvm/exitstat.c
+ * host-deps: rach2/sys/kvm/pmu.c
  * host-deps: tests/host/compat/fd_flat.c tests/host/compat/atomic_host.c
  * host-deps: tests/host/compat/mutex_none.c tests/host/compat/spinlock_host.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
@@ -31,22 +32,27 @@
  * run page, with port and MMIO reads answered on the next KVM_RUN, a HLT
  * going to the caller with no local APIC in the kernel, immediate_exit, a
  * signal, a kick from another processor and a triple fault; KVM_RUN and
- * its exits without the big lock, and interrupts off for the entry; the
- * signal mask swapped for the
- * run; the refusals of the state ioctls Linux makes; EIO from another
- * address space; every allocation given back when the last reference
- * to the VM goes, the mapping's among them; and, in a VM of their own with
+ * its exits without the big lock, and interrupts off for the entry;
+ * kvm/exit_stats's rows for VMX's and SVM's codes, summed over two
+ * processors, with each exit's wait for the big lock, its clear, the
+ * entry, run and exit counted only from marks in order, the preparation
+ * only for an exit the kernel handled, and an exit with no entry after it
+ * counted as one that ended KVM_RUN; the signal mask swapped for the run;
+ * the refusals of the state ioctls Linux makes; EIO from another address
+ * space; every allocation given back when the last reference to the VM
+ * goes, the mapping's among them; and, in a VM of their own with
  * the TSC's rate known, KVM's CPUID leaves and capabilities, the vCPUs'
  * TSCs matched under the master clock, which a write of another TSC stops,
  * the kvmclock in guest memory reading as KVM_GET_CLOCK does, its stop
  * flag, the wall clock, the clock pairing, the old MSR, KVM_SET_CLOCK,
  * KVM_CAP_ENFORCE_PV_FEATURE_CPUID and KVM_CAP_X86_DISABLE_EXITS; the
  * steal time, its writes of the thread's run_delay and its preempted flag
- * across a switch at a slice's end inside KVM_RUN, and never in a record
- * the guest moved into memfd_secret with the tables unchanged; the vCPU
- * attribute KVM_VCPU_TSC_OFFSET; and what Linux's selftests ask for: the
- * TSC's rate set on a VM and on a vCPU, on a processor that scales none and
- * with SVM's and VMX's ratios,
+ * across a switch at a slice's end inside KVM_RUN, none at a halted
+ * vCPU's sleep at the run loop's top, which is no preemption, and never in
+ * a record the guest moved into memfd_secret with the tables unchanged; the
+ * vCPU attribute KVM_VCPU_TSC_OFFSET; and what Linux's selftests ask for:
+ * the TSC's rate set on a VM and on a vCPU, on a processor that scales
+ * none and with SVM's and VMX's ratios,
  * the statistics files of a VM and a vCPU, KVM_PRE_FAULT_MEMORY, 1024
  * vCPUs with ids below 4096, the CR4 bits taken before KVM_SET_CPUID2,
  * the VM's capabilities and quirks, and the synchronized registers; and
@@ -337,9 +343,15 @@ static void clock_pass(uint64_t ns)
  * lock, as the system call layer calls an unlocked file's operations. */
 static int bkl_depth, irq_on = 1, kicked = -1, sig_pending;
 
-/** Take the big lock: one level deeper. */
+/* The TSC cycles the next take of the big lock waits, as another holder
+ * would make it wait. */
+static uint64_t bkl_wait;
+
+/** Take the big lock: one level deeper, after `bkl_wait` cycles. */
 void bkl_enter(void)
 {
+    tsc += bkl_wait;
+    bkl_wait = 0;
     bkl_depth++;
 }
 
@@ -2423,7 +2435,7 @@ static void steal_rows(int fd0)
     CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_GPA) == 1, "the guest turns it off");
     caller.pcount++;
     kvm_steal_prepare(v0);
-    CHECK(st->version == 20, "and nothing more is written");
+    CHECK(st->version == 24, "and nothing more is written");
 }
 
 /* A steal time record in the guest's second page, of memfd_secret. */
@@ -3846,6 +3858,18 @@ static int32_t exit_stats_write(const char *text)
     return exitstat_ops_kept->store(exitstat_data_kept, (const char __user *)text, len);
 }
 
+/** Count `x`'s exit, by `x->hw_exit`, closing the account before it at
+ * `entry` and opening its own at `left`, whose handling then waits for the
+ * big lock through kvm_bkl_enter until `held`. */
+static void exit_with_wait(struct kvm_vcpu *x, uint64_t entry, uint64_t left, uint64_t held)
+{
+    kvm_exitstat_exit(x, entry, left);
+    tsc = left;
+    bkl_wait = held - left;
+    kvm_bkl_enter(x);
+    bkl_exit();
+}
+
 /** kvm/exit_stats on its own: the refused writes, the clear, VMX's rows,
  * its failed entries and its `other` row, summed over two processors,
  * and SVM's rows, its high codes from 0x400 and its failed entries, with
@@ -3870,12 +3894,12 @@ static void exitstat_alone_rows(void)
     x.xs_row = -1;
     host_cpu = 0;
     x.hw_exit = 30;
-    kvm_exitstat_exit(&x, 100, 200, 250);
+    exit_with_wait(&x, 100, 200, 250);
     host_cpu = 1;
     x.hw_exit = 0x80000021u;
-    kvm_exitstat_exit(&x, 400, 500, 520);
+    exit_with_wait(&x, 400, 500, 520);
     x.hw_exit = 0x1234;
-    kvm_exitstat_exit(&x, 600, 700, 710);
+    exit_with_wait(&x, 600, 700, 710);
     tsc = 1000;
     kvm_exitstat_done(&x);
     tsc = 2000;
@@ -3884,12 +3908,13 @@ static void exitstat_alone_rows(void)
     CHECK(t && strcmp(t, "0x1e 1 1 0 50 150 0 0 0 0 IO_INSTRUCTION\n"
                          "0x0 1 0 1 10 290 0 0 0 0 other\n"
                          "0x80000000 1 1 0 20 80 0 0 0 0 FAILED_VMENTRY\n") == 0,
-          "VMX's rows: each exit's wait, its handling to the next entry or to KVM_RUN's "
+          "VMX's rows: each exit's wait for the big lock, its handling to the next entry or to "
+          "KVM_RUN's "
           "return, a failed entry under bit 31 and a reason past the table in other, "
           "summed over the processors that opened and closed the accounts");
     host_cpu = 2;
     x.hw_exit = 10;
-    kvm_exitstat_exit(&x, 3000, 3100, 3200);
+    exit_with_wait(&x, 3000, 3100, 3200);
     CHECK(x.xs_row == -1, "an exit on a processor with no rows opens no account");
     CHECK(exit_stats_write("0") == 1, "a write of 0 without a newline");
     t = exit_stats(buf, sizeof(buf), "vmx");
@@ -3898,17 +3923,17 @@ static void exitstat_alone_rows(void)
     kvm_backend = &kvm_svm;
     host_cpu = 0;
     x.hw_exit = 0x400;
-    kvm_exitstat_exit(&x, 0, 10, 15);
+    exit_with_wait(&x, 0, 10, 15);
     x.hw_exit = 0x403;
-    kvm_exitstat_exit(&x, 20, 30, 31);
+    exit_with_wait(&x, 20, 30, 31);
     x.hw_exit = 0xFFFFFFFFu;
-    kvm_exitstat_exit(&x, 40, 50, 52);
+    exit_with_wait(&x, 40, 50, 52);
     x.hw_exit = 0xB0;
-    kvm_exitstat_exit(&x, 60, 70, 73);
+    exit_with_wait(&x, 60, 70, 73);
     x.hw_exit = 0x410;
-    kvm_exitstat_exit(&x, 80, 90, 94);
+    exit_with_wait(&x, 80, 90, 94);
     x.hw_exit = 0xAF;
-    kvm_exitstat_exit(&x, 100, 110, 115);
+    exit_with_wait(&x, 100, 110, 115);
     tsc = 125;
     kvm_exitstat_done(&x);
     t = exit_stats(buf, sizeof(buf), "svm");
@@ -3944,7 +3969,7 @@ static void exitstat_part_rows(void)
     x.hw_exit = 10;
     x.xs_in = 120;
     x.xs_out = 180;
-    kvm_exitstat_exit(&x, 100, 200, 250);
+    exit_with_wait(&x, 100, 200, 250);
     CHECK(x.xs_in == 0 && x.xs_out == 0, "an exit's count takes the backend's marks");
     tsc = 300;
     kvm_exitstat_prepare(&x);
@@ -3953,10 +3978,10 @@ static void exitstat_part_rows(void)
     CHECK(x.xs_prep == 300, "the preparation starts at the loop's first pass after the exit");
     x.xs_in = 420;
     x.xs_out = 470;
-    kvm_exitstat_exit(&x, 400, 500, 530);
+    exit_with_wait(&x, 400, 500, 530);
     x.xs_in = 650;
     x.xs_out = 640;
-    kvm_exitstat_exit(&x, 600, 700, 710);
+    exit_with_wait(&x, 600, 700, 710);
     tsc = 750;
     kvm_exitstat_prepare(&x);
     tsc = 800;

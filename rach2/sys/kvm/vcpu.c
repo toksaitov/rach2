@@ -706,11 +706,15 @@ static int32_t run_exit(struct kvm_vcpu *v)
  * IN_GUEST_MODE before kvm_vcpu_exit_request (arch/x86/kvm/x86.c:10491,
  * 10519). A request the loop has not taken cancels the entry
  * (KVM_REQ_NOENTER): one that a kick set after the loop's look would
- * otherwise wait for the next exit.
+ * otherwise wait for the next exit. The last exit's account closes as
+ * handled in the kernel only once the guest ran; after -EAGAIN or an
+ * error it stays open, and closes as one that ended KVM_RUN if KVM_RUN
+ * returns before the next entry.
  */
 static int32_t run_enter(struct kvm_vcpu *v)
 {
     uint32_t flags = kirq_save();
+    uint64_t entry;
     int32_t r;
 
     v->cpu = (int32_t)arch_cpu_id();
@@ -722,10 +726,11 @@ static int32_t run_enter(struct kvm_vcpu *v)
         return -EAGAIN;
     }
     v->has_run = 1;
+    entry = arch_cycles();
     r = kvm_backend->enter(v);
     v->mode = KVM_MODE_OUTSIDE;
     if (r == 0) {
-        kvm_exitstat_exit(v, arch_cycles());
+        kvm_exitstat_exit(v, entry, arch_cycles());
     }
     kirq_restore(flags);
     return r;
@@ -977,7 +982,7 @@ static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
         signal_set_blocked(old);
         bkl_exit();
     }
-    kvm_exitstat_done(v, 1);
+    kvm_exitstat_done(v);
     sync_give(v);
     run_post(v);
     return r;
