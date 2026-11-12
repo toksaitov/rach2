@@ -954,6 +954,9 @@ const struct kvm_backend kvm_svm = {"svm", svm_probe, NULL, NULL, NULL, NULL,   
 #define EXIT_RIP_MODEL  0xFFFFFFFF80123450ull
 #define HOST_CR4_MODEL  0x000406F0ull
 #define HOST_XCR0_MODEL 0x7ull /* x87, SSE and AVX */
+/* The host's PKRU, as a host with protection keys on keeps it: Linux's
+ * init_pkru_value, every key but 0 denied writes. */
+#define HOST_PKRU_MODEL 0x55555554u
 
 /* A VMCS the model knows: its address, launch state, the processor where
  * it is active and fields by encoding. */
@@ -1023,9 +1026,13 @@ static struct {
     int saved, saves, restores;
     int fpu_held, fpu_loads, fpu_stores, fpu_reloads, fpu_syncs;
     /* XCR0 and PKRU, the host's values while no guest runs; the MSRs
-     * `msr_slot` keeps, with the WRMSRs of them counted. */
+     * `msr_slot` keeps, with the WRMSRs of them counted. `fpu_load` with
+     * the host's area saves PKRU in `host_pkru` and both forms load the
+     * image's, `image_pkru`; `fpu_store` saves PKRU into the image and with
+     * the host's area loads `host_pkru` again, as XSAVE and XRSTOR move it
+     * under an XCR0 with PKRU. */
     uint64_t xcr0, fs_base;
-    uint32_t pkru;
+    uint32_t pkru, host_pkru, image_pkru;
     uint64_t msr[5];
     int msr_writes;
     /* What the last entry found: the processor's STAR and KERNEL_GS_BASE,
@@ -1655,6 +1662,28 @@ static void exit_with(const struct row *r)
     f[VM_ENTRY_INTR_INFO_FIELD] &= ~(uint64_t)INTR_VALID;
 }
 
+/** Check what every entry that passes the processor's checks runs under:
+ * the preemption timer, the host's state saved, the guest's FPU and PKRU
+ * loaded and empty MSR lists; and note what it found, for the rows. */
+static void note_entry(const uint64_t *f)
+{
+    CHECK((f[PIN_BASED_VM_EXEC_CONTROL] & PIN_PREEMPTION) &&
+              f[VMX_PREEMPTION_TIMER_VALUE] == (VMX_RUN_BOUND_TSC >> (m.misc & 0x1Fu)),
+          "every run is bounded by the preemption timer");
+    CHECK(m.saved && m.fpu_held && m.pkru == m.image_pkru,
+          "the guest runs with the host's state saved and the guest's FPU and PKRU loaded");
+    CHECK(f[VM_ENTRY_MSR_LOAD_COUNT] == 0 && f[VM_EXIT_MSR_STORE_COUNT] == 0 &&
+              f[VM_EXIT_MSR_LOAD_COUNT] == 0,
+          "no MSR is switched by the entry's and the exit's lists");
+    m.entry_star = m.msr[msr_slot(MSR_STAR)];
+    m.entry_kgs = m.msr[msr_slot(MSR_KERNEL_GS_BASE)];
+    m.entry_xcr0 = m.xcr0;
+    m.entry_msr_writes = m.msr_writes;
+    if (m.script_at == 0) {
+        m.first_msr_writes = m.msr_writes;
+    }
+}
+
 /** VMLAUNCH or VMRESUME: the checks, then the script's next run. */
 static int m_run(struct kvm_regs *regs, uint64_t *cr2, int launched)
 {
@@ -1710,21 +1739,7 @@ static int m_run(struct kvm_regs *regs, uint64_t *cr2, int launched)
         f[VM_EXIT_REASON] = EXIT_FAILED_ENTRY | EXIT_MSR_LOAD_FAIL;
         return VMX_OK;
     }
-    CHECK((f[PIN_BASED_VM_EXEC_CONTROL] & PIN_PREEMPTION) &&
-              f[VMX_PREEMPTION_TIMER_VALUE] == (VMX_RUN_BOUND_TSC >> (m.misc & 0x1Fu)),
-          "every run is bounded by the preemption timer");
-    CHECK(m.saved && m.fpu_held,
-          "the guest runs with the host's state saved and the guest's FPU loaded");
-    CHECK(f[VM_ENTRY_MSR_LOAD_COUNT] == 0 && f[VM_EXIT_MSR_STORE_COUNT] == 0 &&
-              f[VM_EXIT_MSR_LOAD_COUNT] == 0,
-          "no MSR is switched by the entry's and the exit's lists");
-    m.entry_star = m.msr[msr_slot(MSR_STAR)];
-    m.entry_kgs = m.msr[msr_slot(MSR_KERNEL_GS_BASE)];
-    m.entry_xcr0 = m.xcr0;
-    m.entry_msr_writes = m.msr_writes;
-    if (m.script_at == 0) {
-        m.first_msr_writes = m.msr_writes;
-    }
+    note_entry(f);
     m.cur->launched = 1;
     r = m.script_at < m.script_len ? &m.script[m.script_at++] : &none;
     CHECK(r != &none, "the guest runs only as the script says");
@@ -1886,10 +1901,12 @@ static void m_fpu_load(void *host, const void *guest)
         CHECK(!m.fpu_held, "the guest's FPU is loaded once until the host's is back");
         m.fpu_held = 1;
         m.fpu_loads++;
+        m.host_pkru = m.pkru;
     } else {
         CHECK(m.fpu_held, "the image is loaded again only over the guest's registers");
         m.fpu_reloads++;
     }
+    m.pkru = m.image_pkru;
 }
 
 /** Store the guest's FPU into `guest` unless it is NULL, then the host's
@@ -1901,9 +1918,14 @@ static void m_fpu_store(void *host, void *guest)
     if (guest && !host) {
         m.fpu_syncs++;
     }
+    if (guest) {
+        CHECK(m.pkru == 0, "the image takes the guest's PKRU, never the host's");
+        m.image_pkru = m.pkru;
+    }
     if (host) {
         m.fpu_held = 0;
         m.fpu_stores++;
+        m.pkru = m.host_pkru;
     }
 }
 
@@ -1997,6 +2019,7 @@ static void model_lenovo(void)
     m.cpus[1].cr4 = HOST_CR4_MODEL;
     m.cr0 = 0x80050033ull;
     m.xcr0 = HOST_XCR0_MODEL;
+    m.pkru = HOST_PKRU_MODEL;
     m.fs_base = 0x700000ull;
     for (i = 0; i < 5; i++) {
         m.msr[i] = HOST_MSR(kept_msrs[i]);
@@ -2091,7 +2114,8 @@ static int32_t run(int fd)
     CHECK(m.misplaced == 0, "a VMCS is cleared where it is active before it is loaded elsewhere");
     CHECK(!m.saved && m.restores == m.saves && host_msrs(),
           "KVM_RUN ends with the host's state and MSRs back");
-    CHECK(!m.fpu_held && m.fpu_loads == m.fpu_stores && m.xcr0 == HOST_XCR0_MODEL && m.pkru == 0,
+    CHECK(!m.fpu_held && m.fpu_loads == m.fpu_stores && m.xcr0 == HOST_XCR0_MODEL &&
+              m.pkru == HOST_PKRU_MODEL,
           "KVM_RUN ends with the host's FPU, XCR0 and PKRU back");
     CHECK(m.script_at == m.script_len, "every run the script gives is entered");
     CHECK(irq_on && bkl_depth == 1, "KVM_RUN ends with interrupts on and the big lock held");
@@ -3276,6 +3300,7 @@ static void vpid_panic_rows(int vm, int first)
     m.fpu_held = 0;
     m.fpu_stores = m.fpu_loads;
     m.xcr0 = HOST_XCR0_MODEL;
+    m.pkru = HOST_PKRU_MODEL;
     for (i = 0; i < 5; i++) {
         m.msr[i] = HOST_MSR(kept_msrs[i]);
     }
