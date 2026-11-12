@@ -14,7 +14,10 @@
 # with its wall time, the user and system time and minor faults of the
 # processes it started (getrusage of the children), and the system, irq and
 # softirq time /proc/stat gives over the four processors meanwhile. OUT gets
-# the lines in `phases`.
+# the lines in `phases`. With PHASE_PROFILE naming a phase, on Rach2, the
+# warm runs of that phase, all but the first, are counted alone in debugfs's
+# bkl/calls and bkl/tick and sampled in bkl/profile's whole-kernel mode,
+# which OUT gets as calls, tick and profile.
 import os
 import resource
 import signal
@@ -27,6 +30,8 @@ count = int(sys.argv[3]) if len(sys.argv) > 3 else 5
 work = os.path.join(out, 'phases-work')
 os.makedirs(work, exist_ok=True)
 lines = []
+target = os.environ.get('PHASE_PROFILE', '')
+bkl = '/sys/kernel/debug/bkl'
 
 
 def kernel():
@@ -36,13 +41,27 @@ def kernel():
     return int(v[2]) + int(v[5]) + int(v[6])
 
 
+def debugfs(name, text):
+    with open(os.path.join(bkl, name), 'w') as f:
+        f.write(text)
+
+
 def measure(name, i, start):
     """Time one run of `start`, which runs the phase and reaps its children."""
+    profiled = name == target and os.path.isdir(bkl)
+    if profiled and i == 1:
+        debugfs('calls', '0')
+        debugfs('tick', '0')
+        debugfs('profile', 'kernel')
     r0 = resource.getrusage(resource.RUSAGE_CHILDREN)
     k0, t0 = kernel(), time.monotonic()
     start()
     t1, k1 = time.monotonic(), kernel()
     r1 = resource.getrusage(resource.RUSAGE_CHILDREN)
+    if profiled and i == count - 1:
+        for part in ('calls', 'tick', 'profile'):
+            with open(os.path.join(bkl, part)) as f, open(os.path.join(out, part), 'w') as g:
+                g.write(f.read())
     line = 'phase %s %d wall %.3f user %.3f system %.3f minflt %d kernel %.2f' % (
         name, i, t1 - t0, r1.ru_utime - r0.ru_utime, r1.ru_stime - r0.ru_stime,
         r1.ru_minflt - r0.ru_minflt, (k1 - k0) / 100.0)

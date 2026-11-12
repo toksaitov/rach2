@@ -23,7 +23,8 @@
 # script such as qmpstats.py, gets QEMU's QMP socket, OUT's kvm-stats and
 # QEMU's PID, and runs beside the guest. PHASES, a count, runs phases.py
 # with it in place of the rounds, which times each phase of a round's start
-# alone. The guest powers off on every exit path.
+# alone, and PHASE_PROFILE names the phase it profiles. The guest powers off
+# on every exit path.
 set -eu
 system=$1 image=$2 extra=$3 out=$4
 frames=${FRAMES:-3346}
@@ -98,6 +99,7 @@ if [ -n "${PHASES:-}" ]; then
         ( GRAPHICS_CLASS=performance GRAPHICS_DONE=1 MESA_SHADER_CACHE_DIR=\$TMPDIR/cache
           . ./tests/graphics/guest-env.sh; graphics_env > /tmp/graphics.env
           VK_DRIVER_FILES=$icd; export VK_DRIVER_FILES
+          PHASE_PROFILE=${PHASE_PROFILE:-}; export PHASE_PROFILE
           python3 -I dev-log/77-vgpu/77-11/phases.py tests/graphics/runners results/measured $PHASES )'" \
         > "$out/guest.log" 2>&1 || echo "profile: guest status $?" >> "$out/guest.log"
 else
