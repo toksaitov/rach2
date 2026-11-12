@@ -778,8 +778,8 @@ static void flush_for_holder(int me)
     }
 }
 
-/** The barrier keeps the store of a new setting after the move, which a
- * timer that reads the setting then sees (`watchdog_timer_fn`). */
+/** Move the settings generation and wake parked CPUs to restart it. The
+ * barrier keeps the new setting after the move (`watchdog_timer_fn`). */
 void watchdog_reconfigure(void)
 {
     int c;
@@ -826,7 +826,8 @@ static void watchdog_restart(struct wd_cpu *w)
  * after a sample period of ticks or of the TSC, whichever comes first, so
  * that the first tick after a wait with interrupts off fires it at once, as
  * Linux's hrtimer fires as soon as interrupts let it, in the context that
- * held them off.
+ * held them off. `tick` counts a scheduler tick; an idle event instead
+ * checks the monotonic sample deadline without advancing that count.
  */
 static void watchdog_run(isr_params_t *params, int tick)
 {
@@ -878,24 +879,25 @@ void watchdog_event(isr_params_t *params)
     watchdog_run(params, 0);
 }
 
-/** Return the next sample's delay in ticks, rounded up, or zero while the
- * detectors are off. Interrupts are off on the processor queried. */
-uint32_t watchdog_idle_ticks(void)
+/** Return the next sample's absolute monotonic deadline, or zero while
+ * disabled. A CPU with changed settings gets a prompt event to apply them.
+ * Interrupts are off on the processor queried. */
+int64_t watchdog_idle_deadline(void)
 {
     struct wd_cpu *w = &wd[arch_cpu_id()];
-    int64_t left;
+    int64_t end;
 
     if (!wd_ready) {
         return 0;
     }
     if (!w->primed || w->gen != wd_gen) {
-        return 1;
+        return rtc_monotonic_ns() + 1;
     }
     if (!watchdog_enabled()) {
         return 0;
     }
-    left = w->timer_ns + (int64_t)sample_ticks() * TICK_NS - rtc_monotonic_ns();
-    return left <= 0 ? 1 : (uint32_t)(tick_div64((uint64_t)left - 1, TICK_NS, NULL) + 1);
+    end = w->timer_ns + (int64_t)sample_ticks() * TICK_NS;
+    return end > 0 ? end : 1;
 }
 
 /**

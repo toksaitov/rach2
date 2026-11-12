@@ -48,6 +48,8 @@ struct hr_state {
     int64_t tick;       /* with `oneshot`, the time of the next tick */
     int64_t due;        /* the time the last tick the clock passed was due,
                          * as the tick being taken found it, or 0 */
+    uint64_t want_tick; /* whole-tick tag of want, zero for a direct time */
+    uint64_t held_tick; /* the corresponding tag of held */
     int64_t programmed; /* device expiry, 0 when stopped, -1 before one-shot */
     uint8_t oneshot;    /* the timer is one-shot */
     uint8_t idle;       /* the scheduler tick is stopped during an idle wait */
@@ -65,7 +67,7 @@ struct hr_state {
 
 /* The ticks a processor may fall behind and keep its tick's phase; past
  * them, as after a virtual machine stood still, its tick starts again a
- * tick from the clock. */
+ * common tick edge. */
 #define HR_BEHIND_MAX 4000u
 
 static struct hr_state hr_cpu[NR_CPUS];
@@ -212,8 +214,20 @@ void apic_timer_start(uint32_t counts, uint32_t hz)
     c->due = 0;
     c->lvt = 0;
     c->want = 0;
+    c->want_tick = 0;
+    c->held_tick = 0;
     c->programmed = -1;
     lapic_timer_set(APIC_TIMER_VECTOR, 1, 0, counts);
+}
+
+/** Return the first monotonic millisecond edge strictly after `now`,
+ * a nonnegative nanosecond time. Every CPU uses this common tick phase. */
+static int64_t hr_next_tick(int64_t now)
+{
+    uint64_t rem;
+
+    (void)tick_div64((uint64_t)now, TICK_NS, &rem);
+    return now + TICK_NS - (int64_t)rem;
 }
 
 /**
@@ -224,7 +238,7 @@ void apic_timer_start(uint32_t counts, uint32_t hz)
  * is short of it, since an interrupt up to HR_SLACK_NS early is that tick.
  * Only the ticks the clock has passed are skipped: the allowance for an
  * early interrupt moves no tick still to come. A processor more than
- * HR_BEHIND_MAX ticks behind has its next tick a tick from `now`.
+ * HR_BEHIND_MAX ticks behind resumes at the next common tick edge.
  */
 static void hr_forward(struct hr_state *c, int64_t now)
 {
@@ -235,7 +249,7 @@ static void hr_forward(struct hr_state *c, int64_t now)
         return;
     }
     if (gap >= (int64_t)HR_BEHIND_MAX * TICK_NS) {
-        c->tick = now + TICK_NS;
+        c->tick = hr_next_tick(now);
         return;
     }
     c->tick += ((int64_t)((uint32_t)gap / TICK_NS) + 1) * TICK_NS;
@@ -322,44 +336,29 @@ static void hr_program(struct hr_state *c, int64_t now)
     }
 }
 
-/**
- * Make this processor's periodic timer one-shot, its next tick at the time
- * the periodic count would have raised it, as Linux starts the emulated tick
- * at the tick's next period (kernel/time/tick-sched.c:1590): the counts
- * left, from the time the count was read. That time is the midpoint of two
- * readings of the clock around the read, and the pair taken is the first
- * within SAMPLE_CLOSE_US of each other, or the closest of SAMPLE_TRIES, so
- * that a processor stopped between a reading and the read, as a hypervisor
- * stops one, cannot move the tick's phase for good by the stop's length; it
- * moves it by at most half the pair's gap. A tick raised and not yet taken
- * when the count is read is one whose count reloaded before the read, so
- * the next tick's time is a tick earlier than the count says; the tick
- * taken then has reached it (`apic_hr_entry`) and moves it on. Returns the
- * clock's last reading. Interrupts are off.
- */
+/** Start one-shot mode on the common monotonic millisecond phase. A
+ * pending periodic tick uses the preceding edge and is served once by the
+ * entry. The pending bit is sampled between clock readings, taking the
+ * first close pair or the closest available. IRQs are off; return the last
+ * clock reading for programming the device. */
 static int64_t hr_oneshot(struct hr_state *c)
 {
     int64_t before, after = 0, gap, best = -1, at = 0;
-    uint32_t cur, count = 0, i;
+    uint32_t i;
     int raised, late = 0;
 
     for (i = 0; i < SAMPLE_TRIES && (best < 0 || best > (int64_t)SAMPLE_CLOSE_US * 1000); i++) {
         before = rtc_monotonic_ns();
-        cur = lapic_timer_current();
         raised = lapic_requested(APIC_TIMER_VECTOR);
         after = rtc_monotonic_ns();
         gap = after - before;
         if (best < 0 || gap < best) {
             best = gap;
-            count = cur;
             late = raised;
             at = before + gap / 2;
         }
     }
-    if (count > hr_tick_counts) {
-        count = hr_tick_counts;
-    }
-    c->tick = at + refclock_scale(count, TICK_NS, hr_tick_counts);
+    c->tick = hr_next_tick(at);
     if (late) {
         c->tick -= TICK_NS;
     }
@@ -374,23 +373,89 @@ int timer_wakes_between(void)
     return hr_vector != 0 && timer_tick_shared();
 }
 
+/** Keep an absolute request and its whole-tick tag, zero for a direct
+ * time. The caller has interrupts off; each winning pair moves together. */
+static void hr_wake_at(int64_t ns, uint64_t tick)
+{
+    struct hr_state *c = &hr_cpu[arch_cpu_id()];
+    int64_t now;
+
+    if (c->hold != 0) {
+        if (c->held == 0 || ns < c->held) {
+            c->held = ns;
+            c->held_tick = tick;
+        }
+    } else if (c->want == 0 || ns < c->want) {
+        c->want = ns;
+        c->want_tick = tick;
+        if (!c->oneshot) {
+            now = hr_oneshot(c);
+            hr_program(c, now);
+        } else if (c->idle || ns < c->tick) {
+            now = rtc_monotonic_ns();
+            hr_program(c, now);
+        }
+    }
+}
+
+void timer_wake_at(int64_t ns)
+{
+    uint32_t flags;
+
+    if (!timer_wakes_between() || ns <= 0) {
+        return;
+    }
+    flags = kirq_save();
+    hr_wake_at(ns, 0);
+    kirq_restore(flags);
+}
+
+/** Convert `tick` from a phase sampled between clock readings, returning
+ * whether it is already passed in `past`. The closest pair bounds the
+ * error if the host stops the CPU between its readings. IRQs are off. */
+static int64_t hr_tick_when(uint64_t tick, int *past)
+{
+    uint32_t phase, i;
+    uint64_t now, left;
+    int64_t before, after, gap, best = -1, at = 0;
+
+    for (i = 0; i < SAMPLE_TRIES && (best < 0 || best > (int64_t)SAMPLE_CLOSE_US * 1000); i++) {
+        before = rtc_monotonic_ns();
+        rtc_tick_phase(&now, &phase);
+        after = rtc_monotonic_ns();
+        gap = after - before;
+        if (best < 0 || gap < best) {
+            best = gap;
+            left = tick > now ? tick - now : 0;
+            if (left > (uint64_t)TICK_HZ * 60u) {
+                left = (uint64_t)TICK_HZ * 60u;
+            }
+            *past = left == 0;
+            at = before + gap / 2 + (int64_t)left * TICK_NS - phase;
+        }
+    }
+    return at;
+}
+
 void timer_wake_tick(uint64_t tick)
 {
-    uint64_t now, left;
-    uint32_t phase, flags;
+    struct hr_state *c;
+    uint32_t flags;
     int64_t at;
+    int past = 0;
 
     if (tick == 0 || !timer_wakes_between()) {
         return;
     }
     flags = kirq_save();
-    rtc_tick_phase(&now, &phase);
-    left = tick > now ? tick - now : 0;
-    if (left > (uint64_t)TICK_HZ * 60u) {
-        left = (uint64_t)TICK_HZ * 60u;
+    c = &hr_cpu[arch_cpu_id()];
+    if ((c->want != 0 && c->want_tick == tick) ||
+        (c->hold != 0 && c->held != 0 && c->held_tick == tick)) {
+        kirq_restore(flags);
+        return;
     }
-    at = rtc_monotonic_ns() + (int64_t)left * TICK_NS - phase;
-    if (left == 0 && tick > tick_count()) {
+    at = hr_tick_when(tick, &past);
+    if (past && tick > tick_count()) {
         int pending;
         uint32_t raw_phase, seq;
 
@@ -402,35 +467,7 @@ void timer_wake_tick(uint64_t tick)
             at = rtc_monotonic_ns() + (int64_t)rtc_slewed(TICK_NS - raw_phase, rtc_mono_rate()) + 1;
         }
     }
-    timer_wake_at(at > 0 ? at : 1);
-    kirq_restore(flags);
-}
-
-void timer_wake_at(int64_t ns)
-{
-    struct hr_state *c;
-    uint32_t flags;
-    int64_t now;
-
-    if (hr_vector == 0 || !timer_tick_shared() || ns <= 0) {
-        return;
-    }
-    flags = kirq_save();
-    c = &hr_cpu[arch_cpu_id()];
-    if (c->hold != 0) {
-        if (c->held == 0 || ns < c->held) {
-            c->held = ns;
-        }
-    } else if (c->want == 0 || ns < c->want) {
-        c->want = ns;
-        if (!c->oneshot) {
-            now = hr_oneshot(c);
-            hr_program(c, now);
-        } else if (c->idle || ns < c->tick) {
-            now = rtc_monotonic_ns();
-            hr_program(c, now);
-        }
-    }
+    hr_wake_at(at > 0 ? at : 1, tick);
     kirq_restore(flags);
 }
 
@@ -443,13 +480,15 @@ void timer_wake_release(void)
 {
     struct hr_state *c = &hr_cpu[arch_cpu_id()];
     int64_t ns = c->held;
+    uint64_t tick = c->held_tick;
 
     if (c->hold == 0 || --c->hold != 0) {
         return;
     }
     c->held = 0;
+    c->held_tick = 0;
     if (ns != 0) {
-        timer_wake_at(ns);
+        hr_wake_at(ns, tick);
     }
 }
 
@@ -541,6 +580,7 @@ int apic_hr_entry(uint32_t vector)
     }
     if (c->want != 0 && c->want <= now) {
         c->want = 0;
+        c->want_tick = 0;
         result |= APIC_HR_EVENT;
     }
     if ((result & APIC_HR_TICK) != 0 || (c->idle && c->want == 0 && result == 0)) {
