@@ -144,7 +144,9 @@ entry, whether or not it takes the lock, each processor on counts of its
 own, which a read sums;
 .Ar wall_us
 is a system call's time from before its entry chose the lock to its
-return, its waits for the lock and its sleeps included;
+return, its waits for the lock and its sleeps included, counted only with
+.Ql rach2.cycleaccount
+on the kernel's command line and 0 without it;
 .Ar holds
 and
 .Ar held_us

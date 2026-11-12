@@ -203,6 +203,7 @@ int ptrace_group_stop(int signo)
 static void ptrace_restop(process_t *t)
 {
     t->ptrace |= PT_INTERRUPT;
+    proc_work_set(t, WORK_SIGNAL);
     if ((t->ptrace & PT_LISTEN) && t->ptrace_status != 0) {
         t->ptrace &= ~PT_LISTEN;
         t->ptrace_signo = 0;
@@ -434,12 +435,14 @@ static int ptrace_resume(process_t *t, unsigned long sig, int step, int syscalls
     if (step) {
         arch_ptrace_step(t, 1);
         t->ptrace |= PT_STEP;
+        proc_work_set(t, WORK_SIGNAL | WORK_TRACE);
     } else if (t->ptrace & PT_STEP) {
         arch_ptrace_step(t, 0);
         t->ptrace &= ~PT_STEP;
     }
     if (syscalls) {
         t->ptrace |= PT_SYSCALL;
+        proc_work_set(t, WORK_SIGNAL | WORK_TRACE);
     } else {
         t->ptrace &= ~PT_SYSCALL;
     }
@@ -555,6 +558,7 @@ static int ptrace_attach(process_t *t, int seize, unsigned long opts)
         return -EINVAL;
     }
     t->ptrace = PT_TRACED | (seize ? PT_SEIZED : 0);
+    proc_work_set(t, WORK_SIGNAL);
     t->tracer = current_proc->tgid;
     t->ptrace_opts = seize ? (uint32_t)opts : 0;
     t->ptrace_exit_seen = 0;
@@ -585,6 +589,7 @@ static int ptrace_traceme(void)
         return -EPERM;
     }
     current_proc->ptrace = PT_TRACED;
+    proc_work_set(current_proc, WORK_SIGNAL);
     current_proc->tracer = parent->tgid;
     current_proc->ptrace_opts = 0;
     current_proc->ptrace_exit_seen = 0;
@@ -937,6 +942,7 @@ long sys_ptrace(isr_params_t *params)
         }
         if (t->ptrace_status == 0) {
             t->ptrace |= PT_INTERRUPT;
+            proc_work_set(t, WORK_SIGNAL);
             if (t->state == PROC_BLOCKED) {
                 sched_wake_signal(t);
             }

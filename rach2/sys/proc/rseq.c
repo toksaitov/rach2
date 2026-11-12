@@ -185,6 +185,7 @@ void rseq_preempt(process_t *p)
     if (p->rseq != 0) {
         p->rseq_event |= RSEQ_EVENT_PREEMPT;
         p->rseq_notify = 1;
+        proc_work_set(p, WORK_RSEQ);
     }
 }
 
@@ -193,6 +194,7 @@ void rseq_migrate(process_t *p)
     if (p->rseq != 0) {
         p->rseq_event |= RSEQ_EVENT_MIGRATE;
         p->rseq_notify = 1;
+        proc_work_set(p, WORK_RSEQ);
     }
 }
 
@@ -320,5 +322,8 @@ long sys_rseq(isr_params_t *params)
     p->rseq_len = len;
     p->rseq_sig = sig;
     p->rseq_notify = area != 0;
+    if (area != 0) {
+        proc_work_set(p, WORK_RSEQ);
+    }
     return 0;
 }

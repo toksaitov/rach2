@@ -41,8 +41,9 @@ int32_t debugreg_status(void);
 /**
  * Drop a debug exception taken in the kernel on this processor, as Linux
  * does, whose ptrace breakpoints exclude the kernel: clear DR6, and clear
- * DR7 until the next switch or return to user mode, so that the rest of a
- * copy through a watched range takes no further exception. Nothing is
+ * DR7 until the next switch or return to user mode, which the current
+ * thread's WORK_DEBUGREG bit marks when it has enables, so that the rest of
+ * a copy through a watched range takes no further exception. Nothing is
  * posted, and the thread's saved DR6 is unchanged. It takes no lock and
  * needs no thread's stack, so x86-64's debug entry calls it on its
  * interrupt stack.
@@ -62,7 +63,9 @@ int debugreg_drop_sysenter(uintptr_t pc);
 /** Make this processor's DR7 match the current thread's enables before the
  * return to user mode: reloaded when a dropped exception cleared it,
  * cleared when the thread has none. `isr_leave` calls it with interrupts
- * off. */
+ * off when the thread's WORK_DEBUGREG bit is set, which `debugreg_drop`
+ * sets for a thread with enables and a tracer's change of the registers
+ * sets for its tracee; a switch loads them itself (`arch_debug_switch`). */
 void debugreg_resume(void);
 
 /** Whether this processor's DR7 has a breakpoint enabled. 0 means it holds

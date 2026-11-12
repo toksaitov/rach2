@@ -61,8 +61,8 @@ static struct usbdisk sticks[USBDISK_MAX];
 static uint32_t teardowns;
 
 /* Set when a stick is waiting to be registered or reclaimed; read by the
- * syscall entry and by the pump. */
-static volatile int pending;
+ * syscall entry and by the pump (usbdisk.h). */
+volatile int usbdisk_waiting;
 
 void usbdisk_arrived(int slot, int lun)
 {
@@ -82,7 +82,7 @@ void usbdisk_arrived(int slot, int lun)
     sticks[n].marked = 0;
     sticks[n].disk = 0;
     sticks[n].state = STICK_ARRIVED;
-    pending = 1;
+    usbdisk_waiting = 1;
 }
 
 void usbdisk_left(int slot)
@@ -95,7 +95,7 @@ void usbdisk_left(int slot)
             named = 1;
             if (sticks[n].state != STICK_CLOSING) {
                 sticks[n].state = STICK_CLOSING;
-                pending = 1;
+                usbdisk_waiting = 1;
             }
         }
     }
@@ -458,26 +458,26 @@ static void settle(void)
             left++;
         }
     }
-    pending = left != 0;
+    usbdisk_waiting = left != 0;
     kirq_restore(flags);
 }
 
 void usbdisk_step(void)
 {
     scan_advance();
-    if (pending && !proc_in_syscall()) {
+    if (usbdisk_waiting && !proc_in_syscall()) {
         settle();
     }
 }
 
 int usbdisk_pending(void)
 {
-    return pending != 0;
+    return usbdisk_waiting != 0;
 }
 
 void usbdisk_service(void)
 {
-    if (pending) {
+    if (usbdisk_waiting) {
         settle();
     }
 }

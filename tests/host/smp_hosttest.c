@@ -53,6 +53,15 @@ extern void free(void *ptr);
 
 static int fails;
 
+/** No row runs a system call without the big lock, so a hold names no call
+ * by its number (`entry_of`). */
+int isr_call_entry(const struct process *p, uint32_t *cmd)
+{
+    (void)p;
+    *cmd = 0;
+    return -1;
+}
+
 /** Count a failure and print `row` when `ok` is 0. */
 static void check(int ok, const char *row)
 {

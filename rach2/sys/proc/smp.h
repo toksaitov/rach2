@@ -76,16 +76,17 @@ int bkl_lend(int cpu, const struct process *thread);
  * back with `bkl_frame_pop`. The record is the current thread's, a bit for
  * each frame on its kernel stack, since an entry that sleeps may return on
  * another processor and other threads' entries come and go here meanwhile;
- * a processor with no current thread keeps its own.
+ * a processor with no current thread keeps its own. Interrupts are off, as
+ * they are at every entry and return.
  */
 void bkl_frame_push(int locked);
 
 /** Take back the record of the newest frame, 1 when its router took the
- * big lock. */
+ * big lock. Interrupts are off. */
 int bkl_frame_pop(void);
 
 /** The record of the newest frame, as `bkl_frame_pop` would return it,
- * left in place. */
+ * left in place. Interrupts are off. */
 int bkl_frame_top(void);
 
 /** Let go of the big lock whatever the depth, before a switch, an idle wait
@@ -221,6 +222,15 @@ void bkl_entry_push(struct bkl_entry_saved *saved, uint32_t vector, int32_t nr, 
 /** Put back the entry `bkl_entry_push` replaced. */
 void bkl_entry_pop(const struct bkl_entry_saved *saved);
 
+/**
+ * The entry key of the system call thread `p` is in the body of, which ran
+ * without the big lock and so pushed no entry (`isr_syscall`), from its
+ * number (`orig_nr`) and frame: BKL_PROFILE_IOCTL for an ioctl of either
+ * ABI, with its request in `cmd`, else the call's key, `cmd` 0. Defined by
+ * the architecture (arch/x86/isr.c).
+ */
+int isr_call_entry(const struct process *p, uint32_t *cmd);
+
 /** Return the slot of ioctl request `cmd` plus one, for `smp_call_end`, 0
  * when every slot holds another request, and charge the hold under way on
  * this processor to the request as well as to the call when the processor
@@ -230,10 +240,11 @@ void bkl_entry_pop(const struct bkl_entry_saved *saved);
 int bkl_note_ioctl(uint32_t cmd);
 
 /** Count the system call `nr` that ends now on this processor's counts,
- * which a read of bkl/calls sums: its time from `start`, the cycle count
- * before its entry chose the big lock, to now, which includes any wait for
- * the lock and its sleeps, and, for `ioctl` above 0, the same under that
- * request's slot. Interrupts are off. */
+ * which a read of bkl/calls sums, and, for `ioctl` above 0, the same under
+ * that request's slot: with the cycle account on (`sched_cycle_account`),
+ * its time too, from `start`, the cycle count before its entry chose the
+ * big lock, to now, which includes any wait for the lock and its sleeps; a
+ * `start` of 0 counts the call alone. Interrupts are off. */
 void smp_call_end(uint32_t nr, int ioctl, uint64_t start);
 
 /** Count a sample of the kernel's time from the tick, which found this

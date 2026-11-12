@@ -1,6 +1,6 @@
 /**
- * Check the fast i386 entry's lock across its saved-EBP user copy, and its
- * count of the call for bkl/calls.
+ * Check the fast i386 entry's copy of the saved EBP before the call's entry,
+ * and the return of a call whose copy fails.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -DRACH2_HOST_X86_64
  */
@@ -10,7 +10,7 @@ extern int printf(const char *format, ...);
 struct percpu cpu_table[NR_CPUS];
 static process_t proc;
 static struct mm space;
-static int depth, bad, routed, fault, counted;
+static int bad, entered, pushed, left, fault;
 
 /* Image labels stand in for the linked assembler; this test builds no image. */
 const char vdso32_text_start[1] = {0};
@@ -61,18 +61,24 @@ uint32_t vdso_elf_hash(const char *name)
     return 0;
 }
 
-/** Account for the entry's lock acquisition. */
-void bkl_enter(void)
+/* The cycle account, off as by default (sched.c). */
+int sched_cycle_account;
+
+/** Account for the frame record a failed copy pushes for the return. */
+void bkl_frame_push(int locked)
 {
-    depth++;
+    if (locked) {
+        bad++;
+    }
+    pushed++;
 }
 
-/** Require the entry to hold the lock before its user copy, which can sleep. */
+/** The copy comes before the call's entry, with no lock taken. */
 int copy_from_user(void *dst, const void __user *src, size_t size)
 {
     uint32_t ebp = 0x12345678u;
 
-    if (depth != 1 || (uintptr_t)src != 0x40001000u || size != sizeof(ebp)) {
+    if (entered != 0 || (uintptr_t)src != 0x40001000u || size != sizeof(ebp)) {
         bad++;
     }
     if (fault) {
@@ -82,62 +88,36 @@ int copy_from_user(void *dst, const void __user *src, size_t size)
     return 0;
 }
 
-/** The syscall dispatcher receives one lock and the sixth argument intact. */
-void isr_router_locked(isr_params_t *p)
+/** The call's entry receives the sixth argument intact and the landing pad
+ * as its return. */
+void isr_syscall(isr_params_t *p)
 {
-    if (depth != 1 || p->rbp != 0x12345678u) {
+    if (p->rbp != 0x12345678u || p->rax != 192) {
         bad++;
     }
-    routed++;
+    entered++;
     p->rax = 17;
 }
 
-/** The entry reads the clock before it takes the lock, for bkl/calls. */
+/** No clock is read with the cycle account off. */
 uint64_t arch_cycles(void)
 {
-    if (depth != 0) {
-        bad++;
-    }
+    bad++;
     return 1000;
 }
 
-/** The entry notes the ioctl request of a routed call under the lock. */
-int isr_call_ioctl(const isr_params_t *p)
-{
-    if (depth != 1 || p->rax != 192 || p->rbp != 0x12345678u) {
-        bad++;
-    }
-    return 0;
-}
-
-/** Every call is counted once, under its own number, before the return. */
-void smp_call_end(uint32_t nr, int ioctl, uint64_t start)
-{
-    if (depth != 1 || nr != 192 || ioctl != 0 || start != 1000) {
-        bad++;
-    }
-    counted++;
-}
-
-/** Return to user mode releases the entry's one lock. */
+/** Every call returns once, after its entry or its failed copy. */
 void isr_leave(isr_params_t *p)
 {
     (void)p;
-    if (depth != 1) {
+    if (entered + pushed != 1) {
         bad++;
     }
-    depth--;
+    left++;
 }
 
-/** Take the big lock, as every i386 entry does in the test. */
-int isr_entry_lock(const isr_params_t *params)
-{
-    (void)params;
-    bkl_enter();
-    return 1;
-}
-
-/** Both fast instructions copy under the lock, including a failed copy. */
+/** Both fast instructions copy the saved EBP before the entry, and a failed
+ * copy answers -EFAULT without the call. */
 int main(void)
 {
     isr_params_t p;
@@ -155,10 +135,11 @@ int main(void)
             p.rax = 192;
             p.rsp = entry ? 0 : 0x40001000u;
             p.rbp = entry ? 0x40001000u : 0;
-            routed = 0;
-            counted = 0;
+            entered = 0;
+            pushed = 0;
+            left = 0;
             ia32_fast_syscall(&p, entry);
-            if (depth || routed != !fault || counted != 1 || p.rsp != 0x40001000u ||
+            if (left != 1 || entered != !fault || pushed != fault || p.rsp != 0x40001000u ||
                 (fault && ((int64_t)p.rax != -EFAULT || proc.orig_nr != 192))) {
                 bad++;
             }

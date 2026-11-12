@@ -470,7 +470,7 @@ static int passes(int limit)
     while (n < limit) {
         usbdisk_step();
         n++;
-        if (scan_n < 0 && !pending && !scanning()) {
+        if (scan_n < 0 && !usbdisk_waiting && !scanning()) {
             break;
         }
     }
@@ -521,7 +521,7 @@ static void settle_rows(void)
     plug(0, 0);
     in_syscall = 1;
     usbdisk_step();
-    CHECK("the pump leaves a syscall alone", pending && disk_at(0) == 0);
+    CHECK("the pump leaves a syscall alone", usbdisk_waiting && disk_at(0) == 0);
     usbdisk_service();
     CHECK("the syscall entry registers the stick", disk_at(0) != 0);
     in_syscall = 0;
@@ -567,7 +567,7 @@ int main(void)
 
     mbr_medium(0);
     plug(0, 0);
-    CHECK("an arrival is pending", pending);
+    CHECK("an arrival is pending", usbdisk_waiting);
     passes(40);
     d = disk_at(0);
     CHECK("the stick is disk 0", d != 0 && d->number == 0 && d->present);
@@ -578,7 +578,7 @@ int main(void)
     CHECK("and its whole window", d && d->whole.present);
     CHECK("its nodes were made and named", nodes_made == 1 && parts_named >= 1);
     CHECK("the model is the inquiry strings", d && d->model[0] == 'Q' && d->model[2] == 'S');
-    CHECK("and nothing is pending", !pending && scan_n < 0);
+    CHECK("and nothing is pending", !usbdisk_waiting && scan_n < 0);
     CHECK("one record is taken", usbdisk_free() == USBDISK_MAX - 1);
 
     mount_holds = 1;

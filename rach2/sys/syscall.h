@@ -46,6 +46,15 @@ void syscall_unlock(int abi, syscall_fn_t handler);
 int syscall_entry_locked(const isr_params_t *params);
 
 /**
+ * Deliver what the loopback ring holds, at a return to user mode whose
+ * thread put a datagram on it (WORK_LOOP), under the big lock: the
+ * return's own, or the lock taken only when it is free, the ring otherwise
+ * left to the thread's next return, which this marks, or the timer.
+ * Interrupts are off.
+ */
+void syscall_loop_drain(void);
+
+/**
  * ioctl(2) of the request `request` with the argument `arg` on the
  * descriptor `fd`, as `sys_ioctl` answers it from a frame. The compat
  * ioctl calls it with a translated argument, a kernel buffer the thread's

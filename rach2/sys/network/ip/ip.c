@@ -23,6 +23,7 @@
 #include "../net.h"
 #include "../netconf.h"
 #include "../../proc/ns.h"
+#include "../../proc/process.h"
 #include "../../serial.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
@@ -295,11 +296,12 @@ void ip_hold_forget(struct netdev *nd)
 }
 
 /* The loopback ring: datagrams addressed to this machine, copied whole and
- * delivered by `ip_loop_drain_from`, from the timer tick, the idle wait, or a
- * system call's exit. `loop_head` is the next slot to fill and `loop_tail`
- * the next to deliver; both only grow, so their difference is the queue's
- * depth and a slot is the counter modulo the ring's size. A full ring
- * refuses the datagram, as a full card's ring would.
+ * delivered by `ip_loop_drain_from`, from the timer tick, the idle wait, or
+ * the return to user mode of a thread that put one there (WORK_LOOP).
+ * `loop_head` is the next slot to fill and `loop_tail` the next to deliver;
+ * both only grow, so their difference is the queue's depth and a slot is
+ * the counter modulo the ring's size. A full ring refuses the datagram, as
+ * a full card's ring would.
  *
  * The slots are a power of two: the two counters are 32 bits and wrap, and a
  * size that does not divide 2^32 moves every slot's place at the wrap, which
@@ -420,6 +422,7 @@ int ip_loop_put_parts(const uint8_t *hdr, uint32_t hlen, const uint8_t *payload,
     loop_ring_if[slot] = ifindex;
     loop_ring_ns[slot] = ip_ns;
     loop_head++;
+    proc_work_set(current_proc, WORK_LOOP);
     lo = ip_ns ? ip_ns->lo : netdev_loopback();
     if (lo) {
         lo->tx_packets++;

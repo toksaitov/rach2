@@ -57,8 +57,10 @@ typedef long ptrdiff_t;
  * `K_NOINLINE` keeps a function out of its caller's frame. It is for a helper
  * with a sector buffer or a large record of its own: at -O2 the compiler puts
  * several such buffers in one frame, and the kernel's stack is 16 KiB with a
- * 4 KiB limit on a single frame. TinyCC does not know the attribute and does
- * not inline across functions either, so it is given nothing.
+ * 4 KiB limit on a single frame. It is also for a rare path of a hot caller,
+ * whose registers the caller would otherwise save on every call. TinyCC does
+ * not know the attribute and does not inline across functions either, so it
+ * is given nothing.
  */
 #if defined(RACH2_HOSTTEST)
 #define K_NORETURN

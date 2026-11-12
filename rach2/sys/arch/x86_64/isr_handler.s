@@ -562,8 +562,8 @@ paranoid_entry:
 # flags IA32_FMASK names, IF and DF among them; it has not changed RSP. The
 # entry swaps GS, moves to the thread's kernel stack (struct cpu's
 # kernel_rsp), and builds the frame an interrupt from user mode would have,
-# with the vector SYSCALL_VECTOR, so the router finds the system call
-# handler as it would find a gate's.
+# with the vector SYSCALL_VECTOR, which isr_syscall (isr.c) runs as it runs
+# the frame of an `int $0x80`.
 #
 # The return takes `sysretq` when the frame still describes the return the
 # call made: RCX and R11 equal to RIP and RFLAGS, the user's selectors, no
@@ -600,7 +600,7 @@ syscall_entry:
     pushq %r14
     pushq %r15
     movq %rsp, %rdi
-    call _isr_router
+    call isr_syscall
     movq %rsp, %rdi
     call isr_leave
     movq F_RCX(%rsp), %rcx

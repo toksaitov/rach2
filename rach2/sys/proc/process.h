@@ -190,7 +190,7 @@ struct process {
     fd_table_t *fds;        /* Descriptor table, shared under CLONE_FILES */
     struct fs_struct *fs;   /* Directories and umask, shared under CLONE_FS */
     /* Nonzero in a system call, exit or user-return work, which may sleep
-     * but a timer never preempts. */
+     * but a timer never preempts; PROC_IN_CALL in a system call's body. */
     volatile uint32_t in_syscall;
     /* i686's switch.s reads `regs.esp`, `kernel_stack` and `tls_base` at
      * fixed offsets, so a new field goes at the end of the record.
@@ -734,6 +734,11 @@ struct process {
      * tick then leaves its switch for the fault's end, as in a system call
      * (`sched_preempt`). */
     volatile uint32_t in_fault;
+    /* The work its next system call entry or return to user mode has, a
+     * WORK_ bit each, as Linux's thread flags: set by whoever makes the work,
+     * from any processor (`proc_work_set`), and cleared only by the thread
+     * itself at that return, before it tests what each bit stands for. */
+    volatile unsigned int work;
 #ifdef RACH2_LOCKDEP
     /* The sleeping locks this thread holds, which it keeps across its
      * sleeps, for the lock-order checker (lib/lockdep.c); its spinlocks are
@@ -747,6 +752,83 @@ struct process {
 };
 
 typedef struct process process_t;
+
+/* `in_syscall` in a system call's body, from the dispatcher's entry to its
+ * exit (`_syscall_handler`); other work that a timer must not preempt sets
+ * 1. A hold of the big lock begun in a call that runs without it is
+ * charged to the call by this (`bkl_mark_hold`). */
+#define PROC_IN_CALL 2u
+
+/*
+ * The bits of a thread's `work`. A bit says that what it stands for may be
+ * there, never that it is: whoever makes the work first makes it (sets the
+ * signal flag, the request, the record) and then sets the bit, and the
+ * thread clears its bits and then tests what they stand for, so a bit set
+ * between the two stays for the next return. A system call's entry tests
+ * WORK_ENTRY once and a return to user mode WORK_EXIT once, as Linux's
+ * entry tests its syscall work word and its exit its thread flags
+ * (include/linux/entry-common.h:190-202, 326-328).
+ *
+ * WORK_SIGNAL: signal work, `sig_woken`, a call to restart, a mask to put
+ * back, the tick's signals, a group stop or a tracer (`signal_return_work`).
+ * WORK_RESCHED: `need_resched`. WORK_TRACE: a tracer's PT_SYSCALL or
+ * PT_STEP, whose stops a call takes. WORK_SECCOMP: a seccomp filter, which
+ * judges each call. WORK_RSEQ: `rseq_notify`. WORK_LOOP: datagrams the
+ * thread put on the loopback ring, delivered at its return to user mode.
+ * WORK_DEBUGREG: the processor's debug registers may not be the thread's.
+ * WORK_WAKETIME: a timed wake's record to finish (waketime.h).
+ */
+#define WORK_SIGNAL   0x01u
+#define WORK_RESCHED  0x02u
+#define WORK_TRACE    0x04u
+#define WORK_SECCOMP  0x08u
+#define WORK_RSEQ     0x10u
+#define WORK_LOOP     0x20u
+#define WORK_DEBUGREG 0x40u
+#define WORK_WAKETIME 0x80u
+#define WORK_ENTRY    (WORK_TRACE | WORK_SECCOMP)
+#define WORK_EXIT                                                                      \
+    (WORK_SIGNAL | WORK_RESCHED | WORK_TRACE | WORK_RSEQ | WORK_LOOP | WORK_DEBUGREG | \
+     WORK_WAKETIME)
+
+/** Set the work `bits` on thread `t`, after the work they stand for is
+ * made, from any processor and in any context; a NULL `t` is no one's. A
+ * full barrier. A host test, which links no arch_atomic_cmpxchg, has the
+ * compiler's own atomics. */
+static __inline__ void proc_work_set(process_t *t, unsigned int bits)
+{
+#ifndef RACH2_HOSTTEST
+    unsigned int old;
+#endif
+
+    if (!t) {
+        return;
+    }
+#ifdef RACH2_HOSTTEST
+    (void)__sync_fetch_and_or(&t->work, bits);
+#else
+    do {
+        old = t->work;
+    } while (arch_atomic_cmpxchg(&t->work, old, old | bits) != old);
+#endif
+}
+
+/** Clear the work `bits` of the current thread `t` and return those of them
+ * that were set; a full barrier, so that the tests of the work that
+ * follow see what a setter made before its bit. */
+static __inline__ unsigned int proc_work_take(process_t *t, unsigned int bits)
+{
+#ifdef RACH2_HOSTTEST
+    return __sync_fetch_and_and(&t->work, ~bits) & bits;
+#else
+    unsigned int old;
+
+    do {
+        old = t->work;
+    } while ((old & bits) != 0 && arch_atomic_cmpxchg(&t->work, old, old & ~bits) != old);
+    return old & bits;
+#endif
+}
 
 /* The live processes, first to last; a walk is
  * `for (p = proc_list; p; p = p->next)`. */

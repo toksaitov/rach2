@@ -647,7 +647,7 @@ int bkl_note_ioctl(uint32_t cmd)
 
 void smp_call_end(uint32_t nr, int ioctl, uint64_t start)
 {
-    uint64_t wall = arch_cycles() - start;
+    uint64_t wall = start != 0 ? arch_cycles() - start : 0;
     struct bkl_tally *t = tally_of(nr < BKL_ENTRY_SYSCALLS ? (int)nr : BKL_KEY_BIGCALL);
 
     if (t) {
@@ -693,6 +693,27 @@ void bkl_entry_pop(const struct bkl_entry_saved *saved)
         p->bkl_entry = saved->entry;
         p->bkl_cmd = saved->cmd;
     }
+}
+
+/** The entry key plus one that thread `p` is in, for its holds and the
+ * profile's samples, and its ioctl request in `cmd`: the one its router
+ * pushed (`bkl_entry_push`), or, in the body of a system call that ran
+ * without the big lock and so pushed none, the call's (`isr_call_entry`);
+ * 0 for none. `p` is this processor's current thread. */
+static uint32_t entry_of(const struct process *p, uint32_t *cmd)
+{
+    int key;
+
+    *cmd = 0;
+    if (!p) {
+        return 0;
+    }
+    if (p->bkl_entry != 0 || p->in_syscall != PROC_IN_CALL) {
+        *cmd = p->bkl_cmd;
+        return p->bkl_entry;
+    }
+    key = isr_call_entry(p, cmd);
+    return key < 0 ? 0u : (uint32_t)key + 1u;
 }
 
 /** Count the sample `chain` in the entry `entry`, the ioctl request `cmd`
@@ -750,8 +771,7 @@ void bkl_profile_sample(uintptr_t pc, uintptr_t fp)
         return;
     }
     sample_chain(chain, pc, fp, cpu->current ? cpu->current->kernel_stack : 0);
-    entry = cpu->current ? cpu->current->bkl_entry : 0;
-    cmd = cpu->current ? cpu->current->bkl_cmd : 0;
+    entry = entry_of(cpu->current, &cmd);
     spin_lock(&profile_lock);
     if (!bkl_profile_showing && profile_wants(cpu)) {
         profile_count(chain, entry, cmd);
@@ -1197,15 +1217,17 @@ int32_t smp_long_store(void *data, const char __user *buf, uint32_t len)
 
 /**
  * Name the hold `cpu` begins after the entry its thread is in, the mark
- * `bkl_entry_push` left, so that a hold an entry run without the lock takes
- * counts under that entry; a thread in none, a kernel thread, names none.
- * An ioctl's hold is charged to its request too. A router that took the
- * lock names its own entry after this (`bkl_note_entry`).
+ * `bkl_entry_push` left or the call it runs without the lock (`entry_of`),
+ * so that a hold an entry run without the lock takes counts under that
+ * entry; a thread in none, a kernel thread, names none. An ioctl's hold is
+ * charged to its request too. A router that took the lock names its own
+ * entry after this (`bkl_note_entry`).
  */
 static void bkl_mark_hold(struct percpu *cpu)
 {
     const struct process *p = cpu->current;
-    int key = p ? (int)p->bkl_entry - 1 : -1;
+    uint32_t cmd;
+    int key = (int)entry_of(p, &cmd) - 1;
 
     cpu->bkl_vector = 0;
     cpu->bkl_nr = -1;
@@ -1213,7 +1235,7 @@ static void bkl_mark_hold(struct percpu *cpu)
     if (key == BKL_PROFILE_IOCTL) {
         cpu->bkl_vector = BKL_CALL_VECTOR;
         cpu->bkl_nr = p->orig_nr;
-        cpu->bkl_ioctl = ioctl_slot(p->bkl_cmd);
+        cpu->bkl_ioctl = ioctl_slot(cmd);
     } else if (key >= 0 && key < BKL_ENTRY_SYSCALLS) {
         cpu->bkl_vector = BKL_CALL_VECTOR;
         cpu->bkl_nr = key;
@@ -1304,31 +1326,23 @@ static uint32_t *bkl_frame_word(void)
 
 void bkl_frame_push(int locked)
 {
-    uint32_t flags = kirq_save();
     uint32_t *w = bkl_frame_word();
 
     *w = (*w << 1) | (locked ? 1u : 0u);
-    kirq_restore(flags);
 }
 
 int bkl_frame_pop(void)
 {
-    uint32_t flags = kirq_save();
     uint32_t *w = bkl_frame_word();
     int locked = (int)(*w & 1u);
 
     *w >>= 1;
-    kirq_restore(flags);
     return locked;
 }
 
 int bkl_frame_top(void)
 {
-    uint32_t flags = kirq_save();
-    int locked = (int)(*bkl_frame_word() & 1u);
-
-    kirq_restore(flags);
-    return locked;
+    return (int)(*bkl_frame_word() & 1u);
 }
 
 int bkl_drop(void)

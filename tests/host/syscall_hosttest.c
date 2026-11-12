@@ -2216,6 +2216,34 @@ int usbdisk_pending(void)
     return 0;
 }
 
+/* No USB disk has work for the entry's choice of the big lock. */
+volatile int usbdisk_waiting;
+
+/** The loopback ring is empty in these rows, so the drain at a return to
+ * user mode (`syscall_loop_drain`) takes no lock. */
+int ip_loop_pending(void)
+{
+    return 0;
+}
+
+void ip_loop_drain_from(int from)
+{
+    (void)from;
+}
+
+int bkl_held(void)
+{
+    return 0;
+}
+
+int bkl_try_enter(void)
+{
+    return 0;
+}
+
+void bkl_exit(void)
+{}
+
 int main(void)
 {
     proc.tg = &group;

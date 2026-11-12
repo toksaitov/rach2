@@ -119,6 +119,9 @@ void debugreg_drop(void)
     v = DR7_ONE;
     DR_WRITE(DR7_MODRM, v);
     dr7_live[arch_cpu_id()] = 0;
+    if (current_proc && (current_proc->debugreg[7] & DR7_ENABLES)) {
+        proc_work_set(current_proc, WORK_DEBUGREG);
+    }
 }
 
 /** A single step through the `sysenter` entry is the program's TF, which
@@ -210,6 +213,7 @@ int debugreg_poke(process_t *t, unsigned n, unsigned long v)
             t->debugreg[n] = old;
             return -EINVAL;
         }
+        proc_work_set(t, WORK_DEBUGREG);
     } else if (n == 6) {
         t->debugreg[6] = v;
     } else {
@@ -218,6 +222,7 @@ int debugreg_poke(process_t *t, unsigned n, unsigned long v)
             return -EINVAL;
         }
         t->debugreg[7] = v;
+        proc_work_set(t, WORK_DEBUGREG);
     }
     return 0;
 }

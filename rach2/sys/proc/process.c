@@ -261,6 +261,7 @@ void proc_tick_signal(process_t *p, int signo)
         p->tick_post_linked = 1;
     }
     p->tick_sigs |= 1u << signo;
+    proc_work_set(p, WORK_SIGNAL);
     tick_posts_due = 1;
     spin_unlock_irqrestore(&tick_post_lock, flags);
 }
