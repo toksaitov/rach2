@@ -183,6 +183,20 @@ void sched_idle_loop(void);
 void sched_idle_balance(void);
 
 /**
+ * Mark this processor's idle task awake when an interrupt ends its halt:
+ * from then until it switches to a thread or halts again it runs with
+ * interrupts off, and a wake needs no interrupt to reach it, since its
+ * selection comes next. A kick then turns `idle_poll` to CPU_POLL_KICKED
+ * and sends none (`smp_kick`), as Linux's idle task keeps its polling bit
+ * set outside the halt itself while it is current (kernel/sched/idle.c:257,
+ * 282-290). The switch to a thread clears the mark under the run queues'
+ * lock, and the next halt clears it first and does not halt when a kick
+ * came (`idle_halt`). From the interrupt that ended the halt, with
+ * interrupts off; a thread halted in place is not marked.
+ */
+void sched_idle_awake(void);
+
+/**
  * The tail of a switch, run by the incoming thread on its own stack with
  * interrupts off: where `schedule` returns past `switch_context`, at a
  * forked child's first return (`ret_from_fork`, isr_handler.s) and at a

@@ -21,9 +21,10 @@ struct page_dir;
  * to be dropped. */
 #define CPU_TLB_ALL ((uintptr_t)-1)
 
-/* An idle wait's `idle_poll`: not polling, polling before its halt, or
- * kicked by a wake while it polled, which then sent no interrupt
- * (`smp_kick`). */
+/* An idle task's `idle_poll`: not polling; polling before its halt, or
+ * awake with interrupts off after an interrupt ended it
+ * (`sched_idle_awake`); or kicked by a wake meanwhile, which then sent no
+ * interrupt (`smp_kick`). */
 #define CPU_POLL_NONE   0u
 #define CPU_POLL_ON     1u
 #define CPU_POLL_KICKED 2u
@@ -66,7 +67,7 @@ struct percpu {
     volatile unsigned int admit;                /* CPU_STARTING, ADMITTED or REFUSED */
     volatile int idle_wait;                     /* halted in an idle wait, for a tick to see */
     int tick_may_stop;                          /* its idle task waits: a tick may stop it */
-    volatile unsigned int idle_poll;            /* CPU_POLL_: polling before a halt, or kicked */
+    volatile unsigned int idle_poll;            /* CPU_POLL_: polling or awake, or kicked */
     uint32_t idle_poll_us;                      /* the poll's length now, 0 to IDLE_POLL_MAX_US */
     volatile int in_nmi;                        /* NMIs it is handling, nested */
     volatile unsigned int tlb_request;          /* drop the translations from `tlb_page` */

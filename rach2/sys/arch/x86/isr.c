@@ -1096,12 +1096,16 @@ void isr_leave(isr_params_t *params)
  * takes the lock for signal work or the rseq area, so that a move updates
  * the area and a barrier aborts its section before user code resumes. An
  * interrupt in kernel mode leaves the request for the system call's next
- * scheduling point.
+ * scheduling point. One that ended an idle halt marks the idle task awake
+ * (`sched_idle_awake`), as the device's and the timer's router does.
  */
 void isr_local_router(isr_params_t *params)
 {
     lapic_eoi_enter((uint32_t)params->vector);
     user_entry(params);
+    if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
+        sched_idle_awake();
+    }
     if (params->vector == IPI_VECTOR) {
         lapic_eoi();
         smp_ipi();
@@ -1276,7 +1280,8 @@ int arch_irq_waiting(void)
  * a processor locked up with interrupts off may hold the big lock for good.
  *
  * An interrupt that ended a halt, which it knows by the frame's address,
- * resumes with interrupts off. Otherwise a tick already pending at the
+ * marks the idle task awake (`sched_idle_awake`) and resumes with interrupts
+ * off. Otherwise a tick already pending at the
  * `iret`, which a wait for the big lock longer than a tick makes likely,
  * arrives before the `cli` that follows the halt, and the processor stays in
  * this router, still marked idle, with ready work on its queue.
@@ -1297,6 +1302,7 @@ void _irq_router(isr_params_t *params)
     user_entry(params);
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);
+        sched_idle_awake();
     } else if (params->vector == IRQ_VECTOR(0) && !FRAME_USER(params)) {
         bkl_profile_sample((uintptr_t)FRAME_PC(params), fp);
     }
