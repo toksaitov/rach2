@@ -245,7 +245,9 @@ The kernel's symbol table names the functions.
 A write zeroes the profile and chooses its mode: the whole kernel for a
 write that begins with
 .Ql kernel ,
-and the big lock's holds for any other.
+only while the thread whose ID follows it after a space runs, as in
+.Ql kernel 791 ,
+if one does, and the big lock's holds for any other.
 .It Pa bkl/long
 Mode 0644.
 The latest interrupt sample of each of the last 32 holds of the big lock
