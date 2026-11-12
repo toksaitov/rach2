@@ -2628,3 +2628,10 @@ int main(void)
     printf("exfat_hosttest: %d failure(s)\n", fails);
     return 1;
 }
+
+/** The service point, as the kernel's with interrupts on: the code under
+ * test runs with them on here. */
+void sched_give_way(void)
+{
+    sched_service_point();
+}

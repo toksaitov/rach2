@@ -1205,6 +1205,13 @@ void sched_service_point(void)
     }
 }
 
+/** The service point, as the kernel's with interrupts on: the code under
+ * test runs with them on here. */
+void sched_give_way(void)
+{
+    sched_service_point();
+}
+
 /* The device of the sort rows: more blocks than a sort passes between two
  * service points, 4096, and a batch of them, so that a sort reaches one. It
  * keeps no bytes, only the order of its writes. */
