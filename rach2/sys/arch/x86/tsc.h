@@ -43,14 +43,15 @@ struct tsc_kvm_sample {
 };
 
 /* What `tsc_kvm_sample` found. */
-#define TSC_KVM_NONE    0 /* no page is kept, or KVM has not written this one */
+#define TSC_KVM_NONE    0 /* no page is kept */
 #define TSC_KVM_SAME    1 /* the rate and the bit are the ones last taken */
 #define TSC_KVM_CHANGED 2 /* KVM changed the rate or the bit, now taken */
 
 /**
  * Read the running processor's clock page into `*s`, as Linux's kvm-clock
- * reads each processor's own (kvmclock.c:74-82): KVM's clock there is one
- * clock across processors whether or not their TSCs agree. A rate that does
+ * reads each processor's own (kvmclock.c:74-82), or the boot processor's
+ * while KVM has not written this one's: KVM's clock there is one clock
+ * across processors whether or not their TSCs agree. A rate that does
  * not fit 32 bits keeps the last one and reads as a withdrawn bit. When
  * the rate or the bit changed, they become the ones `tsc_kvm_withdrawn`
  * and `tsc_kvm_stable` give. One processor at a time calls it, the one
@@ -58,9 +59,9 @@ struct tsc_kvm_sample {
  */
 int tsc_kvm_sample(struct tsc_kvm_sample *s);
 
-/** The TSC into `*tsc` and KVM's clock at it into `*ns` from the running
- * processor's page, taking nothing from it; 0, with nothing written, when
- * `tsc_kvm_sample` would find none. With interrupts off. */
+/** The TSC into `*tsc` and KVM's clock at it into `*ns` from the page
+ * `tsc_kvm_sample` reads, taking nothing from it; 0, with nothing written,
+ * when no page is kept. With interrupts off. */
 int tsc_kvm_now(uint64_t *tsc, uint64_t *ns);
 
 /** Whether the pages `tsc_kvm_counts_per_tick` keeps have withdrawn their

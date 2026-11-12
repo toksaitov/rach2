@@ -26,7 +26,8 @@
  * rows check that a scale past 32 bits gives all ones, that a reference
  * that stops gives no calibration, when the TSC is measured at all, and
  * that the clock follows KVM's clock pages (`kvm_rows`), whose time a
- * processor with a TSC ahead or a stop inside a hand-over does not move.
+ * processor with a TSC ahead, a stop inside a hand-over or a hand-over a
+ * minute late does not move, with a platform counter and without one.
  *
  * The rows of the timer between ticks (`hr_rows`) run the APIC timer at
  * 1 GHz, a count a nanosecond, with the clock the timer is programmed from
@@ -753,9 +754,9 @@ static void hr_hold_rows(void)
           "and its interrupt serves it");
 }
 
-/** Make the TSC of 2 GHz the reference, stable by KVM's pages, with the
- * tick in progress beginning now, KVM's clock there and the microsecond
- * clock at 0. */
+/** Start the reference a TSC of 2 GHz, stable by KVM's pages, calls for
+ * (`ref_start`), with the tick in progress beginning now and the
+ * microsecond clock at 0. */
 static void kvm_tsc_start(void)
 {
     uint32_t raw;
@@ -766,9 +767,9 @@ static void kvm_tsc_start(void)
     kvm_stable_model = 1;
     kvm_changed = 0;
     now_floor = 0;
-    ref_take(REF_TSC, 0u);
+    ref_kind = REF_NONE;
+    CHECK(ref_start() && ref_kind == REF_KVM, "KVM's pages make KVM's clock the reference");
     ref.edge = ref_count(&raw);
-    kvm_edge_ns = now_ns;
     ref.frac = 0;
     ref.ticks = 0;
     ref_us_base = 0;
@@ -784,13 +785,14 @@ static int kvm_kept_time(uint32_t us0, uint64_t ns0, uint32_t us1, uint64_t ns1)
 }
 
 /**
- * KVM's clock pages followed at the tick (`ref_follow`), with the PM timer
- * as the platform's counter and a TSC of 2 GHz keeping the clock: a stable
- * bit withdrawn a third of a tick into a tick hands the clock to the PM
- * timer, and the microsecond clock goes on by the time the hand-over took,
- * its device accesses' 5 us each; the PM timer counts the next tick; the
- * bit set again hands the clock back; and a new rate of 2.5 GHz becomes the
- * TSC's counts in a tick, at which the next tick is counted.
+ * KVM's clock pages followed at the tick (`ref_wanted`, `ref_handover`),
+ * with the PM timer as the platform's counter and KVM's clock keeping time:
+ * a stable bit withdrawn a third of a tick into a tick hands the clock to
+ * the PM timer, and the microsecond clock goes on by the time the hand-over
+ * took, its device accesses' 5 us each; the PM timer counts the next tick;
+ * the bit set again hands the clock back; and a new rate of 2.5 GHz becomes
+ * the TSC's counts in a tick, while the next tick is counted by KVM's
+ * clock.
  */
 static void kvm_follow_rows(void)
 {
@@ -816,7 +818,7 @@ static void kvm_follow_rows(void)
     CHECK(kvm_kept_time(us1, ns1, us2, ns2), "a tick later by the PM timer");
     kvm_stable_model = 1;
     kvm_changed = 1;
-    CHECK(timer_tick_clock() == 0 && ref_kind == REF_TSC, "the bit set again hands the clock back");
+    CHECK(timer_tick_clock() == 0 && ref_kind == REF_KVM, "the bit set again hands the clock back");
     us3 = timer_now_us();
     ns3 = now_ns;
     CHECK(kvm_kept_time(us2, ns2, us3, ns3), "again without a step");
@@ -825,10 +827,10 @@ static void kvm_follow_rows(void)
     tsc_base = at - now_ns * tsc_khz / 1000000u;
     kvm_counts_model = 2500000u;
     kvm_changed = 1;
-    CHECK(timer_tick_clock() == 0 && tsc_per_tick == 2500000u && ref.tick == 2500000u,
+    CHECK(timer_tick_clock() == 0 && tsc_per_tick == 2500000u && ref.tick == NS_PER_TICK,
           "a new rate becomes the TSC's counts in a tick");
     now_ns += MS(1);
-    CHECK(timer_tick_clock() == 1, "and the next tick is counted at it");
+    CHECK(timer_tick_clock() == 1, "and the next tick is counted by KVM's clock");
 }
 
 /**
@@ -885,12 +887,70 @@ static void kvm_handover_rows(void)
     kvm_stop_read = 2;
     kvm_stable_model = 1;
     kvm_changed = 1;
-    CHECK(timer_tick_clock() == 100u && ref_kind == REF_TSC,
-          "a stop of 100 ms inside the hand-over back to the TSC counts its 100 ticks");
+    CHECK(timer_tick_clock() == 100u && ref_kind == REF_KVM,
+          "a stop of 100 ms inside the hand-over back to KVM's clock counts its 100 ticks");
     us1 = timer_now_us();
     ns1 = now_ns;
     CHECK(kvm_kept_time(us0, ns0, us1, ns1), "and the microsecond clock keeps the 100 ms");
     kvm_stop_read = 0;
+}
+
+/**
+ * A hand-over after 65 s without a tick: the pass counts the bound's 60 s
+ * by KVM's clock, which keeps the other 5 s behind its edge, and leaves the
+ * hand-over to the next pass, which counts them and hands the clock to the
+ * PM timer; the microsecond clock keeps all 65 s.
+ */
+static void kvm_catchup_rows(void)
+{
+    uint32_t us0, us1;
+    uint64_t ns0, ns1;
+
+    now_ns = MS(500);
+    kvm_tsc_start();
+    us0 = timer_now_us();
+    ns0 = now_ns;
+    now_ns += MS(65000);
+    kvm_stable_model = 0;
+    kvm_changed = 1;
+    CHECK(timer_tick_clock() == REF_DUE_MAX && ref_kind == REF_KVM,
+          "a hand-over 65 s late counts the bound and waits");
+    CHECK(timer_tick_clock() == 5000u && ref_kind == REF_COUNTER,
+          "the next pass counts the other 5 s and hands the clock over");
+    us1 = timer_now_us();
+    ns1 = now_ns;
+    CHECK(kvm_kept_time(us0, ns0, us1, ns1), "and the microsecond clock keeps the 65 s");
+}
+
+/**
+ * KVM's pages with no platform counter: a withdrawn stable bit keeps KVM's
+ * clock the reference, and the tick, counted on a processor whose TSC is a
+ * second ahead of the boot processor's, counts KVM's nanoseconds, so that
+ * the withdrawal counts no tick and the next tick one.
+ */
+static void kvm_alone_rows(void)
+{
+    uint32_t us0, us1;
+    uint64_t ns0, ns1;
+
+    reference(0);
+    now_ns = MS(70000);
+    kvm_tsc_start();
+    now_ns += MS(1.0 / 3.0);
+    us0 = timer_now_us();
+    ns0 = now_ns;
+    kvm_tsc_ahead = 2000000000u;
+    kvm_stable_model = 0;
+    kvm_changed = 1;
+    CHECK(timer_tick_clock() == 0 && ref_kind == REF_KVM,
+          "with no platform counter a withdrawn bit keeps KVM's clock, and a TSC ahead counts no "
+          "tick");
+    now_ns += MS(1);
+    CHECK(timer_tick_clock() == 1, "the next tick is counted by KVM's clock");
+    us1 = timer_now_us();
+    ns1 = now_ns;
+    CHECK(kvm_kept_time(us0, ns0, us1, ns1), "and the microsecond clock goes on without a step");
+    kvm_tsc_ahead = 0;
 }
 
 /** The rows of KVM's clock pages, and the model put back. */
@@ -903,6 +963,8 @@ static void kvm_rows(void)
     tsc_base = 0;
     kvm_follow_rows();
     kvm_handover_rows();
+    kvm_catchup_rows();
+    kvm_alone_rows();
     ref_kind = REF_NONE;
     kvm_counts_model = 0;
     kvm_stable_model = 0;

@@ -217,18 +217,23 @@ uint32_t tsc_kvm_counts_per_tick(void)
     return s.counts;
 }
 
-/** The running processor's page, or NULL when none is kept or KVM has not
- * written it. */
+/** The running processor's page, as Linux's this_cpu_pvti gives it
+ * (kvmclock.c:74-82), or the boot processor's while KVM has not written the
+ * running one's, before `tsc_cpu_setup` registers it; NULL when none is
+ * kept. */
 static struct kvm_clock_page *kvm_clock_here(void)
 {
     struct kvm_clock_page *p;
     int cpu = arch_cpu_id();
 
-    if (!kvm_kept || cpu < 0 || cpu >= NR_CPUS) {
+    if (!kvm_kept) {
         return 0;
     }
+    if (cpu < 0 || cpu >= NR_CPUS) {
+        return kvm_clock_of(0);
+    }
     p = kvm_clock_of(cpu);
-    return p->version != 0 ? p : 0;
+    return p->version != 0 ? p : kvm_clock_of(0);
 }
 
 int tsc_kvm_sample(struct tsc_kvm_sample *s)
