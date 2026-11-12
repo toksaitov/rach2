@@ -67,6 +67,13 @@
  * becomes SIGSEGV, and check that neither notes a fault for a panic's
  * report, which a later plain panic would show.
  *
+ * Four rows give `cow_fault` the entry a second thread's write fault finds
+ * when another fault changed it after this one found it present and
+ * read-only, as the faults of one address space may at once: made writable
+ * by the other's copy, made absent, or its table gone, each of which must
+ * run the resolution again and not end in SIGSEGV; and a present read-only
+ * page that is not copy-on-write, which stays refused.
+ *
  * Returns 0 when every row passes, 1 otherwise.
  */
 
@@ -931,6 +938,43 @@ static void recovered_rows(void)
     cpu_table[0].current = was;
 }
 
+/**
+ * What `cow_fault` answers for the entry it finds when another fault of the
+ * same address space changed it after the caller's look, which found the
+ * page present, read-only and copy-on-write: -1, to resolve again, for a
+ * page made writable, one made absent and one whose table is gone, as
+ * Linux's handle_pte_fault leaves an entry that is not the one it read; 0
+ * for a present read-only page that is not copy-on-write. Each answer comes
+ * before the frame is looked at, so the entries name frame 1.
+ */
+static void cow_race_rows(void)
+{
+    static struct mm mm;
+    page_dir_t *dir = calloc(1, sizeof(*dir));
+    page_table_t *table = calloc(1, sizeof(*table));
+    uintptr_t addr = USER_ADDR_MIN + 0x3000u;
+    uint32_t index = (uint32_t)addr / PAGE_SIZE / 1024u;
+    pte_t *e = &table->pages[MMU_INDEX(addr)];
+
+    dir->logical_page_tables[index] = table;
+    mm.dir = dir;
+    *e = (pte_t)PAGE_SIZE | PTE_P | PTE_U | PTE_W;
+    check(cow_fault(&mm, addr + 0x10u) == -1,
+          "a copy-on-write page another thread's fault made writable after this one found it "
+          "read-only is resolved again, not refused");
+    *e = 0;
+    check(cow_fault(&mm, addr) == -1,
+          "a copy-on-write page made absent after the look is resolved again, not refused");
+    *e = (pte_t)PAGE_SIZE | PTE_P | PTE_U;
+    check(cow_fault(&mm, addr) == 0,
+          "a present read-only page that is not copy-on-write is refused");
+    dir->logical_page_tables[index] = 0;
+    check(cow_fault(&mm, addr) == -1,
+          "a page whose table went after the look is resolved again, not refused");
+    free(table);
+    free(dir);
+}
+
 /** The protection keys are off in the host test, as on a processor without
  * them. */
 int fpu_pkeys(void)
@@ -985,6 +1029,7 @@ int main(void)
     temp_cpu_rows();
     fault_rows();
     recovered_rows();
+    cow_race_rows();
     give_way_rows();
     check(boot_carves == 0, "no row reached the boot allocator after the heap exists");
 
