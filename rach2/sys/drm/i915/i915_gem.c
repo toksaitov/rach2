@@ -372,6 +372,24 @@ static void free_deferred(struct drm_i915_private *i915)
     }
 }
 
+uint32_t i915_gem_free_deferred_atomic(struct drm_i915_private *i915)
+{
+    struct drm_i915_gem_object *obj;
+    struct dma_buf *import;
+    uint32_t freed = 0;
+
+    lockdep_assert_held(&i915->gem.lock);
+    while ((obj = i915->gem.freed) != 0) {
+        i915->gem.freed = obj->free_next;
+        obj->free_next = 0;
+        import = obj->base.import;
+        freed += obj->pages.held;
+        object_release(obj, 0);
+        dma_buf_put(import);
+    }
+    return freed;
+}
+
 /**
  * The `free` of an object, once its last reference goes, which no request
  * the chip has not passed holds. The DRM core has let its fences go by
@@ -379,14 +397,19 @@ static void free_deferred(struct drm_i915_private *i915)
  *
  * A free that takes the GEM lock itself, from GEM_CLOSE, a file's close, a
  * region's release (`vm_file_reap`) or an exit, may sleep in that take, so
- * it undoes the object giving way. A free under a holder's GEM lock, from
- * retirement or a pool's trim, puts the object on `gem.freed`, since that
+ * it undoes the object giving way. Any last put under a holder's GEM lock
+ * puts the object on `gem.freed`: an ioctl's put of the object it looked
+ * up, as each row that I915_GEM_LOCKED wraps makes, EXECBUFFER2's release
+ * of its objects (`eb_release`), retirement's or a pool's trim's, any of
+ * which is the last when another thread closed the handle meanwhile. That
  * holder may be part way through a change that every other thread must see
- * whole; the holder that took the lock undoes it giving way as it lets the
- * lock go (`i915_gem_unlock`). So every free gives way, as Linux sends every
- * free to its worker, which calls cond_resched after each object
- * (gem/i915_gem_object.c:423, 471-472). A free under the shrinker, which may
- * not give way, undoes the object at once with none.
+ * whole; the holder that took the lock undoes the list giving way as it
+ * lets the lock go (`i915_gem_unlock`). So every free gives way, as Linux
+ * sends every free to its worker, which calls cond_resched after each
+ * object (gem/i915_gem_object.c:423, 471-472). A free under the shrinker,
+ * which may not give way, undoes the object at once with none, and the
+ * shrinker undoes the list the same way
+ * (`i915_gem_free_deferred_atomic`).
  */
 static void i915_gem_object_free(struct drm_gem_object *base)
 {
