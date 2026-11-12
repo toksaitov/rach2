@@ -271,13 +271,12 @@ struct kvm_tdp_format {
  * before each entry, since CR8 is the APIC's TPR, or has the processor
  * keep TPR in the APIC's register page itself (`kvm_lapic_page`) and
  * calls `kvm_lapic_update_ppr` when the guest lowers TPR below the
- * priority of the highest vector waiting (`kvm_lapic_highest_irr`).
- * A guest's VMCALL or
- * VMMCALL goes to `kvm_hv_hypercall` while `kvm_hv_hypercall_enabled`; the
- * flush KVM_REQ_TLB_FLUSH asks for must drop the guest's own translations
- * as well, since the Hyper-V TLB flush hypercalls ask for it to flush the
- * guest's TLB. `check_extension` answers
- * the capabilities whose truth depends on the processor, such as
+ * priority of the highest vector waiting (`kvm_lapic_highest_irr`). A
+ * guest's VMCALL or VMMCALL goes to `kvm_hv_hypercall` while
+ * `kvm_hv_hypercall_enabled`; the flush KVM_REQ_TLB_FLUSH asks for must
+ * drop the guest's own translations as well, since the Hyper-V TLB flush
+ * hypercalls ask for it to flush the guest's TLB. `check_extension`
+ * answers the capabilities whose truth depends on the processor, such as
  * KVM_CAP_X86_ROBUST_SINGLESTEP: the value KVM_CHECK_EXTENSION gives, 0
  * for none. `tdp` is the format of its guest-physical entries.
  * `tsc_scaling`, NULL for a backend without it, gives the largest ratio
