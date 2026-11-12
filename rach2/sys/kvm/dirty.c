@@ -118,6 +118,13 @@ int kvm_dirty_reserve_locked(struct kvm_vm *vm, const struct kvm_slot_view *s, u
     return reserve(vm, vm->dirty_ring_size ? kvm_running_vcpu(vm) : NULL, s, gfn, entry);
 }
 
+int kvm_dirty_ring_full(const struct kvm_vcpu *v)
+{
+    uint32_t entries = v->vm->dirty_ring_size / sizeof(struct kvm_dirty_gfn);
+
+    return entries && v->dirty_ring_put - v->dirty_ring_reset >= entries - KVM_DIRTY_RING_RESERVED;
+}
+
 int kvm_dirty_mark(struct kvm_vcpu *v, const struct kvm_slot_view *s, uint64_t gfn)
 {
     struct kvm_vm *vm = v->vm;

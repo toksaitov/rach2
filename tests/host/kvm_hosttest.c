@@ -4464,7 +4464,7 @@ static void dirty_ring_run_rows(void)
     for (i = 0; i < 192; i++) {
         v->dirty_ring[i].flags = KVM_DIRTY_GFN_F_RESET;
     }
-    CHECK(fdio(vm, KVM_RESET_DIRTY_RINGS, 0) == 192 && !dirty_ring_full(v),
+    CHECK(fdio(vm, KVM_RESET_DIRTY_RINGS, 0) == 192 && !kvm_dirty_ring_full(v),
           "reset reports the collected count and allows entry again");
     script_len = script_at = 0;
     scripted(KVM_X_HLT);

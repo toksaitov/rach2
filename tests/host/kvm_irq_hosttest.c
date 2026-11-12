@@ -28,7 +28,8 @@
  * between modes; KVM_GET_LAPIC and KVM_SET_LAPIC with the x2APIC id and
  * the timer's count; KVM_CAP_X2APIC_API's 32-bit ids, high MSI addresses
  * and broadcast quirk; KVM_INTERRUPT's ExtINT; the halted vCPU woken by an
- * interrupt, by its timer's tick, or ended by the signal-work flag alone;
+ * interrupt, by its timer's tick, or ended by the signal-work flag alone,
+ * and a full dirty ring's exit in place of its wait;
  * the split controller's enable, the routes' refusals, a SINT route raising
  * Hyper-V's SynIC, KVM_IRQ_LINE_STATUS and the EOI exit of a
  * level-triggered I/O APIC route, marked by each vCPU's scan before entry
@@ -290,6 +291,16 @@ uint64_t kvm_hv_stimer_next(const struct kvm_vcpu *v)
 {
     (void)v;
     return 0;
+}
+
+/* The dirty ring, which kvm_hosttest checks: full while a row sets
+ * `ring_full`. */
+static int ring_full;
+
+int kvm_dirty_ring_full(const struct kvm_vcpu *v)
+{
+    (void)v;
+    return ring_full;
 }
 
 /* The host processor: the TSC deadline in leaf 1. */
@@ -1050,6 +1061,13 @@ static void halt_rows(void)
     CHECK(v->stat[KVM_VCPU_STAT_SIGNAL_EXITS] == exits + 1 && v->run->exit_reason == KVM_EXIT_INTR,
           "counted as a signal exit, as Linux's kvm_handle_signal_exit");
     caller.sig_woken = 0;
+    ring_full = 1;
+    waits = 0;
+    endless = 0;
+    CHECK(kvm_lapic_prepare(v) == 1 && v->run->exit_reason == KVM_EXIT_DIRTY_RING_FULL &&
+              v->mp_state == KVM_MP_STATE_HALTED && waits == 0 && endless == 0,
+          "a full dirty ring ends the call before the halted wait, the vCPU still halted");
+    ring_full = 0;
     signal(msi_addr(3, 0), msi_data(0x90, 0, 0));
     CHECK(kvm_lapic_prepare(v) == 0 && v->mp_state == KVM_MP_STATE_RUNNABLE,
           "an interrupt wakes it");

@@ -1682,6 +1682,12 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
             v->dirty |= KVM_PART_MP;
             break;
         }
+        if (kvm_dirty_ring_full(v)) {
+            /* The synthetic timers' writes filled the ring; the vCPU stays
+             * halted until the caller resets it and runs again. */
+            v->run->exit_reason = KVM_EXIT_DIRTY_RING_FULL;
+            return 1;
+        }
         r = block(v);
         if (r != 0) {
             v->run->exit_reason = KVM_EXIT_INTR;
