@@ -366,11 +366,12 @@ struct vfs_ops {
     void *(*handle_node)(void *handle);
     /* Move into the buffer cache what the type keeps dirty outside it and
      * has kept since tick `before` or longer, for the flusher (writeback.h),
-     * which writes the cache back after: no flush, and no write of the
-     * device but those the cache makes to free its buffers. Called with the
-     * big lock and admission, as `sync` is, and never with `before` 0. 0,
-     * or -errno, which the type has recorded. NULL for a type that keeps
-     * nothing dirty outside the cache. */
+     * which then writes the device's dirty buffers back, those just moved
+     * among them: no flush, and no write of the device but those the cache
+     * makes to free its buffers. Called with the big lock and admission, as
+     * `sync` is, and never with `before` 0. 1 when something moved, 0 when
+     * nothing was old enough, or -errno, which the type has recorded. NULL
+     * for a type that keeps nothing dirty outside the cache. */
     int (*writeback)(struct vfs_mount *mnt, uint64_t before);
 };
 
@@ -1176,8 +1177,10 @@ int vfs_sync_all(void);
 /** The flusher's half for the mounts (writeback.h): for every active mount
  * that `vfs_sync_all` syncs, the type's `writeback` of what has waited
  * since tick `before`, then the cache's write-back of the device's buffers
- * dirty since mark `since` (`bcache_writeback`), with no flush. A failure
- * is recorded as the type and the cache record it. */
+ * dirty since mark `since` (`bcache_writeback`), or of all of them when the
+ * type moved something into the cache, as Linux writes all of an expired
+ * inode's pages; no flush. A failure is recorded as the type and the cache
+ * record it. */
 void vfs_writeback_all(uint64_t before, uint64_t since);
 
 /**

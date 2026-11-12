@@ -3238,10 +3238,11 @@ void vfs_writeback_all(uint64_t before, uint64_t since)
             vfs_enter(m) != 0) {
             continue;
         }
-        if (before != 0 && m->type->ops->writeback) {
-            (void)m->type->ops->writeback(m, before);
+        if (before != 0 && m->type->ops->writeback && m->type->ops->writeback(m, before) > 0) {
+            (void)bcache_writeback(m->dev, bcache_marks());
+        } else {
+            (void)bcache_writeback(m->dev, since);
         }
-        (void)bcache_writeback(m->dev, since);
         vfs_leave(m);
     }
 }
