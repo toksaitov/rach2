@@ -651,6 +651,8 @@ struct kvm_vcpu {
     uint64_t ucode_rev;            /* MSR_IA32_UCODE_REV, which only the caller writes */
     uint64_t hwcr;                 /* MSR_K7_HWCR: McStatusWrEn and TscFreqSel alone */
     uint64_t power_ctl;            /* MSR_IA32_POWER_CTL, which nothing reads */
+    uint64_t spec_ctrl;            /* IA32_SPEC_CTRL as the guest wrote it */
+    uint64_t virt_spec_ctrl;       /* AMD's VIRT_SPEC_CTRL: SSBD alone */
     uint64_t stat[KVM_VCPU_STATS]; /* by enum kvm_vcpu_stat */
     char stats_id[KVM_STATS_NAME_SIZE];        /* "kvm-PID/vcpu-ID", its maker's */
     uint64_t mce_banks[KVM_MAX_MCE_BANKS * 4]; /* CTL, STATUS, ADDR, MISC of each */
@@ -860,6 +862,18 @@ int32_t kvm_vcpu_ioctl(struct fd_entry *e, uint32_t request, uintptr_t arg);
 
 /* cpuid.c */
 
+/* The speculation controls' bits: leaf 7's EDX, Intel's, and leaf
+ * 0x80000008's EBX, AMD's. Intel's SPEC_CTRL names IBRS and IBPB at once. */
+#define CPUID_7_SPEC_CTRL  (1u << 26)
+#define CPUID_7_STIBP      (1u << 27)
+#define CPUID_7_FLUSH_L1D  (1u << 28)
+#define CPUID_7_SSBD       (1u << 31)
+#define CPUID_X8_IBPB      (1u << 12)
+#define CPUID_X8_IBRS      (1u << 14)
+#define CPUID_X8_STIBP     (1u << 15)
+#define CPUID_X8_SSBD      (1u << 24)
+#define CPUID_X8_VIRT_SSBD (1u << 25)
+
 /** KVM_GET_SUPPORTED_CPUID's entries: up to `max` into `out`, from the
  * host's CPUID less what KVM does not offer a guest, and KVM's own two
  * leaves at KVM_CPUID_SIGNATURE. The count, or -E2BIG when more than `max`
@@ -941,6 +955,16 @@ void kvm_msr_reset(struct kvm_vcpu *v);
  * MISC_ENABLE, which then decides that bit, as Linux's
  * kvm_update_cpuid_runtime. */
 int kvm_msr_guest_mwait(const struct kvm_vcpu *v);
+
+#define MSR_IA32_SPEC_CTRL 0x048u
+
+/** The IA32_SPEC_CTRL the processor holds while `v` runs: the guest's,
+ * with SSBD as well where its VIRT_SPEC_CTRL asks for it. */
+uint64_t kvm_spec_ctrl_guest(const struct kvm_vcpu *v);
+
+/** The host's IA32_SPEC_CTRL on processor `cpu`, 0 where it has none, read
+ * at the first call there: the value an exit puts back. Interrupts off. */
+uint64_t kvm_spec_ctrl_host(int cpu);
 
 /* The failures of an MSR's access, as Linux's KVM_MSR_RET_*: a value or
  * an access refused (Linux's 1), an MSR not kept (KVM_MSR_RET_UNSUPPORTED)

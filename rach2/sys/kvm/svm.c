@@ -1006,21 +1006,35 @@ static void after_run(struct kvm_vcpu *v)
     s->kgs_table = 0;
 }
 
+#ifndef RACH2_HOSTTEST
+/** Put `v`'s IA32_SPEC_CTRL in force on processor `cpu` before an entry
+ * with `in`, or the host's back after the exit without, where the two
+ * differ. Every access of the guest's exits, so the two calls of a run see
+ * one value. */
+static void spec_switch(const struct kvm_vcpu *v, int cpu, int in)
+{
+    uint64_t guest = kvm_spec_ctrl_guest(v), host = kvm_spec_ctrl_host(cpu);
+
+    if (guest != host) {
+        msr_write(MSR_IA32_SPEC_CTRL, in ? guest : host);
+    }
+}
+#endif
+
 /**
- * Run the guest until its next exit, with interrupts off and without the
- * big lock: EFER.SVME and the host save area set on this processor at its
- * first run, an ASID of the processor, the VMCB brought up to date, the
- * guest's FPU, debug registers and TSC_AUX in, VMRUN between VMSAVE and
- * VMLOAD of the host's state with GIF clear; at the exit the host's state
- * back and the exit read. The host's interrupt or NMI that ended the run
- * stays pending through GIF's clear and the restored RFLAGS.IF until the
- * run loop turns interrupts on, as Linux's svm_vcpu_run leaves them; a
- * machine check the run took reaches the host's handler. An entry that
- * injects an event while the NMI window's step is armed ends the step and
- * sends this processor an IPI, so that it exits right after the delivery.
- * While `v->emul.resume` is set no guest runs: the next step of the
- * instruction under way is `exit`'s. 0, or -EIO when SVM cannot be used
- * here.
+ * Run the guest until its next exit, with interrupts off and without the big
+ * lock: EFER.SVME and the host save area set on this processor at its first
+ * run, an ASID of the processor, the VMCB brought up to date, the guest's FPU,
+ * debug registers, TSC_AUX and SPEC_CTRL in, VMRUN between VMSAVE and VMLOAD of
+ * the host's state with GIF clear; at the exit the host's state back and the
+ * exit read. The host's interrupt or NMI that ended the run stays pending
+ * through GIF's clear and the restored RFLAGS.IF until the run loop turns
+ * interrupts on, as Linux's svm_vcpu_run leaves them; a machine check the run
+ * took reaches the host's handler. An entry that injects an event while the NMI
+ * window's step is armed ends the step and sends this processor an IPI, so that
+ * it exits right after the delivery. While `v->emul.resume` is set no guest
+ * runs: the next step of the instruction under way is `exit`'s. 0, or -EIO when
+ * SVM cannot be used here.
  */
 static int svm_enter(struct kvm_vcpu *v)
 {
@@ -1077,6 +1091,7 @@ static int svm_enter(struct kvm_vcpu *v)
         msr_write(MSR_TSC_RATIO, ratio);
         tsc_ratio[cpu] = ratio;
     }
+    spec_switch(v, cpu, 1);
     if (exit_now) {
         lapic_self_ipi(IPI_VECTOR); /* taken as an exit once GIF is set */
     }
@@ -1087,6 +1102,7 @@ static int svm_enter(struct kvm_vcpu *v)
     v->xs_out = arch_cycles();
     kvm_pmu_svm_exit(v);
     svm_in_run[cpu] = 0;
+    spec_switch(v, cpu, 0);
     if (caps.rdtscp && s->tsc_aux != host_aux[cpu]) {
         msr_write(MSR_TSC_AUX, host_aux[cpu]);
     }
