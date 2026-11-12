@@ -13,15 +13,15 @@
 # only while it runs and holds no task; and runs `scratch.pl` with the stems of
 # master's scratch names, here on this checkout's build/tmp and on that of the
 # Mac's release copy, build/machines/mac/tree, with the release runs'
-# directories there that hold no KEPT, and as root on the
-# testing host on its /tmp and on the build/tmp of the owner's copy and of each
-# account's clone, which removes the scratch of tests that were killed before
-# their traps ran. It then runs `leftovers.pl`, through `leftovers` in lib.sh,
-# on the host and here, which removes failed tests' directories, loose scratch
-# in home directories and copies of the repository whose work master has; and
-# runs `store_expire`, which removes the entries of the host's store of step
-# outputs that no copy uses. It runs `tidy` in each worker's clone too, since a
-# loop tidies only while it runs. `outputs` removes what a build or a run makes
+# directories there that hold no KEPT, and as root on the testing host on its
+# /tmp and on the build/tmp of the owner's copy and of each account's clone,
+# which removes the scratch of tests that were killed before their traps ran.
+# It then runs `leftovers.pl`, through `leftovers` in lib.sh, on the host and
+# here, which removes failed tests' directories, loose scratch in home
+# directories and copies of the repository whose work master has; and runs
+# `store_expire`, which removes the entries of the host's store of step outputs
+# that no copy uses. It runs `tidy` in each worker's clone too, since a loop
+# tidies only while it runs. `outputs` removes what a build or a run makes
 # again and what nothing needs once its run has ended: in each tree on the
 # testing host whose loop holds no session, the images, test output and scratch
 # unchanged for a day, but `build/tests/failed`, and the run files of
@@ -29,11 +29,11 @@
 # tooling job directories, case images and scratch, the old shared TMPDIR of
 # the release runs among it, unchanged for a day, but what the record or KEPT
 # of a release run that is live or kept names, and the release runs'
-# directories in build/tmp unchanged for a day that hold no KEPT and whose
-# etude and parts' bash no longer run; each release run, with its files, its
-# etude and its kept directory, of a milestone whose release closed; and here
-# the entries of `build/tests` unchanged for two weeks and the Mac's kept run
-# directories of a milestone whose release closed. The
+# directories in build/tmp unchanged for a day that hold no KEPT, whose etude
+# and parts' bash no longer run and whose parts have ended; each release run,
+# with its files, its etude and its kept directory, of a milestone whose
+# release closed; and here the entries of `build/tests` unchanged for two weeks
+# and the Mac's kept run directories of a milestone whose release closed. The
 # caches, the build copies of the release and of Windows, and the tooling work
 # disks stay. Each removal, and each step's total, is a line on stdout. Each
 # step that reaches the host stops itself after ten minutes. With -a, which
@@ -95,9 +95,11 @@ outputs()
         printf '%s\n' "$stale"
         echo 'b=/d/rach2/build'
         echo "closed=' $(closed | tr '\n' ' ')'"
-        # A run in build/tmp is live while its etude runs or the bash of one
-        # of its parts runs OUT/ID.PART.sh, as stop.sh finds it, and every
-        # run is while Windows cannot say which. Each path that the record or
+        # A run in build/tmp is live while its etude runs, the bash of one
+        # of its parts runs OUT/ID.PART.sh, as stop.sh finds it, or one of
+        # its parts has a script or launch file in OUT and has not ended, as
+        # winclean.sh -l lists it (V12), and every run is while Windows
+        # cannot say which. Each path that the record or
         # KEPT of a live or kept run names, such as a tooling job directory of
         # the cache, which cannot move into the run's directory, goes into
         # keep before any age rule, unless the run's milestone closed its
@@ -106,6 +108,17 @@ outputs()
 nl='
 '
 keep= live=
+# unended ID: succeed when a part of run ID has a script or launch file in
+# OUT and neither a status file nor a stopped file.
+unended()
+{
+    for u in prepare cases; do
+        u=$b/release/$1.$u
+        [ -e "$u.sh" ] || [ -e "$u.launch" ] || continue
+        [ -e "$u.rc" ] || [ -e "$u.stopped" ] || return 0
+    done
+    return 1
+}
 t=$(MSYS_NO_PATHCONV=1 tasklist /NH /FO CSV 2> /dev/null) &&
     t=$t$nl$(MSYS_NO_PATHCONV=1 powershell.exe -NoProfile -NonInteractive -Command \
         "Get-CimInstance Win32_Process -Filter \"Name = 'bash.exe'\" | ForEach-Object { \$_.CommandLine }" \
@@ -115,7 +128,7 @@ for d in $b/tmp/*; do
     id=${d##*/}
     m=${id#milestone}
     case $closed in *" ${m%%-*} "*) continue ;; esac
-    if [ -n "$live" ] && [ ! -e "$d/KEPT" ]; then
+    if [ -n "$live" ] && [ ! -e "$d/KEPT" ] && ! unended "$id"; then
         case $t in *"\"etude-$id.exe\""* | *"/$id.prepare.sh"* | *"/$id.cases.sh"*) ;; *) continue ;; esac
     fi
     keep=$keep$nl$(sed -n 's/^\(made\|removed\|kept\) //p' "$d/record" "$d/KEPT" 2> /dev/null |
@@ -131,6 +144,7 @@ END
         printf '%s\n' 'if [ -n "$live" ]; then' \
             '    for d in $b/tmp/*; do' \
             '        [ ! -e "$d/KEPT" ] || continue' \
+            '        ! unended "${d##*/}" || continue' \
             '        case $t in *"\"etude-${d##*/}.exe\""* | *"/${d##*/}.prepare.sh"* | *"/${d##*/}.cases.sh"*) continue ;; esac' \
             "        stale $days \"\$d\"" \
             '    done' \
