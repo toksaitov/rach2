@@ -1745,6 +1745,43 @@ void ptimer_discard(struct tgroup *tg, uint64_t bits)
     }
 }
 
+/**
+ * The thread `self` ends: the notifications of its process's POSIX timers
+ * that SIGEV_THREAD_ID aims at it, its pending signal of the timer or one
+ * that waits for another sender's signal there (`count`), go with the
+ * thread's pending signals, and so does a live timer's count of the
+ * expirations since its signal was queued (`set_count`), as Linux's
+ * __exit_signal flushes the thread's queue, the timers' sigqueues on it
+ * among them (kernel/exit.c:207, kernel/signal.c:455-465). A deleted
+ * timer's record whose notification goes is freed. Called by the thread,
+ * with the big lock held, before it becomes a zombie, after which a timer's
+ * signal goes to the process (`ptimer_thread`).
+ */
+void ptimer_thread_exit(process_t *self)
+{
+    struct tgroup *tg = self->tg;
+    struct ktimer *t;
+    uint32_t irq;
+
+    if (!tg->timers && !tg->timers_gone) {
+        return;
+    }
+    irq = spin_lock_irqsave(&timer_lock);
+    for (t = tg->timers; t; t = t->in_group) {
+        if (t->notify == SIGEV_THREAD_ID && t->tid == self->pid) {
+            t->count = 0;
+            t->set_count = 0;
+        }
+    }
+    for (t = tg->timers_gone; t; t = t->in_group) {
+        if (t->notify == SIGEV_THREAD_ID && t->tid == self->pid) {
+            t->count = 0;
+        }
+    }
+    gone_defer(gone_reap(tg));
+    timer_unlock(irq);
+}
+
 /** The number of `tg`'s POSIX timers, those deleted whose notifications
  * still wait (`timers_gone`) among them. The caller holds `timer_lock`. */
 static int ptimer_count(const struct tgroup *tg)
@@ -1937,9 +1974,10 @@ long sys_timer_getoverrun(struct isr_params *params)
  * its notification waits for another sender's signal of its number
  * (`ptimer_fire`), keep it on the process's `timers_gone` until that signal
  * is taken and it is posted (`ptimer_rearm`), or it is discarded
- * (`ptimer_discard`), as Linux's sigqueue_free leaves a queued sigqueue to
- * be delivered (kernel/signal.c:1961-1984). The notification keeps only
- * its own overrun, since no delivery forwards a deleted timer. With `keep`,
+ * (`ptimer_discard`, `ptimer_thread_exit`), as Linux's sigqueue_free
+ * leaves a queued sigqueue to be delivered (kernel/signal.c:1961-1984).
+ * The notification keeps only its own overrun, since no delivery forwards
+ * a deleted timer. With `keep`,
  * an expiration the tick counted and left for a holder of the big lock
  * (`ptimer_fire_later`) is signalled first, as Linux signalled it at the
  * expiry; without it, at an exec, whose signals of the timers go, and when

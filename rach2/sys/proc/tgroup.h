@@ -41,7 +41,9 @@ struct tgroup {
     uint64_t pending;      /* signals sent to the process, which any thread takes */
     struct ktimer *timers; /* timer_create's, in the order of their ids */
     /* Deleted POSIX timers whose expirations wait for another sender's
-     * signal of their number to be taken (`ptimer_rearm`). */
+     * signal of their number to be taken, which posts them (`ptimer_rearm`),
+     * or discarded (`ptimer_discard`, `ptimer_thread_exit`); an exec and the
+     * end of the process free them all (`ptimer_delete_all`). */
     struct ktimer *timers_gone;
     /* The siginfo of each signal pending in `pending`, by signal number. */
     struct k_siginfo info[KSIG_MAX + 1];

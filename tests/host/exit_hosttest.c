@@ -189,6 +189,13 @@ void ptrace_exit_notify(process_t *p)
     CHECK(0, "an untraced thread tells no tracer");
 }
 
+/** Check that the timers aimed at the ending thread are let go of before
+ * it is a zombie, whose timers' signals go to its process. */
+void ptimer_thread_exit(process_t *self)
+{
+    CHECK(self->state != PROC_ZOMBIE, "a thread's timers' notifications go before it is a zombie");
+}
+
 /** Check that the POSIX timers deleted are the child's process's. */
 void ptimer_delete_all(struct tgroup *tg)
 {
