@@ -1,0 +1,70 @@
+# unit-subset.list: the subset of unit-tests.list that the KVM suite's case
+# unit-subset-nested runs on the host-svm profile, in that list's format, to
+# set Rach2 beside Linux as the KVM host of the same machine: every test
+# unit-tests.list runs but debug and xapic, which Linux 6.12 as that host did
+# not finish in 900 s, debug after its MOVSS-blocking single step and xapic
+# after nmi-after-sti. It runs in some 15 minutes under Rach2 and 30 under
+# Linux on the testing PC. EXPECT is unit-tests.list's. LINUX is the result of
+# Debian's Linux 6.12.107 as the host of the same machine, run by
+# linuxhost.sh on 2026-11-12, and REASON names Linux's failure and skip
+# where the two differ or Linux fails.
+#
+# NAME EXPECT LINUX REASON
+access pass pass
+access-reduced-maxphyaddr skip skip /sys/module/kvm_intel/parameters/allow_smaller_maxphyaddr not equal to Y
+access_fep skip skip Forced emulation prefix (FEP) not available
+cet skip skip No CET features supported
+emulator pass pass
+eventinj pass pass
+hypercall pass pass
+hyperv_clock pass skip Linux skips it there, since Linux's own clock source as that host is kvm-clock and the test requires tsc
+hyperv_connections fail fail Linux: receive pending message: 0/2, as Rach2
+hyperv_stimer pass pass
+hyperv_stimer_direct pass pass
+hyperv_synic pass pass
+idt_test pass pass
+intel_iommu pass pass
+ioapic pass pass
+kvmclock_test pass pass
+la57 pass fail Linux: la57.c:230: assert failed: write_cr4_safe(read_cr4() | X86_CR4_PCIDE) == 0, as Rach2
+lam pass pass
+memory pass pass
+msr pass pass
+msr64 pass pass
+pcid-asymmetric pass pass
+pcid-disabled pass fail Linux: FAIL: Test on INVPCID when disabled, as Rach2
+pcid-enabled pass pass
+pks skip skip PKS not enabled: the processor has no PKS
+pku skip skip PKU not enabled
+pmu kvm_pmu?hypervisor?fail:pass:skip fail Linux: 22 of 77 fail, every instruction count 2 to 13% high, the six counters together and every overflow; skips without a host PMU
+pmu_lbr kvm_lbr?pass:skip skip Linux's on the testing PC, which offers no LBR format; the Lenovo's Debian passes it with Haswell's 16 records
+pmu_pebs skip skip Linux's on the testing PC; PEBS is not offered, and the Lenovo's Debian reference settles Intel's
+rdpru pass pass
+realmode pass pass
+rmap_chain pass pass
+s3 pass pass
+setjmp pass pass
+sieve pass pass
+smap smap?pass:skip pass SMAP not enabled, on a processor without it, as the Lenovo's i3-4030U
+smptest pass pass
+smptest3 pass pass
+syscall pass pass
+tsc pass pass
+tsc_adjust pass pass
+tsx-ctrl skip skip TSX not available
+umip pass pass
+vmexit_cpuid pass pass
+vmexit_cr0_wp pass pass
+vmexit_cr4_pge pass pass
+vmexit_inl_pmtimer pass pass
+vmexit_ipi pass pass
+vmexit_ipi_halt pass pass
+vmexit_mov_from_cr8 pass pass
+vmexit_mov_to_cr8 pass pass
+vmexit_ple_round_robin pass pass
+vmexit_tscdeadline pass pass
+vmexit_tscdeadline_immed pass pass
+vmexit_vmcall pass pass
+vmware_backdoors skip skip /sys/module/kvm/parameters/enable_vmware_backdoor not equal to Y
+x2apic pass fail Linux: nmi-after-sti and TMCCT should not be reset to TMICT value fail, and the test takes 716 to 849 s
+xsave pass pass

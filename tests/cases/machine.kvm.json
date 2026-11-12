@@ -1560,6 +1560,207 @@
       }
     },
     {
+      "case_id": "machine.kvm.unit-subset-nested",
+      "behavior": "kvm-unit-tests' tests that tests/kvm/unit-subset.list runs, the subset of unit-tests.list that runs in under an hour on the testing PC, give under Rach2's KVM, on the host-svm processor profile, the result the list expects of each, which Linux 6.12 gives as the host of the same machine (tests/kvm/linuxhost.sh)",
+      "units": [
+        "tests/kvm/corpus.sh",
+        "tests/kvm/unit-subset.list",
+        "rach2/sys/kvm",
+        "kvm-unit-tests",
+        "tests/kvm/Readme.md",
+        "tests/cases/machine/kvm_scenario.c"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "runner": "corpus.sh"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {
+          "svm": "present",
+          "npt": "present",
+          "nrip-save": "present",
+          "tsc-scale": "present",
+          "vmcb-clean": "present",
+          "flushbyasid": "present",
+          "pause-filter": "present"
+        },
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "kvm_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the runner runs as root in the guest, which opens /dev/kvm and mounts the data disk",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and no display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "make /tmp/kvm and copy there from the read-only KVM data disk the runners, the lists and the Debian guest"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run corpus.sh unit unit-subset.list as root, through the framed guest channel"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "kvm-payload",
+                "base": "kvm-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "host-svm",
+            "processors": 2,
+            "memory_bytes": 6442450944,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.tscreliable"
+            ],
+            "display": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "as-listed",
+          "checks": "corpus.sh finds each test that unit-subset.list runs to pass or skip as the list expects and prints kvm-corpus: result: pass",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 2000,
+        "memory_bytes": 7516192768,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "kvm-data",
+          "node": "tests/cases/kvm/kvm.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "kvm_scenario",
+          "node": "tests/cases/machine/kvm_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case boots the GNU root in QEMU with the processor profile whose SVM Rach2's KVM uses, which a native run on the Lenovo, a VMX machine, has not"
+      }
+    },
+    {
       "case_id": "machine.kvm.selftests-nested",
       "behavior": "Linux's KVM selftests that tests/kvm/selftests.list runs give under Rach2's KVM, on the host-svm processor profile, the SVM features the testing PC's KVM under WSL gives its guest, the result the list expects of each: a pass, or the kselftest skip where Linux skips it on the testing PC",
       "units": [
