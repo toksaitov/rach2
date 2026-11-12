@@ -137,15 +137,6 @@ uint64_t arch_cycles(void)
     return 0;
 }
 
-/** `n` divided by `d`, the remainder through `rem` unless it is NULL. */
-uint64_t tick_div(uint64_t n, uint32_t d, uint32_t *rem)
-{
-    if (rem) {
-        *rem = (uint32_t)(n % d);
-    }
-    return n / d;
-}
-
 /** Nothing: no process arms a timer of processor time, which would post a
  * signal. */
 void signal_post(process_t *target, int signo)
@@ -335,6 +326,10 @@ void smp_kick(int cpu)
 
 /** Nothing: no row runs the idle task's loop. */
 void arch_irq_disable(void)
+{}
+
+/** Nothing: no row runs an idle wait's poll. */
+void arch_irq_enable(void)
 {}
 
 /** 0: no signal is pending. */
