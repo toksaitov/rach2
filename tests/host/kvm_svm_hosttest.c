@@ -17,8 +17,10 @@
  * the error code only when EXITINTINFO is valid and has one, as Linux's
  * svm_get_exit_info, and 0 for the error bit alone or the valid bit alone.
  * Beside them, the MSR filter's half in SVM: the permission map's bits
- * and the exits of the guest's filtered RDMSR and WRMSR; and the backend's
- * `xsaves`, which follows `kcpu_xsaves_usable`.
+ * and the exits of the guest's filtered RDMSR and WRMSR; the backend's
+ * `fast`, which takes a WRMSR of the TSC deadline with NextRIP and the
+ * local APIC in the kernel, and no other exit; and the backend's `xsaves`,
+ * which follows `kcpu_xsaves_usable`.
  */
 #include "kvm/svm.c"
 
@@ -467,6 +469,52 @@ static void filter_rows(struct kvm_vcpu *v, uint8_t *msrpm)
     sv(v)->msrpm = NULL;
 }
 
+/**
+ * The backend's `fast`: a WRMSR of the TSC deadline with the local APIC in
+ * the kernel and the next RIP saved is stepped past by NextRIP's length
+ * with no exit left to the run loop; a write of another MSR, a read, one
+ * without NextRIP, one under an event's delivery and one without the APIC
+ * in the kernel are `exit`'s, untouched.
+ */
+static void fast_rows(struct kvm_vcpu *v)
+{
+    struct svm_exit *x = &sv(v)->ex;
+    struct kvm_vm vm;
+
+    k_memset(&vm, 0, sizeof(vm));
+    vm.irqchip = KVM_IRQCHIP_SPLIT;
+    v->vm = &vm;
+    x->code = EXIT_MSR;
+    x->info1 = 1;
+    x->next_rip = 0x1002;
+    x->int_info = 0;
+    v->regs.rip = 0x1000;
+    v->regs.rcx = 0x6E0;
+    v->exit.kind = KVM_X_HLT;
+    skipped = 0;
+    CHECK(svm_fast(v) == 1 && skipped == 2 && v->exit.kind == KVM_X_AGAIN,
+          "a WRMSR of the TSC deadline is the fast path's, stepped by NextRIP's length");
+    v->exit.kind = KVM_X_HLT;
+    skipped = 0;
+    v->regs.rcx = MSR_FS_BASE;
+    CHECK(svm_fast(v) == 0 && skipped == 0 && v->exit.kind == KVM_X_HLT,
+          "a WRMSR of another MSR is exit's");
+    v->regs.rcx = 0x6E0;
+    x->info1 = 0;
+    CHECK(svm_fast(v) == 0 && skipped == 0, "and so is an RDMSR of the TSC deadline");
+    x->info1 = 1;
+    x->next_rip = 0;
+    CHECK(svm_fast(v) == 0 && skipped == 0, "and a WRMSR without NextRIP");
+    x->next_rip = 0x1002;
+    x->int_info = EV_VALID | 0x20u;
+    CHECK(svm_fast(v) == 0 && skipped == 0, "and one under an event's delivery");
+    x->int_info = 0;
+    vm.irqchip = KVM_IRQCHIP_NONE;
+    CHECK(svm_fast(v) == 0 && skipped == 0 && v->exit.kind == KVM_X_HLT,
+          "and one without the local APIC in the kernel");
+    v->vm = NULL;
+}
+
 /** SVM lets a guest run XSAVES exactly where the host may use it: on an
  * AMD Zen 1 or Zen 2 without Erratum 1386's fixed microcode the backend's
  * `xsaves` says no, and KVM_GET_SUPPORTED_CPUID offers none. */
@@ -488,6 +536,7 @@ int main(void)
     v->backend = s;
     report_rows(v);
     filter_rows(v, msrpm);
+    fast_rows(v);
     xsaves_rows();
     free(msrpm);
     free(s);
