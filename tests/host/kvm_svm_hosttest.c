@@ -245,6 +245,16 @@ uint64_t kvm_lapic_cr8(struct kvm_vcpu *v)
     (void)v;
     return 0;
 }
+int kvm_lapic_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host)
+{
+    (void)v, (void)index, (void)write, (void)value, (void)host;
+    return 0;
+}
+int kvm_lapic_timer_expire(struct kvm_vcpu *v)
+{
+    (void)v;
+    return 0;
+}
 int kvm_lapic_pending(struct kvm_vcpu *v)
 {
     (void)v;

@@ -447,6 +447,26 @@ static uint32_t tmcct(const struct lapic *l)
     return (uint32_t)(left / tick_ns(l));
 }
 
+/** Put the fixed `vector` into `l`'s IRR, with the trigger mode `trig` in
+ * TMR, while the APIC is enabled, as Linux's __apic_accept_irq does for a
+ * fixed interrupt, but with no kick: 1 when IRR took it, else 0. Safe from
+ * any context. */
+static int set_irr(struct lapic *l, uint32_t vector, uint32_t trig)
+{
+    if (!hw_enabled(l) || !sw_enabled(l)) {
+        l->v->irq_counts[vector & 0xFFu][KVM_VEC_DROP]++;
+        return 0;
+    }
+    if (trig) {
+        vec_set(l, APIC_TMR, vector);
+    } else {
+        vec_clear(l, APIC_TMR, vector);
+    }
+    vec_set(l, APIC_IRR, vector);
+    l->v->irq_counts[vector & 0xFFu][KVM_VEC_ACCEPT]++;
+    return 1;
+}
+
 /**
  * Accept one interrupt into `l`, as Linux's __apic_accept_irq: a fixed or
  * lowest-priority vector into IRR with its trigger mode in TMR, while the
@@ -461,17 +481,9 @@ static int accept(struct lapic *l, uint32_t mode, uint32_t vector, uint32_t leve
         if (trig && !level) {
             return 0;
         }
-        if (!hw_enabled(l) || !sw_enabled(l)) {
-            l->v->irq_counts[vector & 0xFFu][KVM_VEC_DROP]++;
+        if (!set_irr(l, vector, trig)) {
             return 0;
         }
-        if (trig) {
-            vec_set(l, APIC_TMR, vector);
-        } else {
-            vec_clear(l, APIC_TMR, vector);
-        }
-        vec_set(l, APIC_IRR, vector);
-        l->v->irq_counts[vector & 0xFFu][KVM_VEC_ACCEPT]++;
         lapic_kick(l, KVM_REQ_EVENT);
         return 1;
     case KVM_APIC_DM_REMRD:
@@ -522,26 +534,27 @@ void kvm_lapic_pmi(struct kvm_vcpu *v)
     }
 }
 
-/** Deliver the timer's expiry when it is due: the TSC deadline passed, or
- * the count ran out, the periodic count starting again from where it
- * ended, missed periods counted as one, as Linux's pending count does. */
-static void timer_check(struct lapic *l)
+/** Whether the timer's expiry is due, taking it if so: the TSC deadline
+ * passed, which disarms it, or the count ran out, the periodic count
+ * starting again from where it ended, missed periods counted as one, as
+ * Linux's pending count does. */
+static int timer_due(struct lapic *l)
 {
     uint64_t now, n;
 
     if (l->timer_mode == TIMER_DEADLINE) {
         if (l->tscdeadline && guest_tsc(l->v) >= l->tscdeadline) {
             l->tscdeadline = 0;
-            local_deliver(l, APIC_LVTT);
+            return 1;
         }
-        return;
+        return 0;
     }
     if (l->expire_ns == 0) {
-        return;
+        return 0;
     }
     now = kvm_host_ns();
     if (now < l->expire_ns) {
-        return;
+        return 0;
     }
     if (l->timer_mode == TIMER_PERIODIC && l->period_ns) {
         n = (now - l->expire_ns) / l->period_ns + 1u;
@@ -549,7 +562,35 @@ static void timer_check(struct lapic *l)
     } else {
         l->expire_ns = 0;
     }
-    local_deliver(l, APIC_LVTT);
+    return 1;
+}
+
+/** Deliver the timer's expiry when it is due. */
+static void timer_check(struct lapic *l)
+{
+    if (timer_due(l)) {
+        local_deliver(l, APIC_LVTT);
+    }
+}
+
+int kvm_lapic_timer_expire(struct kvm_vcpu *v)
+{
+    struct lapic *l = apic_of(v);
+    uint32_t r;
+
+    if (!l || !timer_due(l)) {
+        return 0;
+    }
+    r = reg_get(l, APIC_LVTT);
+    if ((r & APIC_MODE_MASK) != KVM_APIC_DM_FIXED) {
+        /* Not the timer's own mode: the run loop takes it. */
+        local_deliver(l, APIC_LVTT);
+        return 0;
+    }
+    if (!hw_enabled(l) || (r & APIC_LVT_MASKED)) {
+        return 0;
+    }
+    return set_irr(l, r & APIC_VECTOR_MASK, (r & APIC_LEVEL_TRIG) != 0);
 }
 
 /** The host's ns at which the timer next expires, 0 for none. A TSC

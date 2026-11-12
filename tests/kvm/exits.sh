@@ -9,7 +9,8 @@
 # As root. On Rach2 the counts are those of /sys/kernel/debug/kvm/exit_stats,
 # cleared before COMMAND, with the cycles of each code's parts: its wait for
 # the big lock, its handling with the next entry's preparation in it, and
-# the entry, the run and the exit before it; on Linux, those of a histogram
+# the entry, the run and the exit before it, and the exits the backend's
+# fast path took; on Linux, those of a histogram
 # trigger on the kvm:kvm_exit trace event keyed by its exit reason, set
 # before COMMAND and removed after, with the totals of /sys/kernel/debug/kvm.
 # Either way every guest of the machine is counted, so nothing else may run
@@ -20,7 +21,7 @@
 #   kvm-exits: backend vmx|svm tsc_khz KHZ
 #   kvm-exits: code CODE exits N [kernel K user U wait_cycles W
 #       handle_cycles H prepare_cycles P entry_cycles E run_cycles R
-#       exit_cycles X] NAME
+#       exit_cycles X fast F] NAME
 #   kvm-exits: total: N exits in S s
 #   kvm-exits: debugfs: exits D
 #
@@ -76,12 +77,12 @@ echo "kvm-exits: kernel: $kind $(uname -r)"
 if [ "$kind" = rach2 ]; then
     awk -v secs=$((end - start)) '
         NR > 2 {
-            name = $11
-            for (i = 12; i <= NF; i++)
+            name = $12
+            for (i = 13; i <= NF; i++)
                 name = name " " $i
             printf "kvm-exits: code %s exits %s kernel %s user %s wait_cycles %s handle_cycles %s " \
-                   "prepare_cycles %s entry_cycles %s run_cycles %s exit_cycles %s %s\n",
-                   $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, name
+                   "prepare_cycles %s entry_cycles %s run_cycles %s exit_cycles %s fast %s %s\n",
+                   $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, name
             total += $2
         }
         NR == 1 { print "kvm-exits: " $0 }

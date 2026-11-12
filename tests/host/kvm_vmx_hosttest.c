@@ -953,6 +953,14 @@ uint64_t kvm_lapic_run_bound(struct kvm_vcpu *v, uint64_t max)
     return max;
 }
 
+/** vlapic.c's delivery of the APIC timer's expiry from the fast path: no
+ * timer is armed here, so none is due. */
+int kvm_lapic_timer_expire(struct kvm_vcpu *v)
+{
+    (void)v;
+    return 0;
+}
+
 /* The APIC's register page of the vCPU of a VM with the local APIC in the
  * kernel, vlapic.c's, for the one such vCPU a row runs at a time: TPR at
  * 0x80, which the guest's MOV to CR8 writes without an exit under the TPR
@@ -5287,10 +5295,10 @@ static size_t length(const char *s)
     return len;
 }
 
-/** The line of kvm/exit_stats in `text` whose code is `code`, its nine
+/** The line of kvm/exit_stats in `text` whose code is `code`, its ten
  * counts after the code read into `n`: 1 when it is there whole, with the
  * name `name` last, and 0 otherwise. */
-static int stat_line(const char *text, const char *code, const char *name, uint64_t n[9])
+static int stat_line(const char *text, const char *code, const char *name, uint64_t n[10])
 {
     const char *p = text;
     size_t len = length(code), i;
@@ -5302,7 +5310,7 @@ static int stat_line(const char *text, const char *code, const char *name, uint6
         return 0;
     }
     p += len;
-    for (i = 0; i < 9; i++) {
+    for (i = 0; i < 10; i++) {
         if (*p++ != ' ' || *p < '0' || *p > '9') {
             return 0;
         }
@@ -5318,19 +5326,19 @@ static int stat_line(const char *text, const char *code, const char *name, uint6
  * kvm/exit_stats through the VMX backend: a CPUID exit the kernel handles,
  * then a HLT for the caller. Each line gives, in this order, the code, the
  * exits, those handled in the kernel, those that ended KVM_RUN, the wait,
- * the handling and its preparation, and the entry, run and exit the backend
+ * the handling and its preparation, the entry, run and exit the backend
  * timed around VMLAUNCH and VMRESUME, which the model's TSC steps make 3,
- * 1000 and 7 cycles.
+ * 1000 and 7 cycles, and the exits the fast path took.
  */
 static void exitstat_rows(void)
 {
     static const char columns[] = "\ncode exits kernel user wait_cycles handle_cycles "
-                                  "prepare_cycles entry_cycles run_cycles exit_cycles name\n";
+                                  "prepare_cycles entry_cycles run_cycles exit_cycles fast name\n";
     static char buf[2048];
     struct kvm_userspace_memory_region region = {0, 0, 0, sizeof(ram), 0};
     unsigned int was_cpu = host_cpu;
     const char *nl;
-    uint64_t n[9];
+    uint64_t n[10];
     int32_t len;
     int vm, fd;
 
@@ -5353,13 +5361,13 @@ static void exitstat_rows(void)
     for (nl = buf; *nl && *nl != '\n'; nl++) {
     }
     CHECK(same(buf, "backend vmx tsc_khz ", 20) && same(nl, columns, sizeof(columns) - 1u),
-          "kvm/exit_stats names its backend and its ten columns, in order");
+          "kvm/exit_stats names its backend and its eleven columns, in order");
     CHECK(stat_line(buf, "0xa", "CPUID", n) && n[0] == 1 && n[1] == 1 && n[2] == 0 && n[6] == 3 &&
-              n[7] == 1000 && n[8] == 7,
+              n[7] == 1000 && n[8] == 7 && n[9] == 0,
           "CPUID's line: one exit, handled in the kernel, whose run's entry, run and exit "
-          "took 3, 1000 and 7 cycles");
+          "took 3, 1000 and 7 cycles, and none on the fast path");
     CHECK(stat_line(buf, "0xc", "HLT", n) && n[0] == 1 && n[1] == 0 && n[2] == 1 && n[5] == 0 &&
-              n[6] == 3 && n[7] == 1000 && n[8] == 7,
+              n[6] == 3 && n[7] == 1000 && n[8] == 7 && n[9] == 0,
           "HLT's line: one exit that ended KVM_RUN, with no preparation, and the same three");
     exitstat_ops->store(exitstat_data, (const char __user *)"0", 1);
     fdclose(fd);

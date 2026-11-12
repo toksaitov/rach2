@@ -717,19 +717,37 @@ static int32_t run_exit(struct kvm_vcpu *v)
     return 1;
 }
 
+/** Whether the run loop has work before `v`'s next entry that the fast
+ * path cannot do, as Linux's kvm_vcpu_exit_request (arch/x86/kvm/x86.c:
+ * 1715-1720) ends its fast path for a request, a signal or a switch the
+ * scheduler asked for: a request the loop answers, the flags of a signal
+ * and of a switch, which `run_signal` and `sched_take_preempt` read, a
+ * PMI the last run left, which `kvm_pmu_prepare` delivers, and the
+ * caller's wait for an interrupt window, which the loop reports after each
+ * exit it handles. With interrupts off, the vCPU IN_GUEST. */
+static int fast_ends(struct kvm_vcpu *v)
+{
+    return (v->requests & KVM_REQ_NOENTER) || *(volatile uint32_t *)&current_proc->sig_woken ||
+           current_proc->need_resched || v->pmu.pmi ||
+           (v->vm->irqchip == KVM_IRQCHIP_SPLIT && v->run->request_interrupt_window);
+}
+
 /**
- * Enter the guest once, with interrupts off, as the backend's `enter`
- * needs: 0, -EAGAIN when a request came between the check and the entry,
- * or the backend's error. The vCPU is IN_GUEST from before its requests
- * are read, so a kick that comes after the read finds it there and
- * interrupts the processor, as Linux's vcpu_enter_guest sets
- * IN_GUEST_MODE before kvm_vcpu_exit_request (arch/x86/kvm/x86.c:10491,
- * 10519). A request the loop has not taken cancels the entry
- * (KVM_REQ_NOENTER): one that a kick set after the loop's look would
- * otherwise wait for the next exit. The last exit's account closes as
- * handled in the kernel only once the guest ran; after -EAGAIN or an
- * error it stays open, and closes as one that ended KVM_RUN if KVM_RUN
- * returns before the next entry.
+ * Enter the guest, with interrupts off, as the backend's `enter` needs,
+ * until an exit its `fast` does not handle or one after which the loop has
+ * work (`fast_ends`), as Linux's vcpu_enter_guest enters again from its
+ * fast path (arch/x86/kvm/x86.c:10578-10597): 0 for an exit the backend's
+ * `exit` names, 1 for one `fast` handled, -EAGAIN when a request came
+ * between the check and the first entry, or the backend's error. The vCPU
+ * is IN_GUEST from before its requests are read, so a kick that comes
+ * after the read finds it there and interrupts the processor, as Linux's
+ * vcpu_enter_guest sets IN_GUEST_MODE before kvm_vcpu_exit_request
+ * (x86.c:10491, 10519); it stays IN_GUEST across the fast path's entries.
+ * A request the loop has not taken cancels the entry (KVM_REQ_NOENTER):
+ * one that a kick set after the loop's look would otherwise wait for the
+ * next exit. The last exit's account closes as handled in the kernel only
+ * once the guest ran; after -EAGAIN or an error it stays open, and closes
+ * as one that ended KVM_RUN if KVM_RUN returns before the next entry.
  */
 static int32_t run_enter(struct kvm_vcpu *v)
 {
@@ -746,12 +764,24 @@ static int32_t run_enter(struct kvm_vcpu *v)
         return -EAGAIN;
     }
     v->has_run = 1;
-    entry = arch_cycles();
-    r = kvm_backend->enter(v);
-    v->mode = KVM_MODE_OUTSIDE;
-    if (r == 0) {
+    for (;;) {
+        entry = arch_cycles();
+        r = kvm_backend->enter(v);
+        if (r != 0) {
+            break;
+        }
         kvm_exitstat_exit(v, entry, arch_cycles());
+        if (!kvm_backend->fast || !kvm_backend->fast(v)) {
+            break;
+        }
+        r = 1;
+        if (fast_ends(v)) {
+            break;
+        }
+        kvm_exitstat_fast(v);
+        v->stat[KVM_VCPU_STAT_EXITS]++;
     }
+    v->mode = KVM_MODE_OUTSIDE;
     kirq_restore(flags);
     return r;
 }
@@ -975,13 +1005,15 @@ static int32_t run_loop(struct kvm_vcpu *v)
         if (r == -EAGAIN) {
             continue;
         }
-        if (r != 0) {
+        if (r < 0) {
             return r;
         }
         v->stat[KVM_VCPU_STAT_EXITS]++;
-        r = kvm_backend->exit ? kvm_backend->exit(v) : -EOPNOTSUPP;
-        if (r != 0) {
-            return r;
+        if (r == 0) {
+            r = kvm_backend->exit ? kvm_backend->exit(v) : -EOPNOTSUPP;
+            if (r != 0) {
+                return r;
+            }
         }
         r = run_exit(v);
         if (r == 0) {
