@@ -286,7 +286,8 @@ at most 64;
 .Dv VIRTGPU_CONTEXT_PARAM_POLL_RINGS_MASK ,
 within the rings; and
 .Dv VIRTGPU_CONTEXT_PARAM_DEBUG_NAME ,
-its first 63 bytes kept.
+its first 63 bytes kept, an empty name too; without it the context takes
+the calling thread's name.
 Nothing takes effect unless every parameter is accepted.
 .El
 .Ss Device loss

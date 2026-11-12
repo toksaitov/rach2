@@ -854,7 +854,8 @@ static void row_context(void)
     v[4] = UPTR("y");
     CHECK(context_init(&file2, 5, p, v) == -EINVAL, "more than four parameters are refused");
     CHECK(three.creates == creates && !ctx->created && !ctx->context_init && !ctx->num_rings &&
-              !ctx->ring_mask && !ctx->base_fence_ctx && !ctx->debug_name[0],
+              !ctx->ring_mask && !ctx->base_fence_ctx && !ctx->explicit_debug_name &&
+              !ctx->debug_name[0],
           "a refused CONTEXT_INIT creates nothing and changes nothing");
     k_memset(long_name, 'n', sizeof(long_name) - 1);
     v[0] = UPTR(long_name);
@@ -865,8 +866,15 @@ static void row_context(void)
     close_file(&file2);
 
     open_file(&file2);
-    CHECK(context_init(&file2, 0, p, v) == 0 && !strcmp(three.name, "rach2"),
-          "CONTEXT_INIT with no parameters makes the default context");
+    CHECK(context_init(&file2, 0, p, v) == 0 && !strcmp(three.name, "vkcube"),
+          "CONTEXT_INIT with no parameters makes the default context, named for the thread");
+    close_file(&file2);
+
+    open_file(&file2);
+    p[0] = VIRTGPU_CONTEXT_PARAM_DEBUG_NAME;
+    v[0] = UPTR("");
+    CHECK(context_init(&file2, 1, p, v) == 0 && three.name[0] == 0,
+          "an empty name given is sent empty, not as the thread's");
     close_file(&file2);
     blob_unbind("the context row leaves nothing");
 }
@@ -1181,6 +1189,7 @@ static void row_copied(void)
 int main(void)
 {
     current_proc = &self;
+    k_memcpy(self.comm, "vkcube", sizeof("vkcube"));
     row_params();
     row_host();
     row_guest();

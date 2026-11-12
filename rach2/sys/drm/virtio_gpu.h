@@ -630,7 +630,8 @@ struct vgpu_context {
     uint32_t num_rings;                   /* 0 when CONTEXT_INIT gave none */
     uint64_t ring_mask;                   /* rings whose fences send the file an event */
     uint64_t base_fence_ctx;              /* 0 when there are no rings */
-    char debug_name[VGPU_DEBUG_NAME_MAX]; /* "" for the default */
+    int explicit_debug_name;              /* CONTEXT_INIT gave a name, "" too */
+    char debug_name[VGPU_DEBUG_NAME_MAX]; /* the name CONTEXT_INIT gave */
 };
 
 struct virtio_gpu_device {

@@ -901,6 +901,7 @@ int32_t vgpu_context_init_ioctl(struct drm_device *dev, void *data, struct drm_f
     ctx->ring_mask = c.mask;
     if (c.name_set) {
         k_memcpy(ctx->debug_name, c.name, sizeof(ctx->debug_name));
+        ctx->explicit_debug_name = 1;
     }
     return vgpu_context_ensure(vg, file);
 }
