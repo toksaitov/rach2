@@ -627,7 +627,9 @@ static int command_set(const struct kvm_vcpu *v, uint32_t index, uint64_t value,
  * caller with `host` or the guest: SPEC_CTRL, which the backend loads
  * around each run and every access of which exits, PRED_CMD and FLUSH_CMD,
  * which only take a write, and SVM's VIRT_SPEC_CTRL, whose SSBD the backend
- * adds to SPEC_CTRL while the guest runs. As Linux's svm_get_msr,
+ * carries out while the guest runs through the mechanism the host has:
+ * SPEC_CTRL, the host's own VIRT_SPEC_CTRL or LS_CFG, and skips on a host
+ * with none, as Linux's x86_virt_spec_ctrl. As Linux's svm_get_msr,
  * svm_set_msr (svm/svm.c:2987-3002, 3120-3156) and vmx's: a guest's access
  * needs the CPUID that offers the register, and SPEC_CTRL takes a value the
  * host's register takes. 0, KVM_MSR_INVAL, or 1 when `index` is none of
