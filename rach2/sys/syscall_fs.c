@@ -4950,7 +4950,12 @@ static void open_done(int fd, const char *name, int flags)
  * and `entry` for, in the slot `fd` it reserved, made as `open_install`
  * makes one for a read-only open of a mounted type: the description takes
  * the hold, the record and a reference on the mount, and the entry is
- * published last. The descriptor, or a negative errno with everything
+ * published last. What `open_done` does for such an open, the description's
+ * watch flags and inotify's report of the open, under the big lock while a
+ * watch exists, is done to the description before the entry is published,
+ * as Linux's `vfs_open` reports the open before `fd_install` (fs/open.c):
+ * once published, another thread may close the descriptor and open another
+ * file in its slot. The descriptor, or a negative errno with everything
  * given back.
  */
 static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry, int fd,
@@ -4983,6 +4988,13 @@ static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry
     }
     e->node = NULL;
     e->type = (st->mode & S_IFMT) == S_IFDIR ? FD_TYPE_DIR : FD_TYPE_FILE;
+    e->ofd->watch_flags = OFD_WATCH_OPEN | (e->type == FD_TYPE_DIR ? OFD_WATCH_DIR : 0u);
+    if (inotify_watches) {
+        bkl_enter();
+        open_record_parent(e->ofd, name);
+        inotify_desc(e->ofd, IN_OPEN);
+        bkl_exit();
+    }
     fd_install(current_proc->fds, fd);
     return fd;
 }
@@ -4999,7 +5011,8 @@ static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry
  * descriptor is reserved before the walk, as `do_open` reserves it. The
  * descriptor or a negative errno; or CALL_LOCKED with nothing done, for
  * every other open, which `do_open` makes under the big lock. inotify's
- * report of the open takes the big lock while a watch exists.
+ * report of the open takes the big lock while a watch exists
+ * (`open_install_unlocked`).
  */
 static int32_t open_unlocked(int dirfd, const char __user *upath, int flags)
 {
@@ -5056,17 +5069,6 @@ static int32_t open_unlocked(int dirfd, const char __user *upath, int flags)
         return rc;
     }
     rc = open_install_unlocked(&ref, entry, fd, name, flags, &st);
-    if (rc >= 0) {
-        int big = inotify_watches != 0;
-
-        if (big) {
-            bkl_enter();
-        }
-        open_done(rc, name, flags);
-        if (big) {
-            bkl_exit();
-        }
-    }
     path_buf_put(path);
     return rc;
 }
