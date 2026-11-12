@@ -469,10 +469,11 @@ static struct bbuf *take_empty(void)
     return b;
 }
 
-/** An unheld buffer off the cache's lists and back to the heap: a clean
- * keyed one, or an empty one the caller has taken off the empties;
- * `cache_spin` is held. */
-static void buffer_free(struct bbuf *b)
+/** An unheld buffer off the cache's lists and onto `*reap`, through its
+ * `next`, for `buffers_reap` to give back to the heap once `cache_spin` is
+ * let go: a clean keyed one, or an empty one the caller has taken off the
+ * empties; `cache_spin` is held. */
+static void buffer_unlink(struct bbuf *b, struct bbuf **reap)
 {
     stat_visits++;
     if (b->prev) {
@@ -486,8 +487,61 @@ static void buffer_free(struct bbuf *b)
     nbufs--;
     index_del(b);
     lru_del(b);
-    kfree_pages(b->data, 1);
-    kfree(b);
+    b->prev = 0;
+    b->next = *reap;
+    *reap = b;
+}
+
+/** Give the buffers `buffer_unlink` put on `*reap` back to the heap, with
+ * `cache_spin` let go, since a free of a page flushes every processor's
+ * translations (`kfree_pages`), as Linux frees what its LRU scan isolated
+ * after it lets `lru_lock` go (mm/vmscan.c:1966-1985). */
+static void buffers_reap(struct bbuf **reap)
+{
+    while (*reap) {
+        struct bbuf *b = *reap;
+
+        *reap = b->next;
+        kfree_pages(b->data, 1);
+        kfree(b);
+    }
+}
+
+/* The buffers a walk of the release order or the empties reads in one hold
+ * of `cache_spin`, which keeps interrupts off, before it lets the lock go:
+ * Linux's LRU scan takes SWAP_CLUSTER_MAX pages at a time under `lru_lock`
+ * (mm/vmscan.c:5729). */
+#define WALK_BATCH 32
+
+/** Whether `b` is on the release order, which a buffer made empty or freed
+ * leaves; `cache_spin` is held. */
+static int on_lru(const struct bbuf *b)
+{
+    return b->lru_prev != 0 || lru_head == b;
+}
+
+/**
+ * Let `cache_spin`, taken with `flags`, go between two batches of a walk,
+ * and take it again: `keep`, the buffer the walk goes on from, or NULL, is
+ * counted among its waiters meanwhile, so that no shrink frees it, and the
+ * buffers on `*reap`, when `reap` is not NULL, go back to the heap. Returns
+ * the flags of the new take. The walk reads `keep` again under the lock,
+ * since anything may have changed it but its address.
+ */
+static uint32_t walk_pause(struct bbuf *keep, struct bbuf **reap, uint32_t flags)
+{
+    if (keep) {
+        keep->waiters++;
+    }
+    cache_unlock(flags);
+    if (reap) {
+        buffers_reap(reap);
+    }
+    flags = cache_lock();
+    if (keep) {
+        keep->waiters--;
+    }
+    return flags;
 }
 
 /** The pid that holds a buffer for the caller: the current process, or 0
@@ -1275,25 +1329,32 @@ static int victim_fit(const struct bbuf *b, block_device_t *filling, struct firs
  * then reads the buffer it takes and those it passes over, and a buffer
  * that stays unfit, such as one whose device fails its writes, costs a
  * read for each turn of the whole cache and not one for every miss. The
- * search stops at the first buffer it moved, which means every buffer was
- * passed over. `cache_spin` is held, and the big lock, which the tests of a
- * dirty buffer read under.
+ * search stops once `*passed`, the buffers the caller's search has passed
+ * over, reaches the count of buffers, which means every buffer was passed
+ * over. It reads at most WALK_BATCH buffers in one call and then answers
+ * NULL with `*more` set, for the caller to let `cache_spin` go and search
+ * again, as Linux's LRU scan goes a batch at a time. `cache_spin` is held,
+ * and the big lock, which the tests of a dirty buffer read under.
  */
-static struct bbuf *victim_find(block_device_t *filling)
+static struct bbuf *victim_find(block_device_t *filling, uint32_t *passed, int *more)
 {
     struct first_ask ask = {0, 0};
-    struct bbuf *b, *moved = 0;
+    struct bbuf *b;
+    int n = 0;
 
-    while ((b = lru_head) != 0 && b != moved) {
+    *more = 0;
+    while ((b = lru_head) != 0 && *passed < nbufs) {
+        if (n++ == WALK_BATCH) {
+            *more = 1;
+            return 0;
+        }
         stat_visits++;
         if (victim_fit(b, filling, &ask)) {
             return b;
         }
         lru_del(b);
         lru_add_tail(b);
-        if (!moved) {
-            moved = b;
-        }
+        (*passed)++;
     }
     return 0;
 }
@@ -1505,8 +1566,8 @@ static void key_held(struct bbuf *b, block_device_t *dev, uint64_t blk)
 static struct bbuf *get(block_device_t *dev, uint64_t blk, int blank, int *fresh)
 {
     struct bbuf *victim, *b;
-    uint32_t flags;
-    int big = 0, filled = blank;
+    uint32_t flags, passed = 0;
+    int big = 0, filled = blank, more;
 
     if (fresh) {
         *fresh = 0;
@@ -1550,7 +1611,11 @@ again:
             victim = buffer_new();
         }
         if (!victim) {
-            victim = victim_find(dev);
+            victim = victim_find(dev, &passed, &more);
+            if (more) {
+                cache_unlock(flags);
+                goto again;
+            }
         }
         if (!victim) {
             cache_unlock(flags);
@@ -1562,6 +1627,7 @@ again:
             if (victim->order != BCACHE_ORDER_AFTER || write_firsts(victim->dev) == 0) {
                 (void)write_one(victim, 0);
             }
+            passed = 0;
             goto again;
         }
     }
@@ -2274,12 +2340,22 @@ int bcache_device_holds(block_device_t *dev)
 
 /** The least recently released dirty buffer the shrink may write and
  * free, or NULL: unheld, unwaited for, and one the eviction too could
- * write. `cache_spin` is held, and the big lock. */
-static struct bbuf *shrink_dirty(void)
+ * write. `cache_spin` is held, taken with `*flags`, and let go every
+ * WALK_BATCH buffers (`walk_pause`); the walk ends where the buffer it
+ * goes on from has left the release order meanwhile. The big lock is
+ * held. */
+static struct bbuf *shrink_dirty(uint32_t *flags)
 {
     struct bbuf *b;
+    uint32_t n = 0;
 
     for (b = lru_head; b; b = b->lru_next) {
+        if (++n % WALK_BATCH == 0) {
+            *flags = walk_pause(b, 0, *flags);
+            if (!on_lru(b)) {
+                return 0;
+            }
+        }
         stat_visits++;
         if (!b->dirty || b->holder != -1 || b->waiters > 0) {
             continue;
@@ -2308,42 +2384,63 @@ static struct bbuf *shrink_dirty(void)
  * under `cache_spin` again, it is clean and nobody holds it or waits for
  * it, since a reader may have taken it once its write let it go. The
  * caller holds the big lock, as reclaim does.
+ *
+ * The walks let `cache_spin` go every WALK_BATCH buffers, and the buffers
+ * are given back to the heap with it let go (`walk_pause`,
+ * `buffers_reap`), as Linux's LRU scan isolates a batch under `lru_lock`
+ * and frees it after (mm/vmscan.c:1966-1985, 5729). The walk of the
+ * empties goes on from the last buffer it passed over, kept meanwhile,
+ * whose link ends the walk once a get took it off the empties; that of the
+ * release order ends where the buffer it goes on from left the order.
  */
 uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
 {
     struct bbuf **link = &empties;
-    struct bbuf *b, *next;
-    uint32_t got = 0, flags;
+    struct bbuf *b, *next, *at = 0, *reap = 0;
+    uint32_t got = 0, flags, n = 0;
     int budget = (int)nbufs * 2;
 
     flags = cache_lock();
     while (got < want && *link) {
+        if (++n % WALK_BATCH == 0) {
+            flags = walk_pause(at, &reap, flags);
+            link = at ? &at->empty_next : &empties;
+            continue;
+        }
         b = *link;
         stat_visits++;
         if (b->holder != -1 || b->waiters > 0) {
+            at = b;
             link = &b->empty_next;
             continue;
         }
         *link = b->empty_next;
         b->empty_next = 0;
-        buffer_free(b);
+        buffer_unlink(b, &reap);
         got++;
     }
+    n = 0;
     for (b = lru_head; b && got < want; b = next) {
         next = b->lru_next;
         stat_visits++;
-        if (b->dirty || b->holder != -1 || b->waiters > 0) {
-            continue;
+        if (!b->dirty && b->holder == -1 && b->waiters == 0) {
+            buffer_unlink(b, &reap);
+            got++;
         }
-        buffer_free(b);
-        got++;
+        if (++n % WALK_BATCH == 0 && next) {
+            flags = walk_pause(next, &reap, flags);
+            if (!on_lru(next)) {
+                break;
+            }
+        }
     }
     cache_unlock(flags);
+    buffers_reap(&reap);
     while (can_write && got < want && budget-- > 0) {
         int rc;
 
         flags = cache_lock();
-        b = shrink_dirty();
+        b = shrink_dirty(&flags);
         cache_unlock(flags);
         if (!b) {
             break;
@@ -2361,9 +2458,10 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
             continue;
         }
         (*written)++;
-        buffer_free(b);
+        buffer_unlink(b, &reap);
         got++;
         cache_unlock(flags);
+        buffers_reap(&reap);
     }
     return got;
 }
@@ -2373,13 +2471,17 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
  * write, as far as `want`: the empties, the room under the limit, and the
  * clean buffers `victim_find` reaches first. Returns the first dirty buffer
  * in the way, which a miss would write, or NULL when `want` were found or
- * the release order has ended. The caller holds the big lock.
+ * the release order has ended. `cache_spin` is let go every WALK_BATCH
+ * buffers of the release order (`walk_pause`), and the walk ends where the
+ * buffer it goes on from has left the order meanwhile. The empties are
+ * counted in one hold, since a count of them reads no buffer's state and
+ * needs at most `want` steps. The caller holds the big lock.
  */
 static struct bbuf *reserve_walk(block_device_t *dev, uint32_t want, uint32_t *ready)
 {
     struct first_ask ask = {0, 0};
     uint32_t limit = bcache_limit(), flags = cache_lock();
-    uint32_t have = nbufs < limit ? limit - nbufs : 0;
+    uint32_t have = nbufs < limit ? limit - nbufs : 0, n = 0;
     const struct bbuf *e;
     struct bbuf *b;
 
@@ -2391,6 +2493,12 @@ static struct bbuf *reserve_walk(block_device_t *dev, uint32_t want, uint32_t *r
         have++;
     }
     for (b = lru_head; b && have < want; b = b->lru_next) {
+        if (++n % WALK_BATCH == 0) {
+            flags = walk_pause(b, 0, flags);
+            if (!on_lru(b)) {
+                break;
+            }
+        }
         stat_visits++;
         if (!victim_fit(b, dev, &ask)) {
             continue;
