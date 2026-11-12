@@ -1357,9 +1357,9 @@ static void row_queued(void)
     CHECK("and is no longer fault-safe, but still pollable",
           (dev->flags & (BLOCK_FAULT_SAFE | BLOCK_POLLABLE)) == BLOCK_POLLABLE &&
               dev->submit != 0 && dev->flush != 0);
-    CHECK("its handler runs without the big lock and the block layer calls it without it",
-          handler_flags == ISR_UNLOCKED && (dev->flags & BLOCK_UNLOCKED) != 0 &&
-              nvme_ctrls[0].sq_lock.locked == 0 && nvme_ctrls[0].cq_poll_lock.locked == 0);
+    CHECK("its handler runs without the big lock and its queue's locks end free",
+          handler_flags == ISR_UNLOCKED && nvme_ctrls[0].sq_lock.locked == 0 &&
+              nvme_ctrls[0].cq_poll_lock.locked == 0);
     m.defer = 1;
     make_requests(10, 200, 0, 0);
     for (i = 0; i < 10; i++) {

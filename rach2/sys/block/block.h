@@ -43,14 +43,6 @@ struct block_request;
  * sleep, a page fault with interrupts off, takes that path instead of a
  * request. */
 #define BLOCK_POLLABLE      0x40u
-/* The driver serializes on locks of its own, as Linux's drivers do on
- * theirs (libata's `ap->lock`, drivers/ata/libata-core.c:5567): its `read`,
- * `write`, `submit` and `flush` are called without the big lock, and it
- * completes its requests from an interrupt that runs without it
- * (ISR_UNLOCKED). The block layer calls a device without the flag under the
- * big lock, taking it when a caller with interrupts on does not hold it
- * (`block_bkl_takes`). A partition view's is its backing's (`block_flags`). */
-#define BLOCK_UNLOCKED      0x100u
 /* The disk makes a write durable before it answers it, with a flush of its
  * own cache after the transfer, unless the request asks it not to
  * (`BLOCK_REQ_NOFLUSH`). Its `unflushed` says whether it has answered such a
@@ -66,6 +58,12 @@ struct block_request;
  * `BLOCK_POLLABLE` device they poll, and a caller may invoke them with
  * interrupts off and without the scheduler running. `drvdata` is the
  * driver's private pointer.
+ *
+ * Every driver serializes on locks of its own, as Linux's drivers do on
+ * theirs (libata's `ap->lock`, drivers/ata/libata-core.c:5567): its
+ * functions are called without the big lock, and it completes its requests
+ * from an interrupt or a pump that takes only its own locks, or the USB
+ * stack's.
  */
 struct block_device {
     uint32_t sector_size; /* always BLOCK_SECTOR_SIZE */
@@ -82,10 +80,10 @@ struct block_device {
     /* Start one request and return; the device reports the end through
      * `block_request_complete`, from whatever context it completes in. Only a
      * device without `BLOCK_FAULT_SAFE` has one. It is called with
-     * interrupts on and no spinlock held, with the big lock only on a device
-     * without `BLOCK_UNLOCKED`; the driver keeps its queue under its own
-     * lock, and completes the request under that lock or after it, as
-     * Linux's `ata_qc_complete` runs under `ap->lock`
+     * interrupts on and no spinlock held, without the big lock unless the
+     * caller holds it; the driver keeps its queue under its own lock, and
+     * completes the request under that lock or after it, as Linux's
+     * `ata_qc_complete` runs under `ap->lock`
      * (drivers/ata/libata-core.c:4915-4927). */
     int (*submit)(block_device_t *device, struct block_request *request);
     /* Put what the device holds in a cache of its own on the medium, and
@@ -423,16 +421,6 @@ int block_device_holds(block_device_t *device);
 
 /** Advance the request deadlines; the timer calls it once per tick. */
 void block_request_tick(void);
-
-/**
- * How many times since boot, or since the last `block_bkl_takes_reset`, the
- * block layer took the big lock for a transfer or flush on a device without
- * `BLOCK_UNLOCKED`, for a caller that did not hold it: the disk path's big
- * lock takes, which debugfs's `bkl/calls` prints as `disk_takes`. A disk
- * whose driver serializes on its own lock adds none.
- */
-uint32_t block_bkl_takes(void);
-void block_bkl_takes_reset(void);
 
 /** Completions that found another request in flight, see `disk-overlaps`. */
 uint32_t block_overlaps(void);

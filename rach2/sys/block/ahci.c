@@ -1675,7 +1675,7 @@ int ahci_init(void)
         d->dev.sector_size = BLOCK_SECTOR_SIZE;
         d->dev.sector_count = d->sectors;
         d->dev.max_sectors = AHCI_REQ_SECTORS;
-        d->dev.flags = BLOCK_FAULT_SAFE | BLOCK_POLLABLE | BLOCK_WRITE_THROUGH | BLOCK_UNLOCKED;
+        d->dev.flags = BLOCK_FAULT_SAFE | BLOCK_POLLABLE | BLOCK_WRITE_THROUGH;
         d->dev.unflushed = 0;
         d->dev.read = ahci_read;
         d->dev.write = ahci_write;

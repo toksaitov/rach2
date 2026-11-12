@@ -1029,16 +1029,13 @@ extern int bkl_host_free;
 extern int bkl_host_takes;
 
 /** A read handed over by a caller without the big lock is admitted under
- * one take of it, which the driver gives back, and the unit is one the
- * block layer calls without the lock. */
+ * one take of it, which the driver gives back. */
 static void unlocked_submit(void)
 {
     static unsigned char buf[8 * SECTOR];
     struct block_request *r = make_request(0, 2, 8, buf);
     int i;
 
-    CHECK("the block layer calls the stick without the big lock",
-          (msc_block_device(0)->flags & BLOCK_UNLOCKED) != 0);
     block.completions = 0;
     bkl_host_free = 1;
     bkl_host_takes = 0;

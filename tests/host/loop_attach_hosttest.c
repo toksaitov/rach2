@@ -361,8 +361,8 @@ static void relocation_row(void)
     check(loop && loop->write(loop, 0, 1, output) == 0, "loop writes the relocated image");
     bkl_host_free = 1;
     bkl_host_takes = 0;
-    check(loop && (loop->flags & BLOCK_UNLOCKED) && loop->write(loop, 0, 1, output) == 0 &&
-              bkl_host_takes == 1 && !bkl_held() && loops[0].in_flight == 0,
+    check(loop && loop->write(loop, 0, 1, output) == 0 && bkl_host_takes == 1 && !bkl_held() &&
+              loops[0].in_flight == 0,
           "a write from a caller without the big lock takes it for the file system alone");
     bkl_host_free = 0;
     check(krffs_read_node(reused, output, 512, 0) == 512 && memcmp(output, replacement, 512) == 0,

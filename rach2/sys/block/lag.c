@@ -18,6 +18,9 @@
  * on the same pool.
  * The wrapper has a `flush` too, answered after the lag with nothing under it
  * to flush, so a sync takes a request of the pool as a stick's flush does.
+ * The block layer calls it without the big lock: its queue, its clock and
+ * its counts are under `lag_lock`, and the transfer it runs at submit calls
+ * the disk's polled functions, which take the disk's own locks.
  */
 
 #include "block.h"
@@ -25,7 +28,7 @@
 #include "../lib/kstring.h"
 
 #include "../cmdline.h"
-#include "../lib/kirq.h"
+#include "../lib/spinlock.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../timer.h"
@@ -52,6 +55,10 @@ struct lag_entry {
     uint8_t staged[BLOCK_REQ_SECTORS * BLOCK_SECTOR_SIZE];
 };
 
+/* The queue, `lag_ticks`, `lag_seen`, `lag_held`, `lag_completions` and
+ * `writes_seen`, taken with interrupts off by a submit and by the tick; an
+ * answer is delivered under it, the request pool's lock nesting inside. */
+static struct spinlock lag_lock = SPINLOCK_INIT_NAMED("block_lag_lock");
 static block_device_t lag_device;
 static block_device_t *lag_backing;
 static struct lag_entry queue[LAG_QUEUE];
@@ -69,17 +76,23 @@ static int dead_set;
 /** The lag clock as it stands now: `lag_ticks` and the ticks `kernel_ticks`
  * has counted since the tick's last call, which a boot processor's tick
  * that found the big lock held left out; `lag_ticks` alone while a fixture
- * holds the queue, since the tick then does not advance it. Interrupts are
- * masked across the reads, so that the tick, run by a timer interrupt on
- * this processor, cannot mix one call's `lag_ticks` with the next call's
- * `lag_seen`. */
+ * holds the queue, since the tick then does not advance it. `lag_lock` is
+ * held, which the tick takes to change both. */
 static uint32_t lag_clock(void)
 {
-    uint32_t flags = kirq_save();
-    uint32_t now = lag_held ? lag_ticks : lag_ticks + ((uint32_t)kernel_ticks - lag_seen);
+    return lag_held ? lag_ticks : lag_ticks + ((uint32_t)kernel_ticks - lag_seen);
+}
 
-    kirq_restore(flags);
-    return now;
+/** Make the claimed slot `e` the tick's to deliver, `lag_delay` from now,
+ * with the answer `status`. */
+static void lag_ready(struct lag_entry *e, int status)
+{
+    uint32_t flags = spin_lock_irqsave(&lag_lock);
+
+    e->status = status;
+    e->due = lag_clock() + lag_delay;
+    e->ready = 1;
+    spin_unlock_irqrestore(&lag_lock, flags);
 }
 
 /**
@@ -92,7 +105,7 @@ static uint32_t lag_clock(void)
  */
 static struct lag_entry *lag_claim(struct block_request *request, int flush)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&lag_lock);
     int i;
 
     for (i = 0; i < LAG_QUEUE; i++) {
@@ -104,11 +117,11 @@ static struct lag_entry *lag_claim(struct block_request *request, int flush)
             queue[i].generation = request->generation;
             queue[i].delivered = 0;
             queue[i].flush = flush;
-            kirq_restore(flags);
+            spin_unlock_irqrestore(&lag_lock, flags);
             return &queue[i];
         }
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&lag_lock, flags);
     return NULL;
 }
 
@@ -121,8 +134,7 @@ static int lag_flush(block_device_t *device, struct block_request *request)
     if (!e) {
         return -EIO;
     }
-    e->due = lag_clock() + lag_delay;
-    e->ready = 1;
+    lag_ready(e, 0);
     return 0;
 }
 
@@ -144,28 +156,34 @@ static int dead_submit(block_device_t *device, struct block_request *request)
 static int lag_submit(block_device_t *device, struct block_request *request)
 {
     struct lag_entry *e = lag_claim(request, 0);
+    uint32_t flags;
+    int fail = 0, status;
 
     (void)device;
     if (!e) {
         return -EIO;
     }
-    if (request->write && fail_write_at && ++writes_seen == fail_write_at) {
-        e->status = -EIO; /* the write the boot option fails */
+    if (request->write && fail_write_at) {
+        flags = spin_lock_irqsave(&lag_lock);
+        fail = ++writes_seen == fail_write_at;
+        spin_unlock_irqrestore(&lag_lock, flags);
+    }
+    if (fail) {
+        status = -EIO; /* the write the boot option fails */
     } else if (request->write) {
-        e->status = lag_backing->write(lag_backing, request->lba, request->count, request->page);
+        status = lag_backing->write(lag_backing, request->lba, request->count, request->page);
     } else {
         k_memset(request->page, 0xEE, request->count * BLOCK_SECTOR_SIZE);
-        e->status = lag_backing->read(lag_backing, request->lba, request->count, e->staged);
+        status = lag_backing->read(lag_backing, request->lba, request->count, e->staged);
     }
-    e->due = lag_clock() + lag_delay;
-    e->ready = 1;
+    lag_ready(e, status);
     return 0;
 }
 
 /**
  * Deliver one answer, retaining its address and generation for a duplicate.
  * The duplicate never reads the request, whose memory may have been reused.
- * Call with interrupts masked, after the backing transfer has returned.
+ * `lag_lock` is held, and the backing transfer has returned.
  */
 static void lag_deliver(struct lag_entry *e)
 {
@@ -189,24 +207,24 @@ static void lag_deliver(struct lag_entry *e)
 
 int block_lag_hold(int hold)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&lag_lock);
 
     if (!lag_backing) {
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&lag_lock, flags);
         return -ENODEV;
     }
     lag_held = hold != 0;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&lag_lock, flags);
     return 0;
 }
 
 int block_lag_answer(uint32_t generation, int duplicate)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&lag_lock);
     int i;
 
     if (!lag_held) {
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&lag_lock, flags);
         return -EPERM;
     }
     for (i = 0; i < LAG_QUEUE; i++) {
@@ -214,15 +232,15 @@ int block_lag_answer(uint32_t generation, int duplicate)
 
         if (e->used && e->generation == generation) {
             if (!e->ready || e->delivered != (duplicate != 0)) {
-                kirq_restore(flags);
+                spin_unlock_irqrestore(&lag_lock, flags);
                 return -EAGAIN;
             }
             lag_deliver(e);
-            kirq_restore(flags);
+            spin_unlock_irqrestore(&lag_lock, flags);
             return 0;
         }
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&lag_lock, flags);
     return -ENOENT;
 }
 
@@ -236,26 +254,31 @@ int block_lag_answer(uint32_t generation, int duplicate)
  */
 void block_lag_tick(void)
 {
+    uint32_t flags = spin_lock_irqsave(&lag_lock);
     uint32_t now = (uint32_t)kernel_ticks, passed = now - lag_seen;
     int i;
 
     lag_seen = now;
-    if (!lag_backing || lag_held) {
-        return;
-    }
-    lag_ticks += passed;
-    for (i = 0; i < LAG_QUEUE; i++) {
-        struct lag_entry *e = &queue[i];
+    if (lag_backing && !lag_held) {
+        lag_ticks += passed;
+        for (i = 0; i < LAG_QUEUE; i++) {
+            struct lag_entry *e = &queue[i];
 
-        if (e->used && e->ready && (int32_t)(lag_ticks - e->due) >= 0) {
-            lag_deliver(e);
+            if (e->used && e->ready && (int32_t)(lag_ticks - e->due) >= 0) {
+                lag_deliver(e);
+            }
         }
     }
+    spin_unlock_irqrestore(&lag_lock, flags);
 }
 
 uint32_t block_lag_completions(void)
 {
-    return lag_completions;
+    uint32_t flags = spin_lock_irqsave(&lag_lock);
+    uint32_t n = lag_completions;
+
+    spin_unlock_irqrestore(&lag_lock, flags);
+    return n;
 }
 
 block_device_t *block_lag_backing(block_device_t *dev)

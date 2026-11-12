@@ -20,7 +20,7 @@
  * length are refused, so the image does not move under the file system
  * mounted on the device.
  *
- * The block layer calls the device without the big lock (`BLOCK_UNLOCKED`).
+ * The block layer calls the device without the big lock.
  * A transfer reads the attachment and counts itself in flight under
  * `loop_lock`, and a detach or a release unpublishes the device under it
  * only when no transfer is in flight, as Linux's loop checks `lo_state` in
@@ -626,8 +626,8 @@ static void loop_publish(struct loop_device *loop, block_device_t *backing, uint
 
     loop->dev.sector_size = BLOCK_SECTOR_SIZE;
     loop->dev.sector_count = size / BLOCK_SECTOR_SIZE;
-    loop->dev.flags = BLOCK_CALLER_SYNC | BLOCK_WRITE_THROUGH | BLOCK_UNLOCKED |
-                      (loop->writable ? 0u : BLOCK_READ_ONLY);
+    loop->dev.flags =
+        BLOCK_CALLER_SYNC | BLOCK_WRITE_THROUGH | (loop->writable ? 0u : BLOCK_READ_ONLY);
     loop->dev.unflushed = 0;
     loop->dev.deadline_ticks = 0;
     loop->dev.read = loop_read;
