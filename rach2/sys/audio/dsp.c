@@ -214,25 +214,39 @@ static void ring_get(struct dsp_chan *c, uint8_t *dst, uint32_t n)
  * Playback's `transfer`, in the driver's service: fill `size` bytes at
  * `buf` with the whole frames queued, and the rest with silence. A partial
  * frame stays for the write that completes it.
+ *
+ * A take that leaves a whole period free wakes the writers and pollers, as
+ * Linux's pointer update wakes them once `avail_min` frames are free
+ * (snd_pcm_update_state, sound/core/pcm_lib.c), whether or not those frames
+ * have played. The mix takes a channel's frames up to the device's buffer
+ * ahead of play, so a writer woken only by `period` finds the buffer
+ * emptied, and the mix fills the gap with silence.
  */
 static void dsp_transfer(audio_stream_t *s, uint8_t *buf, size_t size)
 {
     struct dsp *d = (struct dsp *)s->owner;
+    struct dsp_chan *c = &d->play;
     uint32_t frame = frame_bytes(s);
-    uint32_t flags, n;
+    uint32_t flags, n, room;
+    int wake;
 
     flags = spin_lock_irqsave(&d->lock);
-    n = d->play.used - d->play.used % frame;
+    n = c->used - c->used % frame;
     if (n > size) {
         n = (uint32_t)size;
     }
-    ring_get(&d->play, buf, n);
+    room = c->size - c->used;
+    ring_get(c, buf, n);
+    wake = room < s->period_bytes && room + n >= s->period_bytes;
     if (n > 0) {
         d->data_end = d->given + n / frame;
     }
     d->given += (uint32_t)(size / frame);
     spin_unlock_irqrestore(&d->lock, flags);
     k_memset(buf + n, silence(s->format), size - n);
+    if (wake) {
+        wq_wake(&d->wq, WQ_ROOM);
+    }
 }
 
 /**
