@@ -76,6 +76,15 @@ its times are 64 bits already.
 Times are kept in the same 1 ms ticks, rounded up, so a timer never
 expires early.
 .Pp
+The timer tick finds an expiration and leaves its signal for the next
+holder of the big lock, a later tick that takes the lock, which may come
+some ticks after the expiration; the expirations counted until then go
+into that one signal's overrun.
+A
+.Fn timer_settime
+made before the post keeps the signal and sets its overrun to 0, as
+Linux, which sends the signal at expiration, resets the overrun at a set.
+.Pp
 An expiration posts the signal with
 .Va si_code
 .Dv SI_TIMER ,
@@ -107,7 +116,8 @@ charges to the process's threads, or to the one thread, as
 .Xr times 2
 counts them, user ticks alone for a clock of user time; its time left and
 its interval are in ticks, and it expires at the tick that uses up the
-last of its time, with no overrun, since each tick is counted.
+last of its time and is armed again at that tick; the expirations of the
+ticks before its signal is posted go into that signal's overrun.
 A timer on another process's clock keeps counting that process until it
 is deleted, and counts nothing once the process has ended.
 .Pp

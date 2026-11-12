@@ -59,16 +59,37 @@ The timers of processor time count each tick the timer interrupt charges
 to a thread of the process, in the mode it interrupted, as
 .Xr times 2
 counts them.
-At the tick that posts a signal, the timer is armed again for the
-interval.
+A timer of processor time is armed again for its interval at the tick it
+runs out.
+.Dv ITIMER_REAL
+is armed again when its
+.Dv SIGALRM
+is posted, at the first tick after the post that is a whole number of
+intervals after the tick it ran out, so a late post does not move the
+timer's period, as Linux's
+.Fn hrtimer_forward
+keeps it.
 Unless
 .Fa old
 is null, it receives the timer's setting before the call, as
 .Fn getitimer
 reports it.
 .Pp
-The timer tick posts the signal, which wakes the process if it is asleep
-in a call;
+The timer tick finds a timer run out and leaves its signal for the next
+holder of the big lock: a later tick that takes the lock, or the return to
+user mode of the thread it is left on, which may come some ticks later.
+Each signal is posted once however many times its timer ran out before
+the post, as Linux queues no second of a legacy signal that is pending.
+A
+.Fn setitimer
+or
+.Fn alarm
+of
+.Dv ITIMER_REAL
+made before the post posts its
+.Dv SIGALRM
+first, as Linux sends it when the timer runs out.
+The signal wakes the process if it is asleep in a call;
 .Xr nanosleep 2 ,
 .Xr poll 2
 and
