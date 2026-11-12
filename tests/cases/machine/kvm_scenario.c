@@ -6,6 +6,7 @@
  * under Rach2's KVM as their lists say, or drmfuzz's KVM mode.
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "etude/report.h"
@@ -77,6 +78,26 @@ static int parse(struct kvm_case *s, const char *id)
         return 1;
     }
     return 0;
+}
+
+/**
+ * Give the list the selftests' cases run: selftests.list, or the list of
+ * tests/kvm that RACH2_KVM_SELFTESTS names, such as selftests-gap.list
+ * (tests/kvm/Readme.md). Give NULL for a name that is not a file name of
+ * letters, digits, dots, dashes and underscores ending in `.list`, which
+ * the case's shell command could not hold as one word.
+ */
+static const char *selftests_list(void)
+{
+    const char *name = getenv("RACH2_KVM_SELFTESTS");
+    size_t n;
+
+    if (name == NULL || name[0] == '\0')
+        return "selftests.list";
+    n = strspn(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-");
+    if (name[n] != '\0' || n <= 5 || name[0] == '.' || strcmp(name + n - 5, ".list") != 0)
+        return NULL;
+    return name;
 }
 
 /** Run `command` as root under sh through the guest channel, keeping what
@@ -158,9 +179,11 @@ static void run(struct kvm_case *s)
                                           "kvm-leak: result: pass",
                                           "DRMFUZZ OK"};
     char command[512], line[200];
-    const char *result;
+    const char *result, *list = selftests_list();
     struct net_run r;
 
+    if (s->runner == SELFTESTS && list == NULL)
+        net_fail(&s->u, "RACH2_KVM_SELFTESTS names no list of tests/kvm");
     if (s->runner == LEAK)
         snprintf(command, sizeof(command),
                  "cd " KVM_DIR " && sh leak.sh"
@@ -180,7 +203,9 @@ static void run(struct kvm_case *s)
     else
         snprintf(command, sizeof(command), "cd " KVM_DIR " && sh corpus.sh %s %s",
                  s->runner == UNIT ? "unit" : "selftests",
-                 s->runner == UNIT ? "unit-tests.list" : "selftests.list");
+                 s->runner == UNIT ? "unit-tests.list"
+                 : list != NULL    ? list
+                                   : "none");
     if (net_step(&s->u, "run") == ETUDE_OK)
         as_root(s, command, "runner", &r);
     if (!net_ok(&s->u)) {
