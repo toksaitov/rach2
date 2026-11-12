@@ -433,6 +433,13 @@ process_t *get_process(uint32_t pid)
     return pid == 7 ? &process : NULL;
 }
 
+/** Whether `p` is a kernel thread, as process.c judges it. */
+int proc_is_kthread(const process_t *p)
+{
+    return p->state != PROC_UNUSED && p->state != PROC_ZOMBIE && p->space_root == 0 &&
+           (p->kthread_entry != NULL || !p->in_syscall);
+}
+
 /* The user frame of every thread in the syscall and wchan rows. */
 static isr_params_t user_frame;
 
