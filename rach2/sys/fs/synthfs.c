@@ -247,9 +247,10 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
  * pipe an unprivileged F_SETPIPE_SZ makes and the limits of one user's pipe
  * pages (ipc/pipe.h); what a panic does once its record is out and
  * whether an oops panics (panic.h); the settings of the lockup detectors
- * (watchdog.h); and the write-back's thresholds and periods (bcache.h,
- * writeback.h). An entry whose text is empty is procfs's, which reads its
- * value when the file is opened.
+ * (watchdog.h); the write-back's thresholds and periods (bcache.h,
+ * writeback.h); and whether the sleeping locks time their holds
+ * (fs/sleeplock.h). An entry whose text is empty is procfs's, which reads
+ * its value when the file is opened.
  * A new entry goes at the end, so that the indices SYNTH_SYS_ names stay
  * the same. */
 static const struct {
@@ -339,7 +340,8 @@ static const struct {
                {29, "dirty_expire_centisecs", ""},
                {29, "dirty_ratio", ""},
                {29, "dirty_writeback_centisecs", ""},
-               {29, "dirtytime_expire_seconds", ""}};
+               {29, "dirtytime_expire_seconds", ""},
+               {6, "lock_stat", ""}};
 
 /* The entries of the table. */
 #define SYNTH_SYS_TABLE ((int)(sizeof(sysents) / sizeof(sysents[0])))
@@ -390,7 +392,8 @@ int synth_sys_writable(int entry)
            (entry >= SYNTH_SYS_WATCHDOG && entry <= SYNTH_SYS_HUNG_TASK_WARNINGS &&
             (entry != SYNTH_SYS_NMI_WATCHDOG || watchdog_hardlockup_available())) ||
            (entry >= SYNTH_SYS_TCP_KEEPALIVE_TIME && entry <= SYNTH_SYS_TCP_RETRIES2) ||
-           (entry >= SYNTH_SYS_PROTECTED_FIFOS && entry <= SYNTH_SYS_DIRTYTIME_EXPIRE);
+           (entry >= SYNTH_SYS_PROTECTED_FIFOS && entry <= SYNTH_SYS_DIRTYTIME_EXPIRE) ||
+           entry == SYNTH_SYS_LOCK_STAT;
 }
 
 /* The files of /proc/net after the first four, by origin and name. */

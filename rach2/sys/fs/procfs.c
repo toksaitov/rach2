@@ -8546,8 +8546,9 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
 
 /* The /proc/sys files whose values are their owners' variables, and the
  * range a write must fall in, as Linux's `proc_dointvec_minmax` takes one;
- * kernel/panic and kernel/panic_on_oops take any int, as Linux's
- * `proc_dointvec` does (kernel/sysctl.c). */
+ * kernel/panic, kernel/panic_on_oops and kernel/lock_stat take any int, as
+ * Linux's `proc_dointvec` does (kernel/sysctl.c, kernel/locking/lockdep.c).
+ */
 static const struct {
     int entry;
     int *var;
@@ -8591,7 +8592,8 @@ static const struct {
     {SYNTH_SYS_DIRTY_EXPIRE, &dirty_expire_interval, 0, 0x7FFFFFFF},
     {SYNTH_SYS_DIRTY_RATIO, &vm_dirty_ratio, 0, 100},
     {SYNTH_SYS_DIRTY_WRITEBACK, &dirty_writeback_interval, 0, 0x7FFFFFFF},
-    {SYNTH_SYS_DIRTYTIME_EXPIRE, &dirtytime_expire_interval, 0, 0x7FFFFFFF}};
+    {SYNTH_SYS_DIRTYTIME_EXPIRE, &dirtytime_expire_interval, 0, 0x7FFFFFFF},
+    {SYNTH_SYS_LOCK_STAT, &sleep_lock_stat, -0x7FFFFFFF - 1, 0x7FFFFFFF}};
 
 /** The index in `sysctl_ints` of the /proc/sys file `entry`, or -1. */
 static int sysctl_int(int entry)

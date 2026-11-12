@@ -78,12 +78,15 @@ void k_panic(const char *s)
     _exit(44);
 }
 
-/* The clock, in microseconds, which a row moves. */
+/* The clock, in microseconds, which a row moves, and the reads of it and
+ * of the cycle counter. */
 static uint32_t now_us;
+static int clock_reads;
 
 /** The clock: `now_us`. */
 uint32_t timer_now_us(void)
 {
+    clock_reads++;
     return now_us;
 }
 
@@ -346,8 +349,11 @@ static void row_file_locks(void)
     check(proc_b.file_locks == 0, "the last give lowers it to zero");
 }
 
-/** The record keeps holds that crossed a disk wait, the longest with its
- * holder, and passes over the rest. A hold stamped by the clock, taken
+/** With kernel.lock_stat off a take and a give read no clock and record
+ * nothing, and a hold taken while it was off is not recorded when it is
+ * turned on before the give. Once it is on, the record keeps holds that
+ * crossed a disk wait, the longest with its holder, and passes over the
+ * rest. A hold stamped by the clock, taken
  * while the processors' counters disagree, is measured by the clock's
  * difference across its wrap, and one stamped by the counter that reads the
  * counter below its stamp, as on another processor, reads 0. */
@@ -359,6 +365,22 @@ static void row_record(void)
     __builtin_memcpy(proc_b.comm, "reader", 7);
 
     cpu_table[0].current = &proc_a;
+    sleep_lock_stat = 0;
+    clock_reads = 0;
+    now_us = 100;
+    sleep_lock_take(&lock);
+    proc_a.disk_waits++;
+    now_us = 900;
+    sleep_lock_give(&lock);
+    check(clock_reads == 0 && rec_one.crossings == 0,
+          "with kernel.lock_stat off a hold reads no clock and is not recorded");
+    sleep_lock_take(&lock);
+    proc_a.disk_waits++;
+    sleep_lock_stat = 1;
+    sleep_lock_give(&lock);
+    check(clock_reads == 0 && rec_one.crossings == 0,
+          "a hold taken while it was off is not recorded once it is on");
+
     now_us = 1000;
     sleep_lock_take(&lock);
     now_us = 9000;
