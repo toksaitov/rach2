@@ -2759,8 +2759,10 @@ uint32_t bcache_reserve(block_device_t *dev, uint32_t n)
  * a `cond_resched` between (mm/truncate.c:509-541). A buffer of `dev` a
  * process takes while the second walk has let the lock go is dropped at
  * its release, as at a device's loss, and one dirtied meanwhile is left
- * for its write; the callers, an unmount and a detach, have stopped every
- * use of `dev` before. */
+ * for its write. The callers have stopped every use of `dev` before: an
+ * unmount, a mount the file system refused (`mount_refused`), a loop
+ * device's detach, and a disk whose partition table is set or read again
+ * (`disk_set_table`, `disk_scan`). */
 int bcache_invalidate(block_device_t *dev)
 {
     struct bbuf *b;
