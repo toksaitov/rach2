@@ -1712,13 +1712,18 @@ END
 # LOCKS being build/flow/claims of the owner's clone in WSL, are on ext4,
 # where flock holds; OUT is not.
 #
-# Permission comes first, in an ssh of its own: it links a file holding
-# `go N` to the token, which fails when a token exists, as a stop or another
-# attempt leaves it, and only then makes the locks and removes GOT and the
-# attempt's files. Nothing else is sent unless it succeeded, so that an
-# attempt's runner only ever starts after its permission was confirmed, and
-# a publication that a lost link delays creates a token for an attempt that
-# has no runner, and nothing at all once a later attempt has its own.
+# Permission comes first, in an ssh of its own: holding LOCKS/publish.lock,
+# it links a file holding `go N` to the token, which fails when a token
+# exists, as a stop or another attempt leaves it, and only then makes the
+# locks and removes GOT and the attempt's files. Nothing else is sent unless
+# it succeeded, so that an attempt's runner only ever starts after its
+# permission was confirmed, and a publication that a lost link delays
+# creates a token for an attempt that has no runner, and nothing at all once
+# a later attempt has its own. claim_stop writes its token under the same
+# lock, so that a publication is whole before a stop or after it, and a
+# delayed one never removes the GOT of an attempt that came after the stop.
+# The publication waits a minute at most for that lock, which is never
+# removed, since a publication may hold it open.
 #
 # The attempt runs under the perl program that claim_runner prints, written
 # to OUT/ID.KIND.N.pl and run in a session of its own, since WSL ends what a
@@ -1742,7 +1747,8 @@ claim_start()
 {
     c=$wheld/$1.$2.$3 k=$wlock/$1.$2
     {
-        echo "mkdir -p $wlock && echo 'go $3' > $k.token.$3 && ln $k.token.$3 $k.token || { rm -f $k.token.$3; exit 1; }"
+        echo "mkdir -p $wlock && exec 9>> $wlock/publish.lock && perl -MFcntl=:flock -e 'open(L, \">&=9\") or exit 1; for (1 .. 60) { exit 0 if flock(L, LOCK_EX | LOCK_NB); sleep 1 } exit 1' || exit 1"
+        echo "echo 'go $3' > $k.token.$3 && ln $k.token.$3 $k.token || { rm -f $k.token.$3; exit 1; }"
         echo "rm -f $k.token.$3 $c.rc $c.held $c.started $c.owner $c.reaped $wheld/$5 && : >> $k.lock && : >> $k.grant"
     } | tssh "$WSL" || return 1
     {
@@ -1787,23 +1793,25 @@ claim_state()
     } | tssh "$WSL" 2> /dev/null | tr -d '\r'
 }
 
-# claim_stop ID KIND: end every attempt of the claim ID.KIND that
-# claim_start began, granted, waiting for admission or not yet started, and
-# confirm that each has left WSL's ledger. It replaces the claim's token
-# with `stop`, on which each attempt's runner and holding shell end and a
-# late one starts nothing, and then waits, two and a half minutes at most,
-# for an exclusive lock of the claim's lock file, which it gets only once no
-# process of any attempt holds the shared lock. A free lock does not prove
-# the ledger clean: a restart of WSL, or a runner killed before it wrote
-# its held file, leaves no lock and no marker, and etude's keeper and bridge
-# close the descriptor that carries the lock. So it then has etude status
-# recover the ledger, which drops the claim of an owner that has ended, and
-# looks up the owner that each attempt's launcher wrote; only when recovery
-# succeeded, the ledger could be read and names none of them, and no
-# attempt wrote a held file, does it remove the locks and the token. It
-# prints a line for what stays and fails when the lock stays held, recovery
-# fails, an attempt's launcher stays in the ledger, or the host does not
-# answer within five minutes, so that the caller keeps the claim's files.
+# claim_stop ID KIND: end every attempt of the claim ID.KIND that claim_start
+# began, granted, waiting for admission or not yet started, and confirm that
+# each has left WSL's ledger. It takes LOCKS/publish.lock, which each
+# publication of claim_start holds while it runs, waiting a minute at most, and
+# holds it only while it replaces the claim's token with `stop`, on which each
+# attempt's runner and holding shell end and a late one starts nothing, and
+# then waits, two and a half minutes at most, for an exclusive lock of the
+# claim's lock file, which it gets only once no process of any attempt holds
+# the shared lock. A free lock does not prove the ledger clean: a restart of
+# WSL, or a runner killed before it wrote its held file, leaves no lock and no
+# marker, and etude's keeper and bridge close the descriptor that carries the
+# lock. So it then has etude status recover the ledger, which drops the claim
+# of an owner that has ended, and looks up the owner that each attempt's
+# launcher wrote; only when recovery succeeded, the ledger could be read and
+# names none of them, and no attempt wrote a held file, does it remove the
+# locks and the token. It prints a line for what stays and fails when a
+# publication or an attempt keeps its lock, recovery fails, an attempt's
+# launcher stays in the ledger, or the host does not answer within five
+# minutes, so that the caller keeps the claim's files.
 claim_stop()
 {
     {
@@ -1812,8 +1820,18 @@ claim_stop()
         cat << 'END'
 ledger=${RACH2_CLAIM_LEDGER:-/var/lib/rach2-etude/ledger}
 etude=${RACH2_CLAIM_ETUDE:-/usr/local/libexec/rach2/etude}
-{ mkdir -p "${k%/*}" && echo stop > "$k.token.$$" && mv -f "$k.token.$$" "$k.token"; } ||
-    { echo "cannot write $k.token"; exit 1; }
+{ mkdir -p "${k%/*}" && exec 9>> "${k%/*}/publish.lock"; } || { echo "cannot open ${k%/*}/publish.lock"; exit 1; }
+perl -MFcntl=:flock -e '
+    open(L, ">&=9") or exit 2;
+    for (1 .. 60) { exit 0 if flock(L, LOCK_EX | LOCK_NB); sleep 1 }
+    exit 1'
+case $? in
+0) ;;
+1) echo "a start of a claim still holds ${k%/*}/publish.lock after a minute"; exit 1 ;;
+*) echo "cannot lock ${k%/*}/publish.lock"; exit 1 ;;
+esac
+{ echo stop > "$k.token.$$" && mv -f "$k.token.$$" "$k.token"; } || { echo "cannot write $k.token"; exit 1; }
+exec 9>&-
 perl -MFcntl=:flock -e '
     open(L, ">>", shift) or exit 2;
     for (1 .. 150) { exit 0 if flock(L, LOCK_EX | LOCK_NB); sleep 1 }
