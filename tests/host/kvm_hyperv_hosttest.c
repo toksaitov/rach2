@@ -180,6 +180,14 @@ uint64_t kvm_host_ns(void)
     return mono_ns;
 }
 
+/** vcpu.c's lowering of the vCPU's timer deadline, which the rows read. */
+void kvm_timer_arm(struct kvm_vcpu *v, uint64_t ns)
+{
+    if (ns && (!v->timer_ns || ns < v->timer_ns)) {
+        v->timer_ns = ns;
+    }
+}
+
 uint64_t arch_cycles(void)
 {
     return tsc_base + mono_ns / 10u * 24u;

@@ -917,10 +917,13 @@ int32_t kvm_lapic_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t arg)
     return -ENOTTY;
 }
 
+static int model_halt(struct kvm_vcpu *v);
+
+/** vlapic.c's HLT: the vCPU halts in the kernel when a row asks for its
+ * sleep (`model_halt`), and the exit goes to the caller otherwise. */
 int kvm_lapic_halt(struct kvm_vcpu *v)
 {
-    (void)v;
-    return 1;
+    return model_halt(v);
 }
 
 void kvm_lapic_free(struct kvm_vcpu *v)
@@ -959,6 +962,24 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
 {
     prepares++;
     model_block(v);
+    return 0;
+}
+
+/** vlapic.c's and i8254.c's timer checks, which KVM_REQ_TIMER runs: no
+ * timer is armed here. */
+void kvm_lapic_timer_check(struct kvm_vcpu *v)
+{
+    (void)v;
+}
+
+void kvm_pit_check(struct kvm_vm *vm)
+{
+    (void)vm;
+}
+
+uint64_t kvm_lapic_next_ns(struct kvm_vcpu *v)
+{
+    (void)v;
     return 0;
 }
 
@@ -1272,8 +1293,9 @@ static struct {
     /* The turn of the run loop at which it switches away
      * (`sched_take_preempt`), counting down, and the switches taken. */
     int preempt, switches;
-    /* The pass over the run loop's top at which a halted vCPU sleeps
-     * (`kvm_lapic_prepare`), counting down, and the sleeps taken. */
+    /* Set, the next HLT halts the vCPU in the kernel (`kvm_lapic_halt`)
+     * and the run loop's next look at the halted vCPU sleeps
+     * (`kvm_lapic_prepare`); and the sleeps taken. */
     int block, blocks;
     int fail_vmxon, fail_vmptrld, fail_launch;
     uint32_t refuse; /* a field whose VMWRITE fails as unsupported, or 0 */
@@ -2297,7 +2319,7 @@ static void model_lenovo(void)
 
 /** The switch away the run loop's `sched_take_preempt` takes when a row
  * asked for it at this turn: the thread's `sched_out`, preempted, with
- * interrupts off, as `schedule` calls it. */
+ * interrupts off, as `schedule` calls it, which clears `need_resched`. */
 static void model_switch(void)
 {
     CHECK(!m.fpu_held || m.pkru == m.host_pkru,
@@ -2308,13 +2330,25 @@ static void model_switch(void)
         if (current_proc->sched_out) {
             current_proc->sched_out(current_proc->sched_out_arg, 1);
         }
+        current_proc->need_resched = 0;
         m.switches++;
     }
 }
 
-/** A halted vCPU's sleep at the run loop's top, when a row asked for it
- * at this pass: the thread blocks, and `schedule` calls its `sched_out`
- * with interrupts off, not preempted. The host's state and MSRs must be
+/** The HLT of a row that asks for a sleep (`m.block`): the vCPU halts in
+ * the kernel, 0; 1, the exit to the caller, otherwise. */
+static int model_halt(struct kvm_vcpu *v)
+{
+    if (m.block) {
+        v->mp_state = KVM_MP_STATE_HALTED;
+        return 0;
+    }
+    return 1;
+}
+
+/** A halted vCPU's sleep at the run loop's top, when a row asked for it:
+ * the thread blocks, `schedule` calls its `sched_out` with interrupts off,
+ * not preempted, and the vCPU wakes runnable. The host's state and MSRs must be
  * back by then and the guest's FPU left to the switch, and the steal time
  * must count no preemption, as Linux's kvm_sched_out marks only a task
  * still on its run queue. */
@@ -2325,14 +2359,16 @@ static void model_block(struct kvm_vcpu *v)
 
     CHECK(!m.fpu_held || m.pkru == m.host_pkru,
           "a halted vCPU's sleep finds the host's PKRU in while the guest's FPU is held");
-    if (!m.block || --m.block != 0) {
+    if (!m.block || v->mp_state != KVM_MP_STATE_HALTED) {
         return;
     }
+    m.block = 0;
     CHECK(irq_on && current_proc->sched_out,
           "a halted vCPU sleeps with interrupts on, its thread's sched_out set");
     irq_on = 0;
     current_proc->sched_out(current_proc->sched_out_arg, 0);
     irq_on = 1;
+    v->mp_state = KVM_MP_STATE_RUNNABLE;
     CHECK(!m.saved && host_msrs() && m.fpu_held,
           "a sleep's switch puts the host's state and MSRs back, the guest's FPU left to it");
     CHECK(v->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported &&
@@ -3135,6 +3171,7 @@ static void load_rows(int fd)
     loads = m.fpu_loads;
     switches = m.switches;
     m.preempt = 2;
+    current_proc->need_resched = 1; /* the loop reads it at each turn's top */
     script(EXIT_CPUID, 0, 2)->kgs = 0xFFFF888000DEF000ull;
     script(EXIT_HLT, 0, 1);
     CHECK(run(fd) == 0 && m.switches == switches + 1 && m.saves == saves + 2 &&
@@ -5435,8 +5472,8 @@ static void block_rows(void)
     saves = m.saves;
     loads = m.fpu_loads;
     blocks = m.blocks;
-    m.block = 2;
-    script(EXIT_CPUID, 0, 2);
+    m.block = 1;
+    script(EXIT_HLT, 0, 1);
     script(EXIT_HLT, 0, 1);
     CHECK(run(fd) == 0 && m.blocks == blocks + 1 && m.saves == saves + 2 &&
               m.fpu_loads == loads + 1,
