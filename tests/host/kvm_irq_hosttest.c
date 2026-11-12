@@ -31,7 +31,9 @@
  * interrupt, by its timer's tick, or ended by a signal; the split
  * controller's enable, the routes' refusals, a SINT
  * route raising Hyper-V's SynIC, KVM_IRQ_LINE_STATUS and the EOI exit of a
- * level-triggered I/O APIC route; KVM_SIGNAL_MSI; irqfds raised by a write to
+ * level-triggered I/O APIC route, marked by each vCPU's scan before entry
+ * for the vCPU it targets and one with its vector in service, and for no
+ * other; KVM_SIGNAL_MSI; irqfds raised by a write to
  * the eventfd, following a new route, refused twice or with RESAMPLE,
  * deassigned, raised at once by a counter already up, freed by the eventfd's
  * last close, by the VM's end and after a close that left the hangup to run;
@@ -1173,6 +1175,66 @@ static void invalid_route_rows(void)
     vm.x2apic_format = 0;
 }
 
+/**
+ * Have each vCPU take the KVM_REQ_SCAN_IOAPIC that a change of the routes
+ * sent it, as Linux's vcpu_enter_guest runs vcpu_scan_ioapic before entry
+ * (arch/x86/kvm/x86.c:10390-10391): 1 when every vCPU had the request and
+ * its preparation ended with it taken and no exit. The vCPUs' other
+ * requests are dropped first, as a run before this one would have taken
+ * them.
+ */
+static int scan_eoi_exits(void)
+{
+    int i, ok = 1;
+
+    for (i = 0; i < NVCPU; i++) {
+        ok = ok && (vcpu[i]->requests & KVM_REQ_SCAN_IOAPIC);
+        vcpu[i]->requests &= KVM_REQ_SCAN_IOAPIC;
+        ok = ok && kvm_lapic_prepare(vcpu[i]) == 0 && !(vcpu[i]->requests & KVM_REQ_SCAN_IOAPIC);
+    }
+    return ok;
+}
+
+/**
+ * The EOI exits of the level route of GSI 5, vector 0x35 to APIC 0, for
+ * the vCPU it targets and the others, as Linux's kvm_scan_ioapic_routes
+ * marks a vector for a vCPU the route's destination matches or that has
+ * the vector pending or in service (arch/x86/kvm/irq_comm.c:405-434), and
+ * kvm_ioapic_send_eoi exits only for a marked vector (lapic.c:1463-1482).
+ */
+static void eoi_exit_rows(void)
+{
+    struct kvm_vcpu *t = vcpu[0], *o = vcpu[1];
+
+    clear_vectors();
+    CHECK(signal(msi_addr(1, 0), msi_data(0x35, 0, 0)) == 1 && kvm_lapic_ack(o) == 0x35,
+          "another vCPU takes the route's vector by an edge MSI");
+    wr(o, APIC_EOI, 0);
+    CHECK(!(o->requests & KVM_REQ_EOI_EXIT),
+          "and its EOI makes no exit, since no route targets it");
+    CHECK(signal(msi_addr(1, 0), msi_data(0x35, 0, 0)) == 1 && kvm_lapic_ack(o) == 0x35,
+          "it takes the vector again");
+    CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == 0 && scan_eoi_exits(),
+          "the routes set again while the vector is in service there");
+    wr(o, APIC_EOI, 0);
+    CHECK((o->requests & KVM_REQ_EOI_EXIT) && kvm_lapic_prepare(o) == 1 &&
+              o->run->exit_reason == KVM_EXIT_IOAPIC_EOI && o->run->u.eoi.vector == 0x35,
+          "a vCPU with the vector in service at the scan exits at its EOI");
+    CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == 0 && scan_eoi_exits(),
+          "the routes set again once it ended");
+    CHECK(signal(msi_addr(1, 0), msi_data(0x35, 0, 0)) == 1 && kvm_lapic_ack(o) == 0x35,
+          "the other vCPU takes the vector once more");
+    wr(o, APIC_EOI, 0);
+    CHECK(!(o->requests & KVM_REQ_EOI_EXIT), "and makes no exit, its mark gone at the scan");
+    CHECK(signal(msi_addr(0, 0), msi_data(0x35, 0, 0)) == 1 && kvm_lapic_ack(t) == 0x35,
+          "the target takes the vector by an edge MSI");
+    wr(t, APIC_EOI, 0);
+    CHECK((t->requests & KVM_REQ_EOI_EXIT) && kvm_lapic_prepare(t) == 1 &&
+              t->run->u.eoi.vector == 0x35,
+          "and exits at its EOI, the vector marked for the vCPU the route targets");
+    clear_vectors();
+}
+
 /** The split controller, routes, KVM_IRQ_LINE and the EOI exit. */
 static void routing_rows(void)
 {
@@ -1233,7 +1295,7 @@ static void routing_rows(void)
     CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, 0) == -EFAULT, "a bad address");
 
     clear_vectors();
-    v->requests = 0;
+    CHECK(scan_eoi_exits(), "the routes ask each vCPU to find its EOI exits again before entry");
     lvl.irq = 5;
     lvl.level = 1;
     CHECK(kvm_irq_ioctl(&vm, KVM_IRQ_LINE_STATUS, (uintptr_t)&lvl) == 0 && lvl.irq == 1,
@@ -1263,6 +1325,7 @@ static void routing_rows(void)
     kvm_lapic_ack(v);
     wr(v, APIC_EOI, 0);
     CHECK(!(v->requests & KVM_REQ_EOI_EXIT), "a level route past the I/O APIC's pins too");
+    eoi_exit_rows();
     CHECK(signal(msi_addr(0, 0), msi_data(0x38, 0, 0)) == 1, "KVM_SIGNAL_MSI");
     {
         struct kvm_msi m;
