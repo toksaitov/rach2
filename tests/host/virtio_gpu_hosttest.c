@@ -37,9 +37,12 @@
  * reference goes; and a reset over a transport whose backing is its own heap,
  * which zaps an object no one exported and gives its frames back, and leaves an
  * exported object its frames until it is freed; and blobs mapped from a
- * transport's pages, whose revoke queues a zap of the whole blob for the commit
- * worker, whose free takes a queued zap off the queue, and whose kill holds
- * each blob across a zap in which the program's last reference goes.
+ * transport's pages, whose revoke stops new faults, keeps the map and queues a
+ * zap of the whole blob for the commit worker, which holds the blob across the
+ * zap, in which the program's last reference may go; whose free takes a queued
+ * zap off the queue; whose kill holds each blob across a zap in which the
+ * program's last reference goes; and one whose UNREF cannot be had, whose kill
+ * passes over it at count 0 and gives its frames back, and which is freed once.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -422,6 +425,9 @@ int fd_free(fd_table_t *table, int fd)
 /* ---- the device's record and its objects, as drm.c and drm_gem.c ---- */
 
 static int hotplug_events, registered, released, unplugged_calls;
+static int frees;            /* objects freed through their `free` hook */
+static int backing_releases; /* backings given back while each still had pages */
+static int unplug_releases;  /* `backing_releases` once the last unplug's kill ended */
 
 /** Fill a device for `driver`, as drm.c does. */
 void drm_dev_init(struct drm_device *d, const struct drm_driver *driver)
@@ -561,6 +567,7 @@ void drm_gem_object_put(struct drm_gem_object *obj)
     }
     d = obj->dev;
     resv_drop(&obj->resv_own);
+    frees++;
     obj->funcs->free(obj);
     drm_dev_put(d);
 }
@@ -905,6 +912,7 @@ void drm_dev_unplug(struct drm_device *d)
     if (!d->unplugged) {
         d->unplugged = 1;
         vgpu_unplug(d);
+        unplug_releases = backing_releases;
         drm_dev_put(d);
     }
 }
@@ -1548,8 +1556,6 @@ int virtio_backing_fill(struct virtio_dev *d, struct shmem *sh, uint64_t bytes)
     (void)bytes;
     return 0;
 }
-
-static int backing_releases; /* backings given back while each still had pages */
 
 /** Count a backing given back to the transport. */
 void virtio_backing_release(struct virtio_dev *d, struct shmem *sh)
@@ -2602,19 +2608,22 @@ static void pages_revoke(struct virtio_gpu_object *bo)
     bo->pages_map->revoke(bo->pages_map->owner);
 }
 
-/** The program's last reference to a blob goes while the kill's zap of it
- * waits. */
+static int frees_in_zap; /* `frees` once `zap_put` has put its reference */
+
+/** The program's last reference to a blob goes while a zap of it waits. */
 static void zap_put(const void *obj)
 {
     drm_gem_object_put((struct drm_gem_object *)(uintptr_t)obj);
+    frees_in_zap = frees;
 }
 
 /**
- * Blobs mapped from the transport's pages: a revoke clears the blob's map
- * and queues its zap, which the commit worker runs over the whole blob; a
- * free with the zap still queued takes it off the queue; and the kill holds
- * a blob across its zap, in which the program's last reference may go,
- * and frees it at its own put.
+ * Blobs mapped from the transport's pages: a revoke stops new faults of the
+ * blob (`map_ok`), keeps its map and queues its zap, which the commit
+ * worker runs over the whole blob; a free with the zap still queued frees
+ * the map and takes the zap off the queue; and the kill holds a blob across
+ * its zap, in which the program's last reference may go, frees the blob's
+ * map after the zap and the blob at its own put.
  */
 static void row_revoke(void)
 {
@@ -2636,7 +2645,7 @@ static void row_revoke(void)
     zaps = 0;
     pages_revoke(a);
     CHECK(!a->map_ok && a->pages_map && a->revoke_zap.queued && zaps == 0,
-          "a revoke clears the map and queues the zap, which it does not run");
+          "a revoke clears map_ok, keeps the map and queues the zap, which it does not run");
     (void)drm_atomic_commit_work();
     CHECK(zaps == 1 && zapped == &a->shmem.base && zapped_count == 64 * 64 * 4 / PAGE_SIZE &&
               !a->revoke_zap.queued,
@@ -2654,6 +2663,87 @@ static void row_revoke(void)
     CHECK(zaps == 1 && zapped == &a->shmem.base && !zap_hook && maps_live == 0,
           "the kill zaps the held blob, whose last reference went meanwhile, and frees its map");
     map_give = 0;
+}
+
+/**
+ * The commit worker holds a revoked blob across its zap, in which the
+ * program's last reference goes, since the zap matches mappings by the
+ * object's address, which a new object could take once the blob was freed;
+ * the worker's put frees the blob, its map and its resource.
+ */
+static void row_revoke_held(void)
+{
+    struct virtio_gpu_object *a;
+    uint32_t ha;
+    int before;
+
+    unbind();
+    model_reset();
+    CHECK(bind() == 1, "a bind for the worker's hold");
+    a = dumb(64, 64, &ha);
+    CHECK(a != NULL, "a blob to revoke");
+    if (!a) {
+        unbind();
+        return;
+    }
+    map_give = 1;
+    CHECK(pages_map(a) == 0 && maps_live == 1, "the blob is mapped");
+    pages_revoke(a);
+    CHECK(a->revoke_zap.queued && drm_gem_handle_delete(&file, ha) == 0,
+          "the revoke is queued and the blob's handle goes");
+    before = frees;
+    zaps = 0;
+    zap_hook = zap_put; /* the lookup's reference, the program's last, goes in the zap */
+    (void)drm_atomic_commit_work();
+    CHECK(zaps == 1 && zapped == &a->shmem.base && !zap_hook && frees_in_zap == before,
+          "the worker holds the blob across its zap, in which the program's last reference goes");
+    CHECK(frees == before + 1 && maps_live == 0 &&
+              gpu.log[gpu.nlog - 1] == VIRTIO_GPU_CMD_RESOURCE_UNREF,
+          "the worker's put frees the blob, its map and its resource, once");
+    map_give = 0;
+}
+
+/**
+ * A mapped blob whose UNREF cannot be had: its free frees the map and,
+ * without the command, unplugs the device, whose kill finds the blob on
+ * its list at count 0, passes over it with no reference taken and no zap,
+ * and gives its frames back to the transport at once, before the free
+ * ends and frees the blob, once.
+ */
+static void row_revoke_no_unref(void)
+{
+    struct virtio_gpu_object *a;
+    uint32_t ha;
+    int before;
+
+    unbind();
+    model_reset();
+    gpu.dev.ops = &heap_ops;
+    CHECK(bind() == 1, "a bind over a heap for a failed UNREF");
+    a = dumb(64, 64, &ha);
+    CHECK(a != NULL, "a blob whose UNREF fails");
+    if (!a) {
+        unbind();
+        gpu.dev.ops = NULL;
+        return;
+    }
+    map_give = 1;
+    CHECK(pages_map(a) == 0 && maps_live == 1, "the blob is mapped");
+    CHECK(drm_gem_handle_delete(&file, ha) == 0, "the blob's handle goes");
+    drm_dev_get(dev); /* for `unbind`, since the unplug drops the bind's */
+    before = frees;
+    zaps = 0;
+    backing_releases = unplug_releases = 0;
+    fail_one = 0; /* the UNREF's command */
+    drm_gem_object_put(&a->shmem.base);
+    CHECK(vg->dead && maps_live == 0,
+          "the free frees the map and, with no UNREF, kills the device");
+    CHECK(zaps == 0 && unplug_releases == 1,
+          "the kill passes over the blob at count 0 and gives its frames back at once");
+    CHECK(frees == before + 1 && backing_releases == 1, "the blob is freed once");
+    map_give = 0;
+    unbind();
+    gpu.dev.ops = NULL;
 }
 
 int main(void)
@@ -2682,6 +2772,8 @@ int main(void)
     row_unplug();
     row_reset_heap();
     row_revoke();
+    row_revoke_held();
+    row_revoke_no_unref();
     CHECK(allocations == 0, "nothing is left allocated");
     CHECK(pages_held == 0, "no page is left held");
     CHECK(irq_depth == 0, "every lock is given back");
