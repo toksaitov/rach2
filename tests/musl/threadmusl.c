@@ -1478,9 +1478,13 @@ static int robust_exec(void)
  * execve under the probe's PTRACE_SYSCALL, and only then does the first
  * thread call execve, which sends it SIGKILL and waits for it to end. The
  * SIGKILL ends the stop, and the second call does not run, as on Linux: its
- * thread ends, and the child runs the first one's program. A second call that
- * ran and waited for the first would never end, and would leave the probe's
- * wait asleep. Returns 0, or 1 after the failure is printed.
+ * thread ends, and the child runs the first one's program. The tracer sees
+ * the thread exit with status 0, not die of SIGKILL, since a thread another
+ * thread's execve ends takes 0 as its code, as Linux's do_group_exit gives it
+ * while group_exec_task is set and ptrace(2) says. A second call that ran and
+ * waited for the first would never end, and would leave the probe's wait
+ * asleep. Errno is cleared first, so a wrong status is not printed with the
+ * errno of an earlier call. Returns 0, or 1 after the failure is printed.
  */
 static int two_execs(void)
 {
@@ -1503,13 +1507,14 @@ static int two_execs(void)
         _exit(5);
     }
     close(go[0]);
+    errno = 0;
     ok = read(tid_pipe[0], &second, sizeof(second)) == sizeof(second) &&
          waitpid(second, &status, __WALL) == second && WIFSTOPPED(status) &&
          WSTOPSIG(status) == SIGSTOP && ptrace(PTRACE_SYSCALL, second, NULL, NULL) == 0 &&
          waitpid(second, &status, __WALL) == second && WIFSTOPPED(status) &&
          WSTOPSIG(status) == SIGTRAP && write(go[1], "g", 1) == 1 &&
-         waitpid(second, &status, __WALL) == second && WIFSIGNALED(status) &&
-         WTERMSIG(status) == SIGKILL && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+         waitpid(second, &status, __WALL) == second && WIFEXITED(status) &&
+         WEXITSTATUS(status) == 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
          WEXITSTATUS(status) == 9;
     close(go[1]);
     close(tid_pipe[0]);
