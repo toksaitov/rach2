@@ -109,6 +109,9 @@ says the counter runs at one rate whatever the processor's clock does, or
 on the command line says to take it as one that does, as QEMU's emulator
 needs; never under
 .Cm rach2.notsc .
+Under KVM, where KVM offers its stable clock and its clock page says the
+counter is one clock on every processor, the kernel takes the counter's
+rate from that page instead of measuring it, as Linux's kvm-clock does.
 As each further processor starts, it and the boot processor read the
 counter in turn for two ticks, and a reading behind the other's turns the
 TSC clock off.

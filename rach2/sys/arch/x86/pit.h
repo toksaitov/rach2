@@ -86,10 +86,17 @@ uint32_t pit_period_us(void);
  */
 uint32_t pit_wait_counts(uint32_t counts);
 
-/** The TSC's counts in a tick, as `timer_calibrate` measured them, or 0
- * when it was not measured: no invariant TSC and no `rach2.tscreliable`, or
- * `rach2.notsc`. */
+/** The TSC's counts in a tick, as `timer_calibrate` measured them or KVM
+ * stated them, or 0 when there is no rate: no invariant TSC, no rate from
+ * KVM and no `rach2.tscreliable`, or `rach2.notsc`. */
 uint32_t tsc_counts_per_tick(void);
+
+/** Whether the TSC keeps the clock even where the HPET or the PM timer
+ * could, and is measured before the first tick (`platform_timer_start`):
+ * under `rach2.tscreliable`, or where KVM states its rate and that it is
+ * one clock on every processor (`tsc_kvm_counts_per_tick`), as Linux's
+ * kvm-clock reads it with no exit. */
+int timer_tsc_trusted(void);
 
 /*
  * The wait `k_udelay` makes instead of counting channel 0, or NULL to count

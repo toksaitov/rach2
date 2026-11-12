@@ -359,7 +359,7 @@ void platform_timer_start(isr_handler_t tick)
             udelay_wait = refclock_wait_us;
         }
     }
-    if (kcmdline_has("rach2.tscreliable")) {
+    if (timer_tsc_trusted()) {
         (void)timer_calibrate(); /* before the first tick, which starts the reference */
     }
     apic = ioapic_wanted(a);

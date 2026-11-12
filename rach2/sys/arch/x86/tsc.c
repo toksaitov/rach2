@@ -8,6 +8,8 @@
 #include "kcpu.h"
 #include "pit.h"
 #include "../arch.h"
+#include "../../cmdline.h"
+#include "../../timer.h"
 #include "../../lib/spinlock.h"
 
 /* The register `rdtscp` returns in ECX beside the counter. */
@@ -41,6 +43,106 @@ int tsc_invariant(void)
     }
     kcpu_id(0x80000007u, &a, &b, &c, &d);
     return (d & (1u << 8)) != 0;
+}
+
+/* KVM's paravirtual features (Documentation/virt/kvm/x86/cpuid.rst) and
+ * the clock MSR the second of them names (msr.rst). */
+#define KVM_FEATURE_CLOCKSOURCE2           (1u << 3)
+#define KVM_FEATURE_CLOCKSOURCE_STABLE_BIT (1u << 24)
+#define MSR_KVM_SYSTEM_TIME_NEW            0x4B564D01u
+#define PVCLOCK_TSC_STABLE_BIT             0x01u
+
+/* KVM's pvclock_vcpu_time_info, 32 bytes, which may not cross a page. */
+struct kvm_clock_page {
+    volatile uint32_t version; /* odd while KVM writes the rest */
+    uint32_t pad0;
+    volatile uint64_t tsc_timestamp;
+    volatile uint64_t system_time;
+    volatile uint32_t tsc_to_system_mul; /* nanoseconds per count, by 2^32 */
+    volatile signed char tsc_shift;      /* the count's shift before `mul` */
+    volatile uint8_t flags;
+    uint8_t pad[2];
+};
+
+/* Room for the page at an offset where it crosses no page boundary: of
+ * the two halves of 64 bytes on an 8-byte boundary, one lies in one page. */
+static uint64_t kvm_clock_room[8];
+
+/** `num` / `den`, by the bit, without i686's absent libgcc divide. */
+static uint64_t tsc_div(uint64_t num, uint32_t den)
+{
+    uint64_t q = 0, rem = 0;
+    int bit;
+
+    for (bit = 63; bit >= 0; --bit) {
+        rem = (rem << 1) | ((num >> bit) & 1u);
+        if (rem >= den) {
+            rem -= den;
+            q |= (uint64_t)1 << bit;
+        }
+    }
+    return q;
+}
+
+/** The counts in a tick for a clock page's `tsc_to_system_mul` and
+ * `tsc_shift`, Linux's pvclock_tsc_khz (pvclock.c:27-37) for a tick in place
+ * of a millisecond: a tick's nanoseconds by 2^32, divided by `mul`, then
+ * shifted against `shift`. 0 for a rate that does not fit 32 bits. */
+static uint32_t kvm_clock_counts(uint32_t mul, int shift)
+{
+    uint64_t counts;
+
+    if (mul == 0 || shift < -31 || shift > 31) {
+        return 0;
+    }
+    counts = tsc_div((uint64_t)TICK_NS << 32, mul);
+    if (shift < 0) {
+        if (counts > (0xFFFFFFFFull >> -shift)) {
+            return 0;
+        }
+        counts <<= -shift;
+    } else {
+        counts >>= shift;
+    }
+    return counts > 0xFFFFFFFFull ? 0u : (uint32_t)counts;
+}
+
+uint32_t tsc_kvm_counts_per_tick(void)
+{
+    static int asked;
+    static uint32_t counts;
+    struct kvm_clock_page *p;
+    uintptr_t at = (uintptr_t)kvm_clock_room;
+    uint32_t want = KVM_FEATURE_CLOCKSOURCE2 | KVM_FEATURE_CLOCKSOURCE_STABLE_BIT;
+    uint32_t version, mul;
+    uint64_t phys;
+    int shift, stable;
+
+    if (asked) {
+        return counts;
+    }
+    asked = 1;
+    if (kcmdline_has("rach2.notsc") || !kcpu_msr_present() ||
+        (kcpu_kvm_features() & want) != want) {
+        return 0;
+    }
+    if ((at & 0xFFFu) > 0x1000u - sizeof(*p)) {
+        at += 32u;
+    }
+    p = (struct kvm_clock_page *)at;
+    phys = (uint64_t)virt_to_phys(p);
+    kcpu_wrmsr(MSR_KVM_SYSTEM_TIME_NEW, (uint32_t)phys | 1u, (uint32_t)(phys >> 32));
+    do {
+        version = p->version;
+        arch_dma_fence();
+        mul = p->tsc_to_system_mul;
+        shift = p->tsc_shift;
+        stable = (p->flags & PVCLOCK_TSC_STABLE_BIT) != 0;
+        arch_dma_fence();
+    } while ((version & 1u) != 0 || version != p->version);
+    kcpu_wrmsr(MSR_KVM_SYSTEM_TIME_NEW, 0, 0);
+    counts = version != 0 && stable ? kvm_clock_counts(mul, shift) : 0u;
+    return counts;
 }
 
 int tsc_has_rdtscp(void)
