@@ -696,7 +696,7 @@ int fd_table_init(fd_table_t *table)
     table->cap = 0;
     table->next_free = 0;
     table->sharers = NULL;
-    table->lock.locked = 0;
+    spin_lock_init(&table->lock, "fd_table->lock");
     return chunks_reach(table, FD_TABLE_FIRST) == 0 ? 0 : -1;
 }
 
@@ -795,6 +795,7 @@ static fd_table_t *table_copy(fd_table_t *src, int take)
     if (!table) {
         return NULL;
     }
+    spin_lock_init(&table->lock, "fd_table->lock");
     if (entries_copy(table, src, take) != 0) {
         fd_table_delete(table);
         return NULL;

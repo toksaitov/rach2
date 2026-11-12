@@ -5864,6 +5864,8 @@ static int release_inode(struct ext2_mount *em, struct ext2_node *n)
  * for it and starts again, PLAN_TRIES times before it
  * reads under the lock, so that the holder waits on the disk only for a
  * block evicted again.
+ * The caller locks the new inode at subclass 4, below the published nodes
+ * the VFS holds, until it has a directory entry.
  * 0, -ENOSPC, -ENOMEM, or -errno; a failure frees the inode.
  */
 static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_t mode, int store,
@@ -6767,7 +6769,9 @@ static int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint3
     if (rc != 0) {
         return rc;
     }
+    sleep_lock_subclass(4);
     node_lock(n);
+    sleep_lock_subclass(0);
     rc = dir_add(em, d, name, n->ino, 1);
     if (rc != 0) {
         n->nlink = 0;
@@ -6832,7 +6836,9 @@ static int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32
     if (rc != 0) {
         return rc;
     }
+    sleep_lock_subclass(4);
     node_lock(n);
+    sleep_lock_subclass(0);
     if (type == S_IFCHR_ || type == S_IFBLK_) {
         uint32_t major = (rdev >> 8) & 0xFFFu;
         uint32_t minor = (rdev & 0xFFu) | ((rdev >> 12) & 0xFFF00u);
@@ -6964,7 +6970,9 @@ static int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32
     if (rc != 0) {
         return rc;
     }
+    sleep_lock_subclass(4);
     node_lock(n);
+    sleep_lock_subclass(0);
     rc = map_alloc(em, n, 0, &b, &fresh);
     if (rc == 0) {
         rc = write_bytes(em, (uint64_t)b * em->block_size, 0, em->block_size, 0);
@@ -7197,7 +7205,9 @@ static int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, cons
     if (rc != 0) {
         return rc;
     }
+    sleep_lock_subclass(4);
     node_lock(n);
+    sleep_lock_subclass(0);
     if (tlen < EXT2_FAST_LINK) {
         uint32_t i;
 
