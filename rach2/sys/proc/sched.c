@@ -1361,40 +1361,58 @@ static void sched_account_one(struct percpu *cpu, int mode)
     }
 }
 
+/* The changes of mode a processor notes (`account_stretches`): the mode
+ * each begins and the mode before it. */
+static const int account_began[4] = {ACCOUNT_USER, ACCOUNT_SYSTEM, ACCOUNT_IDLE, ACCOUNT_SYSTEM};
+static const int account_before[4] = {ACCOUNT_SYSTEM, ACCOUNT_USER, ACCOUNT_SYSTEM, ACCOUNT_IDLE};
+
 /**
  * Give the processor's last changes of mode before the tick that counts,
- * as monotonic times: `from[i]` is when a stretch in `mode[i]` began, latest
- * first, and a time before the last of the `n` returned is in `mode[n]`.
- * The stretches are user mode since the last return to it (`user_cycles`,
- * which `isr_leave` notes), the kernel since the last entry from it
- * (`entry_cycles`, which the entry notes, or `user_entered`, which the
- * return noted, when the tick found user mode), and the idle wait since it
- * began (`idle_cycles`). A change too old to time (`timer_cycles_when`)
- * reads 0, before every tick counted.
+ * as monotonic times, latest first: `from[i]` is when a stretch in
+ * `mode[i]` began, and a time before the last of the `n` returned is in
+ * `mode[n]`. The changes are the last return to user mode (`user_cycles`,
+ * which `isr_leave` notes), the last entry from it (`entry_cycles`, which
+ * the entry notes, or `user_entered`, which the return noted, when the tick
+ * found user mode, since the tick's own entry is the latest), and the last
+ * idle wait's start and end (`idle_cycles`, `idle_end_cycles`). Only the
+ * latest of each is kept, so the stretches before the second latest may
+ * hide older changes; ticks due that far back are rare. A change too old
+ * to time (`timer_cycles_when`) is left out, and with none left `mode[0]`
+ * is the mode the tick found.
  */
 static int account_stretches(const struct percpu *cpu, int user, int64_t now, int64_t *from,
                              int *mode)
 {
-    int64_t back = timer_cycles_when(cpu->user_cycles, now);
-    int n = 0;
+    uint64_t cycles[4];
+    int kind[4];
+    int64_t t;
+    int k, i, n = 0;
 
-    if (user) {
-        from[0] = back;
-        from[1] = timer_cycles_when(cpu->user_entered, now);
-        mode[0] = ACCOUNT_USER;
-        mode[1] = ACCOUNT_SYSTEM;
-        mode[2] = ACCOUNT_USER;
-        return 2;
+    cycles[0] = cpu->user_cycles;
+    cycles[1] = user ? cpu->user_entered : cpu->entry_cycles;
+    cycles[2] = cpu->idle_cycles;
+    cycles[3] = cpu->idle_end_cycles;
+    for (k = 0; k < 4; k++) {
+        t = timer_cycles_when(cycles[k], now);
+        if (t == 0) {
+            continue;
+        }
+        for (i = n; i > 0 && from[i - 1] < t; i--) {
+            from[i] = from[i - 1];
+            kind[i] = kind[i - 1];
+        }
+        from[i] = t;
+        kind[i] = k;
+        n++;
     }
-    if (cpu->idle_wait) {
-        from[n] = timer_cycles_when(cpu->idle_cycles, now);
-        mode[n++] = ACCOUNT_IDLE;
+    for (i = 0; i < n; i++) {
+        mode[i] = account_began[kind[i]];
     }
-    from[n] = timer_cycles_when(cpu->entry_cycles, now);
-    mode[n++] = ACCOUNT_SYSTEM;
-    from[n] = back;
-    mode[n++] = ACCOUNT_USER;
-    mode[n] = ACCOUNT_SYSTEM;
+    if (n == 0) {
+        mode[0] = cpu->idle_wait ? ACCOUNT_IDLE : user ? ACCOUNT_USER : ACCOUNT_SYSTEM;
+    } else {
+        mode[n] = account_before[kind[n - 1]];
+    }
     return n;
 }
 
@@ -1436,10 +1454,10 @@ static int account_stretches(const struct percpu *cpu, int user, int64_t now, in
 void sched_account_tick(int user, int64_t due)
 {
     struct percpu *cpu = this_cpu();
-    int64_t now = rtc_monotonic_ns(), from[3], at;
+    int64_t now = rtc_monotonic_ns(), from[4], at;
     int64_t gap = now - cpu->accounted_ns + (int64_t)(TICK_NS / 2u);
     uint64_t ticks, stolen;
-    int mode[4], n = 0, i;
+    int mode[5], n = 0, i;
 
     if (gap < (int64_t)TICK_NS) {
         return;
@@ -1709,6 +1727,7 @@ void idle_wait_irq_off(void)
     this_cpu()->idle_wait = 1;
     depth = bkl_drop();
     idle_halt();
+    this_cpu()->idle_end_cycles = arch_cycles();
     bkl_take_as(depth, BKL_KEY_IDLE);
     this_cpu()->idle_wait = 0;
 }
@@ -1735,6 +1754,7 @@ void idle_wait_irq_on(void)
     this_cpu()->idle_wait = 1;
     depth = bkl_drop();
     idle_halt();
+    this_cpu()->idle_end_cycles = arch_cycles();
     bkl_take_as(depth, BKL_KEY_IDLE);
     this_cpu()->idle_wait = 0;
     kirq_restore(flags);
