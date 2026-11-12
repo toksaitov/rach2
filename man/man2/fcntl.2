@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd November 13, 2026
 .Dt FCNTL 2
 .Os
 .Sh NAME
@@ -57,9 +57,11 @@ Return the access mode,
 or
 .Dv O_RDWR ,
 combined with the stored
-.Dv O_APPEND
+.Dv O_APPEND ,
+.Dv O_NONBLOCK ,
+.Dv O_SYNC
 and
-.Dv O_NONBLOCK
+.Dv O_DSYNC
 flags.
 A descriptor opened with
 .Dv O_PATH
@@ -73,8 +75,12 @@ Replace the open file description's
 and
 .Dv O_NONBLOCK
 flags with those bits from the integer argument.
-Ignore other bits, including the access mode and
-.Dv O_CLOEXEC .
+Ignore other bits, including the access mode,
+.Dv O_CLOEXEC ,
+.Dv O_SYNC
+and
+.Dv O_DSYNC ,
+as Linux does.
 A change of
 .Dv O_APPEND
 on an append-only file fails with

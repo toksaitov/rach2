@@ -947,6 +947,28 @@ out:
     return written;
 }
 
+static long sync_entry(fd_entry_t *e, int (*sync_op)(struct vfs_mount *mnt, void *handle));
+
+/**
+ * The end of a write of `written` bytes, or of its -errno, through `entry`:
+ * on a description opened with O_SYNC the file synced as fsync syncs it,
+ * and with O_DSYNC as fdatasync does, as Linux's `generic_write_sync`
+ * (include/linux/fs.h), which syncs the range written where this syncs the
+ * file. The caller holds no lock of the write's. Returns `written`, or the
+ * sync's -errno.
+ */
+static long write_synced(fd_entry_t *entry, long written)
+{
+    uint32_t st = entry->ofd ? entry->ofd->status_flags : 0u;
+    long rc;
+
+    if (written <= 0 || !(st & OFD_DSYNC)) {
+        return written;
+    }
+    rc = sync_entry(entry, (st & OFD_SYNC) == OFD_SYNC ? vfs_fsync : vfs_fdatasync);
+    return rc < 0 ? rc : written;
+}
+
 /**
  * Write `count` bytes of user buffer `buf` to the file of a mounted type or
  * of the KRFFS root that `entry` is open on: at the description's offset,
@@ -993,6 +1015,8 @@ out:
  * still needs it, and this call takes it for the copy into the pages
  * mappings hold (`file_write_mapped`), the look at the buffer's pages
  * (`user_resident`), the signal and the set-id change, and inotify's report.
+ * On an O_SYNC or O_DSYNC description the write ends with the file's sync
+ * (`write_synced`), with every lock of the write let go.
  */
 static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t count,
                           const uint64_t *at, size_t asked)
@@ -1037,7 +1061,7 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
         inotify_desc(ofd, IN_MODIFY);
     }
     big_give(state.big);
-    return written;
+    return (int32_t)write_synced(entry, written);
 }
 
 /**
@@ -4188,11 +4212,12 @@ static int open_truncate(struct open_file *ofd, struct vfs_mount *mnt)
  * truncation frees the description and its open handle, and one that
  * succeeds clears the set-id bits for a caller without privilege. The
  * access mode is the low two bits of `flags`, read apart from the bits above
- * them. O_APPEND and O_NONBLOCK are status flags of the description, which
- * dup and fork share, and O_CLOEXEC, which opendir and fopen's "e" mode rely
- * on, marks the descriptor. A file of debugfs gets the operations its
- * registrant gave it (`debugfs_bind`), which read, write and ioctl call in
- * place of the file system's, and whose open may refuse or sleep.
+ * them. O_APPEND, O_NONBLOCK, O_SYNC and O_DSYNC are status flags of the
+ * description, which dup and fork share, and O_CLOEXEC, which opendir and
+ * fopen's "e" mode rely on, marks the descriptor. A file of debugfs gets
+ * the operations its registrant gave it (`debugfs_bind`), which read, write
+ * and ioctl call in place of the file system's, and whose open may refuse
+ * or sleep.
  *
  * The entry is published last (`fd_install`): until then the slot is a
  * reservation, which no other thread's lookup, close or dup2 can take while
@@ -4268,6 +4293,7 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
         if (flags & O_NONBLOCK) {
             entry->ofd->status_flags |= OFD_NONBLOCK;
         }
+        entry->ofd->status_flags |= (uint32_t)flags & OFD_SYNC;
     }
     if (flags & O_CLOEXEC) {
         entry->flags |= FD_FLAG_CLOEXEC;
@@ -14640,6 +14666,7 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
         inotify_desc(ofd, IN_MODIFY);
     }
     big_give(state.big);
+    rc = write_synced(entry, rc);
 out:
     kfree(iov);
     return rc;
@@ -16516,10 +16543,11 @@ static long fcntl_cmd(fd_entry_t *entry, int cmd, uintptr_t arg);
  *
  * F_GETFD and F_SETFD read and set the close-on-exec bit, which belongs to
  * the descriptor. F_GETFL reports the access mode, 0, 1 or 2 for O_RDONLY,
- * O_WRONLY and O_RDWR, with O_APPEND and O_NONBLOCK, and O_PATH for an
- * O_PATH descriptor. F_SETFL sets O_APPEND and O_NONBLOCK, which belong to
- * the open file description a dup or a fork shares, and ignores the other
- * bits, the access mode and O_CLOEXEC among them, as POSIX allows; it is
+ * O_WRONLY and O_RDWR, with O_APPEND, O_NONBLOCK, O_SYNC and O_DSYNC, and
+ * O_PATH for an O_PATH descriptor. F_SETFL sets O_APPEND and O_NONBLOCK,
+ * which belong to the open file description a dup or a fork shares, and
+ * ignores the other bits, the access mode, O_CLOEXEC and the sync flags
+ * among them, as POSIX allows and Linux's setfl does; it is
  * -EPERM when it would change O_APPEND of an append-only file, as Linux's
  * setfl refuses either way.
  *
@@ -16595,7 +16623,7 @@ static long fcntl_cmd(fd_entry_t *entry, int cmd, uintptr_t arg)
             fl = 0;
         }
         if (entry->ofd) {
-            fl |= (int)(entry->ofd->status_flags & (OFD_APPEND | OFD_NONBLOCK));
+            fl |= (int)(entry->ofd->status_flags & (OFD_APPEND | OFD_NONBLOCK | OFD_SYNC));
         }
         if (entry->flags & FD_FLAG_PATH) {
             fl |= O_PATH;

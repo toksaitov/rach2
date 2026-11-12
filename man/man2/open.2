@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd November 13, 2026
 .Dt OPEN 2
 .Os
 .Sh NAME
@@ -100,6 +100,15 @@ Set nonblocking status on the open file description.
 Operations that support this status return
 .Er EAGAIN
 when they would wait.
+.It Dv O_DSYNC
+End each successful write through the description with
+.Xr fdatasync 2
+of the file, so the call returns once its data is on the medium.
+A failed sync is the write's error.
+.It Dv O_SYNC
+End each successful write with
+.Xr fsync 2
+of the file, its metadata included.
 .It Dv O_CLOEXEC
 Close the descriptor on successful
 .Xr execve 2 .
@@ -116,7 +125,6 @@ Name the file without opening it; see
 .Pp
 Other flag bits are not checked by the ordinary-file open handler and
 have no effect there.
-In particular, synchronous I/O flags do not cause writes to be flushed.
 .Dv O_APPEND
 and
 .Dv O_NONBLOCK
