@@ -11,8 +11,8 @@
 # sub-make owns while build/tools, build/man and build/vendor stay.
 #
 # The rest are read from the make database, `make -pn`, of a private copy of
-# the root Makefile, mk/ and the suites' fragment, which parses the rules and
-# runs none of them:
+# the root Makefile, mk/ and every fragment the root Makefile reads, which
+# parses the rules and runs none of them:
 #
 #   * grub-disk-rule: `os-real-grub-disk` has a rule that makes
 #     the disk, the disk's rule names the kernel, the recovery kernel, the
@@ -119,20 +119,40 @@ for f in $listed $listed64; do
 done
 last=${listed##* }
 
+# Every makefile the root Makefile reads, as make's MAKEFILE_LIST names them
+# once the parse is done, but the dependency files under build/: so a
+# fragment that a new include names comes into the copy with the others.
+# shellcheck disable=SC2016 # make's words, which make expands
+printf '$(info $(MAKEFILE_LIST))\nrach2-makefiles: ;\n' >"$WORK/makefiles.mk"
+fragments=
+for f in $(MAKEFLAGS='' MFLAGS='' make --no-print-directory -s -n -f Makefile \
+    -f "$WORK/makefiles.mk" rach2-makefiles); do
+    case $f in
+        /* | build/*) ;;
+        *) [ -f "$f" ] && fragments="$fragments $f" ;;
+    esac
+done
+case " $fragments " in
+    *' Makefile '*' tests/system/suites.mk '*) ;;
+    *)
+        echo "build-rules-test: the root Makefile's parse named no fragments: $fragments" >&2
+        exit 1
+        ;;
+esac
+
 # The build tree: the makefiles the root `make clean` reads, and the files its
 # parse runs. The database rows read the same tree.
 C="$WORK/clean"
-for f in Makefile tests/registry tests/Makefile tests/system/suites.mk krffs/Makefile \
+# shellcheck disable=SC2086 # fragments is a list of paths without blanks
+for f in $fragments tests/registry tests/Makefile krffs/Makefile \
     krffs/manifest_deps.sh krffs/programs.sh rach2/Makefile rach2/sources.mk ish/Makefile \
-    ish/sources.mk term/sources.mk utils/Makefile utils/programs.mk ports/doom/Makefile tools/etude/sources.mk \
-    tests/cases/host/scripts.mk tests/cases/host/family.mk tests/system/fakeapi/native.mk \
-    tests/native/native.mk tests/native/sources.mk \
-    tests/system/wifi/wifi.mk tests/system/wifi/hwsimrelay.mk \
+    ish/sources.mk utils/Makefile utils/programs.mk ports/doom/Makefile \
     $(find rach2/sys -name '*.mk'); do
     mkdir -p "$C/$(dirname "$f")"
     cp "$f" "$C/$f"
 done
-cp -R mk "$C/mk"
+mkdir -p "$C/mk"
+cp -R mk/. "$C/mk/"
 mkdir -p "$C/krffs/manifests"
 cp krffs/manifests/*.manifest "$C/krffs/manifests/"
 rm -f "$C/krffs/recovery_authorized_keys"
@@ -389,8 +409,10 @@ images_include_row()
 manifest_parts_row()
 {
     db="$WORK/base.db"
-    manifests=$(cd "$C" && grep -l '^[^#]*build/vendor/e2fsprogs/' krffs/manifests/*.manifest)
-    if [ -z "$manifests" ]; then
+    # One line: BSD awk refuses a -v value with a newline in it.
+    manifests=$(cd "$C" && grep -l '^[^#]*build/vendor/e2fsprogs/' krffs/manifests/*.manifest |
+        tr '\n' ' ')
+    if [ -z "${manifests% }" ]; then
         fail manifest-parts "no manifest names an e2fsprogs program"
         return
     fi
