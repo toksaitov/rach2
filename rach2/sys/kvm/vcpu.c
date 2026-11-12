@@ -798,11 +798,13 @@ static void vcpu_sched_out(void *arg)
  * `kvm_lapic_prepare` readies each entry, and an exit the kernel took ends
  * the call when the caller asked for an interrupt window and may inject
  * now. Before each entry the loop takes a switch the tick asked for at a
- * slice's end (`sched_take_preempt`), as Linux's
- * xfer_to_guest_mode_handle_work takes TIF_NEED_RESCHED, since an exit the
- * kernel answers never reaches the system call's exit, where that switch
- * is otherwise taken: without it a guest that keeps the kernel busy keeps
- * every other thread off its processor. It takes no other, as
+ * slice's end, or that a wake, a priority change or an affinity move asked
+ * for on behalf of a real-time thread that outranks the vCPU
+ * (`sched_take_preempt`), as Linux's xfer_to_guest_mode_handle_work takes
+ * TIF_NEED_RESCHED, since an exit the kernel answers never reaches the
+ * system call's exit, where that switch is otherwise taken: without it a
+ * guest that keeps the kernel busy keeps every other thread off its
+ * processor. It takes no other switch, as
  * `sched_service_point` would whenever a thread is queued: a guest exits
  * thousands of times a second, and giving the processor away at each exit
  * cost the vCPU up to a slice each time. The steal time says preempted
