@@ -103,11 +103,10 @@ static int pin_keep_files(struct pin *pin, struct mm *mm, uintptr_t start, uintp
     return 0;
 }
 
-/** Whether [start, end) of `mm` meets a writable shared mapping of a disk
- * file, whose writeback is ordered by the mapping's lifetime, so that a
- * long-term pin could outlive its writer and leave later device stores
- * unwritten. Linux's writable_file_mapping_allowed refuses such a pin. Does not
- * sleep. */
+/** Whether [start, end) of `mm` meets a writable shared disk mapping.
+ * Linux's writable_file_mapping_allowed refuses a long-term write pin of
+ * one, so pin_user refuses before taking frames or backing-file holds.
+ * Does not sleep. */
 static int pin_meets_tracked_file(struct mm *mm, uintptr_t start, uintptr_t end)
 {
     const vma_t *r;
