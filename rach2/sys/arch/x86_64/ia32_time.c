@@ -97,8 +97,10 @@ long compat_sys_time32(isr_params_t *params)
     return t;
 }
 
-/** gettimeofday (78): an i386 timeval and the time zone, which the x86-64
- * call ignores as well. */
+/** gettimeofday (78): an i386 timeval and the time zone, whose layout is
+ * the x86-64's. The x86-64 call fills the time first and can fault only on
+ * the zone, so the time is written either way, as Linux's compat call
+ * writes it before the zone (kernel/time/time.c:224-241). */
 long compat_sys_gettimeofday(isr_params_t *params)
 {
     long tv[2];
@@ -106,10 +108,10 @@ long compat_sys_gettimeofday(isr_params_t *params)
     long rc = ia32_native(params, sys_gettimeofday, tv, sizeof(tv), u ? KPTR(tv) : 0,
                           UPTR(SC_ARG(params, 1)), 0, 0, 0, 0);
 
-    if (rc != 0 || !u) {
-        return rc;
+    if (u && put_time32(u, tv) != 0) {
+        return -EFAULT;
     }
-    return put_time32(u, tv);
+    return rc;
 }
 
 /** settimeofday (79): an i386 timeval, or 0, and the time zone. */

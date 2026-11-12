@@ -15,7 +15,7 @@
 .Sh SYNOPSIS
 .In sys/time.h
 .Ft int
-.Fn gettimeofday "struct timeval *restrict tv" "void *restrict tz"
+.Fn gettimeofday "struct timeval *restrict tv" "struct timezone *restrict tz"
 .Ft int
 .Fn settimeofday "const struct timeval *tv" "const struct timezone *tz"
 .In time.h
@@ -40,10 +40,13 @@
 .Fn gettimeofday
 reports real time in
 .Fa tv ,
-as seconds and microseconds.
-The
-.Fa tz
-argument is ignored.
+as seconds and microseconds, and the time zone that
+.Fn settimeofday
+last set in
+.Fa tz ,
+minutes west of UTC and the kind of summer time, both 0 until one is set;
+either may be null.
+The kernel keeps the zone only to give it back: no clock reads it.
 Real time is the CMOS clock reading taken at boot plus
 .Dv CLOCK_MONOTONIC ,
 the time since, to the microsecond, so that the rate that
@@ -76,9 +79,19 @@ The boot time that
 gives moves with the step, as on Linux.
 The hardware clock is not written, so the next boot reads the CMOS again.
 .Fn settimeofday
-keeps no time zone: one with only
-.Fa tz ,
-or with neither, sets nothing and succeeds.
+also sets the time zone from a
+.Fa tz
+that is not null, for a privileged caller alone and from \-900 to 900
+minutes, else
+.Er EINVAL ;
+either argument may be null, and a call with neither checks only the
+privilege.
+The first zone set since boot, when it comes without
+.Fa tv
+and is not UTC, moves real time on by its minutes west, as Linux does
+for a hardware clock kept in local time, which is how
+.Xr hwclock 1
+tells the kernel of one.
 Their i386 system call numbers are 264, with a 64-bit timespec 404, for
 .Fn clock_settime ,
 79 for
@@ -485,7 +498,9 @@ The raw
 .Fn clock_gettime
 timespec is null, a nonnull
 .Fn gettimeofday
-timeval cannot be written, or a nonnull
+timeval or timezone cannot be written, a nonnull
+.Fn settimeofday
+timeval or timezone cannot be read, or a nonnull
 .Fn clock_getres
 timespec cannot be written.
 For
@@ -499,6 +514,9 @@ was given a clock other than
 .Dv CLOCK_REALTIME ,
 or a time-setting call a time before 1970, before the time since boot or
 past the year 2232, or a fraction outside a second;
+or
+.Fn settimeofday
+a time zone more than 900 minutes either side of UTC;
 or
 .Fa clockid
 is 8 or greater, including Linux's alarm clocks and
@@ -549,7 +567,10 @@ or
 .Pa \&..
 and reaches something else.
 .It Bq Er EPERM
-A caller that is not privileged sets the real time; or a caller that is
+A caller that is not privileged sets the real time or the time zone, or
+calls
+.Fn settimeofday
+with neither; or a caller that is
 neither the owner nor privileged requests a timestamp change other than
 setting both times to the current time; or the file is immutable or
 append-only, where Linux lets an append-only file have its times set to
