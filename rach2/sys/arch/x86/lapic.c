@@ -43,12 +43,12 @@
  * names one processor. `nox2apic` keeps xAPIC mode, as on Linux.
  *
  * A processor without an APIC or without the model-specific registers, in
- * an x2APIC mode it cannot leave with an identity above 254 where no
- * remapping can come, or in xAPIC mode with its registers above 4 GiB, at
- * no address or on a page that cannot be mapped, is refused by name: the
- * kernel then has no message vectors and every device stays on its legacy
- * line. `rach2.nomsi` refuses in the same way, so a machine that misbehaves
- * has one word on its boot line.
+ * an x2APIC mode it cannot leave with an identity above 254 where neither
+ * remapping nor a hypervisor can keep it, or in xAPIC mode with its
+ * registers above 4 GiB, at no address or on a page that cannot be mapped,
+ * is refused by name: the kernel then has no message vectors and every
+ * device stays on its legacy line. `rach2.nomsi` refuses in the same way,
+ * so a machine that misbehaves has one word on its boot line.
  */
 
 #include "lapic.h"
@@ -221,21 +221,23 @@ static void x2apic_leave(uint32_t lo, uint32_t hi)
  * What becomes of the x2APIC mode a firmware left, with the identity `id`,
  * when interrupt remapping runs in the x2APIC format (`remapped`) or never
  * will: Linux's try_to_enable_x2apic and x2apic_disable (apic.c, lines 1781
- * to 1857). Remapping in that format reaches any identity, and a
- * hypervisor that allows x2APIC mode unremapped delivers to it, so the mode
- * is kept; so is a mode the firmware locked. Otherwise it is left, unless
- * the identity is 255 or more, which xAPIC mode, an I/O APIC entry's 8-bit
- * destination and a message's address cannot name, where Linux panics.
+ * to 1857), in their order. Remapping in that format reaches any identity,
+ * and a hypervisor that allows x2APIC mode unremapped keeps it whatever the
+ * identity (lines 1830 to 1856, where only `x2apic_disable` panics), so the
+ * mode is kept. Otherwise an identity of 255 or more, which xAPIC mode, an
+ * I/O APIC entry's 8-bit destination and a message's address cannot name,
+ * is where Linux panics (line 1789); below it, a mode the firmware locked
+ * is kept and any other left (lines 1792 to 1800).
  */
 static int firmware_verdict(uint32_t id, int remapped)
 {
-    if (remapped) {
+    if (remapped || kcpu_x2apic_unremapped()) {
         return FW_KEEP;
     }
     if (id >= 0xFFu) {
         return FW_STUCK;
     }
-    if (kcpu_x2apic_locked() || kcpu_x2apic_unremapped()) {
+    if (kcpu_x2apic_locked()) {
         return FW_KEEP;
     }
     return FW_LEAVE;
