@@ -201,8 +201,8 @@ static int end(struct nc_attempt *a, const char *value)
 }
 static int flag_fixture(struct nc_attempt *a, const struct nc_config *conf, const char *value)
 {
-    static const char *flags[] = {"mountns", "ipcns",   "utsns",   "log",
-                                  "alone",   "console", "private", NULL};
+    static const char *flags[] = {"mountns", "ipcns",   "utsns",  "log", "alone",
+                                  "console", "private", "gpumin", NULL};
     if (!strcmp(value, "pty"))
         return terminal(a, conf, "");
     for (size_t n = 0; flags[n]; n++)

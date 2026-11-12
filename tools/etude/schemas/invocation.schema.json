@@ -41,7 +41,7 @@
         "required": ["fixture", "given"],
         "properties": {
           "fixture": {"enum": ["workspace", "stage", "volume", "tmpfs", "mountns", "root", "ids", "ipcns", "utsns",
-                               "pty", "ports", "peer", "log", "alone", "console", "private"]},
+                               "pty", "ports", "peer", "log", "alone", "console", "private", "gpumin"]},
           "given": {"type": "array", "items": {"type": "string", "pattern": "^[!-~]+$"}}
         }
       }
