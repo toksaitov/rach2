@@ -359,6 +359,13 @@ void sched_service_point(void)
     }
 }
 
+/** The service point, as the kernel's with interrupts on: the code under
+ * test runs with them on here. */
+void sched_give_way(void)
+{
+    sched_service_point();
+}
+
 /** The tick count, one more at each look, so that a wait with a deadline
  * ends after a bounded number of turns. */
 uint64_t tick_count(void)

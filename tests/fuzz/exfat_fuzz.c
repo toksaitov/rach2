@@ -119,3 +119,10 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
     fs_exercise(&vfs_exfat_type);
     return 0;
 }
+
+/** The service point, as the kernel's with interrupts on: the code under
+ * test runs with them on here. */
+void sched_give_way(void)
+{
+    sched_service_point();
+}
