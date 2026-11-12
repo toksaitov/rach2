@@ -50,6 +50,27 @@
 #define VENUS_PARTS   8
 /* The run's counts and wall time, after its result line, for the log. */
 #define VENUS_SUMMARY " && cat " GRAPHICS_DIR "/out/summary.txt"
+/* piglit's quick_gl subset, which the venus and virgl families each run
+ * whole in one case, and its flakes; the Venus case draws with zink over
+ * Venus's ICD alone and judges against the Venus references' piglit
+ * results. */
+#define QUICK_GL        GRAPHICS_DIR "/piglit-quick-gl.txt.gz"
+#define QUICK_GL_FLAKES GRAPHICS_DIR "/piglit-quick-gl.flakes"
+#define QUICK_GL_JUDGE(ref)                                                     \
+    "python3 -I " GRAPHICS_DIR "/runners/judge.py results " ref                 \
+    "/piglit/piglit-quick-gl.results.gz " GRAPHICS_DIR                          \
+    "/out/piglit-quick-gl.results " GRAPHICS_DIR "/out/piglit-quick-gl.sample " \
+    QUICK_GL_FLAKES
+#define VENUS_ZINK                                                           \
+    "sh " GRAPHICS_DIR "/runners/piglit.sh -z "                              \
+    "/usr/share/vulkan/icd.d/venus_icd.x86_64.json -o " GRAPHICS_DIR "/out " \
+    "-l " QUICK_GL
+/* Fail the judging unless the record's `renderer` line names zink over
+ * Venus. */
+#define VENUS_ZINK_NAMED                                                       \
+    "grep -q '^renderer zink .*Virtio-GPU Venus' " GRAPHICS_DIR "/out/record " \
+    "|| { echo 'judge: result: fail the record names no zink over Venus'; "    \
+    "exit 1; } && "
 /* vkcube presenting through Venus's ICD alone, as root. */
 #define VKCUBE_RUN                              \
     "sh " GRAPHICS_DIR "/runners/vkcube.sh -i " \
@@ -134,8 +155,8 @@ struct graphics_case {
     char chunk[8];      /* the chunk's number, two digits */
     char clip[48];      /* the clip's file name */
     char test[48];      /* IGT's test program, piglit's part, Venus's case, the
-                         * game or virgl's kind: renderer, piglit, deqp, webgl
-                         * or device-lost */
+                         * game or virgl's kind: renderer, piglit,
+                         * piglit-quick-gl, deqp, webgl or device-lost */
     char suite[8];      /* a dEQP-GLES case's suite: gles2, gles3 or gles31 */
     int part;           /* the part of the lavapipe fraction, 1 to VENUS_PARTS,
                          * or of a virgl list, 1 to its parts, 0 being the
@@ -216,7 +237,7 @@ static int set_gles_subset(struct graphics_case *s, const char *text)
 
 /**
  * Read a Venus case, NAME: `smoke`, `sample`, `device-lost`,
- * `fraction-N`, part N of VENUS_PARTS of the lavapipe fraction, or
+ * `piglit-quick-gl`, `fraction-N`, part N of VENUS_PARTS of the lavapipe fraction, or
  * `deqp-SUITE-subset`, the GLES subset of SUITE on the profile's GL. Give 0
  * for another name.
  */
@@ -224,7 +245,7 @@ static int parse_venus(struct graphics_case *s, const char *name)
 {
     strcpy(s->profile, "venus");
     if (strcmp(name, "smoke") == 0 || strcmp(name, "sample") == 0 ||
-        strcmp(name, "device-lost") == 0) {
+        strcmp(name, "device-lost") == 0 || strcmp(name, "piglit-quick-gl") == 0) {
         strcpy(s->test, name);
         return 1;
     }
@@ -261,8 +282,9 @@ static int set_part(struct graphics_case *s, const char *text, int parts)
 }
 
 /**
- * Read a virgl case, NAME: `renderer`; `device-lost`; `piglit-sample` or
- * `piglit-NN`, part NN of VIRGL_PIGLIT_PARTS of the piglit list;
+ * Read a virgl case, NAME: `renderer`; `device-lost`; `piglit-quick-gl`;
+ * `piglit-sample` or `piglit-NN`, part NN of VIRGL_PIGLIT_PARTS of the
+ * piglit list;
  * `deqp-SUITE-sample`, `deqp-SUITE-subset` or `deqp-SUITE-N`, a part of
  * SUITE's cases, gles2, gles3 or gles31; or `webgl-` and a chunk as
  * parse_browser reads it. Give 0 for another name.
@@ -276,7 +298,8 @@ static int parse_virgl(struct graphics_case *s, const char *name)
         {"gles2", VIRGL_GLES2_PARTS}, {"gles3", VIRGL_GLES3_PARTS}, {"gles31", VIRGL_GLES31_PARTS}};
     size_t i, n;
 
-    if (strcmp(name, "renderer") == 0 || strcmp(name, "device-lost") == 0) {
+    if (strcmp(name, "renderer") == 0 || strcmp(name, "device-lost") == 0 ||
+        strcmp(name, "piglit-quick-gl") == 0) {
         strcpy(s->test, name);
     } else if (strncmp(name, "piglit-", 7) == 0) {
         strcpy(s->test, "piglit");
@@ -496,7 +519,10 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
         snprintf(runner, size, "sh " GRAPHICS_DIR "/runners/glmark2.sh -o " GRAPHICS_DIR "/out");
         return 0;
     case VENUS:
-        if (strcmp(s->test, "gles") == 0)
+        if (strcmp(s->test, "piglit-quick-gl") == 0) {
+            *pattern = "piglit: result: ";
+            snprintf(runner, size, VENUS_ZINK);
+        } else if (strcmp(s->test, "gles") == 0)
             snprintf(runner, size,
                      "sh " GRAPHICS_DIR "/runners/deqp.sh -v 1.4.1.1 -o " GRAPHICS_DIR
                      "/out -e %d -s 1 -l " VIRGL_DEQP " %s" VENUS_SUMMARY,
@@ -530,6 +556,10 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
             snprintf(runner, size,
                      "sh " GRAPHICS_DIR "/runners/virgl-lost.sh -o " GRAPHICS_DIR "/out");
             return 1;
+        } else if (strcmp(s->test, "piglit-quick-gl") == 0) {
+            *pattern = "piglit: result: ";
+            snprintf(runner, size,
+                     "sh " GRAPHICS_DIR "/runners/piglit.sh -g -o " GRAPHICS_DIR "/out -l " QUICK_GL);
         } else if (strcmp(s->test, "piglit") == 0) {
             *pattern = "piglit: result: ";
             snprintf(runner, size,
@@ -645,7 +675,7 @@ static void run_lost(struct graphics_case *s)
 
 /**
  * Write the judging command line of a Venus case to `command`: a diff of
- * what the device loss left, or judge.py on dEQP's results.
+ * what the device loss left, or judge.py on dEQP's or piglit's results.
  */
 static void judge_venus(struct graphics_case *s, char *command, size_t size)
 {
@@ -654,6 +684,10 @@ static void judge_venus(struct graphics_case *s, char *command, size_t size)
         snprintf(command, size,
                  "if diff " VENUS_LOST " " GRAPHICS_DIR "/out/lost.txt; then "
                  "echo 'judge: result: pass'; else echo 'judge: result: fail'; fi");
+        return;
+    }
+    if (strcmp(s->test, "piglit-quick-gl") == 0) {
+        snprintf(command, size, VENUS_ZINK_NAMED QUICK_GL_JUDGE(GRAPHICS_DIR "/ref/venus-wsl"));
         return;
     }
     if (strcmp(s->test, "gles") == 0) {
@@ -741,6 +775,8 @@ static void judge_line(struct graphics_case *s, char *command, size_t size)
             snprintf(command, size, VIRGL_NAMED VIRGL_DIFF("glinfo/renderers", "renderers"));
         else if (strcmp(s->test, "device-lost") == 0)
             snprintf(command, size, VIRGL_NAMED VIRGL_DIFF("lost/lost.txt", "lost.txt"));
+        else if (strcmp(s->test, "piglit-quick-gl") == 0)
+            snprintf(command, size, VIRGL_NAMED QUICK_GL_JUDGE(VIRGL_REF));
         else if (strcmp(s->test, "piglit") == 0)
             snprintf(command, size,
                      VIRGL_NAMED "python3 -I " GRAPHICS_DIR "/runners/judge.py results " VIRGL_REF
