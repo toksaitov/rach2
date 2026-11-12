@@ -37,10 +37,12 @@ runner_record()
 }
 
 # runner_busy: the CPUs' busy and total counts of /proc/stat's first line,
-# as `BUSY TOTAL`, in the kernel's ticks.
+# as `BUSY TOTAL`, in the kernel's ticks. Busy is user, nice, system, irq and
+# softirq, total those with idle, iowait and steal; Linux's guest and
+# guest_nice, the last two columns, are already counted in user and nice.
 runner_busy()
 {
-    awk '$1 == "cpu" { t = 0; for (i = 2; i <= NF; i++) t += $i; print t - $5 - $6, t; exit }' /proc/stat
+    awk '$1 == "cpu" { b = $2 + $3 + $4 + $7 + $8; print b, b + $5 + $6 + $9; exit }' /proc/stat
 }
 
 # runner_mesa: the version of Debian's Mesa, from dpkg in a Debian guest and

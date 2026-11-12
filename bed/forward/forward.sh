@@ -205,9 +205,11 @@ case $ref in
 esac
 
 # host_counts: Rach2's busy ticks and KVM exits now, `NAME VALUE` a line.
+# Busy is user, nice, system, irq and softirq, as measure.sh counts it, which
+# leaves out Linux's guest and guest_nice, already counted in user and nice.
 host_counts()
 {
-    awk '$1 == "cpu" { t = 0; for (i = 2; i <= NF; i++) t += $i; print "busy", t - $5 - $6 }
+    awk '$1 == "cpu" { print "busy", $2 + $3 + $4 + $7 + $8 }
          $1 == "kvm_exits" { print $1, $2 }' /proc/stat
 }
 
