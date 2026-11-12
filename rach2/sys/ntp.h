@@ -71,15 +71,19 @@ struct ktimex {
  * microseconds, and the one left read back; otherwise the modes of `tx`,
  * then its offset, frequency, errors, status, time constant, precision,
  * tolerance, tick and TAI offset filled in. `tx->sec` and `tx->usec` hold
- * the real time read before the call, whose seconds the PLL counts its
- * interval in; at or past a leap second the tick has not yet made, they
- * and `tx->tai` read as the leap second's own (ntp.c:835-850). The caller
- * has checked the modes (syscall.c's `ktimex_adjust`) and holds the
+ * the fine real time read before the call; `clock_sec` is real time's
+ * seconds at the last timer pass, read under the clock's lock, in which
+ * the PLL and FLL count their interval and reference time, as Linux's
+ * __ktime_get_real_seconds (kernel/time/ntp.c:321-325, 708-709,
+ * kernel/time/timekeeping.c:944-953). At or past a leap second the tick
+ * has not yet made, the fine time and `tx->tai` read as the leap second's
+ * own (ntp.c:835-850). The caller has checked the modes (syscall.c's
+ * `ktimex_adjust`) and holds the
  * clock's lock; the next tick takes the tick length (`ntp_tick_length`).
  * Returns TIME_ERROR while STA_UNSYNC or STA_CLOCKERR is set, else the
  * leap second's state, TIME_OK while none is announced.
  */
-int32_t ntp_adjtimex(struct ktimex *tx);
+int32_t ntp_adjtimex(struct ktimex *tx, int64_t clock_sec);
 
 /**
  * The clock's second, Linux's second_overflow (kernel/time/ntp.c:400-495),

@@ -71,9 +71,9 @@ static int64_t shift_floor(int64_t x, int s)
     return x < 0 ? -(int64_t)(((uint64_t)-x - 1u) >> s) - 1 : (int64_t)((uint64_t)x >> s);
 }
 
-/** `n` divided by `d`, toward zero, Linux's div_s64, without libgcc
- * (`tick_div64`). */
-static int64_t div_signed(int64_t n, uint32_t d)
+/** `n` divided by the nonzero `d`, toward zero, Linux's div64_long on
+ * x86-64, without libgcc (`tick_div64`). */
+static int64_t div_signed(int64_t n, uint64_t d)
 {
     return n < 0 ? -(int64_t)tick_div64((uint64_t)-n, d, (uint64_t *)0)
                  : (int64_t)tick_div64((uint64_t)n, d, (uint64_t *)0);
@@ -117,10 +117,7 @@ static int64_t ntp_update_offset_fll(int64_t offset64, int64_t secs)
         return 0;
     }
     time_status |= STA_MODE;
-    if (secs > 0xFFFFFFFFLL) {
-        secs = 0xFFFFFFFFLL;
-    }
-    return div_signed(offset64 * ((int64_t)1 << (NTP_SCALE_SHIFT - SHIFT_FLL)), (uint32_t)secs);
+    return div_signed(offset64 * ((int64_t)1 << (NTP_SCALE_SHIFT - SHIFT_FLL)), (uint64_t)secs);
 }
 
 /**
@@ -342,7 +339,7 @@ static void ntp_take_modes(const struct ktimex *tx, int64_t now_sec)
     }
 }
 
-int32_t ntp_adjtimex(struct ktimex *tx)
+int32_t ntp_adjtimex(struct ktimex *tx, int64_t clock_sec)
 {
     int64_t now_sec = tx->sec;
     int32_t result;
@@ -357,7 +354,7 @@ int32_t ntp_adjtimex(struct ktimex *tx)
         tx->offset = save_adjust;
     } else {
         if (tx->modes != 0) {
-            ntp_take_modes(tx, now_sec);
+            ntp_take_modes(tx, clock_sec);
         }
         tx->offset = shift_right(time_offset * NTP_INTERVAL_FREQ, NTP_SCALE_SHIFT);
         if (!(time_status & STA_NANO)) {

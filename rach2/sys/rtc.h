@@ -217,8 +217,9 @@ int32_t rtc_adjtimex(struct ktimex *tx);
  * leap second: a step of real time a second back or on, counted as a
  * setting is (`rtc_step_count`), with the timers of real time told
  * (`timerfd_clock_was_set`). The boot processor's timer pass calls it, or a
- * late pass on another (kernel.c), with the big lock held and interrupts
- * off, once the tick is written, since it writes the tick's length.
+ * late pass on another (kernel.c), holding `clock_pass_lock` with
+ * interrupts off, once the tick is written, since it writes the tick's
+ * length.
  */
 void rtc_seconds(uint32_t n);
 
