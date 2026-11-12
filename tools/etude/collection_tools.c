@@ -347,7 +347,9 @@ static void col_signals(void)
 {
     signal(SIGINT, col_signal);
     signal(SIGTERM, col_signal);
-#ifndef _WIN32
+#ifdef _WIN32
+    signal(SIGBREAK, col_signal);
+#else
     signal(SIGHUP, col_signal);
 #endif
 }
@@ -1791,15 +1793,19 @@ int etude_collection_tools_main(int argc, char **argv)
         goto done;
     }
     strcpy(job.root, root);
-    col_step("work directory");
-    int n = snprintf(job.work, sizeof job.work, "%s/build/tests/rach2-collection.XXXXXX", root);
-    if (n < 0 || n >= (int)sizeof job.work || col_dirs(job.work, 1) || !mkdtemp(job.work)) {
-        col_failed("cannot make %s: %s", job.work,
-                   errno ? strerror(errno) : "the path is too long");
-        goto done;
-    }
+    /* Caught before the work directory exists, so that a stop removes it. */
     col_stop = 0;
     col_signals();
+    col_step("work directory");
+    int n = snprintf(job.work, sizeof job.work, "%s/build/tests/rach2-collection.XXXXXX", root);
+    if (col_stop || n < 0 || n >= (int)sizeof job.work || col_dirs(job.work, 1) ||
+        !mkdtemp(job.work)) {
+        col_failed("cannot make %s: %s", job.work,
+                   col_stop ? "a signal came first"
+                   : errno  ? strerror(errno)
+                            : "the path is too long");
+        goto done;
+    }
 #ifdef _WIN32
     setenv("MSYS2_ARG_CONV_EXCL", "*", 1);
     setenv("MSYS_NO_PATHCONV", "1", 1);
