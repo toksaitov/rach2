@@ -39,12 +39,13 @@ the rest of the file for a
 of 0:
 .Bl -tag -width "POSIX_FADV_SEQUENTIAL"
 .It Dv POSIX_FADV_NORMAL
-Reads of the descriptor are read ahead in windows of at most 128 KiB.
+Reads of the descriptor are read ahead in windows of normally at most
+128 KiB.
 .It Dv POSIX_FADV_RANDOM
 A read that misses the page cache reads the pages it asks for and no
 more.
 .It Dv POSIX_FADV_SEQUENTIAL
-Windows of at most 256 KiB, and no
+Windows of normally at most 256 KiB, and no
 .Dv POSIX_FADV_RANDOM .
 .It Dv POSIX_FADV_WILLNEED
 The range's pages are read into the page cache without waiting, at most
@@ -56,6 +57,9 @@ that ends the file.
 .It Dv POSIX_FADV_NOREUSE
 Nothing changes.
 .El
+.Pp
+A read that asks for more pages than the descriptor's window takes has a
+window as large as the read, up to what one request to the disk moves.
 .Pp
 Readahead is Linux's on-demand readahead.
 A read that misses the cache reads a window from the page it wants: at
