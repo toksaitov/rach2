@@ -1143,9 +1143,10 @@ static void row_play_early(void)
 /**
  * An output interrupt for a period the tick already refilled, before the
  * stream's first interrupt, finds the position in the first half of the
- * next period: its service fills nothing and clears the pending flag, as
- * Linux's azx_position_ok passes such a position, so the tick does not ask
- * for the stream again until the next interrupt is late.
+ * next period: it is not early and leaves the stream not pending, as
+ * Linux's azx_position_ok passes such a position, its service fills
+ * nothing, and the tick does not ask for the stream again until the next
+ * interrupt is late.
  */
 static void row_play_refilled(void)
 {
@@ -1171,9 +1172,10 @@ static void row_play_refilled(void)
 /**
  * khda delayed from one output interrupt until the next has come early:
  * its refill fills the period the first stands for and leaves the stream
- * pending, the position being in the second half of a period, so the tick
- * asks for the period the second stands for once the position has passed
- * it, and refills do not fall a period behind. A stop clears the flag.
+ * pending for the second, the position being short of its boundary, so the
+ * tick asks for the period the second stands for once the position has
+ * passed it, and refills do not fall a period behind. A stop clears the
+ * flag.
  */
 static void row_play_delayed(void)
 {
@@ -1207,6 +1209,51 @@ static void row_play_delayed(void)
     check(play_irq_pending, "another early interrupt leaves the stream pending");
     hda_stop();
     check(!play_irq_pending, "a stop clears the flag");
+    hda_test_threaded = false;
+    service_wanted = 0;
+}
+
+/**
+ * khda delayed from an output interrupt that came past its boundary to a
+ * period and three quarters, with no interrupt between: its refill fills
+ * the period that interrupt stands for and leaves the stream not pending,
+ * though the position is in the second half of a period, so the tick does
+ * not ask for it at each call. An interrupt more than a period and a quarter
+ * after the boundary last passed is late, not early, though the position is
+ * in the second half of a period, as azx_position_ok's wall-clock test
+ * takes one (sound/pci/hda/hda_intel.c:689-692 of Linux 6.12.115).
+ */
+static void row_play_served(void)
+{
+    unsigned next = 1;
+
+    row = "play-irq-served";
+    model_start(1u << 6, 48000, AUDIO_S16LE, 2);
+    write_blocks(&next);
+    hda_test_threaded = true;
+    service_wanted = 0;
+    model_play(24000);
+    hda_test_write(HDA_INTSTS, 1u << output_stream_index, 32);
+    hda_irq_handler(NULL);
+    hda_test_write(HDA_INTSTS, 0, 32);
+    check(!play_irq_pending && (service_wanted & HDA_SERVE_PLAY),
+          "an interrupt past its boundary asks for khda and is not pending");
+    model_play(17000); /* 41 ms, a period of 23.3 ms and three quarters */
+    run_khda();
+    check(hw_fill_count == 1 && !play_irq_pending,
+          "khda run in the second half of the next period fills one and is not pending");
+    tick();
+    check(!(service_wanted & HDA_SERVE_PLAY) && !play_irq_pending,
+          "the tick does not ask for the stream");
+    model_play(24000); /* 65 ms, 41 ms after the boundary last passed */
+    hda_test_write(HDA_INTSTS, 1u << output_stream_index, 32);
+    hda_irq_handler(NULL);
+    hda_test_write(HDA_INTSTS, 0, 32);
+    check(!play_irq_pending && (service_wanted & HDA_SERVE_PLAY),
+          "an interrupt a period and a quarter late is not pending, in a period's second half");
+    run_khda();
+    check(hw_fill_count == 2 && !play_irq_pending, "and khda fills the period it stands for");
+    hda_stop();
     hda_test_threaded = false;
     service_wanted = 0;
 }
@@ -1878,7 +1925,7 @@ static void row_capture_overrun(void)
  * (`cap_irq_pending`); the tick asks at each call and hands the period over
  * once the position has passed it. An interrupt for a period the tick
  * already handed over, after a late one, finds the position in the first
- * half of the next and clears the flag.
+ * half of the next and leaves the flag clear.
  */
 static void row_capture_early(void)
 {
@@ -1969,6 +2016,55 @@ static void row_capture_delayed(void)
     check(cap_irq_pending, "another early interrupt leaves the stream pending");
     hda_driver.stream_stop(&s);
     check(!cap_irq_pending, "a stop clears the flag");
+    hda_test_threaded = false;
+    service_wanted = 0;
+    hda_driver.stream_close(&s);
+    clock_stopped = 0;
+}
+
+/**
+ * khda delayed from an input interrupt that came past its boundary to a
+ * period and three quarters, with no interrupt between: it hands over the
+ * period that interrupt stands for and leaves the stream not pending. An
+ * interrupt more than a period and a quarter after the boundary last
+ * passed is late, not early, though the position is in the second half of
+ * a period, as row play-irq-served checks for the output stream.
+ */
+static void row_capture_served(void)
+{
+    audio_stream_t s;
+
+    row = "capture-irq-served";
+    reset_model();
+    model_adc();
+    check(hda_find_output(), "enumeration succeeds");
+    /* 1024 frames a period at 48 kHz, 21.3 ms. */
+    check(open_capture(&s, 48000, AUDIO_S16LE, 2, 4096) == 0, "capture set up");
+    clock_stopped = 1;
+    check(hda_driver.stream_start(&s) == 0, "capture starts");
+    hda_test_threaded = true;
+    service_wanted = 0;
+    move_input(4096 + 100);
+    clock_value += 24000 * 22;
+    hda_test_write(HDA_INTSTS, 1u << input_stream_index, 32);
+    hda_irq_handler(NULL);
+    hda_test_write(HDA_INTSTS, 0, 32);
+    check(!cap_irq_pending && (service_wanted & HDA_SERVE_CAPTURE),
+          "an interrupt past its boundary asks for khda and is not pending");
+    move_input(4096 + 3000);
+    clock_value += 24000 * 15;
+    run_khda();
+    check(got_transfers == 1 && !cap_irq_pending,
+          "khda run in the second half of the next period hands one over and is not pending");
+    move_input(2 * 4096 + 3000);
+    clock_value += 24000 * 21; /* 36 ms after the boundary last passed */
+    hda_test_write(HDA_INTSTS, 1u << input_stream_index, 32);
+    hda_irq_handler(NULL);
+    hda_test_write(HDA_INTSTS, 0, 32);
+    check(!cap_irq_pending && (service_wanted & HDA_SERVE_CAPTURE),
+          "an interrupt a period and a quarter late is not pending, in a period's second half");
+    run_khda();
+    check(got_transfers == 2 && !cap_irq_pending, "and khda hands over the period it stands for");
     hda_test_threaded = false;
     service_wanted = 0;
     hda_driver.stream_close(&s);
@@ -2588,6 +2684,7 @@ int main(void)
     row_play_early();
     row_play_refilled();
     row_play_delayed();
+    row_play_served();
     row_shutdown();
     row_mix_width();
     row_capture_path();
@@ -2598,6 +2695,7 @@ int main(void)
     row_capture_overrun();
     row_capture_early();
     row_capture_delayed();
+    row_capture_served();
     row_capture_fails();
     row_input_controls();
     row_jack_switch();

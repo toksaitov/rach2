@@ -218,17 +218,22 @@ static bool stream_started = false; /* True once hardware stream is running */
 /* Whether the output stream's interrupt has come since its start, and the
  * low half of `kernel_ticks` when it last came; `hda_tick` asks for the
  * stream's service only until one has come, when the next is late
- * (`hda_irq_late`), and while play_irq_pending is set. That is set by the
- * interrupt and cleared by a service that finds the position in the first
- * half of its period: an interrupt that comes while the position still reads
- * the second half of the period before, as Linux's azx_position_check finds
- * one (sound/pci/hda/hda_intel.c:612-625 and 689-691 of 6.12.115), leaves it
- * set, though a late service of an earlier interrupt fills the periods
- * played, and the tick asks again until the position has passed into the
- * next period. A start and a stop clear it. */
+ * (`hda_irq_late`), and while play_irq_pending is set. The interrupt sets
+ * that when it comes early (hda_irq_early), the position still in the
+ * second half of the period before its boundary, as Linux's
+ * azx_position_check marks one (sound/pci/hda/hda_intel.c:612-625 and
+ * 689-692 of 6.12.115), and records in play_irq_period the period that
+ * boundary begins; the tick asks until a service finds the position there
+ * or past it, which clears it. An interrupt not early clears it. A start
+ * and a stop clear it. play_irq_clock is the wall clock at the boundary
+ * last taken as passed, by an interrupt not early or a service that found
+ * the position past an early one's, and at the start before the first, as
+ * Linux's start_wallclk (sound/hda/hdac_stream.c:137, hda_intel.c:693). */
 static bool play_irq_seen = false;
 static bool play_irq_pending = false;
 static uint32_t play_irq_tick = 0;
+static uint32_t play_irq_period = 0;
+static uint32_t play_irq_clock = 0;
 static audio_callback_t user_callback = NULL;
 
 /* Requested format/rate from AUDIO_START (userspace). */
@@ -818,15 +823,12 @@ static void hda_play_signal(void)
  * from the stream's interrupt and the timer tick (hda_service_kick) with
  * them off. Either the interrupt asks for it, or the tick does until the
  * stream's first interrupt, while an interrupt is pending and whenever the
- * next is late (hda_tick). A call that finds the position in the first half
- * of its period clears play_irq_pending: the boundary the latest interrupt
- * stands for has passed, and the call fills up to it, or a call before it,
- * the tick's before the interrupt came, has. One that finds the position in
- * the second half leaves the flag set, though it fills the periods played:
- * the latest interrupt may have come before the position reached its
- * boundary, as azx_position_ok takes such a position for one short of the
- * boundary (sound/pci/hda/hda_intel.c:689-691 of Linux 6.12.115), and the
- * tick asks again until a call finds the position past it.
+ * next is late (hda_tick). A call that finds the position in the period an
+ * early interrupt's boundary begins (play_irq_period), or past it, clears
+ * play_irq_pending, as azx_irq_pending_work clears irq_pending once
+ * azx_position_ok passes the position (sound/pci/hda/hda_intel.c:742-746 of
+ * Linux 6.12.115); one that finds it still in the period before leaves the
+ * flag set, though it fills the periods played, and the tick asks again.
  * The play position, from the position buffer or LPIB, names the period
  * playing; the periods from the one playing at the last call up to this one
  * have been played, and are filled in that order, so that they play after
@@ -921,8 +923,10 @@ static void hda_service_stream(void)
     lpib_last = pos;
     walclk_last = now;
     hw_period_last = first % HDA_PERIODS;
-    if (pos % period_bytes <= period_bytes / 2)
+    if (play_irq_pending && period != (play_irq_period + HDA_PERIODS - 1) % HDA_PERIODS) {
         play_irq_pending = false;
+        play_irq_clock = now;
+    }
 
     for (i = 0; i < count; i++) {
         index = (first + i) % HDA_PERIODS;
@@ -1745,10 +1749,13 @@ static uint32_t cap_pos = 0;
 static uint32_t cap_clock = 0;
 static uint32_t cap_recorded = 0;
 static uint32_t cap_handed = 0;
-/* The input stream's play_irq_seen, play_irq_pending and play_irq_tick. */
+/* The input stream's play_irq_seen, play_irq_pending, play_irq_tick,
+ * play_irq_period and play_irq_clock. */
 static bool cap_irq_seen = false;
 static bool cap_irq_pending = false;
 static uint32_t cap_irq_tick = 0;
+static uint32_t cap_irq_period = 0;
+static uint32_t cap_irq_clock = 0;
 
 static void hda_service_capture(void);
 static uint32_t hda_input_position(void);
@@ -2396,6 +2403,21 @@ static uint32_t hda_intctl(void)
 }
 
 static void hda_service_kick(uint32_t wanted);
+static uint32_t hda_capture_period_us(void);
+
+/**
+ * Whether a stream's interrupt came early: the position, `pos` bytes into a
+ * period of `period` bytes, is in the second half of the period before the
+ * boundary, and less than a period and a quarter, of `period_us`, has passed
+ * since the boundary last taken as passed, `since_us` ago. So
+ * azx_position_ok refuses a position (sound/pci/hda/hda_intel.c:689-692 of
+ * Linux 6.12.115); one that comes later is a late interrupt for the boundary
+ * behind the position, which has passed.
+ */
+static bool hda_irq_early(uint32_t pos, uint32_t period, uint32_t since_us, uint32_t period_us)
+{
+    return pos % period > period / 2 && since_us < period_us + period_us / 4u;
+}
 
 /**
  * HDA interrupt handler: acknowledge each stream's interrupt and ask for its
@@ -2409,11 +2431,14 @@ static void hda_service_kick(uint32_t wanted);
  * played. So the interrupt holds the big lock for its register accesses
  * and a wake, as Linux's azx_interrupt acknowledges each stream and calls
  * snd_pcm_period_elapsed (sound/hda/hdac_controller.c:684,
- * sound/pci/hda/hda_controller.c:1070).
+ * sound/pci/hda/hda_controller.c:1070). It reads the stream's position and
+ * the wall clock, as azx_position_check does from Linux's interrupt, to
+ * mark an early interrupt pending with the period its boundary begins
+ * (hda_irq_early), or to take the boundary behind the position as passed.
  */
 static void hda_irq_handler(isr_params_t *params)
 {
-    uint32_t intsts, wanted = 0;
+    uint32_t intsts, wanted = 0, buf, pos, now;
     uint8_t sd_sts;
     (void)params;
 
@@ -2425,9 +2450,18 @@ static void hda_irq_handler(isr_params_t *params)
     if (num_input_streams > 0 && (intsts & (1u << input_stream_index))) {
         sd_sts = hda_read8(hda_sd_offset(input_stream_index) + HDA_SD_STS);
         hda_write8(hda_sd_offset(input_stream_index) + HDA_SD_STS, sd_sts);
-        if (cap_running) {
-            cap_irq_seen = cap_irq_pending = true;
+        if (cap_running && cap_period != 0 && cap_periods != 0) {
+            buf = cap_period * cap_periods;
+            pos = hda_input_position() % buf;
+            now = hda_read32(HDA_WALCLK);
+            cap_irq_seen = true;
             cap_irq_tick = (uint32_t)kernel_ticks;
+            cap_irq_pending = hda_irq_early(pos, cap_period, (now - cap_irq_clock) / 24u,
+                                            hda_capture_period_us());
+            if (cap_irq_pending)
+                cap_irq_period = (pos / cap_period + 1) % cap_periods;
+            else
+                cap_irq_clock = now;
         }
         wanted |= HDA_SERVE_CAPTURE;
     }
@@ -2435,9 +2469,18 @@ static void hda_irq_handler(isr_params_t *params)
         sd_sts = hda_read8(hda_sd_offset(output_stream_index) + HDA_SD_STS);
         hda_write8(hda_sd_offset(output_stream_index) + HDA_SD_STS, sd_sts);
         irq_count++;
-        if (playing && stream_started) {
-            play_irq_seen = play_irq_pending = true;
+        if (playing && stream_started && period_bytes != 0) {
+            buf = period_bytes * HDA_PERIODS;
+            pos = hda_stream_position() % buf;
+            now = hda_read32(HDA_WALCLK);
+            play_irq_seen = true;
             play_irq_tick = (uint32_t)kernel_ticks;
+            play_irq_pending = hda_irq_early(pos, period_bytes, (now - play_irq_clock) / 24u,
+                                             hda_bytes_us(period_bytes));
+            if (play_irq_pending)
+                play_irq_period = (pos / period_bytes + 1) % HDA_PERIODS;
+            else
+                play_irq_clock = now;
             wanted |= HDA_SERVE_PLAY;
         }
     }
@@ -3868,6 +3911,7 @@ static int hda_launch(uint16_t fmt)
     hda_sd_write32(stream, HDA_SD_CTL, ctl);
     stream_started = true;
     play_irq_seen = play_irq_pending = false;
+    play_irq_clock = walclk_last;
     hda_report.playing = true;
     hda_report.requested_rate = current_sample_rate;
     hda_report.programmed_rate = current_hw_sample_rate;
@@ -4564,8 +4608,8 @@ static uint32_t hda_capture_convert(const audio_stream_t *s, const uint8_t *src)
  * device writes is lost and the rest, from the one after it, are handed
  * over: the newest whole revolution, in order. A service already under way
  * elsewhere is left to finish alone. A call that finds the position in the
- * first half of its period clears cap_irq_pending, as hda_service_stream
- * clears play_irq_pending.
+ * period an early interrupt's boundary begins, or past it, clears
+ * cap_irq_pending, as hda_service_stream clears play_irq_pending.
  *
  * `cap_lock` and interrupts are held around the reads and updates of the
  * position, cap_next and the counts, and around `period`; each period's
@@ -4605,8 +4649,10 @@ static void hda_service_capture(void)
     /* The frames up to period `cur` that are neither handed nor to be. */
     s->lost = cap_recorded - pos % cap_period / cap_frame - cap_handed -
               (cur + cap_periods - cap_next) % cap_periods * (cap_period / cap_frame);
-    if (pos % cap_period <= cap_period / 2)
+    if (cap_irq_pending && cur != (cap_irq_period + cap_periods - 1) % cap_periods) {
         cap_irq_pending = false;
+        cap_irq_clock = now;
+    }
     while (cap_next != cur) {
         const uint8_t *src = cap_buffer + cap_next * cap_period;
 
@@ -4897,6 +4943,7 @@ static int hda_capture_start(audio_stream_t *s)
     s->lost = 0;
     cap_clock = hda_read32(HDA_WALCLK);
     cap_irq_seen = cap_irq_pending = false;
+    cap_irq_clock = cap_clock;
     cap_running = true;
     hda_report.input.running = true;
     hda_sd_write32(stream, HDA_SD_CTL, hda_sd_read32(stream, HDA_SD_CTL) | HDA_SD_CTL_RUN);
