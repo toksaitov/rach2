@@ -97,18 +97,30 @@ long compat_sys_time32(isr_params_t *params)
     return t;
 }
 
-/** gettimeofday (78): an i386 timeval and the time zone, whose layout is
- * the x86-64's. The x86-64 call fills the time first and can fault only on
- * the zone, so the time is written either way, as Linux's compat call
- * writes it before the zone (kernel/time/time.c:224-241). */
+/** gettimeofday (78): an i386 timeval and the time zone, whose layout,
+ * two 32-bit words, is the x86-64's. The x86-64 call fills both in kernel
+ * memory, and they are copied out the time first and the zone after, as
+ * Linux's compat call writes them (kernel/time/time.c:224-241): a bad
+ * timeval fails the call before the zone is written, and where the two
+ * overlap the zone is written last. */
 long compat_sys_gettimeofday(isr_params_t *params)
 {
-    long tv[2];
+    struct {
+        long tv[2];
+        int32_t tz[2];
+    } k;
     uintptr_t u = UPTR(SC_ARG(params, 0));
-    long rc = ia32_native(params, sys_gettimeofday, tv, sizeof(tv), u ? KPTR(tv) : 0,
-                          UPTR(SC_ARG(params, 1)), 0, 0, 0, 0);
+    uintptr_t z = UPTR(SC_ARG(params, 1));
+    long rc = ia32_native(params, sys_gettimeofday, &k, sizeof(k), u ? KPTR(k.tv) : 0,
+                          z ? KPTR(k.tz) : 0, 0, 0, 0, 0);
 
-    if (u && put_time32(u, tv) != 0) {
+    if (rc < 0) {
+        return rc;
+    }
+    if (u && put_time32(u, k.tv) != 0) {
+        return -EFAULT;
+    }
+    if (z && copy_to_user((void __user *)z, k.tz, sizeof(k.tz)) != 0) {
         return -EFAULT;
     }
     return rc;
