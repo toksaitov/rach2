@@ -15,6 +15,7 @@ Lenovo notice: one trial boot will take the screen for SuperTuxKart and 0 A.D., 
 In the task's clone on the Mac, at the head named by the go:
 
 ```sh
+set -e
 T=$PWD
 R=$T/build/runs/4657-native
 D=/data/trial4657
@@ -50,7 +51,8 @@ Take the lock only now. If it is held, hand back the prepared step. `back` below
 
 ```sh
 LOCK=$(git rev-parse --git-common-dir)/../build/flow/lenovo
-mkdir "$LOCK" && echo 4657 > "$LOCK/issue"
+mkdir "$LOCK" || exit 1
+echo 4657 > "$LOCK/issue"
 L() { ssh -i krffs/rach2_demo_ed25519 -o BatchMode=yes -o ConnectTimeout=5 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o ServerAliveInterval=5 -o ServerAliveCountMax=3 root@192.168.0.106 "$@"; }
 back() { i=0; until L true 2>/dev/null; do i=$((i + 1)); [ "$i" -lt 180 ] || return 1; sleep 2; done; L 'mixer vol 1'; }
 reboot_now() { L 'sync; (nohup sh -c "sleep 2; reboot" >/dev/null 2>&1 &)'; }
@@ -61,7 +63,7 @@ The release must be running from its committed candidate, with no trial armed. T
 
 ```sh
 L 'cat /etc/rach2/release' | grep -qx 'commit bb151e3baa6810fe8a513ac02a19ace4d881cb27'
-L "mount -t ext2 /dev/disk0p6 /data; mkdir -p $D; df -k /data"
+L "mount -t ext2 /dev/disk0p6 /data && mkdir -p $D && df -k /data"
 L "s=\$(bootctl status | sed -n 's/^bootctl: candidate: first sector \([0-9]*\),.*/\1/p'); dd if=/dev/bootpart bs=512 skip=\$s count=8192 2>/dev/null | head -c 2845120" > "$R/release-kernel"
 shasum -a 256 "$R/release-kernel"
 RACH2_MEASURE_SLOT=candidate RACH2_MEASURE_KERNEL="$R/release-kernel" sh tools/dev/machine_identity.sh "$R/identity-before.txt" ssh -i krffs/rach2_demo_ed25519 -o BatchMode=yes -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no root@192.168.0.106
