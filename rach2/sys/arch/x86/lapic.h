@@ -178,6 +178,11 @@ uint32_t lapic_this_id(void);
  * is not enabled. */
 void lapic_eoi(void);
 
+/** Have processor `cpu` end its interrupts through `word`, which it gave
+ * KVM for the paravirtual end of interrupt (kvmsteal.c), where `lapic_eoi`
+ * reads it first. */
+void lapic_set_pv_eoi(int cpu, volatile uint32_t *word);
+
 /** Whether `vector` is in this processor's request register: raised and
  * not yet taken, as the 8259's request register says of a line. Unlike
  * `lapic_pending`, a vector whose handler is running is not counted. */

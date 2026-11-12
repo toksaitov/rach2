@@ -625,11 +625,43 @@ uint32_t lapic_this_id(void)
     return ready ? lapic_this_id_raw() : 0;
 }
 
+/* Bit 0 of a processor's word for KVM's paravirtual end of interrupt
+ * (KVM_PV_EOI_BIT, arch/x86/include/uapi/asm/kvm_para.h:147). */
+#define KVM_PV_EOI_PENDING 1u
+
+/* Each processor's word for KVM's paravirtual end of interrupt, which
+ * `lapic_set_pv_eoi` gives, or NULL. */
+static volatile uint32_t *pv_eoi[NR_CPUS];
+
+void lapic_set_pv_eoi(int cpu, volatile uint32_t *word)
+{
+    if (cpu >= 0 && cpu < NR_CPUS) {
+        pv_eoi[cpu] = word;
+    }
+}
+
+/** With KVM's paravirtual end of interrupt, KVM sets the processor's word
+ * as it delivers an interrupt whose end it can take from the word alone,
+ * one no other interrupt waits behind and the I/O APIC need not hear of,
+ * and the end is the word's clearing, with no write to the APIC and no
+ * exit, as Linux's kvm_guest_apic_eoi_write (arch/x86/kernel/kvm.c:362-
+ * 374). At each exit KVM takes back a word still set, keeping the
+ * interrupt in service, so the test and the clearing are one instruction,
+ * an exchange, as Linux's are one `btr`: an exit between a read and a
+ * store would let the store end nothing, and the interrupt would block
+ * every one below it for good. */
 void lapic_eoi(void)
 {
-    if (ready) {
-        apic_write(LAPIC_EOI, 0);
+    volatile uint32_t *w;
+
+    if (!ready) {
+        return;
     }
+    w = pv_eoi[arch_cpu_id()];
+    if (w && (*w & KVM_PV_EOI_PENDING) != 0 && (arch_atomic_xchg(w, 0) & KVM_PV_EOI_PENDING) != 0) {
+        return;
+    }
+    apic_write(LAPIC_EOI, 0);
 }
 
 /** The APIC raises vector 255 when an interrupt it was about to deliver
