@@ -236,18 +236,31 @@ int kvm_gpamap_new(struct kvm_vm *vm, const struct kvm_gpa_run *runs, uint32_t n
     }
     m->nruns = parts;
     m->pages = pages;
-    rc = fill_parts(m, vm, runs, n);
+    rc = mmap_read_trylock(mm) ? fill_parts(m, vm, runs, n) : -EAGAIN;
+    if (rc == 0) {
+        for (i = 0; i < pages; i++) {
+            frame_ref(m->frames[i]);
+        }
+        hva_bounds(m, &lo, &hi);
+        mmn_register(mm, &m->note, lo, hi, &map_ops, m);
+    }
+    if (rc != -EAGAIN) {
+        mmap_unlock(mm);
+    }
     if (rc != 0) {
         kfree(m->frames);
         kfree(m->runs);
         kfree(m);
+    }
+    if (rc == -EAGAIN) {
+        kvm_vm_get(vm); /* the VM keeps `mm` while the wait lets the big lock go */
+        mmap_read_lock(mm);
+        mmap_unlock(mm);
+        kvm_vm_put(vm);
+    }
+    if (rc != 0) {
         return rc;
     }
-    for (i = 0; i < pages; i++) {
-        frame_ref(m->frames[i]);
-    }
-    hva_bounds(m, &lo, &hi);
-    mmn_register(mm, &m->note, lo, hi, &map_ops, m);
     m->vm = vm;
     m->revoke = revoke;
     m->owner = owner;

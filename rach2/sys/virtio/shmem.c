@@ -1034,7 +1034,9 @@ static void vshm_map_revoked(void *owner)
  * Hold the frames behind runs of the VM's physical pages: the VM is the one
  * whose KVM ioeventfd signals the doorbell the device rings for the queues,
  * so a transport without doorbells has none; its slots and its maker's
- * memory give the frames (`kvm_gpamap_new`). 0, -ENODEV without the VM, or
+ * memory give the frames (`kvm_gpamap_new`). A map that had to wait for the
+ * maker's regions' lock, which let the big lock go, is asked for again from
+ * the transport's state and the VM's lookup. 0, -ENODEV without the VM, or
  * the map's error.
  */
 static int vs_map_pages(struct virtio_dev *d, const struct virtio_run *runs, uint32_t n,
@@ -1049,6 +1051,7 @@ static int vs_map_pages(struct virtio_dev *d, const struct virtio_run *runs, uin
     int rc;
 
     *out = NULL;
+again:
     if (!vs->attached || !vs->bells || !vs->in[VGS_VEC_QUEUE].ev) {
         return -ENODEV;
     }
@@ -1072,6 +1075,9 @@ static int vs_map_pages(struct virtio_dev *d, const struct virtio_run *runs, uin
     kfree(g);
     if (rc != 0) {
         kfree(vm);
+        if (rc == -EAGAIN) {
+            goto again;
+        }
         return rc;
     }
     vm->live = 1;
