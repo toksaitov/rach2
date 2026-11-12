@@ -1272,7 +1272,9 @@ static void walk_name_text(struct walk_name *wn, const char *p, const char *end)
  * front of the rest of the path at `*p`, in the path page `*linkpath`, as a
  * link's target goes, so that the parent's type takes them from there. The
  * record `wn` drops a name for each name the mount is entered by, since the
- * walk records those it takes again. 0, -ENOMEM or -ENAMETOOLONG.
+ * walk records those it takes again. 0 for a mount entered by one name,
+ * whose `..` ends at the parent's root; 1 with the names put in front;
+ * -ENOMEM or -ENAMETOOLONG.
  */
 static int nameless_up(const struct vfs_mount *m, struct walk_name *wn, const char **p,
                        const char **last_comp, char **linkpath, char **target)
@@ -1306,7 +1308,24 @@ static int nameless_up(const struct vfs_mount *m, struct walk_name *wn, const ch
     if (*last_comp) {
         *last_comp = walk_last_comp(*linkpath);
     }
-    return 0;
+    return 1;
+}
+
+/**
+ * Finish `..` at the root of the nameless mount `cur` stands on, once
+ * `nameless_up` has prepared the path and answered `spliced`: move to the
+ * parent's root directory, and for a mount entered by one name, `spliced`
+ * 0, cross the mounts over it (`walk_cross`), as Linux's `handle_dots`
+ * steps into the parent through `handle_mounts` (fs/namei.c:2040-2056). For
+ * one entered by more names the parent's type takes the names put in front
+ * from there, and the crossing, if any, comes at the directory they reach.
+ * 0, or the error of `walk_move` or `walk_cross`.
+ */
+static int nameless_climb(struct vfs_ref *cur, int spliced, int locked)
+{
+    int rc = walk_move(cur, cur->mnt->parent, cur->mnt->parent->root, locked);
+
+    return rc == 0 && !spliced ? walk_cross(cur, locked) : rc;
 }
 
 /** Move the walk at `cur` onto the root of the mount `m`, and on through
@@ -2006,15 +2025,12 @@ static int cached_cross(struct vfs_ref *cur)
  * 2006). `seq` is the count of changes of names the walk began at, and
  * `calm` whether none was under way then (`vfs_name_seq_peek`). The oldest
  * is let go when there is no room, and a `..` above the rest goes to the
- * full walk. `named` marks a directory left for a nameless mount's root,
- * which a `..` reaches without crossing the mounts over it, as the full
- * walk's `nameless_up` does. */
+ * full walk. */
 struct cached_dots {
     uint32_t seq;
     int calm;
     int n;
     struct vfs_ref up[CACHED_DOTS];
-    unsigned char named[CACHED_DOTS];
 };
 
 /** Let go of every directory `dd` keeps. May sleep (`cached_put`). */
@@ -2028,19 +2044,16 @@ static void cached_dots_drop(struct cached_dots *dd)
 }
 
 /** Keep `cur`, its hold and its mount's entry, on top of `dd`, letting the
- * oldest go when `dd` is full; `named` as `struct cached_dots` says. May
- * sleep (`cached_put`). */
-static void cached_dots_push(struct cached_dots *dd, const struct vfs_ref *cur, int named)
+ * oldest go when `dd` is full. May sleep (`cached_put`). */
+static void cached_dots_push(struct cached_dots *dd, const struct vfs_ref *cur)
 {
     if (dd->n == CACHED_DOTS) {
         cached_put(dd->up[0].mnt, dd->up[0].node);
         vfs_leave(dd->up[0].mnt);
         k_memmove(&dd->up[0], &dd->up[1], sizeof(dd->up[0]) * (CACHED_DOTS - 1));
-        k_memmove(&dd->named[0], &dd->named[1], CACHED_DOTS - 1);
         dd->n--;
     }
     dd->up[dd->n] = *cur;
-    dd->named[dd->n] = (unsigned char)named;
     dd->n++;
 }
 
@@ -2064,7 +2077,7 @@ static int cached_move(struct vfs_ref *cur, void *found, struct vfs_name **entry
         cached_put(cur->mnt, found);
         return WALK_FULL;
     }
-    cached_dots_push(dd, cur, 0);
+    cached_dots_push(dd, cur);
     cur->node = found;
     if (cached_cross(cur) != 0) {
         return WALK_FULL;
@@ -2115,18 +2128,18 @@ static int cached_dots_stay(const struct vfs_ref *cur, const struct cached_root 
  * `handle_dots` steps into the parent (fs/namei.c:2040-2056). At the root of
  * a mount over a directory that directory is the one the covered directory
  * was found in, as the full walk reaches it by the covered directory; at a
- * nameless mount's root it is the parent mount's root, which it does not
- * cross, as `nameless_up` uses the `..` up. The kept directory is the
- * parent only while no name has changed since the walk began, which
- * `vfs_name_seq_still` checks, as Linux checks the directory's sequence
- * (fs/namei.c:1994). 0; or WALK_FULL, with `cur` held as it was, for a
- * change of names, a moved root, or a walk that kept no directory above
- * `cur`, having started there or let it go for room.
+ * nameless mount's root it is the parent mount's root, as `nameless_up`
+ * uses the `..` up. The kept directory is the parent only while no name has
+ * changed since the walk began, which `vfs_name_seq_still` checks, as Linux
+ * checks the directory's sequence (fs/namei.c:1994). 0; WALK_FULL, with
+ * `cur` held as it was, for a change of names, a moved root, or a walk that
+ * kept no directory above `cur`, having started there or let it go for
+ * room; or WALK_FULL as `cached_cross` returns it.
  */
 static int cached_dotdot(struct vfs_ref *cur, struct cached_dots *dd,
                          const struct cached_root *seen)
 {
-    int stay, named;
+    int stay;
 
     if (!dd->calm || !vfs_name_seq_still(dd->seq)) {
         return WALK_FULL;
@@ -2142,16 +2155,19 @@ static int cached_dotdot(struct vfs_ref *cur, struct cached_dots *dd,
     vfs_leave(cur->mnt);
     dd->n--;
     *cur = dd->up[dd->n];
-    named = dd->named[dd->n];
-    return named ? 0 : cached_cross(cur);
+    return cached_cross(cur);
 }
 
 /**
  * Take the name `comp` at `cur` in the cached walk when it names no entry
  * of the directory: `.`, `..` (`cached_dotdot`), or a nameless mount, from
  * its parent's root (`cached_named`), whose root the walk moves to, keeping
- * `cur` in `dd`. 0 when taken; -1 for any other name, which the caller
- * looks up; or WALK_FULL, with `cur` held as it was.
+ * `cur` in `dd`, and crosses the mounts over that root (`cached_cross`), as
+ * the full walk's `walk_enter` does and Linux's `__follow_mount_rcu` follows
+ * mounts stacked on a mount's root (fs/namei.c:1544). 0 when taken; -1 for
+ * any other name, which the caller looks up; or WALK_FULL, with `cur` held
+ * where the walk reached and `dd` keeping what it kept, for the caller to
+ * let go of both.
  */
 static int cached_dots_step(struct vfs_ref *cur, const char *comp, struct cached_dots *dd,
                             const struct cached_root *seen)
@@ -2167,9 +2183,9 @@ static int cached_dots_step(struct vfs_ref *cur, const char *comp, struct cached
     }
     rc = cur->node == cur->mnt->root ? cached_named(cur->mnt, comp, &next) : 0;
     if (rc == WALK_NAMED) {
-        cached_dots_push(dd, cur, 1);
+        cached_dots_push(dd, cur);
         *cur = next;
-        return 0;
+        return cached_cross(cur);
     }
     return rc != 0 ? rc : -1;
 }
@@ -2403,7 +2419,10 @@ full:
  * directory. A nameless mount is entered by name from its parent's root
  * directory, as /dev/shm is from /dev's, so `..` at its root is that
  * directory and is used up there: run again, the synthetic type would climb
- * once more.
+ * once more. The walk crosses the mounts over that directory, as Linux's
+ * `handle_dots` steps into the parent through `handle_mounts`
+ * (fs/namei.c:2040-2056), unless the mount is entered by more than one
+ * name, whose names before its last the parent's type takes from there.
  *
  * The walk keeps the root it starts from: `..` stops there, and at the root
  * of the root mount whatever the root, and an absolute link's target starts
@@ -2631,7 +2650,7 @@ begin:
             }
             if (cur.node == cur.mnt->root) {
                 rc = nameless_up(cur.mnt, &name, &p, &last_comp, &linkpath, &target);
-                rc = rc == 0 ? walk_move(&cur, cur.mnt->parent, cur.mnt->parent->root, locked) : rc;
+                rc = rc >= 0 ? nameless_climb(&cur, rc, locked) : rc;
                 if (rc != 0) {
                     goto out_err;
                 }
