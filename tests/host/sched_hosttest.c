@@ -72,28 +72,16 @@ uint64_t arch_steal_ns(void)
     return steal_clock_ns;
 }
 
-/* The modeled times of the processor's last entry from user mode, return
- * to it, and start and end of an idle wait, which the rows set, or 0 for
- * long ago. */
-static int64_t user_entry_ns, user_return_ns, idle_start_ns, idle_end_ns;
+/* The modeled times of the processor's last return to user mode and start
+ * of an idle wait, which the rows set, or 0 for long ago. */
+static int64_t user_return_ns, idle_start_ns;
 
 /** The modeled time of a change of mode, by the count the rows give its
- * field: 1 the entry's, 2 the return's, 3 and 4 the idle wait's. */
+ * field: 3 the idle wait's start, any other the return to user mode. */
 int64_t timer_cycles_when(uint64_t cycles, int64_t now)
 {
     (void)now;
-    switch (cycles) {
-    case 1u:
-        return user_entry_ns;
-    case 2u:
-        return user_return_ns;
-    case 3u:
-        return idle_start_ns;
-    case 4u:
-        return idle_end_ns;
-    default:
-        return 0;
-    }
+    return cycles == 3u ? idle_start_ns : user_return_ns;
 }
 
 /** Timer list membership is checked by process_timer_hosttest. */
@@ -770,14 +758,14 @@ static void accounting_held(void)
     CHECK(cpu->busy_ticks == busy + 5 && cpu->user_ticks == user + 3,
           "with no time of the tick kept, a tick in user mode is user time");
     clock_ns += 2u * TICK_NS;
-    user_entry_ns = (int64_t)(clock_ns - 3u * TICK_NS / 2u);
+    cpu->entry_cycles = 5u;
     idle_start_ns = (int64_t)(clock_ns - TICK_NS / 2u);
     cpu->idle_wait = 1;
     sched_account_tick(0, (int64_t)clock_ns);
     CHECK(cpu->busy_ticks == busy + 6 && cpu->user_ticks == user + 3 && cpu->idle_ticks == idle + 1,
           "a halt after a call charges the tick the call held as system time, the next as idle");
     clock_ns += TICK_NS;
-    idle_end_ns = (int64_t)(clock_ns - TICK_NS / 2u);
+    cpu->entry_cycles = 1u;
     idle_start_ns = (int64_t)(clock_ns - TICK_NS / 4u);
     sched_account_tick(0, (int64_t)(clock_ns - 3u * TICK_NS / 4u));
     cpu->idle_wait = 0;
@@ -791,9 +779,7 @@ static void accounting_held(void)
           "a tick due before the return that its interrupt's delay brings after it is user time");
     cpu->tick_late_ns = 0;
     user_return_ns = 0;
-    user_entry_ns = 0;
     idle_start_ns = 0;
-    idle_end_ns = 0;
     cpu->idle_wait = 1;
     cpu->current = saved;
     clock_ns = saved_clock;
