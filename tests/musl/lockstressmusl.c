@@ -15,8 +15,8 @@
  * one each race crosses processors. The modes, each an assertion:
  *
  *   switch   pairs of threads on two processors pass a count through a
- *            futex word and through a pipe, each seeing every value in
- *            order;
+ *            futex word and through a pipe, every other count with writev
+ *            and readv in two halves, each seeing every value in order;
  *   poll     a reader polls 64 pipes, then waits on them in an epoll set,
  *            while writers on the other processors write them; every byte
  *            arrives once, from the pipe it was written to, and a pipe that
@@ -348,6 +348,38 @@ static void sw_abort(int p)
     futex_wake(&sw_word[p], INT_MAX, FUTEX_PRIVATE);
 }
 
+/** Write the count `k` to pipe `fd`, on an odd round `r` with writev from
+ * two halves; what write or writev returns. */
+static ssize_t sw_put(int fd, uint32_t k, long r)
+{
+    struct iovec iov[2];
+
+    if ((r & 1) == 0) {
+        return write(fd, &k, 4);
+    }
+    iov[0].iov_base = &k;
+    iov[0].iov_len = 2;
+    iov[1].iov_base = (char *)&k + 2;
+    iov[1].iov_len = 2;
+    return writev(fd, iov, 2);
+}
+
+/** Read a count from pipe `fd` into `*got`, on an odd round `r` with readv
+ * into two halves; what read or readv returns. */
+static ssize_t sw_get(int fd, uint32_t *got, long r)
+{
+    struct iovec iov[2];
+
+    if ((r & 1) == 0) {
+        return read(fd, got, 4);
+    }
+    iov[0].iov_base = got;
+    iov[0].iov_len = 2;
+    iov[1].iov_base = (char *)got + 2;
+    iov[1].iov_len = 2;
+    return readv(fd, iov, 2);
+}
+
 /** One side of a pair: thread 2p passes odd counts and thread 2p+1 even
  * ones, through the futex word and then through the pipes. */
 static void *sw_thread(void *arg)
@@ -391,18 +423,18 @@ static void *sw_thread(void *arg)
     for (r = 0; r < sw_rounds; r++) {
         if (side == 0) {
             k = (uint32_t)r;
-            if (write(sw_pipe[p][0][1], &k, 4) != 4 || read(sw_pipe[p][1][0], &got, 4) != 4) {
+            if (sw_put(sw_pipe[p][0][1], k, r) != 4 || sw_get(sw_pipe[p][1][0], &got, r) != 4) {
                 fail("pair %d: pipe: %s", p, strerror(errno));
                 break;
             }
             want = k + 1;
         } else {
-            if (read(sw_pipe[p][0][0], &got, 4) != 4) {
+            if (sw_get(sw_pipe[p][0][0], &got, r) != 4) {
                 fail("pair %d: pipe: %s", p, strerror(errno));
                 break;
             }
             k = got + 1;
-            if (write(sw_pipe[p][1][1], &k, 4) != 4) {
+            if (sw_put(sw_pipe[p][1][1], k, r) != 4) {
                 fail("pair %d: pipe: %s", p, strerror(errno));
                 break;
             }
@@ -2159,6 +2191,7 @@ static const struct {
 } call_names[] = {
     {"read", SYS_read},
     {"write", SYS_write},
+    {"writev", SYS_writev},
     {"close", SYS_close},
     {"openat", SYS_openat},
     {"ioctl", SYS_ioctl},
