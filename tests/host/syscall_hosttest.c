@@ -1424,6 +1424,43 @@ static void timer_first_expiry(void)
 }
 
 /**
+ * A timer whose SIGALRM is sent reads no time left, as Linux's
+ * `itimer_get_remtime` reads its stopped timer (kernel/time/itimer.c:29-45).
+ *
+ * A timer of 1 s, then every half second, set at tick 3000 is due at
+ * 3000 + TICK_HZ + 1. While the tick has marked its SIGALRM (`alarm_due`)
+ * and the due tick still stands, getitimer reads a value of 0 with the
+ * interval, and alarm returns 0. Once the post has stopped it, its due tick
+ * 0 and its interval kept until the SIGALRM is taken, getitimer reads the
+ * same.
+ */
+static void timer_marked(void)
+{
+    struct kernel_itimerval cur;
+
+    model_at(3000);
+    CHECK(set_timer(1, 0, 0, 500000) == 0 && proc.alarm_tick == 3000u + TICK_HZ + 1u,
+          "set a timer of 1 s, then every 0.5 s, at tick 3000");
+    model_at(3000u + TICK_HZ + 1u);
+    proc.alarm_due = 1;
+    cur = read_timer();
+    CHECK(cur.value_sec == 0 && cur.value_usec == 0 && cur.interval_sec == 0 &&
+              cur.interval_usec == 500000,
+          "with its SIGALRM marked, getitimer reads no time left and the interval");
+    CHECK(call_alarm(0) == 0, "and alarm returns 0");
+    proc.alarm_due = 0;
+
+    CHECK(set_timer(1, 0, 0, 500000) == 0, "set the timer again");
+    proc.alarm_tick = 0;
+    cur = read_timer();
+    CHECK(cur.value_sec == 0 && cur.value_usec == 0 && cur.interval_sec == 0 &&
+              cur.interval_usec == 500000,
+          "stopped at its SIGALRM's post, getitimer reads no time left and the interval");
+    CHECK(set_timer(0, 0, 0, 0) == 0 && proc.alarm_interval == 0,
+          "and a value of zero clears the interval");
+}
+
+/**
  * Coarse time since boot reads the uptime and its ticks across 2^32 ticks
  * and into the next second, and leaves interrupts as it found them. Real
  * time reads the model's; clock 12 gives -EINVAL, and a null timespec
@@ -2165,6 +2202,7 @@ int main(void)
     sleep_held_clock();
     sleep_between();
     timer_first_expiry();
+    timer_marked();
     stream_sendmsg();
     raw_shutdown();
     if (failures)
