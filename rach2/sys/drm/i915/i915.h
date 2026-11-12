@@ -4057,10 +4057,13 @@ void i915_hangcheck_unpark(struct drm_i915_private *i915, uint64_t now);
  * then too if a beat with hangcheck off had stopped them all. The GT's
  * beat is shared, so the engine is armed at the first beat at or after
  * its own and judged at the one after: a hung first request is reset 5 to
- * 7.5 s after the engine went busy. Linux resets it 5 to 7 s after, since
+ * 7.5 s after the engine went busy. Linux resets it 5.5 to 6.5 s after the
+ * unpark, give or take a skew of 3 jiffies for each processor:
  * next_heartbeat rounds a beat of a second or more up to a whole second
- * (:60-61), and a whole second more when it falls on one (kernel/time/
- * timer.c:349-387, 512-518), so its beats come 2.5 to 3.5 s apart.
+ * (:60-61), a whole second more when it falls on one (kernel/time/
+ * timer.c:349-387, 512-518), and adds a jiffy (:62), so its first beat
+ * comes 2.5 to 3.5 s out, a jiffy past a whole second, and each later one
+ * exactly 3 s after the last.
  *
  * @return 1 when it set the next beat, for the worker to be told.
  */

@@ -14,12 +14,14 @@
  * the restore it names, which stands for another processor that takes the
  * lock the moment it is free.
  *
- * The rows: a page stored is read back; a page inserted while a shrink
- * between the insertion's two holds of `fc_lock` frees the file's record,
- * the record of its one page, is not kept, and nothing reads the freed
- * record, which AddressSanitizer would stop; a page whose file changed, so
- * that its insertion makes a new record, is kept under that record though
- * the old one is freed between the holds; and every frame goes back.
+ * The rows: a page stored is read back; a second copy of a page held is
+ * not kept, and the page held stays, as Linux's -EEXIST; a page inserted
+ * while a shrink between the insertion's two holds of `fc_lock` frees the
+ * file's record, the record of its one page, is not kept, and nothing reads
+ * the freed record, which AddressSanitizer would stop; a page whose file
+ * changed, so that its insertion makes a new record, is kept under that
+ * record though the old one is freed between the holds; and every frame
+ * goes back.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -289,6 +291,9 @@ int main(void)
     check(insert_page(&file_a, 0, 0x11, 0) && filecache_pages() == 1,
           "a page is kept under a new record");
     check(reads_as(&file_a, 0, 0x11), "and reads back");
+    check(!insert_page(&file_a, 0, 0x55, 0) && filecache_pages() == 1,
+          "a second copy of a page held is not kept");
+    check(reads_as(&file_a, 0, 0x11), "and the page held stays");
 
     shrunk = 0;
     check(!insert_page(&file_a, 1, 0x22, shrink_all),
