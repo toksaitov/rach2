@@ -125,6 +125,11 @@ void *vm_device_object(const struct vm_file *f)
     return f && f->device == vm_device_page ? ((const struct vm_device *)f)->obj : NULL;
 }
 
+int vm_device_whole(const struct vm_file *f)
+{
+    return f && f->device == vm_device_page && ((const struct vm_device *)f)->ops->whole;
+}
+
 int vm_device_access(struct vm_file *f, uint64_t offset, void *buf, uint32_t len, int write)
 {
     struct vm_device *d = (struct vm_device *)f;

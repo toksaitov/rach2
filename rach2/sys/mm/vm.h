@@ -191,12 +191,18 @@ struct vm_file {
  * reads or writes `len` bytes at the byte `offset` of the object for
  * ptrace and /proc/PID/mem, which cannot reach a device region's pages by
  * its page tables, as Linux's vm_operations_struct's `access`; it returns
- * 0 or a negative errno. Called under the big kernel lock.
+ * 0 or a negative errno. `whole` is 1 for an object whose `page` never
+ * sleeps and whose every page a mapping may take at once: the first fault
+ * of a region then maps each page of it not yet present, as Linux's
+ * remap_pfn_range maps a whole region at mmap for virtio-gpu's blobs of
+ * host memory (virtgpu_vram.c:32-67) and i915's fault maps the whole
+ * object (i915_gem_mman.c:253-295). Called under the big kernel lock.
  */
 struct vm_device_ops {
     int (*page)(void *obj, uint32_t pgoff, uintptr_t *phys);
     void (*put)(void *obj);
     int (*access)(void *obj, uint64_t offset, void *buf, uint32_t len, int write);
+    int whole;
 };
 
 /* The nodes a mask given to the memory policy calls may name, Linux's
@@ -403,6 +409,10 @@ int madvise_refused(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t adv
 /** The object a device region's file `f` maps (`vm_device_map`), or NULL
  * when `f` is NULL or no device's. */
 void *vm_device_object(const struct vm_file *f);
+
+/** Whether a fault in a device region of the file `f` may map every page
+ * of the region at once, its object's `whole`: 1 or 0. */
+int vm_device_whole(const struct vm_file *f);
 
 /** Read or write `len` bytes at the byte `offset` of the object a device
  * region's file `f` maps, through its `access`: 0, its error, or -EIO when

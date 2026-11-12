@@ -541,7 +541,7 @@ static int obj_access(void *o, uint64_t offset, void *buf, uint32_t len, int wri
     return 0;
 }
 
-static const struct vm_device_ops obj_ops = {obj_page, obj_put, obj_access};
+static const struct vm_device_ops obj_ops = {obj_page, obj_put, obj_access, 0};
 
 static struct obj dev_obj, ram_obj;
 
