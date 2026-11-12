@@ -1083,6 +1083,13 @@ void isr_leave(isr_params_t *params)
  * whose request is in this processor's record (`smp_ipi`), and the APIC's
  * spurious vector, which needs no end-of-interrupt.
  *
+ * The interprocessor interrupt ends before its requests are served, as
+ * Linux's sysvec handlers end theirs first (arch/x86/kernel/smp.c:
+ * 248-270): a kick the service sends exits under KVM, and an exit takes
+ * back a paravirtual end of interrupt still pending (`lapic_eoi`). A
+ * request left after the service reads its record comes with an interrupt
+ * of its own, taken after the return, since interrupts stay off.
+ *
  * An interprocessor interrupt that finds user mode with a requested
  * reschedule or its thread's rseq marked takes the switch after its end of
  * interrupt, without the big lock, then returns through `isr_leave`, which
@@ -1095,8 +1102,8 @@ void isr_local_router(isr_params_t *params)
 {
     user_entry(params);
     if (params->vector == IPI_VECTOR) {
-        smp_ipi();
         lapic_eoi();
+        smp_ipi();
         if (FRAME_USER(params) && current_proc &&
             (current_proc->work & (WORK_RESCHED | WORK_RSEQ)) != 0) {
             bkl_frame_push(0);
@@ -1211,6 +1218,14 @@ int arch_irq_waiting(void)
  * A holder of the lock on another processor, such as the sound mix's, so
  * takes nothing from this processor's ticks or from its user code.
  *
+ * The timer's interrupts, the tick and the one between ticks, end first
+ * when the lines go through the I/O APIC, as Linux's
+ * sysvec_apic_timer_interrupt ends its own before it programs the timer
+ * (arch/x86/kernel/apic/apic.c:1053): the count written next exits under
+ * KVM, and an exit takes back a paravirtual end of interrupt still pending
+ * (`lapic_eoi`), which then costs an exit of its own. Interrupts stay off
+ * until the handler is done, so the vector cannot come again within it.
+ *
  * Every interrupt first lets the local APIC timer go on from an interrupt
  * between ticks or a tick (`apic_hr_entry`), before the big lock, so that a
  * wait for the lock does not hold back the next tick; an interrupt at the
@@ -1249,9 +1264,11 @@ void _irq_router(isr_params_t *params)
     } else if (params->vector == IRQ_VECTOR(0) && !FRAME_USER(params)) {
         bkl_profile_sample((uintptr_t)FRAME_PC(params), fp);
     }
-    if (!apic_hr_entry(params->vector)) {
-        lapic_eoi();
-        bkl_frame_push(0); /* isr_leave pops it as a tick's without the lock */
+    if (lines_apic && timer) {
+        lapic_eoi(); /* before apic_hr_entry's count, see above */
+    }
+    if (!apic_hr_entry(params->vector)) { /* ended above: only a local tick says 0 */
+        bkl_frame_push(0);                /* isr_leave pops it as a tick's without the lock */
         return;
     }
     if (params->vector == IRQ_VECTOR(0)) {
@@ -1285,14 +1302,15 @@ void _irq_router(isr_params_t *params)
 
     if (params->vector >= 48) {
         irq_dispatch(params);
-        lapic_eoi();
+        if (!timer) {
+            lapic_eoi();
+        }
         sched_tick(); /* a woken reader runs now, or at the call's exit */
         return;
     }
 
     if (lines_apic) {
         if (params->vector == IRQ_VECTOR(0)) {
-            lapic_eoi();
             irq_dispatch(params);
             return;
         }

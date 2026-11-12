@@ -343,6 +343,16 @@ uint32_t kirq_save(void)
     return 0;
 }
 
+/** One processor: the exchange of the paravirtual end of interrupt's word,
+ * which no row gives the driver. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    unsigned int old = *p;
+
+    *p = value;
+    return old;
+}
+
 /** Undo one `kirq_save`. */
 void kirq_restore(uint32_t flags)
 {
