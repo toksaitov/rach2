@@ -1,0 +1,2 @@
+nctxcheck: capset: node /dev/dri/renderD128, mask 0x46, DRM native context present
+nctxcheck: capset: result: pass

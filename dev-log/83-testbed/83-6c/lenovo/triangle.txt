@@ -1,0 +1,2 @@
+nctxcheck: triangle: inside 255,128,0,255 outside 0,0,128,255
+nctxcheck: triangle: result: pass

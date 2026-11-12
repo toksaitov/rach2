@@ -1,0 +1,9 @@
+gpu: before: 0000:00:02.0 on card0; kvm_vms 0 kvm_vcpus 0 kvm_slots 0 kvm_tdp_pages 0 kvm_run_mappings 0 vfio_groups 0 vfio_devices 0 vfio_dma_mappings 0 vfio_dma_pages 0 vfio_dma_io_pages 0 msi_vectors_free 183 
+gpu: unbind: 0000:00:02.0 from i915
+gpu: bind: 0000:00:02.0 to vfio-pci
+gpu: function: 0000:00:02.0, vendor 0x8086, class 0x030000
+gpu: start: qemu-system-x86_64 -machine q35,kernel-irqchip=split -accel kvm -cpu host -m 4096 -smp 2 -nodefaults -vga none -device vfio-pci,host=0000:00:02.0,bus=pcie.0,addr=02.0,x-igd-opregion=on -kernel /data/trial3513/nctx/reverse-vmlinuz -initrd /data/trial3513/nctx/reverse-initrd.img -append console=ttyS0 panic=-1 root=/dev/vda1 rw nctx.reverse=native -drive file=/data/trial3513/nctx/reverse.qcow2,if=none,id=vm,format=qcow2,snapshot=on -device virtio-blk-pci,drive=vm,ioeventfd=off -chardev socket,path=/data/trial3513/nctx-out/ivs.sock,id=ivs -device ivshmem-doorbell,chardev=ivs,vectors=2 -netdev user,id=net,hostfwd=tcp:127.0.0.1:49178-:22 -device virtio-net-pci,netdev=net,romfile= -device virtio-rng-pci
+gpu: unbind: 0000:00:02.0 from vfio-pci
+gpu: bind: 0000:00:02.0 to i915
+gpu: after: 0000:00:02.0 on card0; kvm_vms 0 kvm_vcpus 0 kvm_slots 0 kvm_tdp_pages 0 kvm_run_mappings 0 vfio_groups 0 vfio_devices 0 vfio_dma_mappings 0 vfio_dma_pages 0 vfio_dma_io_pages 0 msi_vectors_free 183 
+gpu: result: pass: 0000:00:02.0 to the guest and back to i915 after 33 s

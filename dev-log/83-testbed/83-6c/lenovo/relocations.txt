@@ -1,0 +1,8 @@
+nctx-relocations: graph: 1428 execbuffer calls, 76799.299 us in them; 2850 calls of eb_relocate_vma
+nctx-relocations: result: 1428 batches, 2850 relocation calls, 7338.031 us total, 5.139 us per batch
+/sys/kernel/tracing/per_cpu/cpu0/stats:overrun: 0
+/sys/kernel/tracing/per_cpu/cpu0/stats:commit overrun: 0
+/sys/kernel/tracing/per_cpu/cpu0/stats:dropped events: 0
+/sys/kernel/tracing/per_cpu/cpu1/stats:overrun: 0
+/sys/kernel/tracing/per_cpu/cpu1/stats:commit overrun: 0
+/sys/kernel/tracing/per_cpu/cpu1/stats:dropped events: 0

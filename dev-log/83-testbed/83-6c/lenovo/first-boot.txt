@@ -1,0 +1,11 @@
+nctx-reverse: evidence: /data/trial3513/nctx-out
+reverse.qcow2: OK
+reverse-vmlinuz: OK
+reverse-initrd.img: OK
+mesa-nctx.tar.xz: OK
+nctxcheck: OK
+ivshmemd: OK
+nctx-reverse: result: fail: the VM ended before SSH answered
+exit 1
+gpu: result: fail: 0000:00:02.0 is in no IOMMU group
+gpu: evidence: /data/trial3513/nctx-out/gpu

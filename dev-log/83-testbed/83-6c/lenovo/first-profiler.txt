@@ -1,0 +1,3 @@
+nctxcheck: fence: result: pass
+nctx-relocations: the kernel has no function profiler
+exit 1

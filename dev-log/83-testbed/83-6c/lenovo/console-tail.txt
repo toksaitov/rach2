@@ -1,0 +1,60 @@
+[[0;32m  OK  [0m] Closed [0;1;39msystemd-networkd.socket[0m - Network Service Netlink Socket.
+[[0;32m  OK  [0m] Closed [0;1;39muuidd.socket[0m - UUID daemon activation socket.
+[[0;32m  OK  [0m] Stopped target [0;1;39msysinit.target[0m - System Initialization.
+         Stopping [0;1;39msystemd-backlight@backlig…[0mess of backlight:intel_backlight...
+         Stopping [0;1;39msystemd-binfmt.service[0m - Set Up Additional Binary Formats...
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-network-generator.…[0mork Units from Kernel Command Line.
+         Stopping [0;1;39msystemd-resolved.service[0m - Network Name Resolution...
+         Stopping [0;1;39msystemd-timesyncd.service[0m - Network Time Synchronization...
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-tmpfiles-setup.ser…[0mreate System Files and Directories.
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-resolved.service[0m - Network Name Resolution.
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-sysctl.service[0m - Apply Kernel Variables.
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-modules-load.service[0m - Load Kernel Modules.
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-binfmt.service[0m - Set Up Additional Binary Formats.
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-backlight@backligh…[0mtness of backlight:intel_backlight.
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-timesyncd.service[0m - Network Time Synchronization.
+[[0;32m  OK  [0m] Removed slice [0;1;39msystem-systemd\x2dba…[0m - Slice /system/systemd-backlight.
+[[0;32m  OK  [0m] Unset automount [0;1;39mproc-sys-fs-binfmt…[0mormats File System Automount Point.
+[[0;32m  OK  [0m] Stopped target [0;1;39mlocal-fs.target[0m - Local File Systems.
+         Unmounting [0;1;39mboot-efi.mount[0m - /boot/efi...
+         Unmounting [0;1;39mrun-lock.mount[0m - Legacy Locks Directory /run/lock...
+         Unmounting [0;1;39mtmp.mount[0m - Temporary Directory /tmp...
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-growfs-root.service[0m - Grow Root File System.
+[[0;32m  OK  [0m] Unmounted [0;1;39mrun-lock.mount[0m - Legacy Locks Directory /run/lock.
+[[0;32m  OK  [0m] Unmounted [0;1;39mboot-efi.mount[0m - /boot/efi.
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-fsck@dev-disk-by\x…[0mf75176-0229-455e-8aa8-ae49e9b72956.
+[[0;32m  OK  [0m] Removed slice [0;1;39msystem-systemd\x2dfs…slice[0m - Slice /system/systemd-fsck.
+[[0;32m  OK  [0m] Stopped target [0;1;39mlocal-fs-pre.target[0m…Preparation for Local File Systems.
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-remount-fs.service[0m…mount Root and Kernel File Systems.
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-tmpfiles-setup-dev…[0mCreate Static Device Nodes in /dev.
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-tmpfiles-setup-dev…[0mic Device Nodes in /dev gracefully.
+[[0;32m  OK  [0m] Unmounted [0;1;39mtmp.mount[0m - Temporary Directory /tmp.
+[[0;32m  OK  [0m] Stopped target [0;1;39mswap.target[0m - Swaps.
+[[0;32m  OK  [0m] Reached target [0;1;39mshutdown.target[0m - System Shutdown.
+[[0;32m  OK  [0m] Reached target [0;1;39mumount.target[0m - Unmount All Filesystems.
+[[0;32m  OK  [0m] Reached target [0;1;39mfinal.target[0m - Late Shutdown Services.
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-poweroff.service[0m - System Power Off.
+[[0;32m  OK  [0m] Reached target [0;1;39mpoweroff.target[0m - System Power Off.
+[   28.232089] systemd-shutdown[1]: Syncing filesystems and block devices.
+[   28.245903] systemd-shutdown[1]: Sending SIGTERM to remaining processes...
+[   28.253122] systemd-journald[258]: Received SIGTERM from PID 1 (systemd-shutdow).
+[   28.270456] systemd-shutdown[1]: Sending SIGKILL to remaining processes...
+[   28.276765] systemd-shutdown[1]: Unmounting file systems.
+[   28.278804] (sd-umount)[804]: Unmounting '/run/credentials/systemd-journald.service'.
+[   28.281409] (sd-remount)[805]: Remounting '/' read-only with options 'discard,errors=remount-ro'.
+[   28.298071] EXT4-fs (vda1): re-mounted 96e538c4-e118-47a5-ad63-ddbd0e67f846 ro.
+[   28.303667] systemd-shutdown[1]: All filesystems unmounted.
+[   28.304833] systemd-shutdown[1]: Deactivating swaps.
+[   28.305893] systemd-shutdown[1]: All swaps deactivated.
+[   28.306947] systemd-shutdown[1]: Detaching loop devices.
+[   28.309264] systemd-shutdown[1]: All loop devices detached.
+[   28.310382] systemd-shutdown[1]: Stopping MD devices.
+[   28.311466] systemd-shutdown[1]: All MD devices stopped.
+[   28.312529] systemd-shutdown[1]: Detaching DM devices.
+[   28.313610] systemd-shutdown[1]: All DM devices detached.
+[   28.314660] systemd-shutdown[1]: All filesystems, swaps, loop devices, MD devices and DM devices detached.
+[   28.317142] systemd-shutdown[1]: Syncing filesystems and block devices.
+[   28.319008] systemd-shutdown[1]: Powering off.
+[   28.525203] net enp0s1: Unexpected TXQ (0) queue failure: -5
+[   29.145205] ACPI: PM: Preparing to enter system sleep state S5
+[   29.146497] reboot: Power down
