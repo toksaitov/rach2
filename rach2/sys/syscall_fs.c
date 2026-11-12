@@ -6902,7 +6902,10 @@ static int32_t file_read_unwritable(struct open_file *ofd, uint64_t at)
  *
  * A file `file_vfs_unlocked` admits is read without the big lock, which the
  * read takes while a shared mapping of a disk file has pages, to look for
- * the file's among them, and for inotify's report.
+ * the file's among them, and for inotify's report. Every return after the
+ * description's lock leaves by one path, which lets go of both locks, as
+ * Linux's ksys_read releases the position on every answer of vfs_read
+ * (fs/read_write.c:701-714).
  */
 static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, const uint64_t *at,
                          size_t asked)
@@ -6928,10 +6931,8 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
     }
     fd_ofd_lock(ofd);
     if (!at && rw_offset_end(entry, asked) != 0) {
-        fd_ofd_unlock(ofd);
-        return -EINVAL;
-    }
-    if (room == 0 && count > 0) {
+        bytes_read = -EINVAL;
+    } else if (room == 0 && count > 0) {
         bytes_read = file_read_unwritable(ofd, at ? *at : ofd->offset);
     } else {
         bytes_read = file_read_locked(ofd, buf, room, at ? *at : ofd->offset);
