@@ -269,7 +269,30 @@ typedef struct fd_entry {
      * its caller wrote, and again while `fd_free` lets the description go:
      * no lookup finds the slot and no copy of the table keeps it. */
     uint32_t pending;
+    /* FD_MODE_* below, or 0 until the first call that asks (`fd_mode`,
+     * syscall_fs.c). */
+    uint32_t mode;
 } fd_entry_t;
+
+/*
+ * What a read or a write of a descriptor needs to know of it, in
+ * `fd_entry_t.mode`, as Linux keeps it in `f_mode`: decided once from what
+ * the open set, the descriptor's type, object, device row and mounts, which
+ * nothing changes while the descriptor is open, so that each call tests bits
+ * in place of classifying the descriptor again. A copy of the entry, by
+ * dup, fork or a view of pread64, keeps the bits, since it names the same
+ * object.
+ */
+#define FD_MODE_SET   0x01u /* the bits below are set */
+#define FD_MODE_PREAD 0x02u /* pread64 and pwrite64 take it: not a stream */
+#define FD_MODE_POS                                                             \
+    0x04u                        /* read and write start at an offset whose end \
+                                    is checked: FMODE_PREAD but no directory */
+#define FD_MODE_RAW_POS    0x08u /* the offset is a raw disk window's `raw_offset` */
+#define FD_MODE_UNSIGNED   0x10u /* offsets are unsigned (FMODE_UNSIGNED_OFFSET) */
+#define FD_MODE_POS_HELD   0x20u /* an ops-backed transfer holds the description */
+#define FD_MODE_READ_FREE  0x40u /* read and pread64 run without the big lock */
+#define FD_MODE_WRITE_FREE 0x80u /* write and pwrite64 run without the big lock */
 
 /* The most chunks a table has (fd.c), enough for FD_NR_OPEN_MAX. */
 #define FD_CHUNKS 22
