@@ -6,6 +6,7 @@
  * host-deps: rach2/sys/kvm/pvclock.c rach2/sys/kvm/binstats.c
  * host-deps: rach2/sys/kvm/exitstat.c
  * host-deps: rach2/sys/kvm/pmu.c
+ * host-deps: rach2/sys/kvm/dirty.c
  * host-deps: tests/host/compat/fd_flat.c tests/host/compat/atomic_host.c
  * host-deps: tests/host/compat/mutex_none.c tests/host/compat/spinlock_host.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
@@ -725,16 +726,27 @@ static int fake_enter(struct kvm_vcpu *v)
 /* An exit the kernel takes for a host interrupt, KVM_X_AGAIN, is one at an
  * instruction boundary whose interrupt asks for a switch, when set. */
 static int tick_exits;
+static uint32_t ring_writes;
 
 /** The next exit of the script. */
 static int fake_exit(struct kvm_vcpu *v)
 {
+    struct kvm_slot_view s;
+    uint32_t i;
+
     CHECK(irq_on && bkl_depth == 0,
           "an exit is handled with interrupts on and without the big lock, as Linux's");
     if (script_at == script_len) {
         return -EIO;
     }
     v->exit = script[script_at++];
+    k_memset(&s, 0, sizeof(s));
+    s.flags = KVM_MEM_LOG_DIRTY_PAGES;
+    s.id = 3;
+    for (i = 0; i < ring_writes; i++) {
+        (void)kvm_dirty_mark(v, &s, i);
+    }
+    ring_writes = 0;
     v->if_flag = 1;
     v->irq_allowed = 1;
     if (late_request) {
@@ -883,19 +895,35 @@ int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range)
     return n ? 0 : -ENOENT;
 }
 
-int32_t kvm_dirty_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
+uint32_t kvm_mmu_lock(struct kvm_vm *vm)
 {
-    (void)vm;
-    (void)request;
-    (void)arg;
-    return -ENOTTY;
+    return spin_lock_irqsave(&vm->mmu_lock);
 }
 
-int32_t kvm_dirty_enable_manual(struct kvm_vm *vm, const struct kvm_enable_cap *cap)
+void kvm_mmu_unlock(struct kvm_vm *vm, uint32_t flags)
+{
+    spin_unlock_irqrestore(&vm->mmu_lock, flags);
+}
+
+int kvm_slot_get(struct kvm_vm *vm, uint32_t id, struct kvm_slot_view *out)
 {
     (void)vm;
-    (void)cap;
-    return -EINVAL;
+    (void)id;
+    (void)out;
+    return 0;
+}
+
+int kvm_tdp_protect(struct kvm_vm *vm, uint64_t gfn, uint64_t mask)
+{
+    (void)vm;
+    (void)gfn;
+    (void)mask;
+    return 0;
+}
+
+void kvm_tdp_flush(struct kvm_vm *vm)
+{
+    (void)vm;
 }
 
 int32_t kvm_irq_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
@@ -4346,6 +4374,117 @@ static void entry_cancel_rows(int fd)
     script_hw[0] = 0;
 }
 
+/** Check the ring's separate shared mapping and its permissions. */
+static void dirty_ring_map_rows(int fd)
+{
+    struct kvm_vcpu *v = (struct kvm_vcpu *)entries[fd].priv;
+    vma_t vma;
+    uintptr_t phys;
+
+    k_memset(&vma, 0, sizeof(vma));
+    vma.pgoff = KVM_DIRTY_LOG_PAGE_OFFSET;
+    vma.end = 4096;
+    vma.type = VM_FILE;
+    CHECK(entries[fd].ops->mmap(&entries[fd], &vma) == -EINVAL,
+          "a private dirty-ring mapping is refused");
+    vma.type = VM_SHARED;
+    vma.prot = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC;
+    CHECK(entries[fd].ops->mmap(&entries[fd], &vma) == -EINVAL,
+          "an executable dirty-ring mapping is refused");
+    vma.prot &= ~VM_PROT_EXEC;
+    CHECK(entries[fd].ops->mmap(&entries[fd], &vma) == 0 &&
+              map_ops->page(map_obj, 64, &phys) == 0 && phys == (uintptr_t)v->dirty_ring &&
+              map_ops->page(map_obj, 63, &phys) == -1 && map_ops->page(map_obj, 65, &phys) == -1,
+          "the shared ring occupies exactly its configured pages at offset 64");
+    CHECK(dev(KVM_GET_VCPU_MMAP_SIZE, 0) == 12288, "the base mapping's size is unchanged");
+}
+
+/** Check the dirty-ring ABI, capabilities and VM enable rules. */
+static void dirty_ring_enable_rows(int vm)
+{
+    struct kvm_enable_cap cap;
+
+    CHECK(sizeof(struct kvm_dirty_gfn) == 16 && KVM_RESET_DIRTY_RINGS == 0xAEC7u &&
+              KVM_EXIT_DIRTY_RING_FULL == 31 && KVM_DIRTY_LOG_PAGE_OFFSET == 64 &&
+              KVM_CAP_DIRTY_LOG_RING == 192 && KVM_CAP_DIRTY_LOG_RING_ACQ_REL == 223,
+          "the dirty-ring ABI matches Linux's");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_DIRTY_LOG_RING) == 1048576 &&
+              fdio(vm, KVM_CHECK_EXTENSION, KVM_CAP_DIRTY_LOG_RING_ACQ_REL) == 1048576,
+          "both dirty-ring capabilities give Linux's maximum byte size");
+    CHECK(fdio(vm, KVM_RESET_DIRTY_RINGS, 0) == -EINVAL &&
+              vm_cap(vm, KVM_CAP_DIRTY_LOG_RING, 0) == -EINVAL &&
+              vm_cap(vm, KVM_CAP_DIRTY_LOG_RING, 2048) == -EINVAL &&
+              vm_cap(vm, KVM_CAP_DIRTY_LOG_RING, 4097) == -EINVAL &&
+              vm_cap(vm, KVM_CAP_DIRTY_LOG_RING, 2097152) == -E2BIG,
+          "a ring needs a power of two between one page and the maximum");
+    k_memset(&cap, 0, sizeof(cap));
+    cap.cap = KVM_CAP_DIRTY_LOG_RING;
+    cap.args[0] = 4096;
+    cap.flags = 1;
+    CHECK(fdio(vm, KVM_ENABLE_CAP, (uintptr_t)&cap) == -EINVAL, "ring flags are refused");
+    CHECK(vm_cap(vm, KVM_CAP_DIRTY_LOG_RING_ACQ_REL, 4096) == 0 &&
+              vm_cap(vm, KVM_CAP_DIRTY_LOG_RING, 4096) == -EINVAL,
+          "the acquire/release ring is enabled once");
+}
+
+/** The dirty ring's capabilities, enable rules, mappings, full-ring exit,
+ * continued refusal until reset, and mapping reference after close.
+ * The fake backend marks pages during an exit handled inside KVM_RUN. */
+static void dirty_ring_run_rows(void)
+{
+    int live_before = live;
+    int vm = dev(KVM_CREATE_VM, 0), fd, b, before, refs;
+    struct kvm_vcpu *v;
+    uintptr_t phys;
+    uint32_t i;
+
+    dirty_ring_enable_rows(vm);
+    fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    b = fdio(vm, KVM_CREATE_VCPU, 1);
+    v = (struct kvm_vcpu *)entries[fd].priv;
+    CHECK(v->dirty_ring && v->dirty_ring != ((struct kvm_vcpu *)entries[b].priv)->dirty_ring &&
+              v->dirty_ring[0].flags == 0,
+          "each vCPU gets zeroed pages of its own");
+    dirty_ring_map_rows(fd);
+    refusing = 0;
+    script_len = script_at = 0;
+    scripted(KVM_X_AGAIN);
+    ring_writes = 256u - KVM_DIRTY_RING_RESERVED;
+    before = entries_made;
+    CHECK(fdio(fd, KVM_RUN, 0) == 0 && v->run->exit_reason == KVM_EXIT_DIRTY_RING_FULL &&
+              entries_made == before + 1 && v->dirty_ring_put == 192 &&
+              v->dirty_ring[191].slot == 3 && v->dirty_ring[191].offset == 191 &&
+              !kvm_running_vcpu(v->vm),
+          "an exit's writes fill the ring, and the run returns before another entry");
+    CHECK(fdio(fd, KVM_RUN, 0) == 0 && v->run->exit_reason == KVM_EXIT_DIRTY_RING_FULL &&
+              entries_made == before + 1,
+          "an unreset full ring refuses another entry");
+    for (i = 0; i < 192; i++) {
+        v->dirty_ring[i].flags = KVM_DIRTY_GFN_F_RESET;
+    }
+    CHECK(fdio(vm, KVM_RESET_DIRTY_RINGS, 0) == 192 && !dirty_ring_full(v),
+          "reset reports the collected count and allows entry again");
+    script_len = script_at = 0;
+    scripted(KVM_X_HLT);
+    CHECK(fdio(fd, KVM_RUN, 0) == 0 && v->run->exit_reason == KVM_EXIT_HLT &&
+              entries_made == before + 2,
+          "the guest enters after the reset");
+    refs = v->vm->refs;
+    fdclose(b);
+    fdclose(fd);
+    fdclose(vm);
+    CHECK(refs == 4 && v->vm->refs == 1 && map_ops->page(map_obj, 64, &phys) == 0,
+          "the ring mapping keeps its VM and pages after every descriptor closes");
+    map_ops->put(map_obj);
+    vm = dev(KVM_CREATE_VM, 0);
+    fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    CHECK(vm_cap(vm, KVM_CAP_DIRTY_LOG_RING, 4096) == -EINVAL,
+          "a ring cannot be enabled after a vCPU was made");
+    fdclose(fd);
+    fdclose(vm);
+    CHECK(live == live_before, "the dirty rings and their VMs return every allocation");
+}
+
 /** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
@@ -4377,6 +4516,7 @@ int main(void)
     vm_rows(vm, vcpu);
     pv_rows();
     selftest_rows();
+    dirty_ring_run_rows();
     printf("kvm-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }

@@ -374,7 +374,7 @@ static int32_t slot_create(struct kvm_vm *vm, struct slots *t, uint32_t id,
     s->hva = r->userspace_addr;
     s->id_node.key = id;
     s->gfn_node.key = s->base_gfn;
-    if (s->flags & KVM_MEM_LOG_DIRTY_PAGES) {
+    if ((s->flags & KVM_MEM_LOG_DIRTY_PAGES) && !vm->dirty_ring_size) {
         s->dirty = log_new(vm, s->npages);
         if (!s->dirty) {
             kfree(s);
@@ -406,7 +406,7 @@ static int32_t slot_change(struct kvm_vm *vm, struct slots *t, struct slot *s, u
     uint64_t *log = s->dirty, *old = NULL, base = s->base_gfn;
     uint32_t lock;
 
-    if ((flags & KVM_MEM_LOG_DIRTY_PAGES) && !log) {
+    if ((flags & KVM_MEM_LOG_DIRTY_PAGES) && !log && !vm->dirty_ring_size) {
         log = log_new(vm, s->npages);
         if (!log) {
             return -ENOMEM;

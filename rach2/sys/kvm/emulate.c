@@ -285,6 +285,7 @@ void kvm_emul_skip(struct kvm_vcpu *v, uint32_t len)
 static int gpa_rw_page(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t chunk, int write)
 {
     struct kvm_slot_view s;
+    struct kvm_dirty_gfn *entry;
     void __user *hva;
     int r = 0;
 
@@ -295,11 +296,18 @@ static int gpa_rw_page(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t chu
     }
     hva = (void __user *)(uintptr_t)(s.hva + (gpa & 0xFFFu));
     if (write) {
-        if (copy_to_user(hva, buf, chunk) != 0) {
-            r = -EFAULT;
+        r = kvm_dirty_reserve(v, &s, gpa >> 12, &entry);
+        if (r != 0) {
             goto out;
         }
-        kvm_dirty_mark(v->vm, &s, gpa >> 12);
+        if (copy_to_user(hva, buf, chunk) != 0) {
+            r = -EFAULT;
+        }
+        if (entry) {
+            kvm_dirty_publish(entry);
+        } else {
+            (void)kvm_dirty_mark(v, &s, gpa >> 12);
+        }
     } else if (copy_from_user(buf, hva, chunk) != 0) {
         r = -EFAULT;
     }

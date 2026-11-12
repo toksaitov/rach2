@@ -216,7 +216,8 @@ A shared mapping is the kernel's own pages, which
 reads and writes, and a fork's child shares it.
 A private mapping gives each page as it was when first touched, as a
 private mapping of a file does, and its writes stay its own.
-A page past the three raises
+An enabled dirty ring is mapped separately at page offset 64.
+Other pages past the three raise
 .Dv SIGBUS .
 .Pp
 A VM belongs to the address space that made it.
@@ -346,6 +347,38 @@ pages from
 a multiple of 64, and write-protects those pages; with
 .Dv KVM_DIRTY_LOG_INITIALLY_SET
 as well, a slot's log starts with every page set.
+.Pp
+As an alternative to a bitmap,
+.Dv KVM_CAP_DIRTY_LOG_RING
+and
+.Dv KVM_CAP_DIRTY_LOG_RING_ACQ_REL
+each report a maximum ring size of 1048576 bytes.
+.Dv KVM_ENABLE_CAP
+of either enables the ring once, before the first vCPU is created, with
+.Va args[0]
+a power-of-two byte size from 4096 to 1048576.
+Each vCPU has a separate ring, mapped shared and non-executable at
+.Dv KVM_DIRTY_LOG_PAGE_OFFSET ,
+64, as an array of
+.Vt struct kvm_dirty_gfn .
+The kernel publishes each logged write's slot and page offset with
+.Dv KVM_DIRTY_GFN_F_DIRTY .
+The caller acquires that flag before reading the entry, then releases
+.Dv KVM_DIRTY_GFN_F_RESET
+after collecting it, in ring order.
+.Dv KVM_RESET_DIRTY_RINGS
+on the VM resets each ring's collected prefix, write-protects its pages
+and flushes the guest translations, then returns the number reset.
+Entries whose slots were deleted or whose slot or offset is invalid
+are skipped but counted.
+.Dv KVM_RUN
+returns
+.Dv KVM_EXIT_DIRTY_RING_FULL
+when 64 entries remain, and enters no guest until enough entries are reset.
+The 64 entries are reserved for writes made while handling an exit.
+The bitmap ioctls fail with
+.Er ENXIO
+in ring mode.
 .Pp
 .Dv KVM_PRE_FAULT_MEMORY
 on a vCPU maps the guest-physical range
@@ -1244,7 +1277,7 @@ gives it.
 .Sh BUGS
 At most 1024 vCPUs in a VM, with ids below 4096, and 32764 memory slots,
 Linux's bounds.
-No dirty ring, no SMM and no nested virtualization, so
+No SMM and no nested virtualization, so
 no enlightened VMCS and no direct TLB flush of Hyper-V's.
 Most statistics of
 .Dv KVM_GET_STATS_FD

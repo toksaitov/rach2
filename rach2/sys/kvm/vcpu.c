@@ -246,13 +246,21 @@ uint8_t *kvm_map_pages(uint32_t count, uintptr_t *pa)
 
 /** The page `pgoff` of `v`'s mapping in the kernel: its run page, its page
  * of port I/O data, or the VM's ring of coalesced writes at
- * KVM_COALESCED_MMIO_PAGE_OFFSET; NULL past them. */
+ * KVM_COALESCED_MMIO_PAGE_OFFSET, and its dirty ring at
+ * KVM_DIRTY_LOG_PAGE_OFFSET; NULL outside them. */
 static uint8_t *mapped_page(struct kvm_vcpu *v, uint32_t pgoff)
 {
     if (pgoff < KVM_RUN_PAGES) {
         return (uint8_t *)v->run + (uintptr_t)pgoff * 4096u;
     }
-    return pgoff == KVM_COALESCED_MMIO_PAGE_OFFSET ? (uint8_t *)v->vm->ring : NULL;
+    if (pgoff == KVM_COALESCED_MMIO_PAGE_OFFSET) {
+        return (uint8_t *)v->vm->ring;
+    }
+    if (pgoff >= KVM_DIRTY_LOG_PAGE_OFFSET &&
+        pgoff - KVM_DIRTY_LOG_PAGE_OFFSET < v->vm->dirty_ring_size / 4096u) {
+        return (uint8_t *)v->dirty_ring + (uintptr_t)(pgoff - KVM_DIRTY_LOG_PAGE_OFFSET) * 4096u;
+    }
+    return NULL;
 }
 
 /** The page `pgoff` of the mapping of the vCPU `obj`, for a fault of a
@@ -324,14 +332,22 @@ static void run_copy_release(struct vm_file *f)
  * fork's child shares it, as Linux's does. A private one, which Linux also
  * allows, gives each page as it was at the first touch, as a private
  * mapping of a file does here (mm/vm.h). Either holds a reference to the
- * VM, so the pages outlive the descriptor. 0, -ENOMEM, or vm_device_map's
- * error.
+ * VM, so the pages outlive the descriptor. A mapping over the dirty ring
+ * must be shared and non-executable, as Linux's kvm_vcpu_mmap checks.
+ * 0, -EINVAL for such a forbidden mapping, -ENOMEM, or vm_device_map's error.
  */
 static int32_t vcpu_mmap(fd_entry_t *e, struct vma *vma)
 {
     struct kvm_vcpu *v = (struct kvm_vcpu *)e->priv;
     struct run_copy *c;
     int32_t r;
+    uint64_t end = (uint64_t)vma->pgoff + (vma->end - vma->start) / 4096u;
+
+    if (v->vm->dirty_ring_size &&
+        vma->pgoff < KVM_DIRTY_LOG_PAGE_OFFSET + v->vm->dirty_ring_size / 4096u &&
+        end > KVM_DIRTY_LOG_PAGE_OFFSET && (vma->type != VM_SHARED || (vma->prot & VM_PROT_EXEC))) {
+        return -EINVAL;
+    }
 
     if (vma->type != VM_SHARED) {
         c = kzalloc(sizeof(*c));
@@ -385,6 +401,9 @@ void kvm_vcpu_free(struct kvm_vcpu *v)
     kvm_hv_vcpu_free(v);
     if (v->run) {
         kfree_pages(v->run, KVM_RUN_PAGES);
+    }
+    if (v->dirty_ring) {
+        kfree_pages(v->dirty_ring, v->vm->dirty_ring_size / 4096u);
     }
     kfree(v->xsave_mem);
     kfree(v->cpuid);
@@ -440,6 +459,13 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
         goto fail;
     }
     k_memset(v->run, 0, KVM_RUN_PAGES * 4096u);
+    if (vm->dirty_ring_size) {
+        v->dirty_ring = kalloc_pages(vm->dirty_ring_size / 4096u, NULL);
+        if (!v->dirty_ring) {
+            goto fail;
+        }
+        k_memset(v->dirty_ring, 0, vm->dirty_ring_size);
+    }
     v->pio = (uint8_t *)v->run + KVM_PIO_PAGE_OFFSET * 4096u;
     v->xsave = (uint8_t *)(((uintptr_t)v->xsave_mem + 63u) & ~(uintptr_t)63u);
     (void)kvm_tsc_set_khz(v, vm->default_tsc_khz);
@@ -823,6 +849,58 @@ static void vcpu_sched_out(void *arg, int preempted)
     }
 }
 
+struct kvm_vcpu *kvm_running_vcpu(struct kvm_vm *vm)
+{
+    struct kvm_vcpu *v;
+
+    if (!current_proc || current_proc->sched_out != vcpu_sched_out) {
+        return NULL;
+    }
+    v = (struct kvm_vcpu *)current_proc->sched_out_arg;
+    return v && v->vm == vm ? v : NULL;
+}
+
+/** Whether `v` must return to its caller to collect and reset its ring.
+ * The reserve covers software writes while completing an exit, as
+ * Linux's soft_limit; neither backend has a hardware dirty-page buffer. */
+static int dirty_ring_full(struct kvm_vcpu *v)
+{
+    uint32_t entries = v->vm->dirty_ring_size / sizeof(struct kvm_dirty_gfn);
+
+    return entries && v->dirty_ring_put - v->dirty_ring_reset >= entries - KVM_DIRTY_RING_RESERVED;
+}
+
+/** Prepare timers, clocks, filters and events for an entry: 1 when ready,
+ * 0 for an exit to the caller, or a negative error. Without the big lock;
+ * the helpers take the locks they need, and may write logged guest pages. */
+static int32_t run_prepare(struct kvm_vcpu *v)
+{
+    int32_t r;
+
+    r = kvm_hv_prepare(v);
+    if (r != 0) {
+        return 0;
+    }
+    kvm_pmu_prepare(v);
+    if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
+        r = kvm_lapic_prepare(v);
+        if (r != 0) {
+            return r > 0 ? 0 : r;
+        }
+    }
+    kvm_clock_prepare(v);
+    kvm_steal_prepare(v);
+    if (kvm_vcpu_test_clear(v, KVM_REQ_MSR_FILTER) && kvm_backend->msr_filter_changed) {
+        kvm_backend->msr_filter_changed(v);
+    }
+    if (kvm_vcpu_test_clear(v, KVM_REQ_EVENT)) {
+        if (kvm_backend->inject) {
+            kvm_backend->inject(v);
+        }
+    }
+    return 1;
+}
+
 /**
  * KVM_RUN's loop, as Linux's kvm_arch_vcpu_ioctl_run and vcpu_run: begin
  * with `run_begin`, then enter until an exit the caller answers, a signal,
@@ -852,7 +930,6 @@ static void vcpu_sched_out(void *arg, int preempted)
 static int32_t run_loop(struct kvm_vcpu *v)
 {
     struct kvm_run *run = v->run;
-    int in_kernel = v->vm->irqchip != KVM_IRQCHIP_NONE;
     uint32_t flags;
     int32_t r;
 
@@ -879,26 +956,17 @@ static int32_t run_loop(struct kvm_vcpu *v)
             run->exit_reason = KVM_EXIT_INTR;
             return -EINTR;
         }
-        r = kvm_hv_prepare(v);
-        if (r != 0) {
+        if (dirty_ring_full(v)) {
+            run->exit_reason = KVM_EXIT_DIRTY_RING_FULL;
             return 0;
         }
-        kvm_pmu_prepare(v);
-        if (in_kernel) {
-            r = kvm_lapic_prepare(v);
-            if (r != 0) {
-                return r > 0 ? 0 : r;
-            }
+        r = run_prepare(v);
+        if (r != 1) {
+            return r;
         }
-        kvm_clock_prepare(v);
-        kvm_steal_prepare(v);
-        if (kvm_vcpu_test_clear(v, KVM_REQ_MSR_FILTER) && kvm_backend->msr_filter_changed) {
-            kvm_backend->msr_filter_changed(v);
-        }
-        if (kvm_vcpu_test_clear(v, KVM_REQ_EVENT)) {
-            if (kvm_backend->inject) {
-                kvm_backend->inject(v);
-            }
+        if (dirty_ring_full(v)) {
+            run->exit_reason = KVM_EXIT_DIRTY_RING_FULL;
+            return 0;
         }
         r = run_enter(v);
         if (r == -EAGAIN) {

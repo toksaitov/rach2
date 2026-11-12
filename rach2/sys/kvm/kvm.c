@@ -204,6 +204,9 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
 
     (void)vm;
     switch (cap) {
+    case KVM_CAP_DIRTY_LOG_RING:
+    case KVM_CAP_DIRTY_LOG_RING_ACQ_REL:
+        return KVM_DIRTY_RING_MAX_BYTES;
     case KVM_CAP_SET_GUEST_DEBUG:
     case KVM_CAP_EXIT_ON_EMULATION_FAILURE:
     case KVM_CAP_MSR_PLATFORM_INFO:
@@ -583,6 +586,9 @@ static int32_t vm_enable_cap(struct kvm_vm *vm, uintptr_t arg)
     if (cap.cap == KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2) {
         return kvm_dirty_enable_manual(vm, &cap);
     }
+    if (cap.cap == KVM_CAP_DIRTY_LOG_RING || cap.cap == KVM_CAP_DIRTY_LOG_RING_ACQ_REL) {
+        return kvm_dirty_enable_ring(vm, &cap);
+    }
     if (cap.cap == KVM_CAP_PMU_CAPABILITY) {
         return kvm_pmu_enable(vm, &cap);
     }
@@ -722,6 +728,7 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         return vm_set_region(vm, request, arg);
     case KVM_GET_DIRTY_LOG:
     case KVM_CLEAR_DIRTY_LOG:
+    case KVM_RESET_DIRTY_RINGS:
         return kvm_dirty_ioctl(vm, request, arg);
     case KVM_SET_TSS_ADDR:
         /* The TSS takes three pages below 4 GiB. */
