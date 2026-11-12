@@ -130,8 +130,8 @@ int arch_guest(void)
     return 0;
 }
 
-/** 0: no device's interrupt waits; only an idle wait's poll asks, which
- * none runs. */
+/** 0: no interrupt waits; only an idle wait's poll asks, which none
+ * runs. */
 int arch_irq_waiting(void)
 {
     return 0;

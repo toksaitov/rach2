@@ -967,23 +967,21 @@ static int timer_vector(uint32_t vector)
 }
 
 /**
- * A device's interrupt is any vector from IRQ_VECTOR(0) to ISR_MSI_LAST but
- * the timer's; above them are the interprocessor and spurious vectors. With
- * x2APIC each word is a register read, which a hypervisor may trap, so the
- * caller looks only every few microseconds.
+ * The vectors that count are those from IRQ_VECTOR(0) to ISR_MSI_LAST:
+ * the 8259's and the I/O APIC's lines, the tick's among them, the local
+ * APIC timer's between ticks, and the messages of PCI devices. Above them
+ * are the interprocessor and spurious vectors. With x2APIC each word is a
+ * register read, which a hypervisor may trap, so the caller looks only
+ * every few microseconds.
  */
 int arch_irq_waiting(void)
 {
     uint32_t w, bits;
-    int hr = apic_hr_vector();
 
     for (w = IRQ_VECTOR(0) / 32u; w <= ISR_MSI_LAST / 32u; w++) {
         bits = lapic_request_word(w);
         if (w == IRQ_VECTOR(0) / 32u) {
-            bits &= ~(1u << (IRQ_VECTOR(0) % 32u));
-        }
-        if (hr != 0 && (uint32_t)hr / 32u == w) {
-            bits &= ~(1u << ((uint32_t)hr % 32u));
+            bits &= ~((1u << (IRQ_VECTOR(0) % 32u)) - 1u);
         }
         if (w == ISR_MSI_LAST / 32u && ISR_MSI_LAST % 32u != 31u) {
             bits &= (1u << (ISR_MSI_LAST % 32u + 1u)) - 1u;
