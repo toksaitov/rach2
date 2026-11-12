@@ -85,10 +85,16 @@ int vfs_ns_held_by_caller(void)
    as every row but `reader_rows` calls; 0 for a reader without it, which
    must take it to write a dirty victim or read the device. `big_takes`
    counts the takes, and `reads_unlocked` the device reads made without
-   it. */
+   it. With `take_dev` set, `take_keyed` says whether block `take_blk` of
+   it was in the cache at the last take: a miss that chose its victim
+   without the big lock keys the block before its read takes the lock, and
+   one that chose it under the lock takes the lock first. */
 static int big_held = 1;
 static int big_takes;
 static int reads_unlocked;
+static block_device_t *take_dev;
+static uint64_t take_blk;
+static int take_keyed;
 
 /** The big lock's answer: whether the caller holds it. */
 int bkl_held(void)
@@ -96,10 +102,14 @@ int bkl_held(void)
     return big_held > 0;
 }
 
-/** Take the big lock, counted in `big_takes`. */
+/** Take the big lock, counted in `big_takes`, and note in `take_keyed`
+ * whether the block a row watches was keyed at the take. */
 void bkl_enter(void)
 {
     big_takes++;
+    if (take_dev) {
+        take_keyed = bcache_cached(take_dev, take_blk);
+    }
     big_held++;
 }
 
@@ -1428,9 +1438,12 @@ static void fill_forty(unsigned clean)
 
 /**
  * The calls of a reader without the big lock: a hit takes no big lock, a
- * miss that finds a clean buffer near the head of the release order takes it
- * only for the device's read and writes nothing, and a miss that finds only
- * dirty buffers takes it to write one; each gives it back.
+ * miss that finds a clean buffer near the head of the release order chooses
+ * and keys it without the lock, which it takes only for the device's read,
+ * and writes nothing, and a miss that finds only dirty buffers takes it
+ * before it chooses, to write one; each gives it back. Whether the victim
+ * was keyed before the take tells the two apart, since both take the lock
+ * once (`take_keyed`).
  */
 static void reader_rows(void)
 {
@@ -1443,11 +1456,15 @@ static void reader_rows(void)
     writes_made = 0;
     reads_made = 0;
     reads_unlocked = 0;
+    take_dev = &vast;
+    take_blk = 300;
+    take_keyed = -1;
     b = bcache_get(&vast, 300);
     check(
         b != 0 && big_takes == 1 && big_held == 0 && writes_made == 0 && reads_made == 1 &&
             reads_unlocked == 0 && b->data[0] == 0x5A,
         "a reader's miss takes a clean buffer with no write, and the big lock for the read alone");
+    check(take_keyed == 1, "and chooses and keys the buffer before it takes the big lock");
     bcache_release(b);
     big_takes = 0;
     b = bcache_get(&vast, 300);
@@ -1455,13 +1472,18 @@ static void reader_rows(void)
     bcache_release(b);
     big_held = 1;
 
+    take_dev = 0;
     fill_forty(0);
     big_held = 0;
     big_takes = 0;
     writes_made = 0;
+    take_dev = &vast;
+    take_keyed = -1;
     b = bcache_get(&vast, 300);
     check(b != 0 && big_takes == 1 && writes_made == 1 && big_held == 0,
           "a reader's miss among dirty buffers takes the big lock to write one, and gives it back");
+    check(take_keyed == 0, "and takes the big lock before it chooses its victim");
+    take_dev = 0;
     bcache_release(b);
     big_held = 1;
     (void)bcache_sync(&vast);
