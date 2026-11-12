@@ -357,6 +357,10 @@ struct ext2_mount {
      * second, so a number reused for another file has another generation. */
     uint32_t next_generation;
     int writable;
+    /* Set while a writable mount or remount checks and opens the volume,
+     * before `writable` is: the only time a mount that is not writable may
+     * write (`ext2_write_owned`). */
+    int opening;
     /* The free counts, kept equal to the sums of the descriptors'. */
     uint64_t free_blocks, free_inodes;
     int valid_cleared; /* the superblock's valid bit was cleared by this mount */

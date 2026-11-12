@@ -651,11 +651,14 @@ static void check_report(struct ext2_check *c)
  * the descriptors and the superblock, and the error bit set as well when
  * blocks were lost, inodes orphaned or attribute blocks left counting
  * inodes that no longer name them; 1 with `*why` naming why it must stay
- * read-only, the error bit written and the counts as the disk has them,
- * since the recount may have stopped part way; or -errno when the device
- * failed.
+ * read-only, nothing written and the counts as the disk has them, since the
+ * recount may have stopped part way; or -errno when the device failed. A
+ * mount that stays read-only writes nothing, as Linux's ext2 writes nothing
+ * to a read-only mount (`ext2_setup_super`, `ext2_put_super`); the error bit
+ * is set in memory alone, and the disk, whose valid bit is clear or error
+ * bit set already, has the next writable mount check it again.
  */
-int ext2_check_volume(struct ext2_mount *em, const char **why)
+static int check_volume(struct ext2_mount *em, const char **why)
 {
     struct ext2_check *c;
     uint64_t free_blocks = em->free_blocks, free_inodes = em->free_inodes;
@@ -731,10 +734,6 @@ int ext2_check_volume(struct ext2_mount *em, const char **why)
         klog(KLOG_WARN, "ext2", "check: inode %d: %s", (int)c->fault_ino, c->fault);
         check_state_free(c);
         em->state |= EXT2_ERROR_FS;
-        rc = ext2_sb_store(em);
-        if (rc != 0) {
-            return rc;
-        }
         *why = "the check found a fault";
         return 1;
     }
@@ -750,4 +749,22 @@ int ext2_check_volume(struct ext2_mount *em, const char **why)
     check_report(c);
     check_state_free(c);
     return ext2_sb_store(em);
+}
+
+/**
+ * `check_volume` with `em->opening` set, the one time a mount that is not
+ * yet writable may write (`ext2_write_owned`): the recounted descriptors
+ * and superblock of a check that leaves the volume writable. The flag is
+ * given back as the caller had it, since a remount writable keeps it set
+ * for the writes that follow the check. Returns what `check_volume` does.
+ */
+int ext2_check_volume(struct ext2_mount *em, const char **why)
+{
+    int was = em->opening;
+    int rc;
+
+    em->opening = 1;
+    rc = check_volume(em, why);
+    em->opening = was;
+    return rc;
 }

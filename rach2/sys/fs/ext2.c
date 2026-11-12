@@ -1730,9 +1730,10 @@ static int remount_writable(struct ext2_mount *em)
     if (em->readonly_why) {
         return -EROFS;
     }
+    em->opening = 1;
     if (!(em->state & EXT2_VALID_FS) || (em->state & EXT2_ERROR_FS)) {
         rc = ext2_check_volume(em, &why);
-        if (rc == 0 && why) {
+        if (rc > 0) {
             em->readonly_why = why;
             rc = -EROFS;
         }
@@ -1748,6 +1749,7 @@ static int remount_writable(struct ext2_mount *em)
         em->valid_cleared = 1;
         em->writable = 1;
     }
+    em->opening = 0;
     ext2_batch_unlock(em);
     return rc;
 }
@@ -2093,7 +2095,10 @@ void ext2_node_share_group(struct ext2_mount *em, struct ext2_node *n, uint32_t 
  * batch holds it to list an image and the drain to copy one over the
  * block, so a reader that holds the buffer or copies under the batch's
  * spinlock sees each write whole; the cache's write lock keeps the marks
- * and writes (bcache.h), so the caller needs no big lock. 0, or -errno.
+ * and writes (bcache.h), so the caller needs no big lock. A mount that is
+ * not writable, outside the check and the opening of a writable mount or
+ * remount (`em->opening`), writes nothing: -EROFS, logged as
+ * `ext2: write refused: the mount is read-only: block B`. 0, or -errno.
  */
 int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const void *src,
                      uint32_t len, int sync)
@@ -2102,6 +2107,11 @@ int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const 
     int level = sync / WRITE_LEVEL(1);
     int rc = 0;
 
+    if (!em->writable && !em->opening) {
+        klog(KLOG_WARN, "ext2", "write refused: the mount is read-only: block %d",
+             (int)(off >> em->block_shift));
+        return -EROFS;
+    }
     sync &= WRITE_WAY;
     while (rc == 0 && len > 0) {
         uint64_t blk = off >> BCACHE_BLOCK_SHIFT;
