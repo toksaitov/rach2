@@ -117,8 +117,19 @@ same file for this purpose.
 A file on a loop-mounted volume cannot be attached to another loop device.
 A chain may contain only one loop device.
 .Pp
-While attached, the file cannot be written or truncated.
-On the memory root, it also cannot be unlinked or renamed over.
+While attached, the file cannot be written, truncated, grown by
+.Xr fallocate 2 ,
+mapped shared through a descriptor open for writing, written by a core
+dump, unlinked or renamed over, through any mount that shows it, a bind
+included.
+A file on tmpfs is not attached while a shared mapping through a
+descriptor open for writing maps it, or once it is sealed against
+shrinking, which
+.Xr udmabuf 4
+and
+.Xr vgpu-shm 4
+require before they hand its pages on; neither takes a file that is
+attached.
 The volume containing the file cannot be unmounted until the device
 is detached.
 These operations fail with
