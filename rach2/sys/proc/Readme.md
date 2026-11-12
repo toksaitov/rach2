@@ -256,7 +256,7 @@ A record has nine limits, `RLIM_COUNT` in `process.h`, each a soft value that is
 | `RLIMIT_AS` | none, none | `brk`, `mmap`, `mremap`, the growth of the stack at a page fault (`rach2/sys/mm/paging.c`), and the image `execve` builds |
 | `RLIMIT_STACK` | 8 MiB (`RLIM_STACK_DEFAULT`), none | `execve`: the room for the strings and their pointers, and how far the new stack may grow |
 | `RLIMIT_CORE` | 0, none | a core file: none below one page, and the file stops at the soft value |
-| `RLIMIT_FSIZE` | none, none | a write, a truncation or an `fallocate` past it fails with `EFBIG` and sends `SIGXFSZ` (`vfs_fsize_refused` and `vfs_newsize_ok` in `rach2/sys/fs/vfs.c`) |
+| `RLIMIT_FSIZE` | none, none | a write, a truncation or an `fallocate` past it fails with `EFBIG` and sends `SIGXFSZ` (`vfs_fsize_refused` and `vfs_newsize_ok` in `rach2/sys/fs/fsize.c`) |
 | `RLIMIT_MEMLOCK` | 8 MiB (`RLIM_MEMLOCK_DEFAULT`), 8 MiB | the `mlock` calls, `MAP_LOCKED`, the growth of locked memory under `MCL_FUTURE` and a driver's pins (`mem_lock_room` in `rach2/sys/mm/paging.c`); a privileged caller is exempt ([memory's Readme](../mm/Readme.md#locked-memory-and-pins)) |
 | `RLIMIT_NICE` | 0, 0 | the lowest nice value, as 20 less it, that `setpriority`, `sched_setattr` and the ia32 `nice` give without privilege, and the leaving of `SCHED_IDLE` (`proc_nice_allowed` in `rach2/sys/syscall_proc.c`) |
 | `RLIMIT_RTPRIO` | 0, 0 | the real-time priority `sched_setscheduler`, `sched_setparam` and `sched_setattr` give without privilege; at 0, no real-time policy (`sched_user_check`) |

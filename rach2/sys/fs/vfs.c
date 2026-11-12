@@ -3121,39 +3121,6 @@ int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t o
     return rc;
 }
 
-int32_t vfs_fsize_refused(uint64_t end)
-{
-    unsigned long limit;
-    struct k_siginfo info;
-    int big = 0;
-
-    if (!current_proc) {
-        return 0;
-    }
-    limit = current_proc->rlim[RLIM_FSIZE].cur;
-    if (limit == RLIM_INFINITY || end <= limit) {
-        return 0;
-    }
-    k_memset(&info, 0, sizeof(info));
-    info.code = SI_USER;
-    info.pid = current_proc->tgid;
-    info.uid = current_proc->ruid;
-    if (!bkl_held()) {
-        bkl_enter();
-        big = 1;
-    }
-    signal_post_thread(current_proc, SIGXFSZ, &info);
-    if (big) {
-        bkl_exit();
-    }
-    return -EFBIG;
-}
-
-int32_t vfs_newsize_ok(uint64_t size, uint64_t end)
-{
-    return end > size ? vfs_fsize_refused(end) : 0;
-}
-
 /* The fields of a write-back error sequence, Linux's errseq_t
  * (lib/errseq.c): the errno below MAX_ERRNO's 4096, the bit set once a
  * sync has reported it, and the step of the count above them. */
