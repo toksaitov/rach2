@@ -324,8 +324,8 @@ struct vgs_info {
     uint64_t heap_used;  /* pages of it the driver holds */
     uint64_t refused;    /* allocations refused for a full heap */
     uint64_t maps;       /* blobs mapped from the VM's pages since the attach */
-    uint64_t map_pages;  /* the VM's pages those maps hold now */
-    uint64_t map_live;   /* maps that hold their pages now */
+    uint64_t map_pages;  /* the VM's pages the maps not taken back give */
+    uint64_t map_live;   /* maps not taken back */
     uint64_t revoked;    /* maps taken back before their blob's end */
 };
 

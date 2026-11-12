@@ -26,7 +26,10 @@
  * a pin of an object's frames refuses a frame the allocator does not count;
  * the frame KVM shares with another program (`paging_user_ram_frame`) is
  * given for a writable private page and refused for a memfd_secret page and
- * for every page once the address space has ended, its directory gone;
+ * for every page once the address space has ended, its directory gone,
+ * and a run of them read in one walk crosses a leaf table's end and a
+ * region's and stops at the first page refused, a present one of a
+ * memfd_secret region and one past the last region;
  * a fork copies a pinned private page for the child, and a pin of a page
  * shared copy-on-write makes it the parent's own first; an unmap of a
  * pinned page and the end of the address space tell the holder once and
@@ -295,6 +298,42 @@ static void ram_frame_rows(void)
     unmap_user_range(&dir_a, plain, secret + P);
 }
 
+/** A run of frames read in one walk (`paging_user_ram_frames`) crosses a
+ * leaf table's end and a region's, and stops at the first page it refuses:
+ * a present, writable page of a memfd_secret region, which only the look at
+ * the region the walk enters refuses, and a page past the last region. */
+static void ram_run_rows(void)
+{
+    uintptr_t from = VB - 2 * P, frames[6];
+    uint32_t i;
+    int ok = 1;
+
+    check(vm_insert(&mm_a.vm, from, VB, RW, VM_ANON) == 0 &&
+              vm_insert(&mm_a.vm, VB, VB + 2 * P, RW | VM_PROT_EXEC, VM_ANON) == 0 &&
+              vm_insert(&mm_a.vm, VB + 2 * P, VB + 3 * P, RW | VM_PROT_SECRET, VM_ANON) == 0 &&
+              vm_find(&mm_a.vm, from)->end == VB && vm_find(&mm_a.vm, VB)->end == VB + 2 * P,
+          "two regions meet at a leaf table's end, and a secret one follows");
+    for (i = 0; i < 5; i++) {
+        ok &= resolve_held(&mm_a, from + i * P, 1, ~(uintptr_t)0) == 1;
+    }
+    check(ok && (pte_of(&dir_a, VB + 2 * P) & (PTE_P | PTE_W)) == (PTE_P | PTE_W),
+          "their five pages are written, the secret one present and writable");
+    for (i = 0; i < 6; i++) {
+        frames[i] = 0;
+    }
+    check(paging_user_ram_frames(&mm_a, from, 4, frames) == 4, "a run of the four is given whole");
+    for (i = 0; i < 4; i++) {
+        ok &= frames[i] != 0 && frames[i] == PTE_ADDR(pte_of(&dir_a, from + i * P));
+    }
+    check(ok, "each frame is its page's, on both sides of the table's end and the region's");
+    check(paging_user_ram_frames(&mm_a, from + P, 5, frames) == 3,
+          "a run into the secret region stops where it begins, at a page the region refuses");
+    check(paging_user_ram_frames(&mm_a, VB + 3 * P, 1, frames) == 0,
+          "a run past the last region gives nothing");
+    vm_remove(&mm_a.vm, from, VB + 3 * P);
+    unmap_user_range(&dir_a, from, VB + 3 * P);
+}
+
 /** A fork copies a pinned private page for the child; a pin of a page
  * shared copy-on-write makes it the parent's own first. */
 static void fork_rows(void)
@@ -515,7 +554,7 @@ static void io_put(void *obj)
     io_object.puts++;
 }
 
-static const struct vm_device_ops io_ops = {io_page, io_put};
+static const struct vm_device_ops io_ops = {io_page, io_put, 0, 0};
 
 /** Access refusals and each end of a device mapping release its holder. */
 static void io_lifetime(uintptr_t addr, uintptr_t phys, vma_t *vma)
@@ -860,6 +899,7 @@ int main(void)
     pin_rows();
     frame_rows();
     ram_frame_rows();
+    ram_run_rows();
     fork_rows();
     release_rows();
     keep_rows();

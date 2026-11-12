@@ -413,6 +413,11 @@ void drm_gem_object_get(struct drm_gem_object *obj)
     }
 }
 
+int drm_gem_object_get_unless_zero(struct drm_gem_object *obj)
+{
+    return refs_get_unless_zero(&obj->refs);
+}
+
 /** Take `obj` off the list at `head`, the device's objects linked through
  * `dev_next`, or with `mmap` set those with an offset, through
  * `mmap_next`. The device's `object_lock` is held. */
@@ -795,7 +800,7 @@ static void shmem_vm_put(void *obj)
     drm_gem_object_put((struct drm_gem_object *)obj);
 }
 
-static const struct vm_device_ops shmem_vm_ops = {shmem_vm_page, shmem_vm_put, NULL};
+static const struct vm_device_ops shmem_vm_ops = {shmem_vm_page, shmem_vm_put, NULL, 0};
 
 /** The `mmap` of a shmem object: a device region over its frames. */
 static int32_t shmem_obj_mmap(struct drm_gem_object *obj, vma_t *vma)

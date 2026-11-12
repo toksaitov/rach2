@@ -29,8 +29,13 @@
  * caches did not give, until the high mark, and says whether they may
  * sleep; above it no one is asked. Two faults of one page interleaved
  * across a file's fill, which lets the regions' lock go, map it once, and a
- * device's page taken back during the device's call is asked for again;
- * `--lock-only` runs those two rows alone.
+ * device's page taken back during the device's call is asked for again.
+ * The first fault of an object that asks it maps its whole region, up to
+ * the object's end, a batch at a time; a zap during a batch's calls maps
+ * nothing of the batch, and a region cut short maps what remains. A zap
+ * walk that waits for one space's lock zaps again a space that faulted the
+ * object back in while it waited. `--lock-only` runs the rows of faults
+ * that let the regions' lock go, and the walk, alone.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -216,7 +221,7 @@ static void dev_put(void *obj)
     (void)obj;
 }
 
-static const struct vm_device_ops dev_ops = {dev_page, dev_put, NULL};
+static const struct vm_device_ops dev_ops = {dev_page, dev_put, NULL, 0};
 
 /** A fork's write-protection, a write's copy and a device's taking back of
  * its pages are told. */
@@ -436,7 +441,7 @@ static int zap_page(void *obj, uint32_t pgoff, uintptr_t *phys)
     return 0;
 }
 
-static const struct vm_device_ops zap_ops = {zap_page, dev_put, NULL};
+static const struct vm_device_ops zap_ops = {zap_page, dev_put, NULL, 0};
 
 /** Two faults of one page interleaved across a file's fill map the page
  * once, the later finding it backed and giving its own frame back; and a
@@ -477,18 +482,187 @@ static void lock_rows(void)
     check(!mmap_held(&mm_a, 0), "no hold of the regions' lock is left after the zap");
 }
 
+/* ---- a device object mapped whole at its first fault ---- */
+
+/* Four regions of 70 pages of the whole object, which `device_map_rest`
+ * maps in a batch of 64 and one of 6, and its region of two pages in A and
+ * B for the zap walk. */
+#define WPAGES 70u
+#define W1     (VF + 8 * P)
+#define W2     (VF + 96 * P)
+#define W3     (VF + 192 * P)
+#define W4     (VF + 288 * P)
+#define WW     (VZ + 16 * P)
+
+/* What the object's page does: there are pages below `whole_end`, and the
+ * call for page `whole_at` zaps the object (`WHOLE_ZAP`) or unmaps the last
+ * four pages of W4 (`WHOLE_CUT`), once. */
+enum { WHOLE_NONE, WHOLE_ZAP, WHOLE_CUT };
+
+static int wobj, whole_do;
+static uint32_t whole_end, whole_at, whole_calls;
+
+/** The whole object's frame for page `pgoff`, past the counted frames, and
+ * the change `whole_do` names on the call for `whole_at`. */
+static int whole_page(void *obj, uint32_t pgoff, uintptr_t *phys)
+{
+    (void)obj;
+    whole_calls++;
+    if (pgoff >= whole_end) {
+        return -1;
+    }
+    if (whole_do != WHOLE_NONE && pgoff == whole_at) {
+        if (whole_do == WHOLE_ZAP) {
+            paging_zap_device(&wobj, 0, 1024);
+        } else {
+            mmap_write_lock(&mm_a);
+            vm_remove(&mm_a.vm, W4 + (WPAGES - 4) * P, W4 + WPAGES * P);
+            unmap_user_range(&dir_a, W4 + (WPAGES - 4) * P, W4 + WPAGES * P);
+            mmap_unlock(&mm_a);
+        }
+        whole_do = WHOLE_NONE;
+    }
+    *phys = (uintptr_t)(DEV_FRAME + 8u + pgoff) * PAGE_SIZE;
+    return 0;
+}
+
+static const struct vm_device_ops whole_ops = {whole_page, dev_put, NULL, 1};
+
+/** How many of the `n` pages from `va` in `dir` are mapped to the whole
+ * object's frames for pages `pgoff` on. */
+static uint32_t whole_mapped(page_dir_t *dir, uintptr_t va, uint32_t pgoff, uint32_t n)
+{
+    uint32_t i, got = 0;
+
+    for (i = 0; i < n; i++) {
+        pte_t e = pte_of(dir, va + i * P);
+
+        if ((e & PTE_P) && PTE_ADDR(e) == (uintptr_t)(DEV_FRAME + 8u + pgoff + i) * PAGE_SIZE) {
+            got++;
+        }
+    }
+    return got;
+}
+
+extern struct mm *host_busy;
+extern void (*host_wait)(struct mm *mm);
+
+static int wait_rc;
+
+/** What A's thread does while the walk waits for B's lock with the big lock
+ * free: it touches the object again, which a pass that zapped A already
+ * cannot see. */
+static void refault_a(struct mm *mm)
+{
+    (void)mm;
+    wait_rc = resolve_held(&mm_a, WW, 1, ~(uintptr_t)0);
+}
+
+/**
+ * The first fault of a whole object maps its region; an object that ends
+ * early leaves the rest to their faults; a zap during a batch's calls maps
+ * nothing of the batch; and a region cut short during the calls maps only
+ * what remains of it.
+ */
+static void whole_rows(void)
+{
+    uint32_t zaps;
+    vma_t vma;
+
+    k_memset(&vma, 0, sizeof(vma));
+    vma.end = WPAGES * P;
+    vma.prot = RW;
+    vma.type = VM_SHARED;
+    check(vm_device_map(&vma, &whole_ops, &wobj, VM_PROT_UC) == 0 &&
+              vm_insert_file(&mm_a.vm, W1, W1 + WPAGES * P, vma.prot, vma.type, vma.file, 0) == 0 &&
+              vm_insert_file(&mm_a.vm, W2, W2 + WPAGES * P, vma.prot, vma.type, vma.file, 0) == 0 &&
+              vm_insert_file(&mm_a.vm, W3, W3 + WPAGES * P, vma.prot, vma.type, vma.file, 0) == 0 &&
+              vm_insert_file(&mm_a.vm, W4, W4 + WPAGES * P, vma.prot, vma.type, vma.file, 0) == 0 &&
+              vm_insert_file(&mm_a.vm, WW, WW + 2 * P, vma.prot, vma.type, vma.file, 0) == 0 &&
+              vm_insert_file(&mm_b.vm, WW, WW + 2 * P, vma.prot, vma.type, vma.file, 0) == 0,
+          "a whole object is mapped in four regions of 70 pages, and two pages in A and B");
+    vm_file_put(vma.file);
+
+    whole_end = 1024;
+    whole_calls = 0;
+    check(resolve_held(&mm_a, W1 + 5 * P, 0, ~(uintptr_t)0) == 1 &&
+              whole_mapped(&dir_a, W1, 0, WPAGES) == WPAGES && whole_calls == 1 + WPAGES,
+          "the first fault maps the whole region, in two batches after its own page");
+
+    whole_end = 40;
+    check(resolve_held(&mm_a, W2 + 3 * P, 0, ~(uintptr_t)0) == 1 &&
+              whole_mapped(&dir_a, W2, 0, 40) == 40 && pte_of(&dir_a, W2 + 40 * P) == 0,
+          "an object that ends early has its pages mapped up to its end and no further");
+    check(resolve_held(&mm_a, W2 + 50 * P, 0, ~(uintptr_t)0) == 0 &&
+              pte_of(&dir_a, W2 + 50 * P) == 0,
+          "and a page past its end faults to nothing");
+    if (current_proc) {
+        current_proc->bus_fault = 0;
+    }
+
+    whole_end = 1024;
+    whole_do = WHOLE_ZAP;
+    whole_at = 66;
+    zaps = mm_a.zaps;
+    check(resolve_held(&mm_a, W3 + P, 1, ~(uintptr_t)0) == 1 && whole_do == WHOLE_NONE &&
+              mm_a.zaps == zaps + 1u && whole_mapped(&dir_a, W3, 0, WPAGES) == 0 &&
+              whole_mapped(&dir_a, W1, 0, WPAGES) == 0,
+          "a zap during the second batch's calls unmaps the first and maps nothing of the"
+          " second");
+    check(!mmap_held(&mm_a, 0), "no hold of the regions' lock is left after the zap");
+
+    whole_do = WHOLE_CUT;
+    whole_at = 65;
+    zaps = mm_a.zaps;
+    check(resolve_held(&mm_a, W4, 1, ~(uintptr_t)0) == 1 && whole_do == WHOLE_NONE &&
+              mm_a.zaps == zaps && whole_mapped(&dir_a, W4, 0, WPAGES - 4) == WPAGES - 4 &&
+              vm_find(&mm_a.vm, W4 + (WPAGES - 4) * P) == NULL &&
+              pte_of(&dir_a, W4 + (WPAGES - 4) * P) == 0,
+          "a region cut short during the second batch's calls has what remains of it mapped");
+    check(!mmap_held(&mm_a, 0), "no hold of the regions' lock is left after the cut");
+}
+
+/** A zap walk that waits for one space's lock zaps again a space that
+ * faulted the object back in during the wait. */
+static void walk_rows(void)
+{
+    uint32_t zaps, zaps_b;
+
+    check(resolve_held(&mm_a, WW, 1, ~(uintptr_t)0) == 1 &&
+              resolve_held(&mm_b, WW, 1, ~(uintptr_t)0) == 1 &&
+              whole_mapped(&dir_a, WW, 0, 2) == 2 && whole_mapped(&dir_b, WW, 0, 2) == 2,
+          "A and B map the object's two pages");
+    zaps = mm_a.zaps;
+    zaps_b = mm_b.zaps;
+    wait_rc = -2;
+    host_busy = &mm_b;
+    host_wait = refault_a;
+    paging_zap_device(&wobj, 0, 1024);
+    host_wait = NULL;
+    check(wait_rc == 1 && host_busy == NULL && mm_a.zaps == zaps + 2u && mm_b.zaps == zaps_b + 1u &&
+              pte_of(&dir_a, WW) == 0 && pte_of(&dir_a, WW + P) == 0 && pte_of(&dir_b, WW) == 0,
+          "a walk that waits for B's lock zaps A again, which faulted the object back in"
+          " meanwhile");
+    check(!mmap_held(&mm_a, 0) && !mmap_held(&mm_b, 0),
+          "no hold of the regions' lock is left after the walk");
+}
+
 /** Run the rows, or with `--lock-only` the faults that let the regions' lock
- * go alone. */
+ * go and the walk that waits for one, alone. */
 int main(int argc, char **argv)
 {
     model_start(NAME);
     if (argc == 2 && __builtin_strcmp(argv[1], "--lock-only") == 0) {
         lock_rows();
+        whole_rows();
+        walk_rows();
         return model_end();
     }
     notify_rows();
     paging_rows();
     shrinker_rows();
     lock_rows();
+    whole_rows();
+    walk_rows();
     return model_end();
 }

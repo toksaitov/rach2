@@ -26,8 +26,9 @@ struct gpamap_run {
 /*
  * A map. `note` covers the caller's addresses from the lowest of its runs
  * to the end of the highest, and its `invalidate` takes the map back when a
- * change there meets a run. `vm` is NULL, and `frames` empty, once the map
- * is taken back; the record stays its owner's until `kvm_gpamap_free`.
+ * change there meets a run. `vm` is NULL once the map is taken back, and
+ * `kvm_gpamap_frame` answers 0; the record and its references to the
+ * frames stay its owner's until `kvm_gpamap_free`.
  */
 struct kvm_gpamap {
     struct mmn_range note; /* first, so that the range is the record */
@@ -36,7 +37,7 @@ struct kvm_gpamap {
     void (*revoke)(void *owner);
     void *owner;
     uint64_t pages;
-    uintptr_t *frames; /* `pages` of them, each with a reference, while live */
+    uintptr_t *frames; /* `pages` of them, each with a reference, until the free */
     uint32_t nruns;
     struct gpamap_run *runs;
 };
@@ -55,12 +56,19 @@ static void unlink_map(struct kvm_gpamap *m)
     m->next = NULL;
 }
 
-/** Let go of what `m` holds, once: its place on the VM's list and the
- * notice, then, after its owner's `revoke` when `tell` is set, its frames. */
+/**
+ * Take `m` back, once: off the VM's list and the notice, so that no frame
+ * is given out again, then its owner's `revoke` when `tell` is set. The
+ * frames stay held until `kvm_gpamap_free`, since a fault in a program's
+ * mapping of them may have read a frame before the revoke and map it
+ * after, and the owner's revoke runs inside a change notice, which must not
+ * sleep and so cannot wait for that fault. Linux's udmabuf holds its pages
+ * the same way: udmabuf_create pins them (drivers/dma-buf/udmabuf.c:401,
+ * memfd_pin_folios at :304) and only the buffer's release unpins them
+ * (release_udmabuf, :191-199, unpin_all_folios at :163-174).
+ */
 static void take_back(struct kvm_gpamap *m, int tell)
 {
-    uint64_t i;
-
     if (!m->vm) {
         return;
     }
@@ -70,12 +78,6 @@ static void take_back(struct kvm_gpamap *m, int tell)
     if (tell && m->revoke) {
         m->revoke(m->owner);
     }
-    for (i = 0; i < m->pages; i++) {
-        frame_unref(m->frames[i]);
-        m->frames[i] = 0;
-    }
-    kvm_count(KVM_COUNT_GPA_MAP_PAGE, -(int)m->pages);
-    kvm_count(KVM_COUNT_GPA_MAP, -1);
 }
 
 /** Whether a run of `m` lies in the caller's [start, end). */
@@ -147,13 +149,15 @@ static int count_parts(struct kvm_vm *vm, const struct kvm_gpa_run *runs, uint32
 }
 
 /** Fill `m`'s parts and frames from the runs `count_parts` passed, taking
- * nothing yet: 0, or -EFAULT for a page that is not ordinary RAM. */
+ * nothing yet, each part's frames read in one walk of the caller's tables
+ * (`paging_user_ram_frames`): 0, or -EFAULT for a page that is not
+ * ordinary RAM. */
 static int fill_parts(struct kvm_gpamap *m, struct kvm_vm *vm, const struct kvm_gpa_run *runs,
                       uint32_t n)
 {
     struct mm *mm = kvm_vm_mm(vm);
     struct kvm_slot_view v;
-    uint64_t gfn, left, take, j, page = 0;
+    uint64_t gfn, left, take, page = 0;
     uint32_t i, k = 0;
 
     for (i = 0; i < n; i++) {
@@ -165,12 +169,10 @@ static int fill_parts(struct kvm_gpamap *m, struct kvm_vm *vm, const struct kvm_
             m->runs[k].pages = take;
             m->runs[k].hva = v.hva;
             k++;
-            for (j = 0; j < take; j++, page++) {
-                m->frames[page] = paging_user_ram_frame(mm, (uintptr_t)(v.hva + j * 4096u));
-                if (!m->frames[page]) {
-                    return -EFAULT;
-                }
+            if (paging_user_ram_frames(mm, (uintptr_t)v.hva, take, &m->frames[page]) != take) {
+                return -EFAULT;
             }
+            page += take;
         }
     }
     return 0;
@@ -256,10 +258,17 @@ uintptr_t kvm_gpamap_frame(const struct kvm_gpamap *m, uint64_t i)
 
 void kvm_gpamap_free(struct kvm_gpamap *m)
 {
+    uint64_t i;
+
     if (!m) {
         return;
     }
     take_back(m, 0);
+    for (i = 0; i < m->pages; i++) {
+        frame_unref(m->frames[i]);
+    }
+    kvm_count(KVM_COUNT_GPA_MAP_PAGE, -(int)m->pages);
+    kvm_count(KVM_COUNT_GPA_MAP, -1);
     kfree(m->frames);
     kfree(m->runs);
     kfree(m);

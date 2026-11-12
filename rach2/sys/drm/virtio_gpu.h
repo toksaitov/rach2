@@ -696,6 +696,11 @@ struct virtio_gpu_object {
      * page lists named, held by the transport, which takes them back first
      * when the device's memory changes or its VM ends. */
     struct virtio_map *pages_map;
+    /* The zap of every program's mapping of the blob, queued to the commit
+     * worker when the transport takes `pages_map`'s frames back, since the
+     * change notice that takes them must not sleep; the map holds the
+     * frames until it is freed. */
+    struct drm_work revoke_zap;
     uintptr_t vmap;
     int uuid_ok; /* ASSIGN_UUID answered with `uuid` */
     uint8_t uuid[16];
@@ -760,8 +765,14 @@ void vgpu_obj_free(struct drm_gem_object *obj);
  * and the kernel's window onto it, given back. */
 void vgpu_blob_release(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
 /** Let go of the frames of a blob mapped from the device's pages, after
- * taking every program's mapping of them away; nothing for another. */
-void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
+ * taking every program's mapping of them away when `zap` says so; nothing
+ * for another. The free passes 0, since a mapping holds a reference to the
+ * object and none can be left once it is freed, as on Linux, whose GEM
+ * free unmaps nothing (drm_gem.c drm_gem_vm_open, virtgpu_vram.c:6-25).
+ * The map comes off the object before the zap, which may sleep, so that no
+ * fault maps from it meanwhile and no other drop frees it twice; with `zap`
+ * set the caller holds a reference to `bo`, which the sleep could free. */
+void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, int zap);
 /** Queue the UNMAP_BLOB of a blob placed in host-visible memory; 0, or
  * -ENOMEM. */
 int32_t vgpu_blob_unmap(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);

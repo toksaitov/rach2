@@ -16,9 +16,15 @@
 #include "../mm/usercopy.h"
 #include "../virtio/vgpushm.h"
 
-/* The bytes of MAP_BLOB's inline answer, and the runs of a page list one
- * answer holds after its heads. */
-#define VGPU_MAP_ANSWER (PAGE_SIZE - VIRTIO_GPU_RESP_OFF)
+/* The bytes of the pages MAP_BLOB's answer of a page list is written to,
+ * and the runs it holds after its heads: 3836, so that a blob of 64 MiB
+ * whose 16,384 pages the VM's allocator scattered is listed in 5 answers,
+ * where the 124 runs of the 2 KiB after the command took 133 round trips
+ * through the VM. Fifteen
+ * pages and the request fit the shared region's chain of 16 descriptors
+ * (VGS_CHAIN_MAX) even when the pages are not one block. The device writes
+ * as many runs as it has and the chain holds. */
+#define VGPU_MAP_ANSWER (15u * PAGE_SIZE)
 #define VGPU_MAP_RUNS   ((VGPU_MAP_ANSWER - VGS_PAGES_OFF) / sizeof(struct vgs_run))
 
 /* The highest capability set id CONTEXT_INIT takes, and the most of its
@@ -94,7 +100,7 @@ void vgpu_blob_release(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
 {
     struct virtio_gpu_object **p;
 
-    vgpu_blob_pages_drop(vg, bo);
+    vgpu_blob_pages_drop(vg, bo, 0);
     if (bo->vmap) {
         mmio_unmap(bo->vmap, (size_t)bo->shmem.base.size);
         bo->vmap = 0;
@@ -111,28 +117,58 @@ void vgpu_blob_release(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
 }
 
 /**
+ * The zap a revoke queued: take every program's mapping of the blob of
+ * `work` away. In the commit worker, under the big lock. It may sleep for
+ * a space's regions' lock, and reads nothing of the object once the walk
+ * starts, since the object's free may run meanwhile; that free comes only
+ * once no mapping holds the object, and takes the work off the queue.
+ */
+static void revoked_zap(struct drm_work *work)
+{
+    struct virtio_gpu_object *bo =
+        (struct virtio_gpu_object *)(void *)((char *)work -
+                                             offsetof(struct virtio_gpu_object, revoke_zap));
+
+    paging_zap_device(&bo->shmem.base, 0, (uint32_t)(bo->shmem.base.size >> PAGE_SHIFT));
+}
+
+/**
  * The transport took the frames of `bo`'s page list back, the device's
- * memory having changed or its VM gone: every program's mapping of the blob
- * goes, and the next touch of one raises SIGBUS, as a revoked mapping does
- * on Linux. Under the big lock; does not sleep.
+ * memory having changed or its VM gone: no fault maps a page of the blob
+ * again (`host_phys`), and the commit worker takes every program's mapping
+ * of it away, after which the next touch of one raises SIGBUS, as a
+ * revoked mapping does on Linux. The zap is queued, not run, since this
+ * runs inside a change notice (`map_invalidate`), which must not sleep
+ * (mm/notify.h), as Linux's interval notifier may not when its range is
+ * not blockable (include/linux/mmu_notifier.h:236-241), and a zap waits for
+ * every space's regions' lock. The transport keeps its references to the
+ * frames until `vgpu_blob_pages_drop` frees the map, so a page mapped before
+ * the zap, by a fault that read its frame before the revoke too, is never
+ * a frame reused since. Under the big lock; does not sleep.
  */
 static void pages_revoked(void *owner)
 {
     struct virtio_gpu_object *bo = (struct virtio_gpu_object *)owner;
 
-    paging_zap_device(&bo->shmem.base, 0, (uint32_t)(bo->shmem.base.size >> PAGE_SHIFT));
     bo->map_ok = 0;
+    bo->revoke_zap.fn = revoked_zap;
+    drm_dev_work_later(bo->shmem.base.dev, &bo->revoke_zap);
 }
 
-void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
+void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, int zap)
 {
-    if (!bo->pages_map) {
+    struct virtio_map *map = bo->pages_map;
+
+    (void)drm_dev_work_cancel(&bo->revoke_zap);
+    if (!map) {
         return;
     }
-    paging_zap_device(&bo->shmem.base, 0, (uint32_t)(bo->shmem.base.size >> PAGE_SHIFT));
-    virtio_map_free(vg->vdev, bo->pages_map);
     bo->pages_map = NULL;
     bo->map_ok = 0;
+    if (zap) {
+        paging_zap_device(&bo->shmem.base, 0, (uint32_t)(bo->shmem.base.size >> PAGE_SHIFT));
+    }
+    virtio_map_free(vg->vdev, map);
 }
 
 /* A page list as its answers come: the runs so far, which cover the blob's
@@ -140,6 +176,7 @@ void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object
 struct pages_gather {
     uint64_t total, first;
     uint32_t info, n;
+    uint32_t room;           /* the runs `runs` has room for */
     struct virtio_run *runs; /* `n` of them */
 };
 
@@ -166,15 +203,24 @@ static int32_t pages_take(const uint8_t *answer, uint32_t got, struct pages_gath
         return -EIO;
     }
     g->info = head.map_info;
-    more = (struct virtio_run *)kmalloc(((size_t)g->n + head.count) * sizeof(*more));
-    if (!more) {
-        return -ENOMEM;
+    if (head.count > g->room - g->n) {
+        uint32_t room = g->room ? g->room : head.count;
+
+        while (room - g->n < head.count) {
+            room *= 2; /* doubled, so the copies cost the list's length in all */
+        }
+        more = (struct virtio_run *)kmalloc((size_t)room * sizeof(*more));
+        if (!more) {
+            return -ENOMEM;
+        }
+        if (g->n) {
+            k_memcpy(more, g->runs, (size_t)g->n * sizeof(*more));
+        }
+        kfree(g->runs);
+        g->runs = more;
+        g->room = room;
     }
-    if (g->n) {
-        k_memcpy(more, g->runs, (size_t)g->n * sizeof(*more));
-    }
-    kfree(g->runs);
-    g->runs = more;
+    more = g->runs;
     for (i = 0; i < head.count; i++) {
         k_memcpy(&run, answer + VGS_PAGES_OFF + i * sizeof(run), sizeof(run));
         if (vgs_check_run(&run, left) != VGS_OK) {
@@ -190,6 +236,56 @@ static int32_t pages_take(const uint8_t *answer, uint32_t got, struct pages_gath
 }
 
 /**
+ * Ask for the page list of `bo` from its page `first` with one
+ * RESOURCE_MAP_BLOB, waited for, and copy the answer to `answer`, which
+ * holds VGPU_MAP_ANSWER bytes, with its length in `*got`. The answer is
+ * written to VGPU_MAP_ANSWER bytes of response pages, or, when the
+ * transport's memory has not got them now or its chain cannot carry them,
+ * to the rest of the command's own page. 0; -ENOMEM; or the wait's error,
+ * after which nothing is in `answer`. May sleep.
+ */
+static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, uint64_t first,
+                       uint8_t *answer, uint32_t *got)
+{
+    struct virtio_gpu_resource_map_blob *req;
+    struct virtio_gpu_cmd *cmd;
+    uint32_t page, here, left;
+    int big, i;
+    int32_t rc;
+
+    for (i = 0; i < 2; i++) {
+        cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB, sizeof(*req));
+        if (!cmd) {
+            return -ENOMEM;
+        }
+        req = (struct virtio_gpu_resource_map_blob *)(void *)cmd->page;
+        req->resource_id = bo->res_id;
+        req->offset = first;
+        big = i == 0 && vgpu_cmd_payload(cmd, 0, VGPU_MAP_ANSWER, 1) == 0 &&
+              virtqueue_chain_fits(cmd->vq, cmd->segments, cmd->nout, cmd->nin);
+        if (big || i == 1) {
+            break;
+        }
+        vgpu_cmd_free(cmd); /* the payload's pages, part of them had */
+    }
+    if (!big) {
+        return vgpu_cmd_send_wait_map(cmd, answer, PAGE_SIZE - VIRTIO_GPU_RESP_OFF, got);
+    }
+    rc = vgpu_cmd_send_wait_map(cmd, NULL, 0, NULL);
+    if (rc == -ETIMEDOUT) {
+        return rc; /* the reaper frees the command once the device answers */
+    }
+    *got = rc != 0 ? 0 : cmd->response_len < VGPU_MAP_ANSWER ? cmd->response_len : VGPU_MAP_ANSWER;
+    left = *got;
+    for (page = 0; left > 0; page++, answer += here, left -= here) {
+        here = left < PAGE_SIZE ? left : PAGE_SIZE;
+        k_memcpy(answer, cmd->payload[page].page, here);
+    }
+    vgpu_cmd_free(cmd);
+    return rc;
+}
+
+/**
  * RESOURCE_MAP_BLOB on a device that maps blobs from its own pages: the
  * page list asked for from the first page on, and from the page after its
  * last run again until it covers `bo`, then its frames held through the
@@ -202,8 +298,6 @@ static int32_t pages_take(const uint8_t *answer, uint32_t got, struct pages_gath
 static int32_t blob_map_pages(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
 {
     struct pages_gather g;
-    struct virtio_gpu_resource_map_blob *req;
-    struct virtio_gpu_cmd *cmd;
     uint32_t got;
     uint8_t *answer = (uint8_t *)kmalloc(VGPU_MAP_ANSWER);
     int32_t rc = answer ? 0 : -ENOMEM;
@@ -211,15 +305,7 @@ static int32_t blob_map_pages(struct virtio_gpu_device *vg, struct virtio_gpu_ob
     k_memset(&g, 0, sizeof(g));
     g.total = bo->shmem.base.size >> PAGE_SHIFT;
     while (rc == 0 && g.first < g.total) {
-        cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB, sizeof(*req));
-        if (!cmd) {
-            rc = -ENOMEM;
-            break;
-        }
-        req = (struct virtio_gpu_resource_map_blob *)(void *)cmd->page;
-        req->resource_id = bo->res_id;
-        req->offset = g.first;
-        rc = vgpu_cmd_send_wait_map(cmd, answer, VGPU_MAP_ANSWER, &got);
+        rc = map_ask(vg, bo, g.first, answer, &got);
         if (rc == 0 || rc == -ETIMEDOUT) {
             bo->host_visible = 1; /* the device may hold the pages: UNMAP_BLOB at the free */
         }
@@ -358,13 +444,15 @@ static void host_vm_put(void *obj)
     drm_gem_object_put((struct drm_gem_object *)obj);
 }
 
-static const struct vm_device_ops host_vm_ops = {host_vm_page, host_vm_put, NULL};
+static const struct vm_device_ops host_vm_ops = {host_vm_page, host_vm_put, NULL, 1};
 
 /**
  * The `mmap` of a blob of host memory, Linux's virtio_gpu_vram_mmap: the
  * whole of a mappable blob that MAP_BLOB placed, with the cache type the
- * host answered, write-combining or uncached, else cached. EINVAL for a
- * blob not mappable or not mapped, or a mapping of part of it.
+ * host answered, write-combining or uncached, else cached, and every page
+ * mapped at the first fault (`whole`), as Linux's io_remap_pfn_range maps
+ * them at the mmap. EINVAL for a blob not mappable or not mapped, or a
+ * mapping of part of it.
  */
 static int32_t host_mmap(struct drm_gem_object *obj, vma_t *vma)
 {

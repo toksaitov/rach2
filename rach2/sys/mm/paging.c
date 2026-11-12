@@ -708,6 +708,80 @@ static pte_t device_cache(uint32_t prot)
     return (prot & VM_PROT_UC) ? PTE_NOCACHE : 0;
 }
 
+/* The pages of a device region whose frames one look of its object gives,
+ * when a fault maps the whole region (`device_map_rest`), on the stack. */
+#define DEVICE_BATCH 64u
+
+/**
+ * Map every page of the device region around `page` that is not yet
+ * present, after a fault has mapped `page` itself, for an object whose
+ * pages a mapping may take at once (`vm_device_whole`), as Linux's
+ * remap_pfn_range does at mmap for virtio-gpu's blobs of host memory
+ * (virtgpu_vram.c:32-67) and i915's fault does for a whole object
+ * (i915_gem_mman.c:253-295): a program that touches a blob of 16,384
+ * pages then takes one fault, not 16,384. The object is asked for a batch
+ * of pages at a time with the regions' lock let go, as `device_fault` asks
+ * for one, and the batch is mapped only while the region and the count of
+ * zaps are as they were, so that no page the object took back meanwhile is
+ * mapped. The first page the object has not got, or a table that cannot be
+ * had, ends the walk and leaves the rest to their faults. The caller holds
+ * the regions' lock to read, as on entry to `device_fault`.
+ */
+static void device_map_rest(struct mm *mm, uintptr_t page, struct vm_file *f, uint32_t prot)
+{
+    const vma_t *vma = vm_find(&mm->vm, page);
+    pte_t flags = PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) | paging_prot_bits(prot) |
+                  device_cache(prot);
+    uintptr_t start, end, at, stop, phys[DEVICE_BATCH];
+    uint32_t base, seq, n, i;
+    int bkl, rc = 0;
+
+    if (!vma || vma->file != f) {
+        return;
+    }
+    start = vma->start;
+    end = vma->end;
+    base = vma->pgoff;
+    for (at = start; rc >= 0 && at < end; at = stop) {
+        stop = end - at > DEVICE_BATCH * PAGE_SIZE ? at + DEVICE_BATCH * PAGE_SIZE : end;
+        seq = mm->zaps;
+        vm_file_get(f);
+        if (!callback_begin(mm, &bkl)) {
+            vm_file_put(f);
+            break;
+        }
+        for (n = 0; at + n * PAGE_SIZE < stop; n++) {
+            if (f->device(f, base + (uint32_t)((at - start) / PAGE_SIZE) + n, &phys[n]) != 0) {
+                rc = -1;
+                break;
+            }
+        }
+        callback_end(mm, bkl);
+        vma = region_same(mm, at, f, prot, base + (uint32_t)((at - start) / PAGE_SIZE), seq)
+                  ? vm_find(&mm->vm, at)
+                  : NULL;
+        vm_file_put(f);
+        if (!vma) {
+            break;
+        }
+        if ((vma->end - at) / PAGE_SIZE < n) {
+            n = (uint32_t)((vma->end - at) / PAGE_SIZE);
+            rc = -1;
+        }
+        for (i = 0; i < n; i++) {
+            int got = install_new(mm, at + i * PAGE_SIZE, phys[i], flags);
+
+            if (got < 0) {
+                rc = -1;
+                break;
+            }
+            if (got == 0) {
+                frame_ref(phys[i]);
+            }
+        }
+    }
+}
+
 /**
  * Back a page of a device region (`vm_device_map`): map the physical
  * address the object gives for it, writable when the region is, with the
@@ -762,6 +836,9 @@ static int device_fault(struct mm *mm, const vma_t *vma, uintptr_t addr)
     }
     frame_ref(phys);
     fault_count(0);
+    if (vm_device_whole(f)) {
+        device_map_rest(mm, page, f, prot);
+    }
     return 1;
 }
 
@@ -2549,30 +2626,56 @@ int paging_frame_is_device(uintptr_t phys)
     return frame >= _frames_number || _frames[frame] >= FRAME_REF_MAX;
 }
 
+static pte_t *user_span(page_dir_t *dir, uintptr_t va, uintptr_t end, uintptr_t *next);
+
+/** The region is found once for each it crosses and the leaf table once
+ * for each table's span, so that a run of n pages costs n reads of entries
+ * and not n walks from the top. */
+uint64_t paging_user_ram_frames(struct mm *mm, uintptr_t va, uint64_t n, uintptr_t *frames)
+{
+    const vma_t *vma = NULL;
+    pte_t *table = NULL;
+    uintptr_t addr, end, next = 0, phys;
+    uint64_t got = 0;
+    pte_t e;
+
+    if (!mm->dir || n > (~(uintptr_t)0 - va) / PAGE_SIZE) {
+        return 0;
+    }
+    end = va + (uintptr_t)n * PAGE_SIZE;
+    for (addr = va; addr < end; addr += PAGE_SIZE, got++) {
+        if (!vma || addr >= vma->end) {
+            vma = vm_find(&mm->vm, addr);
+            if (!vma || !region_allows(vma, 1) ||
+                (vma->prot & (VM_PROT_IO | VM_PROT_GUARD | VM_PROT_SECRET))) {
+                break;
+            }
+        }
+        if (!table || addr >= next) {
+            table = user_span(mm->dir, addr, end, &next);
+            if (!table) {
+                break;
+            }
+        }
+        e = table[MMU_INDEX(addr)];
+        if ((e & (PTE_P | PTE_W)) != (PTE_P | PTE_W) || (e & PTE_COW)) {
+            break;
+        }
+        phys = PTE_ADDR(e);
+        if (paging_frame_is_device(phys) ||
+            (vma->type != VM_SHARED && frame_maps(phys / PAGE_SIZE) > 1)) {
+            break;
+        }
+        frames[got] = phys;
+    }
+    return got;
+}
+
 uintptr_t paging_user_ram_frame(struct mm *mm, uintptr_t va)
 {
-    const vma_t *vma;
-    pte_t *e;
     uintptr_t phys;
 
-    if (!mm->dir) {
-        return 0;
-    }
-    vma = vm_find(&mm->vm, va);
-    if (!vma || !region_allows(vma, 1) ||
-        (vma->prot & (VM_PROT_IO | VM_PROT_GUARD | VM_PROT_SECRET))) {
-        return 0;
-    }
-    e = user_pte(mm->dir, va);
-    if (!e || (*e & (PTE_P | PTE_W)) != (PTE_P | PTE_W) || (*e & PTE_COW)) {
-        return 0;
-    }
-    phys = PTE_ADDR(*e);
-    if (paging_frame_is_device(phys) ||
-        (vma->type != VM_SHARED && frame_maps(phys / PAGE_SIZE) > 1)) {
-        return 0;
-    }
-    return phys;
+    return paging_user_ram_frames(mm, va, 1, &phys) == 1 ? phys : 0;
 }
 
 uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va)
@@ -3180,13 +3283,27 @@ static int zap_lock(struct mm *mm, int *taken)
     return -1;
 }
 
+/* The number of the last walk of `paging_zap_where`, under the big lock. */
+static uint32_t zap_walks;
+
 /**
  * Each thread of a process has its own record on the process list and the
- * address space of its process, so a space shared by threads is walked
- * once for each of them, the later walks finding nothing to unmap. Each
- * space is changed under its regions' lock held to write (`zap_lock`), and
- * its count of zaps moves, so that a fault that let the lock go across a
- * file's or a device's operation maps no page taken back meanwhile.
+ * address space of its process; a walk changes each space once, the first
+ * time it meets it, and passes it for the threads after, as Linux's
+ * unmap_mapping_range visits each region that maps the object once
+ * (mm/memory.c:3755-3774): QEMU's space, which a VM's threads share, would
+ * otherwise be walked region by region for each of its dozen threads at
+ * each revoke of a blob. When the count of walks wraps, every space's mark
+ * is cleared first, so that no stale mark passes a space. A walk that
+ * waited for a lock starts again from the first record with a new number
+ * and zaps every space again, since the big lock was free during the wait
+ * and a thread of a space already changed may have faulted the object back
+ * in; only the last pass, which waits for nothing, runs whole under the big
+ * lock, as Linux's unmap_mapping_pages holds i_mmap_rwsem across its whole
+ * walk (mm/memory.c:3822-3838). Each space is changed under its regions' lock
+ * held to write (`zap_lock`), and its count of zaps moves, so that a fault
+ * that let the lock go across a file's or a device's operation maps no
+ * page taken back meanwhile.
  */
 void paging_zap_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo, uintptr_t *hi),
                       void *arg)
@@ -3194,14 +3311,24 @@ void paging_zap_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo
     process_t *p;
     const vma_t *r;
     uintptr_t lo, hi;
+    uint32_t walk;
     int held, taken;
 
     bkl_assert_held();
 again:
+    walk = ++zap_walks;
+    if (walk == 0) {
+        for (p = proc_list; p; p = p->next) {
+            if (p->mm) {
+                p->mm->zap_walk = 0;
+            }
+        }
+        walk = zap_walks = 1;
+    }
     for (p = proc_list; p; p = p->next) {
         struct mm *mm = p->mm;
 
-        if (!mm || !mm->dir) {
+        if (!mm || !mm->dir || mm->zap_walk == walk) {
             continue;
         }
         held = zap_lock(mm, &taken);
@@ -3209,6 +3336,7 @@ again:
             goto again;
         }
         mm->zaps++;
+        mm->zap_walk = walk;
         for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
             if (match(r, arg, &lo, &hi)) {
                 mmn_notify(mm, MMN_TRUNCATE, lo, hi);

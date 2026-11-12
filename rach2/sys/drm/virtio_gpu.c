@@ -972,7 +972,7 @@ static void obj_vm_put(void *obj)
     drm_gem_object_put((struct drm_gem_object *)obj);
 }
 
-static const struct vm_device_ops vgpu_vm_ops = {obj_vm_page, obj_vm_put, NULL};
+static const struct vm_device_ops vgpu_vm_ops = {obj_vm_page, obj_vm_put, NULL, 0};
 
 /** The `mmap` of an object: a device region over its frames, cached, as
  * Linux maps virtio-gpu's shmem objects. */
@@ -1049,8 +1049,9 @@ void vgpu_obj_free(struct drm_gem_object *obj)
     struct virtio_gpu_cmd *cmd;
 
     vgpu_resource_detach(vg, bo);
-    /* The device's pages go before the UNMAP_BLOB that lets it unpin them. */
-    vgpu_blob_pages_drop(vg, bo);
+    /* The device's pages go before the UNMAP_BLOB that lets it unpin them;
+     * no mapping is left to take away, since each held a reference. */
+    vgpu_blob_pages_drop(vg, bo, 0);
     if (bo->res_id && !vg->dead) {
         cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_UNREF,
                            sizeof(struct virtio_gpu_resource_unref));
@@ -1976,6 +1977,28 @@ static void devices_remove(struct virtio_gpu_device *vg)
 }
 
 /**
+ * The first object at or after `bo` on the device's list of `vg` whose
+ * reference could be taken, with it taken, or NULL past the last, as
+ * Linux's drm_gem_lru_scan passes an object whose last reference has gone
+ * (drm_gem.c:1514-1520). An object passed over has no mapping left, since
+ * each held a reference, and its free has run or is under way: it loses at
+ * once the map of a page list and, on a transport's own backing, the frames
+ * the reset freed, as `vgpu_kill` takes them from a held one, with no zap.
+ * Under the big lock; does not sleep.
+ */
+static struct virtio_gpu_object *kill_hold(struct virtio_gpu_device *vg,
+                                           struct virtio_gpu_object *bo)
+{
+    for (; bo && !drm_gem_object_get_unless_zero(&bo->shmem.base); bo = bo->next) {
+        vgpu_blob_pages_drop(vg, bo, 0);
+        if (vg->vdev->ops->backing_release && !bo->shmem.base.dma_buf) {
+            vgpu_obj_pages_free(vg, bo);
+        }
+    }
+    return bo;
+}
+
+/**
  * Stop the device for good: reset it and free its queues, then answer every
  * command started and not yet answered with none, its fence failing with
  * -ENODEV, as the device-loss rule asks, and free what nobody waits on; a
@@ -1985,12 +2008,14 @@ static void devices_remove(struct virtio_gpu_device *vg)
  * (`obj_vm_page`); frames a transport gave from its own heap go back to it,
  * and such a mapping takes new pages at its next touch, except an exported
  * object's, which it keeps until it is freed, since an importer may hold
- * them. Process context.
+ * them. The walk that zaps holds each object it zaps, since a zap may sleep
+ * and the object's last reference go meanwhile; the put that ends the
+ * object's turn may free it. Process context.
  */
 void vgpu_kill(struct virtio_gpu_device *vg)
 {
     struct virtio_gpu_cmd *cmd;
-    struct virtio_gpu_object *bo;
+    struct virtio_gpu_object *bo, *next;
     struct vgpu_context *ctx;
     uint32_t flags;
 
@@ -2027,14 +2052,14 @@ void vgpu_kill(struct virtio_gpu_device *vg)
     vgpu_reap(vg);
     for (bo = vg->resources; bo; bo = bo->next) {
         vgpu_resource_detach(vg, bo);
+        bo->res_id = 0;
     }
     for (ctx = vg->contexts; ctx; ctx = ctx->next) {
         ctx->created = 0;
         ctx->id = 0;
     }
-    for (bo = vg->resources; bo; bo = bo->next) {
-        bo->res_id = 0;
-        vgpu_blob_pages_drop(vg, bo);
+    for (bo = kill_hold(vg, vg->resources); bo; bo = next) {
+        vgpu_blob_pages_drop(vg, bo, 1);
         /* A transport's own backing is its heap's, which the reset frees;
          * a mapping that faulted in since the unplug's zap goes first. An
          * exported object keeps its frames, which an importer may hold in
@@ -2044,6 +2069,9 @@ void vgpu_kill(struct virtio_gpu_device *vg)
             drm_gem_object_zap(&bo->shmem.base);
             vgpu_obj_pages_free(vg, bo);
         }
+        /* `bo`, held, is still on the list: only its release takes it off. */
+        next = kill_hold(vg, bo->next);
+        drm_gem_object_put(&bo->shmem.base);
     }
     k_memset(vg->res_ids, 0, VIRTIO_GPU_MAX_RESOURCES / 8);
 }

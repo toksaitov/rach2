@@ -601,6 +601,16 @@ struct mm;
  */
 uintptr_t paging_user_ram_frame(struct mm *mm, uintptr_t va);
 
+/**
+ * `paging_user_ram_frame` for the `n` pages from `va`, into `frames`, a
+ * walk of the tables for a run of pages, as Linux's vfio_pin_pages_remote
+ * takes a batch of pages a call at a time (vfio_iommu_type1.c:551-590 and
+ * 597-713): the number of pages from the first whose frames it gave, which
+ * is less than `n` at the first page it refuses. It brings nothing in and
+ * does not sleep.
+ */
+uint64_t paging_user_ram_frames(struct mm *mm, uintptr_t va, uint64_t n, uintptr_t *frames);
+
 /** Count the present pages of the user range [start, end) of `dir` into
  * `*present`, those the processor marked dirty into `*dirty`, and those
  * whose frames are marked anonymous into `*anon`,

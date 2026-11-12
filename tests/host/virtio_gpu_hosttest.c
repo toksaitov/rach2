@@ -31,7 +31,10 @@
  * ENODEV and leaves nothing allocated once the last reference goes; and a
  * reset over a transport whose backing is its own heap, which zaps an
  * object no one exported and gives its frames back, and leaves an exported
- * object its frames until it is freed.
+ * object its frames until it is freed; and blobs mapped from a transport's
+ * pages, whose revoke queues a zap of the whole blob for the commit worker,
+ * whose free takes a queued zap off the queue, and whose kill holds each
+ * blob across a zap in which the program's last reference goes.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -483,6 +486,16 @@ void drm_gem_object_get(struct drm_gem_object *obj)
     if (obj) {
         obj->refs++;
     }
+}
+
+/** Take a reference unless the last has gone: 1 when taken. */
+int drm_gem_object_get_unless_zero(struct drm_gem_object *obj)
+{
+    if (obj->refs == 0) {
+        return 0;
+    }
+    obj->refs++;
+    return 1;
 }
 
 static void resv_drop(struct dma_resv *resv);
@@ -1182,19 +1195,39 @@ static uint32_t exec_scanout(const struct virtio_gpu_set_scanout *s)
     return VIRTIO_GPU_RESP_OK_NODATA;
 }
 
-/* ---- page lists: the model's transport has none, so the driver never
- * asks for one; these stand in for the transport's and the kernel's ---- */
+/* ---- page lists: the model's transport answers no page list, so the
+ * driver never asks it for a map; a row that wants one sets `map_give` and
+ * stands in for the driver's ask, and the map keeps the revoke the driver
+ * gave, which the row calls as the transport's change notice would ---- */
+
+struct virtio_map {
+    void (*revoke)(void *owner);
+    void *owner;
+};
+static int map_give;  /* nonzero: virtio_map_pages gives a map */
+static int maps_live; /* maps given and not yet freed */
 
 int virtio_map_pages(struct virtio_dev *d, const struct virtio_run *runs, uint32_t n,
                      void (*revoke)(void *owner), void *owner, struct virtio_map **out)
 {
+    struct virtio_map *m;
+
     (void)d;
     (void)runs;
     (void)n;
-    (void)revoke;
-    (void)owner;
     *out = NULL;
-    return -ENODEV;
+    if (!map_give) {
+        return -ENODEV;
+    }
+    m = (struct virtio_map *)kmalloc(sizeof(*m));
+    if (!m) {
+        return -ENOMEM;
+    }
+    m->revoke = revoke;
+    m->owner = owner;
+    maps_live++;
+    *out = m;
+    return 0;
 }
 
 uintptr_t virtio_map_frame(struct virtio_dev *d, struct virtio_map *m, uint64_t i)
@@ -1208,7 +1241,10 @@ uintptr_t virtio_map_frame(struct virtio_dev *d, struct virtio_map *m, uint64_t 
 void virtio_map_free(struct virtio_dev *d, struct virtio_map *m)
 {
     (void)d;
-    (void)m;
+    if (m) {
+        maps_live--;
+        kfree(m);
+    }
 }
 
 int vgs_check_pages(const struct vgs_pages *p, uint32_t bytes, uint64_t total, uint64_t first,
@@ -1229,16 +1265,26 @@ int vgs_check_run(const struct vgs_run *r, uint64_t left)
     return VGS_E_PAGES;
 }
 
-static const void *zapped; /* the object of the last zap */
+static const void *zapped;    /* the object of the last zap */
+static uint32_t zapped_count; /* and its count of pages */
 static int zaps;
+/* Run once, inside the next zap, as another thread runs while a zap waits
+ * for a space's regions' lock with the big lock let go. */
+static void (*zap_hook)(const void *obj);
 
 /** Count a zap of an object's mappings, the model having none to remove. */
 void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count)
 {
+    void (*hook)(const void *obj) = zap_hook;
+
     (void)pgoff;
-    (void)count;
     zapped = obj;
+    zapped_count = count;
     zaps++;
+    zap_hook = NULL;
+    if (hook) {
+        hook(obj);
+    }
 }
 
 /** The core's zap of an object's mappings and its importers': the model
@@ -2260,6 +2306,78 @@ static void row_reset_heap(void)
     gpu.dev.ops = NULL;
 }
 
+/** Map `bo` from the transport's pages, as `blob_pages_map` does once the
+ * page list has come: 0, or the model's -errno. */
+static int32_t pages_map(struct virtio_gpu_object *bo)
+{
+    int32_t rc = virtio_map_pages(vg->vdev, NULL, 0, pages_revoked, bo, &bo->pages_map);
+
+    if (rc == 0) {
+        bo->map_ok = 1;
+    }
+    return rc;
+}
+
+/** The transport's change notice for `bo`'s map. */
+static void pages_revoke(struct virtio_gpu_object *bo)
+{
+    bo->pages_map->revoke(bo->pages_map->owner);
+}
+
+/** The program's last reference to a blob goes while the kill's zap of it
+ * waits. */
+static void zap_put(const void *obj)
+{
+    drm_gem_object_put((struct drm_gem_object *)(uintptr_t)obj);
+}
+
+/**
+ * Blobs mapped from the transport's pages: a revoke clears the blob's map
+ * and queues its zap, which the commit worker runs over the whole blob; a
+ * free with the zap still queued takes it off the queue; and the kill holds
+ * a blob across its zap, in which the program's last reference may go,
+ * and frees it at its own put.
+ */
+static void row_revoke(void)
+{
+    struct virtio_gpu_object *a, *b;
+    uint32_t ha, hb;
+
+    unbind();
+    model_reset();
+    CHECK(bind() == 1, "a bind for page lists");
+    a = dumb(64, 64, &ha);
+    b = dumb(64, 64, &hb);
+    CHECK(a && b, "two blobs");
+    if (!a || !b) {
+        unbind();
+        return;
+    }
+    map_give = 1;
+    CHECK(pages_map(a) == 0 && pages_map(b) == 0 && maps_live == 2, "both blobs are mapped");
+    zaps = 0;
+    pages_revoke(a);
+    CHECK(!a->map_ok && a->pages_map && a->revoke_zap.queued && zaps == 0,
+          "a revoke clears the map and queues the zap, which it does not run");
+    (void)drm_atomic_commit_work();
+    CHECK(zaps == 1 && zapped == &a->shmem.base && zapped_count == 64 * 64 * 4 / PAGE_SIZE &&
+              !a->revoke_zap.queued,
+          "the worker zaps the whole blob");
+    zaps = 0;
+    pages_revoke(b);
+    CHECK(b->revoke_zap.queued && zaps == 0, "the second blob's revoke is queued");
+    CHECK(drm_gem_handle_delete(&file, hb) == 0, "the second blob's handle goes");
+    drm_gem_object_put(&b->shmem.base);
+    CHECK(maps_live == 1 && zaps == 0, "the free lets go of the map and zaps nothing");
+    (void)drm_atomic_commit_work();
+    CHECK(zaps == 0, "the free took the queued zap off the queue");
+    zap_hook = zap_put; /* the lookup's reference to `a` goes in the kill's zap */
+    unbind();
+    CHECK(zaps == 1 && zapped == &a->shmem.base && !zap_hook && maps_live == 0,
+          "the kill zaps the held blob, whose last reference went meanwhile, and frees its map");
+    map_give = 0;
+}
+
 int main(void)
 {
     cpu_table[0].current = &self;
@@ -2282,6 +2400,7 @@ int main(void)
     row_no_scanout();
     row_unplug();
     row_reset_heap();
+    row_revoke();
     CHECK(allocations == 0, "nothing is left allocated");
     CHECK(pages_held == 0, "no page is left held");
     CHECK(irq_depth == 0, "every lock is given back");

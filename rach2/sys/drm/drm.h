@@ -538,6 +538,11 @@ void drm_gem_object_init(struct drm_device *dev, struct drm_gem_object *obj, uin
 /** Take a reference to `obj`, which the caller holds one to; NULL is
  * allowed. Any context. */
 void drm_gem_object_get(struct drm_gem_object *obj);
+/** Take a reference to `obj` unless its last has gone, as Linux's
+ * kref_get_unless_zero in drm_gem_lru_scan (drm_gem.c:1519): 1 when taken,
+ * 0 when the object's free has begun, after which only its owner's list
+ * still shows it. Any context. */
+int drm_gem_object_get_unless_zero(struct drm_gem_object *obj);
 /** Drop a reference; the last takes the object off its device's lists and
  * frees it through its `free`, and drops its device. NULL is allowed. */
 void drm_gem_object_put(struct drm_gem_object *obj);
@@ -1969,7 +1974,8 @@ void drm_dev_unplug(struct drm_device *dev);
  * on any device that maps the import under its own address, as the shmem
  * helper's import does, so that the next touch of one asks for its page
  * again. i915 maps an import under its mmap-offset records, which this
- * does not reach. Under the big kernel lock; does not sleep. */
+ * does not reach. Under the big kernel lock; it may sleep for a space's
+ * regions' lock (`paging_zap_device`), so the caller holds `obj`. */
 void drm_gem_object_zap(struct drm_gem_object *obj);
 /** Take and drop a reference to a device. */
 void drm_dev_get(struct drm_device *dev);

@@ -91,6 +91,8 @@ goes, or the machine dies, the frames are taken back: every mapping of the
 blob is removed, and the next access raises
 .Dv SIGBUS ,
 as an access to a revoked mapping does on Linux.
+The kernel keeps its references to the frames until the driver frees the
+map, at the blob's free or the device's reset or removal.
 .Pp
 With a KVM guest's ivshmem-doorbell, the device's doorbells reach the
 kernel through KVM ioeventfds and the driver's raise the guest's MSI-X

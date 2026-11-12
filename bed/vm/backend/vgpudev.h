@@ -41,8 +41,10 @@
 #define VD_EDID_MAX 1024
 /* Objects of one epoch; a device's limits stay below. */
 #define VD_OBJS     1024
-/* Bytes of the largest response: a capset, after its 24-byte header. */
-#define VD_RESP_MAX 16384
+/* Bytes of the largest response: a page list of up to 4092 runs, what 64 KiB
+ * holds after VGS_PAGES_OFF and below the 4096 VGPUSHM_IOC_PAGES gives at
+ * once, or a capset, after its 24-byte header. */
+#define VD_RESP_MAX 65536
 /* Fenced commands awaiting their fence at once. */
 #define VD_PENDING  256
 
