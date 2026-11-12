@@ -24,8 +24,16 @@ shift $((OPTIND - 1))
 [ "$(id -u)" -eq 0 ] || { echo 'trip: run as root' >&2; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
 out=$1
+# The link /opt/proton names the Proton, which a relative -p would make
+# relative to /opt: make it the caller's working directory's.
+case $proton in
+    '' | /*) ;;
+    *) proton=$(pwd)/$proton ;;
+esac
 made=
-trap '[ -z "$made" ] || rm -f /opt/proton' EXIT
+home=
+trap '[ -z "$made" ] || rm -f /opt/proton
+      [ -z "$home" ] || rm -rf "$home"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -53,13 +61,15 @@ fi
     readlink -f /opt/proton
     command -v strace perf || true
 } > "$out/identity.txt" 2>&1
-mkdir -p "$out/home"
-chown "$user" "$out/home"
+home=$out/home
+mkdir -p "$home"
+chown "$user" "$home"
 status=0
 su -s /bin/sh "$user" -c "cd '$out' && HOME='$out/home' TMPDIR='$out' GAMES_RENDERER='$renderer' \
     GAMES_LAUNCHER='$launcher' PYTHONPATH='$here' python3 '$here/trip.py' '$out/trip' '$runs'" \
     || status=$?
-rm -rf "${out:?}/home"
+rm -rf "$home"
+home=
 if command -v mixer > /dev/null && [ -e /dev/mixer ]; then
     mixer vol 1
 fi
