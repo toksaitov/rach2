@@ -1021,6 +1021,7 @@ static struct {
     int calls;                    /* `smp_call`s to another processor */
     struct mvmcs vmcs[MVMCS_MAX]; /* every VMCS the rows used, never forgotten */
     int nvmcs;
+    /* The debug registers; every exit sets DR7 to 0x400 (SDM 28.5.1). */
     uint64_t dr[8];
     int dr6_writes;
     /* IA32_DEBUGCTL, which every exit clears (SDM 28.5.1), its writes, and
@@ -1779,6 +1780,7 @@ static int m_run(struct kvm_regs *regs, uint64_t *cr2, int launched)
     }
     exit_with(r);
     m.debugctl = 0;
+    m.dr[7] = DR7_FIXED;
     return VMX_OK;
 }
 
@@ -1901,9 +1903,13 @@ static uint64_t m_read_dr(int n)
     return m.dr[n & 7];
 }
 
-/** Write a debug register. */
+/** Write a debug register. DR0 to DR3 change only while DR7 enables no
+ * breakpoint, so that the host never traps on a guest's address, as
+ * Linux's vcpu_enter_guest clears DR7 first (x86.c:10542-10548). */
 static void m_write_dr(int n, uint64_t value)
 {
+    CHECK((n & 7) > 3 || !(m.dr[7] & DR7_ENABLES),
+          "DR0 to DR3 change only while DR7 enables no breakpoint");
     m.dr[n & 7] = value;
     if ((n & 7) == 6) {
         m.dr6_writes++;
@@ -3168,6 +3174,16 @@ static void debug_rows(int fd)
               rp->u.debug.dr6 == (1u | DR6_FIXED) && rp->u.debug.dr7 == 1 && f[GUEST_DR7] == 1 &&
               m.entry_dr0 == 0x1234,
           "a hardware breakpoint of the caller's runs in DR0 and DR7 and reports B0");
+    m.dr[0] = 0xFFFFFFFF81234000ull;
+    m.dr[7] = DR7_FIXED | 0x2u;
+    script(EXIT_CPUID, 0, 2);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT && m.entry_dr0 == 0x1234 &&
+              m.dr[0] == 0xFFFFFFFF81234000ull && m.dr[7] == (DR7_FIXED | 0x2u),
+          "under a host DR7 that enables a breakpoint, DR7 is 0x400 while DR0 takes the "
+          "caller's, and the host's DR0 and DR7 are back after each run");
+    m.dr[0] = 0;
+    m.dr[7] = DR7_FIXED;
 
     guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_BLOCKIRQ, 0, 0);
     CHECK(fdio(fd, KVM_NMI, 0) == 0, "KVM_NMI");
