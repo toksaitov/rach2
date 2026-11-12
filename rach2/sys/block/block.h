@@ -48,6 +48,13 @@ struct block_request;
  * (`BLOCK_REQ_NOFLUSH`). Its `unflushed` says whether it has answered such a
  * write since its last flush; `block_flush` sends a flush only then. */
 #define BLOCK_WRITE_THROUGH 0x80u
+/* The device's `submit` takes a read whose request names the caller's page
+ * frames (`frames`) in place of a buffer of its own, and gives the
+ * controller their physical addresses, so that the transfer lands in the
+ * caller's pages with no copy: an AHCI disk that reaches every frame and an
+ * NVMe namespace, on their interrupts. `block_read_frames` reads any other
+ * device through a buffer. */
+#define BLOCK_FRAMES        0x100u
 
 /**
  * A sector-addressed storage device behind a small table of functions.
@@ -303,10 +310,17 @@ struct block_request {
     block_device_t *owner; /* the device the request is accounted to */
     int write;
     uint64_t lba;
-    uint32_t count;      /* sectors, at most the device's `max_sectors` */
-    uint8_t *page;       /* the request's buffer: a DMA-pool frame, or
-                          * `pages` heap pages for a larger transfer */
-    uint32_t pages;      /* pages of the buffer */
+    uint32_t count; /* sectors, at most the device's `max_sectors` */
+    uint8_t *page;  /* the request's buffer: a DMA-pool frame, or
+                     * `pages` heap pages for a larger transfer; NULL
+                     * for a read into `frames` */
+    uint32_t pages; /* pages of the buffer, 0 with `frames` */
+    /* A read into page frames (`block_read_frames`): the physical address
+     * of each page the transfer fills, in order, a page's eight sectors
+     * each and the last one's what is left, with a reference of the
+     * request's on every frame, so that a late answer lands in pages
+     * nothing else owns; NULL for a request with a buffer. */
+    uintptr_t *frames;
     int status;          /* 0 or -errno, valid once done */
     volatile int state;  /* BLOCK_REQ_* */
     uint32_t generation; /* unique to this request */
@@ -371,6 +385,23 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
  */
 int block_request_flags(block_device_t *device, int write, uint64_t lba, uint32_t count,
                         void *buffer, uint32_t flags);
+
+/**
+ * Read `count` sectors at `lba` into the page frames `frames`, sectors
+ * 8i to 8i + 7 into the frame `frames[i]`, the last frame taking what is
+ * left of `count` and the rest of it left as it was.
+ *
+ * On a device with `BLOCK_FRAMES`, from a caller that may sleep, the
+ * controller is given the frames themselves, as Linux's bio names the
+ * pages of the page cache (block/bio.c), so that the transfer touches no
+ * buffer and the processor no byte of it; each request takes a reference
+ * on its frames until the device has let go of it. Any other device, or a
+ * caller that cannot sleep, reads through a buffer from the heap, a page
+ * at a time when the heap has none of the length, and the bytes are copied
+ * into the frames. The context rules and the answer are `block_request`'s.
+ */
+int block_read_frames(block_device_t *device, uint64_t lba, uint32_t count,
+                      const uintptr_t *frames);
 
 /**
  * Put what the device holds in a cache of its own on the medium.

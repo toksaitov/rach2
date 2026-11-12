@@ -266,7 +266,14 @@ static void req_drop(struct block_request *r)
     }
     *link = r->next;
     live--;
-    if (r->pages == REQ_KEEP_PAGES && keep_count < REQ_KEEP) {
+    if (r->frames) {
+        uint32_t i, n = (r->count + BLOCK_REQ_SECTORS - 1) / BLOCK_REQ_SECTORS;
+
+        for (i = 0; i < n; i++) {
+            free_frame(r->frames[i]); /* the request's reference */
+        }
+        kfree(r->frames);
+    } else if (r->pages == REQ_KEEP_PAGES && keep_count < REQ_KEEP) {
         kept_bufs[keep_count++] = r->page;
     } else if (r->pages > 1) {
         kfree_pages(r->page, r->pages);
@@ -355,19 +362,34 @@ static int nothing_pending(void)
  * One of REQ_KEEP_PAGES or fewer takes a kept buffer of REQ_KEEP_PAGES, or a
  * new one of that size, and only when the heap has none its own length.
  *
+ * A read into page frames, `frames` not NULL, takes no buffer: the request
+ * keeps a copy of the list, with a reference on each frame, which
+ * `req_drop` gives back.
+ *
  * The caller sets the generation, which rises with every request and is what
  * a late completion is matched against. It is 32 bits and wraps; a wrong
  * match would need a quarantined request still live after 4 billion others.
  */
-static struct block_request *req_new(uint32_t count)
+static struct block_request *req_new(uint32_t count, const uintptr_t *frames)
 {
     struct block_request *r = kzalloc(sizeof(*r));
-    uint32_t pages = (count * BLOCK_SECTOR_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint32_t pages = (count * BLOCK_SECTOR_SIZE + PAGE_SIZE - 1) / PAGE_SIZE, i;
 
     if (!r) {
         return NULL;
     }
-    if (pages <= 1) {
+    if (frames) {
+        r->frames = kmalloc(pages * sizeof(*r->frames));
+        if (!r->frames) {
+            kfree(r);
+            return NULL;
+        }
+        for (i = 0; i < pages; i++) {
+            r->frames[i] = frames[i];
+            frame_ref(frames[i]);
+        }
+        pages = 0;
+    } else if (pages <= 1) {
         r->page = (uint8_t *)alloc_kernel_frame();
         pages = 1;
     } else if (pages <= REQ_KEEP_PAGES) {
@@ -383,7 +405,7 @@ static struct block_request *req_new(uint32_t count)
     } else {
         r->page = kalloc_pages_try(pages, 0); /* the caller halves and asks again */
     }
-    if (!r->page) {
+    if (!r->page && !r->frames) {
         kfree(r);
         return NULL;
     }
@@ -429,18 +451,19 @@ static uint32_t req_periods(const block_device_t *device)
  * A request to submit, taken for `device` and accounted to its submitter, or
  * NULL.
  *
- * With `wait` the caller sleeps until a request is its to take, and NULL
- * then means the device is stalled, the limit is reached with nothing in
- * flight, so only a late answer could free one, or there is no memory for
- * one. Without `wait`, for a caller that cannot sleep, NULL means no
- * request now. `why`, when not NULL, is set to `-ENOMEM` for no memory and
- * `-EIO` otherwise.
+ * A caller that may sleep passes `why`, and sleeps until a request is its
+ * to take; NULL then means the device is stalled, the limit is reached with
+ * nothing in flight, so only a late answer could free one, or there is no
+ * memory for one, and `*why` is `-ENOMEM` for no memory and `-EIO`
+ * otherwise. A caller that cannot sleep passes NULL, and NULL means no
+ * request now. A read into page frames names them in `frames`, and NULL
+ * takes a buffer.
  */
 static struct block_request *req_take(block_device_t *device, int write, uint64_t lba,
-                                      uint32_t count, int wait, int *why)
+                                      uint32_t count, const uintptr_t *frames, int *why)
 {
     block_device_t *owner = block_submitter(device);
-    int waited = 0;
+    int waited = 0, wait = why != NULL;
     uint32_t wait_from = timer_now_us();
 
     if (why) {
@@ -465,7 +488,7 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
         }
         share_taken = device_held(owner) >= device_cap;
         if (!share_taken && live < pool_size) {
-            r = req_new(count);
+            r = req_new(count, frames);
             if (!r) {
                 pool_unlock(flags);
                 if (why) {
@@ -592,7 +615,7 @@ static int req_run_one(block_device_t *device, int write, uint64_t lba, uint32_t
                        uint8_t *buffer, uint32_t req_flags)
 {
     int why;
-    struct block_request *r = req_take(device, write, lba, count, 1, &why);
+    struct block_request *r = req_take(device, write, lba, count, NULL, &why);
     uint32_t flags;
     int status;
 
@@ -691,6 +714,155 @@ int block_request_flags(block_device_t *device, int write, uint64_t lba, uint32_
         count_transfer(&device->stats, write, count, us);
         if (disk && disk != device) {
             count_transfer(&disk->stats, write, count, us);
+        }
+        pool_unlock(flags);
+    }
+    return rc;
+}
+
+/**
+ * One read of at most the device's `max_sectors` into the page frames
+ * `frames`, on a device with `BLOCK_FRAMES`, as `req_run_one` runs a
+ * request with a buffer and with no copy after it: the device fills the
+ * frames themselves. A request given up on keeps its reference on each
+ * frame until the late answer, so that the answer lands in pages the caller
+ * has let go of but nothing else has taken. -ENOMEM when the heap had no
+ * room for the request's list, which the caller may retry smaller.
+ */
+static int req_run_frames(block_device_t *device, uint64_t lba, uint32_t count,
+                          const uintptr_t *frames)
+{
+    int why;
+    struct block_request *r = req_take(device, 0, lba, count, frames, &why);
+    uint32_t flags;
+    int status;
+
+    if (!r) {
+        return why;
+    }
+    if (device->submit(device, r) != 0) {
+        flags = pool_lock();
+        req_refused(r);
+        pool_unlock(flags);
+        wq_wake_all(&pool_wq);
+        return -EIO;
+    }
+    req_wait(r);
+    flags = pool_lock();
+    if (r->state == BLOCK_REQ_QUARANTINED) {
+        release_total++;
+        release_tick = req_ticks;
+        req_let_go(r, 1);
+        pool_unlock(flags);
+        return -EIO;
+    }
+    status = r->status;
+    req_let_go(r, 1);
+    pool_unlock(flags);
+    wq_wake_all(&pool_wq);
+    return status;
+}
+
+/**
+ * Read `count` sectors at `lba` of `device` into `frames` through a buffer,
+ * for a device the frames cannot be given to: a buffer of the heap for up
+ * to REQ_KEEP_PAGES pages at a time, or each frame's own page through a
+ * temporary mapping when the heap has none, and the bytes copied into the
+ * frames. 0, or the first error.
+ */
+static int read_frames_copied(block_device_t *device, uint64_t lba, uint32_t count,
+                              const uintptr_t *frames)
+{
+    uint32_t pages = (count + BLOCK_REQ_SECTORS - 1) / BLOCK_REQ_SECTORS;
+    uint32_t most = pages < REQ_KEEP_PAGES ? pages : REQ_KEEP_PAGES, i, done = 0;
+    uint8_t *buf = most > 1 ? kalloc_pages_try(most, 0) : NULL;
+    uint8_t *page;
+    int rc = 0;
+
+    while (rc == 0 && done < count) {
+        uint32_t chunk = count - done, n;
+
+        if (buf && chunk > most * BLOCK_REQ_SECTORS) {
+            chunk = most * BLOCK_REQ_SECTORS;
+        } else if (!buf && chunk > BLOCK_REQ_SECTORS) {
+            chunk = BLOCK_REQ_SECTORS;
+        }
+        n = (chunk + BLOCK_REQ_SECTORS - 1) / BLOCK_REQ_SECTORS;
+        if (!buf) {
+            page = kmap_temp(frames[done / BLOCK_REQ_SECTORS]);
+            if (!page) {
+                rc = -EIO;
+                break;
+            }
+            rc = block_request(device, 0, lba + done, chunk, page);
+            kunmap_temp(page);
+            done += chunk;
+            continue;
+        }
+        rc = block_request(device, 0, lba + done, chunk, buf);
+        for (i = 0; rc == 0 && i < n; i++) {
+            uint32_t bytes = (chunk - i * BLOCK_REQ_SECTORS) * BLOCK_SECTOR_SIZE;
+
+            page = kmap_temp(frames[done / BLOCK_REQ_SECTORS + i]);
+            if (!page) {
+                rc = -EIO;
+                break;
+            }
+            k_memcpy(page, buf + i * PAGE_SIZE, bytes < PAGE_SIZE ? bytes : PAGE_SIZE);
+            kunmap_temp(page);
+        }
+        done += chunk;
+    }
+    if (buf) {
+        kfree_pages(buf, most);
+    }
+    return rc;
+}
+
+int block_read_frames(block_device_t *device, uint64_t lba, uint32_t count, const uintptr_t *frames)
+{
+    block_device_t *disk = device ? block_physical(device) : 0;
+    uint32_t start = timer_now_us(), most, done = 0, flags;
+    int rc = 0;
+
+    if (!device || count == 0 || lba >= device->sector_count ||
+        count > device->sector_count - lba) {
+        return -EIO;
+    }
+    if (!(block_flags(device) & BLOCK_FRAMES) || !device->submit ||
+        (device->flags & BLOCK_CALLER_SYNC) || !kirq_enabled() || !current_proc ||
+        !current_proc->in_syscall) {
+        return read_frames_copied(device, lba, count, frames);
+    }
+    /* Whole pages a request, so that each starts on a frame of its own. */
+    most = block_max_sectors(device) & ~(BLOCK_REQ_SECTORS - 1u);
+    if (most == 0) {
+        most = BLOCK_REQ_SECTORS;
+    }
+    count_in_flight(device, disk, 1);
+    while (done < count) {
+        uint32_t chunk = count - done > most ? most : count - done;
+
+        rc = req_run_frames(device, lba + done, chunk, frames + done / BLOCK_REQ_SECTORS);
+        if (rc == -ENOMEM && chunk > BLOCK_REQ_SECTORS) {
+            most = (chunk / 2) & ~(BLOCK_REQ_SECTORS - 1u);
+            most = most < BLOCK_REQ_SECTORS ? BLOCK_REQ_SECTORS : most;
+            continue;
+        }
+        if (rc != 0) {
+            rc = rc == -ENOMEM ? -EIO : rc;
+            break;
+        }
+        done += chunk;
+    }
+    count_in_flight(device, disk, -1);
+    if (rc == 0) {
+        uint32_t us = timer_now_us() - start;
+
+        flags = pool_lock();
+        count_transfer(&device->stats, 0, count, us);
+        if (disk && disk != device) {
+            count_transfer(&disk->stats, 0, count, us);
         }
         pool_unlock(flags);
     }
@@ -836,7 +1008,7 @@ static int flush_device(block_device_t *device)
         current_proc->disk_waits++;
         return device->flush(device, 0); /* answers in this call, no request */
     }
-    r = req_take(device, 1, 0, 1, 1, 0);
+    r = req_take(device, 1, 0, 1, NULL, &status);
     if (!r) {
         return -EIO;
     }
@@ -883,7 +1055,7 @@ struct block_request *block_request_begin(block_device_t *device, uint64_t lba, 
         lba >= device->sector_count || count > device->sector_count - lba) {
         return NULL;
     }
-    r = req_take(device, 0, lba, count, 0, 0);
+    r = req_take(device, 0, lba, count, NULL, NULL);
     if (!r) {
         return NULL;
     }

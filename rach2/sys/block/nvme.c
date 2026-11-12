@@ -1049,7 +1049,9 @@ int nvme_init(void)
 /**
  * One transfer as the driver issues it: a read, a write or a flush. `buf`
  * is the memory the controller is given; `out` is the same memory for a
- * read, which the bounce path copies into, and NULL for a write.
+ * read, which the bounce path copies into, and NULL for a write. A read
+ * into page frames names them in `frames`, with `buf` NULL; only a request
+ * does (`BLOCK_FRAMES`).
  */
 struct nvme_xfer {
     struct nvme_ns *ns;
@@ -1058,7 +1060,8 @@ struct nvme_xfer {
     uint32_t count;
     const uint8_t *buf;
     uint8_t *out;
-    uint32_t control; /* NVME_RW_FUA or 0 */
+    const uintptr_t *frames; /* the request's frames, or NULL */
+    uint32_t control;        /* NVME_RW_FUA or 0 */
 };
 
 /** The ATA command the disk policy judges an NVMe command by: a read by a
@@ -1118,6 +1121,36 @@ static int nvme_prps(struct nvme_slot *s, struct nvme_sqe *cmd, const uint8_t *b
     return 0;
 }
 
+/**
+ * Describe `bytes` in the page frames `frames` in `cmd`'s two PRP entries,
+ * as `nvme_prps` describes a buffer: the first frame, then the second or
+ * `s`'s list of the rest. Returns 0, or -1 for more pages than the list
+ * holds.
+ */
+static int nvme_frame_prps(struct nvme_slot *s, struct nvme_sqe *cmd, const uintptr_t *frames,
+                           uint32_t bytes)
+{
+    uint32_t pages = (bytes + PAGE_SIZE - 1u) / PAGE_SIZE, n;
+
+    cmd->prp1 = frames[0];
+    cmd->prp2 = 0;
+    if (pages <= 1) {
+        return 0;
+    }
+    if (pages == 2) {
+        cmd->prp2 = frames[1];
+        return 0;
+    }
+    if (pages - 1u > NVME_PRP_ENTRIES) {
+        return -1;
+    }
+    for (n = 1; n < pages; n++) {
+        s->prp_list[n - 1u] = frames[n];
+    }
+    cmd->prp2 = s->prp_phys;
+    return 0;
+}
+
 /** Build `xf` as the command in slot `s`. Returns 0, or -1 when the disk
  * policy does not allow it or its buffer cannot be described. */
 static int nvme_build(const struct nvme_ctrl *c, struct nvme_slot *s, const struct nvme_xfer *xf,
@@ -1132,7 +1165,8 @@ static int nvme_build(const struct nvme_ctrl *c, struct nvme_slot *s, const stru
     cmd->cdw0 = (uint32_t)xf->opcode | ((uint32_t)s->cid << 16);
     cmd->nsid = xf->ns->nsid;
     if (xf->opcode != NVME_CMD_FLUSH) {
-        if (nvme_prps(s, cmd, xf->buf, xf->count * BLOCK_SECTOR_SIZE) != 0) {
+        if ((xf->frames ? nvme_frame_prps(s, cmd, xf->frames, xf->count * BLOCK_SECTOR_SIZE)
+                        : nvme_prps(s, cmd, xf->buf, xf->count * BLOCK_SECTOR_SIZE)) != 0) {
             klog(KLOG_WARN, "nvme", "%d: refused: a buffer the PRP list cannot describe",
                  c->number);
             return -1;
@@ -1216,6 +1250,7 @@ static int nvme_flush_half(struct nvme_ctrl *c, struct nvme_slot *s, struct nvme
     xf.count = 0;
     xf.buf = 0;
     xf.out = 0;
+    xf.frames = NULL;
     xf.control = 0;
     if (nvme_build(c, s, &xf, &cmd) != 0) {
         return -1;
@@ -1327,6 +1362,7 @@ static int nvme_issue(struct nvme_ctrl *c, struct nvme_slot *s, struct nvme_ns *
     xf.count = r->count;
     xf.buf = r->page;
     xf.out = r->page;
+    xf.frames = r->frames;
     xf.control = 0;
     if (r->flags & BLOCK_REQ_FLUSH) {
         xf.opcode = NVME_CMD_FLUSH;
@@ -1709,6 +1745,7 @@ static int nvme_rw(block_device_t *device, uint64_t lba, uint32_t count, const v
     xf.count = count;
     xf.buf = dst ? (const uint8_t *)dst : (const uint8_t *)src;
     xf.out = (uint8_t *)dst;
+    xf.frames = NULL;
     xf.control = dst ? 0 : NVME_RW_FUA;
     rc = nvme_polled_rw(&xf);
     if (rc != 0 || dst) {
@@ -1749,6 +1786,7 @@ static int nvme_flush_polled(struct nvme_ns *ns)
     xf.count = 0;
     xf.buf = 0;
     xf.out = 0;
+    xf.frames = NULL;
     xf.control = 0;
     block_count_flush();
     rc = nvme_polled(ns->ctrl, &xf);
@@ -1885,6 +1923,7 @@ static void nvme_start_one(struct nvme_ctrl *c)
     }
     for (i = 0; i < c->nns; i++) {
         c->ns[i].dev.flags &= ~BLOCK_FAULT_SAFE;
+        c->ns[i].dev.flags |= BLOCK_FRAMES;
         c->ns[i].dev.submit = nvme_submit;
         c->ns[i].dev.flush = nvme_flush_submit;
     }
