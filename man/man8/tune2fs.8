@@ -56,20 +56,19 @@ reads
 .Pa /proc/mounts
 to find whether the volume is mounted.
 .Pp
-The kernel mounts read-only a volume with
-.Ql dir_index
-or a read-only-compatible feature it does not know, and refuses one with
-an incompatible feature other than
-.Ql filetype ;
-see
+The kernel mounts read-only a volume with a read-only-compatible feature
+it does not know, refuses one with an incompatible feature other than
+.Ql filetype ,
+and ignores compatible features; see
 .Xr mke2fs 8 .
 So
 .Fl O Cm dir_index
-leaves a volume the kernel mounts read-only, and
+leaves a volume the kernel mounts writable, which clears a directory's
+index flag at the first change of its entries;
 .Fl j
-or
+one whose journal it neither replays nor writes; and
 .Fl O Cm extent
-one it does not mount writable.
+one it does not mount.
 The kernel keeps no mount count and no time of the last check, so
 .Fl c ,
 .Fl C ,
