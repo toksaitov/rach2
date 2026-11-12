@@ -70,7 +70,7 @@ trap 'exit 143' TERM
 mkdir -p "${TMPDIR:-$tree/build/tmp}"
 work=$(mktemp -d "${TMPDIR:-$tree/build/tmp}/debian-runner.XXXXXX")
 tar -czf "$work/runners.tar.gz" -C "$here/.." runners igt-76.list piglit-virgl.txt.gz piglit-quick-gl.txt.gz piglit-quick-gl.flakes deqp-gles-virgl.txt.gz \
-    deqp-vk-lavapipe.txt.gz deqp-vk-lavapipe.flakes deqp-vk-venus-smoke.txt
+    deqp-vk-lavapipe.txt.gz deqp-vk-lavapipe.flakes deqp-vk-venus-smoke.txt deqp-vk-groups.txt.gz
 
 # suite: the path of the pinned WebGL archive, fetched into the main
 # clone's cache as the GNU layer's step fetches it.

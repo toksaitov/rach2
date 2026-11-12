@@ -40,13 +40,15 @@
 
 /* The Venus cases' dEQP-VK: the release Mesa 25.0.7's CI pins, Venus's ICD
  * alone, so that the guest's lavapipe is not the device, the lists and the
- * flakes, and the parts the release runs the lavapipe fraction in. */
+ * flakes, and the parts the release runs the lavapipe fraction in; the
+ * groups list is a part of the api, memory and synchronization groups. */
 #define VENUS_DEQP                                       \
     "sh " GRAPHICS_DIR "/runners/deqp.sh -v 1.4.1.1 -i " \
     "/usr/share/vulkan/icd.d/venus_icd.x86_64.json -o " GRAPHICS_DIR "/out"
 #define VENUS_SMOKE     GRAPHICS_DIR "/deqp-vk-venus-smoke.txt"
 #define VENUS_LIST      GRAPHICS_DIR "/deqp-vk-lavapipe.txt.gz"
 #define VENUS_FLAKES    GRAPHICS_DIR "/deqp-vk-lavapipe.flakes"
+#define VENUS_GROUPS    GRAPHICS_DIR "/deqp-vk-groups.txt.gz"
 #define VENUS_PARTS     8
 /* The run's counts and wall time, after its result line, for the log. */
 #define VENUS_SUMMARY   " && cat " GRAPHICS_DIR "/out/summary.txt"
@@ -235,7 +237,7 @@ static int set_gles_subset(struct graphics_case *s, const char *text)
 }
 
 /**
- * Read a Venus case, NAME: `smoke`, `sample`, `device-lost`,
+ * Read a Venus case, NAME: `smoke`, `sample`, `groups`, `device-lost`,
  * `piglit-quick-gl`, `fraction-N`, part N of VENUS_PARTS of the lavapipe
  * fraction, or `deqp-SUITE-subset`, the GLES subset of SUITE on the
  * profile's GL. Give 0 for another name.
@@ -243,7 +245,7 @@ static int set_gles_subset(struct graphics_case *s, const char *text)
 static int parse_venus(struct graphics_case *s, const char *name)
 {
     strcpy(s->profile, "venus");
-    if (strcmp(name, "smoke") == 0 || strcmp(name, "sample") == 0 ||
+    if (strcmp(name, "smoke") == 0 || strcmp(name, "sample") == 0 || strcmp(name, "groups") == 0 ||
         strcmp(name, "device-lost") == 0 || strcmp(name, "piglit-quick-gl") == 0) {
         strcpy(s->test, name);
         return 1;
@@ -528,6 +530,9 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
         else if (strcmp(s->test, "sample") == 0)
             snprintf(runner, size,
                      VENUS_DEQP " -e 500 -l " VENUS_LIST " -f " VENUS_FLAKES " vk" VENUS_SUMMARY);
+        else if (strcmp(s->test, "groups") == 0)
+            snprintf(runner, size,
+                     VENUS_DEQP " -l " VENUS_GROUPS " -f " VENUS_FLAKES " vk" VENUS_SUMMARY);
         else
             snprintf(runner, size,
                      VENUS_DEQP " -e %d -s %d -l " VENUS_LIST " -f " VENUS_FLAKES
@@ -716,7 +721,9 @@ static void judge_venus(struct graphics_case *s, char *command, size_t size)
     snprintf(command, size,
              "python3 -I " GRAPHICS_DIR "/runners/judge.py deqp " VENUS_REF
              "/%s/results.csv.gz " GRAPHICS_DIR "/out/results.csv.gz " GRAPHICS_DIR "/out/flakes%s",
-             strcmp(s->test, "smoke") == 0 ? "smoke" : "fraction",
+             strcmp(s->test, "smoke") == 0    ? "smoke"
+             : strcmp(s->test, "groups") == 0 ? "groups"
+                                              : "fraction",
              strcmp(s->test, "smoke") != 0
                  ? ""
                  : " && d() { grep -E '^[[:space:]]+(apiVersion|driverVersion|vendorID|"
