@@ -362,7 +362,8 @@ static void ptrace_parent_notify(process_t *t)
 /**
  * Take `t` from its tracer, as PTRACE_DETACH, a tracer's end and its wait's
  * report of a process's end do: the step flag the kernel set and the debug
- * registers go, and a thread in a ptrace stop resumes with `sig`. A thread
+ * registers go, at the tracee's next switch or return to user mode
+ * (WORK_DEBUGREG), and a thread in a ptrace stop resumes with `sig`. A thread
  * that ended while traced, which its tracer would have freed, is left for the
  * next return to user mode to free. A process that has ended, which its
  * parent's wait passed over while another process traced it, is left to the
@@ -382,6 +383,7 @@ static void ptrace_detach(process_t *t, int sig)
     t->ptrace_opts = 0;
     t->stop_seen = 0;
     k_memset(t->debugreg, 0, sizeof(t->debugreg));
+    proc_work_set(t, WORK_DEBUGREG);
     if (t->state == PROC_ZOMBIE && t->pid != t->tgid) {
         proc_dead_threads++;
         return;

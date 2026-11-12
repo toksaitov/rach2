@@ -64,8 +64,9 @@ int debugreg_drop_sysenter(uintptr_t pc);
  * return to user mode: reloaded when a dropped exception cleared it,
  * cleared when the thread has none. `isr_leave` calls it with interrupts
  * off when the thread's WORK_DEBUGREG bit is set, which `debugreg_drop`
- * sets for a thread with enables and a tracer's change of the registers
- * sets for its tracee; a switch loads them itself (`arch_debug_switch`). */
+ * sets for a thread with enables, and a tracer's change of the registers
+ * and its detach set for the tracee; a switch loads them itself
+ * (`arch_debug_switch`). */
 void debugreg_resume(void);
 
 /** Whether this processor's DR7 has a breakpoint enabled. 0 means it holds
