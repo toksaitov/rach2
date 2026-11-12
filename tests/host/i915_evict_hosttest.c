@@ -675,6 +675,59 @@ static void userptr_raced(struct drm_i915_gem_object *obj, uint32_t h)
     dma_fence_put(f);
 }
 
+/** End the notified range while the pin's resolver has let its lock go. */
+static void userptr_pin_end(void)
+{
+    mmn_release(&user_mm);
+}
+
+/** A range's end during pin still unlocks the address space that was taken. */
+static void userptr_pin_ended(void)
+{
+    struct drm_i915_gem_object *obj;
+    uint32_t h;
+
+    CHECK(userptr((uintptr_t)user_mem, PAGE_SIZE, 0, &h) == 0,
+          "userptr: a range to end while its pin sleeps");
+    obj = object(&file_a, h);
+    pin_sleep = userptr_pin_end;
+    CHECK(i915_gem_userptr_get_pages(obj) == -EFAULT && !obj->frames && !obj->userptr.files &&
+              user_pins == 0 && !mmap_held(&user_mm, 0),
+          "userptr: an ended range frees the attempt and gives back the original lock");
+    close_handle(&file_a, h);
+}
+
+/** A busy GPU keeps the mapped file until stores through its old pin end. */
+static void userptr_file_lifetime(void)
+{
+    uintptr_t start = (uintptr_t)user_mem;
+    struct drm_i915_gem_object *obj;
+    struct i915_vma *v = NULL;
+    struct dma_fence *f;
+    uint32_t h;
+
+    tracked_file.refs = 1;
+    user_regions[0].file = &tracked_file;
+    CHECK(userptr(start, PAGE_SIZE, 0, &h) == 0, "userptr: a shared file page");
+    obj = object(&file_a, h);
+    CHECK(pin_whole(obj, 0, &v) == 0 && tracked_file.refs == 2,
+          "userptr: a write pin keeps its mapped file");
+    drop_pin(&v);
+    f = busy_fence(obj);
+    mmn_notify(&user_mm, MMN_UNMAP, start, start + PAGE_SIZE);
+    vm_file_put(&tracked_file);
+    CHECK(obj->userptr.stale && tracked_file.refs == 1 && obj->frames,
+          "userptr: the busy GPU keeps the file after the last region goes");
+    user_mem[8] = 0x79;
+    dma_fence_signal(f);
+    i915_gem_userptr_put_pages(obj);
+    CHECK(tracked_file.refs == 0 && !obj->frames && !obj->userptr.files,
+          "userptr: only the final GPU store's end permits the file's writeback");
+    dma_fence_put(f);
+    user_regions[0].file = NULL;
+    close_handle(&file_a, h);
+}
+
 /**
  * A userptr object's pages pinned when it is used and bound, and let go,
  * its bindings revoked first, when the program unmaps, changes protection,
@@ -1156,6 +1209,8 @@ int main(void)
     userptr_refusals();
     userptr_calls();
     userptr_pages();
+    userptr_file_lifetime();
+    userptr_pin_ended();
     free_on_close();
     free_under_lock();
     free_under_shrinker();
