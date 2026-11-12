@@ -46,28 +46,30 @@ void mmn_register(struct mm *mm, struct mmn_range *r, uintptr_t start, uintptr_t
     r->seq = 0;
     flags = mm_ptl_lock(mm);
     r->next = mm->notify;
+    if (r->next) {
+        r->next->pprev = &r->next;
+    }
+    r->pprev = &mm->notify;
     mm->notify = r;
     mm_ptl_unlock(mm, flags);
 }
 
 void mmn_unregister(struct mmn_range *r)
 {
-    struct mmn_range **link;
     uint32_t flags;
 
     if (!r->mm) {
         return;
     }
     flags = mm_ptl_lock(r->mm);
-    for (link = &r->mm->notify; *link; link = &(*link)->next) {
-        if (*link == r) {
-            *link = r->next;
-            break;
-        }
+    *r->pprev = r->next;
+    if (r->next) {
+        r->next->pprev = r->pprev;
     }
     mm_ptl_unlock(r->mm, flags);
     r->mm = NULL;
     r->next = NULL;
+    r->pprev = NULL;
 }
 
 /** The next range is read before the call, since a callback may unregister
@@ -104,8 +106,12 @@ void mmn_release(struct mm *mm)
 
     while ((r = mm->notify) != NULL) {
         mm->notify = r->next;
+        if (r->next) {
+            r->next->pprev = &mm->notify;
+        }
         r->mm = NULL;
         r->next = NULL;
+        r->pprev = NULL;
         r->seq++;
         r->ops->invalidate(r, MMN_RELEASE, r->start, r->end);
     }
