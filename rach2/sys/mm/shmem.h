@@ -99,6 +99,11 @@ uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff);
  * scheduling between leaves and keeps no pointer across those points. */
 uint64_t shmem_count(const struct shmem *sh, uint32_t first, uint32_t last);
 
+/** Whether the table has the leaf that holds page `pgoff`, so that
+ * `shmem_adopt` of the page allocates nothing and changes only its entry
+ * and the counts, leaving the arrays a reader walks where they are. */
+int shmem_has_leaf(const struct shmem *sh, uint32_t pgoff);
+
 /** Make `phys`, a frame the caller filled, page `pgoff` unless the memory
  * has one by now; the table takes the caller's reference, and the caller's
  * frame is given back when another is there. Returns the page's frame with

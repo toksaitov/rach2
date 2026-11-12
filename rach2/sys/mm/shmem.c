@@ -278,6 +278,13 @@ uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff)
     return sh->leaves[leaf][pgoff % SHMEM_LEAF];
 }
 
+int shmem_has_leaf(const struct shmem *sh, uint32_t pgoff)
+{
+    uint32_t leaf = pgoff / SHMEM_LEAF;
+
+    return pgoff < SHMEM_MAX_PAGES && leaf < sh->nleaves && sh->leaves[leaf] != NULL;
+}
+
 uint64_t shmem_count(const struct shmem *sh, uint32_t first, uint32_t last)
 {
     uint32_t leaf = first / SHMEM_LEAF;

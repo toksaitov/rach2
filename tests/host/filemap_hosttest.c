@@ -119,10 +119,13 @@ void fd_ofd_ref(struct open_file *ofd)
 static uint8_t model_bytes[PAGE_SIZE];
 static uintptr_t model_page;
 static int file_locked;
+/* Whether the leaf of the file's pages that a page goes in exists. */
+static int model_leaf;
 /* The lookups of the file's pages and those made under the file's lock;
- * the additions and those made under both the file's lock and the big
- * lock; the references taken; and the reads of the file. */
-static int lookups, lookups_locked, adopts, adopts_locked, refs, reads;
+ * the additions, those made under both the file's lock and the big lock,
+ * and those under the file's lock alone; the references taken; and the
+ * reads of the file. */
+static int lookups, lookups_locked, adopts, adopts_locked, adopts_file, refs, reads;
 /* The big lock's model (`compat/bkl_held.c`): whether a row stands for a
  * caller without it, and the code's takes since the row cleared them. */
 extern int bkl_host_free;
@@ -168,6 +171,14 @@ uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff)
     return model_page;
 }
 
+/** Whether the page's leaf exists: `model_leaf`. */
+int shmem_has_leaf(const struct shmem *sh, uint32_t pgoff)
+{
+    (void)sh;
+    (void)pgoff;
+    return model_leaf;
+}
+
 /** Add `phys` to the file's pages, counted with the locks held. */
 uintptr_t shmem_adopt(struct shmem *sh, uint32_t pgoff, uintptr_t phys)
 {
@@ -175,6 +186,7 @@ uintptr_t shmem_adopt(struct shmem *sh, uint32_t pgoff, uintptr_t phys)
     (void)pgoff;
     adopts++;
     adopts_locked += file_locked > 0 && bkl_held();
+    adopts_file += file_locked > 0 && !bkl_held();
     model_page = phys;
     return phys;
 }
@@ -516,15 +528,50 @@ static void disk_stores_rows(void)
           "the private mappings' releases free their file's pages");
 }
 
+/** The faults of `unlocked_rows` through `f`, a private mapping, and
+ * `shared`, a shared one, of a file whose reads run without the big lock. */
+static void fault_rows(struct vm_file *f, struct vm_file *shared)
+{
+    uintptr_t phys = 0;
+
+    bkl_host_free = 1;
+    bkl_host_takes = 0;
+    check(f->share(f, 1, &phys) == 1 && phys == MODEL_FRAME && reads == 1 && model_bytes[0] == 0x5a,
+          "a fault without the big lock reads a page that is not in memory");
+    check(adopts == 1 && adopts_locked == 1 && bkl_host_takes == 1 && !bkl_held() &&
+              file_locked == 0,
+          "and adds it, its leaf not yet made, to the file's pages under the file's lock and "
+          "the big lock, both given back");
+    model_page = 0;
+    model_leaf = 1;
+    bkl_host_takes = 0;
+    check(f->share(f, 0, &phys) == 1 && phys == MODEL_FRAME && reads == 2,
+          "a fault reads another page that is not in memory");
+    check(adopts == 2 && adopts_file == 1 && bkl_host_takes == 0 && file_locked == 0,
+          "and adds it to a leaf that exists under the file's lock alone");
+    model_leaf = 0;
+    bkl_host_takes = 0;
+    lookups = 0;
+    lookups_locked = 0;
+    check(shared->share(shared, 1, &phys) == 0 && phys == MODEL_FRAME && refs == 1 && reads == 2,
+          "a page in memory is lent with a reference and no read");
+    check(lookups == 1 && lookups_locked == 1 && bkl_host_takes == 0 && file_locked == 0,
+          "under the file's lock alone");
+    bkl_host_free = 0;
+}
+
 /**
  * Which mappings' faults run without the big lock (`unlocked`): a regular
  * file's of a type that reads without it, as ext2's do, private or shared,
  * and no other type's, nor a file in memory's; and how such a fault reaches
  * a disk file's pages (`filemap_disk_page`). A page not in memory is read
- * under the file's lock and joins the file's pages under the big lock too,
- * which readers under it alone read; a page in memory is lent under the
- * file's lock alone, as Linux's filemap_fault finds and locks a folio with
- * no global lock (mm/filemap.c:3326-3370).
+ * under the file's lock and joins the file's pages under the big lock too
+ * when its leaf must be made, since readers under the big lock alone walk
+ * the table's arrays, and under the file's lock alone when the leaf exists,
+ * as Linux's __filemap_add_folio takes only the mapping's own lock
+ * (mm/filemap.c:842-950); a page in memory is lent under the file's lock
+ * alone, as Linux's filemap_fault finds and locks a folio with no global
+ * lock (mm/filemap.c:3326-3370).
  */
 static void unlocked_rows(void)
 {
@@ -534,7 +581,6 @@ static void unlocked_rows(void)
     struct open_file ofd, ofd_other;
     fd_entry_t e, e_other;
     struct vm_file *f, *shared, *g, *mem;
-    uintptr_t phys = 0;
 
     k_memset(&disk, 0, sizeof(disk));
     k_memset(&other, 0, sizeof(other));
@@ -566,22 +612,7 @@ static void unlocked_rows(void)
     check(!g->unlocked, "a mapping of another type runs its faults under it");
     check(!mem->unlocked, "and so does a mapping of a file in memory");
 
-    bkl_host_free = 1;
-    bkl_host_takes = 0;
-    check(f->share(f, 1, &phys) == 1 && phys == MODEL_FRAME && reads == 1 && model_bytes[0] == 0x5a,
-          "a fault without the big lock reads a page that is not in memory");
-    check(adopts == 1 && adopts_locked == 1 && bkl_host_takes == 1 && !bkl_held() &&
-              file_locked == 0,
-          "and adds it to the file's pages under the file's lock and the big lock, "
-          "both given back");
-    bkl_host_takes = 0;
-    lookups = 0;
-    lookups_locked = 0;
-    check(shared->share(shared, 1, &phys) == 0 && phys == MODEL_FRAME && refs == 1 && reads == 1,
-          "a page in memory is lent with a reference and no read");
-    check(lookups == 1 && lookups_locked == 1 && bkl_host_takes == 0 && file_locked == 0,
-          "under the file's lock alone");
-    bkl_host_free = 0;
+    fault_rows(f, shared);
 
     mem->release(mem);
     g->release(g);
