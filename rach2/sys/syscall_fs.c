@@ -14835,17 +14835,45 @@ static int32_t flock_read(uintptr_t arg, int wide, struct flock_args *fl)
 }
 
 /**
+ * The pid `pid` of F_GETLK's answer, a kernel id, as the caller sees it in
+ * its PID namespace (`pid_seen`), or `pid` itself when it is not positive,
+ * -1 for a description's lock. `pid_seen` reads the process table, which
+ * the big lock guards, so the big lock is taken here when the caller runs
+ * without it, as Linux translates the pid under RCU (fs/locks.c,
+ * locks_translate_pid). An owner reaped since the lock was found reads as
+ * 0, as on Linux.
+ */
+static int32_t flock_pid_seen(int32_t pid)
+{
+    int take = !bkl_held();
+    uint32_t seen;
+
+    if (pid <= 0) {
+        return pid;
+    }
+    if (take) {
+        bkl_enter();
+    }
+    seen = pid_seen((uint32_t)pid);
+    if (take) {
+        bkl_exit();
+    }
+    return (int32_t)seen;
+}
+
+/**
  * Write F_GETLK's answer, the lock `req` found, over the caller's lock
  * description at `arg`, in the layout `flock_read` read: its type, its range
  * from the start of the file with a length of 0 for one to the end, and its
- * owner's pid; or F_UNLCK in `l_type` alone when none conflicts. Returns 0,
- * -EFAULT, or -EOVERFLOW for a lock struct flock cannot describe.
+ * owner's pid as the caller sees it (`flock_pid_seen`); or F_UNLCK in
+ * `l_type` alone when none conflicts. Returns 0, -EFAULT, or -EOVERFLOW for
+ * a lock struct flock cannot describe.
  */
 static int32_t flock_write(uintptr_t arg, int wide, const struct lock_req *req)
 {
     int64_t start = (int64_t)req->start;
     int64_t len = req->end == LOCK_EOF ? 0 : (int64_t)(req->end - req->start + 1u);
-    int32_t pid = req->pid > 0 ? (int32_t)pid_seen((uint32_t)req->pid) : req->pid;
+    int32_t pid = flock_pid_seen(req->pid);
     int16_t type = (int16_t)req->type;
 
     if (req->type == F_UNLCK) {
@@ -14919,8 +14947,10 @@ static int fd_lock_still_open(const fd_entry_t *entry)
  *
  * The call runs without the big lock, as Linux's fcntl_setlk takes none:
  * the locks have their own (lock.c). It takes the big lock for a file keyed
- * by its node (`fd_locks_by_node`), and for a SEEK_END range on a file
- * whose attributes need it, which `file_vfs_unlocked` does not admit.
+ * by its node (`fd_locks_by_node`), for a SEEK_END range on a file whose
+ * attributes need it, which `file_vfs_unlocked` does not admit, and for
+ * F_GETLK's translation of the owner's pid into the caller's PID namespace
+ * (`flock_pid_seen`).
  */
 static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uintptr_t arg)
 {
