@@ -1,0 +1,61 @@
+bed-shm: attach: pass: attached once, refused twice
+bed-shm: build: pass: nocopy built
+bed-shm: pages: pass: 6 blobs pinned, 6 maps, kvm_gpa_maps 6, kvm_gpa_map_pages 2850
+bed-shm: coherent: pass: 16 rounds of 1048576 bytes in 90464 us, 0 words copied wrong, 0 filled wrong; Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), memory type 1
+bed-shm: release: pass: kvm_gpa_maps 0, kvm_gpa_map_pages 0, map_live 0
+bed-shm: refuse: pass: not exported: error -5;not mappable: map error -22;
+bed-shm: figure: QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1)
+bed-shm: figure: Linux 6.18.0-rach2
+bed-shm: measuring: /data/t2668/out1/nocopy serial 8 4096
+bed-shm: figure: NOCOPY DEVICE: Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), memory type 1
+bed-shm: figure: NOCOPY SERIAL: 8 of 4096 bytes: make, map and touch mean 1223 us, first 3464, largest 3464; unmap and free mean 655 us
+bed-shm: figure: NOCOPY OK
+bed-shm: measuring: /data/t2668/out1/nocopy serial 8 65536
+bed-shm: figure: NOCOPY DEVICE: Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), memory type 1
+bed-shm: figure: NOCOPY SERIAL: 8 of 65536 bytes: make, map and touch mean 1097 us, first 1324, largest 1324; unmap and free mean 711 us
+bed-shm: figure: NOCOPY OK
+bed-shm: measuring: /data/t2668/out1/nocopy serial 8 1048576
+bed-shm: figure: NOCOPY DEVICE: Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), memory type 1
+bed-shm: figure: NOCOPY SERIAL: 8 of 1048576 bytes: make, map and touch mean 5181 us, first 6108, largest 7769; unmap and free mean 760 us
+bed-shm: figure: NOCOPY OK
+bed-shm: measuring: /data/t2668/out1/nocopy serial 8 16777216
+bed-shm: figure: NOCOPY DEVICE: Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), memory type 1
+bed-shm: figure: NOCOPY SERIAL: 8 of 16777216 bytes: make, map and touch mean 25207 us, first 26213, largest 32680; unmap and free mean 1764 us
+bed-shm: figure: NOCOPY OK
+bed-shm: measuring: /data/t2668/out1/nocopy serial 8 67108864
+bed-shm: figure: NOCOPY DEVICE: Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), memory type 1
+bed-shm: figure: NOCOPY SERIAL: 8 of 67108864 bytes: make, map and touch mean 88328 us, first 111876, largest 111876; unmap and free mean 4719 us
+bed-shm: figure: NOCOPY OK
+bed-shm: measuring: /data/t2668/out1/nocopy held 32 65536
+bed-shm: figure: NOCOPY DEVICE: Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), memory type 1
+bed-shm: figure: NOCOPY HELD-MAPS: kvm_gpa_maps 36, kvm_gpa_map_pages 2850
+bed-shm: figure: NOCOPY HELD: 32 of 65536 bytes: make, map and touch mean 1004 us, first 1374, largest 3566; all unmapped and freed in 23146 us
+bed-shm: figure: NOCOPY NEXT: one more of 65536 bytes made, mapped and touched in 87143 us
+bed-shm: figure: NOCOPY OK
+bed-shm: measuring: /data/t2668/out1/nocopy bandwidth 67108864
+bed-shm: figure: NOCOPY DEVICE: Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), memory type 1
+bed-shm: figure: NOCOPY BANDWIDTH: 67108864 bytes: mapped write 10388 MB/s, read 4858 MB/s; own write 10376 MB/s, read 4632 MB/s; GPU copy 35676 us (0)
+bed-shm: figure: NOCOPY OK
+bed-shm: measuring: ./vgshmprobe measure 4096
+bed-shm: figure: VGSHMPROBE MEASURE: copy to the VM 4096 bytes: 16312 us
+bed-shm: figure: VGSHMPROBE MEASURE: copy from the VM 4096 bytes: 191 us
+bed-shm: figure: VGSHMPROBE MEASURE: region blob made, mapped and touched, mean of 8, 4096 bytes: 43 us
+bed-shm: figure: VGSHMPROBE MEASURE: region blob unmapped and freed, mean of 8, 4096 bytes: 24 us
+bed-shm: figure: VGSHMPROBE OK
+bed-shm: measuring: ./vgshmprobe measure 1048576
+bed-shm: figure: VGSHMPROBE MEASURE: copy to the VM 1048576 bytes: 96731 us
+bed-shm: figure: VGSHMPROBE MEASURE: copy from the VM 1048576 bytes: 65506 us
+bed-shm: figure: VGSHMPROBE MEASURE: region blob made, mapped and touched, mean of 8, 1048576 bytes: 1437 us
+bed-shm: figure: VGSHMPROBE MEASURE: region blob unmapped and freed, mean of 8, 1048576 bytes: 61 us
+bed-shm: figure: VGSHMPROBE OK
+bed-shm: measuring: ./vgshmprobe measure 4194304
+bed-shm: figure: VGSHMPROBE MEASURE: copy to the VM 4194304 bytes: 343127 us
+bed-shm: figure: VGSHMPROBE MEASURE: copy from the VM 4194304 bytes: 261559 us
+bed-shm: figure: VGSHMPROBE MEASURE: region blob made, mapped and touched, mean of 8, 4194304 bytes: 5099 us
+bed-shm: figure: VGSHMPROBE MEASURE: region blob unmapped and freed, mean of 8, 4194304 bytes: 153 us
+bed-shm: figure: VGSHMPROBE OK
+bed-shm: measure: pass: 27 figures
+bed-shm: revoke: pass: after 2480686 touches, kvm_gpa_maps 0, kvm_gpa_map_pages 0
+bed-shm: leak: pass: kvm_gpa_map_pages 0, 2594 while held, 0 after
+bed-shm: handoff: pass: 0000:00:02.0 to the guest and back to i915 after 32 s, QEMU killed
+bed-shm: result: pass

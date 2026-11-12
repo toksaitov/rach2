@@ -1,0 +1,178 @@
+gpu: before: 0000:00:02.0 on card0; kvm_vms 0 kvm_vcpus 0 kvm_slots 0 kvm_tdp_pages 0 kvm_run_mappings 0 vfio_groups 0 vfio_devices 0 vfio_dma_mappings 0 vfio_dma_pages 0 vfio_dma_io_pages 0 msi_vectors_free 184 
+gpu: unbind: 0000:00:02.0 from i915
+gpu: bind: 0000:00:02.0 to vfio-pci
+gpu: start: qemu-system-x86_64 -machine q35,kernel-irqchip=split -accel kvm -cpu host -m 2048 -smp 2 -nodefaults -vga none -device vfio-pci,host=0000:00:02.0,bus=pcie.0,addr=02.0,x-igd-opregion=on -drive file=/data/t2668/vm.disk,format=raw,if=none,id=guest,snapshot=on -device ide-hd,drive=guest,bus=ide.0 -pidfile /data/t2668/out1/qemu.pid -chardev socket,path=/data/t2668/out1/ivs.sock,id=ivs -device ivshmem-doorbell,chardev=ivs,vectors=2
+gpu: kill: QEMU on SIGUSR1; kvm_vms 1 kvm_vcpus 2 kvm_slots 10 kvm_tdp_pages 344 kvm_run_mappings 2 vfio_groups 1 vfio_devices 1 vfio_dma_mappings 10 vfio_dma_pages 532544 vfio_dma_io_pages 66559 msi_vectors_free 184 
+./gpu.sh: line 293:   279 Killed                     "$qemu" -machine q35,kernel-irqchip=split -accel "$accel" -cpu "$cpu" -m "$mib" -smp "$cpus" -nodefaults -vga none -display none -no-reboot -serial "file:$out/console" "$@" 2> "$out/qemu.err" < /dev/null
+[H[J[1;1H[H[J[1;1H  Booting `Debian GNU/Linux'
+
+Loading Linux 6.12.115+deb13.1-amd64 ...
+Loading initial ramdisk ...
+[    0.000000] Linux version 6.12.115+deb13.1-amd64 (debian-kernel@lists.debian.org) (x86_64-linux-gnu-gcc-14 (Debian 14.2.0-19) 14.2.0, GNU ld (GNU Binutils for Debian) 2.44) #1 SMP PREEMPT_DYNAMIC Debian 6.12.115-2 (2026-11-01)
+[    0.000000] Command line: BOOT_IMAGE=/boot/vmlinuz-6.12.115+deb13.1-amd64 root=PARTUUID=138f3e8b-bdeb-47ac-84b8-f9df1662abc8 ro console=tty0 console=ttyS0,115200 earlyprintk=ttyS0,115200 consoleblank=0 intel_iommu=on iommu=pt quiet loglevel=3 apparmor=0 systemd.service_watchdogs=0
+[    0.000000] BIOS-provided physical RAM map:
+[    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable
+[    0.000000] BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000000f0000-0x00000000000fffff] reserved
+[    0.000000] BIOS-e820: [mem 0x0000000000100000-0x000000007aefffff] usable
+[    0.000000] BIOS-e820: [mem 0x000000007af00000-0x000000007eefffff] reserved
+[    0.000000] BIOS-e820: [mem 0x000000007ef00000-0x000000007ffdcfff] usable
+[    0.000000] BIOS-e820: [mem 0x000000007ffdd000-0x000000007fffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000b0000000-0x00000000bfffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000fed1c000-0x00000000fed1ffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000feffc000-0x00000000feffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000fffc0000-0x00000000ffffffff] reserved
+[    0.000000] printk: legacy bootconsole [earlyser0] enabled
+Memory KASLR using RDRAND RDTSC...
+Poking KASLR using RDRAND RDTSC...
+GROWROOT: NOCHANGE: partition 1 is size 33292255. it cannot be grown
+SELinux:  Could not open policy file <= /etc/selinux/default/policy/policy.34:  No such file or directory
+[!p]104[?7hbed-vm: version: libvirglrenderer1 1.1.0-2+rach21
+bed-vm: version: libgl1-mesa-dri 25.0.7-2+deb13u1
+bed-vm: version: mesa-vulkan-drivers 25.0.7-2+deb13u1
+bed-vm: version: vkms 6.12.115+deb13.1-amd64 SMP preempt mod_unload modversions 
+bed-vm: version: kernel 6.12.115+deb13.1-amd64
+bed-vm: ready
+[!p]104[?7h[6n[32766;32766H[6n[!p]104[?7h[6n[32766;32766H[6nbed-vm: gpu: 0000:00:02.0 on i915, Venus on /usr/share/vulkan/icd.d/intel_hasvk_icd.json:/usr/share/vulkan/icd.d/intel_icd.json
+
+Debian GNU/Linux 13 bed-vm ttyS0
+
+bed-vm login: bed-vm: backend: virgl: gl_version 45 - core profile enabled
+bed-vm: backend: virgl: proxy: proxy server with pid 591
+bed-vm: backend: serving 33554432 bytes as peer 1, doorbells, page lists, 3 capsets, no display
+bed-vm: backend: offer: epoch 1
+bed-vm: backend: running: epoch 1, features 0x100000019, transport 0x3
+bed-vm: backend: flush: resource 1, 1366x768 at 0,0, crc 7751d593
+bed-vm: backend: flush: resource 1, 1366x768 at 0,0, crc 7751d593
+bed-vm: backend: pin: resource 2, fd type 3, shmem, 33 pages
+bed-vm: backend: pin: resource 3, fd type 3, shmem, 256 pages
+bed-vm: MESA-INTEL: warning: Haswell Vulkan support is incomplete
+bed-vm: backend: pin: resource 4, fd type 1, dma-buf, 1 pages
+bed-vm: backend: pin: resource 5, fd type 3, shmem, 2048 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 256 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 256 pages
+bed-vm: backend: map: resource 2: refused: not exported: -22
+bed-vm: backend: command 0x208: response 0x1200
+bed-vm: backend: pin: resource 2, fd type 3, shmem, 33 pages
+bed-vm: backend: pin: resource 3, fd type 3, shmem, 256 pages
+bed-vm: MESA-INTEL: warning: Haswell Vulkan support is incomplete
+bed-vm: backend: pin: resource 4, fd type 1, dma-buf, 1 pages
+bed-vm: backend: pin: resource 5, fd type 3, shmem, 2048 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 1 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 1 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 1 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 1 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 1 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 1 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 1 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 1 pages
+bed-vm: backend: pin: resource 2, fd type 3, shmem, 33 pages
+bed-vm: backend: pin: resource 3, fd type 3, shmem, 256 pages
+bed-vm: MESA-INTEL: warning: Haswell Vulkan support is incomplete
+bed-vm: backend: pin: resource 4, fd type 1, dma-buf, 1 pages
+bed-vm: backend: pin: resource 5, fd type 3, shmem, 2048 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 2, fd type 3, shmem, 33 pages
+bed-vm: backend: pin: resource 3, fd type 3, shmem, 256 pages
+bed-vm: MESA-INTEL: warning: Haswell Vulkan support is incomplete
+bed-vm: backend: pin: resource 4, fd type 1, dma-buf, 1 pages
+bed-vm: backend: pin: resource 5, fd type 3, shmem, 2048 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 256 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 256 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 256 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 256 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 256 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 256 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 256 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 256 pages
+bed-vm: backend: pin: resource 2, fd type 3, shmem, 33 pages
+bed-vm: backend: pin: resource 3, fd type 3, shmem, 256 pages
+bed-vm: MESA-INTEL: warning: Haswell Vulkan support is incomplete
+bed-vm: backend: pin: resource 4, fd type 1, dma-buf, 1 pages
+bed-vm: backend: pin: resource 5, fd type 3, shmem, 2048 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 4096 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 4096 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 4096 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 4096 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 4096 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 4096 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 4096 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 4096 pages
+bed-vm: backend: pin: resource 2, fd type 3, shmem, 33 pages
+bed-vm: backend: pin: resource 3, fd type 3, shmem, 256 pages
+bed-vm: MESA-INTEL: warning: Haswell Vulkan support is incomplete
+bed-vm: backend: pin: resource 4, fd type 1, dma-buf, 1 pages
+bed-vm: backend: pin: resource 5, fd type 3, shmem, 2048 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 16384 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 16384 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 16384 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 16384 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 16384 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 16384 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 16384 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 16384 pages
+bed-vm: backend: pin: resource 2, fd type 3, shmem, 33 pages
+bed-vm: backend: pin: resource 3, fd type 3, shmem, 256 pages
+bed-vm: MESA-INTEL: warning: Haswell Vulkan support is incomplete
+bed-vm: backend: pin: resource 4, fd type 1, dma-buf, 1 pages
+bed-vm: backend: pin: resource 5, fd type 3, shmem, 2048 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 8, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 9, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 10, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 11, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 12, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 13, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 14, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 15, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 16, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 17, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 18, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 19, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 20, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 21, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 22, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 23, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 24, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 25, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 26, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 27, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 28, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 29, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 30, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 31, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 32, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 33, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 34, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 35, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 36, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 37, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 38, fd type 1, dma-buf, 16 pages
+bed-vm: backend: pin: resource 2, fd type 3, shmem, 33 pages
+bed-vm: backend: pin: resource 3, fd type 3, shmem, 256 pages
+bed-vm: MESA-INTEL: warning: Haswell Vulkan support is incomplete
+bed-vm: backend: pin: resource 4, fd type 1, dma-buf, 1 pages
+bed-vm: backend: pin: resource 5, fd type 3, shmem, 2048 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 16384 pages
+bed-vm: backend: pin: resource 7, fd type 1, dma-buf, 16384 pages
+bed-vm: backend: pin: resource 2, fd type 3, shmem, 33 pages
+bed-vm: backend: pin: resource 3, fd type 3, shmem, 256 pages
+bed-vm: MESA-INTEL: warning: Haswell Vulkan support is incomplete
+bed-vm: backend: pin: resource 4, fd type 1, dma-buf, 1 pages
+bed-vm: backend: pin: resource 5, fd type 3, shmem, 2048 pages
+bed-vm: backend: pin: resource 6, fd type 1, dma-buf, 256 pages
+qemu-system-x86_64: -device vfio-pci,host=0000:00:02.0,bus=pcie.0,addr=02.0,x-igd-opregion=on: warning: vfio 0000:00:02.0: Could not enable error recovery for the device
+gpu: unbind: 0000:00:02.0 from vfio-pci
+gpu: bind: 0000:00:02.0 to i915
+[  607.547000] i915: handoff: 0000:00:02.0: released: the display off, the GPU reset, interrupts and bus mastering off
+[  648.075000] i915: handoff: 0000:00:02.0: bound from a reset
+gpu: after: 0000:00:02.0 on card0; kvm_vms 0 kvm_vcpus 0 kvm_slots 0 kvm_tdp_pages 0 kvm_run_mappings 0 vfio_groups 0 vfio_devices 0 vfio_dma_mappings 0 vfio_dma_pages 0 vfio_dma_io_pages 0 msi_vectors_free 184 
+gpu: result: pass: 0000:00:02.0 to the guest and back to i915 after 32 s, QEMU killed
