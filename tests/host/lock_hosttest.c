@@ -2,7 +2,7 @@
  * lock_hosttest.c: the advisory file locks of rach2/sys/fs/lock.c, record
  * locks, open file description locks and flock locks.
  *
- * host-deps:
+ * host-deps: tests/host/compat/host_threads.c
  * host-cflags: -pthread
  *
  * The test includes the source whole, with the heap, the wait queue and the
@@ -16,17 +16,11 @@
  */
 
 #include "fs/lock.c"
+#include "host_threads.h"
 
 extern int printf(const char *format, ...);
 extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *ptr);
-
-/* The host's threads, declared here since the kernel's integer types stand
- * in the way of <pthread.h>; a pthread_t is one word on Linux and macOS. */
-typedef unsigned long host_thread_t;
-extern int pthread_create(host_thread_t *thread, const void *attr, void *(*start)(void *),
-                          void *arg);
-extern int pthread_join(host_thread_t thread, void **ret);
 
 static int fails;
 
@@ -518,9 +512,6 @@ struct thread_work {
  * which the locks allow to be one at most, and the most seen. */
 static volatile int exclusive_now;
 static volatile int exclusive_most;
-/* Set once every thread is made, which the threads wait for, so that
- * they run together. */
-static volatile int threads_go;
 
 /**
  * One thread of `threads_row`: by turns an exclusive flock(2) lock of the
@@ -534,8 +525,6 @@ static void *thread_rounds(void *arg)
     uint64_t base = 1000u * (uint64_t)(w->index + 1);
     int i;
 
-    while (!__atomic_load_n(&threads_go, __ATOMIC_ACQUIRE)) {
-    }
     for (i = 0; i < THREAD_ROUNDS; i++) {
         int32_t rc = lock_flock(&file, &w->ofd[0], LOCK_EX | LOCK_NB);
         struct lock_req req;
@@ -583,21 +572,23 @@ static void *thread_rounds(void *arg)
 static void threads_row(void)
 {
     static struct thread_work work[THREADS];
-    host_thread_t th[THREADS];
-    int i, made = 0, errors = 0;
+    void *args[THREADS];
+    int i, run, errors = 0;
 
-    threaded = 1;
     for (i = 0; i < THREADS; i++) {
         work[i].index = i;
-        made += pthread_create(&th[i], NULL, thread_rounds, &work[i]) == 0;
+        args[i] = &work[i];
     }
-    __atomic_store_n(&threads_go, 1, __ATOMIC_RELEASE);
-    for (i = 0; i < made; i++) {
-        pthread_join(th[i], NULL);
+    threaded = 1;
+    run = host_threads_run(THREADS, thread_rounds, args);
+    threaded = 0;
+    CHECK(run == 0);
+    if (run != 0) {
+        return;
+    }
+    for (i = 0; i < THREADS; i++) {
         errors += work[i].errors;
     }
-    threaded = 0;
-    CHECK(made == THREADS);
     CHECK(errors == 0);
     CHECK(exclusive_most == 1);
     CHECK(count_locks() == 0);
