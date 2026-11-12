@@ -1,0 +1,14 @@
+12:48:33 conformance: weston: [12:48:32.723] Command line: weston --backend=drm --renderer=gl --shell=kiosk --idle-time=0 --socket=wayland-1 --log=/srv/ref80/out/conformance/weston.log
+12:48:33 conformance: start gate-probe.chromium: gate probe chromium
+probe: result: chromium webgl1 fill 1880.9 alu 104.00 webgl2 fill 1945.4 alu 104.00
+12:48:38 conformance: end gate-probe.chromium: exit 0
+12:48:38 conformance: start gate-probe.firefox: gate probe firefox
+probe: result: firefox webgl1 fill 1906.5 alu 104.00 webgl2 fill 1889.3 alu 104.00
+12:48:46 conformance: end gate-probe.firefox: exit 0
+12:48:46 conformance: start gate-glmark2.gl: gate glmark2 gl
+glmark2: result: score 1387
+12:54:19 conformance: end gate-glmark2.gl: exit 0
+12:54:19 conformance: start gate-glmark2.es2: gate glmark2 es2
+glmark2: result: score 1396
+12:59:52 conformance: end gate-glmark2.es2: exit 0
+12:59:52 conformance: done

@@ -1,0 +1,2 @@
+measure: result: webgl native-linux frames 599 frame_ms 19.774 p50 20.000 p99 35.200 cpu_ms_per_frame 35.109 latency_ms 0.457 copied_bytes - exits 0 round_trips - seconds 13.6 passed -
+exit 0

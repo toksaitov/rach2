@@ -1,0 +1,9 @@
+conformance: glmark2 gl score here glmark2-gl 1205
+conformance: glmark2 es2 score here glmark2-es2 1194
+    33 /srv/ref80/out/conformance/expect/glmark2-es2.validations
+    33 /srv/ref80/out/conformance/expect/glmark2-gl.validations
+   284 /srv/ref80/out/conformance/expect/igt-gem.rows
+  2865 /srv/ref80/out/conformance/expect/webgl-chromium.pages
+  2865 /srv/ref80/out/conformance/expect/webgl-firefox.pages
+     8 /srv/ref80/out/conformance/gate.lines
+  6088 total

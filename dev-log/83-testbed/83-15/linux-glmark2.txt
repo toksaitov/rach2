@@ -1,0 +1,2 @@
+measure: result: glmark2 native-linux frames 76439 frame_ms 0.523 p50 0.492 p99 1.825 cpu_ms_per_frame 0.400 latency_ms 0.090 copied_bytes - exits 0 round_trips - seconds 40.7 passed -
+exit 0
