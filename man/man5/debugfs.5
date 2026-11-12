@@ -114,6 +114,7 @@ syscall 16 1200 5400 1200 3100 900
 vector 32 800 0 800 120 40
 ioctl 0xc0406469 600 4100 600 2500 700
 ioctl_lost 0
+disk_takes 0
 .Ed
 .Pp
 .Ar calls
@@ -164,6 +165,13 @@ request for which none of the 32 slots its hash names is free or its own
 count in
 .Ql ioctl_lost ,
 which can count while most slots are free.
+The last line,
+.Ql disk_takes ,
+counts the takes of the lock on the disk path: those the block layer made
+for a transfer or a flush on a disk whose driver still needs the lock, for
+a caller that did not hold it.
+A disk whose driver has a lock of its own, as AHCI's has, adds none, nor
+does its interrupt, whose vector's line then counts no holds.
 A write of anything zeroes the counts.
 .It Pa bkl/profile
 Mode 0644.

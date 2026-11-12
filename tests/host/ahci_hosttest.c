@@ -350,10 +350,21 @@ uintptr_t map_mmio(uintptr_t phys, size_t size)
     return (uintptr_t)(unsigned long)window;
 }
 
-/** The kernel's delay, which passes no time. */
+/* A row's other polled caller: while `claim_release_after` is not 0, each
+   kernel delay counts in `claim_waits`, and the one that reaches it ends the
+   claim that caller held on port 0 (`ahci_disks[0].polling`). */
+static unsigned claim_waits;
+static unsigned claim_release_after;
+static void release_other_claim(void);
+
+/** The kernel's delay, which passes no time, and in which a row's other
+ *  polled caller ends its claim. */
 void k_udelay(uint32_t us)
 {
     (void)us;
+    if (claim_release_after && ++claim_waits == claim_release_after) {
+        release_other_claim();
+    }
 }
 
 /** The model's tables are in host memory, with no cache to write back. */
@@ -615,13 +626,29 @@ void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flag
     (void)flags;
 }
 
+/** End the claim of the row's other polled caller on port 0. */
+static void release_other_claim(void)
+{
+    ahci_disks[0].polling = 0;
+}
+
+/* Commands port 0 completed that were issued with its lock held, as a
+   queued command is, and without it, as a polled command is. */
+static unsigned issued_locked, issued_unlocked;
+
 /** What the controller does when a command completes: write `moved_bytes`
- *  back into the command header's byte count. */
+ *  back into the command header's byte count, and count whether port 0's
+ *  lock was held when it was issued. */
 static void complete_command(void)
 {
     volatile ahci_cmd_header_t *hdr = (volatile ahci_cmd_header_t *)ahci_disks[0].cmdlist;
 
     hdr->prdbc = moved_bytes;
+    if (ahci_disks[0].lock.locked) {
+        issued_locked++;
+    } else {
+        issued_unlocked++;
+    }
 }
 
 /** Return 1 when the strings are equal, and 0 otherwise. */
@@ -1072,6 +1099,62 @@ static void command_waits(void)
               ahci_warnings == 1);
 }
 
+/**
+ * Check the port lock and a polled command's claim of the port.
+ *
+ * A request submitted while a polled command has claimed the port is queued
+ * and nothing is issued, and the submit gives the lock back; the interrupt
+ * leaves the claimed port's status to its caller; the claim's release
+ * starts the queued request with the lock held, and the request's interrupt
+ * completes it. A second polled command waits for the first's claim to end,
+ * and then issues under a claim of its own, with the lock let go.
+ */
+static void port_lock_rows(void)
+{
+    static uint8_t page[512], buf[512];
+    struct ahci_disk *d = &ahci_disks[0];
+    struct block_request r;
+
+    model_reset();
+    CHECK("the port lock row starts a port", ahci_select_port() == 0 && ahci_port_start(d) == 0);
+    d->dev.sector_count = 1000;
+    d->dev.drvdata = d;
+    k_memset(&r, 0, sizeof(r));
+    r.count = 1;
+    r.page = page;
+    r.generation = 7;
+    d->polling = 1;
+    CHECK("a submit beside a claimed port queues the request and issues nothing",
+          ahci_submit(&d->dev, &r) == 0 && d->queue_head == &r && !d->active && issued == 0 &&
+              !d->lock.locked);
+    reg[P0 + P_IS] = 1;
+    reg[R_IS] = 1;
+    ahci_handler(0);
+    CHECK("the interrupt leaves a claimed port's status to its caller",
+          reg[P0 + P_IS] == 1 && completed == 0 && !d->lock.locked);
+    reg[P0 + P_IS] = 0;
+    reg[R_IS] = 0;
+    issued_locked = issued_unlocked = 0;
+    ahci_release(d);
+    CHECK("the release starts the queued request under the port lock",
+          d->active == &r && !d->polling && issued_locked == 1 && issued_unlocked == 0 &&
+              !d->lock.locked);
+    reg[P0 + P_IS] = 1;
+    reg[R_IS] = 1;
+    ahci_handler(0);
+    CHECK("its interrupt completes it", completed == 1 && last_completed == &r &&
+                                            last_generation == 7 && last_status == 0 && !d->active);
+    d->polling = 1;
+    claim_waits = 0;
+    claim_release_after = 3;
+    issued_locked = issued_unlocked = 0;
+    CHECK("a polled command waits out another's claim",
+          ahci_run_command(d, ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) == 0 && claim_waits == 3);
+    CHECK("and issues under its own claim with the lock let go, then ends the claim",
+          issued_unlocked == 1 && issued_locked == 0 && !d->polling && !d->lock.locked);
+    claim_release_after = 0;
+}
+
 /** Check queued completions, independent ports and restart after polling. */
 static void interrupt_rows(void)
 {
@@ -1082,6 +1165,7 @@ static void interrupt_rows(void)
     polled_queue_restart(1);
     polled_queue_restart(2);
     polled_drain_counted();
+    port_lock_rows();
 }
 
 /**
