@@ -58,6 +58,11 @@ struct dshare {
     int stores;       /* a shared mapping through a descriptor open for
                          writing has mapped it, so its pages may hold stores
                          the file lacks; never cleared */
+    /* The faults that read the file less the pages a fault mapped from
+     * memory, as Linux keeps a file's mmap_miss (mm/filemap.c:3187-3189,
+     * 3712-3716), at most `DISK_MISSES_MOST`; read-around stops above
+     * `DISK_LOTS_MISSED`. Under the file's lock. */
+    uint32_t misses;
     wait_queue_t left;
     struct shmem sh;
 };
@@ -425,6 +430,83 @@ static uintptr_t disk_adopt(struct filemap *m, uint32_t pgoff, uintptr_t phys)
     return phys;
 }
 
+/* Linux's mmap read-around: the pages a fault that reads the file reads,
+ * its own among them, from half of them before it, the default readahead
+ * window of 128 KiB (VM_READAHEAD_PAGES, include/linux/pagemap.h:1375),
+ * while the file's misses stay at most MMAP_LOTSAMISS
+ * (do_sync_mmap_readahead, mm/filemap.c:3092, 3187-3203). */
+#define DISK_AROUND      32u
+#define DISK_LOTS_MISSED 100u
+#define DISK_MISSES_MOST (DISK_LOTS_MISSED * 10u)
+
+/** Read page `pgoff` of the disk file of `m` into the frame `phys`,
+ * clearing what lies past the file's end: the bytes read, or a negative
+ * errno. */
+static int32_t disk_read_page(struct filemap *m, uint32_t pgoff, uintptr_t phys)
+{
+    uint8_t *page = kmap_temp(phys);
+    int32_t got;
+
+    if (!page) {
+        return -EIO;
+    }
+    got = filemap_read(m, page, pgoff);
+    if (got >= 0 && got < (int32_t)PAGE_SIZE) {
+        k_memset(page + got, 0, PAGE_SIZE - (uint32_t)got);
+    }
+    kunmap_temp(page);
+    return got;
+}
+
+/**
+ * Read page `pgoff` of the disk file of `m`, which neither its pages in
+ * memory nor the file page cache has, into the frame `phys`, and with it the
+ * pages of the read-around window that neither has, in the file's order, as
+ * Linux reads the window in one request (do_sync_mmap_readahead,
+ * mm/filemap.c:3197-3203): the window's later pages then come from the block
+ * cache's run, which the first miss in order fills, and not from one request
+ * each. The other pages join the file page cache alone, its frames shared
+ * as `filecache_keep` allows, for the fault around this one and the next
+ * faults to take, and what the cache declines is let go. Only a file whose
+ * frames may be the cache's (`stores` clear), and one the cache keeps
+ * (`filecache_keeps`), reads around. The caller holds
+ * the file's lock and may sleep; `size` is the file's size and `epoch` the
+ * cache's count taken before the read. Returns the bytes of `pgoff` read,
+ * or a negative errno.
+ */
+static int32_t disk_read_around(struct filemap *m, uint32_t pgoff, uint64_t size, uintptr_t phys,
+                                uint32_t epoch)
+{
+    uintptr_t around[DISK_AROUND];
+    uint32_t start = pgoff > DISK_AROUND / 2u ? pgoff - DISK_AROUND / 2u : 0;
+    uint64_t pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint32_t n = pages - start < DISK_AROUND ? (uint32_t)(pages - start) : DISK_AROUND;
+    uint32_t i, absent = 0;
+    int32_t got = -EIO, one;
+
+    for (i = 0; i < n; i++) {
+        around[i] = start + i == pgoff ? phys : shmem_resident(m->sh, start + i);
+        absent |= around[i] ? 0 : 1u << i;
+    }
+    (void)filecache_lend(&m->entry, start, n, around);
+    for (i = 0; i < n; i++) {
+        if (start + i == pgoff) {
+            got = disk_read_page(m, pgoff, phys);
+        } else if (!(absent & (1u << i))) {
+            continue;
+        } else if (around[i]) {
+            free_frame(around[i]); /* the reference the cache lent it with */
+        } else if ((around[i] = alloc_user_frame()) != 0) {
+            one = disk_read_page(m, start + i, around[i]);
+            if (one > 0) {
+                filecache_keep(&m->entry, start + i, around[i], epoch);
+            }
+            free_frame(around[i]);
+        }
+    }
+    return got;
+}
+
 /**
  * Read or borrow disk page `pgoff` under its file's lock, which excludes a
  * write or truncation until the page joins the file's resident pages. A
@@ -446,7 +528,6 @@ static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
 {
     struct vfs_ref file;
     struct vfs_stat st;
-    uint8_t *page;
     uint32_t epoch = 0;
     int32_t got = PAGE_SIZE;
     int rc = 0, cached, share;
@@ -473,14 +554,12 @@ static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
             cached = !share && filecache_read(&m->entry, pgoff, *phys);
         }
         if (!cached) {
-            page = kmap_temp(*phys);
-            got = page ? filemap_read(m, page, pgoff) : -EIO;
-            if (got >= 0 && got < (int32_t)PAGE_SIZE) {
-                k_memset(page + got, 0, PAGE_SIZE - (uint32_t)got);
+            if (m->ds->misses < DISK_MISSES_MOST) {
+                m->ds->misses++;
             }
-            if (page) {
-                kunmap_temp(page);
-            }
+            got = share && m->ds->misses <= DISK_LOTS_MISSED && filecache_keeps(&m->entry)
+                      ? disk_read_around(m, pgoff, st.size, *phys, epoch)
+                      : disk_read_page(m, pgoff, *phys);
         }
         if (got < 0) {
             free_frame(*phys);
@@ -603,6 +682,7 @@ static uint32_t filemap_around_disk(struct vm_file *f, uint32_t first, uint32_t 
             }
         }
     }
+    m->ds->misses = m->ds->misses > lent ? m->ds->misses - lent : 0;
     vfs_node_unlock(&file);
     disk_call_end(entered, flags);
     return lent;

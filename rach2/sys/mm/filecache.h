@@ -73,6 +73,10 @@ void filecache_store(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, u
  * `filecache_lend` allows. */
 void filecache_keep(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, uint32_t epoch);
 
+/** Whether the cache keeps pages of the file `e` is open on: 1 for an ext2
+ * regular file, 0 for any other. */
+int filecache_keeps(const struct fd_entry *e);
+
 /** The same for page `pgoff` of the file `node` of `mnt`, from the kernel
  * buffer `buf` of a page. */
 void filecache_store_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, const void *buf,
