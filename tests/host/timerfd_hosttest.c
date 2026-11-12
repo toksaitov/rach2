@@ -35,8 +35,10 @@
  * signal last delivered. Only a delivery under the setting in force counts
  * the intervals since the expiration the signal stands for; notifications
  * that wait are posted oldest first, and timers one pass finds overdue
- * expire in the order of their ends; a discarded signal takes its timers'
- * waiting notifications and frees a deleted timer's record; and exec
+ * expire in the order of their ends, equal ends by their last rearm;
+ * a discarded signal takes its timers' waiting and not yet posted
+ * notifications and frees a deleted timer's record; a thread's end drops
+ * its deferred timer signals and publishes death under one lock; and exec
  * deletes every timer and discards the timers' pending signals. The tick,
  * which runs without the big lock, leaves a POSIX timer's expirations for a
  * holder of it to signal, joined into one signal; timer_settime and
@@ -150,11 +152,15 @@ static uint64_t inner_value;
         }                                                     \
     } while (0)
 
-/** NULL: the POSIX timers' part, which no row reaches, finds no process. */
+/* The target thread of the exit rows, and an observation at the first
+ * interrupt restore after its timers' lock is released. */
+static process_t *model_thread;
+static int exit_unlock_watch, exit_unlock_seen;
+
+/** The exit rows' thread when its id is `pid`, otherwise no process. */
 process_t *get_process(uint32_t pid)
 {
-    (void)pid;
-    return 0;
+    return model_thread && model_thread->pid == pid ? model_thread : NULL;
 }
 
 /* The process of the POSIX timer rows, its leader, whether it ignores the
@@ -216,6 +222,12 @@ uint32_t kirq_save(void)
 void kirq_restore(uint32_t flags)
 {
     masked = (int)flags;
+    if (exit_unlock_watch && !timer_lock.locked) {
+        exit_unlock_watch = 0;
+        exit_unlock_seen++;
+        CHECK(model_thread->state == PROC_ZOMBIE,
+              "the timers' lock is not released between the final discard and zombie publication");
+    }
 }
 
 /**
@@ -1113,6 +1125,125 @@ static void fire_later_rows(void)
 }
 
 /**
+ * A SIGCONT drops a one-shot SIGTSTP expiration still waiting for the big
+ * lock, as Linux 6.12.115 flushes the stops at SIGCONT generation
+ * (kernel/signal.c:923-933). An unrelated deferred signal survives, and a
+ * new expiration can join the queue after its tail was removed. Repeat
+ * with a timer-generated SIGCONT, whose discard holds `timer_lock` already.
+ */
+static void deferred_discard_rows(void)
+{
+    static struct ktimer second;
+    struct setting once = {0, 0, 0, NS_PER_TICK};
+    struct k_siginfo info = {0};
+    int nested;
+
+    for (nested = 0; nested <= 1; nested++) {
+        ptimer_start(SIGEV_SIGNAL);
+        timer.signo = SIGTSTP;
+        k_memset(&second, 0, sizeof(second));
+        ptimer_model(&second, 2, SIGEV_SIGNAL);
+        second.signo = nested ? SIGCONT : SIGUSR1;
+        timer.in_group = &second;
+        CHECK(arm(&second, 0, &once) == 0 && arm(&timer, 0, &once) == 0,
+              "the unrelated timer arms first, then the stop timer at the same tick");
+        kernel_ticks = 1001;
+        timerfd_tick(1001);
+        CHECK(posts == 0 && second.fire_next == &timer && timer.fire_fresh == 1,
+              "both signals wait, the stop at the tail");
+        if (!nested) {
+            signal_post_info(&leader, SIGCONT, &info);
+            CHECK(timer.fire_fresh == 0 && !timer.fire_queued && fire_head == &second &&
+                      second.fire_next == NULL && fire_tail == &second.fire_next,
+                  "SIGCONT cancels the deferred stop and keeps the unrelated signal");
+        }
+        ptimer_post_due();
+        CHECK(posts == (nested ? 1 : 2) && !(group.pending & KSIG_BIT(SIGTSTP)) &&
+                  timer.fire_fresh == 0 && !ptimer_posts_due(),
+              "posting the queue cannot resurrect a stop that SIGCONT discarded");
+        CHECK(arm(&timer, 0, &once) == 0, "a new stop timer setting arms");
+        tick(1002);
+        CHECK(posts == (nested ? 2 : 3) && (group.pending & KSIG_BIT(SIGTSTP)),
+              "a new expiration still posts after the deferred tail was canceled");
+    }
+    group.timers = NULL;
+    model_phase_ns = NS_PER_TICK / 2;
+}
+
+/**
+ * A thread's final discard cancels deferred clock and processor-time
+ * expirations aimed at it, as Linux 6.12.115 flushes its pending sigqueues
+ * under its signal lock (kernel/exit.c:203-207). At the first unlock it is
+ * a zombie already; unrelated signals survive, and later expirations go
+ * to the process. A thread without timers publishes its state too.
+ */
+static void thread_exit_rows(void)
+{
+    static process_t ending;
+    static struct ktimer second;
+    struct setting every = {0, NS_PER_TICK, 0, NS_PER_TICK};
+    struct setting once = {0, 0, 0, NS_PER_TICK};
+    int cpu;
+
+    for (cpu = 0; cpu <= 1; cpu++) {
+        ptimer_start(SIGEV_THREAD_ID);
+        k_memset(&ending, 0, sizeof(ending));
+        ending.pid = 42;
+        ending.tg = &group;
+        ending.state = PROC_RUNNING;
+        model_thread = &ending;
+        timer.tid = ending.pid;
+        if (cpu) {
+            timer.cpu_tg = &group;
+        }
+        k_memset(&second, 0, sizeof(second));
+        ptimer_model(&second, 2, SIGEV_SIGNAL);
+        second.signo = SIGUSR1;
+        timer.in_group = &second;
+        CHECK(arm(&timer, 0, &every) == 0 && arm(&second, 0, &once) == 0,
+              "a periodic timer aimed at the ending thread and an unrelated timer arm");
+        kernel_ticks = 1001;
+        timerfd_tick(1001);
+        if (cpu) {
+            ptimer_cpu_tick(&ending, 1);
+        }
+        CHECK(timer.fire_fresh == 1 && timer.fire_queued && second.fire_queued && posts == 0,
+              "the ending thread's expiration and the unrelated one wait to be posted");
+        exit_unlock_seen = 0;
+        exit_unlock_watch = 1;
+        ptimer_thread_exit(&ending);
+        CHECK(ending.state == PROC_ZOMBIE && exit_unlock_seen == 1 && timer.fire_fresh == 0 &&
+                  !timer.fire_queued && timer.set_count == 0 && fire_head == &second &&
+                  second.fire_next == NULL,
+              "the final discard removes only the ending thread's deferred signal and publishes "
+              "death");
+        ptimer_post_due();
+        CHECK(posts == 1 && (group.pending & KSIG_BIT(SIGUSR1)) &&
+                  !(group.pending & KSIG_BIT(SIGALRM)),
+              "posting after exit delivers only the unrelated signal");
+        kernel_ticks = 1002;
+        if (cpu) {
+            ptimer_cpu_tick(&leader, 1);
+        } else {
+            timerfd_tick(1002);
+        }
+        ptimer_post_due();
+        CHECK(posts == 2 && (group.pending & KSIG_BIT(SIGALRM)),
+              "a later expiration follows the zombie publication and goes to the process");
+        disarm(&timer);
+    }
+    group.timers = NULL;
+    ending.state = PROC_RUNNING;
+    exit_unlock_seen = 0;
+    exit_unlock_watch = 1;
+    ptimer_thread_exit(&ending);
+    CHECK(ending.state == PROC_ZOMBIE && exit_unlock_seen == 1,
+          "a thread without timers publishes death under the timers' lock too");
+    model_thread = NULL;
+    model_phase_ns = NS_PER_TICK / 2;
+}
+
+/**
  * SIGEV_NONE's timers, which the ticks alone count: a one-shot timer of
  * 0.1 ms queried at 0.2 ms, before a tick, has no time left, as Linux
  * reports an expired one; a periodic one of 0.3 ms from 0.1 ms queried at
@@ -1548,6 +1679,56 @@ static void delayed_rows(void)
 }
 
 /**
+ * A periodic timer first armed before a one-shot of the same signal joins
+ * behind it when delivery rearms it for the same end, as Linux 6.12.115's
+ * posixtimer_rearm restarts it (kernel/time/posix-timers.c:244-268) and
+ * timerqueue_add puts an equal time after those already queued
+ * (lib/timerqueue.c:19-37, include/linux/rbtree.h:172-180). Repeat at an
+ * interrupt between ticks and at a tick; then with an ignored first
+ * expiration, whose callback rearms the periodic timer directly.
+ */
+static void equal_rearm_rows(void)
+{
+    static struct ktimer second;
+    struct setting every = {0, NS_PER_TICK, 0, NS_PER_TICK};
+    struct setting once = {0, 0, 0, 2 * NS_PER_TICK};
+    int mode;
+
+    for (mode = 0; mode < 3; mode++) {
+        ptimer_start(SIGEV_SIGNAL);
+        k_memset(&second, 0, sizeof(second));
+        ptimer_model(&second, 2, SIGEV_SIGNAL);
+        timer.in_group = &second;
+        CHECK(arm(&timer, 0, &every) == 0 && arm(&second, 0, &once) == 0,
+              "periodic timer 1 arms for 1 ms, then one-shot timer 2 for 2 ms");
+        ignores = mode == 2;
+        tick(1001);
+        ignores = 0;
+        if (mode != 2) {
+            CHECK(group.info[SIGALRM].pid == 1, "the periodic timer's first signal is pending");
+            (void)take_signal(SIGALRM);
+        }
+        CHECK(timer.end == second.end && armed == &timer,
+              "the rearmed periodic timer joins behind the one-shot for their shared end");
+        if (mode == 0) {
+            kernel_ticks = 1002;
+            (timerfd_due)();
+            ptimer_post_due();
+        } else {
+            tick(1002);
+        }
+        CHECK(posts == 2 && group.info[SIGALRM].pid == 2 && timer.count == 1,
+              "the shared deadline posts the already queued one-shot first");
+        (void)take_signal(SIGALRM);
+        CHECK(posts == 3 && group.info[SIGALRM].pid == 1,
+              "taking the one-shot's signal posts the rearmed periodic timer's next");
+        disarm(&timer);
+    }
+    group.timers = NULL;
+    model_phase_ns = NS_PER_TICK / 2;
+}
+
+/**
  * A discarded signal takes its timers' waiting notifications, as Linux's
  * flush_sigqueue_mask takes every sigqueue of its number off the queues
  * (kernel/signal.c:782-798, 4249-4255). With a user's SIGALRM pending,
@@ -1800,6 +1981,10 @@ int main(void)
     between_pending_rows();
     deferred_rows();
     fire_later_rows();
+    deferred_discard_rows();
+    leader.tg = &group;
+    thread_exit_rows();
+    leader.tg = NULL;
     none_rows();
     shared_rows();
     key_rows();
@@ -1807,6 +1992,7 @@ int main(void)
     elapsed_rows();
     order_rows();
     delayed_rows();
+    equal_rearm_rows();
     discard_rows();
     exec_rows();
     ptimer_rows();

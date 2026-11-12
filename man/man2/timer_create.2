@@ -120,6 +120,8 @@ wait, as Linux queues a signal for each timer and delivers them in turn.
 Timers that one pass of the interrupt or the tick finds expired go in the
 order of their times, as Linux runs a clock's expired timers earliest
 first, so their signals are posted, or wait, in that order.
+Equal times expire in queue order: a periodic timer rearmed at delivery
+joins after the timers already queued for that time.
 A
 .Dv SIGEV_NONE
 timer expires at ticks alone.
@@ -136,9 +138,10 @@ The time left is counted from the reading of the clock the timer was moved
 on by, as Linux's common_timer_get counts both from one reading.
 .Pp
 The timer tick, which runs without the big lock, finds an expiration and
-leaves its signal for the next holder of the lock: the interrupt between
-ticks, which takes the lock and posts the signal at once, or a later tick
-that takes the lock, which may come some ticks after the expiration.
+leaves its signal for the next holder of the lock.
+The interrupt between ticks tries the lock and posts the signal at once
+when it succeeds; otherwise a later tick that takes the lock posts it,
+which may come some ticks after the expiration.
 The expirations counted until then join that one signal, whose delivery
 counts them with the other intervals since.
 A
@@ -186,7 +189,8 @@ ended are not counted, as on Linux.
 Installing
 .Dv SIG_IGN ,
 or a default that ignores, for a signal discards the timers' signals of
-that number, waiting ones and a deleted timer's among them, and so does a
+that number, including waiting signals, expirations not yet posted and a
+deleted timer's signal, and so does a
 stop signal for
 .Dv SIGCONT
 and
@@ -194,8 +198,10 @@ and
 for the stop signals.
 A thread's end discards the signals of the
 .Dv SIGEV_THREAD_ID
-timers aimed at it, pending or waiting there, as Linux discards an ending
-thread's pending signals.
+timers aimed at it, pending, waiting there or not yet posted, as Linux
+discards an ending thread's pending signals.
+The discard and the publication of the thread's zombie state share the
+timers' lock, so an expiration cannot survive between them.
 .Fn timer_getoverrun ,
 number 262 on i386 and 225 on x86-64, gives the overrun that the setting
 in force counted for the last signal of a periodic timer delivered since
