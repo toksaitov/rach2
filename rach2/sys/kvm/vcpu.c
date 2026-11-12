@@ -547,6 +547,44 @@ void kvm_vcpu_kick(struct kvm_vcpu *v, uint32_t request)
     }
 }
 
+void kvm_timer_arm(struct kvm_vcpu *v, uint64_t ns)
+{
+    if (ns && (!v->timer_ns || ns < v->timer_ns)) {
+        v->timer_ns = ns;
+    }
+}
+
+/** The earlier of two deadlines, 0 standing for none. */
+static uint64_t earlier(uint64_t a, uint64_t b)
+{
+    return !a || (b && b < a) ? b : a;
+}
+
+void kvm_vcpu_timers(struct kvm_vcpu *v)
+{
+    uint64_t next = 0, clock;
+
+    if (v->timer_ns && kvm_host_ns() >= v->timer_ns) {
+        req_set(v, KVM_REQ_TIMER);
+    }
+    if (!kvm_vcpu_test_clear(v, KVM_REQ_TIMER)) {
+        return;
+    }
+    if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
+        kvm_lapic_timer_check(v);
+        kvm_pit_check(v->vm);
+        kvm_hv_stimers(v);
+        next = kvm_lapic_next_ns(v);
+    }
+    clock = kvm_clock_next(v);
+    if (clock && kvm_host_ns() >= clock) {
+        /* The write moves the resync on (`kvm_timer_arm`). */
+        req_set(v, KVM_REQ_CLOCK_UPDATE);
+        clock = 0;
+    }
+    v->timer_ns = earlier(next, clock);
+}
+
 /** Queue the exception `nr` for `v`, as Linux replaces a benign exception
  * waiting with a new one, which the instruction raises again when run. */
 static void queue_exception(struct kvm_vcpu *v, uint8_t nr)
@@ -726,12 +764,16 @@ static int32_t run_exit(struct kvm_vcpu *v)
  * request the loop has not taken (KVM_REQ_NOENTER), or a stop or start of
  * the host's clock since the VM's master clock was decided
  * (`kvm_clock_host_moved`), which Linux posts to every vCPU as
- * KVM_REQ_MASTERCLOCK_UPDATE (arch/x86/kvm/x86.c:9166-9169). With the vCPU
- * IN_GUEST: at the entry after a barrier, in the fast path after an exit,
- * which the stop's interrupt forces (`vclock_kick`). */
+ * KVM_REQ_MASTERCLOCK_UPDATE (arch/x86/kvm/x86.c:9166-9169) and which this
+ * test turns into that request, since the host's clock reaches no VM. With
+ * the vCPU IN_GUEST: at the entry after a barrier, in the fast path after
+ * an exit, which the stop's interrupt forces (`vclock_kick`). */
 static int entry_waits(struct kvm_vcpu *v)
 {
-    return (v->requests & KVM_REQ_NOENTER) || kvm_clock_host_moved(v->vm);
+    if (kvm_clock_host_moved(v->vm)) {
+        req_set(v, KVM_REQ_MASTERCLOCK_UPDATE);
+    }
+    return (v->requests & KVM_REQ_NOENTER) != 0;
 }
 
 /** Whether the run loop has work before `v`'s next entry that the fast
@@ -739,14 +781,14 @@ static int entry_waits(struct kvm_vcpu *v)
  * 1715-1720) ends its fast path for a request, a signal or a switch the
  * scheduler asked for (x86.c:10586): a request the loop answers or a
  * change of the host's clock (`entry_waits`), the flags of a signal and of
- * a switch, which `run_signal` and `sched_take_preempt` read, a PMI the
- * last run left, which `kvm_pmu_prepare` delivers, and the caller's wait
- * for an interrupt window, which the loop reports after each exit it
- * handles. With interrupts off, the vCPU IN_GUEST. */
+ * a switch, which `run_signal` and `sched_take_preempt` read, and the
+ * caller's wait for an interrupt window, which the loop reports after each
+ * exit it handles; a PMI the last run left is a request (KVM_REQ_PMI). With
+ * interrupts off, the vCPU IN_GUEST. */
 static int fast_ends(struct kvm_vcpu *v)
 {
     return entry_waits(v) || *(volatile uint32_t *)&current_proc->sig_woken ||
-           current_proc->need_resched || v->pmu.pmi ||
+           current_proc->need_resched ||
            (v->vm->irqchip == KVM_IRQCHIP_SPLIT && v->run->request_interrupt_window);
 }
 
@@ -765,18 +807,25 @@ static int fast_ends(struct kvm_vcpu *v)
  * one that a kick set after the loop's look would otherwise wait for the
  * next exit. So does a stop or start of the host's clock after the loop's
  * `kvm_clock_prepare` (`entry_waits`), which would otherwise enter with a
- * kvmclock that keeps PVCLOCK_TSC_STABLE_BIT. The last exit's account
- * closes as handled in the kernel only once the guest ran; after -EAGAIN
- * or an error it stays open, and closes as one that ended KVM_RUN if
- * KVM_RUN returns before the next entry.
+ * kvmclock that keeps PVCLOCK_TSC_STABLE_BIT. An entry on another
+ * processor than the last asks for the kvmclock without the master clock
+ * (KVM_REQ_CLOCK_UPDATE), as Linux's kvm_arch_vcpu_load does when the vCPU
+ * moved (arch/x86/kvm/x86.c:4584-4605), and so cancels this entry. The
+ * last exit's account closes as handled in the kernel only once the guest
+ * ran; after -EAGAIN or an error it stays open, and closes as one that
+ * ended KVM_RUN if KVM_RUN returns before the next entry.
  */
 static int32_t run_enter(struct kvm_vcpu *v)
 {
     uint32_t flags = kirq_save();
+    int32_t cpu = (int32_t)arch_cpu_id();
     uint64_t entry;
     int32_t r;
 
-    v->cpu = (int32_t)arch_cpu_id();
+    if (v->cpu != cpu) {
+        v->cpu = cpu;
+        kvm_clock_moved_cpu(v);
+    }
     v->mode = KVM_MODE_IN_GUEST;
     sched_mb(); /* the kick's request and mode, read in the other order */
     if (entry_waits(v)) {
@@ -889,12 +938,16 @@ static int32_t run_begin(struct kvm_vcpu *v)
  * kvm_sched_out (virt/kvm/kvm_main.c): `arg` is the vCPU, which a switch
  * away while its thread can still run, `preempted`, marks preempted
  * (`kvm_steal_preempted`), and whose backend gives the host back the
- * processor's state at every switch (`put`), as kvm_arch_vcpu_put. Under
- * the run queues' lock with interrupts off; does not sleep. */
+ * processor's state at every switch (`put`), as kvm_arch_vcpu_put. Every
+ * switch asks for the steal time once the thread runs again
+ * (KVM_REQ_STEAL_UPDATE), as Linux's kvm_arch_vcpu_load does at
+ * kvm_sched_in. Under the run queues' lock with interrupts off; does not
+ * sleep. */
 static void vcpu_sched_out(void *arg, int preempted)
 {
     struct kvm_vcpu *v = (struct kvm_vcpu *)arg;
 
+    req_set(v, KVM_REQ_STEAL_UPDATE);
     if (preempted) {
         kvm_steal_preempted(v);
     }
@@ -914,26 +967,54 @@ struct kvm_vcpu *kvm_running_vcpu(struct kvm_vm *vm)
     return v && v->vm == vm ? v : NULL;
 }
 
-/** Prepare timers, clocks, filters and events for an entry: 1 when ready,
- * 0 for an exit to the caller, or a negative error. Without the big lock;
- * the helpers take the locks they need, and may write logged guest pages.
- * A ring the Hyper-V pages' writes filled ends the call with
- * KVM_EXIT_DIRTY_RING_FULL before the local APIC's work, whose halted wait
- * would otherwise sleep with the ring full, as Linux's vcpu_enter_guest
- * takes the soft-full request first (arch/x86/kvm/x86.c:10294) through
- * kvm_dirty_ring_check_request (virt/kvm/dirty_ring.c:194). */
+/** Whether `v` needs the run loop's work before an entry: a request, or
+ * with the local APIC in the kernel a vCPU that does not run, which waits
+ * in `kvm_lapic_prepare`. */
+static int prepare_due(const struct kvm_vcpu *v)
+{
+    return (v->requests & KVM_REQ_NOENTER) ||
+           (v->vm->irqchip != KVM_IRQCHIP_NONE && v->mp_state != KVM_MP_STATE_RUNNABLE);
+}
+
+/**
+ * Prepare `v` for an entry, as Linux's vcpu_enter_guest does its work only
+ * behind kvm_request_pending and KVM_REQ_EVENT (arch/x86/kvm/x86.c:
+ * 10288-10466): the timers that are due raise KVM_REQ_TIMER
+ * (`kvm_vcpu_timers`), and with no request and the vCPU running there is
+ * nothing more. Otherwise each source's work runs behind its bit: a dirty
+ * ring with no more than its reserve free ends the call first, as Linux's
+ * kvm_dirty_ring_check_request (virt/kvm/dirty_ring.c:198-212), its bit staying
+ * set while it is so; then Hyper-V's exits, the counters and their PMI,
+ * the local APIC's work and its halted wait, the kvmclock with the
+ * reference TSC page, the steal time, the MSR filter and the event to
+ * inject. A
+ * request that a step sets for an earlier one, as the steal time a halted
+ * wait asks for, cancels the entry, which the next pass takes
+ * (KVM_REQ_NOENTER). 1 when ready, 0 for an exit to the caller, or a
+ * negative error. Without the big lock; the helpers take the locks they
+ * need, and may write logged guest pages.
+ */
 static int32_t run_prepare(struct kvm_vcpu *v)
 {
     int32_t r;
 
-    r = kvm_hv_prepare(v);
-    if (r != 0) {
-        return 0;
+    kvm_vcpu_timers(v);
+    if (!prepare_due(v)) {
+        return 1;
     }
-    kvm_pmu_prepare(v);
-    if (kvm_dirty_ring_full(v)) {
+    if (kvm_vcpu_test_clear(v, KVM_REQ_DIRTY_RING_FULL) && kvm_dirty_ring_full(v)) {
+        req_set(v, KVM_REQ_DIRTY_RING_FULL);
         v->run->exit_reason = KVM_EXIT_DIRTY_RING_FULL;
         return 0;
+    }
+    if (v->requests & (KVM_REQ_HV_CRASH | KVM_REQ_HV_RESET | KVM_REQ_HV_EXIT)) {
+        r = kvm_hv_prepare(v);
+        if (r != 0) {
+            return 0;
+        }
+    }
+    if (v->requests & (KVM_REQ_PMU | KVM_REQ_PMI)) {
+        kvm_pmu_prepare(v);
     }
     if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
         r = kvm_lapic_prepare(v);
@@ -941,8 +1022,12 @@ static int32_t run_prepare(struct kvm_vcpu *v)
             return r > 0 ? 0 : r;
         }
     }
-    kvm_clock_prepare(v);
-    kvm_steal_prepare(v);
+    if (v->requests & (KVM_REQ_CLOCK_UPDATE | KVM_REQ_MASTERCLOCK_UPDATE)) {
+        kvm_clock_prepare(v);
+    }
+    if (v->requests & KVM_REQ_STEAL_UPDATE) {
+        kvm_steal_prepare(v);
+    }
     if (kvm_vcpu_test_clear(v, KVM_REQ_MSR_FILTER) && kvm_backend->msr_filter_changed) {
         kvm_backend->msr_filter_changed(v);
     }
@@ -1014,17 +1099,9 @@ static int32_t run_loop(struct kvm_vcpu *v)
             run->exit_reason = KVM_EXIT_INTR;
             return -EINTR;
         }
-        if (kvm_dirty_ring_full(v)) {
-            run->exit_reason = KVM_EXIT_DIRTY_RING_FULL;
-            return 0;
-        }
         r = run_prepare(v);
         if (r != 1) {
             return r;
-        }
-        if (kvm_dirty_ring_full(v)) {
-            run->exit_reason = KVM_EXIT_DIRTY_RING_FULL;
-            return 0;
         }
         r = run_enter(v);
         if (r == -EAGAIN) {
@@ -1034,6 +1111,10 @@ static int32_t run_loop(struct kvm_vcpu *v)
             return r;
         }
         v->stat[KVM_VCPU_STAT_EXITS]++;
+        if (v->tsc_catchup) {
+            /* As Linux's vcpu_enter_guest under tsc_always_catchup. */
+            req_set(v, KVM_REQ_CLOCK_UPDATE);
+        }
         if (r == 0) {
             r = kvm_backend->exit ? kvm_backend->exit(v) : -EOPNOTSUPP;
             if (r != 0) {

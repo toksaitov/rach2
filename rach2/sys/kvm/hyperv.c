@@ -616,10 +616,11 @@ static int clear_page(struct kvm_vcpu *v, uint64_t gpa)
     return 0;
 }
 
-/** Mark timer `i` of `hv` to be looked at before the next entry. */
-static void stimer_mark(struct hv_vcpu *hv, int i)
+/** Mark timer `i` of `v` to be looked at before the next entry. */
+static void stimer_mark(struct kvm_vcpu *v, int i)
 {
-    hv->stimer_pending |= 1u << i;
+    hv_of(v)->stimer_pending |= 1u << i;
+    kvm_timer_arm(v, 1);
 }
 
 /** An end of interrupt on SINT `sint` of `v`: retry the message a timer
@@ -635,7 +636,7 @@ static void synic_acked(struct kvm_vcpu *v, uint32_t sint)
         s = &hv->stimer[i];
         if (s->msg_pending && (s->config & STIMER_ENABLE) && !(s->config & STIMER_DIRECT) &&
             STIMER_SINT(s->config) == sint) {
-            stimer_mark(hv, i);
+            stimer_mark(v, i);
         }
     }
 }
@@ -756,8 +757,8 @@ static void stimer_cleanup(struct hv_vcpu *hv, struct hv_stimer *s)
     s->exp_time = 0;
 }
 
-/** Arm `s` to fire `delta` of 100 ns from now, saturating. */
-static void stimer_arm(struct hv_stimer *s, uint64_t delta)
+/** Arm timer `s` of `v` to fire `delta` of 100 ns from now, saturating. */
+static void stimer_arm(struct kvm_vcpu *v, struct hv_stimer *s, uint64_t delta)
 {
     uint64_t now = kvm_host_ns();
 
@@ -765,6 +766,7 @@ static void stimer_arm(struct hv_stimer *s, uint64_t delta)
     if (s->due_ns == 0) {
         s->due_ns = 1;
     }
+    kvm_timer_arm(v, s->due_ns);
 }
 
 /** Start the enabled timer `s` with a nonzero count, as Linux's
@@ -783,15 +785,15 @@ static void stimer_start(struct kvm_vcpu *v, struct hv_stimer *s)
         } else {
             s->exp_time = now + s->count;
         }
-        stimer_arm(s, s->exp_time - now);
+        stimer_arm(v, s, s->exp_time - now);
         return;
     }
     s->exp_time = s->count;
     if (now >= s->count) {
-        stimer_mark(hv, (int)(s - hv->stimer));
+        stimer_mark(v, (int)(s - hv->stimer));
         return;
     }
-    stimer_arm(s, s->count - now);
+    stimer_arm(v, s, s->count - now);
 }
 
 /** Write timer `n`'s configuration, `count` 0, or its count, 1, as Linux's
@@ -826,7 +828,7 @@ static int stimer_set(struct kvm_vcpu *v, int n, int count, uint64_t data, int h
         }
     }
     if (s->config & STIMER_ENABLE) {
-        stimer_mark(hv, n);
+        stimer_mark(v, n);
     }
     return 0;
 }
@@ -915,7 +917,7 @@ static void hv_stimers(struct kvm_vcpu *v, struct hv_vcpu *hv, uint64_t now)
         s = &hv->stimer[i];
         if (s->due_ns && now >= s->due_ns) {
             s->due_ns = 0;
-            stimer_mark(hv, i);
+            stimer_mark(v, i);
         }
     }
     for (i = 0; i < HV_STIMERS; i++) {
@@ -1218,6 +1220,10 @@ static int pw_set(struct kvm_vcpu *v, uint32_t msr, uint64_t *value, int host)
         h->tsc_msr = data;
         if (data & HV_PAGE_ENABLE) {
             h->tsc_status = host ? TSC_HOST_CHANGED : TSC_GUEST_CHANGED;
+            /* The page is written with the clock, as Linux's
+             * kvm_hv_set_msr_pw asks KVM_REQ_MASTERCLOCK_UPDATE
+             * (arch/x86/kvm/hyperv.c:1443-1450). */
+            kvm_vcpu_kick(v, KVM_REQ_CLOCK_UPDATE);
         } else {
             h->tsc_status = TSC_UNSET;
         }

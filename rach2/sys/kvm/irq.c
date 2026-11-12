@@ -223,7 +223,7 @@ static int irqfd_signal(struct eventfd_hook *h)
     spin_unlock(&iv->lock);
     if (deferred) {
         for (i = 0; i < f->vm->nr_vcpus; i++) {
-            kvm_lapic_wake(f->vm->vcpus[i]);
+            kvm_lapic_wake(f->vm->vcpus[i], KVM_REQ_IRQFD);
         }
     } else if (r.valid) {
         set_msi(f->vm, &r, 1);
@@ -248,9 +248,9 @@ int kvm_irq_pending(struct kvm_vm *vm)
     return pending;
 }
 
-/** Deliver deferred irqfds before guest entry. The test of `pending`
- * takes no lock: the hook kicks every vCPU after it sets it, and the kick's
- * request brings each to look again. */
+/** Deliver deferred irqfds before guest entry, at KVM_REQ_IRQFD. The test
+ * of `pending` takes no lock: the hook sets it and then kicks every vCPU
+ * with the request, which each clears before it looks. */
 void kvm_irq_process(struct kvm_vm *vm)
 {
     struct irq_vm *iv = irq_of(vm);

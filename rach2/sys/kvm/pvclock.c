@@ -423,12 +423,13 @@ int32_t kvm_clock_set(struct kvm_vm *vm, uintptr_t arg)
 }
 
 /** Have `v`'s kvmclock and the VM's reference TSC page written again
- * before the next entry, since `v`'s TSC changed; the flag goes before the
- * kick, as in `master_update`. */
+ * before the next entry, since `v`'s TSC changed, and its TSC deadline
+ * found again (KVM_REQ_TIMER); the flag goes before the kick, as in
+ * `master_update`. */
 static void tsc_changed(struct kvm_vcpu *v)
 {
     v->vm->hv_clock_moved = 1;
-    kvm_vcpu_kick(v, KVM_REQ_CLOCK_UPDATE);
+    kvm_vcpu_kick(v, KVM_REQ_CLOCK_UPDATE | KVM_REQ_TIMER);
 }
 
 /**
@@ -634,6 +635,7 @@ static void pvclock_write(struct kvm_vcpu *v)
     (void)kvm_guest_phys_rw(v, gpa, &version, 4, 1);
     v->clock_cpu = (int32_t)arch_cpu_id();
     v->clock_ns = kvm_host_ns();
+    kvm_timer_arm(v, kvm_clock_next(v));
 }
 
 /** Move `v`'s TSC up to where its rate would have it since its last match
@@ -652,10 +654,26 @@ static int tsc_catch_up(struct kvm_vcpu *v)
     return 1;
 }
 
+uint64_t kvm_clock_next(const struct kvm_vcpu *v)
+{
+    if (!(v->pv_time & KVM_MSR_ENABLED) || v->vm->master_clock || v->clock_cpu < 0) {
+        return 0;
+    }
+    return v->clock_ns + KVMCLOCK_SYNC_NS;
+}
+
+void kvm_clock_moved_cpu(struct kvm_vcpu *v)
+{
+    if ((v->pv_time & KVM_MSR_ENABLED) && !v->vm->master_clock) {
+        kvm_vcpu_kick(v, KVM_REQ_CLOCK_UPDATE);
+    }
+}
+
 void kvm_clock_prepare(struct kvm_vcpu *v)
 {
     int update, pv = (v->pv_time & KVM_MSR_ENABLED) != 0;
 
+    (void)kvm_vcpu_test_clear(v, KVM_REQ_MASTERCLOCK_UPDATE);
     master_recheck(v->vm);
     update = kvm_vcpu_test_clear(v, KVM_REQ_CLOCK_UPDATE);
     if (v->tsc_catchup && tsc_catch_up(v)) {

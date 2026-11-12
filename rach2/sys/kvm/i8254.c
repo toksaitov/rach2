@@ -34,13 +34,15 @@ static struct guest_pit *pit_of(struct kvm_vm *vm)
     return (struct guest_pit *)vm->pit;
 }
 
-/** Request timer processing on every vCPU, including a halted one. */
+/** Have every vCPU, a halted one too, look at the timers and find its
+ * next deadline again (KVM_REQ_TIMER), since the PIT is the VM's and any
+ * vCPU's thread may change it. */
 static void pit_wake(struct kvm_vm *vm)
 {
     uint32_t i;
 
     for (i = 0; i < vm->nr_vcpus; i++) {
-        kvm_lapic_wake(vm->vcpus[i]);
+        kvm_lapic_wake(vm->vcpus[i], KVM_REQ_TIMER);
     }
 }
 
@@ -164,10 +166,11 @@ static int pit_due(const struct guest_pit *p, uint64_t now)
     return (q->active && now >= q->expires) || (q->reinject && q->pending && !q->inflight);
 }
 
-/** A new tick or an acknowledged backlog may produce one IRQ0 pulse. The
- * clock is read only while a timer is armed, since the run loop checks at
- * every entry where Linux's PIT has an hrtimer (arch/x86/kvm/i8254.c:268,
- * 361). */
+/** A new tick or an acknowledged backlog may produce one IRQ0 pulse, at
+ * KVM_REQ_TIMER, which the vCPU's deadline (`kvm_pit_next`) or a change of
+ * the PIT (`pit_wake`) raises where Linux's PIT has an hrtimer
+ * (arch/x86/kvm/i8254.c:268, 361). The clock is read only while a timer is
+ * armed. */
 void kvm_pit_check(struct kvm_vm *vm)
 {
     struct guest_pit *p = pit_of(vm);
