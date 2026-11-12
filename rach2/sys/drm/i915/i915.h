@@ -2531,20 +2531,32 @@ void i915_vma_revoke_mmap(struct i915_vma *vma);
 void i915_vma_flush_writes(struct i915_vma *vma);
 
 /**
+ * Whether a request of the driver's may still use the binding: its object
+ * has a reference and an unsignalled fence on its reservation. A binding
+ * of an object whose last reference has gone, one on `gem.freed`, is
+ * idle whatever the reservation holds, as Linux's eviction treats a
+ * binding of a dead object (dying_vma, i915_gem_evict.c:41-44, 78-81) and
+ * its unbind waits only for the binding's own requests
+ * (i915_vma.c:2123): every request holds each object it uses until it
+ * retires, so none is left, and a fence another device put on an
+ * import's reservation keeps no binding. Takes the reservation's lock.
+ */
+int i915_vma_is_active(const struct i915_vma *vma);
+
+/**
  * Undo a binding, as Linux's __i915_vma_unbind: programs' maps revoked,
  * writes flushed, its fence let go, its entries cleared and its record
- * freed. A binding whose object the GPU may still use is kept, since its
- * entries and pages must stay until the work is done: a caller that may
- * sleep waits with `i915_gem_object_wait_idle` first, where Linux's
- * unbind waits itself. Never sleeps. `may_yield` is the clear's
+ * freed. A binding the GPU may still use (`i915_vma_is_active`) is kept,
+ * since its entries and pages must stay until the work is done: a caller
+ * that may sleep waits with `i915_gem_object_wait_idle` first, where
+ * Linux's unbind waits itself. Never sleeps. `may_yield` is the clear's
  * (`i915_ggtt_clear_range`): set by a caller that may sleep, the ioctls,
  * eviction and an object's free by the holder that took the GEM lock, for
  * the free or before it (`gem.freed`), and clear in an MMU notifier's
  * revoke, an unpin, the shrinker and a free under it, as Linux's shrinker
  * and notifier never reach a cond_resched.
  *
- * @return 0, -EAGAIN while it is pinned, or -EBUSY while its object is
- *         active.
+ * @return 0, -EAGAIN while it is pinned, or -EBUSY while it is active.
  */
 int32_t i915_vma_unbind(struct i915_vma *vma, int may_yield);
 
@@ -2585,7 +2597,8 @@ int32_t i915_ggtt_find(struct drm_i915_private *i915, uint64_t size, uint64_t al
  * Make room in [start, end) of the global GTT for `size` bytes aligned to
  * `align`, at the end `flags` names, as Linux's i915_gem_evict_something:
  * the bindings of objects are scanned least recently used first, each
- * unpinned one whose object is idle counted as free, until a range fits;
+ * unpinned one that is idle (`i915_vma_is_active`) counted as free, until
+ * a range fits;
  * then those of the scanned that lie in the range are undone. When the
  * idle bindings make no room, it waits for the GPU to finish its work and
  * scans once more, as Linux's ggtt_flush, unless `flags` has
@@ -2601,8 +2614,10 @@ int32_t i915_gem_evict_something(struct drm_i915_private *i915, uint64_t size, u
 /**
  * Empty [start, start + size) of the global GTT for a binding at a fixed
  * offset, as Linux's i915_gem_evict_for_node: each binding there undone,
- * once the GPU has finished with its object, which is waited for unless
- * `flags` has I915_PIN_NONBLOCK. With I915_PIN_NOEVICT nothing is undone.
+ * once it is idle (`i915_vma_is_active`), which is waited for unless
+ * `flags` has I915_PIN_NONBLOCK; a binding of an object with no
+ * references is undone with no wait, as Linux's dying_vma. With
+ * I915_PIN_NOEVICT nothing is undone.
  *
  * @return 0; -ENOSPC when a binding there is pinned or, with
  *         I915_PIN_NOEVICT, is there at all, or when the range meets the

@@ -8,10 +8,11 @@
 #include "../../lib/kerrno.h"
 
 /** Whether eviction may undo `vma`: a binding of an object, not pinned,
- * whose object the GPU has finished with, as Linux's mark_free asks. */
+ * that no request may still use (`i915_vma_is_active`), as Linux's
+ * mark_free and defer_evict ask (i915_gem_evict.c:96-121). */
 static int evictable(const struct i915_vma *vma)
 {
-    return vma->obj && vma->pin_count == 0 && !i915_gem_object_is_active(vma->obj);
+    return vma->obj && vma->pin_count == 0 && !i915_vma_is_active(vma);
 }
 
 /*
@@ -100,8 +101,13 @@ static int range_reserved(const struct drm_i915_private *i915, uint64_t start, u
 /*
  * The bindings in the range are taken one at a time, since a wait lets
  * others change the list: a busy one is waited for, which an unbind in
- * Linux does, and then looked for again. With I915_PIN_NOEVICT the range
- * must be free already, as Linux's i915_gem_gtt_reserve asks.
+ * Linux does, and then looked for again. A binding of an object with no
+ * references is idle and goes with no wait, as Linux's grab_vma takes a
+ * dying binding with no lock and its unbind waits only for the binding's
+ * own requests (i915_gem_evict.c:67-83, 410-436; i915_vma.c:2123): such
+ * an object is on `gem.freed`, which the wait's drop of the GEM lock lets
+ * another thread free. With I915_PIN_NOEVICT the range must be free
+ * already, as Linux's i915_gem_gtt_reserve asks.
  */
 int32_t i915_gem_evict_for_node(struct drm_i915_private *i915, uint64_t start, uint64_t size,
                                 uint32_t flags)
@@ -125,7 +131,7 @@ int32_t i915_gem_evict_for_node(struct drm_i915_private *i915, uint64_t start, u
         if (!v->obj || v->pin_count || (flags & I915_PIN_NOEVICT)) {
             return -ENOSPC;
         }
-        if (i915_gem_object_is_active(v->obj)) {
+        if (i915_vma_is_active(v)) {
             if (flags & I915_PIN_NONBLOCK) {
                 return -ENOSPC;
             }

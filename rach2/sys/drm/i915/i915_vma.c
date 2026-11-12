@@ -688,12 +688,17 @@ static void vma_evict(struct i915_vma *vma, int may_yield)
     kfree(vma);
 }
 
+int i915_vma_is_active(const struct i915_vma *vma)
+{
+    return vma->obj->base.refs != 0 && i915_gem_object_is_active(vma->obj);
+}
+
 int32_t i915_vma_unbind(struct i915_vma *vma, int may_yield)
 {
     if (vma->pin_count) {
         return -EAGAIN;
     }
-    if (i915_gem_object_is_active(vma->obj)) {
+    if (i915_vma_is_active(vma)) {
         return -EBUSY;
     }
     vma_evict(vma, may_yield);
