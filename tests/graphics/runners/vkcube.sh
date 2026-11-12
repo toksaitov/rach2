@@ -3,10 +3,15 @@
 # display, inside a graphics guest, Rach2's or Debian's, as root, with the
 # frames it shows read back inside the guest and checksummed.
 #
-#   vkcube.sh [-d] [-i ICD] [-o OUT]
+#   vkcube.sh [-d] [-i ICD] [-m OUTPUT=MODE] [-o OUT]
 #
 # -d uses the caller's DRM Weston and its screenshot protocol, without
 # stopping or starting a compositor. It may run as that display's user.
+# -m has the runner's Weston drive its output OUTPUT, such as Virtual-1, in
+# MODE, one of the modes the connector lists, as weston.ini's [output] mode
+# names it, such as 1360x768@60, through a configuration of that one
+# section in place of --no-config; without it Weston takes the preferred
+# mode. -d takes no -m.
 #
 # Ends any Weston that runs, such as Rach2's boot session, whose supervisor
 # then waits, and starts a Weston of its own on the DRM card with its GL
@@ -46,17 +51,23 @@ FRAMES=346
 HOLDS="300 345"
 TIMED=300
 
-icd='' out=. display=0
-while getopts di:o: o; do
+icd='' out=. display=0 mode=''
+while getopts di:m:o: o; do
     case $o in
         d) display=1 ;;
         i) icd=$OPTARG ;;
+        m) mode=$OPTARG ;;
         o) out=$OPTARG ;;
         *) exit 2 ;;
     esac
 done
 shift $((OPTIND - 1))
-[ $# -eq 0 ] || { echo "usage: vkcube.sh [-d] [-i ICD] [-o OUT]" >&2; exit 2; }
+[ $# -eq 0 ] || { echo "usage: vkcube.sh [-d] [-i ICD] [-m OUTPUT=MODE] [-o OUT]" >&2; exit 2; }
+case $mode in
+    '') ;;
+    *=*) [ "$display" = 0 ] || { echo "vkcube: -d takes no -m" >&2; exit 2; } ;;
+    *) echo "vkcube: -m wants OUTPUT=MODE" >&2; exit 2 ;;
+esac
 for program in vkcube weston weston-screenshooter gcc python3; do
     command -v "$program" > /dev/null || { echo "vkcube: no $program" >&2; exit 1; }
 done
@@ -160,8 +171,13 @@ if [ "$display" = 0 ]; then
     WAYLAND_DISPLAY=wayland-vkcube
     export XDG_RUNTIME_DIR WAYLAND_DISPLAY
     mkdir -m 700 "$XDG_RUNTIME_DIR"
+    config=--no-config
+    if [ -n "$mode" ]; then
+        printf '[output]\nname=%s\nmode=%s\n' "${mode%%=*}" "${mode#*=}" > "$out/weston.ini"
+        config=--config=$out/weston.ini
+    fi
     LIBSEAT_BACKEND=noop setsid weston --backend=drm --renderer=gl --shell=kiosk --idle-time=0 \
-        --no-config --debug --socket="$WAYLAND_DISPLAY" --log="$out/weston.log" < /dev/null > /dev/null 2>&1 &
+        "$config" --debug --socket="$WAYLAND_DISPLAY" --log="$out/weston.log" < /dev/null > /dev/null 2>&1 &
     RUNNER_WESTON=$!
     tries=0
     until [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; do
@@ -171,6 +187,7 @@ if [ "$display" = 0 ]; then
         sleep 0.1
     done
     runner_record "compositor $(weston --version 2>/dev/null) drm gl kiosk"
+    [ -z "$mode" ] || runner_record "mode $mode"
     runner_record "renderer $(sed -n 's/.*GL renderer: *//p' "$out/weston.log" | head -n 1)"
 else
     [ -S "${XDG_RUNTIME_DIR:?}/${WAYLAND_DISPLAY:?}" ] || runner_die "no caller's Wayland display"

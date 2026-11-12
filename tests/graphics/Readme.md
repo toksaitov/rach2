@@ -63,7 +63,7 @@ The runners draw on the guest's GPU when told to: `piglit.sh -g` and `webgl.sh -
 
 On Rach2 the `virgl` suite, `tests/run virgl`, runs them, a case such as `machine.virgl.renderer`, `machine.virgl.piglit-07`, `machine.virgl.deqp-gles31-sample`, `machine.virgl.webgl-chromium-webgl2-03` or `machine.virgl.device-lost` ([virgl's GL](#virgls-gl)).
 
-[`runners/vkcube.sh`](runners/vkcube.sh) presents vkcube to a Weston of its own on the guest's card, as root, holds it at two frames and reads each back inside the guest; `-i` names the Vulkan ICD file to use alone and `-o` the output. `debian.sh vkcube` runs it in the Debian guest, as the reference was made, and the `vkpresent` suite, `tests/run vkpresent`, on Rach2, as the case `machine.vkpresent.vkcube` ([vkcube presenting](#vkcube-presenting)):
+[`runners/vkcube.sh`](runners/vkcube.sh) presents vkcube to a Weston of its own on the guest's card, as root, holds it at two frames and reads each back inside the guest; `-i` names the Vulkan ICD file to use alone, `-m OUTPUT=MODE` a mode of the connector's list for Weston's output, such as `Virtual-1=1360x768@60`, through a `weston.ini` of that one `[output]` section, kept in the output, in place of `--no-config`, and `-o` the output. `debian.sh vkcube` runs it in the Debian guest, as the reference was made, and the `vkpresent` suite, `tests/run vkpresent`, on Rach2, as the case `machine.vkpresent.vkcube` ([vkcube presenting](#vkcube-presenting)):
 
     sh tests/graphics/runners/debian.sh vkcube -p venus -c 8 OUT \
         -i /usr/share/vulkan/icd.d/venus_icd.x86_64.json
