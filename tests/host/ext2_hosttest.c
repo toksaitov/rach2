@@ -4366,6 +4366,7 @@ static void overlap_punch_row(void)
 #include "ext2_pair_rows.h"
 #include "ext2_service_rows.h"
 #include "ext2_group_rows.h"
+#include "ext2_write_rows.h"
 
 /* The host heap's limit on one allocation, 0 for none, and the page
  * allocations it grants before it fails, -1 for no limit
@@ -5800,6 +5801,7 @@ static const struct {
     {"--pairs-only", pair_rows},
     {"--service-only", service_rows},
     {"--groups-only", group_rows},
+    {"--writes-only", write_lock_rows},
     {"--times-only", time_rows},
     {"--cache-partial-only", cache_partial_row},
     {"--xattr-only", xattr_rows},
@@ -5810,7 +5812,8 @@ static const struct {
  * and run the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes
  * and at 2 KiB, the 1 KiB levels, the failures, the write sequences, the
  * order rows, the writer's failures, the dirty volumes, the matrix and the
- * batch rows, the node rows, the fsync rows and the group rows. An option
+ * batch rows, the node rows, the fsync rows, the group rows and the rows
+ * of one file's writes without the big lock. An option
  * of `only_rows` runs its rows alone; `--capture-only` checks independent
  * tool output capture alone. Returns 0, and calls `fix_passed`, when every
  * row passed.
@@ -5863,6 +5866,7 @@ int main(int argc, char **argv)
     pair_rows();
     service_rows();
     group_rows();
+    write_lock_rows();
 
 finish:
     if (image) {
