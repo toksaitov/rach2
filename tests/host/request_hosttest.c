@@ -143,7 +143,35 @@ void *kzalloc(size_t size)
     return 0;
 }
 
-/** Release a record, retaining its bytes to expose premature reuse. */
+/* The lists of page frames a read into frames copies (`req_new`), each of
+ * up to LIST_FRAMES frames, the first free one given and its address
+ * reused at once. */
+#define LIST_SLOTS  4
+#define LIST_FRAMES 8
+static uintptr_t lists[LIST_SLOTS][LIST_FRAMES];
+static int list_used[LIST_SLOTS];
+static int list_count; /* lists given out */
+
+/** Give a request's list of frames, which is the one other allocation the
+ *  pool makes from the heap. */
+void *kmalloc(size_t size)
+{
+    int i;
+
+    check(size > 0 && size <= sizeof(lists[0]) && size % sizeof(uintptr_t) == 0,
+          "the heap is asked only for a list of up to eight frames");
+    for (i = 0; i < LIST_SLOTS; i++) {
+        if (!list_used[i]) {
+            list_used[i] = 1;
+            list_count++;
+            return lists[i];
+        }
+    }
+    return 0;
+}
+
+/** Release a record or a list of frames, retaining its bytes to expose
+ *  premature reuse. */
 void kfree(void *p)
 {
     int i;
@@ -155,7 +183,62 @@ void kfree(void *p)
             return;
         }
     }
+    for (i = 0; i < LIST_SLOTS; i++) {
+        if (p == lists[i] && list_used[i]) {
+            list_used[i] = 0;
+            list_count--;
+            return;
+        }
+    }
     abort();
+}
+
+/* The model's page frames that a read into frames fills, at the physical
+ * addresses (i + 1) * PAGE_SIZE, each with its count of references; a
+ * count of 0 is a free frame, whose bytes nothing may write. */
+#define USER_FRAMES 4
+static uint8_t user_frames[USER_FRAMES][PAGE_SIZE];
+static int frame_refs[USER_FRAMES];
+
+/** The index of the model frame at `phys`, which must be one. */
+static int frame_index(uintptr_t phys)
+{
+    check(phys % PAGE_SIZE == 0 && phys >= PAGE_SIZE && phys <= USER_FRAMES * PAGE_SIZE,
+          "a frame named is one of the model's");
+    return (int)(phys / PAGE_SIZE) - 1;
+}
+
+/** Take a reference on a frame in use. */
+void frame_ref(uintptr_t phys)
+{
+    int i = frame_index(phys);
+
+    check(frame_refs[i] > 0, "a reference is taken only on a frame in use");
+    frame_refs[i]++;
+}
+
+/** Drop a reference; the last one frees the frame. */
+void free_frame(uintptr_t phys)
+{
+    int i = frame_index(phys);
+
+    check(frame_refs[i] > 0, "a frame's references are dropped once each");
+    frame_refs[i]--;
+}
+
+/** The bytes of a frame in use, which the model maps at its own address. */
+void *kmap_temp(uintptr_t phys)
+{
+    int i = frame_index(phys);
+
+    check(frame_refs[i] > 0, "only a frame in use is mapped");
+    return user_frames[i];
+}
+
+/** Nothing to unmap: `kmap_temp` maps nothing. */
+void kunmap_temp(void *va)
+{
+    (void)va;
 }
 
 /** Allocate the first free DMA page. */
@@ -932,7 +1015,7 @@ static uint8_t *kept_limit(uint8_t *first)
 
     flags = kirq_save();
     for (i = 0; i < 5; i++) {
-        five[i] = req_new(16);
+        five[i] = req_new(16, NULL);
         check(five[i] && five[i]->pages == REQ_KEEP_PAGES, "each of five requests gets 32 pages");
         pages[i] = five[i]->page;
     }
@@ -961,7 +1044,7 @@ static void kept_drain(uint8_t *last)
     struct block_request *r;
     uint32_t flags = kirq_save();
 
-    r = req_new(16);
+    r = req_new(16, NULL);
     kirq_restore(flags);
     check(r && r->page == last && keep_count == 3 && heap_calls == 5,
           "the buffer kept last is taken first");
@@ -1019,6 +1102,130 @@ static void kept_buffers(void)
     other.max_sectors = 0;
 }
 
+/* The device given page frames (`BLOCK_FRAMES`): the request it holds and
+ * whether its wait answers at once or lets the request be quarantined. */
+static struct block_request *frames_held;
+static uint32_t frames_generation;
+static int frames_expire;
+
+/** A controller given frames: it records the request, which must name the
+ *  frames in place of a buffer, and answers in the caller's wait. */
+static int frames_submit(block_device_t *dev, struct block_request *r)
+{
+    (void)dev;
+    check(r->frames && !r->page && r->count == 16,
+          "a read into frames names the caller's frames and has no buffer");
+    frames_held = r;
+    frames_generation = r->generation;
+    return 0;
+}
+
+/** The device fills each frame of `r` with `byte`, as its DMA would, which
+ *  only a frame some holder still keeps may take. */
+static void frames_dma(struct block_request *r, uint8_t byte)
+{
+    uint32_t i;
+
+    for (i = 0; i < 2; i++) {
+        check(frame_refs[frame_index(r->frames[i])] > 0,
+              "the device writes only into frames a holder keeps");
+        k_memset(user_frames[frame_index(r->frames[i])], byte, PAGE_SIZE);
+    }
+}
+
+/** Answer the read into frames from the device's interrupt, or tick it to
+ *  its last deadline, which quarantines it with the frames still the
+ *  device's. */
+static void frames_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    struct block_request *r = arg;
+    uint32_t flags;
+
+    check(r == frames_held && !cond(arg) && !irq_depth && wq == r->waiter,
+          "the caller of a read into frames waits on its own request's queue");
+    check(frame_refs[0] == 2 && frame_refs[1] == 2,
+          "the request holds a reference on each of its frames");
+    if (frames_expire) {
+        advance(8);
+        check(r->state == BLOCK_REQ_QUARANTINED && r->held_by_device && cond(arg),
+              "the last deadline quarantines the read and wakes its caller");
+        return;
+    }
+    frames_dma(r, 0x3C);
+    flags = kirq_save();
+    block_request_complete(r, r->generation, 0);
+    kirq_restore(flags);
+    check(cond(arg), "the completion ends the caller's wait");
+}
+
+/**
+ * A read into page frames, as the file page cache reads a window
+ * (`block_read_frames`): the device fills the frames themselves, with no
+ * buffer and no copy, and the request's references come back at the end; a
+ * read given up on keeps its references until the device answers late, so
+ * that a frame the caller let go of is not freed, nor read into again,
+ * while the device may still write it, as Linux leaves a folio locked until
+ * its bio ends. The caller then reads the page again into a new frame
+ * (`disk_read_around`).
+ */
+static void frames_read(void)
+{
+    block_device_t dev = other;
+    uintptr_t want[2] = {PAGE_SIZE, 2 * PAGE_SIZE};
+    process_t process;
+
+    dev.flags = BLOCK_FRAMES;
+    dev.submit = frames_submit;
+    dev.max_sectors = 16;
+    dev.deadline_ticks = 4;
+    dev.deadline_limit = 2;
+    dev.stalled = 0;
+    k_memset(&process, 0, sizeof(process));
+    process.in_syscall = 1;
+    cpu_table[0].current = &process;
+    wait_step = frames_wait;
+    frame_refs[0] = frame_refs[1] = 1;
+
+    frames_expire = 0;
+    check(block_read_frames(&dev, 0, 16, want) == 0 && user_frames[0][0] == 0x3C &&
+              user_frames[1][PAGE_SIZE - 1] == 0x3C,
+          "a read into frames lands in the caller's frames");
+    check(frame_refs[0] == 1 && frame_refs[1] == 1 && list_count == 0 && record_count == 0 &&
+              live == 0,
+          "a completed read gives back its references, its list and its record");
+
+    frames_expire = 1;
+    check(block_read_frames(&dev, 0, 16, want) == -EIO, "a quarantined read into frames fails");
+    check(frame_refs[0] == 2 && frame_refs[1] == 2 && list_count == 1 && record_count == 1 &&
+              frames_held->held_by_device && !frames_held->held_by_caller,
+          "a quarantined read keeps its references on the frames the device owns");
+    free_frame(want[0]);
+    free_frame(want[1]);
+    check(frame_refs[0] == 1 && frame_refs[1] == 1,
+          "the caller lets go of the frames, which stay held for the device");
+    check(refused(&dev) && dev.stalled, "the stalled device admits no other request meanwhile");
+    frame_refs[2] = 1;
+    want[0] = 3 * PAGE_SIZE;
+    frames_dma(frames_held, 0x77);
+    check(user_frames[0][0] == 0x77 && user_frames[2][0] == 0,
+          "the late transfer lands in the old frames, not the new one");
+    block_request_complete(frames_held, frames_generation, 0);
+    check(frame_refs[0] == 0 && frame_refs[1] == 0 && list_count == 0 && record_count == 0 &&
+              live == 0 && !dev.stalled,
+          "the late answer frees the old frames, the list and the record and clears the stall");
+    frames_expire = 0;
+    k_memset(user_frames[2], 0, PAGE_SIZE);
+    frame_refs[3] = 1;
+    want[1] = 4 * PAGE_SIZE;
+    check(block_read_frames(&dev, 0, 16, want) == 0 && user_frames[2][0] == 0x3C &&
+              user_frames[3][0] == 0x3C && frame_refs[2] == 1 && frame_refs[3] == 1,
+          "the read again goes into the new frames");
+    free_frame(want[0]);
+    free_frame(want[1]);
+    wait_step = 0;
+    cpu_table[0].current = 0;
+}
+
 /** Install the fixture, run the lifecycle rows and check every release. */
 int main(void)
 {
@@ -1049,8 +1256,9 @@ int main(void)
     flush_deadlines();
     pool_deadline();
     kept_buffers();
+    frames_read();
     check(record_count == 0 && frame_count == 0 && heap_count == 0 && keep_count == 0 &&
-              live == 0 && quarantined_count == 0,
+              list_count == 0 && live == 0 && quarantined_count == 0,
           "every request, page and buffer is released at the end");
     for (i = 0; i < LAG_QUEUE; i++) {
         check(!queue[i].used, "every captured answer and duplicate is consumed");
