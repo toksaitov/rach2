@@ -6777,80 +6777,126 @@ static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count, siz
     return rc;
 }
 
-/** Read up to `count` bytes of the file of `ofd` at `pos` into the user's
- * `buf` through the file page cache (`filecache_file_read`) or the file
- * system, which a caller without the big lock reaches with it, since the
- * type then writes the user's buffer itself. The bytes read, 0 at the end,
- * or the type's error. */
-static int32_t file_read_plain(struct open_file *ofd, char __user *buf, uint32_t count,
-                               uint64_t pos)
+/** Whether a read of the file of `ofd` must take its next page from the
+ * pages in memory of the file's shared mappings: whether a shared mapping
+ * through a descriptor open for writing has mapped the file
+ * (`filemap_disk_stores`), which another thread may have done while the
+ * read slept on an earlier page. Without the big lock. */
+static int file_read_cut(const struct open_file *ofd)
 {
-    int32_t bytes_read;
-
-    if (!filecache_file_read(ofd, buf, count, pos, &bytes_read)) {
-        int big = !bkl_held();
-
-        if (big) {
-            bkl_enter();
-        }
-        bytes_read = vfs_read(ofd->vmnt, ofd->fhandle, (char __force *)buf, count, pos);
-        if (big) {
-            bkl_exit();
-        }
-    }
-    return bytes_read;
+    return filemap_disk_stores(ofd->vmnt, ofd->ino);
 }
 
 /**
  * Read up to `count` bytes of the file of `ofd` at `pos` into the user's
- * `buf`, with the description's lock held. A file that mappings hold pages
- * of (`filemap_disk_mapped`) is read a page at a time, each page from the
- * mappings' page in memory when there is one (`filemap_read_resident`), up
- * to the size the file has at the call, as Linux's filemap_read reads the
- * shared folio, so that the read sees their stores, those an earlier buffer
- * of the same readv made among them; any other page, and any other file, is
- * read by `file_read_plain`. A caller without the big lock found no
- * writable shared mapping of the file (`filemap_disk_stores`), so the
- * file's pages in memory, if any, equal the file. The bytes read, which
- * stop at the first page that fails after some were read, 0 at the end, or
- * the type's error, or -ENOMEM for a page in memory that no temporary
- * mapping is free for.
+ * `buf` through the file page cache (`filecache_file_read`) or the file
+ * system, which a caller without the big lock reaches with it, since the
+ * type then writes the user's buffer itself. Before each page after the
+ * first the read stops when `file_read_cut` says the page must come from a
+ * mapping's page in memory; the file system's read of an ext2 file, the one
+ * type a shared mapping keeps pages in memory of, goes a page at a time for
+ * that. The bytes read, 0 at the end, or the type's error.
  */
-static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_t count,
-                                uint64_t pos)
+static int32_t file_read_plain(struct open_file *ofd, char __user *buf, uint32_t count,
+                               uint64_t pos)
 {
-    struct vfs_stat st;
-    uint32_t done = 0;
+    uint32_t done = 0, piece;
     int32_t r = 0;
+    int big, paged;
 
-    if (count == 0 || !bkl_held() || !filemap_disk_mapped(ofd->vmnt, ofd->ino)) {
-        return file_read_plain(ofd, buf, count, pos);
-    }
-    r = vfs_getattr(ofd->vmnt, ofd->vnode, &st);
-    if (r != 0) {
+    if (filecache_file_read(ofd, buf, count, pos, &r, file_read_cut)) {
         return r;
     }
-    if (pos >= st.size) {
-        return 0;
+    big = !bkl_held();
+    paged = vfs_mount_base(ofd->vmnt)->type == &vfs_ext2_type;
+    if (big) {
+        bkl_enter();
     }
-    if (count > st.size - pos) {
-        count = (uint32_t)(st.size - pos);
+    do {
+        piece = count - done;
+        if (paged && piece > PAGE_SIZE - (uint32_t)((pos + done) % PAGE_SIZE)) {
+            piece = PAGE_SIZE - (uint32_t)((pos + done) % PAGE_SIZE);
+        }
+        if (done > 0 && file_read_cut(ofd)) {
+            break;
+        }
+        r = vfs_read(ofd->vmnt, ofd->fhandle, (char __force *)buf + done, piece, pos + done);
+        if (r <= 0) {
+            break;
+        }
+        done += (uint32_t)r;
+    } while ((uint32_t)r == piece && done < count);
+    if (big) {
+        bkl_exit();
+    }
+    return done > 0 ? (int32_t)done : r;
+}
+
+/**
+ * Read up to `count` bytes of the file of `ofd` at `pos` into the user's
+ * `buf`, with the description's lock held, each page from where its newest
+ * bytes are when the read reaches it, as Linux's filemap_read looks each
+ * folio up in the file's pages (mm/filemap.c:2649-2700). While no shared
+ * mapping through a descriptor open for writing has mapped the file
+ * (`file_read_cut`), its pages in memory, if any, equal the file, and
+ * `file_read_plain` reads it, asking again before each page, since such a
+ * mapping made while the read slept on the disk may have stored into a
+ * later page. From the first page where one has, the read holds the big
+ * lock, which it takes when the caller did not and records in `*big` for
+ * the caller to give back, and goes a page at a time, up to the size the
+ * file has then: each page comes from the mappings' page in memory when
+ * there is one (`filemap_read_resident`), so that the read sees their
+ * stores, those an earlier buffer of the same readv made among them, and
+ * any other from `file_read_plain`, whose bytes are the page's when it was
+ * chosen, since a mapping that brings the page in while that read sleeps
+ * can hold only stores made after it. The bytes read, which stop at the
+ * first page that fails after
+ * some were read, 0 at the end, or the type's error, or -ENOMEM for a page
+ * in memory that no temporary mapping is free for.
+ */
+static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_t count,
+                                uint64_t pos, int *big)
+{
+    struct vfs_stat st;
+    uint32_t done = 0, piece;
+    int32_t r = 0;
+    int paged = 0;
+
+    if (count == 0) {
+        return file_read_plain(ofd, buf, count, pos);
     }
     while (done < count) {
-        uint32_t piece = PAGE_SIZE - (uint32_t)((pos + done) % PAGE_SIZE);
-
-        if (piece > count - done) {
-            piece = count - done;
+        if (!paged && file_read_cut(ofd)) {
+            if (!bkl_held()) {
+                bkl_enter();
+                *big = 1;
+            }
+            r = vfs_getattr(ofd->vmnt, ofd->vnode, &st);
+            if (r != 0 || pos + done >= st.size) {
+                break;
+            }
+            if (count - done > st.size - (pos + done)) {
+                count = done + (uint32_t)(st.size - (pos + done));
+            }
+            paged = 1;
         }
-        r = filemap_read_resident(ofd->vmnt, ofd->ino, pos + done, buf + done, piece);
-        if (r == 0) {
+        piece = count - done;
+        if (paged) {
+            if (piece > PAGE_SIZE - (uint32_t)((pos + done) % PAGE_SIZE)) {
+                piece = PAGE_SIZE - (uint32_t)((pos + done) % PAGE_SIZE);
+            }
+            r = filemap_read_resident(ofd->vmnt, ofd->ino, pos + done, buf + done, piece);
+            if (r == 0) {
+                r = file_read_plain(ofd, buf + done, piece, pos + done);
+            }
+        } else {
             r = file_read_plain(ofd, buf + done, piece, pos + done);
         }
         if (r <= 0) {
             break;
         }
         done += (uint32_t)r;
-        if ((uint32_t)r < piece) {
+        if ((uint32_t)r < piece && (paged || !file_read_cut(ofd))) {
             break;
         }
     }
@@ -6905,8 +6951,9 @@ static int32_t file_read_unwritable(struct open_file *ofd, uint64_t at)
  * KRFFS relocation cannot move the handle while it is in use.
  *
  * A file `file_vfs_unlocked` admits is read without the big lock, which the
- * read takes while a shared mapping may have stored into the file's pages,
- * to read them (`filemap_disk_stores`), and for inotify's report. A private
+ * read takes from the first page a shared mapping may have stored into the
+ * file's pages, to read them (`file_read_locked`), and for inotify's
+ * report. A private
  * mapping of the file or a shared one through a descriptor open only for
  * reading, whose pages equal the file, or a mapping of another file does
  * not make the read take it: Linux's filemap_read finds
@@ -6934,17 +6981,13 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
     one[0].iov_base = (__force uintptr_t)buf;
     one[0].iov_len = count;
     room = iov_prefix(one, 1, 1);
-    if (!bkl_held() && filemap_disk_stores(ofd->vmnt, ofd->ino)) {
-        bkl_enter();
-        big = 1;
-    }
     fd_ofd_lock(ofd);
     if (!at && rw_offset_end(entry, asked) != 0) {
         bytes_read = -EINVAL;
     } else if (room == 0 && count > 0) {
         bytes_read = file_read_unwritable(ofd, at ? *at : ofd->offset);
     } else {
-        bytes_read = file_read_locked(ofd, buf, room, at ? *at : ofd->offset);
+        bytes_read = file_read_locked(ofd, buf, room, at ? *at : ofd->offset, &big);
     }
     if (bytes_read > 0 && !at) {
         ofd->offset += (uint64_t)bytes_read;
@@ -13987,11 +14030,12 @@ out:
 /** Read the elements of the imported vector `iov` of `count` from the file
  * of `ofd`, whose description's lock the caller holds, at the description's
  * offset, which moves past the bytes read, for `pos` -1, or at `pos`, each
- * element where the one before it ended (`file_read_locked`). Return the
+ * element where the one before it ended (`file_read_locked`), which sets
+ * `*big` when it takes the big lock for the caller to give back. Return the
  * bytes read, stopping at the first element not filled, or when none was
  * read 0 at the end of the file or the read's error. */
 static long iov_file_elements_read(struct open_file *ofd, const struct kernel_iovec *iov, int count,
-                                   long long pos)
+                                   long long pos, int *big)
 {
     uint64_t at = (uint64_t)pos;
     long total = 0;
@@ -14004,8 +14048,8 @@ static long iov_file_elements_read(struct open_file *ofd, const struct kernel_io
         if (len == 0) {
             continue;
         }
-        r = file_read_locked(ofd, (char __user *)iov[i].iov_base, len,
-                             pos == -1 ? ofd->offset : at);
+        r = file_read_locked(ofd, (char __user *)iov[i].iov_base, len, pos == -1 ? ofd->offset : at,
+                             big);
         if (r <= 0) {
             break;
         }
@@ -14052,6 +14096,7 @@ static long iov_file_read(fd_entry_t *entry, uintptr_t addr, int count, long lon
     struct kernel_iovec local[8], *iov = local;
     struct open_file *ofd = entry->ofd;
     uint32_t wanted = 0, room = 0;
+    int big = 0;
     long rc;
 
     if (count < 0 || count > IOV_MAX_LOCAL) {
@@ -14081,11 +14126,14 @@ static long iov_file_read(fd_entry_t *entry, uintptr_t addr, int count, long lon
         } else if (room == 0) {
             rc = file_read_unwritable(ofd, pos == -1 ? ofd->offset : (uint64_t)pos);
         } else {
-            rc = iov_file_elements_read(ofd, iov, count, pos);
+            rc = iov_file_elements_read(ofd, iov, count, pos, &big);
         }
         fd_ofd_unlock(ofd);
         if (rc > 0 && inotify_watches) {
             inotify_desc(ofd, IN_ACCESS);
+        }
+        if (big) {
+            bkl_exit();
         }
     }
     if (iov != local) {
