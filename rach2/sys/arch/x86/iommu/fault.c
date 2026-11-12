@@ -328,8 +328,11 @@ int vtd_fault_start(void)
 
 /** A fault event that comes while FECTL.IM is set waits in FECTL.IP and is
  * sent as the mask is cleared (VT-d specification, the fault event control
- * register), so none is lost across the hold. Nothing while no vector was
- * taken. */
+ * register), so none is lost across the hold. Each write is read back, so
+ * that the posted write reaches the unit before the caller moves the APIC,
+ * as Linux's dmar_msi_mask and dmar_msi_unmask read it back (Linux
+ * 6.12.115, drivers/iommu/intel/dmar.c, lines 1866 to 1893). Nothing while
+ * no vector was taken. */
 void vtd_fault_hold(int hold)
 {
     int i;
@@ -339,6 +342,7 @@ void vtd_fault_hold(int hold)
     }
     for (i = 0; i < vtd_nunits; i++) {
         vtd_hw_write32(vtd_units[i].regs, VTD_FECTL, hold ? VTD_FECTL_IM : 0u);
+        (void)vtd_hw_read32(vtd_units[i].regs, VTD_FECTL); /* flush the posted write */
     }
 }
 
