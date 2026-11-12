@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 13, 2026
 .Dt GETDENTS64 2
 .Os
 .Sh NAME
@@ -151,6 +151,10 @@ ext2 lists its stored directory entries, including
 and
 .Ql .. ,
 and skips unused entries.
+After a directory change or a seek, it advances a cursor inside a record
+to the next current record boundary in that block.
+A name created or moved during enumeration can be omitted or repeated.
+.Pp
 FAT32 lists live entries, using a valid long name when it fits or the
 short name otherwise; it skips deleted entries and volume labels.
 Its stored

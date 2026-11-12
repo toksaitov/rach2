@@ -5,12 +5,14 @@
 
 #include "ext2_internal.h"
 
-/** The `open` of `vfs_ops`: the handle is the node, held once more; `flags`
- * is not read. A device node is -EACCES, since devices are opened in
- * `/dev`. */
+/** The `open` of `vfs_ops`: a new handle holding the node once more, with
+ * a directory cursor not yet validated; `flags` is not read. Returns
+ * -ENOMEM when the handle cannot be allocated, or -EACCES for a device
+ * node, since devices are opened in `/dev`. */
 int ext2_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
 {
     struct ext2_node *n = node;
+    struct ext2_handle *h;
     uint32_t type = n->mode & S_IFMT_;
 
     (void)mnt;
@@ -18,8 +20,14 @@ int ext2_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
     if (type == S_IFCHR_ || type == S_IFBLK_) {
         return -EACCES;
     }
+    h = kzalloc(sizeof(*h));
+    if (!h) {
+        return -ENOMEM;
+    }
+    h->node = n;
+    h->cursor = ~0u;
     ext2_node_ref(n, 1);
-    *handle = node;
+    *handle = h;
     return 0;
 }
 
@@ -30,8 +38,11 @@ int ext2_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
  * a final put takes the big lock for the node table. */
 void ext2_release(struct vfs_mount *mnt, void *handle)
 {
+    struct ext2_handle *h = handle;
+
     (void)ext2_writeback_drain(ext2_em_of(mnt));
-    ext2_put(mnt, handle);
+    ext2_put(mnt, h->node);
+    kfree(h);
 }
 
 /* The most times a read or a write brings the pages of a user buffer in

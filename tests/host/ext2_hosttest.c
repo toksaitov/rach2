@@ -3204,7 +3204,7 @@ static void held_rmdir_row(void)
     struct vfs_dirent ent;
     uint32_t cursor = 0;
     int err;
-    void *d, *gone;
+    void *d, *gone, *h = 0;
 
     wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
     use_image(wimg, wbytes);
@@ -3217,9 +3217,12 @@ static void held_rmdir_row(void)
     check(OPS->rmdir(&mnt, mnt.root, "held") == 0, "an rmdir of the held directory succeeds");
     gone = walk("/held", &err);
     check(!gone && err == -ENOENT, "and its name is gone");
-    check(OPS->readdir(&mnt, d, &cursor, &ent) == -ENOENT &&
+    check(OPS->open(&mnt, d, 0, &h) == 0 && OPS->readdir(&mnt, h, &cursor, &ent) == -ENOENT &&
               OPS->mkdir(&mnt, d, "in", 0755) == -ENOENT,
           "and the removed directory lists as ENOENT and takes no entry");
+    if (h) {
+        OPS->release(&mnt, h);
+    }
     OPS->put(&mnt, d);
     check(unmount_rw() == 0 && e2fsck_clean(wimg),
           "and its inode goes at the last put, leaving the volume clean");

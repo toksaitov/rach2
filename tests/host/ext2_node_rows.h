@@ -417,9 +417,15 @@ static void stuck_at_read(void)
  * lock, as the VFS does, into slot 1. */
 static void write_second(void)
 {
-    OPS->lock_node(&mnt, row_nodes[0]);
-    row_rc[1] = OPS->write(&mnt, row_nodes[0], pattern, 3000, 0);
-    OPS->unlock_node(&mnt, row_nodes[0]);
+    void *h = 0;
+
+    row_rc[1] = OPS->open(&mnt, row_nodes[0], 2, &h);
+    if (row_rc[1] == 0) {
+        OPS->lock_node(&mnt, row_nodes[0]);
+        row_rc[1] = OPS->write(&mnt, h, pattern, 3000, 0);
+        OPS->unlock_node(&mnt, row_nodes[0]);
+        OPS->release(&mnt, h);
+    }
     row_done = 1;
 }
 

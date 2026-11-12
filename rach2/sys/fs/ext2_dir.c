@@ -25,6 +25,14 @@ struct ext2_window {
     int64_t index;
 };
 
+/** Advance the directory's entry version before a write that may change
+ * cached bytes even when it returns an error. The caller holds its lock. */
+static void dir_changed(struct ext2_node *d)
+{
+    ext2_assert_node_locked(d);
+    d->dir_version++;
+}
+
 /** A window for a scan of `em`'s directories; one with no copy, which
  * reads each entry from the cache, when the heap has no room. */
 static void window_open(struct ext2_mount *em, struct ext2_window *w)
@@ -188,16 +196,17 @@ static int dir_lookup(struct ext2_mount *em, struct ext2_node *d, const char *na
 }
 
 /** Whether the entry at byte `at` of directory `d` still names inode `ino`
- * as `name`, read under `d`'s lock: 1, 0, or -EIO. */
+ * as `name`, read under `d`'s lock: 1, 0, or -EIO. A changed `version`
+ * returns 0 before parsing an offset that a removed record may cover. */
 static int dir_names_at(struct ext2_mount *em, struct ext2_node *d, uint32_t at, const char *name,
-                        uint32_t ino)
+                        uint32_t ino, uint64_t version)
 {
     struct ext2_scan sc;
     uint32_t cursor = at;
     int got;
 
     ext2_node_lock(d);
-    got = dir_scan(em, d, &cursor, &sc);
+    got = d->dir_version == version ? dir_scan(em, d, &cursor, &sc) : 0;
     ext2_node_unlock(d);
     return got <= 0 ? got : sc.ino == ino && names_equal(sc.name, name);
 }
@@ -220,6 +229,7 @@ int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
     struct ext2_node *d = dir ? dir : mnt->root;
     struct ext2_node *n;
     uint32_t ino = 0, at = 0;
+    uint64_t version = 0;
     int rc, kept;
 
     if ((d->mode & S_IFMT_) != S_IFDIR_) {
@@ -232,6 +242,7 @@ int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
         } else {
             ext2_node_lock(d);
             rc = dir_lookup(em, d, name, &ino, &at);
+            version = d->dir_version;
             ext2_node_unlock(d);
         }
         if (rc <= 0) {
@@ -247,7 +258,7 @@ int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
         if (!n) {
             return rc;
         }
-        rc = kept ? 1 : dir_names_at(em, d, at, name, ino);
+        rc = kept ? 1 : dir_names_at(em, d, at, name, ino, version);
         if (rc == 1) {
             *node = n;
             return 0;
@@ -314,23 +325,64 @@ static int dir_next(struct ext2_mount *em, struct ext2_node *d, uint32_t *cursor
 }
 
 /**
+ * Move `*cursor` to the first current record boundary at or after it, from
+ * the start of its block, under `d`'s lock. Returns 0 or -EIO. A removal
+ * can merge the saved offset into a name written later in that space;
+ * only the block's current boundaries may be parsed as headers.
+ */
+static int dir_realign(struct ext2_mount *em, struct ext2_node *d, uint32_t *cursor)
+{
+    uint32_t at = *cursor & ~(em->block_size - 1u);
+    struct ext2_scan sc;
+    int got;
+
+    if (*cursor >= d->size) {
+        return 0;
+    }
+    while (at < *cursor) {
+        got = dir_scan(em, d, &at, &sc);
+        if (got < 0) {
+            return got;
+        }
+        if (got == 0) {
+            break;
+        }
+    }
+    *cursor = at;
+    return 0;
+}
+
+/**
  * The `readdir` of `vfs_ops`: the next entry with an inode of directory
  * `handle` at `*cursor`, a byte offset, `.` and `..` included. Its type comes
  * from the entry's file-type byte when the volume has the filetype feature,
  * and from the inode's mode otherwise, which costs a read of the inode. 1
  * with `ent` filled, 0 at the end, -ENOTDIR, -ENOENT for a directory removed
- * while held, or -EIO. Takes the directory's lock (`dir_next`).
+ * while held, or -EIO. Under the directory's lock, a version mismatch or
+ * a seek realigns the cursor from its block's start before `dir_next`.
  */
 int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vfs_dirent *ent)
 {
-    struct ext2_node *d = handle;
+    struct ext2_handle *h = handle;
+    struct ext2_node *d = h->node;
+    struct ext2_mount *em = ext2_em_of(mnt);
     int rc;
 
     if ((d->mode & S_IFMT_) != S_IFDIR_) {
         return -ENOTDIR;
     }
     ext2_node_lock(d);
-    rc = dir_next(ext2_em_of(mnt), d, cursor, ent);
+    rc = d->unlinked ? -ENOENT : 0;
+    if (rc == 0 && (h->dir_version != d->dir_version || h->cursor != *cursor)) {
+        rc = dir_realign(em, d, cursor);
+    }
+    if (rc == 0) {
+        rc = dir_next(em, d, cursor, ent);
+    }
+    if (rc >= 0) {
+        h->dir_version = d->dir_version;
+        h->cursor = *cursor;
+    }
     ext2_node_unlock(d);
     return rc;
 }
@@ -883,6 +935,7 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
     if (rc != 0) {
         return rc;
     }
+    dir_changed(d);
     window_open(em, &w);
     for (;;) {
         uint32_t here = cursor;
@@ -978,6 +1031,7 @@ static int dir_remove_at(struct ext2_mount *em, struct ext2_node *d, uint32_t at
     if (rc != 0) {
         return rc;
     }
+    dir_changed(d);
     if (at % em->block_size == 0) {
         uint8_t zero[4] = {0, 0, 0, 0};
 
@@ -1053,6 +1107,7 @@ static int dir_set_dotdot(struct ext2_mount *em, struct ext2_node *d, uint32_t p
             if (rc != 0) {
                 return rc;
             }
+            dir_changed(d);
             LE32_PUT(raw, parent);
             return ext2_write_bytes(em, off, raw, 4, 1);
         }
@@ -1517,6 +1572,7 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         rc = ext2_write_bytes(em, (uint64_t)b * em->block_size, 0, em->block_size, 0);
     }
     if (rc == 0) {
+        dir_changed(n);
         k_memset(head, 0, sizeof(head));
         LE32_PUT(head, n->ino);
         LE16_PUT(head + 4, 12);
@@ -1948,6 +2004,7 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
             rc = dir_unindex(em, nd);
         }
         if (rc == 0) {
+            dir_changed(nd);
             LE32_PUT(raw, n->ino);
             rc = ext2_write_bytes(em, off, raw, 4, 1);
         }

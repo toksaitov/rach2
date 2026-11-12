@@ -2831,11 +2831,12 @@ static int admit_setattr(struct vfs_mount *mnt, void *node, int what, const stru
 static int32_t admit_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                            uint64_t offset)
 {
+    struct ext2_handle *h = handle;
     int32_t rc;
 
-    em_enter_node(ext2_em_of(mnt), handle);
-    rc = ext2_file_write(mnt, handle, buf, count, offset);
-    em_finish_node(ext2_em_of(mnt), handle);
+    em_enter_node(ext2_em_of(mnt), h->node);
+    rc = ext2_file_write(mnt, h->node, buf, count, offset);
+    em_finish_node(ext2_em_of(mnt), h->node);
     return rc;
 }
 
@@ -2843,11 +2844,12 @@ static int32_t admit_write(struct vfs_mount *mnt, void *handle, const void *buf,
  * lock. */
 static int admit_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
+    struct ext2_handle *h = handle;
     int rc;
 
-    em_enter_node(ext2_em_of(mnt), handle);
-    rc = ext2_truncate(mnt, handle, size);
-    em_finish_node(ext2_em_of(mnt), handle);
+    em_enter_node(ext2_em_of(mnt), h->node);
+    rc = ext2_truncate(mnt, h->node, size);
+    em_finish_node(ext2_em_of(mnt), h->node);
     return rc;
 }
 
@@ -2955,11 +2957,12 @@ static int admit_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint3
 static int admit_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset,
                            uint64_t length)
 {
+    struct ext2_handle *h = handle;
     int rc;
 
-    em_enter_node(ext2_em_of(mnt), handle);
-    rc = ext2_fallocate(mnt, handle, mode, offset, length);
-    em_finish_node(ext2_em_of(mnt), handle);
+    em_enter_node(ext2_em_of(mnt), h->node);
+    rc = ext2_fallocate(mnt, h->node, mode, offset, length);
+    em_finish_node(ext2_em_of(mnt), h->node);
     return rc;
 }
 
@@ -3122,6 +3125,40 @@ static int ext2_xattr(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg)
     return rc;
 }
 
+/** The `read` of `vfs_ops`, on the node held by the open handle. */
+static int32_t open_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
+                         uint64_t offset)
+{
+    struct ext2_handle *h = handle;
+
+    return ext2_read(mnt, h->node, buf, count, offset);
+}
+
+/** The `fsync` of `vfs_ops`, on the node held by the open handle. */
+static int open_fsync(struct vfs_mount *mnt, void *handle)
+{
+    struct ext2_handle *h = handle;
+
+    return ext2_fsync(mnt, h ? h->node : 0);
+}
+
+/** The `fdatasync` of `vfs_ops`, on the node held by the open handle. */
+static int open_fdatasync(struct vfs_mount *mnt, void *handle)
+{
+    struct ext2_handle *h = handle;
+
+    return ext2_fdatasync(mnt, h ? h->node : 0);
+}
+
+/** The `read_frames` of `vfs_ops`, on the node held by the open handle. */
+static int32_t open_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, uint32_t count,
+                                const uintptr_t *frames)
+{
+    struct ext2_handle *h = handle;
+
+    return ext2_read_frames(mnt, h->node, first, count, frames);
+}
+
 static const struct vfs_ops ext2_ops = {
     ext2_lookup,
     0, /* lookup_rest */
@@ -3131,10 +3168,10 @@ static const struct vfs_ops ext2_ops = {
     admit_setattr,
     ext2_open,
     ext2_release,
-    ext2_read,
+    open_read,
     admit_write,
     admit_truncate,
-    ext2_fsync,
+    open_fsync,
     ext2_readdir,
     admit_create,
     admit_unlink,
@@ -3155,7 +3192,7 @@ static const struct vfs_ops ext2_ops = {
     0, /* unpin */
     ext2_remount,
     admit_fallocate,
-    ext2_fdatasync,
+    open_fdatasync,
     ext2_lock_node,
     ext2_unlock_node,
     ext2_shutdown,
@@ -3163,7 +3200,7 @@ static const struct vfs_ops ext2_ops = {
     ext2_cachestat,
     ext2_put_unless_last,
     ext2_readlink_cached,
-    ext2_read_frames,
+    open_read_frames,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 0, 0, 1, 1, 1, 1};

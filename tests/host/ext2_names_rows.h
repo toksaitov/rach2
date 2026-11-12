@@ -502,6 +502,167 @@ static void names_rmdir_row(void)
     names_rmdir_one(1);
 }
 
+/**
+ * Resume two listings at byte 36 after removing a and b and reusing their
+ * space for a twelve-byte name at byte 24. Both must skip to c at byte 48,
+ * even with a write pending in the batch, without mistaking name bytes for
+ * a corrupt header or marking the volume read-only. A seek into the same
+ * name also realigns, even when the directory has not changed again.
+ */
+static void names_readdir_reuse_row(void)
+{
+    struct vfs_dirent ent;
+    uint32_t cursor[2] = {0, 0};
+    void *d = 0, *n = 0, *h[2] = {0, 0}, *writer = 0;
+    int i, j, rc, ok = 1;
+    const char *old[3] = {"a", "b", "c"};
+    const char *first[3] = {".", "..", "a"};
+
+    if (!fsync_mount(0)) {
+        return;
+    }
+    if (OPS->mkdir(&mnt, mnt.root, "listing", 0755) != 0 ||
+        !(d = names_find(mnt.root, "listing"))) {
+        check(0, "the listing directory is made");
+        goto out;
+    }
+    for (i = 0; i < 3; i++) {
+        n = make_file(d, old[i], &rc);
+        ok = ok && n;
+        if (n) {
+            OPS->put(&mnt, n);
+            n = 0;
+        }
+    }
+    for (i = 0; i < 2; i++) {
+        rc = OPS->open(&mnt, d, 0, &h[i]);
+        ok = ok && rc == 0;
+        if (rc == 0) {
+            for (j = 0; j < 3; j++) {
+                rc = OPS->readdir(&mnt, h[i], &cursor[i], &ent);
+                ok = ok && rc == 1 && streq(ent.name, first[j]);
+            }
+        }
+    }
+    check(ok && cursor[0] == 36 && cursor[1] == 36,
+          "two independent listings stop after a at byte 36");
+    if (!ok || cursor[0] != 36 || cursor[1] != 36) {
+        goto out;
+    }
+    rc = OPS->unlink(&mnt, d, "a");
+    ok = rc == 0 && OPS->unlink(&mnt, d, "b") == 0;
+    n = make_file(d, "abcdefghijkl", &rc);
+    ok = ok && n && rc == 0;
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    n = names_find(d, "c");
+    if (n) {
+        rc = OPS->open(&mnt, n, 2, &writer);
+        ok = ok && rc == 0;
+    } else {
+        ok = 0;
+    }
+    check(ok, "a and b are removed and their space reused for a twelve-byte name");
+    if (!ok) {
+        goto out;
+    }
+    writes_made = 0;
+    check(OPS->write(&mnt, writer, "pending", 7, 0) == 7 && writes_made == 0,
+          "a file write stays pending while the listings resume");
+    for (i = 0; i < 2; i++) {
+        rc = OPS->readdir(&mnt, h[i], &cursor[i], &ent);
+        check(rc == 1 && streq(ent.name, "c") && cursor[i] == 4096,
+              "each listing resumes at c after realigning past the reused name");
+        check(OPS->readdir(&mnt, h[i], &cursor[i], &ent) == 0, "and reaches the directory's end");
+    }
+    cursor[0] = 36;
+    check(OPS->readdir(&mnt, h[0], &cursor[0], &ent) == 1 && streq(ent.name, "c"),
+          "a seek into a name realigns even without another directory change");
+    check(!(mnt.flags & VFS_MS_RDONLY) && !mnt.write_error,
+          "the reused cursor sets no error and leaves the volume writable");
+    check(OPS->fsync(&mnt, writer) == 0, "the pending file write syncs without error");
+out:
+    if (writer) {
+        OPS->release(&mnt, writer);
+    }
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    for (i = 0; i < 2; i++) {
+        if (h[i]) {
+            OPS->release(&mnt, h[i]);
+        }
+    }
+    names_end_volume(d, 0, "e2fsck finds the volume of the resumed listings clean");
+}
+
+/** Replace a and b with a longer name once lookup has its inode and has
+ * let the directory lock go. The hook runs at the node table's big-lock
+ * release, with no node lock held, and disables itself before any change. */
+static void names_lookup_reuse(void)
+{
+    void *n;
+    int rc;
+
+    if (sleep_lock_held(&((struct ext2_node *)names_b_dir)->lock)) {
+        return;
+    }
+    bkl_host_gone = 0;
+    names_b_rc[0] = OPS->unlink(&mnt, names_b_dir, "a");
+    rc = OPS->unlink(&mnt, names_b_dir, "b");
+    names_b_rc[0] = names_b_rc[0] ? names_b_rc[0] : rc;
+    n = make_file(names_b_dir, "abcdefghijkl", &rc);
+    names_b_rc[0] = names_b_rc[0] ? names_b_rc[0] : rc;
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+}
+
+/** A lookup whose saved offset is reused while it gets the inode must
+ * restart the search and return ENOENT, without parsing the name bytes
+ * now at that offset as a directory header. */
+static void names_lookup_reuse_row(void)
+{
+    void *d = names_volume("lookup"), *a = 0, *b = 0, *c = 0, *found = 0;
+    int rc, ok;
+
+    if (!d) {
+        return;
+    }
+    a = make_file(d, "a", &rc);
+    b = make_file(d, "b", &rc);
+    c = make_file(d, "c", &rc);
+    ok = a && b && c;
+    check(ok, "three files for a lookup whose offset will be reused are made");
+    if (ok) {
+        names_b_dir = d;
+        names_b_rc[0] = -1;
+        bkl_host_free = 1;
+        bkl_host_gone = names_lookup_reuse;
+        rc = OPS->lookup(&mnt, d, "b", &found);
+        bkl_host_gone = 0;
+        bkl_host_free = 0;
+        check(names_b_rc[0] == 0 && rc == -ENOENT && !found,
+              "a lookup retries after its offset is reused, and the removed name is ENOENT");
+        check(!(mnt.flags & VFS_MS_RDONLY) && !mnt.write_error,
+              "the lookup's stale offset sets no error and leaves the volume writable");
+    }
+    if (found) {
+        OPS->put(&mnt, found);
+    }
+    if (a) {
+        OPS->put(&mnt, a);
+    }
+    if (b) {
+        OPS->put(&mnt, b);
+    }
+    if (c) {
+        OPS->put(&mnt, c);
+    }
+    names_end_volume(d, 0, "e2fsck finds the volume of the retried lookup clean");
+}
+
 /** The rows of operations on names without the big lock. */
 static void names_rows(void)
 {
@@ -509,6 +670,8 @@ static void names_rows(void)
     names_rename_row();
     names_over_row();
     names_rmdir_row();
+    names_readdir_reuse_row();
+    names_lookup_reuse_row();
 }
 
 #endif
