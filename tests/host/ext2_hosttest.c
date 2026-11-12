@@ -4520,6 +4520,27 @@ static void batch_rows(void)
     lock_rows();
 }
 
+/**
+ * Run `e2fsck -fn` on `img` into fsck.out, and its questions into
+ * findings.txt (`e2fsck_status`), and return its status when the checker
+ * ran to its end: 0 or 4, with fsck.out readable and through pass 5. -1
+ * otherwise, printing the status and the head of fsck.out, so that a
+ * checker that failed to run, aborted or left no output passes no row.
+ */
+static int fsck_judged(const char *img)
+{
+    int status = ext2_fixture_fsck(img, "-fn", fix_path("fsck.out"));
+
+    if ((status == 0 || status == 4) &&
+        ext2_fixture_contains(fix_path("fsck.out"), "Pass 5: Checking group summary") &&
+        ext2_fixture_findings(fix_path("fsck.out"), fix_path("findings.txt"))) {
+        return status;
+    }
+    printf("  e2fsck -fn exited %d:\n", status);
+    ext2_fixture_head(fix_path("fsck.out"), 14);
+    return -1;
+}
+
 /* ---- the file type of a replaced entry ---- */
 
 /* The files `ftype_replace` makes and replaces by links, half of them by a
@@ -4692,17 +4713,280 @@ static void ftype_rows(void)
         dev.flags = BLOCK_FAULT_SAFE;
         stop_after = -1;
         use_image(wimg, wbytes);
-        (void)ext2_fixture_fsck(wimg, "-fn", fix_path("fsck.out"));
         snprintf(what, sizeof what,
                  "the rename of a link over a file stopped after write %d of %d leaves no "
                  "entry of the wrong type",
                  k, n);
-        rc = !ext2_fixture_contains(fix_path("fsck.out"), "filetype");
+        rc = fsck_judged(wimg) >= 0 && !ext2_fixture_contains(fix_path("fsck.out"), "filetype");
         check(rc, what);
         if (!rc) {
             ext2_fixture_head(fix_path("fsck.out"), 20);
         }
     }
+}
+
+/* ---- a removed name before its inode's free ---- */
+
+/* What a removal row removes, by its `kind`: an empty file, a fast symbolic
+   link, and a file of three blocks. */
+static const char *const removal_kinds[3] = {"an empty file", "a fast symlink",
+                                             "a file with blocks"};
+/* How it removes it, by its `way`: an unlink; an unlink and a new node of
+   another type, which takes the freed inode; a rename of a file over it. */
+static const char *const removal_ways[3] = {"unlinked", "unlinked with its inode reused",
+                                            "renamed over"};
+
+/* The repairs e2fsck may ask for after a stop of a removal on a mount that
+   writes back: counts and bitmaps, an inode left with no name, and the name
+   `new` written before its inode, as Linux's ext2_add_link writes it too.
+   No finding of `gone` or `src`, an entry naming a free inode or one of
+   another type, is among them. `#` is a run of digits. */
+static const char *const removal_findings[] = {
+    "Free inodes count wrong",        "Free blocks count wrong",   "Directories count wrong",
+    "Block bitmap differences",       "Inode bitmap differences",  "Inode #, i_size is",
+    "Inode #, i_blocks is",           "Inode # ref count is",      "Unattached inode #",
+    "Unattached zero-length inode #", "Entry 'new' in / (2) has ",
+};
+
+/**
+ * Make `gone` of `kind` in the root and an empty file `src` beside it, put
+ * both, and sync the volume, so that their names and inodes are on the
+ * device; `gone`'s inode number in `*ino`. Returns 0, or the first error.
+ */
+static int removal_setup(int kind, uint64_t *ino)
+{
+    void *n = 0;
+    int rc = 0;
+
+    if (kind == 1) {
+        rc = OPS->symlink(&mnt, mnt.root, "gone", "hello.txt");
+    } else {
+        n = make_file(mnt.root, "gone", &rc);
+        if (n && kind == 2) {
+            rc = write_at(n, pattern, 3 * 4096, 0);
+        }
+        if (n) {
+            OPS->put(&mnt, n);
+        }
+    }
+    n = rc == 0 ? walk("/gone", &rc) : 0;
+    if (n) {
+        *ino = held_ino(&mnt, n);
+        OPS->put(&mnt, n);
+    }
+    n = rc == 0 ? make_file(mnt.root, "src", &rc) : 0;
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    return rc == 0 ? OPS->sync(&mnt) : rc;
+}
+
+/**
+ * Remove `gone` of `kind` in `way` and sync the volume: by an unlink; by an
+ * unlink and then a new node `new` of another type, a fast link for an
+ * empty file, a file of 10 bytes for a link and a directory for a file with
+ * blocks, which takes the freed inode as the lowest free one of its group;
+ * or by a rename of `src` over it. The inode number of `new` in `*reused`,
+ * 0 when there is none. Returns 0, or the first error.
+ */
+static int removal_run(int kind, int way, uint64_t *reused)
+{
+    void *n = 0;
+    int rc;
+
+    *reused = 0;
+    if (way == 2) {
+        rc = OPS->rename(&mnt, mnt.root, "src", mnt.root, "gone");
+    } else {
+        rc = OPS->unlink(&mnt, mnt.root, "gone");
+    }
+    if (rc == 0 && way == 1) {
+        if (kind == 0) {
+            rc = OPS->symlink(&mnt, mnt.root, "new", "hello.txt");
+        } else if (kind == 1) {
+            n = make_file(mnt.root, "new", &rc);
+            if (n) {
+                rc = write_at(n, pattern, 10, 0);
+                OPS->put(&mnt, n);
+            }
+        } else {
+            rc = OPS->mkdir(&mnt, mnt.root, "new", 0755);
+        }
+        n = rc == 0 ? walk("/new", &rc) : 0;
+        if (n) {
+            *reused = held_ino(&mnt, n);
+            OPS->put(&mnt, n);
+        }
+    }
+    return rc == 0 ? OPS->sync(&mnt) : rc;
+}
+
+/** Whether every question in findings.txt is one of `removal_findings`. */
+static int removal_findings_allowed(void)
+{
+    void *f = fopen(fix_path("findings.txt"), "r");
+    char line[512];
+    int ok = 1;
+
+    if (!f) {
+        return 0;
+    }
+    while (fgets(line, sizeof(line), f)) {
+        unsigned k;
+        int any = 0;
+
+        for (k = 0; k < sizeof(removal_findings) / sizeof(removal_findings[0]); k++) {
+            any |= matches_pattern(line, removal_findings[k]);
+        }
+        if (!any) {
+            printf("  a repair the removal's order does not allow: %s", line);
+            ok = 0;
+        }
+    }
+    fclose(f);
+    return ok;
+}
+
+/** Whether `gone` and `src`, where the root of `img` still lists them, name
+ * inodes its bitmap marks in use. */
+static int removal_names_used(const char *img)
+{
+    static const char *const names[2] = {"gone", "src"};
+    char request[32];
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        if (!debugfs_lists(img, "/", names[i])) {
+            continue;
+        }
+        snprintf(request, sizeof request, "testi /%s", names[i]);
+        if (!debugfs_says(img, request, "is marked in use")) {
+            printf("  /%s names an inode its bitmap calls free\n", names[i]);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * Make a fresh volume, mount it so that it writes back, and give it the
+ * files of `kind` (`removal_setup`), synced, with `gone`'s inode number in
+ * `*ino`. Returns 0, or the first error, with the volume unmounted.
+ */
+static int removal_mount(int kind, uint64_t *ino)
+{
+    int rc;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    stop_after = -1;
+    rc = mount_flags(0);
+    if (rc == 0) {
+        rc = removal_setup(kind, ino);
+    }
+    if (rc != 0) {
+        printf("  rc %d\n", rc);
+        unmount_image();
+    }
+    return rc;
+}
+
+/**
+ * Drop the mount and its cache as a crash would, after `kind` was removed
+ * in `way` and stopped after write `k` of `n`, and judge the volume left:
+ * e2fsck run to its end asking only for `removal_findings`, and each name
+ * left marked in use (`removal_names_used`).
+ */
+static void removal_judge(int kind, int way, int k, int n)
+{
+    char what[240];
+    int ok;
+
+    OPS->put(&mnt, mnt.root);
+    OPS->unmount(&mnt);
+    mnt.root = 0;
+    bcache_device_gone(&dev);
+    dev.flags = BLOCK_FAULT_SAFE;
+    stop_after = -1;
+    use_image(wimg, wbytes);
+    snprintf(what, sizeof what,
+             "%s %s on a mount that writes back, stopped after write %d of %d, "
+             "leaves e2fsck counts, bitmaps and unnamed inodes to repair",
+             removal_kinds[kind], removal_ways[way], k, n);
+    ok = fsck_judged(wimg) >= 0 && removal_findings_allowed();
+    check(ok, what);
+    if (!ok) {
+        ext2_fixture_head(fix_path("fsck.out"), 30);
+    }
+    snprintf(what, sizeof what,
+             "%s %s, stopped after write %d of %d, leaves no name of a free inode",
+             removal_kinds[kind], removal_ways[way], k, n);
+    check(removal_names_used(wimg), what);
+}
+
+/**
+ * Remove `gone` of `kind` in `way` once whole, counting its writes, and
+ * then once stopped after each of them (`removal_judge`). Returns the
+ * stops walked, or -1 when a volume would not mount or take its files.
+ */
+static int removal_row(int kind, int way)
+{
+    char what[240];
+    uint64_t ino = 0, reused;
+    int k, n, rc;
+
+    if (removal_mount(kind, &ino) != 0) {
+        return -1;
+    }
+    writes_made = 0;
+    rc = removal_run(kind, way, &reused);
+    snprintf(what, sizeof what, "on a mount that writes back, %s is %s", removal_kinds[kind],
+             removal_ways[way]);
+    check(rc == 0 && (way != 1 || reused == ino), what);
+    if (rc != 0 || (way == 1 && reused != ino)) {
+        printf("  rc %d, inode %d, new %d\n", rc, (int)ino, (int)reused);
+    }
+    n = writes_made;
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume is clean");
+    for (k = 0; k <= n; k++) {
+        if (removal_mount(kind, &ino) != 0) {
+            return -1;
+        }
+        writes_made = 0;
+        stop_after = k;
+        (void)removal_run(kind, way, &reused);
+        removal_judge(kind, way, k, n);
+    }
+    return n + 1;
+}
+
+/**
+ * On a mount that writes back, remove a synced empty file, fast symlink and
+ * file with blocks by an unlink, by an unlink whose inode a node of another
+ * type takes again, and by a rename over it (`removal_run`), and stop the
+ * removal and the sync after it after each of their writes. No stop may
+ * leave the removed name on the disk naming an inode the bitmap calls free
+ * or one of another type, as Linux's ext2 writes a directory's change before
+ * the inode loses its count (`ext2_handle_dirsync`, fs/ext2/dir.c:440 in
+ * Linux 6.12.115): e2fsck must run to its end and ask only for the repairs
+ * of `removal_findings`, and debugfs must find each name left marked in use.
+ */
+static void removal_rows(void)
+{
+    int kind, way, got, total = 0;
+
+    fill_pattern();
+    for (kind = 0; kind < 3; kind++) {
+        for (way = 0; way < 3; way++) {
+            got = removal_row(kind, way);
+            if (got < 0) {
+                check(0, "the volume of the removal rows mounts and takes its files");
+                return;
+            }
+            total += got;
+        }
+    }
+    printf("ext2_hosttest: %d stops of removals walked\n", total);
 }
 
 /**
@@ -6258,16 +6542,18 @@ static const struct {
     {"--dirty-only", dirty_rows},
     {"--readonly-only", readonly_rows},
     {"--ftype-only", ftype_rows},
+    {"--removal-only", removal_rows},
 };
 
 /**
  * Make the native fixture tree using the prepared independent tools,
  * and run the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes
  * and at 2 KiB, the 1 KiB levels, the failures, the write sequences, the
- * types of replaced entries, the order rows, the writer's failures, the
- * dirty volumes, the read-only volumes, the matrix and the batch rows, the
- * node rows, the fsync rows, the group rows, the rows of one file's writes
- * and the rows of operations on names, both without the big lock. An option
+ * types of replaced entries, the removals stopped on a mount that writes
+ * back, the order rows, the writer's failures, the dirty volumes, the
+ * read-only volumes, the matrix and the batch rows, the node rows, the
+ * fsync rows, the group rows, the rows of one file's writes and the rows of
+ * operations on names, both without the big lock. An option
  * of `only_rows` runs its rows alone; `--capture-only` checks independent
  * tool output capture alone. Returns 0, and calls `fix_passed`, when every
  * row passed.
@@ -6309,6 +6595,7 @@ int main(int argc, char **argv)
     executable_path_row();
     write_rows();
     ftype_rows();
+    removal_rows();
     time_rows();
     order_row();
     refusal_write_rows();
