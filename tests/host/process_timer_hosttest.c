@@ -51,7 +51,10 @@
  * its deadline tick, which counts from a clock that runs ahead of the tick
  * count; that interrupt, or a tick whose clock has passed the time, makes it
  * ready before its deadline tick, under the run queues' lock, and an
- * interrupt that comes before the time arms it again.
+ * interrupt that comes before the time arms it again. A sleeper the pass
+ * collected that leaves its wait and starts another before the wake, as a
+ * thread whose condition came true does without the run queues' lock,
+ * keeps the new wait's deadline: the wake tests the record again.
  */
 #include "lib/kint.h"
 #include "compat/waketime_none.h"
@@ -169,6 +172,12 @@ static int64_t clock_ns;
 static int64_t wake_ns;
 static int wake_arms;
 
+/* A record the next arming moves to a new wait, at this tick and time,
+ * as its thread would that left its wait while the pass walked the list. */
+static process_t *restart;
+static uint64_t restart_tick;
+static int64_t restart_ns;
+
 /** The model's monotonic clock. */
 int64_t rtc_monotonic_ns(void)
 {
@@ -180,6 +189,11 @@ void timer_wake_at(int64_t ns)
 {
     wake_ns = ns;
     wake_arms++;
+    if (restart) {
+        restart->wakeup_tick = restart_tick;
+        restart->wakeup_ns = restart_ns;
+        restart = NULL;
+    }
 }
 
 /* The real-time clock's step count, which the step row moves. */
@@ -472,6 +486,45 @@ static void between_rows(void)
     sleeper.wakeup_ns = 0;
 }
 
+/** A sleeper the pass collected that leaves its wait and starts another
+ * before the wake keeps the new wait's deadline: the list's head is
+ * collected, and the arming for the record behind it moves the head to a
+ * later wait before the wake. */
+static void restart_rows(void)
+{
+    int64_t t = 4001 * (int64_t)TICK_NS + (int64_t)TICK_NS / 4;
+    int64_t later = 4099 * (int64_t)TICK_NS + (int64_t)TICK_NS / 4;
+
+    /* linked first, so the sleeper put at the list's head comes before it */
+    runner.state = PROC_BLOCKED;
+    runner.wakeup_tick = 5000;
+    runner.wakeup_ns = 4999 * (int64_t)TICK_NS;
+    proc_timer_update(&runner);
+    sleeper.state = PROC_BLOCKED;
+    sleeper.woken = 0;
+    sleeper.wakeup_tick = 4003;
+    sleeper.wakeup_ns = t;
+    proc_timer_update(&sleeper);
+    restart = &sleeper;
+    restart_tick = 4101;
+    restart_ns = later;
+    clock_ns = t + 1000;
+    proc_wake_due();
+    CHECK(restart == NULL, "the pass arms the record behind the one it collected");
+    CHECK(sleeper.state == PROC_BLOCKED && sleeper.wakeup_tick == 4101 &&
+              sleeper.wakeup_ns == later && sleeper.timer_linked && !sleeper.woken,
+          "a sleeper collected that starts a new wait before the wake keeps its deadline");
+    clock_ns = later;
+    proc_wake_due();
+    CHECK(sleeper.state == PROC_READY && sleeper.wakeup_tick == 0 && sleeper.woken,
+          "and the new wait ends at its own time");
+    sleeper.wakeup_ns = 0;
+    runner.state = PROC_RUNNING;
+    runner.wakeup_tick = 0;
+    runner.wakeup_ns = 0;
+    proc_timer_update(&runner);
+}
+
 /** Run every check; 0 when each passes, 1 otherwise. */
 int main(void)
 {
@@ -483,6 +536,7 @@ int main(void)
     crowd_rows();
     step_rows();
     between_rows();
+    restart_rows();
     if (failures) {
         return 1;
     }
