@@ -146,8 +146,15 @@ struct ata_prd {
     uint16_t bytes;
     uint16_t flags;
 };
-#define ATA_PRD_EOT       0x8000
-#define ATA_BOUNCE_BYTES  (ATA_CMD_SECTORS * BLOCK_SECTOR_SIZE)
+#define ATA_PRD_EOT      0x8000
+#define ATA_BOUNCE_BYTES (ATA_CMD_SECTORS * BLOCK_SECTOR_SIZE)
+/* The bounce buffer's alignment. Mach-O caps a segment's at 16 KiB, and a
+   host build has no bus master to satisfy. */
+#ifndef RACH2_HOSTTEST
+#define ATA_BOUNCE_ALIGN ATA_BOUNCE_BYTES
+#else
+#define ATA_BOUNCE_ALIGN 16
+#endif
 #define ATA_CMD_FLUSH     0xE7
 #define ATA_CMD_FLUSH_EXT 0xEA
 #define ATA_CMD_IDENTIFY  0xEC
@@ -248,7 +255,7 @@ struct ata_channel {
        to its own so it lies in one 64 KiB region; both in the image's .bss,
        below 4 GiB, and the controller is given `virt_to_phys` of each. */
     struct ata_prd prd __attribute__((aligned(8)));
-    uint8_t bounce[ATA_BOUNCE_BYTES] __attribute__((aligned(ATA_BOUNCE_BYTES)));
+    uint8_t bounce[ATA_BOUNCE_BYTES] __attribute__((aligned(ATA_BOUNCE_ALIGN)));
 };
 
 /* A sleeping wait: the channel, what the status must show (`ATA_WANT_`),
