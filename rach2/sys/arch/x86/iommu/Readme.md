@@ -117,6 +117,7 @@ So every device of the Lenovo is translated, the GPU in a group of its own with 
 * The domain calls' refusals, an overlap that leaves nothing of itself, and a page for a table that could not be had.
 * A refused invalidation descriptor reported and the queue going on.
 * `intel_iommu=off` and `intremap=off`, and both: the Lenovo's units read and no register written, or one command where the firmware left translation on. `noapic`: translation offered, remapping off, the local APIC not moved and a message as it was.
+* The fault events held across the late x2APIC leave: each unit's masked in FECTL and unmasked again, still aimed at its vector, and nothing written where no vector was taken.
 * 42 faults: one lost while the record was full, 10 lines logged in the window and the rest counted, and the next window's first fault logged after the count held back.
 * A device that refills the one record as fast as it is read: a pass reads 32 records and leaves the full one, and the next tick reads the other 9; 10 are logged, and a fault in the next window after the 31 held back.
 * 40 passes that each find a fault lost: every loss counted, the first 5 passes' records and losses logged, and a loss in the next window after the 70 lines held back.

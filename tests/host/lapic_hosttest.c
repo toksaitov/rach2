@@ -87,6 +87,29 @@ static unsigned int x2_id;
 static unsigned int icr_lo, icr_hi, self_vector;
 static int icr_writes;
 
+/* The timer's count, which the model moves only when a row asks: armed, it
+ * reloads at the first x2APIC register access after the timer's entry is
+ * masked, raising the vector only if the entry is unmasked by then, as the
+ * count of a masked timer that comes to zero raises nothing. The vectors
+ * this processor sent itself through the xAPIC command register, and the
+ * timer's and the error's entries at the move to the disabled state, both
+ * masked or not. */
+static int reload_armed, reload_pending;
+static unsigned int self_sent[8];
+static int lvt_masked_at_base;
+
+/** Reload the timer's count from its initial count, raising its vector
+ * unless its entry is masked. */
+static void timer_reload(void)
+{
+    unsigned int lvt = apic_page[0x320 / 4], v = lvt & 0xFFu;
+
+    apic_page[0x390 / 4] = apic_page[0x380 / 4];
+    if ((lvt & 0x10000u) == 0) {
+        apic_page[(0x200 + 0x10 * (v / 32)) / 4] |= 1u << (v % 32);
+    }
+}
+
 /** Read the register at byte offset `reg`. */
 static unsigned int model_read(unsigned int reg)
 {
@@ -118,6 +141,9 @@ static void model_write(unsigned int reg, unsigned int value)
         value |= 0x10000u; /* the mask bit stays set */
     }
     apic_page[reg / 4] = value;
+    if (reg == 0x300 && (value & (1u << 18)) != 0) {
+        self_sent[(value & 0xFFu) / 32] |= 1u << (value % 32);
+    }
     if (writes < 64) {
         write_order[writes++] = reg;
     }
@@ -180,8 +206,9 @@ int ioapic_disabled(void)
     return ioapic_off;
 }
 
-/** Whether remapping may yet start: the x86-64 kernel's answer, unless
- * `ioapic_off`. */
+/** Whether remapping may yet start in the x2APIC format: yes unless
+ * `ioapic_off`; ioapic_hosttest.c has the rows of the answer from the DMAR
+ * table's flags and the boot line. */
 int ioapic_remappable(void)
 {
     return !ioapic_off;
@@ -214,6 +241,10 @@ static int x2_msr(unsigned int msr)
     }
     if ((apic_base_lo & (1u << 10)) == 0) {
         faults++;
+    }
+    if (reload_pending) {
+        reload_pending = 0;
+        timer_reload();
     }
     return 1;
 }
@@ -280,6 +311,10 @@ void kcpu_wrmsr(unsigned int msr, unsigned int lo, unsigned int hi)
         } else {
             apic_page[(msr - 0x800u) * 4u] = lo;
         }
+        if (msr == 0x832u && (lo & 0x10000u) != 0 && reload_armed) {
+            reload_armed = 0;
+            reload_pending = 1;
+        }
         return;
     }
     wrmsr_calls++;
@@ -289,6 +324,7 @@ void kcpu_wrmsr(unsigned int msr, unsigned int lo, unsigned int hi)
         faults++; /* x2APIC to xAPIC without the disabled state between */
     }
     if ((lo & (1u << 11)) == 0) {
+        lvt_masked_at_base = (apic_page[0x320 / 4] & apic_page[0x370 / 4] & 0x10000u) != 0;
         model_disable();
     }
     apic_base_lo = lo;
@@ -426,6 +462,11 @@ static void reset_model(unsigned int lint0)
     x2_id = 3;
     icr_lo = icr_hi = self_vector = 0;
     icr_writes = 0;
+    reload_armed = reload_pending = 0;
+    for (i = 0; i < 8; i++) {
+        self_sent[i] = 0;
+    }
+    lvt_masked_at_base = 0;
 }
 
 /**
@@ -584,6 +625,66 @@ static void rows_x2apic_firmware_late(void)
           "and a message that came in the last moment is sent again to this processor");
 }
 
+/** Whether this processor sent itself `v` through the xAPIC command
+ * register. */
+static int sent_self(unsigned int v)
+{
+    return (self_sent[v / 32] & (1u << (v % 32))) != 0;
+}
+
+/** A firmware's x2APIC mode kept, the local timer running periodic on
+ * vector 0x20 from 1000 counts with 500 left, and the error entry on
+ * vector 0xFE. */
+static void timer_begin(void)
+{
+    reset_model(0x8700);
+    has_x2apic = 1;
+    apic_base_lo |= 1u << 10;
+    (void)lapic_init();
+    lapic_timer_set(0x20, 1, 0, 1000);
+    apic_page[0x370 / 4] = 0xFEu;
+    apic_page[0x390 / 4] = 500;
+}
+
+/**
+ * The late leave with the local timer running: the timer's and the error's
+ * entries masked across the move and written back as they were, and a tick
+ * the masked timer dropped raised once. The model reloads the count at the
+ * first access after the timer's mask, which raises nothing; a leave that
+ * read the count only after that access would miss the reload.
+ */
+static void rows_x2apic_firmware_timer(void)
+{
+    timer_begin();
+    lapic_x2apic_settle(0);
+    check(!lapic_x2apic() && lvt_masked_at_base,
+          "the late leave masks the timer's and the error's entries before the disabled state");
+    check(apic_page[0x320 / 4] == ((1u << 17) | 0x20u) && apic_page[0x370 / 4] == 0xFEu,
+          "and writes them back as they were after it");
+    check(!sent_self(0x20), "a timer whose count did not reload raises nothing");
+
+    timer_begin();
+    reload_armed = 1;
+    lapic_x2apic_settle(0);
+    check(!reload_armed && !reload_pending && apic_page[0x390 / 4] == 1000,
+          "the count reloads while the timer is masked");
+    check(sent_self(0x20) && faults == 0,
+          "and the tick the masked timer dropped is raised once after the move");
+
+    timer_begin();
+    apic_page[0x320 / 4] |= 0x10000u;
+    reload_armed = 1;
+    lapic_x2apic_settle(0);
+    check(!sent_self(0x20) && apic_page[0x320 / 4] == ((1u << 17) | 0x10000u | 0x20u),
+          "a timer masked before the leave has no tick raised, and stays masked");
+
+    timer_begin();
+    apic_page[0x320 / 4] = 0x20u; /* one-shot, 500 counts left */
+    lapic_x2apic_settle(0);
+    check(apic_page[0x380 / 4] == 500 && !sent_self(0x20),
+          "a one-shot timer starts again from the count it had left");
+}
+
 /** A firmware's x2APIC mode with an identity past 254, where no remapping
  * can come, and under a hypervisor that allows the mode. */
 static void rows_x2apic_firmware_wide(void)
@@ -655,6 +756,7 @@ static void rows_x2apic_firmware(void)
 {
     rows_x2apic_firmware_settled();
     rows_x2apic_firmware_late();
+    rows_x2apic_firmware_timer();
     rows_x2apic_firmware_wide();
 
     reset_model(0x8700);
@@ -760,9 +862,11 @@ static void rows_x2apic_moves(void)
  * A locked one is kept, and so is one under a hypervisor; `nox2apic` takes
  * effect only on a mode that can be left, and a late leave takes a waiting
  * level interrupt first, with the lines masked, and sends a late message
- * again. Interrupt remapping's move from xAPIC mode keeps every register,
- * the request and trigger-mode registers among them. No row may touch the
- * page in x2APIC mode or an MSR outside it.
+ * again, with the timer's and the error's entries masked across it and a
+ * tick the masked timer dropped raised once. Interrupt remapping's move
+ * from xAPIC mode keeps every register, the request and trigger-mode
+ * registers among them. No row may touch the page in x2APIC mode or an MSR
+ * outside it.
  */
 static void rows_x2apic(void)
 {

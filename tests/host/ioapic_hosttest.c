@@ -1,7 +1,9 @@
 /*
  * ioapic_hosttest.c: ioapic.c's masking of the routed lines and pic.c's of
  * the 8259 pair, which remapping's start and the late x2APIC leave wrap
- * around their moves, and the `maxcpus=` parse that keeps the I/O APIC off.
+ * around their moves, the `maxcpus=` parse that keeps the I/O APIC off,
+ * and the boot line's `nointremap` and `intremap=` with the DMAR table's
+ * flags, which say whether remapping may start in the x2APIC format.
  *
  * host-deps: rach2/sys/arch/x86/ioapic.c rach2/sys/arch/x86/pic.c
  * host-deps: rach2/sys/cmdline.c rach2/sys/lib/kstring.c
@@ -16,7 +18,11 @@
  * self-interrupt, for the edge its masked input dropped (`check_irq_resend`
  * in Linux 6.12.115, kernel/irq/resend.c, lines 124 to 153). The parse
  * rows are Linux's get_option over simple_strtoull's base 0 (lib/cmdline.c,
- * lines 56 to 79; lib/kstrtox.c, lines 26 to 40).
+ * lines 56 to 79; lib/kstrtox.c, lines 26 to 40), and its setup_nointremap
+ * and setup_irqremap, which every token runs in the line's order and which
+ * match each item by its prefix (drivers/iommu/irq_remapping.c, lines 50
+ * to 84). Masking before `ioapic_init` touches no chip, since no line is
+ * routed yet.
  */
 
 #include "../../rach2/sys/arch/x86/ioapic.h"
@@ -376,12 +382,147 @@ static void rows_parse(void)
           "option: nth, empty and absent");
 }
 
+/** Mask and unmask before `ioapic_init`, as the late x2APIC leave does on
+ * a machine whose I/O APIC never came up: no line is routed, so no
+ * register is read or written and nothing is raised. */
+static void rows_before_init(void)
+{
+    uint32_t before[CHIP_INPUTS][2];
+
+    chip_begin();
+    entries_save(before);
+    check(ioapic_mask_routed() == 0, "before init: no line routed to mask");
+    ioapic_unmask_lines(0xFFFFu);
+    check(entries_are(before) && bad_access == 0 && nraised == 0,
+          "before init: no register touched and nothing raised");
+}
+
+/* Boot lines and what Linux's setup_nointremap and setup_irqremap leave of
+ * disable_irq_remap and no_x2apic_optout. */
+static const struct {
+    const char *line;
+    int off;
+    int optout;
+} intremaps[] = {
+    {"", 0, 0},
+    {"intremap=off", 1, 0},
+    {"nointremap", 1, 0},
+    {"nointremap=1", 1, 0}, /* parse_args hands it on; the value is not read */
+    {"nointremapx", 0, 0},
+    {"xintremap=off", 0, 0},
+    {"intremap", 0, 0}, /* no value: setup_irqremap refuses it */
+    {"intremap=", 0, 0},
+    {"intremap=on", 0, 0},
+    {"intremap=on,off", 1, 0},
+    {"intremap=off,on", 0, 0},             /* the later item wins */
+    {"intremap=nosid intremap=off", 1, 0}, /* every token is read */
+    {"intremap=off intremap=nosid", 1, 0}, /* and one without on or off keeps it */
+    {"intremap=off intremap=on", 0, 0},
+    {"nointremap intremap=on", 0, 0},
+    {"intremap=on nointremap", 1, 0},
+    {"intremap=offx", 1, 0}, /* strncmp over the word's length */
+    {"intremap=onoff", 0, 0},
+    {"intremap=of", 0, 0},
+    {"intremap=,,off,,", 1, 0}, /* a run of commas is one */
+    {"intremap=no_x2apic_optout", 0, 1},
+    {"intremap=no_x2apic_optout,off", 1, 1},
+    {"intremap=no_x2apic_optout intremap=on", 0, 1}, /* nothing clears it */
+    {"intremap=nosid,no_x2apic_optoutx", 0, 1},
+    {"intremap=no_x2apic", 0, 0},
+    {"intremap=nosid,nosid,nosid,nosid,nosid,nosid,nosid,nosid,nosid,nosid,off", 1, 0},
+};
+
+/** The boot line's control of remapping, item by item and token by token,
+ * and `kcmdline_list`'s answers under it. */
+static void rows_intremap(void)
+{
+    static const char *const onoff[] = {"off", "on"};
+    unsigned int i;
+    int last;
+
+    for (i = 0; i < sizeof(intremaps) / sizeof(intremaps[0]); i++) {
+        (void)kcmdline_capture(intremaps[i].line);
+        if (ioapic_intremap_off() != intremaps[i].off ||
+            ioapic_no_x2apic_optout() != intremaps[i].optout) {
+            failures++;
+            printf("ioapic_hosttest: fail: intremap: \"%s\" should leave remapping %s and "
+                   "the opt-out %s\n",
+                   intremaps[i].line, intremaps[i].off ? "off" : "on",
+                   intremaps[i].optout ? "overridden" : "kept");
+        }
+    }
+    last = 7;
+    (void)kcmdline_capture("intel_iommu=igfx_off,off intel_iommu=sm_on");
+    check(kcmdline_list("intel_iommu", NULL, onoff, 2, &last) == 1 && last == 0,
+          "list: the items that match no word are passed over");
+    (void)kcmdline_capture("intel_iommu=off intel_iommu=igfx_off intel_iommu=on");
+    check(kcmdline_list("intel_iommu", NULL, onoff, 2, &last) == 3 && last == 1,
+          "list: the mask of every word, and the last");
+    last = 7;
+    (void)kcmdline_capture("intel_iommu=igfx_off nointel_iommu=off");
+    check(kcmdline_list("intel_iommu", NULL, onoff, 2, &last) == 0 && last == 7,
+          "list: none matched, the last left alone");
+}
+
+/* The DMAR table, its flags and boot lines, and whether remapping may
+ * start in the x2APIC format on the x86-64 kernel, as Linux's early
+ * intel_prepare_irq_remapping decides it. */
+static const struct {
+    int dmar;
+    uint8_t flags;
+    const char *line;
+    int remappable;
+} remappables[] = {
+    {0, 0, "", 0},
+    {1, 0, "", 0},
+    {1, ACPI_DMAR_INTR_REMAP, "", 1},
+    {1, ACPI_DMAR_INTR_REMAP, "intremap=off", 0},
+    {1, ACPI_DMAR_INTR_REMAP, "nointremap", 0},
+    {1, ACPI_DMAR_INTR_REMAP, "intremap=off,on", 1},
+    {1, ACPI_DMAR_INTR_REMAP, "noapic", 0},
+    {1, ACPI_DMAR_INTR_REMAP, "maxcpus=0", 0},
+    {1, ACPI_DMAR_INTR_REMAP | ACPI_DMAR_X2APIC_OPT_OUT, "", 0},
+    {1, ACPI_DMAR_INTR_REMAP | ACPI_DMAR_X2APIC_OPT_OUT, "intremap=no_x2apic_optout", 1},
+    {1, ACPI_DMAR_X2APIC_OPT_OUT, "intremap=no_x2apic_optout", 0},
+    {0, ACPI_DMAR_INTR_REMAP, "", 0},
+};
+
+/** `ioapic_remappable` from the DMAR table's flags and the boot line; only
+ * the x86-64 kernel builds VT-d, so it is 0 on every other. */
+static void rows_remappable(void)
+{
+    unsigned int i;
+    int want;
+
+    for (i = 0; i < sizeof(remappables) / sizeof(remappables[0]); i++) {
+        info.dmar = remappables[i].dmar;
+        info.dmar_flags = remappables[i].flags;
+        (void)kcmdline_capture(remappables[i].line);
+#if defined(__x86_64__)
+        want = remappables[i].remappable;
+#else
+        want = 0;
+#endif
+        if (ioapic_remappable() != want) {
+            failures++;
+            printf(
+                "ioapic_hosttest: fail: remappable: dmar %d, flags 0x%x, \"%s\" should give %d\n",
+                remappables[i].dmar, (unsigned int)remappables[i].flags, remappables[i].line, want);
+        }
+    }
+    info.dmar = 0;
+    info.dmar_flags = 0;
+}
+
 int main(void)
 {
+    rows_before_init();
     rows_mask();
     rows_mask_remapped();
     rows_pic();
     rows_parse();
+    rows_intremap();
+    rows_remappable();
     if (failures != 0) {
         printf("ioapic_hosttest: %d failed\n", failures);
         return 1;
