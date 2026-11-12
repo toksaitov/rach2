@@ -804,6 +804,32 @@ static void intel_pmi_status(void)
     pmi_enter(&v, 0, 5u, 4u, guest, host);
     CHECK(kvm_pmu_nmi() == 1, "the next entry lets one empty NMI be claimed again");
     kvm_pmu_vmx_exit(&v, guest, 1);
+    pmi_enter(&v, 0, 5u, 4u, guest, host);
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    pmi_enter(&v, 0, 1u, 0, guest, host);
+    CHECK(!kvm_pmu_nmi(), "an entry that gives the bit to no checkpointed counter ends the claim");
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    *reg(GLOBAL_STATUS) = (1ull << 63) | (1ull << 58);
+    pmi_enter(&v, 0, 5u, 4u, guest, host);
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    CHECK(kvm_pmu_nmi() == 1 && kvm_pmu_nmi() == 0,
+          "COND_CHG and LBRS_FROZEN are no counter's overflow: the empty NMI's claim, once");
+    *reg(GLOBAL_STATUS) = 8u;
+    *reg(GLOBAL_OVF) = 0;
+    pmi_enter(&v, 0, 5u, 4u, guest, host);
+    CHECK(*reg(GLOBAL_OVF) == 8u,
+          "a checkpointed entry acknowledges the stale overflow of a counter nobody holds");
+    *reg(GLOBAL_STATUS) = 4u;
+    *reg(GLOBAL_OVF) = 0;
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    kvm_pmu_leave();
+    CHECK(*reg(GLOBAL_OVF) == 4u, "leaving the processor acknowledges a PMI counter's status");
+    *reg(GLOBAL_STATUS) = 0;
+    CHECK(!kvm_pmu_nmi(), "and claims no empty NMI for the checkpointed counter after");
+    *reg(GLOBAL_STATUS) = FIXED_BIT(1);
+    CHECK(!kvm_pmu_nmi(), "nor counts it beside the detector's overflow");
+    *reg(GLOBAL_STATUS) = 0;
+    *reg(GLOBAL_OVF) = 0;
     model_armed = 0;
     pmi_enter(&v, 0, 5u, 4u, guest, host);
     CHECK(!kvm_pmu_nmi(), "and an entry that sets no interrupt bit lets none be claimed");

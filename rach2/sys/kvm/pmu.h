@@ -103,9 +103,21 @@ int32_t kvm_pmu_placed_show(void *obj, int arg, char *buf, uint32_t cap);
 
 /** From the NMI handler (`watchdog_guest_nmi`): acknowledge the overflow
  * of each counter the last entry on this processor gave a PMI bit, the
- * only overflows that raise one. The number of those overflows, each a
- * handled source of the NMI; 0 while no such bit is set. */
+ * only overflows that raise one. Returns the number of handled sources:
+ * those overflows, plus each counter of a TSX-checkpointed event that
+ * entry gave a PMI bit, whose own status bit a rollback may have cleared,
+ * while any counter's overflow bit is set; with no counter's bit set, the
+ * checkpointed counters once until the next entry, and 0 after. 0 while
+ * no PMI bit is set. */
 int kvm_pmu_nmi(void);
+
+/** End the claims of the last Intel entry on this processor, when its
+ * vCPU leaves the run loop or the processor, as Linux clears a counter's
+ * intel_cp_status when its event stops (arch/x86/events/intel/
+ * core.c:2520-2527): acknowledge the overflow of each counter it gave a
+ * PMI bit that is still set, which raised no NMI, and claim none of them
+ * or its checkpointed counters after. With interrupts off. */
+void kvm_pmu_leave(void);
 
 /** Whether the host has usable performance counters. */
 int kvm_pmu_enabled(void);
