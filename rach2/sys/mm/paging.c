@@ -2635,30 +2635,56 @@ int paging_frame_is_device(uintptr_t phys)
     return frame >= _frames_number || _frames[frame] >= FRAME_REF_MAX;
 }
 
+static pte_t *user_span(page_dir_t *dir, uintptr_t va, uintptr_t end, uintptr_t *next);
+
+/** The region is found once for each it crosses and the leaf table once
+ * for each table's span, so that a run of n pages costs n reads of entries
+ * and not n walks from the top. */
+uint64_t paging_user_ram_frames(struct mm *mm, uintptr_t va, uint64_t n, uintptr_t *frames)
+{
+    const vma_t *vma = NULL;
+    pte_t *table = NULL;
+    uintptr_t addr, end, next = 0, phys;
+    uint64_t got = 0;
+    pte_t e;
+
+    if (!mm->dir || n > (~(uintptr_t)0 - va) / PAGE_SIZE) {
+        return 0;
+    }
+    end = va + (uintptr_t)n * PAGE_SIZE;
+    for (addr = va; addr < end; addr += PAGE_SIZE, got++) {
+        if (!vma || addr >= vma->end) {
+            vma = vm_find(&mm->vm, addr);
+            if (!vma || !region_allows(vma, 1) ||
+                (vma->prot & (VM_PROT_IO | VM_PROT_GUARD | VM_PROT_SECRET))) {
+                break;
+            }
+        }
+        if (!table || addr >= next) {
+            table = user_span(mm->dir, addr, end, &next);
+            if (!table) {
+                break;
+            }
+        }
+        e = table[MMU_INDEX(addr)];
+        if ((e & (PTE_P | PTE_W)) != (PTE_P | PTE_W) || (e & PTE_COW)) {
+            break;
+        }
+        phys = PTE_ADDR(e);
+        if (paging_frame_is_device(phys) ||
+            (vma->type != VM_SHARED && frame_maps(phys / PAGE_SIZE) > 1)) {
+            break;
+        }
+        frames[got] = phys;
+    }
+    return got;
+}
+
 uintptr_t paging_user_ram_frame(struct mm *mm, uintptr_t va)
 {
-    const vma_t *vma;
-    pte_t *e;
     uintptr_t phys;
 
-    if (!mm->dir) {
-        return 0;
-    }
-    vma = vm_find(&mm->vm, va);
-    if (!vma || !region_allows(vma, 1) ||
-        (vma->prot & (VM_PROT_IO | VM_PROT_GUARD | VM_PROT_SECRET))) {
-        return 0;
-    }
-    e = user_pte(mm->dir, va);
-    if (!e || (*e & (PTE_P | PTE_W)) != (PTE_P | PTE_W) || (*e & PTE_COW)) {
-        return 0;
-    }
-    phys = PTE_ADDR(*e);
-    if (paging_frame_is_device(phys) ||
-        (vma->type != VM_SHARED && frame_maps(phys / PAGE_SIZE) > 1)) {
-        return 0;
-    }
-    return phys;
+    return paging_user_ram_frames(mm, va, 1, &phys) == 1 ? phys : 0;
 }
 
 uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va)
