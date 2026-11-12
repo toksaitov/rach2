@@ -59,6 +59,7 @@
 #include "../../panic.h"
 #include "ioapic.h"
 #include "kcpu.h"
+#include "pic.h"
 #include "../../mm/paging.h"
 #include "../../proc/percpu.h"
 
@@ -72,6 +73,7 @@
 #define LAPIC_EOI     0xB0
 #define LAPIC_SVR     0xF0
 #define LAPIC_ISR     0x100
+#define LAPIC_TMR     0x180
 #define LAPIC_IRR     0x200
 #define LAPIC_ICR_LO  0x300
 #define LAPIC_ICR_HI  0x310
@@ -118,12 +120,9 @@ static int ready;
 static int x2apic;
 
 /* Whether the x2APIC mode is a firmware's that `lapic_x2apic_settle` keeps
- * or leaves once remapping's format is known; whether `lapic_x2apic_enable`
- * moved the APIC there, which `lapic_x2apic_disable` undoes; and whether
- * `nox2apic` took effect, which a firmware's lock or a wide identity
- * prevents. */
+ * or leaves once remapping's format is known, and whether `nox2apic` took
+ * effect, which a firmware's lock or a wide identity prevents. */
 static int x2apic_kept;
-static int x2apic_moved;
 static int nox2apic_taken;
 
 /* The spurious vectors each processor took, in a word of its own, since the
@@ -325,7 +324,6 @@ int lapic_init(void)
     ready = 0;
     x2apic = 0;
     x2apic_kept = 0;
-    x2apic_moved = 0;
     nox2apic_taken = kcmdline_has("nox2apic");
     if (kcmdline_has("rach2.nomsi")) {
         return refuse("rach2.nomsi on the boot line");
@@ -449,16 +447,62 @@ int lapic_x2apic_enable(void)
         return 0;
     }
     switch_mode(1);
-    x2apic_moved = 1;
     return 1;
 }
 
-void lapic_x2apic_disable(void)
+/** Whether a vector the I/O APIC sent level-triggered waits in the request
+ * register: its bit set there and in the trigger-mode register. */
+static int level_requested(void)
 {
-    if (ready && x2apic_moved) {
-        x2apic_moved = 0;
-        switch_mode(0);
+    uint32_t word;
+
+    for (word = 0; word < 0x80u; word += 0x10u) {
+        if ((apic_read(LAPIC_IRR + word) & apic_read(LAPIC_TMR + word)) != 0) {
+            return 1;
+        }
     }
+    return 0;
+}
+
+/**
+ * Leave x2APIC mode once the devices' interrupts are live.
+ *
+ * The way back passes the disabled state, which clears the request,
+ * in-service and trigger-mode registers (SDM, the local APIC's state after
+ * it has been disabled): a level interrupt dropped there is never ended,
+ * so its I/O APIC entry's remote IRR stays set and the line never fires
+ * again, and a message dropped there is lost. So the 8259 and every routed
+ * I/O APIC line are masked first, and what they already sent is taken by
+ * its handler, interrupts being on, before the move; a message that comes
+ * in the last moment, waiting in the request register, is sent again to
+ * this processor once it is back in xAPIC mode. Linux leaves the mode only
+ * before any device has an interrupt (`enable_IR_x2apic`, apic.c, lines
+ * 1913 to 1926) and needs none of this.
+ */
+static void x2apic_leave_live(void)
+{
+    uint32_t irr[8], flags, i;
+    uint16_t pic, lines;
+    int spins;
+
+    lines = ioapic_mask_routed();
+    pic = pic_mask_all();
+    for (spins = 0; spins < 100000 && level_requested(); spins++) {
+        /* interrupts are on: each handler takes its vector and ends it */
+    }
+    flags = kirq_save();
+    for (i = 0; i < 8u; i++) {
+        irr[i] = apic_read(LAPIC_IRR + i * 0x10u);
+    }
+    switch_mode(0);
+    for (i = 32; i < 256u; i++) {
+        if ((irr[i / 32u] & (1u << (i % 32u))) != 0) {
+            lapic_self_ipi((uint8_t)i);
+        }
+    }
+    kirq_restore(flags);
+    pic_restore_mask(pic);
+    ioapic_unmask_lines(lines);
 }
 
 /** Linux panics where the mode can be neither kept nor left (apic.c, lines
@@ -480,7 +524,7 @@ void lapic_x2apic_settle(int remapped)
         k_panic("lapic: x2apic mode can be neither kept nor left");
         break;
     default:
-        switch_mode(0);
+        x2apic_leave_live();
         break;
     }
 }

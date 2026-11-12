@@ -16,7 +16,10 @@
  * what the processor would fault on: a page access in x2APIC mode, an MSR
  * access outside it, and a move of IA32_APIC_BASE from x2APIC to xAPIC
  * mode that does not pass through the disabled state, which also resets
- * the registers as the SDM says.
+ * the registers as the SDM says, the request, in-service and trigger-mode
+ * registers among them. While interrupts are on it takes what the request
+ * register holds, as the processor would, and the end of a level vector
+ * clears the line's remote IRR at the I/O APIC.
  *
  * The order matters as much as the values. Enabling the APIC with `LINT0`
  * masked stops the 8259's interrupts at the processor, so the row for a
@@ -46,6 +49,36 @@ static int writes;
 /* IA32_APIC_BASE, declared before the page's accessors that read it. */
 static unsigned int apic_base_lo, apic_base_hi;
 
+/* The processor's interrupts: the depth of `kirq_save`, 0 while they are
+ * on; whether a vector waiting in the request register is taken while they
+ * are on, as the processor takes it, its handler ending it; a level
+ * interrupt's remote IRR at the I/O APIC, which only that end clears; and
+ * a message that arrives as interrupts go off, its vector or 0. The 8259
+ * and the I/O APIC's lines: whether each is masked, whether both were at
+ * the last write of IA32_APIC_BASE, and the lines unmasked again. */
+static int irq_off, taking, remote_irr;
+static unsigned int late_vector;
+static int pic_masked, lines_masked, masked_at_base;
+static unsigned int lines_unmasked;
+
+/** Take every vector in the request register, as the processor does while
+ * its interrupts are on: each handler ends its vector, and the end of a
+ * level one, its trigger-mode bit set, clears the line's remote IRR. */
+static void take_requests(void)
+{
+    int w;
+
+    if (!taking || irq_off != 0) {
+        return;
+    }
+    for (w = 0; w < 8; w++) {
+        if ((apic_page[(0x200 + 0x10 * w) / 4] & apic_page[(0x180 + 0x10 * w) / 4]) != 0) {
+            remote_irr = 0;
+        }
+        apic_page[(0x200 + 0x10 * w) / 4] = 0;
+    }
+}
+
 /* What the processor would fault on, and the x2APIC registers that are not
  * the page's: the 32-bit identity, the command register's last write and
  * how many, and the self-interrupt register's. */
@@ -59,6 +92,9 @@ static unsigned int model_read(unsigned int reg)
 {
     if (apic_base_lo & (1u << 10)) {
         faults++;
+    }
+    if (reg >= 0x200 && reg < 0x280) {
+        take_requests();
     }
     return apic_page[reg / 4];
 }
@@ -189,6 +225,9 @@ void kcpu_rdmsr(unsigned int msr, unsigned int *lo, unsigned int *hi)
     unsigned int l = apic_base_lo, h = apic_base_hi;
 
     if (x2_msr(msr)) {
+        if (msr >= 0x820u && msr <= 0x827u) {
+            take_requests();
+        }
         l = msr == 0x802u ? x2_id : apic_page[(msr - 0x800u) * 4u];
         h = 0;
     }
@@ -201,10 +240,16 @@ void kcpu_rdmsr(unsigned int msr, unsigned int *lo, unsigned int *hi)
 }
 
 /** The registers as the processor resets them when its APIC is disabled:
- * the spurious register's enable clear and every local-vector entry
- * masked. */
+ * the spurious register's enable clear, every local-vector entry masked,
+ * and the in-service, trigger-mode and request registers clear, which
+ * drops whatever was waiting. */
 static void model_disable(void)
 {
+    int i;
+
+    for (i = 0x100 / 4; i < 0x280 / 4; i++) {
+        apic_page[i] = 0;
+    }
     apic_page[0xF0 / 4] = 0xFFu;
     apic_page[0x80 / 4] = 0;
     apic_page[0x320 / 4] = 0x10000u;
@@ -239,6 +284,7 @@ void kcpu_wrmsr(unsigned int msr, unsigned int lo, unsigned int hi)
     }
     wrmsr_calls++;
     wrmsr_lo = lo;
+    masked_at_base = pic_masked && lines_masked;
     if ((apic_base_lo & (1u << 10)) != 0 && (lo & (1u << 11)) != 0 && (lo & (1u << 10)) == 0) {
         faults++; /* x2APIC to xAPIC without the disabled state between */
     }
@@ -249,16 +295,51 @@ void kcpu_wrmsr(unsigned int msr, unsigned int lo, unsigned int hi)
     apic_base_hi = hi;
 }
 
-/** No interrupt arrives in the middle of a row's command. */
+/** Turn interrupts off, one level deeper; a message set to arrive now
+ * waits in the request register. */
 uint32_t kirq_save(void)
 {
+    if (late_vector != 0) {
+        apic_page[(0x200 + 0x10 * (late_vector / 32)) / 4] |= 1u << (late_vector % 32);
+        late_vector = 0;
+    }
+    irq_off++;
     return 0;
 }
 
-/** Restore nothing, as `kirq_save` saved nothing. */
+/** Undo one `kirq_save`. */
 void kirq_restore(uint32_t flags)
 {
     (void)flags;
+    irq_off--;
+}
+
+/** Mask the routed I/O APIC lines: line 1 was unmasked. */
+unsigned short ioapic_mask_routed(void)
+{
+    lines_masked = 1;
+    return 0x0002;
+}
+
+/** Unmask the lines `which` names. */
+void ioapic_unmask_lines(unsigned short which)
+{
+    lines_masked = 0;
+    lines_unmasked = which;
+}
+
+/** Mask the 8259 pair: the masks it had. */
+unsigned short pic_mask_all(void)
+{
+    pic_masked = 1;
+    return 0xFFFB;
+}
+
+/** Restore the 8259's masks. */
+void pic_restore_mask(unsigned short mask)
+{
+    (void)mask;
+    pic_masked = 0;
 }
 
 /** Whether `a` and `b` are the same string. */
@@ -336,6 +417,10 @@ static void reset_model(unsigned int lint0)
     nox2apic = 0;
     ioapic_off = 0;
     panics = 0;
+    irq_off = taking = remote_irr = 0;
+    late_vector = 0;
+    pic_masked = lines_masked = masked_at_base = 0;
+    lines_unmasked = 0;
     wrmsr_calls = 0;
     faults = 0;
     x2_id = 3;
@@ -444,16 +529,12 @@ static void rows_x2apic_not_chosen(void)
     x2_id = 0xFF;
     check(lapic_init() == 0 && !lapic_x2apic() && wrmsr_calls == 0,
           "an identity of 255 keeps xAPIC mode under a hypervisor");
-    check(lapic_x2apic_possible() && lapic_x2apic_enable() == 1 && lapic_x2apic(),
+    check(lapic_x2apic_possible() && lapic_x2apic_enable() == 1 && lapic_x2apic() && faults == 0,
           "where remapping may still move it");
-    lapic_x2apic_disable();
-    check(!lapic_x2apic() && (apic_base_lo & 0xC00u) == 0x800u && faults == 0,
-          "and moves it back when it fails");
 }
 
 /** A firmware's x2APIC mode on bare metal, kept until remapping's format
- * is known and then kept or left, or settled at once where no remapping
- * can come. */
+ * is known and then kept or left. */
 static void rows_x2apic_firmware_settled(void)
 {
     reset_model(0x8700);
@@ -477,7 +558,36 @@ static void rows_x2apic_firmware_settled(void)
     lapic_x2apic_settle(1);
     check(lapic_x2apic() && wrmsr_calls == 0 && writes == 0 && faults == 0,
           "remapping in the x2APIC format keeps it");
+}
 
+/** The late leave of a firmware's x2APIC mode, with the devices'
+ * interrupts live: a level interrupt waiting is taken and ended first, the
+ * lines masked across the leave, and a late message sent again. */
+static void rows_x2apic_firmware_late(void)
+{
+    reset_model(0x8700);
+    has_x2apic = 1;
+    apic_base_lo |= 1u << 10;
+    (void)lapic_init();
+    apic_page[0x220 / 4] = 1u << 9; /* vector 0x49 from a level line, waiting */
+    apic_page[0x1A0 / 4] = 1u << 9;
+    remote_irr = 1;
+    taking = 1;
+    late_vector = 0x41; /* a message that comes as interrupts go off */
+    lapic_x2apic_settle(0);
+    check(!lapic_x2apic() && remote_irr == 0,
+          "a level interrupt waiting at the late leave is taken and ended before it");
+    check(masked_at_base && lines_unmasked == 0x0002 && !lines_masked && !pic_masked &&
+              irq_off == 0,
+          "with the 8259 and the I/O APIC's lines masked across it and unmasked after");
+    check(apic_page[0x300 / 4] == ((1u << 18) | 0x41u),
+          "and a message that came in the last moment is sent again to this processor");
+}
+
+/** A firmware's x2APIC mode with an identity past 254, and where no
+ * remapping can come. */
+static void rows_x2apic_firmware_wide(void)
+{
     reset_model(0x8700);
     has_x2apic = 1;
     apic_base_lo |= 1u << 10;
@@ -522,6 +632,8 @@ static void rows_x2apic_firmware_settled(void)
 static void rows_x2apic_firmware(void)
 {
     rows_x2apic_firmware_settled();
+    rows_x2apic_firmware_late();
+    rows_x2apic_firmware_wide();
 
     reset_model(0x8700);
     has_x2apic = 1;
@@ -568,8 +680,8 @@ static void rows_x2apic_firmware(void)
     check(lapic_nox2apic(), "and does in xAPIC mode");
 }
 
-/** The moves interrupt remapping makes, and the processors started after
- * them. */
+/** The move interrupt remapping makes, and the processors started before
+ * and after it. */
 static void rows_x2apic_moves(void)
 {
     reset_model(0x8700);
@@ -586,21 +698,15 @@ static void rows_x2apic_moves(void)
           "and every register is as it was");
     lapic_eoi();
     check(writes == 0 && faults == 0, "after which the page is never touched");
-    lapic_x2apic_disable();
-    check(!lapic_x2apic() && (apic_base_lo & 0xC00u) == 0x800u,
-          "a failed remapping moves it back to xAPIC mode");
-    check(apic_page[0x380 / 4] == 777 && apic_page[0x360 / 4] == 0x400u &&
-              apic_page[0xF0 / 4] == (0x100u | 0xFFu) && apic_page[0x350 / 4] == 0x8700u &&
-              apic_page[0x320 / 4] == 0x20020u,
-          "with the registers the disabled state reset written again");
-    check(faults == 0, "and no fault on the way");
 
     reset_model(0x8700);
     has_x2apic = 1;
-    hypervisor = 1;
     (void)lapic_init();
-    lapic_x2apic_disable();
-    check(lapic_x2apic(), "under a hypervisor x2APIC mode is never left");
+    apic_page[0x220 / 4] = 1u << 9; /* vector 0x49 waiting, level-triggered */
+    apic_page[0x1A0 / 4] = 1u << 9;
+    (void)lapic_x2apic_enable();
+    check(apic_page[0x220 / 4] == 1u << 9 && apic_page[0x1A0 / 4] == 1u << 9,
+          "the move keeps the request and trigger-mode registers");
 
     reset_model(0x8700);
     has_x2apic = 1;
@@ -630,10 +736,11 @@ static void rows_x2apic_moves(void)
  * registers written again, or a panic with an identity past 254; where no
  * remapping can come it is left at once, or refused with such an identity.
  * A locked one is kept, and so is one under a hypervisor; `nox2apic` takes
- * effect only on a mode that can be left. Interrupt remapping's move from
- * xAPIC mode keeps every register, and the move back writes again those
- * the disabled state reset. No row may touch the page in x2APIC mode or an
- * MSR outside it.
+ * effect only on a mode that can be left, and a late leave takes a waiting
+ * level interrupt first, with the lines masked, and sends a late message
+ * again. Interrupt remapping's move from xAPIC mode keeps every register,
+ * the request and trigger-mode registers among them. No row may touch the
+ * page in x2APIC mode or an MSR outside it.
  */
 static void rows_x2apic(void)
 {

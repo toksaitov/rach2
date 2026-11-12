@@ -54,6 +54,14 @@ int ioapic_route_line(int line, int pci, uint8_t vector, uint8_t dest);
  * routed. */
 void ioapic_mask_line(int line);
 
+/** Mask every routed line, and return the lines that were unmasked, line N
+ * at bit N, for `ioapic_unmask_lines`. An edge that comes to a masked input
+ * is not kept; a level stays asserted until the line is unmasked. */
+uint16_t ioapic_mask_routed(void);
+
+/** Unmask the routed lines whose bits are set in `which`. */
+void ioapic_unmask_lines(uint16_t which);
+
 /** Whether the input of `line` has an interrupt it has not yet sent; 0 for
  * a line not routed. */
 int ioapic_line_pending(int line);

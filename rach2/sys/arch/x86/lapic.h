@@ -74,20 +74,14 @@ int lapic_nox2apic(void);
  * started after it: 1 when it moved, 0 when it was in x2APIC mode already,
  * and -1 when `lapic_x2apic_possible` says no.
  *
- * For interrupt remapping (iommu/intremap.c), before it writes an entry in
- * the x2APIC format. Linux's enable_IR_x2apic moves later, once remapping
- * is on and compatibility-format interrupts are refused, with the I/O APIC
- * and the 8259 masked (apic.c, lines 1913 to 1921); this kernel starts
- * remapping with its sources live, and moves first, as intremap.c's head
- * says. Called on the boot processor before the others start; interrupts
- * are off across the move.
+ * For interrupt remapping (iommu/intremap.c), once it is on in the x2APIC
+ * format and refuses the compatibility format, with the 8259 and the I/O
+ * APIC's lines masked, as Linux's enable_IR_x2apic moves it (apic.c, lines
+ * 1913 to 1926). The move keeps every register, the request and
+ * in-service registers among them; nothing moves the APIC back. Called on
+ * the boot processor before the others start, with interrupts off.
  */
 int lapic_x2apic_enable(void);
-
-/** Move the boot processor's APIC back to xAPIC mode, for interrupt
- * remapping that failed after `lapic_x2apic_enable` moved it; nothing when
- * that call did not move it. */
-void lapic_x2apic_disable(void);
 
 /**
  * Keep or leave the x2APIC mode a firmware left, which `lapic_init` kept
@@ -95,9 +89,10 @@ void lapic_x2apic_disable(void);
  * (`remapped`) or has not, as Linux's try_to_enable_x2apic does (apic.c,
  * lines 1820 to 1857): kept when remapped, left otherwise, and a panic
  * where it can be neither, with an identity of 255 or more. Nothing when
- * no such mode was kept.
- * Called once, on the boot processor before the others start, after the
- * VT-d units (platform.c).
+ * no such mode was kept. The devices' interrupts are live by then, so the
+ * leave masks the lines and lets the handlers take what was sent before
+ * it passes the disabled state. Called once, on the boot processor before
+ * the others start, after the VT-d units (platform.c), with interrupts on.
  */
 void lapic_x2apic_settle(int remapped);
 

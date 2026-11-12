@@ -16,15 +16,16 @@
  * The entries name a processor by its xAPIC id, or, in the x2APIC format
  * (IRTA.EIME), by its 32-bit x2APIC id, which Linux 6.12.115 chooses when
  * the processor offers x2APIC mode, the DMAR table does not opt out of it
- * and every unit has the format (`choose_eim`). On bare metal the local
- * APIC enters x2APIC mode only then (`try_to_enable_x2apic`, arch/x86/
- * kernel/apic/apic.c, lines 1820 to 1857), and before the first entry is
- * written. Linux moves it after IRE and the CFI clear, with the 8259 and
- * the I/O APIC masked (lines 1913 to 1926), before any PCI device is
- * probed; here the sources are live and a message may have no mask, so
- * the move comes first, and while remapping starts the units let
- * compatibility-format interrupts by, which reach the processor in x2APIC
- * mode by its 8-bit id (iommu/Readme.md).
+ * and every unit has the format (`choose_eim`). The entries take the boot
+ * processor's whole id, which the compatibility format gives only the low
+ * eight bits of (`irte_dest`). On bare metal the local APIC enters x2APIC
+ * mode only then (`try_to_enable_x2apic`, arch/x86/kernel/apic/apic.c,
+ * lines 1820 to 1857), and last, as Linux's enable_IR_x2apic moves it
+ * (lines 1913 to 1926): once every step that can fail is done, the
+ * compatibility format is refused, and the 8259 and the I/O APIC's lines
+ * are masked (`intremap_start`). Until then the processor is in xAPIC
+ * mode, and the compatibility-format interrupts reach it as they always
+ * did (iommu/Readme.md).
  */
 
 #include "vtd.h"
@@ -44,11 +45,10 @@
 #define IRTA_SIZE 7u
 #define IRTA_EIME (1u << 11)
 
-/* Whether remapping is on; whether its entries are in the x2APIC format;
- * and whether starting it moved the local APIC to x2APIC mode. */
+/* Whether remapping is on, and whether its entries are in the x2APIC
+ * format. */
 static int ir_on;
 static int eim;
-static int eim_moved;
 
 /** A free entry of `u`'s table, marked taken, or -1. */
 static int irte_take(struct vtd_unit *u)
@@ -100,6 +100,21 @@ static uint64_t irte_low(unsigned int vector, unsigned int apic, unsigned int le
     return IRTE_PRESENT | ((uint64_t)(dm & 1u) << 2) | ((uint64_t)(rh & 1u) << 3) |
            ((uint64_t)(level & 1u) << 4) | ((uint64_t)(dlm & 7u) << 5) |
            ((uint64_t)(vector & 0xFFu) << 16) | (dest << 32);
+}
+
+/**
+ * The APIC id of the processor a compatibility-format interrupt names by
+ * the eight bits `dest8`: in the x2APIC format, the boot processor's whole
+ * id when its low eight bits are these, since every interrupt goes to it
+ * and that format's message and redirection entry hold no more. Linux's
+ * prepare_irte writes the whole 32-bit destination the same way
+ * (irq_remapping.c, lines 61 and 1107).
+ */
+static unsigned int irte_dest(unsigned int dest8)
+{
+    uint32_t boot = vtd_hw_apic_id();
+
+    return (eim && (boot & 0xFFu) == dest8) ? (unsigned int)boot : dest8;
 }
 
 /**
@@ -165,7 +180,7 @@ static int msi_map(const pci_device_t *dev, uint32_t address, uint32_t data, uin
     uint8_t devfn = (uint8_t)((dev->device << 3) | (dev->function & 7u));
     int ui = dmar_unit_for(&vtd_dmar, dev->bus, devfn), index;
     struct vtd_unit *u;
-    unsigned int svt;
+    unsigned int svt, dest;
     uint16_t sid;
 
     if (ui < 0 || ui >= vtd_nunits || vtd_units[ui].irt == NULL) {
@@ -179,15 +194,15 @@ static int msi_map(const pci_device_t *dev, uint32_t address, uint32_t data, uin
         return -1;
     }
     msi_source(dev->bus, devfn, &svt, &sid);
+    dest = irte_dest((address >> 12) & 0xFFu);
     irte_set(u, index,
-             irte_low(data & 0xFFu, (address >> 12) & 0xFFu, (data >> 15) & 1u, (data >> 8) & 7u,
-                      (address >> 2) & 1u, (address >> 3) & 1u),
+             irte_low(data & 0xFFu, dest, (data >> 15) & 1u, (data >> 8) & 7u, (address >> 2) & 1u,
+                      (address >> 3) & 1u),
              (uint64_t)sid | ((uint64_t)svt << 18));
     klog(KLOG_DEBUG, "vtd",
          "irte: dmar%d index %d: msi of %x:%x.%u, vector %u to apic %u, %s, sid 0x%04x svt %u", ui,
          index, (unsigned int)dev->bus, (unsigned int)dev->device, (unsigned int)dev->function,
-         data & 0xFFu, (address >> 12) & 0xFFu, ((data >> 15) & 1u) ? "level" : "edge",
-         (unsigned int)sid, svt);
+         data & 0xFFu, dest, ((data >> 15) & 1u) ? "level" : "edge", (unsigned int)sid, svt);
     *raddress = 0xFEE00000u | ((uint32_t)(index & 0x7FFF) << 5) | MSI_REMAP_FORMAT |
                 ((uint32_t)((index >> 15) & 1) << 2);
     *rdata = 0;
@@ -205,6 +220,7 @@ static int msi_map(const pci_device_t *dev, uint32_t address, uint32_t data, uin
 static int ioapic_map(uint8_t id, uint32_t low, uint32_t high, uint32_t *rhigh)
 {
     struct vtd_unit *u;
+    unsigned int dest;
     uint16_t sid;
     int ui, index;
 
@@ -218,11 +234,12 @@ static int ioapic_map(uint8_t id, uint32_t low, uint32_t high, uint32_t *rhigh)
     if (index < 0) {
         return -1;
     }
-    irte_set(u, index, irte_low(low & 0xFFu, high >> 24, (low >> 15) & 1u, 0, 0, 0),
+    dest = irte_dest(high >> 24);
+    irte_set(u, index, irte_low(low & 0xFFu, dest, (low >> 15) & 1u, 0, 0, 0),
              (uint64_t)sid | (1ull << 18));
     klog(KLOG_DEBUG, "vtd",
          "irte: dmar%d index %d: ioapic %u, vector %u to apic %u, %s, sid 0x%04x svt 1", ui, index,
-         (unsigned int)id, low & 0xFFu, high >> 24, ((low >> 15) & 1u) ? "level" : "edge",
+         (unsigned int)id, low & 0xFFu, dest, ((low >> 15) & 1u) ? "level" : "edge",
          (unsigned int)sid);
     *rhigh = ((uint32_t)(index & 0x7FFF) << 17) | (1u << 16);
     return (ui << 16) | index;
@@ -270,8 +287,7 @@ static int choose_eim(void)
     return 1;
 }
 
-/** Turn remapping off on every unit and free its table, and return the
- * local APIC to xAPIC mode if starting remapping moved it. */
+/** Turn remapping off on every unit and free its table. */
 static void units_off(void)
 {
     int i;
@@ -288,20 +304,26 @@ static void units_off(void)
         u->irt = NULL;
         u->irt_phys = 0;
     }
-    if (eim_moved) {
-        vtd_hw_x2apic_disable();
-        eim_moved = 0;
-    }
 }
 
 /**
  * Turn interrupt remapping on, as the file's head describes: 0, or -1 with
- * a record and every interrupt as it was, when the table does not offer
- * it, a unit lacks it or the queue, an I/O APIC is in no unit's scope, or
- * an entry could not be had.
+ * a record and every interrupt as it was, the local APIC's mode among
+ * them, when the table does not offer it, a unit lacks it or the queue, an
+ * I/O APIC is in no unit's scope, or an entry could not be had.
+ *
+ * Every step that can fail comes before the move to x2APIC mode, as in
+ * Linux's enable_IR_x2apic (arch/x86/kernel/apic/apic.c, lines 1913 to
+ * 1926): the tables are taken, then the units remap with the compatibility
+ * format still allowed, the messages are rewritten, and, with interrupts
+ * off and the 8259 and every I/O APIC line masked, the redirection entries
+ * are rewritten, the compatibility format is refused and only then is the
+ * APIC moved. A failure therefore never takes the APIC back through the
+ * disabled state, which would drop what its request register holds.
  */
 int intremap_start(void)
 {
+    struct vtd_lines held;
     uint8_t ids[16];
     int i, n;
 
@@ -327,13 +349,6 @@ int intremap_start(void)
         }
     }
     eim = choose_eim();
-    eim_moved = 0;
-    if (eim) {
-        int moved = vtd_hw_x2apic_enable();
-
-        eim = moved >= 0;
-        eim_moved = moved > 0;
-    }
     for (i = 0; i < vtd_nunits; i++) {
         struct vtd_unit *u = &vtd_units[i];
 
@@ -343,6 +358,10 @@ int intremap_start(void)
             return -1;
         }
         vtd_flush_entry(u, u->irt, 4096);
+    }
+    for (i = 0; i < vtd_nunits; i++) {
+        struct vtd_unit *u = &vtd_units[i];
+
         vtd_hw_write64(u->regs, VTD_IRTA, u->irt_phys | IRTA_SIZE | (eim ? IRTA_EIME : 0u));
         vtd_gcmd_once(u, VTD_GCMD_SIRTP);
         (void)vtd_inv_iec(u, -1);
@@ -350,13 +369,15 @@ int intremap_start(void)
         vtd_set_gcmd(u, VTD_GCMD_IRE, 1);
     }
     ir_on = 1;
-    if (ioapic_remap_start(&ioapic_ops) != 0) {
+    if (pci_msi_remap_start(&msi_ops) != 0) {
         ir_on = 0;
         units_off();
         return -1;
     }
-    if (pci_msi_remap_start(&msi_ops) != 0) {
-        ioapic_remap_stop();
+    vtd_hw_lines_mask(&held);
+    if (ioapic_remap_start(&ioapic_ops) != 0) {
+        vtd_hw_lines_restore(&held);
+        pci_msi_remap_stop();
         ir_on = 0;
         units_off();
         return -1;
@@ -364,6 +385,10 @@ int intremap_start(void)
     for (i = 0; i < vtd_nunits; i++) {
         vtd_set_gcmd(&vtd_units[i], VTD_GCMD_CFI, 0);
     }
+    if (eim) {
+        (void)vtd_hw_x2apic_enable(); /* choose_eim asked that it can */
+    }
+    vtd_hw_lines_restore(&held);
     klog(KLOG_INFO, "vtd", "interrupt remapping: on, %s format, compatibility format refused",
          eim ? "x2apic" : "xapic");
     return 0;
@@ -388,7 +413,6 @@ void intremap_stop(void)
     }
     pci_msi_remap_stop();
     ioapic_remap_stop();
-    eim_moved = 0;
     units_off();
     ir_on = 0;
     klog(KLOG_INFO, "vtd", "interrupt remapping: off");
