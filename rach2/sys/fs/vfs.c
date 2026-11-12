@@ -1915,7 +1915,7 @@ static int cached_cross(struct vfs_ref *cur)
 {
     for (;;) {
         struct vfs_mount *over = NULL;
-        struct vfs_ref next;
+        struct vfs_ref next = {NULL, NULL};
         uint32_t flags = spin_lock_irqsave(&mount_table_lock);
         int i, rc = 0;
 
@@ -1972,7 +1972,7 @@ struct cached_links {
  */
 static int cached_link(struct vfs_ref *cur, void *found, const char *rest, struct cached_links *lk)
 {
-    struct vfs_ref root;
+    struct vfs_ref root = {NULL, NULL};
     int tlen = -1, rc;
 
     if (cur->mnt->type->ops->readlink_cached && ++lk->links <= VFS_LINK_MAX &&
