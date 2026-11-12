@@ -233,10 +233,20 @@ old and new
 bound a call's waits, rounded up to 1 ms ticks, after which the call fails with
 .Er EAGAIN
 or returns what it has moved.
-The limit runs from a call's first wait through every later one, signals
-taken by other threads included, as on Linux; a stream send gives each piece
-it queues the whole limit, as Linux gives each buffer it allocates.
-negative seconds make a wait fail at once, and microseconds outside
+A call reads its limit once, as it starts, and spends it only while it
+sleeps in a wait: each wait has what the call's earlier waits left, and a copy
+or a wait for the socket's receive lock between them costs nothing, as on
+Linux.
+A stream send gives each piece it queues the whole limit, read as the piece
+starts, as Linux gives each buffer it allocates; a datagram send reads it once
+its message is copied, as Linux does.
+A signal that ends a wait under a limit makes the call fail with
+.Er EINTR
+even under
+.Dv SA_RESTART ,
+as on Linux; a wait with no limit is restarted under
+.Dv SA_RESTART .
+Negative seconds make a wait fail at once, and microseconds outside
 0 through 999999 fail with
 .Er EDOM ,
 as on Linux.
