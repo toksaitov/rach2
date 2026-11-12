@@ -27,16 +27,16 @@ int32_t kvm_dirty_enable_manual(struct kvm_vm *vm, const struct kvm_enable_cap *
     return 0;
 }
 
-void kvm_dirty_mark(struct kvm_vm *vm, uint64_t gfn)
+void kvm_dirty_mark(struct kvm_vm *vm, const struct kvm_slot_view *s, uint64_t gfn)
 {
-    struct kvm_slot_view s;
-    uint32_t flags = kvm_mmu_lock(vm);
-    uint64_t i;
+    uint64_t i = gfn - s->base_gfn;
+    uint32_t flags;
 
-    if (kvm_slot_find_locked(vm, gfn, &s) && s.dirty) {
-        i = gfn - s.base_gfn;
-        s.dirty[i / 64u] |= 1ull << (i % 64u);
+    if (!s->dirty) {
+        return;
     }
+    flags = kvm_mmu_lock(vm);
+    s->dirty[i / 64u] |= 1ull << (i % 64u);
     kvm_mmu_unlock(vm, flags);
 }
 
