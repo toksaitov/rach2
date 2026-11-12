@@ -723,6 +723,13 @@ void unmap_kernel_frame(uintptr_t va);
  * passed over. The caller frees the frames only after. */
 void unmap_kernel_frames(uintptr_t va, uint32_t count);
 
+/** Clear the entries of the `count` kernel pages from the page-aligned `va`
+ * and drop this processor's translations of them, as `unmap_kernel_frames`
+ * does, but not the other processors': the caller drops theirs
+ * (`smp_kernel_flush`) before it frees a frame the entries named. Returns 1
+ * when any of the pages was mapped. */
+int unmap_kernel_frames_here(uintptr_t va, uint32_t count);
+
 /** The kernel's directory, whose tables of the kernel's layout every
  * directory shares. */
 extern page_dir_t *_kernel_dir;

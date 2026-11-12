@@ -12,6 +12,7 @@
 #include "../lib/kstring.h"
 #include "paging.h"
 #include "pressure.h"
+#include "../proc/smp.h"
 
 #define KHEAP_MAGIC   0x4B484550u /* "KHEP" */
 #define KHEAP_CLASSES 8
@@ -92,6 +93,30 @@ struct kept_run {
 };
 static struct kept_run *kept[KHEAP_KEEP_PAGES];
 static uint32_t kept_runs[KHEAP_KEEP_PAGES];
+
+/* The runs given back that are still mapped. Linux keeps a slab's freed
+ * objects mapped, and a freed vmalloc
+ * area's translations on the other processors and drops those of many
+ * areas with one flush, once the pages so freed pass lazy_max_pages
+ * (free_unmap_vmap_area and free_vmap_area_noflush, mm/vmalloc.c:2411-2455;
+ * __purge_vmap_area_lazy, 2306-2348), where an unmap with a flush of every
+ * processor for each run costs a request to each and a wait for its answer,
+ * with the heap's lock held. A run given back stays mapped here, its pages
+ * taken and its frames held, until an allocation of its length takes it
+ * (`lazy_take`), KHEAP_LAZY_RUNS runs or KHEAP_LAZY_PAGES pages wait, an
+ * allocation finds no room or no frame, or reclaim asks (`lazy_purge`, from
+ * `release_run` and `kept_drain`); a run longer, or in the reserve, goes
+ * back at once. */
+#define KHEAP_LAZY_RUNS  64u
+#define KHEAP_LAZY_PAGES 512u
+struct lazy_run {
+    uint32_t page;
+    uint32_t count;
+};
+static struct lazy_run lazy[KHEAP_LAZY_RUNS];
+static uint32_t lazy_runs;                      /* the entries of `lazy` in use */
+static uint32_t lazy_pages;                     /* and their pages */
+static uintptr_t lazy_frames[KHEAP_LAZY_PAGES]; /* their frames, during a purge */
 static uint32_t kept_shrink(struct mem_shrinker *s, uint32_t want, int may_sleep);
 static struct mem_shrinker kept_shrinker = {kept_shrink, NULL};
 
@@ -276,6 +301,8 @@ void kheap_init(size_t bytes)
     run_bits = 0;
     k_memset(kept, 0, sizeof(kept));
     k_memset(kept_runs, 0, sizeof(kept_runs));
+    lazy_runs = 0;
+    lazy_pages = 0;
     k_memset(class_pages, 0, sizeof(class_pages));
     k_memset(class_live, 0, sizeof(class_live));
     k_memset(class_spare, 0, sizeof(class_spare));
@@ -334,12 +361,11 @@ static void ends_widen(uint32_t first, uint32_t last)
     }
 }
 
-/** Unmap a run and, when it lies in the reserve, give the run back: the
- * one way pages leave the heap, whoever allocated them. `heap_lock` is
- * held. */
-static void release_run(uint32_t page, uint32_t count)
+/** The run of `count` pages at `page`, unmapped everywhere with its frames
+ * back and its pages marked free, joins the searches, and when it lies in
+ * the reserve the run is given back. `heap_lock` is held. */
+static void run_free(uint32_t page, uint32_t count)
 {
-    unmap_run(page, count);
     if (page < reserve_first) {
         ends_widen(page, page + count - 1u);
     }
@@ -348,11 +374,102 @@ static void release_run(uint32_t page, uint32_t count)
     }
 }
 
-/** Give every kept run back to the region: the pages given back, 0 when
- * there was no kept run. `heap_lock` is held. */
+/**
+ * Unmap every run waiting in `lazy` with one request to each other
+ * processor, then give back their frames and their pages: the pages given
+ * back, 0 when none waited. The frames are read before the entries are
+ * cleared, and go back only after the flush, as `unmap_run` requires.
+ * `heap_lock` is held.
+ */
+static uint32_t lazy_purge(void)
+{
+    uint32_t r, i, n = 0, lo = heap_pages, hi = 0, pages = lazy_pages;
+
+    if (lazy_runs == 0) {
+        return 0;
+    }
+    for (r = 0; r < lazy_runs; r++) {
+        uintptr_t va = KVA_HEAP + (uintptr_t)lazy[r].page * PAGE_SIZE;
+
+        for (i = 0; i < lazy[r].count; i++) {
+            lazy_frames[n++] = paging_virt_to_phys(va + (uintptr_t)i * PAGE_SIZE);
+        }
+        (void)unmap_kernel_frames_here(va, lazy[r].count);
+        lo = lazy[r].page < lo ? lazy[r].page : lo;
+        hi = lazy[r].page + lazy[r].count > hi ? lazy[r].page + lazy[r].count : hi;
+    }
+    smp_kernel_flush(KVA_HEAP + (uintptr_t)lo * PAGE_SIZE, KVA_HEAP + (uintptr_t)hi * PAGE_SIZE);
+    n = 0;
+    for (r = 0; r < lazy_runs; r++) {
+        for (i = 0; i < lazy[r].count; i++) {
+            if (lazy_frames[n]) {
+                free_frame(lazy_frames[n]);
+            }
+            n++;
+            page_set(lazy[r].page + i, 0);
+        }
+        pages_held -= lazy[r].count;
+        run_free(lazy[r].page, lazy[r].count);
+    }
+    lazy_runs = 0;
+    lazy_pages = 0;
+    return pages;
+}
+
+/**
+ * A run of `count` pages waiting in `lazy`, taken out of it for an
+ * allocation of that length, which finds it mapped and its frames there,
+ * as a slab's object comes back with no new page: the one given back last
+ * of those on the allocation's side of `high_free`. The buffer cache's
+ * pages are taken down from the region's top, and every page from
+ * `high_free` up is taken, so a page there is the cache's (`high`,
+ * `kalloc_cache_page`) and one below it the rest's, and neither takes the
+ * other's. `heap_pages` when there is none. `heap_lock` is held.
+ */
+static uint32_t lazy_take(uint32_t count, int high)
+{
+    uint32_t r, page;
+
+    for (r = lazy_runs; r-- > 0;) {
+        if (lazy[r].count == count && (lazy[r].page >= high_free) == (high != 0)) {
+            break;
+        }
+    }
+    if (r >= lazy_runs) {
+        return heap_pages;
+    }
+    page = lazy[r].page;
+    lazy[r] = lazy[--lazy_runs];
+    lazy_pages -= count;
+    return page;
+}
+
+/** Give a run back, the one way pages leave the heap, whoever allocated
+ * them: into `lazy`, after a purge when it has no room, or at once for a
+ * run longer than KHEAP_LAZY_PAGES or in the reserve, whose runs are few
+ * and large. `heap_lock` is held. */
+static void release_run(uint32_t page, uint32_t count)
+{
+    if (count > KHEAP_LAZY_PAGES || page >= reserve_first) {
+        unmap_run(page, count);
+        run_free(page, count);
+        return;
+    }
+    if (lazy_runs == KHEAP_LAZY_RUNS || lazy_pages + count > KHEAP_LAZY_PAGES) {
+        (void)lazy_purge();
+    }
+    lazy[lazy_runs].page = page;
+    lazy[lazy_runs].count = count;
+    lazy_runs++;
+    lazy_pages += count;
+}
+
+/** Give every kept run back to the region, and every run waiting to be
+ * unmapped (`lazy_purge`): the pages given back, 0 when there was none.
+ * `heap_lock` is held. */
 static uint32_t kept_drain(void)
 {
-    uint32_t i, pages = 0;
+    uint32_t i;
 
     for (i = 0; i < KHEAP_KEEP_PAGES; i++) {
         while (kept[i]) {
@@ -360,11 +477,10 @@ static uint32_t kept_drain(void)
 
             kept[i] = k->next;
             release_run((uint32_t)(((uintptr_t)&k->hdr - KVA_HEAP) / PAGE_SIZE), i + 1u);
-            pages += i + 1u;
         }
         kept_runs[i] = 0;
     }
-    return pages;
+    return lazy_purge();
 }
 
 /** Reclaim's call of the heap (`struct mem_shrinker`): every kept run given
@@ -386,7 +502,12 @@ static uint32_t kept_shrink(struct mem_shrinker *s, uint32_t want, int may_sleep
  * kept runs. `heap_lock` is held. */
 static uint32_t take_pages_once(uint32_t count)
 {
-    uint32_t page = find_run(count);
+    uint32_t page = lazy_take(count, 0);
+
+    if (page < heap_pages) {
+        return page;
+    }
+    page = find_run(count);
 
     if (page >= heap_pages && count >= KHEAP_RUN_LEAST) {
         page = reserve_take(count);
@@ -522,7 +643,12 @@ void *kalloc_contig(uint32_t count, uintptr_t *phys)
  * `heap_lock` is held. */
 static uint32_t cache_take(void)
 {
-    uint32_t page = find_page_high();
+    uint32_t page = lazy_take(1, 1);
+
+    if (page < heap_pages) {
+        return page;
+    }
+    page = find_page_high();
 
     if (page < heap_pages && map_run(page, 1) != 0) {
         page = heap_pages;

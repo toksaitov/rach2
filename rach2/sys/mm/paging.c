@@ -3014,7 +3014,7 @@ void unmap_kernel_frame(uintptr_t va)
     unmap_kernel_frames(va, 1);
 }
 
-void unmap_kernel_frames(uintptr_t va, uint32_t count)
+int unmap_kernel_frames_here(uintptr_t va, uint32_t count)
 {
     uint32_t i;
     int present = 0;
@@ -3028,7 +3028,12 @@ void unmap_kernel_frames(uintptr_t va, uint32_t count)
             present = 1;
         }
     }
-    if (present) {
+    return present;
+}
+
+void unmap_kernel_frames(uintptr_t va, uint32_t count)
+{
+    if (unmap_kernel_frames_here(va, count)) {
         smp_kernel_flush(va, va + (uintptr_t)count * PAGE_SIZE);
     }
 }
