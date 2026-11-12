@@ -9,6 +9,7 @@
 #include "../lib/kstring.h"
 #include "../panic.h"
 #include "../proc/process.h"
+#include "../proc/sched.h"
 #include "../timer.h"
 
 /* The kinds of lock, in the order a lock first named each, and the lock of
@@ -73,6 +74,8 @@ void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int
 #endif
     l->holder = -1;
     l->depth = 0;
+    l->owner = 0;
+    l->owner_cpu = 0;
     l->next = 0;
     l->serving = 0;
     l->taken_at = 0;
@@ -96,6 +99,39 @@ void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int
         *pp = record;
     }
     spin_unlock_irqrestore(&records_lock, irq);
+}
+
+/**
+ * Spin while the holder of `t`'s lock runs (`sched_spin_on`), as Linux's
+ * mutex_optimistic_spin spins on a mutex's owner before it sleeps
+ * (kernel/locking/mutex.c:350-385, 613): a hold is often shorter than a
+ * sleep and a wake, and the wake of a halted processor costs an
+ * interprocessor interrupt, which under a hypervisor is an exit for the
+ * sender and an injection for the receiver. A lock given to a waiter
+ * ahead is waited for the same way while no waiter sleeps, since the one
+ * ahead then spins too and takes it at once; with one asleep, the one
+ * ahead may be it, and its wake is long. Returns 1 when the caller's turn
+ * came, 0 when it should sleep. The holder's fields are read as hints,
+ * which only the holder writes; the caller tests its turn again.
+ */
+static int sleep_spin(const struct sleep_turn *t)
+{
+    const volatile struct sleep_lock *l = t->lock;
+    const struct process *owner;
+
+    for (;;) {
+        owner = l->owner;
+        if (l->holder == -1) {
+            if (l->serving == t->place) {
+                return 1;
+            }
+            if (wq_active(&t->lock->wq) || !sched_spin_on(0, -1)) {
+                return 0;
+            }
+        } else if (!owner || !sched_spin_on(owner, l->owner_cpu)) {
+            return 0;
+        }
+    }
 }
 
 /**
@@ -127,9 +163,13 @@ void sleep_lock_take(struct sleep_lock *l)
     turn.lock = l;
     turn.place = sleep_place(l);
     while (!sleep_my_turn(&turn)) {
-        wq_wait_event_nointr(&l->wq, sleep_my_turn, &turn);
+        if (!sleep_spin(&turn)) {
+            wq_wait_event_nointr(&l->wq, sleep_my_turn, &turn);
+        }
     }
     l->holder = me;
+    l->owner = current_proc;
+    l->owner_cpu = arch_cpu_id();
     l->depth = 1;
     l->timed = *(volatile int *)&sleep_lock_stat != 0;
     if (l->timed) {
@@ -202,6 +242,7 @@ void sleep_lock_give(struct sleep_lock *l)
         current_proc->file_locks--;
     }
     l->depth = 0;
+    l->owner = 0;
     l->holder = -1;
     (void)arch_atomic_xchg(&l->serving, l->serving + 1u);
 #ifdef RACH2_LOCKDEP

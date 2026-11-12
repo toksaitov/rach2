@@ -1306,6 +1306,36 @@ int sched_all_idle(void)
 }
 
 /**
+ * A thread on another processor's current record that has not halted runs
+ * kernel or user code there, since a thread in the kernel keeps its
+ * processor until it sleeps, and one that sleeps with nothing else ready
+ * stays current and halts in an idle wait (`wq_wait`). This is Linux's
+ * owner_on_cpu, which spins only while the owner is on its processor and
+ * that processor's vCPU is not preempted (include/linux/sched.h:2200-2207),
+ * and mutex_spin_on_owner's test of need_resched
+ * (kernel/locking/mutex.c:373).
+ */
+int sched_spin_on(const process_t *owner, int cpu)
+{
+    const volatile struct percpu *c;
+
+    if (!current_proc || current_proc->need_resched || !bkl_spin_ok(owner ? cpu : -1)) {
+        return 0;
+    }
+    if (owner) {
+        if (cpu < 0 || cpu >= NR_CPUS) {
+            return 0;
+        }
+        c = &cpu_table[cpu];
+        if (c->current != owner || c->idle_wait || arch_cpu_preempted(cpu)) {
+            return 0;
+        }
+    }
+    arch_relax();
+    return 1;
+}
+
+/**
  * Count a tick of `p`'s processor time against its process's timer `k`
  * when `counts`, and when the timer runs out arm it again for its interval
  * and leave `signo` for a holder of the big lock to post

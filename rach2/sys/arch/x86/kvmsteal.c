@@ -17,6 +17,7 @@
 #define MSR_KVM_STEAL_TIME     0x4B564D03u
 #define MSR_KVM_PV_EOI_EN      0x4B564D04u
 #define KVM_MSR_ENABLED        1u
+#define KVM_VCPU_PREEMPTED     1u /* in `preempted` */
 
 /* Linux's struct kvm_steal_time (arch/x86/include/uapi/asm/kvm_para.h:62-
  * 69): 64 bytes, which KVM wants aligned to 64. */
@@ -90,4 +91,15 @@ uint64_t arch_steal_ns(void)
         arch_dma_fence();
     } while ((version & 1u) != 0 || version != st->version);
     return steal;
+}
+
+int arch_cpu_preempted(int cpu)
+{
+    const volatile struct kvm_steal_time *st;
+
+    if (cpu < 0 || cpu >= NR_CPUS || !steal_on[cpu]) {
+        return 0;
+    }
+    st = steal_record(cpu);
+    return (st->preempted & KVM_VCPU_PREEMPTED) != 0;
 }

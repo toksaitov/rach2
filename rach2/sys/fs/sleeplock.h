@@ -68,7 +68,10 @@ extern int sleep_lock_stat;
  * `taken_at` are its start, by the holder's `disk_waits` and by
  * `arch_cycles` where `timer_cycles_agree` says the processors' counters
  * can time it (`taken_by_cycles`), and by `timer_now_us` elsewhere. Any
- * other hold reads neither, as Linux's mutex_lock reads no clock. A taker
+ * other hold reads neither, as Linux's mutex_lock reads no clock. `owner`
+ * and `owner_cpu` are the holder's record and the processor it took the
+ * lock on, which a waiter compares with what that processor runs, to spin
+ * while the holder runs (`sched_spin_on`). A taker
  * draws its place by compare-and-exchange of `next`; the holder alone
  * writes every other field but `wq`, and gives the lock back by an exchange
  * of `serving`.
@@ -76,6 +79,8 @@ extern int sleep_lock_stat;
 struct sleep_lock {
     int holder;
     int depth;
+    const struct process *volatile owner; /* the holder's record, NULL with none */
+    volatile int owner_cpu;
     volatile uint32_t next;
     volatile uint32_t serving;
     uint64_t taken_at;
@@ -112,10 +117,11 @@ struct sleep_lock {
 void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int flags);
 
 /**
- * Take `l`, sleeping until it is free and the caller's place is served; a
- * signal does not end the wait, since a waiter that retried without
- * sleeping would never let the holder run. The holder takes it again
- * without a place. From a context that may sleep unless the caller holds
+ * Take `l`, waiting until it is free and the caller's place is served,
+ * spinning while its holder runs on another processor and sleeping
+ * otherwise; a signal does not end the wait, since a waiter that retried
+ * without sleeping would never let the holder run. The holder takes it
+ * again without a place. From a context that may sleep unless the caller holds
  * `l` already, with or without the big lock.
  */
 void sleep_lock_take(struct sleep_lock *l);

@@ -5,6 +5,7 @@
  *
  * host-deps: rach2/sys/fs/sleeplock.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/atomic_host.c
+ * host-deps: tests/host/compat/spin_none.c
  *
  * One host thread plays every process. The stubbed wait stands for the
  * scheduler: each time a taker would sleep, it runs the next step of the

@@ -9,6 +9,7 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/fs/sleeplock.c rach2/sys/fs/ext2xattr.c
+ * host-deps: tests/host/compat/spin_none.c
  * host-deps: tests/host/compat/atomic_host.c tests/host/compat/bkl_held.c
  * host-deps: tests/host/compat/fsize_none.c
  *

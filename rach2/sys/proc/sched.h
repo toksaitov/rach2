@@ -308,6 +308,20 @@ void idle_wait_irq_on(void);
  * by the boot processor's tick, with interrupts off. */
 int sched_all_idle(void);
 
+/**
+ * Pause once while `owner`, the holder of a sleeping lock the running
+ * thread waits for, is processor `cpu`'s current thread and runs there: the
+ * processor is not halted in an idle wait and the hypervisor has not
+ * preempted it (`arch_cpu_preempted`). With `owner` NULL, the lock is
+ * passing to a waiter ahead, and only the caller's own state counts.
+ * Returns 1 after the pause, and 0 at once, for the caller to sleep
+ * instead, when the owner does not run so, when the caller needs a switch,
+ * or when its big lock may hold up the owner or another processor
+ * (`bkl_spin_ok`). `owner` is compared, never read, so an owner that has
+ * since given the lock up and exited does no harm. Interrupts on.
+ */
+int sched_spin_on(const process_t *owner, int cpu);
+
 /** Ticks that found a processor parked in an idle wait, and those that did
  * not, summed over the processors in 64 bits; each processor's own are in
  * its record (percpu.h). Counted rather than timed: each processor counts
