@@ -230,8 +230,12 @@ and
 .Dv SO_SNDTIMEO ,
 old and new
 .Pq Xr setsockopt 2 ,
-bound a wait, rounded up to 1 ms ticks, which then fails with
-.Er EAGAIN ;
+bound a call's waits, rounded up to 1 ms ticks, after which the call fails with
+.Er EAGAIN
+or returns what it has moved.
+The limit runs from a call's first wait through every later one, signals
+taken by other threads included, as on Linux; a stream send gives each piece
+it queues the whole limit, as Linux gives each buffer it allocates.
 negative seconds make a wait fail at once, and microseconds outside
 0 through 999999 fail with
 .Er EDOM ,

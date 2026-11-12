@@ -908,6 +908,36 @@ static void unix_release(struct unix_sock *s, int embryo)
     unix_put(s);
 }
 
+/* One socket call's time limit, which every wait of the call shares: Linux
+ * takes timeo once per call and passes its remainder through each wait
+ * (net/unix/af_unix.c:2608, 2817, 2874). */
+struct unix_timeo {
+    uint64_t ticks;    /* the socket's limit: 0 none, UNIX_TIMEO_NOW no wait */
+    uint64_t deadline; /* the tick it ends at, set by the call's first wait */
+    int read;          /* whether `ticks` holds the socket's limit yet */
+    int armed;         /* whether `deadline` is set */
+};
+
+/** Start a socket call's time limit `limit`, with no limit read yet. */
+static void timeo_init(struct unix_timeo *limit)
+{
+    limit->ticks = 0;
+    limit->deadline = 0;
+    limit->read = 0;
+    limit->armed = 0;
+}
+
+/** Take the socket's limit `ticks` into the call's `limit`, unless an earlier
+ * pass of the call took it; the caller holds the socket's state lock, which
+ * keeps the 64-bit limit whole. */
+static void timeo_take(struct unix_timeo *limit, uint64_t ticks)
+{
+    if (!limit->read) {
+        limit->ticks = ticks;
+        limit->read = 1;
+    }
+}
+
 /* The wait of `unix_wait`: its condition, or the socket's time limit. */
 struct timed_cond {
     wq_cond_fn cond;
@@ -943,8 +973,10 @@ static int unix_signal_pending(void)
 }
 
 /**
- * Wait on `wq` until `cond(arg)`, a signal, or the end of the socket time
- * limit `timeo` in ticks, 0 for none and UNIX_TIMEO_NOW for no wait at all.
+ * Wait on `wq` until `cond(arg)`, a signal, or the end of the socket call's
+ * time limit `limit`, which `timeo_take` filled. The call's first wait sets
+ * the deadline and each later wait of the call keeps it, so a call that
+ * waits again after a wake that gave it too little still ends at its limit.
  * Returns 0 when the condition holds, -EINTR for a signal, -EAGAIN when the
  * time ran out, as Linux reports it. The wait tests only the signal-work
  * flag, as Linux tests TIF_SIGPENDING; signal_pending runs after it under
@@ -954,18 +986,22 @@ static int unix_signal_pending(void)
  * thread; Linux keeps the remaining timeout the same way
  * (net/unix/af_unix.c:2608).
  */
-static int unix_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, uint64_t timeo)
+static int unix_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, struct unix_timeo *limit)
 {
     struct timed_cond t;
     int rc;
 
-    if (timeo == UNIX_TIMEO_NOW) {
+    if (limit->ticks == UNIX_TIMEO_NOW) {
         return cond(arg) ? 0 : -EAGAIN;
+    }
+    if (limit->ticks != 0 && !limit->armed) {
+        limit->deadline = rtc_ticks_now() + limit->ticks + 1u;
+        limit->armed = 1;
     }
     t.cond = cond;
     t.arg = arg;
-    t.timed = timeo != 0;
-    t.deadline = rtc_ticks_now() + timeo + 1u;
+    t.timed = limit->ticks != 0;
+    t.deadline = limit->deadline;
     do {
         if (t.timed) {
             current_proc->wakeup_tick = t.deadline;
@@ -1636,8 +1672,8 @@ int32_t unix_connect(fd_entry_t *e, uintptr_t addr, uint32_t addrlen)
     struct unix_sock *s = sock_of(e);
     struct unix_sock *target, *c;
     struct unix_name n;
+    struct unix_timeo limit;
     uint32_t flags;
-    uint64_t timeo;
     int32_t rc;
 
     if (s->type == SOCK_DGRAM) {
@@ -1658,6 +1694,7 @@ int32_t unix_connect(fd_entry_t *e, uintptr_t addr, uint32_t addrlen)
     if (!c) {
         return -ENOMEM;
     }
+    timeo_init(&limit);
     for (;;) {
         target = lookup(&n, s->type, &rc);
         if (!target) {
@@ -1688,13 +1725,13 @@ int32_t unix_connect(fd_entry_t *e, uintptr_t addr, uint32_t addrlen)
             unix_put(target);
             return 0;
         }
-        timeo = s->sndtimeo;
+        timeo_take(&limit, s->sndtimeo);
         state_unpair(s, target, flags);
         if (rc == 0 && nonblocking(e, 0)) {
             rc = -EAGAIN;
         }
         if (rc == 0) {
-            rc = unix_wait(&target->wq, listener_has_room, target, timeo);
+            rc = unix_wait(&target->wq, listener_has_room, target, &limit);
         }
         unix_put(target);
         if (rc != 0) {
@@ -1731,8 +1768,8 @@ int32_t unix_accept(fd_entry_t *e, uintptr_t addr, uintptr_t addrlen_ptr, int fl
 {
     struct unix_sock *s = sock_of(e), *c;
     struct unix_name n;
+    struct unix_timeo limit;
     uint32_t saved;
-    uint64_t timeo;
     int32_t rc;
     int fd;
 
@@ -1746,6 +1783,7 @@ int32_t unix_accept(fd_entry_t *e, uintptr_t addr, uintptr_t addrlen_ptr, int fl
     if (fd < 0) {
         return fd;
     }
+    timeo_init(&limit);
     for (;;) {
         saved = spin_lock_irqsave(&s->state_lock);
         c = s->acc_head;
@@ -1760,13 +1798,13 @@ int32_t unix_accept(fd_entry_t *e, uintptr_t addr, uintptr_t addrlen_ptr, int fl
             break;
         }
         rc = s->state != US_LISTENING || (s->shut & SHUT_RCV) ? -EINVAL : 0;
-        timeo = s->rcvtimeo;
+        timeo_take(&limit, s->rcvtimeo);
         spin_unlock_irqrestore(&s->state_lock, saved);
         if (rc == 0 && nonblocking(e, 0)) {
             rc = -EAGAIN;
         }
         if (rc == 0) {
-            rc = unix_wait(&s->wq, has_connection, s, timeo);
+            rc = unix_wait(&s->wq, has_connection, s, &limit);
         }
         if (rc != 0) {
             fd_free(table(), fd);
@@ -2370,7 +2408,9 @@ static uint32_t send_chunk(const struct unix_sock *s, const struct unix_sock *p,
  * A stream's bytes go in pieces as the peer's queue has room; a packet goes
  * whole. Copying a piece from the caller can sleep, and the connection is
  * judged again after it, so a piece is not queued past an error or a
- * shutdown that came meanwhile.
+ * shutdown that came meanwhile. Each piece has SO_SNDTIMEO whole, shared by
+ * its waits, as Linux's unix_stream_sendmsg takes a fresh limit for each skb
+ * it allocates (sock_alloc_send_pskb, net/core/sock.c).
  */
 static int32_t send_conn(struct unix_sock *s, int nonblock, const struct kernel_iovec *iov,
                          uint32_t iovlen, uint32_t total, struct unix_out *out, int flags)
@@ -2378,7 +2418,7 @@ static int32_t send_conn(struct unix_sock *s, int nonblock, const struct kernel_
     struct unix_sock *p;
     struct unix_msg *m = NULL;
     uint32_t done = 0, saved, chunk = 0;
-    uint64_t timeo;
+    struct unix_timeo limit;
     int32_t rc = 0;
 
     saved = spin_lock_irqsave(&s->state_lock);
@@ -2392,11 +2432,12 @@ static int32_t send_conn(struct unix_sock *s, int nonblock, const struct kernel_
         return rc;
     }
     p = peer_get(s);
+    timeo_init(&limit);
     for (;;) {
         int full = 0, queued = 0;
 
         saved = state_pair(s, p);
-        timeo = s->sndtimeo;
+        timeo_take(&limit, s->sndtimeo);
         if (s->err) {
             rc = -s->err;
             s->err = 0;
@@ -2426,7 +2467,7 @@ static int32_t send_conn(struct unix_sock *s, int nonblock, const struct kernel_
                 rc = -EAGAIN;
                 break;
             }
-            rc = unix_wait(&p->wq, peer_has_room, s, timeo);
+            rc = unix_wait(&p->wq, peer_has_room, s, &limit);
             if (rc) {
                 break;
             }
@@ -2437,6 +2478,7 @@ static int32_t send_conn(struct unix_sock *s, int nonblock, const struct kernel_
             if (done >= total) {
                 break;
             }
+            timeo_init(&limit);
             continue;
         }
         m = build(s, iov, iovlen, done, chunk, out, &rc);
@@ -2501,8 +2543,8 @@ static int32_t send_dgram(struct unix_sock *s, int nonblock, const struct kernel
 {
     struct unix_sock *t;
     struct unix_msg *m;
+    struct unix_timeo limit;
     uint32_t flags;
-    uint64_t timeo;
     int32_t rc = 0;
     int drop_peer = 0;
 
@@ -2533,9 +2575,10 @@ static int32_t send_dgram(struct unix_sock *s, int nonblock, const struct kernel
         unix_put(t);
         return rc;
     }
+    timeo_init(&limit);
     for (;;) {
         flags = state_pair(s, t);
-        timeo = s->sndtimeo;
+        timeo_take(&limit, s->sndtimeo);
         rc = dgram_refusal(s, t, to, &drop_peer);
         if (!rc) {
             spin_lock(&t->queue_lock);
@@ -2554,7 +2597,7 @@ static int32_t send_dgram(struct unix_sock *s, int nonblock, const struct kernel
             rc = -EAGAIN;
             break;
         }
-        rc = unix_wait(&t->wq, target_has_room, t, timeo);
+        rc = unix_wait(&t->wq, target_has_room, t, &limit);
         if (rc) {
             break;
         }
@@ -2611,13 +2654,13 @@ static int has_data(void *arg)
     return ready;
 }
 
-/** Wait for a message: 0 with one at the head of the queue, 1 at the end of
- * input, or the socket's pending error, -EAGAIN or -EINTR. */
-static int32_t wait_data(struct unix_sock *s, int nonblock)
+/** Wait for a message within the receive's time limit `limit`: 0 with one at
+ * the head of the queue, 1 at the end of input, or the socket's pending
+ * error, -EAGAIN or -EINTR. */
+static int32_t wait_data(struct unix_sock *s, int nonblock, struct unix_timeo *limit)
 {
     int32_t rc;
     uint32_t flags;
-    uint64_t timeo;
 
     for (;;) {
         flags = spin_lock_irqsave(&s->state_lock);
@@ -2632,13 +2675,13 @@ static int32_t wait_data(struct unix_sock *s, int nonblock)
         } else {
             rc = -EAGAIN;
         }
-        timeo = s->rcvtimeo;
+        timeo_take(limit, s->rcvtimeo);
         spin_unlock(&s->queue_lock);
         spin_unlock_irqrestore(&s->state_lock, flags);
         if (rc != -EAGAIN || nonblock) {
             return rc;
         }
-        rc = unix_wait(&s->wq, has_data, s, timeo);
+        rc = unix_wait(&s->wq, has_data, s, limit);
         if (rc) {
             return rc;
         }
@@ -2735,6 +2778,7 @@ static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kerne
     uint32_t copied = 0, saved;
     uint32_t want = (flags & MSG_WAITALL) ? total : 1u;
     int peek = (flags & MSG_PEEK) != 0;
+    struct unix_timeo limit;
     int32_t rc = 0;
 
     saved = spin_lock_irqsave(&s->state_lock);
@@ -2743,6 +2787,7 @@ static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kerne
     if (rc || total == 0) {
         return rc;
     }
+    timeo_init(&limit);
     recv_lock(s);
     for (;;) {
         uint32_t off, chunk;
@@ -2760,7 +2805,7 @@ static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kerne
                 break;
             }
             recv_unlock(s);
-            rc = wait_data(s, nonblock);
+            rc = wait_data(s, nonblock, &limit);
             recv_lock(s);
             if (rc == 0) {
                 continue;
@@ -2815,6 +2860,7 @@ static int32_t recv_msg(struct unix_sock *s, int nonblock, const struct kernel_i
 {
     int peek = (flags & MSG_PEEK) != 0;
     struct unix_msg *m;
+    struct unix_timeo limit;
     uint32_t chunk, saved;
     int32_t rc;
 
@@ -2824,8 +2870,9 @@ static int32_t recv_msg(struct unix_sock *s, int nonblock, const struct kernel_i
     if (rc) {
         return rc;
     }
+    timeo_init(&limit);
     for (;;) {
-        rc = wait_data(s, nonblock);
+        rc = wait_data(s, nonblock, &limit);
         if (rc) {
             return rc == 1 ? 0 : rc;
         }
