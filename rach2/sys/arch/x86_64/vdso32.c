@@ -21,8 +21,9 @@
 
 #if RACH2_IA32
 
-/* The system call's entry and the return after it (isr.c). */
-void isr_syscall(isr_params_t *params);
+/* The system call's entry from a fast instruction and the return after it
+ * (isr.c). */
+void isr_syscall_at(isr_params_t *params, uint64_t start);
 void isr_leave(isr_params_t *params);
 
 /* The flags only `iretq` restores: TF, and RF, which `sysret` clears. */
@@ -510,10 +511,11 @@ uintptr_t ia32_vdso_sigreturn(int rt)
  * takes SIGSEGV.
  *
  * The call takes the big lock, or runs without it, and counts in debugfs's
- * bkl/calls, as an `int $0x80` does (`isr_syscall`). The read of EBP from
- * the stack comes before the call's entry, with interrupts off as at the
- * entry; a read that fails pushes a frame record of no lock for the
- * return.
+ * bkl/calls, as an `int $0x80` does (`isr_syscall_at`). The read of EBP
+ * from the stack comes before the call's entry, with interrupts off as at
+ * the entry, and inside the call's time when the cycle account is on; a
+ * read that fails pushes a frame record of no lock for the return and
+ * counts the call once under its number, as the call it stands for.
  *
  * After the call, and the signal its return delivers (`isr_leave`), the
  * return may be by `sysretl`, as Linux's opportunistic SYSRETL: when the
@@ -525,8 +527,13 @@ int ia32_fast_syscall(isr_params_t *p, int sysenter)
 {
     struct mm *mm;
     uintptr_t base, landing;
+    uint64_t start = 0;
     uint32_t ebp;
 
+    if (sched_cycle_account) {
+        start = arch_cycles();
+        this_cpu()->entry_cycles = start;
+    }
     mm = current_proc ? current_proc->mm : NULL;
     base = mm && mm->compat ? mm->vdso : 0;
     landing = vdso32_at(base, vdso32_landing);
@@ -535,15 +542,13 @@ int ia32_fast_syscall(isr_params_t *p, int sysenter)
         p->rsp = (uint32_t)p->rbp;
     }
     if (copy_from_user(&ebp, (const void __user *)(uintptr_t)(uint32_t)p->rsp, sizeof(ebp)) != 0) {
-        if (sched_cycle_account) {
-            this_cpu()->entry_cycles = arch_cycles();
-        }
         current_proc->orig_nr = (int32_t)(uint32_t)p->rax;
         p->rax = (uint64_t)(int64_t)-EFAULT;
         bkl_frame_push(0);
+        smp_call_end((uint32_t)current_proc->orig_nr, 0, start);
     } else {
         p->rbp = ebp;
-        isr_syscall(p);
+        isr_syscall_at(p, start);
     }
     isr_leave(p);
     return p->rip == landing && landing <= 0xFFFFFFFFu && p->cs == GDT_USER_CODE32 &&
