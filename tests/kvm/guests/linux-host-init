@@ -48,6 +48,8 @@ done
 $B mkdir -p $r/dev $r/proc $r/sys $r/tmp
 $B mount -t tmpfs tmpfs $r/tmp
 $B mount -o bind /dev $r/dev
+# POSIX semaphores and shared memory, which selftests open, live there.
+$B mkdir -p $r/dev/shm && $B mount -t tmpfs tmpfs $r/dev/shm
 $B mount -t proc proc $r/proc
 $B mount -t sysfs sysfs $r/sys
 $B mount -t debugfs debugfs $r/sys/kernel/debug
