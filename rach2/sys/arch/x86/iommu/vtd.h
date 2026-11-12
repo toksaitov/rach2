@@ -69,6 +69,7 @@
 #define VTD_ECAP_C(e)   ((unsigned int)((e) & 1u))        /* coherent walks */
 #define VTD_ECAP_QI(e)  ((unsigned int)(((e) >> 1) & 1u)) /* queued invalidation */
 #define VTD_ECAP_IR(e)  ((unsigned int)(((e) >> 3) & 1u)) /* interrupt remapping */
+#define VTD_ECAP_EIM(e) ((unsigned int)(((e) >> 4) & 1u)) /* x2APIC ids in entries */
 #define VTD_ECAP_PT(e)  ((unsigned int)(((e) >> 6) & 1u)) /* pass-through */
 #define VTD_ECAP_SC(e)  ((unsigned int)(((e) >> 7) & 1u)) /* snoop control */
 #define VTD_ECAP_IRO(e) ((unsigned int)((((e) >> 8) & 0x3FFu) * 16u))
@@ -138,6 +139,7 @@ struct dmar_info {
 
 #define DMAR_INCLUDE_ALL 0x01u
 #define DMAR_INTR_REMAP  0x01u
+#define DMAR_X2APIC_OUT  0x02u /* the firmware asks that x2APIC mode not be used */
 
 /* A remapping unit at work. */
 struct vtd_unit {
@@ -276,5 +278,16 @@ int vtd_hw_fault_vector(void);
 
 /** The local APIC id the units' fault events go to. */
 uint32_t vtd_hw_apic_id(void);
+
+/** Whether the local APIC is in x2APIC mode or may be moved there
+ * (`lapic_x2apic_possible`). */
+int vtd_hw_x2apic_possible(void);
+
+/** Move the boot processor's APIC to x2APIC mode: 1 when it moved, 0 when
+ * it was there, -1 when it cannot (`lapic_x2apic_enable`). */
+int vtd_hw_x2apic_enable(void);
+
+/** Move it back after a failed start (`lapic_x2apic_disable`). */
+void vtd_hw_x2apic_disable(void);
 
 #endif /* _VTD_H_ */

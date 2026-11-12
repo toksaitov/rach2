@@ -11,6 +11,7 @@
 Kernel command line:
 .Ql maxcpus=N ,
 .Ql noapic ,
+.Ql nox2apic ,
 .Ql rach2.noacpica ,
 .Ql rach2.nomsi ,
 .Ql rach2.nosci ,
@@ -138,6 +139,13 @@ refused, and with
 on the kernel command line.
 .Ql rach2.nomsi
 refuses the local APIC, and with it messages and the I/O APIC.
+.Pp
+The local APIC runs in x2APIC mode, its registers model-specific
+registers, under a hypervisor that allows it without interrupt remapping,
+and on bare metal once VT-d remaps interrupts in x2APIC format; elsewhere,
+and with
+.Ql nox2apic ,
+it runs in xAPIC mode.
 .Pp
 The kernel runs on every processor the MADT lists as enabled, up to 64.
 Before the first program it starts each through its local APIC, with INIT

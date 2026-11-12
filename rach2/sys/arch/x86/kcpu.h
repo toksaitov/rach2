@@ -28,6 +28,18 @@ int kcpu_msr_present(void);
 /** Whether `cpuid` reports a local APIC (leaf 1, EDX bit 9). */
 int kcpu_apic_present(void);
 
+/** Whether `cpuid` reports x2APIC mode (leaf 1, ECX bit 21). */
+int kcpu_x2apic_present(void);
+
+/** Whether the processor has x2APIC mode and runs under a hypervisor that
+ * delivers interrupts to it without interrupt remapping: KVM, Hyper-V or
+ * Xen, as Linux's `x86_init.hyper.x2apic_available` answers. */
+int kcpu_x2apic_unremapped(void);
+
+/** Whether the firmware locked the APIC in x2APIC mode, so that it cannot
+ * be returned to xAPIC mode. */
+int kcpu_x2apic_locked(void);
+
 /** The model-specific register `msr`, its halves in `lo` and `hi`, each
  * stored unless its pointer is NULL. */
 void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi);

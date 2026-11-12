@@ -21,9 +21,28 @@
  * each time it reaches zero; it is the tick when the I/O APIC takes the
  * lines (apictimer.c). Every register here is the running processor's own.
  *
- * A processor without an APIC, without the model-specific registers, in
- * x2APIC mode, or with its registers above 4 GiB, at no address or on a page
- * that cannot be mapped, is refused by name: the kernel then has no message
+ * The APIC has two modes. In xAPIC mode its registers are a page of memory;
+ * in x2APIC mode they are model-specific registers from 0x800, one for each
+ * 16 bytes of the page, and the interrupt command register is one 64-bit
+ * register whose single write sends the message, with no delivery status to
+ * wait on (SDM, the x2APIC's register address space). Under a hypervisor
+ * each access to the page is an exit with its instruction decoded, and an
+ * xAPIC interprocessor interrupt is three of them, so x2APIC mode is used
+ * where Linux 6.12.115 uses it: under a hypervisor that delivers interrupts
+ * to it unremapped (`kcpu_x2apic_unremapped`), from `lapic_init`; and on
+ * bare metal once the VT-d units remap interrupts in x2APIC format
+ * (`lapic_x2apic_enable`, iommu/intremap.c), since an x2APIC without
+ * remapping is not supported there. That is Linux's try_to_enable_x2apic
+ * and check_x2apic (arch/x86/kernel/apic/apic.c, lines 1820 to 1873). A
+ * firmware that left the APIC in x2APIC mode on bare metal has it returned
+ * to xAPIC mode, as Linux's x2apic_disable does, unless it locked it there.
+ * Destinations are physical, as x2apic_phys.c gives them: every message
+ * names one processor. `nox2apic` keeps xAPIC mode, as on Linux.
+ *
+ * A processor without an APIC or without the model-specific registers, in
+ * an x2APIC mode it cannot leave with an identity above 254, or in xAPIC
+ * mode with its registers above 4 GiB, at no address or on a page that
+ * cannot be mapped, is refused by name: the kernel then has no message
  * vectors and every device stays on its legacy line. `rach2.nomsi` refuses
  * in the same way, so a machine that misbehaves has one word on its boot
  * line.
@@ -58,6 +77,11 @@
 #define LAPIC_INITIAL 0x380
 #define LAPIC_CURRENT 0x390
 #define LAPIC_DIVIDE  0x3E0
+#define LAPIC_SELF    0x3F0 /* x2APIC mode's self-interrupt register */
+#define LAPIC_ERROR   0x370
+
+/* The x2APIC's registers: the xAPIC offset over 16, from 0x800. */
+#define X2APIC_MSR(reg) (0x800u + (reg) / 16u)
 
 #define LVT_MASKED          (1u << 16)
 #define LVT_DELIVERY_MASK   (7u << 8)
@@ -75,14 +99,17 @@
 #define ICR_ASSERT          (1u << 14)
 #define ICR_LEVEL           (1u << 15)
 
-/* The APIC's register page as `lapic_init` mapped it, NULL until then and
- * while a host test's `io` stands in for it; the host test's access, or
- * NULL; the boot processor's APIC identity; and whether `lapic_init`
- * enabled the APIC, which every access but its own checks. */
+/* The APIC's register page as `lapic_init` mapped it, NULL until then, in
+ * x2APIC mode, and while a host test's `io` stands in for it; the host
+ * test's access, or NULL; the boot processor's APIC identity; whether
+ * `lapic_init` enabled the APIC, which every access but its own checks;
+ * and whether every processor's APIC is in x2APIC mode, its registers
+ * MSRs, which changes only on the boot processor before the others start. */
 static volatile uint32_t *apic;
 static const struct lapic_io *io;
 static uint32_t apic_id;
 static int ready;
+static int x2apic;
 
 /* The spurious vectors each processor took, in a word of its own, since the
  * handler runs without a lock on every processor. */
@@ -93,26 +120,43 @@ void lapic_set_io(const struct lapic_io *ops)
     io = ops;
 }
 
-/** Read the APIC register at offset `reg`, through `io` when a host test
- * gave one. */
+/** Read the APIC register at offset `reg`: its MSR in x2APIC mode, else
+ * through `io` when a host test gave one, else the page. */
 static uint32_t apic_read(uint32_t reg)
 {
+    if (x2apic) {
+        uint32_t lo = 0;
+
+        kcpu_rdmsr(X2APIC_MSR(reg), &lo, 0);
+        return lo;
+    }
     if (io) {
         return io->read(reg);
     }
     return apic[reg / 4];
 }
 
-/** Write the APIC register at offset `reg`, through `io` when a host test
- * gave one. */
+/** Write the APIC register at offset `reg`: its MSR in x2APIC mode, else
+ * through `io` when a host test gave one, else the page. */
 static void apic_write(uint32_t reg, uint32_t value)
 {
+    if (x2apic) {
+        kcpu_wrmsr(X2APIC_MSR(reg), value, 0);
+        return;
+    }
     if (io) {
         io->write(reg, value);
         return;
     }
     apic[reg / 4] = value;
     (void)apic[LAPIC_ID / 4]; /* a read the write cannot pass */
+}
+
+/** The running processor's APIC identity: the whole x2APIC identity, or
+ * bits 31:24 of the xAPIC's register. */
+static uint32_t lapic_this_id_raw(void)
+{
+    return x2apic ? apic_read(LAPIC_ID) : apic_read(LAPIC_ID) >> 24;
 }
 
 /** Log why `lapic_init` refused, and return -1. */
@@ -135,10 +179,60 @@ static uint32_t lapic_svr(uint32_t svr)
     return (svr & ~(0xFFu | SVR_EOI_SUPPRESS)) | SVR_SOFTWARE_ENABLE | SPURIOUS_VECTOR;
 }
 
+/** Whether x2APIC mode may be used: the processor has it and the boot line
+ * has no `nox2apic`, Linux's word that clears the processor's x2APIC bit. */
+static int x2apic_offered(void)
+{
+    return !kcmdline_has("nox2apic") && kcpu_x2apic_present();
+}
+
+/** Return this processor's APIC from x2APIC to xAPIC mode through the
+ * disabled state, since the SDM allows no direct step, as Linux's
+ * __x2apic_disable writes it (apic.c, lines 1706 to 1720). `lo` and `hi`
+ * are IA32_APIC_BASE as read. */
+static void x2apic_leave(uint32_t lo, uint32_t hi)
+{
+    kcpu_wrmsr(IA32_APIC_BASE, lo & ~(APIC_BASE_X2APIC | APIC_BASE_ENABLE), hi);
+    kcpu_wrmsr(IA32_APIC_BASE, (lo & ~APIC_BASE_X2APIC) | APIC_BASE_ENABLE, hi);
+}
+
 /**
- * A base whose upper half is not zero is above 4 GiB, where this kernel's
- * addresses do not reach, and taking its low half would map another
- * device's page.
+ * Choose the boot processor's mode from IA32_APIC_BASE's `*lo` and `hi`,
+ * as check_x2apic and try_to_enable_x2apic do for a kernel with no
+ * interrupt remapping yet: x2APIC mode (`x2apic` set) under a hypervisor
+ * that allows it, or where the firmware locked it; otherwise xAPIC mode,
+ * with a firmware's x2APIC mode left (`*lo` updated). 0, or -1 when the
+ * firmware's x2APIC identity is past what xAPIC mode can address.
+ */
+static int choose_mode(uint32_t *lo, uint32_t hi)
+{
+    uint32_t id = 0;
+
+    x2apic = x2apic_offered() && kcpu_x2apic_unremapped();
+    if ((*lo & APIC_BASE_X2APIC) == 0 || x2apic) {
+        return 0;
+    }
+    if (kcpu_x2apic_locked()) {
+        x2apic = 1;
+        klog(KLOG_WARN, "lapic", "x2apic: locked on by the firmware; kept");
+        return 0;
+    }
+    kcpu_rdmsr(X2APIC_MSR(LAPIC_ID), &id, 0);
+    if (id >= 0xFFu) {
+        return -1;
+    }
+    x2apic_leave(*lo, hi);
+    *lo = (*lo & ~APIC_BASE_X2APIC) | APIC_BASE_ENABLE;
+    klog(KLOG_INFO, "lapic", "x2apic: left on by the firmware; returned to xapic mode");
+    return 0;
+}
+
+/**
+ * In x2APIC mode no page is mapped and the base is not read.
+ *
+ * In xAPIC mode a base whose upper half is not zero is above 4 GiB, where
+ * this kernel's addresses do not reach, and taking its low half would map
+ * another device's page.
  *
  * The software enable comes first, and the local-vector entries after it.
  * While the spurious register's bit 8 is clear the processor holds the mask
@@ -155,6 +249,7 @@ int lapic_init(void)
     uintptr_t page;
 
     ready = 0;
+    x2apic = 0;
     if (kcmdline_has("rach2.nomsi")) {
         return refuse("rach2.nomsi on the boot line");
     }
@@ -165,27 +260,33 @@ int lapic_init(void)
         return refuse("the processor has no model-specific registers");
     }
     kcpu_rdmsr(IA32_APIC_BASE, &lo, &hi);
-    if ((lo & APIC_BASE_X2APIC) != 0) {
-        return refuse("x2apic mode, whose registers this driver does not read");
-    }
-    if (hi != 0) {
-        return refuse("an apic base above 4 gib");
+    if (choose_mode(&lo, hi) != 0) {
+        return refuse("x2apic mode with an identity past 254, which xapic mode cannot address");
     }
     base = lo & 0xFFFFF000u;
-    if (base == 0) {
-        return refuse("no apic base address");
-    }
-    if (!io) {
-        page = map_mmio((uintptr_t)base, 0x1000);
-        if (page == 0) {
-            return refuse("the apic page could not be mapped");
+    if (!x2apic) {
+        if (hi != 0) {
+            return refuse("an apic base above 4 gib");
         }
-        apic = (volatile uint32_t *)page;
+        if (base == 0) {
+            return refuse("no apic base address");
+        }
+        if (!io) {
+            page = map_mmio((uintptr_t)base, 0x1000);
+            if (page == 0) {
+                return refuse("the apic page could not be mapped");
+            }
+            apic = (volatile uint32_t *)page;
+        }
     }
     if ((lo & APIC_BASE_ENABLE) == 0) {
-        kcpu_wrmsr(IA32_APIC_BASE, lo | APIC_BASE_ENABLE, hi);
+        lo |= APIC_BASE_ENABLE;
+        kcpu_wrmsr(IA32_APIC_BASE, lo, hi);
     }
-    apic_id = apic_read(LAPIC_ID) >> 24;
+    if (x2apic && (lo & APIC_BASE_X2APIC) == 0) {
+        kcpu_wrmsr(IA32_APIC_BASE, lo | APIC_BASE_X2APIC, hi);
+    }
+    apic_id = lapic_this_id_raw();
 
     apic_write(LAPIC_SVR, lapic_svr(apic_read(LAPIC_SVR)));
     apic_write(LAPIC_TPR, 0);
@@ -196,9 +297,85 @@ int lapic_init(void)
         klog(KLOG_WARN, "lapic", "lint0 was 0x%x; set to an unmasked external interrupt", lint0);
     }
     ready = 1;
-    klog(KLOG_DEBUG, "lapic", "ready: id %d, version 0x%x, base 0x%x", (int)apic_id,
-         apic_read(LAPIC_VERSION) & 0xFFu, base);
+    klog(KLOG_DEBUG, "lapic", "ready: id %d, version 0x%x, %s", (int)apic_id,
+         apic_read(LAPIC_VERSION) & 0xFFu, x2apic ? "x2apic mode" : "xapic mode");
     return 0;
+}
+
+/* The registers a change of mode must keep: the spurious register and task
+ * priority, the local-vector entries this kernel writes, and the timer's
+ * divisor and count. */
+static const uint32_t kept_regs[] = {LAPIC_SVR,   LAPIC_TPR,    LAPIC_TIMER,
+                                     LAPIC_LINT0, LAPIC_LINT1,  LAPIC_LVTPC,
+                                     LAPIC_ERROR, LAPIC_DIVIDE, LAPIC_INITIAL};
+#define NKEPT ((int)(sizeof(kept_regs) / sizeof(kept_regs[0])))
+
+/**
+ * Move the boot processor's APIC to x2APIC mode (`to` 1) or back (`to` 0),
+ * with interrupts off, and write again each register in `kept_regs` that
+ * the move changed. The SDM keeps every register but the identity and the
+ * logical destination from xAPIC to x2APIC mode, and resets them all on the
+ * way back through the disabled state; the count of registers written
+ * again is logged, so that a processor that kept less shows it.
+ */
+static void switch_mode(int to)
+{
+    uint32_t saved[NKEPT], lo = 0, hi = 0, flags;
+    int i, rewritten = 0;
+
+    flags = kirq_save();
+    for (i = 0; i < NKEPT; i++) {
+        saved[i] = apic_read(kept_regs[i]);
+    }
+    kcpu_rdmsr(IA32_APIC_BASE, &lo, &hi);
+    if (to) {
+        kcpu_wrmsr(IA32_APIC_BASE, lo | APIC_BASE_X2APIC, hi);
+    } else {
+        x2apic_leave(lo, hi);
+    }
+    x2apic = to;
+    for (i = 0; i < NKEPT; i++) {
+        if (apic_read(kept_regs[i]) != saved[i]) {
+            apic_write(kept_regs[i], saved[i]);
+            rewritten++;
+        }
+    }
+    apic_id = lapic_this_id_raw();
+    kirq_restore(flags);
+    klog(rewritten ? KLOG_WARN : KLOG_INFO, "lapic", "%s: id %d, %d register(s) written again",
+         to ? "x2apic mode" : "xapic mode", (int)apic_id, rewritten);
+}
+
+int lapic_x2apic(void)
+{
+    return ready && x2apic;
+}
+
+int lapic_x2apic_possible(void)
+{
+    return ready && (x2apic || x2apic_offered());
+}
+
+/** A page must be mapped to come back, which `lapic_init` mapped in xAPIC
+ * mode. */
+int lapic_x2apic_enable(void)
+{
+    if (!lapic_x2apic_possible()) {
+        return -1;
+    }
+    if (x2apic) {
+        return 0;
+    }
+    switch_mode(1);
+    return 1;
+}
+
+void lapic_x2apic_disable(void)
+{
+    if (ready && x2apic && (apic != NULL || io != NULL) && !kcpu_x2apic_unremapped() &&
+        !kcpu_x2apic_locked()) {
+        switch_mode(0);
+    }
 }
 
 /** The request and in-service registers have 256 bits each, 32 to a word,
@@ -234,7 +411,7 @@ uint32_t lapic_id(void)
 
 uint32_t lapic_this_id(void)
 {
-    return ready ? apic_read(LAPIC_ID) >> 24 : 0;
+    return ready ? lapic_this_id_raw() : 0;
 }
 
 void lapic_eoi(void)
@@ -280,12 +457,18 @@ void lapic_set_lint(int lint, uint32_t entry)
 }
 
 /** The self shorthand ignores the destination, so the two writes need not
- * be kept together as `send_command` keeps them. */
+ * be kept together as `send_command` keeps them. x2APIC mode has a register
+ * for it, which Linux's x2apic_send_IPI_self writes (x2apic_phys.c, lines
+ * 101 to 104). */
 void lapic_self_ipi(uint8_t vector)
 {
     int spins;
 
     if (!ready) {
+        return;
+    }
+    if (x2apic) {
+        apic_write(LAPIC_SELF, vector);
         return;
     }
     apic_write(LAPIC_ICR_HI, 0);
@@ -295,21 +478,42 @@ void lapic_self_ipi(uint8_t vector)
     }
 }
 
+/** The processor's mode is made the boot processor's first, as Linux's
+ * x2apic_setup makes it (apic.c, lines 1757 to 1777). */
 void lapic_init_ap(void)
 {
+    uint32_t lo = 0, hi = 0;
+
     if (!ready) {
         return;
+    }
+    kcpu_rdmsr(IA32_APIC_BASE, &lo, &hi);
+    if (x2apic && (lo & APIC_BASE_X2APIC) == 0) {
+        kcpu_wrmsr(IA32_APIC_BASE, lo | APIC_BASE_ENABLE, hi);
+        kcpu_wrmsr(IA32_APIC_BASE, lo | APIC_BASE_ENABLE | APIC_BASE_X2APIC, hi);
+    } else if (!x2apic && (lo & APIC_BASE_X2APIC) != 0) {
+        x2apic_leave(lo, hi);
     }
     apic_write(LAPIC_SVR, lapic_svr(apic_read(LAPIC_SVR)));
     apic_write(LAPIC_TPR, 0);
 }
 
 /**
- * Write the interrupt command register for the processor `target`, the
- * destination in the high word first, since the write of the low word sends
- * the message, and wait for the APIC to have sent it. Interrupts are off
- * across the two writes: a handler that sent its own message between them
- * would leave this one with the other's destination.
+ * Write the interrupt command register for the processor `target`.
+ *
+ * In xAPIC mode the destination goes in the high word first, since the
+ * write of the low word sends the message, and the APIC is waited on until
+ * it has sent it. Interrupts are off across the two writes: a handler that
+ * sent its own message between them would leave this one with the other's
+ * destination.
+ *
+ * In x2APIC mode the command is one write of the 64-bit register, the
+ * destination in its high half, Linux's native_x2apic_icr_write
+ * (arch/x86/include/asm/apic.h, lines 231 to 234), with nothing to wait on.
+ * A write of an x2APIC register does not serialize, so MFENCE and LFENCE
+ * come first, Linux's weak_wrmsr_fence (asm/processor.h, lines 760 to
+ * 763, which x2apic_send_IPI calls at x2apic_phys.c line 48): a store made
+ * before the message must reach the processor it wakes.
  */
 static void send_command(uint32_t target, uint32_t low)
 {
@@ -317,6 +521,12 @@ static void send_command(uint32_t target, uint32_t low)
     int spins;
 
     if (!ready) {
+        return;
+    }
+    if (x2apic) {
+        /* mfence and lfence as bytes: i686 tcc has no mnemonic for them. */
+        __asm__ __volatile__(".byte 0x0f, 0xae, 0xf0\n\t.byte 0x0f, 0xae, 0xe8" : : : "memory");
+        kcpu_wrmsr(X2APIC_MSR(LAPIC_ICR_LO), low, target);
         return;
     }
     flags = kirq_save();
