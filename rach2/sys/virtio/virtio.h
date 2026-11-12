@@ -235,10 +235,13 @@ struct virtio_map;
  *     order: 0 with the map in `*out`, or -EINVAL,
  *     -EFAULT for memory that cannot be shared, -ENODEV, -ENOMEM. When the
  *     transport must take the frames back before map_free, as when the
- *     device's memory changes or its VM ends, it first calls
- *     `revoke(owner)`, which stops every use of them and does not sleep.
+ *     device's memory changes or its VM ends, it calls `revoke(owner)`,
+ *     which stops every new use of them and does not sleep; the frames
+ *     stay held until map_free, so that a use begun before the revoke
+ *     never reaches a frame reused since.
  * map_frame: the frame of page `i` of `m`, or 0 once it is taken back.
- * map_free: let go of `m`, without its `revoke`, once nothing uses it.
+ * map_free: let go of `m` and its frames, without its `revoke`, once
+ *     nothing uses them.
  */
 struct virtio_ops {
     const char *name;

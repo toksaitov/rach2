@@ -18,10 +18,11 @@
  * whose address space has ended, each with nothing held and no range on
  * the notice; a change of the maker's memory past the map's range or
  * inside it between the runs leaving the map, and one that meets a run
- * taking it back through the owner's revoke once, with every reference let
- * go and its frames answering 0; the end of the maker's memory, a slot's
- * change over a run and the VM's end each taking maps back; and a free
- * without a revoke, after which nothing is held.
+ * taking it back through the owner's revoke once, its frames answering 0
+ * and every reference kept, counted, until the owner's free; the end of
+ * the maker's memory, a slot's change over a run and the VM's end each
+ * taking maps back with their references kept; and a free without a
+ * revoke, after which nothing is held.
  */
 #include "kvm/gpamap.c"
 #include "mm/notify.c"
@@ -363,18 +364,23 @@ static void notice_rows(struct kvm_vm *vm)
     mmn_notify(&maker, MMN_COW, MEM_BASE + 18 * 4096u, MEM_BASE + 19 * 4096u);
     CHECK(revokes == 1 && seen_held == 2,
           "a copy-on-write break over a run calls the revoke while the frames are held");
-    CHECK(kvm_gpamap_frame(m, 0) == 0 && held() == 0 && maker.notify == NULL && vm->gpamap == NULL,
-          "the taken-back map holds nothing and answers 0");
-    CHECK(counts[KVM_COUNT_GPA_MAP] == 0 && counts[KVM_COUNT_GPA_MAP_PAGE] == 0,
-          "the counts back after the taking back");
+    CHECK(kvm_gpamap_frame(m, 0) == 0 && maker.notify == NULL && vm->gpamap == NULL,
+          "the taken-back map answers 0 and leaves the notice and the VM's list");
+    CHECK(held() == 2 && counts[KVM_COUNT_GPA_MAP] == 1 && counts[KVM_COUNT_GPA_MAP_PAGE] == 2,
+          "the taken-back map keeps its references, counted, for a fault that read a frame before");
     kvm_gpamap_free(m);
-    CHECK(revokes == 1 && live == 0, "a free after the taking back lets the record go alone");
+    CHECK(revokes == 1 && live == 0 && held() == 0,
+          "a free after the taking back lets the frames go");
+    CHECK(counts[KVM_COUNT_GPA_MAP] == 0 && counts[KVM_COUNT_GPA_MAP_PAGE] == 0,
+          "the counts back after the free");
 
     reset(vm);
     CHECK(make(vm, &run, 1, "a", &m) == 0, "a map for the release row");
     mmn_release(&maker);
-    CHECK(revokes == 1 && held() == 0, "the end of the maker's memory takes the map back");
+    CHECK(revokes == 1 && held() == 2 && maker.notify == NULL,
+          "the end of the maker's memory takes the map back, its references kept");
     kvm_gpamap_free(m);
+    CHECK(held() == 0, "the free lets them go");
 }
 
 /** A slot's change over a run, and the VM's end. */
@@ -390,13 +396,14 @@ static void vm_rows(struct kvm_vm *vm)
               kvm_gpamap_frame(ma, 0) == mem_frame[17],
           "a slot's change takes back the map over it alone");
     kvm_gpamap_vm_end(vm);
-    CHECK(revokes == 2 && seen[0] == 'a' && held() == 0 && vm->gpamap == NULL &&
+    CHECK(revokes == 2 && seen[0] == 'a' && held() == 2 && vm->gpamap == NULL &&
               maker.notify == NULL,
-          "the VM's end takes back every map");
+          "the VM's end takes back every map, their references kept");
     kvm_gpamap_free(ma);
     kvm_gpamap_free(mb);
     kvm_gpamap_free(NULL);
-    CHECK(live == 0 && revokes == 2, "every record freed, with no revoke more");
+    CHECK(live == 0 && revokes == 2 && held() == 0,
+          "every record and reference freed, with no revoke more");
 }
 
 int main(void)
