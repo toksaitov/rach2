@@ -713,13 +713,15 @@ static void ready_lists(void)
 /**
  * Of two wakes of one blocked record, the first makes it ready, marks it
  * woken and asks for an interrupt to the processor it outranks the current
- * thread of; the second, finding it ready under the run queues' lock, asks
- * for none and leaves it where it is in its list, ahead of a record made
- * ready after the first, as Linux's `try_to_wake_up` leaves a task whose
- * state no longer matches (kernel/sched/core.c:4191-4193). A running or a
- * stopped record is left as it was. A signal's wake clears the deadline and
- * marks the record woken; the tick's wakes a sleeper only once its deadline
- * is due, and marks it woken too, so that the slice gives way to either.
+ * thread of, whose `need_resched` it sets, as Linux's resched_curr
+ * (kernel/sched/core.c:1094-1116); the second, finding it ready under the
+ * run queues' lock, asks for none and leaves it where it is in its list,
+ * ahead of a record made ready after the first, as Linux's `try_to_wake_up`
+ * leaves a task whose state no longer matches (kernel/sched/core.c:4191-
+ * 4193). A running or a stopped record is left as it was. A signal's wake
+ * clears the deadline and marks the record woken; the tick's wakes a
+ * sleeper only once its deadline is due, and marks it woken too, so that
+ * the slice gives way to either.
  */
 static void wake_twice(void)
 {
@@ -732,9 +734,12 @@ static void wake_twice(void)
     procs[4].state = PROC_BLOCKED;
     p->rt_priority = 1;
     CHECK(sched_wake_blocked(p) == 0, "the first wake asks for the outranked processor");
+    CHECK(current_proc->need_resched, "and asks the thread it outranks to switch");
+    current_proc->need_resched = 0;
     CHECK(p->state == PROC_READY && p->woken && p->ready_linked, "the first wake queues and marks");
     CHECK(run_queues[0].count == 5 && run_queues[0].tail == p, "the first wake queues at the tail");
-    CHECK(sched_wake_blocked(&procs[4]) == -1, "an equal record asks for no interrupt");
+    CHECK(sched_wake_blocked(&procs[4]) == -1 && !current_proc->need_resched,
+          "an equal record asks for no interrupt and no switch");
     CHECK(sched_wake_blocked(p) == -1, "the second wake asks for no interrupt");
     CHECK(run_queues[0].count == 6 && run_queues[0].tail == &procs[4],
           "the second wake leaves the record ahead of a later one");
@@ -919,6 +924,69 @@ static void tick_slice(void)
     clock_ns = 0;
 }
 
+/**
+ * Within the slice the tick takes a queued real-time thread only when it
+ * outranks the current one: an equal SCHED_RR peer waits for the slice, as
+ * Linux requeues an RR thread only once its time slice has run out
+ * (task_tick_rt, kernel/sched/rt.c:2586-2602), and a higher one switches
+ * at once. A real-time thread queued on another processor behind a higher
+ * one, which selection here could take, counts as well: processor 1 runs a
+ * SCHED_FIFO thread of priority 99 with one of priority 50 queued behind
+ * it, and processor 0's tick, 100 us into an ordinary thread's slice, takes
+ * the 50, as Linux's push_rt_task moves it to a processor running lower
+ * work and reschedules that one (rt.c:1982-2092).
+ */
+static void tick_rt(void)
+{
+    unsigned int i;
+
+    clock_ns = 1000000000u;
+    setup();
+    for (i = 1; i < 7; i++) {
+        sched_forget(&procs[i]);
+        procs[i].state = PROC_BLOCKED;
+    }
+    procs[0].sched_policy = procs[1].sched_policy = SCHED_RR;
+    procs[0].rt_priority = procs[1].rt_priority = 10;
+    sched_make_ready(&procs[1]);
+    procs[0].slice_ns = clock_ns;
+    clock_ns += 100000u;
+    irq_flags = 0;
+    sched_tick();
+    CHECK(current_proc == &procs[0] && switches == 0,
+          "an equal SCHED_RR peer waits for the slice at the tick");
+    procs[1].rt_priority = 11;
+    sched_priority_changed(&procs[1]);
+    sched_tick();
+    CHECK(current_proc == &procs[1] && switches == 1,
+          "a higher real-time thread takes the processor at the tick within the slice");
+
+    setup();
+    for (i = 1; i < 7; i++) {
+        sched_forget(&procs[i]);
+        procs[i].state = PROC_BLOCKED;
+    }
+    cpu_table[1].online = 1;
+    cpu_table[1].current = &procs[1];
+    procs[1].state = PROC_RUNNING;
+    procs[1].cpu = procs[2].cpu = 1;
+    procs[1].sched_policy = procs[2].sched_policy = SCHED_FIFO;
+    procs[1].rt_priority = 99;
+    procs[2].rt_priority = 50;
+    sched_make_ready(&procs[2]);
+    CHECK(run_queues[1].count == 1 && run_queues[0].count == 0 && !procs[1].need_resched,
+          "a FIFO 50 thread queues behind the FIFO 99 one on processor 1");
+    procs[0].slice_ns = clock_ns;
+    clock_ns += 100000u;
+    irq_flags = 0;
+    sched_tick();
+    CHECK(current_proc == &procs[2] && procs[2].cpu == 0 && switches == 1,
+          "processor 0's tick within an ordinary slice takes it from processor 1's queue");
+    cpu_table[1].online = 0;
+    init_sched();
+    clock_ns = 0;
+}
+
 /* The calls of the `sched_out` that `sched_out_rows` gives its threads. */
 static int out_calls;
 static void *out_arg;
@@ -1027,15 +1095,17 @@ int main(int argc, char **argv)
     migration();
     run_delay();
     tick_slice();
+    tick_rt();
     affinity_rows();
     if (failures) {
         return 1;
     }
-    dprintf(1, "sched-hosttest: result: pass: priority, fairness, states, lifecycle, big lock, "
-               "preempt due, "
-               "accounting, "
-               "load phase, "
-               "idle machine, ready lists, wake twice, migration, run delay, tick slice\n");
+    dprintf(1,
+            "sched-hosttest: result: pass: priority, fairness, states, lifecycle, big lock, "
+            "preempt due, "
+            "accounting, "
+            "load phase, "
+            "idle machine, ready lists, wake twice, migration, run delay, tick slice, tick rt\n");
     return 0;
 }
 
