@@ -23,7 +23,9 @@
 #   and TIMEOUT 0, so that no test is judged by
 #   the clock. A test passes on its PASS line and skips on its SKIP line.
 # * `selftests`: each program of /opt/kvm-selftests, run in a directory of
-#   its own; exit 0 is a pass and 4, kselftest's code, a skip.
+#   its own; exit 0 is a pass and 4, kselftest's code, a skip. A NAME of
+#   the form PROGRAM,ARG,... runs PROGRAM with the ARGs, which hold no
+#   comma or space, such as the smaller sizes of selftests-gap.list.
 #
 # The copy and the directories are under TMPDIR, /tmp by default, and are
 # removed on every exit; kernel.nmi_watchdog reads 0 for the run and is put
@@ -143,7 +145,9 @@ else
         # apart by this line.
         echo "kvm-corpus: $name: run" >&2
         start=$(date +%s)
-        (cd "$work/t" && "$tree/$name" < /dev/null) >&2 2>&1
+        # shellcheck disable=SC2046 # the arguments after the name, a word each
+        (cd "$work/t" && "$tree/${name%%,*}" $(echo "$name" | cut -s -d, -f2- | tr , ' ') \
+            < /dev/null) >&2 2>&1
         status=$?
         echo "kvm-corpus: $name: ran: status $status in $(($(date +%s) - start)) s" >&2
         case $status in
