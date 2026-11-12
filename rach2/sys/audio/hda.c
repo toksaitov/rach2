@@ -4189,6 +4189,19 @@ void hda_read_queue(void)
     spin_unlock_irqrestore(&stream_lock, flags);
 }
 
+void hda_copy_report(hda_report_t *out, int *mode)
+{
+    uint32_t flags;
+
+    mutex_lock(&stream_mutex);
+    flags = spin_lock_irqsave(&cap_lock);
+    hda_read_queue();
+    *out = hda_report;
+    *mode = (int)hda_output_mode;
+    spin_unlock_irqrestore(&cap_lock, flags);
+    mutex_unlock(&stream_mutex);
+}
+
 /**
  * Whether a stream whose interrupt last came at tick `since`, and whose
  * period plays for `period_us` microseconds, has gone more than one period

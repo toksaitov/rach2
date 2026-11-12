@@ -9,8 +9,6 @@
 #include "audio.h"
 #include "hda.h"
 
-#include "../lib/kirq.h"
-
 /* A text written into a caller's buffer: what fits is stored, and `len`
  * counts every byte, so a caller learns the size a short buffer lacked. */
 struct audio_text {
@@ -20,7 +18,9 @@ struct audio_text {
 };
 
 /* The report and output mode as the last call without a buffer read them,
- * which every call renders, so that a length and its text agree. */
+ * which every call renders, so that a length and its text agree. procfs
+ * renders under the big lock, which a second reader's copy holds too once
+ * its wait for the stream mutex ends, so no copy lands inside a render. */
 static hda_report_t snap;
 static int snap_mode;
 
@@ -261,12 +261,12 @@ static uint32_t stream_bits(uint16_t format)
  * output stream's queue, and every widget of the codec's function group with
  * its ADCs. It sends no verb.
  *
- * With `buf` NULL it reads the queue again (`hda_read_queue`) and copies the
- * report and the output mode with interrupts off, one snapshot of both
- * directions, which the capture service cannot change halfway; every call
- * renders the last such copy. procfs asks for the length with NULL and then
- * writes the text, so the two calls agree however the counters move between
- * them.
+ * With `buf` NULL it copies the report, its queue read again, and the output
+ * mode at one moment (hda_copy_report), so that neither direction's counters
+ * nor the jacks change halfway; every call renders the last such copy. It
+ * may then sleep for the stream mutex, as procfs's render may. procfs asks
+ * for the length with NULL and then writes the text, so the two calls agree
+ * however the counters move between them.
  *
  * Return the text's whole length; when that is more than `cap`, only the
  * first `cap` bytes were stored, and the caller asks again with more room.
@@ -276,16 +276,10 @@ int audio_proc_text(char *buf, int cap)
     static const char *const modes[] = {"auto", "primary", "hp", "both"};
     const hda_report_t *r = &snap;
     struct audio_text text, *t = &text;
-    uint32_t flags;
     int i, j;
 
-    if (!buf) {
-        flags = kirq_save();
-        hda_read_queue();
-        snap = *hda_get_report();
-        snap_mode = hda_get_output_mode();
-        kirq_restore(flags);
-    }
+    if (!buf)
+        hda_copy_report(&snap, &snap_mode);
     t->buf = buf;
     t->cap = cap;
     t->len = 0;
