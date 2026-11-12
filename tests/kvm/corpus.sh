@@ -9,8 +9,10 @@
 # LIST is unit-tests.list or selftests.list of this directory: a test a line,
 # its name and EXPECT, `pass`, `skip`, `fail` or `excluded`, or FLAG?A:B for a
 # test whose result is the processor's: A where the `flags` of /proc/cpuinfo
-# have FLAG, and B otherwise; A and B may each be FLAG?A:B. Four FLAGs are
-# not the processor's flags: `kvm_cap_vm_tsc_control`, where /dev/kvm answers
+# have FLAG, and B otherwise; A and B may each be FLAG?A:B. Five FLAGs are
+# not the processor's flags: `outer_kvm`, where the variable KVM_CORPUS_OUTER,
+# the accelerator of the machine Rach2 runs in as the KVM suite's cases give
+# it, is `kvm`; `kvm_cap_vm_tsc_control`, where /dev/kvm answers
 # KVM_CAP_VM_TSC_CONTROL with a value above 0, which perl asks it;
 # `kvm_lbr`, where the PERF_CAPABILITIES that /dev/kvm offers has an LBR
 # format, bits 5:0, which perl reads with KVM_GET_MSRS;
@@ -72,6 +74,7 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/kvm-corpus.XXXXXX") || exit 1
 
 # The list with each EXPECT that names a flag settled by this processor's.
 flags=$(awk -F: '$1 ~ /^flags[ \t]*$/ { print $2; exit }' /proc/cpuinfo 2> /dev/null)
+[ "${KVM_CORPUS_OUTER:-}" != kvm ] || flags="$flags outer_kvm"
 # KVM_CHECK_EXTENSION is _IO(0xAE, 3); KVM_CAP_VM_TSC_CONTROL is 214. Perl's
 # ioctl gives "0 but true" for 0 and undef for an error, both 0 as numbers.
 if perl -e 'open(my $f, "<", "/dev/kvm") or exit 1;
