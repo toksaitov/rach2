@@ -1419,8 +1419,15 @@ static void nvme_unlock(struct nvme_ctrl *c, uint32_t flags)
  * the locks; a caller that finds another's recovery running waits for its
  * end, which has aborted that caller's command too, as Linux's second
  * reset finds the controller already resetting. The reset runs with this
- * processor's interrupts masked, as before, so that it is not switched
- * away from while callers on other processors wait for it.
+ * processor's interrupts masked, so that it is not switched away from while
+ * callers on other processors wait for it. They stay masked from
+ * `nvme_lock` to the end: the locks are released with `spin_unlock` and the
+ * caller's flags restored only once `resetting` is clear, splitting the
+ * pair that Linux's `__raw_spin_unlock_irqrestore` makes
+ * (include/linux/spinlock_api_smp.h:146-151). An interrupt taken between
+ * the two would wait in the router for the big lock, whose holder may be
+ * waiting for this recovery, as Linux's `nvme_dev_disable` keeps
+ * `shutdown_lock` from its start to its end (pci.c:2785-2831).
  */
 static void nvme_recover(struct nvme_ctrl *c, const char *why)
 {
@@ -1438,8 +1445,8 @@ static void nvme_recover(struct nvme_ctrl *c, const char *why)
         return;
     }
     c->resetting = 1;
-    nvme_unlock(c, flags);
-    flags = kirq_save();
+    spin_unlock(&c->sq_lock);
+    spin_unlock(&c->cq_poll_lock);
     klog(KLOG_WARN, "nvme", "%d: recovery: %s; resetting the controller", c->number, why);
     if (nvme_disable(c) != 0) {
         k_panic("nvme: recovery: the controller did not stop; DMA buffers still owned");
