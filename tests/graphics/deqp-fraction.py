@@ -2,7 +2,7 @@
 """deqp-fraction.py: the cases of a dEQP list that a fraction of Mesa's CI
 runs, chosen as deqp-runner 0.20.3's `suite` chooses them.
 
-    python3 -I deqp-fraction.py FRACTION LIST SKIPS... > CASES
+    python3 -I deqp-fraction.py [-g GROUP,...] FRACTION LIST SKIPS... > CASES
 
 deqp-runner reads the list, shuffles it with rand 0.7.3's StdRng, ChaCha20
 seeded with 32 bytes of 0x3b, takes the first case and every FRACTIONth
@@ -12,6 +12,10 @@ in .gz; each skip file has a regular expression a line, `#` beginning a
 comment, and a line without the characters of a regular expression has its
 dots escaped, as deqp-runner does. The cases go to standard output in the
 order deqp-runner runs them, and a line of counts to standard error.
+With -g, the list is first cut to the cases of the named groups, the
+second component of a case's name, such as `api` of `dEQP-VK.api.smoke.x`:
+the cut list is shuffled and taken from as deqp-runner would take from a
+list of those cases alone.
 """
 
 import gzip
@@ -75,13 +79,19 @@ def skip_pattern(line):
 
 
 def main(argv):
+    groups = None
+    if len(argv) > 2 and argv[1] == "-g":
+        groups = set(argv[2].split(","))
+        argv = argv[:1] + argv[3:]
     if len(argv) < 3:
-        sys.stderr.write("usage: deqp-fraction.py FRACTION LIST SKIPS...\n")
+        sys.stderr.write("usage: deqp-fraction.py [-g GROUP,...] FRACTION LIST SKIPS...\n")
         return 2
     fraction = int(argv[1])
     opener = gzip.open if argv[2].endswith(".gz") else open
     with opener(argv[2], "rt") as f:
         cases = f.read().splitlines()
+    if groups is not None:
+        cases = [c for c in cases if c.split(".")[1:2] and c.split(".")[1] in groups]
     patterns = []
     for path in argv[3:]:
         with open(path) as f:
