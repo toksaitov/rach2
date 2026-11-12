@@ -1,6 +1,6 @@
 ---
 name: fable
-description: Claude Fable 5.2 at xhigh, read-only. Use for every plan and code review beside Codex, and first when a worker, the manager or the chat goes round in circles on a problem without finding its cause.
+description: Claude Fable 5.2 at xhigh, read-only. Use first when a worker, the manager or the chat goes round in circles on a problem without finding its cause; never for review, which is Codex's.
 model: claude-fable-5-2
 effort: xhigh
 tools: Read, Grep, Glob, Bash
