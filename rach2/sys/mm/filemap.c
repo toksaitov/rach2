@@ -58,10 +58,12 @@ struct dshare {
     int stores;       /* a shared mapping through a descriptor open for
                          writing has mapped it, so its pages may hold stores
                          the file lacks; never cleared */
-    /* The faults that read the file less the pages a fault mapped from
-     * memory, as Linux keeps a file's mmap_miss (mm/filemap.c:3187-3189,
-     * 3712-3716), at most `DISK_MISSES_MOST`; read-around stops above
-     * `DISK_LOTS_MISSED`. Under the file's lock. */
+    /* The faults that read the file less the faults that found their page
+     * in memory and the pages a fault mapped from memory before any read,
+     * as Linux keeps a file's mmap_miss (mm/filemap.c:3187-3189,
+     * 3712-3716, and do_async_mmap_readahead), at most
+     * `DISK_MISSES_MOST`; read-around stops above `DISK_LOTS_MISSED`.
+     * Under the file's lock. */
     uint32_t misses;
     wait_queue_t left;
     struct shmem sh;
@@ -577,6 +579,9 @@ static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
             rc = !*phys ? -ENOMEM : cached ? 0 : 1;
         }
     }
+    if (rc == 0 && m->ds->misses != 0) {
+        m->ds->misses--; /* a hit, as do_async_mmap_readahead counts one */
+    }
     vfs_node_unlock(&file);
     return rc;
 }
@@ -645,10 +650,13 @@ static int filemap_share_disk(struct vm_file *f, uint32_t pgoff, uintptr_t *phys
  * past the file's end is in neither, since a truncation takes those out
  * under the file's lock, under which the pages are looked up here, and the
  * cache lends only pages of the file as it is now. At most the first 32 of
- * the range come from the cache. Returns the pages lent.
+ * the range come from the cache. With `hits` set, the pages lent count
+ * against the file's misses (`struct dshare`); without it, after the
+ * fault's read, they may be pages that read brought in, and count for
+ * nothing. Returns the pages lent.
  */
 static uint32_t filemap_around_disk(struct vm_file *f, uint32_t first, uint32_t count,
-                                    uintptr_t *phys)
+                                    uintptr_t *phys, int hits)
 {
     struct filemap *m = (struct filemap *)f;
     struct vfs_ref file;
@@ -682,7 +690,9 @@ static uint32_t filemap_around_disk(struct vm_file *f, uint32_t first, uint32_t 
             }
         }
     }
-    m->ds->misses = m->ds->misses > lent ? m->ds->misses - lent : 0;
+    if (hits) {
+        m->ds->misses = m->ds->misses > lent ? m->ds->misses - lent : 0;
+    }
     vfs_node_unlock(&file);
     disk_call_end(entered, flags);
     return lent;
