@@ -21,6 +21,7 @@
 #include "../../klog.h"
 #include "../../proc/percpu.h"
 #include "../../timer.h"
+#include "../../watchdog.h"
 
 #define CALIBRATE_US 20000u
 
@@ -58,19 +59,30 @@ static uint32_t tick_hz = TICK_HZ;
  * reached the tick's time, as __hrtimer_run_queues runs a timer only once
  * the clock has reached its expiry (kernel/time/hrtimer.c:1814), so a count
  * that ran out while the timer was programmed again raises no second tick.
+ *
+ * A processor other than the boot one stops its tick while its idle task
+ * waits (`stopped`), as Linux's NO_HZ idle stops the tick of an idle
+ * processor (tick_nohz_idle_stop_tick, kernel/time/tick-sched.c:1205-1243):
+ * a tick taken in that wait moves its next tick on by the ticks
+ * `watchdog_idle_ticks` allows, and keeps where it would have been
+ * (`resume`); the switch to a thread starts it again there
+ * (`timer_idle_exit`). The boot processor's tick polls devices and keeps
+ * the clock, and does not stop.
  */
 struct hr_state {
-    int64_t want;    /* the earliest time asked for and not yet served, in
-                      * nanoseconds since boot, or 0 for none */
-    int64_t tick;    /* with `oneshot`, the time of the next tick */
-    int64_t due;     /* the time the last tick the clock passed was due,
-                      * as the tick being taken found it, or 0 */
-    uint8_t oneshot; /* the timer is one-shot */
-    uint8_t lvt;     /* with `oneshot`, the vector its entry was last
-                      * written with, 0 before the first */
-    uint32_t hold;   /* the passes under way (`timer_wake_hold`): while
-                      * nonzero, a time asked for only lowers `held` */
-    int64_t held;    /* the earliest time asked for while held, 0 for none */
+    int64_t want;             /* the earliest time asked for and not yet served, in
+                               * nanoseconds since boot, or 0 for none */
+    int64_t tick;             /* with `oneshot`, the time of the next tick */
+    int64_t due;              /* the time the last tick the clock passed was due,
+                               * as the tick being taken found it, or 0 */
+    uint8_t oneshot;          /* the timer is one-shot */
+    uint8_t lvt;              /* with `oneshot`, the vector its entry was last
+                               * written with, 0 before the first */
+    uint32_t hold;            /* the passes under way (`timer_wake_hold`): while
+                               * nonzero, a time asked for only lowers `held` */
+    int64_t held;             /* the earliest time asked for while held, 0 for none */
+    volatile uint8_t stopped; /* the tick is stopped in an idle wait */
+    int64_t resume;           /* with `stopped`, the time of the tick it skipped */
 };
 
 /* The time before a tick's time at which an interrupt still counts as the
@@ -247,7 +259,10 @@ static void hr_forward(struct hr_state *c, int64_t now)
  * one it counts to. A time passed is one count away, so that its interrupt
  * comes at once; the counts are rounded up, so that the interrupt never
  * comes before its time by the rounding. The entry is written only when its
- * vector changes. Interrupts are off.
+ * vector changes. A time ticks away, as a stopped tick's is, is
+ * counted in whole ticks and the rest, up to the 32-bit count's limit,
+ * past which the interrupt comes early and counts again. Interrupts are
+ * off.
  */
 static void hr_program(struct hr_state *c, int64_t now)
 {
@@ -263,7 +278,10 @@ static void hr_program(struct hr_state *c, int64_t now)
     if (delta <= 0) {
         counts = 1;
     } else if (delta >= 2 * (int64_t)TICK_NS) {
-        counts = 2u * hr_tick_counts;
+        uint64_t rem, whole = tick_div64((uint64_t)delta, TICK_NS, &rem) * hr_tick_counts;
+
+        whole += refclock_scale((uint32_t)rem, hr_tick_counts, TICK_NS) + 1u;
+        counts = whole >= 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)whole;
     } else {
         counts = refclock_scale((uint32_t)delta, hr_tick_counts, TICK_NS) + 1u;
     }
@@ -382,6 +400,56 @@ static void hr_interrupt(isr_params_t *params)
     timer_hr_pass();
 }
 
+/**
+ * Stop the tick of this processor, whose next tick `c->tick` an interrupt at
+ * the tick has just set, when its idle task waits and may stop it
+ * (`tick_may_stop`): the next tick comes `watchdog_idle_ticks` ticks later,
+ * on the tick's phase, and the one skipped is kept in `resume`. A processor
+ * that is not idle starts its tick again. Interrupts are off.
+ */
+static void hr_idle_stop(struct hr_state *c)
+{
+    struct percpu *cpu = this_cpu();
+    uint32_t skip = watchdog_idle_ticks();
+
+    if (!cpu->idle_wait || !cpu->tick_may_stop || skip < 2u) {
+        c->stopped = 0;
+        return;
+    }
+    if (skip > HR_BEHIND_MAX / 2u) {
+        skip = HR_BEHIND_MAX / 2u;
+    }
+    c->resume = c->tick;
+    c->tick += (int64_t)(skip - 1u) * (int64_t)TICK_NS;
+    c->stopped = 1;
+}
+
+void timer_idle_exit(void)
+{
+    struct hr_state *c;
+    int64_t now;
+
+    if (hr_vector == 0) {
+        return;
+    }
+    c = &hr_cpu[arch_cpu_id()];
+    if (!c->stopped) {
+        return;
+    }
+    c->stopped = 0;
+    c->tick = c->resume;
+    now = rtc_monotonic_ns();
+    if (now + HR_SLACK_NS >= c->tick) {
+        hr_forward(c, now);
+    }
+    hr_program(c, now);
+}
+
+int timer_tick_stopped(int cpu)
+{
+    return hr_cpu[cpu].stopped;
+}
+
 int apic_hr_entry(uint32_t vector)
 {
     struct hr_state *c;
@@ -402,6 +470,7 @@ int apic_hr_entry(uint32_t vector)
         if (c->tick - (int64_t)TICK_NS > c->due) {
             c->due = c->tick - (int64_t)TICK_NS;
         }
+        hr_idle_stop(c);
         tick = 1;
     } else if (vector == (uint32_t)hr_vector && c->want != 0 && c->want <= now) {
         c->want = 0;

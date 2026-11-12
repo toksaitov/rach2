@@ -185,6 +185,17 @@ int arch_idle_poll(void)
     return 0;
 }
 
+/** Nothing: the model has no tick to stop. */
+void timer_idle_exit(void)
+{}
+
+/** 0: no processor of the model stops its tick. */
+int timer_tick_stopped(int cpu)
+{
+    (void)cpu;
+    return 0;
+}
+
 /** 0: no interrupt waits; only an idle wait's poll asks, which none
  * runs. */
 int arch_irq_waiting(void)
