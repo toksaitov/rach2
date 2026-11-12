@@ -23,6 +23,14 @@ guest()
         -p "$port" gfx@127.0.0.1 "$@"
 }
 
+# guest_in runs a command that reads this side's standard input.
+guest_in()
+{
+    ssh -i "$assets/id_ed25519" -o BatchMode=yes -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 \
+        -p "$port" gfx@127.0.0.1 "$@"
+}
+
 # Stop the guest first; gpu.sh then returns its GPU to Rach2's driver.
 cleanup()
 {
@@ -155,7 +163,8 @@ cat "$out/triangle.txt"
 "$assets/nctxcheck" fence > "$out/fence.txt"
 cat "$out/fence.txt"
 if [ "$mode" = native ]; then
-    guest 'sudo /opt/rach2-nctx/relocations start' > "$out/profile-start.txt"
+    # The tree's copy, which may be newer than the image's.
+    guest_in 'sudo sh -s start' < "$here/relocations.sh" > "$out/profile-start.txt"
     profile=1
 fi
 if ! glmark2-drm --off-screen --winsys-options "drm-device=$card" -s 1280x800 \
@@ -173,7 +182,7 @@ fi
 cat "$out/glmark2.txt"
 grep -q "GL_RENDERER: *$want" "$out/glmark2.txt" || die "glmark2 selected another renderer"
 if [ "$profile" = 1 ]; then
-    guest 'sudo /opt/rach2-nctx/relocations stop' > "$out/relocations.txt"
+    guest_in 'sudo sh -s stop' < "$here/relocations.sh" > "$out/relocations.txt"
     cat "$out/relocations.txt"
     profile=0
 fi
