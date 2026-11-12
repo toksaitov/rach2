@@ -887,11 +887,14 @@ void isr_paranoid_router(isr_params_t *params)
  * forked child's first return comes here too, with the depth its fork gave
  * it. The user copies of signal and rseq work run with interrupts on;
  * after they go off again, a migration or tick during that work makes it
- * run again, as Linux's exit_to_user_mode_loop does.
+ * run again, as Linux's exit_to_user_mode_loop does. The work is marked in
+ * a call, as a user fault is, so a timer defers its switch and cannot race
+ * the rseq event fetch and clear; a fault may still sleep.
  */
 void isr_leave(isr_params_t *params)
 {
     uint32_t flags;
+    uint32_t was_in_call;
 
     if (!bkl_frame_pop()) {
         if (!FRAME_USER(params)) {
@@ -905,6 +908,8 @@ void isr_leave(isr_params_t *params)
         bkl_enter();
     }
     if (FRAME_USER(params)) {
+        was_in_call = current_proc->in_syscall;
+        current_proc->in_syscall = 1;
         flags = kirq_save();
         do {
             proc_tick_signals_own();
@@ -913,6 +918,7 @@ void isr_leave(isr_params_t *params)
             rseq_return(params);
             flags = kirq_save();
         } while (current_proc->rseq_notify || current_proc->tick_sigs);
+        current_proc->in_syscall = was_in_call;
         debugreg_resume();
         waketime_return();
     }

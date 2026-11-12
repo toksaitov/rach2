@@ -180,16 +180,18 @@ struct restart_block {
  * flags name.
  */
 struct process {
-    uint32_t pid;                 /* Thread ID; the process ID is `tgid` */
-    proc_state_t state;           /* Current state */
-    cpu_regs_t regs;              /* What switch_context saves (cpu.h) */
-    uintptr_t space_root;         /* Page directory physical address, or 0 */
-    uintptr_t kernel_stack;       /* Top of kernel stack for this process */
-    uint32_t parent_pid;          /* Parent process ID */
-    int32_t exit_code;            /* Encoded wait status it ended with */
-    fd_table_t *fds;              /* Descriptor table, shared under CLONE_FILES */
-    struct fs_struct *fs;         /* Directories and umask, shared under CLONE_FS */
-    volatile uint32_t in_syscall; /* Nonzero in a system call or an exit */
+    uint32_t pid;           /* Thread ID; the process ID is `tgid` */
+    proc_state_t state;     /* Current state */
+    cpu_regs_t regs;        /* What switch_context saves (cpu.h) */
+    uintptr_t space_root;   /* Page directory physical address, or 0 */
+    uintptr_t kernel_stack; /* Top of kernel stack for this process */
+    uint32_t parent_pid;    /* Parent process ID */
+    int32_t exit_code;      /* Encoded wait status it ended with */
+    fd_table_t *fds;        /* Descriptor table, shared under CLONE_FILES */
+    struct fs_struct *fs;   /* Directories and umask, shared under CLONE_FS */
+    /* Nonzero in a system call, exit or user-return work, which may sleep
+     * but a timer never preempts. */
+    volatile uint32_t in_syscall;
     /* i686's switch.s reads `regs.esp`, `kernel_stack` and `tls_base` at
      * fixed offsets, so a new field goes at the end of the record.
      * arch/i686/context.c has the same offsets and checks them against the
