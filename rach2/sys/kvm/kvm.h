@@ -595,7 +595,8 @@ struct kvm_vcpu {
     uint32_t mp_state;
     struct kvm_cpuid_entry2 *cpuid; /* KVM_SET_CPUID2's, or NULL */
     uint32_t cpuid_nent;
-    int cpuid_set; /* KVM_SET_CPUID2 was taken, with entries or with none */
+    int cpuid_set;         /* KVM_SET_CPUID2 was taken, with entries or with none */
+    uint64_t cr4_reserved; /* `kvm_cr4_reserved`'s, kept from creation and KVM_SET_CPUID2 */
     uint32_t msr_count;
     uint32_t msr_index[KVM_VCPU_MSRS];
     uint64_t msr_value[KVM_VCPU_MSRS];
@@ -831,7 +832,10 @@ uint32_t kvm_guest_maxphyaddr(const struct kvm_vcpu *v);
 /** The CR4 bits `v` may not set, as Linux's __kvm_is_valid_cr4: those the
  * CPUID KVM offers reserves, and once KVM_SET_CPUID2 is taken those `v`'s
  * CPUID reserves too. VMXE and SMXE always, since no nested guest is
- * offered. */
+ * offered. Kept in `v` from its creation and each KVM_SET_CPUID2, as Linux
+ * keeps cr4_reserved_bits and cr4_guest_rsvd_bits (arch/x86/kvm/x86.c:9382,
+ * cpuid.c:417-418), since each of the host's CPUIDs that make it is an exit
+ * to the hypervisor beneath a nested Rach2. */
 uint64_t kvm_cr4_reserved(const struct kvm_vcpu *v);
 
 /** The vCPU ioctls, file_ops.ioctl of a vCPU's descriptor. */
