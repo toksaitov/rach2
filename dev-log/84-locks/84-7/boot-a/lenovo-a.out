@@ -1,0 +1,16 @@
+games: result: supertuxkart frames 6830 seconds 90.010 fps 75.88 median 12.70 p90 15.63 p99 19.38 p99.9 27.89 max 42.83 over50 0 end profile
+lenovo-games: result: supertuxkart-1 median 12.70 p90 15.63 p99 19.38 against Linux's 14.72 16.96 19.14: pass
+lenovo-games: result: pass
+bkl: supertuxkart: 186 lines of calls, samples 57055
+games: result: 0ad frames 8162 seconds 150.010 fps 54.41 median 17.40 p90 23.00 p99 36.49 p99.9 79.57 max 526.80 over50 27 end window
+lenovo-games: result: 0ad-1 median 17.40 p90 23.00 p99 36.49 against Linux's 17.06 19.40 36.135: fail
+lenovo-games: result: fail
+bkl: 0ad: 180 lines of calls, samples 99820
+bkl: clock minimum back at 200 MHz
+1
+crysis-bkl: started at 334.48 s
+crysis-bkl: loaded at 439.99 s: crysis: loaded in 32.20 s
+crysis-bkl: the game ended within 150 s
+crysis-bkl: read at 590.06 s: samples 61735
+crysis-bkl: harness ended at 590.07 s
+0
