@@ -2,6 +2,7 @@
 #include "process.h"
 #include "ptrace.h"
 #include "sched.h"
+#include "smp.h"
 #include "tgroup.h"
 #include "../fs/vfs.h"
 #include "../mm/mm.h"
@@ -113,7 +114,11 @@ int proc_exit_cleanup(int32_t status)
         }
         wq_wake_all(&parent->tg->chld);
         if (parent->state == PROC_BLOCKED) {
-            sched_make_ready(parent);
+            int kick = sched_wake_blocked(parent);
+
+            if (kick >= 0) {
+                smp_kick(kick);
+            }
         }
     }
     return 1;

@@ -83,10 +83,15 @@ static int sleeper_posts, runner_posts;
         }                                                         \
     } while (0)
 
-/** A wake makes the process ready; there is one processor and no queue. */
-void sched_make_ready(process_t *p)
+/** The tick's wake, which tests the record again as the kernel's does under
+ * the run queues' lock and makes a due sleeper ready; there is one processor
+ * and no queue. */
+void sched_wake_due(process_t *p, uint64_t now)
 {
-    p->state = PROC_READY;
+    if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 && now >= p->wakeup_tick) {
+        p->wakeup_tick = 0;
+        p->state = PROC_READY;
+    }
 }
 
 /** The model of `signal_post`: count each SIGALRM, for each process. */

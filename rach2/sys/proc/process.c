@@ -524,7 +524,9 @@ void free_process(process_t *proc)
  * again before its deadline tick and the process acts on SIGALRM, and
  * returns 0 if it first runs at that tick or later; a wait that goes on
  * arms its deadline again. The tick count is 64 bits wide and does not wrap,
- * so a deadline is compared with it as it stands.
+ * so a deadline is compared with it as it stands. The test here only skips
+ * the records not due; `sched_wake_due` tests again under the run queues'
+ * lock, so a wait queue's waker and the tick do not both make one ready.
  */
 void proc_wake_sleepers(uint64_t now)
 {
@@ -537,9 +539,7 @@ void proc_wake_sleepers(uint64_t now)
         timer_cursor = p->timer_next;
         work_count[2]++;
         if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 && now >= p->wakeup_tick) {
-            waketime_expire(p, p->wakeup_tick);
-            p->wakeup_tick = 0;
-            sched_make_ready(p);
+            sched_wake_due(p, now);
         }
         if (p->alarm_tick != 0 && now >= p->alarm_tick) {
             p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, p->alarm_interval) : 0;
