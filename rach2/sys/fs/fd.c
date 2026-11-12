@@ -1325,6 +1325,33 @@ void fd_free_after(fd_table_t *table, int fd)
     fd_table_unlock(table, flags);
 }
 
+/**
+ * Whether `table` is the calling thread's own and no other thread shares
+ * it, so that only the caller changes its slots, `cap` and `refs` while it
+ * runs: a table is shared only by a clone of one of its sharers
+ * (`fd_table_share`), every reservation, publication, close and growth is
+ * made by a sharer's call, and another process's call reads the table
+ * (`fd_peek`) or changes no more than a slot's node (`fd_table_repoint`).
+ * A sharer that left made its last change under the lock before it dropped
+ * `refs` there, and x86 does not move a load ahead of an earlier one, so a
+ * read of a slot after `refs` reads 1 finds what it left, as Linux's
+ * `__fget_light` reads a table whose count is 1 with no lock and no
+ * reference after an acquiring read of the count (fs/file.c:1114-1118).
+ */
+static int fd_table_alone(const fd_table_t *table)
+{
+    int alone =
+        current_proc && table == current_proc->fds && *(const volatile int *)&table->refs == 1;
+
+    k_barrier();
+    return alone;
+}
+
+/**
+ * A lookup in a table the caller alone has (`fd_table_alone`) takes no lock
+ * and marks no hold, since no other thread can close the slot during the
+ * call; any other lookup takes the table's lock.
+ */
 fd_entry_t *fd_get(fd_table_t *table, int fd)
 {
     fd_entry_t *e = NULL;
@@ -1332,6 +1359,13 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
 
     if (!table || fd < 0) {
         return NULL;
+    }
+    if (fd_table_alone(table)) {
+        if (fd >= table->cap) {
+            return NULL;
+        }
+        e = fd_slot(table, fd);
+        return slot_unready(e) || (e->flags & FD_FLAG_CLOSING) ? NULL : e;
     }
     flags = fd_table_lock(table);
     if (fd < table->cap) {

@@ -263,10 +263,11 @@ typedef struct fd_entry {
  * `files->file_lock` (include/linux/fdtable.h:51). It is a spinlock, taken
  * with interrupts off and held for no sleep, below the big lock and the
  * sleeping locks and above the scheduler's locks and the heap's, which a
- * growth under it takes. Every lookup, reservation, publication, change of
- * a descriptor's flags, release of a slot and growth takes it, so a call
- * that runs without the big lock may use the table while another sharer
- * runs with it, and another process's table is read only under it
+ * growth under it takes. Every reservation, publication, change of a
+ * descriptor's flags, release of a slot and growth takes it, and so does
+ * every lookup but one in a table that only its caller has (`fd_get`), so
+ * a call that runs without the big lock may use the table while another
+ * sharer runs with it, and another process's table is read only under it
  * (`fd_peek`). A slot that a call has looked up or reserved is held by the
  * call (`fd_get`), so that no other sharer releases what it names until
  * the call ends.
@@ -431,14 +432,16 @@ void fd_free_after(fd_table_t *table, int fd);
 
 /**
  * The entry for fd, or NULL if fd is out of range, free, not yet published
- * or closing, looked up under the table's lock. A lookup in the calling
- * thread's shared table marks the descriptor held by the call until it ends,
- * as Linux's `__fget_files` (fs/file.c:1006) takes a reference: a close by
- * another sharer then leaves the slot and what it names in place until the
- * call ends (`fd_holds_claim`), so the entry may be read through the
- * address for the length of the call, sleeps included, and only its flags
- * change meanwhile, under the lock (`fd_set_flags`). The entry is not
- * copied, since a copy would not be one of the table's (`fd_in_table`).
+ * or closing: looked up with no lock in the calling thread's table when no
+ * other thread shares it, since only the caller changes it then, and under
+ * the table's lock otherwise. A lookup in the calling thread's shared table
+ * marks the descriptor held by the call until it ends, as Linux's
+ * `__fget_files` (fs/file.c:1006) takes a reference: a close by another
+ * sharer then leaves the slot and what it names in place until the call
+ * ends (`fd_holds_claim`), so the entry may be read through the address for
+ * the length of the call, sleeps included, and only its flags change
+ * meanwhile, under the lock (`fd_set_flags`). The entry is not copied,
+ * since a copy would not be one of the table's (`fd_in_table`).
  */
 fd_entry_t *fd_get(fd_table_t *table, int fd);
 
