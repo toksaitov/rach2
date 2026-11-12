@@ -194,7 +194,7 @@ static int32_t slot_delete(struct kvm_vm *vm, struct slots *t, struct slot *s)
         t->last = NULL;
     }
     t->pages -= s->npages;
-    kvm_tdp_zap_locked(vm, s->base_gfn, s->npages);
+    kvm_tdp_zap_locked(vm, s->base_gfn, s->npages, &flags);
     kvm_mmu_unlock(vm, flags);
     slots_synchronize(t);
     slot_free(s);
@@ -238,15 +238,16 @@ static int32_t slot_create(struct kvm_vm *vm, struct slots *t, uint32_t id,
     return 0;
 }
 
-/** Move `s` to the frame `gfn`, or change its flags to `flags`: what the
- * tables map of it goes in the same hold of `mmu_lock` as the change, so
- * that each frame is mapped again by the new rules at its next fault, and
- * the call returns, and frees a log it ends, only once no copy can be
- * using the slot as it was. */
+/** Move `s` to the frame `gfn`, or change its flags to `flags`: the change
+ * is made under `mmu_lock`, and what the tables map of the slot's old
+ * frames goes after it, so that each frame is mapped again by the new
+ * rules at its next fault, also one between two batches of the zap; the
+ * call returns, and frees a log it ends, only once no copy can be using
+ * the slot as it was. */
 static int32_t slot_change(struct kvm_vm *vm, struct slots *t, struct slot *s, uint64_t gfn,
                            uint32_t flags)
 {
-    uint64_t *log = s->dirty, *old = NULL;
+    uint64_t *log = s->dirty, *old = NULL, base = s->base_gfn;
     uint32_t lock;
 
     if ((flags & KVM_MEM_LOG_DIRTY_PAGES) && !log) {
@@ -261,13 +262,13 @@ static int32_t slot_change(struct kvm_vm *vm, struct slots *t, struct slot *s, u
         kvm_gpamap_zap(vm, s->base_gfn, s->npages);
     }
     lock = kvm_mmu_lock(vm);
-    kvm_tdp_zap_locked(vm, s->base_gfn, s->npages);
     if (log != s->dirty) {
         old = s->dirty;
         s->dirty = log;
     }
     s->base_gfn = gfn;
     s->flags = flags;
+    kvm_tdp_zap_locked(vm, base, s->npages, &lock);
     kvm_mmu_unlock(vm, lock);
     slots_synchronize(t);
     kfree(old);
