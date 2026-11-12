@@ -4,6 +4,7 @@
  *
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/spinlock_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * `io/epoll.c` and `proc/wait_queue.c` are included whole. A descriptor is an
@@ -179,6 +180,64 @@ short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     *wq = NULL;
     return e->ops && e->ops->poll ? e->ops->poll(e, events, wq) : 0;
+}
+
+/** `poll_fd`, which a scan calls under its set's lock. */
+short poll_fd_held(fd_entry_t *e, short events, struct wait_queue **wq)
+{
+    return poll_fd(e, events, wq);
+}
+
+/** Whether the poll of `e` runs without the big lock: a model object's
+ * does not, so a scan of a set takes the lock for it. */
+int file_poll_unlocked(const fd_entry_t *e)
+{
+    return e && e->ops && e->ops->poll && (e->ops->flags & FILE_OPS_POLL_UNLOCKED);
+}
+
+/* The depth of the model's big lock, which a scan takes and gives back. */
+static int bkl_depth;
+
+/** Take the big lock, one level deeper. */
+void bkl_enter(void)
+{
+    bkl_depth++;
+}
+
+/** Give back one level of the big lock. */
+void bkl_exit(void)
+{
+    bkl_depth--;
+}
+
+/** Whether the model's big lock is held. */
+int bkl_held(void)
+{
+    return bkl_depth > 0;
+}
+
+/** Store `value` at `*p` when it is `old`, one processor's step: what was
+ * there. */
+unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
+{
+    unsigned int was = *p;
+
+    if (was == old) {
+        *p = value;
+    }
+    return was;
+}
+
+/** No row closes a descriptor a wait holds, so no close asks: 0. */
+int poll_drop_take(void)
+{
+    return 0;
+}
+
+/** No row's wait is asked to give back its holds. */
+void fd_holds_release_closing(int keep)
+{
+    (void)keep;
 }
 
 /** One scan, with a record for each queue it may name: a wait here ends at

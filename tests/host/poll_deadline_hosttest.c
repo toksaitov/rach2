@@ -45,6 +45,7 @@ static long sys_pselect6(struct isr_params *params);
 struct fd_entry;
 struct wait_queue;
 static short poll_fd(struct fd_entry *e, short events, struct wait_queue **wq);
+static short poll_fd_held(struct fd_entry *e, short events, struct wait_queue **wq);
 struct poll_deadline;
 static int poll_wait(int (*scan)(void *ctx, struct wait_queue **wqs), void *ctx, uint32_t n,
                      struct poll_deadline *d, const char *wchan);
