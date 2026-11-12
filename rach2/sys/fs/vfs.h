@@ -695,6 +695,11 @@ int vfs_mount_index(const struct vfs_mount *m);
 /** Whether the caller's mount namespace sees the mount `m`. */
 int vfs_mount_seen(const struct vfs_mount *m);
 
+/** `vfs_mount_seen` for a caller without the big lock, which may read only
+ * the set's first word, since its other words grow under the lock: 1 or 0,
+ * or -1 when the caller's namespace id lies past that word. */
+int vfs_mount_seen_word(const struct vfs_mount *m);
+
 /** Whether a live mount namespace other than the caller's sees the mount
  * `m`, which a change made only for the caller's must then leave alone. */
 int vfs_mount_shared(const struct vfs_mount *m);
