@@ -49,19 +49,21 @@
  * fault recorded). Freestanding; direct system calls (probe.h).
  *
  * With `kvm`, the only node is /dev/kvm, which an ordinary user opens. The
- * child, as nobody, makes a VM with a memory slot of 64 KiB at guest address
- * 0 over pages of HLT and a vCPU, which the calls never close, and the
- * ioctls are KVM's, type 0xAE: three in four with the number of one of the
- * interface's ioctls, the rest with a random number, direction and size.
- * KVM_SET_SIGNAL_MASK is not among the first, since a mask that blocks the
- * timer's signal lets a guest that never exits hold KVM_RUN, as on Linux.
- * The parent reads /proc/stat's live KVM counts (`kvm_vms` to
- * `kvm_gpa_map_pages`) before the fork and after the child is reaped, prints
+ * child, as nobody, opens /dev/kvm itself and makes from that descriptor
+ * alone a VM with a memory slot of 64 KiB at guest address 0 over pages of
+ * HLT and a vCPU, which the calls never close; the run fails when nobody
+ * cannot open it. The ioctls are KVM's, type 0xAE: three in four with the
+ * number of one of the interface's ioctls, the rest with a random number,
+ * direction and size. KVM_SET_SIGNAL_MASK is not among the first, since a
+ * mask that blocks the timer's signal lets a guest that never exits hold
+ * KVM_RUN, as on Linux. The parent reads /proc/stat's live KVM counts
+ * (`kvm_vms` to `kvm_gpa_map_pages`) before the fork and after the child is
+ * reaped, prints
  *
  *   drmfuzz: kvm: before V C S T R G P after V C S T R G P
  *
- * and fails the run, and the case's assertion `leak`, when any differs. The
- * default case is machine.kvm.fuzz.
+ * and fails the run when any differs. This mode writes no etude report: the
+ * KVM suite's case machine.kvm.fuzz runs it and judges its result line.
  */
 
 #include "probe.h"
@@ -280,7 +282,8 @@ static void add_fd(int fd)
     }
 }
 
-/** Open `path` and add it as a node; 1 when it opened. */
+/** Open `path` and add it as a node; its descriptor, or -1 when it did not
+ * open. */
 static int open_node(const char *path)
 {
     int fd = (int)syscall3(SYS_OPEN, (long)path, O_RDWR | O_NONBLOCK, 0);
@@ -289,12 +292,12 @@ static int open_node(const char *path)
         fd = (int)syscall3(SYS_OPEN, (long)path, O_NONBLOCK, 0);
     }
     if (fd < 0) {
-        return 0;
+        return -1;
     }
     add_fd(fd);
     nodes++;
     probe_line("drmfuzz: node: ", path, syscall0(SYS_GETUID) == 0 ? "" : " (as nobody)");
-    return 1;
+    return fd;
 }
 
 /** Open `prefix` with the decimal `n` after it as a node. */
@@ -556,22 +559,24 @@ struct kvm_region {
     unsigned long long guest_phys_addr, memory_size, userspace_addr;
 };
 
-/** Make a VM of the /dev/kvm the child opened, with a slot over 64 KiB of
- * HLT and a vCPU, and keep both among the nodes, which no call closes. */
-static void kvm_setup(void)
+/** Make a VM of `sys`, the /dev/kvm the child opened as nobody, or -1
+ * when that open failed, with a slot over 64 KiB of HLT and a vCPU, and
+ * keep both among the nodes, which no call closes. The descriptor the
+ * parent opened as root stays among the nodes but makes no VM, so a run
+ * in which nobody cannot open /dev/kvm fails. */
+static void kvm_setup(int sys)
 {
     struct kvm_region r;
     long mem, vm, vcpu;
-    int i, sys = -1;
+    int i;
 
-    for (i = 0; i < nfds; i++) {
-        if (syscall3(SYS_IOCTL, fds[i], (long)K(0, 0x00, 0), 0) == 12) {
-            sys = fds[i];
-        }
+    if (sys < 0 || syscall3(SYS_IOCTL, sys, (long)K(0, 0x00, 0), 0) != 12) {
+        probe_line("DRMFUZZ FAIL: ", "nobody could not open /dev/kvm at API version 12", 0);
+        sys_exit(1);
     }
     mem = probe_mmap(0, KVM_SLOT_BYTES, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (sys < 0 || sys_failed(mem)) {
-        probe_line("DRMFUZZ FAIL: ", "nobody could not open /dev/kvm or map the guest's memory", 0);
+    if (sys_failed(mem)) {
+        probe_line("DRMFUZZ FAIL: ", "nobody could not map the guest's memory", 0);
         sys_exit(1);
     }
     for (i = 0; i < KVM_SLOT_BYTES; i++) {
@@ -613,9 +618,10 @@ static void child(unsigned long n)
         probe_line("DRMFUZZ FAIL: ", "the child could not become an ordinary user", 0);
         sys_exit(1);
     }
-    open_nodes();
     if (kvm_mode) {
-        kvm_setup();
+        kvm_setup(open_node("/dev/kvm"));
+    } else {
+        open_nodes();
     }
     ka.handler = tick;
     /* SA_SIGINFO: i386 gives a handler without it the old frame, which
@@ -815,7 +821,7 @@ static void count_records(long len, int *faults, int *errors, int *warnings)
 }
 
 /** Print the live KVM counts `before` the fork and now, and fail the run
- * and the assertion `leak` when any differs. */
+ * when any differs. */
 static void kvm_judge(const unsigned long *before)
 {
     unsigned long after[KVM_COUNTS];
@@ -837,7 +843,6 @@ static void kvm_judge(const unsigned long *before)
     if (leaked) {
         fail("a KVM object outlived the child");
     }
-    report_held();
 }
 
 PROBE_SP_ENTRY;
@@ -862,12 +867,11 @@ void probe_main(unsigned long *sp)
     state = number(argc > 2 ? argv[2] : 0, 1) * 0x9E3779B97F4A7C15ULL + 1;
     trace_from = number(argc > 3 ? argv[3] : 0, 0xFFFFFFFFUL);
     map_region();
-    report_begin(report_case(env, kvm_mode ? "machine.kvm.fuzz" : "guest.dmabuf.drmfuzz"));
-    report_plan("open");
-    report_plan("calls");
-    report_plan("records");
-    if (kvm_mode) {
-        report_plan("leak");
+    if (!kvm_mode) {
+        report_begin(report_case(env, "guest.dmabuf.drmfuzz"));
+        report_plan("open");
+        report_plan("calls");
+        report_plan("records");
     }
     open_nodes();
     if (nodes == 0) {
@@ -915,8 +919,9 @@ void probe_main(unsigned long *sp)
     report_held();
     if (kvm_mode) {
         kvm_judge(kvm_before);
+    } else {
+        report_end();
     }
-    report_end();
     put("DRMFUZZ OK\n");
     sys_exit(0);
 }

@@ -641,7 +641,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run drmfuzz kvm 20000 1, which drops to nobody, makes a VM with a slot and a vCPU and makes 20000 random calls of KVM's ioctls on them and on /dev/kvm"
+          "does": "run drmfuzz kvm 20000 1, which drops to nobody, opens /dev/kvm as nobody, makes from that descriptor a VM with a slot and a vCPU and makes 20000 random calls of KVM's ioctls on them and on /dev/kvm"
         }
       ],
       "machines": [
@@ -684,7 +684,7 @@
       "assertions": [
         {
           "assertion_id": "fuzz",
-          "checks": "drmfuzz exits 0 and prints DRMFUZZ OK: the child made every call and exited by itself, the kernel recorded no fault, and /proc/stat's live KVM counts are back to their values before",
+          "checks": "drmfuzz exits 0 and prints DRMFUZZ OK: nobody opened /dev/kvm and made the VM from it, the child made every call and exited by itself, the kernel recorded no fault, and /proc/stat's live KVM counts are back to their values before",
           "source": "scenario"
         }
       ],
