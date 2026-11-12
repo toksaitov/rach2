@@ -8546,15 +8546,20 @@ long sys_munmap(isr_params_t *params)
 
 /** Bring the resident pages of [start, end) to their regions' protection,
  * `prot` where no region holds them, region by region, so that a shared
- * region's pages stay shared and each page takes its region's key. */
+ * region's pages stay shared, a page whose file counts its stores gains
+ * write access only at its write fault, and each page takes its region's
+ * key. */
 static void protect_resident(uintptr_t start, uintptr_t end, uint32_t prot)
 {
     while (start < end) {
         vma_t *r = vm_find(&current_proc->mm->vm, start);
         uintptr_t stop = (r && r->end < end) ? r->end : end;
+        uint32_t shared = 0;
 
-        paging_protect_range(_curr_dir, start, stop,
-                             r ? r->prot | (r->type == VM_SHARED ? VM_PROT_SHARED : 0u) : prot);
+        if (r && r->type == VM_SHARED) {
+            shared = VM_PROT_SHARED | (r->file && r->file->mkwrite ? VM_PROT_MKWRITE : 0u);
+        }
+        paging_protect_range(_curr_dir, start, stop, r ? r->prot | shared : prot);
         start = stop;
     }
 }

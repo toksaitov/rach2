@@ -25,6 +25,10 @@
  * region, whose pages are shared on purpose: a write goes to the frame they
  * share, never to a copy. */
 #define VM_PROT_SHARED      0x8u
+/* Given to paging_protect_range beside VM_PROT_SHARED, and not kept in a
+ * region, for a shared region whose file counts its stores (`mkwrite`): a
+ * page gains write access only at its write fault. */
+#define VM_PROT_MKWRITE     0x800000u
 /* Kept in a region's protection beside the three access bits: the region
  * may never be made writable. A shared mapping of a file opened without
  * write access has it, and so has a shared mapping of a file on a disk,
@@ -176,7 +180,13 @@ typedef enum {
  * fault calls each with the regions' lock let go, and with the big lock
  * held unless `unlocked` is set, which the owner sets for a file whose
  * operations take only locks of their own, as Linux's filemap_fault takes
- * no global lock (mm/filemap.c:3305-3370).
+ * no global lock (mm/filemap.c:3305-3370). A file with `share` whose
+ * shared mappings' stores it must count, a disk file's, sets `mkwrite`,
+ * Linux's page_mkwrite: a writable shared region then maps each page
+ * read-only until a write fault calls `mkwrite` for page `pgoff`, which
+ * returns 0 before the page gains write access, or a negative errno, which
+ * leaves it read-only and fails the access; it may sleep, and runs as
+ * `share` does.
  */
 struct vm_file {
     uint32_t refs;
@@ -190,6 +200,7 @@ struct vm_file {
                      big lock */
     uint32_t (*around)(struct vm_file *f, uint32_t first, uint32_t count, uintptr_t *phys,
                        int hits);
+    int (*mkwrite)(struct vm_file *f, uint32_t pgoff);
 };
 
 /*
