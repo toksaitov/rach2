@@ -177,11 +177,14 @@ struct ext2_node {
     uint32_t blocks;              /* i_blocks, in 512-byte units */
     uint32_t block[EXT2_NBLOCKS]; /* 12 direct, then single, double and triple indirect */
     struct ext2_time atime, mtime, ctime;
-    struct ext2_time crtime;     /* i_crtime, kept where `extra_isize` covers it */
-    uint32_t extra_isize;        /* i_extra_isize; 0 for a 128-byte inode */
-    uint32_t flags;              /* i_flags, which the VFS enforces in part */
-    uint32_t generation;         /* i_generation, new for each inode made */
-    uint32_t file_acl;           /* i_file_acl: the extended-attribute block, or 0 */
+    struct ext2_time crtime; /* i_crtime, kept where `extra_isize` covers it */
+    uint32_t extra_isize;    /* i_extra_isize; 0 for a 128-byte inode */
+    uint32_t flags;          /* i_flags, which the VFS enforces in part */
+    uint32_t generation;     /* i_generation, new for each inode made */
+    uint32_t file_acl;       /* i_file_acl: the extended-attribute block, or 0 */
+    /* A fast link, its target in `block`: decided once, when the inode is
+     * read or the link made, as Linux sets `i_link` (`readlink_cached`). */
+    int fast_target;
     uint32_t add_from;           /* a directory's offset of the block where the last entry went */
     int unlinked;                /* no name left; the inode and its blocks go at the last put */
     int state;                   /* N_LOADING, N_LIVE, N_DYING or N_FAILED */
@@ -1131,6 +1134,16 @@ static struct ext2_time time_load(const struct ext2_node *n, const uint8_t *raw,
     return t;
 }
 
+/** Whether `n` is a fast symbolic link, its target in the pointer words:
+ * a link whose `i_blocks` counts no block but its extended-attribute
+ * block, as Linux's `ext2_inode_is_fast_symlink` decides. */
+static int fast_link(const struct ext2_mount *em, const struct ext2_node *n)
+{
+    uint32_t attr = n->file_acl ? em->block_size / 512 : 0;
+
+    return (n->mode & S_IFMT_) == S_IFLNK_ && n->blocks == attr;
+}
+
 /**
  * Load inode `ino` into `n`: its number checked against the count, its
  * table found through its group's descriptor. The first 128 bytes of the
@@ -1189,20 +1202,11 @@ static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
     for (i = 0; i < (int)EXT2_NBLOCKS; i++) {
         n->block[i] = le32(raw + 40 + i * 4);
     }
+    n->fast_target = fast_link(em, n);
     if ((n->mode & S_IFMT_) == S_IFREG_) {
         n->size |= (uint64_t)le32(raw + 108) << 32;
     }
     return 0;
-}
-
-/** Whether `n` is a fast symbolic link, its target in the pointer words:
- * a link whose `i_blocks` counts no block but its extended-attribute
- * block, as Linux's `ext2_inode_is_fast_symlink` decides. */
-static int fast_link(const struct ext2_mount *em, const struct ext2_node *n)
-{
-    uint32_t attr = n->file_acl ? em->block_size / 512 : 0;
-
-    return (n->mode & S_IFMT_) == S_IFLNK_ && n->blocks == attr;
 }
 
 /* ---- the nodes in memory ---- */
@@ -2269,7 +2273,8 @@ static int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
 
 /**
  * The target of symbolic link `n` into `buf`, as `ext2_readlink` gives it,
- * for a caller that holds `n`'s lock.
+ * for a caller that holds `n`'s lock, or a hold alone on a fast link
+ * (`fast_target`), whose words do not change.
  */
 static int link_target(struct ext2_mount *em, const struct ext2_node *n, char *buf, uint32_t cap)
 {
@@ -2282,7 +2287,7 @@ static int link_target(struct ext2_mount *em, const struct ext2_node *n, char *b
     if (len + 1 > cap) {
         return -ENAMETOOLONG;
     }
-    if (fast_link(em, n)) {
+    if (n->fast_target) {
         uint32_t i;
 
         if (len >= EXT2_FAST_LINK) {
@@ -2332,16 +2337,20 @@ static int ext2_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t 
 /**
  * The `readlink_cached` of `vfs_ops`: the target of a fast link, which the
  * inode's pointer words hold, as Linux's ext2 points `i_link` at them
- * (fs/ext2/inode.c:1489-1491); -1 for any other node, a slow link among
- * them, or a `cap` too small. A link's mode, size and words do not change
- * while a hold keeps it, so this takes no lock.
+ * (fs/ext2/inode.c:1488-1491, namei.c:186-190); -1 for any other node, a
+ * slow link among them, or a `cap` too small. Whether the link is fast is
+ * `fast_target`, decided when the inode was read or the link made, since
+ * `fast_link` reads `blocks` and `file_acl`, which a setxattr changes in two
+ * stores under the big lock that this walk does not take. A link's mode,
+ * size and words do not change while a hold keeps it, so this takes no
+ * lock.
  */
 static int ext2_readlink_cached(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     struct ext2_mount *em = em_of(mnt);
     struct ext2_node *n = node;
 
-    if (!fast_link(em, n) || n->size >= EXT2_FAST_LINK || n->size + 1 > cap) {
+    if (!n->fast_target || n->size >= EXT2_FAST_LINK || n->size + 1 > cap) {
         return -1;
     }
     return link_target(em, n, buf, cap);
@@ -6984,6 +6993,7 @@ static int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, cons
         for (i = 0; i < tlen; i++) {
             n->block[i / 4] |= (uint32_t)(uint8_t)target[i] << ((i % 4) * 8);
         }
+        n->fast_target = 1;
     } else {
         uint32_t b;
         int fresh;
