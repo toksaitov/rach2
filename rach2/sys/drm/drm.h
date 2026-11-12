@@ -1974,7 +1974,8 @@ void drm_dev_unplug(struct drm_device *dev);
  * on any device that maps the import under its own address, as the shmem
  * helper's import does, so that the next touch of one asks for its page
  * again. i915 maps an import under its mmap-offset records, which this
- * does not reach. Under the big kernel lock; does not sleep. */
+ * does not reach. Under the big kernel lock; it may sleep for a space's
+ * regions' lock (`paging_zap_device`), so the caller holds `obj`. */
 void drm_gem_object_zap(struct drm_gem_object *obj);
 /** Take and drop a reference to a device. */
 void drm_dev_get(struct drm_device *dev);
