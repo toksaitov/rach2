@@ -610,8 +610,10 @@ Linux's KVM selftests and kvm-unit-tests read, each a value and a newline:
 .Pa force_emulation_prefix ,
 .Ql 0 ;
 .Pa enable_pmu ,
-.Ql N ,
-since guests are given no performance counters;
+.Ql Y
+when the host has usable performance counters and
+.Ql N
+otherwise;
 .Pa tdp_mmu ,
 .Ql Y ;
 .Pa eager_page_split ,

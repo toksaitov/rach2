@@ -840,7 +840,7 @@ static struct devfs_node kvm_node = {"kvm", 10, 232, 0666, &dev_ops, NULL, NULL}
 /*
  * The module parameters Linux's KVM selftests read, as Linux's files under
  * /sys/module give them, with what Rach2's KVM does: no forced emulation
- * prefix, no performance counters for guests, the guest-physical tables
+ * prefix, host-dependent performance counters, the guest-physical tables
  * always (EPT or nested paging, with the unrestricted guest on VMX), and no
  * eager splitting of huge leaves when a dirty log starts. Every selftest
  * reads `force_emulation_prefix` before its main and skips without it.
@@ -863,6 +863,9 @@ static int32_t param_show(void *obj, int arg, char *buf, uint32_t cap)
     (void)obj;
     if (cap >= 2u) {
         buf[0] = kvm_params[arg].value;
+        if (!buf[0]) {
+            buf[0] = kvm_pmu_enabled() ? 'Y' : 'N';
+        }
         buf[1] = '\n';
     }
     return 2;

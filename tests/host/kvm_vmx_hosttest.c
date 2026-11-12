@@ -27,8 +27,9 @@
  * processor without what the backend needs, leaving the controls that load
  * IA32_PERF_GLOBAL_CTRL unused on Nehalem and Westmere and choosing the
  * Lenovo's controls;
- * a VM and its vCPU; each entry inside VMXON and VMPTRLD and each exit followed
+ * a VM and its vCPU; VMX on on a processor exactly while a VMCS is active
  * there, with CR4 as it was once it is off, on every path; the first entry
+ * a VMLAUNCH and the next VMRESUMEs with no VMPTRLD; the VMCS built and
  * checked by the model; each exit the corpus's guests cause handled in the
  * kernel or given to the caller: CPUID, port I/O and its string form, with
  * RF across a REP cut at a page and a 64-bit address size at offset 0, EPT
