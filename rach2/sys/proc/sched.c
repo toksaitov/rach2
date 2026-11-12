@@ -1380,20 +1380,23 @@ static void sched_account_one(struct percpu *cpu, int user)
  * kernel/sched/cputime.c:253-269 and 486-492); the rest carries to the
  * next tick.
  *
- * A tick that finds user mode charges user time only for the ticks due
- * since the processor last returned to user mode (`user_cycles`, which
- * `isr_leave` notes), when the timer keeps the tick's time, `due`, and
- * system time for those due before: a tick that came while the kernel ran
- * with interrupts off is taken at the first user instruction after them,
- * and would otherwise charge the kernel's time to the program. Linux's
- * kernel runs a system call with interrupts on, so its tick is taken when
- * it comes, in the mode it finds (`user_mode`, from update_process_times,
- * kernel/time/timer.c:2519).
+ * A tick that finds user mode, when the timer keeps the tick's time,
+ * `due`, charges system time for the ticks due while the processor was in
+ * the kernel before its last return to user mode, from the entry from user
+ * mode before that return (`user_entered`) to the return (`user_cycles`),
+ * both of which `isr_leave` notes, and user time for the rest. A tick that
+ * came while the kernel ran with interrupts off is taken at the first user
+ * instruction after them, and would otherwise charge the kernel's time to
+ * the program; a tick due in user mode but delivered late, as a
+ * hypervisor's often is, after an entry from user mode, stays user time.
+ * Linux's kernel runs a system call with interrupts on, so its tick is
+ * taken when it comes, in the mode it finds (`user_mode`, from
+ * update_process_times, kernel/time/timer.c:2519).
  */
 void sched_account_tick(int user, int64_t due)
 {
     struct percpu *cpu = this_cpu();
-    int64_t now = rtc_monotonic_ns(), since = 0;
+    int64_t now = rtc_monotonic_ns(), entered = 0, since = 0, at;
     int64_t gap = now - cpu->accounted_ns + (int64_t)(TICK_NS / 2u);
     uint64_t ticks, stolen;
 
@@ -1403,6 +1406,7 @@ void sched_account_tick(int user, int64_t due)
     ticks = tick_div64((uint64_t)gap, TICK_NS, NULL);
     cpu->accounted_ns += (int64_t)ticks * (int64_t)TICK_NS;
     if (user && due != 0) {
+        entered = timer_cycles_when(cpu->user_entered, now);
         since = timer_cycles_when(cpu->user_cycles, now);
     }
     stolen = arch_steal_ns() - cpu->steal_ns;
@@ -1414,8 +1418,8 @@ void sched_account_tick(int user, int64_t due)
             ++cpu->steal_ticks;
             cpu->ticks_seq++;
         } else {
-            sched_account_one(
-                cpu, user && (due == 0 || due - (int64_t)ticks * (int64_t)TICK_NS >= since));
+            at = due - (int64_t)ticks * (int64_t)TICK_NS;
+            sched_account_one(cpu, user && (due == 0 || at >= since || at < entered));
         }
     }
 }

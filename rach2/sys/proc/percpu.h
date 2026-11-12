@@ -86,6 +86,8 @@ struct percpu {
     uint64_t steal_ns;                          /* the steal time its counts reach, ns */
     int64_t accounted_ns;                       /* the monotonic time its counts reach, ns */
     uint64_t user_cycles;                       /* cycle count at its last return to user mode */
+    uint64_t entry_cycles;                      /* cycle count at its last entry from user mode */
+    uint64_t user_entered;                      /* entry_cycles as that return found it */
     uint64_t bkl_since;                         /* cycle count when it last took the big lock */
     uint32_t bkl_vector;                        /* the vector of the entry that holds it, or 0 */
     int32_t bkl_nr;                             /* its system call, -1 or BKL_NR_* (smp.h) */

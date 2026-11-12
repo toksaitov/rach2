@@ -735,14 +735,18 @@ static void _dispatch(isr_params_t *params)
 #define SYSCALL_ENTRY 0x80u
 
 /**
- * Mark an entry from user mode that is not a system call with -1 in the
- * interrupted thread's `orig_nr`, as Linux writes -1 in `orig_ax` on every
- * such entry, so that its tracer and its core file read -1 there and not
- * the number of the last call. Only the thread itself writes the field
- * while it runs, so no lock is needed.
+ * Note an entry from user mode's cycle count (`entry_cycles`), which tick
+ * accounting reads (`sched_account_tick`), and mark one that is not a
+ * system call with -1 in the interrupted thread's `orig_nr`, as Linux
+ * writes -1 in `orig_ax` on every such entry, so that its tracer and its
+ * core file read -1 there and not the number of the last call. Only the
+ * thread itself writes the field while it runs, so no lock is needed.
  */
 static void user_entry(const isr_params_t *params)
 {
+    if (FRAME_USER(params)) {
+        this_cpu()->entry_cycles = arch_cycles();
+    }
     if (FRAME_USER(params) && params->vector != SYSCALL_ENTRY && current_proc) {
         current_proc->orig_nr = -1;
     }
@@ -927,16 +931,20 @@ static void isr_leave_work(isr_params_t *params)
 
 /**
  * Leave the router as `isr_leave_work` says, and for a return to user mode
- * note the cycle count it returns at (`user_cycles`), so that a tick held
- * while interrupts were off in the kernel and taken at the return's first
- * user instruction charges the kernel's time as system time
+ * note the cycle count it returns at (`user_cycles`) and that of the entry
+ * from user mode before it (`user_entered`), so that a tick held while
+ * interrupts were off in the kernel and taken at the return's first user
+ * instruction charges the kernel's time as system time
  * (`sched_account_tick`). Interrupts are off.
  */
 void isr_leave(isr_params_t *params)
 {
     isr_leave_work(params);
     if (FRAME_USER(params)) {
-        this_cpu()->user_cycles = arch_cycles();
+        struct percpu *cpu = this_cpu();
+
+        cpu->user_entered = cpu->entry_cycles;
+        cpu->user_cycles = arch_cycles();
     }
 }
 
