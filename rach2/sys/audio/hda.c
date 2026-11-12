@@ -635,6 +635,7 @@ static void hda_pci_force_d0(pci_device_t *dev);
 static uint32_t hda_select_hw_rate(uint32_t req_rate);
 static uint32_t hda_stream_position(void);
 static void hda_halt(void);
+static void hda_stop(void);
 static uint8_t hda_amp_steps(uint32_t amp_caps);
 static uint8_t hda_get_out_amp_max(uint8_t nid);
 static uint8_t hda_get_in_amp_max(uint8_t nid);
@@ -4005,6 +4006,12 @@ static int hda_launch(uint16_t fmt)
  * supported rate. Return 0, -EBUSY while a stream of audio.h has the output,
  * -EINVAL for a format the codec cannot play, or -EIO when the codec was
  * never set up or the stream does not reset (hda_launch).
+ *
+ * The caller holds the stream mutex (hda_m_start), so a stream still playing
+ * is stopped with hda_stop and never with hda_driver.stop, which would take
+ * the mutex again, as Linux's snd_pcm_drop takes the stream lock and calls
+ * snd_pcm_stop, which expects it held (sound/core/pcm_native.c:1571 and
+ * 2234-2252 of 6.12.115).
  */
 static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
 {
@@ -4027,9 +4034,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     if (fmt == 0xFFFF)
         return -EINVAL;
 
-    if (playing) {
-        hda_driver.stop();
-    }
+    if (playing)
+        hda_stop();
 
     current_sample_rate = sample_rate;
     current_format = format;
@@ -5743,10 +5749,11 @@ static uint32_t hda_stream_delay(audio_stream_t *s)
  * The operations of hda_driver that change the device, each under the
  * stream mutex, so that none runs in the middle of khda's service
  * (hda_service_thread). They are called in process context with no
- * spinlock held. The driver's own calls use the functions they wrap. The
- * readers, is_playing, get_volume, stream_frames, stream_delay and
- * input_caps, take at most the stream lock or cap_lock, since a caller may
- * have interrupts off; `beep` is called under the speaker's spinlock and
+ * spinlock held. The driver's own calls use the functions they wrap, never
+ * hda_driver's, since a holder of the mutex that takes it again waits
+ * forever. The readers, is_playing, get_volume, stream_frames, stream_delay
+ * and input_caps, take at most the stream lock or cap_lock, since a caller
+ * may have interrupts off; `beep` is called under the speaker's spinlock and
  * leaves its verbs to khda (hda_beep).
  */
 
