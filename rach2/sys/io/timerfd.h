@@ -71,9 +71,12 @@ long sys_timer_create(struct isr_params *params);
 
 /** timer_settime(2) takes the id, the flags, of which TIMER_ABSTIME is the
  * one, the address of the new struct itimerspec and the address for the old
- * one, or 0, and sets the timer as timerfd_settime does. Returns 0, -EINVAL
- * for an id the process does not have, another flag, a null setting or a
- * time out of range, or -EFAULT. */
+ * one, or 0, and sets the timer as timerfd_settime does. The old setting's
+ * first expiration not yet signalled is signalled, and the overrun its
+ * later intervals gave the timer's pending signal is taken back; the rest of
+ * that signal's overrun stays. Returns 0, -EINVAL for an id the process does
+ * not have, another flag, a null setting or a time out of range, or
+ * -EFAULT. */
 long sys_timer_settime(struct isr_params *params);
 
 /** timer_gettime(2) takes the id and the address for the timer's struct
@@ -87,19 +90,20 @@ long sys_timer_settime64(struct isr_params *params);
 /** timer_gettime with i386's struct of 64-bit times, the time64 call. */
 long sys_timer_gettime64(struct isr_params *params);
 
-/** timer_getoverrun(2) takes the id. Returns the overrun of the timer's last
- * signal, at most 0x7FFFFFFF, or -EINVAL for an id the process does not
- * have. */
+/** timer_getoverrun(2) takes the id. Returns the overrun the later
+ * intervals of the timer's setting gave its last signal, at most 0x7FFFFFFF,
+ * and 0 from a timer_settime until the next signal, or -EINVAL for an id the
+ * process does not have. */
 long sys_timer_getoverrun(struct isr_params *params);
 
-/** timer_delete(2) takes the id and deletes the timer, first posting an
- * expiration whose signal waits to be posted. Returns 0, or -EINVAL for an
- * id the process does not have. */
+/** timer_delete(2) takes the id and deletes the timer, first ending its
+ * setting as timer_settime does. Returns 0, or -EINVAL for an id the
+ * process does not have. */
 long sys_timer_delete(struct isr_params *params);
 
-/** Delete the POSIX timers of `tg`, at an exec, which first posts each
- * expiration whose signal waits to be posted, and when its last thread
- * ends, which posts none. The caller holds the big lock. */
+/** Delete the POSIX timers of `tg`, at an exec, which first ends each
+ * one's setting as timer_settime does, and when its last thread ends,
+ * which posts nothing. The caller holds the big lock. */
 void ptimer_delete_all(struct tgroup *tg);
 
 /** Count the expirations due by the tick `now`, and wake the readers or
