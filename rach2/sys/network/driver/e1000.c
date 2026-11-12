@@ -74,9 +74,8 @@ struct e1000_io {
  * The rings are volatile and the buffers are not, which is the distinction
  * between memory the card writes while this driver is reading it and memory
  * only one of them touches at a time. A done bit the compiler kept in a
- * register would be a wait that never ends. The kernel builds this file
- * without optimization, where that cannot happen, but the host model builds
- * the same file at -O1, so the type states the sharing whatever the flags.
+ * register would be a wait that never ends, so the type states the sharing
+ * whatever the compiler's optimization flags.
  * A buffer is read only after its descriptor reported done, so making
  * 112 KiB of buffer volatile would slow every copy to no purpose.
  */

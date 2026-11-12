@@ -181,9 +181,7 @@ static void fbdrm_read(struct drm_gem_object *obj, uint64_t off, uint8_t *dst, u
  *
  * A row in the screen's own format goes from the buffer's pages straight to
  * the screen, and a converted row from `line`, both through `k_memcpy`,
- * which moves words. The kernel is built without optimization, where a loop
- * over the bytes of the Lenovo's screen, 4 MB, takes 23.6 ms under the
- * kernel's lock, and Weston commits the whole screen twice for each frame.
+ * which moves words.
  */
 static void fbdrm_blit(struct fbdrm_device *f, const struct drm_framebuffer *fb,
                        const struct drm_rect *r, int32_t dx, int32_t dy)

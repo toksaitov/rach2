@@ -46,13 +46,9 @@ void k_strtoupper(char *str)
  * ARCH_STRING_WORDS, and `arch_copy_words`, `arch_copy_words_down` and
  * `arch_fill_words` use them
  * (on an x86, `rep movs` and `rep stos` with the direction flag cleared,
- * since a user program may leave it set at a system call). The kernel is
- * built without optimisation, so a byte loop costs a load, a store and a
- * compare per byte, and every disk and network path passes each byte
- * through several of them; on the Lenovo, byte loops limit the SSD to
- * about 90 MB/s. A byte loop moves the tail. Elsewhere, and in the host
- * tests, the byte loop is the whole function, and the tests of the tail
- * run against it.
+ * since a user program may leave it set at a system call). A byte loop
+ * moves the tail. Elsewhere, and in the host tests, the byte loop is the
+ * whole function, and the tests of the tail run against it.
  */
 #if defined(ARCH_STRING_WORDS) && !defined(RACH2_HOSTTEST)
 #define KSTRING_WORDS 1
