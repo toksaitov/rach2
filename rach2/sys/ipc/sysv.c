@@ -458,6 +458,10 @@ struct shm_seg {
     struct open_file *ofd;
     int64_t atime, dtime, ctime;
     int32_t cpid, lpid;
+    /* The callers counting the segment's attachments, which may sleep and
+     * let the big lock go (`shm_nattch`); the segment is not freed while
+     * any counts. */
+    uint32_t counting;
 };
 
 /* IPC_INFO's struct shminfo64 and SHM_INFO's struct shm_info. */
@@ -476,6 +480,18 @@ struct shm_info {
 static struct shmem *shm_mem(const struct shm_seg *s)
 {
     return tmpfs_shmem(s->ofd->vnode);
+}
+
+/** The attachments of `s` (`shm_attaches`), with `s` kept from a free
+ * across the count, which may sleep: the caller may use `s` after. */
+static uint32_t shm_nattch(struct shm_seg *s)
+{
+    uint32_t n;
+
+    s->counting++;
+    n = shm_attaches(shm_mem(s));
+    s->counting--;
+    return n;
 }
 
 /** Free `s`, which no table and no caller has. */
@@ -497,7 +513,7 @@ static void shm_reap(void)
     for (i = 0; i < SYSV_SLOTS; i++) {
         struct shm_seg *s = (struct shm_seg *)tables[SYSV_SHM][i];
 
-        if (s && (s->perm.mode & SHM_DEST) && shm_attaches(shm_mem(s)) == 0) {
+        if (s && (s->perm.mode & SHM_DEST) && shm_nattch(s) == 0 && s->counting == 0) {
             sysv_leave(SYSV_SHM, &s->perm);
             shm_free(s);
         }
@@ -692,7 +708,7 @@ static void shm_stat_out(struct shm_seg *s, struct shmid64_ds *ds)
     IPC_TIME_SET(ds, ctime, s->ctime);
     ds->cpid = sysv_pid_seen(s->cpid);
     ds->lpid = sysv_pid_seen(s->lpid);
-    ds->nattch = shm_attaches(shm_mem(s));
+    ds->nattch = shm_nattch(s);
 }
 
 /** Copy the record of `s` to `buf` in the layout `rec`. 0 or -EFAULT. */
@@ -2223,12 +2239,12 @@ int sysv_row_at(int kind, int i, struct sysv_row *row)
     row->cuid = uid_seen(p->cuid);
     row->cgid = gid_seen(p->cgid);
     if (kind == SYSV_SHM) {
-        const struct shm_seg *s = (const struct shm_seg *)p;
+        struct shm_seg *s = (struct shm_seg *)tables[kind][i];
 
         row->a = (uint32_t)s->size == s->size ? (uint32_t)s->size : 0xFFFFFFFFu;
         row->b = (uint32_t)sysv_pid_seen(s->cpid);
         row->c = (uint32_t)sysv_pid_seen(s->lpid);
-        row->d = shm_attaches(shm_mem(s));
+        row->d = shm_nattch(s);
         row->t0 = s->atime;
         row->t1 = s->dtime;
         row->t2 = s->ctime;

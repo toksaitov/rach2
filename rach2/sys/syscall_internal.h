@@ -1178,7 +1178,10 @@ long mmap_shm(struct open_file *ofd, uintptr_t addr, uintptr_t len, uint32_t acc
 int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size);
 
 /** How many attachments the pages `sh` have, each address space's regions
- * that map them from the start counted once however many threads share it. */
+ * that map them from the start counted once however many threads share it.
+ * Called under the big lock; each space's regions are read under their
+ * lock, and a wait for one lets the big lock go, so the caller holds what
+ * it reads `sh` from across the call (`shm_nattch`, ipc/sysv.c). */
 uint32_t shm_attaches(const struct shmem *sh);
 
 /* The handlers syscall.c defines for the table (arch/<arch>/systab.c): the

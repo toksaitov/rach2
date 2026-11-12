@@ -8494,20 +8494,41 @@ int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size)
     return rc;
 }
 
-/** An address space is counted at the first process of `proc_list` that has
- * it. */
+/**
+ * An address space is counted at the first process of `proc_list` that has
+ * it. Its regions change under their lock alone, so they are read under it
+ * to read, taken without a wait when it can be; one that must be waited for
+ * is waited for with the big lock let go and given back, and the walk then
+ * starts again, since the process list may have changed meanwhile, as
+ * `paging_zap_where` starts again. `sh` is only compared, never followed.
+ */
 uint32_t shm_attaches(const struct shmem *sh)
 {
     const process_t *p, *q;
-    uint32_t n = 0;
+    struct mm *mm;
+    uint32_t n;
     const vma_t *r;
 
+again:
+    n = 0;
     for (p = proc_list; p; p = p->next) {
         for (q = proc_list; p->mm && q != p && q->mm != p->mm; q = q->next) {
         }
-        for (r = p->mm && q == p ? vm_first(&p->mm->vm) : NULL; r; r = vm_next(r)) {
+        mm = q == p ? p->mm : NULL;
+        if (!mm) {
+            continue;
+        }
+        if (!mmap_read_trylock(mm)) {
+            mm_get(mm);
+            mmap_read_lock(mm);
+            mmap_unlock(mm);
+            mm_put(mm);
+            goto again;
+        }
+        for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
             n += r->pgoff == 0 && filemap_shmem(r->file) == sh;
         }
+        mmap_unlock(mm);
     }
     return n;
 }
