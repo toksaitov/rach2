@@ -11671,28 +11671,104 @@ static int32_t do_access(const char *name, int mode, int dir, int flags)
 }
 
 /**
+ * `do_access` for a caller without the big lock: a path the name cache
+ * finishes (`vfs_resolve_cached`), absolute or relative to the working
+ * directory (`path_from_user_unlocked`), to a file of a type that sets
+ * `reads_unlocked`, whose attributes and permission are read under the
+ * file's own lock, as Linux's faccessat walks a path under RCU first
+ * (fs/open.c:466-490, fs/namei.c:2651-2653). The walk charges search
+ * permission to the real ids unless `flags` has AT_EACCESS, as
+ * `do_access`'s does. 0, a negative errno, or CALL_LOCKED with nothing
+ * done, for `do_access` under the big lock: a `mode` with another bit, whose
+ * -EINVAL that call gives first, among them.
+ */
+static int32_t access_unlocked(int dirfd, const char __user *upath, int mode, int flags)
+{
+    int real = !(flags & AT_EACCESS);
+    int follow = !(flags & AT_SYMLINK_NOFOLLOW);
+    struct vfs_ref ref;
+    struct vfs_stat st;
+    char *path;
+    int dir = 0;
+    int32_t rc;
+
+    if (mode & ~(R_OK | W_OK | X_OK)) {
+        return CALL_LOCKED;
+    }
+    rc = path_from_user_unlocked(dirfd, upath, &path, &dir);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = vfs_resolve_cached(path,
+                            (real ? VFS_WALK_REAL_IDS : 0) | VFS_WALK_LOCK |
+                                (follow || dir ? 0 : VFS_WALK_NOFOLLOW),
+                            &ref, NULL);
+    path_buf_put(path);
+    if (rc != 0) {
+        return rc == VFS_CACHED_MISS ? CALL_LOCKED : rc;
+    }
+    if (!vfs_mount_base(ref.mnt)->type->reads_unlocked) {
+        rc = CALL_LOCKED;
+    } else if (dir) {
+        rc = vfs_getattr(ref.mnt, ref.node, &st);
+        rc = rc != 0 ? rc : ((st.mode & S_IFMT) == S_IFDIR ? 0 : -ENOTDIR);
+    }
+    if (rc == 0) {
+        rc = cred_access_ref(&ref, mode, real);
+    }
+    if (rc == 0 && (mode & W_OK) && (ref.mnt->flags & VFS_MS_RDONLY)) {
+        rc = -EROFS;
+    }
+    vfs_walk_unlock(ref.mnt);
+    vfs_ref_release(&ref);
+    return rc;
+}
+
+/**
+ * The access check of the user's path `upath`, relative to `dirfd`, for
+ * `mode` and `flags` (`do_access`): without the big lock where
+ * `access_unlocked` finishes it, and under it otherwise. 0 or a negative
+ * errno.
+ */
+static int32_t access_path(int dirfd, const char __user *upath, int mode, int flags)
+{
+    char *path;
+    int dir, big;
+    int32_t rc;
+
+    big = !bkl_held();
+    if (big) {
+        rc = access_unlocked(dirfd, upath, mode, flags);
+        if (rc != CALL_LOCKED) {
+            return rc;
+        }
+        bkl_enter();
+    }
+    rc = path_from_user_dir(dirfd, upath, &path, &dir);
+    if (rc == 0) {
+        rc = do_access(path_name(path), mode, dir, flags);
+        path_buf_put(path);
+    }
+    if (big) {
+        bkl_exit();
+    }
+    return rc;
+}
+
+/**
  * access(2): whether the caller's real ids may use the file at the user's
- * path in argument 0 as the mode in argument 1 asks (`do_access`); 0 or a
- * negative errno, -EFAULT for a NULL path.
+ * path in argument 0 as the mode in argument 1 asks (`access_path`); 0 or a
+ * negative errno, -EFAULT for a NULL path. The call runs without the big
+ * lock, which `access_path` takes for what the name cache leaves.
  */
 long sys_access(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
-    int mode = (int)SC_ARG(params, 1);
-    char *path;
-    int dir;
-    int32_t rc;
 
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    rc = path_from_user_dir(AT_FDCWD, upath, &path, &dir);
-    if (rc != 0) {
-        return rc;
-    }
-    rc = do_access(path_name(path), mode, dir, 0);
-    path_buf_put(path);
-    return rc;
+    return access_path(AT_FDCWD, upath, (int)SC_ARG(params, 1), 0);
 }
 
 /**
@@ -11824,18 +11900,42 @@ static int32_t access_fd(fd_entry_t *entry, int mode, int flags)
 }
 
 /**
+ * faccessat2's AT_EMPTY_PATH: what `dirfd` is open on (`access_fd`), or the
+ * working directory for AT_FDCWD (`do_access`). The caller holds the big
+ * lock. 0 or a negative errno.
+ */
+static int32_t access_empty(int dirfd, int mode, int flags)
+{
+    char *path;
+    int32_t rc;
+
+    if (dirfd != AT_FDCWD) {
+        fd_entry_t *entry = fd_get(current_proc->fds, dirfd);
+
+        return entry ? access_fd(entry, mode, flags) : -EBADF;
+    }
+    path = path_buf_get();
+    if (!path) {
+        return -ENOMEM;
+    }
+    k_strncpy(path, proc_cwd(current_proc), VFS_PATH_MAX);
+    rc = do_access(path_name(path), mode, 0, flags);
+    path_buf_put(path);
+    return rc;
+}
+
+/**
  * The body of faccessat(2) and faccessat2(2): access(2) of the user's path
  * `upath` relative to the directory descriptor `dirfd`, or to the working
  * directory for AT_FDCWD, by `do_access` with `flags`. With AT_EMPTY_PATH an
  * empty or null path names what `dirfd` is open on (`access_fd`), or the
  * working directory for AT_FDCWD. Any other flag is -EINVAL, a null path
- * without AT_EMPTY_PATH -EFAULT.
+ * without AT_EMPTY_PATH -EFAULT. A path runs without the big lock where the
+ * name cache finishes it (`access_path`); an empty one takes it.
  */
 static int32_t access_at(int dirfd, const char __user *upath, int mode, int flags)
 {
-    char *path;
-    int empty = 0;
-    int dir = 0;
+    int empty = 0, big;
     int32_t rc;
 
     if (!current_proc) {
@@ -11850,28 +11950,17 @@ static int32_t access_at(int dirfd, const char __user *upath, int mode, int flag
             return empty;
         }
     }
-    if (empty && dirfd != AT_FDCWD) {
-        fd_entry_t *entry = fd_get(current_proc->fds, dirfd);
-
-        return entry ? access_fd(entry, mode, flags) : -EBADF;
+    if (!empty) {
+        return upath ? access_path(dirfd, upath, mode, flags) : -EFAULT;
     }
-    if (empty) {
-        path = path_buf_get();
-        if (!path) {
-            return -ENOMEM;
-        }
-        k_strncpy(path, proc_cwd(current_proc), VFS_PATH_MAX);
-    } else {
-        if (!upath) {
-            return -EFAULT;
-        }
-        rc = path_from_user_dir(dirfd, upath, &path, &dir);
-        if (rc != 0) {
-            return rc;
-        }
+    big = !bkl_held();
+    if (big) {
+        bkl_enter();
     }
-    rc = do_access(path_name(path), mode, dir, flags);
-    path_buf_put(path);
+    rc = access_empty(dirfd, mode, flags);
+    if (big) {
+        bkl_exit();
+    }
     return rc;
 }
 
