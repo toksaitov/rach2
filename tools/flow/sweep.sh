@@ -27,7 +27,8 @@
 # unchanged for a day, but `build/tests/failed`, and the run files of
 # `build/runs` unchanged for two weeks; on Windows the test collections,
 # tooling job directories, case images and scratch, the old shared TMPDIR of
-# the release runs among it, unchanged for a day, and the release runs'
+# the release runs among it, unchanged for a day, but what the record or KEPT
+# of a release run that is live or kept names, and the release runs'
 # directories in build/tmp unchanged for a day that hold no KEPT and whose
 # etude no longer runs; each release run, with its files, its etude and its
 # kept directory, of a milestone whose release closed; and here the entries of
@@ -43,7 +44,9 @@
 TESTING=testing
 
 # stale is the shell function that `outputs` runs on each machine: stale DAYS
-# PATH... removes each PATH in which nothing changed for DAYS days.
+# PATH... removes each PATH in which nothing changed for DAYS days, but a
+# PATH whose last component is a line of `keep`, which names what a live or
+# kept run uses, whatever its age.
 # shellcheck disable=SC2016 # the dollars are the function's
 stale='
 stale()
@@ -53,6 +56,10 @@ stale()
     for p in "$@"; do
         [ -e "$p" ] || continue
         case $p in */tests/failed) continue ;; esac
+        if [ -n "${keep:-}" ] && printf "%s\n" "$keep" | grep -qxF "${p##*/}"; then
+            echo "sweep: keeps $p: a live or kept run names it"
+            continue
+        fi
         [ -z "$(find "$p" -mtime -"$days" -print -quit 2> /dev/null)" ] || continue
         size=$(du -sk "$p" | cut -f 1)
         rm -rf "$p" && echo "sweep: removed $p: $size KiB"
@@ -87,13 +94,36 @@ outputs()
     {
         printf '%s\n' "$stale"
         echo 'b=/d/rach2/build'
+        echo "closed=' $(closed | tr '\n' ' ')'"
+        # A run in build/tmp is live while its etude runs, and every run is
+        # while tasklist cannot say which. Each path that the record or KEPT
+        # of a live or kept run names, such as a tooling job directory of the
+        # cache, which cannot move into the run's directory, goes into keep
+        # before any age rule, unless the run's milestone closed its release.
+        cat << 'END'
+nl='
+'
+keep= live=
+t=$(MSYS_NO_PATHCONV=1 tasklist /NH /FO CSV 2> /dev/null) && live=1
+for d in $b/tmp/*; do
+    [ -d "$d" ] || continue
+    id=${d##*/}
+    m=${id#milestone}
+    case $closed in *" ${m%%-*} "*) continue ;; esac
+    if [ -n "$live" ] && [ ! -e "$d/KEPT" ]; then
+        case $t in *"\"etude-$id.exe\""*) ;; *) continue ;; esac
+    fi
+    keep=$keep$nl$(sed -n 's/^\(made\|removed\|kept\) //p' "$d/record" "$d/KEPT" 2> /dev/null |
+        sed 's,.*/,,')
+done
+END
         # shellcheck disable=SC2016 # the dollars are the remote shell's
         echo "stale $days \$b/tests/rach2-collection.* \$b/tooling/job-* \$b/images/cases/*" \
             '$b/x86_64/images/cases/* $b/release/tmp/*'
         # A run's directory stays while it holds KEPT or its etude runs, and
         # all of build/tmp while tasklist cannot say which run.
         # shellcheck disable=SC2016 # the dollars are the remote shell's
-        printf '%s\n' 'if t=$(MSYS_NO_PATHCONV=1 tasklist /NH /FO CSV 2> /dev/null); then' \
+        printf '%s\n' 'if [ -n "$live" ]; then' \
             '    for d in $b/tmp/*; do' \
             '        [ ! -e "$d/KEPT" ] || continue' \
             '        case $t in *"\"etude-${d##*/}.exe\""*) continue ;; esac' \
