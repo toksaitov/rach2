@@ -91,7 +91,9 @@ int lapic_x2apic_enable(void);
  * where it can be neither, with an identity of 255 or more. Nothing when
  * no such mode was kept. The devices' interrupts are live by then, so the
  * leave masks the lines and lets the handlers take what was sent before
- * it passes the disabled state. Called once, on the boot processor before
+ * it passes the disabled state; a device's message that comes after the
+ * request register is read, or while the APIC is disabled, is lost, since
+ * the messages are not masked. Called once, on the boot processor before
  * the others start, after the VT-d units (platform.c), with interrupts on.
  */
 void lapic_x2apic_settle(int remapped);
