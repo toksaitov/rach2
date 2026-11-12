@@ -4,6 +4,8 @@
 # Usage: crysis-load.py rach2|linux TURN [KERNEL]
 # VIEW_WARM=1 writes data-fresh.ext2 itself, which then becomes data-warm.ext2;
 # VIEW_PROF=1 reads Rach2's bkl/calls and whole-kernel profile over the load,
+# VIEW_PROFTID=1 with it, on a kernel profile-tid.py patched, profiles the
+# game's main thread alone, or with VIEW_PROFNAME=NAME the first thread so named,
 # VIEW_SAMPLE=N samples every processor's RIP N times over the load by QMP,
 # VIEW_STRACE=1 runs the game under strace -f -c.
 import collections, hashlib, json, os, pathlib, re, shlex, signal, socket, subprocess as S, sys, threading, time
@@ -186,7 +188,11 @@ try:
                 if prof:
                     pre = 'echo 1 > /sys/kernel/debug/bkl/calls; echo kernel > /sys/kernel/debug/bkl/profile; '
                     if os.environ.get('VIEW_PROFTID') == '1':
-                        pre = ('G=$(for p in /proc/[0-9]*; do echo "$(ls $p/task 2>/dev/null | wc -l) ${p#/proc/}"; done | sort -n | tail -1 | cut -d" " -f2); echo "profile thread $G"; '
+                        # The game's main thread, or with VIEW_PROFNAME the first thread of that name.
+                        name = os.environ.get('VIEW_PROFNAME')
+                        find = ('G=$(grep -l "^%s$" /proc/[0-9]*/task/[0-9]*/comm 2>/dev/null | head -1 | cut -d/ -f5); ' % name if name else
+                                'G=$(for p in /proc/[0-9]*; do echo "$(ls $p/task 2>/dev/null | wc -l) ${p#/proc/}"; done | sort -n | tail -1 | cut -d" " -f2); ')
+                        pre = (find + 'echo "profile thread $G"; '
                                'echo 1 > /sys/kernel/debug/bkl/calls; echo "kernel $G" > /sys/kernel/debug/bkl/profile; ')
                 (out / 'stat-a.txt').write_bytes(cmd(pre + stat, check=False).stdout)
                 if os.environ.get('VIEW_TRACEP'):
