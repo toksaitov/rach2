@@ -206,6 +206,9 @@ dir 0755 /var/log
 # Where `ifup` records the interfaces it has brought up. It writes the file
 # through a temporary beside it, so the directory must exist.
 dir 0755 /var/run
+# The files a program keeps across a reboot, as Linux's /var/tmp: QEMU's
+# snapshot=on puts its overlay there unless TMPDIR says otherwise.
+dir 1777 /var/tmp
 
 dir 0755 /usr
 dir 0755 /usr/share
