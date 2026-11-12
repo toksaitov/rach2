@@ -33,14 +33,15 @@
  * signal posted when that signal is taken, a one-shot timer's too, and is
  * armed between ticks again. timer_getoverrun reports the overrun of the
  * signal last delivered. Only a delivery under the setting in force counts
- * the intervals since the signal was queued; notifications that wait are
- * posted oldest first; a discarded signal takes its timers' waiting
- * notifications; and exec deletes every timer and discards the timers'
- * pending signals. The tick, which runs without the big lock, leaves a
- * POSIX timer's expirations for a holder of it to signal, joined into one
- * signal; timer_settime and timer_delete post one still waiting, and exec
- * drops it. An expired one-shot timer of
- * SIGEV_NONE has no time left. A tick that comes before
+ * the intervals since the expiration the signal stands for; notifications
+ * that wait are posted oldest first, and timers one pass finds overdue
+ * expire in the order of their ends; a discarded signal takes its timers'
+ * waiting notifications and frees a deleted timer's record; and exec
+ * deletes every timer and discards the timers' pending signals. The tick,
+ * which runs without the big lock, leaves a POSIX timer's expirations for a
+ * holder of it to signal, joined into one signal; timer_settime and
+ * timer_delete post one still waiting, and exec drops it. An expired
+ * one-shot timer of SIGEV_NONE has no time left. A tick that comes before
  * the clock reaches the time does not expire it. A periodic timer counts its
  * expirations from the time and interval it was given, to the nanosecond: one
  * armed for a time long past counts every interval since, and an interval of a
@@ -869,7 +870,8 @@ static void between_pending_rows(void)
 /**
  * A POSIX timer of an interval of a nanosecond is armed between ticks when
  * set and once more at each expiration that sets its signal pending, and not
- * while that signal is pending, since an expiration then only adds to its
+ * while that signal is pending, since an expiration then counts one more of
+ * its setting (`set_count`), which the signal's delivery adds to its
  * overrun: interrupts between ticks stop, and the ticks count it, until the
  * signal is taken (`ptimer_rearm`), as Linux restarts such a timer at the
  * delivery of its signal, with the intervals since added to the signal's

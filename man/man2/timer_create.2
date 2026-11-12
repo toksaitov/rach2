@@ -87,9 +87,13 @@ ticks until the signal is taken, as Linux rearms such a timer only at the
 signal's delivery, so that a short interval cannot raise interrupt after
 interrupt.
 When the signal is taken, the intervals of the setting in force that ended
-since the signal was posted, past the one it stands for, are added to its
+since its first expiration the signal stands for, while the signal waited
+or was pending, past that one, are added to its
 overrun and the timer's time moves past the clock, as Linux forwards the
 timer then.
+A signal a blocking wait drops because the process ignores it, once the
+wait's mask unblocks it, is taken in the same way, as Linux dequeues each
+ignored signal before it drops it.
 Only a signal posted for the setting in force does so: one left pending
 across a
 .Fn timer_settime ,
