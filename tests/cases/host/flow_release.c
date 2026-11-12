@@ -296,7 +296,7 @@ static int wsl_mock(void)
  * preparation and RELEASE_TEST_WINDOWS for the cases, as `poll done` when it
  * has a status line and as `poll ended`, with an empty console, when it has
  * none. winclean.sh fails, as when a part it stops still runs, while
- * RELEASE_TEST_HOLD is `stuck` or `stuck-cases`. Any other script prints
+ * RELEASE_TEST_HOLD begins with `stuck`. Any other script prints
  * nothing.
  */
 static int windows_mock(void)
@@ -1687,7 +1687,10 @@ static int windows_pass_row(struct release *r)
                      called(r, "^testing "),
                  "windows prepares under its own claim, then runs its cases while WSL is held");
 }
-/** A failed run, a run without a status and a failed preparation. */
+/**
+ * A failed run, a run without a status, a preparation without a status that
+ * winclean.sh cannot confirm stopped and a failed preparation.
+ */
 static int windows_failure_rows(struct release *r)
 {
     struct fixture *f = r->f;
@@ -1713,6 +1716,21 @@ static int windows_failure_rows(struct release *r)
                    count(flow_path(f, "calls"), " run routine-prepare ") == 3 &&
                    count(flow_path(f, "calls"), "^sleep 30$") >= 6 && fx_has(record(r), last),
                "windows run without status runs three times after missed claim probes") &&
+         ok;
+    run(r, &(struct release_row){.record = r->head,
+                                 .git = "yes",
+                                 .machines = WINDOWS,
+                                 .hold = "stuck-clean",
+                                 .prepare = "building",
+                                 .windows = "status 0"});
+    machine_line(r, "windows started ", id, sizeof(id));
+    snprintf(last, sizeof(last), "failure windows %s runner", id);
+    ok = check(r,
+               f->status == 1 && count(flow_path(f, "calls"), " run routine-prepare ") == 1 &&
+                   fx_has(record(r), last) && !called(r, " run routine-collect ") &&
+                   strstr(f->out, " is not confirmed stopped on Windows; ") != NULL,
+               "a preparation without a status that winclean.sh cannot confirm stopped fails, "
+               "and no other starts in its copy") &&
          ok;
     run(r, &(struct release_row){.record = r->head,
                                  .git = "yes",

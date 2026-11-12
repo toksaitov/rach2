@@ -133,6 +133,7 @@ launched()
 # succeed once nothing of it is left, waiting up to half a minute.
 halt()
 {
+    p=''
     : > "$1.$2.cancel" || return 1
     launched "$1" "$2" || return 1
     [ -n "$p" ] || return 0
