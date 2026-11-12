@@ -39,13 +39,27 @@ static int sleep_caller(void)
     return current_proc ? (int)current_proc->pid : 0;
 }
 
-/** The wait condition of `sleep_lock_take`: the lock is free and the place
- * of `arg`, a `struct sleep_turn`, is the one served. */
+/** The wait condition of `sleep_lock_take`: the place of `arg`, a
+ * `struct sleep_turn`, is the one served, which the last give of the hold
+ * before it made so after it freed the lock. */
 static int sleep_my_turn(void *arg)
 {
     const struct sleep_turn *t = arg;
 
-    return t->lock->holder == -1 && t->lock->serving == t->place;
+    return t->lock->serving == t->place;
+}
+
+/** Take the next place in the line of `l` and return it: one
+ * compare-and-exchange of `next` when no other taker draws one at the same
+ * moment, as Linux's `__mutex_trylock_fast` takes a free mutex by one. */
+static uint32_t sleep_place(struct sleep_lock *l)
+{
+    uint32_t n;
+
+    do {
+        n = l->next;
+    } while (arch_atomic_cmpxchg(&l->next, n, n + 1u) != n);
+    return n;
 }
 
 void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int flags)
@@ -53,7 +67,6 @@ void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int
     struct sleep_lock_record **pp;
     uint32_t irq;
 
-    spin_lock_init(&l->spin, "sleep_lock.spin");
 #ifdef RACH2_LOCKDEP
     lockdep_init_map(&l->dep, record ? record->kind : "sleep_lock",
                      record ? &record->key : &unrecorded_key);
@@ -88,36 +101,33 @@ void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int
 /**
  * The order costs no switch of its own: giving the lock back does not
  * yield, and the waiter whose place is next runs when the scheduler picks
- * it. A waiter tests its turn again under the lock's spinlock before it
- * takes the lock; the wait's own test is a hint, made with the waiter on
- * the queue, so that a give between the two wakes it.
+ * it. A take with no one in line draws the place served and has the lock
+ * with no wait and no spinlock. Only the holder writes `holder`, `depth`
+ * and `serving`, so a thread that reads itself as the holder is the holder,
+ * and the holder fields are its own until its last give. The wait's test is
+ * made with the waiter on the queue, so that a give between the two wakes
+ * it.
  */
 void sleep_lock_take(struct sleep_lock *l)
 {
     int me = sleep_caller();
     struct sleep_turn turn;
-    uint32_t irq = spin_lock_irqsave(&l->spin);
 
     if (l->holder == me && l->depth > 0) {
         l->depth++;
-        spin_unlock_irqrestore(&l->spin, irq);
         return;
     }
 #ifdef RACH2_LOCKDEP
-    spin_unlock_irqrestore(&l->spin, irq);
     lockdep_acquire(&l->dep, current_proc ? current_proc->lockdep_subclass : 0, LOCKDEP_SLEEPING,
                     DEP_CALLER);
     if (current_proc) {
         current_proc->lockdep_subclass = 0;
     }
-    irq = spin_lock_irqsave(&l->spin);
 #endif
     turn.lock = l;
-    turn.place = l->next++;
+    turn.place = sleep_place(l);
     while (!sleep_my_turn(&turn)) {
-        spin_unlock_irqrestore(&l->spin, irq);
         wq_wait_event_nointr(&l->wq, sleep_my_turn, &turn);
-        irq = spin_lock_irqsave(&l->spin);
     }
     l->holder = me;
     l->depth = 1;
@@ -127,7 +137,6 @@ void sleep_lock_take(struct sleep_lock *l)
         l->taken_at = l->taken_by_cycles ? arch_cycles() : timer_now_us();
         l->taken_waits = current_proc ? current_proc->disk_waits : 0;
     }
-    spin_unlock_irqrestore(&l->spin, irq);
     if ((l->flags & SLEEP_LOCK_FILE) && current_proc) {
         current_proc->file_locks++;
     }
@@ -169,18 +178,18 @@ static void sleep_record_hold(const struct sleep_lock *l)
 }
 
 /**
- * The last give wakes the queue only when a waiter is on it, as Linux's
- * __mutex_unlock_slowpath wakes only a waiter it finds on the lock's list
- * (kernel/locking/mutex.c:937-956). The unlock of the lock's spinlock is an
- * exchange, a full barrier, between the release and the read of the queue,
- * and so is the unlock of the queue a waiter files itself on before it
- * tests its turn (`wq_wait`): either the waiter's test sees the release or
- * this read sees the waiter.
+ * The last give frees the holder fields, then serves the next place by an
+ * exchange of `serving`, as Linux's `__mutex_unlock_fast` frees a mutex by
+ * one atomic operation. It wakes the queue only when a waiter is on it, as
+ * Linux's __mutex_unlock_slowpath wakes only a waiter it finds on the
+ * lock's list (kernel/locking/mutex.c:937-956). The exchange is a full
+ * barrier between the release and the read of the queue, and so is the
+ * unlock of the queue a waiter files itself on before it tests its turn
+ * (`wq_wait`): either the waiter's test sees the release or this read sees
+ * the waiter.
  */
 void sleep_lock_give(struct sleep_lock *l)
 {
-    uint32_t irq;
-
     if (!sleep_lock_held(l)) {
         k_panic("sleeplock: a give by a thread that does not hold the lock");
     }
@@ -192,11 +201,9 @@ void sleep_lock_give(struct sleep_lock *l)
     if ((l->flags & SLEEP_LOCK_FILE) && current_proc) {
         current_proc->file_locks--;
     }
-    irq = spin_lock_irqsave(&l->spin);
     l->depth = 0;
     l->holder = -1;
-    l->serving++;
-    spin_unlock_irqrestore(&l->spin, irq);
+    (void)arch_atomic_xchg(&l->serving, l->serving + 1u);
 #ifdef RACH2_LOCKDEP
     lockdep_release(&l->dep, DEP_CALLER);
 #endif

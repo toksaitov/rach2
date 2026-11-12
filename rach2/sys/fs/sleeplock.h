@@ -8,9 +8,10 @@
  *
  * A sleeping lock keeps what must stay unchanged across a sleep, such as a
  * file's block map while its blocks are read; it is held across the sleep,
- * and every other caller that wants it waits. Its own state is kept under a
- * spinlock of its own, so that callers with and without the big lock take
- * it alike.
+ * and every other caller that wants it waits. Its line is two counters
+ * changed by atomic operations, so that callers with and without the big
+ * lock take it alike, and a take and a give with no one waiting pass no
+ * spinlock.
  */
 
 #include "../lib/kint.h"
@@ -67,15 +68,16 @@ extern int sleep_lock_stat;
  * `taken_at` are its start, by the holder's `disk_waits` and by
  * `arch_cycles` where `timer_cycles_agree` says the processors' counters
  * can time it (`taken_by_cycles`), and by `timer_now_us` elsewhere. Any
- * other hold reads neither, as Linux's mutex_lock reads no clock. `spin`
- * keeps every field but `wq`.
+ * other hold reads neither, as Linux's mutex_lock reads no clock. A taker
+ * draws its place by compare-and-exchange of `next`; the holder alone
+ * writes every other field but `wq`, and gives the lock back by an exchange
+ * of `serving`.
  */
 struct sleep_lock {
-    struct spinlock spin;
     int holder;
     int depth;
-    uint32_t next;
-    uint32_t serving;
+    volatile uint32_t next;
+    volatile uint32_t serving;
     uint64_t taken_at;
     int taken_by_cycles;
     int timed; /* the hold is stamped, for its record */
