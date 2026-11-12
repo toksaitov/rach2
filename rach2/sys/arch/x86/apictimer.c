@@ -492,6 +492,7 @@ static void hr_interrupt(isr_params_t *params)
         watchdog_event(params);
     }
     timer_hr_pass();
+    hr_program(&hr_cpu[arch_cpu_id()], rtc_monotonic_ns());
 }
 
 /**
@@ -570,7 +571,9 @@ int apic_hr_entry(uint32_t vector)
     } else if (vector == (uint32_t)hr_vector && c->want != 0 && c->want <= now) {
         c->want = 0;
     }
-    hr_program(c, now);
+    if (vector == APIC_TIMER_VECTOR) {
+        hr_program(c, now);
+    }
     return vector == APIC_TIMER_VECTOR ? tick : 1;
 }
 
