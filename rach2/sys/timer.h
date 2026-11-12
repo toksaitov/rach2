@@ -259,7 +259,7 @@ int64_t timer_tick_due(void);
  * Start this processor's tick again where it would have been, once its idle
  * task, which a tick in its wait stopped (apictimer.c), switches to a
  * thread, as Linux's tick_nohz_idle_exit restarts the tick
- * (kernel/time/tick-sched.c:1395-1420). Nothing when the tick runs.
+ * (kernel/time/tick-sched.c:1454-1479). Nothing when the tick runs.
  * Interrupts are off.
  */
 void timer_idle_exit(void);

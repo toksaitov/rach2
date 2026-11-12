@@ -177,7 +177,7 @@ void sched_idle_loop(void);
  * (`timer_tick_stopped`) when this processor's queue holds a thread it may
  * take, so that it steals it (`sched_steal`) at once, as Linux's busy
  * processor kicks an idle one into NO_HZ balancing (nohz_balancer_kick,
- * kernel/sched/fair.c:12286-12390): a processor that ticked took such a
+ * kernel/sched/fair.c:12426-12540): a processor that ticked took such a
  * thread at its next tick. From the tick, with interrupts off.
  */
 void sched_idle_balance(void);

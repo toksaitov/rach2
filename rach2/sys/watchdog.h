@@ -58,7 +58,7 @@ void watchdog_tick(isr_params_t *params);
  * (apictimer.c): half a sample period, so that its watchdog timer still
  * runs every period or two and its buddy sees its count move, as Linux's
  * watchdog hrtimer ends a NO_HZ processor's idle each sample period
- * (kernel/watchdog.c:770-775); a second's worth while `watchdog_thresh` is
+ * (kernel/watchdog.c:675-697); a second's worth while `watchdog_thresh` is
  * 0. Any context.
  */
 uint32_t watchdog_idle_ticks(void);
