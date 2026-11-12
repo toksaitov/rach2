@@ -63,7 +63,8 @@ struct hr_state {
     int64_t want;    /* the earliest time asked for and not yet served, in
                       * nanoseconds since boot, or 0 for none */
     int64_t tick;    /* with `oneshot`, the time of the next tick */
-    int64_t due;     /* the time the tick being taken was due, or 0 */
+    int64_t due;     /* the time the last tick the clock passed was due,
+                      * as the tick being taken found it, or 0 */
     uint8_t oneshot; /* the timer is one-shot */
     uint8_t lvt;     /* with `oneshot`, the vector its entry was last
                       * written with, 0 before the first */
@@ -398,6 +399,9 @@ int apic_hr_entry(uint32_t vector)
     if (vector == APIC_TIMER_VECTOR && now + HR_SLACK_NS >= c->tick) {
         c->due = c->tick;
         hr_forward(c, now);
+        if (c->tick - (int64_t)TICK_NS > c->due) {
+            c->due = c->tick - (int64_t)TICK_NS;
+        }
         tick = 1;
     } else if (vector == (uint32_t)hr_vector && c->want != 0 && c->want <= now) {
         c->want = 0;
