@@ -11,22 +11,27 @@
 # result of the same 6.12.115 programs under Linux 6.18.58, WSL's, as
 # ref/linux-selftests.status has it; a row Linux failed there, where the
 # programs are older than the kernel, expects a pass unless its EXPECT is
-# `fail`, and names Linux's failure after `Linux:`.
+# `fail`, and names Linux's failure after `Linux:`. A NAME PROGRAM,ARG,...
+# runs PROGRAM with the ARGs: the six programs that touch a gigabyte or more
+# at their defaults run at smaller sizes, since the suite's guests run them
+# two hypervisors deep, where Linux as the host took 484 s for
+# max_guest_memory_test at 4 GiB and would take hours at its 128 GiB
+# (dev-log/84-locks/84-33.md).
 #
 # NAME EXPECT LINUX REASON
 access_tracking_perf_test skip skip CONFIG_IDLE_PAGE_TRACKING is not enabled
 coalesced_io_test pass pass
-demand_paging_test pass pass
-dirty_log_perf_test pass pass
-dirty_log_test pass fail Linux: Set page 369 value 1 incorrect (iteration=3)
+demand_paging_test,-b,64M pass pass
+dirty_log_perf_test,-b,64M pass pass
+dirty_log_test,-i,4 pass fail Linux: Set page 369 value 1 incorrect (iteration=3)
 guest_memfd_test excluded fail guest_memfd, deferred by the owner's decision of 2026-11-10 to a later milestone; Linux: guest_memfd() with flag '0x1' should fail with EINVAL
 guest_print_test pass pass
 hardware_disable_test pass pass
 kvm_binary_stats_test pass pass
 kvm_create_max_vcpus pass pass
-kvm_page_table_test pass pass
-max_guest_memory_test pass pass
-memslot_modification_stress_test pass pass
+kvm_page_table_test,-b,128M pass pass
+max_guest_memory_test,-m,4 pass pass
+memslot_modification_stress_test,-b,64M pass pass
 memslot_perf_test pass pass
 pre_fault_memory_test pass pass
 rseq_test pass pass
