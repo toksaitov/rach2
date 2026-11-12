@@ -677,8 +677,8 @@ void timer_idle_work(void)
 }
 
 /**
- * Service a processor's tick, TICK_HZ a second, and preempt its current
- * process.
+ * Service a processor's scheduler tick, account its elapsed millisecond
+ * units, and preempt its current process.
  *
  * The tick runs without the big lock, as Linux's does
  * (`tick_sched_handle`, kernel/time/tick-sched.c:253-278, and

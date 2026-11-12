@@ -1355,16 +1355,18 @@ cpu0 USER 0 SYSTEM IDLE 0 0 0 STEAL 0 0
 .Ed
 .Pp
 The first four columns are user, nice, system, and idle time, in
-hundredths of a second, Linux's USER_HZ, counted from the 1000 Hz ticks:
+hundredths of a second, Linux's USER_HZ, counted in millisecond units:
 those that found the processor in user mode, none for nice, those that found it in
 the kernel, an interrupt handler's included, and those that found it in an
 idle wait.
 The eighth is steal time: under KVM, the ticks of the time the host kept
 the processor ready to run but ran something else, which are counted in
 none of the others.
-A processor counts every tick of its own clock since it started: a tick
-lost while its interrupts were held off is counted with the next, as what
-that one found.
+A processor counts elapsed time on its own clock since it started.
+Time lost while its interrupts were held off is counted with the next
+scheduler tick, as what that one found.
+A stopped idle span is charged as idle and steal time once on wake; a
+reader projects that span without changing the owning processor's counters.
 The
 .Li cpu
 line is the processors' sums.
@@ -1645,8 +1647,9 @@ as Linux counts them.
 .It Pa /proc/uptime
 Seconds since boot and the seconds the processors spent idle, summed over
 them, separated by a space, each with two decimal places.
-Both count 1000 Hz timer ticks: the first the boot processor's, the second
-the idle ticks of every processor, as the
+Both count millisecond clock units, independent of the scheduler's
+interrupt rate: the first the global clock's, the second the idle units of
+every processor, as the
 .Li cpu
 lines of
 .Pa /proc/stat
