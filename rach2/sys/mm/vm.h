@@ -439,6 +439,12 @@ int vm_device_access(struct vm_file *f, uint64_t offset, void *buf, uint32_t len
 /** Take a reference to `f`; NULL is ignored. */
 void vm_file_get(struct vm_file *f);
 
+/** Take a reference to `f` unless its last one has gone, as Linux's
+ * get_file_rcu: 1 when taken, 0 for a file that waits for `vm_file_reap`.
+ * For a walk that finds `f` with no reference of its own, since a region's
+ * last put runs under the regions' lock alone. */
+int vm_file_tryget(struct vm_file *f);
+
 /** Drop a reference to `f`; NULL is ignored. The last one does not release
  * the file but puts it on the list `vm_file_reap` empties, so that a change
  * to the regions never sleeps part way through. */
