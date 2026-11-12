@@ -19,8 +19,10 @@
 # serial and QEMU logs and the guest's output. CPU (host) and SMP (4) are
 # QEMU's processor model and count. TRACE, a file, gets QEMU's trace of each
 # processor's exits and entries and of the virtio GPU's notifies, commands
-# and fences, with their times, or of the events EVENTS names. The guest
-# powers off on every exit path.
+# and fences, with their times, or of the events EVENTS names. STATS, a
+# script such as qmpstats.py, gets QEMU's QMP socket, OUT's kvm-stats and
+# QEMU's PID, and runs beside the guest. The guest powers off on every exit
+# path.
 set -eu
 system=$1 image=$2 extra=$3 out=$4
 frames=${FRAMES:-3346}
@@ -72,8 +74,12 @@ qemu-system-x86_64 -name "profile-$system" -accel kvm -cpu "${CPU:-host}" -smp "
     -drive "$drive" -device ide-hd,drive=root,bus=ide.0 \
     -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:$port-:22" -device e1000,netdev=n0 \
     -device virtio-rng-pci -device virtio-keyboard-pci -device virtio-tablet-pci \
-    -serial "file:$out/serial.log" -monitor none $boot $tracing > "$out/qemu.log" 2>&1 &
+    -serial "file:$out/serial.log" -monitor none -qmp "unix:$work/qmp,server=on,wait=off" \
+    $boot $tracing > "$out/qemu.log" 2>&1 &
 qemu=$!
+if [ -n "${STATS:-}" ]; then
+    python3 -I "$STATS" "$work/qmp" "$out/kvm-stats" "$qemu" &
+fi
 ssh="ssh -i $key -p $port -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR $user@127.0.0.1"
 tries=0
 until $ssh true 2>/dev/null </dev/null; do
