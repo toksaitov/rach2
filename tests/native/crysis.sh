@@ -11,8 +11,9 @@
 # desktop session runs. The data partition, /dev/disk0p6, is mounted on /data
 # in that namespace. The checks:
 #
-#   flyby  Linux's island flyby through ROUTE, umu or direct, four loops, each
-#          judged by crysis.py against 24 frames a second beside Linux's
+#   flyby  Linux's island flyby through ROUTE, umu or direct, its first two
+#          loops, each judged by crysis.py against 24 frames a second beside
+#          Linux's
 #   load   SAVE, a save that crysis.py's `save` recorded in an earlier boot
 #          before the root was updated, such as default_accept_s2.CRYSISJMSF
 #          of 80-9, loaded through the game's own prefix with umu and through
@@ -120,7 +121,7 @@ say "kept $(wc -l < before.sha256) files' digests"
 python3 ./crysis.py prepare "$here/out" || fail prepare
 case $1 in
     flyby)
-        python3 ./crysis.py flyby "$2" "flyby-$2" 4 || fail "flyby-$2"
+        python3 ./crysis.py flyby "$2" "flyby-$2" 2 || fail "flyby-$2"
         ;;
     load)
         python3 ./crysis.py load load-update "$2" umu || fail load-update

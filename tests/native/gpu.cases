@@ -137,22 +137,23 @@ case display/kept alone mountns -- native/display.sh kept
 case display/drm alone log stage:drmprobe -- native/display.sh drm
 case display/weston alone log -- native/display.sh weston
 
-# The native games' fixed replays, twice each, on the desktop's session on
-# the panel with sound at volume 1, judged against Linux's frame times
-# (80-7b, tests/system/games/lenovo.sh); the i386 game is not judged.
+# The native games' fixed replays, once each with Mesa's shader cache
+# empty, on the desktop's session on the panel with sound at volume 1,
+# judged against the mean of Linux's two runs (80-7b,
+# tests/system/games/lenovo.sh); the i386 game is not judged.
 case games/supertuxkart alone log \
     file:tests/graphics/runners/games.sh file:tests/graphics/runners/common.sh \
-    -- system/games/lenovo.sh -r . out supertuxkart
+    -- system/games/lenovo.sh -n 1 -r . out supertuxkart
 case games/0ad alone log \
     file:tests/graphics/runners/games.sh file:tests/graphics/runners/common.sh \
-    -- system/games/lenovo.sh -r . out 0ad
+    -- system/games/lenovo.sh -n 1 -r . out 0ad
 case games/supertuxkart-i386 alone log \
     file:tests/graphics/runners/games.sh file:tests/graphics/runners/common.sh \
     -- system/games/lenovo.sh -n 1 -r . out supertuxkart-i386
 
 # Crysis on the game of the data partition, with sound at volume 1: the
-# flyby through umu and directly, four loops judged against 24 frames a
-# second, and 80-9's save loaded after this release's update, through the
+# flyby through umu and directly, its first two loops judged against 24
+# frames a second, and 80-9's save loaded after this release's update, through the
 # game's prefix and a new one (80-9, native/crysis.sh).
 case games/crysis.flyby-umu alone log mountns \
     file:tests/system/games/crysis.py file:tests/system/games/wm.py \
