@@ -1,0 +1,10 @@
+# webgl-lenovo.omit: the WebGL pages that the Lenovo's cases leave out
+# (tests/native/gpu.cases), `BROWSER PATH` a line, as webgl.sh -x takes them,
+# on Rach2 and in Linux's reference alike.
+#
+# The suite's deqp/ pages, 793 of its 2,865, take some 14 s each on the
+# HD 4400, three hours a browser, and the native cases gpu/deqp-* already run
+# dEQP-GLES on the same GPU against Linux. Step 9's reference left them out
+# as well.
+chromium deqp/
+firefox deqp/

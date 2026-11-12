@@ -30,8 +30,9 @@
 #   glmark2  glmark2.sh's validation of each scene, fullscreen on the
 #            session's compositor, as the session's user
 #   webgl    webgl.sh's CHUNK of the WebGL 2.0.1 list in BROWSER, on the
-#            session's compositor, as the session's user, judged against
-#            the same pages of REF, all of the browser's chunks
+#            session's compositor, as the session's user, without the pages
+#            of webgl-lenovo.omit when it is there, judged against the same
+#            pages of REF, all of the browser's chunks
 #   gate     glmark2.sh's benchmark of API, or probe.sh in BROWSER, on the
 #            session's compositor, as the session's user, judged by
 #            `judge.py gate`
@@ -246,8 +247,13 @@ case $kind in
         browser=$1 chunk=$2
         session_start
         mixer_low
+        omit=''
+        if [ -f "$here/webgl-lenovo.omit" ]; then
+            cp "$here/webgl-lenovo.omit" "$work/"
+            omit=$work/webgl-lenovo.omit
+        fi
         run user conformance webgl.sh -b "$browser" ${LENOVO_WEBGL:+-s "$LENOVO_WEBGL"} \
-            -o "$work/out" "$chunk" || status=$?
+            ${omit:+-x "$omit"} -o "$work/out" "$chunk" || status=$?
         mixer_low
         if [ "$ref" != - ]; then
             pages=$out/$browser-2.0.1-$(printf '%02d' "$chunk").pages
