@@ -29,6 +29,8 @@
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
 #include "lib/ksignal.h"
+#include "lib/kirq.h"
+#include "arch/arch.h"
 #include "fs/fd.h"
 #include "fs/debugfs.h"
 #include "fs/file.h"
@@ -5595,6 +5597,12 @@ int file_ops_unlocked(const fd_entry_t *e)
     return !ofd || (!ofd->vmnt && !ofd->dev_mnt && !ofd->synth_mnt);
 }
 
+int file_poll_unlocked(const fd_entry_t *e)
+{
+    return e && e->ops && e->ops->poll &&
+           ((e->ops->flags & FILE_OPS_POLL_UNLOCKED) || file_ops_unlocked(e));
+}
+
 /**
  * An ioctl touches the held device, not its retained inode or offset.
  * Its FILE_OPS_UNLOCKED dispatcher takes any lock its request needs,
@@ -5689,12 +5697,12 @@ static void fd_teardown(fd_table_t *table, int fd)
     }
 }
 
-/** Whether `t`, a sharer of the caller's table, sleeps in an epoll_wait that
+/** Whether `t`, a sharer of the caller's table, is in an epoll_wait that
  * holds descriptor `fd` of the table and does not wait on the set `fd`
  * itself. The caller holds the table's lock. */
 static int epoll_wait_holds(const process_t *t, int fd)
 {
-    return t != current_proc && t->epoll_waiting && t->poll_wqs && t->epoll_wait_fd != fd &&
+    return t != current_proc && t->epoll_waiting && t->epoll_wait_fd != fd &&
            fd / 32 < t->fd_holding && (t->fd_held[fd / 32] & (1u << (fd % 32)));
 }
 
@@ -5718,50 +5726,70 @@ static int epoll_waits_none(fd_table_t *table)
     return none;
 }
 
+/** Whether an epoll_wait of another sharer of `table` holds descriptor
+ * `fd` (`epoll_wait_holds`); the table's lock is taken. */
+static int epoll_waits_hold(fd_table_t *table, int fd)
+{
+    process_t *t;
+    uint32_t flags = fd_table_lock(table);
+    int held = 0;
+
+    for (t = table->sharers; t && !held; t = t->fd_sharer_next) {
+        held = epoll_wait_holds(t, fd);
+    }
+    fd_table_unlock(table, flags);
+    return held;
+}
+
 /**
  * Let go of descriptor `fd` of `table` in each epoll_wait of another sharer
- * that holds it and sleeps, so that a close releases it at once, as a
- * close on Linux does while a thread waits in epoll_wait: the wait comes
- * off every queue it sleeps on, each of which the release may free, with
- * the queue forgotten (`poll_let_go`), its hold on `fd` goes, and it is
- * woken to scan its set again, through its own descriptors. The set's own
+ * that holds it, so that a close releases it at once, as a close on Linux
+ * does while a thread waits in epoll_wait. A wait that is quiet, its last
+ * scan before its sleep done, comes off every queue it sleeps on, each of
+ * which the release may free, with the queue forgotten (`poll_let_go`),
+ * its hold on `fd` goes, and it is woken to scan its set again, through
+ * its own descriptors. A wait that is not may be reading what `fd` names:
+ * it keeps its hold and is asked to give back its holds of descriptors
+ * being closed before it sleeps (`fd_holds_release_closing`), and the last
+ * of them to go releases `fd`, as the last call's hold does. The set's own
  * descriptor stays held, since the wait reads the set until it ends.
- * Returns whether any wait let go.
+ * Returns whether every such wait let go; one that holds `fd` still makes
+ * it 0.
  *
  * The caller has marked `fd` closing, so that no scan takes a new hold on
- * it, or holds the big lock from here until it marks it, as dup2 does.
- * The sharers are found under the big lock as well as the table's lock:
- * epoll_wait runs under the big lock from its scan until its sleep gives
- * the lock up, so a wait that holds `fd` is seen here asleep, with its
- * queues published, and not between its scan and its sleep, where it
- * would sleep on with the hold and the close would never end.
+ * it; dup2, which has not, takes the slot right after (`dup_clear`). The
+ * sharers are found under the table's lock and each wait's quiet mark
+ * read under `poll_lock`, so a wait is seen quiet, with its queues
+ * published, or is asked, and none sleeps on with the hold. The scans of
+ * epoll_wait run without the big lock, and so does this.
  *
- * A table whose sharers have no epoll_wait under way is passed by without
- * the big lock (`epoll_waits_none`).
+ * A table whose sharers have no epoll_wait under way is passed by
+ * (`epoll_waits_none`).
  */
 static int epoll_waits_let_go(fd_table_t *table, int fd)
 {
     process_t *t;
     uint32_t flags;
-    int any = 0;
+    int all = 1, any = 0;
 
     if (table->refs < 2 || epoll_waits_none(table)) {
         return 0;
     }
-    bkl_enter();
     flags = fd_table_lock(table);
     for (t = table->sharers; t; t = t->fd_sharer_next) {
         if (!epoll_wait_holds(t, fd)) {
             continue;
         }
-        poll_let_go(t);
+        any = 1;
+        if (!poll_let_go(t)) {
+            all = 0;
+            continue;
+        }
         t->fd_held[fd / 32] &= ~(1u << (fd % 32));
         wq_wake_proc(t);
-        any = 1;
     }
     fd_table_unlock(table, flags);
-    bkl_exit();
-    return any;
+    return any && all;
 }
 
 /**
@@ -5814,6 +5842,16 @@ void fd_holds_release(void)
     int fd = 0;
 
     while ((fd = fd_holds_claim(fd)) >= 0) {
+        fd_teardown(current_proc->fds, fd);
+        fd++;
+    }
+}
+
+void fd_holds_release_closing(int keep)
+{
+    int fd = 0;
+
+    while ((fd = fd_holds_claim_closing(fd, keep)) >= 0) {
         fd_teardown(current_proc->fds, fd);
         fd++;
     }
@@ -7676,18 +7714,31 @@ long sys_dup(isr_params_t *params)
  * another thread sharing the table holds its descriptor, or the descriptor
  * a close left to such a call, or a close of it is still releasing it,
  * where Linux replaces the descriptor and the call or the close keeps its
- * file. An epoll_wait asleep lets the descriptor go first
- * (`epoll_waits_let_go`).
+ * file. An epoll_wait lets the descriptor go first (`epoll_waits_let_go`);
+ * one in the middle of a scan holds it until its scan is done, which the
+ * call waits for with the big lock lent to a processor that waits for it,
+ * since the scan may need it.
  */
 static int32_t dup_clear(int fd)
 {
     fd_table_t *table = current_proc->fds;
     int rc;
 
-    epoll_waits_let_go(table, fd);
-    while ((rc = fd_dup_target(table, fd)) == 1) {
-        fd_close_locks(fd_slot(table, fd));
-        fd_teardown(table, fd);
+    for (;;) {
+        uint32_t irq;
+
+        epoll_waits_let_go(table, fd);
+        while ((rc = fd_dup_target(table, fd)) == 1) {
+            fd_close_locks(fd_slot(table, fd));
+            fd_teardown(table, fd);
+        }
+        if (rc != -EBUSY || !epoll_waits_hold(table, fd)) {
+            break;
+        }
+        irq = kirq_save();
+        bkl_yield();
+        kirq_restore(irq);
+        arch_relax();
     }
     return rc == 0 ? 0 : -EBUSY;
 }

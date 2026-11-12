@@ -3579,6 +3579,32 @@ static void unlock_file_calls(void)
     }
 }
 
+/**
+ * Mark the epoll calls to run without the big lock, native and i386: a
+ * wait scans its set under the set's own lock and takes the big lock only
+ * for a set that watches a descriptor whose poll needs it, or another set
+ * (`scan_set`, io/epoll.c), and a change of a set takes it only to add or
+ * remove a set inside another, as Linux's eventpoll has `ep->lock`,
+ * `ep->mtx` and `epnested_mutex` (fs/eventpoll.c:314-326, 392). The i386
+ * epoll_pwait2 of x86-64, which converts its timespec, is marked as its
+ * table is filled (`ia32_syscall_init`).
+ */
+static void syscall_epoll_unlock(void)
+{
+    static syscall_fn_t const calls[] = {
+        sys_epoll_wait,
+        sys_epoll_pwait,
+        sys_epoll_pwait2,
+        sys_epoll_ctl,
+    };
+    uint32_t i;
+
+    for (i = 0; i < sizeof(calls) / sizeof(calls[0]); i++) {
+        syscall_unlock(SYSCALL_ABI_NATIVE, calls[i]);
+        syscall_unlock(SYSCALL_ABI_IA32, calls[i]);
+    }
+}
+
 void init_syscall(void)
 {
     uint32_t i;
@@ -3600,6 +3626,7 @@ void init_syscall(void)
     syscall_unlock(SYSCALL_ABI_NATIVE, sys_getrusage);
     syscall_unlock(SYSCALL_ABI_IA32, sys_getrusage);
     unlock_file_calls();
+    syscall_epoll_unlock();
     syscall_mm_unlock();
     syscall_futex_unlock();
 

@@ -1013,15 +1013,23 @@ static int32_t timerfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
 }
 
 /** poll of a timerfd: POLLIN among `events` while it is readable
- * (`readable`), and its wait queue. */
+ * (`readable`), and its wait queue. It runs without the big lock
+ * (FILE_OPS_POLL_UNLOCKED) and reads the count under the timers' lock,
+ * which the tick's expiry holds as it adds to it, as Linux's timerfd_poll
+ * reads `ticks` under the wait queue's lock (fs/timerfd.c:249-263). */
 static short timerfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct ktimer *t = (struct ktimer *)e->priv;
+    uint32_t flags;
+    int ready;
 
     if (wq) {
         *wq = &t->wq;
     }
-    return (short)(readable(t) ? (events & POLLIN) : 0);
+    flags = spin_lock_irqsave(&timer_lock);
+    ready = readable(t);
+    spin_unlock_irqrestore(&timer_lock, flags);
+    return (short)(ready ? (events & POLLIN) : 0);
 }
 
 /** The last close of a timerfd: the timer is disarmed, taken off
@@ -1040,8 +1048,8 @@ static void timerfd_close(fd_entry_t *e)
     e->priv = NULL;
 }
 
-static const struct file_ops timerfd_ops = {timerfd_read,  NULL, timerfd_poll, NULL,
-                                            timerfd_close, NULL, NULL,         0};
+static const struct file_ops timerfd_ops = {
+    timerfd_read, NULL, timerfd_poll, NULL, timerfd_close, NULL, NULL, FILE_OPS_POLL_UNLOCKED};
 
 /** The timer of the caller's descriptor `fd`, or NULL when `fd` is not open
  * or not a timerfd. */

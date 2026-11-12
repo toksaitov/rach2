@@ -46,6 +46,11 @@ struct process;
  * queue whose wake means look again, or NULL for a descriptor always ready. */
 short poll_fd(struct fd_entry *e, short events, struct wait_queue **wq);
 
+/** `poll_fd` for a caller that holds the big lock, or has found that the
+ * poll of `e` runs without it (`file_poll_unlocked`), and may hold a
+ * spinlock of an earlier row than the object's own (epoll's set lock). */
+short poll_fd_held(struct fd_entry *e, short events, struct wait_queue **wq);
+
 /* A scan of what a wait watches, for `poll_wait`: it puts the wait queue of
  * each object in `wqs` and returns the count of those ready. */
 typedef int (*poll_scan_fn)(void *ctx, struct wait_queue **wqs);
@@ -73,12 +78,21 @@ struct poll_deadline {
 int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d, const char *wchan);
 
 /**
- * Take thread `t`, asleep in `poll_wait`, off every queue it sleeps on, and
- * set each queue in its array to NULL, so that a close by another thread may
- * free what the wait sleeps on; the wait scans again once woken. Nothing
- * when `t` is not asleep there. The caller wakes `t`.
+ * Take thread `t`, quiet in `poll_wait` (its last scan before the sleep
+ * done), off every queue it sleeps on, and set each queue in its array to
+ * NULL, so that a close by another thread may free what the wait sleeps
+ * on and clear the wait's hold on the descriptor; the wait scans again
+ * once woken, which the caller does. Returns 1 then. A thread not quiet
+ * may be reading what the close would free: it is asked instead to give
+ * back its holds of the descriptors being closed before it sleeps, and the
+ * call returns 0 (`poll_drop_take`).
  */
-void poll_let_go(struct process *t);
+int poll_let_go(struct process *t);
+
+/** Whether a close has asked the current thread's epoll wait to give back
+ * its holds of descriptors being closed since it last asked; clears the
+ * request. */
+int poll_drop_take(void);
 
 /** In `d`, the deadline of a timeout of `timeout_ms` milliseconds: the first
  * tick at or after its end, and its end by time since boot. A negative

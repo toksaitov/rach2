@@ -1210,10 +1210,20 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
  * The write end is writable with room or the readers
  * gone, and POLLERR once the readers are gone (the write then fails with
  * EPIPE). POLLHUP and POLLERR are reported whatever `events` asks.
+ *
+ * It runs without the big lock and the pipe's lock (FILE_OPS_POLL_UNLOCKED),
+ * reading each word of the pipe once, as Linux's pipe_poll reads the ring
+ * after poll_wait (fs/pipe.c:656-705): every change a poller waits for is
+ * made before the wake of the queue named here, whose lock the poller's
+ * record went on under before this read, so the read sees the change or the
+ * wake finds the poller.
  */
 static short pipe_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     pipe_t *p = (pipe_t *)e->priv;
+    const volatile pipe_t *v = p;
+    uint32_t used, bufs, size;
+    int readers, writers;
     short revents = 0;
 
     if (wq) {
@@ -1223,20 +1233,25 @@ static short pipe_poll(fd_entry_t *e, short events, struct wait_queue **wq)
             *wq = (e->flags & FD_FLAG_READ) ? &p->read_wq : &p->write_wq;
         }
     }
+    used = v->tail - v->head;
+    bufs = v->bufs;
+    size = v->size;
+    readers = v->read_open;
+    writers = v->write_open;
 
     if (e->flags & FD_FLAG_READ) {
-        if (pipe_holds(p)) {
+        if (used != 0 || bufs != 0) {
             revents |= (short)(events & PIPE_POLLIN);
         }
-        if (!p->write_open && (!p->fifo || e->ofd->fifo_write_opens != p->write_opens)) {
+        if (!writers && (!p->fifo || e->ofd->fifo_write_opens != v->write_opens)) {
             revents |= PIPE_POLLHUP;
         }
     }
     if (e->flags & FD_FLAG_WRITE) {
-        if (pipe_slot_room(p) || !p->read_open) {
+        if ((used < size && bufs < size / PAGE_SIZE) || !readers) {
             revents |= (short)(events & PIPE_POLLOUT);
         }
-        if (!p->read_open) {
+        if (!readers) {
             revents |= PIPE_POLLERR;
         }
     }
@@ -1300,7 +1315,7 @@ static void pipe_close(fd_entry_t *e)
 }
 
 static const struct file_ops pipe_ops = {pipe_read,  pipe_write, pipe_poll, pipe_ioctl,
-                                         pipe_close, NULL,       NULL,      0};
+                                         pipe_close, NULL,       NULL,      FILE_OPS_POLL_UNLOCKED};
 
 int pipe_is(const fd_entry_t *e)
 {
