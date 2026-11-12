@@ -102,10 +102,16 @@ static struct {
     uint64_t late_until;
 } pmc[NR_CPUS];
 
-/** Write the 64-bit `v` to model-specific register `msr`. */
+/* Each processor's count of the writes below, which `platform_pmu_writes`
+ * gives. */
+static volatile uint32_t writes[NR_CPUS];
+
+/** Write the 64-bit `v` to model-specific register `msr`, and count the
+ * write. */
 static void wrmsr64(uint32_t msr, uint64_t v)
 {
     kcpu_wrmsr(msr, (uint32_t)v, (uint32_t)(v >> 32));
+    writes[arch_cpu_id()]++;
 }
 
 /** Read model-specific register `msr`, 64 bits. */
@@ -416,6 +422,11 @@ int platform_pmu_probe(void)
 uint64_t platform_cpu_hz(void)
 {
     return cpu_hz;
+}
+
+uint32_t platform_pmu_writes(void)
+{
+    return writes[arch_cpu_id()];
 }
 
 void platform_pmu_enable(uint64_t cycles)

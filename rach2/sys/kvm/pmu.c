@@ -10,6 +10,7 @@
 #include "../lib/spinlock.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
+#include "../platform.h"
 
 #define PMC0          0x0C1u
 #define EVENTSEL0     0x186u
@@ -1719,12 +1720,29 @@ static void lbr_lists(struct kvm_pmu *p, struct kvm_pmu_msr *guest, uint32_t *ng
     }
 }
 
+/*
+ * Each processor's IA32_PERF_GLOBAL_CTRL and IA32_FIXED_CTR_CTRL as the
+ * last entry there read or wrote them, and the counters the host holds by
+ * them, kept while the host's PMU driver has made no write there since
+ * (`writes`, `platform_pmu_writes`), so that an entry reads neither, as
+ * Linux's atomic_switch_perf_msrs takes perf's own record of them
+ * (arch/x86/kvm/vmx/vmx.c:7176-7197, intel_guest_get_msrs in
+ * arch/x86/events/intel/core.c) where a RDMSR of each cost every entry.
+ * Written by each processor's own entries, with interrupts off.
+ */
+static struct {
+    uint64_t global, fixed, held;
+    uint32_t writes;
+    int valid;
+} host_ctrl[NR_CPUS];
+
 void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm_pmu_msr *host,
                        uint32_t *ng, uint32_t *nh, uint64_t *global)
 {
     struct kvm_pmu *p = &v->pmu;
     uint64_t host_global = 0, host_fixed = 0, fixed = 0, held, used = 0, spare;
-    uint32_t i;
+    uint32_t i, writes;
+    int cpu = (int)arch_cpu_id();
 
     *ng = *nh = 0;
     p->lbr_list = ~0u;
@@ -1735,12 +1753,22 @@ void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm
         return;
     }
     if (kvm_pmu_global()) {
-        host_global = pmu_read(GLOBAL_CTRL);
-        if (pmu_host.nr_fixed) {
-            host_fixed = pmu_read(FIXED_CTRL);
+        /* The count first: an NMI's write after it makes the next entry
+         * read again. */
+        writes = platform_pmu_writes();
+        if (!host_ctrl[cpu].valid || host_ctrl[cpu].writes != writes) {
+            host_ctrl[cpu].global = pmu_read(GLOBAL_CTRL);
+            host_ctrl[cpu].fixed = pmu_host.nr_fixed ? pmu_read(FIXED_CTRL) : 0;
+            host_ctrl[cpu].held = host_counters(host_ctrl[cpu].global, host_ctrl[cpu].fixed);
+            host_ctrl[cpu].writes = writes;
+            host_ctrl[cpu].valid = 1;
         }
+        host_global = host_ctrl[cpu].global;
+        host_fixed = host_ctrl[cpu].fixed;
+        held = host_ctrl[cpu].held;
+    } else {
+        held = host_counters(0, 0);
     }
-    held = host_counters(host_global, host_fixed);
     if (p->version) {
         used = place(p, all_counters() & ~held);
     } else {
@@ -1754,6 +1782,7 @@ void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm
         if (host_global & spare) {
             host_global &= ~spare;
             pmu_write(GLOBAL_CTRL, host_global);
+            host_ctrl[cpu].global = host_global;
         }
         for (i = 0; i < pmu_host.nr_fixed; i++) {
             if (held & FIXED_BIT(i)) {
@@ -1765,6 +1794,7 @@ void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm
     if (kvm_pmu_global()) {
         if (pmu_host.nr_fixed && fixed != host_fixed) {
             pmu_write(FIXED_CTRL, fixed);
+            host_ctrl[cpu].fixed = fixed;
         }
         /* The host's counters count in the guest too, as Linux's do. */
         if (global) {
