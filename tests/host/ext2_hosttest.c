@@ -5136,6 +5136,9 @@ static void matrix_rows(void)
     }
 }
 
+/** The count of inotify watches, which fd.c reads at a close: none. */
+int inotify_watches;
+
 /** Do nothing: fd.c reports a close to inotify, and no row watches. */
 void inotify_desc(struct open_file *ofd, uint32_t mask)
 {

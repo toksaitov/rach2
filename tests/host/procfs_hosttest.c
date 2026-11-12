@@ -12,7 +12,8 @@
  * host-deps: tests/host/compat/vm_iter_host.c
  * host-deps: rach2/sys/fs/sysfs.c rach2/sys/drm/drm_sysfs.c
  * host-deps: rach2/sys/evdev_sysfs.c
- * host-deps: rach2/sys/fs/name.c
+ * host-deps: rach2/sys/fs/name.c tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/kirq_none.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/tick.c
