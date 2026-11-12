@@ -1514,10 +1514,34 @@ static long writev(int fd, uintptr_t iov_user, int iovcnt)
     return writev_elements(fd, iov_user, iovcnt, (uint32_t)wanted);
 }
 
-/** writev(2): the descriptor, vector and count in the caller's registers. */
+/**
+ * The big lock for readv or writev of descriptor `fd`, held for the call
+ * (`fd_get`): none for a pipe end, whose operations run without it
+ * (`file_ops_lock`), as read and write of one do, and taken for every other
+ * descriptor, whose vector paths still need it. Returns whether it was
+ * taken, for `file_ops_unlock`.
+ */
+static int vec_call_lock(int fd)
+{
+    fd_entry_t *e = current_proc ? fd_get(current_proc->fds, fd) : NULL;
+
+    if (e && pipe_is(e)) {
+        return file_ops_lock(e);
+    }
+    bkl_enter();
+    return 1;
+}
+
+/** writev(2): the descriptor, vector and count in the caller's registers,
+ * under the big lock unless the descriptor is a pipe end (`vec_call_lock`). */
 long sys_writev(isr_params_t *params)
 {
-    return writev((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2));
+    int fd = (int)SC_ARG(params, 0);
+    int big = vec_call_lock(fd);
+    long rc = writev(fd, SC_ARG(params, 1), (int)SC_ARG(params, 2));
+
+    file_ops_unlock(big);
+    return rc;
 }
 
 /* Linux open flags */
@@ -7666,10 +7690,16 @@ static long readv(int fd, uintptr_t iov_user, int iovcnt)
     return wanted;
 }
 
-/** readv(2): the descriptor, vector and count in the caller's registers. */
+/** readv(2): the descriptor, vector and count in the caller's registers,
+ * under the big lock unless the descriptor is a pipe end (`vec_call_lock`). */
 long sys_readv(isr_params_t *params)
 {
-    return readv((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2));
+    int fd = (int)SC_ARG(params, 0);
+    int big = vec_call_lock(fd);
+    long rc = readv(fd, SC_ARG(params, 1), (int)SC_ARG(params, 2));
+
+    file_ops_unlock(big);
+    return rc;
 }
 
 /**

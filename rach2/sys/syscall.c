@@ -3552,6 +3552,7 @@ static void _syscall_handler(isr_params_t *params)
  * handlers (`syscall_unlock`): read, write, pread64, pwrite64, ioctl, fstat
  * and close run a descriptor's operations without the big lock only for a
  * type that declares FILE_OPS_UNLOCKED (`fd_call_lock`, `file_ops_lock`),
+ * and readv and writev for a pipe end (`vec_call_lock`),
  * or for a file or directory of a type that sets `reads_unlocked`
  * (`file_vfs_unlocked`); getdents64 lists such a directory, fstatat and
  * newfstatat stat a path the name cache finishes (`stat_at_unlocked`), and
@@ -3569,8 +3570,9 @@ static void _syscall_handler(isr_params_t *params)
 static void unlock_file_calls(void)
 {
     static const syscall_fn_t calls[] = {
-        sys_read, sys_write, sys_pread64,   sys_pwrite64,   sys_ioctl, sys_fstat64, sys_close,
-        sys_poll, sys_ppoll, sys_fstatat64, sys_getdents64, sys_open,  sys_openat,
+        sys_read,       sys_write, sys_pread64, sys_pwrite64, sys_ioctl,
+        sys_fstat64,    sys_close, sys_poll,    sys_ppoll,    sys_fstatat64,
+        sys_getdents64, sys_open,  sys_openat,  sys_readv,    sys_writev,
     };
     uint32_t i;
 
