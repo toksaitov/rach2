@@ -92,7 +92,7 @@ void vfio_hw_unmap(uintptr_t va, uint32_t size)
     mmio_unmap(va, size);
 }
 
-int vfio_hw_option(const char *word)
+int vfio_hw_param_bool(const char *key)
 {
-    return kcmdline_has(word);
+    return kcmdline_param_bool(key, 0);
 }

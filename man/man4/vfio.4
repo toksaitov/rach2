@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 12, 2026
 .Dt VFIO 4
 .Os
 .Sh NAME
@@ -110,9 +110,17 @@ gives every function of the container's groups one IOMMU domain.
 It fails with
 .Er EPERM
 on a host whose interrupts are not remapped, where a function could raise
-any interrupt by a message, unless the boot line has
-.Ql vfio_iommu_type1.allow_unsafe_interrupts=1 ,
-as Linux's module parameter.
+any interrupt by a message, unless the boot line sets
+.Ql vfio_iommu_type1.allow_unsafe_interrupts ,
+read as Linux's bool module parameter: the bare word, or a value that
+begins with
+.Ql y ,
+.Ql t
+or
+.Ql 1 ,
+or with
+.Ql on ,
+in either case, is true, and the last word that gives a boolean wins.
 .Dv VFIO_IOMMU_GET_INFO
 gives page sizes of 4 KiB, 2 MiB and 1 GiB, the valid IOVA ranges, which
 leave out each function's reserved regions but the relaxable ones, and

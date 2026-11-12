@@ -243,7 +243,8 @@ void *vfio_hw_fd_object(int fd, const struct file_ops *ops);
 uintptr_t vfio_hw_map(uint64_t phys, uint32_t size);
 void vfio_hw_unmap(uintptr_t va, uint32_t size);
 
-/** Whether the boot line has `word`. */
-int vfio_hw_option(const char *word);
+/** The boolean module parameter `key` as the boot line gives it, false
+ * when it does not, read as Linux's param_set_bool reads it. */
+int vfio_hw_param_bool(const char *key);
 
 #endif /* _VFIO_H_ */
