@@ -144,6 +144,13 @@ int ioapic_disabled(void)
     return ioapic_off;
 }
 
+/** Whether remapping may yet start: the x86-64 kernel's answer, unless
+ * `ioapic_off`. */
+int ioapic_remappable(void)
+{
+    return !ioapic_off;
+}
+
 /** Count a panic and return to the row that set `panic_return`. */
 void k_panic(const char *str)
 {

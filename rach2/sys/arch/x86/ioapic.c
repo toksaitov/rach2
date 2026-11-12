@@ -107,6 +107,16 @@ int ioapic_disabled(void)
     return 1;
 }
 
+/** Only the x86-64 kernel builds VT-d (platform.c). */
+int ioapic_remappable(void)
+{
+#if defined(__x86_64__)
+    return !ioapic_disabled();
+#else
+    return 0;
+#endif
+}
+
 int ioapic_init(const struct acpi_info *a)
 {
     int i;
