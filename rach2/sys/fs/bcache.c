@@ -892,9 +892,57 @@ static void let_go(struct bbuf *b)
     wq_wake_all(&b->wq);
 }
 
-static int write_one(struct bbuf *b, uint32_t flags);
-static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags,
-                     const struct sync_scope *scope);
+static int write_one_met(struct bbuf *b, uint32_t flags, struct bbuf **met);
+static int write_run_met(struct bbuf *first, uint64_t *last, uint32_t flags,
+                         const struct sync_scope *scope, struct bbuf **met);
+
+/**
+ * The end of a write that met `b`, which another process holds, as `met`
+ * asks: with `met` NULL, sleep until nobody holds `b`, unless the caller
+ * does or nobody holds it now (`wait_other`); with `met`, sleep for
+ * nothing, and when another process holds `b`, count it among `b`'s waiters
+ * and give it in `*met` for the caller to wait on once it has let its own
+ * buffers go (`met_wait`). Returns 1, a write's answer after a wait.
+ */
+static int held_met(struct bbuf *b, struct bbuf **met)
+{
+    uint32_t flags;
+
+    if (!met) {
+        (void)wait_other(b);
+        return 1;
+    }
+    flags = cache_lock();
+    if (b->holder != -1 && b->holder != caller_pid()) {
+        b->waiters++;
+        *met = b;
+    }
+    cache_unlock(flags);
+    return 1;
+}
+
+/**
+ * Wait for `b`, a buffer a write met held and counted among its waiters
+ * (`held_met`), or NULL, now that the caller holds nothing: or, with
+ * `met`, give it to the caller's caller in `*met`, which waits on it in
+ * turn. Returns 1.
+ */
+static int met_wait(struct bbuf *b, struct bbuf **met)
+{
+    uint32_t flags;
+
+    if (met) {
+        *met = b;
+        return 1;
+    }
+    if (b) {
+        wq_wait_event_nointr(&b->wq, busy_gone, b);
+        flags = cache_lock();
+        b->waiters--;
+        cache_unlock(flags);
+    }
+    return 1;
+}
 
 /**
  * Write the unheld dirty buffer `b`, which `follows`, after what it waits
@@ -911,22 +959,28 @@ static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags,
  * `first` an `after` waits for while it is written. The caller holds the
  * big lock.
  *
- * @return 0 with `b` written; 1 after a wait, with `b` unwritten; or the
- *         -errno of a failed write or flush, which leaves `b` dirty, or
- *         -EIO for a block the caller holds itself.
+ * A write of what `b` waits for that meets a buffer another process holds
+ * waits for nothing itself (`held_met`): it gives the buffer back, and
+ * `b` is let go before the wait, as is every buffer the callers hold that
+ * passed `met`, which then receives the buffer to wait on (`met_wait`), so
+ * that no wait is made with `b` held.
+ *
+ * @return 0 with `b` written; 1 after a wait, or with `met` a buffer to
+ *         wait on, with `b` unwritten; or the -errno of a failed write or
+ *         flush, which leaves `b` dirty, or -EIO for a block the caller
+ *         holds itself.
  */
-static int write_follower(struct bbuf *b, uint32_t flags)
+static int write_follower(struct bbuf *b, uint32_t flags, struct bbuf **met)
 {
     struct sync_scope any;
-    struct bbuf *d;
+    struct bbuf *d, *busy;
     uint64_t end;
     int rc = 0;
 
     k_memset(&any, 0, sizeof(any));
 
     if (!try_hold(b)) {
-        (void)wait_other(b);
-        return 1;
+        return held_met(b, met);
     }
     while (rc == 0 && (d = way_to(b)) != 0) {
         uint32_t lf = cache_lock();
@@ -937,20 +991,21 @@ static int write_follower(struct bbuf *b, uint32_t flags)
             d->waiters++;
             cache_unlock(lf);
             wq_wake_all(&b->wq);
-            wq_wait_event_nointr(&d->wq, busy_gone, d);
-            lf = cache_lock();
-            d->waiters--;
-            cache_unlock(lf);
-            return 1;
+            return met_wait(d, met);
         }
         cache_unlock(lf);
+        busy = 0;
         if (holder != -1) {
             rc = -EIO;
         } else if (follows(d)) {
-            rc = write_one(d, 0);
+            rc = write_one_met(d, 0, &busy);
         } else {
-            rc = write_run(d, &end, d->order == BCACHE_ORDER_FIRST ? 0 : unflushed_flags(b->dev),
-                           &any);
+            rc = write_run_met(
+                d, &end, d->order == BCACHE_ORDER_FIRST ? 0 : unflushed_flags(b->dev), &any, &busy);
+        }
+        if (rc == 1) {
+            let_go(b);
+            return met_wait(busy, met);
         }
     }
     if (rc == 0) {
@@ -966,22 +1021,28 @@ static int write_follower(struct bbuf *b, uint32_t flags)
 /** Write the unheld buffer `b` alone, held across the write, with the
  * request `flags`, and wake whoever waits for it; one that `follows` goes
  * after what it waits for (`write_follower`). 1 after a wait for a holder
- * that took `b` since the caller's look, or one `write_follower` gave.
- * The caller holds the big lock. */
-static int write_one(struct bbuf *b, uint32_t flags)
+ * that took `b` since the caller's look, or one `write_follower` gave;
+ * with `met`, no wait is made, and the buffer to wait on is given in
+ * `*met` (`held_met`). The caller holds the big lock. */
+static int write_one_met(struct bbuf *b, uint32_t flags, struct bbuf **met)
 {
     int rc;
 
     if (follows(b)) {
-        return write_follower(b, flags);
+        return write_follower(b, flags, met);
     }
     if (!try_hold(b)) {
-        (void)wait_other(b);
-        return 1;
+        return held_met(b, met);
     }
     rc = write_buffer_flags(b, flags);
     let_go(b);
     return rc;
+}
+
+/** `write_one_met` that waits itself. */
+static int write_one(struct bbuf *b, uint32_t flags)
+{
+    return write_one_met(b, flags, 0);
 }
 
 /* The staging buffer a run of blocks is written or read through, the most
@@ -1072,7 +1133,8 @@ static int run_gather(struct bbuf *first, struct bbuf **run, const struct sync_s
  * way is clear, which `first`'s is, and no block of the other kind, since
  * one request reaches the device as a whole; it is held while a
  * write-through disk is flushed before it. A `first` that waits is written
- * after what it waits for and alone (`write_one`), which may answer 1.
+ * after what it waits for and alone (`write_one_met`), which may answer 1,
+ * and with `met` makes no wait itself.
  *
  * A run is as long as the device takes at once and at most half the cache,
  * as a read run is: its buffers are held across the request's sleep and let
@@ -1091,8 +1153,8 @@ static int run_gather(struct bbuf *first, struct bbuf **run, const struct sync_s
  * folio in the page cache, locked, before it reads (mm/readahead.c:268,
  * 273, 290).
  */
-static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags,
-                     const struct sync_scope *scope)
+static int write_run_met(struct bbuf *first, uint64_t *last, uint32_t flags,
+                         const struct sync_scope *scope, struct bbuf **met)
 {
     struct bbuf *run[RUN_BLOCKS];
     block_device_t *dev = first->dev;
@@ -1102,7 +1164,7 @@ static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags,
     n = run_gather(first, run, scope);
     *last = first->blk;
     if (n == 1) {
-        return write_one(first, flags);
+        return write_one_met(first, flags, met);
     }
     rc = follows(first) ? order_flush(dev) : 0;
     if (rc != 0) {
@@ -1139,6 +1201,13 @@ static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags,
     }
     *last = run[n - 1]->blk;
     return rc;
+}
+
+/** `write_run_met` that waits itself. */
+static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags,
+                     const struct sync_scope *scope)
+{
+    return write_run_met(first, last, flags, scope, 0);
 }
 
 /** The valid byte count of block `blk`: whole, or the device's short tail. */
