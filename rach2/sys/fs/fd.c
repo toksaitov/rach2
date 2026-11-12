@@ -499,17 +499,16 @@ void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to)
  * Whether the end of description `ofd`, whose count reached 0, needs the
  * big lock: unless it names no file, or names a file or a directory of a
  * type that sets `reads_unlocked`, as ext2 does, with no pin, no access
- * claim and no device or synthetic node, and in either case no record lock
- * exists and no inotify watch is on its file system
- * (`inotify_mount_watched`). Such a type's `release` and `put` and the name
- * record (`vfs_name_put`) take the big lock where they need it, as Linux's
- * last `fput` of a file takes no lock but its own (`__fput`,
- * fs/file_table.c:442). With the count at 0 no descriptor names the
- * description, so no record lock on it can be taken after the look.
+ * claim and no device or synthetic node, and in either case no inotify
+ * watch is on its file system (`inotify_mount_watched`). Such a type's
+ * `release` and `put` and the name record (`vfs_name_put`) take the big
+ * lock where they need it, as Linux's last `fput` of a file takes no lock
+ * but its own (`__fput`, fs/file_table.c:442). The description's own record
+ * locks go under their list's lock (`lock_ofd_gone`).
  */
 static int ofd_end_big(const struct open_file *ofd)
 {
-    if (lock_any() || (inotify_mount_watched(ofd->vmnt) && (ofd->watch_flags & OFD_WATCH_OPEN))) {
+    if (inotify_mount_watched(ofd->vmnt) && (ofd->watch_flags & OFD_WATCH_OPEN)) {
         return 1;
     }
     if (ofd->vmnt) {
@@ -524,8 +523,11 @@ static int ofd_end_big(const struct open_file *ofd)
  * The count falls in one atomic step, so of two holders that let go at once
  * on different processors exactly one sees it reach 0 and ends the
  * description. The end may sleep, in a file system's release. It takes the
- * big lock, which most file systems, inotify and the record locks still
- * need, where `ofd_end_big` says.
+ * big lock, which most file systems and inotify still need, where
+ * `ofd_end_big` says. With the count at 0 no descriptor names the
+ * description, so no lock of it can be taken after `lock_any` looks, as
+ * Linux's locks_remove_file looks at the file's lists without their lock
+ * (fs/locks.c:2698-2706).
  */
 void fd_ofd_unref(struct open_file *ofd)
 {
@@ -544,7 +546,7 @@ void fd_ofd_unref(struct open_file *ofd)
             spin_unlock_irqrestore(&ofd_lock, flags);
             kfree(rec->spare);
             rec->spare = NULL;
-            if (big && lock_any()) {
+            if (lock_any()) {
                 lock_ofd_gone(ofd);
             }
             if (big && ofd->vmnt && (ofd->watch_flags & OFD_WATCH_OPEN)) {

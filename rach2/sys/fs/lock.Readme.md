@@ -32,17 +32,22 @@ Every wait sleeps on one queue, `lock_wq`, which every change that can end a wai
 
 A set-lock command may gain its lock after another thread sharing the table closed the descriptor. That close dropped the table's locks on the file and left the descriptor closing ([Readme.md](Readme.md)); `fcntl_lock` finds `FD_FLAG_CLOSING` set, makes the key again, since a KRFFS file may have moved during the wait, drops the table's locks on the file and answers `EBADF`.
 
-The list has no lock of its own: every system call runs under the kernel's one big lock (`../proc/smp.h`), and the module sleeps only in its waits.
+### Locking
+
+The list, the waits and their keys are under one spinlock, `flc_lock`, in the place of Linux's per-file `flc_lock` and its `blocked_lock_lock` over the waits (fs/locks.c:170, 967), and `fcntl`'s lock commands, `flock` and `close` run without the big lock, as Linux's take none ([../proc/Readme.md](../proc/Readme.md)). The lock is taken with interrupts off, since a wait's condition runs with them off, and nothing is taken under it: the records a change needs come from the heap before it is taken, two for a record lock and one for a `flock` lock, as Linux's `posix_lock_inode` and `flock_lock_inode` make theirs (fs/locks.c:1091-1095, 1170-1176), and the records a change lets go are freed and the waiters woken after it is let go. A wait files its records and lets the lock go before it sleeps, its condition takes the lock to look, and after each wake the conflict is looked for again under the hold in which the lock is set, since another lock may come between. The caller takes the big lock only for a file keyed by its node (`fd_locks_by_node` in `../syscall_fs.c`), since a KRFFS write moves the node under it, and for an `fcntl` range from the end of a file whose attributes need it.
+
+A close and a lock command of another thread sharing the table are ordered as on Linux: the close marks the descriptor closing under the table's lock before it drops the table's locks, and the command reads the mark under the table's lock after it sets its lock (`fd_lock_still_open`, as `fcntl_setlk` looks the descriptor up again, fs/locks.c:2468-2482), so either the close finds the lock or the command finds the close. `lock_any`, which a close and a description's end read without the lock, as Linux's `locks_remove_posix` and `locks_remove_file` look at the file's lists (fs/locks.c:2617-2631, 2698-2706), is safe by that order and by the count a description's end reaches.
 
 ## Limits
 
 * There are no mandatory locks (`flock`'s `LOCK_MAND` is accepted and ignored) and no leases (`F_SETLEASE` and `F_GETLEASE` answer `EINVAL`).
 * The deadlock search follows ten waits and covers POSIX locks only, so two processes that take exclusive `flock` or OFD locks on two files in opposite orders can wait for each other for good, as on Linux.
-* A `flock` conversion is not atomic, and one that fails with `ENOLCK` leaves the description with no lock.
+* A `flock` conversion is not atomic.
+* One spinlock covers the locks of every file, where Linux has one for each file's locks.
 * Every lock operation walks the whole list, and so does a close while any lock exists; with none, a close costs one test.
 * `/proc/locks` lists the locks held and not the waits.
 
 ## Tests
 
-* `tests/run host` runs `lock_hosttest`, which includes `lock.c` with the wait queue and the heap stood in by the host: conflicts, `F_GETLK`, splits, joins, locks to the end of the file, the closes that drop a table's locks, shared tables as one owner, OFD and `flock` locks, conversions, cycles, and locks and waits that move with their file. `open_hosttest` checks the key `fd_lock_key` makes for a file on the KRFFS root, on a KRFFS volume and on another type, and requires an orphan's last description to drop its locks before the root frees the node.
+* `tests/run host` runs `lock_hosttest`, which includes `lock.c` with the wait queue, the heap and the spinlock stood in by the host: conflicts, `F_GETLK`, splits, joins, locks to the end of the file, the closes that drop a table's locks, shared tables as one owner, OFD and `flock` locks, conversions, cycles, and locks and waits that move with their file. The heap, the wakes and the sleeps must be called with `flc_lock` free, and four host threads take `flock` and OFD locks of one file at once, which only the lock keeps apart: no two hold an exclusive lock together, none is left, and AddressSanitizer finds no record freed twice. `open_hosttest` checks the key `fd_lock_key` makes for a file on the KRFFS root, on a KRFFS volume and on another type, and requires an orphan's last description to drop its locks before the root frees the node.
 * `tests/run default` runs `musl/lockmusl`: the three kinds between processes, waits and `EDEADLK`, a wait whose descriptor another thread closes, a table shared under `CLONE_FILES`, names that hash alike, locks across a rename and a move, and `/proc/locks`.
