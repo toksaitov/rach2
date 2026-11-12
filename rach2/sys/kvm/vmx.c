@@ -820,7 +820,7 @@ struct vmx_exit {
 /*
  * The VMCS's fields that the entry writes only when they change, as Linux's
  * vmx_vcpu_run keeps HOST_CR3 and HOST_CR4 in `host_state` and writes
- * GUEST_RSP and GUEST_RIP only when dirty (vmx.c:7366-7393): the value
+ * GUEST_RSP and GUEST_RIP only when dirty (vmx.c:7379-7408): the value
  * each field holds, ~0 when not known, which `vmcs_build` sets.
  */
 struct vmx_cache {
