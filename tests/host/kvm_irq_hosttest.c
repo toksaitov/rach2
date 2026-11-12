@@ -1025,7 +1025,7 @@ static void extint_rows(void)
 static void halt_rows(void)
 {
     struct kvm_vcpu *v = vcpu[3];
-    uint64_t tsc;
+    uint64_t tsc, exits;
 
     clear_vectors();
     v->requests = 0;
@@ -1037,9 +1037,12 @@ static void halt_rows(void)
     CHECK(kvm_lapic_prepare(v) == -EINTR && endless == 1 && waits == 1,
           "with the signal-work flag clear, nothing ends the halted wait");
     caller.sig_woken = 1;
+    exits = v->stat[KVM_VCPU_STAT_SIGNAL_EXITS];
     CHECK(kvm_lapic_prepare(v) == -EINTR && v->mp_state == KVM_MP_STATE_HALTED && endless == 1 &&
               waits == 2,
           "the flag, which a signal sets, ends the halted wait, the vCPU still halted");
+    CHECK(v->stat[KVM_VCPU_STAT_SIGNAL_EXITS] == exits + 1 && v->run->exit_reason == KVM_EXIT_INTR,
+          "counted as a signal exit, as Linux's kvm_handle_signal_exit");
     caller.sig_woken = 0;
     signal(msi_addr(3, 0), msi_data(0x90, 0, 0));
     CHECK(kvm_lapic_prepare(v) == 0 && v->mp_state == KVM_MP_STATE_RUNNABLE,
