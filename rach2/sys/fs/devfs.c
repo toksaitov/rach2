@@ -83,7 +83,7 @@ static int32_t dev_fill_read(fd_entry_t *e, char __user *buf, uint32_t count, in
 
     (void)e;
     if (!random) {
-        k_memset(tmp, 0, sizeof(tmp));
+        k_memset(tmp, 0, count < sizeof(tmp) ? count : sizeof(tmp));
     }
     while (done < count) {
         uint32_t chunk = count - done;
