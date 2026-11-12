@@ -154,6 +154,25 @@ int klog_inside(void)
     return 0;
 }
 
+/** 0: the model's counter is not measured, so an idle wait does not poll. */
+uint32_t timer_calibrate(void)
+{
+    return 0;
+}
+
+/** 0: the model is no guest, the other reason an idle wait does not poll. */
+int arch_guest(void)
+{
+    return 0;
+}
+
+/** 0: no row reads the cycle counter but an idle wait's poll, which none
+ * runs. */
+uint64_t arch_cycles(void)
+{
+    return 0;
+}
+
 /** Format the record into `record` as the suite receives it, and count it. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
