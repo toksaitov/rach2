@@ -4,7 +4,8 @@
 # user.
 #
 #   piglit.sh [-g|-z ICD] [-p surfaceless|gbm] [-o OUT] PART...|all
-#   piglit.sh [-g|-z ICD] [-p surfaceless|gbm] [-o OUT] -l LIST [-e N] [-s START]
+#   piglit.sh [-g|-z ICD] [-p surfaceless|gbm] [-o OUT] -l LIST [-e N]
+#       [-s START]
 #
 # Runs the tests of piglit's `quick` profile whose names each PART's pattern
 # matches, or every QEMU part's with `all`, or with -l the tests LIST names,
