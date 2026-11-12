@@ -318,12 +318,13 @@ found() {
 # machine for good and a halt in early boot, before the scheduler accounts
 # anything, are not idle waits and are not looked for. The check reads asm
 # statements and the kernel's calls, not comments, and leaves out a host
-# test's stub of it and the declaration in a header.
+# test's stub of it and the declaration in a header, which grep -H names
+# even when only one file is read.
 idle_waits() {
     inhouse_ch | grep -vE 'sys/arch/[^/]+/cpu\.c$' \
-        | xargs grep -nE '__asm__[^;]*"[^"]*sti;[[:space:]]*hlt' 2>/dev/null
+        | xargs grep -nHE '__asm__[^;]*"[^"]*sti;[[:space:]]*hlt' 2>/dev/null
     inhouse_ch | grep -E '^rach2/' | grep -vE 'sys/proc/sched\.c$|sys/arch/[^/]+/cpu\.c$' \
-        | xargs grep -nE '(^|[^_[:alnum:]])arch_idle_masked[[:space:]]*\(' 2>/dev/null \
+        | xargs grep -nHE '(^|[^_[:alnum:]])arch_idle_masked[[:space:]]*\(' 2>/dev/null \
         | grep -vE '^[^:]+\.h:'
 }
 
