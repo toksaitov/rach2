@@ -16300,7 +16300,11 @@ static uint32_t fallocate_type(fd_entry_t *entry)
  * errno, by Linux's vfs_fallocate's checks in its order and then the
  * type's operation under the description's lock and the file's
  * (`file_lock`), which also cover the RLIMIT_FSIZE check of a call that
- * grows the file (`fsize_growth_refused`).
+ * grows the file (`fsize_growth_refused`). The file's lock is held from
+ * before `vfs_fallocate` asks whether a loop device stands on the file to
+ * the end of the change, since an attachment publishes itself under that
+ * lock (`loop_attach`): a check made before it could pass a file attached
+ * while the change waited for the lock.
  */
 static long fallocate_fd(int fd, uint32_t mode, uint64_t offset, uint64_t len)
 {
