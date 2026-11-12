@@ -27,8 +27,8 @@
  * stat and open. Every file reads back against the tree, and every node
  * against setidcheck's reader, which shares no code with this driver. A
  * 1 KiB volume has a sparse file with a byte behind each level of
- * indirection and mounts read-only by name, as a dir_index volume does; an
- * unknown incompatible feature fails the mount. The tree, the volumes,
+ * indirection and mounts read-only by name; an unknown incompatible feature
+ * fails the mount. The tree, the volumes,
  * prepared setidcheck and what the independent tools print are kept in a
  * directory of the test's own (compat/fixdir_host.c). Native C creates the
  * fixtures and controls every command, so concurrent runs share no file.
@@ -1030,6 +1030,11 @@ static void against_reader(const char *img)
     "sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal," \
     "^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize"
 
+/* PROFILE with dir_index, which Linux's ext2 mounts writable. */
+#define PROFILE_DIR_INDEX                                                             \
+    "sparse_super,large_file,filetype,dir_index,resize_inode,^ext_attr,^has_journal," \
+    "^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize"
+
 /* The profile tools/image/mkext2.sh makes, with 256-byte inodes. */
 #define PROFILE_LARGE                                                                  \
     "sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal," \
@@ -1280,8 +1285,8 @@ static void poke(const char *img, long at, const unsigned char *bytes, unsigned 
  * Damage a fresh volume for each row and require the mount, read or lookup
  * to fail, or the mount to go read-only, with the reason named in the log:
  *
- * - a dir_index volume, and an unknown read-only-compatible feature,
- *   mount read-only; an unknown incompatible feature fails the mount;
+ * - an unknown read-only-compatible feature mounts read-only; an unknown
+ *   incompatible feature fails the mount;
  * - a file whose size debugfs sets past 4 GiB stats with that size and
  *   the sectors it holds, and opens;
  * - a block pointer past the volume, into the group descriptors or into the
@@ -1311,17 +1316,6 @@ static void refusal_rows(void)
     void *n;
     int err;
     char linkbuf[300];
-
-    bytes = build_image(img, 4096, 128,
-                        "sparse_super,large_file,filetype,dir_index,resize_inode,"
-                        "^ext_attr,^has_journal,^extent,^64bit,^flex_bg,"
-                        "^metadata_csum,^huge_file,^dir_nlink,^extra_isize",
-                        16, "tree");
-    use_image(img, bytes);
-    check(mount_image() == 0 && (mnt.flags & VFS_MS_RDONLY) != 0 &&
-              memcmp(last_warn, "mounted read-only: dir_index", 28) == 0,
-          "a dir_index volume mounts read-only by name");
-    unmount_image();
 
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
     b[0] = 0x42;
@@ -3185,6 +3179,140 @@ static void held_rmdir_row(void)
           "and its inode goes at the last put, leaving the volume clean");
 }
 
+/* The bit of `i_flags` that marks a directory's hashed index. */
+#define INDEX_FL 0x1000u
+
+/** Whether the directory at `path` is marked indexed: 1 or 0, or -1 when
+ * the lookup or getattr fails. */
+static int index_flag(const char *path)
+{
+    struct vfs_stat st;
+    int err, rc;
+    void *n = walk(path, &err);
+
+    if (!n) {
+        return -1;
+    }
+    rc = OPS->getattr(&mnt, n, &st);
+    OPS->put(&mnt, n);
+    return rc != 0 ? -1 : (st.flags & INDEX_FL) != 0;
+}
+
+/* The changes the dir_index rows make, each to an indexed /many; each
+   returns 0 or the first error. */
+
+/** Create added.txt in /many. */
+static int dx_create(void)
+{
+    int err, rc;
+    void *d = walk("/many", &err);
+    void *n = d ? make_file(d, "added.txt", &rc) : 0;
+
+    if (d) {
+        OPS->put(&mnt, d);
+    }
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    return d ? (n ? 0 : rc) : err;
+}
+
+/** Remove file7.txt from /many. */
+static int dx_unlink(void)
+{
+    int err, rc;
+    void *d = walk("/many", &err);
+
+    if (!d) {
+        return err;
+    }
+    rc = OPS->unlink(&mnt, d, "file7.txt");
+    OPS->put(&mnt, d);
+    return rc;
+}
+
+/** Rename file8.txt over file9.txt in /many, which points the victim's
+ * entry at the file in place, as Linux's ext2_set_link does, before the old
+ * entry goes. */
+static int dx_rename_over(void)
+{
+    int err, rc;
+    void *d = walk("/many", &err);
+
+    if (!d) {
+        return err;
+    }
+    rc = OPS->rename(&mnt, d, "file8.txt", d, "file9.txt");
+    OPS->put(&mnt, d);
+    return rc;
+}
+
+/** Move /many into /dir, which rewrites its `..`. */
+static int dx_move(void)
+{
+    int err, rc;
+    void *d = walk("/dir", &err);
+
+    if (!d) {
+        return err;
+    }
+    rc = OPS->rename(&mnt, mnt.root, "many", d, "many");
+    OPS->put(&mnt, d);
+    return rc;
+}
+
+/**
+ * Make the directory at `path` indexed with `e2fsck -fyD`, mount the volume
+ * writable, run `change`, and require that the directory is no longer
+ * marked indexed and that the volume unmounts clean under `e2fsck -fn`,
+ * which reads every entry and would find an index left stale. `after` is
+ * the directory's path once `change` has run, `what` the row's claim.
+ */
+static void dir_index_change(const char *path, int (*change)(void), const char *after,
+                             const char *what)
+{
+    char request[300];
+    int st = ext2_fixture_fsck(wimg, "-fyD", fix_path("fsck.out"));
+
+    snprintf(request, sizeof request, "stat %s", path);
+    check(st >= 0 && st <= 1 && debugfs_says(wimg, request, "Flags: 0x1000"),
+          "e2fsck -D indexes the directory");
+    check(mount_rw() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 && index_flag(path) == 1,
+          "the dir_index volume mounts writable, the directory marked indexed");
+    if (!mnt.root) {
+        return;
+    }
+    check(change() == 0 && index_flag(after) == 0, what);
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume is clean under e2fsck");
+}
+
+/**
+ * A dir_index volume mounts writable, as Linux's ext2 mounts it, since the
+ * feature is compatible: e2fsck -D indexes /many, of 300 entries, before
+ * each change, and a create, a remove, a rename over a name and a move of
+ * the directory each clear its index flag and leave the volume clean. The
+ * names read back through debugfs and setidcheck's reader at the end.
+ */
+static void dir_index_row(void)
+{
+    wbytes = build_image(wimg, 4096, 128, PROFILE_DIR_INDEX, 16, "tree");
+    use_image(wimg, wbytes);
+    dir_index_change("/many", dx_create, "/many",
+                     "a create in an indexed directory clears its index flag");
+    dir_index_change("/many", dx_unlink, "/many",
+                     "a remove from an indexed directory clears its index flag");
+    dir_index_change("/many", dx_rename_over, "/many",
+                     "a rename over a name of an indexed directory clears its index flag");
+    dir_index_change("/many", dx_move, "/dir/many",
+                     "a move of an indexed directory to another parent clears its index flag");
+    check(debugfs_lists(wimg, "/dir/many", "added.txt") &&
+              debugfs_lists(wimg, "/dir/many", "file9.txt") &&
+              !debugfs_lists(wimg, "/dir/many", "file7.txt") &&
+              !debugfs_lists(wimg, "/dir/many", "file8.txt") &&
+              debugfs_lists(wimg, "/dir/many", "file299.txt") && reader_walks(wimg),
+          "and debugfs and the reader see the changed names");
+}
+
 /**
  * A remount read-only syncs the volume and leaves it as an unmount does, a
  * create on it fails with `EROFS`, and a remount writable takes a create
@@ -4107,6 +4235,7 @@ static void batch_rows(void)
     order_row_under(512, 1, 2059);
     default_mount_row();
     held_rmdir_row();
+    dir_index_row();
     remount_row();
     remount_nomem_row();
     batch_error_row();

@@ -1105,7 +1105,7 @@
     },
     {
       "case_id": "machine.metal.installed-readonly",
-      "behavior": "the rows of metal_accept.sh that read the command line, the disk and the ext2 root, run on a small installed disk: a root with dir_index, which the driver mounts read-only, fails the rows",
+      "behavior": "the rows of metal_accept.sh that read the command line, the disk and the ext2 root, run on a small installed disk: a root with huge_file, a read-only-compatible feature the driver does not know and so mounts read-only, fails the rows",
       "units": ["metal", "tests/system/accept/installed_test.sh"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
