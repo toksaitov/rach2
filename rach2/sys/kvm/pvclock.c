@@ -278,7 +278,11 @@ static int tsc_all_matched(const struct kvm_vm *vm)
  * caller lets `clock_lock` go, since the write copies the master clock
  * under it and a request cancels an entry (KVM_REQ_NOENTER), so that none
  * reads the old formula once another reads the new, as Linux's
- * KVM_REQ_MCLOCK_INPROGRESS holds them. Under `clock_lock`.
+ * KVM_REQ_MCLOCK_INPROGRESS holds them. `hv_clock_moved` is set before
+ * the kicks, as Linux's kvm_update_masterclock asks for the reference TSC
+ * page's update first (x86.c:2652-2654), so that a kicked vCPU's next pass
+ * of `kvm_hv_prepare` sees it and rewrites the page from the new clock,
+ * which it copies under `clock_lock`, before it enters. Under `clock_lock`.
  */
 static void master_update(struct kvm_vm *vm)
 {
@@ -286,6 +290,7 @@ static void master_update(struct kvm_vm *vm)
     uint32_t i, n = vm->nr_vcpus;
     int pair;
 
+    vm->hv_clock_moved = 1;
     for (i = 0; i < n; i++) {
         kvm_vcpu_kick(vm->vcpus[i], KVM_REQ_CLOCK_UPDATE);
     }
@@ -302,7 +307,6 @@ static void master_update(struct kvm_vm *vm)
         vm->master_tsc = tsc;
         time_scale(NSEC_PER_SEC, khz * 1000u, &vm->master_shift, &vm->master_mul);
     }
-    vm->hv_clock_moved = 1;
 }
 
 void kvm_clock_vm_init(struct kvm_vm *vm)
@@ -368,11 +372,12 @@ int32_t kvm_clock_set(struct kvm_vm *vm, uintptr_t arg)
 }
 
 /** Have `v`'s kvmclock and the VM's reference TSC page written again
- * before the next entry, since `v`'s TSC changed. */
+ * before the next entry, since `v`'s TSC changed; the flag goes before the
+ * kick, as in `master_update`. */
 static void tsc_changed(struct kvm_vcpu *v)
 {
-    kvm_vcpu_kick(v, KVM_REQ_CLOCK_UPDATE);
     v->vm->hv_clock_moved = 1;
+    kvm_vcpu_kick(v, KVM_REQ_CLOCK_UPDATE);
 }
 
 /**
