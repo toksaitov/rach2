@@ -72,6 +72,18 @@ static unsigned mutex_takes;
  * whether the model has message-signalled interrupts. */
 static unsigned isr_regs, isr_unlocked;
 static int msi_model;
+/* The takes of cap_lock and of the stream lock, and those of the stream
+ * lock made under cap_lock and under the stream mutex; a lock another
+ * processor holds, which it lets go when the model's thread waits for it,
+ * and the waits; and the copy of the report and the mode that
+ * hda_copy_report fills, which the stream lock's release finds filled or
+ * not. */
+static unsigned cap_takes, stream_takes, stream_under_cap, stream_under_mutex;
+static struct spinlock *held_elsewhere;
+static unsigned lock_waits;
+static const hda_report_t *report_watch;
+static const int *mode_watch;
+static int report_copied;
 static unsigned delays, delays_irqs_off, ics_reads_irqs_on;
 static int refuse_alloc; /* kmalloc fails */
 extern void *malloc(unsigned long size);
@@ -2002,6 +2014,78 @@ static void row_capture_duplex(void)
 }
 
 /**
+ * The locks of 84-6f.2 and 84-6f.3, with capture and playback running.
+ * The tick's look (hda_service_due) reads the input stream under cap_lock
+ * and the output stream under the stream lock taken under it, as Linux's
+ * pending work reads both under the bus's reg_lock
+ * (sound/pci/hda/hda_intel.c:735-753). /proc/audio's copy
+ * (hda_copy_report) takes the stream lock once, under the stream mutex and
+ * cap_lock, and copies the report and the mode before it lets the stream
+ * lock go, as Linux's status read holds the stream lock for the whole read
+ * (sound/core/pcm_native.c:1036). Capture's service, finding cap_lock held
+ * by a reader on another processor, waits for it and hands over the
+ * periods the position passed.
+ */
+static void row_report_locks(void)
+{
+    static hda_report_t copy;
+    audio_stream_t s;
+    uint32_t due;
+    int mode;
+
+    row = "report-locks";
+    reset_model();
+    model_adc();
+    check(hda_find_output(), "enumeration succeeds");
+    check(open_capture(&s, 48000, AUDIO_S16LE, 2, 4096) == 0, "capture set up");
+    clock_stopped = 1;
+    check(hda_driver.stream_start(&s) == 0, "capture starts");
+    check(hda_start(48000, AUDIO_S16LE, 2) == 0, "playback starts beside it");
+    move_input(4096 * 2 + 100);
+    clock_value += 24000 * 44;
+
+    cap_takes = stream_takes = stream_under_cap = stream_under_mutex = 0;
+    due = hda_service_due(HDA_SERVE_CAPTURE | HDA_SERVE_PLAY);
+    check((due & HDA_SERVE_CAPTURE) != 0, "the tick's look finds capture due");
+    check(cap_takes == 1 && stream_takes == 1 && stream_under_cap == 1,
+          "it reads the input stream under cap_lock and the output stream under the stream "
+          "lock taken under it");
+    check(!cap_lock.locked && !stream_lock.locked && irqs_on, "and gives both back");
+
+    k_memset(&copy, 0xA5, sizeof(copy));
+    mode = -1;
+    report_watch = &copy;
+    mode_watch = &mode;
+    report_copied = 0;
+    cap_takes = stream_takes = stream_under_cap = stream_under_mutex = 0;
+    hda_copy_report(&copy, &mode);
+    report_watch = NULL;
+    mode_watch = NULL;
+    check(cap_takes == 1 && stream_takes == 1 && stream_under_cap == 1 && stream_under_mutex == 1,
+          "the report's copy takes the stream lock once, under the stream mutex and cap_lock");
+    check(report_copied, "and copies the report and the mode before it lets the stream lock go");
+    check(!memcmp(&copy.queue, &hda_report.queue, sizeof(copy.queue)) &&
+              copy.input.frames == hda_report.input.frames && mode == (int)hda_output_mode,
+          "the copy is the report");
+    check(!cap_lock.locked && !stream_lock.locked && !stream_mutex.owner && irqs_on,
+          "and every lock is given back");
+
+    cap_lock.locked = 1;
+    held_elsewhere = &cap_lock;
+    lock_waits = 0;
+    got_transfers = 0;
+    hda_service_capture();
+    check(lock_waits == 1 && got_transfers == 2,
+          "capture's service waits for cap_lock a reader holds, then hands over two periods");
+    check(!cap_lock.locked && held_elsewhere == NULL && irqs_on, "and gives cap_lock back");
+
+    hda_stop();
+    hda_driver.stream_stop(&s);
+    hda_driver.stream_close(&s);
+    clock_stopped = 0;
+}
+
+/**
  * A service late by a whole revolution of the DMA buffer counts an overrun,
  * found by the wall clock where the position cannot show it, and hands over
  * the newest revolution: every period but the one the device writes. So
@@ -2826,6 +2910,7 @@ int main(void)
     row_capture_stream();
     row_capture_duplex();
     row_capture_overrun();
+    row_report_locks();
     row_capture_early();
     row_capture_delayed();
     row_capture_served();
@@ -2869,11 +2954,28 @@ void kirq_restore(uint32_t flags)
 {
     irqs_on = (int)flags;
 }
-/** The model has one processor, so a lock is free whenever it is taken. */
+/** A lock is free when it is taken, but for `held_elsewhere`, which
+ * another processor lets go while the model's thread waits; count the
+ * takes of cap_lock and of the stream lock, and what the stream lock is
+ * taken under. */
 void spin_lock(struct spinlock *lock)
 {
+    if (lock->locked && lock == held_elsewhere) {
+        lock->locked = 0;
+        held_elsewhere = NULL;
+        lock_waits++;
+    }
     check(!lock->locked, "a lock taken is free");
     lock->locked = 1;
+    if (lock == &cap_lock)
+        cap_takes++;
+    if (lock == &stream_lock) {
+        stream_takes++;
+        if (cap_lock.locked)
+            stream_under_cap++;
+        if (stream_mutex.owner)
+            stream_under_mutex++;
+    }
 }
 /** Take `lock` when it is free: 1, or 0 when it is held. */
 int spin_trylock(struct spinlock *lock)
@@ -2899,9 +3001,14 @@ void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
     kirq_restore(flags);
 }
 
-/** Give `lock` back. */
+/** Give `lock` back; the stream lock's release notes whether the report's
+ * copy that `report_watch` names is made yet. */
 void spin_unlock(struct spinlock *lock)
 {
+    if (lock == &stream_lock && report_watch)
+        report_copied =
+            !memcmp(&report_watch->queue, &hda_report.queue, sizeof(hda_report.queue)) &&
+            *mode_watch == (int)hda_output_mode;
     lock->locked = 0;
 }
 /** Make `m` a free mutex. */
