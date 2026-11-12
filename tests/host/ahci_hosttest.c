@@ -367,6 +367,16 @@ void k_udelay(uint32_t us)
     }
 }
 
+/* The calls of `smp_service`, which a polled wait with interrupts off makes
+   at each step. */
+static unsigned services;
+
+/** Answer no other processor's request: there is none; count the call. */
+void smp_service(void)
+{
+    services++;
+}
+
 /** The model's tables are in host memory, with no cache to write back. */
 void arch_dma_flush(const volatile void *p, size_t len)
 {
@@ -1155,6 +1165,40 @@ static void port_lock_rows(void)
     claim_release_after = 0;
 }
 
+/**
+ * Check a polled command's bound on its wait for another's claim: one with
+ * interrupts off whose wait outlasts its bound fails with `EIO`, the other
+ * claim and the port untouched, having answered other processors' requests
+ * at each step of the wait.
+ */
+static void claim_bound_rows(void)
+{
+    static uint8_t buf[512];
+    struct ahci_disk *d = &ahci_disks[0];
+
+    model_reset();
+    CHECK("the claim bound row starts a port", ahci_select_port() == 0 && ahci_port_start(d) == 0);
+    d->dev.sector_count = 1000;
+    d->dev.drvdata = d;
+    d->polling = 1;
+    claim_waits = 0;
+    claim_release_after = AHCI_CMD_STEPS_MASKED + 1;
+    issued_locked = issued_unlocked = 0;
+    services = 0;
+    logged_why = NULL;
+    interrupts_masked = 1;
+    CHECK("a polled command with interrupts off gives up another's claim at its own bound",
+          ahci_run_command(d, ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) == -EIO &&
+              claim_waits == AHCI_CMD_STEPS_MASKED - 1 && logged_why &&
+              same_text(logged_why, "another polled command held the port"));
+    interrupts_masked = 0;
+    CHECK("and leaves the other claim and the port alone, answering requests at each step",
+          d->polling && issued_locked == 0 && issued_unlocked == 0 && !d->lock.locked &&
+              services == claim_waits);
+    d->polling = 0;
+    claim_release_after = 0;
+}
+
 /** Check queued completions, independent ports and restart after polling. */
 static void interrupt_rows(void)
 {
@@ -1166,6 +1210,7 @@ static void interrupt_rows(void)
     polled_queue_restart(2);
     polled_drain_counted();
     port_lock_rows();
+    claim_bound_rows();
 }
 
 /**
