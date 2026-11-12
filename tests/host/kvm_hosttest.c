@@ -3228,9 +3228,8 @@ static void spec_rows(void)
     kvm_spec_start();
     model_wrs = 0;
     kvm_virt_ssbd_switch(v, 0, 1);
-    CHECK(
-        kvm_spec_ctrl_guest(v) == 4 && wrote(0, 0) && kvm_virt_ssbd_offered(),
-        "with SSBD in IA32_SPEC_CTRL, the guest's SPEC_CTRL carries it, and VIRT_SSBD is offered");
+    CHECK(kvm_spec_ctrl_guest(v) == 4 && wrote(0, 0) && kvm_virt_ssbd_offered(),
+          "with SSBD in IA32_SPEC_CTRL, the guest's SPEC_CTRL carries it, and VIRT_SSBD is offered");
 
     model_spec_bits = 0;
     model_virt = 1;
@@ -3272,8 +3271,7 @@ static void spec_rows(void)
     model_spec_bits = 7;
     kvm_spec_start();
     model_wrs = 0;
-    CHECK(set_msr(fd, 0x48, 5) == 1 && set_msr(fd, 0xC001011Fu, 4) == 1,
-          "SPEC_CTRL and VIRT_SPEC_CTRL set");
+    CHECK(set_msr(fd, 0x48, 5) == 1 && set_msr(fd, 0xC001011Fu, 4) == 1, "SPEC_CTRL and VIRT_SPEC_CTRL set");
     kvm_vcpu_init_reset(v);
     value = 1;
     CHECK(get_msr(fd, 0x48, &value) == 1 && value == 0 && get_msr(fd, 0xC001011Fu, &value) == 1 &&
