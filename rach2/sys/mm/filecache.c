@@ -937,8 +937,8 @@ static void fc_job_drop(struct open_file *ofd)
 /** A worker, kreadahead: take the oldest waiting job, read it, end it and
  * wake its waiters, and sleep while no job waits. It reads without the big
  * lock, as ext2 reads a file (`reads_unlocked`), and marks itself in a call
- * (`in_syscall`) only across a job, since a kernel thread so marked between
- * them would count as one that is exiting (`proc_is_kthread`). */
+ * (`in_syscall`) only across a job; marked or not, it is a kernel thread,
+ * which takes no signal (`proc_is_kthread`). */
 static void fc_worker(void)
 {
     struct fc_job *j;

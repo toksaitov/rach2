@@ -909,8 +909,10 @@ void free_process(process_t *proc);
 process_t *get_process(uint32_t pid);
 
 /** Whether the record `p` is a kernel thread: a live record with no
- * address space outside an exit, which a user thread leaves only past its
- * mm_drop, in its exit's system call. Such a thread takes no signal, as
+ * address space that was started at a kernel entry (`setup_process_stack`),
+ * marked in a call or not, or that is in no call; a user thread is without
+ * one only past its mm_drop, in its exit's system call. Such a thread takes
+ * no signal, as
  * Linux 6.12.115's kernel threads inherit kthreadd's SIG_IGN for every
  * signal (kernel/kthread.c:745, kernel/signal.c:518-525). */
 int proc_is_kthread(const process_t *p);

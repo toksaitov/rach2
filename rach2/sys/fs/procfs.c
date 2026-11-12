@@ -1378,7 +1378,7 @@ static int procfs_gen_syscall(struct procfs_text *t, int pid)
         ap_str(t, "-1 0x0 0x0\n");
         return t->len;
     }
-    if (p->space_root == 0 && !p->in_syscall) {
+    if (proc_is_kthread(p)) {
         ap_str(t, "0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0\n");
         return t->len;
     }

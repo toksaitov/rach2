@@ -359,12 +359,13 @@ static fd_table_t *files_copy(fd_table_t *src)
  * reaps one, taken off the zombies before its release, which may sleep
  * (`proc_release`), and the walk starts again after each, since the list
  * may have changed while it slept. Kernel threads and the idle record are
- * not user processes and stay: a kernel thread has no address space and is
- * in no system call. A user process that has given up its address space in
- * the call that ends it (`proc_exit_cleanup`) may be asleep there, in a
- * file's release, and is waited for until it is a zombie, and reaped; it
- * is sent no signal, since it does not return to user mode. A record a
- * reaper has taken off the zombies is that reaper's to give back.
+ * not user processes and stay, a kernel thread being one that
+ * `proc_is_kthread` names, even while it is marked in a call. A user
+ * process that has given up its address space in the call that ends it
+ * (`proc_exit_cleanup`) may be asleep there, in a file's release, and is
+ * waited for until it is a zombie, and reaped; it is sent no signal, since
+ * it does not return to user mode. A record a reaper has taken off the
+ * zombies is that reaper's to give back.
  *
  * Each turn waits for an interrupt after the switch, with the big lock let
  * go: a leftover running on another processor takes its signal in that
@@ -389,7 +390,7 @@ static void proc_end_others(void)
                 break;
             }
             if (p->space_root == 0) {
-                alive += p->in_syscall != 0 && p->state != PROC_UNUSED;
+                alive += !proc_is_kthread(p) && p->state != PROC_UNUSED;
                 continue;
             }
             signal_post(p, SIGKILL);
