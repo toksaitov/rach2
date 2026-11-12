@@ -339,6 +339,24 @@ int bkl_held(void)
     return bkl_depth > 0;
 }
 
+/** Let go of the big lock at any depth, as KVM_RUN does with a hold the
+ * system call's entry took: the depth. */
+int bkl_drop(void)
+{
+    int depth = bkl_depth;
+
+    CHECK(!irq_on, "the big lock is let go with interrupts off");
+    bkl_depth = 0;
+    return depth;
+}
+
+/** Take the big lock back at `depth`. */
+void bkl_take(int depth)
+{
+    CHECK(!irq_on && bkl_depth == 0, "the big lock is taken back with interrupts off, once");
+    bkl_depth = depth;
+}
+
 /** Nothing waits on this processor's requests in a test of one thread. */
 void smp_service(void)
 {}
@@ -1618,6 +1636,14 @@ static void startup_run(int vcpu)
     CHECK(r == -EOPNOTSUPP && entries_made == 1,
           "KVM_RUN reaches the backend, whose refusal QEMU reports");
     CHECK(bkl_depth == 0 && irq_on, "KVM_RUN returns with interrupts on and no big lock held");
+    /* The entry took the big lock for its tracer, seccomp, a held
+     * descriptor or USB work: the run lets it go and takes it back. */
+    bkl_depth = 2;
+    entries_made = 0;
+    r = fdio(vcpu, KVM_RUN, 0);
+    CHECK(r == -EOPNOTSUPP && entries_made == 1 && bkl_depth == 2 && irq_on,
+          "KVM_RUN entered with the big lock held runs without it and returns with its depth");
+    bkl_depth = 0;
 }
 
 /**

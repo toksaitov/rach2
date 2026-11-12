@@ -321,6 +321,24 @@ int bkl_held(void)
     return bkl_depth > 0;
 }
 
+/** Let go of the big lock at any depth, as KVM_RUN does with a hold the
+ * system call's entry took: the depth. */
+int bkl_drop(void)
+{
+    int depth = bkl_depth;
+
+    CHECK(!irq_on, "the big lock is let go with interrupts off");
+    bkl_depth = 0;
+    return depth;
+}
+
+/** Take the big lock back at `depth`. */
+void bkl_take(int depth)
+{
+    CHECK(!irq_on && bkl_depth == 0, "the big lock is taken back with interrupts off, once");
+    bkl_depth = depth;
+}
+
 /** Nothing waits on this processor's requests in a test of one thread. */
 void smp_service(void)
 {}
