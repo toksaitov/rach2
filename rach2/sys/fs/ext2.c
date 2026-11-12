@@ -1597,18 +1597,20 @@ static int ext2_sync(struct vfs_mount *mnt)
  * fs/fs-writeback.c). The drain writes only what the cache must free for
  * its copies (`bcache_reserve`), and the cache's write-back of the rest is
  * the flusher's. The batch's age is read without its lock, a look that the
- * next turn corrects. 0, or the drain's -errno, recorded as the batch's
- * error.
+ * next turn corrects. 1 after a drain, 0 when there was nothing old enough,
+ * or the drain's -errno, recorded as the batch's error.
  */
 static int ext2_writeback_old(struct vfs_mount *mnt, uint64_t before)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
+    int rc;
 
     if (!em->writable || (mnt->flags & VFS_MS_RDONLY) || !ext2_batch_pending(em) ||
         em->wb->born > before) {
         return 0;
     }
-    return ext2_writeback_drain(em);
+    rc = ext2_writeback_drain(em);
+    return rc == 0 ? 1 : rc;
 }
 
 /**
