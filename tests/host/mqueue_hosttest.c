@@ -193,6 +193,14 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
     return NULL;
 }
 
+/** No row has a descriptor whose flags mq_getsetattr sets. */
+void fd_ofd_status_set(struct open_file *ofd, uint32_t clear, uint32_t set)
+{
+    (void)ofd;
+    (void)clear;
+    (void)set;
+}
+
 /** No row notifies a process. */
 process_t *get_process(uint32_t pid)
 {
