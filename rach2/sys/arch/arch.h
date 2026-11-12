@@ -120,6 +120,11 @@ void arch_invalid_opcode(void);
  * when this returns. */
 void arch_idle_masked(void);
 
+/** Whether a device's interrupt waits to be taken on this processor while
+ * its interrupts are off; the timer's and the processors' own do not
+ * count. */
+int arch_irq_waiting(void);
+
 /** Whether this processor runs under a hypervisor, as `cpuid` leaf 1
  * reports in ECX bit 31; read once, since in a guest `cpuid` is an exit. */
 int arch_guest(void);

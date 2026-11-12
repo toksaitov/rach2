@@ -927,7 +927,6 @@ void isr_leave(isr_params_t *params)
 void isr_local_router(isr_params_t *params)
 {
     user_entry(params);
-    idle_poll_interrupt();
     if (params->vector == IPI_VECTOR) {
         smp_ipi();
         lapic_eoi();
@@ -965,6 +964,35 @@ static int timer_vector(uint32_t vector)
     int hr = apic_hr_vector();
 
     return vector == IRQ_VECTOR(0) || (hr != 0 && vector == (uint32_t)hr);
+}
+
+/**
+ * A device's interrupt is any vector from IRQ_VECTOR(0) to ISR_MSI_LAST but
+ * the timer's; above them are the interprocessor and spurious vectors. With
+ * x2APIC each word is a register read, which a hypervisor may trap, so the
+ * caller looks only every few microseconds.
+ */
+int arch_irq_waiting(void)
+{
+    uint32_t w, bits;
+    int hr = apic_hr_vector();
+
+    for (w = IRQ_VECTOR(0) / 32u; w <= ISR_MSI_LAST / 32u; w++) {
+        bits = lapic_request_word(w);
+        if (w == IRQ_VECTOR(0) / 32u) {
+            bits &= ~(1u << (IRQ_VECTOR(0) % 32u));
+        }
+        if (hr != 0 && (uint32_t)hr / 32u == w) {
+            bits &= ~(1u << ((uint32_t)hr % 32u));
+        }
+        if (w == ISR_MSI_LAST / 32u && ISR_MSI_LAST % 32u != 31u) {
+            bits &= (1u << (ISR_MSI_LAST % 32u + 1u)) - 1u;
+        }
+        if (bits != 0) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /**
@@ -1046,7 +1074,6 @@ void _irq_router(isr_params_t *params)
 #endif
 
     user_entry(params);
-    idle_poll_interrupt();
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);
     } else if (params->vector == IRQ_VECTOR(0) && !FRAME_USER(params)) {

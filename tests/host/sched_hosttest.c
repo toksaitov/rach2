@@ -130,6 +130,13 @@ int arch_guest(void)
     return 0;
 }
 
+/** 0: no device's interrupt waits; only an idle wait's poll asks, which
+ * none runs. */
+int arch_irq_waiting(void)
+{
+    return 0;
+}
+
 /** 0: no row reads the cycle counter but an idle wait's poll, which none
  * runs. */
 uint64_t arch_cycles(void)
