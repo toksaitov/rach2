@@ -2148,14 +2148,19 @@ struct kvm_gpa_run {
  * behind any of them changes or ends, when a slot over them moves or goes,
  * and when the VM ends; `kvm_gpamap_frame` then answers 0, and the frames
  * stay held until `kvm_gpamap_free`, so that a use begun before the revoke
- * never reaches a frame reused since. Under the big lock; does not
- * sleep, so that no change can come between the slots' answer and the
- * frames. 0 with the map in `*out`; -EINVAL for a run that is empty, not
+ * never reaches a frame reused since. Under the big lock. The slots, the
+ * walk of the maker's regions and tables and the registration on its
+ * change notice run under the maker's regions' lock held to read, with
+ * nothing between that sleeps, so that no change of the slots or of the
+ * regions comes between them unheard; a lock that another thread holds to
+ * write is waited for with the VM held and the big lock let go, and the
+ * answer is then -EAGAIN, for the caller to look the VM up again and call
+ * again. 0 with the map in `*out`; -EINVAL for a run that is empty, not
  * page-aligned or past the guest-physical width, or for too many pages;
  * -EFAULT for a page in no slot, in a read-only one, not present, not
  * ordinary RAM or in a memfd_secret region, which cannot be shared, and
  * for every page once the maker's address space has ended, which leaves no
- * range on its notice; -ENOMEM.
+ * range on its notice; -ENOMEM; -EAGAIN.
  */
 int kvm_gpamap_new(struct kvm_vm *vm, const struct kvm_gpa_run *runs, uint32_t n,
                    void (*revoke)(void *owner), void *owner, struct kvm_gpamap **out);

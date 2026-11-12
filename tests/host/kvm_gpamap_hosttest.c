@@ -21,8 +21,12 @@
  * taking it back through the owner's revoke once, its frames answering 0
  * and every reference kept, counted, until the owner's free; the end of
  * the maker's memory, a slot's change over a run and the VM's end each
- * taking maps back with their references kept; and a free without a
- * revoke, after which nothing is held.
+ * taking maps back with their references kept; a free without a revoke,
+ * after which nothing is held; and a map that finds the maker's regions'
+ * lock held to write by another thread, which waits for it with the VM
+ * held, holds nothing and answers -EAGAIN, and called again maps. The
+ * maker's tables are walked and the range registered only under that lock
+ * held to read, which every row checks.
  */
 #include "kvm/gpamap.c"
 #include "mm/notify.c"
@@ -78,6 +82,58 @@ static int refs[MEM_PAGES];
 static struct mm maker;
 static char maker_dir; /* stands for the maker's page directory */
 
+/* The maker's regions' lock: the reads this thread holds, whether another
+ * thread holds it to write until this one waits for it, the waits, and
+ * the VM's references, taken across a wait. */
+static int maker_reads, maker_written, maker_waits, vm_refs;
+
+/** Take `mm`'s regions' lock to read if that needs no wait: refused while
+ * the other thread holds the maker's to write. */
+int mmap_read_trylock(struct mm *mm)
+{
+    CHECK(mm == &maker, "only the maker's regions' lock is taken");
+    if (maker_written) {
+        return 0;
+    }
+    maker_reads++;
+    return 1;
+}
+
+/** Take `mm`'s regions' lock to read: the wait for the other thread's write
+ * hold ends with its release, during which the VM must be held. */
+void mmap_read_lock(struct mm *mm)
+{
+    CHECK(mm == &maker, "only the maker's regions' lock is taken");
+    if (maker_written) {
+        CHECK(vm_refs > 0, "the VM held across the wait for the maker's lock");
+        maker_waits++;
+        maker_written = 0;
+    }
+    maker_reads++;
+}
+
+/** Give back a read hold of `mm`'s regions' lock. */
+void mmap_unlock(struct mm *mm)
+{
+    CHECK(mm == &maker && maker_reads > 0, "a release of a hold taken");
+    maker_reads--;
+}
+
+/** Count a reference to the VM. */
+void kvm_vm_get(struct kvm_vm *vm)
+{
+    (void)vm;
+    vm_refs++;
+}
+
+/** Drop a reference to the VM. */
+void kvm_vm_put(struct kvm_vm *vm)
+{
+    (void)vm;
+    CHECK(vm_refs > 0, "a reference to the VM dropped that was taken");
+    vm_refs--;
+}
+
 /** 1: the test runs as the one thread, which holds the big lock. */
 int bkl_held(void)
 {
@@ -127,6 +183,7 @@ uint64_t paging_user_ram_frames(struct mm *mm, uintptr_t va, uint64_t n, uintptr
 {
     uint64_t got;
 
+    CHECK(maker_reads > 0, "the maker's tables walked under its regions' lock");
     for (got = 0; got < n; got++, va += 4096u) {
         if (mm != &maker || va < MEM_BASE || va >= MEM_BASE + MEM_PAGES * 4096u ||
             !mem_frame[(va - MEM_BASE) / 4096u]) {
@@ -406,6 +463,31 @@ static void vm_rows(struct kvm_vm *vm)
           "every record and reference freed, with no revoke more");
 }
 
+/** A map that finds the maker's regions' lock held to write waits for it
+ * with the VM held and asks to be called again, holding nothing; the call
+ * again maps, and every hold of the lock is given back. */
+static void wait_rows(struct kvm_vm *vm)
+{
+    static const struct kvm_gpa_run run = {0x101000, 2};
+    struct kvm_gpamap *m = NULL;
+    int before = live;
+
+    reset(vm);
+    maker_written = 1;
+    maker_waits = 0;
+    CHECK(make(vm, &run, 1, "w", &m) == -EAGAIN && m == NULL,
+          "a map that waited for the maker's lock asks to be called again");
+    CHECK(maker_waits == 1 && maker_reads == 0 && vm_refs == 0,
+          "the wait held the VM and gave back the lock and the VM");
+    CHECK(held() == 0 && maker.notify == NULL && live == before,
+          "the map that waited holds no frame, no range and no record");
+    CHECK(make(vm, &run, 1, "w", &m) == 0 && m != NULL && held() == 2 && maker.notify == &m->note &&
+              maker_reads == 0,
+          "called again it maps, its lock given back");
+    kvm_gpamap_free(m);
+    CHECK(held() == 0 && live == before, "the map freed");
+}
+
 int main(void)
 {
     struct kvm_vm *vm = (struct kvm_vm *)calloc(1, sizeof(*vm));
@@ -417,6 +499,8 @@ int main(void)
     refusal_rows(vm);
     notice_rows(vm);
     vm_rows(vm);
+    wait_rows(vm);
+    CHECK(maker_reads == 0, "every hold of the maker's regions' lock given back");
     free(vm);
     if (failures) {
         printf("kvm-gpamap-hosttest: %d failure(s)\n", failures);
