@@ -149,6 +149,18 @@ int sched_wake_due_locked(process_t *p, uint64_t now)
     return -1;
 }
 
+/** A wake at a sleep's time makes a blocked process with a deadline ready,
+ * as `sched_wake_time_locked`. */
+int sched_wake_time_locked(process_t *p)
+{
+    if (p->state != PROC_BLOCKED || p->wakeup_tick == 0) {
+        return -1;
+    }
+    p->wakeup_tick = 0;
+    p->state = PROC_READY;
+    return -1;
+}
+
 /** No processor to interrupt in the model. */
 void sched_kick_cpus(uint64_t cpus)
 {
