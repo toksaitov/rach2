@@ -4773,18 +4773,18 @@ static process_t *sig_fatal_taker(process_t *target, int signo, int whole)
  * the thread `taker` of its process (`sig_fatal_taker`), ends the process at
  * once, as Linux 6.12.115's `complete_signal` judges it (kernel/signal.c:
  * 1034-1043): there is such a thread, the disposition is SIG_DFL and the
- * default action ends the process without a core dump, `taker` does not
- * wait for the signal in rt_sigtimedwait (`sig_real_blocked`), the process
- * is not ending already, or is writing its core and the signal is SIGKILL,
- * which stops the core (kernel/signal.c:908-910, 1035), and `target` is not
- * traced, unless the signal is SIGKILL. Such a waiter takes the signal as
- * its result, a traced thread's tracer sees the signal first, and a
- * signal that dumps core is left to the thread that takes it, which writes
- * the core before the others end. An init (`unkillable`) ends only by
- * SIGKILL here: Linux leaves this test out (kernel/signal.c:1034-1037), so
- * that a signal one of init's threads blocks, which `sig_ignored` lets
- * through, ends init when another thread does not block it, and the
- * system's init panics.
+ * default action ends the process without a core dump, `taker` does not hold
+ * the signal in `sig_real_blocked`, as rt_sigtimedwait and KVM_RUN under
+ * KVM_SET_SIGNAL_MASK's mask do, the process is not ending already, or is
+ * writing its core and the signal is SIGKILL, which stops the core
+ * (kernel/signal.c:908-910, 1035), and `target` is not traced, unless the
+ * signal is SIGKILL. Such a waiter takes the signal as its result, a traced
+ * thread's tracer sees the signal first, and a signal that dumps core is left
+ * to the thread that takes it, which writes the core before the others end. An
+ * init (`unkillable`) ends only by SIGKILL here: Linux leaves this test out
+ * (kernel/signal.c:1034-1037), so that a signal one of init's threads blocks,
+ * which `sig_ignored` lets through, ends init when another thread does not
+ * block it, and the system's init panics.
  */
 static int sig_fatal_now(const process_t *target, const process_t *taker, int signo)
 {

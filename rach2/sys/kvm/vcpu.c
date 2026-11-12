@@ -1057,7 +1057,12 @@ static void sync_give(struct kvm_vcpu *v);
 /** KVM_RUN, whose argument is 0, without the big lock, under the signal
  * mask of KVM_SET_SIGNAL_MASK when one is set, with the old mask back
  * after, as Linux's kvm_sigset_activate and kvm_sigset_deactivate swap
- * them; the swap takes the big lock, which the signal code needs. The
+ * them (virt/kvm/kvm_main.c:3668-3689); the swap takes the big lock, which
+ * the signal code needs. The old mask is the thread's `sig_real_blocked`
+ * meanwhile, as Linux keeps it in real_blocked, so that a signal the mask
+ * lets through and the old mask blocks ends the run with -EINTR and stays
+ * pending, and does not end the process at its post at the default action
+ * (`sig_fatal_now`), as SIGUSR1 kicks dirty_log_test's vCPU. The
  * run page's `kvm_dirty_regs` names the register sets taken from it first
  * and `kvm_valid_regs` those written to it last (KVM_CAP_SYNC_REGS);
  * -EINVAL for a set outside KVM_SYNC_X86_VALID_FIELDS in either, or for
@@ -1076,6 +1081,7 @@ static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
     if (v->has_sigmask) {
         kvm_bkl_enter(v);
         old = current_proc->sig_blocked;
+        current_proc->sig_real_blocked = old;
         signal_set_blocked(v->sigmask);
         bkl_exit();
     }
@@ -1094,6 +1100,7 @@ static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
     if (v->has_sigmask) {
         kvm_bkl_enter(v);
         signal_set_blocked(old);
+        current_proc->sig_real_blocked = 0;
         bkl_exit();
     }
     kvm_exitstat_done(v);

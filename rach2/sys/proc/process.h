@@ -206,8 +206,9 @@ struct process {
     uint64_t sig_pending;
     uint64_t sig_blocked;
     /* The mask rt_sigtimedwait puts back when it ends, while it waits with its
-     * set unblocked, as Linux's real_blocked; 0 otherwise. A signal it holds
-     * is not fatal at its post (`sig_fatal_now`). */
+     * set unblocked, or KVM_RUN, while it runs under KVM_SET_SIGNAL_MASK's
+     * mask, as Linux's real_blocked; 0 otherwise. A signal it holds is not
+     * fatal at its post (`sig_fatal_now`). */
     uint64_t sig_real_blocked;
     /* Set once the thread has begun to end, after its exit event, as Linux's
      * PF_EXITING: no signal sent to its process picks it to take it
