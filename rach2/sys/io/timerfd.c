@@ -125,8 +125,11 @@ struct ktimer {
                             * first, as Linux's queue delivers them */
     uint32_t key;          /* a POSIX timer's own number, from `next_gen` at
                             * timer_create and never 0: its signal carries it
-                            * (`timer_key`), and later expirations add to a
-                            * pending signal that bears it alone */
+                            * (`timer_key`), and only a pending signal that
+                            * bears it is the timer's own, to whose overrun a
+                            * later setting's first expiration adds one, and
+                            * into whose setting's count (`set_count`) the
+                            * later expirations go (`ptimer_fire`) */
     struct tgroup *cpu_tg; /* held: the process whose time it counts, or NULL */
     uint32_t cpu_tid;
     int cpu_user;
@@ -1425,7 +1428,7 @@ static process_t *ptimer_thread(const struct ktimer *t)
  * `key` and the setting, as Linux's posix_timer_queue_signal writes
  * si_sys_private before send_sigqueue queues the timer's sigqueue with an
  * overrun of 0 (kernel/time/posix-timers.c:281-305, kernel/signal.c:
- * 2044-2050). While its signal is pending, the timer's own as its key says,
+ * 2038-2043). While its signal is pending, the timer's own as its key says,
  * or while its notification waits for another sender's signal of its
  * number in `count`, an expiration is one more of the setting in force; or,
  * when the queued notification is of an earlier setting, it adds one to
@@ -1959,8 +1962,12 @@ void ptimer_delete_all(struct tgroup *tg)
 }
 
 /**
- * Then each signal of SI_TIMER pending for `self` or for its process is
- * discarded, as Linux 6.12.115's flush_itimer_signals takes every queued
+ * Delete the POSIX timers of the process of `self` at an exec, and discard
+ * their pending signals. Every timer goes, with the records of deleted ones
+ * that wait (`ptimer_delete_all`), and then each signal of SI_TIMER pending
+ * for `self` or for its process is discarded, as Linux 6.12.115's
+ * posixtimer_exec calls exit_itimers and flush_itimer_signals
+ * (fs/exec.c:1220-1229); flush_itimer_signals takes every queued
  * SI_TIMER sigqueue off the thread's and the process's queues
  * (kernel/signal.c:483-516), so that the new image takes no signal of a
  * timer it never made; a signal whose siginfo is another sender's stays.

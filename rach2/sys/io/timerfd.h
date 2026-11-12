@@ -144,11 +144,15 @@ struct k_siginfo;
 /** After the signal `signo` of the process `tg`, whose information `info`
  * is, has been taken: a periodic POSIX timer's signal of the setting in
  * force has that setting's expirations past the one it stands for added to
- * its overrun in `info`, which timer_getoverrun then reports, and the timer
- * moved past the clock and armed between ticks again, as Linux's
- * posixtimer_rearm restarts a timer at the delivery of its signal
- * (kernel/time/posix-timers.c:258-279); and the timers' notifications that
- * waited for that signal number are posted, oldest first.
+ * its overrun in `info`, si_overrun, which also keeps what the signal
+ * carried while queued, and the timer moved past the clock and armed
+ * between ticks again, as Linux's posixtimer_rearm restarts a timer at the
+ * delivery of its signal (kernel/time/posix-timers.c:258-279). Those
+ * expirations alone, without the carry, are what timer_getoverrun then
+ * reports, as Linux's it_overrun_last, which timer_overrun_to_int adds to
+ * si_overrun (kernel/time/posix-timers.c:237-242, 270-274). Then the
+ * timers' notifications that waited for that signal number are posted,
+ * oldest first.
  * Process context, with interrupts off from the signal's dequeue through
  * the call, so that no tick posts the timer's signal again before its
  * overrun is counted, as dequeue_signal calls posixtimer_rearm before it
