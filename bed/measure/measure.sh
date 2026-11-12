@@ -266,10 +266,13 @@ if [ "$inner" = 1 ]; then
 fi
 
 # counts: the machine's counts now, one `NAME VALUE` a line, a count it
-# does not keep left out.
+# does not keep left out. busy is the processors' user, nice, system, irq and
+# softirq ticks of /proc/stat's first line; Linux counts a guest's time in
+# user or nice and again in guest and guest_nice, the last two columns, and
+# steal is time this machine did not run. total adds idle, iowait and steal.
 counts()
 {
-    awk '$1 == "cpu" { t = 0; for (i = 2; i <= NF; i++) t += $i; print "busy", t - $5 - $6; print "total", t }
+    awk '$1 == "cpu" { b = $2 + $3 + $4 + $7 + $8; print "busy", b; print "total", b + $5 + $6 + $9 }
          $1 == "kvm_exits" || $1 == "virtio_gpu_copied_bytes" { print $1, $2 }' /proc/stat
     [ ! -r /sys/kernel/debug/kvm/exits ] || echo "linux_exits $(cat /sys/kernel/debug/kvm/exits)"
     info=$(ivshmemd -i 2>/dev/null) || info=''
