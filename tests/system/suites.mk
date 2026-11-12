@@ -1051,7 +1051,8 @@ build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
 # common.sh writes the host's half of each record, and venus-lost.sh kills
 # the render server of the device loss case's QEMU.
 GRAPHICS_LISTS = igt-76.list deqp-vk-venus-smoke.txt deqp-vk-lavapipe.txt.gz deqp-vk-lavapipe.flakes \
-                 piglit-virgl.txt.gz piglit-virgl.flakes deqp-gles-virgl.txt.gz
+                 piglit-virgl.txt.gz piglit-virgl.flakes piglit-quick-gl.txt.gz piglit-quick-gl.flakes \
+                 deqp-gles-virgl.txt.gz
 GRAPHICS_REFS = ref/debian ref/venus-wsl ref/virgl-wsl
 GRAPHICS_FILES = $(wildcard tests/graphics/runners/*) tests/graphics/guest-env.sh \
                  $(addprefix tests/graphics/,$(GRAPHICS_LISTS)) \
