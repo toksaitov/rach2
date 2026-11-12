@@ -6,7 +6,7 @@
  * host-deps: tests/host/compat/vfs_name_none.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
- * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/bkl_none.c
+ * host-deps: tests/host/compat/spinlock_host.c
  * host-deps: tests/host/compat/atomic_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
@@ -64,6 +64,7 @@ uint32_t rtc_step_count(void)
 const struct vfs_type vfs_krffs_type = {0, 0, 0, 1, 0, 0};
 static const struct vfs_type other_type = {0, 0, 0, 1, 0, 0};
 static const struct vfs_type plain_type = {0, 0, 0, 0, 0, 0};
+static const struct vfs_type unlocked_type = {.name = "unlocked", .reads_unlocked = 1};
 static struct open_file *reader;
 static int old_node, new_node;
 static int pending, depth, waits, fails;
@@ -253,10 +254,28 @@ void inotify_desc(struct open_file *ofd, uint32_t mask)
     (void)mask;
 }
 
-/** No row's file system is watched. */
+/** Whether a watch is on `mnt`'s file system, as inotify.c reads it. */
 int inotify_mount_watched(const struct vfs_mount *mnt)
 {
-    (void)mnt;
+    return mnt && vfs_mount_base(mnt)->inotify_watched != 0;
+}
+
+/* The times the big lock was taken. */
+static int big_takes;
+
+/** Take the big lock, which one thread need not wait for: count it. */
+void bkl_enter(void)
+{
+    big_takes++;
+}
+
+/** Release the big lock. */
+void bkl_exit(void)
+{}
+
+/** Whether this processor holds the big lock: never, as the rows read it. */
+int bkl_held(void)
+{
     return 0;
 }
 
@@ -855,6 +874,7 @@ static void description_holders(void)
     if (!a || !b || !other) {
         return;
     }
+    mnt.type = &plain_type;
     a->vmnt = b->vmnt = other->vmnt = &mnt;
     a->vnode = b->vnode = &node;
     other->vnode = &elsewhere;
@@ -882,6 +902,7 @@ static void description_live(void)
     struct open_file *ofd = fd_ofd_new();
     uint32_t serial;
 
+    mnt.type = &plain_type;
     check(ofd != 0, "a description");
     if (!ofd) {
         return;
@@ -901,6 +922,40 @@ static void description_live(void)
           "a description its file system closes after its last reference is not open");
     check(!fd_ofd_live(ofd, serial) && allocations == 0,
           "a description is not open after its last reference");
+}
+
+/**
+ * The last end of a description on a type that reads without the big lock
+ * takes the lock for inotify only when a watch is on the description's own
+ * file system, as Linux's fsnotify_sb_has_watchers asks of the file's super
+ * block (include/linux/fsnotify.h:34-37, 81), and not for a watch on
+ * another.
+ */
+static void description_watch(void)
+{
+    struct vfs_mount quiet = {0}, watched = {0};
+    struct open_file *a = fd_ofd_new();
+    struct open_file *b = fd_ofd_new();
+    int takes;
+
+    check(a && b, "two descriptions");
+    if (!a || !b) {
+        return;
+    }
+    quiet.type = &unlocked_type;
+    watched.type = &unlocked_type;
+    watched.inotify_watched = 1;
+    a->vmnt = &quiet;
+    a->watch_flags = OFD_WATCH_OPEN;
+    b->vmnt = &watched;
+    b->watch_flags = OFD_WATCH_OPEN;
+    takes = big_takes;
+    fd_ofd_unref(a);
+    check(big_takes == takes,
+          "a description ends without the big lock while only another file system is watched");
+    fd_ofd_unref(b);
+    check(big_takes == takes + 1, "and one on the watched file system takes it");
+    check(allocations == 0, "and both are freed");
 }
 
 /** A mount is its own base: no row makes a bind mount. */
@@ -943,6 +998,7 @@ int main(void)
     allocation_errors();
     description_holders();
     description_live();
+    description_watch();
     shared_closes();
     close_finish();
     table_chunks();
