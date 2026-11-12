@@ -64,8 +64,9 @@ struct mmn_range {
     uintptr_t start;
     uintptr_t end;
     const struct mmn_ops *ops;
-    void *owner;            /* the driver's, for `invalidate` */
-    struct mmn_range *next; /* the next range of `mm` */
+    void *owner;              /* the driver's, for `invalidate` */
+    struct mmn_range *next;   /* the next range of `mm` */
+    struct mmn_range **pprev; /* the link that points at this range */
     uint32_t seq;
 };
 
