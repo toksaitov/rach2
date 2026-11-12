@@ -22,11 +22,13 @@
  *
  * One row does run the wait: a model `schedule` records the deadline the
  * waiter blocked with and wakes it as `signal_post` does, clearing that
- * deadline. A wait whose condition is still false must arm the caller's
- * deadline again before it blocks again, or a blocked or ignored signal would
- * leave it asleep with no timer to end it. A wait files itself and is
- * blocked before it tests its condition, so a wake made during a false
- * test is not lost, and `wq_complete` sets its flag and wakes together.
+ * deadline. It fails a fifth block and ends that wait, so that a wait that
+ * would spin fails instead. A wait whose condition is still false must arm
+ * the caller's deadline again before it blocks again, or a blocked or
+ * ignored signal would leave it asleep with no timer to end it. A wait
+ * files itself and is blocked before it tests its condition, so a wake made
+ * during a false test is not lost, and `wq_complete` sets its flag and
+ * wakes together.
  *
  * Each queue has its own lock, and the interrupts a wake asks for go out
  * after it: every call leaves its queue's lock free, a poller on two queues
@@ -51,45 +53,7 @@ struct percpu cpu_table[NR_CPUS];
 static int blocks, conds, pending_calls;
 static uint32_t deadline_at_block[4];
 static int post_sig_woken; /* the wake sets the signal-work flag too */
-
-/**
- * The model scheduler: record the deadline the waiter blocked with, then wake
- * it as `signal_post` does, clearing the deadline, and setting the waiter's
- * signal-work flag when `post_sig_woken` asks.
- */
-void schedule(void)
-{
-    if (current_proc && current_proc->state == PROC_BLOCKED && blocks < 4) {
-        deadline_at_block[blocks++] = current_proc->wakeup_tick;
-        current_proc->wakeup_tick = 0;
-        if (post_sig_woken) {
-            current_proc->sig_woken = 1;
-        }
-        current_proc->state = PROC_READY;
-    }
-}
-
-/** 0: no signal is pending. The calls are counted. */
-int signal_pending(void)
-{
-    pending_calls++;
-    return 0;
-}
-
-/** A condition that is never true. */
-static int never(void *arg)
-{
-    (void)arg;
-    return 0;
-}
-
-/** A condition false twice and then true, so the wait blocks twice. */
-static int true_third(void *arg)
-{
-    (void)arg;
-    return ++conds >= 3;
-}
-
+static int overran;        /* a wait blocked past the model's cap */
 static int fails;
 
 #define CHECK(cond)                                           \
@@ -99,6 +63,55 @@ static int fails;
             fails++;                                          \
         }                                                     \
     } while (0)
+
+/**
+ * The model scheduler: record the deadline the waiter blocked with, then wake
+ * it as `signal_post` does, clearing the deadline, and setting the waiter's
+ * signal-work flag when `post_sig_woken` asks. No row blocks more than four
+ * times; a block past that is a failure, which sets `overran` and wakes the
+ * waiter, so that `never` ends a wait that has lost the test that ends it
+ * instead of letting it spin, as smp_hosttest bounds its waits.
+ */
+void schedule(void)
+{
+    if (!current_proc || current_proc->state != PROC_BLOCKED) {
+        return;
+    }
+    if (blocks < 4) {
+        deadline_at_block[blocks++] = current_proc->wakeup_tick;
+        current_proc->wakeup_tick = 0;
+        if (post_sig_woken) {
+            current_proc->sig_woken = 1;
+        }
+    } else if (!overran) {
+        overran = 1;
+        dprintf(2, "wait-queue-test: fail: a wait blocked past the model's four blocks\n");
+        fails++;
+    }
+    current_proc->state = PROC_READY;
+}
+
+/** 0: no signal is pending. The calls are counted. */
+int signal_pending(void)
+{
+    pending_calls++;
+    return 0;
+}
+
+/** A condition that is never true until a wait has blocked past the model's
+ * cap, which it then ends. */
+static int never(void *arg)
+{
+    (void)arg;
+    return overran;
+}
+
+/** A condition false twice and then true, so the wait blocks twice. */
+static int true_third(void *arg)
+{
+    (void)arg;
+    return ++conds >= 3;
+}
 
 /** How many of the waiters on `wq` are `p`'s. */
 static int count_in(wait_queue_t *wq, process_t *p)
