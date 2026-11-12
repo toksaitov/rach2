@@ -2251,10 +2251,11 @@ static void steal_rows(int fd0)
     preempt_seen = -1;
     CHECK(fdio(fd0, KVM_RUN, 0) == 0 && run->exit_reason == KVM_EXIT_HLT,
           "KVM_RUN through a tick whose request finds no other thread, to a HLT");
-    CHECK(preempt_seen == -1 && st->preempted == 0 && st->version == 18 &&
+    CHECK(preempt_seen == -1 && st->preempted == 0 && st->version == 20 &&
               v0->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported + 3 &&
               v0->stat[KVM_VCPU_STAT_PREEMPTION_OTHER] == 1,
-          "the vCPU is not marked preempted, nor counted, when nothing switches it out");
+          "the vCPU is not marked preempted, nor counted, when nothing switches it out, and the "
+          "record is written once, at the entry each KVM_RUN asks for, as Linux's vcpu_load");
     preempt_alone = 0;
     tick_exits = 0;
     preempt_wait = 0;
@@ -2264,7 +2265,7 @@ static void steal_rows(int fd0)
     CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_GPA) == 1, "the guest turns it off");
     caller.pcount++;
     kvm_steal_prepare(v0);
-    CHECK(st->version == 18, "and nothing more is written");
+    CHECK(st->version == 20, "and nothing more is written");
 }
 
 /** A guest's INIT on vCPU `fd0`, as Linux's kvm_vcpu_reset: the steal
@@ -2285,7 +2286,7 @@ static void init_pv_rows(int fd0)
     kvm_clock_prepare(v0);
     pv_version = pv->version;
     st_version = st->version;
-    CHECK(st_version == 20 && (v0->pv_time & KVM_MSR_ENABLED) && pv_version % 2u == 0,
+    CHECK(st_version == 22 && (v0->pv_time & KVM_MSR_ENABLED) && pv_version % 2u == 0,
           "both are written at the next entry");
     kvm_vcpu_init_reset(v0);
     CHECK(get_msr(fd0, MSR_KVM_STEAL_TIME, &value) == 1 && value == 0 &&
