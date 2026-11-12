@@ -32,10 +32,11 @@
  * and a running process is left as it is whatever its wakeup tick says. A
  * tick that wakes a sleeper still marks the sleeper's alarm and a later
  * process's. More sleepers due than one hold of the lock wakes are all
- * woken by one pass. The count is 64 bits wide: a timer armed again across
- * 2^32 ticks is due at 2^32, the tick before serves nothing due after it,
- * and tick 2^32 + 5 marks that timer and wakes the sleeper, whose deadline
- * it is. `proc_alarm_at` gives a tick past 2^32 whole.
+ * woken by one pass, which still marks a timer linked behind them. The
+ * count is 64 bits wide: a timer armed again across 2^32 ticks is due at
+ * 2^32, the tick before serves nothing due after it, and tick 2^32 + 5
+ * marks that timer and wakes the sleeper, whose deadline it is.
+ * `proc_alarm_at` gives a tick past 2^32 whole.
  */
 #include "lib/kint.h"
 #include "compat/waketime_none.h"
@@ -300,13 +301,14 @@ static void crowd_rows(void)
     int i, woken;
 
     proc_alarm_set(&runner, 0, 0);
+    /* linked first, so the twenty put at the list's head come before it */
+    follower.state = PROC_RUNNING;
+    proc_alarm_set(&follower, 1600, 0);
     for (i = 0; i < 20; i++) {
         crowd[i].state = PROC_BLOCKED;
         crowd[i].wakeup_tick = 1600;
         proc_timer_update(&crowd[i]);
     }
-    follower.state = PROC_RUNNING;
-    proc_alarm_set(&follower, 1600, 0);
     tick_at(1600);
     for (i = 0, woken = 0; i < 20; i++) {
         woken += crowd[i].state == PROC_READY && !crowd[i].timer_linked;
