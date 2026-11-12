@@ -17,6 +17,14 @@ void spin_lock(struct spinlock *lock)
     lock->locked = 1;
 }
 
+/** Take `lock` as one of a nest of its class, which one processor takes as
+ * it takes any lock. */
+void spin_lock_nested(struct spinlock *lock, unsigned int subclass)
+{
+    (void)subclass;
+    spin_lock(lock);
+}
+
 /** Take `lock` when it is free: 1, or 0 when it is held. */
 int spin_trylock(struct spinlock *lock)
 {
