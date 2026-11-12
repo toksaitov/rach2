@@ -7,12 +7,14 @@
 #include "../lib/kerrno.h"
 
 /* The kinds of wait: one a signal ends, one it does not, one it does not
- * that /proc counts as idle rather than blocked, and one whose caller's
- * condition must accept SIGKILL, which the hung-task detector skips. */
+ * that /proc counts as idle rather than blocked, one whose caller's
+ * condition must accept SIGKILL, which the hung-task detector skips, and
+ * one the signal-work flag alone ends, for a caller without the big lock. */
 #define WQ_SIGNAL   0
 #define WQ_NOSIGNAL 1
 #define WQ_IDLE     2
 #define WQ_KILLABLE 3
+#define WQ_SIGFLAG  4
 
 /*
  * Save the interrupt flag and disable interrupts; restore puts it back,
@@ -193,8 +195,9 @@ static void wq_dequeue(wait_queue_t *wq, struct wq_waiter *w)
 
 /**
  * The wait behind `wq_wait_event`, `wq_wait_event_as`, `wq_wait_event_nointr`,
- * `wq_wait_event_killable` and `wq_wait_event_idle`: a pending signal ends a
- * wait of kind WQ_SIGNAL, a sleeper of kind WQ_NOSIGNAL or WQ_KILLABLE is
+ * `wq_wait_event_killable`, `wq_wait_event_idle` and `wq_wait_event_sigflag`:
+ * a pending signal ends a wait of kind WQ_SIGNAL, the signal-work flag one
+ * of kind WQ_SIGFLAG, a sleeper of kind WQ_NOSIGNAL or WQ_KILLABLE is
  * marked uninterruptible, and one of WQ_KILLABLE killable too. `name` is
  * the wait's name for /proc/PID/wchan, stored before each block.
  *
@@ -246,6 +249,10 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int kind, const
             break;
         }
         if (kind == WQ_SIGNAL && signal_pending()) {
+            rc = -EINTR;
+            break;
+        }
+        if (kind == WQ_SIGFLAG && *(volatile uint32_t *)&current_proc->sig_woken) {
             rc = -EINTR;
             break;
         }
@@ -443,4 +450,9 @@ int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const c
 int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     return wq_wait(wq, cond, arg, WQ_IDLE, "wq_wait_event_idle");
+}
+
+int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    return wq_wait(wq, cond, arg, WQ_SIGFLAG, name);
 }

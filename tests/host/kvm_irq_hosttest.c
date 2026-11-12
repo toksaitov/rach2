@@ -281,6 +281,13 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return -EINTR;
 }
 
+/** A halted vCPU's wait, as the model's `wq_wait_event`. */
+int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    (void)name;
+    return wq_wait_event(wq, cond, arg);
+}
+
 void wq_wake(wait_queue_t *wq, uint32_t kinds)
 {
     (void)wq;
