@@ -1625,6 +1625,17 @@ void kvm_lapic_update_ppr(struct kvm_vcpu *v);
  */
 int32_t kvm_lapic_prepare(struct kvm_vcpu *v);
 
+/**
+ * The host's TSC cycles `v`'s guest may run before its local APIC's timer
+ * is due, at most `max`, 0 when it is due now: the bound of the next run,
+ * as Linux arms the VMX preemption timer from the APIC timer's deadline
+ * (`vmx_set_hv_timer` and `vmx_update_hv_timer`, arch/x86/kvm/vmx/vmx.c:
+ * 8123-8160 and 7199-7222), so that a guest spinning on the timer takes
+ * it at its expiry, not at the host's next tick. `max` for no local APIC
+ * in the kernel or no timer armed. Reads the clock only while one is.
+ */
+uint64_t kvm_lapic_run_bound(struct kvm_vcpu *v, uint64_t max);
+
 /** Whether the caller of `v` may inject an external interrupt now, the
  * run page's `ready_for_interrupt_injection` with the APIC in the kernel:
  * the guest takes interrupts, none waits, and LINT0 takes ExtINT. */

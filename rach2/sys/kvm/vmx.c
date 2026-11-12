@@ -874,8 +874,9 @@ struct vmx_vcpu {
     uint64_t host_xcr0;
     uint32_t host_pkru, guest_pkru;
     struct vmx_cache c;
-    int inj_armed;  /* VM_ENTRY_INTR_INFO_FIELD may hold a valid event */
-    uint64_t *msrs; /* the PMU's MSR lists, at 0 and at PMU_HOST_LIST */
+    int inj_armed;   /* VM_ENTRY_INTR_INFO_FIELD may hold a valid event */
+    uint32_t ptimer; /* VMX_PREEMPTION_TIMER_VALUE as last written */
+    uint64_t *msrs;  /* the PMU's MSR lists, at 0 and at PMU_HOST_LIST */
     uintptr_t msrs_pa;
     uint8_t *msr_bitmap; /* every MSR exits but those `vmx_msr_filter_changed` passes */
     uintptr_t msr_bitmap_pa;
@@ -1411,8 +1412,9 @@ static void vmcs_build(struct kvm_vcpu *v)
     x->debugctl = kvm_pmu_vmcs_debugctl(v);
     vmcs_write(GUEST_IA32_DEBUGCTL, x->debugctl);
     /* The exit does not save the timer's count, so the field keeps this
-     * bound for every run. */
-    vmcs_write(VMX_PREEMPTION_TIMER_VALUE, VMX_RUN_BOUND_TSC >> caps.timer_shift);
+     * bound for every run until `entry_fields` writes the APIC timer's. */
+    x->ptimer = VMX_RUN_BOUND_TSC >> caps.timer_shift;
+    vmcs_write(VMX_PREEMPTION_TIMER_VALUE, x->ptimer);
     k_memset(&x->c, 0xFF, sizeof(x->c));
     x->c.ng = x->c.nh = 0;
     x->c.known = 0;
@@ -1825,7 +1827,7 @@ static void entry_fields(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
     uint64_t rflags;
-    uint32_t threshold;
+    uint32_t threshold, ptimer;
 
     if (v->vm->irqchip == KVM_IRQCHIP_NONE) {
         x->proc_want &= ~PROC_INTR_WINDOW;
@@ -1879,6 +1881,11 @@ static void entry_fields(struct kvm_vcpu *v)
         vmcs_write(GUEST_RFLAGS, rflags);
         x->c.rflags = rflags;
         x->c.known |= VC_RFLAGS;
+    }
+    ptimer = (uint32_t)(kvm_lapic_run_bound(v, VMX_RUN_BOUND_TSC) >> caps.timer_shift);
+    if (ptimer != x->ptimer) {
+        vmcs_write(VMX_PREEMPTION_TIMER_VALUE, ptimer);
+        x->ptimer = ptimer;
     }
 }
 
