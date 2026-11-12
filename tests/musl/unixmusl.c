@@ -1415,6 +1415,13 @@ static void took_usr1(int signo)
  * leader looks. It then sends nothing and stays runnable, yielding, until
  * the receive ends, so a signal it took is that receive's only wake, and no
  * idle processor stands in for a lost deadline.
+ *
+ * A round counts as taken only when, after this thread took the signal,
+ * the leader is found asleep again before its receive has ended: only the
+ * receive sleeps in the leader, so it was in its wait when the signal came
+ * and went back to it. A receive that ended on its own while this thread was
+ * between its look and its kill, or that ended at the wake, leaves the round
+ * not taken.
  */
 static void *sibling_signals(void *arg)
 {
@@ -1445,7 +1452,12 @@ static void *sibling_signals(void *arg)
             for (j = 0; j < 64; j++) {
                 pthread_sigmask(SIG_UNBLOCK, &usr1, NULL);
             }
-            round_took = sibling_took != before;
+            if (sibling_took != before) {
+                while (stat_state(path) != 'S' && round_ended != round) {
+                    sched_yield();
+                }
+                round_took = round_ended != round;
+            }
         }
         round_sent = round;
         while (round_ended != round) {
@@ -1458,7 +1470,8 @@ static void *sibling_signals(void *arg)
 /**
  * Check that a receive under SO_RCVTIMEO still ends with EAGAIN when the
  * signal that wakes it is taken by a sibling thread: its wait then goes on,
- * and must keep its deadline, as Linux's does (net/unix/af_unix.c:2608).
+ * and must keep its deadline, as Linux's does (unix_stream_data_wait,
+ * net/unix/af_unix.c:2558-2590 in Linux 6.12).
  * Each round is one receive and one signal; the leader takes some of them,
  * which end its receive with EINTR, and the first round whose signal the
  * sibling took is judged. Nothing else wakes that receive, so a wait that
@@ -1522,11 +1535,13 @@ static int timed_after_signals(void)
 }
 
 /* The bytes a MSG_WAITALL receive asks for, the time limit in microseconds
- * of that receive, and the interval in microseconds at which the writer
- * sends them a byte at a time. */
-#define WAITALL_BYTES 8
-#define WAITALL_TIMEO 200000
-#define WAITALL_GAP   50000
+ * of that receive, the interval in microseconds at which the writer sends
+ * them a byte at a time, and the rounds `timed_waitall` tries for one in
+ * which a byte reaches the receive. */
+#define WAITALL_BYTES  8
+#define WAITALL_TIMEO  200000
+#define WAITALL_GAP    50000
+#define WAITALL_ROUNDS 5
 
 /* The receiving thread of `timed_waitall`, the process's leader, and
  * whether its receive ended. */
@@ -1561,40 +1576,49 @@ static void *waitall_writer(void *arg)
 /**
  * Check that a MSG_WAITALL receive under SO_RCVTIMEO ends at its one time
  * limit with the bytes it has, as Linux carries the remaining timeout
- * through each wait for more (net/unix/af_unix.c:2817, 2874): bytes that
- * come a quarter of the limit apart do not stretch the receive until it has
- * them all, which takes nearly twice the limit. A writer held off past the
- * limit leaves the receive nothing, EAGAIN, which is right too. Returns 0,
- * or 1 after the failure is printed.
+ * through each wait for more (net/unix/af_unix.c:2785, 2841 in Linux 6.12):
+ * bytes that come a quarter of the limit apart do not stretch the receive
+ * until it has them all, which takes nearly twice the limit. A round in
+ * which no byte came before the limit, a writer held off past it, ends with
+ * EAGAIN and never waited again with what was left; it is not judged, and
+ * another round is tried. Returns 0, or 1 after the failure is printed.
  */
 static int timed_waitall(void)
 {
     char buf[WAITALL_BYTES];
     struct timeval tv;
     pthread_t writer;
-    ssize_t n;
-    int sv[2], err;
+    ssize_t n = -1;
+    int sv[2], round, err = EAGAIN;
 
     tv.tv_sec = 0;
     tv.tv_usec = WAITALL_TIMEO;
     waitall_reader = getpid();
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
-        setsockopt(sv[0], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0 ||
-        pthread_create(&writer, NULL, waitall_writer, &sv[1]) != 0) {
-        return fail("setup for a timed MSG_WAITALL receive");
+    for (round = 0; round < WAITALL_ROUNDS && n == -1 && err == EAGAIN; round++) {
+        waitall_ended = 0;
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
+            setsockopt(sv[0], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0 ||
+            pthread_create(&writer, NULL, waitall_writer, &sv[1]) != 0) {
+            return fail("setup for a timed MSG_WAITALL receive");
+        }
+        if (round == 0) {
+            row_held();
+        }
+        n = recv(sv[0], buf, sizeof(buf), MSG_WAITALL);
+        err = errno;
+        waitall_ended = 1;
+        pthread_join(writer, NULL);
+        close(sv[0]);
+        close(sv[1]);
     }
-    row_held();
-    n = recv(sv[0], buf, sizeof(buf), MSG_WAITALL);
-    err = errno;
-    waitall_ended = 1;
-    pthread_join(writer, NULL);
     errno = err;
-    if (n >= WAITALL_BYTES || n == 0 || (n < 0 && err != EAGAIN)) {
+    if (n == -1 && err == EAGAIN) {
+        return fail("in no round did a byte reach the timed MSG_WAITALL receive before its limit");
+    }
+    if (n >= WAITALL_BYTES || n <= 0) {
         return fail("a MSG_WAITALL receive did not end at its time limit with part of its bytes");
     }
     row_held();
-    close(sv[0]);
-    close(sv[1]);
     return 0;
 }
 
