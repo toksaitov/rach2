@@ -643,11 +643,13 @@ int32_t kvm_irq_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
     return -ENOTTY;
 }
 
+/** KVM_CAP_SPLIT_IRQCHIP: the local APIC in the kernel, as irq.c sets it
+ * for the vCPUs made after. */
 int32_t kvm_irq_enable_split(struct kvm_vm *vm, const struct kvm_enable_cap *cap)
 {
-    (void)vm;
     (void)cap;
-    return -EINVAL;
+    vm->irqchip = KVM_IRQCHIP_SPLIT;
+    return 0;
 }
 
 int32_t kvm_irq_check_extension(long cap)
@@ -771,14 +773,42 @@ int kvm_lapic_ack(struct kvm_vcpu *v)
     return -1;
 }
 
+/* The APIC's register page of the vCPU of a VM with the local APIC in the
+ * kernel, vlapic.c's, for the one such vCPU a row runs at a time: TPR at
+ * 0x80, which the guest's MOV to CR8 writes without an exit under the TPR
+ * shadow. */
+static volatile uint32_t apic_page[1024] __attribute__((aligned(4096)));
+static int apic_irr = -1; /* the highest vector in IRR, -1 for none */
+static int ppr_updates;   /* `kvm_lapic_update_ppr`'s calls */
+
 uint64_t kvm_lapic_cr8(struct kvm_vcpu *v)
 {
-    return v->sregs.cr8;
+    return v->vm->irqchip != KVM_IRQCHIP_NONE ? (apic_page[0x80 / 4] >> 4) & 0xFu : v->sregs.cr8;
 }
 
 void kvm_lapic_set_cr8(struct kvm_vcpu *v, uint64_t cr8)
 {
-    v->sregs.cr8 = cr8;
+    if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
+        apic_page[0x80 / 4] = (uint32_t)(cr8 & 0xFu) << 4;
+    } else {
+        v->sregs.cr8 = cr8;
+    }
+}
+
+uintptr_t kvm_lapic_page(struct kvm_vcpu *v)
+{
+    return v->vm->irqchip != KVM_IRQCHIP_NONE ? (uintptr_t)apic_page : 0;
+}
+
+int kvm_lapic_highest_irr(struct kvm_vcpu *v)
+{
+    return v->vm->irqchip != KVM_IRQCHIP_NONE ? apic_irr : -1;
+}
+
+void kvm_lapic_update_ppr(struct kvm_vcpu *v)
+{
+    ppr_updates++;
+    kvm_vcpu_kick(v, KVM_REQ_EVENT);
 }
 
 int kvm_lapic_set_base(struct kvm_vcpu *v, uint64_t value, int host)
@@ -942,6 +972,10 @@ struct row {
     int panic;      /* a panic comes inside the run */
     uint64_t rip;   /* the guest's RIP at the exit, when it moved without one */
     uint32_t cs_ar; /* CS's access rights at the exit, when a far jump changed them */
+    /* The guest's MOV to CR8 under the TPR shadow, before the exit: the
+     * processor writes `tpr` to the virtual-APIC page without one. */
+    int tpr_write;
+    uint32_t tpr;
 };
 
 /* The VMCSes the model knows, one for each vCPU any row has run. */
@@ -1300,6 +1334,25 @@ static int check_injection(const uint64_t *f)
     return 1;
 }
 
+/** The checks of the TPR shadow without virtual-interrupt delivery (SDM
+ * 26.2.1.1): 1 when they pass. A page at 0 is the backend's fault alone,
+ * which would keep the guest's TPR in the host's page 0. */
+static int check_tpr_shadow(const uint64_t *f)
+{
+    uint64_t page = f[VIRTUAL_APIC_PAGE_ADDR];
+
+    if ((page & 0xFFFu) || !page) {
+        return fail("a virtual-APIC page misaligned or at 0");
+    }
+    if (f[TPR_THRESHOLD] & ~0xFull) {
+        return fail("a TPR threshold past bit 3");
+    }
+    if (f[TPR_THRESHOLD] > ((*(volatile uint32_t *)(uintptr_t)(page + 0x80u) >> 4) & 0xFu)) {
+        return fail("a TPR threshold above VTPR's class");
+    }
+    return 1;
+}
+
 /** The checks of the controls (SDM 26.2.1): 1 when they pass. */
 static int check_controls(const uint64_t *f)
 {
@@ -1327,6 +1380,9 @@ static int check_controls(const uint64_t *f)
     if ((f[MSR_BITMAP] & 0xFFFu) || (f[VM_ENTRY_MSR_LOAD_ADDR] & 0xFu) ||
         (f[VM_EXIT_MSR_STORE_ADDR] & 0xFu) || (f[VM_EXIT_MSR_LOAD_ADDR] & 0xFu)) {
         return fail("an MSR area misaligned");
+    }
+    if ((proc & PROC_TPR_SHADOW) && !check_tpr_shadow(f)) {
+        return 0;
     }
     return check_injection(f);
 }
@@ -1594,6 +1650,13 @@ static int m_run(struct kvm_regs *regs, uint64_t *cr2, int launched)
     if (r->panic) {
         k_panic_hook();
         longjmp(panic_jump, 1);
+    }
+    if (r->tpr_write) {
+        CHECK(f[CPU_BASED_VM_EXEC_CONTROL] & PROC_TPR_SHADOW,
+              "the guest writes CR8 without an exit only under the TPR shadow");
+        if (f[CPU_BASED_VM_EXEC_CONTROL] & PROC_TPR_SHADOW) {
+            *(volatile uint32_t *)(uintptr_t)(f[VIRTUAL_APIC_PAGE_ADDR] + 0x80u) = r->tpr;
+        }
     }
     exit_with(r);
     return VMX_OK;
@@ -1973,6 +2036,14 @@ static void probe_rows(void)
     CHECK(vmx_probe() && caps.perf_global, "the Lenovo's Haswell, 0x40651, does");
     cpuid_sig = 0x000306C3u;
     model_lenovo();
+    m.proc &= ~((uint64_t)PROC_TPR_SHADOW << 32);
+    CHECK(vmx_probe() && !caps.tpr_shadow &&
+              (caps.proc & (PROC_CR8_LOAD | PROC_CR8_STORE)) == (PROC_CR8_LOAD | PROC_CR8_STORE),
+          "no TPR shadow on a processor without it, and CR8's exits");
+    model_lenovo();
+    m.proc |= (uint64_t)PROC_CR8_STORE;
+    CHECK(vmx_probe() && !caps.tpr_shadow, "no TPR shadow where CR8's store exit is forced on");
+    model_lenovo();
     kvm_start();
     CHECK(kvm_backend == &kvm_vmx && registered && k_panic_hook == vmx_panic,
           "the Lenovo's processor probes, /dev/kvm is registered and the panic hook set");
@@ -1983,6 +2054,8 @@ static void probe_rows(void)
           "the pin controls and EPT, the unrestricted guest and VPID");
     CHECK(!(caps.proc & (PROC_CR3_LOAD | PROC_CR3_STORE | PROC_INVLPG)),
           "no CR3 or INVLPG exits under EPT");
+    CHECK(caps.tpr_shadow && !(caps.proc & PROC_TPR_SHADOW),
+          "the TPR shadow is the Lenovo's, taken for each vCPU with the APIC in the kernel");
     CHECK(vmx_cache(KVM_MT_WB, 1) == 0x70u && vmx_cache(KVM_MT_WB, 0) == 0x30u &&
               vmx_cache(KVM_MT_UC, 0) == 0,
           "EPT's memory types: write-back with IPAT, without, and uncached");
@@ -4437,6 +4510,98 @@ static void xsaves_rows(int vm)
     caps.proc2 = had;
 }
 
+/**
+ * The TPR shadow, as Linux's vmx.c keeps it, on a VM with the local APIC in
+ * the kernel: CR8's exits off and the APIC's page the virtual-APIC page;
+ * the guest's MOV to CR8, which writes the page's TPR without an exit,
+ * read back by KVM_GET_SREGS and the run page; the TPR threshold chosen at
+ * every entry, the class of a vector TPR holds back and 0 once TPR lets it
+ * through, never above TPR, which the model's entry checks, after TPR
+ * changed by the guest, by the APIC with no request for an injection and
+ * by KVM_SET_SREGS; the TPR-below-threshold
+ * exit, which brings PPR up to date and asks for an injection, the MOV
+ * done; and CR8's exits kept for a processor without the shadow.
+ */
+static void tpr_rows(void)
+{
+    struct kvm_userspace_memory_region region = {0, 0, 0, sizeof(ram), 0};
+    struct kvm_sregs sr;
+    struct row *w;
+    uint64_t *f, rip;
+    int vm, fd;
+
+    vm = dev(KVM_CREATE_VM, 0);
+    region.userspace_addr = (uint64_t)(uintptr_t)ram;
+    CHECK(fdio(vm, KVM_SET_USER_MEMORY_REGION, (uintptr_t)&region) == 0 &&
+              vm_cap(vm, KVM_CAP_SPLIT_IRQCHIP, 24) == 0,
+          "a VM of a slot and the local APIC in the kernel");
+    k_memset((void *)apic_page, 0, sizeof(apic_page));
+    apic_irr = -1;
+    ppr_updates = 0;
+    fd = make_vcpu(vm, 0);
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0, "a vCPU with the APIC in the kernel runs");
+    f = fields(fd);
+    CHECK((m.entry_proc & PROC_TPR_SHADOW) && !(m.entry_proc & (PROC_CR8_LOAD | PROC_CR8_STORE)),
+          "the guest runs under the TPR shadow, and CR8 does not exit");
+    CHECK(f[VIRTUAL_APIC_PAGE_ADDR] == (uintptr_t)apic_page && f[TPR_THRESHOLD] == 0,
+          "the APIC's page is the virtual-APIC page, with no threshold while nothing waits");
+
+    w = script(EXIT_CPUID, 0, 2);
+    w->tpr_write = 1;
+    w->tpr = 0x60;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && sregs_of(fd).cr8 == 6 && run_of(fd)->cr8 == 6,
+          "the guest's MOV CR8, 6, done without an exit, is KVM_GET_SREGS's and the run page's");
+    apic_irr = 0x51;
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 && f[TPR_THRESHOLD] == 5,
+          "with vector 0x51 waiting under TPR 0x60, the threshold is its class, 5");
+
+    rip = regs_of(fd).rip;
+    w = script(EXIT_TPR_BELOW, 0, 0);
+    w->tpr_write = 1;
+    w->tpr = 0x40;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && run_of(fd)->exit_reason == KVM_EXIT_HLT && ppr_updates == 1 &&
+              regs_of(fd).rip == rip + 1,
+          "the guest's MOV CR8, 4, below the threshold exits: PPR is brought up to date, and "
+          "only HLT steps RIP");
+    CHECK(f[TPR_THRESHOLD] == 0 && sregs_of(fd).cr8 == 4,
+          "the next entry's threshold is 0, since TPR 0x40 lets vector 0x51 through");
+
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 && f[TPR_THRESHOLD] == 0, "the threshold stays 0");
+    apic_page[0x80 / 4] = 0x60;
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 && f[TPR_THRESHOLD] == 5,
+          "TPR raised over the vector again, the threshold is 5");
+    apic_page[0x80 / 4] = 0x00;
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 && run_of(fd)->exit_reason == KVM_EXIT_HLT &&
+              f[TPR_THRESHOLD] == 0,
+          "TPR lowered with no request for an injection, as an MMIO write does while a vector "
+          "in service holds PPR, the next entry's threshold is 0, which its check of VTPR passes");
+    apic_page[0x80 / 4] = 0x60;
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 && f[TPR_THRESHOLD] == 5, "the threshold is 5 again");
+    sr = sregs_of(fd);
+    sr.cr8 = 0;
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&sr) == 0 && apic_page[0x80 / 4] == 0 &&
+              exits(fd, EXIT_CPUID, 0, 2) == 0 && f[TPR_THRESHOLD] == 0,
+          "KVM_SET_SREGS's CR8 of 0 writes the page's TPR, and the next entry's threshold is 0");
+    apic_irr = -1;
+    fdclose(fd);
+
+    caps.tpr_shadow = 0;
+    fd = make_vcpu(vm, 1);
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 && !(m.entry_proc & PROC_TPR_SHADOW) &&
+              (m.entry_proc & (PROC_CR8_LOAD | PROC_CR8_STORE)) ==
+                  (PROC_CR8_LOAD | PROC_CR8_STORE) &&
+              fields(fd)[VIRTUAL_APIC_PAGE_ADDR] == 0,
+          "without the shadow CR8 exits, and no virtual-APIC page is given");
+    set_regs(fd, 0x1000, 3, 0, 0);
+    CHECK(exits(fd, EXIT_CR_ACCESS, 8, 4) == 0 && apic_page[0x80 / 4] == 0x30,
+          "and its MOV CR8, 3, exits to set the APIC's TPR");
+    caps.tpr_shadow = 1;
+    fdclose(fd);
+    fdclose(vm);
+}
+
 /** What Linux's selftests ask of the guest's side, on a vCPU of its own
  * on `vm` in protected mode. The rows change the VM's capabilities, so
  * they come last. */
@@ -4485,6 +4650,7 @@ int main(void)
     ts_rows(vm);
     hv_rows(vm);
     selftest_rows(vm);
+    tpr_rows();
     CHECK(m.ud == 0 && m.gp == 0 && m.bad_writes == 0 && m.bad_reads == 0,
           "no VMX instruction outside VMX operation and no field the VMCS lacks, over every row");
     fdclose(fd);
