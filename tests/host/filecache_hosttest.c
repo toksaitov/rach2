@@ -208,6 +208,118 @@ int32_t vfs_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, uin
     return -EIO;
 }
 
+/* The readahead's workers and the calls they make. No row reads a file,
+   so no job is queued, and `current_proc` is NULL, which queues none. */
+
+/** A request's most sectors; no row asks. */
+uint32_t block_max_sectors(block_device_t *device)
+{
+    (void)device;
+    return BLOCK_REQ_MAX_SECTORS;
+}
+
+/** No row enters a mount. */
+int vfs_enter(struct vfs_mount *mnt)
+{
+    (void)mnt;
+    check(0, "no row queues a readahead");
+    return -EBUSY;
+}
+
+/** No row leaves a mount. */
+void vfs_leave(struct vfs_mount *mnt)
+{
+    (void)mnt;
+    check(0, "no row queues a readahead");
+}
+
+/** No row holds a description. */
+void fd_ofd_ref(struct open_file *ofd)
+{
+    (void)ofd;
+    check(0, "no row queues a readahead");
+}
+
+/** No row lets one go. */
+void fd_ofd_unref(struct open_file *ofd)
+{
+    (void)ofd;
+    check(0, "no row queues a readahead");
+}
+
+/** No row waits for a job. */
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    (void)cond;
+    (void)arg;
+    check(0, "no row waits for a readahead");
+    return 0;
+}
+
+/** No worker runs. */
+int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    (void)cond;
+    (void)arg;
+    check(0, "no worker runs");
+    return 0;
+}
+
+/** Nobody sleeps to be woken. */
+void wq_wake_all(wait_queue_t *wq)
+{
+    (void)wq;
+}
+
+/** No worker runs. */
+void arch_irq_enable(void)
+{}
+
+/** No worker runs. */
+void sched_service_point(void)
+{}
+
+/** No worker is made. */
+uintptr_t kstack_alloc(void)
+{
+    check(0, "no worker is made");
+    return 0;
+}
+
+/** No worker is made. */
+void kstack_free(uintptr_t top)
+{
+    (void)top;
+}
+
+/** No worker is made. */
+process_t *alloc_process(void)
+{
+    return NULL;
+}
+
+/** No worker is made. */
+void proc_set_comm(process_t *p, const char *path)
+{
+    (void)p;
+    (void)path;
+}
+
+/** No worker is made. */
+void setup_process_stack(process_t *proc, void (*entry_point)(void))
+{
+    (void)proc;
+    (void)entry_point;
+}
+
+/** No worker is made. */
+void sched_make_ready(process_t *p)
+{
+    (void)p;
+}
+
 /* Run once at the restore `restore_countdown` counts down to, then
    cleared. */
 static void (*restore_hook)(void);

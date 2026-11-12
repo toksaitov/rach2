@@ -6261,37 +6261,56 @@ long sys_syncfs(isr_params_t *params)
     return sys_sync(params);
 }
 
-/**
- * Advise the kernel of reads to come (readahead).
- *
- * Its arguments are the descriptor, the offset and the count, the offset in
- * one register on x86-64 and in two on i386, which only the descriptor, the
- * first on both, matters for here: the page cache fills on demand, so there
- * is nothing to start early, and the call returns 0, as Linux does once it
- * has queued the reads. -EBADF for a descriptor not open for reading, and
- * -EINVAL for one that is not a regular file, as on Linux.
- */
-long sys_readahead(isr_params_t *params)
+/* The advice of posix_fadvise(2), as x86 numbers it. */
+#define POSIX_FADV_NORMAL_     0u
+#define POSIX_FADV_RANDOM_     1u
+#define POSIX_FADV_SEQUENTIAL_ 2u
+#define POSIX_FADV_WILLNEED_   3u
+#define POSIX_FADV_DONTNEED_   4u
+#define POSIX_FADV_NOREUSE_    5u
+
+long ksys_readahead(int fd, uint64_t offset, uint64_t count)
 {
     fd_entry_t *e;
 
     if (!current_proc) {
         return -ESRCH;
     }
-    e = fd_get(current_proc->fds, (int)SC_ARG(params, 0));
+    e = fd_get(current_proc->fds, fd);
     if (!e || (e->flags & FD_FLAG_PATH) || !(e->flags & FD_FLAG_READ)) {
         return -EBADF;
     }
-    return e->type == FD_TYPE_FILE ? 0 : -EINVAL;
+    if (e->type != FD_TYPE_FILE) {
+        return -EINVAL;
+    }
+    return ksys_fadvise64(fd, (long long)offset, (long long)count, POSIX_FADV_WILLNEED_);
 }
 
 /**
- * The page cache has one policy for every file, so the advice changes nothing;
- * GNU `cp`, `cat` and `sort` give it and do not look at the result.
+ * readahead(2) as x86-64 has it: the descriptor, the offset and the count,
+ * one register each. i386's form, which splits the offset, is in
+ * arch/i686/sys_ia32.c.
  */
-long ksys_fadvise64(int fd, long long len, uint32_t advice)
+long sys_readahead(isr_params_t *params)
+{
+    return ksys_readahead((int)SC_ARG(params, 0), (uint64_t)SC_ARG(params, 1),
+                          (uint64_t)SC_ARG(params, 2));
+}
+
+/**
+ * The advice a description keeps sets its readahead (`ofd->ra`), as Linux's
+ * `generic_fadvise` sets `f_ra.ra_pages` and FMODE_RANDOM (mm/fadvise.c:
+ * 76-98): POSIX_FADV_NORMAL the default window and no RANDOM, RANDOM a read
+ * of what is asked alone, and SEQUENTIAL twice the default window and no
+ * RANDOM. WILLNEED queues the range's reads and DONTNEED drops its pages
+ * from the file page cache (`filecache_willneed`, `filecache_dontneed`);
+ * NOREUSE changes nothing, as on Linux, whose flag only its page ageing
+ * reads.
+ */
+long ksys_fadvise64(int fd, long long offset, long long len, uint32_t advice)
 {
     fd_entry_t *e;
+    struct open_file *ofd;
 
     if (!current_proc) {
         return -ESRCH;
@@ -6303,7 +6322,35 @@ long ksys_fadvise64(int fd, long long len, uint32_t advice)
     if (e->type == FD_TYPE_PIPE) {
         return -ESPIPE;
     }
-    return len < 0 || advice > 5 ? -EINVAL : 0;
+    if (len < 0 || advice > POSIX_FADV_NOREUSE_) {
+        return -EINVAL;
+    }
+    ofd = e->ofd;
+    if (!ofd) {
+        return 0;
+    }
+    switch (advice) {
+    case POSIX_FADV_NORMAL_:
+        ofd->ra.ra_pages = 0;
+        ofd->ra.random = 0;
+        break;
+    case POSIX_FADV_RANDOM_:
+        ofd->ra.random = 1;
+        break;
+    case POSIX_FADV_SEQUENTIAL_:
+        ofd->ra.ra_pages = 2u * FILE_RA_PAGES;
+        ofd->ra.random = 0;
+        break;
+    case POSIX_FADV_WILLNEED_:
+        filecache_willneed(ofd, (uint64_t)offset, (uint64_t)len);
+        break;
+    case POSIX_FADV_DONTNEED_:
+        filecache_dontneed(ofd, (uint64_t)offset, (uint64_t)len);
+        break;
+    default:
+        break;
+    }
+    return 0;
 }
 
 /**
@@ -6313,7 +6360,7 @@ long ksys_fadvise64(int fd, long long len, uint32_t advice)
  */
 long sys_fadvise64(isr_params_t *params)
 {
-    return ksys_fadvise64((int)SC_ARG(params, 0), SC_SIGNED(params, 2),
+    return ksys_fadvise64((int)SC_ARG(params, 0), SC_SIGNED(params, 1), SC_SIGNED(params, 2),
                           (uint32_t)SC_ARG(params, 3));
 }
 

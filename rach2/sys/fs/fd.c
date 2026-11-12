@@ -207,7 +207,8 @@ static struct ofd_rec *ofd_rec_of(struct open_file *ofd)
 
 /**
  * A new open file description on the live list, with one reference, the next
- * serial, zero offsets and no status flags; NULL when the heap has no room.
+ * serial, zero offsets, no status flags and no read yet for its readahead;
+ * NULL when the heap has no room.
  */
 static struct open_file *ofd_alloc(void)
 {
@@ -223,6 +224,7 @@ static struct open_file *ofd_alloc(void)
         return NULL;
     }
     rec->ofd.refcount = 1;
+    rec->ofd.ra.prev_pos = ~(uint64_t)0;
     rec->creator = current_proc ? current_proc->tgid : 0;
     wait_queue_init(&rec->wq);
     flags = spin_lock_irqsave(&ofd_lock);

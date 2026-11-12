@@ -81,17 +81,26 @@ long sys_ia32_fallocate(isr_params_t *params)
  * first, a 32-bit length, which is never negative, and the advice. */
 long sys_ia32_fadvise64(isr_params_t *params)
 {
-    return ksys_fadvise64((int)SC_ARG(params, 0), (long long)(uint32_t)SC_ARG(params, 3),
-                          (uint32_t)SC_ARG(params, 4));
+    return ksys_fadvise64((int)SC_ARG(params, 0),
+                          (long long)ia32_join(SC_ARG(params, 1), SC_ARG(params, 2)),
+                          (long long)(uint32_t)SC_ARG(params, 3), (uint32_t)SC_ARG(params, 4));
 }
 
 /** fadvise64_64(2), which musl calls: the descriptor, the offset and the
  * length each in two arguments low word first, and the advice. */
 long sys_ia32_fadvise64_64(isr_params_t *params)
 {
-    return ksys_fadvise64((int)SC_ARG(params, 0),
-                          (long long)ia32_join(SC_ARG(params, 3), SC_ARG(params, 4)),
-                          (uint32_t)SC_ARG(params, 5));
+    return ksys_fadvise64(
+        (int)SC_ARG(params, 0), (long long)ia32_join(SC_ARG(params, 1), SC_ARG(params, 2)),
+        (long long)ia32_join(SC_ARG(params, 3), SC_ARG(params, 4)), (uint32_t)SC_ARG(params, 5));
+}
+
+/** readahead(2): the descriptor, the offset in two arguments low word
+ * first, and the count. */
+long sys_ia32_readahead(isr_params_t *params)
+{
+    return ksys_readahead((int)SC_ARG(params, 0), ia32_join(SC_ARG(params, 1), SC_ARG(params, 2)),
+                          (uint64_t)SC_ARG(params, 3));
 }
 
 /* The bits of a futex operation that name the command. */
