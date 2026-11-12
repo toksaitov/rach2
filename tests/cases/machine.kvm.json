@@ -613,7 +613,7 @@
         "program": "kvm_scenario",
         "stdin": null,
         "role": "ordinary",
-        "privileges": "the runner starts as root in the guest, which mounts the data disk; drmfuzz's child drops to uid and gid 65534 before it opens /dev/kvm",
+        "privileges": "the runner starts as root in the guest, which mounts the data disk and grants /dev/kvm mode 0666 for this command, restoring its original mode on exit; drmfuzz's child drops to uid and gid 65534 before it opens /dev/kvm",
         "isolation": [
           {
             "fixture": "scratch"
@@ -639,7 +639,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run drmfuzz kvm 20000 1, which drops to nobody, opens /dev/kvm as nobody, makes from that descriptor a VM with a slot and a vCPU and makes 20000 random calls of KVM's ioctls on them and on /dev/kvm"
+          "does": "save /dev/kvm's mode, grant mode 0666, run drmfuzz kvm 20000 1, and restore the mode on exit; drmfuzz drops to nobody, opens /dev/kvm as nobody, makes from that descriptor a VM with a slot and a vCPU and makes 20000 random calls of KVM's ioctls on them and on /dev/kvm"
         }
       ],
       "machines": [
