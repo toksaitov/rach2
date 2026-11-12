@@ -6,7 +6,7 @@
  * structures.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
- * host-deps: rach2/sys/lib/kstd.c
+ * host-deps: rach2/sys/lib/kstd.c rach2/sys/cmdline.c
  * host-deps: tests/host/compat/resv_host.c
  * host-deps: tests/host/compat/mutex_none.c
  * host-deps: tests/host/compat/spinlock_host.c
@@ -119,32 +119,6 @@ static void model_reset(int edid)
 }
 
 /* ---- the kernel around the driver ---- */
-
-static int nomodeset;
-
-/** The boot line: `nomodeset` while the row sets it. */
-int kcmdline_setup(const char *str)
-{
-    return nomodeset && strcmp(str, "nomodeset") == 0;
-}
-
-/** No `bochs.modeset=` word. */
-int kcmdline_count(const char *key)
-{
-    (void)key;
-    return 0;
-}
-
-/** No option has a value. */
-int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
-{
-    (void)key;
-    (void)nth;
-    if (outlen > 0) {
-        out[0] = '\0';
-    }
-    return 0;
-}
 
 /** Refused: the ports are never used with BAR 2 present. */
 void outb(uint16_t port, uint8_t val)
@@ -898,9 +872,9 @@ static void row_probe(void)
     model_reset(1);
     fn_present = 1;
     vga_fn.bar[2] = 0x81000000u;
-    nomodeset = 1;
+    (void)kcmdline_capture("nomodeset");
     CHECK(bochs_probe() == -ENODEV && nremoved == 0 && registered == 0, "nomodeset binds nothing");
-    nomodeset = 0;
+    (void)kcmdline_capture("");
     vram_bar_size = 2u << 20;
     CHECK(bochs_probe() == -ENODEV && nremoved == 0 && registered == 0,
           "a function with 2 MiB of video memory is refused");

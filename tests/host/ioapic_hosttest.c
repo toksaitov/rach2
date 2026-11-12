@@ -7,6 +7,7 @@
  *
  * host-deps: rach2/sys/arch/x86/ioapic.c rach2/sys/arch/x86/pic.c
  * host-deps: rach2/sys/cmdline.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/kirq_none.c
  *
  * The I/O APIC is a model of one chip's registers, by the index its select

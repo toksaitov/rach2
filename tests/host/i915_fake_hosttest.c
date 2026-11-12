@@ -119,6 +119,20 @@ int kcmdline_has(const char *flag)
     return cmdline_fake && strcmp(flag, "rach2.i915fake") == 0;
 }
 
+/** No `nomodeset` on the boot line. */
+int kcmdline_setup(const char *str)
+{
+    (void)str;
+    return 0;
+}
+
+/** No module parameter on the boot line. */
+int kcmdline_param_int(const char *key, int dflt)
+{
+    (void)key;
+    return dflt;
+}
+
 static uint32_t udelays;
 
 void k_udelay(uint32_t usec)

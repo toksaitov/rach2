@@ -7,11 +7,9 @@
 #include "drm.h"
 
 #include "../arch/x86/portio.h"
-#include "../boot.h"
 #include "../cmdline.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
-#include "../lib/kstd.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
@@ -908,37 +906,16 @@ static int32_t bochs_pci_probe(pci_device_t *pdev)
     return err;
 }
 
-/**
- * The `bochs.modeset` module parameter, as Linux keeps it
- * (drivers/gpu/drm/tiny/bochs.c, lines 53 to 57): -1 unless a word gives
- * it a value param_set_int takes, read by kstrtoint in base 0, the last such
- * word winning; a bare word or a value that is no int sets nothing, as
- * parse_one refuses it (kernel/params.c, lines 117 to 157).
- */
-static int bochs_modeset(void)
-{
-    char text[BOOT_CMDLINE_MAX];
-    long long v;
-    int i, n = kcmdline_count("bochs.modeset"), modeset = -1;
-
-    for (i = 0; i < n; i++) {
-        if (kcmdline_value_nth("bochs.modeset", i, text, sizeof(text)) &&
-            k_strtoll(text, sizeof(text), &v) == 0 && v >= -0x7FFFFFFFLL - 1 && v <= 0x7FFFFFFFLL) {
-            modeset = (int)v;
-        }
-    }
-    return modeset;
-}
-
-/** The driver binds unless `bochs.modeset` is 0, or is -1 under
- * `nomodeset`, as drm_pci_register_driver_if_modeset decides
+/** The driver binds unless `bochs.modeset`, Linux's int module parameter
+ * of -1 (drivers/gpu/drm/tiny/bochs.c, lines 53 to 57), is 0, or is -1
+ * under `nomodeset`, as drm_pci_register_driver_if_modeset decides
  * (include/drm/drm_module.h, lines 61 to 70). */
 int32_t bochs_probe(void)
 {
     pci_device_t pdev;
     int32_t err, bound = 0;
     uint32_t i;
-    int nth, modeset = bochs_modeset();
+    int nth, modeset = kcmdline_param_int("bochs.modeset", -1);
 
     if (modeset == 0 || (modeset == -1 && kcmdline_setup("nomodeset"))) {
         return -ENODEV;

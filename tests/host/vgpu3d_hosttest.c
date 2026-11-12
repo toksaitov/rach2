@@ -1,5 +1,6 @@
 /* vgpu3d_hosttest.c: virgl commands, pipelining and reset over the 2D model.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/cmdline.c rach2/sys/lib/kstd.c
  * host-deps: tests/host/compat/atomic_host.c tests/host/compat/resv_host.c
  * host-deps: tests/host/compat/mutex_none.c
  * Returns 0 when the new 3D rows pass. The included 2D rows do not run, and

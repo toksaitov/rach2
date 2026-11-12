@@ -6,6 +6,7 @@
  * virtio_gpu64_hosttest.c runs the same rows with x86-64's structures.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/cmdline.c rach2/sys/lib/kstd.c
  * host-deps: tests/host/compat/atomic_host.c tests/host/compat/resv_host.c
  * host-deps: tests/host/compat/mutex_none.c
  *
@@ -30,11 +31,12 @@
  * sends one hotplug; the driver's ioctls; a buffer's last reference, which
  * unrefs its resource and frees its pages once the host answers; virtio-vga,
  * which removes the firmware's framebuffer from its memory BARs; a device with
- * no scanout, which has no KMS; an unplug, which fails the commands still out
- * with ENODEV and leaves nothing allocated once the last reference goes; and a
- * reset over a transport whose backing is its own heap, which zaps an object no
- * one exported and gives its frames back, and leaves an exported object its
- * frames until it is freed.
+ * no scanout, which has no KMS; `nomodeset` and `virtio_gpu.modeset` on the
+ * boot line, which refuse the device or bind it; an unplug, which fails the
+ * commands still out with ENODEV and leaves nothing allocated once the last
+ * reference goes; and a reset over a transport whose backing is its own heap,
+ * which zaps an object no one exported and gives its frames back, and leaves an
+ * exported object its frames until it is freed.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -2442,6 +2444,29 @@ static void row_no_scanout(void)
           "no KMS, a render node, and no display read");
 }
 
+/** The boot line: `nomodeset` refuses the device with EINVAL, logged, while
+ * `virtio_gpu.modeset` is -1, as does `virtio_gpu.modeset=0`, and any
+ * other value, `-` and `_` alike in its name, binds it, as Linux's
+ * virtio_gpu_probe decides. */
+static void row_nomodeset(void)
+{
+    int before;
+
+    unbind();
+    model_reset();
+    (void)kcmdline_capture("nomodeset");
+    before = warnings;
+    CHECK(bind() == -EINVAL && vg == NULL && warnings == before + 1,
+          "nomodeset refuses the device, logged");
+    (void)kcmdline_capture("virtio_gpu.modeset=0");
+    CHECK(bind() == -EINVAL && vg == NULL, "virtio_gpu.modeset=0 refuses the device");
+    (void)kcmdline_capture("nomodeset virtio_gpu.modeset=x");
+    CHECK(bind() == -EINVAL && vg == NULL, "a value that is no int leaves modeset at -1");
+    (void)kcmdline_capture("nomodeset virtio-gpu.modeset=1");
+    CHECK(bind() == 1 && vg != NULL, "virtio_gpu.modeset=1 binds under nomodeset");
+    (void)kcmdline_capture("");
+}
+
 /** Unplug with a command out: its fence fails with ENODEV, and the last
  * reference leaves nothing. */
 static void row_unplug(void)
@@ -2527,6 +2552,7 @@ int main(void)
     row_hotplug();
     row_vga();
     row_no_scanout();
+    row_nomodeset();
     row_unplug();
     row_reset_heap();
     CHECK(allocations == 0, "nothing is left allocated");

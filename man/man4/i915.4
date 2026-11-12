@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 12, 2026
 .Dt I915 4
 .Os
 .Sh NAME
@@ -32,6 +32,15 @@ The driver binds a device only when the kernel command line has
 .Cm rach2.i915 .
 Without it the kernel logs the device and leaves the screen to the
 firmware's framebuffer.
+.Cm i915.modeset=0 ,
+or
+.Cm nomodeset
+unless an
+.Cm i915.modeset
+word gives another value than \-1, keeps the driver off, the fake
+device's included, as on Linux, and the kernel logs
+.Dq i915: KMS disabled ;
+the last word whose value is an integer counts.
 .Pp
 With
 .Cm rach2.i915.disable_display

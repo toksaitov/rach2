@@ -14,6 +14,7 @@
 #include "i915_reg.h"
 
 #include "../../arch/arch.h"
+#include "../../cmdline.h"
 #include "../../fs/debugfs.h"
 #include "../../iommu.h"
 #include "../../klog.h"
@@ -444,8 +445,8 @@ static void driver_caps(struct emit *e)
 }
 
 /* The module's parameters at Linux's defaults, of a Linux built without a
- * request timeout, which the driver lacks; reset and enable_hangcheck
- * change in i915_params. */
+ * request timeout, which the driver lacks; modeset comes from the boot
+ * line, and reset and enable_hangcheck change in i915_params. */
 static const char *const i915_params[] = {"i915.modeset=-1",
                                           "i915.enable_guc=0",
                                           "i915.guc_log_level=-1",
@@ -466,13 +467,16 @@ static const char *const i915_params[] = {"i915.modeset=-1",
                                           "i915.enable_debug_only_api=no"};
 
 /** Linux's i915_params_dump of the parameters `p`: the table's lines, with
- * reset and enable_hangcheck as `p` has them. */
+ * modeset as the boot line gives it and reset and enable_hangcheck as `p`
+ * has them. */
 static void emit_params(struct emit *e, const struct i915_params *p)
 {
     uint32_t i;
 
     for (i = 0; i < NELEM(i915_params); i++) {
-        if (is_word(i915_params[i], 10, "i915.reset")) {
+        if (is_word(i915_params[i], 12, "i915.modeset")) {
+            emitf(e, "i915.modeset=%d\n", kcmdline_param_int("i915.modeset", -1));
+        } else if (is_word(i915_params[i], 10, "i915.reset")) {
             emitf(e, "i915.reset=%u\n", p->reset_set ? p->reset : 3u);
         } else if (is_word(i915_params[i], 21, "i915.enable_hangcheck")) {
             emitf(e, "i915.enable_hangcheck=%s\n", yes_no(!p->hangcheck_off));

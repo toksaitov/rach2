@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 12, 2026
 .Dt VIRTIO-GPU 4
 .Os
 .Sh NAME
@@ -35,6 +35,15 @@ Under virtio-vga the driver first removes the firmware's framebuffer from
 every memory BAR of the device, so that
 .Xr fbdrm 4
 leaves the screen to it and the machine has one card.
+.Cm virtio_gpu.modeset=0
+on the kernel command line keeps the driver off, and so does
+.Cm nomodeset ,
+unless a
+.Cm virtio_gpu.modeset
+word gives another value than \-1, as on Linux; the last word whose value
+is an integer counts.
+A device refused so is logged
+.Dq virtio_gpu: refused: gpu N: error -22 .
 .Pp
 A bound device is a DRM device, as
 .Xr drm 4

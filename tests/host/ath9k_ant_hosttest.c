@@ -7,6 +7,7 @@
  * host-deps: rach2/sys/network/driver/ath9k/antenna.c
  * host-deps: rach2/sys/network/driver/ath9k/power.c
  * host-deps: rach2/sys/cmdline.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kctypes.c rach2/sys/proc/suspend.c
  */
 #include "ath9k_model.h"

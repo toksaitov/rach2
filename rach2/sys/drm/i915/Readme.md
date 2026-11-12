@@ -4,7 +4,7 @@
 
 ## Use
 
-The driver binds a chip only when the kernel command line has `rach2.i915` ([cmdline](../../../cmdline.md)). `drm_start` calls `i915_probe` through `arch_drm_probe(ARCH_DRM_NATIVE)`, after bochs and before the firmware framebuffer's driver. A bind on the Lenovo logs:
+The driver binds a chip only when the kernel command line has `rach2.i915` ([cmdline](../../../cmdline.md)). `i915.modeset=0`, or `nomodeset` while `i915.modeset` is -1, keeps the whole driver off, the fake chip included, as Linux's `i915_check_nomodeset` keeps the module from loading, and the probe logs `i915: KMS disabled`. `drm_start` calls `i915_probe` through `arch_drm_probe(ARCH_DRM_NATIVE)`, after bochs and before the firmware framebuffer's driver. A bind on the Lenovo logs:
 
     i915: stolen: [mem 0xaba00000-0xaf9fffff], N KiB usable, inside the device's reserved region; DMAR active, no buffers in it
     i915: gtt: pipe A's firmware surface at 0x0, 4128 KiB, kept

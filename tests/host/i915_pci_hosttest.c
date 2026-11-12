@@ -36,15 +36,16 @@
  * and the card has no directory in /sys here.
  *
  * The rows: the id table against Linux 6.12's Haswell GT2 ids; the probe
- * without and with rach2.i915; the bind to the model, with every source
- * masked and cleared before the message is enabled and only the master
- * enable and the rings' user interrupts enabled after, the configuration
- * words read, the command word's decoding and mastering on, and the DRM
- * device's identity and features; the refusals of another function, an
- * unset BAR 0, another vendor and an unknown id; a machine without
- * messages and a message that will not enable; a registration that fails
- * and leaves the device as found; the unplug hook; and the boundary's
- * accesses past its size and its bounded waits on the model's clock.
+ * without and with rach2.i915, and under nomodeset and i915.modeset as Linux's
+ * i915_check_nomodeset reads them; the bind to the model, with every source
+ * masked and cleared before the message is enabled and only the master enable
+ * and the rings' user interrupts enabled after, the configuration words read,
+ * the command word's decoding and mastering on, and the DRM device's identity
+ * and features; the refusals of another function, an unset BAR 0, another
+ * vendor and an unknown id; a machine without messages and a message that will
+ * not enable; a registration that fails and leaves the device as found; the
+ * unplug hook; and the boundary's accesses past its size and its bounded waits
+ * on the model's clock.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -79,6 +80,8 @@ static int fails;
 
 static struct i915_model *bus; /* the chip on the bus, or NULL */
 static int cmdline_i915;       /* rach2.i915 given */
+static int cmdline_nomodeset;  /* nomodeset given */
+static int cmdline_modeset;    /* i915.modeset's value, -1 when not given */
 static int msi_ready = 1, msi_refuse, register_error;
 static int vectors, vectors_freed, handlers, msi_enables, msi_disables;
 static long msi_enabled_at = -1;
@@ -104,6 +107,16 @@ void klog(int level, const char *subsystem, const char *format, ...)
 int kcmdline_has(const char *flag)
 {
     return cmdline_i915 && strcmp(flag, "rach2.i915") == 0;
+}
+
+int kcmdline_setup(const char *str)
+{
+    return cmdline_nomodeset && strcmp(str, "nomodeset") == 0;
+}
+
+int kcmdline_param_int(const char *key, int dflt)
+{
+    return strcmp(key, "i915.modeset") == 0 ? cmdline_modeset : dflt;
 }
 
 /** The card's directory in /sys: none, so the driver adds no files. */
@@ -595,6 +608,8 @@ static void fresh(struct i915_model *m)
     udelays = 0;
     frames = frames_freed = 0;
     cmdline_i915 = 0;
+    cmdline_nomodeset = 0;
+    cmdline_modeset = -1;
 }
 
 /** Unplug and drop what a row bound, and take the model off the bus. */
@@ -641,7 +656,8 @@ static void row_ids(void)
                   (I915_ENGINE_RCS0 | I915_ENGINE_BCS0 | I915_ENGINE_VCS0 | I915_ENGINE_VECS0));
 }
 
-/** The probe without rach2.i915, and on a bus without the chip. */
+/** The probe without rach2.i915, on a bus without the chip, and under
+ * nomodeset and i915.modeset. */
 static void row_probe_gated(void)
 {
     struct i915_model m;
@@ -657,6 +673,26 @@ static void row_probe_gated(void)
     bus = 0;
     cmdline_i915 = 1;
     CHECK("gated: no device on an empty bus", i915_probe() == -ENODEV);
+    done(&m);
+
+    fresh(&m);
+    cmdline_i915 = 1;
+    cmdline_nomodeset = 1;
+    CHECK("gated: nomodeset binds nothing",
+          i915_probe() == -ENODEV && maps == 0 && registered == 0);
+    done(&m);
+
+    fresh(&m);
+    cmdline_i915 = 1;
+    cmdline_modeset = 0;
+    CHECK("gated: i915.modeset=0 binds nothing", i915_probe() == -ENODEV && registered == 0);
+    done(&m);
+
+    fresh(&m);
+    cmdline_i915 = 1;
+    cmdline_nomodeset = 1;
+    cmdline_modeset = 1;
+    CHECK("gated: i915.modeset=1 binds under nomodeset", i915_probe() == 1 && registered == 1);
     done(&m);
 }
 

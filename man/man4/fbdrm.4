@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 12, 2026
 .Dt FBDRM 4
 .Os
 .Sh NAME
@@ -32,10 +32,16 @@ device decodes; then
 binds nothing and the kernel logs
 .Dq fbdrm: framebuffer at ADDRESS is a native driver's .
 .Cm nomodeset
-on the kernel command line keeps the native drivers off and leaves the
-screen to
+on the kernel command line keeps the native drivers off,
+.Xr bochs 4 ,
+.Xr virtio-gpu 4
+and
+.Xr i915 4 ,
+and leaves the screen to
 .Nm ,
-as on Linux.
+as on Linux, unless a driver's
+.Cm modeset
+parameter gives another value than \-1.
 .Pp
 A bound framebuffer is a DRM device, as
 .Xr drm 4
@@ -110,6 +116,8 @@ The card node of the bound framebuffer.
 .Xr bochs 4 ,
 .Xr console 4 ,
 .Xr drm 4 ,
+.Xr i915 4 ,
+.Xr virtio-gpu 4 ,
 .Xr drm-kms 7
 .Sh HISTORY
 The driver follows Linux 6.12's simpledrm, whose identity, mode, formats
