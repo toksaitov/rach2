@@ -10,28 +10,31 @@
  * host-deps: tests/host/compat/mutex_none.c
  *
  * The rows: a bind with EDID, which reads the EDID and then the displays,
- * fences each command with the next id, and lists Linux's 26 modes of
- * QEMU's EDID with the EDID property, one CRTC, a primary and a cursor
- * plane and no IN_FORMATS; a bind without EDID, whose preferred mode is the
- * display's size among the DMT modes; a dumb buffer whose 2D resource is
- * backed by one entry for adjacent pages; SETCRTC, which sets the scanout,
- * copies the whole buffer to the host and flushes it; DIRTYFB, which copies
- * and flushes the clip alone, from its offset in the buffer; scattered
- * pages, whose entries go on past the command's page into extra pages; a
- * queue too small for the commands, which holds the rest until answers
- * make room, in order; an error answer, which fails the fence with EIO; a
- * device that never answers, whose waiter gives up after five seconds and
- * whose late answer the reaper frees; the cursor, set with its hotspot and
- * then moved; a display change, served at the next open, which rereads the
- * EDID and the displays, clears the event and sends one hotplug; the
- * driver's ioctls; a buffer's last reference, which unrefs its resource
- * and frees its pages once the host answers; virtio-vga, which removes the
- * firmware's framebuffer from its memory BARs; a device with no scanout,
- * which has no KMS; an unplug, which fails the commands still out with
- * ENODEV and leaves nothing allocated once the last reference goes; and a
- * reset over a transport whose backing is its own heap, which zaps an
- * object no one exported and gives its frames back, and leaves an exported
- * object its frames until it is freed.
+ * fences each command with the next id, and lists Linux's 26 modes of QEMU's
+ * EDID with the EDID property, one CRTC, a primary and a cursor plane and no
+ * IN_FORMATS; a bind without EDID, whose preferred mode is the display's size
+ * among the DMT modes; a dumb buffer whose 2D resource is backed by one entry
+ * for adjacent pages; SETCRTC, which sets the scanout, copies the whole buffer
+ * to the host and flushes it; DIRTYFB, which copies and flushes the clip alone,
+ * from its offset in the buffer; scattered pages, whose entries go on past the
+ * command's page into extra pages; a queue too small for the commands, which
+ * holds the rest until answers make room, in order; a plane update over a
+ * device that runs commands at a kick, whose one kick, without the big lock on
+ * virtio-pci and with it otherwise, carries the copy, the scanout and the
+ * flush, even when the queue is full; SETCRTC of a buffer whose write fence has
+ * not signalled, which sends nothing to the device until it has; an error
+ * answer, which fails the fence with EIO; a device that never answers, whose
+ * waiter gives up after five seconds and whose late answer the reaper frees;
+ * the cursor, set with its hotspot and then moved; a display change, served at
+ * the next open, which rereads the EDID and the displays, clears the event and
+ * sends one hotplug; the driver's ioctls; a buffer's last reference, which
+ * unrefs its resource and frees its pages once the host answers; virtio-vga,
+ * which removes the firmware's framebuffer from its memory BARs; a device with
+ * no scanout, which has no KMS; an unplug, which fails the commands still out
+ * with ENODEV and leaves nothing allocated once the last reference goes; and a
+ * reset over a transport whose backing is its own heap, which zaps an object no
+ * one exported and gives its frames back, and leaves an exported object its
+ * frames until it is freed.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -221,10 +224,14 @@ void k_udelay(uint32_t us)
     now_ns += (int64_t)us * 1000;
 }
 
-/** The scheduler is off, as at boot, so a waiter polls. */
+/* The scheduler is on, which the kick rows set; off otherwise, as at boot,
+ * so a waiter polls. */
+static int sched_on;
+
+/** Whether the scheduler is on: `sched_on`. */
 int sched_is_enabled(void)
 {
-    return 0;
+    return sched_on;
 }
 
 static int irq_depth;
@@ -271,13 +278,21 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
-/** A wait whose condition must already hold, since nothing else runs. */
+/* What another thread does while a wait sleeps, which a row sets: none
+ * otherwise. */
+static void (*wait_step)(void);
+
+/** A wait whose condition must already hold once `wait_step` has run, since
+ * nothing else runs. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
 #ifdef VGPU_3D_TEST
     model_wait_step();
 #endif
+    if (wait_step) {
+        wait_step();
+    }
     CHECK(cond(arg), "a wait's condition holds in one thread");
     return 0;
 }
@@ -451,6 +466,36 @@ void drm_client_dev_hotplug(struct drm_device *dev)
 {
     (void)dev;
 }
+
+/** Interrupts are on in the test's one thread. */
+int kirq_enabled(void)
+{
+    return 1;
+}
+
+/* The big lock, which one thread holds but between a drop and a take, and
+ * the drops made. */
+static int bkl_out, bkl_drops;
+
+/** Give the big lock up at depth 1, counting the drop. */
+int bkl_drop(void)
+{
+    CHECK(!bkl_out, "the big lock is held when it is given up");
+    bkl_out = 1;
+    bkl_drops++;
+    return 1;
+}
+
+/** Take it back at `depth`. */
+void bkl_take(int depth)
+{
+    CHECK(bkl_out && depth == 1, "the big lock is taken back at the depth given up");
+    bkl_out = 0;
+}
+
+/** No other processor claims it. */
+void bkl_yield(void)
+{}
 
 /** One thread: interrupts need no masking. */
 uint32_t kirq_save(void)
@@ -942,6 +987,9 @@ struct model_queue {
         uint64_t resp;
         uint32_t resp_len, len;
         int answered;
+        int run;                    /* carried out; with `at_kick`, at a kick */
+        const struct virtio_sg *sg; /* the chain, the driver's until answered */
+        unsigned out, in;
     } flight[MAX_FLIGHT];
     uint32_t nflight;
 };
@@ -962,7 +1010,11 @@ static struct {
     } config;
     struct model_queue q[2];
     int answer;
-    uint32_t fail_type; /* answer this command with ERR_INVALID_RESOURCE_ID */
+    int at_kick;             /* carry commands out only at a kick, as QEMU's device */
+    uint32_t kicks;          /* kicks of either queue */
+    uint32_t kicks_unlocked; /* of them, made without the big lock */
+    uint32_t kicks_counted;  /* of them, counted in the driver's `kicking` */
+    uint32_t fail_type;      /* answer this command with ERR_INVALID_RESOURCE_ID */
     struct {
         uint32_t w, h, enabled;
     } scanout[4];
@@ -1338,16 +1390,44 @@ static int deliver(struct model_queue *q)
     return n;
 }
 
+/** Carry out chain `k` of `q` and write its answer. */
+static void run_chain(struct model_queue *q, uint32_t k)
+{
+    static uint8_t req[PAGE_SIZE * (VIRTIO_GPU_CMD_EXTRA + 1)];
+    const struct virtio_sg *sg = q->flight[k].sg;
+    unsigned out = q->flight[k].out;
+    uint32_t n = gather(sg, out, req, sizeof(req));
+#ifdef VGPU_3D_TEST
+    unsigned in = q->flight[k].in;
+    uint32_t i, room = 0, off = 0;
+    uint8_t *response;
+
+    for (i = 0; i < in; i++) {
+        room += sg[out + i].len;
+    }
+    response = calloc(1, room);
+    q->flight[k].len = execute(req, n, response);
+    CHECK(q->flight[k].len <= room, "the answer fits its segments");
+    for (i = 0; i < in; i++) {
+        k_memcpy((void *)(uintptr_t)sg[out + i].addr, response + off, sg[out + i].len);
+        off += sg[out + i].len;
+    }
+    free(response);
+#else
+    q->flight[k].len = execute(req, n, (uint8_t *)(uintptr_t)sg[out].addr);
+    CHECK(q->flight[k].len <= sg[out].len, "the answer fits its segment");
+#endif
+    q->flight[k].run = 1;
+    q->flight[k].answered = gpu.answer != ANSWER_NEVER;
+}
+
+/** Take the chain: carried out at once, or with `at_kick` at the next kick,
+ * as QEMU's virtio-gpu, which has no ioeventfd, takes its commands. */
 int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out, unsigned in,
                   void *token)
 {
-    static uint8_t req[PAGE_SIZE * (VIRTIO_GPU_CMD_EXTRA + 1)];
     struct model_queue *q = mq(vq);
-    uint32_t n;
-#ifdef VGPU_3D_TEST
-    uint32_t i, room = 0, off = 0;
-    uint8_t *response;
-#endif
+    uint32_t k = q->nflight;
 
     CHECK(in >= 1 && out >= 1, "a command has its request and answer");
     if (gpu.torn_down) {
@@ -1356,35 +1436,39 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
     if (q->nflight >= q->room) {
         return -ENOSPC;
     }
-    n = gather(sg, out, req, sizeof(req));
-    q->flight[q->nflight].token = token;
-    q->flight[q->nflight].resp = sg[out].addr;
-    q->flight[q->nflight].resp_len = sg[out].len;
-#ifdef VGPU_3D_TEST
-    for (i = 0; i < in; i++) {
-        room += sg[out + i].len;
-    }
-    response = calloc(1, room);
-    q->flight[q->nflight].len = execute(req, n, response);
-    CHECK(q->flight[q->nflight].len <= room, "the answer fits its segments");
-    for (i = 0; i < in; i++) {
-        k_memcpy((void *)(uintptr_t)sg[out + i].addr, response + off, sg[out + i].len);
-        off += sg[out + i].len;
-    }
-    free(response);
-#else
-    q->flight[q->nflight].len = execute(req, n, (uint8_t *)(uintptr_t)sg[out].addr);
-    CHECK(q->flight[q->nflight].len <= sg[out].len, "the answer fits its segment");
-#endif
-    q->flight[q->nflight].answered = gpu.answer != ANSWER_NEVER;
+    q->flight[k].token = token;
+    q->flight[k].resp = sg[out].addr;
+    q->flight[k].resp_len = sg[out].len;
+    q->flight[k].sg = sg;
+    q->flight[k].out = out;
+    q->flight[k].in = in;
+    q->flight[k].run = 0;
+    q->flight[k].answered = 0;
     q->nflight++;
+    if (!gpu.at_kick) {
+        run_chain(q, k);
+    }
     return 0;
 }
 
+/** A kick: counted, with whether the big lock was given up for it; with
+ * `at_kick` the chains not yet carried out are, in order; then answered
+ * when the queue answers at its kick. */
 void virtqueue_kick(struct virtqueue *vq)
 {
+    struct model_queue *q = mq(vq);
+    uint32_t k;
+
+    gpu.kicks++;
+    gpu.kicks_unlocked += bkl_out;
+    gpu.kicks_counted += vgpu_devices[0] && vgpu_devices[0]->kicking;
+    for (k = 0; k < q->nflight; k++) {
+        if (!q->flight[k].run) {
+            run_chain(q, k);
+        }
+    }
     if (gpu.answer == ANSWER_KICK) {
-        (void)deliver(mq(vq));
+        (void)deliver(q);
     }
 }
 
@@ -1642,7 +1726,8 @@ static int logged(uint32_t i, uint32_t type)
 }
 
 /** The fence ids of the log are 1, 2, 3 ... for the control queue, 0 for
- * the cursor queue and for UNMAP_BLOB, which goes unfenced. */
+ * the cursor queue and for the commands that go unfenced: SET_SCANOUT,
+ * SET_SCANOUT_BLOB, RESOURCE_FLUSH and UNMAP_BLOB. */
 static int fences_in_order(void)
 {
     uint32_t i, next = 1;
@@ -1650,7 +1735,10 @@ static int fences_in_order(void)
     for (i = 0; i < gpu.nlog; i++) {
         if (gpu.log[i] == VIRTIO_GPU_CMD_UPDATE_CURSOR ||
             gpu.log[i] == VIRTIO_GPU_CMD_MOVE_CURSOR ||
-            gpu.log[i] == VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB) {
+            gpu.log[i] == VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB ||
+            gpu.log[i] == VIRTIO_GPU_CMD_RESOURCE_FLUSH ||
+            gpu.log[i] == VIRTIO_GPU_CMD_SET_SCANOUT ||
+            gpu.log[i] == VIRTIO_GPU_CMD_SET_SCANOUT_BLOB) {
             if (gpu.fence[i]) {
                 return 0;
             }
@@ -1923,6 +2011,163 @@ static void row_pending(void)
     vgpu_reap(vg);
     gpu.q[0].room = 64;
     gpu.answer = ANSWER_KICK;
+}
+
+/** DIRTYFB of a 40x10 clip of the buffer shown. */
+static void dirty_clip(void)
+{
+    struct drm_mode_fb_dirty_cmd d;
+    struct drm_clip_rect clip;
+
+    clip.x1 = 100;
+    clip.y1 = 50;
+    clip.x2 = 140;
+    clip.y2 = 60;
+    k_memset(&d, 0, sizeof(d));
+    d.fb_id = shown_fb;
+    d.num_clips = 1;
+    d.clips_ptr = UPTR(&clip);
+    CHECK(drm_mode_dirtyfb_ioctl(dev, &d, &file) == 0, "DIRTYFB of a clip");
+}
+
+/**
+ * The notifies of a plane update, over a device that carries commands out
+ * only at a kick, as QEMU's virtio-gpu without an ioeventfd does, with the
+ * scheduler on. On virtio-pci's transport the copy goes in quiet and the
+ * flush's one kick carries both, made without the big lock and counted in
+ * `kicking`; a SETCRTC's copy, scanout and flush take one kick too. On a
+ * transport whose notify needs the big lock, as the shared region's eventfd
+ * does, the kick keeps it. With room for one command, the copy fills the
+ * queue and the flush waits, and the flush's submission still kicks, so the
+ * copy runs, its answer lets the flush in, and the flush runs.
+ */
+static void row_kick(void)
+{
+    struct drm_mode_modeinfo modes[64];
+    struct drm_mode_crtc set;
+    uint32_t before, kicks, flushes, fb;
+
+    gpu.at_kick = 1;
+    sched_on = 1;
+    gpu.dev.notify_unlocked = 1;
+    before = gpu.nlog;
+    kicks = gpu.kicks;
+    bkl_drops = 0;
+    gpu.kicks_unlocked = gpu.kicks_counted = 0;
+    dirty_clip();
+    CHECK(gpu.nlog == before + 2 && logged(before, VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D) &&
+              logged(before + 1, VIRTIO_GPU_CMD_RESOURCE_FLUSH),
+          "the copy and the flush run");
+    CHECK(gpu.kicks == kicks + 1, "the flush's one kick carries the quiet copy");
+    CHECK(gpu.kicks_unlocked == 1 && bkl_drops == 1 && gpu.kicks_counted == 1 && !bkl_out,
+          "virtio-pci's kick is made without the big lock, counted in kicking");
+    CHECK(vg->kicking == 0, "no kick is left counted");
+
+    (void)get_modes(modes, 64, NULL);
+    k_memset(&set, 0, sizeof(set));
+    set.crtc_id = vg->outputs[0].crtc.base.id;
+    set.set_connectors_ptr = UPTR(&vg->outputs[0].connector.base.id);
+    set.count_connectors = 1;
+    set.mode = modes[0];
+    set.mode_valid = 1;
+    fb = addfb(shown_handle, 1280, 800);
+    set.fb_id = fb;
+    before = gpu.nlog;
+    kicks = gpu.kicks;
+    CHECK(drm_mode_setcrtc(dev, &set, &file) == 0, "SETCRTC of a new framebuffer");
+    CHECK(gpu.nlog == before + 3 && logged(before, VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D) &&
+              logged(before + 1, VIRTIO_GPU_CMD_SET_SCANOUT) &&
+              logged(before + 2, VIRTIO_GPU_CMD_RESOURCE_FLUSH),
+          "its copy, scanout and flush run");
+    CHECK(gpu.kicks == kicks + 1, "one kick carries the three");
+    set.fb_id = shown_fb;
+    CHECK(drm_mode_setcrtc(dev, &set, &file) == 0, "SETCRTC back to the buffer shown");
+    CHECK(drm_mode_rmfb_ioctl(dev, &fb, &file) == 0, "RMFB of the framebuffer let go");
+
+    gpu.dev.notify_unlocked = 0;
+    bkl_drops = 0;
+    gpu.kicks_unlocked = 0;
+    kicks = gpu.kicks;
+    dirty_clip();
+    CHECK(gpu.kicks == kicks + 1 && gpu.kicks_unlocked == 0 && bkl_drops == 0,
+          "a notify that needs the big lock keeps it");
+
+    gpu.dev.notify_unlocked = 1;
+    gpu.q[0].room = 1;
+    before = gpu.nlog;
+    kicks = gpu.kicks;
+    flushes = gpu.flushes;
+    dirty_clip();
+    CHECK(gpu.nlog == before + 2 && gpu.flushes == flushes + 1 && vg->pending[0] == NULL,
+          "with the queue full the flush's kick runs the copy, and its answer the flush");
+    CHECK(gpu.kicks == kicks + 2, "the flush's submission kicks, and the copy's answer");
+    CHECK(fences_in_order(), "the fences stay in order");
+    vgpu_reap(vg);
+    gpu.q[0].room = 64;
+    gpu.at_kick = 0;
+    sched_on = 0;
+    gpu.dev.notify_unlocked = 0;
+}
+
+/* The write fence of the buffer `row_fence` shows, and the length of the
+ * device's log when the commit waited for it. */
+static struct dma_fence *write_fence;
+static uint32_t log_at_wait;
+
+/** The render job that draws the buffer ends while the commit waits: note
+ * what the device has seen, and signal the buffer's write fence. */
+static void render_done(void)
+{
+    CHECK(!dma_fence_is_signaled(write_fence), "the commit waits while the buffer is drawn");
+    log_at_wait = gpu.nlog;
+    dma_fence_signal(write_fence);
+    wait_step = NULL;
+}
+
+/** A plane waits for its framebuffer's write fence: SETCRTC of a buffer that
+ * is still being drawn sends no copy, scanout or flush until the fence
+ * signals, as Linux's drm_gem_plane_helper_prepare_fb, which
+ * virtio_gpu_plane_prepare_fb calls (virtgpu_plane.c:281), makes it wait. */
+static void row_fence(void)
+{
+    struct drm_mode_modeinfo modes[64];
+    struct drm_mode_crtc set;
+    struct dma_resv *resv = shown_bo->shmem.base.resv;
+    uint32_t before, fb;
+
+    write_fence = (struct dma_fence *)kzalloc(sizeof(*write_fence));
+    CHECK(write_fence != NULL, "a write fence");
+    if (!write_fence) {
+        return;
+    }
+    dma_fence_init(write_fence, &model_fence_ops, 0, 0);
+    resv->write = write_fence;
+    (void)get_modes(modes, 64, NULL);
+    k_memset(&set, 0, sizeof(set));
+    set.crtc_id = vg->outputs[0].crtc.base.id;
+    set.set_connectors_ptr = UPTR(&vg->outputs[0].connector.base.id);
+    set.count_connectors = 1;
+    set.mode = modes[0];
+    set.mode_valid = 1;
+    fb = addfb(shown_handle, 1280, 800);
+    set.fb_id = fb;
+    before = gpu.nlog;
+    log_at_wait = ~0u;
+    wait_step = render_done;
+    CHECK(drm_mode_setcrtc(dev, &set, &file) == 0, "SETCRTC of a buffer still being drawn");
+    CHECK(wait_step == NULL, "the commit waits for the buffer's write fence");
+    wait_step = NULL;
+    CHECK(log_at_wait == before, "nothing goes to the device before the fence signals");
+    CHECK(gpu.nlog == before + 3 && logged(before, VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D) &&
+              logged(before + 1, VIRTIO_GPU_CMD_SET_SCANOUT) &&
+              logged(before + 2, VIRTIO_GPU_CMD_RESOURCE_FLUSH),
+          "then its copy, scanout and flush go");
+    resv->write = NULL;
+    dma_fence_put(write_fence);
+    write_fence = NULL;
+    set.fb_id = shown_fb;
+    CHECK(drm_mode_setcrtc(dev, &set, &file) == 0, "SETCRTC back to the buffer shown");
+    CHECK(drm_mode_rmfb_ioctl(dev, &fb, &file) == 0, "RMFB of the framebuffer let go");
 }
 
 /** An error answer: the fence fails with EIO, the reaper logs it, and a
@@ -2268,6 +2513,8 @@ int main(void)
     row_scanout();
     row_scatter();
     row_pending();
+    row_kick();
+    row_fence();
     row_error();
     row_timeout();
     row_cursor();

@@ -955,6 +955,7 @@ int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out)
         k_memset(vp, 0, sizeof(*vp));
         vp->pci = p;
         vp->dev.ops = &vp_ops;
+        vp->dev.notify_unlocked = 1;
         vp->dev.transport = vp;
         vp->dev.id = id;
         k_memcpy(vp->name, "virtio", 6);

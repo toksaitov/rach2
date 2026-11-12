@@ -19,6 +19,7 @@
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
 #include "../proc/process.h"
+#include "../proc/smp.h"
 #include "../proc/sched.h"
 #include "../rtc.h"
 #include "../timer.h"
@@ -133,6 +134,20 @@ struct virtio_gpu_cmd *vgpu_cmd_new(struct virtio_gpu_device *vg, struct virtque
     return cmd;
 }
 
+/**
+ * Take the fence off `cmd`, a control command not yet started, so that it
+ * goes without VIRTIO_GPU_FLAG_FENCE, as Linux queues a command it gives no
+ * fence. QEMU answers such a command as soon as it has run it, and a fenced
+ * one only at its next poll of virgl's fences, on the guest's next notify
+ * or its 10 ms timer. Nobody may wait for the command, since a wait sleeps
+ * on its fence.
+ */
+void vgpu_cmd_unfence(struct virtio_gpu_cmd *cmd)
+{
+    kfree(cmd->fence);
+    cmd->fence = NULL;
+}
+
 /** Free `cmd`, its pages and its hold on its fence. A fence never started,
  * which has no reference yet, is freed. Process context. */
 void vgpu_cmd_free(struct virtio_gpu_cmd *cmd)
@@ -183,9 +198,12 @@ static void done_add(struct virtio_gpu_device *vg, struct virtio_gpu_cmd *cmd)
     *p = cmd;
 }
 
-/** Publish the commands held for queue `q` while it has room, in order,
- * and tell the device. Under the lock; a handler may call it. */
-static void pending_push(struct virtio_gpu_device *vg, int q)
+/** Publish the commands held for queue `q` while it has room, in order.
+ * Returns 1 when one went in, so that the caller notifies the device once
+ * it has let go of the lock (`vgpu_notify`), as Linux's
+ * virtqueue_kick_prepare; 0 otherwise. Under the lock; a handler may call
+ * it. */
+static int pending_push(struct virtio_gpu_device *vg, int q)
 {
     struct virtqueue *vq = q == VIRTIO_GPU_QUEUE_CONTROL ? vg->ctrlq : vg->cursorq;
     struct virtio_gpu_cmd *cmd;
@@ -202,9 +220,41 @@ static void pending_push(struct virtio_gpu_device *vg, int q)
     if (!vg->pending[q]) {
         vg->pending_tail[q] = NULL;
     }
-    if (added) {
+    return added;
+}
+
+/**
+ * Notify the device of new commands on `vq`. QEMU's virtio-gpu takes its
+ * notifies without an ioeventfd, so the write stops this processor in QEMU
+ * while QEMU, under its own global lock, runs the commands queued, virgl's
+ * decoding and a flush's redraw of the display among them: some 0.8 ms
+ * for a submission on the testing PC. With `sleepable`, from a caller that
+ * may sleep and has interrupts on, on a transport whose notify is one
+ * register write (`notify_unlocked`, virtio-pci's), the write is made
+ * without the big lock, which a sleep would let go too, so that the other
+ * processors' kernel work goes on meanwhile, as on Linux, which holds no
+ * lock there that they need; `kicking` counts the writes in flight, which
+ * vgpu_kill waits for before it frees the queues. Otherwise the big lock
+ * stays held, as in a handler: the shared-memory transport's notify signals
+ * an eventfd, whose wakes and irqfd delivery need it.
+ */
+static void vgpu_notify(struct virtio_gpu_device *vg, struct virtqueue *vq, int sleepable)
+{
+    uint32_t flags;
+    int depth;
+
+    if (!sleepable || !vg->vdev->notify_unlocked || !sched_is_enabled() || current_proc == NULL ||
+        !kirq_enabled()) {
         virtqueue_kick(vq);
+        return;
     }
+    vg->kicking++;
+    flags = kirq_save();
+    depth = bkl_drop();
+    virtqueue_kick(vq);
+    bkl_take(depth);
+    kirq_restore(flags);
+    vg->kicking--;
 }
 
 /**
@@ -216,9 +266,10 @@ static void pending_push(struct virtio_gpu_device *vg, int q)
 static void cmd_submit(struct virtio_gpu_cmd *cmd)
 {
     struct virtio_gpu_device *vg = cmd->vg;
-    int q = cmd->vq == vg->ctrlq ? VIRTIO_GPU_QUEUE_CONTROL : VIRTIO_GPU_QUEUE_CURSOR;
+    struct virtqueue *vq = cmd->vq;
+    int q = vq == vg->ctrlq ? VIRTIO_GPU_QUEUE_CONTROL : VIRTIO_GPU_QUEUE_CURSOR;
     uint32_t flags;
-    int dead, big;
+    int dead, big, kick = 0, sleepable = cmd->sleepable, quiet = cmd->quiet;
 
     if (!cmd->response_size) {
         cmd->segments[cmd->nout].addr = cmd->addr + VIRTIO_GPU_RESP_OFF;
@@ -251,12 +302,28 @@ static void cmd_submit(struct virtio_gpu_cmd *cmd)
             vg->pending[q] = cmd;
         }
         vg->pending_tail[q] = cmd;
-        pending_push(vg, q);
+        kick = pending_push(vg, q);
+        /* A full queue may hold this command behind quiet ones already in,
+         * which only its notify would carry; the device answers nothing
+         * until it is notified, so none would make room. Linux notifies
+         * before it waits for room (virtio_gpu_queue_ctrl_sgs,
+         * virtgpu_vq.c:338-342 in 6.12.115). */
+        if (quiet) {
+            vg->unkicked[q] |= kick;
+            kick = 0;
+        } else if (kick || vg->unkicked[q]) {
+            vg->unkicked[q] = 0;
+            kick = 1;
+        }
     }
     spin_unlock_irqrestore(&vg->lock, flags);
     if ((dead || big) && cmd->fence) {
         dma_fence_set_error(cmd->fence, dead ? -ENODEV : -E2BIG);
         dma_fence_signal(cmd->fence);
+    }
+    if (kick) {
+        /* An answer may free an unwaited command from here on. */
+        vgpu_notify(vg, vq, sleepable);
     }
 }
 
@@ -283,6 +350,7 @@ static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
     int ok = type >= VIRTIO_GPU_RESP_OK_NODATA && type < VIRTIO_GPU_RESP_ERR_UNSPEC;
     uint32_t flags;
     struct virtio_gpu_cmd *prior;
+    int kick;
     int valid_fence =
         !cmd->fence || (len >= sizeof(*resp) && (resp->flags & VIRTIO_GPU_FLAG_FENCE) &&
                         resp->fence_id == cmd->fence->seqno);
@@ -316,8 +384,14 @@ static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
     if (!cmd->waited) {
         done_add(vg, cmd);
     }
-    pending_push(vg, vq == vg->ctrlq ? VIRTIO_GPU_QUEUE_CONTROL : VIRTIO_GPU_QUEUE_CURSOR);
+    kick = pending_push(vg, vq == vg->ctrlq ? VIRTIO_GPU_QUEUE_CONTROL : VIRTIO_GPU_QUEUE_CURSOR);
+    if (kick) {
+        vg->unkicked[vq == vg->ctrlq ? VIRTIO_GPU_QUEUE_CONTROL : VIRTIO_GPU_QUEUE_CURSOR] = 0;
+    }
     spin_unlock_irqrestore(&vg->lock, flags);
+    if (kick) {
+        vgpu_notify(vg, vq, 0);
+    }
     if (vgpu_wake_ready) {
         wq_wake_all(&vgpu_wake);
     }
@@ -532,6 +606,7 @@ static int32_t cmd_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len,
     int32_t rc;
 
     cmd->waited = 1;
+    cmd->sleepable = 1;
     cmd_submit(cmd);
     for (;;) {
         if (!vg->dead) {
@@ -601,6 +676,19 @@ void vgpu_cmd_send(struct virtio_gpu_cmd *cmd, void (*complete)(struct virtio_gp
     cmd->complete = complete;
     cmd->arg = arg;
     cmd_submit(cmd);
+}
+
+void vgpu_cmd_queue(struct virtio_gpu_cmd *cmd)
+{
+    cmd->quiet = 1;
+    vgpu_cmd_send(cmd, NULL, NULL);
+}
+
+void vgpu_cmd_send_sleepable(struct virtio_gpu_cmd *cmd, void (*complete)(struct virtio_gpu_cmd *),
+                             void *arg)
+{
+    cmd->sleepable = 1;
+    vgpu_cmd_send(cmd, complete, arg);
 }
 
 /* ---- The commands ---- */
@@ -706,9 +794,12 @@ static void vgpu_read_displays(struct virtio_gpu_device *vg)
 }
 
 /** SET_SCANOUT: scanout `scanout` shows rectangle `r` of resource `res`, or
- * nothing for 0. Not waited for. */
+ * nothing for 0. Unfenced and not waited for, as Linux's
+ * virtio_gpu_cmd_set_scanout. Without `notify` it is queued for the notify
+ * of the flush that follows it (vgpu_cmd_queue). A commit's step: may
+ * sleep. */
 static void vgpu_set_scanout(struct virtio_gpu_device *vg, uint32_t scanout, uint32_t res,
-                             struct virtio_gpu_rect r)
+                             struct virtio_gpu_rect r, int notify)
 {
     struct virtio_gpu_cmd *cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_SET_SCANOUT,
                                               sizeof(struct virtio_gpu_set_scanout));
@@ -718,17 +809,24 @@ static void vgpu_set_scanout(struct virtio_gpu_device *vg, uint32_t scanout, uin
         klog(KLOG_WARN, "virtio_gpu", "scanout %u: no memory for SET_SCANOUT", scanout);
         return;
     }
+    vgpu_cmd_unfence(cmd);
     req = cmd_req(cmd, struct virtio_gpu_set_scanout);
     req->scanout_id = scanout;
     req->resource_id = res;
     req->r = r;
-    vgpu_cmd_send(cmd, NULL, NULL);
+    if (notify) {
+        vgpu_cmd_send_sleepable(cmd, NULL, NULL);
+    } else {
+        vgpu_cmd_queue(cmd);
+    }
 }
 
 /**
  * SET_SCANOUT_BLOB, Linux's virtio_gpu_cmd_set_scanout_blob: scanout
  * `scanout` shows rectangle `r` of the blob `bo` read as the framebuffer
- * `fb`, XRGB8888 alone, which the device calls B8G8R8X8. Not waited for.
+ * `fb`, XRGB8888 alone, which the device calls B8G8R8X8. Unfenced and not
+ * waited for, as Linux's, and queued for the flush that follows it
+ * (vgpu_cmd_queue). A commit's step: may sleep.
  */
 static void vgpu_set_scanout_blob(struct virtio_gpu_device *vg, uint32_t scanout,
                                   struct virtio_gpu_object *bo, const struct drm_framebuffer *fb,
@@ -743,6 +841,7 @@ static void vgpu_set_scanout_blob(struct virtio_gpu_device *vg, uint32_t scanout
         klog(KLOG_WARN, "virtio_gpu", "scanout %u: no memory for SET_SCANOUT_BLOB", scanout);
         return;
     }
+    vgpu_cmd_unfence(cmd);
     req = cmd_req(cmd, struct virtio_gpu_set_scanout_blob);
     req->scanout_id = scanout;
     req->resource_id = bo->res_id;
@@ -754,7 +853,7 @@ static void vgpu_set_scanout_blob(struct virtio_gpu_device *vg, uint32_t scanout
         req->offsets[i] = fb->offsets[i];
     }
     req->r = r;
-    vgpu_cmd_send(cmd, NULL, NULL);
+    vgpu_cmd_queue(cmd);
 }
 
 /** A TRANSFER_TO_HOST_2D of rectangle `r` of resource `res`, whose first
@@ -776,22 +875,35 @@ static struct virtio_gpu_cmd *vgpu_transfer_cmd(struct virtio_gpu_device *vg, ui
     return cmd;
 }
 
-/** RESOURCE_FLUSH of rectangle `r` of resource `res` to the scanouts that
- * show it, waited for, so that a commit's event follows the picture. 0 or
- * the command's error. May sleep. */
-static int32_t vgpu_flush(struct virtio_gpu_device *vg, uint32_t res, struct virtio_gpu_rect r)
+/**
+ * RESOURCE_FLUSH of rectangle `r` of resource `res` to the scanouts that
+ * show it, unfenced and not waited for, as Linux's
+ * virtio_gpu_resource_flush sends it for a framebuffer that is not a dumb
+ * guest blob, which Rach2's dumb buffers never are. The device runs the
+ * queue in order, so the flush shows what the commands before it drew; a
+ * commit that waited for a fenced flush would hold back its event until
+ * QEMU's next poll of virgl's fences (vgpu_cmd_unfence) on every frame.
+ * Its notify carries the commands the plane update queued before it, and is
+ * made even when the flush has no memory. A commit's step: may sleep.
+ */
+static void vgpu_flush(struct virtio_gpu_device *vg, uint32_t res, struct virtio_gpu_rect r)
 {
     struct virtio_gpu_cmd *cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_FLUSH,
                                               sizeof(struct virtio_gpu_resource_flush));
     struct virtio_gpu_resource_flush *req;
 
     if (!cmd) {
-        return -ENOMEM;
+        klog(KLOG_WARN, "virtio_gpu", "resource %u: no memory for the flush", res);
+        if (!vg->dead) {
+            virtqueue_kick(vg->ctrlq);
+        }
+        return;
     }
+    vgpu_cmd_unfence(cmd);
     req = cmd_req(cmd, struct virtio_gpu_resource_flush);
     req->resource_id = res;
     req->r = r;
-    return vgpu_cmd_send_wait(cmd, NULL, 0);
+    vgpu_cmd_send_sleepable(cmd, NULL, NULL);
 }
 
 /** The memory entry slot `n` of a request of `req` bytes: after the
@@ -1350,7 +1462,7 @@ static int damage_merged(const struct drm_plane_state *old, const struct drm_pla
  * damaged rectangle of a dumb buffer goes to the host, the scanout is set
  * again, with SET_SCANOUT_BLOB for a blob, when the framebuffer, the source
  * or the mode changed, and the
- * rectangle is flushed to the screen. May sleep.
+ * rectangle is flushed to the screen, unwaited (vgpu_flush). May sleep.
  */
 static void primary_update(struct drm_plane *plane, struct drm_atomic_state *state)
 {
@@ -1370,7 +1482,7 @@ static void primary_update(struct drm_plane *plane, struct drm_atomic_state *sta
     }
     vg = o->vg;
     if (!fb || !o->crtc.state->active) {
-        vgpu_set_scanout(vg, o->index, 0, rect_of(0, 0, ps->src_w >> 16, ps->src_h >> 16));
+        vgpu_set_scanout(vg, o->index, 0, rect_of(0, 0, ps->src_w >> 16, ps->src_h >> 16), 1);
         return;
     }
     if (!damage_merged(old, ps, &r)) {
@@ -1383,7 +1495,7 @@ static void primary_update(struct drm_plane *plane, struct drm_atomic_state *sta
                                 (uint64_t)r.x1 * fb->info->cpp[0] + (uint64_t)r.y1 * fb->pitches[0],
                                 rect_of_drm(&r));
         if (cmd) {
-            vgpu_cmd_send(cmd, NULL, NULL);
+            vgpu_cmd_queue(cmd);
         }
     }
     cs = drm_atomic_get_new_crtc_state(state, &o->crtc);
@@ -1396,10 +1508,10 @@ static void primary_update(struct drm_plane *plane, struct drm_atomic_state *sta
         if (bo && bo->blob_mem) {
             vgpu_set_scanout_blob(vg, o->index, bo, fb, src);
         } else {
-            vgpu_set_scanout(vg, o->index, res, src);
+            vgpu_set_scanout(vg, o->index, res, src, 0);
         }
     }
-    (void)vgpu_flush(vg, res, rect_of_drm(&r));
+    vgpu_flush(vg, res, rect_of_drm(&r));
 }
 
 /**
@@ -1445,7 +1557,7 @@ static void cursor_update(struct drm_plane *plane, struct drm_atomic_state *stat
     req->pos.scanout_id = o->index;
     req->pos.x = (uint32_t)ps->crtc_x;
     req->pos.y = (uint32_t)ps->crtc_y;
-    vgpu_cmd_send(cmd, NULL, NULL);
+    vgpu_cmd_send_sleepable(cmd, NULL, NULL);
 }
 
 /** A CRTC turned off: its scanout shows nothing. */
@@ -1454,7 +1566,7 @@ static void crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *state)
     struct virtio_gpu_output *o = crtc_output(crtc);
 
     (void)state;
-    vgpu_set_scanout(o->vg, o->index, 0, rect_of(0, 0, 0, 0));
+    vgpu_set_scanout(o->vg, o->index, 0, rect_of(0, 0, 0, 0), 1);
 }
 
 static const struct drm_plane_funcs primary_funcs = {vgpu_plane_check, primary_update, NULL};
@@ -1985,7 +2097,8 @@ static void devices_remove(struct virtio_gpu_device *vg)
  * (`obj_vm_page`); frames a transport gave from its own heap go back to it,
  * and such a mapping takes new pages at its next touch, except an exported
  * object's, which it keeps until it is freed, since an importer may hold
- * them. Process context.
+ * them. A notify made without the big lock ends first (`vgpu_notify`).
+ * Process context.
  */
 void vgpu_kill(struct virtio_gpu_device *vg)
 {
@@ -2000,6 +2113,13 @@ void vgpu_kill(struct virtio_gpu_device *vg)
     flags = spin_lock_irqsave(&vg->lock);
     vg->dead = 1;
     spin_unlock_irqrestore(&vg->lock, flags);
+    /* A notify without the big lock reads its queue until it takes the lock
+     * back, which this lets it do. */
+    while (vg->kicking) {
+        flags = kirq_save();
+        bkl_yield();
+        kirq_restore(flags);
+    }
     vg->vdev->config_changed = NULL;
     vg->vdev->removed = NULL;
     virtio_teardown(vg->vdev);

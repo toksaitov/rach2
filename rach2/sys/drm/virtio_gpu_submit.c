@@ -369,7 +369,7 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
         a->fence_fd = fd;
     }
     submit_sync_publish(cmd, ins, outs, a);
-    vgpu_cmd_send(cmd, submit_done, s);
+    vgpu_cmd_send_sleepable(cmd, submit_done, s);
     cmd = NULL;
     s = NULL;
     rc = 0;
