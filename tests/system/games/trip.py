@@ -25,11 +25,21 @@ import run
 # summary lists; Linux has only ctxt of them.
 STAT_KEYS = ("ctxt", "bkl_wait_us", "scheduler_picks", "tlb_shootdown_ipis")
 
+# debugfs's counts of the big lock's takes after a switch, by the system call
+# the thread slept in (debugfs(5)); Linux has no such file.
+CALLS = Path("/sys/kernel/debug/bkl/calls")
+
 
 def snapshot():
-    """/proc/stat and each tripprobe thread's stat and status, with the
-    monotonic time, as one text."""
+    """/proc/stat, the slept lines of debugfs's bkl/calls where it has them,
+    and each tripprobe thread's stat and status, with the monotonic time, as
+    one text."""
     text = ["time %.6f\n" % time.monotonic(), Path("/proc/stat").read_text()]
+    try:
+        text += [line + "\n" for line in CALLS.read_text().splitlines()
+                 if line.startswith("slept ")]
+    except OSError:
+        pass
     for pid in os.listdir("/proc"):
         if not pid.isdigit():
             continue
@@ -58,6 +68,8 @@ def parse(text):
             threads[tid] = {}
         elif tid is None and line.startswith("bkl_hold_entry "):
             holds[f[1] + " " + f[2]] = (int(f[3]), int(f[4]))
+        elif tid is None and line.startswith("slept ") and len(f) >= 6:
+            holds["slept " + f[1]] = (int(f[4]), int(f[5]))
         elif tid is None and len(f) == 2 and f[1].isdigit():
             stat[f[0]] = int(f[1])
         elif tid is not None and re.match(r"\d+ \(", line):
