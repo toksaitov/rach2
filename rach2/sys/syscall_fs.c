@@ -2779,7 +2779,7 @@ static int32_t proc_fd_share(fd_table_t *fds, int procfd, int flags)
  * of /proc compares. The copy is taken under the table's lock and holds what
  * a descriptor in flight holds, a reference to its description and to a
  * socket, since its owner may close it meanwhile without the big lock; the
- * caller gives them back with `proc_fd_drop`. 0, -ENOENT for no such
+ * caller gives them back with `fd_peek_drop`. 0, -ENOENT for no such
  * process or descriptor, or -EACCES.
  */
 static int32_t proc_fd_entry(const struct vpath *vp, process_t **owner, fd_entry_t *src)
@@ -2793,22 +2793,27 @@ static int32_t proc_fd_entry(const struct vpath *vp, process_t **owner, fd_entry
     if (p->fds != current_proc->fds && !cred_privileged() && p->euid != proc_fsuid(current_proc)) {
         return -EACCES;
     }
-    if (fd_peek(p->fds, vp->procfd, src, FD_PEEK_REF) != 0) {
+    if (fd_peek_hold(p->fds, vp->procfd, src) != 0) {
         return -ENOENT;
-    }
-    if (src->type == FD_TYPE_SOCKET && src->sock) {
-        socket_ref(src->sock);
     }
     *owner = p;
     return 0;
 }
 
-/** Give back what `proc_fd_entry` took with the copy `src`, as the close of
- * a descriptor in flight does; the last holder of the description releases
- * its object. May sleep. */
-static void proc_fd_drop(fd_entry_t *src)
+int fd_peek_hold(struct fd_table *table, int fd, struct fd_entry *out)
 {
-    fd_release_objects(src);
+    if (fd_peek(table, fd, out, FD_PEEK_REF) != 0) {
+        return -EBADF;
+    }
+    if (out->type == FD_TYPE_SOCKET && out->sock) {
+        socket_ref(out->sock);
+    }
+    return 0;
+}
+
+void fd_peek_drop(struct fd_entry *copy)
+{
+    fd_release_objects(copy);
 }
 
 /** Check a descriptor target against NO_XDEV's mount, or allow no rule.
@@ -2931,7 +2936,7 @@ static int32_t proc_fd_open(const struct vpath *vp, int flags)
         return rc;
     }
     rc = proc_fd_open_from(vp, p, &src, flags);
-    proc_fd_drop(&src);
+    fd_peek_drop(&src);
     return rc;
 }
 
@@ -2978,12 +2983,12 @@ int32_t proc_fd_file(const struct vpath *vp, struct vfs_ref *ref, struct open_fi
         return rc;
     }
     if (!src.ofd || !src.ofd->vmnt || (src.type != FD_TYPE_FILE && src.type != FD_TYPE_DIR)) {
-        proc_fd_drop(&src);
+        fd_peek_drop(&src);
         return -EACCES;
     }
     *held = src.ofd;
     fd_ofd_ref(*held);
-    proc_fd_drop(&src);
+    fd_peek_drop(&src);
     mnt = (*held)->vmnt;
     if (vfs_enter(mnt) != 0) {
         fd_ofd_unref(*held);
@@ -5387,7 +5392,7 @@ static int openat2_magic(const struct vpath *vp, struct vfs_mount *mnt, uint32_t
     rc = proc_fd_entry(vp, &owner, &src);
     if (rc == 0) {
         rc = proc_fd_xdev(&src, mnt);
-        proc_fd_drop(&src);
+        fd_peek_drop(&src);
     }
     return rc;
 }
@@ -9453,7 +9458,7 @@ static int32_t proc_fd_open_path(const struct vpath *vp, int flags)
         return rc;
     }
     rc = proc_fd_open_path_from(vp, p, &src, flags);
-    proc_fd_drop(&src);
+    fd_peek_drop(&src);
     return rc;
 }
 
@@ -11887,7 +11892,7 @@ static int32_t chmod_synth(const struct vpath *vp, uint32_t mode)
 
         if (rc == 0) {
             rc = chmod_fd(&src, mode);
-            proc_fd_drop(&src);
+            fd_peek_drop(&src);
         }
         return rc;
     }
@@ -12036,7 +12041,7 @@ static int32_t chown_synth(const struct vpath *vp, uint32_t uid, uint32_t gid)
 
         if (rc == 0) {
             rc = chown_fd(&src, uid, gid);
-            proc_fd_drop(&src);
+            fd_peek_drop(&src);
         }
         return rc;
     }
