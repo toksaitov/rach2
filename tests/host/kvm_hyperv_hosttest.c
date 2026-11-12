@@ -24,7 +24,8 @@
  * route, their vectors and auto-EOI; the synthetic timers one-shot,
  * periodic, auto-enabled, direct, held by a full slot and retried at EOM
  * and at EOI; the hypercalls' #UD, statuses, 32-bit results, fast and XMM
- * input, the exits to the caller and their completion, HvSignalEvent over
+ * input, the XMM registers read only once synced from the processor to the
+ * image, the exits to the caller and their completion, HvSignalEvent over
  * KVM_HYPERV_EVENTFD, the extended and debug hypercalls; the IPI and TLB
  * flush hypercalls with simple and sparse sets; and every allocation and
  * eventfd reference given back.
@@ -208,11 +209,23 @@ void kvm_emul_skip(struct kvm_vcpu *v, uint32_t len)
     v->regs.rip += len;
 }
 
-/** The FPU image here is the guest's registers, so a fast hypercall reads
- * its XMM inputs from the image as made. */
+/* The guest's XMM0 to XMM5 while they are in the processor, as between a
+ * VM exit and the end of KVM_RUN: `put_xmm` puts its words there and
+ * leaves the image stale, and only `kvm_vcpu_fpu_sync` copies them to the
+ * image, as vcpu.c's saves them through the backend. `fpu_syncs` counts the
+ * syncs that found the registers live. */
+#define NV 3
+static uint64_t fpu_regs[NV][12];
+static int fpu_live[NV], fpu_syncs;
+
+/** Write `v`'s XMM registers back to its image, when they are live. */
 void kvm_vcpu_fpu_sync(struct kvm_vcpu *v)
 {
-    (void)v;
+    if (fpu_live[v->index]) {
+        k_memcpy(v->xsave + 160, fpu_regs[v->index], sizeof(fpu_regs[0]));
+        fpu_live[v->index] = 0;
+        fpu_syncs++;
+    }
 }
 
 void kvm_vcpu_kick(struct kvm_vcpu *v, uint32_t request)
@@ -230,7 +243,6 @@ int kvm_vcpu_test_clear(struct kvm_vcpu *v, uint32_t request)
 
 /* The APIC: the vectors raised on each vCPU since `clear_raised`, and the
  * last of the APIC MSRs. `no_apic` makes every raise -1. */
-#define NV 3
 static struct kvm_vm vm;
 static struct kvm_vcpu vcpus[NV];
 static struct kvm_run runs[NV];
@@ -320,6 +332,7 @@ static void vm_make(int none)
         vcpus[i].id = (uint32_t)i;
         vcpus[i].run = &runs[i];
         vcpus[i].xsave = xsaves[i];
+        fpu_live[i] = 0;
         vcpus[i].sregs.cr0 = 1;
         vcpus[i].tsc_offset = 1000 * (i + 1);
         vcpus[i].tsc_khz = 2400000u;
@@ -415,10 +428,18 @@ static void put64(uint32_t gpa, uint64_t w)
     k_memcpy(mem + gpa, &w, 8);
 }
 
-/** Set XMM half `i` of `v`'s FPU state, low halves even. */
+/** Set XMM half `i` of `v`'s registers, low halves even, and leave its
+ * image's copy stale, ~`w`, until `kvm_vcpu_fpu_sync`. */
 static void put_xmm(struct kvm_vcpu *v, int i, uint64_t w)
 {
-    k_memcpy(v->xsave + 160 + i * 8, &w, 8);
+    uint64_t stale = ~w;
+
+    if (!fpu_live[v->index]) {
+        k_memcpy(fpu_regs[v->index], v->xsave + 160, sizeof(fpu_regs[0]));
+        fpu_live[v->index] = 1;
+    }
+    fpu_regs[v->index][i] = w;
+    k_memcpy(v->xsave + 160 + i * 8, &stale, 8);
 }
 
 /**
@@ -1253,9 +1274,13 @@ static void ipi_rows(void)
     clear_raised();
     put_xmm(v, 0, 0x1);
     put_xmm(v, 1, 0x4);
+    fpu_syncs = 0;
     CHECK(hcall(v, HVCALL_SEND_IPI_EX | HC_FAST | VAR(1), 0x33, HV_SET_SPARSE_4K) == 0 &&
               raises == 1 && was_raised(2, 0x33),
           "the fast Ex form from XMM0");
+    CHECK(fpu_syncs == 1 && !fpu_live[v->index],
+          "the fast hypercall writes the guest's XMM registers back to the image before it "
+          "reads them, as Linux's kvm_hv_hypercall_read_xmm reads them under kvm_fpu_get");
     CHECK(hcall(v, HVCALL_SEND_IPI_EX | HC_FAST | VAR(1), 0x33, HV_SET_SPARSE_4K) == 0,
           "XMM0 read again on each call");
     vm_end();
