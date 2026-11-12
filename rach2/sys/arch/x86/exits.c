@@ -32,12 +32,17 @@ static struct exits_cpu exits_cpus[NR_CPUS];
 /* 0 until every processor's own record is reachable (`exits_start`). */
 static volatile int exits_on;
 
-static const char *const kind_names[EXIT_KINDS] = {"",   "rdmsr", "wrmsr", "cpuid",
-                                                   "in", "out",   "hlt"};
+static const char *const kind_names[EXIT_KINDS] = {"",    "rdmsr", "wrmsr", "cpuid",    "in",
+                                                   "out", "hlt",   "eoipv", "eoitaken", "eoiunset"};
 
 int exits_start(void)
 {
     exits_on = kcmdline_has("rach2.exits");
+    return exits_on;
+}
+
+int exits_counting(void)
+{
     return exits_on;
 }
 

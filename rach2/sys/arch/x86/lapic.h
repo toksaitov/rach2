@@ -186,6 +186,12 @@ uint32_t lapic_this_id(void);
  * is not enabled. */
 void lapic_eoi(void);
 
+/** Note, under `rach2.exits`, the vector a router has begun to take on this
+ * processor and whether KVM's paravirtual word was set then, so that
+ * `lapic_eoi` counts its end by how it went (exits.h's EXIT_EOI_*). Called
+ * first in each router that ends an interrupt, with interrupts off. */
+void lapic_eoi_enter(uint32_t vector);
+
 /** Have processor `cpu` end its interrupts through `word`, which it gave
  * KVM for the paravirtual end of interrupt (kvmsteal.c), where `lapic_eoi`
  * reads it first. */
