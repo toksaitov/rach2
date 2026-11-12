@@ -491,6 +491,37 @@ int sched_wake_blocked(process_t *p)
     return kick;
 }
 
+void sched_wake_signal(process_t *p)
+{
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+    int kick = -1;
+
+    if (p->state == PROC_BLOCKED) {
+        p->wakeup_tick = 0;
+        kick = sched_ready_locked(p);
+    }
+    spin_unlock_irqrestore(&sched_lock, flags);
+    if (kick >= 0) {
+        smp_kick(kick);
+    }
+}
+
+void sched_wake_due(process_t *p, uint64_t now)
+{
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+    int kick = -1;
+
+    if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 && now >= p->wakeup_tick) {
+        waketime_expire(p, p->wakeup_tick);
+        p->wakeup_tick = 0;
+        kick = sched_ready_locked(p);
+    }
+    spin_unlock_irqrestore(&sched_lock, flags);
+    if (kick >= 0) {
+        smp_kick(kick);
+    }
+}
+
 void sched_kick_cpus(uint64_t cpus)
 {
     int c;
@@ -821,7 +852,8 @@ void sched_wait_off_cpu(const process_t *p)
 
 /**
  * A wake that puts a process on this processor's queue sends it the
- * interprocessor interrupt that ends the wait (`sched_make_ready`). The
+ * interprocessor interrupt that ends the wait (`sched_ready_locked` asks
+ * for it, and the waker sends it once its locks are let go). The
  * idle task holds no big lock: its selection and its halt need none, and a
  * thread it switches to takes the lock in its tail when it holds it.
  */
@@ -1205,9 +1237,9 @@ void sched_loadavg(uint32_t avg[3])
  *
  * The big lock is let go for the halt and taken again after it, so that the
  * other processors run kernel code meanwhile. A wake from another processor
- * that comes between the two is not lost either: it sends this processor an
- * interrupt (`sched_make_ready`), which is pending until the `sti` and ends
- * the halt.
+ * that comes between the two is not lost either: the waker sends this
+ * processor an interrupt (`sched_ready_locked` asks for it), which is pending
+ * until the `sti` and ends the halt.
  */
 void idle_wait_irq_off(void)
 {

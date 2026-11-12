@@ -4417,11 +4417,14 @@ static void sig_irq_restore(uint32_t flags)
  * Linux 6.12.115's signal_wake_up_state marks TIF_SIGPENDING
  * (kernel/signal.c:759-773).
  * A wake for a blocked signal marks no work.
- * Make `t` runnable if it sleeps, clearing its timed wake: an
- * interruptible wait then calls `signal_pending` to learn whether to end
- * with -EINTR, and any wait that goes on arms its own deadline again. A
- * full barrier comes between the post and the read of the state, which a
- * sleeper sets before it tests (`sched_set_current_state`). */
+ * Make `t` runnable if it sleeps, clearing its timed wake, with the state
+ * tested and the deadline cleared under the run queues' lock
+ * (`sched_wake_signal`), as signal_wake_up_state wakes through
+ * `try_to_wake_up`'s test: a wait queue's waker and this one do not both
+ * make it ready. An interruptible wait then calls `signal_pending` to learn
+ * whether to end with -EINTR, and any wait that goes on arms its own
+ * deadline again. A full barrier comes between the post and the read of the
+ * state, which a sleeper sets before it tests (`sched_set_current_state`). */
 static void sig_wake(process_t *t, uint64_t bits)
 {
     if (t && (bits & ~t->sig_blocked) != 0) {
@@ -4429,8 +4432,7 @@ static void sig_wake(process_t *t, uint64_t bits)
     }
     sched_mb();
     if (t && t->state == PROC_BLOCKED) {
-        t->wakeup_tick = 0;
-        sched_make_ready(t);
+        sched_wake_signal(t);
     }
 }
 

@@ -108,10 +108,11 @@ void fpu_area_free(void *area)
     kfree(area);
 }
 
-/** A wake makes the process ready; there is one processor and no queue. */
-void sched_make_ready(process_t *p)
+/** The tick's wake of a due sleeper, which no row reaches. */
+void sched_wake_due(process_t *p, uint64_t now)
 {
-    p->state = PROC_READY;
+    (void)p;
+    (void)now;
 }
 
 /** These processes never enter the scheduler. */

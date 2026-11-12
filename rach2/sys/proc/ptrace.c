@@ -938,8 +938,7 @@ long sys_ptrace(isr_params_t *params)
         if (t->ptrace_status == 0) {
             t->ptrace |= PT_INTERRUPT;
             if (t->state == PROC_BLOCKED) {
-                t->wakeup_tick = 0;
-                sched_make_ready(t);
+                sched_wake_signal(t);
             }
         } else if (t->ptrace & PT_LISTEN) {
             ptrace_restop(t);
