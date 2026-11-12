@@ -111,13 +111,15 @@ needs; never under
 .Cm rach2.notsc .
 Under KVM, where KVM offers its stable clock and its clock page says the
 counter is one clock on every processor, the kernel takes the counter's
-rate from that page instead of measuring it, as Linux's kvm-clock does,
-and follows the page: a new rate is taken at the next tick, and while the
-page withdraws its stable bit the clock calls enter the kernel.
-Each reading checks the boot processor's clock page itself, as Linux's
-vDSO does, and enters the kernel the moment its stable bit is clear,
-without waiting for the tick; the kernel then carries the clock on by
-KVM's clock until the tick stops it.
+rate from that page instead of measuring it, and the clock counts KVM's
+clock, the counter converted through the page by its rate and system
+time, as Linux's kvm-clock does, so that a change KVM makes to its clock
+moves this one with it.
+Each reading converts through the boot processor's clock page itself and
+checks its stable bit, as Linux's vDSO does, and enters the kernel the
+moment the bit is clear, without waiting for the tick; the kernel then
+carries the clock on by KVM's clock, never behind a reading before it,
+until the tick stops it, and starts it again once the bit is back.
 As each further processor starts, it and the boot processor read the
 counter in turn for two ticks, and a reading behind the other's turns the
 TSC clock off.
