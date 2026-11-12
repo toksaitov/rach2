@@ -19,8 +19,9 @@
  * open file description, which has both. A watch is kept by the base mount
  * of the file system (`vfs_mount_base`) and the inode number, so a change
  * seen through a bind mount reaches it. A caller tests `inotify_watches`
- * before it tells of a change, and `inotify_desc` tests it itself, so a
- * machine with no watch pays one comparison for each.
+ * before it tells of a change, or `inotify_mount_watched` where it knows the
+ * mount, and `inotify_desc` tests the latter itself, so a machine with no
+ * watch, or none on the file's file system, pays one comparison for each.
  */
 
 struct isr_params;
@@ -54,6 +55,15 @@ struct open_file;
 
 /* How many watches the machine has; every hook does nothing while it is 0. */
 extern int inotify_watches;
+
+/**
+ * Whether a watch is on the file system of `mnt`, which may be NULL, as
+ * Linux's `fsnotify_sb_has_watchers` asks of a superblock before any event
+ * (include/linux/fsnotify.h:34-37, 81): one word read, which a caller
+ * without the big lock may make, so that a read, an open or a close of a
+ * file elsewhere takes no lock for inotify.
+ */
+int inotify_mount_watched(const struct vfs_mount *mnt);
 
 /* fs.inotify, at Linux's defaults: the instances and the watches one user
  * may have, and the events an instance may queue before the next one is

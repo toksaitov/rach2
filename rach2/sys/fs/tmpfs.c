@@ -1437,6 +1437,7 @@ static const struct vfs_ops tmpfs_ops = {
     0, /* xattr */
     tmpfs_cachestat,
     0, /* put_unless_last */
+    0, /* readlink_cached */
 };
 
 const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1, 1, 0, 0, 0};

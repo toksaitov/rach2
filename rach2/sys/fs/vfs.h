@@ -339,6 +339,13 @@ struct vfs_ops {
      * sets `name_cache` has it, for the cached walk (`resolve_path`); NULL
      * for any other type. */
     int (*put_unless_last)(struct vfs_mount *mnt, void *node);
+    /* Copy the target of the symbolic link `node` into `buf` of `cap` bytes,
+     * with a NUL, when the node in memory holds it, as Linux's `i_link`
+     * does for a fast link: its length, or -1 for a target that must be
+     * read with `readlink`. Takes no lock and does not sleep, for the cached
+     * walk (`resolve_path`), whose hold keeps the node; NULL for a type that
+     * keeps no target so. */
+    int (*readlink_cached)(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap);
 };
 
 /* What cachestat(2) counts over a file's range of pages, in the order and
@@ -436,6 +443,10 @@ struct vfs_mount {
      * afterwards, and a mount of the boot by the first and those made from
      * it. Its words are freed with the record (vfs_ns.c). */
     struct idset ns_seen;
+    /* The inotify watches on the file system, counted on its base mount
+     * (`inotify_mount_watched`); changes under the big lock and is read
+     * without it as one word. */
+    int inotify_watched;
     /* For a bind mount, the mount whose file system it shows, never itself
      * a bind, and the path of its root within that file system; NULL and
      * empty for every other mount. A bind has that mount's type, device,
@@ -726,6 +737,10 @@ int vfs_unmount_record(struct vfs_mount *m);
 /** Entry zero, the root of the mount table, read under the table's lock,
  * so a caller need not hold the big lock. */
 struct vfs_mount *vfs_root_mount(void);
+
+/** Add `delta` to the count of inotify watches on the base mount `m`
+ * (`inotify_watched`), whose record the table holds; under the big lock. */
+void vfs_mount_watches(const struct vfs_mount *m, int delta);
 
 /** Whether the device under `mnt` has gone, by its own flags or, for a
  * partition window, by those of the disk under it (`block_flags`); 0 for a

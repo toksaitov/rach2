@@ -574,6 +574,7 @@ const struct vfs_ops debugfs_vops = {
     0, /* xattr */
     0, /* cachestat */
     0, /* put_unless_last */
+    0, /* readlink_cached */
 };
 
 /** The number at the start of `s` in `base`, 8 or 10, its end in `*end`. */

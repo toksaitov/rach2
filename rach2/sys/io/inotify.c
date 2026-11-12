@@ -163,6 +163,7 @@ static void drop(struct watch *w)
         *link = w->next;
     }
     inotify_watches--;
+    vfs_mount_watches(w->mnt, -1);
     kfree(w);
 }
 
@@ -211,9 +212,14 @@ void inotify_child(struct vfs_mount *mnt, uint64_t dir_ino, const char *name, ui
     }
 }
 
+int inotify_mount_watched(const struct vfs_mount *mnt)
+{
+    return mnt && *(volatile const int *)&vfs_mount_base(mnt)->inotify_watched != 0;
+}
+
 void inotify_desc(struct open_file *ofd, uint32_t mask)
 {
-    if (!inotify_watches || !ofd || !ofd->vmnt) {
+    if (!ofd || !inotify_mount_watched(ofd->vmnt)) {
         return;
     }
     inotify_file(ofd->vmnt, ofd->ino, mask);
@@ -357,6 +363,7 @@ static void inotify_close(fd_entry_t *e)
         if (w->owner == in) {
             *wlink = w->next;
             inotify_watches--;
+            vfs_mount_watches(w->mnt, -1);
             kfree(w);
         } else {
             wlink = &w->next;
@@ -459,6 +466,7 @@ int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, ui
     w->next = watches;
     watches = w;
     inotify_watches++;
+    vfs_mount_watches(w->mnt, 1);
     return w->wd;
 }
 
