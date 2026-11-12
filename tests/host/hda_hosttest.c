@@ -1120,6 +1120,34 @@ static void row_play_early(void)
     hda_stop();
 }
 
+/**
+ * An output interrupt for a period the tick already refilled, before the
+ * stream's first interrupt, finds the position in the first half of the
+ * next period: its service fills nothing and clears the pending flag, as
+ * Linux's azx_position_ok passes such a position, so the tick does not ask
+ * for the stream again until the next interrupt is late.
+ */
+static void row_play_refilled(void)
+{
+    unsigned next = 1;
+
+    row = "play-irq-refilled";
+    model_start(1u << 6, 48000, AUDIO_S16LE, 2);
+    write_blocks(&next);
+    model_play(25000);
+    tick();
+    check(hw_fill_count == 1, "the tick fills the period played before the first interrupt");
+    hda_test_write(HDA_INTSTS, 1u << output_stream_index, 32);
+    hda_irq_handler(NULL);
+    hda_test_write(HDA_INTSTS, 0, 32);
+    check(play_irq_seen && !play_irq_pending && hw_fill_count == 1,
+          "its interrupt fills nothing and leaves the stream not pending");
+    model_play(1000);
+    tick();
+    check(hw_fill_count == 1 && !play_irq_pending, "the tick then leaves the stream alone");
+    hda_stop();
+}
+
 /** Allocate a procfs snapshot, or inject allocation failure. */
 void *kmalloc(size_t size)
 {
@@ -1781,6 +1809,55 @@ static void row_capture_overrun(void)
     clock_stopped = 0;
 }
 
+/**
+ * An input interrupt that comes while the position still reads the second
+ * half of the period before hands over nothing and leaves the stream pending
+ * (`cap_irq_pending`); the tick asks at each call and hands the period over
+ * once the position has passed it. An interrupt for a period the tick
+ * already handed over, after a late one, finds the position in the first
+ * half of the next and clears the flag.
+ */
+static void row_capture_early(void)
+{
+    audio_stream_t s;
+
+    row = "capture-irq-early";
+    reset_model();
+    model_adc();
+    check(hda_find_output(), "enumeration succeeds");
+    /* 1024 frames a period at 48 kHz, 21.3 ms. */
+    check(open_capture(&s, 48000, AUDIO_S16LE, 2, 4096) == 0, "capture set up");
+    clock_stopped = 1;
+    check(hda_driver.stream_start(&s) == 0, "capture starts");
+    move_input(3000);
+    clock_value += 24000 * 16;
+    hda_test_write(HDA_INTSTS, 1u << input_stream_index, 32);
+    hda_irq_handler(NULL);
+    hda_test_write(HDA_INTSTS, 0, 32);
+    check(cap_irq_pending && got_transfers == 0,
+          "an interrupt before the period's end hands over nothing and stays pending");
+    tick();
+    check(cap_irq_pending && got_transfers == 0,
+          "the tick hands over nothing while the position reads the first period");
+    move_input(4096 + 200);
+    clock_value += 24000 * 6;
+    tick();
+    check(!cap_irq_pending && got_transfers == 1,
+          "the next tick hands the period over once the position has passed it");
+    move_input(2 * 4096 + 100);
+    clock_value += 24000 * 21;
+    kernel_ticks += 33; /* a period and a half of 21.3 ms, and a tick more */
+    tick();
+    check(got_transfers == 2, "the tick hands the next period over once the interrupt is late");
+    hda_test_write(HDA_INTSTS, 1u << input_stream_index, 32);
+    hda_irq_handler(NULL);
+    hda_test_write(HDA_INTSTS, 0, 32);
+    check(!cap_irq_pending && got_transfers == 2,
+          "the late interrupt hands over nothing and leaves the stream not pending");
+    hda_driver.stream_close(&s);
+    clock_stopped = 0;
+}
+
 /** Run the ticks of `n` jack polls, a quarter second each. */
 static void poll_jacks(unsigned n)
 {
@@ -2158,6 +2235,72 @@ static void beep_ticks(unsigned n)
     }
 }
 
+/** Run the services asked for since the last call, as khda does once the
+ * host test stands for it (hda_test_threaded). */
+static void run_khda(void)
+{
+    uint32_t wanted = service_wanted;
+
+    service_wanted = 0;
+    hda_serve(wanted);
+}
+
+/**
+ * The G50-70's beep with khda running: a tone and the tick's stop each hand
+ * their divider to khda and send no verb, khda sends it, turning the
+ * speaker's pin on first, and waits while code outside its service holds
+ * the jacks; a tone that comes before khda sends a stop replaces it, so the
+ * stop is never sent after the tone; a second of silence turns the pin off.
+ */
+static void beep_threaded(void)
+{
+    const hda_report_t *r = hda_get_report();
+    struct speaker_counters c;
+    unsigned before;
+
+    reset_model();
+    model_lenovo();
+    check(hda_find_output(), "enumeration succeeds");
+    dma_checked = true;
+    speaker_set_beep(hda_driver.beep);
+    hda_test_threaded = true;
+    service_wanted = 0;
+    before = beep_verbs;
+    hda_jack_hold();
+    speaker_tone(SPEAKER_CLOCK / 750, 100);
+    speaker_get_counters(&c);
+    check(beep_verbs == before && beep_owed && (service_wanted & HDA_SERVE_BEEP),
+          "a tone hands divider 16 to khda and sends no verb");
+    check(c.beeps == 1 && c.beep_divider == 16, "the counters name the divider handed on");
+    run_khda();
+    check(beep_verbs == before && pin_ctl[23] == 0 && beep_owed,
+          "khda leaves the pins and the tone while the jacks are held");
+    hda_jack_release();
+    beep_ticks(1);
+    run_khda();
+    check(beep_ctl[18] == (0x100 | 16) && pin_ctl[23] == 0x40 && r->beep_path && !beep_owed,
+          "once they are not, the tick asks again and khda turns the pin on and sends it");
+    beep_ticks(99);
+    speaker_get_counters(&c);
+    check(beep_ctl[18] == (0x100 | 16) && beep_owed && c.ends == 1 && c.beep_retries == 0 &&
+              c.beep_divider == 0,
+          "the tick ending the tone hands the stop to khda and sends no verb");
+    before = beep_verbs;
+    speaker_tone(SPEAKER_CLOCK / 1000, 100);
+    run_khda();
+    check(beep_ctl[18] == (0x100 | 12) && beep_verbs == before + 1 && !beep_owed,
+          "a tone before khda sends the stop replaces it");
+    speaker_tone(0, 0);
+    run_khda();
+    check(beep_ctl[18] == 0x100 && pin_ctl[23] == 0x40 && !beep_owed,
+          "khda sends a request's stop and leaves the pin on");
+    beep_ticks(HDA_BEEP_IDLE_TICKS);
+    run_khda();
+    check(pin_ctl[23] == 0 && !r->beep_path, "and turns it off after a second of silence");
+    hda_test_threaded = false;
+    service_wanted = 0;
+}
+
 /**
  * The G50-70's beep during playback: a tone of 1000 Hz sends divider 12,
  * and a stop of playback during it leaves the speaker's pin on until the
@@ -2227,9 +2370,10 @@ static void beep_other_codecs(void)
  * the tone sends 0, a busy interface delays that by a tick, and a second of
  * silence turns the pin off again. KIOCSOUND 0 stops a sound, a level of 0
  * sends 0, and a stop of playback during a tone leaves the pin on until the
- * tone ends. A widget with power control is powered, a mixer that lists the
- * widget has that input unmuted at 0 dB, and a codec without one leaves the
- * PIT alone to sound.
+ * tone ends. With khda running, a tone and the tick's stop are handed to
+ * it, and a tone replaces a stop not yet sent. A widget with power control
+ * is powered, a mixer that lists the widget has that input unmuted at 0 dB,
+ * and a codec without one leaves the PIT alone to sound.
  */
 static void row_beep(void)
 {
@@ -2293,6 +2437,7 @@ static void row_beep(void)
     beep_ticks(HDA_BEEP_IDLE_TICKS);
 
     beep_during_playback();
+    beep_threaded();
     beep_other_codecs();
 }
 
@@ -2317,6 +2462,7 @@ int main(void)
     row_missed();
     row_play_gate();
     row_play_early();
+    row_play_refilled();
     row_shutdown();
     row_mix_width();
     row_capture_path();
@@ -2325,6 +2471,7 @@ int main(void)
     row_capture_stream();
     row_capture_duplex();
     row_capture_overrun();
+    row_capture_early();
     row_capture_fails();
     row_input_controls();
     row_jack_switch();
