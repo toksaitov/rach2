@@ -63,8 +63,8 @@
 /* The fewest lists that each table has. */
 #define FC_MIN_LISTS 1024u
 
-/* The most pages one call of the type's `read_frames` fills, as ext2 plans
- * a transfer of at most that: Linux's default readahead window. */
+/* The pages a run read in one call holds on the stack: Linux's default
+ * readahead window. */
 #define FC_WINDOW FILE_RA_PAGES
 
 /* The counters of changes, one for each set of files whose hashes share
@@ -828,9 +828,52 @@ static int fc_job_waiting(void *arg)
     return 0;
 }
 
+/* The most pages one call of the type's `read_frames` fills: what one
+ * request to a device moves, so that a long window goes to the disk in
+ * requests as long as Linux's (`ractl_max_pages`). */
+#define FC_RUN_MOST (BLOCK_REQ_MAX_SECTORS / (PAGE_SIZE / BLOCK_SECTOR_SIZE))
+
+/* The records and frames of a run of pages read in one call: FC_WINDOW on
+ * the stack, and for a longer run arrays from the heap. */
+struct fc_run {
+    struct fc_page **recs;
+    uintptr_t *phys;
+    uint32_t room;
+    struct fc_page *recs_small[FC_WINDOW];
+    uintptr_t phys_small[FC_WINDOW];
+};
+
+/** Give `r` room for `want` pages, up to FC_RUN_MOST, from the heap past
+ * FC_WINDOW, or FC_WINDOW when the heap has none. Not under `fc_lock`. */
+static void fc_run_init(struct fc_run *r, uint32_t want)
+{
+    r->recs = r->recs_small;
+    r->phys = r->phys_small;
+    r->room = FC_WINDOW;
+    if (want <= FC_WINDOW) {
+        return;
+    }
+    want = want < FC_RUN_MOST ? want : FC_RUN_MOST;
+    r->recs = kmalloc(want * (sizeof(*r->recs) + sizeof(*r->phys)));
+    if (!r->recs) {
+        r->recs = r->recs_small;
+        return;
+    }
+    r->phys = (uintptr_t *)(void *)(r->recs + want);
+    r->room = want;
+}
+
+/** Give back what `fc_run_init` took. */
+static void fc_run_free(struct fc_run *r)
+{
+    if (r->recs != r->recs_small) {
+        kfree(r->recs);
+    }
+}
+
 /**
  * Read the pages of job `j` that the cache lacks into new frames, which
- * join the cache, a run of at most FC_WINDOW pages a call of the type's
+ * join the cache, a run of at most FC_RUN_MOST pages a call of the type's
  * `read_frames` (`fc_fill`), as Linux's `page_cache_ra_unbounded` skips
  * the folios the page cache has (mm/readahead.c:236-266). The page `j->mark`
  * names takes the mark when it is read, unless a reader reached it first
@@ -838,49 +881,52 @@ static int fc_job_waiting(void *arg)
  */
 static void fc_job_read(struct fc_job *j)
 {
-    struct fc_page *recs[FC_WINDOW];
-    uintptr_t phys[FC_WINDOW];
+    struct fc_run r;
     uint32_t at = j->start, end = j->start + j->count, n, i, flags;
     int32_t got;
 
+    fc_run_init(&r, j->count);
     while (at < end) {
         flags = spin_lock_irqsave(&fc_lock);
         while (at < end && fc_lookup(&j->f, at)) {
             at++;
         }
-        for (n = 0; at + n < end && n < FC_WINDOW && (n == 0 || !fc_lookup(&j->f, at + n)) &&
-                    (recs[n] = fc_new()) != NULL;
+        for (n = 0; at + n < end && n < r.room && (n == 0 || !fc_lookup(&j->f, at + n)) &&
+                    (r.recs[n] = fc_new()) != NULL;
              n++) {
-            phys[n] = fc_phys(recs[n]);
+            r.phys[n] = fc_phys(r.recs[n]);
         }
         spin_unlock_irqrestore(&fc_lock, flags);
         if (n == 0) {
-            return;
+            break;
         }
-        got = fc_fill(j->ofd, at, n, phys);
+        got = fc_fill(j->ofd, at, n, r.phys);
         for (i = 0; i < n; i++) {
             if (got > (int32_t)i) {
                 flags = spin_lock_irqsave(&fc_lock);
                 if (j->mark == at + i) {
-                    recs[i]->pfn |= FC_MARK;
+                    r.recs[i]->pfn |= FC_MARK;
                     j->mark = FC_NO_MARK;
                 }
                 spin_unlock_irqrestore(&fc_lock, flags);
             }
-            if (got <= (int32_t)i || !fc_insert(&j->f, at + i, recs[i], j->epoch)) {
-                fc_free(recs[i]);
+            if (got <= (int32_t)i || !fc_insert(&j->f, at + i, r.recs[i], j->epoch)) {
+                fc_free(r.recs[i]);
             }
         }
         if (got < (int32_t)n) {
-            return;
+            break;
         }
         at += n;
     }
+    fc_run_free(&r);
 }
 
 /** A worker, kreadahead: take the oldest waiting job, read it, end it and
  * wake its waiters, and sleep while no job waits. It reads without the big
- * lock, as ext2 reads a file (`reads_unlocked`). */
+ * lock, as ext2 reads a file (`reads_unlocked`), and marks itself in a call
+ * (`in_syscall`) only across a job, since a kernel thread so marked between
+ * them would count as one that is exiting (`proc_is_kthread`). */
 static void fc_worker(void)
 {
     struct fc_job *j;
@@ -909,6 +955,10 @@ static void fc_worker(void)
         if (!j) {
             continue;
         }
+        /* The disk sleeps a caller in a system call and polls for any
+         * other; the job and a last close sleep as a call does, and the
+         * tick does not switch a kernel thread. */
+        current_proc->in_syscall = 1;
         fc_job_read(j);
         flags = spin_lock_irqsave(&fc_lock);
         ofd = j->ofd;
@@ -921,6 +971,7 @@ static void fc_worker(void)
         wq_wake_all(&done_wq);
         fd_ofd_unref(ofd);
         vfs_leave(mnt);
+        current_proc->in_syscall = 0;
     }
 }
 
@@ -1145,7 +1196,7 @@ static void fc_async_ra(struct open_file *ofd, const struct fc_file *f, uint32_t
  * Read page `pgoff` of `f`, open as `ofd`, into the frame of `p`, which
  * `fc_new` gave, for a read that wants `req` pages from there, and with it
  * in the same call the pages after it of the window readahead gives
- * (`fc_sync_ra`) that are not present, up to FC_WINDOW in all, each into
+ * (`fc_sync_ra`) that are not present, up to FC_RUN_MOST in all, each into
  * a record and frame of its own, which then join the cache, as Linux's
  * `page_cache_ra_unbounded` reads its window into new folios
  * (mm/readahead.c). The call ends at the first page that is present or no
@@ -1159,33 +1210,34 @@ static void fc_async_ra(struct open_file *ofd, const struct fc_file *f, uint32_t
 static int32_t fc_read_window(struct open_file *ofd, const struct fc_file *f, uint32_t pgoff,
                               uint32_t req, struct fc_page *p, uint32_t epoch)
 {
-    struct fc_page *recs[FC_WINDOW];
-    uintptr_t phys[FC_WINDOW];
+    struct fc_run r;
     uint32_t n = 1, i, flags, mark, nr = fc_sync_ra(ofd, f, pgoff, req, &mark);
     uint64_t end = (uint64_t)pgoff * PAGE_SIZE, size;
     int32_t got;
 
-    recs[0] = p;
-    phys[0] = fc_phys(p);
+    fc_run_init(&r, nr);
+    r.recs[0] = p;
+    r.phys[0] = fc_phys(p);
     flags = spin_lock_irqsave(&fc_lock);
-    while (n < nr && n < FC_WINDOW && (uint64_t)(pgoff + n) * PAGE_SIZE < f->size &&
-           !fc_present(f, pgoff + n) && (recs[n] = fc_new()) != NULL) {
-        phys[n] = fc_phys(recs[n]);
+    while (n < nr && n < r.room && (uint64_t)(pgoff + n) * PAGE_SIZE < f->size &&
+           !fc_present(f, pgoff + n) && (r.recs[n] = fc_new()) != NULL) {
+        r.phys[n] = fc_phys(r.recs[n]);
         n++;
     }
     spin_unlock_irqrestore(&fc_lock, flags);
     if (n < nr) {
         fc_queue(ofd, f, pgoff + n, nr - n, mark, epoch);
     }
-    got = fc_fill(ofd, pgoff, n, phys);
+    got = fc_fill(ofd, pgoff, n, r.phys);
     for (i = 1; i < n; i++) {
         if (got > (int32_t)i && pgoff + i == mark) {
-            recs[i]->pfn |= FC_MARK;
+            r.recs[i]->pfn |= FC_MARK;
         }
-        if (got <= (int32_t)i || !fc_insert(f, pgoff + i, recs[i], epoch)) {
-            fc_free(recs[i]);
+        if (got <= (int32_t)i || !fc_insert(f, pgoff + i, r.recs[i], epoch)) {
+            fc_free(r.recs[i]);
         }
     }
+    fc_run_free(&r);
     if (got <= 0) {
         return got;
     }

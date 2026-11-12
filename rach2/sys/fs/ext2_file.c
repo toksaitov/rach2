@@ -275,8 +275,13 @@ int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count
     return rc != 0 ? rc : (int32_t)done;
 }
 
-/* The pages one plan of `ext2_read_frames` covers. */
+/* The pages one plan of `ext2_read_frames` covers on its stack, and with a
+ * plan from the heap for a longer read the most it covers: what one request
+ * to a device moves, so that a window read ahead goes to the disk in
+ * requests as long as Linux's, whose bio for a window takes up to 256
+ * pages (BIO_MAX_VECS). */
 #define EXT2_FRAMES_PLAN 32u
+#define EXT2_FRAMES_MOST (BLOCK_REQ_MAX_SECTORS / (PAGE_SIZE / BLOCK_SECTOR_SIZE))
 /* What a plan found for a page: a hole, or a page another copy of which
  * may be newer than the disk's, which `ext2_read` reads; any other plan is
  * the page's first sector, which is past both, since block 0 holds no data
@@ -434,26 +439,37 @@ int32_t ext2_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, ui
 {
     struct ext2_mount *em = ext2_em_of(mnt);
     struct ext2_node *n = handle;
-    uint64_t plan[EXT2_FRAMES_PLAN], size;
-    uint32_t done = 0, pages, left, i;
+    uint64_t small[EXT2_FRAMES_PLAN], *plan = small, size;
+    uint32_t done = 0, pages, left, i, room = EXT2_FRAMES_PLAN;
     int32_t got;
     int rc = 0;
 
     if ((n->mode & S_IFMT_) != S_IFREG_) {
         return (n->mode & S_IFMT_) == S_IFDIR_ ? -EISDIR : -EINVAL;
     }
+    if (count > room) {
+        room = count < EXT2_FRAMES_MOST ? count : EXT2_FRAMES_MOST;
+        plan = kmalloc(room * sizeof(*plan));
+        if (!plan) {
+            plan = small;
+            room = EXT2_FRAMES_PLAN;
+        }
+    }
     ext2_node_lock(n);
     size = n->size;
     pages = (uint32_t)((size + PAGE_SIZE - 1) >> 12);
     if (first >= pages) {
         ext2_node_unlock(n);
+        if (plan != small) {
+            kfree(plan);
+        }
         return 0;
     }
     if (count > pages - first) {
         count = pages - first;
     }
     while (done < count) {
-        left = count - done < EXT2_FRAMES_PLAN ? count - done : EXT2_FRAMES_PLAN;
+        left = count - done < room ? count - done : room;
         for (i = 0; i < left; i++) {
             rc = frame_plan(em, n, first + done + i, &plan[i]);
             if (rc != 0) {
@@ -474,6 +490,9 @@ int32_t ext2_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, ui
         }
     }
     ext2_node_unlock(n);
+    if (plan != small) {
+        kfree(plan);
+    }
     return done > 0 ? (int32_t)done : rc;
 }
 
