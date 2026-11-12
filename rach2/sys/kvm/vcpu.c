@@ -2126,17 +2126,23 @@ static int32_t vcpu_enable_cap(struct kvm_vcpu *v, uintptr_t arg)
 }
 
 /** KVM_SET_TSC_KHZ of a vCPU, as Linux's: 0, or -EINVAL for a rate
- * `kvm_tsc_khz_arg` or `kvm_tsc_set_khz` refuses. The kvmclock is
- * written again at the new rate before the next entry. */
+ * `kvm_tsc_khz_arg` or `kvm_tsc_set_khz` refuses. Before the next entry
+ * the kvmclock and the reference TSC page, which follows the first vCPU's
+ * TSC, are written again at the new rate, and `timer_ns` is found again,
+ * since a TSC deadline armed at the old rate may now be past; a refused
+ * rate changes the TSC too. */
 static int32_t set_tsc_khz(struct kvm_vcpu *v, uintptr_t arg)
 {
     uint32_t khz = kvm_tsc_khz_arg(arg);
+    int r;
 
-    if (khz == 0 || kvm_tsc_set_khz(v, khz) != 0) {
+    if (khz == 0) {
         return -EINVAL;
     }
-    kvm_vcpu_kick(v, KVM_REQ_CLOCK_UPDATE);
-    return 0;
+    r = kvm_tsc_set_khz(v, khz); /* a refusal leaves the host's rate */
+    v->vm->hv_clock_moved = 1;
+    kvm_vcpu_kick(v, KVM_REQ_CLOCK_UPDATE | KVM_REQ_TIMER);
+    return r != 0 ? -EINVAL : 0;
 }
 
 /** KVM_PRE_FAULT_MEMORY: the range at `arg` is mapped and written back

@@ -677,6 +677,9 @@ void kvm_clock_prepare(struct kvm_vcpu *v)
     master_recheck(v->vm);
     update = kvm_vcpu_test_clear(v, KVM_REQ_CLOCK_UPDATE);
     if (v->tsc_catchup && tsc_catch_up(v)) {
+        /* The TSC deadline is nearer now: find `timer_ns` again, which
+         * cancels this entry, since the timers' pass came before. */
+        kvm_vcpu_kick(v, KVM_REQ_TIMER);
         update = 1;
     }
     if (pv && !update && !v->vm->master_clock &&
