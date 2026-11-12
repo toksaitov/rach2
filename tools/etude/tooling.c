@@ -272,8 +272,10 @@ static int private_dir(const char *cache, const char *prefix, char *out, size_t 
     for (n = 0; n < 1000; n++) {
         if (fmt(out, size, "%s/%s-%ld-%u", cache, prefix, (long)getpid(), n) != 0)
             return -1;
-        if (make_dir(out) == 0)
+        if (make_dir(out) == 0) {
+            tooling_scratch("made", out);
             return 0;
+        }
         if (errno != EEXIST)
             return -1;
     }
@@ -294,6 +296,8 @@ static int remove_dir(const char *dir, const char *const *names)
     }
     if (rmdir(dir) != 0)
         rc = -1;
+    else
+        tooling_scratch("removed", dir);
     return rc;
 }
 
@@ -1038,6 +1042,7 @@ static int prepare_line(const struct etude_tooling_site *site, struct work *w, u
         fmt(seed, sizeof(seed), "%s/seed.img", w->dir) != 0 ||
         fmt(w->b.channel, sizeof(w->b.channel), "%s/channel.log", w->dir) != 0)
         return failure(why, whylen, "the path is too long");
+    tooling_scratch("made", w->root);
     if (make_seed(site, w->dir, why, whylen) != 0 || run_program(site, create, why, whylen) != 0)
         return -1;
     if (qemu_line(&w->l, site, &w->m, w->dir, w->root, &shape) != 0 ||
@@ -1186,12 +1191,17 @@ static int prepare_once(const struct etude_tooling_site *site, unsigned cpus, ui
         if (res->cost.cleanup == ETUDE_CLEANUP_CONFIRMED)
             unlink(w.root);
     }
+    if (w.root[0] != '\0' && !exists(w.root))
+        tooling_scratch("removed", w.root);
     boot_free(&w.b);
     if (w.dir[0] != '\0' &&
         ((res->outcome != ETUDE_TOOLING_ENDED && res->outcome != ETUDE_TOOLING_STOPPED) ||
-         res->cost.cleanup != ETUDE_CLEANUP_CONFIRMED))
+         res->cost.cleanup != ETUDE_CLEANUP_CONFIRMED)) {
         snprintf(res->dir, sizeof(res->dir), "%s", w.dir);
-    else if (w.dir[0] != '\0' && remove_dir(w.dir, scratch) != 0)
+        tooling_scratch("kept", w.dir);
+        if (exists(w.root))
+            tooling_scratch("kept", w.root);
+    } else if (w.dir[0] != '\0' && remove_dir(w.dir, scratch) != 0)
         res->cost.cleanup = ETUDE_CLEANUP_UNCONFIRMED;
     if (etude_history_now(&now) == 0)
         step_end(&w.b, &now, 0, 0, res->outcome == ETUDE_TOOLING_ENDED);
@@ -1440,9 +1450,10 @@ int etude_tooling_run(const struct etude_tooling_site *site, const struct etude_
         res->cost.disk_bytes += used_bytes(job->disks[i]);
     boot_free(&w.b);
     if ((res->outcome != ETUDE_TOOLING_ENDED && res->outcome != ETUDE_TOOLING_STOPPED) ||
-        job->keep || res->cost.cleanup != ETUDE_CLEANUP_CONFIRMED)
+        job->keep || res->cost.cleanup != ETUDE_CLEANUP_CONFIRMED) {
         snprintf(res->dir, sizeof(res->dir), "%s", w.dir);
-    else if (remove_dir(w.dir, scratch) != 0 && res->cost.cleanup == ETUDE_CLEANUP_CONFIRMED)
+        tooling_scratch("kept", w.dir);
+    } else if (remove_dir(w.dir, scratch) != 0 && res->cost.cleanup == ETUDE_CLEANUP_CONFIRMED)
         res->cost.cleanup = ETUDE_CLEANUP_UNCONFIRMED;
     if (etude_history_now(&now) != 0)
         return res->outcome == ETUDE_TOOLING_ENDED ? 0 : -1;

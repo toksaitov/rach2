@@ -391,3 +391,63 @@ void tooling_cache_prune(const struct etude_tooling_site *site, const char *cons
     tooling_cache_leave(guard);
     free(c);
 }
+
+/**
+ * Append "VERB PATH" to the scratch record that ETUDE_SCRATCH_RECORD names.
+ *
+ * A release run on Windows names the record, and tools/flow/winclean.sh
+ * removes each path whose last line says "made" once the run's processes are
+ * stopped: what a process stopped by force leaves, never what it kept as
+ * evidence or what another run made. PATH is made absolute, with forward
+ * slashes on Windows. Each line is one append on a handle opened for it, so
+ * the run's processes may note at once. Does nothing when the variable is
+ * unset; a line that cannot be written is reported on stderr.
+ */
+void tooling_scratch(const char *verb, const char *path)
+{
+    const char *record = getenv("ETUDE_SCRATCH_RECORD");
+    char line[CACHE_PATH + 16], cwd[CACHE_PATH];
+    int n, ok;
+
+    if (!record || !*record || !path || !*path || strchr(path, '\n'))
+        return;
+#ifdef _WIN32
+    if (etude_win_absolute(path))
+#else
+    if (path[0] == '/')
+#endif
+        n = snprintf(line, sizeof(line), "%s %s\n", verb, path);
+    else if (getcwd(cwd, sizeof(cwd)) != NULL)
+        n = snprintf(line, sizeof(line), "%s %s/%s\n", verb, cwd, path);
+    else
+        n = -1;
+    ok = n > 0 && n < (int)sizeof(line);
+#ifdef _WIN32
+    if (ok) {
+        HANDLE h;
+        DWORD wrote = 0;
+        int i;
+
+        for (i = 0; i < n; i++)
+            if (line[i] == '\\')
+                line[i] = '/';
+        /* FILE_APPEND_DATA alone makes each write an atomic append. */
+        h = CreateFileA(record, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                        OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        ok = h != INVALID_HANDLE_VALUE && WriteFile(h, line, (DWORD)n, &wrote, NULL) &&
+             wrote == (DWORD)n;
+        if (h != INVALID_HANDLE_VALUE)
+            CloseHandle(h);
+    }
+#else
+    if (ok) {
+        int fd = open(record, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0600);
+
+        ok = fd >= 0 && write(fd, line, (size_t)n) == (ssize_t)n;
+        if (fd >= 0)
+            close(fd);
+    }
+#endif
+    if (!ok)
+        fprintf(stderr, "etude: scratch record: cannot note %s %s in %s\n", verb, path, record);
+}

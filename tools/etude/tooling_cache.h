@@ -13,4 +13,8 @@ void tooling_cache_leave(intptr_t guard);
 /* Remove completed machines that no key of `keep` names, once keep[0], the
  * machine just made or reused, is complete; `keep` ends with NULL. */
 void tooling_cache_prune(const struct etude_tooling_site *site, const char *const *keep);
+/* Note in the scratch record that ETUDE_SCRATCH_RECORD names, if any, that
+ * this process made, kept as evidence or removed the scratch PATH; VERB is
+ * "made", "kept" or "removed". */
+void tooling_scratch(const char *verb, const char *path);
 #endif
