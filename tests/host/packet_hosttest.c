@@ -396,6 +396,10 @@ void klog(int level, const char *subsystem, const char *format, ...)
 
 #include "../../rach2/sys/network/ethernet/ethernet.c"
 #include "../../rach2/sys/network/ip/ip.c"
+
+/* The CPU table that `current_proc` reads in the loopback ring's producer. */
+struct percpu cpu_table[NR_CPUS];
+
 #include "../../rach2/sys/network/ip/ipfrag.c"
 #include "../../rach2/sys/network/ip/pmtu.c"
 

@@ -626,6 +626,7 @@ static void tsync_apply(process_t *self)
         chain_put(t->seccomp);
         t->seccomp = self->seccomp;
         t->seccomp_mode = SECCOMP_MODE_FILTER;
+        proc_work_set(t, WORK_SECCOMP);
         if (self->no_new_privs) {
             t->no_new_privs = 1;
         }
@@ -669,6 +670,7 @@ static int32_t set_mode_filter(uint32_t flags, uintptr_t uprog)
     f->prev = self->seccomp;
     self->seccomp = f;
     self->seccomp_mode = SECCOMP_MODE_FILTER;
+    proc_work_set(self, WORK_SECCOMP);
     if (flags & SECCOMP_FILTER_FLAG_TSYNC) {
         tsync_apply(self);
     }
@@ -699,6 +701,7 @@ int32_t seccomp_prctl_set(uint32_t mode, uintptr_t prog)
             return -EINVAL;
         }
         current_proc->seccomp_mode = SECCOMP_MODE_STRICT;
+        proc_work_set(current_proc, WORK_SECCOMP);
         return 0;
     }
     if (mode == SECCOMP_MODE_FILTER) {

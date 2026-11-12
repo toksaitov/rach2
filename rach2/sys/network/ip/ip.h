@@ -263,7 +263,9 @@ int ip_loop_put_on(const uint8_t *dgram, uint32_t total_len, int ifindex);
 
 /** `ip_loop_put_on` of the datagram whose first `hlen` bytes, its headers,
  * are at `hdr` and the rest, `plen` bytes, at `payload`, so that a sender
- * need not gather a datagram past its own buffer first. */
+ * need not gather a datagram past its own buffer first. Marks the current
+ * thread's work (WORK_LOOP), so that its return to user mode delivers the
+ * ring. */
 int ip_loop_put_parts(const uint8_t *hdr, uint32_t hlen, const uint8_t *payload, uint32_t plen,
                       int ifindex);
 
@@ -271,9 +273,9 @@ int ip_loop_put_parts(const uint8_t *hdr, uint32_t hlen, const uint8_t *payload,
  * timer interrupt. */
 void ip_loop_drain(void);
 
-/* Who drains the loopback: the tick, the idle wait, or the end of a system
-   call or of a thread; `ip_loop_delivered` counts the datagrams each
-   delivered. */
+/* Who drains the loopback: the tick, the idle wait, or the return to user
+   mode of a thread that put a datagram on it, or a thread's end; `ip_loop_delivered` counts the
+   datagrams each delivered. */
 #define IP_LOOP_FROM_TICK 0
 #define IP_LOOP_FROM_IDLE 1
 #define IP_LOOP_FROM_CALL 2
@@ -285,7 +287,8 @@ void ip_loop_drain(void);
  *
  * Called with interrupts off, after the caller has finished with the stack,
  * since a delivery runs the receive path and may transmit: from the tick,
- * the idle wait, a system call's exit and a thread's end, once its
+ * the idle wait, the return to user mode of a thread that put a datagram
+ * on the ring (`syscall_loop_drain`) and a thread's end, once its
  * descriptors are closed. A call made from inside a delivery returns at
  * once, and the drain already running delivers what that delivery put on
  * the ring.

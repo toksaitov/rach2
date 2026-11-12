@@ -94,6 +94,7 @@ static void wake_start(process_t *p, uint32_t late)
     w->part[WAKE_TIMER] = before_lock;
     w->phase = 4;
     w->since = now;
+    proc_work_set(p, WORK_WAKETIME);
 }
 
 /** Start a blocked user thread's first timed wake at `due`, under the run

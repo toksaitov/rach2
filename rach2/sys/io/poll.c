@@ -813,6 +813,7 @@ int32_t poll_mask_set(uintptr_t umask, uint32_t size)
     }
     current_proc->saved_sigmask = current_proc->sig_blocked;
     current_proc->sigmask_saved = 1;
+    proc_work_set(current_proc, WORK_SIGNAL);
     signal_set_blocked(mask);
     if (big) {
         bkl_exit();

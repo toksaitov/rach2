@@ -108,6 +108,7 @@ static uint16_t lines_pci;
  * first two through `x86_64_route` (x86_64/idt.c). */
 void _isr_router(isr_params_t *params);
 void isr_router_locked(isr_params_t *params);
+void isr_syscall(isr_params_t *params);
 int isr_call_ioctl(const isr_params_t *params);
 int isr_entry_lock(const isr_params_t *params);
 
@@ -736,18 +737,22 @@ static void _dispatch(isr_params_t *params)
 
 /**
  * Note an entry from user mode's cycle count (`entry_cycles`), which tick
- * accounting reads (`sched_account_tick`), and mark one that is not a
- * system call with -1 in the interrupted thread's `orig_nr`, as Linux
- * writes -1 in `orig_ax` on every such entry, so that its tracer and its
- * core file read -1 there and not the number of the last call. Only the
- * thread itself writes the field while it runs, so no lock is needed.
+ * accounting reads (`sched_account_tick`), when the cycle account is on
+ * (`sched_cycle_account`), and mark one that is not a system call with -1
+ * in the interrupted thread's `orig_nr`, as Linux writes -1 in `orig_ax` on
+ * every such entry, so that its tracer and its core file read -1 there and
+ * not the number of the last call. Only the thread itself writes the field
+ * while it runs, so no lock is needed.
  */
 static void user_entry(const isr_params_t *params)
 {
-    if (FRAME_USER(params)) {
+    if (!FRAME_USER(params)) {
+        return;
+    }
+    if (sched_cycle_account) {
         this_cpu()->entry_cycles = arch_cycles();
     }
-    if (FRAME_USER(params) && params->vector != SYSCALL_ENTRY && current_proc) {
+    if (params->vector != SYSCALL_ENTRY && current_proc) {
         current_proc->orig_nr = -1;
     }
 }
@@ -803,7 +808,7 @@ int isr_call_ioctl(const isr_params_t *params)
  * (`bkl_frame_push`), for `isr_leave`. A system call is judged by its
  * handler and ABI and the thread's state (`syscall_entry_locked`), an
  * exception by its chain (`exception_unlock`). Returns nonzero when the lock
- * was taken. `ia32_fast_syscall` (vdso32.c) calls it as `_isr_router` does.
+ * was taken. Interrupts are off.
  */
 int isr_entry_lock(const isr_params_t *params)
 {
@@ -818,33 +823,65 @@ int isr_entry_lock(const isr_params_t *params)
 }
 
 /**
- * Run the handler chain of a processor exception or a system call, under
- * the big lock unless the entry runs without it (`isr_entry_lock`);
- * `isr_leave` gives the lock back. `params` is the saved register frame, so
- * that a handler can change the saved registers, a system call's result for
- * one. An exception during the panic's read of the process panics before
- * the lock is taken (`panic_if_reading`).
+ * Run the system call in `params`, as Linux's `do_syscall_64` does, with
+ * interrupts off; `isr_leave` makes its return. A call that runs without
+ * the big lock (`syscall_entry_locked`) pushes a frame record of 0 and does
+ * nothing else of the lock's: the entry's name for bkl/calls is not kept,
+ * and a hold the call takes is charged to it by its number
+ * (`bkl_mark_hold`). A call that takes the lock records the frame, names
+ * the hold and keeps the entry's name around the handler
+ * (`isr_router_locked`). Either counts in bkl/calls under its number and
+ * an ioctl's request, and with the cycle account on its time too
+ * (`smp_call_end`). The gate has one handler, the dispatcher
+ * (`arch_syscall_init`). `ia32_fast_syscall` (vdso32.c) calls this as
+ * `_isr_router` does.
+ */
+void isr_syscall(isr_params_t *params)
+{
+    process_t *p = current_proc;
+    uint64_t start = 0;
+    uint32_t nr = (uint32_t)SC_NR(params);
+    int ioctl = 0;
+
+    if (sched_cycle_account) {
+        start = arch_cycles();
+        if (FRAME_USER(params)) {
+            this_cpu()->entry_cycles = start;
+        }
+    }
+    if (syscall_entry_locked(params)) {
+        bkl_enter();
+        bkl_frame_push(1);
+        ioctl = isr_call_ioctl(params);
+        isr_router_locked(params);
+    } else {
+        p->bkl_frames <<= 1;
+        if (nr == CALL_IOCTL_NR(params)) {
+            ioctl = bkl_note_ioctl((uint32_t)SC_ARG(params, 1));
+        }
+        _isr_handlers[SYSCALL_ENTRY][0](params);
+    }
+    smp_call_end(nr, ioctl, start);
+}
+
+/**
+ * Run the handler chain of a processor exception or a system call
+ * (`isr_syscall`), under the big lock unless the entry runs without it
+ * (`isr_entry_lock`); `isr_leave` gives the lock back. `params` is the
+ * saved register frame, so that a handler can change the saved registers,
+ * a system call's result for one. An exception during the panic's read of
+ * the process panics before the lock is taken (`panic_if_reading`).
  */
 void _isr_router(isr_params_t *params)
 {
-    uint64_t start = 0;
-    uint32_t nr = 0;
-    int ioctl = 0;
-
-    user_entry(params);
     if (params->vector == SYSCALL_ENTRY) {
-        start = arch_cycles();
-        nr = (uint32_t)SC_NR(params);
+        isr_syscall(params);
+        return;
     }
+    user_entry(params);
     panic_if_reading(params);
     (void)isr_entry_lock(params);
-    if (params->vector == SYSCALL_ENTRY) {
-        ioctl = isr_call_ioctl(params);
-    }
     isr_router_locked(params);
-    if (params->vector == SYSCALL_ENTRY) {
-        smp_call_end(nr, ioctl, start);
-    }
 }
 
 /** Dispatch a saved frame, with the big lock held when its entry took it
@@ -865,6 +902,22 @@ void isr_router_locked(isr_params_t *params)
     bkl_entry_pop(&saved);
 }
 
+int isr_call_entry(const process_t *p, uint32_t *cmd)
+{
+    const isr_params_t *f = proc_user_frame(p);
+    int32_t nr = p->orig_nr;
+
+    *cmd = 0;
+    if (nr < 0) {
+        return -1;
+    }
+    if ((uint32_t)nr == CALL_IOCTL_NR(f)) {
+        *cmd = (uint32_t)SC_ARG(f, 1);
+        return BKL_PROFILE_IOCTL;
+    }
+    return nr < BKL_ENTRY_SYSCALLS ? (int)nr : BKL_KEY_BIGCALL;
+}
+
 /**
  * Dispatch the NMI, the double fault or the machine check, which arrive at
  * any instruction, without the big lock: their handlers report and stop,
@@ -880,40 +933,45 @@ void isr_paranoid_router(isr_params_t *params)
 }
 
 /**
- * The return to the interrupted code, after its router: post the signals
- * of the tick the thread has waiting (`proc_tick_signals_own`) and deliver
- * a signal pending for a return to user mode, update the thread's rseq area
- * (`rseq_return`), and give back the big lock the router took. An entry
- * that ran without the lock, the tick's among them, takes it here only for
- * a return to user mode with signal work (`signal_return_work`) or the rseq
- * area to update, as Linux's `exit_to_user_mode_loop` acts only on the work
- * its flags name (kernel/entry/common.c:90-127). Interrupts are off. A
- * forked child's first return comes here too, with the depth its fork gave
- * it. The user copies of signal and rseq work run with interrupts on;
- * after they go off again, a migration or tick during that work makes it
- * run again, as Linux's exit_to_user_mode_loop does. The work is marked in
- * a call, as a user fault is, so a timer defers its switch and cannot race
- * the rseq event fetch and clear; a fault may still sleep.
+ * The return to user mode's work, which the thread's work bits or threads
+ * ended and not yet freed (`proc_dead_threads`) call for, with interrupts
+ * off and the big lock held when `locked` says the entry took it, which
+ * this gives back, as Linux's `exit_to_user_mode_loop` acts only on the
+ * work its flags name (kernel/entry/common.c:90-127). The bits are cleared
+ * before the work they stand for is tested, so a bit set meanwhile stays
+ * for the next return. In order: the loopback ring's datagrams
+ * (`syscall_loop_drain`) and a switch the thread owes
+ * (`sched_take_preempt`); then, under the big lock, taken here when the
+ * entry ran without it, the signals of the tick the thread has waiting
+ * (`proc_tick_signals_own`), a signal to deliver and the thread's rseq
+ * area (`rseq_return`), when `signal_return_work` or `rseq_notify` says so;
+ * then the debug registers (`debugreg_resume`) and a timed wake's record
+ * (`waketime_return`). The user copies of signal and rseq work run with
+ * interrupts on; after they go off again, a migration or tick during that
+ * work makes it run again. The work is marked in a call, as a user fault
+ * is, so a timer defers its switch and cannot race the rseq event fetch and
+ * clear; a fault may still sleep. Work that stays, a tracer's and a signal
+ * flag a delivery left set, keeps its bits for the next return.
  */
-static void isr_leave_work(isr_params_t *params)
+K_NOINLINE static void isr_leave_work(isr_params_t *params, process_t *p, int locked)
 {
+    unsigned int work = proc_work_take(p, WORK_EXIT), keep = 0;
     uint32_t flags;
     uint32_t was_in_call;
 
-    if (!bkl_frame_pop()) {
-        if (!FRAME_USER(params)) {
-            return;
-        }
-        if (!signal_return_work(params) && !current_proc->rseq_notify) {
-            debugreg_resume();
-            waketime_return();
-            return;
-        }
-        bkl_enter();
+    if (work & WORK_LOOP) {
+        syscall_loop_drain();
     }
-    if (FRAME_USER(params)) {
-        was_in_call = current_proc->in_syscall;
-        current_proc->in_syscall = 1;
+    if (work & WORK_RESCHED) {
+        sched_take_preempt();
+    }
+    if (signal_return_work(params) || p->rseq_notify) {
+        if (!locked) {
+            bkl_enter();
+            locked = 1;
+        }
+        was_in_call = p->in_syscall;
+        p->in_syscall = 1;
         flags = kirq_save();
         do {
             proc_tick_signals_own();
@@ -921,25 +979,64 @@ static void isr_leave_work(isr_params_t *params)
             deliver_signals(params);
             rseq_return(params);
             flags = kirq_save();
-        } while (current_proc->rseq_notify || current_proc->tick_sigs);
-        current_proc->in_syscall = was_in_call;
+        } while (p->rseq_notify || p->tick_sigs);
+        p->in_syscall = was_in_call;
+        work |= proc_work_take(p, WORK_DEBUGREG | WORK_WAKETIME);
+        if (signal_return_work(params)) {
+            keep |= WORK_SIGNAL;
+        }
+        if (p->ptrace & (PT_SYSCALL | PT_STEP)) {
+            keep |= WORK_TRACE;
+        }
+    }
+    if (work & WORK_DEBUGREG) {
         debugreg_resume();
+    }
+    if (work & WORK_WAKETIME) {
         waketime_return();
     }
-    bkl_exit();
+    if (keep) {
+        proc_work_set(p, keep);
+    }
+    if (locked) {
+        bkl_exit();
+    }
 }
 
 /**
- * Leave the router as `isr_leave_work` says, and for a return to user mode
- * note the cycle count it returns at (`user_cycles`), so that a tick held
- * while interrupts were off in the kernel and taken at the return's first
- * user instruction charges the kernel's time as system time
- * (`sched_account_tick`). Interrupts are off.
+ * The return from a router to the interrupted code, with interrupts off:
+ * give back the big lock the router took, after the work of a return to
+ * user mode when the thread's work bits or ended threads call for it
+ * (`isr_leave_work`), and note the cycle count of a return to user mode
+ * (`user_cycles`) when the cycle account is on, so that a tick held while
+ * interrupts were off in the kernel and taken at the return's first user
+ * instruction charges the kernel's time as system time
+ * (`sched_account_tick`). A forked child's first return comes here too,
+ * with the depth its fork gave it.
  */
 void isr_leave(isr_params_t *params)
 {
-    isr_leave_work(params);
-    if (FRAME_USER(params)) {
+    process_t *p = current_proc;
+    int locked;
+
+    if (p) {
+        locked = (int)(p->bkl_frames & 1u);
+        p->bkl_frames >>= 1;
+    } else {
+        locked = bkl_frame_pop();
+    }
+    if (!FRAME_USER(params)) {
+        if (locked) {
+            bkl_exit();
+        }
+        return;
+    }
+    if ((p->work & WORK_EXIT) != 0 || proc_dead_threads != 0) {
+        isr_leave_work(params, p, locked);
+    } else if (locked) {
+        bkl_exit();
+    }
+    if (sched_cycle_account) {
         this_cpu()->user_cycles = arch_cycles();
     }
 }
@@ -964,9 +1061,8 @@ void isr_local_router(isr_params_t *params)
         smp_ipi();
         lapic_eoi();
         if (FRAME_USER(params) && current_proc &&
-            (current_proc->need_resched || current_proc->rseq_notify)) {
+            (current_proc->work & (WORK_RESCHED | WORK_RSEQ)) != 0) {
             bkl_frame_push(0);
-            sched_take_preempt();
             isr_leave(params);
         }
         return;

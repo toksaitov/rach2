@@ -62,6 +62,10 @@ void usbdisk_service(void);
  * take the big lock for it (`syscall_entry_locked`). Any context. */
 int usbdisk_pending(void);
 
+/* What `usbdisk_pending` reads, which the system call entry reads itself
+ * so that its choice of the big lock calls nothing. */
+extern volatile int usbdisk_waiting;
+
 /**
  * How many holds are left on the stick of record `n`: the descriptions open
  * on its nodes, and on the whole device and on each view its mounts and

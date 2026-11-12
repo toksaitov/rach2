@@ -474,6 +474,7 @@ static int sched_preempt_cpu(const process_t *p, int cpu)
     }
     if (sched_priority(p) > sched_priority(cur)) {
         cur->need_resched = 1;
+        proc_work_set(cur, WORK_RESCHED);
         return cpu;
     }
     return -1;
@@ -625,6 +626,7 @@ void sched_priority_changed(process_t *p)
     if (cpu_table[p->cpu].current == p) {
         if (sched_rt_outranks(p->cpu, p)) {
             p->need_resched = 1;
+            proc_work_set(p, WORK_RESCHED);
             kick = p->cpu;
         }
     } else if (p->ready_linked) {
@@ -742,6 +744,7 @@ void sched_set_affinity(process_t *p, uint64_t mask)
     }
     if (remote) {
         p->need_resched = 1;
+        proc_work_set(p, WORK_RESCHED);
         kick = p->cpu;
     }
     spin_unlock(&sched_lock);
@@ -1088,6 +1091,7 @@ void sched_preempt(void)
     if (current_proc && (current_proc->in_syscall || current_proc->in_fault ||
                          current_proc->no_tick_switch || klog_inside())) {
         current_proc->need_resched = 1;
+        proc_work_set(current_proc, WORK_RESCHED);
         return;
     }
     schedule();
@@ -1203,6 +1207,7 @@ void sched_service_point(void)
 
         if (run_queues[arch_cpu_id()].count > 0) {
             current_proc->need_resched = 1;
+            proc_work_set(current_proc, WORK_RESCHED);
         }
         spin_unlock_irqrestore(&sched_lock, held);
     }

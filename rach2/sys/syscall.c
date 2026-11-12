@@ -248,19 +248,23 @@ int syscall_entry_locked(const isr_params_t *params)
 {
     const process_t *p = current_proc;
     const uint32_t *bits = _syscall_unlocked;
-    uint32_t nr = (uint32_t)SC_NR(params), size;
-    syscall_fn_t *table = syscall_table_of(params, &size);
+    uint32_t nr = (uint32_t)SC_NR(params), size = SYSCALL_TABLE_SIZE;
 
 #if defined(IA32_SYSCALL_TABLE_SIZE)
     if (SC_COMPAT(params)) {
         bits = _ia32_syscall_unlocked;
+        size = IA32_SYSCALL_TABLE_SIZE;
     }
 #endif
-    if (!p || (p->ptrace & (PT_SYSCALL | PT_STEP)) || p->seccomp_mode != SECCOMP_MODE_DISABLED ||
-        p->fd_holding || usbdisk_pending()) {
+    if (!p || p->fd_holding || usbdisk_waiting) {
         return 1;
     }
-    return nr >= size || !table[nr] || !(bits[nr / 32] & (1u << (nr % 32)));
+    if ((p->work & WORK_ENTRY) &&
+        ((p->ptrace & (PT_SYSCALL | PT_STEP)) || p->seccomp_mode != SECCOMP_MODE_DISABLED)) {
+        return 1;
+    }
+    /* A number is marked only where its table has a handler. */
+    return nr >= size || !(bits[nr / 32] & (1u << (nr % 32)));
 }
 
 int in_compat_syscall(void)
@@ -3352,6 +3356,9 @@ static long restart_result(const isr_params_t *params, syscall_fn_t fn, long ret
         current_proc->restart_kind = RESTART_NONE;
     }
     current_proc->restart_due = current_proc->restart_kind != RESTART_NONE;
+    if (current_proc->restart_due) {
+        proc_work_set(current_proc, WORK_SIGNAL);
+    }
     return restart_code(current_proc->restart_kind);
 }
 
@@ -3411,22 +3418,17 @@ static void syscall_relock_end(int relock)
     }
 }
 
-/** Let go of the descriptors the call held (`fd_holds_release`), when it
- * held any; each release takes the big lock when its object needs it
- * (`fd_teardown`). */
-static void syscall_holds_release(void)
+/** Let go of the descriptors the call of thread `p`, the current one, held
+ * (`fd_holds_release`), when it held any; each release takes the big lock
+ * when its object needs it (`fd_teardown`). */
+static void syscall_holds_release(const process_t *p)
 {
-    const process_t *p = current_proc;
-
-    if (p && p->fd_holding) {
+    if (p->fd_holding) {
         fd_holds_release();
     }
 }
 
-/** Deliver what the loopback ring holds at a call's exit, under the big
- * lock: the call's own, or the lock taken only when it is free, the ring
- * otherwise left to the holder's exit or the timer. Interrupts are off. */
-static void syscall_loop_drain(void)
+void syscall_loop_drain(void)
 {
     if (!ip_loop_pending()) {
         return;
@@ -3436,6 +3438,8 @@ static void syscall_loop_drain(void)
     } else if (bkl_try_enter()) {
         ip_loop_drain_from(IP_LOOP_FROM_CALL);
         bkl_exit();
+    } else {
+        proc_work_set(current_proc, WORK_LOOP);
     }
 }
 
@@ -3537,49 +3541,66 @@ static void syscall_futex_unlock(void)
  * for the work of its entry and exit that needs it, which a tracer that
  * attached or a filter another thread installed meanwhile may bring: the
  * tracer's stops, the filters, the descriptors it held. The USB sticks wait
- * for a call that holds the lock.
+ * for a call that holds the lock. The entry's work, the tracer's stop and
+ * the filters, is behind the thread's WORK_ENTRY bits, and the exit's
+ * tracer stop behind WORK_TRACE, so that a call with none tests one word
+ * at each end.
  *
- * At the exit whatever the loopback ring holds is delivered, a lone
- * datagram too, so that a receive that follows the call finds what it sent,
- * as on Linux 6.12.115, where loopback_xmit queues the datagram for the
- * softirq (drivers/net/loopback.c:69-92) and the sender's local_bh_enable
- * runs that softirq before the send returns (kernel/softirq.c:402-407). A
- * receive that follows the sender's return therefore needs no drain of its
- * own. The sender's own frames are gone by then, so no delivery runs under
- * them. Interrupts are off, the drain does not run inside itself, and it
- * takes at most four times the ring's slots in one run; what is left is
- * taken by the next call's exit or by the timer. A call without the lock
- * drains only when the lock is free (`bkl_try_enter`), and otherwise leaves
- * the ring to the holder's exit or the timer.
+ * The rest of the exit's work is the return's (`isr_leave`): a switch an
+ * interrupt asked for, and whatever the loopback ring holds, a lone
+ * datagram too, so that a receive that follows the call finds what it
+ * sent, as on Linux 6.12.115, where loopback_xmit queues the datagram for
+ * the softirq (drivers/net/loopback.c:69-92) and the sender's
+ * local_bh_enable runs that softirq before the send returns
+ * (kernel/softirq.c:402-407). The thread that puts a datagram on the ring
+ * marks itself (WORK_LOOP), so a receive that follows the sender's return
+ * needs no drain of its own. The sender's own frames are gone by then, so
+ * no delivery runs under them. Interrupts are off, the drain does not run
+ * inside itself, and it takes at most four times the ring's slots in one
+ * run; what is left is taken by the next return or by the timer
+ * (`syscall_loop_drain`).
  */
 static void _syscall_handler(isr_params_t *params)
 {
+    process_t *p = current_proc;
     uint32_t syscall_num = (uint32_t)SC_NR(params);
     uint32_t size;
     syscall_fn_t *table = syscall_table_of(params, &size);
+    syscall_fn_t fn = NULL;
     long ret = -ENOSYS;
     int skip = 0, relock;
 
-    if (current_proc) {
-        current_proc->in_syscall = 1;
+    if (!p) {
+        arch_irq_enable();
+        usbdisk_service();
+        if (syscall_num < size && table[syscall_num]) {
+            ret = table[syscall_num](params);
+        } else {
+            syscall_missing(syscall_num, SC_COMPAT(params));
+        }
+        arch_irq_disable();
+        SC_RET(params) = (unsigned long)ret;
+        return;
     }
+    p->in_syscall = PROC_IN_CALL;
+    p->orig_nr = (int32_t)syscall_num;
+    p->restart_kind = RESTART_SYS;
+    p->restart_due = 0;
 
     arch_irq_enable();
 
-    if (bkl_held()) {
+    if (p->bkl_frames & 1u) {
         usbdisk_service();
     }
-
-    if (current_proc) {
-        current_proc->orig_nr = (int32_t)syscall_num;
-        if (current_proc->ptrace & PT_SYSCALL) {
+    if (p->work & WORK_ENTRY) {
+        if (p->ptrace & PT_SYSCALL) {
             relock = syscall_relock();
             ptrace_syscall_stop(params, syscall_num, 0);
-            syscall_num = (uint32_t)current_proc->orig_nr;
-            skip = current_proc->orig_nr == -1;
+            syscall_num = (uint32_t)p->orig_nr;
+            skip = p->orig_nr == -1;
             syscall_relock_end(relock);
         }
-        if (!skip && current_proc->seccomp_mode != SECCOMP_MODE_DISABLED) {
+        if (!skip && p->seccomp_mode != SECCOMP_MODE_DISABLED) {
             relock = syscall_relock();
             if (!seccomp_permit(params, syscall_num, &ret)) {
                 skip = 1;
@@ -3587,24 +3608,23 @@ static void _syscall_handler(isr_params_t *params)
             }
             syscall_relock_end(relock);
         }
-    }
-    if (current_proc) {
-        current_proc->restart_kind = RESTART_SYS;
-        current_proc->restart_due = 0;
+        p->restart_kind = RESTART_SYS;
+        p->restart_due = 0;
     }
     if (skip) {
         ret = (long)SC_RET(params);
     } else if (syscall_num < size && table[syscall_num]) {
-        ret = table[syscall_num](params);
+        fn = table[syscall_num];
+        ret = fn(params);
     } else {
         syscall_missing(syscall_num, SC_COMPAT(params));
     }
 
-    syscall_holds_release();
-    if (current_proc) {
-        ret = restart_result(params, !skip && syscall_num < size ? table[syscall_num] : NULL, ret);
+    syscall_holds_release(p);
+    if (ret == -EINTR) {
+        ret = restart_result(params, fn, ret);
     }
-    if (current_proc && (current_proc->ptrace & (PT_SYSCALL | PT_STEP))) {
+    if ((p->work & WORK_TRACE) && (p->ptrace & (PT_SYSCALL | PT_STEP))) {
         relock = syscall_relock();
         SC_RET(params) = (unsigned long)ret;
         ptrace_syscall_stop(params, syscall_num, 1);
@@ -3614,11 +3634,7 @@ static void _syscall_handler(isr_params_t *params)
 
     arch_irq_disable();
 
-    if (current_proc) {
-        current_proc->in_syscall = 0;
-    }
-    syscall_loop_drain();
-    sched_take_preempt();
+    p->in_syscall = 0;
 
     /* The result, in the register the return to user mode restores it from. */
     SC_RET(params) = (unsigned long)ret;

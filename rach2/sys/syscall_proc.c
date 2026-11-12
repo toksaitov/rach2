@@ -2921,6 +2921,8 @@ static void fork_start(process_t *child, process_t *parent, struct fork_pending 
         child->sig_woken = (pending->pending & ~child->sig_blocked) != 0;
     }
     fork_delay_end(parent, pending);
+    proc_work_set(child,
+                  WORK_EXIT | (child->seccomp_mode != SECCOMP_MODE_DISABLED ? WORK_SECCOMP : 0u));
     sched_make_ready(child);
     if (parent->tg->exiting) {
         k_memset(&info, 0, sizeof(info));
@@ -4511,6 +4513,9 @@ static void sig_wake(process_t *t, uint64_t bits)
     if (t && (bits & ~t->sig_blocked) != 0) {
         t->sig_woken = 1;
     }
+    if (t && t->sig_woken) {
+        proc_work_set(t, WORK_SIGNAL);
+    }
     sched_mb();
     if (t && t->state == PROC_BLOCKED) {
         sched_wake_signal(t);
@@ -4526,6 +4531,9 @@ static void sig_recalc(void)
 
     self->sig_woken = ((self->sig_pending | self->tg->pending) & ~self->sig_blocked) != 0 ||
                       (self->tg->stop && !self->stop_seen) || (self->ptrace & PT_INTERRUPT);
+    if (self->sig_woken) {
+        proc_work_set(self, WORK_SIGNAL);
+    }
 }
 
 /** Clear the signals `bits` from the process of `target` and from each of
@@ -4687,6 +4695,7 @@ int signal_change_blocked_unlocked(int how, uint64_t set)
         self->sig_blocked = mask;
         if ((self->sig_pending | self->tg->pending) & ~mask) {
             self->sig_woken = 1;
+            proc_work_set(self, WORK_SIGNAL);
         }
     }
     spin_unlock_irqrestore(&sig_lock, flags);
@@ -5642,6 +5651,7 @@ long signal_suspend(uint64_t mask)
 {
     current_proc->saved_sigmask = current_proc->sig_blocked;
     current_proc->sigmask_saved = 1;
+    proc_work_set(current_proc, WORK_SIGNAL);
     signal_set_blocked(mask);
     sig_wait("sigsuspend");
     current_proc->restart_kind = RESTART_NOHAND;
@@ -6089,6 +6099,7 @@ static void sig_group_stop(int signo)
         return;
     }
     tg->stop = (uint32_t)signo;
+    proc_work_set(current_proc, WORK_SIGNAL);
     for (t = proc_list; t; t = t->next) {
         if (t != current_proc && t->tg == tg && t->state != PROC_UNUSED &&
             t->state != PROC_ZOMBIE) {
