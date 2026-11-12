@@ -7,8 +7,11 @@
  * the bytes Linux's isspace takes, but not inside double quotes, and the
  * quotes around a word or a value are dropped, so `"maxcpus=4"` and
  * `maxcpus="4"` both give `maxcpus` the value 4. A word's name ends at its
- * first `=`. The lookups stop at a bare `--`, as Linux's parse_args does
- * (kernel/params.c, lines 181 to 184), since the words after it are init's.
+ * first `=`, and names are compared as Linux's parameq compares them
+ * (kernel/params.c, lines 79 to 100), with `-` and `_` alike, so that
+ * `intel-iommu=off` is `intel_iommu=off`. The lookups stop at a bare `--`,
+ * as Linux's parse_args does (kernel/params.c, lines 181 to 184), since the
+ * words after it are init's.
  */
 #ifndef _CMDLINE_H_
 #define _CMDLINE_H_
@@ -31,9 +34,28 @@ int kcmdline_capture(const char *cmdline);
 /**
  * Non-zero if the captured command line contains `flag` as a whole word,
  * with no `=`, so that `kcmdline_has("rach2.rescue")` matches the standalone
- * argument and not a substring of a longer one.
+ * argument and not a substring of a longer one. A `flag` of the form
+ * `name=value` matches a word with that name whose value is `value` byte for
+ * byte, so that `kcmdline_has("oops=panic")` matches `oops=panic` and
+ * `oops="panic"` but not `oops=panicx`.
  */
 int kcmdline_has(const char *flag);
+
+/**
+ * Non-zero if a word of the line names the early parameter `name`, bare or
+ * with any value, as Linux's do_early_param runs the setup of a flag such
+ * as `noapic` or `nox2apic` for `noapic=1` too.
+ */
+int kcmdline_early(const char *name);
+
+/**
+ * Non-zero if a word of the line begins with `str`, read as Linux's
+ * obsolete_checksetup reads a word for a `__setup` string with no `=`
+ * (init/main.c, lines 195 to 222): the word's name, its `=` and its value
+ * are compared over the length of `str`, so that `nomodeset`, `nomodeset=1`
+ * and `nomodesetx` all match `nomodeset`.
+ */
+int kcmdline_setup(const char *str);
 
 /**
  * Copy the value of the `key=value` token into `out`.

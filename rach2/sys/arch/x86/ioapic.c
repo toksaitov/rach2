@@ -107,20 +107,21 @@ static void reg_write(const struct ioapic *c, uint32_t reg, uint32_t value)
 }
 
 /**
- * Whether `noapic` is given, or any `maxcpus=` stores 0. Linux runs its
- * maxcpus() once for each occurrence, and each that leaves setup_max_cpus 0
- * calls arch_disable_smp_support, whose disable_ioapic_support no later
- * occurrence undoes (kernel/smp.c, lines 975 to 984;
- * arch/x86/kernel/smpboot.c, lines 1005 to 1008). Each is read as
- * get_option reads it (`kcmdline_option_nth`), as `smp_start` reads
- * them, so `0`, `00`, `0x0` and a value with no digit all store 0, and an
- * empty value stores nothing.
+ * Whether `noapic` is given, bare or with any value, as Linux's
+ * parse_noapic ignores its value (arch/x86/kernel/apic/io_apic.c, lines 191
+ * to 197), or any `maxcpus=` stores 0. Linux runs its maxcpus() once for
+ * each occurrence, and each that leaves setup_max_cpus 0 calls
+ * arch_disable_smp_support, whose disable_ioapic_support no later occurrence
+ * undoes (kernel/smp.c, lines 975 to 984; arch/x86/kernel/smpboot.c, lines
+ * 1005 to 1008). Each is read as get_option reads it
+ * (`kcmdline_option_nth`), as `smp_start` reads them, so `0`, `00`, `0x0`
+ * and a value with no digit all store 0, and an empty value stores nothing.
  */
 int ioapic_disabled(void)
 {
     int nth, r, n;
 
-    if (kcmdline_has("noapic")) {
+    if (kcmdline_early("noapic")) {
         return 1;
     }
     for (nth = 0; (r = kcmdline_option_nth("maxcpus", nth, &n)) >= 0; nth++) {

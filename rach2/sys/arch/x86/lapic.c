@@ -274,7 +274,7 @@ static int choose_mode(uint32_t *lo, uint32_t hi)
 
     x2apic = 0;
     x2apic_kept = 0;
-    nox2apic_taken = kcmdline_has("nox2apic");
+    nox2apic_taken = kcmdline_early("nox2apic");
     if ((*lo & APIC_BASE_X2APIC) == 0) {
         x2apic = x2apic_offered() && !ioapic_disabled() && kcpu_x2apic_unremapped() &&
                  kcpu_x2apic_id() < 0xFFu;
@@ -330,7 +330,7 @@ int lapic_init(void)
     ready = 0;
     x2apic = 0;
     x2apic_kept = 0;
-    nox2apic_taken = kcmdline_has("nox2apic");
+    nox2apic_taken = kcmdline_early("nox2apic");
     if (kcmdline_has("rach2.nomsi")) {
         return refuse("rach2.nomsi on the boot line");
     }

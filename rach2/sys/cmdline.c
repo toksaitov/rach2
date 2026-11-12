@@ -33,7 +33,8 @@ struct arg {
     const char *word; /* where the word begins, its opening quote included */
     const char *name; /* the parameter's name, without its quote */
     size_t nlen;
-    const char *val; /* after the first `=`, its quotes left out; NULL for none */
+    /* after the first `=`, its quotes left out; NULL for none */
+    const char *val;
     size_t vlen;
     int whole; /* 1 when a space ends the word, 0 when the line's end does */
 };
@@ -121,7 +122,16 @@ static int next_arg(const char **p, struct arg *a)
     return 1;
 }
 
-/** Whether the word `a` names the parameter `key`, of length `klen`. */
+/** A byte of a parameter's name as Linux's dash2underscore gives it for a
+ * comparison (kernel/params.c, lines 79 to 84): `-` is `_`. */
+static char name_byte(char c)
+{
+    return c == '-' ? '_' : c;
+}
+
+/** Whether the word `a` names the parameter `key`, of length `klen`, as
+ * Linux's parameq compares a name (kernel/params.c, lines 86 to 100), `-`
+ * and `_` alike, so that `intel-iommu` is `intel_iommu`. */
 static int arg_is(const struct arg *a, const char *key, size_t klen)
 {
     size_t i;
@@ -129,10 +139,39 @@ static int arg_is(const struct arg *a, const char *key, size_t klen)
     if (a->nlen != klen) {
         return 0;
     }
-    for (i = 0; i < klen && a->name[i] == key[i]; i++) {
+    for (i = 0; i < klen && name_byte(a->name[i]) == name_byte(key[i]); i++) {
         /* match each byte of the name against the key */
     }
     return i == klen;
+}
+
+/**
+ * Whether the word `a` begins with the `n` bytes of `str`, as Linux's
+ * obsolete_checksetup matches a `__setup` string (init/main.c, lines 195
+ * to 222): the word is read whole, its name, then a `=` and its value when
+ * it has one, as repair_env_string puts it back together (lines 462 to
+ * 470), and its bytes are compared by parameqn, `-` and `_` alike.
+ */
+static int arg_starts(const struct arg *a, const char *str, size_t n)
+{
+    size_t i;
+    char c;
+
+    for (i = 0; i < n; i++) {
+        if (i < a->nlen) {
+            c = a->name[i];
+        } else if (a->val == 0 || i - a->nlen > a->vlen) {
+            return 0;
+        } else if (i == a->nlen) {
+            c = '=';
+        } else {
+            c = a->val[i - a->nlen - 1];
+        }
+        if (name_byte(c) != name_byte(str[i])) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /** A line that goes on past the buffer is cut before the word that the
@@ -491,7 +530,63 @@ int kcmdline_bare_count(const char *flag)
     return n;
 }
 
+/** A `flag` with a `=` is a name and the value it must have, compared byte
+ * for byte, as Linux's oops_setup compares `panic` (kernel/panic.c, lines
+ * 909 to 917). */
 int kcmdline_has(const char *flag)
 {
-    return kcmdline_bare_count(flag) > 0;
+    size_t flen = k_strlen(flag), klen, i;
+    const char *p = kcmdline;
+    struct arg a;
+
+    for (klen = 0; klen < flen && flag[klen] != '='; klen++) {
+        /* find the end of the name */
+    }
+    if (klen == flen) {
+        return kcmdline_bare_count(flag) > 0;
+    }
+    while (next_arg(&p, &a)) {
+        if (a.val == 0 || !arg_is(&a, flag, klen) || a.vlen != flen - klen - 1) {
+            continue;
+        }
+        for (i = 0; i < a.vlen && a.val[i] == flag[klen + 1 + i]; i++) {
+            /* match each byte of the value */
+        }
+        if (i == a.vlen) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Linux's do_early_param runs an early parameter's setup function for
+ * each word that names it, with a value or none (init/main.c, lines 723 to
+ * 739), and the setup functions of the flags read here, as parse_noapic,
+ * ignore the value. */
+int kcmdline_early(const char *name)
+{
+    size_t nlen = k_strlen(name);
+    const char *p = kcmdline;
+    struct arg a;
+
+    while (next_arg(&p, &a)) {
+        if (arg_is(&a, name, nlen)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int kcmdline_setup(const char *str)
+{
+    size_t n = k_strlen(str);
+    const char *p = kcmdline;
+    struct arg a;
+
+    while (next_arg(&p, &a)) {
+        if (arg_starts(&a, str, n)) {
+            return 1;
+        }
+    }
+    return 0;
 }

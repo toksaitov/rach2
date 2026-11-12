@@ -156,9 +156,9 @@ void k_udelay(uint32_t usec)
     (void)usec;
 }
 
-int kcmdline_has(const char *flag)
+int kcmdline_setup(const char *str)
 {
-    (void)flag;
+    (void)str;
     return 0;
 }
 
