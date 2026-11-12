@@ -172,6 +172,44 @@ static void print_output(const char *out)
 }
 
 /**
+ * Build the runner's shell command in `command`, which holds `cap` bytes.
+ * The fuzz fixture grants nobody access and restores the mode on exit,
+ * since udev may restrict the node after the kernel creates it.
+ */
+static void runner_command(struct kvm_case *s, char *command, size_t cap)
+{
+    const char *list = selftests_list();
+
+    if (s->runner == SELFTESTS && list == NULL)
+        net_fail(&s->u, "RACH2_KVM_SELFTESTS names no list of tests/kvm");
+    if (s->runner == LEAK)
+        snprintf(command, cap,
+                 "cd " KVM_DIR " && sh leak.sh"
+                 " -k guests/debian/vmlinuz -i guests/debian/initrd");
+    else if (s->runner == FUZZ)
+        snprintf(command, cap,
+                 "mode=$(stat -c %%a /dev/kvm) || exit 1; "
+                 "trap 'rc=$?; chmod \"$mode\" /dev/kvm || rc=1; exit \"$rc\"' EXIT; "
+                 "trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; "
+                 "chmod 0666 /dev/kvm && " KVM_DIR "/drmfuzz kvm 20000 1");
+    else if (s->runner == ENTRY || s->runner == SLOTS)
+        snprintf(command, cap, KVM_DIR "/svm-entry%s", s->runner == SLOTS ? " slots" : "");
+    else if (s->runner == BOOT)
+        snprintf(command, cap,
+                 "cd " KVM_DIR " && sh kvm-boot.sh -a %s -o " KVM_DIR "/boot.log"
+                 " -k %s -i %s%s -t '%s'",
+                 s->accel, s->rach2 ? "guests/rach2/kernel" : "guests/debian/vmlinuz",
+                 s->rach2 ? "guests/rach2/ram.krffs" : "guests/debian/initrd",
+                 s->rach2 ? " -l rach2.tscreliable" : "", s->rach2 ? "KVMRACH2 OK" : "KVMGUEST OK");
+    else
+        snprintf(command, cap, "cd " KVM_DIR " && sh corpus.sh %s %s",
+                 s->runner == UNIT ? "unit" : "selftests",
+                 s->runner == UNIT ? s->list
+                 : list != NULL    ? list
+                                   : "none");
+}
+
+/**
  * Run the case's runner, assert its result line, the one assertion of the
  * case, and print what it printed for the run's log.
  */
@@ -187,33 +225,10 @@ static void run(struct kvm_case *s)
                                           "kvm-leak: result: pass",
                                           "DRMFUZZ OK"};
     char command[512], line[200];
-    const char *result, *list = selftests_list();
+    const char *result;
     struct net_run r;
 
-    if (s->runner == SELFTESTS && list == NULL)
-        net_fail(&s->u, "RACH2_KVM_SELFTESTS names no list of tests/kvm");
-    if (s->runner == LEAK)
-        snprintf(command, sizeof(command),
-                 "cd " KVM_DIR " && sh leak.sh"
-                 " -k guests/debian/vmlinuz -i guests/debian/initrd");
-    else if (s->runner == FUZZ)
-        snprintf(command, sizeof(command), KVM_DIR "/drmfuzz kvm 20000 1");
-    else if (s->runner == ENTRY || s->runner == SLOTS)
-        snprintf(command, sizeof(command), KVM_DIR "/svm-entry%s",
-                 s->runner == SLOTS ? " slots" : "");
-    else if (s->runner == BOOT)
-        snprintf(command, sizeof(command),
-                 "cd " KVM_DIR " && sh kvm-boot.sh -a %s -o " KVM_DIR "/boot.log"
-                 " -k %s -i %s%s -t '%s'",
-                 s->accel, s->rach2 ? "guests/rach2/kernel" : "guests/debian/vmlinuz",
-                 s->rach2 ? "guests/rach2/ram.krffs" : "guests/debian/initrd",
-                 s->rach2 ? " -l rach2.tscreliable" : "", s->rach2 ? "KVMRACH2 OK" : "KVMGUEST OK");
-    else
-        snprintf(command, sizeof(command), "cd " KVM_DIR " && sh corpus.sh %s %s",
-                 s->runner == UNIT ? "unit" : "selftests",
-                 s->runner == UNIT ? s->list
-                 : list != NULL    ? list
-                                   : "none");
+    runner_command(s, command, sizeof(command));
     if (net_step(&s->u, "run") == ETUDE_OK)
         as_root(s, command, "runner", &r);
     if (!net_ok(&s->u)) {
@@ -223,12 +238,16 @@ static void run(struct kvm_case *s)
     result = net_find(r.out, s->runner >= ENTRY  ? pattern[s->runner]
                              : s->runner == BOOT ? "kvm-boot: result: "
                                                  : "kvm-corpus: result: ");
+    if (!net_exited0(&r) && r.err != NULL && r.err[0] != '\0')
+        result = r.err;
     net_assert(&s->u, assertion[s->runner],
                net_exited0(&r) && net_find(r.out, pattern[s->runner]) != NULL, "%s",
                net_copy_line(result != NULL ? result : (r.err != NULL ? r.err : r.out), line,
                              sizeof(line)));
     if (r.out != NULL)
         print_output(r.out);
+    if (r.err != NULL)
+        fputs(r.err, stderr);
     net_run_free(&r);
 }
 
