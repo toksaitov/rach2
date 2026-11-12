@@ -1,0 +1,25 @@
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial3513/t3504/tests/graphics/guest-env.sh && graphics_env'"'"''
+hasvk: child: /data/trial3513/t3504/out/environment.log: exit 0
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial3513/t3504/tests/graphics/guest-env.sh && exec vkcube --wsi wayland --c 300'"'"''
+hasvk: child: /data/trial3513/t3504/out/cube.log: exit 0
+hasvk: action: python3 /data/trial3513/t3504/tests/graphics/browser/sandbox.py desktop chromium /data/trial3513/t3504/out/run-0/browser webgpu-frames
+hasvk: child: /data/trial3513/t3504/out/run-0/browser.log: exit 0
+stall: run 0: bare: gap 33.3 ms after frame 1, steady 59.95 FPS, 1 late, 8.0056 s
+hasvk: action: python3 /data/trial3513/t3504/tests/graphics/browser/sandbox.py desktop chromium /data/trial3513/t3504/out/run-1/browser webgpu-frames
+hasvk: child: /data/trial3513/t3504/out/run-1/browser.log: exit 0
+stall: run 1: watched: gap 66.7 ms after frame 1, steady 59.94 FPS, 1 late, 8.0443 s
+hasvk: action: python3 /data/trial3513/t3504/tests/graphics/browser/sandbox.py desktop chromium /data/trial3513/t3504/out/run-2/browser webgpu-trace
+hasvk: child: /data/trial3513/t3504/out/run-2/browser.log: exit 0
+stall: run 2: traced: gap 66.6 ms after frame 2, steady 59.68 FPS, 3 late, 8.0926 s
+hasvk: action: python3 /data/trial3513/t3504/tests/graphics/browser/sandbox.py desktop chromium /data/trial3513/t3504/out/run-3/browser webgpu-frames
+hasvk: child: /data/trial3513/t3504/out/run-3/browser.log: exit 0
+stall: run 3: bare: gap 66.4 ms after frame 1, steady 59.91 FPS, 1 late, 8.0448 s
+hasvk: action: python3 /data/trial3513/t3504/tests/graphics/browser/sandbox.py desktop chromium /data/trial3513/t3504/out/run-4/browser webgpu-frames
+hasvk: child: /data/trial3513/t3504/out/run-4/browser.log: exit 0
+stall: run 4: watched: gap 83.3 ms after frame 2, steady 59.78 FPS, 2 late, 8.0798 s
+hasvk: action: python3 /data/trial3513/t3504/tests/graphics/browser/sandbox.py desktop chromium /data/trial3513/t3504/out/run-5/browser webgpu-trace
+hasvk: child: /data/trial3513/t3504/out/run-5/browser.log: exit 0
+stall: run 5: traced: gap 66.7 ms after frame 1, steady 59.78 FPS, 2 late, 8.0712 s
+stall: result: 6 runs, gaps [33.3, 66.7, 66.6, 66.4, 83.3, 66.7] ms
+stall: evidence: /data/trial3513/t3504/out
+exit 0
