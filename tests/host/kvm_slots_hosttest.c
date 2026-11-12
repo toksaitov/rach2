@@ -45,12 +45,23 @@
  * absent, a write across a page or of nothing, an address of no slot, a
  * caller's check made before the tables last changed and a thread of
  * another address space, and writing a stored-into page of RAM at its
- * offset, logged; a slot moved, its flags changed and deleted with its
- * leaves and tables gone; and every
+ * offset, logged; a zap in batches of a few entries, with a fault between
+ * two at a frame a move's zap passed mapping nothing, and a zap of every
+ * frame passing absent subtrees whole; a slot moved, its flags changed and
+ * deleted with its leaves and tables gone; and every
  * allocation and frame given back.
  */
+/* A zap's batch of 16 entries, so that the rows' zaps break. */
+#define TDP_ZAP_BATCH 16u
+
 #include "kvm/dirty.c"
 #include "kvm/slots.c"
+
+/* tdp.c's and notify.c's lets go of a spinlock with interrupts restored
+ * go through the hook that runs a row's code between two batches. */
+static void unlock_hook(struct spinlock *lock, uint32_t flags);
+#define spin_unlock_irqrestore(lock, flags) unlock_hook(lock, flags)
+
 #include "kvm/tdp.c"
 #include "mm/notify.c"
 
@@ -1120,6 +1131,79 @@ static void write_nofault_rows(void)
     CHECK(set(6, 0, 0, 0, 0) == 0, "deleted");
 }
 
+/* The code a row runs once, the next time `mmu_lock` is let go, as
+ * another vCPU's fault runs while a zap lets the lock go between two
+ * batches; and what it found. */
+static void (*between)(void);
+static uint64_t between_gfn;
+static uint32_t between_seq;
+static int between_fault;
+
+/** Let `lock` go with `flags`, then run `between` once if `lock` is
+ * `mmu_lock`. */
+static void unlock_hook(struct spinlock *lock, uint32_t flags)
+{
+    void (*run)(void) = between;
+
+    (spin_unlock_irqrestore)(lock, flags);
+    if (run && lock == &vm.mmu_lock) {
+        between = NULL;
+        run();
+    }
+}
+
+/** A read fault at `between_gfn` between two batches, and `mmu_seq` then. */
+static void fault_between(void)
+{
+    between_seq = vm.mmu_seq;
+    between_fault = kvm_tdp_fault(&vm, between_gfn, 0);
+}
+
+/**
+ * A zap in batches of TDP_ZAP_BATCH entries: a fault between two batches of
+ * a move's zap, at a frame the zap already passed, finds the slot moved and
+ * maps nothing there, as Linux takes the old slot out of use before it
+ * zaps it (virt/kvm/kvm_main.c:1791-1808); a zap of every frame visits the
+ * entries that are there and passes absent subtrees whole, as tdp_iter
+ * (arch/x86/kvm/mmu/tdp_iter.c:68, 110-122), so its batches follow the
+ * tables, not the frames.
+ */
+static void zap_batch_rows(void)
+{
+    uintptr_t a = HVA + 3 * MIB2;
+    uint64_t gfn = 0x900, i;
+    uint32_t seq;
+    int level, ok = 1;
+
+    region(a, 64, 1);
+    CHECK(set(4, 0, gfn * 4096u, 64 * 4096u, a) == 0, "a slot of 64 pages");
+    for (i = 0; i < 64; i++) {
+        ok = ok && kvm_tdp_fault(&vm, gfn + i, 0) == 0;
+    }
+    CHECK(ok, "each page mapped, more leaves than a batch visits");
+    between = fault_between;
+    between_gfn = gfn + 1;
+    seq = vm.mmu_seq;
+    CHECK(set(4, 0, (gfn + 0x100) * 4096u, 64 * 4096u, a) == 0 && between == NULL &&
+              between_seq == seq + 1 && vm.mmu_seq > between_seq,
+          "a move's zap lets mmu_lock go between two batches, moving mmu_seq after");
+    CHECK(between_fault == 1, "a fault there at a frame the zap passed finds no slot");
+    for (i = 0; i < 64; i++) {
+        ok = ok && leaf_of(gfn + i, &level) == 0;
+    }
+    CHECK(ok && flushed(), "and no leaf of the old frames is left");
+    CHECK(kvm_tdp_fault(&vm, gfn + 0x101, 0) == 0, "a fault at the new place maps");
+    seq = vm.mmu_seq;
+    kvm_tdp_zap(&vm, 0, kvm_tdp_frames());
+    CHECK(vm.mmu_seq - seq <= (1u + 3u * TDP_ENTRIES) / TDP_ZAP_BATCH + 1u &&
+              leaf_of(gfn + 0x101, &level) == 0 && ((struct tdp *)vm.tdp)->tables == 1,
+          "a zap of every frame over one path of tables takes batches by the entries");
+    seq = vm.mmu_seq;
+    kvm_tdp_zap(&vm, 0, kvm_tdp_frames());
+    CHECK(vm.mmu_seq - seq == 1, "and over no table, one batch");
+    CHECK(set(4, 0, 0, 0, 0) == 0, "deleted");
+}
+
 /** The end of the address space. */
 static void release_rows(void)
 {
@@ -1159,6 +1243,7 @@ int main(void)
     device_rows();
     dirty_rows();
     write_nofault_rows();
+    zap_batch_rows();
     release_rows();
     CHECK(((struct tdp *)vm.tdp)->tables == 1, "no table below the top once every slot went");
     CHECK(set(0, 0, 0, 0x1000, HVA) == 0 && kvm_tdp_fault(&vm, 0, 0) == 0, "a slot left");
