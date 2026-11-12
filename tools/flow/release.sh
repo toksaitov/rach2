@@ -50,16 +50,22 @@
 #   whole host in WSL's admission, `etude-launch alone`, keeps WSL's tests
 #   from starting; WSL refusing either claim ends the release. Each part runs
 #   on Windows apart from the ssh session that starts it, as windows_detach
-#   says, and the preparation's claim in WSL apart from its own, so that a
-#   dropped link ends neither: the release polls the part each minute, over
-#   ssh with keepalives, notes each lost link in its output, and says why a
-#   part ended without a status, with the last lines of its console. A
-#   release that exits or is stopped stops Windows' preparation and ends both
-#   claims. Each Windows part gives the run a TMPDIR of its own, OUT/ID.tmp,
-#   and a scratch record, OUT/ID.scratch, in which etude notes the
-#   collections and tooling jobs it makes in the copy; a run that a stop ends
-#   is stopped on Windows too, and its TMPDIR and what the record names as
-#   neither removed nor kept as evidence are removed, as winclean.sh says.
+#   says, and each claim in WSL apart from its own, as claim_start says, so that
+#   a dropped link ends neither and a claim lasts as long as its part: the
+#   release polls the part each minute, over ssh with keepalives, notes each
+#   lost link in its output, and says why a part ended without a status, with
+#   the last lines of its console. A release that exits or is stopped stops
+#   Windows' preparation and cases and then ends both claims, a claim that still
+#   waits for admission included, as claim_stop says. Each run, on the Mac and
+#   in each Windows part, has a directory of its own, build/tmp/ID in its copy,
+#   ID ending in the time and a random suffix, which ETUDE_RUN_DIR names and
+#   which holds its TMPDIR and etude's scratch. A failure first writes ID/KEPT,
+#   with the reason and the evidence, as etude does when it keeps evidence; a
+#   run that passed removes the directory unless it holds KEPT. A Windows run
+#   that a stop ends is stopped there too, and its directory removed unless
+#   kept, as winclean.sh says; a stopped Mac run's directory is removed the
+#   same way. sweep.sh removes a kept one once its milestone's release
+#   closed.
 #   The Lenovo's run, lenovo, is the native cases of tests/native on the
 #   trial boot, which `native-deploy run` starts from here with the payload
 #   the build makes, after the acceptance. The trial boot's console session
@@ -109,7 +115,8 @@
 #   STATE/prepare/MACHINE.log keeps whole; the last line is `release:
 #   prepare: passed SHA` or `release: prepare: failed: MACHINE...`. On every
 #   exit it stops what still runs and removes the copy on the host, the
-#   worktree, and the runs' directories on Windows and the Mac; the vendor
+#   worktree, the runs' output on Windows and the Mac, and their run
+#   directories unless kept, which sweep.sh removes later; the vendor
 #   and GNU builds stay in each machine's step store. It takes the release's
 #   lock and STATE/again.lock, and waits while a release's run on the Mac, or
 #   a Windows run of -a, still runs.
@@ -169,10 +176,19 @@
 #   a machine that a power cycle returns to them.
 # * transfer: the kernel and the root go to the recovery system's /dev/shm,
 #   the root decompressed on the way, and each is checked by SHA-256.
-# * kernel and install: `bootctl kernel` writes the kernel to the candidate
-#   slot, and `rach2-install --console term --update` writes the root, keeps
-#   the accounts and keys, sets term as its console and arms the candidate
-#   for one trial boot. The
+# * kernel and install: a build whose `rach2-install` has `--slots` moves a
+#   disk with kernel slots smaller than the build's to them first, since the
+#   build's bootctl refuses a kernel in a smaller slot; the move saves the
+#   machine to recovery while it runs, so a reset returns there, and the run
+#   again finishes it. Then `bootctl kernel` writes the kernel to the
+#   candidate slot, and `rach2-install --console term --update` writes the
+#   root, keeps the accounts and keys, sets term as its console and arms the
+#   candidate for one trial boot; with `--i915`, which the script passes
+#   when the build's installer has it, the root's lines also bind the Intel
+#   graphics driver, `rach2.i915`, so that the native cases run on the GPU.
+#   That installer is the one that runs, from the build's recovery system,
+#   and the step fails unless every line of the menu on the boot partition
+#   that boots the candidate or fallback slot then carries the word. The
 #   installer runs detached on the machine, with its log and its status in
 #   /dev/shm, so that a lost connection does not stop it; it is started once,
 #   and a release started again finds it by its log and waits for it. An
@@ -183,10 +199,11 @@
 #   person checks the machine's root by hand and then deletes that line.
 # * trial: the machine boots the trial, its /proc/cmdline must have
 #   rach2.slot=candidate and rach2.console=term, which the install's
-#   `--console term` puts in the menu, and machine_identity.sh must find the
-#   new kernel running from the candidate slot. A line without either fails
-#   the step, naming the line, and commits nothing, so the next boot falls
-#   back to the release the machine had.
+#   `--console term` puts in the menu, and rach2.i915 when the install was
+#   given `--i915`; machine_identity.sh must find the new kernel running from
+#   the candidate slot. A line without one of these words fails the step,
+#   naming the line, and commits nothing, so the next boot falls back to the
+#   release the machine had.
 # * accept: `tests/system/accept/metal_accept.sh` must pass on the trial
 #   boot, before the native cases, since it reads the boot's records out of
 #   /dev/bootlog, a ring that their messages overwrite.
@@ -269,6 +286,14 @@ PREPARE_COPY=$OWNER/build/worktrees/prepare
 WAD="{ cp /etc/rach2/doom1.wad ports/doom/doom1.wad ||
             { echo 'release: wad: the testing host has no /etc/rach2/doom1.wad' >&2; false; }; } &&
         sh ports/doom/fetch_wad.sh"
+
+# stamp: print the end of a run's ID that makes it unique, the time in UTC and
+# six random hex digits, since the ID names the run's directory, which its
+# cleanup removes whole.
+stamp()
+{
+    printf '%s-%s\n' "$(date -u '+%m%d-%H%M%S')" "$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+}
 
 # say TEXT: print TEXT and append it to the log, with the time in UTC.
 say()
@@ -796,7 +821,7 @@ build()
         "$WAD && ARCH=x86_64 make clean && ARCH=x86_64 make machine GNU_AGENTS=all && $staged &&
         $native cd $ARCH_DIR &&
         gzip -1 -c images/os-real-gnu.ext2 > images/os-real-gnu.ext2.gz &&
-        sha256sum rach2/kernel rach2-recovery/kernel $RECOVERY_IMAGE images/os-real-gnu.ext2 $payload \
+        sha256sum rach2/kernel rach2-recovery/kernel utils/sbin/bootctl $RECOVERY_IMAGE images/os-real-gnu.ext2 $payload \
             > images/release.sha256" > "$state/build.log" 2>&1; then
         if grep -q 'testing: the copy at .* is in use\|testing: the host did not answer' "$state/build.log"; then
             later "the build copy is busy or the host does not answer"
@@ -810,11 +835,11 @@ build()
         fail build "the build failed: $(tail -n 3 "$state/build.log" | tr '\n' ' ')"
     fi
     RACH2_TESTING_COPY=$COPY sh tools/dev/testing.sh get "$ARCH_DIR/rach2/kernel" \
-        "$ARCH_DIR/rach2-recovery/kernel" "$ARCH_DIR/$RECOVERY_IMAGE" \
+        "$ARCH_DIR/rach2-recovery/kernel" "$ARCH_DIR/utils/sbin/bootctl" "$ARCH_DIR/$RECOVERY_IMAGE" \
         "$ARCH_DIR/images/os-real-gnu.ext2.gz" "$ARCH_DIR/images/release.sha256" \
         ${payload:+"$ARCH_DIR/$payload"} >> "$state/build.log" 2>&1 ||
         later "the build's results could not be fetched"
-    for f in rach2/kernel rach2-recovery/kernel "$RECOVERY_IMAGE" $payload; do
+    for f in rach2/kernel rach2-recovery/kernel utils/sbin/bootctl "$RECOVERY_IMAGE" $payload; do
         [ "$(shasum -a 256 "$files/../$f" 2> /dev/null | cut -d ' ' -f 1)" = "$(digest "$f")" ] ||
             fail build "$f did not arrive whole"
     done
@@ -912,6 +937,11 @@ install()
     if [ -z "$started" ]; then
         if ! done_ kernel; then
             step=kernel
+            if lenovo 'grep -q -e "--slots DISK" /bin/rach2-install'; then
+                lenovo "rach2-install --slots /dev/disk$disk" > "$state/slots.log" 2>&1 ||
+                    fail kernel "rach2-install --slots: $(tr '\n' ' ' < "$state/slots.log")"
+                cat "$state/slots.log" >> "$state/log"
+            fi
             lenovo 'bootctl kernel /dev/shm/kernel' > "$state/kernel.log" 2>&1
             grep -q '^bootctl: installed:' "$state/kernel.log" ||
                 fail kernel "$(tr '\n' ' ' < "$state/kernel.log")"
@@ -919,10 +949,14 @@ install()
         fi
         step=install
         note "install started $(date -u '+%FT%TZ')"
-        lenovo "setsid sh -c 'rach2-install --console term --update /dev/shm/root.ext2 /dev/disk$disk \
+        install_words='--console term'
+        if i915; then
+            install_words="$install_words --i915"
+        fi
+        lenovo "setsid sh -c 'rach2-install $install_words --update /dev/shm/root.ext2 /dev/disk$disk \
             > /dev/shm/install.log 2>&1; echo \$? > /dev/shm/install.status' \
             > /dev/null 2>&1 < /dev/null &" || fail install "the installer could not be started"
-        say "install: rach2-install --console term --update runs on the machine"
+        say "install: rach2-install $install_words --update runs on the machine"
     fi
     i=0
     while :; do
@@ -937,7 +971,33 @@ install()
         sleep 15
     done
     lenovo 'cat /dev/shm/install.log' >> "$state/log" 2>&1
+    if i915; then
+        p1=/dev/disk${disk}p1
+        menu=$(lenovo "mkdir -p /mnt/p1 && mount -t vfat -o ro $p1 /mnt/p1 || exit 1
+            cat /mnt/p1/boot/grub/grub.cfg; s=\$?; umount /mnt/p1; exit \$s") ||
+            fail install "the menu on $p1 could not be read"
+        # The root's lines, by slot, are those the installer gives the token.
+        bare=$(printf '%s\n' "$menu" | awk '
+            /^[ \t]*(multiboot|multiboot2)[ \t]/ &&
+            /[ \t]rach2\.slot=(candidate|fallback)([ \t]|$)/ {
+                roots++
+                if (!/[ \t]rach2\.i915([ \t]|$)/ && bare == "") bare = $0
+            }
+            END {
+                if (roots == 0) print "no line boots the root"
+                else if (bare != "") print bare
+                exit (roots == 0 || bare != "")
+            }') || fail install "the installed menu on $p1 lacks rach2.i915: $bare"
+    fi
     mark install "root $(digest images/os-real-gnu.ext2)"
+}
+
+# i915: succeed when the build's installer takes --i915, which puts rach2.i915
+# on the installed root's lines; recovery checks that the machine's recovery
+# system runs this installer.
+i915()
+{
+    grep -q -e '\[--i915\]' "$state/wt/utils/rach2-install" 2> /dev/null
 }
 
 # setting MACHINE NAME: print each value that the machines file gives NAME for
@@ -1025,11 +1085,14 @@ unhosted()
 # that `selection mac` prints, in the copy TREE with the admission site SITE,
 # with its output in RUNS/ID.console and its status appended to RUNS/ID.times
 # as `rc=N`; with -p make only its preparation, with `routine-prepare`. Its
-# scratch and the evidence of a failed preparation go to TREE/build/tmp, not
-# to the TMPDIR that macOS gives under /var/folders.
+# scratch and the evidence of a failed preparation go to its run directory,
+# TREE/build/tmp/ID, not to the TMPDIR that macOS gives under /var/folders: a
+# failure marks it kept first, and a pass removes it unless etude kept
+# evidence there.
 mac_run()
 {
     id=$1
+    rdir=$tree/build/tmp/$id
     routine='routine-sequence'
     [ -z "$prepare" ] || routine='routine-prepare'
     words=$(selection mac)
@@ -1039,7 +1102,7 @@ mac_run()
     (
         eval "$(environment mac)"
         unset ETUDE_SITE ETUDE_ADMITTED ETUDE_PREPARATION_CLEAN
-        export TMPDIR="$tree/build/tmp"
+        export ETUDE_RUN_DIR="$rdir" TMPDIR="$rdir/tmp"
         cd "$tree" && git checkout -q -f --detach "$sha" && mkdir -p "$TMPDIR" &&
             make build/tools/etude/etude build/tools/etude/etude-volume &&
             cp build/tools/etude/etude build/tools/etude/etude-volume "$site/bin/" &&
@@ -1049,8 +1112,20 @@ mac_run()
                 "$site/bin/etude" run "$routine" phase_first_run "$tree" "$runs/$id" both \
                 "$id" "$site/etude-site" "$site/bin/etude" "$accel" $words
     ) > "$runs/$id.console" 2>&1
-    echo "rc=$?" >> "$runs/$id.times"
+    rc=$?
+    [ "$rc" = 0 ] || { mkdir -p "$rdir" &&
+        echo "failed: the run exited $rc; evidence: $runs/$id $runs/$id.console" >> "$rdir/KEPT"; }
+    [ "$rc" != 0 ] || mac_clean "$id"
+    echo "rc=$rc" >> "$runs/$id.times"
     date '+end %FT%T%z' >> "$runs/$id.times"
+}
+
+# mac_clean ID: remove the run directory of the Mac's run ID, which has
+# stopped, unless it holds KEPT.
+mac_clean()
+{
+    [ -n "$1" ] && [ ! -e "$tree/build/tmp/$1/KEPT" ] || return 0
+    rm -rf "${tree:?}/build/tmp/$1"
 }
 
 # mac_stop: stop the Mac's run that still runs, which belongs to an earlier
@@ -1068,6 +1143,7 @@ mac_stop()
             sleep 10
         done
         say "mac: stopped the earlier run, process group $pg"
+        mac_clean "$last"
     fi
     rm -f "$macdir/run"
     [ -z "$last" ] || ! grep -qF "$last" "$site/ledger/claims" 2> /dev/null ||
@@ -1086,7 +1162,7 @@ mac_start()
         return 0
     fi
     net git -C "$repo" fetch -q origin || later "the fetch failed"
-    mac_launch "milestone$milestone-$(echo "$sha" | cut -c 1-12)-mac-$(date -u '+%m%d-%H%M%S')" "$sha"
+    mac_launch "milestone$milestone-$(echo "$sha" | cut -c 1-12)-mac-$(stamp)" "$sha"
 }
 
 # mac_launch ID AT: record that the Mac's run ID started, and start it at the
@@ -1191,12 +1267,13 @@ lost()
 # number and MSYS2 process group to OUT/ID.PART.pid, and touches OUT/ID.alive
 # each minute while it runs, which keeps WSL's claims for ID. A poll each
 # minute reads whether the process runs and its output. A poll that ssh ends
-# with 255 is a lost link: FILE notes it, with ssh's own lines, and the next
-# poll connects again; after an hour without an answer the run is given up,
-# and windows_clean stops it once the host answers. FILE ends with the output's
-# `status N` line, or, when the process ended without one, did not start or
-# was given up, with a line `lost: WHY` and, when the host answers, the last
-# 40 lines of CONSOLE, the run's console under OUT.
+# with any status but 0 is never read, since its reply may lack its end: FILE
+# notes it, as a lost link when the status is 255, with ssh's own lines, and
+# the next poll connects again; after an hour without a whole answer the run
+# is given up, and windows_clean stops it once the host answers. FILE ends
+# with the output's `status N` line, or, when the process ended without one,
+# did not start or was given up, with a line `lost: WHY` and, when the host
+# answers, the last 40 lines of CONSOLE, the run's console under OUT.
 windows_detach()
 {
     wd_base=$wout/$1.$2 wd_file=$3 wd_console=$wout/$4
@@ -1235,7 +1312,7 @@ windows_detach()
         } | tssh 'C:/msys64/usr/bin/bash.exe -l -s' > "$wd_poll" 2> "$wd_err"
         wd_rc=$?
         wd_state=$(tr -d '\r' < "$wd_poll" | sed -n '1s/^poll //p')
-        if [ -z "$wd_state" ]; then
+        if [ "$wd_rc" != 0 ] || [ -z "$wd_state" ]; then
             if [ "$wd_rc" = 255 ]; then
                 echo "release: $(date -u '+%FT%TZ'): link lost: $(tr -d '\r' < "$wd_err" | tr '\n' ' ')" >> "$wd_file"
             else
@@ -1279,11 +1356,13 @@ windows_settings()
     wheld=/mnt/$(echo "$wout" | cut -c 1 | tr '[:upper:]' '[:lower:]')$(echo "$wout" | cut -c 3-)
 }
 
-# windows_stop: stop Windows' preparation that runs in the background and end
-# the hold of WSL's whole host and its beat, so that a release that exits or is
-# stopped leaves none of them behind; nothing of Windows' run is left running
-# between its preparation and its cases. When it stopped either, it stops what
-# of the run still runs on Windows and removes its scratch there.
+# windows_stop: stop Windows' preparation that runs in the background, the
+# observer of its cases and the beat, and then end the claims of WSL that
+# cover them, so that a release that exits or is stopped leaves none of them
+# behind; nothing of Windows' run is left running between its preparation and
+# its cases. When it stopped a part, it first stops what of the run still
+# runs on Windows and removes its scratch there, so that the whole host's
+# claim lasts until the cases have stopped.
 windows_stop()
 {
     wstopped=
@@ -1292,16 +1371,21 @@ windows_stop()
         wait "$wprep"
         wprep='' wstopped=1
     fi
+    if [ -n "$wobs" ]; then
+        kill "$wobs" 2> /dev/null
+        wobs='' wstopped=1
+    fi
     if [ -n "$wbeat" ]; then
         kill "$wbeat" 2> /dev/null
         wbeat=
     fi
-    if [ -n "$wholder" ]; then
-        wsl "touch $wheld/$wid.end" > /dev/null 2>&1
-        kill "$wholder" 2> /dev/null
-        wholder='' wstopped=1
-    fi
+    [ -z "$wholding" ] || wstopped=1
     [ -z "$wstopped" ] || [ -z "$wid" ] || windows_clean "$wid"
+    if [ -n "$wholding" ]; then
+        wholding=
+        wsl "touch $wheld/$wid.end" > /dev/null 2>&1
+        claim_stop "$wid" hold | while read -r line; do say "windows: $line"; done
+    fi
     [ -z "$wid" ] || rm -f "$state/$wid".*.poll "$state/$wid".*.err "$state/$wid".*.err.start
 }
 
@@ -1311,6 +1395,109 @@ windows_clean()
 {
     tssh "C:/msys64/usr/bin/bash.exe -l -s $wtree $wout $1" \
         < "$repo/tools/flow/winclean.sh" > /dev/null 2>&1
+}
+
+# claim_start ID KIND LAUNCH GOT DONE: start a claim of WSL's admission for
+# Windows' run ID apart from any ssh session: the launcher LAUNCH runs a
+# shell that touches OUT/GOT and OUT/ID.alive once admitted and holds the
+# claim while OUT/DONE is missing and OUT/ID.alive is under ten minutes old,
+# which the part's script on Windows and beat keep fresh. WSL ends what a
+# session started when wsl.exe ends, so the claim's script, OUT/ID.KIND.sh,
+# runs in a session of its own, whose number it writes to OUT/ID.KIND.pid,
+# with its output in OUT/ID.KIND, the launcher's process, which owns the
+# claim in the ledger, in OUT/ID.KIND.owner and its status in
+# OUT/ID.KIND.rc. Return once the script has started, or after half a minute.
+claim_start()
+{
+    c=$wheld/$1.$2
+    {
+        echo "rm -f $c.rc $c.started $c.pid $c.owner"
+        echo "cat > $c.sh << 'END_OF_CLAIM'"
+        # shellcheck disable=SC2016 # the remote shell expands these
+        echo "echo \$\$ > $c.pid"
+        echo "touch $c.started"
+        echo "$3 sh -c 'touch $wheld/$4 $wheld/$1.alive"
+        echo "    while [ ! -e $wheld/$5 ] && find $wheld/$1.alive -mmin -10 2> /dev/null | grep -q .; do sleep 15; done' &"
+        echo "echo \$! > $c.owner"
+        echo "wait \$!"
+        echo "echo \$? > $c.rc"
+        echo "END_OF_CLAIM"
+        echo "cd /tmp && setsid nohup sh $c.sh > $c 2>&1 < /dev/null &"
+        echo "i=0; until [ -e $c.started ] || [ \$i -ge 30 ]; do i=\$((i + 1)); sleep 1; done"
+    } | tssh "$WSL"
+}
+
+# claim_state ID KIND GOT: print `granted` once the claim ID.KIND that
+# claim_start began has touched OUT/GOT, `refused` when its launcher ended
+# without that or its script never started, and nothing while it waits or the
+# link is lost. A launcher may touch the file and end between two tests, so
+# the file is tested again after the end.
+claim_state()
+{
+    c=$wheld/$1.$2
+    wsl "if [ -e $wheld/$3 ]; then echo granted
+        elif [ -e $c.rc ] || [ ! -e $c.started ]; then
+            if [ -e $wheld/$3 ]; then echo granted; else echo refused; fi
+        fi" 2> /dev/null | tr -d '\r'
+}
+
+# claim_stop ID KIND: end the claim ID.KIND that claim_start began, granted or
+# still waiting for admission, and confirm that it has left WSL's ledger.
+# While its launcher runs, it stops each process of the claim's session, with
+# TERM and after half a minute with KILL; then it reads the ledger with
+# `etude status`, which first drops what recovery proves free, until no claim
+# or request there has an owner of the session, for a minute at most. It
+# prints a line for each thing that stays and fails then, or when the host
+# does not answer, so that the caller keeps the claim's files.
+claim_stop()
+{
+    {
+        echo "c=$wheld/$1.$2"
+        cat << 'END'
+ledger=/var/lib/rach2-etude/ledger
+[ -f "$c.pid" ] || [ -f "$c.owner" ] || exit 0
+sid=$(cat "$c.pid" 2> /dev/null) seen=$(cat "$c.owner" 2> /dev/null)
+# The session's leader is the claim's script; a number that another program
+# took since names no session of the claim.
+case $(ps -o args= -p "${sid:-0}" 2> /dev/null) in
+'' | *"$c.sh"*) ;;
+*) sid= ;;
+esac
+members() { [ -z "$sid" ] || ps -o pid= -s "$sid" 2> /dev/null | tr -d ' '; }
+i=0
+while p=$(members) && [ -n "$p" ]; do
+    seen="$seen $p"
+    if [ "$i" -lt 6 ]; then kill -TERM $p 2> /dev/null; else kill -KILL $p 2> /dev/null; fi
+    [ "$i" -lt 12 ] || break
+    i=$((i + 1))
+    sleep 5
+done
+i=0
+while :; do
+    /usr/local/libexec/rach2/etude status "$ledger" > /dev/null 2>&1
+    held=
+    for p in $seen; do
+        ! grep -q "^owner $p " "$ledger/claims" 2> /dev/null || held="$held $p"
+    done
+    left=$(members | tr '\n' ' ')
+    [ -n "$held$left" ] || exit 0
+    [ "$i" -lt 12 ] || break
+    i=$((i + 1))
+    sleep 5
+done
+[ -z "$left" ] || echo "the processes $left of $c.sh still run"
+for p in $held; do
+    echo "process $p keeps a claim or request in $ledger/claims; a person checks it and removes it"
+done
+exit 1
+END
+    } | tssh "$WSL" > "$state/$1.$2.stop" 2>&1
+    cs_rc=$?
+    tr -d '\r' < "$state/$1.$2.stop"
+    rm -f "$state/$1.$2.stop"
+    [ "$cs_rc" != 255 ] ||
+        echo "the testing host did not answer, so the end of the claim $1.$2 is not confirmed"
+    return "$cs_rc"
 }
 
 # beat ID: touch ID.alive in WSL once a minute while the release runs, the
@@ -1344,45 +1531,62 @@ awk '\$1 !~ /^#/ && NF >= 4 { n = \$3; sub(/.*\//, "", n); print n, \$4 }' \
 END
 }
 
+# windows_run ID: print the Windows shell's lines that give a session of the
+# run ID its run directory, TREE/build/tmp/ID, as ETUDE_RUN_DIR with its
+# TMPDIR inside, make it and OUT/ID, and define `kept REASON PATH...`, which
+# marks the directory kept with a line of the reason and the evidence.
+windows_run()
+{
+    echo "run=$wtree/build/tmp/$1"
+    # shellcheck disable=SC2016 # the remote shell expands these
+    echo 'export ETUDE_RUN_DIR=$run TMPDIR=$run/tmp'
+    echo "mkdir -p $wout/$1 \$TMPDIR"
+    # shellcheck disable=SC2016 # the remote shell expands these
+    echo 'kept() { r=$1; shift; echo "failed: $r; evidence: $*" >> "$run/KEPT"; }'
+}
+
+# windows_ended ID CONSOLE: print the Windows shell's lines that, once etude's
+# status is in rc, mark the run directory kept first when it failed, with the
+# run's output OUT/ID and its OUT/ID.CONSOLE as evidence, and remove the
+# directory when it passed and etude kept nothing there.
+windows_ended()
+{
+    echo "[ \"\$rc\" = 0 ] || kept \"etude exited \$rc\" $wout/$1 $wout/$1.$2"
+    # shellcheck disable=SC2016 # the remote shell expands these
+    echo '[ "$rc" != 0 ] || [ -e "$run/KEPT" ] || rm -rf "$run"'
+}
+
 # windows_prepare ID: build the preparation of Windows' run ID with `etude run
 # routine-prepare`, its output in STATE/ID.prepare, while a claim in WSL's
 # admission, `etude-launch build` with Windows' JOBS, holds the memory that the
 # preparation's own claim on Windows takes, JOBS GiB and one more, and the
 # block of ports that WSL's launcher gives each claim, so that WSL's tests
-# leave both to Windows; the tooling machine forwards no port. The claim runs
-# in WSL apart from any ssh session, its output in OUT/ID.claim and its
-# launcher's status in OUT/ID.claim.rc, and the preparation as
-# windows_detach says, so that a dropped link ends neither. The claim ends
-# with the preparation, which touches OUT/ID.prepared, or as beat says once
-# both the release and the preparation are gone; a stop ends both, with
-# windows_clean for the preparation. STATE/ID.claim gets the claim's output.
+# leave both to Windows; the tooling machine forwards no port. The claim,
+# ID.claim, runs as claim_start says and the preparation as windows_detach
+# says, so that a dropped link ends neither, and its observer runs in the
+# background, so that the wait builtin, which a signal interrupts, takes the
+# TERM of a stop at once. The claim ends with the preparation, which touches
+# OUT/ID.prepared once the preparation has ended or, when it ended without a
+# status, windows_clean has stopped it, or as beat says once both the release
+# and the preparation are gone. A stop kills the observer and ends the claim
+# with claim_stop, whether it was granted or still waits; the caller stops
+# the preparation with windows_clean. STATE/ID.claim gets the claim's output.
 # Run in the background.
 windows_prepare()
 {
-    id=$1 beater='' wd_sleep=''
-    trap 'kill $beater $wd_sleep 2> /dev/null; wsl "touch $wheld/$id.prepared" > /dev/null 2>&1; exit 143' TERM
-    {
-        echo "rm -f $wheld/$id.claim.rc $wheld/$id.claim.started"
-        echo "cat > $wheld/$id.claim.sh << 'END_OF_CLAIM'"
-        echo "touch $wheld/$id.claim.started"
-        echo "JOBS=$wjobs /usr/local/libexec/rach2/etude-launch build env sh -c 'touch $wheld/$id.claimed $wheld/$id.alive"
-        echo "    while [ ! -e $wheld/$id.prepared ] && find $wheld/$id.alive -mmin -10 2> /dev/null | grep -q .; do sleep 15; done'"
-        echo "echo \$? > $wheld/$id.claim.rc"
-        echo "END_OF_CLAIM"
-        echo "cd /tmp && setsid nohup sh $wheld/$id.claim.sh > $wheld/$id.claim 2>&1 < /dev/null &"
-        # WSL ends what the session started when wsl.exe ends, unless it has
-        # left the session.
-        echo "i=0; until [ -e $wheld/$id.claim.started ] || [ \$i -ge 30 ]; do i=\$((i + 1)); sleep 1; done"
-    } | tssh "$WSL" > "$state/$id.claim" 2>&1
-    until wsl "test -e $wheld/$id.claimed" 2> /dev/null; do
-        # A launcher may touch the file and end between the two tests. A
-        # lost link fails both tests.
-        if wsl "test -e $wheld/$id.claim.rc || test ! -e $wheld/$id.claim.started" 2> /dev/null; then
-            wsl "test -e $wheld/$id.claimed" 2> /dev/null && break
-            wsl "cat $wheld/$id.claim" >> "$state/$id.claim" 2>&1
-            echo "claim refused: $(tail -n 3 "$state/$id.claim" | tr '\n' ' ')" > "$state/$id.prepare"
-            return 1
-        fi
+    id=$1 beater='' wd_sleep='' wd_obs=''
+    trap 'kill $beater $wd_sleep $wd_obs 2> /dev/null; wsl "touch $wheld/$id.prepared" > /dev/null 2>&1
+        claim_stop "$id" claim >> "$state/$id.claim" 2>&1; exit 143' TERM
+    claim_start "$id" claim "JOBS=$wjobs /usr/local/libexec/rach2/etude-launch build env" \
+        "$id.claimed" "$id.prepared" > "$state/$id.claim" 2>&1
+    while :; do
+        case $(claim_state "$id" claim "$id.claimed") in
+            granted) break ;;
+            refused)
+                wsl "cat $wheld/$id.claim" >> "$state/$id.claim" 2>&1
+                echo "claim refused: $(tail -n 3 "$state/$id.claim" | tr '\n' ' ')" > "$state/$id.prepare"
+                return 1 ;;
+        esac
         sleep 30 &
         wd_sleep=$!
         wait "$wd_sleep"
@@ -1396,21 +1600,25 @@ windows_prepare()
         echo "git fetch -q $wout/release.bundle 'refs/remotes/origin/$branch' && git checkout -q -f --detach $sha || { echo 'status 1'; exit; }"
         downloads
         environment windows
-        echo "export TMPDIR=$wout/$id.tmp ETUDE_SCRATCH_RECORD=$wout/$id.scratch"
-        echo "mkdir -p $wout/$id \$TMPDIR"
-        echo "ETUDE_SITE=$wsite make build/tools/etude/etude > $wout/$id.make.log 2>&1 || { tail -n 20 $wout/$id.make.log; echo 'status 1'; exit; }"
+        windows_run "$id"
+        echo "ETUDE_SITE=$wsite make build/tools/etude/etude > $wout/$id.make.log 2>&1 || { kept 'etude did not build' $wout/$id.make.log; tail -n 20 $wout/$id.make.log; echo 'status 1'; exit; }"
         echo "e=$wout/etude-$id.exe"
-        echo "cp build/tools/etude/etude \"\$e\" || { echo 'status 1'; exit; }"
+        echo "cp build/tools/etude/etude \"\$e\" || { kept 'etude could not be copied'; echo 'status 1'; exit; }"
         echo "unset ETUDE_SITE ETUDE_ADMITTED ETUDE_PREPARATION_CLEAN"
-        echo "ETUDE_SITE=$wsite \"\$e\" run -N -t $wtree -a $warch -A $waccel -J $wout/$id.selection.json $wwords > $wout/$id.selection.log 2>&1 || { tail -n 20 $wout/$id.selection.log; echo 'status 1'; exit; }"
+        echo "ETUDE_SITE=$wsite \"\$e\" run -N -t $wtree -a $warch -A $waccel -J $wout/$id.selection.json $wwords > $wout/$id.selection.log 2>&1 || { kept 'the selection failed' $wout/$id.selection.log; tail -n 20 $wout/$id.selection.log; echo 'status 1'; exit; }"
         echo "ETUDE_PHASE_SELECTION_EXPORT=$wout/$id.selection.json \"\$e\" run routine-prepare phase_first_run $wtree $wout/$id $warch $id $wsite \"\$e\" $waccel $wwords > $wout/$id.prepare.console 2>&1"
         # shellcheck disable=SC2016 # the remote shell expands these
         echo 'rc=$?'
+        windows_ended "$id" prepare.console
         echo "tail -n 40 $wout/$id.prepare.console"
         # shellcheck disable=SC2016 # the remote shell expands these
         echo 'echo "status $rc"'
-    } | windows_detach "$id" prepare "$state/$id.prepare" "$id.prepare.console"
+    } | windows_detach "$id" prepare "$state/$id.prepare" "$id.prepare.console" &
+    wd_obs=$!
+    wait "$wd_obs"
+    wd_obs=
     kill "$beater" 2> /dev/null
+    grep -q '^status ' "$state/$id.prepare" 2> /dev/null || windows_clean "$id"
     wsl "touch $wheld/$id.prepared" > /dev/null 2>&1
     i=0
     until wsl "test -e $wheld/$id.claim.rc" 2> /dev/null || [ "$i" -ge 12 ]; do
@@ -1418,8 +1626,10 @@ windows_prepare()
         sleep 5
     done
     wsl "cat $wheld/$id.claim" >> "$state/$id.claim" 2>&1
-    [ "$i" -lt 12 ] ||
+    if [ "$i" -ge 12 ]; then
         echo "release: the claim had not ended a minute after the preparation" >> "$state/$id.claim"
+        claim_stop "$id" claim >> "$state/$id.claim" 2>&1
+    fi
 }
 
 # windows_words: set wwords to the words of Windows' run, as `selection
@@ -1466,7 +1676,7 @@ windows_start()
             failure windows "$(sed -n 's/^windows started //p' "$state/record" | tail -n 1)" runner
             return 1
         fi
-        wid=milestone$milestone-$(echo "$sha" | cut -c 1-12)-windows-$(date -u '+%m%d-%H%M%S')
+        wid=milestone$milestone-$(echo "$sha" | cut -c 1-12)-windows-$(stamp)
     fi
     windows_bundle
     [ -n "$wgiven" ] || note "windows started $wid"
@@ -1509,16 +1719,16 @@ windows()
             failure windows "$id" runner
             return 0
         fi
-        wsl "exec /usr/local/libexec/rach2/etude-launch alone sh -c 'touch $wheld/$id.held $wheld/$id.alive
-            while [ ! -e $wheld/$id.end ] && find $wheld/$id.alive -mmin -10 2> /dev/null | grep -q .; do sleep 15; done'" \
-            > "$state/$id.hold" 2>&1 9>&- &
-        wholder=$!
-        until wsl "test -e $wheld/$id.held" 2> /dev/null; do
-            # A holder may touch the file and end between the two tests.
-            if ! kill -0 "$wholder" 2> /dev/null; then
-                wsl "test -e $wheld/$id.held" 2> /dev/null && break
-                fail windows "WSL's admission did not give the whole host: $(tail -n 3 "$state/$id.hold" | tr '\n' ' ')"
-            fi
+        claim_start "$id" hold "/usr/local/libexec/rach2/etude-launch alone" "$id.held" "$id.end" \
+            > "$state/$id.hold" 2>&1
+        wholding=1
+        while :; do
+            case $(claim_state "$id" hold "$id.held") in
+                granted) break ;;
+                refused)
+                    wsl "cat $wheld/$id.hold" >> "$state/$id.hold" 2>&1
+                    fail windows "WSL's admission did not give the whole host: $(tail -n 3 "$state/$id.hold" | tr '\n' ' ')" ;;
+            esac
             say "windows: prepared; waiting for WSL's tests to end"
             sleep 30
         done
@@ -1529,35 +1739,30 @@ windows()
         {
             echo "cd $wtree || { echo 'status 1'; exit; }"
             environment windows
-            echo "export TMPDIR=$wout/$id.tmp ETUDE_SCRATCH_RECORD=$wout/$id.scratch"
-            echo "mkdir -p \$TMPDIR"
+            windows_run "$id"
             echo "MSYS_NO_PATHCONV=1 wsl.exe -u root -e sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches' < /dev/null"
             echo "e=$wout/etude-$id.exe"
             echo "unset ETUDE_SITE ETUDE_ADMITTED ETUDE_PREPARATION_CLEAN"
             echo "ETUDE_PHASE_SELECTION_EXPORT=$wout/$id.selection.json \"\$e\" run routine-collect phase_first_run $wtree $wout/$id $warch $id $wsite \"\$e\" $waccel $wwords > $wout/$id.console 2>&1"
             # shellcheck disable=SC2016 # the remote shell expands these
             echo 'rc=$?'
+            windows_ended "$id" console
             echo "tail -n 40 $wout/$id.console"
             # The lines that failed_in reads, wherever they are in the console.
             echo "grep -aE '^run: (result: failed: |(i686|x86_64):[a-z0-9-]+: ([^:]+: (failure|incomplete): |FAIL in |INCOMPLETE in ))' $wout/$id.console"
             # shellcheck disable=SC2016 # the remote shell expands these
             echo 'echo "status $rc"'
-        } | windows_detach "$id" cases "$state/$id.log" "$id.console"
+        } | windows_detach "$id" cases "$state/$id.log" "$id.console" 9>&- &
+        wobs=$!
+        wait "$wobs"
+        wobs=
         kill "$wbeat" 2> /dev/null
         wbeat=
-        wsl "touch $wheld/$id.end" > /dev/null 2>&1
-        i=0
-        while kill -0 "$wholder" 2> /dev/null && [ "$i" -lt 12 ]; do
-            i=$((i + 1))
-            sleep 5
-        done
-        kill "$wholder" 2> /dev/null
-        wait "$wholder"
-        wholder=
         rc=$(tr -d '\r' < "$state/$id.log" | sed -n 's/^status //p' | tail -n 1)
+        [ -n "$rc" ] || windows_clean "$id"
+        windows_unhold "$id"
         [ -z "$rc" ] || break
         say "windows: the run $id ended without a status: $(lost "$state/$id.log")"
-        windows_clean "$id"
     done
     if [ "$rc" = 0 ]; then
         mark windows "run $id"
@@ -1565,6 +1770,22 @@ windows()
     fi
     # shellcheck disable=SC2046 # the suites are words
     failure windows "$id" $(failed_in "$state/$id.log" | grep . || echo runner)
+}
+
+# windows_unhold ID: end the whole host's claim ID.hold once Windows' cases
+# have stopped, appending its output to STATE/ID.hold, and stop it with
+# claim_stop when it has not ended a minute later.
+windows_unhold()
+{
+    wsl "touch $wheld/$1.end" > /dev/null 2>&1
+    i=0
+    until wsl "test -e $wheld/$1.hold.rc" 2> /dev/null || [ "$i" -ge 12 ]; do
+        i=$((i + 1))
+        sleep 5
+    done
+    wsl "cat $wheld/$1.hold" >> "$state/$1.hold" 2>&1
+    [ "$i" -lt 12 ] || claim_stop "$1" hold | while read -r line; do say "windows: $line"; done
+    wholding=
 }
 
 # windows_detached: succeed when the record's last Windows run is one that -a
@@ -1711,9 +1932,19 @@ lenovo_run()
 # its last twenty lines when none does.
 failing()
 {
-    { tr -d '\r' < "$1" |
-        grep -E 'error:|Error [0-9]|\*\*\*|FAIL|[Ff]ailed|refused|[Cc]annot|missing|not found|No such' |
-        tail -n 20 | grep . || tr -d '\r' < "$1" | tail -n 20; } 2> /dev/null | sed 's/^/    /'
+    # A parallel make prints other jobs' configure noise after the error, so
+    # the twelve lines before the first make error come first.
+    { tr -d '\r' < "$1" | awk '
+        { line[NR] = $0 }
+        !first && /make(\[[0-9]+\])?: \*\*\* \[/ { first = NR }
+        END {
+            if (first)
+                for (i = (first > 12 ? first - 12 : 1); i <= first; i++)
+                    print line[i]
+        }'
+        tr -d '\r' < "$1" |
+            grep -E 'error:|Error [0-9]|FAIL|result: fail|step: .*failed|refused|No such' |
+            tail -n 8 | grep . || tr -d '\r' < "$1" | tail -n 20; } 2> /dev/null | sed 's/^/    /'
 }
 
 # prepare_wsl: build SHA for both architectures, as the full run does, and run
@@ -1762,12 +1993,20 @@ END
 }
 
 # prepare_windows_clean: stop Windows' preparation pwid where it still runs on
-# Windows, which a stopped ssh leaves running, and remove its files there.
+# Windows, which a stopped ssh leaves running, end its claim in WSL, and
+# remove its files there once claim_stop has confirmed that the claim and
+# any request of it have left WSL's ledger; otherwise say what stays and keep
+# them.
 prepare_windows_clean()
 {
     windows_clean "$pwid"
-    echo "cd $wout && rm -rf $pwid $pwid.* etude-$pwid.exe" |
-        tssh 'C:/msys64/usr/bin/bash.exe -l -s' > /dev/null 2>&1
+    if pw_left=$(claim_stop "$pwid" claim); then
+        echo "cd $wout && rm -rf $pwid $pwid.* etude-$pwid.exe" |
+            tssh 'C:/msys64/usr/bin/bash.exe -l -s' > /dev/null 2>&1
+    else
+        printf '%s\n' "$pw_left" | while read -r line; do say "prepare: windows: $line"; done
+        say "prepare: windows: the files of $pwid in $wout stay"
+    fi
 }
 
 # prepare_stop: stop each part of -p that still runs, check that none keeps a
@@ -1792,14 +2031,16 @@ prepare_stop()
             i=$((i + 1))
             sleep 10
         done
+        pstuck=
         ! kill -0 -"$pmac" 2> /dev/null ||
-            say "prepare: mac: process group $pmac did not stop; a person stops it"
+            { pstuck=1; say "prepare: mac: process group $pmac did not stop; a person stops it"; }
         pmac=
     fi
     if [ -n "$pmid" ]; then
         ! grep -qF "$pmid" "$site/ledger/claims" 2> /dev/null ||
             say "prepare: mac: $pmid keeps a claim in $site/ledger/claims; a person checks it and removes it"
         rm -f "$macdir/run"
+        [ -n "$pstuck" ] || mac_clean "$pmid"
         rm -rf "${runs:?}/$pmid" "$runs/$pmid".*
         pmid=
     fi
@@ -1835,7 +2076,7 @@ prepare_report()
 prepare_all()
 {
     pdir=$state/prepare log=$pdir/log
-    pwsl='' pwin='' pmac='' pwid='' pmid='' pclean='' pfailed=''
+    pwsl='' pwin='' pmac='' pwid='' pmid='' pclean='' pfailed='' pstuck=''
     mkdir -p "$pdir"
     : > "$log"
     check
@@ -1859,7 +2100,7 @@ prepare_all()
         windows_settings
         windows_words
         windows_bundle
-        pwid=milestone$milestone-$short-windows-prepare-$(date -u '+%m%d-%H%M%S')
+        pwid=milestone$milestone-$short-windows-prepare-$(stamp)
         windows_prepare "$pwid" > /dev/null 2>&1 9>&- &
         pwin=$!
         say "prepare: windows: preparing $pwid"
@@ -1867,7 +2108,7 @@ prepare_all()
     if has mac; then
         [ -d "$tree" ] && [ -f "$site/etude-site" ] ||
             later "the Mac has no copy at $tree or no admission site at $site"
-        pmid=milestone$milestone-$short-mac-prepare-$(date -u '+%m%d-%H%M%S')
+        pmid=milestone$milestone-$short-mac-prepare-$(stamp)
         mkdir -p "$runs/$pmid"
         perl -e 'setpgrp(0, 0); exec @ARGV' sh "$repo/tools/flow/release.sh" -s "$state" \
             -p -m "$pmid" "$milestone" "$sha" > /dev/null 2>&1 < /dev/null 8>&- 9>&- &
@@ -2055,7 +2296,7 @@ restart()
                 refuse "the run $last keeps a claim in $site/ledger/claims; a person checks it and removes it"
         }
     fi
-    id=milestone$milestone-$(echo "$at" | cut -c 1-12)-$m-$(date -u '+%m%d-%H%M%S')
+    id=milestone$milestone-$(echo "$at" | cut -c 1-12)-$m-$(stamp)
     # The line comes first, so that a release that waits on the run never
     # takes it for one of its own commit.
     [ "$at" = "$sha" ] || note "failure newer $m $id $at"
@@ -2212,7 +2453,7 @@ main()
         restart "$restart"
         exit 0
     fi
-    wprep='' wholder='' wbeat='' wgiven=''
+    wprep='' wobs='' wholding='' wbeat='' wgiven=''
     if [ -n "$detached" ]; then
         branch=$(sed -n 's/^branch //p' "$state/record")
         wgiven=$detached wid=$detached
@@ -2312,8 +2553,13 @@ main()
                 ! grep -q '^install started ' "$state/record" ||
                     fail install "the machine runs $now after the installer was started, so a reboot came before the release saw its result; check the root by hand"
                 note "touched $(date -u '+%FT%TZ')"
-                lenovo 'bootctl trial recovery' > /dev/null ||
-                    fail recovery "a trial of recovery could not be armed"
+                # A reset just after the slots were moved leaves the old root,
+                # whose bootctl cannot walk the larger slots; the build's can.
+                if ! lenovo 'bootctl trial recovery' > /dev/null; then
+                    send "$files/../utils/sbin/bootctl" /dev/shm/bootctl
+                    lenovo 'chmod 755 /dev/shm/bootctl && /dev/shm/bootctl trial recovery' > /dev/null ||
+                        fail recovery "a trial of recovery could not be armed"
+                fi
                 reboot_into recovery ;;
             *) later "the machine does not answer" ;;
         esac
@@ -2333,6 +2579,9 @@ main()
         if ! printf '%s\n' "$cmdline" | tr ' ' '\n' | grep -qx 'rach2\.slot=candidate' ||
             ! printf '%s\n' "$cmdline" | tr ' ' '\n' | grep -qx 'rach2\.console=term'; then
             fail trial "the trial boot's command line lacks rach2.slot=candidate or rach2.console=term: ${cmdline:-none read}"
+        fi
+        if i915 && ! printf '%s\n' "$cmdline" | tr ' ' '\n' | grep -qx 'rach2\.i915'; then
+            fail trial "the trial boot's command line lacks rach2.i915: ${cmdline:-none read}"
         fi
         RACH2_MEASURE_SLOT=candidate RACH2_MEASURE_KERNEL=$files/../rach2/kernel \
             sh tools/dev/machine_identity.sh "$state/identity" ssh -i "$repo/krffs/rach2_demo_ed25519" \

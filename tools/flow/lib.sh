@@ -96,7 +96,26 @@ limited()
 {
     { tail -n 2 "$1" |
         grep -E '"type":"result".*"is_error":true|"is_error":true.*"type":"result"|"type":"(error|turn\.failed)"'
-        tail -n 2 "$2"; } 2> /dev/null | grep -o 'hit your [a-z]* limit[^"\\]*' | head -n 1 | grep .
+        tail -n 2 "$2"; } 2> /dev/null | grep -o 'hit your [a-z0-9-]* limit[^"\\]*' | head -n 1 | grep .
+}
+
+# limit_end WHY: print the time, in seconds since the epoch, at which the
+# limit whose message is WHY resets, when the message gives it as a time of
+# day in a zone within the next five hours, as "resets 10:50pm (Asia/Almaty)"
+# does; print 0 for any other message, a weekly limit's among them.
+limit_end()
+{
+    printf '%s\n' "$1" | perl -MPOSIX -ne '
+        if (/resets (\d{1,2})(?::(\d\d))? ?(am|pm) \(([A-Za-z0-9_\/+-]+)\)/) {
+            $ENV{TZ} = $4;
+            tzset();
+            @t = localtime;
+            $d = ($1 % 12 + ($3 eq "pm" ? 12 : 0) - $t[2]) * 3600 +
+                (($2 || 0) - $t[1]) * 60 - $t[0];
+            $d += 86400 if $d < 0;
+            $end = time + $d if $d <= 18600;
+        }
+        END { print $end || 0, "\n" }'
 }
 
 # run_session OUT ERR LIMIT COMMAND...: run COMMAND with its output in OUT and
@@ -153,16 +172,19 @@ landed()
 }
 
 # tidy: remove what finished work left in the clone. A worktree under the
-# clone's .claude/worktrees or build/worktrees goes when its HEAD has landed,
-# or `closed_task` finds its task closed, since a rebased task's commit is not
-# master's; no process has its working directory in it, as a loop has in the
-# worktree it runs in, and `git worktree remove` takes it without force, which
-# it refuses for a worktree with changes, untracked files or a lock, as Claude
-# Code keeps on a helper's worktree while the helper runs, and only when
-# `disposable` finds nothing ignored in it but build output, which goes with
-# it. A branch goes when it has landed, unless it is master or a branch checked
-# out here or in a worktree, which git refuses to delete. Each removal is
-# logged.
+# clone's .claude/worktrees or build/worktrees goes when `closed_task` finds its
+# task closed, since a rebased task's commit is not master's, after `salvage`
+# has moved its run logs out, or, when it is not
+# named for a task, when its HEAD has landed, which a task's new worktree has
+# before its first commit while its session works in it from the clone's top; no
+# process has its working directory in it, as a loop has in the worktree it runs
+# in, and `git worktree remove` takes it without force, which it refuses for a
+# worktree with changes, untracked files or a lock, as Claude Code keeps on a
+# helper's worktree while the helper runs, and only when `disposable` finds
+# nothing ignored in it but build output, which goes with it. A branch goes when
+# it has landed, unless it is master or a branch checked out here or in a
+# worktree, which git refuses to delete. Each removal is logged, and so is a
+# finished worktree that stays, with the condition that keeps it.
 tidy()
 {
     top=$(git rev-parse --show-toplevel) || return 1
@@ -170,9 +192,22 @@ tidy()
     git worktree list --porcelain | sed -n 's/^worktree //p' | while read -r w; do
         case $w in "$top"/.claude/worktrees/*|"$top"/build/worktrees/*) ;; *) continue ;; esac
         head=$(git -C "$w" rev-parse -q --verify HEAD) || continue
-        landed "$head" || closed_task "$w" "$head" || continue
-        disposable "$w" && ! inside "$w" "$busy" &&
-            git worktree remove "$w" 2> /dev/null && log "tidy: removed the worktree $w"
+        if [ -n "$(task_of "$w")" ]; then
+            closed_task "$w" "$head" || continue
+        else
+            landed "$head" || continue
+        fi
+        if inside "$w" "$busy"; then
+            log "tidy: kept: $w: a process has its working directory in it"
+        elif [ -n "$(task_of "$w")" ] && ! salvage "$w"; then
+            log "tidy: kept: $w: its run logs could not be moved out"
+        elif ! disposable "$w"; then
+            log "tidy: kept: $w: $why"
+        elif err=$(git worktree remove "$w" 2>&1); then
+            log "tidy: removed the worktree $w"
+        else
+            log "tidy: kept: $w: $(printf '%s\n' "$err" | head -1)"
+        fi
     done
     git worktree prune
     git for-each-ref --format='%(refname:short)' refs/heads | while read -r b; do
@@ -183,12 +218,37 @@ tidy()
     done
 }
 
-# closed_task W HEAD: succeed when W, a worktree named tN or task-N, was made
+# salvage W: move the run evidence of the closed task's worktree W out of
+# it, so that the worktree and its images can go: each file under W's
+# build/runs and build/flow smaller than 16 MiB, its logs and notes, goes to
+# the same path under build/runs/task-N of the main working tree, where
+# sweep.sh ages it out as any other log; the larger files, disk images and
+# dumps, go with the worktree. Fail, and leave W whole, when a file cannot be
+# copied.
+salvage()
+{
+    n=$(task_of "$1")
+    dest=$(primary "$1")/build/runs/task-$n
+    (cd "$1/build" 2> /dev/null && find runs flow -type f -size -16384k 2> /dev/null) |
+        while read -r f; do
+            mkdir -p "$dest/$(dirname "$f")" && cp -p "$1/build/$f" "$dest/$f" || exit 1
+        done || return 1
+    rm -rf "$1/build/runs" "$1/build/flow"
+}
+
+# task_of W: print N when W is a worktree named N, tN or task-N, made for the
+# task N.
+task_of()
+{
+    basename "$1" | sed -n 's/^t\{0,1\}\(ask-\)\{0,1\}\([0-9][0-9]*\)$/\2/p'
+}
+
+# closed_task W HEAD: succeed when W, a worktree named N, tN or task-N, was made
 # for the task N and that issue is closed. A detached W's commit HEAD gets the
 # branch done/N, so that removing W leaves it on a branch.
 closed_task()
 {
-    n=$(basename "$1" | sed -n 's/^t\(ask-\)\{0,1\}\([0-9][0-9]*\)$/\2/p')
+    n=$(task_of "$1")
     [ -n "$n" ] || return 1
     [ "$(gh issue view "$n" --repo toksaitov/rach2 --json state --jq .state 2> /dev/null)" = CLOSED ] ||
         return 1
@@ -202,9 +262,11 @@ closed_task()
 # krffs files that make writes from the committed key pairs, Python's caches
 # Finder's .DS_Store files, and a Doom WAD or GNU downloads equal to the main
 # working tree's. Another key, a password, any other WAD, a person's notes or
-# any file under build/runs or build/flow keeps the worktree.
+# any file under build/runs or build/flow keeps the worktree. On failure, `why`
+# names what keeps it.
 disposable()
 {
+    why="git cannot list its ignored files"
     ignored=$(git -C "$1" ls-files --others --ignored --exclude-standard --directory) || return 1
     main=$(primary "$1")
     wad=ports/doom/doom1.wad
@@ -214,11 +276,14 @@ disposable()
     if downloaded "$1" "$main"; then
         ignored=$(printf '%s\n' "$ignored" | grep -v '^vendor/gnu/downloads')
     fi
+    why="ignored files that are not build output"
     ! printf '%s\n' "$ignored" |
         grep -v -E '^(build/|\.cache/|compile_commands\.json$|vendor/)|(^|/)(__pycache__/|\.DS_Store$)|^\.claude/scheduled_tasks\.lock$|^krffs/(authorized_keys|recovery_authorized_keys|test_authorized_keys|shadow|rach2_(demo|test)_password)$' |
-        grep -q . &&
-        ! printf '%s\n' "$ignored" | grep -q '^vendor/gnu/downloads' &&
-        ! find "$1/build/runs" "$1/build/flow" ! -type d 2> /dev/null | grep -q .
+        grep -q . || return 1
+    why="GNU downloads that the main working tree lacks"
+    ! printf '%s\n' "$ignored" | grep -q '^vendor/gnu/downloads' || return 1
+    why="files under build/runs or build/flow"
+    ! find "$1/build/runs" "$1/build/flow" ! -type d 2> /dev/null | grep -q .
 }
 
 # downloaded W MAIN: succeed when MAIN has each file of the GNU downloads of W.

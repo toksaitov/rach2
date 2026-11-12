@@ -14,7 +14,12 @@
 # another account while this one waited for its usage limit, the loop drops
 # it and claims another. The number is kept in a file, not read from the
 # board, because two loops of one account cannot tell their tasks apart by
-# assignee. Write a number to STATE/issue to give a loop a task to resume.
+# assignee. Write a number to STATE/issue to give a loop a task to resume,
+# with the take before it and under the claim lock, as claim does:
+# `perl -MFcntl=:flock -e 'open(L, ">>", shift) && flock(L, LOCK_EX) or die;
+# system(@ARGV) == 0 or exit 1' build/flow/claim.lock sh -c 'CMDS'`. Outside
+# it, a loop of the same account can take the card meanwhile, since `take`
+# answers yes to a card this account already holds.
 #
 # The session's prompt is `worker.txt`, with @ISSUE@ replaced by the task's
 # number, @BRANCH@ by its milestone's branch, which `board.sh branch` reads
@@ -31,7 +36,8 @@
 # process group of the session that is running in `session`, the clone's path in
 # `repo`, and in `copy` the copy on the testing host that RACH2_TESTING_COPY
 # names for testing.sh, if any; `touch STATE/stop` ends the loop after the
-# session that is running; tools/flow/stop.sh stops the session as well.
+# session that is running, and before it takes or starts a task;
+# tools/flow/stop.sh stops the session as well.
 # Sessions run with RACH2_MIN_FREE_GIB at 40 unless the environment gives
 # another, so that a build they start stops before it fills the disk, and
 # with RACH2_WORKER_STATE set to STATE, so that `board.sh release` of the
@@ -40,13 +46,22 @@
 # reads at most DOC_BYTES of AGENTS.md, since its own limit, 32 KiB, cuts the
 # file short.
 #
+# STATE/model, if it exists, sets the model and effort of this loop's sessions
+# in place of the account's model, or CODEX_MODEL, and REASONING: one line,
+# `MODEL EFFORT [UNTIL]`, with UNTIL in seconds since the epoch. The loop reads
+# it before each session, so it takes effect at the next one, and removes it
+# once UNTIL has passed, which puts the loop back on its defaults by itself.
+#
 # A session that ends on the account's usage limit makes the loop wait fifteen
-# minutes. One shorter than two minutes for another reason, such as a lost
-# network or a lapsed login, doubles the wait before the next, from one minute
-# up to thirty. A session still running after six hours is stopped, with
-# every process in its group. A loop that starts while a session of the loop
-# before it still runs, as one does after that loop's tmux session is killed,
-# waits for the session to end before it does anything in the clone.
+# minutes, and STATE/limit keeps the time the limit's message gives for its
+# reset: until then a loop whose task went to another account claims no new
+# one, which it could not work. One shorter than two minutes for another
+# reason, such as a lost network or a lapsed login, doubles the wait before
+# the next, from one minute up to thirty. A session still running after six
+# hours is stopped, with every process in its group. A loop that starts while
+# a session of the loop before it still runs, as one does after that loop's
+# tmux session is killed, waits for the session to end before it does anything
+# in the clone.
 #
 # While it holds no task, before it claims one, the loop removes what
 # finished work left in its clone, as `tidy` in lib.sh says, and prunes its
@@ -74,6 +89,8 @@ claim()
         log "claim lock failed"
         return 1
     fi
+    # A task handed to this loop under the lock since its last one ended.
+    [ -s "$state/issue" ] && return 0
     if ! listed=$(sh "$state/run/board.sh" next); then
         log "board unreachable"
         return 1
@@ -90,6 +107,35 @@ claim()
     done
 } 9>> "$flowdir/claim.lock"
 
+# choose: set `model` and `effort` for the next session: empty, for the
+# agent's default model, and REASONING, unless STATE/model names others, as
+# the header says. A line whose model or effort has a character outside
+# letters, digits, `.`, `_` and `-`, or whose UNTIL is not a number, is
+# ignored and logged.
+choose()
+{
+    model='' effort=$REASONING
+    [ -r "$state/model" ] || return 0
+    read -r m e until < "$state/model"
+    case "$m$e" in
+        ''|*[!A-Za-z0-9._-]*)
+            log "model: unusable line in $state/model"
+            return 0 ;;
+    esac
+    case $until in
+        *[!0-9]*)
+            log "model: unusable line in $state/model"
+            return 0 ;;
+    esac
+    if [ -n "$until" ] && [ "$(date +%s)" -ge "$until" ]; then
+        rm -f "$state/model"
+        log "model: $m ended; back to the default at $REASONING"
+        return 0
+    fi
+    model=$m effort=${e:-$REASONING}
+    log "model: $model at $effort"
+}
+
 # session ISSUE BRANCH: run one session on task ISSUE, whose milestone's
 # branch is BRANCH, with the agent's command.
 session()
@@ -97,21 +143,23 @@ session()
     t=$(date -u '+%m%d-%H%M%S')
     prompt=$(sed "s|@ISSUE@|$1|g; s|@BRANCH@|$2|g; s|@BOARD@|$state/run/board.sh|g" \
         "$state/run/worker.txt")
+    choose
     log "session $t on #$1 starts"
     started=$(date +%s)
     case $agent in
         claude)
             run_session "$state/s-$t.jsonl" "$state/s-$t.err" "$DEADLINE" \
                 env CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 \
-                CLAUDE_CODE_EFFORT_LEVEL="$REASONING" \
+                CLAUDE_CODE_EFFORT_LEVEL="$effort" \
                 CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000 \
-                claude -p "$prompt" --permission-mode bypassPermissions \
+                claude ${model:+--model "$model"} \
+                -p "$prompt" --permission-mode bypassPermissions \
                 --disallowedTools ScheduleWakeup,Monitor \
                 --output-format stream-json --verbose ;;
         codex)
             run_session "$state/s-$t.jsonl" "$state/s-$t.err" "$DEADLINE" \
-                codex exec -m "$CODEX_MODEL" \
-                -c model_reasoning_effort="$REASONING" \
+                codex exec -m "${model:-$CODEX_MODEL}" \
+                -c model_reasoning_effort="$effort" \
                 -c project_doc_max_bytes="$DOC_BYTES" \
                 --dangerously-bypass-approvals-and-sandbox --json \
                 -C "$repo" "$prompt" ;;
@@ -190,8 +238,14 @@ main()
             fi
         fi
         if [ -z "$issue" ]; then
+            until=$(cat "$state/limit" 2> /dev/null)
+            if [ "$(date +%s)" -lt "${until:-0}" ]; then
+                sleep 300
+                continue
+            fi
             tidy
             prune_logs 's-*'
+            [ -e "$state/stop" ] && break
             if ! claim; then
                 sleep 60
                 continue
@@ -210,12 +264,15 @@ main()
                 sleep 300
                 continue ;;
         esac
+        [ -e "$state/stop" ] && break
         session "$issue" "$branch"
         if why=$(limited "$last.jsonl" "$last.err"); then
             log "limit: $why"
+            limit_end "$why" > "$state/limit"
             sleep 900
             continue
         fi
+        rm -f "$state/limit"
         if [ "$took" -lt 120 ] && [ "$(gh issue view "$issue" --repo "$REPO" \
             --json state --jq .state)" != CLOSED ]; then
             fails=$((fails + 1))

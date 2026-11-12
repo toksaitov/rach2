@@ -152,8 +152,9 @@
 # `archive [M]` archives the cards of the closed issues of milestone M and of
 # their closed subtasks, and prints the numbers it archived; release.sh runs
 # it once it has closed M. With no M it archives those of every closed
-# milestone and of no milestone; status.sh and stop.sh run it so on every
-# look, so that a card closed after its own release leaves the board at once.
+# milestone and of no milestone updated in the last three days; status.sh and
+# stop.sh run it so on every look, so that a card closed after its own release
+# leaves the board at once.
 # An open issue keeps its card. A card that
 # cannot be archived is reported on stderr and the rest go on, and the exit
 # status is then 1.
@@ -322,43 +323,20 @@ ISSUE='number title state
     milestone { number state description }
     issueDependenciesSummary { blockedBy }'
 
-# items [all]: print the issues on the board in the board's order, one a
-# line, as twelve fields separated by tabs: the item's id, the Status or
-# nothing, the number, the state, the labels joined by commas, the assignees'
-# logins joined by commas, the number of open blockers, the parent's number
-# or nothing, the milestone's number, its state and the branch it names, each
-# or nothing, and the title. GitHub's list of the board's items can lack an
-# item that the issue's own `projectItems` gives, so the repository's open
-# issues, or with `all` every issue, are read as well, and an issue whose
-# item the list lacks follows the others, in the order the issues were
-# opened. Fail when any page of either answer is lost.
-items()
+# issue_cards STATE [SINCE]: print, as items does, the board's cards of the
+# repository's issues in STATE, OPEN or CLOSED, updated since SINCE when it
+# is given. GitHub's list of the board's items can lack an issue's item.
+issue_cards()
 {
-    states=OPEN
-    [ "$1" != all ] || states='OPEN, CLOSED'
-    listed=$(pages .data.user.projectV2.items '
-            select(.content.number != null and (.isArchived | not)) |
-            {id, status: (.fieldValueByName.name // ""), issue: .content} |
-            '"$FIELDS" -F n="$BOARD" -f o="$OWNER" -f query='
-        query($o: String!, $n: Int!, $endCursor: String) {
-            user(login: $o) { projectV2(number: $n) {
-                items(first: 100, after: $endCursor,
-                      orderBy: {field: POSITION, direction: ASC}) {
-                    pageInfo { hasNextPage endCursor }
-                    nodes { id isArchived
-                        fieldValueByName(name: "Status") {
-                            ... on ProjectV2ItemFieldSingleSelectValue { name } }
-                        content { ... on Issue { '"$ISSUE"' } } } } } } }') ||
-        return 1
-    found=$(pages .data.repository.issues '. as $issue |
+    pages .data.repository.issues '. as $issue |
             .projectItems.nodes[] |
             select(.project.number == '"$BOARD"' and
                    .project.owner.login == "'"$OWNER"'") |
             {id, status: (.fieldValueByName.name // ""), issue: $issue} |
-            '"$FIELDS" -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
-        query($o: String!, $r: String!, $endCursor: String) {
+            '"$FIELDS" -f o="${REPO%/*}" -f r="${REPO#*/}" ${2:+-f since="$2"} -f query='
+        query($o: String!, $r: String!, $since: DateTime, $endCursor: String) {
             repository(owner: $o, name: $r) {
-                issues(first: 100, after: $endCursor, states: ['"$states"'],
+                issues(first: 100, after: $endCursor, states: ['"$1"'], filterBy: {since: $since},
                        orderBy: {field: CREATED_AT, direction: ASC}) {
                     pageInfo { hasNextPage endCursor }
                     nodes { '"$ISSUE"'
@@ -367,12 +345,57 @@ items()
                                     owner { ... on User { login } } }
                                 fieldValueByName(name: "Status") {
                                     ... on ProjectV2ItemFieldSingleSelectValue {
-                                        name } } } } } } } }') || return 1
+                                        name } } } } } } } }'
+}
+
+# items [all|open|recent]: print the issues on the board in the board's order,
+# one a line, as twelve fields separated by tabs: the item's id, the Status or
+# nothing, the number, the state, the labels joined by commas, the assignees'
+# logins joined by commas, the number of open blockers, the parent's number or
+# nothing, the milestone's number, its state and the branch it names, each or
+# nothing, and the title. GitHub's list of the board's items can lack an item
+# that the issue's own `projectItems` gives, so the repository's open issues,
+# and with `all` or `recent` the closed ones updated in the last three days, are
+# read as well, and an issue whose item the list lacks follows the others, in
+# the order the issues were opened. With `open` or `recent` the board's list
+# holds only its open issues' items, since the closed ones outnumber them many
+# times, at two GraphQL points for each page of a hundred, and every loop's poll
+# reads the list. Fail when any page of either answer is lost.
+items()
+{
+    # The issues are read while the board's list is, from a file.
+    items_dir=$(git rev-parse --path-format=absolute --git-common-dir 2> /dev/null)/../build/tmp
+    mkdir -p "$items_dir" 2> /dev/null || items_dir=${TMPDIR:-/tmp}
+    items_tmp=$(mktemp "$items_dir/board-items.XXXXXX") || return 1
+    {
+        issue_cards OPEN || exit 1
+        [ "$1" != all ] && [ "$1" != recent ] || issue_cards CLOSED "$(date -u -v-3d +%Y-%m-%dT%H:%M:%SZ 2> /dev/null ||
+            date -u -d '3 days ago' +%Y-%m-%dT%H:%M:%SZ)" || exit 1
+    } > "$items_tmp" &
+    items_pid=$!
+    case $1 in open|recent) items_only='query: "is:open", ' ;; *) items_only= ;; esac
+    listed=$(pages .data.user.projectV2.items '
+            select(.content.number != null and (.isArchived | not)) |
+            {id, status: (.fieldValueByName.name // ""), issue: .content} |
+            '"$FIELDS" -F n="$BOARD" -f o="$OWNER" -f query='
+        query($o: String!, $n: Int!, $endCursor: String) {
+            user(login: $o) { projectV2(number: $n) {
+                items(first: 100, after: $endCursor, '"$items_only"'
+                      orderBy: {field: POSITION, direction: ASC}) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes { id isArchived
+                        fieldValueByName(name: "Status") {
+                            ... on ProjectV2ItemFieldSingleSelectValue { name } }
+                        content { ... on Issue { '"$ISSUE"' } } } } } } }') ||
+        { wait "$items_pid"; rm -f "$items_tmp"; return 1; }
+    wait "$items_pid" || { rm -f "$items_tmp"; return 1; }
+    found=$(cat "$items_tmp")
+    rm -f "$items_tmp"
     printf '%s\n' "$listed" "$found" | awk -F '\t' 'NF > 0 && !seen[$1]++'
 }
 
-# read_board [all]: read the board into `board`, as `items` prints it, or say
-# that it cannot and exit 1.
+# read_board [all|open|recent]: read the board into `board`, as `items`
+# prints it, or say that it cannot and exit 1.
 read_board()
 {
     board=$(items "$1") || {
@@ -403,7 +426,7 @@ lenovo_held()
 next()
 {
     login
-    read_board
+    read_board open
     busy=0
     if [ "$me" = "$OWNER" ]; then
         if lenovo_held || printf '%s\n' "$board" | awk -F '\t' "$LIB"'
@@ -664,7 +687,7 @@ ready()
 
 done_()
 {
-    read_board all
+    read_board recent
     closed=$(printf '%s\n' "$board" | awk -F '\t' '
         $4 == "CLOSED" && $2 != "Done" { print $3 }')
     for n in $closed; do
@@ -682,7 +705,7 @@ done_()
 finish()
 {
     login
-    read_board
+    read_board open
     open=$(printf '%s\n' "$board" | awk -F '\t' -v p="$1" '
         $8 == p && $4 == "OPEN" { printf "%s#%s", sep, $3; sep = " " }')
     if [ -n "$open" ]; then
@@ -740,15 +763,49 @@ step()
     }
 }
 
+# settled N: print the state of issue N, its Status on the board and its
+# assignees joined by commas, the three joined by tabs, read afresh. check
+# calls it CHECK_SETTLE seconds, 15 unless it is set, after its first
+# reading: take, finish and step change an issue's assignees, state and
+# Status in separate calls, seconds apart, and a check that reads the board
+# between them would report a card that is about to be right.
+settled()
+{
+    ask -f query='query($o: String!, $r: String!, $n: Int!) {
+        repository(owner: $o, name: $r) { issue(number: $n) { state
+            assignees(first: 10) { nodes { login } }
+            projectItems(first: 20) { nodes { project { number }
+                fieldValueByName(name: "Status") {
+                    ... on ProjectV2ItemFieldSingleSelectValue { name } } } } } } }' \
+        -f o="$OWNER" -f r="${REPO#*/}" -F n="$1" --jq "
+        .data.repository.issue | .state + \"\t\" +
+        ([.projectItems.nodes[] | select(.project.number == $BOARD) |
+          .fieldValueByName.name // \"\"] | first // \"\") + \"\t\" +
+        ([.assignees.nodes[].login] | join(\",\"))"
+}
+
 check()
 {
-    read_board all
+    read_board recent
+    # The rules on a card's state, Status and assignees are judged on a
+    # second reading of each card the first reading finds wrong. The last
+    # field says whether the card is a task, which has no parent.
+    printf '%s\n' "$board" | awk -F '\t' 'NF >= 12 &&
+        (($4 == "OPEN" && $2 == "Done") || ($4 == "CLOSED" && $2 != "Done") ||
+         ($4 == "OPEN" && $2 == "In progress" && $6 == "") ||
+         ($4 == "OPEN" && $2 == "Ready" && $6 != "" && $8 == "")) {
+            print $3, ($8 == "" ? "task" : "sub") }' |
+        awk -v t="${CHECK_SETTLE:-15}" 'NR == 1 { system("sleep " t) } { print; fflush() }' |
+        while read -r n kind; do
+            now=$(settled "$n") || continue
+            printf '%s\t%s\t%s\n' "$n" "$kind" "$now"
+        done | awk -F '\t' '
+            $3 == "OPEN" && $4 == "Done" { print "board: #" $1 " is open but Done" }
+            $3 == "CLOSED" && $4 != "Done" { print "board: #" $1 " is closed but " ($4 == "" ? "has no Status" : $4) }
+            $3 == "OPEN" && $4 == "In progress" && $5 == "" { print "board: #" $1 " is In progress with no assignee" }
+            $3 == "OPEN" && $4 == "Ready" && $5 != "" && $2 == "task" { print "board: #" $1 " is Ready but assigned to " $5 }'
     printf '%s\n' "$board" | awk -F '\t' -v held=" $* " '
         NF < 12 { next }
-        $4 == "OPEN" && $2 == "Done" { print "board: #" $3 " is open but Done" }
-        $4 == "CLOSED" && $2 != "Done" { print "board: #" $3 " is closed but " ($2 == "" ? "has no Status" : $2) }
-        $4 == "OPEN" && $2 == "In progress" && $6 == "" { print "board: #" $3 " is In progress with no assignee" }
-        $4 == "OPEN" && $2 == "Ready" && $6 != "" && $8 == "" { print "board: #" $3 " is Ready but assigned to " $6 }
         $4 == "OPEN" && $2 == "In progress" && held != "  " && $8 == "" && index(held, " " $3 " ") == 0 &&
             $12 !~ /^Release milestone / { print "board: #" $3 " is In progress but no loop holds it" }
         $8 == "" && $9 != "" && $10 == "OPEN" {
@@ -760,10 +817,14 @@ check()
                 if (!open[m] && !shared[branch[m]])
                     print "board: milestone " m " has all its tasks closed and waits for its release"
         }'
+    # Only a task whose branch exists can be contained in its milestone's.
+    branches=" $(gh api --paginate "repos/$REPO/git/matching-refs/heads/task/" \
+        --jq '.[].ref | ltrimstr("refs/heads/task/")' 2> /dev/null | tr '\n' ' ')"
     printf '%s\n' "$board" | awk -F '\t' '$4 == "OPEN" && $8 == "" && $11 != "" { print $3 " " $11 }' |
         while read -r n b; do
             # A loop that holds the task may have pushed part of it already.
             case " $* " in *" $n "*) continue ;; esac
+            case $branches in *" $n "*) ;; *) continue ;; esac
             s=$(gh api "repos/$REPO/compare/$b...task/$n" --jq .status 2> /dev/null) || continue
             case $s in identical|behind) echo "board: #$n is open but $b contains task/$n" ;; esac
         done
@@ -771,7 +832,7 @@ check()
 
 archive()
 {
-    read_board all
+    if [ -n "$1" ]; then read_board all; else read_board recent; fi
     cards=$(printf '%s\n' "$board" | awk -F '\t' -v m="$1" '
         { id[NR] = $1; n[NR] = $3; closed[NR] = $4 == "CLOSED"; parent[NR] = $8
           if (m != "" ? $9 == m : $9 == "" || $10 == "CLOSED") task[$3] = 1 }
