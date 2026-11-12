@@ -26,20 +26,31 @@ import run
 STAT_KEYS = ("ctxt", "bkl_wait_us", "scheduler_picks", "tlb_shootdown_ipis")
 
 # debugfs's complete holds by entry and takes after a switch, by the system
-# call the thread slept in (debugfs(5)); Linux has no such file.
+# call the thread slept in, and each call's and ioctl request's time with
+# rach2.cycleaccount (debugfs(5)); Linux has no such file.
 CALLS = Path("/sys/kernel/debug/bkl/calls")
+
+# debugfs's profile, whose samples by entry over the loop the summary gives;
+# its whole-kernel mode, which root chooses by writing "kernel" to it before
+# the run, samples every tick in kernel mode, the lock held or not.
+PROFILE = Path("/sys/kernel/debug/bkl/profile")
 
 
 def snapshot():
-    """/proc/stat, all entry and slept holds of debugfs's bkl/calls where read,
-    and each tripprobe thread's stat and status, with the monotonic time, as
-    one text."""
+    """/proc/stat, all entry, slept and ioctl lines of debugfs's bkl/calls and
+    its profile's lines, each after "profile ", where read, and each
+    tripprobe thread's stat and status, with the monotonic time, as one
+    text."""
     text = ["time %.6f\n" % time.monotonic(), Path("/proc/stat").read_text()]
     try:
         calls = CALLS.read_text()
         text += ["bkl_calls_complete\n"]
         text += [line + "\n" for line in calls.splitlines()
-                 if line.startswith(("syscall ", "vector ", "take ", "slept "))]
+                 if line.startswith(("syscall ", "vector ", "take ", "slept ", "ioctl "))]
+    except OSError:
+        pass
+    try:
+        text += ["profile " + line + "\n" for line in PROFILE.read_text().splitlines()]
     except OSError:
         pass
     for pid in os.listdir("/proc"):
@@ -90,6 +101,21 @@ def parse(text):
     return at, stat, holds, threads, complete
 
 
+def entries(text):
+    """Each bkl/calls entry's and ioctl request's calls and wall_us, and the
+    profile's samples summed by entry, of a snapshot."""
+    walls, samples = {}, collections.Counter()
+    for line in text.splitlines():
+        if line.startswith("== "):
+            break
+        f = line.split()
+        if len(f) >= 6 and f[0] in ("syscall", "ioctl"):
+            walls[f[0] + " " + f[1]] = (int(f[2]), int(f[3]))
+        elif len(f) >= 4 and f[0] == "profile" and f[-1].isdigit():
+            samples[f[1] + " " + f[2]] += int(f[-1])
+    return walls, samples
+
+
 def summary(start, end):
     """Lines that give the loop's wall time, the counters' changes, the big
     lock's holds by entry and each thread's switches between two snapshots."""
@@ -106,6 +132,16 @@ def summary(start, end):
         if h1[key][0] > before[0]:
             n, us = h1[key][0] - before[0], h1[key][1] - before[1]
             lines.append("hold %s: %d holds, %d us, %.1f us each" % (key, n, us, us / n))
+    w0, p0 = entries(start)
+    w1, p1 = entries(end)
+    spent = {k: (w1[k][0] - w0.get(k, (0, 0))[0], w1[k][1] - w0.get(k, (0, 0))[1]) for k in w1}
+    for key in sorted(spent, key=lambda k: -spent[k][1])[:16]:
+        n, us = spent[key]
+        if n > 0 and us > 0:
+            lines.append("call %s: %d calls, %d us, %.1f us each" % (key, n, us, us / n))
+    taken = p1 - p0
+    for key, n in taken.most_common(16):
+        lines.append("profile %s: %d samples" % (key, n))
     for tid, y in sorted(b.items()):
         x = a.get(tid, {})
 
