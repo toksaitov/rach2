@@ -866,10 +866,13 @@ static int sched_prepare_old(process_t *old, struct percpu *cpu, int me)
  * entered for the first time skips the restore: a forked child takes its
  * IF from iret, and a kernel thread's entry enables interrupts itself.
  *
- * A switch away from a process that could still run calls its `sched_out`
- * in the same hold of the run queues' lock as the selection, so that what
- * it marks is true of the switch made: KVM's steal time says a vCPU was
- * preempted exactly when it was, as Linux's kvm_sched_out says it.
+ * A switch away from a process calls its `sched_out` in the same hold of
+ * the run queues' lock as the selection, saying whether the process could
+ * still run, so that what it marks is true of the switch made: KVM's steal
+ * time says a vCPU was preempted exactly when it was, as Linux's
+ * kvm_sched_out says it, and KVM gives the host back the processor's state
+ * that a vCPU's run left the guest's at every switch, as Linux's
+ * kvm_arch_vcpu_put.
  *
  * The switch is Linux's protocol (kernel/sched/core.c:4972-4990, 3798):
  * the incoming thread's `on_cpu` is set before the switch, and the
@@ -953,11 +956,11 @@ void schedule(void)
     if (old != cpu->idle) {
         if (old->state == PROC_READY) {
             old->nivcsw++;
-            if (old->sched_out) {
-                old->sched_out(old->sched_out_arg);
-            }
         } else {
             old->nvcsw++;
+        }
+        if (old->sched_out) {
+            old->sched_out(old->sched_out_arg, old->state == PROC_READY);
         }
     }
 

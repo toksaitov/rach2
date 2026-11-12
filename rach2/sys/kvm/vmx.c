@@ -381,19 +381,35 @@
 #define HOST_SS 0x18u
 #define HOST_TR 0x40u
 
-/* The guest MSRs the entry loads and the exit stores, and the host's the
- * exit loads, as 16-byte entries of the MSR area's page: the guest's at 0,
- * the host's at 2048. KERNEL_GS_BASE changes in the guest by SWAPGS
- * without an exit, so the exit stores it; the others change only by a
- * WRMSR that exits. The host's KERNEL_GS_BASE is put back by
- * `restore_host`. TSC_AUX is last, and only where the host has RDTSCP. */
-static const uint32_t guest_msrs[] = {MSR_STAR,         MSR_LSTAR,          MSR_CSTAR,
-                                      MSR_SYSCALL_MASK, MSR_KERNEL_GS_BASE, MSR_TSC_AUX};
-static const uint32_t host_msrs[] = {MSR_STAR, MSR_LSTAR, MSR_CSTAR, MSR_SYSCALL_MASK, MSR_TSC_AUX};
-#define N_GUEST_MSRS 6u
-#define N_HOST_MSRS  5u
-#define KGS_SLOT     4u
-#define HOST_LIST    128u /* the host list's first word, in 16-byte entries: 2048 bytes */
+/*
+ * The MSRs that the guest's code reads and the host's only on its way back
+ * to user mode, which hold the guest's values from the first entry of a
+ * KVM_RUN to `vmx_put`, written by WRMSR where they differ, as Linux's
+ * user-return MSRs (vmx.c:1911-1946, x86.c:552-647): STAR, LSTAR and
+ * SYSCALL_MASK for a guest in 64-bit mode with EFER.SCE, whose SYSCALL
+ * reads them, and TSC_AUX for a guest given RDTSCP. Each changes in the
+ * guest only by a WRMSR that exits. CSTAR is msr.c's alone, as Linux
+ * keeps it, since SYSCALL on an Intel processor never reads it. The
+ * guest's KERNEL_GS_BASE, which SWAPGS changes without an exit, is in the
+ * processor over the same span, as Linux's vmx_prepare_switch_to_guest
+ * loads it (vmx.c:1286-1356).
+ */
+static const uint32_t uret_msrs[] = {MSR_STAR, MSR_LSTAR, MSR_SYSCALL_MASK, MSR_TSC_AUX};
+#define N_URET       4u
+#define URET_TSC_AUX 3u
+
+/* Each processor's values of `uret_msrs`: the host's, read at the first
+ * load there, and those the processor holds now, as Linux's
+ * kvm_user_return_msrs; `uret_read` once the host's are read. */
+static uint64_t uret_host[NR_CPUS][N_URET];
+static uint64_t uret_curr[NR_CPUS][N_URET];
+
+/* The PMU's MSR lists in a vCPU's page `msrs`, which `kvm_pmu_vmx_enter`
+ * fills: the guest's from the start, which the entry loads and the exit
+ * stores, and the host's from this entry, 2048 bytes in, which the exit
+ * loads. Each holds KVM_PMU_LIST_MAX entries of 16 bytes. */
+#define PMU_HOST_LIST 128u
+static int uret_read[NR_CPUS];
 
 /* ---- the table of operations ---- */
 
@@ -416,10 +432,15 @@ struct vmx_host {
  * return VMX_OK, VMX_FAIL_INVALID or VMX_FAIL_VALID, as their flags say;
  * `run` enters the guest from `regs` and its CR2, VMLAUNCH or VMRESUME as
  * `launched` says, and returns VMX_OK at the exit, with the guest's
- * registers saved, or the entry instruction's failure. `fpu_load` saves the
- * host's state into `host` and loads the guest's image with XCR0 `xcr0`;
- * `fpu_store` does the reverse. `nmi` and `machine_check` raise the host's
- * own vector 2 or 18, for an exit that took one from the host.
+ * registers saved, or the entry instruction's failure. The floating-point
+ * operations work under the host's XCR0: `fpu_load` saves the host's state
+ * into `host`, unless `host` is NULL, and loads the guest's image `guest`;
+ * `fpu_store` saves the registers into `guest`, unless `guest` is NULL,
+ * and loads the host's state from `host`, unless `host` is NULL. `xgetbv`
+ * and `xsetbv` read and write XCR0, and `rdpkru` and `wrpkru` PKRU, which
+ * read as 0 and are not written where the host's protection keys are off.
+ * `nmi` and `machine_check` raise the host's own vector 2 or 18, for an
+ * exit that took one from the host.
  */
 struct vmx_ops {
     int (*vmxon)(uint64_t *pa);
@@ -439,8 +460,12 @@ struct vmx_ops {
     void (*write_dr)(int n, uint64_t value);
     void (*save_host)(struct vmx_host *h);
     void (*restore_host)(const struct vmx_host *h);
-    void (*fpu_load)(void *host, const void *guest, uint64_t xcr0);
-    void (*fpu_store)(void *host, void *guest, uint64_t xcr0);
+    void (*fpu_load)(void *host, const void *guest);
+    void (*fpu_store)(void *host, void *guest);
+    uint64_t (*xgetbv)(void);
+    void (*xsetbv)(uint64_t value);
+    uint32_t (*rdpkru)(void);
+    void (*wrpkru)(uint32_t value);
     void (*nmi)(void);
     void (*machine_check)(void);
     void (*wbinvd)(void);
@@ -625,51 +650,69 @@ static void hw_xsetbv(uint64_t v)
                          : "c"(0u), "a"((uint32_t)v), "d"((uint32_t)(v >> 32)));
 }
 
-/* The host's XCR0 while a guest's is loaded, or 0 without XSAVE. */
-static uint64_t host_xcr0[NR_CPUS];
-
-/** Save the host's floating-point state into `host` and load the guest's
- * image `guest` before setting its XCR0. */
-static void hw_fpu_load(void *host, const void *guest, uint64_t xcr0)
+/** Save the host's floating-point state into `host`, unless it is NULL,
+ * and load the guest's image `guest`, under the host's XCR0. */
+static void hw_fpu_load(void *host, const void *guest)
 {
     uint64_t mask;
 
-    fpu_save(host);
+    if (host) {
+        fpu_save(host);
+    }
     if (kvm_xcr0_supported()) {
         mask = hw_xgetbv();
-        host_xcr0[arch_cpu_id()] = mask;
         /* XRSTOR checks the whole header against XCR0, including saved
          * components that the guest currently has disabled. */
         __asm__ __volatile__(XRSTOR64
                              :
                              : "D"(guest), "a"((uint32_t)mask), "d"((uint32_t)(mask >> 32))
                              : "memory");
-        if (xcr0 != mask) {
-            hw_xsetbv(xcr0);
-        }
     } else {
         __asm__ __volatile__("fxrstorq (%0)" : : "r"(guest) : "memory");
     }
 }
 
-/** Save the guest's state into its image and load the host's back. */
-static void hw_fpu_store(void *host, void *guest, uint64_t xcr0)
+/** Save the registers into the guest's image `guest`, unless it is NULL,
+ * under the host's XCR0, and load the host's state from `host`, unless it
+ * is NULL. */
+static void hw_fpu_store(void *host, void *guest)
 {
     uint64_t mask;
 
-    if (kvm_xcr0_supported()) {
-        mask = host_xcr0[arch_cpu_id()];
-        if (xcr0 != mask) {
-            hw_xsetbv(mask);
-        }
+    if (guest && kvm_xcr0_supported()) {
+        mask = hw_xgetbv();
         __asm__ __volatile__(XSAVE64
                              :
                              : "D"(guest), "a"((uint32_t)mask), "d"((uint32_t)(mask >> 32))
                              : "memory");
-    } else {
+    } else if (guest) {
         __asm__ __volatile__("fxsaveq (%0)" : : "r"(guest) : "memory");
     }
-    fpu_restore(host);
+    if (host) {
+        fpu_restore(host);
+    }
+}
+
+/** PKRU, or 0 where the host's protection keys are off: `rdpkru`, 0F 01
+ * EE, with ECX 0. */
+static uint32_t hw_rdpkru(void)
+{
+    uint32_t v, d;
+
+    if (!fpu_pkeys()) {
+        return 0;
+    }
+    __asm__ __volatile__(".byte 0x0f, 0x01, 0xee" : "=a"(v), "=d"(d) : "c"(0u));
+    return v;
+}
+
+/** Write PKRU where the host's protection keys are on: `wrpkru`, 0F 01 EF,
+ * with ECX and EDX 0. */
+static void hw_wrpkru(uint32_t v)
+{
+    if (fpu_pkeys()) {
+        __asm__ __volatile__(".byte 0x0f, 0x01, 0xef" : : "a"(v), "c"(0u), "d"(0u) : "memory");
+    }
 }
 
 /** The host's NMI handler, for an NMI the guest's run took: INT 2. */
@@ -697,11 +740,12 @@ static uint64_t hw_exit_rip(void)
 }
 
 static const struct vmx_ops vmx_hw = {
-    kvm_vmx_vmxon,    kvm_vmx_vmxoff,  kvm_vmx_vmclear, kvm_vmx_vmptrld, kvm_vmx_vmread,
-    kvm_vmx_vmwrite,  kvm_vmx_invept,  kvm_vmx_invvpid, kvm_vmx_vmrun,   msr_read,
-    msr_write,        hw_read_cr,      hw_write_cr4,    hw_read_dr,      hw_write_dr,
-    hw_save_host,     hw_restore_host, hw_fpu_load,     hw_fpu_store,    hw_nmi,
-    hw_machine_check, hw_wbinvd,       hw_exit_rip};
+    kvm_vmx_vmxon,   kvm_vmx_vmxoff,  kvm_vmx_vmclear, kvm_vmx_vmptrld, kvm_vmx_vmread,
+    kvm_vmx_vmwrite, kvm_vmx_invept,  kvm_vmx_invvpid, kvm_vmx_vmrun,   msr_read,
+    msr_write,       hw_read_cr,      hw_write_cr4,    hw_read_dr,      hw_write_dr,
+    hw_save_host,    hw_restore_host, hw_fpu_load,     hw_fpu_store,    hw_xgetbv,
+    hw_xsetbv,       hw_rdpkru,       hw_wrpkru,       hw_nmi,          hw_machine_check,
+    hw_wbinvd,       hw_exit_rip};
 
 static const struct vmx_ops *vmx_op = &vmx_hw;
 
@@ -773,10 +817,41 @@ struct vmx_exit {
     int failed;          /* VMLAUNCH or VMRESUME failed: VMX_FAIL_* */
 };
 
+/*
+ * The VMCS's fields that the entry writes only when they change, as Linux's
+ * vmx_vcpu_run keeps HOST_CR3 and HOST_CR4 in `host_state` and writes
+ * GUEST_RSP and GUEST_RIP only when dirty (vmx.c:7366-7393): the value
+ * each field holds, ~0 when not known, which `vmcs_build` sets.
+ */
+struct vmx_cache {
+    uint64_t host_cr3, host_cr4, host_fs_base, eptp;
+    uint64_t rsp, rip, rflags;
+    uint64_t perf_guest, perf_host; /* GUEST_ and HOST_IA32_PERF_GLOBAL_CTRL */
+    uint32_t ng, nh;                /* the PMU's lists' counts */
+};
+
 struct vmx_vcpu {
     void *vmcs;
     uint64_t vmcs_pa;
-    uint64_t *msrs; /* the MSR area: the guest's list, then at HOST_LIST the host's */
+    uint64_t gmsr[N_URET]; /* the guest's `uret_msrs`, from msr.c */
+    uint64_t guest_kgs;    /* the guest's KERNEL_GS_BASE, read at `vmx_put` */
+    /* The host's state saved and the guest's MSRs in the processor, from
+     * the first entry of a KVM_RUN on `load_cpu` to `vmx_put`, Linux's
+     * guest_state_loaded; `host` the host's state then. */
+    int loaded;
+    int load_cpu;
+    struct vmx_host host;
+    uint64_t host_dr7; /* the host's DR7 at the load, which an exit clears */
+    /* The guest's floating-point state in the registers, the host's in
+     * `host_fpu`, from the first entry of a KVM_RUN to its end; the host's
+     * XCR0 and PKRU, which hold outside the guest's run, and the guest's
+     * PKRU, which its image gave and which a guest without PKU keeps. */
+    int fpu_loaded;
+    uint64_t host_xcr0;
+    uint32_t host_pkru, guest_pkru;
+    struct vmx_cache c;
+    int inj_armed;  /* VM_ENTRY_INTR_INFO_FIELD may hold a valid event */
+    uint64_t *msrs; /* the PMU's MSR lists, at 0 and at PMU_HOST_LIST */
     uintptr_t msrs_pa;
     uint8_t *msr_bitmap; /* every MSR exits but those `vmx_msr_filter_changed` passes */
     uintptr_t msr_bitmap_pa;
@@ -788,7 +863,7 @@ struct vmx_vcpu {
     int launched;                 /* the VMCS's launch state: the next entry is VMRESUME */
     struct vmx_vcpu *next_loaded; /* the next VMCS active on `cpu` (`vmx_loaded`) */
     int fresh;                    /* the record's special registers are the VMCS's */
-    int kgs_table;                /* msr.c's KERNEL_GS_BASE is the guest's, after `save` */
+    int kgs_table;                /* msr.c's KERNEL_GS_BASE is the guest's (`kgs_sync`) */
     int flush_vpid;               /* drop the guest's linear translations at the entry */
     uint32_t vdirty;              /* VX_* */
     uint32_t proc, proc2, entry, exc_bitmap; /* the controls as the VMCS has them */
@@ -1216,7 +1291,6 @@ static int perf_switched(void)
 static void vmcs_build(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
-    uint32_t n = caps.rdtscp ? N_GUEST_MSRS : N_GUEST_MSRS - 1u;
 
     if (caps.proc2 & PROC2_VPID) {
         vmcs_write(VIRTUAL_PROCESSOR_ID, x->vpid);
@@ -1245,11 +1319,14 @@ static void vmcs_build(struct kvm_vcpu *v)
     vmcs_write(CR3_TARGET_COUNT, 0);
     vmcs_write(MSR_BITMAP, x->msr_bitmap_pa);
     vmcs_write(VM_ENTRY_MSR_LOAD_ADDR, x->msrs_pa);
-    vmcs_write(VM_ENTRY_MSR_LOAD_COUNT, n);
     vmcs_write(VM_EXIT_MSR_STORE_ADDR, x->msrs_pa);
-    vmcs_write(VM_EXIT_MSR_STORE_COUNT, n);
-    vmcs_write(VM_EXIT_MSR_LOAD_ADDR, x->msrs_pa + HOST_LIST * 16u);
-    vmcs_write(VM_EXIT_MSR_LOAD_COUNT, caps.rdtscp ? N_HOST_MSRS : N_HOST_MSRS - 1u);
+    vmcs_write(VM_EXIT_MSR_LOAD_ADDR, x->msrs_pa + PMU_HOST_LIST * 16u);
+    /* The lists hold the PMU's MSRs alone (`pmu_enter`), since each entry
+     * costs every MSR on them a load and a store; the system's are written
+     * once per KVM_RUN (`uret_msrs`). */
+    vmcs_write(VM_ENTRY_MSR_LOAD_COUNT, 0);
+    vmcs_write(VM_EXIT_MSR_STORE_COUNT, 0);
+    vmcs_write(VM_EXIT_MSR_LOAD_COUNT, 0);
     vmcs_write(VMCS_LINK_POINTER, ~0ull);
     vmcs_write(CR0_GUEST_HOST_MASK, ~CR0_GUEST_OWNED);
     vmcs_write(CR4_GUEST_HOST_MASK, ~0ull);
@@ -1265,17 +1342,22 @@ static void vmcs_build(struct kvm_vcpu *v)
     vmcs_write(GUEST_PENDING_DBG_EXCEPTIONS, 0);
     x->debugctl = kvm_pmu_vmcs_debugctl(v);
     vmcs_write(GUEST_IA32_DEBUGCTL, x->debugctl);
+    /* The exit does not save the timer's count, so the field keeps this
+     * bound for every run. */
+    vmcs_write(VMX_PREEMPTION_TIMER_VALUE, VMX_RUN_BOUND_TSC >> caps.timer_shift);
+    k_memset(&x->c, 0xFF, sizeof(x->c));
+    x->c.ng = x->c.nh = 0;
+    x->inj_armed = 1;
     x->built = 1;
     x->vdirty = VX_ALL;
 }
 
 /** Write the host's fields of the processor `cpu` the run is on: its
- * GS base, TSS and GDT, its CR0, its IDT, the SYSENTER MSRs, PAT and EFER,
- * and the MSRs the exit loads. */
+ * GS base, TSS and GDT, its CR0, its IDT, the SYSENTER MSRs, PAT and
+ * EFER. */
 static void host_cpu_fields(struct vmx_vcpu *x, int cpu, const struct vmx_host *h)
 {
     uint64_t gs, tr, gdt;
-    uint32_t i;
 
     host_cpu_bases(cpu, &gs, &tr, &gdt);
     vmcs_write(HOST_GS_BASE, gs);
@@ -1288,12 +1370,6 @@ static void host_cpu_fields(struct vmx_vcpu *x, int cpu, const struct vmx_host *
     vmcs_write(HOST_IA32_SYSENTER_EIP, vmx_op->rdmsr(MSR_IA32_SYSENTER_EIP));
     vmcs_write(HOST_IA32_PAT, vmx_op->rdmsr(MSR_IA32_CR_PAT));
     vmcs_write(HOST_IA32_EFER, vmx_op->rdmsr(MSR_EFER));
-    for (i = 0; i < N_HOST_MSRS; i++) {
-        x->msrs[(HOST_LIST + i) * 2u] = host_msrs[i];
-        if (host_msrs[i] != MSR_TSC_AUX || caps.rdtscp) {
-            x->msrs[(HOST_LIST + i) * 2u + 1u] = vmx_op->rdmsr(host_msrs[i]);
-        }
-    }
     x->last_cpu = cpu;
 }
 
@@ -1424,11 +1500,8 @@ static void load_dirty(struct kvm_vcpu *v)
         vmcs_write(GUEST_SYSENTER_EIP, table_msr(v, MSR_IA32_SYSENTER_EIP));
         pat = table_msr(v, MSR_IA32_CR_PAT);
         vmcs_write(GUEST_IA32_PAT, pat);
-        for (i = 0; i < N_GUEST_MSRS; i++) {
-            x->msrs[i * 2u] = guest_msrs[i];
-            if (i != KGS_SLOT || x->kgs_table) {
-                x->msrs[i * 2u + 1u] = table_msr(v, guest_msrs[i]);
-            }
+        for (i = 0; i < N_URET; i++) {
+            x->gmsr[i] = table_msr(v, uret_msrs[i]);
         }
     }
     if (d & KVM_PART_TSC) {
@@ -1441,7 +1514,7 @@ static void load_dirty(struct kvm_vcpu *v)
         x->proc2 = proc2_for(v);
         vmcs_write(SECONDARY_VM_EXEC_CONTROL, x->proc2);
     }
-    /* KVM_PART_FPU is the image and XCR0, loaded at every entry;
+    /* KVM_PART_FPU is the image and XCR0, which `fpu_enter` loads;
      * KVM_PART_CR8 the TPR, which the processor reads from the APIC's page
      * under the TPR shadow and every CR8 access exits for without it;
      * KVM_PART_MP the run state, which the run loop keeps. */
@@ -1451,24 +1524,54 @@ static void load_dirty(struct kvm_vcpu *v)
 
 /* ---- the entry ---- */
 
-/** Read the exit of the run that just ended. */
+/** Whether an exit for `reason` has a qualification: not for those whose
+ * qualification the processor clears, which no handler reads. */
+static int has_qual(uint32_t reason)
+{
+    switch (reason) {
+    case EXIT_EXTERNAL_INTR:
+    case EXIT_INTR_WINDOW:
+    case EXIT_NMI_WINDOW:
+    case EXIT_CPUID:
+    case EXIT_HLT:
+    case EXIT_VMCALL:
+    case EXIT_MSR_READ:
+    case EXIT_MSR_WRITE:
+    case EXIT_PREEMPTION_TIMER:
+    case EXIT_WBINVD:
+    case EXIT_XSETBV:
+        return 0;
+    default:
+        return 1;
+    }
+}
+
+/** Read the exit of the run that just ended: the fields its handling and
+ * its report read, and not the others, as Linux reads the qualification and
+ * the interruption information only when asked (vmx.h's
+ * vmx_get_exit_qual and vmx_get_intr_info); an error code only where its
+ * information has one, the instruction's information only for I/O, which
+ * alone reads it, and the address only for EPT. */
 static void read_exit(struct vmx_vcpu *x)
 {
     struct vmx_exit *e = &x->ex;
+    uint32_t basic, coded = INTR_VALID | INTR_ERRCODE;
 
     e->reason = (uint32_t)vmcs_read(VM_EXIT_REASON);
-    e->qual = vmcs_read(EXIT_QUALIFICATION);
+    basic = e->reason & 0xFFFFu;
+    e->qual = has_qual(basic) ? vmcs_read(EXIT_QUALIFICATION) : 0;
     e->intr_info = (uint32_t)vmcs_read(VM_EXIT_INTR_INFO);
-    e->intr_error = (uint32_t)vmcs_read(VM_EXIT_INTR_ERROR_CODE);
+    e->intr_error =
+        (e->intr_info & coded) == coded ? (uint32_t)vmcs_read(VM_EXIT_INTR_ERROR_CODE) : 0;
     e->idt_info = (uint32_t)vmcs_read(IDT_VECTORING_INFO_FIELD);
-    e->idt_error = (uint32_t)vmcs_read(IDT_VECTORING_ERROR_CODE);
+    e->idt_error =
+        (e->idt_info & coded) == coded ? (uint32_t)vmcs_read(IDT_VECTORING_ERROR_CODE) : 0;
     e->insn_len = (uint32_t)vmcs_read(VM_EXIT_INSTRUCTION_LEN);
-    e->insn_info = (uint32_t)vmcs_read(VMX_INSTRUCTION_INFO);
+    e->insn_info = basic == EXIT_IO ? (uint32_t)vmcs_read(VMX_INSTRUCTION_INFO) : 0;
     e->interruptibility = (uint32_t)vmcs_read(GUEST_INTERRUPTIBILITY_INFO);
-    e->gpa =
-        (e->reason & 0xFFFFu) == EXIT_EPT_VIOLATION || (e->reason & 0xFFFFu) == EXIT_EPT_MISCONFIG
-            ? vmcs_read(GUEST_PHYSICAL_ADDRESS)
-            : 0;
+    e->gpa = basic == EXIT_EPT_VIOLATION || basic == EXIT_EPT_MISCONFIG
+                 ? vmcs_read(GUEST_PHYSICAL_ADDRESS)
+                 : 0;
 }
 
 /** Read the guest's special registers into `v`'s record: the segments,
@@ -1532,17 +1635,16 @@ static int needs_sregs(const struct kvm_vcpu *v, const struct vmx_exit *e)
 /**
  * Load DR0 to DR3 for the run when the DR7 it runs under enables a
  * breakpoint: the caller's breakpoints while it sets them, else the
- * guest's; the host's DR7, which the exit clears, comes back after. DR6
- * is not loaded: the guest reads and writes the record's, since every MOV
- * DR exits, and a #DB exits with its bits in the qualification and the
- * processor's DR6 as it was.
+ * guest's; the host's DR7, which the exit clears and `state_load` read,
+ * comes back after. DR6 is not loaded: the guest reads and writes the
+ * record's, since every MOV DR exits, and a #DB exits with its bits in the
+ * qualification and the processor's DR6 as it was.
  */
-static void dr_load(struct kvm_vcpu *v, uint64_t *host_dr7, uint64_t host_db[4])
+static void dr_load(struct kvm_vcpu *v, uint64_t host_db[4])
 {
     struct vmx_vcpu *x = vx(v);
     int i, hw = debugging(v, KVM_GUESTDBG_USE_HW_BP);
 
-    *host_dr7 = vmx_op->read_dr(7);
     x->guest_dr = (dr7_of(v) & DR7_ENABLES) != 0;
     if (!x->guest_dr) {
         return;
@@ -1554,7 +1656,7 @@ static void dr_load(struct kvm_vcpu *v, uint64_t *host_dr7, uint64_t host_db[4])
 }
 
 /** Put the host's debug registers back. */
-static void dr_store(struct kvm_vcpu *v, uint64_t host_dr7, const uint64_t host_db[4])
+static void dr_store(struct kvm_vcpu *v, const uint64_t host_db[4])
 {
     struct vmx_vcpu *x = vx(v);
     int i;
@@ -1564,8 +1666,8 @@ static void dr_store(struct kvm_vcpu *v, uint64_t host_dr7, const uint64_t host_
             vmx_op->write_dr(i, host_db[i]);
         }
     }
-    if (host_dr7 & DR7_ENABLES) {
-        vmx_op->write_dr(7, host_dr7);
+    if (x->host_dr7 & DR7_ENABLES) {
+        vmx_op->write_dr(7, x->host_dr7);
     }
 }
 
@@ -1620,19 +1722,24 @@ static uint32_t tpr_threshold(struct kvm_vcpu *v)
 }
 
 /**
- * Write the controls and the guest state of the next entry: the window the
- * caller's run page asks for without the local APIC in the kernel, while
- * the guest cannot take an interrupt now; the TPR threshold under the TPR
- * shadow; the event to inject; RSP, RIP and RFLAGS; and the preemption
- * timer, which bounds the run. The threshold is chosen at every entry,
- * where Linux chooses it at a KVM_REQ_EVENT (x86.c:10468-10471) and at
- * each PPR update that asks for none (lapic.c:990-999): TPR changes here
- * through MMIO, KVM_SET_LAPIC and KVM_SET_SREGS as well as CR8, and an
- * entry whose threshold is above TPR's class fails.
+ * Write the controls and the guest state of the next entry where they
+ * changed: the window the caller's run page asks for without the local
+ * APIC in the kernel, while the guest cannot take an interrupt now; the
+ * TPR threshold under the TPR shadow; the event to inject; RSP, RIP and
+ * RFLAGS. Every exit clears the valid bit of the entry's interruption
+ * information (Intel SDM Vol. 3C, "Updating VM-Entry Control Fields"), so
+ * the field is written only for an event or while one written may not
+ * have been taken, as Linux writes it only in vmx_inject_irq and its kin.
+ * The threshold is chosen at every entry, where Linux chooses it at a
+ * KVM_REQ_EVENT (x86.c:10468-10471) and at each PPR update that asks for
+ * none (lapic.c:990-999): TPR changes here through MMIO, KVM_SET_LAPIC and
+ * KVM_SET_SREGS as well as CR8, and an entry whose threshold is above
+ * TPR's class fails.
  */
 static void entry_fields(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
+    uint64_t rflags;
     uint32_t threshold;
 
     if (v->vm->irqchip == KVM_IRQCHIP_NONE) {
@@ -1653,7 +1760,10 @@ static void entry_fields(struct kvm_vcpu *v)
             vmcs_write(TPR_THRESHOLD, threshold);
         }
     }
-    vmcs_write(VM_ENTRY_INTR_INFO_FIELD, x->inj_info);
+    if (x->inj_info || x->inj_armed) {
+        vmcs_write(VM_ENTRY_INTR_INFO_FIELD, x->inj_info);
+        x->inj_armed = (x->inj_info & INTR_VALID) != 0;
+    }
     /* A guest halted in HLT of its own wakes to the event, as Linux's
      * vmx_clear_hlt makes it: the HLT has completed, and RIP is past it. */
     if (x->inj_info && v->hlt_in_guest) {
@@ -1666,13 +1776,22 @@ static void entry_fields(struct kvm_vcpu *v)
     if ((x->inj_info & INTR_VALID) && INTR_TYPE(x->inj_info) == TYPE_EXT_INTR) {
         v->irq_counts[INTR_VECTOR(x->inj_info)][KVM_VEC_INJECT]++;
     }
-    vmcs_write(GUEST_RSP, v->regs.rsp);
-    vmcs_write(GUEST_RIP, v->regs.rip);
+    if (v->regs.rsp != x->c.rsp) {
+        vmcs_write(GUEST_RSP, v->regs.rsp);
+        x->c.rsp = v->regs.rsp;
+    }
+    if (v->regs.rip != x->c.rip) {
+        vmcs_write(GUEST_RIP, v->regs.rip);
+        x->c.rip = v->regs.rip;
+    }
     /* The caller's single step is the guest's TF, hidden from the guest's
      * RFLAGS after the exit, as Linux's __kvm_set_rflags sets it. */
     x->tf_set = debugging(v, KVM_GUESTDBG_SINGLESTEP) && !(v->regs.rflags & RFLAGS_TF);
-    vmcs_write(GUEST_RFLAGS, v->regs.rflags | (x->tf_set ? RFLAGS_TF : 0));
-    vmcs_write(VMX_PREEMPTION_TIMER_VALUE, VMX_RUN_BOUND_TSC >> caps.timer_shift);
+    rflags = v->regs.rflags | (x->tf_set ? RFLAGS_TF : 0);
+    if (rflags != x->c.rflags) {
+        vmcs_write(GUEST_RFLAGS, rflags);
+        x->c.rflags = rflags;
+    }
 }
 
 /** Whether the exit `e` took the host's NMI from the run. */
@@ -1707,10 +1826,13 @@ static void after_run(struct kvm_vcpu *v)
     }
     x->inj_info = 0;
     read_exit(x);
+    if (!(x->ex.reason & EXIT_FAILED_ENTRY)) {
+        x->inj_armed = 0;
+    }
     v->hw_exit = x->ex.reason;
-    v->regs.rsp = vmcs_read(GUEST_RSP);
-    v->regs.rip = vmcs_read(GUEST_RIP);
-    v->regs.rflags = vmcs_read(GUEST_RFLAGS);
+    v->regs.rsp = x->c.rsp = vmcs_read(GUEST_RSP);
+    v->regs.rip = x->c.rip = vmcs_read(GUEST_RIP);
+    v->regs.rflags = x->c.rflags = vmcs_read(GUEST_RFLAGS);
     if (x->tf_set) {
         v->regs.rflags &= ~RFLAGS_TF;
     }
@@ -1726,33 +1848,234 @@ static void after_run(struct kvm_vcpu *v)
 }
 
 /**
+ * Save the host's state and make ready the part of the guest's that stays
+ * in the processor until `vmx_put`, at the first entry of a KVM_RUN and
+ * after each switch away, as Linux's vmx_prepare_switch_to_guest
+ * (vmx.c:1286-1356) does once per vcpu_load: the host's selectors, its
+ * descriptor tables, FS base and KERNEL_GS_BASE, which the exit leaves
+ * changed, with HOST_FS_BASE written where it changed, and the host's DR7.
+ * The guest's MSRs follow in `guest_msrs_load`. With interrupts off.
+ */
+static void state_load(struct vmx_vcpu *x, int cpu)
+{
+    vmx_op->save_host(&x->host);
+    if (x->host.fs_base != x->c.host_fs_base) {
+        vmcs_write(HOST_FS_BASE, x->host.fs_base);
+        x->c.host_fs_base = x->host.fs_base;
+    }
+    x->host_dr7 = vmx_op->read_dr(7);
+    x->loaded = 1;
+    x->load_cpu = cpu;
+}
+
+/**
+ * Write the guest's MSRs that hold until `vmx_put` into the processor
+ * `cpu`: its KERNEL_GS_BASE with `kgs`, at the load, from msr.c's table or
+ * from the value `vmx_put` read; and each of `uret_msrs` the guest uses
+ * where the processor holds another value, as Linux's
+ * kvm_set_user_return_msr (x86.c:631-647), the host's read first, once on
+ * each processor. With interrupts off.
+ */
+static void guest_msrs_load(struct kvm_vcpu *v, int cpu, int kgs)
+{
+    struct vmx_vcpu *x = vx(v);
+    int sys = (v->sregs.efer & (GEFER_LMA | GEFER_SCE)) == (GEFER_LMA | GEFER_SCE);
+    uint32_t i;
+
+    if (kgs) {
+        vmx_op->wrmsr(MSR_KERNEL_GS_BASE,
+                      x->kgs_table ? table_msr(v, MSR_KERNEL_GS_BASE) : x->guest_kgs);
+    }
+    if (!uret_read[cpu]) {
+        for (i = 0; i < N_URET; i++) {
+            if (i != URET_TSC_AUX || caps.rdtscp) {
+                uret_host[cpu][i] = vmx_op->rdmsr(uret_msrs[i]);
+                uret_curr[cpu][i] = uret_host[cpu][i];
+            }
+        }
+        uret_read[cpu] = 1;
+    }
+    for (i = 0; i < N_URET; i++) {
+        if (i == URET_TSC_AUX ? !(caps.rdtscp && (x->proc2 & PROC2_RDTSCP)) : !sys) {
+            continue;
+        }
+        if (x->gmsr[i] != uret_curr[cpu][i]) {
+            vmx_op->wrmsr(uret_msrs[i], x->gmsr[i]);
+            uret_curr[cpu][i] = x->gmsr[i];
+        }
+    }
+}
+
+/**
+ * Make the registers hold the guest's floating-point state for the run:
+ * at the first entry of a KVM_RUN the host's saved into `host_fpu` and the
+ * guest's image loaded, as Linux's kvm_load_guest_fpu does once per
+ * KVM_RUN (x86.c:11061-11066); the image loaded again when `fpu_dirty` says
+ * it changed; then the guest's XCR0 and PKRU, which the host's replace
+ * after each run, as Linux's kvm_load_guest_xsave_state (x86.c:1004-1025).
+ * With interrupts off.
+ */
+static void fpu_enter(struct kvm_vcpu *v, int fpu_dirty)
+{
+    struct vmx_vcpu *x = vx(v);
+    int fresh = 1;
+
+    if (!x->fpu_loaded) {
+        x->host_xcr0 = kvm_xcr0_supported() ? vmx_op->xgetbv() : 0;
+        x->host_pkru = vmx_op->rdpkru();
+        vmx_op->fpu_load(x->host_fpu, v->xsave);
+        x->fpu_loaded = 1;
+    } else if (fpu_dirty) {
+        vmx_op->fpu_load(NULL, v->xsave);
+    } else {
+        fresh = 0;
+    }
+    if (fresh) {
+        x->guest_pkru = vmx_op->rdpkru();
+    } else if (x->guest_pkru != x->host_pkru) {
+        vmx_op->wrpkru(x->guest_pkru);
+    }
+    if (kvm_xcr0_supported() && v->xcr0 != x->host_xcr0) {
+        vmx_op->xsetbv(v->xcr0);
+    }
+}
+
+/** Give the host its XCR0 and PKRU back after the run, as Linux's
+ * kvm_load_host_xsave_state (x86.c:1027-1047); the guest's PKRU, which a
+ * guest without PKU cannot change, is kept. With interrupts off. */
+static void fpu_leave(struct kvm_vcpu *v)
+{
+    struct vmx_vcpu *x = vx(v);
+
+    if (x->guest_pkru != x->host_pkru) {
+        vmx_op->wrpkru(x->host_pkru);
+    }
+    if (kvm_xcr0_supported() && v->xcr0 != x->host_xcr0) {
+        vmx_op->xsetbv(x->host_xcr0);
+    }
+}
+
+/**
+ * Save the guest's floating-point registers into its image while they
+ * are loaded and the image is not newer, the guest's PKRU in it, for a
+ * reader of the image during KVM_RUN; the registers keep the state. Any
+ * context.
+ */
+static void fpu_sync(struct kvm_vcpu *v)
+{
+    struct vmx_vcpu *x = vx(v);
+    uint32_t flags = kirq_save();
+
+    if (x->fpu_loaded && !(v->dirty & KVM_PART_FPU)) {
+        if (x->guest_pkru != x->host_pkru) {
+            vmx_op->wrpkru(x->guest_pkru);
+        }
+        vmx_op->fpu_store(NULL, v->xsave);
+        if (x->guest_pkru != x->host_pkru) {
+            vmx_op->wrpkru(x->host_pkru);
+        }
+    }
+    kirq_restore(flags);
+}
+
+/**
+ * Program the guest's performance counters for the run, with the lists
+ * `kvm_pmu_vmx_enter` builds of the PMU's MSRs alone, as Linux's
+ * atomic_switch_perf_msrs puts them on its lists (vmx.c:7176-7197); the
+ * lists' counts, IA32_PERF_GLOBAL_CTRL's fields and DEBUGCTL are written
+ * only where they changed, so a guest without counters costs the entry no
+ * VMWRITE here. Returns the host's DEBUGCTL, which the exit clears and the
+ * caller puts back when it is not 0. With interrupts off.
+ */
+static uint64_t pmu_enter(struct kvm_vcpu *v)
+{
+    struct vmx_vcpu *x = vx(v);
+    uint64_t global[2], debugctl, host_debugctl;
+    uint32_t ng, nh;
+    int perf = perf_switched();
+
+    kvm_pmu_vmx_enter(v, (struct kvm_pmu_msr *)x->msrs,
+                      (struct kvm_pmu_msr *)x->msrs + PMU_HOST_LIST, &ng, &nh,
+                      perf ? global : NULL);
+    if (perf && global[0] != x->c.perf_guest) {
+        vmcs_write(GUEST_IA32_PERF_GLOBAL_CTRL, global[0]);
+        x->c.perf_guest = global[0];
+    }
+    if (perf && global[1] != x->c.perf_host) {
+        vmcs_write(HOST_IA32_PERF_GLOBAL_CTRL, global[1]);
+        x->c.perf_host = global[1];
+    }
+    /* The host's FREEZE_WHILE_SMM rides in the guest's DEBUGCTL, read with
+     * interrupts off, as Linux's vcpu_enter_guest reads it
+     * (arch/x86/kvm/x86.c:10556-10565) and vmx_guest_debugctl_write adds
+     * it (arch/x86/kvm/vmx/vmx.h:441-447). */
+    host_debugctl = vmx_op->rdmsr(MSR_IA32_DEBUGCTL);
+    debugctl = kvm_pmu_vmcs_debugctl(v) | (host_debugctl & DEBUGCTL_FREEZE_SMM);
+    if (x->debugctl != debugctl) {
+        x->debugctl = debugctl;
+        vmcs_write(GUEST_IA32_DEBUGCTL, x->debugctl);
+    }
+    if (ng != x->c.ng) {
+        vmcs_write(VM_ENTRY_MSR_LOAD_COUNT, ng);
+        vmcs_write(VM_EXIT_MSR_STORE_COUNT, ng);
+        x->c.ng = ng;
+    }
+    if (nh != x->c.nh) {
+        vmcs_write(VM_EXIT_MSR_LOAD_COUNT, nh);
+        x->c.nh = nh;
+    }
+    return host_debugctl;
+}
+
+/** Write HOST_CR3 and HOST_CR4 where the processor's CR3 and CR4 differ
+ * from what the VMCS has, as Linux's vmx_vcpu_run compares them with its
+ * cache (vmx.c:7398-7408). With interrupts off and the VMCS current. */
+static void host_crs(struct vmx_vcpu *x)
+{
+    uint64_t cr = vmx_op->read_cr(3);
+
+    if (cr != x->c.host_cr3) {
+        vmcs_write(HOST_CR3, cr);
+        x->c.host_cr3 = cr;
+    }
+    cr = vmx_op->read_cr(4);
+    if (cr != x->c.host_cr4) {
+        vmcs_write(HOST_CR4, cr);
+        x->c.host_cr4 = cr;
+    }
+}
+
+/**
  * Run the guest until its next exit, with interrupts off and without the
- * big lock: the VMCS current (`vmx_load`) and brought up to date, the
- * guest's FPU, debug registers and MSRs in, VMLAUNCH, or VMRESUME once an
+ * big lock, as Linux's vmx_vcpu_run (vmx.c:7338-7476): the VMCS current
+ * (`vmx_load`) and brought up to date; the host's state saved and the
+ * guest's MSRs and floating-point state loaded at the first entry of a
+ * KVM_RUN or after a switch away, to stay until `vmx_put`; the guest's
+ * XCR0, PKRU and debug registers in; HOST_CR3, HOST_CR4 and the EPT
+ * pointer written only where they changed; VMLAUNCH, or VMRESUME once an
  * entry of the VMCS succeeded, as Linux's __vmx_vcpu_run_flags chooses
- * (vmx.c:948-953); at the exit the host's state back and the exit read,
- * with the VMCS left current and VMX on. The launch state is set after an
- * exit that is no failed entry, as Linux's vmx_vcpu_run sets `launched`
- * (vmx.c:7476-7488). An NMI or a machine check the run took from the host
- * reaches the host's own handler after the exit is read, as Linux's
- * vmx_do_nmi_irqoff and kvm_machine_check pass them on; the host's
- * interrupt that ended the run waits until the run loop turns interrupts
- * on. Under the caller's single step the STI and MOV SS shadow ends before
- * the entry, as Linux's vmx_vcpu_run ends it: the step over STI or MOV SS
- * has been taken by the caller, and the shadow under TF would make the
- * entry fail for want of a pending single-step trap. While
- * `v->emul.resume` is set no guest runs: the next step of the instruction
- * under way is `exit`'s. 0, or -EIO when VMX cannot be turned on here.
+ * (vmx.c:948-953); at the exit the host's XCR0, PKRU and debug registers
+ * back and the exit read, with the VMCS left current and VMX on. The
+ * selectors, tables and MSRs the exit leaves the guest's or changed wait
+ * for `vmx_put`: the kernel between two runs uses none of them. The launch
+ * state is set after an exit that is no failed entry, as Linux's
+ * vmx_vcpu_run sets `launched` (vmx.c:7476-7488). An NMI or a machine
+ * check the run took from the host reaches the host's own handler after
+ * the exit is read, as Linux's vmx_do_nmi_irqoff and kvm_machine_check
+ * pass them on; the host's interrupt that ended the run waits until the
+ * run loop turns interrupts on. Under the caller's single step the STI and
+ * MOV SS shadow ends before the entry, as Linux's vmx_vcpu_run ends it:
+ * the step over STI or MOV SS has been taken by the caller, and the shadow
+ * under TF would make the entry fail for want of a pending single-step
+ * trap. While `v->emul.resume` is set no guest runs: the next step of the
+ * instruction under way is `exit`'s. 0, or -EIO when VMX cannot be turned
+ * on here.
  */
 static int vmx_enter(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
-    struct vmx_host host;
-    uint64_t eptp, host_dr7 = 0, host_db[4] = {0, 0, 0, 0}, global[2];
-    uint64_t host_debugctl, debugctl;
-    uint32_t ng, nh, gbase = caps.rdtscp ? N_GUEST_MSRS : N_GUEST_MSRS - 1u;
-    uint32_t hbase = caps.rdtscp ? N_HOST_MSRS : N_HOST_MSRS - 1u;
-    int cpu = (int)arch_cpu_id(), r, tlb, nmi = 0, mce = 0;
+    uint64_t eptp, host_db[4] = {0, 0, 0, 0}, host_debugctl;
+    int cpu = (int)arch_cpu_id(), r, tlb, nmi = 0, mce = 0, was_loaded, msrs, fpu_dirty;
 
     if (v->emul.resume) {
         return 0;
@@ -1765,61 +2088,53 @@ static int vmx_enter(struct kvm_vcpu *v)
     if (!x->built) {
         vmcs_build(v);
     }
-    vmx_op->save_host(&host);
+    was_loaded = x->loaded;
+    if (!was_loaded) {
+        state_load(x, cpu);
+    }
     if (x->last_cpu != cpu) {
-        host_cpu_fields(x, cpu, &host);
+        host_cpu_fields(x, cpu, &x->host);
         tlb = 1;
         x->flush_vpid = 1;
     }
-    vmcs_write(HOST_CR3, vmx_op->read_cr(3));
-    vmcs_write(HOST_CR4, vmx_op->read_cr(4));
-    vmcs_write(HOST_FS_BASE, host.fs_base);
+    host_crs(x);
     eptp = eptp_of(v);
-    vmcs_write(EPT_POINTER, eptp);
+    if (eptp != x->c.eptp) {
+        vmcs_write(EPT_POINTER, eptp);
+        x->c.eptp = eptp;
+    }
     if (debugging(v, KVM_GUESTDBG_SINGLESTEP) && v->events.interrupt.shadow) {
         /* Under the step's TF the entry would ask for a pending step. */
         v->events.interrupt.shadow = 0;
         x->vdirty |= VX_INTR;
     }
+    msrs = !was_loaded || (v->dirty & (KVM_PART_MSRS | KVM_PART_SREGS | KVM_PART_CPUID)) ||
+           (x->vdirty & VX_EFER);
+    fpu_dirty = (v->dirty & KVM_PART_FPU) != 0;
     load_dirty(v);
+    if (msrs) {
+        guest_msrs_load(v, cpu, !was_loaded);
+    }
     if (tlb || x->flush_vpid) {
         flush(v, tlb ? eptp : 0, x->flush_vpid);
         x->flush_vpid = 0;
     }
     entry_fields(v);
-    kvm_pmu_vmx_enter(v, (struct kvm_pmu_msr *)x->msrs + gbase,
-                      (struct kvm_pmu_msr *)x->msrs + HOST_LIST + hbase, &ng, &nh,
-                      perf_switched() ? global : NULL);
-    if (perf_switched()) {
-        vmcs_write(GUEST_IA32_PERF_GLOBAL_CTRL, global[0]);
-        vmcs_write(HOST_IA32_PERF_GLOBAL_CTRL, global[1]);
-    }
-    /* The host's FREEZE_WHILE_SMM rides in the guest's DEBUGCTL, read with
-     * interrupts off, as Linux's vcpu_enter_guest reads it
-     * (arch/x86/kvm/x86.c:10556-10565) and vmx_guest_debugctl_write adds
-     * it (arch/x86/kvm/vmx/vmx.h:441-447). */
-    host_debugctl = vmx_op->rdmsr(MSR_IA32_DEBUGCTL);
-    debugctl = kvm_pmu_vmcs_debugctl(v) | (host_debugctl & DEBUGCTL_FREEZE_SMM);
-    if (x->debugctl != debugctl) {
-        x->debugctl = debugctl;
-        vmcs_write(GUEST_IA32_DEBUGCTL, x->debugctl);
-    }
-    vmcs_write(VM_ENTRY_MSR_LOAD_COUNT, gbase + ng);
-    vmcs_write(VM_EXIT_MSR_STORE_COUNT, gbase + ng);
-    vmcs_write(VM_EXIT_MSR_LOAD_COUNT, hbase + nh);
-    vmx_op->fpu_load(x->host_fpu, v->xsave, v->xcr0);
-    dr_load(v, &host_dr7, host_db);
+    host_debugctl = pmu_enter(v);
+    fpu_enter(v, fpu_dirty);
+    dr_load(v, host_db);
+    v->xs_in = arch_cycles();
     x->ex.failed = vmx_op->run(&v->regs, &v->sregs.cr2, x->launched);
-    dr_store(v, host_dr7, host_db);
-    vmx_op->fpu_store(x->host_fpu, v->xsave, v->xcr0);
-    vmx_op->restore_host(&host);
+    v->xs_out = arch_cycles();
+    dr_store(v, host_db);
+    fpu_leave(v);
     if (host_debugctl) {
         /* The exit cleared DEBUGCTL; put the host's back, as Linux's
          * vmx_vcpu_run (arch/x86/kvm/vmx/vmx.c:7445-7446). */
         vmx_op->wrmsr(MSR_IA32_DEBUGCTL, host_debugctl);
     }
     after_run(v);
-    kvm_pmu_vmx_exit(v, (const struct kvm_pmu_msr *)x->msrs + gbase,
+    kvm_pmu_vmx_exit(v, (const struct kvm_pmu_msr *)x->msrs,
                      x->ex.failed == VMX_OK && !(x->ex.reason & EXIT_FAILED_ENTRY));
     if (x->ex.failed == VMX_OK && !(x->ex.reason & EXIT_FAILED_ENTRY) &&
         (x->debugctl & DEBUGCTL_LBR)) {
@@ -1843,6 +2158,49 @@ static int vmx_enter(struct kvm_vcpu *v)
         vmx_op->machine_check();
     }
     return 0;
+}
+
+/**
+ * The backend's `put`: give the processor back to the host, as Linux's
+ * vmx_prepare_switch_to_host (vmx.c:1358-1393) and kvm_on_user_return
+ * (x86.c:552-574) do: the guest's KERNEL_GS_BASE read, the host's
+ * `uret_msrs`, selectors, descriptor tables and KERNEL_GS_BASE back; with
+ * `fpu`, at KVM_RUN's end, also the guest's floating-point registers saved
+ * into its image, unless the image is newer, and the host's loaded, as
+ * Linux's kvm_put_guest_fpu (x86.c:11069-11074). The floating-point state
+ * is left at a switch, which saves and loads it with the thread's. With
+ * interrupts off, on the processor of the load; a part not loaded is
+ * left.
+ */
+static void vmx_put(struct kvm_vcpu *v, int fpu)
+{
+    struct vmx_vcpu *x = vx(v);
+    int cpu = (int)arch_cpu_id();
+    uint32_t i;
+
+    if (!x) {
+        return;
+    }
+    if (x->loaded) {
+        if (!x->kgs_table) {
+            x->guest_kgs = vmx_op->rdmsr(MSR_KERNEL_GS_BASE);
+        }
+        for (i = 0; i < N_URET && uret_read[cpu]; i++) {
+            if (uret_curr[cpu][i] != uret_host[cpu][i]) {
+                vmx_op->wrmsr(uret_msrs[i], uret_host[cpu][i]);
+                uret_curr[cpu][i] = uret_host[cpu][i];
+            }
+        }
+        vmx_op->restore_host(&x->host);
+        x->loaded = 0;
+    }
+    if (fpu && x->fpu_loaded) {
+        if (!(v->dirty & KVM_PART_FPU) && x->guest_pkru != x->host_pkru) {
+            vmx_op->wrpkru(x->guest_pkru);
+        }
+        vmx_op->fpu_store(x->host_fpu, (v->dirty & KVM_PART_FPU) ? NULL : v->xsave);
+        x->fpu_loaded = 0;
+    }
 }
 
 /* ---- the exits ---- */
@@ -2204,17 +2562,24 @@ static int set_efer(struct kvm_vcpu *v, uint64_t efer)
     return 0;
 }
 
-/** Make msr.c's KERNEL_GS_BASE the guest's, which the last exit stored,
- * before anything there changes, since the next entry loads the list from
- * msr.c. */
+/** Make msr.c's KERNEL_GS_BASE the guest's, which a run may have changed
+ * by SWAPGS: the processor's while `state_load` has it loaded, else the
+ * value `vmx_put` read, as Linux's vmx_read_guest_kernel_gs_base reads
+ * it. Any context. */
 static void kgs_sync(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
+    uint32_t flags;
+    uint64_t kgs;
 
-    if (!x->kgs_table) {
-        (void)kvm_msr_set(v, MSR_KERNEL_GS_BASE, x->msrs[KGS_SLOT * 2u + 1u], 1);
-        x->kgs_table = 1;
+    if (x->kgs_table) {
+        return;
     }
+    flags = kirq_save();
+    kgs = x->loaded ? vmx_op->rdmsr(MSR_KERNEL_GS_BASE) : x->guest_kgs;
+    kirq_restore(flags);
+    (void)kvm_msr_set(v, MSR_KERNEL_GS_BASE, kgs, 1);
+    x->kgs_table = 1;
 }
 
 /** The guest's RDMSR or WRMSR of `index`, by `write`, with `*value` its
@@ -2253,9 +2618,6 @@ static int exit_msr(struct kvm_vcpu *v, int write)
         /* The bitmap predates the filter, and KVM_REQ_MSR_FILTER brings it
          * up to date before the instruction runs again. */
         return 0;
-    }
-    if (write) {
-        kgs_sync(v);
     }
     r = kvm_msr_allowed(v, index, write) ? msr_access(v, index, write, &value) : KVM_MSR_FILTERED;
     if (r != 0) {
@@ -2639,8 +3001,9 @@ static void vmx_complete(struct kvm_vcpu *v)
 /** Write back the parts `parts` of the guest's state: the special
  * registers and DR7 from the VMCS, read with interrupts off and the VMCS
  * made current on this processor, as Linux's vcpu_load makes it for each
- * vCPU ioctl, when the last exit did not; and KERNEL_GS_BASE from the MSR
- * list. The rest the record holds already. */
+ * vCPU ioctl, when the last exit did not; KERNEL_GS_BASE (`kgs_sync`); and
+ * the floating-point image from the registers while they hold the guest's
+ * (`fpu_sync`). The rest the record holds already. */
 static void vmx_save(struct kvm_vcpu *v, uint32_t parts)
 {
     struct vmx_vcpu *x = vx(v);
@@ -2655,6 +3018,9 @@ static void vmx_save(struct kvm_vcpu *v, uint32_t parts)
     }
     if (parts & KVM_PART_MSRS) {
         kgs_sync(v);
+    }
+    if (parts & KVM_PART_FPU) {
+        fpu_sync(v);
     }
 }
 
@@ -2864,9 +3230,9 @@ static void vmx_msr_filter_changed(struct kvm_vcpu *v)
     b[3072 + 0x100 / 8] = (uint8_t)((b[3072 + 0x100 / 8] & ~0x07u) | wr);
 }
 
-/** Make the backend's share of `v`: the VMCS, the MSR area and bitmap,
- * the host's FPU area and the VPID, and the TPR shadow's choice, which
- * the local APIC made before it decides. 0 or -ENOMEM. */
+/** Make the backend's share of `v`: the VMCS, the MSR bitmap, the host's
+ * FPU area and the VPID, and the TPR shadow's choice, which the local APIC
+ * made before it decides. 0 or -ENOMEM. */
 static int vmx_vcpu_init(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = kzalloc(sizeof(*x));
@@ -2885,9 +3251,9 @@ static int vmx_vcpu_init(struct kvm_vcpu *v)
     if (!x->vmcs || !x->msrs || !x->msr_bitmap || !x->host_fpu) {
         return -ENOMEM;
     }
+    k_memset(x->msrs, 0, 4096);
     k_memset(x->vmcs, 0, 4096);
     *(uint32_t *)x->vmcs = caps.revision;
-    k_memset(x->msrs, 0, 4096);
     k_memset(x->msr_bitmap, 0xFF, 4096);
     vmx_msr_filter_changed(v);
     x->vpid = vpid_alloc();
@@ -3083,9 +3449,9 @@ static uint64_t vmx_tsc_scaling(uint32_t *frac_bits)
 static const struct kvm_tdp_format vmx_tdp = {
     0x7u, 0x1u, 0x2u, 0x4u, 0, 0, 0x80u, 0x000FFFFFFFFFF000ull, 0x100u, 0x200u, vmx_cache};
 
-const struct kvm_backend kvm_vmx = {"vmx",     vmx_probe,       vmx_vm_init,
-                                    NULL,      vmx_vcpu_init,   vmx_vcpu_free,
-                                    vmx_enter, vmx_exit,        vmx_complete,
-                                    vmx_save,  vmx_inject,      vmx_check_extension,
-                                    &vmx_tdp,  vmx_tsc_scaling, vmx_msr_filter_changed,
-                                    vmx_xsaves};
+const struct kvm_backend kvm_vmx = {"vmx",      vmx_probe,       vmx_vm_init,
+                                    NULL,       vmx_vcpu_init,   vmx_vcpu_free,
+                                    vmx_enter,  vmx_exit,        vmx_complete,
+                                    vmx_save,   vmx_inject,      vmx_check_extension,
+                                    &vmx_tdp,   vmx_tsc_scaling, vmx_msr_filter_changed,
+                                    vmx_xsaves, vmx_put};

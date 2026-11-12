@@ -701,6 +701,9 @@ int kvm_emul_xsetbv(struct kvm_vcpu *v)
         kvm_queue_exception(v, GP_VECTOR, 1, 0);
         return -1;
     }
+    /* KVM_PART_FPU loads the image again, so it must hold the guest's
+     * state first. */
+    kvm_vcpu_fpu_sync(v);
     v->xcr0 = xcr0;
     kvm_cpuid_xsave_sizes(v, v->cpuid, v->cpuid_nent);
     v->dirty |= KVM_PART_FPU;
@@ -2030,16 +2033,26 @@ static uint32_t fx_word(const struct kvm_vcpu *v, uint32_t off)
  * Make the component `bit` of `v`'s XSAVE image, 1 for x87 or 2 for SSE,
  * one the image holds: a component its header leaves out is in its initial
  * state, which is written out and the header's bit set. On a host without
- * XSAVE the image is FXSAVE's, which has no header and holds both.
+ * XSAVE the image is FXSAVE's, which has no header and holds both. Every
+ * instruction that touches the x87, MMX or SSE state comes here first, so
+ * the pass's first call makes the image the guest's (`kvm_vcpu_fpu_sync`)
+ * and keeps it in `emul.fx`, which a pass that does not end puts back.
  */
 static void fx_ready(struct kvm_vcpu *v, uint64_t bit)
 {
     uint8_t *img = v->xsave;
-    uint64_t bv = bytes_value(img + XS_BV, 8);
+    uint64_t bv;
 
+    if (!v->emul.fx_held) {
+        kvm_vcpu_fpu_sync(v);
+        k_memcpy(v->emul.fx, v->xsave, sizeof(v->emul.fx));
+        v->emul.fx_held = 1;
+    }
+    bv = bytes_value(img + XS_BV, 8);
     if (kvm_xcr0_supported() == 0 || (bv & bit)) {
         return;
     }
+    v->dirty |= KVM_PART_FPU;
     if (bit == 1u) {
         k_memset(img, 0, 24);
         img[FX_FCW] = 0x7F;
@@ -2062,6 +2075,7 @@ static void mmx_enter(struct kvm_vcpu *v)
     uint32_t top, i;
 
     fx_ready(v, 1);
+    v->dirty |= KVM_PART_FPU;
     top = (fx_word(v, FX_FSW) >> 11) & 7u;
     if (top != 0) {
         k_memcpy(old, img + FX_ST, 128);
@@ -2229,8 +2243,10 @@ static int opnd_write(struct xc *x, const struct kvm_operand *o, uint64_t ea, co
         break;
     case KVM_OPND_XMM:
         k_memcpy(v->xsave + FX_XMM + 16u * o->reg, b, 16);
+        v->dirty |= KVM_PART_FPU;
         break;
     case KVM_OPND_MM:
+        v->dirty |= KVM_PART_FPU;
         k_memcpy(v->xsave + FX_ST + 16u * o->reg, b, 8);
         v->xsave[FX_ST + 16u * o->reg + 8u] = 0xFF;
         v->xsave[FX_ST + 16u * o->reg + 9u] = 0xFF;
@@ -3560,6 +3576,7 @@ static int h_fninit(struct xc *x)
         k_memset(img, 0, 24);
         img[FX_FCW] = 0x7F;
         img[FX_FCW + 1] = 0x03;
+        x->v->dirty |= KVM_PART_FPU;
     }
     return r;
 }
@@ -3623,6 +3640,7 @@ static int h_fxrstor(struct xc *x)
         return x_fault(x, GP_VECTOR, 1, 0);
     }
     k_memcpy(x->v->xsave, img, size);
+    x->v->dirty |= KVM_PART_FPU;
     return X_OK;
 }
 
@@ -4001,7 +4019,7 @@ static int emul_run(struct kvm_vcpu *v)
     em->stage = EMUL_IDLE;
     em->resume = 0;
     v->exit.kind = KVM_X_AGAIN;
-    k_memcpy(em->fx, v->xsave, sizeof(em->fx));
+    em->fx_held = 0;
     r = x_exec(&x);
     if (r == X_OK) {
         r = wq_commit(v);
@@ -4011,7 +4029,9 @@ static int emul_run(struct kvm_vcpu *v)
         cr2 = v->sregs.cr2;
         v->regs = regs;
         v->sregs = sregs;
-        k_memcpy(v->xsave, em->fx, sizeof(em->fx));
+        if (em->fx_held) {
+            k_memcpy(v->xsave, em->fx, sizeof(em->fx));
+        }
         if (r == X_IO) {
             em->stage = EMUL_READ;
             return 0;
