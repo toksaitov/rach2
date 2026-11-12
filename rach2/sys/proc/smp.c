@@ -29,6 +29,14 @@ static volatile unsigned int bkl_word;
  * one, 0 for none (`bkl_acquire`). */
 static volatile unsigned int bkl_claim;
 
+/* A loan of the big lock (`bkl_lend`): the borrowing processor's number plus
+ * one, with BKL_LENT_TAKEN set once it holds the lock, or 0 for none. The
+ * word stays set through a loan, so no other processor takes the lock
+ * between the lender's hold and the borrower's, or between the borrower's
+ * and the lender's again. */
+static volatile unsigned int bkl_lent;
+#define BKL_LENT_TAKEN 0x80000000u
+
 /* Updated with the big lock held; the waits are accumulated as TSC cycles
  * so that rounding at each acquisition loses no short waits. */
 static uint64_t bkl_wait_cycles;
@@ -216,6 +224,9 @@ static void bkl_acquire(struct percpu *cpu)
     for (;;) {
         unsigned int claim = bkl_claim;
 
+        if (bkl_lent == me && arch_atomic_cmpxchg(&bkl_lent, me, me | BKL_LENT_TAKEN) == me) {
+            break; /* lent: the word is the lender's, and stays set */
+        }
         if (!bkl_word && (claim == 0 || claim == me || ++passed >= BKL_PASS_AFTER) &&
             arch_atomic_xchg(&bkl_word, 1u) == 0) {
             break;
@@ -1107,6 +1118,19 @@ int bkl_try_enter(void)
     return 1;
 }
 
+/** Let go of the lock this processor holds: give a loan back to its lender,
+ * whose word stays set, or clear the word. Interrupts are off. */
+static void bkl_release(void)
+{
+    unsigned int me = (unsigned int)arch_cpu_id() + 1u;
+
+    if (bkl_lent == (me | BKL_LENT_TAKEN)) {
+        (void)arch_atomic_xchg(&bkl_lent, 0u);
+    } else {
+        (void)arch_atomic_xchg(&bkl_word, 0u);
+    }
+}
+
 void bkl_exit(void)
 {
     uint32_t flags = kirq_save();
@@ -1117,7 +1141,7 @@ void bkl_exit(void)
     }
     if (--cpu->bkl_depth == 0) {
         bkl_hold_end(cpu);
-        (void)arch_atomic_xchg(&bkl_word, 0u);
+        bkl_release();
     }
     kirq_restore(flags);
 }
@@ -1168,7 +1192,7 @@ int bkl_drop(void)
     if (depth > 0) {
         bkl_hold_end(cpu);
         cpu->bkl_depth = 0;
-        (void)arch_atomic_xchg(&bkl_word, 0u);
+        bkl_release();
     }
     return depth;
 }
@@ -1206,6 +1230,32 @@ void bkl_yield(void)
 
     if (cpu->bkl_depth > 0 && claim != 0 && claim != (unsigned int)arch_cpu_id() + 1u) {
         bkl_take(bkl_drop());
+    }
+}
+
+int bkl_lend(int cpu, const struct process *thread)
+{
+    unsigned int to = (unsigned int)cpu + 1u, lent;
+    struct percpu *them;
+
+    if (this_cpu()->bkl_depth <= 0 || cpu < 0 || cpu >= NR_CPUS || cpu == (int)arch_cpu_id()) {
+        return 0;
+    }
+    them = &cpu_table[cpu];
+    if (!them->wake_bkl_waiting || them->current != thread ||
+        arch_atomic_cmpxchg(&bkl_lent, 0u, to) != 0u) {
+        return 0;
+    }
+    for (;;) {
+        lent = bkl_lent;
+        if (lent == 0u) {
+            return 1; /* given back */
+        }
+        if (lent == to && !them->wake_bkl_waiting && arch_atomic_cmpxchg(&bkl_lent, to, 0u) == to) {
+            return 0; /* withdrawn: it stopped waiting before it took the loan */
+        }
+        smp_service();
+        arch_relax();
     }
 }
 

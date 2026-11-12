@@ -30,6 +30,9 @@ extern void _exit(int status);
 #include "../../rach2/sys/block/block.h"
 #include "../../rach2/sys/klog.h"
 #include "../../rach2/sys/latency.h"
+#include "../../rach2/sys/proc/percpu.h"
+#include "../../rach2/sys/proc/process.h"
+#include "../../rach2/sys/proc/wait_queue.h"
 
 #define REGS 0x400
 
@@ -375,6 +378,71 @@ static unsigned services;
 void smp_service(void)
 {
     services++;
+}
+
+/* The processors' records: the caller's, whose thread `caller_proc` is,
+   and the claim's holder's. */
+struct percpu cpu_table[NR_CPUS];
+static struct process caller_proc, holder_proc;
+
+/* Whether the caller is inside a system call, which with interrupts on lets
+   a wait for another's claim sleep. */
+static int in_call;
+
+/** Inside a system call when `in_call`. */
+int proc_in_syscall(void)
+{
+    return in_call;
+}
+
+/** The scheduler runs. */
+int sched_is_enabled(void)
+{
+    return 1;
+}
+
+/* The sleeps for another's claim, and the loans of the big lock, with the
+   processor and the thread the last one went to. Each ends the other
+   caller's claim, as the holder does once it can go on. */
+static unsigned claim_sleeps, lends;
+static int lend_cpu, holds_bkl;
+static const struct process *lend_thread;
+
+/** Sleep for the port: the holder ends its claim meanwhile. */
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    claim_sleeps++;
+    release_other_claim();
+    return cond(arg) ? 0 : -1;
+}
+
+/** No one sleeps in the model when a claim ends. */
+int wq_active(const wait_queue_t *wq)
+{
+    (void)wq;
+    return 0;
+}
+
+/** Nothing to wake. */
+void wq_wake_all(wait_queue_t *wq)
+{
+    (void)wq;
+}
+
+/** Lend the big lock, when the caller holds it (`holds_bkl`), to the
+ *  holder's processor, whose interrupt then ends and whose holder ends its
+ *  claim; record where it went. */
+int bkl_lend(int cpu, const struct process *thread)
+{
+    if (!holds_bkl) {
+        return 0;
+    }
+    lends++;
+    lend_cpu = cpu;
+    lend_thread = thread;
+    release_other_claim();
+    return 1;
 }
 
 /** The model's tables are in host memory, with no cache to write back. */
@@ -1199,6 +1267,49 @@ static void claim_bound_rows(void)
     claim_release_after = 0;
 }
 
+/**
+ * Check how a polled command waits for another's claim whose holder took an
+ * interrupt that waits for the big lock. A caller inside a system call with
+ * interrupts on sleeps for the port, which lets the big lock go; one with
+ * interrupts off lends the lock to the holder's processor and thread.
+ * Neither spends a step of its bound.
+ */
+static void claim_wait_rows(void)
+{
+    static uint8_t buf[512];
+    struct ahci_disk *d = &ahci_disks[0];
+
+    model_reset();
+    CHECK("the claim wait row starts a port", ahci_select_port() == 0 && ahci_port_start(d) == 0);
+    d->dev.sector_count = 1000;
+    d->dev.drvdata = d;
+    cpu_table[0].current = &caller_proc;
+    caller_proc.disk_waits = 0;
+    d->polling = 1;
+    d->polling_cpu = 3;
+    d->polling_proc = &holder_proc;
+    claim_sleeps = lends = 0;
+    issued_locked = issued_unlocked = 0;
+    in_call = 1;
+    CHECK("a caller that can sleep sleeps for another's claim and then issues",
+          ahci_run_command(d, ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) == 0 && claim_sleeps == 1 &&
+              lends == 0 && caller_proc.disk_waits == 1 && issued_unlocked == 1 && !d->polling);
+    in_call = 0;
+    d->polling = 1;
+    d->polling_cpu = 3;
+    d->polling_proc = &holder_proc;
+    issued_locked = issued_unlocked = 0;
+    interrupts_masked = 1;
+    holds_bkl = 1;
+    CHECK("one with interrupts off lends the big lock to the holder and then issues",
+          ahci_run_command(d, ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) == 0 && claim_sleeps == 1 &&
+              lends == 1 && lend_cpu == 3 && lend_thread == &holder_proc && issued_unlocked == 1 &&
+              !d->polling);
+    holds_bkl = 0;
+    interrupts_masked = 0;
+    cpu_table[0].current = 0;
+}
+
 /** Check queued completions, independent ports and restart after polling. */
 static void interrupt_rows(void)
 {
@@ -1211,6 +1322,7 @@ static void interrupt_rows(void)
     polled_drain_counted();
     port_lock_rows();
     claim_bound_rows();
+    claim_wait_rows();
 }
 
 /**
