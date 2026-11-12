@@ -77,9 +77,12 @@ void watchdog_wait(void);
  * could have (`sched_service_point`), which is where Linux's stopper thread
  * would run and touch the soft-lockup timestamp. Interrupts are off. */
 void watchdog_sched(void);
-/** Touch the lockup detectors after an idle wait with the tick stopped.
- * Called on the waking processor with interrupts off. */
-void watchdog_idle_exit(void);
+/** Run a watchdog sample due by time from an idle event, with interrupts
+ * off before any wait for the big lock. */
+void watchdog_event(isr_params_t *params);
+/** Return this CPU's next watchdog sample delay in ticks, rounded up, or
+ * zero while disabled. Interrupts are off. */
+uint32_t watchdog_idle_ticks(void);
 
 /**
  * Take an NMI meant for the watchdog: a backtrace request, the counter's
