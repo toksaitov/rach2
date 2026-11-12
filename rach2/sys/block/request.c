@@ -35,9 +35,12 @@
  * a completion takes from the interrupt. A caller sleeps for its answer on
  * a queue of its own, as Linux's `submit_bio_wait` sleeps on a completion
  * on its stack that only that bio's end completes (block/bio.c:1453-1481),
- * and only that request's answer or quarantine wakes it. A caller waiting
- * for room in the pool sleeps on the pool's one queue, which every answer,
- * freed request and quarantine wakes, since each may make room. Every
+ * and only that request's answer or quarantine wakes it. A read started
+ * without a waiter (`block_read_frames_async`) has no caller asleep: its
+ * answer, or its quarantine by the tick, calls its completion and lets go
+ * of it for the caller, as Linux's `bio_endio` calls `bi_end_io`. A caller
+ * waiting for room in the pool sleeps on the pool's one queue, which every
+ * answer, freed request and quarantine wakes, since each may make room. Every
  * driver serializes on locks of its own, as Linux's do, and may be called
  * with the big lock or without it; USB storage and loop take it themselves
  * where they need it (block.h).
@@ -870,6 +873,151 @@ int block_read_frames(block_device_t *device, uint64_t lba, uint32_t count, cons
 }
 
 /**
+ * `req_lock` not held. End the read `r` started without a waiter, answered
+ * or quarantined: count it as `block_read_frames` counts a read, call its
+ * completion for its frames, and let go of it for its caller, so that its
+ * frames stay the request's until the completion has run. A quarantined one
+ * ends with `-EIO` and stays the device's until the late answer.
+ */
+static void req_end_async(struct block_request *r)
+{
+    block_device_t *disk = block_physical(r->device);
+    uint32_t flags = pool_lock(), us = timer_now_us() - r->taken_us;
+    int status = r->state == BLOCK_REQ_QUARANTINED ? -EIO : r->status;
+
+    if (r->state == BLOCK_REQ_QUARANTINED) {
+        release_total++;
+        release_tick = req_ticks;
+    }
+    r->device->stats.in_flight--;
+    if (disk && disk != r->device) {
+        disk->stats.in_flight--;
+    }
+    if (status == 0) {
+        count_transfer(&r->device->stats, 0, r->count, us);
+        if (disk && disk != r->device) {
+            count_transfer(&disk->stats, 0, r->count, us);
+        }
+    }
+    pool_unlock(flags);
+    r->done_fn(r->done_arg, r->done_index, r->frames,
+               (r->count + BLOCK_REQ_SECTORS - 1) / BLOCK_REQ_SECTORS, status);
+    flags = pool_lock();
+    req_let_go(r, 1);
+    pool_unlock(flags);
+}
+
+/**
+ * Submit one request of the read `block_read_frames_async` starts: `count`
+ * sectors at `lba` into `frames`, whose first is frame `index` of the
+ * caller's, with `done`'s completion. 0, -ENOMEM when the heap had no room
+ * for the request's list, which the caller may ask again smaller, or -EIO.
+ */
+static int frames_async_one(block_device_t *device, uint64_t lba, uint32_t count,
+                            const uintptr_t *frames, const struct block_frames_done *done,
+                            uint32_t index)
+{
+    struct block_request *r;
+    uint32_t flags;
+    int why;
+
+    r = req_take(device, 0, lba, count, frames, &why);
+    if (!r) {
+        return why;
+    }
+    flags = pool_lock();
+    r->done_fn = done->fn;
+    r->done_arg = done->arg;
+    r->done_index = done->index + index;
+    pool_unlock(flags);
+    count_in_flight(device, block_physical(device), 1);
+    if (device->submit(device, r) != 0) {
+        count_in_flight(device, block_physical(device), -1);
+        flags = pool_lock();
+        req_refused(r);
+        pool_unlock(flags);
+        wq_wake_all(&pool_wq);
+        return -EIO;
+    }
+    return 0;
+}
+
+int block_read_frames_async(block_device_t *device, uint64_t lba, uint32_t count,
+                            const uintptr_t *frames, const struct block_frames_done *done)
+{
+    uint32_t most, started = 0;
+    int rc = -EIO;
+
+    if (!device || count == 0 || lba >= device->sector_count ||
+        count > device->sector_count - lba) {
+        return -EIO;
+    }
+    if (!(block_flags(device) & BLOCK_FRAMES) || !device->submit ||
+        (device->flags & BLOCK_CALLER_SYNC) || !kirq_enabled() || !current_proc ||
+        !current_proc->in_syscall) {
+        return -EAGAIN;
+    }
+    most = block_max_sectors(device) & ~(BLOCK_REQ_SECTORS - 1u);
+    if (most == 0) {
+        most = BLOCK_REQ_SECTORS;
+    }
+    while (started < count) {
+        uint32_t chunk = count - started > most ? most : count - started;
+
+        rc = frames_async_one(device, lba + started, chunk, frames + started / BLOCK_REQ_SECTORS,
+                              done, started / BLOCK_REQ_SECTORS);
+        if (rc == -ENOMEM && chunk > BLOCK_REQ_SECTORS) {
+            most = (chunk / 2) & ~(BLOCK_REQ_SECTORS - 1u);
+            most = most < BLOCK_REQ_SECTORS ? BLOCK_REQ_SECTORS : most;
+            continue;
+        }
+        if (rc != 0) {
+            break;
+        }
+        started += chunk;
+    }
+    if (started == 0) {
+        return rc == -ENOMEM ? -EIO : rc;
+    }
+    return (int)started;
+}
+
+/* The sectors `block_settle` waits for the reads of. */
+struct settle_span {
+    block_device_t *device;
+    uint64_t lba, count;
+};
+
+/** Whether no read started without a waiter on the device of `arg`, a
+ * `struct settle_span`, is in flight over its sectors. */
+static int settle_clear(void *arg)
+{
+    const struct settle_span *s = arg;
+    const struct block_request *r;
+    uint32_t flags = pool_lock();
+    int clear = 1;
+
+    for (r = reqs; r && clear; r = r->next) {
+        clear = !(r->done_fn && r->state == BLOCK_REQ_IN_FLIGHT && r->device == s->device &&
+                  r->lba < s->lba + s->count && s->lba < r->lba + r->count);
+    }
+    pool_unlock(flags);
+    return clear;
+}
+
+void block_settle(block_device_t *device, uint64_t lba, uint64_t count)
+{
+    struct settle_span s;
+
+    s.device = device;
+    s.lba = lba;
+    s.count = count;
+    while (!settle_clear(&s)) {
+        wq_wait_event_nointr(&pool_wq, settle_clear, &s);
+    }
+}
+
+/**
  * Whether a caller outside a system call may still call a device that sleeps
  * its caller (`BLOCK_CALLER_SYNC`): only the boot, before the scheduler is
  * on, when no other context runs, so that nothing the device's chain waits
@@ -1106,7 +1254,7 @@ int block_request_ended(struct block_request *r, uint32_t generation, void *buff
 void block_request_complete(struct block_request *request, uint32_t generation, int status)
 {
     uint32_t flags = pool_lock();
-    int answered = 0;
+    int answered = 0, async;
     uint32_t overdue;
     uint64_t cpus = 0;
 
@@ -1151,9 +1299,13 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
         }
     }
     overdue = request->overdue;
+    async = request->done_fn != NULL;
     req_let_go(request, 0);
     pool_unlock(flags);
     sched_kick_cpus(cpus);
+    if (async) {
+        req_end_async(request); /* the caller's hold keeps it */
+    }
     if (overdue) {
         klog(KLOG_INFO, "block", "late answer: taken after %d deadlines", (int)overdue);
     }
@@ -1294,6 +1446,20 @@ void block_request_tick(void)
     klog(KLOG_WARN, "block", "request deadline: %d slots quarantined", quarantined);
     if (stalled) {
         klog(KLOG_WARN, "block", "device stalled: every slot it holds is past its deadline");
+    }
+    for (;;) {
+        flags = pool_lock();
+        for (r = reqs; r; r = r->next) {
+            if (r->state == BLOCK_REQ_QUARANTINED && r->done_fn && !r->done_ended) {
+                r->done_ended = 1;
+                break;
+            }
+        }
+        pool_unlock(flags);
+        if (!r) {
+            break;
+        }
+        req_end_async(r);
     }
     wq_wake_all(&pool_wq);
 }

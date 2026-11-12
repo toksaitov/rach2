@@ -303,6 +303,30 @@ void block_partition_init(block_partition_t *partition, block_device_t *backing,
  * dropped and logged.
  */
 struct wait_queue;
+
+/**
+ * What a read started without waiting calls at the end of each of its
+ * requests (`block_read_frames_async`): `arg` as the caller gave it,
+ * `index` the place among the caller's frames of the first of the `pages`
+ * frames `frames` the request filled, and `status` 0 or a negative errno,
+ * `-EIO` for a request given up on, whose frames may still be the device's
+ * to fill. It runs in the context the device completes in, an interrupt
+ * or the tick among them, under the driver's lock and with none of the
+ * pool's, so it takes only spinlocks taken with interrupts off and does
+ * not sleep, as Linux's `bi_end_io` runs (block/bio.c:1585-1617).
+ */
+typedef void (*block_frames_fn)(void *arg, uint32_t index, const uintptr_t *frames, uint32_t pages,
+                                int status);
+
+/* A completion and where its caller's frames start: `fn` is called with
+ * `arg` and `index` plus the place of a request's first frame among the
+ * frames it was given. */
+struct block_frames_done {
+    block_frames_fn fn;
+    void *arg;
+    uint32_t index;
+};
+
 struct block_request {
     struct block_request *next;   /* the list of live requests */
     struct block_request *queued; /* the device's own queue, oldest first */
@@ -336,6 +360,14 @@ struct block_request {
      * and cleared by the caller and read by the waker, all under the
      * pool's lock (request.c). */
     struct wait_queue *waiter;
+    /* A read started without a waiter (`block_read_frames_async`): what its
+     * answer or its quarantine calls, with `done_arg` and the index of the
+     * request's first frame among the caller's, `done_index`; NULL for a
+     * request whose caller waits or polls. */
+    block_frames_fn done_fn;
+    void *done_arg;
+    uint32_t done_index;
+    int done_ended; /* the tick has ended it for its quarantine */
 };
 
 /* A write a `BLOCK_WRITE_THROUGH` disk answers without flushing its cache,
@@ -408,6 +440,36 @@ int block_request_flags(block_device_t *device, int write, uint64_t lba, uint32_
  */
 int block_read_frames(block_device_t *device, uint64_t lba, uint32_t count,
                       const uintptr_t *frames);
+
+/**
+ * Start a read of `count` sectors at `lba` into the page frames `frames`,
+ * laid out as `block_read_frames` lays them, and return once its requests
+ * are submitted, without waiting for the device, as Linux's
+ * `mpage_readahead` submits its bio and returns (fs/mpage.c). Each request
+ * holds a reference on its frames until the device lets go of it, and its
+ * answer, or its quarantine past its deadlines, calls `done->fn` once for
+ * the frames it covers (`struct block_frames_done`).
+ *
+ * Only a device with `BLOCK_FRAMES` and `submit` takes such a read, from a
+ * caller that may sleep, which waits, as `block_read_frames` does, for room
+ * in the pool. The sectors whose requests were submitted, each of which
+ * calls `done->fn`, from the first, a multiple of a page's but for the end of
+ * `count`; `-EAGAIN` when the device or the caller cannot take the read so,
+ * nothing started, for the caller to read with `block_read_frames`; or a
+ * negative errno when nothing started.
+ */
+int block_read_frames_async(block_device_t *device, uint64_t lba, uint32_t count,
+                            const uintptr_t *frames, const struct block_frames_done *done);
+
+/**
+ * Sleep until no read started with `block_read_frames_async` on `device`
+ * and still in flight overlaps the `count` sectors at `lba`, for a file
+ * system about to free those sectors to another file, so that no read of
+ * the old file's lands after the new one's write, as Linux's truncation
+ * waits on each locked folio (mm/truncate.c). The caller holds what keeps
+ * new reads of the sectors from starting. From a caller that may sleep.
+ */
+void block_settle(block_device_t *device, uint64_t lba, uint64_t count);
 
 /**
  * Put what the device holds in a cache of its own on the medium.
