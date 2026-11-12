@@ -35,7 +35,10 @@
 # standard error after the second; a selftest's exit status and seconds go
 # to standard error after its output as `kvm-corpus: NAME: ran: status S in
 # N s`; and each excluded one's
-# `kvm-corpus: NAME: excluded: REASON`. The last line is `kvm-corpus: result:
+# `kvm-corpus: NAME: excluded: REASON`. While the tests run, standard output
+# has `kvm-corpus: tests: M`, the count that runs, and `kvm-corpus: done: N
+# of M` as each ends, which the KVM suite's cases take as their progress.
+# The last line is `kvm-corpus: result:
 # pass: N as expected, M excluded` or `kvm-corpus: result: fail: K of N:
 # NAME...`, and the exit status 0 on a pass, 1 on a failure and 2 on a usage
 # error. A program's own output goes to standard error.
@@ -119,6 +122,12 @@ awk '$2 != "excluded" { print $1, $2 }' "$work/list" > "$work/run"
 awk '$2 == "excluded" {
     r = $0; sub(/^[^ ]+ [^ ]+ [^ ]+ ?/, "", r); print "kvm-corpus: " $1 ": excluded: " r }' "$work/list"
 excluded=$(awk '$2 == "excluded"' "$work/list" | wc -l | tr -d ' ')
+# The progress lines, on standard output so that a reader of the run sees
+# each test end: `kvm-corpus: tests: M` first, then `kvm-corpus: done: N of
+# M` as the Nth test of M ends.
+tests=$(wc -l < "$work/run" | tr -d ' ')
+echo "kvm-corpus: tests: $tests"
+ended=0
 
 # results: write NAME RESULT a line to $work/got, RESULT pass, skip or fail.
 : > "$work/got"
@@ -141,8 +150,9 @@ if [ "$kind" = unit ]; then
         (cd "$work/kut" && ACCEL=kvm,kernel-irqchip=split TIMEOUT=0 \
             unittest_log_dir="$work/logs/$name" ./run_tests.sh -a "$name") >> "$work/out" 2>&1
         echo "$name $(($(date +%s) - start))" >> "$work/secs"
-        # A sign of progress while the run goes on.
         echo "kvm-corpus: $name: ran" >&2
+        ended=$((ended + 1))
+        echo "kvm-corpus: done: $ended of $tests"
     done < "$work/run"
     # The runner colours its result words; the escapes go before the match.
     sed "s/$(printf '\033')\\[[0-9;]*m//g" "$work/out" | tee "$work/plain" >&2
@@ -168,6 +178,8 @@ else
             *) echo "$name fail" ;;
         esac >> "$work/got"
         rm -rf "$work/t"
+        ended=$((ended + 1))
+        echo "kvm-corpus: done: $ended of $tests"
     done < "$work/run"
 fi
 

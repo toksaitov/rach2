@@ -172,6 +172,29 @@ static void print_output(const char *out)
 }
 
 /**
+ * Run corpus.sh's `command` as root, as as_root does, and report the witness
+ * `test` as each of its tests ends, on its line `kvm-corpus: done: N of M`,
+ * so that the gap's watchdog bounds one test and not the whole corpus, whose
+ * dozens of tests take longer than the gap bound together.
+ */
+static void corpus_run(struct kvm_case *s, const char *command, struct net_run *r)
+{
+    const char *argv[] = {"/bin/sh", "-c", command, NULL};
+    char text[48];
+    unsigned long n;
+
+    if (net_guest_start(&s->u, s->b.m, argv, NULL, "kvm-corpus: tests: ") == ETUDE_OK) {
+        for (n = 1;; n++) {
+            snprintf(text, sizeof(text), "kvm-corpus: done: %lu of ", n);
+            if (etude_guest_output_wait(s->b.m, text) != ETUDE_OK)
+                break;
+            etude_progress(s->u.c, "test", n);
+        }
+    }
+    net_guest_finish(&s->u, s->b.m, 0, "runner", r);
+}
+
+/**
  * Build the runner's shell command in `command`, which holds `cap` bytes.
  * The fuzz fixture grants nobody access and restores the mode on exit,
  * since udev may restrict the node after the kernel creates it.
@@ -229,8 +252,12 @@ static void run(struct kvm_case *s)
     struct net_run r;
 
     runner_command(s, command, sizeof(command));
-    if (net_step(&s->u, "run") == ETUDE_OK)
-        as_root(s, command, "runner", &r);
+    if (net_step(&s->u, "run") == ETUDE_OK) {
+        if (s->runner == UNIT || s->runner == SELFTESTS)
+            corpus_run(s, command, &r);
+        else
+            as_root(s, command, "runner", &r);
+    }
     if (!net_ok(&s->u)) {
         net_assert(&s->u, assertion[s->runner], 0, "");
         return;

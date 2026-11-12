@@ -1087,6 +1087,12 @@
           "kind": "step",
           "means": "a step of the manifest has ended",
           "limit": 3
+        },
+        {
+          "witness_id": "test",
+          "kind": "counter",
+          "means": "a test of the corpus has ended, as corpus.sh's line kvm-corpus: done: N of M says",
+          "limit": 256
         }
       ],
       "bounds": {
@@ -1284,6 +1290,12 @@
           "kind": "step",
           "means": "a step of the manifest has ended",
           "limit": 3
+        },
+        {
+          "witness_id": "test",
+          "kind": "counter",
+          "means": "a test of the corpus has ended, as corpus.sh's line kvm-corpus: done: N of M says",
+          "limit": 256
         }
       ],
       "bounds": {
@@ -1485,6 +1497,12 @@
           "kind": "step",
           "means": "a step of the manifest has ended",
           "limit": 3
+        },
+        {
+          "witness_id": "test",
+          "kind": "counter",
+          "means": "a test of the corpus has ended, as corpus.sh's line kvm-corpus: done: N of M says",
+          "limit": 256
         }
       ],
       "bounds": {
@@ -1686,6 +1704,12 @@
           "kind": "step",
           "means": "a step of the manifest has ended",
           "limit": 3
+        },
+        {
+          "witness_id": "test",
+          "kind": "counter",
+          "means": "a test of the corpus has ended, as corpus.sh's line kvm-corpus: done: N of M says",
+          "limit": 256
         }
       ],
       "bounds": {
@@ -1887,6 +1911,12 @@
           "kind": "step",
           "means": "a step of the manifest has ended",
           "limit": 3
+        },
+        {
+          "witness_id": "test",
+          "kind": "counter",
+          "means": "a test of the corpus has ended, as corpus.sh's line kvm-corpus: done: N of M says",
+          "limit": 256
         }
       ],
       "bounds": {
