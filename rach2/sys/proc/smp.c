@@ -1644,20 +1644,6 @@ static void smp_cpu_main(int cpu)
     sched_idle_loop();
 }
 
-/** The decimal number `text` begins with, at most `cap`; 0 for none. */
-static int parse_count(const char *text, int cap)
-{
-    int n = 0;
-
-    while (*text >= '0' && *text <= '9') {
-        n = n * 10 + (*text++ - '0');
-        if (n > cap) {
-            return cap;
-        }
-    }
-    return n;
-}
-
 /* How long the boot waits for a started processor to be online, in
  * microseconds, after the platform has seen it reach its entry. */
 #define CPU_ONLINE_WAIT_US 100000
@@ -1667,17 +1653,18 @@ static int parse_count(const char *text, int cap)
  * every processor: a process that blocks or ends leaves for it when nothing
  * else is ready. Its stack is laid out for a first switch into
  * `sched_idle_loop`; a started processor runs its own from its start.
- * `maxcpus=N` limits the processors to N, as Linux's does; 0 and 1 both mean
- * the boot processor alone. A processor that does not answer is reported,
- * and the next is still tried. The boot admits a processor or refuses it in
- * one compare-and-exchange of its `admit`, which the processor makes too as
+ * `maxcpus=N` limits the processors to N, as Linux's does, N read as its
+ * get_option reads it (`kcmdline_option`) into its unsigned setup_max_cpus,
+ * so a negative N is no limit; 0 and 1 both mean the boot processor alone.
+ * A processor that does not answer is reported, and the next is still
+ * tried. The boot admits a processor or refuses it in one
+ * compare-and-exchange of its `admit`, which the processor makes too as
  * it comes online, so that one coming as the wait ends is either counted or
  * stopped, never online and uncounted.
  */
 void smp_start(void)
 {
-    char value[12];
-    int limit = NR_CPUS;
+    int limit = NR_CPUS, max;
     int n, cpu, waited;
 
     cpu_table[0].idle = smp_idle_task(0);
@@ -1687,11 +1674,8 @@ void smp_start(void)
     setup_process_stack(cpu_table[0].idle, sched_idle_loop);
     cpu_table[0].idle->bkl_depth = 0;
     cpu_table[0].online = 1;
-    if (kcmdline_value("maxcpus", value, sizeof(value))) {
-        limit = parse_count(value, NR_CPUS);
-        if (limit < 1) {
-            limit = 1;
-        }
+    if (kcmdline_option("maxcpus", &max)) {
+        limit = (unsigned int)max > NR_CPUS ? NR_CPUS : max < 1 ? 1 : max;
     }
     n = platform_cpu_count(limit);
     paging_temp_split((unsigned int)n);

@@ -45,6 +45,19 @@ int kcmdline_has(const char *flag);
 int kcmdline_value(const char *key, char *out, unsigned int outlen);
 
 /**
+ * Read the integer value of the first `key=value` token into `*out`, as
+ * Linux's get_option reads an early parameter's (lib/cmdline.c, lines 56 to
+ * 79): an optional `-`, then simple_strtoull's base 0, hexadecimal after
+ * `0x` and a hexadecimal digit, octal after a leading 0 and decimal
+ * otherwise, cut to an int; a value that begins with no digit reads 0, as
+ * there, since get_option stores the 0 simple_strtoull gives it.
+ *
+ * @return 1 when the token is present with a value of at most 31 bytes, 0
+ * otherwise, `*out` then untouched.
+ */
+int kcmdline_option(const char *key, int *out);
+
+/**
  * The value of the `nth` `key=value` token, counting from zero.
  *
  * A key a machine may give more than once, one per interface, is read this
