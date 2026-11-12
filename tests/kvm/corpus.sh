@@ -18,10 +18,10 @@
 # `intel`, where /proc/cpuinfo's vendor_id is GenuineIntel. Each test whose
 # EXPECT is not `excluded` runs, in the order of the list:
 #
-# * `unit`: kvm-unit-tests' run_tests.sh, from a copy of /opt/kvm-unit-tests,
-#   with ACCEL `kvm,kernel-irqchip=split`, as in the Linux reference,
-#   and TIMEOUT 0, so that no test is judged by
-#   the clock. A test passes on its PASS line and skips on its SKIP line.
+# * `unit`: kvm-unit-tests' run_tests.sh, once a test, from a copy of
+#   /opt/kvm-unit-tests, with ACCEL `kvm,kernel-irqchip=split`, as in the
+#   Linux reference, and TIMEOUT 0, so that no test is judged by the clock.
+#   A test passes on its PASS line and skips on its SKIP line.
 # * `selftests`: each program of /opt/kvm-selftests, run in a directory of
 #   its own; exit 0 is a pass and 4, kselftest's code, a skip. A NAME of
 #   the form PROGRAM,ARG,... runs PROGRAM with the ARGs, which hold no
@@ -30,10 +30,11 @@
 # The copy and the directories are under TMPDIR, /tmp by default, and are
 # removed on every exit; kernel.nmi_watchdog reads 0 for the run and is put
 # back on every exit. Each test's line is `kvm-corpus: NAME: RESULT`, with
-# `as expected` or `expected EXPECT` after it, and a kvm-unit-test's own log
-# on standard error after the second; a selftest's exit status and seconds,
-# for the record, go to standard error after its output as `kvm-corpus: NAME:
-# ran: status S in N s`; and each excluded one's
+# `as expected` or `expected EXPECT` after it and the seconds the test
+# took, for the record and not judged, and a kvm-unit-test's own log on
+# standard error after the second; a selftest's exit status and seconds go
+# to standard error after its output as `kvm-corpus: NAME: ran: status S in
+# N s`; and each excluded one's
 # `kvm-corpus: NAME: excluded: REASON`. The last line is `kvm-corpus: result:
 # pass: N as expected, M excluded` or `kvm-corpus: result: fail: K of N:
 # NAME...`, and the exit status 0 on a pass, 1 on a failure and 2 on a usage
@@ -121,6 +122,7 @@ excluded=$(awk '$2 == "excluded"' "$work/list" | wc -l | tr -d ' ')
 
 # results: write NAME RESULT a line to $work/got, RESULT pass, skip or fail.
 : > "$work/got"
+: > "$work/secs"
 # The hard-lockup detector holds a counter, which the PMU tests count on
 # having: kvm-unit-tests' `pmu` and `pmu_lbr` require kernel.nmi_watchdog to
 # read 0, as their configuration checks, and `pmu_counters_test` uses every
@@ -131,9 +133,15 @@ if read -r w < /proc/sys/kernel/nmi_watchdog 2> /dev/null && [ "$w" != 0 ] &&
 fi
 if [ "$kind" = unit ]; then
     cp -R "$tree" "$work/kut" || exit 1
-    # shellcheck disable=SC2046 # one word a test
-    (cd "$work/kut" && ACCEL=kvm,kernel-irqchip=split TIMEOUT=0 \
-        ./run_tests.sh -a $(awk '{ print $1 }' "$work/run")) > "$work/out" 2>&1
+    # One run of the runner a test, so that each test's seconds are known.
+    while read -r name _; do
+        start=$(date +%s)
+        (cd "$work/kut" && ACCEL=kvm,kernel-irqchip=split TIMEOUT=0 \
+            ./run_tests.sh -a "$name") >> "$work/out" 2>&1
+        echo "$name $(($(date +%s) - start))" >> "$work/secs"
+        # A sign of progress while the run goes on.
+        echo "kvm-corpus: $name: ran" >&2
+    done < "$work/run"
     # The runner colours its result words; the escapes go before the match.
     sed "s/$(printf '\033')\\[[0-9;]*m//g" "$work/out" | tee "$work/plain" >&2
     awk '$1 == "PASS" { print $2, "pass" } $1 == "SKIP" { print $2, "skip" }
@@ -149,7 +157,9 @@ else
         (cd "$work/t" && "$tree/${name%%,*}" $(echo "$name" | cut -s -d, -f2- | tr , ' ') \
             < /dev/null) >&2 2>&1
         status=$?
-        echo "kvm-corpus: $name: ran: status $status in $(($(date +%s) - start)) s" >&2
+        took=$(($(date +%s) - start))
+        echo "kvm-corpus: $name: ran: status $status in $took s" >&2
+        echo "$name $took" >> "$work/secs"
         case $status in
             0) echo "$name pass" ;;
             4) echo "$name skip" ;;
@@ -164,11 +174,12 @@ total=0 bad=0 names=''
 while read -r name expect; do
     got=$(awk -v n="$name" '$1 == n { print $2; exit }' "$work/got")
     got=${got:-missing}
+    secs=$(awk -v n="$name" '$1 == n { print $2; exit }' "$work/secs")
     total=$((total + 1))
     if [ "$got" = "$expect" ]; then
-        echo "kvm-corpus: $name: $got: as expected"
+        echo "kvm-corpus: $name: $got: as expected, ${secs:-0} s"
     else
-        echo "kvm-corpus: $name: $got: expected $expect"
+        echo "kvm-corpus: $name: $got: expected $expect, ${secs:-0} s"
         # The runner's log of the test names each subtest's result.
         log=$work/kut/logs/$name.log
         [ "$kind" != unit ] || [ ! -f "$log" ] ||
