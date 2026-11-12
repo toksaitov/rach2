@@ -1172,10 +1172,13 @@ int vtd_hw_ioapics(uint8_t *ids, int max)
     return i;
 }
 
+/* The vector the fault event takes, or -1 for none free. */
+static int fault_vec;
+
 /** A vector for the fault event; the rows call its handler themselves. */
 int vtd_hw_fault_vector(void)
 {
-    return 0x31;
+    return fault_vec;
 }
 
 /* The clock of fault.c's rate limit, in milliseconds. Each row starts a
@@ -1526,6 +1529,7 @@ static void row_begin(const char *name)
     ram_top = 0x100000000ull;
     opt_intel_iommu = opt_intremap = NULL;
     opt_noapic = 0;
+    fault_vec = 0x31;
     page_fail_after = -1;
     flush_calls = stray_flushes = 0;
     boot_apic = boot_x2apic = 0;
@@ -2375,6 +2379,42 @@ static void row_read_only(void)
     row_end();
 }
 
+/** The units' fault events held across the late x2APIC leave: each masked
+ * in FECTL, where an event that comes waits in FECTL.IP, and unmasked
+ * again, which sends it; nothing is written while no vector was taken. */
+static void row_fault_hold(void)
+{
+    unsigned long w0, w1;
+
+    row_begin("fault_hold");
+    setup_lenovo();
+    opt_intremap = "off";
+    check(vtd_start() == 2, "up");
+    iommu_fault_hold(1);
+    check(M(0)->regs[VTD_FECTL / 4] == VTD_FECTL_IM && M(1)->regs[VTD_FECTL / 4] == VTD_FECTL_IM,
+          "held: each unit's fault event masked");
+    check(M(0)->regs[VTD_FEDATA / 4] == 0x31u && M(1)->regs[VTD_FEDATA / 4] == 0x31u,
+          "and still aimed at its vector");
+    iommu_fault_hold(0);
+    check(M(0)->regs[VTD_FECTL / 4] == 0 && M(1)->regs[VTD_FECTL / 4] == 0,
+          "let go: each unmasked, which sends an event held meanwhile");
+    row_end();
+
+    row_begin("fault_hold_none");
+    setup_lenovo();
+    opt_intremap = "off";
+    fault_vec = -1;
+    check(vtd_start() == 2 && logged("vtd: fault: no vector: faults go unreported"),
+          "up with no vector");
+    w0 = models[0].writes;
+    w1 = models[1].writes;
+    iommu_fault_hold(1);
+    iommu_fault_hold(0);
+    check(models[0].writes == w0 && models[1].writes == w1,
+          "nothing written while no vector was taken");
+    row_end();
+}
+
 /** Faults past the rate limit, 10 lines in 5 seconds for every unit, are
  * counted, and one lost is counted too; the next window says how many
  * lines were held back. */
@@ -2543,6 +2583,7 @@ int main(void)
     row_iqe();
     row_options();
     row_read_only();
+    row_fault_hold();
     row_fault_limit();
     row_fault_bound();
     row_fault_lost_limit();
