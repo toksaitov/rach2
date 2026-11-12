@@ -57,6 +57,7 @@
 #define AHCI_BOHC_OOS    0x2u        /* OS ownership request */
 #define AHCI_CAP_NP_MASK 0x1Fu       /* CAP.NP: number of ports minus one */
 #define AHCI_CAP_S64A    0x80000000u /* CAP.S64A: 64-bit addressing */
+#define AHCI_CAP_SSS     0x08000000u /* CAP.SSS: staggered spin-up */
 
 /* Per-port register block N lives at ABAR + 0x100 + N*0x80. */
 #define AHCI_PORT_BASE   0x100
@@ -139,17 +140,25 @@
 #define AHCI_CMD_STEPS        3000000u
 #define AHCI_CMD_STEPS_MASKED 500000u
 
-/* The two waits that follow a COMRESET are measured, not counted, since
-   what they wait for happens on the wire and in the device, not at the
-   processor's speed. The poll interval is 100 us; the budgets are one second
-   for the PHY to negotiate, which is what the specification allows, and five
-   for the device to finish its own reset and post its signature, which is
-   generous for a disk and short enough that a port with something unresponsive
-   on it does not hold up a boot. Both expiries are ordinary answers: an empty
-   port and a device that does not answer are both ports to move past. */
-#define AHCI_RESET_POLL_US 100u
-#define AHCI_LINK_STEPS    10000u
-#define AHCI_READY_STEPS   50000u
+/* What follows a COMRESET is measured, not counted, since what it waits for
+   happens on the wire and in the device, not at the processor's speed. The
+   link is debounced as Linux 6.12.115 does it with `sata_deb_timing_normal`
+   (drivers/ata/libata-sata.c:22): after the 200 ms that `sata_link_resume`
+   gives the PHY before the first look (libata-sata.c:323), SStatus.DET is read
+   every 5 ms and taken once it has held for 100 ms, so an empty port, whose DET
+   stays 0, costs 300 ms. A DET of 1, a device seen that has not negotiated
+   yet, is waited on for up to 2 s (`sata_link_debounce`, libata-sata.c:263).
+   The device then has five seconds to finish its own reset and post its
+   signature, polled every 100 us, which is generous for a disk and short
+   enough that a port with something unresponsive on it does not hold up a
+   boot. Every expiry is an ordinary answer: an empty port and a device that
+   does not answer are both ports to move past. */
+#define AHCI_RESUME_DELAY_US 200000u
+#define AHCI_DEB_POLL_US     5000u
+#define AHCI_DEB_STEADY      20u  /* 100 ms of polls */
+#define AHCI_DEB_LIMIT       400u /* 2 s of polls */
+#define AHCI_RESET_POLL_US   100u
+#define AHCI_READY_STEPS     50000u
 
 /* The DMA regions the HBA reads and writes, one set per disk. They are
    static so they land in the kernel image's .bss, below HARD_MEMORY_LIMIT,
@@ -230,9 +239,12 @@ static int ahci_vector = -1;
 
 /* The areas a port is pointed at while it is reset, before the scan knows
    whether it has a disk. Nothing reads them: a port that is kept gets its
-   own areas when it is started, and a port that is skipped is stopped. */
+   own areas when it is started, and a port that is skipped is stopped. The
+   ports are reset together, so each has a FIS area of its own for the HBA to
+   write; they share the command list, which the HBA reads only once the
+   command engine runs, and it stays off. */
 static volatile uint8_t ahci_reset_cmdlist[AHCI_CMDLIST_SIZE] __attribute__((aligned(1024)));
-static volatile uint8_t ahci_reset_fis[AHCI_RECV_FIS_SIZE] __attribute__((aligned(256)));
+static volatile uint8_t ahci_reset_fis[32][AHCI_RECV_FIS_SIZE] __attribute__((aligned(256)));
 
 /* Task-file status bits (PxTFD low byte) and the fatal port-interrupt bits. A
    command fails on a device error (PxTFD ERR or DF) or on a fatal PxIS bit (the
@@ -491,19 +503,15 @@ static int ahci_discover(void)
 }
 
 /**
- * Reset the SATA link on one port (COMRESET) and wait for it to come up.
- * Returns 0 when a device is present and the PHY is ready, and -1 for a port
- * with no link after a second.
+ * Assert COMRESET on one port, with its reset areas programmed, its power up
+ * and its FIS receive on; `ahci_links_reset` releases it.
  *
  * A warm reboot can leave a link where the port reports a device and the
  * device never becomes ready, as the Lenovo's does, and the HBA reset of
  * `ahci_hba_own` leaves every link down; the way back is to take the link
  * down and bring it up. DET=1 asserts COMRESET, which the specification
  * requires held for at least a millisecond, and DET=0 releases it, after
- * which the PHY negotiates again. An empty port is not a failure: every
- * implemented port is reset at bring-up, and most machines have ports with
- * nothing on them. Its wait costs the whole second, and its debug line gives
- * the port's status, which shows whether the wait could be shorter.
+ * which the PHY negotiates again.
  *
  * The device answers a reset with a FIS that has its signature, and a FIS
  * arrives only when the port has somewhere to put it and is receiving, so
@@ -530,20 +538,16 @@ static int ahci_discover(void)
  * diagnostic that reads a sector an hour after boot must not find that the
  * link slept in between and the drive never woke.
  */
-static int ahci_port_comreset(int port)
+static void ahci_port_comreset(int port)
 {
     uint32_t sctl_off = ahci_port_off(port, AHCI_PxSCTL);
-    uint32_t ssts_off = ahci_port_off(port, AHCI_PxSSTS);
-    uint32_t serr_off = ahci_port_off(port, AHCI_PxSERR);
     uint32_t cmd_off = ahci_port_off(port, AHCI_PxCMD);
     uint32_t sctl = ahci_read32(sctl_off);
-    uint32_t spin;
 
     ahci_write32(ahci_port_off(port, AHCI_PxCLB), (uint32_t)virt_to_phys(ahci_reset_cmdlist));
     ahci_write32(ahci_port_off(port, AHCI_PxCLBU), ahci_hi(virt_to_phys(ahci_reset_cmdlist)));
-    ahci_write32(ahci_port_off(port, AHCI_PxFB), (uint32_t)virt_to_phys(ahci_reset_fis));
-    ahci_write32(ahci_port_off(port, AHCI_PxFBU), ahci_hi(virt_to_phys(ahci_reset_fis)));
-    pci_enable_bus_master(&ahci_pci);
+    ahci_write32(ahci_port_off(port, AHCI_PxFB), (uint32_t)virt_to_phys(ahci_reset_fis[port]));
+    ahci_write32(ahci_port_off(port, AHCI_PxFBU), ahci_hi(virt_to_phys(ahci_reset_fis[port])));
 
     {
         uint32_t cmd = ahci_read32(cmd_off) | AHCI_PxCMD_SUD | AHCI_PxCMD_POD;
@@ -556,24 +560,97 @@ static int ahci_port_comreset(int port)
 
     sctl = (sctl & ~(AHCI_SCTL_DET_MASK | AHCI_SCTL_IPM_MASK)) | AHCI_SCTL_IPM_DISABLE_ALL;
     ahci_write32(sctl_off, sctl | AHCI_SCTL_DET_INIT);
+}
+
+/**
+ * Reset the SATA links of the ports in the mask `ports` together and debounce
+ * them. Returns the mask of those whose link came up, DET 3, with their
+ * PxSERR cleared.
+ *
+ * This is Linux's `sata_link_hardreset` (drivers/ata/libata-sata.c:624, in
+ * 6.12.115), which `ahci_hardreset` runs (libahci.c:1641): COMRESET held for
+ * at least a millisecond (libata-sata.c:663), released, 200 ms for the PHY
+ * (`sata_link_resume`, :323), then `sata_link_debounce` (:235) with the
+ * normal timings. A port is settled once its DET has held for 100 ms, except
+ * that a DET of 1 is waited on until the 2 s deadline. A DET that still
+ * changes after the deadline settles the port at that reading, where Linux
+ * returns -EPIPE and its error handler tries again at a lower speed; a port
+ * then reading 3 is taken as up, as the scan always took it. Every port is
+ * settled within the deadline and a steady stretch past it.
+ *
+ * An empty port is not a failure: every implemented port is reset at
+ * bring-up, and most machines have ports with nothing on them. Its DET stays
+ * 0 and it is settled 300 ms after the release, which is what an empty port
+ * costs Linux; a debug line gives each such port's status.
+ */
+static uint32_t ahci_links_reset(uint32_t ports)
+{
+    uint32_t last[32], since[32];
+    uint32_t pending = ports, linked = 0, step;
+    int p;
+
+    pci_enable_bus_master(&ahci_pci);
+    for (p = 0; p < 32; ++p) {
+        if (ports & (1u << p)) {
+            ahci_port_comreset(p);
+        }
+    }
     /* At least 1 ms with COMRESET asserted. */
     k_udelay(2000);
-    ahci_write32(sctl_off, sctl | AHCI_SCTL_DET_NONE);
+    for (p = 0; p < 32; ++p) {
+        if (ports & (1u << p)) {
+            uint32_t sctl_off = ahci_port_off(p, AHCI_PxSCTL);
 
-    for (spin = 0; spin < AHCI_LINK_STEPS; ++spin) {
-        if ((ahci_read32(ssts_off) & AHCI_DET_MASK) == AHCI_DET_PRESENT) {
-            /* PxSERR is write-1-to-clear: this clears the link-up's errors. */
-            ahci_write32(serr_off, ahci_read32(serr_off));
-            return 0;
+            ahci_write32(sctl_off,
+                         (ahci_read32(sctl_off) & ~AHCI_SCTL_DET_MASK) | AHCI_SCTL_DET_NONE);
         }
-        k_udelay(AHCI_RESET_POLL_US);
     }
-    klog(KLOG_DEBUG, "ahci",
-         "port %d: no link after %d ms; SStatus 0x%X, DET %d (0 is nothing attached, "
-         "1 is a device that did not negotiate)",
-         port, (int)((AHCI_LINK_STEPS * AHCI_RESET_POLL_US) / 1000u), ahci_read32(ssts_off),
-         (int)(ahci_read32(ssts_off) & AHCI_DET_MASK));
-    return -1;
+    k_udelay(AHCI_RESUME_DELAY_US);
+
+    for (p = 0; p < 32; ++p) {
+        if (ports & (1u << p)) {
+            last[p] = ahci_read32(ahci_port_off(p, AHCI_PxSSTS)) & AHCI_DET_MASK;
+            since[p] = 0;
+        }
+    }
+    for (step = 1; pending != 0; ++step) {
+        k_udelay(AHCI_DEB_POLL_US);
+        for (p = 0; p < 32; ++p) {
+            uint32_t ssts, cur;
+
+            if (!(pending & (1u << p))) {
+                continue;
+            }
+            ssts = ahci_read32(ahci_port_off(p, AHCI_PxSSTS));
+            cur = ssts & AHCI_DET_MASK;
+            if (cur == last[p]) {
+                if ((cur == 1 && step < AHCI_DEB_LIMIT) || step - since[p] <= AHCI_DEB_STEADY) {
+                    continue;
+                }
+            } else {
+                last[p] = cur;
+                since[p] = step;
+                if (step <= AHCI_DEB_LIMIT) {
+                    continue;
+                }
+            }
+            pending &= ~(1u << p);
+            if (cur == AHCI_DET_PRESENT) {
+                uint32_t serr_off = ahci_port_off(p, AHCI_PxSERR);
+
+                /* PxSERR is write-1-to-clear: clears the link-up's errors. */
+                ahci_write32(serr_off, ahci_read32(serr_off));
+                linked |= 1u << p;
+            } else {
+                klog(KLOG_DEBUG, "ahci",
+                     "port %d: no link after %d ms; SStatus 0x%X, DET %d (0 is nothing attached, "
+                     "1 is a device that did not negotiate)",
+                     p, (int)((AHCI_RESUME_DELAY_US + step * AHCI_DEB_POLL_US) / 1000u), ssts,
+                     (int)cur);
+            }
+        }
+    }
+    return linked;
 }
 
 /**
@@ -584,7 +661,7 @@ static int ahci_port_comreset(int port)
  * machine whose firmware has been using the controller. It also leaves every
  * SATA link down, with a port that reports a device that is not ready (on
  * QEMU's ich9-ahci the port's TFD loses DRDY, 0x50 becoming 0x130), which the
- * COMRESET of each port (`ahci_port_comreset`) brings back.
+ * COMRESET of each port (`ahci_links_reset`) brings back.
  *
  * The BIOS/OS handoff is requested when the controller has it (QEMU's does
  * not), and a request the firmware does not answer within a second is a
@@ -725,10 +802,15 @@ static int ahci_port_ready(int port)
  *
  * Every implemented port is COMRESET first, because a link that a warm reboot
  * left wedged reports a device that never becomes ready, and the scan would
- * otherwise select it and then fail on the identify. A port with no link,
- * nothing there or a device that did not negotiate one, is skipped, since
- * most machines have some; the reset itself logs a debug line for it. A link
- * is up when DET reads 3, whatever IPM says, as Linux's
+ * otherwise select it and then fail on the identify. The ports are reset
+ * together, unless the controller has staggered spin-up (CAP.SSS), when
+ * Linux scans its ports one at a time, each port's device ready before the
+ * next port is reset, so that their drives do not spin up at once
+ * (`ATA_HOST_PARALLEL_SCAN`, drivers/ata/ahci.c:2131, and `async_port_probe`,
+ * libata-core.c:5974). A port with no link, nothing there or a device that
+ * did not negotiate one, is skipped, since most machines have some; the
+ * reset itself logs a debug line for it. A link is up when DET reads 3,
+ * whatever IPM says, as Linux's
  * `ata_phys_link_online` tests: a link that negotiated and then went to a
  * low-power interface state is live, and the ICC write in the reset brings it
  * back.
@@ -751,18 +833,25 @@ static int ahci_port_ready(int port)
  */
 static int ahci_select_port(void)
 {
-    uint32_t pi = ahci_read32(AHCI_PI);
+    uint32_t pi = ahci_read32(AHCI_PI), linked = 0;
+    int serial = (ahci_read32(AHCI_CAP) & AHCI_CAP_SSS) != 0;
     int p;
 
     ahci_ndisks = 0;
     ahci_port = -1;
+    if (!serial) {
+        linked = ahci_links_reset(pi);
+    }
     for (p = 0; p < 32; ++p) {
         uint32_t ssts, sig;
 
         if (!(pi & (1u << p))) {
             continue;
         }
-        if (ahci_port_comreset(p) != 0) {
+        if (serial) {
+            linked |= ahci_links_reset(1u << p);
+        }
+        if (!(linked & (1u << p))) {
             (void)ahci_port_stop(p);
             continue;
         }
