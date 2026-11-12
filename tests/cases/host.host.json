@@ -896,6 +896,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "leave",
+          "checks": "tests/host/leave_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "leave64",
+          "checks": "tests/host/leave64_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "libtsm_keys",
           "checks": "tests/host/libtsm_keys_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
