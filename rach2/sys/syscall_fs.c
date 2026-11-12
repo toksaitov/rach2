@@ -810,8 +810,10 @@ static int user_resident(uintptr_t addr, uint32_t len)
 /**
  * The writes of `file_write`: `count` bytes of `buf` from `*pos`, which
  * moves past each piece written, the bytes copied into any pages shared
- * mappings now hold (`filemap_file_written`). Returns the bytes
- * written, or the first write's error when none were.
+ * mappings now hold (`filemap_file_written`), asked under the file's lock
+ * after each piece, since a fault while the lock was let go may have
+ * brought one in, and copied under the big lock (`file_write_mapped`).
+ * Returns the bytes written, or the first write's error when none were.
  *
  * On a type that sets `file_locked`, `state` names the file whose lock
  * the caller holds, with `own` clear on another type. The file system
@@ -820,9 +822,7 @@ static int user_resident(uintptr_t addr, uint32_t len)
  * at the first that is not, since a fault under the lock could wait for
  * another file's lock. Once this call has moved a byte, in this piece or an
  * earlier vector element, it returns that prefix without releasing the lock.
- * Otherwise the lock goes while the buffer is brought in, and whether
- * mappings hold the file's pages is asked again, since a fault may have
- * brought one in meanwhile (`file_write_mapped`); an append also
+ * Otherwise the lock goes while the buffer is brought in, and an append
  * reads the end again, where another writer may have moved it meanwhile:
  * the count is cut again to what RLIMIT_FSIZE lets through
  * (`fsize_fit`), and a write that finds the end at the limit stops there,
@@ -841,7 +841,9 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
     for (;;) {
         n = vfs_write(ofd->vmnt, ofd->fhandle, (const char *)(from + done), count - done, *pos);
         if (n > 0) {
-            filemap_file_written(entry, *pos, (uint32_t)n);
+            if (file_write_mapped(ofd, state)) {
+                filemap_file_written(entry, *pos, (uint32_t)n);
+            }
             done += (uint32_t)n;
             state->moved = 1;
             *pos += (uint64_t)n;
@@ -862,7 +864,6 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
         if (n != 0) {
             break;
         }
-        mapped = file_write_mapped(ofd, state);
         if (state->append) {
             struct vfs_stat vst;
 
