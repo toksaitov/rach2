@@ -183,6 +183,8 @@ mount being mounted or unmounted.
 The path cannot be read from user memory.
 .It Er EFBIG
 The requested length exceeds the file system's limit.
+On ext2 only a length that grows the file fails, so a file already larger
+than the limit still shrinks, as on Linux.
 .It Er EINVAL
 The length is negative.
 .Fn truncate

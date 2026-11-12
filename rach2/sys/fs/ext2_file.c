@@ -943,8 +943,11 @@ static int past_limit(const struct ext2_mount *em, const char *op, uint64_t offs
  * there, then frees the blocks from the end (`ext2_punch`) and stores the inode
  * again; a stop between leaves blocks past the end. A growth leaves the gap
  * a hole, and puts the zeroed tail a shrink may have left unsynced on the
- * disk before the size covers it. 0, -EINVAL for a file that is not
- * regular, -EFBIG, -EROFS, or -errno.
+ * disk before the size covers it. A growth past the volume's file limit is
+ * -EFBIG; a shrink is not checked against it, so a file larger than the
+ * limit, which a volume may hold from another system, can still be cut, as
+ * Linux's `inode_newsize_ok` checks `s_maxbytes` only for growth. 0, -EINVAL
+ * for a file that is not regular, -EFBIG, -EROFS, or -errno.
  */
 int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
@@ -955,11 +958,11 @@ int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     if ((n->mode & S_IFMT_) != S_IFREG_) {
         return -EINVAL;
     }
-    if (size > em->file_limit) {
-        return past_limit(em, "truncate", size);
-    }
     ext2_node_lock(n);
     rc = ext2_assert_writable(mnt, em);
+    if (rc == 0 && size > n->size && size > em->file_limit) {
+        rc = past_limit(em, "truncate", size);
+    }
     if (rc != 0) {
         ext2_node_unlock(n);
         return rc;
@@ -1364,9 +1367,11 @@ int ext2_fdatasync(struct vfs_mount *mnt, void *handle)
  * locks let go, and the rest of the write is decided again from there; when
  * the caller holds the file's lock, or another, which this cannot give
  * back, the write ends short at that piece, 0 bytes for the first, and the
- * caller brings the page in (`user_refault`). Returns the bytes accepted,
- * -EISDIR, -EFBIG, -EROFS, -ENOSPC, -EFAULT, or -errno. The caller holds the
- * node's lock.
+ * caller brings the page in (`user_refault`). A write that starts below the
+ * volume's file limit and crosses it is clipped at the limit, and one that
+ * starts at or past it is -EFBIG, as Linux's `generic_write_check_limits`
+ * does with `s_maxbytes`. Returns the bytes accepted, -EISDIR, -EFBIG,
+ * -EROFS, -ENOSPC, -EFAULT, or -errno. The caller holds the node's lock.
  */
 int32_t ext2_file_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                         uint64_t offset)
@@ -1383,8 +1388,11 @@ int32_t ext2_file_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
     if (count == 0) {
         return 0;
     }
-    if (offset > em->file_limit || count > em->file_limit - offset) {
+    if (offset >= em->file_limit) {
         return past_limit(em, "write", offset);
+    }
+    if (count > em->file_limit - offset) {
+        count = (uint32_t)(em->file_limit - offset);
     }
     ext2_assert_node_locked(n);
 again:
