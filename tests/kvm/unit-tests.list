@@ -12,16 +12,19 @@
 # names Linux's failure after `Linux:`. Inside a machine of KVM, as the KVM
 # suite's cases run, FLAG `outer_kvm` holds: there `debug` and `xapic` are
 # excluded and `la57`, `pcid-disabled` and `x2apic` fail, as under Linux
-# 6.12 as the host of the same machine (dev-log/81-kvm/81-25.md).
+# 6.12 as the host of the same machine (dev-log/81-kvm/81-25.md). Under
+# another hypervisor, as under the Mac's TCG, `access` is excluded and
+# `debug` fails, as under Linux there. A test is expected to fail only where
+# Linux as the host of the same machine fails it, and its row names how.
 #
 # NAME EXPECT LINUX REASON
-access pass pass
+access outer_kvm?pass:hypervisor?excluded:pass pass not run under another hypervisor, as under the Mac's TCG, where every permutation fails with QEMU TCG's error code 8 for 9, the P bit of a reserved-bit fault's left out, under Linux 6.12 as the host too, and neither host ends: Linux's guest stopped after 64 s and 1,600 failures with its output cut in a line, and Rach2 printed 4,710 in 300 s, a byte a serial exit (dev-log/84-locks/84-33.md)
 access-reduced-maxphyaddr skip skip /sys/module/kvm_intel/parameters/allow_smaller_maxphyaddr not equal to Y
 access_fep skip skip Forced emulation prefix (FEP) not available
 asyncpf excluded pass asynchronous page faults, deferred by the owner's decision of 2026-11-10 to a later milestone
 cet skip skip No CET features supported
 cmpxchg8b excluded skip i386: built only for i386, and the staged tests are x86-64's
-debug outer_kvm?excluded:pass fail Linux: unhandled #PF at ffff0ff0 and 404fb8; not run inside a machine of KVM, where Linux 6.12 as the host did not finish it in 900 s, after its MOVSS-blocking single step (dev-log/81-kvm/81-25.md)
+debug outer_kvm?excluded:hypervisor?fail:pass fail Linux: unhandled #PF at ffff0ff0 and 404fb8; not run inside a machine of KVM, where Linux 6.12 as the host did not finish it in 900 s, after its MOVSS-blocking single step (dev-log/81-kvm/81-25.md); under another hypervisor, as under the Mac's TCG, fails MOV SS + watchpoint + ICEBP, 24 of 25 passing, as under Linux 6.12 as the host there
 emulator pass pass
 ept excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 ept-mbec excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX

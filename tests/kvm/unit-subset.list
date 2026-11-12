@@ -11,7 +11,7 @@
 # two differ or Linux fails.
 #
 # NAME EXPECT LINUX REASON
-access pass pass
+access outer_kvm?pass:hypervisor?excluded:pass pass not run under another hypervisor, as under the Mac's TCG, where every permutation fails with QEMU TCG's error code 8 for 9, the P bit of a reserved-bit fault's left out, under Linux 6.12 as the host too, and neither host ends: Linux's guest stopped after 64 s and 1,600 failures with its output cut in a line, and Rach2 printed 4,710 in 300 s, a byte a serial exit (dev-log/84-locks/84-33.md)
 access-reduced-maxphyaddr skip skip /sys/module/kvm_intel/parameters/allow_smaller_maxphyaddr not equal to Y
 access_fep skip skip Forced emulation prefix (FEP) not available
 cet skip skip No CET features supported
