@@ -230,6 +230,9 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
     case KVM_CAP_XSAVE:
     case KVM_CAP_XCRS:
         return kvm_xcr0_supported() != 0;
+    case KVM_CAP_XSAVE2:
+        /* Linux's floor, sizeof(struct kvm_xsave); no component needs more. */
+        return (int32_t)KVM_XSAVE_SIZE;
     case KVM_CAP_MCE:
         return KVM_MAX_MCE_BANKS;
     case KVM_CAP_ADJUST_CLOCK:
