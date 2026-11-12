@@ -3,12 +3,15 @@
  * trial boot's command line, acceptance order and the preparation of -p. */
 #define _POSIX_C_SOURCE 200809L
 #include "flow_check.h"
+#include <ctype.h>
 #include <dirent.h>
+#include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -254,12 +257,12 @@ static int refused(int alone)
 }
 /**
  * Answer a script for WSL, whose lines are recorded: claim_state's, whose
- * first line `if [ -e GOT ]; then echo granted` names the file a granted
- * claim touches, prints `granted`, `refused` or, while the claim waits, as
- * the whole host's always does in `wait` mode, nothing; `cat` of a claim's
- * output prints the launcher's refusal when the claim is refused. Any other
- * script, which starts or stops a claim, touches a file or tests that a
- * claim has ended, succeeds.
+ * first line `if [ -e GOT ] && ...; then echo granted` names the file a
+ * granted claim touches, prints `granted`, `refused` or, while the claim
+ * waits, as the whole host's always does in `wait` mode, nothing; `cat` of a
+ * claim attempt's output, OUT/ID.KIND.N, prints the launcher's refusal when
+ * the claim is refused. Any other script, which starts or stops a claim,
+ * touches a file or tests that a claim has ended, succeeds.
  */
 static int wsl_mock(void)
 {
@@ -274,6 +277,11 @@ static int wsl_mock(void)
             snprintf(probe, sizeof(probe), "%s", b);
         }
         n = strcspn(b, "\n");
+        /* The attempt's number, `.N`, ends the output's name. */
+        while (n > 4 && isdigit((unsigned char)b[n - 1]))
+            n--;
+        if (n > 4 && b[n - 1] == '.')
+            n--;
         if (!strncmp(b, "cat ", 4) && n > 5 &&
             ((n > 6 && !strncmp(b + n - 6, ".claim", 6) && refused(0)) ||
              (!strncmp(b + n - 5, ".hold", 5) && refused(1))))
@@ -289,19 +297,20 @@ static int wsl_mock(void)
     return 0;
 }
 /**
- * Answer windows_gate's list of the runs whose parts may still run: while
- * RELEASE_TEST_HOLD begins with `stuck`, as when winclean.sh cannot stop
- * them, each run whose preparation a start of the calls so far began, as
- * `orphan ID`; otherwise none.
+ * Answer windows_gate's list, `winclean.sh -l`, of the runs whose parts may
+ * still run: while RELEASE_TEST_HOLD begins with `stuck`, as when winclean.sh
+ * cannot stop them, each run whose preparation a start of the calls so far
+ * began, as `orphan ID`; otherwise none.
  */
 static int gate_mock(void)
 {
+    static const char start[] = "\nwindows b=D:/o/";
     char *s, *p, *e;
     if (strncmp(ev("RELEASE_TEST_HOLD"), "stuck", 5))
         return 0;
     s = fx_read(ev("RELEASE_TEST_CALLS"));
-    for (p = s; p && (p = strstr(p, "\nwindows b=D:/o/")) != NULL; p = e) {
-        p += 17;
+    for (p = s; p && (p = strstr(p, start)) != NULL; p = e) {
+        p += strlen(start);
         e = strchr(p, '\n');
         if (e && e - p > 8 && !strncmp(e - 8, ".prepare", 8))
             printf("orphan %.*s\n", (int)(e - p - 8), p);
@@ -317,28 +326,28 @@ static int gate_mock(void)
  * preparation and RELEASE_TEST_WINDOWS for the cases, as `poll done` when it
  * has a status line and as `poll ended`, with an empty console, when it has
  * none. winclean.sh fails, as when a part it stops still runs, while
- * RELEASE_TEST_HOLD begins with `stuck`, and windows_gate's list is
- * gate_mock's. Any other script prints
- * nothing.
+ * RELEASE_TEST_HOLD begins with `stuck`; windows_gate's list, winclean.sh
+ * given -l in COMMAND, whose lines are recorded as `list LINE`, is
+ * gate_mock's. Any other script prints nothing.
  */
-static int windows_mock(void)
+static int windows_mock(const char *command)
 {
     char line[20000], b[4096];
     const char *out;
-    int start = 0, poll = 0, prepare = 0, clean = 0, gate = 0;
+    int start = 0, poll = 0, prepare = 0, clean = 0;
+    int list = strstr(command, "bash.exe -l -s -l ") != NULL;
     while (fgets(b, sizeof(b), stdin)) {
-        snprintf(line, sizeof(line), "windows %s", b);
+        snprintf(line, sizeof(line), "%s %s", list ? "list" : "windows", b);
         append(ev("RELEASE_TEST_CALLS"), line);
         start |= !strncmp(b, "END_OF_RUN", 10);
         poll |= !strncmp(b, "echo \"poll $a\"", 14);
         prepare |= strstr(b, ".prepare.launch ") != NULL;
         clean |= !strncmp(b, "# winclean.sh: ", 15);
-        gate |= !strncmp(b, "for f in *.prepare.sh *.cases.sh; do", 36);
     }
+    if (clean && list)
+        return gate_mock();
     if (clean)
         return !strncmp(ev("RELEASE_TEST_HOLD"), "stuck", 5);
-    if (gate)
-        return gate_mock();
     if (start)
         puts("start: status 0");
     if (!poll)
@@ -361,9 +370,14 @@ static int testing_mock(const char *command)
 {
     char line[20000];
     if (strstr(command, "bash.exe -l -s"))
-        return windows_mock();
+        return windows_mock(command);
     if (strstr(command, "wsl.exe -- bash -s"))
         return wsl_mock();
+    /* stop.sh's script for WSL, run here on RELEASE_TEST_PS's processes. */
+    if (strstr(command, "wsl.exe -u root -- sh -s") && *ev("RELEASE_TEST_PS")) {
+        execl("/bin/sh", "sh", "-s", (char *)NULL);
+        return 127;
+    }
     snprintf(line, sizeof(line), "ssh testing %s\n", command);
     append(ev("RELEASE_TEST_CALLS"), line);
     return 0;
@@ -665,11 +679,18 @@ static int tasklist_mock(int argc, char **argv)
     const char *pid = NULL;
     int i;
     call("tasklist ", argc, argv, 1);
-    for (i = 1; i < argc; i++)
+    for (i = 1; i < argc; i++) {
         if (!strncmp(argv[i], "PID eq ", 7))
             pid = argv[i] + 7;
+        /* An etude that taskkill cannot stop, while RELEASE_TEST_ETUDE is
+         * `stuck`. */
+        if (!strncmp(argv[i], "IMAGENAME eq ", 13) && !strcmp(ev("RELEASE_TEST_ETUDE"), "stuck")) {
+            printf("\"%s\",\"5000\",\"Console\",\"1\",\"4,096 K\"\n", argv[i] + 13);
+            return 0;
+        }
+    }
     if (pid) {
-        snprintf(killed, sizeof(killed), "\ntaskkill /F /T /PID %s\n", pid);
+        snprintf(killed, sizeof(killed), "\nkill tree %s\n", pid);
         snprintf(listed, sizeof(listed), " %s ", pid);
     }
     if (pid && strstr(ev("RELEASE_TEST_BASH"), listed) &&
@@ -686,10 +707,11 @@ static int tasklist_mock(int argc, char **argv)
  * Answer winclean.sh's PowerShell look at one process, `Get-Process -Id N`,
  * as Windows would when each number that RELEASE_TEST_BASH lists is the
  * part's bash, which started at BASH_STARTED and runs the part's script:
- * until its kill, or always when RELEASE_TEST_WINCLEAN is `stuck`. The look
+ * until its kill, or always when RELEASE_TEST_WINCLEAN is `stuck`. A number
+ * that RELEASE_TEST_REUSED lists runs another command line. The look
  * compares the start time it is given, or with none the command line, and
- * with `kill` kills a match with taskkill, recorded as `taskkill /F /T /PID
- * N`. Any other command prints nothing.
+ * with `kill` kills a match and its tree through their handles, recorded as
+ * `kill tree N`. Any other command prints nothing.
  */
 static int powershell_mock(int argc, char **argv)
 {
@@ -701,12 +723,14 @@ static int powershell_mock(int argc, char **argv)
         snprintf(started, sizeof(started), "%.*s", (int)(q - p - 5), p + 5);
     if (!*pid)
         return 0;
-    snprintf(killed, sizeof(killed), "\ntaskkill /F /T /PID %s\n", pid);
+    snprintf(killed, sizeof(killed), "\nkill tree %s\n", pid);
     snprintf(listed, sizeof(listed), " %s ", pid);
     if (!strstr(ev("RELEASE_TEST_BASH"), listed) ||
         (strcmp(ev("RELEASE_TEST_WINCLEAN"), "stuck") && fx_has(ev("RELEASE_TEST_CALLS"), killed)))
         puts("gone");
     else if (*started && strcmp(started, BASH_STARTED))
+        puts("gone");
+    else if (!*started && strstr(ev("RELEASE_TEST_REUSED"), listed))
         puts("gone");
     else if (!strstr(c, "if ('kill' -ne 'kill')"))
         puts("runs");
@@ -714,6 +738,43 @@ static int powershell_mock(int argc, char **argv)
         append(ev("RELEASE_TEST_CALLS"), killed + 1);
         puts("killed");
     }
+    return 0;
+}
+static unsigned count(const char *path, const char *pattern);
+/**
+ * Answer ps: WSL's `ps -eo sid=,args=` and `ps -eo pid=,sid=,user=,args=`
+ * of stop.sh print RELEASE_TEST_PS_SID and RELEASE_TEST_PS while
+ * RELEASE_TEST_PS is set; any other ps is the system's.
+ */
+static int ps_mock(int argc, char **argv)
+{
+    if (*ev("RELEASE_TEST_PS") && argc == 3 && !strcmp(argv[1], "-eo")) {
+        fputs(!strcmp(argv[2], "sid=,args=") ? ev("RELEASE_TEST_PS_SID") : ev("RELEASE_TEST_PS"),
+              stdout);
+        return 0;
+    }
+    argv[0] = "ps";
+    execv("/bin/ps", argv);
+    execv("/usr/bin/ps", argv);
+    return 127;
+}
+/**
+ * Answer sleep at once, recording it: the release's wait of 30 seconds ends
+ * the release under RELEASE_TEST_HOLD `wait`, a wait of 60 stops it as
+ * stop_release does, and winclean.sh's sixth wait of 5 before a removal's
+ * last try gives RELEASE_TEST_UNLOCK back its write permission.
+ */
+static int sleep_mock(int argc, char **argv)
+{
+    call("sleep ", argc, argv, 1);
+    if (argc > 1 && !strcmp(argv[1], "30") && !strcmp(ev("RELEASE_TEST_HOLD"), "wait") &&
+        fx_has(ev("RELEASE_TEST_CALLS"), "etude-launch alone "))
+        kill(getppid(), SIGTERM);
+    if (argc > 1 && !strcmp(argv[1], "60"))
+        stop_release();
+    if (argc > 1 && !strcmp(argv[1], "5") && *ev("RELEASE_TEST_UNLOCK") &&
+        count(ev("RELEASE_TEST_CALLS"), "^sleep 5$") == 6)
+        chmod(ev("RELEASE_TEST_UNLOCK"), 0700);
     return 0;
 }
 int flow_release_mock(int argc, char **argv)
@@ -753,15 +814,10 @@ int flow_release_mock(int argc, char **argv)
         }
         return 1;
     }
-    if (!strcmp(name, "sleep")) {
-        call("sleep ", argc, argv, 1);
-        if (argc > 1 && !strcmp(argv[1], "30") && !strcmp(ev("RELEASE_TEST_HOLD"), "wait") &&
-            fx_has(ev("RELEASE_TEST_CALLS"), "etude-launch alone "))
-            kill(getppid(), SIGTERM);
-        if (argc > 1 && !strcmp(argv[1], "60"))
-            stop_release();
-        return 0;
-    }
+    if (!strcmp(name, "sleep"))
+        return sleep_mock(argc, argv);
+    if (!strcmp(name, "ps"))
+        return ps_mock(argc, argv);
     if (!strcmp(name, "tasklist"))
         return tasklist_mock(argc, argv);
     if (!strcmp(name, "powershell.exe"))
@@ -791,7 +847,8 @@ static int setup(struct release *r, struct fixture *f)
     char path[4096];
     unsigned i;
     const char *mock[] = {"sh",    "gh",  "ssh",      "git",      "make",
-                          "sleep", "scp", "tasklist", "taskkill", "powershell.exe"};
+                          "sleep", "scp", "tasklist", "taskkill", "powershell.exe",
+                          "ps"};
     memset(r, 0, sizeof(*r));
     r->f = f;
     snprintf(r->tree, sizeof(r->tree), "%s/tree", f->work);
@@ -1663,7 +1720,8 @@ static int windows_prepared(struct release *r)
                   "\nwsl JOBS=30 /usr/local/libexec/rach2/etude-launch "
                   "build env sh -c 'touch " WINDOWS_HELD,
                   "\nwindows cd D:/w || ") &&
-           called(r, "^wsl cd /tmp && setsid nohup sh " WINDOWS_HELD "[0-9a-f-]+\\.claim\\.sh ") &&
+           called(r,
+                  "^wsl cd /tmp && setsid nohup sh " WINDOWS_HELD "[0-9a-f-]+\\.claim\\.1\\.sh ") &&
            called(r, "^wsl +while \\[ ! -e " WINDOWS_HELD
                      "[0-9a-f-]+\\.prepared ] && find " WINDOWS_HELD
                      "[0-9a-f-]+\\.alive -mmin -10 ") &&
@@ -1685,7 +1743,8 @@ static int windows_prepared(struct release *r)
 static int windows_collected(struct release *r)
 {
     return before(r, ".prepared\n", "\nwsl /usr/local/libexec/rach2/etude-launch alone sh -c ") &&
-           called(r, "^wsl cd /tmp && setsid nohup sh " WINDOWS_HELD "[0-9a-f-]+\\.hold\\.sh ") &&
+           called(r,
+                  "^wsl cd /tmp && setsid nohup sh " WINDOWS_HELD "[0-9a-f-]+\\.hold\\.1\\.sh ") &&
            called(r, "^wsl +while \\[ ! -e " WINDOWS_HELD "[0-9a-f-]+\\.end ] && find " WINDOWS_HELD
                      "[0-9a-f-]+\\.alive -mmin -10 ") &&
            before(r, "\nwsl /usr/local/libexec/rach2/etude-launch alone sh -c ",
@@ -1813,7 +1872,8 @@ static int windows_hold_rows(struct release *r)
                f->status == 1 &&
                    fx_has(record(r), "\nfailed windows: WSL's admission did not give the "
                                      "preparation's claim: etude-launch: result: refused: ") &&
-                   !called(r, "^windows ") && !called(r, "etude-launch alone"),
+                   called(r, "^list # winclean.sh: ") && !called(r, "^windows b=") &&
+                   !called(r, "etude-launch alone"),
                "a preparation claim that WSL refuses ends the release before Windows starts") &&
          ok;
     run(r, &(struct release_row){
@@ -1885,11 +1945,17 @@ static int windows_stop_rows(struct release *r)
 }
 #define WINCLEAN_ID  "milestone7-111111111111-windows-20261010-ab12"
 #define WINCLEAN_OUT "windows/out/" WINCLEAN_ID
+/** Set while winclean() is to give the preparation a stopped file. */
+static int winclean_stopped;
 /**
  * Run winclean.sh on the run WINCLEAN_ID, with OUT and TREE under the work
  * directory, as RELEASE_TEST_WINCLEAN says, with the preparation's launch
  * record LAUNCH, PID file PID and status file RC, each missing when NULL,
- * and output OUT. Each claim's PID file names a number of Windows' bash too.
+ * and output OUT, and with the preparation's stopped file while
+ * winclean_stopped is set. Each
+ * claim's PID file names a number of Windows' bash too. MSYS2's /proc is
+ * the work directory's `proc`, which the rows of G5 fill; the run's scratch
+ * cannot be removed while RELEASE_TEST_UNLOCK, its `tmp`, keeps mode 0500.
  */
 static void winclean(struct release *r, const char *how, const char *launch, const char *pid,
                      const char *rc, const char *out)
@@ -1902,23 +1968,29 @@ static void winclean(struct release *r, const char *how, const char *launch, con
     a[4] = WINCLEAN_ID;
     fx_remove(flow_path(f, "windows"));
     flow_put(f, "calls", "");
-    flow_put(f, WINCLEAN_OUT ".claim.pid", "4001\n");
-    flow_put(f, WINCLEAN_OUT ".hold.pid", "4002\n");
+    flow_put(f, WINCLEAN_OUT ".claim.1.pid", "4001\n");
+    flow_put(f, WINCLEAN_OUT ".hold.1.pid", "4002\n");
     if (launch)
         flow_put(f, WINCLEAN_OUT ".prepare.launch", launch);
     if (pid)
         flow_put(f, WINCLEAN_OUT ".prepare.pid", pid);
     if (rc)
         flow_put(f, WINCLEAN_OUT ".prepare.rc", rc);
+    if (winclean_stopped)
+        flow_put(f, WINCLEAN_OUT ".prepare.stopped", "");
     flow_put(f, WINCLEAN_OUT ".prepare.out", out);
     flow_put(f, "windows/tree/build/tmp/" WINCLEAN_ID "/tmp/scratch", "");
+    if (*ev("RELEASE_TEST_UNLOCK"))
+        chmod(ev("RELEASE_TEST_UNLOCK"), 0500);
     fx_env("RELEASE_TEST_CALLS", flow_path(f, "calls"));
     fx_env("RELEASE_TEST_HOLD", "");
     fx_env("RELEASE_TEST_BASH", " 4001 4002 4003 ");
     fx_env("RELEASE_TEST_WINCLEAN", how);
+    fx_env("WINCLEAN_PROC", flow_path(f, "proc"));
     fx_run(f, a, f->work, NULL, NULL);
     fx_env("RELEASE_TEST_BASH", NULL);
     fx_env("RELEASE_TEST_WINCLEAN", NULL);
+    fx_env("WINCLEAN_PROC", NULL);
 }
 /** Succeed when winclean.sh removed the run's scratch and exited 0. */
 static int winclean_removed(struct release *r)
@@ -1936,45 +2008,179 @@ static int winclean_kept(struct release *r, const char *why)
            strstr(f->err, "winclean: " WINCLEAN_ID " still runs; ");
 }
 /**
- * winclean.sh stops a run's preparation, the bash of the number and start
- * time that its start recorded, and takes neither claim's PID file in the
- * same directory, whose numbers are WSL's, for a Windows process, though
- * Windows has a bash.exe of each number; while the preparation still runs,
- * it fails and keeps the run's scratch. It kills no process that has the
- * preparation's number but another start time, fails while a start has not
- * said what it created, and marks each part cancelled before it looks, so
- * that a start that has not begun starts nothing. A part has ended only once
- * its status file exists, whatever its output says, and a bash whose start
- * time no file gives is known by its command line.
+ * Start a process in a process group of its own that waits until it is
+ * killed, and return its number, which is its group's, or -1. It is a child
+ * of a child that has ended, so that init reaps it once it is killed and
+ * `kill -0` then fails.
+ */
+static pid_t grouped(void)
+{
+    int fd[2];
+    pid_t a, b = -1;
+    if (pipe(fd))
+        return -1;
+    a = fork();
+    if (a == 0) {
+        close(fd[0]);
+        b = fork();
+        if (b == 0) {
+            close(fd[1]);
+            setpgid(0, 0);
+            for (;;)
+                pause();
+        }
+        if (b > 0)
+            setpgid(b, b);
+        _exit(write(fd[1], &b, sizeof(b)) == (ssize_t)sizeof(b) ? 0 : 1);
+    }
+    close(fd[1]);
+    if (a > 0) {
+        if (read(fd[0], &b, sizeof(b)) != (ssize_t)sizeof(b))
+            b = -1;
+        waitpid(a, NULL, 0);
+    }
+    close(fd[0]);
+    return b;
+}
+/** Succeed once process PID has ended and been reaped, within three seconds. */
+static int ended_process(pid_t pid)
+{
+    struct timespec t = {0, 10000000};
+    int i;
+    for (i = 0; i < 300; i++) {
+        if (kill(pid, 0) && errno == ESRCH)
+            return 1;
+        /* interval: poll for the process's end every 10 ms */
+        nanosleep(&t, NULL);
+    }
+    return 0;
+}
+/** Put in the rows' /proc a process N of MSYS2 group GROUP, with ENVIRON. */
+static void proc_put(struct release *r, pid_t n, pid_t group, const char *environ, size_t size)
+{
+    char path[200], text[40];
+    snprintf(path, sizeof(path), "proc/%ld/pgid", (long)n);
+    snprintf(text, sizeof(text), "%ld\n", (long)group);
+    flow_put(r->f, path, text);
+    snprintf(path, sizeof(path), "proc/%ld/environ", (long)n);
+    fx_write(flow_path(r->f, path), environ, size, 0600);
+}
+static int winclean_list_rows(struct release *r);
+static int winclean_group_rows(struct release *r);
+static int winclean_state_rows(struct release *r);
+static int winclean_name_rows(struct release *r);
+/**
+ * winclean.sh's guards, G1 to G6 and G16 of
+ * dev-log/84-locks/84-111-lifecycle.md. It stops a run's preparation, the
+ * bash of the number and start time that its start recorded, and takes
+ * neither claim's PID file in the same directory, whose numbers are WSL's,
+ * for a Windows process, though Windows has a bash.exe of each number; while
+ * the preparation still runs, it fails and keeps the run's scratch.
  */
 static int winclean_rows(struct release *r)
 {
     struct fixture *f = r->f;
     int ok;
+    fx_remove(flow_path(f, "proc"));
+    fx_mkdir(flow_path(f, "proc"));
     winclean(r, "", "4003 " BASH_STARTED "\n", "4003\n", NULL, "building\n");
     ok = check(r,
-               winclean_removed(r) && called(r, "^taskkill /F /T /PID 4003$") &&
-                   !called(r, "^taskkill .*/PID 400[12]$"),
+               winclean_removed(r) && called(r, "^kill tree 4003$") &&
+                   !called(r, "^kill tree 400[12]$") &&
+                   fx_exists(flow_path(f, WINCLEAN_OUT ".prepare.stopped")),
                "winclean.sh stops the preparation and leaves the numbers of WSL's claims alone");
     winclean(r, "stuck", "4003 " BASH_STARTED "\n", "4003\n", NULL, "building\n");
     ok = check(r,
                winclean_kept(r, "winclean: the prepare of " WINCLEAN_ID
                                 ", bash 4003, may still run") &&
-                   called(r, "^taskkill /F /T /PID 4003$") &&
-                   !called(r, "^taskkill .*/PID 400[12]$"),
+                   called(r, "^kill tree 4003$") && !called(r, "^kill tree 400[12]$") &&
+                   !fx_exists(flow_path(f, WINCLEAN_OUT ".prepare.stopped")),
                "winclean.sh fails and keeps the scratch of a preparation that still runs") &&
          ok;
-    winclean(r, "", "4003 133600000000000000\n", NULL, NULL, "building\n");
-    ok = check(r, winclean_removed(r) && !called(r, "^taskkill .*/PID 4003$"),
-               "winclean.sh kills no bash that took the number of a preparation that ended") &&
+    ok = winclean_group_rows(r) && ok;
+    ok = winclean_state_rows(r) && ok;
+    ok = winclean_name_rows(r) && ok;
+    return winclean_list_rows(r) && ok;
+}
+/**
+ * winclean.sh kills no process that has the preparation's number but
+ * another start time or command line, and signals an MSYS2 group only while
+ * its leader is the part's bash; once the leader is gone, it signals only
+ * the members that carry the part's mark (F7, G1, G2, G5).
+ */
+static int winclean_group_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    char pid[100], path[100];
+    const char mark[] = "PATH=/usr/bin\0RACH2_PART=" WINCLEAN_ID ".prepare\0";
+    const char other[] = "PATH=/usr/bin\0RACH2_PART=" WINCLEAN_ID ".cases-not\0";
+    pid_t g, m;
+    int ok;
+    /* F7: a stale launch record and PID file, whose number Windows gave to a
+     * bash of another command line, and whose group the fixture holds. */
+    g = grouped();
+    snprintf(pid, sizeof(pid), "4003 %ld\n", (long)g);
+    fx_env("RELEASE_TEST_REUSED", " 4003 ");
+    winclean(r, "", "4003 133600000000000000\n", pid, NULL, "building\n");
+    fx_env("RELEASE_TEST_REUSED", NULL);
+    ok = check(r,
+               g > 0 && winclean_removed(r) && !called(r, "^kill tree 4003$") &&
+                   !called(r, "^taskkill ") && kill(g, 0) == 0,
+               "winclean.sh kills neither a bash that took the number of a preparation that "
+               "ended nor the group its stale PID file names");
+    if (g > 0)
+        kill(g, SIGKILL);
+    /* G5: the group of a leader that is the part's bash. */
+    g = grouped();
+    snprintf(pid, sizeof(pid), "4003 %ld\n", (long)g);
+    snprintf(path, sizeof(path), "proc/%ld/winpid", (long)g);
+    flow_put(f, path, "4003\n");
+    winclean(r, "", "4003 " BASH_STARTED "\n", pid, NULL, "building\n");
+    ok = check(r, g > 0 && winclean_removed(r) && called(r, "^kill tree 4003$") && ended_process(g),
+               "winclean.sh kills the MSYS2 group whose leader is the preparation's bash") &&
          ok;
+    if (g > 0)
+        kill(g, SIGKILL);
+    fx_remove(flow_path(f, "proc"));
+    fx_mkdir(flow_path(f, "proc"));
+    /* G5: once the leader is gone, only the group's processes that carry the
+     * part's mark. */
+    g = grouped();
+    m = grouped();
+    snprintf(pid, sizeof(pid), "4005 %ld\n", (long)g);
+    proc_put(r, g, g, mark, sizeof(mark) - 1);
+    proc_put(r, m, g, other, sizeof(other) - 1);
+    winclean(r, "", NULL, pid, NULL, "building\n");
+    ok = check(r, g > 0 && m > 0 && ended_process(g) && kill(m, 0) == 0,
+               "winclean.sh kills, of a group whose leader is gone, only the processes that "
+               "carry the part's mark") &&
+         ok;
+    if (g > 0)
+        kill(g, SIGKILL);
+    if (m > 0)
+        kill(m, SIGKILL);
+    fx_remove(flow_path(f, "proc"));
+    fx_mkdir(flow_path(f, "proc"));
+    return ok;
+}
+/**
+ * winclean.sh stops at once a part whose start has not said what it created
+ * and whose bash has written no PID file, since it does no work. It marks
+ * each part cancelled before it looks, and leaves a stopped part alone. A
+ * part has ended only once its status or stopped file exists, whatever its
+ * output says (G3, G6).
+ */
+static int winclean_state_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    int ok;
     winclean(r, "", "", NULL, NULL, "building\n");
     ok = check(r,
-               winclean_kept(r, "winclean: the prepare of " WINCLEAN_ID
-                                ", bash unknown, may still run") &&
-                   fx_exists(flow_path(f, WINCLEAN_OUT ".prepare.cancel")),
-               "winclean.sh fails while a preparation's start has not said what it created") &&
-         ok;
+               winclean_removed(r) && fx_exists(flow_path(f, WINCLEAN_OUT ".prepare.cancel")) &&
+                   fx_exists(flow_path(f, WINCLEAN_OUT ".prepare.stopped")) &&
+                   !called(r, "^kill tree "),
+               "winclean.sh stops at once a preparation whose start has not said what it "
+               "created and whose bash wrote no PID file");
     winclean(r, "", NULL, NULL, NULL, "building\n");
     ok = check(r,
                winclean_removed(r) && fx_exists(flow_path(f, WINCLEAN_OUT ".prepare.cancel")) &&
@@ -1984,19 +2190,205 @@ static int winclean_rows(struct release *r)
          ok;
     winclean(r, "", "4003 " BASH_STARTED "\n", "4003\n", NULL, "status 0\n");
     ok = check(r,
-               winclean_removed(r) && called(r, "^taskkill /F /T /PID 4003$") &&
+               winclean_removed(r) && called(r, "^kill tree 4003$") &&
                    fx_exists(flow_path(f, WINCLEAN_OUT ".prepare.stopped")),
                "winclean.sh stops a preparation whose output has a line `status ` but whose "
                "bash wrote no status file, and marks it stopped") &&
          ok;
     winclean(r, "", "4003 " BASH_STARTED "\n", "4003\n", "0\n", "status 0\n");
-    ok = check(r, winclean_removed(r) && !called(r, "^taskkill .*/PID 4003$"),
+    ok = check(r, winclean_removed(r) && !called(r, "^kill tree 4003$"),
                "winclean.sh leaves alone a preparation whose bash wrote its status file") &&
          ok;
+    winclean_stopped = 1;
+    winclean(r, "", "4003 " BASH_STARTED "\n", "4003\n", NULL, "building\n");
+    winclean_stopped = 0;
+    return check(r, winclean_removed(r) && !called(r, "^kill tree "),
+                 "winclean.sh leaves alone a preparation that an earlier cleanup stopped") &&
+           ok;
+}
+/**
+ * winclean.sh knows by its command line a bash whose start time no file
+ * gives (G2), writes a part's stopped file only once the run's etude is gone
+ * too (G6), and judges a removal by its result (G16).
+ */
+static int winclean_name_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    int ok;
     winclean(r, "", NULL, "4003\n", NULL, "building\n");
-    ok = check(r, winclean_removed(r) && called(r, "^taskkill /F /T /PID 4003$"),
+    ok = check(r, winclean_removed(r) && called(r, "^kill tree 4003$"),
                "winclean.sh stops by its command line a bash whose start recorded no start "
-               "time") &&
+               "time");
+    winclean(r, "", "4003 0\n", "4003\n", NULL, "building\n");
+    ok = check(r, winclean_removed(r) && called(r, "^kill tree 4003$"),
+               "winclean.sh takes a start time of 0 as none and stops the bash by its command "
+               "line") &&
+         ok;
+    fx_env("RELEASE_TEST_ETUDE", "stuck");
+    winclean(r, "", "4003 " BASH_STARTED "\n", "4003\n", NULL, "building\n");
+    fx_env("RELEASE_TEST_ETUDE", NULL);
+    ok = check(r,
+               winclean_kept(r, "winclean: etude-" WINCLEAN_ID ".exe still runs") &&
+                   called(r, "^kill tree 4003$") &&
+                   !fx_exists(flow_path(f, WINCLEAN_OUT ".prepare.stopped")),
+               "winclean.sh marks no part stopped while the run's etude still runs") &&
+         ok;
+    fx_env("RELEASE_TEST_UNLOCK", flow_path(f, "windows/tree/build/tmp/" WINCLEAN_ID "/tmp"));
+    winclean(r, "", NULL, NULL, NULL, "building\n");
+    fx_env("RELEASE_TEST_UNLOCK", NULL);
+    /* Mode 0500 keeps no file from root. */
+    ok = check(r,
+               winclean_removed(r) &&
+                   (count(flow_path(f, "calls"), "^sleep 5$") == 6 || getuid() == 0),
+               "winclean.sh succeeds when the removal of a run's scratch succeeds on its last "
+               "try") &&
+         ok;
+    return ok;
+}
+/**
+ * winclean.sh -l lists each run of OUT whose part has a script or launch
+ * file and has not ended, and each run given that has a part with no end, as
+ * a start that has made no file yet leaves it (G8); it fails when OUT cannot
+ * be read, which counts as "cannot say" (H4).
+ */
+static int winclean_list_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    const char *a[6] = {"/bin/sh"};
+    char command[8000];
+    int ok;
+    a[1] = flow_source(f, "tools/flow/winclean.sh");
+    a[2] = "-l";
+    a[3] = flow_path(f, "windows/tree");
+    a[4] = flow_path(f, "windows/out");
+    fx_remove(flow_path(f, "windows"));
+    flow_put(f, "windows/out/milestone7-a.prepare.sh", "");
+    flow_put(f, "windows/out/milestone7-b.cases.launch", "");
+    flow_put(f, "windows/out/milestone7-b.cases.rc", "0\n");
+    flow_put(f, "windows/out/milestone7-d.prepare.rc", "0\n");
+    flow_put(f, "windows/out/milestone7-d.cases.stopped", "");
+    snprintf(command, sizeof(command), "sh '%s' -l '%s' '%s' milestone7-c milestone7-d",
+             flow_source(f, "tools/flow/winclean.sh"), flow_path(f, "windows/tree"),
+             flow_path(f, "windows/out"));
+    fx_sh(f, command);
+    ok = check(r,
+               f->status == 0 && f->out &&
+                   !strcmp(f->out, "orphan milestone7-a\norphan milestone7-c\n"),
+               "winclean.sh -l lists the runs of OUT and the runs given that may still run");
+    fx_remove(flow_path(f, "windows"));
+    a[1] = flow_source(f, "tools/flow/winclean.sh");
+    a[3] = flow_path(f, "windows/tree");
+    a[4] = flow_path(f, "windows/out");
+    fx_run(f, a, f->work, NULL, NULL);
+    ok = check(r, f->status == 1, "winclean.sh -l fails when it cannot read OUT") && ok;
+    return ok;
+}
+/** Count the times TEXT holds WORD. */
+static unsigned count_text(const char *text, const char *word)
+{
+    unsigned n = 0;
+    while ((text = strstr(text, word)) != NULL) {
+        n++;
+        text += strlen(word);
+    }
+    return n;
+}
+/**
+ * Run stop.sh -n, which changes nothing, from the work tree, whose
+ * build/flow/release holds the release's records.
+ */
+static void stop_list(struct release *r)
+{
+    struct fixture *f = r->f;
+    const char *a[] = {"/bin/sh", NULL, "-n", NULL};
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/tools/flow/stop.sh", r->tree);
+    a[1] = path;
+    flow_put(f, "calls", "");
+    fx_env("RELEASE_TEST_CALLS", flow_path(f, "calls"));
+    fx_run(f, a, f->work, NULL, NULL);
+}
+/**
+ * stop.sh's selection, G12 and G15 of dev-log/84-locks/84-111-lifecycle.md:
+ * a command line that holds tools/flow/release.sh is never one of the
+ * processes it stops, and is a release only while STATE/pid names it with
+ * its start (F2); and in WSL the sessions of several claims are each spared
+ * (F3), as is a command line that holds release.sh.
+ */
+static int stop_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    char path[4096], text[400], command[8000];
+    int fd[2], ok;
+    pid_t c;
+    const char *files[] = {"stop.sh", "lib.sh", "machines"};
+    unsigned i;
+    for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
+        snprintf(path, sizeof(path), "%s/tools/flow/%s", r->tree, files[i]);
+        snprintf(text, sizeof(text), "tools/flow/%s", files[i]);
+        if (!fx_copy(flow_source(f, text), path))
+            return check(r, 0, "stop.sh's files are copied");
+    }
+    /* stop.sh finds its main working tree by git's common directory, which
+     * the git mock names .git beside it. */
+    if (!fx_mkdir(flow_path(f, "tree/tools/flow/.git")))
+        return check(r, 0, "stop.sh's tree has a .git");
+    if (pipe(fd))
+        return check(r, 0, "a pipe for stop.sh's rows");
+    c = fork();
+    if (c == 0) {
+        const char *env[] = {"PATH=/bin:/usr/bin", NULL};
+        dup2(fd[0], 0);
+        close(fd[0]);
+        close(fd[1]);
+        execle("/bin/sh", "sh", "-c", "while read x; do :; done", "sh",
+               "/p/etude /q/tools/flow/release.sh", (char *)NULL, env);
+        _exit(127);
+    }
+    close(fd[0]);
+    fx_remove(flow_path(f, "tree/tools/flow/build"));
+    stop_list(r);
+    snprintf(text, sizeof(text), "stop: left: mac: %ld ", (long)c);
+    ok = check(r, c > 0 && f->out && !strstr(f->out, text),
+               "stop.sh takes no process for its command line's release.sh");
+    snprintf(command, sizeof(command),
+             "mkdir -p tree/tools/flow/build/flow/release && echo \"%ld $(ps -o lstart= -p %ld | "
+             "awk '{ $1 = $1; print }')\" > tree/tools/flow/build/flow/release/pid",
+             (long)c, (long)c);
+    fx_sh(f, command);
+    stop_list(r);
+    ok = check(r, f->out && count_text(f->out, text) == 1,
+               "stop.sh takes as a release the process that STATE/pid names with its start") &&
+         ok;
+    snprintf(command, sizeof(command),
+             "echo '%ld Thu Jan  1 00:00:00 1970' > tree/tools/flow/build/flow/release/pid",
+             (long)c);
+    fx_sh(f, command);
+    stop_list(r);
+    ok = check(r, f->out && !strstr(f->out, text),
+               "stop.sh takes as no release a number whose start is not the record's") &&
+         ok;
+    close(fd[1]);
+    if (c > 0) {
+        kill(c, SIGKILL);
+        waitpid(c, NULL, 0);
+    }
+    fx_remove(flow_path(f, "tree/tools/flow/build"));
+    fx_env("RELEASE_TEST_PS_SID", "101 sh /mnt/d/rach2/build/release/m7.claim.1.sh\n"
+                                  "202 sh /mnt/d/rach2/build/release/m7.hold.1.sh\n");
+    fx_env("RELEASE_TEST_PS", "111 101 root /usr/local/libexec/rach2/etude launch build env\n"
+                              "222 202 root /usr/local/libexec/rach2/etude launch alone\n"
+                              "333 303 root qemu-system-x86_64 -x\n"
+                              "444 404 root sh /x/tools/flow/release.sh /etude y\n");
+    stop_list(r);
+    fx_env("RELEASE_TEST_PS", NULL);
+    fx_env("RELEASE_TEST_PS_SID", NULL);
+    ok = check(r,
+               f->out && strstr(f->out, "stop: left: wsl: 333 root qemu-system-x86_64 -x\n") &&
+                   !strstr(f->out, "wsl: 111 ") && !strstr(f->out, "wsl: 222 ") &&
+                   !strstr(f->out, "wsl: 444 "),
+               "stop.sh spares in WSL the sessions of two claims and a command line that holds "
+               "release.sh") &&
          ok;
     return ok;
 }
@@ -2009,6 +2401,7 @@ static int windows_rows(struct release *r)
     ok = windows_hold_rows(r) && ok;
     ok = windows_stop_rows(r) && ok;
     ok = winclean_rows(r) && ok;
+    ok = stop_rows(r) && ok;
     snprintf(text, sizeof(text),
              "milestone 7\nsha %s\nbranch %s\nchosen %s\ntouched %s\ndispatched "
              "1760054400\nrun 101 failure\n",
