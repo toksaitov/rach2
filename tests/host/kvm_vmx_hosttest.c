@@ -908,6 +908,14 @@ int kvm_lapic_ack(struct kvm_vcpu *v)
     return -1;
 }
 
+/** vlapic.c's bound of a run by the APIC timer's next expiry: no timer is
+ * armed here, so the run is bounded by `max` alone. */
+uint64_t kvm_lapic_run_bound(struct kvm_vcpu *v, uint64_t max)
+{
+    (void)v;
+    return max;
+}
+
 /* The APIC's register page of the vCPU of a VM with the local APIC in the
  * kernel, vlapic.c's, for the one such vCPU a row runs at a time: TPR at
  * 0x80, which the guest's MOV to CR8 writes without an exit under the TPR
