@@ -1071,6 +1071,53 @@ static void check_detached(int mode)
 }
 #endif
 
+#if defined(__linux__) || defined(__rach2__)
+/** The private fixture after a forced stop: a case that ignores SIGTERM is
+ * cancelled and killed after its grace period, and the directory `private`
+ * of its workspace goes with all it holds, while the workspace stays. */
+static void check_private(void)
+{
+    static const char token[] = "00000000000000e3";
+    struct ending e;
+    struct got g;
+    struct stat st;
+    char path[PATH_CAP + 64];
+    char inv[65];
+    char c[24];
+    char c2[24];
+    int open_end;
+    int fd;
+
+    start_guest("--stdio", (char *)NULL);
+    hello(ETUDE_FRAME_STDIO_MAX);
+    put_case_with("keeper", ignore, token,
+                  "[{\"fixture\": \"workspace\", \"given\": []}, "
+                  "{\"fixture\": \"private\", \"given\": []}]",
+                  NULL, inv);
+    open_end = watch("marks.open");
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), token, inv, (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_STARTED) == 0, "the attempt with a private directory starts");
+    CHECK(wait_ready() == 0, "the attempt says it is ready");
+    snprintf(path, sizeof(path), "%s/state/a/%s/work/private/copy", work, token);
+    CHECK(mkdir(path, 0700) == 0, "the private directory takes a copy");
+    snprintf(path, sizeof(path), "%s/state/a/%s/work/private/copy/file", work, token);
+    fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0400);
+    CHECK(fd >= 0 && write(fd, "x", 1) == 1 && close(fd) == 0, "and a read-only file in it");
+    send_cmd(ETUDE_CMD_CANCEL, new_cmd(c2), token, (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_STATE) == 0 && strcmp(g.field[2], "running") == 0,
+          "cancel finds the attempt running");
+    CHECK(collect(&e, c, token) == 0 && strcmp(e.kind, "stopped") == 0 &&
+              strcmp(e.cleaned, "confirmed") == 0,
+          "the attempt is stopped through SIGKILL and its cleanup confirmed");
+    CHECK(all_gone(open_end), "the attempt's processes are gone");
+    snprintf(path, sizeof(path), "%s/state/a/%s/work/private", work, token);
+    CHECK(lstat(path, &st) < 0 && errno == ENOENT, "the private directory is removed");
+    snprintf(path, sizeof(path), "%s/state/a/%s/work", work, token);
+    CHECK(stat(path, &st) == 0 && S_ISDIR(st.st_mode), "the rest of the workspace is kept");
+    bye(0);
+}
+#endif
+
 /** A killed etude-guest whose attempt's first process ends after it, and
  * leaves a process in the attempt's group: the next etude-guest kills what
  * is left of the group and confirms the cleanup. A FIFO releases the first
@@ -1762,15 +1809,56 @@ static void check_serial(void)
 
 #include "compat/guest_backpressure.c"
 
+/** Run the checks that `mode` names: "all", "detached", "backpressure" or
+ * "private"; "detached" and "private" run on Linux and Rach2 alone. */
+static void run_checks(const char *mode)
+{
+    int all = !strcmp(mode, "all");
+
+    if (!strcmp(mode, "backpressure"))
+        check_backpressure();
+    if (all) {
+        check_pass_fail_repeat();
+        check_sizes();
+        check_interruptions();
+        check_orphan();
+    }
+#if defined(__linux__) || defined(__rach2__)
+    if (all || !strcmp(mode, "detached")) {
+        check_detached(0);
+        check_detached(1);
+        check_detached(2);
+    }
+    if (all || !strcmp(mode, "private"))
+        check_private();
+#endif
+    if (all) {
+        check_orphan_group();
+        check_group_records();
+        check_unfinished_end();
+        check_record_first();
+        check_started_first();
+        check_state_refused();
+        check_stdio_damage();
+        check_fixtures();
+        check_serial();
+        check_backpressure();
+    }
+}
+
 int main(int argc, char **argv)
 {
     char *tmp = getenv("TMPDIR");
-    int detached = argc == 2 && !strcmp(argv[1], "--detached-only");
-    int pressure = argc == 2 && !strcmp(argv[1], "--backpressure-only");
-    if (argc != 1 && !detached && !pressure)
+    const char *mode = argc == 1                                 ? "all"
+                       : argc != 2                               ? NULL
+                       : !strcmp(argv[1], "--detached-only")     ? "detached"
+                       : !strcmp(argv[1], "--backpressure-only") ? "backpressure"
+                       : !strcmp(argv[1], "--private-only")      ? "private"
+                                                                 : NULL;
+    if (!mode)
         return 2;
 #if !defined(__linux__) && !defined(__rach2__)
-    if (detached)
+    if (!strcmp(mode, "detached") || !strcmp(mode, "private"))
         return 2;
 #endif
 
@@ -1795,39 +1883,11 @@ int main(int argc, char **argv)
         perror(work);
         return 2;
     }
-    if (pressure)
-        check_backpressure();
-    if (!detached && !pressure) {
-        check_pass_fail_repeat();
-        check_sizes();
-        check_interruptions();
-        check_orphan();
-    }
-#if defined(__linux__) || defined(__rach2__)
-    if (!pressure) {
-        check_detached(0);
-        check_detached(1);
-        check_detached(2);
-    }
-#endif
-    if (!detached && !pressure) {
-        check_orphan_group();
-        check_group_records();
-        check_unfinished_end();
-        check_record_first();
-        check_started_first();
-        check_state_refused();
-        check_stdio_damage();
-        check_fixtures();
-        check_serial();
-        check_backpressure();
-    }
+    run_checks(mode);
     if (failures) {
         fprintf(stderr, "etude_guest_hosttest: %d checks failed\n", failures);
         return 1;
     }
-    printf("etude_guest_hosttest: %s checks passed\n", detached   ? "detached"
-                                                       : pressure ? "backpressure"
-                                                                  : "all");
+    printf("etude_guest_hosttest: %s checks passed\n", mode);
     return 0;
 }

@@ -25,8 +25,10 @@
 #include <unistd.h>
 
 /*
- * The fixtures volume, root, tmpfs, mountns, ipcns, utsns and log need the
- * kernel's loop devices, mounts, namespaces or log. The code that makes them
+ * The fixtures volume, root, tmpfs, mountns, ipcns, utsns, log and private
+ * need the kernel's loop devices, mounts, namespaces or log, or its table of
+ * mounts, which keeps the removal of `private` out of a mount left in it.
+ * The code that makes them
  * compiles where FIX_KERNEL is 1: on Linux, and on Rach2, whose cross
  * compiler defines no operating system and whose build of etude-guest
  * defines __rach2__. macOS has none of them, and the host tests compile this
@@ -283,6 +285,7 @@ static int read_flag(struct reading *r, const char *kind)
                 : strcmp(kind, "log") == 0     ? &fx->log
                 : strcmp(kind, "alone") == 0   ? &fx->alone
                 : strcmp(kind, "console") == 0 ? &fx->console
+                : strcmp(kind, "private") == 0 ? &fx->private_dir
                                                : NULL;
 
     if (!flag || r->n != 0)
@@ -304,7 +307,7 @@ static const struct {
 static int kernel_kind(const char *kind)
 {
     static const char *const kinds[] = {"volume", "root",  "tmpfs", "mountns",
-                                        "ipcns",  "utsns", "log"};
+                                        "ipcns",  "utsns", "log",   "private"};
     size_t i;
 
     for (i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
@@ -725,6 +728,108 @@ static int root_place(struct fixtures *fx, const char *dir)
     return make_dir(fx->root_at);
 }
 
+/** Make the directory `private` of the workspace of the attempt in `dir`,
+ * recorded first, so that fixture_settle removes it should etude-guest end
+ * before the case; 0 or -1. */
+static int make_private(const char *dir)
+{
+    char path[FIX_PATH];
+
+    if (fpath(path, "%s/work/private%s", dir, "") < 0 || remember(dir, "private") < 0)
+        return -1;
+    return mkdir(path, 0755);
+}
+
+/**
+ * Whether the machine's table of mounts has a mount at `path`, an absolute
+ * path with no symbolic link and no trailing slash, or below it.
+ *
+ * @return 1 or 0, or -1 when /proc/mounts cannot be read.
+ */
+static int mount_below(const char *path)
+{
+    size_t len = strlen(path);
+    char line[2 * FIX_PATH];
+    char at[FIX_PATH];
+    FILE *f = fopen("/proc/mounts", "re");
+    int found = 0;
+
+    if (!f)
+        return -1;
+    while (!found && fgets(line, sizeof(line), f)) {
+        const char *p = strchr(line, ' ');
+        size_t n = 0;
+
+        /* The table writes a space, a tab, a newline or a backslash of a
+         * name as a backslash and three octal digits. */
+        for (p = p ? p + 1 : ""; *p && *p != ' ' && *p != '\n' && n + 1 < sizeof(at); n++) {
+            if (p[0] == '\\' && p[1] >= '0' && p[1] <= '3' && p[2] >= '0' && p[2] <= '7' &&
+                p[3] >= '0' && p[3] <= '7') {
+                at[n] = (char)((p[1] - '0') * 64 + (p[2] - '0') * 8 + (p[3] - '0'));
+                p += 4;
+            } else
+                at[n] = *p++;
+        }
+        at[n] = '\0';
+        found = strncmp(at, path, len) == 0 && (at[len] == '\0' || at[len] == '/');
+    }
+    fclose(f);
+    return found;
+}
+
+/** Remove the tree at `path`, without following a symbolic link or entering
+ * a directory of a file system other than `dev`'s; 0, or -1 when anything is
+ * left. */
+static int remove_below(const char *path, dev_t dev)
+{
+    char sub[FIX_PATH];
+    struct stat st;
+    struct dirent *e;
+    DIR *d;
+    int rc = 0;
+
+    if (lstat(path, &st) < 0)
+        return errno == ENOENT ? 0 : -1;
+    if (!S_ISDIR(st.st_mode))
+        return unlink(path);
+    if (st.st_dev != dev || !(d = opendir(path)))
+        return -1;
+    while ((e = readdir(d)) != NULL) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
+            continue;
+        if (fpath(sub, "%s/%s", path, e->d_name) < 0 || remove_below(sub, dev) < 0)
+            rc = -1;
+    }
+    closedir(d);
+    return rmdir(path) < 0 ? -1 : rc;
+}
+
+/**
+ * Remove the directory `private` of the workspace of the attempt in `dir`
+ * and all it holds, once the case's processes have ended. A mount at or
+ * below it in the machine's namespace leaves it whole, since the removal
+ * would reach through a bind into the tree bound; a mount of the case's own
+ * namespace has gone with the namespace.
+ *
+ * @return 0, or -1 when it is left in whole or in part.
+ */
+static int remove_private(const char *dir)
+{
+    char path[FIX_PATH];
+    char full[PATH_MAX];
+    struct stat st;
+
+    if (fpath(path, "%s/work/private%s", dir, "") < 0)
+        return -1;
+    if (lstat(path, &st) < 0)
+        return errno == ENOENT ? 0 : -1;
+    if (!S_ISDIR(st.st_mode))
+        return unlink(path);
+    if (!realpath(path, full) || mount_below(full) != 0)
+        return -1;
+    return remove_below(path, st.st_dev);
+}
+
 /** Make the fixtures of `fx` that need the kernel, as fixture_prepare
  * says; 0 or -1. */
 static int kernel_prepare(struct fixtures *fx, const char *dir)
@@ -732,6 +837,8 @@ static int kernel_prepare(struct fixtures *fx, const char *dir)
     int i;
 
     if (fx->log && !(fx->log_before = read_log(&fx->log_before_len)))
+        return -1;
+    if (fx->private_dir && make_private(dir) < 0)
         return -1;
     for (i = 0; i < fx->nvol; i++) {
         char name[16];
@@ -1036,6 +1143,8 @@ static int kernel_cleanup(struct fixtures *fx, const char *dir)
             (fpath(path, "%s/work/%s", dir, vol) < 0 || umount2(path, 0) < 0))
             rc = -1;
     }
+    if (fx->private_dir && remove_private(dir) < 0)
+        rc = -1;
     if (detach_left(dir) < 0)
         rc = -1;
     if (fx->log && keep_log(fx, dir) < 0)
@@ -1052,7 +1161,8 @@ static int kernel_cleanup(struct fixtures *fx, const char *dir)
  * Make the fixtures of the attempt in `dir`, whose workspace has the
  * invocation's files, in etude-guest itself: check that each id is no
  * account's and no process's, and that each port is free; read the
- * kernel's log; attach each volume and the root's image; mount the volumes
+ * kernel's log; make the directory `private` of the workspace; attach each
+ * volume and the root's image; mount the volumes
  * and the tmpfs of a case without a mount namespace of its own; and open the
  * pseudo-terminal. What is made is written to `DIR/fixtures` as it is made.
  *
@@ -1149,9 +1259,10 @@ int fixture_enter(const struct fixtures *fx, const char *work, char *prog, size_
 
 /**
  * Remove the fixtures of the attempt in `dir` once its processes have
- * ended: close the pseudo-terminal, unmount what etude-guest mounted, detach
- * the loop devices on files of the attempt, its program's among them, and
- * keep the kernel's records as `DIR/log`. A mount namespace of the case's
+ * ended: close the pseudo-terminal, unmount what etude-guest mounted, remove
+ * the directory `private` of the workspace with all it holds, detach the
+ * loop devices on files of the attempt, its program's among them, and keep
+ * the kernel's records as `DIR/log`. A mount namespace of the case's
  * own has ended with its last process, and the kernel unmounted its mounts
  * then.
  *
@@ -1174,7 +1285,8 @@ int fixture_cleanup(struct fixtures *fx, const char *dir)
 /**
  * Remove what an attempt whose etude-guest ended before it could left: the
  * mounts the record `DIR/fixtures` names, in the order opposite to their
- * making, then every loop device on a file under `DIR`. A mount is recorded
+ * making, and the directory `private` of the workspace when it names that,
+ * then every loop device on a file under `DIR`. A mount is recorded
  * before it is made, so a name of the record that is not a mount point is
  * passed by. Only the fixtures that need the kernel write the record, so
  * where FIX_KERNEL is 0 there is nothing to remove.
@@ -1203,10 +1315,13 @@ int fixture_settle(const char *dir)
     line[0] = strtok(text, "\n");
     while (n < 63 && line[n])
         line[++n] = strtok(NULL, "\n");
-    while (n-- > 0)
+    while (n-- > 0) {
         if (strncmp(line[n], "mount ", 6) == 0 && umount2(line[n] + 6, 0) < 0 && errno != EINVAL &&
             errno != ENOENT)
             rc = -1;
+        if (strcmp(line[n], "private") == 0 && remove_private(dir) < 0)
+            rc = -1;
+    }
     if (detach_left(dir) < 0)
         rc = -1;
     if (rc == 0)

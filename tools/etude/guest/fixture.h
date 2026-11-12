@@ -39,6 +39,7 @@ struct fixtures {
     long tmpfs_bytes;       /* 0 for none */
     int tmpfs_global;
     int mountns, ipcns, utsns, pty, log, alone, console;
+    int private_dir;                      /* WORK/private, removed once the case's processes end */
     char peer[96];                        /* ADDRESS:PORT, or empty */
     char peer_value[FIX_PEER_VALUES][96]; /* NAME=VALUE arguments of the peer */
     int npeer_values;
