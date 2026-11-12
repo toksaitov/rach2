@@ -3319,6 +3319,52 @@ static int watched_entry(struct vfs_mount *mnt, void *dir, const char *name, str
     return rc;
 }
 
+/**
+ * Whether the entry `name` of `dir` is a file a loop device stands on
+ * (`loop_backs`), other than `keep`, a node the caller looked up already or
+ * NULL. A removal of the name, or a rename over it, would take the file
+ * from under the device, whose file system then writes into a file no name
+ * reaches; so the wrappers refuse it with -EBUSY on every type, under the
+ * locks the caller holds for the change, which an attachment holds too
+ * (`loop_attach`). 0 for no such entry.
+ */
+static int loop_entry(struct vfs_mount *mnt, void *dir, const char *name, const void *keep)
+{
+    void *found;
+    int backs;
+
+    if (!mnt->type->ops->lookup ||
+        mnt->type->ops->lookup(mount_base(mnt), dir, name, &found) != 0) {
+        return 0;
+    }
+    backs = found != keep && loop_backs(mnt, found);
+    node_put(mnt, found);
+    return backs;
+}
+
+/**
+ * Whether a rename of `oldname` in `olddir` to `newname` in `newdir` would
+ * replace a file a loop device stands on (`loop_entry`). A new name that
+ * reaches the file the old one does is not replaced: the rename changes
+ * nothing, as Linux's does for two links of one inode.
+ */
+static int loop_replaced(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
+                         const char *newname)
+{
+    void *moved;
+    int backs;
+
+    if (!loop_entry(mnt, newdir, newname, NULL)) {
+        return 0;
+    }
+    if (mnt->type->ops->lookup(mount_base(mnt), olddir, oldname, &moved) != 0) {
+        return 1;
+    }
+    backs = loop_entry(mnt, newdir, newname, moved);
+    node_put(mnt, moved);
+    return backs;
+}
+
 /** The immutable and append-only flags of `node`, 0 for a type that keeps
  * no inode flags. */
 static uint32_t guard_node(struct vfs_mount *mnt, void *node)
@@ -3500,6 +3546,9 @@ int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
     if (guard_node(mnt, dir) || guard_entry(mnt, dir, name)) {
         return -EPERM; /* may_delete's rule */
     }
+    if (loop_entry(mnt, dir, name, NULL)) {
+        return -EBUSY;
+    }
     watched = inotify_watches && watched_entry(mnt, dir, name, &was) == 0 &&
               watched_node(mnt, dir, &parent) == 0;
     vfs_name_change_begin();
@@ -3599,6 +3648,9 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
     }
     if (rename_guarded(mnt, olddir, oldname, newdir, newname)) {
         return -EPERM;
+    }
+    if (loop_replaced(mnt, olddir, oldname, newdir, newname)) {
+        return -EBUSY;
     }
     watched = inotify_watches && watched_entry(mnt, olddir, oldname, &moved) == 0 &&
               watched_node(mnt, olddir, &from) == 0 && watched_node(mnt, newdir, &to) == 0;
