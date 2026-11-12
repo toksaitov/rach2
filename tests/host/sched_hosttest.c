@@ -78,8 +78,9 @@ static int64_t user_return_ns, idle_start_ns;
 
 /** The modeled time of a change of mode, by the count the rows give its
  * field: 3 the idle wait's start, any other the return to user mode. */
-int64_t timer_cycles_when(uint64_t cycles, int64_t now)
+int64_t timer_cycles_when(uint64_t cycles, uint64_t at, int64_t now)
 {
+    (void)at;
     (void)now;
     return cycles == 3u ? idle_start_ns : user_return_ns;
 }

@@ -109,6 +109,16 @@ uint64_t tick_div64(uint64_t n, uint64_t d, uint64_t *rem)
     return n / d;
 }
 
+/** Tick accounting's held ticks are checked by sched_hosttest; no counter
+ * reading is timed here. */
+int64_t timer_cycles_when(uint64_t cycles, uint64_t at, int64_t now)
+{
+    (void)cycles;
+    (void)at;
+    (void)now;
+    return 0;
+}
+
 /** Timer list membership is checked by process_timer_hosttest. */
 void proc_timer_update(process_t *p)
 {
