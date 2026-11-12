@@ -33,6 +33,15 @@
  * present is brought in with the locks let go, or, when the caller holds a
  * file lock of its own, ends the call short (`user_refault`).
  *
+ * The big lock covers the node table, the batch and the writers' steps
+ * between their sleeps. A reader may run without it: `read`, `readdir`,
+ * `getattr`, `open`, `release`, `hold` and `put` of a node the caller
+ * holds, into kernel buffers (the type sets `reads_unlocked`). Such a
+ * reader holds its node's lock, which every writer of the node's blocks
+ * holds too, takes the big lock while the batch has images (`batch_guard`),
+ * so that it finds them as a reader under it does, and takes it for the
+ * steps that write: an error's mark, a drain, a final put and a reap.
+ *
  * The node lock and `em->meta` count in their holder's `file_locks`
  * (process.h), so that reclaim under either does not enter a file system.
  * The type record sets `file_locked` and leaves `ns_serialised` clear, so
@@ -54,6 +63,7 @@
 #include "../panic.h"
 #include "../proc/process.h"
 #include "../proc/sched.h"
+#include "../proc/smp.h"
 #include "../rtc.h"
 #include "../timer.h"
 #include "bcache.h"
@@ -163,6 +173,7 @@ struct ext2_node {
     uint32_t uid, gid;
     uint32_t nlink;
     uint64_t size;                /* 64 bits for a regular file, 32 for the rest */
+    uint32_t size_seq;            /* odd while `size` changes (`node_size_set`) */
     uint32_t blocks;              /* i_blocks, in 512-byte units */
     uint32_t block[EXT2_NBLOCKS]; /* 12 direct, then single, double and triple indirect */
     struct ext2_time atime, mtime, ctime;
@@ -449,6 +460,40 @@ static uint32_t node_ref(struct ext2_node *n, int delta)
         old = *p;
     } while (arch_atomic_cmpxchg(p, old, old + (unsigned int)delta) != old);
     return old + (unsigned int)delta;
+}
+
+/**
+ * Set the size of `n`, whose lock the caller holds, so that `node_size`
+ * reads it whole without the lock: on i686 the 64-bit store is two, and a
+ * reader between them would see half of each. `size_seq` is odd while the
+ * size changes, as Linux's `i_size_write` keeps a sequence around the size
+ * of a 32-bit kernel (include/linux/fs.h:976-981).
+ */
+static void node_size_set(struct ext2_node *n, uint64_t size)
+{
+    volatile unsigned int *seq = (volatile unsigned int *)&n->size_seq;
+
+    (void)arch_atomic_xchg(seq, *seq + 1u);
+    n->size = size;
+    (void)arch_atomic_xchg(seq, *seq + 1u);
+}
+
+/** The size of `n`, read whole without its lock, as Linux's `i_size_read`
+ * reads it under the sequence (include/linux/fs.h:947-956). */
+static uint64_t node_size(const struct ext2_node *n)
+{
+    const volatile unsigned int *seq = (const volatile unsigned int *)&n->size_seq;
+    unsigned int at;
+    uint64_t size;
+
+    do {
+        while ((at = *seq) & 1u) {
+        }
+        k_barrier();
+        size = *(const volatile uint64_t *)&n->size;
+        k_barrier();
+    } while (*seq != at);
+    return size;
 }
 
 /** A new node from the heap, zeroed, N_LOADING and held once by the caller,
@@ -819,13 +864,14 @@ static void writeback_free(struct ext2_writeback *wb)
 static int writeback_error(struct ext2_mount *em, int rc);
 
 /** The batch's image of block `block`, metadata or data, or NULL; the cache
- * is neither read nor changed. */
+ * is neither read nor changed. NULL for a caller without the big lock, which
+ * holds it whenever the batch has images (`batch_guard`). */
 static struct ext2_image *writeback_find(struct ext2_mount *em, uint32_t block)
 {
     struct ext2_writeback *wb = em->wb;
     int i;
 
-    if (!wb) {
+    if (!wb || !bkl_held()) {
         return 0;
     }
     for (i = 0; i < wb->metas; i++) {
@@ -839,6 +885,35 @@ static struct ext2_image *writeback_find(struct ext2_mount *em, uint32_t block)
         }
     }
     return 0;
+}
+
+/** Whether the batch holds images or inodes, read as single words. */
+static int batch_busy(const struct ext2_mount *em)
+{
+    const volatile struct ext2_writeback *wb = em->wb;
+
+    return wb && (wb->datas != 0 || wb->metas != 0 || wb->count != 0);
+}
+
+/**
+ * Take the big lock for a reader without it while the batch is not empty:
+ * 1 when it took it, for the caller's `bkl_exit`. The writers fill and
+ * empty the batch's arrays under the big lock, between their sleeps, so a
+ * reader under it sees them whole. A reader that finds the batch empty
+ * reads the cache alone (`writeback_find`), which then has what every
+ * finished write left: the reader holds its node's lock, so no write of the
+ * node's own blocks runs meanwhile, and a write of another node's that does
+ * is one the reader may see either before or after, as Linux's reader
+ * under the inode's lock sees another inode's write. The caller holds its
+ * node's lock, and looks again each time it takes that lock back.
+ */
+static int batch_guard(struct ext2_mount *em)
+{
+    if (bkl_held() || !batch_busy(em)) {
+        return 0;
+    }
+    bkl_enter();
+    return 1;
 }
 
 /* ---- bytes off the volume, through the cache ---- */
@@ -1312,10 +1387,18 @@ static void node_final(struct ext2_mount *em, struct ext2_node *n)
  * no block is freed while an older write is pending, unless the caller
  * holds a file lock, which leaves them for the next caller. Called at the
  * end of an operation, at the last unlock of a node, at a put and in
- * `ext2_sync`, so an unmount leaves none.
+ * `ext2_sync`, so an unmount leaves none. A caller without the big lock
+ * takes it when the list has a node.
  */
 static void em_reap(struct ext2_mount *em)
 {
+    struct ext2_node *volatile *reap = &em->reap;
+    int big = 0;
+
+    if (*reap && !file_locks_held() && !bkl_held()) {
+        bkl_enter();
+        big = 1;
+    }
     while (em->reap && !file_locks_held()) {
         struct ext2_node *n = em->reap;
 
@@ -1326,12 +1409,16 @@ static void em_reap(struct ext2_mount *em)
         }
         node_free(em, n);
     }
+    if (big) {
+        bkl_exit();
+    }
 }
 
 /**
- * The `put` of `vfs_ops`, under the big lock: drop a hold on `node`, and
- * free the node with the last; it takes no lock but those of an unlinked
- * inode's free.
+ * The `put` of `vfs_ops`: drop a hold on `node`, and free the node with the
+ * last; it takes no lock but those of an unlinked inode's free. A caller
+ * without the big lock drops a hold that is not the last without it
+ * (`ext2_put_unless_last`) and takes it for any other.
  *
  * An unlinked inode keeps its blocks until its last holder goes, which is
  * what makes an open unlinked file work, and a put of one by a caller with
@@ -1339,11 +1426,22 @@ static void em_reap(struct ext2_mount *em)
  * write is pending. Its last put marks it N_DYING and frees it on a writable
  * mount (`node_final`); a crash before this leaves an orphan for e2fsck.
  */
+static int ext2_put_unless_last(struct vfs_mount *mnt, void *node);
+
 static void ext2_put(struct vfs_mount *mnt, void *node)
 {
     struct ext2_node *n = node;
     struct ext2_mount *em = em_of(mnt);
 
+    int big = 0;
+
+    if (!bkl_held()) {
+        if (ext2_put_unless_last(mnt, node)) {
+            return;
+        }
+        bkl_enter();
+        big = 1;
+    }
     if (n->unlinked && !file_locks_held() && em->wb && em->wb->count) {
         (void)writeback_drain(em);
     }
@@ -1355,6 +1453,9 @@ static void ext2_put(struct vfs_mount *mnt, void *node)
         }
     }
     em_reap(em);
+    if (big) {
+        bkl_exit();
+    }
 }
 
 /**
@@ -1758,8 +1859,10 @@ static int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
 
 /**
  * The `getattr` of `vfs_ops`: the inode's fields as the node has them, with
- * `i_blocks`, the generation and the flags lsattr sees, copied in one step
- * with no lock, since a change of a node is made between sleeps. A device's
+ * `i_blocks`, the generation and the flags lsattr sees, copied with no lock:
+ * under the big lock in one step, since a change of a node is made between
+ * sleeps, and without it a word at a time, the size whole (`node_size`), as
+ * Linux's `generic_fillattr` reads the inode without its lock. A device's
  * numbers are in the old encoding in the first
  * pointer word, major and minor a byte each, or in the new one in the second
  * when the first is zero, and `rdev` packs them as the kernel does. Always
@@ -1775,7 +1878,7 @@ static int ext2_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->uid = n->uid;
     st->gid = n->gid;
     st->nlink = n->nlink;
-    st->size = n->size;
+    st->size = node_size(n);
     st->ino = n->ino;
     if ((n->mode & S_IFMT_) == S_IFCHR_ || (n->mode & S_IFMT_) == S_IFBLK_) {
         uint32_t major, minor;
@@ -1825,11 +1928,24 @@ static int ext2_open(struct vfs_mount *mnt, void *node, int flags, void **handle
 
 /** The `release` of `vfs_ops`, at a description's last close: the batch
  * drained, a failure kept for the next `fsync`, and the hold `ext2_open`
- * took put. */
+ * took put. A caller without the big lock takes it for a drain of a batch
+ * that is not empty, or of a device that went, which records the failure. */
 static void ext2_release(struct vfs_mount *mnt, void *handle)
 {
-    (void)writeback_drain(em_of(mnt));
+    struct ext2_mount *em = em_of(mnt);
+    int big = 0;
+
+    if (!bkl_held() && (batch_busy(em) || (em->dev->flags & BLOCK_GONE))) {
+        bkl_enter();
+        big = 1;
+    }
+    if (big || bkl_held()) {
+        (void)writeback_drain(em);
+    }
     ext2_put(mnt, handle);
+    if (big) {
+        bkl_exit();
+    }
 }
 
 /* The most times a read or a write brings the pages of a user buffer in
@@ -2008,7 +2124,9 @@ static int read_piece(struct ext2_mount *em, const struct ext2_node *n, uint64_t
  * lets go (`read_fetch`); the access time does not change. A page of the
  * buffer that is not present at the copy is brought in with the lock let
  * go (`user_refault`), or ends the read short when the caller holds a file
- * lock. The bytes read, -EISDIR, -EFAULT, or -EIO.
+ * lock. A caller without the big lock passes a kernel buffer, and takes the
+ * lock while the batch is not empty (`batch_guard`). The bytes read,
+ * -EISDIR, -EFAULT, or -EIO.
  */
 static int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
                          uint64_t offset)
@@ -2017,7 +2135,7 @@ static int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_
     struct ext2_node *n = handle;
     uint8_t *out = buf;
     uint32_t done = 0;
-    int rc = 0, fetches = 0, refaults = 0;
+    int rc = 0, fetches = 0, refaults = 0, big = 0;
 
     if ((n->mode & S_IFMT_) == S_IFDIR_) {
         return -EISDIR;
@@ -2026,6 +2144,10 @@ static int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_
     while (rc == 0 && done < count && offset + done < n->size) {
         uint64_t at = offset + done;
         uint32_t take = em->block_size - ((uint32_t)at & (em->block_size - 1));
+
+        if (!big) {
+            big = batch_guard(em);
+        }
 
         if (fetches < EXT2_FETCHES && read_fetch(mnt, n, at)) {
             fetches++;
@@ -2054,6 +2176,9 @@ static int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_
         }
     }
     node_unlock(n);
+    if (big) {
+        bkl_exit();
+    }
     if (rc == -EFAULT && done > 0) {
         rc = 0;
     }
@@ -2120,20 +2245,25 @@ static int dir_next(struct ext2_mount *em, struct ext2_node *d, uint32_t *cursor
  * from the entry's file-type byte when the volume has the filetype feature,
  * and from the inode's mode otherwise, which costs a read of the inode. 1
  * with `ent` filled, 0 at the end, -ENOTDIR, -ENOENT for a directory removed
- * while held, or -EIO. Takes the directory's lock (`dir_next`).
+ * while held, or -EIO. Takes the directory's lock (`dir_next`), and the big
+ * lock while the batch is not empty (`batch_guard`).
  */
 static int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
                         struct vfs_dirent *ent)
 {
     struct ext2_node *d = handle;
-    int rc;
+    int rc, big;
 
     if ((d->mode & S_IFMT_) != S_IFDIR_) {
         return -ENOTDIR;
     }
     node_lock(d);
+    big = batch_guard(em_of(mnt));
     rc = dir_next(em_of(mnt), d, cursor, ent);
     node_unlock(d);
+    if (big) {
+        bkl_exit();
+    }
     return rc;
 }
 
@@ -3328,17 +3458,26 @@ static int gd_store(struct ext2_mount *em, uint32_t g)
 /** Record a fault met while reading: the error bit set, and written when the
  * mount writes, so that an orderly unmount does not mark the volume valid
  * and the next mount checks it. With file writes pending it is recorded as
- * the batch's failure instead, which makes the mount read-only. */
+ * the batch's failure instead, which makes the mount read-only. A reader
+ * without the big lock takes it for the mark. */
 static void mark_error(struct ext2_mount *em)
 {
+    int big = !bkl_held();
+
     if (em->state & EXT2_ERROR_FS) {
         return;
+    }
+    if (big) {
+        bkl_enter();
     }
     em->state |= EXT2_ERROR_FS;
     if (em->wb && em->wb->count) {
         (void)writeback_error(em, -EIO);
     } else if (em->writable) {
         (void)sb_store(em);
+    }
+    if (big) {
+        bkl_exit();
     }
 }
 
@@ -4583,7 +4722,7 @@ static void writeback_commit(struct ext2_mount *em, struct ext2_node *n, uint64_
     k_memcpy(plan->data->data + ((uint32_t)offset & 4095u), src, len);
     plan->data->dirty = 1;
     if (offset + len > n->size) {
-        n->size = offset + len;
+        node_size_set(n, offset + len);
     }
     stamp(n, T_MTIME | T_CTIME);
     plan->table->dirty = 1;
@@ -5191,7 +5330,7 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
         if (rc != 0) {
             return rc;
         }
-        d->size += em->block_size;
+        node_size_set(d, d->size + em->block_size);
         stamp(d, T_MTIME | T_CTIME);
         rc = inode_store(em, d);
         if (rc != 0) {
@@ -5601,7 +5740,7 @@ static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     if (size < n->size) {
         uint32_t keep = (uint32_t)((size + em->block_size - 1) >> em->block_shift);
 
-        n->size = size;
+        node_size_set(n, size);
         stamp(n, T_MTIME | T_CTIME);
         rc = inode_store(em, n);
         if (rc == 0 && ((uint32_t)size & (em->block_size - 1)) != 0) {
@@ -6559,7 +6698,7 @@ static int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32
         rc = write_bytes(em, (uint64_t)b * em->block_size, head, 24, 1);
     }
     if (rc == 0) {
-        n->size = em->block_size;
+        node_size_set(n, em->block_size);
         rc = inode_store(em, n);
     }
     if (rc == 0) {
@@ -6791,7 +6930,7 @@ static int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, cons
         }
     }
     if (rc == 0) {
-        n->size = tlen;
+        node_size_set(n, tlen);
         rc = inode_store(em, n);
     }
     if (rc == 0) {
@@ -8696,4 +8835,4 @@ static const struct vfs_ops ext2_ops = {
     ext2_put_unless_last,
 };
 
-const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 0, 0, 1, 1};
+const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 0, 0, 1, 1, 1};
