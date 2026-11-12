@@ -50,10 +50,11 @@
 #   whole host in WSL's admission, `etude-launch alone`, keeps WSL's tests
 #   from starting; WSL refusing either claim ends the release. A release
 #   that exits or is stopped stops Windows' preparation and ends both claims.
-#   Each Windows session marks the run's start in OUT/ID.start and gives the
-#   run a TMPDIR of its own, OUT/ID.tmp; a run that a stop or a lost ssh ends
-#   is stopped on Windows too, and its TMPDIR and the collections and tooling
-#   jobs it made in the copy are removed, as winclean.sh says.
+#   Each Windows session gives the run a TMPDIR of its own, OUT/ID.tmp, and a
+#   scratch record, OUT/ID.scratch, in which etude notes the collections and
+#   tooling jobs it makes in the copy; a run that a stop or a lost ssh ends is
+#   stopped on Windows too, and its TMPDIR and what the record names as
+#   neither removed nor kept as evidence are removed, as winclean.sh says.
 #   The Lenovo's run, lenovo, is the native cases of tests/native on the
 #   trial boot, which `native-deploy run` starts from here with the payload
 #   the build makes, after the acceptance. The trial boot's console session
@@ -1262,11 +1263,10 @@ windows_prepare()
     # shellcheck disable=SC2086 # the suites are words
     {
         echo "cd $wtree || { echo 'status 1'; exit; }"
-        echo ": > $wout/$id.start"
         echo "git fetch -q $wout/release.bundle 'refs/remotes/origin/$branch' && git checkout -q -f --detach $sha || { echo 'status 1'; exit; }"
         downloads
         environment windows
-        echo "export TMPDIR=$wout/$id.tmp"
+        echo "export TMPDIR=$wout/$id.tmp ETUDE_SCRATCH_RECORD=$wout/$id.scratch"
         echo "mkdir -p $wout/$id \$TMPDIR"
         echo "ETUDE_SITE=$wsite make build/tools/etude/etude > $wout/$id.make.log 2>&1 || { tail -n 20 $wout/$id.make.log; echo 'status 1'; exit; }"
         echo "e=$wout/etude-$id.exe"
@@ -1400,9 +1400,8 @@ windows()
         # shellcheck disable=SC2086 # the suites are words
         {
             echo "cd $wtree || { echo 'status 1'; exit; }"
-            echo "[ -e $wout/$id.start ] || : > $wout/$id.start"
             environment windows
-            echo "export TMPDIR=$wout/$id.tmp"
+            echo "export TMPDIR=$wout/$id.tmp ETUDE_SCRATCH_RECORD=$wout/$id.scratch"
             echo "mkdir -p \$TMPDIR"
             echo "MSYS_NO_PATHCONV=1 wsl.exe -u root -e sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches' < /dev/null"
             echo "e=$wout/etude-$id.exe"
