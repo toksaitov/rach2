@@ -20,7 +20,14 @@
  *   poll     a reader polls 64 pipes, then waits on them in an epoll set,
  *            while writers on the other processors write them; every byte
  *            arrives once, from the pipe it was written to, and a pipe that
- *            poll or epoll gives as readable reads at least a byte;
+ *            poll or epoll gives as readable reads at least a byte; then a
+ *            thread on another processor waits in epoll_wait on a pipe's
+ *            read end and an eventfd while this one closes the read end,
+ *            after a millisecond or at once: a write to the pipe comes to
+ *            fail with EPIPE while the wait goes on, since a close releases
+ *            what an epoll wait watches as Linux's does, whose epoll holds no
+ *            reference to it (fs/eventpoll.c:1287), and the wait, woken by
+ *            the eventfd, reports the eventfd alone;
  *   close    a thread blocked in a read of a pipe, or in a write of 256 KiB
  *            to a full one, has its descriptor closed, or another file
  *            put in its place by dup2, from another processor; the call
@@ -95,6 +102,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -616,7 +624,147 @@ static void pl_round(int use_epoll)
     }
 }
 
-/** The poll mode: a round by poll, then one by epoll. */
+/* The epoll close rounds: the set, the eventfd that ends each wait, and
+ * the rounds' barrier. */
+static int pc_ep, pc_efd;
+static long pc_rounds;
+static pthread_barrier_t pc_two;
+
+/* The data words of the eventfd's and the pipe's registrations. */
+#define PC_EFD  1u
+#define PC_PIPE 2u
+
+/** The waiter of the epoll close rounds: a wait each round, which must
+ * report the eventfd alone. */
+static void *pc_waiter(void *arg)
+{
+    struct epoll_event evs[4];
+    uint64_t v;
+    long r;
+    int i, n;
+
+    (void)arg;
+    pin(1);
+    for (r = 0; r < pc_rounds; r++) {
+        pthread_barrier_wait(&pc_two);
+        do {
+            n = epoll_wait(pc_ep, evs, 4, -1);
+        } while (n < 0 && errno == EINTR);
+        if (n <= 0) {
+            fail("epoll close: epoll_wait gave %d (%s)", n, n < 0 ? strerror(errno) : "none");
+        }
+        for (i = 0; i < n; i++) {
+            if (evs[i].data.u32 != PC_EFD) {
+                fail("epoll close: the closed pipe was reported, events 0x%x", evs[i].events);
+            }
+        }
+        if (read(pc_efd, &v, sizeof(v)) != (ssize_t)sizeof(v)) {
+            fail("epoll close: eventfd read: %s", strerror(errno));
+        }
+        pthread_barrier_wait(&pc_two);
+    }
+    return NULL;
+}
+
+/** Close the read end of the pipe `p` and write to it until a write fails
+ * with EPIPE; 1 when a write passed first, the read end released only once
+ * the wait gave its hold back, else 0. */
+static int pc_close_read(int p[2])
+{
+    unsigned char b = 1;
+    int late = 0;
+
+    close(p[0]);
+    for (;;) {
+        ssize_t n = write(p[1], &b, 1);
+
+        if (n < 0) {
+            if (errno != EPIPE) {
+                fail("epoll close: write gave %s", strerror(errno));
+            }
+            break;
+        }
+        late = 1;
+        sched_yield();
+    }
+    close(p[1]);
+    return late;
+}
+
+/**
+ * The epoll close rounds: each round adds a new pipe's read end to the set
+ * the waiter waits on and closes it, after a millisecond in the even rounds,
+ * when the wait sleeps, and at once in the odd ones, when it may be in its
+ * scan; a write to the pipe then comes to fail with EPIPE, at once or once
+ * the wait has given its hold back, counted as late; then the eventfd ends
+ * the wait.
+ */
+static void pc_rounds_run(void)
+{
+    struct timespec ms = {0, 1000000L};
+    struct epoll_event ev;
+    pthread_t t;
+    uint64_t one = 1;
+    long r, late = 0;
+    int p[2];
+
+    pc_rounds = 200 * scale;
+    pc_ep = epoll_create1(0);
+    pc_efd = eventfd(0, 0);
+    if (pc_ep < 0 || pc_efd < 0) {
+        fail("epoll close: epoll_create1 or eventfd: %s", strerror(errno));
+        goto out;
+    }
+    ev.events = EPOLLIN;
+    ev.data.u32 = PC_EFD;
+    if (epoll_ctl(pc_ep, EPOLL_CTL_ADD, pc_efd, &ev) != 0 ||
+        pthread_barrier_init(&pc_two, NULL, 2) != 0) {
+        fail("epoll close: setup: %s", strerror(errno));
+        goto out;
+    }
+    if (pthread_create(&t, NULL, pc_waiter, NULL) != 0) {
+        fail("epoll close: pthread_create");
+        pthread_barrier_destroy(&pc_two);
+        goto out;
+    }
+    for (r = 0; r < pc_rounds; r++) {
+        if (pipe(p) != 0) {
+            fail("epoll close: pipe: %s", strerror(errno));
+            p[0] = p[1] = -1;
+        }
+        ev.events = EPOLLIN;
+        ev.data.u32 = PC_PIPE;
+        if (p[0] >= 0 && epoll_ctl(pc_ep, EPOLL_CTL_ADD, p[0], &ev) != 0) {
+            fail("epoll close: epoll_ctl: %s", strerror(errno));
+        }
+        pthread_barrier_wait(&pc_two);
+        if (r % 2 == 0) {
+            /* interval: the call is asleep when its descriptor goes */
+            nanosleep(&ms, NULL);
+        }
+        if (p[0] >= 0) {
+            late += pc_close_read(p);
+        }
+        if (write(pc_efd, &one, sizeof(one)) != (ssize_t)sizeof(one)) {
+            fail("epoll close: eventfd write: %s", strerror(errno));
+        }
+        pthread_barrier_wait(&pc_two);
+    }
+    pthread_join(t, NULL);
+    pthread_barrier_destroy(&pc_two);
+    printf("lockstressmusl: poll: epoll close: %ld rounds, %ld released after the scan\n",
+           pc_rounds, late);
+out:
+    if (pc_ep >= 0) {
+        close(pc_ep);
+    }
+    if (pc_efd >= 0) {
+        close(pc_efd);
+    }
+}
+
+/** The poll mode: a round by poll, one by epoll, and the epoll close
+ * rounds. */
 static void mode_poll(void)
 {
     int i, j;
@@ -637,6 +785,9 @@ static void mode_poll(void)
     pl_round(0);
     if (mode_why[M_POLL][0] == '\0') {
         pl_round(1);
+    }
+    if (mode_why[M_POLL][0] == '\0') {
+        pc_rounds_run();
     }
     for (i = 0; i < POLL_PIPES; i++) {
         for (j = 0; j < 2; j++) {
