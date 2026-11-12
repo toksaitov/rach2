@@ -32,8 +32,9 @@
  * lock, and take the cache's own spinlock for their bookkeeping. A dirty
  * mark, a write, a sync, a reserve, a shrink, an invalidation and the
  * removal of a device run under the big lock, which keeps the order the
- * dirty marks give, and a get without it that must write a dirty victim
- * takes the big lock for that. A holder without the big lock only reads.
+ * dirty marks give, and a get without it takes the big lock to write a
+ * dirty victim and for the device's read of a miss. A holder without the
+ * big lock only reads.
  * Deadlock is kept out by two checked rules: a process holds at most
  * `BCACHE_HOLD_MAX` buffers, and while it holds any it may take only a higher
  * block on the same device. A release or a dirty mark by a process that does
