@@ -1,0 +1,5 @@
+nctxcheck: fence: 16 GL syncs signalled in order
+nctxcheck: fence: sync file 9 polled ready
+nctxcheck: fence: inside 255,128,0,255 outside 0,0,128,255
+nctxcheck: fence: native fence exported, polled, imported and waited on
+nctxcheck: fence: result: pass

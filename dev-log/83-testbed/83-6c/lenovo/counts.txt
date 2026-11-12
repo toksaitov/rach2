@@ -1,0 +1,1 @@
+ivshmemd: info: attached 1, bound 1, epoch 1, driver 2, device 2, error 0, doorbells 1, binds 1, rung 2429/2, woken 1800/2, polls 1, heap 1793 of 16381 pages, refused 0, maps 106, map_pages 0, map_live 0, revoked 0

@@ -1,0 +1,66 @@
+nctx-reverse: evidence: /data/trial3513/nctx-out
+reverse.qcow2: OK
+reverse-vmlinuz: OK
+reverse-initrd.img: OK
+mesa-nctx.tar.xz: OK
+nctxcheck: OK
+ivshmemd: OK
+nctxcheck: capset: node /dev/dri/renderD128, mask 0x46, DRM native context present
+nctxcheck: capset: result: pass
+nctxcheck: info: egl vendor: Mesa Project
+nctxcheck: info: egl version: 1.5
+nctxcheck: info: render node: /dev/dri/renderD128
+nctxcheck: info: gl vendor: Intel
+nctxcheck: info: gl renderer: Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+nctxcheck: info: gl version: OpenGL ES 3.2 Mesa 26.1.6
+nctxcheck: info: native fence: yes
+nctxcheck: info: robustness: yes
+nctxcheck: info: result: pass
+nctxcheck: triangle: inside 255,128,0,255 outside 0,0,128,255
+nctxcheck: triangle: result: pass
+nctxcheck: fence: 16 GL syncs signalled in order
+nctxcheck: fence: sync file 9 polled ready
+nctxcheck: fence: inside 255,128,0,255 outside 0,0,128,255
+nctxcheck: fence: native fence exported, polled, imported and waited on
+nctxcheck: fence: result: pass
+Ignoring custom size 1280x800 for validation. Using 800x600.
+Warning: DRM_CAP_ASYNC_PAGE_FLIP not supported, falling back to 'mailbox' mode for SwapInterval(0).
+=======================================================
+    glmark2 2023.01
+=======================================================
+    OpenGL Information
+    GL_VENDOR:      Intel
+    GL_RENDERER:    Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+    GL_VERSION:     4.6 (Compatibility Profile) Mesa 26.1.6
+    Surface Config: buf=32 r=8 g=8 b=8 a=8 depth=24 stencil=0 samples=0
+    Surface Size:   4096x2160 fullscreen
+=======================================================
+[build] use-vbo=true: Validation: Success
+Error: Failed to restore original CRTC: -13
+Warning: DRM_CAP_ASYNC_PAGE_FLIP not supported, falling back to 'mailbox' mode for SwapInterval(0).
+=======================================================
+    glmark2 2023.01
+=======================================================
+    OpenGL Information
+    GL_VENDOR:      Intel
+    GL_RENDERER:    Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+    GL_VERSION:     4.6 (Compatibility Profile) Mesa 26.1.6
+    Surface Config: buf=32 r=8 g=8 b=8 a=8 depth=24 stencil=0 samples=0
+    Surface Size:   4096x2160 fullscreen
+=======================================================
+[build] use-vbo=true: FPS: 142 FrameTime: 7.059 ms
+=======================================================
+                                  glmark2 Score: 141 
+=======================================================
+Error: Failed to restore original CRTC: -13
+nctx-relocations: graph: 1428 execbuffer calls, 76799.299 us in them; 2850 calls of eb_relocate_vma
+nctx-relocations: result: 1428 batches, 2850 relocation calls, 7338.031 us total, 5.139 us per batch
+/sys/kernel/tracing/per_cpu/cpu0/stats:overrun: 0
+/sys/kernel/tracing/per_cpu/cpu0/stats:commit overrun: 0
+/sys/kernel/tracing/per_cpu/cpu0/stats:dropped events: 0
+/sys/kernel/tracing/per_cpu/cpu1/stats:overrun: 0
+/sys/kernel/tracing/per_cpu/cpu1/stats:commit overrun: 0
+/sys/kernel/tracing/per_cpu/cpu1/stats:dropped events: 0
+ivshmemd: info: attached 1, bound 1, epoch 1, driver 2, device 2, error 0, doorbells 1, binds 1, rung 2429/2, woken 1800/2, polls 1, heap 1793 of 16381 pages, refused 0, maps 106, map_pages 0, map_live 0, revoked 0
+nctx-reverse: result: pass: native
+exit 0
