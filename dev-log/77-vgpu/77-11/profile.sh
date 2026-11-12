@@ -21,8 +21,9 @@
 # processor's exits and entries and of the virtio GPU's notifies, commands
 # and fences, with their times, or of the events EVENTS names. STATS, a
 # script such as qmpstats.py, gets QEMU's QMP socket, OUT's kvm-stats and
-# QEMU's PID, and runs beside the guest. The guest powers off on every exit
-# path.
+# QEMU's PID, and runs beside the guest. PHASES, a count, runs phases.py
+# with it in place of the rounds, which times each phase of a round's start
+# alone. The guest powers off on every exit path.
 set -eu
 system=$1 image=$2 extra=$3 out=$4
 frames=${FRAMES:-3346}
@@ -88,55 +89,65 @@ until $ssh true 2>/dev/null </dev/null; do
     [ "$tries" -lt 120 ] || { echo "profile: SSH did not answer" >&2; exit 1; }
     sleep 2
 done
-(cd "$tree" && tar -czf - tests/graphics/runners tests/graphics/guest-env.sh) |
+(cd "$tree" && tar -czf - tests/graphics/runners tests/graphics/guest-env.sh dev-log/77-vgpu/77-11/phases.py) |
     $ssh "${privilege}mkdir -p /tmp/77-11 && ${privilege}tar -xzf - -C /tmp/77-11"
 icd=/usr/share/vulkan/icd.d/venus_icd.x86_64.json
-# shellcheck disable=SC2016 # expanded in the guest
-$ssh "${privilege}sh -c 'cd /tmp/77-11 && mkdir -p build/tmp results/measured && TMPDIR=/tmp/77-11/build/tmp && export TMPDIR &&
-    m=results/measured
-    threads() { for f in /proc/[0-9]*/task/[0-9]*/stat; do cat \$f 2>/dev/null; done; }
-    if [ ${PERF:-1} = 1 ] && [ ! -e /sys/kernel/debug/bkl ] && ! command -v perf > /dev/null; then
-        DEBIAN_FRONTEND=noninteractive apt-get install -y -q linux-perf > results/measured/apt.log 2>&1 || true
-    fi
-    uname -a && for round in 1 2; do
-        rm -f /tmp/graphics.env
+if [ -n "${PHASES:-}" ]; then
+    # shellcheck disable=SC2016 # expanded in the guest
+    $ssh "${privilege}sh -c 'cd /tmp/77-11 && mkdir -p build/tmp results/measured && TMPDIR=/tmp/77-11/build/tmp && export TMPDIR &&
         ( GRAPHICS_CLASS=performance GRAPHICS_DONE=1 MESA_SHADER_CACHE_DIR=\$TMPDIR/cache
           . ./tests/graphics/guest-env.sh; graphics_env > /tmp/graphics.env
-          cube=tests/graphics/runners/vkcube.sh
-          if [ \$round = 2 ]; then
-              sed s/^FRAMES=346/FRAMES=$frames/ \$cube > tests/graphics/runners/vkcube-long.sh
-              cube=tests/graphics/runners/vkcube-long.sh
-              if [ -e /sys/kernel/debug/bkl/calls ]; then
-                  echo 0 > /sys/kernel/debug/bkl/calls; echo 0 > /sys/kernel/debug/bkl/tick
-                  echo kernel > /sys/kernel/debug/bkl/profile
+          VK_DRIVER_FILES=$icd; export VK_DRIVER_FILES
+          python3 -I dev-log/77-vgpu/77-11/phases.py tests/graphics/runners results/measured $PHASES )'" \
+        > "$out/guest.log" 2>&1 || echo "profile: guest status $?" >> "$out/guest.log"
+else
+    # shellcheck disable=SC2016 # expanded in the guest
+    $ssh "${privilege}sh -c 'cd /tmp/77-11 && mkdir -p build/tmp results/measured && TMPDIR=/tmp/77-11/build/tmp && export TMPDIR &&
+        m=results/measured
+        threads() { for f in /proc/[0-9]*/task/[0-9]*/stat; do cat \$f 2>/dev/null; done; }
+        if [ ${PERF:-1} = 1 ] && [ ! -e /sys/kernel/debug/bkl ] && ! command -v perf > /dev/null; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -q linux-perf > results/measured/apt.log 2>&1 || true
+        fi
+        uname -a && for round in 1 2; do
+            rm -f /tmp/graphics.env
+            ( GRAPHICS_CLASS=performance GRAPHICS_DONE=1 MESA_SHADER_CACHE_DIR=\$TMPDIR/cache
+              . ./tests/graphics/guest-env.sh; graphics_env > /tmp/graphics.env
+              cube=tests/graphics/runners/vkcube.sh
+              if [ \$round = 2 ]; then
+                  sed s/^FRAMES=346/FRAMES=$frames/ \$cube > tests/graphics/runners/vkcube-long.sh
+                  cube=tests/graphics/runners/vkcube-long.sh
+                  if [ -e /sys/kernel/debug/bkl/calls ]; then
+                      echo 0 > /sys/kernel/debug/bkl/calls; echo 0 > /sys/kernel/debug/bkl/tick
+                      echo kernel > /sys/kernel/debug/bkl/profile
+                  fi
+                  threads > \$m/threads-before; cat /proc/stat > \$m/stat-before; cat /proc/vmstat > \$m/vmstat-before 2>/dev/null || true
+                  ( sleep 8; threads > \$m/threads-mid1; cat /proc/stat > \$m/stat-mid1
+                    sleep 10; threads > \$m/threads-mid2; cat /proc/stat > \$m/stat-mid2
+                    if [ ${TAIL:-0} = 1 ] && [ -e /sys/kernel/debug/bkl/calls ]; then
+                        echo 0 > /sys/kernel/debug/bkl/calls; echo 0 > /sys/kernel/debug/bkl/tick
+                        echo kernel > /sys/kernel/debug/bkl/profile
+                    fi ) &
+                  if [ ${PERF:-1} = 1 ] && command -v perf > /dev/null; then
+                      perf record -a -g -F 1000 -o \$m/perf.data > \$m/perf.log 2>&1 & perf=\$!
+                  fi
               fi
-              threads > \$m/threads-before; cat /proc/stat > \$m/stat-before; cat /proc/vmstat > \$m/vmstat-before 2>/dev/null || true
-              ( sleep 8; threads > \$m/threads-mid1; cat /proc/stat > \$m/stat-mid1
-                sleep 10; threads > \$m/threads-mid2; cat /proc/stat > \$m/stat-mid2
-                if [ ${TAIL:-0} = 1 ] && [ -e /sys/kernel/debug/bkl/calls ]; then
-                    echo 0 > /sys/kernel/debug/bkl/calls; echo 0 > /sys/kernel/debug/bkl/tick
-                    echo kernel > /sys/kernel/debug/bkl/profile
-                fi ) &
-              if [ ${PERF:-1} = 1 ] && command -v perf > /dev/null; then
-                  perf record -a -g -F 1000 -o \$m/perf.data > \$m/perf.log 2>&1 & perf=\$!
-              fi
-          fi
-          sh \$cube -i $icd -o results/cube-\$round
-          if [ \$round = 2 ]; then
-              cat /proc/stat > \$m/stat-after; cat /proc/vmstat > \$m/vmstat-after 2>/dev/null || true; threads > \$m/threads-after
-              if [ -n \"\${perf:-}\" ]; then
-                  kill -INT \$perf; wait \$perf || true
-                  perf report -i \$m/perf.data --no-children --sort sym --stdio > \$m/perf-sym.txt 2>&1 || true
-                  perf report -i \$m/perf.data --no-children --sort comm,sym --stdio -g none > \$m/perf-comm.txt 2>&1 || true
-                  rm -f \$m/perf.data
-              fi
-              if [ -e /sys/kernel/debug/bkl/calls ]; then
-                  cat /sys/kernel/debug/bkl/calls > \$m/calls
-                  cat /sys/kernel/debug/bkl/tick > \$m/tick
-                  cat /sys/kernel/debug/bkl/profile > \$m/profile
-              fi
-          fi )
-    done'" > "$out/guest.log" 2>&1 || echo "profile: guest status $?" >> "$out/guest.log"
+              sh \$cube -i $icd -o results/cube-\$round
+              if [ \$round = 2 ]; then
+                  cat /proc/stat > \$m/stat-after; cat /proc/vmstat > \$m/vmstat-after 2>/dev/null || true; threads > \$m/threads-after
+                  if [ -n \"\${perf:-}\" ]; then
+                      kill -INT \$perf; wait \$perf || true
+                      perf report -i \$m/perf.data --no-children --sort sym --stdio > \$m/perf-sym.txt 2>&1 || true
+                      perf report -i \$m/perf.data --no-children --sort comm,sym --stdio -g none > \$m/perf-comm.txt 2>&1 || true
+                      rm -f \$m/perf.data
+                  fi
+                  if [ -e /sys/kernel/debug/bkl/calls ]; then
+                      cat /sys/kernel/debug/bkl/calls > \$m/calls
+                      cat /sys/kernel/debug/bkl/tick > \$m/tick
+                      cat /sys/kernel/debug/bkl/profile > \$m/profile
+                  fi
+              fi )
+        done'" > "$out/guest.log" 2>&1 || echo "profile: guest status $?" >> "$out/guest.log"
+fi
 $ssh "${privilege}tar -czf - -C /tmp/77-11/results ." | tar -xzf - -C "$out"
 $ssh "${privilege}poweroff -f" >/dev/null 2>&1 || true
 wait "$qemu" 2>/dev/null || true
