@@ -3,8 +3,8 @@
 # mac.sh CMD: the Mac's side of the 80-2 session on the Lenovo's Debian, and of
 # its rehearsal in a Debian 13 guest under QEMU.
 #   lock | unlock     take or give back the Lenovo (build/flow/lenovo)
-#   arm               from Rach2: save p1, write Debian's kernel and initrd
-#                     into it (run2's p1-run2.img runs), stage boot.cfg with
+#   arm               from Rach2: save p1, copy Debian's kernel and initrd
+#                     into its current FAT, stage boot.cfg with
 #                     bootctl config, arm one boot with bootctl trial
 #                     recovery, and reboot into Debian
 #   wait-debian | wait-rach2   wait up to 6 min for the system to answer SSH
@@ -69,24 +69,34 @@ arm)
 	rssh 'cat /etc/rach2/release; bootctl status' | tee $C/rach2-before.txt
 	rssh 'dd if=/dev/bootpart bs=1048576 2>/dev/null' > $C/p1-before.img
 	shasum -a 256 $C/p1-before.img | tee $C/p1-before.sha256
-	# Debian's files: run2's image where it differs from the p1 it was made
-	# from, laid on p1 as found; the menu slot and grubenv are left alone.
+	# Allocate in the current FAT: old sector runs can name a new kernel's
+	# clusters, and old FAT sectors can discard its allocation chains.
 	cp $C/p1-before.img $C/p1-debian.img
-	python3 -I - $RUN2/p1-run2.img $C/p1-debian.img $RUN2/p1-runs.txt <<'PY'
-import sys
-src = open(sys.argv[1], "rb").read()
-dst = bytearray(open(sys.argv[2], "rb").read())
-for line in open(sys.argv[3]):
-    s, n = (int(v) for v in line.split())
-    assert not (s < 10277 and s + n > 10259), "a run touches the menu slot or grubenv"
-    dst[s * 512:(s + n) * 512] = src[s * 512:(s + n) * 512]
-open(sys.argv[2], "wb").write(dst)
-PY
+	stage=
+	finished=
+	status=0
+	trap 'status=$?; [ -z "$stage" ] || rm -rf "$stage"; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' EXIT
+	trap 'exit 129' HUP
+	trap 'exit 130' INT
+	trap 'exit 143' TERM
+	stage=$(mktemp -d "$C/debian-files.XXXXXX")
+	for f in vmlinuz initrd.img; do
+		mcopy -i $RUN2/p1-run2.img ::/run2/$f "$stage/$f"
+	done
+	mcopy -i $RUN2/p1-run2.img ::/boot/grub/x86_64-efi/linux.mod "$stage/linux.mod"
+	mmd -i $C/p1-debian.img ::/run2 2>/dev/null || mdir -i $C/p1-debian.img ::/run2 > /dev/null
+	mmd -i $C/p1-debian.img ::/boot/grub/x86_64-efi 2>/dev/null ||
+	    mdir -i $C/p1-debian.img ::/boot/grub/x86_64-efi > /dev/null
+	mcopy -o -i $C/p1-debian.img "$stage/vmlinuz" "$stage/initrd.img" ::/run2/
+	mcopy -o -i $C/p1-debian.img "$stage/linux.mod" ::/boot/grub/x86_64-efi/linux.mod
+	rm -rf "$stage"
+	stage=
 	p1write $C/p1-debian.img
 	/usr/bin/scp -q $SSHO -o UserKnownHostsFile=$K2/lenovo-known $D/boot.cfg root@$HOST:/dev/shm/boot.cfg
 	rssh 'bootctl config /dev/shm/boot.cfg && bootctl trial recovery && bootctl status && rm -f /dev/shm/boot.cfg' | tee $C/arm.txt
 	say "rebooting Rach2 into Debian"
 	rssh 'nohup sh -c "sleep 2; reboot" > /dev/null 2>&1 &'
+	finished=1
 	;;
 wait-debian) waitfor tssh ;;
 wait-rach2) waitfor rssh ;;
