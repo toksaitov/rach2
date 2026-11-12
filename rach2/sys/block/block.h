@@ -399,6 +399,12 @@ int block_request_flags(block_device_t *device, int write, uint64_t lba, uint32_
  * caller that cannot sleep, reads through a buffer from the heap, a page
  * at a time when the heap has none of the length, and the bytes are copied
  * into the frames. The context rules and the answer are `block_request`'s.
+ *
+ * After an error the frames not filled may still be the device's: a request
+ * given up on while its command is outstanding keeps its references until
+ * the device answers or is reset, and its transfer may land then. The
+ * caller lets go of such a frame and reads again into another, as Linux
+ * leaves a folio locked and not up to date until its bio ends.
  */
 int block_read_frames(block_device_t *device, uint64_t lba, uint32_t count,
                       const uintptr_t *frames);

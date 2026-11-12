@@ -353,10 +353,12 @@ struct vfs_ops {
      * `readahead` of `address_space_operations` reads into the page
      * cache's folios. The pages filled, from the first, which stop short of
      * `count` only at the end of the file or at a failed read after the
-     * first; 0 at or past the end; or a negative errno. A file's page in
-     * memory is the type's only where the type says so: the caller keeps
-     * what it reads in the file page cache. NULL for a type that reads no
-     * page so, whose caller reads with `read`. */
+     * first; 0 at or past the end; or a negative errno. A frame left
+     * unfilled may still be a device's to fill (`block_read_frames`), and
+     * the caller lets go of it and reads that page into another. A file's
+     * page in memory is the type's only where the type says so: the caller
+     * keeps what it reads in the file page cache. NULL for a type that
+     * reads no page so, whose caller reads with `read`. */
     int32_t (*read_frames)(struct vfs_mount *mnt, void *handle, uint32_t first, uint32_t count,
                            const uintptr_t *frames);
 };
