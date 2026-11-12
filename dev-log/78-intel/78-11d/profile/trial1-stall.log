@@ -1,0 +1,15 @@
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial/t3504p/tests/graphics/guest-env.sh && graphics_env'"'"''
+hasvk: child: /data/trial/t3504p/out/environment.log: exit 0
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial/t3504p/tests/graphics/guest-env.sh && exec vkcube --wsi wayland --c 300'"'"''
+hasvk: child: /data/trial/t3504p/out/cube.log: exit 0
+hasvk: action: python3 /data/trial/t3504p/tests/graphics/browser/sandbox.py desktop chromium /data/trial/t3504p/out/run-0/browser webgpu-frames
+hasvk: child: /data/trial/t3504p/out/run-0/browser.log: exit 0
+stall: run 0: bare: gap 50.4 ms after frame 1, steady 59.81 FPS, 1 late, 8.0473 s
+hasvk: action: python3 /data/trial/t3504p/tests/graphics/browser/sandbox.py desktop chromium /data/trial/t3504p/out/run-1/browser webgpu-frames
+hasvk: child: /data/trial/t3504p/out/run-1/browser.log: exit 0
+stall: run 1: watched: gap 66.5 ms after frame 2, steady 59.58 FPS, 3 late, 8.0862 s
+hasvk: action: python3 /data/trial/t3504p/tests/graphics/browser/sandbox.py desktop chromium /data/trial/t3504p/out/run-2/browser webgpu-trace
+hasvk: child: /data/trial/t3504p/out/run-2/browser.log: exit 0
+stall: run 2: traced: gap 66.7 ms after frame 1, steady 59.59 FPS, 2 late, 8.0973 s
+stall: result: 3 runs, gaps [50.4, 66.5, 66.7] ms
+stall: evidence: /data/trial/t3504p/out
