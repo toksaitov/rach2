@@ -239,6 +239,12 @@ uint64_t kvm_tsc_read(const struct kvm_vcpu *v)
     return arch_cycles() + (uint64_t)v->tsc_offset;
 }
 
+/* pvclock.c's host TSC rate, the model's 2 counts a ns. */
+uint64_t kvm_tsc_khz(void)
+{
+    return 2000000u;
+}
+
 uint64_t tick_count(void)
 {
     return mono_ns / TICK_NS;
