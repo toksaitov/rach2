@@ -18,6 +18,9 @@
  * wait fails the test if any row reaches it. The interrupt flag's restore,
  * which follows every give of `cache_spin`, runs a hook a row sets, which
  * stands for another processor that takes the lock the moment it is free.
+ * The interrupt flag is modeled, so a victim search with interrupts off
+ * must not reach a scheduler service point; a dirty release behind a search
+ * must keep its retries going until the next turn writes and takes it.
  *
  * No hosted headers: the kernel headers define the fixed-width types, and
  * the libc calls used here are declared by hand. Each panic row runs the
@@ -34,7 +37,7 @@ extern int printf(const char *fmt, ...);
 extern int fork(void);
 extern int waitpid(int pid, int *status, int options);
 extern void _exit(int status);
-extern void exit(int status);
+extern void exit(int status) __attribute__((noreturn));
 
 process_t proc_a, proc_b;
 struct percpu cpu_table[NR_CPUS] = {{.current = &proc_a}};
@@ -169,20 +172,35 @@ void sched_kick_cpus(uint64_t cpus)
 /* Run once at the next restore of the interrupt flag, then cleared. */
 static void (*restore_hook)(void);
 
-/** No interrupt can come, so there is no flag to save. */
+/* The interrupt flag, on outside a protected region. A restore hook acts
+ * as another processor, whose own flag starts on. */
+static int irqs_on = 1;
+
+/** Save the model's interrupt flag and clear it. */
 uint32_t kirq_save(void)
 {
-    return 0;
+    uint32_t flags = (uint32_t)irqs_on;
+
+    irqs_on = 0;
+    return flags;
+}
+
+/** Whether the model's caller has interrupts on. */
+int kirq_enabled(void)
+{
+    return irqs_on;
 }
 /** Run and clear `restore_hook`, if a row set one. */
 void kirq_restore(uint32_t flags)
 {
     void (*fn)(void) = restore_hook;
 
-    (void)flags;
+    irqs_on = (int)flags;
     if (fn) {
         restore_hook = 0;
+        irqs_on = 1;
         fn();
+        irqs_on = (int)flags;
     }
 }
 /** The sleeping wait, which no row may reach: one process runs here, so a
@@ -1194,22 +1212,28 @@ static void barred_rows(void)
  * many service points have passed. */
 static void (*service_hook)(void);
 static int service_points;
+static int give_way_skips;
 
 /** Count the point and run `service_hook`, which stands for what runs when
  * the big lock is let go there. */
 void sched_service_point(void)
 {
+    check(kirq_enabled(), "a victim search never reaches a service point with interrupts off");
     service_points++;
     if (service_hook) {
         service_hook();
     }
 }
 
-/** The service point, as the kernel's with interrupts on: the code under
- * test runs with them on here. */
+/** Give way with interrupts on, as the kernel does; count the skipped
+ * points with interrupts off so a row proves its search reaches them. */
 void sched_give_way(void)
 {
-    sched_service_point();
+    if (kirq_enabled()) {
+        sched_service_point();
+    } else {
+        give_way_skips++;
+    }
 }
 
 /* The device of the sort rows: more blocks than a sort passes between two
@@ -1693,6 +1717,8 @@ static process_t pause_holders[10];
 static struct bbuf *pause_held[40];
 static unsigned pause_count;
 static int pause_hits;
+/* Dirty `PAUSE_X` at every hit, with a write that is not barred. */
+static int pause_dirty;
 
 /** Another process hits block `PAUSE_X` of `vast` and lets it go, which
  *  moves it to the tail of the release order; again at the next give of
@@ -1709,6 +1735,10 @@ static void hit_x(void)
     current_proc = &proc_b;
     x = bcache_get_blank(&vast, PAUSE_X);
     if (x) {
+        if (pause_dirty) {
+            x->data[0] = 0xa7;
+            bcache_dirty(x);
+        }
         bcache_release(x);
     }
     current_proc = was;
@@ -1799,6 +1829,55 @@ static void victim_unfit_rows(void)
 }
 
 /**
+ * Dirty releases behind a search reset its no-progress count, as Linux's
+ * should_reclaim_retry counts dirty reclaimable pages (mm/page_alloc.c:
+ * 4179-4185, 4206-4219 in 6.12.115). Sixty pauses move the unbarred dirty
+ * buffer behind the search, beyond sixteen idle retries; the next turn
+ * writes and takes it. With all buffers held and interrupts off, a miss
+ * instead fails without a service point, as Linux's __cond_resched
+ * (kernel/sched/core.c:7287-7292).
+ */
+static void victim_dirty_and_irq_rows(void)
+{
+    struct bbuf *b;
+    uint32_t flags;
+    int points, skips;
+
+    pause_fill(1);
+    pause_hits = 60;
+    pause_dirty = 1;
+    writes_made = 0;
+    restore_hook = hit_x;
+    b = bcache_get_blank(&vast, 100);
+    check(b != 0 && pause_hits == 0 && writes_made > 0 &&
+              image_vast[PAUSE_X * BCACHE_BLOCK_BYTES] == 0xa7,
+          "a dirty release at each of sixty pauses keeps the search going until it writes and "
+          "takes it");
+    restore_hook = 0;
+    pause_dirty = pause_hits = 0;
+    if (b) {
+        bcache_release(b);
+    }
+    pause_release();
+    (void)bcache_sync(&vast);
+    (void)bcache_invalidate(&vast);
+
+    pause_fill(0);
+    points = service_points;
+    skips = give_way_skips;
+    flags = kirq_save();
+    b = bcache_get_blank(&vast, 100);
+    check(!kirq_enabled() && b == 0 && service_points == points && give_way_skips > skips,
+          "an interrupts-off search exhausts its retries without a service point");
+    kirq_restore(flags);
+    if (b) {
+        bcache_release(b);
+    }
+    pause_release();
+    (void)bcache_invalidate(&vast);
+}
+
+/**
  * A miss under the big lock on a cache whose every buffer but one is held:
  * the one fit buffer, hit and let go at the search's first pause, goes
  * behind the buffers the turn passed over, and the next turn takes it. Hit
@@ -1845,6 +1924,7 @@ static void victim_pause_rows(void)
     pause_release();
     (void)bcache_invalidate(&vast);
     victim_unfit_rows();
+    victim_dirty_and_irq_rows();
 }
 
 /* A device of more blocks than the index has buckets, which the index row
