@@ -241,18 +241,6 @@ static int firmware_verdict(uint32_t id, int remapped)
     return FW_LEAVE;
 }
 
-/** Whether interrupt remapping may yet start and run in the x2APIC format:
- * only the x86-64 kernel has it (platform.c), and not while the I/O APIC is
- * off by the boot line (`ioapic_disabled`). */
-static int remapping_may_come(void)
-{
-#if defined(__x86_64__)
-    return !ioapic_disabled();
-#else
-    return 0;
-#endif
-}
-
 /**
  * Choose the boot processor's mode from IA32_APIC_BASE's `*lo` and `hi`,
  * as Linux's check_x2apic, setup_nox2apic and enable_IR_x2apic do before
@@ -292,7 +280,7 @@ static int choose_mode(uint32_t *lo, uint32_t hi)
         nox2apic_taken = 0;
     }
     verdict = nox2apic_taken ? FW_LEAVE : firmware_verdict(id, 0);
-    if (verdict != FW_KEEP && !nox2apic_taken && remapping_may_come()) {
+    if (verdict != FW_KEEP && !nox2apic_taken && ioapic_remappable()) {
         x2apic = 1;
         x2apic_kept = 1;
         klog(KLOG_INFO, "lapic", "x2apic: left on by the firmware; kept until remapping starts");
