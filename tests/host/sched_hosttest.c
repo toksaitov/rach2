@@ -928,15 +928,14 @@ static void tick_slice(void)
  * Within the slice the tick takes a queued real-time thread only when it
  * outranks the current one: an equal SCHED_RR peer waits for the slice, as
  * Linux requeues an RR thread only once its time slice has run out
- * (task_tick_rt, kernel/sched/rt.c:2586-2602), and a higher one switches
- * at once. A real-time thread queued on another processor behind a higher
- * one, which selection here could take, counts as well: processor 1 runs a
- * SCHED_FIFO thread of priority 99 with one of priority 50 queued behind
- * it, and processor 0's tick, 100 us into an ordinary thread's slice, takes
- * the 50, as Linux's push_rt_task moves it to a processor running lower
- * work and reschedules that one (rt.c:1982-2092).
+ * (task_tick_rt, kernel/sched/rt.c:2586-2602), and so it does with an
+ * ordinary thread a wake marked queued under the pair, which selection
+ * would not take, as wakeup_preempt_rt preempts only a lower current task
+ * (rt.c:1655-1660). A priority raise of the queued peer asks the running
+ * one to switch, not itself, as prio_changed_rt calls resched_curr
+ * (rt.c:2526-2533), and the tick switches.
  */
-static void tick_rt(void)
+static void tick_rr(void)
 {
     unsigned int i;
 
@@ -955,12 +954,28 @@ static void tick_rt(void)
     sched_tick();
     CHECK(current_proc == &procs[0] && switches == 0,
           "an equal SCHED_RR peer waits for the slice at the tick");
+    wake(&procs[2]);
+    sched_tick();
+    CHECK(current_proc == &procs[0] && switches == 0 && procs[2].woken && !procs[0].need_resched,
+          "an ordinary woken thread under the RR pair lets no tick rotate it");
     procs[1].rt_priority = 11;
     sched_priority_changed(&procs[1]);
+    CHECK(procs[0].need_resched && !procs[1].need_resched,
+          "a raise of the queued peer asks the running thread to switch");
     sched_tick();
-    CHECK(current_proc == &procs[1] && switches == 1,
+    CHECK(current_proc == &procs[1] && switches == 1 && !procs[0].need_resched,
           "a higher real-time thread takes the processor at the tick within the slice");
+    clock_ns = 0;
+}
 
+/** Reset with processor 1 started, running procs[1] as SCHED_FIFO 99, and
+ * procs[2], SCHED_FIFO 50, blocked with processor 1 last and `affinity`;
+ * processor 0 runs procs[0], an ordinary thread, 100 us into its slice. */
+static void two_cpus(uint64_t affinity)
+{
+    unsigned int i;
+
+    clock_ns = 1000000000u;
     setup();
     for (i = 1; i < 7; i++) {
         sched_forget(&procs[i]);
@@ -973,15 +988,51 @@ static void tick_rt(void)
     procs[1].sched_policy = procs[2].sched_policy = SCHED_FIFO;
     procs[1].rt_priority = 99;
     procs[2].rt_priority = 50;
-    sched_make_ready(&procs[2]);
-    CHECK(run_queues[1].count == 1 && run_queues[0].count == 0 && !procs[1].need_resched,
-          "a FIFO 50 thread queues behind the FIFO 99 one on processor 1");
+    procs[2].affinity = affinity;
     procs[0].slice_ns = clock_ns;
     clock_ns += 100000u;
     irq_flags = 0;
+}
+
+/**
+ * A real-time thread made ready where a higher one runs goes to the
+ * processor running the lowest work, whose thread it asks to switch, as
+ * Linux's select_task_rq_rt and find_lowest_rq place it
+ * (kernel/sched/rt.c:1577-1597, 1807-1880): processor 1 runs a SCHED_FIFO
+ * thread of priority 99, and one of priority 50 last ran there. Pinned to
+ * processor 1, the 50 queues there; processor 0's tick within an ordinary
+ * slice takes it once its affinity widens, as Linux's push_rt_task moves
+ * it to a processor running lower work (rt.c:1982-2092). An affinity that
+ * moves it off processor 1 asks processor 0's thread to switch, as
+ * move_queued_task calls wakeup_preempt (core.c:2462-2463).
+ */
+static void tick_rt(void)
+{
+    two_cpus(~(uint64_t)0);
+    sched_make_ready(&procs[2]);
+    CHECK(run_queues[0].count == 1 && run_queues[1].count == 0 && procs[2].cpu == 0 &&
+              procs[0].need_resched && !procs[1].need_resched,
+          "a woken FIFO 50 thread goes to the processor running ordinary work");
+    sched_take_preempt();
+    CHECK(current_proc == &procs[2] && switches == 1, "and takes it at that thread's request");
+
+    two_cpus(2);
+    sched_make_ready(&procs[2]);
+    CHECK(run_queues[1].count == 1 && run_queues[0].count == 0 && !procs[0].need_resched &&
+              !procs[1].need_resched,
+          "a FIFO 50 thread pinned to processor 1 queues behind the FIFO 99 one");
+    sched_set_affinity(&procs[2], 3);
+    CHECK(run_queues[1].count == 1 && !procs[0].need_resched,
+          "an affinity that keeps processor 1 leaves it queued there");
     sched_tick();
     CHECK(current_proc == &procs[2] && procs[2].cpu == 0 && switches == 1,
           "processor 0's tick within an ordinary slice takes it from processor 1's queue");
+
+    two_cpus(2);
+    sched_make_ready(&procs[2]);
+    sched_set_affinity(&procs[2], 1);
+    CHECK(run_queues[0].count == 1 && procs[2].cpu == 0 && procs[0].need_resched,
+          "an affinity move onto processor 0 asks its ordinary thread to switch");
     cpu_table[1].online = 0;
     init_sched();
     clock_ns = 0;
@@ -1095,17 +1146,18 @@ int main(int argc, char **argv)
     migration();
     run_delay();
     tick_slice();
+    tick_rr();
     tick_rt();
     affinity_rows();
     if (failures) {
         return 1;
     }
-    dprintf(1,
-            "sched-hosttest: result: pass: priority, fairness, states, lifecycle, big lock, "
-            "preempt due, "
-            "accounting, "
-            "load phase, "
-            "idle machine, ready lists, wake twice, migration, run delay, tick slice, tick rt\n");
+    dprintf(1, "sched-hosttest: result: pass: priority, fairness, states, lifecycle, big lock, "
+               "preempt due, "
+               "accounting, "
+               "load phase, "
+               "idle machine, ready lists, wake twice, migration, run delay, tick slice, tick rr, "
+               "tick rt\n");
     return 0;
 }
 
