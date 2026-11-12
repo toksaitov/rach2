@@ -228,7 +228,7 @@ A write of anything zeroes the counts.
 .It Pa bkl/profile
 Mode 0644.
 A profile of the kernel under the big lock, a Rach2 file: each processor's
-tick that finds the processor holding the lock, at 1000 Hz, takes a
+scheduler tick that finds the processor holding the lock takes a
 sample of the instruction it stopped and the three return addresses above
 it, from the frame chain, 0 past its end, with the entry the running
 process is in; in the whole-kernel mode, which a write of

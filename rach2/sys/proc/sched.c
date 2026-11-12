@@ -1740,8 +1740,9 @@ static int idle_stop_tick(void)
  * Wait with the big lock let go. The scheduler idle task polls with its
  * existing tick and interrupts on: the interrupt routers mark the poll kicked,
  * so its interrupt ends the poll before a halt can follow it. Only a poll
- * which finds no wake stops the tick for a halt. A tick already stopped stays
- * stopped through the poll. No APIC register read is needed.
+ * which finds no wake stops the tick for a halt. A stopped tick skips the
+ * poll, committing its deferred events before another halt. No APIC register
+ * read is needed.
  *
  * A kernel wait with its tick running polls with interrupts off: poll this
  * processor's `idle_poll` for `idle_poll_us`, then halt unless a wake turned
@@ -1783,7 +1784,7 @@ static void idle_halt(int stop_tick)
     uint64_t start, limit, now, look, gone;
     uint32_t grow;
     int open = stop_tick;
-    int polling = per_us != 0 && arch_guest();
+    int polling = per_us != 0 && arch_idle_poll() && !cpu->tick_stopped;
 
     start = polling ? arch_cycles() : 0;
     if (polling && cpu->idle_poll_us != 0) {

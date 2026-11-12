@@ -1556,6 +1556,12 @@ static void nohz_poll_before_stop(void)
     idle_wait_irq_off();
     CHECK(idle_timer_enters == 1 && idle_halts == 1 && this_cpu()->tick_stopped,
           "a poll without a wake stops the tick before halting");
+    poll_wake = 1;
+    idle_timer_enters = idle_halts = 0;
+    idle_wait_irq_off();
+    CHECK(poll_wake && idle_timer_enters == 1 && idle_halts == 1,
+          "a stopped CPU skips polling and commits its next short event before halting");
+    poll_wake = 0;
     poll_rate = 0;
     idle_timer_ready = 0;
 }

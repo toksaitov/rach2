@@ -37,6 +37,8 @@
 /* The tick rate `apic_timer_start` was given, which the counter's
  * arithmetic divides a second by. */
 static uint32_t tick_hz = TICK_HZ;
+/* Scheduler periods are separate from the millisecond clock units. */
+static uint32_t hr_sched_ns = TICK_NS;
 
 /* The one-shot timer keeps the next scheduler tick and the earliest event
  * on one vector. Its entry serves both when they coincide. Tick phase moves
@@ -220,14 +222,14 @@ void apic_timer_start(uint32_t counts, uint32_t hz)
     lapic_timer_set(APIC_TIMER_VECTOR, 1, 0, counts);
 }
 
-/** Return the first monotonic millisecond edge strictly after `now`,
+/** Return the first monotonic scheduler edge strictly after `now`,
  * a nonnegative nanosecond time. Every CPU uses this common tick phase. */
 static int64_t hr_next_tick(int64_t now)
 {
     uint64_t rem;
 
-    (void)tick_div64((uint64_t)now, TICK_NS, &rem);
-    return now + TICK_NS - (int64_t)rem;
+    (void)tick_div64((uint64_t)now, hr_sched_ns, &rem);
+    return now + hr_sched_ns - (int64_t)rem;
 }
 
 /**
@@ -238,21 +240,21 @@ static int64_t hr_next_tick(int64_t now)
  * is short of it, since an interrupt up to HR_SLACK_NS early is that tick.
  * Only the ticks the clock has passed are skipped: the allowance for an
  * early interrupt moves no tick still to come. A processor more than
- * HR_BEHIND_MAX ticks behind resumes at the next common tick edge.
+ * four seconds behind resumes at the next common scheduler edge.
  */
 static void hr_forward(struct hr_state *c, int64_t now)
 {
     int64_t gap = now - c->tick;
 
     if (gap < 0) {
-        c->tick += TICK_NS;
+        c->tick += hr_sched_ns;
         return;
     }
     if (gap >= (int64_t)HR_BEHIND_MAX * TICK_NS) {
         c->tick = hr_next_tick(now);
         return;
     }
-    c->tick += ((int64_t)((uint32_t)gap / TICK_NS) + 1) * TICK_NS;
+    c->tick += ((int64_t)((uint32_t)gap / hr_sched_ns) + 1) * hr_sched_ns;
 }
 
 /**
@@ -281,15 +283,17 @@ static uint64_t hr_counts(int64_t delta, uint32_t rate)
 }
 
 /** Program the earlier event once, keeping the LVT until its vector changes.
- * The caller has interrupts off; a zero idle expiry stops the device. */
-static void hr_program(struct hr_state *c, int64_t now)
+ * The caller has interrupts off; a zero idle expiry stops the device.
+ * Idle callbacks retain requests until final preparation (`idle_commit`)
+ * or selection of a non-idle thread. The hardware cache is kept meanwhile. */
+static void hr_program(struct hr_state *c, int64_t now, int idle_commit)
 {
     int64_t at = c->idle ? 0 : c->tick, delta;
     uint8_t vector = APIC_TIMER_VECTOR;
     uint32_t counts, rate;
     uint64_t span;
 
-    if (c->idle && timer_idle_woken()) {
+    if (c->idle && !idle_commit) {
         return;
     }
     if (c->want != 0 && (at == 0 || c->want < at)) {
@@ -339,7 +343,7 @@ static void hr_program(struct hr_state *c, int64_t now)
     }
 }
 
-/** Start one-shot mode on the common monotonic millisecond phase. A
+/** Start one-shot mode on the common monotonic scheduler phase. A
  * pending periodic tick uses the preceding edge and is served once by the
  * entry. The pending bit is sampled between clock readings, taking the
  * first close pair or the closest available. IRQs are off; return the last
@@ -363,7 +367,7 @@ static int64_t hr_oneshot(struct hr_state *c)
     }
     c->tick = hr_next_tick(at);
     if (late) {
-        c->tick -= TICK_NS;
+        c->tick -= hr_sched_ns;
     }
     c->oneshot = 1;
     c->lvt = 0;
@@ -394,10 +398,10 @@ static void hr_wake_at(int64_t ns, uint64_t tick)
         c->want_tick = tick;
         if (!c->oneshot) {
             now = hr_oneshot(c);
-            hr_program(c, now);
+            hr_program(c, now, 0);
         } else if (c->idle || ns < c->tick) {
             now = rtc_monotonic_ns();
-            hr_program(c, now);
+            hr_program(c, now, 0);
         }
     }
 }
@@ -505,7 +509,7 @@ void apic_hr_interrupt(isr_params_t *params)
         watchdog_event(params);
     }
     timer_hr_pass();
-    hr_program(&hr_cpu[arch_cpu_id()], rtc_monotonic_ns());
+    hr_program(&hr_cpu[arch_cpu_id()], rtc_monotonic_ns(), 0);
 }
 
 /**
@@ -569,7 +573,10 @@ int apic_hr_entry(uint32_t vector)
     }
     c = &hr_cpu[arch_cpu_id()];
     if (!c->oneshot) {
-        return APIC_HR_TICK;
+        if (hr_sched_ns == TICK_NS || !timer_wakes_between()) {
+            return APIC_HR_TICK;
+        }
+        (void)hr_oneshot(c);
     }
     programmed = c->programmed;
     c->programmed = 0;
@@ -577,8 +584,8 @@ int apic_hr_entry(uint32_t vector)
     if (!c->idle && (now >= c->tick || (programmed == c->tick && now + HR_SLACK_NS >= c->tick))) {
         c->due = c->tick;
         hr_forward(c, now);
-        if (c->tick - (int64_t)TICK_NS > c->due) {
-            c->due = c->tick - (int64_t)TICK_NS;
+        if (c->tick - (int64_t)hr_sched_ns > c->due) {
+            c->due = c->tick - (int64_t)hr_sched_ns;
         }
         result = APIC_HR_TICK;
     }
@@ -588,7 +595,7 @@ int apic_hr_entry(uint32_t vector)
         result |= APIC_HR_EVENT;
     }
     if ((result & APIC_HR_TICK) != 0 || (c->idle && c->want == 0 && result == 0)) {
-        hr_program(c, now);
+        hr_program(c, now, 0);
     } else {
         result |= APIC_HR_EVENT;
     }
@@ -629,7 +636,7 @@ int timer_idle_enter(void)
     now = c->oneshot ? rtc_monotonic_ns() : hr_oneshot(c);
     c->idle = 1;
     timer_wake_release();
-    hr_program(c, now);
+    hr_program(c, now, 1);
     return 1;
 }
 
@@ -646,7 +653,7 @@ void timer_idle_exit(void)
     if (c->tick <= now) {
         hr_forward(c, now);
     }
-    hr_program(c, now);
+    hr_program(c, now, 0);
 }
 
 void apic_hr_init(uint32_t counts)
@@ -658,6 +665,7 @@ void apic_hr_init(uint32_t counts)
     }
     hr_tick_counts = counts;
     kcpu_id(1, &a, &b, &c, &d);
+    hr_sched_ns = (c & (1u << 31)) != 0 ? 4u * TICK_NS : TICK_NS;
     hr_deadline = (c & (1u << 24)) != 0 && timer_calibrate() != 0;
     hr_vector = APIC_TIMER_VECTOR;
     klog(KLOG_INFO, "lapic", "timer: vector %d for ticks and events", hr_vector);

@@ -43,9 +43,9 @@ struct itco {
     int nowayout;       /* a stop is refused: Linux's WDOG_NO_WAY_OUT */
     int boot_feed;      /* the kernel feeds a running timer no program holds:
                            Linux's watchdog.handle_boot_enabled */
-    uint32_t hz;        /* calls of `itco_feed_tick` a second */
-    uint32_t feed_left; /* calls until the kernel's next feed */
-    int open_limited;   /* a program must open the device in `open_left` calls */
+    uint32_t hz;        /* countdown units a second */
+    uint32_t feed_left; /* units before the next feed tick */
+    int open_limited;   /* a program must open before open_left expires */
     uint32_t open_left; /* Linux's open_deadline, counted down */
     /* the tick leaves each feed to the thread watchdogd: set while the
      * thread exists and the scheduler runs it */
@@ -192,7 +192,8 @@ static int itco_feeding(const struct itco *t)
 }
 
 /**
- * One tick of the kernel's feed of a running timer that no program holds,
+ * Advance the kernel's feed by `passed` units at `hz` units a second,
+ * for a running timer that no program holds,
  * as watchdog_dev.c's hrtimer does (watchdog_next_keepalive and
  * watchdog_timer_expired, lines 99 to 127 and 229 to 237): a feed every
  * half timeout until a program opens the device or the open deadline
@@ -204,18 +205,21 @@ static int itco_feeding(const struct itco *t)
  * the scheduler runs no thread, the tick feeds the timer itself. From the
  * boot processor's tick, with interrupts off.
  */
-static void itco_feed_tick(struct itco *t)
+static void itco_feed_tick(struct itco *t, uint32_t passed)
 {
     uint32_t heartbeat;
 
-    if (!itco_feeding(t)) {
+    if (!itco_feeding(t) || passed == 0) {
         return;
     }
     if (t->open_limited) {
-        t->open_left--;
+        t->open_left = passed < t->open_left ? t->open_left - passed : 0;
+        if (t->open_left == 0) {
+            return;
+        }
     }
-    if (t->feed_left > 0) {
-        t->feed_left--;
+    if (t->feed_left >= passed) {
+        t->feed_left -= passed;
         return;
     }
     if (t->threaded) {
@@ -320,6 +324,7 @@ static int itco_status(struct itco *t)
 #include "../arch.h"
 
 static struct itco watchdog;
+static uint32_t feed_seen; /* kernel_ticks at the last countdown advance */
 static uint16_t tco_base;
 static uintptr_t gcs_address;
 static int registered;
@@ -610,6 +615,7 @@ void itco_init(void)
              heartbeat, ITCO_DEFAULT_TIMEOUT);
     }
     itco_smi_option(pm);
+    feed_seen = (uint32_t)kernel_ticks;
     registered = 1;
     if (arm && itco_boot_arm(&watchdog) != 0) {
         klog(KLOG_WARN, "watchdog", "refused: rach2.itco.arm: the timer would not start");
@@ -682,11 +688,13 @@ void itco_thread_start(void)
 void itco_tick(void)
 {
     int was;
+    uint32_t now = (uint32_t)kernel_ticks, passed = now - feed_seen;
 
+    feed_seen = now;
     if (registered) {
         was = watchdog.feed_due;
         watchdog.threaded = feeder != NULL && sched_is_enabled();
-        itco_feed_tick(&watchdog);
+        itco_feed_tick(&watchdog, passed);
         if (!was && watchdog.feed_due) {
             wq_wake_all(&feed_wq);
         }
@@ -705,5 +713,16 @@ void itco_shutdown(void)
 /** Return the next service deadline for the stopped idle tick. */
 uint32_t itco_idle_ticks(void)
 {
-    return registered && itco_feeding(&watchdog) ? 1u : TICK_HZ;
+    uint32_t elapsed = (uint32_t)kernel_ticks - feed_seen;
+    uint32_t wait;
+
+    if (!registered || !itco_feeding(&watchdog)) {
+        return TICK_HZ;
+    }
+    wait = watchdog.feed_left + 1u;
+    if (watchdog.open_limited && watchdog.open_left < wait) {
+        wait = watchdog.open_left;
+    }
+    wait = elapsed < wait ? wait - elapsed : 1u;
+    return wait < TICK_HZ ? wait : TICK_HZ;
 }

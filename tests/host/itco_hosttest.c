@@ -7,6 +7,7 @@
 #include <stdarg.h>
 
 extern int printf(const char *format, ...);
+extern int strcmp(const char *a, const char *b);
 
 #undef RACH2_HOSTTEST
 #include "arch/x86/itco.c"
@@ -21,6 +22,7 @@ struct model {
 };
 
 static int failures;
+volatile uint64_t kernel_ticks;
 static struct model model;
 static const void *bad_user;
 static const char *refused_keys[8]; /* the options of the first refusals */
@@ -386,7 +388,7 @@ static void run_threads(unsigned seconds, int threads)
     unsigned i;
 
     for (i = 1; i <= seconds * 5u; i++) {
-        itco_feed_tick(&watchdog);
+        itco_feed_tick(&watchdog, 1);
         if (threads) {
             itco_feed_work(&watchdog);
         }
@@ -454,7 +456,7 @@ static void threaded(void)
     watchdog.threaded = 1;
     CHECK(itco_attach(&watchdog, 5) == 0 && itco_boot_arm(&watchdog) == 0);
     at = model.writes;
-    itco_feed_tick(&watchdog);
+    itco_feed_tick(&watchdog, 1);
     CHECK(watchdog.feed_due && model.writes == at);
     itco_feed_work(&watchdog);
     CHECK(!watchdog.feed_due && model.writes == at + 1 && model.regs[at] == TCO_RLD);
@@ -468,7 +470,7 @@ static void threaded(void)
     setup();
     watchdog.threaded = 1;
     CHECK(itco_attach(&watchdog, 5) == 0 && itco_boot_arm(&watchdog) == 0);
-    itco_feed_tick(&watchdog);
+    itco_feed_tick(&watchdog, 1);
     CHECK(itco_open(NULL, NULL, 0) == 0 && watchdog.feed_due);
     at = model.writes;
     itco_feed_work(&watchdog);
@@ -612,8 +614,46 @@ static void line(void)
     (void)kcmdline_capture(0);
 }
 
+/** Check elapsed countdowns, exact open expiry and projected deadlines. */
+static int elapsed_rows(void)
+{
+    unsigned before;
+
+    setup();
+    CHECK(itco_attach(&watchdog, 5) == 0 && itco_boot_arm(&watchdog) == 0);
+    watchdog.boot_feed = 1;
+    watchdog.hz = TICK_HZ;
+    watchdog.feed_left = 10;
+    watchdog.open_limited = 1;
+    watchdog.open_left = 100;
+    before = model.writes;
+    itco_feed_tick(&watchdog, 0);
+    CHECK(watchdog.feed_left == 10 && watchdog.open_left == 100 && model.writes == before);
+    itco_feed_tick(&watchdog, 7);
+    CHECK(watchdog.feed_left == 3 && watchdog.open_left == 93 && model.writes == before);
+    itco_feed_tick(&watchdog, 3);
+    CHECK(watchdog.feed_left == 0 && watchdog.open_left == 90 && model.writes == before);
+    itco_feed_tick(&watchdog, 1);
+    CHECK(model.writes > before && watchdog.open_left == 89);
+    watchdog.feed_left = 0;
+    watchdog.open_left = 5;
+    before = model.writes;
+    itco_feed_tick(&watchdog, 6);
+    CHECK(watchdog.open_left == 0 && model.writes == before);
+    registered = 1;
+    watchdog.open_limited = 0;
+    watchdog.feed_left = 10;
+    feed_seen = 0xFFFFFFFCu;
+    kernel_ticks = 0x100000000ULL;
+    CHECK(itco_idle_ticks() == 7);
+    kernel_ticks += 7;
+    CHECK(itco_idle_ticks() == 1);
+    printf("itco-hosttest: elapsed: %s\n", failures ? "fail" : "pass");
+    return failures != 0;
+}
+
 /** Check actual writes, expiry, failures, exclusive open and the ioctl ABI. */
-int main(void)
+int main(int argc, char **argv)
 {
     int value, before;
     unsigned at;
@@ -622,6 +662,9 @@ int main(void)
         char identity[32];
     } info;
 
+    if (argc == 2 && strcmp(argv[1], "--elapsed-only") == 0) {
+        return elapsed_rows();
+    }
     setup();
     CHECK(itco_attach(&watchdog, 30) == 0);
     CHECK(model.words[TCO1_STS / 2] == 0x100);

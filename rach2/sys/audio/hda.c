@@ -3385,6 +3385,7 @@ static void hda_check_dma(int stream)
 static struct spinlock jack_lock = SPINLOCK_INIT_NAMED("jack_lock");
 static int jack_holds = 0;          /* regions outside the services that program
                                        the pins */
+static uint32_t jack_service_seen;  /* kernel_ticks at the last jack countdown */
 static uint32_t jack_ticks = 0;     /* ticks since the last poll */
 static int8_t jack_seen[HDA_JACKS]; /* a reading that differs from the state and
                                        waits for a second, or HDA_JACK_UNKNOWN */
@@ -4388,29 +4389,32 @@ static uint32_t hda_service_due(uint32_t asked)
 
 void hda_tick(void)
 {
-    static uint32_t seen; /* `kernel_ticks` at the last call */
-    uint32_t now = (uint32_t)kernel_ticks, passed = now - seen;
+    uint32_t now = (uint32_t)kernel_ticks, passed;
     uint32_t wanted = 0, flags;
+    int jack = 0;
 
-    seen = now;
     flags = spin_lock_irqsave(&stream_lock);
+    passed = now - jack_service_seen;
+    jack_service_seen = now;
     if (!play_irq_seen || play_irq_pending ||
         hda_irq_late(play_irq_tick, hda_bytes_us(period_bytes)))
         wanted |= HDA_SERVE_PLAY;
     if (!cap_irq_seen || cap_irq_pending || hda_irq_late(cap_irq_tick, hda_capture_period_us()))
         wanted |= HDA_SERVE_CAPTURE;
-    spin_unlock_irqrestore(&stream_lock, flags);
-    if (wanted && hda_service_threaded())
-        wanted = hda_service_due(wanted);
     if (hda_base && hda_report.ready) {
         jack_ticks += passed;
         if (jack_ticks >= HDA_JACK_TICKS) {
             jack_ticks = 0;
             if (hda_report.jacks[HDA_JACK_HP].pin || hda_report.jacks[HDA_JACK_MIC].pin ||
                 mic_program)
-                wanted |= HDA_SERVE_JACKS;
+                jack = 1;
         }
     }
+    spin_unlock_irqrestore(&stream_lock, flags);
+    if (wanted && hda_service_threaded())
+        wanted = hda_service_due(wanted);
+    if (jack)
+        wanted |= HDA_SERVE_JACKS;
     if (beep_queued ||
         (beep_opened && !beep_div && (playing || now - beep_silent >= HDA_BEEP_IDLE_TICKS)))
         wanted |= HDA_SERVE_BEEP;
@@ -5958,7 +5962,10 @@ uint32_t hda_idle_ticks(void)
     if (playing || cap_running || beep_queued || beep_opened) {
         wait = 1;
     } else if (hda_base && hda_report.ready) {
+        uint32_t elapsed = (uint32_t)kernel_ticks - jack_service_seen;
+
         wait = jack_ticks < HDA_JACK_TICKS ? HDA_JACK_TICKS - jack_ticks : 1u;
+        wait = elapsed < wait ? wait - elapsed : 1u;
         if (wait > TICK_HZ) {
             wait = TICK_HZ;
         }

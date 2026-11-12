@@ -268,8 +268,8 @@ static uint32_t timer_passes_late;
 static struct spinlock clock_pass_lock = SPINLOCK_INIT_NAMED("clock_pass");
 
 /* The boot processor's ticks in a row whose try for the big lock failed,
- * and the count at which its tick waits for the lock all the same, so that
- * its periodic work runs at most this many ticks late. */
+ * and the count at which its tick waits for the lock all the same. Four
+ * scheduler callbacks are 16 ms at 250 Hz and 4 ms at 1000 Hz. */
 static uint32_t boot_ticks_skipped;
 #define BOOT_TICK_SKIPS 4u
 
@@ -329,6 +329,8 @@ static void timer_wake_pass(void)
  * so that a holder elsewhere delays no wake and no tick here. Interrupts
  * are off and no lock is held.
  */
+static void timer_service_event(void);
+
 void timer_hr_pass(void)
 {
     timer_wake_hold();
@@ -344,13 +346,14 @@ void timer_hr_pass(void)
             timer_wake_at(rtc_monotonic_ns() + TICK_NS);
         }
     }
+    timer_service_event();
     timer_wake_release();
 }
 
 /**
  * Whether this processor, not the boot one, should make the clock's pass
  * and the timer pass: the tick count has not moved over two of its ticks,
- * so the boot processor's pass is a tick or more late, as when it runs with
+ * so the boot processor's pass is late, as when it runs with
  * interrupts off; and a reference keeps the clock, so that any processor
  * may count the tick (`timer_tick_shared`), whose count then comes from the
  * reference and not from this processor's ticks. Linux's timers fire from
@@ -443,6 +446,8 @@ static uint64_t timer_own_work(uint64_t t)
     return bkl_tick_charge(BKL_TICK_SPEAKER, t);
 }
 
+static void timer_service_rearm(void);
+
 /**
  * The boot processor's work under the big lock, from the cycle count `t`:
  * the load average and the idle count of the loopback ring, then the
@@ -484,11 +489,12 @@ static void timer_locked_work(uint64_t t)
     t = bkl_tick_charge(BKL_TICK_CONSOLE, t);
     klog_flush();
     (void)bkl_tick_charge(BKL_TICK_KLOG, t);
+    timer_service_rearm();
 }
 
 /* The boot processor's next service tick while parked, written under the
  * big lock and compared there by other processors before they release it. */
-static uint32_t idle_boot_until;
+static volatile uint32_t idle_boot_until;
 
 /** Read each service's next deadline, under the big lock with interrupts
  * off. The one-second bound extends the reference counter before it wraps
@@ -523,9 +529,63 @@ static uint32_t timer_service_ticks(void)
     return wait;
 }
 
+/** Arm the boot processor's earliest service under the big lock. IRQs are
+ * off. Scheduler ticks and device events share this deadline. */
+static void timer_service_rearm(void)
+{
+    uint32_t wait = timer_service_ticks();
+
+    idle_boot_until = (uint32_t)kernel_ticks + wait;
+    timer_wake_tick(tick_count() + wait);
+}
+
+/** Run a due boot-processor service event without waiting for the big
+ * lock. A failed try leaves the deadline due and retries in one millisecond.
+ * Interrupts are off and no lock is held. */
+static void timer_service_event(void)
+{
+    uint64_t t;
+
+    if (arch_cpu_id() != 0) {
+        return;
+    }
+    if ((int32_t)((uint32_t)kernel_ticks - idle_boot_until) < 0) {
+        timer_service_ipi();
+        return;
+    }
+    t = timer_own_work(arch_cycles());
+    if (bkl_try_enter()) {
+        timer_locked_work(t);
+        bkl_exit();
+    } else {
+        idle_boot_until = (uint32_t)kernel_ticks + 1u;
+        timer_wake_tick(tick_count() + 1);
+    }
+}
+
+/** Install the boot processor's service target after an interprocessor
+ * notification, without the big lock. A due service gets an immediate
+ * event; a future whole-tick target stays armed until its coarse expiry. */
+void timer_service_ipi(void)
+{
+    uint64_t now;
+    int32_t left;
+
+    if (arch_cpu_id() != 0) {
+        return;
+    }
+    now = tick_count();
+    left = (int32_t)(idle_boot_until - (uint32_t)now);
+    if (left > 0) {
+        timer_wake_tick(now + (uint32_t)left);
+    } else {
+        timer_wake_at(rtc_monotonic_ns() + 1);
+    }
+}
+
 /** Whether the idle task must return to selection, with interrupts off.
  * A wake leaves its flag set until the scheduler selects under its lock. */
-int timer_idle_woken(void)
+static int timer_idle_woken(void)
 {
     struct percpu *cpu = this_cpu();
 
@@ -539,7 +599,7 @@ int timer_idle_prepare(void)
     uint32_t wait;
     int64_t deadline;
 
-    if (current_proc && current_proc->need_resched) {
+    if (timer_idle_woken()) {
         return -1;
     }
     deadline = watchdog_idle_deadline();
@@ -551,17 +611,17 @@ int timer_idle_prepare(void)
             timer_idle_notify();
             bkl_exit();
         }
-        return current_proc && current_proc->need_resched ? -1 : 1;
+        return timer_idle_woken() ? -1 : 1;
     }
     if (!bkl_try_enter()) {
-        return current_proc && current_proc->need_resched ? -1 : 0;
+        return timer_idle_woken() ? -1 : 0;
     }
     wait = timer_service_ticks();
     idle_boot_until = (uint32_t)kernel_ticks + wait;
     timer_wake_tick(tick_count() + wait);
     latency_idle_begin();
     bkl_exit();
-    return current_proc && current_proc->need_resched ? -1 : 1;
+    return timer_idle_woken() ? -1 : 1;
 }
 
 /** Kick the idle boot processor for an earlier service under the big lock.
@@ -570,7 +630,7 @@ void timer_idle_notify(void)
 {
     uint32_t next;
 
-    if (arch_cpu_id() == 0 || !cpu_table[0].tick_stopped) {
+    if (arch_cpu_id() == 0) {
         return;
     }
     next = (uint32_t)kernel_ticks + timer_service_ticks();
