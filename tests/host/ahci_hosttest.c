@@ -48,8 +48,12 @@ static int link_comes_up;
 static uint32_t empty_ports;
 static uint32_t det_one_ports;
 /* Whether port 0's DET turns between 1 and 3 at each read of PxSSTS: a link
-   that never holds. */
+   that never holds. With `steady_spd` not 0, it holds once its PxSCTL.SPD
+   limits it to 1 to `steady_spd`, and then reads that speed. */
 static int link_flaps;
+static uint32_t steady_spd;
+/* Port 0's COMRESETs. */
+static unsigned p0_resets;
 /* The order of two events, in a count the model keeps: port 0's PxSIG read,
    and the COMRESET of port 1. */
 static unsigned model_seq;
@@ -128,6 +132,14 @@ static void (*on_command_issued)(void);
    not bound itself never returns at all. */
 static unsigned ci_reads;
 
+/** Whether port 0's flapping link holds at the speed its PxSCTL.SPD sets. */
+static int link_steady(void)
+{
+    uint32_t spd = (reg[P0 + P_SCTL] >> 4) & 0xFu;
+
+    return steady_spd != 0 && spd >= 1u && spd <= steady_spd;
+}
+
 /**
  * Read register `off` of the model; an offset past the array reads 0.
  *
@@ -135,7 +147,8 @@ static unsigned ci_reads;
  * read of PxCI is counted in `ci_reads`, and the read that ends a slow
  * command's `complete_after` clears PxCI and runs `on_command_issued`. A read
  * of port 0's PxSIG is stamped in `p0_sig_read_at`, and with `link_flaps` a
- * read of its PxSSTS turns its DET between 1 and 3 first.
+ * read of its PxSSTS turns its DET between 1 and 3 first, unless its link is
+ * steady (`link_steady`).
  */
 static uint32_t model_r32(uint32_t off)
 {
@@ -148,7 +161,7 @@ static uint32_t model_r32(uint32_t off)
     if (off == P0 + P_SIG) {
         p0_sig_read_at = ++model_seq;
     }
-    if (off == P0 + P_SSTS && link_flaps) {
+    if (off == P0 + P_SSTS && link_flaps && !link_steady()) {
         reg[off] ^= 0x122u; /* DET 3, IPM 1 to DET 1, IPM 0, and back */
     }
     if (off == P0 + P_CI) {
@@ -205,8 +218,10 @@ static void model_issue(uint32_t base, uint32_t v)
 /**
  * Write `v` to the PxSCTL of the port whose registers start at `base`: DET 1
  * takes the link down, and DET 0 brings it up when `link_comes_up`, unless
- * the port is one of `empty_ports`, to DET 1 for one of `det_one_ports`. Port
- * 1's COMRESET is stamped in `p1_reset_at`.
+ * the port is one of `empty_ports`, to DET 1 for one of `det_one_ports`, and
+ * for port 0 at a steady speed (`link_steady`) to DET 3 at that speed. Port
+ * 1's COMRESET is stamped in `p1_reset_at`, and port 0's are counted in
+ * `p0_resets`.
  */
 static void model_sctl(uint32_t base, uint32_t v)
 {
@@ -217,9 +232,14 @@ static void model_sctl(uint32_t base, uint32_t v)
         reg[base + P_SSTS] = 0x000u;
         if (base == P1) {
             p1_reset_at = ++model_seq;
+        } else {
+            p0_resets++;
         }
     } else if ((v & 0xFu) == 0u && link_comes_up && !(empty_ports & bit)) {
         reg[base + P_SSTS] = (det_one_ports & bit) ? 0x001u : 0x123u;
+        if (base == P0 && link_flaps && link_steady()) {
+            reg[base + P_SSTS] = 0x103u | (v & 0xF0u);
+        }
     }
 }
 
@@ -841,6 +861,8 @@ static void model_reset(void)
     link_comes_up = 1;
     empty_ports = det_one_ports = 0;
     link_flaps = 0;
+    steady_spd = 0;
+    p0_resets = 0;
     model_seq = p0_sig_read_at = p1_reset_at = 0;
     delays = 0;
     command_completes = 1;
@@ -1047,10 +1069,14 @@ static void answer_port(int port, uint32_t bytes)
  * The link's debounce, in the polls of 5 ms that Linux's `sata_link_debounce`
  * takes with its normal timings: a port settles after 100 ms of one DET, 21
  * polls, except that a DET of 1 waits for the 2 s deadline, 400, and a DET
- * that never holds settles one poll past it. Every count also has the two
- * delays before the polls, COMRESET held and the PHY's 200 ms. The ports are
- * reset together, both before port 0's signature is read, unless the
- * controller has staggered spin-up, when port 1 is reset only after it.
+ * that still changes one poll past it fails the debounce. Every count also
+ * has the two delays before the polls, COMRESET held and the PHY's 200 ms. A
+ * failed link is reset again after one delay to the try's deadline, at a
+ * lower speed, four tries in all, as Linux's `ata_eh_reset`: a link that
+ * never holds is dropped at the lowest speed, and one that holds only at
+ * 1.5 Gb/s is found there. The ports are reset together, both before port 0's
+ * signature is read, unless the controller has staggered spin-up, when port 1
+ * is reset only after it.
  */
 static void link_rows(void)
 {
@@ -1072,9 +1098,23 @@ static void link_rows(void)
 
     model_reset();
     link_flaps = 1;
-    (void)ahci_select_port();
-    CHECK("a link that never holds settles one poll past the deadline",
-          delays == before + AHCI_DEB_LIMIT + 1);
+    CHECK("a link that never holds is dropped", ahci_select_port() != 0 && ahci_ndisks == 0);
+    CHECK("after four resets, each failing one poll past the deadline",
+          p0_resets == AHCI_RESET_TRIES &&
+              delays == AHCI_RESET_TRIES * (before + AHCI_DEB_LIMIT + 1) + AHCI_RESET_TRIES - 1);
+    CHECK("its speed lowered to 1.5 Gb/s", (reg[P0 + P_SCTL] & 0xF0u) == 0x10u);
+
+    model_reset();
+    reg[R_CAP] |= 3u << 20; /* ISS 3: up to 6 Gb/s */
+    link_flaps = 1;
+    steady_spd = 1;
+    CHECK("a link that holds only at 1.5 Gb/s is found",
+          ahci_select_port() == 0 && ahci_ndisks == 1 && ahci_port == 0);
+    CHECK("on its third reset, the first two failing at 6 and 3 Gb/s",
+          p0_resets == 3 &&
+              delays == 2 * (before + AHCI_DEB_LIMIT + 1 + 1) + before + AHCI_DEB_STEADY + 1);
+    CHECK("at 1.5 Gb/s",
+          (reg[P0 + P_SCTL] & 0xF0u) == 0x10u && (reg[P0 + P_SSTS] & 0xFFu) == 0x13u);
 
     model_reset();
     reg[R_PI] = 3;

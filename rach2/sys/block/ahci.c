@@ -50,14 +50,19 @@
 #define AHCI_CAP2 0x24 /* extended capabilities */
 #define AHCI_BOHC 0x28 /* BIOS/OS handoff control and status */
 
-#define AHCI_GHC_AE      0x80000000u /* AHCI enable */
-#define AHCI_GHC_IE      0x00000002u /* global interrupt enable */
-#define AHCI_CAP2_BOH    0x1u        /* BIOS/OS handoff supported */
-#define AHCI_BOHC_BOS    0x1u        /* BIOS owned */
-#define AHCI_BOHC_OOS    0x2u        /* OS ownership request */
-#define AHCI_CAP_NP_MASK 0x1Fu       /* CAP.NP: number of ports minus one */
-#define AHCI_CAP_S64A    0x80000000u /* CAP.S64A: 64-bit addressing */
-#define AHCI_CAP_SSS     0x08000000u /* CAP.SSS: staggered spin-up */
+#define AHCI_GHC_AE        0x80000000u /* AHCI enable */
+#define AHCI_GHC_IE        0x00000002u /* global interrupt enable */
+#define AHCI_CAP2_BOH      0x1u        /* BIOS/OS handoff supported */
+#define AHCI_BOHC_BOS      0x1u        /* BIOS owned */
+#define AHCI_BOHC_OOS      0x2u        /* OS ownership request */
+#define AHCI_CAP_NP_MASK   0x1Fu       /* CAP.NP: number of ports minus one */
+#define AHCI_CAP_S64A      0x80000000u /* CAP.S64A: 64-bit addressing */
+#define AHCI_CAP_SSS       0x08000000u /* CAP.SSS: staggered spin-up */
+/* CAP.ISS: the fastest link the controller supports, 1 for Gen1 (1.5 Gb/s),
+   2 for Gen2 (3 Gb/s) and 3 for Gen3 (6 Gb/s); the other values are
+   reserved. */
+#define AHCI_CAP_ISS_SHIFT 20
+#define AHCI_CAP_ISS_MASK  0xFu
 
 /* Per-port register block N lives at ABAR + 0x100 + N*0x80. */
 #define AHCI_PORT_BASE   0x100
@@ -94,16 +99,23 @@
    of its own for it (`ahci_intel_pcs_quirk`). */
 #define AHCI_INTEL_PCS 0x92
 
-/* SSTS: DET (bits 0-3) == 3 is device present + PHY ready; IPM (bits 8-11) == 1
-   is the active power state. */
+/* SSTS: DET (bits 0-3) == 3 is device present + PHY ready; SPD (bits 4-7) is
+   the speed the link negotiated, numbered as CAP.ISS; IPM (bits 8-11) == 1 is
+   the active power state. */
 #define AHCI_DET_MASK    0xFu
 #define AHCI_DET_PRESENT 0x3u
 #define AHCI_IPM_ACTIVE  0x1u
+#define AHCI_SPD_SHIFT   4
+#define AHCI_SPD_MASK    0xFu
 
-/* SCTL.DET: 1 requests a COMRESET, 0 lets the link come up again. */
-#define AHCI_SCTL_DET_MASK 0xFu
-#define AHCI_SCTL_DET_INIT 0x1u
-#define AHCI_SCTL_DET_NONE 0x0u
+/* SCTL.DET: 1 requests a COMRESET, 0 lets the link come up again, and 4 takes
+   the PHY offline. SCTL.SPD, at the bits of SSTS.SPD, is the fastest speed
+   the link may negotiate, 0 for no limit. */
+#define AHCI_SCTL_DET_MASK    0xFu
+#define AHCI_SCTL_DET_INIT    0x1u
+#define AHCI_SCTL_DET_NONE    0x0u
+#define AHCI_SCTL_DET_OFFLINE 0x4u
+#define AHCI_SCTL_SPD_MASK    0xF0u
 
 /* SCTL.IPM with every link power state disabled: partial, slumber and
    DevSleep. Disabled at the host, they are also denied to the device's
@@ -152,11 +164,16 @@
    signature, polled every 100 us, which is generous for a disk and short
    enough that a port with something unresponsive on it does not hold up a
    boot. Every expiry is an ordinary answer: an empty port and a device that
-   does not answer are both ports to move past. */
+   does not answer are both ports to move past. A DET that still changes after
+   the 2 s is a failed reset, which is tried again at a lower speed, four tries
+   in all, each after the deadline of the one before, 10, 10 and 35 s from its
+   start, as Linux's `ata_eh_reset` does with `ata_eh_reset_timeouts`
+   (libata-eh.c:81); the fourth's deadline, 5 s, is past its own debounce. */
 #define AHCI_RESUME_DELAY_US 200000u
 #define AHCI_DEB_POLL_US     5000u
 #define AHCI_DEB_STEADY      20u  /* 100 ms of polls */
 #define AHCI_DEB_LIMIT       400u /* 2 s of polls */
+#define AHCI_RESET_TRIES     4u
 #define AHCI_RESET_POLL_US   100u
 #define AHCI_READY_STEPS     50000u
 
@@ -504,7 +521,8 @@ static int ahci_discover(void)
 
 /**
  * Assert COMRESET on one port, with its reset areas programmed, its power up
- * and its FIS receive on; `ahci_links_reset` releases it.
+ * and its FIS receive on, and its link limited to speed `spd`, an SCTL.SPD
+ * value; `ahci_links_try` releases it.
  *
  * A warm reboot can leave a link where the port reports a device and the
  * device never becomes ready, as the Lenovo's does, and the HBA reset of
@@ -537,8 +555,12 @@ static int ahci_discover(void)
  * value: SControl IPM = 7, every transition disabled (libata-sata.c). A
  * diagnostic that reads a sector an hour after boot must not find that the
  * link slept in between and the drive never woke.
+ *
+ * A new speed limit is written with the PHY offline, DET 4, as Linux's
+ * `sata_link_hardreset` writes one (libata-sata.c:634-646), since the
+ * specification does not say how a running link takes the change.
  */
-static void ahci_port_comreset(int port)
+static void ahci_port_comreset(int port, uint32_t spd)
 {
     uint32_t sctl_off = ahci_port_off(port, AHCI_PxSCTL);
     uint32_t cmd_off = ahci_port_off(port, AHCI_PxCMD);
@@ -559,40 +581,47 @@ static void ahci_port_comreset(int port)
     ahci_write32(cmd_off, ahci_read32(cmd_off) | AHCI_PxCMD_FRE);
 
     sctl = (sctl & ~(AHCI_SCTL_DET_MASK | AHCI_SCTL_IPM_MASK)) | AHCI_SCTL_IPM_DISABLE_ALL;
+    if (((sctl & AHCI_SCTL_SPD_MASK) >> AHCI_SPD_SHIFT) != spd) {
+        ahci_write32(sctl_off, sctl | AHCI_SCTL_DET_OFFLINE);
+        sctl = (sctl & ~AHCI_SCTL_SPD_MASK) | (spd << AHCI_SPD_SHIFT);
+        ahci_write32(sctl_off, sctl | AHCI_SCTL_DET_OFFLINE);
+    }
     ahci_write32(sctl_off, sctl | AHCI_SCTL_DET_INIT);
 }
 
 /**
- * Reset the SATA links of the ports in the mask `ports` together and debounce
- * them. Returns the mask of those whose link came up, DET 3, with their
- * PxSERR cleared.
+ * Reset the SATA links of the ports in the mask `ports` together, each at the
+ * speed limit `spd[port]`, and debounce them. Returns the mask of those whose
+ * link came up, DET 3, with their PxSERR cleared; sets `*failed` to the mask
+ * of those whose debounce failed and `*spent_us` to the time the delays took.
  *
- * This is Linux's `sata_link_hardreset` (drivers/ata/libata-sata.c:624, in
- * 6.12.115), which `ahci_hardreset` runs (libahci.c:1641): COMRESET held for
- * at least a millisecond (libata-sata.c:663), released, 200 ms for the PHY
- * (`sata_link_resume`, :323), then `sata_link_debounce` (:235) with the
- * normal timings. A port is settled once its DET has held for 100 ms, except
- * that a DET of 1 is waited on until the 2 s deadline. A DET that still
- * changes after the deadline settles the port at that reading, where Linux
- * returns -EPIPE and its error handler tries again at a lower speed; a port
- * then reading 3 is taken as up, as the scan always took it. Every port is
- * settled within the deadline and a steady stretch past it.
+ * This is one try of Linux's `sata_link_hardreset` (drivers/ata/
+ * libata-sata.c:624, in 6.12.115), which `ahci_hardreset` runs
+ * (libahci.c:1641): COMRESET held for at least a millisecond
+ * (libata-sata.c:663), released, 200 ms for the PHY (`sata_link_resume`,
+ * :323), then `sata_link_debounce` (:235) with the normal timings. A port is
+ * settled once its DET has held for 100 ms, except that a DET of 1 is waited
+ * on until the 2 s deadline. A DET that changes after the deadline fails the
+ * port's debounce, where Linux returns -EPIPE (:275-279); the port is then
+ * neither linked nor settled, and `ahci_links_reset` tries it again. Every
+ * port is settled or failed within the deadline and a steady stretch past it.
  *
  * An empty port is not a failure: every implemented port is reset at
  * bring-up, and most machines have ports with nothing on them. Its DET stays
  * 0 and it is settled 300 ms after the release, which is what an empty port
  * costs Linux; a debug line gives each such port's status.
  */
-static uint32_t ahci_links_reset(uint32_t ports)
+static uint32_t ahci_links_try(uint32_t ports, const uint32_t *spd, uint32_t *failed,
+                               uint32_t *spent_us)
 {
     uint32_t last[32], since[32];
     uint32_t pending = ports, linked = 0, step;
     int p;
 
-    pci_enable_bus_master(&ahci_pci);
+    *failed = 0;
     for (p = 0; p < 32; ++p) {
         if (ports & (1u << p)) {
-            ahci_port_comreset(p);
+            ahci_port_comreset(p, spd[p]);
         }
     }
     /* At least 1 ms with COMRESET asserted. */
@@ -630,9 +659,11 @@ static uint32_t ahci_links_reset(uint32_t ports)
             } else {
                 last[p] = cur;
                 since[p] = step;
-                if (step <= AHCI_DEB_LIMIT) {
-                    continue;
+                if (step > AHCI_DEB_LIMIT) {
+                    pending &= ~(1u << p);
+                    *failed |= 1u << p;
                 }
+                continue;
             }
             pending &= ~(1u << p);
             if (cur == AHCI_DET_PRESENT) {
@@ -649,6 +680,122 @@ static uint32_t ahci_links_reset(uint32_t ports)
                      (int)cur);
             }
         }
+    }
+    *spent_us = 2000u + AHCI_RESUME_DELAY_US + (step - 1u) * AHCI_DEB_POLL_US;
+    return linked;
+}
+
+/**
+ * Lower the speed limit `*limit` of a port whose link failed its debounce, a
+ * mask in which bit N-1 allows SCTL.SPD N. Returns the new limit's SCTL.SPD,
+ * or 0 when the limit is already at its lowest and is left as it is.
+ *
+ * This is Linux's `sata_down_spd_limit` (libata-sata.c:540): the fastest
+ * speed allowed is dropped, and so is every speed from the one the link last
+ * negotiated up, which SStatus gives while DET reads 3. Linux starts a limit
+ * that SControl does not set at UINT_MAX, and dropping its top bit with no
+ * speed known writes a reserved SPD, 15 (dev-log/84-locks/upstream.md);
+ * `ahci_links_reset` starts it at the controller's speeds, CAP.ISS, so the
+ * first such step drops the fastest of those.
+ */
+static uint32_t ahci_link_slow(int port, uint32_t *limit)
+{
+    uint32_t ssts = ahci_read32(ahci_port_off(port, AHCI_PxSSTS));
+    uint32_t mask = *limit, cur = 0, spd = 0;
+    static const char *const speeds[] = {"1.5 Gb/s", "3 Gb/s", "6 Gb/s"};
+
+    if ((ssts & AHCI_DET_MASK) == AHCI_DET_PRESENT) {
+        cur = (ssts >> AHCI_SPD_SHIFT) & AHCI_SPD_MASK;
+    }
+    if (mask <= 1u) {
+        return 0;
+    }
+    while ((mask >> spd) > 1u) {
+        ++spd;
+    }
+    mask &= ~(1u << spd);
+    if (cur > 1u) {
+        mask &= (1u << (cur - 1u)) - 1u;
+    }
+    if (mask == 0) {
+        return 0;
+    }
+    *limit = mask;
+    for (spd = 0; mask != 0; mask >>= 1) {
+        ++spd;
+    }
+    klog(KLOG_WARN, "ahci", "port %d: limiting the link to %s", port,
+         spd <= 3u ? speeds[spd - 1u] : "a lower speed");
+    return spd;
+}
+
+/* How long each failed try of a link reset lasts before the next starts, from
+   its own start, in ms: Linux's `ata_eh_reset_timeouts` (libata-eh.c:81). */
+static const uint32_t ahci_reset_wait_ms[AHCI_RESET_TRIES - 1u] = {10000u, 10000u, 35000u};
+
+/**
+ * Reset the SATA links of the ports in the mask `ports` together and debounce
+ * them, trying a link whose debounce fails again at a lower speed. Returns
+ * the mask of those whose link came up, DET 3, with their PxSERR cleared.
+ *
+ * This is the hardreset loop of Linux's `ata_eh_reset` (libata-eh.c:2775 and
+ * 2942-3029), for the ports together. A port whose DET still changes after
+ * the debounce's deadline, a link that does not hold, waits out the try's
+ * deadline, `ahci_reset_wait_ms`, has its speed lowered (`ahci_link_slow`)
+ * and is reset again, with the other failed ports, four tries in all; a link
+ * that has not held by then is skipped with a warning, as Linux gives up on
+ * it. A port whose link held, or that settled with no link, is done after its
+ * first try; most links hold at once, and an empty port costs only that.
+ */
+static uint32_t ahci_links_reset(uint32_t ports)
+{
+    uint32_t spd[32], limit[32];
+    uint32_t linked = 0, failed, spent_us, iss, try;
+    int p;
+
+    iss = (ahci_read32(AHCI_CAP) >> AHCI_CAP_ISS_SHIFT) & AHCI_CAP_ISS_MASK;
+    if (iss == 0) {
+        iss = 3; /* reserved; the fastest SATA speed there is */
+    }
+    for (p = 0; p < 32; ++p) {
+        if (ports & (1u << p)) {
+            spd[p] =
+                (ahci_read32(ahci_port_off(p, AHCI_PxSCTL)) & AHCI_SCTL_SPD_MASK) >> AHCI_SPD_SHIFT;
+            limit[p] = (1u << iss) - 1u;
+            if (spd[p] != 0) {
+                limit[p] &= (1u << spd[p]) - 1u;
+            }
+        }
+    }
+
+    pci_enable_bus_master(&ahci_pci);
+    for (try = 0;; ++try) {
+        linked |= ahci_links_try(ports, spd, &failed, &spent_us);
+        if (failed == 0) {
+            break;
+        }
+        if (try + 1u >= AHCI_RESET_TRIES) {
+            for (p = 0; p < 32; ++p) {
+                if (failed & (1u << p)) {
+                    klog(KLOG_WARN, "ahci", "port %d: the link did not hold in %d resets; skipped",
+                         p, (int)AHCI_RESET_TRIES);
+                }
+            }
+            break;
+        }
+        if (spent_us < ahci_reset_wait_ms[try] * 1000u) {
+            k_udelay(ahci_reset_wait_ms[try] * 1000u - spent_us);
+        }
+        for (p = 0; p < 32; ++p) {
+            if (failed & (1u << p)) {
+                uint32_t lower = ahci_link_slow(p, &limit[p]);
+
+                if (lower != 0) {
+                    spd[p] = lower;
+                }
+            }
+        }
+        ports = failed;
     }
     return linked;
 }
