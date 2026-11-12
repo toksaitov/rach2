@@ -1111,11 +1111,11 @@ const uint8_t *vtd_hw_dmar(uint32_t *len)
     return dmar_table;
 }
 
-/** Whether the row's value of `key`, a list separated by commas, has
- * `value`. */
-int vtd_hw_option(const char *key, const char *value)
+/** Whether the row's value `p`, a list separated by commas, has `value`;
+ * cmdline.c's `kcmdline_list` and its rows in ioapic_hosttest.c read the
+ * boot line itself. */
+static int opt_has(const char *p, const char *value)
 {
-    const char *p = key[3] == 'e' ? opt_intel_iommu : opt_intremap;
     unsigned long n = 0, i;
 
     while (value[n] != 0) {
@@ -1135,6 +1135,24 @@ int vtd_hw_option(const char *key, const char *value)
         p += p[len] == ',' ? len + 1 : len;
     }
     return 0;
+}
+
+/** Whether the row turns translation off. */
+int vtd_hw_dma_off(void)
+{
+    return opt_has(opt_intel_iommu, "off");
+}
+
+/** Whether the row turns remapping off. */
+int vtd_hw_intremap_off(void)
+{
+    return opt_has(opt_intremap, "off");
+}
+
+/** Whether the row takes the x2APIC format over the firmware's opt-out. */
+int vtd_hw_no_x2apic_optout(void)
+{
+    return opt_has(opt_intremap, "no_x2apic_optout");
 }
 
 /** Whether the row's boot line has noapic or maxcpus=0. */
@@ -2301,7 +2319,7 @@ static void row_options(void)
     check(vtd_start() == 1 && iommu_present() && !intremap_active() &&
               (m->gsts & VTD_GCMD_IRE) == 0,
           "translation offered, remapping off");
-    check(logged("vtd: interrupt remapping: off by intremap=off"), "logged");
+    check(logged("vtd: interrupt remapping: off by nointremap or intremap=off"), "logged");
     msi_of(0, DF(0x1F, 2), &a, &data);
     check(a == 0xFEE00000u && data == 49, "the message as it was");
     row_end();

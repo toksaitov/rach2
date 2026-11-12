@@ -44,11 +44,20 @@ int kcmdline_has(const char *flag);
  */
 int kcmdline_value(const char *key, char *out, unsigned int outlen);
 
-/** Whether the first `key=` token's value, a list separated by commas, has
- * `item` as one of its members, as Linux's `intremap=` and `intel_iommu=`
- * take theirs: 0 when the token is absent or its value does not fit 63
- * bytes. */
-int kcmdline_value_has(const char *key, const char *item);
+/**
+ * Read a list option as Linux reads one: every `key=` token in the line's
+ * order, each value a list of items separated by commas, each item taken
+ * as the first of the `nwords` `words` it begins with and passed over when
+ * it begins with none. A token that is `flag`, bare or with a value, when
+ * `flag` is not NULL, is taken as an item that is `words[0]`, as Linux's
+ * `nointremap` sets what `intremap=off` sets. `words` holds at most 16.
+ *
+ * @return a mask with bit `w` set when any item was `words[w]`; `*last`,
+ * when `last` is not NULL, is set to the index of the last item taken and
+ * left alone when none was.
+ */
+int kcmdline_list(const char *key, const char *flag, const char *const *words, int nwords,
+                  int *last);
 
 /**
  * Read the integer value of the `nth` `key=value` token, counting from zero,

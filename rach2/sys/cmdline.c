@@ -84,34 +84,73 @@ int kcmdline_value(const char *key, char *out, unsigned int outlen)
     return kcmdline_value_nth(key, 0, out, outlen);
 }
 
-int kcmdline_value_has(const char *key, const char *item)
+/** The index of the first of the `nwords` `words` that the item at `s`,
+ * which ends before `end`, begins with, as strncmp(s, word, strlen(word))
+ * matches it; -1 for none. */
+static int list_word(const char *s, const char *end, const char *const *words, int nwords)
 {
-    char buf[64];
-    size_t n = k_strlen(item);
-    const char *p = buf;
+    int w;
 
-    if (!kcmdline_value(key, buf, (unsigned int)sizeof(buf))) {
-        return 0;
-    }
-    while (*p != 0) {
-        const char *end = p;
+    for (w = 0; w < nwords; w++) {
+        size_t i = 0, n = k_strlen(words[w]);
 
-        while (*end != 0 && *end != ',') {
-            end++;
+        while (i < n && s + i < end && s[i] == words[w][i]) {
+            i++;
         }
-        if ((size_t)(end - p) == n) {
-            size_t i = 0;
+        if (i == n) {
+            return w;
+        }
+    }
+    return -1;
+}
 
-            while (i < n && p[i] == item[i]) {
-                i++;
+/** Linux's parse_args hands an early parameter's setup function each token
+ * whose name is the parameter's, with a value or none (init/main.c, lines
+ * 723 to 739), so `nointremap` and `nointremap=1` both run
+ * setup_nointremap. A list's items are taken as setup_irqremap and
+ * intel_iommu_setup take theirs (drivers/iommu/irq_remapping.c, lines 62
+ * to 80; drivers/iommu/intel/iommu.c, lines 245 to 281): a word is matched
+ * by strncmp over its own length, so `onx` is `on`, and the item ends at
+ * the next comma, a run of commas being one. */
+int kcmdline_list(const char *key, const char *flag, const char *const *words, int nwords,
+                  int *last)
+{
+    size_t klen = k_strlen(key), flen = flag != 0 ? k_strlen(flag) : 0;
+    const char *p = kcmdline;
+    const char *tok, *s, *end;
+    size_t len;
+    int seen = 0, w;
+
+    while (next_token(&p, &tok, &len)) {
+        if (flag != 0 && len >= flen && token_is(tok, flag, flen) &&
+            (len == flen || tok[flen] == '=')) {
+            seen |= 1;
+            if (last != 0) {
+                *last = 0;
             }
-            if (i == n) {
-                return 1;
+            continue;
+        }
+        if (!token_has_key(tok, len, key, klen)) {
+            continue;
+        }
+        end = tok + len;
+        for (s = tok + klen + 1; s < end;) {
+            w = list_word(s, end, words, nwords);
+            if (w >= 0) {
+                seen |= 1 << w;
+                if (last != 0) {
+                    *last = w;
+                }
+            }
+            while (s < end && *s != ',') {
+                s++;
+            }
+            while (s < end && *s == ',') {
+                s++;
             }
         }
-        p = *end == ',' ? end + 1 : end;
     }
-    return 0;
+    return seen;
 }
 
 int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)

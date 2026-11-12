@@ -1189,10 +1189,10 @@ static int vtd_read_only(void)
 
 /**
  * Read the DMAR table and bring up each unit of segment 0, the fault
- * reports, and, unless the boot line says `intremap=off`, `noapic` or
- * `maxcpus=0`, interrupt remapping: the units up, or -1 when there are
- * none. With both `intel_iommu=off` and `intremap=off` the units are only
- * read, and none is up.
+ * reports, and, unless the boot line turns it off (`nointremap`,
+ * `intremap=off`, `noapic` or `maxcpus=0`), interrupt remapping: the units
+ * up, or -1 when there are none. With both translation and remapping off
+ * by the boot line the units are only read, and none is up.
  */
 int vtd_start(void)
 {
@@ -1209,7 +1209,7 @@ int vtd_start(void)
         return -1;
     }
     dmar_report(&vtd_dmar);
-    if (vtd_hw_option("intel_iommu", "off") && vtd_hw_option("intremap", "off")) {
+    if (vtd_hw_dma_off() && vtd_hw_intremap_off()) {
         (void)vtd_read_only();
         return -1;
     }
@@ -1228,10 +1228,10 @@ int vtd_start(void)
         return -1;
     }
     vtd_up = 1;
-    vtd_dma_off = vtd_hw_option("intel_iommu", "off");
+    vtd_dma_off = vtd_hw_dma_off();
     (void)vtd_fault_start();
-    if (vtd_hw_option("intremap", "off")) {
-        klog(KLOG_INFO, "vtd", "interrupt remapping: off by intremap=off");
+    if (vtd_hw_intremap_off()) {
+        klog(KLOG_INFO, "vtd", "interrupt remapping: off by nointremap or intremap=off");
     } else if (vtd_hw_ioapic_off()) {
         /* Linux's enable_IR_x2apic, apic.c lines 1898 to 1901 */
         klog(KLOG_INFO, "vtd", "interrupt remapping: off by noapic or maxcpus=0");

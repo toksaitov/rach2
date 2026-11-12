@@ -278,7 +278,7 @@ static int choose_eim(void)
     if (!vtd_hw_x2apic_possible()) {
         return 0;
     }
-    if ((vtd_dmar.flags & DMAR_X2APIC_OUT) != 0 && !vtd_hw_option("intremap", "no_x2apic_optout")) {
+    if ((vtd_dmar.flags & DMAR_X2APIC_OUT) != 0 && !vtd_hw_no_x2apic_optout()) {
         klog(KLOG_INFO, "vtd",
              "interrupt remapping: xapic format: the firmware opts out of x2apic");
         return 0;
