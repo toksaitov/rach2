@@ -4,8 +4,9 @@
 # cases (tests/native/gpu.cases) that the second discovery run did not take,
 # in one boot of Debian with the IOMMU's translation off, made by the cases'
 # own program, tests/graphics/runners/lenovo.sh, with `-` for the reference.
-#   STAGE  a directory holding lenovo.sh beside the runners, guest-env.sh and
-#          igt-lenovo-gem.list, flat, as a case's workspace holds them, and
+#   STAGE  a directory holding lenovo.sh beside the runners, guest-env.sh,
+#          igt-lenovo-gem.list and webgl-lenovo.omit, flat, as a case's
+#          workspace holds them, and
 #          the IGT stage of Rach2's root unpacked in STAGE/igt (usr/...)
 #   PART   igt, glmark2, gate, probe or webgl, each by default, in that
 #          order: IGT's buffer list as root with no compositor, then Weston
@@ -37,7 +38,7 @@ case_run() {
 	d=$O/$n
 	rm -rf $d
 	mkdir -p $d
-	cp $S/*.sh $S/*.py $S/*.html $S/*.list $d/ 2> /dev/null
+	cp $S/*.sh $S/*.py $S/*.html $S/*.list $S/*.omit $d/ 2> /dev/null
 	say "conformance: start $n: $*" | tee $d/run.log
 	(cd $d && sh lenovo.sh "$@" -) > $d/lenovo.out 2>&1
 	echo "exit $?" >> $d/run.log

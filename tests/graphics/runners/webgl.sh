@@ -24,9 +24,11 @@
 # new one runs its pages.
 #
 # OMIT names pages that BROWSER does not run, a line each, `BROWSER PATH`,
-# PATH as the list gives it, `#` beginning a comment; such a page's status
-# is `omitted`. The virgl cases name runners/webgl-virgl.omit, the pages
-# that end QEMU on the testing PC in one of the browsers.
+# PATH as the list gives it, or a directory of it ending in `/` for every
+# page under it, `#` beginning a comment; such a page's status is
+# `omitted`. The virgl cases name runners/webgl-virgl.omit, the pages that
+# end QEMU on the testing PC in one of the browsers, and the Lenovo's cases
+# runners/webgl-lenovo.omit.
 #
 # The harness ends a page after 20 s without a result, which webgl.html
 # reports as `timeout`, a status like any other, never a verdict on the run.
