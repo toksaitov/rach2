@@ -104,6 +104,24 @@ struct bkl_call_count {
 };
 static struct bkl_call_count bkl_calls[BKL_ENTRY_KEYS];
 
+/* The holds of each kernel thread that it takes for itself, outside any
+ * interrupt or exception it is in: at its first switch and after each
+ * sleep (`take 1`), after an idle wait (`take 0`) and by `bkl_enter` or
+ * `bkl_take` in its own code (`vector 0`). Each is counted here alone, under
+ * the thread's pid and name, so that bkl/calls names the thread, and the
+ * lines it shows stay disjoint. A slot is the thread's from its first such
+ * hold until the counts are zeroed; a thread that finds every slot taken is
+ * counted under the key as before. The big lock, which a hold's end holds,
+ * guards the slots. */
+#define BKL_THREAD_SLOTS 32
+struct bkl_thread_count {
+    const struct process *proc; /* NULL for a free slot */
+    uint32_t pid;
+    char comm[16];
+    struct bkl_call_count count;
+};
+static struct bkl_thread_count bkl_threads[BKL_THREAD_SLOTS];
+
 /* A processor's own calls and their time for each key, then for each ioctl
  * slot, which a call counts with or without the big lock and a read of
  * bkl/calls sums over the processors, as Linux keeps per-processor counters
@@ -288,6 +306,38 @@ static int hold_key(const struct percpu *cpu)
     return BKL_ENTRY_SYSCALLS + (int)(cpu->bkl_vector & 0xffu);
 }
 
+/** The count of kernel thread `p`'s own holds, its slot taken at its first
+ * hold, or NULL when `p` is no kernel thread or every slot is another's. A
+ * record used again by another thread is told apart by its pid. The big
+ * lock is held. */
+static struct bkl_call_count *thread_count(const struct process *p)
+{
+    struct bkl_thread_count *spare = NULL, *t;
+    int i;
+
+    if (!p || !p->kthread_entry) {
+        return NULL;
+    }
+    for (i = 0; i < BKL_THREAD_SLOTS; i++) {
+        t = &bkl_threads[i];
+        if (t->proc == p && t->pid == p->pid) {
+            return &t->count;
+        }
+        if (!t->proc && !spare) {
+            spare = t;
+        }
+    }
+    if (!spare) {
+        return NULL;
+    }
+    spare->proc = p;
+    spare->pid = p->pid;
+    k_memcpy(spare->comm, p->comm, sizeof(spare->comm));
+    spare->comm[sizeof(spare->comm) - 1] = '\0';
+    k_memset(&spare->count, 0, sizeof(spare->count));
+    return &spare->count;
+}
+
 /** Count the hold that ends now on `cpu`, which still holds the lock, under
  * its entry and against the longest. The first hold to end, the boot
  * processor's start-up, which nobody waits on, is left out. A take after an
@@ -298,6 +348,7 @@ static void bkl_hold_end(struct percpu *cpu)
     int c = arch_cpu_id();
     int key = hold_key(cpu), ioctl;
     int32_t nr = cpu->bkl_nr;
+    struct bkl_call_count *mine;
 
     bkl_recent[bkl_releases % BKL_WAIT_HOLDS].cycles = held;
     bkl_recent[bkl_releases % BKL_WAIT_HOLDS].vector = cpu->bkl_vector;
@@ -313,7 +364,10 @@ static void bkl_hold_end(struct percpu *cpu)
     }
     bkl_entry_cycles[key] += held;
     bkl_entry_holds[key]++;
-    call_hold(&bkl_calls[key], held, waited);
+    mine = key == BKL_ENTRY_SYSCALLS || key == BKL_KEY_SWITCH || key == BKL_KEY_IDLE
+               ? thread_count(cpu->current)
+               : NULL;
+    call_hold(mine ? mine : &bkl_calls[key], held, waited);
     if (ioctl > 0) {
         call_hold(&bkl_ioctls[ioctl - 1].count, held, waited);
     }
@@ -718,24 +772,11 @@ static void text_hex(struct bkl_text *t, uint64_t v)
     }
 }
 
-/** Append the line of `c`: `kind`, `number` (in hex for `hex`) and its
- * counts, the times in microseconds; nothing when `c` counts nothing. */
-static void text_count(struct bkl_text *t, const char *kind, uint64_t number, int hex,
-                       const struct bkl_call_count *held, int tally)
+/** Append `kind`, `number` (in hex for `hex`) and the counts of `c`, the
+ * times in microseconds, without the line's end. */
+static void text_fields(struct bkl_text *t, const char *kind, uint64_t number, int hex,
+                        const struct bkl_call_count *c)
 {
-    struct bkl_call_count sum = *held;
-    const struct bkl_call_count *c = &sum;
-    int cpu;
-
-    for (cpu = 0; cpu < NR_CPUS; cpu++) {
-        if (bkl_tally[cpu]) {
-            sum.calls += bkl_tally[cpu][tally].calls;
-            sum.wall += bkl_tally[cpu][tally].wall;
-        }
-    }
-    if (c->calls == 0 && c->holds == 0) {
-        return;
-    }
     text_str(t, kind);
     text_ch(t, ' ');
     if (hex) {
@@ -753,6 +794,35 @@ static void text_count(struct bkl_text *t, const char *kind, uint64_t number, in
     text_dec(t, timer_cycles_us(c->held));
     text_ch(t, ' ');
     text_dec(t, timer_cycles_us(c->waited));
+}
+
+/** Append the line of `held`, with the processors' calls of tally `tally`
+ * added (`text_fields`); nothing when it counts nothing. */
+static void text_count(struct bkl_text *t, const char *kind, uint64_t number, int hex,
+                       const struct bkl_call_count *held, int tally)
+{
+    struct bkl_call_count sum = *held;
+    int cpu;
+
+    for (cpu = 0; cpu < NR_CPUS; cpu++) {
+        if (bkl_tally[cpu]) {
+            sum.calls += bkl_tally[cpu][tally].calls;
+            sum.wall += bkl_tally[cpu][tally].wall;
+        }
+    }
+    if (sum.calls == 0 && sum.holds == 0) {
+        return;
+    }
+    text_fields(t, kind, number, hex, &sum);
+    text_ch(t, '\n');
+}
+
+/** Append the line of kernel thread `k`, its name last. */
+static void text_thread(struct bkl_text *t, const struct bkl_thread_count *k)
+{
+    text_fields(t, "kthread", k->pid, 0, &k->count);
+    text_ch(t, ' ');
+    text_str(t, k->comm);
     text_ch(t, '\n');
 }
 
@@ -775,6 +845,11 @@ int32_t smp_calls_show(void *data, char *buf, uint32_t cap)
     }
     text_count(&t, "take", 0, 0, &bkl_calls[BKL_KEY_IDLE], BKL_KEY_IDLE);
     text_count(&t, "take", 1, 0, &bkl_calls[BKL_KEY_SWITCH], BKL_KEY_SWITCH);
+    for (key = 0; key < BKL_THREAD_SLOTS; key++) {
+        if (bkl_threads[key].proc) {
+            text_thread(&t, &bkl_threads[key]);
+        }
+    }
     for (key = 0; key < BKL_IOCTL_SLOTS; key++) {
         if (bkl_ioctls[key].used == IOCTL_USED) {
             text_count(&t, "ioctl", bkl_ioctls[key].cmd, 1, &bkl_ioctls[key].count,
@@ -794,6 +869,7 @@ int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len)
     (void)data;
     (void)buf;
     k_memset(bkl_calls, 0, sizeof(bkl_calls));
+    k_memset(bkl_threads, 0, sizeof(bkl_threads));
     for (i = 0; i < BKL_IOCTL_SLOTS; i++) {
         k_memset(&bkl_ioctls[i].count, 0, sizeof(bkl_ioctls[i].count));
     }
