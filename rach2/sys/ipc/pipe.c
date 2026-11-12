@@ -314,12 +314,43 @@ static void pipe_unlock(pipe_t *p, pipe_t *q)
 }
 
 /**
+ * Whether a signal ends a pipe's wait that its signal-work flag ended: the
+ * answer of `signal_pending`, which reads and changes the signal state and
+ * so runs under the big lock, taken here when the caller runs without it,
+ * as Linux dequeues under `sighand->siglock` (kernel/signal.c:632 in 6.12).
+ * Called with no pipe's lock held, since the big lock comes before every
+ * pipe's. An ignored signal is discarded and the flag cleared, so the wait
+ * goes back to sleep.
+ */
+static int pipe_signal_pending(void)
+{
+    int big = !bkl_held();
+    int pending;
+
+    if (big) {
+        bkl_enter();
+    }
+    pending = signal_pending();
+    if (big) {
+        bkl_exit();
+    }
+    return pending;
+}
+
+/**
  * Wait on `wq` until `cond` holds of `arg`, as the wait named `name`, or
- * unnamed when that is NULL, with the locks of `p` and `q` (`pipe_lock`)
- * given back for the wait and taken again after it, as Linux's pipe_read
- * and pipe_write drop `pipe->mutex` to wait. Returns 0, or -EINTR when a
- * signal ends the wait; the locks are held again either way, and the
- * caller judges the pipe again, since others used it meanwhile.
+ * "wq_wait_event" when that is NULL, with the locks of `p` and `q`
+ * (`pipe_lock`) given back for the wait and taken again after it, as
+ * Linux's pipe_read and pipe_write drop `pipe->mutex` to wait. Returns 0,
+ * or -EINTR when a signal ends the wait; the locks are held again either
+ * way, and the caller judges the pipe again, since others used it
+ * meanwhile.
+ *
+ * A pipe's calls run without the big lock, which `signal_pending` needs, so
+ * the sleep is ended by the thread's signal-work flag alone
+ * (`wq_wait_event_sigflag`), as Linux's wait tests TIF_SIGPENDING
+ * (include/linux/sched/signal.h:404 in 6.12), and the flag is judged under
+ * the big lock after it (`pipe_signal_pending`).
  */
 static int pipe_sleep(pipe_t *p, pipe_t *q, wait_queue_t *wq, wq_cond_fn cond, void *arg,
                       const char *name)
@@ -327,7 +358,9 @@ static int pipe_sleep(pipe_t *p, pipe_t *q, wait_queue_t *wq, wq_cond_fn cond, v
     int rc;
 
     pipe_unlock(p, q);
-    rc = name ? wq_wait_event_as(wq, cond, arg, name) : wq_wait_event(wq, cond, arg);
+    do {
+        rc = wq_wait_event_sigflag(wq, cond, arg, name ? name : "wq_wait_event");
+    } while (rc == -EINTR && !pipe_signal_pending());
     pipe_lock(p, q);
     return rc;
 }
@@ -1551,20 +1584,24 @@ static void pipe_uncharge(pipe_t *p, int32_t was)
  * `pipe_resize_ring` allocates its slots, so that a size the heap cannot
  * give fails here and not at every write; the bytes buffered are copied to
  * the slots their counters name in it, so `head` and `tail` keep counting
- * as they did. A growth wakes the writers, which may now have room. The
- * limits are Linux's `pipe_set_size`'s, judged as the new size is charged
- * (`pipe_charge`), and a shrink passes them even for a user over the soft
- * limit; a resize that fails gives the charge back. A shrink below the
- * page buffers fails with EBUSY, as in Linux, however few bytes they hold,
- * an empty one a faulted write left among them (`pipe_buf_fault`): a write
- * opens a page unless its first `count` mod 4096 bytes fit in the newest
- * buffer's (`pipe_buf_merge_room`), and tee, splice and vmsplice open one
- * for each buffer or source page their bytes come from (`pipe_buf_link`,
+ * as they did. A growth wakes the writers, which may now have room, once
+ * the new size is stored, since a poller reads it without the pipe's lock
+ * and would otherwise take the wake, judge the old size full and sleep
+ * again, as Linux's `pipe_resize_ring` sets `max_usage` before its wake
+ * (fs/pipe.c:1322 and 1329 in 6.12). The limits are Linux's
+ * `pipe_set_size`'s, judged as the new size is charged (`pipe_charge`), and
+ * a shrink passes them even for a user over the soft limit; a resize that
+ * fails gives the charge back. A shrink below the page buffers fails with
+ * EBUSY, as in Linux, however few bytes they hold, an empty one a faulted
+ * write left among them (`pipe_buf_fault`): a write opens a page unless its
+ * first `count` mod 4096 bytes fit in the newest buffer's
+ * (`pipe_buf_merge_room`), and tee, splice and vmsplice open one for each
+ * buffer or source page their bytes come from (`pipe_buf_link`,
  * `pipe_buf_add_pages`). Called with the pipe's lock held.
  */
 static int32_t pipe_resize(pipe_t *p, uint32_t size, int privileged)
 {
-    uint32_t want = pipe_round_size(size), done = 0, n = pipe_available(p), i;
+    uint32_t want = pipe_round_size(size), done = 0, n = pipe_available(p), i, was;
     struct pipe_page *slots;
     uint8_t *ring;
     int32_t rc;
@@ -1611,10 +1648,11 @@ static int32_t pipe_resize(pipe_t *p, uint32_t size, int privileged)
     p->buf_pages = slots;
     p->buf_cap = pipe_buf_slots(want);
     p->buf_first = 0;
-    if (want > p->size) {
+    was = p->size;
+    p->size = want;
+    if (want > was) {
         pipe_wake(p, &p->write_wq, WQ_ROOM);
     }
-    p->size = want;
     return (int32_t)want;
 }
 
