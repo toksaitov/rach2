@@ -11,8 +11,11 @@ Usage:
   python3 -I judge.py gate GATE MEASURES
 
 `webgl` compares two pages files of webgl.sh, a chunk's, by page: the lists
-must name the same pages at the same indexes, and a page is worse here when
-it does not pass and either passed in the reference or passed fewer of its
+must name the same pages at the same indexes, a page this run did not run
+is worse, and a page omitted on one side must be omitted on the other,
+since an omitted page passes no subtests and would otherwise match any
+page that passed none. Of the pages both ran, one is worse here when it
+does not pass and either passed in the reference or passed fewer of its
 subtests than the reference did. A page that fails in both with as many
 subtests passed, or that passes here alone, is as good.
 
@@ -135,11 +138,17 @@ def webgl(ref_path, got_path, exclusions_path=None):
     for i in sorted(ref):
         r = ref[i]
         g = got.get(i)
-        if g is None:
+        if g is None or g[1] == "notrun":
             worse.append((r[7], "%s: not run here" % r[7]))
             continue
-        if g[7] != r[7] and g[7] != "-":
+        if g[7] != r[7]:
             worse.append((r[7], "page %d is %s here and %s in the reference" % (i, g[7], r[7])))
+            continue
+        if (g[1] == "omitted") != (r[1] == "omitted"):
+            worse.append((r[7], "%s: omitted %s alone" %
+                          (r[7], "here" if g[1] == "omitted" else "in the reference")))
+            continue
+        if r[1] == "omitted":
             continue
         if g[1] == "pass" or (r[1] != "pass" and int(g[2]) >= int(r[2])):
             continue
@@ -147,6 +156,8 @@ def webgl(ref_path, got_path, exclusions_path=None):
             continue
         worse.append((r[7], "%s: debian %s, %s subtests passed; here %s, %s passed" %
                       (r[7], r[1], r[2], g[1], g[2])))
+    for i in sorted(set(got) - set(ref)):
+        worse.append((got[i][7], "page %d, %s, is here alone" % (i, got[i][7])))
     worse = report(worse, excluded(exclusions_path), lambda w: w[0])
     verdict = "fail" if worse else "pass"
     print("judge: result: %s webgl %d pages, %d worse than Debian's" % (verdict, len(ref), len(worse)))
