@@ -9449,15 +9449,15 @@ static int32_t path_install(struct vfs_ref *ref, const char *name, int flags)
     return fd;
 }
 
+static int32_t proc_fd_open_path_from(const struct vpath *vp, process_t *p, fd_entry_t *src,
+                                      int flags);
+
 /**
  * Open the object of a proc descriptor link with O_PATH and no device open.
  * Mounted files keep their inode through path_install; synthetic objects
  * keep the source description, which O_PATH cannot read or advance.
  * The caller has the kernel lock. Return a descriptor or a negative errno.
  */
-static int32_t proc_fd_open_path_from(const struct vpath *vp, process_t *p, fd_entry_t *src,
-                                      int flags);
-
 static int32_t proc_fd_open_path(const struct vpath *vp, int flags)
 {
     process_t *p;
