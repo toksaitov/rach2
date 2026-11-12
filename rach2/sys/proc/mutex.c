@@ -27,6 +27,23 @@ static const void *mutex_me(void)
     return current_proc ? (const void *)current_proc : (const void *)this_cpu();
 }
 
+/**
+ * Wake the sleepers on `wq` of a lock just let go, if it has any, as Linux's
+ * __up_read and __mutex_unlock_slowpath wake only with a waiter recorded
+ * (kernel/locking/rwsem.c, kernel/locking/mutex.c): a wake of an empty queue
+ * costs a pass with interrupts off, which QEMU's emulator makes dear. The
+ * release's unlock of the lock's spinlock is an exchange, a full barrier,
+ * between its store and this read of the queue, and so is the unlock of the
+ * queue a sleeper files itself on before it tests the lock (`wq_wait`):
+ * either the sleeper's test sees the release or this read sees the sleeper.
+ */
+static void wake_waiters(wait_queue_t *wq)
+{
+    if (wq_active(wq)) {
+        wq_wake_all(wq);
+    }
+}
+
 void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key *key)
 {
     spin_lock_init(&m->spin, "mutex.spin");
@@ -87,7 +104,7 @@ void mutex_unlock(struct mutex *m)
     m->owner = 0;
     spin_unlock_irqrestore(&m->spin, flags);
     DEP_RELEASE(&m->dep);
-    wq_wake_all(&m->wq);
+    wake_waiters(&m->wq);
 }
 
 /** Judge a signal-work flag with no mutex held, under the big lock that
@@ -263,7 +280,7 @@ void up_read(struct rwsem *s)
     spin_unlock_irqrestore(&s->spin, flags);
     DEP_RELEASE(&s->dep);
     if (last) {
-        wq_wake_all(&s->wq);
+        wake_waiters(&s->wq);
     }
 }
 
@@ -279,5 +296,5 @@ void up_write(struct rwsem *s)
     s->wowner = 0;
     spin_unlock_irqrestore(&s->spin, flags);
     DEP_RELEASE(&s->dep);
-    wq_wake_all(&s->wq);
+    wake_waiters(&s->wq);
 }

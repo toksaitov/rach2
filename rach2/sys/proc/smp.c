@@ -237,16 +237,31 @@ static uint32_t tlb_counts[2];
  * seconds, while a process queued on a spinning processor waits as long. So a
  * waiter past `BKL_CLAIM_AFTER` spins claims the lock, and the others leave it
  * to the claimant.
+ *
+ * A lock that is free, unclaimed and not lent is taken at once, with no wait
+ * to account and so no reading of the clock, as Linux's queued_spin_lock
+ * takes a free lock with one exchange and leaves the rest to its slow path
+ * (include/asm-generic/qspinlock.h:107-114): under QEMU's emulator the two
+ * readings cost more than the rest of the take.
  */
 static void bkl_acquire(struct percpu *cpu)
 {
     unsigned int me = (unsigned int)arch_cpu_id() + 1u;
     uint32_t spins = 0, passed = 0;
-    uint32_t releases = bkl_releases;
-    uint64_t start = arch_cycles(), waited;
-    uint32_t wake_start = waketime_clock(), wake_wait;
+    uint32_t releases;
+    uint64_t start, waited;
+    uint32_t wake_start, wake_wait;
     unsigned int i, n;
 
+    if (!bkl_word && !bkl_claim && bkl_lent != me && arch_atomic_xchg(&bkl_word, 1u) == 0) {
+        cpu->bkl_since = arch_cycles();
+        cpu->bkl_waited = 0;
+        k_memset(bkl_early_cycles[me - 1u], 0, sizeof(bkl_early_cycles[0]));
+        return;
+    }
+    releases = bkl_releases;
+    start = arch_cycles();
+    wake_start = waketime_clock();
     cpu->wake_bkl_start = wake_start;
     cpu->wake_bkl_waiting = 1;
     for (;;) {
