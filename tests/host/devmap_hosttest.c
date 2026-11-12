@@ -34,14 +34,20 @@
  * paging_access reaches a device region through its object's `access`.
  * A fault calls a file's fill or share without the big lock when the file
  * sets `unlocked`, and under it otherwise, with the regions' lock let go
- * either way.
+ * either way. Kernel process-memory writes mark their held shared file
+ * frame before copying, even with a writable PTE; a refused mark copies
+ * nothing.
  * Before them, the index of the free frames is searched up and down over
  * groups with no free frame.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
 
+#define k_memcpy model_memcpy
 #include "mm/paging.c"
+#undef k_memcpy
+
+extern void *k_memcpy(void *dst, const void *src, size_t n);
 
 extern int printf(const char *format, ...);
 extern void *calloc(unsigned long count, unsigned long size);
@@ -130,9 +136,18 @@ void mmu_kernel_unlarge(uintptr_t va, pte_t saved)
 }
 #endif
 
-/** NULL: no row touches a kernel mapping. */
+#ifndef ARCH_DIRECT_MAP_ALL
+static pte_t temp_table[MMU_TABLE_ENTRIES];
+#endif
+
+/** The temporary mappings' table on i686; no other kernel mapping. */
 pte_t *mmu_kernel_table(uintptr_t va)
 {
+#ifndef ARCH_DIRECT_MAP_ALL
+    if (va >= KVA_TEMP && va < KVA_TEMP + KVA_TEMP_SLOTS * PAGE_SIZE) {
+        return temp_table;
+    }
+#endif
     (void)va;
     return NULL;
 }
@@ -689,6 +704,61 @@ static void model_count(struct vm_file *f)
     m->regions += mmap_held(&mm_a, 0);
 }
 
+/* The shared frame's bytes and the copies that change them. */
+static uint8_t shared_bytes[PAGE_SIZE];
+static int shared_copies, shared_marks, mark_error, mark_retry;
+
+/** Translate a temporary or direct mapping of SHARE_FRAME for a copy. */
+static void *model_pointer(const void *p)
+{
+    uintptr_t va = (uintptr_t)p, phys;
+
+#ifdef ARCH_DIRECT_MAP_ALL
+    if (va < KVA_DIRECT || va >= KVA_DIRECT + KVA_DIRECT_SIZE) {
+        return (void *)p;
+    }
+    phys = va - KVA_DIRECT;
+#else
+    if (va < KVA_TEMP || va >= KVA_TEMP + KVA_TEMP_SLOTS * PAGE_SIZE) {
+        return (void *)p;
+    }
+    phys = PTE_ADDR(temp_table[MMU_INDEX(va)]) + (va & (PAGE_SIZE - 1));
+#endif
+    check(phys / PAGE_SIZE == SHARE_FRAME, "the copy reaches the shared file's frame");
+    return shared_bytes + (phys & (PAGE_SIZE - 1));
+}
+
+/** Copy through the model's kernel mapping, counting stores to the frame. */
+void *model_memcpy(void *dst, const void *src, size_t n)
+{
+    void *to = model_pointer(dst);
+
+    if (to != dst) {
+        shared_copies++;
+        check(shared_marks > 0, "the file page is marked before the kernel stores");
+    }
+    k_memcpy(to, model_pointer(src), n);
+    return dst;
+}
+
+/** Mark the held resident frame, or fail without allowing a copy. */
+static int model_mkwrite(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
+{
+    model_count(f);
+    check(!mmap_held(&mm_a, 0) && pgoff == 0 && phys == SHARE_FRAME * PAGE_SIZE &&
+              frame_count(phys) == 3,
+          "the mark gets the file page held across the unlocked callback");
+    shared_marks++;
+    if (mark_retry) {
+        mark_retry = 0;
+        unmap_user_range(mm_a.dir, VA_FILE, VA_FILE + PAGE_SIZE);
+        mm_a.zaps++;
+        check(frame_count(phys) == 2, "the callback keeps the frame alive after its PTE goes");
+        return -EAGAIN;
+    }
+    return mark_error;
+}
+
 /** A private mapping's fill: counted, the frame left as it is. */
 static int model_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
 {
@@ -780,6 +850,46 @@ static void file_rows(void)
               share_locked.vf.refs == 1,
           "the unmap drops the pages' and the regions' references");
     _frames[0] = 0;
+}
+
+/** Kernel writes mark even a page whose PTE already allows writes. */
+static void shared_access_rows(void)
+{
+    static struct model_file m;
+    uint8_t byte = 0x6a;
+
+    m.vf.refs = 1;
+    m.vf.share = model_share;
+    m.vf.mkwrite = model_mkwrite;
+    m.vf.release = model_release;
+    m.vf.unlocked = 1;
+    _frames[SHARE_FRAME] = 1;
+    check(vm_insert_file(&mm_a.vm, VA_FILE, VA_FILE + PAGE_SIZE, RW, VM_SHARED, &m.vf, 0) == 0 &&
+              resolve_held(&mm_a, VA_FILE, 0, ~(uintptr_t)0) == 1 &&
+              !(pte_of(&dir_a, VA_FILE) & PTE_W) && shared_marks == 0,
+          "a read of a writable shared file leaves its page clean and read-only");
+    check(paging_access(&mm_a, VA_FILE + 7, &byte, 1, 1) == 0 && shared_marks == 1 &&
+              shared_copies == 1 && shared_bytes[7] == byte,
+          "a process-memory write marks and changes a page with no earlier user store");
+    byte++;
+    check(paging_access(&mm_a, VA_FILE + 7, &byte, 1, 1) == 0 && shared_marks == 2 &&
+              shared_copies == 2 && shared_bytes[7] == byte,
+          "a second kernel store validates and marks the already writable page again");
+    mark_error = -ENOMEM;
+    byte++;
+    check(paging_access(&mm_a, VA_FILE + 7, &byte, 1, 1) == -EIO && shared_marks == 3 &&
+              shared_copies == 2 && shared_bytes[7] == byte - 1,
+          "a refused mark fails the kernel write without copying any bytes");
+    mark_error = 0;
+    mark_retry = 1;
+    check(paging_access(&mm_a, VA_FILE + 7, &byte, 1, 1) == 0 && shared_marks == 5 &&
+              shared_copies == 3 && shared_bytes[7] == byte && !mark_retry,
+          "a removed page is resolved and marked again before the kernel copies");
+    vm_remove(&mm_a.vm, VA_FILE, VA_FILE + PAGE_SIZE);
+    unmap_user_range(&dir_a, VA_FILE, VA_FILE + PAGE_SIZE);
+    vm_file_reap();
+    check(frame_count(SHARE_FRAME * PAGE_SIZE) == 1 && m.vf.refs == 1,
+          "the callbacks and unmap give every frame and file reference back");
 }
 
 /**
@@ -1026,6 +1136,7 @@ int main(void)
     index_rows();
     fault_rows();
     file_rows();
+    shared_access_rows();
     access_rows();
     fork_rows();
     zap_rows();

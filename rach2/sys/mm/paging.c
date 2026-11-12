@@ -770,6 +770,26 @@ static int share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t 
 }
 
 /**
+ * Borrow page `pgoff` of `f` and, with `mark`, validate and mark its frame
+ * before a shared store. A nonnegative share result gives `*phys` a held
+ * frame; a negative errno leaves no hold for the caller to release.
+ */
+static int fault_share(struct vm_file *f, uint32_t pgoff, uintptr_t *phys, int mark)
+{
+    int got = f->share(f, pgoff, phys);
+    int rc;
+
+    if (got >= 0 && mark) {
+        rc = f->mkwrite(f, pgoff, *phys);
+        if (rc != 0) {
+            free_frame(*phys);
+            return rc;
+        }
+    }
+    return got;
+}
+
+/**
  * Borrow a resident file or shared-memory page. A shared region maps it
  * writable when allowed, except that a file with `mkwrite` has a read map
  * it read-only and a store first call `mkwrite`; a private region maps it
@@ -813,13 +833,9 @@ static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int wri
         vm_file_put(f);
         return 0;
     }
-    got = f->share(f, pgoff, &phys);
-    if (got >= 0 && notify && write && f->mkwrite(f, pgoff) != 0) {
-        free_frame(phys);
-        got = -ENOMEM;
-    }
+    got = fault_share(f, pgoff, &phys, notify && write);
     callback_end(mm, bkl);
-    if (!region_same(mm, page, f, prot, pgoff, seq)) {
+    if (got == -EAGAIN || !region_same(mm, page, f, prot, pgoff, seq)) {
         rc = -1;
     }
     vm_file_put(f);
@@ -846,14 +862,15 @@ static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int wri
 }
 
 /**
- * Give write access to the present, read-only page at `addr` of the
- * writable shared region `vma`, whose file counts its stores (`mkwrite`),
- * once the file has marked the page, as Linux's do_shared_fault and
+ * Validate and mark the present page at `addr` of writable shared region
+ * `vma`, whose file counts its stores (`mkwrite`), then give it write
+ * access, as Linux's do_shared_fault and
  * wp_page_shared call page_mkwrite before they make the entry writable
  * (mm/memory.c). `mkwrite` may sleep, so it runs as `shared_fault`'s
- * share does, with the file held and the region looked up again after; an
- * entry changed meanwhile is left as it is and the access runs again. No
- * flush follows: a processor that kept the read-only entry faults on it,
+ * share does, with the file and frame held and the region looked up again
+ * after; an entry changed meanwhile is left as it is and the access runs
+ * again. No flush follows: a processor that kept the read-only entry
+ * faults on it,
  * which drops it, and finds the page writable. 1 with the page writable, 0
  * when the file could not mark it or the lock could not be let go, -1 to
  * resolve again.
@@ -871,14 +888,17 @@ static int shared_mkwrite(struct mm *mm, const vma_t *vma, uintptr_t addr)
         return -1; /* a cut took it meanwhile: fault it in again */
     }
     before = *e;
+    frame_ref(PTE_ADDR(before));
     vm_file_get(f);
     if (!callback_begin(mm, f, &bkl)) {
         vm_file_put(f);
+        free_frame(PTE_ADDR(before));
         return 0;
     }
-    got = f->mkwrite(f, pgoff);
+    got = f->mkwrite(f, pgoff, PTE_ADDR(before));
     callback_end(mm, bkl);
-    if (!region_same(mm, page, f, prot, pgoff, seq)) {
+    free_frame(PTE_ADDR(before));
+    if (got == -EAGAIN || !region_same(mm, page, f, prot, pgoff, seq)) {
         rc = -1;
     }
     vm_file_put(f);
@@ -1936,6 +1956,23 @@ static int access_device(const vma_t *vma, uintptr_t addr, uint8_t *p, uint32_t 
     return rc == 0 ? 0 : (rc == -ENOMEM ? -ENOMEM : -EIO);
 }
 
+/**
+ * Prepare a kernel store to `vma` at `addr`: copy a private page or mark
+ * the shared file's held frame. 1 permits the store, 0 refuses it, and -1
+ * asks the caller to resolve again after a change across the callback.
+ * Called with the regions' read lock, which a callback may let go.
+ */
+static int access_write(struct mm *mm, const vma_t *vma, uintptr_t addr)
+{
+    if (vma->type != VM_SHARED) {
+        return page_private(mm, addr, (vma->prot & VM_PROT_WRITE) != 0) == 0;
+    }
+    if (!(vma->prot & VM_PROT_WRITE)) {
+        return 0;
+    }
+    return vma->file && vma->file->mkwrite ? shared_mkwrite(mm, vma, addr) : 1;
+}
+
 /** One page's part of `paging_access`: `len` bytes at `addr`, within one
  * page, to or from `p`; 0, -EIO or -ENOMEM as `paging_access` says. A
  * device region's bytes go through `access_device`, and a region of
@@ -1943,12 +1980,17 @@ static int access_device(const vma_t *vma, uintptr_t addr, uint8_t *p, uint32_t 
  * get_user_pages refuses both. The resolution and, for a write, the
  * balance of memory before a copy may sleep with `mm`'s regions' lock let
  * go, so the region is looked up again after them, and the page must still
- * be present in a region that allows some access. */
+ * be present in a region that allows some access. A shared file's frame is
+ * held and validated by `mkwrite` before every kernel store, even when the
+ * entry already allows writes, so writeback includes the copied bytes. */
 static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, int write)
 {
-    const vma_t *vma = vm_find(&mm->vm, addr);
+    const vma_t *vma;
     uint8_t *map;
+    int rc;
 
+retry:
+    vma = vm_find(&mm->vm, addr);
     if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX || vma == NULL ||
         !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) ||
         (vma->prot & (VM_PROT_GUARD | VM_PROT_SECRET | VM_PROT_VVAR))) {
@@ -1972,10 +2014,14 @@ static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, 
         !pte_present(mm->dir, addr)) {
         return -EIO;
     }
-    if (write &&
-        (vma->type == VM_SHARED ? !(vma->prot & VM_PROT_WRITE)
-                                : page_private(mm, addr, (vma->prot & VM_PROT_WRITE) != 0) != 0)) {
-        return -EIO;
+    if (write) {
+        rc = access_write(mm, vma, addr);
+        if (rc < 0) {
+            goto retry;
+        }
+        if (rc == 0) {
+            return -EIO;
+        }
     }
     map = kmap_temp(paging_user_phys(mm->dir, addr) & ~(uintptr_t)(PAGE_SIZE - 1));
     if (!map) {
