@@ -5,6 +5,7 @@
  * host-deps: rach2/sys/block/chain.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/nodelock_none.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/bkl_held.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * The test includes the kernel's krffs.c and loop.c. The KRFFS core moves
@@ -232,6 +233,29 @@ int fd_node_busy(struct vfs_mount *mnt, void *node)
     return busy;
 }
 
+/* The big lock of `compat/bkl_held.c`: a row that sets `bkl_host_free`
+ * stands for a caller without it, and `bkl_host_takes` counts the takes. */
+extern int bkl_host_free;
+extern int bkl_host_takes;
+
+/** The mount itself: these rows have no bind mounts. */
+const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
+{
+    return m;
+}
+
+/** No interrupt comes in these rows; the mask is not modelled. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+/** Nothing to put back. */
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
 /** No filesystem is mounted on the loop device in these rows. */
 int vfs_device_holds(block_device_t *dev)
 {
@@ -335,6 +359,12 @@ static void relocation_row(void)
           "loop read avoids the reused old extent");
     k_memset(output, 0x55, sizeof(output));
     check(loop && loop->write(loop, 0, 1, output) == 0, "loop writes the relocated image");
+    bkl_host_free = 1;
+    bkl_host_takes = 0;
+    check(loop && (loop->flags & BLOCK_UNLOCKED) && loop->write(loop, 0, 1, output) == 0 &&
+              bkl_host_takes == 1 && !bkl_held() && loops[0].in_flight == 0,
+          "a write from a caller without the big lock takes it for the file system alone");
+    bkl_host_free = 0;
     check(krffs_read_node(reused, output, 512, 0) == 512 && memcmp(output, replacement, 512) == 0,
           "loop write preserves the replacement file");
     check(loop_detach(0) == 0 && !depth && !opened && !refs && !active,

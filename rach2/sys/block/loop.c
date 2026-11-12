@@ -19,6 +19,19 @@
  * else: a write, a truncation and an attribute change that would change its
  * length are refused, so the image does not move under the file system
  * mounted on the device.
+ *
+ * The block layer calls the device without the big lock (`BLOCK_UNLOCKED`).
+ * A transfer reads the attachment and counts itself in flight under
+ * `loop_lock`, and a detach or a release unpublishes the device under it
+ * only when no transfer is in flight, as Linux's loop checks `lo_state` in
+ * `loop_queue_rq` (drivers/block/loop.c:1815-1825) and freezes the queue
+ * before it lets the file go (loop.c:1089-1160). The transfer then runs in
+ * the caller, which is this device's worker, where Linux's runs on its work
+ * queue (loop.c:776-869), and takes the big lock for the file system under
+ * it as a descriptor's call does: for a write and a sync, and for a read
+ * unless the type reads without it (`reads_unlocked`). Attaching and
+ * detaching are system calls under the big lock, which serializes them as
+ * Linux's `lo_mutex` does (loop.c:77).
  */
 
 #include "loop.h"
@@ -30,8 +43,10 @@
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../lib/spinlock.h"
 #include "../mm/usercopy.h"
 #include "../proc/process.h"
+#include "../proc/smp.h"
 
 struct loop_device {
     block_device_t dev; /* first: a device pointer is a loop pointer */
@@ -58,6 +73,26 @@ struct loop_device {
 
 static struct loop_device loops[LOOP_DEVICES];
 
+/* The devices' state a transfer reads or changes, which the big lock does
+ * not cover since the block layer calls a transfer without it: `attached`,
+ * `in_flight`, `release_due`, `writes`, `syncs` and the device's
+ * `unflushed`, and the file a transfer reads while `attached` (`mnt`,
+ * `node`, `handle`, `ino`, `writable`), whose writers hold the big lock as
+ * well, so a reader holding that sees them without this. Taken with
+ * interrupts off, since a medium's going is reported from the USB pump; it
+ * is a leaf. */
+static struct spinlock loop_lock = SPINLOCK_INIT_NAMED("loop_lock");
+
+/** What a transfer reads of the attachment when it begins. */
+struct loop_file {
+    struct vfs_mount *mnt;
+    void *node;
+    void *handle;
+    uint32_t ino;
+    int writable;
+    uint32_t writes; /* `writes` as the transfer began, for the flush */
+};
+
 /** The loop device whose `dev` is `device`. */
 static struct loop_device *loop_of(block_device_t *device)
 {
@@ -66,8 +101,108 @@ static struct loop_device *loop_of(block_device_t *device)
 
 static void loop_release(struct loop_device *loop);
 static void loop_unclaim(struct loop_device *loop);
-static void loop_transfer_ended(struct loop_device *loop);
 static void loop_settle(void);
+
+/**
+ * Begin a transfer of `loop`: when it is attached, count the transfer in
+ * flight and copy the attachment into `f`, under `loop_lock`. Returns 0, or
+ * `-EIO` for a device not attached. A detach or a release waits for the
+ * count to fall to 0 before it lets the file go, so `f` stays good until
+ * `loop_end`.
+ */
+static int loop_begin(struct loop_device *loop, struct loop_file *f)
+{
+    uint32_t flags = spin_lock_irqsave(&loop_lock);
+
+    if (!loop->attached) {
+        spin_unlock_irqrestore(&loop_lock, flags);
+        return -EIO;
+    }
+    loop->in_flight++;
+    f->mnt = loop->mnt;
+    f->node = loop->node;
+    f->handle = loop->handle;
+    f->ino = loop->ino;
+    f->writable = loop->writable;
+    f->writes = loop->writes;
+    spin_unlock_irqrestore(&loop_lock, flags);
+    return 0;
+}
+
+/**
+ * End a transfer that `loop_begin` began, under `loop_lock`: a write
+ * (`wrote`) counts and marks the device unflushed, a sync that succeeded
+ * (`synced`) counts and clears the mark unless a write was answered while
+ * it ran, since the sync may not have covered it.
+ */
+static void loop_end(struct loop_device *loop, const struct loop_file *f, int wrote, int synced)
+{
+    uint32_t flags = spin_lock_irqsave(&loop_lock);
+
+    if (wrote) {
+        loop->writes++;
+        loop->dev.unflushed = 1;
+    }
+    if (synced) {
+        loop->syncs++;
+        if (loop->writes == f->writes) {
+            loop->dev.unflushed = 0;
+        }
+    }
+    loop->in_flight--;
+    spin_unlock_irqrestore(&loop_lock, flags);
+}
+
+/**
+ * Take the big lock for an operation of the file system under `mnt`, as a
+ * descriptor's call does (`file_read_lock`, syscall_fs.c): for a read
+ * (`read`) only when the type does not read without it. Returns 1 when it
+ * took the lock, which `loop_fs_exit` gives back, and 0 when the caller
+ * holds it already or the read needs none.
+ */
+static int loop_fs_enter(const struct vfs_mount *mnt, int read)
+{
+    if (bkl_held() || (read && vfs_mount_base(mnt)->type->reads_unlocked)) {
+        return 0;
+    }
+    bkl_enter();
+    return 1;
+}
+
+/** Give back what `loop_fs_enter` took. */
+static void loop_fs_exit(int big)
+{
+    if (big) {
+        bkl_exit();
+    }
+}
+
+/** Whether a transfer of `loop` is inside the file system the file is on. */
+static int loop_busy(struct loop_device *loop)
+{
+    uint32_t flags = spin_lock_irqsave(&loop_lock);
+    int busy = loop->in_flight > 0;
+
+    spin_unlock_irqrestore(&loop_lock, flags);
+    return busy;
+}
+
+/**
+ * Unpublish `loop`, so that no transfer begins, when none is in flight.
+ * Returns 1 with `attached` clear, or 0, changing nothing, while a transfer
+ * is inside the file system the file is on. The big lock is held.
+ */
+static int loop_quiesce(struct loop_device *loop)
+{
+    uint32_t flags = spin_lock_irqsave(&loop_lock);
+    int idle = loop->in_flight == 0;
+
+    if (idle) {
+        loop->attached = 0;
+    }
+    spin_unlock_irqrestore(&loop_lock, flags);
+    return idle;
+}
 
 /**
  * Whether a transfer of `count` sectors at `lba` is one this device has.
@@ -100,14 +235,17 @@ static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void 
 {
     struct loop_device *loop = loop_of(device);
     uint32_t bytes = count * BLOCK_SECTOR_SIZE;
+    struct loop_file f;
     int32_t got;
+    int big;
 
-    if (!loop->attached || !loop_bounded(loop, lba, count)) {
+    if (!loop_bounded(loop, lba, count) || loop_begin(loop, &f) != 0) {
         return -EIO;
     }
-    loop->in_flight++;
-    got = vfs_read(loop->mnt, loop->handle, buffer, bytes, lba * BLOCK_SECTOR_SIZE);
-    loop_transfer_ended(loop);
+    big = loop_fs_enter(f.mnt, 1);
+    got = vfs_read(f.mnt, f.handle, buffer, bytes, lba * BLOCK_SECTOR_SIZE);
+    loop_fs_exit(big);
+    loop_end(loop, &f, 0, 0);
     if (got < 0 || (uint32_t)got != bytes) {
         klog(KLOG_WARN, "loop", "read: loop%d: sector %d: short by %d", loop->index, (int)lba,
              (int)(bytes - (got < 0 ? 0 : (uint32_t)got)));
@@ -125,28 +263,29 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
 {
     struct loop_device *loop = loop_of(device);
     uint32_t bytes = count * BLOCK_SECTOR_SIZE;
+    struct loop_file f;
     struct vfs_ref file;
     int32_t wrote;
+    int big;
 
-    if (!loop->attached || !loop_bounded(loop, lba, count)) {
+    if (!loop_bounded(loop, lba, count) || loop_begin(loop, &f) != 0) {
         return -EIO;
     }
-    if (!loop->writable) {
+    if (!f.writable) {
+        loop_end(loop, &f, 0, 0);
         return -EROFS;
     }
-    loop->in_flight++;
-    file.mnt = loop->mnt;
-    file.node = loop->node;
+    big = loop_fs_enter(f.mnt, 0);
+    file.mnt = f.mnt;
+    file.node = f.node;
     vfs_node_lock(&file);
-    wrote = vfs_write(loop->mnt, loop->handle, buffer, bytes, lba * BLOCK_SECTOR_SIZE);
+    wrote = vfs_write(f.mnt, f.handle, buffer, bytes, lba * BLOCK_SECTOR_SIZE);
     if (wrote > 0) {
-        filemap_disk_written(loop->mnt, loop->ino, lba * BLOCK_SECTOR_SIZE, buffer,
-                             (uint32_t)wrote);
+        filemap_disk_written(f.mnt, f.ino, lba * BLOCK_SECTOR_SIZE, buffer, (uint32_t)wrote);
     }
     vfs_node_unlock(&file);
-    loop->writes++;
-    loop->dev.unflushed = 1;
-    loop_transfer_ended(loop);
+    loop_fs_exit(big);
+    loop_end(loop, &f, 1, 0);
     if (wrote < 0 || (uint32_t)wrote != bytes) {
         klog(KLOG_WARN, "loop", "write: loop%d: sector %d: short by %d", loop->index, (int)lba,
              (int)(bytes - (wrote < 0 ? 0 : (uint32_t)wrote)));
@@ -163,22 +302,17 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
 static int loop_flush(block_device_t *device, struct block_request *request)
 {
     struct loop_device *loop = loop_of(device);
-    uint32_t writes = loop->writes;
-    int rc;
+    struct loop_file f;
+    int big, rc;
 
     (void)request;
-    if (!loop->attached) {
+    if (loop_begin(loop, &f) != 0) {
         return -EIO;
     }
-    loop->in_flight++;
-    rc = vfs_fsync(loop->mnt, loop->handle);
-    if (rc == 0) {
-        loop->syncs++;
-        if (loop->writes == writes) {
-            loop->dev.unflushed = 0;
-        }
-    }
-    loop_transfer_ended(loop);
+    big = loop_fs_enter(f.mnt, 0);
+    rc = vfs_fsync(f.mnt, f.handle);
+    loop_fs_exit(big);
+    loop_end(loop, &f, 0, rc == 0);
     return rc == 0 ? 0 : -EIO;
 }
 
@@ -211,18 +345,21 @@ block_device_t *loop_node_device(int index, int write, int32_t *err)
  */
 void loop_repoint(struct vfs_mount *mnt, const void *from, void *to)
 {
+    uint32_t flags;
     int i;
 
     for (i = 0; i < LOOP_DEVICES; i++) {
         if (loops[i].mnt != mnt) {
             continue;
         }
+        flags = spin_lock_irqsave(&loop_lock);
         if (loops[i].node == from) {
             loops[i].node = to;
         }
         if (mnt->type == &vfs_krffs_type && loops[i].handle == from) {
             loops[i].handle = to;
         }
+        spin_unlock_irqrestore(&loop_lock, flags);
     }
 }
 
@@ -252,18 +389,21 @@ int loop_backs(struct vfs_mount *mnt, void *node)
  * blocks would write them into a file nobody holds open.
  *
  * Never called while a transfer is inside the file system the file is on:
- * the callers check `in_flight`.
+ * the callers unpublish the device first (`loop_quiesce`), which no
+ * transfer can begin on.
  */
 static void loop_release(struct loop_device *loop)
 {
     struct vfs_mount *mnt = loop->mnt;
     void *node = loop->node;
     void *handle = loop->handle;
+    uint32_t flags = spin_lock_irqsave(&loop_lock);
 
     loop->attached = 0;
+    loop->release_due = 0;
+    spin_unlock_irqrestore(&loop_lock, flags);
     loop->attaching = 0;
     loop->used = 0;
-    loop->release_due = 0;
     loop->autoclear = 0;
     loop->mnt = 0;
     loop->node = 0;
@@ -285,12 +425,6 @@ static void loop_unclaim(struct loop_device *loop)
     loop->used = 0;
 }
 
-/** The end of one transfer inside the file system the file is on. */
-static void loop_transfer_ended(struct loop_device *loop)
-{
-    loop->in_flight--;
-}
-
 /**
  * The release a medium's going left owing, done where it can be done.
  *
@@ -308,10 +442,7 @@ static void loop_settle(void)
     for (i = 0; i < LOOP_DEVICES; i++) {
         struct loop_device *loop = &loops[i];
 
-        if (!loop->release_due || loop->in_flight > 0) {
-            continue;
-        }
-        if (vfs_device_holds(&loop->dev)) {
+        if (!loop->release_due || vfs_device_holds(&loop->dev) || !loop_quiesce(loop)) {
             continue;
         }
         loop_release(loop);
@@ -320,6 +451,7 @@ static void loop_settle(void)
 
 void loop_device_gone(block_device_t *device)
 {
+    uint32_t flags;
     int i;
 
     for (i = 0; i < LOOP_DEVICES; i++) {
@@ -327,9 +459,11 @@ void loop_device_gone(block_device_t *device)
             continue;
         }
         klog(KLOG_WARN, "loop", "loop%d: the device under its file has gone", i);
+        flags = spin_lock_irqsave(&loop_lock);
         loops[i].dev.flags |= BLOCK_GONE;
         loops[i].attached = 0;
         loops[i].release_due = 1;
+        spin_unlock_irqrestore(&loop_lock, flags);
         bcache_device_gone(&loops[i].dev);
     }
 }
@@ -375,22 +509,26 @@ static uint32_t put_number(char *buffer, uint32_t at, uint32_t cap, uint64_t val
 int loop_line(int index, char *buffer, uint32_t cap)
 {
     struct loop_device *loop;
-    uint32_t at = 0;
+    uint32_t at = 0, writes, syncs, flags;
 
     loop_settle();
     if (index < 0 || index >= LOOP_DEVICES || !loops[index].used || cap == 0) {
         return 0;
     }
     loop = &loops[index];
+    flags = spin_lock_irqsave(&loop_lock);
+    writes = loop->writes;
+    syncs = loop->syncs;
+    spin_unlock_irqrestore(&loop_lock, flags);
     at = put_text(buffer, at, cap, "loop");
     at = put_number(buffer, at, cap, (uint32_t)index);
     at = put_text(buffer, at, cap, " ");
     at = put_number(buffer, at, cap, loop->dev.sector_count * BLOCK_SECTOR_SIZE);
     at = put_text(buffer, at, cap, loop->writable ? " rw " : " ro ");
     at = put_text(buffer, at, cap, "writes ");
-    at = put_number(buffer, at, cap, loop->writes);
+    at = put_number(buffer, at, cap, writes);
     at = put_text(buffer, at, cap, " syncs ");
-    at = put_number(buffer, at, cap, loop->syncs);
+    at = put_number(buffer, at, cap, syncs);
     at = put_text(buffer, at, cap, " ");
     at = put_text(buffer, at, cap, loop->attached ? loop->path : "(gone)");
     at = put_text(buffer, at, cap, "\n");
@@ -475,6 +613,32 @@ static int loop_prepare(struct vfs_ref *ref, void *handle, struct vfs_stat *st)
         rc = -EBUSY;
     }
     return rc;
+}
+
+/**
+ * Fill in `loop`'s device over a file of `size` bytes on the device
+ * `backing`, and publish it under `loop_lock`, after every field a transfer
+ * reads is set.
+ */
+static void loop_publish(struct loop_device *loop, block_device_t *backing, uint64_t size)
+{
+    uint32_t flags;
+
+    loop->dev.sector_size = BLOCK_SECTOR_SIZE;
+    loop->dev.sector_count = size / BLOCK_SECTOR_SIZE;
+    loop->dev.flags = BLOCK_CALLER_SYNC | BLOCK_WRITE_THROUGH | BLOCK_UNLOCKED |
+                      (loop->writable ? 0u : BLOCK_READ_ONLY);
+    loop->dev.unflushed = 0;
+    loop->dev.deadline_ticks = 0;
+    loop->dev.read = loop_read;
+    loop->dev.write = loop_write;
+    loop->dev.submit = 0;
+    loop->dev.flush = loop_flush;
+    loop->dev.backing = backing;
+    loop->dev.drvdata = loop;
+    flags = spin_lock_irqsave(&loop_lock);
+    loop->attached = 1;
+    spin_unlock_irqrestore(&loop_lock, flags);
 }
 
 /**
@@ -594,19 +758,7 @@ int loop_attach(int index, const char *path, int writable)
     k_strncpy(loop->path, path, sizeof(loop->path));
     loop->path[sizeof(loop->path) - 1] = '\0';
     loop->attaching = 0;
-    loop->attached = 1;
-
-    loop->dev.sector_size = BLOCK_SECTOR_SIZE;
-    loop->dev.sector_count = st.size / BLOCK_SECTOR_SIZE;
-    loop->dev.flags = BLOCK_CALLER_SYNC | BLOCK_WRITE_THROUGH | (writable ? 0u : BLOCK_READ_ONLY);
-    loop->dev.unflushed = 0;
-    loop->dev.deadline_ticks = 0;
-    loop->dev.read = loop_read;
-    loop->dev.write = loop_write;
-    loop->dev.submit = 0;
-    loop->dev.flush = loop_flush;
-    loop->dev.backing = ref.mnt->dev;
-    loop->dev.drvdata = loop;
+    loop_publish(loop, ref.mnt->dev, st.size);
 
     vfs_node_unlock(&ref);
 
@@ -647,10 +799,7 @@ int loop_detach(int index)
         return -EBUSY;
     }
     if (!loop->attached) {
-        if (vfs_device_holds(&loop->dev)) {
-            return -EBUSY;
-        }
-        if (loop->in_flight > 0) {
+        if (vfs_device_holds(&loop->dev) || !loop_quiesce(loop)) {
             return -EBUSY;
         }
         klog(KLOG_INFO, "loop", "loop%d: detached", index);
@@ -663,7 +812,7 @@ int loop_detach(int index)
     if (bcache_device_holds(&loop->dev)) {
         return -EBUSY; /* a buffer of it is held */
     }
-    if (loop->in_flight > 0) {
+    if (loop_busy(loop)) {
         return -EBUSY; /* a transfer is inside the file system the file is on */
     }
     if (bcache_sync(&loop->dev) != 0) {
@@ -671,6 +820,9 @@ int loop_detach(int index)
     }
     if (bcache_invalidate(&loop->dev) != 0) {
         return -EBUSY;
+    }
+    if (!loop_quiesce(loop)) {
+        return -EBUSY; /* a transfer began while the sync slept */
     }
     klog(KLOG_INFO, "loop", "loop%d: detached", index);
     loop_release(loop);
