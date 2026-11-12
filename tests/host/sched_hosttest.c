@@ -868,10 +868,12 @@ static void run_delay(void)
 /**
  * The tick switches a thread for another of its processor's queue only once
  * it has run SCHED_SLICE_NS, 0.75 ms, since it was switched in, unless a
- * woken thread waits there. So a thread that a yield runs for 200 us, as
- * KVM's steal_time selftest runs one, ends before the yielder runs again
- * although a tick falls inside its run, and the yielder's run_delay grows
- * by the whole of it; a thread that has run its slice gives way at the tick.
+ * woken or real-time thread waits there. So a thread that a yield runs for
+ * 200 us, as KVM's steal_time selftest runs one, ends before the yielder
+ * runs again although a tick falls inside its run, and the yielder's
+ * run_delay grows by the whole of it; a thread that has run its slice gives
+ * way at the tick, and a real-time thread made ready with no wake's mark
+ * takes the processor at the next tick within the slice.
  */
 static void tick_slice(void)
 {
@@ -906,6 +908,14 @@ static void tick_slice(void)
     wake(&procs[2]);
     sched_tick();
     CHECK(current_proc == &procs[2], "a woken thread takes the processor at the tick at once");
+    procs[3].sched_policy = SCHED_FIFO;
+    procs[3].rt_priority = 10;
+    sched_make_ready(&procs[3]);
+    CHECK(current_proc == &procs[2] && !procs[3].woken,
+          "a real-time thread made ready, unmarked, waits for the tick");
+    sched_tick();
+    CHECK(current_proc == &procs[3],
+          "and takes the processor at the tick within the current thread's slice");
     clock_ns = 0;
 }
 

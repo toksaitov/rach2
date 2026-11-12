@@ -751,6 +751,12 @@ const struct kvm_cpuid_entry2 *kvm_cpuid_find(const struct kvm_vcpu *v, uint32_t
 /** The XCR0 bits the host offers a guest: those the kernel saves. */
 uint64_t kvm_xcr0_supported(void);
 
+#ifdef RACH2_HOSTTEST
+/** Forget the answer `kvm_xcr0_supported` keeps, so that a host test's
+ * model processor may lose XSAVE and gain it back between rows. */
+void kvm_xcr0_forget(void);
+#endif
+
 /** The XCR0 bits `v`'s CPUID allows: leaf 0xD's within the host's, and
  * x87 always. */
 uint64_t kvm_xcr0_guest(const struct kvm_vcpu *v);
