@@ -985,9 +985,14 @@ static void irq_dispatch(isr_params_t *params)
  * first, as through the 8259.
  *
  * After any chain but the tick's, a process a device woke runs now, or at
- * its system call's exit (`sched_preempt`): woken only at the next tick, a
+ * its system call's exit (`sched_tick`): woken only at the next tick, a
  * disk's caller that slept for its command would get one command a
- * scheduler round. The tick's own handler makes its switch itself.
+ * scheduler round. A thread on the queue that nothing woke waits as at the
+ * tick until the current one has run its slice, so that an interrupt does
+ * not end a turn the tick would have left running, as Linux's return to
+ * user mode switches only when the tick or a wake set TIF_NEED_RESCHED
+ * (kernel/entry/common.c:104-105). The tick's own handler makes its switch
+ * itself.
  *
  * The tick takes no big lock here: its handler runs the clock's pass, the
  * accounting and the timer pass without it, each under a spinlock of its
@@ -1056,7 +1061,7 @@ void _irq_router(isr_params_t *params)
     if (params->vector >= 48) {
         irq_dispatch(params);
         lapic_eoi();
-        sched_preempt(); /* a woken reader runs now, or at the call's exit */
+        sched_tick(); /* a woken reader runs now, or at the call's exit */
         return;
     }
 
@@ -1068,7 +1073,7 @@ void _irq_router(isr_params_t *params)
         }
         irq_dispatch(params);
         lapic_eoi();
-        sched_preempt();
+        sched_tick();
         return;
     }
 
@@ -1080,7 +1085,7 @@ void _irq_router(isr_params_t *params)
 
     irq_dispatch(params);
     if (params->vector != 32) {
-        sched_preempt();
+        sched_tick();
     }
 }
 

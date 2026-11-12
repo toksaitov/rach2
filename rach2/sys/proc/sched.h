@@ -204,10 +204,10 @@ void sched_wait_off_cpu(const process_t *p);
  */
 void sched_preempt(void);
 
-/** From the timer tick: switch this processor as `sched_preempt` does,
- * once its current thread has run its slice since it was switched in, or
- * sooner when a woken or real-time thread waits on its queue. Called with
- * interrupts off. */
+/** From the end of an interrupt, the tick's or a device's: switch this
+ * processor as `sched_preempt` does, once its current thread has run its
+ * slice since it was switched in, or sooner when a woken or real-time
+ * thread waits on its queue. Called with interrupts off. */
 void sched_tick(void);
 
 /** Take the switch an interrupt asked for (`need_resched`), if one did;
