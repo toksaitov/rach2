@@ -67,22 +67,24 @@ int sched_is_enabled(void);
 void schedule(void);
 
 /**
- * Make `p`, blocked or stopped, ready to run, on the queue of the processor it
- * last ran on, unless that one is busy and another it may run on is idle, or
- * its affinity no longer has it; a process still current on its processor,
+ *  Make `p`, blocked or stopped, ready to run, on the queue of the processor
+ * it last ran on, unless that one is busy and another it may run on is idle,
+ * or its affinity no longer has it; a process still current on its processor,
  * woken before its switch away, stays there. A real-time `p` that does not
  * outrank the real-time thread running there, or that thread may run nowhere
  * else, goes instead to the processor it may run on whose highest real-time
  * priority, of its current thread and its queue, is lowest, when it outranks
- * every thread there. Its processor is kicked so that it selects now
- * rather than at its tick when it is idle, halted in place with `p` current, or
- * runs a thread `p` outranks, whose `need_resched` is set, so that the
- * interrupt switches it in user mode and a call on that processor switches at
- * its exit. The state is not tested again: this is for a new thread, and for a
- * stopped one, which only the big lock's holder stops and makes ready. A
- * blocked thread, which wakers without the big lock may race for, is woken by
- * `sched_wake_blocked`, `sched_wake_signal` or `sched_wake_due`, which test the
- * state under the run queues' lock, so that one of them makes it ready.
+ * every thread there. Its processor is kicked so that it selects now rather
+ * than at its tick when it is idle, halted in place with `p` current, or runs
+ * a thread `p` outranks, whose `need_resched` is set, so that the interrupt
+ * switches it in user mode and a call on that processor switches at its exit.
+ * An idle target records its reschedule request for the idle loop, which
+ * checks it before halting. The state is not tested again: this is for a new
+ * thread, and for a stopped one, which only the big lock's holder stops and
+ * makes ready. A blocked thread, which wakers without the big lock may race
+ * for, is woken by `sched_wake_blocked`, `sched_wake_signal` or
+ * `sched_wake_due`, which test the state under the run queues' lock, so that
+ * one of them makes it ready.
  */
 void sched_make_ready(process_t *p);
 

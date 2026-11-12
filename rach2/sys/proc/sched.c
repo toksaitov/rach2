@@ -479,10 +479,9 @@ static int sched_preempt_cpu(const process_t *p, int cpu)
     process_t *cur = cpu_table[cpu].current;
 
     if (sched_cpu_idle(cpu)) {
-        if (cur->need_resched) {
-            return -1;
+        if (cur) {
+            cur->need_resched = 1;
         }
-        cur->need_resched = 1;
         return cpu;
     }
     if (sched_priority(p) > sched_priority(cur)) {
@@ -1250,7 +1249,7 @@ void sched_tick(void)
  * call's and none is lost by a clear after the switch. */
 void sched_take_preempt(void)
 {
-    if (current_proc && current_proc->need_resched) {
+    if (current_proc && current_proc != this_cpu()->idle && current_proc->need_resched) {
         schedule();
     }
 }
@@ -1720,80 +1719,74 @@ uint32_t sched_load_idle_ticks(void)
     return wait < TICK_HZ ? wait : TICK_HZ;
 }
 
-/**
- * Wait with the big lock let go. With the tick stopped, poll with interrupts
- * on: the interrupt routers mark the poll kicked, so its interrupt ends the
- * poll before a halt can follow it. No APIC register read is needed.
- *
- * A kernel wait with its tick running polls with interrupts off: poll this
- * processor's `idle_poll` for `idle_poll_us`, then halt unless a wake
- * turned it to CPU_POLL_KICKED meanwhile (`smp_kick`). A kick that comes
- * after the poll finds it off and sends the interrupt that ends the halt.
- * One that came while the idle task was awake (`sched_idle_awake`) ends
- * the wait at once, with no poll or halt, so that its caller selects again.
- * The poll answers the requests other processors leave (`smp_service`), as
- * a wait for the big lock does, so that their interrupts, pending
- * meanwhile, are taken once at its end: taken one by one inside the poll,
- * as Linux's poll_idle takes them with interrupts on
- * (drivers/cpuidle/poll_state.c:22-41), each cost a guest's interrupt and
- * its exits, and a churn of short processes, whose exits flush every
- * processor, ran 1.5 times as long. Linux sends no such flush to an idle
- * processor in lazy TLB mode (should_flush_tlb, arch/x86/mm/tlb.c:
- * 912-914). A device's completion or a timer's interrupt, which Linux's
- * poll would take at once, the poll looks for every IDLE_POLL_CHECK_US
- * (`arch_irq_waiting`), and halts on it, which takes it while the processor
- * is still marked idle: held to the poll's end, a disk's completion made
- * each of its random reads some 90 us longer, and a tick held past a kick
- * was charged to the thread the processor switched to. A kicked wait,
- * after its poll or with none, likewise lets interrupts in for one
- * instruction before it returns (`idle_kicked_window`), so that one pending
- * then, seen or not, is taken while the processor is still marked idle, not
- * after its caller waited for the big lock or switched threads, as Linux's
- * call_cpuidle enables interrupts when a reschedule request cancels the
- * idle entry (kernel/sched/idle.c:144-148).
- *
- * The length adapts as Linux 6.12.115's haltpoll governor adapts its own
- * (adjust_poll_limit, drivers/cpuidle/governors/haltpoll.c): a wait the
- * halt ended within IDLE_POLL_MAX_US doubles it, to at least
- * IDLE_POLL_START_US, and a longer one halves it, to 0 below
- * IDLE_POLL_START_US. A processor whose threads
- * hand work back and forth, as a renderer's do, then takes each wake in the
- * poll, without an interrupt sent under the big lock, a halt and its exit;
- * one that stays idle, which its tick wakes every millisecond, soon halts at
- * once again. The wait polls only where `arch_idle_poll` says, as Linux
- * loads cpuidle-haltpoll only where KVM hints that the guest's processors
- * are its own, or the boot line forces it: on a machine of its own an
- * interrupt and a halt cost a few microseconds and a poll the power of a
- * busy processor, and under a host that shares its processors each look
- * at the request register is an exit. Without a measured counter there is
- * no poll either.
- */
-/** Let a pending interrupt in for one instruction, with the processor
- * still marked idle: `sti` takes effect after the return that follows it. */
-static void idle_kicked_window(void)
+/** Stop the idle task's tick immediately before a halt. IRQs are off and
+ * no lock is held; return zero when a wake requires another selection. */
+static int idle_stop_tick(void)
 {
-    arch_irq_enable();
-    arch_irq_disable();
+    struct percpu *cpu = this_cpu();
+    int stopped;
+
+    cpu->ticks_seq++;
+    cpu->tick_stopped = 1;
+    cpu->ticks_seq++;
+    stopped = timer_idle_enter();
+    cpu->ticks_seq++;
+    cpu->tick_stopped = stopped;
+    cpu->ticks_seq++;
+    return !current_proc->need_resched;
 }
 
-static void idle_halt(void)
+/**
+ * Wait with the big lock let go. The scheduler idle task polls with its
+ * existing tick and interrupts on: the interrupt routers mark the poll kicked,
+ * so its interrupt ends the poll before a halt can follow it. Only a poll
+ * which finds no wake stops the tick for a halt. A tick already stopped stays
+ * stopped through the poll. No APIC register read is needed.
+ *
+ * A kernel wait with its tick running polls with interrupts off: poll this
+ * processor's `idle_poll` for `idle_poll_us`, then halt unless a wake turned
+ * it to CPU_POLL_KICKED meanwhile (`smp_kick`). A kick that comes after the
+ * poll finds it off and sends the interrupt that ends the halt. The poll
+ * answers the requests other processors leave (`smp_service`), as a wait for
+ * the big lock does, so that their interrupts, pending meanwhile, are taken
+ * once at its end: taken one by one inside the poll, as Linux's poll_idle
+ * takes them with interrupts on (drivers/cpuidle/poll_state.c:22-41), each
+ * cost a guest's interrupt and its exits, and a churn of short processes,
+ * whose exits flush every processor, ran 1.5 times as long. Linux sends no
+ * such flush to an idle processor in lazy TLB mode (should_flush_tlb,
+ * arch/x86/mm/tlb.c: 912-914). A device's completion or a timer's interrupt,
+ * which Linux's poll would take at once, the poll looks for every
+ * IDLE_POLL_CHECK_US (`arch_irq_waiting`), and halts on it, which takes it
+ * while the processor is still marked idle: held to the poll's end, a disk's
+ * completion made each of its random reads some 90 us longer, and a tick held
+ * past a kick was charged to the thread the processor switched to. A kicked
+ * poll likewise lets interrupts in for one instruction before it returns, so
+ * that one pending then, seen or not, is taken while the processor is still
+ * marked idle, not after its caller waited for the big lock or switched
+ * threads.
+ *
+ * The length adapts as Linux 6.12.115's haltpoll governor adapts its own
+ * (adjust_poll_limit, drivers/cpuidle/governors/haltpoll.c): a wait the halt
+ * ended within IDLE_POLL_MAX_US doubles it, to at least IDLE_POLL_START_US,
+ * and a longer one halves it, to 0 below IDLE_POLL_START_US. A processor whose
+ * threads hand work back and forth, as a renderer's do, then takes each wake
+ * in the poll, without an interrupt sent under the big lock, a halt and its
+ * exit; one whose waits exceed the maximum soon halts at once again. As Linux
+ * polls only in a guest, so does this: on a machine of its own an interrupt
+ * and a halt cost a few microseconds, and a poll the power of a busy
+ * processor. Without a measured counter there is no poll either.
+ */
+static void idle_halt(int stop_tick)
 {
     struct percpu *cpu = this_cpu();
     uint32_t per_us = timer_calibrate() / TICK_US;
     uint64_t start, limit, now, look, gone;
     uint32_t grow;
-    int open = cpu->tick_stopped;
+    int open = stop_tick;
+    int polling = per_us != 0 && arch_guest();
 
-    if (arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_NONE) == CPU_POLL_KICKED) {
-        idle_kicked_window();
-        return;
-    }
-    if (per_us == 0 || !arch_idle_poll()) {
-        arch_idle_masked();
-        return;
-    }
-    start = arch_cycles();
-    if (cpu->idle_poll_us != 0) {
+    start = polling ? arch_cycles() : 0;
+    if (polling && cpu->idle_poll_us != 0) {
         limit = (uint64_t)cpu->idle_poll_us * per_us;
         look = (uint64_t)IDLE_POLL_CHECK_US * per_us;
         (void)arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_ON);
@@ -1824,7 +1817,13 @@ static void idle_halt(void)
             return;
         }
     }
+    if (stop_tick && !idle_stop_tick()) {
+        return;
+    }
     arch_idle_masked();
+    if (!polling) {
+        return;
+    }
     gone = tick_div(arch_cycles() - start, per_us, NULL);
     if (gone > IDLE_POLL_MAX_US) {
         cpu->idle_poll_us /= 2u;
@@ -1871,7 +1870,7 @@ static void idle_halt(void)
  */
 void idle_wait_irq_off(void)
 {
-    int depth;
+    int depth, scheduler_idle;
 
     if (ip_loop_pending()) {
         if (this_cpu()->bkl_depth > 0) {
@@ -1884,25 +1883,20 @@ void idle_wait_irq_off(void)
             return;
         }
     }
+    scheduler_idle = sched_is_enabled() && current_proc && current_proc == this_cpu()->idle;
+    if (scheduler_idle && current_proc->need_resched) {
+        return;
+    }
     this_cpu()->idle_cycles = arch_cycles();
     this_cpu()->idle_wait = 1;
     depth = bkl_drop();
-    if (sched_is_enabled() && current_proc == this_cpu()->idle) {
-        int stopped;
-
-        this_cpu()->ticks_seq++;
-        this_cpu()->tick_stopped = 1;
-        this_cpu()->ticks_seq++;
-        stopped = timer_idle_enter();
-        this_cpu()->ticks_seq++;
-        this_cpu()->tick_stopped = stopped;
-        this_cpu()->ticks_seq++;
-    }
-    idle_halt();
-    this_cpu()->idle_end_cycles = arch_cycles();
-    if (sched_is_enabled() && current_proc == this_cpu()->idle) {
-        sched_account_tick(0, 0);
-        timer_idle_work();
+    if (!scheduler_idle || !current_proc->need_resched) {
+        idle_halt(scheduler_idle);
+        this_cpu()->idle_end_cycles = arch_cycles();
+        if (scheduler_idle) {
+            sched_account_tick(0, 0);
+            timer_idle_work();
+        }
     }
     bkl_take_as(depth, BKL_KEY_IDLE);
     this_cpu()->idle_wait = 0;
@@ -1929,7 +1923,7 @@ void idle_wait_irq_on(void)
     this_cpu()->idle_cycles = arch_cycles();
     this_cpu()->idle_wait = 1;
     depth = bkl_drop();
-    idle_halt();
+    idle_halt(0);
     this_cpu()->idle_end_cycles = arch_cycles();
     bkl_take_as(depth, BKL_KEY_IDLE);
     this_cpu()->idle_wait = 0;

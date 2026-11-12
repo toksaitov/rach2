@@ -523,13 +523,26 @@ static uint32_t timer_service_ticks(void)
     return wait;
 }
 
+/** Whether the idle task must return to selection, with interrupts off.
+ * A wake leaves its flag set until the scheduler selects under its lock. */
+int timer_idle_woken(void)
+{
+    struct percpu *cpu = this_cpu();
+
+    return cpu->current != NULL && cpu->current == cpu->idle && cpu->current->need_resched;
+}
+
 /** Arm idle device work on the boot processor, or notify it from another.
  * No lock is held and interrupts are off; failure keeps the periodic tick. */
 int timer_idle_prepare(void)
 {
     uint32_t wait;
-    int64_t deadline = watchdog_idle_deadline();
+    int64_t deadline;
 
+    if (current_proc && current_proc->need_resched) {
+        return -1;
+    }
+    deadline = watchdog_idle_deadline();
     if (deadline != 0) {
         timer_wake_at(deadline);
     }
@@ -538,17 +551,17 @@ int timer_idle_prepare(void)
             timer_idle_notify();
             bkl_exit();
         }
-        return 1;
+        return current_proc && current_proc->need_resched ? -1 : 1;
     }
     if (!bkl_try_enter()) {
-        return 0;
+        return current_proc && current_proc->need_resched ? -1 : 0;
     }
     wait = timer_service_ticks();
     idle_boot_until = (uint32_t)kernel_ticks + wait;
     timer_wake_tick(tick_count() + wait);
     latency_idle_begin();
     bkl_exit();
-    return 1;
+    return current_proc && current_proc->need_resched ? -1 : 1;
 }
 
 /** Kick the idle boot processor for an earlier service under the big lock.

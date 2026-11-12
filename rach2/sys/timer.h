@@ -212,18 +212,24 @@ void timer_wake_release(void);
  * context. */
 int timer_wakes_between(void);
 
-/** Stop this processor's scheduler tick for a scheduler idle wait, keeping
- * its earliest timer event armed; 1 when stopped, 0 when unavailable.
- * Interrupts are off and no lock is held. */
+/** Prepare the scheduler idle task's stopped tick and earliest event.
+ * Return whether stopped, preserving the prior state when work is ready;
+ * the caller checks its reschedule flag again before halting. Interrupts
+ * are off and no lock is held. */
 int timer_idle_enter(void);
 
 /** Restart the scheduler tick after an idle wait, with its phase preserved
  * and missed ticks skipped. Interrupts are off and no lock is held. */
 void timer_idle_exit(void);
 
-/** Arm the boot processor's next device-service event before its tick is
- * stopped; 0 when another processor holds the big lock and the periodic
- * tick must stay. No lock is held; interrupts are off. */
+/** Whether the current idle task has a pending selection. Interrupts are
+ * off; no lock is held. The flag remains set until local selection. */
+int timer_idle_woken(void);
+
+/** Collect the next idle watchdog and device events. Return one when
+ * ready, zero when the big lock is busy and the tick must stay, or minus
+ * one when ready work declines the halt without changing the tick state.
+ * No lock is held; interrupts are off. */
 int timer_idle_prepare(void);
 
 /** Compare service deadlines with the sleeping boot processor's event and

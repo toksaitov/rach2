@@ -26,16 +26,23 @@ process_t *proc_idle;
 volatile uint64_t kernel_ticks;
 unsigned int host_cpu;
 
-/** A spin's pause, which the host does not need. */
+static void poll_wake_step(void);
+
+/** Let the poll row deliver one remote wake at a modeled pause. */
 void arch_relax(void)
-{}
+{
+    poll_wake_step();
+}
 static process_t procs[7];
 /* Each process's floating-point area, which the stand-ins tell apart. */
 static uint8_t areas[7][16];
 static uint32_t irq_flags;
 static unsigned switches;
 static int failures;
-static int idle_timer_ready, idle_timer_exits;
+static int idle_timer_ready, idle_timer_exits, idle_timer_enters, idle_halts;
+static int idle_wake_on_enter, poll_wake;
+static uint32_t poll_rate;
+static uint64_t poll_cycles;
 static int affinity_step;
 static unsigned int affinity_kicks;
 static uint32_t rseq_area[8];
@@ -142,13 +149,13 @@ int klog_inside(void)
 /** 0: the model's counter is not measured, so an idle wait does not poll. */
 uint32_t timer_calibrate(void)
 {
-    return 0;
+    return poll_rate;
 }
 
 /** 0: the model's idle waits do not poll, the other reason they do not. */
 int arch_idle_poll(void)
 {
-    return 0;
+    return poll_rate != 0;
 }
 
 /** Nothing: the model has no tick to stop. */
@@ -176,7 +183,7 @@ int arch_irq_waiting(void)
  * runs. */
 uint64_t arch_cycles(void)
 {
-    return 0;
+    return poll_rate ? poll_cycles++ : 0;
 }
 
 /** Nothing: no process arms a timer of processor time, which would post a
@@ -378,7 +385,9 @@ static unsigned int cpu_kicks[NR_CPUS];
 /** Count a request to the remote processor, which the switch model services. */
 void smp_kick(int cpu)
 {
-    cpu_kicks[cpu]++;
+    if (cpu != (int)host_cpu && cpu_table[cpu].idle_poll == CPU_POLL_ON) {
+        cpu_table[cpu].idle_poll = CPU_POLL_KICKED;
+    }
     if (cpu == 1) {
         affinity_kicks++;
     }
@@ -1464,12 +1473,101 @@ static void nohz_switch(void)
     idle_timer_ready = 0;
 }
 
+/** A wake before or during idle entry must return to selection without
+ * stopping again for a halt or touching the event device unnecessarily. */
+static void nohz_ready_entry(void)
+{
+    unsigned int i;
+
+    setup();
+    for (i = 1; i < 7; i++) {
+        sched_forget(&procs[i]);
+    }
+    this_cpu()->idle = &procs[0];
+    irq_flags = 0;
+    idle_timer_ready = 1;
+    idle_timer_enters = idle_halts = 0;
+    sched_make_ready(&procs[1]);
+    CHECK(procs[0].need_resched && !(procs[0].work & WORK_RESCHED),
+          "a wake marks the idle task without user-return work");
+    this_cpu()->idle_wait = 1;
+    sched_take_preempt();
+    CHECK(current_proc == &procs[0] && this_cpu()->idle_wait && !switches,
+          "a service point cannot switch inside post-halt idle work");
+    this_cpu()->idle_wait = 0;
+    idle_wait_irq_off();
+    CHECK(!idle_timer_enters && !idle_halts,
+          "work already ready avoids idle timer programming and a halt");
+    schedule();
+    CHECK(current_proc == &procs[1] && !procs[0].need_resched && !(procs[0].work & WORK_RESCHED),
+          "selection consumes the idle task's request under the run queue lock");
+    setup();
+    for (i = 1; i < 7; i++) {
+        sched_forget(&procs[i]);
+    }
+    this_cpu()->idle = &procs[0];
+    irq_flags = 0;
+    idle_timer_enters = idle_halts = 0;
+    idle_wake_on_enter = 1;
+    idle_wait_irq_off();
+    CHECK(idle_timer_enters == 1 && !idle_halts && procs[0].need_resched,
+          "a wake during preparation is checked again before the halt");
+    idle_timer_ready = 0;
+}
+
+/** Deliver a ready thread from another modeled CPU during the poll. */
+static void poll_wake_step(void)
+{
+    if (poll_wake) {
+        poll_wake = 0;
+        host_cpu = 1;
+        sched_make_ready(&procs[1]);
+        host_cpu = 0;
+    }
+}
+
+/** A short poll which catches a wake keeps its existing tick; one which
+ * finds no work stops the tick before actually halting. */
+static void nohz_poll_before_stop(void)
+{
+    unsigned int i;
+
+    setup();
+    for (i = 1; i < 7; i++) {
+        sched_forget(&procs[i]);
+    }
+    this_cpu()->idle = &procs[0];
+    procs[1].affinity = 1;
+    irq_flags = 0;
+    this_cpu()->idle_poll_us = 20;
+    poll_rate = TICK_US;
+    poll_cycles = 0;
+    idle_timer_ready = 1;
+    idle_timer_enters = idle_halts = 0;
+    poll_wake = 1;
+    idle_wait_irq_off();
+    CHECK(!idle_timer_enters && !idle_halts && procs[0].need_resched && !this_cpu()->tick_stopped,
+          "a wake caught in the poll avoids stopping and restarting the device");
+    schedule();
+    procs[1].state = PROC_BLOCKED;
+    schedule();
+    this_cpu()->idle_poll_us = 20;
+    idle_timer_enters = idle_halts = 0;
+    idle_wait_irq_off();
+    CHECK(idle_timer_enters == 1 && idle_halts == 1 && this_cpu()->tick_stopped,
+          "a poll without a wake stops the tick before halting");
+    poll_rate = 0;
+    idle_timer_ready = 0;
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(int argc, char **argv)
 {
     if (argc == 2 && __builtin_strcmp(argv[1], "--idle-only") == 0) {
         nohz_accounting();
         nohz_switch();
+        nohz_ready_entry();
+        nohz_poll_before_stop();
         dprintf(1, "sched-hosttest: idle: %s\n", failures ? "fail" : "pass");
         return failures != 0;
     }
@@ -1498,6 +1596,8 @@ int main(int argc, char **argv)
     affinity_rows();
     nohz_accounting();
     nohz_switch();
+    nohz_ready_entry();
+    nohz_poll_before_stop();
     if (failures) {
         return 1;
     }
@@ -1526,6 +1626,11 @@ uint64_t arch_cpu_steal_ns(int cpu)
 /** No timer hardware is modeled by the scheduler's rows. */
 int timer_idle_enter(void)
 {
+    idle_timer_enters++;
+    if (idle_wake_on_enter) {
+        idle_wake_on_enter = 0;
+        sched_make_ready(&procs[1]);
+    }
     return idle_timer_ready;
 }
 
