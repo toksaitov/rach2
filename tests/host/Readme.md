@@ -230,6 +230,8 @@ Each entry names a test, the code it compiles, and its cases. The reasoning of a
 
 ### Kernel libraries, memory and processes
 
+The mapped-file rows also keep a failed last release for retry, report its error once after a successful fsync, release with the heap refusing allocations, reap a pending zero-reference writer, and zero a partial page's EOF tail before regrowth. `tmpfs_hosttest.c` truncates mapped pages with a stale remembered size. `open_hosttest.c` creates a mapping during a writer's buffer fault and checks descriptor and core writes against its resident page. `i915_evict_hosttest.c` keeps a shared file through a busy GPU's revoked pin and drops it only after the last device store.
+
 `filemap_hosttest.c` models page-cache misses with file reads and a hit with distinct cached bytes. The hit returns a resident page without a file read or another cache store and adopts the frame under the file's lock. A delayed write mark after truncation refuses both an absent frame and a replacement at the same offset; writeback leaves the regrown clean hole unallocated.
 
 * `kstring_hosttest.c` runs the string and memory routines of `rach2/sys/lib/kstring.c` with `rach2/sys/lib/kctypes.c`. Rows check `k_strlen`, `k_memset`, `k_memcpy`, `k_strncpy`, `k_strreverse` on strings of zero to five characters, `k_toupper`, `k_tolower`, `k_strtoupper`, and `k_memmove` over ranges that overlap in either direction and between two separate objects. A sweep runs the copy, the fill and both directions of the move for every length from 0 to 67 at four source and four destination offsets, and checks the bytes copied and the bytes beside them.

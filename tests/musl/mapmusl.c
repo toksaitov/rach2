@@ -8,9 +8,11 @@
  * mapping and a shared mapping of a file in /dev/shm the parent sees a child's
  * store, a store through the mapping of the file reaches read(2), and after a
  * truncation and a growth a write to the file is seen through the mapping. On
- * x86-64 a truncation to 4 GiB of a file of 4 GiB and a page takes the last
- * page alone out of a mapping of it, and a mapping of a file or of shared
- * memory of 16 TiB is EOVERFLOW and one of a page less is made; mprotect,
+ * ext2 a cache-warmed private page and a shared writable alias both raise
+ * SIGBUS after truncation, and regrowth preserves the prefix and has a zero
+ * tail. On x86-64, truncating a file of 4 GiB and a page to 4 GiB cuts
+ * only its last page from the mapping. A file or shared-memory mapping
+ * of 16 TiB is EOVERFLOW and one of a page less is made; mprotect,
  * getrusage, a shrink and a move each pass terabytes without pages in the
  * run's time and reach the page beyond them. mprotect makes a private mapping
  * of a file opened read-only writable, and not a shared one.
@@ -141,6 +143,7 @@ static const char *const assertion_id[] = {"private-file",
                                            "ext2-readv",
                                            "ext2-msync",
                                            "ext2-reach-file",
+                                           "ext2-cached-truncate",
                                            "krffs-enodev",
                                            "krffs-readonly",
                                            "trunc-file",
@@ -1029,6 +1032,69 @@ static int krffs_shared(int fd, char *m)
     return 0;
 }
 
+/** A cached private page and its writable alias both disappear at truncate. */
+static int ext2_cached_truncate(int fd)
+{
+    char buf[4], *ro = MAP_FAILED, *rw = MAP_FAILED;
+    int status, which, rc = 0;
+    pid_t pid;
+    volatile char byte;
+
+    if (pread(fd, buf, sizeof(buf), PAGE) != (ssize_t)sizeof(buf)) {
+        return fail("warm the file cache before a read-around fault");
+    }
+    ro = mmap(NULL, 2 * PAGE, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (ro != MAP_FAILED) {
+        byte = ((volatile char *)ro)[PAGE];
+        rw = mmap(NULL, 2 * PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    }
+    if (rw == MAP_FAILED) {
+        rc = fail("cached private and shared aliases before truncate");
+        goto out;
+    }
+    byte = ((volatile char *)rw)[PAGE];
+    (void)byte;
+    rw[PAGE] = 'S';
+    if (ftruncate(fd, PAGE) != 0) {
+        rc = fail("truncate below the writable cached page");
+        goto out;
+    }
+    for (which = 0; which < 2; which++) {
+        pid = fork();
+        if (pid == 0) {
+            struct rlimit core = {0, 0};
+
+            if (setrlimit(RLIMIT_CORE, &core) != 0) {
+                _exit(2);
+            }
+            if (which == 0) {
+                ((volatile char *)rw)[PAGE] = 'X';
+            } else {
+                byte = ((volatile char *)ro)[PAGE];
+            }
+            _exit(0);
+        }
+        if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) ||
+            WTERMSIG(status) != SIGBUS) {
+            rc = fail("truncate left a cached alias accessible past EOF");
+            goto out;
+        }
+    }
+    if (ftruncate(fd, 2 * PAGE) != 0 || fsync(fd) != 0 || pread(fd, buf, 4, 0) != 4 ||
+        memcmp(buf, "root", 4) != 0 || pread(fd, buf, 4, PAGE) != 4 ||
+        memcmp(buf, "\0\0\0\0", 4) != 0) {
+        rc = fail("cached truncate and regrowth changed the file's prefix or kept old bytes");
+    }
+out:
+    if (ro != MAP_FAILED) {
+        munmap(ro, 2 * PAGE);
+    }
+    if (rw != MAP_FAILED) {
+        munmap(rw, 2 * PAGE);
+    }
+    return rc;
+}
+
 /**
  * Check that `m`, a shared mapping of two pages of `fd`, a file on ext2, maps
  * the file's pages: a child's store is seen, read and write see the mapping's
@@ -1093,6 +1159,10 @@ static int ext2_shared(int fd, char *m)
         pread(fd, buf, 3, PAGE) != 3 || memcmp(buf, "kid", 3) != 0 || pread(fd, buf, 1, 100) != 1 ||
         buf[0] != 'S') {
         return fail("the stores of a shared mapping of a file on the root did not reach it");
+    }
+    row_held();
+    if (ext2_cached_truncate(fd) != 0) {
+        return 1;
     }
     row_held();
     return 0;

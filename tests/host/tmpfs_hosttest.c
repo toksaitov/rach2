@@ -547,6 +547,7 @@ static void truncation(void)
     mapped[0] = shmem_map_page(sh, 0);
     mapped[3] = shmem_map_page(sh, 3);
     cuts = 0;
+    sh->size = 0; /* a disk read-around may not have sampled the size */
     CHECK(tmpfs_truncate(&mnt, f, PAGE_SIZE + 1) == 0 && cuts == 1 && cut_first == 2);
     CHECK(mapped[0] != 0 && mapped[3] == 0 && refs[frame_index(mapped[0])] == 2);
     CHECK(tmpfs_truncate(&mnt, f, 0) == 0 && cuts == 2 && cut_first == 0 && mapped[0] == 0);

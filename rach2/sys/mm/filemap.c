@@ -56,6 +56,7 @@ struct dshare {
     uint64_t ino;
     uint32_t users;   /* the mappings of it */
     uint32_t leaving; /* releases of writers writing its pages back */
+    int error;        /* first unreported writeback error, kept for fsync */
     int stores;       /* a shared mapping through a descriptor open for
                          writing has mapped it, so its pages may hold stores
                          the file lacks; never cleared */
@@ -93,8 +94,9 @@ struct filemap {
     struct shmem *sh;
     struct shmem own;
     struct dshare *ds;
-    int shared; /* stores may change the file, and may be written back */
-    int going;  /* being released, and no writer for its file's pages */
+    int shared;   /* stores may change the file, and may be written back */
+    int going;    /* being released, and no writer for its file's pages */
+    int retained; /* 1: own hold after a failed release; 2: retry succeeded */
     /* Shared anonymous memory's inode number on the mount
      * `vfs_memfd_mount` has; 0 for any other. */
     uint64_t anon_ino;
@@ -380,8 +382,37 @@ static void dshare_put(struct dshare *ds)
 }
 
 /**
+ * Write `len` bytes of frame `phys` at `at` through `m`, under the file's
+ * lock. A small stack buffer keeps no temporary mapping across a sleep
+ * and needs no allocation at unmap or exit. 0 or the first write error.
+ */
+static int dshare_write_bytes(struct filemap *m, uintptr_t phys, uint32_t len, uint64_t at)
+{
+    uint8_t buf[1024];
+    uint32_t done = 0;
+
+    while (done < len) {
+        uint32_t take = len - done < sizeof(buf) ? len - done : (uint32_t)sizeof(buf);
+        uint8_t *page = kmap_temp(phys);
+        int32_t n;
+
+        if (!page) {
+            return -EIO;
+        }
+        k_memcpy(buf, page + done, take);
+        kunmap_temp(page);
+        n = fs_write_at(&m->entry, buf, take, at + done);
+        if (n != (int32_t)take) {
+            return n < 0 ? n : -EIO;
+        }
+        done += take;
+    }
+    return 0;
+}
+
+/**
  * Write page `i` of `ds` back through `m`'s copy of the descriptor, by way
- * of `buf`, a page from the heap, since the write sleeps. The file's lock
+ * of a stack buffer (`dshare_write_bytes`). The file's lock
  * (`vfs_node_lock`: the mount's namespace lock, or the file's own on a type
  * that sets `file_locked`) is held from before the file's size is read to
  * the end of the write, so a truncation, which takes it too, runs wholly
@@ -391,10 +422,11 @@ static void dshare_put(struct dshare *ds)
  * (`dshare_stored`) is not written, as Linux's write-back passes a clean
  * folio by (`write_cache_pages`, mm/page-writeback.c): it equals the file,
  * and writing a page read from a hole would allocate the hole's blocks. A
- * file a loop device stands on is not written, as write(2) does not write
- * it. 0, -EBUSY, or the write's error.
+ * partial page's tail is zeroed before writing, as Linux's mpage_writepage
+ * zeros bytes beyond EOF. A file a loop device stands on is not written, as
+ * write(2) does not write it. 0, -EBUSY, or the write's error.
  */
-static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i, uint8_t *buf)
+static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i)
 {
     struct vfs_mount *mnt = m->entry.ofd->vmnt;
     uint64_t at = (uint64_t)i * PAGE_SIZE;
@@ -403,7 +435,6 @@ static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i, u
     uintptr_t phys;
     uint8_t *page;
     uint32_t len;
-    int32_t n;
     int rc = 0;
 
     file.mnt = mnt;
@@ -421,12 +452,9 @@ static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i, u
             rc = -EIO;
         } else {
             len = st.size - at < PAGE_SIZE ? (uint32_t)(st.size - at) : PAGE_SIZE;
-            k_memcpy(buf, page, len);
+            k_memset(page + len, 0, PAGE_SIZE - len);
             kunmap_temp(page);
-            n = fs_write_at(&m->entry, buf, len, at);
-            if (n != (int32_t)len) {
-                rc = n < 0 ? n : -EIO;
-            }
+            rc = dshare_write_bytes(m, phys, len, at);
         }
     }
     vfs_node_unlock(&file);
@@ -435,29 +463,22 @@ static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i, u
 
 /** Write the pages of `ds` from page `first` up to page `end` back through
  * `m`'s copy of the descriptor (`dshare_write_page`). Returns 0, also when
- * `m` has no description, -ENOMEM when no buffer can be had, or the first
- * failure. */
+ * `m` has no description, or the first failure. No allocation is needed. */
 static int dshare_write_back(struct dshare *ds, struct filemap *m, uint32_t first, uint32_t end)
 {
-    uint8_t *buf;
     uint32_t i;
     int rc = 0;
 
     if (!m || !m->entry.ofd || !m->entry.ofd->vmnt) {
         return 0;
     }
-    buf = kmalloc(PAGE_SIZE);
-    if (!buf) {
-        return -ENOMEM;
-    }
     for (i = first; i < end && i < ds->sh.npages; i++) {
-        int page_rc = shmem_resident(&ds->sh, i) ? dshare_write_page(ds, m, i, buf) : 0;
+        int page_rc = shmem_resident(&ds->sh, i) ? dshare_write_page(ds, m, i) : 0;
 
         if (page_rc != 0 && rc == 0) {
             rc = page_rc;
         }
     }
-    kfree(buf);
     return rc;
 }
 
@@ -466,6 +487,19 @@ static int dshare_write_back(struct dshare *ds, struct filemap *m, uint32_t firs
 static int dshare_settled(void *arg)
 {
     return ((const struct dshare *)arg)->leaving == 0;
+}
+
+/** Drop the own holds of failed releases after a successful full retry. */
+static void dshare_retried(struct dshare *ds)
+{
+    struct filemap *m;
+
+    for (m = maps; m; m = m->next) {
+        if (m->ds == ds && m->retained == 1) {
+            m->retained = 2;
+            vm_file_put(&m->vf);
+        }
+    }
 }
 
 /**
@@ -485,6 +519,7 @@ static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, int flus
     int rc = 0;
 
     ds->users++;
+    vm_file_reap();
     if (ds->leaving) {
         (void)wq_wait_event_nointr(&ds->left, dshare_settled, ds);
     }
@@ -500,6 +535,12 @@ static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, int flus
             rc = vfs_fsync(m->entry.ofd->vmnt, m->entry.ofd->fhandle);
         }
         vm_file_put(&m->vf);
+    }
+    if (rc != 0 && ds->error == 0) {
+        ds->error = rc;
+    }
+    if (rc == 0 && ds->error == 0 && first == 0 && end >= ds->sh.npages) {
+        dshare_retried(ds);
     }
     dshare_put(ds);
     return rc;
@@ -807,14 +848,15 @@ static int filemap_share_disk(struct vm_file *f, uint32_t pgoff, uintptr_t *phys
  * shared mapping's page gains write access (mm/memory.c), under the file's
  * lock, with sleep enabled across it as `filemap_share_disk` enables it.
  * The caller holds the mapping and frame `phys`. Refuse a frame truncation
- * removed or replaced before the lock was taken, as Linux checks the
- * folio's mapping in filemap_page_mkwrite. 0, -EAGAIN for that stale frame,
- * -ENOMEM, or -EIO when the fault may not sleep.
+ * removed or replaced before the lock was taken, or beyond EOF, as Linux
+ * checks the folio's mapping in filemap_page_mkwrite. Returns 0, -EAGAIN
+ * for a stale frame, -ENOMEM, or -EIO when the fault may not sleep.
  */
 static int filemap_mkwrite_disk(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
 {
     struct filemap *m = (struct filemap *)f;
     struct vfs_ref file;
+    struct vfs_stat st;
     uint32_t flags = 0;
     int entered = disk_call_begin(m, &flags);
     int rc;
@@ -825,7 +867,12 @@ static int filemap_mkwrite_disk(struct vm_file *f, uint32_t pgoff, uintptr_t phy
     file.mnt = m->entry.ofd->vmnt;
     file.node = m->entry.ofd->vnode;
     vfs_node_lock(&file);
-    rc = shmem_resident(m->sh, pgoff) == phys ? dshare_mark(m->ds, pgoff) : -EAGAIN;
+    rc = vfs_getattr(file.mnt, file.node, &st);
+    if (rc == 0) {
+        rc = (uint64_t)pgoff * PAGE_SIZE < st.size && shmem_resident(m->sh, pgoff) == phys
+                 ? dshare_mark(m->ds, pgoff)
+                 : -EAGAIN;
+    }
     vfs_node_unlock(&file);
     disk_call_end(entered, flags);
     return rc;
@@ -907,7 +954,10 @@ static uint32_t filemap_around_disk(struct vm_file *f, uint32_t first, uint32_t 
  * memory's own pages go last, giving way every leaf
  * (`shmem_free_yielding`): the mapping is off the list and its last region
  * gone by then, and the release runs from `mm_reap`, which holds no
- * regions' lock and whose callers let it sleep in a write-back.
+ * regions' lock and whose callers let it sleep in a write-back. A failed
+ * write keeps an own file reference, its descriptor, pages and marks for
+ * sync to retry; the per-file error waits for fsync. Once both the retry
+ * and error reporting finish, `dshare_retried` drops that reference.
  */
 static void filemap_release(struct vm_file *f)
 {
@@ -916,7 +966,7 @@ static void filemap_release(struct vm_file *f)
     struct vfs_mount *locked;
 
     m->going = 1;
-    if (m->ds && m->shared && (m->entry.flags & FD_FLAG_WRITE)) {
+    if (m->ds && m->shared && (m->entry.flags & FD_FLAG_WRITE) && m->retained != 2) {
         int rc;
 
         m->ds->leaving++;
@@ -924,9 +974,16 @@ static void filemap_release(struct vm_file *f)
         if (--m->ds->leaving == 0) {
             wq_wake_all(&m->ds->left);
         }
-        if (rc != 0) {
+        if (rc != 0 || m->ds->error != 0) {
+            if (m->ds->error == 0) {
+                m->ds->error = rc;
+            }
+            m->retained = 1;
+            vm_file_get(f);
+            m->going = 0;
             klog(KLOG_WARN, "mm", "shared mapping: %s: write-back failed: %d",
-                 m->vf.path ? m->vf.path : "a file", rc);
+                 m->vf.path ? m->vf.path : "a file", rc != 0 ? rc : m->ds->error);
+            return;
         }
     }
     locked = m->entry.ofd ? fd_release_lock(&m->entry) : NULL;
@@ -1265,8 +1322,24 @@ void filemap_file_truncated(const struct vfs_mount *mnt, uint64_t ino, uint64_t 
 int filemap_sync_file(const struct vfs_mount *mnt, uint64_t ino)
 {
     struct dshare *ds = dshare_of(mnt, ino);
+    int error, rc;
 
-    return ds ? dshare_sync(ds, 0, 0xFFFFFFFFu, 0) : 0;
+    if (!ds) {
+        return 0;
+    }
+    ds->users++;
+    error = ds->error;
+    ds->error = 0;
+    rc = dshare_sync(ds, 0, 0xFFFFFFFFu, 0);
+    if (error == 0) {
+        error = ds->error;
+    }
+    ds->error = 0;
+    if (rc == 0) {
+        dshare_retried(ds);
+    }
+    dshare_put(ds);
+    return error != 0 ? error : rc;
 }
 
 void filemap_sync_all(void)
