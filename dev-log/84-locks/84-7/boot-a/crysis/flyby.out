@@ -1,0 +1,11 @@
+crysis: started: crysis.sh run --32 -devmode +map island +exec benchmark_gpu
+crysis: loaded in 32.20 s
+crysis: loop 0 finished at frame 2357
+crysis: enosys: syscall: 323: not implemented (asked for by wine)
+crysis: enosys: syscall: 323: not implemented (asked for by wine64)
+crysis: ended after 156 s, status 0
+crysis: check: loop0: ok 40.09 fps (gate 0), play 49.89 s, median 23.8 p99 43.5 max 1638.0 >50ms 8 >100ms 3
+crysis: check: loops: ok 1 of 1 loops finished
+crysis: check: wined3d: ok WineD3D's OpenGL renderer
+crysis: check: fsync: ok Wine's fsync
+crysis: result: crysis-bkl: ok
