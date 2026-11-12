@@ -2108,7 +2108,7 @@ static void exec_take_leader(void)
     process_t *old = tg->leader;
 
     proc_exchange_pids(current_proc, old);
-    proc_alarm_set(current_proc, old->alarm_tick, old->alarm_interval);
+    proc_alarm_take(current_proc, old);
     current_proc->jc_status = old->jc_status;
     proc_thread_fold(old);
     tg->leader = current_proc;
@@ -5998,7 +5998,10 @@ static void sig_park(void)
  * then clears the mark that asks for it, so that a signal put back does not
  * rearm it twice (kernel/signal.c:682-699); the timer's key goes too, so
  * that such a signal takes none of its timer's later expirations. Returns
- * the signal.
+ * the signal. A SIGALRM taken from the process's runs its stopped periodic
+ * real-time timer again (`proc_alarm_taken`), as Linux 6.12.115's
+ * `dequeue_signal` restarts it from the shared pending set
+ * (kernel/signal.c:654-662).
  */
 static int sig_dequeue(uint64_t wanted, struct k_siginfo *info)
 {
@@ -6018,6 +6021,9 @@ static int sig_dequeue(uint64_t wanted, struct k_siginfo *info)
     } else {
         current_proc->tg->pending &= ~KSIG_BIT(signo);
         *info = current_proc->tg->info[signo];
+        if (signo == SIGALRM) {
+            proc_alarm_taken(current_proc->tg->leader);
+        }
     }
     sig_recalc();
     ptimer_rearm(current_proc->tg, signo, info);

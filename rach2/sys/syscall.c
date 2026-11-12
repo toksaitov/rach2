@@ -1878,9 +1878,10 @@ static uint64_t itimer_ticks(long sec, long usec)
 
 /**
  * The ticks left before the current process's timer is due, 0 when it is
- * disarmed or the tick has marked its SIGALRM (`proc_alarm_due_tick`), as
- * Linux's `itimer_get_remtime` reports 0 for a timer that has sent its
- * signal (kernel/time/itimer.c:29-45, 156-166), and so alarm returns 0
+ * disarmed, the tick has marked its SIGALRM, or its post has stopped it
+ * until a SIGALRM is taken (`proc_alarm_due_tick`), as Linux's
+ * `itimer_get_remtime` reports 0 for a timer that has sent its signal
+ * (kernel/time/itimer.c:29-45, 156-166), and so alarm returns 0
  * (`alarm_setitimer`, :263-280). Part of the tick in progress has passed,
  * so the time left lies between the whole ticks to the due tick less one
  * and that number; the lower end is what is reported, and a timer due

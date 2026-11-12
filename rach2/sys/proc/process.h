@@ -387,11 +387,16 @@ struct process {
      * core another thread of its process writes (`core_park`). */
     uint32_t core_parked;
     /* The real-time interval timer, `setitimer(ITIMER_REAL)`: the tick its
-     * SIGALRM is due at, 0 when it is disarmed, and the ticks between one
-     * SIGALRM and the next, 0 for a single one. A fork starts with both
-     * zero, since the child inherits no timer; an exec keeps them. */
+     * SIGALRM is due at, 0 when it is not running, and the ticks between one
+     * SIGALRM and the next, 0 for a single one, as Linux's `real_timer` and
+     * `it_real_incr`. A periodic timer stops once its SIGALRM is posted,
+     * keeping its interval, and runs again when a SIGALRM is taken
+     * (`proc_alarm_taken`), at the first tick of its grid after then,
+     * counted from `alarm_last`, the tick it was last due at. A fork starts
+     * with all zero, since the child inherits no timer; an exec keeps them. */
     uint64_t alarm_tick;
     uint64_t alarm_interval;
+    uint64_t alarm_last;
     /* The signals of the tick, as bits `1u << signo` of SIGALRM, SIGVTALRM
      * and SIGPROF, that a tick found due without the big lock and left for a
      * holder of it to post (`proc_tick_signal`), and the link of the list of
@@ -840,12 +845,32 @@ void proc_timer_update(process_t *p);
 void proc_alarm_set(process_t *p, uint64_t tick, uint64_t interval);
 
 /**
+ * Give `to` the real-time timer of `from`, as it stands, at an exec that
+ * makes `to` its process's leader in place of `from`. A SIGALRM the tick
+ * marked for `from` and no holder posted is posted for `to` at its next
+ * timer pass, since `from`'s record goes. The caller holds the big lock and
+ * no spinlock.
+ */
+void proc_alarm_take(process_t *to, const process_t *from);
+
+/**
+ * Run `p`'s real-time timer again as a SIGALRM of its process is taken,
+ * when the timer is stopped and periodic, at the first tick of its grid
+ * after the tick now, as Linux 6.12.115's `dequeue_signal` restarts the
+ * timer that `it_real_fn` left stopped (kernel/signal.c:654-662,
+ * kernel/time/itimer.c:156-166). `p` is the leader, whose record holds the
+ * timer. The caller holds the big lock and no spinlock.
+ */
+void proc_alarm_taken(process_t *p);
+
+/**
  * The tick `p`'s real-time timer is due at, or 0 when it is disarmed or
- * the tick has marked its SIGALRM, which no holder of the big lock has
- * posted yet: Linux's timer is inactive once `it_real_fn` has sent the
- * signal (kernel/time/itimer.c:156-166), so `itimer_get_remtime` reports
- * no time left (:29-45). Read under the timer list's lock, which the tick
- * marks under; the caller holds the big lock and no spinlock.
+ * stopped, or the tick has marked its SIGALRM, which no holder of the big
+ * lock has posted yet: Linux's timer is inactive once `it_real_fn` has sent
+ * the signal (kernel/time/itimer.c:156-166) until the signal is taken, so
+ * `itimer_get_remtime` reports no time left (:29-45). Read under the timer
+ * list's lock, which the tick marks under; the caller holds the big lock
+ * and no spinlock.
  */
 uint64_t proc_alarm_due_tick(const process_t *p);
 

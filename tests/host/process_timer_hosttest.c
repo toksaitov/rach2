@@ -2,8 +2,8 @@
  * Check the timer tick's part of `proc/process.c`: `proc_wake_sleepers`,
  * the signals of the tick it leaves for a holder of the big lock
  * (`proc_tick_signal`, `proc_tick_signals_post`, `proc_tick_signals_own`),
- * `proc_alarm_set`, `proc_alarm_due_tick`, `proc_alarm_at`, and
- * `proc_wake_due`, the interrupt between ticks' part.
+ * `proc_alarm_set`, `proc_alarm_taken`, `proc_alarm_due_tick`,
+ * `proc_alarm_at`, and `proc_wake_due`, the interrupt between ticks' part.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
@@ -21,15 +21,17 @@
  * The list has a blocked process ahead of a running one, each with a timer.
  * At its tick a due timer is marked, not posted: the pass runs without the
  * big lock, and a later pass marks it no second time. The post, under the
- * lock, sends SIGALRM to its process, blocked or running, and only then
- * arms the timer again at the first tick of its interval's grid after the
- * post, counted from the tick it was due, an interval of one tick included,
- * or leaves it disarmed when it has no interval; a timer not yet due is not
- * marked. A marked timer reports no due tick, so no time left, as Linux's
- * timer is inactive once it has sent SIGALRM. A setting made between the
- * mark and the post posts the marked SIGALRM, once, as Linux sends it at
- * expiry. A thread's own return posts
- * its SIGVTALRM and SIGPROF and takes it off the list. A sleeper is made
+ * lock, sends SIGALRM to its process, blocked or running, and stops the
+ * timer, which keeps its interval and posts nothing more until a SIGALRM is
+ * taken; the take runs it again at the first tick of its interval's grid
+ * after then, counted from the tick it was due, an interval of one tick
+ * included, and a second take moves nothing. A timer with no interval is
+ * left disarmed; a timer not yet due is not marked. A marked or stopped
+ * timer reports no due tick, so no time left, as Linux's timer is inactive
+ * once it has sent SIGALRM until the signal is taken. A setting made
+ * between the mark and the post posts the marked SIGALRM, once, as Linux
+ * sends it at expiry. A thread's own return posts its SIGVTALRM and SIGPROF
+ * and takes it off the list. A sleeper is made
  * runnable at its deadline tick and not before, under the run queues' lock,
  * a blocked process with no deadline is never made runnable by the tick,
  * and a running process is left as it is whatever its wakeup tick says. A
@@ -76,6 +78,7 @@ static void proc_exchange_pids(struct process *a, struct process *b);
 static int proc_set_ruid(struct process *p, uint32_t uid);
 static uint32_t proc_user_records(const struct process *p);
 static uint32_t proc_work_count(unsigned int index);
+static void proc_alarm_take(struct process *to, const struct process *from);
 #include "proc/process.c"
 #include "ns_first.h"
 
@@ -222,9 +225,8 @@ static void tick_at(uint64_t now)
     proc_tick_signals_post();
 }
 
-/** A due real-time timer is marked by the pass, posted by a holder, and
- * armed again on its grid only after its post; a setting between posts the
- * mark. */
+/** A due real-time timer is marked by the pass and posted by a holder,
+ * which stops it. */
 static void alarm_rows(void)
 {
     proc_list = &sleeper;
@@ -254,9 +256,28 @@ static void alarm_rows(void)
     proc_tick_signals_post();
     CHECK(runner_posts == 1, "the post sends SIGALRM to a process that is running");
     CHECK(sleeper_posts == 1, "and to one that is asleep, once though two passes saw it due");
-    CHECK(runner.alarm_tick == 1029 && sleeper.alarm_tick == 1014 && !runner.alarm_due &&
-              !proc_tick_signals_due(),
-          "and only then arms each again for its interval from the tick it was due");
+    CHECK(runner.alarm_tick == 0 && runner.alarm_interval == 25 && runner.alarm_last == 1004 &&
+              sleeper.alarm_tick == 0 && sleeper.alarm_interval == 10 && !runner.alarm_due &&
+              !runner.timer_linked && !proc_tick_signals_due(),
+          "and then stops each, keeping its interval and the tick it was due");
+    CHECK(proc_alarm_due_tick(&runner) == 0,
+          "a stopped timer reports no time left, as Linux's does until its SIGALRM is taken");
+}
+
+/** A stopped timer runs again on its grid when its SIGALRM is taken, a
+ * single alarm stays disarmed, and a setting between the mark and the post
+ * posts the mark; after `alarm_rows`. */
+static void alarm_take_rows(void)
+{
+    tick_at(1040);
+    CHECK(runner_posts == 1 && sleeper_posts == 1,
+          "a stopped timer posts nothing more while its SIGALRM is not taken");
+    proc_alarm_taken(&runner);
+    proc_alarm_taken(&sleeper);
+    CHECK(runner.alarm_tick == 1054 && sleeper.alarm_tick == 1044 && runner.timer_linked,
+          "a SIGALRM taken runs each again at the first tick of its grid after then");
+    proc_alarm_taken(&runner);
+    CHECK(runner.alarm_tick == 1054, "and a second taken while it runs moves nothing");
 
     proc_alarm_set(&runner, 1100, 0);
     proc_alarm_set(&sleeper, 0, 0);
@@ -271,8 +292,9 @@ static void alarm_rows(void)
     proc_wake_sleepers(1110);
     kernel_ticks = 1117;
     proc_tick_signals_post();
+    proc_alarm_taken(&runner);
     CHECK(runner_posts == 3 && runner.alarm_tick == 1119,
-          "a post seven ticks late arms the timer at the first tick of its grid after the post");
+          "a SIGALRM taken seven ticks late runs the timer at the next tick of its grid");
 
     proc_alarm_set(&runner, 1130, 5);
     kernel_ticks = 1130;
@@ -332,7 +354,8 @@ static void sleeper_rows(void)
     tick_at(1400);
     CHECK(sleeper.state == PROC_READY && sleeper_posts == 2 && runner_posts == 5,
           "a tick that wakes a sleeper still marks its alarm and a later process's");
-    CHECK(sleeper.alarm_tick == 1401, "an interval of one tick is armed again");
+    proc_alarm_taken(&sleeper);
+    CHECK(sleeper.alarm_tick == 1401, "an interval of one tick runs again at the next tick");
 }
 
 /** Timers and sleepers across 2^32 ticks, and `proc_alarm_at`. */
@@ -343,6 +366,7 @@ static void wide_rows(void)
     proc_alarm_set(&sleeper, 0, 0);
     proc_alarm_set(&runner, 0xFFFFFFFEu, 2);
     tick_at(0xFFFFFFFEu);
+    proc_alarm_taken(&runner);
     CHECK(runner_posts == 6 && runner.alarm_tick == 0x100000000ull,
           "a timer armed again across 2^32 ticks is due at 2^32");
     tick_at(0xFFFFFFFFu);
@@ -452,6 +476,7 @@ static void between_rows(void)
 int main(void)
 {
     alarm_rows();
+    alarm_take_rows();
     own_rows();
     sleeper_rows();
     wide_rows();

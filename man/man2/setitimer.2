@@ -62,13 +62,24 @@ counts them.
 A timer of processor time is armed again for its interval at the tick it
 runs out.
 .Dv ITIMER_REAL
-is armed again when its
+stops when its
 .Dv SIGALRM
-is posted, at the first tick after the post that is a whole number of
-intervals after the tick it ran out, so a late post does not move the
-timer's period, as Linux's
-.Fn hrtimer_forward
-keeps it.
+is posted, and a periodic one runs again when a
+.Dv SIGALRM
+of the process is taken, by a handler, the default action,
+.Xr sigtimedwait 2
+or a
+.Xr signalfd 2
+read, at the first tick after then that is a whole number of intervals
+after the tick it ran out, so a late signal does not move the timer's
+period, as Linux's
+.Fn dequeue_signal
+restarts it with
+.Fn hrtimer_forward .
+While its
+.Dv SIGALRM
+is blocked the timer posts no other, and one that is ignored and not
+blocked, which is discarded, leaves the timer stopped, as on Linux.
 Unless
 .Fa old
 is null, it receives the timer's setting before the call, as
@@ -109,7 +120,7 @@ the waits for a signal or a deadline are never restarted.
 .Pp
 .Fn getitimer
 reports the time left before the next signal, zero when the timer is
-disarmed, and the interval.
+disarmed or stopped, and the interval.
 For
 .Dv ITIMER_REAL
 the time left is the whole ticks to the due tick less the tick in
@@ -153,14 +164,6 @@ where Linux disarms the timer, and the kernel checks
 .Fa which
 before it reads
 .Fa new .
-Linux arms a periodic timer again when its
-.Dv SIGALRM
-is delivered, so while the signal is blocked its timer stays expired and
-.Fn getitimer
-reports an
-.Va it_value
-of zero with the interval; this kernel arms it again at the tick that
-posts the signal, whatever the mask, and reports the time to the next.
 .Ss System call interface
 The i386 system call numbers are 104 for
 .Fn setitimer ,
