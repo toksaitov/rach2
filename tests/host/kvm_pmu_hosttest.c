@@ -742,11 +742,12 @@ static void intel_step_limits(void)
     kvm_pmu_vmx_exit(&v, guest, 1);
 }
 
-/** Enter `w` with pmu_steps 0x05 on processor `cpu`, with its general
- * counters `run` counting UOPS_RETIRED.ALL, those of `cp` checkpointed,
- * each two counts from its overflow, into the lists `guest` and `host`. */
-static void pmi_enter(struct kvm_vcpu *w, unsigned int cpu, uint32_t run, uint32_t cp,
-                      struct kvm_pmu_msr *guest, struct kvm_pmu_msr *host)
+/** Prepare `w`'s entry with pmu_steps 0x05 on processor `cpu`, with its
+ * general counters `run` counting UOPS_RETIRED.ALL, those of `cp`
+ * checkpointed, each two counts from its overflow, into the lists `guest`
+ * and `host`, and stop short of the run. */
+static void pmi_prepare(struct kvm_vcpu *w, unsigned int cpu, uint32_t run, uint32_t cp,
+                        struct kvm_pmu_msr *guest, struct kvm_pmu_msr *host)
 {
     uint64_t global[2];
     uint32_t ng, nh, i;
@@ -760,6 +761,14 @@ static void pmi_enter(struct kvm_vcpu *w, unsigned int cpu, uint32_t run, uint32
     w->pmu.global_ctrl = run;
     kvm_pmu_prepare(w);
     kvm_pmu_vmx_enter(w, guest, host, &ng, &nh, global);
+}
+
+/** Enter `w` as `pmi_prepare` does, and begin the guest's run. */
+static void pmi_enter(struct kvm_vcpu *w, unsigned int cpu, uint32_t run, uint32_t cp,
+                      struct kvm_pmu_msr *guest, struct kvm_pmu_msr *host)
+{
+    pmi_prepare(w, cpu, run, cp, guest, host);
+    kvm_pmu_vmx_run();
 }
 
 /** Drive the status an entry finds: the overflow firmware left on a
@@ -804,6 +813,11 @@ static void intel_pmi_status(void)
     pmi_enter(&v, 0, 5u, 4u, guest, host);
     CHECK(kvm_pmu_nmi() == 1, "the next entry lets one empty NMI be claimed again");
     kvm_pmu_vmx_exit(&v, guest, 1);
+    pmi_prepare(&v, 0, 5u, 4u, guest, host);
+    CHECK(!kvm_pmu_nmi(), "an empty NMI between the publication and the run is not KVM's");
+    kvm_pmu_vmx_run();
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    CHECK(kvm_pmu_nmi() == 1, "and leaves the claim to the run's own PMI");
     pmi_enter(&v, 0, 5u, 4u, guest, host);
     kvm_pmu_vmx_exit(&v, guest, 1);
     pmi_enter(&v, 0, 1u, 0, guest, host);
