@@ -378,12 +378,21 @@ exits were handled in the kernel and the guest entered again;
 ended
 .Dv KVM_RUN .
 .Ar WAIT
-is the cycles from the end of the guest's run to the big kernel lock
-taken back, and
+is the cycles from the backend's return from the guest's run to the big
+kernel lock taken back, and
 .Ar HANDLE
-from there to the next entry or to
+from there to the big kernel lock let go for the next entry, or to
 .Dv KVM_RUN Ns 's
 return; a HLT the kernel handles counts its sleep until an interrupt there.
+The backend's own switch, its loads of the guest's state, FPU and debug
+registers before VMRUN or VMLAUNCH and its stores of them after, is in
+neither.
+An exit whose next entry does not come, because a request or an error
+ends
+.Dv KVM_RUN
+first, ended
+.Dv KVM_RUN .
+Each processor keeps its own counts, and the file shows their sums.
 The code is SVM's EXITCODE or VMX's exit reason, and a failed entry is
 0xffffffff under SVM and 0x80000000 under VMX.
 SVM's codes from 0xb0 to 0x3ff and above 0x40f, and VMX's from 0xb0 on, share

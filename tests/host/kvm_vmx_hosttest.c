@@ -247,7 +247,7 @@ int sysfs_add_dir(int parent, const char *name)
     return ++sysfs_handles;
 }
 
-/* exitstat.c's debug file, which no test reads. */
+/* exitstat.c's debug file, which kvm_hosttest reads. */
 struct debugfs_text_ops;
 int32_t debugfs_create_text(const char *path, uint32_t mode, const struct debugfs_text_ops *ops,
                             void *data);
@@ -4492,8 +4492,9 @@ int main(void)
     CHECK(vpid_used[0] == 0, "the vCPUs' VPIDs are freed with the VM");
     CHECK(cpu_ok(0) && cpu_ok(1) && !m.on && !m.cpus[1].on && m.vmxons == m.vmxoffs,
           "the freed vCPUs' VMCSs are cleared, and VMX is off with the last");
-    CHECK(live == 4, "the VM's allocations are given back, but for the VMXON regions of the four "
-                     "processors, which the backend keeps");
+    CHECK(live == 5, "the VM's allocations are given back, but for the VMXON regions of the four "
+                     "processors, which the backend keeps, and the exit counts of the processor "
+                     "that started KVM");
     printf("kvm-vmx-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }
