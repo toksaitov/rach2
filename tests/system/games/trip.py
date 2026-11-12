@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import sys
 import tempfile
 import threading
@@ -93,9 +94,11 @@ def summary(start, end):
 
 
 class Runner(run.Runner):
-    """run.py's workspace, whose probe also snapshots the loop's start, when
-    the probe's output has its feature level line, and its end, when it has
-    its result."""
+    """run.py's workspace, whose probe also snapshots the loop's start, once
+    the probe's output has its feature level line and before it has its
+    result, and the loop's end, once it has its result and before the probe
+    returns. A probe without both snapshots fails, since its window would
+    not be the loop's."""
 
     def probe(self, name, extra=None, program=None, renderer=None):
         path = self.work / (name + ".txt")
@@ -103,15 +106,25 @@ class Runner(run.Runner):
         if path.exists():
             path.unlink()
 
+        def read():
+            return path.read_text(errors="replace") if path.exists() else ""
+
         def watch():
-            want = "feature level"
             while not stop.is_set():
-                text = path.read_text(errors="replace") if path.exists() else ""
-                if want in text:
-                    shots.append(snapshot())
-                    if want == "round trips":
-                        return
-                    want = "round trips"
+                text = read()
+                if not shots:
+                    if "round trips" in text:
+                        return  # the loop ended before its start was seen
+                    if "feature level" in text:
+                        shot = snapshot()
+                        if "round trips" in read():
+                            return  # the loop ended while the snapshot was read
+                        shots.append(shot)
+                elif "round trips" in text:
+                    shot = snapshot()
+                    if not stop.is_set():
+                        shots.append(shot)
+                    return
                 time.sleep(0.002)
 
         thread = threading.Thread(target=watch)
@@ -121,10 +134,12 @@ class Runner(run.Runner):
         finally:
             stop.set()
             thread.join()
-        if len(shots) == 2:
-            (self.out / (name + ".loop.txt")).write_text(shots[0] + "\n==== end\n" + shots[1])
-            for line in summary(shots[0], shots[1]):
-                run.say("%s: %s" % (name, line))
+        if len(shots) != 2:
+            raise RuntimeError("%s: no snapshot of the loop's %s" % (
+                name, "end" if shots else "start"))
+        (self.out / (name + ".loop.txt")).write_text(shots[0] + "\n==== end\n" + shots[1])
+        for line in summary(shots[0], shots[1]):
+            run.say("%s: %s" % (name, line))
         return status, text
 
 
@@ -184,4 +199,8 @@ def main():
 
 
 if __name__ == "__main__":
+    # run.py's handlers, which its own guard installs only when it is the
+    # program: they stop the children and unwind through main's cleanup.
+    for stop_signal in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        signal.signal(stop_signal, run.interrupted)
     sys.exit(main())
