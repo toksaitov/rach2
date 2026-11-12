@@ -740,8 +740,12 @@ static void send_command(uint32_t target, uint32_t low)
         return;
     }
     if (x2apic) {
+#ifndef RACH2_HOSTTEST
         /* mfence and lfence as bytes: i686 tcc has no mnemonic for them. */
         __asm__ __volatile__(".byte 0x0f, 0xae, 0xf0\n\t.byte 0x0f, 0xae, 0xe8" : : : "memory");
+#else
+        __asm__ __volatile__("" : : : "memory");
+#endif
         kcpu_wrmsr(X2APIC_MSR(LAPIC_ICR_LO), low, target);
         return;
     }
