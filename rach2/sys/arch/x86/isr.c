@@ -1130,6 +1130,36 @@ static void irq_dispatch(isr_params_t *params)
     irq_leave();
 }
 
+/* For each message vector, a run of its chain under way on some processor,
+ * and a message that came since that run's chain began
+ * (`irq_dispatch_edge`). */
+static volatile unsigned int edge_busy[ISR_MSI_LAST + 1];
+static volatile unsigned int edge_again[ISR_MSI_LAST + 1];
+
+/**
+ * Run the chain of a message vector, whose end of interrupt the caller has
+ * already sent, once for each message, as Linux's handle_edge_irq does
+ * (kernel/irq/chip.c:770-822): a message that comes while a run of the
+ * chain is under way, on this processor once a handler turns interrupts on,
+ * or on another the vector was moved to, is noted (`edge_again`) and run by
+ * that run once its chain returns, so that no handler runs inside itself.
+ */
+static void irq_dispatch_edge(isr_params_t *params)
+{
+    uint32_t v = params->vector;
+
+    (void)arch_atomic_xchg(&edge_again[v], 1u);
+    do {
+        if (arch_atomic_xchg(&edge_busy[v], 1u) != 0) {
+            return; /* the run under way sees `edge_again` */
+        }
+        while (arch_atomic_xchg(&edge_again[v], 0u) != 0) {
+            irq_dispatch(params);
+        }
+        (void)arch_atomic_xchg(&edge_busy[v], 0u);
+    } while (edge_again[v] != 0);
+}
+
 /** Whether `vector` is one of the timer's: the tick's, or the local APIC
  * timer's between ticks (`apic_hr_vector`). */
 static int timer_vector(uint32_t vector)
@@ -1179,12 +1209,15 @@ int arch_irq_waiting(void)
  * through; `isr_leave` gives the lock back.
  *
  * A message from a PCI device, vector 48 and up, has no 8259 line to
- * acknowledge, and the local APIC's end-of-interrupt comes after the chain.
- * Nothing is lost either way, since a second message sets the processor's
- * request bit whether or not this one is still in service. Ending it after
- * the chain keeps the two halves of one interrupt in one place, and costs
- * the vectors below it the time the chain runs, which the kernel's own
- * handlers bound.
+ * acknowledge, and is an edge: the local APIC's end-of-interrupt comes
+ * before the chain, as Linux's handle_edge_irq acknowledges a message
+ * before its handler (`apic_ack_irq`, kernel/irq/chip.c:799), since a
+ * handler's register reads and the kicks of the threads it wakes exit under
+ * KVM, and an exit takes back a paravirtual end of interrupt still pending
+ * (`lapic_eoi`), which then costs an exit of its own. A second message
+ * sets the processor's request bit and comes once the chain is done, or
+ * inside it once a handler turns interrupts on, when the run under way
+ * takes it (`irq_dispatch_edge`).
  *
  * Through the 8259, vectors at or above 40 come from the slave and need
  * both controllers acknowledged; the master is always acknowledged. The end
@@ -1300,10 +1333,15 @@ void _irq_router(isr_params_t *params)
     klog(KLOG_DEBUG, "isr", "irq: vector 0x%X", params->vector);
 #endif
 
-    if (params->vector >= 48) {
-        irq_dispatch(params);
-        if (!timer) {
-            lapic_eoi();
+    if (params->vector >= ISR_MSI_FIRST) {
+        if (timer || params->vector > ISR_MSI_LAST) {
+            irq_dispatch(params);
+            if (!timer) {
+                lapic_eoi();
+            }
+        } else {
+            lapic_eoi(); /* a message is an edge, see above */
+            irq_dispatch_edge(params);
         }
         sched_tick(); /* a woken reader runs now, or at the call's exit */
         return;

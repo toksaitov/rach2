@@ -829,6 +829,15 @@ void lapic_timer_set(uint8_t vector, int periodic, int masked, uint32_t initial)
     apic_write(LAPIC_INITIAL, initial);
 }
 
+void lapic_timer_oneshot(uint8_t vector, uint32_t initial)
+{
+    if (!ready) {
+        return;
+    }
+    apic_write(LAPIC_TIMER, vector);
+    apic_write(LAPIC_INITIAL, initial);
+}
+
 /** The entry and the divide register stay as `lapic_timer_set` wrote
  * them; the write of the initial count starts the count. */
 void lapic_timer_count(uint32_t initial)

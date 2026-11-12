@@ -259,7 +259,8 @@ static void hr_forward(struct hr_state *c, int64_t now)
  * one it counts to. A time passed is one count away, so that its interrupt
  * comes at once; the counts are rounded up, so that the interrupt never
  * comes before its time by the rounding. The entry is written only when its
- * vector changes. A time ticks away, as a stopped tick's is, is
+ * vector changes, and the divide register only at the first count, since
+ * each write exits under KVM. A time ticks away, as a stopped tick's is, is
  * counted in whole ticks and the rest, up to the 32-bit count's limit,
  * past which the interrupt comes early and counts again. Interrupts are
  * off.
@@ -285,8 +286,11 @@ static void hr_program(struct hr_state *c, int64_t now)
     } else {
         counts = refclock_scale((uint32_t)delta, hr_tick_counts, TICK_NS) + 1u;
     }
-    if (c->lvt != vector) {
+    if (c->lvt == 0) {
         lapic_timer_set(vector, 0, 0, counts);
+        c->lvt = vector;
+    } else if (c->lvt != vector) {
+        lapic_timer_oneshot(vector, counts);
         c->lvt = vector;
     } else {
         lapic_timer_count(counts);
