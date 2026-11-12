@@ -29,7 +29,9 @@
 # removed on every exit; kernel.nmi_watchdog reads 0 for the run and is put
 # back on every exit. Each test's line is `kvm-corpus: NAME: RESULT`, with
 # `as expected` or `expected EXPECT` after it, and a kvm-unit-test's own log
-# on standard error after the second, and each excluded one's
+# on standard error after the second; a selftest's exit status and seconds,
+# for the record, go to standard error after its output as `kvm-corpus: NAME:
+# ran: status S in N s`; and each excluded one's
 # `kvm-corpus: NAME: excluded: REASON`. The last line is `kvm-corpus: result:
 # pass: N as expected, M excluded` or `kvm-corpus: result: fail: K of N:
 # NAME...`, and the exit status 0 on a pass, 1 on a failure and 2 on a usage
@@ -140,8 +142,11 @@ else
         # The programs do not name themselves, so their output is told
         # apart by this line.
         echo "kvm-corpus: $name: run" >&2
+        start=$(date +%s)
         (cd "$work/t" && "$tree/$name" < /dev/null) >&2 2>&1
-        case $? in
+        status=$?
+        echo "kvm-corpus: $name: ran: status $status in $(($(date +%s) - start)) s" >&2
+        case $status in
             0) echo "$name pass" ;;
             4) echo "$name skip" ;;
             *) echo "$name fail" ;;
