@@ -564,8 +564,8 @@ void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
  * pread64 refuses with -ESPIPE: a pipe, a socket, a terminal or
  * pseudoterminal, the mouse, a device other than a raw window, the log or
  * /dev/null, /dev/zero and /dev/full, and an anonymous object with no
- * `llseek`. 1 or 0. */
-static int pio_seekable(fd_entry_t *entry)
+ * `llseek`. 1 or 0. Asked once, for FD_MODE_PREAD (`fd_mode`). */
+static int pio_seekable_of(fd_entry_t *entry)
 {
     if (entry->type == FD_TYPE_DEVICE) {
         return devfs_fd_is_raw(entry) || devfs_fd_log_size(entry, NULL) || devfs_lseek_zero(entry);
@@ -576,6 +576,98 @@ static int pio_seekable(fd_entry_t *entry)
     return entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR ||
            entry->type == FD_TYPE_SYNTH_DIR || entry->type == FD_TYPE_PROC ||
            entry->type == FD_TYPE_FRAMEBUFFER;
+}
+
+/**
+ * Whether an ops-backed read or write of `entry` holds its description for
+ * its length, as lseek holds it to move the offset. A raw disk window's
+ * transfer uses `raw_offset`; a /proc file's the offset, a byte of its text
+ * or an address of /proc/PID/mem; and a log device's the offset, a byte of
+ * the kernel log's ring or of the screen log's text
+ * (`devfs_fd_moves_offset`); and the framebuffer's the offset, a byte of
+ * its pixels. Each may sleep before it sets the offset past
+ * what it moved, in a disk request, or in a fault on the caller's buffer or
+ * in bringing in a page of a process; a debugfs file's, whose operations
+ * are its registrant's, may too. A seek through a descriptor that
+ * shares the description must wait for it or be lost, and a second transfer
+ * must wait to start from where the first leaves the offset. Linux holds
+ * such a file's position lock across read, write and lseek alike. pread64
+ * and pwrite64 hold nothing, since they work on a copy (`pio_view`).
+ * Asked once, for FD_MODE_POS_HELD (`fd_mode`).
+ */
+static int ops_offset_moves(const fd_entry_t *entry)
+{
+    return devfs_fd_moves_offset((fd_entry_t *)(uintptr_t)entry) || entry->type == FD_TYPE_PROC ||
+           entry->type == FD_TYPE_FRAMEBUFFER || entry->type == FD_TYPE_FILE;
+}
+
+static int file_rw_unlocked(const fd_entry_t *e);
+
+/**
+ * The FD_MODE_* bits of `e` (fd.h), decided now from its type, object,
+ * device row and mounts, which stay as the open set them while it is open,
+ * as Linux's do_dentry_open sets f_mode and FMODE_STREAM, and
+ * FMODE_UNSIGNED_OFFSET is set by the open of /dev/mem and /proc/PID/mem:
+ * whether pread64 takes it (`pio_seekable_of`); whether a read or write
+ * checks its end at an offset, which a stream and a directory do not; which
+ * offset, a raw window's own or the description's; whether that offset is
+ * unsigned; whether an ops-backed transfer holds the description
+ * (`ops_offset_moves`); and whether a read, and a write, runs without the
+ * big lock: an object `file_rw_unlocked` admits, a file or directory
+ * `file_vfs_unlocked` admits for a read, and a file
+ * `file_vfs_writes_unlocked` admits for a write.
+ */
+static uint32_t fd_mode_of(fd_entry_t *e)
+{
+    uint32_t mode = FD_MODE_SET;
+    int unlocked = file_rw_unlocked(e);
+
+    if (pio_seekable_of(e)) {
+        mode |= FD_MODE_PREAD;
+        if (e->ofd && e->type != FD_TYPE_DIR && e->type != FD_TYPE_SYNTH_DIR) {
+            mode |= FD_MODE_POS;
+        }
+    }
+    if (devfs_fd_is_raw(e)) {
+        mode |= FD_MODE_RAW_POS;
+    }
+    if (procfs_is_mem(e) || devfs_fd_is_mem(e)) {
+        mode |= FD_MODE_UNSIGNED;
+    }
+    if (ops_offset_moves(e)) {
+        mode |= FD_MODE_POS_HELD;
+    }
+    if (unlocked || file_vfs_unlocked(e)) {
+        mode |= FD_MODE_READ_FREE;
+    }
+    if (unlocked || file_vfs_writes_unlocked(e)) {
+        mode |= FD_MODE_WRITE_FREE;
+    }
+    return mode;
+}
+
+/**
+ * The FD_MODE_* bits of `e`, decided by the first call that asks
+ * (`fd_mode_of`) and kept in the entry for the rest. Two sharers of a table
+ * that ask at once each store the same word, so the store takes no lock; a
+ * copy of the entry made before it decides again.
+ */
+static uint32_t fd_mode(const fd_entry_t *e)
+{
+    uint32_t mode = e->mode;
+
+    if (!(mode & FD_MODE_SET)) {
+        mode = fd_mode_of((fd_entry_t *)(uintptr_t)e);
+        ((fd_entry_t *)(uintptr_t)e)->mode = mode;
+    }
+    return mode;
+}
+
+/** Whether pread64 can read `entry` at an offset, or it is a stream that
+ * pread64 refuses with -ESPIPE (`pio_seekable_of`): FD_MODE_PREAD. 1 or 0. */
+static int pio_seekable(fd_entry_t *entry)
+{
+    return (fd_mode(entry) & FD_MODE_PREAD) != 0;
 }
 
 /**
@@ -590,7 +682,7 @@ static int rw_end_past(fd_entry_t *entry, uint64_t pos, uint64_t count)
 {
     const uint64_t max = 0x7FFFFFFFFFFFFFFFull;
 
-    if (entry && (procfs_is_mem(entry) || devfs_fd_is_mem(entry))) {
+    if (entry && (fd_mode(entry) & FD_MODE_UNSIGNED)) {
         return 0;
     }
     return pos > max || count > max - pos;
@@ -600,48 +692,37 @@ static int rw_end_past(fd_entry_t *entry, uint64_t pos, uint64_t count)
  * Check a read or write of `count` bytes, the request before its cut, at
  * the offset of the description `entry` is open on: -EINVAL when its end
  * would pass 2^63-1 (`rw_end_past`), as Linux's ksys_read and ksys_write
- * check every file that is not a stream through rw_verify_area, or 0. A
- * stream, what pread64 refuses (`pio_seekable`), has no offset to check,
- * and a directory's is its listing's cursor, whose read is -EISDIR. A raw
- * window moves an offset of its own, `raw_offset`. A NULL `entry` passes.
+ * check every file that is not a stream through rw_verify_area, or 0. Only
+ * a descriptor with FD_MODE_POS has an offset to check: a stream, what
+ * pread64 refuses, has none, and a directory's is its listing's cursor,
+ * whose read is -EISDIR. A raw window moves an offset of its own,
+ * `raw_offset` (FD_MODE_RAW_POS). A NULL `entry` passes.
  * The callers ask before the transfer, for Linux's order of errors, and the
  * transfer asks again under the description's lock, since a sharer's seek
  * can move the offset while the buffer is faulted in (`file_read`).
  */
 static int32_t rw_offset_end(fd_entry_t *entry, size_t count)
 {
+    const uint64_t max = 0x7FFFFFFFFFFFFFFFull;
+    uint32_t mode;
     uint64_t pos;
 
-    if (!entry || !entry->ofd || !pio_seekable(entry) || entry->type == FD_TYPE_DIR ||
-        entry->type == FD_TYPE_SYNTH_DIR) {
+    if (!entry) {
         return 0;
     }
-    pos = devfs_fd_is_raw(entry) ? entry->ofd->raw_offset : entry->ofd->offset;
-    return rw_end_past(entry, pos, (uint64_t)count) ? -EINVAL : 0;
+    mode = fd_mode(entry);
+    if (!(mode & FD_MODE_POS) || (mode & FD_MODE_UNSIGNED)) {
+        return 0;
+    }
+    pos = (mode & FD_MODE_RAW_POS) ? entry->ofd->raw_offset : entry->ofd->offset;
+    return pos > max || (uint64_t)count > max - pos ? -EINVAL : 0;
 }
 
-/**
- * The description an ops-backed read or write of `entry` holds for its
- * length, as lseek holds it to move the offset, or NULL. A raw disk window's
- * transfer uses `raw_offset`; a /proc file's the offset, a byte of its text
- * or an address of /proc/PID/mem; and a log device's the offset, a byte of
- * the kernel log's ring or of the screen log's text
- * (`devfs_fd_moves_offset`); and the framebuffer's the offset, a byte of
- * its pixels. Each may sleep before it sets the offset past
- * what it moved, in a disk request, or in a fault on the caller's buffer or
- * in bringing in a page of a process; a debugfs file's, whose operations
- * are its registrant's, may too. A seek through a descriptor that
- * shares the description must wait for it or be lost, and a second transfer
- * must wait to start from where the first leaves the offset. Linux holds
- * such a file's position lock across read, write and lseek alike. pread64
- * and pwrite64 hold nothing, since they work on a copy (`pio_view`).
- */
+/** The description an ops-backed read or write of `entry` holds for its
+ * length (FD_MODE_POS_HELD, `ops_offset_moves`), or NULL. */
 static struct open_file *ops_offset_held(fd_entry_t *entry)
 {
-    return devfs_fd_moves_offset(entry) || entry->type == FD_TYPE_PROC ||
-                   entry->type == FD_TYPE_FRAMEBUFFER || entry->type == FD_TYPE_FILE
-               ? entry->ofd
-               : NULL;
+    return (fd_mode(entry) & FD_MODE_POS_HELD) ? entry->ofd : NULL;
 }
 
 /** Dispatch an ops-backed write, holding the description of one whose write
@@ -1171,7 +1252,8 @@ static int32_t write_allowed(const fd_entry_t *entry)
 }
 
 /**
- * Write up to `requested` bytes of user buffer `buf` to descriptor `fd`.
+ * Write up to `requested` bytes of user buffer `buf` to descriptor
+ * `entry`, the caller's lookup, which may be NULL.
  *
  * The shared body of write(2) and of each element of writev(2). Returns the
  * bytes written or a negative errno: -EBADF for a descriptor that is not
@@ -1193,9 +1275,8 @@ static int32_t write_allowed(const fd_entry_t *entry)
  * has operations of its own (display/fbdev.c), and the console is
  * `console_write`'s.
  */
-static int32_t write_fd(int fd, const char __user *buf, size_t requested, int sigpipe)
+static int32_t write_entry(fd_entry_t *entry, const char __user *buf, size_t requested, int sigpipe)
 {
-    fd_entry_t *entry;
     uint32_t count;
     int32_t rc;
 
@@ -1203,7 +1284,6 @@ static int32_t write_fd(int fd, const char __user *buf, size_t requested, int si
         return -ESRCH;
     }
 
-    entry = fd_get(current_proc->fds, fd);
     rc = write_allowed(entry);
     if (rc != 0) {
         return rc;
@@ -1261,6 +1341,13 @@ static int32_t write_fd(int fd, const char __user *buf, size_t requested, int si
     return -EBADF;
 }
 
+/** `write_entry` for descriptor `fd`, which it looks up. */
+static int32_t write_fd(int fd, const char __user *buf, size_t requested, int sigpipe)
+{
+    return write_entry(current_proc ? fd_get(current_proc->fds, fd) : NULL, buf, requested,
+                       sigpipe);
+}
+
 /**
  * Whether descriptor `fd` takes a write, asked without writing, for a
  * writev(2) of no bytes, which Linux answers with 0 once the file is known
@@ -1283,7 +1370,7 @@ static int32_t write_check(int fd)
 static int size_guarded(struct vfs_mount *mnt, void *node);
 static int ofd_append_only(const struct open_file *ofd);
 static int fd_change_lock(int fd);
-static int fd_write_lock(int fd);
+static int rw_call_lock(const fd_entry_t *e, uint32_t free);
 
 /**
  * A change clears set-user-ID, and set-group-ID where group execute is set, for
@@ -1391,15 +1478,16 @@ long sys_ftruncate(isr_params_t *params)
     return ksys_ftruncate((int)SC_ARG(params, 0), SC_SIGNED(params, 1));
 }
 
-/** write(2) takes fd, buf and the raw count, which write_fd checks before
- * cutting it at Linux's MAX_RW_COUNT; the bytes written, or -errno. The
- * call holds the big lock unless the descriptor's type runs without it
- * or it names a file whose writes do (`fd_write_lock`). */
+/** write(2) takes fd, buf and the raw count, which write_entry checks
+ * before cutting it at Linux's MAX_RW_COUNT; the bytes written, or -errno.
+ * The descriptor is looked up once, as Linux's ksys_write looks it up with
+ * fdget_pos, and the call holds the big lock unless its mode says its
+ * writes run without it (FD_MODE_WRITE_FREE, `rw_call_lock`). */
 long sys_write(isr_params_t *params)
 {
-    int fd = (int)SC_ARG(params, 0);
-    int big = fd_write_lock(fd);
-    long rc = write_fd(fd, (const char __user *)SC_ARG(params, 1), SC_ARG(params, 2), 1);
+    fd_entry_t *e = current_proc ? fd_get(current_proc->fds, (int)SC_ARG(params, 0)) : NULL;
+    int big = rw_call_lock(e, FD_MODE_WRITE_FREE);
+    long rc = write_entry(e, (const char __user *)SC_ARG(params, 1), SC_ARG(params, 2), 1);
 
     file_ops_unlock(big);
     return rc;
@@ -5767,14 +5855,14 @@ long sys_openat2(isr_params_t *params)
  * A socket's calls and release are the network stack's, which runs under the
  * big lock; a description that names a file, a device node or a synthetic
  * node is released by a file system; and the description lock that guards
- * an offset (`ops_offset_held`) is a flag the big lock guards.
+ * an offset (`ops_offset_moves`) is a flag the big lock guards.
  */
 int file_ops_unlocked(const fd_entry_t *e)
 {
     const struct open_file *ofd;
 
     if (!e || !e->ops || !(e->ops->flags & FILE_OPS_UNLOCKED) || e->type == FD_TYPE_SOCKET ||
-        ops_offset_held((fd_entry_t *)(uintptr_t)e)) {
+        ops_offset_moves(e)) {
         return 0;
     }
     ofd = e->ofd;
@@ -5835,22 +5923,34 @@ static int file_read_lock(const fd_entry_t *e)
  * touch and the description's end releases under the big lock itself
  * (`ofd_end_big`). /dev/null and /dev/zero opened by path hold one, and are
  * read and written without the lock, as Linux's read_zero and write_null
- * take none (drivers/char/mem.c).
+ * take none (drivers/char/mem.c). It implies `file_ops_unlocked`'s answer
+ * but for those mounts, which `open_device_node` may add after the
+ * descriptor is published, so that FD_MODE_READ_FREE and
+ * FD_MODE_WRITE_FREE (`fd_mode_of`) do not depend on them.
  */
 static int file_rw_unlocked(const fd_entry_t *e)
 {
     if (!e || !e->ops || !(e->ops->flags & FILE_OPS_UNLOCKED) || e->type == FD_TYPE_SOCKET ||
-        ops_offset_held((fd_entry_t *)(uintptr_t)e)) {
+        ops_offset_moves(e)) {
         return 0;
     }
     return !e->ofd || !e->ofd->vmnt;
 }
 
-/** The big lock for read(2) and pread64(2) of `e`: none for an object
- * `file_rw_unlocked` admits, and `file_read_lock`'s answer otherwise. */
-static int rw_read_lock(const fd_entry_t *e)
+/**
+ * The big lock for a read or a write of `e`, held for the call: none when
+ * the FD_MODE_* bit `free`, FD_MODE_READ_FREE or FD_MODE_WRITE_FREE, is set
+ * in its mode (`fd_mode`) or there is no descriptor, whose call fails
+ * without a lock, and taken otherwise. Returns whether it was taken, for
+ * `file_ops_unlock`.
+ */
+static int rw_call_lock(const fd_entry_t *e, uint32_t free)
 {
-    return file_rw_unlocked(e) ? 0 : file_read_lock(e);
+    if (!e || (fd_mode(e) & free)) {
+        return 0;
+    }
+    bkl_enter();
+    return 1;
 }
 
 int file_ops_lock(const fd_entry_t *e)
@@ -5884,16 +5984,6 @@ int file_vfs_writes_unlocked(const fd_entry_t *e)
 {
     return file_vfs_unlocked(e) && e->type == FD_TYPE_FILE &&
            vfs_mount_base(e->ofd->vmnt)->type->writes_unlocked;
-}
-
-/** `fd_call_lock` for a write of descriptor `fd`: no big lock for a file
- * `file_vfs_writes_unlocked` admits or an object `file_rw_unlocked`
- * admits. */
-static int fd_write_lock(int fd)
-{
-    fd_entry_t *e = current_proc ? fd_get(current_proc->fds, fd) : NULL;
-
-    return file_vfs_writes_unlocked(e) || file_rw_unlocked(e) ? 0 : file_ops_lock(e);
 }
 
 /** The big lock for a truncation, fallocate or sync of descriptor `fd`,
@@ -7575,8 +7665,9 @@ static int32_t read_allowed(const fd_entry_t *entry)
 }
 
 /**
- * Read up to `requested` bytes of descriptor `fd` into the user's `buf`, for
- * read(2) and readv(2); the bytes read, 0 at the end, or a negative errno:
+ * Read up to `requested` bytes of descriptor `entry`, the caller's lookup,
+ * which may be NULL, into the user's `buf`, for read(2) and readv(2); the
+ * bytes read, 0 at the end, or a negative errno:
  * `read_allowed`'s, then -EFAULT for the original requested range past the
  * top of user memory, then -EINVAL for a count negative as the kernel's
  * ssize_t or for an end at the description's offset past 2^63-1
@@ -7608,9 +7699,8 @@ static int32_t read_allowed(const fd_entry_t *entry)
  * count, as Linux's generic_read_dir answers, and a descriptor of any other
  * kind -EBADF.
  */
-static int32_t read_fd(int fd, char __user *buf, size_t requested)
+static int32_t read_entry(fd_entry_t *entry, char __user *buf, size_t requested)
 {
-    fd_entry_t *entry;
     uint32_t count;
     int32_t rc;
 
@@ -7618,7 +7708,6 @@ static int32_t read_fd(int fd, char __user *buf, size_t requested)
         return -EFAULT;
     }
 
-    entry = fd_get(current_proc->fds, fd);
     rc = read_allowed(entry);
     if (rc != 0) {
         return rc;
@@ -7676,21 +7765,29 @@ static int32_t read_fd(int fd, char __user *buf, size_t requested)
     return -EBADF;
 }
 
+/** `read_entry` for descriptor `fd`, which it looks up. */
+static int32_t read_fd(int fd, char __user *buf, size_t requested)
+{
+    return read_entry(current_proc ? fd_get(current_proc->fds, fd) : NULL, buf, requested);
+}
+
 /**
  * read(2): read up to the count in argument 2 of the descriptor in argument
- * 0 into the user's buffer in argument 1 (`read_fd`); the bytes read, 0 at
- * the end, or a negative errno. The descriptor and the whole requested
+ * 0 into the user's buffer in argument 1 (`read_entry`); the bytes read, 0
+ * at the end, or a negative errno. The descriptor and the whole requested
  * range are checked before a count past USER_RW_MAX is cut there, as on
  * Linux. On i686 a count negative as ssize_t is EINVAL after the range
  * check; a compat call on x86-64 has the kernel's 64-bit ssize_t instead.
- * The call holds the big lock unless the descriptor's type runs without it
- * (`fd_call_lock`) or it names a file whose reads do (`file_vfs_unlocked`).
+ * The descriptor is looked up once, as Linux's ksys_read looks it up with
+ * fdget_pos, and the call holds the big lock unless its mode says its
+ * reads run without it (FD_MODE_READ_FREE, `rw_call_lock`): an object whose
+ * type runs without it or a file whose type reads without it.
  */
 long sys_read(isr_params_t *params)
 {
-    int fd = (int)SC_ARG(params, 0);
-    int big = rw_read_lock(current_proc ? fd_get(current_proc->fds, fd) : NULL);
-    long rc = read_fd(fd, (char __user *)SC_ARG(params, 1), SC_ARG(params, 2));
+    fd_entry_t *e = current_proc ? fd_get(current_proc->fds, (int)SC_ARG(params, 0)) : NULL;
+    int big = rw_call_lock(e, FD_MODE_READ_FREE);
+    long rc = read_entry(e, (char __user *)SC_ARG(params, 1), SC_ARG(params, 2));
 
     file_ops_unlock(big);
     return rc;
@@ -14188,12 +14285,12 @@ long sys__llseek(isr_params_t *params)
  * What cannot seek is `pio_seekable`'s list. A /proc snapshot is read at an
  * offset, as Linux reads one, the framebuffer written at one, and an
  * anonymous object with a position, a VFIO device's, both.
+ * `entry` is the caller's lookup, NULL for none.
  * Returns 0 with the descriptor in `*out`, or the errno.
  */
-static int32_t pio_entry(int fd, int write, uintptr_t buf, size_t count, long long pos,
+static int32_t pio_check(fd_entry_t *entry, int write, uintptr_t buf, size_t count, long long pos,
                          fd_entry_t **out)
 {
-    fd_entry_t *entry;
     int32_t rc;
 
     if (pos < 0) {
@@ -14202,7 +14299,6 @@ static int32_t pio_entry(int fd, int write, uintptr_t buf, size_t count, long lo
     if (!current_proc) {
         return -ESRCH;
     }
-    entry = fd_get(current_proc->fds, fd);
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
@@ -14225,6 +14321,14 @@ static int32_t pio_entry(int fd, int write, uintptr_t buf, size_t count, long lo
     }
     *out = entry;
     return 0;
+}
+
+/** `pio_check` for descriptor `fd`, which it looks up. */
+static int32_t pio_entry(int fd, int write, uintptr_t buf, size_t count, long long pos,
+                         fd_entry_t **out)
+{
+    return pio_check(current_proc ? fd_get(current_proc->fds, fd) : NULL, write, buf, count, pos,
+                     out);
 }
 
 /**
@@ -14253,15 +14357,15 @@ static void pio_view(fd_entry_t *entry, uint64_t at, fd_entry_t *view, struct op
 /**
  * A regular file is read at the offset under the description's lock, as read(2)
  * reads it, and a device, a /proc snapshot or a debugfs file, whose
- * operations read, through `pio_view`.
+ * operations read, through `pio_view`. `e` is the caller's lookup.
  */
-static long pread_at(int fd, char __user *buf, size_t requested, long long pos)
+static long pread_at(fd_entry_t *e, char __user *buf, size_t requested, long long pos)
 {
     uint64_t at = (uint64_t)pos;
     fd_entry_t *entry = NULL;
     fd_entry_t view;
     struct open_file desc;
-    int32_t rc = pio_entry(fd, 0, (__force uintptr_t)buf, requested, pos, &entry);
+    int32_t rc = pio_check(e, 0, (__force uintptr_t)buf, requested, pos, &entry);
     uint32_t count = USER_RW_LEN(requested);
 
     if (rc != 0 || count == 0) {
@@ -14278,14 +14382,15 @@ static long pread_at(int fd, char __user *buf, size_t requested, long long pos)
 }
 
 /** Write at the offset through file_write or a device's private view,
- * after checking the original request as pread64 does. */
-static long pwrite_at(int fd, const char __user *buf, size_t requested, long long pos)
+ * after checking the original request as pread64 does. `e` is the caller's
+ * lookup. */
+static long pwrite_at(fd_entry_t *e, const char __user *buf, size_t requested, long long pos)
 {
     uint64_t at = (uint64_t)pos;
     fd_entry_t *entry = NULL;
     fd_entry_t view;
     struct open_file desc;
-    int32_t rc = pio_entry(fd, 1, (__force uintptr_t)buf, requested, pos, &entry);
+    int32_t rc = pio_check(e, 1, (__force uintptr_t)buf, requested, pos, &entry);
     uint32_t count = USER_RW_LEN(requested);
 
     if (rc != 0 || count == 0) {
@@ -14301,23 +14406,27 @@ static long pwrite_at(int fd, const char __user *buf, size_t requested, long lon
     return entry->ops->write(&view, buf, count);
 }
 
-/** The call holds the big lock unless the descriptor's type runs without it
- * (`fd_call_lock`) or it names a file whose reads do (`file_vfs_unlocked`). */
+/** The descriptor is looked up once, and the call holds the big lock
+ * unless its mode says its reads run without it (FD_MODE_READ_FREE,
+ * `rw_call_lock`). */
 long ksys_pread64(int fd, char __user *buf, size_t requested, long long pos)
 {
-    int big = rw_read_lock(current_proc ? fd_get(current_proc->fds, fd) : NULL);
-    long rc = pread_at(fd, buf, requested, pos);
+    fd_entry_t *e = current_proc ? fd_get(current_proc->fds, fd) : NULL;
+    int big = rw_call_lock(e, FD_MODE_READ_FREE);
+    long rc = pread_at(e, buf, requested, pos);
 
     file_ops_unlock(big);
     return rc;
 }
 
-/** `pwrite_at` under the big lock unless the descriptor's type runs without
- * it or it names a file whose writes do (`fd_write_lock`). */
+/** `pwrite_at` on the descriptor looked up once, under the big lock unless
+ * its mode says its writes run without it (FD_MODE_WRITE_FREE,
+ * `rw_call_lock`). */
 long ksys_pwrite64(int fd, const char __user *buf, size_t requested, long long pos)
 {
-    int big = fd_write_lock(fd);
-    long rc = pwrite_at(fd, buf, requested, pos);
+    fd_entry_t *e = current_proc ? fd_get(current_proc->fds, fd) : NULL;
+    int big = rw_call_lock(e, FD_MODE_WRITE_FREE);
+    long rc = pwrite_at(e, buf, requested, pos);
 
     file_ops_unlock(big);
     return rc;
