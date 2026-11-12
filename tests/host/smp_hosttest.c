@@ -270,6 +270,10 @@ void setup_process_stack(process_t *proc, void (*entry_point)(void))
     (void)entry_point;
 }
 
+/** Nothing: no row reads a processor's accounted time. */
+void sched_account_start(void)
+{}
+
 /** Nothing: no idle task runs. */
 void sched_idle_loop(void)
 {}

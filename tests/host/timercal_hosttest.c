@@ -407,6 +407,12 @@ int tick_read_retry(uint32_t seq)
     return 0;
 }
 
+/** Zero: the model is no KVM guest, so the TSC is measured. */
+uint32_t tsc_kvm_counts_per_tick(void)
+{
+    return 0;
+}
+
 /** The clock does not run from the TSC here, so the clock source named is
  * the reference's. */
 int vclock_running(void)
