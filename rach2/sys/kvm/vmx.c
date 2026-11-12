@@ -1636,7 +1636,11 @@ static int needs_sregs(const struct kvm_vcpu *v, const struct vmx_exit *e)
  * Load DR0 to DR3 for the run when the DR7 it runs under enables a
  * breakpoint: the caller's breakpoints while it sets them, else the
  * guest's; the host's DR7, which the exit clears and `state_load` read,
- * comes back after. DR6 is not loaded: the guest reads and writes the
+ * comes back after. When that DR7 enables a breakpoint of the host's, it
+ * is cleared to its fixed bit first, as Linux's vcpu_enter_guest writes
+ * DR7_FIXED_1 before the guest's DR0 to DR3 (x86.c:10542-10548), so that
+ * no host access to a guest's breakpoint address traps between the load
+ * and the entry. DR6 is not loaded: the guest reads and writes the
  * record's, since every MOV DR exits, and a #DB exits with its bits in the
  * qualification and the processor's DR6 as it was.
  */
@@ -1648,6 +1652,9 @@ static void dr_load(struct kvm_vcpu *v, uint64_t host_db[4])
     x->guest_dr = (dr7_of(v) & DR7_ENABLES) != 0;
     if (!x->guest_dr) {
         return;
+    }
+    if (x->host_dr7 & DR7_ENABLES) {
+        vmx_op->write_dr(7, DR7_FIXED);
     }
     for (i = 0; i < 4; i++) {
         host_db[i] = vmx_op->read_dr(i);
