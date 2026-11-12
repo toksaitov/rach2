@@ -16,6 +16,7 @@
 #include "../panic.h"
 #include "../mm/paging.h"
 #include "../pci.h"
+#include "../proc/smp.h"
 #include "../irq.h"
 #include "../timer.h"
 #include "../udelay.h"
@@ -317,6 +318,24 @@ static uint32_t nvme_cmd_steps(void)
     return kirq_enabled() ? NVME_CMD_STEPS : NVME_CMD_STEPS_MASKED;
 }
 
+/**
+ * One step of a polled wait, `us` long: with interrupts off, answer the
+ * requests other processors left this one (`smp_service`), as AHCI's
+ * `ahci_poll_step` does, since a processor dropping a translation
+ * everywhere waits under `ipi_lock` for this one's answer and no interrupt
+ * brings it; then the delay. Linux never spins here with interrupts off:
+ * its ready wait sleeps (drivers/nvme/host/core.c:2467) on the reset
+ * workqueue (core.c:169,211), so its processor takes the request as an
+ * interrupt. Any context; no caller holds the controller's locks.
+ */
+static void nvme_poll_step(uint32_t us)
+{
+    if (!kirq_enabled()) {
+        smp_service();
+    }
+    nvme_io->udelay(us);
+}
+
 /** Zero every field of `cmd`. */
 static void nvme_cmd_clear(struct nvme_sqe *cmd)
 {
@@ -433,7 +452,7 @@ static int nvme_admin(struct nvme_ctrl *c, struct nvme_sqe *cmd, uint32_t *resul
             }
             return 0;
         }
-        nvme_io->udelay(NVME_POLL_US);
+        nvme_poll_step(NVME_POLL_US);
     }
     klog(KLOG_WARN, "nvme", "%d: an admin command was not answered; the controller is out of use",
          c->number);
@@ -491,7 +510,7 @@ static int nvme_wait_ready(struct nvme_ctrl *c, uint32_t want)
             nvme_why = "the controller reported a fatal status";
             return -1;
         }
-        nvme_io->udelay(NVME_READY_POLL_US);
+        nvme_poll_step(NVME_READY_POLL_US);
     }
     nvme_why = want ? "the controller did not become ready" : "the controller did not stop";
     return -1;
@@ -1438,7 +1457,7 @@ static void nvme_recover(struct nvme_ctrl *c, const char *why)
     if (c->resetting) {
         while (c->resetting) {
             nvme_unlock(c, flags);
-            nvme_io->udelay(NVME_POLL_US);
+            nvme_poll_step(NVME_POLL_US);
             flags = nvme_lock(c);
         }
         nvme_unlock(c, flags);
@@ -1509,7 +1528,7 @@ static struct nvme_slot *nvme_slot_wait(struct nvme_ctrl *c)
             steps = nvme_cmd_steps();
             continue;
         }
-        nvme_io->udelay(NVME_POLL_US);
+        nvme_poll_step(NVME_POLL_US);
     }
 }
 
@@ -1585,7 +1604,7 @@ static int nvme_polled(struct nvme_ctrl *c, const struct nvme_xfer *xf)
         if (nvme_polled_done(c, s, flags, &rc)) {
             return rc;
         }
-        nvme_io->udelay(NVME_POLL_US);
+        nvme_poll_step(NVME_POLL_US);
     }
     flags = spin_lock_irqsave(&c->cq_poll_lock);
     if (!c->resetting) {
