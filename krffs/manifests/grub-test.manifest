@@ -263,9 +263,9 @@ file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
 # 1000:1000 at 0700 and 0600, so that no account but it and root may read
 # them.
 
-# The one sticky directory of the image: any account may make files in /tmp,
-# and only a file's owner or root may remove or rename one, so root and the
-# test account can share it.
+# Sticky, as /var/tmp is: any account may make files in /tmp, and only a
+# file's owner or root may remove or rename one, so root and the test account
+# can share it.
 dir 1777 /tmp
 dir 0755 /home
 dir 0700:1000:1000 /home/test
