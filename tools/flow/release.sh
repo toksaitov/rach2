@@ -166,9 +166,12 @@
 #   again finishes it. Then `bootctl kernel` writes the kernel to the
 #   candidate slot, and `rach2-install --console term --update` writes the
 #   root, keeps the accounts and keys, sets term as its console and arms the
-#   candidate for one trial boot; with `--i915`, which the script passes to
-#   an installer that has it, the root's lines also bind the Intel graphics
-#   driver, `rach2.i915`, so that the native cases run on the GPU. The
+#   candidate for one trial boot; with `--i915`, which the script passes
+#   when the build's installer has it, the root's lines also bind the Intel
+#   graphics driver, `rach2.i915`, so that the native cases run on the GPU.
+#   That installer is the one that runs, from the build's recovery system,
+#   and the step fails unless every line of the menu on the boot partition
+#   that boots the candidate or fallback slot then carries the word. The
 #   installer runs detached on the machine, with its log and its status in
 #   /dev/shm, so that a lost connection does not stop it; it is started once,
 #   and a release started again finds it by its log and waits for it. An
@@ -179,10 +182,11 @@
 #   person checks the machine's root by hand and then deletes that line.
 # * trial: the machine boots the trial, its /proc/cmdline must have
 #   rach2.slot=candidate and rach2.console=term, which the install's
-#   `--console term` puts in the menu, and machine_identity.sh must find the
-#   new kernel running from the candidate slot. A line without either fails
-#   the step, naming the line, and commits nothing, so the next boot falls
-#   back to the release the machine had.
+#   `--console term` puts in the menu, and rach2.i915 when the install was
+#   given `--i915`; machine_identity.sh must find the new kernel running from
+#   the candidate slot. A line without one of these words fails the step,
+#   naming the line, and commits nothing, so the next boot falls back to the
+#   release the machine had.
 # * accept: `tests/system/accept/metal_accept.sh` must pass on the trial
 #   boot, before the native cases, since it reads the boot's records out of
 #   /dev/bootlog, a ring that their messages overwrite.
@@ -921,7 +925,7 @@ install()
         step=install
         note "install started $(date -u '+%FT%TZ')"
         install_words='--console term'
-        if lenovo 'grep -q -e "\[--i915\]" /bin/rach2-install'; then
+        if i915; then
             install_words="$install_words --i915"
         fi
         lenovo "setsid sh -c 'rach2-install $install_words --update /dev/shm/root.ext2 /dev/disk$disk \
@@ -942,7 +946,33 @@ install()
         sleep 15
     done
     lenovo 'cat /dev/shm/install.log' >> "$state/log" 2>&1
+    if i915; then
+        p1=/dev/disk${disk}p1
+        menu=$(lenovo "mkdir -p /mnt/p1 && mount -t vfat -o ro $p1 /mnt/p1 || exit 1
+            cat /mnt/p1/boot/grub/grub.cfg; s=\$?; umount /mnt/p1; exit \$s") ||
+            fail install "the menu on $p1 could not be read"
+        # The root's lines, by slot, are those the installer gives the token.
+        bare=$(printf '%s\n' "$menu" | awk '
+            /^[ \t]*(multiboot|multiboot2)[ \t]/ &&
+            /[ \t]rach2\.slot=(candidate|fallback)([ \t]|$)/ {
+                roots++
+                if (!/[ \t]rach2\.i915([ \t]|$)/ && bare == "") bare = $0
+            }
+            END {
+                if (roots == 0) print "no line boots the root"
+                else if (bare != "") print bare
+                exit (roots == 0 || bare != "")
+            }') || fail install "the installed menu on $p1 lacks rach2.i915: $bare"
+    fi
     mark install "root $(digest images/os-real-gnu.ext2)"
+}
+
+# i915: succeed when the build's installer takes --i915, which puts rach2.i915
+# on the installed root's lines; recovery checks that the machine's recovery
+# system runs this installer.
+i915()
+{
+    grep -q -e '\[--i915\]' "$state/wt/utils/rach2-install" 2> /dev/null
 }
 
 # setting MACHINE NAME: print each value that the machines file gives NAME for
@@ -2202,6 +2232,9 @@ main()
         if ! printf '%s\n' "$cmdline" | tr ' ' '\n' | grep -qx 'rach2\.slot=candidate' ||
             ! printf '%s\n' "$cmdline" | tr ' ' '\n' | grep -qx 'rach2\.console=term'; then
             fail trial "the trial boot's command line lacks rach2.slot=candidate or rach2.console=term: ${cmdline:-none read}"
+        fi
+        if i915 && ! printf '%s\n' "$cmdline" | tr ' ' '\n' | grep -qx 'rach2\.i915'; then
+            fail trial "the trial boot's command line lacks rach2.i915: ${cmdline:-none read}"
         fi
         RACH2_MEASURE_SLOT=candidate RACH2_MEASURE_KERNEL=$files/../rach2/kernel \
             sh tools/dev/machine_identity.sh "$state/identity" ssh -i "$repo/krffs/rach2_demo_ed25519" \

@@ -1701,21 +1701,35 @@ static int restart_windows_row(struct release *r)
                      called(r, " run routine-prepare "),
                  "-a runs Windows' failed run again detached and records its pass");
 }
+/**
+ * The install asks for term, and for the Intel driver when the build's
+ * installer has --i915, and then checks the menu and the trial boot's command
+ * line for rach2.i915.
+ */
+static int install_words(struct release *r)
+{
+    return check(
+        r,
+        fx_has(r->script, "install_words='--console term'") &&
+            fx_has(r->script, "grep -q -e '\\[--i915\\]' \"$state/wt/utils/rach2-install\"") &&
+            fx_has(r->script, "if i915; then\n"
+                              "            install_words=\"$install_words --i915\"") &&
+            fx_has(r->script, "setsid sh -c 'rach2-install $install_words --update "
+                              "/dev/shm/root.ext2 /dev/disk$disk") &&
+            fx_has(r->script, "fail install \"the installed menu on $p1 lacks "
+                              "rach2.i915: $bare\"") &&
+            fx_has(r->script, "fail trial \"the trial boot's command line lacks "
+                              "rach2.i915: "),
+        "the release requests term, and the Intel driver when the build's installer "
+        "has --i915, and checks the menu and the trial boot for rach2.i915");
+}
 int flow_release(struct fixture *f)
 {
     struct release r;
     int ok = 1;
     if (!setup(&r, f))
         return 0;
-    ok = check(&r,
-               fx_has(r.script, "install_words='--console term'") &&
-                   fx_has(r.script, "grep -q -e \"\\[--i915\\]\" /bin/rach2-install'; then\n"
-                                    "            install_words=\"$install_words --i915\"") &&
-                   fx_has(r.script, "setsid sh -c 'rach2-install $install_words --update "
-                                    "/dev/shm/root.ext2 /dev/disk$disk"),
-               "the release requests term, and the Intel driver from an installer that has "
-               "--i915, when it updates the installed root") &&
-         ok;
+    ok = install_words(&r) && ok;
     ok = finished_rows(&r) && ok;
     ok = open_rows(&r) && ok;
     ok = closing_rows(&r) && ok;
