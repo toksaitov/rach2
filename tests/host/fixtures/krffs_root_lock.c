@@ -186,6 +186,9 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
+/* kernel.lock_stat, off as at boot: the extracted lock times no hold. */
+int sleep_lock_stat;
+
 /** No waiter is ever queued: a sleeper here is resumed by its thread. */
 int wq_active(const wait_queue_t *wq)
 {

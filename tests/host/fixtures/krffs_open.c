@@ -292,6 +292,9 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
+/* kernel.lock_stat, off as at boot: the extracted lock times no hold. */
+int sleep_lock_stat;
+
 /** No waiter is ever queued: the opener is resumed by its thread, and
  * `wq_wake_all` is a no-op. */
 int wq_active(const wait_queue_t *wq)
