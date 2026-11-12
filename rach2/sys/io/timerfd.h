@@ -92,12 +92,14 @@ long sys_timer_gettime64(struct isr_params *params);
  * have. */
 long sys_timer_getoverrun(struct isr_params *params);
 
-/** timer_delete(2) takes the id and deletes the timer. Returns 0, or -EINVAL
- * for an id the process does not have. */
+/** timer_delete(2) takes the id and deletes the timer, first posting an
+ * expiration whose signal waits to be posted. Returns 0, or -EINVAL for an
+ * id the process does not have. */
 long sys_timer_delete(struct isr_params *params);
 
-/** Delete the POSIX timers of `tg`, at an exec and when its last thread
- * ends. */
+/** Delete the POSIX timers of `tg`, at an exec, which first posts each
+ * expiration whose signal waits to be posted, and when its last thread
+ * ends, which posts none. The caller holds the big lock. */
 void ptimer_delete_all(struct tgroup *tg);
 
 /** Count the expirations due by the tick `now`, and wake the readers or

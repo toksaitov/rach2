@@ -84,6 +84,18 @@ A
 .Fn timer_settime
 made before the post keeps the signal and sets its overrun to 0, as
 Linux, which sends the signal at expiration, resets the overrun at a set.
+A
+.Fn timer_settime
+made while the timer's own signal is pending sets that signal's overrun
+to 0 and keeps no expiration of the old setting, so the signal counts
+only the expirations of the new one, as Linux counts them.
+A
+.Fn timer_delete ,
+or an
+.Xr execve 2 ,
+made before the post posts the signal with an overrun of 0 before the
+timer is deleted, as Linux delivers a signal sent before the timer was
+freed.
 .Pp
 An expiration posts the signal with
 .Va si_code
