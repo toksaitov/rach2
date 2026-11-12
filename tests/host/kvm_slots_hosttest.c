@@ -12,10 +12,13 @@
  * a fault would, with a new frame for a write to a copy-on-write page, and
  * the changes munmap, mprotect, a copy-on-write break, madvise and a
  * truncation make, each told to the change notice before the tables change,
- * as the kernel's calls do. RAM is host memory reached through the direct
- * map's formula, so that a frame's address is its physical one, and a
- * device's frames are addresses below 1 TiB, which no host frame has. The
- * backend's entry format is EPT's.
+ * as the kernel's calls do, the break counted under way across its notice
+ * (`mmn_change_begin`). Hooks run a row's code at the fault's take of the
+ * regions' lock, its read of an entry and its waits, as another
+ * processor's change would run there. RAM is host memory reached through
+ * the direct map's formula, so that a frame's address is its physical one,
+ * and a device's frames are addresses below 1 TiB, which no host frame
+ * has. The backend's entry format is EPT's.
  *
  * The rows: the dirty log's structures and ioctl numbers; the capabilities;
  * KVM_SET_USER_MEMORY_REGION's checks in Linux's order and its answers for a
@@ -47,8 +50,12 @@
  * another address space, and writing a stored-into page of RAM at its
  * offset, logged; a zap in batches of a few entries, with a fault between
  * two at a frame a move's zap passed mapping nothing, and a zap of every
- * frame passing absent subtrees whole; a slot moved, its flags changed and
- * deleted with its leaves and tables gone; and every
+ * frame passing absent subtrees whole; the fault's check before its leaf: a
+ * page change finished, one under way and a notice's zap between its read
+ * of the counts and its leaf each making it map nothing and look again,
+ * and a copy-on-write break there giving it the new frame; a flush waiting
+ * for a vCPU in the guest only until it takes the request; a slot moved,
+ * its flags changed and deleted with its leaves and tables gone; and every
  * allocation and frame given back.
  */
 /* A zap's batch of 16 entries, so that the rows' zaps break. */
@@ -80,6 +87,25 @@ static int failures;
             failures++;                                         \
         }                                                       \
     } while (0)
+
+/* The code a row runs once, as another processor's change would run then:
+ * at the fault's next take of the regions' lock to read, at its next read
+ * of a caller's entry under it (`mmu_user_table`), and at its next wait
+ * (`arch_relax`). */
+static void (*at_read_lock)(void);
+static void (*at_entry)(void);
+static void (*at_relax)(void);
+
+/** Run `*hook` once, if a row set it. */
+static void run_once(void (**hook)(void))
+{
+    void (*run)(void) = *hook;
+
+    if (run) {
+        *hook = NULL;
+        run();
+    }
+}
 
 static process_t caller;
 struct percpu cpu_table[NR_CPUS] = {{.current = &caller}};
@@ -194,9 +220,6 @@ void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
     }
 }
 
-void arch_relax(void)
-{}
-
 /* ---- the backend: EPT's format ---- */
 
 /** EPT's memory type in bits 5:3 and its ignore-PAT bit 6. */
@@ -223,6 +246,22 @@ void kvm_count(enum kvm_resource resource, int change)
 static struct mm the_mm;
 static struct kvm_vm vm;
 static struct kvm_vcpu vcpu[2];
+
+/* The waits of tdp.c, counted. A wait past 1000 turns would never end in
+ * a test of one thread: it takes every vCPU out of the guest and ends any
+ * page change under way, so that the row fails on its count instead. */
+static int relaxes;
+
+/** A turn of a wait: the row's code, once, then the guard. */
+void arch_relax(void)
+{
+    relaxes++;
+    run_once(&at_relax);
+    if (relaxes > 1000) {
+        vcpu[0].mode = vcpu[1].mode = KVM_MODE_OUTSIDE;
+        the_mm.changing = 0;
+    }
+}
 
 struct mm *kvm_vm_mm(struct kvm_vm *v)
 {
@@ -298,6 +337,7 @@ pte_t *mmu_user_table(page_dir_t *dir, uintptr_t va, int create)
 {
     (void)dir;
     (void)create;
+    run_once(&at_entry);
     if (va < HVA || va >= HVA + BLOCKS * MIB2) {
         return NULL;
     }
@@ -318,14 +358,17 @@ void bkl_enter(void)
 void bkl_exit(void)
 {}
 
-/* The read holds of the caller's address space that the fault takes. */
-static int mmap_reads;
+/* The read holds of the caller's address space that the fault holds, and
+ * those it took. */
+static int mmap_reads, mmap_takes;
 
 /** Take a read hold of `mm`: one thread, so nothing to wait for. */
 void mmap_read_lock(struct mm *mm)
 {
     (void)mm;
     mmap_reads++;
+    mmap_takes++;
+    run_once(&at_read_lock);
 }
 
 /** Give back a hold of `mm`; a release of no hold stops the test. */
@@ -486,7 +529,8 @@ vma_t *vm_next(const vma_t *r)
 
 /** A page brought in as a fault would: a fresh frame, writable where the
  * region is, and for a write to a copy-on-write page a new frame, told to
- * the notice first. */
+ * the notice first and counted under way from before the notice to after
+ * the new entry, as paging.c's break counts itself (`mmn_change_begin`). */
 int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 {
     pte_t *e = host_entry(addr);
@@ -500,8 +544,10 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     if (!(*e & PTE_P)) {
         *e = fresh() | PTE_P | PTE_U | (prot_w[b][i] ? PTE_W : 0);
     } else if (write && !(*e & PTE_W)) {
+        mmn_change_begin(&the_mm);
         mmn_notify(&the_mm, MMN_COW, addr & ~4095ul, (addr & ~4095ul) + 4096u);
         *e = fresh() | PTE_P | PTE_U | PTE_W;
+        mmn_change_end(&the_mm);
     }
     return 1;
 }
@@ -1207,6 +1253,149 @@ static void zap_batch_rows(void)
     CHECK(set(4, 0, 0, 0, 0) == 0, "deleted");
 }
 
+static void change_ended(void);
+static void take_flush(void);
+
+/** vCPU 0 enters the guest again and takes its flush request first, as the
+ * backend's entry drops its translations. */
+static void take_flush(void)
+{
+    vcpu[0].requests &= ~KVM_REQ_TLB_FLUSH;
+}
+
+/* The page of the stale-fault rows, its frame, and what a row's code
+ * found of its leaf at the fault's next take of the regions' lock. */
+#define STALE_GFN 0xB00u
+#define STALE_HVA (HVA + 3 * MIB2 + 128 * 4096u)
+static uint64_t seen_leaf = ~0ull;
+
+/** Note the stale page's leaf: the fault's look again finds none if its
+ * last pass mapped nothing. */
+static void look_leaf(void)
+{
+    int level;
+
+    seen_leaf = leaf_of(STALE_GFN, &level);
+}
+
+/** A page change that finished, under the regions' lock to read, between
+ * the fault's read of `changes` and its leaf, with no notice to move
+ * `mmu_seq`. */
+static void change_finished(void)
+{
+    mmn_change_begin(&the_mm);
+    mmn_change_end(&the_mm);
+    at_read_lock = look_leaf;
+}
+
+/** A page change begun there and still under way at the leaf, which ends
+ * at the fault's wait for it. */
+static void change_begun(void)
+{
+    mmn_change_begin(&the_mm);
+    at_read_lock = look_leaf;
+    at_relax = change_ended;
+}
+
+/** The end of `change_begun`'s change. */
+static void change_ended(void)
+{
+    mmn_change_end(&the_mm);
+}
+
+/** A notice of the page there, whose zap moves `mmu_seq` alone. */
+static void notice_between(void)
+{
+    mmn_notify(&the_mm, MMN_COW, STALE_HVA, STALE_HVA + 4096u);
+    at_read_lock = look_leaf;
+}
+
+/** The model's copy-on-write break of the page there, by another thread
+ * that holds the regions' lock to read. */
+static void break_between(void)
+{
+    CHECK(vm_prefault_range(STALE_HVA, 4096u, 1), "the break between");
+    at_read_lock = look_leaf;
+}
+
+/** Run a read fault at the stale page, present in the caller's tables,
+ * with `hook` at its read of the caller's entry: 1 when it mapped after
+ * `passes` takes of the regions' lock, its look again finding no leaf. The
+ * page's leaf is dropped before and every hook and count put back after. */
+static int stale_fault(void (*hook)(void), int passes)
+{
+    int takes = mmap_takes, ok, level;
+
+    mmn_notify(&the_mm, MMN_DROP, STALE_HVA, STALE_HVA + 4096u);
+    flushed();
+    seen_leaf = ~0ull;
+    at_entry = hook;
+    ok = kvm_tdp_fault(&vm, STALE_GFN, 0) == 0 && mmap_takes == takes + passes &&
+         (!hook || seen_leaf == 0) && leaf_of(STALE_GFN, &level) != 0 && the_mm.changing == 0;
+    at_entry = at_read_lock = at_relax = NULL;
+    while (the_mm.changing) {
+        mmn_change_end(&the_mm);
+    }
+    return ok;
+}
+
+/**
+ * The fault's check before its leaf, as Linux's is_page_fault_stale and
+ * mmu_invalidate_retry_gfn (arch/x86/kvm/mmu/mmu.c:4587-4598,
+ * include/linux/kvm_host.h:2080-2110): a page change that finished between
+ * the fault's read of the counts and its leaf, one still under way there,
+ * and a notice's zap each make the fault map nothing and look again, and a
+ * copy-on-write break there gives it the new frame.
+ */
+static void stale_rows(void)
+{
+    uint64_t e;
+    int level;
+
+    region(STALE_HVA, 1, 1);
+    CHECK(vm_prefault_range(STALE_HVA, 4096u, 0), "the page brought in");
+    CHECK(set(8, 0, (uint64_t)STALE_GFN * 4096u, 4096u, STALE_HVA) == 0, "a slot of a page");
+    CHECK(stale_fault(NULL, 1), "a fault with no change maps at its first pass");
+    CHECK(stale_fault(change_finished, 2),
+          "a change finished between the fault's read of changes and its leaf: the fault maps "
+          "nothing and looks again");
+    CHECK(stale_fault(change_begun, 3),
+          "a change under way at the leaf: the fault maps nothing, waits for its end at the "
+          "next take and looks again");
+    CHECK(stale_fault(notice_between, 2),
+          "a notice's zap between the read and the leaf moves mmu_seq: the fault maps nothing "
+          "and looks again");
+    *host_entry(STALE_HVA) &= ~(pte_t)PTE_W;
+    CHECK(stale_fault(break_between, 2) &&
+              ((e = leaf_of(STALE_GFN, &level)) & ept.addr) == PTE_ADDR(*host_entry(STALE_HVA)),
+          "a copy-on-write break between the look and the leaf: the fault looks again and maps "
+          "the new frame");
+    CHECK(set(8, 0, 0, 0, 0) == 0 && flushed(), "deleted");
+}
+
+/** A flush waits for a vCPU in the guest only until it takes the request,
+ * as Linux's kvm_make_all_cpus_request waits for the kicked vCPU's
+ * acknowledgement, not for it to leave the guest
+ * (virt/kvm/kvm_main.c:255-320). */
+static void flush_wait_rows(void)
+{
+    flushed();
+    relaxes = 0;
+    kvm_tdp_flush(&vm);
+    CHECK(relaxes == 0 && flushed(), "a flush with every vCPU outside the guest waits for none");
+    vcpu[0].mode = KVM_MODE_IN_GUEST;
+    at_relax = take_flush;
+    kvm_tdp_flush(&vm);
+    CHECK(relaxes == 1 && vcpu[0].mode == KVM_MODE_IN_GUEST &&
+              !(vcpu[0].requests & KVM_REQ_TLB_FLUSH) && (vcpu[1].requests & KVM_REQ_TLB_FLUSH),
+          "a flush waits for a vCPU in the guest until it takes the request, and it may stay in "
+          "the guest");
+    vcpu[0].mode = KVM_MODE_OUTSIDE;
+    at_relax = NULL;
+    relaxes = 0;
+    vcpu[0].requests = vcpu[1].requests = 0;
+}
+
 /** The end of the address space. */
 static void release_rows(void)
 {
@@ -1247,6 +1436,8 @@ int main(void)
     dirty_rows();
     write_nofault_rows();
     zap_batch_rows();
+    stale_rows();
+    flush_wait_rows();
     release_rows();
     CHECK(((struct tdp *)vm.tdp)->tables == 1, "no table below the top once every slot went");
     CHECK(set(0, 0, 0, 0x1000, HVA) == 0 && kvm_tdp_fault(&vm, 0, 0) == 0, "a slot left");
