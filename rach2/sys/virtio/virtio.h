@@ -146,6 +146,8 @@ struct virtqueue {
     uint16_t free_head;             /* the first free descriptor */
     uint16_t nfree;                 /* free descriptors */
     uint16_t avail_idx;             /* the driver's ring index as last published */
+    uint16_t kicked_idx;            /* avail_idx at the last virtqueue_kick */
+    int event;                      /* VIRTIO_F_EVENT_IDX was negotiated */
     uint16_t last_used;             /* the device's ring index as last reaped */
     void *token[VIRTQ_MAX_SIZE];    /* by head; NULL for a free head */
     uint32_t inlen[VIRTQ_MAX_SIZE]; /* bytes the device may write into a head's chain */
@@ -445,15 +447,17 @@ int virtqueue_chain_fits(const struct virtqueue *vq, const struct virtio_sg *sg,
 int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out, unsigned in,
                   void *token);
 
-/** Tell the device about the buffers added since, unless it has asked not
- * to be told. A handler may call it. */
+/** Tell the device about the buffers added since the last call, unless it
+ * has asked not to be told: by VIRTQ_USED_F_NO_NOTIFY, or with
+ * VIRTIO_F_EVENT_IDX by an `avail_event` past them. A handler may call it. */
 void virtqueue_kick(struct virtqueue *vq);
 
 /**
  * Take every buffer the device had returned when the call began, free its
  * descriptors and call `done` for each. An interrupt handler calls it, and
  * so may a driver that polls. A buffer returned meanwhile, perhaps one that
- * a `done` added, raises an interrupt of its own and is left to the next
+ * a `done` added, raises an interrupt of its own, with VIRTIO_F_EVENT_IDX
+ * through the `used_event` the call writes first, and is left to the next
  * call, so that a device that keeps answering cannot hold the caller, and
  * the big lock, until a whole backlog is drained. Returns the count taken.
  */

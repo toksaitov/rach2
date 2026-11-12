@@ -95,6 +95,7 @@ struct model_queue {
     uint16_t last_avail; /* the driver's ring as the model has read it */
     uint16_t used_idx;   /* the device's ring as the model has written it */
     uint32_t notified;
+    uint32_t raised; /* the interrupts its returns raised */
 };
 
 struct model {
@@ -326,8 +327,8 @@ static const struct virtio_ops model_ops = {
     m_dma_free,   m_shm_region,  NULL,           NULL,           NULL,
     NULL,         NULL,          NULL,           NULL,           NULL};
 
-/** A fresh model offering VERSION_1 and INDIRECT_DESC and device bits 0, 1
- * and 5, with two queues of 256. */
+/** A fresh model offering VERSION_1, INDIRECT_DESC, RING_PACKED and device
+ * bits 0, 1 and 5, with two queues of 256; a row adds EVENT_IDX. */
 static struct virtio_dev *model_reset(void)
 {
     k_memset(&m, 0, sizeof(m));
@@ -337,7 +338,7 @@ static struct virtio_dev *model_reset(void)
     m.dev.name = "model0";
     m.dev.id = VIRTIO_ID_GPU;
     m.offered = VIRTIO_BIT(VIRTIO_F_VERSION_1) | VIRTIO_BIT(VIRTIO_F_INDIRECT_DESC) |
-                VIRTIO_BIT(VIRTIO_F_EVENT_IDX) | VIRTIO_BIT(VIRTIO_F_RING_PACKED) | 0x23u;
+                VIRTIO_BIT(VIRTIO_F_RING_PACKED) | 0x23u;
     m.qmax[0] = 256;
     m.qmax[1] = 256;
     udelays = 0;
@@ -405,6 +406,10 @@ static uint32_t model_walk(uint64_t table, uint32_t n, uint32_t head, uint8_t fi
 /**
  * Take up to `max` buffers from queue `qi`'s driver ring, process each and
  * put it on the used ring with the bytes written. Returns the count taken.
+ * With EVENT_IDX taken, as QEMU's virtqueue_pop, it asks to be notified at
+ * the next buffer (`avail_event`), and a return raises an interrupt only
+ * when it passes the driver's `used_event`; without, every return raises
+ * one.
  */
 static int model_run(int qi, int max, uint8_t fill)
 {
@@ -438,6 +443,14 @@ static int model_run(int qi, int max, uint8_t fill)
         k_memcpy(used + 8u + 8u * slot, &len, 4);
         q->used_idx++;
         k_memcpy(used + 2u, &q->used_idx, 2);
+        if (m.driver & VIRTIO_BIT(VIRTIO_F_EVENT_IDX)) {
+            uint16_t want = avail[2u + q->size];
+
+            k_memcpy(used + 4u + 8u * q->size, &q->last_avail, 2);
+            q->raised += (uint16_t)(q->used_idx - want - 1u) < 1u;
+        } else {
+            q->raised++;
+        }
         n++;
     }
     return n;
@@ -490,7 +503,8 @@ static void negotiation(void)
     int r;
 
     m.reset_polls = 5;
-    r = virtio_init(d, 0x21u | VIRTIO_BIT(VIRTIO_F_EVENT_IDX) | VIRTIO_BIT(40), 2);
+    m.offered |= VIRTIO_BIT(VIRTIO_F_EVENT_IDX);
+    r = virtio_init(d, 0x21u | VIRTIO_BIT(40), 2);
     check(r == 0, "init succeeds");
     check(udelays == 5, "the reset waits as long as the status takes to clear");
     check(m.nstatus == 4 && m.status_log[0] == 0 && m.status_log[1] == VIRTIO_STATUS_ACKNOWLEDGE &&
@@ -498,12 +512,14 @@ static void negotiation(void)
               m.status_log[3] ==
                   (VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK),
           "status goes reset, ACKNOWLEDGE, DRIVER, FEATURES_OK in order");
-    check(m.driver == (VIRTIO_BIT(VIRTIO_F_VERSION_1) | VIRTIO_BIT(VIRTIO_F_INDIRECT_DESC) | 0x21u),
-          "the device's wanted bits, VERSION_1 and INDIRECT_DESC are taken, the ring bits "
-          "not handled are not");
+    check(m.driver == (VIRTIO_BIT(VIRTIO_F_VERSION_1) | VIRTIO_BIT(VIRTIO_F_INDIRECT_DESC) |
+                       VIRTIO_BIT(VIRTIO_F_EVENT_IDX) | 0x21u),
+          "the device's wanted bits, VERSION_1, INDIRECT_DESC and EVENT_IDX are taken, the "
+          "ring bits not handled are not");
     check(d->features == m.driver, "features records what was written");
     check(virtio_has(d, VIRTIO_F_VERSION_1) && virtio_has(d, 0) && !virtio_has(d, 1) &&
-              !virtio_has(d, VIRTIO_F_EVENT_IDX) && !virtio_has(d, 99),
+              virtio_has(d, VIRTIO_F_EVENT_IDX) && !virtio_has(d, VIRTIO_F_RING_PACKED) &&
+              !virtio_has(d, 99),
           "virtio_has answers each bit");
     check(m.irq_setups == 1 && m.irq_nqueues == 2 && d->nqueues == 2,
           "interrupts are prepared for the queues");
@@ -573,6 +589,7 @@ static void queue_setup(void)
           "teardown after a reset frees every page and stops the interrupts");
     check(virtio_init(d, 0, 1) == 0 && virtio_queue_setup(d, 0, done, 0, &vq) == 0,
           "a device torn down comes up again");
+    virtio_teardown(d);
 
     d = model_reset();
     m.offered &= ~VIRTIO_BIT(VIRTIO_F_INDIRECT_DESC);
@@ -710,14 +727,70 @@ static void indirect(void)
           "the table and the descriptors come back");
     check(data[64u * 4u] == 0xAB && data[64u * 5u + 31u] == 0xAB && data[64u * 3u] != 0xAB,
           "the device wrote only the writable segments");
-    check(virtqueue_add(vq, sg, VIRTQ_INDIRECT_LEN + 1, 0, (void *)0x1) == -ENOSPC,
-          "a chain longer than a table and the queue is refused");
+    check(virtqueue_add(vq, sg, VIRTQ_INDIRECT_LEN + 1, 0, (void *)0x1) == -E2BIG,
+          "a chain longer than a table and the queue does not fit one chain");
     check(virtqueue_add(vq, sg, VIRTQ_INDIRECT_LEN, 0, (void *)0x1600) == 0 &&
               virtqueue_free_count(vq) == 3,
           "a chain as long as a table goes into one");
     virtqueue_kick(vq);
     check(model_run(0, 4, 0) == 1 && virtqueue_reap(vq) == 1 && virtqueue_free_count(vq) == 4,
           "it comes back whole");
+    virtio_dma_free(d, data, 4096);
+    virtio_teardown(d);
+}
+
+/**
+ * EVENT_IDX: a kick notifies only for buffers past the device's
+ * `avail_event`, so not again while the device has not taken the last it
+ * was told of, and a reap points `used_event` past what it takes, so that
+ * only the first return after it interrupts.
+ */
+static void event_index(void)
+{
+    struct virtio_dev *d = model_reset();
+    struct virtqueue *vq = 0;
+    struct virtio_sg sg[1];
+    uint16_t *avail;
+    int i, ok = 1;
+
+    m.qmax[0] = 8;
+    m.offered |= VIRTIO_BIT(VIRTIO_F_EVENT_IDX);
+    check(virtio_init(d, 0, 1) == 0 && virtio_queue_setup(d, 0, done, 0, &vq) == 0 && vq->event,
+          "a queue of 8 with EVENT_IDX");
+    data = (uint8_t *)virtio_dma_alloc(d, 4096, &data_addr);
+    virtio_ready(d);
+    avail = (uint16_t *)(void *)dev_ptr(m.q[0].avail, 6u + 2u * 8u);
+    ndone = 0;
+    sg[0] = piece(0, 8);
+    virtqueue_add(vq, sg, 1, 0, (void *)0x10);
+    virtqueue_kick(vq);
+    check(m.q[0].notified == 1, "the first buffer notifies");
+    virtqueue_add(vq, sg, 1, 0, (void *)0x11);
+    virtqueue_kick(vq);
+    virtqueue_kick(vq);
+    check(m.q[0].notified == 1, "no notify while the device has not taken the first");
+    check(model_run(0, 8, 0) == 2 && m.q[0].raised == 1,
+          "the device takes both; only the first return passes used_event 0");
+    check(virtqueue_reap(vq) == 2 && ndone == 2 && avail != 0 && avail[2 + 8] == 2,
+          "a reap takes both and points used_event at 2");
+    virtqueue_add(vq, sg, 1, 0, (void *)0x12);
+    virtqueue_kick(vq);
+    check(m.q[0].notified == 2, "a buffer past avail_event notifies");
+    check(model_run(0, 8, 0) == 1 && m.q[0].raised == 2, "and its return interrupts");
+    for (i = 0; i < 3; i++) {
+        ok &= virtqueue_add(vq, sg, 1, 0, (void *)(uintptr_t)(0x20 + i)) == 0;
+        virtqueue_kick(vq);
+    }
+    check(ok && m.q[0].notified == 3, "three buffers the device has not taken notify once");
+    check(model_run(0, 1, 0) == 1 && m.q[0].raised == 2,
+          "a return before the reap that left used_event at 2 raises none");
+    ndone = 0;
+    check(virtqueue_reap(vq) == 2 && ndone == 2 && avail[2 + 8] == 4,
+          "the reap takes both returns and points used_event at 4");
+    check(model_run(0, 8, 0) == 2 && m.q[0].raised == 3,
+          "the first return after the reap interrupts, the second not");
+    check(virtqueue_reap(vq) == 2 && avail[2 + 8] == 6 && virtqueue_free_count(vq) == 8,
+          "the last reap takes the rest");
     virtio_dma_free(d, data, 4096);
     virtio_teardown(d);
 }
@@ -852,12 +925,13 @@ int main(void)
     queue_setup();
     fill_wrap_drain();
     indirect();
+    event_index();
     device_faults();
     config_and_interrupts();
     if (!failures) {
         printf("virtqueue-hosttest: result: pass: negotiation, refusals, queue setup, fill, "
-               "wrap and drain, indirect tables, device faults, configuration and "
-               "interrupts\n");
+               "wrap and drain, indirect tables, event index, device faults, configuration "
+               "and interrupts\n");
     }
     return failures != 0;
 }
