@@ -342,10 +342,13 @@ void platform_cpu_ipi(int cpu)
 }
 
 /**
- * In x2APIC mode a processor's logical ID is its x2APIC ID's cluster, bits
- * 19:4, and one bit of 16 for bits 3:0, as the x2APIC fixes it, so each
- * cluster of the set takes one message; the clusters are gathered in one
- * pass over a set of at most NR_CPUS processors.
+ * Under KVM with KVM_FEATURE_PV_SEND_IPI the set is one hypercall
+ * (`kvm_send_ipi_many`), as Linux's kvm_apic_init makes kvm_send_ipi_mask
+ * the APIC's send_IPI_mask. Otherwise, in x2APIC mode, a processor's
+ * logical ID is its x2APIC ID's cluster, bits 19:4, and one bit of 16 for
+ * bits 3:0, as the x2APIC fixes it, so each cluster of the set takes one
+ * message; the clusters are gathered in one pass over a set of at most
+ * NR_CPUS processors.
  */
 void platform_cpu_ipi_many(uint64_t cpus)
 {
@@ -353,6 +356,9 @@ void platform_cpu_ipi_many(uint64_t cpus)
     uint64_t left = cpus, bit;
     int c;
 
+    if (kvm_send_ipi_many(cpus, IPI_VECTOR)) {
+        return;
+    }
     if (!lapic_x2apic()) {
         for (c = 0; left != 0; c++, left >>= 1) {
             if (left & 1u) {

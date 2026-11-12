@@ -1,16 +1,17 @@
 /*
  * exits.h: counts, on each processor, of the instructions a hypervisor may
  * take as a VM exit: `rdmsr` and `wrmsr` by register, `cpuid` by leaf,
- * port reads and writes by port, and `hlt`, and of the ends of interrupt,
- * by whether they needed a write of the EOI register. Under KVM `cpuid`,
- * `hlt` and the port accesses always exit, and an MSR access exits unless
- * KVM hands the register to the guest, as it hands the FS and GS bases, or
- * the processor's APIC virtualization takes it. With `rach2.exits` on the
- * command line, debugfs's `exits` prints them beside the interprocessor
- * interrupts each processor sent, by kind, so that a load's exits are named
- * from the guest's side, where KVM's own counters leave every MSR access,
- * `cpuid` and pause unnamed. Without it nothing is counted, and a count
- * costs one test.
+ * port reads and writes by port, `hlt` and KVM's hypercalls by number,
+ * and of the ends of interrupt, by whether they needed a write of the EOI
+ * register. Under KVM `cpuid`, `hlt`, a hypercall and the port accesses
+ * always exit, and an MSR access exits unless KVM hands the register to
+ * the guest, as it hands the FS and GS bases, or the processor's APIC
+ * virtualization takes it. With `rach2.exits` on the command line,
+ * debugfs's `exits` prints them beside the interprocessor interrupts each
+ * processor sent, by kind, so that a load's exits are named from the
+ * guest's side, where KVM's own counters leave every MSR access, `cpuid`
+ * and pause unnamed. Without it nothing is counted, and a count costs one
+ * test.
  */
 
 #ifndef _X86_EXITS_H_
@@ -32,7 +33,8 @@
 #define EXIT_EOI_PV    7u
 #define EXIT_EOI_TAKEN 8u
 #define EXIT_EOI_UNSET 9u
-#define EXIT_KINDS     10u
+#define EXIT_VMCALL    10u
+#define EXIT_KINDS     11u
 
 /** Count from now on when the command line has `rach2.exits`, and return
  * whether it does: called once every processor reaches its own record
@@ -43,9 +45,9 @@ int exits_start(void);
 /** Whether `exits_start` turned counting on. */
 int exits_counting(void);
 
-/** Count one instruction of `kind` on `number`, the register, the leaf or
- * the port, or 0 for `hlt`, on the running processor. Any context, NMIs
- * included. */
+/** Count one instruction of `kind` on `number`, the register, the leaf,
+ * the port or the hypercall, or 0 for `hlt`, on the running processor.
+ * Any context, NMIs included. */
 void exits_count(unsigned int kind, uint32_t number);
 
 /** debugfs's `exits` (debugfs.h's `show`): a line `KIND NUMBER TOTAL CPU0

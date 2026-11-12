@@ -1654,6 +1654,12 @@ static void tlb_wait(void)
  * each page that `fork` or `munmap` changes in a process that last ran
  * there.
  *
+ * A processor the hypervisor has preempted is not interrupted either when
+ * the hypervisor takes a mark to flush its TLB before it runs again
+ * (`arch_cpu_tlb_deferred`), as Linux's kvm_flush_tlb_multi leaves such a
+ * vCPU out of the flush (arch/x86/kernel/kvm.c): the interrupt would wait
+ * for the host to run that processor, and its flush would come no sooner.
+ *
  * The records of other processors' current threads are read under
  * `ipi_lock`, which a record's free takes after the record left every
  * processor (`smp_record_quiesce`), so a record read here stays until the
@@ -1684,6 +1690,9 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t en
             if (other->current->space_root == 0) {
                 continue;
             }
+        }
+        if (arch_cpu_tlb_deferred(c)) {
+            continue;
         }
         tlb_request(c, start, end);
         send |= (uint64_t)1 << c;

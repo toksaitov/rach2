@@ -50,6 +50,21 @@ uint32_t kcpu_kvm_features(void);
  * (arch/x86/kernel/kvm.c:934-937); 0 without KVM. */
 uint32_t kcpu_kvm_hints(void);
 
+/** Whether the processor is AMD's or Hygon's, whose instruction for a call
+ * to the hypervisor is VMMCALL where Intel's is VMCALL, as Linux sets
+ * X86_FEATURE_VMMCALL for those two vendors alone. */
+int kcpu_vmmcall(void);
+
+/**
+ * Call KVM's hypercall `nr` with the arguments `a0` to `a3`, in RBX, RCX,
+ * RDX and RSI, by VMMCALL when `vmmcall` is set and VMCALL otherwise, as
+ * Linux's kvm_hypercall4 (arch/x86/include/asm/kvm_para.h). Returns RAX:
+ * the call's answer, or a negated KVM error. Only under KVM, which takes
+ * the instruction as an exit; elsewhere it raises #UD.
+ */
+long kcpu_hypercall4(int vmmcall, unsigned long nr, unsigned long a0, unsigned long a1,
+                     unsigned long a2, unsigned long a3);
+
 /** Whether the firmware locked the APIC in x2APIC mode, so that it cannot
  * be returned to xAPIC mode. */
 int kcpu_x2apic_locked(void);

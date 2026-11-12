@@ -79,7 +79,38 @@ void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi)
     exits_count(EXIT_WRMSR, msr);
     __asm__ __volatile__("wrmsr" : : "c"(msr), "a"(lo), "d"(hi));
 }
+
+long kcpu_hypercall4(int vmmcall, unsigned long nr, unsigned long a0, unsigned long a1,
+                     unsigned long a2, unsigned long a3)
+{
+    unsigned long r = nr;
+
+    exits_count(EXIT_VMCALL, (uint32_t)nr);
+    /* VMMCALL and VMCALL as bytes: i686 tcc has no mnemonic for them. */
+    if (vmmcall) {
+        __asm__ __volatile__(".byte 0x0f, 0x01, 0xd9"
+                             : "+a"(r)
+                             : "b"(a0), "c"(a1), "d"(a2), "S"(a3)
+                             : "memory");
+    } else {
+        __asm__ __volatile__(".byte 0x0f, 0x01, 0xc1"
+                             : "+a"(r)
+                             : "b"(a0), "c"(a1), "d"(a2), "S"(a3)
+                             : "memory");
+    }
+    return (long)r;
+}
 #endif /* RACH2_HOSTTEST */
+
+int kcpu_vmmcall(void)
+{
+    uint32_t b = 0, c = 0, d = 0;
+
+    kcpu_id(0, 0, &b, &c, &d);
+    /* "AuthenticAMD" and "HygonGenuine" in EBX, EDX and ECX */
+    return (b == 0x68747541u && d == 0x69746E65u && c == 0x444D4163u) ||
+           (b == 0x6F677948u && d == 0x6E65476Eu && c == 0x656E6975u);
+}
 
 int kcpu_x2apic_present(void)
 {
