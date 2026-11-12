@@ -430,6 +430,10 @@ is the part of
 from the run loop's first pass over its top after the exit is handled:
 a switch to another thread at the end of the slice, the requests, the
 local APIC's work and the event to inject.
+A wait for the big kernel lock inside it counts in
+.Ar WAIT ,
+as one in the rest of the handling does, and a preparation that ends on
+a processor whose TSC reads lower than the one where it began counts 0.
 A HLT the kernel handles only marks the vCPU halted; its sleep until an
 interrupt comes at the loop's top, so both
 .Ar HANDLE

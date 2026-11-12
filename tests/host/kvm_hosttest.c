@@ -38,7 +38,8 @@
  * kvm/exit_stats's rows for VMX's and SVM's codes, summed over two
  * processors, with each exit's wait for the big lock, its clear, the
  * entry, run and exit counted only from marks in order, the preparation
- * only for an exit the kernel handled, and an exit with no entry after it
+ * only for an exit the kernel handled, less its waits for the big lock and
+ * never wrapped by a lower TSC, and an exit with no entry after it
  * counted as one that ended KVM_RUN; a KVM_REQ_CLOCK_UPDATE or KVM_REQ_EVENT
  * left after the run loop's look cancelling the entry, and a
  * KVM_REQ_TLB_FLUSH left to it; the signal mask swapped for the run;
@@ -4154,6 +4155,50 @@ static void exitstat_part_rows(void)
     tsc = tsc_was;
 }
 
+/** kvm/exit_stats's PREPARE, the part of HANDLE from the run loop's first
+ * pass after an exit: without a wait for the big lock inside it, which
+ * counts in WAIT as HANDLE's does, and 0, never a wrap, for a preparation
+ * that ends on a processor whose TSC reads lower than the one where it
+ * began. */
+static void exitstat_prep_rows(void)
+{
+    static char buf[2048];
+    uint64_t tsc_was = tsc;
+    struct kvm_vcpu x;
+    const char *t;
+
+    exit_stats_write("0");
+    k_memset(&x, 0, sizeof(x));
+    x.xs_row = -1;
+    host_cpu = 0;
+    x.hw_exit = 10;
+    exit_with_wait(&x, 0, 100, 100);
+    tsc = 120;
+    kvm_exitstat_prepare(&x);
+    tsc = 130;
+    bkl_wait = 100;
+    kvm_bkl_enter(&x);
+    bkl_exit();
+    x.hw_exit = 12;
+    exit_with_wait(&x, 240, 300, 300);
+    tsc = 400;
+    kvm_exitstat_prepare(&x);
+    host_cpu = 1;
+    x.hw_exit = 1;
+    exit_with_wait(&x, 350, 360, 360);
+    tsc = 370;
+    kvm_exitstat_done(&x);
+    t = exit_stats(buf, sizeof(buf), "vmx");
+    CHECK(t && strcmp(t, "0x1 1 0 1 0 10 0 0 0 0 EXTERNAL_INTERRUPT\n"
+                         "0xa 1 1 0 100 40 20 0 0 0 CPUID\n"
+                         "0xc 1 1 0 0 50 0 0 0 0 HLT\n") == 0,
+          "PREPARE leaves out a wait inside it, as HANDLE does, and counts 0 for a span "
+          "that ends on a processor whose TSC reads lower");
+    exit_stats_write("0");
+    host_cpu = 0;
+    tsc = tsc_was;
+}
+
 /** kvm/exit_stats through KVM_RUN on the vCPU `fd`: an exit the kernel
  * handles closes as one when the guest runs again, and as one that ended
  * KVM_RUN when KVM_RUN returns first, at a request that comes after the
@@ -4294,6 +4339,7 @@ int main(void)
     exit_rows(vcpu);
     exitstat_alone_rows();
     exitstat_part_rows();
+    exitstat_prep_rows();
     exitstat_run_rows(vcpu);
     entry_cancel_rows(vcpu);
     state_rows(vcpu);
