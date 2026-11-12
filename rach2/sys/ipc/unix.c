@@ -3063,6 +3063,29 @@ int32_t unix_readv(fd_entry_t *e, const struct kernel_iovec *iov, int count, uin
     return rc;
 }
 
+/** Send the imported vector as one socket write, preserving a datagram's
+ * boundary and committing each stream piece only after every element of
+ * that piece has been copied, as Linux's sock_write_iter (net/socket.c:
+ * 1132-1149 in 6.12). The descriptor is held; no big lock is held on return
+ * unless the caller held it on entry. */
+int32_t unix_writev(fd_entry_t *e, const struct kernel_iovec *iov, int count, uint32_t total)
+{
+    struct unix_out out;
+    int32_t rc;
+    uint32_t saved = kirq_save();
+    int depth = bkl_drop();
+
+    kirq_restore(saved);
+    k_memset(&out, 0, sizeof(out));
+    flight_enter(&out.flight);
+    rc = send_core(e, iov, (uint32_t)count, total, NULL, &out, 0);
+    flight_leave(&out.flight);
+    saved = kirq_save();
+    bkl_take(depth);
+    kirq_restore(saved);
+    return rc;
+}
+
 /** The caller's iovec array in `*iov`, copied in in its layout and checked
  * (`iov_import`), with its total length, cut at MAX_RW_COUNT, in `*total`:
  * 0, or -EMSGSIZE past IOV_MAX_LOCAL vectors, -EINVAL for a negative

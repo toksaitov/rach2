@@ -1786,6 +1786,48 @@ static void vector_row(void)
     end_row("vector receive");
 }
 
+/** Queue another stream write while the tested vector's copy sleeps. */
+static void vector_write_sibling(void)
+{
+    sibling_rc[0] = send_text(0, "XY");
+}
+
+/** A vector is one datagram, and a stream vector whose second element
+ * faults commits no first element before another writer's whole message. */
+static void vector_write_row(void)
+{
+    struct kernel_iovec iov[2];
+
+    setup();
+    check(pair(SOCK_DGRAM) == 0, "vector write: a datagram pair");
+    k_memcpy(user(AT(1, 0)), "ab", 2);
+    k_memcpy(user(AT(2, 0)), "cd", 2);
+    iov[0].iov_base = AT(1, 0);
+    iov[0].iov_len = 2;
+    iov[1].iov_base = AT(2, 0);
+    iov[1].iov_len = 2;
+    check(unix_writev(fd_at(0), iov, 2, 4) == 4, "vector write: both elements are sent");
+    check(unix_recvfrom(fd_at(1), AT(0, 0), 4, MSG_DONTWAIT, 0, 0) == 4 &&
+              bytes_are(AT(0, 0), "abcd"),
+          "a datagram vector arrives as one message");
+    check(unix_recvfrom(fd_at(1), AT(0, 0), 4, MSG_DONTWAIT, 0, 0) == -EAGAIN,
+          "a datagram vector leaves no second message");
+    end_row("datagram vector write");
+
+    setup();
+    check(pair(SOCK_STREAM) == 0, "vector write: a stream pair");
+    k_memcpy(user(AT(1, 0)), "ab", 2);
+    k_memcpy(user(AT(2, 0)), "cd", 2);
+    pages[2] = PAGE_MISSING;
+    page_sibling = vector_write_sibling;
+    check(unix_writev(fd_at(0), iov, 2, 4) == 4 && ran == 1 && sibling_rc[0] == 2,
+          "a second writer completes while a vector's second element faults");
+    check(unix_recvfrom(fd_at(1), AT(0, 0), 6, MSG_DONTWAIT, 0, 0) == 6 &&
+              bytes_are(AT(0, 0), "XYabcd"),
+          "no element of a stream piece is queued before its whole copy");
+    end_row("stream vector write");
+}
+
 /** `m` itself: no row makes a bind mount, so a mount is its own base. */
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
@@ -1905,7 +1947,7 @@ void bkl_exit(void)
 
 /** Set up the process and its shared table, and run every row; 0 when
  * each passes, 1 otherwise. */
-int main(void)
+int main(int argc, char **argv)
 {
     unix_init();
     pipe_init_pool();
@@ -1918,6 +1960,11 @@ int main(void)
     self.tgid = 100;
     self.ruid = self.euid = self.suid = 1000;
     self.rgid = self.egid = self.sgid = 1000;
+    if (argc == 2 && same(argv[1], "vector-write")) {
+        vector_write_row();
+        dprintf(1, "unix-hosttest: result: vector-write: %d failures\n", failures);
+        return failures ? 1 : 0;
+    }
     accept_row();
     socketpair_row();
     rights_row();
@@ -1937,6 +1984,7 @@ int main(void)
     moved_row();
     flight_lock_row();
     vector_row();
+    vector_write_row();
     dprintf(1, "unix-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }
