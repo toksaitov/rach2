@@ -48,7 +48,10 @@ int32_t kvm_dirty_enable_manual(struct kvm_vm *vm, const struct kvm_enable_cap *
 
 /** Reserve an entry for `v` under mmu_lock, leaving its flags clear until
  * the write finishes. 0 with *out NULL for a bitmap or an unlogged slot,
- * 0 with the entry for a ring, or -ENOSPC when every entry is in use. */
+ * 0 with the entry for a ring, or -ENOSPC when every entry is in use. The
+ * entry that leaves only the reserve free asks the run loop to end KVM_RUN
+ * (KVM_REQ_DIRTY_RING_FULL), as Linux's kvm_dirty_ring_push
+ * (virt/kvm/dirty_ring.c:194-195). */
 static int reserve(struct kvm_vm *vm, struct kvm_vcpu *v, const struct kvm_slot_view *s,
                    uint64_t gfn, struct kvm_dirty_gfn **out)
 {
@@ -67,6 +70,9 @@ static int reserve(struct kvm_vm *vm, struct kvm_vcpu *v, const struct kvm_slot_
     entry->slot = s->id;
     entry->offset = gfn - s->base_gfn;
     v->dirty_ring_put++;
+    if (kvm_dirty_ring_full(v)) {
+        kvm_vcpu_kick(v, KVM_REQ_DIRTY_RING_FULL);
+    }
     *out = entry;
     return 0;
 }

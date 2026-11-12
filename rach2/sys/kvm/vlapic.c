@@ -303,13 +303,12 @@ static void lapic_kick(struct lapic *l, uint32_t request)
     wq_wake(&l->wq, 0);
 }
 
-/** Wake a local APIC for a deferred controller interrupt. */
-void kvm_lapic_wake(struct kvm_vcpu *v)
+void kvm_lapic_wake(struct kvm_vcpu *v, uint32_t request)
 {
     struct lapic *l = apic_of(v);
 
     if (l) {
-        lapic_kick(l, KVM_REQ_EVENT);
+        lapic_kick(l, request);
     }
 }
 
@@ -403,6 +402,7 @@ static void timer_start(struct lapic *l, uint32_t count_reg)
     if (l->expire_ns == 0) {
         l->expire_ns = 1;
     }
+    kvm_timer_arm(l->v, l->expire_ns);
 }
 
 /** Apply LVTT's mode, as Linux's apic_update_lvtt: a change into or out of
@@ -492,19 +492,19 @@ static int accept(struct lapic *l, uint32_t mode, uint32_t vector, uint32_t leve
         return 1;
     case KVM_APIC_DM_NMI:
         atomic_inc(&l->nmis);
-        lapic_kick(l, KVM_REQ_EVENT);
+        lapic_kick(l, KVM_REQ_NMI | KVM_REQ_EVENT);
         return 1;
     case KVM_APIC_DM_INIT:
         if (trig && !level) {
             return 0;
         }
         arch_atomic_xchg((volatile unsigned int *)&l->events, EV_INIT);
-        lapic_kick(l, KVM_REQ_EVENT);
+        lapic_kick(l, KVM_REQ_INIT_SIPI | KVM_REQ_EVENT);
         return 1;
     case KVM_APIC_DM_STARTUP:
         l->sipi_vector = vector;
         atomic_or(&l->events, EV_SIPI);
-        lapic_kick(l, KVM_REQ_EVENT);
+        lapic_kick(l, KVM_REQ_INIT_SIPI | KVM_REQ_EVENT);
         return 1;
     case KVM_APIC_DM_SMI: /* no SMM is offered */
     case KVM_APIC_DM_EXTINT:
@@ -570,6 +570,15 @@ static void timer_check(struct lapic *l)
 {
     if (timer_due(l)) {
         local_deliver(l, APIC_LVTT);
+    }
+}
+
+void kvm_lapic_timer_check(struct kvm_vcpu *v)
+{
+    struct lapic *l = apic_of(v);
+
+    if (l) {
+        timer_check(l);
     }
 }
 
@@ -651,6 +660,7 @@ static void set_tscdeadline(struct lapic *l, uint64_t value)
         return;
     }
     l->tscdeadline = value;
+    kvm_timer_arm(l->v, timer_next_ns(l));
 }
 
 /* Delivery. */
@@ -1004,6 +1014,7 @@ static void set_tdcr(struct lapic *l, uint32_t val)
         l->period_ns = MIN_PERIOD_NS;
     }
     l->expire_ns = now + left / old * l->divide + 1u;
+    kvm_timer_arm(l->v, l->expire_ns);
 }
 
 /** Have `l`'s vCPU find its EOI exits again before its next entry, since
@@ -1592,6 +1603,13 @@ static uint64_t next_ns(const struct lapic *l)
     return !a || (pit && pit < a) ? pit : a;
 }
 
+uint64_t kvm_lapic_next_ns(struct kvm_vcpu *v)
+{
+    struct lapic *l = apic_of(v);
+
+    return l ? next_ns(l) : 0;
+}
+
 /** Whether the halted or waiting vCPU `arg` has an event to wake it, as
  * Linux's kvm_vcpu_has_events, or a request, or its wait's tick came. */
 static int wake_cond(void *arg)
@@ -1655,12 +1673,15 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
     int32_t r;
 
     for (;;) {
-        kvm_irq_process(v->vm);
-        kvm_pit_check(v->vm);
-        take_nmis(l);
-        timer_check(l);
-        kvm_hv_stimers(v);
-        accept_events(l);
+        if (kvm_vcpu_test_clear(v, KVM_REQ_IRQFD)) {
+            kvm_irq_process(v->vm);
+        }
+        if (kvm_vcpu_test_clear(v, KVM_REQ_NMI)) {
+            take_nmis(l);
+        }
+        if (kvm_vcpu_test_clear(v, KVM_REQ_INIT_SIPI)) {
+            accept_events(l);
+        }
         if (kvm_vcpu_test_clear(v, KVM_REQ_SCAN_IOAPIC)) {
             kvm_irq_scan_eoi_exits(v, l->eoi_exit); /* Linux's vcpu_scan_ioapic */
         }
@@ -1680,6 +1701,8 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
             l->pv_unhalted = 0;
             v->mp_state = KVM_MP_STATE_RUNNABLE;
             v->dirty |= KVM_PART_MP;
+            /* The event that woke it goes in at this entry. */
+            kvm_vcpu_kick(v, KVM_REQ_EVENT);
             break;
         }
         if (kvm_dirty_ring_full(v)) {
@@ -1694,9 +1717,9 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
             v->stat[KVM_VCPU_STAT_SIGNAL_EXITS]++;
             return -EINTR;
         }
-    }
-    if (v->nmi_queued || kvm_lapic_pending(v) >= 0) {
-        kvm_vcpu_kick(v, KVM_REQ_EVENT);
+        /* A wake for a timer finds it due here, whatever `timer_ns` says. */
+        kvm_vcpu_kick(v, KVM_REQ_TIMER);
+        kvm_vcpu_timers(v);
     }
     return 0;
 }
@@ -1768,7 +1791,7 @@ static int32_t set_lapic(struct lapic *l, uintptr_t arg)
     reg_set(l, APIC_TMCCT, 0);
     kvm_ioapic_restore(l->v);
     dest_changed(l);
-    kvm_vcpu_kick(l->v, KVM_REQ_EVENT);
+    kvm_vcpu_kick(l->v, KVM_REQ_EVENT | KVM_REQ_TIMER);
     return 0;
 }
 
@@ -1799,7 +1822,7 @@ static int32_t set_mp_state(struct lapic *l, uintptr_t arg)
         return -EINVAL;
     }
     v->dirty |= KVM_PART_MP;
-    kvm_vcpu_kick(v, KVM_REQ_EVENT);
+    kvm_vcpu_kick(v, KVM_REQ_INIT_SIPI | KVM_REQ_EVENT);
     return 0;
 }
 

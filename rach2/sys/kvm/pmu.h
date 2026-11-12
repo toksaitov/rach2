@@ -30,10 +30,14 @@ struct kvm_pmu {
     uint64_t global_ctrl, global_status, fixed_ctrl, perf_cap;
     uint64_t gp_mask, fixed_mask; /* the guest's counter widths */
     uint32_t version, nr_gp, nr_fixed;
-    uint32_t events;            /* available Intel architectural events */
-    uint32_t run_gp, run_fixed; /* counters enabled for the next entry */
-    int core_ext;               /* AMD's extended CTL/CTR aliases */
-    int pmi;                    /* an overflow waits for delivery under the big lock */
+    uint32_t events; /* available Intel architectural events */
+    /* The counters the guest has enabled and the filter allows, found
+     * again at KVM_REQ_PMU (`kvm_pmu_prepare`), and of those the ones each
+     * entry runs, less any left without a physical counter. */
+    uint32_t want_gp, want_fixed;
+    uint32_t run_gp, run_fixed;
+    int core_ext; /* AMD's extended CTL/CTR aliases */
+    int pmi;      /* an overflow waits for delivery (KVM_REQ_PMI) */
     /* The physical counter each running counter has during an entry, by
      * slot: general counter n, or fixed counter n - 32 from 32 on; the
      * physical counts read before it, for the deltas the exit adds; and
@@ -111,8 +115,12 @@ int32_t kvm_pmu_enable(struct kvm_vm *vm, const struct kvm_enable_cap *cap);
 /** Free the VM's filter after its vCPUs have stopped. */
 void kvm_pmu_vm_free(struct kvm_vm *vm);
 
-/** Deliver a pending PMI and select this entry's events under the big
- * lock, before the backend injects events and lets the guest run. */
+/** Deliver a pending PMI and find again the counters the guest has
+ * enabled and the filter allows, which the entries run, as Linux's
+ * kvm_pmu_handle_event and kvm_pmu_deliver_pmi do at KVM_REQ_PMU and
+ * KVM_REQ_PMI (arch/x86/kvm/x86.c:10369-10372), which the run loop calls it
+ * for and it clears; before the backend injects events and lets the guest
+ * run. In `v`'s thread. */
 void kvm_pmu_prepare(struct kvm_vcpu *v);
 
 /** Access VMX's IA32_DEBUGCTL, as Linux's vmx_set_msr: LBR and

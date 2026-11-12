@@ -581,8 +581,10 @@ void kvm_pmu_reset(struct kvm_vcpu *v)
     k_memset(p->fixed, 0, sizeof(p->fixed));
     p->fixed_ctrl = p->global_status = 0;
     p->global_ctrl = 0;
+    p->want_gp = p->want_fixed = 0;
     p->run_gp = p->run_fixed = 0;
     p->pmi = 0;
+    kvm_vcpu_kick(v, KVM_REQ_PMU);
 }
 
 void kvm_pmu_refresh(struct kvm_vcpu *v)
@@ -980,7 +982,8 @@ uint64_t kvm_pmu_vmcs_debugctl(const struct kvm_vcpu *v)
     return p->lbr_nr ? p->debugctl : p->debugctl & ~(DEBUGCTL_LBR | DEBUGCTL_FRZ);
 }
 
-int kvm_pmu_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host)
+/** `kvm_pmu_msr` but for the request its write makes. */
+static int pmu_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host)
 {
     struct kvm_pmu *p = &v->pmu;
     int r;
@@ -1020,6 +1023,19 @@ int kvm_pmu_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, 
         return 0;
     }
     return 1;
+}
+
+/** A write taken asks for the counters that run to be found again
+ * (KVM_REQ_PMU), as Linux's kvm_pmu_set_msr has a written selector, control
+ * or count reprogrammed at that request. */
+int kvm_pmu_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host)
+{
+    int r = pmu_msr(v, index, write, value, host);
+
+    if (write && r == 0) {
+        kvm_vcpu_kick(v, KVM_REQ_PMU);
+    }
+    return r;
 }
 
 int kvm_pmu_rdpmc(struct kvm_vcpu *v)
@@ -1187,7 +1203,7 @@ void kvm_pmu_prepare(struct kvm_vcpu *v)
     struct kvm_pmu *p = &v->pmu;
     uint32_t i;
 
-    (void)kvm_vcpu_test_clear(v, KVM_REQ_PMU);
+    (void)kvm_vcpu_test_clear(v, KVM_REQ_PMU | KVM_REQ_PMI);
     if (p->pmi) {
         p->pmi = 0;
         /* Versions 2 and 3 freeze the stack on a PMI by clearing
@@ -1197,17 +1213,19 @@ void kvm_pmu_prepare(struct kvm_vcpu *v)
         }
         kvm_lapic_pmi(v);
     }
-    p->run_gp = p->run_fixed = 0;
+    p->want_gp = p->want_fixed = 0;
     for (i = 0; i < p->nr_gp; i++) {
         if (gp_enabled(p, i) && allowed(v, i, 0)) {
-            p->run_gp |= 1u << i;
+            p->want_gp |= 1u << i;
         }
     }
     for (i = 0; i < p->nr_fixed; i++) {
         if (fixed_enabled(p, i) && allowed(v, i, 1)) {
-            p->run_fixed |= 1u << i;
+            p->want_fixed |= 1u << i;
         }
     }
+    p->run_gp = p->want_gp;
+    p->run_fixed = p->want_fixed;
 }
 
 /** Add a measured delta, recording a wrap even when its interrupt is
@@ -1245,6 +1263,9 @@ void kvm_pmu_retired(struct kvm_vcpu *v)
     if (p->nr_fixed && fixed_enabled(p, 0) && allowed(v, 0, 1) &&
         (p->fixed_ctrl & (mode == EV_USR ? 2u : 1u))) {
         accumulate(p, 0, 1, 1);
+    }
+    if (p->pmi) {
+        kvm_vcpu_kick(v, KVM_REQ_PMI);
     }
 }
 
@@ -1593,6 +1614,7 @@ void kvm_pmu_svm_enter(struct kvm_vcpu *v)
     uint32_t i, n;
     uint64_t used;
 
+    p->run_gp = p->want_gp;
     if (pmu_host.intel || !p->version || !p->run_gp) {
         return;
     }
@@ -1650,6 +1672,9 @@ void kvm_pmu_svm_exit(struct kvm_vcpu *v)
     }
     if (pmu_host.version > 1u) {
         pmu_write(AMD_GLOBAL, p->host_global);
+    }
+    if (p->pmi) {
+        kvm_vcpu_kick(v, KVM_REQ_PMI);
     }
 }
 
@@ -1769,6 +1794,8 @@ void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm
     } else {
         held = host_counters(0, 0);
     }
+    p->run_gp = p->want_gp;
+    p->run_fixed = p->want_fixed;
     if (p->version) {
         used = place(p, all_counters() & ~held);
     } else {
@@ -1827,6 +1854,9 @@ void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest, int r
         if (kvm_pmu_global() && p->phys[s] < 32u) {
             pmu_write(EVENTSEL0 + p->phys[s], 0);
         }
+    }
+    if (p->pmi) {
+        kvm_vcpu_kick(v, KVM_REQ_PMI);
     }
     if (ran && k != ~0u) {
         p->lbr_select = guest[k++].value;

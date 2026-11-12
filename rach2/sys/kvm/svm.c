@@ -2634,7 +2634,9 @@ static uint32_t inject_exception(struct kvm_vcpu *v)
 
 /** With the local APIC in the kernel and no other event to inject,
  * EVENTINJ for the vector the APIC gives when `v` can take it, 0 otherwise,
- * with the window armed while one waits. */
+ * with the window armed while one waits, after the injection too, as
+ * Linux's vcpu_enter_guest enables the window while kvm_cpu_has_injectable_intr
+ * (arch/x86/kvm/x86.c:10010-10011). */
 static uint32_t inject_lapic(struct kvm_vcpu *v)
 {
     int vec = kvm_lapic_pending(v);
@@ -2649,6 +2651,9 @@ static uint32_t inject_lapic(struct kvm_vcpu *v)
     vec = kvm_lapic_ack(v);
     if (vec < 0) {
         return 0;
+    }
+    if (kvm_lapic_pending(v) >= 0) {
+        sv(v)->want_vintr = 1;
     }
     v->events.interrupt.injected = 1;
     v->events.interrupt.nr = (uint8_t)vec;

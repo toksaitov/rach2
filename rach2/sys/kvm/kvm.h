@@ -464,21 +464,39 @@ struct kvm_vm {
 #define KVM_MODE_OUTSIDE  0 /* in the kernel, or in the caller */
 #define KVM_MODE_IN_GUEST 1 /* between the check of its requests and the exit */
 
-/* The requests another thread leaves a vCPU, in `requests`, which the run
- * loop answers before each entry. */
-#define KVM_REQ_EXIT         0x1u    /* go back to the caller */
-#define KVM_REQ_EVENT        0x2u    /* an event to inject */
-#define KVM_REQ_TRIPLE_FAULT 0x4u    /* end in KVM_EXIT_SHUTDOWN */
-#define KVM_REQ_EOI_EXIT     0x8u    /* end in KVM_EXIT_IOAPIC_EOI (vlapic.c) */
-#define KVM_REQ_TLB_FLUSH    0x10u   /* the backend drops the VM's guest-physical translations */
-#define KVM_REQ_HV_EXIT      0x20u   /* end in KVM_EXIT_HYPERV (hyperv.c) */
-#define KVM_REQ_HV_CRASH     0x40u   /* end in KVM_SYSTEM_EVENT_CRASH (hyperv.c) */
-#define KVM_REQ_HV_RESET     0x80u   /* end in KVM_SYSTEM_EVENT_RESET (hyperv.c) */
-#define KVM_REQ_CLOCK_UPDATE 0x100u  /* write the kvmclock again (pvclock.c) */
-#define KVM_REQ_STEAL_UPDATE 0x200u  /* write the steal time again (pvclock.c) */
-#define KVM_REQ_MSR_FILTER   0x400u  /* the backend's `msr_filter_changed` */
-#define KVM_REQ_PMU          0x800u  /* refresh the event filter before entry */
-#define KVM_REQ_SCAN_IOAPIC  0x1000u /* find the EOI exits again (vlapic.c) */
+/* The requests left for a vCPU, in `requests`, by its own thread or
+ * another, as Linux's vcpu->requests: whoever changes state that the vCPU
+ * must act on before it enters sets the request's bit atomically and kicks
+ * the vCPU (`kvm_vcpu_kick`), and the run loop does each source's work only
+ * behind its bit, so that an entry with no request tests the one word, as
+ * Linux's vcpu_enter_guest tests kvm_request_pending
+ * (arch/x86/kvm/x86.c:10288). The timers, which have no host timer of
+ * their own to raise a request, keep their earliest deadline in the vCPU
+ * (`timer_ns`), which the loop compares with the clock while one is armed
+ * and turns into KVM_REQ_TIMER when it passes. */
+#define KVM_REQ_EXIT               0x1u  /* go back to the caller */
+#define KVM_REQ_EVENT              0x2u  /* an event to inject */
+#define KVM_REQ_TRIPLE_FAULT       0x4u  /* end in KVM_EXIT_SHUTDOWN */
+#define KVM_REQ_EOI_EXIT           0x8u  /* end in KVM_EXIT_IOAPIC_EOI (vlapic.c) */
+#define KVM_REQ_TLB_FLUSH          0x10u /* the backend drops the VM's guest-physical translations */
+#define KVM_REQ_HV_EXIT            0x20u   /* end in KVM_EXIT_HYPERV (hyperv.c) */
+#define KVM_REQ_HV_CRASH           0x40u   /* end in KVM_SYSTEM_EVENT_CRASH (hyperv.c) */
+#define KVM_REQ_HV_RESET           0x80u   /* end in KVM_SYSTEM_EVENT_RESET (hyperv.c) */
+#define KVM_REQ_CLOCK_UPDATE       0x100u  /* write the kvmclock and the reference TSC page again */
+#define KVM_REQ_STEAL_UPDATE       0x200u  /* write the steal time again (pvclock.c) */
+#define KVM_REQ_MSR_FILTER         0x400u  /* the backend's `msr_filter_changed` */
+#define KVM_REQ_PMU                0x800u  /* find the counters that run again (pmu.c) */
+#define KVM_REQ_SCAN_IOAPIC        0x1000u /* find the EOI exits again (vlapic.c) */
+/* A timer may be due or was changed: the local APIC's, the PIT's, Hyper-V's
+ * synthetic timers and the kvmclock's resync are looked at, and `timer_ns`
+ * found again (vcpu.c), as Linux's hrtimers raise their own requests. */
+#define KVM_REQ_TIMER              0x2000u
+#define KVM_REQ_NMI                0x4000u  /* NMIs delivered, to queue (vlapic.c) */
+#define KVM_REQ_INIT_SIPI          0x8000u  /* an INIT or a SIPI delivered, to take (vlapic.c) */
+#define KVM_REQ_IRQFD              0x10000u /* an irqfd left for the run loop rose (irq.c) */
+#define KVM_REQ_PMI                0x20000u /* a counter overflowed: deliver its PMI (pmu.c) */
+#define KVM_REQ_DIRTY_RING_FULL    0x40000u /* the dirty ring has its reserve left (dirty.c) */
+#define KVM_REQ_MASTERCLOCK_UPDATE 0x80000u /* decide the master clock again (pvclock.c) */
 
 /* The requests that cancel an entry they find set once the vCPU is
  * IN_GUEST, as Linux's kvm_vcpu_exit_request cancels one for any pending
@@ -597,6 +615,14 @@ struct kvm_vcpu {
     volatile uint32_t mode;     /* KVM_MODE_* */
     volatile uint32_t requests; /* KVM_REQ_* */
     volatile int32_t cpu;       /* the processor it last entered on, -1 before */
+    /* The host's ns from which a timer of the vCPU may be due, 0 for none:
+     * the earliest deadline of the local APIC's timer, Hyper-V's synthetic
+     * timers, the PIT's and the kvmclock's resync, or 1 for work waiting
+     * now. The vCPU's thread alone writes it, finding it again at
+     * KVM_REQ_TIMER and lowering it when it arms a timer itself
+     * (`kvm_timer_arm`); another thread changing a timer asks with
+     * KVM_REQ_TIMER. It may be early, which costs a look, never late. */
+    uint64_t timer_ns;
     /* Held for each ioctl of the vCPU, KVM_RUN among them, as Linux's
      * vcpu->mutex: the state below is its holder's. */
     struct mutex mutex;
@@ -843,6 +869,23 @@ void kvm_vcpu_kick(struct kvm_vcpu *v, uint32_t request);
 
 /** Clear the request `request` of `v` atomically: whether it was set. */
 int kvm_vcpu_test_clear(struct kvm_vcpu *v, uint32_t request);
+
+/** Lower `v`'s `timer_ns` to `ns`, the host's ns of a timer the caller just
+ * armed, or 1 for timer work waiting now; 0 changes nothing. By the holder
+ * of `v`'s mutex, in any context; another thread kicks KVM_REQ_TIMER. */
+void kvm_timer_arm(struct kvm_vcpu *v, uint64_t ns);
+
+/**
+ * Look at `v`'s timers once one may be due: when `timer_ns` has passed,
+ * which reads the clock only while it is set, or at KVM_REQ_TIMER. With
+ * the local APIC in the kernel, deliver the APIC timer's expiry
+ * (`kvm_lapic_timer_check`), the PIT's (`kvm_pit_check`) and Hyper-V's
+ * synthetic timers' (`kvm_hv_stimers`); ask for the kvmclock once its
+ * resync is due (`kvm_clock_next`); and find `timer_ns` again. The run
+ * loop's, before each entry and after each halted wait, in `v`'s thread
+ * without the big lock.
+ */
+void kvm_vcpu_timers(struct kvm_vcpu *v);
 
 /** Make `v`'s floating-point image hold the guest's state before it is
  * read during KVM_RUN, while the registers may hold it (the backend's
@@ -1155,14 +1198,16 @@ void kvm_tsc_moved(struct kvm_vcpu *v);
  * KVM's. */
 int kvm_pv_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host);
 
-/** Write `v`'s kvmclock into guest memory before an entry, when it was asked
- * for (KVM_REQ_CLOCK_UPDATE), as it is for every vCPU once the host's clock has
- * stopped or started since the master clock was decided, which decides it again
- * (`vclock_generation`), or, without the master clock, when the vCPU moved to
- * another processor or KVMCLOCK_SYNC_NS passed, as Linux's
- * kvm_guest_time_update, and with it the reference TSC page, kvmclock or not
- * (`kvm_hv_clock_update`), so that a request taken here leaves no page of the
- * old clock to the entry. In `v`'s thread. */
+/** Write `v`'s kvmclock into guest memory before an entry, which the run
+ * loop calls at KVM_REQ_CLOCK_UPDATE or KVM_REQ_MASTERCLOCK_UPDATE and which
+ * clears both: decide the master clock again once the host's clock has
+ * stopped or started since it was decided (`vclock_generation`), and write
+ * the kvmclock when it was asked for, as it is for every vCPU after such a
+ * decision, or, without the master clock, when the vCPU moved to another
+ * processor or KVMCLOCK_SYNC_NS passed, as Linux's kvm_guest_time_update,
+ * and with it the reference TSC page, kvmclock or not
+ * (`kvm_hv_clock_update`), so that a request taken here leaves no page of
+ * the old clock to the entry. In `v`'s thread. */
 void kvm_clock_prepare(struct kvm_vcpu *v);
 
 /** Whether the host's clock has stopped or started (`vclock_generation`)
@@ -1174,16 +1219,29 @@ void kvm_clock_prepare(struct kvm_vcpu *v);
  * KVM_REQ_MASTERCLOCK_UPDATE does. */
 int kvm_clock_host_moved(const struct kvm_vm *vm);
 
+/** The host's ns at which `v`'s kvmclock is due to be written again
+ * without the master clock, KVMCLOCK_SYNC_NS after its last write, as
+ * Linux's kvmclock_sync_work; 0 while the kvmclock is off or the master
+ * clock on. For `timer_ns`. */
+uint64_t kvm_clock_next(const struct kvm_vcpu *v);
+
+/** `v` enters on another processor than the last: without the master
+ * clock its kvmclock is written again first (KVM_REQ_CLOCK_UPDATE), as
+ * Linux's kvm_arch_vcpu_load asks when the vCPU moved. With interrupts
+ * off. */
+void kvm_clock_moved_cpu(struct kvm_vcpu *v);
+
 /** KVM_KVMCLOCK_CTRL: the guest's next kvmclock says it was stopped. 0, or
  * -EINVAL while the kvmclock is off. */
 int32_t kvm_clock_ctrl(struct kvm_vcpu *v);
 
 /** Write `v`'s steal time into guest memory before an entry, as Linux's
- * record_steal_time, when it was asked for (KVM_REQ_STEAL_UPDATE), when
- * the thread was switched out and in since the last entry, as Linux asks
- * at each vcpu_load, and while the guest's record says it was preempted:
- * the thread's run-queue wait since the last write is added to `steal`,
- * and `preempted` cleared. In `v`'s thread. */
+ * record_steal_time, which the run loop calls at KVM_REQ_STEAL_UPDATE, as
+ * each KVM_RUN and each switch of the vCPU's thread ask, and which clears
+ * it: when it was asked for, when the thread was switched out and in since
+ * the last write, and while the guest's record says it was preempted, the
+ * thread's run-queue wait since the last write is added to `steal`, and
+ * `preempted` cleared. In `v`'s thread. */
 void kvm_steal_prepare(struct kvm_vcpu *v);
 
 /** Mark `v`'s steal time KVM_VCPU_PREEMPTED, as Linux's
@@ -1454,10 +1512,12 @@ void kvm_dirty_publish(struct kvm_dirty_gfn *entry);
 /** Whether `v`'s dirty ring is soft-full: its uncollected entries reach
  * the ring's size less KVM_DIRTY_RING_RESERVED, which covers software
  * writes while an exit completes, as Linux's kvm_dirty_ring_soft_full
- * (virt/kvm/dirty_ring.c). KVM_RUN then ends with KVM_EXIT_DIRTY_RING_FULL
- * before any entry or halted wait, until KVM_RESET_DIRTY_RINGS collects
- * them; neither backend has a hardware dirty-page buffer. 0 without a
- * ring. Reads the counters without a lock, in `v`'s thread. */
+ * (virt/kvm/dirty_ring.c). The entry that makes it so asks for
+ * KVM_REQ_DIRTY_RING_FULL, and KVM_RUN then ends with
+ * KVM_EXIT_DIRTY_RING_FULL before any entry or halted wait, until
+ * KVM_RESET_DIRTY_RINGS collects them; neither backend has a hardware
+ * dirty-page buffer. 0 without a ring. Reads the counters without a lock,
+ * in `v`'s thread. */
 int kvm_dirty_ring_full(const struct kvm_vcpu *v);
 
 /** Mark the frame `gfn` of `v`'s VM dirty in the log of `s`, the view of
@@ -1526,7 +1586,7 @@ void kvm_irq_mask(struct kvm_vm *vm, uint32_t chip, uint32_t pin, int masked);
  * lock. */
 int kvm_irq_resample(struct kvm_vm *vm, uint32_t chip, uint32_t pin);
 
-/** Process irqfds deferred from interrupt context. */
+/** Process irqfds deferred from interrupt context, at KVM_REQ_IRQFD. */
 void kvm_irq_process(struct kvm_vm *vm);
 
 /** Whether an irqfd awaits processing; safe in a halted wait condition. */
@@ -1599,8 +1659,9 @@ int32_t kvm_pit_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg);
  * Under the controllers' lock. */
 int kvm_pit_io(struct kvm_vm *vm, uint32_t port, uint32_t size, uint32_t *value, int write);
 
-/** Inject due PIT ticks, retaining unacknowledged ones. Takes the
- * controllers' lock only when a tick may be due, which it first asks
+/** Inject due PIT ticks, retaining unacknowledged ones, at KVM_REQ_TIMER
+ * (`kvm_vcpu_timers`), which a change of the PIT asks of every vCPU. Takes
+ * the controllers' lock only when a tick may be due, which it first asks
  * without the lock. */
 void kvm_pit_check(struct kvm_vm *vm);
 
@@ -1719,8 +1780,19 @@ int kvm_lapic_match_irq(struct kvm_vcpu *v, const struct kvm_lapic_irq *irq);
 /** Whether a vector remains in the local APIC's IRR or ISR. */
 int kvm_lapic_pending_eoi(struct kvm_vcpu *v, uint32_t vector);
 
-/** Request event processing and wake the APIC's wait; interrupt safe. */
-void kvm_lapic_wake(struct kvm_vcpu *v);
+/** Leave `v` the request `request` and wake its halted wait, for a
+ * source the run loop takes for every vCPU, the PIT (KVM_REQ_TIMER) and the
+ * irqfds left to it (KVM_REQ_IRQFD); interrupt safe. */
+void kvm_lapic_wake(struct kvm_vcpu *v, uint32_t request);
+
+/** Deliver the local APIC timer's expiry to `v` when it is due, at
+ * KVM_REQ_TIMER (`kvm_vcpu_timers`). In `v`'s thread. */
+void kvm_lapic_timer_check(struct kvm_vcpu *v);
+
+/** The host's ns at which `v` next has a timer due with its local APIC in
+ * the kernel, the APIC's, a Hyper-V synthetic timer or the PIT, 0 for
+ * none, for `timer_ns`. In `v`'s thread; takes the controllers' lock. */
+uint64_t kvm_lapic_next_ns(struct kvm_vcpu *v);
 
 /** Wake the first vCPU that accepts PIC interrupts, under the controllers'
  * lock. */
@@ -1792,15 +1864,17 @@ int kvm_lapic_highest_irr(struct kvm_vcpu *v);
 void kvm_lapic_update_ppr(struct kvm_vcpu *v);
 
 /**
- * Ready `v` for an entry, before each one, with the local APIC in the
- * kernel: deliver an expired timer, the APIC's or a Hyper-V synthetic
- * timer (`kvm_hv_stimers`), take an INIT or a SIPI, wait while the
- * vCPU is halted or waits for a SIPI until an event wakes it, and make
- * an interrupt waiting an event to inject (KVM_REQ_EVENT). 0 to enter; 1
- * to go to the caller with the run page's exit set, KVM_EXIT_IOAPIC_EOI,
- * or KVM_EXIT_DIRTY_RING_FULL in place of a wait while the dirty ring is
- * full, the vCPU left halted;
- * -EINTR for a signal or a request to leave, with KVM_EXIT_INTR. May sleep.
+ * Ready `v` for an entry with the local APIC in the kernel, which the run
+ * loop calls before an entry with a request or with the vCPU not running:
+ * take the irqfds left to it (KVM_REQ_IRQFD), the NMIs (KVM_REQ_NMI), an
+ * INIT or a SIPI (KVM_REQ_INIT_SIPI), the I/O APIC's EOI exits, and wait
+ * while the vCPU is halted or waits for a SIPI until an event wakes it,
+ * looking at its timers after each wake (`kvm_vcpu_timers`); a halted vCPU
+ * an event wakes asks for its injection (KVM_REQ_EVENT). 0 to enter; 1 to
+ * go to the caller with the run page's exit set, KVM_EXIT_IOAPIC_EOI, or
+ * KVM_EXIT_DIRTY_RING_FULL in place of a wait while the dirty ring is
+ * full, the vCPU left halted; -EINTR for a signal or a request to leave,
+ * with KVM_EXIT_INTR. May sleep.
  */
 int32_t kvm_lapic_prepare(struct kvm_vcpu *v);
 
@@ -1901,10 +1975,11 @@ int kvm_hv_hypercall(struct kvm_vcpu *v, uint32_t len);
  * status. */
 void kvm_hv_complete(struct kvm_vcpu *v);
 
-/** Ready `v` for an entry, before each one: write the reference TSC page
- * once it changed, and end KVM_RUN for a crash, a reset or a SynIC or
- * debugger MSR the guest wrote. 0 to enter; 1 to go to the caller with the
- * run page's exit set. */
+/** Ready `v` for an entry, which the run loop calls at KVM_REQ_HV_CRASH,
+ * KVM_REQ_HV_RESET or KVM_REQ_HV_EXIT: write the reference TSC page once
+ * it changed, and end KVM_RUN for a crash, a reset or a SynIC or debugger
+ * MSR the guest wrote. 0 to enter; 1 to go to the caller with the run
+ * page's exit set. */
 int32_t kvm_hv_prepare(struct kvm_vcpu *v);
 
 /** Write the reference TSC page of `v`'s VM if it waits to be written, as
@@ -1915,7 +1990,8 @@ int32_t kvm_hv_prepare(struct kvm_vcpu *v);
 void kvm_hv_clock_update(struct kvm_vcpu *v);
 
 /** Fire `v`'s synthetic timers that are due, delivering their messages or
- * vectors, in `v`'s thread with the APIC in the kernel. */
+ * vectors, at KVM_REQ_TIMER (`kvm_vcpu_timers`), in `v`'s thread with the
+ * APIC in the kernel. A timer armed or marked lowers `timer_ns`. */
 void kvm_hv_stimers(struct kvm_vcpu *v);
 
 /** The host's ns at which `v`'s next synthetic timer is due, 1 when one
