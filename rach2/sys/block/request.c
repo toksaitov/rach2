@@ -106,7 +106,11 @@ static uint32_t overlap_count; /* completions with another request in flight */
 static uint32_t quarantine_total;
 static uint32_t release_total;
 static uint32_t release_tick;
-static uint32_t pool_size;  /* the limit: REQ_LIMIT, or rach2.blockpool=N */
+static uint32_t pool_size; /* the limit: REQ_LIMIT, or rach2.blockpool=N */
+
+/* The flag of `req_take`'s `how` for a caller that does not wait for its
+ * answer. */
+#define REQ_TAKE_QUIET 2
 static uint32_t device_cap; /* the most requests one device may hold */
 
 /* Buffers of REQ_KEEP_PAGES heap pages that freed requests left, kept
@@ -460,13 +464,16 @@ static uint32_t req_periods(const block_device_t *device)
  * memory for one, and `*why` is `-ENOMEM` for no memory and `-EIO`
  * otherwise. A caller that cannot sleep passes NULL, and NULL means no
  * request now. A read into page frames names them in `frames`, and NULL
- * takes a buffer.
+ * takes a buffer. `how` is 1 for a write and 0 for a read, with
+ * REQ_TAKE_QUIET for a read started without a waiter, whose wait for room
+ * is the pool's ordinary pace and is not logged, as Linux's wait for a tag
+ * is not (block/blk-mq-tag.c).
  */
-static struct block_request *req_take(block_device_t *device, int write, uint64_t lba,
-                                      uint32_t count, const uintptr_t *frames, int *why)
+static struct block_request *req_take(block_device_t *device, int how, uint64_t lba, uint32_t count,
+                                      const uintptr_t *frames, int *why)
 {
     block_device_t *owner = block_submitter(device);
-    int waited = 0, wait = why != NULL;
+    int waited = 0, wait = why != NULL, write = how & 1;
     uint32_t wait_from = timer_now_us();
 
     if (why) {
@@ -531,11 +538,11 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
             return NULL;
         }
         pool_unlock(flags);
-        if (!waited) {
-            waited = 1;
+        if (!waited && !(how & REQ_TAKE_QUIET)) {
             klog(KLOG_INFO, "block", "request pool: waiting for a slot: %s",
                  share_taken ? "the device holds its share" : "the pool is full");
         }
+        waited = 1;
         wq_wait_event_nointr(&pool_wq, slot_ready, owner);
     }
 }
@@ -921,7 +928,7 @@ static int frames_async_one(block_device_t *device, uint64_t lba, uint32_t count
     uint32_t flags;
     int why;
 
-    r = req_take(device, 0, lba, count, frames, &why);
+    r = req_take(device, REQ_TAKE_QUIET, lba, count, frames, &why);
     if (!r) {
         return why;
     }
