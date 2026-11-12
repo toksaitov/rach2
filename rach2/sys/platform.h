@@ -24,7 +24,8 @@ struct process;
  * whose stack an entry from user mode switches to, with the boot stack
  * ending at `boot_stack_top`, and the interrupt table's handlers. On a PC it
  * first sets up the page attribute table, which gives the framebuffer's
- * mapping write-combining (arch/x86/pat.h).
+ * mapping write-combining (arch/x86/pat.h), and the counters' freeze in SMM
+ * (`platform_pmu_cpu_setup`).
  */
 void platform_cpu_init(uintptr_t boot_stack_top);
 
@@ -158,6 +159,21 @@ void platform_cpu_nmi(int cpu);
  * back to the buddy check. The result is logged.
  */
 int platform_pmu_probe(void);
+
+/**
+ * Stop the running processor's performance counters while it is in SMM,
+ * by IA32_DEBUGCTL's FREEZE_WHILE_SMM, on Intel's architectural monitor of
+ * version 2 or later where IA32_PERF_CAPABILITIES offers the bit, as
+ * Linux's perf does by default (arch/x86/events/intel/core.c:5153-5154 and
+ * 5452-5463): without it a counter of user mode alone counts the work of
+ * firmware that runs SMM at CPL 3. Linux tries the write on every version 2
+ * monitor and ignores its #GP (arch/x86/lib/msr.c:39-62); here the
+ * capability is asked first, since the i686 kernel has no recoverable
+ * write, and no MSR it reads can fault. KVM carries the bit into a
+ * guest's IA32_DEBUGCTL (kvm/vmx.c). Each processor runs it once as it
+ * starts, with interrupts off.
+ */
+void platform_pmu_cpu_setup(void);
 
 /**
  * Program this processor's counter to raise an NMI after each `cycles`

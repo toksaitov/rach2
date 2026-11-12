@@ -123,7 +123,8 @@ void kvm_pmu_prepare(struct kvm_vcpu *v);
 int kvm_pmu_debugctl(struct kvm_vcpu *v, int write, uint64_t *value, int host);
 
 /** The guest's IA32_DEBUGCTL as the VMCS loads it: the kept bits, less LBR
- * and FREEZE_LBRS_ON_PMI without the guest's LBR stack. */
+ * and FREEZE_LBRS_ON_PMI without the guest's LBR stack. The backend adds
+ * the host's FREEZE_WHILE_SMM, which the guest never reads (vmx.c). */
 uint64_t kvm_pmu_vmcs_debugctl(const struct kvm_vcpu *v);
 
 /** Load/stop AMD's physical counters with interrupts off, outside the
