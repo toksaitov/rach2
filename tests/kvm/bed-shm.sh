@@ -501,16 +501,23 @@ nocopy_rows()
 }
 
 # still_counts: wait until the doorbells' counts, both sides' and KVM's,
-# are the same at two looks a second apart, 10 looks at most.
+# are the same at two looks a second apart, 10 looks at most, and leave
+# that sample in `still` as `woken rung ioeventfd irqfd`, the transport's
+# counts as ivshmemd gives them. Returns 1, with `still` empty, when no two
+# looks agree.
 still_counts()
 {
-    n=10 last=''
+    n=10 last='' still=''
     while [ "$n" -gt 0 ]; do
         now="$(info woken) $(info rung) $(stat kvm_ioeventfd_signals) $(stat kvm_irqfd_raises)"
-        [ "$now" != "$last" ] || return 0
+        if [ "$now" = "$last" ]; then
+            still=$now
+            return 0
+        fi
         last=$now n=$((n - 1))
         sleep 1
     done
+    return 1
 }
 
 # virgl_rows: the frame drawn, the doorbells, and the VM's death with
@@ -524,13 +531,11 @@ virgl_rows()
         # A doorbell is counted twice, by KVM and by the transport, one
         # after the other, so each pair of counts is read with the doorbells
         # still, which would otherwise split one across the two reads.
-        still_counts
-        io0=$(stat kvm_ioeventfd_signals) irq0=$(stat kvm_irqfd_raises)
-        woken0=$(info woken | cut -d/ -f1) rung0=$(info rung | cut -d/ -f1)
+        before=''
+        ! still_counts || before=$still
         "$probe" draw "$crc" > "$out/draw.out" 2>&1
-        still_counts
-        io1=$(stat kvm_ioeventfd_signals) irq1=$(stat kvm_irqfd_raises)
-        woken1=$(info woken | cut -d/ -f1) rung1=$(info rung | cut -d/ -f1)
+        after=''
+        ! still_counts || after=$still
         polls=$(info polls)
         ivshmemd -i > "$out/info-drawn.txt" 2>&1
         if grep -q 'VGSHMPROBE OK' "$out/draw.out"; then
@@ -538,15 +543,23 @@ virgl_rows()
         else
             fail draw "$(grep VGSHMPROBE "$out/draw.out" | tr '\n' ' ')"
         fi
-        woken=$((woken1 - woken0)) rung=$((rung1 - rung0))
-        io=$((io1 - io0)) irq=$((irq1 - irq0))
-        echo "bed-shm: counts: rung $rung, woken $woken, polls $polls, ioeventfd $io, irqfd $irq" \
-            > "$out/counts.txt"
-        if [ "$(info doorbells)" = 1 ] && [ "$woken" -gt 0 ] && [ "$io" -ge "$woken" ] &&
-            [ "$irq" -ge "$rung" ] && [ "$rung" -gt 0 ]; then
-            pass doorbell "rung $rung, woken $woken, ioeventfd $io, irqfd $irq"
+        if [ -z "$before" ] || [ -z "$after" ]; then
+            echo "bed-shm: counts: never still for a second in 10 s: before '$before', after '$after'" \
+                > "$out/counts.txt"
+            fail doorbell "$(cat "$out/counts.txt")"
         else
-            fail doorbell "$(cat "$out/counts.txt"), doorbells $(info doorbells)"
+            # shellcheck disable=SC2086 # the two samples' eight counts
+            set -- $before $after
+            woken=$((${5%%/*} - ${1%%/*})) rung=$((${6%%/*} - ${2%%/*}))
+            io=$(($7 - $3)) irq=$(($8 - $4))
+            echo "bed-shm: counts: rung $rung, woken $woken, polls $polls, ioeventfd $io, irqfd $irq" \
+                > "$out/counts.txt"
+            if [ "$(info doorbells)" = 1 ] && [ "$woken" -gt 0 ] && [ "$io" -ge "$woken" ] &&
+                [ "$irq" -ge "$rung" ] && [ "$rung" -gt 0 ]; then
+                pass doorbell "rung $rung, woken $woken, ioeventfd $io, irqfd $irq"
+            else
+                fail doorbell "$(cat "$out/counts.txt"), doorbells $(info doorbells)"
+            fi
         fi
     fi
 
