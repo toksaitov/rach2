@@ -4338,19 +4338,28 @@ static void hda_service_kick(uint32_t wanted)
  * apart, so it sees each change of period long before a revolution could
  * pass unseen; a revolution that passes while the thread waits to run, or
  * while the stream's interrupts serve it, is the service's to count.
+ *
+ * It reads the input stream's state under cap_lock and the output stream's
+ * under the stream lock, which guard them, as Linux's pending check reads a
+ * stream's flags and position under the bus's reg_lock
+ * (azx_irq_pending_work, sound/pci/hda/hda_intel.c:735-753 of 6.12.115).
  */
 static uint32_t hda_service_due(uint32_t asked)
 {
-    uint32_t due = 0;
+    uint32_t due = 0, flags;
 
     if (!hda_base)
         return 0;
+    flags = spin_lock_irqsave(&cap_lock);
     if ((asked & HDA_SERVE_CAPTURE) && cap_running && cap_period != 0 && cap_periods != 0 &&
         hda_input_position() % (cap_period * cap_periods) / cap_period != cap_next)
         due |= HDA_SERVE_CAPTURE;
+    spin_lock(&stream_lock);
     if ((asked & HDA_SERVE_PLAY) && playing && stream_started &&
         hda_stream_position() % (period_bytes * HDA_PERIODS) / period_bytes != hw_period_last)
         due |= HDA_SERVE_PLAY;
+    spin_unlock(&stream_lock);
+    spin_unlock_irqrestore(&cap_lock, flags);
     return due;
 }
 
@@ -4723,8 +4732,10 @@ static uint32_t hda_capture_convert(const audio_stream_t *s, const uint8_t *src)
  * service, which the position alone cannot show when it made a whole
  * revolution, so the wall clock counts those. On an overrun the period the
  * device writes is lost and the rest, from the one after it, are handed
- * over: the newest whole revolution, in order. A service already under way
- * elsewhere is left to finish alone. A call that finds the position in the
+ * over: the newest whole revolution, in order. No other service runs
+ * meanwhile (hda_serve), so the lock is waited for: its other holders, the
+ * stream operations, the position's reader, the tick's look and the report's
+ * copy, hold it only a moment. A call that finds the position in the
  * period an early interrupt's boundary begins, or past it, clears
  * cap_irq_pending, as hda_service_stream clears play_irq_pending.
  *
@@ -4743,11 +4754,7 @@ static void hda_service_capture(void)
 
     if (!cap_running)
         return;
-    flags = kirq_save();
-    if (!spin_trylock(&cap_lock)) {
-        kirq_restore(flags);
-        return;
-    }
+    flags = spin_lock_irqsave(&cap_lock);
     if (!cap_running || !hda_base)
         goto out;
     s = cap_stream;
