@@ -1,0 +1,41 @@
+--- dev-log/77-vgpu/77-10/session.py	2026-11-11 19:05:06
++++ build/runs/2662/exp/session-series.py	2026-11-11 19:54:20
+@@ -67,7 +67,7 @@
+     identity()
+     assets = args.assets.resolve()
+     assert assets.is_relative_to(Path("/data/build")), "assets must be under /data/build"
+-    tag = args.system + "-" + args.display
++    tag = args.system + "-" + args.display + "-series"
+     out = assets / "runs" / tag
+     out.mkdir(parents=True, exist_ok=False)
+     scratch = assets / "tmp"
+@@ -97,7 +97,7 @@
+         if args.display == "gtk":
+             display += ",show-menubar=off"
+         qargs = ["qemu-system-x86_64", "-name", "venus-77-10-" + tag,
+-                 "-accel", "kvm", "-cpu", "host", "-smp", "4", "-m", "6G",
++                 "-accel", "kvm", "-cpu", "host,+invtsc", "-smp", "4", "-m", "6G",
+                  "-object", "memory-backend-memfd,id=mem,size=6G,share=on",
+                  "-machine", "q35,memory-backend=mem", "-no-reboot",
+                  "-vga", "none", "-device", "virtio-vga-gl,venus=on,blob=on,hostmem=4G",
+@@ -109,7 +109,7 @@
+                  "-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci",
+                  "-serial", "file:" + str(serial), "-monitor", "none"]
+         if args.system == "rach2":
+-            qargs += ["-kernel", str(images / "kernel"), "-append", "rach2.root=ext2"]
++            qargs += ["-kernel", "/data/build/77-10/exp/kernel", "-append", "rach2.root=ext2"]
+         env = ["XDG_RUNTIME_DIR=/run/user/1000", "WAYLAND_DISPLAY=wayland-77-10",
+                "GDK_BACKEND=wayland", "SDL_VIDEODRIVER=wayland",
+                "SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR=0",
+@@ -163,8 +163,9 @@
+                 if args.system == "debian":
+                     with (assets / "cts.tar.gz").open("rb") as payload:
+                         command(ssh + ["sudo tar -xzf - -C /opt"], stdin=payload)
+-                remote = "cd /tmp/77-10 && " + privilege + "sh dev-log/77-vgpu/77-10/guest.sh "
+-                remote += shlex.join([args.system, args.display])
++                remote = ("cd /tmp/77-10 && B=/sys/kernel/debug/bkl && echo 0 > $B/calls && echo 0 > $B/profile; (while :; do echo T $(cat /proc/uptime); cat $B/calls; grep -E \"^(cpu |intr|bkl_wait_us)\" /proc/stat; ps -eo pid,comm | grep -E \"vkcube|weston|vkhold\"; sleep 1; done) </dev/null >/tmp/calls-series 2>&1 & SAMP=$!; "
++                          "sh dev-log/77-vgpu/77-10/guest.sh " + shlex.join([args.system, args.display]) +
++                          "; st=$?; kill $SAMP; cp /tmp/calls-series build/runs/results/calls-series; cat $B/calls > build/runs/results/bkl-calls; cat $B/profile > build/runs/results/bkl-profile; cat /proc/stat > build/runs/results/stat-end; exit $st")
+                 with (out / "guest.log").open("w") as log:
+                     guest = subprocess.Popen(ssh + [remote], stdout=log, stderr=subprocess.STDOUT)
+                     try:

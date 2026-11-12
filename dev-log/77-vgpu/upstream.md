@@ -144,3 +144,25 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: nothing in its own code. The virgl family's dEQP list leaves the nine cases out, for both guests, as its header says.
 * Status: unreported.
 * Next: run the pair on the host alone, without a guest, through Mesa's D3D12 driver, to see whether virglrenderer is needed, and read `d3d12_draw_vbo`'s handling of a geometry shader with no output and `d3d12_resource_copy_region` for state the first leaves for the second.
+
+## Debian's Chromium launcher escapes its option patterns for grep with backslashes
+
+* Project: Debian 13's chromium package of Chromium 156.0.8078.79, its launcher script `/usr/bin/chromium`, as Rach2's x86-64 GNU root stages it; the package's exact Debian revision is missing from the records.
+* Fails: every start of the launcher prints `grep: warning: stray \ before -` twice on stderr. Line 121 runs `grep \\-\\-enable-remote-extensions` and line 123 `grep \\-\\-load-extension`; the shell passes `\-\-...` to grep, and GNU grep 3.8 and later warn on a backslash before an ordinary character. The patterns still match, so the launcher's choices do not change. `grep -e --enable-remote-extensions` says the same without the warning.
+* Found: 2026-11-11, the testing PC's WSL, milestone 77, task 77-10, rehearsing the Lenovo's Venus guest rows on Rach2's GNU root: `chromium --version` and both WebGPU requests printed the warning.
+* Reproduction: run `chromium --version` on a system whose grep is 3.8 or later.
+* Evidence: the launcher's lines 121 and 123, read from `build/x86_64/images/gnu-test.disk` with debugfs, and the rehearsal's `77-10/rehearsal/rach2/versions` and `guest.log`.
+* Rach2: nothing; the browser's judge does not read the launcher's stderr. Debian's own guest, with the same Chromium 156.0.8078.79, printed no warning in the same rehearsal; its launcher and grep were not compared with Rach2's, so which of the two differs is not known.
+* Status: unreported.
+* Next: read the Debian guest's `/usr/bin/chromium` and `grep --version` beside Rach2's; check the launcher in Debian's current chromium source package, `debian/scripts/chromium`, and report to Debian's bug tracker against chromium with the `-e` form as the patch.
+
+## Linux leaves a periodic POSIX timer stopped for good when its queued signal is discarded
+
+* Project: Linux 6.12.115, `kernel/time/posix-timers.c` and `kernel/signal.c`.
+* Fails: a periodic POSIX timer whose signal is queued when the signal is discarded never expires again until `timer_settime` sets it. `posix_timer_fn` returns `HRTIMER_NORESTART` once `posix_timer_queue_signal` has queued the signal (`kernel/time/posix-timers.c:281-305, 318-321`), leaving the timer to be restarted only by `posixtimer_rearm` when the signal is delivered (`kernel/time/posix-timers.c:258-279`, `kernel/signal.c:589-593`). Installing `SIG_IGN` or an ignoring default (`do_sigaction`, `kernel/signal.c:4249-4255`), or a stop signal for `SIGCONT` and `SIGCONT` for the stops (`prepare_signal`, `kernel/signal.c:915-931`), takes the sigqueue off its queue with `flush_sigqueue_mask` (`kernel/signal.c:782-798`), whose `__sigqueue_free` keeps a timer's preallocated sigqueue (`kernel/signal.c:444-447`); no delivery follows, so nothing restarts the hrtimer, and a handler installed later receives nothing from the timer. The comment in `posix_timer_fn` (`kernel/time/posix-timers.c:336-341`) names the wish to restart such a timer when `SIG_IGN` is removed. Whether a later Linux restarts it was not read.
+* Found: 2026-11-12, by reading Linux's code while fixing round 127's review finding 2 of task 77-10 (`build/flow/manager/review-127/codex.md`), on the testing PC's WSL, milestone 77.
+* Reproduction: not run. A program would block `SIGRTMIN`, start a timer of `SIGRTMIN` every 10 ms, wait 50 ms, install `SIG_IGN` and then a handler, unblock the signal and count the handler's calls over a second; reading the code above, Linux 6.12.115 gives 0.
+* Evidence: `rach2/sys/io/timerfd.c` (`ptimer_discard`), `rach2/sys/io/Readme.md`.
+* Rach2: differs. A discarded signal drops the timer's notification and its count, and the timer goes on expiring, so the next expiration posts its signal or, while ignored, drops it.
+* Status: unreported.
+* Next: run the reproduction on 6.12.115 and on Linux's main branch, and read the main branch's handling of ignored timer signals before a report.

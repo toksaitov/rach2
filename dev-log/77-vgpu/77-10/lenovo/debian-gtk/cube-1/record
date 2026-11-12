@@ -1,0 +1,51 @@
+runner vkcube
+system Debian GNU/Linux 13 (trixie)
+kernel Linux 6.12.115+deb13.1-amd64
+cpus 4
+memory_kib 6073652
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in /tmp/77-10/build/tmp/cache-cube-1, emptied at start: 1
+load start 0.57 0.13 0.04
+processes start 132
+kernel_before cpu  664 0 1338 4866 157 0 171 150 0 0
+kernel_before cpu0 129 0 362 1216 60 0 24 34 0 0
+kernel_before cpu1 244 0 316 1192 23 0 11 36 0 0
+kernel_before cpu2 100 0 312 1269 41 0 84 42 0 0
+kernel_before cpu3 190 0 347 1187 31 0 52 37 0 0
+kernel_before intr 69527 32 9 0 0 368 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 2810 0 3618 0 6 0 0 0 0 0 100 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_before ctxt 53101
+kernel_before btime 1794403148
+kernel_before processes 874
+kernel_before procs_running 1
+kernel_before procs_blocked 0
+kernel_before softirq 25787 0 1904 6 1770 3266 0 413 6531 0 11897
+env GRAPHICS_CLASS=performance
+env GRAPHICS_CPUS=4
+env GRAPHICS_MEMORY_KIB=6073652
+env LP_NUM_THREADS=4
+env MESA_SHADER_CACHE_DIR=/tmp/77-10/build/tmp/cache-cube-1
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
+case vkcube 346 frames in FIFO, held after 300 345, the first 300 timed
+icd /usr/share/vulkan/icd.d/venus_icd.x86_64.json
+vkcube 1.4.304.0+dfsg1-1
+compositor weston 14.0.2 drm gl kiosk
+renderer virgl (Mesa Intel(R) HD Graphics 4400 (HSW GT2))
+load end 0.81 0.21 0.07
+busy 18.6%
+kernel_after cpu  1410 0 1632 9847 265 0 221 223 0 0
+kernel_after cpu0 456 0 438 2331 73 0 40 52 0 0
+kernel_after cpu1 429 0 396 2460 36 0 16 56 0 0
+kernel_after cpu2 301 0 401 2438 122 0 90 57 0 0
+kernel_after cpu3 222 0 396 2616 33 0 75 57 0 0
+kernel_after intr 89478 32 9 0 0 368 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 2820 0 5131 0 8 0 0 0 0 0 1584 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_after ctxt 75036
+kernel_after btime 1794403148
+kernel_after processes 1195
+kernel_after procs_running 1
+kernel_after procs_blocked 0
+kernel_after softirq 36671 0 2957 6 1779 4614 0 413 10939 0 15963
+gpu Selected GPU 0: Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2)), type: IntegratedGpu
+timing vkhold: timed: 300 presents in 5.673 s

@@ -1,0 +1,2 @@
+'DISPLAY' environment variable not set... skipping surface info
+ERROR while creating surface for extension VK_KHR_wayland_surface : ./vulkaninfo/./vulkaninfo.h:247:vkGetPhysicalDeviceSurfacePresentModesKHR failed with ERROR_SURFACE_LOST_KHR

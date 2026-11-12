@@ -1,0 +1,13 @@
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+/data/build/77-10/images/kernel rach2.root=ext2
+{
+    "ICD": {
+        "api_version": "1.4.354",
+        "library_path": "/usr/lib/x86_64-linux-gnu/venus/libvulkan_virtio.so"
+    },
+    "file_format_version": "1.0.1"
+}af0035199d89d04a30d5ecf41096348843023fa580c04fa94dc03aa16b6ed635  /usr/lib/x86_64-linux-gnu/venus/libvulkan_virtio.so
+1b3c48a5ae03ebac4ab5de3ad0f19bf9ccef99e57de28aec2750495511e901ed  /usr/bin/vkcube
+weston 14.0.2 (Rach2 14.0.2-1+rach2.1: kiosk-active-tree, kiosk-fullscreen-centre, xwm-emulated-mode, xwm-mapped-managed, pointer-constraint-view)
+grep: warning: stray \ before -
+Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)

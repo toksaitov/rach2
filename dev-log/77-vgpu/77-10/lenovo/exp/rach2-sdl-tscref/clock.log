@@ -1,0 +1,6 @@
+<7>[0.004000] clock: ready
+<6>[9.100000] clock: reference: the tsc; a tick the timer misses or delays is counted
+<6>[9.115000] smp: cpu1: tsc: synchronized with cpu0
+<6>[9.129000] smp: cpu2: tsc: synchronized with cpu0
+<6>[9.145000] smp: cpu3: tsc: synchronized with cpu0
+<6>[9.179000] vdso: clock: the tsc, 1895666 counts a tick

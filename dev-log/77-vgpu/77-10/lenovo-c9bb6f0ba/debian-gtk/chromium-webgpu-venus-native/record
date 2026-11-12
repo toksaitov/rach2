@@ -1,0 +1,50 @@
+runner browser
+system Debian GNU/Linux 13 (trixie)
+kernel Linux 6.12.115+deb13.1-amd64
+cpus 4
+memory_kib 6073660
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in /tmp/77-10/build/tmp/cache-webgpu-venus-native, emptied at start: 1
+cache browser a new profile for each browser started
+size 1280x800
+load start 1.23 0.45 0.17
+processes start 136
+kernel_before cpu  5646 0 3289 36394 449 0 488 600 0 0
+kernel_before cpu0 1400 0 930 8963 145 0 150 141 0 0
+kernel_before cpu1 1127 0 779 9471 115 0 89 136 0 0
+kernel_before cpu2 2009 0 760 8544 131 0 110 148 0 0
+kernel_before cpu3 1108 0 819 9414 56 0 138 174 0 0
+kernel_before intr 246631 35 9 0 0 451 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 3255 0 8304 0 11 0 0 0 0 0 6491 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_before ctxt 306154
+kernel_before btime 1794453644
+kernel_before processes 2639
+kernel_before procs_running 1
+kernel_before procs_blocked 0
+kernel_before softirq 89799 0 8473 6 2756 7482 0 267 34796 0 36019
+env GRAPHICS_CLASS=performance
+env GRAPHICS_CPUS=4
+env GRAPHICS_MEMORY_KIB=6073660
+env LP_NUM_THREADS=4
+env MESA_SHADER_CACHE_DIR=/tmp/77-10/build/tmp/cache-webgpu-venus-native
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
+case chromium webgpu-venus-native
+icd /usr/share/vulkan/icd.d/venus_icd.x86_64.json
+browser_platform wayland
+compositor weston 14.0.2 headless pixman kiosk no-config
+load end 1.70 0.56 0.20
+busy 34.1%
+kernel_after cpu  6213 0 3533 38055 450 0 513 626 0 0
+kernel_after cpu0 1540 0 992 9379 145 0 156 150 0 0
+kernel_after cpu1 1265 0 847 9881 115 0 94 142 0 0
+kernel_after cpu2 2153 0 810 8966 131 0 121 155 0 0
+kernel_after cpu3 1254 0 882 9828 57 0 140 177 0 0
+kernel_after intr 259391 35 9 0 0 451 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 3517 0 8334 0 11 0 0 0 0 0 6602 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_after ctxt 330395
+kernel_after btime 1794453644
+kernel_after processes 2863
+kernel_after procs_running 1
+kernel_after procs_blocked 0
+kernel_after softirq 96564 0 9207 6 3165 7498 0 268 36827 0 39593

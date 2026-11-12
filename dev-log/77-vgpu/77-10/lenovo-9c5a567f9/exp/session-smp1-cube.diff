@@ -1,0 +1,13 @@
+70c70
+<     tag = args.system + "-" + args.display
+---
+>     tag = args.system + "-" + args.display + "-smp1-cube"
+100c100
+<                  "-accel", "kvm", "-cpu", "host", "-smp", "4", "-m", "6G",
+---
+>                  "-accel", "kvm", "-cpu", "host", "-smp", "1", "-m", "6G",
+166c166
+<                 remote = "cd /tmp/77-10 && " + privilege + "sh dev-log/77-vgpu/77-10/guest.sh "
+---
+>                 remote = "cd /tmp/77-10 && " + privilege + "sed -i s/=.gtk.]/=.nodeqp.]/ dev-log/77-vgpu/77-10/guest.sh && " + privilege + "sh dev-log/77-vgpu/77-10/guest.sh "
+parsed

@@ -1,0 +1,57 @@
+[2393:2428:1112/032236.690763:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[2393:2393:1112/032236.763686:WARNING:ui/ozone/platform/wayland/common/wayland_object.cc:120] Binding to wl_shm version 1 but version 2 is available.
+[2393:2393:1112/032236.763950:WARNING:ui/ozone/platform/wayland/host/wayland_connection.cc:287] No wl_seat object. The functionality may suffer.
+[2393:2393:1112/032236.957244:ERROR:content/browser/browser_main_loop.cc:287] Gdk: gdk_seat_get_keyboard: assertion 'GDK_IS_SEAT (seat)' failed
+[2393:2428:1112/032237.155160:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[2393:2428:1112/032237.155193:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[2442:2442:1112/032237.429108:ERROR:media/gpu/vaapi/vaapi_wrapper.cc:1796] vaInitialize failed: unknown libva error
+[2442:2442:1112/032237.434258:ERROR:ui/ozone/platform/wayland/gpu/wayland_surface_factory.cc:249] '--ozone-platform=wayland' is not compatible with Vulkan. Consider switching to '--ozone-platform=x11' or disabling Vulkan
+[2442:2442:1112/032237.505098:INFO:third_party/skia/src/gpu/vk/VulkanPreferredFeatures.cpp:434] WARNING: VulkanPreferredFeatures::addFeaturesToQuery() was not called
+
+[2442:2442:1112/032237.506164:INFO:third_party/skia/src/gpu/vk/VulkanPreferredFeatures.cpp:437] WARNING: VulkanPreferredFeatures::addFeaturesToEnable() was not called
+
+[2442:2442:1112/032237.514319:WARNING:sandbox/policy/linux/sandbox_linux.cc:405] InitializeSandbox() called with multiple threads in process gpu-process.
+[2393:2428:1112/032237.621000:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[2393:2428:1112/032237.783535:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+
+DevTools listening on ws://127.0.0.1:38633/devtools/browser/4fc95faa-0639-4584-bf84-fa6fc1c8ad54
+[2393:2393:1112/032237.909915:WARNING:ui/ozone/platform/wayland/host/wayland_surface.cc:170] Server doesn't support zcr_alpha_compositing_v1.
+[2393:2393:1112/032237.909965:WARNING:ui/ozone/platform/wayland/host/wayland_surface.cc:185] Server doesn't support overlay_prioritizer.
+[2393:2393:1112/032237.909976:WARNING:ui/ozone/platform/wayland/host/wayland_surface.cc:200] Server doesn't support wp_content_type_v1
+[2393:2393:1112/032237.909986:WARNING:ui/ozone/platform/wayland/host/wayland_surface.cc:214] Server doesn't support wp_color_management_surface_v1.
+[2393:2393:1112/032237.919668:WARNING:ui/ozone/platform/wayland/host/wayland_connection.cc:422] text-input-v3 not available.
+[2393:2393:1112/032238.057446:WARNING:ui/ozone/platform/wayland/host/wayland_connection.cc:422] text-input-v3 not available.
+[2393:2393:1112/032238.246957:WARNING:ui/ozone/platform/wayland/host/wayland_connection.cc:422] text-input-v3 not available.
+[2393:2393:1112/032238.262173:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[2393:2393:1112/032238.264313:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[2393:2428:1112/032238.265634:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[2393:2428:1112/032238.265802:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[2393:2393:1112/032238.294921:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[2393:2428:1112/032238.295104:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[2393:2393:1112/032238.311092:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[2393:2393:1112/032238.311122:WARNING:ui/ozone/platform/wayland/host/org_gnome_mutter_idle_monitor.cc:87] org.gnome.Mutter.IdleMonitor D-Bus service does not exist
+[2393:2393:1112/032238.406343:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[2393:2393:1112/032238.406391:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[2393:2428:1112/032238.407689:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[2393:2393:1112/032238.415399:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[2393:2393:1112/032238.458150:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.UPower was not provided by any .service files
+[2393:2393:1112/032238.458182:WARNING:dbus/property.cc:174] GetAll request failed for: org.freedesktop.UPower.Device
+[2393:2393:1112/032238.459252:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[2393:2428:1112/032238.459571:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[2393:2393:1112/032238.544766:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[2393:2428:1112/032238.545026:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[2393:2393:1112/032238.601537:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[2393:2393:1112/032238.601593:WARNING:ui/base/idle/idle_linux.cc:111] None of the known D-Bus ScreenSaver services could be used.
+[2492:9:1112/032238.670058:ERROR:gpu/ipc/client/command_buffer_proxy_impl.cc:277] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+Warning: EGL display does not support requested client API 'OpenGL' (supported: OpenGL_ES).
+ - While trying to discover a BackendType::OpenGL adapter.
+
+Warning: maxDynamicUniformBuffersPerPipelineLayout artificially reduced from 72 to 16 to fit dynamic offset allocation limit.
+Warning: maxDynamicStorageBuffersPerPipelineLayout artificially reduced from 32 to 16 to fit dynamic offset allocation limit.
+[2393:2393:1112/032242.932962:WARNING:content/common/zygote/zygote_communication_linux.cc:323] Error reading message from zygote: Connection reset by peer (104)
+[2393:2393:1112/032242.956734:ERROR:content/common/zygote/zygote_communication_linux.cc:313] Failed to send GetTerminationStatus message to zygote
+[2393:2393:1112/032242.956854:WARNING:content/common/zygote/zygote_communication_linux.cc:325] Socket closed prematurely.
+[2393:2393:1112/032242.971837:ERROR:content/common/zygote/zygote_communication_linux.cc:313] Failed to send GetTerminationStatus message to zygote
+[2393:2393:1112/032242.971868:WARNING:content/common/zygote/zygote_communication_linux.cc:325] Socket closed prematurely.
+[2393:2393:1112/032242.979125:ERROR:content/common/zygote/zygote_communication_linux.cc:313] Failed to send GetTerminationStatus message to zygote
+[2393:2393:1112/032242.979171:WARNING:content/common/zygote/zygote_communication_linux.cc:325] Socket closed prematurely.

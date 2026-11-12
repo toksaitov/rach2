@@ -1,0 +1,55 @@
+runner deqp
+system Debian GNU/Linux 13 (trixie)
+kernel Linux 6.12.115+deb13.1-amd64
+cpus 4
+memory_kib 6073660
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in /tmp/77-10/build/tmp/cache-sample, emptied at start: 1
+load start 0.59 0.19 0.07
+processes start 135
+kernel_before cpu  3077 0 2275 21919 281 0 316 387 0 0
+kernel_before cpu0 795 0 666 5347 95 0 80 89 0 0
+kernel_before cpu1 567 0 505 5795 58 0 44 89 0 0
+kernel_before cpu2 1198 0 512 5068 96 0 94 91 0 0
+kernel_before cpu3 515 0 590 5708 30 0 96 115 0 0
+kernel_before intr 134839 35 9 0 0 451 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 2957 0 5261 0 9 0 0 0 0 0 4783 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_before ctxt 130909
+kernel_before btime 1794453644
+kernel_before processes 2178
+kernel_before procs_running 1
+kernel_before procs_blocked 0
+kernel_before softirq 59705 0 5412 6 2276 4760 0 264 21093 0 25894
+env GRAPHICS_CLASS=conformance
+env GRAPHICS_CPUS=4
+env GRAPHICS_MEMORY_KIB=6073660
+env LP_NUM_THREADS=0
+env MESA_SHADER_CACHE_DIR=/tmp/77-10/build/tmp/cache-sample
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
+case deqp vk 1.4.1.1 every 500 from 1 of tests/graphics/deqp-vk-lavapipe.txt.gz, 4 processes
+list tests/graphics/deqp-vk-lavapipe.txt.gz 96037 cases sha256 408f2e055742af4968758b6c77340a8feb83eec68d89ebb3122371303103f411
+sample 193 cases sha256 66a281fa40ea9429e7ba18afb1dd2fd6f741620cf8b007fe43026556b12cb954
+program /opt/vk-gl-cts-1.4.1.1/vulkan/deqp-vk vulkan-cts-1.4.1.1
+options --deqp-watchdog=enable --deqp-log-images=disable --deqp-log-shader-sources=disable 
+env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/venus_icd.x86_64.json
+env LP_NUM_THREADS=0
+flakes tests/graphics/deqp-vk-lavapipe.flakes 1 patterns
+renderer deviceName Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2))
+renderer apiVersion 1.2.305
+renderer driverVersion 0x06801006
+load end 1.34 0.46 0.17
+busy 18.5%
+kernel_after cpu  5069 0 2916 34423 284 0 425 488 0 0
+kernel_after cpu0 1226 0 827 8510 95 0 145 116 0 0
+kernel_after cpu1 978 0 675 8988 58 0 81 111 0 0
+kernel_after cpu2 1899 0 677 7998 99 0 100 115 0 0
+kernel_after cpu3 965 0 736 8925 31 0 97 144 0 0
+kernel_after intr 226620 35 9 0 0 451 0 0 0 1 0 0 0 15 0 0 0 0 0 0 0 0 0 2986 0 5313 0 10 0 0 0 0 0 6372 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+kernel_after ctxt 275209
+kernel_after btime 1794453644
+kernel_after processes 2308
+kernel_after procs_running 1
+kernel_after procs_blocked 0
+kernel_after softirq 77373 0 7469 6 2305 4787 0 264 31687 0 30855

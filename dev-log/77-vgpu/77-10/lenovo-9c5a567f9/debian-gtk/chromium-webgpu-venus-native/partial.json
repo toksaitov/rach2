@@ -1,0 +1,26 @@
+{
+  "platform": "wayland",
+  "requests": {
+    "default": {
+      "adapter": {
+        "architecture": "swiftshader",
+        "description": "",
+        "device": "",
+        "fallback": true,
+        "vendor": "google"
+      },
+      "readback": null
+    },
+    "fallback": {
+      "adapter": {
+        "architecture": "swiftshader",
+        "description": "",
+        "device": "",
+        "fallback": true,
+        "vendor": "google"
+      },
+      "readback": null
+    }
+  },
+  "venus_passes": 0
+}

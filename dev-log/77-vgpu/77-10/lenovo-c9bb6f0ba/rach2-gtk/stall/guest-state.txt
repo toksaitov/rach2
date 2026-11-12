@@ -1,0 +1,143 @@
+Warning: Permanently added '[127.0.0.1]:22662' (ED25519) to the list of known hosts.
+       PID       PPID STAT     TIME COMMAND
+         3          0 Ss   00:00:02 kdrm
+         2          0 Ss   00:00:00 khungtaskd
+         1          0 Ss   00:00:03 /sbin/init
+         4          0 Ss   00:00:00 kacpid
+         5          0 Ss   00:00:00 kpsmoused
+         6          0 Ss   00:00:00 watchdogd
+         7          0 Ss   00:00:00 kinputd
+        10          1 S    00:00:00 update
+        11          1 S    00:00:00 acpid -d
+        12          1 S    00:00:00 syslogd -n -O /var/log/messages -s 200 -b 1
+        13          1 S    00:00:00 sshd: /usr/sbin/sshd -D -e -o PermitRootLogin=prohibit-pas
+        16          1 S    00:00:00 /usr/sbin/crond -n
+        17          1 S    00:00:00 ntpd -n
+        18          1 S    00:00:01 /bin/bash /usr/libexec/rach2-desktop
+        22         18 Ss   00:00:01 /usr/lib/systemd/systemd-udevd --resolve-names=early
+        45         18 Ss   00:00:00 seatd -g seat
+        67          0 Ss   00:00:07 virtio_gpu
+        69         13 Ss   00:00:00 sshd-session: root [postauth]
+        72         69 S    00:00:00 sshd-session: root@notty
+        73         72 Ss   00:00:00 sh dev-log/77-vgpu/77-10/guest.sh rach2 gtk
+       217          0 Ss   00:00:01 kdrmcon
+      1480         13 Ss   00:00:00 sshd-session: root [postauth]
+      1482       1480 S    00:00:00 sshd-session: root@notty
+      1483       1482 Ss   00:00:00 bash -c ps -o pid,ppid,stat,time,args 2>/dev/null || ps; echo ===; for p in /proc/[0-9]*; do echo "$p $(cat $p/stat 2>/dev/null | cut -d" " -f1-3) wchan=$(cat $p/wchan 2>/dev/null)"; done; echo ===; cat /proc/disk; echo ===; ls /sys/kernel/debug 2>/dev/null; ls /proc
+      1484       1483 R    00:00:00 ps -o pid,ppid,stat,time,args
+===
+/proc/1 1 (init) S wchan=do_sigtimedwait
+/proc/10 10 (update) S wchan=hrtimer_nanosleep
+/proc/11 11 (busybox) S wchan=do_sys_poll
+/proc/12 12 (busybox) S wchan=wq_wait_event
+/proc/1225 1225 (sh) S wchan=do_wait
+/proc/1270 1270 (weston) S wchan=ep_poll
+/proc/1275 1275 (python3) S wchan=futex_wait_queue
+/proc/13 13 (sshd) S wchan=do_sys_poll
+/proc/1480 1480 (sshd-session) S wchan=do_sys_poll
+/proc/1482 1482 (sshd-session) S wchan=do_sys_poll
+/proc/1483 1483 (bash) S wchan=pipe_read
+/proc/15 15 (dbus-daemon) S wchan=ep_poll
+/proc/16 16 (crond) S wchan=hrtimer_nanosleep
+/proc/17 17 (busybox) S wchan=do_sys_poll
+/proc/18 18 (rach2-desktop) S wchan=do_wait
+/proc/2 2 (khungtaskd) S wchan=wq_wait_event_idle
+/proc/217 217 (kdrmcon) S wchan=wq_wait_event_idle
+/proc/22 22 (systemd-udevd) S wchan=ep_poll
+/proc/3 3 (kdrm) S wchan=wq_wait_event_idle
+/proc/4 4 (kacpid) S wchan=wq_wait_event_idle
+/proc/45 45 (seatd) S wchan=do_sys_poll
+/proc/5 5 (kpsmoused) S wchan=wq_wait_event_idle
+/proc/6 6 (watchdogd) S wchan=wq_wait_event_idle
+/proc/67 67 (virtio_gpu) S wchan=wq_wait_event_idle
+/proc/69 69 (sshd-session) S wchan=do_sys_poll
+/proc/7 7 (kinputd) S wchan=wq_wait_event_idle
+/proc/72 72 (sshd-session) S wchan=do_sys_poll
+/proc/73 73 (sh) S wchan=do_wait
+/proc/9 9 (login) S wchan=wq_wait_event
+===
+state not-asked
+driver ahci
+policy read-write
+disk-commands 34045
+disk-flushes 755
+disk-polls 780
+disk-wait-ticks 37156
+disk-in-flight 0
+disk-overlaps 7959
+disk-drains 0
+disk-quarantines 0
+disk-releases 0
+disk-release-tick 0
+lag-completions 0
+cache-hits 1107453
+cache-fills 104924
+cache-waits 1147
+cache-visits 5086570
+cache-buffers 97792
+cache-limit 97792
+cache-buckets 131072
+disk 0 ahci 0 50335744 mbr QEMU HARDDISK
+identity 0 512 fixed mounted QM00001
+part 0 1 2048 50331648 mbr:83 
+===
+bkl
+dri
+sync
+test_lockup
+1
+10
+11
+12
+1225
+1270
+1275
+13
+1480
+1482
+1483
+15
+16
+17
+18
+2
+217
+22
+3
+4
+45
+5
+6
+67
+69
+7
+72
+73
+9
+acpi
+audio
+cmdline
+console
+cpuinfo
+disk
+diskstats
+filesystems
+fs
+interrupts
+loadavg
+locks
+loop
+meminfo
+mounts
+net
+partitions
+self
+slabinfo
+stat
+swaps
+sys
+sysvipc
+uptime
+usb
+version
+vmstat

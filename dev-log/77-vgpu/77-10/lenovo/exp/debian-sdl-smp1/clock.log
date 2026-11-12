@@ -1,0 +1,15 @@
+[    0.000000] kvm-clock: Using msrs 4b564d01 and 4b564d00
+[    0.000002] kvm-clock: using sched offset of 2400490615 cycles
+[    0.001554] clocksource: kvm-clock: mask: 0xffffffffffffffff max_cycles: 0x1cd42e4dffb, max_idle_ns: 881590591483 ns
+[    0.005031] tsc: Detected 1895.611 MHz processor
+[    0.155487] clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645519600211568 ns
+[    0.321956] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645041785100000 ns
+[    0.426038] clocksource: hpet: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604467 ns
+[    0.438226] clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x36a5f415104, max_idle_ns: 881590682539 ns
+[    1.002116] PTP clock support registered
+[    1.113078] clocksource: Switched to clocksource kvm-clock
+[    1.132491] clocksource: acpi_pm: mask: 0xffffff max_cycles: 0xffffff, max_idle_ns: 2085701024 ns
+[    1.227442] clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x36a5f415104, max_idle_ns: 881590682539 ns
+[    1.605625] rtc_cmos 00:04: setting system clock to 2026-11-11T13:40:18 UTC (1794404418)
+[    1.634386] sched_clock: Marking stable (1524111952, 107355270)->(1700719715, -69252493)
+[    1.848405] clk: Disabling unused clocks

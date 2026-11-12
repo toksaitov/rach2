@@ -1,0 +1,42 @@
+commit bb151e3baa6810fe8a513ac02a19ace4d881cb27
+milestone 12
+full waived
+root 1851d00c3a06ff637204b1c2bf6058129b2b797ee30a970ebf4fba53585c14a3
+bootctl: candidate: first sector 11848, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: first sector 2053, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: runs: 2053+4096 20040+4096
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: candidate
+bootctl: next_entry: empty (a trial was consumed)
+bootctl: booted: candidate
+sh: line 1: diskctl: command not found
+state not-asked
+driver ahci
+policy read-write
+disk-commands 64912
+disk-flushes 8372
+disk-polls 1470
+disk-wait-ticks 10019
+disk-in-flight 0
+disk-overlaps 519
+disk-drains 0
+disk-quarantines 0
+disk-releases 0
+disk-release-tick 0
+lag-completions 0
+cache-hits 100815
+cache-fills 17601
+cache-waits 58
+cache-visits 289824
+cache-buffers 17618
+cache-limit 259584
+cache-buckets 262144
+disk 0 ahci 0 488397168 gpt Samsung SSD 870 EVO 250GB
+identity 0 512 fixed mounted S6P2NX0T381638Z
+part 0 1 2048 131072 43424140-4544-4746-4849-4a4b4c4d4e4f Rach2 boot
+part 0 2 133120 131072 44434241-4645-4847-4849-4a4b4c4d4e4f Rach2 recovery
+part 0 3 266240 134217728 45444342-4746-4948-4849-4a4b4c4d4e4f Rach2 root
+part 0 4 34 2014 46454443-4847-4a49-4849-4a4b4c4d4e4f BIOS boot
+part 0 5 421287936 67108864 f640712e-b236-4c5a-b7d8-1b149d598ec0 Rach2 trial root
+part 0 6 134483968 286803968 62d5104e-990e-42db-9eba-36209f97fcd5 Rach2 data

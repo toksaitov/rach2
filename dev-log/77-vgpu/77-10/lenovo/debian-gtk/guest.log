@@ -1,0 +1,24 @@
+	deviceName         = Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2))
+	deviceName         = Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2))
+venus-lenovo: vkcube: debian gtk round 1
+vkcube: result: frames 300 0x45d19f75 345 0x0b5bf495; 300 presents in 5.673 s, 52.88 a second
+venus-lenovo: vkcube: debian gtk round 2
+vkcube: result: frames 300 0x45d19f75 345 0x0b5bf495; 300 presents in 5.579 s, 53.77 a second
+venus-lenovo: vkcube: debian gtk round 3
+vkcube: result: frames 300 0x45d19f75 345 0x0b5bf495; 300 presents in 5.445 s, 55.10 a second
+venus-lenovo: deqp: debian smoke
+deqp: running 9 of 9 cases of vk in 4 processes
+deqp: result: vk 1.4.1.1 cases 9 of 9 every 1 jobs 4 pass 9 fail 0 notsupported 0 warning 0 crash 0 timeout 0 other 0 missing 0 flake 0
+venus-lenovo: deqp: debian sample
+deqp: running 193 of 96037 cases of vk in 4 processes
+deqp: running 1 cases again
+deqp: result: vk 1.4.1.1 cases 193 of 96037 every 500 jobs 4 pass 27 fail 1 notsupported 165 warning 0 crash 0 timeout 0 other 0 missing 0 flake 0
+venus-lenovo: browser: debian webgpu-venus
+browser: action: chromium webgpu-venus
+browser: adapters: {"platform": "wayland", "requests": {"default": {"adapter": {"architecture": "swiftshader", "description": "", "device": "", "fallback": true, "vendor": "google"}, "readback": null}, "fallback": {"adapter": {"architecture": "swiftshader", "description": "", "device": "", "fallback": true, "vendor": "google"}, "readback": null}}, "venus_passes": 0}
+browser: result: chromium webgpu-venus pass
+venus-lenovo: browser: debian webgpu-venus-native
+browser: action: chromium webgpu-venus-native
+browser: adapters: {"platform": "wayland", "requests": {"default": {"adapter": {"architecture": "swiftshader", "description": "", "device": "", "fallback": true, "vendor": "google"}, "readback": null}, "fallback": {"adapter": {"architecture": "swiftshader", "description": "", "device": "", "fallback": true, "vendor": "google"}, "readback": null}}, "venus_passes": 0}
+browser: result: chromium webgpu-venus-native pass
+venus-lenovo: result: collected debian gtk
