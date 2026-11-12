@@ -317,8 +317,9 @@ a mounted file's final close releases its per-open handle, node, and
 mount reference.
 On ext2, that release drains the mount's pending write batch.
 A failed drain retains the pending inode state and error on the mount;
-close still releases the descriptor, and fsync after reopening reports
-the error.
+close still releases the descriptor, and the next fsync of a description
+opened after it reports the error when no sync has reported it yet
+.Pq Xr sync 2 .
 Closing a framebuffer descriptor restores text mode only when the caller
 owns the framebuffer and closes the last reference to that open file
 description, the references children inherited included.

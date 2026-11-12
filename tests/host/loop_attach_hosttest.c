@@ -166,6 +166,15 @@ void vfs_desc_open(struct vfs_mount *mnt)
     refs++;
 }
 
+/** Start a description's cursors into the write-back errors at none,
+ * which no row reports. */
+void vfs_wb_err_sample(struct vfs_mount *mnt, uint32_t *file, uint32_t *fs)
+{
+    (void)mnt;
+    *file = 0;
+    *fs = 0;
+}
+
 /** Close the published description. */
 void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
 {
@@ -196,10 +205,11 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
 
 /** Sync the backing file and return `sync_error`; with `map_in_sync` the
  * file is mapped shared during the sync, as another process could map it. */
-int vfs_fsync(struct vfs_mount *mnt, void *handle)
+int vfs_fsync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
 {
     (void)mnt;
     (void)handle;
+    (void)seen;
     if (map_in_sync) {
         mapped = 1;
     }

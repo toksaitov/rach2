@@ -311,9 +311,23 @@ int vfs_ns_held_by_caller(void)
     return 0;
 }
 
+/* The write-back errors recorded for the VFS's syncs to report, and the
+ * last of them (`vfs_wb_err_set`). */
+static int wb_err_sets, wb_err_last;
+
+/** Note a write-back error recorded for the descriptions' syncs, which the
+ * VFS reports and these rows read. */
+void vfs_wb_err_set(struct vfs_mount *m, int rc)
+{
+    (void)m;
+    wb_err_sets++;
+    wb_err_last = rc;
+}
+
 /**
  * Record a failed write on the mounted device as the VFS does: keep the
- * first error in `write_error` and make the mount read-only.
+ * first error in `write_error`, record this one for the syncs to report,
+ * and make the mount read-only.
  */
 void vfs_device_failed(block_device_t *d, uint64_t lba, int rc)
 {
@@ -322,6 +336,7 @@ void vfs_device_failed(block_device_t *d, uint64_t lba, int rc)
         if (!mnt.write_error) {
             mnt.write_error = rc;
         }
+        vfs_wb_err_set(&mnt, rc);
         mnt.flags |= VFS_MS_RDONLY;
     }
 }
@@ -3829,9 +3844,11 @@ static void cache_partial_row(void)
 }
 
 /**
- * A failed drain is reported by fsync, and by every later fsync, through
- * a retry that succeeds, a close and a reopen; the bytes the write took
- * are kept.
+ * A failed drain is reported by the fsync that met it and recorded for the
+ * VFS, which reports it once to each description (`vfs_fsync`); the type's
+ * own fsync answers for its own writes alone, so a retry that succeeds is
+ * 0, through a close and a reopen too, and the mount stays read-only; the
+ * bytes the write took are kept.
  */
 static void batch_error_row(void)
 {
@@ -3852,17 +3869,22 @@ static void batch_error_row(void)
           "a write is accepted before its delayed error");
     before = writes_made;
     stop_after = before;
+    wb_err_sets = wb_err_last = 0;
     check(OPS->fsync(&mnt, handle) == -EIO, "fsync reports a delayed device error");
+    check(wb_err_sets > 0 && wb_err_last == -EIO && mnt.write_error == -EIO &&
+              (mnt.flags & VFS_MS_RDONLY),
+          "and the error is recorded for the VFS and keeps the mount read-only");
     stop_after = -1;
-    check(OPS->fsync(&mnt, handle) == -EIO && writes_made > before,
-          "a successful retry preserves the earlier error");
+    check(OPS->fsync(&mnt, handle) == 0 && writes_made > before,
+          "a retry that succeeds answers for itself alone");
     OPS->release(&mnt, handle);
     OPS->put(&mnt, node);
     node = walk("/batch-error", &rc);
     handle = 0;
     check(node && OPS->open(&mnt, node, 0, &handle) == 0, "the failed file reopens for reading");
     if (node && handle) {
-        check(OPS->fsync(&mnt, handle) == -EIO, "a reopened fsync observes the delayed error");
+        check(OPS->fsync(&mnt, handle) == 0 && mnt.write_error == -EIO,
+              "a reopened fsync finds the retried writes on the medium");
         check(OPS->read(&mnt, handle, abuf, sizeof(bytes), 0) == sizeof(bytes) &&
                   memcmp(abuf, bytes, sizeof(bytes)) == 0,
               "the successful retry retained the accepted bytes");
@@ -3877,10 +3899,11 @@ static void batch_error_row(void)
 /**
  * Fail the flush numbered `barrier` of an fsync after two appends that
  * cross an indirect level, from block 1035, or with `large` from block
- * 524287, then retry. The error must stay reported through the retry, a
- * close and a reopen, and both blocks must read back. The barriers are
- * those of the allocation, the data, the pointers, the feature flag and the
- * inode.
+ * 524287, then retry. The fsync that met the failure reports it and
+ * records it for the VFS, the retry flushes again and answers for itself,
+ * as does an fsync after a close and a reopen, and both blocks must read
+ * back. The barriers are those of the allocation, the data, the pointers,
+ * the feature flag and the inode.
  */
 static void batch_flush_error_row(int barrier, int large)
 {
@@ -3907,12 +3930,15 @@ static void batch_flush_error_row(int barrier, int large)
           "two appends cross an indirect level before the failed flush");
     before = flush_calls;
     flush_fail_at = before + barrier;
+    wb_err_sets = wb_err_last = 0;
     check(OPS->fsync(&mnt, handle) == -EIO && flush_calls == flush_fail_at,
           "the selected stage flush fails fsync");
+    check(wb_err_sets > 0 && wb_err_last == -EIO && mnt.write_error == -EIO,
+          "and the flush error is recorded for the VFS");
     flush_fail_at = -1;
     before = flush_calls;
-    check(OPS->fsync(&mnt, handle) == -EIO && flush_calls > before,
-          "retry flushes the retained stage and preserves its error");
+    check(OPS->fsync(&mnt, handle) == 0 && flush_calls > before,
+          "retry flushes the retained stage and answers for itself");
     check(OPS->read(&mnt, handle, abuf, sizeof(bytes), first * 4096) == sizeof(bytes) &&
               memcmp(abuf, bytes, sizeof(bytes)) == 0,
           "a flush retry retains both appended blocks");
@@ -3922,7 +3948,8 @@ static void batch_flush_error_row(int barrier, int large)
     handle = 0;
     check(node && OPS->open(&mnt, node, 0, &handle) == 0, "the failed-flush file reopens");
     if (node && handle) {
-        check(OPS->fsync(&mnt, handle) == -EIO, "a reopened fsync retains the flush error");
+        check(OPS->fsync(&mnt, handle) == 0 && mnt.write_error == -EIO,
+              "a reopened fsync succeeds and the mount keeps its first error");
         OPS->release(&mnt, handle);
         OPS->put(&mnt, node);
     }

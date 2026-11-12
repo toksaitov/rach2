@@ -706,10 +706,11 @@ static int writeback_piece(struct ext2_mount *em, struct ext2_node *n, uint64_t 
 
 /**
  * Record a failure `rc` of the batch: the first one's errno kept for the
- * mount's life, the error bit set in memory, the mount made read-only, and
- * the mount's `write_error` set when it has none, which every later
- * `fsync` reports. The mount's flags and `write_error` are the VFS's,
- * which the big lock keeps, so it is taken for them. Returns `rc`.
+ * mount's life, the error bit set in memory, the mount made read-only, its
+ * `write_error` set when it has none, and the failure recorded for each
+ * description's next fsync and syncfs to report (`vfs_wb_err_set`). The
+ * mount's flags and `write_error` are the VFS's, which the big lock keeps,
+ * so it is taken for them. Returns `rc`.
  */
 int ext2_writeback_error(struct ext2_mount *em, int rc)
 {
@@ -730,6 +731,7 @@ int ext2_writeback_error(struct ext2_mount *em, int rc)
     if (!em->mnt->write_error) {
         em->mnt->write_error = rc;
     }
+    vfs_wb_err_set(em->mnt, rc);
     ext2_big_exit(big);
     return rc;
 }

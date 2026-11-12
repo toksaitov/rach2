@@ -1299,16 +1299,17 @@ static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_o
  * `data_only` for `fdatasync`. Any other file, a mount that is not
  * writable, and the sync of a whole mount (a NULL `handle`) write the
  * device's dirty buffers instead (`ext2_em_write_out`): a directory's entries
- * are not tagged as its own. A failure is recorded as the batch's error,
- * and the mount's first failure, of this call or any before, is what it
- * returns; 0 when there has been none. The call takes no node lock, as
+ * are not tagged as its own. A failure is recorded as the batch's error
+ * and returned; a failure of an earlier write-back, which the mount
+ * records, `vfs_fsync` reports once to each description. The call takes no
+ * node lock, as
  * Linux's takes none (`ext2_fsync` and `generic_buffers_fsync`,
  * fs/ext2/file.c:153-163 and fs/buffer.c:595-622 in 6.12.115): a write
  * that races it lands on either side, since a writer dirties a block before
  * it lists it, as Linux's `mark_buffer_dirty_inode` does. A caller without
  * the big lock has it taken here (`ext2_big_enter`) for the node table,
  * which the look at the neighbours in the node's table block walks
- * (`table_unsynced`), and for the mount's error; the waits let it go.
+ * (`table_unsynced`); the waits let it go.
  */
 static int file_sync(struct vfs_mount *mnt, void *handle, int data_only)
 {
@@ -1325,9 +1326,6 @@ static int file_sync(struct vfs_mount *mnt, void *handle, int data_only)
         rc = ext2_em_write_out(mnt);
     } else {
         rc = node_write_out(mnt, n, data_only);
-    }
-    if (mnt->write_error) {
-        rc = mnt->write_error;
     }
     ext2_big_exit(big);
     return rc;

@@ -1056,7 +1056,8 @@ out:
     return written;
 }
 
-static long sync_entry(fd_entry_t *e, int (*sync_op)(struct vfs_mount *mnt, void *handle));
+static long sync_entry(fd_entry_t *e,
+                       int (*sync_op)(struct vfs_mount *mnt, void *handle, uint32_t *seen));
 
 /**
  * The end of a write of `written` bytes, or of its -errno, through `entry`:
@@ -4017,6 +4018,7 @@ static int32_t open_fifo(struct vfs_ref *ref, int fd, uint64_t ino, int flags)
         return rc;
     }
     e->ofd->vmnt = mnt;
+    vfs_wb_err_sample(mnt, &e->ofd->wb_seen, &e->ofd->sb_seen);
     e->ofd->vnode = ref->node;
     e->ofd->ino = ino;
     vfs_desc_open(mnt);
@@ -4389,6 +4391,7 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
         return rc;
     }
     entry->ofd->vmnt = ref->mnt;
+    vfs_wb_err_sample(ref->mnt, &entry->ofd->wb_seen, &entry->ofd->sb_seen);
     entry->ofd->vnode = node;
     vfs_desc_open(ref->mnt);
     vfs_leave(ref->mnt);
@@ -5282,6 +5285,7 @@ static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry
         return rc;
     }
     e->ofd->vmnt = ref->mnt;
+    vfs_wb_err_sample(ref->mnt, &e->ofd->wb_seen, &e->ofd->sb_seen);
     e->ofd->vnode = ref->node;
     vfs_desc_open(ref->mnt);
     vfs_leave(ref->mnt);
@@ -6276,9 +6280,12 @@ long sys_close(isr_params_t *params)
  * mount through its type, with the pages shared mappings of the file hold
  * written back first, and anything else by writing back the whole cache.
  * The pages are written back under the big lock, taken when the caller
- * lacks it. Returns 0, -EIO, or the type's error.
+ * lacks it. Returns 0, -EIO, the type's error, or a write-back error of the
+ * file system recorded since the description's last sync looked, which
+ * `sync_op` reports once to each description (`vfs_fsync`).
  */
-static long sync_entry(fd_entry_t *e, int (*sync_op)(struct vfs_mount *mnt, void *handle))
+static long sync_entry(fd_entry_t *e,
+                       int (*sync_op)(struct vfs_mount *mnt, void *handle, uint32_t *seen))
 {
     if (e->ofd && e->ofd->vmnt) {
         int32_t mapped = 0, rc;
@@ -6289,7 +6296,7 @@ static long sync_entry(fd_entry_t *e, int (*sync_op)(struct vfs_mount *mnt, void
             mapped = filemap_sync_file(e->ofd);
             big_give(big);
         }
-        rc = sync_op(e->ofd->vmnt, e->ofd->fhandle);
+        rc = sync_op(e->ofd->vmnt, e->ofd->fhandle, &e->ofd->wb_seen);
 
         return mapped != 0 ? -EIO : rc;
     }
@@ -6316,7 +6323,8 @@ static long sync_entry(fd_entry_t *e, int (*sync_op)(struct vfs_mount *mnt, void
  * file's, as Linux's ext2_fsync takes no inode lock (fs/ext2/file.c:153-163
  * in 6.12), and takes the big lock where it still needs it.
  */
-static long sync_fd(isr_params_t *params, int (*sync_op)(struct vfs_mount *mnt, void *handle))
+static long sync_fd(isr_params_t *params,
+                    int (*sync_op)(struct vfs_mount *mnt, void *handle, uint32_t *seen))
 {
     fd_entry_t *e;
     long rc;
@@ -6384,9 +6392,13 @@ long sys_sync(isr_params_t *params)
  * Flush the file system a descriptor is on (syncfs).
  *
  * Its argument is fd. The kernel keeps no list of a mount's own dirty buffers,
- * so this writes back everything, as sync(2) does, and like it returns 0; GNU
- * `sync -f` and BusyBox's `sync -f` call it. -EBADF for a descriptor that is
- * not open or was opened with O_PATH, as on Linux.
+ * so this writes back everything, as sync(2) does; GNU `sync -f` and
+ * BusyBox's `sync -f` call it. A descriptor of a file of a mount then
+ * answers a write-back error its file system recorded since the
+ * description's last syncfs looked, once, as Linux's syncfs reports the
+ * superblock's `s_wb_err` (fs/sync.c:166, `vfs_syncfs_error`); any other
+ * answers 0. -EBADF for a descriptor that is not open or was opened with
+ * O_PATH, as on Linux.
  */
 long sys_syncfs(isr_params_t *params)
 {
@@ -6399,7 +6411,8 @@ long sys_syncfs(isr_params_t *params)
     if (!e || (e->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
-    return sys_sync(params);
+    (void)sys_sync(params);
+    return e->ofd && e->ofd->vmnt ? vfs_syncfs_error(e->ofd->vmnt, &e->ofd->sb_seen) : 0;
 }
 
 /* The advice of posix_fadvise(2), as x86 numbers it. */
@@ -13505,6 +13518,7 @@ static int32_t truncate_path(const char *path, long long length, int dir)
         return rc;
     }
     desc->vmnt = ref.mnt;
+    vfs_wb_err_sample(ref.mnt, &desc->wb_seen, &desc->sb_seen);
     desc->vnode = ref.node;
     vfs_desc_open(ref.mnt);
     vfs_leave(ref.mnt);
@@ -16393,6 +16407,7 @@ static long memfd_open(struct vfs_mount *mnt, void *node, int cloexec)
     e->node = NULL;
     e->flags = FD_FLAG_READ | FD_FLAG_WRITE | (cloexec ? FD_FLAG_CLOEXEC : 0u);
     e->ofd->vmnt = mnt;
+    vfs_wb_err_sample(mnt, &e->ofd->wb_seen, &e->ofd->sb_seen);
     e->ofd->vnode = node;
     e->ofd->ino = vfs_getattr(mnt, node, &st) == 0 ? st.ino : 0;
     vfs_desc_open(mnt);

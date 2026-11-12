@@ -189,6 +189,13 @@ struct open_file {
      * all three through `vfs_desc_close`, so the file system sees one release
      * for each open. `vmnt` is NULL for every other kind of description. */
     struct vfs_mount *vmnt;
+    /* With `vmnt`, the description's cursors into the write-back errors of
+     * its file system, which fsync and fdatasync report from (`wb_seen`)
+     * and syncfs from (`sb_seen`), Linux's `f_wb_err` and `f_sb_err`:
+     * sampled at the open (`vfs_wb_err_sample`) and moved only under the
+     * lock of the errors (vfs.c). */
+    uint32_t wb_seen;
+    uint32_t sb_seen;
     /* The held mount of a synthetic node opened by path, for NO_XDEV when
      * /proc/PID/fd follows this description; NULL on anonymous objects. */
     struct vfs_mount *synth_mnt;

@@ -550,6 +550,15 @@ void vfs_desc_open(struct vfs_mount *mnt)
     (void)mnt;
 }
 
+/** Start a description's cursors into the write-back errors at none,
+ * which no row reports. */
+void vfs_wb_err_sample(struct vfs_mount *mnt, uint32_t *file, uint32_t *fs)
+{
+    (void)mnt;
+    *file = 0;
+    *fs = 0;
+}
+
 /** The model type counts no calls in progress. */
 void vfs_leave(struct vfs_mount *mnt)
 {
@@ -1538,18 +1547,20 @@ int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino)
 }
 
 /** The sync of an O_SYNC or O_DSYNC write, which no row opens: 0. */
-int vfs_fsync(struct vfs_mount *mnt, void *handle)
+int vfs_fsync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
 {
     (void)mnt;
     (void)handle;
+    (void)seen;
     return 0;
 }
 
 /** As `vfs_fsync`. */
-int vfs_fdatasync(struct vfs_mount *mnt, void *handle)
+int vfs_fdatasync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
 {
     (void)mnt;
     (void)handle;
+    (void)seen;
     return 0;
 }
 

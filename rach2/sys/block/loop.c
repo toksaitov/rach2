@@ -67,6 +67,10 @@ struct loop_device {
     const struct vfs_mount *base;
     void *node;
     void *handle;
+    /* The attachment's cursor into the write-back errors of the file
+     * system the file is on, which the flush reports from (`vfs_fsync`),
+     * as Linux's loop syncs through its own open of the file. */
+    uint32_t wb_seen;
     int writable;
     int in_flight; /* transfers inside the file system the file is on */
     /* The writes of the file and its syncs by the flush, which /proc/loop
@@ -348,7 +352,7 @@ static int loop_flush(block_device_t *device, struct block_request *request)
         return -EIO;
     }
     big = loop_fs_enter(f.mnt, 0);
-    rc = vfs_fsync(f.mnt, f.handle);
+    rc = vfs_fsync(f.mnt, f.handle, &loop->wb_seen);
     loop_fs_exit(big);
     loop_end(loop, &f, 0, rc == 0);
     return rc == 0 ? 0 : -EIO;
@@ -632,12 +636,13 @@ static int loop_resolve(const char *path, struct vfs_ref *ref)
 }
 
 /**
- * Sync the file just opened as `handle`, then check again, under the mount's
- * namespace lock, that its length is whole sectors and that it is not open
- * elsewhere, attached, or mapped shared: on disk at all, and in memory
- * (tmpfs) through a descriptor open for writing, whose stores reach the
- * file's own pages. 0, or `-EINVAL` or `-EBUSY`, or what the sync or the
- * attribute read answered.
+ * Sync the file just opened as `handle`, through the attachment's cursor
+ * `seen` into its file system's write-back errors, then check again, under
+ * the mount's namespace lock, that its length is whole sectors and that it
+ * is not open elsewhere, attached, or mapped shared: on disk at all, and in
+ * memory (tmpfs) through a descriptor open for writing, whose stores reach
+ * the file's own pages. 0, or `-EINVAL` or `-EBUSY`, or what the sync or
+ * the attribute read answered.
  *
  * Resolution and open run under the same lock, which the caller keeps
  * through publication on success, so no writer can relocate the node between
@@ -645,9 +650,9 @@ static int loop_resolve(const char *path, struct vfs_ref *ref)
  * since mmap does not take the lock: nothing between this check and the
  * publication sleeps.
  */
-static int loop_prepare(struct vfs_ref *ref, void *handle, struct vfs_stat *st)
+static int loop_prepare(struct vfs_ref *ref, void *handle, struct vfs_stat *st, uint32_t *seen)
 {
-    int rc = vfs_fsync(ref->mnt, handle);
+    int rc = vfs_fsync(ref->mnt, handle, seen);
 
     if (rc == 0) {
         rc = vfs_getattr(ref->mnt, ref->node, st);
@@ -711,6 +716,7 @@ int loop_attach(int index, const char *path, int writable)
     struct vfs_stat st;
     struct loop_device *loop = 0;
     void *handle = 0;
+    uint32_t seen, seen_fs; /* the attachment's cursors; syncfs's is unused */
     int i;
     int rc;
 
@@ -791,7 +797,8 @@ int loop_attach(int index, const char *path, int writable)
         loop_unclaim(loop);
         return rc;
     }
-    rc = loop_prepare(&ref, handle, &st);
+    vfs_wb_err_sample(ref.mnt, &seen, &seen_fs);
+    rc = loop_prepare(&ref, handle, &st, &seen);
     if (rc != 0) {
         vfs_release(ref.mnt, handle);
         vfs_node_unlock(&ref);
@@ -805,6 +812,7 @@ int loop_attach(int index, const char *path, int writable)
     loop->index = index;
     loop->mnt = ref.mnt;
     loop->handle = handle;
+    loop->wb_seen = seen;
     loop->writable = writable ? 1 : 0;
     loop->ino = (uint32_t)st.ino;
     k_strncpy(loop->path, path, sizeof(loop->path));

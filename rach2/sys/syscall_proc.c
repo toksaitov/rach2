@@ -1413,6 +1413,7 @@ static int32_t exec_map(struct exec_file *f, const struct vfs_ref *ref, const st
     }
     vfs_ref_hold(ref);
     ofd->vmnt = ref->mnt;
+    vfs_wb_err_sample(ref->mnt, &ofd->wb_seen, &ofd->sb_seen);
     ofd->vnode = ref->node;
     ofd->ino = root ? krffs_node_ino(node) : vst->ino;
     vfs_desc_open(ref->mnt);

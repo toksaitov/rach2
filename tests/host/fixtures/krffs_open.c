@@ -913,6 +913,15 @@ static int32_t may_create_in_sticky(const struct vfs_ref *ref, const struct vfs_
     return 0;
 }
 
+/** Start a description's cursors into the write-back errors at none; no
+ * row syncs. */
+void vfs_wb_err_sample(struct vfs_mount *mnt, uint32_t *file, uint32_t *fs)
+{
+    (void)mnt;
+    *file = 0;
+    *fs = 0;
+}
+
 /** Reject recording a synthetic directory; every row uses mounted KRFFS. */
 static void synth_dir_record(int fd, int permanent, const char *name)
 {

@@ -622,7 +622,8 @@ static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, int flus
             rc = dshare_write_back(ds, &backing, first, end);
         }
         if (rc == 0 && flush) {
-            rc = vfs_fsync(backing.entry.ofd->vmnt, backing.entry.ofd->fhandle);
+            rc = vfs_fsync(backing.entry.ofd->vmnt, backing.entry.ofd->fhandle,
+                           &backing.entry.ofd->wb_seen);
         }
         if (rc != 0) {
             dshare_failed(ds, &backing, rc);
