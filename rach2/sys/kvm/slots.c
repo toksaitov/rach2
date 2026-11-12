@@ -278,6 +278,7 @@ int kvm_slots_init(struct kvm_vm *vm)
 {
     struct slots *t = kzalloc(sizeof(struct slots));
 
+    mutex_init(&vm->srcu_gp_lock, "kvm_srcu_gp");
     if (!t) {
         return -ENOMEM;
     }
@@ -335,14 +336,19 @@ static int drained(void *arg)
 /**
  * A section that may have loaded what the caller replaced has its join
  * seen by both waits, whichever count it joined; new readers join the
- * other count during each wait, so neither waits for them. Two
- * replacements may wait at once, each letting the big lock go, and each
- * waits for both counts by number, whatever `srcu_gen` the other left.
+ * other count during each wait, so neither waits for them. A wait lets the
+ * big lock go, so a second replacement may come meanwhile; `srcu_gp_lock`
+ * keeps it from changing `srcu_gen` under the first, which could leave one
+ * of them waiting for the count new readers join, and readers that keep
+ * overlapping would keep it waiting for ever. Linux orders its scans and
+ * changes of generation the same way, under srcu_gp_mutex
+ * (kernel/rcu/srcutree.c:1658).
  */
 void kvm_srcu_synchronize(struct kvm_vm *vm)
 {
     struct drain d;
 
+    mutex_lock(&vm->srcu_gp_lock);
     d.vm = vm;
     d.idx = vm->srcu_gen & 1u;
     (void)readers_add(&vm->srcu_waiting, 1u);
@@ -352,6 +358,7 @@ void kvm_srcu_synchronize(struct kvm_vm *vm)
     d.idx ^= 1u;
     (void)wq_wait_event_nointr(&vm->srcu_wq, drained, &d);
     (void)readers_add(&vm->srcu_waiting, 0xFFFFFFFFu);
+    mutex_unlock(&vm->srcu_gp_lock);
 }
 
 /** Free `s`, off the notice. */
