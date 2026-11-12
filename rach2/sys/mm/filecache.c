@@ -510,9 +510,9 @@ int filecache_read_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, void 
     return pages && fc_file_of(mnt, node, &f) && fc_read(&f, pgoff, 0, buf);
 }
 
-/** Read `left` bytes at `at` of the file open as `ofd` straight into the
- * user buffer `dst`, under the big lock, since the file system then writes
- * the user's buffer itself; the type's answer. */
+/** Read `left` bytes at `at` of the file open as `ofd`, which stay inside
+ * one page, straight into the user buffer `dst`, under the big lock, since
+ * the file system then writes the user's buffer itself; the type's answer. */
 static int32_t fc_read_direct(struct open_file *ofd, uint64_t at, char __user *dst, uint32_t left)
 {
     int big = !bkl_held();
@@ -534,7 +534,7 @@ static int32_t fc_read_direct(struct open_file *ofd, uint64_t at, char __user *d
  * so that a drop meanwhile does not free it, or into a new frame read from
  * the file, which then joins the cache when it holds a whole page or the
  * last part of the file. With no frame to be had the file system reads the
- * whole `left` into `dst` itself (`fc_read_direct`). The bytes read, which
+ * page's part into `dst` itself (`fc_read_direct`). The bytes read, which
  * stop short of the page's end or of `left` only at the end of the file;
  * -EFAULT; or the file system's error.
  */
@@ -566,7 +566,7 @@ static int32_t fc_read_page(struct open_file *ofd, const struct fc_file *f, uint
         } else if (phys) {
             free_frame(phys);
         }
-        return fc_read_direct(ofd, at, dst, left);
+        return fc_read_direct(ofd, at, dst, take);
     }
     if (p) {
         epoch = *fc_changes(f->mnt, f->ino);
@@ -598,7 +598,7 @@ static int32_t fc_read_page(struct open_file *ofd, const struct fc_file *f, uint
 }
 
 int filecache_file_read(struct open_file *ofd, char __user *buf, uint32_t count, uint64_t offset,
-                        int32_t *got)
+                        int32_t *got, int (*cut)(const struct open_file *ofd))
 {
     struct fc_file f;
     uint32_t done = 0;
@@ -621,6 +621,9 @@ int filecache_file_read(struct open_file *ofd, char __user *buf, uint32_t count,
         uint32_t in = (uint32_t)((offset + done) % PAGE_SIZE);
         uint32_t want = PAGE_SIZE - in < count - done ? PAGE_SIZE - in : count - done;
 
+        if (done > 0 && cut && cut(ofd)) {
+            break;
+        }
         n = fc_read_page(ofd, &f, offset + done, buf + done, count - done);
         if (n <= 0) {
             break;

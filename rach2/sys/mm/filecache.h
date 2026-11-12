@@ -40,11 +40,13 @@ uint32_t filecache_epoch(struct vfs_mount *mnt, void *node);
  * a whole page or the file's last part. Returns 0, with nothing done, for a
  * file the cache does not keep, which the caller reads itself; 1 with `*got`
  * the bytes read, 0 at or past the end of the file, -EFAULT for a
- * buffer that takes no byte, or the file system's error. The caller holds
- * the description's lock, and may sleep.
+ * buffer that takes no byte, or the file system's error. Before each page
+ * after the first a nonzero `cut(ofd)`, when `cut` is not NULL, ends the
+ * read with the pages before it, since the caller must read that page some
+ * other way. The caller holds the description's lock, and may sleep.
  */
 int filecache_file_read(struct open_file *ofd, char __user *buf, uint32_t count, uint64_t offset,
-                        int32_t *got);
+                        int32_t *got, int (*cut)(const struct open_file *ofd));
 
 /** Keep a copy of the frame `phys`, page `pgoff` of the file `e` is open on
  * as it was just read, unless a change of the file has been recorded since
