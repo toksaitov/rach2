@@ -6,7 +6,9 @@
 # is to fail as it does; or `excluded`, not run, for one of the reasons the
 # stack's approved plan allows. A test whose result is the processor's has
 # FLAG?A:B there: A on a processor whose `flags` in /proc/cpuinfo have FLAG
-# and B on one without it. LINUX is the result of Linux 6.18.58, WSL's,
+# and B on one without it. A|B takes either, for a test the clock decides,
+# and fail~SUBTEST a failure of the subtest SUBTEST alone, its message with
+# `_` for each space, as corpus.sh reads it in the test's log. LINUX is the result of Linux 6.18.58, WSL's,
 # with QEMU 10.2.1 and kernel-irqchip=split, as ref/linux-unit-tests.txt has
 # it: a row Linux failed there expects a pass unless its EXPECT is `fail`, and
 # names Linux's failure after `Linux:`. Inside a machine of KVM, as the KVM
@@ -103,6 +105,6 @@ vmx_pf_vpid_test excluded skip nested virtualization, excluded by the owner's de
 vmx_posted_intr_test excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 vmx_sipi_signal_test excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 vmx_vmcs_shadow_test excluded skip nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
-x2apic outer_kvm?fail:pass|fail timeout Linux: timeout; duration=30; inside a machine of KVM nmi-after-sti fails, as under Linux 6.12 as the host there; elsewhere the clock decides TMCCT should not be reset to TMICT value, which reads the periodic count twice with a report line between and passes only when the line takes less than the count left or more than that and half a period: under the testing PC's TCG, with a period of 10.07 ms, the line took 11.3 ms on the milestone's head and passed, and 9.0 ms once exits were cheaper and failed
+x2apic outer_kvm?fail:pass|fail~TMCCT_should_not_be_reset_to_TMICT_value timeout Linux: timeout; duration=30; inside a machine of KVM nmi-after-sti fails, as under Linux 6.12 as the host there; elsewhere the clock decides TMCCT should not be reset to TMICT value, the only subtest that may fail there, which reads the periodic count twice with a report line between and passes only when the line takes less than the count left or more than that and half a period: under the testing PC's TCG, with a period of 10.07 ms, the line took 11.3 ms on the milestone's head and passed, and 9.0 ms once exits were cheaper and failed
 xapic outer_kvm?excluded:pass timeout Linux: timeout; duration=60; not run inside a machine of KVM, where Linux 6.12 as the host did not finish it in 900 s, after nmi-after-sti (dev-log/81-kvm/81-25.md)
 xsave pass pass
