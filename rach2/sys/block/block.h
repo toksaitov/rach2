@@ -367,7 +367,14 @@ struct block_request {
     block_frames_fn done_fn;
     void *done_arg;
     uint32_t done_index;
-    int done_ended; /* the tick has ended it for its quarantine */
+    /* The read's first sector as `owner`, the device that answers, numbers
+     * it (`block_submitter_lba`), which `block_settle` compares: `lba` is
+     * the caller's view's until a partition's submit adds its offset. */
+    uint64_t done_lba;
+    /* Who calls `done_fn` (request.c's REQ_END_*): the answer, unless the
+     * tick claimed the call in the hold of the pool's lock that quarantined
+     * the read, which leaves it to the tick whenever the answer comes. */
+    int done_ended;
 };
 
 /* A write a `BLOCK_WRITE_THROUGH` disk answers without flushing its cache,
@@ -561,6 +568,14 @@ void block_request_init(void);
  * stick's share of the limit and its stall.
  */
 block_device_t *block_submitter(block_device_t *dev);
+
+/**
+ * Sector `lba` of `dev` as `block_submitter(dev)` numbers it: `lba` plus the
+ * offset of each partition view followed down to it, which is what a
+ * partition's submit makes of a request's `lba`. Two ranges named through
+ * different views of one device are compared so.
+ */
+uint64_t block_submitter_lba(block_device_t *dev, uint64_t lba);
 
 /**
  * The lag test device: `rach2.blocklag=N` wraps disk 0 for the partition

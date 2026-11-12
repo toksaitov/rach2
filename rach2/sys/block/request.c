@@ -111,6 +111,13 @@ static uint32_t pool_size; /* the limit: REQ_LIMIT, or rach2.blockpool=N */
 /* The flag of `req_take`'s `how` for a caller that does not wait for its
  * answer. */
 #define REQ_TAKE_QUIET 2
+
+/* A read started without a waiter (`done_ended`): its completion is the
+ * answer's to call; the tick has claimed it, quarantining the read; the
+ * tick has called it. */
+#define REQ_END_NONE    0
+#define REQ_END_CLAIMED 1
+#define REQ_END_CALLED  2
 static uint32_t device_cap; /* the most requests one device may hold */
 
 /* Buffers of REQ_KEEP_PAGES heap pages that freed requests left, kept
@@ -881,18 +888,19 @@ int block_read_frames(block_device_t *device, uint64_t lba, uint32_t count, cons
 
 /**
  * `req_lock` not held. End the read `r` started without a waiter, answered
- * or quarantined: count it as `block_read_frames` counts a read, call its
- * completion for its frames, and let go of it for its caller, so that its
- * frames stay the request's until the completion has run. A quarantined one
- * ends with `-EIO` and stays the device's until the late answer.
+ * or, when `quarantined`, quarantined: count it as `block_read_frames`
+ * counts a read, call its completion for its frames, and let go of it for
+ * its caller, so that its frames stay the request's until the completion
+ * has run. A quarantined one ends with `-EIO`, even when its late answer
+ * has come since the tick claimed it, and stays the device's until then.
  */
-static void req_end_async(struct block_request *r)
+static void req_end_async(struct block_request *r, int quarantined)
 {
     block_device_t *disk = block_physical(r->device);
     uint32_t flags = pool_lock(), us = timer_now_us() - r->taken_us;
-    int status = r->state == BLOCK_REQ_QUARANTINED ? -EIO : r->status;
+    int status = quarantined ? -EIO : r->status;
 
-    if (r->state == BLOCK_REQ_QUARANTINED) {
+    if (quarantined) {
         release_total++;
         release_tick = req_ticks;
     }
@@ -936,6 +944,7 @@ static int frames_async_one(block_device_t *device, uint64_t lba, uint32_t count
     r->done_fn = done->fn;
     r->done_arg = done->arg;
     r->done_index = done->index + index;
+    r->done_lba = block_submitter_lba(device, lba);
     pool_unlock(flags);
     count_in_flight(device, block_physical(device), 1);
     if (device->submit(device, r) != 0) {
@@ -989,14 +998,18 @@ int block_read_frames_async(block_device_t *device, uint64_t lba, uint32_t count
     return (int)started;
 }
 
-/* The sectors `block_settle` waits for the reads of. */
+/* The sectors `block_settle` waits for the reads of, as the device that
+ * answers for them numbers them (`block_submitter_lba`). */
 struct settle_span {
-    block_device_t *device;
+    block_device_t *owner;
     uint64_t lba, count;
 };
 
 /** Whether no read started without a waiter on the device of `arg`, a
- * `struct settle_span`, is in flight over its sectors. */
+ * `struct settle_span`, is in flight over its sectors. Both ranges are in
+ * the answering device's numbers, whichever views named them: a request's
+ * `lba` changes to the disk's in a partition's submit, so its `done_lba`,
+ * fixed before the submit, is compared. */
 static int settle_clear(void *arg)
 {
     const struct settle_span *s = arg;
@@ -1005,8 +1018,8 @@ static int settle_clear(void *arg)
     int clear = 1;
 
     for (r = reqs; r && clear; r = r->next) {
-        clear = !(r->done_fn && r->state == BLOCK_REQ_IN_FLIGHT && r->device == s->device &&
-                  r->lba < s->lba + s->count && s->lba < r->lba + r->count);
+        clear = !(r->done_fn && r->state == BLOCK_REQ_IN_FLIGHT && r->owner == s->owner &&
+                  r->done_lba < s->lba + s->count && s->lba < r->done_lba + r->count);
     }
     pool_unlock(flags);
     return clear;
@@ -1016,8 +1029,8 @@ void block_settle(block_device_t *device, uint64_t lba, uint64_t count)
 {
     struct settle_span s;
 
-    s.device = device;
-    s.lba = lba;
+    s.owner = block_submitter(device);
+    s.lba = block_submitter_lba(device, lba);
     s.count = count;
     while (!settle_clear(&s)) {
         wq_wait_event_nointr(&pool_wq, settle_clear, &s);
@@ -1256,7 +1269,10 @@ int block_request_ended(struct block_request *r, uint32_t generation, void *buff
  * clears its device's stall. A completion that finds another request in
  * flight is counted for `disk-overlaps`, which a test reads to show that one
  * device's queue did not wait on another's. An answer wakes its own caller
- * alone (`req_wake_caller`), and the waiters for room in the pool.
+ * alone (`req_wake_caller`), and the waiters for room in the pool. The late
+ * answer to a read started without a waiter calls no completion: the tick
+ * claimed that call when it quarantined the read, and the caller's hold,
+ * which the call lets go, keeps the request until then.
  */
 void block_request_complete(struct block_request *request, uint32_t generation, int status)
 {
@@ -1311,7 +1327,7 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
     pool_unlock(flags);
     sched_kick_cpus(cpus);
     if (async) {
-        req_end_async(request); /* the caller's hold keeps it */
+        req_end_async(request, 0); /* the caller's hold keeps it */
     }
     if (overdue) {
         klog(KLOG_INFO, "block", "late answer: taken after %d deadlines", (int)overdue);
@@ -1434,6 +1450,9 @@ void block_request_tick(void)
             continue;
         }
         r->state = BLOCK_REQ_QUARANTINED;
+        if (r->done_fn) {
+            r->done_ended = REQ_END_CLAIMED; /* a late answer may come at once */
+        }
         req_wake_caller(r, &cpus);
         quarantined_count++;
         quarantine_total++;
@@ -1457,8 +1476,8 @@ void block_request_tick(void)
     for (;;) {
         flags = pool_lock();
         for (r = reqs; r; r = r->next) {
-            if (r->state == BLOCK_REQ_QUARANTINED && r->done_fn && !r->done_ended) {
-                r->done_ended = 1;
+            if (r->done_ended == REQ_END_CLAIMED) {
+                r->done_ended = REQ_END_CALLED;
                 break;
             }
         }
@@ -1466,7 +1485,7 @@ void block_request_tick(void)
         if (!r) {
             break;
         }
-        req_end_async(r);
+        req_end_async(r, 1);
     }
     wq_wake_all(&pool_wq);
 }
