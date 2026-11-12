@@ -197,7 +197,8 @@ static void corpus_run(struct kvm_case *s, const char *command, struct net_run *
 /**
  * Build the runner's shell command in `command`, which holds `cap` bytes.
  * The fuzz fixture grants nobody access and restores the mode on exit,
- * since udev may restrict the node after the kernel creates it.
+ * since udev may restrict the node after the kernel creates it. corpus.sh is
+ * told the accelerator of the machine it runs in (KVM_CORPUS_OUTER).
  */
 static void runner_command(struct kvm_case *s, char *command, size_t cap)
 {
@@ -225,8 +226,8 @@ static void runner_command(struct kvm_case *s, char *command, size_t cap)
                  s->rach2 ? "guests/rach2/ram.krffs" : "guests/debian/initrd",
                  s->rach2 ? " -l rach2.tscreliable" : "", s->rach2 ? "KVMRACH2 OK" : "KVMGUEST OK");
     else
-        snprintf(command, cap, "cd " KVM_DIR " && sh corpus.sh %s %s",
-                 s->runner == UNIT ? "unit" : "selftests",
+        snprintf(command, cap, "cd " KVM_DIR " && KVM_CORPUS_OUTER=%s sh corpus.sh %s %s",
+                 etude_case_accel(s->u.c), s->runner == UNIT ? "unit" : "selftests",
                  s->runner == UNIT ? s->list
                  : list != NULL    ? list
                                    : "none");
