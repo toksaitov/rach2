@@ -342,7 +342,8 @@ void vtd_fault_hold(int hold)
     }
     for (i = 0; i < vtd_nunits; i++) {
         vtd_hw_write32(vtd_units[i].regs, VTD_FECTL, hold ? VTD_FECTL_IM : 0u);
-        (void)vtd_hw_read32(vtd_units[i].regs, VTD_FECTL); /* flush the posted write */
+        /* flush the posted write */
+        (void)vtd_hw_read32(vtd_units[i].regs, VTD_FECTL);
     }
 }
 
