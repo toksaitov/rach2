@@ -116,6 +116,11 @@ For a core dump, a thread that waits for the dumper reports the signal
 without the core flag; the dumper reports the status after the dump.
 The final wait reports the process's status once a group exit has begun,
 including the core flag when the dump succeeded.
+For a thread another thread's
+.Xr execve 2
+ends, it reports an exit with status 0, not a death by
+.Dv SIGKILL ,
+as on Linux.
 Without
 .Dv PTRACE_O_TRACEEXEC ,
 an
