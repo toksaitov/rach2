@@ -364,6 +364,14 @@ struct vfs_ops {
     /* The node an open handle holds, for a type whose `open` gives a handle
      * of its own; NULL for a type whose handle is its node. */
     void *(*handle_node)(void *handle);
+    /* Move into the buffer cache what the type keeps dirty outside it and
+     * has kept since tick `before` or longer, for the flusher (writeback.h),
+     * which writes the cache back after: no flush, and no write of the
+     * device but those the cache makes to free its buffers. Called with the
+     * big lock and admission, as `sync` is, and never with `before` 0. 0,
+     * or -errno, which the type has recorded. NULL for a type that keeps
+     * nothing dirty outside the cache. */
+    int (*writeback)(struct vfs_mount *mnt, uint64_t before);
 };
 
 /* What cachestat(2) counts over a file's range of pages, in the order and
@@ -1164,6 +1172,13 @@ int vfs_device_holds(block_device_t *dev);
  * buffers of the device and the device's own flush. Always 0, as sync(2)
  * is. */
 int vfs_sync_all(void);
+
+/** The flusher's half for the mounts (writeback.h): for every active mount
+ * that `vfs_sync_all` syncs, the type's `writeback` of what has waited
+ * since tick `before`, then the cache's write-back of the device's buffers
+ * dirty since mark `since` (`bcache_writeback`), with no flush. A failure
+ * is recorded as the type and the cache record it. */
+void vfs_writeback_all(uint64_t before, uint64_t since);
 
 /**
  * A description opened on `mnt`: the mount's reference count goes up; the
