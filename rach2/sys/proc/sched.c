@@ -953,6 +953,7 @@ void schedule(void)
         return;
     }
 
+    cpu->switches++;
     if (old->state == PROC_RUNNING && old != cpu->idle) {
         old->state = PROC_READY;
     }
@@ -1255,6 +1256,17 @@ void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle, uint
             return;
         }
     }
+}
+
+uint64_t sched_switches(void)
+{
+    uint64_t sum = 0;
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        sum += cpu_table[c].switches;
+    }
+    return sum;
 }
 
 uint64_t sched_idle_ticks(void)

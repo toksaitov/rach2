@@ -1294,6 +1294,18 @@ uint64_t sched_idle_ticks(void)
     return idle_sum;
 }
 
+/** The switches of the model's processors, summed from `cpu_table`. */
+uint64_t sched_switches(void)
+{
+    uint64_t sum = 0;
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        sum += cpu_table[c].switches;
+    }
+    return sum;
+}
+
 /** Processor `c`'s user, busy, idle and steal ticks, from the model's
  *  `cpu_table`. */
 void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle, uint64_t *steal)
