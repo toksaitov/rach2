@@ -1,6 +1,10 @@
 # The kernel mixes OSS streams; PulseAudio supplies the desktop protocol.
+# The device opens at 48 kHz, the rate of the kernel's mix (VCHAN_RATE), so
+# that PulseAudio converts its clients' rates in user space and the kernel
+# copies the frames through, where at PulseAudio's default of 44.1 kHz the
+# kernel's audio thread resampled every frame.
 .nofail
-load-module module-oss device=/dev/dsp sink_name=oss_output source_name=oss_input mmap=0
+load-module module-oss device=/dev/dsp sink_name=oss_output source_name=oss_input mmap=0 rate=48000
 load-module module-native-protocol-unix
 set-default-sink oss_output
 set-default-source oss_input
