@@ -1,0 +1,47 @@
+diff --git a/rach2/sys/proc/sched.c b/rach2/sys/proc/sched.c
+index 7a65128a0..039cd2b5b 100644
+--- a/rach2/sys/proc/sched.c
++++ b/rach2/sys/proc/sched.c
+@@ -21,6 +21,7 @@
+ #include "../lib/spinlock.h"
+ #include "../mm/pressure.h"
+ #include "smp.h"
++void smp_probe(int kind);
+ #include "../usb/usb.h"
+ #include "../network/ip/ip.h"
+ 
+@@ -407,6 +408,7 @@ static process_t *sched_steal(int cpu)
+         tried |= (uint64_t)1 << donor;
+         p = sched_find(donor, cpu, 0);
+         if (p) {
++            smp_probe(SMP_IPI_BARRIER);
+             sched_remove(p);
+             sched_move(p, cpu);
+             return p;
+@@ -593,6 +595,9 @@ static int sched_ready_locked(process_t *p)
+     if (!sched_cpu_idle(target)) {
+         target = sched_rt_place(p, target);
+     }
++    if (target != p->cpu) {
++        smp_probe(SMP_IPI_STOP);
++    }
+     sched_move(p, target);
+     sched_append(p);
+     return sched_preempt_cpu(p, target);
+diff --git a/rach2/sys/proc/smp.c b/rach2/sys/proc/smp.c
+index 2918a1b8a..45729ac03 100644
+--- a/rach2/sys/proc/smp.c
++++ b/rach2/sys/proc/smp.c
+@@ -258,6 +258,12 @@ static void ipi_send_many(uint64_t cpus, int kind)
+     platform_cpu_ipi_many(cpus);
+ }
+ 
++void smp_probe(int kind);
++void smp_probe(int kind)
++{
++    ipi_counts[arch_cpu_id()][kind]++;
++}
++
+ uint32_t smp_ipi_count(int cpu, int kind)
+ {
+     if (cpu < 0 || cpu >= NR_CPUS || kind < 0 || kind >= SMP_IPI_KINDS) {

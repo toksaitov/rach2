@@ -1,0 +1,103 @@
+mounted
+
+booted linux none
+== sleep 2  2.15 s
+__END__0
+   exits=2590 halt_exits=483 io_exits=0 mmio_exits=696 irq_exits=47 irq_window_exits=48 request_irq_exits=0 nmi_window_exits=0 insn_emulation=720 hypercalls=0 irq_injections=553 halt_successful_poll=69 halt_wakeup=409 req_event=756 unnamed=1316
+== mount -t tracefs nodev /sys/kernel/tracing 2>/dev/null; T=/sys/kernel/tracing/events/sched; echo 'hist:keys=common_stacktrace:sort=hitcount if prev_comm=="rcat" && prev_state != 0' > $T/sched_switch/trigger && echo ok  0.13 s
+ok
+__END__0
+   exits=1769 halt_exits=367 io_exits=0 mmio_exits=155 irq_exits=121 irq_window_exits=20 request_irq_exits=0 nmi_window_exits=0 insn_emulation=170 hypercalls=0 irq_injections=487 halt_successful_poll=92 halt_wakeup=270 req_event=585 unnamed=1106
+== tar cf - /opt/proton | /t/rcat  5.02 s
+tar: Removing leading `/' from member names
+rcat: reads 101000 bytes 1610649600 nvcsw 37638 nivcsw 0 by 10k: 73237 13547 8617 1024 439 1250 2886 0
+__END__0
+   exits=338710 halt_exits=81509 io_exits=1 mmio_exits=180918 irq_exits=4043 irq_window_exits=4545 request_irq_exits=0 nmi_window_exits=0 insn_emulation=180940 hypercalls=3 irq_injections=86768 halt_successful_poll=53209 halt_wakeup=14927 req_event=135172 unnamed=67691
+== cat /sys/kernel/tracing/events/sched/sched_switch/hist | grep -v "^#" | head -150  0.15 s
+{ common_stacktrace:
+         __schedule+0x61f/0xbe0
+         schedule+0x27/0xc0
+         io_schedule+0x46/0x70
+         folio_wait_bit_common+0x138/0x350
+         filemap_fault+0x6e5/0xea0
+         __do_fault+0x33/0x170
+         do_fault+0xbd/0x550
+         __handle_mm_fault+0x70d/0xf90
+         handle_mm_fault+0xe2/0x2c0
+         do_user_addr_fault+0x15d/0x650
+         exc_page_fault+0x7e/0x180
+         asm_exc_page_fault+0x26/0x30
+         elf_load+0x20f/0x240
+         load_elf_binary+0x626/0x1770
+         bprm_execve+0x244/0x600
+         do_execveat_common.isra.0+0x182/0x1c0
+} hitcount:          1
+{ common_stacktrace:
+         __schedule+0x61f/0xbe0
+         do_task_dead+0x42/0x50
+         do_exit+0x7c4/0xad0
+         do_group_exit+0x30/0x80
+         __x64_sys_exit_group+0x18/0x20
+         x64_sys_call+0x14b4/0x14c0
+         do_syscall_64+0x87/0x1b0
+         entry_SYSCALL_64_after_hwframe+0x76/0x7e
+} hitcount:          1
+{ common_stacktrace:
+         __schedule+0x61f/0xbe0
+         schedule+0x27/0xc0
+         schedule_preempt_disabled+0x15/0x30
+         __mutex_lock.constprop.0+0x41f/0x730
+         pipe_read+0x270/0x480
+         vfs_read+0x338/0x370
+         ksys_read+0xb9/0xf0
+         do_syscall_64+0x87/0x1b0
+         entry_SYSCALL_64_after_hwframe+0x76/0x7e
+} hitcount:          1
+{ common_stacktrace:
+         __schedule+0x61f/0xbe0
+         schedule+0x27/0xc0
+         io_schedule+0x46/0x70
+         bit_wait_io+0x11/0x70
+         __wait_on_bit+0x45/0x160
+         out_of_line_wait_on_bit+0x94/0xc0
+         ext4_read_bh+0x9e/0xb0 [ext4]
+         ext4_get_branch+0x103/0x180 [ext4]
+         ext4_ind_map_blocks+0x1cb/0xc40 [ext4]
+         ext4_map_query_blocks+0x61/0xa0 [ext4]
+         ext4_map_blocks+0xe2/0x520 [ext4]
+         ext4_mpage_readpages+0x45d/0x720 [ext4]
+         read_pages+0x74/0x240
+         page_cache_ra_unbounded+0x18c/0x200
+         filemap_fault+0x5ac/0xea0
+         __do_fault+0x33/0x170
+} hitcount:          1
+{ common_stacktrace:
+         __schedule+0x61f/0xbe0
+         schedule+0x27/0xc0
+         io_schedule+0x46/0x70
+         folio_wait_bit_common+0x138/0x350
+         filemap_fault+0x6e5/0xea0
+         __do_fault+0x33/0x170
+         do_fault+0x341/0x550
+         __handle_mm_fault+0x70d/0xf90
+         handle_mm_fault+0xe2/0x2c0
+         do_user_addr_fault+0x217/0x650
+         exc_page_fault+0x7e/0x180
+         asm_exc_page_fault+0x26/0x30
+} hitcount:          4
+{ common_stacktrace:
+         __schedule+0x61f/0xbe0
+         schedule+0x27/0xc0
+         pipe_read+0x3f2/0x480
+         vfs_read+0x338/0x370
+         ksys_read+0xb9/0xf0
+         do_syscall_64+0x87/0x1b0
+         entry_SYSCALL_64_after_hwframe+0x76/0x7e
+} hitcount:      37630
+
+Totals:
+    Hits: 37638
+    Entries: 6
+    Dropped: 0
+__END__0
+   exits=1616 halt_exits=313 io_exits=0 mmio_exits=111 irq_exits=38 irq_window_exits=20 request_irq_exits=0 nmi_window_exits=0 insn_emulation=127 hypercalls=0 irq_injections=355 halt_successful_poll=24 halt_wakeup=288 req_event=441 unnamed=1134

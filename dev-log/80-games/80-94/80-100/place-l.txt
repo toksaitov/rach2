@@ -1,0 +1,6 @@
+sleep 2
+grep CAL /proc/interrupts
+tar cf - /opt/proton | /t/rcat
+grep CAL /proc/interrupts
+tar cf - /opt/proton | /t/rcat
+grep CAL /proc/interrupts

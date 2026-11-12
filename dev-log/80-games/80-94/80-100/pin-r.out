@@ -1,0 +1,87 @@
+booted rach2 /home/toksaitov-a/rach2/build/worktrees/task-4826/build/x86_64/rach2/kernel
+== sleep 2  2.00 s
+[?2004h
+<7>[6.201000] virtio_gpu: worker: pid 60
+<6>[6.201000] console: card0: handed to a master, the keyboard off
+[?2004l
+__END__0
+   exits=4418 halt_exits=2017 io_exits=111 mmio_exits=0 irq_exits=33 irq_window_exits=6 request_irq_exits=0 nmi_window_exits=0 insn_emulation=168 hypercalls=0 irq_injections=2026 halt_successful_poll=0 halt_wakeup=2018 req_event=4064 unnamed=2251
+== tar cf - /opt/proton > /dev/null  0.32 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+__END__0
+   exits=7741 halt_exits=1563 io_exits=258 mmio_exits=3438 irq_exits=309 irq_window_exits=198 request_irq_exits=0 nmi_window_exits=0 insn_emulation=3728 hypercalls=0 irq_injections=1810 halt_successful_poll=702 halt_wakeup=761 req_event=3635 unnamed=1975
+== taskset -c 0 tar cf - /opt/proton | taskset -c 3 /t/rcat  6.76 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 85846 bytes 1610649600 nvcsw 59138 nivcsw 1 by 10k: 52354 21183 2802 1103 688 1651 6065 0
+__END__0
+   exits=528997 halt_exits=164339 io_exits=531 mmio_exits=150433 irq_exits=12396 irq_window_exits=15125 request_irq_exits=0 nmi_window_exits=0 insn_emulation=150985 hypercalls=0 irq_injections=179951 halt_successful_poll=111470 halt_wakeup=48334 req_event=276170 unnamed=186173
+== taskset -c 2 tar cf - /opt/proton | taskset -c 3 /t/rcat  1.08 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 145363 bytes 1610649600 nvcsw 84806 nivcsw 1 by 10k: 138157 5782 207 134 86 106 891 0
+__END__0
+   exits=182245 halt_exits=87010 io_exits=518 mmio_exits=0 irq_exits=2036 irq_window_exits=1375 request_irq_exits=0 nmi_window_exits=0 insn_emulation=548 hypercalls=0 irq_injections=88975 halt_successful_poll=84683 halt_wakeup=1516 req_event=94225 unnamed=91306
+== taskset -c 0 tar cf - /opt/proton | taskset -c 3 /t/rcat  1.11 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 145266 bytes 1610649600 nvcsw 87403 nivcsw 1 by 10k: 138000 5741 302 165 108 89 861 0
+__END__0
+   exits=186410 halt_exits=88521 io_exits=516 mmio_exits=0 irq_exits=3000 irq_window_exits=1432 request_irq_exits=0 nmi_window_exits=0 insn_emulation=548 hypercalls=0 irq_injections=90557 halt_successful_poll=87125 halt_wakeup=442 req_event=95491 unnamed=92941
+== taskset -c 2 tar cf - /opt/proton | taskset -c 3 /t/rcat  1.02 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 145781 bytes 1610649600 nvcsw 84166 nivcsw 1 by 10k: 138898 5470 217 135 105 103 853 0
+__END__0
+   exits=180345 halt_exits=86259 io_exits=520 mmio_exits=0 irq_exits=1874 irq_window_exits=1301 request_irq_exits=0 nmi_window_exits=0 insn_emulation=549 hypercalls=0 irq_injections=88132 halt_successful_poll=83990 halt_wakeup=1422 req_event=93115 unnamed=90391
+== cat /sys/kernel/debug/exits  0.08 s
+[?2004h[?2004l
+wrmsr 0x830 387016 183032 14015 181004 8965
+in 0x3fd 2322 1206 314 202 600
+out 0x3f8 1757 641 314 202 600
+wrmsr 0xc0000100 796378 55046 53501 54572 633259
+wrmsr 0xc0000102 796311 55030 53471 54560 633250
+rdmsr 0xc0000100 796306 55046 53453 54554 633253
+rdmsr 0xc0000102 796315 55046 53453 54554 633262
+hlt 0 441735 58802 30815 31190 320928
+wrmsr 0x80b 8682 1855 1216 1164 4447
+out 0x3d4 180 58 56 16 50
+out 0x3d5 180 58 56 16 50
+rdmsr 0x839 4 1 1 1 1
+rdmsr 0x821 4 1 1 1 1
+wrmsr 0x83e 4 1 1 1 1
+wrmsr 0x832 11188 17 4503 3105 3563
+wrmsr 0x838 63777 18404 12573 13847 18953
+in 0x3f8 510 510 0 0 0
+in 0xc03e 50 50 0 0 0
+out 0xc03e 26 26 0 0 0
+in 0xc03a 14 14 0 0 0
+in 0xc037 30 30 0 0 0
+out 0xc020 6 4 0 0 2
+out 0xc010 6 4 0 0 2
+out 0xc038 16 16 0 0 0
+out 0xc02c 6 2 0 0 4
+out 0xc01c 6 2 0 0 4
+out 0xc024 5 2 0 0 3
+out 0xc014 5 2 0 0 3
+out 0xc028 5 2 0 0 3
+out 0xc018 5 2 0 0 3
+in 0xc058 12 11 1 0 0
+in 0xc062 12 11 1 0 0
+out 0x3fa 2 0 2 0 0
+out 0xcf8 1700 0 1046 7 647
+in 0xcfc 1700 0 1046 7 647
+out 0x70 10 0 0 0 10
+in 0x71 1 0 0 0 1
+out 0x71 9 0 0 0 9
+ipi kick 392093 187942 14080 181068 9003
+ipi tlb 1 0 0 0 1
+ipi kernel_tlb 12 6 0 6 0
+ipi barrier 347 97 69 102 79
+ipi space 5 2 0 2 1
+ipi call 0 0 0 0 0
+ipi stop 243 114 41 43 45
+lost 0 0 0 0 0
+__END__0
+   exits=8202 halt_exits=8 io_exits=2933 mmio_exits=0 irq_exits=45 irq_window_exits=39 request_irq_exits=0 nmi_window_exits=0 insn_emulation=5049 hypercalls=0 irq_injections=87 halt_successful_poll=0 halt_wakeup=8 req_event=240 unnamed=5177

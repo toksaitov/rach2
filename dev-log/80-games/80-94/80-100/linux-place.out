@@ -1,0 +1,83 @@
+mounted
+
+booted linux none
+== sleep 2  2.14 s
+__END__0
+   exits=2652 halt_exits=517 io_exits=0 mmio_exits=678 irq_exits=67 irq_window_exits=32 request_irq_exits=0 nmi_window_exits=0 insn_emulation=702 hypercalls=0 irq_injections=573 halt_successful_poll=74 halt_wakeup=436 req_event=795 unnamed=1358
+== mount -t debugfs nodev /sys/kernel/debug 2>/dev/null; cat /sys/devices/system/cpu/cpu0/cache/index3/shared_cpu_list; cat /proc/sys/kernel/sched_schedstats; ls /sys/kernel/debug/sched/domains/cpu0/ 2>&1; cat /sys/kernel/debug/sched/domains/cpu0/*/name /sys/kernel/debug/sched/domains/cpu0/*/flags 2>&1  0.14 s
+0-3
+0
+ls: cannot access '/sys/kernel/debug/sched/domains/cpu0/': No such file or directory
+cat: '/sys/kernel/debug/sched/domains/cpu0/*/name': No such file or directory
+cat: '/sys/kernel/debug/sched/domains/cpu0/*/flags': No such file or directory
+__END__1
+   exits=1946 halt_exits=378 io_exits=0 mmio_exits=215 irq_exits=67 irq_window_exits=28 request_irq_exits=0 nmi_window_exits=0 insn_emulation=234 hypercalls=0 irq_injections=422 halt_successful_poll=61 halt_wakeup=315 req_event=564 unnamed=1258
+== mount -t tracefs nodev /sys/kernel/tracing 2>/dev/null; T=/sys/kernel/tracing/events/sched; echo 'hist:keys=common_cpu,target_cpu:sort=hitcount if comm=="cat"' > $T/sched_wakeup/trigger; echo 'hist:keys=orig_cpu,dest_cpu:sort=hitcount if comm=="cat"' > $T/sched_migrate_task/trigger; echo 'hist:keys=common_cpu,target_cpu:sort=hitcount if comm=="tar"' >> $T/sched_wakeup/trigger; echo 1 > /proc/sys/kernel/sched_schedstats; echo ok  0.14 s
+ok
+__END__0
+   exits=1614 halt_exits=345 io_exits=0 mmio_exits=1 irq_exits=162 irq_window_exits=20 request_irq_exits=0 nmi_window_exits=0 insn_emulation=19 hypercalls=1 irq_injections=493 halt_successful_poll=62 halt_wakeup=280 req_event=562 unnamed=1085
+== grep -E "CAL|RES" /proc/interrupts; cat /proc/schedstat  0.14 s
+RES:        272        232        345        292   Rescheduling interrupts
+CAL:       8077      10033       7755       6752   Function call interrupts
+version 16
+timestamp 4294897614
+cpu0 0 0 78 34 45 12 1666065230 547645988 4098
+domain0 f 0 0 0 0 0 0 0 0 14 14 0 0 0 0 0 14 2 2 0 0 0 0 0 2 0 0 0 0 0 0 0 0 0 33 18 0
+cpu1 0 0 86 40 51 2 1722688490 621004324 3361
+domain0 f 0 0 0 0 0 0 0 0 13 13 0 0 0 0 0 13 2 1 1 1 0 0 0 1 0 0 0 0 0 0 0 0 0 49 34 0
+cpu2 0 0 116 56 47 13 1767331922 7533100255 4378
+domain0 f 0 0 0 0 0 0 0 0 11 11 0 0 0 0 0 11 7 6 1 1 0 0 0 6 0 0 0 0 0 0 0 0 0 34 19 0
+cpu3 0 0 106 52 42 20 1729631461 492987685 4188
+domain0 f 0 0 0 0 0 0 0 0 14 14 0 0 0 0 0 14 4 4 0 0 0 0 0 4 0 0 0 0 0 0 0 0 0 22 14 0
+__END__0
+   exits=1528 halt_exits=304 io_exits=0 mmio_exits=80 irq_exits=47 irq_window_exits=23 request_irq_exits=0 nmi_window_exits=0 insn_emulation=95 hypercalls=0 irq_injections=345 halt_successful_poll=23 halt_wakeup=279 req_event=422 unnamed=1074
+== tar cf - /opt/proton | cat > /dev/null  5.26 s
+tar: Removing leading `/' from member names
+__END__0
+   exits=325957 halt_exits=76021 io_exits=0 mmio_exits=180458 irq_exits=3927 irq_window_exits=3547 request_irq_exits=0 nmi_window_exits=0 insn_emulation=180478 hypercalls=2 irq_injections=80415 halt_successful_poll=54157 halt_wakeup=17670 req_event=128625 unnamed=62002
+== grep -E "CAL|RES" /proc/interrupts; cat /proc/schedstat; cat /sys/kernel/tracing/events/sched/sched_wakeup/hist | grep -v "^#"; cat /sys/kernel/tracing/events/sched/sched_migrate_task/hist | grep -v "^#"  0.15 s
+RES:        280        242        353        299   Rescheduling interrupts
+CAL:      28162      15114      32691       7606   Function call interrupts
+version 16
+timestamp 4294898965
+cpu0 0 0 43629 20411 32477 2810 5097505757 556365864 27271
+domain0 f 0 0 0 0 0 0 0 0 281 279 2 2 0 0 0 279 397 396 1 1 0 0 0 391 0 0 0 0 0 0 0 0 0 29667 26955 0
+cpu1 0 0 9540 4757 878 50 1851490562 622373681 8096
+domain0 f 0 0 0 0 0 0 0 0 348 340 8 8 0 0 0 340 324 319 5 5 0 0 0 305 0 0 0 0 0 0 0 0 0 828 109 0
+cpu2 0 0 50674 25329 2884 47 2206017595 7536510678 29662
+domain0 f 0 0 0 0 0 0 0 0 508 501 7 9 0 0 0 501 361 357 4 5 0 0 0 350 0 0 0 0 0 0 0 0 0 2837 58 0
+cpu3 0 0 2302 1108 18218 274 1910718628 503404619 5327
+domain0 f 0 0 0 0 0 0 0 0 357 351 6 6 0 0 0 351 98 95 3 3 0 0 0 87 0 0 0 0 0 0 0 0 0 17944 847 0
+
+{ common_cpu:          0, target_cpu:          2 } hitcount:          1
+{ common_cpu:          3, target_cpu:          3 } hitcount:        672
+{ common_cpu:          1, target_cpu:          1 } hitcount:       4567
+{ common_cpu:          2, target_cpu:          2 } hitcount:      25175
+
+Totals:
+    Hits: 30415
+    Entries: 4
+    Dropped: 0
+
+
+
+{ common_cpu:          1, target_cpu:          1 } hitcount:          6
+{ common_cpu:          3, target_cpu:          3 } hitcount:        184
+{ common_cpu:          0, target_cpu:          0 } hitcount:      20287
+
+Totals:
+    Hits: 20477
+    Entries: 3
+    Dropped: 0
+
+{ orig_cpu:          2, dest_cpu:          1 } hitcount:          2
+{ orig_cpu:          3, dest_cpu:          2 } hitcount:          2
+{ orig_cpu:          2, dest_cpu:          3 } hitcount:          2
+{ orig_cpu:          1, dest_cpu:          2 } hitcount:          2
+
+Totals:
+    Hits: 8
+    Entries: 4
+    Dropped: 0
+__END__0
+   exits=1683 halt_exits=311 io_exits=0 mmio_exits=1 irq_exits=82 irq_window_exits=25 request_irq_exits=0 nmi_window_exits=0 insn_emulation=21 hypercalls=0 irq_injections=354 halt_successful_poll=16 halt_wakeup=294 req_event=462 unnamed=1264

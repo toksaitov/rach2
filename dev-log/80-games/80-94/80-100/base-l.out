@@ -1,0 +1,28 @@
+mounted
+
+booted linux none
+== sleep 2  2.15 s
+__END__0
+   exits=2685 halt_exits=573 io_exits=0 mmio_exits=611 irq_exits=58 irq_window_exits=36 request_irq_exits=0 nmi_window_exits=0 insn_emulation=636 hypercalls=0 irq_injections=628 halt_successful_poll=123 halt_wakeup=448 req_event=883 unnamed=1407
+== grep CAL /proc/interrupts  0.13 s
+CAL:      10051       5953       7848       8306   Function call interrupts
+__END__0
+   exits=1470 halt_exits=297 io_exits=0 mmio_exits=82 irq_exits=36 irq_window_exits=23 request_irq_exits=0 nmi_window_exits=0 insn_emulation=98 hypercalls=0 irq_injections=338 halt_successful_poll=18 halt_wakeup=278 req_event=416 unnamed=1032
+== tar cf - /opt/proton | /t/rcat  5.37 s
+tar: Removing leading `/' from member names
+rcat: reads 109075 bytes 1610649600 nvcsw 40117 nivcsw 0 by 10k: 83320 17244 2982 1011 617 1466 2435 0
+__END__0
+   exits=341204 halt_exits=81271 io_exits=0 mmio_exits=180912 irq_exits=5311 irq_window_exits=4544 request_irq_exits=0 nmi_window_exits=0 insn_emulation=180932 hypercalls=2 irq_injections=87581 halt_successful_poll=60162 halt_wakeup=15454 req_event=135772 unnamed=69164
+== grep CAL /proc/interrupts  0.16 s
+CAL:      25759      27671      19490      17212   Function call interrupts
+__END__0
+   exits=1410 halt_exits=317 io_exits=0 mmio_exits=1 irq_exits=30 irq_window_exits=14 request_irq_exits=0 nmi_window_exits=0 insn_emulation=18 hypercalls=0 irq_injections=347 halt_successful_poll=23 halt_wakeup=291 req_event=397 unnamed=1048
+== tar cf - /opt/proton | /t/rcat  0.92 s
+tar: Removing leading `/' from member names
+rcat: reads 106488 bytes 1610649600 nvcsw 52834 nivcsw 2 by 10k: 58426 46651 685 330 189 110 97 0
+__END__0
+   exits=108542 halt_exits=52995 io_exits=0 mmio_exits=11 irq_exits=814 irq_window_exits=247 request_irq_exits=0 nmi_window_exits=0 insn_emulation=28 hypercalls=0 irq_injections=53434 halt_successful_poll=48384 halt_wakeup=497 req_event=54207 unnamed=54475
+== grep CAL /proc/interrupts  0.13 s
+CAL:      61598      44504      19644      17283   Function call interrupts
+__END__0
+   exits=1333 halt_exits=271 io_exits=0 mmio_exits=1 irq_exits=34 irq_window_exits=16 request_irq_exits=0 nmi_window_exits=0 insn_emulation=18 hypercalls=0 irq_injections=307 halt_successful_poll=22 halt_wakeup=247 req_event=356 unnamed=1011
