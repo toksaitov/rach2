@@ -414,28 +414,51 @@ struct kernel_timeval {
     long tv_usec; /* microseconds */
 };
 
+/*
+ * The struct timezone of gettimeofday and settimeofday, the same in every
+ * ABI, and the kernel's, Linux's sys_tz (kernel/time/time.c:50), which only
+ * settimeofday changes and nothing in the kernel reads. Each field is one
+ * store, read and written without a lock, as Linux's are.
+ */
+struct kernel_timezone {
+    int32_t tz_minuteswest; /* minutes west of UTC, -900 to 900 */
+    int32_t tz_dsttime;     /* the kind of summer time, not checked */
+};
+
+static struct kernel_timezone sys_tz;
+
 /**
- * gettimeofday(2) takes tv (timeval*) and tz (ignored). Reports real time from
+ * gettimeofday(2) takes tv (timeval*) and tz (timezone*), each of which may
+ * be null, as Linux's (kernel/time/time.c:140-156). Reports real time from
  * the clock anchored at boot (clock.c), or time since boot when there was no
- * clock to read, in seconds as wide as a long; a null tv reads nothing, as on
- * Linux. Returns 0 or -errno.
+ * clock to read, in seconds as wide as a long, at tv, then the time zone
+ * settimeofday last set at tz. Returns 0 or -EFAULT, with tv written when
+ * only tz faults.
  */
 long sys_gettimeofday(isr_params_t *params)
 {
     struct kernel_timeval __user *tv = (struct kernel_timeval __user *)SC_ARG(params, 0);
+    struct kernel_timezone __user *tz = (struct kernel_timezone __user *)SC_ARG(params, 1);
     struct kernel_timeval ktv;
+    struct kernel_timezone ktz;
     int64_t seconds;
     int64_t nanoseconds;
 
     clock_call_count++;
-    if (!tv) {
-        return 0;
+    if (tv) {
+        get_current_time(&seconds, &nanoseconds);
+        ktv.tv_sec = (long)seconds;
+        ktv.tv_usec = (int32_t)nanoseconds / 1000; /* narrow first: no __divdi3 */
+        if (copy_to_user(tv, &ktv, sizeof(ktv)) != 0) {
+            return -EFAULT;
+        }
     }
-    get_current_time(&seconds, &nanoseconds);
-    ktv.tv_sec = (long)seconds;
-    ktv.tv_usec = (int32_t)nanoseconds / 1000; /* narrow first: no __divdi3 */
-    if (copy_to_user(tv, &ktv, sizeof(ktv)) != 0) {
-        return -EFAULT;
+    if (tz) {
+        ktz.tz_minuteswest = sys_tz.tz_minuteswest;
+        ktz.tz_dsttime = sys_tz.tz_dsttime;
+        if (copy_to_user(tz, &ktz, sizeof(ktz)) != 0) {
+            return -EFAULT;
+        }
     }
     return 0;
 }
@@ -1034,24 +1057,64 @@ long sys_clock_adjtime64(isr_params_t *params)
 }
 
 /**
- * settimeofday takes timeval and timezone. The time zone is not kept, so a call
- * with only one is done and changes nothing; a call with neither is too, as on
- * Linux.
+ * settimeofday takes timeval and timezone, each of which may be null, and
+ * checks them in Linux's order (kernel/time/time.c:169-221): each copied,
+ * -EFAULT, and the time's microseconds and seconds, -EINVAL; then the
+ * privilege, -EPERM, even with neither; then the zone's minutes, -EINVAL
+ * past 15 hours either way. A zone is then kept, for gettimeofday and the
+ * vDSO's (`vclock_set_tz`), and the time set (`realtime_set`), which may
+ * still refuse a time before the monotonic clock with the zone kept, as
+ * Linux's do_settimeofday64 does after it. The first zone set at all, when
+ * it comes alone and is not UTC, moves real time on by its minutes, as
+ * Linux's timekeeping_warp_clock takes a machine's clock kept in local time
+ * to UTC (kernel/time/timekeeping.c:1452-1462), which is how BusyBox's and
+ * util-linux's hwclock tell the kernel of such a clock.
  */
 long sys_settimeofday(isr_params_t *params)
 {
+    static int tz_set_before;
+    const void __user *utv = (const void __user *)SC_ARG(params, 0);
+    const void __user *utz = (const void __user *)SC_ARG(params, 1);
     struct kernel_timeval tv;
+    struct kernel_timezone tz;
+    int64_t sec = 0; /* as wide as the clock's limit on either kernel */
 
-    if (!SC_ARG(params, 0)) {
-        return proc_privileged(current_proc) ? 0 : -EPERM;
+    if (utv) {
+        if (copy_from_user(&tv, utv, sizeof(tv)) != 0) {
+            return -EFAULT;
+        }
+        if (tv.tv_usec < 0 || tv.tv_usec > 999999) {
+            return -EINVAL;
+        }
+        sec = tv.tv_sec;
     }
-    if (copy_from_user(&tv, (const void __user *)SC_ARG(params, 0), sizeof(tv)) != 0) {
+    if (utz && copy_from_user(&tz, utz, sizeof(tz)) != 0) {
         return -EFAULT;
     }
-    if (tv.tv_usec < 0 || tv.tv_usec > 999999) {
+    if (sec < 0 || sec >= RTC_SETTOD_SEC_MAX) {
         return -EINVAL;
     }
-    return realtime_set(tv.tv_sec, (int64_t)tv.tv_usec * 1000);
+    if (!proc_privileged(current_proc)) {
+        return -EPERM;
+    }
+    if (utz) {
+        if (tz.tz_minuteswest > 15 * 60 || tz.tz_minuteswest < -15 * 60) {
+            return -EINVAL;
+        }
+        sys_tz.tz_minuteswest = tz.tz_minuteswest;
+        sys_tz.tz_dsttime = tz.tz_dsttime;
+        vclock_set_tz(tz.tz_minuteswest, tz.tz_dsttime);
+        if (!tz_set_before) {
+            tz_set_before = 1;
+            if (!utv && tz.tz_minuteswest != 0) {
+                rtc_shift_realtime((int64_t)tz.tz_minuteswest * 60, 0);
+            }
+        }
+    }
+    if (!utv) {
+        return 0;
+    }
+    return realtime_set(sec, (int64_t)tv.tv_usec * 1000);
 }
 
 /** stime takes the seconds, a 32-bit time_t. */

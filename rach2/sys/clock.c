@@ -184,11 +184,6 @@ static struct spinlock rtc_realtime_lock = SPINLOCK_INIT_NAMED("rtc_realtime_loc
  * one, modulo 2^32 with 0 left out (`rtc_step_count`). */
 static volatile uint32_t rtc_steps = 1;
 
-/* The latest time `rtc_set_realtime` takes, Linux's TIME_SETTOD_SEC_MAX
- * (linux/time64.h:43-44): the seconds of 2^63 nanoseconds, less 30 years
- * for the monotonic clock, so that a time in nanoseconds never overflows. */
-#define RTC_SETTOD_SEC_MAX (9223372036LL - 30LL * 365 * 24 * 3600)
-
 /** `ns` nanoseconds added to `sec` seconds, as seconds in `*out_sec` and
  * nanoseconds from 0 to 10^9 - 1 in `*out_nsec`, for `ns` of either
  * sign. */

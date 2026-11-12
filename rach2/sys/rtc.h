@@ -187,6 +187,11 @@ void rtc_tick_phase(uint64_t *ticks, uint32_t *phase_ns);
  * would end a tick early by the monotonic clock. */
 uint64_t rtc_ticks_now(void);
 
+/* The latest time `rtc_set_realtime` takes, Linux's TIME_SETTOD_SEC_MAX
+ * (linux/time64.h:43-44): the seconds of 2^63 nanoseconds, less 30 years
+ * for the monotonic clock, so that a time in nanoseconds never overflows. */
+#define RTC_SETTOD_SEC_MAX (9223372036LL - 30LL * 365 * 24 * 3600)
+
 /**
  * Make the real time `seconds` and `nanoseconds` now, as clock_settime,
  * settimeofday and stime do for a privileged caller; the caller checks the
