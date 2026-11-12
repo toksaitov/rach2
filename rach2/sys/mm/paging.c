@@ -447,6 +447,7 @@ void frame_take_boot(uintptr_t frame)
 static int cow_fault(struct mm *mm, uintptr_t addr);
 static int page_private(struct mm *mm, uintptr_t addr, int writable);
 static uint32_t frame_maps(uintptr_t frame);
+static int frame_get(uintptr_t phys);
 
 /** The entry of `dir`'s own table for the user address `addr`, or NULL where
  * there is no table. */
@@ -1601,14 +1602,45 @@ static void page_change_end(struct mm *mm, const struct page_change *c)
 }
 
 /**
+ * Take a reference of the caller's own on the frame of the entry `e` of
+ * `mm`, the source of a copy made with no lock but the regions', as Linux's
+ * wp_page_copy holds the old folio across its copy (mm/memory.c:3737): the
+ * entry is read again under the page-table lock, and the reference is
+ * taken only while it is still `pte`. Until then the entry's own mapping
+ * reference keeps the frame: a fault or a pin changes the entry only under
+ * the lock, and a zap drops the reference only after its shootdown, which
+ * this processor, running `mm` with interrupts off, answers only once the
+ * lock is let go. Another thread may install its copy and drop that
+ * reference, and the process that shares the frame unmap it, while the copy
+ * is made; the caller's reference keeps the frame meanwhile, and the caller
+ * drops it (`frame_unref`) on every path once the copy is made or given
+ * up. 1 when the
+ * reference is held; 0 when the frame has no room for one more, and no
+ * copy can be made; -1 when the entry changed, and the page is resolved
+ * again.
+ */
+static int cow_source_get(struct mm *mm, pte_t *e, pte_t pte)
+{
+    uint32_t flags = mm_ptl_lock(mm);
+    int rc = -1;
+
+    if (*(volatile pte_t *)e == pte) {
+        rc = frame_get(PTE_ADDR(pte));
+    }
+    mm_ptl_unlock(mm, flags);
+    return rc;
+}
+
+/**
  * Resolve a write to the present copy-on-write (PTE_COW) page at `addr` of
  * `mm`. When this address space holds the frame's last mapping, the page is
  * made writable in place and loses its mark, whatever pins the frame has;
  * otherwise a writable copy of its own takes its place, the ranges
  * registered on the page are told (MMN_COW), and the shared frame's
  * reference is dropped. The copy is made first, with no lock but the
- * regions', and the entry is read again under the page-table lock and
- * replaced only while it is the one copied (`page_change_begin`). The
+ * regions' and with a reference on the shared frame (`cow_source_get`),
+ * and the entry is read again under the page-table lock and replaced only
+ * while it is the one copied (`page_change_begin`). The
  * caller balanced memory before it looked at the page, so nothing here
  * sleeps. Every caller found the page present. Returns 1 if it resolved
  * the page; -1 when the entry changed meanwhile and the resolution runs
@@ -1642,14 +1674,22 @@ static int cow_fault(struct mm *mm, uintptr_t addr)
     old_phys = PTE_ADDR(pte);
     frame = old_phys / PAGE_SIZE;
     if (frame < _frames_number && frame_maps(frame) > 1) {
+        rc = cow_source_get(mm, e, pte);
+        if (rc <= 0) {
+            return rc;
+        }
         new_phys = alloc_user_frame();
         if (new_phys == 0) {
+            frame_unref(old_phys);
             return 0;
         }
-        if (paging_copy_frame(new_phys, old_phys) != 0) {
+        rc = paging_copy_frame(new_phys, old_phys);
+        frame_unref(old_phys);
+        if (rc != 0) {
             free_frame(new_phys);
             return 0;
         }
+        rc = 1;
         frame_make_anon(new_phys);
     }
     if (page_change_begin(mm, &c, new_phys ? MMN_COW : 0, addr) != 0) {
@@ -1690,7 +1730,8 @@ static int cow_fault(struct mm *mm, uintptr_t addr)
  * copy with the same rights, read-only still, and one this space alone
  * holds is used as it is; either way the frame is this space's alone after,
  * and the page loses its copy-on-write mark. The entry is replaced in two
- * phases, as `cow_fault` replaces it, and the change is made again when
+ * phases, as `cow_fault` replaces it, with a reference on the shared frame
+ * across the copy (`cow_source_get`), and the change is made again when
  * the entry changed meanwhile. The caller balanced memory first, so nothing
  * here sleeps. 0, or -1 when the page is not present or no frame could be
  * had or copied.
@@ -1720,11 +1761,21 @@ static int page_private(struct mm *mm, uintptr_t addr, int writable)
         old_phys = PTE_ADDR(pte);
         new_phys = old_phys;
         if (frame_maps(old_phys / PAGE_SIZE) > 1) {
-            new_phys = alloc_user_frame();
-            if (new_phys == 0) {
+            rc = cow_source_get(mm, e, pte);
+            if (rc < 0) {
+                continue;
+            }
+            if (rc == 0) {
                 return -1;
             }
-            if (paging_copy_frame(new_phys, old_phys) != 0) {
+            new_phys = alloc_user_frame();
+            if (new_phys == 0) {
+                frame_unref(old_phys);
+                return -1;
+            }
+            rc = paging_copy_frame(new_phys, old_phys);
+            frame_unref(old_phys);
+            if (rc != 0) {
                 free_frame(new_phys);
                 return -1;
             }
@@ -3162,13 +3213,23 @@ static void batch_flush(struct flush_batch *b)
 
 void frame_ref(uintptr_t phys)
 {
+    (void)frame_get(phys);
+}
+
+/** `frame_ref`, saying whether it took the reference: 1, or 0 for a frame
+ * it leaves alone, which a later `frame_unref` must then not drop. */
+static int frame_get(uintptr_t phys)
+{
     uintptr_t frame = phys / PAGE_SIZE;
     uint32_t flags = spin_lock_irqsave(&frame_lock);
+    int taken = 0;
 
     if (frame < _frames_number && _frames[frame] != 0 && _frames[frame] < FRAME_REF_MAX - 1) {
         _frames[frame]++;
+        taken = 1;
     }
     spin_unlock_irqrestore(&frame_lock, flags);
+    return taken;
 }
 
 /** Count `frame`, whose word just reached 0, among the free frames, with
