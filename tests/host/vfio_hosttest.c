@@ -1074,9 +1074,9 @@ void vfio_hw_unmap(uintptr_t va, uint32_t size)
     (void)size;
 }
 
-int vfio_hw_option(const char *word)
+int vfio_hw_param_bool(const char *key)
 {
-    return unsafe_option && strcmp(word, "vfio_iommu_type1.allow_unsafe_interrupts=1") == 0;
+    return unsafe_option && strcmp(key, "vfio_iommu_type1.allow_unsafe_interrupts") == 0;
 }
 
 /** Open the registered node `name` as a new descriptor: the descriptor,

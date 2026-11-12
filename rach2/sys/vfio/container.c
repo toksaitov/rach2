@@ -20,8 +20,9 @@
 #define PAGE_4K 0x1000ull
 
 /* The boot option that lets a container be set up on a host whose
- * interrupts are not remapped, Linux's module parameter of the same name. */
-#define UNSAFE_INTERRUPTS "vfio_iommu_type1.allow_unsafe_interrupts=1"
+ * interrupts are not remapped, Linux's bool module parameter of the same
+ * name (drivers/vfio/vfio_iommu_type1.c, lines 46 to 48). */
+#define UNSAFE_INTERRUPTS "vfio_iommu_type1.allow_unsafe_interrupts"
 
 /* The most valid IOVA ranges GET_INFO reports. */
 #define IOVA_RANGES_MAX 32
@@ -237,7 +238,7 @@ static int32_t set_iommu(struct vfio_container *c, uintptr_t type)
     if (c->groups == NULL) {
         return -EINVAL;
     }
-    if (!iommu_irq_remapped() && !vfio_hw_option(UNSAFE_INTERRUPTS)) {
+    if (!iommu_irq_remapped() && !vfio_hw_param_bool(UNSAFE_INTERRUPTS)) {
         klog(KLOG_WARN, "vfio",
              "set: interrupts not remapped; boot with " UNSAFE_INTERRUPTS " to allow it");
         return -EPERM;

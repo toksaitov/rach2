@@ -21,7 +21,7 @@ The function must have no driver of the kernel's: bind is `EBUSY` while one hold
 * `vfio_file_is_valid` identifies group and device descriptors for the [KVM bridge](../kvm/Readme.md#vfio-assignment), which holds their open file descriptions and applies the guest PAT while a device is assigned.
 * `vfio_start` (`kernel.c`) forms the groups and adds the nodes and entries at boot, after the PCI bus, the IOMMU and the display. It logs `vfio: ready: G groups of F functions`.
 * `/proc/stat` counts attached groups (`vfio_groups`), referenced devices (`vfio_devices`), DMA mappings (`vfio_dma_mappings`), their live pinned RAM pages (`vfio_dma_pages`) and mapped device pages (`vfio_dma_io_pages`), under the big lock. A container shared by groups is counted once. `msi_vectors_free` counts the free vectors of the host's message pool.
-* The boot option `vfio_iommu_type1.allow_unsafe_interrupts=1` ([cmdline](../../cmdline.md)).
+* The boot option `vfio_iommu_type1.allow_unsafe_interrupts`, a bool as Linux's module parameter ([cmdline](../../cmdline.md)).
 
 ## Sources and license
 
