@@ -347,6 +347,9 @@ static void group_free_row(void)
     group_finish(p, handle, "and each group's bitmaps and the free counts agree");
 }
 
+/* The inode process B of `group_inode_row` made, or 0. */
+static uint32_t group_b_ino;
+
 /** Process B of `group_inode_row`: a file made in `group_b_dir`. */
 static void group_second_create(void)
 {
@@ -354,50 +357,126 @@ static void group_second_create(void)
 
     group_b_rc = OPS->create(&mnt, group_b_dir, "made", 0644, &n);
     if (n) {
+        group_b_ino = ((struct ext2_node *)n)->ino;
         OPS->put(&mnt, n);
     }
 }
 
+/** At process A's write of a run that covers `group_pause_block`, give
+ * process B the turn. */
+static void group_write_turn(void)
+{
+    if (current_proc == &proc_a && group_pause_block >= request_block &&
+        group_pause_block < request_block + request_blocks) {
+        write_pause = 0;
+        group_paused = 1;
+        pass_turn();
+    }
+}
+
+/** The group of inode `ino`. */
+static uint32_t group_of_inode(uint32_t ino)
+{
+    return (ino - 1) / group_em()->ipg;
+}
+
 /**
- * An inode freed and an inode allocated in one group at once: process A
- * removes a file of blocks, and process B, run at A's first disk request
- * inside the removal, makes a file in another directory of the same group.
- * An inode bitmap has no image in the batch, so under the big lock its
- * buffer orders the two whatever the group's lock does; the row checks the
- * inode and block totals the two leave.
+ * Mount a new volume of sixteen groups of GROUP_BLOCKS blocks with
+ * `dirsync`, so that a bit is written through under its group's lock.
+ * Whether it mounted writable.
+ */
+static int group_strict_volume(void)
+{
+    int rc;
+
+    wbytes = (uint64_t)16 << 20;
+    ext2_fixture_groups(GROUP_BLOCKS);
+    rc = ext2_fixture_image(wimg, 4096, 128, PROFILE, 16, fix_path("tree"));
+    ext2_fixture_groups(0);
+    if (!rc) {
+        printf("ext2_hosttest: mke2fs failed for %s\n", wimg);
+        exit(1);
+    }
+    use_image(wimg, wbytes);
+    rc = mount_rw();
+    check(rc == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 && ext2_em_strict(group_em()),
+          "the inode row's volume mounts with dirsync");
+    return rc == 0;
+}
+
+/**
+ * An inode freed and an inode allocated in one group at once, the second
+ * inside the first's read-modify-write of the group's inode bitmap. Group 0
+ * is filled, so that a file made in a directory there takes its inode from
+ * group 1, where process A removes a file. On a mount with `dirsync` A
+ * clears the file's bit and writes the bitmap through under group 1's lock,
+ * before it raises the descriptor's count; process B, run at that write,
+ * makes a file in a directory of group 0, passes its fetches, which A holds
+ * no buffer of, finds group 0 full and must sleep on group 1's lock. Without
+ * the lock B goes on into the group, sleeps on the bitmap's buffer, which A
+ * holds, and the row fails by that wait.
  */
 static void group_inode_row(void)
 {
-    static uint8_t data[8 * 4096];
+    struct ext2_mount *em;
     void *ia = 0, *u = 0;
-    int rc;
+    uint32_t uino = 0, k;
+    char name[16];
+    int rc = 0;
 
-    if (!group_volume()) {
+    if (!group_strict_volume()) {
         return;
     }
+    em = group_em();
     check(OPS->mkdir(&mnt, mnt.root, "ia", 0755) == 0 &&
               OPS->mkdir(&mnt, mnt.root, "ib", 0755) == 0,
           "two directories of one group");
     ia = walk("/ia", &rc);
     group_b_dir = walk("/ib", &rc);
-    u = ia ? make_file(ia, "u", &rc) : 0;
-    check(u && write_at(u, data, sizeof(data), 0) == 0, "a file of eight blocks");
-    if (u) {
-        OPS->put(&mnt, u);
-    }
-    if (!ia || !group_b_dir || !u) {
+    if (!ia || !group_b_dir) {
         group_finish(0, 0, "the inode row's volume");
         return;
     }
-    check(OPS->sync(&mnt) == 0 && bcache_sync(&dev) == 0 && bcache_invalidate(&dev) == 0,
-          "the cache empties");
+    check(group_of_inode(((struct ext2_node *)ia)->ino) == 0 &&
+              group_of_inode(((struct ext2_node *)group_b_dir)->ino) == 0,
+          "both in group 0");
+    for (k = 0; rc == 0 && ext2_le16(em->gd + 14) != 0 && k < em->ipg; k++) {
+        void *f;
+
+        snprintf(name, sizeof name, "f%u", (unsigned)k);
+        f = make_file(group_b_dir, name, &rc);
+        if (f) {
+            OPS->put(&mnt, f);
+        }
+    }
+    check(rc == 0 && ext2_le16(em->gd + 14) == 0, "files fill group 0's inodes");
+    u = make_file(ia, "u", &rc);
+    if (u) {
+        uino = ((struct ext2_node *)u)->ino;
+        OPS->put(&mnt, u);
+    }
+    check(u && group_of_inode(uino) == 1, "a file of group 0's directory takes group 1's inode");
+    check(OPS->sync(&mnt) == 0 && bcache_sync(&dev) == 0, "the cache is clean");
+    if (!u) {
+        OPS->put(&mnt, ia);
+        OPS->put(&mnt, group_b_dir);
+        group_finish(0, 0, "the inode row's volume");
+        return;
+    }
+    group_pause_block =
+        ((uint64_t)ext2_le32(em->gd + 32 + 4) * em->block_size) >> BCACHE_BLOCK_SHIFT;
+    group_paused = 0;
     group_b_rc = -1;
-    read_pause = overlap_turn;
+    group_b_ino = 0;
+    write_pause = group_write_turn;
     start_turns(group_second_create);
     rc = OPS->unlink(&mnt, ia, "u");
     finish_turns();
-    read_pause = 0;
-    check(rc == 0 && group_b_rc == 0, "a file is removed while another is made");
+    write_pause = 0;
+    check(rc == 0 && group_b_rc == 0 && group_paused,
+          "a file is removed while another is made, inside the write of the freed bit");
+    check(second_wait && streq(second_wait, "ext2 group"), "where it sleeps on the group's lock");
+    check(group_of_inode(group_b_ino) == 1, "and takes an inode of group 1");
     OPS->put(&mnt, ia);
     OPS->put(&mnt, group_b_dir);
     group_finish(0, 0, "and each group's bitmaps and the free counts agree");
