@@ -5763,7 +5763,7 @@ static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     } else if (size > n->size) {
         rc = em_sync(em);
         if (rc == 0) {
-            n->size = size;
+            node_size_set(n, size);
             stamp(n, T_MTIME | T_CTIME);
             rc = inode_store(em, n);
         }
