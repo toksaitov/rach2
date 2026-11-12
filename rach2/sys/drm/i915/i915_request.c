@@ -1228,6 +1228,7 @@ static int32_t request_new(struct intel_context *ce, struct i915_request **out)
     struct drm_i915_private *i915 = ce->i915;
     struct i915_engine *e = ce->engine;
     struct i915_request *rq;
+    uint64_t now;
     uint32_t flags;
     int32_t err;
     int idle;
@@ -1241,13 +1242,16 @@ static int32_t request_new(struct intel_context *ce, struct i915_request **out)
     if (!rq) {
         return -ENOMEM;
     }
+    /* One tick for the GT's unpark and the engine's, so that the engine's
+     * first beat is the GT's first. */
+    now = rtc_ticks_now();
     if (!i915->gt.awake) {
         i915->gt.awake = 1;
-        i915->gt.unpark_ticks = rtc_ticks_now();
-        i915->gt.retire_next = retire_deadline(i915->gt.unpark_ticks);
+        i915->gt.unpark_ticks = now;
+        i915->gt.retire_next = retire_deadline(now);
         i915_gt_unpark(i915);
         /* The worker beats while the GT is awake. */
-        i915_hangcheck_unpark(i915);
+        i915_hangcheck_unpark(i915, now);
         submit_device_add(i915);
         hangcheck_kicked = 1;
         wq_wake_all(&submit_wait);
@@ -1267,7 +1271,7 @@ static int32_t request_new(struct intel_context *ce, struct i915_request **out)
     e->unretired = 1;
     e->building = 1;
     spin_unlock_irqrestore(&e->lock, flags);
-    if (idle && i915_hangcheck_unpark_engine(i915, e)) {
+    if (idle && i915_hangcheck_unpark_engine(i915, e, now)) {
         hangcheck_kicked = 1;
         wq_wake_all(&submit_wait);
     }
