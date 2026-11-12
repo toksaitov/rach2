@@ -991,6 +991,32 @@ void filecache_store(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, u
     (void)epoch;
 }
 
+/** Lend no page. */
+uint32_t filecache_lend(const struct fd_entry *e, uint32_t first, uint32_t count, uintptr_t *phys)
+{
+    (void)e;
+    (void)first;
+    (void)count;
+    (void)phys;
+    return 0;
+}
+
+/** Keep no frame. */
+void filecache_keep(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, uint32_t epoch)
+{
+    (void)e;
+    (void)pgoff;
+    (void)phys;
+    (void)epoch;
+}
+
+/** Nothing is cached to forget. */
+void filecache_forget_ino(const struct vfs_mount *mnt, uint64_t ino)
+{
+    (void)mnt;
+    (void)ino;
+}
+
 /** Require a live open handle before truncation. */
 int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
 {

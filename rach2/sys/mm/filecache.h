@@ -26,6 +26,17 @@ int filecache_read(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys);
  * buffer `buf` of a page, as exec reads a program. */
 int filecache_read_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, void *buf);
 
+/**
+ * Lend the frame of each page `first + i`, for `i` below `count`, of the
+ * file `e` is open on that the cache has as the file is now and whose
+ * `phys[i]` is 0, in `phys[i]` with a reference for the caller, leaving the
+ * other entries as they are. The frame stays the cache's too, so its holder
+ * changes it only as a write or a truncation of the file changes the file,
+ * which then drops the file's pages from the cache (`filecache_forget`).
+ * One look at the file serves the whole range. Returns the frames lent.
+ */
+uint32_t filecache_lend(const struct fd_entry *e, uint32_t first, uint32_t count, uintptr_t *phys);
+
 /** The count of the changes recorded so far of the file `node` of `mnt`
  * and of the few files that share its counter (`filecache_forget`,
  * `filecache_forget_mount`), taken before a page is read for
@@ -56,6 +67,12 @@ int filecache_file_read(struct open_file *ofd, char __user *buf, uint32_t count,
  * heap; past that the least recently used page's frame is used. */
 void filecache_store(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, uint32_t epoch);
 
+/** Keep the frame `phys` itself, with a reference of the cache's, as page
+ * `pgoff` of the file `e` is open on as it was just read, as
+ * `filecache_store` keeps a copy; its holder changes it only as
+ * `filecache_lend` allows. */
+void filecache_keep(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, uint32_t epoch);
+
 /** The same for page `pgoff` of the file `node` of `mnt`, from the kernel
  * buffer `buf` of a page. */
 void filecache_store_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, const void *buf,
@@ -64,6 +81,10 @@ void filecache_store_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, con
 /** Drop every page of the file `node` of `mnt`, which a write, a truncation
  * or an allocation in it has just changed. */
 void filecache_forget(struct vfs_mount *mnt, void *node);
+
+/** Drop every page of the file numbered `ino` on `mnt`, as
+ * `filecache_forget` does, without asking the file system. */
+void filecache_forget_ino(const struct vfs_mount *mnt, uint64_t ino);
 
 /** Drop every page of the files of `mnt`, at its unmount. */
 void filecache_forget_mount(const struct vfs_mount *mnt);
