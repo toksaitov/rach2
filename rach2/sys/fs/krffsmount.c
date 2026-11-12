@@ -1268,6 +1268,7 @@ static const struct vfs_ops krffs_volume_ops = {
     0, /* cachestat */
     0, /* put_unless_last */
     0, /* readlink_cached */
+    0, /* read_frames */
 };
 
 /**

@@ -2189,6 +2189,188 @@ static int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_
     return rc != 0 ? rc : (int32_t)done;
 }
 
+/* The pages one plan of `ext2_read_frames` covers. */
+#define EXT2_FRAMES_PLAN 32u
+/* What a plan found for a page: a hole, or a page another copy of which
+ * may be newer than the disk's, which `ext2_read` reads; any other plan is
+ * the page's first sector, which is past both, since a page is read so only
+ * from blocks of a page or more and block 0 holds no data. */
+#define EXT2_PAGE_HOLE   ((uint64_t)0)
+#define EXT2_PAGE_COPY   ((uint64_t)1)
+
+/**
+ * Find where page `pg` of `n` lies, for `ext2_read_frames`: the device
+ * sector its bytes start at, when they are one run of sectors no other copy
+ * of which may be newer, EXT2_PAGE_HOLE for a hole, or EXT2_PAGE_COPY for a
+ * page `ext2_read` must read: a block the batch has an image of or the
+ * cache holds, either of which may be newer than the device, or a page of
+ * blocks smaller than a page. 0, or the errors of `block_at`. The caller
+ * holds `n`'s lock, and the big lock while the batch is not empty
+ * (`batch_guard`), so that no write of the file changes a block after the
+ * look.
+ */
+static int frame_plan(struct ext2_mount *em, const struct ext2_node *n, uint32_t pg, uint64_t *plan)
+{
+    uint64_t at = (uint64_t)pg * PAGE_SIZE, off;
+    uint32_t b;
+    int rc;
+
+    if (em->block_size < PAGE_SIZE) {
+        *plan = EXT2_PAGE_COPY;
+        return 0;
+    }
+    rc = block_at(em, n, (uint32_t)(at >> em->block_shift), &b);
+    if (rc != 0) {
+        return rc;
+    }
+    if (b == 0) {
+        *plan = EXT2_PAGE_HOLE;
+        return 0;
+    }
+    off = ((uint64_t)b << em->block_shift) + ((uint32_t)at & (em->block_size - 1));
+    if (writeback_find(em, (uint32_t)(off >> BCACHE_BLOCK_SHIFT)) ||
+        bcache_cached(em->dev, off >> BCACHE_BLOCK_SHIFT)) {
+        *plan = EXT2_PAGE_COPY;
+        return 0;
+    }
+    *plan = off >> 9; /* sectors of 512 bytes */
+    return 0;
+}
+
+/**
+ * Read `left` pages from page `pg` of `n`, whose plans are `plan`, into
+ * `frames`, under `n`'s lock: a run of pages whose sectors follow each
+ * other in one transfer straight into the frames (`block_read_frames`), a
+ * hole as zeros and a copied page through `ext2_read`; the bytes past the
+ * file's size are cleared. The pages filled, from the first; or the first
+ * page's error.
+ */
+static int32_t frame_fill(struct vfs_mount *mnt, struct ext2_node *n, uint32_t pg, uint32_t left,
+                          const uint64_t *plan, const uintptr_t *frames)
+{
+    struct ext2_mount *em = em_of(mnt);
+    uint64_t size = n->size;
+    uint32_t i = 0, run;
+    int32_t rc = 0;
+    uint8_t *page;
+
+    while (i < left) {
+        uint64_t at = (uint64_t)(pg + i) * PAGE_SIZE;
+
+        if (plan[i] == EXT2_PAGE_HOLE) {
+            rc = paging_zero_frame(frames[i]) == 0 ? 0 : -EIO;
+            run = 1;
+        } else if (plan[i] == EXT2_PAGE_COPY) {
+            page = kmap_temp(frames[i]);
+            rc = page ? ext2_read(mnt, n, page, PAGE_SIZE, at) : -EIO;
+            if (rc >= 0 && rc < (int32_t)PAGE_SIZE) {
+                k_memset(page + rc, 0, PAGE_SIZE - (uint32_t)rc);
+            }
+            if (page) {
+                kunmap_temp(page);
+            }
+            rc = rc < 0 ? rc : 0;
+            run = 1;
+        } else {
+            for (run = 1; i + run < left && plan[i + run] > EXT2_PAGE_COPY &&
+                          plan[i + run] == plan[i] + run * (PAGE_SIZE / BLOCK_SECTOR_SIZE);
+                 run++) {
+            }
+            rc = block_read_frames(em->dev, plan[i], run * (PAGE_SIZE / BLOCK_SECTOR_SIZE),
+                                   frames + i);
+        }
+        if (rc != 0) {
+            break;
+        }
+        i += run;
+        if (at + (uint64_t)run * PAGE_SIZE > size && plan[i - 1] > EXT2_PAGE_COPY) {
+            page = kmap_temp(frames[i - 1]);
+            if (!page) {
+                rc = -EIO;
+                i--;
+                break;
+            }
+            k_memset(page + (uint32_t)(size & (PAGE_SIZE - 1)), 0,
+                     PAGE_SIZE - (uint32_t)(size & (PAGE_SIZE - 1)));
+            kunmap_temp(page);
+        }
+    }
+    return i > 0 ? (int32_t)i : rc;
+}
+
+/**
+ * The `read_frames` of `vfs_ops`: pages `first` to `first + count - 1` of a
+ * regular file into `frames`, ending at the size, as Linux's
+ * `mpage_readahead` reads a file's pages into the page cache's folios
+ * (fs/mpage.c): a page whose blocks follow on the device goes into
+ * one transfer with its neighbours, made on the frames themselves, so that
+ * no buffer of the cache holds the bytes and no copy moves them, and a page
+ * the cache may hold newer bytes of, a hole and a page of small blocks are
+ * read as `ext2_read` reads them, as `do_mpage_readpage` falls back to
+ * `block_read_full_folio` for a page with buffers or with blocks out of
+ * line. Data written to a file goes through
+ * the batch and the cache, so the device's bytes of a block that neither
+ * holds are the file's.
+ *
+ * The node's lock is held across each plan and its transfers, so that no
+ * write, truncation or free of the file changes a planned block before it
+ * is read, as Linux's locked folio holds off a truncation of its page until
+ * its read ends (`truncate_inode_pages_range`, mm/truncate.c); the
+ * big lock only across the plan, while the batch is not empty. The pages
+ * filled, 0 at or past the end, -EISDIR, or the first page's error.
+ */
+static int32_t ext2_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, uint32_t count,
+                                const uintptr_t *frames)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *n = handle;
+    uint64_t plan[EXT2_FRAMES_PLAN], size;
+    uint32_t done = 0, pages, left, i;
+    int32_t got = 0;
+    int rc = 0, big;
+
+    if ((n->mode & S_IFMT_) != S_IFREG_) {
+        return (n->mode & S_IFMT_) == S_IFDIR_ ? -EISDIR : -EINVAL;
+    }
+    node_lock(n);
+    size = n->size;
+    pages = (uint32_t)((size + PAGE_SIZE - 1) >> 12);
+    if (first >= pages) {
+        node_unlock(n);
+        return 0;
+    }
+    if (count > pages - first) {
+        count = pages - first;
+    }
+    while (done < count) {
+        left = count - done < EXT2_FRAMES_PLAN ? count - done : EXT2_FRAMES_PLAN;
+        big = batch_guard(em);
+        for (i = 0; i < left; i++) {
+            rc = frame_plan(em, n, first + done + i, &plan[i]);
+            if (rc != 0) {
+                break;
+            }
+        }
+        if (big) {
+            bkl_exit();
+        }
+        if (i == 0) {
+            break;
+        }
+        got = frame_fill(mnt, n, first + done, i, plan, frames + done);
+        if (got <= 0) {
+            rc = got;
+            break;
+        }
+        done += (uint32_t)got;
+        if ((uint32_t)got < i || rc != 0) {
+            break;
+        }
+    }
+    node_unlock(n);
+    return done > 0 ? (int32_t)done : rc;
+}
+
 /**
  * The getdents64 type of the file-type byte a directory entry stores under
  * the filetype feature: regular file, directory, character and block
@@ -8912,6 +9094,7 @@ static const struct vfs_ops ext2_ops = {
     ext2_cachestat,
     ext2_put_unless_last,
     ext2_readlink_cached,
+    ext2_read_frames,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 0, 0, 1, 1, 1};

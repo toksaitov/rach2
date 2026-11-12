@@ -346,6 +346,19 @@ struct vfs_ops {
      * walk (`resolve_path`), whose hold keeps the node; NULL for a type that
      * keeps no target so. */
     int (*readlink_cached)(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap);
+    /* Read pages `first` to `first + count - 1` of the regular file open as
+     * `handle` into the page frames `frames`, a page each, with zeros in a
+     * hole and past the end of the file, the device's transfer landing in
+     * the frames where it can (`block_read_frames`), as Linux's
+     * `readahead` of `address_space_operations` reads into the page
+     * cache's folios. The pages filled, from the first, which stop short of
+     * `count` only at the end of the file or at a failed read after the
+     * first; 0 at or past the end; or a negative errno. A file's page in
+     * memory is the type's only where the type says so: the caller keeps
+     * what it reads in the file page cache. NULL for a type that reads no
+     * page so, whose caller reads with `read`. */
+    int32_t (*read_frames)(struct vfs_mount *mnt, void *handle, uint32_t first, uint32_t count,
+                           const uintptr_t *frames);
 };
 
 /* What cachestat(2) counts over a file's range of pages, in the order and
@@ -1168,6 +1181,10 @@ void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to);
 /** The type's read: the bytes read, 0 at the end, -EINVAL for a type without
  * `read`, or the type's error. */
 int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count, uint64_t offset);
+/** The type's `read_frames`: the pages filled, 0 at the end, -ENOSYS for a
+ * type without it, or the type's error. */
+int32_t vfs_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, uint32_t count,
+                        const uintptr_t *frames);
 /** The type's write: the bytes written, -EROFS for a type without `write`,
  * or the type's error. */
 int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,

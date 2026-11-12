@@ -2817,6 +2817,18 @@ int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
     return mnt->type->ops->read(mount_base(mnt), handle, buf, count, offset);
 }
 
+int32_t vfs_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, uint32_t count,
+                        const uintptr_t *frames)
+{
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
+    if (!mnt->type->ops->read_frames) {
+        return -ENOSYS;
+    }
+    return mnt->type->ops->read_frames(mount_base(mnt), handle, first, count, frames);
+}
+
 int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                   uint64_t offset)
 {
@@ -3894,6 +3906,7 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* cachestat */
     0,                           /* put_unless_last */
     0,                           /* readlink_cached */
+    0,                           /* read_frames */
 };
 
 /** The constructor of the root's entry: the mount's root is the image's root
@@ -4518,6 +4531,7 @@ static const struct vfs_ops devfs_vops = {
     0, /* cachestat */
     0, /* put_unless_last */
     0, /* readlink_cached */
+    0, /* read_frames */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -4561,6 +4575,7 @@ static const struct vfs_ops procfs_vops = {
     0, /* cachestat */
     0, /* put_unless_last */
     0, /* readlink_cached */
+    0, /* read_frames */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -4604,6 +4619,7 @@ static const struct vfs_ops sysfs_vops = {
     0, /* cachestat */
     0, /* put_unless_last */
     0, /* readlink_cached */
+    0, /* read_frames */
 };
 
 /** The constructor of a synthetic mount: its root is a node of the
