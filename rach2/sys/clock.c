@@ -536,6 +536,54 @@ static void rtc_mono_now(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = (int64_t)r.second_ticks * RTC_NANOSECONDS_PER_TICK + (int64_t)r.mono_past;
 }
 
+/* The last readings of the monotonic and raw clocks, which no later one is
+ * earlier than. */
+static int64_t rtc_mono_seconds;
+static int64_t rtc_mono_nanoseconds;
+static int64_t rtc_raw_seconds;
+static int64_t rtc_raw_nanoseconds;
+/* The monotonic time, in nanoseconds since boot, that the coarse clocks'
+ * fallbacks to the tick read no earlier than: the last time of the vDSO's
+ * clock where it stopped (`rtc_vclock_change`). */
+static uint64_t rtc_coarse_floor_ns;
+static struct spinlock rtc_mono_lock = SPINLOCK_INIT_NAMED("rtc_mono_lock");
+
+/** Hold `*seconds` and `*nanoseconds`, whose nanoseconds may pass a second,
+ * to the floor `*floor_sec` and `*floor_nsec` and make them the floor, with
+ * `rtc_mono_lock` held. */
+static void rtc_floor(int64_t *seconds, int64_t *nanoseconds, int64_t *floor_sec,
+                      int64_t *floor_nsec)
+{
+    while (*nanoseconds >= 1000000000) {
+        *nanoseconds -= 1000000000;
+        (*seconds)++;
+    }
+    if (*seconds < *floor_sec || (*seconds == *floor_sec && *nanoseconds < *floor_nsec)) {
+        *seconds = *floor_sec;
+        *nanoseconds = *floor_nsec;
+    }
+    *floor_sec = *seconds;
+    *floor_nsec = *nanoseconds;
+}
+
+/**
+ * The continuous monotonic clock now, `rtc_mono_now` held to the floor of
+ * every reading before it, which it becomes, in `*seconds` and in
+ * `*nanoseconds`, under a second; the caller has interrupts off and may
+ * hold `rtc_realtime_lock`, which comes before `rtc_mono_lock`. Where the
+ * vDSO's clock stopped ahead of the tick's, the floor is that clock's last
+ * time (`rtc_vclock_change`), so the clock does not run back across the
+ * stop, as Linux's timekeeper carries its own time across a change of
+ * clocksource (kernel/time/timekeeping.c:1479-1502).
+ */
+static void rtc_mono_held(int64_t *seconds, int64_t *nanoseconds)
+{
+    rtc_mono_now(seconds, nanoseconds);
+    spin_lock(&rtc_mono_lock);
+    rtc_floor(seconds, nanoseconds, &rtc_mono_seconds, &rtc_mono_nanoseconds);
+    spin_unlock(&rtc_mono_lock);
+}
+
 /** Real time at the monotonic time `msec` and `mnsec`, whose nanoseconds
  * may pass a second, with the lock held, in `*seconds` and `*nanoseconds`,
  * under a second. */
@@ -572,17 +620,18 @@ int64_t rtc_boot_epoch(void)
 }
 
 /**
- * The last reading is kept as a floor, since a reading can fall back:
- * without a reference counter a stretch with interrupts off longer than a
- * period loses periods the tick does not count, and a faulty latch of the
- * counter reads zero.
+ * Real time is the continuous monotonic clock (`rtc_mono_held`) plus the
+ * offset. The last reading is kept as a floor too, since a reading can fall
+ * back: without a reference counter a stretch with interrupts off longer
+ * than a period loses periods the tick does not count, and a faulty latch
+ * of the counter reads zero.
  */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
     int64_t msec, mnsec;
 
-    rtc_mono_now(&msec, &mnsec);
+    rtc_mono_held(&msec, &mnsec);
     rtc_real_of_mono(msec, mnsec, seconds, nanoseconds);
     if (*seconds < rtc_last_seconds ||
         (*seconds == rtc_last_seconds && *nanoseconds < rtc_last_nanoseconds)) {
@@ -594,46 +643,13 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
     spin_unlock_irqrestore(&rtc_realtime_lock, flags);
 }
 
-/* The last readings of the monotonic and raw clocks, which no later one is
- * earlier than. */
-static int64_t rtc_mono_seconds;
-static int64_t rtc_mono_nanoseconds;
-static int64_t rtc_raw_seconds;
-static int64_t rtc_raw_nanoseconds;
-/* The monotonic time, in nanoseconds since boot, that the coarse clocks'
- * fallbacks to the tick read no earlier than: the last time of the vDSO's
- * clock where it stopped (`rtc_vclock_change`). */
-static uint64_t rtc_coarse_floor_ns;
-static struct spinlock rtc_mono_lock = SPINLOCK_INIT_NAMED("rtc_mono_lock");
-
-/** Hold `*seconds` and `*nanoseconds`, whose nanoseconds may pass a second,
- * to the floor `*floor_sec` and `*floor_nsec` and make them the floor, with
- * `rtc_mono_lock` held. */
-static void rtc_floor(int64_t *seconds, int64_t *nanoseconds, int64_t *floor_sec,
-                      int64_t *floor_nsec)
-{
-    while (*nanoseconds >= 1000000000) {
-        *nanoseconds -= 1000000000;
-        (*seconds)++;
-    }
-    if (*seconds < *floor_sec || (*seconds == *floor_sec && *nanoseconds < *floor_nsec)) {
-        *seconds = *floor_sec;
-        *nanoseconds = *floor_nsec;
-    }
-    *floor_sec = *seconds;
-    *floor_nsec = *nanoseconds;
-}
-
 /** The floor is `rtc_realtime`'s, for the same reasons, kept apart from it
  * since setting the clock moves that one and not this. */
 void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds)
 {
     uint32_t flags = kirq_save();
 
-    rtc_mono_now(seconds, nanoseconds);
-    spin_lock(&rtc_mono_lock);
-    rtc_floor(seconds, nanoseconds, &rtc_mono_seconds, &rtc_mono_nanoseconds);
-    spin_unlock(&rtc_mono_lock);
+    rtc_mono_held(seconds, nanoseconds);
     kirq_restore(flags);
 }
 
@@ -804,9 +820,13 @@ static int rtc_step_locked(int64_t msec, int64_t mnsec, int64_t seconds, int32_t
 }
 
 /**
- * The offset becomes the time asked for less the monotonic clock now, so
- * the clock goes on from the new time at the rate it had. A reading after
- * a step back may be earlier than one before it, and the boot epoch moves
+ * The offset becomes the time asked for less the continuous monotonic clock
+ * now (`rtc_mono_held`), the one every reading of real time adds it to, as
+ * Linux's do_settimeofday64 and timekeeping_inject_offset work from the
+ * timekeeper's own time (kernel/time/timekeeping.c:1361-1376, 1393-1429).
+ * So the clock goes on from the new time at the rate it had, and a shift of
+ * nothing leaves real time and its floor where they were. A reading after a
+ * step back may be earlier than one before it, and the boot epoch moves
  * with the step, as Linux's does, so that a process's start time read from
  * it stays where it was against the clock.
  */
@@ -821,7 +841,7 @@ int rtc_set_realtime(int64_t seconds, int32_t nanoseconds)
         return -1;
     }
     flags = spin_lock_irqsave(&rtc_realtime_lock);
-    rtc_mono_now(&msec, &mnsec);
+    rtc_mono_held(&msec, &mnsec);
     rc = rtc_step_locked(msec, mnsec, seconds, nanoseconds, 1);
     spin_unlock_irqrestore(&rtc_realtime_lock, flags);
     timerfd_clock_was_set();
@@ -836,7 +856,7 @@ int rtc_shift_realtime(int64_t seconds, int32_t nanoseconds)
     int valid;
     int rc;
 
-    rtc_mono_now(&msec, &mnsec);
+    rtc_mono_held(&msec, &mnsec);
     rtc_real_of_mono(msec, mnsec, &now, &now_ns);
     valid = seconds > -RTC_SETTOD_SEC_MAX && seconds < RTC_SETTOD_SEC_MAX;
     rtc_normalize(valid ? now + seconds : 0, now_ns + nanoseconds, &now, &nsec);

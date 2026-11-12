@@ -4,18 +4,25 @@
 #include "sched.h"
 #include "../rtc.h"
 #include "../timer.h"
-#include "../vdso.h"
 #include "../lib/kstring.h"
 
-/** Read the common microsecond clock with interrupts off, modulo 2^32. */
+/**
+ * Read the monotonic clock in microseconds, modulo 2^32, or 0 before the
+ * scheduler runs, when no wake is timed. It is the one continuous clock
+ * (`rtc_monotonic`): the vDSO's clock while that runs and the tick's
+ * after, held to the last reading, so that a stage that starts on one and
+ * ends on the other, or across a slew, is measured on one scale. Takes
+ * `rtc_mono_lock`, a leaf, with interrupts off.
+ */
 uint32_t waketime_clock(void)
 {
     int64_t sec, ns;
 
-    if (vclock_read(0, 0, &sec, &ns)) {
-        return (uint32_t)sec * 1000000u + (uint32_t)ns / 1000u;
+    if (!sched_is_enabled()) {
+        return 0u;
     }
-    return sched_is_enabled() ? timer_now_us() : 0u;
+    rtc_monotonic(&sec, &ns);
+    return (uint32_t)sec * 1000000u + (uint32_t)ns / 1000u;
 }
 
 /** Read `cpu`'s completed and current lock waits at `now`. Completed
