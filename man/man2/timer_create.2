@@ -189,6 +189,10 @@ stop signal for
 and
 .Dv SIGCONT
 for the stop signals.
+A thread's end discards the signals of the
+.Dv SIGEV_THREAD_ID
+timers aimed at it, pending or waiting there, as Linux discards an ending
+thread's pending signals.
 .Fn timer_getoverrun ,
 number 262 on i386 and 225 on x86-64, gives the overrun that the setting
 in force counted for the last signal of a periodic timer delivered since

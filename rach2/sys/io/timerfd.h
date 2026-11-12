@@ -124,6 +124,13 @@ void ptimer_exec(struct process *self);
  * and free the deleted timers they kept; with interrupts off. */
 void ptimer_discard(struct tgroup *tg, uint64_t bits);
 
+/** Drop the notifications of the POSIX timers that SIGEV_THREAD_ID aims at
+ * the ending thread `self`, pending or waiting on it, and free the deleted
+ * timers they kept, as Linux flushes an ending thread's pending signals
+ * (kernel/exit.c:207); called by the thread with the big lock, before it
+ * becomes a zombie. */
+void ptimer_thread_exit(struct process *self);
+
 /** Count the expirations due by the tick `now`, and wake the readers or
  * leave the signals for a holder of the big lock to post
  * (`ptimer_post_due`); called from the timer interrupt that made the
