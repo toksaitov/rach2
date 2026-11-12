@@ -247,7 +247,7 @@ static void wr_fallocate_row(void)
     }
     wr_b_at = 0;
     wr_arm(wr_second_write, 0);
-    a_rc = OPS->fallocate(&mnt, f, 0, 0, sizeof(want));
+    a_rc = OPS->fallocate(&mnt, ha, 0, 0, sizeof(want));
     wr_end("a write of the first block inside fallocate's disk read");
     check(wr_slept && streq(wr_slept, "ext2 node"), "where it sleeps on the node's lock");
     memset(want, 0, sizeof(want));

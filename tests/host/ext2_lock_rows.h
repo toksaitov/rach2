@@ -251,9 +251,13 @@ static void rename_order_row(void)
     if (empty) {
         struct vfs_dirent ent;
         uint32_t cursor = 0;
+        void *h = 0;
 
-        check(OPS->readdir(&mnt, empty, &cursor, &ent) == -ENOENT,
+        check(OPS->open(&mnt, empty, 0, &h) == 0 && OPS->readdir(&mnt, h, &cursor, &ent) == -ENOENT,
               "and the held directory lists as ENOENT");
+        if (h) {
+            OPS->release(&mnt, h);
+        }
         OPS->put(&mnt, empty);
     }
     moved = walk("/p/s", &err);

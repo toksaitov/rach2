@@ -206,6 +206,8 @@ struct ext2_node {
      * lookup found a name in, kept under its lock, as Linux keeps
      * `i_dir_start_lookup` (fs/ext2/dir.c:356 and 395). */
     uint32_t lookup_from;
+    /* Entry changes, under the directory lock; not stored on disk. */
+    uint64_t dir_version;
     int unlinked;                /* no name left; the inode and its blocks go at the last put */
     int state;                   /* N_LOADING, N_LIVE, N_DYING or N_FAILED */
     int load_error;              /* the -errno of a load that failed */
@@ -237,6 +239,14 @@ struct ext2_node {
      * and when the node is made, and cleared as an `fsync` writes the
      * table block: `fdatasync` writes that block only while it is set. */
     int dirty_meta;
+};
+
+/* One open file, holding `node` until release. The directory cursor and
+ * version belong to this open, under the node lock, not to other opens. */
+struct ext2_handle {
+    struct ext2_node *node;
+    uint32_t cursor;      /* the last position returned, or ~0u before the first read */
+    uint64_t dir_version; /* the directory version at that position */
 };
 
 /* `ext2_write_bytes`'s ways to write on a mount with `sync` or `dirsync`
