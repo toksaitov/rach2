@@ -48,9 +48,10 @@ uint32_t filecache_epoch(struct vfs_mount *mnt, void *node);
  * user buffer `buf` through the cache, as read(2) does: each page the cache
  * has as the file is now is copied from it, and a page it lacks is read
  * with the window the description's readahead gives (`ofd->ra`), each page
- * into a new frame, which joins the cache; reaching a marked page queues
- * the next window for a worker, and reaching a page a worker will read
- * waits for it. Returns 0, with nothing done, for a
+ * into a new frame, which joins the cache locked until the disk answers;
+ * the reader submits each window's reads itself without waiting for them,
+ * reaching a marked page submits the next window so, and reaching a locked
+ * page waits until its read ends. Returns 0, with nothing done, for a
  * file the cache does not keep, which the caller reads itself; 1 with `*got`
  * the bytes read, 0 at or past the end of the file, -EFAULT for a
  * buffer that takes no byte, or the file system's error. Before each page
@@ -62,9 +63,11 @@ int filecache_file_read(struct open_file *ofd, char __user *buf, uint32_t count,
                         int32_t *got, int (*cut)(const struct open_file *ofd));
 
 /**
- * Queue the pages of the `len` bytes at `offset` of the file `ofd` is open
- * on, all of them for a `len` of 0, for a worker to read into the cache
- * without waiting, as Linux's POSIX_FADV_WILLNEED and readahead(2) start
+ * Submit, in the caller's own context, the reads of the pages of the `len`
+ * bytes at `offset` of the file `ofd` is open on, all of them for a `len`
+ * of 0, into pages put in the cache locked until their reads end, and
+ * return without waiting for the disk, as Linux's POSIX_FADV_WILLNEED and
+ * readahead(2) start
  * their reads (`force_page_cache_ra`, mm/readahead.c:327-353): at most what
  * one request to the device moves or the description's window, whichever
  * is larger, cut at the file's end. A file the cache does not keep is left
