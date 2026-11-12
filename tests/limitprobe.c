@@ -442,9 +442,12 @@ static int body_sandbox(void)
     return 0;
 }
 
-/** A file of at most 4096 bytes: a write of 8192 writes 4096, the next one
- * and a truncation to 8192 are EFBIG, and SIGXFSZ, ignored here, would
- * otherwise have ended the child. Returns 0, or 2 to 4 for the step that
+/** A file of at most 4096 bytes. A file of 16384 bytes, written before the
+ * limit is set, shrinks to 12288 by ftruncate and to 8192 by truncate while
+ * SIGXFSZ, which would end the child, still has its default action, since
+ * only growth is checked against the limit. Then, with SIGXFSZ ignored, a
+ * write of 8192 to an emptied file writes 4096, and the next one and a
+ * truncation to 8192 are EFBIG. Returns 0, or 2 to 6 for the step that
  * fails. */
 static int body_fsize(void)
 {
@@ -454,14 +457,34 @@ static int body_fsize(void)
         unsigned long handler, flags, restorer;
         unsigned long long mask;
     } ignore = {SIG_IGN, 0, 0, 0};
-    int fd, wrote, again, cut;
+    int fd, wrote, again, cut, shrunk;
 
-    if (set_limit(RLIMIT_FSIZE, 4096, 4096) != 0 ||
-        syscall4(SYS_RT_SIGACTION, SIGXFSZ, (long)&ignore, 0, 8) != 0) {
+    fd = syscall3(SYS_OPEN, (long)scratch_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        return 3;
+    }
+    wrote = syscall3(SYS_WRITE, fd, (long)block, (int)sizeof(block));
+    again = syscall3(SYS_WRITE, fd, (long)block, (int)sizeof(block));
+    if (wrote != (int)sizeof(block) || again != (int)sizeof(block) ||
+        set_limit(RLIMIT_FSIZE, 4096, 4096) != 0) {
+        syscall1(SYS_CLOSE, fd);
+        syscall1(SYS_UNLINK, (long)scratch_path);
         return 2;
+    }
+    cut = syscall2(SYS_FTRUNCATE, fd, 12288);
+    shrunk = syscall2(SYS_TRUNCATE, (long)scratch_path, 8192);
+    syscall1(SYS_CLOSE, fd);
+    if (cut != 0 || shrunk != 0) {
+        syscall1(SYS_UNLINK, (long)scratch_path);
+        return 5;
+    }
+    if (syscall4(SYS_RT_SIGACTION, SIGXFSZ, (long)&ignore, 0, 8) != 0) {
+        syscall1(SYS_UNLINK, (long)scratch_path);
+        return 6;
     }
     fd = syscall3(SYS_OPEN, (long)scratch_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
+        syscall1(SYS_UNLINK, (long)scratch_path);
         return 3;
     }
     wrote = syscall3(SYS_WRITE, fd, (long)block, (int)sizeof(block));
