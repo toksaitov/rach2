@@ -462,6 +462,10 @@ int vm_device_map(vma_t *vma, const struct vm_device_ops *ops, void *obj, uint32
  * the fake backend lets a guest run XSAVES. */
 static int model_xsaves;
 
+/* Whether the model lacks XSAVE, OSXSAVE and AVX, as a processor before
+ * the Core 2 of 45 nm does. */
+static int model_no_xsave;
+
 /* The processor: a model of the Lenovo's Haswell, i7-4xxx. */
 void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
 {
@@ -478,6 +482,9 @@ void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t
         r[0] = 0x000306C3;
         r[1] = 0x00100800;
         r[2] = 0x7FFAFBBFu; /* with VMX, x2APIC, OSXSAVE */
+        if (model_no_xsave) {
+            r[2] &= ~0x1C000000u; /* XSAVE, OSXSAVE, AVX */
+        }
         r[3] = 0xBFEBFBFFu;
         break;
     case 4:
@@ -3495,6 +3502,63 @@ static void xsave_move_rows(void)
     fdclose(vm);
 }
 
+/**
+ * KVM_GET_XSAVE and KVM_SET_XSAVE on a model without XSAVE, where Linux
+ * keeps them in FXSAVE's form: KVM_CAP_XSAVE answers 1 on either model and
+ * KVM_CAP_XCRS only with XSAVE; KVM_GET_XSAVE gives FXSAVE's 512 bytes with
+ * x87 and SSE marked and nothing after the header's first word; and
+ * KVM_SET_XSAVE refuses AVX marked or a reserved MXCSR bit and loads the
+ * 512 bytes, MXCSR among them.
+ */
+static void xsave_none_rows(void)
+{
+    static uint8_t img[4096] __attribute__((aligned(64)));
+    uint64_t bv;
+    uint32_t mxcsr, i;
+    uint8_t rest = 0;
+    int vm, a;
+
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_XSAVE) == 1 &&
+              dev(KVM_CHECK_EXTENSION, KVM_CAP_XCRS) == 1,
+          "with XSAVE, KVM_CAP_XSAVE and KVM_CAP_XCRS are 1");
+    model_no_xsave = 1;
+    kvm_xcr0_forget();
+    CHECK(kvm_xcr0_supported() == 0, "the model without XSAVE supports no XCR0");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_XSAVE) == 1 &&
+              dev(KVM_CHECK_EXTENSION, KVM_CAP_XCRS) == 0,
+          "without it KVM_CAP_XSAVE is 1 still and KVM_CAP_XCRS 0");
+    vm = dev(KVM_CREATE_VM, 0);
+    a = fdio(vm, KVM_CREATE_VCPU, 0);
+    k_memset(img, 0xA5, sizeof(img));
+    CHECK(fdio(a, KVM_GET_XSAVE, (uintptr_t)img) == 0, "KVM_GET_XSAVE without XSAVE");
+    k_memcpy(&bv, img + 512, 8);
+    for (i = 520; i < sizeof(img); i++) {
+        rest |= img[i];
+    }
+    CHECK(bv == 0x3 && rest == 0 && img[24] == 0x80 && img[25] == 0x1F,
+          "it gives FXSAVE's image, x87 and SSE marked, MXCSR 0x1F80");
+    bv = 0x7;
+    k_memcpy(img + 512, &bv, 8);
+    CHECK(fdio(a, KVM_SET_XSAVE, (uintptr_t)img) == -EINVAL, "KVM_SET_XSAVE refuses AVX marked");
+    bv = 0x3;
+    k_memcpy(img + 512, &bv, 8);
+    mxcsr = 0x10000; /* a reserved bit */
+    k_memcpy(img + 24, &mxcsr, 4);
+    CHECK(fdio(a, KVM_SET_XSAVE, (uintptr_t)img) == -EINVAL, "and a reserved MXCSR bit");
+    mxcsr = 0x9F80; /* FZ */
+    k_memcpy(img + 24, &mxcsr, 4);
+    CHECK(fdio(a, KVM_SET_XSAVE, (uintptr_t)img) == 0, "it takes x87 and SSE");
+    k_memset(img, 0, sizeof(img));
+    fdio(a, KVM_GET_XSAVE, (uintptr_t)img);
+    k_memcpy(&mxcsr, img + 24, 4);
+    CHECK(mxcsr == 0x9F80, "and loads FXSAVE's image, MXCSR among it");
+    fdclose(a);
+    fdclose(vm);
+    model_no_xsave = 0;
+    kvm_xcr0_forget();
+    CHECK(kvm_xcr0_supported() == 0x7, "the Haswell's model has x87, SSE and AVX again");
+}
+
 /** The capabilities and bounds Linux's selftests ask for, each in VMs of
  * its own. */
 static void selftest_rows(void)
@@ -3510,6 +3574,7 @@ static void selftest_rows(void)
     mce_hwcr_rows();
     xsaves_rows();
     xsave_move_rows();
+    xsave_none_rows();
     user_msr_rows();
     attr_rows();
     sync_rows();

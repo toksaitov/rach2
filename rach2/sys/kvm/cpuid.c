@@ -123,6 +123,13 @@ uint64_t kvm_xcr0_supported(void)
     return mask;
 }
 
+#ifdef RACH2_HOSTTEST
+void kvm_xcr0_forget(void)
+{
+    xcr0_known = 0;
+}
+#endif
+
 uint32_t kvm_xsave_size(uint64_t features, int compacted)
 {
     uint32_t a, b, c, d, size = 576, off, i;
