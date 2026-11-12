@@ -69,53 +69,62 @@ void user_window_close(void)
 
 /**
  * Copy `n` bytes between `dst` and `src`, of which `addr` is the user end,
- * for `copy_from_user` and `copy_to_user`: 0, or -EFAULT. A kernel buffer
- * the thread opened to the checks (`user_window_open`) is copied as kernel
- * memory. A user range is copied with no lock (`arch_user_copy`), and a
- * page that is not there, or not writable for a write, faults and is
- * brought in by the page fault handler under the regions' lock, as a
- * user's own access would be: Linux's copy is a string move with an
- * exception table's entry (arch/x86/include/asm/uaccess_64.h:119-131), and
- * only its fault takes the address space's lock (arch/x86/mm/fault.c:1329,
- * 1361). Another thread's unmap during the copy ends it at the page that
- * went. What a short copy from user memory did not fill of `dst` is zeroed,
- * as Linux's `_copy_from_user` zeroes it (include/linux/uaccess.h:180-184).
+ * for the copies of usercopy.h, and return the bytes not copied, 0 when all
+ * were and `n` for a range outside user space. A kernel buffer the thread
+ * opened to the checks (`user_window_open`) is copied as kernel memory. A
+ * user range is copied with no lock (`arch_user_copy`), and a page that is
+ * not there, or not writable for a write, faults and is brought in by the
+ * page fault handler under the regions' lock, as a user's own access would
+ * be: Linux's copy is a string move with an exception table's entry
+ * (arch/x86/include/asm/uaccess_64.h:119-131), and only its fault takes the
+ * address space's lock (arch/x86/mm/fault.c:1329, 1361). Another thread's
+ * unmap during the copy ends it at the page that went. The bytes not
+ * copied of `dst` are left as they were.
  */
-static int user_copy(void *dst, const void *src, uintptr_t addr, size_t n, int write)
+static size_t user_copy(void *dst, const void *src, uintptr_t addr, size_t n)
 {
-    size_t left;
-
     if (n == 0) {
         return 0;
     }
     if (!user_range_ok(addr, n)) {
-        return -EFAULT;
+        return n;
     }
     if (proc_window_covers(current_proc, addr, n)) {
         k_memcpy(dst, src, n);
         return 0;
     }
     if (!current_proc || !current_proc->mm) {
-        return -EFAULT;
+        return n;
     }
-    left = arch_user_copy(dst, src, n);
+    return arch_user_copy(dst, src, n);
+}
+
+/** What a short copy did not fill of `dst` is zeroed, as Linux's
+ * `_copy_from_user` zeroes it (include/linux/uaccess.h:180-184). */
+int copy_from_user(void *dst, const void __user *src, size_t n)
+{
+    size_t left = user_copy(dst, (const void __force *)src, (__force uintptr_t)src, n);
+
     if (left == 0) {
         return 0;
     }
-    if (!write) {
-        k_memset((char *)dst + (n - left), 0, left);
-    }
+    k_memset((char *)dst + (n - left), 0, left);
     return -EFAULT;
-}
-
-int copy_from_user(void *dst, const void __user *src, size_t n)
-{
-    return user_copy(dst, (const void __force *)src, (__force uintptr_t)src, n, 0);
 }
 
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
-    return user_copy((void __force *)dst, src, (__force uintptr_t)dst, n, 1);
+    return user_copy((void __force *)dst, src, (__force uintptr_t)dst, n) == 0 ? 0 : -EFAULT;
+}
+
+size_t copy_from_user_left(void *dst, const void __user *src, size_t n)
+{
+    return user_copy(dst, (const void __force *)src, (__force uintptr_t)src, n);
+}
+
+size_t copy_to_user_left(void __user *dst, const void *src, size_t n)
+{
+    return user_copy((void __force *)dst, src, (__force uintptr_t)dst, n);
 }
 
 int get_user_u32(uint32_t *val, uintptr_t src)

@@ -2360,6 +2360,20 @@ static int32_t tty_job_gate(struct tty *t, uint32_t request)
     }
 }
 
+/** TIOCSWINSZ: read the size at the user's `arg` whole and only then make
+ * it `*ws`, as Linux's tiocswinsz copies before it changes the size; 0, or
+ * -EFAULT with `*ws` as it was. */
+static int32_t tty_set_winsize(struct tty_winsize *ws, uintptr_t arg)
+{
+    struct tty_winsize in;
+
+    if (!arg || copy_from_user(&in, (const void __user *)arg, sizeof(in)) != 0) {
+        return -EFAULT;
+    }
+    *ws = in;
+    return 0;
+}
+
 /**
  * The terminal ioctls of the tty `t`.
  *
@@ -2443,13 +2457,7 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, 
         return 0;
 
     case TIOCSWINSZ:
-        if (!arg) {
-            return -EFAULT;
-        }
-        if (copy_from_user(&t->winsize, (const void __user *)arg, sizeof(t->winsize)) != 0) {
-            return -EFAULT;
-        }
-        return 0;
+        return tty_set_winsize(&t->winsize, arg);
 
     case TIOCGPGRP: {
         int pgrp = t->fg_pgid > 0 ? (int)pid_seen((uint32_t)t->fg_pgid) : 0;

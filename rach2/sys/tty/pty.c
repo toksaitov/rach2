@@ -780,15 +780,19 @@ static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
             return -EFAULT;
         }
         return 0;
-    case TIOCSWINSZ:
-        if (copy_from_user(&p->slave.winsize, (const void __user *)arg, sizeof(p->slave.winsize)) !=
-            0) {
+    case TIOCSWINSZ: {
+        struct tty_winsize ws;
+
+        /* Read whole before the size changes, as Linux's tiocswinsz does. */
+        if (copy_from_user(&ws, (const void __user *)arg, sizeof(ws)) != 0) {
             return -EFAULT;
         }
+        p->slave.winsize = ws;
         if (p->slave.fg_pgid != 0) {
             tty_signal_group(p->slave.fg_pgid, SIGWINCH);
         }
         return 0;
+    }
     case TIOCPKT:
     case TIOCGPKT:
         return ptm_packet(p, request, arg);

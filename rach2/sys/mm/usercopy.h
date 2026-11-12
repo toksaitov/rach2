@@ -69,7 +69,10 @@ void user_window_close(void);
 
 /** Copy `n` bytes from the user address `src` into `dst`: 0, also for an
  * `n` of 0, or -EFAULT when a byte of the source is outside user space, in
- * no region that may be read, or cannot be backed. */
+ * no region that may be read, or cannot be backed. The bytes before the
+ * fault are copied and the rest of `dst` is zeroed, as on Linux, so a
+ * caller whose `dst` is live state copies into a local first and publishes
+ * it only on success, or uses `copy_from_user_left`. */
 int copy_from_user(void *dst, const void __user *src, size_t n);
 
 /** Copy `n` bytes from `src` to the user address `dst`, after making each
@@ -77,6 +80,17 @@ int copy_from_user(void *dst, const void __user *src, size_t n);
  * a byte of the destination is outside user space, in no region that may be
  * written, or cannot be backed. */
 int copy_to_user(void __user *dst, const void *src, size_t n);
+
+/** `copy_from_user`, but returning the bytes not copied, 0 when all were,
+ * and leaving the bytes not copied of `dst` as they were, as Linux's
+ * __copy_from_user does: for a destination whose old bytes must survive a
+ * fault, such as a buffer object's pages a write goes into. */
+size_t copy_from_user_left(void *dst, const void __user *src, size_t n);
+
+/** `copy_to_user`, but returning the bytes not copied, 0 when all were, as
+ * Linux's copy_to_user does: the bytes before a fault are in `dst`, for a
+ * caller that counts them in its result. */
+size_t copy_to_user_left(void __user *dst, const void *src, size_t n);
 
 /**
  * Read the aligned 32-bit user word at `src` into `*val` in one load, which a

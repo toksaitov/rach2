@@ -1275,6 +1275,22 @@ static int32_t get_sregs(struct kvm_vcpu *v, uintptr_t arg)
     return copy_to_user((void __user *)arg, &s, sizeof(s)) ? -EFAULT : 0;
 }
 
+/** KVM_SET_REGS: 0, or -EFAULT with the registers as they were, since the
+ * copy goes to a local first, as Linux's kvm_vcpu_ioctl stages them
+ * (virt/kvm/kvm_main.c:4540). */
+static int32_t set_regs(struct kvm_vcpu *v, uintptr_t arg)
+{
+    struct kvm_regs regs;
+
+    if (copy_from_user(&regs, (const void __user *)arg, sizeof(regs)) != 0) {
+        return -EFAULT;
+    }
+    v->regs = regs;
+    v->dirty |= KVM_PART_REGS;
+    req_set(v, KVM_REQ_EVENT);
+    return 0;
+}
+
 /** KVM_SET_SREGS: 0, -EINVAL for a state Linux refuses, or -EFAULT. */
 static int32_t set_sregs(struct kvm_vcpu *v, uintptr_t arg)
 {
@@ -2106,12 +2122,7 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
         vcpu_save(v, KVM_PART_REGS);
         return copy_to_user((void __user *)arg, &v->regs, sizeof(v->regs)) ? -EFAULT : 0;
     case KVM_SET_REGS:
-        if (copy_from_user(&v->regs, (const void __user *)arg, sizeof(v->regs)) != 0) {
-            return -EFAULT;
-        }
-        v->dirty |= KVM_PART_REGS;
-        req_set(v, KVM_REQ_EVENT);
-        return 0;
+        return set_regs(v, arg);
     case KVM_GET_SREGS:
         return get_sregs(v, arg);
     case KVM_SET_SREGS:
