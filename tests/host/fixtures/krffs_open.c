@@ -528,6 +528,15 @@ static void fixture_name_put(struct vfs_name *name)
     }
 }
 
+/* A waiter of the sleeping lock always sleeps here: the threads take turns,
+ * so a holder never runs beside it (proc/sched.h). */
+static int sched_spin_on(const struct process *owner, int cpu)
+{
+    (void)owner;
+    (void)cpu;
+    return 0;
+}
+
 #define vfs_name_put fixture_name_put
 #include "vfs_open.inc"
 #undef vfs_name_put

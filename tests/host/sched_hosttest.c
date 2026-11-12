@@ -337,6 +337,20 @@ void bkl_take(int depth)
 void bkl_yield(void)
 {}
 
+/** 1: there is no big lock to hold up a lock's holder. */
+int bkl_spin_ok(int cpu)
+{
+    (void)cpu;
+    return 1;
+}
+
+/** 0: no hypervisor takes a processor away. */
+int arch_cpu_preempted(int cpu)
+{
+    (void)cpu;
+    return 0;
+}
+
 /** Count a request to the remote processor, which the switch model services. */
 void smp_kick(int cpu)
 {

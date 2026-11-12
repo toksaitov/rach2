@@ -257,6 +257,15 @@ static krffs_node_t *watched_next_node(krffs_file_system_t *fs, krffs_node_t *no
 /* The lock over the sleeping locks' records, which sleeplock.c defines. */
 static struct spinlock records_lock = SPINLOCK_INIT;
 
+/* A waiter of the sleeping lock always sleeps here: the threads take turns,
+ * so a holder never runs beside it (proc/sched.h). */
+static int sched_spin_on(const struct process *owner, int cpu)
+{
+    (void)owner;
+    (void)cpu;
+    return 0;
+}
+
 #define krffs_get_next_node watched_next_node
 #include "kfs_data.inc"
 #undef krffs_get_next_node

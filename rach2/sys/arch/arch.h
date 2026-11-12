@@ -414,6 +414,12 @@ uint64_t arch_cycles(void);
  * (x86/kvmsteal.c), or 0 where there is none. Interrupts are off. */
 uint64_t arch_steal_ns(void);
 
+/** Whether the hypervisor has taken processor `cpu` off the host's
+ * processors, so that it runs nothing now: KVM's preempted flag in its
+ * steal-time record (x86/kvmsteal.c), or 0 where there is none. A hint,
+ * read without a lock. */
+int arch_cpu_preempted(int cpu);
+
 /** A value from the processor's entropy source into `out`: `seed` asks for
  * the conditioned seed source (RDSEED), otherwise the generator (RDRAND).
  * Returns 1, or 0 when the source has none to give. */

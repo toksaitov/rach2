@@ -36,6 +36,12 @@ void bkl_enter(void);
  * depth, which goes with the thread across a switch. Any context. */
 int bkl_held(void);
 
+/** Whether the running thread may spin while processor `cpu`'s thread holds
+ * a sleeping lock it waits for, or with `cpu` -1 while the lock passes to a
+ * waiter ahead: 1 without the big lock; with it, 0 once another processor
+ * claims the big lock or `cpu` waits for it. Interrupts on. */
+int bkl_spin_ok(int cpu);
+
 /** Take the big lock as `bkl_enter` does when it is free or this processor
  * holds it, and return 1; return 0 at once, taking nothing, when another
  * processor holds it or waits for its turn. Interrupts are off. */

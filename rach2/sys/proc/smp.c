@@ -1298,6 +1298,22 @@ int bkl_held(void)
     return held;
 }
 
+/**
+ * Whether the running thread may spin for a sleeping lock (`sched_spin_on`):
+ * it holds no big lock, or no other processor has claimed it and processor
+ * `cpu`, whose thread holds the sleeping lock, is not waiting for it, which
+ * that processor marks before its wait (`bkl_acquire`). With `cpu` -1 only
+ * the claim counts. A spinner that holds the big lock otherwise keeps it
+ * from the thread it waits for, and from every processor that claims it.
+ */
+int bkl_spin_ok(int cpu)
+{
+    if (!bkl_held()) {
+        return 1;
+    }
+    return bkl_claim == 0 && (cpu < 0 || cpu >= NR_CPUS || !cpu_table[cpu].wake_bkl_waiting);
+}
+
 int bkl_try_enter(void)
 {
     struct percpu *cpu = this_cpu();

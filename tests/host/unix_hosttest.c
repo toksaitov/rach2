@@ -6,7 +6,7 @@
  * host-deps: tests/host/compat/kirq_none.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  * host-deps: rach2/sys/tick.c
- * host-deps: rach2/sys/fs/sleeplock.c
+ * host-deps: rach2/sys/fs/sleeplock.c tests/host/compat/spin_none.c
  * host-deps: tests/host/compat/fd_flat.c
  *
  * `ipc/unix.c`, `ipc/pipe.c`, the mutex and the checked user copy are the
