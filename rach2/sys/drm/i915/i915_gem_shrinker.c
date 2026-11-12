@@ -116,12 +116,15 @@ uint32_t i915_gem_shrink(struct drm_i915_private *i915, uint32_t want)
  * lock, as Linux's shrinker only tries each object's lock
  * (gem/i915_gem_shrinker.c:216-220), and frees nothing while another
  * holds it; a caller that holds it already, whose allocation reclaims,
- * frees under it. */
+ * frees under it. An object whose last put comes here is freed at once,
+ * with no give-way (`gem.no_yield`), so that its frames count now, and the
+ * lock goes back with `gem.freed` left to its next taker. */
 static uint32_t i915_gem_shrinker_scan(struct mem_shrinker *s, uint32_t want, int may_sleep)
 {
     struct drm_i915_private *i915 = ((struct i915_shrinker *)s)->i915;
     uint32_t got;
     int taken = 0;
+    uint8_t no_yield;
 
     (void)may_sleep;
     if (!mutex_held(&i915->gem.lock)) {
@@ -130,11 +133,14 @@ static uint32_t i915_gem_shrinker_scan(struct mem_shrinker *s, uint32_t want, in
         }
         taken = 1;
     }
+    no_yield = i915->gem.no_yield;
+    i915->gem.no_yield = 1;
     got = i915_gem_pool_trim(i915, I915_POOL_IDLE);
     if (got < want) {
         got += i915_gem_shrink(i915, want - got);
     }
-    i915_gem_unlock(i915, taken);
+    i915->gem.no_yield = no_yield;
+    i915_gem_unlock_atomic(i915, taken);
     return got;
 }
 

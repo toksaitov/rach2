@@ -125,7 +125,9 @@ static void userptr_unpend(struct drm_i915_gem_object *obj)
  * and leaves its pages to the next user (gem/i915_gem_userptr.c:59-65);
  * meanwhile the frames stay pinned, so no page goes to another use while
  * the GPU may still read it. Does not sleep or give way, as a notifier's
- * callback must not (mm/notify.h).
+ * callback must not (mm/notify.h), so a lock it took goes back with
+ * `i915_gem_unlock_atomic`, which leaves the device's deferred frees to the
+ * lock's next taker.
  */
 static void userptr_invalidate(struct mmn_range *r, int event, uintptr_t start, uintptr_t end)
 {
@@ -142,7 +144,7 @@ static void userptr_invalidate(struct mmn_range *r, int event, uintptr_t start, 
     }
     if (mutex_trylock(&i915->gem.lock)) {
         userptr_revoke(obj);
-        i915_gem_unlock(i915, 1);
+        i915_gem_unlock_atomic(i915, 1);
         return;
     }
     flags = spin_lock_irqsave(&i915->gem.userptr_lock);
@@ -154,7 +156,7 @@ static void userptr_invalidate(struct mmn_range *r, int event, uintptr_t start, 
     spin_unlock_irqrestore(&i915->gem.userptr_lock, flags);
     /* The holder may have let go between the try and the list. */
     if (mutex_trylock(&i915->gem.lock)) {
-        i915_gem_unlock(i915, 1);
+        i915_gem_unlock_atomic(i915, 1);
     }
 }
 

@@ -128,7 +128,8 @@ void shmem_free(struct shmem *sh);
  * three: tmpfs, for a file that has lost its last name and its last hold,
  * `filemap_release`, for shared anonymous memory's own pages once the
  * mapping is off its list and its last region is gone, and the i915
- * object's free that took the GEM lock itself.
+ * object's free by the holder that took the GEM lock, for the free or
+ * before it.
  */
 void shmem_free_yielding(struct shmem *sh);
 
