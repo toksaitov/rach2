@@ -1,5 +1,6 @@
 /* Full and split interrupt controllers, GSI routes, MSIs and irqfds.
- * The big lock owns the controllers; eventfd hooks defer legacy inputs. */
+ * The controllers' lock owns the controllers; eventfd hooks defer legacy
+ * inputs to the run loop. */
 
 #include "kvm.h"
 
@@ -42,9 +43,9 @@ struct route {
  * An irqfd: the eventfd `ev`, whose rise raises `gsi`. `route` is the
  * GSI's route as KVM_SET_GSI_ROUTING last left it, copied under the VM's
  * `lock`, since the hook reads it from the signaller's context without the
- * big lock. `vm` is NULL once the VM is gone while the eventfd's last close
- * has taken the hook off and its hangup is yet to run, which then frees the
- * record.
+ * controllers' lock. `vm` is NULL once the VM is gone while the eventfd's
+ * last close has taken the hook off and its hangup is yet to run, which
+ * then frees the record.
  */
 struct irqfd {
     struct eventfd_hook hook; /* first, for the hook's callbacks */
@@ -53,17 +54,27 @@ struct irqfd {
     struct eventfd *resample; /* held until this irqfd is removed, NULL for pulses */
     uint32_t gsi;
     struct route route; /* under the VM's `lock` */
-    int pending;        /* a legacy delivery deferred to the big lock, under iv->lock */
-    struct irqfd *next; /* the VM's list, under the big lock */
+    int pending;        /* a legacy delivery deferred to the run loop, under iv->lock */
+    struct irqfd *next; /* the VM's list, under `chip` */
 };
 
-/* irq.c's share of a VM. */
+/*
+ * irq.c's share of a VM. `chip`, the controllers' lock, is over the routes,
+ * the irqfds' list and the controllers themselves,
+ * the PIC, the I/O APIC and the PIT, which call each other: an EOI calls
+ * the ack notifiers, which resample and raise pins again. Linux gives each
+ * controller a spinlock of its own and drops the I/O APIC's around those
+ * calls (ioapic.c:  __kvm_ioapic_update_eoi); one lock over all keeps those
+ * chains whole. It is taken after the big lock and before an eventfd's
+ * lock, and `lock` after it; a local APIC's delivery takes none.
+ */
 struct irq_vm {
     uint32_t ioapic_pins; /* the GSIs KVM_CAP_SPLIT_IRQCHIP reserved */
     struct route *routes; /* by GSI, `nr_routes` of them */
     uint32_t nr_routes;
     struct irqfd *irqfds;
-    int pending;          /* any irqfd needs the big lock, under `lock` */
+    struct spinlock chip;
+    int pending;          /* any irqfd waits for the run loop, under `lock` */
     struct spinlock lock; /* the irqfds' `route` */
 };
 
@@ -71,6 +82,16 @@ struct irq_vm {
 static struct irq_vm *irq_of(struct kvm_vm *vm)
 {
     return (struct irq_vm *)vm->irq;
+}
+
+uint32_t kvm_chip_lock(struct kvm_vm *vm)
+{
+    return spin_lock_irqsave(&irq_of(vm)->chip);
+}
+
+void kvm_chip_unlock(struct kvm_vm *vm, uint32_t flags)
+{
+    spin_unlock_irqrestore(&irq_of(vm)->chip, flags);
 }
 
 /** The interrupt the MSI `r` of `vm` raises, as Linux's kvm_set_msi_irq:
@@ -211,7 +232,7 @@ static int irqfd_signal(struct eventfd_hook *h)
     return 1;
 }
 
-/** Whether an interrupt-context irqfd is waiting for the big lock. */
+/** Whether an interrupt-context irqfd is waiting for the run loop. */
 int kvm_irq_pending(struct kvm_vm *vm)
 {
     struct irq_vm *iv = irq_of(vm);
@@ -227,17 +248,20 @@ int kvm_irq_pending(struct kvm_vm *vm)
     return pending;
 }
 
-/** Deliver deferred irqfds before guest entry, under the big lock. */
+/** Deliver deferred irqfds before guest entry. The test of `pending`
+ * takes no lock: the hook kicks every vCPU after it sets it, and the kick's
+ * request brings each to look again. */
 void kvm_irq_process(struct kvm_vm *vm)
 {
     struct irq_vm *iv = irq_of(vm);
     struct irqfd *f;
-    uint32_t flags;
+    uint32_t flags, chip;
     int pending;
 
-    if (!iv) {
+    if (!iv || !iv->pending) {
         return;
     }
+    chip = spin_lock_irqsave(&iv->chip);
     flags = spin_lock_irqsave(&iv->lock);
     iv->pending = 0;
     spin_unlock_irqrestore(&iv->lock, flags);
@@ -253,6 +277,7 @@ void kvm_irq_process(struct kvm_vm *vm)
             }
         }
     }
+    spin_unlock_irqrestore(&iv->chip, chip);
 }
 
 /** Take `f` off its VM's list. */
@@ -289,10 +314,13 @@ static void irqfd_lower(struct irq_vm *iv, struct irqfd *f)
 static void irqfd_hangup(struct eventfd_hook *h)
 {
     struct irqfd *f = (struct irqfd *)h;
+    uint32_t flags;
 
     if (f->vm) {
+        flags = kvm_chip_lock(f->vm);
         irqfd_unlink(irq_of(f->vm), f);
         irqfd_lower(irq_of(f->vm), f);
+        kvm_chip_unlock(f->vm, flags);
     }
     if (f->resample) {
         eventfd_put(f->resample);
@@ -302,11 +330,15 @@ static void irqfd_hangup(struct eventfd_hook *h)
 }
 
 /** Free `f`, taking its hook off the eventfd, unless the eventfd's last
- * close took it off first, whose hangup then frees it. */
+ * close took it off first, whose hangup then frees it. Under the big lock,
+ * not the controllers'. */
 static void irqfd_free(struct irq_vm *iv, struct irqfd *f)
 {
+    uint32_t flags = spin_lock_irqsave(&iv->chip);
+
     irqfd_unlink(iv, f);
     irqfd_lower(iv, f);
+    spin_unlock_irqrestore(&iv->chip, flags);
     if (eventfd_hook_remove(f->ev, &f->hook, NULL)) {
         if (f->resample) {
             eventfd_put(f->resample);
@@ -332,6 +364,7 @@ static int32_t irqfd(struct kvm_vm *vm, uintptr_t arg)
     struct kvm_irqfd a;
     struct irqfd *f, *next;
     struct eventfd *ev;
+    uint32_t flags;
     int32_t err = 0;
     int r;
 
@@ -388,15 +421,19 @@ static int32_t irqfd(struct kvm_vm *vm, uintptr_t arg)
     f->vm = vm;
     f->ev = ev;
     f->gsi = a.gsi;
+    flags = spin_lock_irqsave(&iv->chip);
     irqfd_update(iv, f);
     f->next = iv->irqfds;
     iv->irqfds = f;
+    spin_unlock_irqrestore(&iv->chip, flags);
     r = eventfd_hook_add(ev, &f->hook);
     if (r == 1) {
+        flags = spin_lock_irqsave(&iv->chip);
         kvm_irq_set(vm, f->gsi, f->resample ? KVM_IRQ_SRC_RESAMPLE : KVM_IRQ_SRC_USER, 1, 0);
         if (!f->resample) {
             kvm_irq_set(vm, f->gsi, KVM_IRQ_SRC_USER, 0, 0);
         }
+        spin_unlock_irqrestore(&iv->chip, flags);
     }
     return 0;
 }
@@ -408,6 +445,7 @@ static struct irq_vm *irq_vm_alloc(void)
 
     if (iv) {
         spin_lock_init(&iv->lock, "kvm_irq_vm");
+        spin_lock_init(&iv->chip, "kvm_irq_chip");
     }
     return iv;
 }
@@ -490,6 +528,7 @@ static int32_t create_irqchip(struct kvm_vm *vm)
 static int32_t irqchip_state(struct kvm_vm *vm, uintptr_t arg, int set)
 {
     struct kvm_irqchip chip;
+    uint32_t flags;
 
     if (copy_from_user(&chip, (const void __user *)arg, sizeof(chip)) != 0) {
         return -EFAULT;
@@ -497,13 +536,16 @@ static int32_t irqchip_state(struct kvm_vm *vm, uintptr_t arg, int set)
     if (vm->irqchip != KVM_IRQCHIP_KERNEL) {
         return -ENXIO;
     }
-    if (chip.chip_id < KVM_IRQCHIP_IOAPIC) {
-        kvm_pic_state(vm, chip.chip_id, &chip.chip.pic, set);
-    } else if (chip.chip_id == KVM_IRQCHIP_IOAPIC) {
-        kvm_ioapic_state(vm, &chip.chip.ioapic, set);
-    } else {
+    if (chip.chip_id > KVM_IRQCHIP_IOAPIC) {
         return -EINVAL;
     }
+    flags = kvm_chip_lock(vm);
+    if (chip.chip_id < KVM_IRQCHIP_IOAPIC) {
+        kvm_pic_state(vm, chip.chip_id, &chip.chip.pic, set);
+    } else {
+        kvm_ioapic_state(vm, &chip.chip.ioapic, set);
+    }
+    kvm_chip_unlock(vm, flags);
     return !set && copy_to_user((void __user *)arg, &chip, sizeof(chip)) ? -EFAULT : 0;
 }
 
@@ -537,6 +579,32 @@ static int route_add(struct kvm_vm *vm, struct route *t, struct kvm_irq_routing_
     return 0;
 }
 
+void kvm_irq_scan_eoi_exits(struct kvm_vcpu *v, uint32_t map[8])
+{
+    struct kvm_vm *vm = v->vm;
+    struct irq_vm *iv = irq_of(vm);
+    struct kvm_lapic_irq irq;
+    uint32_t i, n, flags;
+
+    k_memset(map, 0, 8u * sizeof(map[0]));
+    if (!iv || vm->irqchip != KVM_IRQCHIP_SPLIT) {
+        return;
+    }
+    flags = spin_lock_irqsave(&iv->chip);
+    n = iv->ioapic_pins < iv->nr_routes ? iv->ioapic_pins : iv->nr_routes;
+    for (i = 0; i < n; i++) {
+        if (!iv->routes[i].valid || iv->routes[i].sint || iv->routes[i].chips) {
+            continue; /* Linux's entry->type != KVM_IRQ_ROUTING_MSI */
+        }
+        msi_irq(vm, &iv->routes[i], &irq);
+        if (irq.trig_mode &&
+            (kvm_lapic_match_irq(v, &irq) || kvm_lapic_pending_eoi(v, irq.vector))) {
+            map[irq.vector >> 5] |= 1u << (irq.vector & 31u);
+        }
+    }
+    spin_unlock_irqrestore(&iv->chip, flags);
+}
+
 /**
  * Replace the routing table and refresh each irqfd's route. A GSI has
  * one MSI or SINT, or at most one pin per in-kernel controller. Returns
@@ -548,9 +616,9 @@ static int32_t set_routing(struct kvm_vm *vm, uintptr_t arg)
     struct irq_vm *iv = irq_of(vm);
     struct kvm_irq_routing head;
     struct kvm_irq_routing_entry *ue = NULL;
-    struct route *table = NULL;
+    struct route *table = NULL, *old;
     struct irqfd *f;
-    uint32_t i, n = 0;
+    uint32_t i, n = 0, flags;
     int32_t r;
 
     if (!iv) {
@@ -597,12 +665,20 @@ static int32_t set_routing(struct kvm_vm *vm, uintptr_t arg)
             goto out;
         }
     }
-    kfree(iv->routes);
+    flags = spin_lock_irqsave(&iv->chip);
+    old = iv->routes;
     iv->routes = table;
     iv->nr_routes = n;
-    table = NULL;
+    table = old;
     for (f = iv->irqfds; f; f = f->next) {
         irqfd_update(iv, f);
+    }
+    spin_unlock_irqrestore(&iv->chip, flags);
+    /* Each vCPU finds its EOI exits again before its next entry, as
+     * Linux's kvm_arch_post_irq_routing_update asks
+     * (arch/x86/kvm/irq_comm.c:397-403). */
+    for (i = 0; vm->irqchip == KVM_IRQCHIP_SPLIT && i < vm->nr_vcpus; i++) {
+        kvm_vcpu_kick(vm->vcpus[i], KVM_REQ_SCAN_IOAPIC);
     }
     r = 0;
 out:
@@ -612,7 +688,8 @@ out:
 }
 
 /** Raise `gsi` at `level`, as Linux's kvm_set_irq: -1 for a GSI with no
- * route or one that reached no APIC, else the APICs that took it. */
+ * route or one that reached no APIC, else the APICs that took it. Under
+ * the controllers' lock. */
 int kvm_irq_set(struct kvm_vm *vm, uint32_t gsi, uint32_t source, uint32_t level, int status)
 {
     struct irq_vm *iv = irq_of(vm);
@@ -676,11 +753,12 @@ void kvm_irq_mask(struct kvm_vm *vm, uint32_t chip, uint32_t pin, int masked)
     }
 }
 
-/** Take legacy-controller I/O inside KVM, including string port reads. */
+/** Take legacy-controller I/O inside KVM, including string port reads,
+ * under the controllers' lock. */
 int kvm_irq_io(struct kvm_vcpu *v)
 {
     struct kvm_exit *ex = &v->exit;
-    uint32_t size, i, value;
+    uint32_t size, i, value, flags;
     uint64_t wide;
     int write, handled;
 
@@ -695,7 +773,9 @@ int kvm_irq_io(struct kvm_vcpu *v)
         wide = 0;
         write = ex->mmio.is_write != 0;
         k_memcpy(&wide, ex->mmio.data, size);
+        flags = kvm_chip_lock(v->vm);
         handled = kvm_ioapic_io(v->vm, ex->mmio.phys_addr, size, &wide, write);
+        kvm_chip_unlock(v->vm, flags);
         if (!handled) {
             return 0;
         }
@@ -708,17 +788,20 @@ int kvm_irq_io(struct kvm_vcpu *v)
             return 0;
         }
         write = ex->io.direction == KVM_EXIT_IO_OUT;
+        flags = kvm_chip_lock(v->vm);
         for (i = 0; i < ex->io.count; i++) {
             value = 0;
             k_memcpy(&value, ex->data + i * size, size);
             if (!kvm_pic_io(v->vm, ex->io.port, size, &value, write) &&
                 !kvm_pit_io(v->vm, ex->io.port, size, &value, write)) {
+                kvm_chip_unlock(v->vm, flags);
                 return 0;
             }
             if (!write) {
                 k_memcpy(ex->data + i * size, &value, size);
             }
         }
+        kvm_chip_unlock(v->vm, flags);
     } else {
         return 0;
     }
@@ -734,6 +817,7 @@ int kvm_irq_io(struct kvm_vcpu *v)
 static int32_t irq_line(struct kvm_vm *vm, uintptr_t arg, int status)
 {
     struct kvm_irq_level l;
+    uint32_t flags;
 
     if (copy_from_user(&l, (const void __user *)arg, sizeof(l)) != 0) {
         return -EFAULT;
@@ -741,7 +825,9 @@ static int32_t irq_line(struct kvm_vm *vm, uintptr_t arg, int status)
     if (!irq_of(vm)) {
         return -ENXIO;
     }
+    flags = kvm_chip_lock(vm);
     l.irq = kvm_irq_set(vm, (uint32_t)l.irq, KVM_IRQ_SRC_USER, l.level, status);
+    kvm_chip_unlock(vm, flags);
     if (status && copy_to_user((void __user *)arg, &l, sizeof(l)) != 0) {
         return -EFAULT;
     }
@@ -806,24 +892,6 @@ int32_t kvm_irq_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
     default:
         return -ENOTTY;
     }
-}
-
-int kvm_irq_eoi_exits(struct kvm_vm *vm, uint32_t vector)
-{
-    struct irq_vm *iv = irq_of(vm);
-    uint32_t i, n;
-
-    if (!iv || vm->irqchip != KVM_IRQCHIP_SPLIT) {
-        return 0;
-    }
-    n = iv->ioapic_pins < iv->nr_routes ? iv->ioapic_pins : iv->nr_routes;
-    for (i = 0; i < n; i++) {
-        if (iv->routes[i].valid && !iv->routes[i].sint && (iv->routes[i].data & MSI_DATA_LEVEL) &&
-            (iv->routes[i].data & 0xFFu) == vector) {
-            return 1;
-        }
-    }
-    return 0;
 }
 
 /** The host's TSC-deadline timer, which Linux requires to offer the

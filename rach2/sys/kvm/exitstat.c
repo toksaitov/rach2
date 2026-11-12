@@ -1,7 +1,8 @@
 /*
  * exitstat.c: the guests' exits counted by the processor's exit code since
  * boot, with the TSC cycles each kind waits for the big lock and spends in
- * the kernel, read from the debug file kvm/exit_stats.
+ * the kernel, read from the debug file kvm/exit_stats. KVM_RUN runs without
+ * the big lock, so each processor keeps counts of its own.
  */
 
 #include "kvm.h"
@@ -15,6 +16,7 @@
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
 #include "../proc/percpu.h"
+#include "../proc/smp.h"
 
 /*
  * The rows. A code below ROW_HIGH has the row of its number, SVM's
@@ -33,12 +35,12 @@
 /*
  * One kind's counts. `kernel` exits were handled in the kernel and the
  * guest entered again; `user` ended KVM_RUN, most of them for the caller
- * to answer. `wait` is the TSC cycles from the backend's return from its
- * entry to the big lock taken back, `handle` from there to the big lock
- * let go for the next entry or to KVM_RUN's return; a HLT the kernel
- * handles counts its sleep until an interrupt in `handle`. The backend's
- * own work around VMRUN or VMLAUNCH, its loads before and its stores
- * after, is in neither.
+ * to answer. `wait` is the TSC cycles the exit's handling spent waiting for
+ * the big lock (`kvm_bkl_enter`), and `handle` the rest of the time from
+ * the backend's return from its entry to the next entry or to KVM_RUN's
+ * return; a HLT the kernel handles counts its sleep until an interrupt in
+ * `handle`. The backend's own work around VMRUN or VMLAUNCH, its loads
+ * before and its stores after, is in neither.
  */
 struct row {
     uint64_t exits, kernel, user, wait, handle;
@@ -55,6 +57,16 @@ struct row {
  * the processors, which kvm/exit_stats shows, mean anything.
  */
 static struct row *rows[NR_CPUS];
+
+/*
+ * Each processor's completed entries since boot, for every processor,
+ * rows or none, and never cleared. Written as the rows are and summed
+ * without a lock by kvm_exit_count, as Linux's vcpu_stat_get sums its
+ * vCPUs' counters (virt/kvm/kvm_main.c:6146-6156, 6264-6274); on i686 a
+ * sum read while another processor carries into a count's high word may
+ * be off by that carry, as on 32-bit Linux.
+ */
+static uint64_t cpu_exits[NR_CPUS];
 
 /* A code and its name, as Linux's SVM_EXIT_REASONS and VMX_EXIT_REASONS
  * give them to its kvm_exit trace event. */
@@ -288,24 +300,50 @@ static const char *name_of(uint32_t code)
     return NULL;
 }
 
-void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t entry, uint64_t left, uint64_t held)
+uint64_t kvm_exit_count(void)
 {
-    struct row *mine = rows[arch_cpu_id()];
-    uint32_t r;
+    uint64_t n = 0;
+    uint32_t i;
 
+    for (i = 0; i < NR_CPUS; i++) {
+        n += cpu_exits[i];
+    }
+    return n;
+}
+
+/** Close the open account of `v`'s exit in `row` at the TSC count `now`:
+ * its waits for the big lock go to the row's wait, the rest of its time
+ * since `v->xs_mark` to its handling. */
+static void account_close(struct row *row, struct kvm_vcpu *v, uint64_t now)
+{
+    uint64_t spent = now - v->xs_mark;
+
+    if (v->xs_wait > spent) {
+        v->xs_wait = spent; /* the TSCs of two processors differ a little */
+    }
+    row->wait += v->xs_wait;
+    row->handle += spent - v->xs_wait;
+}
+
+void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t entry, uint64_t left)
+{
+    uint32_t cpu = arch_cpu_id(), r;
+    struct row *mine = rows[cpu];
+
+    cpu_exits[cpu]++;
     if (!mine) {
         v->xs_row = -1;
         return;
     }
     if (v->xs_row >= 0) {
-        mine[v->xs_row].handle += entry - v->xs_mark;
+        account_close(&mine[v->xs_row], v, entry);
         mine[v->xs_row].kernel++;
     }
     r = row_of(v->hw_exit);
     mine[r].exits++;
-    mine[r].wait += held - left;
     v->xs_row = (int32_t)r;
-    v->xs_mark = held;
+    v->xs_mark = left;
+    v->xs_wait = 0;
 }
 
 void kvm_exitstat_done(struct kvm_vcpu *v)
@@ -319,11 +357,24 @@ void kvm_exitstat_done(struct kvm_vcpu *v)
     flags = kirq_save();
     mine = rows[arch_cpu_id()];
     if (mine) {
-        mine[v->xs_row].handle += arch_cycles() - v->xs_mark;
+        account_close(&mine[v->xs_row], v, arch_cycles());
         mine[v->xs_row].user++;
     }
     v->xs_row = -1;
     kirq_restore(flags);
+}
+
+void kvm_bkl_enter(struct kvm_vcpu *v)
+{
+    uint64_t start;
+
+    if (!v || v->xs_row < 0 || bkl_held()) {
+        bkl_enter();
+        return;
+    }
+    start = arch_cycles();
+    bkl_enter();
+    v->xs_wait += arch_cycles() - start;
 }
 
 /* A text being written: `len` bytes so far, of which those below `cap`

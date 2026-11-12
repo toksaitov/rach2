@@ -2,7 +2,15 @@
  * slots.c: a VM's memory slots, ranges of the caller's memory that the
  * guest sees at guest-physical addresses, each on the address space's
  * change notice so that the guest-physical tables follow every change to
- * the pages behind it.
+ * the pages behind it. The table is changed under the big lock, which the
+ * VM's ioctls hold, and `mmu_lock`, which a lookup from a vCPU's run takes,
+ * as Linux's slots change under slots_lock and their readers hold
+ * kvm->srcu (virt/kvm/kvm_main.c:1599-1633, 1870). A copy through a
+ * slot's address in the caller holds the table's readers' lock from its
+ * lookup to its end (`kvm_slots_read_lock`), and a change waits for every
+ * such copy before it frees anything or returns, as Linux waits for
+ * kvm->srcu's readers (kvm_main.c:1633); a slot is freed only once it is
+ * off the table, its leaves are zapped and no copy can be using it.
  */
 
 #include "kvm.h"
@@ -11,6 +19,7 @@
 #include "../lib/kerrno.h"
 #include "../mm/kheap.h"
 #include "../mm/notify.h"
+#include "../proc/mutex.h"
 
 /* The most pages a slot has, Linux's KVM_MEM_MAX_NR_PAGES. */
 #define SLOT_MAX_PAGES 0x7FFFFFFFull
@@ -34,11 +43,16 @@ struct slot {
     uint64_t *dirty; /* the dirty log, a bit a page, while it logs */
 };
 
-/* A VM's slots, by number; `last` is the one `kvm_slot_find` last found. */
+/* A VM's slots, by number; `last` is the one `kvm_slot_find` last found.
+ * Under the big lock and `mmu_lock` to change, either to read. `readers` is
+ * held to read by each copy that uses a slot's address after `mmu_lock` is
+ * let go, and taken to write by a change once the table no longer offers
+ * the old slot, to wait for those copies: Linux's kvm->srcu. */
 struct slots {
     struct slot *by_id[KVM_MEM_SLOTS];
     struct slot *last;
     uint64_t pages; /* of every slot, which Linux bounds by an unsigned long */
+    struct rwsem readers;
 };
 
 /** The bytes of a dirty log of `npages` pages, whole 64-bit words as
@@ -92,8 +106,37 @@ static const struct mmn_ops slot_ops = {slot_invalidate};
 
 int kvm_slots_init(struct kvm_vm *vm)
 {
-    vm->slots = kzalloc(sizeof(struct slots));
-    return vm->slots ? 0 : -ENOMEM;
+    struct slots *t = kzalloc(sizeof(struct slots));
+
+    if (!t) {
+        return -ENOMEM;
+    }
+    rwsem_init(&t->readers, "kvm_slots");
+    vm->slots = t;
+    return 0;
+}
+
+void kvm_slots_read_lock(struct kvm_vm *vm)
+{
+    down_read(&((struct slots *)vm->slots)->readers);
+}
+
+void kvm_slots_read_unlock(struct kvm_vm *vm)
+{
+    up_read(&((struct slots *)vm->slots)->readers);
+}
+
+/**
+ * Wait until no copy that may hold a view of `t` from before the change
+ * just made is under way, as Linux's kvm_swap_active_memslots waits with
+ * synchronize_srcu_expedited (virt/kvm/kvm_main.c:1633). A copy that
+ * begins after the change finds the table as it is now. Sleeps, giving up
+ * the big lock meanwhile; never under `mmu_lock`.
+ */
+static void slots_synchronize(struct slots *t)
+{
+    down_write(&t->readers);
+    up_write(&t->readers);
 }
 
 /** Free `s`, off the notice. */
@@ -137,17 +180,23 @@ static int overlaps(const struct slots *t, uint32_t id, uint64_t gfn, uint64_t n
     return 0;
 }
 
-/** Delete `s`, the slot `id`: its frames out of the tables, then the
- * record. */
+/** Delete `s`, the slot `id`: off the table and its frames out of the
+ * tables under `mmu_lock`, then, once no copy can be using it, the record,
+ * so that the caller may unmap its memory once the call returns. */
 static int32_t slot_delete(struct kvm_vm *vm, struct slots *t, struct slot *s)
 {
+    uint32_t flags;
+
+    kvm_gpamap_zap(vm, s->base_gfn, s->npages);
+    flags = kvm_mmu_lock(vm);
     t->by_id[s->id] = NULL;
     if (t->last == s) {
         t->last = NULL;
     }
     t->pages -= s->npages;
-    kvm_gpamap_zap(vm, s->base_gfn, s->npages);
-    kvm_tdp_zap(vm, s->base_gfn, s->npages);
+    kvm_tdp_zap_locked(vm, s->base_gfn, s->npages, &flags);
+    kvm_mmu_unlock(vm, flags);
+    slots_synchronize(t);
     slot_free(s);
     return 0;
 }
@@ -158,6 +207,7 @@ static int32_t slot_create(struct kvm_vm *vm, struct slots *t, uint32_t id,
 {
     struct mm *mm = kvm_vm_mm(vm);
     struct slot *s;
+    uint32_t flags;
 
     s = kzalloc(sizeof(*s));
     if (!s) {
@@ -181,17 +231,24 @@ static int32_t slot_create(struct kvm_vm *vm, struct slots *t, uint32_t id,
                      &slot_ops, s);
     }
     kvm_count(KVM_COUNT_SLOT, 1);
+    flags = kvm_mmu_lock(vm);
     t->by_id[id] = s;
     t->pages += s->npages;
+    kvm_mmu_unlock(vm, flags);
     return 0;
 }
 
-/** Move `s` to the frame `gfn`, or change its flags to `flags`: what the
- * tables map of it goes first, so that each frame is mapped again by the
- * new rules at its next fault. */
-static int32_t slot_change(struct kvm_vm *vm, struct slot *s, uint64_t gfn, uint32_t flags)
+/** Move `s` to the frame `gfn`, or change its flags to `flags`: the change
+ * is made under `mmu_lock`, and what the tables map of the slot's old
+ * frames goes after it, so that each frame is mapped again by the new
+ * rules at its next fault, also one between two batches of the zap; the
+ * call returns, and frees a log it ends, only once no copy can be using
+ * the slot as it was. */
+static int32_t slot_change(struct kvm_vm *vm, struct slots *t, struct slot *s, uint64_t gfn,
+                           uint32_t flags)
 {
-    uint64_t *log = s->dirty;
+    uint64_t *log = s->dirty, *old = NULL, base = s->base_gfn;
+    uint32_t lock;
 
     if ((flags & KVM_MEM_LOG_DIRTY_PAGES) && !log) {
         log = log_new(vm, s->npages);
@@ -204,13 +261,17 @@ static int32_t slot_change(struct kvm_vm *vm, struct slot *s, uint64_t gfn, uint
     if (gfn != s->base_gfn) {
         kvm_gpamap_zap(vm, s->base_gfn, s->npages);
     }
-    kvm_tdp_zap(vm, s->base_gfn, s->npages);
+    lock = kvm_mmu_lock(vm);
     if (log != s->dirty) {
-        kfree(s->dirty);
+        old = s->dirty;
         s->dirty = log;
     }
     s->base_gfn = gfn;
     s->flags = flags;
+    kvm_tdp_zap_locked(vm, base, s->npages, &lock);
+    kvm_mmu_unlock(vm, lock);
+    slots_synchronize(t);
+    kfree(old);
     return 0;
 }
 
@@ -274,7 +335,7 @@ int32_t kvm_slots_set(struct kvm_vm *vm, const struct kvm_userspace_memory_regio
     if (placed && overlaps(t, id, gfn, npages)) {
         return -EEXIST;
     }
-    return old ? slot_change(vm, old, gfn, r->flags) : slot_create(vm, t, id, r);
+    return old ? slot_change(vm, t, old, gfn, r->flags) : slot_create(vm, t, id, r);
 }
 
 /** Fill `out` from `s` for its frame `gfn`. */
@@ -290,7 +351,7 @@ static void view(const struct slot *s, uint64_t gfn, struct kvm_slot_view *out)
 
 /** A guest has a few slots, so a walk of the table, with the last slot
  * found tried first, costs less than keeping them sorted. */
-int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
+int kvm_slot_find_locked(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
 {
     struct slots *t = (struct slots *)vm->slots;
     struct slot *s = t ? t->last : NULL;
@@ -313,6 +374,15 @@ int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
     }
     view(s, gfn, out);
     return 1;
+}
+
+int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
+{
+    uint32_t flags = kvm_mmu_lock(vm);
+    int found = kvm_slot_find_locked(vm, gfn, out);
+
+    kvm_mmu_unlock(vm, flags);
+    return found;
 }
 
 int kvm_slot_get(struct kvm_vm *vm, uint32_t id, struct kvm_slot_view *out)

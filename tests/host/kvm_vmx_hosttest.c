@@ -6,7 +6,8 @@
  * host-deps: rach2/sys/kvm/hyperv.c rach2/sys/kvm/pvclock.c
  * host-deps: rach2/sys/kvm/binstats.c rach2/sys/kvm/exitstat.c
  * host-deps: rach2/sys/kvm/pmu.c
- * host-deps: tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/fd_flat.c tests/host/compat/mutex_none.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * vmx.c is the kernel's, included whole, so that its table of operations
@@ -298,21 +299,50 @@ uint64_t arch_cycles(void)
     return 1000000;
 }
 
-/* The big lock's depth, the interrupt flag and a pending signal. */
-static int bkl_depth = 1, irq_on = 1;
+/* The big lock's depth and the interrupt flag. KVM_RUN is called without
+ * the big lock, as the system call layer calls an unlocked file's
+ * operations. */
+static int bkl_depth, irq_on = 1;
 
+/** Take the big lock: one level deeper. */
+void bkl_enter(void)
+{
+    bkl_depth++;
+}
+
+/** Give back one level of the big lock. */
+void bkl_exit(void)
+{
+    bkl_depth--;
+}
+
+/** Whether this thread holds the big lock. */
+int bkl_held(void)
+{
+    return bkl_depth > 0;
+}
+
+/** Let go of the big lock at any depth, as KVM_RUN does with a hold the
+ * system call's entry took: the depth. */
 int bkl_drop(void)
 {
-    int d = bkl_depth;
+    int depth = bkl_depth;
 
+    CHECK(!irq_on, "the big lock is let go with interrupts off");
     bkl_depth = 0;
-    return d;
+    return depth;
 }
 
+/** Take the big lock back at `depth`. */
 void bkl_take(int depth)
 {
+    CHECK(!irq_on && bkl_depth == 0, "the big lock is taken back with interrupts off, once");
     bkl_depth = depth;
 }
+
+/** Nothing waits on this processor's requests in a test of one thread. */
+void smp_service(void)
+{}
 
 uint32_t kirq_save(void)
 {
@@ -367,6 +397,13 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
+/** A halted vCPU's wait: a signal ends it at once in the model. */
+int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    (void)name;
+    return wq_wait_event(wq, cond, arg);
+}
+
 void wq_wake(wait_queue_t *wq, uint32_t kinds)
 {
     (void)wq;
@@ -409,14 +446,27 @@ int vm_device_map(vma_t *vma, const struct vm_device_ops *ops, void *obj, uint32
     return 0;
 }
 
-unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
-{
-    unsigned int cur = *p;
+/* The caller's region over guest memory, which is never memfd_secret's. */
+static vma_t guest_vma;
 
-    if (cur == old) {
-        *p = value;
-    }
-    return cur;
+/** The region at `addr`: always the plain one. */
+vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
+{
+    (void)vm;
+    (void)addr;
+    return &guest_vma;
+}
+
+/** Nothing to wait for in a test of one thread. */
+void mmap_read_lock(struct mm *mm)
+{
+    (void)mm;
+}
+
+/** Give back `mmap_read_lock`: nothing. */
+void mmap_unlock(struct mm *mm)
+{
+    (void)mm;
 }
 
 /* The CPUID of a Haswell, as tests/host/kvm_hosttest.c gives it, with leaf
@@ -553,6 +603,18 @@ int32_t kvm_slots_check_extension(long cap)
     return cap == KVM_CAP_USER_MEMORY;
 }
 
+/** A copy's hold of the slots: nothing changes them in the model. */
+void kvm_slots_read_lock(struct kvm_vm *vm)
+{
+    (void)vm;
+}
+
+/** The end of a copy's hold. */
+void kvm_slots_read_unlock(struct kvm_vm *vm)
+{
+    (void)vm;
+}
+
 int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
 {
     uint64_t base = slot0.guest_phys_addr >> 12;
@@ -601,12 +663,14 @@ int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range)
 }
 
 /** No thread here is switched away, so the steal time is never marked. */
-int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n)
+int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n,
+                          uint32_t seq)
 {
     (void)vm;
     (void)gpa;
     (void)buf;
     (void)n;
+    (void)seq;
     return 1;
 }
 
@@ -1599,7 +1663,7 @@ static int m_run(struct kvm_regs *regs, uint64_t *cr2, int launched)
 
     (void)regs;
     (void)cr2;
-    CHECK(!irq_on && bkl_depth == 0, "the guest runs with interrupts off and the big lock let go");
+    CHECK(!irq_on && bkl_depth == 0, "the guest runs with interrupts off and no big lock held");
     if (!m.on) {
         return not_on();
     }
@@ -1926,7 +1990,7 @@ static int32_t run(int fd)
     CHECK(m.restores == m.launches + m.resumes, "the host's state is put back after every run");
     CHECK(m.fpu_loads == m.fpu_stores, "the guest's FPU goes back after every run");
     CHECK(m.script_at == m.script_len, "every run the script gives is entered");
-    CHECK(irq_on && bkl_depth == 1, "KVM_RUN ends with interrupts on and the big lock held");
+    CHECK(irq_on && bkl_depth == 0, "KVM_RUN ends with interrupts on and no big lock held");
     if (m.why && m.launches + m.resumes > runs && run_of(fd)->exit_reason != KVM_EXIT_FAIL_ENTRY) {
         printf("kvm-vmx-hosttest: entry check: %s\n", m.why);
     }
@@ -2965,9 +3029,9 @@ static void vpid_panic_rows(int vm, int first)
               !b->active && !vx(vcpu_of(first))->launched && vx(v)->cpu == -1,
           "a panic in the run clears every VMCS active there, turns VMX off and puts CR4 back");
     irq_on = 1;
-    bkl_depth = 1;
+    bkl_depth = 0;
     v->mode = KVM_MODE_OUTSIDE;
-    v->busy = 0;
+    mutex_init(&v->mutex, "kvm_vcpu"); /* the run's hold, left by the jump */
     m.script_len = 0;
     m.script_at = 0;
     fdclose(fd);

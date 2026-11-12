@@ -122,6 +122,19 @@ int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const c
 int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 
 /**
+ * `wq_wait_event` for a caller that does not hold the big lock, which
+ * `signal_pending` needs: the wait ends with -EINTR when the thread's
+ * signal-work flag (`sig_woken`) is set, read without a lock and changing
+ * nothing, as Linux's kvm_vcpu_check_block reads TIF_SIGPENDING through
+ * signal_pending (virt/kvm/kvm_main.c:3738, include/linux/sched/signal.h:
+ * 404-415). A signal wakes the sleeper as it wakes one of `wq_wait_event`.
+ * The caller learns under the big lock which signal, if any, is taken;
+ * an ignored signal's flag is cleared there, as the flag's recomputation
+ * in `signal_pending` does. `name` is the wait's name for /proc/PID/wchan.
+ */
+int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name);
+
+/**
  * Make every process currently blocked on `wq` runnable, with one preferred
  * selection by the scheduler, empty the queue, and count the wake for each
  * kind of change among `kinds`. The kinds are those the change can bring to
