@@ -315,7 +315,7 @@ static int ref_start(void)
 {
     uint32_t raw, now_us;
 
-    if (tsc_per_tick && (!refclock_name() || kcmdline_has("rach2.tscreliable"))) {
+    if (tsc_per_tick && (!refclock_name() || timer_tsc_trusted())) {
         ref.mult = 1;
         ref.tick = tsc_per_tick;
         ref_kind = REF_TSC;
@@ -428,13 +428,24 @@ static uint32_t tsc_against_reference(void)
 }
 
 /**
- * Measure the TSC against the active reference, the HPET or the PM timer,
- * or against the 8254 on a machine with neither, once, with interrupts off.
- * It is measured only where `cpuid` says it runs at one rate or
- * `rach2.tscreliable` says to take it as one that does, as QEMU's emulator
- * needs, which reports no such counter, and never with `rach2.notsc` on the
- * command line. The TSC's difference is taken in
- * 64 bits, so that a long one is not taken for a short one.
+ * `rach2.tscreliable`, or a rate and a stable bit from KVM: Linux under KVM
+ * reads kvm-clock, the TSC scaled by the clock page, and leaves the HPET
+ * that QEMU serves with an exit to its own process for each read.
+ */
+int timer_tsc_trusted(void)
+{
+    return kcmdline_has("rach2.tscreliable") || tsc_kvm_counts_per_tick() != 0;
+}
+
+/**
+ * Take the TSC's rate from KVM where KVM states it (`tsc_kvm_counts_per_tick`),
+ * as Linux's `kvm_get_tsc_khz` does, or else measure the TSC against the
+ * active reference, the HPET or the PM timer, or against the 8254 on a
+ * machine with neither, once, with interrupts off. It is measured only where
+ * `cpuid` says it runs at one rate or `rach2.tscreliable` says to take it as
+ * one that does, as QEMU's emulator needs, which reports no such counter,
+ * and never with `rach2.notsc` on the command line. The TSC's difference is
+ * taken in 64 bits, so that a long one is not taken for a short one.
  */
 uint32_t timer_calibrate(void)
 {
@@ -444,8 +455,12 @@ uint32_t timer_calibrate(void)
         return tsc_per_tick;
     }
     tsc_measured = 1;
-    if (kcmdline_has("rach2.notsc") || !(tsc_one_rate() || kcmdline_has("rach2.tscreliable"))) {
+    if (kcmdline_has("rach2.notsc")) {
         return 0;
+    }
+    tsc_per_tick = tsc_kvm_counts_per_tick();
+    if (tsc_per_tick || !(tsc_one_rate() || kcmdline_has("rach2.tscreliable"))) {
+        return tsc_per_tick;
     }
     flags = kirq_save();
     tsc_per_tick = refclock_name() ? tsc_against_reference() : tsc_against_pit();

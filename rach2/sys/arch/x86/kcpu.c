@@ -170,6 +170,27 @@ int kcpu_x2apic_unremapped(void)
 }
 
 /**
+ * Linux's kvm_arch_para_features (arch/x86/include/asm/kvm_para.h): EAX of
+ * the leaf after the base that holds KVM's signature, which may sit at any
+ * base from 0x40000000 when another hypervisor's leaves come first.
+ */
+uint32_t kcpu_kvm_features(void)
+{
+    uint32_t c = 0, a = 0, base;
+
+    kcpu_id(1, 0, 0, &c, 0);
+    if ((c & (1u << 31)) == 0) {
+        return 0; /* no hypervisor beneath */
+    }
+    base = hypervisor_base("KVMKVMKVM\0\0\0", 0);
+    if (base == 0) {
+        return 0;
+    }
+    kcpu_id(base + 1u, &a, 0, 0, 0);
+    return a;
+}
+
+/**
  * Linux's x2apic_hw_locked (arch/x86/kernel/apic/apic.c, lines 1693 to
  * 1704): IA32_ARCH_CAPABILITIES, which leaf 7's EDX bit 29 offers, has
  * XAPIC_DISABLE (bit 21), and IA32_XAPIC_DISABLE_STATUS (0xBD) has bit 0.

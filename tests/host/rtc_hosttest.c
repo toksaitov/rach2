@@ -250,6 +250,12 @@ void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
     CHECK(0);
 }
 
+/** Nor does KVM state the counter's rate here. */
+uint32_t tsc_kvm_counts_per_tick(void)
+{
+    return 0;
+}
+
 uint32_t pit_wait_counts(uint32_t counts)
 {
     (void)counts;

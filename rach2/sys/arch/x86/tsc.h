@@ -18,6 +18,20 @@ uint64_t tsc_ordered(void);
  * power state do (`cpuid` leaf 0x80000007, EDX bit 8). */
 int tsc_invariant(void);
 
+/**
+ * The TSC's counts in a tick as KVM states them, or 0. Under KVM with its
+ * second clock MSR and the stable bit (KVM_FEATURE_CLOCKSOURCE2 and
+ * KVM_FEATURE_CLOCKSOURCE_STABLE_BIT), the clock page KVM fills for this
+ * processor gives the rate, and its PVCLOCK_TSC_STABLE_BIT says that the
+ * counter is one clock on every processor, as Linux's kvm-clock reads it
+ * (arch/x86/kernel/kvmclock.c:116-120, 317-324; pvclock.c:27-37). The page
+ * is registered for the reading and given up after it. 0 elsewhere, with
+ * either bit clear, or once `rach2.notsc` is on the command line. The
+ * answer is kept from the first call; the boot processor makes it with
+ * interrupts off.
+ */
+uint32_t tsc_kvm_counts_per_tick(void);
+
 /** Whether the processor has `rdtscp` (`cpuid` leaf 0x80000001, EDX bit
  * 27), which reads the counter and IA32_TSC_AUX together. */
 int tsc_has_rdtscp(void);
