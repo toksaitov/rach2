@@ -728,6 +728,13 @@ void filecache_keep(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, ui
     }
 }
 
+int filecache_keeps(const struct fd_entry *e)
+{
+    struct fc_file f;
+
+    return e->ofd && fc_file_of(e->ofd->vmnt, e->ofd->vnode, &f);
+}
+
 void filecache_store_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, const void *buf,
                           uint32_t epoch)
 {

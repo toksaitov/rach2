@@ -1010,6 +1010,13 @@ void filecache_keep(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, ui
     (void)epoch;
 }
 
+/** Keep no file's pages. */
+int filecache_keeps(const struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
 /** Nothing is cached to forget. */
 void filecache_forget_ino(const struct vfs_mount *mnt, uint64_t ino)
 {
