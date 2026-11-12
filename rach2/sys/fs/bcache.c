@@ -1482,10 +1482,10 @@ static int write_run_met(struct bbuf *first, uint64_t *last, uint32_t flags,
     if (rc == 0) {
         written_clean(run, n); /* before the let_go: a fill may take a buffer once let go */
     }
+    *last = run[n - 1]->blk;
     for (i = 0; i < n; i++) {
         let_go(run[i]);
     }
-    *last = run[n - 1]->blk;
     return rc;
 }
 
@@ -2802,7 +2802,8 @@ int bcache_device_holds(block_device_t *dev)
  * write. `cache_spin` is held, taken with `*flags`, and let go every
  * WALK_BATCH buffers (`walk_pause`); the walk ends where the buffer it
  * goes on from has left the release order meanwhile. `wb_lock` is
- * held. */
+ * held. A returned buffer is kept in its waiters until `shrink_written`
+ * gives that reference back on every outcome of the write. */
 static struct bbuf *shrink_dirty(uint32_t *flags)
 {
     struct bbuf *b;
@@ -2826,27 +2827,27 @@ static struct bbuf *shrink_dirty(uint32_t *flags)
             (b->order == BCACHE_ORDER_AFTER && firsts_pending(b->dev))) {
             continue;
         }
+        b->waiters++;
         return b;
     }
     return 0;
 }
 
 /**
- * Free `b`, which the shrink has just written, unless it is dirty again,
- * held or waited for, since a reader may have taken it once its write let
- * it go, or no longer keyed: a fill that took it meanwhile may have emptied
- * it again (`fill_run`), which puts it on the empties, and a buffer is
- * freed only off every list it is on, as Linux takes each buffer off its
- * inode's list and the folio before it frees them (fs/buffer.c:2922-2933,
- * 2999-3007). An empty one is left for the walk of the empties, or for a
- * miss. Returns 1 when `b` was freed. Called without `cache_spin`.
+ * Drop the reference `shrink_dirty` kept in `b`'s waiters, and, if its
+ * write succeeded (`wrote`), free it while still clean, keyed, unheld and
+ * unwaited for. The reference keeps its address valid through the write's
+ * release and this last look, even while another shrink frees clean
+ * buffers. A miss may have reused it meanwhile, so every field is read
+ * again under `cache_spin`. Returns 1 when freed. Called without the spinlock.
  */
-static int shrink_written(struct bbuf *b)
+static int shrink_written(struct bbuf *b, int wrote)
 {
     struct bbuf *reap = 0;
     uint32_t flags = cache_lock();
 
-    if (b->dirty || b->holder != -1 || b->waiters > 0 || !b->dev) {
+    b->waiters--;
+    if (!wrote || b->dirty || b->holder != -1 || b->waiters > 0 || !b->dev) {
         cache_unlock(flags);
         return 0;
     }
@@ -2933,9 +2934,10 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
             break;
         }
         if (b->order == BCACHE_ORDER_AFTER && write_firsts(b->dev) != 0) {
+            (void)shrink_written(b, 0);
             continue;
         }
-        if (write_one(b, 0) == 0 && shrink_written(b)) {
+        if (shrink_written(b, write_one(b, 0) == 0)) {
             (*written)++;
             got++;
         }

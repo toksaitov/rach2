@@ -79,7 +79,7 @@ The free counts change in the same step as the descriptor, under the group's loc
 
 The batch's lists change only under both `em->batch` and `wb->lock`. An image is listed in the same step as its copy from the cache, with the buffer held, so that a later write through the cache to that block finds it. A caller without `em->batch` looks an image up and copies its bytes, in or out, in one step under `wb->lock`, so that a drain that empties the lists, or a plan that gives back its images, does not reuse a page under the copy.
 
-The node table, its hash, the nodes' states and the reap list and the lookup hints are kept by the big lock, and the hash's chains by `em->share_lock` too, as above. The buffer cache's dirty marks, writes and syncs are kept by its own write lock (bcache.h).
+The node table, its hash, the nodes' states and the reap list and the lookup hints are kept by the big lock, and the hash's chains by `em->share_lock` too, as above. The buffer cache's dirty marks, writes and syncs are kept by its own write mutex, `wb_lock`, and its spinlock, `cache_spin` (bcache.h). The mutex is given up for requests and waits; a dirty-victim write needs no big lock.
 
 The name cache's `dcache_lock` (`dcache.c`) and the file page cache's `fc_lock` (`../mm/filecache.c`) are spinlocks of rows 10 and 9 of the kernel's order: the driver takes neither, and their holders call it only with them let go, a lookup the cache misses (`dcache_lookup`) and a read of a file's pages into frames (`vfs_read_frames`) alike, so every lock above comes before them, as Linux takes `d_lock` and the `i_pages` lock under `i_rwsem` and never the other way (fs/dcache.c, mm/filemap.c:89-92).
 
