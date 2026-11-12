@@ -32,8 +32,8 @@ static struct exits_cpu exits_cpus[NR_CPUS];
 /* 0 until every processor's own record is reachable (`exits_start`). */
 static volatile int exits_on;
 
-static const char *const kind_names[EXIT_KINDS] = {"",    "rdmsr", "wrmsr", "cpuid",    "in",
-                                                   "out", "hlt",   "eoipv", "eoitaken", "eoiunset"};
+static const char *const kind_names[EXIT_KINDS] = {
+    "", "rdmsr", "wrmsr", "cpuid", "in", "out", "hlt", "eoipv", "eoitaken", "eoiunset", "vmcall"};
 
 int exits_start(void)
 {

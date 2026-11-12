@@ -314,6 +314,13 @@ uint64_t arch_cycles(void)
     return cycles_now;
 }
 
+/** Zero: no hypervisor here flushes a preempted processor's TLB. */
+int arch_cpu_tlb_deferred(int cpu)
+{
+    (void)cpu;
+    return 0;
+}
+
 /** Zero: this model calibrates no invariant counter. */
 uint64_t timer_cycles_us(uint64_t cycles)
 {
