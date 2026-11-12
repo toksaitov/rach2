@@ -11,13 +11,14 @@
 # a minute later, and ends the loop itself. It then stops what the sessions
 # left running on the Mac, in WSL and on Windows: QEMU guests, test runs, the
 # worker scripts and the board's watches. On Windows it looks only at programs
-# under D:\rach2, so that Hyper-V and its machines are never touched, and for
-# each release run whose etude it stopped it removes the run's scratch there,
-# as winclean.sh says. Then it brings the board up to date, runs sweep.sh, with
-# -a unless a release still runs, and prints what is still there: a line
-# `stop: left: MACHINE: WHAT` for each process and each claim of the admission
-# ledger. It ends with `stop: everything is stopped` and status 0, or `stop: N
-# left` and status 1.
+# under D:\rach2 and at MSYS2's bash running a release run's part, so that
+# Hyper-V and its machines are never touched, and for each release run whose
+# etude or bash it found it stops the bash with what it started and removes
+# the run's scratch there, as winclean.sh says. Then it brings the board up to
+# date, runs sweep.sh, with -a unless a release still runs, and prints what is
+# still there: a line `stop: left: MACHINE: WHAT` for each process and each
+# claim of the admission ledger. It ends with `stop: everything is stopped`
+# and status 0, or `stop: N left` and status 1.
 #
 # -n changes nothing and prints only what runs now, in the same form. A running
 # release is left alone and counts as left, since it costs hours to repeat;
@@ -116,6 +117,11 @@ running()
     } | wsl
     echo "Get-Process | Where-Object { \$_.Path -like 'D:\\rach2\\*' -or \$_.Path -like 'D:/rach2/*' } |
         ForEach-Object { 'windows: {0} {1}' -f \$_.Id, \$_.ProcessName }" | windows
+    # A part of a release run that release.sh starts apart from its ssh
+    # session is MSYS2's bash running OUT/ID.PART.sh.
+    echo "Get-CimInstance Win32_Process -Filter \"Name = 'bash.exe'\" |
+        Where-Object { \$_.CommandLine -like '* $(machine out)/*.sh' } |
+        ForEach-Object { 'windows: {0} bash {1}' -f \$_.ProcessId, \$_.CommandLine }" | windows
 }
 
 # stragglers: stop what `running` lists, but a release that may stay.
@@ -128,11 +134,16 @@ stragglers()
     [ -z "$pids" ] || kill $pids 2> /dev/null
     pids=$(printf '%s\n' "$list" | sed -n 's/^wsl: \([0-9]*\) .*/\1/p' | tr '\n' ' ')
     [ -z "$pids" ] || echo "kill $pids 2> /dev/null" | wsl
-    pids=$(printf '%s\n' "$list" | sed -n 's/^windows: \([0-9]*\) .*/\1/p' | tr '\n' ',' | sed 's/,$//')
+    # winclean.sh stops a run's bash with what it started, which Stop-Process
+    # would leave running.
+    pids=$(printf '%s\n' "$list" | grep -v '^windows: [0-9]* bash ' |
+        sed -n 's/^windows: \([0-9]*\) .*/\1/p' | tr '\n' ',' | sed 's/,$//')
     [ -z "$pids" ] || echo "Stop-Process -Id $pids -Force" | windows
-    # A release run's etude is OUT/etude-ID.exe; remove what each stopped run
-    # made on Windows outside its own files.
-    ids=$(printf '%s\n' "$list" | sed -n 's/^windows: [0-9]* etude-\(milestone[^ ]*\)$/\1/p' |
+    # A release run's etude is OUT/etude-ID.exe and its bash runs
+    # OUT/ID.PART.sh; stop each run's bash and remove what the run made on
+    # Windows outside its own files.
+    ids=$(printf '%s\n' "$list" | sed -n -e 's/^windows: [0-9]* etude-\(milestone[^ ]*\)$/\1/p' \
+        -e 's/^windows: [0-9]* bash .*\/\(milestone[^ /.]*\)\.[a-z]*\.sh$/\1/p' |
         sort -u | tr '\n' ' ')
     [ -z "$ids" ] ||
         ssh_host "$TESTING" "C:/msys64/usr/bin/bash.exe -l -s $(machine tree) $(machine out) $ids" \
