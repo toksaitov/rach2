@@ -185,6 +185,13 @@ int vfs_mount_seen(const struct vfs_mount *m)
     return 1;
 }
 
+/** And the cached walk reads that namespace's view in the set's first word. */
+int vfs_mount_seen_word(const struct vfs_mount *m)
+{
+    (void)m;
+    return 1;
+}
+
 /** The fixture's types keep no name cache: each lookup goes to the type. */
 static int dcache_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {

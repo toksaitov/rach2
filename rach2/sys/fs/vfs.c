@@ -1849,11 +1849,11 @@ static int cached_start(const struct vfs_ref *start, const char *path, struct vf
     return rc;
 }
 
-/** Whether a mount may cover `node` of `mnt`, or be entered by the name
- * `comp` from it when `comp` is not NULL and `node` is the mount's root: a
- * search of the table under its lock that judges no namespace's view and
- * no state but free, so that it errs only toward the full walk. */
-static int cached_mount_near(struct vfs_mount *mnt, void *node, const char *comp)
+/** Whether a nameless mount may be entered by the name `comp` from the
+ * root directory of `mnt`: a search of the table under its lock that judges
+ * no namespace's view and no state but free, so that it errs only toward
+ * the full walk. */
+static int cached_mount_named(struct vfs_mount *mnt, const char *comp)
 {
     uint32_t flags = spin_lock_irqsave(&mount_table_lock);
     int i, near = 0;
@@ -1864,10 +1864,58 @@ static int cached_mount_near(struct vfs_mount *mnt, void *node, const char *comp
         if (!m || m->state == VFS_FREE || m->parent != mnt) {
             continue;
         }
-        near = comp ? !m->covered && streq(path_last(m->covered_path), comp) : m->covered == node;
+        near = !m->covered && streq(path_last(m->covered_path), comp);
     }
     spin_unlock_irqrestore(&mount_table_lock, flags);
     return near;
+}
+
+/**
+ * Move the cached walk at `cur` onto the root of the mount covering its
+ * node, and on through each mount made over that root in turn, as
+ * `walk_cross` moves the full walk and Linux's `__follow_mount_rcu` moves
+ * a walk under RCU (fs/namei.c:1521-1563). The mounts are searched under the
+ * table's lock, which keeps a record in its slot while the walk enters it,
+ * as `cached_start` takes the root mount. 0, with `cur` where a path through
+ * this place arrives; or WALK_FULL, with `cur` on the last mount reached,
+ * for a mount the walk may not judge (`vfs_mount_seen_word`) or stand on
+ * (`cached_take`), one being made or unmounted among them. May sleep, to
+ * drop a hold it moved off (`cached_put`).
+ */
+static int cached_cross(struct vfs_ref *cur)
+{
+    for (;;) {
+        struct vfs_mount *over = NULL;
+        struct vfs_ref next;
+        uint32_t flags = spin_lock_irqsave(&mount_table_lock);
+        int i, rc = 0;
+
+        for (i = 1; i < mount_slots && !over && rc == 0; i++) {
+            struct vfs_mount *m = mounts[i];
+            int seen;
+
+            if (!m || m->state == VFS_FREE || m->parent != cur->mnt || !m->covered ||
+                m->covered != cur->node) {
+                continue;
+            }
+            seen = vfs_mount_seen_word(m);
+            if (seen < 0) {
+                rc = WALK_FULL;
+            } else if (seen) {
+                over = m;
+            }
+        }
+        if (over) {
+            rc = cached_take(over, over->root, &next);
+        }
+        spin_unlock_irqrestore(&mount_table_lock, flags);
+        if (rc != 0 || !over) {
+            return rc;
+        }
+        cached_put(cur->mnt, cur->node);
+        vfs_leave(cur->mnt);
+        *cur = next;
+    }
 }
 
 /**
@@ -1878,10 +1926,12 @@ static int cached_mount_near(struct vfs_mount *mnt, void *node, const char *comp
  * negative entry for a name; or WALK_FULL, with nothing held, for the full
  * walk to take the path whole.
  *
- * Each step must stay on one mount of a type `walk_cacheable` admits, find
+ * Each step must stand on a mount of a type `walk_cacheable` admits, find
  * its name in the cache, pass the search check, which reads the held
  * directory alone (`name_cache`), and reach no symbolic link it would
- * follow and no mount. Anything else, `..`, a failed search check among
+ * follow; a directory a mount covers it crosses (`cached_cross`), but a
+ * nameless mount entered by name it leaves to the full walk. Anything
+ * else, `..`, a failed search check among
  * them, which the full walk may excuse on the way to the working directory
  * (`toward_cwd`), goes to the full walk, which gives the same answer for
  * every path this one finishes. The walk takes no namespace lock, since its
@@ -1929,8 +1979,7 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
         if (streq(comp, ".")) {
             continue;
         }
-        if (streq(comp, "..") ||
-            (cur.node == cur.mnt->root && cached_mount_near(cur.mnt, cur.node, comp))) {
+        if (streq(comp, "..") || (cur.node == cur.mnt->root && cached_mount_named(cur.mnt, comp))) {
             goto full;
         }
         rc = dcache_lookup_hit(mount_base(cur.mnt), cur.node, comp, &found);
@@ -1951,7 +2000,7 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
         }
         cached_put(cur.mnt, cur.node);
         cur.node = found;
-        if (cached_mount_near(cur.mnt, cur.node, NULL)) {
+        if (cached_cross(&cur) != 0) {
             goto full;
         }
     }

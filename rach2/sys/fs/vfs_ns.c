@@ -27,6 +27,16 @@ int vfs_mount_seen(const struct vfs_mount *m)
     return idset_has(&m->ns_seen, caller_id());
 }
 
+int vfs_mount_seen_word(const struct vfs_mount *m)
+{
+    uint32_t id = caller_id();
+
+    if (id >= 32u) {
+        return -1;
+    }
+    return (int)((*(volatile const uint32_t *)&m->ns_seen.low >> id) & 1u);
+}
+
 int vfs_mount_shared(const struct vfs_mount *m)
 {
     return m->ns_seen.count > (uint32_t)vfs_mount_seen(m);
