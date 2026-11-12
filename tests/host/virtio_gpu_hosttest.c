@@ -37,9 +37,9 @@
  * reference goes; and a reset over a transport whose backing is its own heap,
  * which zaps an object no one exported and gives its frames back, and leaves an
  * exported object its frames until it is freed; and blobs mapped from a
- * transport's pages, whose revoke queues a zap of the whole blob for the
- * commit worker, whose free takes a queued zap off the queue, and whose kill
- * holds each blob across a zap in which the program's last reference goes.
+ * transport's pages, whose revoke queues a zap of the whole blob for the commit
+ * worker, whose free takes a queued zap off the queue, and whose kill holds
+ * each blob across a zap in which the program's last reference goes.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
