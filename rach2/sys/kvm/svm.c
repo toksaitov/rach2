@@ -2563,7 +2563,7 @@ static void svm_inject(struct kvm_vcpu *v)
 
 /**
  * The backend's `fast`, as Linux's svm_exit_handlers_fastpath
- * (arch/x86/kvm/svm/svm.c:4283-4309): the guest's WRMSR of the TSC
+ * (arch/x86/kvm/svm/svm.c:4283-4310): the guest's WRMSR of the TSC
  * deadline with the local APIC in the kernel, as
  * handle_fastpath_set_msr_irqoff (x86.c:1743-1789), when the exit saved
  * the next RIP, since no instruction is decoded with interrupts off. A

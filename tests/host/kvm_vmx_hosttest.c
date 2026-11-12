@@ -73,9 +73,12 @@
  * without EFER.SCE, refused with it, and its load once EFER.SCE is on
  * caught at its #GP; under a host DR7 that enables a breakpoint, DR7 at
  * 0x400 while DR0 to DR3 change, and the host's back after each run; the
- * first entry of a new vCPU with RSP all ones; and kvm/exit_stats's ten
- * columns in order, a run's entry, run and exit as the model's TSC steps
- * them.
+ * first entry of a new vCPU with RSP all ones; the exit path's fast path
+ * with the local APIC in the kernel, a WRMSR of the TSC deadline and the
+ * preemption timer's expiry entering again with the run loop not run and
+ * counted as fast, and a request ending it with the WRMSR stepped once;
+ * and kvm/exit_stats's eleven columns in order, a run's entry, run and
+ * exit as the model's TSC steps them.
  */
 #include "kvm/vmx.c"
 
@@ -925,10 +928,16 @@ int kvm_lapic_ready(struct kvm_vcpu *v)
 
 static void model_block(struct kvm_vcpu *v);
 
+/* The calls of `kvm_lapic_prepare` and `kvm_lapic_timer_expire`, and what
+ * the next calls of the second do: `expire_due` of them find the timer
+ * due, and the one numbered `expire_exit`, from 1, leaves KVM_REQ_EXIT. */
+static int prepares, expires, expire_due, expire_exit;
+
 /** The local APIC's work before an entry: a halted vCPU's sleep when a
  * row asks for one. */
 int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
 {
+    prepares++;
     model_block(v);
     return 0;
 }
@@ -953,11 +962,17 @@ uint64_t kvm_lapic_run_bound(struct kvm_vcpu *v, uint64_t max)
     return max;
 }
 
-/** vlapic.c's delivery of the APIC timer's expiry from the fast path: no
- * timer is armed here, so none is due. */
+/** vlapic.c's delivery of the APIC timer's expiry from the fast path, as
+ * `expire_due` and `expire_exit` have it. */
 int kvm_lapic_timer_expire(struct kvm_vcpu *v)
 {
-    (void)v;
+    if (++expires == expire_exit) {
+        kvm_vcpu_kick(v, KVM_REQ_EXIT);
+    }
+    if (expire_due > 0) {
+        expire_due--;
+        return 1;
+    }
     return 0;
 }
 
@@ -5407,6 +5422,68 @@ static void block_rows(void)
 }
 
 /**
+ * The exit path's fast path, `vmx_fast`, on a VM with the local APIC in the
+ * kernel: a WRMSR of the TSC deadline and the preemption timer's expiry
+ * enter the guest again with the run loop not run, each delivering the
+ * timer, and kvm/exit_stats counts each as fast; a request the fast path
+ * finds ends it, and the run loop does not take its exit again.
+ */
+static void fast_rows(void)
+{
+    static char buf[2048];
+    struct kvm_userspace_memory_region region = {0, 0, 0, sizeof(ram), 0};
+    unsigned int was_cpu = host_cpu;
+    struct kvm_run *rp;
+    uint64_t n[10];
+    int32_t len;
+    int vm, fd, runs;
+
+    on_cpu(0);
+    vm = dev(KVM_CREATE_VM, 0);
+    region.userspace_addr = (uint64_t)(uintptr_t)ram;
+    CHECK(fdio(vm, KVM_SET_USER_MEMORY_REGION, (uintptr_t)&region) == 0 &&
+              vm_cap(vm, KVM_CAP_SPLIT_IRQCHIP, 24) == 0,
+          "a VM of a slot and the local APIC in the kernel");
+    k_memset((void *)apic_page, 0, sizeof(apic_page));
+    apic_irr = -1;
+    fd = make_vcpu(vm, 0);
+    rp = run_of(fd);
+    exitstat_ops->store(exitstat_data, (const char __user *)"0", 1);
+    set_regs(fd, 0x1000, 0x1234, 0x6E0, 0);
+    prepares = expires = 0;
+    expire_due = 1;
+    expire_exit = 0;
+    runs = m.launches + m.resumes;
+    script(EXIT_MSR_WRITE, 0, 2);
+    script(EXIT_PREEMPTION_TIMER, 0, 0);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT && regs_of(fd).rip == 0x1003 &&
+              m.launches + m.resumes == runs + 3 && prepares == 1 && expires == 2,
+          "a WRMSR of the TSC deadline and the preemption timer's expiry enter again with the "
+          "run loop not run, each delivering the timer");
+    len = exitstat_ops->show(exitstat_data, buf, sizeof(buf) - 1u);
+    buf[len > 0 && len < (int32_t)sizeof(buf) ? len : 0] = '\0';
+    CHECK(stat_line(buf, "0x20", "MSR_WRITE", n) && n[0] == 1 && n[1] == 1 && n[5] == 0 &&
+              n[9] == 1 && stat_line(buf, "0x34", "PREEMPTION_TIMER", n) && n[0] == 1 &&
+              n[1] == 1 && n[5] == 0 && n[9] == 1 && stat_line(buf, "0xc", "HLT", n) && n[0] == 1 &&
+              n[2] == 1 && n[9] == 0,
+          "kvm/exit_stats counts the two as fast, with no preparation, and the HLT as not");
+
+    set_regs(fd, 0x1000, 0, 0x6E0, 0);
+    prepares = expires = 0;
+    expire_exit = 1;
+    script(EXIT_MSR_WRITE, 0, 2);
+    CHECK(run(fd) == -EINTR && rp->exit_reason == KVM_EXIT_INTR && regs_of(fd).rip == 0x1002 &&
+              expires == 1,
+          "a request the fast path finds ends it, and the WRMSR it took is not stepped again");
+    expire_exit = 0;
+    exitstat_ops->store(exitstat_data, (const char __user *)"0", 1);
+    fdclose(fd);
+    fdclose(vm);
+    on_cpu((int)was_cpu);
+}
+
+/**
  * The TPR shadow, as Linux's vmx.c keeps it, on a VM with the local APIC in
  * the kernel: CR8's exits off and the APIC's page the virtual-APIC page;
  * the guest's MOV to CR8, which writes the page's TPR without an exit,
@@ -5579,6 +5656,7 @@ int main(void)
     first_entry_rows(vm);
     tpr_rows();
     block_rows();
+    fast_rows();
     exitstat_rows();
     CHECK(m.ud == 0 && m.gp == 0 && m.bad_writes == 0 && m.bad_reads == 0,
           "no VMX instruction outside VMX operation and no field the VMCS lacks, over every row");

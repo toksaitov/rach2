@@ -315,7 +315,7 @@ struct kvm_tdp_format {
  * image marks KVM_PART_FPU, so that the next entry loads it.
  * `fast`, NULL for a backend without it, is the exit path's fast path, as
  * Linux's vmx_exit_handlers_fastpath and svm_exit_handlers_fastpath
- * (arch/x86/kvm/vmx/vmx.c:7258-7279, svm/svm.c:4283-4309): called after
+ * (arch/x86/kvm/vmx/vmx.c:7258-7279, svm/svm.c:4283-4310): called after
  * each `enter` that returned 0, still with interrupts off, it handles the
  * exit `enter` read when it is one of the few it takes, a WRMSR of the TSC
  * deadline and on VMX the preemption timer's expiry, with the local APIC

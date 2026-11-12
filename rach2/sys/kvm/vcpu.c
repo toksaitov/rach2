@@ -736,7 +736,7 @@ static int fast_ends(struct kvm_vcpu *v)
  * Enter the guest, with interrupts off, as the backend's `enter` needs,
  * until an exit its `fast` does not handle or one after which the loop has
  * work (`fast_ends`), as Linux's vcpu_enter_guest enters again from its
- * fast path (arch/x86/kvm/x86.c:10578-10597): 0 for an exit the backend's
+ * fast path (arch/x86/kvm/x86.c:10569-10595): 0 for an exit the backend's
  * `exit` names, 1 for one `fast` handled, -EAGAIN when a request came
  * between the check and the first entry, or the backend's error. The vCPU
  * is IN_GUEST from before its requests are read, so a kick that comes
