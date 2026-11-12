@@ -147,7 +147,7 @@ static const unsigned long kvm_cmds[] = {
     K(0, 0x9A, 0),    K(0, 0xA2, 0),    K(0, 0xA3, 0),   K(1, 0x9B, 72),   K(1, 0x9C, 8),
     K(1, 0x9E, 64),   K(2, 0x9F, 64),   K(1, 0xA0, 64),  K(2, 0xA1, 128),  K(1, 0xA2, 128),
     K(2, 0xA4, 4096), K(1, 0xA5, 4096), K(2, 0xA6, 392), K(1, 0xA7, 392),  K(0, 0xAD, 0),
-    K(3, 0xD5, 64)};
+    K(3, 0xD5, 64),   K(1, 0xB2, 32),   K(1, 0xC6, 392)};
 
 /* The guest memory of the child's VM: 64 KiB of HLT, so that a vCPU sent
  * into it exits at once. */
