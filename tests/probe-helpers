@@ -12,6 +12,7 @@ musl/ctrlcmusl manual interactive signal test
 musl/devtest manual device test
 musl/hdaprobe manual audio path and rate diagnostic
 musl/hello manual musl startup smoke test
+musl/kvmipimusl manual load of a halted vCPU's wakes by IPI and by INIT and SIPI (rach2/sys/kvm/Readme.md)
 musl/kvmmusl KVM run page and fork check, run by the native collection on the Lenovo, whose VMX no suite profile has yet
 musl/kvmslotmusl KVM memory slot check, run by the native collection on the Lenovo; its guest rows need a backend that runs guests
 musl/mallocqsort manual allocation and sort test
