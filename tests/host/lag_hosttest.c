@@ -3,6 +3,7 @@
  * a transfer that sleeps.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * The wrapper runs each transfer in the caller's context and answers it
  * from the timer a few ticks later. The driver under it can put the caller
