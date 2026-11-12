@@ -1912,15 +1912,19 @@ static void lbr_lists(struct kvm_pmu *p, struct kvm_pmu_msr *guest, uint32_t *ng
  * counter new to `pmi` may hold the status firmware or an earlier user
  * left, as Linux's intel_pmu_reset acknowledges whatever status it finds
  * (arch/x86/events/intel/core.c:2984-2986); claimed, it would make an
- * unrelated NMI KVM's. Each counter is stopped, so its acknowledged status
- * cannot come back before the entry. Interrupts are off, so the processor
- * does not change; `pmu_pmi` is set last, so that an NMI meanwhile claims
- * no bit of `pmi`.
+ * unrelated NMI KVM's. With a checkpointed counter, which `kvm_pmu_nmi`
+ * counts whenever any counter's status is set, the stale status of every
+ * counter of `spare`, those the host does not hold, is acknowledged too,
+ * so that only an overflow of this run or of the host's own counters
+ * makes the NMI count it. Each counter is stopped, so its acknowledged
+ * status cannot come back before the entry. Interrupts are off, so the
+ * processor does not change; `pmu_pmi` is set last, so that an NMI
+ * meanwhile claims no bit of `pmi`.
  */
-static void pmi_publish(uint64_t pmi, uint64_t cp)
+static void pmi_publish(uint64_t pmi, uint64_t cp, uint64_t spare)
 {
     uint32_t cpu = arch_cpu_id();
-    uint64_t status, bits = pmu_pmi[cpu] | pmi;
+    uint64_t status, bits = pmu_pmi[cpu] | pmi | (cp ? spare : 0);
 
     if (bits && kvm_pmu_global()) {
         status = pmu_read(GLOBAL_STATUS) & bits;
@@ -1931,6 +1935,11 @@ static void pmi_publish(uint64_t pmi, uint64_t cp)
     pmu_pmi[cpu] = 0;
     pmu_cp[cpu] = pmu_cp_due[cpu] = cp;
     pmu_pmi[cpu] = pmi;
+}
+
+void kvm_pmu_leave(void)
+{
+    pmi_publish(0, 0, 0);
 }
 
 void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm_pmu_msr *host,
@@ -1985,7 +1994,7 @@ void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm
     }
     pmu_placed = used;
     fixed |= program_slots(p, guest, host, ng, nh, pmi);
-    pmi_publish(pmi[0], pmi[1]);
+    pmi_publish(pmi[0], pmi[1], all_counters() & ~held);
     if (kvm_pmu_global()) {
         if (pmu_host.nr_fixed && fixed != host_fixed) {
             pmu_write(FIXED_CTRL, fixed);
@@ -2074,13 +2083,19 @@ void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest, int r
  *
  * A counter of a TSX-checkpointed event is counted whether or not its bit
  * is set, since the transaction's rollback that its PMI causes clears the
- * bit: while any status bit is set, as Linux adds `intel_cp_status`
- * (arch/x86/events/intel/core.c:2516-2517, 3119-3124), and once, until the
- * next entry, by an NMI that finds no status at all. There Linux returns
- * 0 (arch/x86/events/intel/core.c:3183-3185) and reports an NMI of unknown
- * reason and goes on (arch/x86/kernel/nmi.c:331-357, 475), where an unclaimed
- * NMI here is a hardware fault's panic; the counter, stopped by the exit
- * the NMI caused, raises no second PMI before the next entry.
+ * bit: while any counter's overflow bit is set, as Linux adds
+ * `intel_cp_status` (arch/x86/events/intel/core.c:2516-2517, 3119-3124)
+ * only to a status that holds more than COND_CHG, ASIF and LBRS_FROZEN
+ * (core.c:3050-3057), and once, until the next entry, by an NMI that finds
+ * no counter's bit. The status's other bits name no counter's overflow:
+ * those three, which a guest's DEBUGCTL or firmware may leave, and those
+ * of PEBS, Processor Trace and the uncore, which the host never enables.
+ * Where no counter's bit is set Linux returns 0 (arch/x86/events/intel/
+ * core.c:3183-3185) and reports an NMI of unknown reason and goes on
+ * (arch/x86/kernel/nmi.c:331-357, 475), where an unclaimed NMI here is a
+ * hardware fault's panic; the counter, stopped by the exit the NMI caused,
+ * raises no second PMI before the next entry. `kvm_pmu_leave` ends both
+ * claims when the vCPU leaves the processor.
  *
  * The counter's APIC entry, which the delivery masked, is unmasked by the
  * hard-lockup detector's handler after this while its counter runs, and
@@ -2102,7 +2117,7 @@ int kvm_pmu_nmi(void)
     if (status) {
         pmu_write(GLOBAL_OVF, status);
     }
-    if (all) {
+    if (all & all_counters()) {
         status |= pmu_cp[cpu];
     } else {
         status = pmu_cp_due[cpu];
