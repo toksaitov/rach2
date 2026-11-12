@@ -1,0 +1,169 @@
+<6>[0.000000] boot: Rach2 Booting
+<6>[0.000000] boot: loader: qemu, by multiboot
+<6>[0.000000] boot: screen: text; the loader described none
+<7>[0.000000] module: none: the loader carried no module
+<6>[0.000000] vga: font: loaded: code page 437 box drawing with Cyrillic
+<7>[0.000000] boot: Initializing system components
+<6>[0.000000] cpu: page attributes: 0x0007040600070106; the framebuffer is mapped write-combining
+<7>[0.000000] boot: gdt: ready
+<7>[0.000000] boot: tss: ready
+<7>[0.000000] boot: idt: ready
+<7>[0.000000] boot: isr: ready
+<7>[0.000000] fpu: fxsr: on, sse: on, xsave: on, xcr0: 0x7, area: 832 bytes, pkeys: off
+<7>[0.000000] boot: memory manager: ready
+<7>[0.000000] memory: map: 0x0000000000000000-0x000000000009FC00 available
+<7>[0.000000] memory: map: 0x000000000009FC00-0x00000000000A0000 reserved
+<7>[0.000000] memory: map: 0x00000000000F0000-0x0000000000100000 reserved
+<7>[0.000000] memory: map: 0x0000000000100000-0x000000007FFDF000 available
+<7>[0.000000] memory: map: 0x000000007FFDF000-0x0000000080000000 reserved
+<7>[0.000000] memory: map: 0x00000000B0000000-0x00000000C0000000 reserved
+<7>[0.000000] memory: map: 0x00000000FED1C000-0x00000000FED20000 reserved
+<7>[0.000000] memory: map: 0x00000000FEFFC000-0x00000000FF000000 reserved
+<7>[0.000000] memory: map: 0x00000000FFFC0000-0x0000000100000000 reserved
+<7>[0.000000] memory: map: 0x0000000100000000-0x0000000200000000 available
+<6>[0.000000] memory: usable 6290939 KiB, unreachable 0 KiB, reserved 18963 KiB, managed 6271976 KiB
+<7>[0.000000] boot: paging: ready
+<7>[0.000000] pci: list: 9 functions
+<7>[0.000000] boot: page cache: ready
+<7>[0.000000] acpi: rsdp: at 0xf5280, from the bios area
+<6>[0.000000] acpi: tables: rsdt at 0x7ffe2480, revision 0, BOCHS : FACP APIC HPET MCFG WAET DSDT
+<6>[0.000000] acpi: madt: 4 processors (4 usable), 1 ioapics, 5 overrides, 1 nmi inputs, an 8259 pair
+<7>[0.000000] acpi: madt: override: isa 0 to gsi 2, flags 0x0
+<7>[0.000000] acpi: madt: override: isa 5 to gsi 5, flags 0xd
+<7>[0.000000] acpi: madt: override: isa 9 to gsi 9, flags 0xd
+<7>[0.000000] acpi: madt: override: isa 10 to gsi 10, flags 0xd
+<7>[0.000000] acpi: madt: override: isa 11 to gsi 11, flags 0xd
+<6>[0.000000] acpi: fadt: revision 3, pm1a 0x604, pm timer 0x608 (24-bit), reset register, 8042 yes, century 50
+<6>[0.000000] acpi: dsdt: \_S5 sleep types 0 and 0
+<6>[0.000000] acpi: hpet: at 0xfed00000
+<6>[0.000000] acpi: mcfg: segment 0, buses 0 to 255 at 0xb0000000
+<6>[0.000000] pci: ecam: buses 0 to 0 of segment 0 at 0xb0000000
+<6>[0.000000] pci: ecam: 0 functions with extended capabilities
+<6>[0.000000] hpet: ready: 100000000 Hz, period 10000000 fs
+<7>[0.000000] lapic: ready: id 0, version 0x14, x2apic mode
+<6>[0.000000] ioapic: ready: id 0 at 0xfec00000, version 0x11, gsi 0 to 23
+<6>[0.000000] lapic: tick: 62497 counts, measured against the hpet
+<6>[0.000000] ioapic: interrupts: lines through the ioapic, the 8259 masked
+<6>[0.002000] lapic: timer: vector 48 between ticks
+<7>[0.003000] boot: timer: ready
+<6>[0.004000] rtc: 2026-11-12 10:15:19 UTC
+<7>[0.005000] clock: ready
+<6>[0.006000] entropy: ready: RDRAND, trusted
+<6>[0.007000] board: ich9: ACPI enabled
+<6>[0.008000] board: ich9: masked the SCI on IRQ 9
+<6>[0.009000] board: ready: ich9
+<6>[0.011000] watchdog: ready: TCO version 2 at 660, running, fed by the kernel until opened, heartbeat 30 s, nowayout 0
+<7>[0.015000] ioapic: route: line 1 to gsi 1, vector 33, edge, active high
+<6>[0.016000] console: blank: after 600 seconds without input
+<7>[0.018000] ioapic: route: line 4 to gsi 4, vector 36, edge, active high
+<7>[0.020000] boot: keyboard: ready
+<7>[0.020000] boot: syscall: ready
+<7>[0.021000] boot: process: ready
+<7>[0.022000] boot: scheduler: ready
+<7>[0.023000] acpi: acpica: RSDP 0x00000000000F5280 000014 (v00 BOCHS )
+<7>[0.024000] acpi: acpica: RSDT 0x000000007FFE2480 000038 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.026000] acpi: acpica: FACP 0x000000007FFE2260 0000F4 (v03 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.030000] acpi: acpica: DSDT 0x000000007FFE0040 002220 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.032000] acpi: acpica: FACS 0x000000007FFE0000 000040
+<7>[0.033000] acpi: acpica: APIC 0x000000007FFE2354 000090 (v03 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.035000] acpi: acpica: HPET 0x000000007FFE23E4 000038 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.037000] acpi: acpica: MCFG 0x000000007FFE241C 00003C (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.039000] acpi: acpica: WAET 0x000000007FFE2458 000028 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.045000] acpi: acpica: 1 ACPI AML tables successfully acquired and loaded
+<7>[0.047000] ioapic: route: line 9 to gsi 9, vector 41, level, active high
+<7>[0.049000] acpi: sci: line 9
+<6>[0.052000] acpi: pnp: i8042 kbd: PNP: PNP0303
+<6>[0.053000] acpi: pnp: i8042 aux: PNP: PNP0f13
+<7>[0.056000] acpi: acpica: Enabled 2 GPEs in block 00 to 3F
+<6>[0.059000] acpi: acpica: 279 objects, 0 errors
+<7>[0.061000] vtd: none: no DMAR table
+<7>[0.062000] mouse: started
+<7>[0.062000] ioapic: route: line 12 to gsi 12, vector 44, edge, active high
+<7>[3.070000] mouse: ready
+<7>[3.070000] audio: started
+<6>[3.073000] audio: ready: PC Speaker fallback
+<6>[3.074000] disk: policy: read-write
+<6>[3.076000] modules: none
+<6>[3.077000] block: started
+<7>[3.078000] ahci: found: 8086:2922 at 0:31.2, prog-if 1, BAR5 FEBF4000
+<7>[4.188000] ahci: port 1: no link after 1000 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[5.300000] ahci: port 2: no link after 1000 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[6.406000] ahci: port 3: no link after 1000 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[7.519000] ahci: port 4: no link after 1000 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[8.628000] ahci: port 5: no link after 1000 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<6>[8.631000] disk: disk0: ahci 0: 50335744 sectors, model QEMU HARDDISK
+<6>[8.633000] ahci: port 0: 50335744 sectors, 24578 MiB
+<6>[8.635000] nvme: none: no NVMe controller on the bus
+<7>[8.636000] ioapic: route: line 14 to gsi 14, vector 46, edge, active high
+<7>[8.638000] ioapic: route: line 15 to gsi 15, vector 47, edge, active high
+<4>[8.641000] block: entry 0 is not a boot partition; /dev/bootpart absent
+<6>[8.669000] ext2: mounted: 6291456 blocks of 4096, 1572864 inodes, 192 groups
+<6>[8.672000] ext2: root: /dev/disk0p1
+<6>[8.673000] usb: started
+<7>[8.674000] usb: controller: none
+<6>[8.675000] usb: absent: no xHCI controller on the bus
+<7>[8.677000] pci: msi: 0:1f.2 on vector 49
+<6>[8.679000] ahci: interrupts: messages on vector 49, 1 disks queued
+<6>[8.681000] net: started
+<7>[8.694000] ioapic: route: line 11 to gsi 11, vector 43, level, active high
+<6>[8.695000] net: eth0: IPv6 fe80::5054:ff:fe12:3456/64 added
+<6>[8.697000] net: ready: e1000
+<6>[8.698000] net: eth0: e1000, station 52:54:00:12:34:56
+<7>[8.700000] e1000: 82540EM, MMIO 0x133000, IRQ 11, MAC 52:54:00:12:34:56
+<6>[8.701000] e1000: link 1000 Mb/s, full duplex
+<6>[8.703000] net: eth0: IPv4 10.0.2.15/24, gateway 10.0.2.2
+<6>[8.705000] drm: start
+<6>[8.712000] virtio: found: virtio0: 00:01.0 gpu, common bar 2+0x1000, notify bar 2+0x3000 x4, isr bar 2+0x1800, device bar 2+0x2000, 2 queues
+<6>[8.717000] virtio: found: virtio0: shared memory 1 at 70:0, 4096 MiB
+<6>[8.719000] virtio_gpu: pci: virtio-vga detected at 0000:00:01.0
+<6>[8.742000] virtio: features: virtio0: offered 101:3000001b, taken 1:3000001b
+<6>[8.745000] virtio: interrupts: virtio0: msi-x, a vector for each of 2 queues and the configuration
+<6>[8.748000] virtio_gpu: host memory window: 0x7000000000 +0x100000000
+<6>[8.750000] virtio_gpu: features: +virgl +edid +resource_blob +host_visible
+<6>[8.752000] virtio_gpu: features: +context_init
+<6>[8.754000] virtio: queue: virtio0: 0 of 128 entries, vector 1, indirect
+<6>[8.756000] virtio: queue: virtio0: 1 of 128 entries, vector 2, indirect
+<6>[8.759000] virtio_gpu: number of scanouts: 1
+<6>[8.760000] virtio_gpu: number of cap sets: 3
+<6>[8.784000] virtio_gpu: display: scanout 0: 1280x800+0+0
+<7>[8.786000] drm: worker: kdrm is pid 1
+<6>[8.788000] drm: virtio_gpu: card0
+<6>[8.789000] console: card0: a native display
+<6>[8.792000] kvm: ready: vmx
+<6>[8.793000] vfio: ready: 0 groups of 0 functions, no IOMMU unit translates
+<6>[9.066000] timing: tick 1000 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 2001 us
+<6>[9.069000] clock: reference: the tsc; a tick the timer misses or delays is counted
+<6>[9.084000] smp: cpu1: tsc: synchronized with cpu0
+<6>[9.098000] smp: cpu2: tsc: synchronized with cpu0
+<6>[9.112000] smp: cpu3: tsc: synchronized with cpu0
+<6>[9.114000] smp: processors: 4 online of 4
+<6>[9.143000] nmi_watchdog: counter: intel arch version 2, fixed counter 1, 48 bits, 1895 MHz
+<6>[9.148000] nmi_watchdog: enabled: permanently consumes one hw-PMU counter
+<6>[9.151000] vdso: clock: the tsc, 1895611 counts a tick
+<6>[9.166000] boot: starting /sbin/init
+<7>[9.175000] acpi: thread: kacpid is pid 4
+<7>[9.176000] mouse: worker: kpsmoused is pid 5
+<7>[9.179000] watchdog: worker: watchdogd is pid 6
+<7>[9.180000] input: sysfs: worker: kinputd is pid 7
+init: sshd: started as pid 13
+rach2 login: 
+<6>[10.075000] net: eth0: IPv6 fec0::8e3f:a2d6:b893:1038/64 added
+<6>[10.075000] net: eth0: IPv6 fec0::bdc9:26ac:3dfe:1141/64 added
+<7>[12.407000] virtio_gpu: worker: pid 52
+<6>[12.407000] console: card0: handed to a master, the keyboard off
+<6>[22.207000] console: card0: taken back from a master, the keyboard on
+<6>[22.208000] console: card0: 1280x800, the font at 2x
+<6>[22.318000] console: card0: handed to a master, the keyboard off
+<6>[38.020000] console: card0: taken back from a master, the keyboard on
+<6>[38.022000] console: card0: 1280x800, the font at 2x
+<6>[38.527000] console: card0: handed to a master, the keyboard off
+<6>[53.816000] console: card0: taken back from a master, the keyboard on
+<6>[53.818000] console: card0: 1280x800, the font at 2x
+<6>[54.323000] console: card0: handed to a master, the keyboard off
+<6>[69.920000] console: card0: taken back from a master, the keyboard on
+<6>[69.922000] console: card0: 1280x800, the font at 2x
+<6>[70.297000] poweroff: acpica: \_PTS(5) run, gpes disabled
+<6>[70.302000] shutdown: root: unmounted
+<6>[70.303000] shutdown: Stopping the system. Goodbye!
+<6>[70.307000] poweroff: acpica: status cleared
+<6>[70.307000] poweroff: powering off
