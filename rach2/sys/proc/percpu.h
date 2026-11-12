@@ -87,7 +87,6 @@ struct percpu {
     int64_t accounted_ns;                       /* the monotonic time its counts reach, ns */
     uint64_t user_cycles;                       /* cycle count at its last return to user mode */
     uint64_t entry_cycles;                      /* cycle count at its last entry from user mode */
-    uint64_t user_entered;                      /* entry_cycles as that return found it */
     uint64_t idle_cycles;                       /* cycle count as its last idle wait began */
     uint64_t idle_end_cycles;                   /* and as its halt ended */
     uint64_t bkl_since;                         /* cycle count when it last took the big lock */

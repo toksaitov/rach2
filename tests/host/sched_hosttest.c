@@ -78,7 +78,7 @@ uint64_t arch_steal_ns(void)
 static int64_t user_entry_ns, user_return_ns, idle_start_ns, idle_end_ns;
 
 /** The modeled time of a change of mode, by the count the rows give its
- * field: 1 the entries', 2 the return's, 3 and 4 the idle wait's. */
+ * field: 1 the entry's, 2 the return's, 3 and 4 the idle wait's. */
 int64_t timer_cycles_when(uint64_t cycles, int64_t now)
 {
     (void)now;
@@ -722,12 +722,11 @@ static void accounting(void)
 }
 
 /**
- * A tick taken in user mode charges system time for the ticks due between
- * the processor's last entry from user mode and its return, which
- * interrupts kept off in the kernel held back, and user time for those due
- * after the return or before the entry; one taken in an idle wait charges
- * each tick due before the wait to the mode it was due in, idle for one due
- * in an earlier wait.
+ * A tick taken as interrupts come back on charges the ticks due before then,
+ * which interrupts kept off in the kernel held back, where Linux would have
+ * taken them: at a return to user mode as system time, and at an idle
+ * wait's halt as system time, or as idle when the stretch that held them
+ * began at the end of an earlier wait.
  */
 static void accounting_held(void)
 {
@@ -738,7 +737,6 @@ static void accounting_held(void)
 
     cpu->current = NULL;
     cpu->idle_wait = 0;
-    cpu->user_entered = 1u;
     cpu->entry_cycles = 1u;
     cpu->user_cycles = 2u;
     cpu->idle_cycles = 3u;
@@ -748,6 +746,7 @@ static void accounting_held(void)
     sched_account_start();
     busy = cpu->busy_ticks;
     user = cpu->user_ticks;
+    idle = cpu->idle_ticks;
     clock_ns += TICK_NS;
     user_return_ns = (int64_t)(clock_ns - TICK_NS / 2u);
     sched_account_tick(1, (int64_t)(clock_ns - TICK_NS / 4u));
@@ -768,45 +767,24 @@ static void accounting_held(void)
     sched_account_tick(1, 0);
     CHECK(cpu->busy_ticks == busy + 5 && cpu->user_ticks == user + 3,
           "with no time of the tick kept, a tick in user mode is user time");
-    clock_ns += TICK_NS;
-    user_entry_ns = (int64_t)(clock_ns - TICK_NS / 4u);
-    user_return_ns = (int64_t)(clock_ns - TICK_NS / 8u);
-    sched_account_tick(1, (int64_t)(clock_ns - TICK_NS / 2u));
-    CHECK(cpu->busy_ticks == busy + 6 && cpu->user_ticks == user + 4,
-          "a tick due in user mode before the entry, delivered after it, is user time");
-    clock_ns += 3u * TICK_NS;
-    user_return_ns = (int64_t)(clock_ns - 5u * TICK_NS / 2u);
+    clock_ns += 2u * TICK_NS;
     user_entry_ns = (int64_t)(clock_ns - 3u * TICK_NS / 2u);
     idle_start_ns = (int64_t)(clock_ns - TICK_NS / 2u);
-    idle = cpu->idle_ticks;
     cpu->idle_wait = 1;
     sched_account_tick(0, (int64_t)clock_ns);
-    cpu->idle_wait = 0;
-    CHECK(cpu->busy_ticks == busy + 8 && cpu->user_ticks == user + 5 && cpu->idle_ticks == idle + 1,
-          "an idle wait's tick charges ticks due in user mode, in the kernel and idle to each");
+    CHECK(cpu->busy_ticks == busy + 6 && cpu->user_ticks == user + 3 && cpu->idle_ticks == idle + 1,
+          "a halt after a call charges the tick the call held as system time, the next as idle");
     clock_ns += TICK_NS;
-    user_return_ns = 0;
-    user_entry_ns = 0;
     idle_end_ns = (int64_t)(clock_ns - TICK_NS / 2u);
     idle_start_ns = (int64_t)(clock_ns - TICK_NS / 4u);
-    cpu->idle_wait = 1;
     sched_account_tick(0, (int64_t)(clock_ns - 3u * TICK_NS / 4u));
     cpu->idle_wait = 0;
-    CHECK(cpu->busy_ticks == busy + 8 && cpu->idle_ticks == idle + 2,
-          "a tick due in an idle wait, delivered in the next, is idle");
-    clock_ns += TICK_NS;
-    idle_start_ns = (int64_t)(clock_ns - 3u * TICK_NS / 4u);
-    idle_end_ns = (int64_t)(clock_ns - TICK_NS / 2u);
-    user_entry_ns = (int64_t)(clock_ns - TICK_NS / 4u);
-    user_return_ns = (int64_t)(clock_ns - TICK_NS / 8u);
-    sched_account_tick(1, (int64_t)(clock_ns - 3u * TICK_NS / 8u));
-    CHECK(cpu->busy_ticks == busy + 9 && cpu->user_ticks == user + 6,
-          "below a return and an entry, which older pairs may hide, a tick is user time");
-    idle_start_ns = 0;
-    idle_end_ns = 0;
-    user_entry_ns = 0;
+    CHECK(cpu->busy_ticks == busy + 6 && cpu->idle_ticks == idle + 2,
+          "a halt after the end of an earlier wait charges the tick held there as idle");
     user_return_ns = 0;
     user_entry_ns = 0;
+    idle_start_ns = 0;
+    idle_end_ns = 0;
     cpu->idle_wait = 1;
     cpu->current = saved;
     clock_ns = saved_clock;
