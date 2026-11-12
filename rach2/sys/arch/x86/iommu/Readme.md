@@ -8,13 +8,15 @@ The boot brings the units up after ACPICA, in `platform_firmware_start` (`platfo
 
     vtd: dmar0: at 0xfed90000, version 1.0, cap 0x80d2008c222f0606, ecap 0xf00f4a
     vtd: irte: dmar0 index 2: msi of 0:1f.2, vector 40 to apic 0, edge, sid 0x00fa svt 1
-    vtd: interrupt remapping: on, compatibility format refused
+    vtd: interrupt remapping: on, xapic format, compatibility format refused
     vtd: ready: 1 units, interrupt remapping on, translation on for assigned devices only
 
-Two words of the boot line change this, as Linux's do ([the command line](../../../../cmdline.md)):
+Words of the boot line change this, as Linux's do ([the command line](../../../../cmdline.md)):
 
 * `intel_iommu=off`: no device is given to a domain (`iommu_present` is 0 and `iommu_attach` fails with `-ENODEV`); interrupt remapping stays on, as on Linux, where only `intremap=` turns it off. The word may be one of a list, as `intel_iommu=on,igfx_off`; the other values are accepted and change nothing, since translation is off for the host's devices anyway.
 * `intremap=off`: interrupts are not remapped.
+* `intremap=no_x2apic_optout`: the x2APIC format is taken although the DMAR table opts out of x2APIC mode.
+* `nox2apic`: the entries keep the xAPIC format ([the PC platform](../Readme.md)).
 
 With both words, as on Linux, no unit is programmed: each unit's version, capabilities and status are read and logged, translation is turned off only if the firmware left it on, and nothing else is written. The log says `vtd: off by intel_iommu=off intremap=off: N units read`.
 
@@ -68,7 +70,7 @@ A device that a reserved region names is refused (`-EPERM`) unless it is a USB c
 
 `intremap_start` turns remapping on when the table offers it, every unit has it and the queue, and every I/O APIC the MADT lists is in a unit's scope. Each unit gets a table of 256 entries in one page. The units at first let compatibility-format interrupts by (GCMD.CFI); `ioapic_remap_start` and `pci_msi_remap_start` then give every routed redirection entry and every enabled message an entry of its own and rewrite it in the remappable format, and then the compatibility format is refused, as Linux has it. A message is remapped with no subhandle, so that its data is not read and the one write of its address moves it from one format to the other; a redirection entry moves with the one write of its high half. A message enabled afterwards is composed through the remapper, and one disabled has its enable bit cleared before it is written back and its entry given back. `intremap_stop` reverses the steps.
 
-An entry delivers the vector, at fixed delivery and edge or level as the source had them, to the boot processor's xAPIC id, and takes the interrupt only from the source's requester id. For a device behind bridges that id is Linux's `set_msi_sid` (`drivers/iommu/intel/irq_remapping.c`, line 373): a conventional PCI bridge, or a PCI-to-PCI Express bridge, puts its own id on what passes it and is matched whole; a PCI Express-to-PCI bridge puts its secondary bus with devfn 0, and the entry checks the range of buses from there to the device's.
+An entry delivers the vector, at fixed delivery and edge or level as the source had them, to the boot processor's APIC id, and takes the interrupt only from the source's requester id. The id is in the xAPIC format, eight bits, or in the x2APIC format, 32 bits with IRTA.EIME set, which Linux's `intel_prepare_irq_remapping` chooses (`irq_remapping.c`, lines 738 to 754) when the local APIC may run in x2APIC mode, the DMAR table does not opt out of it and every unit has the format (ECAP.EIM). With the x2APIC format, `intremap_start` moves the boot processor's local APIC to x2APIC mode before it writes the first entry, as Linux's `enable_IR_x2apic` enables x2APIC mode once remapping is on, since an x2APIC on bare metal is not supported without it; while the units still let compatibility-format interrupts by, those reach the processor by its 8-bit id. A start that fails after the move moves the APIC back to xAPIC mode. The Lenovo's two units both have the format and its table does not opt out, so it runs in x2APIC mode, as Linux does there; QEMU's unit has it only with `eim=on`. For a device behind bridges that id is Linux's `set_msi_sid` (`drivers/iommu/intel/irq_remapping.c`, line 373): a conventional PCI bridge, or a PCI-to-PCI Express bridge, puts its own id on what passes it and is matched whole; a PCI Express-to-PCI bridge puts its secondary bus with devfn 0, and the entry checks the range of buses from there to the device's.
 
 QEMU's intel-iommu does not reflect GCMD.CFI in its status register, so the driver waits a millisecond for that bit and no longer, without a record.
 
@@ -91,7 +93,7 @@ So every device of the Lenovo is translated, the GPU in a group of its own with 
 * Units of segment 0 alone, as configuration space here is segment 0's; another segment's unit is logged and passed over.
 * Legacy-mode tables alone: no scalable mode, no first-level tables, no PASIDs, no device TLBs (ATS) and no page requests.
 * A device's context entry is its own requester id; a device behind a PCIe-to-PCI bridge, whose DMA carries the bridge's id, keeps the host's entry under that id when it is given to a domain: devices that share a requester id are not yet grouped.
-* Interrupt remapping needs the invalidation queue on every unit. Its entries name xAPIC ids, since the kernel runs the local APIC in xAPIC mode, and every remapped interrupt goes to the boot processor. The HPET's scope is read but its interrupts are not remapped, since the HPET raises none here.
+* Interrupt remapping needs the invalidation queue on every unit. Every remapped interrupt goes to the boot processor, whose id must be below 256 to be named by the compatibility format the entry is made from. The HPET's scope is read but its interrupts are not remapped, since the HPET raises none here.
 * A table of 256 remapping entries for each unit; a message or a line past that is refused, and keeps the format it had.
 * USB controllers' reserved regions are relaxable, as Linux has them, beside the display's.
 * A domain mapped before it is first given to a unit with snoop control has no snoop bit in its leaves.
@@ -103,6 +105,7 @@ So every device of the Lenovo is translated, the GPU in a group of its own with 
 * QEMU's table, captured from QEMU 10.2.1 (`tests/host/acpi_qemu_tables.h`), and the Lenovo's, rebuilt from Linux's boot log to its 176 bytes; malformed tables, and scopes through absent and present bridges.
 * On QEMU's unit: the I/O APIC's lines, AHCI's MSI and NVMe's MSI-X remapped at the start and delivered; a message from the wrong requester and one in the compatibility format refused and reported; messages enabled, enabled again and disabled while remapping is on, an entry the unit held as not present taken again; and remapping stopped, each source back in the compatibility format.
 * On the Lenovo's two units: the GPU's message through dmar0, the others through dmar1, the I/O APIC's from its own requester id alone, every entry read through the stale copy of memory and logged.
+* With a processor that offers x2APIC mode: on the Lenovo's units the local APIC moved once and every message delivered to an id read from bits 63:32; a table that opts out, and QEMU's unit without the format, kept in the xAPIC format with the APIC where it was; and a start whose second table cannot be had moving the APIC back.
 * The requester ids behind a root port, a PCI bridge, a PCIe-to-PCI bridge and a PCI-to-PCIe bridge.
 * The Lenovo's reserved regions, as Linux reports them.
 * The GPU given to a domain: dmar0 translating through tables written back, without the snoop bit, its identity domain of a million 4 KiB pages, a fault past the mapping, a page mapped for reading alone, an unmap the IOTLB forgets, and the GPU physical again once given back.

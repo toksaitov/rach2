@@ -9,9 +9,12 @@
  * timer's.
  *
  * `lapic_init` enables it or refuses with the reason in the kernel log: a
- * processor without an APIC or without the model-specific registers, one in
- * x2APIC mode, a base address this driver cannot map, or `rach2.nomsi` on
- * the boot line. Every device driver asks `isr_msi_ready`, which is
+ * processor without an APIC or without the model-specific registers, one
+ * the firmware left in x2APIC mode with an identity xAPIC mode cannot
+ * address, a base address this driver cannot map, or `rach2.nomsi` on the
+ * boot line. It runs the APIC in x2APIC mode under a hypervisor that allows
+ * it, and in xAPIC mode elsewhere until interrupt remapping moves it
+ * (`lapic_x2apic_enable`). Every device driver asks `isr_msi_ready`, which is
  * `lapic_ready`, before it programs a message, and stays on its legacy line
  * when the answer is no.
  *
@@ -41,7 +44,8 @@ void lapic_set_io(const struct lapic_io *ops);
  * Enable the APIC: 0 when messages can be received, -1 with the reason
  * named in the log.
  *
- * Maps the APIC's page, records the processor's identity for `lapic_id`,
+ * Chooses the mode, maps the APIC's page in xAPIC mode, records the
+ * processor's identity for `lapic_id`,
  * sets the spurious vector and the software enable with a task priority of
  * 0, and makes `LINT0` an unmasked external-interrupt entry if it is not
  * one. Called once, on the boot processor, with interrupts off, from
@@ -49,23 +53,51 @@ void lapic_set_io(const struct lapic_io *ops);
  */
 int lapic_init(void);
 
+/** Whether the APIC is enabled in x2APIC mode, its registers MSRs. */
+int lapic_x2apic(void);
+
+/** Whether the APIC is enabled and may run in x2APIC mode: it does, or the
+ * processor offers it and the boot line has no `nox2apic`. Interrupt
+ * remapping asks this before it chooses its x2APIC format. */
+int lapic_x2apic_possible(void);
+
+/**
+ * Move the boot processor's APIC to x2APIC mode, and every processor
+ * started after it: 1 when it moved, 0 when it was in x2APIC mode already,
+ * and -1 when `lapic_x2apic_possible` says no.
+ *
+ * For interrupt remapping (iommu/intremap.c), before it writes an entry in
+ * the x2APIC format, as Linux's enable_IR_x2apic enables x2APIC mode only
+ * once remapping is on. Called on the boot processor before the others
+ * start; interrupts are off across the move.
+ */
+int lapic_x2apic_enable(void);
+
+/** Move the boot processor's APIC back to xAPIC mode, for interrupt
+ * remapping that failed after `lapic_x2apic_enable`; nothing under a
+ * hypervisor that allows x2APIC mode unremapped, or where the firmware
+ * locked it. */
+void lapic_x2apic_disable(void);
+
 /* The vector of the interprocessor interrupt (proc/smp.c): in the highest
  * priority class, so that a device's interrupt in service does not hold it
  * back. */
 #define IPI_VECTOR 0xF0
 
-/** Enable the APIC of a processor the boot one started, which `lapic_init`
- * has mapped: the spurious vector and the software enable, and the task
- * priority; nothing when `lapic_init` refused. Its `LINT0` and `LINT1` are
- * the MADT's (`apic_lint_init`). */
+/** Enable the APIC of a processor the boot one started, in the boot
+ * processor's mode: the spurious vector and the software enable, and the
+ * task priority; nothing when `lapic_init` refused. Its `LINT0` and
+ * `LINT1` are the MADT's (`apic_lint_init`). */
 void lapic_init_ap(void);
 
 /**
  * Send `vector` to the processor whose APIC has the identity `target`.
  *
- * This and the two sends below write the destination and then the command
- * with interrupts off, wait, boundedly, until the APIC has sent the message,
- * and do nothing while the APIC is not enabled.
+ * This and the sends below do nothing while the APIC is not enabled. In
+ * xAPIC mode each writes the destination and then the command with
+ * interrupts off and waits, boundedly, until the APIC has sent the message;
+ * in x2APIC mode each is one write, after a fence that orders the stores
+ * made before it.
  */
 void lapic_send_ipi(uint32_t target, uint8_t vector);
 
@@ -107,8 +139,9 @@ void lapic_repair_lint0(void);
  */
 int lapic_pending(uint8_t vector);
 
-/** The APIC identity of the processor that enabled the APIC, read then:
- * the destination of a device's message and of an I/O APIC input. */
+/** The APIC identity of the boot processor, read when it enabled the APIC
+ * or changed its mode: the destination of a device's message and of an I/O
+ * APIC input. */
 uint32_t lapic_id(void);
 
 /** The APIC identity of the processor running this; 0 while the APIC is

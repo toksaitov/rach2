@@ -2,10 +2,11 @@
  * apicdiag.c: the `rach2.apicdiag` report, which writes no register.
  *
  * It says what a machine's firmware left for a kernel that takes interrupts
- * through the local APIC and by message: whether the processor has an APIC
- * and the model-specific registers to reach it, where `IA32_APIC_BASE` puts
- * its page and whether it is in x2APIC mode, what the APIC's own registers
- * hold, whether `LINT0` is the unmasked external-interrupt entry that
+ * through the local APIC and by message: whether the processor has an APIC,
+ * x2APIC mode and the model-specific registers to reach it, where
+ * `IA32_APIC_BASE` puts its page and whether it is in x2APIC mode, what the
+ * APIC's own registers hold, read from the page or in x2APIC mode from
+ * their MSRs, whether `LINT0` is the unmasked external-interrupt entry that
  * passes on the 8259's interrupts, and which of the xHCI and HDA
  * controllers have an MSI or MSI-X capability and where. A word of the boot
  * line asks for it, so the report comes from the machine that boots, before
@@ -28,6 +29,19 @@
 #define LAPIC_SVR     0xF0
 #define LAPIC_LINT0   0x350
 #define LAPIC_LINT1   0x360
+
+/** The APIC register at offset `reg`: from `page`, or from its MSR when
+ * `page` is NULL, in x2APIC mode. */
+static uint32_t diag_read(volatile uint32_t *page, uint32_t reg)
+{
+    uint32_t lo = 0;
+
+    if (page != NULL) {
+        return page[reg / 4];
+    }
+    kcpu_rdmsr(0x800u + reg / 16u, &lo, 0);
+    return lo;
+}
 
 /** Log the location of `dev`, called `what` in the log, and its MSI and
  * MSI-X capabilities as their control words have them. */
@@ -80,24 +94,28 @@ void apic_diag_report(void)
     klog(KLOG_INFO, "apicdiag", "IA32_APIC_BASE: hi 0x%x lo 0x%x: base 0x%x, %s%s%s", hi, lo,
          lo & 0xFFFFF000u, (lo & (1u << 11)) ? "enabled" : "disabled",
          (lo & (1u << 10)) ? ", x2apic" : "", (lo & (1u << 8)) ? ", bootstrap processor" : "");
-    page = map_mmio((uintptr_t)(lo & 0xFFFFF000u), 0x1000);
-    if (page == 0) {
-        klog(KLOG_WARN, "apicdiag", "the apic page could not be mapped");
-        return;
+    klog(KLOG_INFO, "apicdiag", "cpuid: x2apic %s", kcpu_x2apic_present() ? "yes" : "no");
+    page = 0;
+    if ((lo & (1u << 10)) == 0) {
+        page = map_mmio((uintptr_t)(lo & 0xFFFFF000u), 0x1000);
+        if (page == 0) {
+            klog(KLOG_WARN, "apicdiag", "the apic page could not be mapped");
+            return;
+        }
     }
     {
         volatile uint32_t *apic = (volatile uint32_t *)page;
-        uint32_t id = apic[LAPIC_ID / 4];
-        uint32_t version = apic[LAPIC_VERSION / 4];
-        uint32_t lint0 = apic[LAPIC_LINT0 / 4];
-        uint32_t lint1 = apic[LAPIC_LINT1 / 4];
+        uint32_t id = diag_read(apic, LAPIC_ID);
+        uint32_t version = diag_read(apic, LAPIC_VERSION);
+        uint32_t svr = diag_read(apic, LAPIC_SVR);
+        uint32_t lint0 = diag_read(apic, LAPIC_LINT0);
+        uint32_t lint1 = diag_read(apic, LAPIC_LINT1);
 
-        klog(KLOG_INFO, "apicdiag", "apic: id %d, version 0x%x, %d lvt entries", id >> 24,
-             version & 0xFFu, ((version >> 16) & 0xFFu) + 1);
+        klog(KLOG_INFO, "apicdiag", "apic: id %d, version 0x%x, %d lvt entries",
+             page != 0 ? (int)(id >> 24) : (int)id, version & 0xFFu, ((version >> 16) & 0xFFu) + 1);
         klog(KLOG_INFO, "apicdiag", "apic: tpr 0x%x, svr 0x%x: %s, spurious vector %d",
-             apic[LAPIC_TPR / 4], apic[LAPIC_SVR / 4],
-             (apic[LAPIC_SVR / 4] & 0x100u) ? "software enabled" : "software disabled",
-             apic[LAPIC_SVR / 4] & 0xFFu);
+             diag_read(apic, LAPIC_TPR), svr,
+             (svr & 0x100u) ? "software enabled" : "software disabled", svr & 0xFFu);
         klog(KLOG_INFO, "apicdiag", "apic: lint0 0x%x: %s, delivery %d%s", lint0,
              (lint0 & (1u << 16)) ? "masked" : "unmasked", (lint0 >> 8) & 7u,
              ((lint0 >> 8) & 7u) == 7 ? " (extint)" : "");

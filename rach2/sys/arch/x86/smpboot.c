@@ -185,7 +185,10 @@ void smpboot_bios_restart(void)
  * processor would never preempt what it runs; without the HPET or the PM
  * timer the others have no counter to read the clock by; without free pages
  * for the trampoline none can be started; and an APIC identity of 255 or
- * more is past what the xAPIC's messages address.
+ * more is past what the xAPIC's messages address. In x2APIC mode an
+ * interprocessor interrupt names the whole 32-bit identity, and no device
+ * interrupt goes to a processor but the boot one, so any identity is
+ * started.
  */
 int platform_cpu_count(int limit)
 {
@@ -218,7 +221,7 @@ int platform_cpu_count(int limit)
         if (!(c->flags & ACPI_CPU_ENABLED) || c->apic_id == self) {
             continue;
         }
-        if (c->apic_id >= 0xFFu) {
+        if (c->apic_id >= 0xFFu && !lapic_x2apic()) {
             klog(KLOG_WARN, "smp", "apic %d: past the xapic's identities; not started",
                  (int)c->apic_id);
             continue;

@@ -123,9 +123,12 @@ void kirq_restore(uint32_t flags)
 }
 
 /** The boot processor, which every message goes to. */
+/* The boot processor's APIC id, the destination of every message. */
+static uint32_t boot_apic;
+
 uint32_t lapic_id(void)
 {
-    return 0;
+    return boot_apic;
 }
 
 /** The configuration ports: no bus answers past the ECAM window. */
@@ -1002,7 +1005,8 @@ static int m_irq(struct model *m, uint16_t sid, int remappable, unsigned int ind
         (void)m_fault(m, sid, (uint64_t)index << 48, 0, 0x26);
         return -1;
     }
-    m->last_dest = (unsigned int)(lo >> 40) & 0xFFu;
+    m->last_dest =
+        (m->irta & (1u << 11)) != 0 ? (unsigned int)(lo >> 32) : (unsigned int)(lo >> 40) & 0xFFu;
     m->last_level = (unsigned int)(lo >> 4) & 1u;
     return (int)((lo >> 16) & 0xFFu);
 }
@@ -1139,7 +1143,40 @@ int vtd_hw_fault_vector(void)
 /** The boot processor. */
 uint32_t vtd_hw_apic_id(void)
 {
-    return 0;
+    return boot_apic;
+}
+
+/* The local APIC's mode: whether it may enter x2APIC mode, whether it is
+ * there, and its moves there and back. */
+static int x2_possible, x2_on, x2_moves, x2_backs;
+
+/** Whether the APIC may be or is in x2APIC mode. */
+int vtd_hw_x2apic_possible(void)
+{
+    return x2_possible || x2_on;
+}
+
+/** Move it to x2APIC mode, as lapic.c answers. */
+int vtd_hw_x2apic_enable(void)
+{
+    if (!vtd_hw_x2apic_possible()) {
+        return -1;
+    }
+    if (x2_on) {
+        return 0;
+    }
+    x2_on = 1;
+    x2_moves++;
+    return 1;
+}
+
+/** Move it back. */
+void vtd_hw_x2apic_disable(void)
+{
+    if (x2_on) {
+        x2_on = 0;
+        x2_backs++;
+    }
 }
 
 /* The I/O APIC's routed entries, as ioapic.c keeps them. */
@@ -1419,6 +1456,8 @@ static void row_begin(const char *name)
     opt_intel_iommu = opt_intremap = NULL;
     page_fail_after = -1;
     flush_calls = stray_flushes = 0;
+    boot_apic = 0;
+    x2_possible = x2_on = x2_moves = x2_backs = 0;
     memset(ecam_mem, 0xFF, (unsigned long)ECAM_BUSES << 20);
     memset(msix_tables, 0, sizeof(msix_tables));
     pci_ecam_set((uintptr_t)ecam_mem, 0, ECAM_BUSES - 1);
@@ -1641,7 +1680,7 @@ static void row_ir_qemu(void)
     check(vtd_start() == 1, "one unit");
     check(logged("vtd: dmar0: at 0xfed90000, version 1.0, cap 0x80d2008c222f0606, ecap 0xf00f4a"),
           "the unit's line");
-    check(logged("vtd: interrupt remapping: on, compatibility format refused") &&
+    check(logged("vtd: interrupt remapping: on, xapic format, compatibility format refused") &&
               logged("vtd: ready: 1 units, interrupt remapping on, translation on for assigned "
                      "devices only"),
           "the ready lines");
@@ -1732,6 +1771,78 @@ static void row_ir_lenovo(void)
               logged(": msi of 2:0.0, vector 51 to apic 0, edge, sid 0x0200 svt 1") &&
               log_count("vtd: irte: dmar0 ") == 1 && log_count("vtd: irte: dmar1 ") == 4,
           "each entry logged");
+    row_end();
+}
+
+/**
+ * The Lenovo's units with a processor that offers x2APIC mode: the entries
+ * in the x2APIC format, as Linux enables them there, the local APIC moved
+ * once before the first entry, and every interrupt delivered to the boot
+ * processor's id from bits 63:32. A table that opts out, or a unit without
+ * the format, keeps the xAPIC format and the APIC where it is; a start that
+ * fails after the move moves it back.
+ */
+static void row_ir_x2apic(void)
+{
+    uint32_t a, d;
+    long held;
+
+    row_begin("ir_x2apic");
+    setup_lenovo();
+    boot_apic = 2;
+    x2_possible = 1;
+    check(t_msi(0, DF(2, 0), 49) == 0 && t_msix(2, DF(0, 0), 1, 51) == 0, "messages");
+    check(vtd_start() == 2 && intremap_active(), "on");
+    check(x2_on && x2_moves == 1 && x2_backs == 0, "the APIC moved to x2APIC mode once");
+    check((M(0)->irta & (1u << 11)) != 0 && (M(1)->irta & (1u << 11)) != 0,
+          "both tables in the x2APIC format");
+    check(logged("vtd: interrupt remapping: on, x2apic format, compatibility format refused"),
+          "logged");
+    msi_of(0, DF(2, 0), &a, &d);
+    check(m_msi(M(0), 0x0010, a, d) == 49 && M(0)->last_dest == 2, "the GPU's message to apic 2");
+    check(m_msi(M(1), 0x0200, msix_tables[1][0], msix_tables[1][2]) == 51 && M(1)->last_dest == 2,
+          "the RTL8168's");
+    check(m_rte(M(1), 0xF0F8, rtes[0].low, rtes[0].high) == 33 && M(1)->last_dest == 0,
+          "the ioapic's line to the id its entry names");
+    row_end();
+
+    row_begin("ir_x2apic_optout");
+    setup_lenovo();
+    tb[37] |= DMAR_X2APIC_OUT;
+    tb[9] = (uint8_t)(tb[9] - DMAR_X2APIC_OUT); /* the checksum still sums to zero */
+    boot_apic = 2;
+    x2_possible = 1;
+    check(t_msi(0, DF(2, 0), 49) == 0, "a message");
+    check(vtd_start() == 2 && intremap_active(), "on");
+    check(!x2_on && x2_moves == 0 && (M(0)->irta & (1u << 11)) == 0, "in the xAPIC format");
+    check(logged("xapic format: the firmware opts out of x2apic"), "logged");
+    msi_of(0, DF(2, 0), &a, &d);
+    check(m_msi(M(0), 0x0010, a, d) == 49 && M(0)->last_dest == 2, "delivered to apic 2");
+    row_end();
+
+    row_begin("ir_x2apic_no_eim");
+    setup_qemu(CAP_QEMU, ECAP_QEMU);
+    x2_possible = 1;
+    check(vtd_start() == 1 && intremap_active(), "on");
+    check(!x2_on && (M(0)->irta & (1u << 11)) == 0, "QEMU's unit has no x2APIC format");
+    check(logged("xapic format: dmar0 has no x2apic format"), "logged");
+    row_end();
+
+    row_begin("ir_x2apic_count");
+    setup_lenovo();
+    x2_possible = 1;
+    check(vtd_start() == 2 && intremap_active(), "on");
+    held = mpage_count; /* the last page taken is dmar1's remapping table */
+    row_end();
+
+    row_begin("ir_x2apic_back");
+    setup_lenovo();
+    x2_possible = 1;
+    page_fail_after = held - 1;
+    (void)vtd_start();
+    check(!intremap_active() && x2_moves == 1 && x2_backs == 1 && !x2_on,
+          "a start whose second table fails after the move moves the APIC back");
+    check(logged("vtd: ready: 2 units, interrupt remapping off"), "and runs unremapped");
     row_end();
 }
 
@@ -2185,6 +2296,7 @@ int main(void)
     row_dmar_malformed();
     row_ir_qemu();
     row_ir_lenovo();
+    row_ir_x2apic();
     row_msi_source();
     row_regions_lenovo();
     row_assign_gpu();

@@ -6,6 +6,7 @@
 #include "../../fs/cpuinfo.h"
 
 #include "kcpu.h"
+#include "../../cmdline.h"
 #include "smpboot.h"
 #include "../../lib/kstring.h"
 #include "../../proc/percpu.h"
@@ -585,7 +586,7 @@ int cpuinfo_cache(int cpu, int index, struct cpu_cache *cache)
  * extended family is added to a family of 15, and the extended model is put
  * above the model of family 6 and of 15 and up. An extended leaf count
  * outside 0x80000000 to 0x8000FFFF is another leaf's data, and is taken as
- * no extended leaves.
+ * no extended leaves. `nox2apic` on the boot line leaves out `x2apic`.
  */
 uint32_t cpuinfo_text(char *out, uint32_t cap, int cpu)
 {
@@ -664,6 +665,9 @@ uint32_t cpuinfo_text(char *out, uint32_t cap, int cpu)
     }
     if (ext_max >= 0x8000000Au) {
         kcpu_id(0x8000000Au, 0, 0, 0, &svm);
+    }
+    if (kcmdline_has("nox2apic")) {
+        c &= ~(1u << 21); /* as Linux's setup_nox2apic clears it */
     }
     put_flags(&t, leaf1_edx, d);
     put_flags(&t, ext1_edx, e1d);
