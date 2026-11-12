@@ -1419,7 +1419,7 @@ void sched_account_tick(int user, int64_t due)
     ticks = tick_div64((uint64_t)gap, TICK_NS, NULL);
     cpu->accounted_ns += (int64_t)ticks * (int64_t)TICK_NS;
     if (due != 0 && found != ACCOUNT_SYSTEM) {
-        on = timer_cycles_when(user ? cpu->user_cycles : cpu->idle_cycles, now);
+        on = timer_cycles_when(user ? cpu->user_cycles : cpu->idle_cycles, arch_cycles(), now);
         if (due >= on && now >= due && now - due < (int64_t)TICK_NS) {
             cpu->tick_late_ns += (now - due - cpu->tick_late_ns) / 8;
         }

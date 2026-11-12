@@ -255,11 +255,12 @@ uint64_t timer_cycles_us(uint64_t cycles);
  * handler, with interrupts off. */
 int64_t timer_tick_due(void);
 
-/** The time on the monotonic clock at which this processor's counter read
- * `cycles` (`arch_cycles`), given that the clock reads `now`, at the
- * calibrated rate; 0, the clock's start, when the rate was not measured or
- * the reading is more than a second old. Interrupts are off. */
-int64_t timer_cycles_when(uint64_t cycles, int64_t now);
+/** The time on the monotonic clock, to the microsecond, at which this
+ * processor's counter read `cycles` (`arch_cycles`), given that it reads
+ * `at` while the clock reads `now`, at the calibrated rate; 0, the clock's
+ * start, when the rate was not measured or the reading is more than a
+ * second old. */
+int64_t timer_cycles_when(uint64_t cycles, uint64_t at, int64_t now);
 
 /** Whether a span of processor cycles can be timed by `timer_cycles_us`:
  * the counter's rate was measured and every processor started so far
