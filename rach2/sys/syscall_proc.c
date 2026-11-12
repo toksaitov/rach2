@@ -4707,6 +4707,22 @@ uint64_t signal_blocked_now(void)
     return mask;
 }
 
+void signal_sets_of(const process_t *t, uint64_t *pending, uint64_t *shared, uint64_t *blocked)
+{
+    uint32_t flags;
+    int big = bkl_held();
+
+    flags = big ? sig_irq_save() : spin_lock_irqsave(&sig_lock);
+    *pending = t->sig_pending;
+    *shared = t->tg->pending;
+    *blocked = t->sig_blocked;
+    if (big) {
+        sig_irq_restore(flags);
+    } else {
+        spin_unlock_irqrestore(&sig_lock, flags);
+    }
+}
+
 void signal_exit_begin(void)
 {
     process_t *self = current_proc;
