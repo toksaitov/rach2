@@ -605,9 +605,9 @@ void sched_make_ready(process_t *p)
  * running thread asks itself when a queued thread that selection on its
  * processor could take now outranks it, as prio_changed_rt reschedules a
  * running task once the queue's highest priority is above its own
- * (rt.c:2512-2513); one that left the real-time policy with only ordinary
+ * (rt.c:2519-2520); one that left the real-time policy with only ordinary
  * threads queued gives way at the tick once its slice has run, where
- * Linux's switched_to_fair asks at once (fair.c:13366-13367). A blocked
+ * Linux's switched_to_fair asks at once (fair.c:13367-13368). A blocked
  * thread asks nothing.
  */
 void sched_priority_changed(process_t *p)
