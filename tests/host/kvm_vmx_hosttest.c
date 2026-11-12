@@ -207,21 +207,28 @@ void *k_memset(void *dst, int c, size_t n)
     return dst;
 }
 
-/** The caller's memory is the host's; address 0 faults. */
+static void slot_access(const void *p);
+
+/** The caller's memory is the host's; address 0 faults. A copy into the
+ * slot's memory is counted, with whether the slots' readers' lock is
+ * held. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     if (!dst) {
         return -EFAULT;
     }
+    slot_access(dst);
     k_memcpy(dst, src, n);
     return 0;
 }
 
+/** As `copy_to_user`, from the caller's memory. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     if (!src) {
         return -EFAULT;
     }
+    slot_access(src);
     k_memcpy(dst, src, n);
     return 0;
 }
@@ -631,16 +638,36 @@ int32_t kvm_slots_check_extension(long cap)
     return cap == KVM_CAP_USER_MEMORY;
 }
 
-/** A copy's hold of the slots: nothing changes them in the model. */
+/* The slots' readers' lock: the holds now, the copies through the slot's
+ * memory, and the copies and dirty marks made with no hold, which a change
+ * of the slot would not wait for. */
+static int slot_holds, slot_copies, unheld_copies;
+
+/** Count an access of the kernel's to the caller's memory at `p`, when it
+ * is the slot's. */
+static void slot_access(const void *p)
+{
+    uintptr_t a = (uintptr_t)p;
+
+    if (a >= slot0.userspace_addr && a - slot0.userspace_addr < slot0.memory_size) {
+        slot_copies++;
+        unheld_copies += slot_holds == 0;
+    }
+}
+
+/** A copy's hold of the slots, counted; nothing changes them in the
+ * model. */
 void kvm_slots_read_lock(struct kvm_vm *vm)
 {
     (void)vm;
+    slot_holds++;
 }
 
 /** The end of a copy's hold. */
 void kvm_slots_read_unlock(struct kvm_vm *vm)
 {
     (void)vm;
+    slot_holds--;
 }
 
 int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
@@ -665,6 +692,7 @@ void kvm_dirty_mark(struct kvm_vm *vm, const struct kvm_slot_view *s, uint64_t g
     (void)s;
     (void)gfn;
     dirty_marks++;
+    unheld_copies += slot_holds == 0;
 }
 
 int kvm_tdp_init(struct kvm_vm *vm)
@@ -5382,6 +5410,9 @@ int main(void)
     exitstat_rows();
     CHECK(m.ud == 0 && m.gp == 0 && m.bad_writes == 0 && m.bad_reads == 0,
           "no VMX instruction outside VMX operation and no field the VMCS lacks, over every row");
+    CHECK(slot_copies > 0 && dirty_marks > 0 && unheld_copies == 0 && slot_holds == 0,
+          "every copy through the slot and every dirty mark under the slots' readers' lock, "
+          "over every row, and each hold given back");
     fdclose(fd);
     fdclose(vm);
     CHECK(vpid_used[0] == 0, "the vCPUs' VPIDs are freed with the VM");

@@ -16,6 +16,10 @@
  * that its object changed. A wake that names none still wakes every waiter,
  * and wq_wakes sums the kinds asked for.
  *
+ * `wq_wait_event_sigflag` ends on the signal-work flag set before it or by
+ * the wake that ends its sleep, never asking `signal_pending`, and the flag
+ * ends no other wait.
+ *
  * One row does run the wait: a model `schedule` records the deadline the
  * waiter blocked with and wakes it as `signal_post` does, clearing that
  * deadline. A wait whose condition is still false must arm the caller's
@@ -44,25 +48,38 @@
 extern int dprintf(int fd, const char *format, ...);
 
 struct percpu cpu_table[NR_CPUS];
-static int blocks, conds;
+static int blocks, conds, pending_calls;
 static uint32_t deadline_at_block[4];
+static int post_sig_woken; /* the wake sets the signal-work flag too */
 
 /**
  * The model scheduler: record the deadline the waiter blocked with, then wake
- * it as `signal_post` does, clearing the deadline.
+ * it as `signal_post` does, clearing the deadline, and setting the waiter's
+ * signal-work flag when `post_sig_woken` asks.
  */
 void schedule(void)
 {
     if (current_proc && current_proc->state == PROC_BLOCKED && blocks < 4) {
         deadline_at_block[blocks++] = current_proc->wakeup_tick;
         current_proc->wakeup_tick = 0;
+        if (post_sig_woken) {
+            current_proc->sig_woken = 1;
+        }
         current_proc->state = PROC_READY;
     }
 }
 
-/** 0: no signal is pending. */
+/** 0: no signal is pending. The calls are counted. */
 int signal_pending(void)
 {
+    pending_calls++;
+    return 0;
+}
+
+/** A condition that is never true. */
+static int never(void *arg)
+{
+    (void)arg;
     return 0;
 }
 
@@ -280,6 +297,43 @@ static void filed_first(void)
 }
 
 /**
+ * `wq_wait_event_sigflag`, the halted vCPU's wait: it ends with -EINTR on
+ * the caller's signal-work flag alone, set before the wait or by the wake
+ * that ends a sleep, without asking `signal_pending`, as Linux's
+ * kvm_vcpu_check_block reads TIF_SIGPENDING (virt/kvm/kvm_main.c:3738);
+ * its condition, true, ends it with 0; and the flag ends no wait of
+ * another kind.
+ */
+static void sigflag_rows(void)
+{
+    static process_t vcpu_thread;
+    wait_queue_t wq;
+    int calls = pending_calls;
+
+    blocks = 0;
+    wait_queue_init(&wq);
+    vcpu_thread.waiter.proc = &vcpu_thread;
+    vcpu_thread.state = PROC_RUNNING;
+    current_proc = &vcpu_thread;
+    vcpu_thread.sig_woken = 1;
+    CHECK(wq_wait_event_sigflag(&wq, never, 0, "sigflag") == -EINTR && blocks == 0);
+    CHECK(vcpu_thread.state == PROC_RUNNING && total_queued(&wq) == 0);
+    conds = 0;
+    CHECK(wq_wait_event(&wq, true_third, 0) == 0 && blocks == 2);
+    vcpu_thread.sig_woken = 0;
+    post_sig_woken = 1;
+    CHECK(wq_wait_event_sigflag(&wq, never, 0, "sigflag") == -EINTR && blocks == 3);
+    CHECK(vcpu_thread.sig_woken == 1 && vcpu_thread.state == PROC_RUNNING);
+    CHECK(total_queued(&wq) == 0 && wq.lock.locked == 0 && wq_host_held == 0);
+    post_sig_woken = 0;
+    vcpu_thread.sig_woken = 0;
+    conds = 2;
+    CHECK(wq_wait_event_sigflag(&wq, true_third, 0, "sigflag") == 0 && blocks == 3);
+    CHECK(pending_calls == calls + 2);
+    current_proc = 0;
+}
+
+/**
  * Each queue's lock is free after every call, a poller's two records make
  * it ready once and ask for one interrupt, to the processor it ran on, and
  * every interrupt goes out with no queue's lock held; `wq_complete` and
@@ -428,5 +482,6 @@ int main(void)
     wake_order();
     filed_first();
     own_locks();
+    sigflag_rows();
     return fails > 255 ? 255 : fails;
 }
