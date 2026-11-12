@@ -38,7 +38,9 @@ typedef char
                     __builtin_offsetof(struct vdso_data, coarse_ns) == VDSO_DATA_COARSE_NS &&
                     __builtin_offsetof(struct vdso_data, raw_mult) == VDSO_DATA_RAW_MULT &&
                     __builtin_offsetof(struct vdso_data, raw_sec) == VDSO_DATA_RAW_SEC &&
-                    __builtin_offsetof(struct vdso_data, raw_nsec) == VDSO_DATA_RAW_NSEC)
+                    __builtin_offsetof(struct vdso_data, raw_nsec) == VDSO_DATA_RAW_NSEC &&
+                    __builtin_offsetof(struct vdso_data, tz_minuteswest) == VDSO_DATA_TZ_MW &&
+                    __builtin_offsetof(struct vdso_data, tz_dsttime) == VDSO_DATA_TZ_DST)
                        ? 1
                        : -1];
 #endif
@@ -89,6 +91,10 @@ static uint64_t mono_base_ns;
 static uint64_t raw_base_ns;
 static int64_t wall_ns;
 static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
+
+/* The time zone settimeofday set, for a page built after it
+ * (`vclock_set_tz`). */
+static volatile int32_t tz_minuteswest, tz_dsttime;
 
 /* The count of the clock's stops and starts (`vclock_generation`), raised
  * under `vclock_lock` after the page's count goes odd, so that a reader
@@ -306,6 +312,8 @@ static int vclock_page(void)
     k_memset(page, 0, PAGE_SIZE);
     page->coarse_ns = TICK_NS;
     page->getcpu = (uint32_t)tsc_has_rdtscp();
+    page->tz_minuteswest = tz_minuteswest;
+    page->tz_dsttime = tz_dsttime;
     data_phys = virt_to_phys(page);
     __asm__ __volatile__("" : : : "memory");
     data = page;
@@ -729,6 +737,18 @@ void vclock_set_wall(int64_t sec, int32_t nsec)
         vclock_write_end();
     }
     spin_unlock_irqrestore(&vclock_lock, flags);
+}
+
+void vclock_set_tz(int32_t minuteswest, int32_t dsttime)
+{
+    struct vdso_data *page = data;
+
+    tz_minuteswest = minuteswest;
+    tz_dsttime = dsttime;
+    if (page) {
+        page->tz_minuteswest = minuteswest;
+        page->tz_dsttime = dsttime;
+    }
 }
 
 uint32_t vclock_resolution_ns(void)

@@ -46,6 +46,9 @@ struct vm_file;
  * rate, which the NTP state's slew does not change. Each clock's rate is 8
  * bytes before its seconds. The coarse clocks are the first two times as
  * they are, without the counts since.
+ *
+ * The time zone, which gettimeofday gives, is the kernel's
+ * (`vclock_set_tz`), outside the sequence count, as Linux keeps it.
  */
 struct vdso_data {
     volatile uint32_t seq; /* odd while the kernel changes the page */
@@ -65,8 +68,10 @@ struct vdso_data {
     uint32_t pad2;
     uint32_t raw_mult; /* the raw clock's nanoseconds a count, times 2^shift */
     uint32_t pad3;
-    int64_t raw_sec;   /* CLOCK_MONOTONIC_RAW at cycle_base */
-    uint64_t raw_nsec; /* below 10^9 */
+    int64_t raw_sec;        /* CLOCK_MONOTONIC_RAW at cycle_base */
+    uint64_t raw_nsec;      /* below 10^9 */
+    int32_t tz_minuteswest; /* struct timezone's, as settimeofday set it */
+    int32_t tz_dsttime;
 };
 
 /* The offsets the vDSO reads the page at. */
@@ -86,6 +91,8 @@ struct vdso_data {
 #define VDSO_DATA_RAW_MULT   80
 #define VDSO_DATA_RAW_SEC    88
 #define VDSO_DATA_RAW_NSEC   96
+#define VDSO_DATA_TZ_MW      104
+#define VDSO_DATA_TZ_DST     108
 
 /* The clocks `vclock_read` and `vclock_read_cycles` read. */
 #define VCLOCK_READ_MONO 0
@@ -169,6 +176,15 @@ int vclock_read_cycles(int which, uint64_t *ns, uint64_t *cycles);
  * yet. Interrupts may be on or off; the caller may hold clock.c's lock.
  */
 void vclock_set_wall(int64_t sec, int32_t nsec);
+
+/**
+ * Give the vDSO's gettimeofday the time zone settimeofday set, struct
+ * timezone's two fields, as Linux's update_vsyscall_tz does
+ * (kernel/time/vsyscall.c): two stores outside the page's sequence count,
+ * so that a reader may see one field old and one new, as on Linux. Kept
+ * for the page when it is not built yet. Any context may call it.
+ */
+void vclock_set_tz(int32_t minuteswest, int32_t dsttime);
 
 /** The resolution of the clock from the TSC, in nanoseconds: a count,
  * rounded up. */

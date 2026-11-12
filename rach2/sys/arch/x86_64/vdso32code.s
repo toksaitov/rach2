@@ -34,6 +34,8 @@
 .set D_COARSE_NS,  72
 .set D_RAW_MULT,   80
 .set D_RAW_SEC,    88
+.set D_TZ_MW,      104
+.set D_TZ_DST,     108
 # From the data page back to KVM's clock page, and that page's fields,
 # pvclock_vcpu_time_info's (../x86/tsc.c), with PVCLOCK_TSC_STABLE_BIT.
 .set KVM_BACK,         0x1000
@@ -423,14 +425,14 @@ vdso32_clock_gettime64_end:
 
 # int gettimeofday(struct old_timeval32 *tv, struct timezone *tz)
 #
-# Real time to the microsecond; a null tv reads nothing, as the kernel's
-# call does. A time zone asked for is the kernel's to answer.
+# Real time to the microsecond at tv, then the kernel's time zone from the
+# data page at tz, each skipped when null, as the 64-bit vDSO's
+# gettimeofday; a time the vDSO cannot read makes the system call, which
+# writes both.
 .globl vdso32_gettimeofday
 vdso32_gettimeofday:
-    cmpl $0, 8(%esp)
-    jne 9f
     cmpl $0, 4(%esp)
-    je 1f
+    je 2f
     xorl %eax, %eax
     call vdso32_clock
     jc 9f
@@ -443,6 +445,15 @@ vdso32_gettimeofday:
     divl %ecx
     movl %eax, 4(%ebx)
     popl %ebx
+2:
+    movl 8(%esp), %edx
+    testl %edx, %edx
+    je 1f
+    call vdso32_page
+    movl D_TZ_MW(%ecx), %eax
+    movl %eax, (%edx)
+    movl D_TZ_DST(%ecx), %eax
+    movl %eax, 4(%edx)
 1:
     xorl %eax, %eax
     ret

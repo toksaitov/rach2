@@ -47,8 +47,11 @@
  * both vDSOs, the x86-64 one and the 32-bit one, converts the TSC through
  * KVM's page, its stamp, rate, shift either way and system time, while the
  * page has its stable bit, and makes the system call once it is withdrawn
- * (`abi_rows`); and that a boot whose start finds the bit withdrawn starts
- * the clock at the tick once the bit is back (`boot_rows`).
+ * (`abi_rows`); that both vDSOs' gettimeofday give the time zone
+ * settimeofday set from the data page, with no system call even where the
+ * time needs one (`abi_rows`); and that a boot whose start finds the bit
+ * withdrawn starts the clock at the tick once the bit is back, with a time
+ * zone set before the page was built on it (`boot_rows`).
  */
 
 #include "arch/x86_64/vclock.c"
@@ -703,6 +706,14 @@ struct ts32 {
     int32_t sec, nsec;
 };
 
+/* A struct timezone, the same in both ABIs, and the zone the rows have the
+ * kernel keep: six hours east of UTC, with a summer time. */
+struct tz32 {
+    int32_t mw, dst;
+};
+#define ABI_TZ_MW  (-360)
+#define ABI_TZ_DST 1
+
 static unsigned char *low;
 
 /** The address below 4 GiB at offset `off` of the low memory. */
@@ -925,9 +936,10 @@ static int gate_works(void)
  * through the two pages that convert the TSC, the monotonic clock reads
  * what they convert the TSC to before and after the call, or between; and
  * with the bit withdrawn each makes its system call, so that a vdsocode.s
- * that counted the TSC or did not check the bit fails a row.
+ * that counted the TSC or did not check the bit fails a row. 1 when the
+ * code is in its layout, for `abi_tz_rows`.
  */
-static void abi64_rows(void)
+static int abi64_rows(void)
 {
     static const uint32_t calls[] = {96u, 201u, 228u, 229u, 309u};
     uint32_t cgt = abi_fn(LOW_ABI64, vdso_text_start, vdso_clock_gettime);
@@ -940,7 +952,7 @@ static void abi64_rows(void)
     ok = abi_code64(LOW_ABI64, vdso_text_start, vdso_text_end, calls, 5) == 5;
     CHECK(ok, "the x86-64 vDSO's code fits and its five system calls are found and replaced");
     if (!ok) {
-        return;
+        return 0;
     }
     abi_recovered(LOW_ABI64);
     ok = vhost_call64(cgt, 1, (uint64_t)(uintptr_t)&ts) == 0 && abi_not_before(ts.sec, ts.nsec);
@@ -975,6 +987,7 @@ static void abi64_rows(void)
     ok = ok && (uint32_t)vhost_call64(gtod, (uint64_t)(uintptr_t)&tv, 0) == ~96u;
     ok = ok && (uint32_t)vhost_call64(tm, 0, 0) == ~201u;
     CHECK(ok, "with the bit withdrawn the x86-64 vDSO makes the system call for each");
+    return 1;
 }
 
 /**
@@ -983,7 +996,7 @@ static void abi64_rows(void)
  * as abi64_rows runs the x86-64 code; its system calls go through
  * __kernel_vsyscall, whose `int $0x80` is the one replaced.
  */
-static void abi32_rows(void)
+static int abi32_rows(void)
 {
     static const unsigned char entry[] = {0x90, 0x90, 0x90, 0x90, 0xCD, 0x80};
     unsigned long n = (unsigned long)(vdso32_text_end - vdso32_text_start), i;
@@ -1001,7 +1014,7 @@ static void abi32_rows(void)
 
     CHECK(n <= LAYOUT_ROOM, "the 32-bit vDSO's code fits its layout");
     if (n > LAYOUT_ROOM) {
-        return;
+        return 0;
     }
     low_copy(LOW_ABI32 + LAYOUT_CODE, vdso32_text_start, n);
     for (i = 0; i < sizeof entry; i++) {
@@ -1009,7 +1022,7 @@ static void abi32_rows(void)
     }
     CHECK(same, "__kernel_vsyscall's entry is four nops and int $0x80");
     if (!same) {
-        return;
+        return 0;
     }
     call[4] = 0xF7;
     call[5] = 0xD0;
@@ -1043,6 +1056,63 @@ static void abi32_rows(void)
     ok = ok && gate_call(gtod, out, 0, 0, 0) == ~78u;
     ok = ok && gate_call(tm, 0, 0, 0, 0) == ~13u;
     CHECK(ok, "with the bit withdrawn the 32-bit vDSO makes the system call for each");
+    return 1;
+}
+
+/** gettimeofday of the x86-64 vDSO at `g64`, or for `abi32` the 32-bit
+ * one at `g32`, on `tv` and `tz`, addresses below 4 GiB or 0: what it
+ * returned, in 32 bits. */
+static uint32_t abi_gtod(int abi32, uint32_t g64, uint32_t g32, uint64_t tv, uint64_t tz)
+{
+    return abi32 ? gate_call(g32, (uint32_t)tv, (uint32_t)tz, 0, 0)
+                 : (uint32_t)vhost_call64(g64, tv, tz);
+}
+
+/**
+ * Both vDSOs' gettimeofday with a time zone, from the code `abi64_rows` and
+ * `abi32_rows` put in their layouts, `abi64` and `abi32` where each did: on
+ * a page with KVM's stable bit it gives the zone the data page holds with
+ * the time and for a null tv, with no system call; with the bit withdrawn,
+ * and in VCLOCK_NONE, it leaves a time and its zone to the system call and
+ * gives a zone alone itself, so that a reading that kept tz on the stack
+ * and did not pop it before the call returns nowhere.
+ */
+static void abi_tz_rows(int abi64, int abi32)
+{
+    uint32_t g64 = abi_fn(LOW_ABI64, vdso_text_start, vdso_gettimeofday);
+    uint32_t g32 = abi_fn(LOW_ABI32, vdso32_text_start, vdso32_gettimeofday);
+    uint64_t tv = (uint64_t)(uintptr_t)(low + LOW_OUT), tz = tv + 64u;
+    uint32_t at[2] = {LOW_ABI64, LOW_ABI32};
+    struct tz32 *z = (struct tz32 *)(low + LOW_OUT + 64u);
+    int k, mode, ok;
+
+    for (k = 0; k < 2; k++) {
+        if (!(k ? abi32 : abi64)) {
+            continue;
+        }
+        abi_pages(at[k], 1, &abi_fields[0]);
+        z->mw = z->dst = 0;
+        ok = abi_gtod(k, g64, g32, tv, tz) == 0 && z->mw == ABI_TZ_MW && z->dst == ABI_TZ_DST;
+        z->mw = z->dst = 0;
+        ok = ok && abi_gtod(k, g64, g32, 0, tz) == 0 && z->mw == ABI_TZ_MW && z->dst == ABI_TZ_DST;
+        CHECK(ok, k ? "the 32-bit vDSO's gettimeofday gives the data page's time zone, with the "
+                      "time and for a null tv, making no system call"
+                    : "the x86-64 vDSO's gettimeofday gives the data page's time zone, with the "
+                      "time and for a null tv, making no system call");
+        abi_pages(at[k], 0, &abi_fields[0]);
+        for (mode = 0; mode < 2; mode++) {
+            ((struct vdso_data *)(low + at[k] + PAGE_SIZE))->mode =
+                mode ? VCLOCK_NONE : VCLOCK_PVCLOCK;
+            z->mw = z->dst = 0;
+            ok = abi_gtod(k, g64, g32, tv, tz) == ~(k ? 78u : 96u) && z->mw == 0;
+            ok = ok && abi_gtod(k, g64, g32, 0, tz) == 0 && z->mw == ABI_TZ_MW &&
+                 z->dst == ABI_TZ_DST;
+            CHECK(ok, mode ? "in VCLOCK_NONE it leaves a time and its zone to the system call, "
+                             "and gives a zone alone itself"
+                           : "with the bit withdrawn it leaves a time and its zone to the "
+                             "system call, and gives a zone alone itself");
+        }
+    }
 }
 
 /** The rows of both vDSOs' code, on the clock as recovery_rows leaves it,
@@ -1050,6 +1120,7 @@ static void abi32_rows(void)
 static void abi_rows(void)
 {
     uint64_t stamp;
+    int abi64, abi32;
     void *m =
         mmap(0, LOW_SIZE, HOST_PROT_RWX, HOST_MAP_PRIVATE | HOST_MAP_ANON | HOST_MAP_32BIT, -1, 0);
 
@@ -1065,12 +1136,17 @@ static void abi_rows(void)
     abi_fields[1].stamp = stamp;
     abi_fields[2].stamp = stamp;
     low_copy(LOW_GATE, vhost_gate, (unsigned long)(vhost_gate_end - vhost_gate));
-    abi64_rows();
+    vclock_set_tz(ABI_TZ_MW, ABI_TZ_DST);
+    CHECK(data->tz_minuteswest == ABI_TZ_MW && data->tz_dsttime == ABI_TZ_DST,
+          "settimeofday's time zone reaches the data page");
+    abi64 = abi64_rows();
     if (!gate_works()) {
         CHECK(0, "the host runs 32-bit code, for the 32-bit vDSO's rows");
+        abi_tz_rows(abi64, 0);
         return;
     }
-    abi32_rows();
+    abi32 = abi32_rows();
+    abi_tz_rows(abi64, abi32);
 }
 #endif
 
@@ -1098,10 +1174,13 @@ static void boot_rows(void)
     kvm_here_withdrawn = 0;
     now_ns = 7000000000ULL;
     kvm_boot_withdrawn = 1;
+    vclock_set_tz(300, 0);
     vclock_start();
     CHECK(!vclock_running() && data && data->mode == VCLOCK_NONE,
           "a start at boot that finds the boot processor's bit withdrawn leaves the clock "
           "stopped");
+    CHECK(data && data->tz_minuteswest == 300 && data->tz_dsttime == 0,
+          "a time zone set before the data page is built is on the page");
     now_ns += TICK_NS;
     vclock_tick();
     CHECK(!vclock_running(), "and the tick leaves it stopped while the bit stays withdrawn");

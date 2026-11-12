@@ -24,7 +24,9 @@ of
 and the two coarse clocks, and the system call for any other clock.
 .It Fn __vdso_gettimeofday
 .Xr gettimeofday 2 ,
-and the system call when the time zone pointer is not null.
+the time zone included, which the kernel copies to the data page when
+.Xr settimeofday 2
+sets it.
 .It Fn __vdso_time
 .Xr time 2 .
 .It Fn __vdso_getcpu
