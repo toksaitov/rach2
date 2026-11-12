@@ -1025,12 +1025,38 @@ static void dest_changed(struct lapic *l)
     kvm_vcpu_kick(l->v, KVM_REQ_SCAN_IOAPIC);
 }
 
+/** Whether LINT0 takes the caller's ExtINT, as Linux's
+ * kvm_apic_accept_pic_intr: with the APIC off, or LINT0 unmasked in
+ * ExtINT mode. */
+static int accept_pic_intr(const struct lapic *l)
+{
+    uint32_t lvt0 = reg_get(l, APIC_LVT0);
+
+    if (!hw_enabled(l)) {
+        return 1;
+    }
+    return !(lvt0 & APIC_LVT_MASKED) && (lvt0 & APIC_MODE_MASK) == KVM_APIC_DM_EXTINT;
+}
+
+/** Have `l`'s vCPU look for an interrupt to inject (KVM_REQ_EVENT) when
+ * its LINT0, which refused the PIC's INT before a change of LVT0 or of the
+ * APIC's enable, takes it now: the PIC woke no vCPU for an INT that no
+ * LINT0 took (`kvm_lapic_pic_wake`), so the INT would wait for another
+ * event. In the vCPU's thread or under its mutex. */
+static void pic_reaccepted(struct lapic *l)
+{
+    if (accept_pic_intr(l)) {
+        kvm_vcpu_kick(l->v, KVM_REQ_EVENT);
+    }
+}
+
 /** Write `val` to the register at `off`, as Linux's kvm_lapic_reg_write:
  * 0, or 1 for a register this mode does not let the guest write, which an
  * x2APIC MSR write takes as #GP. */
 static int reg_write(struct lapic *l, uint32_t off, uint32_t val)
 {
     uint32_t mask;
+    int pic;
 
     switch (off) {
     case APIC_ID:
@@ -1093,7 +1119,11 @@ static int reg_write(struct lapic *l, uint32_t off, uint32_t val)
         mask = (off == APIC_LVT0 || off == APIC_LVT1) ? LINT_MASK
                : (off == APIC_LVTERR)                 ? LVT_MASK
                                                       : LVT_MASK | APIC_MODE_MASK;
+        pic = off == APIC_LVT0 && !accept_pic_intr(l);
         reg_set(l, off, val & mask);
+        if (pic) {
+            pic_reaccepted(l);
+        }
         return 0;
     case APIC_LVTT:
         if (!sw_enabled(l)) {
@@ -1214,6 +1244,7 @@ int kvm_lapic_set_base(struct kvm_vcpu *v, uint64_t value, int host)
     uint64_t old = v->sregs.apic_base, reserved;
     uint32_t phys = 36;
     struct lapic *l = apic_of(v);
+    int pic;
 
     if (e && e->eax >= 0x80000008u && (e = kvm_cpuid_find(v, 0x80000008u, 0)) != NULL) {
         phys = e->eax & 0xFFu;
@@ -1233,10 +1264,14 @@ int kvm_lapic_set_base(struct kvm_vcpu *v, uint64_t value, int host)
             return -1;
         }
     }
+    pic = l && !accept_pic_intr(l);
     v->sregs.apic_base = value;
     v->dirty |= KVM_PART_SREGS;
     if (!l) {
         return 0;
+    }
+    if (pic) {
+        pic_reaccepted(l);
     }
     if (((old ^ value) & APIC_BASE_ENABLE) && (value & APIC_BASE_ENABLE)) {
         reg_set(l, APIC_ID, v->id << 24);
@@ -1422,19 +1457,6 @@ void kvm_lapic_update_ppr(struct kvm_vcpu *v)
     }
 }
 
-/** Whether LINT0 takes the caller's ExtINT, as Linux's
- * kvm_apic_accept_pic_intr: with the APIC off, or LINT0 unmasked in
- * ExtINT mode. */
-static int accept_pic_intr(const struct lapic *l)
-{
-    uint32_t lvt0 = reg_get(l, APIC_LVT0);
-
-    if (!hw_enabled(l)) {
-        return 1;
-    }
-    return !(lvt0 & APIC_LVT_MASKED) && (lvt0 & APIC_MODE_MASK) == KVM_APIC_DM_EXTINT;
-}
-
 /** Wake the first local APIC whose LINT0 accepts the PIC's INT. */
 void kvm_lapic_pic_wake(struct kvm_vm *vm)
 {
@@ -1611,14 +1633,18 @@ uint64_t kvm_lapic_next_ns(struct kvm_vcpu *v)
 }
 
 /** Whether the halted or waiting vCPU `arg` has an event to wake it, as
- * Linux's kvm_vcpu_has_events, or a request, or its wait's tick came. */
+ * Linux's kvm_vcpu_has_events, or a request, or its wait's tick came. A
+ * timer changed by another thread, the PIT above all, ends the wait
+ * (KVM_REQ_TIMER), so that `kvm_lapic_prepare` finds the new deadline and
+ * waits again until it, as Linux's PIT has a host timer of its own. */
 static int wake_cond(void *arg)
 {
     struct kvm_vcpu *v = (struct kvm_vcpu *)arg;
     struct lapic *l = apic_of(v);
     uint64_t next;
 
-    if ((v->requests & (KVM_REQ_EXIT | KVM_REQ_TRIPLE_FAULT)) || kvm_irq_pending(v->vm)) {
+    if ((v->requests & (KVM_REQ_EXIT | KVM_REQ_TRIPLE_FAULT | KVM_REQ_TIMER)) ||
+        kvm_irq_pending(v->vm)) {
         return 1;
     }
     if (l->events & EV_INIT) {
