@@ -647,7 +647,8 @@ static void big_lock(void)
  * A processor's tick counts the whole ticks of its own clock since its last
  * count, rounded to the nearest: three after two were lost, none a quarter
  * tick later, and one, charged as user time, when the processor runs ring 3;
- * ticks the hypervisor reports stolen count as steal before any other.
+ * ticks the hypervisor reports stolen count as steal before any other; and
+ * a gap longer than 2^32 nanoseconds counts whole.
  */
 static void accounting(void)
 {
@@ -685,6 +686,10 @@ static void accounting(void)
     sched_account_tick(0);
     CHECK(cpu->steal_ticks == steal + 3 && cpu->idle_ticks == idle + 4,
           "the stolen half tick left over joins the next to make a steal tick");
+    clock_ns += 5000u * (uint64_t)TICK_NS;
+    sched_account_tick(0);
+    CHECK(cpu->idle_ticks == idle + 5004 && cpu->steal_ticks == steal + 3,
+          "a gap of five seconds, past 2^32 nanoseconds, is five thousand ticks");
     cpu->current = saved;
     clock_ns = saved_clock;
 }
