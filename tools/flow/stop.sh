@@ -21,11 +21,19 @@
 # and status 0, or `stop: N left` and status 1.
 #
 # -n changes nothing and prints only what runs now, in the same form. A running
-# release is left alone and counts as left, since it costs hours to repeat;
-# -r stops it too, with TERM to release.sh, whose traps stop its machines, and
-# `release.sh -r` goes on from it later. The two GitHub runners stay on, since
-# they are idle unless a release runs; -g stops them too and turns them off at
-# boot, which `systemctl enable --now` undoes.
+# release is left alone and counts as left, since it costs hours to repeat:
+# while one runs, stop.sh leaves Windows alone, and on the Mac the process
+# group of the release's run there, and in WSL the copy of -p's preparation.
+# -r stops the release too, with TERM to each process of release.sh that
+# STATE/pid or STATE/windows.run of build/flow/release names, whose traps
+# stop its machines and end its claims, and waits up to ten minutes for them
+# to end before it stops the rest; `release.sh -r` goes on from it later. The
+# session of a claim of WSL's admission that a Windows run holds, whose
+# leader runs OUT/ID.claim.sh or OUT/ID.hold.sh, is never stopped here: it
+# ends by itself ten minutes after the run's last touch of ID.alive, so that
+# WSL admits other work only once Windows has stopped. The two GitHub
+# runners stay on, since they are idle unless a release runs; -g stops them
+# too and turns them off at boot, which `systemctl enable --now` undoes.
 #
 # STATE/stop stays, so that no loop starts by accident: remove it to start the
 # loop again, as tools/Readme.md says. The manager's own /loop and Monitors live
@@ -104,17 +112,55 @@ loops()
     done
 }
 
+# releases: print each process of this clone's release.sh that STATE/pid or
+# STATE/windows.run names, STATE being build/flow/release of the main working
+# tree, while ps shows it running tools/flow/release.sh.
+releases()
+{
+    for f in "$top/build/flow/release/pid" "$top/build/flow/release/windows.run"; do
+        p=$(cat "$f" 2> /dev/null)
+        [ -n "$p" ] || continue
+        case $(ps -o command= -p "$p" 2> /dev/null) in
+            *tools/flow/release.sh*) echo "$p" ;;
+        esac
+    done
+}
+
 # running: print a line `MACHINE: PID ARGS` for each process the header names.
 # With -r the release's own processes count, and with them the GitHub runners'
-# jobs, whose QEMU belongs to the release.
+# jobs, whose QEMU belongs to the release. Without -r, while a release runs,
+# the process group of its Mac run and the copy of -p's preparation in WSL
+# are its own and do not count. A claim's session in WSL never counts.
 running()
 {
-    ps -axo pid=,command= | grep -E "$WHAT|release\.sh" | grep -v -E 'grep|stop\.sh' |
+    group=
+    [ -n "$release" ] || [ -z "$(releases)" ] ||
+        group=$(cut -d ' ' -f 1 "$top/build/machines/mac/run" 2> /dev/null)
+    ps -axo pid=,pgid=,command= | grep -E "$WHAT|release\.sh" | grep -v -E 'grep|stop\.sh' |
+        awk -v g="$group" 'g == "" || $2 != g { $2 = ""; sub(/ +/, " "); print }' |
         sed 's/^ */mac: /'
     {
-        echo "ps -eo pid=,user=,args= | grep -E '$WHAT|release\\.sh' | grep -v -E 'grep|stop\\.sh' |"
-        echo "    { [ -n \"$release\" ] && cat || grep -v ' ghrunner '; } | sed 's/^ */wsl: /'"
+        echo "release='$release' live='$(releases | head -n 1)' copy='$prepare'"
+        echo "what='$WHAT'"
+        cat << 'END'
+claims=$(ps -eo sid=,args= | awk '$2 == "sh" && $3 ~ /\.(claim|hold)\.sh$/ { print $1 }')
+ps -eo pid=,sid=,user=,args= | grep -E "$what|release\.sh" | grep -v -E 'grep|stop\.sh' |
+    while read -r pid sid user args; do
+        case " $claims " in *" $sid "*) continue ;; esac
+        if [ -z "$release" ]; then
+            [ "$user" != ghrunner ] || continue
+            if [ -n "$live" ]; then
+                case $(readlink "/proc/$pid/cwd" 2> /dev/null) in
+                    "$copy" | "$copy"/*) continue ;;
+                esac
+            fi
+        fi
+        echo "wsl: $pid $user $args"
+    done
+END
     } | wsl
+    # A release that stays keeps what it runs on Windows.
+    [ -n "$release" ] || [ -z "$(releases)" ] || return 0
     echo "Get-Process | Where-Object { \$_.Path -like 'D:\\rach2\\*' -or \$_.Path -like 'D:/rach2/*' } |
         ForEach-Object { 'windows: {0} {1}' -f \$_.Id, \$_.ProcessName }" | windows
     # A part of a release run that release.sh starts apart from its ssh
@@ -196,12 +242,23 @@ here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=tools/flow/lib.sh
 . "$here/lib.sh"
 top=$(primary "$here")
+# The copy of release.sh -p's preparation in WSL, as release.sh names it.
+prepare=$(sed -n 's,^PREPARE_COPY=\$OWNER,/home/testing/rach2,p' "$here/release.sh")
 if [ -n "$dry" ]; then
     left
     exit
 fi
 loops
-[ -z "$release" ] || pkill -TERM -f 'release\.sh' 2> /dev/null
+if [ -n "$release" ]; then
+    pids=$(releases)
+    # shellcheck disable=SC2086 # the ids are a word each
+    [ -z "$pids" ] || kill -TERM $pids 2> /dev/null
+    i=0
+    while [ -n "$(releases)" ] && [ "$i" -lt 120 ]; do
+        sleep 5
+        i=$((i + 1))
+    done
+fi
 stragglers
 [ -z "$github" ] || runners
 sh "$here/board.sh" 'done' > /dev/null 2>&1 || echo "stop: board.sh done failed"

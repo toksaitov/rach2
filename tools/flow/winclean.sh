@@ -7,17 +7,34 @@
 #
 # release.sh and stop.sh pipe it to the host's MSYS2 bash with `bash -l -s
 # TREE OUT ID...`, TREE being Windows' copy and OUT its output directory, as
-# the machines file names them. For each run ID it stops each process of the
-# run's etude, OUT/etude-ID.exe, with its tree, which a stopped ssh leaves
-# running, and waits until tasklist shows none; while one still runs, it
-# removes nothing of that run. Before that it stops each of the two parts of
-# the run that release.sh starts apart from its ssh session, the preparation
-# and the cases, whose output, OUT/ID.PART.out, has no status line yet: it
-# kills the MSYS2 process group that OUT/ID.PART.pid names after the bash's
-# Windows process, since taskkill's tree misses what MSYS2's exec starts, and
-# that process with its tree while it runs, and waits until neither is left.
-# It reads no other OUT/ID.*.pid: those of the run's claims in WSL name WSL's
-# processes, which release.sh's claim_stop ends.
+# the machines file names them. For each run ID it first stops each of the
+# two parts of the run that release.sh starts apart from its ssh session,
+# the preparation and the cases, that has not ended, and keeps any from
+# starting. A part has ended once its bash wrote its status to
+# OUT/ID.PART.rc, or, for a part started before release.sh made that file,
+# once its output, OUT/ID.PART.out, has a status line. winclean.sh touches
+# OUT/ID.PART.cancel before it reads whether the part was launched, and the
+# part's start and the part's bash each read that file after they have said
+# what they are, as release.sh's windows_detach says, so that a part either
+# shows itself here or does no work. OUT/ID.PART.launch exists while a part's
+# start runs and names, once Windows has created the part's bash, that
+# process's number and start time; OUT/ID.PART.pid names, once the bash runs,
+# its Windows process and MSYS2 process group. winclean.sh kills that process
+# group once, since taskkill's tree misses what MSYS2's exec starts, and the
+# bash with its tree while a process of its number and start time runs, or,
+# for a bash whose start time no file gives, of its number and a command line
+# that runs OUT/ID.PART.sh; PowerShell holds the process while it compares
+# and kills, so that Windows cannot give the number to another in between. It
+# waits until neither the bash nor the group is left, and then touches
+# OUT/ID.PART.stopped, which says that nothing of the part runs or will. A
+# start that has not said within half a minute what it created counts as one
+# that may still run. It reads no other OUT/ID.*.pid: those of the run's
+# claims in WSL name WSL's processes, which release.sh's claim_stop ends.
+# Then it stops each process of the run's etude, OUT/etude-ID.exe, with its
+# tree, which a stopped ssh leaves running, and waits until tasklist shows
+# none; etude runs its commands, QEMU among them, in a job that Windows ends
+# with etude. While a part or etude still runs, it removes nothing of that
+# run.
 #
 # Each session of the run has the run directory TREE/build/tmp/ID, which
 # ETUDE_RUN_DIR names and which holds the run's TMPDIR and etude's scratch.
@@ -31,9 +48,10 @@
 # run's own files, OUT/ID and OUT/ID.*, stay for the caller to keep or
 # remove.
 #
-# Exit 0 once nothing of any run ID is left running, and 1 when a part or
-# etude of one still runs or tasklist cannot say, so that the caller keeps
-# the run's claims in WSL while Windows may still use what they hold.
+# Exit 0 once nothing of any run ID is left running or can start and its
+# scratch is gone or kept, and 1 when a part or etude of one may still run,
+# Windows cannot say, or the scratch cannot be removed, so that the caller
+# keeps the run's claims in WSL while Windows may still use what they hold.
 
 [ "$#" -ge 3 ] || { echo 'usage: winclean.sh TREE OUT ID...' >&2; exit 2; }
 tree=$1 out=$2
@@ -62,35 +80,94 @@ stopped()
     done
 }
 
-# windows_bash PID: print `yes` while Windows shows a bash.exe of number
-# PID, `no` when it shows none, and nothing when tasklist cannot say.
-windows_bash()
+# windows_part PID TIME SCRIPT [kill]: print `gone` when no Windows process
+# of number PID that is the part runs, `runs` while one does, and with `kill`
+# kill it and its tree and print `killed`; print nothing when Windows cannot
+# say. The process is the part when its start time, as a FILETIME, is TIME,
+# or, when TIME is empty, when its command line names SCRIPT. PowerShell
+# holds the process's handle while it compares and kills, so that its number
+# cannot pass to another process in between.
+windows_part()
 {
-    list=$(MSYS_NO_PATHCONV=1 tasklist /NH /FO CSV /FI "PID eq $1" /FI "IMAGENAME eq bash.exe" 2> /dev/null) ||
-        return 0
-    case $list in
-    *'"bash.exe"'*) echo yes ;;
-    *) echo no ;;
-    esac
+    MSYS_NO_PATHCONV=1 powershell.exe -NoProfile -NonInteractive -Command "
+        \$p = Get-Process -Id $1 -ErrorAction SilentlyContinue
+        if (-not \$p) { 'gone'; exit }
+        try { \$null = \$p.Handle } catch { 'gone'; exit }
+        if (\$p.HasExited) { 'gone'; exit }
+        if ('$2' -ne '') {
+            if (\$p.StartTime.ToFileTimeUtc() -ne '$2') { 'gone'; exit }
+        } else {
+            \$c = (Get-CimInstance Win32_Process -Filter 'ProcessId = $1').CommandLine
+            if (-not \$c -or -not \$c.Contains('$3')) { 'gone'; exit }
+        }
+        if ('$4' -ne 'kill') { 'runs'; exit }
+        taskkill.exe /F /T /PID $1 | Out-Null
+        'killed'" < /dev/null 2> /dev/null | tr -d '\r'
 }
 
-# halt PID GROUP: stop the part whose bash is Windows process PID and whose
-# MSYS2 process group is GROUP, and succeed once neither is left, waiting up
-# to half a minute. taskkill goes to PID only while it is a bash.exe, since
-# Windows may have given the number to another program since.
-halt()
+# launched ID PART: wait for the start of the part PART of run ID to say what
+# it created, and set p and t to the Windows process number and start time
+# that OUT/ID.PART.launch gives, both empty when nothing was created, and w
+# and g to the Windows process number and MSYS2 process group that the
+# bash's own OUT/ID.PART.pid gives, both empty while it has written none.
+# Fail when the start has not said within half a minute what it created, and
+# the bash has not named itself either.
+launched()
 {
     i=0
     while :; do
-        [ -z "$2" ] || kill -KILL "-$2" 2> /dev/null
-        case $(windows_bash "$1") in
-        yes) MSYS_NO_PATHCONV=1 taskkill /F /T /PID "$1" > /dev/null 2>&1 ;;
-        no) { [ -n "$2" ] && kill -0 "-$2" 2> /dev/null; } || return 0 ;;
-        esac
+        p='' t='' w='' g=''
+        [ ! -f "$1.$2.pid" ] || read -r w g < "$1.$2.pid"
+        [ ! -f "$1.$2.launch" ] || read -r p t < "$1.$2.launch"
+        { [ -f "$1.$2.launch" ] && [ -z "$p" ]; } || return 0
+        if [ "$i" -ge 6 ]; then
+            [ -n "$w" ]
+            return
+        fi
+        i=$((i + 1))
+        sleep 5
+    done
+}
+
+# halt ID PART: stop the part PART of run ID and keep it from starting, and
+# succeed once nothing of it is left, waiting up to half a minute.
+halt()
+{
+    p='' w=''
+    : > "$1.$2.cancel" || return 1
+    launched "$1" "$2" || return 1
+    killed=''
+    i=0
+    while :; do
+        [ -n "$g" ] || [ ! -f "$1.$2.pid" ] || read -r w g < "$1.$2.pid"
+        if [ -n "$g" ] && [ -z "$killed" ]; then
+            kill -KILL "-$g" 2> /dev/null
+            killed=1
+        fi
+        left=''
+        if [ -n "$p" ]; then
+            [ "$(windows_part "$p" "$t" "$1.$2.sh" kill)" = gone ] || left=1
+        fi
+        if [ -n "$w" ] && [ "$w" != "$p" ]; then
+            [ "$(windows_part "$w" '' "$1.$2.sh" kill)" = gone ] || left=1
+        fi
+        [ -z "$g" ] || ! kill -0 "-$g" 2> /dev/null || left=1
+        if [ -z "$left" ]; then
+            : > "$1.$2.stopped"
+            return 0
+        fi
         [ "$i" -lt 6 ] || return 1
         i=$((i + 1))
         sleep 5
     done
+}
+
+# ended ID PART: succeed when the part PART of run ID has ended, as the
+# header says.
+ended()
+{
+    [ -e "$1.$2.rc" ] && return 0
+    [ ! -e "$1.$2.launch" ] && grep -aq '^status ' "$1.$2.out" 2> /dev/null
 }
 
 # abandoned RECORD: print each path of RECORD whose last line says "made", in
@@ -115,12 +192,9 @@ for id; do
     case $id in */* | .* | '') echo "winclean: $id is not a run ID" >&2; continue ;; esac
     left=
     for part in prepare cases; do
-        [ -f "$id.$part.pid" ] || continue
-        ! grep -aq '^status ' "$id.$part.out" 2> /dev/null || continue
-        p='' g=''
-        read -r p g < "$id.$part.pid"
-        if [ -z "$p" ] || ! halt "$p" "$g"; then
-            echo "winclean: the $part of $id, bash ${p:-unknown}, may still run" >&2
+        ! ended "$id" "$part" || continue
+        if ! halt "$id" "$part"; then
+            echo "winclean: the $part of $id, bash ${p:-${w:-unknown}}, may still run" >&2
             left=1
         fi
     done
@@ -163,7 +237,7 @@ for id; do
         i=$((i + 1))
         sleep 5
     done
-    [ "$i" -lt 6 ] || echo "winclean: cannot remove:" $paths >&2
+    [ "$i" -lt 6 ] || { echo "winclean: cannot remove:" $paths >&2; status=1; }
     unset IFS
 done
 exit "$status"
