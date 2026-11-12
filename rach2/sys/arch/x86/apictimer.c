@@ -371,8 +371,9 @@ void timer_wake_release(void)
     }
 }
 
-/** The interrupt between ticks, under the big lock, which the router has
- * taken: the pass (`timer_hr_pass`), which arms the next times due. */
+/** The interrupt between ticks, without the big lock (ISR_UNLOCKED): the
+ * pass (`timer_hr_pass`), which arms the next times due and takes the lock
+ * only by a try, to post the POSIX timers' signals. */
 static void hr_interrupt(isr_params_t *params)
 {
     (void)params;
@@ -417,6 +418,7 @@ void apic_hr_init(uint32_t counts)
     }
     hr_tick_counts = counts;
     set_isr_handler((uint8_t)v, hr_interrupt, "hrtimer");
+    isr_register_flags((uint8_t)v, hr_interrupt, ISR_UNLOCKED);
     hr_vector = v;
     klog(KLOG_INFO, "lapic", "timer: vector %d between ticks", v);
 }
