@@ -114,6 +114,7 @@ int vm_device_map(vma_t *vma, const struct vm_device_ops *ops, void *obj, uint32
     d->vf.dead = NULL;
     d->vf.device = vm_device_page;
     d->vf.unlocked = 0;
+    d->vf.around = NULL;
     d->ops = ops;
     d->obj = obj;
     vma->file = &d->vf;

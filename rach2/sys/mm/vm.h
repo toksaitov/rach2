@@ -164,10 +164,16 @@ typedef enum {
  * gives the physical address of page `pgoff` in `*phys` and returns 0, -1
  * when the object has no page there now, which raises SIGBUS, or 1 to run
  * the access again, as `struct vm_device_ops`'s `page` says; it may sleep.
- * The fault calls each with the regions' lock let go, and with the big lock
- * held unless `unlocked` is set, which the owner sets for a file whose
- * operations take only locks of their own, as Linux's filemap_fault takes
- * no global lock (mm/filemap.c:3305-3370).
+ * A file with `share` may also have `around`, which lends the frames of
+ * its pages `first` to `first + count - 1` that it has in memory, in
+ * `phys`, with a reference for the mapping each, and 0 for each other page,
+ * reading none, and returns the count it lent; a read fault maps those
+ * around its page, as Linux's do_fault_around does with a file's map_pages
+ * (mm/memory.c:5254-5284 and 5300-5330). The fault calls each with the
+ * regions' lock let go, and with the big lock held unless `unlocked` is set,
+ * which the owner sets for a file whose operations take only locks of their
+ * own, as Linux's filemap_fault takes no global lock
+ * (mm/filemap.c:3305-3370).
  */
 struct vm_file {
     uint32_t refs;
@@ -177,7 +183,9 @@ struct vm_file {
     char *path;           /* the file's path for /proc/PID/maps, or NULL */
     struct vm_file *dead; /* the next file waiting for `vm_file_reap` */
     int (*device)(struct vm_file *f, uint32_t pgoff, uintptr_t *phys);
-    int unlocked; /* `fill`, `share` and `device` run without the big lock */
+    int unlocked; /* `fill`, `share`, `around` and `device` run without the
+                     big lock */
+    uint32_t (*around)(struct vm_file *f, uint32_t first, uint32_t count, uintptr_t *phys);
 };
 
 /*
