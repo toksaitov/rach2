@@ -5,6 +5,7 @@
  * host-deps: rach2/sys/kvm/msr.c rach2/sys/kvm/emulate.c rach2/sys/kvm/decode.c
  * host-deps: rach2/sys/kvm/hyperv.c rach2/sys/kvm/pvclock.c
  * host-deps: rach2/sys/kvm/binstats.c rach2/sys/kvm/exitstat.c
+ * host-deps: rach2/sys/kvm/pmu.c
  * host-deps: tests/host/compat/fd_flat.c tests/host/compat/mutex_none.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
@@ -1819,6 +1820,7 @@ static int m_run(struct kvm_regs *regs, uint64_t *cr2, int launched)
     (void)regs;
     (void)cr2;
     CHECK(!irq_on && bkl_depth == 0, "the guest runs with interrupts off and no big lock held");
+    model_tsc += tsc_steps ? 1000u : 0u;
     if (!m.on) {
         return not_on();
     }
@@ -3554,6 +3556,18 @@ static void vpid_panic_rows(int vm, int first)
     bkl_depth = 0;
     v->mode = KVM_MODE_OUTSIDE;
     mutex_init(&v->mutex, "kvm_vcpu"); /* the run's hold, left by the jump */
+    current_proc->sched_out = NULL;
+    m.saved = 0;
+    m.restores = m.saves;
+    m.fpu_held = 0;
+    m.fpu_stores = m.fpu_loads;
+    m.xcr0 = HOST_XCR0_MODEL;
+    m.pkru = HOST_PKRU_MODEL;
+    for (i = 0; i < 5; i++) {
+        m.msr[i] = HOST_MSR(kept_msrs[i]);
+    }
+    k_memset(uret_curr, 0, sizeof(uret_curr));
+    k_memset(uret_read, 0, sizeof(uret_read));
     m.script_len = 0;
     m.script_at = 0;
     fdclose(fd);

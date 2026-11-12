@@ -648,6 +648,11 @@ struct kvm_vcpu {
     int32_t xs_row;
     uint64_t xs_mark;
     uint64_t xs_wait;
+    /* TSC counts, 0 when not taken: the run loop's at its first pass over
+     * its top once the last exit is handled (`xs_prep`); the backend's just
+     * before the entry instruction of the run that ends in the next exit
+     * (`xs_in`) and just after that exit (`xs_out`). */
+    uint64_t xs_prep, xs_in, xs_out;
 
     /* The steps each vector's interrupts reached, by enum kvm_vec_step,
      * which the VM's fdinfo shows; written by the vCPU's thread and by a
@@ -680,19 +685,34 @@ void kvm_start(void);
  * backend has probed. */
 void kvm_exitstat_start(void);
 
-/**
- * Count the exit of the run that just ended on `v`, by `v->hw_exit`, with
- * its handling timed from the TSC count `left`, read as the guest's run
- * ended, and count the entry among those since boot (`kvm_exit_count`). In
- * `v`'s thread, with interrupts off.
- */
-void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t left);
+/** Make the exit counts of each processor started since; from each VM's
+ * creation, with the big lock held. A processor left without them for want
+ * of memory is logged, and its exits go uncounted. */
+void kvm_exitstat_cpus(void);
 
-/** End the account of `v`'s exit, if one is open: the kernel enters the
- * guest again (`to_user` 0) or KVM_RUN returns (1). The exit's waits for
- * the big lock go to its row's wait, the rest of its time to its handling.
+/**
+ * Count the exit of the run that just ended on `v`, by `v->hw_exit`, among
+ * the entries since boot (`kvm_exit_count`) and in this processor's row,
+ * and close the account of the exit before it, if one is open, as handled
+ * in the kernel: `entry`, read just before the backend's entry, ends that
+ * exit's handling and its preparation, and `left`, read as the backend's
+ * entry returned, starts the new one's; `entry` and the run's `xs_in` and
+ * `xs_out`, where taken, time the entry, the run and the exit before
+ * `left`. Only after a run that entered the guest; in `v`'s thread, with
+ * interrupts off.
+ */
+void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t entry, uint64_t left);
+
+/** Mark the TSC count at which the run loop, the exit of `v` handled, begins
+ * to prepare the next entry, if an account is open and not yet marked.
  * In `v`'s thread. */
-void kvm_exitstat_done(struct kvm_vcpu *v, int to_user);
+void kvm_exitstat_prepare(struct kvm_vcpu *v);
+
+/** End the account of `v`'s exit, if one is open, as one that ended
+ * KVM_RUN. The exit's waits for the big lock go to its row's wait, the
+ * rest of its time to its handling. When KVM_RUN returns, in `v`'s
+ * thread. */
+void kvm_exitstat_done(struct kvm_vcpu *v);
 
 /** Take the big lock for a part of KVM_RUN that still needs it, counting
  * the cycles the take waits in the account of `v`'s exit; `v` may be NULL,
