@@ -1984,6 +1984,10 @@ COLLECTION_TOOLS = build/tests/cases/host/host_checks_scenario \
     build/tools/dev/native-deploy $(ARCH_BUILD)/tests/cases/host/image-channel-fixture \
     $(ARCH_BUILD)/tests/cases/machine/installer-repair-fixture \
     $(WIFI_MKCPIO) $(WIFI_HWSIMRELAY) $(AUDIO_MKRESAMPLE) $(AUDIO_RESAMPLEBENCH)
+# The guest programs that the suites' rules compile, which no unit's dry run
+# reaches: the assign suite's edu, KVM's SVM entry and its Rach2 guest's init.
+COLLECTION_GUESTS = build/tests/cases/assign/edu build/x86_64/tests/kvm/svm-entry \
+    build/tests/kvm/rach2-init
 ifeq ($(OS),Windows_NT)
 # Native link outputs depend on the wrapper that publishes their stable paths.
 $(HOST_TOOLS) $(filter-out $(ARCH_BUILD)/tests/cases/host/image-channel-fixture \
@@ -1996,7 +2000,7 @@ print-native-libc-inputs:
 
 .PHONY: print-collection-tools
 print-collection-tools:
-	@echo $(COLLECTION_TOOLS)
+	@echo $(COLLECTION_TOOLS) $(COLLECTION_GUESTS)
 
 # Fails when a kernel .c on disk is missing from C_SRC, or a C_SRC entry is
 # missing from disk, so that a new kernel source cannot be left out of the

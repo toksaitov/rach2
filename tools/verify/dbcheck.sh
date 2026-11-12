@@ -27,6 +27,14 @@
 # describe; such a source passes when that script names it, or when
 # tools/etude/sources.mk lists it for the Windows etude that the script
 # builds.
+# A program that runs on another machine is compiled there, by the script
+# that runs it or by hand as the Readme beside it says, against that
+# machine's libraries: MinGW's in the Debian guest, Weston's, FFmpeg's, X11's
+# and Vulkan's on Linux, the GNU root's glibc on Rach2. The host has none of
+# them and no build compiles the program, so no command of the host describes
+# it; such a source passes when the script or Readme named for its directory
+# below compiles it.
+#
 # The Windows scenario actor uses the native host preparation adapter.
 # The native mandoc build copies its entry and mapping adapter to
 # batch_main.c and batch_mmap.c, compiled by tools/setup/mandoc-batch.mk;
@@ -119,12 +127,39 @@ windows() {
         *) return 1 ;;
     esac
 }
+# guest FILE: true for the programs compiled on the machines they run on, as
+# described above, each by the script that compiles it.
+guest() {
+    base=${1##*/}
+    case $1 in
+        tests/graphics/browser/*.c)
+            grep -qF "/$base" tests/graphics/browser/seat-build.sh ;;
+        tests/graphics/d3d/d3d*probe.c)
+            n=${base#d3d}
+            n=${n%probe.c}
+            # shellcheck disable=SC2016 # the script's own words, unexpanded
+            grep -qF 'src/d3d${n}probe.c' tests/graphics/d3d/build.sh &&
+            grep -Eq "for n in ([0-9]+ )*$n( |;|\$)" tests/graphics/d3d/build.sh ;;
+        tests/system/games/*.c)
+            grep -qF " $base" tests/system/games/build.sh ;;
+        tests/graphics/runners/*.c)
+            grep -qF "\"\$RUNNER_DIR/$base\"" tests/graphics/runners/*.sh ;;
+        tests/graphics/lenovo/*.c)
+            grep -qF "$base" tests/graphics/lenovo/*.sh tests/graphics/lenovo/*.py ;;
+        tests/kvm/nocopy.c)
+            grep -qF "$base" tests/kvm/bed-shm.sh ;;
+        tools/lenovo/debian-ref/*.c)
+            grep -qF "\`$base\` built with" tools/lenovo/debian-ref/Readme.md ;;
+        *) return 1 ;;
+    esac
+}
 missing=0
 for f in $sources; do
     grep -qxF "$REPO/$f" "$known" && continue
     included "$f" && continue
     fixture "$f" && continue
     windows "$f" && continue
+    guest "$f" && continue
     echo "dbcheck: $f is in no compilation database"
     missing=$((missing + 1))
 done
