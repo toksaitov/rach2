@@ -553,9 +553,13 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
  * entered, on a type that sets `name_cache`; -ENOENT for a name the cache
  * holds as absent; or VFS_CACHED_MISS with nothing taken, for a path the
  * caller resolves again under the big lock. `flags` takes VFS_WALK_NOFOLLOW,
- * VFS_WALK_REAL_IDS and VFS_WALK_LOCK; any other is a miss.
+ * VFS_WALK_REAL_IDS and VFS_WALK_LOCK; any other is a miss. With `entry` not
+ * NULL a regular file at the last name has its directory entry recorded
+ * there, as `vfs_resolve_entry` records it, and a change of names that the
+ * walk may have raced makes it a miss (`vfs_name_capture_at`); `*entry` is
+ * NULL on every other answer.
  */
-int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out);
+int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out, struct vfs_name **entry);
 
 /**
  * Resolve `path` from the caller's root, as `vfs_resolve` does with no

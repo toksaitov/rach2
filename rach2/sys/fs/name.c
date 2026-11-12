@@ -26,30 +26,55 @@ struct vfs_name {
 static struct vfs_name *names;
 static struct spinlock names_lock = SPINLOCK_INIT_NAMED("names");
 
+/* The changes of names under way (`vfs_name_change_begin`), and a count
+ * that moves at each one's beginning and end, both under `names_lock`. */
+static uint32_t names_changing;
+static uint32_t names_seq;
+
 /** The mutable base whose operations implement this mount's file system. */
 static struct vfs_mount *name_base(struct vfs_mount *mnt)
 {
     return mnt->bind_of ? mnt->bind_of : mnt;
 }
 
-static struct vfs_name *name_new(const struct vfs_ref *parent, const char *leaf)
+/**
+ * A record of `leaf` in `parent`, held once, on the list: 0 with it in
+ * `*out`; -ENOMEM; or, with `checked`, -EAGAIN when a change of names began
+ * since `seq` was read (`vfs_name_seq`), with nothing kept. The check and
+ * the insert are one step under the lock, so a change that begins later
+ * finds the record.
+ */
+static int name_new(const struct vfs_ref *parent, const char *leaf, int checked, uint32_t seq,
+                    struct vfs_name **out)
 {
     struct vfs_name *name = kzalloc(sizeof(*name));
     uint32_t flags;
+    int moved;
 
-    if (name) {
-        name->parent = *parent;
-        vfs_ref_hold(parent);
-        vfs_desc_open(parent->mnt);
-        name->refs = 1;
-        k_strncpy(name->leaf, leaf, sizeof(name->leaf));
-        name->leaf[sizeof(name->leaf) - 1] = '\0';
-        flags = spin_lock_irqsave(&names_lock);
+    *out = NULL;
+    if (!name) {
+        return -ENOMEM;
+    }
+    name->parent = *parent;
+    vfs_ref_hold(parent);
+    vfs_desc_open(parent->mnt);
+    name->refs = 1;
+    k_strncpy(name->leaf, leaf, sizeof(name->leaf));
+    name->leaf[sizeof(name->leaf) - 1] = '\0';
+    flags = spin_lock_irqsave(&names_lock);
+    moved = checked && (names_changing != 0 || names_seq != seq);
+    if (!moved) {
         name->next = names;
         names = name;
-        spin_unlock_irqrestore(&names_lock, flags);
     }
-    return name;
+    spin_unlock_irqrestore(&names_lock, flags);
+    if (moved) {
+        vfs_desc_close(name->parent.mnt, name->parent.node, NULL);
+        kfree(name);
+        return -EAGAIN;
+    }
+    *out = name;
+    return 0;
 }
 
 int vfs_name_capture(const struct vfs_ref *parent, const char *leaf, struct vfs_name **out)
@@ -58,8 +83,45 @@ int vfs_name_capture(const struct vfs_ref *parent, const char *leaf, struct vfs_
     if (!parent->mnt->type->ops->hold || !parent->mnt->type->ops->put) {
         return 0;
     }
-    *out = name_new(parent, leaf);
-    return *out ? 0 : -ENOMEM;
+    return name_new(parent, leaf, 0, 0, out);
+}
+
+int vfs_name_capture_at(const struct vfs_ref *parent, const char *leaf, uint32_t seq,
+                        struct vfs_name **out)
+{
+    *out = NULL;
+    if (!parent->mnt->type->ops->hold || !parent->mnt->type->ops->put) {
+        return 0;
+    }
+    return name_new(parent, leaf, 1, seq, out);
+}
+
+int vfs_name_seq(uint32_t *seq)
+{
+    uint32_t flags = spin_lock_irqsave(&names_lock);
+    int calm = names_changing == 0;
+
+    *seq = names_seq;
+    spin_unlock_irqrestore(&names_lock, flags);
+    return calm;
+}
+
+void vfs_name_change_begin(void)
+{
+    uint32_t flags = spin_lock_irqsave(&names_lock);
+
+    names_changing++;
+    names_seq++;
+    spin_unlock_irqrestore(&names_lock, flags);
+}
+
+void vfs_name_change_end(void)
+{
+    uint32_t flags = spin_lock_irqsave(&names_lock);
+
+    names_changing--;
+    names_seq++;
+    spin_unlock_irqrestore(&names_lock, flags);
 }
 
 struct vfs_name *vfs_name_ref(struct vfs_name *name)

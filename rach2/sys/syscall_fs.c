@@ -4935,6 +4935,137 @@ static void open_done(int fd, const char *name, int flags)
     inotify_desc(ofd, IN_OPEN);
 }
 
+/* The open flags that send an open to the big lock (`open_unlocked`): any
+ * access mode but O_RDONLY, the low two bits, and every flag that creates,
+ * truncates, opens nothing or opens a nameless file (Linux's __O_TMPFILE). */
+#define OPEN_LOCKED_FLAGS (3 | O_CREAT | O_TRUNC | O_PATH | 020000000)
+
+/**
+ * The descriptor of an open that `open_unlocked` checked and holds `ref`
+ * and `entry` for, in the slot `fd` it reserved, made as `open_install`
+ * makes one for a read-only open of a mounted type: the description takes
+ * the hold, the record and a reference on the mount, and the entry is
+ * published last. The descriptor, or a negative errno with everything
+ * given back.
+ */
+static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry, int fd,
+                                     const char *name, int flags, const struct vfs_stat *st)
+{
+    fd_entry_t *e = fd_slot(current_proc->fds, fd);
+    int rc;
+
+    e->ofd->name = entry;
+    e->ofd->ino = st->ino;
+    e->ofd->offset = 0;
+    ofd_record_path(e->ofd, name);
+    rc = vfs_open_node(ref->mnt, ref->node, flags, &e->ofd->fhandle);
+    if (rc != 0) {
+        fd_free(current_proc->fds, fd);
+        vfs_ref_release(ref);
+        return rc;
+    }
+    e->ofd->vmnt = ref->mnt;
+    e->ofd->vnode = ref->node;
+    vfs_desc_open(ref->mnt);
+    vfs_leave(ref->mnt);
+    fd_ofd_access_drop(e->ofd);
+    e->flags = FD_FLAG_READ | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0);
+    if (flags & O_APPEND) {
+        e->ofd->status_flags |= OFD_APPEND;
+    }
+    if (flags & O_NONBLOCK) {
+        e->ofd->status_flags |= OFD_NONBLOCK;
+    }
+    e->node = NULL;
+    e->type = (st->mode & S_IFMT) == S_IFDIR ? FD_TYPE_DIR : FD_TYPE_FILE;
+    fd_install(current_proc->fds, fd);
+    return fd;
+}
+
+/**
+ * `open_from_user` for a caller without the big lock: a read-only open that
+ * creates and truncates nothing, of a regular file or a directory on a type
+ * that sets `reads_unlocked`, whose path the name cache finishes
+ * (`vfs_resolve_cached`), absolute or relative to the working directory
+ * (`path_from_user_unlocked`), as Linux's `path_openat` walks under RCU
+ * first and again with references when that fails (fs/namei.c:4055-4057,
+ * `do_filp_open`). The checks are those `open_mounted_node` makes for such
+ * an open: ENOTDIR for O_DIRECTORY on a file, and read permission. The
+ * descriptor is reserved before the walk, as `do_open` reserves it. The
+ * descriptor or a negative errno; or CALL_LOCKED with nothing done, for
+ * every other open, which `do_open` makes under the big lock. inotify's
+ * report of the open takes the big lock while a watch exists.
+ */
+static int32_t open_unlocked(int dirfd, const char __user *upath, int flags)
+{
+    struct vfs_name *entry = NULL;
+    struct vfs_stat st;
+    struct vfs_ref ref;
+    const char *name;
+    char *path;
+    int end = 0, fd;
+    int32_t rc;
+
+    if (flags & OPEN_LOCKED_FLAGS) {
+        return CALL_LOCKED;
+    }
+    rc = path_from_user_unlocked(dirfd, upath, &path, &end);
+    if (rc != 0) {
+        return rc;
+    }
+    if (end) {
+        flags = (flags | O_DIRECTORY) & ~O_NOFOLLOW;
+    }
+    name = path_name(path);
+    if (device_name(name, "fb") || device_name(name, "mouse") || path_starts(name, "proc/") ||
+        path_starts(name, "dev/")) {
+        path_buf_put(path);
+        return CALL_LOCKED;
+    }
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0) {
+        path_buf_put(path);
+        return fd;
+    }
+    rc = vfs_resolve_cached(path, VFS_WALK_LOCK | ((flags & O_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0),
+                            &ref, &entry);
+    if (rc != 0) {
+        fd_free(current_proc->fds, fd);
+        path_buf_put(path);
+        return rc == VFS_CACHED_MISS ? CALL_LOCKED : rc;
+    }
+    if (!vfs_mount_base(ref.mnt)->type->reads_unlocked ||
+        vfs_getattr(ref.mnt, ref.node, &st) != 0 ||
+        ((st.mode & S_IFMT) != S_IFREG && (st.mode & S_IFMT) != S_IFDIR)) {
+        rc = CALL_LOCKED;
+    } else if ((st.mode & S_IFMT) != S_IFDIR && (flags & O_DIRECTORY)) {
+        rc = -ENOTDIR;
+    } else {
+        rc = cred_access_ref(&ref, CRED_R, 0);
+    }
+    if (rc != 0) {
+        vfs_name_put(entry);
+        vfs_ref_release(&ref);
+        fd_free(current_proc->fds, fd);
+        path_buf_put(path);
+        return rc;
+    }
+    rc = open_install_unlocked(&ref, entry, fd, name, flags, &st);
+    if (rc >= 0) {
+        int big = inotify_watches != 0;
+
+        if (big) {
+            bkl_enter();
+        }
+        open_done(rc, name, flags);
+        if (big) {
+            bkl_exit();
+        }
+    }
+    path_buf_put(path);
+    return rc;
+}
+
 /**
  * open(2) and openat(2) after their arguments: the path `upath`, a relative
  * one resolved from `dirfd`, opened by `open_named` with the Linux open
@@ -4944,11 +5075,14 @@ static void open_done(int fd, const char *name, int flags)
  * is -EINVAL before the path is read, as Linux answers it since 6.4; an
  * older Linux made a regular file. O_PATH, which drops O_CREAT, takes the
  * pair, as Linux's open and openat do.
+ *
+ * A caller without the big lock tries `open_unlocked` first and takes the
+ * big lock for what that leaves.
  */
 static int32_t open_from_user(int dirfd, const char __user *upath, int flags, uint32_t mode)
 {
     char *path;
-    int end;
+    int end, big;
     int32_t rc;
 
     if ((flags & (O_CREAT | O_DIRECTORY | O_PATH)) == (O_CREAT | O_DIRECTORY)) {
@@ -4957,15 +5091,25 @@ static int32_t open_from_user(int dirfd, const char __user *upath, int flags, ui
     if (!upath) {
         return -EFAULT;
     }
+    big = !bkl_held();
+    if (big) {
+        rc = open_unlocked(dirfd, upath, flags);
+        if (rc != CALL_LOCKED) {
+            return rc;
+        }
+        bkl_enter();
+    }
     rc = path_from_user_dir(dirfd, upath, &path, &end);
-    if (rc != 0) {
-        return rc;
+    if (rc == 0) {
+        rc = open_named(path_name(path), flags, mode, end);
+        if (rc >= 0) {
+            open_done(rc, path_name(path), flags);
+        }
+        path_buf_put(path);
     }
-    rc = open_named(path_name(path), flags, mode, end);
-    if (rc >= 0) {
-        open_done(rc, path_name(path), flags);
+    if (big) {
+        bkl_exit();
     }
-    path_buf_put(path);
     return rc;
 }
 
@@ -10684,7 +10828,8 @@ static int32_t stat_at_unlocked(int dirfd, const char __user *upath, int flags, 
     if (rc != 0) {
         return rc;
     }
-    rc = vfs_resolve_cached(pathbuf, VFS_WALK_LOCK | (follow || dir ? 0 : VFS_WALK_NOFOLLOW), &ref);
+    rc = vfs_resolve_cached(pathbuf, VFS_WALK_LOCK | (follow || dir ? 0 : VFS_WALK_NOFOLLOW), &ref,
+                            NULL);
     path_buf_put(pathbuf);
     if (rc != 0) {
         return rc == VFS_CACHED_MISS ? CALL_LOCKED : rc;

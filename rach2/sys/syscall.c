@@ -3480,19 +3480,24 @@ static void _syscall_handler(isr_params_t *params)
  * handlers (`syscall_unlock`): read, write, pread64, pwrite64, ioctl, fstat
  * and close run a descriptor's operations without the big lock only for a
  * type that declares FILE_OPS_UNLOCKED (`fd_call_lock`, `file_ops_lock`),
- * and poll and ppoll scan their descriptors the same way and sleep without
- * it, taking it for the signal state (`poll_signal_pending`,
- * `poll_mask_set`). Every other step those calls make takes the locks of
- * what it touches; the user-memory copies take the big lock until address
- * spaces have locks of their own. The forms of an architecture's own, i686's
- * split offsets and the i386 calls of x86-64, are marked as its tables are
- * filled (`arch_syscall_init`, `ia32_syscall_init`).
+ * or for a file or directory of a type that sets `reads_unlocked`
+ * (`file_vfs_unlocked`); getdents64 lists such a directory, fstatat and
+ * newfstatat stat a path the name cache finishes (`stat_at_unlocked`), and
+ * open and openat make a read-only descriptor of such a file
+ * (`open_unlocked`), each taking the big lock for anything else; poll and
+ * ppoll scan their descriptors the same way and sleep without it, taking it
+ * for the signal state (`poll_signal_pending`, `poll_mask_set`). Every
+ * other step those calls make takes the locks of what it touches; the
+ * user-memory copies take the big lock until address spaces have locks of
+ * their own. The forms of an architecture's own, i686's split offsets and
+ * the i386 calls of x86-64, are marked as its tables are filled
+ * (`arch_syscall_init`, `ia32_syscall_init`).
  */
 static void unlock_file_calls(void)
 {
     static const syscall_fn_t calls[] = {
-        sys_read,  sys_write, sys_pread64, sys_pwrite64,  sys_ioctl,      sys_fstat64,
-        sys_close, sys_poll,  sys_ppoll,   sys_fstatat64, sys_getdents64,
+        sys_read, sys_write, sys_pread64,   sys_pwrite64,   sys_ioctl, sys_fstat64, sys_close,
+        sys_poll, sys_ppoll, sys_fstatat64, sys_getdents64, sys_open,  sys_openat,
     };
     uint32_t i;
 
