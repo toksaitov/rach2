@@ -12,7 +12,7 @@ vmexit_tscdeadline pass pass
 vmexit_tscdeadline_immed pass pass
 vmexit_ipi_halt pass pass
 vmexit_inl_pmtimer pass pass
-eventinj pass pass
+eventinj outer_kvm?pass:hypervisor?fail:pass pass under another hypervisor, as under the testing PC's and the Mac's TCG, fails NP exception, NP PF exceptions and int 33 with shadowed stack, 10 of 13 passing, as under Debian's Linux 6.12 as the host there
 smptest pass pass
 smptest3 pass pass
 ioapic pass pass
