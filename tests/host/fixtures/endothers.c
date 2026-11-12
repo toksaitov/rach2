@@ -3,23 +3,27 @@
  * debug shell hands the machine back to it (`proc_end_others`).
  *
  * The rule of mk/host-fixtures.mk extracts `proc_end_others` unchanged from
- * rach2/sys/syscall_proc.c into endothers.inc. The records here have
- * the fields it reads, and the signal, the scheduler and the reap are
- * models. A switch lets the others run: a process sent SIGKILL ends, and so
- * does one asleep in the call that ends it, as one asleep in a file's release
- * does once the release is done; each is a zombie after the switch. A walk
- * that goes on switching when nothing is left to end would wait forever, so
- * a sixteenth switch ends the run.
+ * rach2/sys/syscall_proc.c into endothers.inc, with the `proc_is_kthread` of
+ * rach2/sys/proc/process.c that it asks. The records here have the fields
+ * they read, and the signal, the scheduler and the reap are models. A switch
+ * lets the others run: a process sent SIGKILL ends, and so does one asleep in
+ * the call that ends it, as one asleep in a file's release does once the
+ * release is done; each is a zombie after the switch. A kernel thread never
+ * ends. A walk that goes on switching when nothing is left to end would wait
+ * forever, so a sixteenth switch ends the run.
  *
- * The first row has a process in the call that ends it, which has given up
- * its address space (`proc_exit_cleanup`): it must be waited for until it is
- * a zombie, then reaped, and sent no signal. Beside it, a kernel thread,
- * which has no address space and is in no call, and a record another reaper
- * has taken off the zombies must be left alone and not waited for. The
- * second row has a process that runs in its address space, which must be
- * sent SIGKILL, waited for and reaped. The third has such a process running
- * on another processor, which takes its SIGKILL while init waits for an
- * interrupt with the big lock let go (`idle_wait_irq_on`).
+ * A kernel thread, which has no address space, is left alone and not waited
+ * for, whether it is in no call or marked in one, as it is while it runs a
+ * system call's code: in the first row it is the only other process, and
+ * the walk returns without a switch. The second row has a process in the
+ * call that ends it, which has given up its address space
+ * (`proc_exit_cleanup`): it must be waited for until it is a zombie, then
+ * reaped, and sent no signal. Beside it, a record another reaper has taken
+ * off the zombies must be left alone and not waited for. The third row has a
+ * process that runs in its address space, which must be sent SIGKILL,
+ * waited for and reaped. The fourth has such a process running on another
+ * processor, which takes its SIGKILL while init waits for an interrupt with
+ * the big lock let go (`idle_wait_irq_on`). Each row has both kernel threads.
  *
  * The same rule extracts `exec_alone` and `exec_one_thread`, the end of the
  * other threads of a process before execve replaces its image, as Linux's
@@ -79,6 +83,7 @@ typedef struct process {
     uint32_t tgid;
     uintptr_t space_root;
     volatile uint32_t in_syscall;
+    void (*kthread_entry)(void);
     uint64_t sig_pending;
     int signalled;
     int released;
@@ -122,7 +127,7 @@ static void proc_release(process_t *p)
 }
 
 /** Let the others run: a process sent SIGKILL, and one asleep in the call
- * that ends it, end and are zombies. */
+ * that ends it, end and are zombies; a kernel thread never ends. */
 static void schedule(void)
 {
     process_t *p;
@@ -132,7 +137,8 @@ static void schedule(void)
         exit(1);
     }
     for (p = proc_list; p; p = p->next) {
-        if (p != current_proc && (p->state == PROC_READY || p->state == PROC_BLOCKED) &&
+        if (p != current_proc && !p->kthread_entry &&
+            (p->state == PROC_READY || p->state == PROC_BLOCKED) &&
             (p->signalled == SIGKILL || (p->space_root == 0 && p->in_syscall))) {
             p->state = PROC_ZOMBIE;
             p->space_root = 0;
@@ -211,8 +217,12 @@ static int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, 
 
 #include "endothers.inc"
 
-static struct tgroup groups[5];
-static process_t init, idle, kthread, ending, unused, running;
+static struct tgroup groups[6];
+static process_t init, idle, kthread, marked, ending, unused, running;
+
+/** What the model's kernel threads run, which only marks them. */
+static void kthread_main(void)
+{}
 
 /** Put `p` on the list, alone in thread group `tg`, with `space_root`,
  * `in_syscall` and `state`. */
@@ -228,26 +238,32 @@ static void add(process_t *p, int tg, uint32_t pid, uintptr_t space_root, uint32
     proc_list = p;
 }
 
-/** A fresh list with init running, the idle record and a kernel thread. */
+/** A fresh list with init running, the idle record, a kernel thread and one
+ * marked in a call. */
 static void begin(void)
 {
     static const process_t none;
 
-    init = idle = kthread = ending = unused = running = none;
+    init = idle = kthread = marked = ending = unused = running = none;
     proc_list = NULL;
     switches = 0;
     add(&idle, 1, 0, 0, 0, PROC_READY);
     add(&kthread, 2, 5, 0, 0, PROC_BLOCKED);
+    kthread.kthread_entry = kthread_main;
+    add(&marked, 5, 6, 0, 1, PROC_BLOCKED);
+    marked.kthread_entry = kthread_main;
     add(&init, 0, 1, 0x1000, 1, PROC_RUNNING);
     current_proc = &init;
     proc_idle = &idle;
 }
 
-/** The kernel thread and the idle record stay, untouched. */
+/** The kernel threads and the idle record stay, untouched. */
 static void kept(void)
 {
     check(!kthread.signalled && !kthread.released && kthread.state == PROC_BLOCKED,
           "a kernel thread is left alone");
+    check(!marked.signalled && !marked.released && marked.state == PROC_BLOCKED,
+          "a kernel thread marked in a call is left alone");
     check(!idle.signalled && !idle.released, "the idle record is left alone");
 }
 
@@ -318,10 +334,15 @@ static void exec_rows(void)
     check(execs.exec_task == &other, "a second exec leaves exec_task to the first");
 }
 
-/** Run the three rows of an init's end and the exec rows: 0 when every row
+/** Run the four rows of an init's end and the exec rows: 0 when every row
  * passes, 1 otherwise. */
 int main(void)
 {
+    begin();
+    proc_end_others();
+    check(switches == 0, "a kernel thread marked in a call is not waited for");
+    kept();
+
     begin();
     add(&ending, 3, 7, 0, 1, PROC_BLOCKED);
     add(&unused, 4, 9, 0, 1, PROC_UNUSED);
