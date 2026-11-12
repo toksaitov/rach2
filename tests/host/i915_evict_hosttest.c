@@ -843,8 +843,8 @@ static void free_under_lock(void)
 
 /** A last put under the shrinker, the pool's reference the last, undoes
  * the object at once with no give-way and counts its frames; the
- * shrinker, taking the lock in a wait's drop of it, leaves the list to the
- * holder. */
+ * shrinker, taking the lock in a wait's drop of it, undoes `gem.freed` the
+ * same way and counts its frames too. */
 static void free_under_shrinker(void)
 {
     struct mem_shrinker *sk = &dev_a->gem.shrinker.base;
@@ -862,18 +862,69 @@ static void free_under_shrinker(void)
 
     queued = held_bound();
     pool_parked = held_bound();
+    frames = frames_live;
     taken = i915_gem_lock(dev_a);
     i915_gem_object_put(queued);
     CHECK(i915_gem_lock_drop(dev_a) == 1, "free: a wait lets the lock go, the list kept");
     free_counts_zero();
-    CHECK(sk->shrink(sk, 1, 1) == SET_PAGES && dev_a->gem.freed == queued && clears == 1 &&
-              clears_yielding == 0 && give_ways == 0 && !mutex_held(&dev_a->gem.lock),
-          "free: the shrinker, in a wait's drop of the lock, frees its own and leaves the list");
+    CHECK(sk->shrink(sk, 1, 1) == 2 * SET_PAGES && !dev_a->gem.freed && clears == 2 &&
+              clears_yielding == 0 && give_ways == 0 &&
+              frames_live == frames - 2 * (int)SET_PAGES && !mutex_held(&dev_a->gem.lock),
+          "free: the shrinker, in a wait's drop of the lock, frees the list and its own, counted");
     i915_gem_lock_retake(dev_a, 1);
     i915_gem_unlock(dev_a, taken);
-    CHECK(!dev_a->gem.freed && clears_yielding == 1 && frees_yielding == 1 && give_ways == 1,
-          "free: the holder frees the list once it lets the lock go");
+    CHECK(clears == 2 && clears_yielding == 0 && frees_yielding == 0 && give_ways == 0,
+          "free: the holder finds the list empty once it lets the lock go");
     i915_gem_shrinker_unregister(dev_a);
+}
+
+/** The shrinker under its caller's own GEM lock, as an allocation of
+ * EXECBUFFER2's that reclaims, undoes `gem.freed` with no give-way and
+ * counts its frames, as Linux's shrinker reaches an object its free worker
+ * has not yet freed (gem/i915_gem_shrinker.c:186-192). */
+static void free_shrinker_holder(void)
+{
+    struct mem_shrinker *sk = &dev_a->gem.shrinker.base;
+    struct drm_i915_gem_object *queued;
+    int frames, taken;
+
+    i915_gem_shrinker_register(dev_a);
+    queued = held_bound();
+    frames = frames_live;
+    taken = i915_gem_lock(dev_a);
+    i915_gem_object_put(queued);
+    free_counts_zero();
+    CHECK(taken && sk->shrink(sk, 1, 1) == SET_PAGES && !dev_a->gem.freed && clears == 1 &&
+              clears_yielding == 0 && frees_yielding == 0 && give_ways == 0 &&
+              frames_live == frames - (int)SET_PAGES && mutex_held(&dev_a->gem.lock),
+          "free: the shrinker under its caller's lock frees the list with no give-way, counted");
+    i915_gem_unlock(dev_a, taken);
+    CHECK(clears == 1 && give_ways == 0, "free: the holder finds the list empty as it lets go");
+    i915_gem_shrinker_unregister(dev_a);
+}
+
+/** A free undoes every binding of its object whatever fence another device
+ * left on the reservation, as Linux's force_unbind
+ * (i915_vma.c:1760-1768): no binding stays in the GTT to a freed object. */
+static void free_busy_shared(void)
+{
+    struct drm_i915_gem_object *obj = held_bound();
+    struct dma_fence *f = busy_fence(obj);
+    struct i915_vma *v;
+    int frames = frames_live, bound = 0;
+
+    for (v = dev_a->gem.bound; v; v = v->ggtt_next) {
+        bound++;
+    }
+    free_counts_zero();
+    i915_gem_object_put(obj);
+    for (v = dev_a->gem.bound; v; v = v->ggtt_next) {
+        bound--;
+    }
+    CHECK(bound == 1 && clears == 1 && frames_live == frames - (int)SET_PAGES && !dev_a->gem.freed,
+          "free: the binding goes with its object though another device's fence is unsignalled");
+    dma_fence_signal(f);
+    dma_fence_put(f);
 }
 
 /** Run every row: 0 when each passed. */
@@ -926,6 +977,8 @@ int main(void)
     free_on_close();
     free_under_lock();
     free_under_shrinker();
+    free_shrinker_holder();
+    free_busy_shared();
     CHECK(!dev_a->drm.objects && !dev_a->gem.bound && !frames_live && !pins_live && !user_pins,
           "the end: no object, binding, page or pin left");
     CHECK(allocations == before, "the end: every record freed");

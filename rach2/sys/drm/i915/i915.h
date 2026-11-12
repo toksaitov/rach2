@@ -817,9 +817,9 @@ struct i915_gem {
     struct spinlock userptr_lock;
     /* The objects whose last put came under a holder's GEM lock, by
      * `free_next`, which the holder that took the lock frees as it lets it
-     * go (`i915_gem_unlock`), as Linux's free list and worker; and whether
-     * the holder may not give way, the shrinker, whose frees run at once.
-     * Both are the GEM lock's. */
+     * go (`i915_gem_unlock`), or the shrinker sooner, as Linux's free list
+     * and worker; and whether the holder may not give way, the shrinker,
+     * whose frees run at once. Both are the GEM lock's. */
     struct drm_i915_gem_object *freed;
     uint8_t no_yield;
     struct i915_vma *bound;
@@ -2649,8 +2649,17 @@ int i915_gem_lock(struct drm_i915_private *i915);
 void i915_gem_unlock(struct drm_i915_private *i915, int taken);
 /** Give back the GEM lock as `i915_gem_unlock` does but leave `gem.freed`
  * to the lock's next taker, for a holder that may not give way: an MMU
- * notifier's callback and the shrinker, which only tried the lock. */
+ * notifier's callback and the shrinker, which only tried the lock and
+ * has undone the list itself. */
 void i915_gem_unlock_atomic(struct drm_i915_private *i915, int taken);
+/**
+ * Undo every object on `gem.freed` with the GEM lock held and no give-way,
+ * for the shrinker, which may not give way and must count the frames now:
+ * the number of pages of their own that went. Linux's shrinker reaches the
+ * pages of an object that its free worker has not yet freed, since the
+ * object stays on its lists until then (gem/i915_gem_shrinker.c:186-192).
+ */
+uint32_t i915_gem_free_deferred_atomic(struct drm_i915_private *i915);
 /** Revoke the bindings and frames of each userptr object whose
  * invalidation found the GEM lock held, with the lock held. */
 void i915_gem_userptr_flush(struct drm_i915_private *i915);
