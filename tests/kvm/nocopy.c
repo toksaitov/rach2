@@ -20,6 +20,11 @@
  * back, and the touch that follows raises SIGBUS, as Linux's revoked
  * mappings do, which it reports as `NOCOPY SIGBUS` before it exits.
  *
+ * Each mode runs on the first integrated GPU of Intel's that Venus offers,
+ * else on its first device, and prints it as `NOCOPY DEVICE: NAME, vendor
+ * 0xVENDOR, TYPE, memory type N`; with NOCOPY_INTEL set and not empty it
+ * fails when Venus offers no integrated GPU of Intel's.
+ *
  * Each mode ends with `NOCOPY OK` or `NOCOPY FAIL: reason`; the figures are
  * `NOCOPY NAME: ...` lines. The Vulkan types it needs are written out here
  * from vulkan_core.h, so that it builds with the C library alone on
@@ -67,23 +72,25 @@ typedef void (*PFN_vkVoidFunction)(void);
 #define VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO    42
 #define VK_STRUCTURE_TYPE_MEMORY_BARRIER               46
 
-#define VK_API_VERSION_1_1                   ((1u << 22) | (1u << 12))
-#define VK_QUEUE_GRAPHICS_BIT                1u
-#define VK_QUEUE_COMPUTE_BIT                 2u
-#define VK_QUEUE_TRANSFER_BIT                4u
-#define VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT  2u
-#define VK_MEMORY_PROPERTY_HOST_COHERENT_BIT 4u
-#define VK_BUFFER_USAGE_TRANSFER_SRC_BIT     1u
-#define VK_BUFFER_USAGE_TRANSFER_DST_BIT     2u
-#define VK_PIPELINE_STAGE_TRANSFER_BIT       0x1000u
-#define VK_PIPELINE_STAGE_HOST_BIT           0x4000u
-#define VK_ACCESS_TRANSFER_READ_BIT          0x800u
-#define VK_ACCESS_TRANSFER_WRITE_BIT         0x1000u
-#define VK_ACCESS_HOST_READ_BIT              0x2000u
-#define VK_ACCESS_HOST_WRITE_BIT             0x4000u
-#define VK_COMMAND_BUFFER_LEVEL_PRIMARY      0
-#define VK_COMMAND_POOL_RESET_BUFFER_BIT     2u
-#define VK_COMMAND_BUFFER_ONE_TIME_BIT       1u
+#define VK_API_VERSION_1_1                     ((1u << 22) | (1u << 12))
+#define VK_QUEUE_GRAPHICS_BIT                  1u
+#define VK_QUEUE_COMPUTE_BIT                   2u
+#define VK_QUEUE_TRANSFER_BIT                  4u
+#define VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT    2u
+#define VK_MEMORY_PROPERTY_HOST_COHERENT_BIT   4u
+#define VK_BUFFER_USAGE_TRANSFER_SRC_BIT       1u
+#define VK_BUFFER_USAGE_TRANSFER_DST_BIT       2u
+#define VK_PIPELINE_STAGE_TRANSFER_BIT         0x1000u
+#define VK_PIPELINE_STAGE_HOST_BIT             0x4000u
+#define VK_ACCESS_TRANSFER_READ_BIT            0x800u
+#define VK_ACCESS_TRANSFER_WRITE_BIT           0x1000u
+#define VK_ACCESS_HOST_READ_BIT                0x2000u
+#define VK_ACCESS_HOST_WRITE_BIT               0x4000u
+#define VK_COMMAND_BUFFER_LEVEL_PRIMARY        0
+#define VK_COMMAND_POOL_RESET_BUFFER_BIT       2u
+#define VK_COMMAND_BUFFER_ONE_TIME_BIT         1u
+#define VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU 1u
+#define VK_VENDOR_ID_INTEL                     0x8086u
 
 struct vk_app {
     int32_t sType;
@@ -383,8 +390,16 @@ static void open_instance(void)
     LOAD(QueueSubmit, "vkQueueSubmit");
 }
 
-/** Take the first device, a queue that copies, the first host-visible
- * and coherent memory type, a command buffer and a fence. */
+/**
+ * Take a device, a queue that copies, the first host-visible and coherent
+ * memory type, a command buffer and a fence.
+ *
+ * The device is the first integrated GPU of Intel's, else the first
+ * device. With NOCOPY_INTEL set and not empty, a run with no integrated GPU
+ * of Intel's fails: Venus passes the VM's device's vendor and type through,
+ * so that a VM that fell back to lavapipe shows as a CPU of Mesa's vendor
+ * (0x10005) and is refused.
+ */
 static void open_device(void)
 {
     static const float priority = 1.0f;
@@ -397,15 +412,38 @@ static void open_device(void)
     struct vk_command_info ci = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, 0, 0,
                                  VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
     struct vk_fence_info fi = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, 0, 0};
-    uint64_t props[1024]; /* VkPhysicalDeviceProperties, 824 bytes */
-    uint32_t n = 1, i,
+    /* VkPhysicalDeviceProperties, 824 bytes: vendorID at 8, deviceType at
+     * 16, deviceName at 20. */
+    uint64_t props[1024];
+    static const char *const kinds[] = {"other", "integrated GPU", "discrete GPU", "virtual GPU",
+                                        "CPU"};
+    VkPhysicalDevice gpus[16];
+    const char *intel = getenv("NOCOPY_INTEL");
+    uint32_t n = 16, i, vendor = 0, kind = 0,
              want = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
     VkResult r;
 
-    if ((r = vk.EnumeratePhysicalDevices(g.instance, &n, &g.gpu)) < 0 || n == 0) {
+    if ((r = vk.EnumeratePhysicalDevices(g.instance, &n, gpus)) < 0 || n == 0) {
         die("no Vulkan device", r);
     }
-    vk.GetPhysicalDeviceProperties(g.gpu, props);
+    for (i = 0; i < n; i++) {
+        vk.GetPhysicalDeviceProperties(gpus[i], props);
+        memcpy(&vendor, (const char *)props + 8, 4);
+        memcpy(&kind, (const char *)props + 16, 4);
+        if (vendor == VK_VENDOR_ID_INTEL && kind == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
+            break;
+        }
+    }
+    if (i == n) {
+        if (intel && *intel) {
+            die("no integrated GPU of Intel's among the Vulkan devices", (long)n);
+        }
+        i = 0;
+        vk.GetPhysicalDeviceProperties(gpus[0], props);
+        memcpy(&vendor, (const char *)props + 8, 4);
+        memcpy(&kind, (const char *)props + 16, 4);
+    }
+    g.gpu = gpus[i];
     memcpy(g.name, (const char *)props + 20, sizeof(g.name) - 1);
     n = 16;
     vk.GetPhysicalDeviceQueueFamilyProperties(g.gpu, &n, fam);
@@ -449,7 +487,9 @@ static void open_device(void)
     if ((r = vk.CreateFence(g.dev, &fi, 0, &g.fence)) != VK_SUCCESS) {
         die("vkCreateFence", r);
     }
-    printf("NOCOPY DEVICE: %s, memory type %u\n", g.name, (unsigned)g.type);
+    printf("NOCOPY DEVICE: %s, vendor 0x%04x, %s, memory type %u\n", g.name, (unsigned)vendor,
+           kind < sizeof(kinds) / sizeof(kinds[0]) ? kinds[kind] : "type unknown",
+           (unsigned)g.type);
 }
 
 /** Make a buffer of `bytes` in the host-visible memory type and map it. */
