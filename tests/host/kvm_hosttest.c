@@ -170,10 +170,20 @@ void *k_memcpy(void *dst, const void *src, size_t n)
     return dst;
 }
 
+/* A word no `k_memset` may cover, and how many have since it was set: an
+ * INIT's reset leaves the APIC base unwritten, which another processor's
+ * delivery reads without a lock. */
+static const volatile void *memset_watch;
+static int memset_watch_hits;
+
 void *k_memset(void *dst, int c, size_t n)
 {
     uint8_t *d = dst;
 
+    if (memset_watch && (const volatile uint8_t *)memset_watch >= d &&
+        (const volatile uint8_t *)memset_watch < d + n) {
+        memset_watch_hits++;
+    }
     while (n--) {
         *d++ = (uint8_t)c;
     }
@@ -2546,6 +2556,25 @@ static void init_pv_rows(int fd0)
           "notwithstanding");
 }
 
+/** A guest's INIT on vCPU `fd0` leaves its APIC base as it is and never
+ * clears it on the way, as Linux's kvm_lapic_reset sets the base only at a
+ * reset (arch/x86/kvm/lapic.c:2814-2826): another vCPU's delivery reads it
+ * without a lock, and a SIPI sent while the INIT is taken would otherwise
+ * find the APIC off and be dropped. */
+static void init_apic_base_row(int fd0)
+{
+    struct kvm_vcpu *v0 = entries[fd0].priv;
+    uint64_t base = v0->sregs.apic_base;
+
+    memset_watch = &v0->sregs.apic_base;
+    memset_watch_hits = 0;
+    kvm_vcpu_init_reset(v0);
+    memset_watch = NULL;
+    CHECK(base & 0x800u, "the vCPU's APIC is enabled before its INIT");
+    CHECK(memset_watch_hits == 0 && v0->sregs.apic_base == base,
+          "a guest's INIT leaves the APIC base unwritten, so a SIPI during it is kept");
+}
+
 /** The vCPU attribute KVM_VCPU_TSC_OFFSET of vCPUs `fd0` and `fd1` of the
  * VM `vm`, as system_counter_offset_test drives it and Linux's
  * kvm_arch_tsc_set_attr matches it: the guest's TSC is the host's plus the
@@ -2671,6 +2700,7 @@ static void pv_rows(void)
     steal_rows(fd0);
     steal_move_rows(fd0);
     init_pv_rows(fd0);
+    init_apic_base_row(fd0);
     fdclose(fd1);
     fdclose(fd0);
     fdclose(vm);
