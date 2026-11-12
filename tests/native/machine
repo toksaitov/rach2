@@ -35,6 +35,7 @@ musl/clockloadmusl the emulator stopped by the host and the clocks compared with
 musl/creddisk three boots of one disk image after _exit
 musl/ip6optmusl fixed UDP ports, and a group joined and sent to on the card, eth0, of a machine of its own
 musl/keygennoent a processor without RDSEED and RDRAND, by QEMU's -cpu qemu64
+musl/kvmipimusl a load run by hand, many thousands of wakes of a halted vCPU, which ends at a stall the clock measures
 musl/punchmusl an empty disk the host formats before the boot and judges after it
 musl/pagecachemusl an empty disk the host formats before the boot, a machine of 1.5 GiB whose disk reads no other process moves, and a volume unmounted and written through a loop device
 musl/saltnoent a processor without RDSEED and RDRAND, by QEMU's -cpu qemu64
