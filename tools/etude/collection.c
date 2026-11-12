@@ -1452,6 +1452,10 @@ static int hold_collection(struct collection *c, int argc, char **argv, int prod
     char *query[] = {c->program, "-q", c->tree, NULL};
     if (etude_lock_tree_main(3, query) == 0)
         return -1;
+    /* The held run makes a workspace of its own; this one would outlive a
+     * stop of this process, which waits for hours. */
+    legacy_remove_tree(c->work);
+    c->work[0] = 0;
     size_t offset = production ? 6 : 5;
     char **command = calloc((size_t)argc + 7, sizeof(*command));
     if (!command)
