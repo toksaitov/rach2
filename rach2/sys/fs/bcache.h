@@ -26,15 +26,20 @@
  * A held buffer is busy: a second process that asks for it sleeps on the
  * buffer's queue and is woken at release, as Linux's `lock_buffer` sleeps.
  *
- * Locks: a get that finds its block cached, or a clean buffer to fill, a
- * release, and the questions `bcache_cached`, `bcache_state`,
- * `bcache_copy_cached`, `bcache_busy` and `bcache_wait_unheld` need no big
- * lock, and take the cache's own spinlock for their bookkeeping. A dirty
- * mark, a write, a sync, a reserve, a shrink, an invalidation and the
- * removal of a device run under the big lock, which keeps the order the
- * dirty marks give, and a get without it takes the big lock to write a
- * dirty victim and for the device's read of a miss. A holder without the
- * big lock only reads.
+ * Locks: no call needs the big lock. A get that finds its block cached, or
+ * a clean buffer to fill, a release, an invalidation and the questions
+ * `bcache_cached`, `bcache_state`, `bcache_copy_cached`, `bcache_busy` and
+ * `bcache_wait_unheld` take the cache's spinlock for their bookkeeping. A
+ * dirty mark, a write, a sync, a reserve, the writes of a shrink, the
+ * removal of a device, the release of a dirty buffer that a removal or an
+ * invalidation marked to drop, and a get that searches the cache for a
+ * victim, which it may write, take the cache's write lock too, a mutex,
+ * which keeps the order the dirty marks give and which each gives up around
+ * its requests and waits; a caller may hold buffers and its own sleeping
+ * locks when it calls them. A get with interrupts off takes no mutex: it
+ * fills a miss only from an empty or a clean buffer. A failed write is
+ * recorded against the device's mounts under the big lock, which the cache
+ * takes for it when the caller runs without it.
  * Deadlock is kept out by two checked rules: a process holds at most
  * `BCACHE_HOLD_MAX` buffers, and while it holds any it may take only a higher
  * block on the same device. A release or a dirty mark by a process that does
@@ -237,8 +242,9 @@ int bcache_sync(block_device_t *dev);
  * failed writes none of them: not alone, not in a run, and not ahead of an
  * `after`, which stays dirty with it. On a write-through disk the flush
  * comes between. A sync still retries them. The callbacks run under the
- * walks of the dirty buffers and must not sleep; the caller clears them
- * before `arg` goes.
+ * walks of the dirty buffers, under the cache's write lock, and at a
+ * release under its spinlock, and must not sleep; the caller clears them
+ * before `arg` goes, which waits for a walk that runs them.
  */
 void bcache_sync_last(block_device_t *dev, int (*last)(void *arg, uint64_t blk),
                       int (*names)(void *arg, uint64_t blk, uint64_t owner), void *arg);
@@ -363,9 +369,9 @@ int bcache_device_holds(block_device_t *dev);
 /**
  * Give back up to `want` buffers, each a frame: empty ones, then clean
  * ones oldest first, then, with `can_write`, dirty ones written back where
- * the caller may write them, which sleeps. A buffer a process holds or
- * waits for is left alone. Returns how many went; `*written` is increased
- * by the writebacks.
+ * the caller may write them, which sleeps and takes the write lock. A
+ * buffer a process holds or waits for is left alone. Returns how many
+ * went; `*written` is increased by the writebacks.
  */
 uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written);
 
