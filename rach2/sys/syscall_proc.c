@@ -4681,8 +4681,8 @@ int signal_change_blocked_unlocked(int how, uint64_t set)
     int done;
 
     mask &= ~(uint64_t)KSIG_UNCATCHABLE;
-    done = !self->sig_woken && (self->tg->pending & mask & ~old) == 0;
-    if (done) {
+    done = mask == old || (!self->sig_woken && (self->tg->pending & mask & ~old) == 0);
+    if (done && mask != old) {
         self->sig_blocked = mask;
         if ((self->sig_pending | self->tg->pending) & ~mask) {
             self->sig_woken = 1;
@@ -5705,7 +5705,7 @@ long sys_rt_sigaction(isr_params_t *params)
  * -EINVAL for another sigsetsize or an unknown `how`, -EFAULT.
  *
  * The call runs without the big lock (`syscall_unlock`), as Linux's takes
- * only sighand->siglock (kernel/signal.c:3205-3215, 3304-3330): the mask is
+ * only sighand->siglock (kernel/signal.c:3097-3136, 3229-3255): the mask is
  * read and changed under the signal state's lock
  * (`signal_change_blocked_unlocked`), and the big lock is taken only for the
  * change that lock alone cannot make. Only the thread itself and
