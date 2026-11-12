@@ -33,8 +33,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <time.h>
 #include <unistd.h>
+
+/* getrusage's calling thread alone, Linux's, which POSIX does not name. */
+#ifndef RUSAGE_THREAD
+#define RUSAGE_THREAD 1
+#endif
 
 typedef int32_t VkResult;
 typedef uint32_t VkFlags;
@@ -578,10 +584,14 @@ static int rounds(uint32_t n, uint64_t bytes)
 }
 
 /** `n` buffers made, mapped, touched and freed one after another: the
- * mean, first and largest time to make, map and touch, and to free. */
+ * mean, first and largest time to make, map and touch, and to free, and
+ * the most page faults one buffer's touch took, which a mapping that maps
+ * every page at its first fault keeps at one. */
 static void serial(uint32_t n, uint64_t bytes)
 {
     double make = 0, first = 0, most = 0, freed = 0, t0, t1, t2;
+    struct rusage r0, r1;
+    long faults = 0;
     struct buf b;
     uint32_t k;
     uint64_t i;
@@ -589,10 +599,15 @@ static void serial(uint32_t n, uint64_t bytes)
     for (k = 0; k < n; k++) {
         t0 = now_us();
         buf_make(&b, bytes);
+        getrusage(RUSAGE_THREAD, &r0);
         for (i = 0; i < bytes / 4; i += 1024) {
             b.map[i] = (uint32_t)i;
         }
+        getrusage(RUSAGE_THREAD, &r1);
         t1 = now_us();
+        if (r1.ru_minflt + r1.ru_majflt - r0.ru_minflt - r0.ru_majflt > faults) {
+            faults = r1.ru_minflt + r1.ru_majflt - r0.ru_minflt - r0.ru_majflt;
+        }
         buf_free(&b);
         t2 = now_us();
         first = k == 0 ? t1 - t0 : first;
@@ -601,8 +616,8 @@ static void serial(uint32_t n, uint64_t bytes)
         freed += t2 - t1;
     }
     printf("NOCOPY SERIAL: %u of %llu bytes: make, map and touch mean %.0f us, first %.0f, "
-           "largest %.0f; unmap and free mean %.0f us\n",
-           (unsigned)n, (unsigned long long)bytes, make / n, first, most, freed / n);
+           "largest %.0f; unmap and free mean %.0f us; touch faults most %ld\n",
+           (unsigned)n, (unsigned long long)bytes, make / n, first, most, freed / n, faults);
 }
 
 /** `n` buffers held at once, each made, mapped and touched; then freed
