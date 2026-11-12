@@ -238,7 +238,7 @@ void timer_idle_work(void);
 /**
  * The pass of an interrupt `timer_wake_at` armed: make ready the timed
  * sleepers whose time of the monotonic clock has come before their tick
- * (`proc_wake_due`), and expire the timers whose clock has reached their
+ * (`proc_wake_sleepers`), and expire the timers whose clock has reached their
  * time (`timerfd_due`), each of which arms again every time still to come,
  * however far, and post the POSIX timers' signals when the big lock is
  * free, leaving them to a tick when it is not. kernel.c defines it; the
