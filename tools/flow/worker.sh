@@ -89,6 +89,8 @@ claim()
         log "claim lock failed"
         return 1
     fi
+    # A task handed to this loop under the lock since its last one ended.
+    [ -s "$state/issue" ] && return 0
     if ! listed=$(sh "$state/run/board.sh" next); then
         log "board unreachable"
         return 1
