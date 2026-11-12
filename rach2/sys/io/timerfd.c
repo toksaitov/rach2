@@ -197,6 +197,10 @@ static volatile int fire_due;
  * plus one, 0 for none: a stop or SIGCONT posted then discards other
  * signals (`ptimer_discard`) under the lock it already holds. */
 static unsigned int fire_cpu;
+/* The deleted timers whose records a discard under `fire_cpu` let go, on
+ * their `in_group`, for the holder of `timer_lock` to free once it lets the
+ * lock go (`timer_unlock`), under `timer_lock`. */
+static struct ktimer *gone_later;
 
 /** A number never given before and never 0, which a user's signal carries:
  * a new POSIX timer setting's generation, one for every setting of every
@@ -259,6 +263,7 @@ static uint64_t ticks_of(uint32_t sec, uint32_t sub)
 
 static int ptimer_fire(struct ktimer *t, uint64_t fresh);
 static void ptimer_free(struct ktimer **link, int keep);
+static void timer_unlock(uint32_t irq);
 /** `n` divided by `d`, which is not 0, with the remainder in `*rem` when it
  * is not NULL; the freestanding kernel has no `__udivdi3`. */
 static uint64_t div64(uint64_t n, uint64_t d, uint64_t *rem)
@@ -524,7 +529,7 @@ void ptimer_post_due(void)
     }
     fire_due = 0;
     timer_wake_release();
-    spin_unlock_irqrestore(&timer_lock, irq);
+    timer_unlock(irq);
 }
 
 /**
@@ -1111,7 +1116,7 @@ static void current_setting(struct ktimer *t, struct setting *s)
         s->isec = (int64_t)div64(t->ins, NS_PER_SEC, &ns);
         s->insec = (int32_t)ns;
     }
-    spin_unlock_irqrestore(&timer_lock, irq);
+    timer_unlock(irq);
 }
 
 /** `sec` seconds and `nsec` nanoseconds, neither negative, as nanoseconds,
@@ -1256,7 +1261,7 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
     } else if (on) {
         rc = list_clock(t, base, flags, s, &r);
     }
-    spin_unlock_irqrestore(&timer_lock, irq);
+    timer_unlock(irq);
     return rc;
 }
 
@@ -1597,6 +1602,39 @@ static void gone_free(struct ktimer *done)
     }
 }
 
+/** Put the deleted timers `done`, linked on their `in_group`, on
+ * `gone_later`, to be freed when `timer_lock`, which the caller holds, is
+ * let go (`timer_unlock`). */
+static void gone_defer(struct ktimer *done)
+{
+    struct ktimer *t;
+
+    while (done) {
+        t = done;
+        done = t->in_group;
+        t->in_group = gone_later;
+        gone_later = t;
+    }
+}
+
+/**
+ * Let `timer_lock` go, with the interrupt flag `irq` its taking returned,
+ * and free the deleted timers' records on `gone_later`: those a discard
+ * let go while a signal was posted under the lock (`ptimer_discard`), as
+ * Linux's flush_sigqueue_mask frees a deleted timer's sigqueue as it takes
+ * it off the queue (kernel/signal.c:444-452, 794-795), and not at some
+ * later dequeue that may never come. Every operation that can post a
+ * timer's signal under the lock lets it go here.
+ */
+static void timer_unlock(uint32_t irq)
+{
+    struct ktimer *done = gone_later;
+
+    gone_later = NULL;
+    spin_unlock_irqrestore(&timer_lock, irq);
+    gone_free(done);
+}
+
 /**
  * The signal `signo` of the process `tg`, whose siginfo is `info`, has
  * been taken off its pending signals, with interrupts off since then, so
@@ -1626,7 +1664,7 @@ static void gone_free(struct ktimer *done)
 void ptimer_rearm(struct tgroup *tg, int signo, struct k_siginfo *info)
 {
     uint32_t irq;
-    struct ktimer *t, *done;
+    struct ktimer *t;
     struct reading r;
 
     if (!tg->timers && !tg->timers_gone) {
@@ -1660,10 +1698,9 @@ void ptimer_rearm(struct tgroup *tg, int signo, struct k_siginfo *info)
         break;
     }
     post_waiting(tg, signo);
-    done = gone_reap(tg);
+    gone_defer(gone_reap(tg));
     timer_wake_release();
-    spin_unlock_irqrestore(&timer_lock, irq);
-    gone_free(done);
+    timer_unlock(irq);
 }
 
 /**
@@ -1673,16 +1710,16 @@ void ptimer_rearm(struct tgroup *tg, int signo, struct k_siginfo *info)
  * signals that waits goes too, and with it a deleted timer's record, and a
  * live timer's expirations since its signal was queued (`set_count`), as
  * Linux's flush_sigqueue_mask takes every sigqueue of those numbers off the
- * queues (kernel/signal.c:782-798, 915-931, 4249-4255). With interrupts
- * off; `timer_lock` is taken here unless this processor holds it to post a
- * signal (`fire_cpu`), whose job control discards the others, when the
- * records are left on `timers_gone` with nothing waiting, to be freed by
- * the next dequeue of the process's signals (`ptimer_rearm`).
+ * queues and frees a deleted timer's (kernel/signal.c:444-452, 782-798,
+ * 915-931, 4249-4255). With interrupts off; `timer_lock` is taken here
+ * unless this processor holds it to post a signal (`fire_cpu`), whose job
+ * control discards the others, when the records are freed as the poster
+ * lets the lock go (`gone_defer`, `timer_unlock`).
  */
 void ptimer_discard(struct tgroup *tg, uint64_t bits)
 {
     int held = fire_cpu == arch_cpu_id() + 1u;
-    struct ktimer *t, *done = NULL;
+    struct ktimer *t;
     uint32_t irq = 0;
 
     if (!tg->timers && !tg->timers_gone) {
@@ -1702,10 +1739,9 @@ void ptimer_discard(struct tgroup *tg, uint64_t bits)
             t->count = 0;
         }
     }
+    gone_defer(gone_reap(tg));
     if (!held) {
-        done = gone_reap(tg);
-        spin_unlock_irqrestore(&timer_lock, irq);
-        gone_free(done);
+        timer_unlock(irq);
     }
 }
 
@@ -1930,7 +1966,7 @@ static void ptimer_free(struct ktimer **link, int keep)
         t->in_group = t->tg->timers_gone;
         t->tg->timers_gone = t;
     }
-    spin_unlock_irqrestore(&timer_lock, irq);
+    timer_unlock(irq);
     tgroup_put(cpu_tg);
     if (!keep) {
         kfree(t);
