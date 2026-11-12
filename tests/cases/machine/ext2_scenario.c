@@ -928,14 +928,14 @@ static void lost(struct lc *l)
 }
 
 /**
- * Say whether `text` has the kernel's record that its check found an inode
- * that the tree reaches and the bitmap calls free, `ext2: check: inode N: a
- * reached inode the bitmap calls free`.
+ * Say whether `text` has the kernel's record that its check found a link
+ * count the names do not match, `ext2: check: inode N: a link count that
+ * does not match its names`.
  */
-static int free_reached(const char *text)
+static int miscounted(const char *text)
 {
-    static const char head[] = "ext2: check: inode ", tail[] = ": a reached inode the bitmap "
-                                                               "calls free";
+    static const char head[] = "ext2: check: inode ", tail[] = ": a link count that does not "
+                                                               "match its names";
     const char *p = text, *q;
 
     while ((p = strstr(p, head)) != NULL) {
@@ -949,12 +949,15 @@ static int free_reached(const char *text)
 }
 
 /**
- * The fault of case `repair`: with an inode in use marked free, the root
- * names the fault and mounts writable with Linux's warning for a volume
- * with errors, and the poweroff leaves the error bit set. The boot writes
- * no file, so that no new file takes the inode the bitmap calls free before
- * the repair. Assertions `fault-writable`, `fault-record`, `fault-reason`
- * and `fault-error-bit`.
+ * The fault of case `repair`: with the link count of /etc/hostname above
+ * its names, the root names the fault and mounts writable with Linux's
+ * warning for a volume with errors, and the poweroff leaves the error bit
+ * set. The boot's init writes, as any boot's does, so the fault is one
+ * that no new file or block can take: a free bit on an inode or block in
+ * use would let a file the boot makes overwrite it, on Linux as here. Its
+ * bytes before the damage are kept as evidence `hostname.before` for
+ * `repair-kept`. Assertions `fault-writable`, `fault-record`,
+ * `fault-reason` and `fault-error-bit`.
  */
 static void fault(struct lc *l)
 {
@@ -962,18 +965,45 @@ static void fault(struct lc *l)
     struct boot b;
 
     if (!lc_step(l, "damage") || !volume(l, "root-disk", PART1, vol, sizeof(vol)) ||
-        !debugfs(l, 1, "freei /etc/hostname", vol, "freei") || !lc_step(l, "fault") ||
+        !debugfs(l, 0, "cat /etc/hostname", vol, "hostname.before") ||
+        !debugfs(l, 1, "sif /etc/hostname links_count 3", vol, "sif") || !lc_step(l, "fault") ||
         !start(l, "root", 5, &b))
         return;
     expect(l, &b, "cat /proc/mounts; echo MOUNTS\"\"END\r", "MOUNTSEND", "fault-writable", rw_line);
     free(poweroff(l, &b));
     if ((w = window(l, b.console, 0, b.at)) == NULL)
         return;
-    lc_assert(l, "fault-record", free_reached(w),
-              "the kernel did not name the inode the bitmap calls free");
+    lc_assert(l, "fault-record", miscounted(w),
+              "the kernel did not name the link count that does not match its names");
     seen(l, w, "fault-reason", "ext2: mounting with errors, running e2fsck is recommended");
     free(w);
     state(l, "fault-error-bit", 2);
+}
+
+/**
+ * Report assertion `repair-kept`: debugfs reads /etc/hostname on the
+ * repaired copy, as evidence `hostname.after`, byte for byte as it read it
+ * before the damage, `hostname.before`, so that neither the writable boot
+ * with the fault nor the repair lost the damaged file.
+ */
+static void kept(struct lc *l)
+{
+    char vol[1100], path[1100];
+    char *before = NULL, *after = NULL;
+
+    if (!volume(l, "root-disk", PART1, vol, sizeof(vol)) ||
+        !debugfs(l, 0, "cat /etc/hostname", vol, "hostname.after"))
+        return;
+    if (evidence(l, "hostname.before", path, sizeof(path)))
+        before = slurp(path, NULL);
+    if (evidence(l, "hostname.after", path, sizeof(path)))
+        after = slurp(path, NULL);
+    lc_assert(l, "repair-kept",
+              before != NULL && after != NULL && strstr(before, "not found") == NULL &&
+                  strcmp(before, after) == 0,
+              "debugfs does not read /etc/hostname after the repair as it did before the damage");
+    free(before);
+    free(after);
 }
 
 /**
@@ -982,7 +1012,8 @@ static void fault(struct lc *l)
  * ext2 partition of both disks, the second a copy of the first, and the
  * partition node takes a sector's write. Assertions `look-same`,
  * `look-no-e2fsck`, `repair-root`, `repair-second`, `repair-copy`,
- * `node-writes`, `repair-e2fsck`, `repair-valid` and `repair-changed`.
+ * `node-writes`, `repair-e2fsck`, `repair-valid`, `repair-changed` and
+ * `repair-kept`.
  */
 static void recover(struct lc *l)
 {
@@ -1019,6 +1050,7 @@ static void recover(struct lc *l)
     state(l, "repair-valid", 1);
     if (digest(l, &after))
         lc_assert(l, "repair-changed", after != before, "the repair changed nothing on the disk");
+    kept(l);
 }
 
 /**
@@ -1050,17 +1082,21 @@ int etude_scenario(struct etude_case *c)
     static const char *const busy_ids[] = {"writing", "unmounted", NULL};
     static const char *const stress_ids[] = {"said-ok", "unmounted", "stress-e2fsck", NULL};
     static const char *const repair_ids[] = {
-        "first-mounted",   "first-write",     "node-refused",    "root-before-usb",
-        "first-unchecked", "loop-ext2",       "loop-ext2-read",  "loop-vfat",
-        "loop-done",       "made-e2fsck",     "made-features",   "made-block-size",
-        "made-label",      "made-fat-file",   "killed-dirty",    "dirty-kept",
-        "dirty-mounted",   "dirty-unmounted", "dirty-checked",   "dirty-valid",
-        "dirty-e2fsck",    "lost-mounted",    "lost-write",      "lost-record",
-        "lost-error-bit",  "lost-e2fsck",     "lost-bitmap",     "fault-writable",
-        "fault-record",    "fault-reason",    "fault-error-bit", "look-same",
-        "look-no-e2fsck",  "repair-root",     "repair-second",   "repair-copy",
-        "node-writes",     "repair-e2fsck",   "repair-valid",    "repair-changed",
-        "clean-mounted",   "clean-kept",      "clean-unchecked", NULL};
+        "first-mounted",   "first-write",     "node-refused",
+        "root-before-usb", "first-unchecked", "loop-ext2",
+        "loop-ext2-read",  "loop-vfat",       "loop-done",
+        "made-e2fsck",     "made-features",   "made-block-size",
+        "made-label",      "made-fat-file",   "killed-dirty",
+        "dirty-kept",      "dirty-mounted",   "dirty-unmounted",
+        "dirty-checked",   "dirty-valid",     "dirty-e2fsck",
+        "lost-mounted",    "lost-write",      "lost-record",
+        "lost-error-bit",  "lost-e2fsck",     "lost-bitmap",
+        "fault-writable",  "fault-record",    "fault-reason",
+        "fault-error-bit", "look-same",       "look-no-e2fsck",
+        "repair-root",     "repair-second",   "repair-copy",
+        "node-writes",     "repair-e2fsck",   "repair-valid",
+        "repair-changed",  "repair-kept",     "clean-mounted",
+        "clean-kept",      "clean-unchecked", NULL};
     const char *name = case_name(c);
     struct lc l;
     size_t i;
