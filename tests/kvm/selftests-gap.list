@@ -25,7 +25,7 @@ kvm_create_max_vcpus pass pass
 kvm_page_table_test,-b,128M pass pass
 max_guest_memory_test,-m,4 pass pass
 memslot_modification_stress_test,-b,64M pass pass
-memslot_perf_test fail fail both: the RW case outlasts the alarm(10) of host_perform_sync (memslot_perf_test.c:418-426) at this depth; #4673: Rach2 runs the map case with 255 slots, where Linux, with 32764, declines it
+memslot_perf_test fail fail both: the RW case outlasts the alarm(10) of host_perform_sync (memslot_perf_test.c:418-426) at this depth
 pre_fault_memory_test pass pass
 rseq_test pass pass
 set_memory_region_test pass pass

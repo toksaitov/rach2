@@ -278,7 +278,7 @@ at the guest-physical address
 .Va guest_phys_addr ,
 all three page-aligned, numbered
 .Va slot ,
-below 256, in address space 0.
+below 32764, in address space 0.
 A size of 0 deletes the slot.
 A slot may move to another guest address or change its
 .Dv KVM_MEM_LOG_DIRTY_PAGES
@@ -1238,7 +1238,8 @@ Linux's KVM API, version 12, for x86, as its
 .Pa Documentation/virt/kvm/api.rst
 gives it.
 .Sh BUGS
-At most 1024 vCPUs in a VM, with ids below 4096, and 256 memory slots.
+At most 1024 vCPUs in a VM, with ids below 4096, and 32764 memory slots,
+Linux's bounds.
 No dirty ring, no SMM and no nested virtualization, so
 no enlightened VMCS and no direct TLB flush of Hyper-V's.
 Most statistics of
