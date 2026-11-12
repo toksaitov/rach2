@@ -10,11 +10,13 @@
  * model pages; the resolver starts a peer operation before returning a
  * missing or copy-on-write page. A peer that would take the pipe's lock while
  * the caller holds it waits, and runs when the caller gives the lock back, as
- * a thread that waits for Linux's `pipe->mutex`; a close takes no lock and
- * runs at once. Waits, signals and wakeups are recorded substitutes; a wakeup
- * keeps the kinds of change it names, so a read must wake the writers for
- * room alone, a write the readers for data alone, whether the ring had data
- * before it or not, and a close the other end for a hangup.
+ * a thread that waits for Linux's `pipe->mutex`; a close takes it too, as
+ * Linux's `pipe_release`. Waits, signals and wakeups are recorded
+ * substitutes; a wakeup keeps the kinds of change it names, so a read must
+ * wake the writers for room alone, a write the readers for data alone,
+ * whether the ring had data before it or not, and a close the other end for
+ * a hangup. The calls run without the big lock, which SIGPIPE alone takes,
+ * after the pipe's lock is given back.
  */
 #include "ipc/pipe.c"
 #include "ipc/pipe_ring.c"
@@ -62,6 +64,8 @@ static int thread_now = 1;
 /* A peer that waits for the pipe's lock, and the waits for it so far. */
 static void (*lock_waiter)(void);
 static int lock_waits;
+/* The model's takes of the big lock, which the calls run without. */
+static int bkl_depth;
 static process_t writing_thread;
 struct percpu cpu_table[NR_CPUS] = {{.current = &writing_thread}};
 
@@ -118,17 +122,14 @@ void *k_memset(void *dst, int c, size_t n)
     return dst;
 }
 
-static void close_reader(void);
-
-/** Run `action` as a peer: at once when the pipe's lock is free or the
- * action takes none, as `close_reader`, since the kernel's `pipe_close`
- * takes no lock, and otherwise once its holder gives it back
- * (`sleep_lock_give`). */
+/** Run `action` as a peer: at once when the pipe's lock is free, and
+ * otherwise once its holder gives it back (`sleep_lock_give`). Every peer
+ * takes the lock, a close among them. */
 static void as_peer(void (*action)(void))
 {
     int was = thread_now;
 
-    if (action != close_reader && ring.lock.depth > 0 && ring.lock.holder != 2) {
+    if (ring.lock.depth > 0 && ring.lock.holder != 2) {
         CHECK(lock_waiter == NULL, "one peer waits for the lock");
         lock_waiter = action;
         lock_waits++;
@@ -324,12 +325,30 @@ void wait_queue_init(wait_queue_t *wq)
 }
 
 /** Count the SIGPIPE a writer whose last reader closed posts to the writing
- * thread. */
+ * thread, which it posts under the big lock, with no pipe's lock held. */
 void signal_post_thread(process_t *proc, int signo, const struct k_siginfo *info)
 {
     CHECK(proc == current_proc && signo == SIGPIPE && info->code == SI_USER,
           "writer posts sigpipe");
+    CHECK(bkl_depth == 1, "sigpipe is posted under the big lock");
+    CHECK(ring.lock.depth == 0 && out_ring.lock.depth == 0,
+          "sigpipe is posted with the pipes' locks given back");
     signals++;
+}
+
+/** Take the pipes' list lock: one thread, so nothing waits. */
+uint32_t spin_lock_irqsave(struct spinlock *lock)
+{
+    CHECK(!lock->locked, "a spinlock is free when taken");
+    lock->locked = 1;
+    return 0;
+}
+
+/** Give back the list lock. */
+void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
+{
+    (void)flags;
+    lock->locked = 0;
 }
 
 /** A failure: the test's pipe has its ring already. */
@@ -398,6 +417,7 @@ static void setup(uint32_t head)
     ring.size = PIPE_BUF_SIZE;
     ring.head = ring.tail = head;
     ring.read_open = ring.write_open = 1;
+    ring.files = 2;
     reader.priv = writer.priv = &ring;
     reader.flags = FD_FLAG_READ;
     writer.flags = FD_FLAG_WRITE;
@@ -417,6 +437,7 @@ static void setup(uint32_t head)
     thread_now = 1;
     lock_waiter = NULL;
     lock_waits = 0;
+    bkl_depth = 0;
 }
 
 /** Read `peer_count` bytes through `pipe_read` into PEER_PAGE, as a peer
@@ -574,10 +595,11 @@ static void fault_holds_pipe(void)
 /**
  * A transfer rechecks the ring after a resolve or a wait: a peer's read
  * that waited for a reader's resolve finds the ring drained, and a later
- * read gives 0 once the writer closed; a write after the reader closed
- * during its resolve, which a close does without the lock, gives -EPIPE and
- * SIGPIPE; a blocking read or write waits, and a read wakes the writers for
- * room alone and a write the readers for data alone.
+ * read gives 0 once the writer closed; a close of the reader during a
+ * write's resolve waits for the pipe's lock, as Linux's `pipe_release`
+ * does, so the write finishes and the next write gives -EPIPE and SIGPIPE;
+ * a blocking read or write waits, and a read wakes the writers for room
+ * alone and a write the readers for data alone.
  */
 static void state_changes(void)
 {
@@ -605,8 +627,12 @@ static void state_changes(void)
     setup(0);
     pages[0] = 0;
     resolve_action = close_reader;
-    CHECK(pipe_write(&writer, user_at(0), 2) == -EPIPE, "writer rechecks reader closure");
-    CHECK(signals == 1 && pipe_available(&ring) == 0, "closed reader gets no bytes");
+    CHECK(pipe_write(&writer, user_at(0), 2) == 2, "a close waits for a write's resolve");
+    CHECK(lock_waits == 1 && ring.read_open == 0 && ring.files == 1 && signals == 0 &&
+              pipe_available(&ring) == 2,
+          "the close runs once the write gives the lock back");
+    CHECK(pipe_write(&writer, user_at(0), 2) == -EPIPE && signals == 1,
+          "a write after the close is epipe with sigpipe");
 
     setup(0);
     read_ofd.status_flags = 0;
@@ -768,10 +794,10 @@ static void later_page(void)
     setup(0);
     pages[1] = 0;
     resolve_action = close_reader;
-    CHECK(pipe_write(&writer, user_at(PAGE_SIZE - 2), 6) == -EPIPE,
-          "a close during the group's resolve returns epipe");
-    CHECK(signals == 1 && pipe_available(&ring) == 0,
-          "a close during the group's resolve posts the signal and adds no byte");
+    CHECK(pipe_write(&writer, user_at(PAGE_SIZE - 2), 6) == 6,
+          "a close during a group's resolve waits for the group");
+    CHECK(lock_waits == 1 && ring.read_open == 0 && signals == 0 && pipe_available(&ring) == 6,
+          "the group is whole in the ring when the close runs");
 }
 
 /**
@@ -801,19 +827,24 @@ static void link_ends(void)
     }
 }
 
-/** 1: the test runs as the kernel, under the big lock. */
+/** Whether the model's thread holds the big lock. */
 int bkl_held(void)
 {
-    return 1;
+    return bkl_depth > 0;
 }
 
-/** Nothing: there is no big lock. */
+/** Take the big lock, which no call holds when it starts. */
 void bkl_enter(void)
-{}
+{
+    bkl_depth++;
+}
 
-/** Nothing: there is no big lock. */
+/** Give the big lock back. */
 void bkl_exit(void)
-{}
+{
+    CHECK(bkl_depth > 0, "the big lock is given back by its holder");
+    bkl_depth--;
+}
 
 /** Run every case; 0 when each passes, 1 otherwise. */
 int main(void)
