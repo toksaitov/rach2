@@ -1028,8 +1028,7 @@ int kvm_pmu_rdpmc(struct kvm_vcpu *v)
     uint32_t index = (uint32_t)v->regs.rcx, type = index & 0xFFFF0000u;
     uint64_t value;
 
-    if (!p->version || ((v->sregs.cr0 & 1u) && !(v->sregs.cr4 & 0x100u) &&
-                        ((v->regs.rflags & 0x20000u) || (v->sregs.cs.selector & 3u)))) {
+    if (!p->version || (!(v->sregs.cr4 & 0x100u) && kvm_emul_cpl(v) != 0)) {
         goto fault;
     }
     if (pmu_host.intel && type == (1u << 30)) {
@@ -1232,7 +1231,7 @@ void kvm_pmu_retired(struct kvm_vcpu *v)
 {
     struct kvm_pmu *p = &v->pmu;
     uint64_t select, event_mask = pmu_host.intel ? 0xFFu : AMD_EVENT;
-    uint64_t mode = ((v->regs.rflags & 0x20000u) || (v->sregs.cs.selector & 3u)) ? EV_USR : EV_OS;
+    uint64_t mode = kvm_emul_cpl(v) != 0 ? EV_USR : EV_OS;
     uint32_t i;
 
     for (i = 0; i < p->nr_gp; i++) {
