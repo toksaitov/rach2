@@ -60,8 +60,13 @@ struct block_request;
  * driver's private pointer.
  *
  * Every driver serializes on locks of its own, as Linux's drivers do on
- * theirs (libata's `ap->lock`, drivers/ata/libata-core.c:5567): its
- * functions are called without the big lock, and it completes its requests
+ * theirs (libata's `ap->lock`, drivers/ata/libata-core.c:5567). The block
+ * layer takes no big lock, and a driver's functions may be called with it
+ * or without it: a buffer-cache write holds it, a miss need not. The AHCI,
+ * NVMe and ATA drivers need none; USB storage takes it, only when it is
+ * free, to start a submitted request (usb/msc.c), and a loop device takes
+ * it for the file system its file is on, unless the caller holds it or the
+ * file system reads without it (loop.c). A driver completes its requests
  * from an interrupt or a pump that takes only its own locks, or the USB
  * stack's.
  */

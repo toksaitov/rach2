@@ -38,8 +38,9 @@
  * and only that request's answer or quarantine wakes it. A caller waiting
  * for room in the pool sleeps on the pool's one queue, which every answer,
  * freed request and quarantine wakes, since each may make room. Every
- * driver serializes on locks of its own, as Linux's do, and is called
- * without the big lock.
+ * driver serializes on locks of its own, as Linux's do, and may be called
+ * with the big lock or without it; USB storage and loop take it themselves
+ * where they need it (block.h).
  */
 
 #include "../lib/kirq.h"
