@@ -1743,6 +1743,51 @@ static void cached_put(struct vfs_mount *mnt, void *node)
     }
 }
 
+/** Record the directory entry `leaf` of `parent` in `*entry` when `found`,
+ * the walk's last node, is a regular file, as `walk_record_entry` does for
+ * the full walk; `seq` is the count of changes of names the walk began at.
+ * 0, or nonzero with nothing recorded, for the full walk. */
+static int cached_entry(const struct vfs_ref *parent, void *found, const char *leaf, uint32_t seq,
+                        struct vfs_name **entry)
+{
+    struct vfs_stat st;
+    int rc = parent->mnt->type->ops->getattr(mount_base(parent->mnt), found, &st);
+
+    if (rc != 0 || (st.mode & 0170000u) != 0100000u) {
+        return rc;
+    }
+    return vfs_name_capture_at(parent, leaf, seq, entry);
+}
+
+/* Where the cached walk records the last name's entry, NULL for nowhere,
+ * and the count of changes of names it began at (`vfs_name_seq`). */
+struct cached_record {
+    struct vfs_name **entry;
+    uint32_t seq;
+};
+
+/**
+ * The cached walk's checks on `found`, the node of the name `leaf` it just
+ * looked up in `cur`, with `rest` the path after it: 0, with a regular
+ * file's entry recorded at the last name as `rec` asks (`cached_entry`); or
+ * WALK_FULL, with `found` put, for a symbolic link the walk would follow, a
+ * failed `getattr` or an entry it cannot record.
+ */
+static int cached_found(const struct vfs_ref *cur, void *found, const char *leaf, const char *rest,
+                        int flags, const struct cached_record *rec)
+{
+    struct vfs_stat st;
+
+    if ((cur->mnt->type->ops->readlink &&
+         (cur->mnt->type->ops->getattr(mount_base(cur->mnt), found, &st) != 0 ||
+          ((st.mode & 0170000u) == 0120000u && (*rest || !(flags & VFS_WALK_NOFOLLOW))))) ||
+        (rec->entry && !*rest && cached_entry(cur, found, leaf, rec->seq, rec->entry) != 0)) {
+        cached_put(cur->mnt, found);
+        return WALK_FULL;
+    }
+    return 0;
+}
+
 /** Enter `mnt` and hold `node` on it for the cached walk, into `cur`, when
  * the walk may stand there: 0, or WALK_FULL with nothing taken. The caller
  * holds a lock or a hold that keeps both while this runs, and may hold a
@@ -1832,20 +1877,22 @@ static int cached_mount_near(struct vfs_mount *mnt, void *node, const char *comp
  * type needs none, and a mount it ends on is the one `walk_unlock` leaves.
  */
 static int resolve_cached(const struct vfs_ref *start, const char *path, int flags,
-                          struct vfs_ref *out)
+                          struct vfs_ref *out, struct vfs_name **entry)
 {
     const char *p = path;
     struct vfs_ref cur;
     int use_real = (flags & VFS_WALK_REAL_IDS) != 0;
+    struct cached_record rec;
     uint32_t found_names = 0;
     int rc;
 
-    if (cached_start(start, path, &cur) != 0) {
+    rec.entry = entry;
+    rec.seq = 0;
+    if ((entry && !vfs_name_seq(&rec.seq)) || cached_start(start, path, &cur) != 0) {
         return WALK_FULL;
     }
     for (;;) {
         char comp[VFS_NAME_MAX + 1];
-        struct vfs_stat st;
         const char *rest;
         uint32_t len = 0;
         void *found;
@@ -1888,10 +1935,7 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
         found_names++;
         for (rest = p; *rest == '/'; rest++) {
         }
-        if (cur.mnt->type->ops->readlink &&
-            (cur.mnt->type->ops->getattr(mount_base(cur.mnt), found, &st) != 0 ||
-             ((st.mode & 0170000u) == 0120000u && (*rest || !(flags & VFS_WALK_NOFOLLOW))))) {
-            cached_put(cur.mnt, found);
+        if (cached_found(&cur, found, comp, rest, flags, &rec) != 0) {
             goto full;
         }
         cached_put(cur.mnt, cur.node);
@@ -1908,6 +1952,10 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
     return 0;
 
 full:
+    if (entry) {
+        vfs_name_put(*entry);
+        *entry = NULL;
+    }
     cached_put(cur.mnt, cur.node);
     vfs_leave(cur.mnt);
     return WALK_FULL;
@@ -2314,7 +2362,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     if (path && out && !record && mounts[0]->state == VFS_ACTIVE &&
         !(flags & ~(VFS_WALK_NOFOLLOW | VFS_WALK_REAL_IDS | VFS_WALK_LOCK)) &&
         !(current_proc && current_proc->walk_replay)) {
-        rc = resolve_cached(start, path, flags, out);
+        rc = resolve_cached(start, path, flags, out, NULL);
         if (rc != WALK_FULL) {
             return rc;
         }
@@ -2325,16 +2373,19 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     return rc;
 }
 
-int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out)
+int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out, struct vfs_name **entry)
 {
     int rc;
 
+    if (entry) {
+        *entry = NULL;
+    }
     if (!path || path[0] != '/' || mounts[0]->state != VFS_ACTIVE ||
         (flags & ~(VFS_WALK_NOFOLLOW | VFS_WALK_REAL_IDS | VFS_WALK_LOCK)) ||
         (current_proc && current_proc->walk_replay)) {
         return VFS_CACHED_MISS;
     }
-    rc = resolve_cached(0, path, flags, out);
+    rc = resolve_cached(0, path, flags, out, entry);
     return rc == WALK_FULL ? VFS_CACHED_MISS : rc;
 }
 
@@ -2954,12 +3005,14 @@ int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
     }
     watched = inotify_watches && watched_entry(mnt, dir, name, &was) == 0 &&
               watched_node(mnt, dir, &parent) == 0;
+    vfs_name_change_begin();
     dcache_forget(mount_base(mnt), dir, name);
     rc = mnt->type->ops->unlink(mount_base(mnt), dir, name);
     dcache_forget(mount_base(mnt), dir, name);
     if (rc == 0) {
         vfs_name_unlink(mnt, dir, name);
     }
+    vfs_name_change_end();
     if (rc == 0 && watched) {
         watch_removed(mnt, parent.ino, name, &was);
     }
@@ -3056,6 +3109,7 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
         had_target =
             watched_entry(mnt, newdir, newname, &replaced) == 0 && replaced.ino != moved.ino;
     }
+    vfs_name_change_begin();
     same = vfs_name_same(mnt, olddir, oldname, newdir, newname);
     dcache_forget(mount_base(mnt), olddir, oldname);
     victim = dcache_forget_victim(mount_base(mnt), newdir, newname);
@@ -3066,6 +3120,7 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
     if (rc == 0 && !same) {
         vfs_name_rename(mnt, olddir, oldname, newdir, newname);
     }
+    vfs_name_change_end();
     if (rc == 0 && watched) {
         uint32_t cookie = inotify_cookie();
         uint32_t isdir = watched_isdir(&moved);
