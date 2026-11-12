@@ -157,16 +157,18 @@ static void pages_revoked(void *owner)
 
 void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, int zap)
 {
+    struct virtio_map *map = bo->pages_map;
+
     (void)drm_dev_work_cancel(&bo->revoke_zap);
-    if (!bo->pages_map) {
+    if (!map) {
         return;
     }
+    bo->pages_map = NULL;
+    bo->map_ok = 0;
     if (zap) {
         paging_zap_device(&bo->shmem.base, 0, (uint32_t)(bo->shmem.base.size >> PAGE_SHIFT));
     }
-    virtio_map_free(vg->vdev, bo->pages_map);
-    bo->pages_map = NULL;
-    bo->map_ok = 0;
+    virtio_map_free(vg->vdev, map);
 }
 
 /* A page list as its answers come: the runs so far, which cover the blob's
