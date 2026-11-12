@@ -58,7 +58,8 @@
 # stopped, the host's virtio-gpu card is opened and closed, so that the
 # console takes it back from that master onto a buffer of its own, and the
 # card is unplugged through its debugfs `virtio_gpu_reset`; the console
-# must have taken the card back and left it (`unplug`). With no card, the
+# must have taken the card back with its screen set, and left it
+# (`unplug`). With no card, the
 # console takes the region's card as virtio-gpu binds over the region,
 # inside the bind on the transport's thread, and commits its buffer there;
 # the bind must return within 60 s of the card's registration, and the
@@ -236,13 +237,19 @@ if [ "$unplug" = 1 ]; then
         n=$((n - 1))
     done
     took=$(klog_count "console: $host: taken back from a master")
+    placed=$(klog_count "console: $host: [0-9]*x[0-9]*, the font at")
     left=$(klog_count "console: $host: left")
     # The first opener of a card with no master becomes its master; at the
-    # close the console takes the card back onto a buffer of its own.
+    # close the console takes the card back onto a buffer of its own. The
+    # take-back is logged whether or not its buffer was placed; the size
+    # and font line follows only a placed one, without which the console
+    # holds no buffer, its leaving marks nothing lost, and the region's
+    # card is only probed.
     [ -z "$host" ] || : <> "/dev/dri/$host"
     if [ -n "$reset" ] && klog_more "console: $host: taken back from a master" "$took" &&
+        klog_more "console: $host: [0-9]*x[0-9]*, the font at" "$placed" &&
         echo 1 > "$reset" && klog_more "console: $host: left" "$left"; then
-        pass unplug "the console took $host back from a master, and $host left"
+        pass unplug "the console took $host back from a master onto a buffer of its own, and $host left"
     else
         fail unplug "card '$host': $(dmesg | grep 'console: ' | tail -n 3 | tr '\n' ' ')"
     fi
