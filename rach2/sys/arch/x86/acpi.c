@@ -466,6 +466,13 @@ static void fadt_parse(struct acpi_info *a, const uint8_t *t, uint32_t len)
 
 #define HPET_MIN_LEN 56
 
+/* The DMAR table's header: the host address width at 36, the flags at 37
+ * and ten reserved bytes; the units' structures follow, which iommu/dmar.c
+ * reads once ACPICA is up. Only the flags are read here, for the local
+ * APIC's mode (ioapic.c's `ioapic_remappable`). */
+#define DMAR_MIN_LEN 48
+#define DMAR_FLAGS   37
+
 /** Read the HPET table `t`, at `phys`, into the record: the event timer
  * block's ID, its registers' address and its number. A table whose
  * registers are not in memory is logged and left out. */
@@ -548,6 +555,8 @@ static void table_take(acpi_map_fn map, struct acpi_info *a, uint64_t phys)
         min = FADT_MIN_LEN;
     } else if (same(sig, "HPET", 4)) {
         min = HPET_MIN_LEN;
+    } else if (same(sig, "DMAR", 4)) {
+        min = DMAR_MIN_LEN;
     }
     t = table_read(map, phys, 0, min, &len);
     table_note(a, head, phys, t ? len : get32(head + 4), t != 0);
@@ -562,6 +571,9 @@ static void table_take(acpi_map_fn map, struct acpi_info *a, uint64_t phys)
         hpet_parse(a, t, phys);
     } else if (same(sig, "MCFG", 4) && a->necam == 0) {
         mcfg_parse(a, t, len);
+    } else if (same(sig, "DMAR", 4) && !a->dmar) {
+        a->dmar = 1;
+        a->dmar_flags = t[DMAR_FLAGS];
     }
 }
 

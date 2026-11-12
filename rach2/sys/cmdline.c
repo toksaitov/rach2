@@ -84,6 +84,36 @@ int kcmdline_value(const char *key, char *out, unsigned int outlen)
     return kcmdline_value_nth(key, 0, out, outlen);
 }
 
+int kcmdline_value_has(const char *key, const char *item)
+{
+    char buf[64];
+    size_t n = k_strlen(item);
+    const char *p = buf;
+
+    if (!kcmdline_value(key, buf, (unsigned int)sizeof(buf))) {
+        return 0;
+    }
+    while (*p != 0) {
+        const char *end = p;
+
+        while (*end != 0 && *end != ',') {
+            end++;
+        }
+        if ((size_t)(end - p) == n) {
+            size_t i = 0;
+
+            while (i < n && p[i] == item[i]) {
+                i++;
+            }
+            if (i == n) {
+                return 1;
+            }
+        }
+        p = *end == ',' ? end + 1 : end;
+    }
+    return 0;
+}
+
 int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
 {
     size_t klen = k_strlen(key);

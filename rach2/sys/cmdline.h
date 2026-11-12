@@ -44,6 +44,12 @@ int kcmdline_has(const char *flag);
  */
 int kcmdline_value(const char *key, char *out, unsigned int outlen);
 
+/** Whether the first `key=` token's value, a list separated by commas, has
+ * `item` as one of its members, as Linux's `intremap=` and `intel_iommu=`
+ * take theirs: 0 when the token is absent or its value does not fit 63
+ * bytes. */
+int kcmdline_value_has(const char *key, const char *item);
+
 /**
  * Read the integer value of the first `key=value` token into `*out`, as
  * Linux's get_option reads an early parameter's (lib/cmdline.c, lines 56 to
