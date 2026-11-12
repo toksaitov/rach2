@@ -3266,13 +3266,23 @@ static int zap_lock(struct mm *mm, int *taken)
     return -1;
 }
 
+/* The number of the last walk of `paging_zap_where`, under the big lock. */
+static uint32_t zap_walks;
+
 /**
  * Each thread of a process has its own record on the process list and the
- * address space of its process, so a space shared by threads is walked
- * once for each of them, the later walks finding nothing to unmap. Each
- * space is changed under its regions' lock held to write (`zap_lock`), and
- * its count of zaps moves, so that a fault that let the lock go across a
- * file's or a device's operation maps no page taken back meanwhile.
+ * address space of its process; a walk changes each space once, the first
+ * time it meets it, and passes it for the threads after, as Linux's
+ * unmap_mapping_range visits each region that maps the object once
+ * (mm/memory.c:3755-3774): QEMU's space, which a VM's threads share, would
+ * otherwise be walked region by region for each of its dozen threads at
+ * each revoke of a blob. When the count of walks wraps, every space's mark
+ * is cleared first, so that no stale mark passes a space. A walk that
+ * waited for a lock starts again from the first record and passes the
+ * spaces it has changed. Each space is changed under its regions' lock
+ * held to write (`zap_lock`), and its count of zaps moves, so that a fault
+ * that let the lock go across a file's or a device's operation maps no
+ * page taken back meanwhile.
  */
 void paging_zap_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo, uintptr_t *hi),
                       void *arg)
@@ -3280,14 +3290,24 @@ void paging_zap_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo
     process_t *p;
     const vma_t *r;
     uintptr_t lo, hi;
+    uint32_t walk;
     int held, taken;
 
     bkl_assert_held();
+    walk = ++zap_walks;
+    if (walk == 0) {
+        for (p = proc_list; p; p = p->next) {
+            if (p->mm) {
+                p->mm->zap_walk = 0;
+            }
+        }
+        walk = zap_walks = 1;
+    }
 again:
     for (p = proc_list; p; p = p->next) {
         struct mm *mm = p->mm;
 
-        if (!mm || !mm->dir) {
+        if (!mm || !mm->dir || mm->zap_walk == walk) {
             continue;
         }
         held = zap_lock(mm, &taken);
@@ -3295,6 +3315,7 @@ again:
             goto again;
         }
         mm->zaps++;
+        mm->zap_walk = walk;
         for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
             if (match(r, arg, &lo, &hi)) {
                 /* Under way, for a space this thread holds only to read. */
