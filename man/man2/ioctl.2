@@ -1,4 +1,4 @@
-.Dd November 3, 2026
+.Dd November 12, 2026
 .Dt IOCTL 2
 .Os
 .Sh NAME
@@ -53,6 +53,14 @@ those operations; the framebuffer and console handle their private requests.
 An unsupported request returns
 .Er ENOTTY .
 The mouse has no requests of its own.
+.Pp
+A DRM request enters the dispatcher without the big kernel lock, even
+when its description retains a file-system device node.
+The dispatcher takes the lock only for a handler that still needs it.
+Sync objects and i915 requests use their own locks; mode-setting requests
+use the device mutex, with the big lock as well for a driver that has not
+opted out.
+The i386 compatibility path takes the same locks.
 .Ss Terminal requests
 The console and pseudo-terminal slaves accept:
 .Bl -tag -width "TIOCGWINSZ"

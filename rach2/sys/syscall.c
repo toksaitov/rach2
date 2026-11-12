@@ -2720,7 +2720,7 @@ long ioctl_fd(int fd_num, uint32_t request, uintptr_t arg)
                      request == FIOCLEX ? FD_FLAG_CLOEXEC : 0);
         return 0;
     }
-    if (request != FIONBIO && file_ops_unlocked(entry)) {
+    if (request != FIONBIO && file_ioctl_unlocked(entry)) {
         return entry->ops->ioctl ? entry->ops->ioctl(entry, request, arg) : -ENOTTY;
     }
     bkl_enter();

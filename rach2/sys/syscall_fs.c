@@ -5596,6 +5596,16 @@ int file_ops_unlocked(const fd_entry_t *e)
 }
 
 /**
+ * An ioctl touches the held device, not its retained inode or offset.
+ * Its FILE_OPS_UNLOCKED dispatcher takes any lock its request needs,
+ * as Linux's unlocked_ioctl does even for a file-system device node.
+ */
+int file_ioctl_unlocked(const fd_entry_t *e)
+{
+    return e && e->ops && (e->ops->flags & FILE_OPS_UNLOCKED);
+}
+
+/**
  * Whether descriptor `e` names a regular file or a directory of a type that
  * sets `reads_unlocked`, as ext2 does, whose reads, listings and attributes
  * then run without the big lock: the type's operations take it where they

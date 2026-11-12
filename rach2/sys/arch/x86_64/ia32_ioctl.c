@@ -796,7 +796,7 @@ static const struct family families[] = {
  * holds is -ENOTTY, as Linux answers a compat caller on a file with no
  * compat handler; rach2/ia32.md lists the families. A family's handler runs
  * under the big lock unless the descriptor's type runs without it
- * (`file_ops_lock`); one that passes takes what the native call takes.
+ * (`file_ioctl_unlocked`); one that passes takes what the native call takes.
  */
 long compat_sys_ioctl(isr_params_t *params)
 {
@@ -821,7 +821,7 @@ long compat_sys_ioctl(isr_params_t *params)
             if (!families[i].fn) {
                 return pass(fd, cmd, arg);
             }
-            big = file_ops_lock(e);
+            big = file_ioctl_unlocked(e) ? 0 : file_ops_lock(e);
             rc = families[i].fn(e, fd, cmd, arg);
             file_ops_unlock(big);
             return rc;

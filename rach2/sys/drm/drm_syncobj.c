@@ -26,7 +26,8 @@
  * changes that end its sleeps: a fence signalled or a point submitted. */
 struct waiter {
     wait_queue_t wq;
-    uint32_t events, seen;
+    volatile unsigned int events; /* callbacks may run on different processors */
+    uint32_t seen;
     int64_t deadline; /* CLOCK_MONOTONIC in nanoseconds, or NO_DEADLINE */
 };
 
@@ -169,7 +170,11 @@ static int32_t point_fence(struct dma_fence *f, uint64_t point, struct dma_fence
 /** Count a change for a waiting thread and wake it. */
 static void waiter_wake(struct waiter *w)
 {
-    w->events++;
+    unsigned int old;
+
+    do {
+        old = w->events;
+    } while (arch_atomic_cmpxchg(&w->events, old, old + 1u) != old);
     wq_wake_all(&w->wq);
 }
 

@@ -1777,63 +1777,69 @@ I915_GEM_LOCKED(i915_gem_get_caching_ioctl)
 I915_GEM_LOCKED(i915_gem_get_aperture_ioctl)
 I915_GEM_LOCKED(i915_gem_userptr_ioctl)
 
-/* The driver's own ioctls, with Linux's flags: a render node may call each
- * but GET_PIPE_FROM_CRTC_ID, which looks the CRTC up under the mode lock.
- * Each row of the buffers runs under the GEM lock; EXECBUFFER2 takes it
- * itself between its copies, and THROTTLE, which takes a file's context
- * list lock, which comes before it, and waits, takes none. DRM_UNLOCKED
- * marks the rows that need no big lock: BUSY, under the handle table's and
- * the reservation's locks, MADVISE, under the reservation's and then the
- * GEM lock, EXECBUFFER2, and the context calls, under the file's context
- * list lock. The device's DRIVER_KMS_UNLOCKED lets the core's ATOMIC,
- * PAGE_FLIP and WAIT_VBLANK run without the big lock too: the display's
- * hooks take the mode lock's state, the GEM lock for the framebuffers'
- * bindings and pages, the event and vblank locks for what the interrupt
- * shares, and the backlight's lock. */
+/* All rows run without the big lock, as Linux's i915 table. The buffer
+ * wrappers hold the GEM mutex; EXECBUFFER2 takes it between its copies.
+ * BUSY uses the handle and reservation locks, MADVISE the reservation and
+ * GEM locks, contexts their file's mutex and the GEM mutex for their state,
+ * and THROTTLE the context mutex and engine locks. REG_READ has forcewake's
+ * uncore lock; GETPARAM and QUERY initialize topology under the GEM mutex.
+ * GET_PIPE_FROM_CRTC_ID holds the mode mutex. The core's KMS rows run under
+ * that mutex too, without the big lock on DRIVER_KMS_UNLOCKED devices:
+ * i915's display hooks use it, the GEM mutex and the event, vblank,
+ * backlight and hardware locks. */
 const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS] = {
-    {DRM_IOCTL_I915_GETPARAM, DRM_RENDER_ALLOW, i915_getparam_ioctl, "I915_GETPARAM"},
-    {DRM_IOCTL_I915_GET_PIPE_FROM_CRTC_ID, DRM_MODESET_LOCK, intel_get_pipe_from_crtc_id_ioctl,
-     "I915_GET_PIPE_FROM_CRTC_ID"},
+    {DRM_IOCTL_I915_GETPARAM, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_getparam_ioctl,
+     "I915_GETPARAM"},
+    {DRM_IOCTL_I915_GET_PIPE_FROM_CRTC_ID, DRM_MODESET_LOCK | DRM_UNLOCKED,
+     intel_get_pipe_from_crtc_id_ioctl, "I915_GET_PIPE_FROM_CRTC_ID"},
     {DRM_IOCTL_I915_GEM_CONTEXT_CREATE_EXT, DRM_RENDER_ALLOW | DRM_UNLOCKED,
      i915_gem_context_create_ioctl, "I915_GEM_CONTEXT_CREATE"},
     {DRM_IOCTL_I915_GEM_CONTEXT_DESTROY, DRM_RENDER_ALLOW | DRM_UNLOCKED,
      i915_gem_context_destroy_ioctl, "I915_GEM_CONTEXT_DESTROY"},
-    {DRM_IOCTL_I915_REG_READ, DRM_RENDER_ALLOW, i915_reg_read_ioctl, "I915_REG_READ"},
+    {DRM_IOCTL_I915_REG_READ, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_reg_read_ioctl,
+     "I915_REG_READ"},
     {DRM_IOCTL_I915_GET_RESET_STATS, DRM_RENDER_ALLOW | DRM_UNLOCKED,
      i915_gem_context_reset_stats_ioctl, "I915_GET_RESET_STATS"},
     {DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM, DRM_RENDER_ALLOW | DRM_UNLOCKED,
      i915_gem_context_getparam_ioctl, "I915_GEM_CONTEXT_GETPARAM"},
     {DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM, DRM_RENDER_ALLOW | DRM_UNLOCKED,
      i915_gem_context_setparam_ioctl, "I915_GEM_CONTEXT_SETPARAM"},
-    {DRM_IOCTL_I915_QUERY, DRM_RENDER_ALLOW, i915_query_ioctl, "I915_QUERY"},
+    {DRM_IOCTL_I915_QUERY, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_query_ioctl, "I915_QUERY"},
     {DRM_IOCTL_I915_GEM_BUSY, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_busy_ioctl,
      "I915_GEM_BUSY"},
-    {DRM_IOCTL_I915_GEM_THROTTLE, DRM_RENDER_ALLOW, i915_gem_throttle_ioctl, "I915_GEM_THROTTLE"},
-    {DRM_IOCTL_I915_GEM_CREATE, DRM_RENDER_ALLOW, i915_gem_create_ioctl_gem, "I915_GEM_CREATE"},
-    {DRM_IOCTL_I915_GEM_CREATE_EXT, DRM_RENDER_ALLOW, i915_gem_create_ext_ioctl_gem,
+    {DRM_IOCTL_I915_GEM_THROTTLE, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_throttle_ioctl,
+     "I915_GEM_THROTTLE"},
+    {DRM_IOCTL_I915_GEM_CREATE, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_create_ioctl_gem,
+     "I915_GEM_CREATE"},
+    {DRM_IOCTL_I915_GEM_CREATE_EXT, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_create_ext_ioctl_gem,
      "I915_GEM_CREATE_EXT"},
-    {DRM_IOCTL_I915_GEM_PREAD, DRM_RENDER_ALLOW, i915_gem_pread_ioctl_gem, "I915_GEM_PREAD"},
-    {DRM_IOCTL_I915_GEM_PWRITE, DRM_RENDER_ALLOW, i915_gem_pwrite_ioctl_gem, "I915_GEM_PWRITE"},
-    {DRM_IOCTL_I915_GEM_MMAP, DRM_RENDER_ALLOW, i915_gem_mmap_ioctl_gem, "I915_GEM_MMAP"},
-    {DRM_IOCTL_I915_GEM_MMAP_OFFSET, DRM_RENDER_ALLOW, i915_gem_mmap_offset_ioctl_gem,
-     "I915_GEM_MMAP_OFFSET"},
-    {DRM_IOCTL_I915_GEM_SET_DOMAIN, DRM_RENDER_ALLOW, i915_gem_set_domain_ioctl_gem,
+    {DRM_IOCTL_I915_GEM_PREAD, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_pread_ioctl_gem,
+     "I915_GEM_PREAD"},
+    {DRM_IOCTL_I915_GEM_PWRITE, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_pwrite_ioctl_gem,
+     "I915_GEM_PWRITE"},
+    {DRM_IOCTL_I915_GEM_MMAP, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_mmap_ioctl_gem,
+     "I915_GEM_MMAP"},
+    {DRM_IOCTL_I915_GEM_MMAP_OFFSET, DRM_RENDER_ALLOW | DRM_UNLOCKED,
+     i915_gem_mmap_offset_ioctl_gem, "I915_GEM_MMAP_OFFSET"},
+    {DRM_IOCTL_I915_GEM_SET_DOMAIN, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_set_domain_ioctl_gem,
      "I915_GEM_SET_DOMAIN"},
-    {DRM_IOCTL_I915_GEM_SW_FINISH, DRM_RENDER_ALLOW, i915_gem_sw_finish_ioctl_gem,
+    {DRM_IOCTL_I915_GEM_SW_FINISH, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_sw_finish_ioctl_gem,
      "I915_GEM_SW_FINISH"},
     {DRM_IOCTL_I915_GEM_EXECBUFFER2_WR, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_execbuffer2_ioctl,
      "I915_GEM_EXECBUFFER2"},
-    {DRM_IOCTL_I915_GEM_SET_TILING, DRM_RENDER_ALLOW, i915_gem_set_tiling_ioctl_gem,
+    {DRM_IOCTL_I915_GEM_SET_TILING, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_set_tiling_ioctl_gem,
      "I915_GEM_SET_TILING"},
-    {DRM_IOCTL_I915_GEM_GET_TILING, DRM_RENDER_ALLOW, i915_gem_get_tiling_ioctl_gem,
+    {DRM_IOCTL_I915_GEM_GET_TILING, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_get_tiling_ioctl_gem,
      "I915_GEM_GET_TILING"},
-    {DRM_IOCTL_I915_GEM_WAIT, DRM_RENDER_ALLOW, i915_gem_wait_ioctl_gem, "I915_GEM_WAIT"},
-    {DRM_IOCTL_I915_GEM_SET_CACHING, DRM_RENDER_ALLOW, i915_gem_set_caching_ioctl_gem,
-     "I915_GEM_SET_CACHING"},
-    {DRM_IOCTL_I915_GEM_GET_CACHING, DRM_RENDER_ALLOW, i915_gem_get_caching_ioctl_gem,
-     "I915_GEM_GET_CACHING"},
-    {DRM_IOCTL_I915_GEM_GET_APERTURE, DRM_RENDER_ALLOW, i915_gem_get_aperture_ioctl_gem,
-     "I915_GEM_GET_APERTURE"},
+    {DRM_IOCTL_I915_GEM_WAIT, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_wait_ioctl_gem,
+     "I915_GEM_WAIT"},
+    {DRM_IOCTL_I915_GEM_SET_CACHING, DRM_RENDER_ALLOW | DRM_UNLOCKED,
+     i915_gem_set_caching_ioctl_gem, "I915_GEM_SET_CACHING"},
+    {DRM_IOCTL_I915_GEM_GET_CACHING, DRM_RENDER_ALLOW | DRM_UNLOCKED,
+     i915_gem_get_caching_ioctl_gem, "I915_GEM_GET_CACHING"},
+    {DRM_IOCTL_I915_GEM_GET_APERTURE, DRM_RENDER_ALLOW | DRM_UNLOCKED,
+     i915_gem_get_aperture_ioctl_gem, "I915_GEM_GET_APERTURE"},
     {DRM_IOCTL_I915_GEM_MADVISE, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_madvise_ioctl,
      "I915_GEM_MADVISE"},
-    {DRM_IOCTL_I915_GEM_USERPTR, DRM_RENDER_ALLOW, i915_gem_userptr_ioctl_gem, "I915_GEM_USERPTR"}};
+    {DRM_IOCTL_I915_GEM_USERPTR, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_userptr_ioctl_gem,
+     "I915_GEM_USERPTR"}};
