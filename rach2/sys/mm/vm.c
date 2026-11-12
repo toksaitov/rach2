@@ -23,7 +23,9 @@ static struct vm_file *vm_dead;
 /* Covers `vm_dead`, which a fault's last reference reaches without the
  * regions' write lock. */
 static struct spinlock vm_dead_lock = SPINLOCK_INIT_NAMED("vm_dead_lock");
-static uint32_t gap_steps;
+/* Gap candidates examined since boot, which searches in different address
+ * spaces add to at once (`gap_count`). */
+static volatile uint32_t gap_steps;
 
 /** Read the number of gap candidates examined since boot. */
 uint32_t vm_gap_steps(void)
@@ -43,6 +45,13 @@ static uint32_t ref_add(volatile uint32_t *p, int delta)
     } while (arch_atomic_cmpxchg((volatile unsigned int *)p, old, old + (unsigned int)delta) !=
              old);
     return (uint32_t)(old + (unsigned int)delta);
+}
+
+/** Add the `n` gap candidates one search examined to `gap_steps`, in one
+ * step, since searches in other address spaces run at once. */
+static void gap_count(uint32_t n)
+{
+    (void)ref_add(&gap_steps, (int)n);
 }
 
 void vm_file_get(struct vm_file *f)
@@ -930,6 +939,7 @@ uintptr_t vm_find_free(vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t hi
 {
     vma_t *r;
     uintptr_t top, bottom;
+    uint32_t steps = 0;
 
     if (len == 0 || hi <= lo || hi - lo < len) {
         return 0;
@@ -947,14 +957,16 @@ uintptr_t vm_find_free(vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t hi
     }
     r = r ? r->prev : vm->last;
     for (;;) {
-        gap_steps++;
+        steps++;
         bottom = r && r->end > lo ? r->end : lo;
         if (top > bottom && top - bottom >= len) {
             vm->gap_top = top;
+            gap_count(steps);
             return top - len;
         }
         if (!r || r->start <= lo) {
             vm->gap_top = lo;
+            gap_count(steps);
             return 0;
         }
         top = r->start;
@@ -967,20 +979,23 @@ uintptr_t vm_find_mmap(vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t ba
 {
     uintptr_t at = vm_find_free(vm, len, lo, base < hi ? base : hi);
     const vma_t *r;
+    uint32_t steps = 0;
 
     if (at || !len || lo >= hi || len > hi - lo) {
         return at;
     }
     at = lo;
     for (r = vm_lower(vm, lo); r && r->start < hi; r = vm_next(r)) {
-        gap_steps++;
+        steps++;
         if (r->start > at && len <= r->start - at) {
+            gap_count(steps);
             return at;
         }
         if (r->end > at) {
             at = r->end;
         }
     }
+    gap_count(steps);
     return at <= hi - len ? at : 0;
 }
 
