@@ -2326,13 +2326,13 @@ static int32_t frame_fill(struct vfs_mount *mnt, struct ext2_node *n, uint32_t p
  * The `read_frames` of `vfs_ops`: pages `first` to `first + count - 1` of a
  * regular file into `frames`, ending at the size, as Linux's
  * `mpage_readahead` reads a file's pages into the page cache's folios
- * (fs/mpage.c): a page whose blocks follow on the device goes into
- * one transfer with its neighbours, made on the frames themselves, so that
- * no buffer of the cache holds the bytes and no copy moves them, and a page
- * the cache may hold newer bytes of, a hole and a page of small blocks are
- * read as `ext2_read` reads them, as `do_mpage_readpage` falls back to
- * `block_read_full_folio` for a page with buffers or with blocks out of
- * line. Data written to a file goes through
+ * (fs/mpage.c): a page whose blocks follow on the device goes into one
+ * transfer with its neighbours, made on the frames themselves, so that no
+ * buffer of the cache holds the bytes and no copy moves them; a hole is
+ * zeroed; and a page the cache may hold newer bytes of, or whose smaller
+ * blocks are not one run, is read as `ext2_read` reads it, as
+ * `do_mpage_readpage` falls back to `block_read_full_folio` for a page with
+ * buffers or with blocks out of line. Data written to a file goes through
  * the batch and the cache, so the device's bytes of a block that neither
  * holds are the file's.
  *
@@ -2350,7 +2350,7 @@ static int32_t ext2_read_frames(struct vfs_mount *mnt, void *handle, uint32_t fi
     struct ext2_node *n = handle;
     uint64_t plan[EXT2_FRAMES_PLAN], size;
     uint32_t done = 0, pages, left, i;
-    int32_t got = 0;
+    int32_t got;
     int rc = 0, big;
 
     if ((n->mode & S_IFMT_) != S_IFREG_) {
