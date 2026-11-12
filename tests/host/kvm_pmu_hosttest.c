@@ -233,6 +233,16 @@ const struct kvm_cpuid_entry2 *kvm_cpuid_find(const struct kvm_vcpu *vcpu, uint3
     return NULL;
 }
 
+/** The guest's privilege as emulate.c judges it: 0 in real mode, 3 in
+ * virtual-8086 mode, else SS's DPL. */
+int kvm_emul_cpl(const struct kvm_vcpu *vcpu)
+{
+    if (!(vcpu->sregs.cr0 & 1u)) {
+        return 0;
+    }
+    return (vcpu->regs.rflags & 0x20000u) ? 3 : vcpu->sregs.ss.dpl & 3;
+}
+
 /** Record invalid RDPMC's architectural exception. */
 void kvm_queue_exception(struct kvm_vcpu *vcpu, uint8_t nr, int error, uint32_t code)
 {
@@ -336,7 +346,7 @@ static void intel_registers(void)
     CHECK(kvm_pmu_msr(&v, PERF_CAP, 1, &value, 1) == -1, "capabilities frozen after run");
     v.regs.rcx = 0;
     v.sregs.cr0 = 1;
-    v.sregs.cs.selector = 3;
+    v.sregs.ss.dpl = 3;
     CHECK(kvm_pmu_rdpmc(&v) == -1, "user RDPMC needs CR4.PCE");
     v.sregs.cr4 = 0x100;
     v.pmu.counter[0] = 0x123456789ABull;
