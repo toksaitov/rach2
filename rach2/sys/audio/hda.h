@@ -389,17 +389,17 @@ uint32_t hda_delay_frames(void);
  * each stream only until its first interrupt, while an interrupt that came
  * before its period's end is pending, or while its next interrupt is late;
  * every quarter second for the jacks' poll, which moves the output and the
- * microphone recorded as a plug goes in or out; and for the beep's stop and
- * the turning off of the pins a beep opened, when they are due. The boot
- * processor's tick calls this, with interrupts off, so playback goes on
+ * microphone recorded as a plug goes in or out; and for the turning off of
+ * the pins a beep opened, when it is due. The boot processor's tick calls
+ * this, with interrupts off and the big lock held, so playback goes on
  * where the controller's interrupt does not arrive, while a stream whose
  * interrupts come is asked for by them alone, as Linux's `azx_interrupt`
  * acknowledges the stream and wakes its writer. The services run in the
- * driver's thread, which the tick wakes for a stream when its position has
- * passed into another period, and here while the thread does not run them;
- * the tick sends no verb while the thread runs. The jacks' and the beep's
- * clocks count the ticks since the last call, since that tick skips the call
- * while another processor holds the big lock. */
+ * driver's thread, which the tick only wakes, for a stream when its
+ * position has passed into another period, and here while the thread does
+ * not run them; the tick sends no verb while the thread runs. The jacks'
+ * clock counts the ticks since the last call, since a tick that does not
+ * take the big lock skips the call (timer_lock_take, kernel.c). */
 void hda_tick(void);
 
 /** Make the driver's thread, khda, which refills the output stream and

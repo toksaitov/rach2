@@ -2771,6 +2771,31 @@ void spin_unlock(struct spinlock *lock)
 {
     lock->locked = 0;
 }
+/** The stream mutex's takes, which every operation of hda_driver that
+ * changes the device makes once. */
+static unsigned mutex_takes;
+/** Make `m` a free mutex. */
+void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key *key)
+{
+    (void)name;
+    (void)key;
+    m->owner = NULL;
+}
+/** The model has one thread, which never waits: a mutex taken is free, and
+ * it is never taken in an interrupt or under a spinlock. */
+void mutex_lock(struct mutex *m)
+{
+    check(!m->owner, "a mutex taken is free");
+    check(irqs_on, "a mutex is taken with interrupts on");
+    m->owner = m;
+    mutex_takes++;
+}
+/** Give `m` back. */
+void mutex_unlock(struct mutex *m)
+{
+    check(m->owner == m, "a mutex given back is held");
+    m->owner = NULL;
+}
 /** Model the speaker's ports: 0x61, and channel 2's count, low byte first. */
 void outb(uint16_t port, uint8_t val)
 {
@@ -2885,6 +2910,14 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     (void)vector;
     (void)handler;
     (void)name;
+}
+/** The flags a handler runs with: the driver's carries ISR_UNLOCKED. */
+static unsigned isr_flags;
+void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flags)
+{
+    (void)vector;
+    (void)handler;
+    isr_flags = flags;
 }
 /** MMIO accesses use the test hooks. */
 uintptr_t map_mmio(uintptr_t addr, size_t size)
