@@ -11,8 +11,13 @@
  * write, a truncation and an allocation through the VFS drop the file's pages
  * after they change it, and an unmount every page of its files; each counts
  * as a change of the file, and a page read while a change of its file ran is
- * not kept, since the read may have seen part of it. A mapping gets a copy of
- * a cached page, so nothing it does reaches the cache. Each file that has
+ * not kept, since the read may have seen part of it. A private mapping gets
+ * a copy of a cached page. The pages in memory of a disk file that no shared
+ * mapping through a writable descriptor maps share the cache's frame, as
+ * Linux's page cache gives read(2) and every mapping one folio: the file's
+ * pages change only as a write or a truncation changes the file, which
+ * drops its pages here after, and such a mapping, whose stores reach the
+ * pages before the file, drops them when it is made. Each file that has
  * pages has a record that lists them and holds the size and the modification
  * time they were read at, so a change drops that file's pages without a
  * search of every other file's. The frames are the machine's free memory:
@@ -332,30 +337,39 @@ static int fc_read(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, void
     return hit;
 }
 
-/** A page record off every list, with a frame of its own, for a new page:
- * a new record and frame while a quarter of the frames are free and the
- * records fit in an eighth of the heap; past either, the least recently used
- * page's record, whose frame goes back, while a sixteenth of the frames are
- * free, above the reserve that `mem_may_take` keeps, so that the new frame
- * is had; NULL otherwise. Under `fc_lock`. */
-static struct fc_page *fc_new(void)
+/** A page record off every list, with no frame yet, for a new page: a new
+ * record while a quarter of the frames are free and the records fit in an
+ * eighth of the heap; past either, the least recently used page's record,
+ * whose frame goes back, while a sixteenth of the frames are free, above
+ * the reserve that `mem_may_take` keeps; NULL otherwise. Under `fc_lock`. */
+static struct fc_page *fc_record(void)
 {
     struct fc_page *p;
-    uintptr_t phys;
     size_t free_frames = frame_free_count(), total = frame_total_count();
 
     if (pages < most && free_frames >= total / 4u) {
-        p = kzalloc(sizeof(*p));
-        if (!p) {
-            return NULL;
-        }
-    } else if (oldest && free_frames >= total / 16u) {
+        return kzalloc(sizeof(*p));
+    }
+    if (oldest && free_frames >= total / 16u) {
         p = oldest;
         fc_unlink(p);
         /* A reader of the page holds a reference of its own. */
         free_frame((uintptr_t)p->pfn * PAGE_SIZE);
         k_memset(p, 0, sizeof(*p));
-    } else {
+        return p;
+    }
+    return NULL;
+}
+
+/** A page record off every list, as `fc_record` gives one, with a new
+ * frame of its own, so that the frame given back for a used record is
+ * there to be had; NULL otherwise. Under `fc_lock`. */
+static struct fc_page *fc_new(void)
+{
+    struct fc_page *p = fc_record();
+    uintptr_t phys;
+
+    if (!p) {
         return NULL;
     }
     phys = alloc_user_frame();
@@ -495,12 +509,64 @@ static void fc_store(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, co
     }
 }
 
+/** Keep the frame `phys` itself, with a reference of the cache's, as page
+ * `pgoff` of `f`, as `fc_insert` keeps a page. */
+static void fc_keep(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, uint32_t epoch)
+{
+    struct fc_page *p;
+    uint32_t flags;
+
+    if (!buckets) {
+        return;
+    }
+    flags = spin_lock_irqsave(&fc_lock);
+    p = fc_record();
+    spin_unlock_irqrestore(&fc_lock, flags);
+    if (!p) {
+        return;
+    }
+    frame_ref(phys);
+    p->pfn = (uint32_t)(phys / PAGE_SIZE);
+    if (!fc_insert(f, pgoff, p, epoch)) {
+        fc_free(p);
+    }
+}
+
+/** Lend the frame of each page `first + i` of `f` that the cache has as the
+ * file is now, for each `phys[i]` that is 0, with a reference; the count
+ * lent. */
+static uint32_t fc_lend(const struct fc_file *f, uint32_t first, uint32_t count, uintptr_t *phys)
+{
+    struct fc_page *p;
+    uint32_t i, lent = 0, flags = spin_lock_irqsave(&fc_lock);
+
+    for (i = 0; i < count; i++) {
+        if (phys[i] == 0 && (p = fc_lookup(f, first + i)) != NULL) {
+            phys[i] = (uintptr_t)p->pfn * PAGE_SIZE;
+            frame_ref(phys[i]);
+            fc_use(p);
+            lent++;
+        }
+    }
+    spin_unlock_irqrestore(&fc_lock, flags);
+    return lent;
+}
+
 int filecache_read(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys)
 {
     struct fc_file f;
 
     return pages && e->ofd && fc_file_of(e->ofd->vmnt, e->ofd->vnode, &f) &&
            fc_read(&f, pgoff, phys, NULL);
+}
+
+uint32_t filecache_lend(const struct fd_entry *e, uint32_t first, uint32_t count, uintptr_t *phys)
+{
+    struct fc_file f;
+
+    return pages && e->ofd && fc_file_of(e->ofd->vmnt, e->ofd->vnode, &f)
+               ? fc_lend(&f, first, count, phys)
+               : 0;
 }
 
 int filecache_read_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, void *buf)
@@ -653,6 +719,15 @@ void filecache_store(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, u
     }
 }
 
+void filecache_keep(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, uint32_t epoch)
+{
+    struct fc_file f;
+
+    if (e->ofd && fc_file_of(e->ofd->vmnt, e->ofd->vnode, &f)) {
+        fc_keep(&f, pgoff, phys, epoch);
+    }
+}
+
 void filecache_store_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, const void *buf,
                           uint32_t epoch)
 {
@@ -675,6 +750,24 @@ void filecache_forget(struct vfs_mount *mnt, void *node)
     flags = spin_lock_irqsave(&fc_lock);
     (*fc_changes(f.mnt, f.ino))++;
     file = pages ? fc_find(f.mnt, f.ino) : NULL;
+    if (file) {
+        fc_drop_file(file);
+    }
+    spin_unlock_irqrestore(&fc_lock, flags);
+}
+
+void filecache_forget_ino(const struct vfs_mount *mnt, uint64_t ino)
+{
+    struct fc_inode *file;
+    uint32_t flags;
+
+    if (!buckets) {
+        return;
+    }
+    mnt = vfs_mount_base(mnt);
+    flags = spin_lock_irqsave(&fc_lock);
+    (*fc_changes(mnt, ino))++;
+    file = pages ? fc_find(mnt, ino) : NULL;
     if (file) {
         fc_drop_file(file);
     }

@@ -246,6 +246,29 @@ int filecache_read(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys)
     return 1;
 }
 
+/** Count a cache look; on a hit lend MODEL_FRAME, which then holds bytes of
+ * 0xa5, for each page asked for that is 0 in `phys`. */
+uint32_t filecache_lend(const struct fd_entry *e, uint32_t first, uint32_t count, uintptr_t *phys)
+{
+    uint32_t i, lent = 0;
+
+    (void)e;
+    (void)first;
+    cache_reads++;
+    if (!model_cached) {
+        return 0;
+    }
+    check(file_locked > 0, "the cache lends its frame under the file's lock");
+    k_memset(model_bytes, 0xa5, sizeof(model_bytes));
+    for (i = 0; i < count; i++) {
+        if (phys[i] == 0) {
+            phys[i] = MODEL_FRAME;
+            lent++;
+        }
+    }
+    return lent;
+}
+
 /** Count a page stored after a file read. */
 void filecache_store(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, uint32_t epoch)
 {
@@ -254,6 +277,23 @@ void filecache_store(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, u
     (void)phys;
     (void)epoch;
     cache_stores++;
+}
+
+/** Count a frame kept after a file read, as a store. */
+void filecache_keep(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, uint32_t epoch)
+{
+    (void)e;
+    (void)pgoff;
+    (void)phys;
+    (void)epoch;
+    cache_stores++;
+}
+
+/** Nothing is cached to forget. */
+void filecache_forget_ino(const struct vfs_mount *mnt, uint64_t ino)
+{
+    (void)mnt;
+    (void)ino;
 }
 
 /* ---- what no row reaches ---- */
@@ -538,7 +578,7 @@ static void disk_stores_rows(void)
           "the private mappings' releases free their file's pages");
 }
 
-/** After two cache misses, fill a private mapping's frame from the cache
+/** After two cache misses, give a private mapping's page the cache's frame
  * under the file's lock alone, without another file read or cache store. */
 static void cached_fault_row(struct vm_file *f)
 {

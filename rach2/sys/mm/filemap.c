@@ -405,18 +405,41 @@ static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, int flus
     return rc;
 }
 
+/** Add the frame `phys`, with the reference it was read or lent with, to
+ * the pages in memory of the disk file of `m` as page `pgoff`, under the
+ * file's lock, which the caller holds, and under the big lock as well when
+ * the page's leaf of the table must be made, since readers under the big
+ * lock alone walk the table's arrays (struct dshare). Returns the frame
+ * with a mapping reference, or 0 when no leaf could be had. */
+static uintptr_t disk_adopt(struct filemap *m, uint32_t pgoff, uintptr_t phys)
+{
+    int big = !bkl_held() && !shmem_has_leaf(m->sh, pgoff);
+
+    if (big) {
+        bkl_enter();
+    }
+    phys = shmem_adopt(m->sh, pgoff, phys);
+    if (big) {
+        bkl_exit();
+    }
+    return phys;
+}
+
 /**
  * Read or borrow disk page `pgoff` under its file's lock, which excludes a
  * write or truncation until the page joins the file's resident pages. A
  * caller without the big lock, a fault of a file whose reads run without it
  * (`unlocked`), finds a resident page and adds one it read under the file's
  * lock alone, and takes the big lock only when the page's leaf of the table
- * must be made, since readers under the big lock alone walk the table's
- * arrays (struct dshare). A page not resident is copied from the file page
- * cache when it has the page, and a page read from the file leaves a copy
- * there, so the pages outlive the file's last mapping, as Linux's page cache
+ * must be made (`disk_adopt`). A page not resident comes from the file page
+ * cache when it has the page, and a page read from the file is kept there,
+ * so the pages outlive the file's last mapping, as Linux's page cache
  * outlives the mappings of its folios: a program started again or a library
- * mapped again does not come from the disk again. Returns 0 with a resident
+ * mapped again does not come from the disk again. While no shared mapping
+ * through a writable descriptor has mapped the file (`stores`), the page in
+ * memory is the cache's frame itself, as Linux maps the page cache's folio
+ * (`filemap_fault`, mm/filemap.c:3326-3370); after, it is a copy, since
+ * such a mapping stores into it before the file. Returns 0 with a resident
  * mapping reference in `phys`, 1 after reading the file, or a negative errno.
  */
 static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
@@ -424,9 +447,9 @@ static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
     struct vfs_ref file;
     struct vfs_stat st;
     uint8_t *page;
-    uint32_t epoch;
+    uint32_t epoch = 0;
     int32_t got = PAGE_SIZE;
-    int rc = 0, big, cached;
+    int rc = 0, cached, share;
 
     file.mnt = m->entry.ofd->vmnt;
     file.node = m->entry.ofd->vnode;
@@ -436,15 +459,19 @@ static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
         return -EIO;
     }
     m->sh->size = st.size;
+    share = !m->ds->stores;
     if ((uint64_t)pgoff * PAGE_SIZE >= st.size) {
         rc = -ENXIO;
     } else if ((*phys = shmem_resident(m->sh, pgoff)) != 0) {
         frame_ref(*phys);
-    } else if ((*phys = alloc_user_frame()) == 0) {
+    } else if (!(cached = share && filecache_lend(&m->entry, pgoff, 1, phys) != 0) &&
+               (*phys = alloc_user_frame()) == 0) {
         rc = -ENOMEM;
     } else {
-        epoch = filecache_epoch(file.mnt, file.node);
-        cached = filecache_read(&m->entry, pgoff, *phys);
+        if (!cached) {
+            epoch = filecache_epoch(file.mnt, file.node);
+            cached = !share && filecache_read(&m->entry, pgoff, *phys);
+        }
         if (!cached) {
             page = kmap_temp(*phys);
             got = page ? filemap_read(m, page, pgoff) : -EIO;
@@ -461,16 +488,13 @@ static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
             rc = got;
         } else {
             if (!cached && got > 0) {
-                filecache_store(&m->entry, pgoff, *phys, epoch);
+                if (share) {
+                    filecache_keep(&m->entry, pgoff, *phys, epoch);
+                } else {
+                    filecache_store(&m->entry, pgoff, *phys, epoch);
+                }
             }
-            big = !bkl_held() && !shmem_has_leaf(m->sh, pgoff);
-            if (big) {
-                bkl_enter();
-            }
-            *phys = shmem_adopt(m->sh, pgoff, *phys);
-            if (big) {
-                bkl_exit();
-            }
+            *phys = disk_adopt(m, pgoff, *phys);
             rc = !*phys ? -ENOMEM : cached ? 0 : 1;
         }
     }
@@ -535,17 +559,21 @@ static int filemap_share_disk(struct vm_file *f, uint32_t pgoff, uintptr_t *phys
  * 0 in `phys[i]` for a page that is not, which is left to its own fault and
  * read then: the pages a fault maps around the one it reads, as Linux's
  * filemap_map_pages maps only the folios already in the page cache and
- * reads none (mm/filemap.c:3634-3719). A page past the file's end is never
- * in memory, since a truncation takes those out under the file's lock,
- * under which the pages are looked up here, as `filemap_disk_page` looks
- * one up. Returns the pages lent.
+ * reads none (mm/filemap.c:3634-3719). A page the file page cache has
+ * counts as in memory while its frame may be shared (`filemap_disk_page`):
+ * it joins the file's pages, so that a program started again maps its text
+ * sixteen pages a fault, as it would were the pages still mapped. A page
+ * past the file's end is in neither, since a truncation takes those out
+ * under the file's lock, under which the pages are looked up here, and the
+ * cache lends only pages of the file as it is now. At most the first 32 of
+ * the range come from the cache. Returns the pages lent.
  */
 static uint32_t filemap_around_disk(struct vm_file *f, uint32_t first, uint32_t count,
                                     uintptr_t *phys)
 {
     struct filemap *m = (struct filemap *)f;
     struct vfs_ref file;
-    uint32_t flags = 0, i, lent = 0;
+    uint32_t flags = 0, i, lent = 0, missing = 0;
     int entered = disk_call_begin(m, &flags);
 
     for (i = 0; i < count; i++) {
@@ -562,6 +590,17 @@ static uint32_t filemap_around_disk(struct vm_file *f, uint32_t first, uint32_t 
         if (phys[i]) {
             frame_ref(phys[i]);
             lent++;
+        } else if (i < 32u) {
+            missing |= 1u << i;
+        }
+    }
+    if (missing && !m->ds->stores &&
+        filecache_lend(&m->entry, first, count < 32u ? count : 32u, phys) != 0) {
+        for (i = 0; i < count && i < 32u; i++) {
+            if ((missing & (1u << i)) && phys[i]) {
+                phys[i] = disk_adopt(m, first + i, phys[i]);
+                lent += phys[i] != 0;
+            }
         }
     }
     vfs_node_unlock(&file);
@@ -760,6 +799,8 @@ static struct vm_file *filemap_disk_map(const fd_entry_t *e, int shared)
         ds->stores = 1;
         dshare_stores_in[dshare_index(ds->ino)]++;
         spin_unlock_irqrestore(&dshare_lock, flags);
+        /* Its stores reach the pages, which may be the cache's frames. */
+        filecache_forget_ino(ds->mnt, ds->ino);
     }
     m->vf.fill = NULL;
     m->vf.share = filemap_share_disk;
