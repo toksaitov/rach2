@@ -52,6 +52,7 @@
 
 extern int printf(const char *format, ...);
 extern void *malloc(unsigned long n);
+extern void *aligned_alloc(unsigned long align, unsigned long n);
 extern void free(void *p);
 extern int strcmp(const char *a, const char *b);
 
@@ -110,6 +111,35 @@ void kfree(void *p)
         live--;
         free(p);
     }
+}
+
+/** kalloc_pages over the host's allocator, counted as kmalloc counts: the
+ * APIC's register page. A host address is its own physical address. */
+void *kalloc_pages(uint32_t count, uintptr_t *phys)
+{
+    void *p;
+
+    if (allocation_fail == 0) {
+        return NULL;
+    }
+    if (allocation_fail > 0) {
+        allocation_fail--;
+    }
+    p = aligned_alloc(4096, 4096ul * count);
+    if (p) {
+        live++;
+    }
+    if (phys) {
+        *phys = (uintptr_t)p;
+    }
+    return p;
+}
+
+/** kfree_pages, counted. */
+void kfree_pages(void *p, uint32_t count)
+{
+    (void)count;
+    kfree(p);
 }
 
 void *k_memcpy(void *dst, const void *src, size_t n)

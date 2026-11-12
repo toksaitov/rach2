@@ -268,7 +268,11 @@ struct kvm_tdp_format {
  * base, the TSC deadline and the x2APIC registers go to `kvm_lapic_msr`,
  * and a backend that lets the guest write CR8 without an exit gives the
  * value to `kvm_lapic_set_cr8` after each exit and loads `kvm_lapic_cr8`'s
- * before each entry, since CR8 is the APIC's TPR. A guest's VMCALL or
+ * before each entry, since CR8 is the APIC's TPR, or has the processor
+ * keep TPR in the APIC's register page itself (`kvm_lapic_page`) and
+ * calls `kvm_lapic_update_ppr` when the guest lowers TPR below the
+ * priority of the highest vector waiting (`kvm_lapic_highest_irr`).
+ * A guest's VMCALL or
  * VMMCALL goes to `kvm_hv_hypercall` while `kvm_hv_hypercall_enabled`; the
  * flush KVM_REQ_TLB_FLUSH asks for must drop the guest's own translations
  * as well, since the Hyper-V TLB flush hypercalls ask for it to flush the
@@ -1390,6 +1394,23 @@ uint64_t kvm_lapic_cr8(struct kvm_vcpu *v);
 
 /** Set the TPR of `v` from CR8 `cr8`. */
 void kvm_lapic_set_cr8(struct kvm_vcpu *v, uint64_t cr8);
+
+/** The physical address of `v`'s APIC register page, which a backend may
+ * give the processor to keep TPR in, as VMX's virtual-APIC page; 0 with
+ * no local APIC in the kernel. The page lasts as long as the vCPU. */
+uintptr_t kvm_lapic_page(struct kvm_vcpu *v);
+
+/** The highest vector in `v`'s IRR, or -1 with none, with no local APIC
+ * in the kernel, or with the APIC off in IA32_APIC_BASE or SPIV, as Linux's
+ * update_cr8_intercept asks kvm_lapic_find_highest_irr only while
+ * kvm_lapic_enabled. */
+int kvm_lapic_highest_irr(struct kvm_vcpu *v);
+
+/** Bring PPR up to date after the guest changed TPR without an exit, and
+ * ask for an injection, which a lower TPR may let through: VMX's
+ * TPR-below-threshold exit, as Linux's handle_tpr_below_threshold calls
+ * kvm_apic_update_ppr. */
+void kvm_lapic_update_ppr(struct kvm_vcpu *v);
 
 /**
  * Ready `v` for an entry, before each one, with the local APIC in the
