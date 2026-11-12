@@ -1,0 +1,219 @@
+samples 43576, lost 0
+entry 16403 37.6% ioctl 0x40406469
+entry 3075 7.1% kernel 0
+entry 2824 6.5% vector 14
+entry 2272 5.2% syscall 0
+entry 1976 4.5% syscall 232
+entry 1669 3.8% ioctl 0xc00c6466
+entry 1601 3.7% syscall 271
+entry 1350 3.1% ioctl 0xc03864bc
+entry 1284 2.9% ioctl 0xc0086457
+entry 1098 2.5% syscall 202
+entry 1041 2.4% syscall 262
+entry 962 2.2% syscall 1
+entry 783 1.8% syscall 257
+entry 706 1.6% syscall 59
+entry 679 1.6% ioctl 0xc00864c0
+entry 617 1.4% syscall 56
+entry 445 1.0% syscall 231
+entry 431 1.0% syscall 7
+entry 360 0.8% syscall 47
+entry 345 0.8% syscall 46
+entry 313 0.7% ioctl 0xc00864bf
+entry 279 0.6% syscall 13
+entry 277 0.6% syscall 9
+entry 261 0.6% syscall 3
+entry 253 0.6% syscall 14
+entry 241 0.6% syscall 230
+entry 202 0.5% syscall 61
+entry 164 0.4% syscall 162
+entry 153 0.4% ioctl 0x8010500c
+entry 143 0.3% syscall 10
+entry 137 0.3% syscall 286
+entry 135 0.3% syscall 107
+entry 99 0.2% syscall 39
+entry 99 0.2% ioctl 0xc02864c3
+entry 92 0.2% syscall 5
+entry 88 0.2% syscall 8
+entry 80 0.2% syscall 12
+entry 74 0.2% ioctl 0x80044dfe
+entry 70 0.2% ioctl 0x400c645f
+entry 69 0.2% syscall 21
+entry 43 0.1% syscall 73
+entry 41 0.1% syscall 33
+entry 32 0.1% syscall 72
+entry 31 0.1% syscall 318
+entry 30 0.1% syscall 217
+entry 26 0.1% syscall 108
+entry 18 0.0% ioctl 0xc0206464
+entry 15 0.0% syscall 102
+entry 14 0.0% syscall 302
+entry 14 0.0% syscall 104
+entry 12 0.0% syscall 293
+entry 12 0.0% syscall 15
+entry 12 0.0% ioctl 0xc00464af
+entry 11 0.0% syscall 275
+entry 10 0.0% syscall 158
+entry 10 0.0% ioctl 0x40086409
+entry 9 0.0% syscall 334
+entry 8 0.0% syscall 11
+entry 6 0.0% syscall 221
+entry 5 0.0% syscall 89
+entry 4 0.0% syscall 83
+entry 4 0.0% syscall 55
+entry 4 0.0% syscall 28
+entry 4 0.0% syscall 263
+entry 4 0.0% ioctl 0xc0106461
+entry 4 0.0% ioctl 0xc010645b
+entry 3 0.0% syscall 273
+entry 3 0.0% ioctl 0xc06864b8
+entry 3 0.0% ioctl 0x802c542a
+entry 2 0.0% syscall 44
+entry 2 0.0% syscall 41
+entry 2 0.0% syscall 128
+entry 2 0.0% syscall 111
+entry 2 0.0% syscall 103
+entry 2 0.0% ioctl 0xc018643a
+entry 2 0.0% ioctl 0xc0044d00
+entry 2 0.0% ioctl 0x8933
+entry 2 0.0% ioctl 0x5413
+entry 1 0.0% syscall 87
+entry 1 0.0% syscall 80
+entry 1 0.0% syscall 52
+entry 1 0.0% syscall 435
+entry 1 0.0% syscall 35
+entry 1 0.0% syscall 326
+entry 1 0.0% syscall 32
+entry 1 0.0% syscall 285
+entry 1 0.0% syscall 270
+entry 1 0.0% syscall 258
+entry 1 0.0% syscall 218
+entry 1 0.0% syscall 20
+entry 1 0.0% syscall 161
+entry 1 0.0% syscall 110
+entry 1 0.0% ioctl 0x80044d00
+entry 1 0.0% ioctl 0x5411
+
+ioctl 0x40406469: 16403 samples
+function 6095 37.2% kirq_restore
+function 920 5.6% find_cmd
+function 615 3.7% arch_atomic_cmpxchg
+function 565 3.4% arch_copy_words
+function 475 2.9% arch_fill_words
+function 473 2.9% dma_resv_add_fence_locked
+function 356 2.2% cursor_at
+function 353 2.2% i915_vma_pin_args
+function 309 1.9% cursor_get
+function 303 1.8% eb_binding
+function 299 1.8% spin_unlock_irqrestore
+function 275 1.7% eb_move_to_gpu
+function 273 1.7% kmalloc
+function 244 1.5% i915_gem_object_lookup
+function 236 1.4% i915_cmd_parser
+function 235 1.4% k_memset
+function 204 1.2% lru_unlink
+function 195 1.2% render_length_mask
+function 171 1.0% spin_lock_irqsave
+function 163 1.0% kfree
+path 965 5.9% kirq_restore <- drm_gem_object_lookup <- i915_gem_object_lookup <- eb_lookup
+path 920 5.6% find_cmd <- eb_parse <- ioctl_call <- drm_node_ioctl
+path 715 4.4% kirq_restore <- dma_fence_signal <- dma_fence_merge <- dma_resv_snapshot_locked
+path 621 3.8% kirq_restore <- kmalloc <- kmalloc <- dma_fence_merge
+path 461 2.8% kirq_restore <- dma_fence_init <- dma_resv_snapshot_locked <- eb_move_to_gpu
+path 457 2.8% dma_resv_add_fence_locked <- eb_move_to_gpu <- ioctl_call <- drm_node_ioctl
+path 381 2.3% kirq_restore <- kfree <- array_release <- dma_fence_merge
+path 346 2.1% i915_vma_pin_args <- eb_pin_first <- ioctl_call <- drm_node_ioctl
+path 309 1.9% cursor_get <- eb_parse <- ioctl_call <- drm_node_ioctl
+path 303 1.8% eb_binding <- ioctl_call <- drm_node_ioctl <- ioctl_locked
+path 290 1.8% arch_copy_words <- copy_batch <- eb_parse <- ioctl_call
+path 282 1.7% cursor_at <- cursor_get <- eb_parse <- ioctl_call
+path 278 1.7% kirq_restore <- wq_wake_all <- mutex_unlock <- dma_resv_unlock
+path 275 1.7% eb_move_to_gpu <- ioctl_call <- drm_node_ioctl <- ioctl_locked
+path 246 1.5% kirq_restore <- kmalloc <- kmalloc <- dma_resv_snapshot_locked
+path 246 1.5% kirq_restore <- kfree <- dma_resv_snapshot_locked <- eb_move_to_gpu
+path 242 1.5% arch_copy_words <- user_end <- eb_relocs_copy <- ioctl_call
+path 239 1.5% i915_gem_object_lookup <- eb_lookup <- ioctl_call <- drm_node_ioctl
+path 234 1.4% i915_cmd_parser <- eb_parse <- ioctl_call <- drm_node_ioctl
+path 228 1.4% kirq_restore <- mutex_lock <- dma_resv_lock <- eb_move_to_gpu
+path 219 1.3% kirq_restore <- mutex_unlock <- dma_resv_unlock <- eb_move_to_gpu
+path 211 1.3% kirq_restore <- wq_wake_all <- dma_fence_signal <- dma_fence_merge
+path 196 1.2% lru_unlink <- eb_pin_first <- ioctl_call <- drm_node_ioctl
+path 195 1.2% render_length_mask <- eb_parse <- ioctl_call <- drm_node_ioctl
+path 192 1.2% kirq_restore <- kfree <- dma_fence_put <- eb_move_to_gpu
+path 171 1.0% kirq_restore <- drm_node_ioctl <- ioctl_locked <- sys_ioctl
+path 157 1.0% arch_fill_words <- kzalloc <- dma_fence_merge <- dma_resv_snapshot_locked
+path 144 0.9% eb_relocs_out <- ioctl_call <- drm_node_ioctl <- ioctl_locked
+path 143 0.9% dma_fence_merge <- dma_resv_snapshot_locked <- eb_move_to_gpu <- ioctl_call
+path 140 0.9% i915_gem_object_flush_for_gpu <- eb_move_to_gpu <- ioctl_call <- drm_node_ioctl
+path 126 0.8% arch_atomic_cmpxchg <- dma_resv_add_fence_locked <- eb_move_to_gpu <- ioctl_call
+path 119 0.7% refs_put <- i915_gem_object_put <- eb_hold_release <- request_release
+path 119 0.7% kmalloc <- kmalloc <- dma_fence_merge <- dma_resv_snapshot_locked
+path 112 0.7% arch_fill_words <- dma_fence_init <- dma_resv_snapshot_locked <- eb_move_to_gpu
+path 111 0.7% cmd_key_shift <- eb_parse <- ioctl_call <- drm_node_ioctl
+path 103 0.6% dma_fence_is_signaled <- eb_move_to_gpu <- ioctl_call <- drm_node_ioctl
+path 96 0.6% cmd_index_of <- eb_parse <- ioctl_call <- drm_node_ioctl
+path 90 0.5% arch_atomic_cmpxchg <- i915_gem_object_put <- eb_hold_release <- request_release
+path 83 0.5% kirq_restore <- fd_tty <- sys_ioctl <- _syscall_handler
+path 83 0.5% i915_vma_unpin <- ioctl_call <- drm_node_ioctl <- ioctl_locked
+
+ioctl 0xc00c6466: 1669 samples
+function 935 56.0% kirq_restore
+function 132 7.9% _syscall_handler
+function 91 5.5% vm_lower
+function 66 4.0% i915_gem_madvise_ioctl
+function 44 2.6% drm_ioctl
+function 24 1.4% kirq_save
+function 24 1.4% ioctl_row
+function 22 1.3% file_ops_unlocked
+function 18 1.1% mmu_user_table
+function 17 1.0% spin_unlock_irqrestore
+function 16 1.0% arch_copy_words
+function 14 0.8% table_for
+function 14 0.8% spin_lock_irqsave
+function 14 0.8% k_memcpy
+function 12 0.7% vm_user_begin
+function 12 0.7% ioctl_fd
+function 11 0.7% arch_cpu_id
+function 11 0.7% arch_atomic_cmpxchg
+function 10 0.6% user_range_ok
+function 9 0.5% devfs_fd_is_raw
+path 229 13.7% kirq_restore <- fd_tty <- sys_ioctl <- _syscall_handler
+path 221 13.2% kirq_restore <- drm_node_ioctl <- ioctl_locked <- sys_ioctl
+path 132 7.9% _syscall_handler <- _dispatch <- _isr_router <- syscall_entry
+path 91 5.5% vm_lower <- prefault_locked <- vm_user_begin <- user_begin
+path 75 4.5% kirq_restore <- fd_table_unlock <- fd_holds_release <- syscall_holds_release
+path 64 3.8% kirq_restore <- up_read <- mmap_unlock <- vm_user_end
+path 63 3.8% kirq_restore <- drm_gem_object_lookup <- i915_gem_object_lookup <- ioctl_call
+path 60 3.6% kirq_restore <- wq_wake_all <- up_read <- mmap_unlock
+path 58 3.5% kirq_restore <- down_read <- arch_cpu_id <- vm_user_begin
+path 54 3.2% i915_gem_madvise_ioctl <- ioctl_call <- drm_node_ioctl <- ioctl_locked
+path 44 2.6% kirq_restore <- ioctl_fd <- sys_ioctl <- _syscall_handler
+path 40 2.4% drm_ioctl <- drm_node_ioctl <- ioctl_locked <- sys_ioctl
+path 35 2.1% kirq_restore <- fd_get <- ioctl_fd <- sys_ioctl
+path 31 1.9% kirq_restore <- wq_wake_all <- mutex_unlock <- dma_resv_unlock
+path 26 1.6% kirq_restore <- mutex_lock <- dma_resv_lock <- i915_gem_madvise_ioctl
+path 24 1.4% ioctl_row <- drm_node_ioctl <- ioctl_locked <- sys_ioctl
+path 21 1.3% kirq_restore <- mutex_unlock <- dma_resv_unlock <- i915_gem_madvise_ioctl
+path 16 1.0% arch_copy_words <- user_end <- drm_ioctl <- drm_node_ioctl
+path 14 0.8% table_for <- user_pte <- prefault_locked <- vm_user_begin
+path 14 0.8% file_ops_unlocked <- sys_ioctl <- _syscall_handler <- _dispatch
+path 12 0.7% i915_gem_madvise_ioctl <- drm_node_ioctl <- ioctl_locked <- sys_ioctl
+path 11 0.7% mmu_user_table <- prefault_locked <- vm_user_begin <- user_begin
+path 11 0.7% k_memcpy <- user_end <- drm_ioctl <- drm_node_ioctl
+path 11 0.7% arch_atomic_cmpxchg <- i915_gem_madvise_ioctl <- ioctl_call <- drm_node_ioctl
+path 10 0.6% user_range_ok <- drm_ioctl <- drm_node_ioctl <- ioctl_locked
+path 9 0.5% ioctl_fd <- sys_ioctl <- _syscall_handler <- _dispatch
+path 9 0.5% devfs_fd_is_raw <- ioctl_fd <- sys_ioctl <- _syscall_handler
+path 8 0.5% kirq_restore <- _syscall_handler <- _dispatch <- _isr_router
+path 8 0.5% file_ops_unlocked <- ioctl_fd <- sys_ioctl <- _syscall_handler
+path 7 0.4% vm_user_begin <- user_begin <- drm_ioctl <- drm_node_ioctl
+path 7 0.4% mmu_user_table <- user_pte <- prefault_locked <- vm_user_begin
+path 7 0.4% i915_gem_object_lookup <- ioctl_call <- drm_node_ioctl <- ioctl_locked
+path 6 0.4% ioctl_call <- drm_node_ioctl <- ioctl_locked <- sys_ioctl
+path 5 0.3% vm_user_end <- copy_from_user <- drm_ioctl <- drm_node_ioctl
+path 5 0.3% vm_user_begin <- drm_ioctl <- drm_node_ioctl <- ioctl_locked
+path 5 0.3% range_ready <- prefault_locked <- vm_user_begin <- user_begin
+path 5 0.3% pkey_allows <- range_ready <- prefault_locked <- vm_user_begin
+path 5 0.3% kirq_save <- drm_node_ioctl <- ioctl_locked <- sys_ioctl
+path 5 0.3% kirq_save <- _syscall_handler <- _dispatch <- _isr_router
+path 4 0.2% spin_unlock_irqrestore <- down_read <- arch_cpu_id <- vm_user_begin
