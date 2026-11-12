@@ -1400,9 +1400,12 @@ void kvm_lapic_set_cr8(struct kvm_vcpu *v, uint64_t cr8);
 uintptr_t kvm_lapic_page(struct kvm_vcpu *v);
 
 /** The highest vector in `v`'s IRR, or -1 with none, with no local APIC
- * in the kernel, or with the APIC off in IA32_APIC_BASE or SPIV, as Linux's
- * update_cr8_intercept asks kvm_lapic_find_highest_irr only while
- * kvm_lapic_enabled. */
+ * in the kernel, or with the APIC off in IA32_APIC_BASE, where no vector
+ * in IRR can be delivered. SPIV's enable bit does not hide IRR, since
+ * `kvm_lapic_pending` still delivers from it: Linux's
+ * kvm_lapic_find_highest_irr (lapic.c:830-838) checks no enable, and
+ * kvm_apic_has_interrupt (lapic.c:3021-3031) asks only kvm_apic_present
+ * (lapic.h:208-211). */
 int kvm_lapic_highest_irr(struct kvm_vcpu *v);
 
 /** Bring PPR up to date after the guest changed TPR without an exit, and

@@ -1302,7 +1302,7 @@ int kvm_lapic_highest_irr(struct kvm_vcpu *v)
 {
     struct lapic *l = apic_of(v);
 
-    if (!l || !hw_enabled(l) || !sw_enabled(l)) {
+    if (!l || !hw_enabled(l)) {
         return -1;
     }
     return vec_highest(l, APIC_IRR);
