@@ -1,7 +1,7 @@
 /*
  * ext2_service_rows.h: rows of ext2_hosttest.c, which includes this file after
  * ext2_pair_rows.h, for the service points of a free of a file's blocks
- * (`punch`) and of a write of a file and its drains, where the big lock is
+ * (`ext2_punch`) and of a write of a file and its drains, where the big lock is
  * let go and another process runs: a real competing operation at each one, a
  * sync and e2fsck of the device at each one, and a device that fails at one.
  */
@@ -801,10 +801,10 @@ static void svc_once(void)
 
 /**
  * Process B takes every free block at the first write point of a long write,
- * which `writeback_space` had passed whole. The write stops short, with what
- * it took and those bytes in the file, and nothing past them, and the volume
- * is clean. The write sees what B changed at that point, so this row has no
- * pass without the point.
+ * which `ext2_writeback_space` had passed whole. The write stops short, with
+ * what it took and those bytes in the file, and nothing past them, and the
+ * volume is clean. The write sees what B changed at that point, so this row has
+ * no pass without the point.
  */
 static void svc_enospc_row(uint32_t flags)
 {

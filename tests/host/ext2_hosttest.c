@@ -4000,12 +4000,12 @@ static int listing(void *h)
  * big lock on a type that sets `reads_unlocked`, with the lock reported
  * free (compat/bkl_held.c), and count the takes the driver makes. While
  * another description's write waits in the batch, a read and a listing
- * take the lock for the batch (`batch_guard`) and read the pending bytes,
+ * take the lock for the batch (`ext2_batch_guard`) and read the pending bytes,
  * a hold that is not the last is dropped without it
  * (`ext2_put_unless_last`), and a release takes it to drain the batch
  * (`ext2_release`). Once the batch is empty a read, a listing and a release
  * take it never, the batch's images being read from the cache alone
- * (`writeback_find`), and a last put takes it once (`ext2_put`).
+ * (`ext2_writeback_find`), and a last put takes it once (`ext2_put`).
  */
 static void unlocked_reader_row(void)
 {
