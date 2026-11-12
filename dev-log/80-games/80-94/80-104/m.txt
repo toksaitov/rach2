@@ -1,0 +1,8 @@
+sleep 2
+cat /sys/kernel/debug/exits
+/t/load munmapspin 20000
+cat /sys/kernel/debug/exits
+tar cf - /opt/proton | cat > /dev/null
+cat /sys/kernel/debug/exits
+tar cf - /opt/proton | cat > /dev/null
+cat /sys/kernel/debug/exits

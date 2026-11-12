@@ -8,7 +8,7 @@ for b in blocks:
     if b.startswith('cat /sys/kernel/debug/exits'):
         d={}
         for l in b.splitlines():
-            m=re.match(r'(rdmsr|wrmsr|in|out|hlt|cpuid|ipi|lost) ?(\S*) (\d+)( \d+)+$',l)
+            m=re.match(r'(rdmsr|wrmsr|in|out|hlt|cpuid|vmcall|ipi|lost) ?(\S*) (\d+)( \d+)+$',l)
             if m: d[m.group(1)+' '+m.group(2)]=[int(x) for x in l.split()[2:]]
         snaps.append((prev,d))
     else:
