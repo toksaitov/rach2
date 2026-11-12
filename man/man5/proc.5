@@ -103,7 +103,8 @@ or
 .Ql unknown
 before a reading succeeds; and the readings of its sense, those that
 failed or found the command interface busy, and the changes of its state.
-The tick reads each jack every quarter second, and a start reads it once.
+The driver's thread reads each jack every quarter second, and a start
+reads it once.
 A state changes when two readings in a row differ from it, or at a start's
 reading; a failed reading changes nothing.
 A change of the microphone jack moves capture between the internal and the
@@ -356,11 +357,15 @@ The last tone's or sound's divisor of 1193182 Hz, and the last tone's
 length in milliseconds, 0 for a sound.
 .It Li speaker-beeps , speaker-beep-divider
 Tones and sounds the audio driver's beep generator began beside the PC
-speaker, and the divider it was last sent, 0 while it is silent; both stay
-0 on a machine whose driver has no generator.
+speaker, and the divider it was last given, 0 for silence; both stay 0 on
+a machine whose driver has no generator.
+While the driver's thread runs, a request or the kernel's stop hands the
+divider to that thread, and this line has it as soon as it is handed on,
+before the codec has it.
 .It Li speaker-beep-retries
 Stops of the generator that the tick found the codec busy for and sent
-again at a later tick.
+again at a later tick; 0 while the driver's thread sends the generator's
+commands.
 .El
 .It Pa /proc/diskstats
 A line for each disk and each partition node, in Linux's twenty fields:
