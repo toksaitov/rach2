@@ -3,11 +3,13 @@
 # image's page at VDSO_TEXT_OFFSET. The kernel never runs it.
 #
 # The code reads the data page (../../vdso.h), which is mapped one page
-# below the image, through %rip, so it runs wherever the image is placed.
-# Where the data page says the clock does not run from the TSC, or for a
-# clock or an argument it does not serve, each function makes the system
-# call it stands for and returns what the kernel returned, -errno for an
-# error, as Linux's vDSO does; the C library turns that into errno.
+# below the image, and KVM's clock page for the boot processor, one page
+# below that, through %rip, so it runs wherever the image is placed. Where
+# the data page says the clock does not run from the TSC, where KVM's page
+# has withdrawn its stable bit, or for a clock or an argument it does not
+# serve, each function makes the system call it stands for and returns
+# what the kernel returned, -errno for an error, as Linux's vDSO does; the
+# C library turns that into errno.
 
 # From the code's first byte back to the data page: the image's bytes
 # before the code, VDSO_TEXT_OFFSET in vdso.c, and the page.
@@ -27,12 +29,21 @@
 .set D_COARSE_NS,  72
 .set D_RAW_MULT,   80
 .set D_RAW_SEC,    88
+# From the data page back to KVM's clock page, and that page's version
+# and flags, pvclock_vcpu_time_info's (../x86/tsc.c), with
+# PVCLOCK_TSC_STABLE_BIT.
+.set KVM_BACK,         0x1000
+.set PVTI_VERSION,     0
+.set PVTI_FLAGS,       29
+.set PVCLOCK_TSC_STABLE_BIT, 1
 # Each clock's rate is 8 bytes before its seconds: D_MULT before D_MONO_SEC,
 # D_REAL_MULT before D_REAL_SEC and D_RAW_MULT before D_RAW_SEC.
 .set D_RATE_BACK,  8
 
-# VCLOCK_TSC, and the system calls each function stands for.
-.set VCLOCK_TSC,         1
+# VCLOCK_NONE and VCLOCK_PVCLOCK, and the system calls each function
+# stands for.
+.set VCLOCK_NONE,        0
+.set VCLOCK_PVCLOCK,     2
 .set SYS_gettimeofday,   96
 .set SYS_time,           201
 .set SYS_clock_gettime,  228
@@ -57,18 +68,27 @@ vdso_text_start:
 # mode after the count, as Linux's do_hres does (lib/vdso/gettimeofday.c:
 # 141-169), and returns with the carry set and nothing read when the clock
 # has stopped, so that a reading the stop overtakes makes the system call.
-# Changes %rcx and %r9 to %r11.
+# In VCLOCK_PVCLOCK the TSC is read as Linux's vread_pvclock reads it
+# (arch/x86/include/asm/vdso/gettimeofday.h:197-232): KVM's page's version
+# made even, its stable bit checked, the TSC read, and the version read
+# again, the TSC read again when it moved; a clear bit returns with the
+# carry set, so that the system call reads the clock. Changes %rcx and %r9
+# to %r11.
 vdso_fine:
     movl D_SEQ(%r8), %r11d
     testl $1, %r11d
     jnz 3f
-    cmpl $VCLOCK_TSC, D_MODE(%r8)
-    jne 4f
+    movl D_MODE(%r8), %ecx
+    cmpl $VCLOCK_NONE, %ecx
+    je 4f
     movq (%r8,%rdi), %r9
     movq 8(%r8,%rdi), %r10
+    cmpl $VCLOCK_PVCLOCK, %ecx
+    je 5f
     lfence
     rdtsc
     lfence
+6:
     shlq $32, %rdx
     orq %rdx, %rax
     subq D_CYCLE_BASE(%r8), %rax
@@ -100,6 +120,17 @@ vdso_fine:
 4:
     stc
     ret
+5:
+    movl -KVM_BACK+PVTI_VERSION(%r8), %ecx
+    andl $~1, %ecx
+    testb $PVCLOCK_TSC_STABLE_BIT, -KVM_BACK+PVTI_FLAGS(%r8)
+    jz 4b
+    lfence
+    rdtsc
+    lfence
+    cmpl -KVM_BACK+PVTI_VERSION(%r8), %ecx
+    jne 5b
+    jmp 6b
 
 # The same clock as of the last tick, without the TSC: %rax and %rdx and
 # the carry as `vdso_fine` gives them. Changes %r11.
@@ -107,8 +138,8 @@ vdso_coarse:
     movl D_SEQ(%r8), %r11d
     testl $1, %r11d
     jnz 1f
-    cmpl $VCLOCK_TSC, D_MODE(%r8)
-    jne 2f
+    cmpl $VCLOCK_NONE, D_MODE(%r8)
+    je 2f
     movq (%r8,%rdi), %rax
     movq 8(%r8,%rdi), %rdx
     cmpl D_SEQ(%r8), %r11d
@@ -131,8 +162,8 @@ vdso_coarse:
 .globl vdso_clock_gettime
 vdso_clock_gettime:
     leaq vdso_text_start-VDSO_BACK(%rip), %r8
-    cmpl $VCLOCK_TSC, D_MODE(%r8)
-    jne 9f
+    cmpl $VCLOCK_NONE, D_MODE(%r8)
+    je 9f
     testl %edi, %edi
     je 1f
     cmpl $1, %edi
@@ -195,8 +226,8 @@ vdso_gettimeofday:
     testq %rdi, %rdi
     je 1f
     leaq vdso_text_start-VDSO_BACK(%rip), %r8
-    cmpl $VCLOCK_TSC, D_MODE(%r8)
-    jne 9f
+    cmpl $VCLOCK_NONE, D_MODE(%r8)
+    je 9f
     movq %rdi, %rsi
     movl $D_REAL_SEC, %edi
     call vdso_fine
@@ -227,8 +258,8 @@ vdso_gettimeofday_end:
 .globl vdso_time
 vdso_time:
     leaq vdso_text_start-VDSO_BACK(%rip), %r8
-    cmpl $VCLOCK_TSC, D_MODE(%r8)
-    jne 9f
+    cmpl $VCLOCK_NONE, D_MODE(%r8)
+    je 9f
     movq %rdi, %rsi
     movl $D_REAL_SEC, %edi
     call vdso_fine
@@ -287,8 +318,8 @@ vdso_getcpu_end:
 .globl vdso_clock_getres
 vdso_clock_getres:
     leaq vdso_text_start-VDSO_BACK(%rip), %r8
-    cmpl $VCLOCK_TSC, D_MODE(%r8)
-    jne 9f
+    cmpl $VCLOCK_NONE, D_MODE(%r8)
+    je 9f
     movl D_RES_NS(%r8), %eax
     testl %edi, %edi
     je 1f

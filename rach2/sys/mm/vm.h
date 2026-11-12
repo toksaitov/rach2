@@ -109,12 +109,12 @@
 /* Kept the same way: the mapping was made with MAP_NORESERVE, as Linux's
  * VM_NORESERVE under overcommit_memory 0, and is never VM_PROT_ACCOUNT. */
 #define VM_PROT_NORESERVE   0x100000u
-/* Kept the same way: the region is the vDSO's data page, [vvar], which
- * Linux maps VM_IO | VM_PFNMAP and without VM_MAYEXEC. Only the process's
- * own accesses reach its pages: ptrace, /proc/PID/mem, process_vm_readv,
- * vmsplice and the pins of devices are refused them, as Linux's
- * get_user_pages refuses the region, and mprotect answers EACCES to
- * PROT_EXEC. */
+/* Kept the same way: the region is the vDSO's data page and KVM's clock
+ * page, [vvar], which Linux maps VM_IO | VM_PFNMAP and without VM_MAYEXEC.
+ * Only the process's own accesses reach its pages: ptrace, /proc/PID/mem,
+ * process_vm_readv, vmsplice and the pins of devices are refused them, as
+ * Linux's get_user_pages refuses the region, and mprotect answers EACCES
+ * to PROT_EXEC. */
 #define VM_PROT_VVAR        0x200000u
 /* Given with the access bits, which a change of them replaces: mmap or
  * mprotect gave the region write or execute without PROT_READ, so it has

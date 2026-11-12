@@ -6,12 +6,14 @@
 # VDSO_TEXT_OFFSET; it is 32-bit code, which the kernel never runs.
 #
 # The clock functions read the data page the 64-bit vDSO reads
-# (../../vdso.h), mapped one page below the image, and find it from their
-# own address, since 32-bit code has no addressing relative to the
-# instruction pointer. Where the page says the clock does not run from the
-# TSC, or for a clock or an argument they do not serve, they make the
-# system call they stand for through __kernel_vsyscall and return what the
-# kernel returned, -errno for an error, as Linux's vDSO does.
+# (../../vdso.h), mapped one page below the image, and KVM's clock page for
+# the boot processor, one page below that, and find them from their own
+# address, since 32-bit code has no addressing relative to the instruction
+# pointer. Where the page says the clock does not run from the TSC, where
+# KVM's page has withdrawn its stable bit, or for a clock or an argument
+# they do not serve, they make the system call they stand for through
+# __kernel_vsyscall and return what the kernel returned, -errno for an
+# error, as Linux's vDSO does.
 
 # From the code's first byte back to the data page: the image's bytes
 # before the code, VDSO_TEXT_OFFSET in vdsoimg.h, and the page.
@@ -32,12 +34,21 @@
 .set D_COARSE_NS,  72
 .set D_RAW_MULT,   80
 .set D_RAW_SEC,    88
+# From the data page back to KVM's clock page, and that page's version
+# and flags, pvclock_vcpu_time_info's (../x86/tsc.c), with
+# PVCLOCK_TSC_STABLE_BIT.
+.set KVM_BACK,         0x1000
+.set PVTI_VERSION,     0
+.set PVTI_FLAGS,       29
+.set PVCLOCK_TSC_STABLE_BIT, 1
 # Each clock's rate is 8 bytes before its seconds: D_MULT before D_MONO_SEC,
 # D_REAL_MULT before D_REAL_SEC and D_RAW_MULT before D_RAW_SEC.
 .set D_RATE_BACK,  8
 
-# VCLOCK_TSC, and the i386 system calls the code makes.
-.set VCLOCK_TSC,           1
+# VCLOCK_NONE and VCLOCK_PVCLOCK, and the i386 system calls the code
+# makes.
+.set VCLOCK_NONE,          0
+.set VCLOCK_PVCLOCK,       2
 .set NR_time,              13
 .set NR_gettimeofday,      78
 .set NR_sigreturn,         119
@@ -134,7 +145,10 @@ vdso32_page_at:
 # Linux's do_hres does (lib/vdso/gettimeofday.c:141-169), and returns with
 # the carry set and nothing read when the clock has stopped, so that a
 # reading the stop overtakes makes the system call; the carry is clear
-# otherwise.
+# otherwise. In VCLOCK_PVCLOCK the TSC is read as Linux's vread_pvclock
+# reads it (arch/x86/include/asm/vdso/gettimeofday.h:197-232), as the
+# 64-bit vDSO's vdso_fine reads it, and a clear stable bit returns with
+# the carry set.
 vdso32_fine:
     pushl %ebp
     pushl %ebx
@@ -148,11 +162,15 @@ vdso32_fine:
     testl $1, %eax
     jnz 5f
     movl %eax, (%esp)
-    cmpl $VCLOCK_TSC, D_MODE(%ebp)
-    jne 6f
+    movl D_MODE(%ebp), %eax
+    cmpl $VCLOCK_NONE, %eax
+    je 6f
+    cmpl $VCLOCK_PVCLOCK, %eax
+    je 7f
     lfence
     rdtsc
     lfence
+8:
     subl D_CYCLE_BASE(%ebp), %eax
     sbbl D_CYCLE_BASE+4(%ebp), %edx
     jae 2f
@@ -214,6 +232,17 @@ vdso32_fine:
     popl %ebp
     stc
     ret
+7:
+    movl -KVM_BACK+PVTI_VERSION(%ebp), %esi
+    andl $~1, %esi
+    testb $PVCLOCK_TSC_STABLE_BIT, -KVM_BACK+PVTI_FLAGS(%ebp)
+    jz 6b
+    lfence
+    rdtsc
+    lfence
+    cmpl -KVM_BACK+PVTI_VERSION(%ebp), %esi
+    jne 7b
+    jmp 8b
 
 # The same clock as of the last tick, without the TSC: EDX:EAX and ECX and
 # the carry as `vdso32_fine` gives them, the mode checked in each pass as
@@ -227,8 +256,8 @@ vdso32_coarse:
     movl D_SEQ(%ecx), %edi
     testl $1, %edi
     jnz 2f
-    cmpl $VCLOCK_TSC, D_MODE(%ecx)
-    jne 3f
+    cmpl $VCLOCK_NONE, D_MODE(%ecx)
+    je 3f
     movl (%ecx,%eax), %ebx
     movl 4(%ecx,%eax), %esi
     movl 8(%ecx,%eax), %edx
@@ -262,8 +291,8 @@ vdso32_coarse:
 # carry is this routine's.
 vdso32_clock:
     call vdso32_page
-    cmpl $VCLOCK_TSC, D_MODE(%ecx)
-    jne 9f
+    cmpl $VCLOCK_NONE, D_MODE(%ecx)
+    je 9f
     testl %eax, %eax
     je 1f
     cmpl $1, %eax
@@ -407,8 +436,8 @@ vdso32_time_end:
 .globl vdso32_clock_getres
 vdso32_clock_getres:
     call vdso32_page
-    cmpl $VCLOCK_TSC, D_MODE(%ecx)
-    jne 9f
+    cmpl $VCLOCK_NONE, D_MODE(%ecx)
+    je 9f
     movl 4(%esp), %edx
     movl D_RES_NS(%ecx), %eax
     testl %edx, %edx

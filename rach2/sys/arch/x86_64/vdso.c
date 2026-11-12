@@ -12,6 +12,7 @@
 #include "../../lib/kstring.h"
 #include "../../mm/paging.h"
 #include "../../proc/elf.h"
+#include "../x86/tsc.h"
 
 /*
  * The ELF structures the image has that the loader's elf.h does not: a
@@ -452,6 +453,9 @@ uintptr_t vdso_frame(int abi, uint32_t page)
 {
     if (page == VDSO_DATA_PAGE) {
         return vdso_data_frame();
+    }
+    if (page == VDSO_KVM_PAGE) {
+        return tsc_kvm_page_frame();
     }
 #if RACH2_IA32
     return abi == VDSO_IA32 ? vdso32_image_frame() : image_phys;

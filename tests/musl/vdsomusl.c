@@ -14,7 +14,7 @@
  *
  * `auxv`: AT_SYSINFO_EHDR gives the address of the ELF header of a shared
  * object of the program's class and machine. `maps`: /proc/self/maps has
- * `[vvar]`, one page readable alone, just below it, and `[vdso]`, one page
+ * `[vvar]`, two pages readable alone, just below it, and `[vdso]`, one page
  * readable and executable, at it. `symbols`: the image's hash table and
  * version tables give `__vdso_clock_gettime`, `__vdso_gettimeofday`,
  * `__vdso_time`, `__vdso_getcpu` and `__vdso_clock_getres`, each of version
@@ -346,9 +346,9 @@ static int maps(void)
         strcmp(perm, "r-xp") != 0) {
         return fail("maps has no [vdso] of one r-xp page at AT_SYSINFO_EHDR");
     }
-    if (maps_region("[vvar]", &lo, &hi, perm) != 0 || lo != at - 4096 || hi != at ||
+    if (maps_region("[vvar]", &lo, &hi, perm) != 0 || lo != at - 8192 || hi != at ||
         strcmp(perm, "r--p") != 0) {
-        return fail("maps has no [vvar] of one r--p page below the vDSO");
+        return fail("maps has no [vvar] of two r--p pages below the vDSO");
     }
     report_held();
     return 0;
