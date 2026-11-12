@@ -1316,21 +1316,26 @@ static void cpu_timer_tick(process_t *p, int k, int counts, int signo)
     }
 }
 
+/* The modes a tick is charged to (`sched_account_one`). */
+#define ACCOUNT_SYSTEM 0
+#define ACCOUNT_USER   1
+#define ACCOUNT_IDLE   2
+
 /**
  * Count one tick of processor `cpu` as idle or busy, and charge a busy one
  * to the process it interrupted, to its process's virtual and profiling
  * timers, and to the POSIX timers that count its processor time.
  *
  * The process charged is `current_proc`, whose code, system call or
- * interrupt handler the tick interrupted, and `user` says whether the
- * interrupted code was ring 3's; Linux charges an interrupt handler's time to
- * the process it interrupted too. A tick that finds the processor in an idle
- * wait is charged to no one, although the process whose call is waiting is
- * still current.
+ * interrupt handler the tick interrupted, and `mode` is ACCOUNT_USER when
+ * that was ring 3's code; Linux charges an interrupt handler's time to the
+ * process it interrupted too. An ACCOUNT_IDLE tick, one due in an idle
+ * wait, is charged to no one, although the process whose call is waiting
+ * is still current.
  */
-static void sched_account_one(struct percpu *cpu, int user)
+static void sched_account_one(struct percpu *cpu, int mode)
 {
-    int idle = cpu->idle_wait;
+    int idle = mode == ACCOUNT_IDLE, user = mode == ACCOUNT_USER;
 
     cpu->ticks_seq++;
     if (idle) {
@@ -1357,6 +1362,43 @@ static void sched_account_one(struct percpu *cpu, int user)
 }
 
 /**
+ * Give the processor's last changes of mode before the tick that counts,
+ * as monotonic times: `from[i]` is when a stretch in `mode[i]` began, latest
+ * first, and a time before the last of the `n` returned is in `mode[n]`.
+ * The stretches are user mode since the last return to it (`user_cycles`,
+ * which `isr_leave` notes), the kernel since the last entry from it
+ * (`entry_cycles`, which the entry notes, or `user_entered`, which the
+ * return noted, when the tick found user mode), and the idle wait since it
+ * began (`idle_cycles`). A change too old to time (`timer_cycles_when`)
+ * reads 0, before every tick counted.
+ */
+static int account_stretches(const struct percpu *cpu, int user, int64_t now, int64_t *from,
+                             int *mode)
+{
+    int64_t back = timer_cycles_when(cpu->user_cycles, now);
+    int n = 0;
+
+    if (user) {
+        from[0] = back;
+        from[1] = timer_cycles_when(cpu->user_entered, now);
+        mode[0] = ACCOUNT_USER;
+        mode[1] = ACCOUNT_SYSTEM;
+        mode[2] = ACCOUNT_USER;
+        return 2;
+    }
+    if (cpu->idle_wait) {
+        from[n] = timer_cycles_when(cpu->idle_cycles, now);
+        mode[n++] = ACCOUNT_IDLE;
+    }
+    from[n] = timer_cycles_when(cpu->entry_cycles, now);
+    mode[n++] = ACCOUNT_SYSTEM;
+    from[n] = back;
+    mode[n++] = ACCOUNT_USER;
+    mode[n] = ACCOUNT_SYSTEM;
+    return n;
+}
+
+/**
  * Each tick is counted as `sched_account_one` counts one. A processor
  * counts the ticks of its own clock, the monotonic time since its last
  * count in whole ticks, rounded to the nearest, as Linux charges each
@@ -1380,34 +1422,34 @@ static void sched_account_one(struct percpu *cpu, int user)
  * kernel/sched/cputime.c:253-269 and 486-492); the rest carries to the
  * next tick.
  *
- * A tick that finds user mode, when the timer keeps the tick's time,
- * `due`, charges system time for the ticks due while the processor was in
- * the kernel before its last return to user mode, from the entry from user
- * mode before that return (`user_entered`) to the return (`user_cycles`),
- * both of which `isr_leave` notes, and user time for the rest. A tick that
- * came while the kernel ran with interrupts off is taken at the first user
- * instruction after them, and would otherwise charge the kernel's time to
- * the program; a tick due in user mode but delivered late, as a
- * hypervisor's often is, after an entry from user mode, stays user time.
- * Linux's kernel runs a system call with interrupts on, so its tick is
- * taken when it comes, in the mode it finds (`user_mode`, from
- * update_process_times, kernel/time/timer.c:2519).
+ * When the timer keeps the tick's time, `due`, each tick counted is charged
+ * to the mode the processor was in when it was due (`account_stretches`),
+ * and otherwise to the mode the tick found. Linux's kernel runs a system
+ * call with interrupts on, so its tick is taken when it comes, in the mode
+ * it finds (`user_mode`, from update_process_times,
+ * kernel/time/timer.c:2519). Rach2's runs one with interrupts off, so a tick
+ * due in the call is taken at the first user instruction after it, or as
+ * the halt of an idle wait begins, and would otherwise charge the kernel's
+ * time to the program or to no one; and a hypervisor often delivers a tick
+ * due in user mode late, after the next entry from user mode.
  */
 void sched_account_tick(int user, int64_t due)
 {
     struct percpu *cpu = this_cpu();
-    int64_t now = rtc_monotonic_ns(), entered = 0, since = 0, at;
+    int64_t now = rtc_monotonic_ns(), from[3], at;
     int64_t gap = now - cpu->accounted_ns + (int64_t)(TICK_NS / 2u);
     uint64_t ticks, stolen;
+    int mode[4], n = 0, i;
 
     if (gap < (int64_t)TICK_NS) {
         return;
     }
     ticks = tick_div64((uint64_t)gap, TICK_NS, NULL);
     cpu->accounted_ns += (int64_t)ticks * (int64_t)TICK_NS;
-    if (user && due != 0) {
-        entered = timer_cycles_when(cpu->user_entered, now);
-        since = timer_cycles_when(cpu->user_cycles, now);
+    if (due != 0) {
+        n = account_stretches(cpu, user, now, from, mode);
+    } else {
+        mode[0] = cpu->idle_wait ? ACCOUNT_IDLE : user ? ACCOUNT_USER : ACCOUNT_SYSTEM;
     }
     stolen = arch_steal_ns() - cpu->steal_ns;
     while (ticks-- > 0) {
@@ -1419,7 +1461,11 @@ void sched_account_tick(int user, int64_t due)
             cpu->ticks_seq++;
         } else {
             at = due - (int64_t)ticks * (int64_t)TICK_NS;
-            sched_account_one(cpu, user && (due == 0 || at >= since || at < entered));
+            i = 0;
+            while (i < n && at < from[i]) {
+                i++;
+            }
+            sched_account_one(cpu, mode[i]);
         }
     }
 }
@@ -1659,6 +1705,7 @@ void idle_wait_irq_off(void)
             return;
         }
     }
+    this_cpu()->idle_cycles = arch_cycles();
     this_cpu()->idle_wait = 1;
     depth = bkl_drop();
     idle_halt();
@@ -1684,6 +1731,7 @@ void idle_wait_irq_on(void)
     uint32_t flags = kirq_save();
     int depth;
 
+    this_cpu()->idle_cycles = arch_cycles();
     this_cpu()->idle_wait = 1;
     depth = bkl_drop();
     idle_halt();

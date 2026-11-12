@@ -72,16 +72,18 @@ uint64_t arch_steal_ns(void)
     return steal_clock_ns;
 }
 
-/* The modeled times of the processor's last return to user mode and of the
- * entry from user mode before it, which the rows set, or 0 for long ago. */
-static int64_t user_return_ns, user_entry_ns;
+/* The modeled times of the processor's last return to user mode, of its
+ * entry from user mode and of the start of its idle wait, which the rows
+ * set, or 0 for long ago. */
+static int64_t user_return_ns, user_entry_ns, idle_start_ns;
 
 /** The modeled time of the entry, for the count 1 the rows give
- * `user_entered`, or of the return to user mode, for any other. */
+ * `user_entered` and `entry_cycles`, of the idle wait's start, for the
+ * count 3 they give `idle_cycles`, or of the return to user mode. */
 int64_t timer_cycles_when(uint64_t cycles, int64_t now)
 {
     (void)now;
-    return cycles == 1u ? user_entry_ns : user_return_ns;
+    return cycles == 1u ? user_entry_ns : cycles == 3u ? idle_start_ns : user_return_ns;
 }
 
 /** Timer list membership is checked by process_timer_hosttest. */
@@ -713,19 +715,22 @@ static void accounting(void)
  * A tick taken in user mode charges system time for the ticks due between
  * the processor's last entry from user mode and its return, which
  * interrupts kept off in the kernel held back, and user time for those due
- * after the return or before the entry.
+ * after the return or before the entry; one taken in an idle wait charges
+ * each tick due before the wait to the mode it was due in.
  */
 static void accounting_held(void)
 {
     struct percpu *cpu = this_cpu();
     process_t *saved = cpu->current;
-    uint64_t busy, user;
+    uint64_t busy, user, idle;
     uint64_t saved_clock = clock_ns;
 
     cpu->current = NULL;
     cpu->idle_wait = 0;
     cpu->user_entered = 1u;
+    cpu->entry_cycles = 1u;
     cpu->user_cycles = 2u;
+    cpu->idle_cycles = 3u;
     clock_ns = 7000000000u;
     steal_clock_ns = 0;
     sched_account_start();
@@ -757,6 +762,17 @@ static void accounting_held(void)
     sched_account_tick(1, (int64_t)(clock_ns - TICK_NS / 2u));
     CHECK(cpu->busy_ticks == busy + 6 && cpu->user_ticks == user + 4,
           "a tick due in user mode before the entry, delivered after it, is user time");
+    clock_ns += 3u * TICK_NS;
+    user_return_ns = (int64_t)(clock_ns - 5u * TICK_NS / 2u);
+    user_entry_ns = (int64_t)(clock_ns - 3u * TICK_NS / 2u);
+    idle_start_ns = (int64_t)(clock_ns - TICK_NS / 2u);
+    idle = cpu->idle_ticks;
+    cpu->idle_wait = 1;
+    sched_account_tick(0, (int64_t)clock_ns);
+    cpu->idle_wait = 0;
+    CHECK(cpu->busy_ticks == busy + 8 && cpu->user_ticks == user + 5 && cpu->idle_ticks == idle + 1,
+          "an idle wait's tick charges ticks due in user mode, in the kernel and idle to each");
+    idle_start_ns = 0;
     user_return_ns = 0;
     user_entry_ns = 0;
     cpu->idle_wait = 1;
