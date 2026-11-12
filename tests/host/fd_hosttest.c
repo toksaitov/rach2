@@ -196,6 +196,10 @@ void path_bufs_free(process_t *p)
     (void)p;
 }
 
+/** These process fixtures run on no processor's TLB shootdown. */
+void smp_record_quiesce(void)
+{}
+
 /** These process fixtures have no seccomp filter. */
 void seccomp_release(process_t *p)
 {

@@ -357,11 +357,23 @@ void smp_kick(int cpu);
  * translates through `dir`, with one request to each, and wait until each
  * has; a processor whose current thread has no address space is marked to
  * load `dir` again at its next switch instead. One sender at a time sends
- * requests (smp.c), with interrupts off while it waits. The caller holds
- * the big lock and has changed the pages' entries, and frees a frame they
- * named only after this returns.
+ * requests (smp.c), with interrupts off while it waits. The caller need
+ * not hold the big lock; it has changed the pages' entries, and frees a
+ * frame they named only after this returns.
  */
 void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t end);
+
+/**
+ * Wait until no TLB shootdown is reading the processors' current threads:
+ * `free_process` calls it once the record has left every processor and
+ * before the record is freed, since a shootdown reads another processor's
+ * `current` without the big lock that the free holds, and a record it read
+ * just before its processor switched away is read again in the same scan,
+ * as Linux's flush_tlb_mm_range reads only state of each processor's own
+ * (arch/x86/mm/tlb.c). Taking `ipi_lock`, which the scan holds throughout,
+ * is enough: a scan that begins after reads the processor's new thread.
+ */
+void smp_record_quiesce(void);
 
 /**
  * Drop the translations of the kernel pages [`start`, `end`), or every
