@@ -791,6 +791,9 @@ static fd_entry_t slots[64];
 static struct open_file descriptions[64];
 static int64_t now_ns;
 static struct dma_fence *signal_on_wait;
+/* A call a row makes once, at the next sleep, before the sleep's fence
+ * signals: what another thread does while the sleeper waits. */
+static void (*during_wait)(void);
 
 void rtc_monotonic(int64_t *sec, int64_t *ns)
 {
@@ -821,11 +824,18 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
-/** A sleep: the fence the test named signals, or the clock reaches the
- * sleeper's timeout. */
+/** A sleep: the call the test named runs (`during_wait`), and then the
+ * fence the test named signals, or the clock reaches the sleeper's
+ * timeout. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
+    if (during_wait) {
+        void (*fn)(void) = during_wait;
+
+        during_wait = 0;
+        fn();
+    }
     if (signal_on_wait) {
         dma_fence_signal(signal_on_wait);
         signal_on_wait = 0;
