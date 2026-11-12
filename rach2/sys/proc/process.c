@@ -314,15 +314,24 @@ uint64_t proc_alarm_due_tick(const process_t *p)
  * first `due` plus a whole number of `interval`s after the tick `now`, so
  * that a SIGALRM taken late does not move the timer off its grid, as
  * Linux's `hrtimer_forward` steps from the old expiry
- * (kernel/time/hrtimer.c:1046-1078, from kernel/signal.c:654-662). A
- * SIGALRM taken long after `due` makes the loop run once for each interval
- * passed. */
+ * (kernel/time/hrtimer.c:1046-1078, from kernel/signal.c:654-662). The
+ * intervals passed are counted by one division, as `hrtimer_forward`
+ * counts its overruns with `ktime_divns` (:1062-1066), so a SIGALRM taken
+ * long after `due` costs no more than one taken at once: the caller holds
+ * `timer_list_lock` with interrupts off. The count's product is at most
+ * `now - due`, and the last interval is added as `ktime_add_safe` adds it
+ * (:1075 and :347-359), the sum held at the largest tick instead of
+ * wrapping. */
 static uint64_t alarm_next(uint64_t due, uint64_t interval, uint64_t now)
 {
-    uint64_t next = due + interval;
+    uint64_t next;
 
-    while (next <= now) {
-        next += interval;
+    if (now >= due && now - due >= interval) {
+        due += tick_div64(now - due, interval, 0) * interval;
+    }
+    next = due + interval;
+    if (next < due) {
+        next = ~(uint64_t)0;
     }
     return next != 0 ? next : 1u;
 }
