@@ -37,12 +37,17 @@
  * back, since the kernel does not read the page tables' dirty bits. The
  * mount and inode number identify the file to descriptor operations.
  *
- * The table of `sh` changes only under both the file's lock
- * (`vfs_node_lock`) and the big lock: a page joins it at a fault, and a
- * truncation or the last release takes pages out. So a reader holds either:
- * a fault without the big lock looks a page up under the file's lock, as
- * Linux's filemap_fault finds the folio and locks it with no global lock
- * (mm/filemap.c:3326-3370), and a reader under the big lock needs no more.
+ * The table of `sh` changes only under the file's lock (`vfs_node_lock`):
+ * a page joins it at a fault, and a truncation or the last release takes
+ * pages out. Its arrays, the directory and the leaves, are made, replaced
+ * and freed only under the big lock as well, so a reader under the big lock
+ * alone walks them safely and sees each entry either empty or holding a
+ * page read from the file; a fault puts a page in a leaf that exists under
+ * the file's lock alone (`shmem_has_leaf`), as Linux adds a folio to a
+ * file's pages under the mapping's own xarray lock with no global one
+ * (__filemap_add_folio, mm/filemap.c:842-950), and takes the big lock only
+ * to make the leaf. A fault looks a page up under the file's lock, as
+ * Linux's filemap_fault finds the folio and locks it (mm/filemap.c:3326-3370).
  */
 struct dshare {
     struct dshare *next;
@@ -404,10 +409,11 @@ static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, int flus
  * Read or borrow disk page `pgoff` under its file's lock, which excludes a
  * write or truncation until the page joins the file's resident pages. A
  * caller without the big lock, a fault of a file whose reads run without it
- * (`unlocked`), finds a resident page under the file's lock alone and takes
- * the big lock only to add a page it read to the table, which readers under
- * the big lock alone read (struct dshare). Returns 0 with a resident mapping
- * reference in `phys`, 1 after reading the file, or a negative errno.
+ * (`unlocked`), finds a resident page and adds one it read under the file's
+ * lock alone, and takes the big lock only when the page's leaf of the table
+ * must be made, since readers under the big lock alone walk the table's
+ * arrays (struct dshare). Returns 0 with a resident mapping reference in
+ * `phys`, 1 after reading the file, or a negative errno.
  */
 static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
 {
@@ -445,7 +451,7 @@ static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
             *phys = 0;
             rc = got;
         } else {
-            big = !bkl_held();
+            big = !bkl_held() && !shmem_has_leaf(m->sh, pgoff);
             if (big) {
                 bkl_enter();
             }
