@@ -483,6 +483,10 @@ struct vfs_mount {
     uint32_t opens;
     uint32_t releases;
     int write_error; /* the error of the first failed write, 0 for none */
+    /* The tick since which what a write-back of shared mappings' pages put
+     * in the file system may have been dirty, the oldest kept, on the base
+     * mount; 0 for none (`vfs_writeback_aged`). Under the big lock. */
+    uint64_t aged;
     int claim;       /* the devfs claim on the source's sectors, or -1 */
     char source[32]; /* the source string mount(2) was given, for /proc/mounts */
     /* The ids of the live mount namespaces that see it (proc/ns.h): a
@@ -1179,9 +1183,19 @@ int vfs_sync_all(void);
  * since tick `before`, then the cache's write-back of the device's buffers
  * dirty since mark `since` (`bcache_writeback`), or of all of them when the
  * type moved something into the cache, as Linux writes all of an expired
- * inode's pages; no flush. A failure is recorded as the type and the cache
- * record it. */
+ * inode's pages; a mount whose `aged` is at or before a nonzero `before`
+ * is written whole, its `aged` cleared first; no flush. A failure is
+ * recorded as the type and the cache record it. */
 void vfs_writeback_all(uint64_t before, uint64_t since);
+
+/** Keep on the base of `mnt` that what was just written to one of its files
+ * may have been dirty since tick `born`, as shared mappings' pages are
+ * written into the file system with no age of their own: once `born` is as
+ * old as the flusher's expiry, `vfs_writeback_all` writes the mount whole,
+ * the type's pending writes and every dirty buffer of its device, as Linux
+ * writes an expired inode's pages whatever their own age. The oldest of
+ * the ticks given is kept. Under the big lock. */
+void vfs_writeback_aged(const struct vfs_mount *mnt, uint64_t born);
 
 /**
  * A description opened on `mnt`: the mount's reference count goes up; the

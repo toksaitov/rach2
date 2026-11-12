@@ -8,6 +8,7 @@
 #include "vfs.h"
 
 #include "../klog.h"
+#include "../arch/arch.h"
 #include "../lib/kirq.h"
 #include "../mm/filemap.h"
 #include "../mm/pagecache.h"
@@ -38,8 +39,8 @@ static struct {
 static int reading_first, reading_count;
 
 static wait_queue_t flusher_wait;
-static volatile uint32_t flusher_gen; /* moved by every wake */
-static volatile int flusher_busy;     /* awake, and will look at the cache again */
+static volatile unsigned int flusher_gen; /* moved by every kick */
+static volatile int flusher_busy;         /* in a turn, which needs no wake */
 static process_t *flusher;
 
 /** The expiry period in ticks. */
@@ -108,10 +109,10 @@ static void write_background(void)
     }
 }
 
-/* What the flusher's sleep waits for: a wake, which moves `flusher_gen`
+/* What the flusher's sleep waits for: a kick, which moves `flusher_gen`
  * past `gen`, or the tick `due`, 0 for none. */
 struct flusher_wait_arg {
-    uint32_t gen;
+    unsigned int gen;
     uint64_t due;
 };
 
@@ -126,13 +127,18 @@ static int flusher_due(void *arg)
 /**
  * The flusher's loop, Linux's `wb_workfn` with `wb_check_old_data_flush`
  * and `wb_check_background_flush`: at each turn the reading of the marks,
- * the write-back of what has expired, once a period the pages that keep no
- * age, then the background write-back; then a sleep for the writeback
- * interval, or until a wake when the interval is 0. While the cache holds
- * dirty buffers the sleep ends at the readings' spacing too, for a reading
- * only, and the first dirty buffer of a clean cache wakes the thread, so
- * that a buffer waits at most that spacing longer than on Linux, which
- * stamps each inode with the time it went dirty.
+ * once a period the pages that keep no age, then the write-back of what has
+ * expired, those pages' stores among it once their mount says they may be
+ * that old (`vfs_writeback_aged`), then the background write-back; then a
+ * sleep for the writeback interval, or until a wake when the interval is 0.
+ * While the cache holds dirty buffers the sleep ends at the readings'
+ * spacing too, for a reading only, and the first dirty buffer of a clean
+ * cache wakes the thread, so that a buffer waits at most that spacing
+ * longer than on Linux, which stamps each inode with the time it went
+ * dirty. The kicks' count is read at the start of the turn, after the turn
+ * is published busy, and the sleep ends at once when it has moved since:
+ * a kick that came during the turn, whose wake the turn's being busy kept
+ * back, may have come after the turn's last look at the cache.
  */
 static void flusher_main(void)
 {
@@ -144,27 +150,29 @@ static void flusher_main(void)
     arch_irq_enable();
     for (;;) {
         flusher_busy = 1;
+        sched_mb();
+        arg.gen = flusher_gen;
         now = tick_count();
         period = expire_ticks();
         interval = (uint64_t)(uint32_t)dirty_writeback_interval * (TICK_HZ / 100u);
         reading_add(now, bcache_marks());
         if (interval != 0 && now - last_turn >= interval) {
             last_turn = now;
-            if (period == 0) {
-                vfs_writeback_all(now, bcache_marks());
-            } else if (now > period) {
-                vfs_writeback_all(now - period, reading_at(now - period));
-            }
             if (now - last_pages >= period) {
                 last_pages = now;
                 filemap_sync_all();
                 (void)pc_sync();
             }
+            if (period == 0) {
+                vfs_writeback_all(now, bcache_marks());
+            } else if (now > period) {
+                vfs_writeback_all(now - period, reading_at(now - period));
+            }
         }
         write_background();
         flusher_busy = 0;
+        sched_mb();
         flags = kirq_save();
-        arg.gen = flusher_gen;
         arg.due = interval != 0 ? last_turn + interval : 0;
         soon = now + ((period >> 5) ? (period >> 5) : 1);
         if (interval != 0 && period != 0 && soon < arg.due && bcache_dirty_count() > 0) {
@@ -177,20 +185,37 @@ static void flusher_main(void)
     }
 }
 
+/** Move the kicks' count, atomically, which is a full barrier too: a
+ * flusher that reads the count after it has moved sees what the kicker
+ * stored before. */
+static void flusher_count(void)
+{
+    unsigned int gen;
+
+    do {
+        gen = flusher_gen;
+    } while (arch_atomic_cmpxchg(&flusher_gen, gen, gen + 1u) != gen);
+}
+
 void writeback_kick(void)
 {
-    flusher_gen++;
+    flusher_count();
     wq_wake_all(&flusher_wait);
 }
 
 /** The cache's call at its first dirty buffer and past the background
- * threshold: a wake unless the flusher is awake already, since every dirty
- * mark past the threshold makes one. A mark between the flusher's last look
- * and its sleep waits for the next reading or turn. */
+ * threshold: the kicks' count moved, and a wake unless the flusher is in a
+ * turn, since every dirty mark past the threshold makes one. A turn ends
+ * with another when the count has moved since its start (`flusher_main`);
+ * the move comes before the look at `flusher_busy`, and the flusher clears
+ * that before it reads the count for its sleep, each with a full barrier
+ * between, so either the kicker sees the turn over and wakes the thread or
+ * the thread sees the count moved. */
 static void flusher_kick(void)
 {
+    flusher_count();
     if (!flusher_busy) {
-        writeback_kick();
+        wq_wake_all(&flusher_wait);
     }
 }
 

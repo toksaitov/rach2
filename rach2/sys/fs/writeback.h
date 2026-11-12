@@ -7,8 +7,11 @@
  * `dirty_writeback_centisecs` it writes back, without the disk's flush, what
  * has been dirty for `dirty_expire_centisecs` or longer: each file system's
  * own pending writes (`vfs_ops.writeback`), then the buffer cache's dirty
- * buffers (`bcache_writeback`); and once in each expiry period the pages of
- * shared mappings and of the disk-backed window, which keep no age. When a
+ * buffers (`bcache_writeback`). Once in each expiry period, before that,
+ * it writes the pages of shared mappings and of the disk-backed window,
+ * which keep no age, into their files; each file's mount keeps the tick
+ * since which those stores may have been dirty (`vfs_writeback_aged`), and
+ * a mount whose tick has expired is written whole in the same turn. When a
  * dirty mark leaves the buffer cache past its background threshold
  * (`bcache_dirty_level`), the thread is woken and writes the oldest buffers
  * back until the cache is under it again. The first dirty buffer of a clean

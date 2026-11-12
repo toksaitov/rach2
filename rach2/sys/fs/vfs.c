@@ -3238,12 +3238,37 @@ void vfs_writeback_all(uint64_t before, uint64_t since)
             vfs_enter(m) != 0) {
             continue;
         }
-        if (before != 0 && m->type->ops->writeback && m->type->ops->writeback(m, before) > 0) {
+        if (before != 0 && m->aged != 0 && m->aged <= before) {
+            m->aged = 0; /* before the writes, so an age kept meanwhile stays */
+            if (m->type->ops->writeback) {
+                (void)m->type->ops->writeback(m, ~(uint64_t)0);
+            }
+            (void)bcache_writeback(m->dev, bcache_marks());
+        } else if (before != 0 && m->type->ops->writeback &&
+                   m->type->ops->writeback(m, before) > 0) {
             (void)bcache_writeback(m->dev, bcache_marks());
         } else {
             (void)bcache_writeback(m->dev, since);
         }
         vfs_leave(m);
+    }
+}
+
+void vfs_writeback_aged(const struct vfs_mount *mnt, uint64_t born)
+{
+    const struct vfs_mount *base = vfs_mount_base(mnt);
+    int i;
+
+    born = born ? born : 1u;
+    for (i = 0; i < mount_slots; i++) {
+        struct vfs_mount *m = mounts[i];
+
+        if (m == base) {
+            if (m->aged == 0 || born < m->aged) {
+                m->aged = born;
+            }
+            return;
+        }
     }
 }
 

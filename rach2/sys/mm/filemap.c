@@ -20,6 +20,7 @@
 #include "../proc/process.h"
 #include "../proc/smp.h"
 #include "../proc/wait_queue.h"
+#include "../timer.h"
 #include "../lib/kerrno.h"
 #include "../lib/kirq.h"
 #include "../lib/kstring.h"
@@ -76,6 +77,12 @@ struct dshare {
      * `DISK_MISSES_MOST`; read-around stops above `DISK_LOTS_MISSED`.
      * Under the file's lock. */
     uint32_t misses;
+    /* The tick before which every store of its mappings has reached the
+     * file: its first mapping's, then the start of each write-back of every
+     * page that succeeded. What a write-back puts in the file may have been
+     * dirty since then, which it tells the flusher (`vfs_writeback_aged`),
+     * since the pages keep no age of their own. */
+    uint64_t clean;
     wait_queue_t left;
     struct shmem sh;
     /* The pages a shared mapping may have stored into, a bit each, in
@@ -468,7 +475,8 @@ static int dshare_write_bytes(struct filemap *m, uintptr_t phys, uint32_t len, u
  * and writing a page read from a hole would allocate the hole's blocks. A
  * partial page's tail is zeroed before writing, as Linux's mpage_writepage
  * zeros bytes beyond EOF. A file a loop device stands on is not written, as
- * write(2) does not write it. 0, -EBUSY, or the write's error.
+ * write(2) does not write it. 1 after a write, 0 when there was nothing to
+ * write, -EBUSY, or the write's error.
  */
 static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i)
 {
@@ -499,6 +507,7 @@ static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i)
             k_memset(page + len, 0, PAGE_SIZE - len);
             kunmap_temp(page);
             rc = dshare_write_bytes(m, phys, len, at);
+            rc = rc == 0 ? 1 : rc;
         }
     }
     vfs_node_unlock(&file);
@@ -506,12 +515,16 @@ static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i)
 }
 
 /** Write the pages of `ds` from page `first` up to page `end` back through
- * `m`'s copy of the descriptor (`dshare_write_page`). Returns 0, also when
- * `m` has no description, or the first failure. No allocation is needed. */
+ * `m`'s copy of the descriptor (`dshare_write_page`). What was written may
+ * have been dirty since `clean`, which the file's mount keeps for the
+ * flusher (`vfs_writeback_aged`), and a write of every page that succeeds
+ * moves `clean` to its own start. Returns 0, also when `m` has no
+ * description, or the first failure. No allocation is needed. */
 static int dshare_write_back(struct dshare *ds, struct filemap *m, uint32_t first, uint32_t end)
 {
+    uint64_t start = tick_count();
     uint32_t i;
-    int rc = 0;
+    int rc = 0, wrote = 0;
 
     if (!m || !m->entry.ofd || !m->entry.ofd->vmnt) {
         return 0;
@@ -519,9 +532,17 @@ static int dshare_write_back(struct dshare *ds, struct filemap *m, uint32_t firs
     for (i = first; i < end && i < ds->sh.npages; i++) {
         int page_rc = shmem_resident(&ds->sh, i) ? dshare_write_page(ds, m, i) : 0;
 
-        if (page_rc != 0 && rc == 0) {
+        if (page_rc > 0) {
+            wrote = 1;
+        } else if (page_rc != 0 && rc == 0) {
             rc = page_rc;
         }
+    }
+    if (wrote) {
+        vfs_writeback_aged(m->entry.ofd->vmnt, ds->clean);
+    }
+    if (rc == 0 && first == 0 && end >= ds->sh.npages) {
+        ds->clean = start;
     }
     return rc;
 }
@@ -1208,7 +1229,9 @@ static struct vm_file *filemap_disk_map(const fd_entry_t *e, int shared)
     m->shared = shared;
     m->ds = ds;
     m->sh = &ds->sh;
-    ds->users++;
+    if (ds->users++ == 0) {
+        ds->clean = tick_count(); /* no store is older than its first mapping */
+    }
     ds->sh.maps++;
     if (shared && (e->flags & FD_FLAG_WRITE) && !ds->stores) {
         flags = spin_lock_irqsave(&dshare_lock);
