@@ -134,8 +134,12 @@ struct open_file {
      * atomic step (`fd_ofd_ref`, `fd_ofd_unref`), since descriptors of one
      * description in different tables close without a common lock. */
     uint32_t refcount;
-    uint64_t offset;       /* Shared read/write offset */
-    uint64_t raw_offset;   /* Shared offset of a raw disk window */
+    uint64_t offset;     /* Shared read/write offset */
+    uint64_t raw_offset; /* Shared offset of a raw disk window */
+    /* The page after the last one read(2) took through the file page cache
+     * (`filecache_file_read`), by which a read that goes on from there is
+     * read ahead, as Linux keeps `f_ra.prev_pos`; 0 at the open. */
+    uint32_t ra_next;
     uint32_t status_flags; /* Shared O_APPEND/O_NONBLOCK (OFD_* above) */
     /* A FIFO reader's writer-open count for poll: equal to the pipe's
      * count until a writer has opened since a nonblocking read-only open

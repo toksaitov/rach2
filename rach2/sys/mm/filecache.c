@@ -57,6 +57,10 @@
 /* The fewest lists that each table has. */
 #define FC_MIN_LISTS 1024u
 
+/* The most pages one read of a file fills: Linux's default readahead
+ * window, VM_READAHEAD_PAGES, 128 KiB (include/linux/pagemap.h:1375). */
+#define FC_WINDOW 32u
+
 /* The counters of changes, one for each set of files whose hashes share
  * their low bits, so that a write to one file costs the reads of only the
  * few files beside it the pages they were reading. A power of two. */
@@ -576,6 +580,87 @@ int filecache_read_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, void 
     return pages && fc_file_of(mnt, node, &f) && fc_read(&f, pgoff, 0, buf);
 }
 
+/**
+ * Read pages `first` to `first + count - 1` of the file open as `ofd` into
+ * the frames `phys`, each filled whole, with zeros past the end of the
+ * file: by the type's `read_frames`, which a type that has one fills them
+ * with straight from the device, or a page at a time with `vfs_read`. The
+ * pages filled, from the first; 0 at the end; or a negative errno.
+ */
+static int32_t fc_fill(struct open_file *ofd, uint32_t first, uint32_t count, const uintptr_t *phys)
+{
+    int32_t got = vfs_read_frames(ofd->vmnt, ofd->fhandle, first, count, phys);
+    uint32_t i;
+    uint8_t *page;
+
+    if (got != -ENOSYS) {
+        return got;
+    }
+    for (i = 0; i < count; i++) {
+        page = kmap_temp(phys[i]);
+        got = page ? vfs_read(ofd->vmnt, ofd->fhandle, page, PAGE_SIZE,
+                              (uint64_t)(first + i) * PAGE_SIZE)
+                   : -EIO;
+        if (got >= 0 && got < (int32_t)PAGE_SIZE) {
+            k_memset(page + got, 0, PAGE_SIZE - (uint32_t)got);
+        }
+        if (page) {
+            kunmap_temp(page);
+        }
+        if (got <= 0) {
+            break;
+        }
+        if (got < (int32_t)PAGE_SIZE) {
+            i++;
+            break;
+        }
+    }
+    return i > 0 ? (int32_t)i : got;
+}
+
+/**
+ * Read page `pgoff` of `f`, open as `ofd`, into the frame of `p`, which
+ * `fc_new` gave, and with it in the same call up to `more` pages after it
+ * that the cache lacks, each into a record and frame of its own, which then
+ * join the cache, as Linux's `page_cache_ra_unbounded` reads its window
+ * into new folios (mm/readahead.c). The window ends at the first
+ * page the cache has or no frame is had for. `epoch` is the cache's count
+ * taken before the read. The bytes of `pgoff` the file has, which stop
+ * short of a page only at its end; 0 past the end; or a negative errno.
+ */
+static int32_t fc_read_window(struct open_file *ofd, const struct fc_file *f, uint32_t pgoff,
+                              uint32_t more, struct fc_page *p, uint32_t epoch)
+{
+    struct fc_page *recs[FC_WINDOW];
+    uintptr_t phys[FC_WINDOW];
+    uint32_t n = 1, i, flags;
+    uint64_t end = (uint64_t)pgoff * PAGE_SIZE;
+    int32_t got;
+
+    recs[0] = p;
+    phys[0] = (uintptr_t)p->pfn * PAGE_SIZE;
+    if (more > FC_WINDOW - 1u) {
+        more = FC_WINDOW - 1u;
+    }
+    flags = spin_lock_irqsave(&fc_lock);
+    while (n <= more && (uint64_t)(pgoff + n) * PAGE_SIZE < f->size && !fc_lookup(f, pgoff + n) &&
+           (recs[n] = fc_new()) != NULL) {
+        phys[n] = (uintptr_t)recs[n]->pfn * PAGE_SIZE;
+        n++;
+    }
+    spin_unlock_irqrestore(&fc_lock, flags);
+    got = fc_fill(ofd, pgoff, n, phys);
+    for (i = 1; i < n; i++) {
+        if (got <= (int32_t)i || !fc_insert(f, pgoff + i, recs[i], epoch)) {
+            fc_free(recs[i]);
+        }
+    }
+    if (got <= 0) {
+        return got;
+    }
+    return f->size - end < PAGE_SIZE ? (int32_t)(f->size - end) : (int32_t)PAGE_SIZE;
+}
+
 /** Read `left` bytes at `at` of the file open as `ofd`, which stay inside
  * one page, straight into the user buffer `dst`, under the big lock, since
  * the file system then writes the user's buffer itself; the type's answer. */
@@ -598,14 +683,14 @@ static int32_t fc_read_direct(struct open_file *ofd, uint64_t at, char __user *d
  * Read up to `left` bytes at `at` of `f`, open as `ofd`, inside one page,
  * into the user buffer `dst`: from the cache's frame, with a reference taken
  * so that a drop meanwhile does not free it, or into a new frame read from
- * the file, which then joins the cache when it holds a whole page or the
- * last part of the file. With no frame to be had the file system reads the
- * page's part into `dst` itself (`fc_read_direct`). The bytes read, which
- * stop short of the page's end or of `left` only at the end of the file;
+ * the file with up to `more` pages after it (`fc_read_window`), which then
+ * joins the cache. With no frame to be had the file system reads the page's
+ * part into `dst` itself (`fc_read_direct`). The bytes read, which stop
+ * short of the page's end or of `left` only at the end of the file;
  * -EFAULT; or the file system's error.
  */
 static int32_t fc_read_page(struct open_file *ofd, const struct fc_file *f, uint64_t at,
-                            char __user *dst, uint32_t left)
+                            char __user *dst, uint32_t left, uint32_t more)
 {
     uint32_t pgoff = (uint32_t)(at / PAGE_SIZE), in = (uint32_t)(at % PAGE_SIZE);
     uint32_t take = PAGE_SIZE - in < left ? PAGE_SIZE - in : left, epoch = 0, flags;
@@ -636,10 +721,7 @@ static int32_t fc_read_page(struct open_file *ofd, const struct fc_file *f, uint
     }
     if (p) {
         epoch = *fc_changes(f->mnt, f->ino);
-        got = vfs_read(ofd->vmnt, ofd->fhandle, page, PAGE_SIZE, (uint64_t)pgoff * PAGE_SIZE);
-        if (got >= 0 && got < (int32_t)PAGE_SIZE) {
-            k_memset(page + got, 0, PAGE_SIZE - (uint32_t)got);
-        }
+        got = fc_read_window(ofd, f, pgoff, more, p, epoch);
         if (got < 0) {
             rc = got;
         } else if ((uint32_t)got <= in) {
@@ -654,20 +736,47 @@ static int32_t fc_read_page(struct open_file *ofd, const struct fc_file *f, uint
     kunmap_temp(page);
     if (!p) {
         free_frame(phys);
-    } else if (got <= 0 ||
-               (got < (int32_t)PAGE_SIZE &&
-                (uint64_t)pgoff * PAGE_SIZE + (uint32_t)got != f->size) ||
-               !fc_insert(f, pgoff, p, epoch)) {
+    } else if (got <= 0 || !fc_insert(f, pgoff, p, epoch)) {
         fc_free(p);
     }
     return rc != 0 ? rc : (int32_t)take;
+}
+
+/**
+ * The pages a read of `ofd` that misses page `pgoff` fills, that page among
+ * them, when the read wants pages up to `last`, by Linux's readahead
+ * (mm/readahead.c): a read at the start of the file, the initial window,
+ * four times the pages it wants rounded up to a power of two while those
+ * are at most one, twice them while at most eight, and FC_WINDOW past
+ * that (`get_init_ra_size`, mm/readahead.c:361-372); a read that goes on
+ * where the last one left off, the whole window; any other only the pages
+ * it wants. At most FC_WINDOW.
+ */
+static uint32_t fc_window(const struct open_file *ofd, uint32_t pgoff, uint32_t last)
+{
+    uint32_t want = last - pgoff + 1u, round = 1u, ra;
+
+    if (want >= FC_WINDOW) {
+        return FC_WINDOW;
+    }
+    if (pgoff == 0) {
+        while (round < want) {
+            round *= 2u;
+        }
+        ra = round <= 1u ? 4u * round : round <= 8u ? 2u * round : FC_WINDOW;
+        return ra > want ? ra : want;
+    }
+    if (pgoff == ofd->ra_next || pgoff + 1u == ofd->ra_next) {
+        return FC_WINDOW;
+    }
+    return want;
 }
 
 int filecache_file_read(struct open_file *ofd, char __user *buf, uint32_t count, uint64_t offset,
                         int32_t *got, int (*cut)(const struct open_file *ofd))
 {
     struct fc_file f;
-    uint32_t done = 0;
+    uint32_t done = 0, last;
     int32_t n = 0;
 
     if (!buckets || count == 0 || !fc_file_of(ofd->vmnt, ofd->vnode, &f)) {
@@ -683,14 +792,17 @@ int filecache_file_read(struct open_file *ofd, char __user *buf, uint32_t count,
     if (count > f.size - offset) {
         count = (uint32_t)(f.size - offset);
     }
+    last = (uint32_t)((offset + count - 1u) / PAGE_SIZE);
     while (done < count) {
         uint32_t in = (uint32_t)((offset + done) % PAGE_SIZE);
         uint32_t want = PAGE_SIZE - in < count - done ? PAGE_SIZE - in : count - done;
+        uint32_t pgoff = (uint32_t)((offset + done) / PAGE_SIZE);
 
         if (done > 0 && cut && cut(ofd)) {
             break;
         }
-        n = fc_read_page(ofd, &f, offset + done, buf + done, count - done);
+        n = fc_read_page(ofd, &f, offset + done, buf + done, count - done,
+                         fc_window(ofd, pgoff, last) - 1u);
         if (n <= 0) {
             break;
         }
@@ -698,6 +810,9 @@ int filecache_file_read(struct open_file *ofd, char __user *buf, uint32_t count,
         if ((uint32_t)n < want) {
             break;
         }
+    }
+    if (done > 0) {
+        ofd->ra_next = (uint32_t)((offset + done - 1u) / PAGE_SIZE) + 1u;
     }
     *got = done > 0 || n > 0 ? (int32_t)done : n;
     return 1;
