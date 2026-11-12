@@ -1035,6 +1035,80 @@ static void evict_dying(void)
     dma_fence_put(f);
 }
 
+/* ---- 84-6l.2: a live object's last reference goes during the wait ---- */
+
+/* The object of `evict_live`, its handle and binding, the frames live
+ * before the close, and whether the close found the object kept. */
+static uint32_t live_handle;
+static struct drm_i915_gem_object *live_obj;
+static struct i915_vma *live_vma;
+static int live_frames, live_kept;
+
+/** Another thread during eviction's wait, which has let the GEM lock go:
+ * close the object's handle, its last reference but eviction's own, and
+ * take and let go of the GEM lock, whose release frees what waits on
+ * `gem.freed`. The object is kept, bound and with its pages. */
+static void live_close(void)
+{
+    int taken;
+
+    close_handle(&file_a, live_handle);
+    taken = i915_gem_lock(dev_a);
+    i915_gem_unlock(dev_a, taken);
+    live_kept = taken && live_obj->base.refs == 1 && whole(live_obj) == live_vma &&
+                live_obj->pages.held == SET_PAGES && frames_live == live_frames &&
+                !dev_a->gem.freed;
+}
+
+/**
+ * Eviction at a fixed offset waits for a busy binding with the GEM lock let
+ * go, holding a reference on its object, as Linux's grab_vma takes one
+ * with i915_gem_object_get_rcu and ungrab_vma puts it
+ * (i915_gem_evict.c:66-92): a close of the object's last handle during
+ * the wait, and a free of the deferred list, leave it whole, and the
+ * eviction's put, then the last, comes with the lock retaken and leaves
+ * the object on `gem.freed`, its binding undone, until the lock goes.
+ * Without that reference the close would free the object under the wait.
+ */
+static void evict_live(void)
+{
+    struct i915_vma *v = 0;
+    struct dma_fence *f;
+    uint64_t start, size;
+    int taken;
+    int32_t err;
+
+    live_handle = create(&file_a, SET_BYTES);
+    live_obj = object(&file_a, live_handle);
+    CHECK(pin_whole(live_obj, 0, &v) == 0 && live_obj->pages.held == SET_PAGES,
+          "live: an object bound, with its pages, behind its handle alone");
+    live_vma = v;
+    start = v->start;
+    size = v->node_size;
+    drop_pin(&v);
+    f = busy_fence(live_obj);
+    live_frames = frames_live;
+    live_kept = 0;
+    taken = i915_gem_lock(dev_a);
+    during_wait = live_close;
+    signal_on_wait = f;
+    dev_a->gem.evictions = 0;
+    err = i915_gem_evict_for_node(dev_a, start, size, 0);
+    CHECK(live_kept && !during_wait && dma_fence_is_signaled(f),
+          "live: a close during the wait leaves the object bound, with its pages, on eviction's "
+          "reference");
+    CHECK(taken && err == 0 && dev_a->gem.freed == live_obj && !live_obj->vmas &&
+              dev_a->gem.evictions == 1,
+          "live: eviction's put, the last, under the retaken lock leaves the object on the list, "
+          "its binding undone");
+    during_wait = 0;
+    signal_on_wait = 0;
+    i915_gem_unlock(dev_a, taken);
+    CHECK(!dev_a->gem.freed && frames_live == live_frames - (int)SET_PAGES,
+          "live: the object freed as the lock goes");
+    dma_fence_put(f);
+}
+
 /** Run every row: 0 when each passed. */
 /* ---- RPS's waitboost and interactive mode, which the driver calls ---- */
 
@@ -1088,6 +1162,7 @@ int main(void)
     free_shrinker_holder();
     free_busy_shared();
     evict_dying();
+    evict_live();
     CHECK(!dev_a->drm.objects && !dev_a->gem.bound && !frames_live && !pins_live && !user_pins,
           "the end: no object, binding, page or pin left");
     CHECK(allocations == before, "the end: every record freed");
