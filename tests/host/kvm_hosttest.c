@@ -66,7 +66,9 @@
  * vCPUs with ids below 4096, the CR4 bits taken before KVM_SET_CPUID2,
  * the VM's capabilities and quirks, and the synchronized registers; and
  * under SVM, SYSCALL_MASK's bits 63:32 kept from the caller and refused
- * from the guest.
+ * from the guest, and VIRT_SPEC_CTRL's SSBD carried out in IA32_SPEC_CTRL,
+ * the host's VIRT_SPEC_CTRL or LS_CFG, or skipped on a host with none, and
+ * cleared with SPEC_CTRL at INIT.
  */
 #include "kvm/kvm.c"
 #include "kvm/vcpu.c"
@@ -567,6 +569,24 @@ static int model_xsaves;
  * the Core 2 of 45 nm does. */
 static int model_no_xsave;
 
+/* The speculation controls of spec_rows' hosts, which the Haswell's model
+ * otherwise lacks as MSRs: with `model_spec_bits`, IA32_SPEC_CTRL takes
+ * those bits; with `model_virt`, CPUID offers VIRT_SSBD and the host has
+ * its VIRT_SPEC_CTRL, as beneath another hypervisor; with `model_amd17`,
+ * the processor is AMD's family 17h, two threads to a core, with LS_CFG,
+ * and `model_apic` is the extended APIC ID of the processor that asks.
+ * The MSRs hold `model_msr_*`, and the model logs every write that
+ * succeeds in `model_wr`. */
+static uint64_t model_spec_bits;
+static int model_virt, model_amd17;
+static uint32_t model_apic;
+static uint64_t model_msr_spec, model_msr_virt, model_msr_ls;
+static struct {
+    uint32_t index;
+    uint64_t value;
+} model_wr[8];
+static int model_wrs;
+
 /* The processor: a model of the Lenovo's Haswell, i7-4xxx. */
 void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
 {
@@ -628,9 +648,24 @@ void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t
         break;
     case 0x80000008u:
         r[0] = 0x3027;
+        r[1] = model_virt ? 1u << 25 : 0u; /* VIRT_SSBD */
         break;
     default:
         break;
+    }
+    if (model_amd17) {
+        if (leaf == 0) {
+            r[1] = 0x68747541; /* AuthenticAMD */
+            r[2] = 0x444D4163;
+            r[3] = 0x69746E65;
+        } else if (leaf == 1) {
+            r[0] = 0x00800F11; /* family 17h, model 1 */
+        } else if (leaf == 0x80000000u) {
+            r[0] = 0x8000001Eu;
+        } else if (leaf == 0x8000001Eu) {
+            r[0] = model_apic;
+            r[1] = 0x100; /* two threads to a core */
+        }
     }
     *a = r[0];
     *b = r[1];
@@ -666,20 +701,47 @@ void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi)
     (void)hi;
 }
 
-/** The model has no AMD PMU. */
-int kcpu_rdmsr_safe(uint32_t msr, uint64_t *value)
+/** The speculation controls of spec_rows' hosts, `model_spec_bits`,
+ * `model_virt` and `model_amd17`; the model has no other, and no AMD PMU. */
+static uint64_t *model_msr(uint32_t msr)
 {
-    (void)msr;
-    (void)value;
-    return -1;
+    if (msr == 0x48u && model_spec_bits) {
+        return &model_msr_spec;
+    }
+    if (msr == 0xC001011Fu && model_virt) {
+        return &model_msr_virt;
+    }
+    if (msr == 0xC0011020u && model_amd17) {
+        return &model_msr_ls;
+    }
+    return NULL;
 }
 
-/** The model has no AMD PMU. */
+int kcpu_rdmsr_safe(uint32_t msr, uint64_t *value)
+{
+    uint64_t *reg = model_msr(msr);
+
+    if (!reg) {
+        return -1;
+    }
+    *value = *reg;
+    return 0;
+}
+
 int kcpu_wrmsr_safe(uint32_t msr, uint64_t value)
 {
-    (void)msr;
-    (void)value;
-    return -1;
+    uint64_t *reg = model_msr(msr);
+
+    if (!reg || (msr == 0x48u && (value & ~model_spec_bits))) {
+        return -1;
+    }
+    *reg = value;
+    if (model_wrs < 8) {
+        model_wr[model_wrs].index = msr;
+        model_wr[model_wrs].value = value;
+        model_wrs++;
+    }
+    return 0;
 }
 
 /** No virtual APIC is armed for a performance interrupt here. */
@@ -1521,7 +1583,8 @@ static void check_cpuid_entry(const struct kvm_cpuid_entry2 *e)
         CHECK(e->ecx & (1u << 21), "leaf 1 offers x2APIC, which the kernel's local APIC emulates");
     }
     if (e->function == 7 && e->index == 0) {
-        CHECK((e->ebx & 0x20u) && !(e->edx & (1u << 26)), "leaf 7 keeps AVX2, drops SPEC_CTRL");
+        CHECK((e->ebx & 0x20u) && (e->edx & (1u << 26)),
+              "leaf 7 keeps AVX2 and the host's SPEC_CTRL, as Linux's kvm_set_cpu_caps");
         CHECK(e->flags == KVM_CPUID_FLAG_SIGNIFCANT_INDEX, "leaf 7 is indexed");
     }
     if (e->function == 0xD && e->index == 0) {
@@ -3120,6 +3183,111 @@ static void svm_sfmask_rows(void)
     fdclose(vm);
 }
 
+/** Whether the model's MSR writes since `model_wrs` was cleared are the
+ * one write of `value` to `index`, or none with `index` 0. */
+static int wrote(uint32_t index, uint64_t value)
+{
+    int r = index ? model_wrs == 1 && model_wr[0].index == index && model_wr[0].value == value
+                  : model_wrs == 0;
+
+    model_wrs = 0;
+    return r;
+}
+
+/** SVM's VIRT_SPEC_CTRL on each kind of host, as Linux's svm_set_msr
+ * takes it from the caller (arch/x86/kvm/svm/svm.c:3148-3156) and its
+ * entry carries it out (svm.c:4418-4424, arch/x86/kernel/cpu/bugs.c:207-242):
+ * on a host with no mechanism, taken and skipped, with no MSR written; with
+ * SSBD in IA32_SPEC_CTRL, carried in that register; beneath a hypervisor
+ * with VIRT_SSBD, in the host's VIRT_SPEC_CTRL; on family 17h, in LS_CFG,
+ * set by the first thread of a core and cleared by the last
+ * (arch/x86/kernel/process.c:562-599). Then INIT clears SPEC_CTRL and
+ * VIRT_SPEC_CTRL, as Linux's svm_vcpu_reset (svm.c:1402-1403). The vCPU is
+ * VMX's fake one, read with the backend SVM's. */
+static void spec_rows(void)
+{
+    struct kvm_vcpu *v;
+    int vm, fd;
+    uint64_t value = 1;
+
+    vm = dev(KVM_CREATE_VM, 0);
+    fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    v = (struct kvm_vcpu *)entries[fd].priv;
+    kvm_backend = &kvm_svm;
+    kvm_spec_start();
+    model_wrs = 0;
+    CHECK(set_msr(fd, 0xC001011Fu, 4) == 1 && get_msr(fd, 0xC001011Fu, &value) == 1 && value == 4,
+          "on a host with no mechanism, the caller's VIRT_SPEC_CTRL takes SSBD");
+    CHECK(set_msr(fd, 0xC001011Fu, 1) == 0, "and nothing else");
+    kvm_virt_ssbd_switch(v, 0, 1);
+    kvm_virt_ssbd_switch(v, 0, 0);
+    CHECK(kvm_spec_ctrl_guest(v) == 0 && wrote(0, 0) && !kvm_virt_ssbd_offered(),
+          "which no entry carries out: SPEC_CTRL without SSBD, no MSR written, none offered");
+
+    model_spec_bits = 7; /* IBRS, STIBP, SSBD */
+    kvm_spec_start();
+    model_wrs = 0;
+    kvm_virt_ssbd_switch(v, 0, 1);
+    CHECK(
+        kvm_spec_ctrl_guest(v) == 4 && wrote(0, 0) && kvm_virt_ssbd_offered(),
+        "with SSBD in IA32_SPEC_CTRL, the guest's SPEC_CTRL carries it, and VIRT_SSBD is offered");
+
+    model_spec_bits = 0;
+    model_virt = 1;
+    kvm_spec_start();
+    model_wrs = 0;
+    kvm_virt_ssbd_switch(v, 0, 1);
+    CHECK(kvm_spec_ctrl_guest(v) == 0 && wrote(0xC001011Fu, 4),
+          "beneath a hypervisor with VIRT_SSBD, the entry sets the host's VIRT_SPEC_CTRL");
+    kvm_virt_ssbd_switch(v, 0, 0);
+    CHECK(wrote(0xC001011Fu, 0) && !kvm_virt_ssbd_offered(),
+          "and the exit clears it; VIRT_SSBD is not offered, as Linux's svm_set_cpu_caps");
+
+    model_virt = 0;
+    model_amd17 = 1;
+    model_msr_ls = 0x1000;
+    kvm_spec_start();
+    model_wrs = 0;
+    CHECK(kvm_spec_ctrl_guest(v) == 0 && kvm_virt_ssbd_offered(),
+          "on family 17h without AMD_SSBD, LS_CFG carries it, and VIRT_SSBD is offered");
+    model_apic = 0;
+    kvm_virt_ssbd_switch(v, 0, 1);
+    CHECK(wrote(0xC0011020u, 0x1400), "the first thread of a core to enter sets LS_CFG's bit 10");
+    model_apic = 1;
+    kvm_virt_ssbd_switch(v, 1, 1);
+    CHECK(wrote(0, 0), "its sibling's entry writes nothing");
+    model_apic = 0;
+    kvm_virt_ssbd_switch(v, 0, 0);
+    CHECK(wrote(0, 0), "nor the first one's exit, while the sibling's guest runs");
+    model_apic = 1;
+    kvm_virt_ssbd_switch(v, 1, 0);
+    CHECK(wrote(0xC0011020u, 0x1000), "the last thread's exit puts the host's LS_CFG back");
+    model_apic = 2;
+    kvm_virt_ssbd_switch(v, 2, 1);
+    CHECK(wrote(0xC0011020u, 0x1400), "and another core's entry sets its own");
+    kvm_virt_ssbd_switch(v, 2, 0);
+    CHECK(wrote(0xC0011020u, 0x1000), "and its exit clears it");
+    model_amd17 = 0;
+
+    model_spec_bits = 7;
+    kvm_spec_start();
+    model_wrs = 0;
+    CHECK(set_msr(fd, 0x48, 5) == 1 && set_msr(fd, 0xC001011Fu, 4) == 1,
+          "SPEC_CTRL and VIRT_SPEC_CTRL set");
+    kvm_vcpu_init_reset(v);
+    value = 1;
+    CHECK(get_msr(fd, 0x48, &value) == 1 && value == 0 && get_msr(fd, 0xC001011Fu, &value) == 1 &&
+              value == 0 && kvm_spec_ctrl_guest(v) == 0,
+          "INIT clears both");
+    model_spec_bits = 0;
+    model_msr_spec = 0;
+    kvm_spec_start();
+    model_wrs = 0;
+    kvm_backend = &kvm_vmx;
+    fdclose(fd);
+    fdclose(vm);
+}
+
 /** /dev/kvm's attribute KVM_X86_XCOMP_GUEST_SUPP, as amx_test reads it,
  * and the debugging capabilities. */
 static void attr_rows(void)
@@ -4026,6 +4194,7 @@ static void selftest_rows(void)
     feature_msr_rows();
     svm_debugctl_rows();
     svm_sfmask_rows();
+    spec_rows();
     mce_hwcr_rows();
     xsaves_rows();
     xsave_move_rows();
