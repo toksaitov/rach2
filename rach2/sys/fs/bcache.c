@@ -143,8 +143,9 @@ static struct bbuf *fill_keep;
  * (`victim_any`). */
 static uint32_t fit_gos;
 static uint32_t limit_set; /* a limit given by `bcache_set_limit`, or 0 */
-/* Who wakes the flusher once the dirty buffers pass the background
- * threshold (`bcache_set_flusher`), or NULL. */
+/* Who wakes the flusher at the first dirty buffer of a clean cache and once
+ * the dirty buffers pass the background threshold (`bcache_set_flusher`),
+ * or NULL. */
 static void (*flusher_kick)(void);
 
 /* Linux's names and defaults (mm/page-writeback.c:70-95): the share of the
@@ -2250,13 +2251,15 @@ again:
  * Mark the held buffer `b` dirty, and with `tag` set give it `owner` and
  * `level` (`bcache_dirty_owned`, `bcache_dirty_pointer`), in one step under
  * `cache_spin` with `wb_lock` taken, which the caller then holds and gives
- * back; past the background threshold the flusher is woken, as Linux's
- * `balance_dirty_pages` starts background writeback. Returns 1, or panics
- * when the caller does not hold `b`.
+ * back. The flusher is woken by the first dirty buffer of a clean cache,
+ * so that its readings of the marks start then, and past the background
+ * threshold, as Linux's `balance_dirty_pages` starts background writeback.
+ * Returns 1, or panics when the caller does not hold `b`.
  */
 static int mark(struct bbuf *b, int tag, uint64_t owner, int level)
 {
     uint32_t flags;
+    int first;
 
     if (!b || b->holder != caller_pid()) {
         k_panic("bcache: hold rule: a dirty mark by a process that does not hold the buffer");
@@ -2264,13 +2267,15 @@ static int mark(struct bbuf *b, int tag, uint64_t owner, int level)
     }
     wb_take();
     flags = cache_lock();
+    first = ndirty == 0;
     set_dirty(b);
+    first = first && ndirty > 0;
     if (tag) {
         b->owner = owner;
         b->level = level;
     }
     cache_unlock(flags);
-    if (flusher_kick && bcache_dirty_level() > 0) {
+    if (flusher_kick && (first || bcache_dirty_level() > 0)) {
         flusher_kick();
     }
     return 1;

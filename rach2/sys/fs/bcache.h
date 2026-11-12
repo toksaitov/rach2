@@ -412,9 +412,10 @@ extern unsigned long dirty_background_bytes;
 extern int vm_dirty_ratio;
 extern unsigned long vm_dirty_bytes;
 
-/** Name the call that wakes the flusher once a dirty mark leaves the dirty
- * buffers at or past the background threshold; NULL names none. The call
- * runs under the cache's write lock and must not sleep. */
+/** Name the call that wakes the flusher when a dirty mark makes the first
+ * dirty buffer of a clean cache or leaves the dirty buffers at or past the
+ * background threshold; NULL names none. The call runs under the cache's
+ * write lock and must not sleep. */
 void bcache_set_flusher(void (*kick)(void));
 
 /** The count of dirty marks so far, which grows by one at each; a buffer
