@@ -506,10 +506,18 @@ static int32_t disk_read_pages(struct filemap *m, uint32_t first, uint32_t count
  * a file whose frames may be the cache's (`stores` clear), and one the
  * cache keeps (`filecache_keeps`), reads around. The caller holds the
  * file's lock and may sleep; `size` is the file's size and `epoch` the
- * cache's count taken before the read. Returns the bytes of `pgoff` read,
- * or a negative errno.
+ * cache's count taken before the read.
+ *
+ * When the window's read leaves `pgoff` unfilled, the page is read again
+ * into a new frame, which replaces `*phys`, and the caller's reference on
+ * the old one is let go: a read the block layer gave up on may still be
+ * the device's to fill (`block_read_frames`), and its request keeps a
+ * reference on the frame until the device answers or is reset, as Linux
+ * leaves a folio locked and not up to date until its bio ends (fs/mpage.c,
+ * `filemap_read_folio` in mm/filemap.c). Returns the bytes of `pgoff` read,
+ * with `*phys` the caller's still on an error, or a negative errno.
  */
-static int32_t disk_read_around(struct filemap *m, uint32_t pgoff, uint64_t size, uintptr_t phys,
+static int32_t disk_read_around(struct filemap *m, uint32_t pgoff, uint64_t size, uintptr_t *phys,
                                 uint32_t epoch)
 {
     uintptr_t around[DISK_AROUND];
@@ -517,10 +525,11 @@ static int32_t disk_read_around(struct filemap *m, uint32_t pgoff, uint64_t size
     uint64_t pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
     uint32_t n = pages - start < DISK_AROUND ? (uint32_t)(pages - start) : DISK_AROUND;
     uint32_t i, run, own = pgoff - start, wanted = 0, filled = 0;
+    uintptr_t fresh;
     int32_t got = -EIO;
 
     for (i = 0; i < n; i++) {
-        around[i] = i == own ? phys : shmem_resident(m->sh, start + i);
+        around[i] = i == own ? *phys : shmem_resident(m->sh, start + i);
         wanted |= around[i] ? 0 : 1u << i;
     }
     (void)filecache_lend(&m->entry, start, n, around);
@@ -558,7 +567,17 @@ static int32_t disk_read_around(struct filemap *m, uint32_t pgoff, uint64_t size
         free_frame(around[i]);
     }
     if (!(filled & (1u << own))) {
-        return disk_read_page(m, pgoff, phys);
+        if ((fresh = alloc_user_frame()) == 0) {
+            return -ENOMEM;
+        }
+        got = disk_read_page(m, pgoff, fresh);
+        if (got < 0) {
+            free_frame(fresh);
+            return got;
+        }
+        free_frame(*phys);
+        *phys = fresh;
+        return got;
     }
     return size - (uint64_t)pgoff * PAGE_SIZE < PAGE_SIZE
                ? (int32_t)(size - (uint64_t)pgoff * PAGE_SIZE)
@@ -616,7 +635,7 @@ static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
                 m->ds->misses++;
             }
             got = share && m->ds->misses <= DISK_LOTS_MISSED && filecache_keeps(&m->entry)
-                      ? disk_read_around(m, pgoff, st.size, *phys, epoch)
+                      ? disk_read_around(m, pgoff, st.size, phys, epoch)
                       : disk_read_page(m, pgoff, *phys);
         }
         if (got < 0) {
