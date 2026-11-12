@@ -222,6 +222,11 @@ int vtd_fault_start(void);
 
 /** Point the units' fault events again at the boot processor, by the id it
  * answers to after its APIC changed mode. */
+/** Mask every unit's fault event (`hold` 1), or unmask it (`hold` 0),
+ * once `vtd_fault_start` aimed it: across the late x2APIC leave
+ * (`iommu_fault_hold`). */
+void vtd_fault_hold(int hold);
+
 void vtd_fault_retarget(void);
 void vtd_fault_unit(struct vtd_unit *u);
 void vtd_fault_all(void);

@@ -4460,7 +4460,7 @@ void kernel_main(const struct boot_info *boot)
     init_sched();
     klog(KLOG_DEBUG, "boot", "scheduler: ready");
 
-    platform_firmware_start();
+    platform_firmware_start(); /* before any driver enables a message (platform.c) */
 
     /* After ACPICA, whose PNP IDs choose the touchpad's quirks. */
     platform_mouse_init();

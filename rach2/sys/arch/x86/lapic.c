@@ -37,8 +37,10 @@
  * enable_IR_x2apic, try_to_enable_x2apic and check_x2apic
  * (arch/x86/kernel/apic/apic.c, lines 1820 to 1927). A firmware's x2APIC
  * mode is kept where it is locked or a hypervisor allows it, and on the
- * x86-64 kernel until remapping's format is known (`lapic_x2apic_settle`);
- * otherwise it is returned to xAPIC mode, as Linux's x2apic_disable does.
+ * x86-64 kernel, where the DMAR table offers remapping in the x2APIC
+ * format (`ioapic_remappable`), until the format is known
+ * (`lapic_x2apic_settle`); otherwise it is returned to xAPIC mode, as
+ * Linux's x2apic_disable does.
  * Destinations are physical, as x2apic_phys.c gives them: every message
  * names one processor. `nox2apic` keeps xAPIC mode, as on Linux.
  *
@@ -97,6 +99,7 @@
 #define SVR_EOI_SUPPRESS    0x1000u
 #define SPURIOUS_VECTOR     0xFFu
 #define TIMER_PERIODIC      (1u << 17)
+#define TIMER_MODE          (3u << 17) /* one-shot 0, periodic or TSC deadline */
 #define DIVIDE_BY_16        0x3u
 #define ICR_SELF            (1u << 18)
 #define ICR_PENDING         (1u << 12)
@@ -395,9 +398,11 @@ static const uint32_t kept_regs[] = {LAPIC_SVR,   LAPIC_TPR,    LAPIC_TIMER,
  * the move changed. The SDM keeps every register but the identity and the
  * logical destination from xAPIC to x2APIC mode, and resets them all on the
  * way back through the disabled state; the count of registers written
- * again is logged, so that a processor that kept less shows it.
+ * again is logged, so that a processor that kept less shows it. `*count`,
+ * when `count` is not NULL, is the timer's current count read last before
+ * the mode's write, after which the way back resets it.
  */
-static void switch_mode(int to)
+static void switch_mode(int to, uint32_t *count)
 {
     uint32_t saved[NKEPT], lo = 0, hi = 0, flags;
     int i, rewritten = 0;
@@ -407,6 +412,9 @@ static void switch_mode(int to)
         saved[i] = apic_read(kept_regs[i]);
     }
     kcpu_rdmsr(IA32_APIC_BASE, &lo, &hi);
+    if (count) {
+        *count = apic_read(LAPIC_CURRENT);
+    }
     if (to) {
         kcpu_wrmsr(IA32_APIC_BASE, lo | APIC_BASE_X2APIC, hi);
     } else {
@@ -450,7 +458,7 @@ int lapic_x2apic_enable(void)
     if (x2apic) {
         return 0;
     }
-    switch_mode(1);
+    switch_mode(1, NULL);
     return 1;
 }
 
@@ -469,32 +477,51 @@ static int level_requested(void)
 }
 
 /**
- * Leave x2APIC mode once the devices' interrupts are live.
+ * Leave x2APIC mode once the I/O APIC's lines, the local timer and the VT-d
+ * units' fault events are live, with every source of an interrupt quiet
+ * across the move.
  *
  * The way back passes the disabled state, which clears the request,
  * in-service and trigger-mode registers (SDM, the local APIC's state after
  * it has been disabled): a level interrupt dropped there is never ended,
  * so its I/O APIC entry's remote IRR stays set and the line never fires
- * again, and a message dropped there is lost. So the 8259 and every routed
- * I/O APIC line are masked first, and what they already sent is taken by
- * its handler, interrupts being on, before the move; a message that comes
- * in the last moment, waiting in the request register, is sent again to
- * this processor once it is back in xAPIC mode, and an edge a masked line
- * dropped is raised again as the line is unmasked (`ioapic_unmask_lines`).
- * The devices' messages are not masked, and many have no mask of their
- * own (MSI without per-vector masking), so a message that comes after the
- * request register is read, or while the APIC is disabled between the two
- * writes of `x2apic_leave`, is lost. The window is a few register accesses,
- * once a boot, and only where a firmware left x2APIC mode on and remapping
- * cannot keep it.
- * Linux leaves the mode only before any device has an interrupt
- * (`enable_IR_x2apic`, apic.c, lines 1913 to 1926) and needs none of this.
+ * again, and a message dropped there is lost. So no source may send while
+ * the request register is read and the APIC moved:
+ *
+ * The 8259 and every routed I/O APIC line are masked first, and what they
+ * already sent level-triggered is taken by its handler, interrupts being
+ * on; an edge a masked line dropped is raised again as the line is
+ * unmasked (`ioapic_unmask_lines`), and the 8259 keeps a masked edge in its
+ * own request register. With interrupts off, the timer's and the error's
+ * local-vector entries are masked; what either raised before is in the
+ * request register, which is then read. The timer goes on counting, and a
+ * count that came to zero while it was masked raised nothing, so its
+ * vector is raised once after the move when the count reloaded, or ran out
+ * in one-shot mode, between the mask and the move, a window of a few
+ * register accesses, far shorter than a tick. The move resets the count,
+ * which starts again from the initial count in periodic mode and from what
+ * it had left in one-shot mode.
+ *
+ * Every vector the request register held is sent again to this processor
+ * once it is back in xAPIC mode, and the two entries are written as they
+ * were. The VT-d units' fault events are held by the caller in FECTL.IP,
+ * which sends one as it is unmasked (platform.c). No device has a message
+ * of its own yet, since the platform settles the mode before any driver
+ * enables one (kernel.c), and no other processor runs to send one.
+ *
+ * Linux leaves the mode before the local timer, the I/O APIC's lines or
+ * any message is set up, with only the 8259's timer live, which it masks
+ * (`enable_IR_x2apic`, apic.c, lines 1893 to 1926, from
+ * apic_intr_mode_init by way of x86_64_probe_apic, apic.c, line 1372, and
+ * probe_64.c, line 21, after timer_init, arch/x86/kernel/time.c, lines 76
+ * and 82); this kernel knows remapping's format only once ACPICA has read
+ * the DMAR, after its tick has started.
  */
 static void x2apic_leave_live(void)
 {
-    uint32_t irr[8], flags, i;
+    uint32_t irr[8], flags, i, timer, error, before, after;
     uint16_t pic, lines;
-    int spins;
+    int spins, dropped;
 
     lines = ioapic_mask_routed();
     pic = pic_mask_all();
@@ -502,10 +529,24 @@ static void x2apic_leave_live(void)
         /* interrupts are on: each handler takes its vector and ends it */
     }
     flags = kirq_save();
+    timer = apic_read(LAPIC_TIMER);
+    error = apic_read(LAPIC_ERROR);
+    apic_write(LAPIC_TIMER, timer | LVT_MASKED);
+    apic_write(LAPIC_ERROR, error | LVT_MASKED);
+    before = apic_read(LAPIC_CURRENT);
     for (i = 0; i < 8u; i++) {
         irr[i] = apic_read(LAPIC_IRR + i * 0x10u);
     }
-    switch_mode(0);
+    switch_mode(0, &after);
+    if ((timer & TIMER_MODE) == 0) {
+        apic_write(LAPIC_INITIAL, after); /* one-shot: the count it had left */
+    }
+    apic_write(LAPIC_ERROR, error);
+    apic_write(LAPIC_TIMER, timer);
+    dropped = (timer & LVT_MASKED) == 0 && (after > before || (before != 0 && after == 0));
+    if (dropped && (timer & 0xFFu) >= 32u) {
+        irr[(timer & 0xFFu) / 32u] |= 1u << ((timer & 0xFFu) % 32u);
+    }
     for (i = 32; i < 256u; i++) {
         if ((irr[i / 32u] & (1u << (i % 32u))) != 0) {
             lapic_self_ipi((uint8_t)i);

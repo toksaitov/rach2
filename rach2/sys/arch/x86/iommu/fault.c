@@ -323,6 +323,22 @@ int vtd_fault_start(void)
     return 0;
 }
 
+/** A fault event that comes while FECTL.IM is set waits in FECTL.IP and is
+ * sent as the mask is cleared (VT-d specification, the fault event control
+ * register), so none is lost
+ * across the hold. Nothing while no vector was taken. */
+void vtd_fault_hold(int hold)
+{
+    int i;
+
+    if (fault_vector < 0) {
+        return;
+    }
+    for (i = 0; i < vtd_nunits; i++) {
+        vtd_hw_write32(vtd_units[i].regs, VTD_FECTL, hold ? VTD_FECTL_IM : 0u);
+    }
+}
+
 /** The move to x2APIC mode gives the processor its whole x2APIC id, which
  * may be wider than the eight bits `vtd_fault_start` aimed at. */
 void vtd_fault_retarget(void)

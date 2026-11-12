@@ -89,12 +89,13 @@ int lapic_x2apic_enable(void);
  * (`remapped`) or has not, as Linux's try_to_enable_x2apic does (apic.c,
  * lines 1820 to 1857): kept when remapped, left otherwise, and a panic
  * where it can be neither, with an identity of 255 or more. Nothing when
- * no such mode was kept. The devices' interrupts are live by then, so the
- * leave masks the lines and lets the handlers take what was sent before
- * it passes the disabled state; a device's message that comes after the
- * request register is read, or while the APIC is disabled, is lost, since
- * the messages are not masked. Called once, on the boot processor before
- * the others start, after the VT-d units (platform.c), with interrupts on.
+ * no such mode was kept. The I/O APIC's lines and the local timer are live
+ * by then, so the leave masks the lines, the 8259 and the timer's and the
+ * error's entries, lets the handlers take what was sent before, and sends
+ * again what the request register held as it passed the disabled state.
+ * Called once, on the boot processor before the others start and before
+ * any driver enables a device's message, after the VT-d units, whose fault
+ * events the caller holds (platform.c), with interrupts on.
  */
 void lapic_x2apic_settle(int remapped);
 
