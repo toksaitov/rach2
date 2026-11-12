@@ -3,12 +3,16 @@
  * locks, open file description locks and flock locks.
  *
  * host-deps:
+ * host-cflags: -pthread
  *
- * The test includes the source whole, with the heap and the wait queue
- * given by the host. Each process of a row has a descriptor table of its
- * own, the owner of its record locks, except where a row makes two share
- * one. A sleep runs what the row's other processes do meanwhile, as steps
- * the row sets before it.
+ * The test includes the source whole, with the heap, the wait queue and the
+ * spinlock given by the host. Each process of a row has a descriptor table
+ * of its own, the owner of its record locks, except where a row makes two
+ * share one. A sleep runs what the row's other processes do meanwhile, as
+ * steps the row sets before it. The heap, the wakes and the sleeps check
+ * that the list's lock is free when they are called, and the last row runs
+ * four host threads on the list at once, which the list's lock alone keeps
+ * apart now that the calls run without the big lock.
  */
 
 #include "fs/lock.c"
@@ -16,6 +20,13 @@
 extern int printf(const char *format, ...);
 extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *ptr);
+
+/* The host's threads, declared here since the kernel's integer types stand
+ * in the way of <pthread.h>; a pthread_t is one word on Linux and macOS. */
+typedef unsigned long host_thread_t;
+extern int pthread_create(host_thread_t *thread, const void *attr, void *(*start)(void *),
+                          void *arg);
+extern int pthread_join(host_thread_t thread, void **ret);
 
 static int fails;
 
@@ -35,15 +46,52 @@ struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
 static fd_table_t tables[10];
 static fd_table_t *table_of[10];
 
+/* Set while the threads of `threads_row` run, whose calls may meet the
+ * list's lock held by another thread. */
+static volatile int threaded;
+/* The calls of the heap, the wakes and the sleeps made while the list's
+ * lock was held, which none may be: the heap and a wake are called once
+ * the lock is let go, and a sleep with it free. */
+static int held_calls;
+
+/** Count a call made with `flc_lock` held, outside the threads' row. */
+static void lock_free_here(void)
+{
+    if (!threaded && flc_lock.locked) {
+        held_calls++;
+    }
+}
+
+/** Take `lock` by an atomic exchange, spinning while another thread holds
+ * it; one thread that takes it twice traps. The flags are unused. */
+uint32_t spin_lock_irqsave(struct spinlock *lock)
+{
+    if (!threaded && lock->locked) {
+        __builtin_trap();
+    }
+    while (__atomic_exchange_n(&lock->locked, 1u, __ATOMIC_ACQUIRE) != 0) {
+    }
+    return 0;
+}
+
+/** Release `lock`. */
+void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
+{
+    (void)flags;
+    __atomic_store_n(&lock->locked, 0u, __ATOMIC_RELEASE);
+}
+
 /** The kernel heap's zeroed allocation, from the C library. */
 void *kzalloc(size_t n)
 {
+    lock_free_here();
     return calloc(1, n);
 }
 
 /** Free what `kzalloc` gave. */
 void kfree(void *p)
 {
+    lock_free_here();
     free(p);
 }
 
@@ -51,6 +99,7 @@ void kfree(void *p)
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
+    lock_free_here();
 }
 
 /* What other processes do while a caller sleeps, one step for each sleep in
@@ -64,6 +113,7 @@ static int step;
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
+    lock_free_here();
     while (!cond(arg)) {
         if (step >= 4 || !steps[step]) {
             return -EINTR;
@@ -450,6 +500,105 @@ static void shared_cycle(void)
     CHECK(count_locks() == 0);
 }
 
+/* The rounds each thread of `threads_row` makes. */
+#define THREAD_ROUNDS 20000
+#define THREADS       4
+
+/* What each thread of `threads_row` has: its two descriptions, the owners
+ * of its locks, and the counts of what it was given. */
+struct thread_work {
+    struct open_file ofd[2];
+    int index;
+    int exclusive;
+    int refused;
+    int errors;
+};
+
+/* How many threads hold an exclusive flock(2) lock of `file` at once,
+ * which the locks allow to be one at most, and the most seen. */
+static volatile int exclusive_now;
+static volatile int exclusive_most;
+
+/**
+ * One thread of `threads_row`: by turns an exclusive flock(2) lock of the
+ * file without waiting, held across a count of its holders, and a read and
+ * a write OFD lock over a range of the file of its own, which a split, a
+ * merge and an unlock change in place.
+ */
+static void *thread_rounds(void *arg)
+{
+    struct thread_work *w = arg;
+    uint64_t base = 1000u * (uint64_t)(w->index + 1);
+    int i;
+
+    for (i = 0; i < THREAD_ROUNDS; i++) {
+        int32_t rc = lock_flock(&file, &w->ofd[0], LOCK_EX | LOCK_NB);
+        struct lock_req req;
+
+        if (rc == 0) {
+            int now = __atomic_add_fetch(&exclusive_now, 1, __ATOMIC_SEQ_CST);
+
+            if (now > exclusive_most) {
+                exclusive_most = now;
+            }
+            w->exclusive++;
+            __atomic_sub_fetch(&exclusive_now, 1, __ATOMIC_SEQ_CST);
+            w->errors += lock_flock(&file, &w->ofd[0], LOCK_UN) != 0;
+        } else if (rc == -EAGAIN) {
+            w->refused++;
+        } else {
+            w->errors++;
+        }
+        req.type = F_RDLCK;
+        req.start = base;
+        req.end = base + 99u;
+        req.pid = 0;
+        w->errors += lock_record(&file, &w->ofd[1], LOCK_SET, &req) != 0;
+        req.type = F_WRLCK;
+        req.start = base + 40u;
+        req.end = base + 59u;
+        w->errors += lock_record(&file, &w->ofd[1], LOCK_SET, &req) != 0;
+        req.type = F_UNLCK;
+        req.start = base;
+        req.end = base + 99u;
+        w->errors += lock_record(&file, &w->ofd[1], LOCK_SET, &req) != 0;
+    }
+    return NULL;
+}
+
+/**
+ * Four threads take and give back flock(2) and OFD locks of one file at
+ * once, as the calls do on four processors without the big lock. No two
+ * threads hold an exclusive flock(2) lock together, no call fails but by a
+ * conflict, no lock is left, and the list's records stay whole for the
+ * heap's checker. Without the list's lock in its place the threads lose
+ * each other's changes: two exclusive locks at once, a lock left behind,
+ * or a record freed twice.
+ */
+static void threads_row(void)
+{
+    static struct thread_work work[THREADS];
+    host_thread_t th[THREADS];
+    int i, made = 0, errors = 0;
+
+    threaded = 1;
+    for (i = 0; i < THREADS; i++) {
+        work[i].index = i;
+        made += pthread_create(&th[i], NULL, thread_rounds, &work[i]) == 0;
+    }
+    for (i = 0; i < made; i++) {
+        pthread_join(th[i], NULL);
+        errors += work[i].errors;
+    }
+    threaded = 0;
+    CHECK(made == THREADS);
+    CHECK(errors == 0);
+    CHECK(exclusive_most == 1);
+    CHECK(count_locks() == 0);
+    CHECK(waits == NULL && waiting_keys == NULL);
+    CHECK(flc_lock.locked == 0);
+}
+
 /** Run the rows. Returns the count of failed checks, at most 100. */
 int main(void)
 {
@@ -461,5 +610,8 @@ int main(void)
     moving_waits();
     shared_table();
     shared_cycle();
+    CHECK(held_calls == 0);
+    CHECK(flc_lock.locked == 0);
+    threads_row();
     return fails > 100 ? 100 : fails;
 }

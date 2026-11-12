@@ -370,6 +370,14 @@ static void fd_lock_key(const fd_entry_t *e, struct lock_key *key)
     }
 }
 
+/** Whether the key of what `e` is open on is its node (`fd_lock_key`),
+ * which a KRFFS write moves under the big lock (`vfs_repoint`), so that the
+ * key is made under it. */
+static int fd_locks_by_node(const fd_entry_t *e)
+{
+    return e->ofd && e->ofd->vmnt && mnt_locks_by_node(e->ofd->vmnt);
+}
+
 /**
  * Drop the record locks of the calling thread's descriptor table on what `e`
  * is open on, when `e` is one of the table's descriptors, as POSIX has every
@@ -378,21 +386,32 @@ static void fd_lock_key(const fd_entry_t *e, struct lock_key *key)
  * a file mapping or a message in flight keeps is not a descriptor of the
  * table (`fd_in_table`), and its release drops none; nor does the close of
  * an O_PATH descriptor, which Linux does not count as a close of the file.
- * The locks are dropped under the big lock, which guards them, and taken
- * only when some lock exists.
+ * Nothing is done when no lock exists, as Linux's locks_remove_posix looks
+ * at the file's list first (fs/locks.c:2617-2631); the list has its own
+ * lock, and the big lock is taken only for a file keyed by its node
+ * (`fd_locks_by_node`), which a KRFFS write moves under it. A caller that
+ * runs beside a lock command of another sharer marks the descriptor
+ * closing under the table's lock first, which the command reads after it
+ * sets its lock (`fd_lock_still_open`).
  */
 static void fd_close_locks(const fd_entry_t *e)
 {
     struct lock_key key;
+    int big;
 
     if (!lock_any() || !e->ofd || (e->flags & FD_FLAG_PATH) || !current_proc ||
         !fd_in_table(current_proc->fds, e)) {
         return;
     }
-    bkl_enter();
+    big = fd_locks_by_node(e);
+    if (big) {
+        bkl_enter();
+    }
     fd_lock_key(e, &key);
     lock_close(&key);
-    bkl_exit();
+    if (big) {
+        bkl_exit();
+    }
 }
 
 /**
@@ -5818,7 +5837,8 @@ static int epoll_waits_let_go(fd_table_t *table, int fd)
 
 /**
  * Close descriptor `fd` of the caller's table. The table's record locks on
- * the file go at once, as Linux drops them at every close. Then the entry
+ * the file go as soon as the descriptor is claimed, as Linux drops them at
+ * every close. Then the entry
  * is released and its slot freed (`fd_teardown`), or, while a call of
  * another thread sharing the table holds it, marked closing, so that the
  * call ends with what it had and the slot is released as that call ends
@@ -5827,8 +5847,13 @@ static int epoll_waits_let_go(fd_table_t *table, int fd)
  * ends after it took a lock again. Linux keeps the file for such a call
  * through the reference `fdget` takes. The choice is made under the table's
  * lock (`fd_close_claim`), so of two closes of one descriptor one answers
- * EBADF. An epoll_wait asleep does not keep the descriptors it watches
- * (`epoll_waits_let_go`), since Linux's epoll takes no reference to them:
+ * EBADF. The locks go after the claim, as Linux's close takes the file out
+ * of the table before `filp_close` drops its locks (fs/file.c:654-665), so
+ * that a lock command of another sharer either finds the descriptor closing
+ * after it sets its lock or has set it before the close looks
+ * (`fd_lock_still_open`). An epoll_wait asleep does not keep the
+ * descriptors it watches (`epoll_waits_let_go`), since Linux's epoll takes
+ * no reference to them:
  * when the holds that kept the slot were such waits', the close releases
  * it itself (`fd_close_finish`), or the last of them does, when one was in
  * the middle of its scan. The claim comes first, so that no wait
@@ -5844,8 +5869,10 @@ static int32_t close_fd(int fd)
     if (!e) {
         return -EBADF;
     }
-    fd_close_locks(e);
     rc = fd_close_claim(table, fd);
+    if (rc >= 0) {
+        fd_close_locks(e);
+    }
     if (rc == 0 && epoll_waits_let_go(table, fd)) {
         rc = fd_close_finish(table, fd);
     }
@@ -14616,6 +14643,23 @@ static int32_t flock_write(uintptr_t arg, int wide, const struct lock_req *req)
 }
 
 /**
+ * Whether descriptor `entry` of the caller's table is not being closed,
+ * read under the table's lock after a lock command set its lock, as Linux's
+ * fcntl_setlk looks the descriptor up again under `file_lock`
+ * (fs/locks.c:2468-2482): a close marks the descriptor closing under that
+ * lock before it drops the table's locks (`close_fd`), so either this sees
+ * the mark or the close sees the lock.
+ */
+static int fd_lock_still_open(const fd_entry_t *entry)
+{
+    uint32_t flags = fd_table_lock(current_proc->fds);
+    int open = !(entry->flags & FD_FLAG_CLOSING);
+
+    fd_table_unlock(current_proc->fds, flags);
+    return open;
+}
+
+/**
  * The record-lock commands of fcntl64 on `entry`: `cmd` one of the nine,
  * `arg` the caller's struct flock, 16 bytes with 32-bit offsets for F_GETLK,
  * F_SETLK and F_SETLKW, or struct flock64, 24 bytes, for the rest. Returns
@@ -14639,10 +14683,15 @@ static int32_t flock_write(uintptr_t arg, int wide, const struct lock_req *req)
  * The file's key is taken again for that, since a KRFFS file a write moved
  * during the wait has a new one. An OFD lock belongs to the description,
  * which the call still holds.
+ *
+ * The call runs without the big lock, as Linux's fcntl_setlk takes none:
+ * the locks have their own (lock.c). It takes the big lock for a file keyed
+ * by its node (`fd_locks_by_node`), and for a SEEK_END range on a file
+ * whose attributes need it, which `file_vfs_unlocked` does not admit.
  */
 static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uintptr_t arg)
 {
-    int wide, by_ofd;
+    int wide, by_ofd, big;
     int op = flock_cmd(cmd, &wide, &by_ofd);
     struct flock_args fl;
     struct lock_req req;
@@ -14663,19 +14712,25 @@ static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uintptr_t arg)
                            (fl.type == F_WRLCK && !(entry->flags & FD_FLAG_WRITE)))) {
         return -EBADF;
     }
-    rc = flock_range(entry, fl.whence, fl.start, fl.len, &req);
-    if (rc != 0) {
-        return rc;
+    big = fd_locks_by_node(entry) ||
+          (fl.whence == 2 && entry->ofd->vmnt && !file_vfs_unlocked(entry));
+    if (big) {
+        bkl_enter();
     }
-    req.type = fl.type;
-    req.pid = 0;
-    fd_lock_key(entry, &key);
-    rc = lock_record(&key, by_ofd ? entry->ofd : NULL, op, &req);
-    if (rc == 0 && op != LOCK_GET && req.type != F_UNLCK && !by_ofd &&
-        (entry->flags & FD_FLAG_CLOSING)) {
+    rc = flock_range(entry, fl.whence, fl.start, fl.len, &req);
+    if (rc == 0) {
+        req.type = fl.type;
+        req.pid = 0;
+        fd_lock_key(entry, &key);
+        rc = lock_record(&key, by_ofd ? entry->ofd : NULL, op, &req);
+    }
+    if (rc == 0 && op != LOCK_GET && req.type != F_UNLCK && !by_ofd && !fd_lock_still_open(entry)) {
         fd_lock_key(entry, &key);
         lock_close(&key);
-        return -EBADF;
+        rc = -EBADF;
+    }
+    if (big) {
+        bkl_exit();
     }
     if (rc != 0 || op != LOCK_GET) {
         return rc;
@@ -15805,6 +15860,10 @@ long sys_cachestat(isr_params_t *params)
  * is not open for reading or writing when it asks for a lock; EWOULDBLOCK
  * when LOCK_NB meets a conflict; EINTR when a signal ends the wait; or
  * ENOLCK.
+ *
+ * The call runs without the big lock, as Linux's flock takes none: the
+ * locks have their own (lock.c), and the big lock is taken only for a file
+ * keyed by its node (`fd_locks_by_node`).
  */
 long sys_flock(isr_params_t *params)
 {
@@ -15812,6 +15871,7 @@ long sys_flock(isr_params_t *params)
     int kind = op & ~LOCK_NB;
     fd_entry_t *e;
     struct lock_key key;
+    int32_t rc;
 
     if (op & LOCK_MAND) {
         return 0;
@@ -15827,8 +15887,15 @@ long sys_flock(isr_params_t *params)
         (kind != LOCK_UN && !(e->flags & (FD_FLAG_READ | FD_FLAG_WRITE)))) {
         return -EBADF;
     }
+    if (!fd_locks_by_node(e)) {
+        fd_lock_key(e, &key);
+        return lock_flock(&key, e->ofd, op);
+    }
+    bkl_enter();
     fd_lock_key(e, &key);
-    return lock_flock(&key, e->ofd, op);
+    rc = lock_flock(&key, e->ofd, op);
+    bkl_exit();
+    return rc;
 }
 
 /** F_SETFL on the held descriptor `entry`: set the O_APPEND and O_NONBLOCK
