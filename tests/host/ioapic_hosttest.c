@@ -3,7 +3,9 @@
  * the 8259 pair, which remapping's start and the late x2APIC leave wrap
  * around their moves, the `maxcpus=` parse that keeps the I/O APIC off,
  * and the boot line's `nointremap` and `intremap=` with the DMAR table's
- * flags, which say whether remapping may start in the x2APIC format.
+ * flags, which say whether remapping may start in the x2APIC format; and
+ * the boot line's lookups of a word, cmdline.c's `kcmdline_has`,
+ * `kcmdline_early` and `kcmdline_setup`, which those parses stand on.
  *
  * host-deps: rach2/sys/arch/x86/ioapic.c rach2/sys/arch/x86/pic.c
  * host-deps: rach2/sys/cmdline.c rach2/sys/lib/kstring.c
@@ -328,6 +330,9 @@ static const struct {
 } parses[] = {
     {"", 0},
     {"noapic", 1},
+    {"noapic=1", 1}, /* do_early_param runs parse_noapic for any value */
+    {"noapic=0", 1}, /* which it does not read */
+    {"noapicx", 0},  /* another name */
     {"maxcpus=0", 1},
     {"maxcpus=00", 1},
     {"maxcpus=0x0", 1},
@@ -361,6 +366,66 @@ static const struct {
     {"--=1 maxcpus=0", 1}, /* a double dash with a value is a parameter */
     {"--x noapic", 1},
 };
+
+/* The boot lines and what each lookup answers for a word: `kcmdline_has`,
+ * a flag's whole word with no `=` or a name's exact value, `kcmdline_early`,
+ * Linux's do_early_param, which runs for a name with any value, and
+ * `kcmdline_setup`, Linux's obsolete_checksetup, which matches a word by
+ * its first bytes; names with `-` and `_` alike, as parameq has them. */
+static const struct {
+    const char *line;
+    const char *word;
+    int has, early, setup;
+} words[] = {
+    {"noapic", "noapic", 1, 1, 1},
+    {"noapic=1", "noapic", 0, 1, 1},
+    {"no-apic", "noapic", 0, 0, 0}, /* only a `-` that is a `_` is alike */
+    {"nox2apic=0", "nox2apic", 0, 1, 1},
+    {"intel-iommu=off", "intel_iommu=off", 1, 0, 1},
+    {"intel_iommu=off", "intel-iommu=off", 1, 0, 1},
+    {"intel_iommu=offx", "intel_iommu=off", 0, 0, 1},
+    {"intel_iommu=of", "intel_iommu=off", 0, 0, 0},
+    {"nomodeset", "nomodeset", 1, 1, 1},
+    {"nomodeset=1", "nomodeset", 0, 1, 1},
+    {"nomodesetx", "nomodeset", 0, 0, 1},
+    {"nomode", "nomodeset", 0, 0, 0},
+    {"\"nomodeset\"", "nomodeset", 1, 1, 1},
+    {"nowatchdogs", "nowatchdog", 0, 0, 1},
+    {"no_watchdog", "no-watchdog", 1, 1, 1},
+    {"nosoftlockup=0", "nosoftlockup", 0, 1, 1},
+    {"oops=panic", "oops=panic", 1, 0, 1},
+    {"oops=\"panic\"", "oops=panic", 1, 0, 1}, /* next_arg drops the quotes */
+    {"oops=panicx", "oops=panic", 0, 0, 1},
+    {"oops=pani", "oops=panic", 0, 0, 0},
+    {"oops", "oops=panic", 0, 0, 0},
+    {"oops=panic", "oops", 0, 1, 1},
+    {"xoops=panic", "oops=panic", 0, 0, 0},
+    {"init=rescue", "init=rescue", 1, 0, 1},
+    {"rach2.root=disk", "rach2.root=disk", 1, 0, 1},
+    {"rach2.root=disk2", "rach2.root=disk", 0, 0, 1},
+    {"rach2.root=ext2 rach2.root=disk", "rach2.root=disk", 1, 0, 1},
+    {"-- nomodeset", "nomodeset", 0, 0, 0}, /* init's words */
+};
+
+/** Each line of `words` with `kcmdline_has`, `kcmdline_early` and
+ * `kcmdline_setup`. */
+static void rows_words(void)
+{
+    unsigned int i;
+
+    for (i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
+        (void)kcmdline_capture(words[i].line);
+        if ((kcmdline_has(words[i].word) != 0) != words[i].has ||
+            (kcmdline_early(words[i].word) != 0) != words[i].early ||
+            (kcmdline_setup(words[i].word) != 0) != words[i].setup) {
+            failures++;
+            printf("ioapic_hosttest: fail: words: \"%s\" for \"%s\": has %d, early %d, "
+                   "setup %d\n",
+                   words[i].line, words[i].word, kcmdline_has(words[i].word),
+                   kcmdline_early(words[i].word), kcmdline_setup(words[i].word));
+        }
+    }
+}
 
 /** The `maxcpus=` parse of every occurrence, and `kcmdline_option`'s values. */
 static void rows_parse(void)
@@ -535,6 +600,7 @@ int main(void)
     rows_mask_remapped();
     rows_pic();
     rows_parse();
+    rows_words();
     rows_intremap();
     rows_remappable();
     if (failures != 0) {
