@@ -41,7 +41,6 @@ The programs of os-real, as [its manifest](../krffs/manifests/os-real.manifest) 
 | `soxi` | [soxi(1)](man1/soxi.1) | sox_ng (`mode`) |  |  |
 | `su` | [su(1)](man1/su.1) | BusyBox (`busybox-suid`) | in-house | yes |
 | `tcc` | [tcc(1)](man1/tcc.1) | TinyCC |  |  |
-| `update` | [update(8)](man8/update.8) | in-house | yes | yes |
 | `wifi` | [wifi(1)](man1/wifi.1) | in-house | yes | yes |
 | `wpa_cli` | [wpa_cli(8)](man8/wpa_cli.8) | hostap |  | yes |
 | `wpa_passphrase` | [wpa_passphrase(8)](man8/wpa_passphrase.8) | hostap |  | yes |

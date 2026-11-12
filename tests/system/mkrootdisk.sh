@@ -10,17 +10,17 @@
 #   loop        8 MiB, whose /sbin/init is a symbolic link to itself, so
 #               that the kernel's lookup of init answers ELOOP
 #   servicelog  16 MiB, with init-shell as /sbin/init, BusyBox as
-#               /bin/busybox and /bin/sh, `update` as the one service init
-#               starts, and an /etc/profile that prints the line
-#               `servicelog: shell up`, which a boot waits for, since the
-#               prompt alone is too short to tell from the kernel's lines
+#               /bin/busybox and /bin/sh, and an /etc/profile that prints
+#               the line `servicelog: shell up`, which a boot waits for,
+#               since the prompt alone is too short to tell from the
+#               kernel's lines
 #
 # Usage: mkrootdisk.sh loop DISK MKMBR
-#        mkrootdisk.sh servicelog DISK MKMBR INIT UPDATE BUSYBOX
+#        mkrootdisk.sh servicelog DISK MKMBR INIT BUSYBOX
 #
 set -eu
 
-[ "$#" -ge 3 ] || { echo "mkrootdisk: usage: mkrootdisk.sh loop|servicelog DISK MKMBR [INIT UPDATE BUSYBOX]" >&2; exit 2; }
+[ "$#" -ge 3 ] || { echo "mkrootdisk: usage: mkrootdisk.sh loop|servicelog DISK MKMBR [INIT BUSYBOX]" >&2; exit 2; }
 KIND=$1
 DISK=$2
 MKMBR=$3
@@ -39,14 +39,13 @@ case $KIND in
         ln -s init "$TREE/sbin/init"
         ;;
     servicelog)
-        [ "$#" -eq 6 ] || { echo "mkrootdisk: servicelog needs INIT UPDATE BUSYBOX" >&2; exit 2; }
+        [ "$#" -eq 5 ] || { echo "mkrootdisk: servicelog needs INIT BUSYBOX" >&2; exit 2; }
         MIB=16
         mkdir -p "$TREE/sbin" "$TREE/bin" "$TREE/etc" "$TREE/var/log"
         cp "$4" "$TREE/sbin/init"
-        cp "$5" "$TREE/bin/update"
-        cp "$6" "$TREE/bin/busybox"
-        cp "$6" "$TREE/bin/sh"
-        chmod 755 "$TREE/sbin/init" "$TREE/bin/update" "$TREE/bin/busybox" "$TREE/bin/sh"
+        cp "$5" "$TREE/bin/busybox"
+        cp "$5" "$TREE/bin/sh"
+        chmod 755 "$TREE/sbin/init" "$TREE/bin/busybox" "$TREE/bin/sh"
         printf 'export PATH=/bin\necho servicelog: shell up\n' > "$TREE/etc/profile"
         ;;
     *)

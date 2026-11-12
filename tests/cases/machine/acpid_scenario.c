@@ -150,9 +150,9 @@ static int airplane(struct guest *g, const char *want, const char *id)
 
 /**
  * Log in; see acpid running; set the volume to 50 and press the volume keys
- * and the mute key twice; read acpid's and update's paths, and run the
- * airplane action twice in acpid's environment; then press the power button
- * and wait for the machine's end.
+ * and the mute key twice; read acpid's path, and run the airplane action
+ * twice in acpid's environment; then press the power button and wait for
+ * the machine's end.
  */
 static void real(struct lc *l)
 {
@@ -183,7 +183,7 @@ static void real(struct lc *l)
         !press(&g, "audiomute", "vol 50:50", "vol 0:0 muted", "mute") ||
         !press(&g, "audiomute", "vol 0:0 muted", "vol 50:50", "unmute") || !lc_step(l, "wifi"))
         return;
-    if (!service_path(&g, "acpid", "acpid-path") || !service_path(&g, "update", "update-path"))
+    if (!service_path(&g, "acpid", "acpid-path"))
         return;
     if (!ask(&g, "echo SOFT\"\"=" SOFT_BLOCKS "\r", "SOFT", got, sizeof(got)))
         return;
@@ -207,9 +207,9 @@ static void real(struct lc *l)
 
 int etude_scenario(struct etude_case *c)
 {
-    static const char *const ids[] = {"running",   "set",         "up",          "down",  "mute",
-                                      "unmute",    "acpid-path",  "update-path", "radio", "blocked",
-                                      "unblocked", "powered-off", "in-order",    NULL};
+    static const char *const ids[] = {"running",     "set",        "up",    "down",    "mute",
+                                      "unmute",      "acpid-path", "radio", "blocked", "unblocked",
+                                      "powered-off", "in-order",   NULL};
     struct lc l;
 
     lc_begin(&l, c, ids);

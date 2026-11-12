@@ -96,9 +96,6 @@ gfxtool: gfxtool.c
 	$(UCC) $(UFLAGS) -o gfxtool.new gfxtool.c
 	mv gfxtool.new gfxtool
 
-update: update.c
-	$(UCC) $(UFLAGS) -o update.new update.c
-	mv update.new update
 audiotest: audiotest.c
 	$(UCC) $(UFLAGS) -o audiotest.new audiotest.c
 	mv audiotest.new audiotest

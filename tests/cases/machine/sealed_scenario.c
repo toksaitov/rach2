@@ -441,8 +441,10 @@ static void first_boot(struct sealed *s, long *cand)
                "no partition of the disk's GUID table has an ext2 root");
     mark_kernel(s);
     up(s);
-    ask(s, "ps", "ps", &r);
-    net_assert(&s->u, "update", has(r.out, "update"), "the installed root runs no update process");
+    ask(s, "cat /proc/sys/vm/dirty_expire_centisecs /proc/sys/vm/dirty_writeback_centisecs",
+        "writeback", &r);
+    net_assert(&s->u, "writeback", has(r.out, "3000\n500"),
+               "the installed kernel's write-back periods are not Linux's 3000 and 500");
     net_run_free(&r);
     ask(s,
         "mkdir -p /tmp/v && mke2fs -q /root/v.ext2 8M && loopctl attach 0 /root/v.ext2 && "

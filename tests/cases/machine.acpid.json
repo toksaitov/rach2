@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.acpid.real",
-      "behavior": "on os-real with an Intel HDA controller and one software Wi-Fi radio, logged in as root, init runs one acpid; with the volume at 50, the volume keys pressed on the PS/2 keyboard step mixer's reading to 55 and back to 50, the mute key mutes and then unmutes it, acpid and update have init's PATH /sbin:/usr/sbin:/bin:/usr/bin, the airplane action /etc/acpi/wifi run in acpid's environment blocks the radio's rfkill switch and run again unblocks it, and the ACPI power button that QMP's system_powerdown presses powers the machine off through init and the kernel's orderly stop",
+      "behavior": "on os-real with an Intel HDA controller and one software Wi-Fi radio, logged in as root, init runs one acpid; with the volume at 50, the volume keys pressed on the PS/2 keyboard step mixer's reading to 55 and back to 50, the mute key mutes and then unmutes it, acpid has init's PATH /sbin:/usr/sbin:/bin:/usr/bin, the airplane action /etc/acpi/wifi run in acpid's environment blocks the radio's rfkill switch and run again unblocks it, and the ACPI power button that QMP's system_powerdown presses powers the machine off through init and the kernel's orderly stop",
       "units": ["acpid", "mixer", "init-login", "rfkill", "wsim"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -15,7 +15,7 @@
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "real", "does": "boot os-real and log in as root at the console"},
         {"step_id": "volume", "stage": "execute", "machine": "real", "does": "count acpid's processes, set the volume to 50, and press the volume keys and the mute key twice through QMP, reading mixer after each"},
-        {"step_id": "wifi", "stage": "execute", "machine": "real", "does": "read the PATH of acpid and of update from /proc/PID/environ, and run /etc/acpi/wifi twice under env -i with acpid's environment, reading the Wi-Fi switch's soft block after each"},
+        {"step_id": "wifi", "stage": "execute", "machine": "real", "does": "read the PATH of acpid from /proc/PID/environ, and run /etc/acpi/wifi twice under env -i with acpid's environment, reading the Wi-Fi switch's soft block after each"},
         {"step_id": "power", "stage": "execute", "machine": "real", "does": "press the power button with QMP's system_powerdown and wait for the machine's end"}
       ],
       "machines": [
@@ -29,7 +29,6 @@
         {"assertion_id": "mute", "checks": "the mute key moves it to vol 0:0 muted", "source": "scenario"},
         {"assertion_id": "unmute", "checks": "the mute key again moves it back to vol 50:50", "source": "scenario"},
         {"assertion_id": "acpid-path", "checks": "the PATH in acpid's /proc/PID/environ is /sbin:/usr/sbin:/bin:/usr/bin", "source": "scenario"},
-        {"assertion_id": "update-path", "checks": "the PATH in update's /proc/PID/environ is /sbin:/usr/sbin:/bin:/usr/bin", "source": "scenario"},
         {"assertion_id": "radio", "checks": "the one Wi-Fi switch under /sys/class/rfkill starts with soft block 0", "source": "scenario"},
         {"assertion_id": "blocked", "checks": "the airplane action in acpid's environment exits 0 and leaves the switch's soft block 1", "source": "scenario"},
         {"assertion_id": "unblocked", "checks": "the action again exits 0 and leaves the soft block 0", "source": "scenario"},
