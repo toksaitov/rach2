@@ -1024,6 +1024,10 @@ void isr_local_router(isr_params_t *params)
         sched_idle_awake();
     }
     if (params->vector == IPI_VECTOR) {
+        if (this_cpu()->idle_poll == CPU_POLL_ON) {
+            this_cpu()->idle_poll = CPU_POLL_KICKED;
+        }
+        smp_ipi();
         lapic_eoi();
         smp_ipi();
         if (FRAME_USER(params) && current_proc &&
@@ -1217,6 +1221,9 @@ void _irq_router(isr_params_t *params)
 
     lapic_eoi_enter((uint32_t)params->vector);
     user_entry(params);
+    if (cpu->idle_poll == CPU_POLL_ON) {
+        cpu->idle_poll = CPU_POLL_KICKED;
+    }
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);
         sched_idle_awake();

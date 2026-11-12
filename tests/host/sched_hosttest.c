@@ -35,6 +35,7 @@ static uint8_t areas[7][16];
 static uint32_t irq_flags;
 static unsigned switches;
 static int failures;
+static int idle_timer_ready, idle_timer_exits;
 static int affinity_step;
 static unsigned int affinity_kicks;
 static uint32_t rseq_area[8];
@@ -1433,11 +1434,42 @@ static void nohz_accounting(void)
     CHECK(sched_load_idle_ticks() == 1, "a load sample already due is serviced at once");
 }
 
+/** Keep the tick stopped across a wake that returns to idle, and restart
+ * it only when a ready thread leaves the idle task. */
+static void nohz_switch(void)
+{
+    unsigned int i;
+
+    setup();
+    for (i = 1; i < 7; i++) {
+        sched_forget(&procs[i]);
+    }
+    this_cpu()->idle = &procs[0];
+    this_cpu()->accounted_ns = clock_ns;
+    this_cpu()->steal_ns = steal_clock_ns;
+    idle_timer_ready = 1;
+    idle_timer_exits = 0;
+    idle_wait_irq_off();
+    CHECK(this_cpu()->tick_stopped && !idle_timer_exits,
+          "an interrupt returning to idle leaves the tick stopped");
+    schedule();
+    CHECK(current_proc == &procs[0] && this_cpu()->tick_stopped && !idle_timer_exits,
+          "an empty run queue keeps the stopped tick across a selection");
+    clock_ns += 2u * TICK_NS;
+    sched_make_ready(&procs[1]);
+    schedule();
+    CHECK(current_proc == &procs[1] && !this_cpu()->tick_stopped && idle_timer_exits == 1 &&
+              this_cpu()->idle_ticks == 2 && !procs[1].stime,
+          "the switch accounts the last idle span and restarts before the new thread");
+    idle_timer_ready = 0;
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(int argc, char **argv)
 {
     if (argc == 2 && __builtin_strcmp(argv[1], "--idle-only") == 0) {
         nohz_accounting();
+        nohz_switch();
         dprintf(1, "sched-hosttest: idle: %s\n", failures ? "fail" : "pass");
         return failures != 0;
     }
@@ -1465,6 +1497,7 @@ int main(int argc, char **argv)
     tick_rt();
     affinity_rows();
     nohz_accounting();
+    nohz_switch();
     if (failures) {
         return 1;
     }
@@ -1493,17 +1526,15 @@ uint64_t arch_cpu_steal_ns(int cpu)
 /** No timer hardware is modeled by the scheduler's rows. */
 int timer_idle_enter(void)
 {
-    return 0;
+    return idle_timer_ready;
 }
 
 /** Nothing: no timer hardware is modeled. */
 void timer_idle_exit(void)
-{}
+{
+    idle_timer_exits++;
+}
 
 /** Nothing: no device services are modeled. */
 void timer_idle_work(void)
-{}
-
-/** Nothing: no lockup detector is modeled. */
-void watchdog_idle_exit(void)
 {}

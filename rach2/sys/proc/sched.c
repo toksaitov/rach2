@@ -1009,8 +1009,12 @@ void schedule(void)
     cpu->current = next;
     cpu->switch_prev = old;
     spin_unlock(&sched_lock);
-    if (old == cpu->idle) {
+    if (old == cpu->idle && cpu->tick_stopped) {
+        sched_account_tick(0, 0);
         timer_idle_exit();
+        cpu->ticks_seq++;
+        cpu->tick_stopped = 0;
+        cpu->ticks_seq++;
     }
     old->bkl_depth = bkl_drop();
     sched_wait_off_cpu(next);
@@ -1556,7 +1560,9 @@ void sched_account_tick(int user, int64_t due)
     int64_t now = rtc_monotonic_ns(), on = 0;
     int64_t gap = now - cpu->accounted_ns + (int64_t)(TICK_NS / 2u);
     uint64_t ticks, stolen;
-    int found = cpu->idle_wait ? ACCOUNT_IDLE : user ? ACCOUNT_USER : ACCOUNT_SYSTEM;
+    int found = cpu->idle_wait || cpu->tick_stopped ? ACCOUNT_IDLE
+                : user                              ? ACCOUNT_USER
+                                                    : ACCOUNT_SYSTEM;
     int held = found;
 
     if (gap < (int64_t)TICK_NS) {
@@ -1715,7 +1721,11 @@ uint32_t sched_load_idle_ticks(void)
 }
 
 /**
- * Wait for a wake with interrupts off and the big lock let go: poll this
+ * Wait with the big lock let go. With the tick stopped, poll with interrupts
+ * on: the interrupt routers mark the poll kicked, so its interrupt ends the
+ * poll before a halt can follow it. No APIC register read is needed.
+ *
+ * A kernel wait with its tick running polls with interrupts off: poll this
  * processor's `idle_poll` for `idle_poll_us`, then halt unless a wake
  * turned it to CPU_POLL_KICKED meanwhile (`smp_kick`). A kick that comes
  * after the poll finds it off and sends the interrupt that ends the halt.
@@ -1772,6 +1782,7 @@ static void idle_halt(void)
     uint32_t per_us = timer_calibrate() / TICK_US;
     uint64_t start, limit, now, look, gone;
     uint32_t grow;
+    int open = cpu->tick_stopped;
 
     if (arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_NONE) == CPU_POLL_KICKED) {
         idle_kicked_window();
@@ -1786,19 +1797,27 @@ static void idle_halt(void)
         limit = (uint64_t)cpu->idle_poll_us * per_us;
         look = (uint64_t)IDLE_POLL_CHECK_US * per_us;
         (void)arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_ON);
+        if (open) {
+            arch_irq_enable();
+        }
         for (;;) {
             now = arch_cycles() - start;
             if (cpu->idle_poll != CPU_POLL_ON || now >= limit) {
                 break;
             }
-            if (now >= look) {
+            if (!open && now >= look) {
                 if (arch_irq_waiting()) {
                     break;
                 }
                 look = now + (uint64_t)IDLE_POLL_CHECK_US * per_us;
             }
-            smp_service();
+            if (!open) {
+                smp_service();
+            }
             arch_relax();
+        }
+        if (open) {
+            arch_irq_disable();
         }
         if (arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_NONE) == CPU_POLL_KICKED) {
             idle_kicked_window();
@@ -1883,12 +1902,7 @@ void idle_wait_irq_off(void)
     this_cpu()->idle_end_cycles = arch_cycles();
     if (sched_is_enabled() && current_proc == this_cpu()->idle) {
         sched_account_tick(0, 0);
-        timer_idle_exit();
         timer_idle_work();
-        watchdog_idle_exit();
-        this_cpu()->ticks_seq++;
-        this_cpu()->tick_stopped = 0;
-        this_cpu()->ticks_seq++;
     }
     bkl_take_as(depth, BKL_KEY_IDLE);
     this_cpu()->idle_wait = 0;
