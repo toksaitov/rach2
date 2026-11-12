@@ -20,6 +20,8 @@ The rest of the kernel uses `fd.h` (the tables, entries and descriptions; `fd_al
 
 ## Design
 
+Each live description retains the allocating thread group's initial-namespace pid until its final release, even after that process exits. `fd_files_creators` snapshots those ids under the description list's spinlock for debugfs's `files/creators` ([debugfs(5)](../../../man/man5/debugfs.5)). The KVM lifetime checks count only descriptions allocated by their workload, including a description whose object has closed but whose final reference leaked.
+
 ### Descriptor tables
 
 A process's record points to its table (`fd_table_t`), whose entries are in chunks from the heap. A table starts with `FD_TABLE_FIRST`, 16, entries and doubles as it fills, each growth adding a chunk as large as all before it; a caller is given no descriptor at or past its soft `RLIMIT_NOFILE`, and none at or past `fd_nr_open`, fs.nr_open, 1,048,576 by default (`fd_limit`). The search for the lowest free descriptor begins at `next_free`, below which no slot is free, as Linux's `next_fd`. `fd_file_max`, fs.file-max, bounds the open file descriptions of the machine for a caller that is not privileged, with `ENFILE`; it is `LONG_MAX` by default, and `fd_files_open` counts them. `clone` with `CLONE_FILES` shares a table and counts its sharers in `refs`. `fork` gives the child a copy whose descriptors take another reference to the same descriptions (`files_copy` in `../syscall_proc.c`); `execve`, `close_range` with `CLOSE_RANGE_UNSHARE` and `unshare` with `CLONE_FILES` give a sharer a copy of its own (`proc_files_unshare`); and the last sharer to go closes every descriptor (`release_fd_table`).

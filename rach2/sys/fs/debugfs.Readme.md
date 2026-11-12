@@ -1,6 +1,6 @@
 # debugfs
 
-debugfs is the debug file system the kernel mounts at `/sys/kernel/debug`: a tree of directories and files that the kernel's subsystems register, each file with the operations an open binds to its descriptor, as Linux's `debugfs_create_file` gives them. It exists for the test programs that drive the kernel through it: IGT's sync-file tests through `sync/sw_sync` and `sync/info`, and its display tests through the DRM files under `dri/` ([../drm/Readme.md](../drm/Readme.md)). What each file does is in [debugfs(5)](../../../man/man5/debugfs.5).
+debugfs is the debug file system the kernel mounts at `/sys/kernel/debug`: a tree of directories and files that the kernel's subsystems register, each file with the operations an open binds to its descriptor, as Linux's `debugfs_create_file` gives them. It exists for the test programs that drive the kernel through it: IGT's sync-file tests through `sync/sw_sync` and `sync/info`, its display tests through the DRM files under `dri/` ([../drm/Readme.md](../drm/Readme.md)), and the KVM lifetime checks through `files/creators`. What each file does is in [debugfs(5)](../../../man/man5/debugfs.5).
 
 ## Interfaces
 

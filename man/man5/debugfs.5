@@ -71,6 +71,20 @@ and
 set the root directory's mode and owner for every mount, as on Linux.
 .Ss Files
 .Bl -tag -width Ds
+.It Pa files/creators
+Mode 0400, a Rach2 file with no Linux counterpart.
+Each line is the decimal process id of the thread group that allocated
+one live open file description, in the initial PID namespace;
+0 means that no process was current at allocation.
+There is no header.
+The snapshot holds the description list's lock.
+The id stays with the description through dup, fork and transfers,
+and after its creator exits, until its last reference goes.
+It is an allocation's creator, not its current holder;
+process ids may be reused.
+The description used to read this file is included.
+This lets a test count its own allocations after their descriptors
+and objects have closed, without counting other processes' files.
 .It Pa sync/sw_sync
 Mode 0644.
 Each open makes a software timeline of its own, which the descriptor's

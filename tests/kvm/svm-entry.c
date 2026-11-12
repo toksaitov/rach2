@@ -400,9 +400,45 @@ static int object_slot(struct guest *g)
 
 struct resources {
     unsigned long value[RESOURCE_COUNTS];
+    unsigned long files;
 };
 
-/** Read the seven live KVM object counts, including guest-page maps. */
+/** Count live descriptions allocated by pid, even after it has been reaped. */
+static int files_read(pid_t pid, unsigned long *count)
+{
+    FILE *f = fopen("/sys/kernel/debug/files/creators", "r");
+    char line[64], extra;
+    unsigned long creator;
+    int error = 0;
+
+    if (f == NULL)
+        return fail("file-description creators");
+    *count = 0;
+    while (fgets(line, sizeof(line), f) != NULL) {
+        if (sscanf(line, "%lu %c", &creator, &extra) != 1 || strchr(line, '\n') == NULL) {
+            error = 1;
+            break;
+        }
+        if (creator == (unsigned long)pid)
+            (*count)++;
+    }
+    error |= ferror(f);
+    if (fclose(f) != 0)
+        error = 1;
+    return error ? fail("file-description snapshot") : 0;
+}
+
+/** Require KVM, the VM and the vCPU to own three new descriptions. */
+static int files_live(unsigned long before)
+{
+    unsigned long files;
+
+    if (files_read(getpid(), &files) != 0 || files != before + 3u)
+        return fail("live guest file descriptions");
+    return 0;
+}
+
+/** Read KVM's live counts and descriptions allocated by this process. */
 static int resources_read(struct resources *r)
 {
     static const char *const names[] = {"kvm_vms",          "kvm_vcpus",        "kvm_slots",
@@ -427,8 +463,10 @@ static int resources_read(struct resources *r)
             }
         }
     }
-    fclose(f);
-    return seen == (1u << RESOURCE_COUNTS) - 1u ? 0 : fail("incomplete resource counts");
+    i = ferror(f);
+    if (fclose(f) != 0 || i || seen != (1u << RESOURCE_COUNTS) - 1u)
+        return fail("incomplete resource counts");
+    return files_read(getpid(), &r->files);
 }
 
 /** Require every live count to have returned to its value before the VM. */
@@ -442,6 +480,11 @@ static int resources_equal(const struct resources *before, const struct resource
                     before->value[i], after->value[i]);
             return -1;
         }
+    }
+    if (before->files != after->files) {
+        fprintf(stderr, "svm-entry: fail: file descriptions: %lu before, %lu after\n",
+                before->files, after->files);
+        return -1;
     }
     return 0;
 }
@@ -473,6 +516,7 @@ static void leak_child(volatile uint32_t *shared)
 static int kill_guest(volatile uint32_t *shared)
 {
     struct resources before, during, after;
+    unsigned long files;
     pid_t child;
     int status, result = 0;
 
@@ -486,11 +530,11 @@ static int kill_guest(volatile uint32_t *shared)
         leak_child(shared);
     while (shared[0] == 0 && shared[1] == 0)
         sched_yield();
-    if (shared[1] != 0 || resources_read(&during) != 0) {
+    if (shared[1] != 0 || resources_read(&during) != 0 || files_read(child, &files) != 0) {
         result = fail("start guest to kill");
     } else if (during.value[0] != before.value[0] + 1u || during.value[1] != before.value[1] + 1u ||
                during.value[2] != before.value[2] + 2u || during.value[3] <= before.value[3] ||
-               during.value[4] != before.value[4] + 1u) {
+               during.value[4] != before.value[4] + 1u || files < 3u) {
         result = fail("live guest counts");
     }
     if (kill(child, SIGKILL) != 0 || waitpid(child, &status, 0) != child)
@@ -499,6 +543,8 @@ static int kill_guest(volatile uint32_t *shared)
         result = fail("guest kill status");
     if (resources_read(&after) != 0 || resources_equal(&before, &after) != 0)
         return -1;
+    if (files_read(child, &files) != 0 || files != 0)
+        return fail("killed guest's file descriptions leaked");
     return result;
 }
 
@@ -637,6 +683,8 @@ int main(int argc, char **argv)
     if (resources_read(&before) != 0)
         return 1;
     result = open_guest(&g);
+    if (result == 0)
+        result = files_live(before.files);
     if (result == 0)
         result = rows(&g);
     if (result == 0 && (getpid() == 1 || (argc == 2 && strcmp(argv[1], "slots") == 0))) {
