@@ -1275,4 +1275,4 @@ static const struct vfs_ops mqfs_ops = {
     0, /* put_unless_last */
 };
 
-const struct vfs_type vfs_mqueue_type = {"mqueue", mqfs_mount, &mqfs_ops, 0, 1, 0, 0};
+const struct vfs_type vfs_mqueue_type = {"mqueue", mqfs_mount, &mqfs_ops, 0, 1, 0, 0, 0};

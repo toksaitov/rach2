@@ -3618,7 +3618,7 @@ static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
     return 0;
 }
 
-const struct vfs_type vfs_krffs_type = {"krffs", kfs_mount, &krffs_ops, 1, 0, 0, 0};
+const struct vfs_type vfs_krffs_type = {"krffs", kfs_mount, &krffs_ops, 1, 0, 0, 0, 0};
 
 /* The three synthetic types, of /dev, /proc and /sys. */
 
@@ -4348,10 +4348,10 @@ static int sysfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flag
     return synth_mount_root(mnt, dev, flags, "sys");
 }
 
-const struct vfs_type vfs_devfs_type = {"devfs", devfs_mount, &devfs_vops, 0, 1, 0, 0};
-const struct vfs_type vfs_procfs_type = {"proc", procfs_mount, &procfs_vops, 0, 1, 0, 0};
-const struct vfs_type vfs_sysfs_type = {"sysfs", sysfs_mount, &sysfs_vops, 0, 1, 0, 0};
-const struct vfs_type vfs_debugfs_type = {"debugfs", debugfs_mount, &debugfs_vops, 0, 1, 0, 0};
+const struct vfs_type vfs_devfs_type = {"devfs", devfs_mount, &devfs_vops, 0, 1, 0, 0, 0};
+const struct vfs_type vfs_procfs_type = {"proc", procfs_mount, &procfs_vops, 0, 1, 0, 0, 0};
+const struct vfs_type vfs_sysfs_type = {"sysfs", sysfs_mount, &sysfs_vops, 0, 1, 0, 0, 0};
+const struct vfs_type vfs_debugfs_type = {"debugfs", debugfs_mount, &debugfs_vops, 0, 1, 0, 0, 0};
 
 const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
 {
