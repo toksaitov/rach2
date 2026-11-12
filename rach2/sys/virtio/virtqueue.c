@@ -23,9 +23,10 @@
  * 24 to 40, which a driver's `wanted` does not choose; the core accepts
  * those of them it handles. */
 #define VIRTIO_RESERVED_MASK (((VIRTIO_BIT(41) - 1u) >> 24) << 24)
-#define VIRTIO_CORE_FEATURES                                               \
-    (VIRTIO_BIT(VIRTIO_F_VERSION_1) | VIRTIO_BIT(VIRTIO_F_INDIRECT_DESC) | \
-     VIRTIO_BIT(VIRTIO_F_ACCESS_PLATFORM) | VIRTIO_BIT(VIRTIO_F_ORDER_PLATFORM))
+#define VIRTIO_CORE_FEATURES                                                 \
+    (VIRTIO_BIT(VIRTIO_F_VERSION_1) | VIRTIO_BIT(VIRTIO_F_INDIRECT_DESC) |   \
+     VIRTIO_BIT(VIRTIO_F_EVENT_IDX) | VIRTIO_BIT(VIRTIO_F_ACCESS_PLATFORM) | \
+     VIRTIO_BIT(VIRTIO_F_ORDER_PLATFORM))
 
 /* The bytes of an indirect table page. */
 #define VIRTQ_INDIRECT_BYTES \
@@ -200,9 +201,12 @@ int virtio_queue_setup(struct virtio_dev *d, uint16_t index, virtqueue_done_t do
         vq->next[i] = (uint16_t)(i + 1u);
         vq->table[i] = -1;
     }
+    vq->event = virtio_has(d, VIRTIO_F_EVENT_IDX);
     vq->free_head = 0;
     vq->nfree = size;
-    vq->max_chain = size;
+    /* An indirect table holds a chain longer than the ring, as Linux's
+     * virtqueue_add_split does (virtio_ring.c:576-580). */
+    vq->max_chain = vq->indirect && VIRTQ_INDIRECT_LEN > size ? VIRTQ_INDIRECT_LEN : size;
     vq->max_bytes = 0;
     r = d->ops->queue_enable(d, vq);
     if (r != 0) {
@@ -476,10 +480,31 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
     return 0;
 }
 
+/**
+ * With VIRTIO_F_EVENT_IDX the device keeps, after its ring's entries, the
+ * driver's index at which it wants the next notify, `avail_event`, and asks
+ * for none while it has not taken the buffers it was told of; Linux's
+ * virtqueue_kick_prepare_split notifies only when the buffers added since
+ * the last kick, from `old` to `new`, pass that index
+ * (drivers/virtio/virtio_ring.c:734-763 in 6.12.115). The index is read
+ * after the ring's, in the queue's lock, which keeps the last kick's index.
+ */
 void virtqueue_kick(struct virtqueue *vq)
 {
-    arch_dma_fence(); /* the index is out before the device's flag is read */
-    if (!(vq->used[0] & VIRTQ_USED_F_NO_NOTIFY)) {
+    uint32_t flags = spin_lock_irqsave(&vq->lock);
+    uint16_t old = vq->kicked_idx, now = vq->avail_idx, event;
+    int notify;
+
+    vq->kicked_idx = now;
+    arch_dma_fence(); /* the index is out before the device's word is read */
+    if (vq->event) {
+        event = vq->used[2u + 4u * vq->size];
+        notify = (uint16_t)(now - event - 1u) < (uint16_t)(now - old);
+    } else {
+        notify = !(vq->used[0] & VIRTQ_USED_F_NO_NOTIFY);
+    }
+    spin_unlock_irqrestore(&vq->lock, flags);
+    if (notify) {
         vq->dev->ops->notify(vq->dev, vq);
     }
 }
@@ -505,12 +530,31 @@ static void virtqueue_release(struct virtqueue *vq, uint16_t head)
     vq->token[head] = 0;
 }
 
+/**
+ * With VIRTIO_F_EVENT_IDX the device interrupts only for the entry that
+ * passes the driver's `used_event`, after its ring's entries, as Linux's
+ * virtqueue_get_buf_ctx_split asks for the next one (virtio_ring.c:866-874).
+ * The reap points it at `until`, the end of what it takes, before it takes
+ * anything, so that the first buffer returned after those raises an
+ * interrupt; one returned while it pointed there extends `until`. The
+ * pointing is in the queue's lock, so that a later reap's mark is never
+ * overwritten by an earlier one's.
+ */
 int virtqueue_reap(struct virtqueue *vq)
 {
     uint32_t flags = spin_lock_irqsave(&vq->lock);
-    uint16_t until = vq->used[1], left;
+    uint16_t until = vq->used[1], left, now;
     int n = 0;
 
+    while (vq->event) {
+        vq->avail[2u + vq->size] = until;
+        arch_dma_fence(); /* the mark is out before the device's index is read */
+        now = vq->used[1];
+        if (now == until) {
+            break;
+        }
+        until = now;
+    }
     spin_unlock_irqrestore(&vq->lock, flags);
     for (;;) {
         uint16_t used_idx;
