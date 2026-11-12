@@ -1402,9 +1402,10 @@ static void pipe_close(fd_entry_t *e)
 }
 
 /* Every operation but poll runs under the pipe's own lock without the big
- * lock, which it takes only to post SIGPIPE (`pipe_sigpipe`); poll takes
- * neither. A FIFO's operations but poll keep the big lock
- * (`file_ops_unlocked`). */
+ * lock, which it takes, with the pipes' locks given back, only to post
+ * SIGPIPE (`pipe_sigpipe`) and to ask `signal_pending` once the signal-work
+ * flag ends a wait (`pipe_signal_pending`); poll takes neither. A FIFO's
+ * operations but poll keep the big lock (`file_ops_unlocked`). */
 static const struct file_ops pipe_ops = {
     pipe_read,  pipe_write, pipe_poll, pipe_ioctl,
     pipe_close, NULL,       NULL,      FILE_OPS_UNLOCKED | FILE_OPS_POLL_UNLOCKED};
