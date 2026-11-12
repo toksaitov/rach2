@@ -1953,11 +1953,14 @@ static int windows_stop_rows(struct release *r)
 }
 /*
  * The driver of claim_rows: it runs release.sh's claim functions here, with
- * ssh, setsid, etude-launch and etude from DIR/bin, on DIR's files, and
+ * ssh, setsid, ln, etude-launch and etude from DIR/bin, on DIR's files, and
  * prints what scenario SCENARIO saw. No process of a claim is its child, so
- * it signals none by number at its exit: the claim's stop token and the end
- * files end them, and it only waits for them. Usage: sh driver DIR RELEASE
- * SCENARIO.
+ * it signals none by number: the orphan row's runner is killed by the
+ * supervisor that setsid keeps as its unreaped parent, and at its exit the
+ * claim's stop token and the end files end them all, and it prints a line
+ * `left` unless the claim's lock, which every process of the claim holds,
+ * and the supervisor's lock are free within a minute. Usage: sh driver DIR
+ * RELEASE SCENARIO.
  */
 static const char claim_driver[] =
     "W=$1 R=$2 how=$3\n"
@@ -1965,17 +1968,20 @@ static const char claim_driver[] =
     "RACH2_CLAIM_ETUDE=$W/bin/etude\n"
     "FAKE_HOLD='' FAKE_ETUDE_RC=0\n"
     "case $how in\n"
-    "dead | cleanup | ledger) FAKE_LAUNCH=grant ;;\n"
+    "dead | cleanup | ledger | publish) FAKE_LAUNCH=grant ;;\n"
     "late | retry) FAKE_LAUNCH=wait ;;\n"
     "orphan) FAKE_LAUNCH=stubborn ;;\n"
     "*) FAKE_LAUNCH=$how ;;\n"
     "esac\n"
     "[ \"$how\" != cleanup ] || FAKE_LAUNCH=linger FAKE_HOLD=1\n"
-    "export PATH FAKE_DIR FAKE_LAUNCH FAKE_HOLD FAKE_ETUDE_RC RACH2_CLAIM_LEDGER "
+    "FAKE_SUPERVISE=\n"
+    "[ \"$how\" != orphan ] || FAKE_SUPERVISE=1\n"
+    "export PATH FAKE_DIR FAKE_LAUNCH FAKE_HOLD FAKE_ETUDE_RC FAKE_SUPERVISE RACH2_CLAIM_LEDGER "
     "RACH2_CLAIM_ETUDE\n"
     "wheld=$W/held wlock=$W/locks state=$W/state WSL=wsl\n"
     "rm -rf \"$wheld\" \"$wlock\" \"$state\" \"$W/ledger\" \"$W/launcher\" \"$W/end\" \"$W/ended\" "
-    "\"$W/launch-go\" \"$W/etude-go\"\n"
+    "\"$W/launch-go\" \"$W/etude-go\" \"$W/kill-runner\" \"$W/runner-gone\" \"$W/supervisor\" "
+    "\"$W/publish-pause\" \"$W/publish-paused\" \"$W/publish-go\" \"$W/stop.out\"\n"
     "mkdir -p \"$wheld\" \"$state\" \"$W/ledger\"\n"
     "pause() { perl -e 'select(undef, undef, undef, 0.1)'; }\n"
     "gone() {\n"
@@ -1983,13 +1989,20 @@ static const char claim_driver[] =
     "    while kill -0 \"$1\" 2> /dev/null && [ \"$i\" -lt 150 ]; do i=$((i + 1)); pause; done\n"
     "    kill -0 \"$1\" 2> /dev/null || echo \"gone $2\"\n"
     "}\n"
+    "# settled LOCK: succeed once no process holds LOCK, a minute at most.\n"
+    "settled() {\n"
+    "    [ ! -e \"$1\" ] || perl -MFcntl=:flock -e 'open(L, \"<\", shift) or exit 0;\n"
+    "        for (1 .. 600) { exit 0 if flock(L, LOCK_EX | LOCK_NB); select(undef, undef, undef, "
+    "0.1) }\n"
+    "        exit 1' \"$1\"\n"
+    "}\n"
     "# No process of a claim is this driver's child, so none is signalled by its\n"
-    "# number here: a stop token and the end file end them all, and the wait only\n"
-    "# looks.\n"
+    "# number here: a stop token and the end files end them all, and the claim's\n"
+    "# lock, which each of them holds, says when they have.\n"
     "trap '[ ! -d \"$wlock\" ] || echo stop > \"$wlock/m7.claim.token\"\n"
-    "    : > \"$W/end\" \"$W/launch-go\" \"$W/etude-go\"\n"
-    "    if read -r p l < \"$W/launcher\" 2> /dev/null; then gone \"$l\" > /dev/null; gone \"$p\" "
-    "> /dev/null; fi' EXIT\n"
+    "    touch \"$W/end\" \"$W/launch-go\" \"$W/etude-go\" \"$W/publish-go\"\n"
+    "    settled \"$wlock/m7.claim.lock\" || echo \"left: a process of the claim holds its lock\"\n"
+    "    settled \"$W/supervisor\" || echo \"left: the supervisor of the runner\"' EXIT\n"
     "eval \"$(sed -n '/^tssh()$/,/^}$/p' \"$R\")\"\n"
     "eval \"$(sed -n '/^# claim_runner: print/,/^# beat ID/p' \"$R\")\"\n"
     "look() {\n"
@@ -2005,6 +2018,28 @@ static const char claim_driver[] =
     "until_file() { i=0; until [ -e \"$1\" ] || [ \"$i\" -ge 150 ]; do i=$((i + 1)); pause; done; "
     "}\n"
     "touch \"$wheld/m7.alive\"\n"
+    "if [ \"$how\" = publish ]; then\n"
+    "    # Attempt 1's publication pauses once its token is linked, before it\n"
+    "    # removes GOT, as a lost link may leave it.\n"
+    "    touch \"$W/publish-pause\"\n"
+    "    claim_start m7 claim 1 'etude-launch alone' m7.claimed m7.prepared > /dev/null 2>&1 &\n"
+    "    s1=$!\n"
+    "    until_file \"$W/publish-paused\"\n"
+    "    rm -f \"$W/publish-pause\"\n"
+    "    claim_stop m7 claim > \"$W/stop.out\" 2>&1 &\n"
+    "    s2=$!\n"
+    "    i=0\n"
+    "    while [ \"$i\" -lt 20 ]; do i=$((i + 1)); pause; done\n"
+    "    echo \"token $(cat \"$wlock/m7.claim.token\" 2> /dev/null)\"\n"
+    "    touch \"$W/publish-go\"\n"
+    "    wait \"$s1\"\n"
+    "    wait \"$s2\"\n"
+    "    echo \"stop $?\"\n"
+    "    rm -f \"$W/launcher\"\n"
+    "    claim_start m7 claim 2 'etude-launch alone' m7.claimed m7.prepared > /dev/null 2>&1\n"
+    "    look granted 2\n"
+    "    exit\n"
+    "fi\n"
     "claim_start m7 claim 1 'etude-launch alone' m7.claimed m7.prepared > /dev/null 2>&1\n"
     "until_file \"$W/launcher\"\n"
     "read -r p l < \"$W/launcher\"\n"
@@ -2060,11 +2095,13 @@ static const char claim_driver[] =
     "refuse)\n"
     "    look + ;;\n"
     "orphan)\n"
-    "    kill -KILL \"$p\"\n"
-    "    gone \"$p\" runner\n"
+    "    # The supervisor kills the runner, its own unreaped child.\n"
+    "    touch \"$W/kill-runner\"\n"
+    "    until_file \"$W/runner-gone\"\n"
+    "    [ ! -e \"$W/runner-gone\" ] || echo 'gone runner'\n"
     "    s=$(claim_state m7 claim 1 m7.claimed)\n"
     "    echo \"orphan ${s:-none}\"\n"
-    "    kill -KILL \"$l\"\n"
+    "    touch \"$W/end\"\n"
     "    look dead ;;\n"
     "late)\n"
     "    claim_stop m7 claim\n"
@@ -2093,11 +2130,13 @@ static const char claim_driver[] =
 /* The launcher of claim_rows, as FAKE_LAUNCH says: `grant` runs its command,
  * `linger` too, as a child, and then waits for DIR/launch-go, as etude's
  * launcher outlives its command until it has released its admission, `wait`
- * waits for admission, `stubborn` too, ignoring TERM, and `refuse` refuses.
+ * waits for admission, `stubborn` too, ignoring TERM from before it writes
+ * its number, since its runner's death sends it TERM, and `refuse` refuses.
  * It writes its parent, the attempt's runner, and itself; each wait ends at
  * DIR/end too. */
 static const char claim_launcher[] =
     "#!/bin/sh\n"
+    "[ \"$FAKE_LAUNCH\" != stubborn ] || trap '' TERM\n"
     "echo \"$PPID $$\" > \"$FAKE_DIR/launcher.part\" && mv \"$FAKE_DIR/launcher.part\" "
     "\"$FAKE_DIR/launcher\"\n"
     "case $1 in build) shift 2 ;; *) shift ;; esac\n"
@@ -2108,7 +2147,7 @@ static const char claim_launcher[] =
     "    : > \"$FAKE_DIR/ended\"\n"
     "    while [ ! -e \"$FAKE_DIR/launch-go\" ]; do sleep 1; done ;;\n"
     "wait) while [ ! -e \"$FAKE_DIR/end\" ]; do sleep 1; done ;;\n"
-    "stubborn) trap '' TERM; while [ ! -e \"$FAKE_DIR/end\" ]; do sleep 1; done ;;\n"
+    "stubborn) while [ ! -e \"$FAKE_DIR/end\" ]; do sleep 1; done ;;\n"
     "*) echo 'etude-launch: result: refused: admission: no room'; exit 1 ;;\n"
     "esac\n";
 /* The etude of claim_rows: `status` succeeds, or exits FAKE_ETUDE_RC, once
@@ -2121,6 +2160,40 @@ static const char claim_etude[] =
     "    i=$((i + 1))\n"
     "done\n"
     "exit \"${FAKE_ETUDE_RC:-0}\"\n";
+/* The setsid of claim_rows: while FAKE_SUPERVISE is set, it stays the
+ * parent of its command, the attempt's runner, and reaps it only once it has
+ * ended, so that its KILL on DIR/kill-runner goes to that process alone; it
+ * then writes DIR/runner-gone. It holds a lock of DIR/supervisor while it
+ * lives. */
+static const char claim_setsid[] =
+    "#!/bin/sh\n"
+    "[ -n \"$FAKE_SUPERVISE\" ] || exec perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or exit 127' "
+    "\"$@\"\n"
+    "exec perl -MPOSIX -MFcntl=:flock -e '\n"
+    "    POSIX::setsid();\n"
+    "    my $d = $ENV{FAKE_DIR};\n"
+    "    open(L, \">>\", \"$d/supervisor\") && flock(L, LOCK_EX) or exit 127;\n"
+    "    defined(my $c = fork()) or exit 127;\n"
+    "    if (!$c) { close(L); exec @ARGV or exit 127 }\n"
+    "    my $sent = 0;\n"
+    "    while (waitpid($c, WNOHANG) == 0) {\n"
+    "        if (!$sent && -e \"$d/kill-runner\") { kill(\"KILL\", $c); $sent = 1 }\n"
+    "        select(undef, undef, undef, 0.1);\n"
+    "    }\n"
+    "    open(G, \">\", \"$d/runner-gone\") and close(G);' \"$@\"\n";
+/* The ln of claim_rows: the system's, which then waits for DIR/publish-go,
+ * half a minute at most, while DIR/publish-pause exists, having touched
+ * DIR/publish-paused, as a publication that a lost link holds up between
+ * its token and its removal of GOT. */
+static const char claim_ln[] = "#!/bin/sh\n"
+                               "/bin/ln \"$@\" || exit\n"
+                               "[ -e \"$FAKE_DIR/publish-pause\" ] || exit 0\n"
+                               ": > \"$FAKE_DIR/publish-paused\"\n"
+                               "i=0\n"
+                               "while [ ! -e \"$FAKE_DIR/publish-go\" ] && [ \"$i\" -lt 300 ]; do\n"
+                               "    perl -e 'select(undef, undef, undef, 0.1)'\n"
+                               "    i=$((i + 1))\n"
+                               "done\n";
 /** Run claim_driver's SCENARIO, and succeed when it printed WANT whole. */
 static int claim_saw(struct release *r, const char *scenario, const char *want)
 {
@@ -2143,11 +2216,13 @@ static int claim_saw(struct release *r, const char *scenario, const char *want)
  * dead once its holder has ended (j79 3); claim_stop ends a granted claim and
  * one that waits, through the token, and confirms it by the lock and by a
  * recovered ledger that names no attempt's launcher, failing while it names
- * one or recovery fails (j90 4); a launcher whose runner was killed keeps the
- * lock, so the claim reads neither free nor dead until it ends (j79 4); a
- * late runner of a stopped attempt starts nothing, and a late start of an
- * earlier attempt neither replaces a retry's token nor starts (j90 2); and a
- * refused claim reads refused.
+ * one or recovery fails (j90 4); a launcher whose runner was killed, by the
+ * supervisor whose unreaped child it is, keeps the lock, so the claim reads
+ * neither free nor dead until it ends (j79 4, j102 1); a late runner of a
+ * stopped attempt starts nothing, and a late start of an earlier attempt
+ * neither replaces a retry's token nor starts (j90 2); claim_stop waits for a
+ * publication that a lost link holds up, so that it cannot remove a retry's
+ * GOT (j102 2); and a refused claim reads refused.
  */
 static int claim_rows(struct release *r)
 {
@@ -2159,13 +2234,8 @@ static int claim_rows(struct release *r)
                   0700) ||
         !fx_write(flow_path(f, "claims/bin/etude"), claim_etude, strlen(claim_etude), 0700) ||
         !fx_write(flow_path(f, "claims/bin/ssh"), "#!/bin/sh\nexec /bin/sh -s\n", 26, 0700) ||
-        !fx_write(
-            flow_path(f, "claims/bin/setsid"),
-            "#!/bin/sh\nexec perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or exit 127' "
-            "\"$@\"\n",
-            strlen("#!/bin/sh\nexec perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or exit 127' "
-                   "\"$@\"\n"),
-            0700))
+        !fx_write(flow_path(f, "claims/bin/setsid"), claim_setsid, strlen(claim_setsid), 0700) ||
+        !fx_write(flow_path(f, "claims/bin/ln"), claim_ln, strlen(claim_ln), 0700))
         return check(r, 0, "the claim rows' files are written");
     ok = check(r, claim_saw(r, "grant", "state granted\nstop 0\nlock removed\ngone launcher\n"),
                "a granted claim reads granted, and claim_stop ends it and removes its locks");
@@ -2197,7 +2267,144 @@ static int claim_rows(struct release *r)
               "a late start of an earlier attempt neither replaces a retry's token nor "
               "starts") &&
         ok;
+    ok = check(r, claim_saw(r, "publish", "token go 1\nstop 0\nstate granted\n"),
+               "claim_stop writes its token only once a publication held up between its token "
+               "and its removal of GOT has ended, so that the retry's GOT stays (j102 2)") &&
+         ok;
     fx_remove(flow_path(f, "claims"));
+    return ok;
+}
+/*
+ * The driver of observer_rows: it runs release.sh's windows_detach, with the
+ * start read as started and each poll run here by sh, or sweep.sh's outputs,
+ * with ssh running Windows' script here on DIR/build, and the jobs that
+ * winjob from DIR/bin reads in DIR/jobs, and prints what SCENARIO saw. Usage:
+ * sh driver DIR RELEASE SWEEP SCENARIO.
+ */
+static const char observer_driver[] =
+    "W=$1 R=$2 S=$3 how=$4\n"
+    "PATH=$W/bin:/usr/bin:/bin FAKE_DIR=$W\n"
+    "export PATH FAKE_DIR\n"
+    "rm -rf \"$W/out\" \"$W/state\" \"$W/jobs\" \"$W/build\" \"$W/repo\" \"$W/polls\" \"$W/seen\" "
+    "\"$W/file\"\n"
+    "mkdir -p \"$W/out\" \"$W/state\" \"$W/jobs\"\n"
+    "case $how in\n"
+    "poll)\n"
+    "    eval \"$(sed -n '/^# windows_detach ID PART FILE CONSOLE:/,/^}$/p' \"$R\")\"\n"
+    "    wout=$W/out state=$W/state repo=$W\n"
+    "    # The start reads as started; each poll runs here.\n"
+    "    tssh() {\n"
+    "        s=$(cat)\n"
+    "        case $s in *END_OF_RUN*) echo 'start: status 0' ;; *) printf '%s\\n' \"$s\" | sh -s "
+    ";; esac\n"
+    "    }\n"
+    "    # Each wait before a poll notes whether the observer has given its\n"
+    "    # result yet; the job ends before the third poll.\n"
+    "    sleep() {\n"
+    "        n=$(($(cat \"$W/polls\" 2> /dev/null || echo 0) + 1))\n"
+    "        echo \"$n\" > \"$W/polls\"\n"
+    "        if [ \"$n\" -ge 2 ]; then\n"
+    "            if grep -q '^status ' \"$W/file\"; then echo early; else echo waits; fi >> "
+    "\"$W/seen\"\n"
+    "        fi\n"
+    "        [ \"$n\" -lt 3 ] || rm -f \"$W/jobs/rach2-m7.prepare\"\n"
+    "        [ \"$n\" -lt 20 ] || kill \"$$\"\n"
+    "    }\n"
+    "    printf 'building\\nstatus 0\\n' > \"$W/out/m7.prepare.out\"\n"
+    "    echo 0 > \"$W/out/m7.prepare.rc\"\n"
+    "    echo 'active 1' > \"$W/jobs/rach2-m7.prepare\"\n"
+    "    echo 'echo status 0' | windows_detach m7 prepare \"$W/file\" m7.prepare.console\n"
+    "    cat \"$W/seen\" \"$W/file\" 2> /dev/null\n"
+    "    echo \"polls $(cat \"$W/polls\")\" ;;\n"
+    "sweep)\n"
+    "    eval \"$(sed -n \"/^stale='\\$/,/^'\\$/p; /^# closed: print/,/^# clones: run/p\" "
+    "\"$S\")\"\n"
+    "    HOMES='' TESTING=testing days=1 repo=$W/repo\n"
+    "    for x in a b c; do\n"
+    "        mkdir -p \"$W/build/tmp/milestone7-$x/tmp\" \"$W/build/release\"\n"
+    "        : > \"$W/build/tmp/milestone7-$x/tmp/scratch\"\n"
+    "        echo n > \"$W/build/release/milestone7-$x.prepare.token\"\n"
+    "        echo 0 > \"$W/build/release/milestone7-$x.prepare.rc\"\n"
+    "    done\n"
+    "    echo 'active 1' > \"$W/jobs/rach2-milestone7-a.prepare\"\n"
+    "    : > \"$W/build/release/milestone7-c.prepare.stopped\"\n"
+    "    # Each run is years old.\n"
+    "    find \"$W/build/tmp\" -exec touch -t 202001010000 {} +\n"
+    "    outputs > /dev/null 2>&1\n"
+    "    for x in a b c; do\n"
+    "        if [ -d \"$W/build/tmp/milestone7-$x\" ]; then echo \"kept $x\"; else echo \"removed "
+    "$x\"; fi\n"
+    "    done ;;\n"
+    "esac\n";
+/* The winjob of observer_rows: `state NAME` prints DIR/jobs/rach2-ID.PART,
+ * or `absent` when it is empty or missing. */
+static const char observer_winjob[] =
+    "#!/bin/sh\n"
+    "n=${2##*\\\\}\n"
+    "if [ -s \"$FAKE_DIR/jobs/$n\" ]; then cat \"$FAKE_DIR/jobs/$n\"; else echo absent; fi\n";
+/* The ssh of observer_rows: WSL's script is read and dropped, and Windows'
+ * script runs here with DIR/build for the host's build. */
+static const char observer_ssh[] = "#!/bin/sh\n"
+                                   "for a; do last=$a; done\n"
+                                   "case $last in\n"
+                                   "*wsl.exe*) cat > /dev/null ;;\n"
+                                   "*) sed \"s,/d/rach2/build,$FAKE_DIR/build,g\" | sh -s ;;\n"
+                                   "esac\n";
+/* The winjob.sh of observer_rows: winjob is DIR/bin/winjob. */
+static const char observer_winjob_sh[] = "#!/bin/sh\n"
+                                         "echo \"winjob=$FAKE_DIR/bin/winjob\"\n";
+/** Run observer_driver's SCENARIO, and succeed when it printed WANT whole. */
+static int observer_saw(struct release *r, const char *scenario, const char *want)
+{
+    struct fixture *f = r->f;
+    const char *a[] = {"/bin/sh", NULL, NULL, NULL, NULL, scenario, NULL};
+    char driver[4200], dir[4200], release[4200];
+    snprintf(driver, sizeof(driver), "%s", flow_path(f, "observer/driver"));
+    snprintf(dir, sizeof(dir), "%s", flow_path(f, "observer"));
+    snprintf(release, sizeof(release), "%s", flow_source(f, "tools/flow/release.sh"));
+    a[1] = driver;
+    a[2] = dir;
+    a[3] = release;
+    a[4] = flow_source(f, "tools/flow/sweep.sh");
+    fx_run(f, a, f->work, NULL, NULL);
+    if (f->out && !strcmp(f->out, want))
+        return 1;
+    fprintf(stderr, "observer: %s printed:\n%s", scenario, f->out ? f->out : "");
+    return 0;
+}
+/**
+ * A Windows part whose status file exists while its job is still active has
+ * not ended (j102 3): windows_detach's poll reads it as running, so that the
+ * observer gives no result, and its caller ends no claim in WSL, until a
+ * poll finds the job absent; and sweep.sh keeps the scratch of a run whose
+ * part has a status file and a token and no stopped file, whether its job is
+ * active or absent, and removes it once a stop has written the stopped file.
+ */
+static int observer_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    int ok;
+    fx_remove(flow_path(f, "observer"));
+    if (!flow_put(f, "observer/driver", observer_driver) ||
+        !flow_put(f, "observer/machines", "windows out D:/o\n") ||
+        !fx_write(flow_path(f, "observer/bin/winjob"), observer_winjob, strlen(observer_winjob),
+                  0700) ||
+        !fx_write(flow_path(f, "observer/bin/ssh"), observer_ssh, strlen(observer_ssh), 0700) ||
+        !fx_write(flow_path(f, "observer/bin/git"), "#!/bin/sh\nexit 0\n", 17, 0700) ||
+        !fx_write(flow_path(f, "observer/winjob.sh"), observer_winjob_sh,
+                  strlen(observer_winjob_sh), 0700) ||
+        !fx_write(flow_path(f, "observer/tools/flow/winjob.sh"), observer_winjob_sh,
+                  strlen(observer_winjob_sh), 0700))
+        return check(r, 0, "the observer rows' files are written");
+    ok = check(
+        r, observer_saw(r, "poll", "waits\nwaits\nbuilding\noutput: status 0\nstatus 0\npolls 3\n"),
+        "the observer reads a part whose status file exists beside an active job as "
+        "running, and gives its result only once the job is absent (j102 3)");
+    ok = check(r, observer_saw(r, "sweep", "kept a\nkept b\nremoved c\n"),
+               "sweep.sh keeps the scratch of a run whose part has a status file but no stopped "
+               "file, and removes it once a stop has confirmed the part ended (j102 3)") &&
+         ok;
+    fx_remove(flow_path(f, "observer"));
     return ok;
 }
 #define WINCLEAN_ID  "milestone7-111111111111-windows-20261010-ab12"
@@ -2665,6 +2872,7 @@ static int windows_rows(struct release *r)
     ok = windows_hold_rows(r) && ok;
     ok = windows_stop_rows(r) && ok;
     ok = claim_rows(r) && ok;
+    ok = observer_rows(r) && ok;
     ok = winclean_rows(r) && ok;
     ok = stop_rows(r) && ok;
     snprintf(text, sizeof(text),
