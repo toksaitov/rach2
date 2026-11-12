@@ -1,0 +1,26 @@
+diff --git a/rach2/sys/arch/x86/lapic.c b/rach2/sys/arch/x86/lapic.c
+index 2279a0cd0..fa383975f 100644
+--- a/rach2/sys/arch/x86/lapic.c
++++ b/rach2/sys/arch/x86/lapic.c
+@@ -671,7 +671,20 @@ void lapic_eoi(void)
+         exits_count(EXIT_EOI_PV, 0);
+         return;
+     }
+-    exits_count(eoi_word_set[c] ? EXIT_EOI_TAKEN : EXIT_EOI_UNSET, eoi_vector[c]);
++    {
++        uint32_t irr = 0, isrn = 0, i, bits;
++
++        for (i = 1; i < 8; i++) {
++            irr |= apic_read(LAPIC_IRR + i * 0x10u);
++            bits = apic_read(LAPIC_ISR + i * 0x10u);
++            while (bits) {
++                isrn++;
++                bits &= bits - 1u;
++            }
++        }
++        exits_count(eoi_word_set[c] ? EXIT_EOI_TAKEN : EXIT_EOI_UNSET,
++                    eoi_vector[c] | (irr ? 0x1000u : 0u) | (isrn > 1 ? 0x2000u : 0u));
++    }
+     apic_write(LAPIC_EOI, 0);
+ }
+ 

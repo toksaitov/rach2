@@ -1,0 +1,4 @@
+sleep 2
+mount -t tracefs nodev /sys/kernel/tracing 2>/dev/null; echo 'hist:keys=msr,common_cpu:sort=msr,common_cpu if msr == 1760' >> /sys/kernel/tracing/events/msr/write_msr/trigger && echo ok
+tar cf - /opt/proton | cat > /dev/null
+cat /proc/interrupts; cat /sys/kernel/tracing/events/msr/write_msr/hist | grep -v "^#"
