@@ -129,6 +129,59 @@ case testbed/game alone log \
     file:bed/measure/ref/lenovo-linux.lines \
     -- native/testbed.sh game lenovo-linux.lines
 
+# Video on the GPU against Linux's decodes, browser plays and hangs (78-14b,
+# native/gpuvideo.sh); the clips and vahash are on the data partition, under
+# native/video/clips, and the hang check goes last, since it hangs the
+# render ring on purpose.
+case video/decode alone log mountns \
+    file:tests/graphics/lenovo/video-gpu.sh file:tests/graphics/guest-env.sh \
+    file:tests/graphics/runners/video.sh file:tests/graphics/runners/common.sh file:tests/graphics/runners/server.py \
+    file:tests/graphics/runners/cdp.py file:tests/graphics/runners/events.py file:tests/graphics/runners/video.html \
+    file:tests/graphics/runners/clips.sha256 file:tests/graphics/runners/judge.py file:tests/graphics/runners/video.limits \
+    file:tests/graphics/ref/lenovo-video/data.sha256 file:tests/graphics/ref/lenovo-video/linux.tar.gz \
+    -- native/gpuvideo.sh decode data.sha256 linux.tar.gz
+case video/browsers alone log mountns \
+    file:tests/graphics/lenovo/video-gpu.sh file:tests/graphics/guest-env.sh \
+    file:tests/graphics/runners/video.sh file:tests/graphics/runners/common.sh file:tests/graphics/runners/server.py \
+    file:tests/graphics/runners/cdp.py file:tests/graphics/runners/events.py file:tests/graphics/runners/video.html \
+    file:tests/graphics/runners/clips.sha256 file:tests/graphics/runners/judge.py file:tests/graphics/runners/video.limits \
+    file:tests/graphics/ref/lenovo-video/data.sha256 file:tests/graphics/ref/lenovo-video/linux.tar.gz \
+    -- native/gpuvideo.sh browsers data.sha256 linux.tar.gz
+case video/hang alone log mountns \
+    file:tests/graphics/lenovo/video-gpu.sh file:tests/graphics/guest-env.sh \
+    file:tests/graphics/runners/video.sh file:tests/graphics/runners/common.sh file:tests/graphics/runners/server.py \
+    file:tests/graphics/runners/cdp.py file:tests/graphics/runners/events.py file:tests/graphics/runners/video.html \
+    file:tests/graphics/runners/clips.sha256 file:tests/graphics/runners/judge.py file:tests/graphics/runners/video.limits \
+    file:tests/graphics/ref/lenovo-video/data.sha256 file:tests/graphics/ref/lenovo-video/linux.tar.gz \
+    -- native/gpuvideo.sh hang data.sha256 linux.tar.gz
+
+# The test bed's rungs through a VM on the GPU (83-7, native/bed.sh): the
+# shared region's session, figures and the VM's death under load, then the
+# forward guest's glmark2 through virgl and Venus. The VMs' disks are on the
+# data partition, under native/bed, which tests/kvm/ref/lenovo-bed.sha256
+# pins.
+case bed/shm alone log mountns stage:vgshmprobe \
+    file:tests/kvm/bed-shm.sh file:tests/assign/gpu.sh file:bed/forward/forward.sh \
+    file:dev-log/82-assign/82-4/check.sh file:dev-log/78-intel/78-10d/crcmodes.c \
+    file:bed/measure/measure.sh file:bed/measure/piglit.txt file:bed/measure/latency.c file:bed/measure/webgl.html \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/games.sh file:tests/graphics/runners/piglit.sh \
+    file:tests/kvm/ref/lenovo-bed.sha256 \
+    -- native/bed.sh shm lenovo-bed.sha256
+case bed/forward.virgl alone log mountns stage:vgshmprobe \
+    file:tests/kvm/bed-shm.sh file:tests/assign/gpu.sh file:bed/forward/forward.sh \
+    file:dev-log/82-assign/82-4/check.sh file:dev-log/78-intel/78-10d/crcmodes.c \
+    file:bed/measure/measure.sh file:bed/measure/piglit.txt file:bed/measure/latency.c file:bed/measure/webgl.html \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/games.sh file:tests/graphics/runners/piglit.sh \
+    file:tests/kvm/ref/lenovo-bed.sha256 \
+    -- native/bed.sh forward virgl lenovo-bed.sha256
+case bed/forward.venus alone log mountns stage:vgshmprobe \
+    file:tests/kvm/bed-shm.sh file:tests/assign/gpu.sh file:bed/forward/forward.sh \
+    file:dev-log/82-assign/82-4/check.sh file:dev-log/78-intel/78-10d/crcmodes.c \
+    file:bed/measure/measure.sh file:bed/measure/piglit.txt file:bed/measure/latency.c file:bed/measure/webgl.html \
+    file:tests/graphics/runners/common.sh file:tests/graphics/runners/games.sh file:tests/graphics/runners/piglit.sh \
+    file:tests/kvm/ref/lenovo-bed.sha256 \
+    -- native/bed.sh forward venus lenovo-bed.sha256
+
 # The panel, the touchpad and the data partition: the rows of 76's
 # checkpoint slice that need the machine, on i915's mode at 1366x768
 # (native/display.sh).
