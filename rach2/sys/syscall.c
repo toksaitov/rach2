@@ -1225,7 +1225,7 @@ static void sleep_begin(uintptr_t urem, int wide)
  * be written, as Linux answers; 0 when a remainder was asked for and none
  * is left, by the clock or by the tick, as Linux's do_nanosleep returns 0
  * for a remainder of 0 or less (kernel/time/hrtimer.c:2107-2111). The
- * caller counts the sleep as cut short once it returns -EINTR
+ * caller counts the sleep as cut short when it returns -EINTR or -EFAULT
  * (`sleep_cut_short`).
  */
 static int32_t nanosleep_interrupted(int rem, uint64_t target)
@@ -1265,14 +1265,15 @@ static int32_t nanosleep_interrupted(int rem, uint64_t target)
 }
 
 /**
- * Count the sleep that ends with `rc` as one a signal cut short when `rc` is
- * -EINTR, and not when its remainder came to none and it returns 0, nor for
- * -EFAULT (`process_count_sleep_cut_short`, /proc/stat's
+ * Count the nanosleep that ends with `rc` as one a signal cut short when `rc`
+ * is -EINTR, or -EFAULT, which a sleep returns only when a signal ended it
+ * and its remainder could not be written; not when its remainder came to
+ * none and it returns 0 (`process_count_sleep_cut_short`, /proc/stat's
  * sleeps_interrupted). Returns `rc`.
  */
 static int32_t sleep_cut_short(int32_t rc)
 {
-    if (rc == -EINTR) {
+    if (rc == -EINTR || rc == -EFAULT) {
         process_count_sleep_cut_short();
     }
     return rc;
@@ -1501,7 +1502,7 @@ static long sleep_resume(isr_params_t *params);
  * remainder of none, with a place for it, returns 0, as Linux's
  * do_nanosleep does for a remainder of 0 or less (kernel/time/hrtimer.c:
  * 2107-2111), and the sleep is counted as cut short only when it returns
- * -EINTR (`sleep_cut_short`).
+ * -EINTR or -EFAULT (`sleep_cut_short`).
  *
  * When a signal cuts the sleep short, the deadline goes into the thread's
  * restart block and the call stands for Linux's ERESTART_RESTARTBLOCK: a
@@ -1541,12 +1542,11 @@ static int32_t sleep_to(uint64_t target, const struct kernel_timespec *end, cons
                 rem.tv_nsec = 0;
             }
             if (sleep_rem_put(&rem) != 0) {
-                return -EFAULT;
+                return sleep_cut_short(-EFAULT);
             }
         }
     }
-    if (rc == -EINTR) {
-        sleep_cut_short(rc);
+    if (sleep_cut_short(rc) == -EINTR) {
         b->fn = sleep_resume;
         b->tick = target;
         b->sec = end->tv_sec;
@@ -3124,7 +3124,7 @@ long sys_syslog(isr_params_t *params)
         }
         while ((syslog_read_at = klog_clamp(syslog_read_at)) == klog_written()) {
             if (sleep_until(tick_count() + MS_TO_TICKS(100), 0, "syslog_print") != 0) {
-                return sleep_cut_short(-EINTR);
+                return -EINTR;
             }
         }
         return syslog_copy(ubuf, (uint32_t)len, &syslog_read_at);
