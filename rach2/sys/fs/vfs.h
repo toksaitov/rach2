@@ -416,6 +416,14 @@ struct vfs_type {
      * files, directories and links. A type that sets it sets `file_locked`
      * and `name_cache`. */
     int reads_unlocked;
+    /* Nonzero for a type whose `write`, `truncate`, `fallocate`, `fsync`
+     * and `fdatasync` of a regular file run without the big lock under the
+     * file's own lock (`lock_node`), as Linux's ext2 writes under the
+     * inode's `i_rwsem`, each taking the big lock itself for a step that
+     * needs it; write, pwrite64, writev, ftruncate, fallocate, fsync and
+     * fdatasync then run without it on the type's regular files. A type
+     * that sets it sets `reads_unlocked`. */
+    int writes_unlocked;
 };
 
 /* One table entry. `covered` is the held node of the directory this mount
