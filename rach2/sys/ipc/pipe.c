@@ -11,11 +11,14 @@
 #include "../proc/process.h"
 #include "../mm/usercopy.h"
 #include "../mm/paging.h"
+#include "../mm/mm.h"
 #include "../mm/pin.h"
 #include "../mm/kheap.h"
 #include "../lib/kstring.h"
 #include "../lib/kerrno.h"
 #include "../lib/ksignal.h"
+#include "../lib/spinlock.h"
+#include "../proc/smp.h"
 #include "../syscall_internal.h"
 
 /* Linux ioctls a pipe answers. */
@@ -26,8 +29,19 @@
 #define O_NONBLOCK_FLAG 04000
 
 /* The live pipes, each allocated from the heap when made and freed when
- * both ends are closed. */
+ * its last description closes (`pipe_info_put`), and the lock over the
+ * list, the next inode number, and each pipe's `files` and `nr_accounted`,
+ * as Linux keeps `pipe->files` under the inode's `i_lock` (fs/pipe.c:707-719
+ * in 6.12). A pipe's own lock may be held when it is taken; nothing is
+ * taken under it. */
 static pipe_t *pipes;
+static struct spinlock pipes_lock = SPINLOCK_INIT_NAMED("pipes_lock");
+
+/* The kind of every pipe's lock, which gives the lock-order checker one
+ * class for them (`sleep_lock_init`), and /proc/fs/lockwait a line for the
+ * holds of one that crossed a disk wait, as a read whose page comes in
+ * from the disk makes. */
+static struct sleep_lock_record pipe_lock_record = SLEEP_LOCK_RECORD("pipe");
 
 uint32_t pipe_max_size = PIPE_MAX_SIZE;
 unsigned long pipe_user_pages_soft = PIPE_USER_PAGES_SOFT;
@@ -42,7 +56,7 @@ static uint32_t next_pipe_inode = 1;
 
 /**
  * The next inode number to give a pipe: rising, nonzero, and not one a live
- * pipe has.
+ * pipe has. Called under `pipes_lock`.
  *
  * A program reading /proc/PID/fd takes two descriptors that show one number
  * for ends of one pipe, so no two live pipes share a number, and the number
@@ -71,7 +85,7 @@ static uint32_t pipe_next_inode(void)
 /**
  * The pages the live pipes of the real user `user` hold, Linux's
  * `user->pipe_bufs`: each pipe's ring size in pages, whether or not the ring
- * is allocated yet.
+ * is allocated yet, as charged (`nr_accounted`). Called under `pipes_lock`.
  */
 static uint32_t pipe_user_pages(uint32_t user)
 {
@@ -80,7 +94,7 @@ static uint32_t pipe_user_pages(uint32_t user)
 
     for (p = pipes; p; p = p->next) {
         if (p->user == user) {
-            pages += p->size / PAGE_SIZE;
+            pages += p->nr_accounted;
         }
     }
     return pages;
@@ -107,23 +121,51 @@ static int pipe_pages_over(unsigned long pages, unsigned long limit)
 }
 
 /**
- * A new pipe on the live list, with one end of each kind counted open and
- * no ring yet; NULL when the heap has no room or, for an unprivileged
- * caller, when its user's pipes would pass `pipe_user_pages_hard`. It is
- * charged to the caller's real user, and its size is Linux's
- * `alloc_pipe_info`'s: PIPE_BUF_SIZE, but for an unprivileged caller at
- * most `pipe_max_size`, and PIPE_MIN_PAGES once the user's pipes would pass
- * `pipe_user_pages_soft`.
+ * A new pipe, not yet on the live list, with one end of each kind counted
+ * open, two descriptions (`files`), and no ring yet; NULL when the heap has
+ * no room. It is charged to the caller's real user once it is on the list
+ * (`pipe_publish`).
  */
 static pipe_t *pipe_alloc(void)
 {
-    uint32_t user = current_proc ? current_proc->ruid : 0;
+    pipe_t *p = kzalloc(sizeof(*p));
+
+    if (!p) {
+        return NULL;
+    }
+    p->in_use = 1;
+    p->user = current_proc ? current_proc->ruid : 0;
+    p->read_open = 1;
+    p->write_open = 1;
+    p->files = 2;
+    wait_queue_init(&p->read_wq);
+    wait_queue_init(&p->write_wq);
+    wait_queue_init(&p->rdwr_wq);
+    wait_queue_init(&p->splice_wq);
+    wait_queue_init(&p->open_wq);
+    sleep_lock_init(&p->lock, &pipe_lock_record, 0);
+    return p;
+}
+
+/**
+ * Size `p`, a new pipe of `pipe_alloc`, charge it to its user and put it on
+ * the live list, with its inode number: 0, or -1 for an unprivileged caller
+ * whose user's pipes would pass `pipe_user_pages_hard`, with `p` left off
+ * the list for the caller to free. Its size is Linux's `alloc_pipe_info`'s:
+ * PIPE_BUF_SIZE, but for an unprivileged caller at most `pipe_max_size`,
+ * and PIPE_MIN_PAGES once the user's pipes would pass
+ * `pipe_user_pages_soft`. The count and the charge are one hold of
+ * `pipes_lock`, as Linux's `account_pipe_buffers` adds and reads the
+ * user's count in one atomic step (fs/pipe.c:767-772 and 807 in 6.12). Called
+ * under `pipes_lock`.
+ */
+static int pipe_publish(pipe_t *p)
+{
     int privileged = !current_proc || proc_privileged(current_proc);
     uint32_t size = PIPE_BUF_SIZE, held;
-    pipe_t *p;
 
     if (!privileged) {
-        held = pipe_user_pages(user);
+        held = pipe_user_pages(p->user);
         if (size > pipe_max_size) {
             size = pipe_max_size;
         }
@@ -131,44 +173,54 @@ static pipe_t *pipe_alloc(void)
             size = PIPE_MIN_PAGES * PAGE_SIZE;
         }
         if (pipe_pages_over((unsigned long)held + size / PAGE_SIZE, pipe_user_pages_hard)) {
-            return NULL;
+            return -1;
         }
     }
-    p = kzalloc(sizeof(*p));
-    if (!p) {
-        return NULL;
-    }
-    p->in_use = 1;
     p->size = size;
-    p->user = user;
+    p->nr_accounted = size / PAGE_SIZE;
     p->inode = pipe_next_inode();
-    p->read_open = 1;
-    p->write_open = 1;
-    wait_queue_init(&p->read_wq);
-    wait_queue_init(&p->write_wq);
-    wait_queue_init(&p->rdwr_wq);
-    wait_queue_init(&p->splice_wq);
-    sleep_lock_init(&p->lock, NULL, 0);
     p->next = pipes;
     pipes = p;
-    return p;
+    return 0;
 }
 
-/** Take `p` off the live list and free it with its ring, once no end of it
- * is open or before any descriptor has it. */
+/** Free `p` with its ring, once it is off the live list or was never on
+ * it. */
 static void pipe_free(pipe_t *p)
 {
-    pipe_t **link = &pipes;
-
-    while (*link && *link != p) {
-        link = &(*link)->next;
-    }
-    if (*link) {
-        *link = p->next;
-    }
     kfree(p->buf);
     kfree(p->buf_pages);
     kfree(p);
+}
+
+/**
+ * Let go of one of the descriptions or unfinished FIFO opens that `files`
+ * counts, and free `p` when it was the last: the pipe leaves the live list
+ * under `pipes_lock`, so no FIFO open finds it after, and is freed outside
+ * it, as Linux's `put_pipe_info` (fs/pipe.c:707-719 in 6.12). The caller
+ * does not hold the pipe's lock: two closes of its ends on two processors
+ * each give the lock back whole before either counts itself out here, so
+ * neither touches the pipe after the other frees it.
+ */
+static void pipe_info_put(pipe_t *p)
+{
+    uint32_t irq = spin_lock_irqsave(&pipes_lock);
+    int last = --p->files == 0;
+
+    if (last) {
+        pipe_t **link = &pipes;
+
+        while (*link && *link != p) {
+            link = &(*link)->next;
+        }
+        if (*link) {
+            *link = p->next;
+        }
+    }
+    spin_unlock_irqrestore(&pipes_lock, irq);
+    if (last) {
+        pipe_free(p);
+    }
 }
 
 /** Whether `p` holds bytes or a buffer, as Linux's `pipe_empty` is false:
@@ -232,8 +284,11 @@ static int pipe_unspliced(void *arg)
 
 /** Take the lock of `p`, and of `q` too when it is not NULL, the lower
  * address first, as Linux's `pipe_double_lock` orders them, so that two
- * tees between the same pipes never wait on each other. May sleep; a
- * signal does not end the wait, as Linux's `mutex_lock` of a pipe. */
+ * tees between the same pipes never wait on each other; the second is
+ * taken at subclass 1 of the pipes' class, the order the lock-order checker
+ * is told, as Linux 6.12 tells it by `pipe_lock_cmp_fn` (fs/pipe.c:81-85).
+ * May sleep; a signal does not end the wait, as Linux's `mutex_lock` of a
+ * pipe. */
 static void pipe_lock(pipe_t *p, pipe_t *q)
 {
     if (q && (uintptr_t)q < (uintptr_t)p) {
@@ -244,6 +299,7 @@ static void pipe_lock(pipe_t *p, pipe_t *q)
     }
     sleep_lock_take(&p->lock);
     if (q) {
+        sleep_lock_subclass(1);
         sleep_lock_take(&q->lock);
     }
 }
@@ -601,17 +657,31 @@ static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return pipe_read_vec(e, &one, 1);
 }
 
-/** Linux's SIGPIPE for a write to a pipe no reader is left on: SI_USER,
- * from the writer, to its thread. */
+/**
+ * Linux's SIGPIPE for a write to a pipe no reader is left on: SI_USER,
+ * from the writer, to its thread. The signal state is the big lock's, so
+ * it is posted under the big lock, taken here when the caller runs without
+ * it, and after the pipe's lock is given back, since the big lock comes
+ * before every pipe's in the lock order; Linux posts it under
+ * `pipe->mutex` (fs/pipe.c:458 and 499 in 6.12), under which its
+ * `siglock` comes.
+ */
 static void pipe_sigpipe(void)
 {
     struct k_siginfo info;
+    int big = !bkl_held();
 
     k_memset(&info, 0, sizeof(info));
     info.code = SI_USER;
     info.pid = current_proc->tgid;
     info.uid = current_proc->ruid;
+    if (big) {
+        bkl_enter();
+    }
     signal_post_thread(current_proc, SIGPIPE, &info);
+    if (big) {
+        bkl_exit();
+    }
 }
 
 /* How `pipe_put` and `pipe_put_vec` take their bytes, a mask. */
@@ -658,14 +728,28 @@ static int pipe_put_room(const pipe_t *p, int opens)
     return !opens || pipe_slots_free(p) != 0;
 }
 
+/** Whether a pin may take the caller's page at `addr` for a read
+ * (`paging_pin_allows`), judged under the address space's regions' lock,
+ * which keeps its region from changing during the look. */
+static int pipe_pin_allows(uintptr_t addr)
+{
+    struct mm *mm = current_proc->mm;
+    int ok;
+
+    mmap_read_lock(mm);
+    ok = paging_pin_allows(mm, addr, 0);
+    mmap_unlock(mm);
+    return ok;
+}
+
 /** Make present the page of the caller's memory at `addr` that the next of
  * `n` bytes of a `pipe_put` with `how` come from, as `pipe_read` does: 1,
  * or 0 for a page the caller cannot read or, with PUT_PINNED, one a pin may
  * not take before it is brought in, since a page of a mapping without
- * PROT_READ passes only when it is there already (`paging_pin_allows`). */
+ * PROT_READ passes only when it is there already (`pipe_pin_allows`). */
 static int pipe_put_fault(uintptr_t addr, uint32_t n, uint32_t how)
 {
-    if ((how & PUT_PINNED) && !paging_pin_allows(current_proc->mm, addr, 0)) {
+    if ((how & PUT_PINNED) && !pipe_pin_allows(addr)) {
         return 0;
     }
     return vm_prefault_range(addr, page_piece(addr, n), 0);
@@ -676,7 +760,7 @@ static int pipe_put_fault(uintptr_t addr, uint32_t n, uint32_t how)
  * PUT_PINNED, one a pin may not take. Takes no page in before the check. */
 static int32_t pipe_put_copy(uint8_t *at, const char __user *from, uint32_t n, uint32_t how)
 {
-    if ((how & PUT_PINNED) && !paging_pin_allows(current_proc->mm, (__force uintptr_t)from, 0)) {
+    if ((how & PUT_PINNED) && !pipe_pin_allows((__force uintptr_t)from)) {
         return -EFAULT;
     }
     return copy_from_user(at, (const void __user *)from, n) != 0 ? -EFAULT : 0;
@@ -748,7 +832,6 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
         uintptr_t addr = (__force uintptr_t)buf + done;
 
         if (!p->read_open) {
-            pipe_sigpipe();
             err = -EPIPE;
             break;
         }
@@ -801,7 +884,9 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
         pipe_wake(p, &p->read_wq, WQ_DATA);
     }
     pipe_unlock(p, NULL);
-
+    if (err == -EPIPE) {
+        pipe_sigpipe();
+    }
     return (done > 0) ? (int32_t)done : err;
 }
 
@@ -819,36 +904,13 @@ static uintptr_t pipe_iov_at(const struct kernel_iovec *iov, int *k, uint32_t *o
 }
 
 /**
- * Whether the `n` bytes of `iov` from `off` bytes into element `k` lie in
- * pages that are present now and may be read, or written when `write`
- * (`vm_resident`), found with no sleep, a page at a time: 1. Otherwise the
- * first page that is not is brought in, which may sleep, and the result is
- * 0, or -EFAULT when it cannot be had.
- */
-static int pipe_iov_resident(const struct kernel_iovec *iov, int k, uint32_t off, uint32_t n,
-                             int write)
-{
-    while (n > 0) {
-        uint32_t left;
-        uintptr_t addr = pipe_iov_at(iov, &k, &off, &left);
-
-        left = page_piece(addr, left < n ? left : n);
-        if (!vm_resident(addr, left, write)) {
-            return vm_prefault_range(addr, left, write) ? 0 : -EFAULT;
-        }
-        off += left;
-        n -= left;
-    }
-    return 1;
-}
-
-/**
  * Copy the `n` bytes of `iov` from `*off` bytes into element `*k` into the
  * ring of `p` at its tail, which has room for them, moving `*k` and `*off`
  * past them, a page of the source at a time; the tail does not move.
- * Returns 0, or -EFAULT when a byte cannot be read. The caller has found
- * the bytes resident (`pipe_iov_resident`) with no sleep since, so the copy
- * brings nothing in and does not sleep.
+ * Returns 0, or -EFAULT when a byte cannot be read, with the bytes before
+ * it in the ring past the tail, where no reader sees them. Each piece is
+ * brought in and copied under the regions' lock (`copy_from_user`), which
+ * may sleep with the pipe's lock held.
  */
 static int32_t pipe_iov_copy(pipe_t *p, const struct kernel_iovec *iov, int *k, uint32_t *off,
                              uint32_t n)
@@ -877,9 +939,9 @@ static int32_t pipe_iov_copy(pipe_t *p, const struct kernel_iovec *iov, int *k, 
  * Copy the `n` bytes at the head of the ring of `p` into `iov` from `*off`
  * bytes into element `*k`, moving `*k` and `*off` past them, a page of the
  * destination at a time; the head does not move. Returns 0, or -EFAULT
- * when a byte cannot be written. The caller has found the destination
- * resident for writing (`pipe_iov_resident`) with no sleep since, so the
- * copy brings nothing in and does not sleep.
+ * when a byte cannot be written, with the bytes before it copied. Each
+ * piece is brought in for writing and copied under the regions' lock
+ * (`copy_to_user`), which may sleep with the pipe's lock held.
  */
 static int32_t pipe_iov_fill(const pipe_t *p, const struct kernel_iovec *iov, int *k, uint32_t *off,
                              uint32_t n)
@@ -949,11 +1011,12 @@ static uint32_t pipe_buf_head_len(const pipe_t *p)
  * its copies' faults and drops it only to wait (fs/pipe.c:264, 361, 393 and
  * 399 in 6.12), so while a destination page comes in no other reader takes
  * the next buffer and no writer grows the one being read: the bytes a read
- * returns are adjacent in the stream. Each copy brings its destination in
- * for writing first, which may sleep, and judges the ring again after any
- * sleep; then, with no sleep between, it copies the bytes and moves the head
- * past them. An interrupt does not preempt a system call, so no other thread
- * unmaps a page between the check and the copy.
+ * returns are adjacent in the stream. Each page of a copy is brought in for
+ * writing and copied under the address space's regions' lock, so another
+ * thread's unmap comes before or after it and a page it took away ends the
+ * copy with -EFAULT (`pipe_iov_fill`); the head moves past a buffer once
+ * its copy is whole. The lock is the pipe's alone: the read takes no big
+ * lock, and nothing but the lock holder moves the ring.
  */
 static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n)
 {
@@ -978,7 +1041,6 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int 
     pipe_lock(p, NULL);
     while (done < count) {
         uint32_t len;
-        int32_t rc;
 
         pipe_buf_skip_empty(p);
         if (pipe_available(p) == 0) {
@@ -1009,14 +1071,6 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int 
         if (len > count - done) {
             len = count - done;
         }
-        rc = pipe_iov_resident(iov, k, off, len, 1);
-        if (rc < 0) {
-            err = rc;
-            break;
-        }
-        if (rc == 0) {
-            continue;
-        }
         if (pipe_iov_fill(p, iov, &k, &off, len) < 0) {
             err = -EFAULT;
             break;
@@ -1027,7 +1081,6 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int 
         pipe_wake(p, &p->write_wq, WQ_ROOM);
     }
     pipe_unlock(p, NULL);
-
     return (done > 0) ? (int32_t)done : err;
 }
 
@@ -1085,9 +1138,9 @@ static void pipe_buf_fault(pipe_t *p)
  *
  * Each of those groups, the merged bytes and each page, is committed whole
  * or not at all, as Linux commits a page only once it is full or the vector
- * is spent: the group's source is made present, which may sleep, and the
- * readers and the ring are judged again after any sleep; then, with no sleep
- * between, the group is copied past the tail and the tail moves past it. A
+ * is spent: the group is copied past the tail, each page of its source
+ * brought in and copied under the regions' lock (`pipe_iov_copy`), and only
+ * then does the tail move past it. A
  * page the caller cannot read ends the write with the bytes of the groups
  * before it, or -EFAULT, and no byte of its own group is readable. A page
  * group that faults leaves its buffer open and empty (`pipe_buf_fault`), as
@@ -1128,7 +1181,6 @@ static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n
         int32_t rc;
 
         if (!p->read_open) {
-            pipe_sigpipe();
             err = -EPIPE;
             break;
         }
@@ -1154,11 +1206,7 @@ static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n
             }
             continue;
         }
-        rc = pipe_iov_resident(iov, k, off, len, 0);
-        if (rc == 0) {
-            continue;
-        }
-        if (rc < 0 || pipe_iov_copy(p, iov, &k, &off, len) < 0) {
+        if (pipe_iov_copy(p, iov, &k, &off, len) < 0) {
             if (fill == 0) {
                 pipe_buf_fault(p);
             }
@@ -1172,7 +1220,9 @@ static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n
         pipe_wake(p, &p->read_wq, WQ_DATA);
     }
     pipe_unlock(p, NULL);
-
+    if (err == -EPIPE) {
+        pipe_sigpipe();
+    }
     return (done > 0) ? (int32_t)done : err;
 }
 
@@ -1288,8 +1338,12 @@ static int32_t pipe_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
  * (`fd_release_backing`): count the end closed, wake the other end's queue
  * for every kind of change, so that a waiting reader sees the end of file,
  * or a waiting writer the broken pipe, once no end of the closed kind is
- * left, and free the pipe once no end is open. A FIFO opened for reading and
- * writing is an end of both kinds.
+ * left, and free the pipe once no description of it is left
+ * (`pipe_info_put`). A FIFO opened for reading and writing is an end of
+ * both kinds. The counts change under the pipe's lock, as Linux's
+ * `pipe_release` changes them under `pipe->mutex` (fs/pipe.c:722-743 in
+ * 6.12), so a read or a write that holds it sees them change only while it
+ * waits, and judges them again when it wakes. May sleep.
  */
 static void pipe_close(fd_entry_t *e)
 {
@@ -1298,6 +1352,7 @@ static void pipe_close(fd_entry_t *e)
     if (!p) {
         return;
     }
+    pipe_lock(p, NULL);
     if (e->flags & FD_FLAG_READ) {
         p->read_open--;
         pipe_wake(p, &p->write_wq, WQ_ALL);
@@ -1309,13 +1364,17 @@ static void pipe_close(fd_entry_t *e)
     if ((e->flags & FD_FLAG_READ) && (e->flags & FD_FLAG_WRITE)) {
         p->rdwr_open--;
     }
-    if (!p->read_open && !p->write_open) {
-        pipe_free(p);
-    }
+    pipe_unlock(p, NULL);
+    pipe_info_put(p);
 }
 
-static const struct file_ops pipe_ops = {pipe_read,  pipe_write, pipe_poll, pipe_ioctl,
-                                         pipe_close, NULL,       NULL,      FILE_OPS_POLL_UNLOCKED};
+/* Every operation but poll runs under the pipe's own lock without the big
+ * lock, which it takes only to post SIGPIPE (`pipe_sigpipe`); poll takes
+ * neither. A FIFO's operations but poll keep the big lock
+ * (`file_ops_unlocked`). */
+static const struct file_ops pipe_ops = {
+    pipe_read,  pipe_write, pipe_poll, pipe_ioctl,
+    pipe_close, NULL,       NULL,      FILE_OPS_UNLOCKED | FILE_OPS_POLL_UNLOCKED};
 
 int pipe_is(const fd_entry_t *e)
 {
@@ -1361,7 +1420,6 @@ int32_t pipe_splice_room(fd_entry_t *e, int nonblock, uint32_t src)
     pipe_lock(p, NULL);
     for (;;) {
         if (!p->read_open) {
-            pipe_sigpipe();
             rc = -EPIPE;
             break;
         }
@@ -1381,6 +1439,9 @@ int32_t pipe_splice_room(fd_entry_t *e, int nonblock, uint32_t src)
         }
     }
     pipe_unlock(p, NULL);
+    if (rc == -EPIPE) {
+        pipe_sigpipe();
+    }
     return rc;
 }
 
@@ -1445,19 +1506,60 @@ int32_t pipe_get_size(const fd_entry_t *e)
 }
 
 /**
+ * Charge the pages of a ring of `want` bytes to the user of `p` in place of
+ * its present ring's, for a resize: the pages charged before, to give back
+ * with `pipe_uncharge` if the resize fails, or -EPERM for a growth past
+ * `pipe_max_size` or the user's limits that an unprivileged caller,
+ * `privileged` 0, may not make. The check and the charge are one hold of
+ * `pipes_lock`, as Linux's `pipe_set_size` charges the user's count and
+ * reads it in one step before it judges the limits and reverts the charge
+ * on a refusal (fs/pipe.c:1363-1381 in 6.12), so two resizes of one user's
+ * pipes cannot both pass a limit that only one fits under.
+ */
+static int32_t pipe_charge(pipe_t *p, uint32_t want, int privileged)
+{
+    uint32_t irq = spin_lock_irqsave(&pipes_lock);
+    uint32_t was = p->nr_accounted;
+
+    if (want > p->size && !privileged) {
+        unsigned long pages = (unsigned long)pipe_user_pages(p->user) - was + want / PAGE_SIZE;
+
+        if (want > pipe_max_size || pipe_pages_over(pages, pipe_user_pages_soft) ||
+            pipe_pages_over(pages, pipe_user_pages_hard)) {
+            spin_unlock_irqrestore(&pipes_lock, irq);
+            return -EPERM;
+        }
+    }
+    p->nr_accounted = want / PAGE_SIZE;
+    spin_unlock_irqrestore(&pipes_lock, irq);
+    return (int32_t)was;
+}
+
+/** Charge `p`'s user again with `was` pages, its charge before a resize
+ * that failed (`pipe_charge`). */
+static void pipe_uncharge(pipe_t *p, int32_t was)
+{
+    uint32_t irq = spin_lock_irqsave(&pipes_lock);
+
+    p->nr_accounted = (uint32_t)was;
+    spin_unlock_irqrestore(&pipes_lock, irq);
+}
+
+/**
  * Give `p` a ring of `size` bytes for F_SETPIPE_SZ (`pipe_set_size`). A new
  * ring is allocated, whether or not the pipe had one, as Linux's
  * `pipe_resize_ring` allocates its slots, so that a size the heap cannot
  * give fails here and not at every write; the bytes buffered are copied to
  * the slots their counters name in it, so `head` and `tail` keep counting
  * as they did. A growth wakes the writers, which may now have room. The
- * limits are Linux's `pipe_set_size`'s, and a shrink passes them even for a
- * user over the soft limit. A shrink below the page buffers fails with
- * EBUSY, as in Linux, however few bytes they hold, an empty one a faulted
- * write left among them (`pipe_buf_fault`): a write opens
- * a page unless its first `count` mod 4096 bytes fit in the newest buffer's
- * (`pipe_buf_merge_room`), and tee, splice and vmsplice open one for each
- * buffer or source page their bytes come from (`pipe_buf_link`,
+ * limits are Linux's `pipe_set_size`'s, judged as the new size is charged
+ * (`pipe_charge`), and a shrink passes them even for a user over the soft
+ * limit; a resize that fails gives the charge back. A shrink below the
+ * page buffers fails with EBUSY, as in Linux, however few bytes they hold,
+ * an empty one a faulted write left among them (`pipe_buf_fault`): a write
+ * opens a page unless its first `count` mod 4096 bytes fit in the newest
+ * buffer's (`pipe_buf_merge_room`), and tee, splice and vmsplice open one
+ * for each buffer or source page their bytes come from (`pipe_buf_link`,
  * `pipe_buf_add_pages`). Called with the pipe's lock held.
  */
 static int32_t pipe_resize(pipe_t *p, uint32_t size, int privileged)
@@ -1465,28 +1567,26 @@ static int32_t pipe_resize(pipe_t *p, uint32_t size, int privileged)
     uint32_t want = pipe_round_size(size), done = 0, n = pipe_available(p), i;
     struct pipe_page *slots;
     uint8_t *ring;
+    int32_t rc;
 
     if (want == 0) {
         return -EINVAL;
     }
-    if (want > p->size && !privileged) {
-        unsigned long pages =
-            (unsigned long)pipe_user_pages(p->user) - p->size / PAGE_SIZE + want / PAGE_SIZE;
-
-        if (want > pipe_max_size || pipe_pages_over(pages, pipe_user_pages_soft) ||
-            pipe_pages_over(pages, pipe_user_pages_hard)) {
-            return -EPERM;
-        }
-    }
     if (want == p->size) {
         return (int32_t)want;
     }
+    rc = pipe_charge(p, want, privileged);
+    if (rc < 0) {
+        return rc;
+    }
     if (pipe_ring_new(want, &ring, &slots) < 0) {
+        pipe_uncharge(p, rc);
         return -ENOMEM;
     }
     if (n > want || p->bufs > want / PAGE_SIZE) {
         kfree(ring);
         kfree(slots);
+        pipe_uncharge(p, rc);
         return -EBUSY;
     }
     for (i = 0; i < p->bufs; i++) {
@@ -1590,7 +1690,8 @@ void pipe_splice_consume(fd_entry_t *e, uint32_t n)
  * faulted write left among them (`pipe_holds`), no splice holds `a`'s
  * bytes, and `b` has a slot and a byte free. Returns 1 then, or 0 for an
  * `a` that holds nothing and has no writer, -EAGAIN for a wait `nonblock`
- * forbids, -EPIPE with SIGPIPE raised for a `b` with no reader, or -EINTR.
+ * forbids, -EPIPE for a `b` with no reader, for which the caller raises
+ * SIGPIPE once it has let the locks go, or -EINTR.
  * A `b` with no reader is -EPIPE before an `a` with neither bytes nor writer
  * is 0, as Linux's `link_pipe` and `splice_pipe_to_pipe` check
  * `opipe->readers` first in their loops (fs/splice.c:1778-1783 and
@@ -1602,7 +1703,6 @@ static int32_t pipe_link_ready(pipe_t *a, pipe_t *b, int nonblock)
         if (!pipe_holds(a)) {
             if (!a->write_open) {
                 if (!b->read_open) {
-                    pipe_sigpipe();
                     return -EPIPE;
                 }
                 return 0;
@@ -1622,7 +1722,6 @@ static int32_t pipe_link_ready(pipe_t *a, pipe_t *b, int nonblock)
             continue;
         }
         if (!b->read_open) {
-            pipe_sigpipe();
             return -EPIPE;
         }
         if (pipe_slot_room(b)) {
@@ -1746,6 +1845,9 @@ int32_t pipe_tee(fd_entry_t *in, fd_entry_t *out, uint32_t len, int nonblock, in
         }
     }
     pipe_unlock(a, b);
+    if (rc == -EPIPE) {
+        pipe_sigpipe();
+    }
     return rc;
 }
 
@@ -1789,7 +1891,7 @@ static int fifo_partner_came(void *arg)
 }
 
 /** The pipe of the FIFO file that `mnt` and `ino` identify, or NULL when no
- * end of it is open. */
+ * end of it is open. Called under `pipes_lock`. */
 static pipe_t *fifo_find(const void *mnt, uint64_t ino)
 {
     pipe_t *p;
@@ -1799,22 +1901,73 @@ static pipe_t *fifo_find(const void *mnt, uint64_t ino)
     return p;
 }
 
-/** Take back the ends counted by an open that did not finish, `reads` and
- * `writes` of them, and free the pipe when no end is left. */
+/**
+ * The pipe of the FIFO file that `mnt` and `ino` identify, with a count in
+ * its `files` for the caller's open, made when no end of it is open; NULL
+ * when the heap has no room or the caller's user is at
+ * `pipe_user_pages_hard`. The look and the count are one hold of
+ * `pipes_lock`, and a pipe made while the lock was let go is dropped for
+ * one another open published meanwhile, as Linux's `fifo_open` finds or
+ * makes `inode->i_pipe` under `i_lock` (fs/pipe.c:1117-1135 in 6.12), so
+ * every open of a file reaches one pipe.
+ */
+static pipe_t *fifo_get(const void *mnt, uint64_t ino)
+{
+    uint32_t irq = spin_lock_irqsave(&pipes_lock);
+    pipe_t *p = fifo_find(mnt, ino), *made;
+
+    if (p) {
+        p->files++;
+        spin_unlock_irqrestore(&pipes_lock, irq);
+        return p;
+    }
+    spin_unlock_irqrestore(&pipes_lock, irq);
+    made = pipe_alloc();
+    if (!made) {
+        return NULL;
+    }
+    made->read_open = 0;
+    made->write_open = 0;
+    made->files = 1;
+    made->fifo = 1;
+    made->fifo_mnt = mnt;
+    made->fifo_ino = ino;
+    irq = spin_lock_irqsave(&pipes_lock);
+    p = fifo_find(mnt, ino);
+    if (p) {
+        p->files++;
+    } else if (pipe_publish(made) == 0) {
+        p = made;
+        made = NULL;
+    }
+    spin_unlock_irqrestore(&pipes_lock, irq);
+    if (made) {
+        pipe_free(made);
+    }
+    return p;
+}
+
+/** Take back the ends counted by an open of `p` that did not finish,
+ * `reads` and `writes` of them, under the pipe's lock, which the caller
+ * holds and which is given back here, and let go of the open's count in
+ * `files`, which frees the pipe when it was the last. */
 static void fifo_unopen(pipe_t *p, int reads, int writes)
 {
     p->read_open -= reads;
     p->write_open -= writes;
-    if (!p->read_open && !p->write_open) {
-        pipe_free(p);
-    }
+    pipe_unlock(p, NULL);
+    pipe_info_put(p);
 }
 
 /**
  * A blocking open waits for the other end's count of opens to change, not
  * for an end of that kind to be open, so an open of the other end that
  * closes again while this one sleeps still ends the wait, as Linux's
- * counters have it.
+ * counters have it. The counts change under the pipe's lock, which the
+ * wait gives back, as Linux's `fifo_open` holds `pipe->mutex` and lets it
+ * go in `wait_for_partner` (fs/pipe.c:1081-1100 and 1140 in 6.12); the
+ * open's count in `files` keeps the pipe while it waits, and becomes its
+ * description's.
  */
 int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint64_t ino, int flags)
 {
@@ -1827,19 +1980,11 @@ int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint64_t ino, int flags)
     if (acc == 3) {
         return -EINVAL;
     }
-    p = fifo_find(mnt, ino);
+    p = fifo_get(mnt, ino);
     if (!p) {
-        p = pipe_alloc();
-        if (!p) {
-            return -ENOMEM;
-        }
-        p->read_open = 0;
-        p->write_open = 0;
-        p->fifo = 1;
-        p->fifo_mnt = mnt;
-        p->fifo_ino = ino;
-        wait_queue_init(&p->open_wq);
+        return -ENOMEM;
     }
+    pipe_lock(p, NULL);
     p->read_open += reads;
     p->write_open += writes;
     if (acc == 1 && nonblock && p->read_open == 0) {
@@ -1855,7 +2000,7 @@ int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint64_t ino, int flags)
         w.p = p;
         w.for_reader = acc == 1;
         w.seen = w.for_reader ? p->read_opens : p->write_opens;
-        if (wq_wait_event_as(&p->open_wq, fifo_partner_came, &w, "wait_for_partner") < 0) {
+        if (pipe_sleep(p, NULL, &p->open_wq, fifo_partner_came, &w, "wait_for_partner") < 0) {
             fifo_unopen(p, reads, writes);
             return -EINTR;
         }
@@ -1879,6 +2024,7 @@ int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint64_t ino, int flags)
     if (acc != 0 || !nonblock || p->write_open) {
         e->ofd->fifo_write_opens--;
     }
+    pipe_unlock(p, NULL);
     return 0;
 }
 
@@ -1910,6 +2056,16 @@ static int32_t pipe_open(uintptr_t fds_ptr, int flags)
     }
 
     pipe = pipe_alloc();
+    if (pipe) {
+        uint32_t irq = spin_lock_irqsave(&pipes_lock);
+        int over = pipe_publish(pipe) < 0;
+
+        spin_unlock_irqrestore(&pipes_lock, irq);
+        if (over) {
+            pipe_free(pipe);
+            pipe = NULL;
+        }
+    }
     if (!pipe) {
         return -ENFILE;
     }
@@ -1923,7 +2079,8 @@ static int32_t pipe_open(uintptr_t fds_ptr, int flags)
         if (kfds[0] >= 0) {
             fd_free(current_proc->fds, kfds[0]);
         }
-        pipe_free(pipe);
+        pipe_info_put(pipe);
+        pipe_info_put(pipe);
         return kfds[1] < 0 ? kfds[1] : -EFAULT;
     }
     pipe_setup_end(kfds[0], pipe, FD_FLAG_READ, flags);

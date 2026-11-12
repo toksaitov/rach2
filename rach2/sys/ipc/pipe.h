@@ -59,11 +59,29 @@ struct pipe_page {
     uint16_t merge;  /* nonzero when a later write's bytes may join it */
 };
 
+/*
+ * A pipe's fields are kept under its lock, `lock`, but for these: `next`,
+ * `files` and `nr_accounted` are kept under the list's lock (`pipes_lock`
+ * in pipe.c); `inode`, `user` and the FIFO's file are set before the pipe
+ * is on the list and do not change; and poll and the wait conditions read
+ * the counts and counters with no lock, as Linux's `pipe_poll` reads them
+ * (fs/pipe.c:657-705 in 6.12), since a waiter is on its queue before it
+ * reads them and every change under the lock wakes the queue after it.
+ */
 typedef struct pipe {
-    struct pipe *next;     /* the list of live pipes */
-    int in_use;            /* 1 from allocation on; no code reads it */
-    uint32_t inode;        /* nonzero, unlike every other live pipe's */
-    uint32_t user;         /* the real user charged with its pages */
+    struct pipe *next; /* the list of live pipes */
+    int in_use;        /* 1 from allocation on; no code reads it */
+    uint32_t inode;    /* nonzero, unlike every other live pipe's */
+    uint32_t user;     /* the real user charged with its pages */
+    /* The open file descriptions of the pipe's ends, one open for reading
+     * and writing counting once, and the opens of a FIFO that have counted
+     * themselves and not yet finished: Linux's `pipe->files`. The last to
+     * go frees the pipe, after it has given the pipe's lock back
+     * (`pipe_info_put`). */
+    uint32_t files;
+    /* The pages charged to `user`, the ring's size in pages, which a resize
+     * charges before it allocates (`pipe_resize`): Linux's `nr_accounted`. */
+    uint32_t nr_accounted;
     uint8_t *buf;          /* the ring, NULL until the first write */
     uint32_t size;         /* the ring's bytes, a power of two, a page or more */
     uint32_t head;         /* total bytes consumed by the read end */
@@ -103,11 +121,13 @@ typedef struct pipe {
     uint32_t buf_first;
     uint32_t bufs;
     /* Linux's `pipe->mutex`: held by a read, a write, a splice's or a tee's
-     * use of the ring, a resize and FIONREAD from their start to their
-     * return, across the page faults of their copies, and given back only
-     * while they wait (`pipe_sleep`), so no other reader or writer moves
-     * the ring while a copy sleeps. A close does not take it, since a
-     * closed end only ends a wait or a write, which each judge again. */
+     * use of the ring, a resize, FIONREAD, a close and a FIFO's open from
+     * their start to their return, across the page faults of their copies,
+     * and given back only while they wait (`pipe_sleep`), so no other
+     * reader or writer moves the ring while a copy sleeps. No call holds
+     * the big lock for it: the operations of a pipe end run without the big
+     * lock (FILE_OPS_UNLOCKED), and a tee takes two, the lower address
+     * first, the second by subclass, as Linux's `pipe_double_lock`. */
     struct sleep_lock lock;
 } pipe_t;
 
