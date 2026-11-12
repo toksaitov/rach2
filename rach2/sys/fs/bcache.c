@@ -2540,6 +2540,31 @@ static struct bbuf *shrink_dirty(uint32_t *flags)
     return 0;
 }
 
+/**
+ * Free `b`, which the shrink has just written, unless it is dirty again,
+ * held or waited for, since a reader may have taken it once its write let
+ * it go, or no longer keyed: a fill that took it meanwhile may have emptied
+ * it again (`fill_run`), which puts it on the empties, and a buffer is
+ * freed only off every list it is on, as Linux takes each buffer off its
+ * inode's list and the folio before it frees them (fs/buffer.c:2922-2933,
+ * 2999-3007). An empty one is left for the walk of the empties, or for a
+ * miss. Returns 1 when `b` was freed. Called without `cache_spin`.
+ */
+static int shrink_written(struct bbuf *b)
+{
+    struct bbuf *reap = 0;
+    uint32_t flags = cache_lock();
+
+    if (b->dirty || b->holder != -1 || b->waiters > 0 || !b->dev) {
+        cache_unlock(flags);
+        return 0;
+    }
+    buffer_unlink(b, &reap);
+    cache_unlock(flags);
+    buffers_reap(&reap);
+    return 1;
+}
+
 /*
  * Three passes, each a walk of one list: the empties; the release order
  * for the clean buffers, oldest first, in one walk, since freeing a clean
@@ -2549,9 +2574,9 @@ static struct bbuf *shrink_dirty(uint32_t *flags)
  * address; so is one dirtied again or waited for while its write slept.
  * The writing pass has a budget, so a buffer dirtied again as fast as it is
  * written cannot keep the shrink here. A written buffer is freed only if,
- * under `cache_spin` again, it is clean and nobody holds it or waits for
- * it, since a reader may have taken it once its write let it go. The
- * caller holds the big lock, as reclaim does.
+ * under `cache_spin` again, it is still keyed, clean and nobody holds it or
+ * waits for it (`shrink_written`). The caller holds the big lock, as
+ * reclaim does.
  *
  * The walks let `cache_spin` go every WALK_BATCH buffers, and the buffers
  * are given back to the heap with it let go (`walk_pause`,
@@ -2605,8 +2630,6 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
     cache_unlock(flags);
     buffers_reap(&reap);
     while (can_write && got < want && budget-- > 0) {
-        int rc;
-
         flags = cache_lock();
         b = shrink_dirty(&flags);
         cache_unlock(flags);
@@ -2616,20 +2639,10 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
         if (b->order == BCACHE_ORDER_AFTER && write_firsts(b->dev) != 0) {
             continue;
         }
-        rc = write_one(b, 0);
-        if (rc != 0) {
-            continue;
+        if (write_one(b, 0) == 0 && shrink_written(b)) {
+            (*written)++;
+            got++;
         }
-        flags = cache_lock();
-        if (b->dirty || b->holder != -1 || b->waiters > 0) {
-            cache_unlock(flags);
-            continue;
-        }
-        (*written)++;
-        buffer_unlink(b, &reap);
-        got++;
-        cache_unlock(flags);
-        buffers_reap(&reap);
     }
     return got;
 }
