@@ -147,13 +147,15 @@ static int count_parts(struct kvm_vm *vm, const struct kvm_gpa_run *runs, uint32
 }
 
 /** Fill `m`'s parts and frames from the runs `count_parts` passed, taking
- * nothing yet: 0, or -EFAULT for a page that is not ordinary RAM. */
+ * nothing yet, each part's frames read in one walk of the caller's tables
+ * (`paging_user_ram_frames`): 0, or -EFAULT for a page that is not
+ * ordinary RAM. */
 static int fill_parts(struct kvm_gpamap *m, struct kvm_vm *vm, const struct kvm_gpa_run *runs,
                       uint32_t n)
 {
     struct mm *mm = kvm_vm_mm(vm);
     struct kvm_slot_view v;
-    uint64_t gfn, left, take, j, page = 0;
+    uint64_t gfn, left, take, page = 0;
     uint32_t i, k = 0;
 
     for (i = 0; i < n; i++) {
@@ -165,12 +167,10 @@ static int fill_parts(struct kvm_gpamap *m, struct kvm_vm *vm, const struct kvm_
             m->runs[k].pages = take;
             m->runs[k].hva = v.hva;
             k++;
-            for (j = 0; j < take; j++, page++) {
-                m->frames[page] = paging_user_ram_frame(mm, (uintptr_t)(v.hva + j * 4096u));
-                if (!m->frames[page]) {
-                    return -EFAULT;
-                }
+            if (paging_user_ram_frames(mm, (uintptr_t)v.hva, take, &m->frames[page]) != take) {
+                return -EFAULT;
             }
+            page += take;
         }
     }
     return 0;

@@ -121,12 +121,18 @@ static int frame_page(uintptr_t phys)
     return -1;
 }
 
-uintptr_t paging_user_ram_frame(struct mm *mm, uintptr_t va)
+uint64_t paging_user_ram_frames(struct mm *mm, uintptr_t va, uint64_t n, uintptr_t *frames)
 {
-    if (mm != &maker || va < MEM_BASE || va >= MEM_BASE + MEM_PAGES * 4096u) {
-        return 0;
+    uint64_t got;
+
+    for (got = 0; got < n; got++, va += 4096u) {
+        if (mm != &maker || va < MEM_BASE || va >= MEM_BASE + MEM_PAGES * 4096u ||
+            !mem_frame[(va - MEM_BASE) / 4096u]) {
+            break;
+        }
+        frames[got] = mem_frame[(va - MEM_BASE) / 4096u];
     }
-    return mem_frame[(va - MEM_BASE) / 4096u];
+    return got;
 }
 
 void frame_ref(uintptr_t phys)
