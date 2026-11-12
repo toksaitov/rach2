@@ -270,9 +270,9 @@ static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
                        uint32_t bytes, uint8_t *answer, uint32_t *got)
 {
     struct virtio_gpu_resource_map_blob *req;
-    struct virtio_gpu_cmd *cmd;
+    struct virtio_gpu_cmd *cmd = NULL;
     uint32_t page, here, left;
-    int big, i;
+    int big = 0, i;
     int32_t rc;
 
     for (i = 0; i < 2; i++) {
