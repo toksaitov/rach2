@@ -606,6 +606,18 @@ int32_t kvm_slots_check_extension(long cap)
     return cap == KVM_CAP_USER_MEMORY;
 }
 
+/** A copy's hold of the slots: nothing changes them in the model. */
+void kvm_slots_read_lock(struct kvm_vm *vm)
+{
+    (void)vm;
+}
+
+/** The end of a copy's hold. */
+void kvm_slots_read_unlock(struct kvm_vm *vm)
+{
+    (void)vm;
+}
+
 int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
 {
     uint64_t base = slot0.guest_phys_addr >> 12;

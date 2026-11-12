@@ -272,36 +272,60 @@ void kvm_emul_skip(struct kvm_vcpu *v, uint32_t len)
 /* ---- guest memory ---- */
 
 /**
+ * Copy `chunk` bytes, within one page, between `buf` and `v`'s
+ * guest-physical memory at `gpa`, by `write`, as `gpa_rw` answers. The
+ * slot's readers' lock is held from the lookup through the copy and the
+ * dirty log's mark, so a change of the slot waits for the copy before the
+ * caller may unmap the memory, as Linux's exits run under kvm->srcu
+ * (arch/x86/kvm/x86.c:10673, virt/kvm/kvm_main.c:1633).
+ */
+static int gpa_rw_page(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t chunk, int write)
+{
+    struct kvm_slot_view s;
+    void __user *hva;
+    int r = 0;
+
+    kvm_slots_read_lock(v->vm);
+    if (!kvm_slot_find(v->vm, gpa >> 12, &s) || (write && (s.flags & KVM_MEM_READONLY))) {
+        r = 1;
+        goto out;
+    }
+    hva = (void __user *)(uintptr_t)(s.hva + (gpa & 0xFFFu));
+    if (write) {
+        if (copy_to_user(hva, buf, chunk) != 0) {
+            r = -EFAULT;
+            goto out;
+        }
+        kvm_dirty_mark(v->vm, gpa >> 12);
+    } else if (copy_from_user(buf, hva, chunk) != 0) {
+        r = -EFAULT;
+    }
+out:
+    kvm_slots_read_unlock(v->vm);
+    return r;
+}
+
+/**
  * Read or write, by `write`, the `n` bytes of `v`'s guest-physical memory
  * at `gpa` through the caller's memory that the slots map, in the vCPU's
  * thread. 0; 1 when a byte is in no slot or a write meets a read-only
  * slot, which is MMIO; -EFAULT when the caller's memory cannot be touched.
+ * May sleep.
  */
 static int gpa_rw(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t n, int write)
 {
-    struct kvm_slot_view s;
     uint8_t *p = (uint8_t *)buf;
     uint32_t chunk;
+    int r;
 
     while (n) {
         chunk = 4096u - (uint32_t)(gpa & 0xFFFu);
         if (chunk > n) {
             chunk = n;
         }
-        if (!kvm_slot_find(v->vm, gpa >> 12, &s)) {
-            return 1;
-        }
-        if (write && (s.flags & KVM_MEM_READONLY)) {
-            return 1;
-        }
-        if (write) {
-            if (copy_to_user((void __user *)(uintptr_t)(s.hva + (gpa & 0xFFFu)), p, chunk) != 0) {
-                return -EFAULT;
-            }
-            kvm_dirty_mark(v->vm, gpa >> 12);
-        } else if (copy_from_user(p, (const void __user *)(uintptr_t)(s.hva + (gpa & 0xFFFu)),
-                                  chunk) != 0) {
-            return -EFAULT;
+        r = gpa_rw_page(v, gpa, p, chunk, write);
+        if (r != 0) {
+            return r;
         }
         p += chunk;
         gpa += chunk;

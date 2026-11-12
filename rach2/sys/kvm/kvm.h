@@ -1070,6 +1070,19 @@ int kvm_slots_init(struct kvm_vm *vm);
 void kvm_slots_free(struct kvm_vm *vm);
 
 /**
+ * Begin a copy through the caller's address of a slot that a lookup gives:
+ * a slot's change waits for it to end (`kvm_slots_read_unlock`) before it
+ * returns or frees the slot or its log, as Linux's readers of the slots
+ * hold kvm->srcu (arch/x86/kvm/x86.c:10673). Readers do not wait for each
+ * other; one waits while a change waits. May sleep; not nested, and not
+ * under a spinlock.
+ */
+void kvm_slots_read_lock(struct kvm_vm *vm);
+
+/** End what `kvm_slots_read_lock` began. */
+void kvm_slots_read_unlock(struct kvm_vm *vm);
+
+/**
  * KVM_SET_USER_MEMORY_REGION, with Linux's checks and answers: a slot
  * made, moved, its flags changed or deleted, while vCPUs run. What the
  * guest-physical tables hold of a slot that moves, changes its flags or
