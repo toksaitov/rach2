@@ -122,3 +122,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: the scene draws one cube's 36 vertices 1,024 times with ANGLE_instanced_arrays, from buffers of 864 and 8,192 bytes, which Debian's Chromium draws 300 frames of.
 * Status: unreported.
 * Next: repeat with Chromium's current stable on Linux with llvmpipe and on another GL driver, read the passthrough decoder's handling of a large `BufferData` to find what marks the context lost, and report it on Chromium's tracker with the page.
+
+## Linux's i915 writes through a read-only IOMMU mapping in IGT's gem_create hog-create
+
+* Project: Linux 6.12.115 as Debian 13.7 builds it, 6.12.115+deb13.1-amd64, its i915 driver on the Lenovo's HD 4400 (Haswell GT2, PCI 00:02.0) with `intel_iommu=on`; IGT 2.0 as Rach2's GNU root builds it from Debian's intel-gpu-tools 2.0-1 source. Linux's source was not read for this fault.
+* Fails: during IGT's `gem_create@hog-create@smem0` the IOMMU reports a write from the GPU to a page whose entry does not allow writing, `DMAR: [DMA Write NO_PASID] Request device [00:02.0] fault addr 0x7ffff17000 [fault reason 0x05] PTE Write access is not set`. The subtest passes, and IGT records the subtest and its test as `dmesg-warn` for the line. The driver's code that maps the page read-only was not found.
+* Found: 2026-11-12, the Lenovo, milestone 83, task 83-15, while taking Linux's references for the Lenovo's IGT buffer cases in a Debian boot with the IOMMU's translation on. The boot with translation off, the same day, ran no IGT.
+* Reproduction: Debian 13.7 on the Lenovo with `intel_iommu=on`, IGT's `gem_create --run-subtest hog-create` as root with no compositor; the fault is in the kernel's log some 6 s after the subtest starts. One run showed it once; whether every run does is not known.
+* Evidence: [83-15/dmar-faults-on.txt](83-15/dmar-faults-on.txt); the two `dmesg-warn` rows in `tests/graphics/ref/lenovo/expect/igt-gem.rows`; [83-15.md](83-15.md#results).
+* Rach2: nothing. The rows are Linux's reference, and Rach2's run passes the judge with `pass` or with the same `dmesg-warn`.
+* Status: unreported.
+* Next: run the subtest again with translation on, under Linux's current stable and master, to see whether it repeats; find the mapping by the faulting address in i915's GTT and IOMMU tracing (`intel_iommu` and `i915_gem` events), and report it to the i915 maintainers with the trace.

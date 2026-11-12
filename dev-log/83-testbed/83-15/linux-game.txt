@@ -1,0 +1,2 @@
+measure: result: game native-linux frames 6039 frame_ms 14.905 p50 14.440 p99 19.360 cpu_ms_per_frame 13.929 latency_ms 0.210 copied_bytes - exits 0 round_trips - seconds 107.1 passed -
+exit 0

@@ -1,0 +1,51 @@
+10:34:24 conformance: start igt-gem.1: igt igt-lenovo-gem.list gem-1
+igt: igt@gem_set_tiling_vs_gtt names no test
+igt: igt@gem_set_tiling_vs_pwrite names no test
+igt: result: 13 tests, 117 results: pass 109 skip 8 fail 0 other 0
+10:37:07 conformance: end igt-gem.1: exit 0
+10:37:07 conformance: start igt-gem.2: igt igt-lenovo-gem.list gem-2
+igt: result: 9 tests, 167 results: pass 112 skip 53 fail 0 other 2
+10:43:10 conformance: end igt-gem.2: exit 0
+10:43:11 conformance: weston: [10:43:10.603] Command line: weston --backend=drm --renderer=gl --shell=kiosk --idle-time=0 --socket=wayland-1 --log=/srv/ref80/out/conformance/weston.log
+10:43:11 conformance: start glmark2.gl: glmark2 gl
+glmark2: result: 33 scenes: Success 27 Failure 0 Unknown 6
+10:43:14 conformance: end glmark2.gl: exit 0
+10:43:14 conformance: start glmark2.es2: glmark2 es2
+glmark2: result: 33 scenes: Success 27 Failure 0 Unknown 6
+10:43:17 conformance: end glmark2.es2: exit 0
+10:43:17 conformance: start gate-glmark2.gl: gate glmark2 gl
+glmark2: result: score 1205
+10:48:50 conformance: end gate-glmark2.gl: exit 0
+10:48:50 conformance: start gate-glmark2.es2: gate glmark2 es2
+glmark2: result: score 1194
+10:54:23 conformance: end gate-glmark2.es2: exit 0
+10:54:23 conformance: start gate-probe.chromium: gate probe chromium
+probe: result: chromium webgl1 fill 1724.6 alu 103.90 webgl2 fill 1774.2 alu 103.90
+10:54:28 conformance: end gate-probe.chromium: exit 0
+10:54:28 conformance: start gate-probe.firefox: gate probe firefox
+probe: result: firefox webgl1 fill 1719.0 alu 105.00 webgl2 fill 1705.0 alu 104.00
+10:54:36 conformance: end gate-probe.firefox: exit 0
+10:54:36 conformance: start webgl-chromium.00: webgl chromium 0
+webgl: browser: done after 250 pages
+webgl: browser: done after 1 pages
+webgl: result: chromium 2.0.1 chunk 0 of 12 pages 250 pass 249 fail 1 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 1 subtests passed 26576 failed 2
+10:55:54 conformance: end webgl-chromium.00: exit 0
+10:55:54 conformance: start webgl-chromium.01: webgl chromium 1
+webgl: browser: done after 250 pages
+webgl: browser: done after 1 pages
+webgl: result: chromium 2.0.1 chunk 1 of 12 pages 250 pass 249 fail 1 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 1 subtests passed 8782 failed 2
+10:57:03 conformance: end webgl-chromium.01: exit 0
+10:57:03 conformance: start webgl-chromium.02: webgl chromium 2
+webgl: browser: done after 250 pages
+webgl: browser: done after 10 pages
+webgl: result: chromium 2.0.1 chunk 2 of 12 pages 250 pass 240 fail 4 timeout 6 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 10 subtests passed 42381 failed 684
+11:02:52 conformance: end webgl-chromium.02: exit 0
+11:02:52 conformance: start webgl-chromium.03: webgl chromium 3
+webgl: browser: done after 250 pages
+webgl: result: chromium 2.0.1 chunk 3 of 12 pages 250 pass 250 fail 0 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 0 subtests passed 243510675 failed 0
+11:13:59 conformance: end webgl-chromium.03: exit 0
+11:13:59 conformance: start webgl-chromium.04: webgl chromium 4
+webgl: browser: done after 250 pages
+webgl: result: chromium 2.0.1 chunk 4 of 12 pages 250 pass 250 fail 0 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 0 subtests passed 364876665 failed 0
+11:44:47 conformance: end webgl-chromium.04: exit 0
+11:44:47 conformance: start webgl-chromium.05: webgl chromium 5

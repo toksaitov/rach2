@@ -1,0 +1,2 @@
+BOOT_IMAGE=/run2/vmlinuz root=PARTUUID=f640712e-b236-4c5a-b7d8-1b149d598ec0 ro ds=nocloud modprobe.blacklist=ath9k,snd_hda_intel panic=10 intel_iommu=off
+0
