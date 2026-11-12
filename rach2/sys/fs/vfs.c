@@ -1843,20 +1843,39 @@ static int cached_take(struct vfs_mount *mnt, void *node, struct vfs_ref *cur)
     return 0;
 }
 
+/* The root the cached walk took first: its mount and node, which it does
+ * not hold, and the count of changes of the process's root it read with
+ * them (`fs_struct.root_seq`), 0 without a process. `taken` is 0 until the
+ * walk reads the root, at the start of an absolute path or at its first
+ * absolute link. */
+struct cached_root {
+    int taken;
+    uint32_t seq;
+    struct vfs_mount *mnt;
+    void *node;
+};
+
 /**
  * Where the cached walk of `path` starts, entered and held into `cur`: the
  * caller's `start` for a relative path, which the caller holds, else the
  * calling process's root, read under its lock, or the root mount's, read
  * under the table's, as Linux's `set_root` reads `fs->root` under its
- * sequence (fs/namei.c:943-965). 0, or WALK_FULL with nothing taken, for a
- * path the full walk starts at the root of the root mount, one that begins
- * with two slashes, among others.
+ * sequence (fs/namei.c:943-965). The root is recorded in `seen` the first
+ * time; once recorded, a root that has moved since, by a chroot of a thread
+ * that shares it (CLONE_FS) or a new root mount, is WALK_FULL, for the full
+ * walk to start over at the new root as its `walk_root_moved` does, since
+ * Linux's walk keeps the `nd->root` it began with to its end
+ * (fs/namei.c:970-1000). 0, or WALK_FULL with nothing taken, for a path the
+ * full walk starts at the root of the root mount, one that begins with two
+ * slashes, among others. May sleep, to drop a root that moved
+ * (`cached_put`).
  */
-static int cached_start(const struct vfs_ref *start, const char *path, struct vfs_ref *cur)
+static int cached_start(const struct vfs_ref *start, const char *path, struct vfs_ref *cur,
+                        struct cached_root *seen)
 {
     struct fs_struct *fs = current_proc ? current_proc->fs : NULL;
-    uint32_t flags;
-    int rc;
+    uint32_t flags, seq = 0;
+    int rc = -1;
 
     if (path[0] != '/' && start) {
         return cached_take(start->mnt, start->node, cur);
@@ -1866,16 +1885,28 @@ static int cached_start(const struct vfs_ref *start, const char *path, struct vf
     }
     if (fs) {
         flags = spin_lock_irqsave(&fs->lock);
+        seq = fs->root_seq;
         rc = fs->root_mnt ? cached_take(fs->root_mnt, fs->root_node, cur) : -1;
         spin_unlock_irqrestore(&fs->lock, flags);
-        if (rc >= 0) {
-            return rc;
-        }
     }
-    flags = spin_lock_irqsave(&mount_table_lock);
-    rc = cached_take(mounts[0], mounts[0]->root, cur);
-    spin_unlock_irqrestore(&mount_table_lock, flags);
-    return rc;
+    if (rc < 0) {
+        flags = spin_lock_irqsave(&mount_table_lock);
+        rc = cached_take(mounts[0], mounts[0]->root, cur);
+        spin_unlock_irqrestore(&mount_table_lock, flags);
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    if (seen->taken && (seen->seq != seq || seen->mnt != cur->mnt || seen->node != cur->node)) {
+        cached_put(cur->mnt, cur->node);
+        vfs_leave(cur->mnt);
+        return WALK_FULL;
+    }
+    seen->taken = 1;
+    seen->seq = seq;
+    seen->mnt = cur->mnt;
+    seen->node = cur->node;
+    return 0;
 }
 
 /** Whether a nameless mount may be entered by the name `comp` from the
@@ -1973,11 +2004,13 @@ static int cached_move(struct vfs_ref *cur, void *found, struct vfs_name **entry
 }
 
 /* What the cached walk keeps while it follows links: the two path pages,
- * taken at the first link (`walk_pages`), and the count of links. */
+ * taken at the first link (`walk_pages`), the count of links, and the root
+ * it took first, which an absolute link must find where it was. */
 struct cached_links {
     char *linkpath;
     char *target;
     int links;
+    struct cached_root root;
 };
 
 /**
@@ -1989,11 +2022,13 @@ struct cached_links {
  * caller's root, as the full walk's `walk_move` does and Linux's pick_link
  * calls `nd_jump_root` (fs/namei.c:970-1000, 1877-1882), whatever slashes
  * the spliced path begins with: a target of "/" splices to "//rest", which
- * `cached_start` would leave to the full walk. A relative target goes on
- * from `cur`. 0, with the walk to go on at `lk->linkpath`; or WALK_FULL,
- * with `cur` held as it was, past VFS_LINK_MAX links, for a target the node
- * does not hold, a root it cannot take or an error, which the full walk
- * reports.
+ * `cached_start` would leave to the full walk. That root must be the one
+ * the walk took first (`lk->root`), as `nd_jump_root` jumps to the
+ * `nd->root` the walk began with. A relative target goes on from `cur`. 0,
+ * with the walk to go on at `lk->linkpath`; or WALK_FULL, with `cur` held
+ * as it was, past VFS_LINK_MAX links, for a target the node does not hold,
+ * a root it cannot take or that has moved, or an error, which the full
+ * walk reports.
  */
 static int cached_link(struct vfs_ref *cur, void *found, const char *rest, struct cached_links *lk)
 {
@@ -2007,7 +2042,7 @@ static int cached_link(struct vfs_ref *cur, void *found, const char *rest, struc
     }
     cached_put(cur->mnt, found);
     rc = tlen < 0 ? -1 : walk_splice(lk->linkpath, lk->target, tlen, rest);
-    if (rc < 0 || (rc == 1 && cached_start(NULL, "/", &root) != 0)) {
+    if (rc < 0 || (rc == 1 && cached_start(NULL, "/", &root, &lk->root) != 0)) {
         return WALK_FULL;
     }
     if (rc == 1) {
@@ -2046,13 +2081,14 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
     struct vfs_ref cur;
     int use_real = (flags & VFS_WALK_REAL_IDS) != 0;
     struct cached_record rec;
-    struct cached_links lk = {NULL, NULL, 0};
+    struct cached_links lk;
     uint32_t found_names = 0;
     int rc;
 
+    k_memset(&lk, 0, sizeof(lk));
     rec.entry = entry;
     rec.seq = 0;
-    if ((entry && !vfs_name_seq(&rec.seq)) || cached_start(start, path, &cur) != 0) {
+    if ((entry && !vfs_name_seq(&rec.seq)) || cached_start(start, path, &cur, &lk.root) != 0) {
         return WALK_FULL;
     }
     for (;;) {
@@ -6213,6 +6249,7 @@ void vfs_root_set(struct process *p, struct vfs_mount *mnt, void *node)
     flags = spin_lock_irqsave(&p->fs->lock);
     p->fs->root_mnt = mnt;
     p->fs->root_node = mnt ? node : 0;
+    p->fs->root_seq++;
     spin_unlock_irqrestore(&p->fs->lock, flags);
     hold_release(was, was_node);
 }
