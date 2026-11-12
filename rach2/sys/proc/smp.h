@@ -283,21 +283,25 @@ int32_t smp_profile_store(void *data, const char __user *buf, uint32_t len);
 /* The rows of the tick's counts (`bkl_tick_charge`, debugfs's `bkl/tick`):
  * the parts of a tick in the order it runs them. `CLOCK`, `ACCOUNT` and
  * `WAKE` run without the big lock, on every processor for the accounting
- * and on the one that makes the clock's pass for the other two; `LOCK` is
- * the tick's try for the big lock, or its wait, and the rows after it run
- * under the lock: the signals of the tick posted, the load average, and the
- * boot processor's services. `NESTED` counts the ticks whose locked part
- * ran inside a hold the interrupted code already had, with that part's
- * time, which the rows count too: such time is the interrupted hold's, not
- * vector 32's. */
+ * and on the one that makes the clock's pass for the other two, and so do
+ * the boot processor's services with locks of their own, `HDA` to
+ * `SPEAKER`; `LOCK` is the tick's try for the big lock, or its wait, and
+ * the rows after it run under the lock: the signals of the tick posted, the
+ * load average, and the boot processor's other services. `NESTED` counts
+ * the ticks whose locked part ran inside a hold the interrupted code
+ * already had, with that part's time, which the rows count too: such time
+ * is the interrupted hold's, not vector 32's. */
 enum bkl_tick_row {
     BKL_TICK_CLOCK,
     BKL_TICK_ACCOUNT,
     BKL_TICK_WAKE,
+    BKL_TICK_HDA,
+    BKL_TICK_BLOCK_LAG,
+    BKL_TICK_BLOCK_REQUEST,
+    BKL_TICK_SPEAKER,
     BKL_TICK_LOCK,
     BKL_TICK_SIGNALS,
     BKL_TICK_LOAD,
-    BKL_TICK_HDA,
     BKL_TICK_NETDEV,
     BKL_TICK_NETCONSOLE,
     BKL_TICK_ATH9K,
@@ -308,11 +312,8 @@ enum bkl_tick_row {
     BKL_TICK_IP_LOOP,
     BKL_TICK_USB,
     BKL_TICK_INPUT,
-    BKL_TICK_BLOCK_LAG,
-    BKL_TICK_BLOCK_REQUEST,
     BKL_TICK_PLATFORM,
     BKL_TICK_VKMS,
-    BKL_TICK_SPEAKER,
     BKL_TICK_CONSOLE,
     BKL_TICK_KLOG,
     BKL_TICK_NESTED,

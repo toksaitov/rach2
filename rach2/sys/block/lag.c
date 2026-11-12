@@ -247,8 +247,8 @@ int block_lag_answer(uint32_t generation, int duplicate)
 /**
  * Deliver ready answers at their due tick, and error duplicates two ticks
  * later. The lag clock advances by the ticks counted since the last call,
- * since the boot processor's tick does not call this on every tick
- * (`timer_lock_take`, kernel.c). Explicitly held fixtures use
+ * since a late interrupt of the boot processor's tick counts several
+ * (`timer_own_work`, kernel.c). Explicitly held fixtures use
  * `block_lag_answer` instead; timer ticks then change neither the lag clock
  * nor its queue.
  */

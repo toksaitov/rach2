@@ -412,6 +412,28 @@ static int timer_lock_take(int boot)
 }
 
 /**
+ * The boot processor's periodic work that takes only locks of its own, from
+ * the cycle count `t`, each charged to its row: the HDA tick, which asks
+ * khda for a stream whose interrupts do not arrive under the stream lock,
+ * the lag device's answers under its lock, the block requests' deadlines
+ * under the pool's lock, and the end of a speaker's tone under the
+ * speaker's lock, as Linux runs a driver's timer under the driver's own
+ * lock (`timer_list` callbacks, kernel/time/timer.c). No lock is held and
+ * interrupts are off. Returns the cycle count at its end.
+ */
+static uint64_t timer_own_work(uint64_t t)
+{
+    hda_tick();
+    t = bkl_tick_charge(BKL_TICK_HDA, t);
+    block_lag_tick();
+    t = bkl_tick_charge(BKL_TICK_BLOCK_LAG, t);
+    block_request_tick();
+    t = bkl_tick_charge(BKL_TICK_BLOCK_REQUEST, t);
+    speaker_tick();
+    return bkl_tick_charge(BKL_TICK_SPEAKER, t);
+}
+
+/**
  * The boot processor's work under the big lock, from the cycle count `t`:
  * the load average and the idle count of the loopback ring, then the
  * periodic services, each charged to its row. The caller holds the lock.
@@ -424,8 +446,6 @@ static void timer_locked_work(uint64_t t)
     }
     t = bkl_tick_charge(BKL_TICK_LOAD, t);
 
-    hda_tick();
-    t = bkl_tick_charge(BKL_TICK_HDA, t);
     netdev_poll();
     t = bkl_tick_charge(BKL_TICK_NETDEV, t);
     netconsole_tick();
@@ -446,16 +466,10 @@ static void timer_locked_work(uint64_t t)
     t = bkl_tick_charge(BKL_TICK_USB, t);
     input_tick();
     t = bkl_tick_charge(BKL_TICK_INPUT, t);
-    block_lag_tick();
-    t = bkl_tick_charge(BKL_TICK_BLOCK_LAG, t);
-    block_request_tick();
-    t = bkl_tick_charge(BKL_TICK_BLOCK_REQUEST, t);
     platform_tick();
     t = bkl_tick_charge(BKL_TICK_PLATFORM, t);
     vkms_tick();
     t = bkl_tick_charge(BKL_TICK_VKMS, t);
-    speaker_tick();
-    t = bkl_tick_charge(BKL_TICK_SPEAKER, t);
     tty_console_poll();
     t = bkl_tick_charge(BKL_TICK_CONSOLE, t);
     klog_flush();
@@ -477,7 +491,10 @@ static void timer_locked_work(uint64_t t)
  * makes it while another is in it. Every tick then accounts itself as idle
  * or busy (`sched_account_tick`), and the tick that made the clock's pass
  * makes the timer pass, which wakes the sleepers and timerfds whose time
- * has come (`timer_wake_pass`). A signal the accounting or the timer pass
+ * has come (`timer_wake_pass`). On the boot processor the periodic work
+ * that has locks of its own follows (`timer_own_work`): the HDA tick, the
+ * lag device, the block requests' deadlines and the end of a speaker's
+ * tone. A signal the accounting or the timer pass
  * finds due, SIGALRM, SIGVTALRM, SIGPROF or a POSIX timer's, is left for a
  * holder of the big lock to post (`proc_tick_signal`, `ptimer_fire_later`,
  * timerfd.c), since signals are posted under it. The real-time timer is set
@@ -488,14 +505,13 @@ static void timer_locked_work(uint64_t t)
  * The second part takes the big lock, by a try, for the work that still
  * needs it (`timer_lock_take`): the signals of the tick are posted, and on
  * the boot processor the load average is folded and the kernel's periodic
- * work runs: the HDA tick for a controller whose interrupts do not arrive,
- * the network device that is polled, the TCP timers, IPv6 neighbour
- * discovery's and MLD's timers, the loopback delivery, the USB
- * controller's event ring, the keyboards' repeat, after the USB reports
- * that may press or release a key, the block layer's lagged requests and
- * deadlines, the platform's devices, vkms's vblank timer, the end of a
- * speaker's tone and the console's serial port; last it writes out the log
- * records kept for a holder of the big lock (`klog_flush`). A tick that
+ * work that still needs the lock runs: the network device that is
+ * polled, the TCP timers, IPv6 neighbour discovery's and MLD's timers, the
+ * loopback delivery, the USB controller's event ring, the keyboards'
+ * repeat, after the USB reports that may press or release a key, the
+ * platform's devices, vkms's vblank timer and the console's serial port;
+ * last it writes out the log records kept for a holder of the big lock
+ * (`klog_flush`). A tick that
  * does not get the lock leaves this part to a later one, and a thread's own
  * return to user mode posts its signals of the tick (`isr_leave`).
  *
@@ -553,6 +569,9 @@ static void timer_handler(isr_params_t *params)
     if (passed) {
         timer_wake_pass();
         t = bkl_tick_charge(BKL_TICK_WAKE, t);
+    }
+    if (boot) {
+        t = timer_own_work(t);
     }
 
     if (timer_lock_take(boot)) {
