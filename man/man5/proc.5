@@ -1784,9 +1784,11 @@ Fields 14 through 17 are the user and system time of all the process's
 threads and its reaped children's, in 1/100 second ticks, as
 .Xr times 2
 reports them.
+Fields 10 through 13 are the minor and major page faults counted the
+same way, the process's then its reaped children's.
 In
 .Pa /proc/PID/task/TID/stat ,
-fields 14 and 15 are the thread's own time, as on Linux.
+fields 10, 12, 14 and 15 are the thread's own faults and time, as on Linux.
 Field 19 is the nice value
 .Xr setpriority 2
 keeps, and field 18 the priority Linux reports for it, 20 more than the

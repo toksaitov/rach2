@@ -481,6 +481,14 @@ void proc_cpu_time(const process_t *p, uint64_t *user, uint64_t *sys)
     *sys = process.stime + thread.stime;
 }
 
+/** The whole process's page faults, its two threads' together. */
+void proc_faults(const process_t *p, unsigned long *minor, unsigned long *major)
+{
+    (void)p;
+    *minor = process.min_flt + thread.min_flt;
+    *major = process.maj_flt + thread.maj_flt;
+}
+
 /** The host's allocation, counted in `allocations`, or NULL while
  *  `refuse` is set. */
 void *kmalloc(size_t size)
@@ -1263,6 +1271,20 @@ static int stat_times(const char *line, unsigned user, unsigned sys)
            u == user && s == sys;
 }
 
+/** Whether the stat line `line` has the page faults `minor`, `cminor`,
+ *  `major` and `cmajor`, fields 10 to 13. */
+static int stat_faults(const char *line, unsigned minor, unsigned cminor, unsigned major,
+                       unsigned cmajor)
+{
+    const char *close = __builtin_strrchr(line, ')');
+    unsigned f[4];
+
+    return close &&
+           sscanf(close + 1, " %*s %*s %*s %*s %*s %*s %*s %u %u %u %u", &f[0], &f[1], &f[2],
+                  &f[3]) == 4 &&
+           f[0] == minor && f[1] == cminor && f[2] == major && f[3] == cmajor;
+}
+
 /* The processors' idle ticks summed, which the uptime row sets. */
 static uint64_t idle_sum;
 
@@ -1376,8 +1398,9 @@ static void netdev_rows(void)
     iface = 0;
 }
 
-/** A process's stat has the time of all its threads, and a thread's under
- * the process's task directory has its own, each in USER_HZ's clock_t. */
+/** A process's stat has the time and page faults of all its threads, and a
+ * thread's under the process's task directory has its own, the times in
+ * USER_HZ's clock_t; both have the process's reaped children's faults. */
 static void thread_times(void)
 {
     struct procfs_text text;
@@ -1401,7 +1424,23 @@ static void thread_times(void)
     check(procfs_gen_stat(&text, 7, 0) > 0 && stat_times(text.buf, 5, 6),
           "the leader's stat under task has the leader's own time");
     kfree(text.buf);
+    process.min_flt = 7;
+    process.maj_flt = 1;
+    thread.min_flt = 70;
+    thread.maj_flt = 2;
+    group.cmin_flt = 500;
+    group.cmaj_flt = 4;
+    procfs_text_init(&text);
+    check(procfs_gen_stat(&text, 7, 1) > 0 && stat_faults(text.buf, 77, 500, 3, 4),
+          "a process's stat has every thread's faults and its children's");
+    kfree(text.buf);
+    procfs_text_init(&text);
+    check(procfs_gen_stat(&text, 9, 0) > 0 && stat_faults(text.buf, 70, 500, 2, 4),
+          "a thread's stat has its own faults and the process's children's");
+    kfree(text.buf);
     process.utime = process.stime = thread.utime = thread.stime = 0;
+    process.min_flt = process.maj_flt = thread.min_flt = thread.maj_flt = 0;
+    group.cmin_flt = group.cmaj_flt = 0;
 }
 
 /** Whether the syscall file of `pid`, or its wchan file when `wchan`,
