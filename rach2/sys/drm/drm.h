@@ -1769,7 +1769,9 @@ void drm_dev_work_later_ms(struct drm_device *dev, struct drm_work *work, uint32
 /** Take `work` off the worker's queue if it waits; for a driver going
  * away, or an owner that does the work's job itself. 1 when this call took
  * it off, 0 when it was not queued, as when the worker has taken it to run.
- * Any context. */
+ * A caller under the big lock that sees 0 for a work the worker took sees
+ * it after its `fn` has begun, and does not wait for it to end, so an `fn`
+ * that sleeps holds a reference to its owner. Any context. */
 int drm_dev_work_cancel(struct drm_work *work);
 
 /* ---- Vblanks, their events and CRCs, in drm_vblank.c ---- */

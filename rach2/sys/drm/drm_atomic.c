@@ -1701,7 +1701,12 @@ static void worker_bkl_exit(int needed)
 /** Run the queued drivers' works whose time has come, each once, under the
  * big lock, which a driver's work, such as i915's hotplug probe, still
  * needs; the number run. A work that queues itself again waits for the
- * next round. */
+ * next round. The lock is taken before a work leaves the queue, so that an
+ * owner's free, which cancels its work under the lock, either takes the
+ * work off the queue or runs once `fn` has begun, never between them.
+ * drm_dev_work_cancel does not wait for a running `fn`, as Linux's
+ * cancel_work_sync does (kernel/workqueue.c:4423-4424), so an `fn` that
+ * sleeps holds a reference to its owner across the sleep. */
 static int dev_work_run(void)
 {
     struct drm_work *work;
@@ -1716,17 +1721,18 @@ static int dev_work_run(void)
     }
     spin_unlock_irqrestore(&work_lock, flags);
     while (n < todo) {
+        worker_bkl_enter(1);
         flags = spin_lock_irqsave(&work_lock);
         for (work = dev_works; work && !dev_work_due(work, now); work = work->next) {
         }
         if (!work) {
             spin_unlock_irqrestore(&work_lock, flags);
+            worker_bkl_exit(1);
             break;
         }
         dev_work_unlink(work);
         spin_unlock_irqrestore(&work_lock, flags);
         dev = work->dev;
-        worker_bkl_enter(1);
         if (!dev->unplugged) {
             work->fn(work);
         }
