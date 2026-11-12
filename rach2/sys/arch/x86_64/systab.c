@@ -124,6 +124,13 @@ static long sys_rach2_ping(isr_params_t *params)
     return sys_socketcall(params);
 }
 
+/** Mark the native accept wrapper unlocked and register the call gate. */
+static void register_dispatch(void (*dispatch)(isr_params_t *))
+{
+    syscall_unlock(SYSCALL_ABI_NATIVE, sys_accept_noflags);
+    register_isr_handler(SYSCALL_VECTOR, dispatch, "syscall");
+}
+
 /** `syscall_entry` gives its frame the vector SYSCALL_VECTOR, though no
  * gate has it, and calls `_isr_router`, which runs the handler registered
  * on that vector here, `dispatch`. */
@@ -439,5 +446,5 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_EPOLL_PWAIT2] = sys_epoll_pwait2;
     table[SYS_RACH2_PING] = sys_rach2_ping;
 
-    register_isr_handler(SYSCALL_VECTOR, dispatch, "syscall");
+    register_dispatch(dispatch);
 }

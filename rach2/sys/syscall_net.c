@@ -4500,8 +4500,8 @@ static int cmsg_compat_refused(int call, const unsigned long *args)
 }
 
 /**
- * Dispatch one Unix socket operation without the big lock. The entry and
- * the other socket families still use it; a sleep in unix.c keeps depth 0,
+ * Dispatch one Unix socket operation without the big lock. An entry held
+ * for tracing or other work gives it back; a sleep in unix.c keeps depth 0,
  * as its state, queue, bind and receive locks guard the whole operation.
  * The descriptor lookup holds the socket's description across this call.
  */
@@ -4519,41 +4519,9 @@ static int32_t unix_dispatch(int call, fd_entry_t *e, const unsigned long *args)
     return rc;
 }
 
-/**
- * Run socket sub-call `call` with its arguments `args`, for socketcall and
- * for the direct socket calls. A call on an AF_UNIX socket, or one that
- * makes one, goes to ipc/unix.c; the rest to the calls above. Returns the
- * sub-call's result, -EOPNOTSUPP for a socketpair of another family, or
- * -EINVAL for an unknown sub-call or for a native message call whose flags
- * have MSG_CMSG_COMPAT (`cmsg_compat_refused`).
- */
-int32_t socket_call(int call, unsigned long *args)
+/** Run the other socket families under the big lock (`socket_call`). */
+static int32_t socket_legacy(int call, const unsigned long *args)
 {
-    fd_entry_t *e;
-
-    if (cmsg_compat_refused(call, args)) {
-        return -EINVAL;
-    }
-    if ((call == SC_SOCKET || call == SC_SOCKETPAIR) && (uint32_t)args[0] == AF_UNIX) {
-        return unix_dispatch(call, NULL, args);
-    }
-    if (call == SC_SOCKETPAIR) {
-        return -EOPNOTSUPP;
-    }
-    if (call == SC_SENDMMSG) {
-        return mmsg_send(args[0], args[1], (uint32_t)args[2], args[3]);
-    }
-    if (call == SC_RECVMMSG) {
-        return recvmmsg_call(args, 0);
-    }
-    e = (call != SC_SOCKET && call != SC_PING && call != SC_PING_DATA && call != SC_PING6 &&
-         current_proc)
-            ? fd_get(current_proc->fds, (int)args[0])
-            : (fd_entry_t *)0;
-    if (e && e->type == FD_TYPE_UNIX) {
-        return unix_dispatch(call, e, args);
-    }
-
     switch (call) {
     case SC_SOCKET:
         return socket_with_flags((int)args[0], (int)args[1], (int)args[2]);
@@ -4611,6 +4579,57 @@ int32_t socket_call(int call, unsigned long *args)
         return do_sendmsg((int)args[0], args[1], (int)args[2]);
     default:
         return -EINVAL;
+    }
+}
+
+/**
+ * Run socket sub-call `call` with its arguments `args`, for socketcall and
+ * for the direct socket calls. A call on an AF_UNIX socket, or one that
+ * makes one, goes to ipc/unix.c; the rest to the calls above. Returns the
+ * sub-call's result, -EOPNOTSUPP for a socketpair of another family, or
+ * -EINVAL for an unknown sub-call or for a native message call whose flags
+ * have MSG_CMSG_COMPAT (`cmsg_compat_refused`). The entry runs without the
+ * big lock; other families take it around their body (`socket_legacy`).
+ */
+int32_t socket_call(int call, unsigned long *args)
+{
+    fd_entry_t *e;
+
+    if (cmsg_compat_refused(call, args)) {
+        return -EINVAL;
+    }
+    if ((call == SC_SOCKET || call == SC_SOCKETPAIR) && (uint32_t)args[0] == AF_UNIX) {
+        return unix_dispatch(call, NULL, args);
+    }
+    if (call == SC_SOCKETPAIR) {
+        return -EOPNOTSUPP;
+    }
+    if (call == SC_SENDMMSG) {
+        return mmsg_send(args[0], args[1], (uint32_t)args[2], args[3]);
+    }
+    if (call == SC_RECVMMSG) {
+        return recvmmsg_call(args, 0);
+    }
+    e = (call != SC_SOCKET && call != SC_PING && call != SC_PING_DATA && call != SC_PING6 &&
+         current_proc)
+            ? fd_get(current_proc->fds, (int)args[0])
+            : (fd_entry_t *)0;
+    if (e && e->type == FD_TYPE_UNIX) {
+        return unix_dispatch(call, e, args);
+    }
+
+    {
+        int big = !bkl_held();
+        int32_t rc;
+
+        if (big) {
+            bkl_enter();
+        }
+        rc = socket_legacy(call, args);
+        if (big) {
+            bkl_exit();
+        }
+        return rc;
     }
 }
 
