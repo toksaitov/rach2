@@ -14,6 +14,7 @@ The KVM suite runs Rach2's KVM the way a person uses it: Debian's QEMU on the x8
 * `boot-debian-tcg`: `kvm-boot.sh -a tcg` boots the Debian guest in Rach2's QEMU under TCG to its token.
 * `unit-tests` and `selftests`: `corpus.sh` runs the corpus under Rach2's KVM, on the `max-svm` profile, on Linux and on macOS.
 * `unit-tests-nested` and `selftests-nested`: the same on the `host-svm` profile, on Linux alone.
+* `unit-subset-nested`: `corpus.sh unit unit-subset.list` on the `host-svm` profile, on Linux alone: the 58 tests of [`unit-subset.list`](unit-subset.list), every test `unit-tests.list` runs but `debug` and `xapic`, which Linux 6.12 as the host of the same machine does not finish. It runs in some 15 minutes, and `linuxhost.sh` runs the same list under Linux's KVM in about 30, so that the two hosts' results sit side by side.
 
 The accelerator outside is the run's, as for every case: on the testing PC KVM, so that Rach2 runs its guests under nested KVM, and on the Mac TCG, which emulates SVM; `RACH2_QEMU_ACCEL=tcg` runs the `max-svm` cases under TCG on the testing PC too. `host-svm` starts only under KVM. Under TCG the outer machine has one processor, whatever the case asks ([etude](../../tools/etude/Readme.md)), for two faults of QEMU's that Results names.
 
@@ -56,9 +57,18 @@ With `-g BDF`, on the Lenovo, which needs `-k` or `-w`, since the GPU's MSIs rea
 
 [`exits.sh`](exits.sh), which no case runs, counts the exits of every guest by the processor's exit code around one command, as root, on Rach2 from `/sys/kernel/debug/kvm/exit_stats` with the cycles of each code's entry, run, exit, wait for the big lock and handling and its fast exits, and on Linux from a histogram trigger on the `kvm:kvm_exit` trace event: `sh exits.sh sh kvm-boot.sh -k guests/debian/vmlinuz -i guests/debian/initrd` prints a `kvm-exits: code` line for each code after the boot's output.
 
-[`guests/mklinuxhost.sh`](guests/mklinuxhost.sh) `OUTDIR` makes the Linux host that counts the same boots on Linux under the same outer QEMU: Debian's kernel of `guests/debian.txt` and an initramfs of Debian's static BusyBox, its AHCI and KVM modules and [`guests/linux-host-init`](guests/linux-host-init) as `/init`. Booted with `-kernel OUTDIR/vmlinuz -initrd OUTDIR/initrd -append console=ttyS0`, the GNU root's disk first and `kvm.ext2` second, both on the q35 machine's AHCI, it runs the GNU root in a chroot with Linux's KVM, boots the Debian guest twice and the i686 Rach2 guest once under `exits.sh`, prints the `kvm-exits:` lines on the console and powers off.
+[`guests/mklinuxhost.sh`](guests/mklinuxhost.sh) `OUTDIR` makes the Linux host that runs the same work on Linux under the same outer QEMU: Debian's kernel of `guests/debian.txt` and an initramfs of Debian's static BusyBox, its AHCI and KVM modules and [`guests/linux-host-init`](guests/linux-host-init) as `/init`. Booted with `-kernel OUTDIR/vmlinuz -initrd OUTDIR/initrd -append console=ttyS0` and the GNU root's disk and `kvm.ext2` on AHCI, it takes the disk with a partition table for the root, whichever port it is on, runs the GNU root in a chroot with Linux's KVM, boots the Debian guest twice and the i686 Rach2 guest once under `exits.sh`, prints the `kvm-exits:` lines on the console and powers off. With `linuxhost.corpus=KIND:LIST` on its command line it runs `corpus.sh KIND LIST` instead.
 
-[`kvm-boot.sh`](kvm-boot.sh) boots a kernel and initramfs, or a raw disk under SeaBIOS, with `-accel kvm,kernel-irqchip=on`, or `-accel tcg`, and the console on a serial port it reads once a second. It passes on the token, `KVMGUEST OK` by default, and fails when QEMU ends without it or the console stays silent for 600 s, a bound on silence that `-w` changes, not on the boot's length. `-I split` keeps the PIC, IOAPIC and PIT in QEMU; `-I off` also keeps the local APIC there. Its header lists the options. [`corpus.sh`](corpus.sh) runs each test that a list runs, kvm-unit-tests' through their own `run_tests.sh` with no timeout, and judges each result against the list; its last line is `kvm-corpus: result: pass` or `fail` with the names of the tests that gave another result.
+[`linuxhost.sh`](linuxhost.sh) `[-d DATA] [-o LOG] OUTDIR KIND LIST` boots that host with the machine of the `-nested` cases, the `host-svm` profile under the testing PC's KVM with two processors and 6 GiB, and the tree's `gnu-test.disk` and `kvm.ext2` under QEMU's snapshot, so that Linux runs a corpus as Rach2 runs it:
+
+    make ARCH=x86_64 build/x86_64/images/gnu-test.disk build/tests/cases/kvm/kvm.ext2 build/tools/wifi/mkcpio
+    sh tests/kvm/guests/mklinuxhost.sh build/kvm/linuxhost
+    sh tests/kvm/linuxhost.sh -o build/tmp/linux-unit.log build/kvm/linuxhost unit unit-subset.list
+    RACH2_QEMU_ACCEL=kvm RACH2_CASES=machine.kvm.unit-subset-nested ARCH=x86_64 tests/run kvm
+
+The console, with each test's line, goes to LOG, and the last line printed is `corpus.sh`'s result line.
+
+[`kvm-boot.sh`](kvm-boot.sh) boots a kernel and initramfs, or a raw disk under SeaBIOS, with `-accel kvm,kernel-irqchip=on`, or `-accel tcg`, and the console on a serial port it reads once a second. It passes on the token, `KVMGUEST OK` by default, and fails when QEMU ends without it or the console stays silent for 600 s, a bound on silence that `-w` changes, not on the boot's length. `-I split` keeps the PIC, IOAPIC and PIT in QEMU; `-I off` also keeps the local APIC there. Its header lists the options. [`corpus.sh`](corpus.sh) runs each test that a list runs, kvm-unit-tests' each through its own run of `run_tests.sh` with no timeout, and judges each result against the list; each test's line ends with the seconds it took, for the record, and its last line is `kvm-corpus: result: pass` or `fail` with the names of the tests that gave another result.
 
 ## Results
 
@@ -96,6 +106,7 @@ The PMU rows follow the host's counters. With them, the selftest `pmu_event_filt
 | List | Pass | Skip | Fail | Excluded | By the processor |
 | --- | --- | --- | --- | --- | --- |
 | `unit-tests.list` | 48 | 8 | 1 | 27 | 3 |
+| `unit-subset.list` | 46 | 8 | 1 | 0 | 3 |
 | `selftests.list` | 46 | 14 | 0 | 19 | 6 |
 
 The Debian guest, which [`guests/mkdebian.sh`](guests/mkdebian.sh) makes, is trixie's cloud kernel, 6.12.107, and an initramfs of Debian's static BusyBox 1.37.0 whose [`/init`](guests/debian-init) prints the kernel's version, the processor count, the first processor's flags and the clock source its kernel chose, `kvm-clock` under KVM, then `KVMGUEST OK`, and powers off. Both packages are pinned in [`guests/debian.txt`](guests/debian.txt) by the SHA-256 that the Debian layer's signed snapshot index gives. The guest boots in seconds even under TCG inside Rach2 and needs no disk, so a failure to reach its token is the hypervisor's. Make writes it to `build/kvm/guests/debian`, and puts it with the runners and the lists into `build/tests/cases/kvm/kvm.ext2`, which every case mounts read-only and copies to `/tmp/kvm`.
