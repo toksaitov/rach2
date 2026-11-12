@@ -17,7 +17,7 @@ access_tracking_perf_test skip skip Linux: CONFIG_IDLE_PAGE_TRACKING is not enab
 coalesced_io_test pass pass
 demand_paging_test,-b,64M pass pass
 dirty_log_perf_test,-b,64M pass pass
-dirty_log_test,-i,4 pass pass passes on both; #4672: Rach2 skips its dirty-ring mode, having no KVM_CAP_DIRTY_LOG_RING (rach2/sys/kvm/kvm.c, kvm_check_extension), which Linux runs
+dirty_log_test,-i,4 pass pass bitmap, clear-log and dirty-ring modes; the ring stops on full and on a kick, and the host collects and resets it
 guest_print_test pass pass
 hardware_disable_test pass pass
 kvm_binary_stats_test pass pass

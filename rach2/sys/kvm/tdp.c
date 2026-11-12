@@ -556,8 +556,8 @@ static int large_ok(struct mm *mm, struct tdp *t, uint64_t gfn, int write,
     uint32_t i, flags;
     int l, w = !(s->flags & KVM_MEM_READONLY);
 
-    if (s->dirty || block < s->base_gfn || block + TDP_ENTRIES > s->base_gfn + s->npages ||
-        (hva & (TDP_LARGE - 1u)) != 0) {
+    if ((s->flags & KVM_MEM_LOG_DIRTY_PAGES) || block < s->base_gfn ||
+        block + TDP_ENTRIES > s->base_gfn + s->npages || (hva & (TDP_LARGE - 1u)) != 0) {
         return 0;
     }
     for (l = TDP_LEVELS; l > 2; l--) {
@@ -606,11 +606,13 @@ static int map_small(struct kvm_vm *vm, uint64_t gfn, int write, const struct kv
     uint64_t phys = PTE_ADDR(pte), i;
     int writable = (pte & PTE_W) && !(s->flags & KVM_MEM_READONLY) && (write || !host_zero(pte));
 
-    if (s->dirty) {
+    if (s->flags & KVM_MEM_LOG_DIRTY_PAGES) {
         i = gfn - s->base_gfn;
         if (write) {
-            s->dirty[i / 64u] |= 1ull << (i % 64u);
-        } else if (!((s->dirty[i / 64u] >> (i % 64u)) & 1u)) {
+            if (kvm_dirty_mark_locked(vm, s, gfn) != 0) {
+                return 0; /* leave the fault pending for the full-ring exit */
+            }
+        } else if (vm->dirty_ring_size || !((s->dirty[i / 64u] >> (i % 64u)) & 1u)) {
             writable = 0;
         }
     }
@@ -720,8 +722,8 @@ int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint
 {
     struct mm *mm = kvm_vm_mm(vm);
     struct kvm_slot_view s;
+    struct kvm_dirty_gfn *entry;
     uint32_t flags;
-    uint64_t i;
     pte_t pte;
     int rc = 1;
 
@@ -737,10 +739,14 @@ int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint
     if (!host_ok(pte, 1) || !(pte & PTE_DIRTY) || paging_frame_is_device(PTE_ADDR(pte))) {
         goto out;
     }
+    if (kvm_dirty_reserve_locked(vm, &s, gpa >> 12, &entry) != 0) {
+        goto out;
+    }
     k_memcpy((uint8_t *)phys_to_virt(PTE_ADDR(pte)) + (gpa & 0xFFFu), buf, n);
-    if (s.dirty) {
-        i = (gpa >> 12) - s.base_gfn;
-        s.dirty[i / 64u] |= 1ull << (i % 64u);
+    if (entry) {
+        kvm_dirty_publish(entry);
+    } else {
+        (void)kvm_dirty_mark_locked(vm, &s, gpa >> 12);
     }
     rc = 0;
 out:

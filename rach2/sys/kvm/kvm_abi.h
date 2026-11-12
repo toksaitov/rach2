@@ -38,6 +38,7 @@
 /* The ioctls of a VM. */
 #define KVM_CREATE_VCPU               KVM_IO(0x41u)
 #define KVM_GET_DIRTY_LOG             KVM_IOW(0x42u, 16u)
+#define KVM_RESET_DIRTY_RINGS         KVM_IO(0xC7u)
 #define KVM_SET_NR_MMU_PAGES          KVM_IO(0x44u)
 #define KVM_GET_NR_MMU_PAGES          KVM_IO(0x45u)
 #define KVM_SET_USER_MEMORY_REGION    KVM_IOW(0x46u, 32u)
@@ -224,6 +225,8 @@
 #define KVM_CAP_VM_TSC_CONTROL              214
 #define KVM_CAP_VM_DISABLE_NX_HUGE_PAGES    220
 #define KVM_CAP_PRE_FAULT_MEMORY            236
+#define KVM_CAP_DIRTY_LOG_RING              192
+#define KVM_CAP_DIRTY_LOG_RING_ACQ_REL      223
 #define KVM_CAP_X86_APIC_BUS_CYCLES_NS      237
 #define KVM_CAP_PMU_EVENT_FILTER            173
 #define KVM_CAP_PMU_CAPABILITY              212
@@ -259,6 +262,7 @@ struct kvm_pmu_event_filter {
 #define KVM_EXIT_HYPERV          27
 #define KVM_EXIT_X86_RDMSR       29
 #define KVM_EXIT_X86_WRMSR       30
+#define KVM_EXIT_DIRTY_RING_FULL 31
 
 /* The types of KVM_EXIT_SYSTEM_EVENT. */
 #define KVM_SYSTEM_EVENT_SHUTDOWN 1
@@ -282,6 +286,7 @@ struct kvm_pmu_event_filter {
  * coalesced MMIO and port writes, which every vCPU of the VM maps. */
 #define KVM_PIO_PAGE_OFFSET            1
 #define KVM_COALESCED_MMIO_PAGE_OFFSET 2
+#define KVM_DIRTY_LOG_PAGE_OFFSET      64
 
 /* struct kvm_regs. */
 struct kvm_regs {
@@ -617,6 +622,18 @@ struct kvm_clear_dirty_log {
     uint64_t first_page;
     uint64_t dirty_bitmap;
 };
+
+/* A dirty-ring entry: the slot and its page offset precede publication
+ * of DIRTY; the caller publishes RESET after collecting them. */
+struct kvm_dirty_gfn {
+    uint32_t flags;
+    uint32_t slot;
+    uint64_t offset;
+};
+
+#define KVM_DIRTY_GFN_F_DIRTY 1u
+#define KVM_DIRTY_GFN_F_RESET 2u
+#define KVM_DIRTY_GFN_F_MASK  3u
 
 /* The options of KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2. */
 #define KVM_DIRTY_LOG_MANUAL_PROTECT_ENABLE 1u

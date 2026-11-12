@@ -246,6 +246,13 @@ void kvm_count(enum kvm_resource resource, int change)
 static struct mm the_mm;
 static struct kvm_vm vm;
 static struct kvm_vcpu vcpu[2];
+static struct kvm_vcpu *running_vcpu;
+
+/** The row's running vCPU, or NULL when it models a VM ioctl's thread. */
+struct kvm_vcpu *kvm_running_vcpu(struct kvm_vm *v)
+{
+    return running_vcpu && running_vcpu->vm == v ? running_vcpu : NULL;
+}
 
 /* The waits of tdp.c, counted. A wait past 1000 turns would never end in
  * a test of one thread: it takes every vCPU out of the guest and ends any
@@ -1059,7 +1066,7 @@ static uint64_t copy_gfn;
  * copied through, then the readers' lock given back. */
 static void copy_mark(void)
 {
-    kvm_dirty_mark(&vm, &copy_view, copy_gfn);
+    kvm_dirty_mark(&vcpu[0], &copy_view, copy_gfn);
     kvm_slots_read_unlock(&vm);
 }
 
@@ -1165,7 +1172,7 @@ static void dirty_rows(void)
     CHECK(clear_dirty(6, 0, 64, bits) == -ENOENT, "CLEAR of no slot");
     CHECK(kvm_tdp_fault(&vm, gfn + 64, 1) == 0, "a write after CLEAR");
     CHECK(kvm_slot_find(&vm, gfn + 65, &copy_view), "a kernel's write finds its slot");
-    kvm_dirty_mark(&vm, &copy_view, gfn + 65);
+    kvm_dirty_mark(&vcpu[0], &copy_view, gfn + 65);
     CHECK(get_dirty(5, bits) == 0 && bits[1] == 3, "is logged, and so is a kernel's write");
     overtaken_rows(gfn, a);
     vm.dirty_manual = 0;
@@ -1469,6 +1476,145 @@ static void release_rows(void)
     CHECK(set(7, 0, 0, 0, 0) == 0, "the slot is deleted after it");
 }
 
+/** Check counter wrap, an unpublished copy, full-ring refusal and a
+ * deleted slot, with slot 8 at `gfn` backed by `a` and empty rings. */
+static void dirty_ring_limit_rows(struct kvm_dirty_gfn rings[2][256], const struct kvm_slot_view *s,
+                                  uint64_t gfn, uintptr_t a)
+{
+    struct kvm_dirty_gfn *entry;
+    uint8_t byte = 0x5A;
+    uint32_t i;
+    int level;
+
+    vcpu[0].dirty_ring_put = vcpu[0].dirty_ring_reset = 0xFFFFFFFEu;
+    running_vcpu = &vcpu[0];
+    for (i = 0; i < 3; i++) {
+        kvm_dirty_mark(running_vcpu, s, gfn + i);
+        rings[0][(254u + i) & 255u].flags = KVM_DIRTY_GFN_F_RESET;
+    }
+    CHECK(kvm_dirty_ioctl(&vm, KVM_RESET_DIRTY_RINGS, 0) == 3 && vcpu[0].dirty_ring_reset == 1,
+          "both the ring and its free-running counters wrap");
+    running_vcpu = NULL;
+    CHECK(kvm_dirty_reserve(&vcpu[0], s, gfn, &entry) == 0 && entry == &rings[0][1] &&
+              entry->flags == 0 && kvm_dirty_ioctl(&vm, KVM_RESET_DIRTY_RINGS, 0) == 0,
+          "a state ioctl reserves an entry, and reset waits for its copy to finish");
+    kvm_dirty_publish(entry);
+    entry->flags = KVM_DIRTY_GFN_F_RESET;
+    CHECK(kvm_dirty_ioctl(&vm, KVM_RESET_DIRTY_RINGS, 0) == 1,
+          "the completed copy's published entry resets");
+    for (i = 0; i < 256; i++) {
+        CHECK(kvm_dirty_reserve(&vcpu[0], s, gfn, &entry) == 0,
+              "a state ioctl can use the ring's reserve");
+        kvm_dirty_publish(entry);
+    }
+    CHECK(kvm_dirty_reserve(&vcpu[0], s, gfn, &entry) == -ENOSPC && !entry,
+          "a full ring refuses another copy before it overwrites an entry");
+    running_vcpu = &vcpu[0];
+    byte = 0x5A;
+    CHECK(kvm_tdp_write_nofault(&vm, gfn * 4096u, &byte, 1, vm.mmu_seq) == 1 &&
+              *(uint8_t *)phys_to_virt(PTE_ADDR(*host_entry(a))) == 0xA5,
+          "a no-fault write cannot change memory when its ring is full");
+    CHECK(kvm_tdp_fault(&vm, gfn + 5, 1) == 0 && !leaf_of(gfn + 5, &level),
+          "a full ring leaves a guest's write fault pending");
+    for (i = 0; i < 256; i++) {
+        rings[0][i].flags = KVM_DIRTY_GFN_F_RESET;
+    }
+    CHECK(kvm_dirty_ioctl(&vm, KVM_RESET_DIRTY_RINGS, 0) == 256,
+          "every entry remains available for collection after the refusals");
+    i = vcpu[0].dirty_ring_put & 255u;
+    kvm_dirty_mark(running_vcpu, s, gfn);
+    rings[0][i].flags = KVM_DIRTY_GFN_F_RESET;
+    CHECK(set(8, 0, 0, 0, 0) == 0 && kvm_dirty_ioctl(&vm, KVM_RESET_DIRTY_RINGS, 0) == 1,
+          "an entry of a deleted slot can be reset");
+}
+
+/**
+ * The ring logs fault and software writes without a bitmap; RESET takes
+ * only the collected prefix, protects its pages and flushes, tolerates
+ * stale or modified entries, and wraps its counters. Two vCPUs keep
+ * separate rings. The arrays model the pages mapped to the caller.
+ */
+static void dirty_ring_rows(void)
+{
+    static struct kvm_dirty_gfn rings[2][256];
+    struct kvm_enable_cap cap;
+    struct kvm_slot_view s;
+    uint64_t bits[1];
+    uint64_t gfn = 0x900;
+    uintptr_t a = HVA + 6 * MIB2;
+    uint8_t byte = 0xA5;
+    int level;
+    uint32_t i;
+
+    k_memset(&cap, 0, sizeof(cap));
+    cap.cap = KVM_CAP_DIRTY_LOG_RING;
+    cap.args[0] = 4096;
+    CHECK(kvm_dirty_enable_ring(&vm, &cap) == -EINVAL, "no ring enabled after vCPU creation");
+    vm.nr_vcpus = 0;
+    CHECK(kvm_dirty_enable_ring(&vm, &cap) == 0, "ring enabled before vCPUs");
+    CHECK(kvm_dirty_enable_ring(&vm, &cap) == -EINVAL, "ring enabled only once");
+    vm.nr_vcpus = 2;
+    for (i = 0; i < 2; i++) {
+        vcpu[i].vm = &vm;
+        vcpu[i].dirty_ring = rings[i];
+    }
+    region(a, 8, 1);
+    CHECK(set(8, KVM_MEM_LOG_DIRTY_PAGES, gfn * 4096u, 8 * 4096u, a) == 0 &&
+              kvm_slot_find(&vm, gfn, &s) && !s.dirty,
+          "ring logging has no bitmap");
+    CHECK(get_dirty(8, bits) == -ENXIO && clear_dirty(8, 0, 8, bits) == -ENXIO,
+          "ring mode refuses the bitmap ioctls");
+    running_vcpu = &vcpu[0];
+    CHECK(kvm_tdp_fault(&vm, gfn, 0) == 0 && !(leaf_of(gfn, &level) & 2),
+          "a ring's clean page is read-only");
+    CHECK(kvm_tdp_fault(&vm, gfn, 1) == 0 && (leaf_of(gfn, &level) & 2) &&
+              rings[0][0].flags == KVM_DIRTY_GFN_F_DIRTY && rings[0][0].slot == 8 &&
+              rings[0][0].offset == 0,
+          "the write fault publishes the slot and page in its vCPU's ring");
+    kvm_dirty_mark(running_vcpu, &s, gfn + 1);
+    CHECK(rings[0][1].offset == 1 && vcpu[0].dirty_ring_put == 2,
+          "a software write enters the same ring");
+    running_vcpu = &vcpu[1];
+    kvm_dirty_mark(running_vcpu, &s, gfn + 2);
+    CHECK(vcpu[1].dirty_ring_put == 1 && rings[1][0].offset == 2,
+          "another vCPU has a separate ring");
+    rings[0][1].flags = KVM_DIRTY_GFN_F_RESET;
+    CHECK(kvm_dirty_ioctl(&vm, KVM_RESET_DIRTY_RINGS, 0) == 0,
+          "reset stops before an entry not collected");
+    rings[0][0].flags = KVM_DIRTY_GFN_F_RESET;
+    rings[1][0].flags = KVM_DIRTY_GFN_F_RESET;
+    CHECK(kvm_dirty_ioctl(&vm, KVM_RESET_DIRTY_RINGS, 0) == 3 && rings[0][0].flags == 0 &&
+              rings[1][0].flags == 0 && !(leaf_of(gfn, &level) & 2) && flushed(),
+          "reset frees both rings' collected prefixes and protects the page");
+    CHECK(kvm_tdp_fault(&vm, gfn, 1) == 0 && rings[1][1].offset == 0,
+          "the next write is logged again");
+    rings[1][1].slot = 0x10008;
+    rings[1][1].offset = ~0ull;
+    rings[1][1].flags = KVM_DIRTY_GFN_F_RESET;
+    CHECK(kvm_dirty_ioctl(&vm, KVM_RESET_DIRTY_RINGS, 0) == 1,
+          "an invalid slot supplied by the caller is skipped");
+    kvm_dirty_mark(running_vcpu, &s, gfn);
+    rings[1][2].offset = ~0ull;
+    rings[1][2].flags = KVM_DIRTY_GFN_F_RESET;
+    CHECK(kvm_dirty_ioctl(&vm, KVM_RESET_DIRTY_RINGS, 0) == 1,
+          "an invalid offset supplied by the caller is skipped");
+    *host_entry(a) |= PTE_DIRTY;
+    CHECK(kvm_tdp_write_nofault(&vm, gfn * 4096u, &byte, 1, vm.mmu_seq) == 0 &&
+              rings[1][3].offset == 0 && rings[1][3].flags == KVM_DIRTY_GFN_F_DIRTY,
+          "the steal time's no-fault write enters its running vCPU's ring");
+    rings[1][3].flags = KVM_DIRTY_GFN_F_RESET;
+    CHECK(kvm_dirty_ioctl(&vm, KVM_RESET_DIRTY_RINGS, 0) == 1, "the no-fault write's entry resets");
+    dirty_ring_limit_rows(rings, &s, gfn, a);
+    running_vcpu = NULL;
+    vm.dirty_ring_size = 0;
+    for (i = 0; i < 2; i++) {
+        vcpu[i].dirty_ring = NULL;
+        vcpu[i].dirty_ring_put = vcpu[i].dirty_ring_reset = 0;
+    }
+    CHECK(kvm_dirty_ioctl(&vm, KVM_RESET_DIRTY_RINGS, 0) == -EINVAL,
+          "reset without a ring is refused");
+}
+
 int main(void)
 {
     uint32_t i;
@@ -1480,6 +1626,7 @@ int main(void)
     vm.nr_vcpus = 2;
     for (i = 0; i < 2; i++) {
         vm.vcpus[i] = &vcpu[i];
+        vcpu[i].vm = &vm;
     }
     caller.mm = &the_mm;
     CHECK(kvm_slots_init(&vm) == 0 && kvm_tdp_init(&vm) == 0, "the VM's tables");
@@ -1498,6 +1645,7 @@ int main(void)
     zap_batch_rows();
     stale_rows();
     flush_wait_rows();
+    dirty_ring_rows();
     release_rows();
     CHECK(((struct tdp *)vm.tdp)->tables == 1, "no table below the top once every slot went");
     CHECK(set(0, 0, 0, 0x1000, HVA) == 0 && kvm_tdp_fault(&vm, 0, 0) == 0, "a slot left");

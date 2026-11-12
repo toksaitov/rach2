@@ -702,13 +702,31 @@ int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
     return 1;
 }
 
-void kvm_dirty_mark(struct kvm_vm *vm, const struct kvm_slot_view *s, uint64_t gfn)
+int kvm_dirty_mark(struct kvm_vcpu *v, const struct kvm_slot_view *s, uint64_t gfn)
 {
-    (void)vm;
+    (void)v;
     (void)s;
     (void)gfn;
     dirty_marks++;
     unheld_copies += slot_holds == 0;
+    return 0;
+}
+
+/** No dirty ring in this model; its writes go to the bitmap stub. */
+int kvm_dirty_reserve(struct kvm_vcpu *v, const struct kvm_slot_view *s, uint64_t gfn,
+                      struct kvm_dirty_gfn **entry)
+{
+    (void)v;
+    (void)s;
+    (void)gfn;
+    *entry = NULL;
+    return 0;
+}
+
+/** Ring publication is checked by kvm_slots_hosttest. */
+void kvm_dirty_publish(struct kvm_dirty_gfn *entry)
+{
+    (void)entry;
 }
 
 int kvm_tdp_init(struct kvm_vm *vm)
@@ -767,6 +785,14 @@ int32_t kvm_dirty_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
 }
 
 int32_t kvm_dirty_enable_manual(struct kvm_vm *vm, const struct kvm_enable_cap *cap)
+{
+    (void)vm;
+    (void)cap;
+    return -EINVAL;
+}
+
+/** Dirty-ring ioctls are checked by kvm_hosttest and kvm_slots_hosttest. */
+int32_t kvm_dirty_enable_ring(struct kvm_vm *vm, const struct kvm_enable_cap *cap)
 {
     (void)vm;
     (void)cap;

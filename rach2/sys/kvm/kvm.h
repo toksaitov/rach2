@@ -62,6 +62,11 @@ struct kvm_vcpu;
 #define KVM_RUN_PAGES  2u
 #define KVM_MMAP_PAGES 3u
 
+/* Linux's ring bound and reserve for writes made while handling an exit.
+ * Neither backend buffers dirty pages in hardware. */
+#define KVM_DIRTY_RING_MAX_BYTES (65536u * 16u)
+#define KVM_DIRTY_RING_RESERVED  64u
+
 /*
  * The statistics of a VM and of a vCPU that KVM_GET_STATS_FD's file gives,
  * a 64-bit value each, in the order of Linux's struct kvm_vm_stat and
@@ -405,6 +410,7 @@ struct kvm_vm {
     int irqchip;                 /* KVM_IRQCHIP_*: which interrupt controller is in the kernel */
     uint32_t boot_cpu_id;        /* KVM_SET_BOOT_CPU_ID */
     uint32_t dirty_manual;       /* KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2's options, dirty.c's */
+    uint32_t dirty_ring_size;    /* bytes per vCPU; fixed before the first vCPU */
     uint32_t noncoherent;        /* devices assigned that do not snoop (`kvm_tdp_noncoherent`) */
     void *slots;                 /* slots.c's */
     void *tdp;                   /* tdp.c's */
@@ -555,10 +561,14 @@ struct kvm_vcpu {
     struct anon_obj anon; /* `name`, for /proc/PID/fd */
     char name[24];        /* "kvm-vcpu:ID" */
     struct kvm_vm *vm;
-    uint32_t id;                /* the caller's id, the APIC id */
-    uint32_t index;             /* the place in the VM's `vcpus` */
-    struct kvm_run *run;        /* the run page, the first of KVM_RUN_PAGES */
-    uint8_t *pio;               /* the port I/O page, the second */
+    uint32_t id;                      /* the caller's id, the APIC id */
+    uint32_t index;                   /* the place in the VM's `vcpus` */
+    struct kvm_run *run;              /* the run page, the first of KVM_RUN_PAGES */
+    uint8_t *pio;                     /* the port I/O page, the second */
+    struct kvm_dirty_gfn *dirty_ring; /* shared pages at KVM_DIRTY_LOG_PAGE_OFFSET */
+    /* Free-running entry counts under mmu_lock, read by the run loop.
+     * The caller can change entries, but never these indices. */
+    volatile uint32_t dirty_ring_put, dirty_ring_reset;
     volatile uint32_t mode;     /* KVM_MODE_* */
     volatile uint32_t requests; /* KVM_REQ_* */
     volatile int32_t cpu;       /* the processor it last entered on, -1 before */
@@ -1139,7 +1149,7 @@ int32_t kvm_slots_set(struct kvm_vm *vm, const struct kvm_userspace_memory_regio
  * A slot as its users see it: its first frame, its frames, its flags, its
  * number, the caller's address of the frame asked for, and its dirty log,
  * a bit for each page from `base_gfn` in 64-bit words, or NULL when it does
- * not log. A change of the slot frees the log, so a view's log is used in
+ * not log or uses a dirty ring. A change frees the bitmap, so it is used in
  * one of two ways: under `mmu_lock` held from the lookup to the last use;
  * or under `kvm_slots_read_lock` held from before the lookup to the last
  * use, which the change waits for, with `mmu_lock` held at each read or
@@ -1151,7 +1161,7 @@ struct kvm_slot_view {
     uint32_t flags; /* KVM_MEM_* */
     uint32_t id;
     uint64_t hva;    /* the caller's address of the frame asked for */
-    uint64_t *dirty; /* the dirty log while KVM_MEM_LOG_DIRTY_PAGES is set */
+    uint64_t *dirty; /* the bitmap log, or NULL with no log or a dirty ring */
 };
 
 /** The slot that holds the guest-physical frame `gfn` of `vm`, for the
@@ -1287,21 +1297,54 @@ void kvm_tdp_flush(struct kvm_vm *vm);
 
 /* dirty.c: dirty logging. */
 
-/** KVM_GET_DIRTY_LOG and KVM_CLEAR_DIRTY_LOG, `request` naming which. */
+/** KVM_GET_DIRTY_LOG, KVM_CLEAR_DIRTY_LOG or KVM_RESET_DIRTY_RINGS.
+ * A bitmap ioctl is -ENXIO in ring mode. RESET returns the entry count,
+ * or -EINVAL without a ring. The VM ioctl holds the big lock. */
 int32_t kvm_dirty_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg);
 
 /** KVM_ENABLE_CAP of KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2 on `vm`: 0, or
  * -EINVAL for an option Linux does not take. */
 int32_t kvm_dirty_enable_manual(struct kvm_vm *vm, const struct kvm_enable_cap *cap);
 
-/** Mark the frame `gfn` of `vm` dirty in the log of `s`, the view of its
- * slot that a write of the kernel's own to guest memory found and copied
- * through, as Linux's mark_page_dirty_in_slot (virt/kvm/kvm_main.c:3624):
+/** Enable a dirty ring once, before vCPUs exist: 0, -EINVAL for its
+ * flags, size or timing, or -E2BIG above Linux's bound. Under the big lock. */
+int32_t kvm_dirty_enable_ring(struct kvm_vm *vm, const struct kvm_enable_cap *cap);
+
+/** The vCPU this thread runs in KVM_RUN for `vm`, or NULL outside a run
+ * of that VM. The thread's scheduler callback identifies the run. */
+struct kvm_vcpu *kvm_running_vcpu(struct kvm_vm *vm);
+
+/** Mark `gfn` in `s`'s log under mmu_lock, already held by the caller.
+ * A ring records the running vCPU's writes; a bitmap sets its page bit.
+ * 0, or -ENOSPC for a full ring; the caller must not write on failure. */
+int kvm_dirty_mark_locked(struct kvm_vm *vm, const struct kvm_slot_view *s, uint64_t gfn);
+
+/** Reserve a ring entry before a software copy to a page in `s`: 0 and
+ * *entry NULL without a ring, 0 with a reserved entry, or -ENOSPC before
+ * a copy that would overrun the ring. Holds mmu_lock only for the reserve;
+ * the caller holds the vCPU's mutex and the slots' readers' lock. */
+int kvm_dirty_reserve(struct kvm_vcpu *v, const struct kvm_slot_view *s, uint64_t gfn,
+                      struct kvm_dirty_gfn **entry);
+
+/** Reserve for the running vCPU with mmu_lock already held, for a
+ * no-fault software write. The same results as kvm_dirty_reserve. */
+int kvm_dirty_reserve_locked(struct kvm_vm *vm, const struct kvm_slot_view *s, uint64_t gfn,
+                             struct kvm_dirty_gfn **entry);
+
+/** Publish a reserved entry after its software copy, even a failed one
+ * that may have stored a prefix. Until then RESET stops at this entry. */
+void kvm_dirty_publish(struct kvm_dirty_gfn *entry);
+
+/** Mark the frame `gfn` of `v`'s VM dirty in the log of `s`, the view of
+ * the slot a kernel write to guest memory found, as Linux's
+ * mark_page_dirty_in_slot (virt/kvm/kvm_main.c:3624):
  * nothing when that slot did not log. The caller holds the slots' readers'
  * lock from the lookup, so the log is not yet freed, and a move of the slot
  * meanwhile keeps the log and the frame's place in it, as Linux reuses the
- * bitmap (kvm_main.c:1671-1675). Takes `mmu_lock`. */
-void kvm_dirty_mark(struct kvm_vm *vm, const struct kvm_slot_view *s, uint64_t gfn);
+ * bitmap (kvm_main.c:1671-1675). Takes `mmu_lock`. 0, or -ENOSPC for a full
+ * ring, before which the caller must not write. The explicit vCPU also
+ * logs writes by state ioctls, outside KVM_RUN. */
+int kvm_dirty_mark(struct kvm_vcpu *v, const struct kvm_slot_view *s, uint64_t gfn);
 
 /* irq.c: interrupt routing, irqfd and MSIs. */
 

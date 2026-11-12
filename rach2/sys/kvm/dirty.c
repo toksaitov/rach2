@@ -4,7 +4,8 @@
  * KVM_GET_DIRTY_LOG and KVM_CLEAR_DIRTY_LOG give it. A log is read and
  * written under the VM's `mmu_lock`, which a fault from a vCPU's run holds
  * while it marks a page, as Linux's kvm_get_dirty_log_protect takes
- * mmu_lock (virt/kvm/kvm_main.c:2202-2312).
+ * mmu_lock (virt/kvm/kvm_main.c:2202-2312). With dirty rings enabled the
+ * running vCPU publishes the pages in its shared ring instead.
  */
 
 #include "kvm.h"
@@ -12,6 +13,24 @@
 #include "../lib/kerrno.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
+
+int32_t kvm_dirty_enable_ring(struct kvm_vm *vm, const struct kvm_enable_cap *cap)
+{
+    uint32_t size = (uint32_t)cap->args[0];
+
+    /* Linux's ioctl takes the argument as u32. */
+    if (cap->flags || !size || (size & (size - 1u)) || size < 4096u) {
+        return -EINVAL;
+    }
+    if (size > KVM_DIRTY_RING_MAX_BYTES) {
+        return -E2BIG;
+    }
+    if (vm->dirty_ring_size || vm->nr_vcpus) {
+        return -EINVAL;
+    }
+    vm->dirty_ring_size = size;
+    return 0;
+}
 
 int32_t kvm_dirty_enable_manual(struct kvm_vm *vm, const struct kvm_enable_cap *cap)
 {
@@ -27,17 +46,146 @@ int32_t kvm_dirty_enable_manual(struct kvm_vm *vm, const struct kvm_enable_cap *
     return 0;
 }
 
-void kvm_dirty_mark(struct kvm_vm *vm, const struct kvm_slot_view *s, uint64_t gfn)
+/** Reserve an entry for `v` under mmu_lock, leaving its flags clear until
+ * the write finishes. 0 with *out NULL for a bitmap or an unlogged slot,
+ * 0 with the entry for a ring, or -ENOSPC when every entry is in use. */
+static int reserve(struct kvm_vm *vm, struct kvm_vcpu *v, const struct kvm_slot_view *s,
+                   uint64_t gfn, struct kvm_dirty_gfn **out)
 {
-    uint64_t i = gfn - s->base_gfn;
-    uint32_t flags;
+    struct kvm_dirty_gfn *entry;
+    uint32_t entries;
 
-    if (!s->dirty) {
-        return;
+    *out = NULL;
+    if (!(s->flags & KVM_MEM_LOG_DIRTY_PAGES) || !vm->dirty_ring_size || !v) {
+        return 0;
     }
+    entries = vm->dirty_ring_size / sizeof(*entry);
+    if (v->dirty_ring_put - v->dirty_ring_reset >= entries) {
+        return -ENOSPC;
+    }
+    entry = &v->dirty_ring[v->dirty_ring_put & (entries - 1u)];
+    entry->slot = s->id;
+    entry->offset = gfn - s->base_gfn;
+    v->dirty_ring_put++;
+    *out = entry;
+    return 0;
+}
+
+void kvm_dirty_publish(struct kvm_dirty_gfn *entry)
+{
+    /* x86's stores are ordered; publish only after the guest-page write. */
+    k_barrier();
+    *(volatile uint32_t *)&entry->flags = KVM_DIRTY_GFN_F_DIRTY;
+}
+
+int kvm_dirty_reserve(struct kvm_vcpu *v, const struct kvm_slot_view *s, uint64_t gfn,
+                      struct kvm_dirty_gfn **entry)
+{
+    uint32_t flags = kvm_mmu_lock(v->vm);
+    int r = reserve(v->vm, v, s, gfn, entry);
+
+    kvm_mmu_unlock(v->vm, flags);
+    return r;
+}
+
+/** Record a completed write under mmu_lock. A full ring is -ENOSPC;
+ * software copies reserve their entry before writing to avoid that case. */
+static int mark(struct kvm_vm *vm, struct kvm_vcpu *v, const struct kvm_slot_view *s, uint64_t gfn)
+{
+    struct kvm_dirty_gfn *entry;
+    uint64_t i = gfn - s->base_gfn;
+    int r = reserve(vm, v, s, gfn, &entry);
+
+    if (r != 0) {
+        return r;
+    }
+    if (entry) {
+        kvm_dirty_publish(entry);
+    } else if (s->dirty) {
+        s->dirty[i / 64u] |= 1ull << (i % 64u);
+    }
+    return 0;
+}
+
+int kvm_dirty_mark_locked(struct kvm_vm *vm, const struct kvm_slot_view *s, uint64_t gfn)
+{
+    return mark(vm, vm->dirty_ring_size ? kvm_running_vcpu(vm) : NULL, s, gfn);
+}
+
+int kvm_dirty_reserve_locked(struct kvm_vm *vm, const struct kvm_slot_view *s, uint64_t gfn,
+                             struct kvm_dirty_gfn **entry)
+{
+    return reserve(vm, vm->dirty_ring_size ? kvm_running_vcpu(vm) : NULL, s, gfn, entry);
+}
+
+int kvm_dirty_mark(struct kvm_vcpu *v, const struct kvm_slot_view *s, uint64_t gfn)
+{
+    struct kvm_vm *vm = v->vm;
+    uint32_t flags;
+    int r;
+
     flags = kvm_mmu_lock(vm);
-    s->dirty[i / 64u] |= 1ull << (i % 64u);
+    r = mark(vm, v, s, gfn);
     kvm_mmu_unlock(vm, flags);
+    return r;
+}
+
+/**
+ * Reset the collected prefix of every ring, as Linux's
+ * kvm_dirty_ring_reset: copy each caller-writable entry once, validate its
+ * slot and offset, and protect that page again before freeing the entry.
+ * mmu_lock serializes producers and the reset indices; the VM ioctl's big
+ * lock serializes resets and slot changes. Batches of 64 entries let
+ * interrupts run. A final flush ends every old writable translation
+ * before the ioctl returns the count, including entries of deleted slots.
+ */
+static int32_t reset_rings(struct kvm_vm *vm)
+{
+    struct kvm_vcpu *v;
+    struct kvm_dirty_gfn *entry;
+    struct kvm_slot_view s;
+    uint32_t n, i, flags, slot, batch, entries;
+    uint64_t offset;
+    int32_t count = 0;
+
+    if (!vm->dirty_ring_size) {
+        return -EINVAL;
+    }
+    entries = vm->dirty_ring_size / sizeof(*entry);
+    for (n = 0; n < vm->nr_vcpus; n++) {
+        v = vm->vcpus[n];
+        for (;;) {
+            flags = kvm_mmu_lock(vm);
+            for (batch = 0; batch < 64u && v->dirty_ring_reset != v->dirty_ring_put; batch++) {
+                i = v->dirty_ring_reset & (entries - 1u);
+                entry = &v->dirty_ring[i];
+                if (!(*(volatile uint32_t *)&entry->flags & KVM_DIRTY_GFN_F_RESET)) {
+                    break;
+                }
+                /* x86's loads are ordered; acquire the caller's RESET. */
+                k_barrier();
+                slot = *(volatile uint32_t *)&entry->slot;
+                offset = *(volatile uint64_t *)&entry->offset;
+                if (slot < KVM_MEM_SLOTS && kvm_slot_get(vm, slot, &s) && offset < s.npages) {
+                    (void)kvm_tdp_protect(vm, s.base_gfn + offset, 1);
+                }
+                k_barrier();
+                *(volatile uint32_t *)&entry->flags = 0;
+                v->dirty_ring_reset++;
+                count++;
+            }
+            kvm_mmu_unlock(vm, flags);
+            if (batch < 64u) {
+                break;
+            }
+        }
+    }
+    if (count) {
+        flags = kvm_mmu_lock(vm);
+        kvm_tdp_flush(vm);
+        kvm_mmu_unlock(vm, flags);
+    }
+    return count;
 }
 
 /** The slot of a log ioctl's `slot` into `*s`: 0, -EINVAL for an address
@@ -76,6 +224,9 @@ static int32_t get_log(struct kvm_vm *vm, uintptr_t arg)
 
     if (copy_from_user(&log, (const void __user *)arg, sizeof(log)) != 0) {
         return -EFAULT;
+    }
+    if (vm->dirty_ring_size) {
+        return -ENXIO;
     }
     flags = kvm_mmu_lock(vm);
     r = log_slot(vm, log.slot, &s);
@@ -134,6 +285,9 @@ static int32_t clear_log(struct kvm_vm *vm, uintptr_t arg)
     if (copy_from_user(&c, (const void __user *)arg, sizeof(c)) != 0) {
         return -EFAULT;
     }
+    if (vm->dirty_ring_size) {
+        return -ENXIO;
+    }
     if ((c.slot >> 16) != 0 || (c.slot & 0xFFFFu) >= KVM_MEM_SLOTS || (c.first_page & 63u)) {
         return -EINVAL;
     }
@@ -184,6 +338,9 @@ static int32_t clear_log(struct kvm_vm *vm, uintptr_t arg)
 
 int32_t kvm_dirty_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
 {
+    if (request == KVM_RESET_DIRTY_RINGS) {
+        return reset_rings(vm);
+    }
     switch (request) {
     case KVM_GET_DIRTY_LOG:
         return get_log(vm, arg);
