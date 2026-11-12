@@ -46,10 +46,11 @@
  * flag, the wall clock, the clock pairing, the old MSR, KVM_SET_CLOCK,
  * KVM_CAP_ENFORCE_PV_FEATURE_CPUID and KVM_CAP_X86_DISABLE_EXITS; the
  * steal time, its writes of the thread's run_delay and its preempted flag
- * across a switch at a slice's end inside KVM_RUN; the vCPU attribute
- * KVM_VCPU_TSC_OFFSET; and what Linux's selftests ask for: the TSC's rate
- * set on a VM and on a vCPU, on a processor that scales none and with SVM's
- * and VMX's ratios,
+ * across a switch at a slice's end inside KVM_RUN, and none at a halted
+ * vCPU's sleep at the run loop's top, which is no preemption; the vCPU
+ * attribute KVM_VCPU_TSC_OFFSET; and what Linux's selftests ask for: the
+ * TSC's rate set on a VM and on a vCPU, on a processor that scales none
+ * and with SVM's and VMX's ratios,
  * the statistics files of a VM and a vCPU, KVM_PRE_FAULT_MEMORY, 1024
  * vCPUs with ids below 4096, the CR4 bits taken before KVM_SET_CPUID2,
  * the VM's capabilities and quirks, and the synchronized registers; and

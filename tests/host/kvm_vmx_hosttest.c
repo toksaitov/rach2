@@ -61,6 +61,20 @@
  * CPL 0 under KVM_CAP_EXIT_ON_EMULATION_FAILURE, DR7.GD under the
  * caller's breakpoints, and the TSC multiplier on a model whose controls
  * have TSC scaling.
+ *
+ * Beside the trial's path: the host's state and MSRs back, the guest's
+ * FPU left to the switch, at a switch between two runs, a slice's end or
+ * a halted vCPU's sleep at the run loop's top, which marks no preemption,
+ * and saved and loaded again at the next entry; on a host PKRU that is not
+ * 0, the guest's PKRU from its image for each run and in the image at
+ * each save, and the host's in between runs and at the sleep; the guest's
+ * SYSCALL_MASK with a bit of 63:32 kept from the guest and the caller
+ * without EFER.SCE, refused with it, and its load once EFER.SCE is on
+ * caught at its #GP; under a host DR7 that enables a breakpoint, DR7 at
+ * 0x400 while DR0 to DR3 change, and the host's back after each run; the
+ * first entry of a new vCPU with RSP all ones; and kvm/exit_stats's ten
+ * columns in order, a run's entry, run and exit as the model's TSC steps
+ * them.
  */
 #include "kvm/vmx.c"
 
