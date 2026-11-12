@@ -9,7 +9,7 @@
  * host-deps: tests/host/compat/nodelock_none.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
  * host-deps: tests/host/compat/bkl_none.c
- * host-deps: tests/host/compat/atomic_host.c tests/host/compat/fsize_none.c
+ * host-deps: tests/host/compat/atomic_host.c rach2/sys/fs/fsize.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * `syscall_fs.c` is included whole, its unused exports private so that the
@@ -1972,7 +1972,7 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
     return m;
 }
 
-/** No row sends a signal. */
+/** The SIGXFSZ of a row past RLIMIT_FSIZE, which no row reads. */
 void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
 {
     (void)t;
