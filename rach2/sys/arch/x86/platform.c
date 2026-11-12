@@ -23,6 +23,7 @@
 #include "efirt.h"
 #include "i8042.h"
 #include "ioapic.h"
+#include "kvmsteal.h"
 #include "ps2kbd.h"
 #include "lapic.h"
 #include "pat.h"
@@ -83,6 +84,7 @@ void platform_cpu_init(uintptr_t boot_stack_top)
 {
     pat_setup();
     platform_pmu_cpu_setup();
+    kvm_steal_cpu_setup(0);
     init_gdt();
     klog(KLOG_DEBUG, "boot", "gdt: ready");
 

@@ -1771,7 +1771,7 @@ static void smp_cpu_main(int cpu)
     if (arch_atomic_cmpxchg(&self->admit, CPU_STARTING, CPU_ADMITTED) != CPU_STARTING) {
         arch_stop();
     }
-    self->accounted_tick = (uint32_t)kernel_ticks;
+    sched_account_start();
     self->online = 1;
     bkl_take(1);
     (void)bkl_drop();

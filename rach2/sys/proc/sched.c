@@ -1217,7 +1217,7 @@ void sched_give_way(void)
 }
 
 /*
- * Each processor's idle marker and three tick counters are in its record
+ * Each processor's idle marker and four tick counters are in its record
  * (percpu.h). They are `volatile` because the timer handler reads the marker
  * from an interrupt that arrives in the middle of the halt it describes. The
  * counters are 64 bits wide, so they do not wrap, and are read whole within
@@ -1226,7 +1226,7 @@ void sched_give_way(void)
  * totals are summed over every record, of which those of processors never
  * started are zero.
  */
-void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle)
+void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle, uint64_t *steal)
 {
     const struct percpu *cpu = &cpu_table[c];
     uint32_t seq;
@@ -1244,6 +1244,7 @@ void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle)
         *user = cpu->user_ticks;
         *busy = cpu->busy_ticks;
         *idle = cpu->idle_ticks;
+        *steal = cpu->steal_ticks;
         if (cpu->ticks_seq == seq) {
             return;
         }
@@ -1252,11 +1253,11 @@ void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle)
 
 uint64_t sched_idle_ticks(void)
 {
-    uint64_t sum = 0, user, busy, idle;
+    uint64_t sum = 0, user, busy, idle, steal;
     int i;
 
     for (i = 0; i < NR_CPUS; i++) {
-        sched_cpu_ticks(i, &user, &busy, &idle);
+        sched_cpu_ticks(i, &user, &busy, &idle, &steal);
         sum += idle;
     }
     return sum;
@@ -1264,11 +1265,11 @@ uint64_t sched_idle_ticks(void)
 
 uint64_t sched_busy_ticks(void)
 {
-    uint64_t sum = 0, user, busy, idle;
+    uint64_t sum = 0, user, busy, idle, steal;
     int i;
 
     for (i = 0; i < NR_CPUS; i++) {
-        sched_cpu_ticks(i, &user, &busy, &idle);
+        sched_cpu_ticks(i, &user, &busy, &idle, &steal);
         sum += busy;
     }
     return sum;
@@ -1355,26 +1356,60 @@ static void sched_account_one(struct percpu *cpu, int user)
 }
 
 /**
- * Each tick is counted as `sched_account_one` counts one. The boot
- * processor calls this after it has counted its tick and any the
- * clock found lost, and so charges all of them. Another processor's tick is
- * out of step with the boot processor's and charges the global ticks since
- * its last, none or more than one. A tick lost while interrupts were off
+ * Each tick is counted as `sched_account_one` counts one. A processor
+ * counts the ticks of its own clock, the monotonic time since its last
+ * count in whole ticks, rounded to the nearest, as Linux charges each
+ * processor's tick to that processor alone (account_process_tick,
+ * kernel/sched/cputime.c:474-500, from update_process_times,
+ * kernel/time/timer.c:2514-2519, in 6.12.115). Its interrupt normally
+ * comes once a tick and counts one; a tick lost while interrupts were off
  * for longer than a tick is charged to what the processor was doing when
- * the next one came. Each processor writes only its own counts and its
- * current thread's times, so this needs no lock but the group's for its
- * CPU timers (`cpu_timer_tick`).
+ * the next one came. The count does not follow the boot processor's tick,
+ * which a stretch with interrupts off there makes late: a count of the
+ * global ticks would charge another processor none while it is late and
+ * two at its next tick after, to whatever that processor runs then. Each
+ * processor writes only its own counts and its current thread's times, so
+ * this needs no lock but the group's for its CPU timers
+ * (`cpu_timer_tick`).
+ *
+ * A tick's worth of the hypervisor's steal time not yet counted makes a
+ * tick stolen, counted as neither idle nor busy and charged to no one, as
+ * Linux takes the steal time out of the tick it charges
+ * (steal_account_process_time and account_process_tick,
+ * kernel/sched/cputime.c:253-269 and 486-492); the rest carries to the
+ * next tick.
  */
 void sched_account_tick(int user)
 {
     struct percpu *cpu = this_cpu();
-    uint32_t now = (uint32_t)kernel_ticks;
-    uint32_t ticks = now - cpu->accounted_tick;
+    int64_t gap = rtc_monotonic_ns() - cpu->accounted_ns + (int64_t)(TICK_NS / 2u);
+    uint64_t ticks, stolen;
 
-    cpu->accounted_tick = now;
-    while (ticks-- > 0) {
-        sched_account_one(cpu, user);
+    if (gap < (int64_t)TICK_NS) {
+        return;
     }
+    ticks = tick_div((uint64_t)gap, TICK_NS, NULL);
+    cpu->accounted_ns += (int64_t)ticks * (int64_t)TICK_NS;
+    stolen = arch_steal_ns() - cpu->steal_ns;
+    while (ticks-- > 0) {
+        if (stolen >= TICK_NS) {
+            stolen -= TICK_NS;
+            cpu->steal_ns += TICK_NS;
+            cpu->ticks_seq++;
+            ++cpu->steal_ticks;
+            cpu->ticks_seq++;
+        } else {
+            sched_account_one(cpu, user);
+        }
+    }
+}
+
+void sched_account_start(void)
+{
+    struct percpu *cpu = this_cpu();
+
+    cpu->accounted_ns = rtc_monotonic_ns();
+    cpu->steal_ns = arch_steal_ns();
 }
 
 /* The load averages, Linux's: in fixed point, sampled every LOAD_FREQ

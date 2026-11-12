@@ -397,6 +397,11 @@ uintptr_t arch_fault_address(void);
  * processor has one. */
 uint64_t arch_cycles(void);
 
+/** The nanoseconds the hypervisor kept the running processor ready to run
+ * but did not run it, since the processor started: KVM's steal time
+ * (x86/kvmsteal.c), or 0 where there is none. Interrupts are off. */
+uint64_t arch_steal_ns(void);
+
 /** A value from the processor's entropy source into `out`: `seed` asks for
  * the conditioned seed source (RDSEED), otherwise the generator (RDRAND).
  * Returns 1, or 0 when the source has none to give. */

@@ -311,25 +311,30 @@ int sched_all_idle(void);
 /** Ticks that found a processor parked in an idle wait, and those that did
  * not, summed over the processors in 64 bits; each processor's own are in
  * its record (percpu.h). Counted rather than timed: each processor counts
- * every global tick since it started, a lost one with the next
+ * every tick of its own clock since it started, a lost one with the next
  * (`sched_account_tick`). */
 uint64_t sched_idle_ticks(void);
 uint64_t sched_busy_ticks(void);
 
-/** Processor `c`'s ticks in user mode, busy and idle, as one reading. Its
- * own tick changes them within its `ticks_seq`, which is odd meanwhile, so
- * a reader on any processor reads them again until the count is even and
- * has not moved: on the i686 a 64-bit count is two loads. */
-void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle);
+/** Processor `c`'s ticks in user mode, busy, idle and stolen by the
+ * hypervisor, which are neither busy nor idle, as one reading. Its own tick
+ * changes them within its `ticks_seq`, which is odd meanwhile, so a reader
+ * on any processor reads them again until the count is even and has not
+ * moved: on the i686 a 64-bit count is two loads. */
+void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle, uint64_t *steal);
 
-/** Count the global ticks this processor has not counted yet as idle or
- * busy, so that its idle and busy ticks add up to the uptime since it
- * started, and charge each busy one to the current process as user time
+/** Count the ticks of this processor's clock it has not counted yet as idle,
+ * busy or stolen, so that the three add up to the uptime since it started,
+ * and charge each busy one to the current process as user time
  * when `user` is set and as system time when it is not, and to its
  * process's virtual, profiling and POSIX CPU-time timers, whose signals it
  * leaves for a holder of the big lock to post. Called by each processor's
  * timer tick alone, without the big lock and with interrupts off. */
 void sched_account_tick(int user);
+
+/** Start this processor's counts at the clock's time now: an application
+ * processor's, as it comes online, before its first tick. */
+void sched_account_start(void);
 
 /** Fold the processes running or ready to run into the load averages every
  * five seconds and a tick (`sched_loadavg`). Called by the boot
