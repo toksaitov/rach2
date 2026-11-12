@@ -29,11 +29,14 @@
 .set D_COARSE_NS,  72
 .set D_RAW_MULT,   80
 .set D_RAW_SEC,    88
-# From the data page back to KVM's clock page, and that page's version
-# and flags, pvclock_vcpu_time_info's (../x86/tsc.c), with
-# PVCLOCK_TSC_STABLE_BIT.
+# From the data page back to KVM's clock page, and that page's fields,
+# pvclock_vcpu_time_info's (../x86/tsc.c), with PVCLOCK_TSC_STABLE_BIT.
 .set KVM_BACK,         0x1000
 .set PVTI_VERSION,     0
+.set PVTI_TSC,         8
+.set PVTI_SYSTEM,      16
+.set PVTI_MUL,         24
+.set PVTI_SHIFT,       28
 .set PVTI_FLAGS,       29
 .set PVCLOCK_TSC_STABLE_BIT, 1
 # Each clock's rate is 8 bytes before its seconds: D_MULT before D_MONO_SEC,
@@ -59,21 +62,25 @@ vdso_text_start:
 
 # A reading of the clock whose base seconds are at %rdi in the data page
 # at %r8, the nanoseconds after them and its rate before them, from the
-# TSC: the seconds in %rax and the nanoseconds, below 10^9, in %rdx, with
-# the carry clear. It reads the page's sequence count before and after,
-# and again while it is odd or has moved; the TSC is read between two
-# lfences, so that it is taken after the loads before it and before the
-# count's second load. A count behind the base, as another processor's can
-# be by a few counts, reads as the base. Each reading checks the page's
+# page's count: the seconds in %rax and the nanoseconds, below 10^9, in
+# %rdx, with the carry clear. It reads the page's sequence count before and
+# after, and again while it is odd or has moved; the TSC is read between
+# two lfences, so that it is taken after the loads before it and before
+# the count's second load. A count behind the base, as another processor's
+# can be by a few counts, reads as the base. Each reading checks the page's
 # mode after the count, as Linux's do_hres does (lib/vdso/gettimeofday.c:
 # 141-169), and returns with the carry set and nothing read when the clock
 # has stopped, so that a reading the stop overtakes makes the system call.
-# In VCLOCK_PVCLOCK the TSC is read as Linux's vread_pvclock reads it
-# (arch/x86/include/asm/vdso/gettimeofday.h:197-232): KVM's page's version
-# made even, its stable bit checked, the TSC read, and the version read
-# again, the TSC read again when it moved; a clear bit returns with the
-# carry set, so that the system call reads the clock. Changes %rcx and %r9
-# to %r11.
+# The count is the TSC in VCLOCK_TSC. In VCLOCK_PVCLOCK it is KVM's clock,
+# read as Linux's vread_pvclock reads it (arch/x86/include/asm/vdso/
+# gettimeofday.h:197-232): KVM's page's version made even, its stable bit
+# checked, the TSC read and converted by the page's stamp, rate and system
+# time (__pvclock_read_cycles, asm/pvclock.h:44-90), a TSC before the
+# stamp as the stamp, as the kernel's reader takes it (../x86/tsc.c), and
+# the version read again, the reading made again when it moved; the top
+# bit is dropped, as vread_pvclock's `ret & S64_MAX`. A clear bit returns
+# with the carry set, so that the system call reads the clock. Changes %rcx
+# and %r9 to %r11.
 vdso_fine:
     movl D_SEQ(%r8), %r11d
     testl $1, %r11d
@@ -81,16 +88,16 @@ vdso_fine:
     movl D_MODE(%r8), %ecx
     cmpl $VCLOCK_NONE, %ecx
     je 4f
-    movq (%r8,%rdi), %r9
-    movq 8(%r8,%rdi), %r10
     cmpl $VCLOCK_PVCLOCK, %ecx
     je 5f
     lfence
     rdtsc
     lfence
-6:
     shlq $32, %rdx
     orq %rdx, %rax
+6:
+    movq (%r8,%rdi), %r9
+    movq 8(%r8,%rdi), %r10
     subq D_CYCLE_BASE(%r8), %rax
     jae 1f
     xorl %eax, %eax
@@ -121,15 +128,35 @@ vdso_fine:
     stc
     ret
 5:
-    movl -KVM_BACK+PVTI_VERSION(%r8), %ecx
-    andl $~1, %ecx
+    movl -KVM_BACK+PVTI_VERSION(%r8), %r9d
+    andl $~1, %r9d
     testb $PVCLOCK_TSC_STABLE_BIT, -KVM_BACK+PVTI_FLAGS(%r8)
     jz 4b
     lfence
     rdtsc
     lfence
-    cmpl -KVM_BACK+PVTI_VERSION(%r8), %ecx
+    shlq $32, %rdx
+    orq %rdx, %rax
+    subq -KVM_BACK+PVTI_TSC(%r8), %rax
+    jae 7f
+    xorl %eax, %eax
+7:
+    movsbl -KVM_BACK+PVTI_SHIFT(%r8), %ecx
+    testl %ecx, %ecx
+    js 8f
+    shlq %cl, %rax
+    jmp 9f
+8:
+    negl %ecx
+    shrq %cl, %rax
+9:
+    movl -KVM_BACK+PVTI_MUL(%r8), %edx
+    mulq %rdx
+    shrdq $32, %rdx, %rax
+    addq -KVM_BACK+PVTI_SYSTEM(%r8), %rax
+    cmpl -KVM_BACK+PVTI_VERSION(%r8), %r9d
     jne 5b
+    btrq $63, %rax
     jmp 6b
 
 # The same clock as of the last tick, without the TSC: %rax and %rdx and

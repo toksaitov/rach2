@@ -34,11 +34,14 @@
 .set D_COARSE_NS,  72
 .set D_RAW_MULT,   80
 .set D_RAW_SEC,    88
-# From the data page back to KVM's clock page, and that page's version
-# and flags, pvclock_vcpu_time_info's (../x86/tsc.c), with
-# PVCLOCK_TSC_STABLE_BIT.
+# From the data page back to KVM's clock page, and that page's fields,
+# pvclock_vcpu_time_info's (../x86/tsc.c), with PVCLOCK_TSC_STABLE_BIT.
 .set KVM_BACK,         0x1000
 .set PVTI_VERSION,     0
+.set PVTI_TSC,         8
+.set PVTI_SYSTEM,      16
+.set PVTI_MUL,         24
+.set PVTI_SHIFT,       28
 .set PVTI_FLAGS,       29
 .set PVCLOCK_TSC_STABLE_BIT, 1
 # Each clock's rate is 8 bytes before its seconds: D_MULT before D_MONO_SEC,
@@ -133,9 +136,9 @@ vdso32_page_at:
     ret
 
 # A reading of the clock whose base seconds are at offset EAX of the data
-# page at ECX, the nanoseconds after them, from the TSC: the seconds in
-# EDX:EAX and the nanoseconds, below 10^9, in ECX, as the 64-bit vDSO's
-# vdso_fine reads them. The TSC's count since the base, nought when it is
+# page at ECX, the nanoseconds after them, from the page's count: the
+# seconds in EDX:EAX and the nanoseconds, below 10^9, in ECX, as the 64-bit
+# vDSO's vdso_fine reads them. The count since the base, nought when it is
 # behind, as another processor's can be by a few counts, is multiplied by
 # the clock's rate, 8 bytes before its seconds, into 96 bits and shifted
 # right by the page's shift, at most 32; the base's nanoseconds are added
@@ -145,10 +148,14 @@ vdso32_page_at:
 # Linux's do_hres does (lib/vdso/gettimeofday.c:141-169), and returns with
 # the carry set and nothing read when the clock has stopped, so that a
 # reading the stop overtakes makes the system call; the carry is clear
-# otherwise. In VCLOCK_PVCLOCK the TSC is read as Linux's vread_pvclock
-# reads it (arch/x86/include/asm/vdso/gettimeofday.h:197-232), as the
-# 64-bit vDSO's vdso_fine reads it, and a clear stable bit returns with
-# the carry set.
+# otherwise. The count is the TSC in VCLOCK_TSC, and in VCLOCK_PVCLOCK
+# KVM's clock, read as Linux's vread_pvclock reads it (arch/x86/include/
+# asm/vdso/gettimeofday.h:197-232) and as the 64-bit vDSO's vdso_fine
+# reads it: the TSC converted through KVM's page by the 32-bit steps of
+# pvclock_scale_delta (asm/pvclock.h:44-81), the count shifted, then each
+# half times the page's rate, the low half's product shifted down 32 and
+# added to the high's, then the system time added. A clear stable bit
+# returns with the carry set.
 vdso32_fine:
     pushl %ebp
     pushl %ebx
@@ -237,11 +244,50 @@ vdso32_fine:
     andl $~1, %esi
     testb $PVCLOCK_TSC_STABLE_BIT, -KVM_BACK+PVTI_FLAGS(%ebp)
     jz 6b
+    pushl %esi
     lfence
     rdtsc
     lfence
+    subl -KVM_BACK+PVTI_TSC(%ebp), %eax
+    sbbl -KVM_BACK+PVTI_TSC+4(%ebp), %edx
+    jae 9f
+    xorl %eax, %eax
+    xorl %edx, %edx
+9:
+    movsbl -KVM_BACK+PVTI_SHIFT(%ebp), %ecx
+    testl %ecx, %ecx
+    js 10f
+    testb $32, %cl
+    jz 11f
+    movl %eax, %edx
+    xorl %eax, %eax
+11:
+    shldl %cl, %eax, %edx
+    shll %cl, %eax
+    jmp 12f
+10:
+    negl %ecx
+    testb $32, %cl
+    jz 13f
+    movl %edx, %eax
+    xorl %edx, %edx
+13:
+    shrdl %cl, %edx, %eax
+    shrl %cl, %edx
+12:
+    movl %edx, %ebx
+    mull -KVM_BACK+PVTI_MUL(%ebp)
+    movl %edx, %esi
+    movl %ebx, %eax
+    mull -KVM_BACK+PVTI_MUL(%ebp)
+    addl %esi, %eax
+    adcl $0, %edx
+    addl -KVM_BACK+PVTI_SYSTEM(%ebp), %eax
+    adcl -KVM_BACK+PVTI_SYSTEM+4(%ebp), %edx
+    popl %esi
     cmpl -KVM_BACK+PVTI_VERSION(%ebp), %esi
     jne 7b
+    andl $0x7FFFFFFF, %edx
     jmp 8b
 
 # The same clock as of the last tick, without the TSC: EDX:EAX and ECX and

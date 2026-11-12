@@ -53,8 +53,8 @@ struct tsc_kvm_sample {
  * while KVM has not written this one's: KVM's clock there is one clock
  * across processors whether or not their TSCs agree. A rate that does
  * not fit 32 bits keeps the last one and reads as a withdrawn bit. When
- * the rate or the bit changed, they become the ones `tsc_kvm_withdrawn`
- * and `tsc_kvm_stable` give. One processor at a time calls it, the one
+ * the rate or the bit changed, they become the ones `tsc_kvm_stable`
+ * gives. One processor at a time calls it, the one
  * counting the tick, with interrupts off.
  */
 int tsc_kvm_sample(struct tsc_kvm_sample *s);
@@ -71,23 +71,24 @@ int tsc_kvm_now(uint64_t *tsc, uint64_t *ns);
 int tsc_kvm_read(struct tsc_kvm_sample *s);
 
 /**
- * The TSC into `*tsc`, read while the boot processor's clock page, the one
- * the vDSO reads, has PVCLOCK_TSC_STABLE_BIT set, as Linux's vDSO checks
+ * The TSC into `*tsc` and KVM's clock at it into `*ns`, converted through
+ * the boot processor's clock page, the one the vDSO reads, in one pass
+ * while the page has PVCLOCK_TSC_STABLE_BIT set, as Linux's vDSO reads
  * that page inside each reading; 0, with nothing that may be used, when
  * the bit is clear or no page is kept. Any processor and any context may
  * call it.
  */
-int tsc_kvm_boot_stable(uint64_t *tsc);
+int tsc_kvm_boot_read(uint64_t *tsc, uint64_t *ns);
 
 /** The physical address of the page that holds the processors' clock
  * pages, the boot processor's first, which the vDSO maps; the page holds
  * nothing else. */
 uintptr_t tsc_kvm_page_frame(void);
 
-/** Whether the pages `tsc_kvm_counts_per_tick` keeps have withdrawn their
- * stable bit as of the last `tsc_kvm_sample`, so that the TSC is no longer
- * known to be one clock on every processor. 0 when no page is kept. */
-int tsc_kvm_withdrawn(void);
+/** Whether the boot processor's clock page, the one every reader of the
+ * vDSO's clock tests, has PVCLOCK_TSC_STABLE_BIT clear now, read from the
+ * page itself; 0 when no page is kept. Any context may call it. */
+int tsc_kvm_boot_withdrawn(void);
 
 /** Whether KVM states the TSC's rate and that it is one clock on every
  * processor, as of the last `tsc_kvm_sample`. */
