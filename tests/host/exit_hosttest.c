@@ -190,10 +190,12 @@ void ptrace_exit_notify(process_t *p)
 }
 
 /** Check that the timers aimed at the ending thread are let go of before
- * it is a zombie, whose timers' signals go to its process. */
+ * it is a zombie, and publish that state as the real function does under
+ * the timers' lock, after which their signals go to its process. */
 void ptimer_thread_exit(process_t *self)
 {
     CHECK(self->state != PROC_ZOMBIE, "a thread's timers' notifications go before it is a zombie");
+    self->state = PROC_ZOMBIE;
 }
 
 /** Check that the POSIX timers deleted are the child's process's. */

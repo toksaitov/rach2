@@ -237,6 +237,22 @@ static void unlist(struct ktimer *t)
     }
 }
 
+/**
+ * Put the armed clock timer `t` first on `armed`, whose equal deadlines
+ * expire from the last entry to the first (`expires_first`): a true rearm
+ * joins after the timers already queued for its end, as Linux 6.12.115's
+ * hrtimer_restart (kernel/time/posix-timers.c:244-251) and timerqueue_add
+ * (lib/timerqueue.c:19-37, include/linux/rbtree.h:172-180). Counting an
+ * interval while its signal is pending is no rearm. The caller holds
+ * `timer_lock`.
+ */
+static void requeue_clock(struct ktimer *t)
+{
+    unlist(t);
+    t->next = armed;
+    armed = t;
+}
+
 /** Take `t` off the list of armed timers it is on and mark it disarmed. The
  * caller holds `timer_lock`. */
 static void disarm(struct ktimer *t)
@@ -711,8 +727,9 @@ static int base_rank(int base)
  * first (kernel/time/hrtimer.c:1791-1811, include/linux/timerqueue.h:
  * 20-26), so that their signals are posted, or wait for another sender's,
  * in the order they expired (`ptimer_fire_later`, `wait_seq`). Of two with
- * the same end, the one later on `armed`, which went on it first, comes
- * first, as the timerqueue puts an equal time after those queued before it.
+ * the same end, the one later on `armed`, whose most recent arm or rearm
+ * came first (`requeue_clock`), comes first, as the timerqueue puts an equal
+ * time after those queued before it.
  */
 static int expires_first(const struct ktimer *t, const struct ktimer *first)
 {
@@ -1544,6 +1561,9 @@ static int ptimer_fire(struct ktimer *t, uint64_t fresh)
     fire_cpu = 0;
     if (!(pending & KSIG_BIT(t->signo))) {
         t->set_count = 0; /* ignored: dropped, and no delivery counts it */
+        if (fresh != 0 && t->armed && !t->cpu_tg) {
+            requeue_clock(t);
+        }
     }
     return (pending & KSIG_BIT(t->signo)) != 0 || t->ins >= (uint64_t)NS_PER_TICK;
 }
@@ -1727,6 +1747,7 @@ void ptimer_rearm(struct tgroup *tg, int signo, struct k_siginfo *info)
             t->set_count = 0;
             if (!t->cpu_tg) {
                 t->between = 1;
+                requeue_clock(t);
                 set_due(t, &r, 0);
             }
         }
@@ -1743,8 +1764,9 @@ void ptimer_rearm(struct tgroup *tg, int signo, struct k_siginfo *info)
  * of its threads': a disposition that ignores them, or a stop or SIGCONT
  * that cancels the other. Each notification of a POSIX timer of those
  * signals that waits goes too, and with it a deleted timer's record, and a
- * live timer's expirations since its signal was queued (`set_count`), as
- * Linux's flush_sigqueue_mask takes every sigqueue of those numbers off the
+ * live timer's expirations since its signal was queued (`set_count`) and
+ * those still waiting to be posted (`ptimer_fire_cancel`), as Linux
+ * 6.12.115's flush_sigqueue_mask takes every sigqueue of those numbers off the
  * queues and frees a deleted timer's (kernel/signal.c:444-452, 782-798,
  * 915-931, 4249-4255). With interrupts off; `timer_lock` is taken here
  * unless this processor holds it to post a signal (`fire_cpu`), whose job
@@ -1765,6 +1787,7 @@ void ptimer_discard(struct tgroup *tg, uint64_t bits)
     }
     for (t = tg->timers; t; t = t->in_group) {
         if (t->notify != SIGEV_NONE && (bits & KSIG_BIT(t->signo))) {
+            (void)ptimer_fire_cancel(t);
             t->count = 0;
             t->set_count = 0;
         }
@@ -1785,12 +1808,14 @@ void ptimer_discard(struct tgroup *tg, uint64_t bits)
  * that SIGEV_THREAD_ID aims at it, its pending signal of the timer or one
  * that waits for another sender's signal there (`count`), go with the
  * thread's pending signals, and so does a live timer's count of the
- * expirations since its signal was queued (`set_count`), as Linux's
+ * expirations since its signal was queued (`set_count`), including those
+ * the tick left to post (`ptimer_fire_cancel`), as Linux 6.12.115's
  * __exit_signal flushes the thread's queue, the timers' sigqueues on it
  * among them (kernel/exit.c:207, kernel/signal.c:455-465). A deleted
  * timer's record whose notification goes is freed. Called by the thread,
- * with the big lock held, before it becomes a zombie, after which a timer's
- * signal goes to the process (`ptimer_thread`).
+ * with the big lock held; publishes its zombie state under `timer_lock`
+ * after the discard, so no tick leaves an expiration for the ending thread
+ * between the two. Later expirations go to the process (`ptimer_thread`).
  */
 void ptimer_thread_exit(process_t *self)
 {
@@ -1798,12 +1823,10 @@ void ptimer_thread_exit(process_t *self)
     struct ktimer *t;
     uint32_t irq;
 
-    if (!tg->timers && !tg->timers_gone) {
-        return;
-    }
     irq = spin_lock_irqsave(&timer_lock);
     for (t = tg->timers; t; t = t->in_group) {
         if (t->notify == SIGEV_THREAD_ID && t->tid == self->pid) {
+            (void)ptimer_fire_cancel(t);
             t->count = 0;
             t->set_count = 0;
         }
@@ -1814,6 +1837,7 @@ void ptimer_thread_exit(process_t *self)
         }
     }
     gone_defer(gone_reap(tg));
+    self->state = PROC_ZOMBIE;
     timer_unlock(irq);
 }
 

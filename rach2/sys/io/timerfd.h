@@ -125,16 +125,18 @@ void ptimer_delete_all(struct tgroup *tg);
  * pending, as Linux's posixtimer_exec (fs/exec.c:1220-1229). */
 void ptimer_exec(struct process *self);
 
-/** Discard the waiting notifications of `tg`'s POSIX timers of the signals
- * `bits`, which have just been discarded from the process and its threads,
- * and free the deleted timers they kept; with interrupts off. */
+/** Discard the waiting and not yet posted notifications of `tg`'s POSIX
+ * timers of the signals `bits`, which have just been discarded from the
+ * process and its threads, and free the deleted timers they kept; with
+ * interrupts off. */
 void ptimer_discard(struct tgroup *tg, uint64_t bits);
 
 /** Drop the notifications of the POSIX timers that SIGEV_THREAD_ID aims at
- * the ending thread `self`, pending or waiting on it, and free the deleted
- * timers they kept, as Linux flushes an ending thread's pending signals
- * (kernel/exit.c:207); called by the thread with the big lock, before it
- * becomes a zombie. */
+ * the ending thread `self`, pending, waiting on it or not yet posted, and
+ * free the deleted timers they kept, then publish its zombie state under
+ * the same timer lock, as Linux 6.12.115 flushes an ending thread's pending
+ * signals under its signal lock (kernel/exit.c:203-207). Called by the
+ * thread with the big lock, after every release that may sleep. */
 void ptimer_thread_exit(struct process *self);
 
 /** Count the expirations due by the tick `now`, and wake the readers or

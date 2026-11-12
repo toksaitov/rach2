@@ -44,7 +44,8 @@
  * return to user mode, a traced one by its tracer's wait, and the leader,
  * whose id is the process id, waits for the rest of its group. Before it
  * becomes a zombie, the thread drops the notifications of the POSIX timers
- * aimed at it (`ptimer_thread_exit`), as Linux flushes an ending thread's
+ * aimed at it and publishes its zombie state together under the timers'
+ * lock (`ptimer_thread_exit`), as Linux flushes an ending thread's
  * pending signals (kernel/exit.c:207). The last
  * thread deletes the process's POSIX timers, applies its semaphore
  * adjustments, detaches its tracees, ends the rest of a PID namespace whose
@@ -91,7 +92,6 @@ int proc_exit_cleanup(int32_t status)
         }
     }
     ptimer_thread_exit(self);
-    self->state = PROC_ZOMBIE;
     if (self->ptrace & PT_TRACED) {
         ptrace_exit_notify(self);
     } else if (self != leader) {
