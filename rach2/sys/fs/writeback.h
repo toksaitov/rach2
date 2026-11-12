@@ -11,13 +11,18 @@
  * shared mappings and of the disk-backed window, which keep no age. When a
  * dirty mark leaves the buffer cache past its background threshold
  * (`bcache_dirty_level`), the thread is woken and writes the oldest buffers
- * back until the cache is under it again.
+ * back until the cache is under it again. The first dirty buffer of a clean
+ * cache wakes it too, and while any buffer is dirty it wakes a 32nd of the
+ * expiry period apart to read the cache's count of marks, which stands for
+ * the time a buffer went dirty.
  *
  * Durability is the syncs': `fsync`, `fdatasync`, `sync`, `syncfs`, `msync`
  * with MS_SYNC, O_SYNC and O_DSYNC writes, an unmount and a shutdown write
  * what they promise and flush the disk's cache, whether or not the flusher
  * has written any of it. A stop of the machine loses at most what was
- * dirtied in the last expiry period and the interval after it, as on Linux.
+ * dirtied in the last expiry period and the interval after it, as on Linux,
+ * and a 32nd of the period more, the spacing of the flusher's readings of
+ * the cache's marks (writeback.c).
  */
 
 /* /proc/sys/vm's dirty_expire_centisecs and dirty_writeback_centisecs, in

@@ -128,12 +128,16 @@ static int flusher_due(void *arg)
  * and `wb_check_background_flush`: at each turn the reading of the marks,
  * the write-back of what has expired, once a period the pages that keep no
  * age, then the background write-back; then a sleep for the writeback
- * interval, or until a wake when the interval is 0.
+ * interval, or until a wake when the interval is 0. While the cache holds
+ * dirty buffers the sleep ends at the readings' spacing too, for a reading
+ * only, and the first dirty buffer of a clean cache wakes the thread, so
+ * that a buffer waits at most that spacing longer than on Linux, which
+ * stamps each inode with the time it went dirty.
  */
 static void flusher_main(void)
 {
     uint64_t now, period, last_pages = tick_count(), last_turn = tick_count();
-    uint64_t interval;
+    uint64_t interval, soon;
     uint32_t flags;
     struct flusher_wait_arg arg;
 
@@ -162,6 +166,10 @@ static void flusher_main(void)
         flags = kirq_save();
         arg.gen = flusher_gen;
         arg.due = interval != 0 ? last_turn + interval : 0;
+        soon = now + ((period >> 5) ? (period >> 5) : 1);
+        if (interval != 0 && period != 0 && soon < arg.due && bcache_dirty_count() > 0) {
+            arg.due = soon;
+        }
         current_proc->wakeup_tick = arg.due;
         kirq_restore(flags);
         (void)wq_wait_event_idle(&flusher_wait, flusher_due, &arg);
@@ -175,9 +183,10 @@ void writeback_kick(void)
     wq_wake_all(&flusher_wait);
 }
 
-/** The cache's call past the background threshold: a wake unless the
- * flusher is awake already, since every dirty mark there makes one. A mark
- * between the flusher's last look and its sleep waits for its next turn. */
+/** The cache's call at its first dirty buffer and past the background
+ * threshold: a wake unless the flusher is awake already, since every dirty
+ * mark past the threshold makes one. A mark between the flusher's last look
+ * and its sleep waits for the next reading or turn. */
 static void flusher_kick(void)
 {
     if (!flusher_busy) {
