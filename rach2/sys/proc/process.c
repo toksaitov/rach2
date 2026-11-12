@@ -703,11 +703,12 @@ void free_process(process_t *proc)
  * tick do not both make one ready, and marked woken, as a wait queue's
  * wake marks it, so that the current thread's slice gives way to it
  * (`sched_tick`). The run queues' lock is held across the three, so that
- * no record collected is freed before its wake: `free_process` takes that lock (`sched_forget`)
- * before it frees. A real-time timer that is due is marked for a holder of the big lock
- * (`proc_tick_signal`), since a signal is posted under it, and stays due until then; `alarm_due`
- * keeps the next passes from marking it again. The interrupts the wakes ask for go out after the
- * lock.
+ * no record collected is freed before its wake: `free_process` takes that
+ * lock (`sched_forget`) before it frees. A real-time timer that is due is
+ * marked for a holder of the big lock (`proc_tick_signal`), since a signal
+ * is posted under it, and stays due until then; `alarm_due` keeps the next
+ * passes from marking it again. The interrupts the wakes ask for go out
+ * after the lock.
  */
 void proc_wake_sleepers(uint64_t now)
 {

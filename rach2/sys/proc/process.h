@@ -319,10 +319,11 @@ struct process {
      * the cache so its hold rules are checked against them alone. */
     struct bbuf *bcache_held;
     /* Set by a wake from a sleep: a wait queue's (`sched_wake_blocked`), its
-     * deadline's (`sched_wake_due`) or a signal's (`sched_wake_signal`). The scheduler may prefer
-     * the process once at its next selection, an interrupt switches to it within the current
-     * thread's slice (`sched_tick`), and the flag clears when the scheduler
-     * selects the process or the process blocks again. */
+     * deadline's (`sched_wake_due`) or a signal's (`sched_wake_signal`).
+     * The scheduler may prefer the process once at its next selection, an
+     * interrupt switches to it within the current thread's slice
+     * (`sched_tick`), and the flag clears when the scheduler selects the
+     * process or the process blocks again. */
     uint32_t woken;
     /* The switches away from it while it was blocked or stopped, and while
      * it could still run, counted by `schedule`: /proc's
