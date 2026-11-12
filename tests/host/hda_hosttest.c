@@ -44,6 +44,9 @@ static uint16_t eapd[128]; /* each pin's EAPD/BTL payload, with 0x100 once set *
  * once set, and the beep verbs sent. */
 static uint16_t beep_ctl[128], power[128];
 static unsigned beep_verbs;
+/* The next Set Beep Generation runs one tick of the boot processor once the
+ * codec has it, as a tick that comes while khda waits for the response. */
+static int beep_verb_ticks;
 /* The PC speaker's ports: port 0x61, and the PIT channel 2's count with the
  * bytes written to it. */
 static uint8_t port61;
@@ -133,6 +136,12 @@ static void model_set(unsigned nid, unsigned verb, unsigned offset)
     if ((verb & 0xFFF00) == HDA_VERB_SET_BEEP) {
         beep_ctl[nid] = (uint16_t)(0x100 | offset);
         beep_verbs++;
+        if (beep_verb_ticks) {
+            beep_verb_ticks = 0;
+            kernel_ticks++;
+            hda_tick();
+            speaker_tick();
+        }
     }
     if ((verb & 0xFFF00) == HDA_VERB_SET_POWER)
         power[nid] = (uint16_t)(0x100 | offset);
@@ -239,6 +248,7 @@ static void reset_model(void)
     k_memset(beep_ctl, 0, sizeof(beep_ctl));
     k_memset(power, 0, sizeof(power));
     beep_verbs = 0;
+    beep_verb_ticks = 0;
     conn_reads = verbs = bad_offsets = sense_triggers = 0;
     log_count = 0;
     run_at = ~0u;
@@ -2347,7 +2357,9 @@ static void beep_ticks(unsigned n)
  * their divider to khda and send no verb, khda sends it, turning the
  * speaker's pin on first, and waits while code outside its service holds
  * the jacks; a tone that comes before khda sends a stop replaces it, so the
- * stop is never sent after the tone; a second of silence turns the pin off.
+ * stop is never sent after the tone; a second of silence turns the pin off;
+ * and the tick's stop that comes while khda sends a tone stays owed, and
+ * khda sends it next.
  */
 static void beep_threaded(void)
 {
@@ -2396,6 +2408,18 @@ static void beep_threaded(void)
     beep_ticks(HDA_BEEP_IDLE_TICKS);
     run_khda();
     check(pin_ctl[23] == 0 && !r->beep_path, "and turns it off after a second of silence");
+
+    speaker_get_counters(&c0);
+    speaker_tone(SPEAKER_CLOCK / 750, 100);
+    beep_ticks(99);
+    beep_verb_ticks = 1;
+    run_khda();
+    speaker_get_counters(&c);
+    check(beep_ctl[18] == (0x100 | 16) && pin_ctl[23] == 0x40 && c.ends == c0.ends + 1 &&
+              beep_owed && beep_next == 0 && (service_wanted & HDA_SERVE_BEEP),
+          "the tick's stop that comes while khda sends the tone stays owed");
+    run_khda();
+    check(beep_ctl[18] == 0x100 && !beep_owed, "and khda sends it next");
     hda_test_threaded = false;
     service_wanted = 0;
 }
@@ -2470,7 +2494,8 @@ static void beep_other_codecs(void)
  * silence turns the pin off again. KIOCSOUND 0 stops a sound, a level of 0
  * sends 0, and a stop of playback during a tone leaves the pin on until the
  * tone ends. With khda running, a tone and the tick's stop are handed to
- * it, and a tone replaces a stop not yet sent. A widget with power control
+ * it, a tone replaces a stop not yet sent, and the tick's stop that comes
+ * while khda sends a tone stays owed. A widget with power control
  * is powered, a mixer that lists the widget has that input unmuted at 0 dB,
  * and a codec without one leaves the PIT alone to sound.
  */
