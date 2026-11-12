@@ -12,14 +12,27 @@
 struct vm_space;
 struct vm_file;
 
-/* What the vDSO's clock functions do: call the kernel, or read the TSC. */
-#define VCLOCK_NONE 0u
-#define VCLOCK_TSC  1u
+/*
+ * What the vDSO's clock functions do: call the kernel; read the TSC; or
+ * read the TSC while KVM's clock page for the boot processor, mapped below
+ * the data page, has PVCLOCK_TSC_STABLE_BIT set, checked inside each
+ * reading, and call the kernel when it is clear, as Linux's vDSO does in
+ * VDSO_CLOCKMODE_PVCLOCK (vread_pvclock, arch/x86/include/asm/vdso/
+ * gettimeofday.h:197-232).
+ */
+#define VCLOCK_NONE    0u
+#define VCLOCK_TSC     1u
+#define VCLOCK_PVCLOCK 2u
+
+/* The pages of [vvar]: KVM's clock page, then the data page, just below
+ * the image. */
+#define VDSO_VVAR_PAGES 2u
 
 /*
- * The data page, [vvar] in /proc/PID/maps, mapped read-only one page below
- * the vDSO's image, which reads it at these offsets (arch/x86_64/vdsocode.s):
- * the vDSO's copy of the offsets must change with this structure.
+ * The data page, the upper page of [vvar] in /proc/PID/maps, mapped
+ * read-only one page below the vDSO's image, which reads it at these
+ * offsets (arch/x86_64/vdsocode.s): the vDSO's copy of the offsets must
+ * change with this structure.
  *
  * The kernel changes it between two increments of `seq`, which is odd
  * meanwhile; a reader reads `seq`, the fields and the TSC, then `seq`
@@ -35,7 +48,7 @@ struct vm_file;
  */
 struct vdso_data {
     volatile uint32_t seq; /* odd while the kernel changes the page */
-    uint32_t mode;         /* VCLOCK_NONE or VCLOCK_TSC */
+    uint32_t mode;         /* VCLOCK_NONE, VCLOCK_TSC or VCLOCK_PVCLOCK */
     uint64_t cycle_base;   /* the TSC at the times below */
     uint32_t mult;         /* nanoseconds a count, times 2^shift */
     uint32_t shift;        /* at most 32 */
@@ -120,8 +133,11 @@ void vclock_tick(void);
  * `*sec` and `*nsec`, which is below 10^9; the raw clock has no coarse
  * reading. 0 with nothing read when the clock does not run from the TSC,
  * which each pass of the reading checks on the page, so that a reading the
- * clock's stop overtakes reads nothing. Any processor and any context may
- * call it.
+ * clock's stop overtakes reads nothing. In VCLOCK_PVCLOCK, once KVM's page
+ * for the boot processor withdraws its stable bit, where the vDSO makes
+ * the system call, the clock is carried on from the page's base by KVM's
+ * clock, as the stop carries it, until the tick stops the clock. Any
+ * processor and any context may call it.
  */
 int vclock_read(int which, int coarse, int64_t *sec, int64_t *nsec);
 
@@ -130,7 +146,7 @@ int vclock_read(int which, int coarse, int64_t *sec, int64_t *nsec);
  * with the TSC count it was read at in `*cycles`, so that the two are one
  * moment, as Linux's kvm_get_time_and_clockread pairs them for KVM's master
  * clock. 1, or 0 with nothing read when the clock does not run from the
- * TSC.
+ * TSC or KVM's page for the boot processor has withdrawn its stable bit.
  */
 int vclock_read_cycles(int which, uint64_t *ns, uint64_t *cycles);
 
@@ -166,19 +182,23 @@ uint32_t clock_calls(void);
  * none. */
 uint32_t vdso_image_pages(int abi);
 
-/** The physical frame of page `page` of the image for the ABI `abi`, or
- * of the data page for VDSO_DATA_PAGE. */
+/** The physical frame of page `page` of the image for the ABI `abi`, of
+ * the data page for VDSO_DATA_PAGE, or of the page that holds KVM's clock
+ * pages for VDSO_KVM_PAGE. */
 #define VDSO_DATA_PAGE 0xFFFFFFFFu
+#define VDSO_KVM_PAGE  0xFFFFFFFEu
 uintptr_t vdso_frame(int abi, uint32_t page);
 
 /** The bytes the vDSO takes in an address space of the ABI `abi`: the
- * data page and the image, or 0 where there is none. */
+ * VDSO_VVAR_PAGES pages of [vvar] and the image, or 0 where there is
+ * none. */
 uintptr_t vdso_span(int abi);
 
 /**
- * Add the data page at `at` and the image for the ABI `abi` after it to
- * `vm`, each a region of its own whose pages come from the kernel's frames
- * when first touched: the data page read-only and never writable, and the
+ * Add [vvar] at `at`, KVM's clock page and the data page, and the image
+ * for the ABI `abi` after it to `vm`, each a region of its own whose pages
+ * come from the kernel's frames when first touched: [vvar] read-only and
+ * never writable, and the
  * image read and execute, a private mapping that mprotect may make writable
  * and that a write, or a tracer's, copies. Returns the image's address,
  * AT_SYSINFO_EHDR; 0 where there is no vDSO; -1 when a region cannot be
@@ -190,7 +210,7 @@ intptr_t vdso_map(struct vm_space *vm, uintptr_t at, int abi);
  * that `vdso_map` maps, of either image, and NULL for any other. */
 const char *vdso_region_name(const struct vm_file *f);
 
-/** Whether `f` is the file of the data page, [vvar], which a core file
+/** Whether `f` is the file of [vvar], which a core file
  * leaves as a hole (proc/coredump.c). */
 int vdso_is_data(const struct vm_file *f);
 

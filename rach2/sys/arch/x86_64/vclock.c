@@ -191,27 +191,47 @@ static uint64_t vclock_base_cycles(void)
 }
 
 /**
- * The count on the page's TSC of the moment now, for the stop: where KVM's
- * clock was read at the page's base, the base plus KVM's clock since then,
- * read from the running processor's own page, at the page's counts in a
- * tick. KVM's clock is one clock on every processor; the TSC of the
- * processor that stops the clock, once the stable bit is withdrawn, may not
- * agree with the one the base was read on. Linux's reader likewise
- * converts each processor's own count by its own page before it takes any
- * floor (__pvclock_clocksource_read, pvclock.c:75-79 and 104-110;
- * kvm_clock_read, kvmclock.c:74-82). Elsewhere, the TSC read in order.
- * Under `vclock_lock`, with interrupts off.
+ * The count on the page's TSC of the moment now, carried from the page's
+ * base by KVM's clock, into `*cycles`: the base plus KVM's clock since the
+ * base, read from the running processor's own page, at the page's counts
+ * in a tick. KVM's clock is one clock on every processor; the TSC of the
+ * running processor, once the stable bit is withdrawn, may not agree with
+ * the one the base was read on. Linux's kernel likewise goes on reading
+ * kvm-clock, each processor's own count converted by its own page
+ * (kvm_clock_read, kvmclock.c:74-82; __pvclock_clocksource_read,
+ * pvclock.c:75-79 and 104-110). 0, with nothing written, where KVM's clock
+ * was not read at the base. Under `vclock_lock`, or inside a reader's pass
+ * of the page's sequence count; interrupts are kept off for the reading.
  */
-static uint64_t vclock_stop_cycles(void)
+static int vclock_kvm_cycles(uint64_t *cycles)
 {
     uint64_t tsc, ns, gone;
+    uint32_t flags;
+    int kvm;
 
-    if (!kvm_base_read || !tsc_kvm_now(&tsc, &ns)) {
-        return tsc_ordered();
+    if (!kvm_base_read) {
+        return 0;
+    }
+    flags = kirq_save();
+    kvm = tsc_kvm_now(&tsc, &ns);
+    kirq_restore(flags);
+    if (!kvm) {
+        return 0;
     }
     gone = ns > kvm_base_ns ? ns - kvm_base_ns : 0u;
-    return data->cycle_base + gone / TICK_NS * per_tick_used +
-           gone % TICK_NS * per_tick_used / TICK_NS;
+    *cycles = data->cycle_base + gone / TICK_NS * per_tick_used +
+              gone % TICK_NS * per_tick_used / TICK_NS;
+    return 1;
+}
+
+/** The count on the page's TSC of the moment now, for the stop: carried
+ * by KVM's clock where it was read at the base (`vclock_kvm_cycles`), else
+ * the TSC read in order. Under `vclock_lock`, with interrupts off. */
+static uint64_t vclock_stop_cycles(void)
+{
+    uint64_t cycles;
+
+    return vclock_kvm_cycles(&cycles) ? cycles : tsc_ordered();
 }
 
 /** The rate and its shift for `per_tick` counts a tick: the largest shift,
@@ -281,7 +301,10 @@ static const char *vclock_refusal(void)
 
 /**
  * Start the clock from the tick's clocks now at the TSC's rate now, and
- * have the vDSO read it: at clock.c's floors, `*mono_ns` and `*raw_ns`,
+ * have the vDSO read it, in VCLOCK_PVCLOCK where KVM's clock pages are
+ * kept, as Linux's kvm-clock gives the vDSO VDSO_CLOCKMODE_PVCLOCK where
+ * the boot processor's page has the stable bit (kvm_setup_vsyscall_timeinfo,
+ * kvmclock.c:241-262): at clock.c's floors, `*mono_ns` and `*raw_ns`,
  * where a clock stopped before is still ahead of the tick's, so that no
  * reading is earlier than one before the start. The bases go back into
  * them. Given to `rtc_vclock_change`.
@@ -305,7 +328,7 @@ static void vclock_begin(uint64_t *mono_ns, uint64_t *raw_ns)
     data->raw_mult = mult_measured;
     data->res_ns = vclock_resolution_ns();
     vclock_write_times();
-    data->mode = VCLOCK_TSC;
+    data->mode = kvm ? VCLOCK_PVCLOCK : VCLOCK_TSC;
     vclock_write_end();
     running = 1;
     kvm_stopped = 0;
@@ -470,32 +493,69 @@ static void vclock_fields(int which, int64_t *sec, uint64_t *nsec, uint32_t *mul
     }
 }
 
-/** Linux's do_hres, and do_coarse with `coarse`, each pass checking the
- * mode as do_hres does (lib/vdso/gettimeofday.c:130-179, 218-242). */
-int vclock_read(int which, int coarse, int64_t *sec, int64_t *nsec)
-{
-    uint64_t ns, cycles;
-    uint32_t seq, mult;
-    int64_t s;
+/* What a reading's passes found (`vclock_pass`). */
+#define VREAD_OK        0 /* read as the vDSO reads it */
+#define VREAD_STOPPED   1 /* the clock does not run; nothing read */
+#define VREAD_WITHDRAWN 2 /* KVM's page withdrew its bit; carried by KVM's clock */
 
-    if (!data) {
-        return 0;
-    }
+/**
+ * A reading of the clock `which` as the vDSO makes it: Linux's do_hres,
+ * and do_coarse with `coarse`, each pass checking the mode as do_hres does
+ * (lib/vdso/gettimeofday.c:130-179, 218-242), and in VCLOCK_PVCLOCK the
+ * TSC read as vread_pvclock reads it, while KVM's page for the boot
+ * processor has its stable bit (`tsc_kvm_boot_stable`;
+ * arch/x86/include/asm/vdso/gettimeofday.h:197-232). The base's seconds go
+ * into `*sec`, the nanoseconds since them, which may pass a second, into
+ * `*ns`, and the TSC count into `*cycles`, which a coarse reading leaves.
+ * VREAD_OK; VREAD_STOPPED, with nothing that may be used, while the clock
+ * does not run; VREAD_WITHDRAWN where the page has withdrawn its bit, where
+ * the vDSO makes the system call, with the clock read at the moment now
+ * carried from the page's base by KVM's clock (`vclock_kvm_cycles`), the
+ * reading the stop makes and Linux's kernel makes by kvm-clock.
+ */
+static int vclock_pass(int which, int coarse, int64_t *sec, uint64_t *ns, uint64_t *cycles)
+{
+    uint32_t seq, mult, mode;
+    int found;
+
     do {
         while ((seq = data->seq) & 1u) {
             arch_relax();
         }
         __asm__ __volatile__("" : : : "memory");
-        if (data->mode != VCLOCK_TSC) {
-            return 0;
+        mode = data->mode;
+        if (mode == VCLOCK_NONE) {
+            return VREAD_STOPPED;
         }
-        vclock_fields(which, &s, &ns, &mult);
+        vclock_fields(which, sec, ns, &mult);
+        found = VREAD_OK;
         if (!coarse) {
-            cycles = tsc_ordered();
-            ns += vclock_scale(vclock_since(cycles), mult, data->shift);
+            if (mode != VCLOCK_PVCLOCK) {
+                *cycles = tsc_ordered();
+            } else if (!tsc_kvm_boot_stable(cycles)) {
+                found = VREAD_WITHDRAWN;
+                if (!vclock_kvm_cycles(cycles)) {
+                    return VREAD_STOPPED;
+                }
+            }
+            *ns += vclock_scale(vclock_since(*cycles), mult, data->shift);
         }
         __asm__ __volatile__("" : : : "memory");
     } while (data->seq != seq);
+    return found;
+}
+
+/** A reading of `vclock_pass`, the one carried by KVM's clock included,
+ * so that a system call the vDSO makes for a withdrawn bit reads the
+ * clock on from where its readings left it. */
+int vclock_read(int which, int coarse, int64_t *sec, int64_t *nsec)
+{
+    uint64_t ns, cycles;
+    int64_t s;
+
+    if (!data || vclock_pass(which, coarse, &s, &ns, &cycles) == VREAD_STOPPED) {
+        return 0;
+    }
     if (ns >= NSEC_PER_SEC) {
         s += (int64_t)(ns / NSEC_PER_SEC);
         ns %= NSEC_PER_SEC;
@@ -505,30 +565,18 @@ int vclock_read(int which, int coarse, int64_t *sec, int64_t *nsec)
     return 1;
 }
 
+/** Only a reading of the TSC itself, VREAD_OK, pairs a count with the
+ * time: a withdrawn bit gives no pair, as Linux's vgettsc gives KVM none
+ * from a clock page that is not valid (arch/x86/kvm/x86.c:2395-2425). */
 int vclock_read_cycles(int which, uint64_t *ns, uint64_t *cycles)
 {
-    uint64_t base, c, nsec;
-    uint32_t seq, mult;
+    uint64_t c, nsec;
     int64_t sec;
 
-    if (!data) {
+    if (!data || vclock_pass(which, 0, &sec, &nsec, &c) != VREAD_OK) {
         return 0;
     }
-    do {
-        while ((seq = data->seq) & 1u) {
-            arch_relax();
-        }
-        __asm__ __volatile__("" : : : "memory");
-        if (data->mode != VCLOCK_TSC) {
-            return 0;
-        }
-        vclock_fields(which, &sec, &nsec, &mult);
-        base = (uint64_t)sec * NSEC_PER_SEC + nsec;
-        c = tsc_ordered();
-        base += vclock_scale(vclock_since(c), mult, data->shift);
-        __asm__ __volatile__("" : : : "memory");
-    } while (data->seq != seq);
-    *ns = base;
+    *ns = (uint64_t)sec * NSEC_PER_SEC + nsec;
     *cycles = c;
     return 1;
 }

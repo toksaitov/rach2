@@ -640,7 +640,7 @@ struct mm;
  * private page, a breakpoint in the program's text, through a copy of its
  * own, as Linux's FOLL_FORCE does. An address outside user space, a page of
  * no region, of a PROT_NONE one, of a guard, of device memory, of
- * memfd_secret or of the vDSO's data page, [vvar], a page that cannot be
+ * memfd_secret or of the vDSO's data pages, [vvar], a page that cannot be
  * backed, and a page of a read-only shared region for a write are -EIO, as
  * Linux's get_user_pages refuses them.
  * Returns 0, -EIO, or -ENOMEM when no temporary mapping was free. It may

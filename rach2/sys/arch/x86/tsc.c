@@ -65,16 +65,22 @@ struct kvm_clock_page {
     uint8_t pad[2];
 };
 
-/* Room for a page for each processor, in room for one more so that they
- * can start on a 32-byte boundary, where none crosses a page boundary. */
-static uint64_t kvm_clock_room[(NR_CPUS + 1) * 4];
+/*
+ * A page for each processor, 32 bytes each, in a page of memory of their
+ * own, which the vDSO maps read-only for the boot processor's, as Linux's
+ * hv_clock_boot is a page that holds nothing else (arch/x86/kernel/
+ * kvmclock.c:44-50), whose first entry kvm_init_platform gives the vDSO
+ * (pvclock_set_pvti_cpu0_va, kvmclock.c:315) and vvar_fault maps
+ * (arch/x86/entry/vdso/vma.c:185-191). NR_CPUS of them fit; an array size
+ * of -1 fails the compile.
+ */
+static uint64_t kvm_clock_room[PAGE_SIZE / sizeof(uint64_t)] __attribute__((aligned(4096)));
+typedef char kvm_clock_room_fits[NR_CPUS * sizeof(struct kvm_clock_page) <= PAGE_SIZE ? 1 : -1];
 
 /** Processor `cpu`'s page. */
 static struct kvm_clock_page *kvm_clock_of(int cpu)
 {
-    uintptr_t at = ((uintptr_t)kvm_clock_room + 31u) & ~(uintptr_t)31u;
-
-    return (struct kvm_clock_page *)at + cpu;
+    return (struct kvm_clock_page *)kvm_clock_room + cpu;
 }
 
 /** Give KVM processor `cpu`'s page, the running one's, with
@@ -270,6 +276,38 @@ int tsc_kvm_now(uint64_t *tsc, uint64_t *ns)
     *tsc = s.tsc;
     *ns = s.ns;
     return 1;
+}
+
+/**
+ * Linux's vread_pvclock (arch/x86/include/asm/vdso/gettimeofday.h:
+ * 197-232): the version made even (pvclock_read_begin, asm/pvclock.h:
+ * 22-29) and the bit checked before the counter is read, and the reading
+ * made again when the version moved meanwhile or was odd
+ * (pvclock_read_retry, pvclock.h:31-36).
+ */
+int tsc_kvm_boot_stable(uint64_t *tsc)
+{
+    struct kvm_clock_page *p = kvm_clock_of(0);
+    uint32_t version;
+
+    if (!kvm_kept) {
+        return 0;
+    }
+    do {
+        version = p->version & ~1u;
+        arch_dma_fence();
+        if (!(p->flags & PVCLOCK_TSC_STABLE_BIT)) {
+            return 0;
+        }
+        *tsc = tsc_ordered();
+        arch_dma_fence();
+    } while (version != p->version);
+    return 1;
+}
+
+uintptr_t tsc_kvm_page_frame(void)
+{
+    return virt_to_phys(kvm_clock_room);
 }
 
 int tsc_kvm_withdrawn(void)

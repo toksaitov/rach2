@@ -77,7 +77,7 @@ Other values that differ:
 | `kmap_temp` | a slot of the temporary mappings | the frame's address in the direct map |
 | `ELF_ET_DYN_BASE`, a position-independent program's base | `0x08000000` | `0x0000555555554000` |
 | `USER_MMAP_BASE`, below which mappings go | `0xB0000000` | `0x00007F0000000000` |
-| The vDSO's data page and code, `[vvar]` and `[vdso]` ([vdso(7)](../../../man/man7/vdso.7)) | none | the two pages above the free page over the mmap base |
+| The vDSO's KVM clock page, data page and code, `[vvar]` and `[vdso]` ([vdso(7)](../../../man/man7/vdso.7)) | none | the three pages above the free page over the mmap base |
 | `USER_STACK_BASE`, the stack's top page | `0xBFFFF000` | `0x00007FFFFFFFE000` |
 | `ASLR_STACK_PAGES`, `ASLR_MMAP_PAGES`, `ASLR_BRK_PAGES`, the bounds of the random offsets, counted in pages: of the stack's top, of the mmap base and of a position-independent program's base, of the heap's start | 0, 0, 0 | 16 GiB, 1 TiB, 32 MiB |
 | `ASLR_SP_BYTES`, the bound of the entry stack pointer's offset | 0 | 8 KiB |

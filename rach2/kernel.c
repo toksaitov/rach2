@@ -1744,7 +1744,7 @@ static void exec_program(int argc, char *argv[])
     stack_bottom = stack_base;
 
     user_sp = boot_stack(mm, argc, argv, default_envp, &img,
-                         vdso_span(abi) ? vdso_at + PAGE_SIZE : 0, &stack_bottom);
+                         vdso_span(abi) ? vdso_at + VDSO_VVAR_PAGES * PAGE_SIZE : 0, &stack_bottom);
     if (user_sp == 0) {
         mm_put(mm);
         console_puts("exec: the initial stack could not be built");

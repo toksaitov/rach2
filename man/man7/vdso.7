@@ -114,6 +114,10 @@ counter is one clock on every processor, the kernel takes the counter's
 rate from that page instead of measuring it, as Linux's kvm-clock does,
 and follows the page: a new rate is taken at the next tick, and while the
 page withdraws its stable bit the clock calls enter the kernel.
+Each reading checks the boot processor's clock page itself, as Linux's
+vDSO does, and enters the kernel the moment its stable bit is clear,
+without waiting for the tick; the kernel then carries the clock on by
+KVM's clock until the tick stops it.
 As each further processor starts, it and the boot processor read the
 counter in turn for two ticks, and a reading behind the other's turns the
 TSC clock off.
@@ -124,7 +128,8 @@ vdso: clock: the system call; no tsc at one rate was measured
 .Ed
 .Pp
 The kernel keeps the clock's state in a page of its own, mapped read-only
-one page below the library: the counter's value at the last tick, and for
+one page below the library, with KVM's clock page for the boot processor
+one page below that: the counter's value at the last tick, and for
 the monotonic clock, real time and
 .Dv CLOCK_MONOTONIC_RAW
 the time then and the nanoseconds a count adds, which it changes at each
@@ -147,16 +152,18 @@ system call itself.
 .Sh FILES
 .Bl -tag -width "/proc/PID/maps"
 .It Pa /proc/PID/maps
-The data page as
+KVM's clock page and the data page as
 .Li [vvar] ,
-readable alone, and the library as
+two pages readable alone, and the library as
 .Li [vdso] ,
-readable and executable, each one page, private, one free page above the
+one page readable and executable, each private, one free page above the
 range
 .Xr mmap 2
 places mappings in.
-The data page can never be made writable or executable, and only the
-process's own loads reach it, as on Linux.
+Neither page of
+.Li [vvar]
+can ever be made writable or executable, and only the process's own loads
+reach them, as on Linux.
 .Xr ptrace 2
 and
 .Pa /proc/PID/mem ,
@@ -164,13 +171,15 @@ the process's own
 .Pa /proc/self/mem
 among them, answer
 .Er EIO
-for it;
+for them;
 .Xr process_vm_readv 2
 and
 .Xr vmsplice 2
 answer
 .Er EFAULT .
-The library, unlike the data page, may be made writable, as on Linux:
+The library, unlike
+.Li [vvar] ,
+may be made writable, as on Linux:
 .Xr mprotect 2
 may add
 .Dv PROT_WRITE ,

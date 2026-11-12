@@ -64,6 +64,20 @@ int tsc_kvm_sample(struct tsc_kvm_sample *s);
  * when no page is kept. With interrupts off. */
 int tsc_kvm_now(uint64_t *tsc, uint64_t *ns);
 
+/**
+ * The TSC into `*tsc`, read while the boot processor's clock page, the one
+ * the vDSO reads, has PVCLOCK_TSC_STABLE_BIT set, as Linux's vDSO checks
+ * that page inside each reading; 0, with nothing that may be used, when
+ * the bit is clear or no page is kept. Any processor and any context may
+ * call it.
+ */
+int tsc_kvm_boot_stable(uint64_t *tsc);
+
+/** The physical address of the page that holds the processors' clock
+ * pages, the boot processor's first, which the vDSO maps; the page holds
+ * nothing else. */
+uintptr_t tsc_kvm_page_frame(void);
+
 /** Whether the pages `tsc_kvm_counts_per_tick` keeps have withdrawn their
  * stable bit as of the last `tsc_kvm_sample`, so that the TSC is no longer
  * known to be one clock on every processor. 0 when no page is kept. */
