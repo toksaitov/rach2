@@ -43,8 +43,8 @@ static int _wake_turn[NR_CPUS];
 
 /* Each remote affinity caller keeps its wait on its stack until completed.
  * The list is under sched_lock; a wait is completed after it leaves the
- * list, under the wait queues' lock (`wq_complete`), and its waiter may
- * return and its stack go the moment that lock is let go. */
+ * list, under its queue's lock (`wq_complete`), and its waiter may return
+ * and its stack go the moment that lock is let go. */
 struct affinity_wait {
     struct affinity_wait *next;
     process_t *task; /* No reference remains after the wait completes. */
@@ -56,7 +56,7 @@ static struct affinity_wait *affinity_waits;
 /** Complete every pending move of `p`, after its switch away or when a
  * later affinity allows its processor. Interrupts are off and sched_lock
  * free: the waits are taken off the list under it, and completed after,
- * since a wake takes the wait queues' lock, which comes before it. A wait
+ * since a wake takes its queue's lock, which comes before it. A wait
  * for `p` is linked only while `p` runs, under sched_lock, so a caller that
  * comes after `p`'s switch away sees it without the lock. */
 static void affinity_complete(process_t *p)
@@ -440,11 +440,15 @@ static int sched_place(const process_t *p)
     return cpu_table[p->cpu].current == p ? p->cpu : sched_choose(p);
 }
 
-void sched_make_ready(process_t *p)
+/**
+ * Make `p` ready, on the queue `sched_place` gives it, and return the
+ * processor to interrupt so that it selects now: one that is idle, or
+ * halted in place with `p` current, or runs a thread `p` outranks; -1 when
+ * none needs it. `sched_lock` is held.
+ */
+static int sched_ready_locked(process_t *p)
 {
-    uint32_t flags = spin_lock_irqsave(&sched_lock);
     int target;
-    int kick;
 
     sched_remove(p);
     p->state = PROC_READY;
@@ -456,11 +460,45 @@ void sched_make_ready(process_t *p)
     } else {
         waketime_state(p, 2, target);
     }
-    kick = sched_cpu_idle(target) || cpu_table[target].current == p ||
-           sched_priority(p) > sched_priority(cpu_table[target].current);
+    if (sched_cpu_idle(target) || cpu_table[target].current == p ||
+        sched_priority(p) > sched_priority(cpu_table[target].current)) {
+        return target;
+    }
+    return -1;
+}
+
+void sched_make_ready(process_t *p)
+{
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+    int kick = sched_ready_locked(p);
+
     spin_unlock_irqrestore(&sched_lock, flags);
-    if (kick) {
-        smp_kick(target);
+    if (kick >= 0) {
+        smp_kick(kick);
+    }
+}
+
+int sched_wake_blocked(process_t *p)
+{
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+    int kick = -1;
+
+    if (p->state == PROC_BLOCKED) {
+        p->woken = 1;
+        kick = sched_ready_locked(p);
+    }
+    spin_unlock_irqrestore(&sched_lock, flags);
+    return kick;
+}
+
+void sched_kick_cpus(uint64_t cpus)
+{
+    int c;
+
+    for (c = 0; cpus != 0; c++, cpus >>= 1) {
+        if (cpus & 1u) {
+            smp_kick(c);
+        }
     }
 }
 

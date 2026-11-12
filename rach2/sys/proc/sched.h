@@ -75,6 +75,24 @@ void schedule(void);
 void sched_make_ready(process_t *p);
 
 /**
+ * Make `p` ready as `sched_make_ready` does, and mark it woken, if it is
+ * blocked; a thread in any other state is left as it is. The state is
+ * tested under the run queues' lock, as Linux's `try_to_wake_up` tests it
+ * under the task's `pi_lock` (kernel/sched/core.c:4191-4193), so that of two
+ * wakers on two queues of one poller, or a queue's and a signal's, one makes
+ * it ready. Returns the processor to interrupt, which the caller passes to
+ * `smp_kick`, or to `sched_kick_cpus` in a set, once it has let its own
+ * spinlocks go, or -1 when none needs it. Interrupts may be on or off.
+ */
+int sched_wake_blocked(process_t *p);
+
+/** `smp_kick` each processor whose bit is set in `cpus`: the interrupts a
+ * waker's `sched_wake_blocked` calls asked for, sent after its locks, as
+ * Linux's `wake_up_q` wakes after the futex bucket's lock
+ * (kernel/futex/waitwake.c:198-199). */
+void sched_kick_cpus(uint64_t cpus);
+
+/**
  * Bind `p` to the processors of `mask`, of which one is started at least,
  * as sched_setaffinity(2) asks. A ready process on the queue of a processor
  * outside the set moves to one inside it. A running process leaves before
