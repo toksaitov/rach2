@@ -874,7 +874,10 @@ static void entry_fields(struct kvm_vcpu *v)
 
 /** Load DR0 to DR3 for the run when the DR7 it runs under enables a
  * breakpoint: the caller's breakpoints while it sets them, else the
- * guest's. The VMCB holds DR6 and DR7. */
+ * guest's. The VMCB holds DR6 and DR7. A host DR7 that enables a
+ * breakpoint is cleared to its fixed bit first, as Linux's vcpu_enter_guest
+ * writes DR7_FIXED_1 before the guest's DR0 to DR3 (x86.c:10542-10548), so
+ * that no host access to a guest's breakpoint address traps before VMRUN. */
 static void dr_load(struct kvm_vcpu *v, uint64_t *host_dr7, uint64_t host_db[4])
 {
 #ifndef RACH2_HOSTTEST
@@ -885,6 +888,9 @@ static void dr_load(struct kvm_vcpu *v, uint64_t *host_dr7, uint64_t host_db[4])
     s->guest_dr = (dr7_of(v) & DR7_ENABLES) != 0;
     if (!s->guest_dr) {
         return;
+    }
+    if (*host_dr7 & DR7_ENABLES) {
+        hw_write_dr(7, DR7_ONE);
     }
     for (i = 0; i < 4; i++) {
         host_db[i] = hw_read_dr(i);
