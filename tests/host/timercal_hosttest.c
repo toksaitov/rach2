@@ -60,6 +60,7 @@ static uint64_t deadline_at;
 static uint64_t coarse_model = (uint64_t)-1;
 
 static int fails;
+static int guest_model;
 
 #define CHECK(cond, what)                   \
     do {                                    \
@@ -324,7 +325,9 @@ int kcmdline_has(const char *flag)
 void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
 {
     *a = *b = *c = *d = 0;
-    if (leaf == 0x80000000u) {
+    if (leaf == 1 && guest_model) {
+        *c = 1u << 31;
+    } else if (leaf == 0x80000000u) {
         *a = 0x80000008u;
     } else if (leaf == 0x80000007u && tsc_one_rate_bit) {
         *d = 1u << 8;
@@ -1063,8 +1066,11 @@ static void idle_transitions(void)
     now_ns = MS(101);
     CHECK(!(take_hr_event(APIC_TIMER_VECTOR) & APIC_HR_TICK),
           "a stale pending tick does not count in idle");
+    writes = apic_writes;
     timer_wake_at((int64_t)MS(250));
-    CHECK(apic_vector == APIC_TIMER_VECTOR && apic_initial == 149000001u,
+    CHECK(c->want == (int64_t)MS(250) && apic_writes == writes,
+          "idle callbacks retain an event without programming before selection");
+    CHECK(timer_idle_enter() && apic_vector == APIC_TIMER_VECTOR && apic_initial == 149000001u,
           "the next event is armed for its full interval without intervening ticks");
     writes = apic_writes;
     CHECK(timer_idle_enter() && apic_writes == writes,
@@ -1105,7 +1111,7 @@ static void idle_transitions(void)
     tsc_measured = 1;
     tsc_khz = 2000000u;
     timer_wake_at((int64_t)MS(400));
-    CHECK(deadline_at == tsc_ordered() + 198000001u,
+    CHECK(timer_idle_enter() && deadline_at == tsc_ordered() + 198000001u,
           "TSC-deadline mode uses the TSC rate for the event");
     now_ns = MS(400) + 1;
     deadline_at = 0; /* The APIC clears the MSR when it raises the interrupt. */
@@ -1260,6 +1266,37 @@ static void idle_prepare_rows(void)
     prepare_first = prepare_second = 0;
 }
 
+/** Keep the guest scheduler at 250 Hz while a millisecond event stays
+ * independent, including the first interrupt of a continuously busy CPU. */
+static void idle_guest_period(void)
+{
+    struct hr_state *c = &hr_cpu[0];
+
+    guest_model = 1;
+    apic_hr_init(1000000u);
+    now_ns = MS(10000.2);
+    apic_timer_start(1000000u, TICK_HZ);
+    now_ns = MS(10001.2);
+    CHECK(take_hr_event(APIC_TIMER_VECTOR) == APIC_HR_EVENT && c->oneshot &&
+              c->tick == (int64_t)MS(10004),
+          "a busy guest joins the four-millisecond phase on its first interrupt");
+    now_ns = MS(10004);
+    CHECK((take_hr_event(APIC_TIMER_VECTOR) & APIC_HR_TICK) != 0 && c->due == (int64_t)MS(10004) &&
+              c->tick == (int64_t)MS(10008),
+          "a guest scheduler tick advances by four clock units");
+    timer_wake_at((int64_t)MS(10005));
+    now_ns = MS(10005);
+    CHECK(take_hr_event(APIC_TIMER_VECTOR) == APIC_HR_EVENT && c->tick == (int64_t)MS(10008),
+          "a one-millisecond event takes no future guest scheduler tick");
+    CHECK(timer_idle_enter(), "stop the guest tick before a long idle span");
+    now_ns = MS(15000.4);
+    timer_idle_exit();
+    CHECK(c->tick == (int64_t)MS(15004),
+          "a long idle span retains the four-millisecond common phase");
+    guest_model = 0;
+    hr_sched_ns = TICK_NS;
+}
+
 /** Run the idle-event scenario and restore the calibration model. */
 static void idle_rows(void)
 {
@@ -1268,6 +1305,7 @@ static void idle_rows(void)
     idle_tick_cache();
     idle_phase();
     idle_prepare_rows();
+    idle_guest_period();
     hr_model = 0;
     ref_kind = REF_NONE;
     hr_vector = 0;
@@ -1360,12 +1398,6 @@ int main(int argc, char **argv)
     }
     printf("timercal_hosttest: all checks passed\n");
     return 0;
-}
-
-/** The model's declined idle preparation represents pending ready work. */
-int timer_idle_woken(void)
-{
-    return idle_allowed < 0;
 }
 
 /** No device services constrain the modeled idle timer. */

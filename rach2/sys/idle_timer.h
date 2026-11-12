@@ -1,4 +1,4 @@
-/* Idle deadlines of services otherwise driven by the boot processor's tick. */
+/* Deadlines of the boot processor's device and protocol services. */
 #ifndef _IDLE_TIMER_H_
 #define _IDLE_TIMER_H_
 #include "timer.h"

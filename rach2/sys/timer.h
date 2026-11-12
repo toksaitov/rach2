@@ -222,17 +222,17 @@ int timer_idle_enter(void);
  * and missed ticks skipped. Interrupts are off and no lock is held. */
 void timer_idle_exit(void);
 
-/** Whether the current idle task has a pending selection. Interrupts are
- * off; no lock is held. The flag remains set until local selection. */
-int timer_idle_woken(void);
-
 /** Collect the next idle watchdog and device events. Return one when
  * ready, zero when the big lock is busy and the tick must stay, or minus
  * one when ready work declines the halt without changing the tick state.
  * No lock is held; interrupts are off. */
 int timer_idle_prepare(void);
 
-/** Compare service deadlines with the sleeping boot processor's event and
+/** Install CPU0's saved service deadline after an interprocessor kick.
+ * Interrupts are off; no lock is held. Other processors do nothing. */
+void timer_service_ipi(void);
+
+/** Compare service deadlines with the boot processor's event and
  * kick it when an earlier one was added. The caller holds the big lock
  * with interrupts off and no other lock. */
 void timer_idle_notify(void);

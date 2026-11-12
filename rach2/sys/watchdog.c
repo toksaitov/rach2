@@ -823,17 +823,16 @@ static void watchdog_restart(struct wd_cpu *w)
  * that a lockup within the first sample period is caught, and the first
  * after a write of the settings restarts the detectors (`watchdog_restart`),
  * whether or not they are on now. The timer fires
- * after a sample period of ticks or of the TSC, whichever comes first, so
+ * once the monotonic sample deadline passes, so
  * that the first tick after a wait with interrupts off fires it at once, as
  * Linux's hrtimer fires as soon as interrupts let it, in the context that
- * held them off. `tick` counts a scheduler tick; an idle event instead
- * checks the monotonic sample deadline without advancing that count.
+ * held them off. Both scheduler ticks and idle events check the monotonic
+ * deadline; the sample period is independent of their frequency.
  */
-static void watchdog_run(isr_params_t *params, int tick)
+static void watchdog_run(isr_params_t *params)
 {
     struct wd_cpu *w = &wd[arch_cpu_id()];
     uint32_t period = sample_ticks();
-    uint64_t cycles = sample_cycles();
     int64_t now = rtc_monotonic_ns();
 
     if (!wd_ready) {
@@ -856,8 +855,7 @@ static void watchdog_run(isr_params_t *params, int tick)
     if (period == 0) {
         return;
     }
-    if (tick ? (++w->ticks < period && (cycles == 0 || w->tick_tsc - w->timer_tsc < cycles))
-             : now - w->timer_ns < (int64_t)period * TICK_NS) {
+    if (now - w->timer_ns < (int64_t)period * TICK_NS) {
         return;
     }
     w->ticks = 0;
@@ -869,14 +867,14 @@ static void watchdog_run(isr_params_t *params, int tick)
 /** Run the watchdog's sample from a scheduler tick, with interrupts off. */
 void watchdog_tick(isr_params_t *params)
 {
-    watchdog_run(params, 1);
+    watchdog_run(params);
 }
 
 /** Run a sample due by monotonic time from an idle timer event, with
  * interrupts off before any wait for the big lock. */
 void watchdog_event(isr_params_t *params)
 {
-    watchdog_run(params, 0);
+    watchdog_run(params);
 }
 
 /** Return the next sample's absolute monotonic deadline, or zero while

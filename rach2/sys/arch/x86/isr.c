@@ -1030,6 +1030,7 @@ void isr_local_router(isr_params_t *params)
         smp_ipi();
         lapic_eoi();
         smp_ipi();
+        timer_service_ipi();
         if (FRAME_USER(params) && current_proc &&
             (current_proc->work & (WORK_RESCHED | WORK_RSEQ)) != 0) {
             bkl_frame_push(0);

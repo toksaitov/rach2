@@ -515,4 +515,6 @@ The virtual channel rows of `dsp_hosttest.c` also cover two readers receiving th
 
 `process_timer_hosttest --event-owner` runs only the event ownership row: a pass on another CPU rearms no future wake, its owner rearms it, and either may expire it once due. The idle rows of `timercal_hosttest` also force a smooth clock ahead of an uncountable coarse tick, keep an unchanged programmed event, and leave periodic mode on first idle with TSC-deadline support.
 
-`kvmguest_hosttest` models the guest's KVM records: feature gating, the aligned per-CPU EOI word, one completion per host-set bit, independent CPU words, the ordinary EOI fallback, and local and remote steal-time reads.
+`kvmguest_hosttest` models the guest's KVM records: independent feature setup, per-CPU EOI word registration and local and remote steal-time reads.
+
+The task's `itco_hosttest --elapsed-only` rows check irregular service spans, zero elapsed time, the open deadline, and the next service across a tick-count wrap. `timercal_hosttest --idle` also checks the guest's 4 ms scheduler phase and an independent 1 ms event.
