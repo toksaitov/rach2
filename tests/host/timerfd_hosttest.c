@@ -28,9 +28,11 @@
  * timer_settime before the post keeps one expiration for it; one made while
  * the timer's own signal is pending sets that signal's overrun to 0 and
  * keeps none.
+ *
+ * An expiration begins the wake record of each reader on the timer's queue
+ * under the queue's lock and the run queues' lock taken after it.
  */
 #include "io/timerfd.c"
-#include "compat/waketime_none.h"
 
 extern int printf(const char *format, ...);
 
@@ -154,12 +156,52 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return -EINTR;
 }
 
-/** Nothing: the model keeps no wake records. */
+/* The reader the timer's queue holds in the wake record's row, or NULL;
+ * whether the queue's lock and the run queues' lock are held; and the wake
+ * records begun, with the reader, deadline and locks of the last. */
+static process_t *waiter;
+static int queue_held, sched_held;
+static int records, record_queue, record_sched;
+static process_t *record_proc;
+static uint64_t record_due;
+
+/** Call `fn` for the queue's one reader, `waiter`, under the queue's lock,
+ * as the kernel's walk does; nothing when it has none. */
 void wq_each_waiter(wait_queue_t *wq, void (*fn)(struct process *p, uint64_t arg), uint64_t arg)
 {
     (void)wq;
-    (void)fn;
-    (void)arg;
+    if (waiter) {
+        queue_held = 1;
+        fn(waiter, arg);
+        queue_held = 0;
+    }
+}
+
+/** Take the run queues' lock, which comes after a queue's: the interrupt
+ * state before. */
+uint32_t sched_lock_take(void)
+{
+    CHECK(!sched_held, "the run queues' lock is free when taken");
+    sched_held = 1;
+    return kirq_save();
+}
+
+/** Give back the run queues' lock and put interrupts back as `flags`. */
+void sched_lock_give(uint32_t flags)
+{
+    CHECK(sched_held, "the run queues' lock given back is held");
+    sched_held = 0;
+    kirq_restore(flags);
+}
+
+/** Count a wake record begun for `p` at `due`, and the locks held. */
+void waketime_expire(struct process *p, uint64_t due)
+{
+    records++;
+    record_proc = p;
+    record_due = due;
+    record_queue = queue_held;
+    record_sched = sched_held;
 }
 
 /** Count a wakeup of the timer's readers. */
@@ -477,6 +519,31 @@ static void posix_set_rows(void)
 }
 
 /**
+ * A timerfd of a tick, armed at tick 1000 with a reader blocked on its
+ * queue, expires at 1002 and begins the reader's wake record for that
+ * deadline under the queue's lock and the run queues' lock taken after it,
+ * so that a wake of the reader from elsewhere, which moves the record's
+ * stage under the run queues' lock, is not overwritten.
+ */
+static void wake_record_rows(void)
+{
+    struct setting tick = {0, 0, 0, NS_PER_TICK};
+
+    reset();
+    records = 0;
+    CHECK(arm(&timer, 0, &tick) == 0, "a timer of a tick arms");
+    waiter = &reader;
+    kernel_ticks = 1002;
+    timerfd_tick(kernel_ticks);
+    waiter = NULL;
+    CHECK(timer.count == 1 && records == 1 && record_proc == &reader && record_due == 1002,
+          "its expiration begins its reader's wake record at its deadline");
+    CHECK(record_queue && record_sched,
+          "under the queue's lock and the run queues' lock taken after it");
+    CHECK(!sched_held && !queue_held, "and gives both back");
+}
+
+/**
  * Run every row; 0 when each passes, 1 otherwise. An expiration during a
  * read's copy is kept for the next read, a second read during the copy finds
  * none, a copy that fails loses the count it took, and a read shorter than
@@ -505,6 +572,7 @@ int main(void)
     long_rows();
     posix_rows();
     posix_set_rows();
+    wake_record_rows();
     CHECK(masked == 0, "every interrupt mask is taken back");
 
     printf("timerfd-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);

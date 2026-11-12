@@ -57,8 +57,9 @@ static void account(struct wake_record *w, uint32_t now)
 }
 
 /** Start a blocked user thread's first timed wake at `due`, under the run
- * queues' lock or the waiter's queue's lock with interrupts off; an
- * unfinished wake keeps its first deadline.
+ * queues' lock with interrupts off, so that a wake from elsewhere does not
+ * move the stage between the test and the start; an unfinished wake keeps
+ * its first deadline.
  * Kernel threads have no user return at which to complete a record. */
 void waketime_expire(process_t *p, uint64_t due)
 {
