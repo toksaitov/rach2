@@ -1,0 +1,17 @@
+32:	650650	LAPIC	timer
+33:	4	IO-APIC	kbd
+41:	28	IO-APIC	acpi
+48:	13678	MSI	hda
+49:	1	MSI	xhci
+50:	54234	MSI	ahci
+51:	1946	MSI	rtl8168
+52:	9249	MSI	ath9k
+53:	38066	MSI	i915
+SPU:	0	spurious
+FBK:	0	usb fallback
+port 10 super 35d6:3510 class 9 protocol 0
+port 2 high 35d6:2510 class 9 protocol 1
+port 2.1 low 46d:c34b class 3 protocol 1 reports 0
+port 2.3 low 46d:c077 class 3 protocol 2 reports 0
+service calls 16927 usec 16485463 max-usec 5852 missed 1 clock-us 150092118 gap-us 76738 asked-us 792 asked-valid 1 moved-us 7416 revolution-us 69000
+queue fill 0 high 0 delay-ms 53 written 0 dropped 0 periods 6874 underruns 0 missed 1 lpib 23552
