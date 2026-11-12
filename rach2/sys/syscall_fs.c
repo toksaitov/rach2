@@ -751,8 +751,8 @@ struct file_write_state {
 
 /**
  * The writes of `file_write`: `count` bytes of `buf` from `*pos`, which
- * moves past each piece written, the bytes copied into the pages shared
- * mappings hold when `mapped` (`filemap_file_written`). Returns the bytes
+ * moves past each piece written, the bytes copied into any pages shared
+ * mappings now hold (`filemap_file_written`). Returns the bytes
  * written, or the first write's error when none were.
  *
  * On a type that sets `file_locked`, `state` names the file whose lock
@@ -769,7 +769,7 @@ struct file_write_state {
  * -EFBIG when it has moved no byte. An end that cannot be read again ends
  * the write with the bytes moved.
  */
-static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *state, int mapped,
+static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *state,
                                  const char __user *buf, uint32_t count, uint64_t *pos)
 {
     struct open_file *ofd = entry->ofd;
@@ -781,9 +781,7 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
     for (;;) {
         n = vfs_write(ofd->vmnt, ofd->fhandle, (const char *)(from + done), count - done, *pos);
         if (n > 0) {
-            if (mapped) {
-                filemap_file_written(entry, *pos, (uint32_t)n);
-            }
+            filemap_file_written(entry, *pos, (uint32_t)n);
             done += (uint32_t)n;
             state->moved = 1;
             *pos += (uint64_t)n;
@@ -867,7 +865,7 @@ static int32_t file_write_locked(fd_entry_t *entry, const char __user *buf, uint
         goto out;
     }
     count = fsize_fit(pos, count);
-    written = file_write_pieces(entry, state, mapped, buf, count, &pos);
+    written = file_write_pieces(entry, state, buf, count, &pos);
 out:
     if (held) {
         vfs_node_unlock(&state->file);
@@ -16777,13 +16775,25 @@ struct core_file {
 static int32_t core_file_put(void *ctx, const void *buf, uint32_t len)
 {
     struct core_file *cf = ctx;
+    struct vfs_ref file;
+    fd_entry_t entry;
     int32_t n;
 
     if (current_proc->sig_pending & KSIG_BIT(SIGKILL)) {
         return -EINTR;
     }
     if (buf) {
+        file.mnt = cf->ofd->vmnt;
+        file.node = cf->ofd->vnode;
+        vfs_node_lock(&file);
         n = vfs_write(cf->ofd->vmnt, cf->ofd->fhandle, buf, len, cf->pos);
+        if (n > 0) {
+            k_memset(&entry, 0, sizeof(entry));
+            entry.type = FD_TYPE_FILE;
+            entry.ofd = cf->ofd;
+            filemap_file_written(&entry, cf->pos, (uint32_t)n);
+        }
+        vfs_node_unlock(&file);
         if (n < 0) {
             return n;
         }
