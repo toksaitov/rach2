@@ -29,7 +29,10 @@
  * bytes, the place a listing gave after a, once a and b are removed and a
  * name of twelve bytes is made in their space, is taken by lseek and by
  * seekdir and lists c and then the end, as Linux's ext2 does; lseek there
- * also takes SEEK_END and a place past 4 GiB, from which nothing is listed.
+ * also takes SEEK_END and a place past 4 GiB, from which nothing is listed,
+ * and the volume's largest file offset, and refuses a byte past it with
+ * EINVAL from each origin; an empty ext2 directory removed while open is
+ * ENOENT to getdents64 past 4 GiB.
  *
  * The other calls that take a path answer one that names a directory by its end
  * as Linux does, in the probe's own directory and in one of /dev/shm: a regular
@@ -83,8 +86,9 @@
  * `shm-*`. Three groups of branches say which rows ran: `arch`, `i686` with
  * `proc-self-dot-old` or `x86-64` without it; `dir`, `given` with
  * `root-bin-types` or `default` without it; `seek`, `bytes` with
- * `ext2-lseek-reuse` and `ext2-seekdir-reuse` on ext2, or `places` without
- * them; and `links`, `links` with
+ * `ext2-lseek-reuse`, `ext2-seekdir-reuse`, `ext2-lseek-limit` and
+ * `ext2-getdents-removed` on ext2, or `places` without them; and `links`,
+ * `links` with
  * `own-link-followed` and `own-link-unlink-enotdir`, or `none`, for a file
  * system with no symbolic links. A failure before the probe has tried a
  * symbolic link reports no branch of `links`.
@@ -176,7 +180,8 @@ static const char *const start_ids[] = {"symlink-or-eperm",   "own-dir-types",  
 #endif
                                         "file-slash-enotdir", "file-dot-enotdir", "own-rewind",
                                         "own-seekdir",        "proc-self-rewind"};
-static const char *const reuse_ids[] = {"ext2-lseek-reuse", "ext2-seekdir-reuse"};
+static const char *const reuse_ids[] = {"ext2-lseek-reuse", "ext2-seekdir-reuse",
+                                        "ext2-lseek-limit", "ext2-getdents-removed"};
 static const char *const root_ids[] = {"root-ebusy", "root-eexist", "root-bind"};
 static const char *const synth_ids[] = {"proc-dot-rename", "dev-noreplace", "synth-new-slash"};
 static const char *const taken_ids[] = {"synth-taken"};
@@ -637,9 +642,103 @@ static int seekdir_reuse(void)
 }
 
 /**
+ * Whether lseek(2) of an ext2 directory takes the volume's largest file
+ * offset, Linux's `s_maxbytes` (`ext2_max_size`, fs/ext2/super.c:730) for
+ * the block size statfs gives, by SEEK_SET and SEEK_END, and refuses a
+ * byte past it with EINVAL by SEEK_SET, SEEK_CUR and SEEK_END, leaving the
+ * offset, as Linux's `generic_file_llseek` does. musl's lseek is _llseek on
+ * i386, native or compat by the kernel, and lseek on x86-64. 0, or 1 once
+ * the failure is reported.
+ */
+static int lseek_limit(void)
+{
+    static const struct {
+        long bsize;
+        long long most;
+    } limits[] = {{1024, 17247252480LL}, {2048, 275415851008LL}, {4096, 2196873666560LL}};
+    struct statfs sf;
+    struct stat st;
+    long long most = -1;
+    unsigned i;
+    int fd, ok;
+
+    if (reuse_make() != 0 || (fd = open(reuse_dir, O_RDONLY | O_DIRECTORY)) < 0) {
+        return fail("make the directory of the seek limit");
+    }
+    if (fstatfs(fd, &sf) != 0 || fstat(fd, &st) != 0) {
+        close(fd);
+        return fail("fstatfs and fstat of an ext2 directory");
+    }
+    for (i = 0; i < sizeof(limits) / sizeof(limits[0]); i++) {
+        if ((long)sf.f_bsize == limits[i].bsize) {
+            most = limits[i].most;
+        }
+    }
+    if (most < 0) {
+        close(fd);
+        printf("direntmusl: ext2 block size %ld\n", (long)sf.f_bsize);
+        return fail("statfs gives an ext2 block size of 1, 2 or 4 KiB");
+    }
+    ok = lseek(fd, most, SEEK_SET) == most;
+    ok = ok && lseek(fd, 1, SEEK_CUR) == -1 && errno == EINVAL && lseek(fd, 0, SEEK_CUR) == most;
+    ok = ok && lseek(fd, most + 1, SEEK_SET) == -1 && errno == EINVAL;
+    ok = ok && lseek(fd, most - st.st_size + 1, SEEK_END) == -1 && errno == EINVAL;
+    ok = ok && lseek(fd, 0, SEEK_CUR) == most && lseek(fd, 0, SEEK_SET) == 0;
+    ok = ok && lseek(fd, most - st.st_size, SEEK_END) == most;
+    if (!ok) {
+        printf("direntmusl: limit %lld, size %lld: %s\n", most, (long long)st.st_size,
+               strerror(errno));
+        close(fd);
+        return fail("lseek of an ext2 directory to its volume's largest file offset and past it");
+    }
+    close(fd);
+    held();
+    return 0;
+}
+
+/**
+ * Whether getdents64 of an empty ext2 directory at a place past 4 GiB lists
+ * nothing, and once the directory is removed fails with ENOENT, as Linux's
+ * `iterate_dir` checks a removed directory before the listing's end
+ * (fs/readdir.c:105). 0, or 1 once the failure is reported.
+ */
+static int getdents_removed(void)
+{
+    char buf[256];
+    long n;
+    int fd;
+
+    reuse_tidy();
+    if (mkdir(reuse_dir, 0755) != 0 || (fd = open(reuse_dir, O_RDONLY | O_DIRECTORY)) < 0) {
+        return fail("make the empty directory of the removed listing");
+    }
+    if (lseek(fd, 0x100000000LL, SEEK_SET) != 0x100000000LL ||
+        syscall(SYS_getdents64, fd, buf, sizeof(buf)) != 0) {
+        printf("direntmusl: 4 GiB: %s\n", strerror(errno));
+        close(fd);
+        return fail("getdents64 of an empty ext2 directory past 4 GiB lists nothing");
+    }
+    if (rmdir(reuse_dir) != 0) {
+        close(fd);
+        return fail("remove the empty directory of the removed listing");
+    }
+    n = syscall(SYS_getdents64, fd, buf, sizeof(buf));
+    if (n != -1 || errno != ENOENT) {
+        printf("direntmusl: getdents64: %ld, %s\n", n, strerror(errno));
+        close(fd);
+        return fail("getdents64 past 4 GiB of a removed ext2 directory is ENOENT");
+    }
+    close(fd);
+    held();
+    return 0;
+}
+
+/**
  * The rows of a place in an ext2 directory that a removal and a new name
- * have covered (`lseek_reuse`, `seekdir_reuse`), which a directory of
- * another file system does not have. 0, or 1 once a failure is reported.
+ * have covered (`lseek_reuse`, `seekdir_reuse`), of the volume's largest
+ * file offset (`lseek_limit`) and of a removed directory read past 4 GiB
+ * (`getdents_removed`), which a directory of another file system does not
+ * have. 0, or 1 once a failure is reported.
  */
 static int reuse_rows(void)
 {
@@ -648,6 +747,8 @@ static int reuse_rows(void)
     if (group_reuse.n > 0) {
         rc = lseek_reuse();
         rc = rc ? rc : seekdir_reuse();
+        rc = rc ? rc : lseek_limit();
+        rc = rc ? rc : getdents_removed();
     }
     reuse_tidy();
     return rc;
