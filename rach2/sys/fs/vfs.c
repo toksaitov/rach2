@@ -3114,11 +3114,14 @@ int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t o
 }
 
 /** The body of `vfs_fsync` and `vfs_fdatasync`: the type's operation `op`, or
- * the device's sync for a type with neither, then the device's flush. */
+ * the device's sync for a type with neither, then the device's flush. A
+ * flush that fails is reported to the mounts on the device
+ * (`vfs_device_failed`) under the big lock, which is taken when the caller,
+ * a sync of a type that sets `writes_unlocked`, lacks it. */
 static int sync_handle(struct vfs_mount *mnt, void *handle,
                        int (*op)(struct vfs_mount *mnt, void *handle))
 {
-    int rc;
+    int rc, big;
 
     if (!op) {
         rc = mnt->dev ? bcache_sync(mnt->dev) : 0;
@@ -3128,7 +3131,14 @@ static int sync_handle(struct vfs_mount *mnt, void *handle,
     if (rc == 0 && mnt->dev) {
         rc = block_flush(mnt->dev);
         if (rc != 0) {
+            big = !bkl_held();
+            if (big) {
+                bkl_enter();
+            }
             vfs_device_failed(mnt->dev, 0, rc);
+            if (big) {
+                bkl_exit();
+            }
         }
     }
     return rc;

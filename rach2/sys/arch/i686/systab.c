@@ -87,13 +87,16 @@
 
 /** Mark i386's own forms of shared calls to run without the big lock, as
  * the shared handlers do (`unlock_file_calls` and `syscall_futex_unlock` in
- * syscall.c): pread64 and pwrite64, whose offsets are split over two
- * registers, and futex_time64, which reads its 64-bit timespec and calls
- * the shared futex handler; the table is filled. */
+ * syscall.c): pread64, pwrite64, ftruncate64 and fallocate, whose offsets
+ * and lengths are split over two registers, and futex_time64, which reads
+ * its 64-bit timespec and calls the shared futex handler; the table is
+ * filled. */
 static void unlock_split_calls(void)
 {
     syscall_unlock(SYSCALL_ABI_NATIVE, sys_ia32_pread64);
     syscall_unlock(SYSCALL_ABI_NATIVE, sys_ia32_pwrite64);
+    syscall_unlock(SYSCALL_ABI_NATIVE, sys_ia32_ftruncate64);
+    syscall_unlock(SYSCALL_ABI_NATIVE, sys_ia32_fallocate);
     syscall_unlock(SYSCALL_ABI_NATIVE, sys_ia32_futex_time64);
 }
 

@@ -1211,7 +1211,18 @@ int filemap_disk_stores(const struct vfs_mount *mnt, uint64_t ino)
 
 int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino)
 {
-    return dshare_of(mnt, ino) != NULL;
+    const struct dshare *ds;
+    uint32_t flags;
+
+    if (*(volatile uint32_t *)&dshare_count == 0) {
+        return 0;
+    }
+    mnt = vfs_mount_base(mnt);
+    flags = spin_lock_irqsave(&dshare_lock);
+    for (ds = *dshare_bucket(ino); ds && !(ds->mnt == mnt && ds->ino == ino); ds = ds->next) {
+    }
+    spin_unlock_irqrestore(&dshare_lock, flags);
+    return ds != NULL;
 }
 
 int32_t filemap_read_resident(const struct vfs_mount *mnt, uint64_t ino, uint64_t off,

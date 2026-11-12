@@ -79,7 +79,10 @@ struct vm_file *filemap_disk_shared(const fd_entry_t *e);
 int filemap_disk_pages(const struct vm_file *f);
 
 /** Whether the file `ino` of `mnt` has resident pages for any private or
- * shared mapping, which descriptor writes must update. Under the big lock. */
+ * shared mapping, which descriptor writes must update. With or without the
+ * big lock: asked under the file's lock (`vfs_node_lock`), a no stays true
+ * until it is let go, since a page joins a file's pages only at a fault,
+ * which takes that lock. */
 int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino);
 
 /** Whether the pages in memory of the disk file `ino` of `mnt` may hold

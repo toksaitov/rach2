@@ -673,15 +673,37 @@ static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t cou
     return rc;
 }
 
+/** Take the big lock unless the caller holds it: 1 when taken, for
+ * `big_give`, as a write of a file `file_vfs_writes_unlocked` admits takes
+ * it for the steps that still need it. */
+static int big_take(void)
+{
+    if (bkl_held()) {
+        return 0;
+    }
+    bkl_enter();
+    return 1;
+}
+
+/** Give back the big lock `big_take` took when `taken` says it did. */
+static void big_give(int taken)
+{
+    if (taken) {
+        bkl_exit();
+    }
+}
+
 /**
  * Whether the caller's RLIMIT_FSIZE lets a file reach `end` bytes: 0, or
  * -EFBIG with SIGXFSZ sent to the calling thread, as Linux answers a write
- * that starts at the limit and a truncation past it.
+ * that starts at the limit and a truncation past it. The signal is sent
+ * under the big lock, which is taken when the caller lacks it.
  */
 static int32_t fsize_refused(uint64_t end)
 {
     unsigned long limit = current_proc->rlim[RLIM_FSIZE].cur;
     struct k_siginfo info;
+    int big;
 
     if (limit == RLIM_INFINITY || end <= limit) {
         return 0;
@@ -690,7 +712,9 @@ static int32_t fsize_refused(uint64_t end)
     info.code = SI_USER;
     info.pid = current_proc->tgid;
     info.uid = current_proc->ruid;
+    big = big_take();
     signal_post_thread(current_proc, SIGXFSZ, &info);
+    big_give(big);
     return -EFBIG;
 }
 
@@ -747,7 +771,41 @@ struct file_write_state {
     /* nonzero once this call, an earlier vector element included, has moved
      * a byte */
     int moved;
+    /* nonzero once this call has taken the big lock for a file mappings
+     * hold pages of (`file_write_mapped`), which its caller gives back */
+    int big;
 };
+
+/**
+ * Whether the pages mappings hold of the file of `ofd` must take the bytes
+ * a write moves (`filemap_disk_mapped`), asked under the file's lock, which
+ * keeps a no true until it is let go. Their copy (`filemap_file_written`)
+ * walks them under the big lock, which is taken for the rest of the call
+ * when the caller lacks it and recorded in `state`.
+ */
+static int file_write_mapped(const struct open_file *ofd, struct file_write_state *state)
+{
+    if (!filemap_disk_mapped(ofd->vmnt, ofd->ino)) {
+        return 0;
+    }
+    if (!bkl_held()) {
+        bkl_enter();
+        state->big = 1;
+    }
+    return 1;
+}
+
+/** Whether all `len` bytes at `addr` of the caller's memory are present
+ * (`vm_resident`), asked under the big lock, which is taken when the
+ * caller lacks it. */
+static int user_resident(uintptr_t addr, uint32_t len)
+{
+    int big = big_take();
+    int resident = vm_resident(addr, len, 0);
+
+    big_give(big);
+    return resident;
+}
 
 /**
  * The writes of `file_write`: `count` bytes of `buf` from `*pos`, which
@@ -762,7 +820,9 @@ struct file_write_state {
  * at the first that is not, since a fault under the lock could wait for
  * another file's lock. Once this call has moved a byte, in this piece or an
  * earlier vector element, it returns that prefix without releasing the lock.
- * Otherwise the lock goes while the buffer is brought in, and an append
+ * Otherwise the lock goes while the buffer is brought in, and whether
+ * mappings hold the file's pages is asked again, since a fault may have
+ * brought one in meanwhile (`file_write_mapped`); an append also
  * reads the end again, where another writer may have moved it meanwhile:
  * the count is cut again to what RLIMIT_FSIZE lets through
  * (`fsize_fit`), and a write that finds the end at the limit stops there,
@@ -787,7 +847,7 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
             *pos += (uint64_t)n;
             refaults = 0;
         }
-        if (!state->own || n < 0 || done == count || vm_resident(from + done, count - done, 0)) {
+        if (!state->own || n < 0 || done == count || user_resident(from + done, count - done)) {
             break;
         }
         if (state->moved) {
@@ -802,6 +862,7 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
         if (n != 0) {
             break;
         }
+        mapped = file_write_mapped(ofd, state);
         if (state->append) {
             struct vfs_stat vst;
 
@@ -841,7 +902,7 @@ static int32_t file_write_locked(fd_entry_t *entry, const char __user *buf, uint
 {
     struct open_file *ofd = entry->ofd;
     int append = state->append;
-    int mapped = filemap_disk_mapped(ofd->vmnt, ofd->ino);
+    int mapped = file_write_mapped(ofd, state);
     int held = !state->own && (append || mapped);
     uint64_t pos;
     int32_t written;
@@ -923,6 +984,14 @@ out:
  * pages comes between the two (`filemap_file_written`). Under
  * RLIMIT_FSIZE a write that would pass the limit writes what fits, and one
  * that starts at it fails (`fsize_refused`).
+ *
+ * A file `file_vfs_writes_unlocked` admits is written without the big lock,
+ * under the description's lock and the file's, as Linux's
+ * generic_file_write_iter writes under the inode's lock alone
+ * (mm/filemap.c:4191-4206 in 6.12): the type takes the big lock where it
+ * still needs it, and this call takes it for the copy into the pages
+ * mappings hold (`file_write_mapped`), the look at the buffer's pages
+ * (`user_resident`), the signal and the set-id change, and inotify's report.
  */
 static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t count,
                           const uint64_t *at, size_t asked)
@@ -951,6 +1020,7 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
     state.own = file_lock(ofd, &state.file);
     state.append = (ofd->status_flags & OFD_APPEND) != 0;
     state.moved = 0;
+    state.big = 0;
     if (loop_backs(ofd->vmnt, ofd->vnode)) {
         file_unlock(&state.file, state.own);
         fd_ofd_unlock(ofd);
@@ -960,8 +1030,12 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
     file_unlock(&state.file, state.own);
     fd_ofd_unlock(ofd);
     if (written > 0 && inotify_watches) {
+        if (!state.big) {
+            state.big = big_take();
+        }
         inotify_desc(ofd, IN_MODIFY);
     }
+    big_give(state.big);
     return written;
 }
 
@@ -1183,6 +1257,8 @@ static int32_t write_check(int fd)
 
 static int size_guarded(struct vfs_mount *mnt, void *node);
 static int ofd_append_only(const struct open_file *ofd);
+static int fd_change_lock(int fd);
+static int fd_write_lock(int fd);
 
 /**
  * A change clears set-user-ID, and set-group-ID where group execute is set, for
@@ -1192,13 +1268,15 @@ static int ofd_append_only(const struct open_file *ofd);
  * mappings of the file lose the pages past the new end
  * (`filemap_file_truncated`), under the file's lock on a type that sets
  * `file_locked` (`file_lock`), so that no write-back of a mapped page past
- * the new end comes between the two.
+ * the new end comes between the two and no fault brings one in again; the
+ * pages are cut under the big lock, taken when the caller lacks it, as is
+ * inotify's report. 0 or a negative errno.
  */
-long ksys_ftruncate(int fd, long long length)
+static long ftruncate_fd(int fd, long long length)
 {
     fd_entry_t *entry;
     struct vfs_ref file;
-    int own;
+    int own, big = 0;
     int rc;
 
     if (!current_proc) {
@@ -1241,7 +1319,8 @@ long ksys_ftruncate(int fd, long long length)
             vfs_kill_setid(entry->ofd->vmnt, entry->ofd->vnode);
         }
     }
-    if (rc == 0 && own) {
+    if (rc == 0 && own && filemap_disk_mapped(entry->ofd->vmnt, entry->ofd->ino)) {
+        big = big_take();
         filemap_file_truncated(entry->ofd->vmnt, entry->ofd->ino, (uint64_t)length);
     }
     file_unlock(&file, own);
@@ -1251,9 +1330,31 @@ long ksys_ftruncate(int fd, long long length)
             filemap_file_truncated(entry->ofd->vmnt, entry->ofd->ino, (uint64_t)length);
         }
         if (inotify_watches) {
+            if (!big) {
+                big = big_take();
+            }
             inotify_desc(entry->ofd, IN_MODIFY);
         }
     }
+    big_give(big);
+    return rc;
+}
+
+/**
+ * Truncate the file of descriptor `fd` to `length` bytes, for ftruncate(2)
+ * and ftruncate64(2): `ftruncate_fd`, under the big lock unless the
+ * descriptor names a file `file_vfs_writes_unlocked` admits, which is
+ * truncated under its description's lock and its own, as Linux's
+ * do_ftruncate truncates under the inode's lock (fs/open.c:63-65 in 6.12),
+ * the type taking the big lock where it still needs it. Returns as
+ * `ftruncate_fd` does.
+ */
+long ksys_ftruncate(int fd, long long length)
+{
+    int big = fd_change_lock(fd);
+    long rc = ftruncate_fd(fd, length);
+
+    big_give(big);
     return rc;
 }
 
@@ -1268,11 +1369,11 @@ long sys_ftruncate(isr_params_t *params)
 /** write(2) takes fd, buf and the raw count, which write_fd checks before
  * cutting it at Linux's MAX_RW_COUNT; the bytes written, or -errno. The
  * call holds the big lock unless the descriptor's type runs without it
- * (`fd_call_lock`). */
+ * or it names a file whose writes do (`fd_write_lock`). */
 long sys_write(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
-    int big = fd_call_lock(fd);
+    int big = fd_write_lock(fd);
     long rc = write_fd(fd, (const char __user *)SC_ARG(params, 1), SC_ARG(params, 2), 1);
 
     file_ops_unlock(big);
@@ -1559,11 +1660,14 @@ static int vec_call_lock(int fd)
 
 /** writev(2): the descriptor, vector and count in the caller's registers,
  * under the big lock unless it is a pipe end or a Unix socket
- * (`vec_call_lock`). */
+ * (`vec_call_lock`) or a file whose writes run without it
+ * (`file_vfs_writes_unlocked`). */
 long sys_writev(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
-    int big = vec_call_lock(fd);
+    int big = file_vfs_writes_unlocked(current_proc ? fd_get(current_proc->fds, fd) : NULL)
+                  ? 0
+                  : vec_call_lock(fd);
     long rc = writev(fd, SC_ARG(params, 1), (int)SC_ARG(params, 2));
 
     file_ops_unlock(big);
@@ -2548,6 +2652,7 @@ void cred_kill_setid(krffs_node_t *node)
 void vfs_kill_setid(struct vfs_mount *mnt, void *node)
 {
     struct vfs_stat vst;
+    int big;
 
     if (!mnt || !node || vfs_getattr(mnt, node, &vst) != 0) {
         return;
@@ -2559,7 +2664,9 @@ void vfs_kill_setid(struct vfs_mount *mnt, void *node)
     if (vst.mode & 0010u) {
         vst.mode &= ~02000u;
     }
+    big = big_take();
     (void)vfs_setattr(mnt, node, VFS_SET_MODE, &vst);
+    big_give(big);
 }
 
 /** Non-zero when `gid` is in the caller's supplementary list. */
@@ -5721,6 +5828,33 @@ int fd_call_lock(int fd)
     return file_ops_lock(current_proc ? fd_get(current_proc->fds, fd) : NULL);
 }
 
+int file_vfs_writes_unlocked(const fd_entry_t *e)
+{
+    return file_vfs_unlocked(e) && e->type == FD_TYPE_FILE &&
+           vfs_mount_base(e->ofd->vmnt)->type->writes_unlocked;
+}
+
+/** `fd_call_lock` for a write of descriptor `fd`: no big lock for a file
+ * `file_vfs_writes_unlocked` admits. */
+static int fd_write_lock(int fd)
+{
+    fd_entry_t *e = current_proc ? fd_get(current_proc->fds, fd) : NULL;
+
+    return file_vfs_writes_unlocked(e) ? 0 : file_ops_lock(e);
+}
+
+/** The big lock for a truncation, fallocate or sync of descriptor `fd`,
+ * held for the call (`fd_get`): none for a file `file_vfs_writes_unlocked`
+ * admits, and taken for any other unless the caller holds it, since those
+ * calls reach every type's operations. Returns whether it was taken, for
+ * `big_give`. */
+static int fd_change_lock(int fd)
+{
+    fd_entry_t *e = current_proc ? fd_get(current_proc->fds, fd) : NULL;
+
+    return file_vfs_writes_unlocked(e) ? 0 : big_take();
+}
+
 /**
  * Release descriptor `fd` of `table`, which the caller has marked closing
  * and releasing (`fd_close_claim`, `fd_holds_claim`), with every backing it
@@ -5973,13 +6107,21 @@ long sys_close(isr_params_t *params)
  * is open on, by `sync_op`, as `sync_fd` says: a file or directory of a
  * mount through its type, with the pages shared mappings of the file hold
  * written back first, and anything else by writing back the whole cache.
- * Returns 0, -EIO, or the type's error.
+ * The pages are written back under the big lock, taken when the caller
+ * lacks it. Returns 0, -EIO, or the type's error.
  */
 static long sync_entry(fd_entry_t *e, int (*sync_op)(struct vfs_mount *mnt, void *handle))
 {
     if (e->ofd && e->ofd->vmnt) {
-        int32_t mapped = filemap_sync_file(e->ofd->vmnt, e->ofd->ino);
-        int32_t rc = sync_op(e->ofd->vmnt, e->ofd->fhandle);
+        int32_t mapped = 0, rc;
+
+        if (filemap_disk_mapped(e->ofd->vmnt, e->ofd->ino)) {
+            int big = big_take();
+
+            mapped = filemap_sync_file(e->ofd->vmnt, e->ofd->ino);
+            big_give(big);
+        }
+        rc = sync_op(e->ofd->vmnt, e->ofd->fhandle);
 
         return mapped != 0 ? -EIO : rc;
     }
@@ -6000,19 +6142,26 @@ static long sync_entry(fd_entry_t *e, int (*sync_op)(struct vfs_mount *mnt, void
  * bad descriptor, -EIO when a write-back fails, or the type's error. Dropbear
  * writes its host key with the open/write/fsync/rename idiom and treats an
  * fsync error as fatal, so the error must reach the program.
+ *
+ * The call holds the big lock unless the descriptor names a file
+ * `file_vfs_writes_unlocked` admits, whose type syncs it with no lock of the
+ * file's, as Linux's ext2_fsync takes no inode lock (fs/ext2/file.c:153-163
+ * in 6.12), and takes the big lock where it still needs it.
  */
 static long sync_fd(isr_params_t *params, int (*sync_op)(struct vfs_mount *mnt, void *handle))
 {
     fd_entry_t *e;
+    long rc;
+    int big;
 
     if (!current_proc) {
         return -ESRCH;
     }
+    big = fd_change_lock((int)SC_ARG(params, 0));
     e = fd_get(current_proc->fds, (int)SC_ARG(params, 0));
-    if (!e || (e->flags & FD_FLAG_PATH)) {
-        return -EBADF;
-    }
-    return sync_entry(e, sync_op);
+    rc = !e || (e->flags & FD_FLAG_PATH) ? -EBADF : sync_entry(e, sync_op);
+    big_give(big);
+    return rc;
 }
 
 /** Flush a file and its attributes to stable storage (fsync(2)), by the
@@ -14034,10 +14183,11 @@ long ksys_pread64(int fd, char __user *buf, size_t requested, long long pos)
     return rc;
 }
 
-/** `ksys_pread64`'s lock around `pwrite_at`. */
+/** `pwrite_at` under the big lock unless the descriptor's type runs without
+ * it or it names a file whose writes do (`fd_write_lock`). */
 long ksys_pwrite64(int fd, const char __user *buf, size_t requested, long long pos)
 {
-    int big = fd_call_lock(fd);
+    int big = fd_write_lock(fd);
     long rc = pwrite_at(fd, buf, requested, pos);
 
     file_ops_unlock(big);
@@ -14364,6 +14514,7 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
     }
     state.append = append;
     state.moved = 0;
+    state.big = 0;
     rc = iov_file_refused(entry, pos, wanted);
     if (rc == 0) {
         rc = iov_seal_grow(ofd, pos == -1 ? ofd->offset : (uint64_t)pos, wanted, append, &room);
@@ -14380,8 +14531,12 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
     file_unlock(&state.file, state.own);
     fd_ofd_unlock(ofd);
     if (rc > 0 && inotify_watches) {
+        if (!state.big) {
+            state.big = big_take();
+        }
         inotify_desc(ofd, IN_MODIFY);
     }
+    big_give(state.big);
 out:
     kfree(iov);
     return rc;
@@ -15862,7 +16017,12 @@ static uint32_t fallocate_type(fd_entry_t *entry)
     return 0;
 }
 
-long ksys_fallocate(int fd, uint32_t mode, uint64_t offset, uint64_t len)
+/**
+ * The body of fallocate(2), which `ksys_fallocate` locks: 0 or a negative
+ * errno, by Linux's vfs_fallocate's checks in its order and then the
+ * type's operation under the description's lock.
+ */
+static long fallocate_fd(int fd, uint32_t mode, uint64_t offset, uint64_t len)
 {
     fd_entry_t *entry;
     uint32_t type;
@@ -15906,6 +16066,18 @@ long ksys_fallocate(int fd, uint32_t mode, uint64_t offset, uint64_t len)
     fd_ofd_lock(entry->ofd);
     rc = vfs_fallocate(entry->ofd->vmnt, entry->ofd->fhandle, mode, offset, len);
     fd_ofd_unlock(entry->ofd);
+    return rc;
+}
+
+/** fallocate(2) under the big lock unless the descriptor names a file
+ * `file_vfs_writes_unlocked` admits, whose type then runs it under the
+ * file's lock (`fd_change_lock`). Returns as `fallocate_fd` does. */
+long ksys_fallocate(int fd, uint32_t mode, uint64_t offset, uint64_t len)
+{
+    int big = fd_change_lock(fd);
+    long rc = fallocate_fd(fd, mode, offset, len);
+
+    big_give(big);
     return rc;
 }
 
