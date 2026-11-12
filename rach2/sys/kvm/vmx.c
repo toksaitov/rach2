@@ -821,14 +821,29 @@ struct vmx_exit {
  * The VMCS's fields that the entry writes only when they change, as Linux's
  * vmx_vcpu_run keeps HOST_CR3 and HOST_CR4 in `host_state` and writes
  * GUEST_RSP and GUEST_RIP only when dirty (vmx.c:7379-7408): the value
- * each field holds, ~0 when not known, which `vmcs_build` sets.
+ * each field holds, ~0 when not known, which `vmcs_build` sets. A field
+ * that may legally hold ~0, a canonical address or a caller's RFLAGS, is
+ * known only by its bit in `known`, as Linux's kvm_arch_vcpu_create marks
+ * every register dirty for the first entry (x86.c:11505-11506).
  */
 struct vmx_cache {
     uint64_t host_cr3, host_cr4, host_fs_base, eptp;
     uint64_t rsp, rip, rflags;
     uint64_t perf_guest, perf_host; /* GUEST_ and HOST_IA32_PERF_GLOBAL_CTRL */
     uint32_t ng, nh;                /* the PMU's lists' counts */
+    uint32_t known;                 /* VC_*: the fields above whose value is known */
 };
+
+#define VC_RSP     0x1u
+#define VC_RIP     0x2u
+#define VC_RFLAGS  0x4u
+#define VC_FS_BASE 0x8u
+
+/** Whether the VMCS field of `bit` is known to hold `val` in cache `c`. */
+static int cache_holds(const struct vmx_cache *c, uint32_t bit, uint64_t cached, uint64_t val)
+{
+    return (c->known & bit) && cached == val;
+}
 
 struct vmx_vcpu {
     void *vmcs;
@@ -1347,6 +1362,7 @@ static void vmcs_build(struct kvm_vcpu *v)
     vmcs_write(VMX_PREEMPTION_TIMER_VALUE, VMX_RUN_BOUND_TSC >> caps.timer_shift);
     k_memset(&x->c, 0xFF, sizeof(x->c));
     x->c.ng = x->c.nh = 0;
+    x->c.known = 0;
     x->inj_armed = 1;
     x->built = 1;
     x->vdirty = VX_ALL;
@@ -1783,21 +1799,24 @@ static void entry_fields(struct kvm_vcpu *v)
     if ((x->inj_info & INTR_VALID) && INTR_TYPE(x->inj_info) == TYPE_EXT_INTR) {
         v->irq_counts[INTR_VECTOR(x->inj_info)][KVM_VEC_INJECT]++;
     }
-    if (v->regs.rsp != x->c.rsp) {
+    if (!cache_holds(&x->c, VC_RSP, x->c.rsp, v->regs.rsp)) {
         vmcs_write(GUEST_RSP, v->regs.rsp);
         x->c.rsp = v->regs.rsp;
+        x->c.known |= VC_RSP;
     }
-    if (v->regs.rip != x->c.rip) {
+    if (!cache_holds(&x->c, VC_RIP, x->c.rip, v->regs.rip)) {
         vmcs_write(GUEST_RIP, v->regs.rip);
         x->c.rip = v->regs.rip;
+        x->c.known |= VC_RIP;
     }
     /* The caller's single step is the guest's TF, hidden from the guest's
      * RFLAGS after the exit, as Linux's __kvm_set_rflags sets it. */
     x->tf_set = debugging(v, KVM_GUESTDBG_SINGLESTEP) && !(v->regs.rflags & RFLAGS_TF);
     rflags = v->regs.rflags | (x->tf_set ? RFLAGS_TF : 0);
-    if (rflags != x->c.rflags) {
+    if (!cache_holds(&x->c, VC_RFLAGS, x->c.rflags, rflags)) {
         vmcs_write(GUEST_RFLAGS, rflags);
         x->c.rflags = rflags;
+        x->c.known |= VC_RFLAGS;
     }
 }
 
@@ -1866,9 +1885,10 @@ static void after_run(struct kvm_vcpu *v)
 static void state_load(struct vmx_vcpu *x, int cpu)
 {
     vmx_op->save_host(&x->host);
-    if (x->host.fs_base != x->c.host_fs_base) {
+    if (!cache_holds(&x->c, VC_FS_BASE, x->c.host_fs_base, x->host.fs_base)) {
         vmcs_write(HOST_FS_BASE, x->host.fs_base);
         x->c.host_fs_base = x->host.fs_base;
+        x->c.known |= VC_FS_BASE;
     }
     x->host_dr7 = vmx_op->read_dr(7);
     x->loaded = 1;
