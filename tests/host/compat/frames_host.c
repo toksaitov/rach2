@@ -6,6 +6,7 @@
  */
 
 #include "block/block.h"
+#include "lib/kerrno.h"
 #include "lib/kstring.h"
 #include "mm/paging.h"
 
@@ -46,4 +47,25 @@ int block_read_frames(block_device_t *device, uint64_t lba, uint32_t count, cons
         }
     }
     return 0;
+}
+
+/** The host's requests all wait, so no read starts without one: the
+ * caller reads with `block_read_frames`. */
+int block_read_frames_async(block_device_t *device, uint64_t lba, uint32_t count,
+                            const uintptr_t *frames, const struct block_frames_done *done)
+{
+    (void)device;
+    (void)lba;
+    (void)count;
+    (void)frames;
+    (void)done;
+    return -EAGAIN;
+}
+
+/** No read is in flight without a waiter, so there is none to wait for. */
+void block_settle(block_device_t *device, uint64_t lba, uint64_t count)
+{
+    (void)device;
+    (void)lba;
+    (void)count;
 }
