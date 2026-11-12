@@ -11,11 +11,13 @@
 # a minute later, and ends the loop itself. It then stops what the sessions
 # left running on the Mac, in WSL and on Windows: QEMU guests, test runs, the
 # worker scripts and the board's watches. On Windows it looks only at programs
-# under D:\rach2, so that Hyper-V and its machines are never touched. Then it
-# brings the board up to date, runs sweep.sh, with -a unless a release still
-# runs, and prints what is still there: a line `stop: left: MACHINE: WHAT` for
-# each process and each claim of the admission ledger. It ends with
-# `stop: everything is stopped` and status 0, or `stop: N left` and status 1.
+# under D:\rach2, so that Hyper-V and its machines are never touched, and for
+# each release run whose etude it stopped it removes the run's scratch there,
+# as winclean.sh says. Then it brings the board up to date, runs sweep.sh, with
+# -a unless a release still runs, and prints what is still there: a line
+# `stop: left: MACHINE: WHAT` for each process and each claim of the admission
+# ledger. It ends with `stop: everything is stopped` and status 0, or `stop: N
+# left` and status 1.
 #
 # -n changes nothing and prints only what runs now, in the same form. A running
 # release is left alone and counts as left, since it costs hours to repeat;
@@ -76,6 +78,12 @@ windows()
         tr -d '\000\r'
 }
 
+# machine NAME: print the value that the machines file gives Windows' NAME.
+machine()
+{
+    awk -v n="$1" '$1 == "windows" && $2 == n { print $3; exit }' "$here/machines"
+}
+
 # loops: stop each loop, as the header says.
 loops()
 {
@@ -122,6 +130,13 @@ stragglers()
     [ -z "$pids" ] || echo "kill $pids 2> /dev/null" | wsl
     pids=$(printf '%s\n' "$list" | sed -n 's/^windows: \([0-9]*\) .*/\1/p' | tr '\n' ',' | sed 's/,$//')
     [ -z "$pids" ] || echo "Stop-Process -Id $pids -Force" | windows
+    # A release run's etude is OUT/etude-ID.exe; remove what each stopped run
+    # made on Windows outside its own files.
+    ids=$(printf '%s\n' "$list" | sed -n 's/^windows: [0-9]* etude-\(milestone[^ ]*\)$/\1/p' |
+        sort -u | tr '\n' ' ')
+    [ -z "$ids" ] ||
+        ssh_host "$TESTING" "C:/msys64/usr/bin/bash.exe -l -s $(machine tree) $(machine out) $ids" \
+            < "$here/winclean.sh" > /dev/null 2>&1
     [ -z "$list" ] || sleep 10
 }
 

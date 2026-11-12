@@ -25,7 +25,8 @@
 # testing host whose loop holds no session, the images, test output and scratch
 # unchanged for a day, but `build/tests/failed`, and the run files of
 # `build/runs` unchanged for two weeks; on Windows the test collections,
-# tooling job directories, case images and scratch unchanged for a day, and
+# tooling job directories, case images and scratch, the old shared TMPDIR of
+# the release runs among it, unchanged for a day, and
 # each release run, with its files and its etude, of a milestone whose release
 # closed; and here the entries of `build/tests` unchanged for two weeks. The
 # caches, the build copies of the release and of Windows, and the tooling work
@@ -84,7 +85,7 @@ outputs()
         echo 'b=/d/rach2/build'
         # shellcheck disable=SC2016 # the dollars are the remote shell's
         echo "stale $days \$b/tests/rach2-collection.* \$b/tooling/job-* \$b/images/cases/*" \
-            '$b/x86_64/images/cases/* $b/tmp/*'
+            '$b/x86_64/images/cases/* $b/tmp/* $b/release/tmp/*'
         # A milestone whose release closed runs nothing on Windows again, so
         # its runs there, failed ones with their evidence among them, go
         # whatever their age.
