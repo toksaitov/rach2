@@ -58,8 +58,8 @@
 #include "mm/usercopy.c"
 #include "proc/mutex.c"
 
-/** The compare-and-exchange `cmpxchg_user_u32` makes, which no row reaches,
- * on the host's one thread. */
+/** The compare-and-exchange of the mutex's and the rwsem's words and of
+ * `cmpxchg_user_u32`, on the host's one thread. */
 unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
 {
     unsigned int was = *p;
@@ -67,6 +67,15 @@ unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, uns
     if (was == old) {
         *p = value;
     }
+    return was;
+}
+
+/** The exchange that frees the mutex, on the host's one thread. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    unsigned int was = *p;
+
+    *p = value;
     return was;
 }
 #include "ns_first.h"

@@ -33,8 +33,8 @@ static const void *mutex_me(void)
  * __up_read and __mutex_unlock_slowpath wake only with a waiter recorded
  * (kernel/locking/rwsem.c, kernel/locking/mutex.c): a wake of an empty queue
  * costs a pass with interrupts off, which QEMU's emulator makes dear. The
- * release's unlock of the lock's spinlock is an exchange, a full barrier,
- * between its store and this read of the queue, and so is the unlock of the
+ * release's atomic exchange of the lock's word is a full barrier between
+ * its store and this read of the queue, and so is the unlock of the
  * queue a sleeper files itself on before it tests the lock (`wq_wait`):
  * either the sleeper's test sees the release or this read sees the sleeper.
  */
@@ -47,7 +47,7 @@ static void wake_waiters(wait_queue_t *wq)
 
 void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key *key)
 {
-    spin_lock_init(&m->spin, "mutex.spin");
+    m->locked = 0;
     m->owner = 0;
     wait_queue_init(&m->wq);
     lockdep_init_map(&m->dep, name, key);
@@ -60,20 +60,18 @@ static int mutex_free(void *arg)
 {
     const struct mutex *m = arg;
 
-    return m->owner == 0;
+    return m->locked == 0;
 }
 
-/** Take `m` if it is free: 1 when taken, else 0. */
+/** Take `m` if it is free: 1 when taken, else 0. The exchange is the
+ * take's one atomic operation; the holder then records itself. */
 static int mutex_take(struct mutex *m)
 {
-    uint32_t flags = spin_lock_irqsave(&m->spin);
-    int got = m->owner == 0;
-
-    if (got) {
-        m->owner = mutex_me();
+    if (m->locked != 0 || arch_atomic_cmpxchg(&m->locked, 0, 1) != 0) {
+        return 0;
     }
-    spin_unlock_irqrestore(&m->spin, flags);
-    return got;
+    m->owner = mutex_me();
+    return 1;
 }
 
 /** A trylock that succeeds is noted as a take, which adds its order. */
@@ -94,16 +92,16 @@ void mutex_lock(struct mutex *m)
     }
 }
 
+/** The owner is cleared before the lock word, so that a taker that has
+ * the mutex at once does not lose its record to this release; the
+ * exchange that frees it is the full barrier `wake_waiters` needs. */
 void mutex_unlock(struct mutex *m)
 {
-    uint32_t flags = spin_lock_irqsave(&m->spin);
-
-    if (m->owner != mutex_me()) {
-        spin_unlock_irqrestore(&m->spin, flags);
+    if (!m->locked || m->owner != mutex_me()) {
         k_panic("mutex: an unlock by a thread that does not hold it");
     }
     m->owner = 0;
-    spin_unlock_irqrestore(&m->spin, flags);
+    (void)arch_atomic_xchg(&m->locked, 0);
     DEP_RELEASE(&m->dep);
     wake_waiters(&m->wq);
 }
