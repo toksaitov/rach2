@@ -2768,6 +2768,25 @@ static void msr_family_rows(int fd, uint32_t gpe)
           "WRMSR of the platform id is #GP");
 }
 
+/** The guest's WRMSR of the MSRs VMX loads between exits: STAR, and
+ * SYSCALL_MASK, whose bits 63:32 are refused; `gpe` is the #GP. */
+static void uret_msr_rows(int fd, uint32_t gpe)
+{
+    set_regs(fd, 0x1000, 0x11, MSR_STAR, 0x00230010u);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 &&
+              vx(vcpu_of(fd))->gmsr[0] == 0x0023001000000011ull &&
+              m.msr[msr_slot(MSR_STAR)] == HOST_MSR(MSR_STAR),
+          "WRMSR STAR reaches the guest's copy, and the host's is back after KVM_RUN");
+    set_regs(fd, 0x1000, 0x700, MSR_SYSCALL_MASK, 1);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == gpe && regs_of(fd).rip == 0x1001 &&
+              (vx(vcpu_of(fd))->gmsr[2] >> 32) == 0,
+          "WRMSR SYSCALL_MASK with a bit of 63:32 is #GP, so no entry's WRMSR can fault the host");
+    set_regs(fd, 0x1000, 0x700, MSR_SYSCALL_MASK, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == 0 &&
+              vx(vcpu_of(fd))->gmsr[2] == 0x700u,
+          "and one within bits 31:0 reaches the guest's copy");
+}
+
 /** The debug registers, MSRs, XSETBV, VMCALL and the instructions the
  * kernel answers alone. */
 static void insn_rows(int fd)
@@ -2792,10 +2811,7 @@ static void insn_rows(int fd)
     set_regs(fd, 0x1000, 1, 0x6E0, 0);
     CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1003,
           "WRMSR of the TSC deadline goes to the local APIC's MSRs");
-    set_regs(fd, 0x1000, 0x11, MSR_STAR, 0x00230010u);
-    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && vx(v)->gmsr[0] == 0x0023001000000011ull &&
-              m.msr[msr_slot(MSR_STAR)] == HOST_MSR(MSR_STAR),
-          "WRMSR STAR reaches the guest's copy, and the host's is back after KVM_RUN");
+    uret_msr_rows(fd, gpe);
 
     set_regs(fd, 0x1000, 7, 0, 0);
     CHECK(exits(fd, EXIT_XSETBV, 0, 3) == 0 && v->xcr0 == 7 && regs_of(fd).rip == 0x1004,

@@ -481,10 +481,14 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
 }
 
 /**
- * Whether the caller may write `value` to the table's MSR `index`, as
- * Linux's checks of a write from the host judge it: PAT's eight types,
- * the MTRRs' types and reserved bits, and a canonical address for the
- * MSRs that hold one.
+ * Whether the caller or the guest may write `value` to the table's MSR
+ * `index`, as Linux's checks judge it: PAT's eight types, the MTRRs' types
+ * and reserved bits, a canonical address for the MSRs that hold one, and
+ * no reserved bit, 63:32, of TSC_AUX and SYSCALL_MASK. VMX loads
+ * SYSCALL_MASK into the processor with a WRMSR between exits, which such a
+ * bit would fault in the host; Linux's vmx_set_guest_uret_msr refuses the
+ * value its kvm_set_user_return_msr cannot write (vmx/vmx.c:718-731,
+ * x86.c:631-647), and the guest takes #GP as from the processor.
  */
 static int table_value_ok(uint32_t index, uint64_t value)
 {
@@ -502,6 +506,7 @@ static int table_value_ok(uint32_t index, uint64_t value)
     case MSR_IA32_SYSENTER_EIP:
         return (s >> 47) == 0 || (s >> 47) == -1;
     case MSR_TSC_AUX:
+    case MSR_SYSCALL_MASK:
         return (value >> 32) == 0;
     default:
         break;
