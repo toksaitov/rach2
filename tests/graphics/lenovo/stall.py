@@ -8,6 +8,7 @@ WebGPU picture RUNS times as USER, in turn alone, beside threadwatch, and
 beside threadwatch with Chromium's own trace. threadwatch samples the
 threads of Chromium, Weston and Xwayland, with the GPU's clock, the i915
 interrupt's count and, on Rach2, the big lock's and the timer's counters.
+On Rach2 each bare run also keeps the kernel's profile and big lock counts.
 OUT must not exist; it keeps every run and, in summary.json and stall.txt,
 the slowest gap of each run's first frames and what each thread did in it.
 """
@@ -39,6 +40,9 @@ MARGIN = 20000000
 # The runs in turn: the picture alone, beside threadwatch, whose reads take
 # the kernel's big lock on Rach2, and beside threadwatch with Chromium's trace.
 KINDS = ("bare", "watched", "traced")
+# Rach2's profile of the kernel and counts of its big lock, which each bare
+# run zeroes before it and keeps after it.
+BKL = Path("/sys/kernel/debug/bkl")
 
 
 def snapshot(card, into):
@@ -53,6 +57,19 @@ def snapshot(card, into):
             (into / str(path).strip("/").replace("/", "_")).write_bytes(path.read_bytes())
         except OSError as error:
             (into / (str(path).strip("/").replace("/", "_") + ".error")).write_text(str(error) + "\n")
+
+
+def profile_start():
+    """Zero Rach2's big lock counts and start its profile of the whole kernel."""
+    for name in ("calls", "long", "tick"):
+        (BKL / name).write_text("0\n")
+    (BKL / "profile").write_text("kernel\n")
+
+
+def profile_keep(into):
+    """Copy Rach2's profile and big lock counts into INTO."""
+    for name in ("profile", "calls", "long", "tick"):
+        (into / ("bkl_" + name)).write_bytes((BKL / name).read_bytes())
 
 
 def frames(picture):
@@ -161,6 +178,9 @@ def main():
             here.mkdir()
             os.chown(here, account.pw_uid, account.pw_gid)
             snapshot(card, here / "before")
+            profiled = kind == "bare" and os.uname().sysname == "Rach2"
+            if profiled:
+                profile_start()
             log = here / "threadwatch.txt"
             if kind != "bare":
                 watch = subprocess.Popen([str(sampler), "-i", "1000",
@@ -177,6 +197,8 @@ def main():
                     assert watch.wait() == 0, "threadwatch failed"
                     watch = None
             snapshot(card, here / "after")
+            if profiled:
+                profile_keep(here / "after")
             picture = json.loads((here / "browser/result.json").read_text())["picture"]
             row = dict(frames(picture), run=index, kind=kind)
             summary.append(row)
