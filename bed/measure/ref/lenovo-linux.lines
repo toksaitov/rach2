@@ -1,0 +1,6 @@
+# lenovo-linux.lines: Linux's `measure: result:` line for each scene of the
+# test bed's harness on the Lenovo, the rung native-linux, under a headless
+# Weston of the harness's own, which the native cases testbed/* of
+# tests/native/gpu.cases print beside Rach2's native-rach2 lines. A line is
+# the harness's last line as it printed it, after a comment naming the boot,
+# its kernel and its IOMMU setting. The Debian boot of 83-15 adds them.

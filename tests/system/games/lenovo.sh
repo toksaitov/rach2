@@ -5,7 +5,8 @@
 #   sh lenovo.sh [-n RUNS] [-s WxH] [-t SECONDS] [-r RUNNERS] [-u USER]
 #       OUT [GAME...]
 #
-# Run as root on a GNU root whose desktop session runs (vendor/gnu/desktop):
+# Run as root on a GNU root whose desktop session runs (vendor/gnu/desktop),
+# by hand or as the native cases games/GAME (tests/native/gpu.cases):
 # Weston's kiosk-shell on the DRM device as USER (desktop), with PulseAudio
 # on /dev/dsp. Each GAME, by default supertuxkart, 0ad and supertuxkart-i386,
 # plays its replay RUNS times (2), one run after another, through RUNNERS'
@@ -64,6 +65,12 @@ shift
 [ $# -ge 1 ] || set -- supertuxkart 0ad supertuxkart-i386
 [ "$(id -u)" = 0 ] || { echo "lenovo-games: run as root" >&2; exit 2; }
 [ -r "$runners/games.sh" ] || { echo "lenovo-games: no $runners/games.sh" >&2; exit 1; }
+# The user's shell runs games.sh from the run's own directory, so both
+# paths are made absolute, as a native case gives them relative to its
+# workspace (tests/native/gpu.cases).
+runners=$(cd "$runners" && pwd)
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
 uid=$(id -u "$user")
 run=/run/user/$uid
 [ -S "$run/wayland-0" ] || { echo "lenovo-games: no desktop session: no $run/wayland-0" >&2; exit 1; }

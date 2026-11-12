@@ -1,0 +1,16 @@
+# linux-vmexit.txt: kvm-unit-tests' vmexit group at 5a221342 under Debian
+# 13.7's Linux 6.12 and QEMU with KVM on the Lenovo, three rounds, from 80-2
+# (dev-log/81-kvm/81-7.md, "Exit microbenchmarks"): a line a case, the name
+# its test prints and the guest's TSC cycles a round gave.
+cpuid 2101 1942 1947
+vmcall 5675 5715 5667
+mov_from_cr8 16 16 16
+mov_to_cr8 21 21 21
+inl_from_pmtimer 9792 9784 10009
+ipi 11884 11885 11924
+ipi_halt 9504 10219 10053
+ple_round_robin 16 16 16
+tscdeadline 7422 7416 7406
+tscdeadline_immed 8076 8080 8048
+toggle_cr0_wp 4695 4684 4683
+toggle_cr4_pge 1136 1136 1136
