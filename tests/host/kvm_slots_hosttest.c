@@ -329,6 +329,46 @@ void mmap_unlock(struct mm *mm)
 void smp_service(void)
 {}
 
+/* The slots' readers' lock: the waits of a change for the copies through
+ * a slot, which the rows count. */
+static int slot_syncs;
+
+/** Make `s` free. */
+void rwsem_init_key(struct rwsem *s, const char *name, const struct lockdep_key *key)
+{
+    (void)name;
+    (void)key;
+    s->count = 0;
+}
+
+/** A copy's hold: one thread, so no writer waits. */
+void down_read(struct rwsem *s)
+{
+    s->count++;
+}
+
+/** The end of a copy's hold. */
+void up_read(struct rwsem *s)
+{
+    s->count--;
+}
+
+/** A change's wait for the copies, none of which is under way here. */
+void down_write(struct rwsem *s)
+{
+    if (s->count != 0) {
+        __builtin_trap();
+    }
+    s->count = -1;
+    slot_syncs++;
+}
+
+/** The end of the change's wait. */
+void up_write(struct rwsem *s)
+{
+    s->count = 0;
+}
+
 /** Take `mm`'s page-table lock, around the notice list's changes: the
  * test has one thread, so a held lock is the same path twice. */
 uint32_t mm_ptl_lock(struct mm *mm)
@@ -518,6 +558,8 @@ static void capability_rows(void)
 /** KVM_SET_USER_MEMORY_REGION's checks and answers. */
 static void region_rows(void)
 {
+    int syncs;
+
     CHECK(set(0, 4, 0, 0x10000, HVA) == -EINVAL, "an unknown flag");
     CHECK(set(0, 0, 0, 0x10001, HVA) == -EINVAL, "a size not page-aligned");
     CHECK(set(0, 0, 0x800, 0x10000, HVA) == -EINVAL, "an address not page-aligned");
@@ -537,11 +579,13 @@ static void region_rows(void)
     zapped(0, 0);
     CHECK(set(0, 0, 0x100000, 0x10000, HVA) == 0 && zaps == 0, "no change, and no map taken back");
     CHECK(set(0, 0, 0x118000, 0x10000, HVA) == -EEXIST && zaps == 0, "a move into another slot");
-    CHECK(set(0, 0, 0x200000, 0x10000, HVA) == 0, "a move");
+    syncs = slot_syncs;
+    CHECK(set(0, 0, 0x200000, 0x10000, HVA) == 0 && slot_syncs == syncs + 1,
+          "a move, which waits for the copies through the slot");
     CHECK(zapped(0x100, 16), "a move takes back the guest page maps over the slot's old frames");
     CHECK(set(0, 0, 1ull << 39, 0x10000, HVA) == -EINVAL, "a move past the physical width");
-    CHECK(set(0, 0, 0, 0, 0) == 0 && zapped(0x200, 16),
-          "a deletion takes back the guest page maps over the slot");
+    CHECK(set(0, 0, 0, 0, 0) == 0 && zapped(0x200, 16) && slot_syncs == syncs + 2,
+          "a deletion takes back the guest page maps over the slot and waits for the copies");
     CHECK(set(1, 0, 0, 0, 0) == 0 && zapped(0x110, 16), "the other deletion");
     CHECK(((struct slots *)vm.slots)->pages == 0 && the_mm.notify == NULL,
           "nothing left of the slots");
