@@ -152,60 +152,136 @@ static void vclock_write_end(void)
     data->seq++;
 }
 
-/** The tick's monotonic clock now in nanoseconds, with its raw clock in
- * `*raw_ns`, and the TSC at that reading, the middle of a reading on each
- * side; where KVM's clock pages are kept, each side reads the TSC with
- * KVM's clock from the running processor's page (`tsc_kvm_now`), and KVM's
- * clock at the middle goes into `*kvm_ns` with `*kvm` 1, else `*kvm` is 0.
- * With interrupts off. */
-static uint64_t vclock_reference(uint64_t *cycles, uint64_t *raw_ns, uint64_t *kvm_ns, int *kvm)
-{
-    uint64_t t0, n0, t1, n1, mono_ns;
+/* A reading of the moment now (`vclock_sample`). */
+struct vclock_sample {
+    uint64_t tsc; /* the running processor's TSC */
+    uint64_t ns;  /* KVM's clock at it in nanoseconds, where `kvm` */
+    int kvm;      /* KVM's clock was read with the TSC */
+    int stable;   /* the page read had PVCLOCK_TSC_STABLE_BIT, or none is kept */
+};
 
-    *kvm = tsc_kvm_now(&t0, &n0);
-    if (!*kvm) {
-        t0 = tsc_ordered();
-    }
-    rtc_tick_both(&mono_ns, raw_ns);
-    if (*kvm && tsc_kvm_now(&t1, &n1)) {
-        *kvm_ns = n0 + (n1 - n0) / 2u;
+/** Read the moment now into `*s`: the running processor's KVM clock page
+ * and its TSC in one pass, the page's stable bit with them (`tsc_kvm_read`),
+ * as Linux's kvm_clock_read reads this processor's page (kvmclock.c:74-82;
+ * pvclock.c:68-84); where no page is kept, the TSC read in order, which
+ * `vclock_refusal` found one clock on every processor. With interrupts
+ * off. */
+static void vclock_sample(struct vclock_sample *s)
+{
+    struct tsc_kvm_sample k;
+
+    s->kvm = tsc_kvm_read(&k);
+    if (s->kvm) {
+        s->tsc = k.tsc;
+        s->ns = k.ns;
+        s->stable = k.stable;
     } else {
-        *kvm = 0;
-        t1 = tsc_ordered();
+        s->tsc = tsc_ordered();
+        s->ns = 0;
+        s->stable = 1;
     }
-    *cycles = t0 + (t1 - t0) / 2u;
-    return mono_ns;
 }
 
-/** The TSC now, for the page's new base, read with KVM's clock at it from
- * the running processor's page where KVM's pages are kept, into
- * `kvm_base_ns`, as Linux's __pvclock_clocksource_read reads the two in
- * one pass (arch/x86/kernel/pvclock.c:75-79); else read in order. Under
- * `vclock_lock`, with interrupts off. */
-static uint64_t vclock_base_cycles(void)
+/** The middle of the counts or times `a` and `b`, in either order. */
+static uint64_t vclock_middle(uint64_t a, uint64_t b)
 {
-    uint64_t cycles;
+    return a < b ? a + (b - a) / 2u : b + (a - b) / 2u;
+}
 
-    kvm_base_read = tsc_kvm_now(&cycles, &kvm_base_ns);
-    return kvm_base_read ? cycles : tsc_ordered();
+/** KVM's clock `ns` as a count on the page's TSC: the base's count plus
+ * KVM's clock since the base's (`kvm_base_ns`) at the page's counts in a
+ * tick; a time before the base's is the base. Under `vclock_lock`, or
+ * inside a reader's pass of the page's sequence count. */
+static uint64_t vclock_carry(uint64_t ns)
+{
+    uint64_t gone = ns > kvm_base_ns ? ns - kvm_base_ns : 0u;
+
+    return data->cycle_base + gone / TICK_NS * per_tick_used +
+           gone % TICK_NS * per_tick_used / TICK_NS;
 }
 
 /**
- * The count on the page's TSC of the moment now, carried from the page's
- * base by KVM's clock, into `*cycles`: the base plus KVM's clock since the
- * base, read from the running processor's own page, at the page's counts
- * in a tick. KVM's clock is one clock on every processor; the TSC of the
- * running processor, once the stable bit is withdrawn, may not agree with
- * the one the base was read on. Linux's kernel likewise goes on reading
- * kvm-clock, each processor's own count converted by its own page
- * (kvm_clock_read, kvmclock.c:74-82; __pvclock_clocksource_read,
- * pvclock.c:75-79 and 104-110). 0, with nothing written, where KVM's clock
- * was not read at the base. Under `vclock_lock`, or inside a reader's pass
- * of the page's sequence count; interrupts are kept off for the reading.
+ * The count on the page's TSC of the moment `s` read, through the base's
+ * pvclock anchor, as Linux's __pvclock_clocksource_read takes a reading
+ * (pvclock.c:68-108): the TSC itself while the page it was read with has
+ * PVCLOCK_TSC_STABLE_BIT, when every processor's TSC is the one the base
+ * was read on (pvclock.c:86-88); with the bit clear, KVM's clock read with
+ * it, which is one clock on every processor whether or not their TSCs
+ * agree, carried from the base (`vclock_carry`), never a count behind it.
+ * Where KVM's clock was not read at the base, no page is kept and the TSC
+ * is the count. Under `vclock_lock`.
  */
+static uint64_t vclock_count(const struct vclock_sample *s)
+{
+    if (s->stable || !s->kvm || !kvm_base_read) {
+        return s->tsc;
+    }
+    return vclock_carry(s->ns);
+}
+
+/**
+ * Put the page's base at the moment `s` read, whose count on the page's
+ * TSC is `cycles`, with the monotonic and raw clocks there `mono` and
+ * `raw`: the only writer of the base's count, KVM's clock at it and the
+ * clocks' times there, which the page's times, real time's and the coarse
+ * clocks' among them, follow (`vclock_write_times`). With the page's count
+ * odd, under `vclock_lock`.
+ */
+static void vclock_anchor(const struct vclock_sample *s, uint64_t cycles, uint64_t mono,
+                          uint64_t raw)
+{
+    data->cycle_base = cycles;
+    kvm_base_read = s->kvm;
+    kvm_base_ns = s->ns;
+    mono_base_ns = mono;
+    raw_base_ns = raw;
+}
+
+/**
+ * Advance the base to the moment now, read here, after the page's count
+ * went odd, so that a reading by the old base was of a moment before it:
+ * each clock goes to its time at the moment's count through the old
+ * pvclock anchor (`vclock_count`) at its old rate, plus `mono_step` and
+ * `raw_step`, the tick's steps forward (`vclock_step`), and the moment
+ * becomes the anchor (`vclock_anchor`). The one way a running clock's base
+ * moves on: the tick, a change of real time's offset and the stop go
+ * through it. With the page's count odd, under `vclock_lock`, with
+ * interrupts off.
+ */
+static void vclock_advance(uint64_t mono_step, uint64_t raw_step)
+{
+    struct vclock_sample s;
+    uint64_t cycles;
+
+    vclock_sample(&s);
+    cycles = vclock_count(&s);
+    vclock_anchor(&s, cycles, vclock_at(cycles) + mono_step, vclock_raw_at(cycles) + raw_step);
+}
+
+/** The tick's monotonic clock now in nanoseconds, with its raw clock in
+ * `*raw_ns`, read between the moments `*before` and `*after`
+ * (`vclock_sample`). With interrupts off. */
+static uint64_t vclock_reference(struct vclock_sample *before, struct vclock_sample *after,
+                                 uint64_t *raw_ns)
+{
+    uint64_t mono_ns;
+
+    vclock_sample(before);
+    rtc_tick_both(&mono_ns, raw_ns);
+    vclock_sample(after);
+    return mono_ns;
+}
+
+/** The count on the page's TSC of the moment now, carried from the page's
+ * base by KVM's clock read from the running processor's page
+ * (`vclock_carry`), into `*cycles`, for a reading made with the boot
+ * processor's stable bit withdrawn; Linux's kernel likewise goes on
+ * reading kvm-clock (kvmclock.c:74-82). 0, with nothing written, where
+ * KVM's clock was not read at the base. Inside a reader's pass of the
+ * page's sequence count; interrupts are kept off for the reading. */
 static int vclock_kvm_cycles(uint64_t *cycles)
 {
-    uint64_t tsc, ns, gone;
+    uint64_t tsc, ns;
     uint32_t flags;
     int kvm;
 
@@ -218,20 +294,8 @@ static int vclock_kvm_cycles(uint64_t *cycles)
     if (!kvm) {
         return 0;
     }
-    gone = ns > kvm_base_ns ? ns - kvm_base_ns : 0u;
-    *cycles = data->cycle_base + gone / TICK_NS * per_tick_used +
-              gone % TICK_NS * per_tick_used / TICK_NS;
+    *cycles = vclock_carry(ns);
     return 1;
-}
-
-/** The count on the page's TSC of the moment now, for the stop: carried
- * by KVM's clock where it was read at the base (`vclock_kvm_cycles`), else
- * the TSC read in order. Under `vclock_lock`, with interrupts off. */
-static uint64_t vclock_stop_cycles(void)
-{
-    uint64_t cycles;
-
-    return vclock_kvm_cycles(&cycles) ? cycles : tsc_ordered();
 }
 
 /** The rate and its shift for `per_tick` counts a tick: the largest shift,
@@ -306,29 +370,31 @@ static const char *vclock_refusal(void)
  * the boot processor's page has the stable bit (kvm_setup_vsyscall_timeinfo,
  * kvmclock.c:241-262): at clock.c's floors, `*mono_ns` and `*raw_ns`,
  * where a clock stopped before is still ahead of the tick's, so that no
- * reading is earlier than one before the start. The bases go back into
- * them. Given to `rtc_vclock_change`.
+ * reading is earlier than one before the start. The base is a new anchor
+ * at the TSC read with the tick's clocks (`vclock_anchor`), carried from
+ * no old one, since the clock did not run. The bases go back into them.
+ * Given to `rtc_vclock_change`.
  */
 static void vclock_begin(uint64_t *mono_ns, uint64_t *raw_ns)
 {
-    uint64_t cycles, mono, raw, kvm_ns = 0;
-    int kvm;
+    struct vclock_sample before, after, at;
+    uint64_t mono, raw;
 
-    mono = vclock_reference(&cycles, &raw, &kvm_ns, &kvm);
+    mono = vclock_reference(&before, &after, &raw);
+    at.tsc = vclock_middle(before.tsc, after.tsc);
+    at.ns = vclock_middle(before.ns, after.ns);
+    at.kvm = before.kvm && after.kvm;
+    at.stable = before.stable && after.stable;
     spin_lock(&vclock_lock);
     vclock_write_begin();
-    kvm_base_read = kvm;
-    kvm_base_ns = kvm_ns;
     per_tick_used = tsc_counts_per_tick();
     vclock_rate(per_tick_used, &mult_measured, &data->shift);
-    mono_base_ns = mono > *mono_ns ? mono : *mono_ns;
-    raw_base_ns = raw > *raw_ns ? raw : *raw_ns;
-    data->cycle_base = cycles;
+    vclock_anchor(&at, at.tsc, mono > *mono_ns ? mono : *mono_ns, raw > *raw_ns ? raw : *raw_ns);
     data->mult = (uint32_t)rtc_slewed(mult_measured, rtc_mono_rate());
     data->raw_mult = mult_measured;
     data->res_ns = vclock_resolution_ns();
     vclock_write_times();
-    data->mode = kvm ? VCLOCK_PVCLOCK : VCLOCK_TSC;
+    data->mode = at.kvm ? VCLOCK_PVCLOCK : VCLOCK_TSC;
     vclock_write_end();
     running = 1;
     kvm_stopped = 0;
@@ -343,27 +409,24 @@ static void vclock_begin(uint64_t *mono_ns, uint64_t *raw_ns)
  * KVM's clock page withdraws PVCLOCK_TSC_STABLE_BIT (vread_pvclock,
  * arch/x86/include/asm/vdso/gettimeofday.h:219-229). The page's count goes
  * odd first, and the clock's last times are read at a moment after it,
- * past every reading a reader has finished, carried from the page's base by
- * KVM's clock where it is read (`vclock_stop_cycles`), and go into
+ * past every reading a reader has finished, the base advanced to it through
+ * its pvclock anchor (`vclock_advance`), and go into
  * `*mono_ns` and `*raw_ns` while readers still wait, so that clock.c's
  * floors hold the tick's clocks after the stop at or past them. Given to
  * `rtc_vclock_change`.
  */
 static void vclock_stop(uint64_t *mono_ns, uint64_t *raw_ns)
 {
-    uint64_t cycles, mono, raw;
-
     spin_lock(&vclock_lock);
     vclock_write_begin();
     data->mode = VCLOCK_NONE;
-    cycles = vclock_stop_cycles();
-    mono = vclock_at(cycles);
-    raw = vclock_raw_at(cycles);
-    if (mono > *mono_ns) {
-        *mono_ns = mono;
+    vclock_advance(0, 0);
+    vclock_write_times();
+    if (mono_base_ns > *mono_ns) {
+        *mono_ns = mono_base_ns;
     }
-    if (raw > *raw_ns) {
-        *raw_ns = raw;
+    if (raw_base_ns > *raw_ns) {
+        *raw_ns = raw_base_ns;
     }
     vclock_write_end();
     running = 0;
@@ -394,20 +457,23 @@ int vclock_running(void)
     return running;
 }
 
-/**
- * The rate for a clock that runs at `mult` and reads `clock_ns` where the
- * tick's reads `ref_ns`, steered toward the tick's; a clock more than
- * STEP_NS behind has its base `*base_ns` moved forward as far and is not
- * steered. The base is the clock at the page's new base, after the
- * reading.
- */
-static uint32_t vclock_steer(uint32_t mult, uint64_t ref_ns, uint64_t clock_ns, uint64_t *base_ns)
+/** The step forward of a clock that reads `clock_ns` where the tick's
+ * reads `ref_ns`: as far as it is behind when that is more than STEP_NS,
+ * else none. */
+static uint64_t vclock_step(uint64_t ref_ns, uint64_t clock_ns)
+{
+    return clock_ns < ref_ns && ref_ns - clock_ns > STEP_NS ? ref_ns - clock_ns : 0u;
+}
+
+/** The rate for a clock that runs at `mult` and reads `clock_ns` where the
+ * tick's reads `ref_ns`, steered toward the tick's; a clock stepped
+ * forward (`vclock_step`) is not steered. */
+static uint32_t vclock_steer(uint32_t mult, uint64_t ref_ns, uint64_t clock_ns)
 {
     int ahead = clock_ns > ref_ns;
     uint32_t error, adjust;
 
-    if (!ahead && ref_ns - clock_ns > STEP_NS) {
-        *base_ns += ref_ns - clock_ns;
+    if (vclock_step(ref_ns, clock_ns) != 0) {
         return mult;
     }
     error = (uint32_t)(ahead ? clock_ns - ref_ns : ref_ns - clock_ns);
@@ -419,10 +485,13 @@ static uint32_t vclock_steer(uint32_t mult, uint64_t ref_ns, uint64_t clock_ns, 
 }
 
 /**
- * The errors are measured at the tick's reading and the base moved to a
- * TSC count taken after the page's count went odd, so that a reading that
- * used the old rate was of a count before the new base, and each clock is
- * continuous there: the base's time is the old rate's time at that count.
+ * The errors are measured at the tick's reading, its counts taken through
+ * the base's pvclock anchor (`vclock_count`), and the base advanced to a
+ * moment read after the page's count went odd (`vclock_advance`), so that
+ * a reading that used the old rate was of a count before the new base, and
+ * each clock is continuous there: the base's time is the old rate's time
+ * at that count. A stable bit KVM withdraws after the tick read its page
+ * thus moves no clock by a TSC that may not agree with the base's.
  * The monotonic clock's rate is the measured one at the tick length's
  * rate, under 2^32 since the measured is under 2^31 and the length within a
  * quarter of a tick. Real time goes with the monotonic clock, a step
@@ -437,9 +506,9 @@ static uint32_t vclock_steer(uint32_t mult, uint64_t ref_ns, uint64_t clock_ns, 
  */
 void vclock_tick(void)
 {
-    uint64_t at_ref, cycles, ref_ns, ref_raw, clock_ns, clock_raw, kvm_ns;
+    struct vclock_sample before, after;
+    uint64_t at_ref, ref_ns, ref_raw, clock_ns, clock_raw;
     uint32_t mono_mult;
-    int kvm;
 
     if (!running) {
         if (kvm_stopped && !vclock_refusal()) {
@@ -453,23 +522,21 @@ void vclock_tick(void)
         klog(KLOG_WARN, "vdso", "clock: the system call; kvm's clock page withdrew its stable bit");
         return;
     }
-    ref_ns = vclock_reference(&at_ref, &ref_raw, &kvm_ns, &kvm);
+    ref_ns = vclock_reference(&before, &after, &ref_raw);
     spin_lock(&vclock_lock);
+    at_ref = vclock_middle(vclock_count(&before), vclock_count(&after));
     clock_ns = vclock_at(at_ref);
     clock_raw = vclock_raw_at(at_ref);
     vclock_write_begin();
-    cycles = vclock_base_cycles();
-    mono_base_ns = vclock_at(cycles);
-    raw_base_ns = vclock_raw_at(cycles);
+    vclock_advance(vclock_step(ref_ns, clock_ns), vclock_step(ref_raw, clock_raw));
     if (tsc_counts_per_tick() != per_tick_used) {
         per_tick_used = tsc_counts_per_tick();
         vclock_rate(per_tick_used, &mult_measured, &data->shift);
         data->res_ns = vclock_resolution_ns();
     }
     mono_mult = (uint32_t)rtc_slewed(mult_measured, rtc_mono_rate());
-    data->mult = vclock_steer(mono_mult, ref_ns, clock_ns, &mono_base_ns);
-    data->raw_mult = vclock_steer(mult_measured, ref_raw, clock_raw, &raw_base_ns);
-    data->cycle_base = cycles;
+    data->mult = vclock_steer(mono_mult, ref_ns, clock_ns);
+    data->raw_mult = vclock_steer(mult_measured, ref_raw, clock_raw);
     vclock_write_times();
     vclock_write_end();
     spin_unlock(&vclock_lock);
@@ -581,17 +648,17 @@ int vclock_read_cycles(int which, uint64_t *ns, uint64_t *cycles)
     return 1;
 }
 
+/** The bases go on to the moment of the change through their pvclock
+ * anchor (`vclock_advance`), so that a change made once KVM has withdrawn
+ * its stable bit moves no clock by a TSC that may not agree with the
+ * base's. */
 void vclock_set_wall(int64_t sec, int32_t nsec)
 {
-    uint64_t cycles;
     uint32_t flags = spin_lock_irqsave(&vclock_lock);
 
     if (running) {
         vclock_write_begin();
-        cycles = vclock_base_cycles();
-        mono_base_ns = vclock_at(cycles);
-        raw_base_ns = vclock_raw_at(cycles);
-        data->cycle_base = cycles;
+        vclock_advance(0, 0);
     }
     wall_ns = sec * (int64_t)NSEC_PER_SEC + nsec;
     if (running) {

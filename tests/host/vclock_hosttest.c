@@ -24,8 +24,10 @@
  * was read on, reads nothing, so that the system call reads the clock,
  * carried on by KVM's clock; that the stop then raises the floors to its
  * moment by KVM's clock and no further, at or past every reading given;
- * and that the clock started again while the tick's clock is still behind
- * the stop's time begins at the floors (`stop_rows`).
+ * that a setting of real time and a tick made between the withdrawal and
+ * the stop carry the bases by KVM's clock, not by that TSC; and that the
+ * clock started again while the tick's clock is still behind the stop's
+ * time begins at the floors (`stop_rows`).
  */
 
 #include "arch/x86_64/vclock.c"
@@ -102,6 +104,21 @@ int tsc_kvm_now(uint64_t *tsc, uint64_t *ns)
     }
     *tsc = tsc_ordered();
     *ns = now_ns;
+    return 1;
+}
+
+/** The running processor's page read whole: its TSC, KVM's clock at it
+ * and its stable bit, which KVM withdraws on every page together, while
+ * pages are kept. */
+int tsc_kvm_read(struct tsc_kvm_sample *s)
+{
+    if (!kvm_kept_model) {
+        return 0;
+    }
+    s->tsc = tsc_ordered();
+    s->ns = now_ns;
+    s->counts = 2u * TICK_NS;
+    s->stable = !kvm_boot_withdrawn;
     return 1;
 }
 
@@ -296,9 +313,14 @@ static uint64_t syscall_mono(void)
  * pairs no TSC count with the time; 5 us later the vDSO's reading,
  * `vclock_pass` as vdsocode.s makes it, reads nothing, where without the
  * check of the page it reads the TSC a second ahead, 6.003305 s, which
- * updates no floor. The stop, 10 us later on the same processor, makes the
- * floors the moment of the stop, by KVM's clock, 5.003315 s, at or past
- * every reading given and not the second ahead. The bit set again, on a
+ * updates no floor. A setting of real time 2 us later, which leaves it
+ * where it was, as clock.c's step of nothing does, and 3 us after that a
+ * tick that read its page before the withdrawal, each carry the monotonic
+ * and raw bases to their moment by KVM's clock through the base's anchor,
+ * where the TSC a second ahead would add a second to each. The stop, 10 us
+ * later on the same processor, makes the floors the moment of the stop, by
+ * KVM's clock, 5.00332 s, at or past every reading given and not the
+ * second ahead. The bit set again, on a
  * processor whose TSC agrees, starts the clock while the tick's clock, a
  * millisecond behind the machine's, has not reached the stop's time, so
  * that only the floor puts the clock's first reading at or past it.
@@ -330,6 +352,15 @@ static void stop_rows(void)
         vdso_ns = (uint64_t)sec * NSEC_PER_SEC + ns;
     }
     CHECK(found != VREAD_OK, "the vDSO's reading after the withdrawal makes the system call");
+    now_ns += 2000u;
+    vclock_set_wall(0, 0);
+    CHECK(near(mono_base_ns, now_ns, 1000u) && near(raw_base_ns, now_ns, 1000u),
+          "a setting of real time after the withdrawal carries the bases by KVM's clock, "
+          "not by the TSC a second ahead");
+    now_ns += 3000u;
+    vclock_tick();
+    CHECK(vclock_running() && near(mono_base_ns, now_ns, 1000u) && near(raw_base_ns, now_ns, 1000u),
+          "and so does a tick that read its page before the withdrawal");
     now_ns += 10000u;
     kvm_withdrawn_model = 1;
     vclock_tick();

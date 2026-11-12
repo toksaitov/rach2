@@ -64,6 +64,12 @@ int tsc_kvm_sample(struct tsc_kvm_sample *s);
  * when no page is kept. With interrupts off. */
 int tsc_kvm_now(uint64_t *tsc, uint64_t *ns);
 
+/** The page `tsc_kvm_now` reads, read whole into `*s` in one pass with
+ * the TSC, its stable bit with it, taking nothing from it; a rate that does
+ * not fit 32 bits reads as a withdrawn bit, as in `tsc_kvm_sample`. 0, with
+ * nothing written, when no page is kept. With interrupts off. */
+int tsc_kvm_read(struct tsc_kvm_sample *s);
+
 /**
  * The TSC into `*tsc`, read while the boot processor's clock page, the one
  * the vDSO reads, has PVCLOCK_TSC_STABLE_BIT set, as Linux's vDSO checks
