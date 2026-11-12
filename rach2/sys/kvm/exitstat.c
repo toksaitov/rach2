@@ -10,8 +10,11 @@
 #include "../fs/debugfs.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
+#include "../lib/kirq.h"
 #include "../lib/kstring.h"
+#include "../mm/kheap.h"
 #include "../mm/usercopy.h"
+#include "../proc/percpu.h"
 
 /*
  * The rows. A code below ROW_HIGH has the row of its number, SVM's
@@ -30,16 +33,28 @@
 /*
  * One kind's counts. `kernel` exits were handled in the kernel and the
  * guest entered again; `user` ended KVM_RUN, most of them for the caller
- * to answer. `wait` is the TSC cycles from the end of the guest's run to
- * the big lock taken back, `handle` from there to the next entry or to
- * KVM_RUN's return; a HLT the kernel handles counts its sleep until an
- * interrupt in `handle`.
+ * to answer. `wait` is the TSC cycles from the backend's return from its
+ * entry to the big lock taken back, `handle` from there to the big lock
+ * let go for the next entry or to KVM_RUN's return; a HLT the kernel
+ * handles counts its sleep until an interrupt in `handle`. The backend's
+ * own work around VMRUN or VMLAUNCH, its loads before and its stores
+ * after, is in neither.
  */
 struct row {
     uint64_t exits, kernel, user, wait, handle;
 };
 
-static struct row rows[ROWS];
+/*
+ * Each processor's ROWS rows, made by kvm_exitstat_start for the
+ * processors started by then, as Linux keeps a vCPU's exits in its own
+ * counters (arch/x86/kvm/x86.c:10657); NULL for any other, whose exits go
+ * uncounted. A processor writes only its own rows, with interrupts off, so
+ * no lock guards them; a read or a clear from another processor may miss
+ * an exit counted at the same time. An exit's account may close on
+ * another processor than the one that opened it, so only the sums over
+ * the processors, which kvm/exit_stats shows, mean anything.
+ */
+static struct row *rows[NR_CPUS];
 
 /* A code and its name, as Linux's SVM_EXIT_REASONS and VMX_EXIT_REASONS
  * give them to its kvm_exit trace event. */
@@ -273,31 +288,42 @@ static const char *name_of(uint32_t code)
     return NULL;
 }
 
-void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t left, uint64_t held)
+void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t entry, uint64_t left, uint64_t held)
 {
-    uint32_t r = row_of(v->hw_exit);
+    struct row *mine = rows[arch_cpu_id()];
+    uint32_t r;
 
-    rows[r].exits++;
-    rows[r].wait += held - left;
+    if (!mine) {
+        v->xs_row = -1;
+        return;
+    }
+    if (v->xs_row >= 0) {
+        mine[v->xs_row].handle += entry - v->xs_mark;
+        mine[v->xs_row].kernel++;
+    }
+    r = row_of(v->hw_exit);
+    mine[r].exits++;
+    mine[r].wait += held - left;
     v->xs_row = (int32_t)r;
     v->xs_mark = held;
 }
 
-void kvm_exitstat_done(struct kvm_vcpu *v, int to_user)
+void kvm_exitstat_done(struct kvm_vcpu *v)
 {
-    struct row *r;
+    uint32_t flags;
+    struct row *mine;
 
     if (v->xs_row < 0) {
         return;
     }
-    r = &rows[v->xs_row];
-    r->handle += arch_cycles() - v->xs_mark;
-    if (to_user) {
-        r->user++;
-    } else {
-        r->kernel++;
+    flags = kirq_save();
+    mine = rows[arch_cpu_id()];
+    if (mine) {
+        mine[v->xs_row].handle += arch_cycles() - v->xs_mark;
+        mine[v->xs_row].user++;
     }
     v->xs_row = -1;
+    kirq_restore(flags);
 }
 
 /* A text being written: `len` bytes so far, of which those below `cap`
@@ -364,12 +390,13 @@ static void put_hex(struct out *o, uint32_t n)
  * line naming the columns, then one line for each kind with exits: the
  * code, the exits, those handled in the kernel and those that ended
  * KVM_RUN, the cycles waited for the big lock and spent handling, and the
- * name last, since SVM's exceptions' names have a space.
+ * name last, since SVM's exceptions' names have a space. Each count is the
+ * sum of the processors' rows.
  */
 static int32_t exitstat_show(void *data, char *buf, uint32_t cap)
 {
     struct out o;
-    uint32_t i;
+    uint32_t i, c;
 
     (void)data;
     o.buf = buf;
@@ -381,24 +408,34 @@ static int32_t exitstat_show(void *data, char *buf, uint32_t cap)
     put_dec(&o, kvm_tsc_khz());
     put_str(&o, "\ncode exits kernel user wait_cycles handle_cycles name\n");
     for (i = 0; i < ROWS; i++) {
-        const struct row *r = &rows[i];
+        struct row sum;
         uint32_t code = code_of(i);
         const char *name = i == ROW_OTHER ? "other" : name_of(code);
 
-        if (r->exits == 0) {
+        k_memset(&sum, 0, sizeof(sum));
+        for (c = 0; c < NR_CPUS; c++) {
+            if (rows[c]) {
+                sum.exits += rows[c][i].exits;
+                sum.kernel += rows[c][i].kernel;
+                sum.user += rows[c][i].user;
+                sum.wait += rows[c][i].wait;
+                sum.handle += rows[c][i].handle;
+            }
+        }
+        if (sum.exits == 0) {
             continue;
         }
         put_hex(&o, code);
         put_str(&o, " ");
-        put_dec(&o, r->exits);
+        put_dec(&o, sum.exits);
         put_str(&o, " ");
-        put_dec(&o, r->kernel);
+        put_dec(&o, sum.kernel);
         put_str(&o, " ");
-        put_dec(&o, r->user);
+        put_dec(&o, sum.user);
         put_str(&o, " ");
-        put_dec(&o, r->wait);
+        put_dec(&o, sum.wait);
         put_str(&o, " ");
-        put_dec(&o, r->handle);
+        put_dec(&o, sum.handle);
         put_str(&o, " ");
         if (name) {
             put_str(&o, name);
@@ -417,6 +454,7 @@ static int32_t exitstat_show(void *data, char *buf, uint32_t cap)
 static int32_t exitstat_store(void *data, const char __user *buf, uint32_t len)
 {
     char c[2];
+    uint32_t i;
 
     (void)data;
     if (len == 0 || len > 2) {
@@ -428,7 +466,11 @@ static int32_t exitstat_store(void *data, const char __user *buf, uint32_t len)
     if (c[0] != '0' || (len == 2 && c[1] != '\n')) {
         return -EINVAL;
     }
-    k_memset(rows, 0, sizeof(rows));
+    for (i = 0; i < NR_CPUS; i++) {
+        if (rows[i]) {
+            k_memset(rows[i], 0, ROWS * sizeof(struct row));
+        }
+    }
     return (int32_t)len;
 }
 
@@ -436,7 +478,19 @@ static const struct debugfs_text_ops exitstat_ops = {exitstat_show, exitstat_sto
 
 void kvm_exitstat_start(void)
 {
-    int32_t r = debugfs_create_text("kvm/exit_stats", 0644u, &exitstat_ops, NULL);
+    uint32_t i;
+    int32_t r;
+
+    for (i = 0; i < NR_CPUS; i++) {
+        if (cpu_table[i].online || i == arch_cpu_id()) {
+            rows[i] = kzalloc(ROWS * sizeof(struct row));
+            if (!rows[i]) {
+                klog(KLOG_WARN, "kvm", "failed: no memory for processor %u's exit counts",
+                     (unsigned)i);
+            }
+        }
+    }
+    r = debugfs_create_text("kvm/exit_stats", 0644u, &exitstat_ops, NULL);
 
     if (r != 0) {
         klog(KLOG_WARN, "kvm", "failed: kvm/exit_stats not registered: %d", (int)r);
