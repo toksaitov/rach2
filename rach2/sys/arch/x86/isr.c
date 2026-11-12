@@ -972,12 +972,18 @@ static int timer_vector(uint32_t vector)
  * APIC timer's between ticks, and the messages of PCI devices. Above them
  * are the interprocessor and spurious vectors. With x2APIC each word is a
  * register read, which a hypervisor may trap, so the caller looks only
- * every few microseconds.
+ * every few microseconds. While the 8259 delivers the lines, with no
+ * local APIC, as under `rach2.nomsi`, or through the local APIC's `LINT0`,
+ * whose ExtINT delivery sets none of its request bits, the 8259's request
+ * register is read as well (`pic_waiting`).
  */
 int arch_irq_waiting(void)
 {
     uint32_t w, bits;
 
+    if (pic_waiting()) {
+        return 1;
+    }
     for (w = IRQ_VECTOR(0) / 32u; w <= ISR_MSI_LAST / 32u; w++) {
         bits = lapic_request_word(w);
         if (w == IRQ_VECTOR(0) / 32u) {
