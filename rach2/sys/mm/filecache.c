@@ -619,14 +619,28 @@ static int32_t fc_fill(struct open_file *ofd, uint32_t first, uint32_t count, co
 }
 
 /**
+ * The size of the file open as `ofd` now, or `was` when it cannot be read,
+ * which a read takes after its pages are up to date, as Linux's
+ * `filemap_read` reads i_size after it has the folios (mm/filemap.c), so
+ * that a truncation that raced the read ends the bytes it returns.
+ */
+static uint64_t fc_size_now(struct open_file *ofd, uint64_t was)
+{
+    struct vfs_stat st;
+
+    return vfs_getattr(ofd->vmnt, ofd->vnode, &st) == 0 ? st.size : was;
+}
+
+/**
  * Read page `pgoff` of `f`, open as `ofd`, into the frame of `p`, which
  * `fc_new` gave, and with it in the same call up to `more` pages after it
  * that the cache lacks, each into a record and frame of its own, which then
  * join the cache, as Linux's `page_cache_ra_unbounded` reads its window
  * into new folios (mm/readahead.c). The window ends at the first
  * page the cache has or no frame is had for. `epoch` is the cache's count
- * taken before the read. The bytes of `pgoff` the file has, which stop
- * short of a page only at its end; 0 past the end; or a negative errno.
+ * taken before the read. The bytes of `pgoff` the file has after the read
+ * (`fc_size_now`), which stop short of a page only at its end; 0 past the
+ * end; or a negative errno.
  */
 static int32_t fc_read_window(struct open_file *ofd, const struct fc_file *f, uint32_t pgoff,
                               uint32_t more, struct fc_page *p, uint32_t epoch)
@@ -634,7 +648,7 @@ static int32_t fc_read_window(struct open_file *ofd, const struct fc_file *f, ui
     struct fc_page *recs[FC_WINDOW];
     uintptr_t phys[FC_WINDOW];
     uint32_t n = 1, i, flags;
-    uint64_t end = (uint64_t)pgoff * PAGE_SIZE;
+    uint64_t end = (uint64_t)pgoff * PAGE_SIZE, size;
     int32_t got;
 
     recs[0] = p;
@@ -658,7 +672,11 @@ static int32_t fc_read_window(struct open_file *ofd, const struct fc_file *f, ui
     if (got <= 0) {
         return got;
     }
-    return f->size - end < PAGE_SIZE ? (int32_t)(f->size - end) : (int32_t)PAGE_SIZE;
+    size = fc_size_now(ofd, f->size);
+    if (size <= end) {
+        return 0;
+    }
+    return size - end < PAGE_SIZE ? (int32_t)(size - end) : (int32_t)PAGE_SIZE;
 }
 
 /** Read `left` bytes at `at` of the file open as `ofd`, which stay inside
@@ -686,8 +704,9 @@ static int32_t fc_read_direct(struct open_file *ofd, uint64_t at, char __user *d
  * the file with up to `more` pages after it (`fc_read_window`), which then
  * joins the cache. With no frame to be had the file system reads the page's
  * part into `dst` itself (`fc_read_direct`). The bytes read, which stop
- * short of the page's end or of `left` only at the end of the file;
- * -EFAULT; or the file system's error.
+ * short of the page's end or of `left` only at the end of the file, as its
+ * size reads once the page is had (`fc_size_now`); -EFAULT; or the file
+ * system's error.
  */
 static int32_t fc_read_page(struct open_file *ofd, const struct fc_file *f, uint64_t at,
                             char __user *dst, uint32_t left, uint32_t more)
@@ -728,6 +747,14 @@ static int32_t fc_read_page(struct open_file *ofd, const struct fc_file *f, uint
             take = 0;
         } else if (take > (uint32_t)got - in) {
             take = (uint32_t)got - in;
+        }
+    } else {
+        uint64_t size = fc_size_now(ofd, f->size);
+
+        if (size <= at) {
+            take = 0;
+        } else if (take > size - at) {
+            take = (uint32_t)(size - at);
         }
     }
     if (rc == 0 && take > 0 && copy_to_user(dst, page + in, take) != 0) {
