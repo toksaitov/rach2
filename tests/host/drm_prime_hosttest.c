@@ -351,6 +351,14 @@ uint32_t tmpfs_seals(void *node)
     return TMPFS_SEAL_SHRINK;
 }
 
+/** No loop device stands on the model memfd. */
+int loop_backs(struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    (void)node;
+    return 0;
+}
+
 /** Node publication is outside these rows. */
 int32_t devfs_node_register(struct devfs_node *node)
 {

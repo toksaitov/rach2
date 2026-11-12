@@ -633,8 +633,10 @@ static int loop_resolve(const char *path, struct vfs_ref *ref)
 /**
  * Sync the file just opened as `handle`, then check again, under the mount's
  * namespace lock, that its length is whole sectors and that it is not open
- * elsewhere, attached, or mapped shared. 0, or `-EINVAL` or `-EBUSY`, or what
- * the sync or the attribute read answered.
+ * elsewhere, attached, or mapped shared: on disk at all, and in memory
+ * (tmpfs) through a descriptor open for writing, whose stores reach the
+ * file's own pages. 0, or `-EINVAL` or `-EBUSY`, or what the sync or the
+ * attribute read answered.
  *
  * Resolution and open run under the same lock, which the caller keeps
  * through publication on success, so no writer can relocate the node between
@@ -653,7 +655,8 @@ static int loop_prepare(struct vfs_ref *ref, void *handle, struct vfs_stat *st)
         rc = -EINVAL;
     }
     if (rc == 0 && (fd_node_busy(ref->mnt, ref->node) || loop_backs(ref->mnt, ref->node) ||
-                    filemap_disk_shared_mapped(ref->mnt, st->ino))) {
+                    filemap_disk_shared_mapped(ref->mnt, st->ino) ||
+                    filemap_memory_shared_writable(ref->mnt, ref->node))) {
         rc = -EBUSY;
     }
     return rc;
@@ -763,7 +766,8 @@ int loop_attach(int index, const char *path, int writable)
         loop_unclaim(loop);
         return -EINVAL; /* whole sectors only */
     }
-    if (loop_backs(ref.mnt, ref.node) || filemap_disk_shared_mapped(ref.mnt, st.ino)) {
+    if (loop_backs(ref.mnt, ref.node) || filemap_disk_shared_mapped(ref.mnt, st.ino) ||
+        filemap_memory_shared_writable(ref.mnt, ref.node)) {
         vfs_node_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
