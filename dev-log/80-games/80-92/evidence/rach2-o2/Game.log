@@ -1,0 +1,79 @@
+BackupNameAttachment=" Build(6156) Date(12 Nov 2026) Time(04 35 48)"  -- used by backup system
+ 
+Log Started at Thursday, November 12, 2026 04:35:48
+Running 64 bit version
+Executable: Z:\data\crysis\game\Bin64\Crysis.exe
+FileVersion: 1.1.1.6156
+ProductVersion: 1.1.1.6156
+Using STLport C++ Standard Library implementation
+ 
+C1-Launcher Game v7 64-bit
+Main directory: Z:\data\crysis\game
+Root directory: Z:\data\crysis\game
+User directory: z:\data\crysis\saves
+Windows build: 10.0.19045 (real)
+AMD Ryzen 9 7950X3D 16-Core Processor [Count: 4] [Features: MMX SSE SSE2]
+Windows 64 bit (build 6.2.9200)
+System language: English
+Windows Directory: "C:\windows"
+Prerequisites...
+* Installation of KB940105 hotfix required: no! (either not needed or already installed)
+Local time is 04:35:48 11/12/26, system running for 0 minutes
+4081MB physical memory installed, 3737MB available, 134217727MB virtual memory installed, 8 percent of memory in use
+PageFile usage: 28MB, Working Set: 37MB, Peak PageFile usage: 28MB,
+Current display mode is 640x480x32, (Unknown graphics card)
+IBM enhanced (101/102-key) keyboard and 3+ button mouse installed
+--------------------------------------------------------------------------------
+Stream Engine Initialization
+[Localization] Using English language
+Network initialization
+[net] using iocp socket io management
+Physics initialization
+MovieSystem initialization
+Renderer initialization
+D3D9 Adapter: llvmpipe (LLVM 19.1.7, 256 bits)
+D3D9 Adapter: PCI ffffffff:ffffffff (rev 00)
+Console initialization
+Time initialization
+Input initialization
+Sound initialization
+Sound - initializing AudioDevice now!
+Sound - starting to initialize DirectSound output! 
+Sound - 2 drivers found: 
+Sound - available drivers: 0 Speakers (PulseAudio Output) !
+Sound - available drivers: 1 Speakers (Null Output) !
+Sound - initializing FMOD-EX now!
+Sound - initialized FMOD-EX
+Sound - available record drivers: 0 Microphone (PulseAudio Input) !
+Sound - available record drivers: 1 Microphone (Monitor of Null Output) !
+Sound - using FMOD version: 00040723 and internal 00040723!
+Sound - initializing SoundSystem now!
+Font initialization
+AI initialization
+Initializing Animation System
+Initializing 3D Engine
+Script System Initialization
+Entity system initialization
+Initializing AI System
+[PlayerProfiles] Login of user 'steamuser' successful.
+[PlayerProfiles] Found 1 profiles.
+   Profile 0 : 'default'
+[GameProfiles]: Successfully activated profile 'default' for user 'steamuser'
+    $3r_FSAA = $60 $5[DUMPTODISK, REQUIRE_APP_RESTART]$4
+    $3r_FSAA_samples = $60 $5[DUMPTODISK, REQUIRE_APP_RESTART]$4
+    $3r_FSAA_quality = $60 $5[DUMPTODISK, REQUIRE_APP_RESTART]$4
+    $3r_Width = $6640 $5[DUMPTODISK]$4
+    $3r_Height = $6480 $5[DUMPTODISK]$4
+    $3sys_spec = $61 $5[]$4
+    $3g_skipIntro = $61 $5[]$4
+[net 04:36:00.809] connection requested to: <local>:64087
+[net 04:36:00.809] resolved as: <local>:64087
+[net 04:35:48.822] network hostname: rach2
+[net 04:35:48.822]   ip:127.0.1.1
+[Error] <Flash> Error: CallMethod - 'gotoAndPlay' on invalid object. [Libs/UI/HUD_GrenadeDetect_Friendly.gfx]
+[Error] <Flash> Error: CallMethod - 'gotoAndPlay' on invalid object. [Libs/UI/HUD_GrenadeDetect.gfx]
+[Error] <Flash> Error: CallMethod - 'gotoAndStop' on invalid object. [Libs/UI/HUD_RadarCompassStealth.gfx]
+-----------------------------------------------------
+*LOADING: Level island loading time: 9.34 seconds
+-----------------------------------------------------
+System:Quit
