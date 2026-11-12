@@ -90,11 +90,12 @@ struct percpu {
     int32_t bkl_nr;                             /* its system call, -1 or BKL_NR_* (smp.h) */
     uint64_t bkl_waited;                        /* cycles the hold under way waited for the lock */
     int bkl_ioctl;                              /* its ioctl request's slot plus one, or 0 */
-    volatile uint32_t wake_bkl_start;           /* current lock wait's clock, microseconds */
-    volatile uint32_t wake_bkl_waiting;         /* published after start, cleared under the lock */
-    uint32_t wake_bkl_total;                    /* completed lock waits, microseconds modulo 2^32 */
-    uint32_t wake_irq_start;                    /* latest serviced timer interrupt, at its entry */
-    uint32_t wake_irq_locked;                   /* the same interrupt at its router's end */
+    int32_t bkl_slept;                  /* a switch take's system call or -1 (`bkl_take_as`) */
+    volatile uint32_t wake_bkl_start;   /* current lock wait's clock, microseconds */
+    volatile uint32_t wake_bkl_waiting; /* published after start, cleared under the lock */
+    uint32_t wake_bkl_total;            /* completed lock waits, microseconds modulo 2^32 */
+    uint32_t wake_irq_start;            /* latest serviced timer interrupt, at its entry */
+    uint32_t wake_irq_locked;           /* the same interrupt at its router's end */
 #ifdef RACH2_LOCKDEP
     /* The lock-order checker's (lib/lockdep.c): the spinlocks this
      * processor holds, in interrupts and out, since a spinlock is held
