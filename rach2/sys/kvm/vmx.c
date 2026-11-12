@@ -1685,11 +1685,14 @@ static void read_sregs(struct kvm_vcpu *v)
 }
 
 /** Whether the exit `e` of `v` needs the special registers in the record
- * for its handling: an access to MMIO, string I/O, a debug register, a
- * hypercall's privilege, an exception, a task switch, the APIC base's
- * write, which vlapic.c marks as theirs, and any exit under the caller's
- * single step, whose report gives CS's base. A write of CR0 or CR4 reads
- * the bits it needs alone (`after_run`). */
+ * for its handling: an access to MMIO, string I/O, a debug register, an
+ * exception, a task switch, the APIC base's write, which vlapic.c marks as
+ * theirs, and any exit under the caller's single step, whose report gives
+ * CS's base. A write of CR0 or CR4 reads the bits it needs alone
+ * (`after_run`). A hypercall reads none: its privilege and mode are SS's
+ * and CS's rights, which every exit reads, with CR0.PE and EFER, which the
+ * record holds, as Linux's kvm_emulate_hypercall reads only
+ * is_64_bit_hypercall and get_cpl (arch/x86/kvm/x86.c:9686-9717). */
 static int needs_sregs(const struct kvm_vcpu *v, const struct vmx_exit *e)
 {
     if (debugging(v, KVM_GUESTDBG_SINGLESTEP)) {
@@ -1699,7 +1702,6 @@ static int needs_sregs(const struct kvm_vcpu *v, const struct vmx_exit *e)
     case EXIT_EPT_VIOLATION:
     case EXIT_EPT_MISCONFIG:
     case EXIT_DR_ACCESS:
-    case EXIT_VMCALL:
     case EXIT_TASK_SWITCH:
     case EXIT_EXCEPTION_NMI:
         return 1;
