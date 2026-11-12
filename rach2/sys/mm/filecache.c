@@ -853,13 +853,18 @@ static void fc_run_free(struct fc_run *r)
  * `folio_end_read` marks a folio up to date or not and unlocks it, and the
  * readers waiting on their pages' queues are woken. The call that ends the
  * window's last page, after the starter has let go (`fc_flight_put`),
- * frees the window. Any context; takes `fc_lock` and the queues' locks.
+ * frees the window. The window is read only under `fc_lock`, before the
+ * call gives up its pages: once they are given up, the starter's put or
+ * another call on another processor may free it, so the wakes use copies.
+ * Any context; takes `fc_lock` and the queues' locks.
  */
 static void fc_done(void *arg, uint32_t index, const uintptr_t *frames, uint32_t count, int status)
 {
     struct fc_flight *w = arg;
+    const struct vfs_mount *mnt;
     struct fc_page *p;
-    uint32_t i, left, flags = spin_lock_irqsave(&fc_lock);
+    uint64_t ino;
+    uint32_t i, left, first, flags = spin_lock_irqsave(&fc_lock);
 
     for (i = 0; i < count; i++) {
         for (p = *fc_bucket(w->mnt, w->ino, w->start + index + i); p; p = p->next) {
@@ -877,11 +882,14 @@ static void fc_done(void *arg, uint32_t index, const uintptr_t *frames, uint32_t
             fc_drop(p);
         }
     }
+    mnt = w->mnt;
+    ino = w->ino;
+    first = w->start + index;
     w->pending -= count;
     left = w->pending;
     spin_unlock_irqrestore(&fc_lock, flags);
     for (i = 0; i < count && i < FC_WAITS; i++) {
-        wq_wake_all(fc_page_wq(w->mnt, w->ino, w->start + index + i));
+        wq_wake_all(fc_page_wq(mnt, ino, first + i));
     }
     if (left == 0) {
         kfree(w);
@@ -907,6 +915,9 @@ static void fc_flight_put(struct fc_flight *w)
  * a new frame whose number `r` holds and an extra reference of the
  * caller's, so that a drop before the read starts does not free the
  * frame. `epoch` is as `fc_insert` takes it. The pages put in, from `at`.
+ * Every frame gets the caller's reference before the first insertion, so
+ * that each frame left over after an insertion fails holds the two that
+ * its cleanup drops.
  */
 static uint32_t fc_lock_run(const struct fc_file *f, uint32_t at, uint32_t n, uint32_t mark,
                             uint32_t epoch, struct fc_run *r)
@@ -922,6 +933,8 @@ static uint32_t fc_lock_run(const struct fc_file *f, uint32_t at, uint32_t n, ui
     spin_unlock_irqrestore(&fc_lock, flags);
     for (i = 0; i < got; i++) {
         frame_ref(r->phys[i]);
+    }
+    for (i = 0; i < got; i++) {
         if (!fc_insert(f, at + i, r->recs[i], epoch)) {
             break;
         }
