@@ -904,9 +904,27 @@ int kvm_lapic_ready(struct kvm_vcpu *v)
     return 0;
 }
 
+/* A halted vCPU's sleep at the run loop's top, which a row asks for with
+ * `block_turn`, the pass over the loop's top it comes at, counting down:
+ * the thread blocks in `wq_wait_event`, whose `schedule` calls its
+ * `sched_out` with interrupts off, not preempted, and is woken and switched
+ * in again; the steal time's `preempted` byte at `preempt_seen_at` is kept
+ * in `block_seen` as the switch found it. */
+static int block_turn, block_seen = -1;
+
 int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
 {
     (void)v;
+    if (block_turn && --block_turn == 0) {
+        CHECK(irq_on && caller.sched_out != NULL,
+              "a halted vCPU sleeps with interrupts on, its thread's sched_out set");
+        irq_on = 0;
+        caller.nvcsw++;
+        caller.sched_out(caller.sched_out_arg, 0);
+        caller.pcount++;
+        block_seen = preempt_seen_at ? *preempt_seen_at : -1;
+        irq_on = 1;
+    }
     return 0;
 }
 
@@ -2181,6 +2199,35 @@ static int32_t get_msr(int fd, uint32_t index, uint64_t *value);
 /* The steal time's record in the guest page, 64-byte aligned. */
 #define ST_GPA (GUEST_PAGE + 0x400u)
 
+/** A halted vCPU's sleep in KVM_RUN on vCPU `fd0`, whose steal time is on
+ * and whose `reported` preemptions are counted so far: the switch tells the
+ * thread's `sched_out` it is not preempted, so the record is not marked and
+ * no preemption is counted, as Linux's kvm_sched_out marks only a task
+ * still on its run queue (virt/kvm/kvm_main.c). */
+static void steal_block_row(int fd0, uint64_t reported)
+{
+    struct kvm_vcpu *v0 = entries[fd0].priv;
+    struct kvm_steal_time *st = (void *)(guest_page + (ST_GPA - GUEST_PAGE));
+    unsigned long nvcsw = caller.nvcsw;
+
+    script_len = 0;
+    script_at = 0;
+    scripted(KVM_X_AGAIN);
+    scripted(KVM_X_HLT);
+    v0->vm->irqchip = KVM_IRQCHIP_SPLIT;
+    block_turn = 2;
+    block_seen = -1;
+    CHECK(fdio(fd0, KVM_RUN, 0) == 0 && run_of(fd0)->exit_reason == KVM_EXIT_HLT &&
+              caller.nvcsw == nvcsw + 1,
+          "KVM_RUN through a halted vCPU's sleep after an exit, to a HLT");
+    v0->vm->irqchip = KVM_IRQCHIP_NONE;
+    CHECK(block_seen == 0 && st->preempted == 0 && st->version == 24 &&
+              v0->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported + 3 &&
+              v0->stat[KVM_VCPU_STAT_PREEMPTION_OTHER] == 1,
+          "the sleep's switch is not a preemption: the record is not marked, nor counted, and the "
+          "switch in after it asks for a write, as KVM_RUN's start does");
+}
+
 /** The steal time of vCPU `fd0`, as the selftest steal_time and Linux's
  * record_steal_time see it: MSR_KVM_STEAL_TIME refuses its reserved bits,
  * each write adds the thread's run_delay since the last and keeps the
@@ -2268,13 +2315,14 @@ static void steal_rows(int fd0)
     preempt_alone = 0;
     tick_exits = 0;
     preempt_wait = 0;
+    steal_block_row(fd0, reported);
     preempt_seen_at = NULL;
     refusing = 1;
 
     CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_GPA) == 1, "the guest turns it off");
     caller.pcount++;
     kvm_steal_prepare(v0);
-    CHECK(st->version == 20, "and nothing more is written");
+    CHECK(st->version == 24, "and nothing more is written");
 }
 
 /** A guest's INIT on vCPU `fd0`, as Linux's kvm_vcpu_reset: the steal
