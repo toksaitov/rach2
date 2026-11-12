@@ -3491,8 +3491,8 @@ static void _syscall_handler(isr_params_t *params)
 static void unlock_file_calls(void)
 {
     static const syscall_fn_t calls[] = {
-        sys_read,    sys_write, sys_pread64, sys_pwrite64, sys_ioctl,
-        sys_fstat64, sys_close, sys_poll,    sys_ppoll,    sys_fstatat64,
+        sys_read,  sys_write, sys_pread64, sys_pwrite64,  sys_ioctl,      sys_fstat64,
+        sys_close, sys_poll,  sys_ppoll,   sys_fstatat64, sys_getdents64,
     };
     uint32_t i;
 
