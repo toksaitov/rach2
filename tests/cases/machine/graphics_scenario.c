@@ -769,7 +769,9 @@ static void judge_line(struct graphics_case *s, char *command, size_t size)
         break;
     case MODETEST:
         snprintf(command, size,
-                 "modes " GRAPHICS_REF "/%s/modetest/modes " GRAPHICS_DIR "/out/modes", s->profile);
+                 "modes " GRAPHICS_REF "/%s/modetest/modes " GRAPHICS_DIR "/out/modes " GRAPHICS_DIR
+                 "/runners/modetest.faults",
+                 s->profile);
         break;
     case GLMARK2:
         snprintf(command, size,
