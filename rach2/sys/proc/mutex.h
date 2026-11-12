@@ -9,18 +9,26 @@
  * A mutex has one holder, who may sleep while holding it, and a waiter
  * sleeps until it is free, as Linux's `struct mutex` (kernel/locking/
  * mutex.c). A rwsem has any number of readers or one writer, as Linux's
- * `struct rw_semaphore` (kernel/locking/rwsem.c). A mutex keeps its state
- * under a spinlock of its own, a rwsem in an atomic word, and each its
- * sleepers on a wait queue: a sleeper files itself before it tests the
- * lock (`wq_wait_event_nointr`), and the holder gives the lock up in a
- * full barrier before it looks for sleepers to wake, so no wake is lost.
+ * `struct rw_semaphore` (kernel/locking/rwsem.c). Each keeps its state in
+ * an atomic word and its sleepers on a wait queue: a sleeper files itself
+ * before it tests the lock (`wq_wait_event_nointr`), and the holder gives
+ * the lock up in a full barrier before it looks for sleepers to wake, so
+ * no wake is lost.
  * A sleep gives up the big lock, as every sleep does, and neither is taken
  * in an interrupt or under a spinlock.
  */
+/*
+ * `locked` is 1 while the mutex is held and 0 while it is free, changed only
+ * by an atomic exchange, so that a take that finds it free and a release
+ * are one exchange each, as Linux's `__mutex_trylock_fast` and
+ * `__mutex_unlock_fast` are one compare-and-exchange of `owner`
+ * (kernel/locking/mutex.c:166-182). `owner` is written by the holder
+ * alone: after its take and before its release.
+ */
 struct mutex {
-    struct spinlock spin; /* keeps `owner` */
-    const void *owner;    /* the holder's record, NULL while free */
-    wait_queue_t wq;      /* its waiters */
+    volatile unsigned int locked; /* 1 while held */
+    const void *owner;            /* the holder's record, NULL while free */
+    wait_queue_t wq;              /* its waiters */
 #ifdef RACH2_LOCKDEP
     struct lockdep_map dep; /* its class, for the lock-order checker */
 #endif

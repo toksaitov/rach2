@@ -74,7 +74,7 @@ static void cache_unlock(uint32_t flags)
  * place in the kernel's lock order is after every sleeping lock a caller
  * holds and a buffer's hold, and before `cache_spin` (proc/Readme.md,
  * Locking): nothing is waited for while it is held. */
-static struct mutex wb_lock = {SPINLOCK_INIT_NAMED("bcache_wb.spin"),
+static struct mutex wb_lock = {0,
                                0,
                                {0}
 #ifdef RACH2_LOCKDEP
