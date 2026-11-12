@@ -16,9 +16,12 @@
 #include "../mm/usercopy.h"
 #include "../virtio/vgpushm.h"
 
-/* The bytes of MAP_BLOB's inline answer, and the runs of a page list one
- * answer holds after its heads. */
-#define VGPU_MAP_ANSWER (PAGE_SIZE - VIRTIO_GPU_RESP_OFF)
+/* The bytes of the pages MAP_BLOB's answer of a page list is written to,
+ * and the runs it holds after its heads: 4092, so that a blob of 64 MiB
+ * whose 16,384 pages the VM's allocator scattered is listed in 5 answers,
+ * where one page's 250 runs took 66 round trips through the VM. The device
+ * writes as many runs as it has and the chain holds. */
+#define VGPU_MAP_ANSWER (16u * PAGE_SIZE)
 #define VGPU_MAP_RUNS   ((VGPU_MAP_ANSWER - VGS_PAGES_OFF) / sizeof(struct vgs_run))
 
 /* The highest capability set id CONTEXT_INIT takes, and the most of its
@@ -142,6 +145,7 @@ void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object
 struct pages_gather {
     uint64_t total, first;
     uint32_t info, n;
+    uint32_t room;           /* the runs `runs` has room for */
     struct virtio_run *runs; /* `n` of them */
 };
 
@@ -168,15 +172,24 @@ static int32_t pages_take(const uint8_t *answer, uint32_t got, struct pages_gath
         return -EIO;
     }
     g->info = head.map_info;
-    more = (struct virtio_run *)kmalloc(((size_t)g->n + head.count) * sizeof(*more));
-    if (!more) {
-        return -ENOMEM;
+    if (head.count > g->room - g->n) {
+        uint32_t room = g->room ? g->room : head.count;
+
+        while (room - g->n < head.count) {
+            room *= 2; /* doubled, so the copies cost the list's length in all */
+        }
+        more = (struct virtio_run *)kmalloc((size_t)room * sizeof(*more));
+        if (!more) {
+            return -ENOMEM;
+        }
+        if (g->n) {
+            k_memcpy(more, g->runs, (size_t)g->n * sizeof(*more));
+        }
+        kfree(g->runs);
+        g->runs = more;
+        g->room = room;
     }
-    if (g->n) {
-        k_memcpy(more, g->runs, (size_t)g->n * sizeof(*more));
-    }
-    kfree(g->runs);
-    g->runs = more;
+    more = g->runs;
     for (i = 0; i < head.count; i++) {
         k_memcpy(&run, answer + VGS_PAGES_OFF + i * sizeof(run), sizeof(run));
         if (vgs_check_run(&run, left) != VGS_OK) {
@@ -192,6 +205,55 @@ static int32_t pages_take(const uint8_t *answer, uint32_t got, struct pages_gath
 }
 
 /**
+ * Ask for the page list of `bo` from its page `first` with one
+ * RESOURCE_MAP_BLOB, waited for, and copy the answer to `answer`, which
+ * holds VGPU_MAP_ANSWER bytes, with its length in `*got`. The answer is
+ * written to VGPU_MAP_ANSWER bytes of response pages, or, when the
+ * transport's memory has not got them now, to the rest of the command's
+ * own page. 0; -ENOMEM; or the wait's error, after which nothing is in
+ * `answer`. May sleep.
+ */
+static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, uint64_t first,
+                       uint8_t *answer, uint32_t *got)
+{
+    struct virtio_gpu_resource_map_blob *req;
+    struct virtio_gpu_cmd *cmd;
+    uint32_t page, here, left;
+    int big, i;
+    int32_t rc;
+
+    for (i = 0; i < 2; i++) {
+        cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB, sizeof(*req));
+        if (!cmd) {
+            return -ENOMEM;
+        }
+        req = (struct virtio_gpu_resource_map_blob *)(void *)cmd->page;
+        req->resource_id = bo->res_id;
+        req->offset = first;
+        big = i == 0 && vgpu_cmd_payload(cmd, 0, VGPU_MAP_ANSWER, 1) == 0;
+        if (big || i == 1) {
+            break;
+        }
+        vgpu_cmd_free(cmd); /* the payload's pages, part of them had */
+    }
+    if (!big) {
+        return vgpu_cmd_send_wait_map(cmd, answer, PAGE_SIZE - VIRTIO_GPU_RESP_OFF, got);
+    }
+    rc = vgpu_cmd_send_wait_map(cmd, NULL, 0, NULL);
+    if (rc == -ETIMEDOUT) {
+        return rc; /* the reaper frees the command once the device answers */
+    }
+    *got = rc != 0 ? 0 : cmd->response_len < VGPU_MAP_ANSWER ? cmd->response_len : VGPU_MAP_ANSWER;
+    left = *got;
+    for (page = 0; left > 0; page++, answer += here, left -= here) {
+        here = left < PAGE_SIZE ? left : PAGE_SIZE;
+        k_memcpy(answer, cmd->payload[page].page, here);
+    }
+    vgpu_cmd_free(cmd);
+    return rc;
+}
+
+/**
  * RESOURCE_MAP_BLOB on a device that maps blobs from its own pages: the
  * page list asked for from the first page on, and from the page after its
  * last run again until it covers `bo`, then its frames held through the
@@ -204,8 +266,6 @@ static int32_t pages_take(const uint8_t *answer, uint32_t got, struct pages_gath
 static int32_t blob_map_pages(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
 {
     struct pages_gather g;
-    struct virtio_gpu_resource_map_blob *req;
-    struct virtio_gpu_cmd *cmd;
     uint32_t got;
     uint8_t *answer = (uint8_t *)kmalloc(VGPU_MAP_ANSWER);
     int32_t rc = answer ? 0 : -ENOMEM;
@@ -213,15 +273,7 @@ static int32_t blob_map_pages(struct virtio_gpu_device *vg, struct virtio_gpu_ob
     k_memset(&g, 0, sizeof(g));
     g.total = bo->shmem.base.size >> PAGE_SHIFT;
     while (rc == 0 && g.first < g.total) {
-        cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB, sizeof(*req));
-        if (!cmd) {
-            rc = -ENOMEM;
-            break;
-        }
-        req = (struct virtio_gpu_resource_map_blob *)(void *)cmd->page;
-        req->resource_id = bo->res_id;
-        req->offset = g.first;
-        rc = vgpu_cmd_send_wait_map(cmd, answer, VGPU_MAP_ANSWER, &got);
+        rc = map_ask(vg, bo, g.first, answer, &got);
         if (rc == 0 || rc == -ETIMEDOUT) {
             bo->host_visible = 1; /* the device may hold the pages: UNMAP_BLOB at the free */
         }
