@@ -29,7 +29,6 @@ struct thread {
     unsigned gen;  /* the scan that last found it */
     char comm[32]; /* the thread's own name */
     char state;    /* stat's state letter, 0 before the first read */
-    long cpu;      /* utime + stime, in clock ticks */
     char wchan[64];
     char call[160]; /* the syscall file's text */
     size_t key;     /* the length of call that a change is judged by */
@@ -260,7 +259,7 @@ static void sample(struct thread *th, long long t)
 {
     char path[64], buf[TEXT], wchan[64], call[160];
     char *s, state;
-    long utime = 0, stime = 0;
+    long utime = 0, stime = 0, minflt = 0;
     int field;
     size_t key;
 
@@ -268,8 +267,10 @@ static void sample(struct thread *th, long long t)
     if (slurp(path, buf, sizeof buf) <= 0 || (s = strrchr(buf, ')')) == NULL)
         return;
     state = s[2];
-    /* After the name: state is field 3, utime 14 and stime 15. */
+    /* After the name: state is field 3, minflt 10, utime 14 and stime 15. */
     for (field = 3, s += 2; *s && field <= 15; field++) {
+        if (field == 10)
+            minflt = strtol(s, NULL, 10);
         if (field == 14)
             utime = strtol(s, NULL, 10);
         if (field == 15)
@@ -292,12 +293,11 @@ static void sample(struct thread *th, long long t)
         strncmp(call, th->call, key) == 0)
         return;
     th->state = state;
-    th->cpu = utime + stime;
     snprintf(th->wchan, sizeof th->wchan, "%s", wchan);
     snprintf(th->call, sizeof th->call, "%s", call);
     th->key = key;
-    note("T %lld.%09lld %d %d %s %c %ld %s | %s\n", t / 1000000000LL, t % 1000000000LL, th->pid,
-         th->tid, th->comm, state, th->cpu, wchan, call);
+    note("T %lld.%09lld %d %d %s %c %ld/%ld/%ld %s | %s\n", t / 1000000000LL, t % 1000000000LL,
+         th->pid, th->tid, th->comm, state, utime, stime, minflt, wchan, call);
 }
 
 /** Say whether `line` holds one of the words of `words`, split by '|'. */
