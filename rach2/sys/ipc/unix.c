@@ -940,6 +940,10 @@ static int unix_signal_pending(void)
  * time ran out, as Linux reports it. The wait tests only the signal-work
  * flag, as Linux tests TIF_SIGPENDING; signal_pending runs after it under
  * the big lock, since it changes the signal queues (unix_signal_pending).
+ * The deadline is armed again before each retry, since the signal's wake
+ * cleared it (sched_wake_signal) and the signal may have gone to a sibling
+ * thread; Linux keeps the remaining timeout the same way
+ * (net/unix/af_unix.c:2608).
  */
 static int unix_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, uint64_t timeo)
 {
@@ -953,10 +957,10 @@ static int unix_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, uint64_t time
     t.arg = arg;
     t.timed = timeo != 0;
     t.deadline = rtc_ticks_now() + timeo + 1u;
-    if (t.timed) {
-        current_proc->wakeup_tick = t.deadline;
-    }
     do {
+        if (t.timed) {
+            current_proc->wakeup_tick = t.deadline;
+        }
         rc = wq_wait_event_sigflag(wq, timed_ready, &t, "unix_wait");
     } while (rc == -EINTR && !unix_signal_pending());
     if (t.timed) {
