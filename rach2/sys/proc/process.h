@@ -672,11 +672,6 @@ struct process {
      * tick then leaves its switch for the fault's end, as in a system call
      * (`sched_preempt`). */
     volatile uint32_t in_fault;
-    /* Nonzero for a kernel thread that the tick does not switch, as it does
-     * not a system call (`sched_preempt`): its steps change state that the
-     * big lock alone guards, so it gives way only where it sleeps and at
-     * `sched_service_point`. */
-    volatile uint32_t no_tick_switch;
 #ifdef RACH2_LOCKDEP
     /* The sleeping locks this thread holds, which it keeps across its
      * sleeps, for the lock-order checker (lib/lockdep.c); its spinlocks are
