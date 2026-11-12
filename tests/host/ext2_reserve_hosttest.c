@@ -4,7 +4,8 @@
  * byte is taken, and the reserved blocks kept from a caller who is not root;
  * what the batch and the allocators read and write under their locks,
  * `em->batch` and the groups'; and that a
- * change of a file is admitted only once it has the file's lock.
+ * change of a file is admitted only once it has the file's lock; a sync
+ * between an inode encode and store, and an interrupt at its odd size count.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/fs/sleeplock.c rach2/sys/fs/ext2xattr.c
@@ -18,7 +19,12 @@
  * that evicts a block again after its fetch would.
  */
 #include "fs/vfs.h"
+#include "arch/arch.h"
+
+static unsigned int row_xchg(volatile unsigned int *p, unsigned int value);
+#define arch_atomic_xchg row_xchg
 #include "fs/ext2.c"
+#undef arch_atomic_xchg
 #include "fs/ext2_alloc.c"
 #include "fs/ext2_batch.c"
 #include "fs/ext2_check.c"
@@ -31,6 +37,8 @@ extern void exit(int status);
 extern void free(void *ptr);
 extern void *malloc(unsigned long size);
 extern void *calloc(unsigned long count, unsigned long size);
+extern int bkl_host_free;
+extern int bkl_host_elsewhere;
 
 #define TEST_BLOCKS 64u
 static uint8_t disk[TEST_BLOCKS][4096], saved[TEST_BLOCKS][4096];
@@ -45,6 +53,17 @@ static uint8_t descriptors[32], payload[8192], result[8192];
 static process_t process;
 struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
 static int failures, writes;
+
+/* The forced inode-store race: a sync before the second table get, and
+ * a separate durable copy of that block, changed only by a table sync. */
+static int table_tracking, table_gets, table_syncs, store_pauses;
+static uint8_t durable_table[4096];
+
+/* A device interrupt attempted at the odd size sequence, deferred until
+ * interrupts are restored. An unsafe attempt is counted without spinning
+ * forever on the big lock that the modeled reader holds. */
+static int irq_on = 1, size_irq, irq_pending, irq_blocked, irq_readers;
+static uint64_t irq_size;
 
 /* The cache model's state: whether each block is missing from the cache, and
  * how many more reads leave it missing; the misses plans met; whether each
@@ -387,6 +406,11 @@ struct bbuf *bcache_get(block_device_t *dev, uint64_t block)
             hook();
         }
     }
+    if (table_tracking && block == 4 && ++table_gets == 2) {
+        store_pauses++;
+        check(ext2_fdatasync(&mount, &file) == 0,
+              "fdatasync completes between the inode encode and its store");
+    }
     return &buffers[block];
 }
 
@@ -421,6 +445,9 @@ void bcache_release(struct bbuf *buffer)
 void bcache_dirty(struct bbuf *buffer)
 {
     writes++;
+    if (table_tracking) {
+        buffer->dirty = 1;
+    }
     unordered[buffer - buffers]++;
 }
 
@@ -483,11 +510,16 @@ int bcache_sync_owned(block_device_t *dev, uint64_t owner)
     return 0;
 }
 
-/** Succeed: the model has nothing to sync. */
+/** Sync a dirty table block to the durable copy in the forced store row;
+ * otherwise succeed without a write, as the reservation rows require. */
 int bcache_sync_block(block_device_t *dev, uint64_t blk)
 {
     (void)dev;
-    (void)blk;
+    if (table_tracking && blk == 4 && buffers[blk].dirty) {
+        k_memcpy(durable_table, buffers[blk].data, sizeof(durable_table));
+        buffers[blk].dirty = 0;
+        table_syncs++;
+    }
     return 0;
 }
 
@@ -533,6 +565,7 @@ static void reset(uint32_t available)
 {
     uint32_t i;
 
+    table_tracking = 0;
     k_memset(disk, 0, sizeof(disk));
     k_memset(&volume, 0, sizeof(volume));
     k_memset(&file, 0, sizeof(file));
@@ -553,6 +586,7 @@ static void reset(uint32_t available)
     for (i = 0; i < TEST_BLOCKS; i++) {
         buffers[i].data = disk[i];
         buffers[i].bytes = 4096;
+        buffers[i].dirty = 0;
         if (i < TEST_BLOCKS - available) {
             disk[2][i / 8] |= (uint8_t)(1u << (i % 8));
         }
@@ -1009,18 +1043,121 @@ static void admission_rows(void)
     check(volume.writers == 0 && process.file_locks == 0, "and each leaves the mount and the lock");
 }
 
+/** Attempt an interrupt at the first odd store of the armed size writer.
+ * A reader holding the big lock cannot finish until that writer resumes. */
+static unsigned int row_xchg(volatile unsigned int *p, unsigned int value)
+{
+    unsigned int old = arch_atomic_xchg(p, value);
+
+    if (size_irq && p == &file.size_seq && (value & 1u)) {
+        size_irq = 0;
+        if (irq_on) {
+            check(!bkl_try_enter(), "the device interrupt waits for the reader's big lock");
+            irq_blocked++;
+        } else {
+            irq_pending = 1;
+        }
+    }
+    return old;
+}
+
+/** Save and disable the model's interrupt flag. */
+uint32_t kirq_save(void)
+{
+    uint32_t flags = irq_on;
+
+    irq_on = 0;
+    return flags;
+}
+
+/** Restore the flag and deliver the pending interrupt only after the size
+ * sequence is even, when its big-lock holder can finish `node_size`. */
+void kirq_restore(uint32_t flags)
+{
+    irq_on = flags != 0;
+    if (irq_on && irq_pending) {
+        irq_pending = 0;
+        check(!(file.size_seq & 1u), "a size reader's interrupt waits for the even sequence");
+        if (!(file.size_seq & 1u)) {
+            irq_size = node_size(&file);
+            irq_readers++;
+            bkl_host_elsewhere = 0;
+            check(bkl_try_enter(), "the deferred interrupt takes the lock after the reader ends");
+            bkl_exit();
+        }
+    }
+}
+
+/** Whether the modeled processor admits device interrupts. */
+int kirq_enabled(void)
+{
+    return irq_on;
+}
+
+/** Force fdatasync between a truncation's encode and table store, then
+ * require the next fdatasync to put the completed size change on disk. */
+static void inode_store_sync_row(void)
+{
+    uint32_t at;
+
+    reset(56);
+    at = (uint32_t)ext2_inode_offset(&volume, file.ino) & 4095u;
+    inode_encode(&volume, &file, disk[4] + at);
+    k_memcpy(durable_table, disk[4], sizeof(durable_table));
+    table_gets = table_syncs = store_pauses = 0;
+    table_tracking = 1;
+    check(ext2_truncate(&mount, &file, 8192) == 0 && store_pauses == 1,
+          "a growth stores its inode after the forced fdatasync");
+    check(ext2_le32(durable_table + at + 4) == 0,
+          "the racing fdatasync precedes the size store on disk");
+    check(file.dirty_meta != 0, "the completed size store retains its metadata dirty mark");
+    check(ext2_fdatasync(&mount, &file) == 0 && table_syncs == 1 &&
+              ext2_le32(durable_table + at + 4) == 8192 && !file.dirty_meta,
+          "the following fdatasync persists the grown size and takes its dirty mark");
+    table_tracking = 0;
+}
+
+/** Force a device interrupt at the odd size sequence, with interrupts
+ * initially on and off; only the even sequence may restore admission. */
+static void inode_size_irq_row(void)
+{
+    int enabled;
+
+    for (enabled = 0; enabled <= 1; enabled++) {
+        reset(56);
+        irq_on = enabled;
+        bkl_host_free = bkl_host_elsewhere = 1;
+        irq_pending = irq_blocked = irq_readers = 0;
+        size_irq = 1;
+        ext2_node_lock(&file);
+        ext2_node_size_set(&file, ((uint64_t)1 << 32) + 7);
+        ext2_node_unlock(&file);
+        check(!size_irq && !irq_blocked && irq_on == enabled,
+              "the odd size sequence defers a device interrupt and restores the entry flag");
+        if (!enabled) {
+            check(irq_pending && !irq_readers, "an irq-off caller keeps its interrupt deferred");
+            kirq_restore(1);
+        }
+        check(irq_readers == 1 && !irq_pending && irq_size == ((uint64_t)1 << 32) + 7,
+              "the big-lock reader finishes with the whole new size before the deferred interrupt");
+        bkl_host_free = bkl_host_elsewhere = 0;
+    }
+}
+
 /** Take `lock` with interrupts off: one thread, so nothing waits. */
 uint32_t spin_lock_irqsave(struct spinlock *lock)
 {
+    uint32_t flags = kirq_save();
+
     lock->locked = 1;
-    return 0;
+    return flags;
 }
 
 /** Give `lock` back. */
 void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
 {
-    (void)flags;
     lock->locked = 0;
+    kirq_restore(flags);
 }
 
 /** Run the rows; 0 when every row passed. */
@@ -1037,9 +1174,11 @@ int main(void)
     overlap_punch_row();
     inode_rows();
     admission_rows();
+    inode_store_sync_row();
+    inode_size_irq_row();
     if (!failures) {
         printf("ext2-reserve-hosttest: result: pass: boundaries, reservation quotas, plans and "
-               "frees under their locks, and admission\n");
+               "frees under their locks, admission, inode stores and size interrupts\n");
     }
     return failures != 0;
 }
