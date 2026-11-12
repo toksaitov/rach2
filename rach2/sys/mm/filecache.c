@@ -1093,9 +1093,7 @@ static void fc_queue(struct open_file *ofd, const struct fc_file *f, uint32_t st
         jobs[slot].mark = mark;
         jobs[slot].epoch = epoch;
         jobs[slot].running = 0;
-        if (++job_serials == 0) {
-            job_serials = 1;
-        }
+        job_serials = job_serials % 0xFFFFFFFFu + 1u; /* never 0 */
         jobs[slot].serial = job_serials;
     }
     more = slot >= 0 && workers < FC_WORKERS && waiting + 1u > workers - workers_busy;
