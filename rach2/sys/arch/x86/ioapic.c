@@ -131,17 +131,40 @@ int ioapic_disabled(void)
     return 0;
 }
 
+/* The items of `intremap=` read here, the first for `nointremap` too. */
+static const char *const intremap_onoff[] = {"off", "on"};
+static const char *const intremap_optout[] = {"no_x2apic_optout"};
+
+/** Linux's disable_irq_remap, which irq_remapping_prepare reads (Linux
+ * 6.12.115, drivers/iommu/irq_remapping.c, lines 102 and 103): set by
+ * `nointremap` (lines 50 to 55) and by an `intremap=` item `off`, cleared
+ * by one `on` (lines 62 to 68), in the line's order. */
+int ioapic_intremap_off(void)
+{
+    int last = -1;
+
+    (void)kcmdline_list("intremap", "nointremap", intremap_onoff, 2, &last);
+    return last == 0;
+}
+
+/** Linux's no_x2apic_optout, which an `intremap=` item sets and nothing
+ * clears (irq_remapping.c, lines 71 and 72). */
+int ioapic_no_x2apic_optout(void)
+{
+    return kcmdline_list("intremap", NULL, intremap_optout, 1, NULL) != 0;
+}
+
 /**
  * Only the x86-64 kernel builds VT-d (platform.c). The DMAR table's flags
  * are read before ACPICA, which iommu/vtd.c reads the units through, so the
  * answer is Linux's own early one: intel_prepare_irq_remapping goes on only
  * when the DMAR offers remapping (`dmar_ir_support`, dmar.c, lines 2124 to
- * 2131) and the boot line does not say `intremap=off` (irq_remapping.c,
- * lines 66 to 68), and takes the x2APIC format only when the firmware does
- * not opt out of it or `intremap=no_x2apic_optout` overrides it
- * (intel/irq_remapping.c, lines 678 to 685 and 739 to 745). A unit without
- * the format, or one that fails, is known only once remapping starts, and
- * the mode is then left late (`lapic_x2apic_settle`).
+ * 2131) and the boot line leaves remapping on (`ioapic_intremap_off`), and
+ * takes the x2APIC format only when the firmware does not opt out of it or
+ * `intremap=no_x2apic_optout` overrides it (intel/irq_remapping.c, lines
+ * 678 to 685 and 739 to 745). A unit without the format, or one that
+ * fails, is known only once remapping starts, and the mode is then left
+ * late (`lapic_x2apic_settle`).
  */
 int ioapic_remappable(void)
 {
@@ -149,11 +172,10 @@ int ioapic_remappable(void)
     const struct acpi_info *a = acpi_get();
 
     if (ioapic_disabled() || !a->dmar || (a->dmar_flags & ACPI_DMAR_INTR_REMAP) == 0 ||
-        kcmdline_value_has("intremap", "off")) {
+        ioapic_intremap_off()) {
         return 0;
     }
-    return (a->dmar_flags & ACPI_DMAR_X2APIC_OPT_OUT) == 0 ||
-           kcmdline_value_has("intremap", "no_x2apic_optout");
+    return (a->dmar_flags & ACPI_DMAR_X2APIC_OPT_OUT) == 0 || ioapic_no_x2apic_optout();
 #else
     return 0;
 #endif

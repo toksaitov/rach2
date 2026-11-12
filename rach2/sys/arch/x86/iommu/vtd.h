@@ -276,9 +276,19 @@ uint64_t vtd_hw_ram_top(void);
 /** The DMAR table and its length, or NULL. */
 const uint8_t *vtd_hw_dmar(uint32_t *len);
 
-/** Whether the boot line has `key=value` among the values of `key`, which
- * may be a list separated by commas, as `intel_iommu=on,igfx_off` is. */
-int vtd_hw_option(const char *key, const char *value);
+/** Whether the boot line turns translation off: the last `intel_iommu=`
+ * item that is `off` or `on`, by its prefix, is `off`, as Linux's
+ * intel_iommu_setup reads every token in order (Linux 6.12.115,
+ * drivers/iommu/intel/iommu.c, lines 240 to 285). */
+int vtd_hw_dma_off(void);
+
+/** Whether the boot line turns interrupt remapping off, by `nointremap` or
+ * `intremap=off` (`ioapic_intremap_off`). */
+int vtd_hw_intremap_off(void);
+
+/** Whether the boot line says `intremap=no_x2apic_optout`
+ * (`ioapic_no_x2apic_optout`). */
+int vtd_hw_no_x2apic_optout(void);
 
 /** Whether the boot line keeps the I/O APIC off, and with it interrupt
  * remapping (`ioapic_disabled`). */

@@ -50,11 +50,20 @@ void ioapic_set_io(const struct ioapic_io *ops);
  */
 int ioapic_disabled(void);
 
+/** Whether the boot line turns interrupt remapping off: the last of
+ * `nointremap` and the `intremap=` items `off` and `on` is `nointremap` or
+ * `off`, each item matched by its prefix, as Linux reads them. */
+int ioapic_intremap_off(void);
+
+/** Whether any `intremap=` item is `no_x2apic_optout`, which takes the
+ * x2APIC format where the DMAR table opts out of it, as on Linux. */
+int ioapic_no_x2apic_optout(void);
+
 /** Whether interrupt remapping may yet start in the x2APIC format, which
  * lets the local APIC stay in x2APIC mode (lapic.c): not on the i686
  * kernel, not while `ioapic_disabled`, and only where the firmware's DMAR
  * table offers remapping without opting out of the format, as the boot
- * line's `intremap=` lets it. */
+ * line lets it (`ioapic_intremap_off`, `ioapic_no_x2apic_optout`). */
 int ioapic_remappable(void);
 
 /** Map the I/O APICs the MADT lists and mask every input: the count made

@@ -125,9 +125,25 @@ const uint8_t *vtd_hw_dmar(uint32_t *len)
     return acpica_table("DMAR", len);
 }
 
-int vtd_hw_option(const char *key, const char *value)
+/* The items of `intel_iommu=` read here. */
+static const char *const dma_onoff[] = {"off", "on"};
+
+int vtd_hw_dma_off(void)
 {
-    return kcmdline_value_has(key, value);
+    int last = -1;
+
+    (void)kcmdline_list("intel_iommu", NULL, dma_onoff, 2, &last);
+    return last == 0;
+}
+
+int vtd_hw_intremap_off(void)
+{
+    return ioapic_intremap_off();
+}
+
+int vtd_hw_no_x2apic_optout(void)
+{
+    return ioapic_no_x2apic_optout();
 }
 
 int vtd_hw_ioapic_off(void)
