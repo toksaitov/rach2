@@ -249,9 +249,10 @@ uint32_t timer_calibrate(void);
 uint64_t timer_cycles_us(uint64_t cycles);
 
 /** The time on the monotonic clock, in nanoseconds since boot, at which the
- * tick this processor is taking was due, or 0 when its timer keeps none, as
- * a periodic timer does: the local APIC's timer once it is one-shot
- * (`apic_hr_entry`). For the tick's handler, with interrupts off. */
+ * tick this processor is taking was due, the last of them when it came
+ * ticks late, or 0 when its timer keeps none, as a periodic timer does: the
+ * local APIC's timer once it is one-shot (`apic_hr_entry`). For the tick's
+ * handler, with interrupts off. */
 int64_t timer_tick_due(void);
 
 /** The time on the monotonic clock at which this processor's counter read
