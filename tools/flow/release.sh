@@ -166,7 +166,9 @@
 #   again finishes it. Then `bootctl kernel` writes the kernel to the
 #   candidate slot, and `rach2-install --console term --update` writes the
 #   root, keeps the accounts and keys, sets term as its console and arms the
-#   candidate for one trial boot. The
+#   candidate for one trial boot; with `--i915`, which the script passes to
+#   an installer that has it, the root's lines also bind the Intel graphics
+#   driver, `rach2.i915`, so that the native cases run on the GPU. The
 #   installer runs detached on the machine, with its log and its status in
 #   /dev/shm, so that a lost connection does not stop it; it is started once,
 #   and a release started again finds it by its log and waits for it. An
@@ -918,10 +920,14 @@ install()
         fi
         step=install
         note "install started $(date -u '+%FT%TZ')"
-        lenovo "setsid sh -c 'rach2-install --console term --update /dev/shm/root.ext2 /dev/disk$disk \
+        install_words='--console term'
+        if lenovo 'grep -q -e "\[--i915\]" /bin/rach2-install'; then
+            install_words="$install_words --i915"
+        fi
+        lenovo "setsid sh -c 'rach2-install $install_words --update /dev/shm/root.ext2 /dev/disk$disk \
             > /dev/shm/install.log 2>&1; echo \$? > /dev/shm/install.status' \
             > /dev/null 2>&1 < /dev/null &" || fail install "the installer could not be started"
-        say "install: rach2-install --console term --update runs on the machine"
+        say "install: rach2-install $install_words --update runs on the machine"
     fi
     i=0
     while :; do

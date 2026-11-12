@@ -1708,9 +1708,13 @@ int flow_release(struct fixture *f)
     if (!setup(&r, f))
         return 0;
     ok = check(&r,
-               fx_has(r.script, "setsid sh -c 'rach2-install --console term --update "
-                                "/dev/shm/root.ext2 /dev/disk$disk"),
-               "the release requests term when it updates the installed root") &&
+               fx_has(r.script, "install_words='--console term'") &&
+                   fx_has(r.script, "grep -q -e \"\\[--i915\\]\" /bin/rach2-install'; then\n"
+                                    "            install_words=\"$install_words --i915\"") &&
+                   fx_has(r.script, "setsid sh -c 'rach2-install $install_words --update "
+                                    "/dev/shm/root.ext2 /dev/disk$disk"),
+               "the release requests term, and the Intel driver from an installer that has "
+               "--i915, when it updates the installed root") &&
          ok;
     ok = finished_rows(&r) && ok;
     ok = open_rows(&r) && ok;
