@@ -11,7 +11,9 @@
 # VIEW_STRACEO in place of -c -w, VIEW_TRACEP=NAMES counts
 # the calls of every thread so named for VIEW_TRACET seconds of the load, game
 # naming the main thread, with strace's options VIEW_TRACEO in place of -c -w,
-# and VIEW_CPU gives QEMU's -cpu.
+# and VIEW_CPU gives QEMU's -cpu. Around the load host-a.txt and host-b.txt
+# keep each QEMU thread's stat line on the host, whose vCPU threads' user and
+# system ticks say what the guest's processors cost the host, idle ones too.
 import collections, hashlib, json, os, pathlib, re, shlex, signal, socket, subprocess as S, sys, threading, time
 
 w = pathlib.Path(__file__).resolve().parent
@@ -50,6 +52,17 @@ def cmd(c, data=None, check=True, raw=False):
     if check and r.returncode != 0:
         raise RuntimeError('status %d from %s: %s' % (r.returncode, c, r.stdout.decode(errors='replace')))
     return r
+
+
+def host_stat(name):
+    """Keep the stat line of each of QEMU's threads on the host in NAME."""
+    rows = []
+    for t in sorted(pathlib.Path(f'/proc/{q.pid}/task').glob('[0-9]*')):
+        try:
+            rows.append(t.name + ' ' + (t / 'stat').read_text())
+        except OSError:
+            pass
+    (out / name).write_text(''.join(rows))
 
 
 def say(*a):
@@ -198,6 +211,7 @@ try:
                                 'G=$(for p in /proc/[0-9]*; do echo "$(ls $p/task 2>/dev/null | wc -l) ${p#/proc/}"; done | sort -n | tail -1 | cut -d" " -f2); ')
                         pre = (find + 'echo "profile thread $G"; '
                                'echo 1 > /sys/kernel/debug/bkl/calls; echo "kernel $G" > /sys/kernel/debug/bkl/profile; ')
+                host_stat('host-a.txt')
                 (out / 'stat-a.txt').write_bytes(cmd(pre + stat, check=False).stdout)
                 if os.environ.get('VIEW_TRACEP'):
                     tr = ('G=$(for p in /proc/[0-9]*; do echo "$(ls $p/task 2>/dev/null | wc -l) ${p#/proc/}"; done | sort -n | tail -1 | cut -d" " -f2); '
@@ -212,6 +226,7 @@ try:
                 if sampler:
                     sampler.done.set()
                 (out / 'stat-b.txt').write_bytes(cmd(stat, check=False).stdout)
+                host_stat('host-b.txt')
                 if prof:
                     (out / 'bkl-calls.txt').write_bytes(cmd('cat /sys/kernel/debug/bkl/calls', check=False).stdout)
                     (out / 'bkl-profile.txt').write_bytes(cmd('cat /sys/kernel/debug/bkl/profile', check=False).stdout)
