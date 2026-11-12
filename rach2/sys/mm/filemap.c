@@ -24,6 +24,7 @@
 #include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "../lib/kuser.h"
+#include "../lib/spinlock.h"
 #include "filecache.h"
 #include "../network/socket/socket.h"
 #include "../syscall_internal.h"
@@ -49,8 +50,9 @@ struct dshare {
     uint64_t ino;
     uint32_t users;   /* the mappings of it */
     uint32_t leaving; /* releases of writers writing its pages back */
-    int stores;       /* a shared mapping has mapped it, so its pages may
-                         hold stores the file lacks; never cleared */
+    int stores;       /* a shared mapping through a descriptor open for
+                         writing has mapped it, so its pages may hold stores
+                         the file lacks; never cleared */
     wait_queue_t left;
     struct shmem sh;
 };
@@ -77,14 +79,18 @@ static struct filemap *maps;
 /* The disk files shared mappings hold pages of, in buckets by inode
  * number, since every read and write of a disk file asks whether its file
  * is among them: Linux reaches a file's pages from its inode
- * (`inode->i_mapping`) without a search. */
+ * (`inode->i_mapping`) without a search. A record joins and leaves its
+ * bucket, and its `stores` is set, under both the big lock and
+ * `dshare_lock`, so a holder of either may walk the buckets; a read without
+ * the big lock asks under the spinlock (`filemap_disk_stores`), under which
+ * nothing else is taken. */
 #define DSHARE_BUCKETS 256u
 static struct dshare *dshares[DSHARE_BUCKETS];
 static uint32_t dshare_count; /* how many are in the buckets */
-/* How many in each bucket a shared mapping has mapped (`stores`), which a
- * read of a disk file reads as one word without the big lock
- * (`filemap_disk_stores_maybe`). */
+/* How many in each bucket have `stores` set, read as one word first, so
+ * that a read of a file in a bucket with none takes no lock. */
 static uint32_t dshare_stores_in[DSHARE_BUCKETS];
+static struct spinlock dshare_lock = SPINLOCK_INIT_NAMED("dshare");
 
 /**
  * Whether a page of a file on `mnt` can be read with interrupts off, for a
@@ -225,10 +231,12 @@ static struct dshare *dshare_of(const struct vfs_mount *mnt, uint64_t ino)
     return ds;
 }
 
-/** Take `ds`, which is in its bucket, out of it; nothing here sleeps. */
+/** Take `ds`, which is in its bucket, out of it, under the big lock;
+ * nothing here sleeps. */
 static void dshare_unlink(struct dshare *ds)
 {
     struct dshare **link = dshare_bucket(ds->ino);
+    uint32_t flags = spin_lock_irqsave(&dshare_lock);
 
     while (*link && *link != ds) {
         link = &(*link)->next;
@@ -240,6 +248,7 @@ static void dshare_unlink(struct dshare *ds)
             dshare_stores_in[dshare_index(ds->ino)]--;
         }
     }
+    spin_unlock_irqrestore(&dshare_lock, flags);
 }
 
 /** A mapping of `ds`, through a descriptor open for writing when `writer`,
@@ -629,12 +638,16 @@ struct vm_file *filemap_shared(const fd_entry_t *e, struct shmem *sh)
 }
 
 /** A mapping of the disk file of `e`, its file's pages in memory found or
- * made (`dshare_of`), shared when `shared`, which marks the file as one
- * whose pages may hold stores (`stores`); NULL when memory runs out. */
+ * made (`dshare_of`), shared when `shared`, which through a descriptor open
+ * for writing marks the file as one whose pages may hold stores (`stores`):
+ * a shared mapping through one open only for reading can never be made
+ * writable (VM_PROT_NOWRITE). NULL when memory runs out. Under the big
+ * lock, as mmap makes its backing. */
 static struct vm_file *filemap_disk_map(const fd_entry_t *e, int shared)
 {
     struct dshare *ds = dshare_of(e->ofd->vmnt, e->ofd->ino);
     struct filemap *m;
+    uint32_t flags;
 
     if (!ds) {
         ds = kzalloc(sizeof(*ds));
@@ -644,9 +657,11 @@ static struct vm_file *filemap_disk_map(const fd_entry_t *e, int shared)
         ds->mnt = vfs_mount_base(e->ofd->vmnt);
         ds->ino = e->ofd->ino;
         wait_queue_init(&ds->left);
+        flags = spin_lock_irqsave(&dshare_lock);
         ds->next = *dshare_bucket(ds->ino);
         *dshare_bucket(ds->ino) = ds;
         dshare_count++;
+        spin_unlock_irqrestore(&dshare_lock, flags);
     }
     m = (struct filemap *)filemap_new(e);
     if (!m) {
@@ -661,9 +676,11 @@ static struct vm_file *filemap_disk_map(const fd_entry_t *e, int shared)
     m->sh = &ds->sh;
     ds->users++;
     ds->sh.maps++;
-    if (shared && !ds->stores) {
+    if (shared && (e->flags & FD_FLAG_WRITE) && !ds->stores) {
+        flags = spin_lock_irqsave(&dshare_lock);
         ds->stores = 1;
         dshare_stores_in[dshare_index(ds->ino)]++;
+        spin_unlock_irqrestore(&dshare_lock, flags);
     }
     m->vf.fill = NULL;
     m->vf.share = filemap_share_disk;
@@ -711,9 +728,22 @@ int filemap_disk_shared_mapped(const struct vfs_mount *mnt, uint64_t ino)
     return 0;
 }
 
-int filemap_disk_stores_maybe(uint64_t ino)
+int filemap_disk_stores(const struct vfs_mount *mnt, uint64_t ino)
 {
-    return *(volatile uint32_t *)&dshare_stores_in[dshare_index(ino)] != 0;
+    const struct dshare *ds;
+    uint32_t flags;
+    int stores = 0;
+
+    if (*(volatile uint32_t *)&dshare_stores_in[dshare_index(ino)] == 0) {
+        return 0;
+    }
+    mnt = vfs_mount_base(mnt);
+    flags = spin_lock_irqsave(&dshare_lock);
+    for (ds = *dshare_bucket(ino); ds && !(ds->mnt == mnt && ds->ino == ino); ds = ds->next) {
+    }
+    stores = ds && ds->stores;
+    spin_unlock_irqrestore(&dshare_lock, flags);
+    return stores;
 }
 
 int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino)
