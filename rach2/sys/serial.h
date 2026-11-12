@@ -47,9 +47,9 @@ int serial_rx_service(int budget);
  * `serial_set_rx_notify` gave, when the ring holds a byte. */
 void serial_enable_rx_irq(void);
 
-/** Whether the receive interrupt is enabled and has taken a byte: whether
- * the port's bytes are known to arrive without the tick's reading. */
-int serial_rx_irq_proven(void);
+/** Whether the receive interrupt is enabled, so that the port's bytes
+ * arrive without the tick's reading. */
+int serial_rx_irq_on(void);
 
 /**
  * Register what runs after the interrupt's service, with interrupts off:

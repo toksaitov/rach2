@@ -395,9 +395,8 @@ int serial_data_available(void)
 }
 
 /* The readings of the port, `serial_rx_service`'s calls, and whether its
- * receive interrupt has taken a byte (`serial_rx_irq_proven`); a row sets
- * the second. */
-static int serial_services, serial_irq_proven;
+ * receive interrupt is on (`serial_rx_irq_on`); a row sets the second. */
+static int serial_services, serial_irq_on;
 
 /** Count a reading of the port; 0: the test puts whole transfers in the
  * serial input. */
@@ -408,11 +407,11 @@ int serial_rx_service(int budget)
     return 0;
 }
 
-/** Whether the port's receive interrupt has taken a byte, as the row set
- * it; 0 by default, and the tick reads the port each time. */
-int serial_rx_irq_proven(void)
+/** Whether the port's receive interrupt is on, as the row set it; 0 by
+ * default, and the tick reads the port each time. */
+int serial_rx_irq_on(void)
 {
-    return serial_irq_proven;
+    return serial_irq_on;
 }
 
 /** -1: no serial input has a signal character. */
@@ -712,8 +711,8 @@ static void raw_serial(void)
 }
 
 /**
- * The tick reads COM1 at every call until the port's receive interrupt has
- * taken a byte, and then every CONSOLE_BACKUP_TICKS, a fifth of a second.
+ * The tick reads COM1 at every call while the port's receive interrupt is
+ * off, and while it is on every CONSOLE_BACKUP_TICKS, a fifth of a second.
  */
 static void console_poll_backup(void)
 {
@@ -722,22 +721,21 @@ static void console_poll_backup(void)
     setup_pair();
     tty_console_init();
     serial_pos = serial_len = 0;
-    serial_irq_proven = 0;
+    serial_irq_on = 0;
     serial_services = 0;
     irq_enabled = 0;
     for (i = 0; i < 3; i++) {
         kernel_ticks++;
         tty_console_poll();
     }
-    CHECK(serial_services == 3, "the tick reads a port whose interrupt took nothing at each call");
-    serial_irq_proven = 1;
+    CHECK(serial_services == 3, "the tick reads a port whose interrupt is off at each call");
+    serial_irq_on = 1;
     serial_services = 0;
     for (i = 0; i < TICK_HZ / 5 - 1; i++) {
         kernel_ticks++;
         tty_console_poll();
     }
-    CHECK(serial_services == 0,
-          "once the interrupt took a byte the tick waits a fifth of a second");
+    CHECK(serial_services == 0, "once the interrupt is on the tick waits a fifth of a second");
     kernel_ticks++;
     tty_console_poll();
     CHECK(serial_services == 1, "and then reads the port");
@@ -746,7 +744,7 @@ static void console_poll_backup(void)
         tty_console_poll();
     }
     CHECK(serial_services == 3, "and again every fifth of a second");
-    serial_irq_proven = 0;
+    serial_irq_on = 0;
     irq_enabled = 1;
 }
 

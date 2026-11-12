@@ -178,8 +178,8 @@ int tty_job_check(struct tty *t, int signo);
  * Run the screen's blanking countdown (`blank_tick`) and service the
  * console's serial port, from the boot processor's timer tick with
  * interrupts off; the port's interrupt services the port alone. Servicing
- * it moves the UART's bytes to the ring, at every tick until the receive
- * interrupt has taken a byte and every fifth of a second after, then wakes
+ * it moves the UART's bytes to the ring, at every tick while the receive
+ * interrupt is off and every fifth of a second while it is on, then wakes
  * a reader or poller waiting on the console, or, with none waiting and a
  * session owning the console, drains the ring into the discipline without
  * echo.
