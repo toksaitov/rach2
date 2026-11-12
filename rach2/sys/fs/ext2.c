@@ -2193,10 +2193,40 @@ static int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_
 #define EXT2_FRAMES_PLAN 32u
 /* What a plan found for a page: a hole, or a page another copy of which
  * may be newer than the disk's, which `ext2_read` reads; any other plan is
- * the page's first sector, which is past both, since a page is read so only
- * from blocks of a page or more and block 0 holds no data. */
+ * the page's first sector, which is past both, since block 0 holds no data
+ * and a block of 1 KiB at 1 is the superblock. */
 #define EXT2_PAGE_HOLE   ((uint64_t)0)
 #define EXT2_PAGE_COPY   ((uint64_t)1)
+
+/**
+ * Find the blocks of page `pg` of `n`, for `frame_plan`: `*first` is the
+ * first one's, 0 for a hole, and EXT2_PAGE_COPY when they are neither all
+ * holes nor one run on the device, which only blocks smaller than a page
+ * can be. 0, or the errors of `block_at`.
+ */
+static int frame_blocks(struct ext2_mount *em, const struct ext2_node *n, uint32_t pg,
+                        uint64_t *first)
+{
+    uint32_t at = (uint32_t)(((uint64_t)pg * PAGE_SIZE) >> em->block_shift);
+    uint32_t per = em->block_size < PAGE_SIZE ? (uint32_t)PAGE_SIZE >> em->block_shift : 1u;
+    uint32_t b0 = 0, b, i;
+    int rc;
+
+    for (i = 0; i < per; i++) {
+        rc = block_at(em, n, at + i, &b);
+        if (rc != 0) {
+            return rc;
+        }
+        if (i == 0) {
+            b0 = b;
+        } else if (b != (b0 == 0 ? 0 : b0 + i)) {
+            *first = EXT2_PAGE_COPY;
+            return 0;
+        }
+    }
+    *first = b0;
+    return 0;
+}
 
 /**
  * Find where page `pg` of `n` lies, for `ext2_read_frames`: the device
@@ -2204,34 +2234,28 @@ static int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_
  * of which may be newer, EXT2_PAGE_HOLE for a hole, or EXT2_PAGE_COPY for a
  * page `ext2_read` must read: a block the batch has an image of or the
  * cache holds, either of which may be newer than the device, or a page of
- * blocks smaller than a page. 0, or the errors of `block_at`. The caller
- * holds `n`'s lock, and the big lock while the batch is not empty
- * (`batch_guard`), so that no write of the file changes a block after the
- * look.
+ * smaller blocks that are not one run, as Linux's `do_mpage_readpage` gives
+ * such a page to `block_read_full_folio`. 0, or the errors of `block_at`.
+ * The caller holds `n`'s lock, and the big lock while the batch is not
+ * empty (`batch_guard`), so that no write of the file changes a block after
+ * the look.
  */
 static int frame_plan(struct ext2_mount *em, const struct ext2_node *n, uint32_t pg, uint64_t *plan)
 {
-    uint64_t at = (uint64_t)pg * PAGE_SIZE, off;
-    uint32_t b;
+    uint64_t at = (uint64_t)pg * PAGE_SIZE, off, b, u;
     int rc;
 
-    if (em->block_size < PAGE_SIZE) {
-        *plan = EXT2_PAGE_COPY;
-        return 0;
-    }
-    rc = block_at(em, n, (uint32_t)(at >> em->block_shift), &b);
-    if (rc != 0) {
+    rc = frame_blocks(em, n, pg, &b);
+    if (rc != 0 || b == EXT2_PAGE_HOLE || b == EXT2_PAGE_COPY) {
+        *plan = b;
         return rc;
     }
-    if (b == 0) {
-        *plan = EXT2_PAGE_HOLE;
-        return 0;
-    }
-    off = ((uint64_t)b << em->block_shift) + ((uint32_t)at & (em->block_size - 1));
-    if (writeback_find(em, (uint32_t)(off >> BCACHE_BLOCK_SHIFT)) ||
-        bcache_cached(em->dev, off >> BCACHE_BLOCK_SHIFT)) {
-        *plan = EXT2_PAGE_COPY;
-        return 0;
+    off = (b << em->block_shift) + ((uint32_t)at & (em->block_size - 1));
+    for (u = off >> BCACHE_BLOCK_SHIFT; u <= (off + PAGE_SIZE - 1) >> BCACHE_BLOCK_SHIFT; u++) {
+        if (writeback_find(em, (uint32_t)u) || bcache_cached(em->dev, u)) {
+            *plan = EXT2_PAGE_COPY;
+            return 0;
+        }
     }
     *plan = off >> 9; /* sectors of 512 bytes */
     return 0;
