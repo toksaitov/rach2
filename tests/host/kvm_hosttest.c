@@ -2483,6 +2483,48 @@ static void host_clock_rows(int vm, int fd0)
     CHECK(clk.flags & KVM_CLOCK_TSC_STABLE, "KVM_GET_CLOCK under the master clock again");
 }
 
+/**
+ * The host's clock stopping between the run loop's preparation of vCPU
+ * `fd0`, under the master clock, and its entry: the entry goes back to the
+ * loop, and the fast path ends, so that the next preparation writes the
+ * kvmclock without PVCLOCK_TSC_STABLE_BIT before the guest runs, as Linux's
+ * KVM_REQ_MASTERCLOCK_UPDATE, which pvclock_gtod_notify posts to every
+ * vCPU, cancels an entry past its preparation (arch/x86/kvm/x86.c:9166,
+ * 10586). The clock's start after it brings the master clock back.
+ */
+static void host_clock_entry_rows(int fd0)
+{
+    const struct pvclock_vcpu_time_info *pv = (const void *)guest_page;
+    struct kvm_vcpu *v0 = entries[fd0].priv;
+    int made, was_refusing = refusing;
+
+    v0->requests = 0;
+    kvm_clock_prepare(v0);
+    CHECK(v0->vm->master_clock && (pv->flags & PVCLOCK_TSC_STABLE_BIT) && !entry_waits(v0),
+          "a preparation under the master clock leaves the entry nothing to wait for");
+    vclock_on = 0;
+    vclock_gen++;
+    made = entries_made;
+    CHECK(run_enter(v0) == -EAGAIN && entries_made == made && v0->mode == KVM_MODE_OUTSIDE &&
+              irq_on,
+          "the host's clock stopped after the preparation: the entry goes back to the run loop");
+    CHECK(fast_ends(v0), "and the fast path ends at the exit the stop's kick forces");
+    CHECK(v0->vm->master_clock && (pv->flags & PVCLOCK_TSC_STABLE_BIT),
+          "until the loop's next preparation, the kvmclock keeps the old clock");
+    kvm_clock_prepare(v0);
+    CHECK(!v0->vm->master_clock && !(pv->flags & PVCLOCK_TSC_STABLE_BIT) && !entry_waits(v0),
+          "which decides the master clock again and writes the kvmclock without the bit");
+    refusing = 1;
+    CHECK(run_enter(v0) == -EOPNOTSUPP && entries_made == made + 1,
+          "the entry after it reaches the backend");
+    refusing = was_refusing;
+    vclock_on = 1;
+    vclock_gen++;
+    kvm_clock_prepare(v0);
+    CHECK(v0->vm->master_clock && (pv->flags & PVCLOCK_TSC_STABLE_BIT) && !entry_waits(v0),
+          "the clock's start brings the master clock back");
+}
+
 /** The kvmclock of the VM `vm` on vCPU `fd0` and its MSRs: the copy in
  * guest memory, which reads as KVM_GET_CLOCK does, the guest's stop, the
  * wall clock, the old MSR and KVM_SET_CLOCK. */
@@ -2957,6 +2999,7 @@ static void pv_rows(void)
     init_cr0_rows(fd0);
     hv_clock_rows(vm, fd0);
     host_clock_rows(vm, fd0);
+    host_clock_entry_rows(fd0);
     fdclose(fd1);
     fdclose(fd0);
     fdclose(vm);
