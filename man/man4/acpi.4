@@ -136,6 +136,8 @@ The kernel keeps the 8259 pair and the 8254's tick where the tables list
 no I/O APIC, where the machine has no ACPI tables, where the local APIC is
 refused, and with
 .Ql noapic
+or
+.Ql maxcpus=0
 on the kernel command line.
 .Ql rach2.nomsi
 refuses the local APIC, and with it messages and the I/O APIC.
@@ -149,6 +151,15 @@ x2APIC format; elsewhere, and with
 or
 .Ql maxcpus=0 ,
 it runs in xAPIC mode.
+A firmware that left the local APIC in x2APIC mode is the exception: that
+mode is kept where the firmware locked it or a hypervisor allows it, under
+.Ql noapic
+and
+.Ql maxcpus=0
+too, and
+.Ql nox2apic
+is ignored where the mode is locked or the processor's identity is 255 or
+more.
 .Pp
 The kernel runs on every processor the MADT lists as enabled, up to 64.
 Before the first program it starts each through its local APIC, with INIT
