@@ -810,6 +810,8 @@ static int race_cache;
 static int race_mapped;
 static int race_reads;
 static void race_map(void);
+static int mapped_write_row, mapped_write_ready;
+static uint8_t mapped_disk[2 * PAGE_SIZE];
 
 /** Report an accessible regular file with set-id bits, or in the mkdir rows
  * the directory a name is made in. A read the mount's lock does not cover
@@ -1274,6 +1276,11 @@ int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
     uint32_t i;
 
     (void)handle;
+    if (mapped_write_row) {
+        check(offset + count <= sizeof(mapped_disk), "mapped write reads within its file");
+        k_memcpy(buf, mapped_disk + (uint32_t)offset, count);
+        return (int32_t)count;
+    }
     if (!race_row) {
         check(0, "unexpected read of a mapped file");
         return -EIO;
@@ -1301,12 +1308,44 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
 {
     (void)mnt;
     (void)handle;
-    (void)buf;
-    (void)count;
-    (void)offset;
+    if (mapped_write_row) {
+        check(ns_depth > 0, "a descriptor or core write holds the file lock");
+        if (!mapped_write_ready) {
+            return 0;
+        }
+        check(offset + count <= sizeof(mapped_disk), "the write fits the model disk");
+        k_memcpy(mapped_disk + (uint32_t)offset, buf, count);
+        return (int32_t)count;
+    }
     check(0, "unexpected write of a mapped file");
     return -EIO;
 }
+
+/** A first write's buffer is absent until the row's fault makes a mapping. */
+int vm_resident(uintptr_t start, size_t len, int write)
+{
+    (void)start;
+    (void)len;
+    (void)write;
+    return !mapped_write_row || mapped_write_ready;
+}
+
+/** Fault the buffer while another thread maps and stores into the file. */
+int vm_prefault_range(uintptr_t start, size_t len, int write)
+{
+    (void)start;
+    (void)len;
+    (void)write;
+    if (mapped_write_row) {
+        race_map();
+        mapped_write_ready = 1;
+    }
+    return 1;
+}
+
+/** No row queues a real mapping's last reference. */
+void vm_file_reap(void)
+{}
 
 /** A quota with room, since no row maps a shared page. */
 int shmem_quota_full(const struct shmem *sh)
@@ -4523,6 +4562,7 @@ static void race_map(void)
     race_ds.mnt = &race_mount;
     race_ds.ino = 77;
     race_ds.stores = 1;
+    race_ds.users = 1;
     race_ds.sh.npages = 2;
     *dshare_bucket(race_ds.ino) = &race_ds;
     dshare_count = 1;
@@ -4587,6 +4627,53 @@ static void resident_race_once(int cache, const char *how)
     e->ofd->vmnt = NULL;
     e->ofd->vnode = NULL;
     e->type = FD_TYPE_NONE;
+    row_end();
+}
+
+/** Writes update a mapping made during refault, and core writes do likewise. */
+static void mapped_writers(void)
+{
+    struct open_file ofd;
+    fd_entry_t e;
+    struct file_write_state state;
+    struct core_file core;
+    uint64_t at = PAGE_SIZE + 4;
+
+    row_begin();
+    k_memset(&ofd, 0, sizeof(ofd));
+    k_memset(&e, 0, sizeof(e));
+    k_memset(&state, 0, sizeof(state));
+    k_memset(&core, 0, sizeof(core));
+    race_mount.type = &mounted_type;
+    ofd.vmnt = &race_mount;
+    ofd.vnode = &node;
+    ofd.ino = 77;
+    e.type = FD_TYPE_FILE;
+    e.flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    e.ofd = &ofd;
+    state.file.mnt = &race_mount;
+    state.file.node = &node;
+    state.own = 1;
+    proc.rlim[RLIM_FSIZE].cur = RLIM_INFINITY;
+    mapped_write_row = race_row = 1;
+    mapped_write_ready = race_mapped = 0;
+    k_memset(mapped_disk, 'b', sizeof(mapped_disk));
+    vfs_node_lock(&state.file);
+    check(file_write_locked(&e, (const char __user *)"WR", 2, &at, &state) == 2 && race_mapped &&
+              mapped_write_ready && resident_pages[1][4] == 'W' && resident_pages[1][5] == 'R' &&
+              resident_pages[1][3] == 'S',
+          "a first-buffer refault's new mapping sees the write and keeps its store beside it");
+    vfs_node_unlock(&state.file);
+    proc.sig_pending = 0;
+    core.ofd = &ofd;
+    core.pos = PAGE_SIZE + 8;
+    check(core_file_put(&core, "CORE", 4) == 0 && resident_pages[1][8] == 'C' &&
+              resident_pages[1][11] == 'E' && resident_pages[1][7] == 'S' && ns_depth == 0,
+          "a core write updates the resident mapping under the file lock");
+    mapped_write_row = race_row = race_mapped = 0;
+    dshare_stores_in[dshare_index(77)] = 0;
+    *dshare_bucket(77) = NULL;
+    dshare_count = 0;
     row_end();
 }
 
@@ -4880,6 +4967,7 @@ int main(int argc, char **argv)
     file_locked_mount_rmdir();
     resident_unmapped();
     resident_race();
+    mapped_writers();
     read_end_past_unlocked();
     unlocked_open_one();
     protected_links();
