@@ -512,6 +512,10 @@ int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *
  */
 int32_t fs_clone_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *handled);
 
+/** Whether `request` is FICLONE or FICLONERANGE, which `fs_clone_ioctl`
+ * answers for a descriptor of any type. */
+int fs_clone_request(uint32_t request);
+
 long sys_fadvise64(isr_params_t *params);
 
 long sys_setxattr(isr_params_t *params);
