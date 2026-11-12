@@ -1374,9 +1374,9 @@ static bool hda_verb_wait(struct hda_verb_wait *w)
  * polls run with the caller's interrupts, so a verb sent from a system call
  * does not hold off the tick. The tick may stop such a verb half-way, so a
  * caller in the tick or another interrupt, or in a service that may run
- * there, passes HDA_VERB_TRY, which gives up
- * when the lock is held or the interface is still busy with a command before
- * it; waiting there would never end, or end too late for the tick.
+ * there, passes HDA_VERB_TRY, which gives up when the lock is held or the
+ * interface is still busy with a command before it; waiting there would
+ * never end, or end too late for the tick.
  *
  * Return 0 with the response; -EBUSY in HDA_VERB_TRY mode when the interface
  * is in use, having sent nothing; -EIO when the controller is not mapped or
@@ -1726,19 +1726,26 @@ static uint8_t cap_out[HDA_CAPTURE_PERIOD]; /* a period in the reader's format *
 static struct spinlock cap_lock = SPINLOCK_INIT_NAMED("cap_lock");
 static audio_stream_t *cap_stream = NULL; /* the open input stream, or NULL */
 static volatile bool cap_running = false;
-static uint16_t cap_format = 0;      /* the stream format word stream_setup chose */
-static uint32_t cap_asked = 0;       /* the rate stream_setup was asked for */
-static uint32_t cap_period = 0;      /* bytes of one DMA period; 0 before a setup */
-static uint32_t cap_periods = 0;     /* periods in the DMA buffer */
-static uint32_t cap_frame = 4;       /* bytes of one frame in the DMA buffer */
-static uint32_t cap_next = 0;        /* the period the service hands over next */
-static uint32_t cap_pos = 0;         /* the position at the last service, bytes */
-static uint32_t cap_clock = 0;       /* the wall clock at the last service */
-static uint32_t cap_recorded = 0;    /* frames recorded up to `cap_pos` */
-static uint32_t cap_handed = 0;      /* frames handed to the reader */
-static bool cap_irq_seen = false;    /* the input stream's, as `play_irq_seen`, */
-static bool cap_irq_pending = false; /* `play_irq_pending` */
-static uint32_t cap_irq_tick = 0;    /* and `play_irq_tick` */
+/* The stream format word stream_setup chose and the rate it was asked for;
+ * the bytes of one DMA period, 0 before a setup, the periods in the DMA
+ * buffer and the bytes of one frame in it. */
+static uint16_t cap_format = 0;
+static uint32_t cap_asked = 0;
+static uint32_t cap_period = 0;
+static uint32_t cap_periods = 0;
+static uint32_t cap_frame = 4;
+/* The period the service hands over next; the position in bytes and the
+ * wall clock at the last service; the frames recorded up to cap_pos, and
+ * those handed to the reader. */
+static uint32_t cap_next = 0;
+static uint32_t cap_pos = 0;
+static uint32_t cap_clock = 0;
+static uint32_t cap_recorded = 0;
+static uint32_t cap_handed = 0;
+/* The input stream's play_irq_seen, play_irq_pending and play_irq_tick. */
+static bool cap_irq_seen = false;
+static bool cap_irq_pending = false;
+static uint32_t cap_irq_tick = 0;
 
 static void hda_service_capture(void);
 static uint32_t hda_input_position(void);
@@ -3238,11 +3245,11 @@ static void hda_check_dma(int stream)
  * where its caps have presence detect and its configuration does not deny
  * it, are polled every quarter second (hda_poll_jacks), by the service the
  * tick asks for (hda_tick), with verbs that give up when the interface is in
- * use (HDA_VERB_TRY). A reading
- * that differs from a jack's state changes it only when the next reading
- * agrees, so a plug half-way in does not move the sound back and forth; a
- * reading whose verb fails changes nothing. A start reads every pin's sense
- * (hda_sense_pins) and takes the jacks' states from it at once.
+ * use (HDA_VERB_TRY). A reading that differs from a jack's state changes it
+ * only when the next reading agrees, so a plug half-way in does not move the
+ * sound back and forth; a reading whose verb fails changes nothing. A start
+ * reads every pin's sense (hda_sense_pins) and takes the jacks' states from
+ * it at once.
  *
  * In the automatic output mode the headphones play, and the primary pin is
  * off, while the headphone jack has a plug (hda_route_output); a change
@@ -5345,7 +5352,8 @@ static void hda_beep_eapd(bool on, bool *ok)
     for (i = 0; i < hda_report.widget_count; i++) {
         const hda_widget_report_t *w = &hda_report.widgets[i];
 
-        if (w->type == HDA_WIDGET_PIN && (w->pin_caps & 0x10000)) /* EAPD capable */
+        /* Pin caps bit 16: EAPD capable. */
+        if (w->type == HDA_WIDGET_PIN && (w->pin_caps & 0x10000))
             hda_put(w->nid,
                     HDA_VERB_SET_EAPD | (!on                         ? 0x00
                                          : w->nid == speaker_pin_nid ? 0x03
