@@ -702,6 +702,15 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     return 0;
 }
 
+size_t copy_from_user_left(void *dst, const void __user *src, size_t n)
+{
+    if ((uintptr_t)src < 4096) {
+        return n;
+    }
+    k_memcpy(dst, src, n);
+    return 0;
+}
+
 void klog(int level, const char *subsystem, const char *fmt, ...)
 {
     (void)level;

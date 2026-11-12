@@ -880,7 +880,7 @@ static int32_t shmem_pwrite(struct drm_i915_gem_object *obj, const struct drm_i9
         if ((off | len) & partial) {
             arch_dma_flush(va + off, len);
         }
-        if (copy_from_user(va + off, user, len) != 0) {
+        if (copy_from_user_left(va + off, user, len) != 0) { /* the rest stays */
             err = -EFAULT;
         } else if (needs_clflush & I915_CLFLUSH_AFTER) {
             arch_dma_flush(va + off, len);
@@ -968,7 +968,7 @@ static int32_t gtt_copy(struct drm_i915_private *i915, uint64_t base, uint32_t o
         return -ENOSPC;
     }
     if (write) {
-        fault = copy_from_user(va + off, user, len) != 0;
+        fault = copy_from_user_left(va + off, user, len) != 0; /* the rest stays */
         arch_dma_fence();
         i915_aperture_sync(&i915->hw, base, I915_GTT_PAGE_SIZE, 1);
     } else {
