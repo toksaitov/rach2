@@ -30,6 +30,12 @@
  * the overflow's callback, and that a disabled counter stops and keeps its
  * entry masked.
  *
+ * The SMM rows start a processor (`platform_pmu_cpu_setup`): IA32_DEBUGCTL
+ * gets FREEZE_WHILE_SMM, its LBR kept, on the Haswell and the hypervisor's
+ * version 3, whose IA32_PERF_CAPABILITIES offer it; the chip without that
+ * bit, the version 1 monitor, AMD's and the one without MSRs are written
+ * nothing, and a write of the bit where it is not offered is a #GP.
+ *
  * Returns 0 when every row passes, 1 otherwise.
  */
 
@@ -63,6 +69,7 @@ static uint64_t tsc;
 static uint64_t evtsel, counter, global_ctrl, global_status; /* the detector's */
 static uint64_t fixed_ctrl, fixed1; /* the fixed counters' control, counter 1 */
 static uint64_t other_evtsel[8];    /* the other general counters' selects */
+static uint64_t debugctl;           /* IA32_DEBUGCTL */
 static uint32_t lvtpc = LAPIC_LVT_MASKED;
 static int nmi_pending;
 static int msr_writes, last_msr_written;
@@ -247,6 +254,9 @@ static int msr_exists(uint32_t msr)
     if (!chip->has_msr) {
         return 0;
     }
+    if (msr == IA32_DEBUGCTL) {
+        return 1;
+    }
     if (chip_amd()) {
         return msr >= AMD_PERF_CTL0 && msr < AMD_PERF_CTL0 + 2u * chip_counters() &&
                (chip->ext1_ecx & (1u << 23)) != 0;
@@ -293,6 +303,8 @@ void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi)
         v = evtsel;
     } else if (msr == IA32_PERF_CAPABILITIES) {
         v = chip->perf_cap;
+    } else if (msr == IA32_DEBUGCTL) {
+        v = debugctl;
     } else if (msr == IA32_PERF_GLOBAL_STATUS) {
         v = global_status;
     } else if (msr == IA32_PERF_GLOBAL_CTRL) {
@@ -326,6 +338,16 @@ void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi)
         return;
     }
     if (other_count(msr)) {
+        return;
+    }
+    if (msr == IA32_DEBUGCTL) {
+        /* FREEZE_WHILE_SMM is reserved where IA32_PERF_CAPABILITIES does
+         * not offer it (SDM 18.4.1, 19.8.1). */
+        if ((v & DEBUGCTL_FREEZE_SMM) != 0 && (chip_amd() || (chip->leaf1_ecx & CPUID1_PDCM) == 0 ||
+                                               (chip->perf_cap & PERF_CAP_SMM_FREEZE) == 0)) {
+            gp("wrmsr of reserved bits of", msr);
+        }
+        debugctl = v;
         return;
     }
     if (chip_amd()) {
@@ -486,6 +508,7 @@ static void reset(const struct chip *c)
     tsc = 1000000;
     evtsel = counter = global_ctrl = global_status = 0;
     fixed1 = 0;
+    debugctl = 0;
     k_memset(other_evtsel, 0, sizeof other_evtsel);
     /* The firmware left counter 1 counting cycles with its interrupt on,
      * and fixed counter 0 counting instructions. */
@@ -655,6 +678,28 @@ static void none_row(const struct chip *c, const char *line)
     check(fault[0] == '\0', fault[0] != '\0' ? fault : "no #GP");
 }
 
+/**
+ * The freeze of the counters in SMM as a processor starts: with LBR left on
+ * by the firmware, `platform_pmu_cpu_setup` sets IA32_DEBUGCTL's
+ * FREEZE_WHILE_SMM and keeps LBR when `want`, on Intel's monitor of version
+ * 2 or later whose IA32_PERF_CAPABILITIES offers the bit, as Linux's perf
+ * sets it (arch/x86/events/intel/core.c:5452-5463); and otherwise writes
+ * nothing, since the bit is reserved there.
+ */
+static void smm_freeze_row(const struct chip *c, int want)
+{
+    reset(c);
+    debugctl = 0x1u;
+    platform_pmu_cpu_setup();
+    check(fault[0] == '\0', fault[0] != '\0' ? fault : "no #GP");
+    if (want) {
+        check(debugctl == (0x1u | DEBUGCTL_FREEZE_SMM) && msr_writes == 1,
+              "the counters freeze in SMM, LBR kept");
+    } else {
+        check(debugctl == 0x1u && msr_writes == 0, "no freeze is asked for where none is offered");
+    }
+}
+
 /* Leaf 0xA's EAX: version 3, four counters, 48 bits, seven events; its
  * EDX: three fixed counters, 48 bits. */
 #define HSW_LEAF_A   0x07300403u
@@ -783,6 +828,12 @@ int main(void)
     none_row(&dead, "no counter: fixed counter 1 does not count");
     none_row(&no_cycles, "no counter: the processor lists no cycles counter");
     none_row(&no_msr, "no counter: no local apic or no msrs");
+    smm_freeze_row(&haswell, 1);
+    smm_freeze_row(&no_fixed, 1);
+    smm_freeze_row(&no_fw, 0);
+    smm_freeze_row(&v1, 0);
+    smm_freeze_row(&ryzen, 0);
+    smm_freeze_row(&no_msr, 0);
     if (failures == 0) {
         printf("pmu_hosttest: ok\n");
     }
