@@ -3506,13 +3506,16 @@ static void xsave_move_rows(void)
  * KVM_GET_XSAVE and KVM_SET_XSAVE on a model without XSAVE, where Linux
  * keeps them in FXSAVE's form: KVM_CAP_XSAVE answers 1 on either model and
  * KVM_CAP_XCRS only with XSAVE; KVM_GET_XSAVE gives FXSAVE's 512 bytes with
- * x87 and SSE marked and nothing after the header's first word; and
+ * x87 and SSE marked and nothing after the header's first word, from a
+ * vCPU whose image marks AVX alone and has marked bytes after the 512,
+ * where the ordinary mask would mark nothing and keep those bytes; and
  * KVM_SET_XSAVE refuses AVX marked or a reserved MXCSR bit and loads the
  * 512 bytes, MXCSR among them.
  */
 static void xsave_none_rows(void)
 {
     static uint8_t img[4096] __attribute__((aligned(64)));
+    struct kvm_vcpu *v;
     uint64_t bv;
     uint32_t mxcsr, i;
     uint8_t rest = 0;
@@ -3529,6 +3532,10 @@ static void xsave_none_rows(void)
           "without it KVM_CAP_XSAVE is 1 still and KVM_CAP_XCRS 0");
     vm = dev(KVM_CREATE_VM, 0);
     a = fdio(vm, KVM_CREATE_VCPU, 0);
+    v = (struct kvm_vcpu *)entries[a].priv;
+    k_memset(v->xsave + 512, 0x5A, KVM_XSAVE_SIZE - 512);
+    bv = 0x4; /* AVX alone */
+    k_memcpy(v->xsave + 512, &bv, 8);
     k_memset(img, 0xA5, sizeof(img));
     CHECK(fdio(a, KVM_GET_XSAVE, (uintptr_t)img) == 0, "KVM_GET_XSAVE without XSAVE");
     k_memcpy(&bv, img + 512, 8);
@@ -3536,7 +3543,7 @@ static void xsave_none_rows(void)
         rest |= img[i];
     }
     CHECK(bv == 0x3 && rest == 0 && img[24] == 0x80 && img[25] == 0x1F,
-          "it gives FXSAVE's image, x87 and SSE marked, MXCSR 0x1F80");
+          "it gives FXSAVE's image, x87 and SSE marked, MXCSR 0x1F80, the header and tail cleared");
     bv = 0x7;
     k_memcpy(img + 512, &bv, 8);
     CHECK(fdio(a, KVM_SET_XSAVE, (uintptr_t)img) == -EINVAL, "KVM_SET_XSAVE refuses AVX marked");
