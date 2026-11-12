@@ -686,6 +686,16 @@ int sched_wake_due_locked(process_t *p, uint64_t now)
     return sched_ready_locked(p);
 }
 
+int sched_wake_time_locked(process_t *p)
+{
+    if (p->state != PROC_BLOCKED || p->wakeup_tick == 0) {
+        return -1;
+    }
+    p->wakeup_tick = 0;
+    p->woken = 1;
+    return sched_ready_locked(p);
+}
+
 void sched_wake_due(process_t *p, uint64_t now)
 {
     uint32_t flags = spin_lock_irqsave(&sched_lock);

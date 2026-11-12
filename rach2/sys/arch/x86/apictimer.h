@@ -39,8 +39,31 @@ void apic_lint_init(const struct acpi_info *a);
 uint32_t apic_timer_calibrate(uint32_t hz, const char **against);
 
 /** Start this processor's timer, periodic, raising `APIC_TIMER_VECTOR`
- * every `counts` counts, which is a tick at `hz`. */
+ * every `counts` counts, which is a tick at `hz`, with no time between
+ * ticks armed. */
 void apic_timer_start(uint32_t counts, uint32_t hz);
+
+/**
+ * Take a vector for the timer's interrupts between ticks, which
+ * `timer_wake_at` arms, once the timer ticks every `counts` counts. Without
+ * a vector free, sleeps and timers end at ticks.
+ */
+void apic_hr_init(uint32_t counts);
+
+/**
+ * On every interrupt of this processor at `vector`, before the big lock, so
+ * that a wait for the lock does not hold back the next interrupt: once the
+ * timer is one-shot (`timer_wake_at`), move the tick's time on when the
+ * interrupt is the tick, forget a time asked for that the interrupt between
+ * ticks serves, and count the timer to the next of the two. Returns 0 for an
+ * interrupt at APIC_TIMER_VECTOR that is not the tick, since the clock has
+ * not reached the tick's time, which the caller acknowledges and handles no
+ * further; 1 otherwise. Interrupts are off.
+ */
+int apic_hr_entry(uint32_t vector);
+
+/** The vector of the timer's interrupts between ticks, or 0 for none. */
+int apic_hr_vector(void);
 
 /* The clock's counters under a tick that is not the 8259's: the APIC timer
  * itself, and the 8254 through the I/O APIC. */

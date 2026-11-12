@@ -157,7 +157,8 @@ struct restart_block {
     long (*fn)(struct isr_params *params);
     uint64_t tick; /* the deadline's tick, or a CPU clock's due ticks */
     /* Deadline since boot; sec -1 marks a CPU-clock sleep; both 0 for
-     * a wait ended by its tick alone. */
+     * a wait ended by its tick alone. A futex wait with
+     * FUTEX_CLOCK_REALTIME keeps its time of real time here. */
     int64_t sec;
     int64_t nsec;
     uintptr_t uaddr; /* poll's array, or the futex word */
@@ -692,6 +693,16 @@ struct process {
      * A post marks only the chosen thread; only that thread recomputes it
      * after changing its mask or taking signals. */
     uint32_t sig_woken;
+    /* With `wakeup_tick` counted to an absolute time of real time, the
+     * clock's step count it was counted at (`rtc_step_count`), else 0: the
+     * timer tick wakes the sleep once the clock is set, so that it counts
+     * its tick again. */
+    uint32_t rt_steps;
+    /* With `wakeup_tick`, the time of the monotonic clock in nanoseconds
+     * since boot at which the sleep ends, before that tick, or 0 for a
+     * sleep that ends at its tick: the interrupt `timer_wake_at` arms makes
+     * it ready then (`proc_wake_due`). */
+    int64_t wakeup_ns;
     /* Nonzero while a fault from user mode runs with interrupts on; the
      * tick then leaves its switch for the fault's end, as in a system call
      * (`sched_preempt`). */
@@ -1014,13 +1025,23 @@ void proc_set_comm(process_t *p, const char *path);
 
 /**
  * Make ready each process BLOCKED in a timed sleep whose `wakeup_tick` has
- * come by the tick `now`, clearing it, and mark the SIGALRM of each process
- * whose real-time timer is due for a holder of the big lock to post
- * (`proc_tick_signal`), which arms the timer again for its interval or
- * leaves a single alarm disarmed. The tick that makes the clock's pass
- * calls it, without the big lock and with interrupts off.
+ * come by the tick `now`, or whose `rt_steps` the real-time clock's setting
+ * has left behind, or whose `wakeup_ns` the monotonic clock has reached,
+ * clearing it, and mark the SIGALRM of each process whose real-time timer
+ * is due for a holder of the big lock to post (`proc_tick_signal`), which
+ * arms the timer again for its interval or leaves a single alarm disarmed.
+ * The tick that makes the clock's pass calls it, without the big lock and
+ * with interrupts off.
  */
 void proc_wake_sleepers(uint64_t now);
+
+/**
+ * Make ready each process BLOCKED in a timed sleep whose `wakeup_ns` the
+ * monotonic clock has reached, before its tick, and arm the time of each
+ * other again (`timer_wake_at`). The interrupt between ticks calls it,
+ * with interrupts off (`timer_hr_pass`); it takes the locks it needs.
+ */
+void proc_wake_due(void);
 
 /**
  * Post `signo` to the process `target` is a thread of, with a siginfo whose

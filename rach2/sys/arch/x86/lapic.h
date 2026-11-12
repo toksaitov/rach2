@@ -202,10 +202,12 @@ void lapic_self_ipi(uint8_t vector);
 /*
  * The timer, this processor's: programmed with `vector`, periodic or
  * one-shot, masked or not, from `initial` counts at the bus clock divided
- * by sixteen; stopped, with its entry masked; and read. Each does nothing,
- * or reads 0, while the APIC is not enabled.
+ * by sixteen; started again from `initial` counts as last programmed;
+ * stopped, with its entry masked; and read. Each does nothing, or reads 0,
+ * while the APIC is not enabled.
  */
 void lapic_timer_set(uint8_t vector, int periodic, int masked, uint32_t initial);
+void lapic_timer_count(uint32_t initial);
 void lapic_timer_stop(void);
 uint32_t lapic_timer_current(void);
 uint32_t lapic_timer_initial(void);

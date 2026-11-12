@@ -11,6 +11,7 @@
 #include "vdso.h"
 
 #include "arch/arch.h"
+#include "io/timerfd.h"
 #include "lib/kirq.h"
 #include "lib/spinlock.h"
 #include "proc/smp.h"
@@ -154,6 +155,9 @@ static int64_t rtc_last_seconds;
 static int64_t rtc_last_nanoseconds;
 /* Protect the clock's step and real-time floor across processors. */
 static struct spinlock rtc_realtime_lock = SPINLOCK_INIT_NAMED("rtc_realtime_lock");
+/* The settings of the clock since boot, plus one, modulo 2^32 with 0 left
+ * out (`rtc_step_count`). */
+static volatile uint32_t rtc_steps = 1;
 
 void rtc_anchor(int64_t seconds, uint32_t uptime)
 {
@@ -436,6 +440,14 @@ void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds)
     kirq_restore(flags);
 }
 
+int64_t rtc_monotonic_ns(void)
+{
+    int64_t sec, nsec;
+
+    rtc_monotonic(&sec, &nsec);
+    return sec * 1000000000ll + nsec;
+}
+
 void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     uint32_t flags;
@@ -474,7 +486,7 @@ void rtc_coarse_monotonic(int64_t *seconds, int64_t *nanoseconds)
  * step, as Linux's does, so that a process's start time read from it stays
  * where it was against the clock.
  */
-void rtc_set_realtime(int64_t seconds, int32_t nanoseconds)
+void rtc_set_realtime(int64_t seconds, int32_t nanoseconds, int slew)
 {
     int64_t kept_seconds;
     int64_t kept_nanoseconds;
@@ -495,5 +507,12 @@ void rtc_set_realtime(int64_t seconds, int32_t nanoseconds)
     rtc_last_nanoseconds = nanoseconds;
     rtc_offset_locked(&kept_seconds, &nanoseconds);
     vclock_set_offset(kept_seconds, nanoseconds);
+    rtc_steps = rtc_steps + 1u != 0 ? rtc_steps + 1u : 1u;
     spin_unlock_irqrestore(&rtc_realtime_lock, flags);
+    timerfd_clock_was_set(!slew);
+}
+
+uint32_t rtc_step_count(void)
+{
+    return rtc_steps;
 }

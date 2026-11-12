@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 12, 2026
 .Dt TIMER_CREATE 2
 .Os
 .Sh NAME
@@ -59,7 +59,10 @@ The C libraries make
 of
 .Dv SIGEV_THREAD_ID
 and a thread of their own.
-A process has at most 64 timers.
+A process has at most 64 timers, a deleted timer whose signal still waits
+to be posted counting among them until it is posted or discarded, as Linux
+counts the signal such a timer leaves queued against the process's limit
+of pending signals.
 .Pp
 .Fn timer_settime ,
 number 260 on i386 and 223 on x86-64, arms and disarms the timer as
@@ -73,26 +76,71 @@ number 261 on i386 and 224 on x86-64, reports its setting as
 does.
 The i386 64-bit time forms are numbers 409 and 408; x86-64 has none, since
 its times are 64 bits already.
-Times are kept in the same 1 ms ticks, rounded up, so a timer never
-expires early.
-.Pp
-The timer tick finds an expiration and leaves its signal for the next
-holder of the big lock, a later tick that takes the lock, which may come
-some ticks after the expiration; the expirations counted until then go
-into that one signal's overrun.
-A
+Times and intervals are kept and expire as
+.Xr timerfd_settime 2
+keeps them: to the nanosecond, when the clock reaches the time, never
+early.
+A timer expires between ticks when it is set and while its last
+expiration set its signal pending or that signal has been taken since;
+an expiration while its signal is pending leaves the timer to the 1 ms
+ticks until the signal is taken, as Linux rearms such a timer only at the
+signal's delivery, so that a short interval cannot raise interrupt after
+interrupt.
+When the signal is taken, the intervals of the setting in force that ended
+since the signal was posted, past the one it stands for, are added to its
+overrun and the timer's time moves past the clock, as Linux forwards the
+timer then.
+Only a signal posted for the setting in force does so: one left pending
+across a
 .Fn timer_settime ,
-a
+or posted by a deleted timer whose id a new timer took, is delivered with
+the overrun it has and leaves the timer as it is, as Linux compares the
+signal's mark with the timer's setting.
+While a timer's own signal of an earlier setting is pending, the first
+expiration of the setting in force adds one to that signal's overrun and
+makes it the new setting's, as Linux's send_sigqueue adds to the overrun of
+a timer's signal still queued; nothing adds to a signal a deleted timer of
+the same id left pending, nor to a user's
+.Dv SI_TIMER
+signal.
+The signal's overrun is counted before interrupts come on again, so no
+expiration in between posts the signal a second time.
+An expiration whose signal the process ignores leaves a timer of an
+interval under a tick to the ticks, and keeps one of a tick or more
+expiring between ticks, as Linux restarts such a timer at once and moves it
+a tick on only when its interval is shorter.
+An expiration that waits for another sender's pending signal of the same
+number leaves the timer to the ticks until that signal is taken, which
+posts the waiting timer's signal at once, the oldest first when several
+wait, as Linux queues a signal for each timer and delivers them in turn.
+A
+.Dv SIGEV_NONE
+timer expires at ticks alone.
+.Fn timer_gettime
+first counts the intervals the clock has passed of a timer left to the
+ticks, so its time left is never reported as passed: into the overrun
+the pending signal's delivery adds, or for
+.Dv SIGEV_NONE
+into nothing, as Linux's does; an expired one-shot
+.Dv SIGEV_NONE
+timer has no time left, and any other timer whose time has passed reports
+a nanosecond left, its signal not yet delivered.
+The time left is counted from the reading of the clock the timer was moved
+on by, as Linux's common_timer_get counts both from one reading.
+.Pp
+The timer tick, which runs without the big lock, finds an expiration and
+leaves its signal for the next holder of the lock: the interrupt between
+ticks, which takes the lock and posts the signal at once, or a later tick
+that takes the lock, which may come some ticks after the expiration.
+The expirations counted until then join that one signal, whose delivery
+counts them with the other intervals since.
+A
+.Fn timer_settime
+or a
 .Fn timer_delete
-or an
+posts such a signal first, as Linux sent it at expiration; an
 .Xr execve 2
-ends the timer's setting as Linux ends it.
-The setting's first expiration, if its signal is not yet posted, is
-posted, or adds 1 to the overrun of the timer's signal still pending, as
-Linux sent it at expiration.
-The intervals after it, which the pending signal counted, are taken back
-out of its overrun, since Linux counts them only when the signal is taken
-and the set or delete stops that count; what earlier settings added stays.
+drops it with the timers' other signals.
 .Pp
 An expiration posts the signal with
 .Va si_code
@@ -105,23 +153,58 @@ in
 .Va si_value ,
 and in
 .Va si_overrun
-the expirations after the first that came while the signal was pending,
-which go on adding to the pending signal until it is taken, as Linux
-counts them, and 1 for each new setting whose first expiration came
-while it was pending.
+every interval that ended after the first expiration and before the signal
+was taken under the setting in force, whether or not a signal was
+pending, as Linux counts them when it rearms the timer at the signal's
+delivery: an absolute timer of a 1 s interval armed for a time 10 s past
+delivers its first signal with an overrun of 10, and expirations while the
+signal is pending are counted too.
 While a signal of the same number that is not the timer's is pending, the
-expirations wait and count toward the next signal.
-.Fn timer_getoverrun ,
-number 262 on i386 and 225 on x86-64, gives the expirations after the
-first that the timer's setting added to its last signal, and 0 from a
+timer's signal waits, and is posted when that signal is taken; a one-shot
+timer's is posted then too.
+A waiting signal outlives a
+.Fn timer_settime ,
+whose first expiration adds one to its overrun, and a
+.Fn timer_delete ,
+as Linux leaves the timer's signal queued; a signal of a former setting,
+or of a deleted timer, is delivered with only that overrun and moves no
+timer, so the intervals of a setting that a
 .Fn timer_settime
-until the next signal; it counts them as they come, where Linux gives
-them once the signal is taken.
+or a
+.Fn timer_delete
+ended are not counted, as on Linux.
+Installing
+.Dv SIG_IGN ,
+or a default that ignores, for a signal discards the timers' signals of
+that number, waiting ones and a deleted timer's among them, and so does a
+stop signal for
+.Dv SIGCONT
+and
+.Dv SIGCONT
+for the stop signals.
+.Fn timer_getoverrun ,
+number 262 on i386 and 225 on x86-64, gives the overrun that the setting
+in force counted for the last signal of a periodic timer delivered since
+the timer was set, as Linux's it_overrun_last: the intervals of that
+setting that ended after the first of its expirations the signal stands
+for; 0 before the first delivery and for a one-shot timer, and unchanged
+by expirations after that delivery.
+It leaves out what the signal's
+.Va si_overrun
+carried of an earlier setting: a signal left pending across a
+.Fn timer_settime
+and taken after the new setting's first expiration, before its next, has
+an overrun of 1, and
+.Fn timer_getoverrun
+gives 0, as on Linux.
 .Pp
 .Fn timer_delete ,
 number 263 on i386 and 226 on x86-64, disarms and deletes the timer.
 .Xr execve 2
-and the end of the process delete its timers; a child of
+and the end of the process delete its timers, and
+.Xr execve 2
+discards their signals, pending or waiting, keeping other senders', as
+Linux's exec does; a child of
 .Xr fork 2
 has none.
 .Pp
@@ -148,7 +231,8 @@ returns the negative error number itself.
 .Sh ERRORS
 .Bl -tag -width EINVAL
 .It Er EAGAIN
-The process has 64 timers, or the kernel had no memory for another.
+The process has 64 timers, deleted ones whose signals still wait among
+them, or the kernel had no memory for another.
 .It Er EFAULT
 A structure is not in the caller's memory.
 .It Er EINVAL

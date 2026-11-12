@@ -2,7 +2,8 @@
  * Check the timer tick's part of `proc/process.c`: `proc_wake_sleepers`,
  * the signals of the tick it leaves for a holder of the big lock
  * (`proc_tick_signal`, `proc_tick_signals_post`, `proc_tick_signals_own`),
- * `proc_alarm_set`, `proc_alarm_due_tick` and `proc_alarm_at`.
+ * `proc_alarm_set`, `proc_alarm_due_tick`, `proc_alarm_at`, and
+ * `proc_wake_due`, the interrupt between ticks' part.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
@@ -38,7 +39,17 @@
  * count is 64 bits wide: a timer armed again across 2^32 ticks is due at
  * 2^32, the tick before serves nothing due after it, and tick 2^32 + 5
  * marks that timer and wakes the sleeper, whose deadline it is.
- * `proc_alarm_at` gives a tick past 2^32 whole.
+ * `proc_alarm_at` gives a tick past 2^32 whole. A sleep to a time of real
+ * time (`rt_steps`) waits while the clock's step count stays, and a setting
+ * of the clock wakes it at the next tick, before its deadline, for it to
+ * count its tick again; a sleep on time since boot stays asleep.
+ *
+ * A sleep with a time of the monotonic clock (`wakeup_ns`) has the interrupt
+ * between ticks armed for it at every pass, however far the time, whatever
+ * its deadline tick, which counts from a clock that runs ahead of the tick
+ * count; that interrupt, or a tick whose clock has passed the time, makes it
+ * ready before its deadline tick, under the run queues' lock, and an
+ * interrupt that comes before the time arms it again.
  */
 #include "lib/kint.h"
 #include "compat/waketime_none.h"
@@ -132,6 +143,49 @@ int sched_wake_due_locked(process_t *p, uint64_t now)
     p->state = PROC_READY;
     proc_timer_update(p);
     return -1;
+}
+
+/** The wake of a timed sleeper at its time or at a setting of the clock,
+ * as the kernel's under the run queues' lock: ready, off the timer list and
+ * marked woken, its deadline cleared. */
+int sched_wake_time_locked(process_t *p)
+{
+    if (p->state != PROC_BLOCKED || p->wakeup_tick == 0) {
+        return -1;
+    }
+    p->wakeup_tick = 0;
+    p->woken = 1;
+    p->state = PROC_READY;
+    proc_timer_update(p);
+    return -1;
+}
+
+/* The model's monotonic clock, in nanoseconds since boot, and the time the
+ * interrupt between ticks was last armed for, with how often it was. */
+static int64_t clock_ns;
+static int64_t wake_ns;
+static int wake_arms;
+
+/** The model's monotonic clock. */
+int64_t rtc_monotonic_ns(void)
+{
+    return clock_ns;
+}
+
+/** Note the time the interrupt between ticks is armed for. */
+void timer_wake_at(int64_t ns)
+{
+    wake_ns = ns;
+    wake_arms++;
+}
+
+/* The real-time clock's step count, which the step row moves. */
+static uint32_t step_count = 1;
+
+/** The model's step count of the real-time clock (`rtc_step_count`). */
+uint32_t rtc_step_count(void)
+{
+    return step_count;
 }
 
 /** No processor to interrupt in the model. */
@@ -324,6 +378,76 @@ static void crowd_rows(void)
           "and the pass still reaches the timer after them");
 }
 
+/** A sleep to a time of real time waits while the clock's step count stays,
+ * and a setting of the clock wakes it at the next tick, before its deadline;
+ * a sleep on time since boot stays asleep. */
+static void step_rows(void)
+{
+    proc_alarm_set(&follower, 0, 0);
+    proc_alarm_set(&sleeper, 0, 0);
+    proc_alarm_set(&runner, 0, 0);
+    sleeper.state = PROC_BLOCKED;
+    sleeper.wakeup_tick = 9000;
+    sleeper.rt_steps = 1;
+    runner.state = PROC_BLOCKED;
+    runner.wakeup_tick = 9000;
+    proc_timer_update(&sleeper);
+    proc_timer_update(&runner);
+    tick_at(2000);
+    CHECK(sleeper.state == PROC_BLOCKED && sleeper.wakeup_tick == 9000,
+          "a sleep to a time of real time waits while the clock is not set");
+    step_count = 2;
+    tick_at(2001);
+    CHECK(sleeper.state == PROC_READY && sleeper.wakeup_tick == 0 && !sleeper.timer_linked,
+          "a setting of the clock wakes it at the next tick, before its deadline");
+    CHECK(runner.state == PROC_BLOCKED && runner.wakeup_tick == 9000 && runner.timer_linked,
+          "and leaves a sleep on time since boot asleep");
+    sleeper.rt_steps = 0;
+}
+
+/** A sleep with a time between ticks: armed at every pass, however far,
+ * woken by the interrupt between ticks once the clock reaches it, or by a
+ * tick whose clock has passed it, before its deadline tick. */
+static void between_rows(void)
+{
+    int64_t t = 3001 * (int64_t)TICK_NS + (int64_t)TICK_NS / 4;
+
+    sleeper.state = PROC_BLOCKED;
+    sleeper.wakeup_tick = 3003;
+    sleeper.wakeup_ns = t;
+    runner.state = PROC_RUNNING;
+    runner.wakeup_tick = 0;
+    proc_timer_update(&sleeper);
+    proc_timer_update(&runner);
+    wake_arms = 0;
+    clock_ns = 2998 * (int64_t)TICK_NS + (int64_t)TICK_NS / 2;
+    tick_at(2998);
+    CHECK(sleeper.state == PROC_BLOCKED && wake_arms == 1 && wake_ns == t,
+          "a time more than two ticks off is armed between ticks");
+    clock_ns = 2999 * (int64_t)TICK_NS + (int64_t)TICK_NS / 2;
+    tick_at(2999);
+    CHECK(sleeper.state == PROC_BLOCKED && wake_arms == 2 && wake_ns == t,
+          "and armed again by the next tick, its deadline tick four off");
+    clock_ns = t - 1000;
+    proc_wake_due();
+    CHECK(sleeper.state == PROC_BLOCKED && wake_arms == 3 && wake_ns == t,
+          "an interrupt before the time arms it again");
+    clock_ns = t;
+    proc_wake_due();
+    CHECK(sleeper.state == PROC_READY && sleeper.wakeup_tick == 0 && !sleeper.timer_linked &&
+              sleeper.woken,
+          "the interrupt at the time makes it ready and woken, before its deadline tick");
+
+    sleeper.state = PROC_BLOCKED;
+    sleeper.wakeup_tick = 3003;
+    proc_timer_update(&sleeper);
+    clock_ns = t + 1000;
+    tick_at(3001);
+    CHECK(sleeper.state == PROC_READY && sleeper.wakeup_tick == 0,
+          "a tick whose clock has passed the time makes it ready too");
+    sleeper.wakeup_ns = 0;
+}
+
 /** Run every check; 0 when each passes, 1 otherwise. */
 int main(void)
 {
@@ -332,6 +456,8 @@ int main(void)
     sleeper_rows();
     wide_rows();
     crowd_rows();
+    step_rows();
+    between_rows();
     if (failures) {
         return 1;
     }

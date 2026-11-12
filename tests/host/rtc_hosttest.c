@@ -229,6 +229,12 @@ void vclock_set_offset(int64_t sec, int32_t nsec)
     (void)nsec;
 }
 
+/** No timer here waits on real time. */
+void timerfd_clock_was_set(int cancel)
+{
+    (void)cancel;
+}
+
 /** The command line here is empty. */
 int kcmdline_has(const char *flag)
 {
@@ -357,7 +363,7 @@ static void set_rows(void)
     wrap_on_pending = 0;
     status = 0x80;
     count = pit_reload - 100u;
-    rtc_set_realtime(1790000000LL, 500000000);
+    rtc_set_realtime(1790000000LL, 500000000, 0);
     rtc_realtime(&sec, &ns);
     CHECK(sec == 1790000000LL && ns == 500000000);
     kernel_second_ticks = 1;
@@ -365,7 +371,7 @@ static void set_rows(void)
     CHECK(sec == 1790000000LL && ns == 501000000);
     rtc_coarse_realtime(&sec, &ns);
     CHECK(sec == 1790000000LL && ns == 500959000);
-    rtc_set_realtime(1000, 0);
+    rtc_set_realtime(1000, 0, 0);
     rtc_realtime(&sec, &ns);
     CHECK(sec == 1000 && ns == 0);
     CHECK(rtc_boot_epoch() == 979);
@@ -412,7 +418,7 @@ static void monotonic_rows(void)
     CHECK(sec == 51 && ns == 41000);
     kernel_uptime_seconds = 51;
     kernel_second_ticks = 1;
-    rtc_set_realtime(1000, 0);
+    rtc_set_realtime(1000, 0, 0);
     rtc_monotonic(&sec, &ns);
     CHECK(sec == 51 && ns == 1041000);
     CHECK(!irq_disabled);

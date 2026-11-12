@@ -30,7 +30,11 @@
  *
  * A fault can also stand for a sleep of some ticks, which a wait's deadline,
  * fixed when the call begins, must count. The model's wait ends at once,
- * noting the tick it was armed for.
+ * noting the tick it was armed for. A step row may set the real-time clock
+ * in the wait or in the word's read, as another processor would; the
+ * setting wakes the wait at the next tick, which the model takes as now,
+ * and a wait whose condition does not see the setting sleeps on to the tick
+ * it was armed for.
  *
  * A thread's end clears its CLONE_CHILD_CLEARTID word only when another
  * thread uses its address space, which a hold on the record, as a
@@ -73,6 +77,17 @@ uint64_t rtc_ticks_now(void)
     return kernel_ticks + tick_pending;
 }
 
+/* The real-time clock's step count and its time in seconds, which the
+ * step rows move (`model_step`). */
+static uint32_t rt_steps = 1u;
+static int64_t rt_sec = 100;
+
+/** The real-time clock's step count (`rtc_step_count`). */
+uint32_t rtc_step_count(void)
+{
+    return rt_steps;
+}
+
 /** The tick's counts as one reading, with interrupts off as the kernel's
  * reads them, which on the host's one thread is all one reading needs. */
 void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint64_t *ticks)
@@ -93,11 +108,16 @@ static process_t *ends_at_copy;
 /* The word whose waiter sets FUTEX_WAITERS in the next fault for a write. */
 static uint32_t waiters_at;
 /* The address whose next fault takes `slow_ticks` ticks, and the tick the
- * last wait was armed for. */
+ * last wait was armed for and the step count it kept for the tick's wake. */
 static uint32_t slow_at, slow_ticks;
 static uint64_t armed;
+static uint32_t armed_steps;
+/* The seconds a setting of the real-time clock moves it by in the next
+ * wait, or in the next fault at `step_at`; 0 for none. */
+static int64_t step_in_wait, step_in_fault;
+static uint32_t step_at;
 static struct futex_q waiter;
-static struct futex_sleeper waiter_s;
+static struct futex_sleeper waiter_s; /* the model's waiter's sleep */
 static int masked, failures, wakes, waits, cmpxchgs;
 /* The interrupts the wakes asked for that went out, and those that went
  * out while a bucket's lock was held. */
@@ -126,6 +146,14 @@ static uint32_t raced_at;
             failures++;                               \
         }                                             \
     } while (0)
+
+/** A setting of the real-time clock `sec` seconds on from where it is, as
+ * `rtc_set_realtime` makes on another processor: the step count moves. */
+static void model_step(int64_t sec)
+{
+    rt_sec += sec;
+    rt_steps++;
+}
 
 /** Whether [addr, addr + len) lies in the model's user memory. */
 static int in_user(uint32_t addr, uint32_t len)
@@ -180,6 +208,10 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     if (!masked && slow_at != 0 && slow_at == addr) {
         kernel_ticks += slow_ticks;
         slow_at = 0;
+    }
+    if (step_in_fault != 0 && step_at == addr) {
+        model_step(step_in_fault);
+        step_in_fault = 0;
     }
     return 1;
 }
@@ -390,10 +422,16 @@ void sched_priority_changed(process_t *p)
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
-    (void)cond;
-    (void)arg;
     waits++;
     armed = current_proc->wakeup_tick;
+    armed_steps = current_proc->rt_steps;
+    if (step_in_wait != 0) {
+        model_step(step_in_wait);
+        step_in_wait = 0;
+        if (!cond(arg)) {
+            kernel_ticks = armed;
+        }
+    }
     if (pi_wait_step) {
         void (*step)(void) = pi_wait_step;
 
@@ -451,10 +489,10 @@ void wait_queue_init(wait_queue_t *wq)
     (void)wq;
 }
 
-/** The wall clock: 100 s. */
+/** The wall clock: 100 s, or where a step row set it. */
 void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 {
-    *seconds = 100;
+    *seconds = rt_sec;
     *nanoseconds = 0;
 }
 
@@ -745,6 +783,86 @@ static void restarts(void)
           "a wait resumed at its deadline ends without a sleep");
 }
 
+/** Wait with FUTEX_WAIT_BITSET and FUTEX_CLOCK_REALTIME on the word at 600,
+ * which holds 7, from tick `now` until `at` s of real time. */
+static int32_t rt_wait(uint32_t now, int32_t at)
+{
+    isr_params_t p;
+    struct kernel_timespec ts;
+
+    ts.tv_sec = at;
+    ts.tv_nsec = 0;
+    k_memcpy(user + 608, &ts, sizeof(ts));
+    word_set(600, 7u);
+    kernel_ticks = now;
+    waits = 0;
+    armed = 0;
+    armed_steps = 0;
+    k_memset(&p, 0, sizeof(p));
+    p.ebx = 600;
+    p.ecx = FUTEX_WAIT_BITSET | FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME;
+    p.edx = 7;
+    p.esi = 608;
+    p.ebp = FUTEX_MATCH_ANY;
+    return sys_futex(&p);
+}
+
+/**
+ * A futex wait to a time of real time follows a setting of the clock, as
+ * Linux's clock_was_set retriggers its hrtimer (kernel/futex/core.c:143-145,
+ * kernel/time/hrtimer.c:951-987). The wait keeps the step count it counted
+ * its tick at, for the tick's wake. A step back of a second during the wait
+ * counts the tick again and sleeps on to it, a second later; a step forward
+ * past the time ends it with ETIMEDOUT without a second sleep. A step during
+ * the word's read, between the deadline and the queueing of the waiter, is
+ * counted before the sleep: back, from a time already past, the wait sleeps
+ * to the time; forward, past the time, it ends without a sleep. A wait on
+ * real time that a signal cut short files the time, and its restart counts
+ * the tick from the clock as set then, not from the tick it was first given.
+ */
+static void realtime_steps(void)
+{
+    isr_params_t p;
+
+    rt_sec = 100;
+    step_in_wait = -1;
+    CHECK(rt_wait(2000, 101) == -ETIMEDOUT && waits == 2 && armed == 2001u + 2u * TICK_HZ,
+          "a step back during a wait on real time sleeps on to the time");
+    CHECK(armed_steps == rt_steps, "the wait keeps the step count for the tick's wake");
+    rt_sec = 100;
+    step_in_wait = 2;
+    CHECK(rt_wait(2000, 101) == -ETIMEDOUT && waits == 1 && armed == 2001u + TICK_HZ &&
+              armed_steps == rt_steps - 1u,
+          "a step forward past the time ends a wait on real time");
+    rt_sec = 100;
+    step_at = 600;
+    step_in_fault = -2;
+    CHECK(rt_wait(2000, 99) == -ETIMEDOUT && waits == 1 && armed == 2001u + TICK_HZ,
+          "a step back before the waiter is queued puts a time past ahead again");
+    rt_sec = 100;
+    step_in_fault = 2;
+    CHECK(rt_wait(2000, 101) == -ETIMEDOUT && waits == 0,
+          "a step forward before the waiter is queued ends the wait without a sleep");
+    step_at = 0;
+
+    rt_sec = 100;
+    pi_wait_errno = -EINTR;
+    CHECK(rt_wait(3000, 101) == -EINTR && self.restart_kind == RESTART_BLOCK &&
+              self.restart.fn == futex_wait_restart && self.restart.sec == 101 &&
+              self.restart.nsec == 0 && (self.restart.flags & FUTEX_CLOCK_REALTIME),
+          "a wait on real time files its time for restart_syscall");
+    pi_wait_errno = 0;
+    model_step(-1);
+    kernel_ticks = 3500;
+    waits = 0;
+    armed = 0;
+    k_memset(&p, 0, sizeof(p));
+    CHECK(futex_wait_restart(&p) == -ETIMEDOUT && waits == 1 && armed == 3501u + 2u * TICK_HZ &&
+              !self.restart.fn,
+          "the resumed wait on real time counts its tick from the clock as set");
+    rt_sec = 100;
+}
+
 /**
  * get_robust_list reads the head of thread 5's list before it copies
  * anything out: the first copy ends the thread and frees its record, and the
@@ -894,6 +1012,7 @@ int main(void)
     child_tid_cleared();
     deadline_fixed();
     restarts();
+    realtime_steps();
     bucket_rows();
     fault_rows();
     bkl_rows();
@@ -901,6 +1020,6 @@ int main(void)
         return 1;
     }
     printf("futex-test: pass: the robust head, the robust release, the child's word, the "
-           "deadline, the restarts and the bucket locks\n");
+           "deadline, the restarts, the steps of real time and the bucket locks\n");
     return 0;
 }

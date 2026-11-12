@@ -4,7 +4,7 @@
  * SIGPIPE it posts, the shutdown of a raw and a packet socket, the clocks
  * past 2^32 ticks and their resolutions, and the sleeps and the interval
  * timer, with their deadlines, masks, remainders, clamps and checks of
- * arguments.
+ * arguments, and the sleeps that end between ticks at their time.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/network/socket/address.c rach2/sys/network/ip6/addr6.c
@@ -143,6 +143,15 @@ volatile uint64_t kernel_ticks;
 uint64_t tick_count(void)
 {
     return kernel_ticks;
+}
+
+/* The real-time clock's step count, which the step rows move (`model_step`). */
+static uint32_t model_steps = 1u;
+
+/** The real-time clock's step count (`rtc_step_count`). */
+uint32_t rtc_step_count(void)
+{
+    return model_steps;
 }
 
 /** The timer's resolution within the tick: a microsecond, the PIT's when
@@ -301,11 +310,59 @@ void get_current_time(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = real_nsec;
 }
 
-/** The real time at boot, which coarse real time and a real-time deadline
- * are counted from. */
+/* Real time less time since boot, in seconds and nanoseconds below a
+ * second, and the nanoseconds a setting of the clock moves it by right after
+ * the next reading of it, or in the next sleep; 0 for none. */
+static int64_t model_epoch = 1000000;
+static int32_t model_epoch_ns;
+static int64_t step_after_offset, step_in_sleep;
+
+/** Add `ns` nanoseconds to the time `*sec` and `*nsec`, keeping `*nsec`
+ * within the second. */
+static void add_ns(int64_t *sec, int64_t *nsec, int64_t ns)
+{
+    *nsec += ns % 1000000000;
+    *sec += ns / 1000000000;
+    if (*nsec < 0) {
+        *nsec += 1000000000;
+        (*sec)--;
+    } else if (*nsec >= 1000000000) {
+        *nsec -= 1000000000;
+        (*sec)++;
+    }
+}
+
+/** A setting of the real-time clock `ns` nanoseconds on from where it is, as
+ * `rtc_set_realtime` makes on another processor: the real time and the
+ * clock's offset move by it, and so does the step count. */
+static void model_step(int64_t ns)
+{
+    int64_t offset_ns = model_epoch_ns;
+
+    add_ns(&real_sec, &real_nsec, ns);
+    add_ns(&model_epoch, &offset_ns, ns);
+    model_epoch_ns = (int32_t)offset_ns;
+    model_steps++;
+}
+
+/** The real time at boot, the offset's seconds, which coarse real time is
+ * counted from. */
 int64_t rtc_boot_epoch(void)
 {
-    return 1000000;
+    return model_epoch;
+}
+
+/** Real time less time since boot, which a deadline of real time is counted
+ * from; with `step_after_offset`, the clock is set once this reading is
+ * taken. */
+void rtc_offset(int64_t *seconds, int32_t *nanoseconds)
+{
+    *seconds = model_epoch;
+    *nanoseconds = model_epoch_ns;
+    if (step_after_offset != 0) {
+        model_step(step_after_offset);
+        step_after_offset = 0;
+    }
 }
 
 /** The tick's counts as one reading, with interrupts off as the kernel's
@@ -383,6 +440,37 @@ void rtc_tick_phase(uint64_t *ticks, uint32_t *phase_ns)
 {
     *ticks = kernel_ticks;
     *phase_ns = (uint32_t)mono_phase_ns;
+}
+
+/** `rtc_monotonic` as nanoseconds since boot. */
+int64_t rtc_monotonic_ns(void)
+{
+    int64_t sec, nsec;
+
+    rtc_monotonic(&sec, &nsec);
+    return sec * 1000000000 + nsec;
+}
+
+/* The earliest time the interrupt between ticks is armed for, 0 for none,
+ * which `schedule` brings with `wake_between`. */
+static int64_t armed_ns;
+
+/** Keep the earliest time the interrupt between ticks is armed for, as a
+ * processor's timer keeps it (`timer_wake_at`). */
+void timer_wake_at(int64_t ns)
+{
+    if (armed_ns == 0 || ns < armed_ns) {
+        armed_ns = ns;
+    }
+}
+
+static int wake_between;
+
+/** Whether a sleep ends between ticks: in the rows that say so
+ * (`wake_between`). */
+int timer_wakes_between(void)
+{
+    return wake_between;
 }
 
 /** The model's one other process, pid 9, whose CPU clock a caller may read. */
@@ -549,18 +637,39 @@ static void connects(void)
     CHECK(connect_done(&sock), "removed connection wakes caller");
 }
 
+static void ticks_pass(uint64_t n);
+
+/* The time the clock moves on at the first question that finds a signal
+ * pending, the ticks it crosses counted, 0 for none: the sleep's end comes
+ * between that question and the remainder's reading. */
+static int64_t signal_moves_ns;
+
 /**
  * The pending state the sleep asks about, and the mask of its first question,
  * which must be on: the sleep asks at the top of each turn, masked, whether a
- * signal it acts on is pending.
+ * signal it acts on is pending. With `signal_moves_ns`, a question that finds
+ * one moves the clock on by that much, once.
  */
 int signal_pending(void)
 {
     if (pending_masked < 0) {
         pending_masked = masked;
     }
+    if (pending && signal_moves_ns != 0) {
+        mono_phase_ns += signal_moves_ns;
+        signal_moves_ns = 0;
+        while (mono_phase_ns >= TICKS_NS(1)) {
+            mono_phase_ns -= TICKS_NS(1);
+            ticks_pass(1);
+        }
+    }
     return pending;
 }
+
+/* With `wake_between`, the yield of a sleeper with a time armed between
+ * ticks moves the clock to that time and the interrupt there wakes it; the
+ * sleep's `wakeup_ns` at the last block is `blocked_ns`. */
+static int64_t blocked_ns;
 
 /**
  * Wake a blocked sleeper as the kernel does: the timer at its deadline, or
@@ -587,17 +696,20 @@ static void ticks_pass(uint64_t n)
     }
 }
 
-/** One tick of the model's clock, and the timer's wake of a due sleeper; with
- * `sibling_runs`, another thread of the process runs in the tick, which the
- * timer charges to the process. */
+/** One tick of the model's clock, and the timer's wake of a due sleeper, or
+ * of a sleeper on real time whose clock was set since it counted its tick
+ * (`rt_steps`), as `proc_wake_sleepers` wakes them; with `sibling_runs`,
+ * another thread of the process runs in the tick, which the timer charges to
+ * the process. */
 static void tick(void)
 {
     ticks_pass(1);
     if (sibling_runs) {
         proc.utime++;
     }
-    if (current_proc->state == PROC_BLOCKED && current_proc->wakeup_tick != 0 &&
-        kernel_ticks >= current_proc->wakeup_tick) {
+    if (current_proc->state == PROC_BLOCKED &&
+        ((current_proc->wakeup_tick != 0 && kernel_ticks >= current_proc->wakeup_tick) ||
+         (current_proc->rt_steps != 0 && current_proc->rt_steps != model_steps))) {
         wake(0);
     }
 }
@@ -623,6 +735,9 @@ static void clock_to(uint64_t tick)
  * for the halts to carry to it. A woken sleeper is READY, or RUNNING for
  * `switch_back`, as the kernel's `schedule` leaves it when it switches back.
  *
+ * With `step_in_sleep`, the clock is set once instead, and the sleeper left
+ * blocked for the next tick to wake.
+ *
  * No row yields a thousand times. A sleep that does, one that returns before
  * its clock moves to a caller that sleeps again until it has, is a fault the
  * model ends by posting a signal, so that its row fails and the rest run.
@@ -644,8 +759,28 @@ void schedule(void)
         return;
     }
     blocked_until = current_proc->wakeup_tick;
+    blocked_ns = current_proc->wakeup_ns;
     if (blocks++ == 0) {
         first_blocked_until = blocked_until;
+    }
+    if (wake_between && armed_ns != 0) {
+        int64_t at = armed_ns;
+
+        armed_ns = 0;
+        while (at - ((int64_t)kernel_uptime_seconds * 1000000000 +
+                     (int64_t)kernel_second_ticks * TICK_NS) >=
+               (int64_t)TICK_NS) {
+            ticks_pass(1);
+        }
+        mono_phase_ns = at - ((int64_t)kernel_uptime_seconds * 1000000000 +
+                              (int64_t)kernel_second_ticks * TICK_NS);
+        wake(0);
+        return;
+    }
+    if (step_in_sleep != 0) {
+        model_step(step_in_sleep);
+        step_in_sleep = 0;
+        return;
     }
     if (tick_after_yield) {
         tick_after_yield = 0;
@@ -752,6 +887,9 @@ static void model_at(uint64_t tick)
     unarmed_unmasks = 0;
     blocked_until = first_blocked_until = 0;
     mono_held_ns = 0;
+    armed_ns = blocked_ns = 0;
+    wake_between = 0;
+    signal_moves_ns = 0;
     current_proc->state = PROC_RUNNING;
     current_proc->wakeup_tick = 0;
 }
@@ -766,6 +904,20 @@ static struct kernel_timespec remainder(void)
 
     k_memcpy(&rem, user + 64, sizeof(rem));
     return rem;
+}
+
+/** Whether the remainder's place still holds the bytes `ask_sleep` filled
+ * it with: nothing was written there. */
+static int remainder_untouched(void)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(struct kernel_timespec); i++) {
+        if (user[64 + i] != 0xA5) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /**
@@ -830,12 +982,14 @@ static void sleeps_masked(void)
  * first sleep's deadline. The count of ticks is 64 bits wide: a sleep begun a
  * tick before 2^32 ticks blocks until its deadline past them, and one of
  * 2^62 s is cut at 2^40 s, which a signal a tick in leaves less that tick. A
- * sleep of zero does not block.
+ * sleep of zero blocks for Linux's 50 us of slack, and the interrupt between
+ * ticks ends it then, within its tick.
  */
 static void sleep_edges(void)
 {
     isr_params_t p;
     struct kernel_timespec rem;
+    int64_t start;
     int rc, calls;
 
     ask_sleep(&p, 0, TICKS_NS(3));
@@ -902,8 +1056,12 @@ static void sleep_edges(void)
 
     ask_sleep(&p, 0, 0);
     model_at(0);
+    wake_between = 1;
+    start = rtc_monotonic_ns();
     rc = sleep_call(&p);
-    CHECK(rc == 0 && sleeps == 0, "a sleep of zero does not block");
+    CHECK(rc == 0 && blocks == 1 && kernel_ticks == 0 && blocked_ns == start + 50000,
+          "a sleep of zero blocks for Linux's 50 us of slack and ends between ticks");
+    mono_phase_ns = 0;
 }
 
 /**
@@ -1071,6 +1229,111 @@ static void sleep_held_clock(void)
     rem = remainder();
     CHECK(rc == -EINTR && rem.tv_sec == 0 && rem.tv_nsec == TICKS_NS(3) / 10 && cut_short == 1,
           "and a signal at tick 1002 leaves the 0.3 tick the clock lacks");
+}
+
+/**
+ * A sleep ends at its time between ticks, as Linux's hrtimer ends it, and
+ * not at the tick after it.
+ *
+ * A sleep of a quarter tick begun half a tick into tick 1000 arms the
+ * interrupt between ticks for three quarters into it, and that interrupt
+ * ends it with the tick count still at 1000. One of a tick and a quarter
+ * has its deadline tick two ahead, at 1002, which a clock running ahead of
+ * the tick count gives such a time; the clock decides, so it too is armed
+ * at once, and ends at its time, in tick 1001. A signal pending as a sleep
+ * of a quarter tick begun half a tick in blocks leaves a remainder of the
+ * quarter tick, the time to its end, as Linux's, and not the half tick to
+ * its deadline tick. A signal seen as the clock reaches such a sleep's end
+ * returns 0 with no remainder written and counts no sleep cut short, as
+ * Linux's do_nanosleep returns 0 for a remainder of 0 or less; so does one
+ * seen as the tick count reaches the deadline tick where there is no
+ * interrupt between ticks. A sleep of 10,000,000,000 s, which a sleep
+ * accepts, has a time past what nanoseconds since boot hold, so it keeps no
+ * time between ticks and is the tick's, as Linux takes such a time as
+ * KTIME_MAX.
+ */
+static void sleep_between(void)
+{
+    isr_params_t p;
+    struct kernel_timespec rem;
+    int64_t start;
+    int32_t rc;
+
+    mono_phase_ns = TICKS_NS(1) / 2;
+    ask_sleep(&p, 0, TICKS_NS(1) / 4);
+    model_at(1000);
+    kernel_uptime_seconds = 1;
+    kernel_second_ticks = 0;
+    start = rtc_monotonic_ns();
+    wake_between = 1;
+    CHECK(sleep_call(&p) == 0 && kernel_ticks == 1000 && blocks == 1,
+          "a sleep of a quarter tick begun half a tick in ends within the tick");
+    CHECK(blocked_until == 1001 && blocked_ns == start + TICKS_NS(1) / 4 &&
+              mono_phase_ns == TICKS_NS(3) / 4,
+          "at its time, which it armed between ticks, before its deadline tick 1001");
+
+    mono_phase_ns = TICKS_NS(1) / 2;
+    ask_sleep(&p, 0, TICKS_NS(5) / 4);
+    model_at(1000);
+    kernel_uptime_seconds = 1;
+    kernel_second_ticks = 0;
+    start = rtc_monotonic_ns();
+    wake_between = 1;
+    CHECK(sleep_call(&p) == 0 && kernel_ticks == 1001 && blocks == 1 && blocked_until == 1002,
+          "a sleep whose deadline tick is two ahead is armed at once and ends in tick 1001");
+    CHECK(blocked_ns == start + TICKS_NS(5) / 4 && mono_phase_ns == TICKS_NS(3) / 4,
+          "at its time, three quarters into that tick");
+
+    mono_phase_ns = TICKS_NS(1) / 2;
+    ask_sleep(&p, 0, TICKS_NS(1) / 4);
+    model_at(1000);
+    kernel_uptime_seconds = 1;
+    kernel_second_ticks = 0;
+    wake_between = 1;
+    pending = 1;
+    rc = sleep_call(&p);
+    rem = remainder();
+    CHECK(rc == -EINTR && blocks == 0 && rem.tv_sec == 0 && rem.tv_nsec == TICKS_NS(1) / 4,
+          "a signal as a sleep of a quarter tick blocks leaves the quarter tick to its end");
+    pending = 0;
+
+    mono_phase_ns = TICKS_NS(1) / 2;
+    ask_sleep(&p, 0, TICKS_NS(1) / 4);
+    model_at(1000);
+    kernel_uptime_seconds = 1;
+    kernel_second_ticks = 0;
+    wake_between = 1;
+    pending = 1;
+    signal_moves_ns = TICKS_NS(1) / 4;
+    rc = sleep_call(&p);
+    CHECK(rc == 0 && cut_short == 0 && remainder_untouched(),
+          "a signal seen as the clock reaches the sleep's end returns 0 and writes no remainder");
+    pending = 0;
+
+    mono_phase_ns = TICKS_NS(1) / 2;
+    ask_sleep(&p, 0, TICKS_NS(1) / 4);
+    model_at(1000);
+    kernel_uptime_seconds = 1;
+    kernel_second_ticks = 0;
+    pending = 1;
+    signal_moves_ns = TICKS_NS(1) / 2;
+    rc = sleep_call(&p);
+    CHECK(rc == 0 && cut_short == 0 && kernel_ticks == 1001 && remainder_untouched(),
+          "without the interrupt between ticks, one seen as the deadline tick comes returns 0 too");
+    pending = 0;
+    mono_phase_ns = 0;
+
+    ask_sleep(&p, 10000000000L, 0);
+    model_at(1000);
+    kernel_uptime_seconds = 1;
+    kernel_second_ticks = 0;
+    wake_between = 1;
+    tick_signals = 1;
+    CHECK(sleep_call(&p) == -EINTR && blocks == 1 && blocked_ns == 0 && armed_ns == 0,
+          "a sleep of 10,000,000,000 s keeps no time between ticks");
+    pending = 0;
+    tick_signals = 0;
+    wake_between = 0;
 }
 
 /**
@@ -1522,6 +1785,68 @@ static void clock_sleeps(void)
     cpu_clock_sibling();
 }
 
+/** Put an absolute clock_nanosleep on CLOCK_REALTIME until `tick` ticks
+ * past the boot's epoch, 1000000 s, and start the model at tick 1000, real
+ * time 1000001 s, with the clock's offset 1000000 s on the second. */
+static void ask_rt_sleep(isr_params_t *p, uint64_t tick)
+{
+    model_epoch = 1000000;
+    model_epoch_ns = 0;
+    real_sec = 1000001;
+    real_nsec = 0;
+    ask_clock_tick(p, 0, 1, 1000000, tick, 0);
+    uptime_at(1000);
+}
+
+/**
+ * An absolute clock_nanosleep on CLOCK_REALTIME follows a setting of the
+ * clock, as Linux's clock_was_set retriggers its hrtimer
+ * (kernel/time/hrtimer.c:951-987, 2133-2142). From tick 1000, real time
+ * 1000001 s, until 10 ms past that: a step back of a second during the sleep
+ * wakes it at the next tick, which counts its tick again and sleeps on to
+ * 2010; a step forward of a second past the time ends it at that tick; and a
+ * step right after the sleep reads the clock's offset, before it blocks,
+ * sends it to count again without a block, so that it blocks once, until
+ * 2010. A sleep until 1000012 s counts the offset to the nanosecond, as
+ * Linux subtracts its base's whole offset (kernel/time/hrtimer.c:922, 2140):
+ * after a step of half a second forward it sleeps on to tick 11500, and
+ * after one of half a second back to tick 12500.
+ */
+static void realtime_steps(void)
+{
+    isr_params_t p;
+    int64_t sec = real_sec, nsec = real_nsec;
+
+    ask_rt_sleep(&p, 1010);
+    step_in_sleep = -1000000000LL;
+    CHECK(clock_sleep_call(&p) == 0 && first_blocked_until == 1010 && blocked_until == 2010 &&
+              kernel_ticks == 2010,
+          "a step back during an absolute sleep on real time sleeps on to the time");
+    ask_rt_sleep(&p, 1010);
+    step_in_sleep = 1000000000LL;
+    CHECK(clock_sleep_call(&p) == 0 && kernel_ticks == 1001 && blocks == 1,
+          "a step forward past the time ends an absolute sleep on real time at the next tick");
+    ask_rt_sleep(&p, 1010);
+    step_after_offset = -1000000000LL;
+    CHECK(clock_sleep_call(&p) == 0 && first_blocked_until == 2010 && kernel_ticks == 2010,
+          "a step between the sleep's reading of the clock and its block is counted first");
+    CHECK(current_proc->rt_steps == 0, "the sleep leaves no step count behind");
+    ask_rt_sleep(&p, 12000);
+    step_in_sleep = 500000000LL;
+    CHECK(clock_sleep_call(&p) == 0 && first_blocked_until == 12000 && blocked_until == 11500 &&
+              kernel_ticks == 11500,
+          "a step of half a second forward brings the sleep's tick half a second nearer");
+    ask_rt_sleep(&p, 12000);
+    step_in_sleep = -500000000LL;
+    CHECK(clock_sleep_call(&p) == 0 && first_blocked_until == 12000 && blocked_until == 12500 &&
+              kernel_ticks == 12500,
+          "a step of half a second back moves the sleep's tick half a second on");
+    model_epoch = 1000000;
+    model_epoch_ns = 0;
+    real_sec = sec;
+    real_nsec = nsec;
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 /**
  * A UDP send answers its length when a full queue lost the datagram, as
@@ -1833,16 +2158,19 @@ int main(void)
     clocks();
     clock_ids();
     clock_sleeps();
+    realtime_steps();
     sleeps_masked();
     sleep_edges();
     sleep_races();
     sleep_held_clock();
+    sleep_between();
     timer_first_expiry();
     stream_sendmsg();
     raw_shutdown();
     if (failures)
         return 1;
-    printf("syscall-test: pass: connect, datagram, sendmsg, shutdown, clocks, sleeps and timer\n");
+    printf("syscall-test: pass: connect, datagram, sendmsg, shutdown, clocks, sleeps, sleeps "
+           "between ticks, steps of real time and timer\n");
     return 0;
 }
 

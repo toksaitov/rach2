@@ -299,11 +299,31 @@ static void timer_clock_pass(void)
 
 /** Wake the timed sleepers and expire the timerfds whose tick has come; a
  * second pass at the same tick finds none. Each has a lock of its own, and
- * the caller holds no lock, the big lock included. */
+ * the caller holds no lock, the big lock included, with interrupts off. The
+ * interrupt between ticks is programmed once, for the earliest time still
+ * to come (`timer_wake_hold`). */
 static void timer_wake_pass(void)
 {
-    proc_wake_sleepers(tick_count());
-    timerfd_tick(tick_count());
+    uint64_t now = tick_count();
+
+    timer_wake_hold();
+    proc_wake_sleepers(now);
+    timerfd_tick(now);
+    timer_wake_release();
+}
+
+/** The pass of an interrupt between ticks: the sleepers and timers whose
+ * time of their clock has come before their tick, with the interrupt
+ * programmed once for the earliest time still to come. The router has
+ * taken the big lock for it, so the signals of the POSIX timers it expired
+ * are posted now, and not left for a tick (`ptimer_post_due`). */
+void timer_hr_pass(void)
+{
+    timer_wake_hold();
+    proc_wake_due();
+    timerfd_due();
+    ptimer_post_due();
+    timer_wake_release();
 }
 
 /**

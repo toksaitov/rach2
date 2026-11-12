@@ -42,6 +42,12 @@ and the offset of
 step the real time at once, so none is left in progress and
 .Fa offset
 reads 0.
+Every step counts the timers and sleeps of real time again, but only
+.Dv ADJ_SETOFFSET
+cancels a timerfd set with
+.Dv TFD_TIMER_CANCEL_ON_SET ,
+since Linux slews the other two and does not count them as settings of the
+clock.
 .Dv ADJ_FREQUENCY ,
 .Dv ADJ_MAXERROR ,
 .Dv ADJ_ESTERROR ,

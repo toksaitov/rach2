@@ -62,6 +62,9 @@ real-time
 .Fa abs ,
 or not at all for a descriptor with
 .Dv O_NONBLOCK .
+A setting of the real-time clock moves the deadline, as in Linux: a
+setting past it ends the wait at the next tick, and a setting back keeps
+the call waiting until the clock reaches it again.
 .Fn mq_timedreceive
 takes the first message and its priority, waiting while the queue is
 empty.

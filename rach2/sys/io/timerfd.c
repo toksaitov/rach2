@@ -43,8 +43,9 @@
 #define SIGEV_THREAD_ID 4
 
 /* Format: the kernel's ticks in a second, and nanoseconds in a tick. A
- * setting is kept as whole seconds and ticks below a second, and a deadline
- * as a 64-bit tick. */
+ * timer of the clocks keeps its time and interval in nanoseconds, as the
+ * call gives them, and its next tick; one of processor time keeps whole
+ * seconds and ticks below a second, and counts ticks. */
 #define TICKS_PER_SEC ((uint32_t)TICK_HZ)
 #define NS_PER_TICK   ((int32_t)TICK_NS)
 #define NS_PER_SEC    1000000000
@@ -52,27 +53,40 @@
  * is taken as that, as Linux takes one past its own limit, about 292
  * years. */
 #define TIME_MAX      0xFFFFFFFFu
+/* Policy: the latest time a timer of the clocks keeps, in nanoseconds on its
+ * clock, about the year 2255: a later one is taken as that, as Linux takes
+ * one past KTIME_MAX, in 2262. */
+#define END_MAX       9000000000000000000ll
 
 /* A timer: a timerfd's, read through its descriptor (`anon` and `wq`), or a
  * POSIX timer's, which `tg` names and whose expirations post a signal. A
- * POSIX timer on a clock of processor time counts the ticks charged to
- * `cpu_tg`'s threads, or to its thread `cpu_tid` alone, user ticks alone for
- * `cpu_user`: `due` is then the ticks left.
- *
- * A setting of a POSIX timer notifies once, at its first expiration, and
- * its later intervals add to that signal's overrun until the signal is
- * taken: `sent` and `late` record the two while the timer's own signal is
- * pending (`ptimer_fire`), and the end of the setting takes `late` back out
- * of it (`ptimer_settle`). */
+ * timer of the clocks expires when `base` reaches `end`, which the tick
+ * checks from the tick `due` on. A POSIX timer on a clock of processor time
+ * counts the ticks charged to `cpu_tg`'s threads, or to its thread `cpu_tid`
+ * alone, user ticks alone for `cpu_user`: `due` is then the ticks left, and
+ * its interval is `isec` and `isub`. */
 struct ktimer {
     struct anon_obj anon;
     struct ktimer *next; /* the list of armed timers the tick walks */
     int clock;
     int armed;
-    uint64_t due;   /* the tick the next expiration is due at */
-    uint32_t isec;  /* the interval, 0 and 0 for none: whole seconds, */
-    uint32_t isub;  /* and ticks below a second */
-    uint64_t count; /* expirations not yet read, or not yet signalled */
+    uint64_t due;   /* the first tick that may see the next expiration;
+                     * all ones while a periodic timerfd is stopped at its
+                     * expiry (`expire`) */
+    int base;       /* the clock `end` is on: `clock`, or for a relative
+                     * timer of real time CLOCK_MONOTONIC, as Linux's
+                     * hrtimer bases one */
+    int64_t end;    /* the next expiration, in nanoseconds on `base` */
+    int64_t set_at; /* the time on `base` at which `end` was last counted
+                     * (`set_due`): a wake is late by the time past the
+                     * later of the two */
+    uint64_t ins;   /* the interval in nanoseconds, 0 for none */
+    uint32_t isec;  /* processor time's interval, 0 and 0 for none: whole */
+    uint32_t isub;  /* seconds, and ticks below a second */
+    uint64_t count; /* a timerfd's expirations not yet read; a POSIX
+                     * timer's notification that waits for another
+                     * sender's signal of its number to be taken, as its
+                     * overrun plus one, 0 for none (`ptimer_fire`) */
     wait_queue_t wq;
     struct tgroup *tg;       /* a POSIX timer's process, or NULL */
     struct ktimer *in_group; /* the process's next timer */
@@ -81,12 +95,66 @@ struct ktimer {
     int signo;
     uintptr_t value;
     uint32_t tid;          /* the thread SIGEV_THREAD_ID names */
-    uint32_t overrun;      /* timer_getoverrun's: `late` at the last post */
-    int sent;              /* the setting's first expiration is in its signal */
-    uint32_t late;         /* what the setting's later intervals added to it */
+    uint32_t overrun;      /* the intervals of the setting in force that
+                            * the last periodic signal delivered since the
+                            * setting counted past its first expiration, 0
+                            * for none: Linux's it_overrun_last */
+    uint64_t set_count;    /* the expirations of the setting in force since
+                            * its signal, pending or waiting, was queued:
+                            * Linux's it_overrun plus one, which a setting
+                            * and a rearm make -1 (kernel/time/
+                            * posix-timers.c:271-272, 881-882). Only a
+                            * delivery under that setting adds them to the
+                            * signal's overrun (`ptimer_rearm`), which
+                            * otherwise holds what Linux's si_overrun holds
+                            * while queued: one for each later setting that
+                            * expired meanwhile (kernel/signal.c:2029-2036) */
+    uint32_t gen;          /* a POSIX timer's setting, never 0 once set
+                            * (`next_gen`): its signal carries it
+                            * (`timer_gen`), and only a signal of the
+                            * setting in force forwards the timer when
+                            * taken, as Linux's it_requeue_pending
+                            * (`ptimer_rearm`) */
+    uint32_t count_gen;    /* the setting of the last expiration in `count`,
+                            * which its signal carries when posted, as
+                            * Linux's posix_timer_queue_signal writes
+                            * si_sys_private at each expiration
+                            * (kernel/time/posix-timers.c:288-302) */
+    uint64_t wait_seq;     /* when `count` began to wait (`wait_order`):
+                            * waiting notifications are posted oldest
+                            * first, as Linux's queue delivers them */
+    uint32_t key;          /* a POSIX timer's own number, from `next_gen` at
+                            * timer_create and never 0: its signal carries it
+                            * (`timer_key`), and later expirations add to a
+                            * pending signal that bears it alone */
     struct tgroup *cpu_tg; /* held: the process whose time it counts, or NULL */
     uint32_t cpu_tid;
     int cpu_user;
+
+    struct ktimer *cnext;     /* the next timer on `cancelable` */
+    int on_cancel;            /* on it: last set with TFD_TIMER_ABSTIME and
+                               * TFD_TIMER_CANCEL_ON_SET on CLOCK_REALTIME */
+    int canceled;             /* the real-time clock was set while it was on
+                               * it, and no read or setting has said so */
+    int stepped;              /* the clock was set while it was on it, since
+                               * the last read or setting: Linux's tick for the
+                               * step (fs/timerfd.c:108-111), which makes it
+                               * readable */
+    int expired;              /* it expired since the last read, setting or
+                               * timerfd_gettime: Linux's `expired`, the mark of
+                               * a timer stopped at its expiry until one of
+                               * those starts it again (fs/timerfd.c:58-72) */
+    int between;              /* its time may be armed between ticks
+                               * (`arm_between`): every timerfd; a POSIX timer
+                               * but SIGEV_NONE's when set, then while its last
+                               * expiration set its signal pending, or was
+                               * ignored with an interval of a tick or more, and
+                               * again once that signal, or another sender's of
+                               * its number that its notification waited for, is
+                               * taken (`ptimer_rearm`) */
+    uint64_t fire_fresh;      /* the expirations the tick counted and left for
+                               * a holder of the big lock to signal
+                               * (`ptimer_fire_later`) */
     struct ktimer *fire_next; /* the list of timers whose signal is due */
     int fire_queued;          /* on that list */
 };
@@ -101,24 +169,49 @@ struct setting {
 };
 
 /*
- * The armed timers, and those of processor time, which `ptimer_cpu_tick`
- * counts. Their lock covers the two lists, each timer's count and arming,
- * and each process's list of POSIX timers, against the ticks of every
- * processor; it is taken with interrupts off, after the big lock, and
- * before the locks of the wait queues and the run queues a firing takes.
+ * The armed timers, those of processor time, which `ptimer_cpu_tick`
+ * counts, and the timerfds a setting of the real-time clock cancels, as
+ * Linux's cancel_list holds them. Their lock covers the three lists, each
+ * timer's count, arming and cancellation, and each process's list of POSIX
+ * timers, against the ticks of every processor; it is taken with interrupts
+ * off, after the big lock, and before the clock's own lock and the locks of
+ * the wait queues and the run queues a firing takes.
  */
 static struct spinlock timer_lock = SPINLOCK_INIT_NAMED("timer_lock");
 static struct ktimer *armed;
 static struct ktimer *cpu_armed;
-/* The POSIX timers whose signal the tick found due and left for a holder of
- * the big lock (`ptimer_fire_later`), first expired first, under
- * `timer_lock`; and whether there are any, read without it. */
+static struct ktimer *cancelable;
+/* The last number `next_gen` gave a setting or a timer. */
+static uint32_t timer_gens;
+/* The last `wait_seq` given, in the order notifications began to wait. */
+static uint64_t wait_order;
+/* The POSIX timers whose expirations the tick counted and left for a holder
+ * of the big lock to signal (`ptimer_fire_later`), first expired first,
+ * under `timer_lock`; and whether there are any, read without it. */
 static struct ktimer *fire_head, **fire_tail = &fire_head;
 static volatile int fire_due;
+/* The processor that holds `timer_lock` while `ptimer_fire` posts a signal,
+ * plus one, 0 for none: a stop or SIGCONT posted then discards other
+ * signals (`ptimer_discard`) under the lock it already holds. */
+static unsigned int fire_cpu;
 
-/** Take `t` off the list of armed timers it is on and mark it disarmed. The
- * caller holds `timer_lock`. */
-static void disarm(struct ktimer *t)
+/** A number never given before and never 0, which a user's signal carries:
+ * a new POSIX timer setting's generation, one for every setting of every
+ * timer, so that neither a later setting nor a timer that takes a deleted
+ * one's id matches a signal posted before it; and a new timer's `key`, so
+ * that no other timer's expirations add to its signal. The caller holds
+ * `timer_lock`. */
+static uint32_t next_gen(void)
+{
+    if (++timer_gens == 0) {
+        timer_gens = 1;
+    }
+    return timer_gens;
+}
+
+/** Take `t` off the list of armed timers it is on, if any. The caller holds
+ * `timer_lock`. */
+static void unlist(struct ktimer *t)
 {
     struct ktimer **link = t->cpu_tg ? &cpu_armed : &armed;
 
@@ -128,7 +221,33 @@ static void disarm(struct ktimer *t)
     if (*link) {
         *link = t->next;
     }
+}
+
+/** Take `t` off the list of armed timers it is on and mark it disarmed. The
+ * caller holds `timer_lock`. */
+static void disarm(struct ktimer *t)
+{
+    unlist(t);
     t->armed = 0;
+}
+
+/** Put `t` on `cancelable` when `on` and take it off otherwise, as Linux's
+ * timerfd_setup_cancel does (fs/timerfd.c:159-175). The caller holds
+ * `timer_lock`. */
+static void set_cancel(struct ktimer *t, int on)
+{
+    struct ktimer **link = &cancelable;
+
+    if (on && !t->on_cancel) {
+        t->cnext = cancelable;
+        cancelable = t;
+    } else if (!on && t->on_cancel) {
+        while (*link != t) {
+            link = &(*link)->cnext;
+        }
+        *link = t->cnext;
+    }
+    t->on_cancel = on;
 }
 
 /** `sec` seconds and `sub` ticks as ticks. */
@@ -137,20 +256,196 @@ static uint64_t ticks_of(uint32_t sec, uint32_t sub)
     return (uint64_t)sec * TICKS_PER_SEC + sub;
 }
 
-static void ptimer_fire(struct ktimer *t);
-static void ptimer_settle(struct ktimer *t);
-static void ptimer_free(struct ktimer **link);
+static int ptimer_fire(struct ktimer *t, uint64_t fresh);
+static void ptimer_free(struct ktimer **link, int keep);
+/** `n` divided by `d`, which is not 0, with the remainder in `*rem` when it
+ * is not NULL; the freestanding kernel has no `__udivdi3`. */
+static uint64_t div64(uint64_t n, uint64_t d, uint64_t *rem)
+{
+    uint64_t q = 0, r = 0;
+    int i;
+
+    if ((n >> 32) == 0 && (d >> 32) == 0) {
+        q = (uint32_t)n / (uint32_t)d;
+        r = (uint32_t)n % (uint32_t)d;
+    } else {
+        for (i = 63; i >= 0; i--) {
+            r = (r << 1) | ((n >> i) & 1u);
+            if (r >= d) {
+                r -= d;
+                q |= (uint64_t)1 << i;
+            }
+        }
+    }
+    if (rem) {
+        *rem = r;
+    }
+    return q;
+}
+
+/** The time on `clock` now in `*ns`, in nanoseconds, never past END_MAX nor
+ * before 0; 0, or `clock_now`'s error with `*ns` 0. */
+static int32_t clock_ns(int clock, int64_t *ns)
+{
+    int64_t sec;
+    int32_t nsec;
+    int32_t rc = clock_now(clock, &sec, &nsec);
+
+    if (rc != 0 || sec < 0) {
+        *ns = 0;
+    } else if (sec >= END_MAX / NS_PER_SEC) {
+        *ns = END_MAX;
+    } else {
+        *ns = sec * NS_PER_SEC + nsec;
+    }
+    return rc;
+}
+
+/* A reading of a timer's clock and of the tick count, taken together. */
+struct reading {
+    int64_t clock;  /* the time on the timer's `base`, in nanoseconds */
+    uint64_t tick;  /* the tick count as the clocks count it */
+    uint32_t phase; /* nanoseconds into the tick in progress */
+};
 
 /**
- * Leave the expiration of the POSIX timer `t` for a holder of the big lock
- * to signal (`ptimer_post_due`), since the tick runs without it and a
- * signal is posted under it; the expirations counted meanwhile go into the
- * one signal and its overrun, as they would into a signal still pending.
- * Linux posts a timer's signal from its timer's callback
- * (kernel/time/posix-timers.c:318-377). The caller holds `timer_lock`.
+ * Read the tick count and the clock `base` into `r`, the tick's from where
+ * the clock is within the tick in progress (`rtc_tick_phase`); 0, or
+ * `clock_now`'s error. The caller has interrupts off, so that no tick comes
+ * between the two readings and the time to a timer's end counts from the
+ * tick it is added to, as Linux's hrtimer adds a relative time to its
+ * base's clock and queues the timer under the base's lock
+ * (kernel/time/hrtimer.c:1260 and 1342). The tick is read first, so that a
+ * delay between the readings, a virtual processor's preemption, can make
+ * `due` early, which `expire` corrects, and never late.
  */
-static void ptimer_fire_later(struct ktimer *t)
+static int32_t read_now(int base, struct reading *r)
 {
+    rtc_tick_phase(&r->tick, &r->phase);
+    return clock_ns(base, &r->clock);
+}
+
+/* The bases a timer of the clocks counts on, as `pass_read` indexes them. */
+#define PASS_BASES 3
+
+/*
+ * The readings of one pass over the armed timers, each taken at its first
+ * use and then shared by every timer of the pass, as Linux's
+ * hrtimer_interrupt reads the clock once and compares every timer of a
+ * base with that reading and the base's offset (kernel/time/hrtimer.c:1814,
+ * 1861, 1879).
+ */
+struct pass {
+    struct reading read[PASS_BASES]; /* CLOCK_REALTIME, MONOTONIC, BOOTTIME */
+    int32_t rc[PASS_BASES];          /* `read_now`'s answer for each */
+    uint8_t have;                    /* a bit for each reading taken */
+    uint8_t have_offset;
+    int64_t offset; /* with `have_offset`, CLOCK_REALTIME less MONOTONIC */
+};
+
+/** The reading of `base` for the pass `p`, taken at its first use; NULL
+ * when the clock cannot be read. */
+static const struct reading *pass_read(struct pass *p, int base)
+{
+    int i = base == CLOCK_REALTIME ? 0 : base == CLOCK_MONOTONIC ? 1 : 2;
+
+    if (!(p->have & (1u << i))) {
+        p->rc[i] = read_now(base, &p->read[i]);
+        p->have |= (uint8_t)(1u << i);
+    }
+    return p->rc[i] == 0 ? &p->read[i] : NULL;
+}
+
+/**
+ * Arm the interrupt between ticks for `t`'s end (`timer_wake_at`), however
+ * far it is, as Linux starts a timer's hrtimer when the timer is set
+ * (hrtimer_start_range_ns, kernel/time/hrtimer.c:1324-1347): the timer then
+ * expires at its time, and not at the tick after it, and no pass needs to
+ * come before its time to arm it. A processor keeps the earliest time asked
+ * of it, and every pass arms each time still to come again (`timerfd_tick`,
+ * `timerfd_due`), so a later time that an earlier one put aside is armed
+ * once that is served.
+ * The time is the end itself on the monotonic clock and the end less the
+ * real-time clock's offset on CLOCK_REALTIME, the pass `p`'s when it is not
+ * NULL, as Linux programs a timer at its expiry less its base's offset
+ * (kernel/time/hrtimer.c:818, 922), so that no time passed between a
+ * reading and the arming is added to it. A POSIX timer whose `between` is
+ * clear is left to the ticks. The caller holds `timer_lock`.
+ */
+static void arm_between(const struct ktimer *t, struct pass *p)
+{
+    int64_t at = t->end;
+
+    if (!t->between || t->end >= END_MAX) {
+        return;
+    }
+    if (t->base == CLOCK_REALTIME) {
+        int64_t sec, off;
+        int32_t nsec;
+
+        if (p && p->have_offset) {
+            off = p->offset;
+        } else {
+            rtc_offset(&sec, &nsec);
+            off = sec * NS_PER_SEC + nsec;
+            if (p) {
+                p->offset = off;
+                p->have_offset = 1;
+            }
+        }
+        at -= off;
+    }
+    timer_wake_at(at > 0 ? at : 1);
+}
+
+/** Move `t->end`, which the clock's reading `clock` has reached, on by
+ * whole intervals past it, as hrtimer_forward does (kernel/time/hrtimer.c:
+ * 1046-1076); returns the intervals moved, at least one. */
+static uint64_t forward_end(struct ktimer *t, int64_t clock)
+{
+    uint64_t n = div64((uint64_t)(clock - t->end), t->ins, NULL) + 1u;
+    /* under 2^64: the gap is under END_MAX and the interval under 2^63 */
+    uint64_t step = n * t->ins;
+
+    t->end = step > (uint64_t)(END_MAX - t->end) ? END_MAX : t->end + (int64_t)step;
+    return n;
+}
+
+/** Set `t->due` to the first tick at or after `t->end`, counted from the
+ * reading `r` (`read_now`), as `sleep_for` ends a sleep, or the tick in
+ * progress when the clock has reached `t->end`; and at least the tick after
+ * `now`, a tick the caller has handled, so that the tick's walk ends even
+ * for a timer held at END_MAX by a clock past it. The end is armed between
+ * ticks (`arm_between`), and the reading kept as the time it was counted
+ * at (`set_at`). */
+static void set_due(struct ktimer *t, const struct reading *r, uint64_t now)
+{
+    int64_t left = t->end - r->clock;
+
+    t->set_at = r->clock;
+    t->due = r->tick;
+    if (left > 0) {
+        t->due += div64((uint64_t)left + r->phase + NS_PER_TICK - 1u, NS_PER_TICK, NULL);
+    }
+    if (now != 0 && t->due <= now) {
+        t->due = now + 1u;
+    }
+    arm_between(t, NULL);
+}
+
+/**
+ * Leave `fresh` expirations of the POSIX timer `t` for a holder of the big
+ * lock to signal (`ptimer_post_due`), since the tick runs without it and a
+ * signal is posted under it; the expirations counted meanwhile join them,
+ * as they would join a signal posted at the first. Linux posts a timer's
+ * signal from its timer's callback (kernel/time/posix-timers.c:318-377).
+ * Until then the timer is left to the ticks (`between`), as a timer whose
+ * signal is pending is. The caller holds `timer_lock`.
+ */
+static void ptimer_fire_later(struct ktimer *t, uint64_t fresh)
+{
+    t->fire_fresh += fresh;
+    t->between = 0;
     if (t->fire_queued) {
         return;
     }
@@ -161,14 +456,16 @@ static void ptimer_fire_later(struct ktimer *t)
     fire_due = 1;
 }
 
-/** Take `t` off the list of timers whose signal is due; the caller holds
- * `timer_lock`. */
-static void ptimer_fire_cancel(struct ktimer *t)
+/** Take `t` off the list of timers whose signal is due, and return the
+ * expirations it had waiting; the caller holds `timer_lock`. */
+static uint64_t ptimer_fire_cancel(struct ktimer *t)
 {
     struct ktimer **link = &fire_head;
+    uint64_t fresh = t->fire_fresh;
 
+    t->fire_fresh = 0;
     if (!t->fire_queued) {
-        return;
+        return fresh;
     }
     while (*link && *link != t) {
         link = &(*link)->fire_next;
@@ -182,6 +479,29 @@ static void ptimer_fire_cancel(struct ktimer *t)
     t->fire_queued = 0;
     t->fire_next = NULL;
     fire_due = fire_head != NULL;
+    return fresh;
+}
+
+/** Signal the expirations of `t` the tick left (`ptimer_fire_later`), if
+ * any, and arm its next time between ticks when its signal allows
+ * (`ptimer_fire`), as `post_waiting` does. The caller holds the big lock and
+ * `timer_lock`. */
+static void ptimer_post_one(struct ktimer *t)
+{
+    uint64_t fresh = ptimer_fire_cancel(t);
+    struct reading r;
+    int between;
+
+    if (fresh == 0) {
+        return;
+    }
+    between = ptimer_fire(t, fresh);
+    if (t->armed && !t->cpu_tg && read_now(t->base, &r) == 0) {
+        t->between = between;
+        if (between) {
+            set_due(t, &r, 0);
+        }
+    }
 }
 
 int ptimer_posts_due(void)
@@ -197,65 +517,126 @@ void ptimer_post_due(void)
         return;
     }
     irq = spin_lock_irqsave(&timer_lock);
+    timer_wake_hold();
     while (fire_head) {
-        struct ktimer *t = fire_head;
-
-        fire_head = t->fire_next;
-        if (!fire_head) {
-            fire_tail = &fire_head;
-        }
-        t->fire_next = NULL;
-        t->fire_queued = 0;
-        ptimer_fire(t);
+        ptimer_post_one(fire_head);
     }
     fire_due = 0;
+    timer_wake_release();
     spin_unlock_irqrestore(&timer_lock, irq);
 }
 
 /**
- * Start the wake record of the reader `p` of an expiring timerfd due at
- * `due` (`waketime_expire`), under the run queues' lock, taken after the
- * queue's, which the caller holds: a wake of `p` from elsewhere, a signal or
- * another descriptor it polls, moves the record's stage under that lock, and
- * the record is begun only while `p` is blocked and has none, so neither
- * overwrites the other. Linux's waker likewise tests a task's state under
- * the task's `pi_lock`, which every waker takes (`try_to_wake_up`,
- * kernel/sched/core.c:4191-4194).
+ * Start the wake record of the reader `p` of an expiring timerfd, the clock
+ * `late` nanoseconds past the time it waited for (`waketime_expire_late`),
+ * under the run queues' lock, taken after the queue's, which the caller
+ * holds: a wake of `p` from elsewhere, a signal or another descriptor it
+ * polls, moves the record's stage under that lock, and the record is begun
+ * only while `p` is blocked and has none, so neither overwrites the other.
+ * Linux's waker likewise tests a task's state under the task's `pi_lock`,
+ * which every waker takes (`try_to_wake_up`, kernel/sched/core.c:4191-4194).
  */
-static void timerfd_wake_record(process_t *p, uint64_t due)
+static void timerfd_wake_record(process_t *p, uint64_t late)
 {
     uint32_t flags = sched_lock_take();
 
-    waketime_expire(p, due);
+    waketime_expire_late(p, (int64_t)late);
     sched_lock_give(flags);
 }
 
-/** An expiration of `t`, due by the tick `now`: counted, with those of an
- * interval missed since, and the timer armed again by its interval or
- * disarmed; then its readers woken, or its signal posted. The caller holds
- * `timer_lock`. */
-static void expire(struct ktimer *t, uint64_t now)
+/**
+ * The tick `now` has reached `t->due`: when `t->base` has reached `t->end`,
+ * an expiration; then its readers woken, or its signal left for a holder of
+ * the big lock to post (`ptimer_fire_later`), since a pass runs without
+ * it; SIGEV_NONE, which posts nothing, is counted at once. A periodic
+ * POSIX timer counts those of an interval missed since, as Linux's
+ * hrtimer_forward counts them from the time and interval it was given, and
+ * is armed again by its interval, between ticks only once its signal is
+ * set pending, or is ignored and its interval is a tick or more
+ * (`ptimer_post_one`): its expirations are otherwise counted at ticks alone, so
+ * that a short interval cannot raise interrupt after interrupt between
+ * them. A periodic timerfd counts the one, and
+ * stops at its expiry, armed but off the tick's list (`due` never), as
+ * Linux's timerfd_tmrproc returns HRTIMER_NORESTART (fs/timerfd.c:58-80),
+ * until a read, a setting or timerfd_gettime starts it again
+ * (`timerfd_forward`). A one-shot timer is disarmed. A tick that comes
+ * before the clock reaches the time, as one does when the clock runs ahead
+ * of the tick count, only moves `due` on, as `deadline_passed` in poll.c
+ * does, since Linux's timers never expire before their clock reaches their
+ * time. `r` is the reading of `t->base` the decision is made on (`read_now`,
+ * `pass_read`). A reader's wake is late by the time since the end or since
+ * the end was counted (`set_at`), whichever is later, so that a timer set to
+ * a time already past, or moved past by a step of the clock, counts only
+ * the time since then; that time is read at the wake, and not taken from
+ * `r`, which a pass shares with the timers before this one. The caller
+ * holds `timer_lock`.
+ */
+static void expire(struct ktimer *t, uint64_t now, const struct reading *r)
 {
-    if (!t->tg) {
-        wq_each_waiter(&t->wq, timerfd_wake_record, t->due);
+    if (r->clock < t->end) {
+        set_due(t, r, now);
+        return;
     }
-    if (t->isec != 0 || t->isub != 0) {
-        uint64_t interval = ticks_of(t->isec, t->isub);
-        uint64_t gap = now - t->due;
-        /* the gap is the ticks one interrupt counted, under 2^32 */
-        uint32_t late = interval > gap ? 0u : (uint32_t)gap / (uint32_t)interval;
+    t->expired = 1;
+    if (!t->tg && t->wq.head) {
+        int64_t from = t->set_at > t->end ? t->set_at : t->end, at = 0;
 
-        t->count += 1u + late;
-        t->due += (late + 1u) * interval;
-    } else {
-        t->count++;
-        disarm(t);
+        (void)clock_ns(t->base, &at);
+        wq_each_waiter(&t->wq, timerfd_wake_record, (uint64_t)(at > from ? at - from : 0));
     }
     if (t->tg) {
-        ptimer_fire_later(t);
-    } else {
-        wq_wake_all(&t->wq);
+        uint64_t n = 1;
+
+        if (t->ins != 0) {
+            n = forward_end(t, r->clock);
+        } else {
+            disarm(t);
+        }
+        if (t->notify == SIGEV_NONE) {
+            t->between = ptimer_fire(t, n);
+        } else {
+            ptimer_fire_later(t, n);
+        }
+        if (t->armed) {
+            set_due(t, r, now);
+        }
+        return;
     }
+    t->count++;
+    if (t->ins != 0) {
+        unlist(t);
+        t->due = ~(uint64_t)0;
+    } else {
+        disarm(t);
+    }
+    wq_wake_all(&t->wq);
+}
+
+/**
+ * Start `t`, a periodic timerfd stopped at its expiry (`expire`), again:
+ * move its time on by whole intervals past its clock now and put it back on
+ * the tick's list, as Linux's hrtimer_forward_now and hrtimer_restart do
+ * (kernel/time/hrtimer.c:1046-1079). Returns the intervals it moved, the
+ * expirations since the one counted plus that one, and 0 when a step of
+ * the clock back has put the time ahead again, which leaves the time where
+ * it was. `r` is a reading of `t->base` (`read_now`). Nothing is done
+ * unless `t` is a timerfd that expired and is stopped. The caller holds
+ * `timer_lock`.
+ */
+static uint64_t timerfd_forward(struct ktimer *t, const struct reading *r)
+{
+    uint64_t n = 0;
+
+    if (t->tg || !t->expired || !t->armed || t->ins == 0) {
+        return 0;
+    }
+    if (r->clock >= t->end) {
+        n = forward_end(t, r->clock);
+    }
+    set_due(t, r, 0);
+    t->next = armed;
+    armed = t;
+    return n;
 }
 
 /** `sec` seconds and `sub` ticks as ticks, at least one, so that a timer
@@ -278,30 +659,12 @@ void ptimer_cpu_tick(const process_t *p, int user)
 
         if (t->cpu_tg == p->tg && (t->cpu_tid == 0 || t->cpu_tid == p->pid) &&
             (user || !t->cpu_user) && --t->due == 0) {
-            t->count++;
             if (t->isec != 0 || t->isub != 0) {
                 t->due = cpu_ticks_of(t->isec, t->isub);
             } else {
                 disarm(t);
             }
-            ptimer_fire_later(t);
-        }
-        t = next;
-    }
-    spin_unlock(&timer_lock);
-}
-
-void timerfd_tick(uint64_t now)
-{
-    struct ktimer *t;
-
-    spin_lock(&timer_lock);
-    t = armed;
-    while (t) {
-        struct ktimer *next = t->next;
-
-        while (t->armed && now >= t->due) {
-            expire(t, now);
+            ptimer_fire_later(t, 1);
         }
         t = next;
     }
@@ -309,10 +672,116 @@ void timerfd_tick(uint64_t now)
 }
 
 /**
+ * Each base's clock is read once for the pass (`pass_read`), at the first
+ * timer due on it. A timer whose time is still to come has it armed between
+ * ticks again (`arm_between`), since a processor keeps only the earliest
+ * time asked of it.
+ */
+void timerfd_tick(uint64_t now)
+{
+    struct pass p;
+    struct ktimer *t;
+
+    p.have = 0;
+    p.have_offset = 0;
+    spin_lock(&timer_lock);
+    t = armed;
+    while (t) {
+        struct ktimer *next = t->next;
+        const struct reading *r;
+
+        while (t->armed && now >= t->due && (r = pass_read(&p, t->base)) != NULL) {
+            expire(t, now, r);
+        }
+        if (t->armed && t->due != ~(uint64_t)0) {
+            arm_between(t, &p); /* not a timerfd stopped at its expiry */
+        }
+        t = next;
+    }
+    spin_unlock(&timer_lock);
+}
+
+/**
+ * Each base's clock is read once for the pass (`pass_read`), and decides,
+ * not the tick count, as Linux's hrtimer_interrupt compares every timer
+ * with one reading (kernel/time/hrtimer.c:1814, 1861). A timer whose time
+ * is still to come, since the interrupt came a few counts before it or was
+ * armed for an earlier time, has it armed again (`arm_between`).
+ */
+void timerfd_due(void)
+{
+    uint64_t now = tick_count();
+    struct pass p;
+    struct ktimer *t;
+
+    p.have = 0;
+    p.have_offset = 0;
+    spin_lock(&timer_lock);
+    t = armed;
+    while (t) {
+        struct ktimer *next = t->next;
+        const struct reading *r;
+
+        if (t->armed && t->between && (r = pass_read(&p, t->base)) != NULL) {
+            if (r->clock >= t->end) {
+                expire(t, now, r);
+            } else {
+                arm_between(t, &p);
+            }
+        }
+        t = next;
+    }
+    spin_unlock(&timer_lock);
+}
+
+/**
+ * Linux's clock_was_set and timerfd_clock_was_set (kernel/time/hrtimer.c:
+ * 951-987, fs/timerfd.c:97-115): each armed timer whose end is a time of
+ * CLOCK_REALTIME has its tick counted again from one reading of the clock as
+ * now set, and its end armed between ticks again, so that a step forward
+ * past its end expires it at once and a step back keeps it waiting, with
+ * the interrupt between ticks programmed once for them all
+ * (`timer_wake_hold`), as clock_was_set reprograms each processor once; and
+ * each timerfd on `cancelable` is marked canceled and stepped, which makes
+ * it readable as Linux's tick for the step does,
+ * and its readers woken, so that its next read or setting fails with
+ * ECANCELED. Without `cancel`, for a step that stands for adjtimex's
+ * ADJ_OFFSET, the timers are counted again and none is canceled, since
+ * Linux slews that offset and calls clock_was_set only for ADJ_SETOFFSET, a
+ * change of TAI or a leap second (kernel/time/ntp.c:754-755,
+ * kernel/time/timekeeping.c:2490-2532).
+ */
+void timerfd_clock_was_set(int cancel)
+{
+    uint32_t irq = spin_lock_irqsave(&timer_lock);
+    struct reading r;
+    struct ktimer *t;
+    int have = 0;
+
+    timer_wake_hold();
+    for (t = armed; t; t = t->next) {
+        if (t->base == CLOCK_REALTIME) {
+            if (!have) {
+                (void)read_now(CLOCK_REALTIME, &r);
+                have = 1;
+            }
+            set_due(t, &r, 0);
+        }
+    }
+    timer_wake_release();
+    for (t = cancel ? cancelable : NULL; t; t = t->cnext) {
+        t->canceled = 1;
+        t->stepped = 1;
+        wq_wake_all(&t->wq);
+    }
+    spin_unlock_irqrestore(&timer_lock, irq);
+}
+
+/**
  * A time of `sec` seconds and `nsec` nanoseconds, below a second, as whole
- * seconds and ticks below a second, rounded up to a tick so that a timer
- * never expires early. A negative time is none, and a time past TIME_MAX
- * seconds is that.
+ * seconds and ticks below a second, rounded up to a tick, for a timer of
+ * processor time, which counts ticks. A negative time is none, and a time
+ * past TIME_MAX seconds is that.
  */
 static void to_wait(int64_t sec, int32_t nsec, uint32_t *s, uint32_t *sub)
 {
@@ -333,10 +802,24 @@ static void to_wait(int64_t sec, int32_t nsec, uint32_t *s, uint32_t *sub)
     }
 }
 
-/** The wait condition of a read: the timer `arg` has expirations. */
+/** Whether `t`'s next read or setting fails with ECANCELED, as Linux's
+ * timerfd_canceled answers (fs/timerfd.c:151-157): the real-time clock was
+ * set while `t` was on `cancelable`, and it is on it still. */
+static int is_canceled(const struct ktimer *t)
+{
+    return t->on_cancel && t->canceled;
+}
+
+/** The wait condition of a read: the timer `arg` has expirations, or the
+ * clock was set since its last read or setting (`stepped`), as Linux's
+ * `ticks` counts both (fs/timerfd.c:258, 279). A timerfd canceled and then
+ * set to disarmed is not readable, as in Linux, whose setting zeroes
+ * `ticks` and keeps the cancel mark (fs/timerfd.c:200-201, 215-228). */
 static int readable(void *arg)
 {
-    return ((struct ktimer *)arg)->count != 0;
+    const struct ktimer *t = (const struct ktimer *)arg;
+
+    return t->count != 0 || t->stepped;
 }
 
 /**
@@ -346,12 +829,30 @@ static int readable(void *arg)
  * interrupt adds to it (`timerfd_tick`), and before the copy to the caller,
  * which can sleep in a page fault: an expiration that comes meanwhile is
  * kept for the next read, and a second reader finds none of the ones this
- * read took. A copy that fails loses the count, as in Linux. Returns 8,
- * -EINVAL for a buffer under eight bytes, -EAGAIN, -EINTR or -EFAULT.
+ * read took. A copy that fails loses the count, as in Linux.
+ *
+ * A canceled timer (`is_canceled`) fails with -ECANCELED once a blocking
+ * read has something to read, at once for a nonblocking read or one a
+ * signal ended, and drops its count, as Linux's read does (fs/timerfd.c:
+ * 272-290). A periodic timer keeps running then, unless it expired and
+ * nothing read, set or asked for it since (`expired`): Linux stops such a
+ * timer at its expiry and only those three start it again, so it stays
+ * disarmed until it is set. Otherwise a read with a count clears `expired`,
+ * and a periodic timer stopped at its expiry is started again
+ * (`timerfd_forward`), the expirations its forwarding counts added less the
+ * one already counted, as Linux's read adds hrtimer_forward_now's count less
+ * one only when both `expired` and `tintv` are set (fs/timerfd.c:292-313);
+ * a one-shot timer's read returns its count of one. When a step of the
+ * clock back leaves a periodic timer no count, the read returns -EAGAIN for
+ * a nonblocking descriptor and 0 otherwise, as Linux's does
+ * (fs/timerfd.c:276-279, 315-321). Returns 8, -EINVAL for a
+ * buffer under eight bytes, -ECANCELED, -EAGAIN, -EINTR, -EFAULT or 0.
  */
 static int32_t timerfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct ktimer *t = (struct ktimer *)e->priv;
+    int nonblock = e->ofd && (e->ofd->status_flags & OFD_NONBLOCK);
+    int32_t rc = 0;
     uint64_t n;
 
     if (count < sizeof(n)) {
@@ -360,18 +861,46 @@ static int32_t timerfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
     for (;;) {
         uint32_t irq = spin_lock_irqsave(&timer_lock);
 
+        if (is_canceled(t) && (readable(t) || nonblock || rc != 0)) {
+            t->canceled = 0;
+            if (t->expired && t->armed) {
+                disarm(t);
+            }
+            t->count = 0;
+            t->stepped = 0;
+            t->expired = 0;
+            spin_unlock_irqrestore(&timer_lock, irq);
+            return -ECANCELED;
+        }
         n = t->count;
         t->count = 0;
-        spin_unlock_irqrestore(&timer_lock, irq);
+        t->stepped = 0;
         if (n != 0) {
+            if (t->expired && t->armed && t->ins != 0) {
+                struct reading r;
+
+                (void)read_now(t->base, &r);
+                n = n + timerfd_forward(t, &r) - 1u;
+            }
+            t->expired = 0;
+            if (n == 0) {
+                spin_unlock_irqrestore(&timer_lock, irq);
+                return nonblock ? -EAGAIN : 0;
+            }
+        }
+        spin_unlock_irqrestore(&timer_lock, irq);
+        if (n != 0 || rc != 0) {
             break;
         }
-        if (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK)) {
+        if (nonblock) {
             return -EAGAIN;
         }
         if (wq_wait_event(&t->wq, readable, t) < 0) {
-            return -EINTR;
+            rc = -EINTR;
         }
+    }
+    if (n == 0) {
+        return rc;
     }
     if (copy_to_user((void __user *)buf, &n, sizeof(n)) != 0) {
         return -EFAULT;
@@ -379,8 +908,8 @@ static int32_t timerfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)sizeof(n);
 }
 
-/** poll of a timerfd: POLLIN among `events` while it has expirations, and
- * its wait queue. */
+/** poll of a timerfd: POLLIN among `events` while it is readable
+ * (`readable`), and its wait queue. */
 static short timerfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct ktimer *t = (struct ktimer *)e->priv;
@@ -388,10 +917,11 @@ static short timerfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     if (wq) {
         *wq = &t->wq;
     }
-    return (short)(t->count ? (events & POLLIN) : 0);
+    return (short)(readable(t) ? (events & POLLIN) : 0);
 }
 
-/** The last close of a timerfd: the timer is disarmed and freed. */
+/** The last close of a timerfd: the timer is disarmed, taken off
+ * `cancelable` and freed. */
 static void timerfd_close(fd_entry_t *e)
 {
     struct ktimer *t = (struct ktimer *)e->priv;
@@ -400,6 +930,7 @@ static void timerfd_close(fd_entry_t *e)
     if (t->armed) {
         disarm(t);
     }
+    set_cancel(t, 0);
     spin_unlock_irqrestore(&timer_lock, flags);
     kfree(t);
     e->priv = NULL;
@@ -457,83 +988,209 @@ long sys_timerfd_create(struct isr_params *params)
 }
 
 /** The timer's setting now: the time to its next expiration and its
- * interval, both zero when it is disarmed. It is read under the timers'
- * lock, since the tick moves the timer. */
-static void current_setting(const struct ktimer *t, struct setting *s)
+ * interval, to the nanosecond for a timer of the clocks, as Linux's hrtimer
+ * keeps them. A disarmed timer has no time left, and a disarmed POSIX timer
+ * no interval; a disarmed timerfd keeps the interval it was last set with,
+ * as Linux's `tintv` (fs/timerfd.c:202, 568). It is read under the timers'
+ * lock, since the tick moves the timer, and marks an expiration seen
+ * (`expired`). A periodic timerfd stopped at its expiry is started again
+ * first (`timerfd_forward`), its count moved by the forwarding's count less
+ * one, as Linux's timerfd_gettime forwards it against the clock now and
+ * restarts it (fs/timerfd.c:552-565), so a step of the clock back before it
+ * reports the time to the expiry it stopped at. A periodic POSIX timer of
+ * the clocks that the ticks alone count (`between` clear: SIGEV_NONE's, or
+ * one whose signal is pending) has the expirations its clock has passed
+ * counted first (`expire`), into the setting's count (`set_count`), which
+ * the signal's delivery adds to its overrun, so that its
+ * time is never reported as passed, as Linux's common_timer_get forwards
+ * such a timer (kernel/time/posix-timers.c:670-678); an expired one-shot
+ * timer of SIGEV_NONE has no time left, and any other one passed is
+ * reported a nanosecond away, its signal not yet delivered
+ * (kernel/time/posix-timers.c:690-701). The time left is counted from the
+ * reading the forwarding was made on, as common_timer_get counts both from
+ * one `now` (kernel/time/posix-timers.c:671-688), so that a short interval
+ * that ends between two readings cannot leave a forwarded timer reported
+ * as due. */
+static void current_setting(struct ktimer *t, struct setting *s)
 {
     uint32_t irq = spin_lock_irqsave(&timer_lock);
+    struct reading r = {0, 0, 0};
+    int32_t rc = 0;
     uint32_t rest;
 
     k_memset(s, 0, sizeof(*s));
+    if (t->armed && !t->cpu_tg) {
+        rc = read_now(t->base, &r);
+    }
+    if (t->expired && !t->tg && t->armed && t->ins != 0) {
+        uint64_t n = timerfd_forward(t, &r);
+
+        /* the forwarding's count less the one counted; Linux's ticks */
+        t->count = n != 0 || t->count != 0 ? t->count + n - 1u : 0;
+    }
+    if (t->tg && !t->cpu_tg && t->armed && t->ins != 0 && !t->between && rc == 0) {
+        expire(t, 0, &r);
+    }
+    if (t->tg) {
+        ptimer_post_one(t);
+    }
+    t->expired = 0;
     if (t->armed && t->cpu_tg) {
         s->vsec = (int64_t)tick_div(t->due, TICKS_PER_SEC, &rest);
         s->vnsec = (int32_t)rest * NS_PER_TICK;
         s->isec = t->isec;
         s->insec = (int32_t)t->isub * NS_PER_TICK;
-    } else if (t->armed) {
-        uint64_t now = rtc_ticks_now();
+    } else if (t->armed || !t->tg) {
+        int64_t left;
+        uint64_t ns;
 
-        if (t->due > now) {
-            s->vsec = (int64_t)tick_div(t->due - now, TICKS_PER_SEC, &rest);
-            s->vnsec = (int32_t)rest * NS_PER_TICK;
-        } else {
-            s->vnsec = 1; /* due now: reported as not yet expired */
+        if (t->armed) {
+            left = t->end - r.clock;
+            if (left > 0) {
+                s->vsec = (int64_t)div64((uint64_t)left, NS_PER_SEC, &ns);
+                s->vnsec = (int32_t)ns;
+            } else if (!t->tg || t->notify != SIGEV_NONE) {
+                s->vnsec = 1; /* due now: reported as not yet expired */
+            }
         }
-        s->isec = t->isec;
-        s->insec = (int32_t)t->isub * NS_PER_TICK;
+        s->isec = (int64_t)div64(t->ins, NS_PER_SEC, &ns);
+        s->insec = (int32_t)ns;
     }
     spin_unlock_irqrestore(&timer_lock, irq);
+}
+
+/** `sec` seconds and `nsec` nanoseconds, neither negative, as nanoseconds,
+ * the seconds cut at TIME_MAX. */
+static uint64_t ns_of(int64_t sec, int32_t nsec)
+{
+    if (sec > (int64_t)TIME_MAX) {
+        sec = (int64_t)TIME_MAX;
+    }
+    return (uint64_t)sec * NS_PER_SEC + (uint32_t)nsec;
+}
+
+/**
+ * List `t`, a timer of the clocks, as armed from the setting `s`, absolute
+ * on `base` when `flags` has TFD_TIMER_ABSTIME and otherwise from the
+ * reading `r`; 0, or -ECANCELED for a timerfd that is canceled
+ * (`is_canceled`), which is armed all the same, as Linux's timerfd_setup arms
+ * it (fs/timerfd.c:227-228). The caller holds `timer_lock`.
+ */
+static int32_t list_clock(struct ktimer *t, int base, int flags, const struct setting *s,
+                          const struct reading *r)
+{
+    uint64_t v = ns_of(s->vsec, s->vnsec);
+
+    if (flags & TFD_TIMER_ABSTIME) {
+        t->end = s->vsec >= END_MAX / NS_PER_SEC ? END_MAX : s->vsec * NS_PER_SEC + s->vnsec;
+    } else {
+        t->end = v > (uint64_t)(END_MAX - r->clock) ? END_MAX : r->clock + (int64_t)v;
+    }
+    t->base = base;
+    t->ins = ns_of(s->isec, s->insec);
+    t->between = !t->tg || t->notify != SIGEV_NONE;
+    set_due(t, r, 0); /* from a call: no tick handled */
+    t->armed = 1;
+    t->next = armed;
+    armed = t;
+    if (is_canceled(t)) {
+        t->canceled = 0;
+        return -ECANCELED;
+    }
+    return 0;
 }
 
 /**
  * Arm `t` from the setting `s`, absolute on its clock when `flags` has
  * TFD_TIMER_ABSTIME, or disarm it for a first expiration of zero, dropping
- * the expirations not read; 0, -EINVAL for a time out of range, or
- * `clock_now`'s error. A relative time counts from the next tick, so the
- * part of the tick in progress does not shorten it.
+ * a timerfd's expirations not read. A POSIX timer starts a new generation
+ * (`next_gen`), so that a signal of the old setting still pending forwards
+ * nothing when taken, as Linux's posix_timer_set_common moves
+ * it_requeue_pending on (kernel/time/posix-timers.c:879), and drops the
+ * old setting's expirations since its signal was queued (`set_count`), as
+ * posix_timer_set_common resets it_overrun (kernel/time/posix-timers.c:
+ * 881-882); a notification that waits for another sender's signal stays,
+ * with its own overrun and the setting it was posted for (`count_gen`),
+ * since Linux leaves the timer's sigqueue queued across a setting; 0, -EINVAL
+ * for a time out of range, or `clock_now`'s error. A timer of the clocks
+ * keeps its time and interval to the nanosecond, as Linux's timerfd_setup
+ * keeps them, and expires when its clock reaches its time, by the interrupt
+ * between ticks (`arm_between`), as Linux's hrtimer does, or at the first
+ * tick at which its clock has reached its time where there is none or the
+ * timer is a POSIX timer left to the ticks (`set_due`, `expire`): never
+ * early. Its clock and the tick are read under the timers' lock
+ * (`read_now`). A time already past expires at once by that interrupt, or
+ * at the next tick without it, with each interval since it counted.
  *
- * A POSIX timer's old setting ends as `ptimer_settle` says, and
- * `timer_getoverrun` reads 0 until the next post, as Linux's set resets the
- * timer's accounting (`posix_timer_set_common`,
- * kernel/time/posix-timers.c:871-883). The caller holds the big lock.
+ * A timerfd goes on `cancelable` or off it by `flags`, as Linux's
+ * timerfd_settime does before it arms the timer, and one armed while
+ * canceled fails with -ECANCELED (`list_clock`). Every setting drops the
+ * timerfd's mark of a step (`stepped`) and of an expiration (`expired`),
+ * and a disarming one keeps its interval, as Linux's timerfd_setup zeroes
+ * `ticks` and `expired` and stores `tintv` whatever the time
+ * (fs/timerfd.c:199-202).
  */
 static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
 {
     int on = s->vsec != 0 || s->vnsec != 0;
+    int base =
+        t->clock == CLOCK_REALTIME && !(flags & TFD_TIMER_ABSTIME) ? CLOCK_MONOTONIC : t->clock;
+    int64_t wsec = s->vsec;
+    int32_t wnsec = s->vnsec;
     uint32_t sec, sub, isec, isub;
+    struct reading r = {0, 0, 0};
+    int32_t rc = 0;
     uint32_t irq;
 
     if (s->vsec < 0 || s->vnsec < 0 || s->vnsec >= NS_PER_SEC) {
         return -EINVAL;
     }
-    to_wait(s->vsec, s->vnsec, &sec, &sub);
-    if (on && (flags & TFD_TIMER_ABSTIME)) {
+    if (on && t->cpu_tg && (flags & TFD_TIMER_ABSTIME)) {
         int64_t now;
         int32_t nsec;
-        int32_t rc = clock_now(t->clock, &now, &nsec);
 
+        rc = clock_now(t->clock, &now, &nsec);
         if (rc != 0) {
             return rc;
         }
-        now = s->vsec - now;
-        nsec = s->vnsec - nsec;
-        if (nsec < 0) {
-            nsec += NS_PER_SEC;
-            now--;
+        wsec = s->vsec - now;
+        wnsec = s->vnsec - nsec;
+        if (wnsec < 0) {
+            wnsec += NS_PER_SEC;
+            wsec--;
         }
-        to_wait(now, nsec, &sec, &sub);
     }
+    to_wait(wsec, wnsec, &sec, &sub);
     to_wait(s->isec, s->insec, &isec, &isub);
     irq = spin_lock_irqsave(&timer_lock);
+    if (on && !t->cpu_tg) {
+        rc = read_now(base, &r);
+        if (rc != 0) {
+            spin_unlock_irqrestore(&timer_lock, irq);
+            return rc;
+        }
+    }
+    if (!t->tg) {
+        set_cancel(t, t->clock == CLOCK_REALTIME && (flags & TFD_TIMER_ABSTIME) &&
+                          (flags & TFD_TIMER_CANCEL_ON_SET));
+    }
     if (t->armed) {
         disarm(t);
     }
     if (t->tg) {
-        ptimer_settle(t);
+        ptimer_post_one(t);
+        t->gen = next_gen();
+        t->set_count = 0;
+        t->between = 0;
     } else {
         t->count = 0;
     }
     t->overrun = 0;
+    t->stepped = 0;
+    t->expired = 0;
+    if (!on && !t->tg) {
+        t->ins = ns_of(s->isec, s->insec);
+    }
     if (on && t->cpu_tg) {
         t->due = cpu_ticks_of(sec, sub);
         t->isec = isec;
@@ -542,15 +1199,10 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
         t->next = cpu_armed;
         cpu_armed = t;
     } else if (on) {
-        t->due = rtc_ticks_now() + 1u + ticks_of(sec, sub);
-        t->isec = isec;
-        t->isub = isub;
-        t->armed = 1;
-        t->next = armed;
-        armed = t;
+        rc = list_clock(t, base, flags, s, &r);
     }
     spin_unlock_irqrestore(&timer_lock, irq);
-    return 0;
+    return rc;
 }
 
 /**
@@ -697,144 +1349,342 @@ static process_t *thread_of(struct tgroup *tg, uint32_t tid)
     return p && p->tg == tg && p->state != PROC_ZOMBIE ? p : NULL;
 }
 
+/** `overrun` and `more` added, no more than INT_MAX, as Linux's
+ * timer_overrun_to_int limits it (kernel/time/posix-timers.c:237-242). */
+static uint32_t overrun_add(uint32_t overrun, uint64_t more)
+{
+    return more >= 0x7FFFFFFFu - (uint64_t)overrun ? 0x7FFFFFFFu : overrun + (uint32_t)more;
+}
+
 /** The thread the signal of the POSIX timer `t` goes to, or NULL for its
- * process: SIGEV_THREAD_ID's thread while it has not ended. */
+ * process: the thread SIGEV_THREAD_ID named, while it has not ended. */
 static process_t *ptimer_thread(const struct ktimer *t)
 {
     return t->notify == SIGEV_THREAD_ID ? thread_of(t->tg, t->tid) : NULL;
 }
 
-/** The siginfo kept for the signal number of `t` where its signal goes,
- * `thread` or, for NULL, the process, while a signal of that number is
- * pending there, whoever sent it; NULL otherwise. The caller holds the big
- * lock, under which signals are posted and taken. */
-static struct k_siginfo *ptimer_held(const struct ktimer *t, process_t *thread)
-{
-    uint64_t pending = thread ? thread->sig_pending : t->tg->pending;
-
-    if (!(pending & KSIG_BIT(t->signo))) {
-        return NULL;
-    }
-    return thread ? &thread->sig_info[t->signo] : &t->tg->info[t->signo];
-}
-
-/** The siginfo of the POSIX timer `t`'s own signal while it is pending, or
- * NULL: none for SIGEV_NONE, and none while the signal of its number pending
- * came from elsewhere. The caller holds the big lock. */
-static struct k_siginfo *ptimer_own_signal(const struct ktimer *t)
-{
-    struct k_siginfo *held;
-
-    if (t->notify == SIGEV_NONE) {
-        return NULL;
-    }
-    held = ptimer_held(t, ptimer_thread(t));
-    return held && held->code == SI_TIMER && held->pid == (uint32_t)t->id ? held : NULL;
-}
-
-/** `a` and `n` added, at most 0x7FFFFFFF, the largest overrun Linux
- * reports (`timer_overrun_to_int`, kernel/time/posix-timers.c:237-242). */
-static uint32_t overrun_add(uint32_t a, uint64_t n)
-{
-    if (a >= 0x7FFFFFFFu || n >= 0x7FFFFFFFu - a) {
-        return 0x7FFFFFFFu;
-    }
-    return a + (uint32_t)n;
-}
-
 /**
- * The signal of the POSIX timer `t`, whose expirations not yet signalled are
- * its `count`. With the timer's own signal not pending, the signal is posted
- * with all but the first as its overrun. While it is pending, the first
- * expiration of a setting that has not yet notified adds 1 to its overrun,
- * as Linux's `send_sigqueue` does for a signal already queued
- * (kernel/signal.c:2029-2036), and the setting's later intervals add
- * themselves, kept in `late`: Linux stops a periodic timer whose signal is
- * queued (`posix_timer_fn`, kernel/time/posix-timers.c:318-377) and adds
- * the intervals it missed at delivery (`posixtimer_rearm`, :258-279), which
- * a handler is given, and which timer_getoverrun then reads (:776-789).
- * While a signal of the same number from elsewhere is pending, the
- * expirations wait for the next. SIGEV_NONE posts nothing; a signal for a
- * thread SIGEV_THREAD_ID named that has ended goes to the process. The
- * caller holds the big lock and `timer_lock`.
+ * An expiration of the POSIX timer `t`, or `fresh` of them, which the
+ * setting in force (`gen`) has counted; or, with `fresh` 0, only the post
+ * of its waiting notification. Every expiration counts in `set_count`,
+ * which the signal's delivery adds to its overrun (`ptimer_rearm`).
+ *
+ * The signal is posted with SI_TIMER, the timer's id, its value, its own
+ * `key` and the setting, as Linux's posix_timer_queue_signal writes
+ * si_sys_private before send_sigqueue queues the timer's sigqueue with an
+ * overrun of 0 (kernel/time/posix-timers.c:281-305, kernel/signal.c:
+ * 2044-2050). While its signal is pending, the timer's own as its key says,
+ * or while its notification waits for another sender's signal of its
+ * number in `count`, an expiration is one more of the setting in force; or,
+ * when the queued notification is of an earlier setting, it adds one to
+ * that notification's overrun and makes it of this setting, as
+ * send_sigqueue increments si_overrun of a sigqueue still queued
+ * (kernel/signal.c:2034-2042). Linux stops the timer meanwhile, so no
+ * setting expires twice into it; here the ticks go on counting it, into
+ * `set_count`. A notification that waits is posted once that signal is
+ * taken (`ptimer_rearm`), oldest first (`wait_seq`). SIGEV_NONE posts
+ * nothing; a signal for a thread SIGEV_THREAD_ID named that has ended goes
+ * to the process.
+ *
+ * Returns whether the timer's next time may be armed between ticks: 1 when
+ * the signal is set pending now, or when the process ignores it, which
+ * posting drops, and the interval is a tick or more; 0 for SIGEV_NONE, a
+ * pending signal, or an ignored one of a shorter interval. Linux restarts a
+ * timer whose signal is pending only when that signal is delivered
+ * (posixtimer_rearm, kernel/time/posix-timers.c:258-279), which here arms
+ * it between ticks again (`ptimer_rearm`); restarts one whose signal is
+ * ignored at once, moved a tick on only when its interval is shorter
+ * (kernel/time/posix-timers.c:318-374), which here leaves it to the ticks;
+ * and never starts SIGEV_NONE's hrtimer (kernel/time/posix-timers.c:818).
+ * Meanwhile the ticks count the timer. The caller holds `timer_lock`, and
+ * the big lock, under which a signal is posted, unless `t` is SIGEV_NONE's.
  */
-static void ptimer_fire(struct ktimer *t)
+static int ptimer_fire(struct ktimer *t, uint64_t fresh)
 {
-    process_t *thread;
+    process_t *thread = ptimer_thread(t);
+    uint64_t pending = thread ? thread->sig_pending : t->tg->pending;
     struct k_siginfo *held;
     struct k_siginfo info;
-    uint64_t later = t->count != 0 ? t->count - 1u : 0;
 
     if (t->notify == SIGEV_NONE) {
         t->count = 0;
-        return;
+        t->set_count = 0;
+        return 0;
+    }
+    held = thread ? &thread->sig_info[t->signo] : &t->tg->info[t->signo];
+    t->set_count += fresh;
+    if (fresh != 0 && (pending & KSIG_BIT(t->signo)) && held->code == SI_TIMER &&
+        held->timer_key == t->key) {
+        if (held->timer_gen != t->gen) {
+            held->uid = overrun_add(held->uid, 1u);
+            held->timer_gen = t->gen;
+        }
+        return 0;
+    }
+    if (fresh != 0 && t->count == 0) {
+        t->count = 1;
+        t->count_gen = t->gen;
+        t->wait_seq = ++wait_order;
+    } else if (fresh != 0 && t->count_gen != t->gen) {
+        t->count = (uint64_t)overrun_add((uint32_t)(t->count - 1u), 1u) + 1u;
+        t->count_gen = t->gen;
+    }
+    if (t->count == 0 || (pending & KSIG_BIT(t->signo))) {
+        return 0;
+    }
+    k_memset(&info, 0, sizeof(info));
+    info.code = SI_TIMER;
+    info.pid = (uint32_t)t->id;           /* si_timerid, where a child's pid is */
+    info.uid = (uint32_t)(t->count - 1u); /* si_overrun */
+    info.value = t->value;                /* si_value */
+    info.status = (int32_t)t->value;
+    info.timer_gen = t->count_gen;
+    info.timer_key = t->key;
+    t->count = 0;
+    fire_cpu = arch_cpu_id() + 1u;
+    if (thread) {
+        signal_post_thread(thread, t->signo, &info);
+        pending = thread->sig_pending;
+    } else {
+        signal_post_info(t->tg->leader, t->signo, &info);
+        pending = t->tg->pending;
+    }
+    fire_cpu = 0;
+    if (!(pending & KSIG_BIT(t->signo))) {
+        t->set_count = 0; /* ignored: dropped, and no delivery counts it */
+    }
+    return (pending & KSIG_BIT(t->signo)) != 0 || t->ins >= (uint64_t)NS_PER_TICK;
+}
+
+/** `t` when its notification waits for the signal `signo`, which is no
+ * longer pending where `t` posts it, and it began to wait before `first`'s,
+ * or `first` has none; `first` otherwise. The caller holds `timer_lock`. */
+static struct ktimer *earlier(struct ktimer *first, struct ktimer *t, int signo)
+{
+    process_t *thread;
+    uint64_t pending;
+
+    if (t->count == 0 || t->notify == SIGEV_NONE || t->signo != signo ||
+        (first && first->wait_seq < t->wait_seq)) {
+        return first;
     }
     thread = ptimer_thread(t);
-    held = ptimer_held(t, thread);
-    if (held && (held->code != SI_TIMER || held->pid != (uint32_t)t->id)) {
-        return;
-    }
-    if (held) {
-        uint32_t before;
-
-        if (t->sent) {
-            later = t->count;
-        } else {
-            held->uid = overrun_add(held->uid, 1u);
-        }
-        before = held->uid;
-        held->uid = overrun_add(held->uid, later);
-        t->late += held->uid - before;
-    } else {
-        t->late = overrun_add(0, later);
-        k_memset(&info, 0, sizeof(info));
-        info.code = SI_TIMER;
-        info.pid = (uint32_t)t->id; /* si_timerid, where a child's pid is */
-        info.uid = t->late;         /* si_overrun */
-        info.value = t->value;      /* si_value */
-        info.status = (int32_t)t->value;
-        if (thread) {
-            signal_post_thread(thread, t->signo, &info);
-        } else {
-            signal_post_info(t->tg->leader, t->signo, &info);
-        }
-    }
-    t->sent = 1;
-    t->overrun = t->late;
-    t->count = 0;
+    pending = thread ? thread->sig_pending : t->tg->pending;
+    return pending & KSIG_BIT(signo) ? first : t;
 }
 
 /**
- * End the setting of the POSIX timer `t`, at timer_settime or timer_delete,
- * as Linux ends it. The later intervals the setting added to the timer's
- * pending signal are taken back out of its overrun, since Linux would add
- * them only at delivery, which no longer rearms the timer: the set moves
- * `it_requeue_pending` on (`posix_timer_set_common`,
- * kernel/time/posix-timers.c:871-883), and the delete frees the timer and
- * clears SIGQUEUE_PREALLOC on its queued signal (`sigqueue_free`,
- * kernel/signal.c:1961-1985), so `collect_signal` asks for no rearm
- * (:590-593). The overrun the signal holds otherwise, from earlier settings,
- * stays. An expiration the tick counted for a setting that has not yet
- * notified is that setting's notification, which Linux sent at expiry: it is
- * posted, or adds 1 to the pending signal, before the setting ends, and its
- * later intervals are dropped. The caller holds the big lock and
- * `timer_lock`, and the timer is disarmed.
+ * Post the notifications of `tg`'s timers, live or deleted (`timers_gone`),
+ * that wait for the signal `signo` where it is no longer pending, oldest
+ * first (`wait_seq`), as Linux's collect_signal delivers the first sigqueue
+ * of a number queued (kernel/signal.c:566-582), so that no later
+ * expiration overtakes one: each post sets the signal pending again where
+ * it goes, and those that wait there go on waiting. A live timer whose
+ * signal that sets pending is armed between ticks again. The caller holds
+ * `timer_lock`.
  */
-static void ptimer_settle(struct ktimer *t)
+static void post_waiting(struct tgroup *tg, int signo)
 {
-    struct k_siginfo *held = ptimer_own_signal(t);
+    struct ktimer *t, *first;
+    struct reading r;
+    int between;
 
-    ptimer_fire_cancel(t);
-    if (held) {
-        held->uid -= t->late < held->uid ? t->late : held->uid;
+    for (;;) {
+        first = NULL;
+        for (t = tg->timers; t; t = t->in_group) {
+            first = earlier(first, t, signo);
+        }
+        for (t = tg->timers_gone; t; t = t->in_group) {
+            first = earlier(first, t, signo);
+        }
+        if (!first) {
+            return;
+        }
+        between = ptimer_fire(first, 0);
+        if (first->armed && !first->cpu_tg && read_now(first->base, &r) == 0) {
+            first->between = between;
+            if (between) {
+                set_due(first, &r, 0);
+            }
+        }
     }
-    if (t->count != 0 && !(held && t->sent)) {
-        t->count = 1;
-        ptimer_fire(t);
+}
+
+/** Take off `tg`'s `timers_gone` each deleted timer whose notification no
+ * longer waits, and return them, on their `in_group`, for the caller to
+ * free once it lets `timer_lock` go, which it holds. */
+static struct ktimer *gone_reap(struct tgroup *tg)
+{
+    struct ktimer *t, **link = &tg->timers_gone, *done = NULL;
+
+    while (*link) {
+        t = *link;
+        if (t->count == 0) {
+            *link = t->in_group;
+            t->in_group = done;
+            done = t;
+        } else {
+            link = &t->in_group;
+        }
     }
-    t->count = 0;
-    t->sent = 0;
-    t->late = 0;
+    return done;
+}
+
+/** Free the deleted timers `done`, linked on their `in_group`. */
+static void gone_free(struct ktimer *done)
+{
+    struct ktimer *t;
+
+    while (done) {
+        t = done;
+        done = t->in_group;
+        kfree(t);
+    }
+}
+
+/**
+ * The signal `signo` of the process `tg`, whose siginfo is `info`, has
+ * been taken off its pending signals, with interrupts off since then, so
+ * that no tick posts the timer's signal again before its overrun is counted,
+ * as dequeue_signal rearms the timer before it lets interrupts on
+ * (kernel/signal.c:682-699). When it is a periodic timer's own (`key`),
+ * posted or last added to for the setting in force (`gen`), as
+ * posixtimer_rearm compares si_sys_private with it_requeue_pending
+ * (kernel/time/posix-timers.c:267), the intervals the timer's clock has
+ * passed are counted, its time moves past the clock and is armed between
+ * ticks again, and the setting's expirations since its signal was queued
+ * (`set_count`), less the one the signal stands for, are added to the
+ * signal's overrun and become the timer's `overrun`, as posixtimer_rearm
+ * forwards and restarts the timer, sets it_overrun_last from it_overrun and
+ * adds that to si_overrun, for a periodic timer alone (kernel/time/
+ * posix-timers.c:237-242, 244-251, 258-279). A signal of an earlier
+ * setting, or of a deleted timer, adds none and forwards nothing, as
+ * Linux's posix_timer_set_common resets it_overrun and collect_signal
+ * rearms no sigqueue that has lost SIGQUEUE_PREALLOC (kernel/time/
+ * posix-timers.c:879-882, kernel/signal.c:589-593). A timer of processor
+ * time has its expirations counted at every tick charged, so only its
+ * overrun is taken. Then the notifications that waited for the signal are
+ * posted (`post_waiting`), and a deleted timer whose notification no longer
+ * waits is freed. The interrupt between ticks is programmed once for them
+ * all (`timer_wake_hold`). Called without `timer_lock`.
+ */
+void ptimer_rearm(struct tgroup *tg, int signo, struct k_siginfo *info)
+{
+    uint32_t irq;
+    struct ktimer *t, *done;
+    struct reading r;
+
+    if (!tg->timers && !tg->timers_gone) {
+        return;
+    }
+    irq = spin_lock_irqsave(&timer_lock);
+    timer_wake_hold();
+    for (t = tg->timers; t; t = t->in_group) {
+        int periodic = t->cpu_tg ? t->isec != 0 || t->isub != 0 : t->ins != 0;
+
+        if (t->notify == SIGEV_NONE || t->signo != signo || info->code != SI_TIMER ||
+            info->timer_key != t->key || info->timer_gen != t->gen) {
+            continue;
+        }
+        if (!t->armed || !periodic) {
+            t->set_count = 0;
+        } else if (t->cpu_tg || read_now(t->base, &r) == 0) {
+            if (!t->cpu_tg && r.clock >= t->end) {
+                t->set_count += forward_end(t, r.clock);
+            }
+            if (t->set_count != 0) {
+                info->uid = overrun_add(info->uid, t->set_count - 1u);
+            }
+            t->overrun = t->set_count != 0 ? overrun_add(0, t->set_count - 1u) : 0;
+            t->set_count = 0;
+            if (!t->cpu_tg) {
+                t->between = 1;
+                set_due(t, &r, 0);
+            }
+        }
+        break;
+    }
+    post_waiting(tg, signo);
+    done = gone_reap(tg);
+    timer_wake_release();
+    spin_unlock_irqrestore(&timer_lock, irq);
+    gone_free(done);
+}
+
+/**
+ * The signals `bits` of the process `tg` have been discarded, its and each
+ * of its threads': a disposition that ignores them, or a stop or SIGCONT
+ * that cancels the other. Each notification of a POSIX timer of those
+ * signals that waits goes too, and with it a deleted timer's record, and a
+ * live timer's expirations since its signal was queued (`set_count`), as
+ * Linux's flush_sigqueue_mask takes every sigqueue of those numbers off the
+ * queues (kernel/signal.c:782-798, 915-931, 4249-4255). With interrupts
+ * off; `timer_lock` is taken here unless this processor holds it to post a
+ * signal (`fire_cpu`), whose job control discards the others, when the
+ * records are left on `timers_gone` with nothing waiting, to be freed by
+ * the next dequeue of the process's signals (`ptimer_rearm`).
+ */
+void ptimer_discard(struct tgroup *tg, uint64_t bits)
+{
+    int held = fire_cpu == arch_cpu_id() + 1u;
+    struct ktimer *t, *done = NULL;
+    uint32_t irq = 0;
+
+    if (!tg->timers && !tg->timers_gone) {
+        return;
+    }
+    if (!held) {
+        irq = spin_lock_irqsave(&timer_lock);
+    }
+    for (t = tg->timers; t; t = t->in_group) {
+        if (t->notify != SIGEV_NONE && (bits & KSIG_BIT(t->signo))) {
+            t->count = 0;
+            t->set_count = 0;
+        }
+    }
+    for (t = tg->timers_gone; t; t = t->in_group) {
+        if (bits & KSIG_BIT(t->signo)) {
+            t->count = 0;
+        }
+    }
+    if (!held) {
+        done = gone_reap(tg);
+        spin_unlock_irqrestore(&timer_lock, irq);
+        gone_free(done);
+    }
+}
+
+/** The number of `tg`'s POSIX timers, those deleted whose notifications
+ * still wait (`timers_gone`) among them. The caller holds `timer_lock`. */
+static int ptimer_count(const struct tgroup *tg)
+{
+    const struct ktimer *t;
+    int n = 0;
+
+    for (t = tg->timers; t; t = t->in_group) {
+        n++;
+    }
+    for (t = tg->timers_gone; t; t = t->in_group) {
+        n += t->count != 0;
+    }
+    return n;
+}
+
+/** The lowest id `tg` has no timer of, or PTIMER_MAX when it has PTIMER_MAX
+ * timers, deleted ones whose notifications wait among them (`ptimer_count`).
+ * The caller holds `timer_lock`. */
+static int free_id(const struct tgroup *tg)
+{
+    const struct ktimer *t;
+    int id = 0;
+
+    if (ptimer_count(tg) >= PTIMER_MAX) {
+        return PTIMER_MAX;
+    }
+    for (t = tg->timers; t && t->id == id; t = t->in_group) {
+        id++;
+    }
+    return id;
 }
 
 /** The calling process's POSIX timer `id`, or NULL. */
@@ -865,7 +1715,10 @@ static int32_t ptimer_clock(struct ktimer *t, int clock)
  * store can sleep in a page fault, which the timers' lock cannot be held
  * across, and a timer already listed could be deleted by another thread
  * meanwhile. A thread that takes the id while the store sleeps has the next
- * free one tried.
+ * free one tried. A deleted timer whose notification still waits counts
+ * against PTIMER_MAX until it is posted or discarded, as the sigqueue
+ * Linux leaves queued counts against RLIMIT_SIGPENDING until it is freed
+ * (kernel/signal.c:428, 444-450, 1956-1959).
  */
 long sys_timer_create(struct isr_params *params)
 {
@@ -904,10 +1757,7 @@ long sys_timer_create(struct isr_params *params)
     }
     for (;;) {
         irq = spin_lock_irqsave(&timer_lock);
-        id = 0;
-        for (link = &tg->timers; *link && (*link)->id == id; link = &(*link)->in_group) {
-            id++;
-        }
+        id = free_id(tg);
         spin_unlock_irqrestore(&timer_lock, irq);
         if (id >= PTIMER_MAX ||
             copy_to_user((void __user *)SC_ARG(params, 2), &id, sizeof(id)) != 0) {
@@ -918,7 +1768,7 @@ long sys_timer_create(struct isr_params *params)
         irq = spin_lock_irqsave(&timer_lock);
         for (link = &tg->timers; *link && (*link)->id < id; link = &(*link)->in_group) {
         }
-        if (!*link || (*link)->id != id) {
+        if ((!*link || (*link)->id != id) && ptimer_count(tg) < PTIMER_MAX) {
             break;
         }
         spin_unlock_irqrestore(&timer_lock, irq);
@@ -930,6 +1780,7 @@ long sys_timer_create(struct isr_params *params)
     t->signo = ev.signo;
     t->value = SC_ARG(params, 1) ? ev.value : (uintptr_t)id;
     t->tid = (uint32_t)ev.tid;
+    t->key = next_gen();
     t->in_group = *link;
     *link = t;
     spin_unlock_irqrestore(&timer_lock, irq);
@@ -991,32 +1842,44 @@ long sys_timer_getoverrun(struct isr_params *params)
 
 /**
  * Take the timer `link` names out of its process's list, disarmed, let go
- * of the process whose time it counts, and free it. While the process has a
- * thread left, its setting ends first as `ptimer_settle` says: freeing the
- * timer leaves a signal already queued to be delivered, without the later
- * intervals (`posix_timer_free`, kernel/time/posix-timers.c:424-429, and
- * `sigqueue_free`, kernel/signal.c:1961-1985), at timer_delete and at exec's
- * `exit_itimers` alike (fs/exec.c:1226, kernel/time/posix-timers.c:1119-1134).
- * After the last thread has ended nothing is posted, since none is left to
- * take it. The caller holds the big lock.
+ * of the process whose time it counts, and free it; or, with `keep`, when
+ * its notification waits for another sender's signal of its number
+ * (`ptimer_fire`), keep it on the process's `timers_gone` until that signal
+ * is taken and it is posted (`ptimer_rearm`), or it is discarded
+ * (`ptimer_discard`), as Linux's sigqueue_free leaves a queued sigqueue to
+ * be delivered (kernel/signal.c:1961-1984). The notification keeps only
+ * its own overrun, since no delivery forwards a deleted timer. With `keep`,
+ * an expiration the tick counted and left for a holder of the big lock
+ * (`ptimer_fire_later`) is signalled first, as Linux signalled it at the
+ * expiry; without it, at an exec, whose signals of the timers go, and when
+ * the last thread has ended, it is dropped. The caller holds the big lock.
  */
-static void ptimer_free(struct ktimer **link)
+static void ptimer_free(struct ktimer **link, int keep)
 {
     struct ktimer *t = *link;
+    struct tgroup *cpu_tg = t->cpu_tg;
     uint32_t irq = spin_lock_irqsave(&timer_lock);
 
     if (t->armed) {
         disarm(t);
     }
-    if (t->tg->live != 0) {
-        ptimer_settle(t);
+    if (keep) {
+        ptimer_post_one(t);
     } else {
-        ptimer_fire_cancel(t);
+        (void)ptimer_fire_cancel(t);
     }
     *link = t->in_group;
+    t->cpu_tg = NULL;
+    keep = keep && t->count != 0 && t->notify != SIGEV_NONE;
+    if (keep) {
+        t->in_group = t->tg->timers_gone;
+        t->tg->timers_gone = t;
+    }
     spin_unlock_irqrestore(&timer_lock, irq);
-    tgroup_put(t->cpu_tg);
-    kfree(t);
+    tgroup_put(cpu_tg);
+    if (!keep) {
+        kfree(t);
+    }
 }
 
 long sys_timer_delete(struct isr_params *params)
@@ -1029,13 +1892,43 @@ long sys_timer_delete(struct isr_params *params)
     if (!*link) {
         return -EINVAL;
     }
-    ptimer_free(link);
+    ptimer_free(link, 1);
     return 0;
 }
 
 void ptimer_delete_all(struct tgroup *tg)
 {
     while (tg->timers) {
-        ptimer_free(&tg->timers);
+        ptimer_free(&tg->timers, 0);
     }
+    while (tg->timers_gone) {
+        ptimer_free(&tg->timers_gone, 0);
+    }
+}
+
+/**
+ * Then each signal of SI_TIMER pending for `self` or for its process is
+ * discarded, as Linux 6.12.115's flush_itimer_signals takes every queued
+ * SI_TIMER sigqueue off the thread's and the process's queues
+ * (kernel/signal.c:483-516), so that the new image takes no signal of a
+ * timer it never made; a signal whose siginfo is another sender's stays.
+ * The thread's mark of signal work may stay set, as Linux leaves
+ * TIF_SIGPENDING, and finds nothing.
+ */
+void ptimer_exec(process_t *self)
+{
+    uint32_t irq;
+    int signo;
+
+    ptimer_delete_all(self->tg);
+    irq = kirq_save();
+    for (signo = 1; signo <= KSIG_MAX; signo++) {
+        if (self->tg->info[signo].code == SI_TIMER) {
+            self->tg->pending &= ~KSIG_BIT(signo);
+        }
+        if (self->sig_info[signo].code == SI_TIMER) {
+            self->sig_pending &= ~KSIG_BIT(signo);
+        }
+    }
+    kirq_restore(irq);
 }

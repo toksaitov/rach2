@@ -40,13 +40,32 @@ or disarms it when
 is zero; the setting it replaces goes to
 .Fa old
 when that is not NULL.
-An absolute time already past expires at the next tick.
-.Dv TFD_TIMER_CANCEL_ON_SET
-is accepted and does nothing: a change of the real-time clock does not
-move an armed timer.
+An absolute time already past expires at once, by the interrupt between
+ticks below, or at the next tick where there is none.
+.Dv TFD_TIMER_CANCEL_ON_SET ,
+with
+.Dv TFD_TIMER_ABSTIME
+on a timer of
+.Dv CLOCK_REALTIME ,
+makes the timer canceled at each setting of the clock, until a setting of
+the timer without them, though not at the offsets of
+.Fn adjtimex
+that Linux slews,
+.Dv ADJ_OFFSET
+and
+.Dv ADJ_OFFSET_SINGLESHOT :
+its next read fails with
+.Er ECANCELED ,
+and its next
+.Fn timerfd_settime
+that arms it arms it and fails with
+.Er ECANCELED ,
+without writing
+.Fa old .
 .Fn timerfd_gettime ,
-number 326 on i386 and 287 on x86-64, reports the time to the next expiration and the interval,
-zeros for a disarmed timer.
+number 326 on i386 and 287 on x86-64, reports the time to the next expiration and the interval:
+a disarmed timer has no time left and keeps the interval it was last set
+with, as in Linux.
 The i386 64-bit time forms are numbers 411 and 410; x86-64 has none, since
 its times are 64 bits already.
 .Pp
@@ -56,28 +75,76 @@ of eight bytes returns the number of expirations since the last read or
 setting, and waits while there are none, or fails with
 .Er EAGAIN
 for a nonblocking descriptor.
+A read of a periodic timer whose counted expiration a setting of the
+clock back, or an offset of
+.Fn adjtimex
+back, has taken away, as below, returns 0, and does not wait, or fails
+with
+.Er EAGAIN
+for a nonblocking descriptor, as in Linux.
 The count is taken before it is copied to the caller, as in Linux: an
 expiration during the copy is kept for the next read, and a read whose
 buffer cannot be written fails with
 .Er EFAULT
 and loses the count it took.
+A setting of the clock makes a canceled timer readable.
+A read of it drops its count and fails with
+.Er ECANCELED ,
+at once when the descriptor is nonblocking and otherwise once the timer
+has expired or the clock was set again since a setting of the timer;
+a periodic timer goes on, unless it expired and no read,
+.Fn timerfd_settime
+or
+.Fn timerfd_gettime
+came since, when it stays disarmed until it is set again, as in Linux.
 .Xr poll 2
 and
 .Xr epoll 2
-report the descriptor readable while there are expirations to read.
+report the descriptor readable while there are expirations to read or the
+clock was set since the last read or setting of a canceled timer.
 .Pa /proc/ Ns Ar pid Ns Pa /fd
 names it
 .Dq anon_inode:[timerfd] .
 .Pp
-The kernel keeps time in 1 ms ticks: an expiration and an interval are
-rounded up to whole ticks, counted from the tick the monotonic clock is
-in, a tick whose interrupt has not yet been taken included, and the tick in
-progress is not counted, so a timer never expires early by that clock.
-A time of any length up to 4294967295 seconds, about 136 years, is kept
-whole, and
+A timer keeps its time and interval to the nanosecond, as Linux does, and
 .Fn timerfd_gettime
-reports it; a longer one is taken as that many seconds, as Linux takes a
-time past its own limit of about 292 years.
+reports both so.
+A timer expires when its clock reaches its time, as Linux's
+high-resolution timers expire, never earlier: the kernel arms its local
+APIC timer to interrupt at that time between its 1 ms ticks.
+Where that timer is not the tick, or before a reference counter keeps the
+clock, a timer expires at the first tick at or after its time, measured
+from the clock's place within the tick in progress, and is late by under a
+tick.
+A periodic timer counts its expirations from the time and interval it was
+given: a read returns every interval that has ended since the time, so one
+armed for an absolute time long past counts each interval since that time.
+As in Linux, a periodic timer stops at an expiration until a read,
+.Fn timerfd_gettime
+or a setting, which moves its time on past the clock as it reads then and
+counts the intervals passed; after a setting of the clock back before the
+expiration, that takes the expiration back, and the timer is due again at
+the time it stopped at.
+.Dv ADJ_OFFSET
+and
+.Dv ADJ_OFFSET_SINGLESHOT
+of
+.Fn adjtimex
+take it back too when the offset is negative, unlike Linux, since this
+kernel steps the clock by such an offset where Linux slews it and its clock
+never goes back.
+A relative timer of
+.Dv CLOCK_REALTIME
+runs by
+.Dv CLOCK_MONOTONIC ,
+as Linux's does, so setting the clock does not move it; an absolute one
+moves with the clock, as in Linux: a setting past its time expires it at
+once, by the interrupt between ticks, or at the next tick where there is
+none, and a setting back keeps it waiting until the clock reaches its time
+again.
+A relative time or an interval of any length up to 4294967295 seconds,
+about 136 years, is kept whole; a longer one is taken as that many seconds,
+as Linux takes a time past its own limit of about 292 years.
 .Pp
 On x86-64 the timerfd calls take itimerspecs of 64-bit fields, and there
 are no time64 forms.
@@ -87,10 +154,13 @@ returns the descriptor, and the others 0; each returns -1 with
 .Va errno
 set on failure.
 .Sh ERRORS
-.Bl -tag -width EMFILE
+.Bl -tag -width ECANCELED
 .It Er EBADF
 .Fa fd
 is not an open descriptor.
+.It Er ECANCELED
+The real-time clock was set while the timer was set with
+.Dv TFD_TIMER_CANCEL_ON_SET .
 .It Er EFAULT
 A
 .Vt struct itimerspec

@@ -43,6 +43,24 @@ uint64_t tick_count(void)
     return kernel_ticks;
 }
 
+/** Nothing: no sleeper here has a time between ticks to arm. */
+void timer_wake_at(int64_t ns)
+{
+    (void)ns;
+}
+
+/** 0: no sleeper here has a time between ticks to reach. */
+int64_t rtc_monotonic_ns(void)
+{
+    return 0;
+}
+
+/** The real-time clock's step count, which no row moves (`rtc_step_count`). */
+uint32_t rtc_step_count(void)
+{
+    return 1u;
+}
+
 const struct vfs_type vfs_krffs_type = {0, 0, 0, 1, 0, 0};
 static const struct vfs_type other_type = {0, 0, 0, 1, 0, 0};
 static const struct vfs_type plain_type = {0, 0, 0, 0, 0, 0};

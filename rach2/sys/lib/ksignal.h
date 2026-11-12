@@ -115,7 +115,14 @@ struct k_siginfo {
     uintptr_t addr;
     uintptr_t value;
     int32_t err;
-    uint32_t pkey; /* the protection key of a SIGSEGV with SEGV_PKUERR */
+    uint32_t pkey;      /* the protection key of a SIGSEGV with SEGV_PKUERR */
+    uint32_t timer_gen; /* a POSIX timer's SI_TIMER signal: the setting it
+                         * was posted for (`ptimer_rearm`), as Linux's
+                         * si_sys_private, which no user writes or reads;
+                         * 0 for every other signal */
+    uint32_t timer_key; /* a POSIX timer's SI_TIMER signal: the timer that
+                         * posted it (`key`), whose later expirations add to
+                         * it while it is pending; 0 for every other signal */
 };
 
 /*
