@@ -130,6 +130,14 @@ int xhci_port_status(struct xhci_ctrl *hc, int port, struct usb_port_status *out
     return 0;
 }
 
+/** Return `port_present`, as `xhci_port_status` reports the port. */
+int xhci_port_connected(struct xhci_ctrl *hc, int port)
+{
+    (void)hc;
+    (void)port;
+    return port_present;
+}
+
 /** Return 0: no root port has settled. */
 int xhci_port_settled(struct xhci_ctrl *hc, int port)
 {

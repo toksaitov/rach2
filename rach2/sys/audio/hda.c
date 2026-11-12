@@ -215,6 +215,18 @@ static uint32_t ring_write(const uint8_t *data, uint32_t count)
 /* Playback state */
 static bool playing = false;
 static bool stream_started = false; /* True once hardware stream is running */
+/* Whether the output stream's interrupt has come since its start, and the
+ * low half of `kernel_ticks` when it last came; `hda_tick` asks for the
+ * stream's service only until one has come, when the next is late
+ * (`hda_irq_late`), and while play_irq_pending is set. That is set by the
+ * interrupt and cleared by a service that finds a period played: an
+ * interrupt that comes while the position still reads the period before,
+ * as Linux's azx_position_check finds one (sound/pci/hda/hda_intel.c:612-625
+ * of 6.12.115), leaves it set, and the tick asks again until the position
+ * has passed into the next period. */
+static bool play_irq_seen = false;
+static bool play_irq_pending = false;
+static uint32_t play_irq_tick = 0;
 static audio_callback_t user_callback = NULL;
 
 /* Requested format/rate from AUDIO_START (userspace). */
@@ -301,14 +313,22 @@ static volatile uint32_t missed_revolutions = 0;
  * acknowledges the stream and calls snd_pcm_period_elapsed, which wakes the
  * writer, whose own call copies into the ring
  * (sound/pci/hda/hda_controller.c:1056 and 1070, sound/core/pcm_lib.c:232
- * and 2274, Linux 6.12.115). `service_wanted` holds the HDA_SERVE_ bits
- * asked for since the thread last took them; the interrupt, the tick and the
- * thread all hold the big lock. service_thread is NULL until the first
- * program has its pid, and always in the host test; until then, and while
- * the scheduler is off, the service runs where it is asked for.
+ * and 2274, Linux 6.12.115). The thread also polls the jacks
+ * (HDA_SERVE_JACKS) and stops the beep generator and turns off the pins a
+ * beep opened (HDA_SERVE_BEEP), which the tick asks for when they are due,
+ * as Linux polls the jacks from a delayed work and sends the beep's verbs
+ * from a work (sound/pci/hda/hda_codec.c:645-659,
+ * sound/pci/hda/hda_beep.c:45-51 and 118 of 6.12.115). `service_wanted`
+ * holds the HDA_SERVE_ bits asked for since the thread last took them; the
+ * interrupt, the tick and the thread all hold the big lock. service_thread
+ * is NULL until the first program has its pid, and always in the host test;
+ * until then, and while the scheduler is off, the service runs where it is
+ * asked for.
  */
 #define HDA_SERVE_CAPTURE   1u
 #define HDA_SERVE_PLAY      2u
+#define HDA_SERVE_JACKS     4u
+#define HDA_SERVE_BEEP      8u
 /* The thread's priority under SCHED_FIFO, Linux's for an interrupt's thread
  * (sched_set_fifo, MAX_RT_PRIO / 2, kernel/sched/syscalls.c:873, called by
  * irq_thread at kernel/irq/manage.c:1310), so that a refill is not queued
@@ -788,11 +808,15 @@ static void hda_play_signal(void)
  * Refill every DMA period played since the last call.
  *
  * Called from the service's thread with interrupts on, or, before it runs,
- * from the stream's interrupt and every timer tick (hda_service_kick) with
- * them off. The play position, from the position buffer or
- * LPIB, names the period playing; the periods from the one playing at the
- * last call up to this one have been played, and are filled in that order, so
- * that they play after the periods filled before them.
+ * from the stream's interrupt and the timer tick (hda_service_kick) with
+ * them off. Either the interrupt asks for it, or the tick does until the
+ * stream's first interrupt, while an interrupt is pending and whenever the
+ * next is late (hda_tick). A call that finds a period played clears
+ * play_irq_pending; one that finds none leaves it as the interrupt set it.
+ * The play position, from the position buffer or LPIB, names the period
+ * playing; the periods from the one playing at the last call up to this one
+ * have been played, and are filled in that order, so that they play after
+ * the periods filled before them.
  *
  * Interrupts are off only around the reads and updates of the state that
  * hda_play_delay and hda_delay_at read, the position, hw_period_last,
@@ -883,6 +907,8 @@ static void hda_service_stream(void)
     lpib_last = pos;
     walclk_last = now;
     hw_period_last = first % HDA_PERIODS;
+    if (count > 0)
+        play_irq_pending = false;
 
     for (i = 0; i < count; i++) {
         index = (first + i) % HDA_PERIODS;
@@ -1321,7 +1347,8 @@ static bool hda_verb_wait(struct hda_verb_wait *w)
 }
 
 /* hda_verb's `mode`: wait for the interface, or give up at once when it is
- * busy, as a caller in the tick must. */
+ * busy, as a caller in the tick must, and the jacks' and the beep's
+ * services, which may run there. */
 #define HDA_VERB_WAIT 0
 #define HDA_VERB_TRY  1
 
@@ -1335,7 +1362,8 @@ static bool hda_verb_wait(struct hda_verb_wait *w)
  * interrupts off only while a register is read or written: the waits between
  * polls run with the caller's interrupts, so a verb sent from a system call
  * does not hold off the tick. The tick may stop such a verb half-way, so a
- * caller in the tick or another interrupt passes HDA_VERB_TRY, which gives up
+ * caller in the tick or another interrupt, or in a service that may run
+ * there, passes HDA_VERB_TRY, which gives up
  * when the lock is held or the interface is still busy with a command before
  * it; waiting there would never end, or end too late for the tick.
  *
@@ -1687,16 +1715,19 @@ static uint8_t cap_out[HDA_CAPTURE_PERIOD]; /* a period in the reader's format *
 static struct spinlock cap_lock = SPINLOCK_INIT_NAMED("cap_lock");
 static audio_stream_t *cap_stream = NULL; /* the open input stream, or NULL */
 static volatile bool cap_running = false;
-static uint16_t cap_format = 0;   /* the stream format word stream_setup chose */
-static uint32_t cap_asked = 0;    /* the rate stream_setup was asked for */
-static uint32_t cap_period = 0;   /* bytes of one DMA period; 0 before a setup */
-static uint32_t cap_periods = 0;  /* periods in the DMA buffer */
-static uint32_t cap_frame = 4;    /* bytes of one frame in the DMA buffer */
-static uint32_t cap_next = 0;     /* the period the service hands over next */
-static uint32_t cap_pos = 0;      /* the position at the last service, bytes */
-static uint32_t cap_clock = 0;    /* the wall clock at the last service */
-static uint32_t cap_recorded = 0; /* frames recorded up to `cap_pos` */
-static uint32_t cap_handed = 0;   /* frames handed to the reader */
+static uint16_t cap_format = 0;      /* the stream format word stream_setup chose */
+static uint32_t cap_asked = 0;       /* the rate stream_setup was asked for */
+static uint32_t cap_period = 0;      /* bytes of one DMA period; 0 before a setup */
+static uint32_t cap_periods = 0;     /* periods in the DMA buffer */
+static uint32_t cap_frame = 4;       /* bytes of one frame in the DMA buffer */
+static uint32_t cap_next = 0;        /* the period the service hands over next */
+static uint32_t cap_pos = 0;         /* the position at the last service, bytes */
+static uint32_t cap_clock = 0;       /* the wall clock at the last service */
+static uint32_t cap_recorded = 0;    /* frames recorded up to `cap_pos` */
+static uint32_t cap_handed = 0;      /* frames handed to the reader */
+static bool cap_irq_seen = false;    /* the input stream's, as `play_irq_seen`, */
+static bool cap_irq_pending = false; /* `play_irq_pending` */
+static uint32_t cap_irq_tick = 0;    /* and `play_irq_tick` */
 
 static void hda_service_capture(void);
 static uint32_t hda_input_position(void);
@@ -1704,7 +1735,7 @@ static void hda_capture_stop(audio_stream_t *s);
 static bool hda_input_ready(void);
 static void hda_find_jacks(void);
 static void hda_find_beep(void);
-static void hda_beep_tick(uint32_t passed);
+static void hda_beep_service(void);
 
 /* The PCI subsystem, vendor in the high half, which names a machine's
  * quirks; hda_init reads it. */
@@ -2373,14 +2404,21 @@ static void hda_irq_handler(isr_params_t *params)
     if (num_input_streams > 0 && (intsts & (1u << input_stream_index))) {
         sd_sts = hda_read8(hda_sd_offset(input_stream_index) + HDA_SD_STS);
         hda_write8(hda_sd_offset(input_stream_index) + HDA_SD_STS, sd_sts);
+        if (cap_running) {
+            cap_irq_seen = cap_irq_pending = true;
+            cap_irq_tick = (uint32_t)kernel_ticks;
+        }
         wanted |= HDA_SERVE_CAPTURE;
     }
     if (intsts & (1 << output_stream_index)) {
         sd_sts = hda_read8(hda_sd_offset(output_stream_index) + HDA_SD_STS);
         hda_write8(hda_sd_offset(output_stream_index) + HDA_SD_STS, sd_sts);
         irq_count++;
-        if (playing && stream_started)
+        if (playing && stream_started) {
+            play_irq_seen = play_irq_pending = true;
+            play_irq_tick = (uint32_t)kernel_ticks;
             wanted |= HDA_SERVE_PLAY;
+        }
     }
     if (wanted)
         hda_service_kick(wanted);
@@ -3187,8 +3225,9 @@ static void hda_check_dma(int stream)
 /*
  * Jack detection. The headphone pin and the microphone jack's pin, each
  * where its caps have presence detect and its configuration does not deny
- * it, are polled from the tick every quarter second (hda_poll_jacks), with
- * verbs that give up when the interface is in use (HDA_VERB_TRY). A reading
+ * it, are polled every quarter second (hda_poll_jacks), by the service the
+ * tick asks for (hda_tick), with verbs that give up when the interface is in
+ * use (HDA_VERB_TRY). A reading
  * that differs from a jack's state changes it only when the next reading
  * agrees, so a plug half-way in does not move the sound back and forth; a
  * reading whose verb fails changes nothing. A start reads every pin's sense
@@ -3200,14 +3239,16 @@ static void hda_check_dma(int stream)
  * of the microphone jack moves capture between the internal mic and the jack
  * mic (hda_follow_mic), at once when the input stream runs.
  *
- * Code that programs the pins outside the tick holds the jacks for that time
- * (hda_jack_hold), and the tick, which takes jack_lock with a try, polls
- * only when nothing holds them, so that the two never set a pin in turn.
+ * Code that programs the pins outside the jacks' and the beep's services
+ * holds the jacks for that time (hda_jack_hold), and the services, which
+ * take jack_lock with a try (hda_jacks_held), set pins only when nothing
+ * holds them, so that the two never set a pin in turn.
  */
 #define HDA_JACK_TICKS (TICK_HZ / 4 > 0 ? TICK_HZ / 4 : 1)
 
 static struct spinlock jack_lock = SPINLOCK_INIT_NAMED("jack_lock");
-static int jack_holds = 0;          /* regions outside the tick that program the pins */
+static int jack_holds = 0;          /* regions outside the services that program
+                                       the pins */
 static uint32_t jack_ticks = 0;     /* ticks since the last poll */
 static int8_t jack_seen[HDA_JACKS]; /* a reading that differs from the state and
                                        waits for a second, or HDA_JACK_UNKNOWN */
@@ -3223,10 +3264,11 @@ static uint8_t mic_left = 0;        /* the pin capture moved from, whose input t
 /*
  * The beep generator (hda_beep), found at enumeration. With no stream
  * playing the output pins are off, so a beep turns them on as a start does,
- * and the tick turns them off again once the generator has been silent for
- * HDA_BEEP_IDLE_TICKS, so that a run of bells does not switch the pins
- * between bells. The pins and beep_opened change only with the jacks held
- * or under jack_lock.
+ * and the service the tick asks for turns them off again once the generator
+ * has been silent for HDA_BEEP_IDLE_TICKS (hda_beep_service), so that a run
+ * of bells does not switch the pins between bells. The pins and beep_opened
+ * change only with the jacks held or in that service, which runs only when
+ * nothing holds them.
  */
 #define HDA_BEEP_IDLE_TICKS (TICK_HZ > 0 ? TICK_HZ : 1) /* one second */
 
@@ -3239,12 +3281,14 @@ static volatile uint8_t beep_div = 0;     /* the divider sounding; 0 silent */
 static volatile bool beep_opened = false; /* a beep turned the output pins on
                                              with no stream playing */
 static uint32_t beep_quiet = 0;           /* ticks silent since, while opened */
+static volatile bool beep_stop = false;   /* the tick's stop of the generator
+                                             waits for the beep's service */
 
 static bool hda_input_program(int vmode, bool live);
 static uint8_t hda_source_route(int source, bool take);
 
-/** Count a region outside the tick that programs the codec's pins; the tick
- * polls no jack until hda_jack_release ends it. */
+/** Count a region outside the jacks' and the beep's services that programs
+ * the codec's pins; the services set no pin until hda_jack_release ends it. */
 static void hda_jack_hold(void)
 {
     uint32_t flags = kirq_save();
@@ -3268,7 +3312,7 @@ static void hda_jack_release(void)
 
 /**
  * Send `verb` to `nid` in `vmode` (hda_verb) as one of a sequence, setting
- * `*ok` false when it fails. In HDA_VERB_TRY mode, the tick's, a sequence
+ * `*ok` false when it fails. In HDA_VERB_TRY mode, the services', a sequence
  * stops at its first failure, since the interface is in use or the codec
  * does not answer, and the caller sends it again at its next poll; in
  * HDA_VERB_WAIT mode the rest is still sent.
@@ -3438,42 +3482,51 @@ static int8_t hda_jack_sense(int j)
 }
 
 /**
- * Poll the jacks, from the tick with interrupts off, every HDA_JACK_TICKS
- * ticks: read each one's sense, and then move the output while a stream
- * plays in the automatic mode and the headphones' routing differs from the
- * jack, and capture after a change of the microphone jack. Nothing is done
- * while code outside the tick holds the jacks, and what a failed verb left
- * undone is done again at the next poll. `passed` is the ticks since the
- * last call (hda_tick).
+ * Whether code outside the service holds the jacks (hda_jack_hold), or is
+ * taking or releasing them, so that the service leaves the pins alone.
+ * jack_lock is taken with a try, since the service may run in the tick,
+ * which may have interrupted a hold on its own processor.
  */
-static void hda_poll_jacks(uint32_t passed)
+static bool hda_jacks_held(void)
 {
-    uint32_t flags;
+    uint32_t flags = kirq_save();
+    bool held = true;
+
+    if (spin_trylock(&jack_lock)) {
+        held = jack_holds != 0;
+        spin_unlock(&jack_lock);
+    }
+    kirq_restore(flags);
+    return held;
+}
+
+/**
+ * Poll the jacks: read each one's sense, and then move the output while a
+ * stream plays in the automatic mode and the headphones' routing differs
+ * from the jack, and capture after a change of the microphone jack. The
+ * tick asks for this every HDA_JACK_TICKS ticks (hda_tick), and it runs in
+ * khda with interrupts on, as Linux's hda_jackpoll_work polls from a
+ * delayed work (sound/pci/hda/hda_codec.c:645-659 of 6.12.115), or in the
+ * tick while khda does not run. Nothing is done while code outside the
+ * service holds the jacks, and what a failed verb left undone is done again
+ * at the next poll. No hold begins while the poll runs: holds are taken by
+ * system calls, which wait for the big lock that khda, or the tick, holds
+ * throughout, and khda is not switched in the middle of a service.
+ */
+static void hda_poll_jacks(void)
+{
     int j;
 
-    if (!hda_base || !hda_report.ready)
+    if (!hda_base || !hda_report.ready || hda_jacks_held())
         return;
-    jack_ticks += passed;
-    if (jack_ticks < HDA_JACK_TICKS)
-        return;
-    jack_ticks = 0;
-    flags = kirq_save();
-    if (!spin_trylock(&jack_lock)) {
-        kirq_restore(flags);
-        return;
-    }
-    if (jack_holds == 0) {
-        for (j = 0; j < HDA_JACKS; j++)
-            if (hda_report.jacks[j].pin)
-                hda_jack_reading(j, hda_jack_sense(j));
-        if ((playing || beep_opened) && hda_output_mode == HDA_OUTMODE_AUTO &&
-            hda_report.jacks[HDA_JACK_HP].pin &&
-            route_hp != (hda_report.jacks[HDA_JACK_HP].state == HDA_JACK_IN))
-            hda_route_output(HDA_VERB_TRY);
-        hda_follow_mic(HDA_VERB_TRY);
-    }
-    spin_unlock(&jack_lock);
-    kirq_restore(flags);
+    for (j = 0; j < HDA_JACKS; j++)
+        if (hda_report.jacks[j].pin)
+            hda_jack_reading(j, hda_jack_sense(j));
+    if ((playing || beep_opened) && hda_output_mode == HDA_OUTMODE_AUTO &&
+        hda_report.jacks[HDA_JACK_HP].pin &&
+        route_hp != (hda_report.jacks[HDA_JACK_HP].state == HDA_JACK_IN))
+        hda_route_output(HDA_VERB_TRY);
+    hda_follow_mic(HDA_VERB_TRY);
 }
 
 /** Start the output session: zero its counters and read the wall clock.
@@ -3752,8 +3805,8 @@ static void hda_out_codec(uint16_t fmt)
  * converter format readbacks for procfs. Return 0, or -EIO when the stream
  * does not reset.
  *
- * The session's counters start again (hda_session_reset). The tick polls no
- * jack while the path is programmed.
+ * The session's counters start again (hda_session_reset). No jack is polled
+ * while the path is programmed.
  *
  * The first start after the controller was set up then waits 20 ms in
  * hda_check_dma to choose where the stream's position is read; later starts
@@ -3791,6 +3844,7 @@ static int hda_launch(uint16_t fmt)
     walclk_last = hda_read32(HDA_WALCLK);
     hda_sd_write32(stream, HDA_SD_CTL, ctl);
     stream_started = true;
+    play_irq_seen = play_irq_pending = false;
     hda_report.playing = true;
     hda_report.requested_rate = current_sample_rate;
     hda_report.programmed_rate = current_hw_sample_rate;
@@ -3885,7 +3939,7 @@ static void hda_halt(void)
     hda_send_verb(codec_addr, dac_nid, HDA_VERB_SET_AMP_GAIN | 0xB080);
     hda_jack_hold();
     if (beep_div) {
-        /* A beep sounds through the pins; the tick turns them off after. */
+        /* A beep sounds through the pins; its service turns them off after. */
         beep_opened = true;
         beep_quiet = 0;
         hda_report.beep_path = 1;
@@ -3994,12 +4048,40 @@ void hda_read_queue(void)
     kirq_restore(flags);
 }
 
+/**
+ * Whether a stream whose interrupt last came at tick `since`, and whose
+ * period plays for `period_us` microseconds, has gone more than one period
+ * and a half without one: the next interrupt is half a period late, and the
+ * tick asks for the stream's service itself, since a stream of three periods
+ * plays a period again two periods after the one its service missed.
+ */
+static bool hda_irq_late(uint32_t since, uint32_t period_us)
+{
+    return (uint32_t)kernel_ticks - since > (period_us + period_us / 2u) / TICK_US + 1u;
+}
+
+/** The time one period of the input stream records for, in microseconds,
+ * at its rate; 0 before a setup. */
+static uint32_t hda_capture_period_us(void)
+{
+    uint32_t rate = hda_report.input.rate;
+    uint32_t milli;
+
+    if (rate == 0 || cap_frame == 0)
+        return 0;
+    milli = cap_period / cap_frame * 1000u;
+    return milli / rate * 1000u + milli % rate * 1000u / rate;
+}
+
 /** Run the services `wanted` asks for, HDA_SERVE_ bits, the input
- * stream's first, as the interrupt acknowledges it first: from khda with
- * interrupts on, or from the interrupt or the tick with them off. A call
- * that comes while a service is under way, which only an interrupt in khda's
- * fills could make, returns at once; the service under way, or the next
- * tick's, refills what it would have. */
+ * stream's first, as the interrupt acknowledges it first, and the jacks' and
+ * the beep's last: from khda with interrupts on, or from the interrupt or
+ * the tick with them off. A call that comes while a service is under way,
+ * which only an interrupt in khda's services could make, returns at once;
+ * the service under way refills up to the position it read, and each later
+ * service refills every period played since, so the stream's next
+ * interrupt, or the tick once that interrupt is late, refills the rest, and
+ * the tick asks again for a poll or a beep's verbs that are still due. */
 static void hda_serve(uint32_t wanted)
 {
     static volatile bool serving = false;
@@ -4015,6 +4097,10 @@ static void hda_serve(uint32_t wanted)
         hda_service_capture();
     if (wanted & HDA_SERVE_PLAY)
         hda_service_stream();
+    if (wanted & HDA_SERVE_JACKS)
+        hda_poll_jacks();
+    if (wanted & HDA_SERVE_BEEP)
+        hda_beep_service();
     serving = false;
 }
 
@@ -4049,23 +4135,27 @@ static void hda_service_kick(uint32_t wanted)
 }
 
 /**
- * The services with a period to hand over or refill, HDA_SERVE_ bits: the
- * input stream's position in a period past the one the service hands next,
- * the output stream's in a period past the one playing at its last refill.
- * The tick reads the positions at each of its calls, a millisecond apart, so
- * it sees each change of period long before a revolution could pass unseen;
- * one that passes while the thread waits to run is the service's to count.
+ * Of the services `asked` names, HDA_SERVE_ bits, those with a period to hand
+ * over or refill: the input stream's position in a period past the one the
+ * service hands next, the output stream's in a period past the one playing
+ * at its last refill. Only the positions of the streams asked for are read.
+ * The tick asks for a stream until its first interrupt, while an interrupt
+ * that came before its period's end is pending and while the next is late
+ * (hda_tick), and then reads its position at each call, a millisecond
+ * apart, so it sees each change of period long before a revolution could
+ * pass unseen; a revolution that passes while the thread waits to run, or
+ * while the stream's interrupts serve it, is the service's to count.
  */
-static uint32_t hda_service_due(void)
+static uint32_t hda_service_due(uint32_t asked)
 {
     uint32_t due = 0;
 
     if (!hda_base)
         return 0;
-    if (cap_running && cap_period != 0 && cap_periods != 0 &&
+    if ((asked & HDA_SERVE_CAPTURE) && cap_running && cap_period != 0 && cap_periods != 0 &&
         hda_input_position() % (cap_period * cap_periods) / cap_period != cap_next)
         due |= HDA_SERVE_CAPTURE;
-    if (playing && stream_started &&
+    if ((asked & HDA_SERVE_PLAY) && playing && stream_started &&
         hda_stream_position() % (period_bytes * HDA_PERIODS) / period_bytes != hw_period_last)
         due |= HDA_SERVE_PLAY;
     return due;
@@ -4075,15 +4165,35 @@ void hda_tick(void)
 {
     static uint32_t seen; /* `kernel_ticks` at the last call */
     uint32_t now = (uint32_t)kernel_ticks, passed = now - seen;
-    uint32_t wanted = HDA_SERVE_CAPTURE | HDA_SERVE_PLAY;
+    uint32_t wanted = 0;
 
     seen = now;
-    if (hda_service_threaded())
-        wanted = hda_service_due();
+    if (!play_irq_seen || play_irq_pending ||
+        hda_irq_late(play_irq_tick, hda_bytes_us(period_bytes)))
+        wanted |= HDA_SERVE_PLAY;
+    if (!cap_irq_seen || cap_irq_pending || hda_irq_late(cap_irq_tick, hda_capture_period_us()))
+        wanted |= HDA_SERVE_CAPTURE;
+    if (wanted && hda_service_threaded())
+        wanted = hda_service_due(wanted);
+    if (hda_base && hda_report.ready) {
+        jack_ticks += passed;
+        if (jack_ticks >= HDA_JACK_TICKS) {
+            jack_ticks = 0;
+            if (hda_report.jacks[HDA_JACK_HP].pin || hda_report.jacks[HDA_JACK_MIC].pin ||
+                mic_program)
+                wanted |= HDA_SERVE_JACKS;
+        }
+    }
+    if (beep_stop) {
+        wanted |= HDA_SERVE_BEEP;
+    } else if (beep_opened && !beep_div) {
+        if (!playing)
+            beep_quiet += passed;
+        if (playing || beep_quiet >= HDA_BEEP_IDLE_TICKS)
+            wanted |= HDA_SERVE_BEEP;
+    }
     if (wanted)
         hda_service_kick(wanted);
-    hda_poll_jacks(passed);
-    hda_beep_tick(passed);
 }
 
 #ifndef RACH2_HOSTTEST
@@ -4426,7 +4536,9 @@ static uint32_t hda_capture_convert(const audio_stream_t *s, const uint8_t *src)
  * revolution, so the wall clock counts those. On an overrun the period the
  * device writes is lost and the rest, from the one after it, are handed
  * over: the newest whole revolution, in order. A service already under way
- * elsewhere is left to finish alone.
+ * elsewhere is left to finish alone. A call that finds a period to hand
+ * over clears cap_irq_pending, as hda_service_stream clears
+ * play_irq_pending.
  *
  * `cap_lock` and interrupts are held around the reads and updates of the
  * position, cap_next and the counts, and around `period`; each period's
@@ -4466,6 +4578,8 @@ static void hda_service_capture(void)
     /* The frames up to period `cur` that are neither handed nor to be. */
     s->lost = cap_recorded - pos % cap_period / cap_frame - cap_handed -
               (cur + cap_periods - cap_next) % cap_periods * (cap_period / cap_frame);
+    if (cap_next != cur)
+        cap_irq_pending = false;
     while (cap_next != cur) {
         const uint8_t *src = cap_buffer + cap_next * cap_period;
 
@@ -4755,6 +4869,7 @@ static int hda_capture_start(audio_stream_t *s)
     cap_handed = 0;
     s->lost = 0;
     cap_clock = hda_read32(HDA_WALCLK);
+    cap_irq_seen = cap_irq_pending = false;
     cap_running = true;
     hda_report.input.running = true;
     hda_sd_write32(stream, HDA_SD_CTL, hda_sd_read32(stream, HDA_SD_CTL) | HDA_SD_CTL_RUN);
@@ -5065,7 +5180,7 @@ static unsigned hda_input_caps(unsigned *controls)
 
 /** Record `source`, reprogramming the route at once while the input stream
  * runs, with the input of the pin left turned off; the source recorded
- * after, or -ENODEV when the codec has no input path. The tick polls no jack
+ * after, or -ENODEV when the codec has no input path. No jack is polled
  * meanwhile. */
 static int hda_input_select(int source)
 {
@@ -5179,13 +5294,33 @@ static void hda_find_beep(void)
 }
 
 /**
+ * Stop the beep generator in a try, for the tick's stop: 0 when it is
+ * stopped, or -EBUSY when the verb found the interface in use or failed,
+ * and the stop is still owed.
+ */
+static int hda_beep_stop(void)
+{
+    if (hda_verb(codec_addr, beep_nid, HDA_VERB_SET_BEEP | 0, HDA_VERB_TRY, NULL) != 0)
+        return -EBUSY;
+    beep_stop = false;
+    beep_div = 0;
+    hda_report.beep_divider = 0;
+    return 0;
+}
+
+/**
  * Sound `hz` on the beep generator until the next call, or stop it with 0,
  * as audio.h's `beep` says. The divider is Linux's, 12000 / `hz` held
  * between 1 and 255, so that 750 Hz is 16; a level of 0 sends 0. With no
  * stream playing, a tone first turns the output pins on for the output mode
- * and EAPD, as a start does (hda_route_output), and hda_beep_tick turns them
- * off a second after the generator stops. A stop from the tick sends only
- * the stop, in a try. The divider sent, or -ENODEV, or -EBUSY from the tick.
+ * and EAPD, as a start does (hda_route_output), and hda_beep_service turns
+ * them off a second after the generator stops. A stop from the tick sends
+ * only the stop: khda sends it, as Linux's snd_hda_beep_event leaves the
+ * verb to a work (sound/pci/hda/hda_beep.c:118 of 6.12.115), and the tick
+ * asks again while the verb finds the interface in use (hda_tick); while
+ * khda does not run, the tick sends it here in a try (hda_beep_stop). The
+ * divider sent, 0 for a stop the tick handed to khda, or -ENODEV, or
+ * -EBUSY from the tick.
  */
 static int hda_beep(uint32_t hz, int tick)
 {
@@ -5201,13 +5336,14 @@ static int hda_beep(uint32_t hz, int tick)
             div = 1;
     }
     if (tick) {
-        if (hda_verb(codec_addr, beep_nid, HDA_VERB_SET_BEEP | 0, HDA_VERB_TRY, NULL) != 0)
-            return -EBUSY;
-        beep_div = 0;
-        hda_report.beep_divider = 0;
+        if (!hda_service_threaded())
+            return hda_beep_stop();
+        beep_stop = true;
+        hda_service_kick(HDA_SERVE_BEEP);
         return 0;
     }
     hda_jack_hold();
+    beep_stop = false;
     if (div && !playing && !beep_opened) {
         hda_route_output(HDA_VERB_WAIT);
         hda_set_eapd(true);
@@ -5225,18 +5361,23 @@ static int hda_beep(uint32_t hz, int tick)
 }
 
 /**
- * From the tick: once a stream plays, leave the pins a beep turned on to it;
- * with none, turn them and EAPD off when the generator has been silent for
- * HDA_BEEP_IDLE_TICKS, in tries, and try again at the next tick when a verb
- * fails or code outside the tick holds the jacks. `passed` is the ticks
- * since the last call (hda_tick).
+ * The beep's service, which the tick asks for (hda_tick) and which runs in
+ * khda, or in the tick while khda does not run, as hda_poll_jacks does:
+ * send the stop the tick owes (hda_beep_stop); then, once a stream plays,
+ * leave the pins a beep turned on to it, and with none, turn them and EAPD
+ * off when the generator has been silent for HDA_BEEP_IDLE_TICKS, in
+ * tries. The tick asks again while a verb fails or code outside the service
+ * holds the jacks, as Linux's generate_tone sends the stop and powers the
+ * codec down from the beep's work (sound/pci/hda/hda_beep.c:24-51 of
+ * 6.12.115).
  */
-static void hda_beep_tick(uint32_t passed)
+static void hda_beep_service(void)
 {
-    uint32_t flags;
     bool ok = true;
     int i;
 
+    if (beep_stop && hda_beep_stop() != 0)
+        return;
     if (!beep_opened || beep_div)
         return;
     if (playing) {
@@ -5244,34 +5385,24 @@ static void hda_beep_tick(uint32_t passed)
         hda_report.beep_path = 0;
         return;
     }
-    beep_quiet += passed;
-    if (beep_quiet < HDA_BEEP_IDLE_TICKS)
+    if (beep_quiet < HDA_BEEP_IDLE_TICKS || hda_jacks_held())
         return;
-    flags = kirq_save();
-    if (!spin_trylock(&jack_lock)) {
-        kirq_restore(flags);
-        return;
-    }
-    if (jack_holds == 0 && beep_opened && !beep_div && !playing) {
-        if (pin_nid)
-            hda_put(pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00, HDA_VERB_TRY, &ok);
-        if (hp_pin_nid && hp_pin_nid != pin_nid)
-            hda_put(hp_pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00, HDA_VERB_TRY, &ok);
-        for (i = 0; i < hda_report.widget_count; i++) {
-            const hda_widget_report_t *w = &hda_report.widgets[i];
+    if (pin_nid)
+        hda_put(pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00, HDA_VERB_TRY, &ok);
+    if (hp_pin_nid && hp_pin_nid != pin_nid)
+        hda_put(hp_pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00, HDA_VERB_TRY, &ok);
+    for (i = 0; i < hda_report.widget_count; i++) {
+        const hda_widget_report_t *w = &hda_report.widgets[i];
 
-            if (w->type == HDA_WIDGET_PIN && (w->pin_caps & 0x10000)) /* EAPD capable */
-                hda_put(w->nid, HDA_VERB_SET_EAPD | 0x00, HDA_VERB_TRY, &ok);
-        }
-        if (ok) {
-            beep_opened = false;
-            hda_report.beep_path = 0;
-            hda_report.primary_enabled = hda_report.hp_enabled = 0;
-            route_hp = -1;
-        }
+        if (w->type == HDA_WIDGET_PIN && (w->pin_caps & 0x10000)) /* EAPD capable */
+            hda_put(w->nid, HDA_VERB_SET_EAPD | 0x00, HDA_VERB_TRY, &ok);
     }
-    spin_unlock(&jack_lock);
-    kirq_restore(flags);
+    if (ok) {
+        beep_opened = false;
+        hda_report.beep_path = 0;
+        hda_report.primary_enabled = hda_report.hp_enabled = 0;
+        route_hp = -1;
+    }
 }
 
 /**

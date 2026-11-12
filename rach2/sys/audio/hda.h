@@ -318,7 +318,7 @@ typedef struct {
 #define HDA_JACKS    2
 
 /*
- * A jack the tick polls (hda_tick): a pin in a jack with presence detect.
+ * A jack the driver polls (hda_tick): a pin in a jack with presence detect.
  * `state` changes when a reading that differs from it is seen twice in a
  * row, or by one reading at a start. A reading that fails changes nothing.
  */
@@ -385,15 +385,21 @@ void hda_read_queue(void);
 uint32_t hda_delay_frames(void);
 
 /** Ask for the refill of the periods the stream has played since the last
- * refill and the handing over of the input stream's finished periods, when
- * either stream's position has passed into another period, and every quarter
- * second poll the jacks, moving the output and the microphone recorded as a
- * plug goes in or out. The boot processor's tick calls this, with interrupts
- * off, so playback goes on where the controller's interrupt does not arrive;
- * the service runs in the driver's thread, and here, at every call, while
- * the thread does not run it. The jacks' and the beep's clocks count the
- * ticks since the last call, since that tick skips the call while another
- * processor holds the big lock. */
+ * refill and the handing over of the input stream's finished periods, for
+ * each stream only until its first interrupt, while an interrupt that came
+ * before its period's end is pending, or while its next interrupt is late;
+ * every quarter second for the jacks' poll, which moves the output and the
+ * microphone recorded as a plug goes in or out; and for the beep's stop and
+ * the turning off of the pins a beep opened, when they are due. The boot
+ * processor's tick calls this, with interrupts off, so playback goes on
+ * where the controller's interrupt does not arrive, while a stream whose
+ * interrupts come is asked for by them alone, as Linux's `azx_interrupt`
+ * acknowledges the stream and wakes its writer. The services run in the
+ * driver's thread, which the tick wakes for a stream when its position has
+ * passed into another period, and here while the thread does not run them;
+ * the tick sends no verb while the thread runs. The jacks' and the beep's
+ * clocks count the ticks since the last call, since that tick skips the call
+ * while another processor holds the big lock. */
 void hda_tick(void);
 
 /** Make the driver's thread, khda, which refills the output stream and

@@ -252,6 +252,12 @@ int xhci_ports(struct xhci_ctrl *hc);
  * controller does not have. */
 int xhci_port_status(struct xhci_ctrl *hc, int port, struct usb_port_status *out);
 
+/** Whether root port `port` was connected at the scan of the ports that the
+ * last drain made or left as it was (`xhci_events`): what the core's tick
+ * reads, with no register access. 0 for a port the controller does not
+ * have. */
+int xhci_port_connected(struct xhci_ctrl *hc, int port);
+
 /**
  * Whether root port `port` has been connected long enough to reset.
  *
@@ -308,7 +314,8 @@ int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out);
  *
  * A command completion ends the command in flight; a transfer event is
  * matched to its transfer, whose completion is queued for `xhci_poll`; a port
- * change event is dropped, since the scan reads every port's connect bit. At
+ * change event has the scan read every port's connect bit, which it
+ * otherwise reads only while a connect settles and every 250 ms. At
  * most one ring's worth of events is taken in a call, and a transfer event
  * that finds the completion queue full stays on the ring for the next call.
  * Returns 0 on a controller that is not running.

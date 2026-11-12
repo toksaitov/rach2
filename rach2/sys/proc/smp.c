@@ -139,6 +139,20 @@ static struct spinlock profile_lock = SPINLOCK_INIT_NAMED("bkl_profile");
  * with or without the big lock. */
 static volatile int bkl_profile_whole;
 
+/* The tick's parts by row (`bkl_tick_charge`), in TSC cycles, and the names
+ * `smp_tick_show` gives them. */
+struct bkl_tick_count {
+    uint64_t cycles;
+    uint64_t max;
+    uint32_t calls;
+};
+static struct bkl_tick_count bkl_ticks[BKL_TICK_ROWS];
+static const char *const bkl_tick_names[BKL_TICK_ROWS] = {
+    "entry", "clock",      "account",       "wake",     "hda",     "netdev",  "netconsole",
+    "ath9k", "tcp",        "ip_frag",       "ip6",      "netlink", "ip_loop", "usb",
+    "input", "block_lag",  "block_request", "platform", "vkms",    "speaker", "console",
+    "klog",  "ap_account", "ap_late_pass",  "return",   "switch",  "nested"};
+
 /* The probes an open-addressed table makes before it gives up. */
 #define BKL_PROBES 32
 
@@ -259,10 +273,17 @@ static int hold_key(const struct percpu *cpu)
  * idle wait or a switch is recorded as BKL_NR_IDLE or BKL_NR_SWITCH. */
 static void bkl_hold_end(struct percpu *cpu)
 {
-    uint64_t held = arch_cycles() - cpu->bkl_since, waited;
+    uint64_t now = arch_cycles(), held = now - cpu->bkl_since, waited;
     int c = arch_cpu_id();
     int key = hold_key(cpu), ioctl;
     int32_t nr = cpu->bkl_nr;
+
+    if (cpu->tick_tail != 0) {
+        (void)bkl_tick_charge(cpu->current == cpu->tick_tail_proc ? BKL_TICK_RETURN
+                                                                  : BKL_TICK_SWITCH,
+                              cpu->tick_tail);
+        cpu->tick_tail = 0;
+    }
 
     bkl_recent[bkl_releases % BKL_WAIT_HOLDS].cycles = held;
     bkl_recent[bkl_releases % BKL_WAIT_HOLDS].vector = cpu->bkl_vector;
@@ -289,6 +310,27 @@ static void bkl_hold_end(struct percpu *cpu)
         k_memcpy(bkl_hold_early_cycles, bkl_early_cycles[c], sizeof(bkl_hold_early_cycles));
         k_memcpy(bkl_hold_early_pc, bkl_early_pc[c], sizeof(bkl_hold_early_pc));
     }
+}
+
+uint64_t bkl_tick_charge(int row, uint64_t start)
+{
+    uint64_t now = arch_cycles(), spent = now - start;
+    struct bkl_tick_count *c = &bkl_ticks[row];
+
+    c->calls++;
+    c->cycles += spent;
+    if (spent > c->max) {
+        c->max = spent;
+    }
+    return now;
+}
+
+void bkl_tick_tail(void)
+{
+    struct percpu *cpu = this_cpu();
+
+    cpu->tick_tail_proc = cpu->current;
+    cpu->tick_tail = arch_cycles();
 }
 
 /** This processor's tally for `key`, an entry's key or BKL_ENTRY_KEYS plus
@@ -745,6 +787,51 @@ int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len)
         }
     }
     bkl_ioctls_lost = 0;
+    return (int32_t)len;
+}
+
+int32_t smp_tick_show(void *data, char *buf, uint32_t cap)
+{
+    struct bkl_tick_count snap[BKL_TICK_ROWS];
+    struct bkl_text t;
+    uint32_t flags;
+    int row;
+
+    (void)data;
+    /* The tick writes the rows from its interrupt, which the big lock does
+     * not hold off on this processor: copy them with interrupts off, as
+     * Linux's u64_stats_sync.h:22-24 has a writer beside an interrupt's. */
+    flags = kirq_save();
+    k_memcpy(snap, bkl_ticks, sizeof(snap));
+    kirq_restore(flags);
+    t.buf = buf;
+    t.cap = cap;
+    t.len = 0;
+    text_str(&t, "part calls cycles us max_us\n");
+    for (row = 0; row < BKL_TICK_ROWS; row++) {
+        text_str(&t, bkl_tick_names[row]);
+        text_ch(&t, ' ');
+        text_dec(&t, snap[row].calls);
+        text_ch(&t, ' ');
+        text_dec(&t, snap[row].cycles);
+        text_ch(&t, ' ');
+        text_dec(&t, timer_cycles_us(snap[row].cycles));
+        text_ch(&t, ' ');
+        text_dec(&t, timer_cycles_us(snap[row].max));
+        text_ch(&t, '\n');
+    }
+    return (int32_t)t.len;
+}
+
+int32_t smp_tick_store(void *data, const char __user *buf, uint32_t len)
+{
+    uint32_t flags;
+
+    (void)data;
+    (void)buf;
+    flags = kirq_save();
+    k_memset(bkl_ticks, 0, sizeof(bkl_ticks));
+    kirq_restore(flags);
     return (int32_t)len;
 }
 
