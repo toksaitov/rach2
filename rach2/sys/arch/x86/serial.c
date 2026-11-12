@@ -300,9 +300,9 @@ void serial_enable_rx_irq(void)
     outb(SERIAL_COM1 + SERIAL_INTR_ENABLE, SERIAL_IER_RDA);
 }
 
-int serial_rx_irq_proven(void)
+int serial_rx_irq_on(void)
 {
-    return _rx_irq_wanted && _rx.irq_bytes > 0;
+    return _rx_irq_wanted;
 }
 
 void serial_set_rx_notify(void (*notify)(void))
