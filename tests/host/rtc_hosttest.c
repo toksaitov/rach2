@@ -23,7 +23,8 @@
  * reference counter the test keeps drives the ticks each interrupt counts and
  * the clocks it keeps, on the boot processor and on another. A model of the
  * vDSO's clock checks that the coarse clocks read no earlier after its stop
- * than before it.
+ * than before it. Each row of the clocks sets its own tick, and starts with
+ * none of the floors an earlier row's readings raised (`rtc_forget_floors`).
  *
  * The answers are for a tick of 1000 Hz: a reload of 1193, sweeps of 499 us
  * and a reference tick of 1000 counts of the 1 MHz counter.
@@ -347,6 +348,7 @@ static void subtick_rows(void)
 {
     int64_t sec, ns;
 
+    rtc_forget_floors();
     kernel_uptime_seconds = 10;
     kernel_second_ticks = 0;
     count = pit_reload - 100u;
@@ -417,6 +419,7 @@ static void set_rows(void)
 {
     int64_t sec, ns;
 
+    rtc_forget_floors();
     kernel_uptime_seconds = 20;
     kernel_second_ticks = 0;
     pending = 0;
@@ -447,6 +450,7 @@ static void monotonic_rows(void)
 {
     int64_t sec, ns;
 
+    rtc_forget_floors();
     wrap_on_pending = 0;
     pending = 0;
     kernel_uptime_seconds = 50;
@@ -502,6 +506,7 @@ static void reference_rows(void)
     int64_t sec, ns;
     int due;
 
+    rtc_forget_floors();
     ref_on = 1;
     ref_now = start;
     pending = 0;
@@ -547,6 +552,7 @@ static void coarse_rows(void)
 {
     int64_t sec, ns, rsec, rns, sec1, ns1, rsec1, rns1;
 
+    rtc_forget_floors();
     kernel_uptime_seconds = 100;
     kernel_second_ticks = 0;
     vclock_coarse_ns = 100005000000ULL;

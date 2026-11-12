@@ -259,6 +259,12 @@ void rtc_mono_of_real(int64_t sec, int32_t nsec, int64_t *mono_sec, int32_t *mon
  */
 uint32_t rtc_step_count(void);
 
+#if defined(RACH2_HOSTTEST)
+/** Clear every floor of the clocks, for a host test that starts the tick
+ * again (clock.c). */
+void rtc_forget_floors(void);
+#endif
+
 /**
  * Read the machine's clock now, as the boot reads it: two samples that agree,
  * decoded, with interrupts off and the clock's ports locked against other
