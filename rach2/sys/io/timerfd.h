@@ -78,13 +78,17 @@ long sys_timer_create(struct isr_params *params);
 
 /** timer_settime(2) takes the id, the flags, of which TIMER_ABSTIME is the
  * one, the address of the new struct itimerspec and the address for the old
- * one, or 0, and sets the timer as timerfd_settime does. An expiration of
- * the old setting that the tick counted and no holder of the big lock has
- * signalled yet is signalled first, as Linux signals it at the expiry; the
- * old setting's later expirations are dropped, and a signal of it still
- * pending forwards nothing when taken. Returns 0, -EINVAL for an id the
- * process does not have, another flag, a null setting or a time out of
- * range, or -EFAULT. */
+ * one, or 0, and sets the timer as timerfd_settime does. The expirations
+ * of the old setting that the tick counted and no holder of the big lock
+ * has signalled yet are signalled first, as Linux signals the first at its
+ * expiry and stops the timer until that signal is delivered
+ * (kernel/time/posix-timers.c:318-377): the first of them, the setting's
+ * first expiration or one after the setting's signal was taken, is posted,
+ * or counts with the timer's notification already pending or waiting. The
+ * rest, and the old setting's later expirations, are dropped, and a signal
+ * of it still pending forwards nothing when taken. Returns 0, -EINVAL for
+ * an id the process does not have, another flag, a null setting or a time
+ * out of range, or -EFAULT. */
 long sys_timer_settime(struct isr_params *params);
 
 /** timer_gettime(2) takes the id and the address for the timer's struct
@@ -103,10 +107,12 @@ long sys_timer_gettime64(struct isr_params *params);
  * 0x7FFFFFFF, or -EINVAL for an id the process does not have. */
 long sys_timer_getoverrun(struct isr_params *params);
 
-/** timer_delete(2) takes the id and deletes the timer, whose notification
- * that waits for another sender's signal of its number is posted once that
- * signal is taken, with its own overrun. Returns 0, or -EINVAL for an id
- * the process does not have. */
+/** timer_delete(2) takes the id and deletes the timer, first signalling
+ * the expirations the tick counted and no holder of the big lock has
+ * signalled yet, as timer_settime does, the setting's first or one after
+ * its signal was taken. Its notification that waits for another sender's
+ * signal of its number is posted once that signal is taken, with its own
+ * overrun. Returns 0, or -EINVAL for an id the process does not have. */
 long sys_timer_delete(struct isr_params *params);
 
 /** Delete the POSIX timers of `tg` when its last thread ends, and the

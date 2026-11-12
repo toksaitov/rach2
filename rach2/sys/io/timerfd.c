@@ -1190,9 +1190,12 @@ static int32_t list_clock(struct ktimer *t, int base, int flags, const struct se
 /**
  * Arm `t` from the setting `s`, absolute on its clock when `flags` has
  * TFD_TIMER_ABSTIME, or disarm it for a first expiration of zero, dropping
- * a timerfd's expirations not read. A POSIX timer starts a new generation
- * (`next_gen`), so that a signal of the old setting still pending forwards
- * nothing when taken, as Linux's posix_timer_set_common moves
+ * a timerfd's expirations not read. A POSIX timer first signals the
+ * expirations the tick left for a holder of the big lock
+ * (`ptimer_post_one`), the setting's first or one after its signal was
+ * taken, as Linux signalled it at the expiry, and then starts a new
+ * generation (`next_gen`), so that a signal of the old setting still pending
+ * forwards nothing when taken, as Linux's posix_timer_set_common moves
  * it_requeue_pending on (kernel/time/posix-timers.c:879), and drops the
  * old setting's expirations since its signal was queued (`set_count`), as
  * posix_timer_set_common resets it_overrun (kernel/time/posix-timers.c:
