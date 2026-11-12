@@ -10,6 +10,7 @@
 #include "../../../acpi/acpica.h"
 #include "../../../cmdline.h"
 #include "../../../irq.h"
+#include "../../../lib/kirq.h"
 #include "../../../lib/kstring.h"
 #include "../../../mm/paging.h"
 #include "../../../pci.h"
@@ -17,6 +18,7 @@
 #include "../../arch.h"
 #include "../acpi.h"
 #include "../ioapic.h"
+#include "../pic.h"
 #include "../lapic.h"
 
 uintptr_t vtd_hw_map(uint64_t base)
@@ -201,7 +203,16 @@ int vtd_hw_x2apic_enable(void)
     return lapic_x2apic_enable();
 }
 
-void vtd_hw_x2apic_disable(void)
+void vtd_hw_lines_mask(struct vtd_lines *held)
 {
-    lapic_x2apic_disable();
+    held->flags = kirq_save();
+    held->pic = pic_mask_all();
+    held->ioapic = ioapic_mask_routed();
+}
+
+void vtd_hw_lines_restore(const struct vtd_lines *held)
+{
+    ioapic_unmask_lines(held->ioapic);
+    pic_restore_mask(held->pic);
+    kirq_restore(held->flags);
 }

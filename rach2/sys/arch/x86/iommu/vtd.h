@@ -294,7 +294,19 @@ int vtd_hw_x2apic_possible(void);
  * it was there, -1 when it cannot (`lapic_x2apic_enable`). */
 int vtd_hw_x2apic_enable(void);
 
-/** Move it back after a failed start (`lapic_x2apic_disable`). */
-void vtd_hw_x2apic_disable(void);
+/* What `vtd_hw_lines_mask` changed, for `vtd_hw_lines_restore`. */
+struct vtd_lines {
+    uint32_t flags;  /* the processor's interrupt flag, as kirq_save gave it */
+    uint16_t pic;    /* the 8259 pair's masks (`pic_mask_all`) */
+    uint16_t ioapic; /* the I/O APIC lines that were unmasked */
+};
+
+/** Turn the processor's interrupts off and mask the 8259 pair and every
+ * routed I/O APIC line, as Linux's enable_IR_x2apic does around the move to
+ * x2APIC mode, keeping what was there in `*held`. */
+void vtd_hw_lines_mask(struct vtd_lines *held);
+
+/** Undo `vtd_hw_lines_mask`. */
+void vtd_hw_lines_restore(const struct vtd_lines *held);
 
 #endif /* _VTD_H_ */

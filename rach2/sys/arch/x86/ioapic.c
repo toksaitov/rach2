@@ -220,6 +220,46 @@ int ioapic_line_pending(int line)
             RTE_PENDING) != 0;
 }
 
+uint16_t ioapic_mask_routed(void)
+{
+    uint16_t was = 0;
+    int line;
+
+    for (line = 0; line < 16; line++) {
+        const struct ioapic *c;
+        uint32_t reg, low;
+
+        if (lines[line].chip < 0) {
+            continue;
+        }
+        c = &chips[lines[line].chip];
+        reg = IOAPIC_REG_TABLE + 2u * lines[line].input;
+        low = reg_read(c, reg);
+        if ((low & RTE_MASKED) == 0) {
+            was = (uint16_t)(was | (1u << line));
+            reg_write(c, reg, low | RTE_MASKED);
+        }
+    }
+    return was;
+}
+
+void ioapic_unmask_lines(uint16_t which)
+{
+    int line;
+
+    for (line = 0; line < 16; line++) {
+        const struct ioapic *c;
+        uint32_t reg;
+
+        if ((which & (1u << line)) == 0 || lines[line].chip < 0) {
+            continue;
+        }
+        c = &chips[lines[line].chip];
+        reg = IOAPIC_REG_TABLE + 2u * lines[line].input;
+        reg_write(c, reg, reg_read(c, reg) & ~RTE_MASKED);
+    }
+}
+
 int ioapic_remap_start(const struct ioapic_remap *ops)
 {
     int line, back;

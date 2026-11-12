@@ -1164,8 +1164,15 @@ uint32_t vtd_hw_apic_id(void)
 }
 
 /* The local APIC's mode: whether it may enter x2APIC mode, whether it is
- * there, and its moves there and back. */
-static int x2_possible, x2_on, x2_moves, x2_backs;
+ * there, and its moves there. Whether the 8259 and the I/O APIC's lines are
+ * masked with interrupts off (`vtd_hw_lines_mask`), and, at the last move,
+ * whether they were and whether any unit still let the compatibility format
+ * by. A level interrupt the APIC holds, which a pass through the disabled
+ * state would drop; nothing here takes the APIC there, and a row checks
+ * that it is still held. */
+static int x2_possible, x2_on, x2_moves;
+static int lines_masked, x2_moved_masked, x2_moved_cfi;
+static int level_held;
 
 /** Whether the APIC may be or is in x2APIC mode. */
 int vtd_hw_x2apic_possible(void)
@@ -1184,16 +1191,26 @@ int vtd_hw_x2apic_enable(void)
     }
     x2_on = 1;
     x2_moves++;
+    x2_moved_masked = lines_masked;
+    x2_moved_cfi =
+        (M(0)->gsts & VTD_GCMD_CFI) != 0 || (nmodels > 1 && (M(1)->gsts & VTD_GCMD_CFI) != 0);
     return 1;
 }
 
-/** Move it back. */
-void vtd_hw_x2apic_disable(void)
+/** Mask the lines, as hw.c does: counted, no line is modelled. */
+void vtd_hw_lines_mask(struct vtd_lines *held)
 {
-    if (x2_on) {
-        x2_on = 0;
-        x2_backs++;
-    }
+    held->flags = 0;
+    held->pic = 0;
+    held->ioapic = 0;
+    lines_masked = 1;
+}
+
+/** Unmask them. */
+void vtd_hw_lines_restore(const struct vtd_lines *held)
+{
+    (void)held;
+    lines_masked = 0;
 }
 
 /* The I/O APIC's routed entries, as ioapic.c keeps them. */
@@ -1475,7 +1492,8 @@ static void row_begin(const char *name)
     page_fail_after = -1;
     flush_calls = stray_flushes = 0;
     boot_apic = 0;
-    x2_possible = x2_on = x2_moves = x2_backs = 0;
+    x2_possible = x2_on = x2_moves = 0;
+    lines_masked = x2_moved_masked = x2_moved_cfi = level_held = 0;
     memset(ecam_mem, 0xFF, (unsigned long)ECAM_BUSES << 20);
     memset(msix_tables, 0, sizeof(msix_tables));
     pci_ecam_set((uintptr_t)ecam_mem, 0, ECAM_BUSES - 1);
@@ -1811,7 +1829,9 @@ static void row_ir_x2apic(void)
     x2_possible = 1;
     check(t_msi(0, DF(2, 0), 49) == 0 && t_msix(2, DF(0, 0), 1, 51) == 0, "messages");
     check(vtd_start() == 2 && intremap_active(), "on");
-    check(x2_on && x2_moves == 1 && x2_backs == 0, "the APIC moved to x2APIC mode once");
+    check(x2_on && x2_moves == 1, "the APIC moved to x2APIC mode once");
+    check(x2_moved_masked && !x2_moved_cfi && !lines_masked,
+          "with the lines masked, after the compatibility format was refused, and unmasked after");
     check((M(0)->irta & (1u << 11)) != 0 && (M(1)->irta & (1u << 11)) != 0,
           "both tables in the x2APIC format");
     check(logged("vtd: interrupt remapping: on, x2apic format, compatibility format refused"),
@@ -1856,11 +1876,66 @@ static void row_ir_x2apic(void)
     row_begin("ir_x2apic_back");
     setup_lenovo();
     x2_possible = 1;
+    level_held = 1;
     page_fail_after = held - 1;
     (void)vtd_start();
-    check(!intremap_active() && x2_moves == 1 && x2_backs == 1 && !x2_on,
-          "a start whose second table fails after the move moves the APIC back");
+    check(!intremap_active() && x2_moves == 0 && !x2_on && level_held,
+          "a start whose second table fails leaves the APIC and its level interrupt as they were");
     check(logged("vtd: ready: 2 units, interrupt remapping off"), "and runs unremapped");
+    row_end();
+
+    row_begin("ir_x2apic_last_step");
+    setup_lenovo();
+    x2_possible = 1;
+    level_held = 1;
+    rtes[0].low |= 1u << 8; /* lowest priority, which ioapic_map refuses */
+    check(t_msi(0, DF(2, 0), 49) == 0, "a message");
+    (void)vtd_start();
+    msi_of(0, DF(2, 0), &a, &d);
+    check(!intremap_active() && x2_moves == 0 && !x2_on && level_held && !lines_masked,
+          "a start that fails at its last fallible step, the lines masked, leaves the APIC");
+    check(a == 0xFEE00000u && d == 49, "and the message as it was");
+    row_end();
+}
+
+/**
+ * An identity of 255 or more, which only remapping in the x2APIC format
+ * reaches: the compatibility-format message and redirection entry carry its
+ * low eight bits, and the entries take the whole of it; without remapping
+ * the message's address holds the eight bits and nothing above bit 19.
+ */
+static void row_ir_x2apic_wide(void)
+{
+    uint32_t a, d;
+
+    row_begin("ir_x2apic_wide");
+    setup_lenovo();
+    boot_apic = 0x103;
+    x2_possible = 1;
+    rtes[0].dest = 0x03;
+    rtes[0].high = 0x03u << 24;
+    check(t_msi(0, DF(2, 0), 49) == 0 && t_msix(2, DF(0, 0), 1, 51) == 0, "messages");
+    msi_of(0, DF(2, 0), &a, &d);
+    check(a == 0xFEE03000u, "the unremapped message names the low eight bits alone");
+    check(vtd_start() == 2 && intremap_active() && x2_on, "on, in the x2APIC format");
+    msi_of(0, DF(2, 0), &a, &d);
+    check(m_msi(M(0), 0x0010, a, d) == 49 && M(0)->last_dest == 0x103,
+          "the GPU's message to apic 0x103");
+    check(m_msi(M(1), 0x0200, msix_tables[1][0], msix_tables[1][2]) == 51 &&
+              M(1)->last_dest == 0x103,
+          "the RTL8168's");
+    check(m_rte(M(1), 0xF0F8, rtes[0].low, rtes[0].high) == 33 && M(1)->last_dest == 0x103,
+          "the ioapic's line");
+    row_end();
+
+    row_begin("ir_x2apic_wide_off");
+    setup_lenovo();
+    boot_apic = 0x103;
+    opt_intremap = "off";
+    check(t_msi(0, DF(2, 0), 49) == 0, "a message");
+    check(vtd_start() == 2 && !intremap_active(), "remapping off");
+    msi_of(0, DF(2, 0), &a, &d);
+    check(a == 0xFEE03000u && d == 49, "the message keeps the low eight bits");
     row_end();
 }
 
@@ -2361,6 +2436,7 @@ int main(void)
     row_ir_qemu();
     row_ir_lenovo();
     row_ir_x2apic();
+    row_ir_x2apic_wide();
     row_msi_source();
     row_regions_lenovo();
     row_assign_gpu();

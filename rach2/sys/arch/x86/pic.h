@@ -56,6 +56,17 @@ int pic_irq_pending(uint8_t irq);
  */
 void pic_mask_irq(uint8_t irq);
 
+/**
+ * Mask all sixteen lines for a moment, and return the two mask registers as
+ * they were, the master's in the low byte, for `pic_restore_mask`. A line
+ * raised meanwhile stays latched in the request register.
+ */
+uint16_t pic_mask_all(void);
+
+/** Write back the masks `pic_mask_all` returned; nothing after
+ * `pic_retire`, which keeps every line masked. */
+void pic_restore_mask(uint16_t mask);
+
 /** Sends End Of Interrupt to the master PIC. */
 void reset_master_pic(void);
 

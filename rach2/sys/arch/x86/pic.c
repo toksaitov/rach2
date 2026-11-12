@@ -97,6 +97,24 @@ void pic_mask_irq(uint8_t irq)
     }
 }
 
+uint16_t pic_mask_all(void)
+{
+    uint16_t mask = (uint16_t)(inb(0x21) | (inb(0xA1) << 8));
+
+    outb(0x21, 0xFF);
+    outb(0xA1, 0xFF);
+    return mask;
+}
+
+void pic_restore_mask(uint16_t mask)
+{
+    if (retired) {
+        return;
+    }
+    outb(0x21, (uint8_t)(mask & 0xFFu));
+    outb(0xA1, (uint8_t)(mask >> 8));
+}
+
 void reset_master_pic(void)
 {
     outb(0x20, 0x20);
