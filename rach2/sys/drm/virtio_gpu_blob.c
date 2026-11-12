@@ -17,11 +17,13 @@
 #include "../virtio/vgpushm.h"
 
 /* The bytes of the pages MAP_BLOB's answer of a page list is written to,
- * and the runs it holds after its heads: 4092, so that a blob of 64 MiB
+ * and the runs it holds after its heads: 3836, so that a blob of 64 MiB
  * whose 16,384 pages the VM's allocator scattered is listed in 5 answers,
- * where one page's 250 runs took 66 round trips through the VM. The device
- * writes as many runs as it has and the chain holds. */
-#define VGPU_MAP_ANSWER (16u * PAGE_SIZE)
+ * where one page's 250 runs took 66 round trips through the VM. Fifteen
+ * pages and the request fit the shared region's chain of 16 descriptors
+ * (VGS_CHAIN_MAX) even when the pages are not one block. The device writes
+ * as many runs as it has and the chain holds. */
+#define VGPU_MAP_ANSWER (15u * PAGE_SIZE)
 #define VGPU_MAP_RUNS   ((VGPU_MAP_ANSWER - VGS_PAGES_OFF) / sizeof(struct vgs_run))
 
 /* The highest capability set id CONTEXT_INIT takes, and the most of its
@@ -209,9 +211,9 @@ static int32_t pages_take(const uint8_t *answer, uint32_t got, struct pages_gath
  * RESOURCE_MAP_BLOB, waited for, and copy the answer to `answer`, which
  * holds VGPU_MAP_ANSWER bytes, with its length in `*got`. The answer is
  * written to VGPU_MAP_ANSWER bytes of response pages, or, when the
- * transport's memory has not got them now, to the rest of the command's
- * own page. 0; -ENOMEM; or the wait's error, after which nothing is in
- * `answer`. May sleep.
+ * transport's memory has not got them now or its chain cannot carry them,
+ * to the rest of the command's own page. 0; -ENOMEM; or the wait's error,
+ * after which nothing is in `answer`. May sleep.
  */
 static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, uint64_t first,
                        uint8_t *answer, uint32_t *got)
@@ -230,7 +232,8 @@ static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
         req = (struct virtio_gpu_resource_map_blob *)(void *)cmd->page;
         req->resource_id = bo->res_id;
         req->offset = first;
-        big = i == 0 && vgpu_cmd_payload(cmd, 0, VGPU_MAP_ANSWER, 1) == 0;
+        big = i == 0 && vgpu_cmd_payload(cmd, 0, VGPU_MAP_ANSWER, 1) == 0 &&
+              virtqueue_chain_fits(cmd->vq, cmd->segments, cmd->nout, cmd->nin);
         if (big || i == 1) {
             break;
         }
