@@ -3,10 +3,14 @@
 # loads the AHCI and KVM modules of Debian's kernel, mounts the GNU root of
 # the first disk read-only, binds its directories into a tmpfs with a tmpfs
 # on /tmp, copies the KVM suite's data disk, the second, to /tmp/kvm, and
-# runs there under exits.sh, in a chroot of that tmpfs, the guest boots that
-# the measurements of Rach2's KVM run: the Debian guest twice and the i686
-# Rach2 guest once, each under the root's own QEMU and Linux's KVM. Then it
-# powers the machine off.
+# runs there, in a chroot of that tmpfs, under Linux's KVM: with no
+# `linuxhost=` on the kernel's command line, the guest boots under exits.sh
+# that the measurements of Rach2's KVM run, the Debian guest twice and the
+# i686 Rach2 guest once, each under the root's own QEMU; with
+# `linuxhost=selftests:LIST`, `corpus.sh selftests LIST` of the data disk, as
+# Rach2 runs it. Then it powers the machine off. The kernel gives init each
+# word of its command line it does not know, `linuxhost=` among them, as a
+# variable of its environment.
 B=/bin/busybox
 $B mount -t proc proc /proc
 $B mount -t sysfs sysfs /sys
@@ -52,6 +56,15 @@ $B mkdir -p $r/tmp/kd $r/tmp/kvm
 $B mount -t ext4 -o ro /dev/sdb $r/tmp/kd && $B cp -R $r/tmp/kd/. $r/tmp/kvm && $B umount $r/tmp/kd
 echo "linuxhost: kernel: $($B uname -r), $($B grep -c ^processor /proc/cpuinfo) processor(s)"
 echo "linuxhost: kvm: $($B ls -l /dev/kvm 2>&1)"
+case ${linuxhost:-} in
+    selftests:*)
+        list=${linuxhost#selftests:}
+        $B chroot $r /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/tmp \
+            /bin/sh -c 'cd /tmp/kvm && sh corpus.sh selftests "$1"' sh "$list" 2>&1
+        echo "linuxhost: done"
+        $B poweroff -f
+        ;;
+esac
 $B chroot $r /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/tmp /bin/sh -c '
 cd /tmp/kvm || exit 1
 sh exits.sh sh kvm-boot.sh -a kvm -o /tmp/kvm/boot1.log -k guests/debian/vmlinuz -i guests/debian/initrd
