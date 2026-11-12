@@ -210,6 +210,13 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
+/** No sleeper is on any queue: no other process runs here. */
+int wq_active(const wait_queue_t *wq)
+{
+    (void)wq;
+    return 0;
+}
+
 /** Fail the test, unless a row armed `wait_hook`: any other wait here would
  * never end, since no other process runs. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)

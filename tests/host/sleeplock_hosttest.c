@@ -125,6 +125,17 @@ void wq_wake_all(wait_queue_t *wq)
     wakes++;
 }
 
+/* The takers inside a wait whose condition was false, which on the machine
+ * are on the queue while the step that stands for the holder runs. */
+static int sleepers;
+
+/** Whether a taker sleeps on the queue now. */
+int wq_active(const wait_queue_t *wq)
+{
+    (void)wq;
+    return sleepers > 0;
+}
+
 /* The spinlocks held now, a lock's own and the records', and the waits
  * that began with one held, which on the machine would sleep under it. */
 static int spin_depth, spin_at_wait;
@@ -177,7 +188,9 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
         printf("sleeplock_hosttest: FAIL: a wait that nothing would end\n");
         _exit(1);
     }
+    sleepers++;
     steps[next_step++]();
+    sleepers--;
     cpu_table[0].current = me;
     return 0;
 }
@@ -185,7 +198,7 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 /** Forget the script and the counts of the last row. */
 static void script_clear(void)
 {
-    nsteps = next_step = waits = wakes = 0;
+    nsteps = next_step = waits = wakes = sleepers = 0;
 }
 
 static struct sleep_lock_record rec_one = SLEEP_LOCK_RECORD("one");
@@ -254,8 +267,8 @@ static void row_alone(void)
     check(sleep_lock_held(&lock) && lock.depth == 1 && wakes == 0,
           "a give of the inner take keeps it held and wakes nobody");
     sleep_lock_give(&lock);
-    check(!sleep_lock_held(&lock) && lock.holder == -1 && lock.serving == 1 && wakes == 1,
-          "the last give frees it, serves the next place and wakes the line");
+    check(!sleep_lock_held(&lock) && lock.holder == -1 && lock.serving == 1 && wakes == 0,
+          "the last give frees it, serves the next place and wakes nobody, since none waits");
     check(proc_a.file_locks == 0, "a lock that is not a file lock counts in no file_locks");
 }
 
@@ -305,7 +318,9 @@ static void row_spin(void)
     sleep_lock_take(&lock);
     check(waits == 1 && spin_at_wait == 0 && sleep_lock_held(&lock),
           "a taker waits with no spinlock held and has the lock after the give");
+    check(wakes == 1, "the give with a taker asleep wakes it");
     sleep_lock_give(&lock);
+    check(wakes == 1, "the give with no taker asleep wakes nobody");
     check(spin_depth == 0 && !lock.spin.locked, "a give lets every spinlock go");
 }
 

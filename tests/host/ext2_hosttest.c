@@ -148,6 +148,13 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
+/** No sleeper is on any queue: no other process runs here. */
+int wq_active(const wait_queue_t *wq)
+{
+    (void)wq;
+    return 0;
+}
+
 /** The wake of a waker that holds a spinlock, which, as `wq_wake_all`
  *  here, has nobody to wake. */
 void wq_wake_all_deferred(wait_queue_t *wq, uint64_t *cpus)
