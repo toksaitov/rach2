@@ -74,6 +74,11 @@ void wait_queue_init(wait_queue_t *wq);
  * sleep. On return the process is off the queue and RUNNING, and the
  * caller's interrupt flag is as it was.
  *
+ * A caller may hold the big lock or not, but no spinlock. One without it
+ * sleeps until the signal-work flag is set, as `wq_wait_event_sigflag`
+ * does, and the wait takes the big lock to learn whether a signal ends it
+ * (`signal_pending`), which goes back to sleep when the signal is ignored.
+ *
  * A deadline the caller armed in `wakeup_tick` before the call is armed again
  * before each block, since `signal_post` clears it when it wakes the process.
  * The condition must be true once that deadline has passed, and the caller
@@ -122,15 +127,16 @@ int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const c
 int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 
 /**
- * `wq_wait_event` for a caller that does not hold the big lock, which
- * `signal_pending` needs: the wait ends with -EINTR when the thread's
- * signal-work flag (`sig_woken`) is set, read without a lock and changing
- * nothing, as Linux's kvm_vcpu_check_block reads TIF_SIGPENDING through
- * signal_pending (virt/kvm/kvm_main.c:3738, include/linux/sched/signal.h:
- * 404-415). A signal wakes the sleeper as it wakes one of `wq_wait_event`.
- * The caller learns under the big lock which signal, if any, is taken;
- * an ignored signal's flag is cleared there, as the flag's recomputation
- * in `signal_pending` does. `name` is the wait's name for /proc/PID/wchan.
+ * `wq_wait_event` for a caller that judges a signal itself, under the big
+ * lock and after letting go of its own locks: the wait ends with -EINTR
+ * when the thread's signal-work flag (`sig_woken`) is set, read without a
+ * lock and changing nothing, as Linux's kvm_vcpu_check_block reads
+ * TIF_SIGPENDING through signal_pending (virt/kvm/kvm_main.c:3738,
+ * include/linux/sched/signal.h:404-415). A signal wakes the sleeper as it
+ * wakes one of `wq_wait_event`. The caller learns under the big lock which
+ * signal, if any, is taken; an ignored signal's flag is cleared there, as
+ * the flag's recomputation in `signal_pending` does. `name` is the wait's
+ * name for /proc/PID/wchan.
  */
 int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name);
 

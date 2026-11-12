@@ -1,7 +1,7 @@
 /**
  * Host test of the list of waiters of proc/wait_queue.c.
  *
- * host-deps:
+ * host-deps: tests/host/compat/bkl_held.c
  *
  * The test runs the enqueue, which adds a waiter once at the tail, the
  * dequeue, and wq_wake_all, which makes every blocked waiter ready, oldest
