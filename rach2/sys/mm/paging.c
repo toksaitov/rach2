@@ -3295,8 +3295,12 @@ static uint32_t zap_walks;
  * otherwise be walked region by region for each of its dozen threads at
  * each revoke of a blob. When the count of walks wraps, every space's mark
  * is cleared first, so that no stale mark passes a space. A walk that
- * waited for a lock starts again from the first record and passes the
- * spaces it has changed. Each space is changed under its regions' lock
+ * waited for a lock starts again from the first record with a new number
+ * and zaps every space again, since the big lock was free during the wait
+ * and a thread of a space already changed may have faulted the object back
+ * in; only the last pass, which waits for nothing, runs whole under the big
+ * lock, as Linux's unmap_mapping_pages holds i_mmap_rwsem across its whole
+ * walk (mm/memory.c:3822-3838). Each space is changed under its regions' lock
  * held to write (`zap_lock`), and its count of zaps moves, so that a fault
  * that let the lock go across a file's or a device's operation maps no
  * page taken back meanwhile.
@@ -3311,6 +3315,7 @@ void paging_zap_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo
     int held, taken;
 
     bkl_assert_held();
+again:
     walk = ++zap_walks;
     if (walk == 0) {
         for (p = proc_list; p; p = p->next) {
@@ -3320,7 +3325,6 @@ void paging_zap_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo
         }
         walk = zap_walks = 1;
     }
-again:
     for (p = proc_list; p; p = p->next) {
         struct mm *mm = p->mm;
 
