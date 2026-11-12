@@ -1947,6 +1947,31 @@ static int cached_cross(struct vfs_ref *cur)
     }
 }
 
+/**
+ * Move the cached walk at `cur` to `found`, held, on the same mount, and
+ * cross the mounts over it (`cached_cross`). A file bound over the last
+ * name's entry in `*entry` moves the walk onto another mount, which the
+ * entry does not name, so the entry is dropped, as the full walk's
+ * `walk_record_cross` drops it and Linux's `__follow_mount_rcu` replaces
+ * the mount and the dentry together (fs/namei.c:1544-1556). 0, or
+ * WALK_FULL as `cached_cross` returns it. May sleep.
+ */
+static int cached_move(struct vfs_ref *cur, void *found, struct vfs_name **entry)
+{
+    struct vfs_mount *from = cur->mnt;
+
+    cached_put(cur->mnt, cur->node);
+    cur->node = found;
+    if (cached_cross(cur) != 0) {
+        return WALK_FULL;
+    }
+    if (entry && cur->mnt != from) {
+        vfs_name_put(*entry);
+        *entry = NULL;
+    }
+    return 0;
+}
+
 /* What the cached walk keeps while it follows links: the two path pages,
  * taken at the first link (`walk_pages`), and the count of links. */
 struct cached_links {
@@ -2006,7 +2031,7 @@ static int cached_link(struct vfs_ref *cur, void *found, const char *rest, struc
  * directory alone (`name_cache`). A symbolic link whose target the node
  * holds it follows (`cached_link`), from the root for an absolute target
  * and from the link's directory for a relative one, and a directory a
- * mount covers it crosses (`cached_cross`); a nameless mount entered by
+ * mount covers it crosses (`cached_move`); a nameless mount entered by
  * name it leaves to the full walk. Anything else, `..`, any other link and
  * a failed search check among them, which the full walk may excuse on the
  * way to the working directory (`toward_cwd`), goes to the full walk, which
@@ -2086,9 +2111,7 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
         if (rc != 0) {
             goto full;
         }
-        cached_put(cur.mnt, cur.node);
-        cur.node = found;
-        if (cached_cross(&cur) != 0) {
+        if (cached_move(&cur, found, entry) != 0) {
             goto full;
         }
     }
