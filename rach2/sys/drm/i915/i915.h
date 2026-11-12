@@ -2670,9 +2670,10 @@ void i915_gem_unlock_atomic(struct drm_i915_private *i915, int taken);
 /**
  * Undo every object on `gem.freed` with the GEM lock held and no give-way,
  * for the shrinker, which may not give way and must count the frames now:
- * the number of pages of their own that went. Linux's shrinker reaches the
- * pages of an object that its free worker has not yet freed, since the
- * object stays on its lists until then (gem/i915_gem_shrinker.c:186-192).
+ * the number of pages of their own that went. This stands in for Linux's
+ * free worker, which i915_gem_free_object queues to run beside the holder
+ * (gem/i915_gem_object.c:471-472); Linux's shrinker itself skips every
+ * object whose last reference has gone (gem/i915_gem_shrinker.c:212-213).
  */
 uint32_t i915_gem_free_deferred_atomic(struct drm_i915_private *i915);
 /** Revoke the bindings and frames of each userptr object whose

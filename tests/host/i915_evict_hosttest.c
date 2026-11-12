@@ -880,8 +880,10 @@ static void free_under_shrinker(void)
 
 /** The shrinker under its caller's own GEM lock, as an allocation of
  * EXECBUFFER2's that reclaims, undoes `gem.freed` with no give-way and
- * counts its frames, as Linux's shrinker reaches an object its free worker
- * has not yet freed (gem/i915_gem_shrinker.c:186-192). */
+ * counts its frames, in place of Linux's free worker, which runs beside
+ * the holder (gem/i915_gem_object.c:471-472), since Linux's shrinker skips
+ * an object whose last reference has gone (gem/i915_gem_shrinker.c:212-213).
+ */
 static void free_shrinker_holder(void)
 {
     struct mem_shrinker *sk = &dev_a->gem.shrinker.base;

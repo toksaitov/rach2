@@ -108,9 +108,10 @@ uint32_t i915_gem_shrink(struct drm_i915_private *i915, uint32_t want)
 }
 
 /** The shrinker's `shrink`, which reclaim calls under the big kernel lock:
- * the objects on `gem.freed` undone first, as Linux's shrinker reaches the
- * pages of an object its free worker has not yet freed
- * (gem/i915_gem_shrinker.c:186-192), then the pool's idle shadows dropped,
+ * the objects on `gem.freed` undone first, in place of Linux's free
+ * worker, which runs beside the holder (gem/i915_gem_object.c:471-472),
+ * since Linux's shrinker skips every object whose last reference has gone
+ * (gem/i915_gem_shrinker.c:212-213), then the pool's idle shadows dropped,
  * as Linux's pool_retire makes an idle shadow purgeable for its shrinker
  * (gt/intel_gt_buffer_pool.c:107-112), then the purgeable objects purged.
  * None sleeps, and their unbinds give no way (`i915_gem_object_unbind`),
