@@ -23,6 +23,7 @@
 #include "../cmdline.h"
 #include "../latency.h"
 #include "../panic.h"
+#include "../proc/smp.h"
 
 #include "../lib/kerrno.h"
 #include "../lib/kint.h"
@@ -200,7 +201,7 @@ struct ahci_disk {
      * that caller. The handler leaves the port alone while this is set,
      * since acknowledging would clear the error bits that the caller
      * reads, no queued request starts, and a second polled caller waits
-     * for the claim to end (`ahci_claim`). */
+     * for the claim to end, within its own bound (`ahci_claim`). */
     int polling;
     struct block_request *queue_head, *queue_tail;
     /* The pages a controller without 64-bit addressing moves a buffer's
@@ -1078,28 +1079,57 @@ static uint32_t ahci_cmd_steps(void)
 }
 
 /**
- * Claim `d`'s slot for a polled command, as libata's internal command takes
- * the port from its queue under `ap->lock` and runs with the lock let go
- * (drivers/ata/libata-core.c:1546-1597, 1663). Under the port's lock, a
- * claim another polled caller holds is waited out with the lock let go, the
- * active queued command is finished by polling and its request completed
- * (`ahci_drain`), and `polling` is set. The lock is then let go: the claim
- * keeps the interrupt off the port and the queue stopped until
+ * One step of a polled wait: with interrupts off, answer the requests other
+ * processors left this one (`smp_service`), as a spinlock's waiter does
+ * (lib/spinlock.c), since a processor dropping a translation everywhere
+ * waits for this one's answer and no interrupt brings it; then the delay.
+ * Any context, the port's lock held or not.
+ */
+static void ahci_poll_step(void)
+{
+    if (!kirq_enabled()) {
+        smp_service();
+    }
+    k_udelay(AHCI_CMD_POLL_US);
+}
+
+/**
+ * Claim `d`'s slot for polled command `command`, as libata's internal
+ * command takes the port from its queue under `ap->lock` and runs with the
+ * lock let go (drivers/ata/libata-core.c:1546-1597, 1663). Under the port's
+ * lock, a claim another polled caller holds is waited out with the lock let
+ * go, the active queued command is finished by polling and its request
+ * completed (`ahci_drain`), and `polling` is set. The lock is then let go:
+ * the claim keeps the interrupt off the port and the queue stopped until
  * `ahci_release`, so the command runs with interrupts as the caller had
  * them. Never sleeps.
+ *
+ * The wait for another claim takes its steps from `*steps`, the caller's
+ * bound for the whole command, as libata bounds an internal command by one
+ * timeout (`wait_for_completion_timeout`, libata-core.c:1616): a caller with
+ * interrupts off, whose bound is five seconds, cannot spin for the thirty
+ * seconds and more of a holder's with them on. Returns 0 with the port
+ * claimed and `*steps` what is left, or `-EIO`, logged, with nothing
+ * claimed and the port untouched, since its state is the holder's.
  */
-static void ahci_claim(struct ahci_disk *d)
+static int ahci_claim(struct ahci_disk *d, uint8_t command, uint32_t *steps)
 {
     uint32_t flags = spin_lock_irqsave(&d->lock);
 
     while (d->polling) {
         spin_unlock_irqrestore(&d->lock, flags);
-        k_udelay(AHCI_CMD_POLL_US);
+        if (--*steps == 0) {
+            klog(KLOG_WARN, "ahci", "port %d: command 0x%X failed: %s", d->port, (unsigned)command,
+                 "another polled command held the port");
+            return -EIO;
+        }
+        ahci_poll_step();
         flags = spin_lock_irqsave(&d->lock);
     }
     ahci_drain(d);
     d->polling = 1;
     spin_unlock_irqrestore(&d->lock, flags);
+    return 0;
 }
 
 /** End `d`'s polled claim and start its queue again, under the port's lock;
@@ -1132,7 +1162,9 @@ static int ahci_polled_failed(struct ahci_disk *d, uint8_t command, const char *
 
 /**
  * Issue one polled command on `d`'s port, which the caller has claimed
- * (`ahci_claim`), and spin to completion within `steps`.
+ * (`ahci_claim`), and spin to completion within `steps`, what is left of
+ * the caller's bound once the claim was won: the wait for the task file to
+ * go idle and the wait for the slot take from it in turn.
  *
  * Builds the command through ahci_build_command, waits for the task file to
  * go idle, sets the slot's `PxCI` bit, and busy-polls it clear, watching the
@@ -1168,7 +1200,7 @@ static int ahci_command_claimed(struct ahci_disk *d, uint8_t command, uint64_t l
         if (--spin == 0) {
             return ahci_polled_failed(d, command, "the device stayed busy");
         }
-        k_udelay(AHCI_CMD_POLL_US);
+        ahci_poll_step();
     }
 
     ahci_write32(is_off, 0xFFFFFFFFu); /* clear stale status (write 1) */
@@ -1178,7 +1210,6 @@ static int ahci_command_claimed(struct ahci_disk *d, uint8_t command, uint64_t l
     }
     ahci_write32(ci_off, 1u << AHCI_SLOT);
 
-    spin = steps;
     while (ahci_read32(ci_off) & (1u << AHCI_SLOT)) {
         uint32_t is;
 
@@ -1190,11 +1221,11 @@ static int ahci_command_claimed(struct ahci_disk *d, uint8_t command, uint64_t l
         }
         if (--spin == 0) {
             return ahci_polled_failed(d, command,
-                                      steps == AHCI_CMD_STEPS
+                                      kirq_enabled()
                                           ? "no answer in thirty seconds"
                                           : "no answer in five seconds with interrupts off");
         }
-        k_udelay(AHCI_CMD_POLL_US);
+        ahci_poll_step();
     }
     rc = ahci_judge(d, bytes, buf, write);
     ahci_acknowledge(d);
@@ -1207,8 +1238,10 @@ static int ahci_command_claimed(struct ahci_disk *d, uint8_t command, uint64_t l
  * release it. On a port with a queued command active, the claim finishes
  * that command first by polling and completes its request, and the release
  * starts the queue again after this command, or after one that could not
- * be built. The bound is the caller's: thirty seconds with interrupts on,
- * five with them off. Returns as `ahci_command_claimed` does.
+ * be built. The bound is the caller's, thirty seconds with interrupts on
+ * and five with them off, and covers the wait for another polled caller's
+ * claim as well as the command. Returns as `ahci_command_claimed` does, and
+ * `-EIO` when the other claim outlasts the bound.
  */
 static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, uint32_t count,
                             volatile uint8_t *buf, uint32_t bytes, int write)
@@ -1216,7 +1249,9 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
     uint32_t steps = ahci_cmd_steps();
     int rc;
 
-    ahci_claim(d);
+    if (ahci_claim(d, command, &steps) != 0) {
+        return -EIO;
+    }
     rc = ahci_command_claimed(d, command, lba, count, buf, bytes, write, steps);
     ahci_release(d);
     return rc;
@@ -1380,7 +1415,7 @@ static void ahci_drain(struct ahci_disk *d)
             if (--spin == 0) {
                 break;
             }
-            k_udelay(AHCI_CMD_POLL_US);
+            ahci_poll_step();
         }
         if (spin == 0) {
             struct block_request *r = d->active;
@@ -1567,7 +1602,9 @@ static int ahci_flush(struct ahci_disk *d)
     uint32_t steps = ahci_cmd_steps();
     int rc;
 
-    ahci_claim(d);
+    if (ahci_claim(d, ATA_FLUSH_EXT, &steps) != 0) {
+        return -EIO; /* `unflushed` stays as it was */
+    }
     d->dev.unflushed = 0;
     rc = ahci_command_claimed(d, ATA_FLUSH_EXT, 0, 0, 0, 0, 0, steps);
     if (rc != 0) {
