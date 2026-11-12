@@ -50,8 +50,13 @@
  *   another process's allocation on the root runs in the reclaim's sleep;
  * - a read of a disk file whose pages a shared mapping holds in memory
  *   when no temporary mapping is free for one of them;
+ * - a read of an ext2 file without the big lock while another thread, as
+ *   the read's first page waits for the disk, maps the file shared and
+ *   writable and stores into its second page, through the file system and
+ *   through the file page cache (`resident_race`, which `--race-only` runs
+ *   alone);
  * - a read without the big lock whose end a sharer's seek put past 2^63-1,
- *   which gives back the big lock it took, and an open without the big lock
+ *   which holds no big lock after, and an open without the big lock
  *   that installs descriptor 1 and is not made again under it;
  * - on a model type that sets `file_locked`, with the node locks of
  *   rach2/sys/fs/nodelock.c, the order of the locks a create, an unlink,
@@ -282,6 +287,9 @@ const struct vfs_type vfs_krffs_type = {"krffs", 0, &root_ops, 1, 0};
 const struct vfs_type vfs_krffs_volume_type = {"krffs", 0, 0, 1, 0};
 const struct vfs_type vfs_vfat_type = {"vfat", 0, 0, 0, 0};
 const struct vfs_type vfs_exfat_type = {"exfat", 0, 0, 0, 0};
+/* ext2, the type whose files a shared mapping keeps pages of, for the race
+ * row, unserialised as it is. */
+const struct vfs_type vfs_ext2_type = {"ext2", 0, 0, 0, 0};
 static const struct vfs_type mounted_type = {0};
 /* A mounted type whose uses are serialised under its namespace lock, as
  * KRFFS volumes and ext2 are, for the attribute rows. */
@@ -788,6 +796,16 @@ extern int bkl_host_free;
 extern int bkl_host_takes;
 static uintptr_t resident_fail;
 static int resident_refs;
+/* The race row (`resident_race`): set while it runs, an ext2 mount of a
+ * file of two pages; whether the file page cache's model serves the read;
+ * set once the other thread has mapped the file and stored into its second
+ * page in memory, `resident_pages[1]`; and the disk's reads. */
+static int race_row;
+static struct vfs_mount race_mount;
+static int race_cache;
+static int race_mapped;
+static int race_reads;
+static void race_map(void);
 
 /** Report an accessible regular file with set-id bits, or in the mkdir rows
  * the directory a name is made in. A read the mount's lock does not cover
@@ -800,6 +818,14 @@ int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
         k_memset(st, 0, sizeof(*st));
         st->mode = 0100644;
         st->ino = 78;
+        return 0;
+    }
+    if (race_row) {
+        check(mnt == &race_mount && at == &node, "a racing read sizes the file it reads");
+        k_memset(st, 0, sizeof(*st));
+        st->mode = 0100644;
+        st->ino = 77;
+        st->size = sizeof(resident_pages);
         return 0;
     }
     if (resident_row) {
@@ -917,16 +943,41 @@ uint32_t filecache_epoch(struct vfs_mount *mnt, void *node)
     return 0;
 }
 
-/** Keep no file, so that read(2) goes to the file system. */
+/** Keep no file, so that read(2) goes to the file system, but in the race
+ * row with `race_cache`: then read the file a page at a time, each from
+ * the disk (`vfs_read`), and before each page after the first end the read
+ * when `cut` asks, as the cache does. */
 int filecache_file_read(struct open_file *ofd, char __user *buf, uint32_t count, uint64_t offset,
-                        int32_t *got)
+                        int32_t *got, int (*cut)(const struct open_file *ofd))
 {
-    (void)ofd;
-    (void)buf;
-    (void)count;
-    (void)offset;
-    (void)got;
-    return 0;
+    uint32_t done = 0;
+    int32_t n = 0;
+
+    if (!race_row || !race_cache) {
+        return 0;
+    }
+    if (offset >= sizeof(resident_pages)) {
+        *got = 0;
+        return 1;
+    }
+    if (count > sizeof(resident_pages) - offset) {
+        count = (uint32_t)(sizeof(resident_pages) - offset);
+    }
+    while (done < count) {
+        uint32_t in = (uint32_t)((offset + done) % PAGE_SIZE);
+        uint32_t want = PAGE_SIZE - in < count - done ? PAGE_SIZE - in : count - done;
+
+        if (done > 0 && cut && cut(ofd)) {
+            break;
+        }
+        n = vfs_read(ofd->vmnt, ofd->fhandle, (char __force *)buf + done, want, offset + done);
+        if (n <= 0) {
+            break;
+        }
+        done += (uint32_t)n;
+    }
+    *got = done > 0 || n > 0 ? (int32_t)done : n;
+    return 1;
 }
 
 /** Keep no page. */
@@ -1032,7 +1083,7 @@ int unix_inflight_holds(const void *node)
  * a mapping. */
 void *kmap_temp(uintptr_t phys)
 {
-    if (resident_row) {
+    if (resident_row || race_mapped) {
         return phys == resident_fail ? NULL : (void *)phys;
     }
     check(0, "unexpected read of a mapping's page");
@@ -1096,6 +1147,18 @@ uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff)
     if (resident_row && pgoff < 2) {
         return (uintptr_t)resident_pages[pgoff];
     }
+    if (race_mapped && pgoff == 1) {
+        return (uintptr_t)resident_pages[1];
+    }
+    return 0;
+}
+
+/** Whether the table has a page's leaf: never, since no row adds a page to
+ * a disk file's shared mapping (`shmem_adopt`). */
+int shmem_has_leaf(const struct shmem *sh, uint32_t pgoff)
+{
+    (void)sh;
+    (void)pgoff;
     return 0;
 }
 
@@ -1130,7 +1193,7 @@ uintptr_t alloc_user_frame(void)
 void frame_ref(uintptr_t phys)
 {
     (void)phys;
-    check(resident_row, "unexpected reference to a shared page");
+    check(resident_row || race_mapped, "unexpected reference to a shared page");
     resident_refs++;
 }
 
@@ -1139,7 +1202,7 @@ void frame_ref(uintptr_t phys)
 void free_frame(uintptr_t phys)
 {
     (void)phys;
-    check(resident_row, "unexpected free of a shared page");
+    check(resident_row || race_mapped, "unexpected free of a shared page");
     resident_refs--;
 }
 
@@ -1157,16 +1220,34 @@ void vm_file_put(struct vm_file *f)
     check(0, "unexpected put of a mapping");
 }
 
-/** Fail the row: no row reads a mapped file. */
+/** Read the race row's disk, whose first page is all 'a' and second all
+ * 'b'; a read of the first page sleeps for the disk, and the other thread
+ * maps the file and stores into its second page then (`race_map`). Fail
+ * any other row: none reads a mapped file. */
 int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count, uint64_t offset)
 {
-    (void)mnt;
+    uint32_t i;
+
     (void)handle;
-    (void)buf;
-    (void)count;
-    (void)offset;
-    check(0, "unexpected read of a mapped file");
-    return -EIO;
+    if (!race_row) {
+        check(0, "unexpected read of a mapped file");
+        return -EIO;
+    }
+    check(mnt == &race_mount, "a racing read reads its own file");
+    race_reads++;
+    if (offset >= sizeof(resident_pages)) {
+        return 0;
+    }
+    if (count > sizeof(resident_pages) - offset) {
+        count = (uint32_t)(sizeof(resident_pages) - offset);
+    }
+    if (offset < PAGE_SIZE && !race_mapped) {
+        race_map();
+    }
+    for (i = 0; i < count; i++) {
+        ((char *)buf)[i] = offset + i < PAGE_SIZE ? 'a' : 'b';
+    }
+    return (int32_t)count;
 }
 
 /** Fail the row: no row writes a mapped file. */
@@ -4236,6 +4317,7 @@ static void resident_unmapped(void)
     static struct dshare ds;
     static char out[2 * PAGE_SIZE];
     struct open_file ofd;
+    int big = 0;
 
     k_memset(&ofd, 0, sizeof(ofd));
     ofd.vmnt = &mount;
@@ -4244,35 +4326,125 @@ static void resident_unmapped(void)
     ds.mnt = &mount;
     ds.ino = 77;
     ds.sh.npages = 2;
+    ds.stores = 1;
     k_memset(resident_pages[0], 'a', PAGE_SIZE);
     k_memset(resident_pages[1], 'b', PAGE_SIZE);
     *dshare_bucket(ds.ino) = &ds;
     dshare_count = 1;
+    dshare_stores_in[dshare_index(77)] = 1;
     resident_row = 1;
 
     resident_fail = (uintptr_t)resident_pages[1];
     k_memset(out, 0, sizeof(out));
-    check(file_read_locked(&ofd, (char __user *)out, sizeof(out), 0) == PAGE_SIZE &&
+    check(file_read_locked(&ofd, (char __user *)out, sizeof(out), 0, &big) == PAGE_SIZE &&
               out[0] == 'a' && out[PAGE_SIZE - 1] == 'a' && out[PAGE_SIZE] == 0,
           "a resident read returns the page before the one it cannot map");
     resident_fail = (uintptr_t)resident_pages[0];
-    check(file_read_locked(&ofd, (char __user *)out, sizeof(out), 0) == -ENOMEM,
+    check(file_read_locked(&ofd, (char __user *)out, sizeof(out), 0, &big) == -ENOMEM,
           "a resident read of a first page it cannot map fails with ENOMEM");
     check(resident_refs == 0, "a resident read lets every page's reference go");
+    check(big == 0, "a resident read under the big lock takes it no more");
 
     resident_row = 0;
     resident_fail = 0;
+    dshare_stores_in[dshare_index(77)] = 0;
     *dshare_bucket(ds.ino) = NULL;
     dshare_count = 0;
 }
 
+/* The race row's mapping of the file, which the other thread makes. */
+static struct dshare race_ds;
+
+/** The other thread, while the race row's read sleeps on the disk: it maps
+ * the file shared through a descriptor open for writing, as
+ * `filemap_disk_map` marks it, and stores 'S' over its second page, which
+ * the fault brought into memory and nothing has written back. */
+static void race_map(void)
+{
+    race_ds.mnt = &race_mount;
+    race_ds.ino = 77;
+    race_ds.stores = 1;
+    race_ds.sh.npages = 2;
+    *dshare_bucket(race_ds.ino) = &race_ds;
+    dshare_count = 1;
+    dshare_stores_in[dshare_index(77)] = 1;
+    k_memset(resident_pages[1], 'S', PAGE_SIZE);
+    race_mapped = 1;
+}
+
+/**
+ * A read without the big lock of an ext2 file of two pages that no mapping
+ * holds when it starts. While its first page waits for the disk, another
+ * thread maps the file shared and writable and stores 'S' over the second
+ * page (`race_map`). The read returns the first page from the disk and the
+ * second with the store, as Linux's filemap_read takes each folio from the
+ * file's pages when it reaches it (mm/filemap.c:2649-2700), and gives back
+ * the big lock it took to read the mapping's page, and through the file
+ * system to read the disk; once through the file system, `cache` 0, and
+ * once through the file page cache, `cache` 1.
+ */
+static void resident_race_once(int cache, const char *how)
+{
+    static char out[2 * PAGE_SIZE];
+    fd_entry_t *e;
+    int fd;
+
+    row_begin();
+    race_mount.type = &vfs_ext2_type;
+    fd = fd_alloc(proc.fds);
+    e = fd_slot(proc.fds, fd);
+    e->type = FD_TYPE_FILE;
+    e->flags = FD_FLAG_READ;
+    e->ofd->vmnt = &race_mount;
+    e->ofd->vnode = &node;
+    e->ofd->offset = 0;
+    e->ofd->ino = 77;
+    k_memset(resident_pages[1], 'b', PAGE_SIZE);
+    k_memset(out, 0, sizeof(out));
+    race_row = 1;
+    race_cache = cache;
+    race_reads = 0;
+    bkl_host_free = 1;
+    bkl_host_takes = 0;
+    check(file_read(e, (char __user *)out, sizeof(out), NULL, sizeof(out)) == (int32_t)sizeof(out),
+          how);
+    check(out[0] == 'a' && out[PAGE_SIZE - 1] == 'a', "the first page comes from the disk");
+    check(out[PAGE_SIZE] == 'S' && out[2 * PAGE_SIZE - 1] == 'S',
+          "the second page has the store a mapping made while the first waited for the disk");
+    check(race_reads == 1, "the second page is not read from the disk");
+    check(e->ofd->offset == sizeof(out), "the offset moves past both pages");
+    check(bkl_host_takes == (cache ? 1 : 2) && !bkl_held(),
+          "the read takes the big lock for the mapping's page, and for the file system's read, "
+          "and gives it back");
+    check(resident_refs == 0, "the read lets the mapping's page go");
+    bkl_host_free = 0;
+    race_row = 0;
+    race_cache = 0;
+    race_mapped = 0;
+    dshare_stores_in[dshare_index(77)] = 0;
+    *dshare_bucket(race_ds.ino) = NULL;
+    dshare_count = 0;
+    e->ofd->ino = 0;
+    e->ofd->vmnt = NULL;
+    e->ofd->vnode = NULL;
+    e->type = FD_TYPE_NONE;
+    row_end();
+}
+
+/** The race row, through the file system and through the file page cache
+ * (`resident_race_once`). */
+static void resident_race(void)
+{
+    resident_race_once(0, "a read through the file system returns both pages");
+    resident_race_once(1, "a read through the file page cache returns both pages");
+}
+
 /**
  * A read without the big lock of a file whose description a sharer's seek
- * left at 2^63-1, while a writable shared mapping of the file has pages, so
- * that the read takes the big lock: the read is -EINVAL, as
- * Linux's rw_verify_area refuses it, and gives back the big lock it took, as
- * every answer of Linux's ksys_read releases the position
- * (fs/read_write.c:701-714).
+ * left at 2^63-1, while a writable shared mapping of the file has pages:
+ * the read is -EINVAL, as Linux's rw_verify_area refuses it, before it
+ * reaches a page, and holds no big lock after, as every answer of Linux's
+ * ksys_read releases the position (fs/read_write.c:701-714).
  */
 static void read_end_past_unlocked(void)
 {
@@ -4300,7 +4472,7 @@ static void read_end_past_unlocked(void)
     bkl_host_takes = 0;
     check(file_read(e, (char __user *)out, sizeof(out), NULL, sizeof(out)) == -EINVAL,
           "a read whose end a sharer's seek put past 2^63-1 is EINVAL");
-    check(bkl_host_takes == 1 && !bkl_held(), "and gives back the big lock it took");
+    check(!bkl_held(), "and holds no big lock after");
     bkl_host_free = 0;
     dshare_stores_in[dshare_index(77)] = 0;
     *dshare_bucket(ds.ino) = NULL;
@@ -4483,10 +4655,19 @@ static void protected_creates(void)
     vfs_protected_fifos = 1;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     mount.type = &mounted_type;
     give_maps();
+    if (argc > 1 && __builtin_strcmp(argv[1], "--race-only") == 0) {
+        proc.rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
+        resident_race();
+        if (!failures) {
+            printf(
+                "open-hosttest: result: pass: a read sees a mapping's store made while it slept\n");
+        }
+        return failures != 0;
+    }
     truncation();
     close_sleeping();
     deferred_release();
@@ -4515,6 +4696,7 @@ int main(void)
     file_locked_orders();
     file_locked_mount_rmdir();
     resident_unmapped();
+    resident_race();
     read_end_past_unlocked();
     unlocked_open_one();
     protected_links();
