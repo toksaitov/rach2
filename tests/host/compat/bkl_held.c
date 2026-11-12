@@ -4,10 +4,12 @@
  * the row counts. */
 #include "../../../rach2/sys/proc/smp.h"
 
-/* Nonzero while a row stands for a caller without the big lock; the takes
- * the code made since the row cleared `bkl_host_takes`; and the depth of
- * those takes, which the code gives back before it returns. */
+/* Nonzero while a row stands for a caller without the big lock; nonzero
+ * while another processor holds it, so that a try fails; the takes the code
+ * made since the row cleared `bkl_host_takes`; and the depth of those
+ * takes, which the code gives back before it returns. */
 int bkl_host_free;
+int bkl_host_elsewhere;
 int bkl_host_takes;
 static int depth;
 
@@ -38,10 +40,14 @@ int bkl_held(void)
     return !bkl_host_free || depth > 0;
 }
 
-/** Take the big lock as `bkl_enter` does and return 1: the test is one
- * thread, so no other processor holds it. */
+/** Take the big lock as `bkl_enter` does and return 1, or take nothing and
+ * return 0 while the row has another processor hold it
+ * (`bkl_host_elsewhere`). */
 int bkl_try_enter(void)
 {
+    if (bkl_host_elsewhere) {
+        return 0;
+    }
     bkl_enter();
     return 1;
 }
