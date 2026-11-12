@@ -41,6 +41,8 @@ struct dshare {
     uint64_t ino;
     uint32_t users;   /* the mappings of it */
     uint32_t leaving; /* releases of writers writing its pages back */
+    int stores;       /* a shared mapping has mapped it, so its pages may
+                         hold stores the file lacks; never cleared */
     wait_queue_t left;
     struct shmem sh;
 };
@@ -71,6 +73,10 @@ static struct filemap *maps;
 #define DSHARE_BUCKETS 256u
 static struct dshare *dshares[DSHARE_BUCKETS];
 static uint32_t dshare_count; /* how many are in the buckets */
+/* How many in each bucket a shared mapping has mapped (`stores`), which a
+ * read of a disk file reads as one word without the big lock
+ * (`filemap_disk_stores_maybe`). */
+static uint32_t dshare_stores_in[DSHARE_BUCKETS];
 
 /**
  * Whether a page of a file on `mnt` can be read with interrupts off, for a
@@ -184,10 +190,16 @@ static void *filemap_node(const struct filemap *m)
     return fd_root_node(&m->entry);
 }
 
+/** The index in `dshares` of the bucket of inode number `ino`. */
+static uint32_t dshare_index(uint64_t ino)
+{
+    return (uint32_t)(ino ^ (ino >> 32)) % DSHARE_BUCKETS;
+}
+
 /** The bucket of `dshares` that holds the file of inode number `ino`. */
 static struct dshare **dshare_bucket(uint64_t ino)
 {
-    return &dshares[(uint32_t)(ino ^ (ino >> 32)) % DSHARE_BUCKETS];
+    return &dshares[dshare_index(ino)];
 }
 
 /** The pages in memory of the file `ino` of `mnt`, or NULL when no shared
@@ -216,6 +228,9 @@ static void dshare_unlink(struct dshare *ds)
     if (*link) {
         *link = ds->next;
         dshare_count--;
+        if (ds->stores) {
+            dshare_stores_in[dshare_index(ds->ino)]--;
+        }
     }
 }
 
@@ -570,7 +585,10 @@ struct vm_file *filemap_shared(const fd_entry_t *e, struct shmem *sh)
     return f;
 }
 
-struct vm_file *filemap_disk_shared(const fd_entry_t *e)
+/** A mapping of the disk file of `e`, its file's pages in memory found or
+ * made (`dshare_of`), shared when `shared`, which marks the file as one
+ * whose pages may hold stores (`stores`); NULL when memory runs out. */
+static struct vm_file *filemap_disk_map(const fd_entry_t *e, int shared)
 {
     struct dshare *ds = dshare_of(e->ofd->vmnt, e->ofd->ino);
     struct filemap *m;
@@ -595,14 +613,23 @@ struct vm_file *filemap_disk_shared(const fd_entry_t *e)
         }
         return NULL;
     }
-    m->shared = 1;
+    m->shared = shared;
     m->ds = ds;
     m->sh = &ds->sh;
     ds->users++;
     ds->sh.maps++;
+    if (shared && !ds->stores) {
+        ds->stores = 1;
+        dshare_stores_in[dshare_index(ds->ino)]++;
+    }
     m->vf.fill = NULL;
     m->vf.share = filemap_share_disk;
     return &m->vf;
+}
+
+struct vm_file *filemap_disk_shared(const fd_entry_t *e)
+{
+    return filemap_disk_map(e, 1);
 }
 
 int filemap_disk_pages(const struct vm_file *f)
@@ -614,10 +641,11 @@ struct vm_file *filemap_private(const fd_entry_t *e, struct shmem *sh, int disk)
 {
     struct vm_file *f;
 
+    if (disk && !sh) {
+        return filemap_disk_map(e, 0);
+    }
     if (sh) {
         f = filemap_shared(e, sh);
-    } else if (disk) {
-        f = filemap_disk_shared(e);
     } else {
         return filemap_new(e);
     }
@@ -640,9 +668,9 @@ int filemap_disk_shared_mapped(const struct vfs_mount *mnt, uint64_t ino)
     return 0;
 }
 
-int filemap_disk_any(void)
+int filemap_disk_stores_maybe(uint64_t ino)
 {
-    return *(volatile uint32_t *)&dshare_count != 0;
+    return *(volatile uint32_t *)&dshare_stores_in[dshare_index(ino)] != 0;
 }
 
 int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino)
