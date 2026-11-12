@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 """Accept Crysis on a trial root: the flyby, the suit's reboot and the saves.
 
-Usage, as root, in the boot session of the GNU root with the game installed
-in /data/crysis (crysis.sh):
+Usage, as root, in the boot session of the GNU root with the game in
+/data/crysis, which the native case crysis.sh (tests/native) makes a private
+copy of the owner's, since every command but `key` writes there:
 
     crysis.py prepare OUT
     crysis.py flyby ROUTE NAME [LOOPS]
     crysis.py hud NAME SAVE [ROUTE]
     crysis.py save NAME [ROUTE]
     crysis.py load NAME SAVE [ROUTE [PREFIX]]
-    crysis.py restore
 
-ROUTE is direct, umu or 32: crysis.sh run, run --umu or run --32. `prepare`
-gives the desktop account the game's directory, recording its owner, sets
-the boot session's output to 1366x768 with Weston's screenshots on, and
-writes the settings of Linux's runs on the Lenovo (dev-log/80-games/80-2.md):
-Low, 1366x768, fullscreen, no vsync, sound on. Each later command writes
-under OUT/NAME and prints one result line, `crysis: result: NAME: ok` or
-`crysis: result: NAME: FAILED` with what failed.
+ROUTE is direct, umu or 32: crysis.sh run, run --umu or run --32. The
+desktop account, which runs the game, must be able to write /data/crysis.
+`prepare` sets the boot session's output to 1366x768 with Weston's
+screenshots on, and writes the settings of Linux's runs on the Lenovo
+(dev-log/80-games/80-2.md): Low, 1366x768, fullscreen, no vsync, sound on. A
+file the script writes or removes under /data/crysis is replaced or removed
+as a name, so that a symbolic link to a file of the owner's goes, never the
+file. Each later command writes under OUT/NAME and prints one result line,
+`crysis: result: NAME: ok` or `crysis: result: NAME: FAILED` with what
+failed.
 
 `flyby` runs Linux's island flyby, `-devmode +map island +exec benchmark_gpu`,
 and ends the game after LOOPS of its four loops; each loop's rate is judged
@@ -31,8 +34,7 @@ starts the first level, saves as accept_NAME once its opening cinematic, in
 which the game refuses a save, has played, and records the save's SHA-256
 in /data/crysis/accept.json; `load` loads SAVE through PREFIX, the game's own
 prefix unless given, and requires the level loaded and the save's bytes as
-recorded; it loads no save that `save` did not make. `restore` gives the
-game's directory back to its recorded owner.
+recorded; it loads no save that `save` did not make.
 """
 import ctypes
 import hashlib
@@ -52,7 +54,6 @@ GAME = BASE / "game"
 SAVES = BASE / "saves"
 SAVEGAMES = SAVES / "SaveGames"
 BENCH = GAME / "Game/Levels/island/benchmark_gpu.log"
-OWNER = BASE / "accept-owner"
 RECORD = BASE / "accept.json"
 STATE = Path("/run/crysis-accept")
 UID = 1001
@@ -112,12 +113,20 @@ def set_volume():
         subprocess.run(["mixer", "vol", "1"], check=False, stdout=subprocess.DEVNULL)
 
 
+def replace(path, text):
+    """Write TEXT as a new file PATH owned by the desktop account, in place
+    of whatever PATH was, a symbolic link to a read-only file among them."""
+    if path.is_symlink() or path.exists():
+        path.unlink()
+    path.write_text(text)
+    os.chown(path, UID, UID)
+
+
 def settings():
     """Write Low, 1366x768, fullscreen, no vsync and sound on, in the game's
     system.cfg and the profile's files, which override it."""
-    (GAME / "system.cfg").write_text("sys_spec = 1\nr_Width = 1366\nr_Height = 768\n"
-                                     "r_Fullscreen = 1\nr_vsync = 0\ns_SoundEnable = 1\n")
-    os.chown(GAME / "system.cfg", UID, UID)
+    replace(GAME / "system.cfg", "sys_spec = 1\nr_Width = 1366\nr_Height = 768\n"
+            "r_Fullscreen = 1\nr_vsync = 0\ns_SoundEnable = 1\n")
     cfg = SAVES / "game.cfg"
     if cfg.exists():
         text = cfg.read_text(errors="replace")
@@ -128,24 +137,16 @@ def settings():
                                (r"^r_vsync = .*$", "r_vsync = 0"),
                                (r"^s_SoundEnable = .*$", "s_SoundEnable = 1")):
             text = re.sub(pattern, value, text, flags=re.M)
-        cfg.write_text(text)
+        replace(cfg, text)
     attributes = SAVES / "Profiles/default/attributes.xml"
     if attributes.exists():
-        attributes.write_text(re.sub(r'(name="OptionCfg\.sys_spec_[A-Za-z]+" value=")[0-9]+',
-                                     r"\g<1>1", attributes.read_text(errors="replace")))
-
-
-def chown_tree(uid, gid):
-    """Give every file of /data/crysis to UID and GID."""
-    for top, dirs, files in os.walk(BASE):
-        for entry in dirs + files:
-            os.lchown(os.path.join(top, entry), uid, gid)
-    os.lchown(BASE, uid, gid)
+        replace(attributes, re.sub(r'(name="OptionCfg\.sys_spec_[A-Za-z]+" value=")[0-9]+',
+                                   r"\g<1>1", attributes.read_text(errors="replace")))
 
 
 def prepare(out):
-    """Give the game to the desktop account, set the session's output to
-    1366x768 and write the game's settings; record OUT for later commands."""
+    """Set the session's output to 1366x768 and write the game's settings;
+    record OUT for later commands."""
     if not (GAME / "Bin64/Crysis.exe").exists():
         raise SystemExit("crysis: no game in %s" % GAME)
     STATE.mkdir(exist_ok=True)
@@ -153,11 +154,6 @@ def prepare(out):
     out.mkdir(parents=True, exist_ok=True)
     os.chown(out, UID, UID)
     (STATE / "out").write_text(str(out) + "\n")
-    info = BASE.stat()
-    if not OWNER.exists():
-        OWNER.write_text("%d %d\n" % (info.st_uid, info.st_gid))
-    say("owner: %s, recorded in %s" % (OWNER.read_text().strip(), OWNER))
-    chown_tree(UID, UID)
     output = wm.session("1366x768")
     text = wm.log_from(0)
     renderer = re.findall(r"GL renderer: (.*)", text)
@@ -166,16 +162,6 @@ def prepare(out):
     set_volume()
     say("volume: %s" % volume())
     print("CRYSIS PREPARED", flush=True)
-
-
-def restore():
-    """Give /data/crysis back to the owner `prepare` recorded."""
-    if not OWNER.exists():
-        raise SystemExit("crysis: no recorded owner")
-    uid, gid = (int(n) for n in OWNER.read_text().split())
-    OWNER.unlink()
-    chown_tree(uid, gid)
-    say("restored: /data/crysis to %d:%d" % (uid, gid))
 
 
 class Game:
@@ -197,7 +183,7 @@ class Game:
         (out / "command.txt").write_text(line + "\n")
         # The game writes Game.log anew on each start; the last run's would
         # report its load before this one's.
-        if (GAME / "Game.log").exists():
+        if (GAME / "Game.log").is_symlink() or (GAME / "Game.log").exists():
             (GAME / "Game.log").unlink()
         self.log = open(out / "game.out", "w")
         self.started = time.monotonic()
@@ -400,7 +386,7 @@ def frame_stats(values):
 def flyby(route, name, loops):
     """Run the flyby for LOOPS loops and judge each against GATE."""
     out = out_dir(name)
-    if BENCH.exists():
+    if BENCH.is_symlink() or BENCH.exists():
         BENCH.unlink()
     settings()
     game = Game(out, route, ["+map", "island", "+exec", "benchmark_gpu"])
@@ -650,15 +636,12 @@ def main():
     if os.geteuid() != 0:
         raise SystemExit("crysis: run as root")
     usage = "usage: crysis.py prepare OUT | flyby ROUTE NAME [LOOPS] | hud NAME SAVE [ROUTE] | " \
-            "save NAME [ROUTE] | load NAME SAVE [ROUTE [PREFIX]] | restore"
+            "save NAME [ROUTE] | load NAME SAVE [ROUTE [PREFIX]]"
     if not argv:
         raise SystemExit(usage)
     command, rest = argv[0], argv[1:]
     if command == "prepare" and len(rest) == 1:
         prepare(rest[0])
-        return 0
-    if command == "restore" and not rest:
-        restore()
         return 0
     if command == "flyby" and len(rest) in (2, 3) and rest[0] in ROUTES:
         name = rest[1]

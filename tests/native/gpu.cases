@@ -151,10 +151,11 @@ case games/supertuxkart-i386 alone log \
     file:tests/graphics/runners/games.sh file:tests/graphics/runners/common.sh \
     -- system/games/lenovo.sh -n 1 -r . out supertuxkart-i386
 
-# Crysis on the game of the data partition, with sound at volume 1: the
-# flyby through umu and directly, its first two loops judged against 24
-# frames a second, and 80-9's save loaded after this release's update, through the
-# game's prefix and a new one (80-9, native/crysis.sh).
+# Crysis on a private copy of the game of the data partition, which stays
+# read-only, with sound at volume 1: the flyby through umu and directly, its
+# first two loops judged against 24 frames a second, and 80-9's save loaded
+# after this release's update, through a copy of the game's prefix and a new
+# one (80-9, native/crysis.sh).
 case games/crysis.flyby-umu alone log mountns \
     file:tests/system/games/crysis.py file:tests/system/games/wm.py \
     -- native/crysis.sh flyby umu
