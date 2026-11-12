@@ -20,23 +20,28 @@
  * above the inodes that name them are counted and kept, held out of the
  * allocator by the bits and counts they still have, and the error bit is
  * set so that the volume is not marked clean again before `e2fsck` has
- * run. A fault mounts the volume read-only with the first one named: a
- * block claimed twice or out of range, an inode whose pointers do not
- * match its size or its `i_blocks`, an attribute block of the wrong form
- * or named by more inodes than its count, a directory with two parents or
- * without its parent, an entry of the wrong form, a link count that does
- * not match the entries, a used block or a reached inode the bitmap calls
- * free. The group descriptors' free counts are recomputed from the bitmaps
- * rather than taken from the disk, since a crash leaves them stale.
+ * run. A fault names the first one met and sets the error bit: a block
+ * claimed twice or out of range, an inode whose pointers do not match its
+ * size or its `i_blocks`, an attribute block of the wrong form or named by
+ * more inodes than its count, a directory with two parents or without its
+ * parent, an entry of the wrong form, a link count that does not match the
+ * entries, a used block or a reached inode the bitmap calls free. The
+ * volume mounts writable all the same, as Linux's ext2 mounts a volume
+ * whose error bit is set with a warning (`ext2_setup_super`). The group
+ * descriptors' free counts are recomputed from the bitmaps rather than
+ * taken from the disk, since a crash leaves them stale.
  *
  * The walk keeps its state on the heap rather than on the stack: the node
  * of each directory level, the hard links and the shared attribute blocks
  * met with their expected and found counts, the reached-inode set, one bit
  * per inode of the volume, and one bitmap block; the block bitmap is the
  * one the FAT walks share. A dirty volume whose set or bitmap the free
- * memory cannot hold, a directory deeper than the levels, or more shared
- * attribute blocks than its table holds mounts read-only and says
- * which. Hard-link records are allocated as files are met.
+ * memory cannot hold, a directory deeper than the levels, more shared
+ * attribute blocks than its table holds, or hard links the heap cannot
+ * record stop the check, which says which: none is a fault of the volume,
+ * which mounts writable unchecked, as Linux mounts a volume whose valid
+ * bit is clear, and keeps the state that called for the check. Hard-link
+ * records are allocated as files are met.
  */
 #define EXT2_CHECK_DEPTH        32  /* the directory levels the walk holds */
 #define EXT2_CHECK_LINK_BUCKETS 512 /* the index, not a limit on linked files */
@@ -60,6 +65,7 @@ struct ext2_check {
     struct ext2_mount *em;
     const char *fault;
     uint32_t fault_ino;
+    int limit; /* `fault` is a limit of the check's, not of the volume */
     uint32_t lost, orphans, stale, attrs;
     int link_nomem;
     struct ext2_link *link[EXT2_CHECK_LINK_BUCKETS];
@@ -123,6 +129,16 @@ static int check_fault(struct ext2_check *c, uint32_t ino, const char *why)
         c->fault_ino = ino;
     }
     return -EIO;
+}
+
+/** Record that the check stopped at inode `ino` at its own limit `why`,
+ * when no fault came first; -EIO, which ends the walk. */
+static int check_limit(struct ext2_check *c, uint32_t ino, const char *why)
+{
+    if (!c->fault) {
+        c->limit = 1;
+    }
+    return check_fault(c, ino, why);
 }
 
 /** Whether inode `ino` is in the set of reached inodes. */
@@ -248,7 +264,7 @@ static int check_attr(struct ext2_check *c, const struct ext2_node *n)
         }
     }
     if (c->attrs >= EXT2_CHECK_ATTRS) {
-        return check_fault(c, n->ino, "more shared attribute blocks than the check's table");
+        return check_limit(c, n->ino, "more shared attribute blocks than the check's table");
     }
     rc = check_mark(c, n->ino, b);
     if (rc != 0) {
@@ -396,7 +412,7 @@ static int check_child(struct ext2_check *c, uint32_t ino, uint32_t dir, uint32_
         return check_fault(c, dir, "an entry naming an inode past the count");
     }
     if (depth >= EXT2_CHECK_DEPTH) {
-        return check_fault(c, ino, "a directory deeper than the check walks");
+        return check_limit(c, ino, "a directory deeper than the check walks");
     }
     n = &c->node[depth];
     rc = ext2_inode_load(em, ino, n);
@@ -641,36 +657,82 @@ static void check_report(struct ext2_check *c)
 }
 
 /**
+ * End a check that met its first fault or one of its own limits, `c->fault`:
+ * the free counts put back to `free_blocks` and `free_inodes` and the
+ * descriptors read again, since the recount may have stopped part way; the
+ * fault logged, and the error bit set for a fault of the volume or
+ * `em->check_owed` for a limit of the check's, as `check_volume` says.
+ * 0, or the read's -errno.
+ */
+static int check_stopped(struct ext2_check *c, uint64_t free_blocks, uint64_t free_inodes)
+{
+    struct ext2_mount *em = c->em;
+    int rc;
+
+    em->free_blocks = free_blocks;
+    em->free_inodes = free_inodes;
+    rc = ext2_read_bytes(em, (uint64_t)(em->first_data + 1) * em->block_size, em->gd,
+                         em->groups * 32);
+    if (rc != 0) {
+        return rc;
+    }
+    if (c->fault_ino != 0) {
+        klog(KLOG_WARN, "ext2", "check: inode %d: %s", (int)c->fault_ino, c->fault);
+    } else {
+        klog(KLOG_WARN, "ext2", "check: %s", c->fault);
+    }
+    if (c->limit) {
+        em->check_owed = 1;
+        klog(KLOG_WARN, "ext2", "mounting unchecked, running e2fsck is recommended");
+    } else {
+        em->state |= EXT2_ERROR_FS;
+        klog(KLOG_WARN, "ext2", "mounting with errors, running e2fsck is recommended");
+    }
+    return 0;
+}
+
+/**
  * Check a volume whose valid bit is clear or whose error bit is set, at a
  * writable mount or remount, before it is written, as the section above
  * says: the structural blocks and the reserved inodes below `s_first_ino`
  * marked first, then the tree walked from the root, the link counts
  * compared, and the bitmaps.
  *
- * Returns 0 with the volume writable, the recounted free counts written to
- * the descriptors and the superblock, and the error bit set as well when
- * blocks were lost, inodes orphaned or attribute blocks left counting
- * inodes that no longer name them; 1 with `*why` naming why it must stay
- * read-only, nothing written and the counts as the disk has them, since the
- * recount may have stopped part way; or -errno when the device failed. A
- * mount that stays read-only writes nothing, as Linux's ext2 writes nothing
- * to a read-only mount (`ext2_setup_super`, `ext2_put_super`); the error bit
- * is set in memory alone, and the disk, whose valid bit is clear or error
- * bit set already, has the next writable mount check it again.
+ * Returns 0 and leaves the volume to be mounted writable, as Linux's ext2
+ * mounts any volume it supports whatever its state (`ext2_setup_super`):
+ *
+ * - a check that ends writes the recounted free counts to the descriptors
+ *   and the superblock, with the error bit set when blocks were lost,
+ *   inodes orphaned or attribute blocks left counting inodes that no longer
+ *   name them;
+ * - a fault is logged as `ext2: check: inode N: WHY` and sets the error
+ *   bit in memory, which the mount's write of the superblock puts on the
+ *   disk, with the counts as the disk has them, since the recount may have
+ *   stopped part way;
+ * - a check stopped at one of its own limits is logged by name and sets
+ *   `em->check_owed`, with the counts as the disk has them and the state
+ *   as it is, so that no unmount marks the volume valid and the next
+ *   writable mount checks it again.
+ *
+ * The last two log `ext2: mounting with errors, running e2fsck is
+ * recommended` or `ext2: mounting unchecked, running e2fsck is
+ * recommended`, Linux's warnings. -errno when the device failed.
  */
-static int check_volume(struct ext2_mount *em, const char **why)
+static int check_volume(struct ext2_mount *em)
 {
     struct ext2_check *c;
     uint64_t free_blocks = em->free_blocks, free_inodes = em->free_inodes;
     uint32_t g, ino;
     int rc;
 
+    em->check_owed = 0;
     c = check_state(em);
     if (!c) {
         klog(KLOG_WARN, "ext2", "check: no memory for the %d KiB of workspace the volume needs",
              (int)((fat_walk_bytes(em->blocks) + (em->inodes + 7) / 8 + sizeof(*c)) / 1024));
-        *why = "not unmounted cleanly and the check's workspace is more than the free memory";
-        return 1;
+        em->check_owed = 1;
+        klog(KLOG_WARN, "ext2", "mounting unchecked, running e2fsck is recommended");
+        return 0;
     }
     for (g = 0; g < em->groups; g++) {
         const uint8_t *gd = em->gd + g * 32;
@@ -712,30 +774,17 @@ static int check_volume(struct ext2_mount *em, const char **why)
         rc = check_bitmaps(c);
     }
     fat_walk_release();
-    if (rc == -ENOMEM && c->link_nomem) {
-        check_state_free(c);
-        klog(KLOG_WARN, "ext2", "check: no memory to count the hard links");
-        *why = "not unmounted cleanly and no memory for the check's hard links";
-        return 1;
+    if (rc == -ENOMEM && c->link_nomem && !c->fault) {
+        (void)check_limit(c, 0, "no memory to count the hard links");
     }
     if (rc != 0 && !c->fault) {
         check_state_free(c);
         return rc;
     }
     if (c->fault) {
-        em->free_blocks = free_blocks;
-        em->free_inodes = free_inodes;
-        rc = ext2_read_bytes(em, (uint64_t)(em->first_data + 1) * em->block_size, em->gd,
-                             em->groups * 32);
-        if (rc != 0) {
-            check_state_free(c);
-            return rc;
-        }
-        klog(KLOG_WARN, "ext2", "check: inode %d: %s", (int)c->fault_ino, c->fault);
+        rc = check_stopped(c, free_blocks, free_inodes);
         check_state_free(c);
-        em->state |= EXT2_ERROR_FS;
-        *why = "the check found a fault";
-        return 1;
+        return rc;
     }
     for (g = 0; g < em->groups; g++) {
         ext2_group_lock(em, g);
@@ -754,17 +803,17 @@ static int check_volume(struct ext2_mount *em, const char **why)
 /**
  * `check_volume` with `em->opening` set, the one time a mount that is not
  * yet writable may write (`ext2_write_owned`): the recounted descriptors
- * and superblock of a check that leaves the volume writable. The flag is
- * given back as the caller had it, since a remount writable keeps it set
- * for the writes that follow the check. Returns what `check_volume` does.
+ * and superblock of a check that ends. The flag is given back as the
+ * caller had it, since a remount writable keeps it set for the writes that
+ * follow the check. Returns what `check_volume` does.
  */
-int ext2_check_volume(struct ext2_mount *em, const char **why)
+int ext2_check_volume(struct ext2_mount *em)
 {
     int was = em->opening;
     int rc;
 
     em->opening = 1;
-    rc = check_volume(em, why);
+    rc = check_volume(em);
     em->opening = was;
     return rc;
 }

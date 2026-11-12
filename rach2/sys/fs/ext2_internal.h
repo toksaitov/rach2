@@ -356,6 +356,9 @@ struct ext2_mount {
     /* The generation the next inode made gets, counted from the mount's
      * second, so a number reused for another file has another generation. */
     uint32_t next_generation;
+    /* Whether the mount writes. A remount read-only clears it under
+     * `em->super`, where a sync reads it again before it notes the
+     * superblock (`ext2_sync`). */
     int writable;
     /* Set while a writable mount or remount checks and opens the volume,
      * before `writable` is: the only time a mount that is not writable may
@@ -364,6 +367,11 @@ struct ext2_mount {
     /* The free counts, kept equal to the sums of the descriptors'. */
     uint64_t free_blocks, free_inodes;
     int valid_cleared; /* the superblock's valid bit was cleared by this mount */
+    /* Set when this mount's check stopped at one of its own limits before
+     * it could judge the volume: no unmount sets the valid bit, so the
+     * volume keeps the state that called for a check, as Linux puts back at
+     * unmount the state the volume had at mount (`ext2_put_super`). */
+    int check_owed;
     /* Why the volume may only be read, which a remount cannot change, or
      * NULL for a volume read-only because it was asked to be. */
     const char *readonly_why;
@@ -636,6 +644,6 @@ void ext2_cachestat(struct vfs_mount *mnt, void *node, uint64_t first, uint64_t 
                     struct vfs_cachestat *cs);
 
 /* ext2_check.c */
-int ext2_check_volume(struct ext2_mount *em, const char **why);
+int ext2_check_volume(struct ext2_mount *em);
 
 #endif
