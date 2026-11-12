@@ -67,43 +67,55 @@ void user_window_close(void)
     current_proc->uwin_base = 0;
 }
 
-/** The range is brought in before the copy (`user_begin`), so that a page
- * not yet backed is backed there and not by a fault in the copy, and stays
- * until the copy ends. */
-int copy_from_user(void *dst, const void __user *src, size_t n)
+/**
+ * Copy `n` bytes between `dst` and `src`, of which `addr` is the user end,
+ * for `copy_from_user` and `copy_to_user`: 0, or -EFAULT. A kernel buffer
+ * the thread opened to the checks (`user_window_open`) is copied as kernel
+ * memory. A user range is copied with no lock (`arch_user_copy`), and a
+ * page that is not there, or not writable for a write, faults and is
+ * brought in by the page fault handler under the regions' lock, as a
+ * user's own access would be: Linux's copy is a string move with an
+ * exception table's entry (arch/x86/include/asm/uaccess_64.h:119-131), and
+ * only its fault takes the address space's lock (arch/x86/mm/fault.c:1329,
+ * 1361). Another thread's unmap during the copy ends it at the page that
+ * went. What a short copy from user memory did not fill of `dst` is zeroed,
+ * as Linux's `_copy_from_user` zeroes it (include/linux/uaccess.h:180-184).
+ */
+static int user_copy(void *dst, const void *src, uintptr_t addr, size_t n, int write)
 {
-    uintptr_t addr = (__force uintptr_t)src;
-    int held;
+    size_t left;
 
     if (n == 0) {
         return 0;
     }
-    if (!user_range_ok(addr, n) || user_begin(addr, n, 0, &held) < 0) {
+    if (!user_range_ok(addr, n)) {
         return -EFAULT;
     }
-    k_memcpy(dst, (const void __force *)src, n);
-    user_end(held);
-    return 0;
+    if (proc_window_covers(current_proc, addr, n)) {
+        k_memcpy(dst, src, n);
+        return 0;
+    }
+    if (!current_proc || !current_proc->mm) {
+        return -EFAULT;
+    }
+    left = arch_user_copy(dst, src, n);
+    if (left == 0) {
+        return 0;
+    }
+    if (!write) {
+        k_memset((char *)dst + (n - left), 0, left);
+    }
+    return -EFAULT;
 }
 
-/** The range is brought in for a write before the copy, so that a page not
- * yet backed is made there and a copy-on-write page made private, and the
- * kernel's store finds each page writable, held as `copy_from_user` holds
- * its range. */
+int copy_from_user(void *dst, const void __user *src, size_t n)
+{
+    return user_copy(dst, (const void __force *)src, (__force uintptr_t)src, n, 0);
+}
+
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
-    uintptr_t addr = (__force uintptr_t)dst;
-    int held;
-
-    if (n == 0) {
-        return 0;
-    }
-    if (!user_range_ok(addr, n) || user_begin(addr, n, 1, &held) < 0) {
-        return -EFAULT;
-    }
-    k_memcpy((void __force *)dst, src, n);
-    user_end(held);
-    return 0;
+    return user_copy((void __force *)dst, src, (__force uintptr_t)dst, n, 1);
 }
 
 int get_user_u32(uint32_t *val, uintptr_t src)

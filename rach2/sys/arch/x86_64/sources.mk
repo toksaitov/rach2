@@ -19,6 +19,7 @@ ARCH_ASM_SRC = sys/arch/x86_64/loader.s \
     sys/arch/x86_64/isr_handler.s \
     sys/arch/x86_64/switch.s \
     sys/arch/x86_64/msr.s \
+    sys/arch/x86_64/usercopy.s \
     sys/arch/x86_64/trampoline.s \
     sys/arch/x86_64/vdsocode.s \
     sys/arch/x86_64/vdso32code.s \

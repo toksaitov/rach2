@@ -1,11 +1,14 @@
 /*
  * The copies between kernel and user memory. These helpers check a user
- * range, back every page of it that is not yet present, and copy, so that a
- * kernel touch of a bad user address becomes -EFAULT in one place and not a
- * panic in whichever system call dereferenced it. User pointers are marked
- * __user (lib/kuser.h), so that sparse reports one dereferenced outside
- * these helpers. Linux has the same names; BSD has copyin, copyout and
- * copyinstr.
+ * range and copy, so that a kernel touch of a bad user address becomes
+ * -EFAULT in one place and not a panic in whichever system call
+ * dereferenced it: `copy_from_user` and `copy_to_user` copy with no lock
+ * and bring in a page that is not present in the page fault handler, as a
+ * user's access would, ending short at a page it cannot serve, and the
+ * others back every page of their range before they touch it. User
+ * pointers are marked __user (lib/kuser.h), so that sparse reports one
+ * dereferenced outside these helpers. Linux has the same names; BSD has
+ * copyin, copyout and copyinstr.
  *
  * The copies back pages as a fault would, for the current process, and so
  * may sleep: taking frames back from the caches can wait on a writeback.

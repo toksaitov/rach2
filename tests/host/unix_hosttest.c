@@ -137,6 +137,8 @@ struct sockfile {
 };
 
 static process_t self;
+/* The address space of `self`, which the copies ask for and never read. */
+static struct mm model_mm;
 struct percpu cpu_table[NR_CPUS] = {{.current = &self}};
 volatile uint64_t kernel_ticks;
 
@@ -395,6 +397,34 @@ int vm_user_begin(uintptr_t addr, uintptr_t len, int write)
 /** End what `vm_user_begin` began: nothing to give back. */
 void vm_user_end(void)
 {}
+
+/**
+ * `arch_user_copy` over the model: the pages of the user end are touched in
+ * order, and one that is not present for the access faults and is brought
+ * in as the page fault handler would bring it in (`vm_prefault_range`).
+ * Returns the bytes not copied from the first page the fault cannot serve,
+ * or 0.
+ */
+size_t arch_user_copy(void *dst, const void *src, size_t n)
+{
+    uintptr_t d = (uintptr_t)dst;
+    int write = d >= USER_BASE && d - USER_BASE < sizeof(memory);
+    uintptr_t user = write ? d : (uintptr_t)src;
+    size_t done = 0;
+
+    while (done < n) {
+        size_t room = PAGE_SIZE - ((user + done) & (PAGE_SIZE - 1u));
+        size_t chunk = n - done < room ? n - done : room;
+
+        if (!vm_resident(user + done, chunk, write) &&
+            !vm_prefault_range(user + done, chunk, write)) {
+            return n - done;
+        }
+        k_memcpy((char *)dst + done, (const char *)src + done, chunk);
+        done += chunk;
+    }
+    return 0;
+}
 
 /** `vm_prefault_held`: the model's prefault. */
 int vm_prefault_held(uintptr_t addr, uintptr_t len, int write)
@@ -2231,6 +2261,7 @@ int main(int argc, char **argv)
     dirs.umask = 022;
     self.fs = &dirs;
     self.fds = &shared;
+    self.mm = &model_mm;
     self.tgid = 100;
     self.ruid = self.euid = self.suid = 1000;
     self.rgid = self.egid = self.sgid = 1000;
