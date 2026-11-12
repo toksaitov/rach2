@@ -1208,7 +1208,8 @@ void kvm_tdp_zap(struct kvm_vm *vm, uint64_t gfn, uint64_t npages);
 
 /**
  * `kvm_tdp_zap` for a caller that holds `mmu_lock`, taken with the flags
- * `*flags`. A range wider than a batch, TDP_ZAP_BATCH frames, is zapped a
+ * `*flags`. A zap that visits more than a batch of entries, TDP_ZAP_BATCH
+ * of them at every level with an absent subtree passed as one, goes a
  * batch at a time, each flushed and its tables freed before `mmu_lock` is
  * let go and taken again, `*flags` with it, and `mmu_seq` moved again, as
  * Linux's tdp_mmu_zap_leafs yields (arch/x86/kvm/mmu/tdp_mmu.c:705-735,

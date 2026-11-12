@@ -253,55 +253,84 @@ static int table_empty(const uint64_t *table)
     return 1;
 }
 
+/* The entries, at every level, that one batch of a zap visits between two
+ * holds of `mmu_lock`: as many as 64 tables of 4 KiB leaves hold, so that a
+ * batch clears up to 128 MiB of a guest mapped page by page, and covers
+ * far more where whole subtrees are absent. kvm_slots_hosttest sets fewer,
+ * so that its rows' zaps break. */
+#ifndef TDP_ZAP_BATCH
+#define TDP_ZAP_BATCH (64u * TDP_ENTRIES)
+#endif
+
+/* A zap under way: the frames [lo, hi) left to zap, the entries the batch
+ * may still visit, and, when it stops for them, the first frame it did not
+ * reach. */
+struct zap {
+    uint64_t lo, hi;
+    uint64_t next;
+    uint32_t budget;
+    int cleared; /* a leaf went in this batch */
+};
+
 /**
  * Clear the entries of `table`, of level `level` and with `base` its first
- * frame, that meet the frames [lo, hi): a leaf goes whole, a 2 MiB one
- * that the range only meets among them, and a table below goes to the
+ * frame, that meet the frames [z->lo, z->hi): a leaf goes whole, a 2 MiB
+ * one that the range only meets among them, and a table below goes to the
  * dead list once it maps nothing, so that a deleted slot leaves no table
- * behind and a later 2 MiB leaf finds no table in its place. Whether a
- * leaf was cleared.
+ * behind and a later 2 MiB leaf finds no table in its place. Each entry
+ * looked at spends one of the batch's `budget`; an absent one is passed at
+ * its own level, with the whole subtree it would have named, as Linux's
+ * tdp_iter steps beside a non-present entry instead of down
+ * (arch/x86/kvm/mmu/tdp_iter.c:68, 78-100, 110-122). 1 when the budget ran
+ * out, with `z->next` the first frame not reached, and every frame below it
+ * zapped; 0 when the table's part of the range is done.
  */
-static int zap_level(struct tdp *t, uint64_t *table, int level, uint64_t base, uint64_t lo,
-                     uint64_t hi)
+static int zap_level(struct tdp *t, uint64_t *table, int level, uint64_t base, struct zap *z)
 {
     uint64_t span = 1ull << (9 * (level - 1));
-    uint32_t i = lo > base ? (uint32_t)((lo - base) / span) : 0;
-    int cleared = 0;
+    uint32_t i = z->lo > base ? (uint32_t)((z->lo - base) / span) : 0;
 
-    for (; i < TDP_ENTRIES && base + i * span < hi; i++) {
+    for (; i < TDP_ENTRIES && base + i * span < z->hi; i++) {
         uint64_t e = table[i], from = base + i * span;
 
+        if (z->budget == 0) {
+            z->next = from > z->lo ? from : z->lo;
+            return 1;
+        }
+        z->budget--;
         if (!present(e)) {
             continue;
         }
         if (leaf(e, level)) {
             table[i] = 0;
             t->pages[level - 1]--;
-            cleared = 1;
+            z->cleared = 1;
             continue;
         }
-        cleared |= zap_level(t, table_at(e & fmt()->addr), level - 1, from, lo, hi);
-        if ((lo <= from && from + span <= hi) || table_empty(table_at(e & fmt()->addr))) {
+        if (zap_level(t, table_at(e & fmt()->addr), level - 1, from, z)) {
+            return 1;
+        }
+        if ((z->lo <= from && from + span <= z->hi) || table_empty(table_at(e & fmt()->addr))) {
             table[i] = 0;
             table_at(e & fmt()->addr)[0] = t->dead;
             t->dead = e & fmt()->addr;
         }
     }
-    return cleared;
+    return 0;
 }
-
-/* The frames of one batch of a zap between two holds of `mmu_lock`: 64
- * tables of 4 KiB leaves, 128 MiB of the guest. */
-#define TDP_ZAP_BATCH (64ull * TDP_ENTRIES)
 
 /** A table on the dead list is freed only after the flush, and a table
  * that goes needs the flush even when no leaf did. The count moves first,
  * whatever the tables held, so that a fault that read the caller's entry
- * before the change maps nothing from it, and again after each break. */
+ * before the change maps nothing from it, and again after each break. A
+ * batch ends after TDP_ZAP_BATCH entries, which every batch spends on
+ * frames past the last one's, as Linux yields only after progress
+ * (arch/x86/kvm/mmu/tdp_mmu.c:711-713, 859-864). */
 void kvm_tdp_zap_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages, uint32_t *flags)
 {
     struct tdp *t = (struct tdp *)vm->tdp;
-    uint64_t end, stop;
+    struct zap z;
+    int more;
 
     if (!t) {
         return;
@@ -310,10 +339,13 @@ void kvm_tdp_zap_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages, uint32
     if (npages == 0 || gfn >= kvm_tdp_frames()) {
         return;
     }
-    end = gfn + npages;
+    z.lo = gfn;
+    z.hi = gfn + npages;
     for (;;) {
-        stop = end - gfn > TDP_ZAP_BATCH ? gfn + TDP_ZAP_BATCH : end;
-        if (zap_level(t, table_at(t->root), TDP_LEVELS, 0, gfn, stop) || t->dead) {
+        z.budget = TDP_ZAP_BATCH;
+        z.cleared = 0;
+        more = zap_level(t, table_at(t->root), TDP_LEVELS, 0, &z);
+        if (z.cleared || t->dead) {
             kvm_tdp_flush(vm);
         }
         while (t->dead) {
@@ -322,10 +354,10 @@ void kvm_tdp_zap_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages, uint32
             t->dead = table_at(p)[0];
             table_free(t, p);
         }
-        if (stop == end) {
+        if (!more) {
             return;
         }
-        gfn = stop;
+        z.lo = z.next;
         kvm_mmu_unlock(vm, *flags);
         *flags = kvm_mmu_lock(vm);
         vm->mmu_seq++;
