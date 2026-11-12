@@ -141,6 +141,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "bcache_lock",
+          "checks": "tests/host/bcache_lock_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "blank",
           "checks": "tests/host/blank_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
