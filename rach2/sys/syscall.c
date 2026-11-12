@@ -3367,17 +3367,21 @@ static void syscall_loop_drain(void)
 }
 
 /**
- * Mark the mmap family to run without the big lock, native and i386: each
- * holds its address space's regions' lock to write across its change and
- * takes the big lock inside it (`regions_begin`, syscall_proc.c), and its
- * balance and populate run with neither. The i386 table's own mmap and
- * mmap2 are marked as it is filled (`ia32_syscall_init`).
+ * Mark the mmap family to run without the big lock, native and i386, as
+ * Linux's take mmap_lock alone: each holds its address space's regions'
+ * lock to write across its change (`regions_begin`, mm/regions.h) and
+ * takes the big lock only around the steps that reach what has no lock of
+ * its own, the change of entries that takes a page away or a right from
+ * it, the change notice and the release of files; its balance and populate
+ * run with neither. The i386 table's own mmap and mmap2 are marked as it is
+ * filled (`ia32_syscall_init`).
  */
 static void syscall_mm_unlock(void)
 {
     static syscall_fn_t const calls[] = {
-        sys_brk,      sys_mmap,          sys_mmap2,  sys_munmap,
-        sys_mprotect, sys_pkey_mprotect, sys_mremap, sys_madvise,
+        sys_brk,           sys_mmap,     sys_mmap2,      sys_munmap, sys_mprotect,
+        sys_pkey_mprotect, sys_mremap,   sys_madvise,    sys_mlock,  sys_munlock,
+        sys_mlock2,        sys_mlockall, sys_munlockall,
     };
     uint32_t i;
 
