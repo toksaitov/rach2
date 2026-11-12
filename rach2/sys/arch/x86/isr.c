@@ -1045,13 +1045,20 @@ void isr_local_router(isr_params_t *params)
  * kept around it: an allocation made by a handler is the kernel's, whoever
  * was running.
  */
-static void irq_dispatch(isr_params_t *params)
+static void irq_dispatch(isr_params_t *params, int timer_kind)
 {
     struct bkl_entry_saved saved;
 
     irq_enter();
     bkl_entry_push(&saved, (uint32_t)params->vector, -1, 0, 0);
-    _dispatch(params);
+    if (params->vector == IRQ_VECTOR(0) && (timer_kind & APIC_HR_EVENT) != 0) {
+        apic_hr_interrupt(params);
+        if ((timer_kind & APIC_HR_TICK) != 0) {
+            _dispatch(params);
+        }
+    } else {
+        _dispatch(params);
+    }
     bkl_entry_pop(&saved);
     irq_leave();
 }
@@ -1212,7 +1219,7 @@ void _irq_router(isr_params_t *params)
     struct percpu *cpu = this_cpu();
     int timer = timer_vector(params->vector);
     uint32_t wake_irq = timer ? waketime_clock() : 0;
-    int locked = 1;
+    int locked = 1, timer_kind;
 #if defined(__x86_64__)
     uintptr_t fp = (uintptr_t)params->rbp;
 #else
@@ -1226,18 +1233,19 @@ void _irq_router(isr_params_t *params)
     }
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);
-        sched_idle_awake();
-    } else if (params->vector == IRQ_VECTOR(0) && !FRAME_USER(params)) {
-        bkl_profile_sample((uintptr_t)FRAME_PC(params), fp);
     }
-    if (lines_apic && timer) {
-        lapic_eoi(); /* before apic_hr_entry's count, see above */
-    }
-    if (!apic_hr_entry(params->vector)) { /* ended above: only a local tick says 0 */
-        bkl_frame_push(0);                /* isr_leave pops it as a tick's without the lock */
+    timer_kind = apic_hr_entry(params->vector);
+    if (!timer_kind) {
+        count_up(&irq_count);
+        count_up(&vector_count[params->vector - 32]);
+        lapic_eoi();
+        bkl_frame_push(0); /* isr_leave pops it as a tick's without the lock */
         return;
     }
-    if (params->vector == IRQ_VECTOR(0)) {
+    if (params->vector == IRQ_VECTOR(0) && (timer_kind & APIC_HR_TICK) != 0) {
+        if (!FRAME_USER(params) && FRAME_PC(params) != (unsigned long)arch_idle_resume) {
+            bkl_profile_sample((uintptr_t)FRAME_PC(params), fp);
+        }
         watchdog_tick(params);
     }
     if (params->vector != IRQ_VECTOR(0)) {
@@ -1266,26 +1274,23 @@ void _irq_router(isr_params_t *params)
     klog(KLOG_DEBUG, "isr", "irq: vector 0x%X", params->vector);
 #endif
 
-    if (params->vector >= ISR_MSI_FIRST) {
-        if (timer || params->vector > ISR_MSI_LAST) {
-            irq_dispatch(params);
-            if (!timer) {
-                lapic_eoi();
-            }
-        } else {
-            lapic_eoi(); /* a message is an edge, see above */
-            irq_dispatch_edge(params);
-        }
+    if (params->vector >= 48) {
+        irq_dispatch(params, timer_kind);
+        lapic_eoi();
         sched_tick(); /* a woken reader runs now, or at the call's exit */
         return;
     }
 
     if (lines_apic) {
         if (params->vector == IRQ_VECTOR(0)) {
-            irq_dispatch(params);
+            lapic_eoi();
+            irq_dispatch(params, timer_kind);
+            if ((timer_kind & APIC_HR_TICK) == 0) {
+                sched_tick();
+            }
             return;
         }
-        irq_dispatch(params);
+        irq_dispatch(params, timer_kind);
         lapic_eoi();
         sched_tick();
         return;
@@ -1297,7 +1302,7 @@ void _irq_router(isr_params_t *params)
 
     reset_master_pic();
 
-    irq_dispatch(params);
+    irq_dispatch(params, timer_kind);
     if (params->vector != 32) {
         sched_tick();
     }
