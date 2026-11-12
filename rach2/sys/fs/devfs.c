@@ -44,7 +44,6 @@
 
 /* The open flags `devfs_open` acts on, at Linux's values. */
 #define DEVFS_O_CLOEXEC   02000000
-#define DEVFS_O_NONBLOCK  04000
 #define DEVFS_O_CREAT     0100
 #define DEVFS_O_EXCL      0200
 #define DEVFS_O_DIRECTORY 0200000
@@ -2606,8 +2605,8 @@ int devfs_open(const char *name, int flags)
     if (flags & DEVFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
-    if ((flags & DEVFS_O_NONBLOCK) && e->ofd) {
-        e->ofd->status_flags |= OFD_NONBLOCK;
+    if (e->ofd) {
+        e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
     }
     devfs_note_open(dev, e);
     fd_install(current_proc->fds, fd);

@@ -452,8 +452,8 @@ int main(void)
 
     for (acc = 0; acc < 3; acc++) {
         for (extra = 0; extra < 2; extra++) {
-            int flags = acc | DEVFS_O_CREAT | DEVFS_O_EXCL |
-                        (extra ? DEVFS_O_DIRECTORY | DEVFS_O_NONBLOCK : 0);
+            int flags =
+                acc | DEVFS_O_CREAT | DEVFS_O_EXCL | (extra ? DEVFS_O_DIRECTORY | OFD_NONBLOCK : 0);
             check(devfs_open("ptmx", flags) == -EEXIST,
                   "ptmx exclusive create returns EEXIST before dispatch");
             check(devfs_open("null", flags) == -EEXIST, "existing leaf exclusive create");

@@ -41,9 +41,8 @@
 #define TCXONC             0x540A     /* tcflow(3): arg TCOOFF, TCOON, TCIOFF or TCION */
 
 /* O_* flags honored on open (mirror syscall.c / fd.h). */
-#define O_CLOEXEC_FLAG  02000000
-#define O_NONBLOCK_FLAG 04000
-#define O_NOCTTY_FLAG   0400
+#define O_CLOEXEC_FLAG 02000000
+#define O_NOCTTY_FLAG  0400
 
 /* The live ptys, each allocated from the heap at its master's open and
  * freed when both ends are gone. The index is the lowest one no live pty
@@ -1153,8 +1152,8 @@ int pty_open_master(int flags)
     if (flags & O_CLOEXEC_FLAG) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
-    if ((flags & O_NONBLOCK_FLAG) && e->ofd) {
-        e->ofd->status_flags |= OFD_NONBLOCK;
+    if (e->ofd) {
+        e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
     }
     p->master_open = 1;
     fd_install(current_proc->fds, fd);
@@ -1206,8 +1205,8 @@ int pty_open_slave(int index, int flags)
     if (flags & O_CLOEXEC_FLAG) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
-    if ((flags & O_NONBLOCK_FLAG) && e->ofd) {
-        e->ofd->status_flags |= OFD_NONBLOCK;
+    if (e->ofd) {
+        e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
     }
     p->slave_opens++;
     p->hung_up = 0;
