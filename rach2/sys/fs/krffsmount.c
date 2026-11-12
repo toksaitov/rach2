@@ -379,6 +379,13 @@ static int kv_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
     return 0;
 }
 
+/** The `handle_node` of `vfs_ops`: the node the open record `handle` is for,
+ * encoded at the offset where the node is now, which a move updates. */
+static void *kv_handle_node(void *handle)
+{
+    return handle_of(((struct krffs_open *)handle)->offset);
+}
+
 /**
  * Free a record that no open and no pin keeps, and reap its file when it
  * was unlinked meanwhile and the mount is still writable; on a read-only
@@ -1269,7 +1276,7 @@ static const struct vfs_ops krffs_volume_ops = {
     0, /* put_unless_last */
     0, /* readlink_cached */
     0, /* read_frames */
-    0, /* handle_node */
+    kv_handle_node,
     0, /* writeback */
 };
 
