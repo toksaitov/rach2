@@ -1166,7 +1166,10 @@ static void fault_between(void)
  * zaps it (virt/kvm/kvm_main.c:1791-1808); a zap of every frame visits the
  * entries that are there and passes absent subtrees whole, as tdp_iter
  * (arch/x86/kvm/mmu/tdp_iter.c:68, 110-122), so its batches follow the
- * tables, not the frames.
+ * tables, not the frames. Each batch after a break walks down again from
+ * the root, as tdp_iter_restart (tdp_iter.c:23-33), and spends up to
+ * TDP_LEVELS - 1 entries on the path above the one it stopped at, so the
+ * bound counts only the entries a batch has left for new ones.
  */
 static void zap_batch_rows(void)
 {
@@ -1195,7 +1198,7 @@ static void zap_batch_rows(void)
     CHECK(kvm_tdp_fault(&vm, gfn + 0x101, 0) == 0, "a fault at the new place maps");
     seq = vm.mmu_seq;
     kvm_tdp_zap(&vm, 0, kvm_tdp_frames());
-    CHECK(vm.mmu_seq - seq <= (1u + 3u * TDP_ENTRIES) / TDP_ZAP_BATCH + 1u &&
+    CHECK(vm.mmu_seq - seq <= (1u + 3u * TDP_ENTRIES) / (TDP_ZAP_BATCH - (TDP_LEVELS - 1)) + 1u &&
               leaf_of(gfn + 0x101, &level) == 0 && ((struct tdp *)vm.tdp)->tables == 1,
           "a zap of every frame over one path of tables takes batches by the entries");
     seq = vm.mmu_seq;
