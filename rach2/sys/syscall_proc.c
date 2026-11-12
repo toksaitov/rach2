@@ -4330,37 +4330,89 @@ long sys_getrusage(isr_params_t *params)
 }
 
 /**
+ * Take the big lock for an identity call that runs without it
+ * (`syscall_ids_unlock` in syscall.c) when its answer needs more than the
+ * caller's own record: when `lookup` is set, for a call that looks another
+ * process up in the process table, or when the caller's user or PID
+ * namespace is not the first, whose maps (`uid_seen`) and PID lookups
+ * (`pid_seen`) read what the big lock guards. In the first namespaces an id
+ * is the record's own word, read once. Returns whether the lock was taken,
+ * for `ids_unlock`; the lock nests, so a caller that holds it may call this.
+ */
+static int ids_lock(int lookup)
+{
+    if (!lookup && proc_userns(current_proc) == &init_userns &&
+        proc_pidns(current_proc) == &init_pidns) {
+        return 0;
+    }
+    bkl_enter();
+    return 1;
+}
+
+/** Give back what `ids_lock` took when `taken` says it took the lock. */
+static void ids_unlock(int taken)
+{
+    if (taken) {
+        bkl_exit();
+    }
+}
+
+/** The id `kid` of the caller's credentials, as its user namespace maps it,
+ * a group id when `group` is set (`uid_seen`, `gid_seen`), under the lock
+ * `ids_lock` decides. */
+static uint32_t id_seen_free(uint32_t kid, int group)
+{
+    int taken = ids_lock(0);
+    uint32_t id = group ? gid_seen(kid) : uid_seen(kid);
+
+    ids_unlock(taken);
+    return id;
+}
+
+/** The kernel's PID `kid` as the caller's PID namespace sees it
+ * (`pid_seen`), under the lock `ids_lock` decides. */
+static uint32_t pid_seen_free(uint32_t kid)
+{
+    int taken = ids_lock(0);
+    uint32_t pid = pid_seen(kid);
+
+    ids_unlock(taken);
+    return pid;
+}
+
+/**
  * getuid: the caller's real uid. The four id getters, on i386 the 32-bit
  * calls 199 to 202, read the ids of the caller's record as its user
  * namespace maps them (`uid_seen`, `gid_seen`), and return them unsigned, so
- * that an id past 2^31 is not an error on x86-64. The setters and the group
- * list are later in this file.
+ * that an id past 2^31 is not an error on x86-64. They run without the big
+ * lock (`id_seen_free`). The setters and the group list are later in this
+ * file.
  */
 long sys_getuid(isr_params_t *params)
 {
     (void)params;
-    return (long)uid_seen(current_proc->ruid);
+    return (long)id_seen_free(current_proc->ruid, 0);
 }
 
 /** geteuid: the caller's effective uid, as `sys_getuid` gives an id. */
 long sys_geteuid(isr_params_t *params)
 {
     (void)params;
-    return (long)uid_seen(current_proc->euid);
+    return (long)id_seen_free(current_proc->euid, 0);
 }
 
 /** getgid: the caller's real gid, as `sys_getuid` gives an id. */
 long sys_getgid(isr_params_t *params)
 {
     (void)params;
-    return (long)gid_seen(current_proc->rgid);
+    return (long)id_seen_free(current_proc->rgid, 1);
 }
 
 /** getegid: the caller's effective gid, as `sys_getuid` gives an id. */
 long sys_getegid(isr_params_t *params)
 {
     (void)params;
-    return (long)gid_seen(current_proc->egid);
+    return (long)id_seen_free(current_proc->egid, 1);
 }
 
 /** The default action for a signal whose disposition is SIG_DFL. */
@@ -6732,6 +6784,8 @@ long sys_signalfd4(isr_params_t *params)
 /**
  * The calling process's PID (getpid(2)), which is its thread group's id, in
  * its PID namespace (`pid_seen`), as every id these calls give and take is.
+ * getpid, gettid, getppid and getpgrp run without the big lock
+ * (`pid_seen_free`).
  */
 long sys_getpid(isr_params_t *params)
 {
@@ -6740,7 +6794,7 @@ long sys_getpid(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    return (int32_t)pid_seen(current_proc->tgid);
+    return (int32_t)pid_seen_free(current_proc->tgid);
 }
 
 /**
@@ -6754,7 +6808,7 @@ long sys_gettid(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    return (int32_t)pid_seen(current_proc->pid);
+    return (int32_t)pid_seen_free(current_proc->pid);
 }
 
 /** Give every thread of the process of `p` the session `sid` and the
@@ -6867,16 +6921,20 @@ static process_t *pgrp_target(int pid)
  */
 long sys_getpgid(isr_params_t *params)
 {
+    int pid = (int)SC_ARG(params, 0), taken;
     process_t *target;
+    long r = -ESRCH;
 
     if (!current_proc) {
         return -ESRCH;
     }
-    target = pgrp_target((int)SC_ARG(params, 0));
-    if (!target) {
-        return -ESRCH;
+    taken = ids_lock(pid != 0);
+    target = pgrp_target(pid);
+    if (target) {
+        r = (int32_t)pid_seen(target->pgid);
     }
-    return (int32_t)pid_seen(target->pgid);
+    ids_unlock(taken);
+    return r;
 }
 
 /** The caller's process-group id (getpgrp(2), the no-arg form). */
@@ -6887,7 +6945,7 @@ long sys_getpgrp(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    return (int32_t)pid_seen(current_proc->pgid);
+    return (int32_t)pid_seen_free(current_proc->pgid);
 }
 
 /**
@@ -6896,19 +6954,25 @@ long sys_getpgrp(isr_params_t *params)
  */
 long sys_getsid(isr_params_t *params)
 {
+    int pid = (int)SC_ARG(params, 0), taken;
     process_t *target;
+    long r = -ESRCH;
 
     if (!current_proc) {
         return -ESRCH;
     }
-    target = pgrp_target((int)SC_ARG(params, 0));
-    if (!target) {
-        return -ESRCH;
+    taken = ids_lock(pid != 0);
+    target = pgrp_target(pid);
+    if (target) {
+        r = (int32_t)pid_seen(target->sid);
     }
-    return (int32_t)pid_seen(target->sid);
+    ids_unlock(taken);
+    return r;
 }
 
-/** The parent's PID (getppid(2)). */
+/** The parent's PID (getppid(2)). The parent's exit moves the caller to a
+ * new parent under the big lock, and a call beside it reads the old PID or
+ * the new one, as Linux's reads `real_parent` under RCU alone. */
 long sys_getppid(isr_params_t *params)
 {
     (void)params;
@@ -6916,7 +6980,7 @@ long sys_getppid(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    return (int32_t)pid_seen(current_proc->parent_pid);
+    return (int32_t)pid_seen_free(current_proc->parent_pid);
 }
 
 /**
@@ -7282,7 +7346,8 @@ long sys_setfsgid16(isr_params_t *params)
 long sys_getresuid(isr_params_t *params)
 {
     process_t *p = current_proc;
-    uint32_t r = uid_seen(p->ruid), e = uid_seen(p->euid), s = uid_seen(p->suid);
+    uint32_t r = id_seen_free(p->ruid, 0), e = id_seen_free(p->euid, 0),
+             s = id_seen_free(p->suid, 0);
 
     if (copy_to_user((void __user *)SC_ARG(params, 0), &r, sizeof(r)) != 0 ||
         copy_to_user((void __user *)SC_ARG(params, 1), &e, sizeof(e)) != 0 ||
@@ -7296,7 +7361,8 @@ long sys_getresuid(isr_params_t *params)
 long sys_getresgid(isr_params_t *params)
 {
     process_t *p = current_proc;
-    uint32_t r = gid_seen(p->rgid), e = gid_seen(p->egid), s = gid_seen(p->sgid);
+    uint32_t r = id_seen_free(p->rgid, 1), e = id_seen_free(p->egid, 1),
+             s = id_seen_free(p->sgid, 1);
 
     if (copy_to_user((void __user *)SC_ARG(params, 0), &r, sizeof(r)) != 0 ||
         copy_to_user((void __user *)SC_ARG(params, 1), &e, sizeof(e)) != 0 ||
@@ -7365,7 +7431,7 @@ long sys_getgroups(isr_params_t *params)
         return -EINVAL;
     }
     for (i = 0; i < p->ngroups; i++) {
-        uint32_t g = gid_seen(p->groups[i]);
+        uint32_t g = id_seen_free(p->groups[i], 1);
 
         if (copy_to_user((void __user *)(list_ptr + i * 4), &g, sizeof(g)) != 0) {
             return -EFAULT;

@@ -3505,6 +3505,37 @@ static void syscall_mm_unlock(void)
 }
 
 /**
+ * Mark the calls that read the caller's own identity to run without the big
+ * lock, native and i386, as Linux's read the task's own fields and its
+ * credentials under RCU: getpid, gettid, getppid and getpgrp read the
+ * thread's record; getuid, geteuid, getgid, getegid, getresuid, getresgid
+ * and getgroups its credentials, which only the thread itself changes
+ * (`sys_setuid` and the rest change `current_proc` alone); getpgid and
+ * getsid the caller's group or session for a pid of 0. Each word is read
+ * once, and a word another thread writes under the big lock, the parent's
+ * PID at a reparenting or the group a setpgid gives, reads as its old
+ * value or its new one, as on Linux. A call takes the big lock itself for
+ * a lookup of another process and in a user or PID namespace below the
+ * first, whose maps and lookups the lock guards (`ids_lock`,
+ * syscall_proc.c). The i386 forms with 16-bit ids, which call these, are
+ * marked as their table is filled (`ia32_syscall_init`).
+ */
+static void syscall_ids_unlock(void)
+{
+    static syscall_fn_t const calls[] = {
+        sys_getpid,    sys_gettid,    sys_getppid,   sys_getpgrp, sys_getpgid,
+        sys_getsid,    sys_getuid,    sys_geteuid,   sys_getgid,  sys_getegid,
+        sys_getresuid, sys_getresgid, sys_getgroups,
+    };
+    uint32_t i;
+
+    for (i = 0; i < sizeof(calls) / sizeof(calls[0]); i++) {
+        syscall_unlock(SYSCALL_ABI_NATIVE, calls[i]);
+        syscall_unlock(SYSCALL_ABI_IA32, calls[i]);
+    }
+}
+
+/**
  * Mark the futex calls to run without the big lock, native and i386, as
  * Linux's futexes have their bucket locks alone: each names its futex and
  * reads its word under the address space's regions' lock and the bucket's
@@ -3805,6 +3836,7 @@ void init_syscall(void)
     syscall_socket_unlock();
     syscall_mm_unlock();
     syscall_futex_unlock();
+    syscall_ids_unlock();
 
     _trace_enosys = kcmdline_has("rach2.trace=enosys");
     sched_cycle_account = kcmdline_has("rach2.cycleaccount");
