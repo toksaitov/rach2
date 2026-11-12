@@ -139,19 +139,29 @@ static struct spinlock profile_lock = SPINLOCK_INIT_NAMED("bkl_profile");
  * with or without the big lock. */
 static volatile int bkl_profile_whole;
 
-/* The tick's parts by row (`bkl_tick_charge`), in TSC cycles, and the names
- * `smp_tick_show` gives them. */
+/* The tick's parts by row (`bkl_tick_charge`), in TSC cycles, kept by each
+ * processor for its own ticks, which run without the big lock: a processor
+ * writes its rows inside `seq`, odd while it writes, and zeroes them first
+ * when `gen` is behind `bkl_tick_gen`, which a write of `bkl/tick` moves on,
+ * so that no other processor writes them. The names `smp_tick_show` gives
+ * the rows follow. */
 struct bkl_tick_count {
     uint64_t cycles;
     uint64_t max;
     uint32_t calls;
 };
-static struct bkl_tick_count bkl_ticks[BKL_TICK_ROWS];
+struct bkl_tick_cpu {
+    volatile uint32_t seq;
+    volatile uint32_t gen;
+    struct bkl_tick_count rows[BKL_TICK_ROWS];
+};
+static struct bkl_tick_cpu bkl_ticks[NR_CPUS];
+static volatile uint32_t bkl_tick_gen;
 static const char *const bkl_tick_names[BKL_TICK_ROWS] = {
-    "entry", "clock",      "account",       "wake",     "hda",     "netdev",  "netconsole",
-    "ath9k", "tcp",        "ip_frag",       "ip6",      "netlink", "ip_loop", "usb",
-    "input", "block_lag",  "block_request", "platform", "vkms",    "speaker", "console",
-    "klog",  "ap_account", "ap_late_pass",  "return",   "switch",  "nested"};
+    "clock",   "account",    "wake",  "lock",      "signals",       "load",     "hda",
+    "netdev",  "netconsole", "ath9k", "tcp",       "ip_frag",       "ip6",      "netlink",
+    "ip_loop", "usb",        "input", "block_lag", "block_request", "platform", "vkms",
+    "speaker", "console",    "klog",  "nested"};
 
 /* The probes an open-addressed table makes before it gives up. */
 #define BKL_PROBES 32
@@ -278,13 +288,6 @@ static void bkl_hold_end(struct percpu *cpu)
     int key = hold_key(cpu), ioctl;
     int32_t nr = cpu->bkl_nr;
 
-    if (cpu->tick_tail != 0) {
-        (void)bkl_tick_charge(cpu->current == cpu->tick_tail_proc ? BKL_TICK_RETURN
-                                                                  : BKL_TICK_SWITCH,
-                              cpu->tick_tail);
-        cpu->tick_tail = 0;
-    }
-
     bkl_recent[bkl_releases % BKL_WAIT_HOLDS].cycles = held;
     bkl_recent[bkl_releases % BKL_WAIT_HOLDS].vector = cpu->bkl_vector;
     bkl_recent[bkl_releases % BKL_WAIT_HOLDS].nr = nr;
@@ -315,22 +318,24 @@ static void bkl_hold_end(struct percpu *cpu)
 uint64_t bkl_tick_charge(int row, uint64_t start)
 {
     uint64_t now = arch_cycles(), spent = now - start;
-    struct bkl_tick_count *c = &bkl_ticks[row];
+    struct bkl_tick_cpu *mine = &bkl_ticks[arch_cpu_id()];
+    struct bkl_tick_count *c = &mine->rows[row];
+    uint32_t gen = bkl_tick_gen;
 
+    mine->seq++;
+    k_barrier();
+    if (mine->gen != gen) {
+        k_memset(mine->rows, 0, sizeof(mine->rows));
+        mine->gen = gen;
+    }
     c->calls++;
     c->cycles += spent;
     if (spent > c->max) {
         c->max = spent;
     }
+    k_barrier();
+    mine->seq++;
     return now;
-}
-
-void bkl_tick_tail(void)
-{
-    struct percpu *cpu = this_cpu();
-
-    cpu->tick_tail_proc = cpu->current;
-    cpu->tick_tail = arch_cycles();
 }
 
 /** This processor's tally for `key`, an entry's key or BKL_ENTRY_KEYS plus
@@ -790,19 +795,55 @@ int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len)
     return (int32_t)len;
 }
 
+/** Add processor `c`'s rows to `sum`, read whole inside its `seq`, as
+ * Linux's u64_stats_sync.h:22-24 reads a writer's counters; rows not yet
+ * zeroed for the current generation count as zero. Interrupts are off, so
+ * that this processor's own tick does not write while it is read. */
+static void tick_rows_add(int c, struct bkl_tick_count *sum)
+{
+    const struct bkl_tick_cpu *cpu = &bkl_ticks[c];
+    struct bkl_tick_count rows[BKL_TICK_ROWS];
+    uint32_t seq;
+    int row;
+
+    for (;;) {
+        seq = cpu->seq;
+        if (seq & 1u) {
+            arch_relax();
+            continue;
+        }
+        k_barrier();
+        if (cpu->gen != bkl_tick_gen) {
+            return;
+        }
+        k_memcpy(rows, cpu->rows, sizeof(rows));
+        k_barrier();
+        if (cpu->seq == seq) {
+            break;
+        }
+    }
+    for (row = 0; row < BKL_TICK_ROWS; row++) {
+        sum[row].calls += rows[row].calls;
+        sum[row].cycles += rows[row].cycles;
+        if (rows[row].max > sum[row].max) {
+            sum[row].max = rows[row].max;
+        }
+    }
+}
+
 int32_t smp_tick_show(void *data, char *buf, uint32_t cap)
 {
     struct bkl_tick_count snap[BKL_TICK_ROWS];
     struct bkl_text t;
     uint32_t flags;
-    int row;
+    int row, c;
 
     (void)data;
-    /* The tick writes the rows from its interrupt, which the big lock does
-     * not hold off on this processor: copy them with interrupts off, as
-     * Linux's u64_stats_sync.h:22-24 has a writer beside an interrupt's. */
+    k_memset(snap, 0, sizeof(snap));
     flags = kirq_save();
-    k_memcpy(snap, bkl_ticks, sizeof(snap));
+    for (c = 0; c < NR_CPUS; c++) {
+        tick_rows_add(c, snap);
+    }
     kirq_restore(flags);
     t.buf = buf;
     t.cap = cap;
@@ -830,7 +871,7 @@ int32_t smp_tick_store(void *data, const char __user *buf, uint32_t len)
     (void)data;
     (void)buf;
     flags = kirq_save();
-    k_memset(bkl_ticks, 0, sizeof(bkl_ticks));
+    bkl_tick_gen++;
     kirq_restore(flags);
     return (int32_t)len;
 }

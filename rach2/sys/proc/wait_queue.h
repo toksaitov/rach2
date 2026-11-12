@@ -134,6 +134,12 @@ int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg);
  */
 void wq_wake(wait_queue_t *wq, uint32_t kinds);
 
+/** Call `fn` with the process of each waiter on `wq` and `arg`, under the
+ * queue's lock, with interrupts off, as timerfd's expiry starts each
+ * waiter's wake record (`waketime_expire`); `fn` must not sleep or take the
+ * queue's lock. */
+void wq_each_waiter(wait_queue_t *wq, void (*fn)(struct process *p, uint64_t arg), uint64_t arg);
+
 /**
  * `wq_wake_all` for a waker that holds a spinlock of its own: the
  * processors the wakes would interrupt are added to the set `*cpus`, one

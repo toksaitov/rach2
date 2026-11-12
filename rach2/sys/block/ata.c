@@ -604,9 +604,9 @@ static void ata_irq(isr_params_t *params)
  * this driver's transfers take no request of the block layer, which counts
  * the ticks its requests wait. Both count the ticks since the last call,
  * since the boot processor's tick does not call this on every tick
- * (`tick_waits`, isr.c), but no more than have passed since the channel's
- * sleepers began (`sleep_from`); the last sleeper to wake counts the ticks
- * since this call (`ata_count_rest`).
+ * (`timer_lock_take`, kernel.c), but no more than have passed since the
+ * channel's sleepers began (`sleep_from`); the last sleeper to wake counts
+ * the ticks since this call (`ata_count_rest`).
  */
 void ata_tick(void)
 {

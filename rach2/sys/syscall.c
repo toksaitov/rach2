@@ -1775,8 +1775,15 @@ static void itimer_read(int32_t which, struct kernel_itimerval *out)
         itimer_put(itimer_left(), &out->value_sec, &out->value_usec);
         itimer_put(tg->leader->alarm_interval, &out->interval_sec, &out->interval_usec);
     } else {
-        itimer_put(tg->cpu_left[which - 1], &out->value_sec, &out->value_usec);
-        itimer_put(tg->cpu_interval[which - 1], &out->interval_sec, &out->interval_usec);
+        struct tgroup *g = current_proc->tg;
+        uint64_t left, interval;
+
+        spin_lock(&g->cpu_lock);
+        left = g->cpu_left[which - 1];
+        interval = g->cpu_interval[which - 1];
+        spin_unlock(&g->cpu_lock);
+        itimer_put(left, &out->value_sec, &out->value_usec);
+        itimer_put(interval, &out->interval_sec, &out->interval_usec);
     }
 }
 
@@ -1795,19 +1802,13 @@ static void itimer_set(int32_t which, uint64_t value, uint64_t interval)
     process_t *p = tg->leader;
 
     if (which != ITIMER_REAL) {
+        spin_lock(&tg->cpu_lock);
         tg->cpu_left[which - 1] = value;
         tg->cpu_interval[which - 1] = value != 0 ? interval : 0;
+        spin_unlock(&tg->cpu_lock);
         return;
     }
-    if (value == 0) {
-        p->alarm_tick = 0;
-        p->alarm_interval = 0;
-        proc_timer_update(p);
-        return;
-    }
-    p->alarm_tick = proc_alarm_at(tick_count(), value + 1u);
-    p->alarm_interval = interval;
-    proc_timer_update(p);
+    proc_alarm_set(p, value != 0 ? proc_alarm_at(tick_count(), value + 1u) : 0, interval);
 }
 
 /**
