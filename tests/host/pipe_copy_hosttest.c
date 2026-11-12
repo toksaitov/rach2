@@ -297,6 +297,20 @@ int wq_wait_event_as(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *n
     return wq_wait_event(wq, cond, arg);
 }
 
+/** A wait the signal-work flag ends, which the model takes as
+ * `wq_wait_event`: its -EINTR stands for the flag set. */
+int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    (void)name;
+    return wq_wait_event(wq, cond, arg);
+}
+
+/** 1: the signal that set the flag ends the wait. */
+int signal_pending(void)
+{
+    return 1;
+}
+
 /** Count the wakeups of each end's queue and the kinds of change they name,
  * waking nothing. */
 void wq_wake(wait_queue_t *wq, uint32_t kinds)
