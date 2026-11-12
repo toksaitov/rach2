@@ -2352,7 +2352,7 @@ static void beep_ticks(unsigned n)
 static void beep_threaded(void)
 {
     const hda_report_t *r = hda_get_report();
-    struct speaker_counters c;
+    struct speaker_counters c, c0;
     unsigned before;
 
     reset_model();
@@ -2364,11 +2364,13 @@ static void beep_threaded(void)
     service_wanted = 0;
     before = beep_verbs;
     hda_jack_hold();
+    speaker_get_counters(&c0);
     speaker_tone(SPEAKER_CLOCK / 750, 100);
     speaker_get_counters(&c);
     check(beep_verbs == before && beep_owed && (service_wanted & HDA_SERVE_BEEP),
           "a tone hands divider 16 to khda and sends no verb");
-    check(c.beeps == 1 && c.beep_divider == 16, "the counters name the divider handed on");
+    check(c.beeps == c0.beeps + 1 && c.beep_divider == 16,
+          "the counters name the divider handed on");
     run_khda();
     check(beep_verbs == before && pin_ctl[23] == 0 && beep_owed,
           "khda leaves the pins and the tone while the jacks are held");
@@ -2379,8 +2381,8 @@ static void beep_threaded(void)
           "once they are not, the tick asks again and khda turns the pin on and sends it");
     beep_ticks(99);
     speaker_get_counters(&c);
-    check(beep_ctl[18] == (0x100 | 16) && beep_owed && c.ends == 1 && c.beep_retries == 0 &&
-              c.beep_divider == 0,
+    check(beep_ctl[18] == (0x100 | 16) && beep_owed && c.ends == c0.ends + 1 &&
+              c.beep_retries == c0.beep_retries && c.beep_divider == 0,
           "the tick ending the tone hands the stop to khda and sends no verb");
     before = beep_verbs;
     speaker_tone(SPEAKER_CLOCK / 1000, 100);
