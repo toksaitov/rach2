@@ -4520,6 +4520,191 @@ static void batch_rows(void)
     lock_rows();
 }
 
+/* ---- the file type of a replaced entry ---- */
+
+/* The files `ftype_replace` makes and replaces by links, half of them by a
+   rename over them and half by an unlink and a symlink, as Wine's prefix
+   setup replaces its DLLs. */
+#define FTYPE_FILES 48
+
+/**
+ * In a new directory `dlls`, make FTYPE_FILES files of a few bytes each,
+ * then replace each by a symbolic link: the even ones by a link made under
+ * a temporary name and renamed over the file, the odd ones by an unlink and
+ * a symlink of the same name, which can take the freed inode; then rename
+ * a new file over the first link, which puts a regular file back. Returns
+ * 0, or the first error.
+ */
+static int ftype_replace(void)
+{
+    char name[32], temp[32];
+    void *d, *n;
+    int i, rc = OPS->mkdir(&mnt, mnt.root, "dlls", 0755);
+
+    if (rc != 0) {
+        return rc;
+    }
+    d = walk("/dlls", &rc);
+    if (!d) {
+        return rc;
+    }
+    for (i = 0; rc == 0 && i < FTYPE_FILES; i++) {
+        snprintf(name, sizeof name, "f%02d.dll", i);
+        n = make_file(d, name, &rc);
+        if (n) {
+            rc = write_at(n, pattern, 100 + i, 0);
+            OPS->put(&mnt, n);
+        }
+    }
+    for (i = 0; rc == 0 && i < FTYPE_FILES; i++) {
+        snprintf(name, sizeof name, "f%02d.dll", i);
+        if (i % 2 == 0) {
+            snprintf(temp, sizeof temp, "f%02d.tmp", i);
+            rc = OPS->symlink(&mnt, d, temp, "../hello.txt");
+            if (rc == 0) {
+                rc = OPS->rename(&mnt, d, temp, d, name);
+            }
+        } else {
+            rc = OPS->unlink(&mnt, d, name);
+            if (rc == 0) {
+                rc = OPS->symlink(&mnt, d, name, "../hello.txt");
+            }
+        }
+    }
+    if (rc == 0) {
+        n = make_file(d, "back.dll", &rc);
+        if (n) {
+            rc = write_at(n, pattern, 10, 0);
+            OPS->put(&mnt, n);
+        }
+    }
+    if (rc == 0) {
+        rc = OPS->rename(&mnt, d, "back.dll", d, "f00.dll");
+    }
+    OPS->put(&mnt, d);
+    return rc;
+}
+
+/**
+ * Whether every name `ftype_replace` left reads back as it should: f00.dll
+ * the 10-byte file renamed over it, and each other name a link to
+ * ../hello.txt.
+ */
+static int ftype_after(void)
+{
+    char path[40], buf[64];
+    void *n;
+    int i, err, got;
+
+    if (!file_is("/dlls/f00.dll", pattern, 10)) {
+        return 0;
+    }
+    for (i = 1; i < FTYPE_FILES; i++) {
+        snprintf(path, sizeof path, "/dlls/f%02d.dll", i);
+        n = walk(path, &err);
+        if (!n) {
+            return 0;
+        }
+        got = OPS->readlink(&mnt, n, buf, sizeof buf);
+        OPS->put(&mnt, n);
+        if (got != 12 || memcmp(buf, "../hello.txt", 12) != 0) {
+            printf("  %s: readlink %d\n", path, got);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * Replace files by symbolic links and a link by a file (`ftype_replace`)
+ * on a mount with `flags`, unmount cleanly, and require e2fsck to find
+ * each entry's file type that of the inode it names, as Linux's
+ * `ext2_set_link` and `ext2_add_link` write it; then stop a rename of a
+ * link over a file after each of its writes on a `dirsync` mount, and
+ * require no stop to leave an entry whose type is not its inode's.
+ */
+static void ftype_rows(void)
+{
+    static const uint32_t flags[2] = {VFS_MS_DIRSYNC, 0};
+    char what[200];
+    int i, k, n, rc;
+    void *d;
+
+    fill_pattern();
+    for (i = 0; i < 2; i++) {
+        const char *how = flags[i] ? "a dirsync mount" : "a mount that writes back";
+
+        wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+        use_image(wimg, wbytes);
+        stop_after = -1;
+        rc = mount_flags(flags[i]);
+        snprintf(what, sizeof what, "%s for the replaced entries mounts", how);
+        check(rc == 0 && (mnt.flags & VFS_MS_RDONLY) == 0, what);
+        if (rc != 0) {
+            continue;
+        }
+        rc = ftype_replace();
+        snprintf(what, sizeof what, "on %s, files replaced by links and a link by a file", how);
+        check(rc == 0, what);
+        if (rc != 0) {
+            printf("  rc %d\n", rc);
+        }
+        check(ftype_after(), "and each name reads back as what replaced it");
+        check(unmount_rw() == 0, "and the volume unmounts");
+        snprintf(what, sizeof what, "on %s, e2fsck finds each replaced entry's type its inode's",
+                 how);
+        rc = e2fsck_clean(wimg);
+        check(rc, what);
+        if (!rc) {
+            ext2_fixture_head(fix_path("fsck.out"), 20);
+        }
+    }
+
+    /* The writes of one rename of a link over a file, counted on a full run. */
+    n = -1;
+    for (k = 0; n < 0 || k <= n; k++) {
+        wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+        use_image(wimg, wbytes);
+        stop_after = -1;
+        if (mount_flags(VFS_MS_DIRSYNC) != 0) {
+            check(0, "the volume for the stopped renames mounts");
+            return;
+        }
+        d = mnt.root;
+        rc = OPS->symlink(&mnt, d, "link.tmp", "hello.txt");
+        if (rc == 0) {
+            writes_made = 0;
+            stop_after = n < 0 ? -1 : k;
+            rc = OPS->rename(&mnt, d, "link.tmp", d, "hello.txt");
+        }
+        if (n < 0) {
+            check(rc == 0, "a link renames over a file on a dirsync mount");
+            n = writes_made;
+            stop_after = -1;
+            check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume is clean");
+            k = -1;
+            continue;
+        }
+        OPS->put(&mnt, mnt.root);
+        OPS->unmount(&mnt);
+        mnt.root = 0;
+        bcache_device_gone(&dev);
+        dev.flags = BLOCK_FAULT_SAFE;
+        stop_after = -1;
+        use_image(wimg, wbytes);
+        (void)ext2_fixture_fsck(wimg, "-fn", fix_path("fsck.out"));
+        snprintf(what, sizeof what,
+                 "the rename of a link over a file stopped after write %d of %d leaves no "
+                 "entry of the wrong type",
+                 k, n);
+        rc = !ext2_fixture_contains(fix_path("fsck.out"), "filetype");
+        check(rc, what);
+        if (!rc) {
+            ext2_fixture_head(fix_path("fsck.out"), 20);
+        }
+    }
+}
+
 /**
  * Run each of `sequences` on a fresh volume and judge it by the driver,
  * by e2fsck, by setidcheck's reader, and by the driver again after a
@@ -5946,17 +6131,18 @@ static const struct {
     {"--xattr-only", xattr_rows},
     {"--dirty-only", dirty_rows},
     {"--readonly-only", readonly_rows},
+    {"--ftype-only", ftype_rows},
 };
 
 /**
  * Make the native fixture tree using the prepared independent tools,
  * and run the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes
  * and at 2 KiB, the 1 KiB levels, the failures, the write sequences, the
- * order rows, the writer's failures, the dirty volumes, the read-only
- * volumes, the matrix and the batch rows, the node rows, the fsync rows,
- * the group rows, the rows of one file's writes and the rows of operations
- * on names, both without the big lock. An option of `only_rows` runs its
- * rows alone; `--capture-only` checks independent
+ * types of replaced entries, the order rows, the writer's failures, the
+ * dirty volumes, the read-only volumes, the matrix and the batch rows, the
+ * node rows, the fsync rows, the group rows, the rows of one file's writes
+ * and the rows of operations on names, both without the big lock. An option
+ * of `only_rows` runs its rows alone; `--capture-only` checks independent
  * tool output capture alone. Returns 0, and calls `fix_passed`, when every
  * row passed.
  */
@@ -5996,6 +6182,7 @@ int main(int argc, char **argv)
     refusal_rows();
     executable_path_row();
     write_rows();
+    ftype_rows();
     time_rows();
     order_row();
     refusal_write_rows();
