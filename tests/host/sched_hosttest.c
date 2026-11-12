@@ -864,6 +864,50 @@ static void run_delay(void)
     clock_ns = 0;
 }
 
+/**
+ * The tick switches a thread for another of its processor's queue only once
+ * it has run SCHED_SLICE_NS, 0.75 ms, since it was switched in, unless a
+ * woken thread waits there. So a thread that a yield runs for 200 us, as
+ * KVM's steal_time selftest runs one, ends before the yielder runs again
+ * although a tick falls inside its run, and the yielder's run_delay grows
+ * by the whole of it; a thread that has run its slice gives way at the tick.
+ */
+static void tick_slice(void)
+{
+    unsigned int i;
+
+    clock_ns = 1000000000u;
+    setup();
+    for (i = 2; i < 7; i++) {
+        sched_forget(&procs[i]);
+        procs[i].state = PROC_BLOCKED;
+    }
+    procs[0].sched_yielded = 1;
+    schedule();
+    CHECK(current_proc == &procs[1] && procs[0].run_delay == 0, "the yield runs the other thread");
+    clock_ns += 100000u;
+    irq_flags = 0;
+    sched_tick();
+    CHECK(current_proc == &procs[1] && switches == 1,
+          "a tick 100 us into a thread's run leaves it running");
+    clock_ns += 150000u;
+    procs[1].state = PROC_BLOCKED;
+    schedule();
+    CHECK(current_proc == &procs[0] && procs[0].run_delay == 250000u,
+          "the yielder waits the whole run of the thread it yielded to");
+    sched_make_ready(&procs[1]);
+    clock_ns += 749999u;
+    sched_tick();
+    CHECK(current_proc == &procs[0], "a thread 1 ns short of its slice keeps the processor");
+    clock_ns += 1u;
+    sched_tick();
+    CHECK(current_proc == &procs[1], "a thread that has run its slice gives way at the tick");
+    wake(&procs[2]);
+    sched_tick();
+    CHECK(current_proc == &procs[2], "a woken thread takes the processor at the tick at once");
+    clock_ns = 0;
+}
+
 /* The calls of the `sched_out` that `sched_out_rows` gives its threads. */
 static int out_calls;
 static void *out_arg;
@@ -971,6 +1015,7 @@ int main(int argc, char **argv)
     wake_twice();
     migration();
     run_delay();
+    tick_slice();
     affinity_rows();
     if (failures) {
         return 1;
@@ -979,7 +1024,7 @@ int main(int argc, char **argv)
                "preempt due, "
                "accounting, "
                "load phase, "
-               "idle machine, ready lists, wake twice, migration, run delay\n");
+               "idle machine, ready lists, wake twice, migration, run delay, tick slice\n");
     return 0;
 }
 

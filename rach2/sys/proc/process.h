@@ -341,6 +341,10 @@ struct process {
      * a queue since `queued_ns`, the monotonic clock in nanoseconds. */
     uint64_t run_delay;
     uint64_t queued_ns;
+    /* The monotonic clock in nanoseconds when `schedule` last switched it
+     * onto a processor, from which the tick measures its slice
+     * (`sched_tick`); 0 before its first switch. */
+    uint64_t slice_ns;
     unsigned long pcount;
     uint8_t run_queued;
     /* Whether its sleep is one no signal ends (`wq_wait_event_nointr`),

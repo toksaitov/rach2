@@ -10088,9 +10088,10 @@ long sys_sched_get_priority_min(isr_params_t *params)
 
 /**
  * A process's round-robin time slice (sched_rr_get_interval, a timespec of
- * two longs): one tick, since the timer takes the processor from every
- * process at each tick, and 0 for SCHED_FIFO and SCHED_DEADLINE, which
- * Linux gives no slice. -EINVAL for a negative pid, -ESRCH, -EFAULT.
+ * two longs): one tick, since the tick takes the processor from a process
+ * switched in at the last one (`sched_tick`), and 0 for SCHED_FIFO and
+ * SCHED_DEADLINE, which Linux gives no slice. -EINVAL for a negative pid,
+ * -ESRCH, -EFAULT.
  */
 long sys_sched_rr_get_interval(isr_params_t *params)
 {
