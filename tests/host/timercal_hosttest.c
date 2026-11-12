@@ -229,6 +229,38 @@ void lapic_timer_count(uint32_t initial)
     apic_writes++;
 }
 
+/** Make the APIC timer one-shot at `vector` from `initial` counts, its
+ * divide register kept; only the timer between ticks does. */
+void lapic_timer_oneshot(uint8_t vector, uint32_t initial)
+{
+    CHECK(hr_model, "the timer is not made one-shot without its divide");
+    apic_vector = vector;
+    apic_periodic = 0;
+    apic_start_ns = now_ns;
+    apic_initial = initial;
+    apic_running = 1;
+    apic_writes++;
+}
+
+/* The processors' records, which the timer reads for the idle stop of the
+ * tick; no row's processor waits idle, so no tick stops. */
+struct percpu cpu_table[NR_CPUS];
+
+/** Half a sample period of 4 s, as the watchdog's default gives. */
+uint32_t watchdog_idle_ticks(void)
+{
+    return 2u * TICK_HZ;
+}
+
+/** The host divides 64 bits itself. */
+uint64_t tick_div64(uint64_t n, uint64_t d, uint64_t *rem)
+{
+    if (rem) {
+        *rem = n % d;
+    }
+    return n / d;
+}
+
 /** Stop the APIC timer. */
 void lapic_timer_stop(void)
 {
