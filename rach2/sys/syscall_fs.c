@@ -5390,6 +5390,31 @@ int file_ops_unlocked(const fd_entry_t *e)
     return !ofd || (!ofd->vmnt && !ofd->dev_mnt && !ofd->synth_mnt);
 }
 
+/**
+ * Whether descriptor `e` names a regular file or a directory of a type that
+ * sets `reads_unlocked`, as ext2 does, whose reads, listings and attributes
+ * then run without the big lock: the type's operations take it where they
+ * need it, as Linux reads such a file under its inode's lock alone.
+ */
+int file_vfs_unlocked(const fd_entry_t *e)
+{
+    const struct open_file *ofd;
+
+    if (!e || e->ops || (e->type != FD_TYPE_FILE && e->type != FD_TYPE_DIR)) {
+        return 0;
+    }
+    ofd = e->ofd;
+    return ofd && ofd->vmnt && !ofd->dev_mnt && !ofd->synth_mnt &&
+           vfs_mount_base(ofd->vmnt)->type->reads_unlocked;
+}
+
+/** The big lock for a read of `e`: none for a file `file_vfs_unlocked`
+ * admits, and `file_ops_lock`'s answer otherwise. */
+static int file_read_lock(const fd_entry_t *e)
+{
+    return file_vfs_unlocked(e) ? 0 : file_ops_lock(e);
+}
+
 int file_ops_lock(const fd_entry_t *e)
 {
     if (file_ops_unlocked(e)) {
@@ -6524,14 +6549,24 @@ static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count, siz
 
 /** Read up to `count` bytes of the file of `ofd` at `pos` into the user's
  * `buf` through the file page cache (`filecache_file_read`) or the file
- * system. The bytes read, 0 at the end, or the type's error. */
+ * system, which a caller without the big lock reaches with it, since the
+ * type then writes the user's buffer itself. The bytes read, 0 at the end,
+ * or the type's error. */
 static int32_t file_read_plain(struct open_file *ofd, char __user *buf, uint32_t count,
                                uint64_t pos)
 {
     int32_t bytes_read;
 
     if (!filecache_file_read(ofd, buf, count, pos, &bytes_read)) {
+        int big = !bkl_held();
+
+        if (big) {
+            bkl_enter();
+        }
         bytes_read = vfs_read(ofd->vmnt, ofd->fhandle, (char __force *)buf, count, pos);
+        if (big) {
+            bkl_exit();
+        }
     }
     return bytes_read;
 }
@@ -6544,9 +6579,11 @@ static int32_t file_read_plain(struct open_file *ofd, char __user *buf, uint32_t
  * to the size the file has at the call, as Linux's filemap_read reads the
  * shared folio, so that the read sees their stores, those an earlier buffer
  * of the same readv made among them; any other page, and any other file, is
- * read by `file_read_plain`. The bytes read, which stop at the first page
- * that fails after some were read, 0 at the end, or the type's error, or
- * -ENOMEM for a page in memory that no temporary mapping is free for.
+ * read by `file_read_plain`. A caller without the big lock found no shared
+ * mapping of a disk file (`file_read`). The bytes read, which stop at the
+ * first page that fails after some were read, 0 at the end, or the type's
+ * error, or -ENOMEM for a page in memory that no temporary mapping is free
+ * for.
  */
 static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_t count,
                                 uint64_t pos)
@@ -6555,7 +6592,7 @@ static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_
     uint32_t done = 0;
     int32_t r = 0;
 
-    if (count == 0 || !filemap_disk_mapped(ofd->vmnt, ofd->ino)) {
+    if (count == 0 || !bkl_held() || !filemap_disk_mapped(ofd->vmnt, ofd->ino)) {
         return file_read_plain(ofd, buf, count, pos);
     }
     r = vfs_getattr(ofd->vmnt, ofd->vnode, &st);
@@ -6635,6 +6672,10 @@ static int32_t file_read_unwritable(struct open_file *ofd, uint64_t at)
  * operation: with dup or fork sharing the offset, a second reader sleeps
  * rather than reading the same bytes while the first is in a request, and a
  * KRFFS relocation cannot move the handle while it is in use.
+ *
+ * A file `file_vfs_unlocked` admits is read without the big lock, which the
+ * read takes while a shared mapping of a disk file has pages, to look for
+ * the file's among them, and for inotify's report.
  */
 static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, const uint64_t *at,
                          size_t asked)
@@ -6643,6 +6684,7 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
     struct kernel_iovec one[1];
     int32_t bytes_read;
     uint32_t room;
+    int big = 0;
 
     if (!(entry->flags & FD_FLAG_READ)) {
         return -EBADF;
@@ -6653,6 +6695,10 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
     one[0].iov_base = (__force uintptr_t)buf;
     one[0].iov_len = count;
     room = iov_prefix(one, 1, 1);
+    if (!bkl_held() && filemap_disk_any()) {
+        bkl_enter();
+        big = 1;
+    }
     fd_ofd_lock(ofd);
     if (!at && rw_offset_end(entry, asked) != 0) {
         fd_ofd_unlock(ofd);
@@ -6668,7 +6714,14 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
     }
     fd_ofd_unlock(ofd);
     if (bytes_read > 0 && inotify_watches) {
+        if (!bkl_held()) {
+            bkl_enter();
+            big = 1;
+        }
         inotify_desc(ofd, IN_ACCESS);
+    }
+    if (big) {
+        bkl_exit();
     }
     return bytes_read;
 }
@@ -6915,12 +6968,12 @@ static int32_t read_fd(int fd, char __user *buf, size_t requested)
  * Linux. On i686 a count negative as ssize_t is EINVAL after the range
  * check; a compat call on x86-64 has the kernel's 64-bit ssize_t instead.
  * The call holds the big lock unless the descriptor's type runs without it
- * (`fd_call_lock`).
+ * (`fd_call_lock`) or it names a file whose reads do (`file_vfs_unlocked`).
  */
 long sys_read(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
-    int big = fd_call_lock(fd);
+    int big = file_read_lock(current_proc ? fd_get(current_proc->fds, fd) : NULL);
     long rc = read_fd(fd, (char __user *)SC_ARG(params, 1), SC_ARG(params, 2));
 
     file_ops_unlock(big);
@@ -13265,10 +13318,10 @@ static long pwrite_at(int fd, const char __user *buf, size_t requested, long lon
 }
 
 /** The call holds the big lock unless the descriptor's type runs without it
- * (`fd_call_lock`). */
+ * (`fd_call_lock`) or it names a file whose reads do (`file_vfs_unlocked`). */
 long ksys_pread64(int fd, char __user *buf, size_t requested, long long pos)
 {
-    int big = fd_call_lock(fd);
+    int big = file_read_lock(current_proc ? fd_get(current_proc->fds, fd) : NULL);
     long rc = pread_at(fd, buf, requested, pos);
 
     file_ops_unlock(big);
