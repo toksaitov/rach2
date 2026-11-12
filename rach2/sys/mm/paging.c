@@ -662,14 +662,16 @@ static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write
  * FAULT_AROUND pages from the multiple of FAULT_AROUND pages at or below
  * `page`, or from the region's start when that is higher, cut at the
  * region's end and at the end of the page table, so that one table holds
- * it. The file is asked with the regions' lock let go, as for its share,
- * and its pages are mapped only while the region still maps the whole
- * window of the file as it did and no unmap of a truncated file's pages has
- * come since; a page another fault mapped meanwhile is left as it is.
- * `hits` asks the file to count the pages it lends as found in memory
- * (`struct vm_file`). Called from `shared_fault` with the regions' lock
- * held to read, which it lets go and takes again. 1 when it mapped `page`
- * itself, else 0.
+ * it; a missing table is made, as Linux allocates it before fault-around
+ * (mm/memory.c:5271), so that a fault whose page the file has completes
+ * here and counts that page once. The file is asked with the regions' lock
+ * let go, as for its share, and its pages are mapped only while the region
+ * still maps the whole window of the file as it did and no unmap of a
+ * truncated file's pages has come since; a page another fault mapped
+ * meanwhile is left as it is. `hits` asks the file to count the pages it
+ * lends as found in memory (`struct vm_file`). Called from `shared_fault`
+ * with the regions' lock held to read, which it lets go and takes again. 1
+ * when it mapped `page` itself, else 0.
  */
 static int share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t flags, int hits)
 {
@@ -712,7 +714,7 @@ static int share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t 
     vma = vm_find(&mm->vm, from);
     if (i != 0 && region_same(mm, from, f, prot, pgoff, seq) && vma->end >= to) {
         lock = mm_ptl_lock(mm);
-        table = mmu_user_table(mm->dir, from, 0);
+        table = mmu_user_table(mm->dir, from, 1);
         for (i = 0; table && i < n; i++) {
             if (phys[i] && table[MMU_INDEX(from + i * PAGE_SIZE)] == 0) {
                 table[MMU_INDEX(from + i * PAGE_SIZE)] =
