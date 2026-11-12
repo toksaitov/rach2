@@ -89,10 +89,13 @@ void mmn_notify(struct mm *mm, int event, uintptr_t start, uintptr_t end);
 /**
  * Count a change of present pages of `mm` under way, before its
  * `mmn_notify`, as Linux's mmu_notifier_invalidate_range_start raises
- * mmu_invalidate_in_progress; `mmn_change_end` after the new entries. A
- * driver that reads an entry and maps it elsewhere without the big lock
- * reads `mm->changes` before the read and maps nothing while `changing` is
- * not 0 or `changes` has moved. Any context; atomic.
+ * mmu_invalidate_in_progress; `mmn_change_end` after the new entries. Only
+ * a change made under `mmap_lock` held to read calls it; one under the
+ * write lock is not counted. A driver that reads an entry and maps it
+ * elsewhere without the big lock therefore reads `mm->changes` first,
+ * holds the lock to read from its read of the entry to its map, and maps
+ * nothing while `changing` is not 0 or `changes` has moved. Any context;
+ * atomic.
  */
 void mmn_change_begin(struct mm *mm);
 

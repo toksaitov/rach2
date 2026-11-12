@@ -70,11 +70,16 @@ struct mm {
      * write lock: a fault that let the lock go across a file's or a
      * device's operation maps nothing if it moved meanwhile. */
     uint32_t zaps;
-    /* The changes of present pages under way and finished whose ranges
-     * were told (`mmn_change_begin`), as Linux's mmu_invalidate_in_progress
-     * and mmu_invalidate_seq: a driver that reads entries without the big
-     * lock maps what it read only while `changing` is 0 and `changes` has
-     * not moved since before the read (KVM's fault, tdp.c). */
+    /* The changes of present pages under way and finished that holders of
+     * `mmap_lock` to read make, a copy-on-write break and a truncation's
+     * cut, each counted from before its notice to after its entry
+     * (`mmn_change_begin`), as Linux's mmu_invalidate_in_progress and
+     * mmu_invalidate_seq. A change made under the write lock, such as
+     * munmap's, mprotect's or fork's, is not counted. A driver that reads
+     * entries without the big lock reads `changes` first, holds the lock to
+     * read from its read of the entry to its map, which keeps those out,
+     * and maps what it read only while `changing` is 0 and `changes` has
+     * not moved (KVM's fault, tdp.c). */
     volatile uint32_t changing;
     volatile uint32_t changes;
     struct page_dir *dir; /* NULL once the last user has gone */
