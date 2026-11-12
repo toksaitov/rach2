@@ -1064,6 +1064,62 @@ static void row_missed(void)
     hda_stop();
 }
 
+/**
+ * Once the output stream's interrupt has come, the tick leaves its periods
+ * to the interrupt and fills nothing, until more than a period and a half
+ * has passed since that interrupt (`hda_irq_late`); then it fills the
+ * period played itself.
+ */
+static void row_play_gate(void)
+{
+    unsigned next = 1;
+
+    row = "play-irq-gate";
+    model_start(1u << 6, 48000, AUDIO_S16LE, 2);
+    write_blocks(&next);
+    model_play(25000);
+    hda_test_write(HDA_INTSTS, 1u << output_stream_index, 32);
+    hda_irq_handler(NULL);
+    check(play_irq_seen && hw_fill_count == 1,
+          "the output stream's interrupt fills the period played");
+    model_play(24000);
+    tick();
+    check(hw_fill_count == 1, "the tick leaves a period played to the interrupt that is due");
+    kernel_ticks += 36; /* a period and a half of 23.3 ms, and a tick more */
+    tick();
+    check(hw_fill_count == 2, "the tick fills the period itself once the interrupt is late");
+    hda_stop();
+}
+
+/**
+ * An output interrupt that comes while the position still reads the period
+ * before fills nothing and leaves the stream pending (`play_irq_pending`),
+ * as Linux's azx_position_check marks one; the tick then asks for the
+ * service at each call, and the first after the position has passed into
+ * the next period fills the period played.
+ */
+static void row_play_early(void)
+{
+    unsigned next = 1;
+
+    row = "play-irq-early";
+    model_start(1u << 6, 48000, AUDIO_S16LE, 2);
+    write_blocks(&next);
+    model_play(20000);
+    hda_test_write(HDA_INTSTS, 1u << output_stream_index, 32);
+    hda_irq_handler(NULL);
+    check(play_irq_pending && hw_fill_count == 0,
+          "an interrupt before the period's end fills nothing and stays pending");
+    tick();
+    check(play_irq_pending && hw_fill_count == 0,
+          "the tick fills nothing while the position reads the first period");
+    model_play(5000);
+    tick();
+    check(!play_irq_pending && hw_fill_count == 1,
+          "the next tick fills the period once the position has passed it");
+    hda_stop();
+}
+
 /** Allocate a procfs snapshot, or inject allocation failure. */
 void *kmalloc(size_t size)
 {
@@ -1662,7 +1718,10 @@ static void row_capture_duplex(void)
     move_input(4096 * 4);
     clock_value += 2 * 24000 * 21;
     tick();
-    check(got_transfers == 4, "capture goes on alone");
+    check(got_transfers == 2, "the tick leaves a stream whose interrupts come to them");
+    kernel_ticks += 32; /* a period and a half of 21 ms, and the next interrupt is late */
+    tick();
+    check(got_transfers == 4, "capture goes on alone, from the tick once its interrupt is late");
     check(hda_start(48000, AUDIO_S16LE, 2) == 0, "playback starts again");
     hda_driver.stream_stop(&s);
     check(playing && (hda_test_read(0xA0 + HDA_SD_CTL, 8) & HDA_SD_CTL_RUN),
@@ -2256,6 +2315,8 @@ int main(void)
     row_fill();
     row_writer_stall();
     row_missed();
+    row_play_gate();
+    row_play_early();
     row_shutdown();
     row_mix_width();
     row_capture_path();

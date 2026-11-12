@@ -371,6 +371,22 @@ static int root_status(struct xhci_ctrl *hc, int owner, int port, struct usb_por
     return xhci_port_status(hc, port, out);
 }
 
+/** Whether a root port had a device at the controller's last scan; `owner`
+ * is not used. */
+static int root_connected(struct xhci_ctrl *hc, int owner, int port)
+{
+    (void)owner;
+    return xhci_port_connected(hc, port);
+}
+
+/** Whether a hub's port had a device at the hub's last status. */
+static int hub_connected(struct xhci_ctrl *hc, int owner, int port)
+{
+    struct usb_port_status status;
+
+    return hub_port_status(hc, owner, port, &status) == 0 && status.connected;
+}
+
 /** Whether a root port's connection has settled; `owner` is not used. */
 static int root_settled(struct xhci_ctrl *hc, int owner, int port)
 {
@@ -392,11 +408,11 @@ static int root_reset_done(struct xhci_ctrl *hc, int owner, int port)
     return xhci_port_reset_done(hc, port);
 }
 
-static const struct usb_port_ops root_ops = {root_status, root_settled, root_reset_begin,
-                                             root_reset_done};
+static const struct usb_port_ops root_ops = {root_status, root_connected, root_settled,
+                                             root_reset_begin, root_reset_done};
 
-static const struct usb_port_ops hub_ops = {hub_port_status, hub_port_settled, hub_port_reset_begin,
-                                            hub_port_reset_done};
+static const struct usb_port_ops hub_ops = {hub_port_status, hub_connected, hub_port_settled,
+                                            hub_port_reset_begin, hub_port_reset_done};
 
 /* The entry that has each controller's command turn, or -1: the device
  * being enumerated or closed, or a running one whose own command is in
@@ -2429,15 +2445,11 @@ void usb_core_step(uint32_t elapsed_ms)
     }
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
-        struct usb_port_status status;
-
         if (dev_at(i)->state == ST_FREE || dev_at(i)->state == ST_CLOSING ||
             dev_at(i)->state == ST_TOMBSTONE) {
             continue;
         }
-        if (dev_at(i)->ops->status(dev_at(i)->hc, dev_at(i)->owner, dev_at(i)->port, &status) !=
-                0 ||
-            !status.connected) {
+        if (!dev_at(i)->ops->connected(dev_at(i)->hc, dev_at(i)->owner, dev_at(i)->port)) {
             device_gone(i);
         }
     }
@@ -2447,10 +2459,9 @@ void usb_core_step(uint32_t elapsed_ms)
         int ports = xhci_ports(hc);
 
         for (port = 0; port < ports && port < 32; port++) {
-            struct usb_port_status status;
             int known = 0;
 
-            if (xhci_port_status(hc, port, &status) != 0 || !status.connected) {
+            if (!xhci_port_connected(hc, port)) {
                 port_refused[n] &= ~((uint32_t)1u << port);
                 port_unentered[n] &= ~((uint32_t)1u << port);
                 continue;

@@ -249,20 +249,43 @@ int serial_rx_service(int budget)
     return moved;
 }
 
+/* The passes of `_serial_rx_handler` before it gives up on a port whose
+ * receive line stays high. A pass moves up to 128 bytes from the UART into
+ * the ring, each through `serial_rx_service`: 64 that the handler reads and
+ * 64 more that the notify's console service reads, so 256 passes move up
+ * to 32 KiB, more than the ring and the console's discipline together
+ * take, and a full ring masks the interrupt first. A console that
+ * discards COM1's input, as one in a raw keyboard mode does, empties the
+ * ring at each pass, so its flood is bounded by the passes alone, and the
+ * 200 ms reading takes what is left. Linux's PASS_LIMIT of 512 bounds its
+ * handler the same way (drivers/tty/serial/8250/8250_core.c). */
+#define SERIAL_RX_PASSES 256
+
 /**
- * The port's interrupt: a service of at most 64 bytes, then the notify when
- * the ring holds any. The FIFO is 16 bytes and the budget is four times
- * that, so a byte arriving while the handler runs is taken in the same
- * service and a flood cannot hold the handler for more than 64 bytes; what
- * is left raises the line again.
+ * The port's interrupt: passes of a service of at most 64 bytes, then the
+ * notify when the ring holds any, until the receive line drops. IRQ 4 is
+ * edge-triggered on the 8259 and the I/O APIC, so a handler that left
+ * LSR.DR set would see no other interrupt from the port; the loop ends
+ * when the FIFO is empty, which drops the line, or when a full ring has
+ * masked the interrupt, as Linux's serial8250_interrupt loops until no
+ * port has work (drivers/tty/serial/8250/8250_core.c:68-110). A byte that
+ * arrives while the handler runs is taken in the same interrupt, and the
+ * 64-byte passes let the notify move the ring along between them.
  */
 static void _serial_rx_handler(isr_params_t *params)
 {
+    int pass;
+
     (void)params;
     _rx.irq_services++;
-    _rx.irq_bytes += (uint32_t)serial_rx_service(64);
-    if (_rx_notify && _rx_count() > 0) {
-        _rx_notify();
+    for (pass = 0; pass < SERIAL_RX_PASSES; pass++) {
+        _rx.irq_bytes += (uint32_t)serial_rx_service(64);
+        if (_rx_notify && _rx_count() > 0) {
+            _rx_notify();
+        }
+        if (_rx_irq_masked || !(_serial_lsr() & SERIAL_LSR_DR)) {
+            return;
+        }
     }
 }
 
@@ -275,6 +298,11 @@ void serial_enable_rx_irq(void)
     pic_unmask_irq(SERIAL_IRQ);
     _rx_irq_wanted = 1;
     outb(SERIAL_COM1 + SERIAL_INTR_ENABLE, SERIAL_IER_RDA);
+}
+
+int serial_rx_irq_proven(void)
+{
+    return _rx_irq_wanted && _rx.irq_bytes > 0;
 }
 
 void serial_set_rx_notify(void (*notify)(void))

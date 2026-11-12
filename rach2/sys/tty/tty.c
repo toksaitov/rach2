@@ -1087,23 +1087,42 @@ void tty_console_counters(struct console_counters *out)
     kirq_restore(flags);
 }
 
+/* The ticks between two readings of the port by the tick once its receive
+ * interrupt has taken a byte, a fifth of a second: Rach2's own fallback for
+ * an edge the interrupt lost, which the handler's loop makes rare. Linux
+ * reads an 8250 that has an interrupt from no timer; its backup timer only
+ * sends, for a UART with the THRE bug (8250_core.c:269-275), and a port
+ * without an interrupt is polled every uart_poll_timeout
+ * (8250_core.c:207-213). */
+#define CONSOLE_BACKUP_TICKS (TICK_HZ / 5)
+
+static void console_deliver(void);
+
 /**
  * The UART's bytes go to the ring first, so a port whose interrupt is not
- * enabled is still served every tick. A reader or poller parked on the
- * console, which nothing else would tell of serial input while another
- * process runs, is then only woken: it drains and echoes the ring in its own
- * context (console_pump). With nobody parked and a session owning the
- * console, as when a foreground job runs while its shell waits in wait4, the
- * ring is drained here without echo (console_pump_irq), so a serial ^C/^Z
- * still reaches the foreground group and type-ahead waits for the next
- * reader. With no session the ring is left to the kernel debug shell, which
- * polls it itself and releases the console (tty_set_session 0) whenever it
- * regains control.
+ * enabled, or has never taken a byte, is still read every tick; once the
+ * interrupt has taken one, the tick reads the port every CONSOLE_BACKUP_TICKS,
+ * and the interrupt takes the rest. A reader or poller parked on the console,
+ * which nothing else would tell of serial input while another process runs, is
+ * then only woken: it drains and echoes the ring in its own context
+ * (console_pump). With nobody parked and a session owning the console, as when
+ * a foreground job runs while its shell waits in wait4, the ring is drained
+ * here without echo (console_pump_irq), so a serial ^C/^Z still reaches the
+ * foreground group and type-ahead waits for the next reader. With no session
+ * the ring is left to the kernel debug shell, which polls it itself and
+ * releases the console (tty_set_session 0) whenever it regains control.
  */
 void tty_console_poll(void)
 {
+    static uint32_t read_at; /* the low half of `kernel_ticks` at the next reading */
+    uint32_t now = (uint32_t)kernel_ticks;
+
     blank_tick();
-    console_service();
+    if (!serial_rx_irq_proven() || (int32_t)(now - read_at) >= 0) {
+        read_at = now + CONSOLE_BACKUP_TICKS;
+        serial_rx_service(TTY_PUMP_BUDGET);
+    }
+    console_deliver();
 }
 
 /** Service the console's serial port, as `tty_console_poll` describes; the
@@ -1111,6 +1130,14 @@ void tty_console_poll(void)
 static void console_service(void)
 {
     serial_rx_service(TTY_PUMP_BUDGET);
+    console_deliver();
+}
+
+/** Wake a reader or poller parked on the console when the ring holds bytes,
+ * or with none parked and a session owning the console drain the ring into
+ * the discipline, as `tty_console_poll` describes; no port access. */
+static void console_deliver(void)
+{
     if (!serial_data_available() || console_serial_closed()) {
         return;
     }
