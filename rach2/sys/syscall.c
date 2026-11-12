@@ -3558,7 +3558,8 @@ static void _syscall_handler(isr_params_t *params)
  * open and openat make a read-only descriptor of such a file
  * (`open_unlocked`), each taking the big lock for anything else; poll and
  * ppoll scan their descriptors the same way and sleep without it, taking it
- * for the signal state (`poll_signal_pending`, `poll_mask_set`). Every
+ * for the signal state when the thread is marked for a signal or the call
+ * changes its mask (`poll_signal_pending`, `poll_mask_set`). Every
  * other step those calls make takes the locks of what it touches; the
  * user-memory copies take the big lock until address spaces have locks of
  * their own. The forms of an architecture's own, i686's split offsets and
