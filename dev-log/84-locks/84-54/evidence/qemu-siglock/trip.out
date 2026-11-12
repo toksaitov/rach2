@@ -1,0 +1,318 @@
+games: weston: renderer llvmpipe (LLVM 19.1.7, 256 bits) display :3
+games: prefix: status 0 rach2-game: prefix: made /data/trial4729/out/rach2-trip.sq98wusz/compat/pfx
+games: trip-gl-0: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl-0: feature level: 0xb000
+games: trip-gl-0: tripprobe: 1000 round trips in 117.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-0: TRIP OK
+games: trip-gl-0: window 118.4 ms
+games: trip-gl-0: ctxt 0
+games: trip-gl-0: bkl_wait_us 16707
+games: trip-gl-0: scheduler_picks 137119
+games: trip-gl-0: tlb_shootdown_ipis 27
+games: trip-gl-0: hold vector 0: 13757 holds, 14182 us, 1.0 us each
+games: trip-gl-0: hold syscall 257: 750 holds, 7711 us, 10.3 us each
+games: trip-gl-0: hold take 1: 181 holds, 1213 us, 6.7 us each
+games: trip-gl-0: hold slept 230: 152 holds, 1171 us, 7.7 us each
+games: trip-gl-0: hold syscall 20: 419 holds, 1080 us, 2.6 us each
+games: trip-gl-0: hold syscall 47: 720 holds, 998 us, 1.4 us each
+games: trip-gl-0: hold syscall 262: 218 holds, 925 us, 4.2 us each
+games: trip-gl-0: hold syscall 0: 445 holds, 708 us, 1.6 us each
+games: trip-gl-0: hold vector 32: 93 holds, 446 us, 4.8 us each
+games: trip-gl-0: hold syscall 89: 204 holds, 420 us, 2.1 us each
+games: trip-gl-0: hold syscall 230: 152 holds, 411 us, 2.7 us each
+games: trip-gl-0: hold syscall 3: 497 holds, 259 us, 0.5 us each
+games: trip-gl-0: hold syscall 9: 288 holds, 120 us, 0.4 us each
+games: trip-gl-0: hold vector 14: 10 holds, 35 us, 3.5 us each
+games: trip-gl-0: hold slept 128: 1 holds, 1 us, 1.0 us each
+games: trip-gl-0: thread 472 trip64.exe: utime 3 stime 10 voluntary 5 involuntary 71
+games: trip-gl-0: thread 488 llvmpipe-0: utime 0 stime 1 voluntary 2081 involuntary 16
+games: trip-gl-0: thread 489 llvmpipe-1: utime 0 stime 1 voluntary 2220 involuntary 16
+games: trip-gl-0: thread 490 llvmpipe-2: utime 0 stime 1 voluntary 2220 involuntary 11
+games: trip-gl-0: thread 491 llvmpipe-3: utime 0 stime 1 voluntary 1927 involuntary 14
+games: trip-gl-0: thread 492 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 493 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 494 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 495 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 496 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 499 wined3d_cs: utime 2 stime 4 voluntary 1519 involuntary 32
+games: trip-gl-0: exit 0 ms 117.2
+games: trip-gl-1: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl-1: feature level: 0xb000
+games: trip-gl-1: tripprobe: 1000 round trips in 75.3 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: TRIP OK
+games: trip-gl-1: window 75.7 ms
+games: trip-gl-1: ctxt 0
+games: trip-gl-1: bkl_wait_us 13308
+games: trip-gl-1: scheduler_picks 102587
+games: trip-gl-1: tlb_shootdown_ipis 17
+games: trip-gl-1: hold vector 0: 13924 holds, 12000 us, 0.9 us each
+games: trip-gl-1: hold syscall 257: 619 holds, 3465 us, 5.6 us each
+games: trip-gl-1: hold syscall 47: 708 holds, 1045 us, 1.5 us each
+games: trip-gl-1: hold syscall 20: 419 holds, 1034 us, 2.5 us each
+games: trip-gl-1: hold take 1: 119 holds, 610 us, 5.1 us each
+games: trip-gl-1: hold slept 230: 100 holds, 589 us, 5.9 us each
+games: trip-gl-1: hold syscall 0: 442 holds, 502 us, 1.1 us each
+games: trip-gl-1: hold syscall 262: 76 holds, 452 us, 5.9 us each
+games: trip-gl-1: hold syscall 89: 204 holds, 379 us, 1.9 us each
+games: trip-gl-1: hold vector 32: 57 holds, 314 us, 5.5 us each
+games: trip-gl-1: hold syscall 230: 100 holds, 227 us, 2.3 us each
+games: trip-gl-1: hold syscall 3: 345 holds, 180 us, 0.5 us each
+games: trip-gl-1: hold syscall 9: 261 holds, 147 us, 0.6 us each
+games: trip-gl-1: hold vector 14: 9 holds, 14 us, 1.6 us each
+games: trip-gl-1: thread 604 trip64.exe: utime 3 stime 5 voluntary 4 involuntary 30
+games: trip-gl-1: thread 622 llvmpipe-0: utime 0 stime 0 voluntary 2139 involuntary 11
+games: trip-gl-1: thread 623 llvmpipe-1: utime 0 stime 0 voluntary 2386 involuntary 22
+games: trip-gl-1: thread 624 llvmpipe-2: utime 0 stime 0 voluntary 2412 involuntary 12
+games: trip-gl-1: thread 625 llvmpipe-3: utime 0 stime 0 voluntary 1992 involuntary 11
+games: trip-gl-1: thread 626 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-1: thread 627 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-1: thread 628 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-1: thread 629 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-1: thread 630 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-1: thread 633 wined3d_cs: utime 3 stime 1 voluntary 1483 involuntary 24
+games: trip-gl-1: exit 0 ms 75.3
+games: trip-gl-2: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl-2: feature level: 0xb000
+games: trip-gl-2: tripprobe: 1000 round trips in 88.8 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: TRIP OK
+games: trip-gl-2: window 89.2 ms
+games: trip-gl-2: ctxt 0
+games: trip-gl-2: bkl_wait_us 16818
+games: trip-gl-2: scheduler_picks 88240
+games: trip-gl-2: tlb_shootdown_ipis 19
+games: trip-gl-2: hold vector 0: 13930 holds, 13462 us, 1.0 us each
+games: trip-gl-2: hold syscall 257: 633 holds, 3971 us, 6.3 us each
+games: trip-gl-2: hold syscall 47: 708 holds, 1021 us, 1.4 us each
+games: trip-gl-2: hold syscall 20: 419 holds, 994 us, 2.4 us each
+games: trip-gl-2: hold take 1: 142 holds, 840 us, 5.9 us each
+games: trip-gl-2: hold slept 230: 119 holds, 804 us, 6.8 us each
+games: trip-gl-2: hold syscall 0: 442 holds, 580 us, 1.3 us each
+games: trip-gl-2: hold syscall 262: 82 holds, 446 us, 5.4 us each
+games: trip-gl-2: hold syscall 89: 204 holds, 382 us, 1.9 us each
+games: trip-gl-2: hold syscall 230: 118 holds, 318 us, 2.7 us each
+games: trip-gl-2: hold vector 32: 65 holds, 241 us, 3.7 us each
+games: trip-gl-2: hold syscall 9: 294 holds, 180 us, 0.6 us each
+games: trip-gl-2: hold syscall 3: 361 holds, 150 us, 0.4 us each
+games: trip-gl-2: hold vector 14: 9 holds, 12 us, 1.3 us each
+games: trip-gl-2: thread 740 trip64.exe: utime 2 stime 7 voluntary 4 involuntary 0
+games: trip-gl-2: thread 756 llvmpipe-0: utime 0 stime 0 voluntary 2132 involuntary 15
+games: trip-gl-2: thread 757 llvmpipe-1: utime 0 stime 0 voluntary 2301 involuntary 14
+games: trip-gl-2: thread 758 llvmpipe-2: utime 0 stime 0 voluntary 2368 involuntary 8
+games: trip-gl-2: thread 759 llvmpipe-3: utime 0 stime 1 voluntary 2010 involuntary 11
+games: trip-gl-2: thread 760 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-2: thread 761 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-2: thread 762 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-2: thread 763 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-2: thread 764 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-2: thread 767 wined3d_cs: utime 3 stime 3 voluntary 1584 involuntary 17
+games: trip-gl-2: exit 0 ms 88.8
+games: trip-gl-strace: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl-strace: feature level: 0xb000
+games: trip-gl-strace: tripprobe: 1000 round trips in 9890.7 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: TRIP OK
+games: trip-gl-strace: window 9941.0 ms
+games: trip-gl-strace: ctxt 0
+games: trip-gl-strace: bkl_wait_us 12356555
+games: trip-gl-strace: scheduler_picks 493624
+games: trip-gl-strace: tlb_shootdown_ipis 3
+games: trip-gl-strace: hold take 1: 321715 holds, 4301702 us, 13.4 us each
+games: trip-gl-strace: hold syscall 101: 511135 holds, 2264633 us, 4.4 us each
+games: trip-gl-strace: hold syscall 61: 323812 holds, 1769143 us, 5.5 us each
+games: trip-gl-strace: hold slept 202: 121635 holds, 1195914 us, 9.8 us each
+games: trip-gl-strace: hold slept 61: 31672 holds, 641703 us, 20.3 us each
+games: trip-gl-strace: hold slept 98: 40128 holds, 423753 us, 10.6 us each
+games: trip-gl-strace: hold slept 441: 9273 holds, 386776 us, 41.7 us each
+games: trip-gl-strace: hold slept 7: 22352 holds, 289743 us, 13.0 us each
+games: trip-gl-strace: hold slept 230: 15174 holds, 262269 us, 17.3 us each
+games: trip-gl-strace: hold slept 0: 17945 holds, 228073 us, 12.7 us each
+games: trip-gl-strace: hold slept 24: 21270 holds, 208795 us, 9.8 us each
+games: trip-gl-strace: hold slept 14: 14712 holds, 183082 us, 12.4 us each
+games: trip-gl-strace: hold slept 1: 10439 holds, 181504 us, 17.4 us each
+games: trip-gl-strace: hold slept 20: 3366 holds, 71080 us, 21.1 us each
+games: trip-gl-strace: hold syscall 262: 4854 holds, 57185 us, 11.8 us each
+games: trip-gl-strace: hold syscall 257: 8392 holds, 47897 us, 5.7 us each
+games: trip-gl-strace: hold slept 262: 1994 holds, 45029 us, 22.6 us each
+games: trip-gl-strace: hold syscall 0: 7687 holds, 35439 us, 4.6 us each
+games: trip-gl-strace: hold syscall 14: 7356 holds, 34396 us, 4.7 us each
+games: trip-gl-strace: hold slept 257: 1201 holds, 30985 us, 25.8 us each
+games: trip-gl-strace: hold syscall 3: 8442 holds, 24727 us, 2.9 us each
+games: trip-gl-strace: hold slept 217: 808 holds, 19226 us, 23.8 us each
+games: trip-gl-strace: hold vector 0: 25879 holds, 17959 us, 0.7 us each
+games: trip-gl-strace: hold slept 3: 928 holds, 13678 us, 14.7 us each
+games: trip-gl-strace: hold slept 449: 1250 holds, 12833 us, 10.3 us each
+games: trip-gl-strace: hold slept 89: 700 holds, 11744 us, 16.8 us each
+games: trip-gl-strace: hold slept 72: 868 holds, 11394 us, 13.1 us each
+games: trip-gl-strace: hold syscall 20: 1901 holds, 9319 us, 4.9 us each
+games: trip-gl-strace: hold slept 47: 788 holds, 8148 us, 10.3 us each
+games: trip-gl-strace: hold slept 10: 544 holds, 7795 us, 14.3 us each
+games: trip-gl-strace: hold slept 82: 7 holds, 7505 us, 1072.1 us each
+games: trip-gl-strace: hold slept 16: 408 holds, 6123 us, 15.0 us each
+games: trip-gl-strace: hold slept 5: 478 holds, 6103 us, 12.8 us each
+games: trip-gl-strace: hold slept 9: 352 holds, 4960 us, 14.1 us each
+games: trip-gl-strace: hold slept 138: 316 holds, 4859 us, 15.4 us each
+games: trip-gl-strace: hold slept 17: 106 holds, 4434 us, 41.8 us each
+games: trip-gl-strace: hold vector 32: 346 holds, 3263 us, 9.4 us each
+games: trip-gl-strace: hold syscall 89: 349 holds, 2305 us, 6.6 us each
+games: trip-gl-strace: hold slept 63: 156 holds, 1629 us, 10.4 us each
+games: trip-gl-strace: hold slept 11: 114 holds, 1554 us, 13.6 us each
+games: trip-gl-strace: hold slept 234: 48 holds, 814 us, 17.0 us each
+games: trip-gl-strace: hold slept 293: 24 holds, 742 us, 30.9 us each
+games: trip-gl-strace: hold slept 46: 54 holds, 525 us, 9.7 us each
+games: trip-gl-strace: hold slept 191: 24 holds, 418 us, 17.4 us each
+games: trip-gl-strace: hold slept 87: 2 holds, 397 us, 198.5 us each
+games: trip-gl-strace: hold slept 233: 26 holds, 384 us, 14.8 us each
+games: trip-gl-strace: hold vector 14: 278 holds, 282 us, 1.0 us each
+games: trip-gl-strace: hold slept 8: 26 holds, 261 us, 10.0 us each
+games: trip-gl-strace: hold slept 15: 24 holds, 261 us, 10.9 us each
+games: trip-gl-strace: hold slept 193: 16 holds, 252 us, 15.8 us each
+games: trip-gl-strace: hold slept 435: 12 holds, 247 us, 20.6 us each
+games: trip-gl-strace: hold slept 99: 14 holds, 194 us, 13.9 us each
+games: trip-gl-strace: hold slept 203: 8 holds, 130 us, 16.2 us each
+games: trip-gl-strace: hold slept 270: 3 holds, 129 us, 43.0 us each
+games: trip-gl-strace: hold slept 32: 12 holds, 118 us, 9.8 us each
+games: trip-gl-strace: hold slept 39: 10 holds, 109 us, 10.9 us each
+games: trip-gl-strace: hold slept 104: 8 holds, 92 us, 11.5 us each
+games: trip-gl-strace: hold slept 128: 9 holds, 64 us, 7.1 us each
+games: trip-gl-strace: hold slept 21: 4 holds, 60 us, 15.0 us each
+games: trip-gl-strace: hold slept 131: 8 holds, 59 us, 7.4 us each
+games: trip-gl-strace: hold slept 334: 8 holds, 50 us, 6.2 us each
+games: trip-gl-strace: hold slept 108: 6 holds, 47 us, 7.8 us each
+games: trip-gl-strace: hold slept 158: 8 holds, 41 us, 5.1 us each
+games: trip-gl-strace: hold slept 221: 2 holds, 39 us, 19.5 us each
+games: trip-gl-strace: hold slept 273: 8 holds, 35 us, 4.4 us each
+games: trip-gl-strace: hold slept 118: 4 holds, 21 us, 5.2 us each
+games: trip-gl-strace: hold slept 186: 8 holds, 16 us, 2.0 us each
+games: trip-gl-strace: hold slept 107: 6 holds, 13 us, 2.2 us each
+games: trip-gl-strace: hold slept 157: 8 holds, 13 us, 1.6 us each
+games: trip-gl-strace: hold slept 102: 8 holds, 10 us, 1.2 us each
+games: trip-gl-strace: hold slept 60: 2 holds, 6 us, 3.0 us each
+games: trip-gl-strace: hold slept 120: 4 holds, 5 us, 1.2 us each
+games: trip-gl-strace: thread 877 trip64.exe: utime 12 stime 346 voluntary 60247 involuntary 1168
+games: trip-gl-strace: thread 892 llvmpipe-0: utime 2 stime 101 voluntary 18062 involuntary 33
+games: trip-gl-strace: thread 893 llvmpipe-1: utime 3 stime 101 voluntary 18783 involuntary 34
+games: trip-gl-strace: thread 894 llvmpipe-2: utime 2 stime 106 voluntary 19474 involuntary 32
+games: trip-gl-strace: thread 895 llvmpipe-3: utime 2 stime 95 voluntary 18712 involuntary 40
+games: trip-gl-strace: thread 896 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 897 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 898 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 899 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 900 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 904 wined3d_cs: utime 46 stime 205 voluntary 38818 involuntary 52
+games: trip-gl-strace: exit 0 ms 9890.7
+games: trip-gl-ioctl: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl-ioctl: feature level: 0xb000
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 6469.6 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: TRIP OK
+games: trip-gl-ioctl: window 6494.1 ms
+games: trip-gl-ioctl: ctxt 0
+games: trip-gl-ioctl: bkl_wait_us 7630689
+games: trip-gl-ioctl: scheduler_picks 470667
+games: trip-gl-ioctl: tlb_shootdown_ipis 2
+games: trip-gl-ioctl: hold take 1: 309096 holds, 2894719 us, 9.4 us each
+games: trip-gl-ioctl: hold syscall 101: 368518 holds, 1332913 us, 3.6 us each
+games: trip-gl-ioctl: hold syscall 61: 311536 holds, 1291816 us, 4.1 us each
+games: trip-gl-ioctl: hold slept 202: 120207 holds, 839866 us, 7.0 us each
+games: trip-gl-ioctl: hold slept 61: 31462 holds, 483457 us, 15.4 us each
+games: trip-gl-ioctl: hold slept 98: 38677 holds, 297892 us, 7.7 us each
+games: trip-gl-ioctl: hold slept 441: 8591 holds, 222519 us, 25.9 us each
+games: trip-gl-ioctl: hold slept 7: 17862 holds, 161923 us, 9.1 us each
+games: trip-gl-ioctl: hold slept 0: 17856 holds, 156520 us, 8.8 us each
+games: trip-gl-ioctl: hold slept 230: 12238 holds, 154514 us, 12.6 us each
+games: trip-gl-ioctl: hold slept 24: 20613 holds, 146568 us, 7.1 us each
+games: trip-gl-ioctl: hold slept 1: 10140 holds, 121852 us, 12.0 us each
+games: trip-gl-ioctl: hold slept 14: 14397 holds, 111512 us, 7.7 us each
+games: trip-gl-ioctl: hold slept 20: 3420 holds, 40469 us, 11.8 us each
+games: trip-gl-ioctl: hold syscall 262: 3717 holds, 28968 us, 7.8 us each
+games: trip-gl-ioctl: hold syscall 7: 8930 holds, 28443 us, 3.2 us each
+games: trip-gl-ioctl: hold slept 262: 1978 holds, 27454 us, 13.9 us each
+games: trip-gl-ioctl: hold syscall 0: 7669 holds, 25188 us, 3.3 us each
+games: trip-gl-ioctl: hold syscall 257: 6177 holds, 25111 us, 4.1 us each
+games: trip-gl-ioctl: hold syscall 14: 7198 holds, 22719 us, 3.2 us each
+games: trip-gl-ioctl: hold syscall 1: 5502 holds, 22452 us, 4.1 us each
+games: trip-gl-ioctl: hold syscall 230: 5898 holds, 21522 us, 3.6 us each
+games: trip-gl-ioctl: hold slept 257: 1280 holds, 19934 us, 15.6 us each
+games: trip-gl-ioctl: hold slept 310: 1468 holds, 14610 us, 10.0 us each
+games: trip-gl-ioctl: hold slept 217: 808 holds, 12864 us, 15.9 us each
+games: trip-gl-ioctl: hold vector 0: 25162 holds, 11991 us, 0.5 us each
+games: trip-gl-ioctl: hold slept 3: 938 holds, 9452 us, 10.1 us each
+games: trip-gl-ioctl: hold slept 89: 698 holds, 7435 us, 10.7 us each
+games: trip-gl-ioctl: hold syscall 20: 1956 holds, 7432 us, 3.8 us each
+games: trip-gl-ioctl: hold slept 449: 948 holds, 7418 us, 7.8 us each
+games: trip-gl-ioctl: hold slept 162: 50 holds, 7234 us, 144.7 us each
+games: trip-gl-ioctl: hold slept 72: 880 holds, 7201 us, 8.2 us each
+games: trip-gl-ioctl: hold slept 47: 854 holds, 6373 us, 7.5 us each
+games: trip-gl-ioctl: hold slept 10: 544 holds, 5829 us, 10.7 us each
+games: trip-gl-ioctl: hold slept 82: 7 holds, 4851 us, 693.0 us each
+games: trip-gl-ioctl: hold slept 16: 408 holds, 4265 us, 10.5 us each
+games: trip-gl-ioctl: hold slept 5: 480 holds, 3983 us, 8.3 us each
+games: trip-gl-ioctl: hold slept 9: 336 holds, 3438 us, 10.2 us each
+games: trip-gl-ioctl: hold slept 138: 316 holds, 3411 us, 10.8 us each
+games: trip-gl-ioctl: hold slept 17: 106 holds, 2336 us, 22.0 us each
+games: trip-gl-ioctl: hold syscall 89: 349 holds, 1514 us, 4.3 us each
+games: trip-gl-ioctl: hold vector 32: 145 holds, 1109 us, 7.6 us each
+games: trip-gl-ioctl: hold slept 11: 114 holds, 1105 us, 9.7 us each
+games: trip-gl-ioctl: hold slept 63: 198 holds, 1033 us, 5.2 us each
+games: trip-gl-ioctl: hold slept 234: 48 holds, 902 us, 18.8 us each
+games: trip-gl-ioctl: hold slept 293: 30 holds, 742 us, 24.7 us each
+games: trip-gl-ioctl: hold slept 191: 24 holds, 606 us, 25.2 us each
+games: trip-gl-ioctl: hold slept 46: 62 holds, 521 us, 8.4 us each
+games: trip-gl-ioctl: hold vector 14: 279 holds, 421 us, 1.5 us each
+games: trip-gl-ioctl: hold slept 233: 30 holds, 358 us, 11.9 us each
+games: trip-gl-ioctl: hold slept 435: 15 holds, 320 us, 21.3 us each
+games: trip-gl-ioctl: hold slept 87: 2 holds, 310 us, 155.0 us each
+games: trip-gl-ioctl: hold slept 99: 14 holds, 262 us, 18.7 us each
+games: trip-gl-ioctl: hold slept 273: 10 holds, 214 us, 21.4 us each
+games: trip-gl-ioctl: hold slept 15: 24 holds, 196 us, 8.2 us each
+games: trip-gl-ioctl: hold slept 193: 16 holds, 172 us, 10.8 us each
+games: trip-gl-ioctl: hold slept 8: 26 holds, 157 us, 6.0 us each
+games: trip-gl-ioctl: hold syscall 39: 45 holds, 141 us, 3.1 us each
+games: trip-gl-ioctl: hold slept 203: 10 holds, 136 us, 13.6 us each
+games: trip-gl-ioctl: hold slept 32: 14 holds, 123 us, 8.8 us each
+games: trip-gl-ioctl: hold slept 21: 6 holds, 77 us, 12.8 us each
+games: trip-gl-ioctl: hold slept 158: 10 holds, 65 us, 6.5 us each
+games: trip-gl-ioctl: hold slept 334: 10 holds, 46 us, 4.6 us each
+games: trip-gl-ioctl: hold slept 131: 10 holds, 40 us, 4.0 us each
+games: trip-gl-ioctl: hold slept 157: 10 holds, 36 us, 3.6 us each
+games: trip-gl-ioctl: hold slept 107: 6 holds, 32 us, 5.3 us each
+games: trip-gl-ioctl: hold slept 41: 2 holds, 30 us, 15.0 us each
+games: trip-gl-ioctl: hold slept 39: 12 holds, 28 us, 2.3 us each
+games: trip-gl-ioctl: hold slept 270: 3 holds, 25 us, 8.3 us each
+games: trip-gl-ioctl: hold slept 52: 2 holds, 24 us, 12.0 us each
+games: trip-gl-ioctl: hold slept 108: 6 holds, 22 us, 3.7 us each
+games: trip-gl-ioctl: hold slept 102: 8 holds, 19 us, 2.4 us each
+games: trip-gl-ioctl: hold slept 118: 4 holds, 17 us, 4.2 us each
+games: trip-gl-ioctl: hold slept 120: 4 holds, 17 us, 4.2 us each
+games: trip-gl-ioctl: hold slept 186: 10 holds, 16 us, 1.6 us each
+games: trip-gl-ioctl: hold slept 221: 2 holds, 14 us, 7.0 us each
+games: trip-gl-ioctl: hold slept 35: 1 holds, 13 us, 13.0 us each
+games: trip-gl-ioctl: hold slept 128: 6 holds, 12 us, 2.0 us each
+games: trip-gl-ioctl: hold slept 104: 8 holds, 9 us, 1.1 us each
+games: trip-gl-ioctl: hold slept 60: 2 holds, 7 us, 3.5 us each
+games: trip-gl-ioctl: hold slept 42: 2 holds, 6 us, 3.0 us each
+games: trip-gl-ioctl: hold slept 45: 4 holds, 4 us, 1.0 us each
+games: trip-gl-ioctl: thread 1015 trip64.exe: utime 8 stime 255 voluntary 58741 involuntary 1233
+games: trip-gl-ioctl: thread 1030 llvmpipe-0: utime 2 stime 75 voluntary 18087 involuntary 36
+games: trip-gl-ioctl: thread 1031 llvmpipe-1: utime 1 stime 75 voluntary 18768 involuntary 30
+games: trip-gl-ioctl: thread 1032 llvmpipe-2: utime 1 stime 75 voluntary 19247 involuntary 36
+games: trip-gl-ioctl: thread 1033 llvmpipe-3: utime 1 stime 69 voluntary 18438 involuntary 25
+games: trip-gl-ioctl: thread 1034 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 1035 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 1036 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 1037 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 1038 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 1042 wined3d_cs: utime 33 stime 147 voluntary 38077 involuntary 60
+games: trip-gl-ioctl: exit 0 ms 6469.6
+games: ioctl VFAT_IOCTL_READDIR_BOTH 846
+games: ioctl FS_IOC_GETFLAGS 544
+games: ioctl TCGETS2 36
+games: ioctl UDMABUF_CREATE 6
+games: ioctl DMA_BUF_IOCTL_EXPORT_SYNC_FILE 6
+games: ioctl TIOCGPGRP 2
+games: ioctl SIOCGIFHWADDR 2
+games: ioctl SIOCGIFFLAGS 2
+games: ioctl SIOCGIFMTU 2
+games: ioctl TIOCGWINSZ 1
+games: ioctl FIOCLEX 1
+games: ioctl SIOCGIWNAME 1
+TRIPS OK
+trip: result: status 0, results in /data/trial4729/out/trip

@@ -1,0 +1,191 @@
+games: weston: renderer llvmpipe (LLVM 19.1.7, 256 bits) display :2
+games: prefix: status 0 rach2-game: prefix: made /data/trial4729/out/rach2-trip.udjkzr_n/compat/pfx
+games: trip-gl-0: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl-0: feature level: 0xb000
+games: trip-gl-0: tripprobe: 1000 round trips in 80.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-0: TRIP OK
+games: trip-gl-0: window 80.0 ms
+games: trip-gl-0: ctxt 0
+games: trip-gl-0: bkl_wait_us 11514
+games: trip-gl-0: scheduler_picks 99248
+games: trip-gl-0: tlb_shootdown_ipis 23
+games: trip-gl-0: hold vector 0: 13022 holds, 11399 us, 0.9 us each
+games: trip-gl-0: hold syscall 257: 718 holds, 4003 us, 5.6 us each
+games: trip-gl-0: hold syscall 14: 4472 holds, 1939 us, 0.4 us each
+games: trip-gl-0: hold syscall 20: 418 holds, 948 us, 2.3 us each
+games: trip-gl-0: hold syscall 262: 205 holds, 905 us, 4.4 us each
+games: trip-gl-0: hold take 1: 138 holds, 583 us, 4.2 us each
+games: trip-gl-0: hold syscall 89: 204 holds, 462 us, 2.3 us each
+games: trip-gl-0: hold syscall 0: 444 holds, 344 us, 0.8 us each
+games: trip-gl-0: hold syscall 11: 40 holds, 292 us, 7.3 us each
+games: trip-gl-0: hold vector 32: 57 holds, 241 us, 4.2 us each
+games: trip-gl-0: hold syscall 3: 459 holds, 137 us, 0.3 us each
+games: trip-gl-0: hold syscall 9: 252 holds, 97 us, 0.4 us each
+games: trip-gl-0: hold vector 14: 9 holds, 9 us, 1.0 us each
+games: trip-gl-0: thread 475 trip64.exe: utime 2 stime 6 voluntary 4 involuntary 36
+games: trip-gl-0: thread 491 llvmpipe-0: utime 0 stime 0 voluntary 2006 involuntary 10
+games: trip-gl-0: thread 492 llvmpipe-1: utime 0 stime 0 voluntary 2156 involuntary 11
+games: trip-gl-0: thread 493 llvmpipe-2: utime 0 stime 0 voluntary 2182 involuntary 10
+games: trip-gl-0: thread 494 llvmpipe-3: utime 0 stime 1 voluntary 1912 involuntary 7
+games: trip-gl-0: thread 495 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 496 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 497 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 498 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 499 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 502 wined3d_cs: utime 3 stime 2 voluntary 1359 involuntary 18
+games: trip-gl-0: exit 0 ms 80.5
+games: trip-gl-1: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl-1: feature level: 0xb000
+games: trip-gl-1: tripprobe: 1000 round trips in 69.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: TRIP OK
+games: trip-gl-1: window 71.0 ms
+games: trip-gl-1: ctxt 0
+games: trip-gl-1: bkl_wait_us 15368
+games: trip-gl-1: scheduler_picks 118422
+games: trip-gl-1: tlb_shootdown_ipis 29
+games: trip-gl-1: hold vector 0: 12645 holds, 9266 us, 0.7 us each
+games: trip-gl-1: hold syscall 257: 489 holds, 3235 us, 6.6 us each
+games: trip-gl-1: hold syscall 14: 3854 holds, 2140 us, 0.6 us each
+games: trip-gl-1: hold syscall 20: 385 holds, 733 us, 1.9 us each
+games: trip-gl-1: hold syscall 47: 624 holds, 643 us, 1.0 us each
+games: trip-gl-1: hold take 1: 116 holds, 512 us, 4.4 us each
+games: trip-gl-1: hold syscall 89: 204 holds, 430 us, 2.1 us each
+games: trip-gl-1: hold syscall 262: 75 holds, 395 us, 5.3 us each
+games: trip-gl-1: hold syscall 0: 396 holds, 324 us, 0.8 us each
+games: trip-gl-1: hold syscall 11: 56 holds, 313 us, 5.6 us each
+games: trip-gl-1: hold vector 32: 54 holds, 223 us, 4.1 us each
+games: trip-gl-1: hold syscall 9: 273 holds, 166 us, 0.6 us each
+games: trip-gl-1: hold syscall 3: 341 holds, 118 us, 0.3 us each
+games: trip-gl-1: hold vector 14: 8 holds, 10 us, 1.2 us each
+games: trip-gl-1: thread 608 trip64.exe: utime 2 stime 5 voluntary 5 involuntary 9
+games: trip-gl-1: thread 616 llvmpipe-0: utime 0 stime 0 voluntary 1990 involuntary 8
+games: trip-gl-1: thread 617 llvmpipe-1: utime 0 stime 1 voluntary 2131 involuntary 11
+games: trip-gl-1: thread 618 llvmpipe-2: utime 0 stime 0 voluntary 2116 involuntary 8
+games: trip-gl-1: thread 619 llvmpipe-3: utime 0 stime 0 voluntary 1892 involuntary 13
+games: trip-gl-1: thread 620 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-1: thread 621 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-1: thread 622 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-1: thread 623 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-1: thread 624 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-1: thread 636 wined3d_cs: utime 2 stime 1 voluntary 1323 involuntary 17
+games: trip-gl-1: exit 0 ms 69.9
+games: trip-gl-2: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl-2: feature level: 0xb000
+games: trip-gl-2: tripprobe: 1000 round trips in 106.4 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: TRIP OK
+games: trip-gl-2: window 105.4 ms
+games: trip-gl-2: ctxt 0
+games: trip-gl-2: bkl_wait_us 17429
+games: trip-gl-2: scheduler_picks 137105
+games: trip-gl-2: tlb_shootdown_ipis 41
+games: trip-gl-2: hold vector 0: 13981 holds, 9257 us, 0.7 us each
+games: trip-gl-2: hold syscall 257: 645 holds, 3326 us, 5.2 us each
+games: trip-gl-2: hold syscall 14: 4202 holds, 2282 us, 0.5 us each
+games: trip-gl-2: hold take 1: 183 holds, 1796 us, 9.8 us each
+games: trip-gl-2: hold syscall 20: 419 holds, 1096 us, 2.6 us each
+games: trip-gl-2: hold syscall 47: 708 holds, 906 us, 1.3 us each
+games: trip-gl-2: hold syscall 262: 88 holds, 585 us, 6.6 us each
+games: trip-gl-2: hold syscall 0: 441 holds, 379 us, 0.9 us each
+games: trip-gl-2: hold syscall 11: 56 holds, 371 us, 6.6 us each
+games: trip-gl-2: hold syscall 89: 204 holds, 309 us, 1.5 us each
+games: trip-gl-2: hold vector 32: 82 holds, 290 us, 3.5 us each
+games: trip-gl-2: hold syscall 3: 373 holds, 136 us, 0.4 us each
+games: trip-gl-2: hold syscall 9: 303 holds, 125 us, 0.4 us each
+games: trip-gl-2: hold vector 14: 9 holds, 9 us, 1.0 us each
+games: trip-gl-2: thread 741 trip64.exe: utime 2 stime 7 voluntary 4 involuntary 24
+games: trip-gl-2: thread 758 llvmpipe-0: utime 0 stime 1 voluntary 2120 involuntary 13
+games: trip-gl-2: thread 759 llvmpipe-1: utime 0 stime 1 voluntary 2469 involuntary 12
+games: trip-gl-2: thread 760 llvmpipe-2: utime 0 stime 1 voluntary 2452 involuntary 13
+games: trip-gl-2: thread 761 llvmpipe-3: utime 0 stime 1 voluntary 1991 involuntary 10
+games: trip-gl-2: thread 762 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-2: thread 763 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-2: thread 764 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-2: thread 765 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-2: thread 766 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-2: thread 769 wined3d_cs: utime 3 stime 4 voluntary 1430 involuntary 23
+games: trip-gl-2: exit 0 ms 106.4
+games: trip-gl-strace: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl-strace: feature level: 0xb000
+games: trip-gl-strace: tripprobe: 1000 round trips in 6737.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: TRIP OK
+games: trip-gl-strace: window 6763.0 ms
+games: trip-gl-strace: ctxt 0
+games: trip-gl-strace: bkl_wait_us 7834535
+games: trip-gl-strace: scheduler_picks 476235
+games: trip-gl-strace: tlb_shootdown_ipis 3
+games: trip-gl-strace: hold take 1: 308927 holds, 2982366 us, 9.7 us each
+games: trip-gl-strace: hold syscall 101: 491444 holds, 1478524 us, 3.0 us each
+games: trip-gl-strace: hold syscall 61: 311676 holds, 1350489 us, 4.3 us each
+games: trip-gl-strace: hold syscall 262: 3761 holds, 34998 us, 9.3 us each
+games: trip-gl-strace: hold syscall 257: 6254 holds, 28305 us, 4.5 us each
+games: trip-gl-strace: hold syscall 230: 5939 holds, 23890 us, 4.0 us each
+games: trip-gl-strace: hold syscall 0: 7826 holds, 22677 us, 2.9 us each
+games: trip-gl-strace: hold syscall 14: 7382 holds, 22417 us, 3.0 us each
+games: trip-gl-strace: hold syscall 1: 4045 holds, 15016 us, 3.7 us each
+games: trip-gl-strace: hold syscall 20: 2164 holds, 6885 us, 3.2 us each
+games: trip-gl-strace: hold vector 0: 24372 holds, 6090 us, 0.2 us each
+games: trip-gl-strace: hold syscall 89: 349 holds, 1581 us, 4.5 us each
+games: trip-gl-strace: hold vector 32: 139 holds, 1227 us, 8.8 us each
+games: trip-gl-strace: hold vector 14: 278 holds, 241 us, 0.9 us each
+games: trip-gl-strace: thread 879 trip64.exe: utime 8 stime 251 voluntary 59132 involuntary 1138
+games: trip-gl-strace: thread 894 llvmpipe-0: utime 2 stime 74 voluntary 18220 involuntary 33
+games: trip-gl-strace: thread 895 llvmpipe-1: utime 1 stime 76 voluntary 18774 involuntary 37
+games: trip-gl-strace: thread 896 llvmpipe-2: utime 2 stime 79 voluntary 19330 involuntary 34
+games: trip-gl-strace: thread 897 llvmpipe-3: utime 2 stime 68 voluntary 18674 involuntary 21
+games: trip-gl-strace: thread 898 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 899 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 900 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 901 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 902 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 906 wined3d_cs: utime 32 stime 153 voluntary 38551 involuntary 54
+games: trip-gl-strace: exit 0 ms 6737.9
+games: trip-gl-ioctl: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl-ioctl: feature level: 0xb000
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 3694.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: TRIP OK
+games: trip-gl-ioctl: window 3697.7 ms
+games: trip-gl-ioctl: ctxt 0
+games: trip-gl-ioctl: bkl_wait_us 3993544
+games: trip-gl-ioctl: scheduler_picks 440765
+games: trip-gl-ioctl: tlb_shootdown_ipis 0
+games: trip-gl-ioctl: hold take 1: 286660 holds, 1575892 us, 5.5 us each
+games: trip-gl-ioctl: hold syscall 61: 292049 holds, 903803 us, 3.1 us each
+games: trip-gl-ioctl: hold syscall 101: 341117 holds, 775506 us, 2.3 us each
+games: trip-gl-ioctl: hold syscall 7: 5939 holds, 13849 us, 2.3 us each
+games: trip-gl-ioctl: hold syscall 0: 6716 holds, 12959 us, 1.9 us each
+games: trip-gl-ioctl: hold syscall 14: 6499 holds, 11996 us, 1.8 us each
+games: trip-gl-ioctl: hold syscall 262: 2626 holds, 10814 us, 4.1 us each
+games: trip-gl-ioctl: hold syscall 1: 4002 holds, 10000 us, 2.5 us each
+games: trip-gl-ioctl: hold syscall 257: 3924 holds, 9914 us, 2.5 us each
+games: trip-gl-ioctl: hold syscall 230: 3865 holds, 8322 us, 2.2 us each
+games: trip-gl-ioctl: hold syscall 20: 1673 holds, 3842 us, 2.3 us each
+games: trip-gl-ioctl: hold vector 0: 22963 holds, 3555 us, 0.2 us each
+games: trip-gl-ioctl: hold syscall 89: 349 holds, 825 us, 2.4 us each
+games: trip-gl-ioctl: hold vector 14: 22 holds, 36 us, 1.6 us each
+games: trip-gl-ioctl: hold syscall 39: 26 holds, 11 us, 0.4 us each
+games: trip-gl-ioctl: thread 1017 trip64.exe: utime 4 stime 150 voluntary 57907 involuntary 921
+games: trip-gl-ioctl: thread 1032 llvmpipe-0: utime 1 stime 48 voluntary 18297 involuntary 24
+games: trip-gl-ioctl: thread 1033 llvmpipe-1: utime 1 stime 47 voluntary 18730 involuntary 28
+games: trip-gl-ioctl: thread 1034 llvmpipe-2: utime 0 stime 44 voluntary 19188 involuntary 31
+games: trip-gl-ioctl: thread 1035 llvmpipe-3: utime 0 stime 41 voluntary 18277 involuntary 15
+games: trip-gl-ioctl: thread 1036 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 1037 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 1038 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 1039 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 1040 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 1044 wined3d_cs: utime 18 stime 94 voluntary 37625 involuntary 48
+games: trip-gl-ioctl: exit 0 ms 3694.5
+games: ioctl VFAT_IOCTL_READDIR_BOTH 846
+games: ioctl FS_IOC_GETFLAGS 544
+games: ioctl TCGETS2 36
+games: ioctl UDMABUF_CREATE 6
+games: ioctl DMA_BUF_IOCTL_EXPORT_SYNC_FILE 6
+games: ioctl TIOCGPGRP 2
+games: ioctl SIOCGIFHWADDR 2
+games: ioctl SIOCGIFFLAGS 2
+games: ioctl SIOCGIFMTU 2
+games: ioctl TIOCGWINSZ 1
+games: ioctl FIOCLEX 1
+games: ioctl SIOCGIWNAME 1
+TRIPS OK
+trip: result: status 0, results in /data/trial4729/out/trip
