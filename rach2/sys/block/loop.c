@@ -25,8 +25,10 @@
  * `loop_lock`, and a detach or a release unpublishes the device under it
  * only when no transfer is in flight. Linux's loop checks `lo_state` in
  * `loop_queue_rq` (drivers/block/loop.c:1815-1825); its `loop_clr_fd` only
- * marks the device `Lo_rundown` (loop.c:1161-1193), and `lo_release` lets the
- * file go at the last close (loop.c:1694-1716), when no I/O can be in flight.
+ * marks the device `LO_FLAGS_AUTOCLEAR`, and `Lo_rundown` as well for a sole
+ * opener (loop.c:1187-1189); with other openers the device stays `Lo_bound`
+ * until `lo_release`, at the last close, marks it `Lo_rundown` and lets the
+ * file go (loop.c:1707-1715), when no I/O can be in flight.
  * Here a detach does it at once and answers `EBUSY` while a transfer is in
  * flight. The transfer then runs in the caller, which is this device's
  * worker, where Linux's runs on its work queue (loop.c:776-869), and takes
