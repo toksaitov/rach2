@@ -48,6 +48,9 @@ static struct serial_rx_counters _rx;
 static void (*_rx_notify)(void);
 static int _rx_irq_wanted; /* the receive interrupt was enabled */
 static int _rx_irq_masked; /* and is off from a full ring to a half-empty one */
+/* The handler stopped at its pass limit with a byte still in the FIFO, so
+ * IRQ 4's line stays high and raises no edge until a reading empties it. */
+static int _rx_line_high;
 /* The ring position before which `serial_rx_lookahead` has given every
  * byte; monotonic, as the head and tail are. */
 static uint32_t _rx_looked;
@@ -226,8 +229,14 @@ int serial_rx_service(int budget)
         return 0;
     }
     flags = console_lock();
-    while (moved < budget && _rx_count() < SERIAL_RX_SIZE && (_serial_lsr() & SERIAL_LSR_DR)) {
-        unsigned char c = inb(SERIAL_COM1 + SERIAL_DATA);
+    while (moved < budget && _rx_count() < SERIAL_RX_SIZE) {
+        unsigned char c;
+
+        if (!(_serial_lsr() & SERIAL_LSR_DR)) {
+            _rx_line_high = 0;
+            break;
+        }
+        c = inb(SERIAL_COM1 + SERIAL_DATA);
 
         _rx.bytes++;
         moved++;
@@ -256,9 +265,11 @@ int serial_rx_service(int budget)
  * to 32 KiB, more than the ring and the console's discipline together
  * take, and a full ring masks the interrupt first. A console that
  * discards COM1's input, as one in a raw keyboard mode does, empties the
- * ring at each pass, so its flood is bounded by the passes alone, and the
- * 200 ms reading takes what is left. Linux's PASS_LIMIT of 512 bounds its
- * handler the same way (drivers/tty/serial/8250/8250_core.c). */
+ * ring at each pass, so its flood is bounded by the passes alone; the
+ * handler then leaves the line high (`serial_rx_line_high`), and the
+ * tick's reading every fifth of a second takes what is left. Linux's
+ * PASS_LIMIT of 512 bounds its handler the same way
+ * (drivers/tty/serial/8250/8250_core.c). */
 #define SERIAL_RX_PASSES 256
 
 /**
@@ -287,6 +298,7 @@ static void _serial_rx_handler(isr_params_t *params)
             return;
         }
     }
+    _rx_line_high = 1;
 }
 
 void serial_enable_rx_irq(void)
@@ -303,6 +315,11 @@ void serial_enable_rx_irq(void)
 int serial_rx_irq_on(void)
 {
     return _rx_irq_wanted;
+}
+
+int serial_rx_line_high(void)
+{
+    return _rx_line_high;
 }
 
 void serial_set_rx_notify(void (*notify)(void))

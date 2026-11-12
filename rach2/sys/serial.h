@@ -51,6 +51,12 @@ void serial_enable_rx_irq(void);
  * arrive without the tick's reading. */
 int serial_rx_irq_on(void);
 
+/** Whether the receive interrupt's handler stopped at its pass limit with a
+ * byte still in the port, so that IRQ 4's edge-triggered line stays high
+ * and no interrupt comes until a reading by `serial_rx_service` empties
+ * the port, which clears it. */
+int serial_rx_line_high(void);
+
 /**
  * Register what runs after the interrupt's service, with interrupts off:
  * the console's wake of a parked reader or its drain into the discipline.
