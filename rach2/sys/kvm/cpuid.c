@@ -51,8 +51,9 @@
 #define L1_ECX_AVX        0x30001000u
 #define L1_ECX_XSAVE      (1u << 26)
 
-/* Leaf 7, subleaf 0. EBX: as Linux, less SGX, MPX and Intel PT. ECX:
- * AVX512VBMI, UMIP, VBMI2, GFNI, VAES, VPCLMULQDQ, VNNI, BITALG,
+/* Leaf 7, subleaf 0. EBX: as Linux, less SGX, MPX and Intel PT, with
+ * TSC_ADJUST always, since the MSR is emulated (Linux's cpuid.c:710-711).
+ * ECX: AVX512VBMI, UMIP, VBMI2, GFNI, VAES, VPCLMULQDQ, VNNI, BITALG,
  * VPOPCNTDQ, RDPID, BUS_LOCK_DETECT, CLDEMOTE, MOVDIRI and MOVDIR64B; not
  * PKU, since a guest's XCR0 may not name PKRU (XCR0_KERNEL), nor LA57
  * before the guest-physical tables have five levels, nor WAITPKG or
@@ -61,14 +62,15 @@
  * speculation controls, which `spec_bits` completes; not ARCH_CAPABILITIES,
  * whose value names the host's flaws, which the kernel does not track, nor
  * AMX, whose state the kernel does not save. */
-#define L7_EBX        0xFDBF2FFBu
-#define L7_ECX        0x1B405F46u
-#define L7_EDX        0x9C81451Cu
+#define L7_EBX         0xFDBF2FFBu
+#define L7_ECX         0x1B405F46u
+#define L7_EDX         0x9C81451Cu
 /* The bits of leaf 7 that need AVX-512's state, and AVX2, AVX's. */
-#define L7_EBX_AVX512 0xDC230000u
-#define L7_ECX_AVX512 0x00005842u
-#define L7_EDX_AVX512 0x0080010Cu
-#define L7_EBX_AVX2   0x00000020u
+#define L7_EBX_AVX512  0xDC230000u
+#define L7_ECX_AVX512  0x00005842u
+#define L7_EDX_AVX512  0x0080010Cu
+#define L7_EBX_AVX2    0x00000020u
+#define L7_EBX_TSC_ADJ 0x00000002u
 
 /* Leaf 0x80000008's EBX: the speculation controls, AMD's names of Intel's,
  * STIBP always on, SSB_NO and PSFD. */
@@ -232,7 +234,7 @@ static int filter(struct kvm_cpuid_entry2 *e, uint64_t xcr0)
     case 7:
         if (e->index == 0) {
             e->eax = e->eax > 1u ? 1u : e->eax;
-            e->ebx &= L7_EBX;
+            e->ebx = (e->ebx & L7_EBX) | L7_EBX_TSC_ADJ;
             e->ecx &= L7_ECX;
             e->edx &= L7_EDX;
             spec_bits(e);
