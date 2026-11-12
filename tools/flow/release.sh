@@ -1702,6 +1702,70 @@ exit 0;
 END
 }
 
+# claim_publisher: print the perl program that runs a publication of
+# claim_start. Its arguments are LIMIT, LOCK and the publication's command.
+# It takes LOCK exclusively, a minute at most, clears close-on-exec so that
+# the command and all it starts hold the lock too, and runs the command in a
+# process group of its own; once the command has ended, LIMIT seconds have
+# passed or the program takes HUP, INT, PIPE or TERM, it kills that group,
+# so that a process the command left, or one that stalls, closes its
+# descriptor of the lock, and exits with the command's status, or 1 when it
+# killed the command or could not take the lock.
+claim_publisher()
+{
+    cat << 'END'
+use strict;
+use warnings;
+use Fcntl qw(:flock F_GETFD F_SETFD FD_CLOEXEC);
+use POSIX qw(WNOHANG);
+my ($limit, $lock, @command) = @ARGV;
+open(my $l, '>>', $lock) or die "publish: cannot open $lock: $!\n";
+my $got = 0;
+for (1 .. 60) {
+    if (flock($l, LOCK_EX | LOCK_NB)) {
+        $got = 1;
+        last;
+    }
+    sleep 1;
+}
+$got or die "publish: a stop or another publication still holds $lock after a minute\n";
+fcntl($l, F_SETFD, fcntl($l, F_GETFD, 0) & ~FD_CLOEXEC) or die "publish: fcntl: $!\n";
+my $why = '';
+$SIG{$_} = sub { $why ||= "it took $_[0]" } for qw(HUP INT PIPE TERM);
+my $pid = fork();
+defined $pid or die "publish: cannot fork: $!\n";
+if ($pid == 0) {
+    setpgrp(0, 0);
+    open(STDIN, '<', '/dev/null');
+    exec { $command[0] } @command or exit 127;
+}
+# Both sides set the group, so that it exists before a kill names it.
+setpgrp($pid, $pid);
+my $end = time + $limit;
+my $status;
+while (1) {
+    if (waitpid($pid, WNOHANG) == $pid) {
+        $status = $?;
+        last;
+    }
+    $why ||= "it did not end within $limit seconds" if time >= $end;
+    last if $why;
+    select(undef, undef, undef, 0.1);
+}
+kill('KILL', -$pid);
+waitpid($pid, 0) unless defined $status;
+for (1 .. 50) {
+    last unless kill(0, -$pid);
+    select(undef, undef, undef, 0.1);
+}
+if ($why) {
+    print STDERR "publish: killed the publication: $why\n";
+    exit 1;
+}
+exit($status & 127 ? 1 : $status >> 8);
+END
+}
+
 # claim_start ID KIND N LAUNCH GOT DONE: start attempt N of a claim of WSL's
 # admission for Windows' run ID apart from any ssh session: the launcher
 # LAUNCH runs a shell that touches OUT/GOT and OUT/ID.alive once admitted and
@@ -1722,8 +1786,15 @@ END
 # a later attempt has its own. claim_stop writes its token under the same
 # lock, so that a publication is whole before a stop or after it, and a
 # delayed one never removes the GOT of an attempt that came after the stop.
-# The publication waits a minute at most for that lock, which is never
-# removed, since a publication may hold it open.
+# The publication runs under the perl program that claim_publisher prints,
+# which waits a minute at most for that lock, which is never removed, and
+# then gives the publication RACH2_CLAIM_PUBLISH seconds, 30 unless WSL's
+# environment sets it, before it kills the publication's process group,
+# every process of which inherits the lock; so a stalled publication holds
+# the lock for less than the minute that claim_stop waits for it. Each ssh
+# ends after a deadline too, two and a half minutes for the publication and
+# two for the runner's start, so that a stop's TERM, which the caller's trap
+# takes only once its foreground command has ended, waits no longer.
 #
 # The attempt runs under the perl program that claim_runner prints, written
 # to OUT/ID.KIND.N.pl and run in a session of its own, since WSL ends what a
@@ -1747,10 +1818,12 @@ claim_start()
 {
     c=$wheld/$1.$2.$3 k=$wlock/$1.$2
     {
-        echo "mkdir -p $wlock && exec 9>> $wlock/publish.lock && perl -MFcntl=:flock -e 'open(L, \">&=9\") or exit 1; for (1 .. 60) { exit 0 if flock(L, LOCK_EX | LOCK_NB); sleep 1 } exit 1' || exit 1"
-        echo "echo 'go $3' > $k.token.$3 && ln $k.token.$3 $k.token || { rm -f $k.token.$3; exit 1; }"
-        echo "rm -f $k.token.$3 $c.rc $c.held $c.started $c.owner $c.reaped $wheld/$5 && : >> $k.lock && : >> $k.grant"
-    } | tssh "$WSL" || return 1
+        echo "mkdir -p $wlock || exit 1"
+        echo "perl - \"\${RACH2_CLAIM_PUBLISH:-30}\" $wlock/publish.lock sh -c \"echo 'go $3' > $k.token.$3 && ln $k.token.$3 $k.token || { rm -f $k.token.$3; exit 1; }; rm -f $k.token.$3 $c.rc $c.held $c.started $c.owner $c.reaped $wheld/$5 && : >> $k.lock && : >> $k.grant\" << 'END_OF_PUBLICATION' || exit 1"
+        claim_publisher
+        echo "END_OF_PUBLICATION"
+    } | perl -e 'alarm shift; exec @ARGV' 150 ssh -o BatchMode=yes -o ServerAliveInterval=15 \
+        -o ServerAliveCountMax=4 testing "$WSL" || return 1
     {
         echo "cat > $c.pl << 'END_OF_CLAIM'"
         claim_runner
@@ -1761,7 +1834,8 @@ claim_start()
         echo "    while [ ! -e $wheld/$6 ] && [ \"\$(cat $k.token 2> /dev/null)\" = \"go $3\" ] &&"
         echo "        find $wheld/$1.alive -mmin -10 2> /dev/null | grep -q .; do sleep 5; done' > $c 2>&1 < /dev/null &"
         echo "i=0; until [ -e $c.started ] || [ \$i -ge 30 ]; do i=\$((i + 1)); sleep 1; done"
-    } | tssh "$WSL"
+    } | perl -e 'alarm shift; exec @ARGV' 120 ssh -o BatchMode=yes -o ServerAliveInterval=15 \
+        -o ServerAliveCountMax=4 testing "$WSL"
 }
 
 # claim_state ID KIND N GOT: print `granted` while OUT/GOT exists, the
@@ -1796,8 +1870,9 @@ claim_state()
 # claim_stop ID KIND: end every attempt of the claim ID.KIND that claim_start
 # began, granted, waiting for admission or not yet started, and confirm that
 # each has left WSL's ledger. It takes LOCKS/publish.lock, which each
-# publication of claim_start holds while it runs, waiting a minute at most, and
-# holds it only while it replaces the claim's token with `stop`, on which each
+# publication of claim_start holds while it runs, half a minute at most as
+# claim_publisher bounds it, waiting a minute at most for it, and holds it
+# only while it replaces the claim's token with `stop`, on which each
 # attempt's runner and holding shell end and a late one starts nothing, and
 # then waits, two and a half minutes at most, for an exclusive lock of the
 # claim's lock file, which it gets only once no process of any attempt holds
