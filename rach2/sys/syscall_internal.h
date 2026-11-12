@@ -80,10 +80,10 @@ long sys_ftruncate(isr_params_t *params);
  * negative length, before the descriptor is looked at; -EBADF for a descriptor
  * that is not open or is an O_PATH one; -EINVAL for one open on anything but a
  * file of a mount, such as a directory, a pipe, a socket or a device, or not
- * open for writing; -EFBIG past RLIMIT_FSIZE, with SIGXFSZ sent
- * (`fsize_refused`); -EPERM for an immutable or append-only file
- * (`size_guarded`); -EBUSY for a file that backs a loop device; or the file
- * system's error. May sleep.
+ * open for writing; -EPERM for an immutable or append-only file
+ * (`size_guarded`); -EBUSY for a file that backs a loop device; -EFBIG, with
+ * SIGXFSZ sent, for a length that grows the file past RLIMIT_FSIZE, never for
+ * a shrink; or the file system's error. May sleep.
  */
 long ksys_ftruncate(int fd, long long length);
 

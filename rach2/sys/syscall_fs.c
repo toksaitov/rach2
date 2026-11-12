@@ -799,6 +799,31 @@ static int32_t fsize_refused(uint64_t end)
     return -EFBIG;
 }
 
+/**
+ * Whether the caller's RLIMIT_FSIZE refuses a truncate(2) or fallocate(2)
+ * that sets the size of the file of `ofd` to `end` bytes: 0, or -EFBIG with
+ * SIGXFSZ (`fsize_refused`) only when `end` is past both the limit and the
+ * file's size, since Linux checks the limit for growth alone
+ * (inode_newsize_ok, fs/attr.c:258 in 6.12). The caller holds the lock that
+ * covers a change of the file's size (`file_lock`), so that the size read
+ * here is the size changed. A size that cannot be read is that error.
+ */
+static int32_t fsize_growth_refused(const struct open_file *ofd, uint64_t end)
+{
+    unsigned long limit = current_proc->rlim[RLIM_FSIZE].cur;
+    struct vfs_stat st;
+    int32_t rc;
+
+    if (limit == RLIM_INFINITY || end <= limit) {
+        return 0;
+    }
+    rc = vfs_getattr(ofd->vmnt, ofd->vnode, &st);
+    if (rc != 0) {
+        return rc;
+    }
+    return end > st.size ? fsize_refused(end) : 0;
+}
+
 /** The part of `count` bytes written at `pos` that the caller's
  * RLIMIT_FSIZE lets the file take: `count`, less, or 0 from the limit on. */
 static uint32_t fsize_fit(uint64_t pos, uint32_t count)
@@ -1382,7 +1407,10 @@ static int rw_call_lock(const fd_entry_t *e, uint32_t free);
  * `file_locked` (`file_lock`), so that no write-back of a mapped page past
  * the new end comes between the two and no fault brings one in again; the
  * pages are cut under the big lock, taken when the caller lacks it, as is
- * inotify's report. 0 or a negative errno.
+ * inotify's report. A length that grows the file past the caller's
+ * RLIMIT_FSIZE is -EFBIG with SIGXFSZ, judged under the same locks
+ * (`fsize_growth_refused`); a shrink is never refused. 0 or a negative
+ * errno.
  */
 static long ftruncate_fd(int fd, long long length)
 {
@@ -1407,9 +1435,6 @@ static long ftruncate_fd(int fd, long long length)
     if (!entry->ofd || !entry->ofd->vmnt) {
         return -EBADF;
     }
-    if (fsize_refused((uint64_t)length) != 0) {
-        return -EFBIG;
-    }
     if (size_guarded(entry->ofd->vmnt, entry->ofd->vnode)) {
         return -EPERM;
     }
@@ -1423,7 +1448,10 @@ static long ftruncate_fd(int fd, long long length)
         fd_ofd_unlock(entry->ofd);
         return -EBUSY;
     }
-    rc = vfs_truncate(entry->ofd->vmnt, entry->ofd->fhandle, (uint64_t)length);
+    rc = fsize_growth_refused(entry->ofd, (uint64_t)length);
+    if (rc == 0) {
+        rc = vfs_truncate(entry->ofd->vmnt, entry->ofd->fhandle, (uint64_t)length);
+    }
     if (rc == 0 && !cred_fs_privileged()) {
         if (entry->node) {
             cred_kill_setid(entry->node);
@@ -13447,8 +13475,7 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
 /**
  * Set the length of the file at `path`, an absolute path in a path page, to
  * `length` bytes, which is not negative, for truncate(2) and truncate64(2);
- * 0 or a negative errno. A length past the caller's RLIMIT_FSIZE is -EFBIG,
- * with SIGXFSZ (`fsize_refused`), before the path is looked at.
+ * 0 or a negative errno.
  *
  * The path is resolved through links, to a directory when it named one by
  * its end, `dir` (`resolve_named`), and `truncate_checks` has what is
@@ -13457,8 +13484,10 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
  * close of an open for writing and an ftruncate: a KRFFS file that must move
  * to grow repoints the description, so the set-id clear of an unprivileged
  * caller finds the file where it is now, and a loop attachment sees the
- * truncation in progress, as it sees an ftruncate. A file reserved for
- * execution gives -ETXTBSY, as on Linux.
+ * truncation in progress, as it sees an ftruncate. A length that grows the
+ * file past the caller's RLIMIT_FSIZE is -EFBIG with SIGXFSZ, judged under
+ * the file's lock (`fsize_growth_refused`); a shrink is never refused. A
+ * file reserved for execution gives -ETXTBSY, as on Linux.
  */
 static int32_t truncate_path(const char *path, long long length, int dir)
 {
@@ -13468,9 +13497,6 @@ static int32_t truncate_path(const char *path, long long length, int dir)
     int32_t rc;
     int own;
 
-    if (length >= 0 && fsize_refused((uint64_t)length) != 0) {
-        return -EFBIG;
-    }
     rc = resolve_named(path_name(path), VFS_WALK_LOCK, dir, &ref);
     if (rc != 0) {
         return rc;
@@ -13498,6 +13524,9 @@ static int32_t truncate_path(const char *path, long long length, int dir)
     own = file_lock(desc, &file);
     rc = -EBUSY;
     if (!loop_backs(desc->vmnt, desc->vnode)) {
+        rc = fsize_growth_refused(desc, (uint64_t)length);
+    }
+    if (rc == 0) {
         rc = vfs_truncate(desc->vmnt, desc->fhandle, (uint64_t)length);
     }
     if (rc == 0 && !cred_fs_privileged()) {
@@ -16269,13 +16298,17 @@ static uint32_t fallocate_type(fd_entry_t *entry)
 /**
  * The body of fallocate(2), which `ksys_fallocate` locks: 0 or a negative
  * errno, by Linux's vfs_fallocate's checks in its order and then the
- * type's operation under the description's lock.
+ * type's operation under the description's lock and the file's
+ * (`file_lock`), which also cover the RLIMIT_FSIZE check of a call that
+ * grows the file (`fsize_growth_refused`).
  */
 static long fallocate_fd(int fd, uint32_t mode, uint64_t offset, uint64_t len)
 {
     fd_entry_t *entry;
+    struct vfs_ref file;
     uint32_t type;
     int32_t rc;
+    int own;
 
     if (!current_proc) {
         return -ESRCH;
@@ -16309,11 +16342,13 @@ static long fallocate_fd(int fd, uint32_t mode, uint64_t offset, uint64_t len)
     if (type != S_IFREG || entry->type != FD_TYPE_FILE || !entry->ofd || !entry->ofd->vmnt) {
         return -EOPNOTSUPP;
     }
-    if (!(mode & FALLOC_FL_KEEP_SIZE) && fsize_refused(offset + len) != 0) {
-        return -EFBIG;
-    }
     fd_ofd_lock(entry->ofd);
-    rc = vfs_fallocate(entry->ofd->vmnt, entry->ofd->fhandle, mode, offset, len);
+    own = file_lock(entry->ofd, &file);
+    rc = mode & FALLOC_FL_KEEP_SIZE ? 0 : fsize_growth_refused(entry->ofd, offset + len);
+    if (rc == 0) {
+        rc = vfs_fallocate(entry->ofd->vmnt, entry->ofd->fhandle, mode, offset, len);
+    }
+    file_unlock(&file, own);
     fd_ofd_unlock(entry->ofd);
     return rc;
 }
