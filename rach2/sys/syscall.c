@@ -1206,8 +1206,9 @@ static int32_t sleep_cut_short(int32_t rc)
  * sleep's hrtimer when the sleep begins (kernel/time/hrtimer.c:2085-2093),
  * so that no pass of the timer needs to come before its time to arm it. The
  * clock decides, not the tick count, which runs behind it by up to half a
- * tick and the ticks whose pass found the big lock held. The process is
- * marked blocked, and interrupts are off.
+ * tick, and, while the boot processor runs with interrupts off, by the
+ * ticks until another processor makes the clock's pass (`timer_pass_late`,
+ * kernel.c). The process is marked blocked, and interrupts are off.
  */
 static int sleep_time_come(void)
 {
