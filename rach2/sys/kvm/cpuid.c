@@ -123,8 +123,8 @@ static uint32_t host_spec(int amd)
  * mask has kept the host's own bits: each named as well in the other
  * vendor's terms where the host has it in either, as Linux's
  * kvm_set_cpu_caps (arch/x86/kvm/cpuid.c:713-719, 787-794), and SVM's
- * VIRT_SSBD where SPEC_CTRL has SSBD, which msr.c's VIRT_SPEC_CTRL sets
- * there, as svm_set_cpu_caps (svm/svm.c:5423-5425).
+ * VIRT_SSBD where the host carries out VIRT_SPEC_CTRL's SSBD in SPEC_CTRL
+ * or LS_CFG, as svm_set_cpu_caps (svm/svm.c:5423-5425).
  */
 static void spec_bits(struct kvm_cpuid_entry2 *e)
 {
@@ -151,7 +151,7 @@ static void spec_bits(struct kvm_cpuid_entry2 *e)
     if (l7 & CPUID_7_SSBD) {
         e->ebx |= CPUID_X8_SSBD;
     }
-    if (kvm_backend == &kvm_svm && (e->ebx & CPUID_X8_SSBD)) {
+    if (kvm_backend == &kvm_svm && kvm_virt_ssbd_offered()) {
         e->ebx |= CPUID_X8_VIRT_SSBD;
     }
 }

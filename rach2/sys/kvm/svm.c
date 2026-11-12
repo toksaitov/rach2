@@ -1007,10 +1007,10 @@ static void after_run(struct kvm_vcpu *v)
 }
 
 #ifndef RACH2_HOSTTEST
-/** Put `v`'s IA32_SPEC_CTRL in force on processor `cpu` before an entry
- * with `in`, or the host's back after the exit without, where the two
- * differ. Every access of the guest's exits, so the two calls of a run see
- * one value. */
+/** Put `v`'s IA32_SPEC_CTRL and virtual SSBD in force on processor `cpu`
+ * before an entry with `in`, or the host's back after the exit without,
+ * where the two differ. Every access of the guest's exits, so the two calls
+ * of a run see one value. */
 static void spec_switch(const struct kvm_vcpu *v, int cpu, int in)
 {
     uint64_t guest = kvm_spec_ctrl_guest(v), host = kvm_spec_ctrl_host(cpu);
@@ -1018,6 +1018,7 @@ static void spec_switch(const struct kvm_vcpu *v, int cpu, int in)
     if (guest != host) {
         msr_write(MSR_IA32_SPEC_CTRL, in ? guest : host);
     }
+    kvm_virt_ssbd_switch(v, cpu, in);
 }
 #endif
 
