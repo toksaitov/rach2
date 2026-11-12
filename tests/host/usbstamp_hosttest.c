@@ -189,8 +189,30 @@ int arch_idle_poll(void)
 void timer_idle_exit(void)
 {}
 
-/** 0: no processor of the model stops its tick. */
-int timer_tick_stopped(int cpu)
+/** The recorder's model retains its periodic timer. */
+int timer_idle_enter(void)
+{
+    return 0;
+}
+
+/** No devices are serviced by the recorder's model. */
+void timer_idle_work(void)
+{}
+
+/** The model's periodic scheduler uses millisecond units. */
+uint32_t timer_tick_period(void)
+{
+    return 1;
+}
+
+/** The periodic model keeps no one-shot tick expiry. */
+int64_t timer_tick_due(void)
+{
+    return 0;
+}
+
+/** No processor of this model has hypervisor steal time. */
+uint64_t arch_cpu_steal_ns(int cpu)
 {
     (void)cpu;
     return 0;
