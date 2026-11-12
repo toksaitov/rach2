@@ -4558,7 +4558,8 @@ static void tpr_rows(void)
           "with vector 0x51 waiting under TPR 0x60, the threshold is its class, 5");
 
     rip = regs_of(fd).rip;
-    w = script(EXIT_TPR_BELOW, 0, 0);
+    /* 4, the length of MOV CR8, RAX (44 0F 22 C0), which a step would add. */
+    w = script(EXIT_TPR_BELOW, 0, 4);
     w->tpr_write = 1;
     w->tpr = 0x40;
     script(EXIT_HLT, 0, 1);
