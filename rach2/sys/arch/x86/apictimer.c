@@ -1,13 +1,5 @@
-/*
- * apictimer.c: the local APIC's own inputs when the I/O APIC has the lines,
- * as apictimer.h describes: `LINT0` and `LINT1`, the timer as the tick, and
- * the timer's interrupts between ticks for the times `timer_wake_at` asks.
- *
- * The clock under the tick reads the timer's current count: periodic mode
- * reloads the initial count when the count reaches zero, at the moment the
- * vector is raised, so the counts gone from the initial count are the place
- * within the tick, as channel 0's are through the 8259.
- */
+/* The local APIC timer: periodic ticks at boot, then one-shot ticks and
+ * events on one vector, with scheduler ticks stopped while idle. */
 
 #include "apictimer.h"
 #include "ioapic.h"
@@ -46,31 +38,10 @@
  * arithmetic divides a second by. */
 static uint32_t tick_hz = TICK_HZ;
 
-/*
- * The timer between ticks, kept as Linux's hrtimer interrupt keeps its
- * clock event device. A processor's timer is periodic, raising
- * APIC_TIMER_VECTOR every tick, until `timer_wake_at` first asks it for a
- * time; from then on it is one-shot, and every interrupt counts it once to
- * the earlier of two absolute times of the monotonic clock: the processor's
- * next tick, raising APIC_TIMER_VECTOR, and the time asked for, raising
- * `hr_vector`. The tick's time moves on by whole ticks past the clock
- * (`hr_forward`), as tick_nohz_handler moves the tick's hrtimer by
- * hrtimer_forward (kernel/time/tick-sched.c:309, kernel/time/hrtimer.c:
- * 1046-1077), so the delay of an interrupt shifts no later tick; and an
- * interrupt at APIC_TIMER_VECTOR is the tick only once the clock has
- * reached the tick's time, as __hrtimer_run_queues runs a timer only once
- * the clock has reached its expiry (kernel/time/hrtimer.c:1814), so a count
- * that ran out while the timer was programmed again raises no second tick.
- *
- * A processor other than the boot one stops its tick while its idle task
- * waits (`stopped`), as Linux's NO_HZ idle stops the tick of an idle
- * processor (tick_nohz_idle_stop_tick, kernel/time/tick-sched.c:1211-1245):
- * a tick taken in that wait moves its next tick on by the ticks
- * `watchdog_idle_ticks` allows, and keeps where it would have been
- * (`resume`); the switch to a thread starts it again there
- * (`timer_idle_exit`). The boot processor's tick polls devices and keeps
- * the clock, and does not stop.
- */
+/* The one-shot timer keeps the next scheduler tick and the earliest event
+ * on one vector. Its entry serves both when they coincide. Tick phase moves
+ * by whole periods, including across idle, and an early event takes no
+ * future tick. Each processor changes only its own state with IRQs off. */
 struct hr_state {
     int64_t want;       /* the earliest time asked for and not yet served, in
                          * nanoseconds since boot, or 0 for none */
@@ -306,7 +277,6 @@ static void hr_program(struct hr_state *c, int64_t now)
 
     if (c->want != 0 && (at == 0 || c->want < at)) {
         at = c->want;
-        vector = (uint8_t)hr_vector;
     }
     if (at == 0) {
         if (c->programmed == 0) {
@@ -486,7 +456,7 @@ void timer_wake_release(void)
 /** The interrupt between ticks, without the big lock (ISR_UNLOCKED): the
  * pass (`timer_hr_pass`), which arms the next times due and takes the lock
  * only by a try, to post the POSIX timers' signals. */
-static void hr_interrupt(isr_params_t *params)
+void apic_hr_interrupt(isr_params_t *params)
 {
     if (hr_cpu[arch_cpu_id()].idle) {
         watchdog_event(params);
@@ -548,33 +518,37 @@ int timer_tick_stopped(int cpu)
 int apic_hr_entry(uint32_t vector)
 {
     struct hr_state *c;
-    int64_t now;
-    int tick = 0;
+    int64_t now, programmed;
+    int result = 0;
 
-    if (hr_vector == 0 || (vector != APIC_TIMER_VECTOR && vector != (uint32_t)hr_vector)) {
-        return 1;
+    if (hr_vector == 0 || vector != APIC_TIMER_VECTOR) {
+        return APIC_HR_TICK;
     }
     c = &hr_cpu[arch_cpu_id()];
     if (!c->oneshot) {
-        return 1;
+        return APIC_HR_TICK;
     }
+    programmed = c->programmed;
     c->programmed = 0;
     now = rtc_monotonic_ns();
-    if (!c->idle && vector == APIC_TIMER_VECTOR && now + HR_SLACK_NS >= c->tick) {
+    if (!c->idle && (now >= c->tick || (programmed == c->tick && now + HR_SLACK_NS >= c->tick))) {
         c->due = c->tick;
         hr_forward(c, now);
         if (c->tick - (int64_t)TICK_NS > c->due) {
             c->due = c->tick - (int64_t)TICK_NS;
         }
-        hr_idle_stop(c);
-        tick = 1;
-    } else if (vector == (uint32_t)hr_vector && c->want != 0 && c->want <= now) {
+        result = APIC_HR_TICK;
+    }
+    if (c->want != 0 && c->want <= now) {
         c->want = 0;
+        result |= APIC_HR_EVENT;
     }
-    if (vector == APIC_TIMER_VECTOR) {
+    if ((result & APIC_HR_TICK) != 0 || (c->idle && c->want == 0 && result == 0)) {
         hr_program(c, now);
+    } else {
+        result |= APIC_HR_EVENT;
     }
-    return vector == APIC_TIMER_VECTOR ? tick : 1;
+    return result;
 }
 
 int64_t timer_tick_due(void)
@@ -623,19 +597,16 @@ void timer_idle_exit(void)
 
 void apic_hr_init(uint32_t counts)
 {
-    int v = isr_alloc_vector();
     uint32_t a, b, c, d;
 
-    if (v < 0 || counts == 0) {
+    if (counts == 0) {
         return;
     }
     hr_tick_counts = counts;
     kcpu_id(1, &a, &b, &c, &d);
     hr_deadline = (c & (1u << 24)) != 0 && timer_calibrate() != 0;
-    set_isr_handler((uint8_t)v, hr_interrupt, "hrtimer");
-    isr_register_flags((uint8_t)v, hr_interrupt, ISR_UNLOCKED);
-    hr_vector = v;
-    klog(KLOG_INFO, "lapic", "timer: vector %d between ticks", v);
+    hr_vector = APIC_TIMER_VECTOR;
+    klog(KLOG_INFO, "lapic", "timer: vector %d for ticks and events", hr_vector);
 }
 
 /** The counts gone since the timer last reloaded, and the initial count. */

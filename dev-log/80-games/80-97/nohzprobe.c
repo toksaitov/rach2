@@ -101,6 +101,14 @@ static unsigned long counts(const char *s, const char *name)
     return ~0ul;
 }
 
+/** Count physical timer interrupts in a shared or split-vector kernel. */
+static unsigned long timer_counts(const char *text)
+{
+    unsigned long ticks = counts(text, "timer"), events = counts(text, "hrtimer");
+
+    return ticks == ~0ul ? ticks : ticks + (events == ~0ul ? 0 : events);
+}
+
 /** Run the idle interval and the waits with no other user thread runnable. */
 PROBE_START void _start(void)
 {
@@ -127,7 +135,7 @@ PROBE_START void _start(void)
     t0 = counts(before, "timer"); t1 = counts(after, "timer");
     print("NOHZPROBE interrupts before\n"); print(before);
     print("NOHZPROBE interrupts after\n"); print(after);
-    check(t0 != ~0ul && t1 != ~0ul && t1 >= t0 && t1 - t0 < 16, "idle interval takes no periodic tick");
+    check(t0 != ~0ul && t1 != ~0ul && t1 >= t0 && t1 - t0 < 128, "idle interval takes no periodic tick");
     check(b.sec - a.sec > 6 || (b.sec - a.sec == 6 && b.ns >= a.ns), "idle clock advances");
     check(syscall3(SYS_POLL, 0, 0, 17) == 0, "poll timeout with no runnable thread");
     req.sec = 0; req.ns = 3100000;
@@ -156,7 +164,7 @@ PROBE_START void _start(void)
     check(syscall2(SYS_RT_SIGPENDING, (long)&pending, 8) == 0 && (pending & blocked),
           "real alarm posts its signal without a periodic tick");
     check(read_proc("/proc/interrupts", before) > 0, "read slew baseline");
-    t0 = counts(before, "timer") + counts(before, "hrtimer");
+    t0 = timer_counts(before);
     timex[0] = 2;
     timex[2] = 32768000;
     check(syscall1(SYS_ADJTIMEX, (long)timex) >= 0, "set a 500 ppm slew");
@@ -167,10 +175,10 @@ PROBE_START void _start(void)
         }
     }
     check(read_proc("/proc/interrupts", after) > 0, "read slew interrupts");
-    t1 = counts(after, "timer") + counts(after, "hrtimer");
+    t1 = timer_counts(after);
     print("NOHZPROBE slew interrupts before\n"); print(before);
     print("NOHZPROBE slew interrupts after\n"); print(after);
-    check(t1 >= t0 && t1 - t0 < 4096 * 4 + 128, "one-tick waits take bounded events during a slew");
+    check(t0 != ~0ul && t1 != ~0ul && t1 >= t0 && t1 - t0 < 4096 * 4 + 128, "one-tick waits take bounded events during a slew");
     timex[0] = 2;
     timex[2] = 0;
     check(syscall1(SYS_ADJTIMEX, (long)timex) >= 0, "restore the clock rate");

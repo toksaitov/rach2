@@ -43,26 +43,24 @@ uint32_t apic_timer_calibrate(uint32_t hz, const char **against);
  * ticks armed. */
 void apic_timer_start(uint32_t counts, uint32_t hz);
 
-/**
- * Take a vector for the timer's interrupts between ticks, which
- * `timer_wake_at` arms, once the timer ticks every `counts` counts. Without
- * a vector free, sleeps and timers end at ticks.
- */
+/** Enable one-shot events on the tick's vector after its rate is measured
+ * as `counts` counts per tick. Zero leaves periodic mode alone. */
 void apic_hr_init(uint32_t counts);
 
-/**
- * On every interrupt of this processor at `vector`, before the big lock, so
- * that a wait for the lock does not hold back the next interrupt: once the
- * timer is one-shot (`timer_wake_at`), move the tick's time on when the
- * interrupt is the tick, forget a time asked for that the interrupt between
- * ticks serves, and count the timer to the next of the two. Returns 0 for an
- * interrupt at APIC_TIMER_VECTOR that is not the tick, since the clock has
- * not reached the tick's time, which the caller acknowledges and handles no
- * further; 1 otherwise. Interrupts are off.
- */
+#define APIC_HR_TICK  1
+#define APIC_HR_EVENT 2
+
+/** Classify a timer interrupt as a scheduler tick, an event, or both, and
+ * advance its deadlines. Zero acknowledges a stale idle interrupt only.
+ * Other vectors and periodic mode return APIC_HR_TICK for normal dispatch.
+ * Interrupts are off, before the router takes the big lock. */
 int apic_hr_entry(uint32_t vector);
 
-/** The vector of the timer's interrupts between ticks, or 0 for none. */
+/** Serve the event part of a local timer interrupt, with interrupts off
+ * inside the router's IRQ context and without the big lock. */
+void apic_hr_interrupt(isr_params_t *params);
+
+/** The shared tick and event vector, or zero before events are enabled. */
 int apic_hr_vector(void);
 
 /* The clock's counters under a tick that is not the 8259's: the APIC timer
