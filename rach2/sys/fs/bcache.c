@@ -77,12 +77,12 @@ static uint32_t write_gen;        /* counts the writes that reached a device, un
  * blocks are keyed, since the caller has let it go to key them and would
  * otherwise find it gone. Under `cache_spin`. */
 static struct bbuf *fill_keep;
-/* Counts the buffers let go fit for any miss, clean and not kept for a
- * fill, and the fills that ended the keep of a clean one, under
- * `cache_spin`. A search that lets the lock go reads it to tell a turn in
- * which a buffer went fit, perhaps behind the turn, from one in which none
- * did (`victim_any`). A dirty buffer let go is not counted, fit or not: a
- * search takes it only by writing it, which `get` counts itself. */
+/* Counts the buffers let go that a miss may take, under `cache_spin`: each
+ * one not kept for a fill that is clean, or dirty with its write not barred
+ * (`write_barred`), and the fills that ended the keep of a clean one. A
+ * search that lets the lock go reads it to tell a turn in which such a
+ * buffer was let go, perhaps behind the turn, from one in which none was
+ * (`victim_any`). */
 static uint32_t fit_gos;
 static uint32_t limit_set; /* a limit given by `bcache_set_limit`, or 0 */
 static uint32_t clock_stamp;
@@ -681,12 +681,15 @@ static void hold(struct bbuf *b)
 }
 
 /** Take `b` off the caller's list and mark it unheld, counted in `fit_gos`
- * when it is clean and not kept for a fill; `cache_spin` is held. */
+ * when it is not kept for a fill and is clean or dirty with a write that is
+ * not barred; `cache_spin` is held. */
+static int write_barred(const struct bbuf *b);
+
 static void unhold(struct bbuf *b)
 {
     struct bbuf **link;
 
-    if (!b->dirty && b != fill_keep) {
+    if (b != fill_keep && (!b->dirty || !write_barred(b))) {
         fit_gos++;
     }
 
@@ -1502,26 +1505,26 @@ struct victim_search {
  * `filling` may take (`victim_find`), with `*more` set and NULL when the
  * search lets `cache_spin` go before its next batch.
  *
- * A turn that passes over every buffer is progress when a buffer went fit
- * during it (`fit_gos`): a clean one let go, perhaps behind the turn, which
- * the next turn reads. Linux's `should_reclaim_retry` counts as progress
- * only the pages reclaim freed, and then sets `no_progress_loops` to 0
- * (mm/page_alloc.c:4179-4180); a folio reclaim leaves, such as a dirty one
- * it writes or a referenced one, is kept and not counted
- * (mm/vmscan.c:1347-1410, 1495-1499). A release of a buffer that stays
- * unfit is not progress, nor is a dirty one let go, which a search takes
- * only by its write, counted in `get`; Linux's getblk itself never fails
- * (`__getblk_slow`, fs/buffer.c:1117-1140). A turn in which no buffer went
- * fit is counted, and is retried SEARCH_TURNS times in a row before the
- * miss fails, as Linux gives up once its loops without progress pass
- * MAX_RECLAIM_RETRIES (mm/page_alloc.c:4184).
+ * A turn that passes over every buffer is progress when a buffer a miss
+ * may take was let go during it (`fit_gos`), perhaps behind the turn, which
+ * the next turn reads: a clean one, or a dirty one whose write is not
+ * barred, which the next turn writes and takes. Linux's
+ * `should_reclaim_retry` sets `no_progress_loops` to 0 after a reclaim
+ * that made progress (mm/page_alloc.c:4179-4180), and retries while the
+ * reclaimable pages, its dirty file pages among them, could meet the
+ * watermark (mm/page_alloc.c:4206-4219); its getblk never fails
+ * (`__getblk_slow`, fs/buffer.c:1131-1140). A release of a buffer whose
+ * write is barred is not progress, since no search takes it. A turn in
+ * which no such buffer was let go is counted, and is retried SEARCH_TURNS
+ * times in a row before the miss fails, as Linux gives up once its loops
+ * without progress pass MAX_RECLAIM_RETRIES (mm/page_alloc.c:4184).
  *
- * A clean buffer let go at every turn and taken again before the search
- * reaches it keeps the search going, so every turn ends with `s->ended`
- * set, for `get` to let the big lock go before the next one, as
- * `should_reclaim_retry` calls cond_resched before each retry
- * (mm/page_alloc.c:4226-4233): what could make a buffer fit, a write or a
- * sync, then runs, and the search holds the lock for one turn at a time.
+ * A buffer let go at every turn and taken again before the search reaches
+ * it keeps the search going, so every turn ends with `s->ended` set, for
+ * `get` to give way before the next one, as `should_reclaim_retry` calls
+ * cond_resched before each retry (mm/page_alloc.c:4226-4233): what could
+ * make a buffer fit, a write or a sync, then runs, and the search holds the
+ * big lock for one turn at a time.
  * `cache_spin` is held.
  */
 static struct bbuf *victim_any(block_device_t *filling, struct victim_search *s, int *more)
@@ -1554,14 +1557,18 @@ static struct bbuf *victim_any(block_device_t *filling, struct victim_search *s,
 }
 
 /** Let `cache_spin`, taken with `flags`, go between two batches of a victim
- * search, and at a turn's end pass the big lock to a processor waiting for
- * it at a service point (`victim_any`). */
+ * search, and at a turn's end give way (`victim_any`): pass the big lock to
+ * a processor waiting for it and take the switch the tick asked for, unless
+ * the caller runs with interrupts off, as a fault on a mapping inside a call
+ * with interrupts off reads its block in place (`filemap_read`), and must
+ * not sleep. Linux's cond_resched does nothing then (`__cond_resched`,
+ * kernel/sched/core.c:7287-7292). */
 static void search_pause(struct victim_search *s, uint32_t flags)
 {
     cache_unlock(flags);
     if (s->ended) {
         s->ended = 0;
-        sched_service_point();
+        sched_give_way();
     }
 }
 
@@ -1767,9 +1774,9 @@ static void key_held(struct bbuf *b, block_device_t *dev, uint64_t blk)
  * Linux's `__getblk_slow` (fs/buffer.c:1117) needs no global lock. A miss
  * without the big lock that finds no clean victim takes the big lock for
  * the search, whose writes of a dirty victim keep the order the dirty marks
- * give, and lets it go at the return. Each turn of the search ends at a
- * service point, which lets the big lock go to a processor waiting for it
- * (`victim_any`), as a sleep does.
+ * give, and lets it go at the return. Each turn of the search ends by
+ * giving way, which lets the big lock go to a processor waiting for it
+ * (`search_pause`), as a sleep does.
  */
 static struct bbuf *get(block_device_t *dev, uint64_t blk, int blank, int *fresh)
 {
