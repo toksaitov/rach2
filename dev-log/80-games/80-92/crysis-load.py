@@ -215,7 +215,7 @@ try:
                 (out / 'stat-a.txt').write_bytes(cmd(pre + stat, check=False).stdout)
                 if os.environ.get('VIEW_TRACEP'):
                     tr = ('G=$(for p in /proc/[0-9]*; do echo "$(ls $p/task 2>/dev/null | wc -l) ${p#/proc/}"; done | sort -n | tail -1 | cut -d" " -f2); '
-                          'for n in %s; do if [ $n = game ]; then t="-p $G"; else t=$(grep -l "^$n\\$" /proc/[0-9]*/task/[0-9]*/comm 2>/dev/null | cut -d/ -f5 | sed "s/^/-p /" | tr "\\n" " "); fi; '
+                          'for n in %s; do if [ $n = game ]; then t="-p $G"; else t=$(grep -l "^${n}$" /proc/[0-9]*/task/[0-9]*/comm 2>/dev/null | cut -d/ -f5 | sed "s/^/-p /" | tr "\\n" " "); fi; '
                           '[ -n "$t" ] && (timeout -s INT %s strace %s $t -o /tmp/tp-$n.txt > /tmp/tp-$n.err 2>&1 &); echo "$n $t"; done' % (os.environ['VIEW_TRACEP'], os.environ.get('VIEW_TRACET', '6'), os.environ.get('VIEW_TRACEO', '-c -w')))
                     say('tracing', cmd(tr, check=False).stdout.decode())
                 if sampler:
