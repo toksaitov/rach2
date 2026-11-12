@@ -42,11 +42,11 @@
  * flag, the wall clock, the clock pairing, the old MSR, KVM_SET_CLOCK,
  * KVM_CAP_ENFORCE_PV_FEATURE_CPUID and KVM_CAP_X86_DISABLE_EXITS; the
  * steal time, its writes of the thread's run_delay and its preempted flag
- * across a switch at a slice's end inside KVM_RUN, and none at a halted
- * vCPU's sleep at the run loop's top, which is no preemption; the vCPU
+ * across a switch at a slice's end inside KVM_RUN, and never in a record
+ * the guest moved into memfd_secret with the tables unchanged; the vCPU
  * attribute KVM_VCPU_TSC_OFFSET; and what Linux's selftests ask for: the
- * TSC's rate set on a VM and on a vCPU, on a processor that scales none
- * and with SVM's and VMX's ratios,
+ * TSC's rate set on a VM and on a vCPU, on a processor that scales none and
+ * with SVM's and VMX's ratios,
  * the statistics files of a VM and a vCPU, KVM_PRE_FAULT_MEMORY, 1024
  * vCPUs with ids below 4096, the CR4 bits taken before KVM_SET_CPUID2,
  * the VM's capabilities and quirks, and the synchronized registers; and
@@ -1020,10 +1020,11 @@ int kvm_lapic_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value
 /* What hyperv.c calls of emulate.c, vlapic.c, eventfd.c and the clock,
  * for a VM with no guest memory, no APIC and no eventfd. */
 
-/* One guest page at GUEST_PAGE, present only while guest_mem is set, for
- * the kvmclock's rows; the Hyper-V rows see no guest memory. */
+/* Two guest pages at GUEST_PAGE, present only while guest_mem is set, for
+ * the kvmclock's rows, the second in a region of memfd_secret; the Hyper-V
+ * rows see no guest memory. */
 #define GUEST_PAGE 0x1000u
-static uint8_t guest_page[4096];
+static uint8_t guest_page[2 * 4096];
 static int guest_mem;
 static int low_rw; /* accesses below GUEST_PAGE, which no row maps */
 
@@ -1044,30 +1045,36 @@ int kvm_guest_phys_rw(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t n, i
     return 0;
 }
 
-/* The caller's region over the guest page, which a row marks
- * VM_PROT_SECRET, as memfd_secret's. */
-static vma_t guest_vma;
+/* The caller's region over the first guest page, which a row marks
+ * VM_PROT_SECRET, as memfd_secret's, and the one over the second, always
+ * memfd_secret's. */
+static vma_t guest_vma, secret_vma;
 
-/** The slot of the one guest page, which the steal time's record vouches
- * for: 1 with `out` filled while guest_mem is set, or 0. */
+/** The slot of a guest page, which the steal time's record vouches for: 1
+ * with `out` filled while guest_mem is set, or 0. */
 int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
 {
+    uint64_t first = GUEST_PAGE >> 12;
+
     (void)vm;
-    if (!guest_mem || gfn != GUEST_PAGE >> 12) {
+    if (!guest_mem || gfn < first || gfn - first >= sizeof(guest_page) / 4096u) {
         return 0;
     }
     k_memset(out, 0, sizeof(*out));
     out->base_gfn = gfn;
     out->npages = 1;
-    out->hva = (uint64_t)(uintptr_t)guest_page;
+    out->hva = (uint64_t)(uintptr_t)(guest_page + (gfn - first) * 4096u);
     return 1;
 }
 
-/** The region at `addr`: always the guest page's. */
+/** The region at `addr`: the second guest page's or the first's. */
 vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
 {
     (void)vm;
-    (void)addr;
+    if (addr >= (uintptr_t)guest_page + 4096u) {
+        secret_vma.prot = VM_PROT_SECRET;
+        return &secret_vma;
+    }
     return &guest_vma;
 }
 
@@ -2431,6 +2438,45 @@ static void steal_rows(int fd0)
     CHECK(st->version == 20, "and nothing more is written");
 }
 
+/* A steal time record in the guest's second page, of memfd_secret. */
+#define ST_SECRET_GPA (GUEST_PAGE + 0x1400u)
+
+/** The steal time of vCPU `fd0` moved by the guest to a page of
+ * memfd_secret while the tables' count stays: neither a preemption before
+ * the next entry nor one after marks the new record, which was never found
+ * outside memfd_secret, as Linux compares its cache's gpa with the MSR's
+ * (arch/x86/kvm/x86.c:3259-3263, 4646-4650). Leaves the MSR
+ * off. */
+static void steal_move_rows(int fd0)
+{
+    struct kvm_vcpu *v0 = entries[fd0].priv;
+    struct kvm_steal_time *st = (void *)(guest_page + (ST_GPA - GUEST_PAGE));
+    struct kvm_steal_time *moved = (void *)(guest_page + (ST_SECRET_GPA - GUEST_PAGE));
+    uint32_t seq = v0->vm->mmu_seq;
+
+    k_memset(moved, 0, sizeof(*moved));
+    CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_GPA | KVM_MSR_ENABLED) == 1,
+          "the guest turns the steal time on again");
+    kvm_steal_prepare(v0);
+    CHECK(v0->st_ok && v0->st_gpa == ST_GPA && v0->st_seq == seq,
+          "its record is found outside memfd_secret at the next entry");
+    CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_SECRET_GPA | KVM_MSR_ENABLED) == 1,
+          "the guest moves the record into a page of memfd_secret");
+    v0->at_boundary = 1;
+    kvm_steal_preempted(v0);
+    CHECK(moved->preempted == 0 && st->preempted == 0 && !v0->st_preempted,
+          "a preemption before the next entry marks neither record");
+    kvm_steal_prepare(v0);
+    CHECK(moved->version == 2 && !v0->st_ok && v0->vm->mmu_seq == seq,
+          "the next entry writes the new record and finds it in memfd_secret, the tables' "
+          "count unchanged");
+    kvm_steal_preempted(v0);
+    CHECK(moved->preempted == 0 && !v0->st_preempted,
+          "and a preemption after it does not mark the new record");
+    CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_SECRET_GPA) == 1, "the guest turns it off");
+    kvm_steal_prepare(v0);
+}
+
 /** A guest's INIT on vCPU `fd0`, as Linux's kvm_vcpu_reset: the steal
  * time and the kvmclock, both on, are turned off, and neither is written
  * at the next entry. */
@@ -2440,7 +2486,7 @@ static void init_pv_rows(int fd0)
     struct kvm_steal_time *st = (void *)(guest_page + (ST_GPA - GUEST_PAGE));
     const struct pvclock_vcpu_time_info *pv = (const void *)guest_page;
     uint64_t value = 0;
-    uint32_t pv_version, st_version;
+    uint32_t pv_version, st_version = st->version;
 
     CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_GPA | KVM_MSR_ENABLED) == 1 &&
               set_msr(fd0, MSR_KVM_SYSTEM_TIME_NEW, GUEST_PAGE | KVM_MSR_ENABLED) == 1,
@@ -2448,8 +2494,7 @@ static void init_pv_rows(int fd0)
     kvm_steal_prepare(v0);
     kvm_clock_prepare(v0);
     pv_version = pv->version;
-    st_version = st->version;
-    CHECK(st_version == 22 && (v0->pv_time & KVM_MSR_ENABLED) && pv_version % 2u == 0,
+    CHECK(st->version == st_version + 2u && (v0->pv_time & KVM_MSR_ENABLED) && pv_version % 2u == 0,
           "both are written at the next entry");
     kvm_vcpu_init_reset(v0);
     CHECK(get_msr(fd0, MSR_KVM_STEAL_TIME, &value) == 1 && value == 0 &&
@@ -2460,6 +2505,7 @@ static void init_pv_rows(int fd0)
     kvm_vcpu_kick(v0, KVM_REQ_CLOCK_UPDATE);
     kvm_steal_prepare(v0);
     kvm_clock_prepare(v0);
+    st_version += 2u;
     CHECK(st->version == st_version && pv->version == pv_version,
           "and neither is written at the next entry, a switch and requests for both "
           "notwithstanding");
@@ -2588,6 +2634,7 @@ static void pv_rows(void)
     tsc_attr_rows(vm, fd0, fd1);
     pv_cap_rows(vm, fd0, fd1);
     steal_rows(fd0);
+    steal_move_rows(fd0);
     init_pv_rows(fd0);
     fdclose(fd1);
     fdclose(fd0);
