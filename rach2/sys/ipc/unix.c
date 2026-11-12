@@ -719,7 +719,9 @@ static void enqueue(struct unix_sock *s, struct unix_msg *m)
 /**
  * Wake whoever waits for room in `s`'s queue: a sender to it waits on its
  * queue, where the room changes none of `s`'s own events, and a socket
- * connected to it polls on its own, where it is room to write.
+ * connected to it polls on its own, where it is room to write. Streams
+ * and sequenced packets have one reciprocal peer, pinned by state_lock;
+ * only datagrams need the table walk for every socket connected to them.
  */
 static void wake_writers(struct unix_sock *s)
 {
@@ -727,6 +729,14 @@ static void wake_writers(struct unix_sock *s)
     uint32_t flags;
 
     wq_wake(&s->wq, 0);
+    if (s->type != SOCK_DGRAM) {
+        flags = spin_lock_irqsave(&s->state_lock);
+        if (s->peer) {
+            wq_wake(&s->peer->wq, WQ_ROOM);
+        }
+        spin_unlock_irqrestore(&s->state_lock, flags);
+        return;
+    }
     flags = spin_lock_irqsave(&table_lock);
     for (o = socks; o; o = o->next) {
         spin_lock(&o->state_lock);
