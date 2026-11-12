@@ -597,6 +597,27 @@ static void unhold(struct bbuf *b)
 }
 
 /**
+ * Let go of `b`, held by the caller, and wake whoever waits for it, under
+ * `cache_spin`, which the caller keeps until the wakes are made: once the
+ * lock goes, an unheld buffer whose waiters have left may be freed by a
+ * shrink (`buffers_reap`), so a wake after it would touch freed memory.
+ * Linux's `unlock_buffer` wakes while the holder still has its reference
+ * (fs/buffer.c:75-80, `brelse` after it), and wakes only a queue with a
+ * sleeper (`__wake_up_bit`, kernel/sched/wait_bit.c:121-127); every
+ * sleeper here is counted in `waiters` under the lock before it sleeps, so
+ * a buffer with none needs no wake. The processors the wakes interrupt are
+ * added to `*cpus`, for `sched_kick_cpus` once the lock is let go, as
+ * `wq_wake_all_deferred` asks.
+ */
+static void unhold_wake(struct bbuf *b, uint64_t *cpus)
+{
+    unhold(b);
+    if (b->waiters > 0) {
+        wq_wake_all_deferred(&b->wq, cpus);
+    }
+}
+
+/**
  * Read `sectors` sectors of `dev` at `lba` into `buf` for a miss, under the
  * big lock, which the block layer's requests still run under: a caller
  * without it takes it for the transfer alone, and the request's sleep lets
@@ -939,11 +960,12 @@ static int order_flush(block_device_t *dev)
 /** Let go of `b`, held by the caller, and wake whoever waits for it. */
 static void let_go(struct bbuf *b)
 {
+    uint64_t cpus = 0;
     uint32_t flags = cache_lock();
 
-    unhold(b);
+    unhold_wake(b, &cpus);
     cache_unlock(flags);
-    wq_wake_all(&b->wq);
+    sched_kick_cpus(cpus);
 }
 
 static int write_one_met(struct bbuf *b, uint32_t flags, struct bbuf **met);
@@ -1041,10 +1063,12 @@ static int write_follower(struct bbuf *b, uint32_t flags, struct bbuf **met)
         int holder = d->holder;
 
         if (holder != -1 && holder != caller_pid()) {
-            unhold(b);
+            uint64_t cpus = 0;
+
+            unhold_wake(b, &cpus);
             d->waiters++;
             cache_unlock(lf);
-            wq_wake_all(&b->wq);
+            sched_kick_cpus(cpus);
             return met_wait(d, met);
         }
         cache_unlock(lf);
@@ -1643,11 +1667,13 @@ again:
     }
     if (device_read(dev, blk * BCACHE_BLOCK_SECTORS, victim->bytes / BLOCK_SECTOR_SIZE,
                     victim->data) != 0) {
+        uint64_t cpus = 0;
+
         flags = cache_lock();
-        unhold(victim);
+        unhold_wake(victim, &cpus);
         make_empty(victim);
         cache_unlock(flags);
-        wq_wake_all(&victim->wq);
+        sched_kick_cpus(cpus);
         goto done;
     }
     flags = cache_lock();
@@ -1738,10 +1764,12 @@ static int fill_run(block_device_t *dev, uint64_t blk)
         }
         flags = cache_lock();
         if (fresh && write_gen != gen) {
-            unhold(b);
+            uint64_t cpus = 0;
+
+            unhold_wake(b, &cpus);
             make_empty(b);
             cache_unlock(flags);
-            wq_wake_all(&b->wq);
+            sched_kick_cpus(cpus);
             break;
         }
         if (fresh) {
@@ -1772,6 +1800,7 @@ static int fill_run(block_device_t *dev, uint64_t blk)
  * than `cache_spin`. */
 void bcache_release(struct bbuf *b)
 {
+    uint64_t cpus = 0;
     uint32_t flags;
 
     if (!b || b->holder != caller_pid()) {
@@ -1779,7 +1808,7 @@ void bcache_release(struct bbuf *b)
         return;
     }
     flags = cache_lock();
-    unhold(b);
+    unhold_wake(b, &cpus);
     b->stamp = ++clock_stamp;
     if (b->discard) {
         make_empty(b);
@@ -1788,7 +1817,7 @@ void bcache_release(struct bbuf *b)
         lru_add_tail(b);
     }
     cache_unlock(flags);
-    wq_wake_all(&b->wq);
+    sched_kick_cpus(cpus);
 }
 
 /* The dirty lists are the big lock's. */
