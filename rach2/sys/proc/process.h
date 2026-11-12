@@ -396,7 +396,8 @@ struct process {
      * list's spinlock in process.c. `alarm_due` is set, under the timer
      * list's lock, while the real-time timer's SIGALRM waits there, so that
      * the timer pass marks it once, and cleared when the alarm is set again
-     * (`proc_alarm_set`), which then posts the marked SIGALRM. */
+     * (`proc_alarm_set`), which then posts the marked SIGALRM; while it is
+     * set the timer reports no time left (`proc_alarm_due_tick`). */
     uint32_t tick_sigs;
     int tick_post_linked;
     struct process *tick_post_next;
@@ -824,6 +825,16 @@ void proc_timer_update(process_t *p);
  * stays pending. The caller holds the big lock and no spinlock.
  */
 void proc_alarm_set(process_t *p, uint64_t tick, uint64_t interval);
+
+/**
+ * The tick `p`'s real-time timer is due at, or 0 when it is disarmed or
+ * the tick has marked its SIGALRM, which no holder of the big lock has
+ * posted yet: Linux's timer is inactive once `it_real_fn` has sent the
+ * signal (kernel/time/itimer.c:156-166), so `itimer_get_remtime` reports
+ * no time left (:29-45). Read under the timer list's lock, which the tick
+ * marks under; the caller holds the big lock and no spinlock.
+ */
+uint64_t proc_alarm_due_tick(const process_t *p);
 
 /**
  * Leave the signal `signo` of the tick, SIGALRM, SIGVTALRM or SIGPROF, for

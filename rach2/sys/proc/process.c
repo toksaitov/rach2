@@ -299,6 +299,15 @@ void proc_alarm_set(process_t *p, uint64_t tick, uint64_t interval)
     }
 }
 
+uint64_t proc_alarm_due_tick(const process_t *p)
+{
+    uint32_t flags = spin_lock_irqsave(&timer_list_lock);
+    uint64_t tick = p->alarm_due ? 0 : p->alarm_tick;
+
+    spin_unlock_irqrestore(&timer_list_lock, flags);
+    return tick;
+}
+
 /** The tick a periodic real-time timer due at `due` is due at next: the
  * first `due` plus a whole number of `interval`s after the tick `now`, so
  * that a SIGALRM posted late does not move the timer off its grid, as
