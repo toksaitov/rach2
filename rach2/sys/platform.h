@@ -197,12 +197,6 @@ void platform_pmu_handled(void);
  */
 int platform_pmu_late(void);
 
-/** Whether this processor's counter runs (`platform_pmu_enable`), which
- * keeps its local APIC's counter entry an unmasked NMI, so that another
- * counter's overflow with its interrupt bit set raises one; called with
- * interrupts off. */
-int platform_pmu_armed(void);
-
 /** The processor's clock in cycles a second, as Linux's `cpu_khz` gives it
  * times 1000: the TSC's measured rate, which on Intel's processors since
  * Nehalem is the nominal clock, measured by `platform_pmu_probe` with or
