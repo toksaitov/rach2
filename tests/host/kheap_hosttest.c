@@ -81,6 +81,20 @@ uintptr_t alloc_frame(void)
     return 0x10000000u + frames_out * PAGE_SIZE;
 }
 
+/** `count` frames at consecutive addresses, or 0 when they would pass
+ * `frame_limit`. */
+uintptr_t alloc_frames(uint32_t count)
+{
+    uintptr_t first;
+
+    if (count == 0 || frame_limit - frames_out < count) {
+        return 0;
+    }
+    first = 0x10000000u + (frames_out + 1u) * PAGE_SIZE;
+    frames_out += count;
+    return first;
+}
+
 /** Count a frame given back. */
 void free_frame(uintptr_t phys)
 {

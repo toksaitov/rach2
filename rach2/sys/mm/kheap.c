@@ -454,6 +454,69 @@ void *kalloc_pages_try(uint32_t count, uintptr_t *phys)
     return pages_or_null(count, phys, 1);
 }
 
+/** Map a run of `count` consecutive frames (`alloc_frames`) at the run of
+ * free pages starting at `page` and mark them taken: 0, or -1 when no such
+ * run of frames is free. `heap_lock` is held. */
+static int map_run_contig(uint32_t page, uint32_t count)
+{
+    uintptr_t phys = alloc_frames(count);
+    uint32_t i;
+
+    if (phys == 0) {
+        return -1;
+    }
+    for (i = 0; i < count; i++) {
+        map_kernel_frame(KVA_HEAP + ((uintptr_t)page + i) * PAGE_SIZE,
+                         phys + (uintptr_t)i * PAGE_SIZE, 1);
+        page_set(page + i, 1);
+    }
+    pages_held += count;
+    return 0;
+}
+
+/** `count` pages backed by consecutive frames, from the ordinary region,
+ * or `heap_pages` when it has no room or no such frames. `heap_lock` is
+ * held. */
+static uint32_t take_contig_once(uint32_t count)
+{
+    uint32_t page = find_run(count);
+
+    if (page < heap_pages && map_run_contig(page, count) != 0) {
+        page = heap_pages;
+    }
+    return page;
+}
+
+/** The kept runs are given back and the run sought again when the first
+ * search finds no room or no frames, as `take_pages` does. */
+void *kalloc_contig(uint32_t count, uintptr_t *phys)
+{
+    uint32_t flags = spin_lock_irqsave(&heap_lock);
+    uint32_t page;
+    void *va;
+
+    if (count == 0 || count >= KHEAP_RUN_LEAST) {
+        spin_unlock_irqrestore(&heap_lock, flags);
+        klog(KLOG_ERR, "kheap", "%d consecutive frames: not a size it gives", (int)count);
+        return NULL;
+    }
+    page = take_contig_once(count);
+    if (page >= heap_pages && kept_drain()) {
+        page = take_contig_once(count);
+    }
+    if (page >= heap_pages) {
+        spin_unlock_irqrestore(&heap_lock, flags);
+        klog(KLOG_ERR, "kheap", "%d consecutive frames: no room or no run free", (int)count);
+        return NULL;
+    }
+    va = (void *)(KVA_HEAP + (uintptr_t)page * PAGE_SIZE);
+    if (phys) {
+        *phys = paging_virt_to_phys((uintptr_t)va);
+    }
+    spin_unlock_irqrestore(&heap_lock, flags);
+    return va;
+}
+
 /** A page for the buffer cache, mapped, from the top of the ordinary
  * region; `heap_pages` when there is no free page or no frame for it.
  * `heap_lock` is held. */

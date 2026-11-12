@@ -234,35 +234,10 @@ void kvm_vcpu_init_reset(struct kvm_vcpu *v)
     v->dirty |= KVM_PART_REGS | KVM_PART_SREGS | KVM_PART_EVENTS | KVM_PART_DEBUG | KVM_PART_CR8;
 }
 
-/* The most runs of pages `kvm_map_pages` takes before it gives up. */
-#define MAP_TRIES 16u
-
 uint8_t *kvm_map_pages(uint32_t count, uintptr_t *pa)
 {
-    uint8_t *held[MAP_TRIES];
-    uint8_t *p = NULL;
-    uint32_t n = 0, i;
+    uint8_t *p = kalloc_contig(count, pa);
 
-    while (n < MAP_TRIES) {
-        p = kalloc_pages(count, pa);
-        if (!p) {
-            break;
-        }
-        for (i = 1; i < count; i++) {
-            if (paging_virt_to_phys((uintptr_t)p + (uintptr_t)i * 4096u) !=
-                *pa + (uintptr_t)i * 4096u) {
-                break;
-            }
-        }
-        if (i == count) {
-            break;
-        }
-        held[n++] = p;
-        p = NULL;
-    }
-    while (n-- > 0) {
-        kfree_pages(held[n], count);
-    }
     if (p) {
         k_memset(p, 0xFF, (size_t)count * 4096u);
     }

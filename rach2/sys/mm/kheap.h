@@ -15,8 +15,10 @@
  * A class page and the first page of a large object start with a 16-byte
  * header that says the class or the page count, which is how `kfree` finds
  * what it was given: the page base of the pointer. Pages from
- * `kalloc_pages` have no header. `kalloc_guarded` gives pages with a guard
- * below them, a page of the region that is marked taken and never mapped.
+ * `kalloc_pages` have no header. `kalloc_contig` gives a run whose frames
+ * are consecutive too, taken together from the frame allocator.
+ * `kalloc_guarded` gives pages with a guard below them, a page of the
+ * region that is marked taken and never mapped.
  *
  * The allocator never sleeps: it scans the frame table and the page bitmap
  * with interrupts masked, so it may be called from any context that may
@@ -100,6 +102,17 @@ void *kalloc_pages(uint32_t count, uintptr_t *phys);
  * cannot give at the moment is not an error in the log.
  */
 void *kalloc_pages_try(uint32_t count, uintptr_t *phys);
+
+/**
+ * `count` pages, virtually contiguous and page-aligned, whose frames are
+ * also consecutive, for a structure the processor reads by its physical
+ * address across pages, as SVM's permission maps; `phys`, when given,
+ * receives the first frame's address. The frames come from `alloc_frames`,
+ * so the run does not depend on how scattered the free frames are. `count`
+ * is 1 to 63; NULL, with a record, for another count, or when the region
+ * has no room or no run of `count` frames is free. Freed with `kfree_pages`.
+ */
+void *kalloc_contig(uint32_t count, uintptr_t *phys);
 
 /**
  * One page for the buffer cache, as `kalloc_pages(1, 0)` gives it, or NULL

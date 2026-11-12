@@ -2629,6 +2629,68 @@ uintptr_t alloc_frame(void)
     return frame * PAGE_SIZE;
 }
 
+/** The first frame of the lowest run of `count` free frames in [from, to),
+ * or `to` when there is none: each candidate is the next free frame the
+ * index gives, and a used frame inside a run restarts the search past it.
+ * `frame_lock` is held. */
+static uintptr_t frame_run_free(uintptr_t from, uintptr_t to, uint32_t count)
+{
+    uintptr_t first, i;
+
+    while (from < to && to - from >= count) {
+        first = frame_next_free(from, to);
+        if (first >= to || to - first < count) {
+            return to;
+        }
+        i = 1;
+        while (i < count && _frames[first + i] == 0) {
+            i++;
+        }
+        if (i == count) {
+            return first;
+        }
+        from = first + i + 1u;
+    }
+    return to;
+}
+
+/** The runs are sought where `find_free_frame` takes single frames: above
+ * the window, from its hint and then below it, where `rach2.framehigh`
+ * leaves frames free; then in the window while WINDOW_KEEP frames would be
+ * left to `alloc_kernel_frame`. */
+uintptr_t alloc_frames(uint32_t count)
+{
+    uintptr_t frame, i;
+    uint32_t flags;
+
+    if (count == 0 || framefail_now() || !mem_may_take(0)) {
+        return 0;
+    }
+    flags = spin_lock_irqsave(&frame_lock);
+    frame = frame_run_free(_next_free_upper, _frames_number, count);
+    if (frame >= _frames_number) {
+        frame = frame_run_free(_window_frames, _next_free_upper, count);
+        if (frame >= _next_free_upper) {
+            frame = _frames_number;
+        }
+    }
+    if (frame >= _frames_number && _free_window_frames > WINDOW_KEEP + count) {
+        frame = frame_run_free(_user_frames_start, _window_frames, count);
+        if (frame >= _window_frames) {
+            frame = _frames_number;
+        }
+    }
+    if (frame >= _frames_number) {
+        spin_unlock_irqrestore(&frame_lock, flags);
+        return 0;
+    }
+    for (i = 0; i < count; i++) {
+        frame_take(frame + i);
+    }
+    spin_unlock_irqrestore(&frame_lock, flags);
+    return frame * PAGE_SIZE;
+}
+
 void free_frame(uintptr_t phys)
 {
     frame_unref(phys);

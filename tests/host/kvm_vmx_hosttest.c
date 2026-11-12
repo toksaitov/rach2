@@ -164,6 +164,13 @@ void *kalloc_pages(uint32_t count, uintptr_t *phys)
     return p;
 }
 
+/** Pages whose frames are consecutive: `kalloc_pages`'s, whose address is
+ * their physical address. */
+void *kalloc_contig(uint32_t count, uintptr_t *phys)
+{
+    return kalloc_pages(count, phys);
+}
+
 /** A kernel address is its own physical address here. */
 uintptr_t paging_virt_to_phys(uintptr_t va)
 {
