@@ -4,6 +4,8 @@
  *
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
  * host-cflags: -DRACH2_HOST_X86_64
+ * host-inputs: rach2/sys/arch/x86_64/vdsocode.s
+ * host-inputs: rach2/sys/arch/x86_64/vdso32code.s
  *
  * The source is included whole, so that a row reaches the page and the
  * clock's state. The machine is a clock of nanoseconds, KVM's clock, which
@@ -25,9 +27,11 @@
  * carried on by KVM's clock; that the stop then raises the floors to its
  * moment by KVM's clock and no further, at or past every reading given;
  * that a setting of real time and a tick made between the withdrawal and
- * the stop carry the bases by KVM's clock, not by that TSC; and that the
- * clock started again while the tick's clock is still behind the stop's
- * time begins at the floors (`stop_rows`).
+ * the stop carry the bases by KVM's clock, not by that TSC; that the clock
+ * started again while the tick's clock is still behind the stop's time
+ * begins at the floors (`stop_rows`); and that the code of both vDSOs, the
+ * x86-64 one and the 32-bit one, reads the page while KVM's page has its
+ * stable bit and makes the system call once it is withdrawn (`abi_rows`).
  */
 
 #include "arch/x86_64/vclock.c"
@@ -384,10 +388,398 @@ static void stop_rows(void)
           "and the vDSO reads it at or past the floor");
 }
 
+/*
+ * The vDSOs' own code, vdsocode.s for x86-64 programs and vdso32code.s for
+ * i386 ones, assembled into this program where the host is an x86-64
+ * Linux, and run there: copied into memory below 4 GiB laid out as a
+ * program sees it, KVM's clock page, then the data page, then the image
+ * with the code at VDSO_TEXT_OFFSET, and its system calls replaced by
+ * `notl %eax`, so that a fallback returns the call's number inverted and
+ * makes no call. The 32-bit code runs in the host kernel's 32-bit code
+ * segment, entered and left by far returns (`vhost_gate`). Elsewhere, on
+ * macOS on Apple's processors and on Windows, the host runs no x86-64
+ * Linux code, and only the C reader's rows run.
+ */
+#if defined(__x86_64__) && defined(__linux__) && defined(__GNUC__)
+#define VCLOCK_ABI_ROWS 1
+
+/* The assembler finds the files from the repository's root, where the
+ * host tests compile. */
+__asm__(".pushsection .text\n"
+        ".include \"rach2/sys/arch/x86_64/vdsocode.s\"\n"
+        ".include \"rach2/sys/arch/x86_64/vdso32code.s\"\n"
+        ".code64\n"
+        /* uint64_t vhost_call64(uint64_t fn, uint64_t a, uint64_t b): fn(a, b),
+         * a direct call for the sanitizers. */
+        ".p2align 4\n"
+        ".globl vhost_call64\n"
+        ".hidden vhost_call64\n"
+        "vhost_call64:\n"
+        "    movq %rdi, %rax\n"
+        "    movq %rsi, %rdi\n"
+        "    movq %rdx, %rsi\n"
+        "    jmp *%rax\n"
+        /* The gate, copied below 4 GiB: given a block below 4 GiB in %rdi
+         * (`struct gate_block`), it saves the stack pointer there, moves to
+         * the block's stack, far-returns to the 32-bit code segment 0x23,
+         * calls the block's function with its four arguments by the i386
+         * convention, keeps EAX and EDX, and far-returns to the 64-bit
+         * segment 0x33, where it takes its stack back and returns EAX. */
+        ".p2align 4\n"
+        ".globl vhost_gate\n"
+        ".hidden vhost_gate\n"
+        "vhost_gate:\n"
+        "    pushq %rbx\n"
+        "    pushq %rbp\n"
+        "    pushq %r12\n"
+        "    pushq %r13\n"
+        "    pushq %r14\n"
+        "    pushq %r15\n"
+        "    movl %edi, %ebx\n"
+        "    movq %rsp, 0(%rbx)\n"
+        "    leaq vhost_gate_back(%rip), %rax\n"
+        "    movl %eax, 40(%rbx)\n"
+        "    movl 8(%rbx), %esp\n"
+        "    leaq vhost_gate32(%rip), %rax\n"
+        "    pushq $0x23\n"
+        "    pushq %rax\n"
+        "    lretq\n"
+        ".code32\n"
+        "vhost_gate32:\n"
+        "    movl $0x2b, %eax\n"
+        "    movl %eax, %ds\n"
+        "    movl %eax, %es\n"
+        "    pushl 28(%ebx)\n"
+        "    pushl 24(%ebx)\n"
+        "    pushl 20(%ebx)\n"
+        "    pushl 16(%ebx)\n"
+        "    call *12(%ebx)\n"
+        "    addl $16, %esp\n"
+        "    movl %eax, 32(%ebx)\n"
+        "    movl %edx, 36(%ebx)\n"
+        "    pushl $0x33\n"
+        "    pushl 40(%ebx)\n"
+        "    lret\n"
+        /* A 32-bit function that returns 0x5a5a, for the probe. */
+        ".globl vhost_probe32\n"
+        ".hidden vhost_probe32\n"
+        "vhost_probe32:\n"
+        "    movl $0x5a5a, %eax\n"
+        "    ret\n"
+        ".code64\n"
+        "vhost_gate_back:\n"
+        "    movl %ebx, %ebx\n"
+        "    movq 0(%rbx), %rsp\n"
+        "    movl 32(%rbx), %eax\n"
+        "    popq %r15\n"
+        "    popq %r14\n"
+        "    popq %r13\n"
+        "    popq %r12\n"
+        "    popq %rbp\n"
+        "    popq %rbx\n"
+        "    ret\n"
+        ".globl vhost_gate_end\n"
+        ".hidden vhost_gate_end\n"
+        "vhost_gate_end:\n"
+        ".popsection\n");
+
+extern const unsigned char vdso_text_start[], vdso_text_end[];
+extern const unsigned char vdso_clock_gettime[], vdso_gettimeofday[], vdso_time[];
+extern const unsigned char vdso32_text_start[], vdso32_text_end[], vdso32_vsyscall_entry[];
+extern const unsigned char vdso32_clock_gettime[], vdso32_clock_gettime64[];
+extern const unsigned char vdso32_gettimeofday[], vdso32_time[];
+extern const unsigned char vhost_gate[], vhost_gate_end[], vhost_probe32[];
+extern uint64_t vhost_call64(uint64_t fn, uint64_t a, uint64_t b);
+
+/* The host's calls, declared here, since a host header would define the
+ * kernel's types again; the constants are x86-64 Linux's. */
+extern void *mmap(void *addr, unsigned long length, int prot, int flags, int fd, long offset);
+extern int fork(void);
+extern int waitpid(int pid, int *status, int options);
+extern void _exit(int status);
+#define HOST_PROT_RWX    7
+#define HOST_MAP_PRIVATE 0x02
+#define HOST_MAP_ANON    0x20
+#define HOST_MAP_32BIT   0x40
+
+/* The memory below 4 GiB, as offsets: each ABI's KVM page, data page and
+ * image, whose code is at VDSO_TEXT_OFFSET and may run on past the image's
+ * page up to the next layout; then the gate, the block and the 32-bit
+ * code's stack. */
+#define LOW_ABI64   0x0000u
+#define LOW_ABI32   0x4000u
+#define LOW_GATE    0x8000u
+#define LOW_BLOCK   0x9000u
+#define LOW_OUT     0x9100u
+#define LOW_STACK   0xC000u
+#define LOW_SIZE    0xC000u
+#define LAYOUT_CODE (2u * PAGE_SIZE + VDSO_TEXT_OFFSET)
+#define LAYOUT_ROOM (LOW_ABI32 - LOW_ABI64 - LAYOUT_CODE)
+
+/* The block the gate reads, at LOW_BLOCK. */
+struct gate_block {
+    uint64_t saved_rsp; /* the 64-bit stack pointer, kept by the gate */
+    uint32_t stack;     /* the top of the 32-bit code's stack */
+    uint32_t fn;        /* the 32-bit function */
+    uint32_t arg[4];    /* its arguments, the first lowest */
+    uint32_t eax, edx;  /* what it returned */
+    uint32_t back;      /* where the gate comes back to 64-bit code */
+};
+
+/* A timespec and a timeval of each ABI. */
+struct ts64 {
+    int64_t sec, nsec;
+};
+struct ts32 {
+    int32_t sec, nsec;
+};
+
+static unsigned char *low;
+
+/** The address below 4 GiB at offset `off` of the low memory. */
+static uint32_t low_at(uint32_t off)
+{
+    return (uint32_t)(uintptr_t)(low + off);
+}
+
+/** Copy `n` bytes from `from` to the low memory at `off`. */
+static void low_copy(uint32_t off, const unsigned char *from, unsigned long n)
+{
+    unsigned long i;
+
+    for (i = 0; i < n; i++) {
+        low[off + i] = from[i];
+    }
+}
+
+/**
+ * The layout at `at`: KVM's page, its version even and its stable bit
+ * `stable`, and the clock's data page as the kernel keeps it, with a base
+ * count no TSC reaches, so that a reading of the TSC reads the base's time
+ * exactly.
+ */
+static void abi_pages(uint32_t at, int stable)
+{
+    struct vdso_data *page = (struct vdso_data *)(low + at + PAGE_SIZE);
+    unsigned int i;
+
+    for (i = 0; i < 32u; i++) {
+        low[at + i] = 0;
+    }
+    low[at] = 2;
+    low[at + 29u] = stable ? 1u : 0u;
+    low_copy(at + PAGE_SIZE, (const unsigned char *)data, PAGE_SIZE);
+    page->cycle_base = ~(uint64_t)0;
+}
+
+/**
+ * Copy the code from `start` to `end` to the layout at `at` and replace
+ * each `movl $N, %eax; syscall` whose N is in `calls` with `notl %eax`:
+ * the replacements made, or -1 when the code does not fit.
+ */
+static int abi_code64(uint32_t at, const unsigned char *start, const unsigned char *end,
+                      const uint32_t *calls, int ncalls)
+{
+    unsigned long n = (unsigned long)(end - start), i;
+    unsigned char *code = low + at + LAYOUT_CODE;
+    int made = 0, k;
+
+    if (n > LAYOUT_ROOM) {
+        return -1;
+    }
+    low_copy(at + LAYOUT_CODE, start, n);
+    for (i = 0; i + 7u <= n; i++) {
+        uint32_t imm = (uint32_t)code[i + 1] | (uint32_t)code[i + 2] << 8 |
+                       (uint32_t)code[i + 3] << 16 | (uint32_t)code[i + 4] << 24;
+
+        if (code[i] != 0xB8 || code[i + 5] != 0x0F || code[i + 6] != 0x05) {
+            continue;
+        }
+        for (k = 0; k < ncalls; k++) {
+            if (imm == calls[k]) {
+                code[i + 5] = 0xF7;
+                code[i + 6] = 0xD0;
+                made++;
+            }
+        }
+    }
+    return made;
+}
+
+/** The address below 4 GiB of the function `fn` of the code from `start`
+ * copied to the layout at `at`. */
+static uint32_t abi_fn(uint32_t at, const unsigned char *start, const unsigned char *fn)
+{
+    return low_at(at + LAYOUT_CODE + (uint32_t)(fn - start));
+}
+
+/** The 32-bit function at `fn` called through the gate with the four
+ * arguments: what it returned in EAX. */
+static uint32_t gate_call(uint32_t fn, uint32_t a, uint32_t b, uint32_t c, uint32_t d)
+{
+    struct gate_block *g = (struct gate_block *)(low + LOW_BLOCK);
+
+    g->stack = low_at(LOW_STACK);
+    g->fn = fn;
+    g->arg[0] = a;
+    g->arg[1] = b;
+    g->arg[2] = c;
+    g->arg[3] = d;
+    return (uint32_t)vhost_call64(low_at(LOW_GATE), low_at(LOW_BLOCK), 0);
+}
+
+/** Whether the host runs 32-bit code: the gate tried in a child, which
+ * a host without the 32-bit code segment ends with a signal, so that the
+ * row fails with its message where the gate would end the test. */
+static int gate_works(void)
+{
+    int pid, status = 0;
+
+    pid = fork();
+    if (pid == 0) {
+        _exit(gate_call(low_at(LOW_GATE + (uint32_t)(vhost_probe32 - vhost_gate)), 0, 0, 0, 0) ==
+                      0x5a5au
+                  ? 0
+                  : 1);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid) {
+        return 0;
+    }
+    return (status & 0x7F) == 0 && ((status >> 8) & 0xFF) == 0;
+}
+
+/**
+ * The x86-64 vDSO's clock_gettime of the monotonic, real and raw clocks,
+ * gettimeofday and time, run from the code of vdsocode.s over the kernel's
+ * data page in VCLOCK_PVCLOCK: with KVM's stable bit each reads the page's
+ * base, and with it withdrawn each makes its system call, so that a
+ * vdsocode.s without the check of the bit fails the second set.
+ */
+static void abi64_rows(void)
+{
+    static const uint32_t calls[] = {96u, 201u, 228u, 229u, 309u};
+    uint32_t cgt = abi_fn(LOW_ABI64, vdso_text_start, vdso_clock_gettime);
+    uint32_t gtod = abi_fn(LOW_ABI64, vdso_text_start, vdso_gettimeofday);
+    uint32_t tm = abi_fn(LOW_ABI64, vdso_text_start, vdso_time);
+    struct ts64 ts, tv;
+    int stable, ok;
+
+    ok = abi_code64(LOW_ABI64, vdso_text_start, vdso_text_end, calls, 5) == 5;
+    CHECK(ok, "the x86-64 vDSO's code fits and its five system calls are found and replaced");
+    if (!ok) {
+        return;
+    }
+    for (stable = 1; stable >= 0; stable--) {
+        abi_pages(LOW_ABI64, stable);
+        if (stable) {
+            ok = vhost_call64(cgt, 1, (uint64_t)(uintptr_t)&ts) == 0 && ts.sec == data->mono_sec &&
+                 (uint64_t)ts.nsec == data->mono_nsec;
+            ok = ok && vhost_call64(cgt, 0, (uint64_t)(uintptr_t)&ts) == 0 &&
+                 ts.sec == data->real_sec && (uint64_t)ts.nsec == data->real_nsec;
+            ok = ok && vhost_call64(cgt, 4, (uint64_t)(uintptr_t)&ts) == 0 &&
+                 ts.sec == data->raw_sec && (uint64_t)ts.nsec == data->raw_nsec;
+            ok = ok && vhost_call64(gtod, (uint64_t)(uintptr_t)&tv, 0) == 0 &&
+                 tv.sec == data->real_sec && (uint64_t)tv.nsec == data->real_nsec / 1000u;
+            ok = ok && (int64_t)vhost_call64(tm, 0, 0) == data->real_sec;
+            CHECK(ok, "with KVM's stable bit the x86-64 vDSO reads each clock from the page");
+        } else {
+            ok = (uint32_t)vhost_call64(cgt, 1, (uint64_t)(uintptr_t)&ts) == ~228u;
+            ok = ok && (uint32_t)vhost_call64(cgt, 0, (uint64_t)(uintptr_t)&ts) == ~228u;
+            ok = ok && (uint32_t)vhost_call64(cgt, 4, (uint64_t)(uintptr_t)&ts) == ~228u;
+            ok = ok && (uint32_t)vhost_call64(gtod, (uint64_t)(uintptr_t)&tv, 0) == ~96u;
+            ok = ok && (uint32_t)vhost_call64(tm, 0, 0) == ~201u;
+            CHECK(ok, "with the bit withdrawn the x86-64 vDSO makes the system call for each");
+        }
+    }
+}
+
+/**
+ * The 32-bit vDSO's clock_gettime, clock_gettime64, gettimeofday and time
+ * of an i386 program, run from the code of vdso32code.s through the gate,
+ * as abi64_rows runs the x86-64 code; its system calls go through
+ * __kernel_vsyscall, whose `int $0x80` is the one replaced.
+ */
+static void abi32_rows(void)
+{
+    static const unsigned char entry[] = {0x90, 0x90, 0x90, 0x90, 0xCD, 0x80};
+    unsigned long n = (unsigned long)(vdso32_text_end - vdso32_text_start), i;
+    unsigned char *call =
+        low + LOW_ABI32 + LAYOUT_CODE + (vdso32_vsyscall_entry - vdso32_text_start);
+    uint32_t cgt = abi_fn(LOW_ABI32, vdso32_text_start, vdso32_clock_gettime);
+    uint32_t cgt64 = abi_fn(LOW_ABI32, vdso32_text_start, vdso32_clock_gettime64);
+    uint32_t gtod = abi_fn(LOW_ABI32, vdso32_text_start, vdso32_gettimeofday);
+    uint32_t tm = abi_fn(LOW_ABI32, vdso32_text_start, vdso32_time);
+    struct ts32 *t32 = (struct ts32 *)(low + LOW_OUT);
+    struct ts64 *t64 = (struct ts64 *)(low + LOW_OUT);
+    uint32_t out = low_at(LOW_OUT);
+    int stable, ok, same = 1;
+
+    CHECK(n <= LAYOUT_ROOM, "the 32-bit vDSO's code fits its layout");
+    if (n > LAYOUT_ROOM) {
+        return;
+    }
+    low_copy(LOW_ABI32 + LAYOUT_CODE, vdso32_text_start, n);
+    for (i = 0; i < sizeof entry; i++) {
+        same = same && call[i] == entry[i];
+    }
+    CHECK(same, "__kernel_vsyscall's entry is four nops and int $0x80");
+    if (!same) {
+        return;
+    }
+    call[4] = 0xF7;
+    call[5] = 0xD0;
+    for (stable = 1; stable >= 0; stable--) {
+        abi_pages(LOW_ABI32, stable);
+        if (stable) {
+            ok = gate_call(cgt, 1, out, 0, 0) == 0 && t32->sec == (int32_t)data->mono_sec &&
+                 (uint64_t)t32->nsec == data->mono_nsec;
+            ok = ok && gate_call(cgt64, 4, out, 0, 0) == 0 && t64->sec == data->raw_sec &&
+                 (uint64_t)t64->nsec == data->raw_nsec;
+            ok = ok && gate_call(gtod, out, 0, 0, 0) == 0 && t32->sec == (int32_t)data->real_sec &&
+                 (uint64_t)t32->nsec == data->real_nsec / 1000u;
+            ok = ok && gate_call(tm, 0, 0, 0, 0) == (uint32_t)data->real_sec;
+            CHECK(ok, "with KVM's stable bit the 32-bit vDSO reads each clock from the page");
+        } else {
+            ok = gate_call(cgt, 1, out, 0, 0) == ~265u;
+            ok = ok && gate_call(cgt64, 4, out, 0, 0) == ~403u;
+            ok = ok && gate_call(gtod, out, 0, 0, 0) == ~78u;
+            ok = ok && gate_call(tm, 0, 0, 0, 0) == ~13u;
+            CHECK(ok, "with the bit withdrawn the 32-bit vDSO makes the system call for each");
+        }
+    }
+}
+
+/** The rows of both vDSOs' code, on the clock as stop_rows leaves it,
+ * running in VCLOCK_PVCLOCK. */
+static void abi_rows(void)
+{
+    void *m =
+        mmap(0, LOW_SIZE, HOST_PROT_RWX, HOST_MAP_PRIVATE | HOST_MAP_ANON | HOST_MAP_32BIT, -1, 0);
+
+    CHECK(m != (void *)-1 && (uintptr_t)m + LOW_SIZE <= 0xFFFFFFFFu,
+          "memory below 4 GiB for the vDSOs' code");
+    if (m == (void *)-1) {
+        return;
+    }
+    low = m;
+    CHECK(data->mode == VCLOCK_PVCLOCK, "the vDSOs read a clock in VCLOCK_PVCLOCK");
+    low_copy(LOW_GATE, vhost_gate, (unsigned long)(vhost_gate_end - vhost_gate));
+    abi64_rows();
+    if (!gate_works()) {
+        CHECK(0, "the host runs 32-bit code, for the 32-bit vDSO's rows");
+        return;
+    }
+    abi32_rows();
+}
+#endif
+
 /** Run the rows: 0 when every check passes, 1 otherwise. */
 int main(void)
 {
     page_rows();
     stop_rows();
+#ifdef VCLOCK_ABI_ROWS
+    abi_rows();
+#endif
     return fails != 0;
 }
