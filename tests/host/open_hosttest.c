@@ -10,7 +10,7 @@
  * host-deps: rach2/sys/fs/nodelock.c rach2/sys/mm/notify.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/bkl_held.c
  * host-deps: tests/host/compat/atomic_host.c
- * host-deps: tests/host/compat/mmap_lock_host.c
+ * host-deps: tests/host/compat/mmap_lock_host.c tests/host/compat/fsize_none.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * The rows check:

@@ -14,7 +14,7 @@
  * fuzz-deps: tests/host/compat/pressure_host.c tests/host/compat/atomic_host.c
  * fuzz-deps: tests/host/compat/bkl_held.c tests/host/compat/frames_host.c
  * fuzz-deps: tests/host/compat/mutex_none.c tests/host/compat/kirq_on.c
- * fuzz-deps: tests/host/compat/kirq_none.c
+ * fuzz-deps: tests/host/compat/kirq_none.c tests/host/compat/fsize_none.c
  */
 #include "../../rach2/sys/fs/ext2.h"
 #include "fs_common.h"
