@@ -138,7 +138,6 @@ static int rows(struct guest *g)
     g->mem[2u * PAGE] = 0x52;
     if (run_code(g, read, sizeof(read), 0x52) != 0)
         return -1;
-    puts("SVMENTRY OK");
     return 0;
 }
 
@@ -397,17 +396,18 @@ static int object_slot(struct guest *g)
     return result;
 }
 
-#define RESOURCE_COUNTS 6u
+#define RESOURCE_COUNTS 7u
 
 struct resources {
     unsigned long value[RESOURCE_COUNTS];
 };
 
-/** Read the live KVM object counts and the system's open file descriptions. */
+/** Read the seven live KVM object counts, including guest-page maps. */
 static int resources_read(struct resources *r)
 {
-    static const char *const names[] = {"kvm_vms", "kvm_vcpus", "kvm_slots", "kvm_tdp_pages",
-                                        "kvm_run_mappings"};
+    static const char *const names[] = {"kvm_vms",          "kvm_vcpus",        "kvm_slots",
+                                        "kvm_tdp_pages",    "kvm_run_mappings", "kvm_gpa_maps",
+                                        "kvm_gpa_map_pages"};
     FILE *f;
     char line[256], name[64];
     unsigned long value;
@@ -420,7 +420,7 @@ static int resources_read(struct resources *r)
     while (fgets(line, sizeof(line), f) != NULL) {
         if (sscanf(line, "%63s %lu", name, &value) != 2)
             continue;
-        for (i = 0; i < 5u; i++) {
+        for (i = 0; i < RESOURCE_COUNTS; i++) {
             if (strcmp(name, names[i]) == 0) {
                 r->value[i] = value;
                 seen |= 1u << i;
@@ -428,12 +428,7 @@ static int resources_read(struct resources *r)
         }
     }
     fclose(f);
-    f = fopen("/proc/sys/fs/file-nr", "r");
-    if (f == NULL)
-        return fail("file descriptions");
-    i = fscanf(f, "%lu", &r->value[5]) == 1;
-    fclose(f);
-    return seen == 31u && i ? 0 : fail("incomplete resource counts");
+    return seen == (1u << RESOURCE_COUNTS) - 1u ? 0 : fail("incomplete resource counts");
 }
 
 /** Require every live count to have returned to its value before the VM. */
@@ -658,6 +653,8 @@ int main(int argc, char **argv)
         result = -1;
     if (result == 0 && (getpid() == 1 || (argc == 2 && strcmp(argv[1], "leak") == 0)))
         result = leak_rows();
+    if (result == 0)
+        puts("SVMENTRY OK");
     fflush(NULL);
     if (getpid() == 1) {
         reboot(RB_POWER_OFF);

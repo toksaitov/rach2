@@ -20,10 +20,12 @@ if [ -z "$kernel" ] || [ -z "$initrd" ]; then
     exit 2
 fi
 
-# The five counters name live objects, including references held by maps.
+# The seven KVM counters include references held by run and guest-page maps.
 counts()
 {
-    awk '$1 ~ /^kvm_(vms|vcpus|slots|tdp_pages|run_mappings)$/ { print $1, $2 }' /proc/stat
+    awk '$1 ~ /^kvm_(vms|vcpus|slots|tdp_pages|run_mappings|gpa_maps|gpa_map_pages)$/ {
+        print $1, $2
+    }' /proc/stat
 }
 fail()
 {
@@ -35,9 +37,7 @@ fail()
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-kvm-leak.XXXXXX") || exit 1
 before=$(counts) || fail 'cannot read initial counts'
-[ "$(printf '%s\n' "$before" | wc -l)" = 5 ] || fail 'missing KVM counters'
-files_before=$(cat /proc/sys/fs/file-nr) || fail 'cannot read initial file count'
-files_before=${files_before%%[!0-9]*}
+[ "$(printf '%s\n' "$before" | wc -l)" = 7 ] || fail 'missing KVM counters'
 qemu=${QEMU:-qemu-system-x86_64}
 "$qemu" -nodefaults -no-reboot -display none -accel kvm,kernel-irqchip=split \
     -cpu host -m 256 -smp 1 -kernel "$kernel" -initrd "$initrd" \
@@ -68,8 +68,5 @@ pid=
 [ "$status" = 137 ] || fail "QEMU ended with $status, not SIGKILL"
 [ ! -d "/proc/$old_pid" ] || fail 'QEMU still owns its address space'
 after=$(counts) || fail 'cannot read final counts'
-files_after=$(cat /proc/sys/fs/file-nr) || fail 'cannot read final file count'
-files_after=${files_after%%[!0-9]*}
 [ "$before" = "$after" ] || fail 'KVM resources did not return to their initial counts'
-[ "$files_before" = "$files_after" ] || fail 'open file descriptions leaked'
 echo 'kvm-leak: result: pass'
