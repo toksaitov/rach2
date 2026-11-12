@@ -1272,12 +1272,14 @@ uint64_t sched_idle_ticks(void)
     return idle_sum;
 }
 
-/** Processor `c`'s user, busy and idle ticks, from the model's `cpu_table`. */
-void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle)
+/** Processor `c`'s user, busy, idle and steal ticks, from the model's
+ *  `cpu_table`. */
+void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle, uint64_t *steal)
 {
     *user = cpu_table[c].user_ticks;
     *busy = cpu_table[c].busy_ticks;
     *idle = cpu_table[c].idle_ticks;
+    *steal = cpu_table[c].steal_ticks;
 }
 
 /** `v` in decimal into `out` of `cap` bytes, as `diskinfo_u64_dec` writes

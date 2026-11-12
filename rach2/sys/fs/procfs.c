@@ -3433,15 +3433,15 @@ static void ap_ticks_as_seconds(struct procfs_text *t, uint64_t ticks)
  * idled, summed over them as Linux sums them.
  *
  * Both are counted in ticks (`sched_account_tick`): the uptime is the boot
- * processor's idle and busy ticks together, and the idle time the idle
- * ticks of every processor.
+ * processor's idle, busy and stolen ticks together, and the idle time the
+ * idle ticks of every processor.
  */
 static int procfs_gen_uptime(struct procfs_text *t)
 {
-    uint64_t user, busy, idle;
+    uint64_t user, busy, idle, steal;
 
-    sched_cpu_ticks(0, &user, &busy, &idle);
-    ap_ticks_as_seconds(t, busy + idle);
+    sched_cpu_ticks(0, &user, &busy, &idle, &steal);
+    ap_ticks_as_seconds(t, busy + idle + steal);
     ap_ch(t, ' ');
     ap_ticks_as_seconds(t, sched_idle_ticks());
     ap_ch(t, '\n');
@@ -3501,8 +3501,9 @@ static int procfs_gen_cpuinfo(struct procfs_text *t)
 
 /** Append a /proc/stat processor line's columns after its name, in the
  * `clock_t` of USER_HZ that Linux's count: `user` ticks, no nice, `busy`
- * less `user` as system, and `idle`. */
-static void ap_cpu_ticks(struct procfs_text *t, uint64_t user, uint64_t busy, uint64_t idle)
+ * less `user` as system, `idle`, and `steal` as the eighth column. */
+static void ap_cpu_ticks(struct procfs_text *t, uint64_t user, uint64_t busy, uint64_t idle,
+                         uint64_t steal)
 {
     ap_str(t, " ");
     ap_u64(t, TICKS_TO_CLOCK(user));
@@ -3510,7 +3511,9 @@ static void ap_cpu_ticks(struct procfs_text *t, uint64_t user, uint64_t busy, ui
     ap_u64(t, TICKS_TO_CLOCK(busy - user));
     ap_ch(t, ' ');
     ap_u64(t, TICKS_TO_CLOCK(idle));
-    ap_str(t, " 0 0 0 0 0 0\n");
+    ap_str(t, " 0 0 0 ");
+    ap_u64(t, TICKS_TO_CLOCK(steal));
+    ap_str(t, " 0 0\n");
 }
 
 /** Render what the wireless queues counted, summed over the radios: the
@@ -3794,11 +3797,12 @@ static void procfs_work_counts(struct procfs_text *t)
  * negative ones.
  *
  * The `cpu` line, and the `cpuN` line of each processor online, have user,
- * nice, system and idle in that order, then six columns this kernel does not
- * count, which are zero: a processor's ticks in user mode, in the kernel and
- * in its idle wait, with the `cpu` line their sums. Nice is zero, since no
- * tick is told apart by the nice value; an interrupt's time is the
- * interrupted code's, as `sched_account_tick` charges it.
+ * nice, system and idle in that order, three columns this kernel does not
+ * count, which are zero, steal, and two more zeros: a processor's ticks in
+ * user mode, in the kernel, in its idle wait and stolen by the hypervisor,
+ * with the `cpu` line their sums. Nice is zero, since no tick is told apart
+ * by the nice value; an interrupt's time is the interrupted code's, as
+ * `sched_account_tick` charges it.
  *
  * `processes` is what Linux means by it, the count of processes created
  * since boot, not of those alive now. `procs_running` and `procs_blocked`
@@ -3809,26 +3813,27 @@ static void procfs_work_counts(struct procfs_text *t)
 static int procfs_gen_statsys(struct procfs_text *t)
 {
     struct dcache_counts names;
-    uint64_t user = 0, busy = 0, idle = 0, cu, cb, ci;
+    uint64_t user = 0, busy = 0, idle = 0, steal = 0, cu, cb, ci, cs;
     const process_t *p;
     uint32_t running = 0;
     uint32_t blocked = 0;
     int c;
 
     for (c = 0; c < NR_CPUS; c++) {
-        sched_cpu_ticks(c, &cu, &cb, &ci);
+        sched_cpu_ticks(c, &cu, &cb, &ci, &cs);
         user += cu;
         busy += cb;
         idle += ci;
+        steal += cs;
     }
     ap_str(t, "cpu ");
-    ap_cpu_ticks(t, user, busy, idle);
+    ap_cpu_ticks(t, user, busy, idle, steal);
     for (c = 0; c < NR_CPUS; c++) {
         if (cpu_table[c].online) {
             ap_str(t, "cpu");
             ap_u32(t, (uint32_t)c);
-            sched_cpu_ticks(c, &cu, &cb, &ci);
-            ap_cpu_ticks(t, cu, cb, ci);
+            sched_cpu_ticks(c, &cu, &cb, &ci, &cs);
+            ap_cpu_ticks(t, cu, cb, ci, cs);
         }
     }
     ap_str(t, "intr ");

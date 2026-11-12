@@ -65,7 +65,9 @@ struct percpu {
     volatile uint64_t idle_ticks;               /* ticks that found it in an idle wait */
     volatile uint64_t busy_ticks;               /* ticks that found it running code */
     volatile uint64_t user_ticks;               /* of those, ticks that found it in user mode */
-    uint32_t accounted_tick;                    /* low word of the global tick its counts reach */
+    volatile uint64_t steal_ticks;              /* ticks the hypervisor kept from it */
+    uint64_t steal_ns;                          /* the steal time its counts reach, ns */
+    int64_t accounted_ns;                       /* the monotonic time its counts reach, ns */
     uint64_t bkl_since;                         /* cycle count when it last took the big lock */
     uint32_t bkl_vector;                        /* the vector of the entry that holds it, or 0 */
     int32_t bkl_nr;                             /* its system call, -1 or BKL_NR_* (smp.h) */

@@ -2,7 +2,7 @@
  * Host test of the scheduler's selection and the wait queue's wakeups,
  * proc/sched.c and proc/wait_queue.c, with no switch of the processor.
  *
- * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c rach2/sys/tick.c
  * host-cflags: -DRACH2_HOST_CPU
  *
  * The interrupt flag, the floating-point saves and the switch of stacks are
@@ -54,6 +54,21 @@ void rtc_monotonic(int64_t *sec, int64_t *ns)
 {
     *sec = (int64_t)(clock_ns / 1000000000u);
     *ns = (int64_t)(clock_ns % 1000000000u);
+}
+
+/** The modeled monotonic clock in nanoseconds, as clock.c reads it. */
+int64_t rtc_monotonic_ns(void)
+{
+    return (int64_t)clock_ns;
+}
+
+/* The hypervisor's modeled steal time in nanoseconds, which the rows move. */
+static uint64_t steal_clock_ns;
+
+/** The modeled steal time, which only the rows move. */
+uint64_t arch_steal_ns(void)
+{
+    return steal_clock_ns;
 }
 
 /** Timer list membership is checked by process_timer_hosttest. */
@@ -601,30 +616,49 @@ static void big_lock(void)
 }
 
 /**
- * A processor's tick counts the global ticks it has not counted yet: three
- * after two were lost, none when its own tick comes before the next global
- * one, and one, charged as user time, when the processor runs ring 3.
+ * A processor's tick counts the whole ticks of its own clock since its last
+ * count, rounded to the nearest: three after two were lost, none a quarter
+ * tick later, and one, charged as user time, when the processor runs ring 3;
+ * ticks the hypervisor reports stolen count as steal before any other.
  */
 static void accounting(void)
 {
     struct percpu *cpu = this_cpu();
     process_t *saved = cpu->current;
     uint64_t idle = cpu->idle_ticks, busy = cpu->busy_ticks, user = cpu->user_ticks;
+    uint64_t steal = cpu->steal_ticks, saved_clock = clock_ns;
 
     cpu->current = NULL;
     cpu->idle_wait = 1;
-    kernel_ticks = cpu->accounted_tick + 3;
+    clock_ns = 5000000000u;
+    steal_clock_ns = 0;
+    sched_account_start();
+    clock_ns += 3u * TICK_NS;
     sched_account_tick(0);
     CHECK(cpu->idle_ticks == idle + 3 && cpu->busy_ticks == busy,
-          "three global ticks since the processor's last count are three idle ticks");
+          "three ticks of the processor's clock since its last count are three idle ticks");
+    clock_ns += TICK_NS / 4u;
     sched_account_tick(0);
-    CHECK(cpu->idle_ticks == idle + 3, "a tick before the next global tick counts none");
+    CHECK(cpu->idle_ticks == idle + 3, "a quarter tick later counts none");
     cpu->idle_wait = 0;
-    kernel_ticks++;
+    clock_ns += TICK_NS;
     sched_account_tick(1);
     CHECK(cpu->busy_ticks == busy + 1 && cpu->user_ticks == user + 1 && cpu->idle_ticks == idle + 3,
-          "the next global tick in ring 3 is one busy tick of user time");
+          "the next tick in ring 3 is one busy tick of user time");
+    cpu->idle_wait = 1;
+    steal_clock_ns = 2u * TICK_NS + TICK_NS / 2u;
+    clock_ns += 3u * TICK_NS;
+    sched_account_tick(0);
+    CHECK(cpu->steal_ticks == steal + 2 && cpu->idle_ticks == idle + 4 &&
+              cpu->busy_ticks == busy + 1,
+          "two and a half ticks stolen of three are two steal ticks and one idle");
+    steal_clock_ns += TICK_NS / 2u;
+    clock_ns += TICK_NS;
+    sched_account_tick(0);
+    CHECK(cpu->steal_ticks == steal + 3 && cpu->idle_ticks == idle + 4,
+          "the stolen half tick left over joins the next to make a steal tick");
     cpu->current = saved;
+    clock_ns = saved_clock;
 }
 
 /**

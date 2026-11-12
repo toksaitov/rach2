@@ -9,6 +9,7 @@
 #include "apictimer.h"
 #include "fpu.h"
 #include "kcpu.h"
+#include "kvmsteal.h"
 #include "lapic.h"
 #include "pat.h"
 #include "refclock.h"
@@ -324,6 +325,7 @@ void x86_ap_entry(int cpu)
     apic_lint_init(acpi_get());
     apic_timer_start(x86_tick_counts(), platform_timer_hz());
     tsc_cpu_setup(cpu);
+    kvm_steal_cpu_setup(cpu);
     ap_alive = 1;
     tsc_sync_target(cpu);
     ap_main(cpu);
