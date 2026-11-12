@@ -1519,7 +1519,7 @@ static void allowed_fixtures(const struct rule *r, const struct json *list, cons
 static void rule_fixtures(const struct rule *r)
 {
     static const char *const single[] = {"workspace", "mountns", "ipcns",   "utsns", "root",
-                                         "log",       "alone",   "console", "pty"};
+                                         "log",       "alone",   "console", "pty",   "private"};
     const struct json *native = native_fixtures(r->c);
     const char *case_id = json_text(r->c, "case_id");
     size_t i;
@@ -1531,7 +1531,7 @@ static void rule_fixtures(const struct rule *r)
     }
     allowed_fixtures(r, native,
                      " workspace stage volume tmpfs mountns ipcns utsns root ids pty ports peer "
-                     "log alone console ",
+                     "log alone console private ",
                      "a native run");
     if (fixture(native, "workspace") == NULL) {
         finding(r->file, native->line, "%s: a native case has a workspace fixture", case_id);

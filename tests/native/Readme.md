@@ -21,6 +21,7 @@ Each case has a workspace: a directory of its own, its working directory, remove
 * `tmpfs:SIZE`: a tmpfs of SIZE bytes, or with `K` or `M`, mounted on `tmpfs` in the workspace.
 * `root:TYPE` and `root:TYPE:MIB`: a private root made for the case as a `krffs` or an `ext2` volume with MIB mebibytes free beyond its files, 64 unless given, or as a directory on the workspace's own file system for `ext2-dir`. It has the test image's tree, its set-id copies and accounts among them, with the ids of `maps`, and the program and the case's staged files at `/`. The case runs in it, in a mount namespace of its own, with the machine's `/proc`, `/sys` and `/dev`, its `/dev/shm` and `/dev/mqueue` among them, `/` as its working directory, and the program at `/PROGRAM`.
 * `mountns`, `ipcns`, `utsns`: a namespace of that kind of the case's own.
+* `private`: a directory `private` in the workspace, removed with all it holds once every process of the case has ended, after a pass, a failure or a forced stop alike, while the rest of a failed case's workspace is kept as evidence.
 * `ids:OLD[,OLD]...`: the user and group ids the program uses, which the run maps as `maps` says.
 * `ports:OLD[,OLD]...`: the local ports the program uses, mapped likewise.
 * `pty` and `pty:INPUT`: a pseudo-terminal whose slave side is the program's descriptors 0 to 2 and its controlling terminal; INPUT, a file of this directory, is written to the master side.
