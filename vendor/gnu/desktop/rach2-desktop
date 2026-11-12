@@ -15,10 +15,12 @@ cleanup()
 {
     trap - EXIT HUP INT TERM USR1
     rm -f /run/rach2-desktop.pid "$removed"
-    for child in "$session" "$watch" "$seat" "$udev"; do
+    [ -z "$session" ] || stop_session
+    for child in "$watch" "$seat" "$udev"; do
         [ -z "$child" ] || kill -TERM "-$child" 2>/dev/null || :
+        [ -z "$child" ] || kill -CONT "-$child" 2>/dev/null || :
     done
-    for child in "$session" "$watch" "$seat" "$udev"; do
+    for child in "$watch" "$seat" "$udev"; do
         [ -z "$child" ] || wait "$child" 2>/dev/null || :
     done
 }
@@ -149,23 +151,28 @@ start_session()
 
 # stop_session: end the session's group and wait until none of it is left,
 # since Weston still holds its socket's lock after su and dbus-run-session
-# have gone, and a new Weston would fail on it; KILL after 10 seconds.
+# have gone, and a new Weston would fail on it. CONT follows TERM, since a
+# stopped process takes no TERM until it runs again; what is left after 10
+# seconds gets KILL. No wait blocks before that: the session's own cleanup
+# waits for Weston and PulseAudio, so a member that holds off TERM would hold
+# a wait for the leader too. The shell reaps the leader as it exits, so that
+# the group's end shows to kill -0; the wait then gives its status.
 stop_session()
 {
     local left=100
-    if [ -n "$session" ]; then
-        kill -TERM "-$session" 2>/dev/null || :
-        wait "$session" 2>/dev/null || :
-        while kill -0 "-$session" 2>/dev/null; do
-            if [ "$left" -eq 0 ]; then
-                kill -KILL "-$session" 2>/dev/null || :
-            else
-                left=$((left - 1))
-            fi
-            sleep 0.1
-        done
-        session=''
-    fi
+    [ -n "$session" ] || return 0
+    kill -TERM "-$session" 2>/dev/null || :
+    kill -CONT "-$session" 2>/dev/null || :
+    while kill -0 "-$session" 2>/dev/null; do
+        if [ "$left" -eq 0 ]; then
+            kill -KILL "-$session" 2>/dev/null || :
+        else
+            left=$((left - 1))
+        fi
+        sleep 0.1
+    done
+    wait "$session" 2>/dev/null || :
+    session=''
 }
 
 start_session
