@@ -968,7 +968,13 @@ const struct kvm_backend kvm_svm = {"svm", svm_probe, NULL, NULL, NULL, NULL,   
 #define HOST_CR4_MODEL  0x000406F0ull
 #define HOST_XCR0_MODEL 0x7ull /* x87, SSE and AVX */
 /* The host's PKRU, as a host with protection keys on keeps it: Linux's
- * init_pkru_value, every key but 0 denied writes. */
+ * init_pkru_value, every key but 0 denied writes. The Lenovo's Haswell has
+ * no protection keys, so the model's XCR0 lacks PKRU's bit 9 and its CR4
+ * and IA32_VMX_CR4_FIXED1 lack PKE, which fpu_cpu_setup turns on only with
+ * that bit; the backend reaches PKRU only through `rdpkru` and `wrpkru`,
+ * which never read XCR0, so a PKRU that is not 0 makes its switch visible
+ * on the Lenovo's model, and `m_fpu_load` and `m_fpu_store` move PKRU with
+ * the image as XSAVE and XRSTOR do under an XCR0 with the bit. */
 #define HOST_PKRU_MODEL 0x55555554u
 
 /* A VMCS the model knows: its address, launch state, the processor where
@@ -2079,6 +2085,9 @@ static void model_lenovo(void)
  * interrupts off, as `schedule` calls it. */
 static void model_switch(void)
 {
+    CHECK(!m.fpu_held || m.pkru == m.host_pkru,
+          "between runs the host's PKRU is in, while the guest's FPU is held, as Linux's "
+          "kvm_load_host_xsave_state puts it back after each run (x86.c:1027-1047)");
     if (m.preempt && --m.preempt == 0) {
         CHECK(!irq_on, "the switch is taken with interrupts off");
         if (current_proc->sched_out) {
@@ -2099,6 +2108,8 @@ static void model_block(struct kvm_vcpu *v)
     uint64_t reported = v->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED];
     uint64_t other = v->stat[KVM_VCPU_STAT_PREEMPTION_OTHER];
 
+    CHECK(!m.fpu_held || m.pkru == m.host_pkru,
+          "a halted vCPU's sleep finds the host's PKRU in while the guest's FPU is held");
     if (!m.block || --m.block != 0) {
         return;
     }
