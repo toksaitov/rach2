@@ -143,8 +143,12 @@ static void reset_seg(struct kvm_segment *s, uint16_t sel, uint64_t base, uint8_
  * The architectural state a reset and an INIT both give, as Linux's
  * kvm_vcpu_reset: real mode at 0xFFFF0 below the reset vector's segment,
  * EDX the family, model and stepping of the guest's CPUID, or 0x600 before
- * KVM_SET_CPUID2, CR0 with CD, NW and ET, no event waiting, and the debug
- * registers at reset; the APIC base as it was.
+ * KVM_SET_CPUID2, CR0 with ET, no event waiting, and the debug registers at
+ * reset; the APIC base as it was. CR0's CD and NW are set at a power-on
+ * reset and kept as they were at an INIT, `init` nonzero, as Linux's
+ * (arch/x86/kvm/x86.c:11752-11761); the record's CD and NW are the guest's
+ * at an exit, since VMX keeps them the host's and SVM reads CR0 back at
+ * each exit it does not intercept.
  *
  * The segments are built aside and copied in whole, so that the APIC base
  * never reads other than it was: another processor's delivery reads it
@@ -155,7 +159,7 @@ static void reset_seg(struct kvm_segment *s, uint16_t sel, uint64_t base, uint8_
  * delivery reads the APIC map, rebuilt under `apic_map_lock`
  * (lapic.c:385-495, 1234-1269).
  */
-static void reset_arch(struct kvm_vcpu *v)
+static void reset_arch(struct kvm_vcpu *v, int init)
 {
     const struct kvm_cpuid_entry2 *l1 = kvm_cpuid_find(v, 1, 0);
     struct kvm_sregs s;
@@ -177,7 +181,7 @@ static void reset_arch(struct kvm_vcpu *v)
     s.ldt.s = 0;
     s.gdt.limit = 0xFFFF;
     s.idt.limit = 0xFFFF;
-    s.cr0 = CR0_CD | CR0_NW | CR0_ET;
+    s.cr0 = CR0_ET | (init ? v->sregs.cr0 & (CR0_CD | CR0_NW) : CR0_CD | CR0_NW);
     s.apic_base = v->sregs.apic_base;
     v->sregs = s;
     k_memset(&v->events, 0, sizeof(v->events));
@@ -198,7 +202,7 @@ static void vcpu_reset(struct kvm_vcpu *v)
 {
     uint64_t bv = XFEATURE_X87 | XFEATURE_SSE;
 
-    reset_arch(v);
+    reset_arch(v, 0);
     v->sregs.apic_base = APIC_BASE_DEFAULT | APIC_BASE_ENABLE;
     if (v->id == v->vm->boot_cpu_id) {
         v->sregs.apic_base |= APIC_BASE_BSP;
@@ -221,7 +225,7 @@ static void vcpu_reset(struct kvm_vcpu *v)
 
 void kvm_vcpu_init_reset(struct kvm_vcpu *v)
 {
-    reset_arch(v);
+    reset_arch(v, 1);
     kvm_pmu_reset(v);
     /* As Linux's kvm_vcpu_reset at INIT: the steal time and the kvmclock
      * are off. */

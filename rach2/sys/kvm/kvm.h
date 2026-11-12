@@ -808,7 +808,8 @@ void kvm_vcpu_fpu_sync(struct kvm_vcpu *v);
 
 /** Give `v` the state an INIT leaves, as Linux's kvm_vcpu_reset with
  * `init_event`: the registers, segments, control registers, events and
- * debug registers of a reset, keeping the APIC base, the FPU's state, XCR0,
+ * debug registers of a reset, keeping CR0's CD and NW, the APIC base, the
+ * FPU's state, XCR0,
  * the MSRs but the kvmclock's and the steal time's, which are turned off,
  * and the TSC. vlapic.c resets the APIC itself. */
 void kvm_vcpu_init_reset(struct kvm_vcpu *v);
