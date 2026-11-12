@@ -1440,7 +1440,9 @@ void bkl_take_as(int depth, int key)
         bkl_mark_hold(cpu);
         cpu->bkl_vector = 0;
         cpu->bkl_nr = key == BKL_KEY_IDLE ? BKL_NR_IDLE : BKL_NR_SWITCH;
-        cpu->bkl_slept = key == BKL_KEY_SWITCH && cpu->current && cpu->current->in_syscall
+        /* A kernel thread marked in a call has no system call number. */
+        cpu->bkl_slept = key == BKL_KEY_SWITCH && cpu->current && cpu->current->in_syscall &&
+                                 !cpu->current->kthread_entry
                              ? cpu->current->orig_nr
                              : -1;
         cpu->bkl_depth = depth;
