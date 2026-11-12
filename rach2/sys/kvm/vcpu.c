@@ -976,7 +976,10 @@ static int32_t run_prepare(struct kvm_vcpu *v)
  * top after an exit for a host interrupt: the loop clears `at_boundary`
  * right after it, as Linux clears at_instruction_boundary at the top of
  * vcpu_run's loop, since the work before the next entry may start an
- * instruction of the guest's.
+ * instruction of the guest's. The switch's flag is read with interrupts
+ * on, as Linux's xfer_to_guest_mode_work_pending reads TIF_NEED_RESCHED
+ * (include/linux/entry-kvm.h): the tick only sets it and switches no
+ * thread inside a call, so interrupts go off only for a switch to take.
  * Returns 0 with `exit_reason` set,
  * -EINTR with it KVM_EXIT_INTR for a signal or a kick, or -errno.
  */
@@ -992,10 +995,12 @@ static int32_t run_loop(struct kvm_vcpu *v)
     }
     for (;;) {
         kvm_exitstat_prepare(v);
-        flags = kirq_save();
-        sched_take_preempt();
+        if (current_proc->need_resched) {
+            flags = kirq_save();
+            sched_take_preempt();
+            kirq_restore(flags);
+        }
         v->at_boundary = 0; /* the steps below may start an instruction */
-        kirq_restore(flags);
         if (kvm_vcpu_test_clear(v, KVM_REQ_TRIPLE_FAULT)) {
             run->exit_reason = KVM_EXIT_SHUTDOWN;
             return 0;
