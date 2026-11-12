@@ -372,13 +372,16 @@ static int poll_expired(struct poll_deadline *d)
 
 /**
  * The scan runs first with the process RUNNING. When it finds nothing ready,
- * the process goes on every queue it named and is marked BLOCKED, and the
+ * the process is marked BLOCKED, goes on every queue it named, and the
  * scan runs again, as Linux's poll adds its entry to each queue before it
  * reads that file's mask (fs/select.c, `__pollwait`): a change of readiness
  * after the second scan's look wakes the process from one of the queues,
  * and `schedule` then keeps it running; one before it, the second scan
- * sees. When the second scan names other queues, the process leaves them
- * and scans again. Interrupts are off from the first scan to `schedule`.
+ * sees. BLOCKED precedes enrollment, since even a wake for an unrequested
+ * kind removes the record; it must then mark the thread ready, so it cannot
+ * sleep with that record gone. When the second scan names other queues,
+ * the process leaves them and scans again. Interrupts are off from the
+ * first scan to `schedule`.
  * A finite timeout also sets the timer wake, `wakeup_tick`, which
  * `proc_wake_sleepers` acts on at the deadline: with another process
  * runnable, schedule() does not return here on its own, and a wait on no
@@ -436,12 +439,12 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d,
             break;
         }
 
-        poll_file(wqs, recs, n);
         if (d->set) {
             current_proc->wakeup_tick = d->tick ? d->tick : 1;
         }
         current_proc->wchan = wchan;
         sched_set_current_state(PROC_BLOCKED);
+        poll_file(wqs, recs, n);
         for (i = 0; i < n; i++) {
             again[i] = NULL;
         }

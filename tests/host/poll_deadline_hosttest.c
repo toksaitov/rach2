@@ -3,13 +3,19 @@
  *
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  * host-deps: rach2/sys/tick.c
+ * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/kirq_none.c
+ * host-deps: tests/host/compat/bkl_held.c
+ * host-deps: tests/host/compat/atomic_host.c
  *
  * The system call exports and the poll core's other exports are made private
  * before the source is included, so at -O1, which the host suite and the
  * scripts that build this test use, the native compiler removes every path
- * but the conversions and the comparison this test calls, and nothing else of
- * the kernel is linked. The wait itself, which asks `deadline_reached` and
- * `deadline_passed` at each wake, is not compiled.
+ * but the conversions, comparisons and wait this test calls. The enrollment
+ * row forces a wake after a record is linked and before the next scan: the
+ * wake removes it, as wait_queue.c does, and marks only a blocked thread
+ * ready. An unrelated wake must not leave a poll asleep without its record.
+ * The `enrollment` argument runs that row alone.
  *
  * A wait ends at the first tick at or after its end, measured from where in
  * the tick in progress it began, so a timeout of three ticks begun as tick
@@ -54,6 +60,7 @@ static int32_t poll_mask_done(int32_t ret);
 #include "io/poll.c"
 
 extern int printf(const char *format, ...);
+extern int strcmp(const char *a, const char *b);
 extern int dprintf(int fd, const char *format, ...);
 
 volatile uint64_t kernel_ticks;
@@ -154,7 +161,7 @@ static uint64_t ts_tick(const struct poll_timespec *ts, int *set)
 
 /** The deadline tick of a `select` of `tv`, or 0, with `*set` whether it has
  * one. */
-static uint64_t tv_tick(const struct poll_timeval *tv, int *set)
+static uint64_t tv_tick(struct poll_timeval *tv, int *set)
 {
     struct poll_deadline d;
 
@@ -250,20 +257,127 @@ void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
     lock->locked = 0;
 }
 
-/** Nothing: the test files no waiter on a queue. */
+static process_t waiter;
+static wait_queue_t watched;
+static int filing_wake, invalid_sleeps, scans;
+static uint32_t filing_kind;
+
+/** Take a model spinlock; one processor can never wait for itself. */
+void spin_lock(struct spinlock *lock)
+{
+    if (lock->locked) {
+        __builtin_trap();
+    }
+    lock->locked = 1;
+}
+
+/** Release a model spinlock. */
+void spin_unlock(struct spinlock *lock)
+{
+    lock->locked = 0;
+}
+
+/** No signal is pending in the enrollment row. */
+int signal_pending(void)
+{
+    return 0;
+}
+
+/** File a record, then force one other processor's unrelated wake. */
+void wq_poll_add(wait_queue_t *wq, struct wq_waiter *w)
+{
+    w->next = wq->head;
+    wq->head = w;
+    if (filing_wake) {
+        filing_wake = 0;
+        wq->head = NULL;
+        w->next = NULL;
+        if (filing_kind & WQ_ROOM) {
+            wq->wakes[1]++;
+        }
+        if (w->proc->state == PROC_BLOCKED) {
+            w->proc->state = PROC_READY;
+        }
+    }
+}
+
+/** Supply input after recording a sleep whose enrollment was lost. */
+void schedule(void)
+{
+    invalid_sleeps += current_proc->state == PROC_BLOCKED && watched.head == NULL;
+    current_proc->state = PROC_READY;
+}
+
+/** No model wait idles; record one as an invalid sleep and end it. */
+void idle_wait_irq_off(void)
+{
+    invalid_sleeps++;
+    current_proc->state = PROC_READY;
+}
+
+/** Remove a poll record when a scan, wake or completed wait withdraws it. */
 void wq_poll_remove(wait_queue_t *wq, struct wq_waiter *w)
 {
-    (void)wq;
-    (void)w;
+    struct wq_waiter **link;
+
+    if (!wq) {
+        return;
+    }
+    for (link = &wq->head; *link; link = &(*link)->next) {
+        if (*link == w) {
+            *link = w->next;
+            w->next = NULL;
+            break;
+        }
+    }
+}
+
+/** No input at the first two scans; input arrives before the next. */
+static int enrollment_scan(void *ctx, struct wait_queue **wqs)
+{
+    (void)ctx;
+    wqs[0] = &watched;
+    return ++scans >= 3;
+}
+
+/** An unrelated filing wake cannot leave the next input without a waiter. */
+static void enrollment(void)
+{
+    struct poll_deadline d;
+    int kind;
+
+    for (kind = 0; kind < 2; kind++) {
+        current_proc = &waiter;
+        waiter.state = PROC_RUNNING;
+        watched.head = NULL;
+        watched.wakes[1] = 0;
+        filing_wake = 1;
+        filing_kind = kind ? WQ_ROOM : 0;
+        invalid_sleeps = scans = 0;
+        d.set = 0;
+        CHECK(poll_wait(enrollment_scan, NULL, 1, &d, "enrollment") == 1,
+              "a data arrival after an unrelated filing wake completes the wait");
+        CHECK(!invalid_sleeps, "no sleep after an unrelated wake removed the record");
+        CHECK(!watched.head && !waiter.poll_wqs && !waiter.poll_recs && !waiter.poll_n,
+              "the completed wait withdraws its queue records and arrays");
+        CHECK(waiter.state == PROC_RUNNING && !waiter.wakeup_tick,
+              "the completed wait is running with no timer wake");
+    }
 }
 
 /** Run every check; 0 when each passes, 1 otherwise. */
-int main(void)
+int main(int argc, char **argv)
 {
     struct poll_timespec ts;
     struct poll_timeval tv;
     int has = -1;
 
+    if (argc == 2 && strcmp(argv[1], "enrollment") == 0) {
+        enrollment();
+        printf("poll-enrollment-test: %d failures\n", failures);
+        return failures != 0;
+    }
+    enrollment();
     kernel_ticks = 1000;
     CHECK(ms_tick(TICKS_MS(3), &has) == 1003 && has == 1,
           "a poll of three ticks from tick 1000 ends at 1003");
