@@ -438,6 +438,19 @@ int vfs_fsync(struct vfs_mount *mnt, void *handle)
     return 0;
 }
 
+/** The clock, which no row reads. */
+uint64_t tick_count(void)
+{
+    return 0;
+}
+
+/** The age of written stores, which no row reads. */
+void vfs_writeback_aged(const struct vfs_mount *mnt, uint64_t born)
+{
+    (void)mnt;
+    (void)born;
+}
+
 /** Not reached. */
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
