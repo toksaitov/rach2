@@ -1338,8 +1338,8 @@ static void claim_bound_rows(void)
  * interrupt that waits for the big lock. A caller inside a system call with
  * interrupts on sleeps for the port, which lets the big lock go; one with
  * interrupts off lends the lock to the holder's processor and thread.
- * Only the sleep spends no step of the caller's bound; each lend is a step
- * of the spinning wait, and the rows do not read the steps left.
+ * The sleep spends the bound's ticks, of which none pass here; each lend is
+ * a step of the spinning wait, and the rows do not read the steps left.
  */
 static void claim_wait_rows(void)
 {
