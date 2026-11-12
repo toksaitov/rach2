@@ -1059,7 +1059,9 @@ unhosted()
 # mac_run ID: make the run ID of the release tests on the Mac, of the words
 # that `selection mac` prints, in the copy TREE with the admission site SITE,
 # with its output in RUNS/ID.console and its status appended to RUNS/ID.times
-# as `rc=N`; with -p make only its preparation, with `routine-prepare`.
+# as `rc=N`; with -p make only its preparation, with `routine-prepare`. Its
+# scratch and the evidence of a failed preparation go to TREE/build/tmp, not
+# to the TMPDIR that macOS gives under /var/folders.
 mac_run()
 {
     id=$1
@@ -1072,7 +1074,8 @@ mac_run()
     (
         eval "$(environment mac)"
         unset ETUDE_SITE ETUDE_ADMITTED ETUDE_PREPARATION_CLEAN
-        cd "$tree" && git checkout -q -f --detach "$sha" &&
+        export TMPDIR="$tree/build/tmp"
+        cd "$tree" && git checkout -q -f --detach "$sha" && mkdir -p "$TMPDIR" &&
             make build/tools/etude/etude build/tools/etude/etude-volume &&
             cp build/tools/etude/etude build/tools/etude/etude-volume "$site/bin/" &&
             ETUDE_SITE=$site/etude-site "$site/bin/etude" run -N -t "$tree" -a both -A "$accel" \
