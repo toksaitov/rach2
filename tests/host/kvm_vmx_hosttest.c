@@ -432,13 +432,6 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
-/** A halted vCPU's wait: a signal ends it at once in the model. */
-int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
-{
-    (void)name;
-    return wq_wait_event(wq, cond, arg);
-}
-
 void wq_wake(wait_queue_t *wq, uint32_t kinds)
 {
     (void)wq;

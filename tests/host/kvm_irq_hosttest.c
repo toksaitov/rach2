@@ -28,15 +28,15 @@
  * between modes; KVM_GET_LAPIC and KVM_SET_LAPIC with the x2APIC id and
  * the timer's count; KVM_CAP_X2APIC_API's 32-bit ids, high MSI addresses
  * and broadcast quirk; KVM_INTERRUPT's ExtINT; the halted vCPU woken by an
- * interrupt, by its timer's tick, or ended by a signal; the split
- * controller's enable, the routes' refusals, a SINT
- * route raising Hyper-V's SynIC, KVM_IRQ_LINE_STATUS and the EOI exit of a
+ * interrupt, by its timer's tick, or ended by the signal-work flag alone;
+ * the split controller's enable, the routes' refusals, a SINT route raising
+ * Hyper-V's SynIC, KVM_IRQ_LINE_STATUS and the EOI exit of a
  * level-triggered I/O APIC route, marked by each vCPU's scan before entry
  * for the vCPU it targets and one with its vector in service, and for no
- * other; KVM_SIGNAL_MSI; irqfds raised by a write to
- * the eventfd, following a new route, refused twice or with RESAMPLE,
- * deassigned, raised at once by a counter already up, freed by the eventfd's
- * last close, by the VM's end and after a close that left the hangup to run;
+ * other; KVM_SIGNAL_MSI; irqfds raised by a write to the eventfd, following
+ * a new route, refused twice or with RESAMPLE, deassigned, raised at once
+ * by a counter already up, freed by the eventfd's last close, by the VM's
+ * end and after a close that left the hangup to run;
  * ioeventfds on ports and MMIO, with and without a data match, any length,
  * string OUTs, their refusals and collisions, a full bus, and deassign;
  * coalesced zones of MMIO and of ports, queued on the VM's ring until one
@@ -293,13 +293,29 @@ void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
     *c = leaf == 1 ? (1u << 24) : 0;
 }
 
-/* The waits: a signal ends a wait whose condition is false, or with
- * `sleep_to_tick` the wait sleeps to its tick first. */
-static int waits, sleep_to_tick, wakes_done;
+/* The waits: an eventfd's ends with -EINTR when its condition is false;
+ * a halted vCPU's is counted in `waits`, with `sleep_to_tick` sleeps to
+ * its tick first, and is counted in `endless` when nothing would end it. */
+static int waits, sleep_to_tick, wakes_done, endless;
 
+/** An eventfd's wait: its condition, or a signal. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
+    return cond(arg) ? 0 : -EINTR;
+}
+
+/**
+ * A halted vCPU's wait, as wait_queue.c's WQ_SIGFLAG: its condition ends it
+ * with 0, and the caller's signal-work flag, read with no lock, with
+ * -EINTR, as Linux's kvm_vcpu_check_block (virt/kvm/kvm_main.c:3729-3747).
+ * A wait that neither ends would sleep for ever: it is counted in
+ * `endless` and ends with -EINTR, so that a row sees it.
+ */
+int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    (void)wq;
+    (void)name;
     waits++;
     if (cond(arg)) {
         return 0;
@@ -310,14 +326,11 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
             return 0;
         }
     }
+    if (*(volatile uint32_t *)&current_proc->sig_woken) {
+        return -EINTR;
+    }
+    endless++;
     return -EINTR;
-}
-
-/** A halted vCPU's wait, as the model's `wq_wait_event`. */
-int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
-{
-    (void)name;
-    return wq_wait_event(wq, cond, arg);
 }
 
 void wq_wake(wait_queue_t *wq, uint32_t kinds)
@@ -764,9 +777,12 @@ static void init_rows(void)
     CHECK(apic_of(ap)->events == EV_INIT, "an INIT is left for the vCPU");
     init_resets = 0;
     waits = 0;
+    endless = 0;
     sleep_to_tick = 0;
-    CHECK(kvm_lapic_prepare(ap) == -EINTR && ap->run->exit_reason == KVM_EXIT_INTR,
+    caller.sig_woken = 1;
+    CHECK(kvm_lapic_prepare(ap) == -EINTR && ap->run->exit_reason == KVM_EXIT_INTR && endless == 0,
           "a vCPU waiting for SIPI blocks until a signal");
+    caller.sig_woken = 0;
     CHECK(init_resets == 1 && ap->mp_state == KVM_MP_STATE_INIT_RECEIVED && waits == 1,
           "the INIT resets an AP to wait for SIPI");
     CHECK(rd(ap, APIC_SPIV) == 0xFF && rd(ap, APIC_ID) == 1u << 24,
@@ -1016,8 +1032,15 @@ static void halt_rows(void)
     v->if_flag = 1;
     CHECK(kvm_lapic_halt(v) == 0 && v->mp_state == KVM_MP_STATE_HALTED, "HLT halts in the kernel");
     sleep_to_tick = 0;
-    CHECK(kvm_lapic_prepare(v) == -EINTR && v->mp_state == KVM_MP_STATE_HALTED,
-          "a signal ends the halted wait, the vCPU still halted");
+    waits = 0;
+    endless = 0;
+    CHECK(kvm_lapic_prepare(v) == -EINTR && endless == 1 && waits == 1,
+          "with the signal-work flag clear, nothing ends the halted wait");
+    caller.sig_woken = 1;
+    CHECK(kvm_lapic_prepare(v) == -EINTR && v->mp_state == KVM_MP_STATE_HALTED && endless == 1 &&
+              waits == 2,
+          "the flag, which a signal sets, ends the halted wait, the vCPU still halted");
+    caller.sig_woken = 0;
     signal(msi_addr(3, 0), msi_data(0x90, 0, 0));
     CHECK(kvm_lapic_prepare(v) == 0 && v->mp_state == KVM_MP_STATE_RUNNABLE,
           "an interrupt wakes it");
@@ -1027,7 +1050,10 @@ static void halt_rows(void)
     v->if_flag = 0;
     kvm_lapic_halt(v);
     signal(msi_addr(3, 0), msi_data(0x91, 0, 0));
-    CHECK(kvm_lapic_prepare(v) == -EINTR, "with IF clear an interrupt does not wake it");
+    caller.sig_woken = 1;
+    CHECK(kvm_lapic_prepare(v) == -EINTR && endless == 1,
+          "with IF clear an interrupt does not wake it");
+    caller.sig_woken = 0;
     v->if_flag = 1;
     clear_vectors();
     wr(v, APIC_LVTT, 0x400E8);
