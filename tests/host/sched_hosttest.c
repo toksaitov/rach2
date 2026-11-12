@@ -726,7 +726,8 @@ static void accounting(void)
  * which interrupts kept off in the kernel held back, where Linux would have
  * taken them: at a return to user mode as system time, and at an idle
  * wait's halt as system time, or as idle when the stretch that held them
- * began at the end of an earlier wait.
+ * began at the end of an earlier wait; a tick whose interrupt's delay would
+ * bring it after the return is not held.
  */
 static void accounting_held(void)
 {
@@ -741,6 +742,7 @@ static void accounting_held(void)
     cpu->user_cycles = 2u;
     cpu->idle_cycles = 3u;
     cpu->idle_end_cycles = 4u;
+    cpu->tick_late_ns = 0;
     clock_ns = 7000000000u;
     steal_clock_ns = 0;
     sched_account_start();
@@ -781,6 +783,13 @@ static void accounting_held(void)
     cpu->idle_wait = 0;
     CHECK(cpu->busy_ticks == busy + 6 && cpu->idle_ticks == idle + 2,
           "a halt after the end of an earlier wait charges the tick held there as idle");
+    clock_ns += TICK_NS;
+    cpu->tick_late_ns = (int64_t)(TICK_NS / 2u);
+    user_return_ns = (int64_t)(clock_ns - TICK_NS / 4u);
+    sched_account_tick(1, (int64_t)(clock_ns - TICK_NS / 2u));
+    CHECK(cpu->busy_ticks == busy + 7 && cpu->user_ticks == user + 4,
+          "a tick due before the return that its interrupt's delay brings after it is user time");
+    cpu->tick_late_ns = 0;
     user_return_ns = 0;
     user_entry_ns = 0;
     idle_start_ns = 0;
