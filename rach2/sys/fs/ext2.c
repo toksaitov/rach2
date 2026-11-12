@@ -8,7 +8,9 @@
 
 /* The kinds of ext2's locks, as `sleep_lock_records` lists them. */
 static struct sleep_lock_record node_record = SLEEP_LOCK_RECORD("ext2 node");
-static struct sleep_lock_record meta_record = SLEEP_LOCK_RECORD("ext2 meta");
+static struct sleep_lock_record batch_record = SLEEP_LOCK_RECORD("ext2 batch");
+static struct sleep_lock_record group_record = SLEEP_LOCK_RECORD("ext2 group");
+static struct sleep_lock_record super_record = SLEEP_LOCK_RECORD("ext2 super");
 
 /* The nodes every mount's hash has read in its searches, for /proc/stat. */
 static uint32_t node_visits;
@@ -260,12 +262,18 @@ struct ext2_mount *ext2_em_of(struct vfs_mount *mnt)
  * anything else uses the record. */
 static void em_locks_init(struct ext2_mount *em)
 {
-    sleep_lock_init(&em->meta, &meta_record, SLEEP_LOCK_FILE);
+    int i;
+
+    sleep_lock_init(&em->batch, &batch_record, SLEEP_LOCK_FILE);
+    for (i = 0; i < EXT2_GROUP_LOCKS; i++) {
+        sleep_lock_init(&em->group_locks[i], &group_record, SLEEP_LOCK_FILE);
+    }
+    sleep_lock_init(&em->super, &super_record, SLEEP_LOCK_FILE);
+    spin_lock_init(&em->count_lock, "ext2 counts");
     wait_queue_init(&em->node_wq);
     em->reap = 0;
     em->writers = 0;
     em->closing = 0;
-    em->planner = -1;
 }
 
 /** Whether the caller holds a node's lock or an allocator's, of any mount,
@@ -279,7 +287,7 @@ static int file_locks_held(void)
  * Take the lock of node `n`, which covers its attributes, its block map and
  * a directory's entries, sleeping while another process holds it; the
  * holder takes it again by depth. The caller holds `n`, and takes no node
- * lock after `em->meta` and none against the order at the top of the file.
+ * lock after `em->batch` and none against the order in ext2.Readme.md.
  */
 void ext2_node_lock(struct ext2_node *n)
 {
@@ -299,29 +307,176 @@ void ext2_assert_node_locked(const struct ext2_node *n)
 }
 
 /**
- * Take `em->meta`, which covers the batch, the bitmaps, the descriptors and
- * the free counts, sleeping while another process holds it; the holder
- * takes it again by depth. Taken after every node lock the caller needs,
+ * Take `em->batch`, which covers the file-write batch: its images' bytes,
+ * its stage, a piece's plan and commit and a drain. Sleeps while another
+ * process holds it; the holder takes it again by depth. Taken after every
+ * node lock the caller needs and before any group's lock or `em->super`,
  * and held across a disk wait only for one block evicted after its fetch,
  * or held by another's write PLAN_TRIES times over, or by a strict mount
  * for its ordered writes.
  */
-void ext2_meta_lock(struct ext2_mount *em)
+void ext2_batch_lock(struct ext2_mount *em)
 {
-    sleep_lock_take(&em->meta);
+    sleep_lock_take(&em->batch);
 }
 
-/** Give back one take of `em->meta`, as `ext2_meta_lock` took it. */
-void ext2_meta_unlock(struct ext2_mount *em)
+/** Give back one take of `em->batch`, as `ext2_batch_lock` took it. */
+void ext2_batch_unlock(struct ext2_mount *em)
 {
-    sleep_lock_give(&em->meta);
+    sleep_lock_give(&em->batch);
 }
 
-/** Panic unless the caller may change the allocator's state: it holds
- * `em->meta`. */
-void ext2_assert_meta_locked(struct ext2_mount *em)
+/** Panic unless the caller holds `em->batch`. */
+void ext2_assert_batch_locked(struct ext2_mount *em)
 {
-    sleep_lock_assert(&em->meta, "ext2: an allocation outside em->meta");
+    sleep_lock_assert(&em->batch, "ext2: a change of the batch outside em->batch");
+}
+
+/** The lock of group `g`, which it shares with the groups whose numbers have
+ * the same low bits. */
+static struct sleep_lock *group_lock_of(struct ext2_mount *em, uint32_t g)
+{
+    return &em->group_locks[g & (EXT2_GROUP_LOCKS - 1)];
+}
+
+/**
+ * Take the lock of group `g`, which covers its block and inode bitmaps and
+ * its descriptor in `em->gd`, sleeping while another process holds it; the
+ * holder takes it again by depth, as a group that hashes to a lock it holds
+ * does. A caller holds one group's lock at a time, but for a batch's plan,
+ * which holds `em->batch` too and tells the checker the second and later
+ * at subclasses (`writeback_reserve`). Taken after `em->batch` and before
+ * `em->super`.
+ */
+void ext2_group_lock(struct ext2_mount *em, uint32_t g)
+{
+    sleep_lock_take(group_lock_of(em, g));
+}
+
+/** Give back one take of group `g`'s lock, as `ext2_group_lock` took it. */
+void ext2_group_unlock(struct ext2_mount *em, uint32_t g)
+{
+    sleep_lock_give(group_lock_of(em, g));
+}
+
+/** Whether the caller holds group `g`'s lock. */
+int ext2_group_held(struct ext2_mount *em, uint32_t g)
+{
+    return sleep_lock_held(group_lock_of(em, g));
+}
+
+/** Panic unless the caller holds group `g`'s lock. */
+void ext2_assert_group_locked(struct ext2_mount *em, uint32_t g)
+{
+    sleep_lock_assert(group_lock_of(em, g), "ext2: a change of a group outside its lock");
+}
+
+/** Take `em->super`, which orders the writes of the superblock's counts,
+ * state and features, as Linux's `s_lock` does; the last of the locks that
+ * sleep. */
+void ext2_super_lock(struct ext2_mount *em)
+{
+    sleep_lock_take(&em->super);
+}
+
+/** Give back one take of `em->super`. */
+void ext2_super_unlock(struct ext2_mount *em)
+{
+    sleep_lock_give(&em->super);
+}
+
+/** Change the free block count by `delta` and, when `hint` is not 0, make it
+ * the allocation hint, under `em->count_lock`. The caller holds the lock of
+ * the group whose descriptor changed with the count. */
+void ext2_count_blocks(struct ext2_mount *em, int delta, uint32_t hint)
+{
+    uint32_t flags = spin_lock_irqsave(&em->count_lock);
+
+    em->free_blocks += (uint64_t)(int64_t)delta;
+    if (hint != 0) {
+        em->alloc_hint = hint;
+    }
+    spin_unlock_irqrestore(&em->count_lock, flags);
+}
+
+/** Change the free inode count by `delta`, under `em->count_lock`. */
+void ext2_count_inodes(struct ext2_mount *em, int delta)
+{
+    uint32_t flags = spin_lock_irqsave(&em->count_lock);
+
+    em->free_inodes += (uint64_t)(int64_t)delta;
+    spin_unlock_irqrestore(&em->count_lock, flags);
+}
+
+/** The free block count, read whole under `em->count_lock`: a hint for a
+ * caller without the lock of every group, as Linux's free counters are. */
+uint64_t ext2_free_blocks(struct ext2_mount *em)
+{
+    uint32_t flags = spin_lock_irqsave(&em->count_lock);
+    uint64_t v = em->free_blocks;
+
+    spin_unlock_irqrestore(&em->count_lock, flags);
+    return v;
+}
+
+/** The free inode count, read as `ext2_free_blocks` reads its own. */
+uint64_t ext2_free_inodes(struct ext2_mount *em)
+{
+    uint32_t flags = spin_lock_irqsave(&em->count_lock);
+    uint64_t v = em->free_inodes;
+
+    spin_unlock_irqrestore(&em->count_lock, flags);
+    return v;
+}
+
+/** The block after the last one given out, where a search starts. */
+uint32_t ext2_alloc_hint(struct ext2_mount *em)
+{
+    uint32_t flags = spin_lock_irqsave(&em->count_lock);
+    uint32_t v = em->alloc_hint;
+
+    spin_unlock_irqrestore(&em->count_lock, flags);
+    return v;
+}
+
+/** The generation of a new inode, each one once, as Linux takes
+ * `s_next_generation` under `s_next_gen_lock` (fs/ext2/ialloc.c). */
+uint32_t ext2_generation_next(struct ext2_mount *em)
+{
+    uint32_t flags = spin_lock_irqsave(&em->count_lock);
+    uint32_t v = em->next_generation++;
+
+    spin_unlock_irqrestore(&em->count_lock, flags);
+    return v;
+}
+
+/** Set the bits `set` and clear the bits `clear` of `s_state` in memory, in
+ * one step; returns the new state. The caller that writes it holds
+ * `em->super` (`sb_write`). */
+uint32_t ext2_state_change(struct ext2_mount *em, uint32_t set, uint32_t clear)
+{
+    uint32_t flags = spin_lock_irqsave(&em->count_lock);
+    uint32_t v;
+
+    em->state = (em->state | set) & ~clear;
+    v = em->state;
+    spin_unlock_irqrestore(&em->count_lock, flags);
+    return v;
+}
+
+/** Add the bits `bits` to the feature word `word`, `em->compat` or
+ * `em->ro_compat`, in one step; returns the new word. Bits are only ever
+ * added while mounted, so a write of an older value is overtaken by the
+ * write of the newer one that follows it. */
+uint32_t ext2_feature_add(struct ext2_mount *em, uint32_t *word, uint32_t bits)
+{
+    uint32_t flags = spin_lock_irqsave(&em->count_lock);
+    uint32_t v;
+
+    *word |= bits;
+    v = *word;
+    spin_unlock_irqrestore(&em->count_lock, flags);
+    return v;
 }
 
 /** The wait condition of `em_enter`: admission is open on the mount `arg`. */
@@ -476,15 +631,41 @@ static void em_open(struct ext2_mount *em)
     }
 }
 
-/** The thread ID that `em->planner` and the sleeping locks name the caller
- * by, 0 before the first process. */
-int ext2_plan_caller(void)
+/**
+ * Begin a plan on mount `em`, try `tries` of PLAN_TRIES: until
+ * `ext2_plan_end`, the caller's reads of a block the cache lacks or another
+ * holds answer -EAGAIN (`ext2_volume_get`), for it to fetch with its locks
+ * let go. The last try, and a caller with no process, reads as any caller
+ * does. The mark is the thread's (`fs_plan` in process.h), so that plans in
+ * two groups of one mount run at once.
+ */
+void ext2_plan_begin(struct ext2_mount *em, int tries)
 {
-    return current_proc ? (int)current_proc->pid : 0;
+    if (current_proc) {
+        current_proc->fs_plan = tries < PLAN_TRIES ? em : 0;
+        current_proc->fs_missed = 0;
+    }
+}
+
+/** End the caller's plan; returns the block its last -EAGAIN asked for. */
+uint32_t ext2_plan_end(struct ext2_mount *em)
+{
+    (void)em;
+    if (!current_proc) {
+        return 0;
+    }
+    current_proc->fs_plan = 0;
+    return current_proc->fs_missed;
+}
+
+/** Whether the caller plans on mount `em`. */
+static int planning(const struct ext2_mount *em)
+{
+    return current_proc && current_proc->fs_plan == em;
 }
 
 /** Whether the planner must give block `blk` back to fetch it with
- * `em->meta` let go: the cache lacks it, or another process holds it, a
+ * its locks let go: the cache lacks it, or another process holds it, a
  * sync or an fsync writing it among them, whose request the get would wait
  * out under the lock. */
 static int plan_lacks(struct ext2_mount *em, uint64_t blk)
@@ -494,17 +675,17 @@ static int plan_lacks(struct ext2_mount *em, uint64_t blk)
 
 /**
  * Cache block `blk` of the volume, held, as `bcache_get` gives it. While the
- * caller plans under `em->meta` (`em->planner`), a block the cache lacks or
- * another holds is not waited for: NULL with `*rc` -EAGAIN and the block in
- * `em->missed`, for the planner to fetch with the lock let go. NULL with
- * -EIO for a failed read.
+ * caller plans (`ext2_plan_begin`), a block the cache lacks or another holds
+ * is not waited for: NULL with `*rc` -EAGAIN and the block in the thread's
+ * `fs_missed`, for it to fetch with its locks let go. NULL with -EIO for a
+ * failed read.
  */
 struct bbuf *ext2_volume_get(struct ext2_mount *em, uint64_t blk, int *rc)
 {
     struct bbuf *b;
 
-    if (em->planner == ext2_plan_caller() && plan_lacks(em, blk)) {
-        em->missed = (uint32_t)blk;
+    if (planning(em) && plan_lacks(em, blk)) {
+        current_proc->fs_missed = (uint32_t)blk;
         *rc = -EAGAIN;
         return 0;
     }
@@ -514,15 +695,14 @@ struct bbuf *ext2_volume_get(struct ext2_mount *em, uint64_t blk, int *rc)
 }
 
 /** Whether a plan may go on to write a block it read none of: -EAGAIN with
- * cache block `blk` in `em->missed`, under a plan, when neither the cache nor
- * the batch has it or another process holds it in the cache, and 0
+ * cache block `blk` in the thread's `fs_missed`, under a plan, when neither the
+ * cache nor the batch has it or another process holds it in the cache, and 0
  * otherwise. */
 int ext2_plan_has(struct ext2_mount *em, uint32_t blk)
 {
-    if (em->planner == ext2_plan_caller() &&
-        ((!ext2_writeback_find(em, blk) && !bcache_cached(em->dev, blk)) ||
-         bcache_busy(em->dev, blk))) {
-        em->missed = blk;
+    if (planning(em) && ((!ext2_writeback_has(em, blk) && !bcache_cached(em->dev, blk)) ||
+                         bcache_busy(em->dev, blk))) {
+        current_proc->fs_missed = blk;
         return -EAGAIN;
     }
     return 0;
@@ -530,14 +710,14 @@ int ext2_plan_has(struct ext2_mount *em, uint32_t blk)
 
 /** Bring cache block `blk` into the cache when neither it nor the batch has
  * it, and wait until no other process holds it, sleeping on the disk; the
- * caller holds no buffer and not `em->meta`. A failed read is left for the
- * caller's own read to meet. */
+ * caller holds no buffer, no group's lock and not `em->batch`. A failed read is
+ * left for the caller's own read to meet. */
 void ext2_volume_fetch(struct ext2_mount *em, uint64_t blk)
 {
     struct bbuf *b;
 
     bcache_wait_unheld(em->dev, blk);
-    if (ext2_writeback_find(em, (uint32_t)blk) || bcache_cached(em->dev, blk)) {
+    if (ext2_writeback_has(em, (uint32_t)blk) || bcache_cached(em->dev, blk)) {
         return;
     }
     b = bcache_get(em->dev, blk);
@@ -563,15 +743,12 @@ int ext2_read_bytes(struct ext2_mount *em, uint64_t off, void *dst, uint32_t len
         uint32_t in = (uint32_t)off & (BCACHE_BLOCK_BYTES - 1);
         uint32_t take = BCACHE_BLOCK_BYTES - in;
         struct bbuf *b;
-        struct ext2_image *pending;
         int rc;
 
         if (take > len) {
             take = len;
         }
-        pending = ext2_writeback_find(em, (uint32_t)blk);
-        if (pending) {
-            k_memcpy(out, pending->data + in, take);
+        if (ext2_writeback_copy(em, (uint32_t)blk, in, out, take, 0)) {
             out += take;
             off += take;
             len -= take;
@@ -902,9 +1079,7 @@ static void node_free(struct ext2_mount *em, struct ext2_node *n)
         ext2_node_unlock(n);
         if (rc != 0) {
             klog(KLOG_WARN, "ext2", "inode %d: not freed at its last put", (int)n->ino);
-            ext2_meta_lock(em);
             ext2_mark_error(em);
-            ext2_meta_unlock(em);
         }
     }
     node_drop(em, n);
@@ -916,7 +1091,7 @@ static void node_free(struct ext2_mount *em, struct ext2_node *n)
  * as a writer without waiting, since a remount that is closing the mount
  * must see it and the caller may be a writer it waits for. A caller with no
  * file lock frees it now; any other leaves it on `em->reap`, since the free
- * takes node locks and `em->meta` out of order and waits on the disk.
+ * takes node locks and a group's lock out of order and waits on the disk.
  */
 static void node_final(struct ext2_mount *em, struct ext2_node *n)
 {
@@ -1220,10 +1395,10 @@ static int ext2_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     st->magic = EXT2_SUPER_MAGIC;
     st->bsize = em->block_size;
     st->blocks = em->blocks > overhead ? em->blocks - overhead : 0;
-    st->bfree = em->free_blocks;
+    st->bfree = ext2_free_blocks(em);
     st->reserved = em->r_blocks;
     st->files = em->inodes;
-    st->ffree = em->free_inodes;
+    st->ffree = ext2_free_inodes(em);
     st->namelen = EXT2_NAME_MAX;
     return 0;
 }
@@ -1297,7 +1472,7 @@ int ext2_em_write_out(struct vfs_mount *mnt)
 /**
  * The `sync` of `vfs_ops`: the batch drained, the final puts left on
  * `em->reap` done, and, on a writable mount, the superblock's free counts
- * and state left dirty under `em->meta`, then the device's dirty buffers
+ * and state left dirty under `em->super`, then the device's dirty buffers
  * written and the disk's cache flushed with no lock held (`ext2_em_write_out`).
  * The caller holds no file lock. Returns this sync's result, with a failure
  * recorded as the batch's error; the mount's first failure is what `fsync`
@@ -1312,9 +1487,7 @@ static int ext2_sync(struct vfs_mount *mnt)
     em_reap(em);
     if (rc == 0 && em->writable && !(mnt->flags & VFS_MS_RDONLY)) {
         ext2_volume_fetch(em, 0);
-        ext2_meta_lock(em);
         rc = sb_note(em);
-        ext2_meta_unlock(em);
     }
     return rc != 0 ? ext2_writeback_error(em, rc) : ext2_em_write_out(mnt);
 }
@@ -1324,7 +1497,7 @@ static int ext2_sync(struct vfs_mount *mnt)
  * `ext2_sync`, which leaves no final put undone, and then, on a writable
  * mount none of whose writes failed, the superblock's valid bit set again
  * when this mount cleared it and the error bit is clear, and the state
- * written to the medium under `em->meta`. 0, or -errno; a
+ * written to the medium under `em->super`. 0, or -errno; a
  * failed write of the state clears the valid bit again and is recorded as
  * the batch's error.
  */
@@ -1336,18 +1509,18 @@ static int ext2_prepare_unmount(struct vfs_mount *mnt)
     if (rc != 0 || !em->writable || (mnt->flags & VFS_MS_RDONLY) || mnt->write_error) {
         return rc;
     }
-    ext2_meta_lock(em);
+    ext2_super_lock(em);
     if (em->valid_cleared && !(em->state & EXT2_ERROR_FS)) {
-        em->state |= EXT2_VALID_FS;
+        (void)ext2_state_change(em, EXT2_VALID_FS, 0);
     }
     rc = ext2_sb_store(em);
     if (rc != 0) {
-        em->state &= ~EXT2_VALID_FS;
+        (void)ext2_state_change(em, 0, EXT2_VALID_FS);
         rc = ext2_writeback_error(em, rc);
     } else {
         em->valid_cleared = 0;
     }
-    ext2_meta_unlock(em);
+    ext2_super_unlock(em);
     return rc;
 }
 
@@ -1355,30 +1528,31 @@ static int ext2_prepare_unmount(struct vfs_mount *mnt)
  * The `abort_unmount` of `vfs_ops`: on a writable mount, the valid bit that
  * `ext2_prepare_unmount` set is cleared again in the superblock and the
  * device synced and flushed, since the unmount is not happening. A failure
- * is recorded as the batch's error. The state changes under `em->meta`,
- * and the sync and the flush run with no lock held.
+ * is recorded as the batch's error. The state is written under
+ * `em->super`, and the sync and the flush run with no lock held.
  */
 static void ext2_abort_unmount(struct vfs_mount *mnt)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
     struct bbuf *b;
+    uint32_t state;
     int rc = -EIO;
 
     if (!em->writable) {
         return;
     }
     ext2_volume_fetch(em, 0);
-    ext2_meta_lock(em);
-    em->state &= ~EXT2_VALID_FS;
+    ext2_super_lock(em);
+    state = ext2_state_change(em, 0, EXT2_VALID_FS);
     em->valid_cleared = 1;
     b = bcache_get(em->dev, 0);
     if (b) {
-        b->data[1024 + 58] = (uint8_t)em->state;
-        b->data[1024 + 59] = (uint8_t)(em->state >> 8);
+        b->data[1024 + 58] = (uint8_t)state;
+        b->data[1024 + 59] = (uint8_t)(state >> 8);
         bcache_dirty(b);
         bcache_release(b);
     }
-    ext2_meta_unlock(em);
+    ext2_super_unlock(em);
     if (b) {
         rc = bcache_sync(em->dev);
         if (rc == 0) {
@@ -1424,7 +1598,8 @@ static int remount_readonly(struct vfs_mount *mnt, struct ext2_mount *em)
  *
  * The check holds no lock: admission is closed (`em_close`) and the mount
  * is read-only, so no writer, allocation or free of an inode changes what
- * it reads. The state and the batch change under `em->meta`.
+ * it reads. The batch is set up under `em->batch`, and the state written
+ * under `em->super`.
  */
 static int remount_writable(struct ext2_mount *em)
 {
@@ -1441,18 +1616,18 @@ static int remount_writable(struct ext2_mount *em)
             rc = -EROFS;
         }
     }
-    ext2_meta_lock(em);
+    ext2_batch_lock(em);
     if (rc == 0 && !em->wb) {
         rc = ext2_writeback_init(em);
     } else if (rc == 0) {
-        em->state &= ~EXT2_VALID_FS;
+        (void)ext2_state_change(em, 0, EXT2_VALID_FS);
         rc = ext2_sb_store(em);
     }
     if (rc == 0) {
         em->valid_cleared = 1;
         em->writable = 1;
     }
-    ext2_meta_unlock(em);
+    ext2_batch_unlock(em);
     return rc;
 }
 
@@ -1486,11 +1661,11 @@ static int ext2_remount(struct vfs_mount *mnt, uint32_t flags, const char *optio
  * volume once its valid bit is written.
  *
  * At the deadline nothing more is done and -EBUSY returned: a writer still
- * inside may hold `em->meta`, a node lock or a buffer, and waits on a disk
- * that may never answer, so a sync could wait for ever. The valid bit stays
- * clear on the medium, where a writable mount put it, and the next mount
- * checks the volume. A removed file still open, whose inode only its last
- * put frees, is -EBUSY too, after a sync: marked valid, the volume would
+ * inside may hold a node lock, `em->batch`, a group's lock or a buffer, and
+ * waits on a disk that may never answer, so a sync could wait for ever. The
+ * valid bit stays clear on the medium, where a writable mount put it, and the
+ * next mount checks the volume. A removed file still open, whose inode only its
+ * last put frees, is -EBUSY too, after a sync: marked valid, the volume would
  * keep that inode for good.
  */
 static int ext2_shutdown(struct vfs_mount *mnt, uint64_t deadline)
@@ -1769,7 +1944,6 @@ int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const 
         uint64_t blk = off >> BCACHE_BLOCK_SHIFT;
         uint32_t at = (uint32_t)off & (BCACHE_BLOCK_BYTES - 1);
         uint32_t take = BCACHE_BLOCK_BYTES - at;
-        struct ext2_image *pending;
         struct bbuf *b;
         int rc = 0;
 
@@ -1790,10 +1964,7 @@ int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const 
         } else {
             k_memset(b->data + at, 0, take);
         }
-        pending = ext2_writeback_find(em, (uint32_t)blk);
-        if (pending) {
-            k_memcpy(pending->data + at, b->data + at, take);
-        }
+        (void)ext2_writeback_copy(em, (uint32_t)blk, at, b->data + at, take, 1);
         if (sync == WRITE_DURABLE || (sync == WRITE_THROUGH && ext2_em_strict(em))) {
             rc = bcache_write(b);
         } else if (sync == WRITE_UNFLUSHED && ext2_em_strict(em)) {
@@ -1869,10 +2040,13 @@ uint64_t ext2_inode_offset(const struct ext2_mount *em, uint32_t ino)
 static int large_file_flag(struct ext2_mount *em)
 {
     uint8_t raw[4];
+    int rc;
 
-    em->ro_compat |= EXT2_RO_LARGE_FILE;
-    LE32_PUT(raw, em->ro_compat);
-    return ext2_write_bytes(em, 1024 + 100, raw, 4, 1);
+    ext2_super_lock(em);
+    LE32_PUT(raw, ext2_feature_add(em, &em->ro_compat, EXT2_RO_LARGE_FILE));
+    rc = ext2_write_bytes(em, 1024 + 100, raw, 4, 1);
+    ext2_super_unlock(em);
+    return rc;
 }
 
 /**
@@ -2021,7 +2195,7 @@ void ext2_mark_error(struct ext2_mount *em)
     if (big) {
         bkl_enter();
     }
-    em->state |= EXT2_ERROR_FS;
+    (void)ext2_state_change(em, EXT2_ERROR_FS, 0);
     if (em->wb && em->wb->count) {
         (void)ext2_writeback_error(em, -EIO);
     } else if (em->writable) {
@@ -2033,20 +2207,27 @@ void ext2_mark_error(struct ext2_mount *em)
 }
 
 /** Write the superblock's free counts and its state as `ext2_write_bytes` does
- * with `sync`; 0, or -errno. */
+ * with `sync`, under `em->super`, read in one step under `em->count_lock`
+ * after it is taken, so that the last write carries the latest values; 0, or
+ * -errno. */
 static int sb_write(struct ext2_mount *em, int sync)
 {
-    uint8_t raw[8];
+    uint8_t raw[8], state[2];
+    uint32_t flags;
     int rc;
 
+    ext2_super_lock(em);
+    flags = spin_lock_irqsave(&em->count_lock);
     LE32_PUT(raw, (uint32_t)em->free_blocks);
     LE32_PUT(raw + 4, (uint32_t)em->free_inodes);
+    LE16_PUT(state, em->state);
+    spin_unlock_irqrestore(&em->count_lock, flags);
     rc = ext2_write_bytes(em, 1024 + 12, raw, 8, sync);
-    if (rc != 0) {
-        return rc;
+    if (rc == 0) {
+        rc = ext2_write_bytes(em, 1024 + 58, state, 2, sync);
     }
-    LE16_PUT(raw, em->state);
-    return ext2_write_bytes(em, 1024 + 58, raw, 2, sync);
+    ext2_super_unlock(em);
+    return rc;
 }
 
 /** Write the superblock's free counts and its state to the medium, on any
@@ -2083,14 +2264,14 @@ uint32_t ext2_pointer_levels(const struct ext2_mount *em, uint32_t index)
 }
 
 /** Bring byte offset `at` of the volume's block into the cache with no lock
- * held, for a caller that reads it under `em->meta`; a failure is left to
+ * held, for a caller that reads it under a group's lock; a failure is left to
  * that read. */
 void ext2_block_fetch(struct ext2_mount *em, uint64_t at)
 {
     ext2_volume_fetch(em, at >> BCACHE_BLOCK_SHIFT);
 }
 
-/** Fetch what freeing the inode of `n` reads under `em->meta`: its inode
+/** Fetch what freeing the inode of `n` reads under its groups' locks: its inode
  * bitmap and its group's descriptor, and its attribute block with that
  * block's bitmap. */
 static void inode_blocks_fetch(struct ext2_mount *em, const struct ext2_node *n)
@@ -2111,9 +2292,9 @@ static void inode_blocks_fetch(struct ext2_mount *em, const struct ext2_node *n)
  * file, a directory or a long symbolic link from the end (`ext2_punch`), then
  * the inode written zeroed with its deletion time, then its reference to
  * its extended-attribute block (`ext2_attr_release`), then its bit and counts,
- * these two under `em->meta` with the blocks they read fetched first, so
- * that the lock waits on the disk only for a block evicted again. The node's
- * `unlinked` mark is cleared. 0, or -errno.
+ * these two under their groups' locks with the blocks they read fetched
+ * first, so that a lock waits on the disk only for a block evicted again.
+ * The node's `unlinked` mark is cleared. 0, or -errno.
  */
 int ext2_release_inode(struct ext2_mount *em, struct ext2_node *n)
 {
@@ -2138,7 +2319,6 @@ int ext2_release_inode(struct ext2_mount *em, struct ext2_node *n)
         return rc;
     }
     inode_blocks_fetch(em, n);
-    ext2_meta_lock(em);
     if (n->file_acl != 0) {
         rc = ext2_attr_release(em, n->ino, n->file_acl);
     }
@@ -2146,7 +2326,6 @@ int ext2_release_inode(struct ext2_mount *em, struct ext2_node *n)
         n->unlinked = 0;
         rc = ext2_inode_bit_free(em, n->ino, was_dir);
     }
-    ext2_meta_unlock(em);
     return rc;
 }
 
@@ -2608,14 +2787,14 @@ static int attr_read(struct ext2_mount *em, struct ext2_node *n, uint8_t **out)
 }
 
 /** Enable external attributes, promoting a revision-zero superblock first.
- * The allocator lock serialises the feature write; a stop after promotion
+ * `em->super` serialises the feature write; a stop after promotion
  * still has a valid dynamic revision with no attribute inode yet. */
 static int attr_feature(struct ext2_mount *em)
 {
     uint8_t raw[16], feature[4];
     int rc;
 
-    ext2_meta_lock(em);
+    ext2_super_lock(em);
     rc = ext2_read_bytes(em, 1024 + 76, raw, sizeof(raw));
     if (!rc && ext2_le32(raw) == 0) {
         LE32_PUT(raw, 1);
@@ -2624,11 +2803,11 @@ static int attr_feature(struct ext2_mount *em)
         rc = ext2_write_bytes(em, 1024 + 76, raw, sizeof(raw), WRITE_DURABLE);
     }
     if (!rc && !(em->compat & 8u)) {
-        em->compat |= 8u; /* EXT2_FEATURE_COMPAT_EXT_ATTR precedes i_file_acl. */
-        LE32_PUT(feature, em->compat);
+        /* EXT2_FEATURE_COMPAT_EXT_ATTR precedes i_file_acl. */
+        LE32_PUT(feature, ext2_feature_add(em, &em->compat, 8u));
         rc = ext2_write_bytes(em, 1024 + 92, feature, 4, WRITE_DURABLE);
     }
-    ext2_meta_unlock(em);
+    ext2_super_unlock(em);
     return rc;
 }
 
@@ -2692,11 +2871,9 @@ static int attr_replace(struct vfs_mount *mnt, struct ext2_node *n, const uint8_
         uint32_t g = (old - em->first_data) / em->bpg;
         ext2_group_fetch(em, old);
         ext2_block_fetch(em, (uint64_t)old * em->block_size);
-        ext2_meta_lock(em);
         rc = ext2_attr_release(em, n->ino, old);
         ext2_node_share(n, ext2_le32(em->gd + g * 32));
         ext2_node_share(n, em->first_data + 1 + (g * 32) / em->block_size);
-        ext2_meta_unlock(em);
     }
     if (!rc)
         rc = ext2_em_write_out(mnt);

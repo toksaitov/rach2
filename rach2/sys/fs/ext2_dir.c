@@ -953,15 +953,16 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
     {
         uint32_t index = (uint32_t)(d->size >> em->block_shift);
         uint32_t b;
-        uint64_t off;
+        uint64_t off, free;
         uint8_t head[8];
 
         if (d->size + em->block_size > 0xFFFFFFFFu) {
             return -EFBIG;
         }
-        if (1 + ext2_pointer_levels(em, index) > em->free_blocks ||
+        free = ext2_free_blocks(em);
+        if (1 + ext2_pointer_levels(em, index) > free ||
             (!ext2_may_use_reserved() &&
-             em->free_blocks - (1 + ext2_pointer_levels(em, index)) < em->r_blocks)) {
+             free - (1 + ext2_pointer_levels(em, index)) < em->r_blocks)) {
             return -ENOSPC;
         }
         rc = ext2_map_alloc(em, d, index, &b, &fresh);
@@ -1150,15 +1151,15 @@ static int is_below(struct ext2_mount *em, uint32_t ino, uint32_t ancestor, int 
  * written zeroed, for a caller that stores the inode once it has the rest.
  * Either way the slot's old bytes are gone, since a freed inode's slot
  * keeps what it had and the encoder writes only the fields this driver
- * keeps. The node is made before `em->meta`, whose holder should not wait
- * on the heap, and is published N_LOADING under it, so that no gap lets
- * another caller see the number with no node; it goes N_LIVE once written.
- * The parent's group's inode bitmap and descriptor are fetched before
- * `em->meta`, and a search that meets another group's that the cache lacks,
- * or a block another process holds, lets the lock go, fetches it or waits
- * for it and starts again, PLAN_TRIES times before it
- * reads under the lock, so that the holder waits on the disk only for a
- * block evicted again.
+ * keeps. The node is made before a group's lock, whose holder should not
+ * wait on the heap, and is published N_LOADING under it, so that no gap
+ * lets another caller see the number with no node; it goes N_LIVE once
+ * written. The parent's group's inode bitmap and descriptor are fetched
+ * before the lock, and a search that meets another group's that the cache
+ * lacks, or a block another process holds, lets the lock go, fetches it or
+ * waits for it and starts again, PLAN_TRIES times before it reads under
+ * the lock, so that the holder waits on the disk only for a block evicted
+ * again.
  * The caller locks the new inode at subclass 4, below the published nodes
  * the VFS holds, until it has a directory entry.
  * 0, -ENOSPC, -ENOMEM, or -errno; a failure frees the inode.
@@ -1180,12 +1181,9 @@ static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_
                              em->block_size);
     ext2_gd_fetch(em, (parent_ino - 1) / em->ipg);
     for (tries = 0;; tries++) {
-        ext2_meta_lock(em);
-        em->planner = tries < PLAN_TRIES ? ext2_plan_caller() : -1;
+        ext2_plan_begin(em, tries);
         rc = ext2_inode_alloc(em, parent_ino, is_dir, n);
-        em->planner = -1;
-        missed = em->missed;
-        ext2_meta_unlock(em);
+        missed = ext2_plan_end(em);
         if (rc != -EAGAIN) {
             break;
         }
@@ -1214,14 +1212,12 @@ static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_
     if (ext2_extra_has(n, EXT2_CRTIME + 4)) {
         n->crtime = ext2_time_fit(n, EXT2_CRTIME_EXTRA + 4, n->ctime.sec, n->ctime.nsec);
     }
-    n->generation = em->next_generation++;
+    n->generation = ext2_generation_next(em);
     rc = store ? ext2_inode_write(em, n, 1, WRITE_THROUGH)
                : ext2_write_bytes(em, ext2_inode_offset(em, n->ino), 0, em->inode_size,
                                   WRITE_THROUGH);
     if (rc != 0) {
-        ext2_meta_lock(em);
         ext2_inode_bit_free(em, n->ino, is_dir);
-        ext2_meta_unlock(em);
         ext2_node_settle(em, n, rc);
         return rc;
     }

@@ -3,26 +3,18 @@
  * the records of a mount, a node and the write batch, and the functions one
  * file calls in another.
  *
- * The locks, from the outermost:
- *
- *   lock         scope      covers                          waits on the disk
- *   rename       mount      the ancestry of a directory's   for the walk up
- *                           move to another parent          `..` alone
- *   node lock    one inode  its attributes, block map and   for that file's
- *                           a directory's entries           own requests
- *   em->meta     mount      the batch, bitmaps,             for one request,
- *                           descriptors and free counts     of a block evicted
- *                                                           after its fetch
- *   buffer       one block  the cache's rules (bcache.h)    for one request
- *
- * They are taken in that order: the rename lock, then directories, then
- * other inodes, then `em->meta`, then buffers. The rename lock is the
- * mount's (`vfs_mount.rename`), which the VFS takes for a rename between
- * two directories before it orders and locks them (`vfs_rename_lock`), so
+ * The locks, their order and what each covers are in ext2.Readme.md's
+ * Locks section; in short, from the outermost: the mount's rename lock,
+ * then directories' node locks, then other nodes', then `em->batch`, then
+ * the groups' locks, then `em->super`, then buffers, then the spinlocks
+ * `em->count_lock` and a batch's `wb->lock`. The rename lock is the mount's
+ * (`vfs_mount.rename`), which the VFS takes for a rename between two
+ * directories before it orders and locks them (`vfs_rename_lock`), so
  * `ext2_rename` and `is_below` run with it held. Related directories go
  * ancestor first; unrelated ones, and every inode after the directories,
- * go by inode number. A strict mount holds `em->meta` across its ordered
- * writes, as `sync` asks.
+ * go by inode number. A strict mount holds `em->batch` across a drain's
+ * ordered writes, and a group's lock across the writes through of its
+ * bitmap and descriptor, as `sync` asks.
  *
  * The VFS takes a directory's lock around a change of its entries and a
  * file's around a write, a truncation and a change of attributes, and the
@@ -34,8 +26,8 @@
  * present is brought in with the locks let go, or, when the caller holds a
  * file lock of its own, ends the call short (`user_refault`).
  *
- * The big lock covers the node table, the batch and the writers' steps
- * between their sleeps. A reader may run without it: `read`, `readdir`,
+ * The big lock covers the node table, the cache's writes and the writers'
+ * steps between their sleeps. A reader may run without it: `read`, `readdir`,
  * `getattr`, `open`, `release`, `hold` and `put` of a node the caller
  * holds, into kernel buffers (the type sets `reads_unlocked`). Such a
  * reader holds its node's lock, which every writer of the node's blocks
@@ -44,11 +36,12 @@
  * takes it for the steps that write: an error's mark, a drain, a final put and
  * a reap.
  *
- * The node lock and `em->meta` count in their holder's `file_locks`
- * (process.h), so that reclaim under either does not enter a file system.
- * The type record sets `file_locked` and leaves `ns_serialised` clear, so
- * the mount's namespace lock covers nothing here: a slow request on one
- * file holds up only the callers that need that file's lock.
+ * The node locks, `em->batch`, the groups' locks and `em->super` count in
+ * their holder's `file_locks` (process.h), so that reclaim under any of them
+ * does not enter a file system. The type record sets `file_locked` and leaves
+ * `ns_serialised` clear, so the mount's namespace lock covers nothing here: a
+ * slow request on one file holds up only the callers that need that file's
+ * lock.
  */
 
 #ifndef _EXT2_INTERNAL_H_
@@ -294,11 +287,20 @@ struct ext2_writeback {
     int datas, metas, count;
     uint32_t bytes;
     int stage, error;
+    /* Kept by `em->batch` and this spinlock together: `datas`, `metas`,
+     * `count`, `nodes` and each image's `block` and `stage`; a holder of
+     * either may read them. */
+    struct spinlock lock;
 };
 
 /* The directories whose last lookup a mount remembers, enough for the walk
  * of a path eight directories deep. */
 #define EXT2_LOOKUP_HINTS 8
+
+/* The groups' locks a mount has, which the group numbers hash to by their
+ * low bits, as Linux's `bgl_lock_ptr` hashes them to NR_BG_LOCKS; a power
+ * of two. */
+#define EXT2_GROUP_LOCKS 64
 
 /* The buckets of a mount's hash of its nodes before it has more nodes than
  * that, which the mount's record holds; a power of two. */
@@ -331,11 +333,6 @@ struct ext2_mount {
     const char *readonly_why;
     /* The file-write batch, set up when the mount becomes writable. */
     struct ext2_writeback *wb;
-    /* The thread ID of the process planning under `em->meta`, or -1: its
-     * read of a block the cache lacks fails with -EAGAIN and leaves the
-     * block in `missed`, for it to fetch with the lock let go. */
-    int planner;
-    uint32_t missed;
     uint32_t alloc_hint;     /* the block after the last one given out */
     uint8_t *gd;             /* the group descriptors, `groups * 32` bytes, from the heap */
     struct ext2_node *nodes; /* the nodes in memory, from the heap, linked both ways */
@@ -357,9 +354,18 @@ struct ext2_mount {
         uint32_t dir, block;
     } lookup_hint[EXT2_LOOKUP_HINTS];
     int lookup_next;
-    /* The allocator's lock (`ext2_meta_lock`), as the comment at the top of the
-     * file says. */
-    struct sleep_lock meta;
+    /* The locks ext2.Readme.md's Locks section lists: the batch's
+     * (`ext2_batch_lock`), the groups', which group `g` takes at
+     * `g % EXT2_GROUP_LOCKS` (`ext2_group_lock`), and the superblock's
+     * (`ext2_super_lock`). */
+    struct sleep_lock batch;
+    struct sleep_lock group_locks[EXT2_GROUP_LOCKS];
+    struct sleep_lock super;
+    /* Keeps `free_blocks`, `free_inodes`, `alloc_hint`, `next_generation`,
+     * `state`, `compat` and `ro_compat` (`ext2_count_blocks` and the
+     * functions beside it). A 32-bit one of them may be read alone as a
+     * single word, which is current at some moment of the read. */
+    struct spinlock count_lock;
     /* Where a caller sleeps for a node that is loading or dying, and a
      * writer for admission while `closing` is set. */
     wait_queue_t node_wq;
@@ -381,7 +387,7 @@ struct ext2_mount {
 /* ---- bytes off the volume, through the cache ---- */
 
 /* The plans of one piece or allocation that may meet a block the cache
- * lacks and start again; the next reads it under `em->meta`. */
+ * lacks and start again; the next reads it under its locks. */
 #define PLAN_TRIES 8
 
 /* ---- the writer ---- */
@@ -453,10 +459,25 @@ struct ext2_mount *ext2_em_of(struct vfs_mount *mnt);
 void ext2_node_lock(struct ext2_node *n);
 void ext2_node_unlock(struct ext2_node *n);
 void ext2_assert_node_locked(const struct ext2_node *n);
-void ext2_meta_lock(struct ext2_mount *em);
-void ext2_meta_unlock(struct ext2_mount *em);
-void ext2_assert_meta_locked(struct ext2_mount *em);
-int ext2_plan_caller(void);
+void ext2_batch_lock(struct ext2_mount *em);
+void ext2_batch_unlock(struct ext2_mount *em);
+void ext2_assert_batch_locked(struct ext2_mount *em);
+void ext2_group_lock(struct ext2_mount *em, uint32_t g);
+void ext2_group_unlock(struct ext2_mount *em, uint32_t g);
+int ext2_group_held(struct ext2_mount *em, uint32_t g);
+void ext2_assert_group_locked(struct ext2_mount *em, uint32_t g);
+void ext2_super_lock(struct ext2_mount *em);
+void ext2_super_unlock(struct ext2_mount *em);
+void ext2_count_blocks(struct ext2_mount *em, int delta, uint32_t hint);
+void ext2_count_inodes(struct ext2_mount *em, int delta);
+uint64_t ext2_free_blocks(struct ext2_mount *em);
+uint64_t ext2_free_inodes(struct ext2_mount *em);
+uint32_t ext2_alloc_hint(struct ext2_mount *em);
+uint32_t ext2_generation_next(struct ext2_mount *em);
+uint32_t ext2_state_change(struct ext2_mount *em, uint32_t set, uint32_t clear);
+uint32_t ext2_feature_add(struct ext2_mount *em, uint32_t *word, uint32_t bits);
+void ext2_plan_begin(struct ext2_mount *em, int tries);
+uint32_t ext2_plan_end(struct ext2_mount *em);
 struct bbuf *ext2_volume_get(struct ext2_mount *em, uint64_t blk, int *rc);
 int ext2_plan_has(struct ext2_mount *em, uint32_t blk);
 void ext2_volume_fetch(struct ext2_mount *em, uint64_t blk);
@@ -516,7 +537,9 @@ void ext2_gd_fetch(struct ext2_mount *em, uint32_t g);
 
 /* ext2_batch.c */
 void ext2_writeback_free(struct ext2_writeback *wb);
-struct ext2_image *ext2_writeback_find(struct ext2_mount *em, uint32_t block);
+int ext2_writeback_has(struct ext2_mount *em, uint32_t block);
+int ext2_writeback_copy(struct ext2_mount *em, uint32_t block, uint32_t at, void *buf, uint32_t len,
+                        int into);
 int ext2_batch_busy(const struct ext2_mount *em);
 int ext2_batch_guard(struct ext2_mount *em);
 int ext2_writeback_holds(const struct ext2_mount *em, const struct ext2_node *n);

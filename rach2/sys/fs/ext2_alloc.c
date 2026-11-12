@@ -6,11 +6,14 @@
 #include "ext2_internal.h"
 
 /** Write the primary descriptor of group `g` in the way `how` says; the
- * backup tables are not written. 0, or -errno. */
+ * backup tables are not written. The caller holds the group's lock, so that
+ * no other change of its 32 bytes comes between their copy and their
+ * write. 0, or -errno. */
 static int gd_write(struct ext2_mount *em, uint32_t g, int how)
 {
     uint64_t at = (uint64_t)(em->first_data + 1) * em->block_size + (uint64_t)g * 32;
 
+    ext2_assert_group_locked(em, g);
     return ext2_write_bytes(em, at, em->gd + g * 32, 32, how);
 }
 
@@ -73,8 +76,9 @@ int ext2_bit_first_clear(struct ext2_mount *em, uint32_t bitmap_block, uint32_t 
 }
 
 /** Set bit `index` of the bitmap in block `bitmap_block` to `value`, written
- * in the way `how` says; 0, or -errno. The caller holds `em->meta`, so that
- * no other change of the byte comes between its read and its write. */
+ * in the way `how` says; 0, or -errno. The caller holds the lock of the
+ * bitmap's group, so that no other change of the byte comes between its
+ * read and its write. */
 static int bit_write(struct ext2_mount *em, uint32_t bitmap_block, uint32_t index, int value,
                      int how)
 {
@@ -107,23 +111,65 @@ int ext2_may_use_reserved(void)
 }
 
 /**
+ * Take the first free block of group `g` at or after bit `from` and before
+ * bit `count` of its bitmap in block `bitmap`, into `*bit`: the bit set, the
+ * group's count lowered and written, and the free count lowered with the
+ * hint after it. -ENOSPC when the group has none, or -errno. The caller
+ * holds the group's lock.
+ */
+static int group_take_block(struct ext2_mount *em, uint32_t g, uint32_t bitmap, uint32_t from,
+                            uint32_t count, uint32_t *bit)
+{
+    uint8_t *gd = em->gd + g * 32;
+    uint32_t i;
+    int rc;
+
+    if (ext2_le16(gd + 12) == 0) {
+        return -ENOSPC;
+    }
+    rc = ext2_bit_first_clear(em, bitmap, from, count, &i);
+    if (rc != 0) {
+        return rc;
+    }
+    if (i >= count) {
+        return -ENOSPC;
+    }
+    rc = bit_put(em, bitmap, i, 1);
+    if (rc != 0) {
+        return rc;
+    }
+    LE16_PUT(gd + 12, ext2_le16(gd + 12) - 1);
+    rc = ext2_gd_store(em, g);
+    if (rc != 0) {
+        return rc;
+    }
+    ext2_count_blocks(em, -1, em->first_data + g * em->bpg + i + 1);
+    *bit = i;
+    return 0;
+}
+
+/**
  * Allocate one block into `*out`, first-fit from `hint`: every group from
  * the hint's on, wrapping, and last the part of the hint's group before the
  * hint. The bit is set and the group's count lowered before the block is
  * returned, so that no pointer ever names a free block, and the block after
  * it becomes the mount's hint. 0, -ENOSPC when none is free or only the
- * reserved blocks are and the caller is not privileged, or -errno. The
- * caller holds `em->meta`. Under a plan (`ext2_volume_get`) a bitmap the cache
- * lacks is -EAGAIN, met before the first change, since every read of the
- * search and of the chosen bit's byte comes before its write.
+ * reserved blocks are and the caller is not privileged, or -errno. Each
+ * group is searched and changed under its lock, one at a time, as Linux's
+ * `ext2_new_blocks` sets a bit under `sb_bgl_lock`; the free count read
+ * first is a hint, as Linux's counter is. Under a plan (`ext2_volume_get`) a
+ * bitmap the cache lacks is -EAGAIN, met before the first change, since
+ * every read of the search and of the chosen bit's byte comes before its
+ * write. The caller holds no group's lock.
  */
 static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
 {
     uint32_t g0, g, tried;
     uint32_t start_in;
+    uint64_t free;
 
-    ext2_assert_meta_locked(em);
-    if (em->free_blocks == 0 || (!ext2_may_use_reserved() && em->free_blocks <= em->r_blocks)) {
+    free = ext2_free_blocks(em);
+    if (free == 0 || (!ext2_may_use_reserved() && free <= em->r_blocks)) {
         return -ENOSPC;
     }
     if (hint < em->first_data || hint >= em->blocks) {
@@ -148,40 +194,30 @@ static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
         if (ext2_le16(gd + 12) == 0) {
             continue;
         }
-        rc = ext2_bit_first_clear(em, bitmap, from, count, &i);
-        if (rc != 0) {
+        ext2_group_lock(em, g);
+        rc = group_take_block(em, g, bitmap, from, count, &i);
+        ext2_group_unlock(em, g);
+        if (rc == 0) {
+            *out = base + i;
+            return 0;
+        }
+        if (rc != -ENOSPC) {
             return rc;
         }
-        if (i >= count) {
-            continue;
-        }
-        rc = bit_put(em, bitmap, i, 1);
-        if (rc != 0) {
-            return rc;
-        }
-        LE16_PUT(gd + 12, ext2_le16(gd + 12) - 1);
-        rc = ext2_gd_store(em, g);
-        if (rc != 0) {
-            return rc;
-        }
-        em->free_blocks--;
-        em->alloc_hint = base + i + 1;
-        *out = base + i;
-        return 0;
     }
     return -ENOSPC;
 }
 
 /** Free block `b`: its bit cleared and its group's count raised, as
  * `bit_put` and `ext2_gd_store` write them. 0, -EIO with a record for a block
- * that may not hold data, or -errno. The caller holds `em->meta`. */
+ * that may not hold data, or -errno, under the group's lock, which the
+ * caller may hold already. */
 static int block_free(struct ext2_mount *em, uint32_t b)
 {
     uint32_t g, i;
     uint8_t *gd;
     int rc;
 
-    ext2_assert_meta_locked(em);
     if (!ext2_data_block_ok(em, b)) {
         klog(KLOG_WARN, "ext2", "free of block %d, which is out of range", (int)b);
         return -EIO;
@@ -189,16 +225,73 @@ static int block_free(struct ext2_mount *em, uint32_t b)
     g = (b - em->first_data) / em->bpg;
     i = (b - em->first_data) % em->bpg;
     gd = em->gd + g * 32;
+    ext2_group_lock(em, g);
     rc = bit_put(em, ext2_le32(gd + 0), i, 0);
+    if (rc == 0) {
+        LE16_PUT(gd + 12, ext2_le16(gd + 12) + 1);
+        rc = ext2_gd_store(em, g);
+    }
+    if (rc == 0) {
+        ext2_count_blocks(em, 1, 0);
+    }
+    ext2_group_unlock(em, g);
+    return rc;
+}
+
+/**
+ * Take a free inode of group `g` for `n`, as `ext2_inode_alloc` says: the
+ * first whose bit is clear at or after `s_first_ino` and that the hash does
+ * not hold. -ENOSPC when the group has none, -EAGAIN under a plan, or
+ * -errno. The caller holds the group's lock.
+ */
+static int group_take_inode(struct ext2_mount *em, uint32_t g, int is_dir, struct ext2_node *n)
+{
+    uint8_t *gd = em->gd + g * 32;
+    uint32_t base = g * em->ipg, from = 0, limit = em->ipg, i;
+    int rc;
+
+    if (ext2_le16(gd + 14) == 0) {
+        return -ENOSPC;
+    }
+    if (base + 1 < em->first_ino) {
+        from = em->first_ino - 1 - base;
+    }
+    if (em->inodes - base < limit) {
+        limit = em->inodes - base;
+    }
+    for (;;) {
+        rc = ext2_bit_first_clear(em, ext2_le32(gd + 4), from, limit, &i);
+        if (rc != 0) {
+            return rc;
+        }
+        if (i >= limit || !ext2_node_find(em, base + i + 1)) {
+            break;
+        }
+        from = i + 1;
+    }
+    if (i >= limit) {
+        return -ENOSPC;
+    }
+    rc = ext2_plan_has(em, gd_cache_block(em, g));
     if (rc != 0) {
         return rc;
     }
-    LE16_PUT(gd + 12, ext2_le16(gd + 12) + 1);
+    (void)ext2_plan_end(em);
+    ext2_node_publish(em, n, base + i + 1);
+    ext2_node_share_group(em, n, g, 4);
+    rc = bit_write(em, ext2_le32(gd + 4), i, 1, WRITE_UNFLUSHED);
+    if (rc != 0) {
+        return rc;
+    }
+    LE16_PUT(gd + 14, ext2_le16(gd + 14) - 1);
+    if (is_dir) {
+        LE16_PUT(gd + 16, ext2_le16(gd + 16) + 1);
+    }
     rc = ext2_gd_store(em, g);
     if (rc != 0) {
         return rc;
     }
-    em->free_blocks++;
+    ext2_count_inodes(em, -1);
     return 0;
 }
 
@@ -216,74 +309,39 @@ static int block_free(struct ext2_mount *em, uint32_t b)
  * is written. Under a plan (`ext2_volume_get`) a bitmap or descriptor block the
  * cache lacks is -EAGAIN, met before `n` is published and anything changes;
  * from there the plan is over, so a block evicted meanwhile is read under
- * the lock. 0, -ENOSPC, or -errno, with `n->ino` nonzero when `n` was
- * published. The caller holds `em->meta`.
+ * the locks. Each group is searched and changed under its lock, one at a
+ * time, as Linux's `ext2_new_inode` sets the bit under `sb_bgl_lock`. 0,
+ * -ENOSPC, or -errno, with `n->ino` nonzero when `n` was published. The
+ * caller holds no group's lock.
  */
 int ext2_inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, struct ext2_node *n)
 {
     uint32_t g0 = (parent_ino - 1) / em->ipg;
     uint32_t tried;
 
-    ext2_assert_meta_locked(em);
-    if (em->free_inodes == 0) {
+    if (ext2_free_inodes(em) == 0) {
         return -ENOSPC;
     }
     for (tried = 0; tried < em->groups; tried++) {
         uint32_t g = (g0 + tried) % em->groups;
         uint8_t *gd = em->gd + g * 32;
-        uint32_t base = g * em->ipg, from = 0, limit = em->ipg, i;
         int rc;
 
-        if (ext2_le16(gd + 14) == 0 || base >= em->inodes) {
+        if (ext2_le16(gd + 14) == 0 || g * em->ipg >= em->inodes) {
             continue;
         }
-        if (base + 1 < em->first_ino) {
-            from = em->first_ino - 1 - base;
-        }
-        if (em->inodes - base < limit) {
-            limit = em->inodes - base;
-        }
-        for (;;) {
-            rc = ext2_bit_first_clear(em, ext2_le32(gd + 4), from, limit, &i);
-            if (rc != 0) {
-                return rc;
-            }
-            if (i >= limit || !ext2_node_find(em, base + i + 1)) {
-                break;
-            }
-            from = i + 1;
-        }
-        if (i >= limit) {
-            continue;
-        }
-        rc = ext2_plan_has(em, gd_cache_block(em, g));
-        if (rc != 0) {
+        ext2_group_lock(em, g);
+        rc = group_take_inode(em, g, is_dir, n);
+        ext2_group_unlock(em, g);
+        if (rc != -ENOSPC) {
             return rc;
         }
-        em->planner = -1;
-        ext2_node_publish(em, n, base + i + 1);
-        ext2_node_share_group(em, n, g, 4);
-        rc = bit_write(em, ext2_le32(gd + 4), i, 1, WRITE_UNFLUSHED);
-        if (rc != 0) {
-            return rc;
-        }
-        LE16_PUT(gd + 14, ext2_le16(gd + 14) - 1);
-        if (is_dir) {
-            LE16_PUT(gd + 16, ext2_le16(gd + 16) + 1);
-        }
-        rc = ext2_gd_store(em, g);
-        if (rc != 0) {
-            return rc;
-        }
-        em->free_inodes--;
-        return 0;
     }
     return -ENOSPC;
 }
-
 /** Clear the bit of inode `ino` and raise its group's free count, lowering
  * the directory count for `was_dir`, once the inode itself was written
- * freed; 0, or -errno. The caller holds `em->meta`. */
+ * freed, under the group's lock; 0, or -errno. */
 int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir)
 {
     uint32_t g = (ino - 1) / em->ipg;
@@ -291,21 +349,20 @@ int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir)
     uint8_t *gd = em->gd + g * 32;
     int rc;
 
-    ext2_assert_meta_locked(em);
+    ext2_group_lock(em, g);
     rc = bit_put(em, ext2_le32(gd + 4), i, 0);
-    if (rc != 0) {
-        return rc;
+    if (rc == 0) {
+        LE16_PUT(gd + 14, ext2_le16(gd + 14) + 1);
+        if (was_dir && ext2_le16(gd + 16) > 0) {
+            LE16_PUT(gd + 16, ext2_le16(gd + 16) - 1);
+        }
+        rc = ext2_gd_store(em, g);
     }
-    LE16_PUT(gd + 14, ext2_le16(gd + 14) + 1);
-    if (was_dir && ext2_le16(gd + 16) > 0) {
-        LE16_PUT(gd + 16, ext2_le16(gd + 16) - 1);
+    if (rc == 0) {
+        ext2_count_inodes(em, 1);
     }
-    rc = ext2_gd_store(em, g);
-    if (rc != 0) {
-        return rc;
-    }
-    em->free_inodes++;
-    return 0;
+    ext2_group_unlock(em, g);
+    return rc;
 }
 
 /**
@@ -315,13 +372,16 @@ int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir)
  * `ext2_xattr_delete_inode` does, so that a block several inodes share
  * stays until the last of them goes. A block out of range, or whose header
  * lacks the magic number or a length of one block, is left as it is with
- * the error bit set, for e2fsck. 0, or -errno.
+ * the error bit set, for e2fsck. The count is read and written under the
+ * lock of the block's group, which the free takes again, so that two
+ * inodes that share the block and go at once each count once, as Linux
+ * holds the block's buffer lock for it. 0, or -errno.
  */
 int ext2_attr_release(struct ext2_mount *em, uint32_t ino, uint32_t b)
 {
     uint64_t at = (uint64_t)b * em->block_size;
     uint8_t raw[12];
-    uint32_t refs;
+    uint32_t refs, g;
     int rc;
 
     if (!ext2_data_block_ok(em, b)) {
@@ -329,26 +389,26 @@ int ext2_attr_release(struct ext2_mount *em, uint32_t ino, uint32_t b)
         ext2_mark_error(em);
         return 0;
     }
+    g = (b - em->first_data) / em->bpg;
+    ext2_group_lock(em, g);
     rc = ext2_read_bytes(em, at, raw, sizeof(raw));
-    if (rc != 0) {
-        return rc;
-    }
-    if (ext2_le32(raw) != EXT2_XATTR_MAGIC || ext2_le32(raw + 8) != 1) {
+    if (rc == 0 && (ext2_le32(raw) != EXT2_XATTR_MAGIC || ext2_le32(raw + 8) != 1)) {
         klog(KLOG_WARN, "ext2", "inode %d: attribute block %d has no valid header", (int)ino,
              (int)b);
         ext2_mark_error(em);
-        return 0;
-    }
-    refs = ext2_le32(raw + 4);
-    if (refs > 1) {
+    } else if (rc == 0 && ext2_le32(raw + 4) > 1) {
+        refs = ext2_le32(raw + 4);
         LE32_PUT(raw + 4, refs - 1);
-        return ext2_write_bytes(em, at + 4, raw + 4, 4, WRITE_THROUGH);
+        rc = ext2_write_bytes(em, at + 4, raw + 4, 4, WRITE_THROUGH);
+    } else if (rc == 0) {
+        rc = block_free(em, b);
     }
-    return block_free(em, b);
+    ext2_group_unlock(em, g);
+    return rc;
 }
 
 /**
- * Bring into the cache, with `em->meta` let go, the bitmap block and the
+ * Bring into the cache, with no group's lock held, the bitmap block and the
  * descriptor block of the group that holds block `hint`, which an
  * allocation from that hint reads first.
  */
@@ -365,13 +425,13 @@ void ext2_group_fetch(struct ext2_mount *em, uint32_t hint)
 }
 
 /**
- * Allocate one block from `hint` into `*out` by `block_alloc`, under
- * `em->meta`, which waits on the disk only for a block evicted again since
- * its fetch. The hint's group is fetched first with the lock let go, and a
- * search that meets another bitmap the cache lacks lets the lock go, fetches
- * it and starts again, PLAN_TRIES times before it reads under the lock. The
- * caller holds the lock of the node it allocates for and not `em->meta`. 0,
- * or the errors of `block_alloc`.
+ * Allocate one block from `hint` into `*out` by `block_alloc`, whose groups'
+ * locks wait on the disk only for a block evicted again since its fetch.
+ * The hint's group is fetched first with no lock held, and a search that
+ * meets another bitmap the cache lacks lets its lock go, fetches it and
+ * starts again, PLAN_TRIES times before it reads under the lock. The caller
+ * holds the lock of the node it allocates for and no group's lock. 0, or
+ * the errors of `block_alloc`.
  */
 int ext2_alloc_block(struct ext2_mount *em, uint32_t hint, uint32_t *out)
 {
@@ -380,12 +440,9 @@ int ext2_alloc_block(struct ext2_mount *em, uint32_t hint, uint32_t *out)
 
     ext2_group_fetch(em, hint);
     for (tries = 0;; tries++) {
-        ext2_meta_lock(em);
-        em->planner = tries < PLAN_TRIES ? ext2_plan_caller() : -1;
+        ext2_plan_begin(em, tries);
         rc = block_alloc(em, hint, out);
-        em->planner = -1;
-        missed = em->missed;
-        ext2_meta_unlock(em);
+        missed = ext2_plan_end(em);
         if (rc != -EAGAIN) {
             return rc;
         }
@@ -396,8 +453,8 @@ int ext2_alloc_block(struct ext2_mount *em, uint32_t hint, uint32_t *out)
 /**
  * Free the `list->count` blocks of `list`, whose pointers in `n` are
  * cleared, a group at a time: the group's bitmap and descriptor block
- * fetched with `em->meta` let go, then under it each bit cleared and the
- * counts raised, the bitmap and descriptor dirtied `after`, so that they
+ * fetched with no lock held, then under the group's lock each bit cleared and
+ * the counts raised, the bitmap and descriptor dirtied `after`, so that they
  * reach the device after every pointer and inode dirtied `first`, and
  * listed among `n`'s shared blocks. The list is emptied. A
  * block that may not hold data is skipped with a record and makes the
@@ -421,7 +478,7 @@ int ext2_punch_free(struct ext2_mount *em, struct ext2_node *n, struct punch_lis
         g = (first - em->first_data) / em->bpg;
         gd = em->gd + g * 32;
         ext2_group_fetch(em, first);
-        ext2_meta_lock(em);
+        ext2_group_lock(em, g);
         for (i = 0; i < list->count; i++) {
             uint32_t b = list->blocks[i];
             int err;
@@ -436,17 +493,17 @@ int ext2_punch_free(struct ext2_mount *em, struct ext2_node *n, struct punch_lis
                 continue;
             }
             LE16_PUT(gd + 12, ext2_le16(gd + 12) + 1);
-            em->free_blocks++;
-            freed = 1;
+            freed++;
         }
         list->count = left;
         if (freed) {
             int err = gd_write(em, g, WRITE_AFTER);
 
             rc = rc != 0 ? rc : err;
+            ext2_count_blocks(em, freed, 0);
             ext2_node_share_group(em, n, g, 0);
         }
-        ext2_meta_unlock(em);
+        ext2_group_unlock(em, g);
     }
     return rc;
 }

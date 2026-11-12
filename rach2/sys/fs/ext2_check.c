@@ -739,7 +739,9 @@ int ext2_check_volume(struct ext2_mount *em, const char **why)
         return 1;
     }
     for (g = 0; g < em->groups; g++) {
+        ext2_group_lock(em, g);
         rc = ext2_gd_store(em, g);
+        ext2_group_unlock(em, g);
         if (rc != 0) {
             check_state_free(c);
             return rc;
