@@ -62,9 +62,10 @@ static void unlink_map(struct kvm_gpamap *m)
  * frames stay held until `kvm_gpamap_free`, since a fault in a program's
  * mapping of them may have read a frame before the revoke and map it
  * after, and the owner's revoke runs inside a change notice, which must not
- * sleep and so cannot wait for that fault, as Linux's pins keep their pages
- * after the notice of their memory's change until the holder lets them go
- * (drivers/vfio/vfio_iommu_type1.c:2455-2508).
+ * sleep and so cannot wait for that fault. Linux's udmabuf holds its pages
+ * the same way: udmabuf_create pins them (drivers/dma-buf/udmabuf.c:401,
+ * memfd_pin_folios at :304) and only the buffer's release unpins them
+ * (release_udmabuf, :191-199, unpin_all_folios at :163-174).
  */
 static void take_back(struct kvm_gpamap *m, int tell)
 {
