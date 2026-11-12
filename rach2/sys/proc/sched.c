@@ -504,6 +504,7 @@ void sched_wake_signal(process_t *p)
 
     if (p->state == PROC_BLOCKED) {
         p->wakeup_tick = 0;
+        p->woken = 1;
         kick = sched_ready_locked(p);
     }
     spin_unlock_irqrestore(&sched_lock, flags);
@@ -519,6 +520,7 @@ int sched_wake_due_locked(process_t *p, uint64_t now)
     }
     waketime_expire(p, p->wakeup_tick);
     p->wakeup_tick = 0;
+    p->woken = 1;
     return sched_ready_locked(p);
 }
 
