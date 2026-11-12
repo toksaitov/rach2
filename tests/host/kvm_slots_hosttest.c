@@ -618,7 +618,7 @@ static void capability_rows(void)
     CHECK(kvm_slots_check_extension(KVM_CAP_USER_MEMORY2) == 1, "USER_MEMORY2");
     CHECK(kvm_slots_check_extension(KVM_CAP_READONLY_MEM) == 1, "READONLY_MEM");
     CHECK(kvm_slots_check_extension(KVM_CAP_SYNC_MMU) == 1, "SYNC_MMU");
-    CHECK(kvm_slots_check_extension(KVM_CAP_NR_MEMSLOTS) == 256, "NR_MEMSLOTS");
+    CHECK(kvm_slots_check_extension(KVM_CAP_NR_MEMSLOTS) == 32764, "NR_MEMSLOTS, Linux's on x86");
     CHECK(kvm_slots_check_extension(KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2) == 3,
           "MANUAL_DIRTY_LOG_PROTECT2");
     CHECK(kvm_slots_check_extension(KVM_CAP_IRQFD) == 0, "a capability not the slots'");
@@ -635,7 +635,7 @@ static void region_rows(void)
     CHECK(set(0, 0, 0, 0x10000, HVA + 8) == -EINVAL, "a caller's address not page-aligned");
     CHECK(set(0, 0, 0, 0x2000, USER_ADDR_MAX - 0x1000) == -EINVAL, "a range past user space");
     CHECK(set(0x10000, 0, 0, 0x10000, HVA) == -EINVAL, "address space 1");
-    CHECK(set(256, 0, 0, 0x10000, HVA) == -EINVAL, "slot 256");
+    CHECK(set(32764, 0, 0, 0x10000, HVA) == -EINVAL, "slot 32764");
     CHECK(set(0, 0, 0xFFFFFFFFFFFFF000ull, 0x2000, HVA) == -EINVAL, "a range that wraps");
     CHECK(set(0, 0, 1ull << 39, 0x1000, HVA) == -EINVAL, "a range past the physical width");
     CHECK(set(0, 0, 0, 0, HVA) == -EINVAL, "the deletion of no slot");
@@ -657,6 +657,64 @@ static void region_rows(void)
           "a deletion takes back the guest page maps over the slot and waits for the copies");
     CHECK(set(1, 0, 0, 0, 0) == 0 && zapped(0x110, 16), "the other deletion");
     CHECK(((struct slots *)vm.slots)->pages == 0 && the_mm.notify == NULL,
+          "nothing left of the slots");
+}
+
+/** Every slot number in use at once, made in an order apart from their
+ * frames', found by frame and by number, moved, and deleted. Slot `i * P`
+ * modulo the count, P a prime that does not divide it, holds the frame
+ * 0x1000 + 2i, and the odd frames between are holes. */
+static void many_rows(void)
+{
+    const uint32_t n = KVM_MEM_SLOTS, step = 7919u;
+    struct kvm_slot_view v;
+    uint32_t i, made = 0, found = 0, holes = 0, gone = 0;
+
+    for (i = 0; i < n; i++) {
+        made += set(i * step % n, 0, (0x1000u + 2u * i) * 4096u, 4096u, HVA) == 0;
+    }
+    CHECK(made == n, "every slot number in use");
+    CHECK(set(n, 0, 0x100000000ull, 4096u, HVA) == -EINVAL, "no slot past the last");
+    for (i = 0; i < n; i++) {
+        found += kvm_slot_find(&vm, 0x1000u + 2u * i, &v) && v.id == i * step % n &&
+                 v.base_gfn == 0x1000u + 2u * i;
+        holes += !kvm_slot_find(&vm, 0x1001u + 2u * i, &v);
+    }
+    CHECK(found == n && holes == n, "each frame found in its slot, and no slot at a hole");
+    CHECK(!kvm_slot_find(&vm, 0xFFF, &v) && kvm_slot_get(&vm, 5u * step % n, &v) &&
+              v.base_gfn == 0x100A,
+          "no slot below the first, and a slot found by number");
+    CHECK(set(5u * step % n, 0, 0x100Cu * 4096u, 4096u, HVA) == -EEXIST,
+          "a move onto the next slot");
+    CHECK(set(5u * step % n, 0, 0x100Bu * 4096u, 4096u, HVA) == 0 &&
+              kvm_slot_find(&vm, 0x100B, &v) && v.id == 5u * step % n &&
+              !kvm_slot_find(&vm, 0x100A, &v),
+          "a move into the hole past the next slot");
+    CHECK(set(5u * step % n, 0, 0x100Au * 4096u, 2u * 4096u, HVA) == -EINVAL,
+          "a change of a moved slot's size");
+    for (i = 0; i < n; i += 2) {
+        gone += set(i * step % n, 0, 0, 0, 0) == 0;
+    }
+    for (i = 0, found = 0, holes = 0; i < n; i++) {
+        if (i % 2) {
+            found += kvm_slot_find(&vm, 0x1000u + 2u * i + (i == 5), &v) && v.id == i * step % n;
+        } else {
+            holes +=
+                !kvm_slot_find(&vm, 0x1000u + 2u * i, &v) && !kvm_slot_get(&vm, i * step % n, &v);
+        }
+    }
+    CHECK(gone == n / 2 && found == n / 2 && holes == n / 2,
+          "half the slots deleted, and the other half found");
+    CHECK(set(0, 0, 0x1000u * 4096u, 3u * 4096u, HVA) == -EEXIST &&
+              set(0, 0, 0x1000u * 4096u, 2u * 4096u, HVA) == 0,
+          "a new slot over a deleted one's frames, and not over a live one's");
+    CHECK(set(0, 0, 0, 0, 0) == 0, "its deletion");
+    for (i = 1, gone = 0; i < n; i += 2) {
+        gone += set(i * step % n, 0, 0, 0, 0) == 0;
+    }
+    CHECK(gone == n / 2 && ((struct slots *)vm.slots)->ids == NULL &&
+              ((struct slots *)vm.slots)->gfns == NULL && ((struct slots *)vm.slots)->pages == 0 &&
+              the_mm.notify == NULL,
           "nothing left of the slots");
 }
 
@@ -1068,7 +1126,8 @@ static void dirty_rows(void)
     CHECK(!(leaf_of(gfn + 70, &level) & 2) && flushed(), "and the page is write-protected again");
     CHECK(get_dirty(5, bits) == 0 && bits[0] == 0 && bits[1] == 0, "the log was cleared");
     CHECK(get_dirty(6, bits) == -ENOENT, "no slot");
-    CHECK(get_dirty(256, bits) == -EINVAL, "slot 256");
+    CHECK(get_dirty(256, bits) == -ENOENT && get_dirty(32764, bits) == -EINVAL,
+          "slot 256, which may be, and slot 32764, which may not");
     CHECK(get_dirty(0x10005, bits) == -EINVAL, "address space 1");
 
     /* Flags: the log off, then on, each change dropping the leaves. */
@@ -1426,6 +1485,7 @@ int main(void)
     CHECK(kvm_slots_init(&vm) == 0 && kvm_tdp_init(&vm) == 0, "the VM's tables");
     capability_rows();
     region_rows();
+    many_rows();
     small_rows();
     readonly_rows();
     large_rows();

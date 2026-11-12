@@ -28,6 +28,17 @@
 #define SLOT_FLAGS (KVM_MEM_LOG_DIRTY_PAGES | KVM_MEM_READONLY)
 
 /*
+ * A node of one of a VM's two trees of slots, an AVL tree on `key`: the
+ * slot's number in one, its first guest frame in the other. Since no two
+ * slots share a number or a frame, the keys of a tree differ.
+ */
+struct snode {
+    struct snode *link[2]; /* the subtrees of smaller and of larger keys */
+    uint64_t key;
+    int height; /* of the subtree this node roots: 1 for a leaf */
+};
+
+/*
  * A slot. `note` covers [hva, hva + npages pages) of the VM's address
  * space, and its `invalidate` drops what the tables map of the part that
  * changes; `note.mm` is NULL once the address space has ended.
@@ -40,20 +51,158 @@ struct slot {
     uint64_t base_gfn;
     uint64_t npages;
     uint64_t hva;
-    uint64_t *dirty; /* the dirty log, a bit a page, while it logs */
+    uint64_t *dirty;       /* the dirty log, a bit a page, while it logs */
+    struct snode id_node;  /* in `ids`, on `id` */
+    struct snode gfn_node; /* in `gfns`, on `base_gfn` */
 };
 
-/* A VM's slots, by number; `last` is the one `kvm_slot_find` last found.
+/* The slot of a node of `ids` or of `gfns`. */
+#define SLOT_OF_ID(n)  ((struct slot *)(void *)((char *)(n) - offsetof(struct slot, id_node)))
+#define SLOT_OF_GFN(n) ((struct slot *)(void *)((char *)(n) - offsetof(struct slot, gfn_node)))
+
+/* A VM's slots, in a tree by number and one by first frame, as Linux keeps
+ * them in a hash by number and a tree by frame (struct kvm_memslots,
+ * include/linux/kvm_host.h); `last` is the one `kvm_slot_find` last found.
  * Under the big lock and `mmu_lock` to change, either to read. `readers` is
  * held to read by each copy that uses a slot's address after `mmu_lock` is
  * let go, and taken to write by a change once the table no longer offers
  * the old slot, to wait for those copies: Linux's kvm->srcu. */
 struct slots {
-    struct slot *by_id[KVM_MEM_SLOTS];
+    struct snode *ids;
+    struct snode *gfns;
     struct slot *last;
     uint64_t pages; /* of every slot, which Linux bounds by an unsigned long */
     struct rwsem readers;
 };
+
+/** The height of the subtree `n` roots, 0 for none. */
+static int tree_height(const struct snode *n)
+{
+    return n ? n->height : 0;
+}
+
+/** Set `n`'s height from its subtrees'. */
+static void tree_fix(struct snode *n)
+{
+    int l = tree_height(n->link[0]), r = tree_height(n->link[1]);
+
+    n->height = (l > r ? l : r) + 1;
+}
+
+/** Turn the subtree `n` toward the side `dir`, so that its child on the
+ * other side takes its place: that child, the subtree's new root. */
+static struct snode *tree_rotate(struct snode *n, int dir)
+{
+    struct snode *c = n->link[!dir];
+
+    n->link[!dir] = c->link[dir];
+    c->link[dir] = n;
+    tree_fix(n);
+    tree_fix(c);
+    return c;
+}
+
+/** Restore the AVL rule at `n`, whose subtrees are AVL trees whose heights
+ * differ by at most 2: the subtree's new root. */
+static struct snode *tree_balance(struct snode *n)
+{
+    int diff, dir;
+
+    tree_fix(n);
+    diff = tree_height(n->link[1]) - tree_height(n->link[0]);
+    if (diff < -1 || diff > 1) {
+        dir = diff > 0;
+        if (tree_height(n->link[dir]->link[!dir]) > tree_height(n->link[dir]->link[dir])) {
+            n->link[dir] = tree_rotate(n->link[dir], dir);
+        }
+        n = tree_rotate(n, !dir);
+    }
+    return n;
+}
+
+/** Add `x`, whose key no node of `n` has, to the tree `n`: its new root.
+ * The recursion is as deep as the tree, at most 22 for 32764 nodes. */
+static struct snode *tree_insert(struct snode *n, struct snode *x)
+{
+    int dir;
+
+    if (!n) {
+        x->link[0] = NULL;
+        x->link[1] = NULL;
+        x->height = 1;
+        return x;
+    }
+    dir = x->key > n->key;
+    n->link[dir] = tree_insert(n->link[dir], x);
+    return tree_balance(n);
+}
+
+/** Take the node of the least key out of the tree `n`, which is not empty,
+ * into `*min`: the tree's new root. */
+static struct snode *tree_remove_min(struct snode *n, struct snode **min)
+{
+    if (!n->link[0]) {
+        *min = n;
+        return n->link[1];
+    }
+    n->link[0] = tree_remove_min(n->link[0], min);
+    return tree_balance(n);
+}
+
+/** Take the node keyed `key`, which the tree `n` has, out of it: its new
+ * root. */
+static struct snode *tree_remove(struct snode *n, uint64_t key)
+{
+    struct snode *m, *right;
+    int dir;
+
+    if (key != n->key) {
+        dir = key > n->key;
+        n->link[dir] = tree_remove(n->link[dir], key);
+        return tree_balance(n);
+    }
+    if (!n->link[0] || !n->link[1]) {
+        return n->link[0] ? n->link[0] : n->link[1];
+    }
+    right = tree_remove_min(n->link[1], &m);
+    m->link[0] = n->link[0];
+    m->link[1] = right;
+    return tree_balance(m);
+}
+
+/** The node of the tree `n` with the greatest key not above `key`, or
+ * NULL when every key is above it. */
+static struct snode *tree_floor(struct snode *n, uint64_t key)
+{
+    struct snode *best = NULL;
+
+    while (n) {
+        if (n->key <= key) {
+            best = n;
+            n = n->link[1];
+        } else {
+            n = n->link[0];
+        }
+    }
+    return best;
+}
+
+/** The slot of `t` numbered `id`, or NULL. */
+static struct slot *slot_by_id(const struct slots *t, uint32_t id)
+{
+    struct snode *n = tree_floor(t->ids, id);
+
+    return n && n->key == id ? SLOT_OF_ID(n) : NULL;
+}
+
+/** The slot of `t` with the greatest first frame not above `gfn`, the one
+ * slot that may hold `gfn`, or NULL. */
+static struct slot *slot_below(const struct slots *t, uint64_t gfn)
+{
+    struct snode *n = tree_floor(t->gfns, gfn);
+
+    return n ? SLOT_OF_GFN(n) : NULL;
+}
 
 /** The bytes of a dirty log of `npages` pages, whole 64-bit words as
  * Linux's kvm_dirty_bitmap_bytes. */
@@ -148,36 +297,39 @@ static void slot_free(struct slot *s)
     kfree(s);
 }
 
+/** Free every slot of the tree by number `n`. */
+static void slots_free_tree(struct snode *n)
+{
+    if (n) {
+        slots_free_tree(n->link[0]);
+        slots_free_tree(n->link[1]);
+        slot_free(SLOT_OF_ID(n));
+    }
+}
+
 void kvm_slots_free(struct kvm_vm *vm)
 {
     struct slots *t = (struct slots *)vm->slots;
-    uint32_t i;
 
     if (!t) {
         return;
     }
-    for (i = 0; i < KVM_MEM_SLOTS; i++) {
-        if (t->by_id[i]) {
-            slot_free(t->by_id[i]);
-        }
-    }
+    slots_free_tree(t->ids);
     kfree(t);
     vm->slots = NULL;
 }
 
-/** Whether a slot other than `id` holds any frame of [gfn, gfn + npages). */
+/** Whether a slot other than `id` holds any frame of [gfn, gfn + npages),
+ * `npages` not 0. The other slots do not overlap each other, so of those
+ * that begin before the range ends, only the last can reach into it. */
 static int overlaps(const struct slots *t, uint32_t id, uint64_t gfn, uint64_t npages)
 {
-    uint32_t i;
+    const struct slot *s = slot_below(t, gfn + npages - 1u);
 
-    for (i = 0; i < KVM_MEM_SLOTS; i++) {
-        const struct slot *s = t->by_id[i];
-
-        if (s && i != id && s->base_gfn < gfn + npages && gfn < s->base_gfn + s->npages) {
-            return 1;
-        }
+    if (s && s->id == id) {
+        s = s->base_gfn ? slot_below(t, s->base_gfn - 1u) : NULL;
     }
-    return 0;
+    return s && gfn < s->base_gfn + s->npages;
 }
 
 /** Delete `s`, the slot `id`: off the table and its frames out of the
@@ -189,7 +341,8 @@ static int32_t slot_delete(struct kvm_vm *vm, struct slots *t, struct slot *s)
 
     kvm_gpamap_zap(vm, s->base_gfn, s->npages);
     flags = kvm_mmu_lock(vm);
-    t->by_id[s->id] = NULL;
+    t->ids = tree_remove(t->ids, s->id);
+    t->gfns = tree_remove(t->gfns, s->base_gfn);
     if (t->last == s) {
         t->last = NULL;
     }
@@ -219,6 +372,8 @@ static int32_t slot_create(struct kvm_vm *vm, struct slots *t, uint32_t id,
     s->base_gfn = r->guest_phys_addr / 4096u;
     s->npages = r->memory_size / 4096u;
     s->hva = r->userspace_addr;
+    s->id_node.key = id;
+    s->gfn_node.key = s->base_gfn;
     if (s->flags & KVM_MEM_LOG_DIRTY_PAGES) {
         s->dirty = log_new(vm, s->npages);
         if (!s->dirty) {
@@ -232,7 +387,8 @@ static int32_t slot_create(struct kvm_vm *vm, struct slots *t, uint32_t id,
     }
     kvm_count(KVM_COUNT_SLOT, 1);
     flags = kvm_mmu_lock(vm);
-    t->by_id[id] = s;
+    t->ids = tree_insert(t->ids, &s->id_node);
+    t->gfns = tree_insert(t->gfns, &s->gfn_node);
     t->pages += s->npages;
     kvm_mmu_unlock(vm, flags);
     return 0;
@@ -266,7 +422,12 @@ static int32_t slot_change(struct kvm_vm *vm, struct slots *t, struct slot *s, u
         old = s->dirty;
         s->dirty = log;
     }
-    s->base_gfn = gfn;
+    if (gfn != s->base_gfn) {
+        t->gfns = tree_remove(t->gfns, s->base_gfn);
+        s->base_gfn = gfn;
+        s->gfn_node.key = gfn;
+        t->gfns = tree_insert(t->gfns, &s->gfn_node);
+    }
     s->flags = flags;
     kvm_tdp_zap_locked(vm, base, s->npages, &lock);
     kvm_mmu_unlock(vm, lock);
@@ -313,7 +474,7 @@ int32_t kvm_slots_set(struct kvm_vm *vm, const struct kvm_userspace_memory_regio
     if (err != 0) {
         return err;
     }
-    old = t->by_id[id];
+    old = slot_by_id(t, id);
     if (npages == 0) {
         return old ? slot_delete(vm, t, old) : -EINVAL;
     }
@@ -349,24 +510,20 @@ static void view(const struct slot *s, uint64_t gfn, struct kvm_slot_view *out)
     out->dirty = s->dirty;
 }
 
-/** A guest has a few slots, so a walk of the table, with the last slot
- * found tried first, costs less than keeping them sorted. */
+/** The last slot found is tried first, then the tree by frame, as Linux's
+ * search_memslots tries its last_used_slot. */
 int kvm_slot_find_locked(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
 {
     struct slots *t = (struct slots *)vm->slots;
     struct slot *s = t ? t->last : NULL;
-    uint32_t i;
 
-    if (!s || gfn < s->base_gfn || gfn - s->base_gfn >= s->npages) {
-        s = NULL;
-        for (i = 0; t && i < KVM_MEM_SLOTS; i++) {
-            struct slot *c = t->by_id[i];
-
-            if (c && gfn >= c->base_gfn && gfn - c->base_gfn < c->npages) {
-                s = c;
-                t->last = c;
-                break;
-            }
+    if (t && (!s || gfn < s->base_gfn || gfn - s->base_gfn >= s->npages)) {
+        s = slot_below(t, gfn);
+        if (s && gfn - s->base_gfn >= s->npages) {
+            s = NULL;
+        }
+        if (s) {
+            t->last = s;
         }
     }
     if (!s) {
@@ -388,7 +545,7 @@ int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
 int kvm_slot_get(struct kvm_vm *vm, uint32_t id, struct kvm_slot_view *out)
 {
     struct slots *t = (struct slots *)vm->slots;
-    struct slot *s = t && id < KVM_MEM_SLOTS ? t->by_id[id] : NULL;
+    struct slot *s = t ? slot_by_id(t, id) : NULL;
 
     if (!s) {
         return 0;

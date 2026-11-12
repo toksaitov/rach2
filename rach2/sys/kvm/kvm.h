@@ -43,8 +43,10 @@ struct kvm_vcpu;
  * another, Linux's APIC_BUS_CYCLE_NS_DEFAULT: a bus of 1 GHz. */
 #define KVM_APIC_BUS_NS_DEFAULT 1
 
-/* The memory slots a VM has, KVM_CAP_NR_MEMSLOTS. */
-#define KVM_MEM_SLOTS 256
+/* The memory slots a VM has, KVM_CAP_NR_MEMSLOTS: Linux's x86
+ * KVM_USER_MEM_SLOTS, SHRT_MAX less the 3 slots its KVM keeps for itself,
+ * so that a caller numbers its slots below it as on Linux. */
+#define KVM_MEM_SLOTS 32764
 
 /* The CPUID entries KVM_SET_CPUID2 takes and KVM_GET_SUPPORTED_CPUID
  * gives at most, Linux's KVM_MAX_CPUID_ENTRIES. */
