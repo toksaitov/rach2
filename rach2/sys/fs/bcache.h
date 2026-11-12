@@ -307,8 +307,9 @@ int bcache_state(block_device_t *dev, uint64_t blk);
 
 /** Copy a resident buffer's bytes [offset, offset + count) into `out`
  * without a disk read, a wait or a hold. Return 1, or 0 for an absent,
- * discarded or busy buffer or a range outside its valid bytes. The caller
- * holds the big lock, so the copy and the state check are one step. */
+ * discarded or busy buffer or a range outside its valid bytes. The state
+ * check and the copy are one step under the cache's spinlock, so the caller
+ * needs no big lock. */
 int bcache_copy_cached(block_device_t *dev, uint64_t blk, uint32_t offset, void *out,
                        uint32_t count);
 
