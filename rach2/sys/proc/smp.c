@@ -11,6 +11,7 @@
 #include "../klog.h"
 #include "../panic.h"
 #include "../platform.h"
+#include "../lib/kerrno.h"
 #include "../lib/kirq.h"
 #include "../lib/spinlock.h"
 #include "../timer.h"
@@ -711,23 +712,33 @@ static void profile_count(const uintptr_t chain[BKL_SAMPLE_PCS], uint32_t entry,
     bkl_profile_lost++;
 }
 
+/** Return nonzero when the profile's mode takes a sample of the tick on
+ * `cpu`: a tick under the big lock, or any in the whole-kernel mode, and
+ * there only while the chosen thread, if one is, runs. A tick calls it
+ * without `profile_lock` to skip the frame walk, and again under it, since
+ * `smp_profile_store` may change the mode between the two. */
+static int profile_wants(const struct percpu *cpu)
+{
+    if (!bkl_profile_whole && cpu->bkl_depth < 1) {
+        return 0;
+    }
+    return bkl_profile_tid == 0 || (cpu->current && cpu->current->pid == bkl_profile_tid);
+}
+
 void bkl_profile_sample(uintptr_t pc, uintptr_t fp)
 {
     struct percpu *cpu = this_cpu();
     uintptr_t chain[BKL_SAMPLE_PCS];
     uint32_t entry, cmd;
 
-    if (!bkl_profile_whole && cpu->bkl_depth < 1) {
-        return;
-    }
-    if (bkl_profile_tid != 0 && (!cpu->current || cpu->current->pid != bkl_profile_tid)) {
+    if (!profile_wants(cpu)) {
         return;
     }
     sample_chain(chain, pc, fp, cpu->current ? cpu->current->kernel_stack : 0);
     entry = cpu->current ? cpu->current->bkl_entry : 0;
     cmd = cpu->current ? cpu->current->bkl_cmd : 0;
     spin_lock(&profile_lock);
-    if (!bkl_profile_showing) {
+    if (!bkl_profile_showing && profile_wants(cpu)) {
         profile_count(chain, entry, cmd);
     }
     spin_unlock(&profile_lock);
@@ -1061,7 +1072,7 @@ int32_t smp_profile_store(void *data, const char __user *buf, uint32_t len)
 {
     static const char kernel[6] = {'k', 'e', 'r', 'n', 'e', 'l'};
     char word[24];
-    uint32_t i, n, tid = 0;
+    uint32_t i, n, digit, tid = 0;
     int whole;
 
     (void)data;
@@ -1072,8 +1083,15 @@ int32_t smp_profile_store(void *data, const char __user *buf, uint32_t len)
     }
     for (; whole && i < n && word[i] == ' '; i++) {
     }
-    for (; whole && i < n && word[i] >= '0' && word[i] <= '9' && tid < 100000000u; i++) {
-        tid = tid * 10u + (uint32_t)(word[i] - '0');
+    for (; whole && i < n && word[i] >= '0' && word[i] <= '9'; i++) {
+        digit = (uint32_t)(word[i] - '0');
+        if (tid > (0x7fffffffu - digit) / 10u) {
+            return -EINVAL;
+        }
+        tid = tid * 10u + digit;
+    }
+    if (whole && i == n && n < len) {
+        return -EINVAL;
     }
     profile_hold(1);
     k_memset(bkl_profile, 0, sizeof(bkl_profile));

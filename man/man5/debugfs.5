@@ -262,6 +262,10 @@ write that begins with
 only while the thread whose ID follows it after a space runs, as in
 .Ql kernel 791 ,
 if one does, and the big lock's holds for any other.
+A thread ID above 2147483647, or a write whose first 24 bytes end inside
+the ID, fails with
+.Er EINVAL
+and leaves the profile as it was.
 .It Pa bkl/long
 Mode 0644.
 The latest interrupt sample of each of the last 32 holds of the big lock
