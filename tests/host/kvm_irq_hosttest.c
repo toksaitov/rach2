@@ -417,6 +417,30 @@ int kvm_vcpu_test_clear(struct kvm_vcpu *v, uint32_t request)
     return set;
 }
 
+/** vcpu.c's lowering of the vCPU's timer deadline. */
+void kvm_timer_arm(struct kvm_vcpu *v, uint64_t ns)
+{
+    if (ns && (!v->timer_ns || ns < v->timer_ns)) {
+        v->timer_ns = ns;
+    }
+}
+
+/** vcpu.c's timer pass, without the kvmclock's resync: a passed deadline
+ * asks KVM_REQ_TIMER, which checks the three timers and sets the next. */
+void kvm_vcpu_timers(struct kvm_vcpu *v)
+{
+    if (v->timer_ns && kvm_host_ns() >= v->timer_ns) {
+        v->requests |= KVM_REQ_TIMER;
+    }
+    if (!kvm_vcpu_test_clear(v, KVM_REQ_TIMER)) {
+        return;
+    }
+    kvm_lapic_timer_check(v);
+    kvm_pit_check(v->vm);
+    kvm_hv_stimers(v);
+    v->timer_ns = kvm_lapic_next_ns(v);
+}
+
 /** The registers an INIT gives, as vcpu.c does, keeping the APIC base. */
 void kvm_vcpu_init_reset(struct kvm_vcpu *v)
 {
@@ -1078,8 +1102,10 @@ static void halt_rows(void)
     kvm_lapic_halt(v);
     signal(msi_addr(3, 0), msi_data(0x91, 0, 0));
     caller.sig_woken = 1;
-    CHECK(kvm_lapic_prepare(v) == -EINTR && endless == 1,
-          "with IF clear an interrupt does not wake it");
+    waits = 0;
+    CHECK(kvm_lapic_prepare(v) == -EINTR && v->mp_state == KVM_MP_STATE_HALTED && waits == 1 &&
+              endless == 0,
+          "with IF clear an interrupt does not wake it: it waits until the signal");
     caller.sig_woken = 0;
     v->if_flag = 1;
     clear_vectors();

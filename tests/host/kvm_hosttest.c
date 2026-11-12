@@ -799,6 +799,7 @@ static int fake_enter(struct kvm_vcpu *v)
  * instruction boundary whose interrupt asks for a switch, when set. */
 static int tick_exits;
 static uint32_t ring_writes;
+static int block_turn, block_seen = -1; /* the sleep of `kvm_lapic_prepare` */
 
 /** The next exit of the script. */
 static int fake_exit(struct kvm_vcpu *v)
@@ -827,6 +828,9 @@ static int fake_exit(struct kvm_vcpu *v)
     if (tick_exits && v->exit.kind == KVM_X_AGAIN) {
         v->at_boundary = 1;
         caller.need_resched = 1;
+    }
+    if (block_turn == 1 && v->vm->irqchip != KVM_IRQCHIP_NONE) {
+        v->mp_state = KVM_MP_STATE_HALTED;
     }
     return 0;
 }
@@ -1117,15 +1121,14 @@ int kvm_lapic_ready(struct kvm_vcpu *v)
 
 /* A halted vCPU's sleep at the run loop's top, which a row asks for with
  * `block_turn`, the pass over the loop's top it comes at, counting down:
- * the thread blocks in `wq_wait_event`, whose `schedule` calls its
- * `sched_out` with interrupts off, not preempted, and is woken and switched
- * in again; the steal time's `preempted` byte at `preempt_seen_at` is kept
- * in `block_seen` as the switch found it. */
-static int block_turn, block_seen = -1;
-
+ * the exit before that pass halts the vCPU (`fake_exit`), so that the loop
+ * calls `kvm_lapic_prepare`, and the thread blocks in `wq_wait_event`,
+ * whose `schedule` calls its `sched_out` with interrupts off, not
+ * preempted, and is woken, switched in again and runnable; the steal
+ * time's `preempted` byte at `preempt_seen_at` is kept in `block_seen` as
+ * the switch found it. */
 int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
 {
-    (void)v;
     if (block_turn && --block_turn == 0) {
         CHECK(irq_on && caller.sched_out != NULL,
               "a halted vCPU sleeps with interrupts on, its thread's sched_out set");
@@ -1135,7 +1138,26 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
         caller.pcount++;
         block_seen = preempt_seen_at ? *preempt_seen_at : -1;
         irq_on = 1;
+        v->mp_state = KVM_MP_STATE_RUNNABLE;
     }
+    return 0;
+}
+
+/** vlapic.c's and i8254.c's timer checks, which KVM_REQ_TIMER runs: no
+ * timer is armed here. */
+void kvm_lapic_timer_check(struct kvm_vcpu *v)
+{
+    (void)v;
+}
+
+void kvm_pit_check(struct kvm_vm *vm)
+{
+    (void)vm;
+}
+
+uint64_t kvm_lapic_next_ns(struct kvm_vcpu *v)
+{
+    (void)v;
     return 0;
 }
 
