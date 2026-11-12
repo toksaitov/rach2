@@ -330,9 +330,12 @@ static int interrupt_pending(void)
  * timer's pump is all that is left: it is how the fallback is seen to work on
  * a machine whose interrupts stop.
  *
- * The router ends a message, and a line the I/O APIC routes, at the local
- * APIC after this returns, and a line through the 8259 before this runs;
- * either way it then lets a woken reader run.
+ * The router ends a message at the local APIC, and a line through the 8259
+ * at the 8259, before this runs, and a line the I/O APIC routes at the
+ * local APIC after this returns; either way it then lets a woken reader
+ * run. A message that comes while the pump sleeps in a disk's teardown
+ * (`usbdisk_step`) is run by this run once it returns, and the timer's
+ * pump drains the rings meanwhile.
  */
 static void usb_msi_handler(isr_params_t *params)
 {

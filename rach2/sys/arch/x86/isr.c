@@ -1225,13 +1225,14 @@ int arch_irq_waiting(void)
  * again without being lost.
  *
  * Through the I/O APIC, the local APIC's end-of-interrupt comes after the
- * chain, as a message's does: a level-triggered line is still asserted until
- * its handler has quieted the device, and an end sent before would have the
- * I/O APIC send it again at once. The tick's vector is the exception. Its
- * handler may switch to another process before it returns, and while its
- * vector is in service the local APIC blocks every vector of its
- * priority and below, the lines' included; it is an edge, and is ended
- * first, as through the 8259.
+ * chain, unlike a message's, as Linux's handle_fasteoi_irq ends a level
+ * line after its handler (kernel/irq/chip.c:687-736): a level-triggered
+ * line is still asserted until its handler has quieted the device, and an
+ * end sent before would have the I/O APIC send it again at once. The
+ * tick's vector is the exception. Its handler may switch to another process
+ * before it returns, and while its vector is in service the local APIC
+ * blocks every vector of its priority and below, the lines' included; it is
+ * an edge, and is ended first, as through the 8259.
  *
  * After any chain but the tick's, a process a device woke runs now, or at
  * its system call's exit (`sched_tick`): woken only at the next tick, a
