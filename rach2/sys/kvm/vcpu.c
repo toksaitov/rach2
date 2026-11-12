@@ -1197,13 +1197,14 @@ static int32_t get_xsave(struct kvm_vcpu *v, uintptr_t arg)
  * KVM_SET_XSAVE: an XSAVE image in its standard form, which Linux's
  * fpu_copy_uabi_to_guest_fpstate takes when its header marks only
  * components KVM supports on this host, whatever the guest's CPUID allows,
- * so that a vCPU's state loads into one not yet given its CPUID, its
- * compaction word and reserved bytes are zero, and, with x87, SSE or AVX
- * marked, its MXCSR sets no reserved bit. With none of those three marked
- * the vCPU keeps its MXCSR, as Linux's copy_uabi_to_xstate keeps it, since
- * XRSTOR loads MXCSR whenever SSE or AVX is asked for. Without XSAVE only
- * x87 and SSE may be marked, and the 512 bytes of FXSAVE's image are
- * taken. 0, -EINVAL, -ENOMEM or -EFAULT.
+ * its compaction word and reserved bytes are zero, and, with x87, SSE or
+ * AVX marked, its MXCSR sets no reserved bit. The check is against the
+ * host's components so that a vCPU's state loads into one not yet given
+ * its CPUID. With none of those three marked the vCPU keeps its MXCSR, as
+ * Linux's copy_uabi_to_xstate keeps it, since XRSTOR loads MXCSR whenever
+ * SSE or AVX is asked for. Without XSAVE only x87 and SSE may be marked,
+ * and the 512 bytes of FXSAVE's image are taken. 0, -EINVAL, -ENOMEM or
+ * -EFAULT.
  */
 static int32_t set_xsave(struct kvm_vcpu *v, uintptr_t arg)
 {
