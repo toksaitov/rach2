@@ -31,6 +31,11 @@ int kcpu_apic_present(void);
 /** Whether `cpuid` reports x2APIC mode (leaf 1, ECX bit 21). */
 int kcpu_x2apic_present(void);
 
+/** The running processor's x2APIC identity, which xAPIC mode shows only
+ * the low eight bits of: leaf 0xB's EDX where the leaf describes a level,
+ * else the initial APIC id of leaf 1's EBX bits 31:24. */
+uint32_t kcpu_x2apic_id(void);
+
 /** Whether the processor has x2APIC mode and runs under a hypervisor that
  * delivers interrupts to it without interrupt remapping: KVM, Hyper-V or
  * Xen, as Linux's `x86_init.hyper.x2apic_available` answers. */

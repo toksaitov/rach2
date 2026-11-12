@@ -29,23 +29,26 @@
  * each access to the page is an exit with its instruction decoded, and an
  * xAPIC interprocessor interrupt is three of them, so x2APIC mode is used
  * where Linux 6.12.115 uses it: under a hypervisor that delivers interrupts
- * to it unremapped (`kcpu_x2apic_unremapped`), from `lapic_init`; and on
- * bare metal once the VT-d units remap interrupts in x2APIC format
- * (`lapic_x2apic_enable`, iommu/intremap.c), since an x2APIC without
- * remapping is not supported there. That is Linux's try_to_enable_x2apic
- * and check_x2apic (arch/x86/kernel/apic/apic.c, lines 1820 to 1873). A
- * firmware that left the APIC in x2APIC mode on bare metal has it returned
- * to xAPIC mode, as Linux's x2apic_disable does, unless it locked it there.
+ * to it unremapped (`kcpu_x2apic_unremapped`), from `lapic_init`, for a
+ * boot identity below 255; and on bare metal once the VT-d units remap
+ * interrupts in x2APIC format (`lapic_x2apic_enable`, iommu/intremap.c),
+ * since an x2APIC without remapping is not supported there. Neither
+ * happens while the I/O APIC is off by the boot line. That is Linux's
+ * enable_IR_x2apic, try_to_enable_x2apic and check_x2apic
+ * (arch/x86/kernel/apic/apic.c, lines 1820 to 1927). A firmware's x2APIC
+ * mode is kept where it is locked or a hypervisor allows it, and on the
+ * x86-64 kernel until remapping's format is known (`lapic_x2apic_settle`);
+ * otherwise it is returned to xAPIC mode, as Linux's x2apic_disable does.
  * Destinations are physical, as x2apic_phys.c gives them: every message
  * names one processor. `nox2apic` keeps xAPIC mode, as on Linux.
  *
  * A processor without an APIC or without the model-specific registers, in
- * an x2APIC mode it cannot leave with an identity above 254, or in xAPIC
- * mode with its registers above 4 GiB, at no address or on a page that
- * cannot be mapped, is refused by name: the kernel then has no message
- * vectors and every device stays on its legacy line. `rach2.nomsi` refuses
- * in the same way, so a machine that misbehaves has one word on its boot
- * line.
+ * an x2APIC mode it cannot leave with an identity above 254 where no
+ * remapping can come, or in xAPIC mode with its registers above 4 GiB, at
+ * no address or on a page that cannot be mapped, is refused by name: the
+ * kernel then has no message vectors and every device stays on its legacy
+ * line. `rach2.nomsi` refuses in the same way, so a machine that misbehaves
+ * has one word on its boot line.
  */
 
 #include "lapic.h"
@@ -53,6 +56,8 @@
 #include "../../cmdline.h"
 #include "../../klog.h"
 #include "../../lib/kirq.h"
+#include "../../panic.h"
+#include "ioapic.h"
 #include "kcpu.h"
 #include "../../mm/paging.h"
 #include "../../proc/percpu.h"
@@ -100,16 +105,26 @@
 #define ICR_LEVEL           (1u << 15)
 
 /* The APIC's register page as `lapic_init` mapped it, NULL until then, in
- * x2APIC mode, and while a host test's `io` stands in for it; the host
- * test's access, or NULL; the boot processor's APIC identity; whether
- * `lapic_init` enabled the APIC, which every access but its own checks;
- * and whether every processor's APIC is in x2APIC mode, its registers
- * MSRs, which changes only on the boot processor before the others start. */
+ * x2APIC mode but for a firmware's mode kept until it is settled, and
+ * while a host test's `io` stands in for it; the host test's access, or
+ * NULL; the boot processor's APIC identity; whether `lapic_init` enabled
+ * the APIC, which every access but its own checks; and whether every
+ * processor's APIC is in x2APIC mode, its registers MSRs, which changes
+ * only on the boot processor before the others start. */
 static volatile uint32_t *apic;
 static const struct lapic_io *io;
 static uint32_t apic_id;
 static int ready;
 static int x2apic;
+
+/* Whether the x2APIC mode is a firmware's that `lapic_x2apic_settle` keeps
+ * or leaves once remapping's format is known; whether `lapic_x2apic_enable`
+ * moved the APIC there, which `lapic_x2apic_disable` undoes; and whether
+ * `nox2apic` took effect, which a firmware's lock or a wide identity
+ * prevents. */
+static int x2apic_kept;
+static int x2apic_moved;
+static int nox2apic_taken;
 
 /* The spurious vectors each processor took, in a word of its own, since the
  * handler runs without a lock on every processor. */
@@ -179,11 +194,12 @@ static uint32_t lapic_svr(uint32_t svr)
     return (svr & ~(0xFFu | SVR_EOI_SUPPRESS)) | SVR_SOFTWARE_ENABLE | SPURIOUS_VECTOR;
 }
 
-/** Whether x2APIC mode may be used: the processor has it and the boot line
- * has no `nox2apic`, Linux's word that clears the processor's x2APIC bit. */
+/** Whether x2APIC mode may be used: the processor has it and `nox2apic`
+ * did not take effect, Linux's word that clears the processor's x2APIC bit
+ * (`setup_nox2apic`, apic.c, lines 1733 to 1754). */
 static int x2apic_offered(void)
 {
-    return !kcmdline_has("nox2apic") && kcpu_x2apic_present();
+    return !nox2apic_taken && kcpu_x2apic_present();
 }
 
 /** Return this processor's APIC from x2APIC to xAPIC mode through the
@@ -196,30 +212,99 @@ static void x2apic_leave(uint32_t lo, uint32_t hi)
     kcpu_wrmsr(IA32_APIC_BASE, (lo & ~APIC_BASE_X2APIC) | APIC_BASE_ENABLE, hi);
 }
 
+/* What becomes of a firmware's x2APIC mode (`firmware_verdict`). */
+#define FW_KEEP  0 /* stay in x2APIC mode */
+#define FW_LEAVE 1 /* return to xAPIC mode */
+#define FW_STUCK 2 /* neither: no message reaches identity `id` */
+
+/**
+ * What becomes of the x2APIC mode a firmware left, with the identity `id`,
+ * when interrupt remapping runs in the x2APIC format (`remapped`) or never
+ * will: Linux's try_to_enable_x2apic and x2apic_disable (apic.c, lines 1781
+ * to 1857). Remapping in that format reaches any identity, and a
+ * hypervisor that allows x2APIC mode unremapped delivers to it, so the mode
+ * is kept; so is a mode the firmware locked. Otherwise it is left, unless
+ * the identity is 255 or more, which xAPIC mode, an I/O APIC entry's 8-bit
+ * destination and a message's address cannot name, where Linux panics.
+ */
+static int firmware_verdict(uint32_t id, int remapped)
+{
+    if (remapped) {
+        return FW_KEEP;
+    }
+    if (id >= 0xFFu) {
+        return FW_STUCK;
+    }
+    if (kcpu_x2apic_locked() || kcpu_x2apic_unremapped()) {
+        return FW_KEEP;
+    }
+    return FW_LEAVE;
+}
+
+/** Whether interrupt remapping may yet start and run in the x2APIC format:
+ * only the x86-64 kernel has it (platform.c), and not while the I/O APIC is
+ * off by the boot line (`ioapic_disabled`). */
+static int remapping_may_come(void)
+{
+#if defined(__x86_64__)
+    return !ioapic_disabled();
+#else
+    return 0;
+#endif
+}
+
 /**
  * Choose the boot processor's mode from IA32_APIC_BASE's `*lo` and `hi`,
- * as check_x2apic and try_to_enable_x2apic do for a kernel with no
- * interrupt remapping yet: x2APIC mode (`x2apic` set) under a hypervisor
- * that allows it, or where the firmware locked it; otherwise xAPIC mode,
- * with a firmware's x2APIC mode left (`*lo` updated). 0, or -1 when the
- * firmware's x2APIC identity is past what xAPIC mode can address.
+ * as Linux's check_x2apic, setup_nox2apic and enable_IR_x2apic do before
+ * interrupt remapping (apic.c, lines 1733 to 1754, 1859 to 1872 and 1893
+ * to 1901). 0, with `x2apic` set for x2APIC mode and `*lo` updated when a
+ * firmware's x2APIC mode was left; -1 when a firmware's mode can be
+ * neither kept nor left.
+ *
+ * From xAPIC mode, x2APIC mode is entered under a hypervisor that allows
+ * it unremapped, unless `nox2apic` or the I/O APIC is off by the boot line,
+ * where Linux's enable_IR_x2apic returns before it moves, or the boot
+ * identity is 255 or more, which no device's interrupt reaches without
+ * remapping (`x2apic_set_max_apicid`, line 1853); remapping may still move
+ * it (`lapic_x2apic_enable`).
+ *
+ * A firmware's x2APIC mode is left at once under `nox2apic`, which neither
+ * a lock nor an identity of 255 or more lets take effect. Otherwise it is
+ * kept while remapping may still start in the x2APIC format, and settled
+ * by `lapic_x2apic_settle` once the format is known (`x2apic_kept`); where
+ * remapping cannot come, `firmware_verdict` settles it here.
  */
 static int choose_mode(uint32_t *lo, uint32_t hi)
 {
     uint32_t id = 0;
+    int verdict;
 
-    x2apic = x2apic_offered() && kcpu_x2apic_unremapped();
-    if ((*lo & APIC_BASE_X2APIC) == 0 || x2apic) {
-        return 0;
-    }
-    if (kcpu_x2apic_locked()) {
-        x2apic = 1;
-        klog(KLOG_WARN, "lapic", "x2apic: locked on by the firmware; kept");
+    x2apic = 0;
+    x2apic_kept = 0;
+    nox2apic_taken = kcmdline_has("nox2apic");
+    if ((*lo & APIC_BASE_X2APIC) == 0) {
+        x2apic = x2apic_offered() && !ioapic_disabled() && kcpu_x2apic_unremapped() &&
+                 kcpu_x2apic_id() < 0xFFu;
         return 0;
     }
     kcpu_rdmsr(X2APIC_MSR(LAPIC_ID), &id, 0);
-    if (id >= 0xFFu) {
+    if (id >= 0xFFu || kcpu_x2apic_locked()) {
+        nox2apic_taken = 0;
+    }
+    verdict = nox2apic_taken ? FW_LEAVE : firmware_verdict(id, 0);
+    if (verdict != FW_KEEP && !nox2apic_taken && remapping_may_come()) {
+        x2apic = 1;
+        x2apic_kept = 1;
+        klog(KLOG_INFO, "lapic", "x2apic: left on by the firmware; kept until remapping starts");
+        return 0;
+    }
+    if (verdict == FW_STUCK) {
         return -1;
+    }
+    if (verdict == FW_KEEP) {
+        x2apic = 1;
+        klog(KLOG_INFO, "lapic", "x2apic: left on by the firmware; kept");
+        return 0;
     }
     x2apic_leave(*lo, hi);
     *lo = (*lo & ~APIC_BASE_X2APIC) | APIC_BASE_ENABLE;
@@ -228,7 +313,8 @@ static int choose_mode(uint32_t *lo, uint32_t hi)
 }
 
 /**
- * In x2APIC mode no page is mapped and the base is not read.
+ * In x2APIC mode no page is mapped and the base is not read, but for a
+ * firmware's mode kept until `lapic_x2apic_settle`, which may leave it.
  *
  * In xAPIC mode a base whose upper half is not zero is above 4 GiB, where
  * this kernel's addresses do not reach, and taking its low half would map
@@ -250,6 +336,9 @@ int lapic_init(void)
 
     ready = 0;
     x2apic = 0;
+    x2apic_kept = 0;
+    x2apic_moved = 0;
+    nox2apic_taken = kcmdline_has("nox2apic");
     if (kcmdline_has("rach2.nomsi")) {
         return refuse("rach2.nomsi on the boot line");
     }
@@ -261,10 +350,10 @@ int lapic_init(void)
     }
     kcpu_rdmsr(IA32_APIC_BASE, &lo, &hi);
     if (choose_mode(&lo, hi) != 0) {
-        return refuse("x2apic mode with an identity past 254, which xapic mode cannot address");
+        return refuse("x2apic mode with an identity past 254, which no message reaches unremapped");
     }
     base = lo & 0xFFFFF000u;
-    if (!x2apic) {
+    if (!x2apic || x2apic_kept) {
         if (hi != 0) {
             return refuse("an apic base above 4 gib");
         }
@@ -351,6 +440,11 @@ int lapic_x2apic(void)
     return ready && x2apic;
 }
 
+int lapic_nox2apic(void)
+{
+    return nox2apic_taken;
+}
+
 int lapic_x2apic_possible(void)
 {
     return ready && (x2apic || x2apic_offered());
@@ -367,14 +461,39 @@ int lapic_x2apic_enable(void)
         return 0;
     }
     switch_mode(1);
+    x2apic_moved = 1;
     return 1;
 }
 
 void lapic_x2apic_disable(void)
 {
-    if (ready && x2apic && (apic != NULL || io != NULL) && !kcpu_x2apic_unremapped() &&
-        !kcpu_x2apic_locked()) {
+    if (ready && x2apic_moved) {
+        x2apic_moved = 0;
         switch_mode(0);
+    }
+}
+
+/** Linux panics where the mode can be neither kept nor left (apic.c, lines
+ * 1788 to 1790): its identity is past what every message but a remapped
+ * one names, and the I/O APIC and the devices already send to it. */
+void lapic_x2apic_settle(int remapped)
+{
+    if (!ready || !x2apic_kept) {
+        return;
+    }
+    x2apic_kept = 0;
+    switch (firmware_verdict(apic_id, remapped)) {
+    case FW_KEEP:
+        klog(KLOG_INFO, "lapic", "x2apic: the firmware's mode kept: remapped in x2apic format");
+        break;
+    case FW_STUCK:
+        klog(KLOG_ERR, "lapic", "x2apic: id %u past 254 and no remapping in x2apic format",
+             (unsigned int)apic_id);
+        k_panic("lapic: x2apic mode can be neither kept nor left");
+        break;
+    default:
+        switch_mode(0);
+        break;
     }
 }
 

@@ -216,6 +216,7 @@ void vtd_gcmd_once(struct vtd_unit *u, uint32_t bit);
 int intremap_start(void);
 void intremap_stop(void);
 int intremap_active(void);
+int intremap_x2apic(void);
 
 /* fault.c */
 int vtd_fault_start(void);
@@ -270,6 +271,10 @@ const uint8_t *vtd_hw_dmar(uint32_t *len);
 /** Whether the boot line has `key=value` among the values of `key`, which
  * may be a list separated by commas, as `intel_iommu=on,igfx_off` is. */
 int vtd_hw_option(const char *key, const char *value);
+
+/** Whether the boot line keeps the I/O APIC off, and with it interrupt
+ * remapping (`ioapic_disabled`). */
+int vtd_hw_ioapic_off(void);
 
 /** The ids of the I/O APICs the MADT lists, up to `max`: their count. */
 int vtd_hw_ioapics(uint8_t *ids, int max);

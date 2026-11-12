@@ -17,11 +17,14 @@
  * (IRTA.EIME), by its 32-bit x2APIC id, which Linux 6.12.115 chooses when
  * the processor offers x2APIC mode, the DMAR table does not opt out of it
  * and every unit has the format (`choose_eim`). On bare metal the local
- * APIC enters x2APIC mode only then, before the first entry is written:
- * Linux's enable_IR_x2apic and try_to_enable_x2apic (arch/x86/kernel/apic/
- * apic.c, lines 1820 to 1857 and 1891 to 1923). While remapping starts the
- * units let compatibility-format interrupts by, which reach a processor in
- * x2APIC mode by its 8-bit id.
+ * APIC enters x2APIC mode only then (`try_to_enable_x2apic`, arch/x86/
+ * kernel/apic/apic.c, lines 1820 to 1857), and before the first entry is
+ * written. Linux moves it after IRE and the CFI clear, with the 8259 and
+ * the I/O APIC masked (lines 1913 to 1926), before any PCI device is
+ * probed; here the sources are live and a message may have no mask, so
+ * the move comes first, and while remapping starts the units let
+ * compatibility-format interrupts by, which reach the processor in x2APIC
+ * mode by its 8-bit id (iommu/Readme.md).
  */
 
 #include "vtd.h"
@@ -394,4 +397,9 @@ void intremap_stop(void)
 int intremap_active(void)
 {
     return ir_on;
+}
+
+int intremap_x2apic(void)
+{
+    return ir_on && eim;
 }

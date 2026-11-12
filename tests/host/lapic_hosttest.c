@@ -26,6 +26,8 @@
 
 #include "../../rach2/sys/arch/x86/lapic.h"
 
+#include <setjmp.h>
+
 extern int printf(const char *fmt, ...);
 extern void exit(int status);
 
@@ -89,11 +91,16 @@ static const struct lapic_io model_io = {model_read, model_write};
 
 /* The processor's features, a hypervisor that allows x2APIC mode
  * unremapped, a firmware's lock of it, the command line's rach2.nomsi and
- * nox2apic, and the writes of IA32_APIC_BASE. */
+ * nox2apic, the I/O APIC off by noapic or maxcpus=0, and the writes of
+ * IA32_APIC_BASE. */
 static int has_apic, has_msr, has_x2apic, hypervisor, locked;
-static int nomsi, nox2apic;
+static int nomsi, nox2apic, ioapic_off;
 static int wrmsr_calls;
 static unsigned int wrmsr_lo;
+
+/* The panics the driver raised, each of which returns to `panic_return`. */
+static int panics;
+static jmp_buf panic_return;
 
 /** Whether `cpuid` reports an APIC: `has_apic`. */
 int kcpu_apic_present(void)
@@ -123,6 +130,26 @@ int kcpu_x2apic_unremapped(void)
 int kcpu_x2apic_locked(void)
 {
     return locked;
+}
+
+/** The x2APIC identity `cpuid` gives, the same as the register's. */
+unsigned int kcpu_x2apic_id(void)
+{
+    return x2_id;
+}
+
+/** Whether the boot line keeps the I/O APIC off: `ioapic_off`. */
+int ioapic_disabled(void)
+{
+    return ioapic_off;
+}
+
+/** Count a panic and return to the row that set `panic_return`. */
+void k_panic(const char *str)
+{
+    (void)str;
+    panics++;
+    longjmp(panic_return, 1);
 }
 
 /** A `cpuid` that writes nothing; the driver asks the calls above. */
@@ -300,6 +327,8 @@ static void reset_model(unsigned int lint0)
     locked = 0;
     nomsi = 0;
     nox2apic = 0;
+    ioapic_off = 0;
+    panics = 0;
     wrmsr_calls = 0;
     faults = 0;
     x2_id = 3;
@@ -346,10 +375,10 @@ static void rows_x2apic_hypervisor(void)
     reset_model(0x8700);
     has_x2apic = 1;
     hypervisor = 1;
-    x2_id = 0x103;
+    x2_id = 0x13;
     check(lapic_init() == 0 && lapic_x2apic(), "under a hypervisor x2APIC mode is used");
     check((apic_base_lo & 0xC00u) == 0xC00u, "with the base register's bits 10 and 11 set");
-    check(lapic_id() == 0x103 && lapic_this_id() == 0x103, "and the identity read whole");
+    check(lapic_id() == 0x13 && lapic_this_id() == 0x13, "and the identity read from its MSR");
     check(writes == 0, "and the page is not written");
     check(apic_page[0xF0 / 4] == (0x100u | 0xFFu) && apic_page[0x80 / 4] == 0,
           "the spurious register and the task priority are written through their MSRs");
@@ -372,8 +401,9 @@ static void rows_x2apic_hypervisor(void)
     check(faults == 0, "and nothing touched the page or faulted");
 }
 
-/** x2APIC mode not chosen: bare metal before remapping, `nox2apic`, and a
- * processor without the mode. */
+/** x2APIC mode not chosen: bare metal before remapping, `nox2apic`, the
+ * I/O APIC off, a boot identity no message reaches, and a processor without
+ * the mode. */
 static void rows_x2apic_not_chosen(void)
 {
     reset_model(0x8700);
@@ -393,37 +423,142 @@ static void rows_x2apic_not_chosen(void)
     hypervisor = 1;
     check(lapic_init() == 0 && !lapic_x2apic() && !lapic_x2apic_possible(),
           "a processor without x2APIC keeps xAPIC mode");
+
+    reset_model(0x8700);
+    has_x2apic = 1;
+    hypervisor = 1;
+    ioapic_off = 1;
+    check(lapic_init() == 0 && !lapic_x2apic() && wrmsr_calls == 0,
+          "noapic or maxcpus=0 keeps xAPIC mode under a hypervisor");
+
+    reset_model(0x8700);
+    has_x2apic = 1;
+    hypervisor = 1;
+    x2_id = 0xFF;
+    check(lapic_init() == 0 && !lapic_x2apic() && wrmsr_calls == 0,
+          "an identity of 255 keeps xAPIC mode under a hypervisor");
+    check(lapic_x2apic_possible() && lapic_x2apic_enable() == 1 && lapic_x2apic(),
+          "where remapping may still move it");
+    lapic_x2apic_disable();
+    check(!lapic_x2apic() && (apic_base_lo & 0xC00u) == 0x800u && faults == 0,
+          "and moves it back when it fails");
 }
 
-/** A firmware's x2APIC mode: left on bare metal, kept when locked, and
- * refused with an identity xAPIC mode cannot address. */
-static void rows_x2apic_firmware(void)
+/** A firmware's x2APIC mode on bare metal, kept until remapping's format
+ * is known and then kept or left, or settled at once where no remapping
+ * can come. */
+static void rows_x2apic_firmware_settled(void)
 {
     reset_model(0x8700);
     has_x2apic = 1;
     apic_base_lo |= 1u << 10;
-    check(lapic_init() == 0 && !lapic_x2apic(),
-          "a firmware's x2APIC mode on bare metal is returned to xAPIC mode");
-    check((apic_base_lo & 0xC00u) == 0x800u && wrmsr_calls == 2,
-          "through the disabled state, in two writes");
-    check(apic_page[0xF0 / 4] == (0x100u | 0xFFu) && apic_page[0x350 / 4] == (7u << 8),
-          "and the reset APIC is enabled with LINT0 an external interrupt again");
-    check(faults == 0, "with no fault");
+    check(lapic_init() == 0 && lapic_x2apic() && wrmsr_calls == 0,
+          "a firmware's x2APIC mode is kept until remapping starts");
+    check(apic_page[0xF0 / 4] == (0x100u | 0xFFu) && faults == 0, "and enabled through its MSRs");
+    lapic_x2apic_settle(0);
+    check(!lapic_x2apic() && (apic_base_lo & 0xC00u) == 0x800u && wrmsr_calls == 2,
+          "remapping in the xAPIC format, or none, leaves it through the disabled state");
+    check(apic_page[0xF0 / 4] == (0x100u | 0xFFu) && apic_page[0x350 / 4] == 0x8700u && faults == 0,
+          "with the registers the disabled state reset written again");
+    lapic_x2apic_settle(1);
+    check(!lapic_x2apic() && wrmsr_calls == 2, "and a second settle does nothing");
+
+    reset_model(0x8700);
+    has_x2apic = 1;
+    apic_base_lo |= 1u << 10;
+    (void)lapic_init();
+    lapic_x2apic_settle(1);
+    check(lapic_x2apic() && wrmsr_calls == 0 && writes == 0 && faults == 0,
+          "remapping in the x2APIC format keeps it");
+
+    reset_model(0x8700);
+    has_x2apic = 1;
+    apic_base_lo |= 1u << 10;
+    x2_id = 0x1FF;
+    check(lapic_init() == 0 && lapic_x2apic() && lapic_id() == 0x1FF,
+          "an identity past 254 is kept until remapping starts");
+    lapic_x2apic_settle(1);
+    check(lapic_x2apic() && panics == 0, "and kept when remapping can reach it");
+
+    reset_model(0x8700);
+    has_x2apic = 1;
+    apic_base_lo |= 1u << 10;
+    x2_id = 0x1FF;
+    (void)lapic_init();
+    if (setjmp(panic_return) == 0) {
+        lapic_x2apic_settle(0);
+    }
+    check(panics == 1 && wrmsr_calls == 0,
+          "without remapping in the x2APIC format it is a panic, as Linux's x2apic_disable");
+
+    reset_model(0x8700);
+    has_x2apic = 1;
+    apic_base_lo |= 1u << 10;
+    ioapic_off = 1;
+    check(lapic_init() == 0 && !lapic_x2apic() && (apic_base_lo & 0xC00u) == 0x800u,
+          "where no remapping can come it is left at once");
+    check(wrmsr_calls == 2 && apic_page[0xF0 / 4] == (0x100u | 0xFFu) &&
+              apic_page[0x350 / 4] == (7u << 8) && faults == 0,
+          "and the reset APIC enabled with LINT0 an external interrupt again");
+
+    reset_model(0x8700);
+    has_x2apic = 1;
+    apic_base_lo |= 1u << 10;
+    ioapic_off = 1;
+    x2_id = 0x1FF;
+    check(lapic_init() == -1 && !lapic_ready() && wrmsr_calls == 0 && faults == 0,
+          "and refused with an identity past 254, nothing written");
+}
+
+/** A firmware's x2APIC mode kept where it is locked or a hypervisor allows
+ * it, and `nox2apic`, which takes effect only where the mode can be left. */
+static void rows_x2apic_firmware(void)
+{
+    rows_x2apic_firmware_settled();
 
     reset_model(0x8700);
     has_x2apic = 1;
     locked = 1;
+    ioapic_off = 1;
     apic_base_lo |= 1u << 10;
     check(lapic_init() == 0 && lapic_x2apic(), "a locked x2APIC mode is kept");
     check(writes == 0 && wrmsr_calls == 0 && faults == 0, "and the page is not touched");
 
     reset_model(0x8700);
     has_x2apic = 1;
+    hypervisor = 1;
     apic_base_lo |= 1u << 10;
+    (void)lapic_init();
+    lapic_x2apic_settle(0);
+    check(lapic_x2apic() && wrmsr_calls == 0, "under a hypervisor it is kept without remapping");
+
+    reset_model(0x8700);
+    has_x2apic = 1;
+    nox2apic = 1;
+    apic_base_lo |= 1u << 10;
+    check(lapic_init() == 0 && !lapic_x2apic() && wrmsr_calls == 2 && lapic_nox2apic(),
+          "nox2apic leaves it at once and takes effect");
+
+    reset_model(0x8700);
+    has_x2apic = 1;
+    nox2apic = 1;
+    locked = 1;
+    apic_base_lo |= 1u << 10;
+    check(lapic_init() == 0 && lapic_x2apic() && !lapic_nox2apic() && lapic_x2apic_possible(),
+          "nox2apic does not take effect on a locked mode");
+
+    reset_model(0x8700);
+    has_x2apic = 1;
+    nox2apic = 1;
     x2_id = 0x1FF;
-    check(lapic_init() == -1 && !lapic_ready(),
-          "a firmware's x2APIC mode with an identity past 254 is refused");
-    check(wrmsr_calls == 0 && faults == 0, "and nothing is written");
+    apic_base_lo |= 1u << 10;
+    check(lapic_init() == 0 && lapic_x2apic() && !lapic_nox2apic() && lapic_x2apic_possible(),
+          "nor with an identity past 254, which waits for remapping");
+
+    reset_model(0x8700);
+    nox2apic = 1;
+    (void)lapic_init();
+    check(lapic_nox2apic(), "and does in xAPIC mode");
 }
 
 /** The moves interrupt remapping makes, and the processors started after
@@ -481,13 +616,17 @@ static void rows_x2apic_moves(void)
  * reaches every register through its MSR: the identity whole, the
  * end-of-interrupt one write of zero to 0x80B, an interprocessor interrupt
  * one write of 0x830 with the destination in its high half, a message to
- * itself one write of 0x83F. Without the processor's bit, or with
- * `nox2apic`, the APIC stays in xAPIC mode. A firmware's x2APIC mode on
- * bare metal is left through the disabled state, its registers set up
- * afresh through the page; a locked one is kept; one with an identity past
- * 254 is refused. Interrupt remapping's move from xAPIC mode keeps every
- * register, and the move back writes again those the disabled state reset.
- * No row may touch the page in x2APIC mode or an MSR outside it.
+ * itself one write of 0x83F. Without the processor's bit, with `nox2apic`,
+ * with the I/O APIC off, or for an identity of 255, the APIC stays in xAPIC
+ * mode. A firmware's x2APIC mode on bare metal is kept until remapping's
+ * format is known, then kept or left through the disabled state, its
+ * registers written again, or a panic with an identity past 254; where no
+ * remapping can come it is left at once, or refused with such an identity.
+ * A locked one is kept, and so is one under a hypervisor; `nox2apic` takes
+ * effect only on a mode that can be left. Interrupt remapping's move from
+ * xAPIC mode keeps every register, and the move back writes again those
+ * the disabled state reset. No row may touch the page in x2APIC mode or an
+ * MSR outside it.
  */
 static void rows_x2apic(void)
 {

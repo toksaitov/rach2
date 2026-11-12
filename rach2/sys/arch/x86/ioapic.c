@@ -22,6 +22,7 @@
 
 #include "ioapic.h"
 
+#include "../../cmdline.h"
 #include "../../klog.h"
 #include "../../lib/kirq.h"
 #include "../../mm/paging.h"
@@ -82,6 +83,28 @@ static void reg_write(const struct ioapic *c, uint32_t reg, uint32_t value)
     c->regs[IOAPIC_SELECT] = reg;
     c->regs[IOAPIC_WINDOW] = value;
     kirq_restore(flags);
+}
+
+/** `maxcpus=` counts as 0 when its value begins with decimal digits that
+ * read 0, as `smp_start` reads them; a value that begins with no digit is
+ * passed over, as Linux's get_option passes it over. */
+int ioapic_disabled(void)
+{
+    char v[12];
+    int i;
+
+    if (kcmdline_has("noapic")) {
+        return 1;
+    }
+    if (!kcmdline_value("maxcpus", v, sizeof(v)) || v[0] < '0' || v[0] > '9') {
+        return 0;
+    }
+    for (i = 0; v[i] >= '0' && v[i] <= '9'; i++) {
+        if (v[i] != '0') {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 int ioapic_init(const struct acpi_info *a)
