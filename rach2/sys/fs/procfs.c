@@ -65,6 +65,7 @@
 #include "../timer.h"
 #include "../vdso.h"
 #include "vfs.h"
+#include "writeback.h"
 #include "name.h"
 #include "lock.h"
 #include "sleeplock.h"
@@ -8585,7 +8586,12 @@ static const struct {
     {SYNTH_SYS_PROTECTED_FIFOS, &vfs_protected_fifos, 0, 2},
     {SYNTH_SYS_PROTECTED_FIFOS + 1, &vfs_protected_hardlinks, 0, 1},
     {SYNTH_SYS_PROTECTED_FIFOS + 2, &vfs_protected_regular, 0, 2},
-    {SYNTH_SYS_PROTECTED_SYMLINKS, &vfs_protected_symlinks, 0, 1}};
+    {SYNTH_SYS_PROTECTED_SYMLINKS, &vfs_protected_symlinks, 0, 1},
+    {SYNTH_SYS_DIRTY_BACKGROUND_RATIO, &dirty_background_ratio, 0, 100},
+    {SYNTH_SYS_DIRTY_EXPIRE, &dirty_expire_interval, 0, 0x7FFFFFFF},
+    {SYNTH_SYS_DIRTY_RATIO, &vm_dirty_ratio, 0, 100},
+    {SYNTH_SYS_DIRTY_WRITEBACK, &dirty_writeback_interval, 0, 0x7FFFFFFF},
+    {SYNTH_SYS_DIRTYTIME_EXPIRE, &dirtytime_expire_interval, 0, 0x7FFFFFFF}};
 
 /** The index in `sysctl_ints` of the /proc/sys file `entry`, or -1. */
 static int sysctl_int(int entry)
@@ -8613,7 +8619,12 @@ static int sysctl_int(int entry)
  * reads the new value sees it moved and returns (`watchdog_timer_fn`), as
  * Linux stores the threshold only once the timers have stopped
  * (:867-880); and a write of the hung-task detector's timeout or interval
- * wakes it. `count` on success.
+ * wakes it. A write of vm/dirty_background_ratio clears
+ * dirty_background_bytes, and one that changes vm/dirty_ratio clears
+ * dirty_bytes, as Linux's `dirty_background_ratio_handler` and
+ * `dirty_ratio_handler` do (mm/page-writeback.c); a write of a vm setting
+ * wakes the flusher, as Linux's `dirty_writeback_centisecs_handler` does,
+ * for a look with the new value. `count` on success.
  */
 static int32_t sysctl_int_write(int entry, int32_t v, uint32_t count)
 {
@@ -8637,6 +8648,14 @@ static int32_t sysctl_int_write(int entry, int32_t v, uint32_t count)
     }
     if (entry == SYNTH_SYS_HUNG_TASK_TIMEOUT || entry == SYNTH_SYS_HUNG_TASK_INTERVAL) {
         watchdog_sysctl_changed();
+    }
+    if (entry == SYNTH_SYS_DIRTY_BACKGROUND_RATIO) {
+        dirty_background_bytes = 0;
+    } else if (entry == SYNTH_SYS_DIRTY_RATIO && old != (int)v) {
+        vm_dirty_bytes = 0;
+    }
+    if (entry >= SYNTH_SYS_DIRTY_BACKGROUND_BYTES && entry <= SYNTH_SYS_DIRTYTIME_EXPIRE) {
+        writeback_kick();
     }
     return (int32_t)count;
 }
@@ -8759,6 +8778,9 @@ static int procfs_sysctl_text(struct procfs_text *t, int entry)
     } else if (entry == SYNTH_SYS_FILE_MAX) {
         ap_ulong(t, fd_file_max);
         ap_ch(t, '\n');
+    } else if (entry == SYNTH_SYS_DIRTY_BACKGROUND_BYTES || entry == SYNTH_SYS_DIRTY_BYTES) {
+        ap_ulong(t, entry == SYNTH_SYS_DIRTY_BYTES ? vm_dirty_bytes : dirty_background_bytes);
+        ap_ch(t, '\n');
     } else if (entry == SYNTH_SYS_PIPE_MAX_SIZE) {
         ap_ulong(t, pipe_max_size);
         ap_ch(t, '\n');
@@ -8860,8 +8882,12 @@ static int sysctl_parse_ulong(const char *s, unsigned long limit, unsigned long 
  * Write the NUL-ended text `text` to the /proc/sys file `entry` when its
  * value is an unsigned long: fs/file-max, up to LONG_MAX; fs/pipe-max-size,
  * up to 2^31 and rounded (`pipe_round_size`); fs/pipe-user-pages-hard and
- * fs/pipe-user-pages-soft, any. Returns 0 for any other file, and otherwise
- * 1, with 0 or -EINVAL in `*rc`.
+ * fs/pipe-user-pages-soft, any; vm/dirty_background_bytes from 1 and
+ * vm/dirty_bytes from two pages, as Linux's minimums are, which clear
+ * dirty_background_ratio and, when changed, dirty_ratio, and wake the
+ * flusher (`dirty_background_bytes_handler`, `dirty_bytes_handler`,
+ * mm/page-writeback.c). Returns 0 for any other file, and otherwise 1, with
+ * 0 or -EINVAL in `*rc`.
  */
 static int sysctl_ulong_write(int entry, const char *text, int *rc)
 {
@@ -8886,6 +8912,30 @@ static int sysctl_ulong_write(int entry, const char *text, int *rc)
     case SYNTH_SYS_PIPE_USER_PAGES_SOFT:
         *rc = sysctl_parse_ulong(text, ~0ul, &pipe_user_pages_soft);
         return 1;
+    case SYNTH_SYS_DIRTY_BACKGROUND_BYTES:
+        *rc = sysctl_parse_ulong(text, ~0ul, &v);
+        if (*rc == 0 && v < 1ul) {
+            *rc = -EINVAL;
+        }
+        if (*rc == 0) {
+            dirty_background_bytes = v;
+            dirty_background_ratio = 0;
+            writeback_kick();
+        }
+        return 1;
+    case SYNTH_SYS_DIRTY_BYTES:
+        *rc = sysctl_parse_ulong(text, ~0ul, &v);
+        if (*rc == 0 && v < 2ul * PAGE_SIZE) {
+            *rc = -EINVAL;
+        }
+        if (*rc == 0) {
+            if (v != vm_dirty_bytes) {
+                vm_dirty_ratio = 0;
+            }
+            vm_dirty_bytes = v;
+            writeback_kick();
+        }
+        return 1;
     default:
         return 0;
     }
@@ -8905,8 +8955,9 @@ static int32_t sysctl_max_mnt_write(int32_t v, uint32_t count)
  *
  * kernel/hostname and kernel/domainname become the text up to its first
  * newline, at most 64 bytes, as sethostname(2) and setdomainname(2) would
- * set them; the whole count is taken. fs/file-max and the pipe limits take
- * an unsigned long (`sysctl_ulong_write`), and fs/pipe-max-size rounds it
+ * set them; the whole count is taken. fs/file-max, the pipe limits and
+ * vm's byte counts take an unsigned long (`sysctl_ulong_write`), and
+ * fs/pipe-max-size rounds it
  * as Linux's `round_pipe_size` does, so that 1 sets a page. A write to
  * another file is an integer, read as `oom_parse` reads one. A file of
  * `sysctl_ints` stores it in its owner's variable, which the owner reads at
