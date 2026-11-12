@@ -572,7 +572,7 @@ static int sched_rt_place(const process_t *p, int target)
  * its switch away, finds itself ready at its own selection, which takes
  * this lock, and runs on, as Linux's ttwu_runnable makes a task that has
  * not left its queue running with no interrupt (kernel/sched/core.c:
- * 3805-3830). It halts in place as current only where its processor has no
+ * 3756-3780). It halts in place as current only where its processor has no
  * idle task to switch to or the scheduler is off, and only then is it
  * kicked: a kick otherwise came during that processor's switch, with its
  * interrupts off, and cost an interrupt-window exit under KVM besides the

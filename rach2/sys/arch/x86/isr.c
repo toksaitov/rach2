@@ -1139,7 +1139,7 @@ static volatile unsigned int edge_again[ISR_MSI_LAST + 1];
 /**
  * Run the chain of a message vector, whose end of interrupt the caller has
  * already sent, once for each message, as Linux's handle_edge_irq does
- * (kernel/irq/chip.c:770-822): a message that comes while a run of the
+ * (kernel/irq/chip.c:787-838): a message that comes while a run of the
  * chain is under way, on this processor once a handler turns interrupts on,
  * or on another the vector was moved to, is noted (`edge_again`) and run by
  * that run once its chain returns, so that no handler runs inside itself.
@@ -1211,7 +1211,7 @@ int arch_irq_waiting(void)
  * A message from a PCI device, vector 48 and up, has no 8259 line to
  * acknowledge, and is an edge: the local APIC's end-of-interrupt comes
  * before the chain, as Linux's handle_edge_irq acknowledges a message
- * before its handler (`apic_ack_irq`, kernel/irq/chip.c:799), since a
+ * before its handler (`apic_ack_irq`, kernel/irq/chip.c:812), since a
  * handler's register reads and the kicks of the threads it wakes exit under
  * KVM, and an exit takes back a paravirtual end of interrupt still pending
  * (`lapic_eoi`), which then costs an exit of its own. A second message

@@ -62,7 +62,7 @@ static uint32_t tick_hz = TICK_HZ;
  *
  * A processor other than the boot one stops its tick while its idle task
  * waits (`stopped`), as Linux's NO_HZ idle stops the tick of an idle
- * processor (tick_nohz_idle_stop_tick, kernel/time/tick-sched.c:1205-1243):
+ * processor (tick_nohz_idle_stop_tick, kernel/time/tick-sched.c:1211-1245):
  * a tick taken in that wait moves its next tick on by the ticks
  * `watchdog_idle_ticks` allows, and keeps where it would have been
  * (`resume`); the switch to a thread starts it again there
