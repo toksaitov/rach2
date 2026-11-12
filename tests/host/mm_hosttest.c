@@ -6,7 +6,7 @@
  *
  * host-deps: tests/host/compat/vm_iter_host.c rach2/sys/mm/notify.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
- * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  *
  * `mm/mm.c` is included whole, over a model of the paging layer that counts
  * what is freed. A hold, which a /proc/PID/mem descriptor takes, must keep

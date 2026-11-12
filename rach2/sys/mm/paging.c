@@ -1379,6 +1379,7 @@ int paging_dma_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t fla
  */
 struct page_change {
     int bkl;        /* whether the change took the big lock */
+    int counted;    /* whether it counts itself under way (`mmn_change_begin`) */
     uint32_t flags; /* the page-table lock's saved flags */
 };
 
@@ -1390,19 +1391,24 @@ struct page_change {
  * held from the notice to the change (notify.h), so that a driver that
  * reads entries under it sees each page before the change or hears of it
  * after, as Linux's wp_page_copy calls mmu_notifier_invalidate_range_start
- * before it takes the page-table lock (mm/memory.c:3384-3390). 0; or -1,
- * with nothing held, when a range was registered after the space was seen
- * without one, and the change is made again.
+ * before it takes the page-table lock (mm/memory.c:3384-3390). A change
+ * that gives the page a new frame (`event` set) counts itself under way
+ * from before the notice to the end (`mmn_change_begin`), for a driver
+ * that reads entries without the big lock. 0; or -1, with nothing held,
+ * when a range was registered after the space was seen without one, and
+ * the change is made again.
  */
 static int page_change_begin(struct mm *mm, struct page_change *c, int event, uintptr_t page)
 {
     int ranges = mm->notify != NULL;
 
     c->bkl = ranges && !bkl_held();
+    c->counted = ranges && event;
     if (c->bkl) {
         bkl_enter();
     }
-    if (ranges && event) {
+    if (c->counted) {
+        mmn_change_begin(mm);
         mmn_notify(mm, event, page, page + PAGE_SIZE);
     }
     c->flags = mm_ptl_lock(mm);
@@ -1417,6 +1423,9 @@ static int page_change_begin(struct mm *mm, struct page_change *c, int event, ui
 static void page_change_end(struct mm *mm, const struct page_change *c)
 {
     mm_ptl_unlock(mm, c->flags);
+    if (c->counted) {
+        mmn_change_end(mm);
+    }
     if (c->bkl) {
         bkl_exit();
     }
@@ -3211,8 +3220,11 @@ again:
         mm->zaps++;
         for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
             if (match(r, arg, &lo, &hi)) {
+                /* Under way, for a space this thread holds only to read. */
+                mmn_change_begin(mm);
                 mmn_notify(mm, MMN_TRUNCATE, lo, hi);
                 unmap_user_range(mm->dir, lo, hi);
+                mmn_change_end(mm);
             }
         }
         if (taken) {

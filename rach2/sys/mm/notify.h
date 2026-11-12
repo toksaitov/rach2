@@ -20,7 +20,9 @@
  * break, holds the big lock from the call to the change of the entry
  * whenever the address space has a range, so that a driver that reads an
  * entry under the big lock and maps what it found sees the page before the
- * change or hears of it after.
+ * change or hears of it after; and it counts itself under way from before
+ * the call to after the change (`mmn_change_begin`), as a truncation's cut
+ * does, for a driver that reads entries without the big lock.
  */
 #ifndef _NOTIFY_H_
 #define _NOTIFY_H_
@@ -83,6 +85,22 @@ void mmn_unregister(struct mmn_range *r);
  * change, with the regions or the page tables still as they were.
  */
 void mmn_notify(struct mm *mm, int event, uintptr_t start, uintptr_t end);
+
+/**
+ * Count a change of present pages of `mm` under way, before its
+ * `mmn_notify`, as Linux's mmu_notifier_invalidate_range_start raises
+ * mmu_invalidate_in_progress; `mmn_change_end` after the new entries. A
+ * driver that reads an entry and maps it elsewhere without the big lock
+ * reads `mm->changes` before the read and maps nothing while `changing` is
+ * not 0 or `changes` has moved. Any context; atomic.
+ */
+void mmn_change_begin(struct mm *mm);
+
+/** End what `mmn_change_begin` began: `changes` moves before `changing`
+ * falls, as Linux's mmu_notifier_invalidate_range_end moves
+ * mmu_invalidate_seq before it lowers mmu_invalidate_in_progress
+ * (virt/kvm/kvm_main.c:806-830). */
+void mmn_change_end(struct mm *mm);
 
 /**
  * Unregister every range of `mm` and call each with MMN_RELEASE and its
