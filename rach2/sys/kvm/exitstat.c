@@ -72,10 +72,15 @@ struct row {
  * start after KVM, as Linux keeps a vCPU's exits in its own counters
  * (arch/x86/kvm/x86.c:10657); NULL for any other, whose exits go
  * uncounted. A processor writes only its own rows, with interrupts off, so
- * no lock guards them; a read or a clear from another processor may miss
- * an exit counted at the same time. An exit's account may close on
- * another processor than the one that opened it, so only the sums over
- * the processors, which kvm/exit_stats shows, mean anything.
+ * no lock guards them. A read from another processor may miss an exit
+ * counted at the same time. A clear while a guest runs may leave a row
+ * uncleared: a count read before the clear and stored after it keeps its
+ * old value and the exit, and on i686 a 64-bit count may keep its old high
+ * word, as Linux's vcpu_stat_clear zeroes the vCPUs' counters under no
+ * vCPU's lock (virt/kvm/kvm_main.c:6159-6168, 6278-6293). An exit's
+ * account may close on another processor than the one that opened it, so
+ * only the sums over the processors, which kvm/exit_stats shows, mean
+ * anything.
  */
 static struct row *rows[NR_CPUS];
 
@@ -334,13 +339,17 @@ uint64_t kvm_exit_count(void)
 
 /** Close the open account of `v`'s exit in `row` at the TSC count `now`:
  * its waits for the big lock go to the row's wait, the rest of its time
- * since `v->xs_mark` to its handling. */
+ * since `v->xs_mark` to its handling. `now` may come from another
+ * processor than `v->xs_mark`, whose TSC may read a little lower, as
+ * Linux's kvm_arch_vcpu_load finds a backwards TSC when a vCPU moves
+ * (arch/x86/kvm/x86.c:4584-4588); such a span counts as 0, not as a
+ * wrap of some 2^64 cycles. */
 static void account_close(struct row *row, struct kvm_vcpu *v, uint64_t now)
 {
-    uint64_t spent = now - v->xs_mark;
+    uint64_t spent = now >= v->xs_mark ? now - v->xs_mark : 0;
 
     if (v->xs_wait > spent) {
-        v->xs_wait = spent; /* the TSCs of two processors differ a little */
+        v->xs_wait = spent; /* the waits too may span two processors */
     }
     row->wait += v->xs_wait;
     row->handle += spent - v->xs_wait;
@@ -409,7 +418,7 @@ void kvm_exitstat_done(struct kvm_vcpu *v)
 
 void kvm_bkl_enter(struct kvm_vcpu *v)
 {
-    uint64_t start;
+    uint64_t start, end;
 
     if (!v || v->xs_row < 0 || bkl_held()) {
         bkl_enter();
@@ -417,7 +426,10 @@ void kvm_bkl_enter(struct kvm_vcpu *v)
     }
     start = arch_cycles();
     bkl_enter();
-    v->xs_wait += arch_cycles() - start;
+    end = arch_cycles();
+    if (end > start) {
+        v->xs_wait += end - start; /* 0 when the wait moved to a lower TSC */
+    }
 }
 
 /* A text being written: `len` bytes so far, of which those below `cap`
