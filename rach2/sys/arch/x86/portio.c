@@ -4,10 +4,12 @@
  */
 
 #include "portio.h"
+#include "exits.h"
 #include "../../kio.h"
 
 void outb(uint16_t port, uint8_t val)
 {
+    exits_count(EXIT_OUT, port);
     __asm__ __volatile__("outb %1, %0" : : "dN"(port), "a"(val));
 }
 
@@ -28,11 +30,13 @@ void harness_exit(uint8_t status)
 
 void outw(uint16_t port, uint16_t val)
 {
+    exits_count(EXIT_OUT, port);
     __asm__ __volatile__("outw %1, %0" : : "dN"(port), "a"(val));
 }
 
 void outd(uint16_t port, uint32_t val)
 {
+    exits_count(EXIT_OUT, port);
     __asm__ __volatile__("outl %1, %0" : : "dN"(port), "a"(val));
 }
 
@@ -40,6 +44,7 @@ uint8_t inb(uint16_t port)
 {
     uint8_t result;
 
+    exits_count(EXIT_IN, port);
     __asm__ __volatile__("inb %1, %0" : "=a"(result) : "dN"(port));
 
     return result;
@@ -49,6 +54,7 @@ uint16_t inw(uint16_t port)
 {
     uint16_t result;
 
+    exits_count(EXIT_IN, port);
     __asm__ __volatile__("inw %1, %0" : "=a"(result) : "dN"(port));
 
     return result;
@@ -58,6 +64,7 @@ uint32_t ind(uint16_t port)
 {
     uint32_t result;
 
+    exits_count(EXIT_IN, port);
     __asm__ __volatile__("inl %1, %0" : "=a"(result) : "dN"(port));
 
     return result;
@@ -70,12 +77,14 @@ void insw(uint16_t port, void *buffer, uint32_t count)
 #if defined(__x86_64__)
     unsigned long n = count;
 
+    exits_count(EXIT_IN, port); /* one count for the whole string */
     __asm__ __volatile__("cld\n\t"
                          "rep insw"
                          : "+D"(buffer), "+c"(n)
                          : "d"(port)
                          : "memory", "cc");
 #else
+    exits_count(EXIT_IN, port); /* one count for the whole string */
     __asm__ __volatile__("cld\n\t"
                          "rep insw"
                          : "+D"(buffer), "+c"(count)
@@ -89,12 +98,14 @@ void outsw(uint16_t port, const void *buffer, uint32_t count)
 #if defined(__x86_64__)
     unsigned long n = count;
 
+    exits_count(EXIT_OUT, port); /* one count for the whole string */
     __asm__ __volatile__("cld\n\t"
                          "rep outsw"
                          : "+S"(buffer), "+c"(n)
                          : "d"(port)
                          : "memory", "cc");
 #else
+    exits_count(EXIT_OUT, port); /* one count for the whole string */
     __asm__ __volatile__("cld\n\t"
                          "rep outsw"
                          : "+S"(buffer), "+c"(count)

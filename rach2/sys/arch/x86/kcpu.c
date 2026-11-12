@@ -4,6 +4,7 @@
  */
 
 #include "kcpu.h"
+#include "exits.h"
 
 void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
 {
@@ -16,6 +17,7 @@ void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t
 {
     uint32_t ra = leaf, rb = 0, rc = sub, rd = 0;
 
+    exits_count(EXIT_CPUID, leaf);
     __asm__ __volatile__("cpuid" : "+a"(ra), "=b"(rb), "+c"(rc), "=d"(rd) : : "memory");
     if (a) {
         *a = ra;
@@ -62,6 +64,7 @@ void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi)
 {
     uint32_t l = 0, h = 0;
 
+    exits_count(EXIT_RDMSR, msr);
     __asm__ __volatile__("rdmsr" : "=a"(l), "=d"(h) : "c"(msr));
     if (lo) {
         *lo = l;
@@ -73,6 +76,7 @@ void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi)
 
 void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi)
 {
+    exits_count(EXIT_WRMSR, msr);
     __asm__ __volatile__("wrmsr" : : "c"(msr), "a"(lo), "d"(hi));
 }
 #endif /* RACH2_HOSTTEST */

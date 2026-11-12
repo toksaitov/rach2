@@ -21,6 +21,7 @@
 #include "itco.h"
 #include "diag.h"
 #include "efirt.h"
+#include "exits.h"
 #include "i8042.h"
 #include "ioapic.h"
 #include "kvmsteal.h"
@@ -52,6 +53,7 @@
 #include "../../drm/i915/i915.h"
 #include "../../cmdline.h"
 #include "../../evdev.h"
+#include "../../fs/debugfs.h"
 #include "../../input.h"
 #include "../../iommu.h"
 #include "../../klog.h"
@@ -470,6 +472,11 @@ void platform_firmware_start(void)
 
 void platform_threads_start(void)
 {
+    static const struct debugfs_text_ops exits_ops = {exits_show, NULL};
+
+    if (exits_start() && debugfs_create_text("exits", 0444u, &exits_ops, NULL) != 0) {
+        klog(KLOG_WARN, "exits", "debugfs: not registered");
+    }
     acpica_thread_start();
     wlan_work_threads_start();
     ps2mouse_thread_start();

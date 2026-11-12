@@ -227,6 +227,34 @@ static int cpus_online = 1;
  * (`smp_tlb_count`); written under the big lock. */
 static uint32_t tlb_counts[2];
 
+/* The interrupts each processor sent, by kind (`smp_ipi_count`), each
+ * written by its own processor alone. */
+static uint32_t ipi_counts[NR_CPUS][SMP_IPI_KINDS];
+
+static const char *const ipi_names[SMP_IPI_KINDS] = {"kick",  "tlb",  "kernel_tlb", "barrier",
+                                                     "space", "call", "stop"};
+
+/** Send processor `cpu` the interprocessor interrupt, counted under `kind`
+ * on this processor. */
+static void ipi_send(int cpu, int kind)
+{
+    ipi_counts[arch_cpu_id()][kind]++;
+    platform_cpu_ipi(cpu);
+}
+
+uint32_t smp_ipi_count(int cpu, int kind)
+{
+    if (cpu < 0 || cpu >= NR_CPUS || kind < 0 || kind >= SMP_IPI_KINDS) {
+        return 0;
+    }
+    return ipi_counts[cpu][kind];
+}
+
+const char *smp_ipi_name(int kind)
+{
+    return kind >= 0 && kind < SMP_IPI_KINDS ? ipi_names[kind] : "?";
+}
+
 /**
  * Spin until the big lock is free and take it, answering this processor's
  * requests meanwhile, since the holder may be waiting for the answer to its
@@ -1525,21 +1553,21 @@ void smp_kick(int cpu)
     if (cpu != (int)arch_cpu_id() && cpu_table[cpu].online &&
         arch_atomic_cmpxchg(&cpu_table[cpu].idle_poll, CPU_POLL_ON, CPU_POLL_KICKED) !=
             CPU_POLL_ON) {
-        platform_cpu_ipi(cpu);
+        ipi_send(cpu, SMP_IPI_KICK);
     }
 }
 
 /** Leave processor `c` a request to drop the translations of [`start`,
- * `end`), or every one for CPU_TLB_ALL, and interrupt it; `ipi_lock` is
- * held. */
-static void tlb_send(int c, uintptr_t start, uintptr_t end)
+ * `end`), or every one for CPU_TLB_ALL, and interrupt it, counted under
+ * `kind`; `ipi_lock` is held. */
+static void tlb_send(int c, uintptr_t start, uintptr_t end, int kind)
 {
     struct percpu *other = &cpu_table[c];
 
     other->tlb_page = start;
     other->tlb_end = end;
     other->tlb_request = 1;
-    platform_cpu_ipi(c);
+    ipi_send(c, kind);
 }
 
 /** Wait until every processor sent a TLB request has answered it,
@@ -1608,7 +1636,7 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t en
                 continue;
             }
         }
-        tlb_send(c, start, end);
+        tlb_send(c, start, end, SMP_IPI_TLB);
         sent++;
     }
     if (sent) {
@@ -1646,7 +1674,7 @@ void smp_kernel_flush(uintptr_t start, uintptr_t end)
     flags = spin_lock_irqsave(&ipi_lock);
     for (c = 0; c < NR_CPUS; c++) {
         if (c != me && cpu_table[c].online) {
-            tlb_send(c, start, end);
+            tlb_send(c, start, end, SMP_IPI_KERNEL_TLB);
         }
     }
     tlb_wait();
@@ -1667,7 +1695,7 @@ void smp_barrier(uint64_t cpus, int sync_core)
     for (c = 0; c < NR_CPUS; c++) {
         if (c != me && (cpus & ((uint64_t)1 << c)) && cpu_table[c].online) {
             cpu_table[c].barrier_request = sync_core ? SMP_BARRIER_SYNC : SMP_BARRIER;
-            platform_cpu_ipi(c);
+            ipi_send(c, SMP_IPI_BARRIER);
         }
     }
     for (c = 0; c < NR_CPUS; c++) {
@@ -1692,7 +1720,7 @@ void smp_space_release(const struct page_dir *dir)
     for (c = 0; c < NR_CPUS; c++) {
         if (c != me && cpu_table[c].online && cpu_table[c].space == dir) {
             cpu_table[c].space_drop = dir;
-            platform_cpu_ipi(c);
+            ipi_send(c, SMP_IPI_SPACE);
         }
     }
     for (c = 0; c < NR_CPUS; c++) {
@@ -1721,7 +1749,7 @@ void smp_call(int cpu, void (*fn)(void *), void *arg)
     if (cpu_table[cpu].online) {
         cpu_table[cpu].call_arg = arg;
         cpu_table[cpu].call_fn = fn;
-        platform_cpu_ipi(cpu);
+        ipi_send(cpu, SMP_IPI_CALL);
         while (cpu_table[cpu].call_fn && cpu_table[cpu].online) {
             smp_service();
             arch_relax();
@@ -1774,7 +1802,7 @@ void smp_stop_others(void)
         if (asked[c]) {
             cpu_table[c].stop_request = 1;
             cpu_table[c].online = 0;
-            platform_cpu_ipi(c);
+            ipi_send(c, SMP_IPI_STOP);
         }
     }
     for (waited = 0; stop_pending(asked) && waited < STOP_WAIT_US; waited += 10u) {
