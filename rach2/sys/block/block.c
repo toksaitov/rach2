@@ -258,6 +258,15 @@ block_device_t *block_submitter(block_device_t *dev)
     return dev;
 }
 
+uint64_t block_submitter_lba(block_device_t *dev, uint64_t lba)
+{
+    while (dev && dev->submit == block_partition_submit) {
+        lba += ((block_partition_t *)dev->drvdata)->start_lba;
+        dev = ((block_partition_t *)dev->drvdata)->backing;
+    }
+    return lba;
+}
+
 block_device_t *block_physical(block_device_t *dev)
 {
     for (;;) {
