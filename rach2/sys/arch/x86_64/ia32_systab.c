@@ -104,6 +104,8 @@ static void ia32_unlock_file_calls(void)
 {
     syscall_unlock(SYSCALL_ABI_IA32, compat_sys_ia32_pread64);
     syscall_unlock(SYSCALL_ABI_IA32, compat_sys_ia32_pwrite64);
+    syscall_unlock(SYSCALL_ABI_IA32, compat_sys_ia32_ftruncate64);
+    syscall_unlock(SYSCALL_ABI_IA32, compat_sys_ia32_fallocate);
     syscall_unlock(SYSCALL_ABI_IA32, compat_sys_ioctl);
     syscall_unlock(SYSCALL_ABI_IA32, compat_sys_fstat);
     syscall_unlock(SYSCALL_ABI_IA32, compat_sys_newfstat);

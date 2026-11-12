@@ -117,6 +117,11 @@ int file_ioctl_unlocked(const fd_entry_t *e);
  * without the big lock (vfs.h). */
 int file_vfs_unlocked(const fd_entry_t *e);
 
+/** Whether descriptor `e` names a regular file that `file_vfs_unlocked`
+ * admits of a type that also sets `writes_unlocked`, whose writes,
+ * truncations, fallocate and syncs run without the big lock (vfs.h). */
+int file_vfs_writes_unlocked(const fd_entry_t *e);
+
 /** Take the big lock for a call on `e` unless `file_ops_unlocked` says
  * otherwise, and return whether it was taken, for `file_ops_unlock`. */
 int file_ops_lock(const fd_entry_t *e);
