@@ -567,6 +567,16 @@ static int sched_rt_place(const process_t *p, int target)
  * processor to interrupt so that it selects now, as `sched_preempt_cpu`
  * gives it, or the one where `p` is halted in place as current; -1 when
  * none needs it. `sched_lock` is held.
+ *
+ * A `p` still current on its processor, between its marking as blocked and
+ * its switch away, finds itself ready at its own selection, which takes
+ * this lock, and runs on, as Linux's ttwu_runnable makes a task that has
+ * not left its queue running with no interrupt (kernel/sched/core.c:
+ * 3805-3830). It halts in place as current only where its processor has no
+ * idle task to switch to or the scheduler is off, and only then is it
+ * kicked: a kick otherwise came during that processor's switch, with its
+ * interrupts off, and cost an interrupt-window exit under KVM besides the
+ * command write and the interrupt.
  */
 static int sched_ready_locked(process_t *p)
 {
@@ -578,7 +588,7 @@ static int sched_ready_locked(process_t *p)
     target = sched_place(p);
     if (cpu_table[target].current == p) {
         waketime_state(p, 2, target);
-        return target;
+        return cpu_table[target].idle && _sched_enabled ? -1 : target;
     }
     if (!sched_cpu_idle(target)) {
         target = sched_rt_place(p, target);
