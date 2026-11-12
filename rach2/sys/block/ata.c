@@ -50,11 +50,13 @@
  * own spinlock, as libata's port is under `ap->lock` (drivers/ata/
  * libata-core.c:5567), taken with interrupts off: the owner, the callers
  * of every processor and the interrupt and the tick meet there. A data port
- * sequence holds it from its wait for the idle drive to its last sector,
- * as libata's PIO moves a sector under the lock (libata-sff.c:1210-1250),
- * so no other caller's command can land in its data phase; an owner holds
- * it to program and start its command (libata-core.c:5063, issued under
- * the lock) and for each read of the status, and sleeps without it.
+ * sequence waits for the idle drive without it, checks the drive is idle
+ * again under it and holds it from there to its last sector, as libata's
+ * PIO lets the lock go while BSY persists and moves a sector under it
+ * (libata-sff.c:1210-1250), so no other caller's command can land in its
+ * data phase; an owner holds it to program and start its command
+ * (libata-core.c:5063, issued under the lock) and for each read of the
+ * status, and sleeps without it.
  *
  * A wait for the drive sleeps when it can and polls when it must. From a
  * system call, with interrupts on, the caller reads the status register a
@@ -192,6 +194,12 @@ void ata_set_io(const struct ata_io *ops)
    and a DMA command is not, on the emulator or the hardware, so the rest
    of the wait is the sleep. Each read is an exit under a hypervisor. */
 #define ATA_SPIN_BEFORE_SLEEP 8
+
+/* How many times a data port sequence finds the drive idle without the
+   channel's lock and busy again under it, a command issued between the
+   two, before it waits under the lock, where none can come between
+   (`ata_lock_idle`). */
+#define ATA_IDLE_TRIES 16
 
 /* A sleeping wait's bound in ticks, thirty seconds, the AHCI and
    NVMe drivers' bound with interrupts on and Linux's ATA command timeout:
@@ -571,8 +579,9 @@ static void ata_pause(void)
  * device. A polled wait that gives up says so, since the caller's answer
  * to it may be a panic with no record of its own. A caller that holds the
  * channel's lock (`held`), a data port sequence, polls under it with
- * interrupts off; any other reads the status under the lock, taken for
- * each read, and sleeps without it.
+ * interrupts off, for its own command's sectors and end, or for the idle
+ * drive when `ata_lock_idle` has run out of tries; any other reads the
+ * status under the lock, taken for each read, and sleeps without it.
  */
 static int ata_wait_for(struct ata_channel *ch, int want, int held)
 {
@@ -670,6 +679,44 @@ static int ata_wait_ready(struct ata_channel *ch, int held)
 static int ata_wait_data(struct ata_channel *ch, int held)
 {
     return ata_wait_for(ch, ATA_WANT_DATA, held);
+}
+
+/**
+ * Take `ch`'s lock with the drive idle, for a data port sequence. Returns 0
+ * with the lock held and the state `ata_unlock` puts back in `*flags`, or
+ * `-EIO`, without the lock, for a drive that never goes idle.
+ *
+ * The wait for idle runs without the lock, sleeping where the caller can,
+ * so a caller that cannot sleep does not keep the owner, back from its DMA,
+ * or a caller on another processor spinning for the lock with interrupts
+ * off for as long as it polls. The status is read once more under the lock,
+ * since the owner may have issued its next command between the two, and
+ * the wait begins again if it did. This is `ata_sff_pio_task`'s order,
+ * which busy-waits under the port lock only briefly and lets it go to
+ * sleep while BSY persists (drivers/ata/libata-sff.c:1239-1247). After
+ * `ATA_IDLE_TRIES` such misses the wait polls under the lock, which bounds
+ * it as the polled wait's own bound does.
+ */
+static int ata_lock_idle(struct ata_channel *ch, uint32_t *flags)
+{
+    int tries, rc;
+
+    for (tries = 0; tries < ATA_IDLE_TRIES; tries++) {
+        if (ata_wait_idle(ch, 0) != 0) {
+            return -EIO;
+        }
+        *flags = ata_lock(ch);
+        if (ata_status_done(ch, ATA_WANT_IDLE, &rc)) {
+            return 0;
+        }
+        ata_unlock(ch, *flags);
+    }
+    *flags = ata_lock(ch);
+    if (ata_wait_idle(ch, 1) != 0) {
+        ata_unlock(ch, *flags);
+        return -EIO;
+    }
+    return 0;
 }
 
 /**
@@ -859,8 +906,9 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, c
  * Returns 0 or `-EIO`.
  *
  * The data port's sequence runs under the channel's lock, whoever the
- * caller is: a command left in its data phase while another caller ran, on
- * this processor or another, would hand that caller its sectors.
+ * caller is, from the idle drive `ata_lock_idle` finds to its last sector:
+ * a command left in its data phase while another caller ran, on this
+ * processor or another, would hand that caller its sectors.
  */
 static int ata_read_on(struct ata_drive *d, uint64_t lba, uint32_t count, void *buffer, int owned)
 {
@@ -883,9 +931,7 @@ static int ata_read_on(struct ata_drive *d, uint64_t lba, uint32_t count, void *
             count -= chunk;
             continue;
         }
-        flags = ata_lock(ch);
-        if (ata_wait_idle(ch, 1) != 0) {
-            ata_unlock(ch, flags);
+        if (ata_lock_idle(ch, &flags) != 0) {
             return -EIO;
         }
         if (!ata_command(ch, ata_program(d, lba, chunk, 0, 0))) {
@@ -949,9 +995,10 @@ static int ata_flush_issue(struct ata_drive *d)
 /**
  * Flush `d`'s cache, behind any command on its channel: the owner (`owned`)
  * waits for the idle drive and for the flush without the channel's lock,
- * and issues it under the lock; a caller without the channel holds the lock
- * throughout. Returns 0, `-EIO`, or `-EPERM` when the disk policy does not
- * allow the flush.
+ * and issues it under the lock; a caller without the channel waits for the
+ * idle drive as a data port sequence does (`ata_lock_idle`) and holds the
+ * lock from there to the flush's end. Returns 0, `-EIO`, or `-EPERM` when
+ * the disk policy does not allow the flush.
  */
 static int ata_flush_on(struct ata_drive *d, int owned)
 {
@@ -971,8 +1018,10 @@ static int ata_flush_on(struct ata_drive *d, int owned)
         }
         return ata_wait_ready(ch, 0) != 0 ? -EIO : 0;
     }
-    flags = ata_lock(ch);
-    rc = ata_wait_idle(ch, 1) != 0 ? -EIO : ata_flush_issue(d);
+    if (ata_lock_idle(ch, &flags) != 0) {
+        return -EIO;
+    }
+    rc = ata_flush_issue(d);
     if (rc == 0 && ata_wait_ready(ch, 1) != 0) {
         rc = -EIO;
     }
@@ -991,8 +1040,8 @@ static int ata_flush_on(struct ata_drive *d, int owned)
  * channel flushes behind the owner's command and not into it; and it selects
  * its drive again, since that caller may have selected the other one. The
  * owner issues it under the channel's lock and sleeps for it without; a
- * caller without the channel holds the lock throughout, as it does for the
- * data port.
+ * caller without the channel holds the lock from the idle drive to the
+ * flush's end, as it does for the data port.
  */
 static int ata_write_on(struct ata_drive *d, uint64_t lba, uint32_t count, const void *buffer,
                         int owned)
@@ -1013,9 +1062,7 @@ static int ata_write_on(struct ata_drive *d, uint64_t lba, uint32_t count, const
             }
             in += chunk * BLOCK_SECTOR_SIZE;
         } else {
-            flags = ata_lock(ch);
-            if (ata_wait_idle(ch, 1) != 0) {
-                ata_unlock(ch, flags);
+            if (ata_lock_idle(ch, &flags) != 0) {
                 return -EIO;
             }
             if (!ata_command(ch, ata_program(d, lba, chunk, 1, 0))) {
