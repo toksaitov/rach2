@@ -520,11 +520,15 @@ void mmap_unlock(struct mm *mm)
  * 1's signature, which the probe's erratum rows change. */
 static int cpuid_vmx = 1;
 static uint32_t cpuid_sig = 0x000306C3u;
+/* The host's CPUIDs run, each of which a nested host's hypervisor takes as
+ * an exit. */
+static uint32_t cpuid_runs;
 
 void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
 {
     uint32_t r[4] = {0, 0, 0, 0};
 
+    cpuid_runs++;
     switch (leaf) {
     case 0:
         r[0] = 0xD;
@@ -2985,7 +2989,8 @@ static void cr_owned_rows(int fd)
  * makes it, costs what Linux's handle_cr does: the exit reads CR0 and not
  * CR3 or CR4, and the entry writes the two CR0 fields and neither EFER nor
  * the entry controls, which LMA alone changes; a write of CR4 reads CR4
- * alone; and clearing PG in 64-bit code is #GP, as Linux's kvm_set_cr0.
+ * alone and runs no CPUID of the host's, whose reserved bits the vCPU
+ * keeps; and clearing PG in 64-bit code is #GP, as Linux's kvm_set_cr0.
  * In long mode, as `cr_rows` leaves the vCPU. */
 static void cr_cost_rows(int fd)
 {
@@ -3016,8 +3021,10 @@ static void cr_cost_rows(int fd)
 
     set_regs(fd, 0x1000, CR4_PAE | CR4_TSD, 0, 0);
     memset(m.reads, 0, sizeof(m.reads));
+    cpuid_runs = 0;
     CHECK(exits(fd, EXIT_CR_ACCESS, 4, 3) == 0 && f[CR4_READ_SHADOW] == (CR4_PAE | CR4_TSD),
           "MOV CR4 sets TSD");
+    CHECK(cpuid_runs == 0, "and judges its reserved bits without the host's CPUID");
     CHECK(m.reads[GUEST_CR4] == 1 && m.reads[GUEST_CR0] == 0 && m.reads[GUEST_CR3] == 0,
           "and its exit reads CR4 alone");
     set_regs(fd, 0x1000, CR4_PAE, 0, 0);
