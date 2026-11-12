@@ -1634,11 +1634,23 @@ static int ext2_writeback_old(struct vfs_mount *mnt, uint64_t before)
  * mount writable before the write of the state or read-only after it
  * (`ext2_sync`). 0, or -errno; a failed write of the state clears the valid
  * bit again and is recorded as the batch's error.
+ *
+ * A fault a reader meets while the state is on its way to the disk sets
+ * the error bit under `em->count_lock` before it waits for `em->super`
+ * (`ext2_mark_error`), and must reach the disk, as Linux's `ext2_error`
+ * writes the bit while a remount syncs, before SB_RDONLY is set. So the
+ * state is written again, without the valid bit, while it changed during
+ * the write before, and `writable` is cleared in the same step under
+ * `em->count_lock` as the look that found it unchanged: a bit set before
+ * that step is on the disk, and one set after it was met on a mount that
+ * no longer writes.
  */
 static int finish_writes(struct vfs_mount *mnt, int readonly)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
     int rc = ext2_sync(mnt);
+    uint32_t state, flags;
+    int again;
 
     if (rc != 0 || !em->writable) {
         return rc;
@@ -1648,7 +1660,23 @@ static int finish_writes(struct vfs_mount *mnt, int readonly)
         if (em->valid_cleared && !(em->state & EXT2_ERROR_FS) && !em->check_owed) {
             (void)ext2_state_change(em, EXT2_VALID_FS, 0);
         }
-        rc = ext2_sb_store(em);
+        do {
+            flags = spin_lock_irqsave(&em->count_lock);
+            state = em->state;
+            spin_unlock_irqrestore(&em->count_lock, flags);
+            rc = ext2_sb_store(em);
+            if (rc != 0) {
+                break;
+            }
+            flags = spin_lock_irqsave(&em->count_lock);
+            again = em->state != state;
+            if (again) {
+                em->state &= ~EXT2_VALID_FS;
+            } else if (readonly) {
+                em->writable = 0;
+            }
+            spin_unlock_irqrestore(&em->count_lock, flags);
+        } while (again);
         if (rc != 0) {
             (void)ext2_state_change(em, 0, EXT2_VALID_FS);
             rc = ext2_writeback_error(em, rc);
@@ -1657,7 +1685,9 @@ static int finish_writes(struct vfs_mount *mnt, int readonly)
         }
     }
     if (rc == 0 && readonly) {
+        flags = spin_lock_irqsave(&em->count_lock);
         em->writable = 0;
+        spin_unlock_irqrestore(&em->count_lock, flags);
     }
     ext2_super_unlock(em);
     return rc;
@@ -1708,6 +1738,56 @@ static void ext2_abort_unmount(struct vfs_mount *mnt)
     if (rc != 0) {
         (void)ext2_writeback_error(em, rc);
     }
+}
+
+/** Whether the text from `key` to `end` is exactly `word`. */
+static int option_is(const char *key, const char *end, const char *word)
+{
+    while (key < end && *word && *key == *word) {
+        key++;
+        word++;
+    }
+    return key == end && *word == '\0';
+}
+
+/**
+ * Read `errors=` of `options`, mount(2)'s data or NULL, into `*errors`,
+ * left as it is when the option is absent, as Linux's `parse_options`
+ * overrides the disk's s_errors (fs/ext2/super.c:523-532); the last one
+ * given counts, and other options are ignored. 0, or -EINVAL with the
+ * record `ext2: refused: errors=` for a value other than `continue`,
+ * `remount-ro` and `panic`.
+ */
+static int errors_option(const char *options, int *errors)
+{
+    const char *p = options ? options : "";
+
+    while (*p) {
+        const char *key = p, *value, *end;
+
+        while (*p && *p != ',') {
+            p++;
+        }
+        end = p;
+        if (*p == ',') {
+            p++;
+        }
+        if (end - key < 7 || !option_is(key, key + 7, "errors=")) {
+            continue;
+        }
+        value = key + 7;
+        if (option_is(value, end, "continue")) {
+            *errors = EXT2_ERRORS_CONTINUE;
+        } else if (option_is(value, end, "remount-ro")) {
+            *errors = EXT2_ERRORS_RO;
+        } else if (option_is(value, end, "panic")) {
+            *errors = EXT2_ERRORS_PANIC;
+        } else {
+            klog(KLOG_WARN, "ext2", "refused: errors=");
+            return -EINVAL;
+        }
+    }
+    return 0;
 }
 
 /**
@@ -1772,21 +1852,31 @@ static int remount_writable(struct ext2_mount *em)
 
 /**
  * The `remount` of `vfs_ops`: make the mount read-only or writable, by
- * VFS_MS_RDONLY in `flags`; a remount that keeps the mount as it is changes
- * nothing, and the options are ignored. Admission is closed first, so that
- * no writer is inside while the mount changes and new ones wait
- * (`em_close`). A failed write that makes the mount read-only is no remount:
- * it sets the flags at once and waits for nobody (`ext2_writeback_error`).
+ * VFS_MS_RDONLY in `flags`, and take `errors=` of `options`
+ * (`errors_option`) once that succeeds, as Linux's `ext2_remount` sets the
+ * options it parsed at its end; a remount that keeps the mount as it is
+ * changes only the policy, and other options are ignored. -EINVAL for a
+ * bad `errors=`, before anything changes. Admission is closed first, so
+ * that no writer is inside while the mount changes and new ones wait
+ * (`em_close`). A failed write, or a fault under EXT2_ERRORS_RO, that makes
+ * the mount read-only is no remount: it sets the flags at once and waits
+ * for nobody (`ext2_writeback_error`, `ext2_mark_error`).
  */
 static int ext2_remount(struct vfs_mount *mnt, uint32_t flags, const char *options)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
-    int rc = 0;
+    int errors = em->errors;
+    int rc = errors_option(options, &errors);
 
-    (void)options;
+    if (rc != 0) {
+        return rc;
+    }
     em_close(em);
     if (((flags & VFS_MS_RDONLY) != 0) != !em->writable) {
         rc = (flags & VFS_MS_RDONLY) ? remount_readonly(mnt, em) : remount_writable(em);
+    }
+    if (rc == 0) {
+        em->errors = errors;
     }
     em_open(em);
     return rc;
@@ -2392,30 +2482,44 @@ int ext2_inode_times_later(struct ext2_mount *em, struct ext2_node *d)
     return ext2_inode_write(em, d, 0, 0);
 }
 
-/** Record a fault met while reading: the error bit set, and written when the
- * mount writes, so that an orderly unmount does not mark the volume valid
- * and the next mount checks it. With file writes pending it is recorded as
- * the batch's failure instead, which makes the mount read-only. A reader
- * without the big lock takes it for the mark. */
+/**
+ * Report a fault of the volume met at run time, once the caller has logged
+ * it, as Linux's `ext2_error` does (fs/ext2/super.c:49-80), each time it is
+ * met, whatever the state was before. The error bit is set in memory under
+ * `em->count_lock`, then, on a writable mount, the superblock written to
+ * the medium under `em->super`; a remount read-only that is writing the
+ * state meanwhile writes it again with the bit before it lets the mount
+ * stop writing (`finish_writes`), as Linux's bit, set under `s_lock`,
+ * reaches the disk while a remount syncs. Then the mount's policy
+ * (`em->errors`): EXT2_ERRORS_CONTINUE goes on; EXT2_ERRORS_RO makes a
+ * writable mount read-only at once, waiting for nobody, as Linux sets
+ * SB_RDONLY, the batch's pending writes still drained at the next sync;
+ * and EXT2_ERRORS_PANIC stops the kernel, on any mount. A read-only mount
+ * keeps the bit in memory alone, which a remount writable writes. A reader
+ * without the big lock takes it, for the mount's flags. The caller holds
+ * no buffer.
+ */
 void ext2_mark_error(struct ext2_mount *em)
 {
     int big = !bkl_held();
+    int writable;
 
-    if (em->state & EXT2_ERROR_FS) {
-        return;
-    }
     if (big) {
         bkl_enter();
     }
     (void)ext2_state_change(em, EXT2_ERROR_FS, 0);
-    if (em->wb && em->wb->count) {
-        (void)ext2_writeback_error(em, -EIO);
-    } else {
-        ext2_super_lock(em);
-        if (em->writable) {
-            (void)ext2_sb_store(em);
-        }
-        ext2_super_unlock(em);
+    ext2_super_lock(em);
+    writable = em->writable && !(em->mnt->flags & VFS_MS_RDONLY);
+    if (writable) {
+        (void)ext2_sb_store(em);
+    }
+    ext2_super_unlock(em);
+    if (em->errors == EXT2_ERRORS_PANIC) {
+        k_panic("ext2: panic from previous error");
+    }
+    if (writable && em->errors == EXT2_ERRORS_RO) {
+        klog(KLOG_CRIT, "ext2", "error: remounting read-only");
+        em->mnt->flags |= VFS_MS_RDONLY;
     }
     if (big) {
         bkl_exit();
@@ -2581,6 +2685,19 @@ static uint64_t file_limit(uint32_t block_shift)
     return res << block_shift;
 }
 
+/** Take the superblock `sb`'s state into `em`, and its s_errors as the
+ * error policy unless `errors=` set one: an unknown value is remount-ro, as
+ * Linux's `ext2_fill_super` takes it (fs/ext2/super.c:898-903). */
+static void state_take(struct ext2_mount *em, const uint8_t *sb)
+{
+    uint32_t v = ext2_le16(sb + 60);
+
+    em->state = ext2_le16(sb + 58);
+    if (em->errors == 0) {
+        em->errors = v == EXT2_ERRORS_PANIC || v == EXT2_ERRORS_CONTINUE ? (int)v : EXT2_ERRORS_RO;
+    }
+}
+
 /** Log `ext2: refused: FIELD` and return -EINVAL, which fails the mount on
  * `field`. */
 static int refuse(const char *field)
@@ -2644,7 +2761,7 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     em->first_data = ext2_le32(sb + 20);
     em->bpg = ext2_le32(sb + 32);
     em->ipg = ext2_le32(sb + 40);
-    em->state = ext2_le16(sb + 58);
+    state_take(em, sb);
     if (rev == 0) {
         em->inode_size = 128;
         em->first_ino = 11;
@@ -2795,19 +2912,22 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
 }
 
 /** The constructor of `vfs_ext2_type`, whose contract is in ext2.h: the
- * record from the heap, given to `ext2_mount_on` and freed, with its nodes,
- * batch and descriptors, when that fails. */
+ * record from the heap, its policy set by `errors=` of `options` when they
+ * have it (`errors_option`), given to `ext2_mount_on` and freed, with its
+ * nodes, batch and descriptors, when that fails. */
 int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, const char *options)
 {
     struct ext2_mount *em = kzalloc(sizeof(*em));
     int rc;
 
-    (void)options;
     if (!em) {
         return -ENOMEM;
     }
     em_locks_init(em);
-    rc = ext2_mount_on(em, mnt, dev, flags);
+    rc = errors_option(options, &em->errors);
+    if (rc == 0) {
+        rc = ext2_mount_on(em, mnt, dev, flags);
+    }
     if (rc != 0) {
         nodes_free(em);
         ext2_writeback_free(em->wb);

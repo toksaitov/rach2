@@ -111,11 +111,39 @@ int ext2_may_use_reserved(void)
 }
 
 /**
+ * Refuse block `b`, which bit `bit` of the bitmap in block `bitmap` calls
+ * free, when it may not hold data (`ext2_data_block_ok`): a superblock, a
+ * descriptor table, a bitmap or an inode table, as Linux's
+ * `ext2_new_blocks` refuses a block in the system zone
+ * (fs/ext2/balloc.c:1377-1392). The bit is set, so that no search offers
+ * the block again, the counts are left as they are, and the fault is
+ * logged and reported (`ext2_mark_error`). 1 when the block was refused, 0
+ * when it may hold data, or the bit's -errno. The caller holds the lock of
+ * the bitmap's group and no buffer.
+ */
+int ext2_block_refused(struct ext2_mount *em, uint32_t bitmap, uint32_t bit, uint32_t b)
+{
+    int rc;
+
+    if (ext2_data_block_ok(em, b)) {
+        return 0;
+    }
+    rc = bit_put(em, bitmap, bit, 1);
+    if (rc != 0) {
+        return rc;
+    }
+    klog(KLOG_WARN, "ext2", "block %d is free in its bitmap but holds the volume's tables", (int)b);
+    ext2_mark_error(em);
+    return 1;
+}
+
+/**
  * Take the first free block of group `g` at or after bit `from` and before
  * bit `count` of its bitmap in block `bitmap`, into `*bit`: the bit set, the
  * group's count lowered and written, and the free count lowered with the
- * hint after it. -ENOSPC when the group has none, or -errno. The caller
- * holds the group's lock.
+ * hint after it. A clear bit on a block that may not hold data is refused
+ * (`ext2_block_refused`) and the search goes on past it. -ENOSPC when the
+ * group has none, or -errno. The caller holds the group's lock.
  */
 static int group_take_block(struct ext2_mount *em, uint32_t g, uint32_t bitmap, uint32_t from,
                             uint32_t count, uint32_t *bit)
@@ -127,12 +155,22 @@ static int group_take_block(struct ext2_mount *em, uint32_t g, uint32_t bitmap, 
     if (ext2_le16(gd + 12) == 0) {
         return -ENOSPC;
     }
-    rc = ext2_bit_first_clear(em, bitmap, from, count, &i);
-    if (rc != 0) {
-        return rc;
-    }
-    if (i >= count) {
-        return -ENOSPC;
+    for (;;) {
+        rc = ext2_bit_first_clear(em, bitmap, from, count, &i);
+        if (rc != 0) {
+            return rc;
+        }
+        if (i >= count) {
+            return -ENOSPC;
+        }
+        rc = ext2_block_refused(em, bitmap, i, em->first_data + g * em->bpg + i);
+        if (rc == 0) {
+            break;
+        }
+        if (rc < 0) {
+            return rc;
+        }
+        from = i + 1;
     }
     rc = bit_put(em, bitmap, i, 1);
     if (rc != 0) {

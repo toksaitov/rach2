@@ -89,7 +89,9 @@ nor
 and gives
 .Fa data
 to the file system, of whose options tmpfs takes
-.Ql size= .
+.Ql size=
+and ext2
+.Ql errors= .
 On ext2 it makes the mount read-only, synced and marked clean as an
 unmount leaves it, or writable, checked as a writable mount is; tmpfs
 changes between the two at once; every other type refuses a change
@@ -440,8 +442,18 @@ and
 .Ql relatime
 are set; the silent flag and the file system's own options are not
 shown.
-KRFFS, ext2, mqueue and pstore ignore the option string; FAT32, exFAT,
+KRFFS, mqueue and pstore ignore the option string; FAT32, exFAT,
 tmpfs and debugfs parse it.
+ext2 takes
+.Ql errors=continue ,
+.Ql errors=remount-ro
+or
+.Ql errors=panic ,
+which overrides the volume's own policy, and ignores the rest; another
+value of
+.Ql errors=
+is
+.Er EINVAL .
 .Ss Dirty-volume checks
 Before a writable mount, FAT32 checks a dirty volume with limits of
 32 directory levels including the root and 16 surplus tails.
@@ -463,6 +475,10 @@ A structural fault sets the error bit, and a check stopped at a limit of
 its own leaves the volume's state as it was; either way the kernel logs
 that running e2fsck is recommended, and the unmount does not mark the
 volume valid.
+A fault an ext2 mount meets later sets the error bit on a writable
+mount and then, as Linux's
+.Ql errors=
+says, continues, makes the mount read-only, or stops the kernel.
 .Ss Unmounting
 .Fn umount2
 requires
