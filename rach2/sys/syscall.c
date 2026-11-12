@@ -190,6 +190,10 @@ static syscall_fn_t _ia32_syscall_table[IA32_SYSCALL_TABLE_SIZE];
 /* The compat ioctl (arch/x86_64/ia32_ioctl.c), which restarts as ioctl does
  * (`syscall_restartable`). */
 long compat_sys_ioctl(isr_params_t *params);
+
+/* i386's rt_sigprocmask (arch/x86_64/ia32_signal.c), which calls the native
+ * handler and runs without the big lock as it does (`init_syscall`). */
+long compat_sys_rt_sigprocmask(isr_params_t *params);
 #endif
 
 /* The numbers of each table whose calls run without the big lock
@@ -3628,6 +3632,12 @@ void init_syscall(void)
     /* getrusage takes the big lock itself for any target but the thread. */
     syscall_unlock(SYSCALL_ABI_NATIVE, sys_getrusage);
     syscall_unlock(SYSCALL_ABI_IA32, sys_getrusage);
+    /* rt_sigprocmask takes the signal state's lock, and the big lock only
+     * for a change that lock alone cannot make. */
+    syscall_unlock(SYSCALL_ABI_NATIVE, sys_rt_sigprocmask);
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    syscall_unlock(SYSCALL_ABI_IA32, compat_sys_rt_sigprocmask);
+#endif
     unlock_file_calls();
     syscall_epoll_unlock();
     syscall_mm_unlock();

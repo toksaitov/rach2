@@ -1151,6 +1151,27 @@ void signal_force(process_t *target, int signo, const struct k_siginfo *info);
  * made through it. Defined in syscall_proc.c. */
 void signal_set_blocked(uint64_t mask);
 
+/**
+ * Change the current thread's blocked mask by `how` (KSIG_BLOCK, KSIG_UNBLOCK
+ * or KSIG_SETMASK, which the caller has checked) and `set`, less SIGKILL and
+ * SIGSTOP, under the signal state's lock alone, without the big lock, as
+ * Linux 6.12.115's __set_current_blocked takes only sighand->siglock
+ * (kernel/signal.c:3205-3215). Returns 1 when it changed the mask, and marks
+ * signal work when the new mask lets a pending signal through. Returns 0,
+ * changing nothing, when the change needs the big lock and the caller must
+ * make it with `signal_set_blocked`: the new mask blocks a signal pending
+ * for the process, for which another thread must be woken, or signal work
+ * is marked already, which only a holder of the big lock clears. The caller
+ * does not hold the big lock. Defined in syscall_proc.c.
+ */
+int signal_change_blocked_unlocked(int how, uint64_t set);
+
+/** The current thread's blocked mask, read whole: under the signal state's
+ * lock when the caller does not hold the big lock, since `signal_force` may
+ * change it from another processor and the mask is two words on i686.
+ * Defined in syscall_proc.c. */
+uint64_t signal_blocked_now(void);
+
 /** The siginfo of the SIGCHLD a child's end sends to `receiver`, its parent
  * or its tracer: CLD_EXITED with the exit code, or CLD_KILLED or CLD_DUMPED
  * with the signal, from its wait status, and the child's pid and real uid as
