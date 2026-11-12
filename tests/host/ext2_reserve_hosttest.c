@@ -1032,16 +1032,20 @@ static void lock_held_elsewhere(void)
 static void admission_rows(void)
 {
     struct vfs_stat st;
+    struct ext2_handle h;
 
     k_memset(&st, 0, sizeof(st));
+    k_memset(&h, 0, sizeof(h));
+    h.node = &file;
+    h.cursor = ~0u;
     lock_held_elsewhere();
-    check(admit_fallocate(&mount, &file, 0, 0, 4096) == 0 && writers_at_wait == 0,
+    check(admit_fallocate(&mount, &h, 0, 0, 4096) == 0 && writers_at_wait == 0,
           "a fallocate sleeps on the file's lock before admission");
     lock_held_elsewhere();
-    check(admit_write(&mount, &file, payload, 4096, 0) == 4096 && writers_at_wait == 0,
+    check(admit_write(&mount, &h, payload, 4096, 0) == 4096 && writers_at_wait == 0,
           "a write sleeps on the file's lock before admission");
     lock_held_elsewhere();
-    check(admit_truncate(&mount, &file, 4096) == 0 && writers_at_wait == 0,
+    check(admit_truncate(&mount, &h, 4096) == 0 && writers_at_wait == 0,
           "a truncate sleeps on the file's lock before admission");
     lock_held_elsewhere();
     st.mode = 0640;
