@@ -52,6 +52,9 @@
 #define MSR_K7_HWCR            0xC0010015u
 #define MSR_AMD64_NB_CFG       0xC001001Fu
 
+#define EFER_SCE 0x001ull
+#define EFER_LMA 0x400ull
+
 /* The variable-range MTRRs a guest has, and MTRRcap's value: WC and the
  * fixed ranges with that count, as Linux's KVM_NR_VAR_MTRR gives. */
 #define VAR_MTRRS   8u
@@ -484,11 +487,8 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
  * Whether the caller or the guest may write `value` to the table's MSR
  * `index`, as Linux's checks judge it: PAT's eight types, the MTRRs' types
  * and reserved bits, a canonical address for the MSRs that hold one, and
- * no reserved bit, 63:32, of TSC_AUX and SYSCALL_MASK. VMX loads
- * SYSCALL_MASK into the processor with a WRMSR between exits, which such a
- * bit would fault in the host; Linux's vmx_set_guest_uret_msr refuses the
- * value its kvm_set_user_return_msr cannot write (vmx/vmx.c:718-731,
- * x86.c:631-647), and the guest takes #GP as from the processor.
+ * no reserved bit, 63:32, of TSC_AUX. SYSCALL_MASK's reserved bits depend
+ * on the vCPU and the backend, and `sfmask_ok` judges them.
  */
 static int table_value_ok(uint32_t index, uint64_t value)
 {
@@ -506,7 +506,6 @@ static int table_value_ok(uint32_t index, uint64_t value)
     case MSR_IA32_SYSENTER_EIP:
         return (s >> 47) == 0 || (s >> 47) == -1;
     case MSR_TSC_AUX:
-    case MSR_SYSCALL_MASK:
         return (value >> 32) == 0;
     default:
         break;
@@ -521,6 +520,29 @@ static int table_value_ok(uint32_t index, uint64_t value)
         return (value & 0x7FFu) == 0;
     }
     return 1;
+}
+
+/**
+ * Whether `v` takes `value` for SYSCALL_MASK from the caller, with `host`,
+ * or from the guest, as Linux takes it. The processor refuses bits 63:32
+ * with #GP. VMX loads the MSR into the processor only for a guest in
+ * 64-bit mode with EFER.SCE, whose SYSCALL reads it, and refuses there the
+ * value whose WRMSR fails (vmx/vmx.c:718-731, 1916-1925, x86.c:631-647);
+ * otherwise it keeps any value, which vmx.c's load writes with a WRMSR that
+ * may fail, as Linux's vmx_prepare_switch_to_guest leaves the processor's
+ * value when its write fails (vmx/vmx.c:1302-1311). SVM keeps the caller's
+ * value in the VMCB (svm/svm.c:3177-3178) and lets the guest's WRMSR reach
+ * the processor (svm/svm.c:99), whose #GP the guest takes here.
+ */
+static int sfmask_ok(const struct kvm_vcpu *v, uint64_t value, int host)
+{
+    if ((value >> 32) == 0) {
+        return 1;
+    }
+    if (kvm_backend == &kvm_svm) {
+        return host;
+    }
+    return (v->sregs.efer & (EFER_LMA | EFER_SCE)) != (EFER_LMA | EFER_SCE);
 }
 
 /**
@@ -693,7 +715,8 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
         if (!table_msr(index)) {
             return KVM_MSR_UNKNOWN;
         }
-        if (!table_value_ok(index, value)) {
+        if (!table_value_ok(index, value) ||
+            (index == MSR_SYSCALL_MASK && !sfmask_ok(v, value, host))) {
             return KVM_MSR_INVAL;
         }
         slot = table_slot(v, index);

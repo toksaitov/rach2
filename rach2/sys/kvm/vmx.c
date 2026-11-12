@@ -432,7 +432,9 @@ struct vmx_host {
  * return VMX_OK, VMX_FAIL_INVALID or VMX_FAIL_VALID, as their flags say;
  * `run` enters the guest from `regs` and its CR2, VMLAUNCH or VMRESUME as
  * `launched` says, and returns VMX_OK at the exit, with the guest's
- * registers saved, or the entry instruction's failure. The floating-point
+ * registers saved, or the entry instruction's failure. `wrmsr_safe` is a
+ * WRMSR that returns -1 where the processor refuses the value with #GP,
+ * and 0 once written. The floating-point
  * operations work under the host's XCR0: `fpu_load` saves the host's state
  * into `host`, unless `host` is NULL, and loads the guest's image `guest`;
  * `fpu_store` saves the registers into `guest`, unless `guest` is NULL,
@@ -454,6 +456,7 @@ struct vmx_ops {
     int (*run)(struct kvm_regs *regs, uint64_t *cr2, int launched);
     uint64_t (*rdmsr)(uint32_t msr);
     void (*wrmsr)(uint32_t msr, uint64_t value);
+    int (*wrmsr_safe)(uint32_t msr, uint64_t value);
     uint64_t (*read_cr)(int n);
     void (*write_cr4)(uint64_t value);
     uint64_t (*read_dr)(int n);
@@ -740,12 +743,12 @@ static uint64_t hw_exit_rip(void)
 }
 
 static const struct vmx_ops vmx_hw = {
-    kvm_vmx_vmxon,   kvm_vmx_vmxoff,  kvm_vmx_vmclear, kvm_vmx_vmptrld, kvm_vmx_vmread,
-    kvm_vmx_vmwrite, kvm_vmx_invept,  kvm_vmx_invvpid, kvm_vmx_vmrun,   msr_read,
-    msr_write,       hw_read_cr,      hw_write_cr4,    hw_read_dr,      hw_write_dr,
-    hw_save_host,    hw_restore_host, hw_fpu_load,     hw_fpu_store,    hw_xgetbv,
-    hw_xsetbv,       hw_rdpkru,       hw_wrpkru,       hw_nmi,          hw_machine_check,
-    hw_wbinvd,       hw_exit_rip};
+    kvm_vmx_vmxon,    kvm_vmx_vmxoff,  kvm_vmx_vmclear, kvm_vmx_vmptrld, kvm_vmx_vmread,
+    kvm_vmx_vmwrite,  kvm_vmx_invept,  kvm_vmx_invvpid, kvm_vmx_vmrun,   msr_read,
+    msr_write,        kcpu_wrmsr_safe, hw_read_cr,      hw_write_cr4,    hw_read_dr,
+    hw_write_dr,      hw_save_host,    hw_restore_host, hw_fpu_load,     hw_fpu_store,
+    hw_xgetbv,        hw_xsetbv,       hw_rdpkru,       hw_wrpkru,       hw_nmi,
+    hw_machine_check, hw_wbinvd,       hw_exit_rip};
 
 static const struct vmx_ops *vmx_op = &vmx_hw;
 
@@ -1901,7 +1904,10 @@ static void state_load(struct vmx_vcpu *x, int cpu)
  * from the value `vmx_put` read; and each of `uret_msrs` the guest uses
  * where the processor holds another value, as Linux's
  * kvm_set_user_return_msr (x86.c:631-647), the host's read first, once on
- * each processor. With interrupts off.
+ * each processor. A value the processor refuses, a SYSCALL_MASK with bits
+ * 63:32 that msr.c kept outside 64-bit mode or EFER.SCE, leaves the
+ * processor's, as Linux's vmx_prepare_switch_to_guest ignores the failure
+ * (vmx/vmx.c:1302-1311). With interrupts off.
  */
 static void guest_msrs_load(struct kvm_vcpu *v, int cpu, int kgs)
 {
@@ -1926,8 +1932,7 @@ static void guest_msrs_load(struct kvm_vcpu *v, int cpu, int kgs)
         if (i == URET_TSC_AUX ? !(caps.rdtscp && (x->proc2 & PROC2_RDTSCP)) : !sys) {
             continue;
         }
-        if (x->gmsr[i] != uret_curr[cpu][i]) {
-            vmx_op->wrmsr(uret_msrs[i], x->gmsr[i]);
+        if (x->gmsr[i] != uret_curr[cpu][i] && vmx_op->wrmsr_safe(uret_msrs[i], x->gmsr[i]) == 0) {
             uret_curr[cpu][i] = x->gmsr[i];
         }
     }
