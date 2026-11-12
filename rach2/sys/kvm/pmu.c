@@ -1094,16 +1094,17 @@ static int filter_allows(const struct pmu_filter *f, struct kvm_vcpu *v, uint32_
 
 /**
  * Whether the VM's filter permits this general or fixed counter. The filter
- * is read under the VM's `filter_lock`, which its replacement takes before
- * it frees the old one, as Linux's check_pmu_event_filter reads it under
- * kvm->srcu (arch/x86/kvm/pmu.c:429-447).
+ * is read in a section of the VM's readers, which its replacement waits
+ * for before it frees the old one, as Linux's check_pmu_event_filter reads
+ * it under kvm->srcu (arch/x86/kvm/pmu.c:429-447).
  */
 static int allowed(struct kvm_vcpu *v, uint32_t i, int fixed)
 {
-    uint32_t flags = spin_lock_irqsave(&v->vm->filter_lock);
-    int ok = filter_allows((const struct pmu_filter *)v->vm->pmu_filter, v, i, fixed);
+    uint32_t idx = kvm_srcu_read_lock(v->vm);
+    int ok =
+        filter_allows(*(const struct pmu_filter *const volatile *)&v->vm->pmu_filter, v, i, fixed);
 
-    spin_unlock_irqrestore(&v->vm->filter_lock, flags);
+    kvm_srcu_read_unlock(v->vm, idx);
     return ok;
 }
 
@@ -1112,7 +1113,7 @@ int32_t kvm_pmu_filter(struct kvm_vm *vm, uintptr_t arg)
     struct kvm_pmu_event_filter head;
     struct pmu_filter *f, *old;
     uint64_t valid = (pmu_host.intel ? 0xFFu : AMD_EVENT) | 0xFF00u | FILTER_MASK | FILTER_EXCLUDE;
-    uint32_t i, flags;
+    uint32_t i;
 
     if (copy_from_user(&head, (const void __user *)arg, sizeof(head)) != 0) {
         return -EFAULT;
@@ -1143,13 +1144,13 @@ int32_t kvm_pmu_filter(struct kvm_vm *vm, uintptr_t arg)
     }
     /* The swap and the free after it, as Linux's rcu_replace_pointer and
      * synchronize_srcu_expedited (arch/x86/kvm/pmu.c:1023-1035). */
-    flags = spin_lock_irqsave(&vm->filter_lock);
     old = vm->pmu_filter;
+    k_barrier(); /* the filter whole before a reader can load it */
     vm->pmu_filter = f;
-    spin_unlock_irqrestore(&vm->filter_lock, flags);
     for (i = 0; i < vm->nr_vcpus; i++) {
         kvm_vcpu_kick(vm->vcpus[i], KVM_REQ_PMU);
     }
+    kvm_srcu_synchronize(vm);
     kfree(old);
     return 0;
 }

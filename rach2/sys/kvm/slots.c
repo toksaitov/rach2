@@ -3,14 +3,16 @@
  * guest sees at guest-physical addresses, each on the address space's
  * change notice so that the guest-physical tables follow every change to
  * the pages behind it. The table is changed under the big lock, which the
- * VM's ioctls hold, and `mmu_lock`, which a lookup from a vCPU's run takes,
- * as Linux's slots change under slots_lock and their readers hold
- * kvm->srcu (virt/kvm/kvm_main.c:1599-1633, 1870). A copy through a
- * slot's address in the caller holds the table's readers' lock from its
- * lookup to its end (`kvm_slots_read_lock`), and a change waits for every
- * such copy before it frees anything or returns, as Linux waits for
- * kvm->srcu's readers (kvm_main.c:1633); a slot is freed only once it is
- * off the table, its leaves are zapped and no copy can be using it.
+ * VM's ioctls hold, and `mmu_lock`, as Linux's slots change under
+ * slots_lock (virt/kvm/kvm_main.c:1870), and each change is a write of the
+ * table's sequence count. A lookup from a vCPU's run takes no lock: it
+ * walks the tree inside a section of the VM's readers, two counts and no
+ * lock, which this file keeps for the VM (`kvm_srcu_read_lock`), and walks
+ * again when the count says a change came meanwhile, as Linux's readers
+ * search kvm_memslots under kvm->srcu (kvm_main.c:1599-1633). A change
+ * waits for every section that may have seen a slot or a log as it was
+ * before it frees either or returns, as Linux waits with
+ * synchronize_srcu_expedited (kvm_main.c:1633).
  */
 
 #include "kvm.h"
@@ -19,7 +21,7 @@
 #include "../lib/kerrno.h"
 #include "../mm/kheap.h"
 #include "../mm/notify.h"
-#include "../proc/mutex.h"
+#include "../proc/wait_queue.h"
 
 /* The most pages a slot has, Linux's KVM_MEM_MAX_NR_PAGES. */
 #define SLOT_MAX_PAGES 0x7FFFFFFFull
@@ -60,19 +62,22 @@ struct slot {
 #define SLOT_OF_ID(n)  ((struct slot *)(void *)((char *)(n) - offsetof(struct slot, id_node)))
 #define SLOT_OF_GFN(n) ((struct slot *)(void *)((char *)(n) - offsetof(struct slot, gfn_node)))
 
-/* A VM's slots, in a tree by number and one by first frame, as Linux keeps
+/*
+ * A VM's slots, in a tree by number and one by first frame, as Linux keeps
  * them in a hash by number and a tree by frame (struct kvm_memslots,
- * include/linux/kvm_host.h); `last` is the one `kvm_slot_find` last found.
- * Under the big lock and `mmu_lock` to change, either to read. `readers` is
- * held to read by each copy that uses a slot's address after `mmu_lock` is
- * let go, and taken to write by a change once the table no longer offers
- * the old slot, to wait for those copies: Linux's kvm->srcu. */
+ * include/linux/kvm_host.h); `last` is the one `kvm_slot_find_locked` last
+ * found. The trees and the slots' fields are under the big lock and
+ * `mmu_lock` to change, either to read. A change is also a write of `seq`,
+ * odd while it is under way, so that a reader with neither lock walks the
+ * tree by frame again when it moved (`kvm_slot_find_read`), as a reader of
+ * Linux's seqcount_t does.
+ */
 struct slots {
     struct snode *ids;
     struct snode *gfns;
     struct slot *last;
     uint64_t pages; /* of every slot, which Linux bounds by an unsigned long */
-    struct rwsem readers;
+    volatile uint32_t seq;
 };
 
 /** The height of the subtree `n` roots, 0 for none. */
@@ -253,6 +258,22 @@ static void slot_invalidate(struct mmn_range *r, int event, uintptr_t start, uin
 
 static const struct mmn_ops slot_ops = {slot_invalidate};
 
+/** Begin a change of `t` that a reader without `mmu_lock` may see: the
+ * count odd before any store of the change. Under `mmu_lock`; the
+ * processor makes stores visible in the order they were made. */
+static void write_begin(struct slots *t)
+{
+    t->seq++;
+    k_barrier();
+}
+
+/** End it: the count even again, after every store of the change. */
+static void write_end(struct slots *t)
+{
+    k_barrier();
+    t->seq++;
+}
+
 int kvm_slots_init(struct kvm_vm *vm)
 {
     struct slots *t = kzalloc(sizeof(struct slots));
@@ -260,32 +281,77 @@ int kvm_slots_init(struct kvm_vm *vm)
     if (!t) {
         return -ENOMEM;
     }
-    rwsem_init(&t->readers, "kvm_slots");
     vm->slots = t;
     return 0;
 }
 
-void kvm_slots_read_lock(struct kvm_vm *vm)
+/** Add `delta` to `*p` as one step, a full barrier: the new count. */
+static uint32_t readers_add(volatile uint32_t *p, uint32_t delta)
 {
-    down_read(&((struct slots *)vm->slots)->readers);
+    uint32_t old;
+
+    do {
+        old = *p;
+    } while (arch_atomic_cmpxchg(p, old, old + delta) != old);
+    return old + delta;
 }
 
-void kvm_slots_read_unlock(struct kvm_vm *vm)
+/** The section's count is joined before anything it reads is loaded, and
+ * the join is a full barrier, so a replacement whose wait reads the count
+ * without the join has published before the load, which finds the new. */
+uint32_t kvm_srcu_read_lock(struct kvm_vm *vm)
 {
-    up_read(&((struct slots *)vm->slots)->readers);
+    uint32_t idx = vm->srcu_gen & 1u;
+
+    (void)readers_add(&vm->srcu_readers[idx], 1u);
+    return idx;
+}
+
+/** The decrement is a full barrier before the read of `srcu_waiting`, and
+ * a replacement counts itself there by an exchange before it reads the
+ * count, so either the replacement sees the count at 0 or this sees it
+ * waiting and wakes it. */
+void kvm_srcu_read_unlock(struct kvm_vm *vm, uint32_t idx)
+{
+    if (readers_add(&vm->srcu_readers[idx], 0xFFFFFFFFu) == 0 && vm->srcu_waiting) {
+        wq_wake_all(&vm->srcu_wq);
+    }
+}
+
+/* A replacement's wait for one of the readers' counts. */
+struct drain {
+    struct kvm_vm *vm;
+    uint32_t idx;
+};
+
+/** Whether the count `arg` names has reached 0. */
+static int drained(void *arg)
+{
+    const struct drain *d = (const struct drain *)arg;
+
+    return d->vm->srcu_readers[d->idx] == 0;
 }
 
 /**
- * Wait until no copy that may hold a view of `t` from before the change
- * just made is under way, as Linux's kvm_swap_active_memslots waits with
- * synchronize_srcu_expedited (virt/kvm/kvm_main.c:1633). A copy that
- * begins after the change finds the table as it is now. Sleeps, giving up
- * the big lock meanwhile; never under `mmu_lock`.
+ * A section that may have loaded what the caller replaced has its join
+ * seen by both waits, whichever count it joined; new readers join the
+ * other count during each wait, so neither waits for them. Two
+ * replacements may wait at once, each letting the big lock go, and each
+ * waits for both counts by number, whatever `srcu_gen` the other left.
  */
-static void slots_synchronize(struct slots *t)
+void kvm_srcu_synchronize(struct kvm_vm *vm)
 {
-    down_write(&t->readers);
-    up_write(&t->readers);
+    struct drain d;
+
+    d.vm = vm;
+    d.idx = vm->srcu_gen & 1u;
+    (void)readers_add(&vm->srcu_waiting, 1u);
+    (void)arch_atomic_xchg(&vm->srcu_gen, d.idx ^ 1u);
+    (void)wq_wait_event_nointr(&vm->srcu_wq, drained, &d);
+    (void)arch_atomic_xchg(&vm->srcu_gen, d.idx);
+    d.idx ^= 1u;
+    (void)wq_wait_event_nointr(&vm->srcu_wq, drained, &d);
+    (void)readers_add(&vm->srcu_waiting, 0xFFFFFFFFu);
 }
 
 /** Free `s`, off the notice. */
@@ -341,15 +407,17 @@ static int32_t slot_delete(struct kvm_vm *vm, struct slots *t, struct slot *s)
 
     kvm_gpamap_zap(vm, s->base_gfn, s->npages);
     flags = kvm_mmu_lock(vm);
+    write_begin(t);
     t->ids = tree_remove(t->ids, s->id);
     t->gfns = tree_remove(t->gfns, s->base_gfn);
     if (t->last == s) {
         t->last = NULL;
     }
     t->pages -= s->npages;
+    write_end(t);
     kvm_tdp_zap_locked(vm, s->base_gfn, s->npages, &flags);
     kvm_mmu_unlock(vm, flags);
-    slots_synchronize(t);
+    kvm_srcu_synchronize(vm);
     slot_free(s);
     return 0;
 }
@@ -387,9 +455,11 @@ static int32_t slot_create(struct kvm_vm *vm, struct slots *t, uint32_t id,
     }
     kvm_count(KVM_COUNT_SLOT, 1);
     flags = kvm_mmu_lock(vm);
+    write_begin(t);
     t->ids = tree_insert(t->ids, &s->id_node);
     t->gfns = tree_insert(t->gfns, &s->gfn_node);
     t->pages += s->npages;
+    write_end(t);
     kvm_mmu_unlock(vm, flags);
     return 0;
 }
@@ -418,6 +488,7 @@ static int32_t slot_change(struct kvm_vm *vm, struct slots *t, struct slot *s, u
         kvm_gpamap_zap(vm, s->base_gfn, s->npages);
     }
     lock = kvm_mmu_lock(vm);
+    write_begin(t);
     if (log != s->dirty) {
         old = s->dirty;
         s->dirty = log;
@@ -429,9 +500,10 @@ static int32_t slot_change(struct kvm_vm *vm, struct slots *t, struct slot *s, u
         t->gfns = tree_insert(t->gfns, &s->gfn_node);
     }
     s->flags = flags;
+    write_end(t);
     kvm_tdp_zap_locked(vm, base, s->npages, &lock);
     kvm_mmu_unlock(vm, lock);
-    slots_synchronize(t);
+    kvm_srcu_synchronize(vm);
     kfree(old);
     return 0;
 }
@@ -533,12 +605,92 @@ int kvm_slot_find_locked(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *
     return 1;
 }
 
+/* The most nodes a walk of the tree by frame passes before it gives up and
+ * walks again: an AVL tree of 32764 nodes is at most 22 deep, so a walk
+ * longer than this met the tree in the middle of a change. */
+#define WALK_MAX 48
+
+/**
+ * The walk of `tree_floor` and `view` for a reader without `mmu_lock`,
+ * each link and field read once: 1 with `*out` filled, 0 for no slot, or
+ * -1 when the walk ran past WALK_MAX, which only a change under way makes
+ * it do, since a rotation's two stores may form a loop for a moment. What
+ * it gives is the caller's to believe only when the count did not move.
+ */
+static int walk_read(struct snode *n, uint64_t gfn, struct kvm_slot_view *out)
+{
+    struct snode *best = NULL;
+    const struct slot *s;
+    uint32_t steps = 0;
+    uint64_t key;
+
+    while (n) {
+        if (++steps > WALK_MAX) {
+            return -1;
+        }
+        key = *(const volatile uint64_t *)&n->key;
+        if (key <= gfn) {
+            best = n;
+            n = *(struct snode *const volatile *)&n->link[1];
+        } else {
+            n = *(struct snode *const volatile *)&n->link[0];
+        }
+    }
+    if (!best) {
+        return 0;
+    }
+    s = SLOT_OF_GFN(best);
+    out->base_gfn = *(const volatile uint64_t *)&s->base_gfn;
+    out->npages = *(const volatile uint64_t *)&s->npages;
+    if (gfn < out->base_gfn || gfn - out->base_gfn >= out->npages) {
+        return 0;
+    }
+    out->flags = *(const volatile uint32_t *)&s->flags;
+    out->id = s->id;
+    out->hva = s->hva + (gfn - out->base_gfn) * 4096u;
+    out->dirty = *(uint64_t *const volatile *)&s->dirty;
+    return 1;
+}
+
+/** The count is read before the walk and again after it, with the loads
+ * between kept in order by the processor, as Linux's read_seqcount_begin
+ * and read_seqcount_retry; an odd count is a change under way, which runs
+ * under `mmu_lock` with interrupts off and ends soon. The slots the walk
+ * passes stay, whatever the count, until the caller's section ends. */
+int kvm_slot_find_read(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
+{
+    struct slots *t = (struct slots *)vm->slots;
+    uint32_t seq;
+    int found;
+
+    if (!t) {
+        return 0;
+    }
+    for (;;) {
+        seq = t->seq;
+        if (!(seq & 1u)) {
+            k_barrier();
+            found = walk_read(*(struct snode *const volatile *)&t->gfns, gfn, out);
+            k_barrier();
+            if (t->seq == seq && found >= 0) {
+                return found;
+            }
+        }
+        arch_relax();
+    }
+}
+
 int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
 {
-    uint32_t flags = kvm_mmu_lock(vm);
-    int found = kvm_slot_find_locked(vm, gfn, out);
+    uint32_t idx;
+    int found;
 
-    kvm_mmu_unlock(vm, flags);
+    if (!vm->slots) {
+        return 0;
+    }
+    idx = kvm_srcu_read_lock(vm);
+    found = kvm_slot_find_read(vm, gfn, out);
+    kvm_srcu_read_unlock(vm, idx);
     return found;
 }
 

@@ -678,22 +678,35 @@ static void slot_access(const void *p)
     }
 }
 
-/** A copy's hold of the slots, counted; nothing changes them in the
- * model. */
-void kvm_slots_read_lock(struct kvm_vm *vm)
+/** A copy's section of the slots' readers, counted; nothing changes them
+ * in the model. */
+uint32_t kvm_srcu_read_lock(struct kvm_vm *vm)
 {
     (void)vm;
     slot_holds++;
+    return 0;
 }
 
-/** The end of a copy's hold. */
-void kvm_slots_read_unlock(struct kvm_vm *vm)
+/** The end of a copy's section. */
+void kvm_srcu_read_unlock(struct kvm_vm *vm, uint32_t idx)
 {
     (void)vm;
+    (void)idx;
     slot_holds--;
 }
 
+/** A replacement's wait for the sections: none is under way. */
+void kvm_srcu_synchronize(struct kvm_vm *vm)
+{
+    (void)vm;
+}
+
 int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
+{
+    return kvm_slot_find_read(vm, gfn, out);
+}
+
+int kvm_slot_find_read(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
 {
     uint64_t base = slot0.guest_phys_addr >> 12;
 
