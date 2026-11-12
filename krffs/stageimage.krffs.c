@@ -127,6 +127,19 @@ static const char *host_path(const char *path)
  * Returns the file `STAGEIMAGE_DEPS` names, opened for writing on the first
  * call, or NULL when it names none or cannot be opened.
  */
+/**
+ * Set when `stage_node` found no free node large enough, so that `main`
+ * measures the whole tree and says how far the image falls short.
+ */
+static bool out_of_space;
+/**
+ * Set while `measure_tree` stages the manifest again into memory: the inputs
+ * are not recorded a second time, and the messages of a stage that only
+ * measures, a skipped optional file or a node that does not fit, are not
+ * printed.
+ */
+static bool measuring;
+
 static FILE *deps_file(void)
 {
     static FILE *file;
@@ -152,7 +165,7 @@ static FILE *deps_file(void)
  */
 static void record_input(const char *path)
 {
-    if (deps_file() != NULL) {
+    if (!measuring && deps_file() != NULL) {
         fprintf(deps_file(), "%s\n", path);
     }
 }
@@ -165,7 +178,7 @@ static void record_input(const char *path)
  */
 static void record_exec_dir(const char *path)
 {
-    if (deps_file() != NULL) {
+    if (!measuring && deps_file() != NULL) {
         fprintf(deps_file(), "exec-dir\t%s\n", path);
     }
 }
@@ -317,7 +330,10 @@ static struct krffs_node *stage_node(struct krffs_file_system *file_system, uint
     node = krffs_allocate_reserved_node(file_system, data_size, NULL);
 
     if (!node) {
-        fprintf(stderr, "stageimage: not enough space for '%s'.\n", name);
+        if (!measuring) {
+            fprintf(stderr, "stageimage: not enough space for '%s'.\n", name);
+        }
+        out_of_space = true;
 
         return NULL;
     }
@@ -469,6 +485,17 @@ static bool is_synthetic_path(const char *path)
 static const char *tree_root;
 /** The lines `tree_note` has printed. */
 static unsigned long tree_nodes;
+
+/**
+ * Says that the optional guest `path` is skipped because its host file
+ * `hostpath` is absent, unless the stage only measures the tree.
+ */
+static void note_skipped(const char *path, const char *hostpath)
+{
+    if (!measuring) {
+        printf("stageimage: optional '%s' absent (%s); skipping.\n", path, hostpath);
+    }
+}
 
 /** Prints the `node` line of the guest `path` and counts it. */
 static void tree_note(uint16_t mode, uint32_t uid, uint32_t gid, const char *path)
@@ -1230,7 +1257,7 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
         record_input(hostpath);
         if (access(hostpath, F_OK) != 0) {
             if (strcmp(verb, "optional-file") == 0) {
-                printf("stageimage: optional '%s' absent (%s); skipping.\n", path, hostpath);
+                note_skipped(path, hostpath);
 
                 return true;
             }
@@ -1289,6 +1316,104 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
 }
 
 /**
+ * Stages each line of the manifest `path` with `apply_line`, in order, until
+ * the end or the first line that fails. Returns whether every line was
+ * staged, with a message for the line that was not.
+ */
+static bool stage_manifest(struct krffs_file_system *file_system, const char *path)
+{
+    FILE *manifest = fopen(path, "r");
+    char line[2048];
+    bool ok = true;
+
+    if (manifest == NULL) {
+        fprintf(stderr, "stageimage: cannot open manifest '%s'.\n", path);
+
+        return false;
+    }
+
+    while (fgets(line, sizeof(line), manifest) != NULL) {
+        size_t n = strlen(line);
+
+        if (n == sizeof(line) - 1 && line[n - 1] != '\n') {
+            fprintf(stderr, "stageimage: manifest line too long (over %d bytes).\n",
+                    (int)sizeof(line) - 2);
+            ok = false;
+
+            break;
+        }
+        while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) {
+            line[--n] = '\0';
+        }
+        if (!apply_line(file_system, line)) {
+            ok = false;
+
+            break;
+        }
+    }
+
+    if (ok && ferror(manifest)) {
+        fprintf(stderr, "stageimage: cannot read manifest '%s'.\n", path);
+        ok = false;
+    }
+    if (fclose(manifest) != 0 && ok) {
+        fprintf(stderr, "stageimage: cannot close manifest '%s'.\n", path);
+        ok = false;
+    }
+
+    return ok;
+}
+
+/**
+ * Says how many bytes the tree of `manifest` takes against the `size` bytes
+ * of `image`, which it did not fit. The manifest is staged again into an
+ * empty file system in memory, twice the image's size and doubled while the
+ * tree still does not fit, up to 64 times; its bytes used, headers included,
+ * are what an image needs before any free space. A line that fails for
+ * another reason prints its own message, and the tree is then not measured.
+ *
+ * The memory is not a mapping of a file, so the syncs of the staging fail
+ * there, which is harmless: nothing reads the memory but this function.
+ */
+static void measure_tree(const char *manifest, const char *image, uint64_t size)
+{
+    uint64_t probe;
+
+    measuring = true;
+    for (probe = size * 2; probe <= size * 64 && probe <= (uint64_t)SIZE_MAX; probe *= 2) {
+        struct krffs_file_system memory;
+        bool staged;
+
+        memory.size = (off_t)probe;
+        memory.node = calloc(1, (size_t)probe);
+        if (memory.node == NULL) {
+            break;
+        }
+        krffs_initialize_file_system(&memory);
+        out_of_space = false;
+        staged = stage_manifest(&memory, manifest);
+        if (staged) {
+            uint64_t used = probe - total_free_space(&memory);
+
+            fprintf(stderr,
+                    "stageimage: the tree of '%s' needs %llu bytes and '%s' has %llu, "
+                    "%llu short.\n",
+                    manifest, (unsigned long long)used, image, (unsigned long long)size,
+                    (unsigned long long)(used - size));
+        }
+        free(memory.node);
+        if (staged || !out_of_space) {
+            measuring = false;
+
+            return;
+        }
+    }
+    measuring = false;
+    fprintf(stderr, "stageimage: the tree of '%s' needs more than %llu bytes; '%s' has %llu.\n",
+            manifest, (unsigned long long)(probe / 2), image, (unsigned long long)size);
+}
+
+/**
  * stageimage.krffs MANIFEST IMAGE [--offset BYTES --size BYTES], or
  * stageimage.krffs MANIFEST --tree DIRECTORY: stages each line of MANIFEST
  * with `apply_line`, into the KRFFS region of IMAGE, which `mkfs.krffs` has
@@ -1302,9 +1427,11 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
  * made: a file whose path is already in the image fails as staged more than
  * once, so a run over a partly staged image stops at the first file it
  * staged before. A manifest line longer than 2046 bytes, or a full image,
- * fails with a message. Host paths are read from the current directory, so
- * the build runs the stager from the top of the tree. At the end one line on
- * stdout gives the bytes used and free, or the nodes of the tree.
+ * fails with a message; for a full image `measure_tree` adds the bytes the
+ * whole tree needs and the image has. Host paths are read from the current
+ * directory, so the build runs the stager from the top of the tree. At the
+ * end one line on stdout gives the bytes used and free, or the nodes of the
+ * tree.
  *
  * Returns `EXIT_SUCCESS` or `EXIT_FAILURE`.
  */
@@ -1314,8 +1441,6 @@ int main(int argc, char **argv)
     int file_descriptor = -1;
     struct krffs_file_system file_system = {.node = NULL};
     struct stat file_info;
-    FILE *manifest;
-    char line[2048];
     uint64_t free_after;
 
     if (argc == 4 && strcmp(argv[2], "--tree") == 0 && argv[1][0] != '-') {
@@ -1398,42 +1523,11 @@ int main(int argc, char **argv)
     krffs_sync_mapping(file_system.node, sizeof(*file_system.node));
 
 stage:
-    manifest = fopen(argv[1], "r");
-    if (manifest == NULL) {
-        fprintf(stderr, "stageimage: cannot open manifest '%s'.\n", argv[1]);
-
+    if (!stage_manifest(&file_system, argv[1])) {
         exit_status = EXIT_FAILURE;
-
-        goto cleanup;
-    }
-
-    while (fgets(line, sizeof(line), manifest) != NULL) {
-        size_t n = strlen(line);
-
-        if (n == sizeof(line) - 1 && line[n - 1] != '\n') {
-            fprintf(stderr, "stageimage: manifest line too long (over %d bytes).\n",
-                    (int)sizeof(line) - 2);
-            exit_status = EXIT_FAILURE;
-
-            break;
+        if (out_of_space) {
+            measure_tree(argv[1], argv[2], (uint64_t)file_system.size);
         }
-        while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) {
-            line[--n] = '\0';
-        }
-        if (!apply_line(&file_system, line)) {
-            exit_status = EXIT_FAILURE;
-
-            break;
-        }
-    }
-
-    if (exit_status == EXIT_SUCCESS && ferror(manifest)) {
-        fprintf(stderr, "stageimage: cannot read manifest '%s'.\n", argv[1]);
-        exit_status = EXIT_FAILURE;
-    }
-    if (fclose(manifest) != 0 && exit_status == EXIT_SUCCESS) {
-        fprintf(stderr, "stageimage: cannot close manifest '%s'.\n", argv[1]);
-        exit_status = EXIT_FAILURE;
     }
 
     if (exit_status == EXIT_SUCCESS && tree_root != NULL) {
