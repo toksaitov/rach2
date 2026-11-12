@@ -14,7 +14,7 @@ The KVM suite runs Rach2's KVM the way a person uses it: Debian's QEMU on the x8
 * `boot-debian-tcg`: `kvm-boot.sh -a tcg` boots the Debian guest in Rach2's QEMU under TCG to its token.
 * `unit-tests` and `selftests`: `corpus.sh` runs the corpus under Rach2's KVM, on the `max-svm` profile, on Linux and on macOS.
 * `unit-tests-nested` and `selftests-nested`: the same on the `host-svm` profile, on Linux alone.
-* `unit-subset-nested`: `corpus.sh unit unit-subset.list` on the `host-svm` profile, on Linux alone: the 58 tests of [`unit-subset.list`](unit-subset.list), every test `unit-tests.list` runs but `debug` and `xapic`, which Linux 6.12 as the host of the same machine does not finish. It runs in some 15 minutes, and `linuxhost.sh` runs the same list under Linux's KVM in about 30, so that the two hosts' results sit side by side.
+* `unit-subset-nested`: `corpus.sh unit unit-subset.list` on the `host-svm` profile, on Linux alone: the 58 tests of [`unit-subset.list`](unit-subset.list), every test `unit-tests.list` runs but `debug` and `xapic`, which Linux 6.12 as the host of the same machine does not finish. It runs in about half an hour, as does `linuxhost.sh`'s run of the same list under Linux's KVM, so that the two hosts' results sit side by side.
 
 The accelerator outside is the run's, as for every case: on the testing PC KVM, so that Rach2 runs its guests under nested KVM, and on the Mac TCG, which emulates SVM; `RACH2_QEMU_ACCEL=tcg` runs the `max-svm` cases under TCG on the testing PC too. `host-svm` starts only under KVM. Under TCG the outer machine has one processor, whatever the case asks ([etude](../../tools/etude/Readme.md)), for two faults of QEMU's that Results names.
 
@@ -108,6 +108,8 @@ The PMU rows follow the host's counters. With them, the selftest `pmu_event_filt
 | `unit-tests.list` | 48 | 8 | 1 | 27 | 3 |
 | `unit-subset.list` | 46 | 8 | 1 | 0 | 3 |
 | `selftests.list` | 46 | 14 | 0 | 19 | 6 |
+
+`unit-subset-nested` and `linuxhost.sh` set Rach2 beside Debian's Linux 6.12.107 as the KVM host of the same machine. On 2026-11-12, of the subset's 58 tests, Rach2 passed 44, skipped 9 and failed 5, and Linux passed 43, skipped 10 and failed 5. Both fail `hyperv_connections`, `la57`, `pcid-disabled` and `x2apic` with the same subtests, and `pmu`, 22 of its 77 subtests under Linux and 26 to 32 under Rach2: Rach2's tick, at 1000 Hz to Debian's 250, makes more exits during each counted loop, and the outer layers count each exit's work in the guest's counters, so that Rach2's branch counts can exceed the test's bound, within which Linux's stay. `hyperv_clock` passes under Rach2 and skips under Linux, whose own clock source there is kvm-clock and not the TSC the test requires.
 
 The Debian guest, which [`guests/mkdebian.sh`](guests/mkdebian.sh) makes, is trixie's cloud kernel, 6.12.107, and an initramfs of Debian's static BusyBox 1.37.0 whose [`/init`](guests/debian-init) prints the kernel's version, the processor count, the first processor's flags and the clock source its kernel chose, `kvm-clock` under KVM, then `KVMGUEST OK`, and powers off. Both packages are pinned in [`guests/debian.txt`](guests/debian.txt) by the SHA-256 that the Debian layer's signed snapshot index gives. The guest boots in seconds even under TCG inside Rach2 and needs no disk, so a failure to reach its token is the hypervisor's. Make writes it to `build/kvm/guests/debian`, and puts it with the runners and the lists into `build/tests/cases/kvm/kvm.ext2`, which every case mounts read-only and copies to `/tmp/kvm`.
 
