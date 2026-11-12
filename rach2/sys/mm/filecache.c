@@ -611,7 +611,7 @@ int filecache_read_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, void 
  */
 static int32_t fc_fill(struct open_file *ofd, uint32_t first, uint32_t count, const uintptr_t *phys)
 {
-    int32_t got = vfs_read_frames(ofd->vmnt, ofd->fhandle, first, count, phys);
+    int32_t got = vfs_read_frames(ofd->vmnt, ofd->fhandle, first, count, phys, NULL);
     uint32_t i;
     uint8_t *page;
 

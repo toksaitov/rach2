@@ -697,7 +697,8 @@ static int32_t disk_read_page(struct filemap *m, uint32_t pgoff, uintptr_t phys)
 static int32_t disk_read_pages(struct filemap *m, uint32_t first, uint32_t count,
                                const uintptr_t *frames)
 {
-    int32_t got = vfs_read_frames(m->entry.ofd->vmnt, m->entry.ofd->fhandle, first, count, frames);
+    int32_t got =
+        vfs_read_frames(m->entry.ofd->vmnt, m->entry.ofd->fhandle, first, count, frames, NULL);
     uint32_t i;
 
     if (got != -ENOSYS) {

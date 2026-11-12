@@ -111,6 +111,7 @@ struct vfs_xattr {
 
 struct vfs_mount;
 struct vfs_name;
+struct block_frames_done;
 
 /* What getattr reports and setattr changes. Times are seconds and
  * nanoseconds; `mode` includes the S_IF type bits. `blocks` is the 512-byte
@@ -358,9 +359,18 @@ struct vfs_ops {
      * the caller lets go of it and reads that page into another. A file's
      * page in memory is the type's only where the type says so: the caller
      * keeps what it reads in the file page cache. NULL for a type that
-     * reads no page so, whose caller reads with `read`. */
+     * reads no page so, whose caller reads with `read`.
+     *
+     * With `done` not NULL the type starts the reads and returns without
+     * waiting for the device, as Linux's `readahead` submits its bios
+     * (fs/mpage.c), and calls `done->fn` once for each frame, with
+     * `done->index` plus the frame's place in `frames`, whether from the
+     * device's completion or in the call for a frame it fills itself
+     * (`struct block_frames_done`); the answer is then the pages it
+     * started, each of which the completion will be or was called for, and
+     * the caller lets go of the frames from there on itself. */
     int32_t (*read_frames)(struct vfs_mount *mnt, void *handle, uint32_t first, uint32_t count,
-                           const uintptr_t *frames);
+                           const uintptr_t *frames, const struct block_frames_done *done);
     /* The node an open handle holds, for a type whose `open` gives a handle
      * of its own; NULL for a type whose handle is its node. */
     void *(*handle_node)(void *handle);
@@ -1278,10 +1288,11 @@ void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to);
 /** The type's read: the bytes read, 0 at the end, -EINVAL for a type without
  * `read`, or the type's error. */
 int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count, uint64_t offset);
-/** The type's `read_frames`: the pages filled, 0 at the end, -ENOSYS for a
- * type without it, or the type's error. */
+/** The type's `read_frames`, with `done` as it takes it: the
+ * pages filled, or started for `done`, 0 at the end, -ENOSYS for a type
+ * without it, or the type's error. */
 int32_t vfs_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, uint32_t count,
-                        const uintptr_t *frames);
+                        const uintptr_t *frames, const struct block_frames_done *done);
 /** The type's write: the bytes written, -EROFS for a type without `write`,
  * or the type's error. */
 int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,

@@ -628,7 +628,7 @@ int ext2_open(struct vfs_mount *mnt, void *node, int flags, void **handle);
 void ext2_release(struct vfs_mount *mnt, void *handle);
 int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count, uint64_t offset);
 int32_t ext2_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, uint32_t count,
-                         const uintptr_t *frames);
+                         const uintptr_t *frames, const struct block_frames_done *done);
 int ext2_punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep);
 int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, uint32_t *out,
                    int *fresh);

@@ -3223,11 +3223,11 @@ static int open_fdatasync(struct vfs_mount *mnt, void *handle)
 
 /** The `read_frames` of `vfs_ops`, on the node held by the open handle. */
 static int32_t open_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, uint32_t count,
-                                const uintptr_t *frames)
+                                const uintptr_t *frames, const struct block_frames_done *done)
 {
     struct ext2_handle *h = handle;
 
-    return ext2_read_frames(mnt, h->node, first, count, frames);
+    return ext2_read_frames(mnt, h->node, first, count, frames, done);
 }
 
 /** The `handle_node` of `vfs_ops`: the node the open handle holds. */
