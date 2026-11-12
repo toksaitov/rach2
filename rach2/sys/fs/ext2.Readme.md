@@ -167,7 +167,7 @@ A new inode belongs to the caller's effective user and group, or to the director
 
 ## Limits
 
-* The largest file is what the block pointers and the 32-bit `i_blocks` address: 2196875759616 bytes at 4 KiB blocks. A write, truncate or `fallocate` past it is `EFBIG`, logged with the limit.
+* The largest file is Linux's `s_maxbytes` for ext2 (`ext2_max_size`): what the block pointers address, unless a dense file that large, its pointer blocks counted, would pass the 32-bit `i_blocks`, which caps it at 2196873666560 bytes at 4 KiB blocks. It also bounds `lseek` of a directory. A write, truncate or `fallocate` past it is `EFBIG`, logged with the limit.
 * A directory is at most 4 GiB less a block (`EFBIG`), a link count 65000 (`EMLINK`), a name 255 bytes, and a symbolic link's target a block less one byte, 4095 bytes at 4 KiB blocks (`ENAMETOOLONG`).
 * `path` and the rename check climb at most 2048 directories (`VFS_PATH_MAX / 2`).
 * A 256-byte inode keeps each time to the nanosecond, from 1901-12-13 20:45:52 UTC to 2446-05-10 22:38:55 UTC. A new one has 32 extra bytes, or the superblock's wanted or minimum extra size when that is more, and its creation time is set, but no call reports it. A time an inode's `i_extra_isize` does not cover, and every time of a 128-byte inode, is signed 32-bit seconds, from 1901 to 2038-01-19 03:14:07 UTC, without fractional seconds. A time outside the range, supplied by a program or the clock, is clamped to the nearer limit.

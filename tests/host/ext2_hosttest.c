@@ -4686,10 +4686,10 @@ static void refusal_write_rows(void)
     if (n) {
         bcache_sync(&dev);
         snapshot(wimg, wbytes);
-        check(write_at(n, pattern, 1, 0x1FF7FFFE000ull) == -EFBIG &&
+        check(write_at(n, pattern, 1, 0x1FF7FDFE000ull) == -EFBIG &&
                   memcmp(last_warn,
-                         "write: offset 2095103 MiB is past the file limit of "
-                         "2095103 MiB for 4096-byte blocks",
+                         "write: offset 2095101 MiB is past the file limit of "
+                         "2095101 MiB for 4096-byte blocks",
                          82) == 0,
               "a write at the format's limit answers EFBIG by name");
         bcache_sync(&dev);
@@ -4698,7 +4698,7 @@ static void refusal_write_rows(void)
             void *h = 0;
 
             check(OPS->open(&mnt, n, 1, &h) == 0 &&
-                      OPS->truncate(&mnt, h, 0x1FF7FFFE001ull) == -EFBIG,
+                      OPS->truncate(&mnt, h, 0x1FF7FDFE001ull) == -EFBIG,
                   "a truncate past it answers EFBIG");
             if (h) {
                 OPS->release(&mnt, h);

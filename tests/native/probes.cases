@@ -9,7 +9,7 @@ case bigfileprobe.exfat-limit volume:exfat:big-exfat:attached mountns log -- \
 case bigfileprobe.ext2 volume:ext2:big-ext2:attached mountns log -- \
     bigfileprobe write-verify - ext2 256 dir=big
 case bigfileprobe.ext2-limit volume:ext2:big-ext2:attached mountns log -- \
-    bigfileprobe limit - ext2 2196875759616 dir=big
+    bigfileprobe limit - ext2 2196873666560 dir=big
 case bigfileprobe.ext2-sparse volume:ext2:big-ext2:attached mountns -- \
     bigfileprobe sparse - ext2 0 dir=big
 case bigfileprobe.vfat-limit volume:vfat:big-vfat:attached mountns log -- \
