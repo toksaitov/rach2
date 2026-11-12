@@ -1,7 +1,7 @@
 /**
  * Drive exit cleanup through a contended close and working-directory release.
  *
- * host-deps: rach2/sys/proc/child_signal.c
+ * host-deps: rach2/sys/proc/child_signal.c tests/host/compat/bkl_held.c
  *
  * The file callbacks wait on a queue of the kernel's wait queue code, which
  * is included whole. The scheduler substitute releases the lock only after

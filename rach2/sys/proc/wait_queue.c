@@ -4,6 +4,7 @@
 #include "../lib/spinlock.h"
 #include "wait_queue.h"
 #include "sched.h"
+#include "smp.h"
 #include "../lib/kerrno.h"
 
 /* The kinds of wait: one a signal ends, one it does not, one it does not
@@ -427,14 +428,49 @@ uint32_t wq_wakes(const wait_queue_t *wq, uint32_t kinds)
     return sum;
 }
 
+/**
+ * The wait a signal ends, `wq_wait_event`'s, named `name`. `signal_pending`
+ * reads and changes the signal state under the big lock, so a caller that
+ * runs without it sleeps until the signal-work flag is set (WQ_SIGFLAG),
+ * as Linux's wait tests TIF_SIGPENDING (include/linux/sched/signal.h:404 in
+ * 6.12), and then judges the flag under the big lock, as Linux dequeues
+ * under `sighand->siglock` (kernel/signal.c:632). An ignored signal is
+ * discarded there and the flag cleared, and the wait sleeps again, with the
+ * caller's deadline armed again, since the signal's wake cleared it. No
+ * spinlock is held at a wait, so the big lock may be taken here.
+ */
+static int wq_wait_signal(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    uint64_t deadline;
+    int rc, pending;
+
+    if (!current_proc || bkl_held()) {
+        return wq_wait(wq, cond, arg, WQ_SIGNAL, name);
+    }
+    deadline = current_proc->wakeup_tick;
+    for (;;) {
+        rc = wq_wait(wq, cond, arg, WQ_SIGFLAG, name);
+        if (rc != -EINTR) {
+            return rc;
+        }
+        bkl_enter();
+        pending = signal_pending();
+        bkl_exit();
+        if (pending) {
+            return -EINTR;
+        }
+        current_proc->wakeup_tick = deadline;
+    }
+}
+
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
-    return wq_wait(wq, cond, arg, WQ_SIGNAL, "wq_wait_event");
+    return wq_wait_signal(wq, cond, arg, "wq_wait_event");
 }
 
 int wq_wait_event_as(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
 {
-    return wq_wait(wq, cond, arg, WQ_SIGNAL, name);
+    return wq_wait_signal(wq, cond, arg, name);
 }
 
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)

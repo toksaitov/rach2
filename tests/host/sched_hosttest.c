@@ -3,6 +3,7 @@
  * proc/sched.c and proc/wait_queue.c, with no switch of the processor.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c rach2/sys/tick.c
+ * host-deps: tests/host/compat/bkl_held.c
  * host-cflags: -DRACH2_HOST_CPU
  *
  * The interrupt flag, the floating-point saves and the switch of stacks are
