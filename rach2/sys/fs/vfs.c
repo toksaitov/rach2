@@ -3227,6 +3227,25 @@ int vfs_sync_all(void)
     return 0;
 }
 
+void vfs_writeback_all(uint64_t before, uint64_t since)
+{
+    int i;
+
+    for (i = 0; i < mount_slots; i++) {
+        struct vfs_mount *m = mounts[i];
+
+        if (!m || m->state != VFS_ACTIVE || !m->dev || m->bind_of || vfs_mount_gone(m) ||
+            vfs_enter(m) != 0) {
+            continue;
+        }
+        if (before != 0 && m->type->ops->writeback) {
+            (void)m->type->ops->writeback(m, before);
+        }
+        (void)bcache_writeback(m->dev, since);
+        vfs_leave(m);
+    }
+}
+
 int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     if (vfs_mount_gone(mnt)) {
@@ -4130,6 +4149,7 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* readlink_cached */
     0,                           /* read_frames */
     0,                           /* handle_node */
+    0,                           /* writeback */
 };
 
 /** The constructor of the root's entry: the mount's root is the image's root
@@ -4756,6 +4776,7 @@ static const struct vfs_ops devfs_vops = {
     0, /* readlink_cached */
     0, /* read_frames */
     0, /* handle_node */
+    0, /* writeback */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -4801,6 +4822,7 @@ static const struct vfs_ops procfs_vops = {
     0, /* readlink_cached */
     0, /* read_frames */
     0, /* handle_node */
+    0, /* writeback */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -4846,6 +4868,7 @@ static const struct vfs_ops sysfs_vops = {
     0, /* readlink_cached */
     0, /* read_frames */
     0, /* handle_node */
+    0, /* writeback */
 };
 
 /** The constructor of a synthetic mount: its root is a node of the

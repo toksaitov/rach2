@@ -18,8 +18,12 @@
  * device before it returns, so the order in which a driver writes metadata
  * is the order in which it reaches the disk. Data goes through
  * `bcache_dirty` and reaches the disk at eviction, at `fsync`, at `sync`,
- * and through the periodic sync process. A dirty victim is written before
- * its buffer is reused. A write that fails, by either path, is recorded
+ * and through the kernel's flusher (`writeback.h`), which writes it back
+ * once it has been dirty for `dirty_expire_centisecs` or the dirty buffers
+ * pass the background threshold, as Linux's does. Eviction, the flusher and
+ * a writer past the dirty limit write without the disk's flush; `fsync`,
+ * `sync` and an unmount end with it. A dirty victim is written before its
+ * buffer is reused. A write that fails, by either path, is recorded
  * against the device through `vfs_device_failed`: the mounts on it go
  * read-only, and the buffer stays dirty for a later sync to try again.
  *
@@ -384,11 +388,52 @@ uint32_t bcache_capacity(void);
 /** The buckets of the cache's index by device and block, for /proc/disk. */
 uint32_t bcache_buckets(void);
 
-/** Whether the dirty buffers are a quarter of the cache's limit or more,
- * the share at which a file system that writes back writes them in runs
- * (`bcache_sync_unflushed`) rather than leave each to an eviction, which
- * writes its one block alone. */
-int bcache_dirty_heavy(void);
+/**
+ * Where the dirty buffers stand against Linux's thresholds, taken of the
+ * cache's limit, the most memory dirty data can hold here, as Linux takes
+ * them of the memory its page cache can grow into: 0 below the background
+ * threshold (`dirty_background_ratio` per cent, or `dirty_background_bytes`
+ * when set), 1 at or past it, where the flusher writes back, and 2 at or
+ * past the dirty limit (`vm_dirty_ratio` per cent, or `vm_dirty_bytes`),
+ * where a writer writes back itself (`balance_dirty_pages`). A background
+ * threshold not below the limit is half the limit, as in Linux's
+ * `domain_dirty_limits`.
+ */
+int bcache_dirty_level(void);
+
+/** The dirty buffers now. */
+uint32_t bcache_dirty_count(void);
+
+/* /proc/sys/vm's dirty_background_ratio, dirty_background_bytes,
+ * dirty_ratio and dirty_bytes: percents from 0 to 100 and byte counts, of
+ * which the bytes count when not 0. */
+extern int dirty_background_ratio;
+extern unsigned long dirty_background_bytes;
+extern int vm_dirty_ratio;
+extern unsigned long vm_dirty_bytes;
+
+/** Name the call that wakes the flusher once a dirty mark leaves the dirty
+ * buffers at or past the background threshold; NULL names none. The call
+ * runs under the cache's write lock and must not sleep. */
+void bcache_set_flusher(void (*kick)(void));
+
+/** The count of dirty marks so far, which grows by one at each; a buffer
+ * gone dirty after a reading of it was marked later than it. */
+uint64_t bcache_marks(void);
+
+/**
+ * Write the buffers of `dev` that went dirty at or before the mark count
+ * `since` (`bcache_marks`), in the passes, runs and order of `bcache_sync`,
+ * without the disk's flush: the write-back of the flusher and of a writer
+ * past the dirty limit. A block one of them waits for is written first,
+ * however young. 0 for `since` writes nothing, and a count not reached yet
+ * every buffer dirty when the call began. A device whose write has failed
+ * is left to `bcache_sync`. Holds as `bcache_sync`.
+ *
+ * @return 0, or the first failure's -errno with that buffer and the rest
+ *         still dirty.
+ */
+int bcache_writeback(block_device_t *dev, uint64_t since);
 
 /** Fix the most buffers the cache makes, for a test; 0 restores the rule. */
 void bcache_set_limit(uint32_t n);

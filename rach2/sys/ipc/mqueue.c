@@ -1317,6 +1317,7 @@ static const struct vfs_ops mqfs_ops = {
     0, /* readlink_cached */
     0, /* read_frames */
     0, /* handle_node */
+    0, /* writeback */
 };
 
 const struct vfs_type vfs_mqueue_type = {"mqueue", mqfs_mount, &mqfs_ops, 0, 1, 0, 0, 0, 0, 0};

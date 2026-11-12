@@ -1590,6 +1590,28 @@ static int ext2_sync(struct vfs_mount *mnt)
 }
 
 /**
+ * The `writeback` of `vfs_ops`: on a writable mount, the file-write batch
+ * drained into the cache once its first byte is as old as `before`, as
+ * Linux's flusher writes an inode's pages back once the inode has been
+ * dirty for `dirty_expire_centisecs` (`wb_check_old_data_flush`,
+ * fs/fs-writeback.c). The drain writes only what the cache must free for
+ * its copies (`bcache_reserve`), and the cache's write-back of the rest is
+ * the flusher's. The batch's age is read without its lock, a look that the
+ * next turn corrects. 0, or the drain's -errno, recorded as the batch's
+ * error.
+ */
+static int ext2_writeback_old(struct vfs_mount *mnt, uint64_t before)
+{
+    struct ext2_mount *em = ext2_em_of(mnt);
+
+    if (!em->writable || (mnt->flags & VFS_MS_RDONLY) || !ext2_batch_pending(em) ||
+        em->wb->born > before) {
+        return 0;
+    }
+    return ext2_writeback_drain(em);
+}
+
+/**
  * The `prepare_unmount` of `vfs_ops`, used by a remount read-only too:
  * `ext2_sync`, which leaves no final put undone, and then, on a writable
  * mount none of whose writes failed, the superblock's valid bit set again
@@ -2000,25 +2022,26 @@ int ext2_em_sync(struct ext2_mount *em)
 }
 
 /** On a mount that writes back, write the device's dirty buffers in runs,
- * without the disk's flush, once the cache is heavy with them, as Linux
- * makes a writer write back when its dirty pages pass a share of memory: a
- * block left to an eviction goes to the disk alone. Only a process that has
- * itself written EXT2_BALANCE_SHARE bytes since it last did so pays, as
- * Linux throttles each task by its own rate: a drain runs on whoever comes
- * next, and a program that exits or logs a line would otherwise write what
- * others dirtied, for seconds. The operation that called it is done in the
- * cache, so a failed write is not its failure; the cache records it against
- * the device, as it records an eviction's. */
+ * without the disk's flush, once they pass the dirty limit
+ * (`bcache_dirty_level`), as Linux's `balance_dirty_pages` holds a writer
+ * back there while its dirty pages are written; below it the flusher does
+ * the writing (writeback.h). Only a process that has itself written
+ * EXT2_BALANCE_SHARE bytes since it last did so pays, as Linux throttles
+ * each task by its own rate: a drain runs on whoever comes next, and a
+ * program that exits or logs a line would otherwise write what others
+ * dirtied, for seconds. The operation that called it is done in the cache,
+ * so a failed write is not its failure; the cache records it against the
+ * device, as it records an eviction's. */
 void ext2_em_balance(struct ext2_mount *em)
 {
     if (ext2_em_strict(em) || !current_proc) {
         return;
     }
-    if (!bcache_dirty_heavy()) {
+    if (bcache_dirty_level() < 2) {
         current_proc->fs_written = 0;
     } else if (current_proc->fs_written >= EXT2_BALANCE_SHARE) {
         current_proc->fs_written = 0;
-        (void)bcache_sync_unflushed(em->dev);
+        (void)bcache_writeback(em->dev, bcache_marks());
     }
 }
 
@@ -3224,6 +3247,7 @@ static const struct vfs_ops ext2_ops = {
     ext2_readlink_cached,
     open_read_frames,
     open_node,
+    ext2_writeback_old,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 0, 0, 1, 1, 1, 1, 1};

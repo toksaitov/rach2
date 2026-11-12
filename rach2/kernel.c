@@ -33,6 +33,7 @@
 #include "sys/fs/devfs.h"
 #include "sys/fs/procfs.h"
 #include "sys/fs/vfs.h"
+#include "sys/fs/writeback.h"
 #include "sys/fs/ext2.h"
 #include "sys/proc/process.h"
 #include "sys/io/timerfd.h"
@@ -4241,14 +4242,16 @@ static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
                                                            lockdep_inject_store};
 #endif
 
-/** Start the processors past the first (`smp_start`) and the lockup
- * detectors on all of them (`watchdog_init`), then register bkl/calls,
- * bkl/profile, bkl/long, bkl/tick and, with the checker, lockdep/inject in
- * debugfs; a failure there is logged. */
+/** Start the processors past the first (`smp_start`), the lockup
+ * detectors on all of them (`watchdog_init`) and the flusher
+ * (`writeback_init`), then register bkl/calls, bkl/profile, bkl/long,
+ * bkl/tick and, with the checker, lockdep/inject in debugfs; a failure
+ * there is logged. */
 static void start_processors(void)
 {
     smp_start();
     watchdog_init();
+    writeback_init();
     if (debugfs_create_text("bkl/calls", 0644u, &bkl_calls_ops, NULL) != 0 ||
         debugfs_create_text("bkl/profile", 0644u, &bkl_profile_ops, NULL) != 0 ||
         debugfs_create_text("bkl/long", 0644u, &bkl_long_ops, NULL) != 0 ||

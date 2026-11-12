@@ -79,7 +79,7 @@ static int misses;
 static int busy[TEST_BLOCKS], busy_waits, busy_gets;
 static int order_of[TEST_BLOCKS], unordered[TEST_BLOCKS];
 static int reserve_calls;
-static int dirty_heavy, unflushed_syncs;
+static int dirty_level, unflushed_syncs, writebacks;
 static uint32_t reserve_n;
 static int events, reserve_at, blank_at;
 static void (*fetch_hook)(void);
@@ -549,9 +549,24 @@ void bcache_sync_last(block_device_t *dev, int (*last)(void *arg, uint64_t blk),
 }
 
 /** Return what balance_rows sets; the other rows leave the cache light. */
-int bcache_dirty_heavy(void)
+int bcache_dirty_level(void)
 {
-    return dirty_heavy;
+    return dirty_level;
+}
+
+/** Count no marks: the model keeps no dirty buffers. */
+uint64_t bcache_marks(void)
+{
+    return 1;
+}
+
+/** Count a writer's write-back of the cache; the model has nothing to write. */
+int bcache_writeback(block_device_t *dev, uint64_t since)
+{
+    (void)dev;
+    (void)since;
+    writebacks++;
+    return 0;
 }
 
 /** Succeed: the model's device has no cache. */
@@ -871,30 +886,38 @@ static void drain_reserve_row(void)
 }
 
 /**
- * A cache full of dirty buffers is written back by those who wrote them: a
+ * A cache past its dirty limit is written back by those who wrote it: a
  * process that wrote less than its share pays nothing, as one that only
- * closes or exits does, and a writer past its share pays once.
+ * closes or exits does, and a writer past its share pays once. Past the
+ * background threshold alone, the flusher writes, and no writer does.
  */
 static void balance_rows(void)
 {
     reset(20);
+    writebacks = 0;
     unflushed_syncs = 0;
     process.fs_written = EXT2_BALANCE_SHARE;
     ext2_em_balance(&volume);
-    check(unflushed_syncs == 0 && process.fs_written == 0,
+    check(writebacks == 0 && process.fs_written == 0,
           "a light cache writes nothing back and forgets the share");
-    dirty_heavy = 1;
+    process.fs_written = EXT2_BALANCE_SHARE;
+    dirty_level = 1;
     ext2_em_balance(&volume);
-    check(unflushed_syncs == 0, "a process that wrote nothing pays for no other's writes");
+    check(writebacks == 0 && process.fs_written == 0,
+          "past the background threshold the writer leaves the write-back to the flusher");
+    dirty_level = 2;
+    ext2_em_balance(&volume);
+    check(writebacks == 0, "a process that wrote nothing pays for no other's writes");
     process.fs_written = EXT2_BALANCE_SHARE - 1;
     ext2_em_balance(&volume);
-    check(unflushed_syncs == 0 && process.fs_written == EXT2_BALANCE_SHARE - 1,
+    check(writebacks == 0 && process.fs_written == EXT2_BALANCE_SHARE - 1,
           "nor does one short of its share");
     process.fs_written = EXT2_BALANCE_SHARE;
     ext2_em_balance(&volume);
-    check(unflushed_syncs == 1 && process.fs_written == 0,
+    check(writebacks == 1 && process.fs_written == 0,
           "a writer past its share writes back once and begins a new share");
-    dirty_heavy = 0;
+    check(unflushed_syncs == 0, "and no writer syncs the device whole");
+    dirty_level = 0;
 }
 
 /* The nested punch's file, freed while the outer punch fetches a bitmap. */

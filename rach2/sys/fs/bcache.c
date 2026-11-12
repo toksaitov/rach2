@@ -143,6 +143,18 @@ static struct bbuf *fill_keep;
  * (`victim_any`). */
 static uint32_t fit_gos;
 static uint32_t limit_set; /* a limit given by `bcache_set_limit`, or 0 */
+/* Who wakes the flusher once the dirty buffers pass the background
+ * threshold (`bcache_set_flusher`), or NULL. */
+static void (*flusher_kick)(void);
+
+/* Linux's names and defaults (mm/page-writeback.c:70-95): the share of the
+ * cache's limit, or the bytes, past which the flusher writes back, and past
+ * which a writer writes back itself. A ratio of 0 gives way to the bytes,
+ * and the bytes of 0 to the ratio. */
+int dirty_background_ratio = 10;
+unsigned long dirty_background_bytes;
+int vm_dirty_ratio = 20;
+unsigned long vm_dirty_bytes;
 static uint32_t clock_stamp;
 static uint64_t stat_hits, stat_fills, stat_waits;
 /* Every buffer a walk of the cache's lists reads: the whole list, the release
@@ -184,9 +196,58 @@ uint32_t bcache_capacity(void)
     return bcache_limit();
 }
 
-int bcache_dirty_heavy(void)
+/** `n` bytes in buffers, rounded up, or `limit` buffers times `ratio` per
+ * cent, as Linux's `domain_dirty_limits` takes the bytes when set. */
+static uint32_t dirty_share(unsigned long n, int ratio, uint32_t limit)
 {
-    return ndirty >= bcache_limit() / 4u;
+    if (n) {
+        unsigned long want = (n + BCACHE_BLOCK_BYTES - 1u) / BCACHE_BLOCK_BYTES;
+
+        return want > limit ? limit : (uint32_t)want;
+    }
+    return (uint32_t)(((uint64_t)limit * (uint32_t)ratio) / 100u);
+}
+
+/* As Linux's `domain_dirty_limits` (mm/page-writeback.c:398-447): the
+ * background threshold is half the limit when it is not below it. */
+static void dirty_limits(uint32_t *background, uint32_t *hard)
+{
+    uint32_t limit = bcache_limit();
+    uint32_t bg = dirty_share(dirty_background_bytes, dirty_background_ratio, limit);
+    uint32_t th = dirty_share(vm_dirty_bytes, vm_dirty_ratio, limit);
+
+    if (bg >= th) {
+        bg = th / 2u;
+    }
+    *background = bg;
+    *hard = th;
+}
+
+int bcache_dirty_level(void)
+{
+    uint32_t bg, th, n = ndirty;
+
+    dirty_limits(&bg, &th);
+    return n >= th ? 2 : n >= bg ? 1 : 0;
+}
+
+uint32_t bcache_dirty_count(void)
+{
+    return ndirty;
+}
+
+void bcache_set_flusher(void (*kick)(void))
+{
+    flusher_kick = kick;
+}
+
+uint64_t bcache_marks(void)
+{
+    uint32_t flags = cache_lock();
+    uint64_t n = marks;
+
+    cache_unlock(flags);
+    return n;
 }
 
 uint64_t bcache_stat_hits(void)
@@ -1148,6 +1209,16 @@ static uint32_t unflushed_flags(block_device_t *dev)
     return (block_flags(dev) & BLOCK_WRITE_THROUGH) ? BLOCK_REQ_NOFLUSH : 0;
 }
 
+/** The request flags of a reclaim's write of the dirty `b`: without the
+ * disk's flush, as Linux's `pageout` writes a page (mm/vmscan.c), but for a
+ * `first`, whose flush the order keeps. A block that waits for others has
+ * the disk flushed before it whatever wrote them (`write_follower`), so the
+ * order holds, and a sync, `fsync` or unmount flushes at its end. */
+static uint32_t reclaim_flags(const struct bbuf *b)
+{
+    return b->order == BCACHE_ORDER_FIRST ? 0 : unflushed_flags(b->dev);
+}
+
 /** Put what a write-through disk under `dev` holds in its cache on the
  * medium, before a block that must follow what went before it; a disk with
  * nothing unflushed answers at once. A failure is recorded as a failed
@@ -2000,7 +2071,7 @@ again:
         if (victim->dirty) {
             cache_unlock(flags);
             if (victim->order != BCACHE_ORDER_AFTER || write_firsts(victim->dev) == 0) {
-                (void)write_one(victim, 0);
+                (void)write_one(victim, reclaim_flags(victim));
             }
             search.passed = 0;
             search.idle = 0;
@@ -2179,7 +2250,9 @@ again:
  * Mark the held buffer `b` dirty, and with `tag` set give it `owner` and
  * `level` (`bcache_dirty_owned`, `bcache_dirty_pointer`), in one step under
  * `cache_spin` with `wb_lock` taken, which the caller then holds and gives
- * back. Returns 1, or panics when the caller does not hold `b`.
+ * back; past the background threshold the flusher is woken, as Linux's
+ * `balance_dirty_pages` starts background writeback. Returns 1, or panics
+ * when the caller does not hold `b`.
  */
 static int mark(struct bbuf *b, int tag, uint64_t owner, int level)
 {
@@ -2197,6 +2270,9 @@ static int mark(struct bbuf *b, int tag, uint64_t owner, int level)
         b->level = level;
     }
     cache_unlock(flags);
+    if (flusher_kick && bcache_dirty_level() > 0) {
+        flusher_kick();
+    }
     return 1;
 }
 
@@ -2570,7 +2646,7 @@ static int sync_passes(block_device_t *dev, struct sync_scope *scope)
     return rc != 0 ? rc : sync_pass(dev, 1, scope);
 }
 
-static int sync_device(block_device_t *dev, int durable);
+static int sync_device(block_device_t *dev, int durable, uint64_t since);
 
 /*
  * A block that waits for others is written after them, whatever their block
@@ -2596,7 +2672,7 @@ static int sync_device(block_device_t *dev, int durable);
  */
 int bcache_sync(block_device_t *dev)
 {
-    return sync_device(dev, 1);
+    return sync_device(dev, 1, 0);
 }
 
 /* Set under both locks, since a release reads `last` under `cache_spin`
@@ -2618,14 +2694,26 @@ void bcache_sync_last(block_device_t *dev, int (*last)(void *arg, uint64_t blk),
 
 int bcache_sync_unflushed(block_device_t *dev)
 {
-    return sync_device(dev, 0);
+    return sync_device(dev, 0, 0);
+}
+
+/* A device whose write failed is left to a sync, which tries its blocks
+ * again: the flusher's turns would otherwise try them every few seconds. */
+int bcache_writeback(block_device_t *dev, uint64_t since)
+{
+    if (since == 0 || (dev->flags & BLOCK_WRITE_FAILED)) {
+        return 0;
+    }
+    return sync_device(dev, 0, since);
 }
 
 /** `bcache_sync`, durable with `durable` set, when a run of `first` buffers
  * is written with the disk's flush and the sync ends with one; without it
  * every write leaves the disk's cache to the caller's next flush, in the
- * order written. */
-static int sync_device(block_device_t *dev, int durable)
+ * order written. `since` bounds the blocks written to those that went dirty
+ * at or before that count of marks, and 0 or a count not reached yet to
+ * those dirty when the call began. */
+static int sync_device(block_device_t *dev, int durable, uint64_t since)
 {
     int through = (block_flags(dev) & BLOCK_WRITE_THROUGH) != 0;
     struct sync_scope scope;
@@ -2633,7 +2721,7 @@ static int sync_device(block_device_t *dev, int durable)
 
     k_memset(&scope, 0, sizeof(scope));
     wb_take();
-    scope.since = marks;
+    scope.since = since && since < marks ? since : marks;
     scope.flags = unflushed_flags(dev);
     scope.first_flags = durable ? 0 : scope.flags;
     scope.hold = dev->sync_last != 0;
@@ -2937,7 +3025,7 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
             (void)shrink_written(b, 0);
             continue;
         }
-        if (shrink_written(b, write_one(b, 0) == 0)) {
+        if (shrink_written(b, write_one(b, reclaim_flags(b)) == 0)) {
             (*written)++;
             got++;
         }

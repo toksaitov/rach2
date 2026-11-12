@@ -320,6 +320,7 @@ struct ext2_writeback {
     uint8_t *slot[EXT2_WB_DATA + EXT2_WB_META];
     int datas, metas, count;
     uint32_t bytes;
+    uint64_t born;        /* the tick of the first byte since the batch was empty */
     uint32_t inode_dirty; /* bit per `nodes` entry, until its table buffer is stored */
     int stage, error;
     /* Kept by `em->batch` and this spinlock together: `datas`, `metas`,

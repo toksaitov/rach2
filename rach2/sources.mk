@@ -52,6 +52,7 @@ C_SRC_SHARED = kernel.c \
     sys/block/request.c \
     sys/block/lag.c \
     sys/fs/bcache.c \
+    sys/fs/writeback.c \
     sys/fs/vfs.c \
     sys/fs/vfs_ns.c \
     sys/fs/sleeplock.c \

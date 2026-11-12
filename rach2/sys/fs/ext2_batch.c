@@ -574,6 +574,9 @@ static void writeback_commit(struct ext2_mount *em, struct ext2_node *n, uint64_
     }
     ext2_stamp(n, T_MTIME | T_CTIME);
     plan->table->dirty = 1;
+    if (wb->bytes == 0) {
+        wb->born = tick_count();
+    }
     wb->bytes += len;
     if (current_proc) {
         current_proc->fs_written += len;
