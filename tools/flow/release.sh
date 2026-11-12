@@ -1746,10 +1746,11 @@ windows_bundle()
 
 # windows_start: start Windows' run of the words that `selection windows`
 # prints, its preparation in the background, which windows_stop stops when the
-# release exits first. Mark the run done when only style failed, and record
-# a failure of the last run when three runs have started or when windows_clean
-# cannot confirm that it stopped, since the next would run in the same copy;
-# return 1 in each case.
+# release exits first. Mark the run done when only style failed, record a
+# failure of the last run when three runs have started, and record one of the
+# run that -a gave or else of the last run when windows_clean cannot confirm
+# that the last run before it stopped, since the next would run in the same
+# copy; return 1 in each case.
 windows_start()
 {
     windows_settings
@@ -1758,17 +1759,18 @@ windows_start()
         mark windows "only style failed, which the full run checks"
         return 1
     fi
+    wlast=$(sed -n 's/^windows started //p' "$state/record" | grep -vxF "$wgiven" | tail -n 1)
+    if [ -n "$wlast" ] && ! windows_clean "$wlast"; then
+        say "windows: $(unstopped "$wlast"), so no other run starts in Windows' copy"
+        failure windows "${wgiven:-$wlast}" runner
+        wgiven=
+        return 1
+    fi
     # The first run of a process that -a started is its own, which -a has
     # recorded.
     if [ -n "$wgiven" ]; then
         wid=$wgiven
     else
-        wlast=$(sed -n 's/^windows started //p' "$state/record" | tail -n 1)
-        if [ -n "$wlast" ] && ! windows_clean "$wlast"; then
-            say "windows: $(unstopped "$wlast"), so no other run starts in Windows' copy"
-            failure windows "$wlast" runner
-            return 1
-        fi
         if [ "$(starts windows)" -ge 3 ]; then
             failure windows "$wlast" runner
             return 1
