@@ -16,6 +16,8 @@
 #include "input.h"
 #include "mouse.h"
 #include "proc/process.h"
+#include "proc/smp.h"
+#include "lib/kirq.h"
 #include "proc/ns.h"
 #include "proc/sched.h"
 #include "proc/elf.h"
@@ -4498,6 +4500,26 @@ static int cmsg_compat_refused(int call, const unsigned long *args)
 }
 
 /**
+ * Dispatch one Unix socket operation without the big lock. The entry and
+ * the other socket families still use it; a sleep in unix.c keeps depth 0,
+ * as its state, queue, bind and receive locks guard the whole operation.
+ * The descriptor lookup holds the socket's description across this call.
+ */
+static int32_t unix_dispatch(int call, fd_entry_t *e, const unsigned long *args)
+{
+    uint32_t flags = kirq_save();
+    int depth = bkl_drop();
+    int32_t rc;
+
+    kirq_restore(flags);
+    rc = e ? unix_call(call, e, args) : unix_make(call, args);
+    flags = kirq_save();
+    bkl_take(depth);
+    kirq_restore(flags);
+    return rc;
+}
+
+/**
  * Run socket sub-call `call` with its arguments `args`, for socketcall and
  * for the direct socket calls. A call on an AF_UNIX socket, or one that
  * makes one, goes to ipc/unix.c; the rest to the calls above. Returns the
@@ -4513,7 +4535,7 @@ int32_t socket_call(int call, unsigned long *args)
         return -EINVAL;
     }
     if ((call == SC_SOCKET || call == SC_SOCKETPAIR) && (uint32_t)args[0] == AF_UNIX) {
-        return unix_make(call, args);
+        return unix_dispatch(call, NULL, args);
     }
     if (call == SC_SOCKETPAIR) {
         return -EOPNOTSUPP;
@@ -4529,7 +4551,7 @@ int32_t socket_call(int call, unsigned long *args)
             ? fd_get(current_proc->fds, (int)args[0])
             : (fd_entry_t *)0;
     if (e && e->type == FD_TYPE_UNIX) {
-        return unix_call(call, e, args);
+        return unix_dispatch(call, e, args);
     }
 
     switch (call) {
