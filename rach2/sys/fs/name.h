@@ -21,6 +21,16 @@ int vfs_name_capture_at(const struct vfs_ref *parent, const char *leaf, uint32_t
 /* The count of changes of names into `*seq`; 1 when none is under way, 0
  * when one is, which a walk without the big lock leaves to the full walk. */
 int vfs_name_seq(uint32_t *seq);
+/* `vfs_name_seq` without the lock, for a walk that compares the count
+ * again only if it climbs a `..` (`vfs_name_seq_still`): a change begun
+ * after the read moves the count, and one under way before it is the 0
+ * returned. */
+int vfs_name_seq_peek(uint32_t *seq);
+/* Whether no change of names is under way and none has begun since `seq`
+ * was read (`vfs_name_seq`, `vfs_name_seq_peek`), as Linux's walk under RCU
+ * checks the sequence of the directory it climbs from before it trusts the
+ * parent (fs/namei.c:1990-1995). */
+int vfs_name_seq_still(uint32_t seq);
 /* Bracket an unlink or a rename, from the name cache's first forget to the
  * records' update, so that a record captured without the big lock across
  * it is refused (`vfs_name_capture_at`). Under the big lock; may nest. */

@@ -106,6 +106,22 @@ int vfs_name_seq(uint32_t *seq)
     return calm;
 }
 
+int vfs_name_seq_peek(uint32_t *seq)
+{
+    *seq = *(volatile const uint32_t *)&names_seq;
+    k_barrier();
+    return *(volatile const uint32_t *)&names_changing == 0;
+}
+
+int vfs_name_seq_still(uint32_t seq)
+{
+    uint32_t flags = spin_lock_irqsave(&names_lock);
+    int still = names_changing == 0 && names_seq == seq;
+
+    spin_unlock_irqrestore(&names_lock, flags);
+    return still;
+}
+
 void vfs_name_change_begin(void)
 {
     uint32_t flags = spin_lock_irqsave(&names_lock);

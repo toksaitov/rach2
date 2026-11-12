@@ -1909,25 +1909,44 @@ static int cached_start(const struct vfs_ref *start, const char *path, struct vf
     return 0;
 }
 
-/** Whether a nameless mount may be entered by the name `comp` from the
- * root directory of `mnt`: a search of the table under its lock that judges
- * no namespace's view and no state but free, so that it errs only toward
- * the full walk. */
-static int cached_mount_named(struct vfs_mount *mnt, const char *comp)
+/* `cached_named`'s answer for a nameless mount it entered. */
+#define WALK_NAMED 3
+
+/**
+ * Enter the nameless mount that `comp` names from the root directory of
+ * `mnt`, as the full walk's `mount_named` finds it, for the cached walk:
+ * the mount and its root, entered and held, into `next`. The table is
+ * searched under its lock, which keeps a record in its slot while the walk
+ * enters it, as `cached_cross` searches it. WALK_NAMED with `next` taken; 0
+ * when no such mount is there, and the name is looked up as any other; or
+ * WALK_FULL, with nothing taken, for a mount the walk may not judge
+ * (`vfs_mount_seen_word`) or stand on (`cached_take`).
+ */
+static int cached_named(struct vfs_mount *mnt, const char *comp, struct vfs_ref *next)
 {
     uint32_t flags = spin_lock_irqsave(&mount_table_lock);
-    int i, near = 0;
+    struct vfs_mount *found = NULL;
+    int i, seen, rc = 0;
 
-    for (i = 1; i < mount_slots && !near; i++) {
-        const struct vfs_mount *m = mounts[i];
+    for (i = 1; i < mount_slots && !found && rc == 0; i++) {
+        struct vfs_mount *m = mounts[i];
 
-        if (!m || m->state == VFS_FREE || m->parent != mnt) {
+        if (!m || m->state != VFS_ACTIVE || m->parent != mnt || m->covered ||
+            !streq(mount_entry_name(m), comp)) {
             continue;
         }
-        near = !m->covered && streq(path_last(m->covered_path), comp);
+        seen = vfs_mount_seen_word(m);
+        if (seen < 0) {
+            rc = WALK_FULL;
+        } else if (seen) {
+            found = m;
+        }
+    }
+    if (found) {
+        rc = cached_take(found, found->root, next) == 0 ? WALK_NAMED : WALK_FULL;
     }
     spin_unlock_irqrestore(&mount_table_lock, flags);
-    return near;
+    return rc;
 }
 
 /**
@@ -1978,20 +1997,74 @@ static int cached_cross(struct vfs_ref *cur)
     }
 }
 
+/* How many of the directories above it the cached walk keeps for `..`. */
+#define CACHED_DOTS 24
+
+/* The directories the cached walk came down through, nearest last, each
+ * held and its mount entered, so that a `..` climbs to the one it came
+ * from, as Linux's walk under RCU climbs to `d_parent` (fs/namei.c:1968-
+ * 2006). `seq` is the count of changes of names the walk began at, and
+ * `calm` whether none was under way then (`vfs_name_seq_peek`). The oldest
+ * is let go when there is no room, and a `..` above the rest goes to the
+ * full walk. `named` marks a directory left for a nameless mount's root,
+ * which a `..` reaches without crossing the mounts over it, as the full
+ * walk's `nameless_up` does. */
+struct cached_dots {
+    uint32_t seq;
+    int calm;
+    int n;
+    struct vfs_ref up[CACHED_DOTS];
+    unsigned char named[CACHED_DOTS];
+};
+
+/** Let go of every directory `dd` keeps. May sleep (`cached_put`). */
+static void cached_dots_drop(struct cached_dots *dd)
+{
+    while (dd->n > 0) {
+        dd->n--;
+        cached_put(dd->up[dd->n].mnt, dd->up[dd->n].node);
+        vfs_leave(dd->up[dd->n].mnt);
+    }
+}
+
+/** Keep `cur`, its hold and its mount's entry, on top of `dd`, letting the
+ * oldest go when `dd` is full; `named` as `struct cached_dots` says. May
+ * sleep (`cached_put`). */
+static void cached_dots_push(struct cached_dots *dd, const struct vfs_ref *cur, int named)
+{
+    if (dd->n == CACHED_DOTS) {
+        cached_put(dd->up[0].mnt, dd->up[0].node);
+        vfs_leave(dd->up[0].mnt);
+        k_memmove(&dd->up[0], &dd->up[1], sizeof(dd->up[0]) * (CACHED_DOTS - 1));
+        k_memmove(&dd->named[0], &dd->named[1], CACHED_DOTS - 1);
+        dd->n--;
+    }
+    dd->up[dd->n] = *cur;
+    dd->named[dd->n] = (unsigned char)named;
+    dd->n++;
+}
+
 /**
  * Move the cached walk at `cur` to `found`, held, on the same mount, and
- * cross the mounts over it (`cached_cross`). A file bound over the last
- * name's entry in `*entry` moves the walk onto another mount, which the
- * entry does not name, so the entry is dropped, as the full walk's
- * `walk_record_cross` drops it and Linux's `__follow_mount_rcu` replaces
- * the mount and the dentry together (fs/namei.c:1544-1556). 0, or
- * WALK_FULL as `cached_cross` returns it. May sleep.
+ * cross the mounts over it (`cached_cross`); the directory it leaves is
+ * kept in `dd` for a `..`. A file bound over the last name's entry in
+ * `*entry` moves the walk onto another mount, which the entry does not
+ * name, so the entry is dropped, as the full walk's `walk_record_cross`
+ * drops it and Linux's `__follow_mount_rcu` replaces the mount and the
+ * dentry together (fs/namei.c:1544-1556). 0, or WALK_FULL as
+ * `cached_cross` returns it, or with `found` put when the mount cannot be
+ * entered again. May sleep.
  */
-static int cached_move(struct vfs_ref *cur, void *found, struct vfs_name **entry)
+static int cached_move(struct vfs_ref *cur, void *found, struct vfs_name **entry,
+                       struct cached_dots *dd)
 {
     struct vfs_mount *from = cur->mnt;
 
-    cached_put(cur->mnt, cur->node);
+    if (vfs_enter(cur->mnt) != 0) {
+        cached_put(cur->mnt, found);
+        return WALK_FULL;
+    }
+    cached_dots_push(dd, cur, 0);
     cur->node = found;
     if (cached_cross(cur) != 0) {
         return WALK_FULL;
@@ -2001,6 +2074,104 @@ static int cached_move(struct vfs_ref *cur, void *found, struct vfs_name **entry
         *entry = NULL;
     }
     return 0;
+}
+
+/**
+ * Whether a `..` at `cur` stays there, as the full walk's `dotdot_stays`
+ * says: at the caller's root, or at the root of the root mount. The root
+ * is read as `cached_start` reads it; one that has moved since the walk
+ * took it first (`seen`) is -1, for the full walk to start over at the new
+ * root, as its `walk_root_moved` does. 1, 0, or -1.
+ */
+static int cached_dots_stay(const struct vfs_ref *cur, const struct cached_root *seen)
+{
+    struct fs_struct *fs = current_proc ? current_proc->fs : NULL;
+    struct vfs_mount *mnt = NULL;
+    void *node = NULL;
+    uint32_t flags, seq = 0;
+    int stay;
+
+    if (fs) {
+        flags = spin_lock_irqsave(&fs->lock);
+        seq = fs->root_seq;
+        mnt = fs->root_mnt;
+        node = fs->root_node;
+        spin_unlock_irqrestore(&fs->lock, flags);
+    }
+    if (seen->taken && seen->seq != seq) {
+        return -1;
+    }
+    flags = spin_lock_irqsave(&mount_table_lock);
+    stay = (mnt && cur->mnt == mnt && cur->node == node) ||
+           (cur->mnt == mounts[0] && cur->node == mounts[0]->root);
+    spin_unlock_irqrestore(&mount_table_lock, flags);
+    return stay;
+}
+
+/**
+ * Take a `..` in the cached walk at `cur`: stay at the root
+ * (`cached_dots_stay`), or climb to the directory the walk came down from,
+ * kept in `dd`, and cross the mounts over it (`cached_cross`), as Linux's
+ * `handle_dots` steps into the parent (fs/namei.c:2040-2056). At the root of
+ * a mount over a directory that directory is the one the covered directory
+ * was found in, as the full walk reaches it by the covered directory; at a
+ * nameless mount's root it is the parent mount's root, which it does not
+ * cross, as `nameless_up` uses the `..` up. The kept directory is the
+ * parent only while no name has changed since the walk began, which
+ * `vfs_name_seq_still` checks, as Linux checks the directory's sequence
+ * (fs/namei.c:1994). 0; or WALK_FULL, with `cur` held as it was, for a
+ * change of names, a moved root, or a walk that kept no directory above
+ * `cur`, having started there or let it go for room.
+ */
+static int cached_dotdot(struct vfs_ref *cur, struct cached_dots *dd,
+                         const struct cached_root *seen)
+{
+    int stay, named;
+
+    if (!dd->calm || !vfs_name_seq_still(dd->seq)) {
+        return WALK_FULL;
+    }
+    stay = cached_dots_stay(cur, seen);
+    if (stay != 0) {
+        return stay > 0 ? 0 : WALK_FULL;
+    }
+    if (dd->n == 0) {
+        return WALK_FULL;
+    }
+    cached_put(cur->mnt, cur->node);
+    vfs_leave(cur->mnt);
+    dd->n--;
+    *cur = dd->up[dd->n];
+    named = dd->named[dd->n];
+    return named ? 0 : cached_cross(cur);
+}
+
+/**
+ * Take the name `comp` at `cur` in the cached walk when it names no entry
+ * of the directory: `.`, `..` (`cached_dotdot`), or a nameless mount, from
+ * its parent's root (`cached_named`), whose root the walk moves to, keeping
+ * `cur` in `dd`. 0 when taken; -1 for any other name, which the caller
+ * looks up; or WALK_FULL, with `cur` held as it was.
+ */
+static int cached_dots_step(struct vfs_ref *cur, const char *comp, struct cached_dots *dd,
+                            const struct cached_root *seen)
+{
+    struct vfs_ref next;
+    int rc;
+
+    if (streq(comp, ".")) {
+        return 0;
+    }
+    if (streq(comp, "..")) {
+        return cached_dotdot(cur, dd, seen);
+    }
+    rc = cur->node == cur->mnt->root ? cached_named(cur->mnt, comp, &next) : 0;
+    if (rc == WALK_NAMED) {
+        cached_dots_push(dd, cur, 1);
+        *cur = next;
+        return 0;
+    }
+    return rc != 0 ? rc : -1;
 }
 
 /* What the cached walk keeps while it follows links: the two path pages,
@@ -2025,12 +2196,14 @@ struct cached_links {
  * `cached_start` would leave to the full walk. That root must be the one
  * the walk took first (`lk->root`), as `nd_jump_root` jumps to the
  * `nd->root` the walk began with. A relative target goes on from `cur`. 0,
- * with the walk to go on at `lk->linkpath`; or WALK_FULL, with `cur` held
- * as it was, past VFS_LINK_MAX links, for a target the node does not hold,
- * a root it cannot take or that has moved, or an error, which the full
- * walk reports.
+ * with the walk to go on at `lk->linkpath`, and after an absolute target
+ * with the directories `dd` kept let go, since a `..` climbs from the root
+ * now; or WALK_FULL, with `cur` and `dd` as they were, past VFS_LINK_MAX
+ * links, for a target the node does not hold, a root it cannot take or that
+ * has moved, or an error, which the full walk reports.
  */
-static int cached_link(struct vfs_ref *cur, void *found, const char *rest, struct cached_links *lk)
+static int cached_link(struct vfs_ref *cur, void *found, const char *rest, struct cached_links *lk,
+                       struct cached_dots *dd)
 {
     struct vfs_ref root = {NULL, NULL};
     int tlen = -1, rc;
@@ -2048,6 +2221,7 @@ static int cached_link(struct vfs_ref *cur, void *found, const char *rest, struc
     if (rc == 1) {
         cached_put(cur->mnt, cur->node);
         vfs_leave(cur->mnt);
+        cached_dots_drop(dd);
         *cur = root;
     }
     return 0;
@@ -2065,12 +2239,16 @@ static int cached_link(struct vfs_ref *cur, void *found, const char *rest, struc
  * its name in the cache and pass the search check, which reads the held
  * directory alone (`name_cache`). A symbolic link whose target the node
  * holds it follows (`cached_link`), from the root for an absolute target
- * and from the link's directory for a relative one, and a directory a
- * mount covers it crosses (`cached_move`); a nameless mount entered by
- * name it leaves to the full walk. Anything else, `..`, any other link and
- * a failed search check among them, which the full walk may excuse on the
- * way to the working directory (`toward_cwd`), goes to the full walk, which
- * gives the same answer for every path this one finishes. The walk takes no
+ * and from the link's directory for a relative one, a directory a mount
+ * covers it crosses (`cached_move`), a nameless mount it enters by its name
+ * from its parent's root (`cached_named`), as the full walk does, and a
+ * `..` it climbs to the directory it came down from (`cached_dotdot`), as
+ * Linux's walk under RCU climbs to the parent, so that Wine's links of
+ * `dosdevices`, `c:` to `../drive_c`, stay off the big lock. Anything else,
+ * a `..` above where the walk began, any other link and a failed search
+ * check among them, which the full walk may excuse on the way to the
+ * working directory (`toward_cwd`), goes to the full walk, which gives the
+ * same answer for every path this one finishes. The walk takes no
  * namespace lock, since its type needs none, and a mount it ends on is the
  * one `walk_unlock` leaves.
  */
@@ -2082,10 +2260,13 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
     int use_real = (flags & VFS_WALK_REAL_IDS) != 0;
     struct cached_record rec;
     struct cached_links lk;
+    struct cached_dots dd;
     uint32_t found_names = 0;
     int rc;
 
     k_memset(&lk, 0, sizeof(lk));
+    dd.n = 0;
+    dd.calm = vfs_name_seq_peek(&dd.seq);
     rec.entry = entry;
     rec.seq = 0;
     if ((entry && !vfs_name_seq(&rec.seq)) || cached_start(start, path, &cur, &lk.root) != 0) {
@@ -2115,10 +2296,11 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
         k_memcpy(comp, p, len);
         comp[len] = '\0';
         p += len;
-        if (streq(comp, ".")) {
+        rc = cached_dots_step(&cur, comp, &dd, &lk.root);
+        if (rc == 0) {
             continue;
         }
-        if (streq(comp, "..") || (cur.node == cur.mnt->root && cached_mount_named(cur.mnt, comp))) {
+        if (rc > 0) {
             goto full;
         }
         rc = dcache_lookup_hit(mount_base(cur.mnt), cur.node, comp, &found);
@@ -2126,6 +2308,7 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
             dcache_count_hits(found_names + 1);
             cached_put(cur.mnt, cur.node);
             vfs_leave(cur.mnt);
+            cached_dots_drop(&dd);
             path_buf_put(lk.linkpath);
             path_buf_put(lk.target);
             return rc;
@@ -2138,7 +2321,7 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
         }
         rc = cached_found(&cur, found, comp, rest, flags, &rec);
         if (rc == WALK_LINK) {
-            rc = cached_link(&cur, found, rest, &lk);
+            rc = cached_link(&cur, found, rest, &lk, &dd);
             p = lk.linkpath;
             if (rc == 0) {
                 continue;
@@ -2147,7 +2330,7 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
         if (rc != 0) {
             goto full;
         }
-        if (cached_move(&cur, found, entry) != 0) {
+        if (cached_move(&cur, found, entry, &dd) != 0) {
             goto full;
         }
     }
@@ -2156,6 +2339,7 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
     }
     dcache_count_hits(found_names);
     *out = cur;
+    cached_dots_drop(&dd);
     path_buf_put(lk.linkpath);
     path_buf_put(lk.target);
     return 0;
@@ -2163,6 +2347,7 @@ static int resolve_cached(const struct vfs_ref *start, const char *path, int fla
 full:
     cached_put(cur.mnt, cur.node);
     vfs_leave(cur.mnt);
+    cached_dots_drop(&dd);
     if (entry) {
         vfs_name_put(*entry);
         *entry = NULL;

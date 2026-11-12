@@ -41,7 +41,8 @@ static int opened_fd, publication_seen, lock_waits, opening_flags, before_public
  * `fast`, as ext2's fast links do. Its nodes are one table, each named in
  * its parent; `refs` counts the walk's holds, which every row gives back.
  * Reading the link `moving` moves the walker's root, as a chroot by a
- * thread that shares it (CLONE_FS) would during the walk.
+ * thread that shares it (CLONE_FS) would during the walk, and reading
+ * `renaming` counts a change of names, as a rename by another thread would.
  */
 struct cnode {
     struct cnode *parent;
@@ -71,12 +72,26 @@ enum {
     C_OROOT,
     C_INNER,
     C_SOURCE,
+    C_BACK,
+    C_OUT,
+    C_DROOT,
+    C_UP,
+    C_PFX,
+    C_DOS,
+    C_CLINK,
+    C_DLINK,
+    C_DRIVE,
+    C_WIN,
     C_NODES
 };
 
 static struct cnode cn[C_NODES];
-static struct vfs_mount croot, cother, cunseen, cunsure, cbind;
-static struct vfs_mount *cache_table[5] = {&croot, &cother, &cunseen, &cunsure, &cbind};
+#define C_MOUNTS 6
+static struct vfs_mount croot, cother, cunseen, cunsure, cbind, cnamed;
+static struct vfs_mount *cache_table[C_MOUNTS] = {&croot,   &cother, &cunseen,
+                                                  &cunsure, &cbind,  &cnamed};
+/* The model's count of changes of names, which reading `renaming` moves. */
+static uint32_t names_changed;
 /* The record the cached walk captures for a regular file's last name, and
  * the counts of those captured and dropped. */
 static int name_record, names_taken, names_put;
@@ -163,6 +178,9 @@ static int cache_readlink_cached(struct vfs_mount *mnt, void *node, char *buf, u
     }
     if (n == &cn[C_MOVING]) {
         dirs.root_seq++;
+    }
+    if (n == &cn[C_DLINK]) {
+        names_changed++;
     }
     return cache_target(n, buf, cap);
 }
@@ -439,11 +457,23 @@ static void reap_if_detached(const struct vfs_mount *mnt, uint32_t left)
     (void)left;
 }
 
-/** The count of changes of names, which none of the cached rows makes. */
+/** The count of changes of names, of which none is ever under way. */
 int vfs_name_seq(uint32_t *seq)
 {
-    *seq = 0;
+    *seq = names_changed;
     return 1;
+}
+
+/** The same count, read as the cached walk reads it at its start. */
+int vfs_name_seq_peek(uint32_t *seq)
+{
+    return vfs_name_seq(seq);
+}
+
+/** Whether the count is still `seq`. */
+int vfs_name_seq_still(uint32_t seq)
+{
+    return names_changed == seq;
 }
 
 /** Capture a regular file's last name for the cached walk: the model's one
@@ -887,7 +917,11 @@ static void locked_walks(void)
  * that file relative, absolute and through "/", a slow link, a directory
  * another mount of the model covers, one another namespace's mount covers,
  * one under a mount the namespace word cannot judge, a file a file bind
- * covers with a link to it, and the link that moves the root. */
+ * covers with a link to it, the link that moves the root, and links that
+ * climb a `..` from the root, from a covering mount's root and from a
+ * nameless mount's root. That mount, entered as /data, holds Wine's prefix
+ * with its link `c:` to `../drive_c` and a link `d:` read as a name
+ * changes. */
 static void cache_layout(void)
 {
     int i;
@@ -910,7 +944,18 @@ static void cache_layout(void)
     cnode_set(C_OROOT, -1, NULL, 0040755u, NULL, 0);
     cnode_set(C_INNER, C_OROOT, "inner", 0100644u, NULL, 0);
     cnode_set(C_SOURCE, -1, NULL, 0100644u, NULL, 0);
-    for (i = 0; i < 5; i++) {
+    cnode_set(C_BACK, C_ROOT, "back", 0120777u, "../bin/tool", 1);
+    cnode_set(C_OUT, C_OROOT, "out", 0120777u, "../bin/tool", 1);
+    cnode_set(C_DROOT, -1, NULL, 0040755u, NULL, 0);
+    cnode_set(C_UP, C_DROOT, "up", 0120777u, "../bin/tool", 1);
+    cnode_set(C_PFX, C_DROOT, "pfx", 0040755u, NULL, 0);
+    cnode_set(C_DOS, C_PFX, "dosdevices", 0040755u, NULL, 0);
+    cnode_set(C_CLINK, C_DOS, "c:", 0120777u, "../drive_c", 1);
+    cnode_set(C_DLINK, C_DOS, "d:", 0120777u, "../drive_c", 1);
+    cnode_set(C_DRIVE, C_PFX, "drive_c", 0040755u, NULL, 0);
+    cnode_set(C_WIN, C_DRIVE, "win", 0100644u, NULL, 0);
+    names_changed = 0;
+    for (i = 0; i < C_MOUNTS; i++) {
         k_memset(cache_table[i], 0, sizeof(*cache_table[i]));
         cache_table[i]->type = &cache_type;
         cache_table[i]->state = VFS_ACTIVE;
@@ -926,6 +971,9 @@ static void cache_layout(void)
     cunsure.covered = &cn[C_UNSURE];
     cbind.root = &cn[C_SOURCE];
     cbind.covered = &cn[C_TARGET];
+    k_memcpy(croot.covered_path, "/", 2);
+    cnamed.root = &cn[C_DROOT];
+    k_memcpy(cnamed.covered_path, "/data", 6);
 }
 
 /** Resolve `path` by the cached walk alone, with a name record when
@@ -952,7 +1000,7 @@ static int cache_quiet(void)
     for (i = 0; i < C_NODES; i++) {
         held += cn[i].refs;
     }
-    for (i = 0; i < 5; i++) {
+    for (i = 0; i < C_MOUNTS; i++) {
         held += (int)cache_table[i]->inprogress;
     }
     return held == 0;
@@ -968,8 +1016,15 @@ static int cache_quiet(void)
  * (fs/namei.c:1521-1563), stays on the directory under one it does not,
  * and leaves to the full walk one it cannot judge. A file bind's crossing
  * drops the last name's record, which names the covered file. An absolute
- * link met after the root moved goes to the full walk. Each row gives back
- * every hold and mount it took.
+ * link met after the root moved goes to the full walk. It enters a
+ * nameless mount by its name from its parent's root, as the full walk's
+ * mount_named does, and climbs a `..` to the directory it came down from,
+ * as follow_dotdot_rcu climbs to d_parent (fs/namei.c:1968-2006): from a
+ * covering mount's root to the directory the covered one is in, and from a
+ * nameless mount's root to its parent's root; at the root it stays. A `..`
+ * after a change of names goes to the full walk, as a d_seq that moved
+ * does (fs/namei.c:1994). Each row gives back every hold and mount it
+ * took.
  */
 static void cached_walks(void)
 {
@@ -983,7 +1038,7 @@ static void cached_walks(void)
     dirs.root_node = NULL;
     cache_layout();
     mounts = cache_table;
-    mount_slots = 5;
+    mount_slots = C_MOUNTS;
     check(cached_at("/bin/tool", NULL, &croot, C_TOOL) == 0, "the cached walk finds a file");
     check(cached_at("/rel", NULL, &croot, C_TOOL) == 0,
           "and follows a fast link's relative target from the link's directory");
@@ -1013,6 +1068,21 @@ static void cached_walks(void)
           "an absolute link met after the root moved goes to the full walk");
     check(cached_at("/abs", NULL, &croot, C_TOOL) == 0,
           "and a walk that begins after the move takes the root as it now is");
+    check(cached_at("/bin/../bin/tool", NULL, &croot, C_TOOL) == 0,
+          "a `..` climbs to the directory the walk came down from");
+    check(cached_at("/back", NULL, &croot, C_TOOL) == 0, "and stays at the root");
+    check(cached_at("/cover/out", NULL, &croot, C_TOOL) == 0,
+          "and climbs from a covering mount's root to the covered directory's parent");
+    check(cached_at("/data/pfx/drive_c/win", NULL, &cnamed, C_WIN) == 0,
+          "the walk enters a nameless mount by its name");
+    check(cached_at("/data/up", NULL, &croot, C_TOOL) == 0,
+          "and climbs from its root to its parent's root");
+    check(cached_at("/data/pfx/dosdevices/c:/win", NULL, &cnamed, C_WIN) == 0,
+          "a relative link's `..` climbs inside the nameless mount");
+    check(cached_at("/data/pfx/dosdevices/d:/win", NULL, &cnamed, C_WIN) == VFS_CACHED_MISS,
+          "a `..` after a change of names goes to the full walk");
+    check(cached_at("/data/pfx/dosdevices/c:/win", NULL, &cnamed, C_WIN) == 0,
+          "and a walk that begins after the change climbs it");
     check(cache_quiet(), "the cached walks give back every hold and mount");
     mounts = was;
     mount_slots = was_slots;
