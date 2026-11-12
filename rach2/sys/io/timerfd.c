@@ -71,23 +71,24 @@ struct ktimer {
     struct ktimer *next; /* the list of armed timers the tick walks */
     int clock;
     int armed;
-    uint64_t due;   /* the first tick that may see the next expiration;
-                     * all ones while a periodic timerfd is stopped at its
-                     * expiry (`expire`) */
-    int base;       /* the clock `end` is on: `clock`, or for a relative
-                     * timer of real time CLOCK_MONOTONIC, as Linux's
-                     * hrtimer bases one */
-    int64_t end;    /* the next expiration, in nanoseconds on `base` */
-    int64_t set_at; /* the time on `base` at which `end` was last counted
-                     * (`set_due`): a wake is late by the time past the
-                     * later of the two */
-    uint64_t ins;   /* the interval in nanoseconds, 0 for none */
-    uint32_t isec;  /* processor time's interval, 0 and 0 for none: whole */
-    uint32_t isub;  /* seconds, and ticks below a second */
-    uint64_t count; /* a timerfd's expirations not yet read; a POSIX
-                     * timer's notification that waits for another
-                     * sender's signal of its number to be taken, as its
-                     * overrun plus one, 0 for none (`ptimer_fire`) */
+    unsigned int event_cpu; /* CPU that last armed its deadline */
+    uint64_t due;           /* first tick that may see the next expiry;
+                             * all ones while a periodic timerfd waits at its
+                             * expiry (`expire`) */
+    int base;               /* the clock `end` is on: `clock`, or for a relative
+                             * timer of real time CLOCK_MONOTONIC, as Linux's
+                             * hrtimer bases one */
+    int64_t end;            /* the next expiration, in nanoseconds on `base` */
+    int64_t set_at;         /* the time on `base` at which `end` was last counted
+                             * (`set_due`): a wake is late by the time past the
+                             * later of the two */
+    uint64_t ins;           /* the interval in nanoseconds, 0 for none */
+    uint32_t isec;          /* processor time's interval, 0 and 0 for none: whole */
+    uint32_t isub;          /* seconds, and ticks below a second */
+    uint64_t count;         /* a timerfd's expirations not yet read; a POSIX
+                             * timer's notification that waits for another
+                             * sender's signal of its number to be taken, as its
+                             * overrun plus one, 0 for none (`ptimer_fire`) */
     wait_queue_t wq;
     struct tgroup *tg;       /* a POSIX timer's process, or NULL */
     struct ktimer *in_group; /* the process's next timer */
@@ -417,7 +418,7 @@ static void arm_between(const struct ktimer *t, struct pass *p)
 {
     int64_t at = t->end;
 
-    if (!t->between || t->end >= END_MAX) {
+    if (!t->between || t->end >= END_MAX || t->event_cpu != arch_cpu_id()) {
         return;
     }
     if (t->base == CLOCK_REALTIME) {
@@ -464,6 +465,7 @@ static void set_due(struct ktimer *t, const struct reading *r, uint64_t now)
 {
     int64_t left = t->end - r->clock;
 
+    t->event_cpu = arch_cpu_id();
     t->set_at = r->clock;
     t->due = r->tick;
     if (left > 0) {
