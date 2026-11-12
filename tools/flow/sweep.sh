@@ -12,7 +12,8 @@
 # state directory under this checkout's build/flow, which a loop itself prunes
 # only while it runs and holds no task; and runs `scratch.pl` with the stems of
 # master's scratch names, here on this checkout's build/tmp and on that of the
-# Mac's release copy, build/machines/mac/tree, and as root on the
+# Mac's release copy, build/machines/mac/tree, with the release runs'
+# directories there that hold no KEPT, and as root on the
 # testing host on its /tmp and on the build/tmp of the owner's copy and of each
 # account's clone, which removes the scratch of tests that were killed before
 # their traps ran. It then runs `leftovers.pl`, through `leftovers` in lib.sh,
@@ -26,9 +27,12 @@
 # unchanged for a day, but `build/tests/failed`, and the run files of
 # `build/runs` unchanged for two weeks; on Windows the test collections,
 # tooling job directories, case images and scratch, the old shared TMPDIR of
-# the release runs among it, unchanged for a day, and
-# each release run, with its files and its etude, of a milestone whose release
-# closed; and here the entries of `build/tests` unchanged for two weeks. The
+# the release runs among it, unchanged for a day, and the release runs'
+# directories in build/tmp unchanged for a day that hold no KEPT and whose
+# etude no longer runs; each release run, with its files, its etude and its
+# kept directory, of a milestone whose release closed; and here the entries of
+# `build/tests` unchanged for two weeks and the Mac's kept run directories of
+# a milestone whose release closed. The
 # caches, the build copies of the release and of Windows, and the tooling work
 # disks stay. Each removal, and each step's total, is a line on stdout. Each
 # step that reaches the host stops itself after ten minutes. With -a, which
@@ -85,17 +89,33 @@ outputs()
         echo 'b=/d/rach2/build'
         # shellcheck disable=SC2016 # the dollars are the remote shell's
         echo "stale $days \$b/tests/rach2-collection.* \$b/tooling/job-* \$b/images/cases/*" \
-            '$b/x86_64/images/cases/* $b/tmp/* $b/release/tmp/*'
+            '$b/x86_64/images/cases/* $b/release/tmp/*'
+        # A run's directory stays while it holds KEPT or its etude runs, and
+        # all of build/tmp while tasklist cannot say which run.
+        # shellcheck disable=SC2016 # the dollars are the remote shell's
+        printf '%s\n' 'if t=$(MSYS_NO_PATHCONV=1 tasklist /NH /FO CSV 2> /dev/null); then' \
+            '    for d in $b/tmp/*; do' \
+            '        [ ! -e "$d/KEPT" ] || continue' \
+            '        case $t in *"\"etude-${d##*/}.exe\""*) continue ;; esac' \
+            "        stale $days \"\$d\"" \
+            '    done' \
+            'fi'
         # A milestone whose release closed runs nothing on Windows again, so
         # its runs there, failed ones with their evidence among them, go
         # whatever their age.
         for m in $(closed); do
-            echo "stale 0 \$b/release/milestone$m-*-windows-* \$b/release/etude-milestone$m-*-windows-*"
+            echo "stale 0 \$b/release/milestone$m-*-windows-* \$b/release/etude-milestone$m-*-windows-*" \
+                "\$b/tmp/milestone$m-*-windows-*"
         done
     } | perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         'bash -s' 2>&1 | tr -d '\000\r' | sed 's/^/windows: /'
     eval "$stale"
     stale 14 "$repo"/build/tests/* 2>&1 | sed "s/^/$(hostname -s): /"
+    # The Mac's kept runs, which scratch.pl leaves, of a milestone whose
+    # release closed.
+    for m in $(closed); do
+        stale 0 "$repo"/build/machines/mac/tree/build/tmp/milestone"$m"-*-mac-*
+    done 2>&1 | sed "s/^/$(hostname -s): /"
     git worktree prune
 }
 
@@ -131,7 +151,7 @@ main()
     clones
     stems=$(stems origin/master | tr '\n' ' ')
     # shellcheck disable=SC2086 # the stems are a word each
-    perl "$(dirname "$0")/scratch.pl" -d "$repo/build/tmp" \
+    perl "$(dirname "$0")/scratch.pl" -r -d "$repo/build/tmp" \
         -d "$repo/build/machines/mac/tree/build/tmp" "$age" $stems 2>&1 |
         sed "s/^/$(hostname -s): /"
     dirs='-d /tmp'

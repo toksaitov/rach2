@@ -50,11 +50,15 @@
 #   whole host in WSL's admission, `etude-launch alone`, keeps WSL's tests
 #   from starting; WSL refusing either claim ends the release. A release
 #   that exits or is stopped stops Windows' preparation and ends both claims.
-#   Each Windows session gives the run a TMPDIR of its own, OUT/ID.tmp, and a
-#   scratch record, OUT/ID.scratch, in which etude notes the collections and
-#   tooling jobs it makes in the copy; a run that a stop or a lost ssh ends is
-#   stopped on Windows too, and its TMPDIR and what the record names as
-#   neither removed nor kept as evidence are removed, as winclean.sh says.
+#   Each run, on the Mac and in each Windows session, has a directory of its
+#   own, build/tmp/ID in its copy, ID ending in the time and a random suffix,
+#   which ETUDE_RUN_DIR names and which holds its TMPDIR and etude's scratch.
+#   A failure first writes ID/KEPT, with the reason and the evidence, as etude
+#   does when it keeps evidence; a run that passed removes the directory
+#   unless it holds KEPT. A Windows run that a stop or a lost ssh ends is
+#   stopped there too, and its directory removed unless kept, as winclean.sh
+#   says; a stopped Mac run's directory is removed the same way. sweep.sh
+#   removes a kept one once its milestone's release closed.
 #   The Lenovo's run, lenovo, is the native cases of tests/native on the
 #   trial boot, which `native-deploy run` starts from here with the payload
 #   the build makes, after the acceptance. The trial boot's console session
@@ -104,7 +108,8 @@
 #   STATE/prepare/MACHINE.log keeps whole; the last line is `release:
 #   prepare: passed SHA` or `release: prepare: failed: MACHINE...`. On every
 #   exit it stops what still runs and removes the copy on the host, the
-#   worktree, and the runs' directories on Windows and the Mac; the vendor
+#   worktree, the runs' output on Windows and the Mac, and their run
+#   directories unless kept, which sweep.sh removes later; the vendor
 #   and GNU builds stay in each machine's step store. It takes the release's
 #   lock and STATE/again.lock, and waits while a release's run on the Mac, or
 #   a Windows run of -a, still runs.
@@ -274,6 +279,14 @@ PREPARE_COPY=$OWNER/build/worktrees/prepare
 WAD="{ cp /etc/rach2/doom1.wad ports/doom/doom1.wad ||
             { echo 'release: wad: the testing host has no /etc/rach2/doom1.wad' >&2; false; }; } &&
         sh ports/doom/fetch_wad.sh"
+
+# stamp: print the end of a run's ID that makes it unique, the time in UTC and
+# six random hex digits, since the ID names the run's directory, which its
+# cleanup removes whole.
+stamp()
+{
+    printf '%s-%s\n' "$(date -u '+%m%d-%H%M%S')" "$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+}
 
 # say TEXT: print TEXT and append it to the log, with the time in UTC.
 say()
@@ -1065,11 +1078,14 @@ unhosted()
 # that `selection mac` prints, in the copy TREE with the admission site SITE,
 # with its output in RUNS/ID.console and its status appended to RUNS/ID.times
 # as `rc=N`; with -p make only its preparation, with `routine-prepare`. Its
-# scratch and the evidence of a failed preparation go to TREE/build/tmp, not
-# to the TMPDIR that macOS gives under /var/folders.
+# scratch and the evidence of a failed preparation go to its run directory,
+# TREE/build/tmp/ID, not to the TMPDIR that macOS gives under /var/folders: a
+# failure marks it kept first, and a pass removes it unless etude kept
+# evidence there.
 mac_run()
 {
     id=$1
+    rdir=$tree/build/tmp/$id
     routine='routine-sequence'
     [ -z "$prepare" ] || routine='routine-prepare'
     words=$(selection mac)
@@ -1079,7 +1095,7 @@ mac_run()
     (
         eval "$(environment mac)"
         unset ETUDE_SITE ETUDE_ADMITTED ETUDE_PREPARATION_CLEAN
-        export TMPDIR="$tree/build/tmp"
+        export ETUDE_RUN_DIR="$rdir" TMPDIR="$rdir/tmp"
         cd "$tree" && git checkout -q -f --detach "$sha" && mkdir -p "$TMPDIR" &&
             make build/tools/etude/etude build/tools/etude/etude-volume &&
             cp build/tools/etude/etude build/tools/etude/etude-volume "$site/bin/" &&
@@ -1089,8 +1105,20 @@ mac_run()
                 "$site/bin/etude" run "$routine" phase_first_run "$tree" "$runs/$id" both \
                 "$id" "$site/etude-site" "$site/bin/etude" "$accel" $words
     ) > "$runs/$id.console" 2>&1
-    echo "rc=$?" >> "$runs/$id.times"
+    rc=$?
+    [ "$rc" = 0 ] || { mkdir -p "$rdir" &&
+        echo "failed: the run exited $rc; evidence: $runs/$id $runs/$id.console" >> "$rdir/KEPT"; }
+    [ "$rc" != 0 ] || mac_clean "$id"
+    echo "rc=$rc" >> "$runs/$id.times"
     date '+end %FT%T%z' >> "$runs/$id.times"
+}
+
+# mac_clean ID: remove the run directory of the Mac's run ID, which has
+# stopped, unless it holds KEPT.
+mac_clean()
+{
+    [ -n "$1" ] && [ ! -e "$tree/build/tmp/$1/KEPT" ] || return 0
+    rm -rf "${tree:?}/build/tmp/$1"
 }
 
 # mac_stop: stop the Mac's run that still runs, which belongs to an earlier
@@ -1108,6 +1136,7 @@ mac_stop()
             sleep 10
         done
         say "mac: stopped the earlier run, process group $pg"
+        mac_clean "$last"
     fi
     rm -f "$macdir/run"
     [ -z "$last" ] || ! grep -qF "$last" "$site/ledger/claims" 2> /dev/null ||
@@ -1126,7 +1155,7 @@ mac_start()
         return 0
     fi
     net git -C "$repo" fetch -q origin || later "the fetch failed"
-    mac_launch "milestone$milestone-$(echo "$sha" | cut -c 1-12)-mac-$(date -u '+%m%d-%H%M%S')" "$sha"
+    mac_launch "milestone$milestone-$(echo "$sha" | cut -c 1-12)-mac-$(stamp)" "$sha"
 }
 
 # mac_launch ID AT: record that the Mac's run ID started, and start it at the
@@ -1277,6 +1306,31 @@ awk '\$1 !~ /^#/ && NF >= 4 { n = \$3; sub(/.*\//, "", n); print n, \$4 }' \
 END
 }
 
+# windows_run ID: print the Windows shell's lines that give a session of the
+# run ID its run directory, TREE/build/tmp/ID, as ETUDE_RUN_DIR with its
+# TMPDIR inside, make it and OUT/ID, and define `kept REASON PATH...`, which
+# marks the directory kept with a line of the reason and the evidence.
+windows_run()
+{
+    echo "run=$wtree/build/tmp/$1"
+    # shellcheck disable=SC2016 # the remote shell expands these
+    echo 'export ETUDE_RUN_DIR=$run TMPDIR=$run/tmp'
+    echo "mkdir -p $wout/$1 \$TMPDIR"
+    # shellcheck disable=SC2016 # the remote shell expands these
+    echo 'kept() { r=$1; shift; echo "failed: $r; evidence: $*" >> "$run/KEPT"; }'
+}
+
+# windows_ended ID CONSOLE: print the Windows shell's lines that, once etude's
+# status is in rc, mark the run directory kept first when it failed, with the
+# run's output OUT/ID and its OUT/ID.CONSOLE as evidence, and remove the
+# directory when it passed and etude kept nothing there.
+windows_ended()
+{
+    echo "[ \"\$rc\" = 0 ] || kept \"etude exited \$rc\" $wout/$1 $wout/$1.$2"
+    # shellcheck disable=SC2016 # the remote shell expands these
+    echo '[ "$rc" != 0 ] || [ -e "$run/KEPT" ] || rm -rf "$run"'
+}
+
 # windows_prepare ID: build the preparation of Windows' run ID with `etude run
 # routine-prepare`, its output in STATE/ID.prepare, while a claim in WSL's
 # admission, `etude-launch build` with Windows' JOBS, holds the memory that the
@@ -1311,16 +1365,16 @@ windows_prepare()
         echo "git fetch -q $wout/release.bundle 'refs/remotes/origin/$branch' && git checkout -q -f --detach $sha || { echo 'status 1'; exit; }"
         downloads
         environment windows
-        echo "export TMPDIR=$wout/$id.tmp ETUDE_SCRATCH_RECORD=$wout/$id.scratch"
-        echo "mkdir -p $wout/$id \$TMPDIR"
-        echo "ETUDE_SITE=$wsite make build/tools/etude/etude > $wout/$id.make.log 2>&1 || { tail -n 20 $wout/$id.make.log; echo 'status 1'; exit; }"
+        windows_run "$id"
+        echo "ETUDE_SITE=$wsite make build/tools/etude/etude > $wout/$id.make.log 2>&1 || { kept 'etude did not build' $wout/$id.make.log; tail -n 20 $wout/$id.make.log; echo 'status 1'; exit; }"
         echo "e=$wout/etude-$id.exe"
-        echo "cp build/tools/etude/etude \"\$e\" || { echo 'status 1'; exit; }"
+        echo "cp build/tools/etude/etude \"\$e\" || { kept 'etude could not be copied'; echo 'status 1'; exit; }"
         echo "unset ETUDE_SITE ETUDE_ADMITTED ETUDE_PREPARATION_CLEAN"
-        echo "ETUDE_SITE=$wsite \"\$e\" run -N -t $wtree -a $warch -A $waccel -J $wout/$id.selection.json $wwords > $wout/$id.selection.log 2>&1 || { tail -n 20 $wout/$id.selection.log; echo 'status 1'; exit; }"
+        echo "ETUDE_SITE=$wsite \"\$e\" run -N -t $wtree -a $warch -A $waccel -J $wout/$id.selection.json $wwords > $wout/$id.selection.log 2>&1 || { kept 'the selection failed' $wout/$id.selection.log; tail -n 20 $wout/$id.selection.log; echo 'status 1'; exit; }"
         echo "ETUDE_PHASE_SELECTION_EXPORT=$wout/$id.selection.json \"\$e\" run routine-prepare phase_first_run $wtree $wout/$id $warch $id $wsite \"\$e\" $waccel $wwords > $wout/$id.prepare.console 2>&1"
         # shellcheck disable=SC2016 # the remote shell expands these
         echo 'rc=$?'
+        windows_ended "$id" prepare.console
         echo "tail -n 40 $wout/$id.prepare.console"
         # shellcheck disable=SC2016 # the remote shell expands these
         echo 'echo "status $rc"'
@@ -1383,7 +1437,7 @@ windows_start()
             failure windows "$(sed -n 's/^windows started //p' "$state/record" | tail -n 1)" runner
             return 1
         fi
-        wid=milestone$milestone-$(echo "$sha" | cut -c 1-12)-windows-$(date -u '+%m%d-%H%M%S')
+        wid=milestone$milestone-$(echo "$sha" | cut -c 1-12)-windows-$(stamp)
     fi
     windows_bundle
     [ -n "$wgiven" ] || note "windows started $wid"
@@ -1446,14 +1500,14 @@ windows()
         {
             echo "cd $wtree || { echo 'status 1'; exit; }"
             environment windows
-            echo "export TMPDIR=$wout/$id.tmp ETUDE_SCRATCH_RECORD=$wout/$id.scratch"
-            echo "mkdir -p \$TMPDIR"
+            windows_run "$id"
             echo "MSYS_NO_PATHCONV=1 wsl.exe -u root -e sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches' < /dev/null"
             echo "e=$wout/etude-$id.exe"
             echo "unset ETUDE_SITE ETUDE_ADMITTED ETUDE_PREPARATION_CLEAN"
             echo "ETUDE_PHASE_SELECTION_EXPORT=$wout/$id.selection.json \"\$e\" run routine-collect phase_first_run $wtree $wout/$id $warch $id $wsite \"\$e\" $waccel $wwords > $wout/$id.console 2>&1"
             # shellcheck disable=SC2016 # the remote shell expands these
             echo 'rc=$?'
+            windows_ended "$id" console
             echo "tail -n 40 $wout/$id.console"
             # The lines that failed_in reads, wherever they are in the console.
             echo "grep -aE '^run: (result: failed: |(i686|x86_64):[a-z0-9-]+: ([^:]+: (failure|incomplete): |FAIL in |INCOMPLETE in ))' $wout/$id.console"
@@ -1719,14 +1773,16 @@ prepare_stop()
             i=$((i + 1))
             sleep 10
         done
+        pstuck=
         ! kill -0 -"$pmac" 2> /dev/null ||
-            say "prepare: mac: process group $pmac did not stop; a person stops it"
+            { pstuck=1; say "prepare: mac: process group $pmac did not stop; a person stops it"; }
         pmac=
     fi
     if [ -n "$pmid" ]; then
         ! grep -qF "$pmid" "$site/ledger/claims" 2> /dev/null ||
             say "prepare: mac: $pmid keeps a claim in $site/ledger/claims; a person checks it and removes it"
         rm -f "$macdir/run"
+        [ -n "$pstuck" ] || mac_clean "$pmid"
         rm -rf "${runs:?}/$pmid" "$runs/$pmid".*
         pmid=
     fi
@@ -1762,7 +1818,7 @@ prepare_report()
 prepare_all()
 {
     pdir=$state/prepare log=$pdir/log
-    pwsl='' pwin='' pmac='' pwid='' pmid='' pclean='' pfailed=''
+    pwsl='' pwin='' pmac='' pwid='' pmid='' pclean='' pfailed='' pstuck=''
     mkdir -p "$pdir"
     : > "$log"
     check
@@ -1786,7 +1842,7 @@ prepare_all()
         windows_settings
         windows_words
         windows_bundle
-        pwid=milestone$milestone-$short-windows-prepare-$(date -u '+%m%d-%H%M%S')
+        pwid=milestone$milestone-$short-windows-prepare-$(stamp)
         windows_prepare "$pwid" > /dev/null 2>&1 9>&- &
         pwin=$!
         say "prepare: windows: preparing $pwid"
@@ -1794,7 +1850,7 @@ prepare_all()
     if has mac; then
         [ -d "$tree" ] && [ -f "$site/etude-site" ] ||
             later "the Mac has no copy at $tree or no admission site at $site"
-        pmid=milestone$milestone-$short-mac-prepare-$(date -u '+%m%d-%H%M%S')
+        pmid=milestone$milestone-$short-mac-prepare-$(stamp)
         mkdir -p "$runs/$pmid"
         perl -e 'setpgrp(0, 0); exec @ARGV' sh "$repo/tools/flow/release.sh" -s "$state" \
             -p -m "$pmid" "$milestone" "$sha" > /dev/null 2>&1 < /dev/null 8>&- 9>&- &
@@ -1981,7 +2037,7 @@ restart()
                 refuse "the run $last keeps a claim in $site/ledger/claims; a person checks it and removes it"
         }
     fi
-    id=milestone$milestone-$(echo "$at" | cut -c 1-12)-$m-$(date -u '+%m%d-%H%M%S')
+    id=milestone$milestone-$(echo "$at" | cut -c 1-12)-$m-$(stamp)
     # The line comes first, so that a release that waits on the run never
     # takes it for one of its own commit.
     [ "$at" = "$sha" ] || note "failure newer $m $id $at"

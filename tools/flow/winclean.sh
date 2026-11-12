@@ -1,7 +1,7 @@
 #!/bin/sh
 # shellcheck disable=SC2086 # the paths are a line each
 # winclean.sh: on the testing host's Windows, stop what is left of a Windows
-# release run and remove the scratch it made outside its own files.
+# release run and remove its run directory.
 #
 # Usage: winclean.sh TREE OUT ID...
 #
@@ -12,19 +12,16 @@
 # running, and waits until tasklist shows none; while one still runs, it
 # removes nothing of that run.
 #
-# The run's etude and the etude programs under it note each scratch path they
-# make, keep as evidence or remove in the run's scratch record,
-# OUT/ID.scratch, which ETUDE_SCRATCH_RECORD names: the collection workspaces
-# under TREE/build/tests and the tooling jobs, provisioning directories and
-# partial machine disks under TREE/build/tooling. etude removes its scratch
-# itself when it ends or a signal stops it, but keeps what its output names
-# as evidence; a process stopped by force, as taskkill /F and Stop-Process
-# -Force stop one, leaves its scratch. winclean.sh removes each path under
-# TREE whose last line in the record says "made", so that what another run
-# made in the same copy and what this run kept as evidence stay. It removes
-# the run's TMPDIR, OUT/ID.tmp, too, unless the record keeps a path in it.
-# A run whose etude writes no record leaves its scratch in TREE to sweep.sh.
-# The run's own files, OUT/ID and OUT/ID.*, stay for the caller to keep or
+# Each session of the run has the run directory TREE/build/tmp/ID, which
+# ETUDE_RUN_DIR names and which holds the run's TMPDIR and etude's scratch.
+# A run that failed, or an etude that kept evidence, wrote ID/KEPT; such a
+# run keeps everything, until sweep.sh removes it once its milestone's
+# release closed. Otherwise winclean.sh removes the run directory whole, and
+# first each path of ID/record whose last line says "made": the tooling job
+# directories and partial machine disks that etude makes in TREE/build/tooling,
+# which cannot move into the run directory, and which a process stopped by
+# force, as taskkill /F and Stop-Process -Force stop one, leaves there. The
+# run's own files, OUT/ID and OUT/ID.*, stay for the caller to keep or
 # remove.
 
 [ "$#" -ge 3 ] || { echo 'usage: winclean.sh TREE OUT ID...' >&2; exit 2; }
@@ -72,32 +69,34 @@ abandoned()
 }
 
 for id; do
+    case $id in */* | .* | '') echo "winclean: $id is not a run ID" >&2; continue ;; esac
     MSYS_NO_PATHCONV=1 taskkill /F /T /IM "etude-$id.exe" > /dev/null 2>&1
     if ! stopped "$id"; then
         echo "winclean: etude-$id.exe still runs; its scratch stays" >&2
         continue
     fi
+    run=$tree/build/tmp/$id
+    [ -d "$run" ] || continue
+    if [ -e "$run/KEPT" ]; then
+        echo "winclean: $run is kept: $(head -n 1 "$run/KEPT")" >&2
+        continue
+    fi
     paths=
-    keep_tmp=
-    if [ -f "$id.scratch" ]; then
+    if [ -f "$run/record" ]; then
         IFS=$nl
-        for path in $(abandoned "$id.scratch"); do
+        for path in $(abandoned "$run/record"); do
             case $path in
             */../* | */..) ;;
-            "$tree"/build/tests/rach2-collection.* | "$tree"/build/tooling/job-* | \
-                "$tree"/build/tooling/prepare-* | "$tree"/build/tooling/tooling-*.part)
+            "$tree"/build/tooling/job-* | "$tree"/build/tooling/tooling-*.part)
                 paths=$paths$nl$path
                 continue
                 ;;
             esac
-            echo "winclean: $id.scratch names $path, outside the run's scratch; it stays" >&2
+            echo "winclean: $run/record names $path, outside the tooling cache; it stays" >&2
         done
         unset IFS
-        awk -v p="kept $out/$id.tmp/" 'index($0, p) == 1 { f = 1 } END { exit !f }' "$id.scratch" &&
-            keep_tmp=1
     fi
-    [ -n "$keep_tmp" ] || paths=$id.tmp$paths
-    [ -n "$paths" ] || continue
+    paths=$paths$nl$run
     IFS=$nl
     # A QEMU that taskkill ended may hold its files for a few seconds more.
     i=0

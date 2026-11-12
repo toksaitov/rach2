@@ -3,7 +3,7 @@
 # scratch.pl: remove the scratch that tests left in directories when they
 # were killed before their exit traps ran.
 #
-# Usage: perl scratch.pl -d DIR [-d DIR]... SECONDS STEM...
+# Usage: perl scratch.pl [-r] -d DIR [-d DIR]... SECONDS STEM...
 #
 # sweep.sh runs this as root in WSL on the testing host, for /tmp, whose
 # tmpfs is the host's memory, and the build/tmp of each account's clone, and
@@ -14,7 +14,9 @@
 #
 # * its name is one of the STEMs that begin with `rach2`, a dot and six to
 #   eight letters, digits or underscores, as mktemp(1) makes from a template
-#   STEM.XXXXXX and Python's tempfile from a prefix `STEM.`;
+#   STEM.XXXXXX and Python's tempfile from a prefix `STEM.`; or, with -r, it
+#   is a release run's directory, named as release.sh names a run,
+#   `milestoneM-COMMIT-MACHINE-MMDD-HHMMSS-RANDOM`, and holds no file KEPT;
 # * it is a directory or a regular file, and root does not own it;
 # * nothing in it has changed for SECONDS;
 # * nothing is mounted in it, and no process has its working directory, its
@@ -33,9 +35,9 @@ use File::Path qw(remove_tree);
 use Getopt::Long qw(:config no_ignore_case bundling);
 
 alarm 540;
-my @dirs;
-GetOptions('d=s' => \@dirs) and @dirs
-    or die "usage: scratch.pl -d DIR [-d DIR]... SECONDS STEM...\n";
+my (@dirs, $runs);
+GetOptions('d=s' => \@dirs, 'r' => \$runs) and @dirs
+    or die "usage: scratch.pl [-r] -d DIR [-d DIR]... SECONDS STEM...\n";
 my $age = shift // '';
 $age =~ /^\d+$/ or die "scratch: SECONDS must be a number\n";
 my @stems = grep { /^rach2/ } @ARGV;
@@ -96,8 +98,10 @@ sub sweep {
     my ($count, $bytes) = (0, 0);
     my @used = grep { index($_, "$dir/") == 0 } @busy;
     for my $e (sort readdir $d) {
-        next unless @stems and $e =~ /^(?:$stems)\.[A-Za-z0-9_]{6,8}$/;
         my $p = "$dir/$e";
+        my $run = $runs && $e =~ /^milestone\d+-[0-9a-f]{12}-[a-z]+(?:-prepare)?-\d{4}-\d{6}-[0-9a-f]{6}$/
+            && !-e "$p/KEPT";
+        next unless $run or @stems and $e =~ /^(?:$stems)\.[A-Za-z0-9_]{6,8}$/;
         my @st = lstat $p or next;
         next if $st[4] == 0 or !(-d _ or -f _);
         next if grep { $_ eq $p or index($_, "$p/") == 0 } @used;
