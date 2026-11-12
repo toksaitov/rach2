@@ -99,6 +99,9 @@ static uint64_t armed;
 static struct futex_q waiter;
 static struct futex_sleeper waiter_s;
 static int masked, failures, wakes, waits, cmpxchgs;
+/* The interrupts the wakes asked for that went out, and those that went
+ * out while a bucket's lock was held. */
+static int kicks, kicks_held;
 /* The address space of the model's thread, which every row has but the
  * one that gives it another. */
 static struct mm self_mm;
@@ -413,11 +416,33 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return wq_wait_event(wq, cond, arg);
 }
 
-/** Count a wake. */
+/** Count a wake of a waiter's queue; the PI exit queue, which every
+ * thread's end wakes for the PI waiters of its futexes, is not counted. */
 void wq_wake_all(wait_queue_t *wq)
+{
+    if (wq != &pi_exit_queue) {
+        wakes++;
+    }
+}
+
+/** Count a wake made under a bucket's lock, which asks for an interrupt
+ * to processor 1. */
+void wq_wake_all_deferred(wait_queue_t *wq, uint64_t *cpus)
 {
     (void)wq;
     wakes++;
+    *cpus |= 2u;
+}
+
+/** Count the interrupts of `cpus`, and those sent under a bucket's lock. */
+void sched_kick_cpus(uint64_t cpus)
+{
+    for (; cpus != 0; cpus >>= 1) {
+        if (cpus & 1u) {
+            kicks++;
+            kicks_held += !hb_all_free();
+        }
+    }
 }
 
 /** A waiter's queue needs nothing in the model. */
@@ -486,7 +511,7 @@ static void waiter_file(uint32_t uaddr)
     waiter.s = &waiter_s;
     waiter.task = &self;
     futex_queue(&waiter, futex_hash(waiter.space, waiter.uaddr));
-    wakes = 0;
+    wakes = kicks = kicks_held = 0;
 }
 
 /** Take the model's waiter off its list when no wake did. */
@@ -529,6 +554,7 @@ static void owner_released(void)
     CHECK(word_at(272) == (FUTEX_WAITERS | FUTEX_OWNER_DIED),
           "the word keeps the waiters bit a waiter set during the fault");
     CHECK(waiter.woken && wakes == 1, "and the waiter is woken");
+    CHECK(kicks == 1 && kicks_held == 0, "with its interrupt sent after the bucket's lock");
     CHECK(self.robust_list == 0, "and the thread's list is forgotten");
     if (!waiter.woken) {
         waiter_unfile();
