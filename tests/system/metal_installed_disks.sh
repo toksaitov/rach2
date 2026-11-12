@@ -116,10 +116,11 @@ mcopy -n -o -i "$work/wrong-partition.disk.new@@1048576" ::/boot/grub/grub.cfg "
 sed 's/rach2.root=MBRID=1acef00d,3/rach2.root=MBRID=1acef00d,4/g' "$work/grub.cfg" > "$work/wrong.cfg"
 mcopy -o -i "$work/wrong-partition.disk.new@@1048576" "$work/wrong.cfg" ::/boot/grub/grub.cfg
 
-# The root with dir_index, which the driver does not write.
+# The root with huge_file, a read-only-compatible feature the driver does
+# not know, so that it mounts the root read-only.
 cp "$work/candidate.disk.new" "$work/readonly.disk.new"
 cp "$volume" "$work/readonly.ext2"
-debugfs -w -R 'feature dir_index' "$work/readonly.ext2" > "$work/readonly.debugfs" 2>&1
+debugfs -w -R 'feature huge_file' "$work/readonly.ext2" > "$work/readonly.debugfs" 2>&1
 dd if="$work/readonly.ext2" of="$work/readonly.disk.new" bs=1048576 seek=26 conv=notrunc 2>/dev/null
 
 # GRUB's saved entry changed to the fallback slot.
