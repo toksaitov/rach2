@@ -1613,7 +1613,11 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
         }
         r = block(v);
         if (r != 0) {
+            /* Linux's vcpu_run takes the signal after vcpu_block, in
+             * kvm_handle_signal_exit (include/linux/kvm_host.h:2405-2409,
+             * kernel/entry/kvm.c:11-13). */
             v->run->exit_reason = KVM_EXIT_INTR;
+            v->stat[KVM_VCPU_STAT_SIGNAL_EXITS]++;
             return -EINTR;
         }
     }
