@@ -9,6 +9,7 @@
  * fuzz-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * fuzz-deps: tests/host/compat/kheap_host.c tests/host/compat/blockmax_host.c
  * fuzz-deps: tests/host/compat/pressure_host.c tests/host/compat/atomic_host.c
+ * fuzz-deps: tests/host/compat/bkl_held.c
  */
 #include "../../rach2/sys/fs/ext2.h"
 #include "fs_common.h"
