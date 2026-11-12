@@ -831,9 +831,13 @@ static int shared_mkwrite(struct mm *mm, const vma_t *vma, uintptr_t addr)
     uintptr_t page = addr & ~(PAGE_SIZE - 1);
     uint32_t pgoff = vma->pgoff + (uint32_t)((page - vma->start) / PAGE_SIZE);
     uint32_t prot = vma->prot, seq = mm->zaps, lock;
-    pte_t before = *user_pte(mm->dir, page), *e;
+    pte_t *e = user_pte(mm->dir, page), before;
     int bkl, got, rc = 1;
 
+    if (!e || !(*e & PTE_P)) {
+        return -1; /* a cut took it meanwhile: fault it in again */
+    }
+    before = *e;
     vm_file_get(f);
     if (!callback_begin(mm, f, &bkl)) {
         vm_file_put(f);
