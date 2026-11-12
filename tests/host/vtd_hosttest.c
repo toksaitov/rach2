@@ -122,10 +122,10 @@ void kirq_restore(uint32_t flags)
     (void)flags;
 }
 
-/** The boot processor, which every message goes to. */
 /* The boot processor's APIC id, the destination of every message. */
 static uint32_t boot_apic;
 
+/** The boot processor, which every message goes to. */
 uint32_t lapic_id(void)
 {
     return boot_apic;
@@ -1047,6 +1047,7 @@ static const uint8_t *dmar_table;
 static uint32_t dmar_len;
 static const char *opt_intel_iommu; /* the boot line's values, or NULL */
 static const char *opt_intremap;
+static int opt_noapic; /* noapic or maxcpus=0 */
 static uint8_t ioapic_ids[4];
 static int nioapic_ids;
 
@@ -1131,6 +1132,12 @@ int vtd_hw_option(const char *key, const char *value)
         p += p[len] == ',' ? len + 1 : len;
     }
     return 0;
+}
+
+/** Whether the row's boot line has noapic or maxcpus=0. */
+int vtd_hw_ioapic_off(void)
+{
+    return opt_noapic;
 }
 
 /** The row's I/O APICs. */
@@ -1464,6 +1471,7 @@ static void row_begin(const char *name)
     nioapic_ids = 0;
     ram_top = 0x100000000ull;
     opt_intel_iommu = opt_intremap = NULL;
+    opt_noapic = 0;
     page_fail_after = -1;
     flush_calls = stray_flushes = 0;
     boot_apic = 0;
@@ -2164,7 +2172,8 @@ static void row_iqe(void)
     row_end();
 }
 
-/** The boot line's `intel_iommu=off` and `intremap=off`. */
+/** The boot line's `intel_iommu=off`, `intremap=off`, and `noapic` or
+ * `maxcpus=0`, which keep remapping off as Linux's enable_IR_x2apic does. */
 static void row_options(void)
 {
     struct iommu_domain *d;
@@ -2190,6 +2199,19 @@ static void row_options(void)
               (m->gsts & VTD_GCMD_IRE) == 0,
           "translation offered, remapping off");
     check(logged("vtd: interrupt remapping: off by intremap=off"), "logged");
+    msi_of(0, DF(0x1F, 2), &a, &data);
+    check(a == 0xFEE00000u && data == 49, "the message as it was");
+    row_end();
+
+    row_begin("noapic");
+    m = setup_qemu(CAP_QEMU, ECAP_QEMU);
+    opt_noapic = 1;
+    x2_possible = 1;
+    check(t_msi(0, DF(0x1F, 2), 49) == 0, "a message");
+    check(vtd_start() == 1 && iommu_present() && !intremap_active() &&
+              (m->gsts & VTD_GCMD_IRE) == 0 && x2_moves == 0,
+          "translation offered, remapping off, the APIC not moved");
+    check(logged("vtd: interrupt remapping: off by noapic or maxcpus=0"), "logged");
     msi_of(0, DF(0x1F, 2), &a, &data);
     check(a == 0xFEE00000u && data == 49, "the message as it was");
     row_end();

@@ -16,6 +16,7 @@
 #include "../../../udelay.h"
 #include "../../arch.h"
 #include "../acpi.h"
+#include "../ioapic.h"
 #include "../lapic.h"
 
 uintptr_t vtd_hw_map(uint64_t base)
@@ -149,6 +150,11 @@ int vtd_hw_option(const char *key, const char *value)
         p = *end == ',' ? end + 1 : end;
     }
     return 0;
+}
+
+int vtd_hw_ioapic_off(void)
+{
+    return ioapic_disabled();
 }
 
 int vtd_hw_ioapics(uint8_t *ids, int max)

@@ -23,6 +23,17 @@
  * booted on.
  */
 
+/**
+ * Whether the boot line keeps the I/O APIC off: `noapic`, or `maxcpus=0`,
+ * which Linux 6.12.115 turns into the same disable_ioapic_support
+ * (arch/x86/kernel/apic/io_apic.c, lines 191 to 197; kernel/smp.c, lines
+ * 975 to 982; arch/x86/kernel/smpboot.c, lines 1005 to 1008). Linux's
+ * ioapic_is_disabled then also keeps interrupt remapping and the move to
+ * x2APIC mode from starting (apic.c, lines 1898 to 1901), and so does this
+ * kernel (lapic.c, iommu/vtd.c).
+ */
+int ioapic_disabled(void);
+
 /** Map the I/O APICs the MADT lists and mask every input: the count made
  * ready, 0 when none was. */
 int ioapic_init(const struct acpi_info *a);
