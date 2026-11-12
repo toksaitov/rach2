@@ -1120,8 +1120,13 @@ $(KVM_GUEST_DIR)/initrd: tests/kvm/guests/mkdebian.sh tests/kvm/guests/debian.tx
                          build/tools/wifi/mkcpio $(SHA256TOOL)
 	MKCPIO=$(WIFI_MKCPIO) sh tests/kvm/guests/mkdebian.sh $(KVM_GUEST_DIR)
 $(KVM_GUEST_DIR)/vmlinuz: $(KVM_GUEST_DIR)/initrd
+# With ARCH=x86_64 the tests component builds drmfuzz. No image stages it,
+# and manifest_deps.sh leaves out a product not yet built, so on a new tree
+# the top Makefile's rule for staged probes does not name it.
 KVM_FUZZ = build/x86_64/tests/drmfuzz
-ifneq ($(ARCH),x86_64)
+ifeq ($(ARCH),x86_64)
+$(KVM_FUZZ): tests
+else
 $(KVM_FUZZ): ask-the-sub-make
 	$(MAKE) --no-print-directory -C tests ARCH=x86_64 ../$@
 endif
