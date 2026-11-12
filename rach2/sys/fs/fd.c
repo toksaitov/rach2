@@ -379,10 +379,10 @@ void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to)
  * big lock: unless it names no file, or names a file or a directory of a
  * type that sets `reads_unlocked`, as ext2 does, with no pin, no access
  * claim and no device or synthetic node, and in either case no record lock
- * exists and no inotify watch is on its file system (`inotify_mount_watched`).
- * Such a type's `release` and `put` and the
- * name record (`vfs_name_put`) take the big lock where they need it, as
- * Linux's last `fput` of a file takes no lock but its own (`__fput`,
+ * exists and no inotify watch is on its file system
+ * (`inotify_mount_watched`). Such a type's `release` and `put` and the name
+ * record (`vfs_name_put`) take the big lock where they need it, as Linux's
+ * last `fput` of a file takes no lock but its own (`__fput`,
  * fs/file_table.c:442). With the count at 0 no descriptor names the
  * description, so no record lock on it can be taken after the look.
  */
