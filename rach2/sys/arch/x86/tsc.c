@@ -278,6 +278,21 @@ int tsc_kvm_now(uint64_t *tsc, uint64_t *ns)
     return 1;
 }
 
+int tsc_kvm_read(struct tsc_kvm_sample *s)
+{
+    struct kvm_clock_page *p = kvm_clock_here();
+    uint32_t version;
+
+    if (!p) {
+        return 0;
+    }
+    kvm_clock_read(p, &version, s);
+    if (s->counts == 0) {
+        s->stable = 0;
+    }
+    return 1;
+}
+
 /**
  * Linux's vread_pvclock (arch/x86/include/asm/vdso/gettimeofday.h:
  * 197-232): the version made even (pvclock_read_begin, asm/pvclock.h:
