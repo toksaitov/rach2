@@ -20,6 +20,7 @@
  * host-deps: tests/host/compat/pressure_host.c tests/host/compat/fixdir_host.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
  * host-deps: tests/host/compat/bkl_held.c
+ * host-deps: tests/host/compat/mutex_none.c tests/host/compat/kirq_on.c
  * host-deps: tests/host/compat/atomic_host.c
  * host-first: its interruption matrices run for minutes
  *

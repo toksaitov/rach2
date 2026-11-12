@@ -31,6 +31,7 @@
 #include "../../rach2/sys/fs/bcache.h"
 #include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/lib/kirq.h"
+#include "../../rach2/sys/proc/mutex.h"
 #include "../../rach2/sys/proc/process.h"
 
 extern int printf(const char *fmt, ...);
@@ -89,18 +90,11 @@ int vfs_ns_held_by_caller(void)
 
 /* The takes of the big lock the calls hold, 1 for a caller that holds it,
    as every row but `reader_rows` calls; 0 for a reader without it, which
-   must take it to write a dirty victim or read the device. `big_takes`
-   counts the takes, and `reads_unlocked` the device reads made without
-   it. With `take_dev` set, `take_keyed` says whether block `take_blk` of
-   it was in the cache at the last take: a miss that chose its victim
-   without the big lock keys the block before its read takes the lock, and
-   one that chose it under the lock takes the lock first. */
+   the cache takes only to record a failed write. `big_takes` counts the
+   takes, and `reads_unlocked` the device reads made without it. */
 static int big_held = 1;
 static int big_takes;
 static int reads_unlocked;
-static block_device_t *take_dev;
-static uint64_t take_blk;
-static int take_keyed;
 
 /** The big lock's answer: whether the caller holds it. */
 int bkl_held(void)
@@ -108,14 +102,10 @@ int bkl_held(void)
     return big_held > 0;
 }
 
-/** Take the big lock, counted in `big_takes`, and note in `take_keyed`
- * whether the block a row watches was keyed at the take. */
+/** Take the big lock, counted in `big_takes`. */
 void bkl_enter(void)
 {
     big_takes++;
-    if (take_dev) {
-        take_keyed = bcache_cached(take_dev, take_blk);
-    }
     big_held++;
 }
 
@@ -123,6 +113,49 @@ void bkl_enter(void)
 void bkl_exit(void)
 {
     big_held--;
+}
+
+/* The takes of the cache's write lock, `wb_lock`, and how many are held. A
+   restore hook stands for another processor, which in the kernel waits for
+   the lock; here it takes the lock as it is, so the count only nests. With
+   `take_dev` set, `take_keyed` says whether block `take_blk` of it was in
+   the cache at the first take since a row set it to -1: a miss that chose
+   a clean victim without the lock keys the block and takes none, and one
+   that found only dirty buffers takes the lock before it chooses. */
+static int wb_depth;
+static int wb_takes;
+static block_device_t *take_dev;
+static uint64_t take_blk;
+static int take_keyed;
+
+/** Take the write lock, counted in `wb_takes`, and note in `take_keyed`
+ * whether the block a row watches was keyed at the first take. */
+void mutex_lock(struct mutex *m)
+{
+    (void)m;
+    wb_takes++;
+    wb_depth++;
+    if (take_dev && take_keyed == -1) {
+        take_keyed = bcache_cached(take_dev, take_blk);
+    }
+}
+
+/** Give back a take of the write lock; a give of a free one exits 45. */
+void mutex_unlock(struct mutex *m)
+{
+    (void)m;
+    if (wb_depth == 0) {
+        printf("bcache_hosttest: the write lock is given back unheld\n");
+        _exit(45);
+    }
+    wb_depth--;
+}
+
+/** Whether the write lock is held. */
+int mutex_held(const struct mutex *m)
+{
+    (void)m;
+    return wb_depth > 0;
 }
 
 /** The kernel log; the records are dropped. */
@@ -1215,7 +1248,7 @@ static int service_points;
 static int give_way_skips;
 
 /** Count the point and run `service_hook`, which stands for what runs when
- * the big lock is let go there. */
+ * the write lock is let go there. */
 void sched_service_point(void)
 {
     check(kirq_enabled(), "a victim search never reaches a service point with interrupts off");
@@ -1354,7 +1387,7 @@ static uint32_t sort_plain_end(void)
 }
 
 /**
- * The sort of a sync's batch lets the big lock go at its service points
+ * The sort of a sync's batch lets the write lock go at its service points
  * (`gather_dirty`), past the sync's look at the dirty `first` blocks. A
  * `first` dirtied there, of the class written last, with an `after` marked
  * behind it, is one the sync that holds the last blocks must see: it sorts
@@ -1522,13 +1555,13 @@ static void fill_forty(unsigned clean)
 }
 
 /**
- * The calls of a reader without the big lock: a hit takes no big lock, a
- * miss that finds a clean buffer near the head of the release order chooses
- * and keys it without the lock, which it takes only for the device's read,
- * and writes nothing, and a miss that finds only dirty buffers takes it
- * before it chooses, to write one; each gives it back. Whether the victim
- * was keyed before the take tells the two apart, since both take the lock
- * once (`take_keyed`).
+ * The calls of a reader without the big lock: a hit takes no lock, a miss
+ * that finds a clean buffer near the head of the release order chooses and
+ * keys it and reads the device with neither the big lock nor the write lock,
+ * and writes nothing, and a miss that finds only dirty buffers takes the
+ * write lock before it chooses, to write one, and gives it back; none takes
+ * the big lock. Whether the victim was keyed at the first take of the write
+ * lock tells the two misses apart (`take_keyed`).
  */
 static void reader_rows(void)
 {
@@ -1538,36 +1571,35 @@ static void reader_rows(void)
     image_vast[300 * 4096] = 0x5A;
     big_held = 0;
     big_takes = 0;
+    wb_takes = 0;
     writes_made = 0;
     reads_made = 0;
     reads_unlocked = 0;
+    b = bcache_get(&vast, 300);
+    check(b != 0 && big_takes == 0 && wb_takes == 0 && writes_made == 0 && reads_made == 1 &&
+              reads_unlocked == 1 && b->data[0] == 0x5A,
+          "a reader's miss takes a clean buffer with no write and reads with no lock");
+    bcache_release(b);
+    b = bcache_get(&vast, 300);
+    check(b != 0 && big_takes == 0 && wb_takes == 0 && reads_made == 1,
+          "and its hit takes no lock");
+    bcache_release(b);
+    big_held = 1;
+
+    fill_forty(0);
+    big_held = 0;
+    big_takes = 0;
+    wb_takes = 0;
+    writes_made = 0;
     take_dev = &vast;
     take_blk = 300;
     take_keyed = -1;
     b = bcache_get(&vast, 300);
-    check(
-        b != 0 && big_takes == 1 && big_held == 0 && writes_made == 0 && reads_made == 1 &&
-            reads_unlocked == 0 && b->data[0] == 0x5A,
-        "a reader's miss takes a clean buffer with no write, and the big lock for the read alone");
-    check(take_keyed == 1, "and chooses and keys the buffer before it takes the big lock");
-    bcache_release(b);
-    big_takes = 0;
-    b = bcache_get(&vast, 300);
-    check(b != 0 && big_takes == 0 && reads_made == 1, "and its hit takes no big lock");
-    bcache_release(b);
-    big_held = 1;
-
-    take_dev = 0;
-    fill_forty(0);
-    big_held = 0;
-    big_takes = 0;
-    writes_made = 0;
-    take_dev = &vast;
-    take_keyed = -1;
-    b = bcache_get(&vast, 300);
-    check(b != 0 && big_takes == 1 && writes_made == 1 && big_held == 0,
-          "a reader's miss among dirty buffers takes the big lock to write one, and gives it back");
-    check(take_keyed == 0, "and takes the big lock before it chooses its victim");
+    check(b != 0 && wb_takes > 0 && wb_depth == 0 && writes_made == 1 && big_takes == 0 &&
+              big_held == 0,
+          "a reader's miss among dirty buffers takes the write lock to write one, and gives it "
+          "back");
+    check(take_keyed == 0, "and takes the write lock before it chooses its victim");
     take_dev = 0;
     bcache_release(b);
     big_held = 1;
@@ -1601,7 +1633,7 @@ static uint32_t reclaimed;
 
 /** The release's give of `cache_spin` seen by another processor: the
  *  waiter `reclaim_buffer` counted finds it unheld and leaves, and a
- *  shrink under the big lock takes the lock at once and frees every clean
+ *  shrink under the big lock takes `cache_spin` at once and frees every clean
  *  buffer nobody holds or waits for, as a reclaim would. */
 static void reclaim_after_release(void)
 {
@@ -1792,7 +1824,7 @@ static void pause_release(void)
  * and that one dirty with its write failed: hit and let go at every pause of
  * the search, it stays unfit, so its releases are no progress, and the miss
  * fails after its sixteen retries while the hits go on. Every turn ends at a
- * service point, where the big lock may go to a writer.
+ * service point, where the write lock may go to a writer.
  */
 static void victim_unfit_rows(void)
 {
@@ -2693,6 +2725,7 @@ int main(int argc, char **argv)
     reader_rows();
     release_wake_rows();
     pause_rows();
+    check(wb_depth == 0, "every call gives the write lock back");
 
     if (fails == 0) {
         printf("bcache_hosttest: OK\n");
