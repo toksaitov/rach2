@@ -18,7 +18,7 @@ The build applies the patches [`patches/series`](patches/series) lists, in its o
 
 ### mke2fs defaults
 
-[`mke2fs.conf`](mke2fs.conf) is copied into the tree as `misc/mke2fs.conf.custom.in`, which upstream's make compiles into `mke2fs` as its defaults in place of its own. It is upstream's file with the features and block sizes the kernel's ext2 driver mounts writable: `dir_index` and `ext_attr` are not in `base_features`, and the `small` and `floppy` types keep the 4096-byte block where upstream gives them 1024 bytes. No image stages `/etc/mke2fs.conf`, which `mke2fs` would read in place of these defaults.
+[`mke2fs.conf`](mke2fs.conf) is copied into the tree as `misc/mke2fs.conf.custom.in`, which upstream's make compiles into `mke2fs` as its defaults in place of its own. It is upstream's file with the features and block sizes the kernel's ext2 driver writes: `dir_index`, whose index the driver drops at a directory's first change, and `ext_attr` are not in `base_features`, and the `small` and `floppy` types keep the 4096-byte block where upstream gives them 1024 bytes. No image stages `/etc/mke2fs.conf`, which `mke2fs` would read in place of these defaults.
 
 ### Configuration
 

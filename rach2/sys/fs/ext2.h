@@ -16,11 +16,10 @@
  * superblock, features or group descriptors it does not take or whose root
  * inode is not a directory; -EIO when the device fails a read, and -ENOMEM.
  * It mounts read-only, with the reason recorded, a volume with an unknown
- * read-only-compatible feature, with `dir_index`, or with blocks below 4096
- * bytes. A writable mount of a volume whose valid bit is clear or whose
- * error bit is set checks the volume first, and is read-only when the check
- * finds a fault; a remount to writable checks it the same way, and is
- * -EROFS then.
+ * read-only-compatible feature or with blocks below 4096 bytes. A writable
+ * mount of a volume whose valid bit is clear or whose error bit is set
+ * checks the volume first, and is read-only when the check finds a fault; a
+ * remount to writable checks it the same way, and is -EROFS then.
  *
  * `file_locked` is set and `ns_serialised` clear: the operations lock each
  * inode on its own (`node_lock`), the mount's allocator apart, and the VFS

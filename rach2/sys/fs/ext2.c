@@ -81,9 +81,9 @@
 /* The bits of `i_flags` lsattr(1) sees, and those chattr(1) may change. */
 #define EXT2_FL_USER_VISIBLE    0x0003DFFFu
 #define EXT2_FL_USER_MODIFIABLE 0x000380FFu
+#define EXT2_INDEX_FL           0x00001000u /* a hashed index lies behind the entries */
 
 #define EXT2_COMPAT_RESIZE_INODE 0x0010u
-#define EXT2_COMPAT_DIR_INDEX    0x0020u
 #define EXT2_RO_SPARSE_SUPER     0x0001u
 #define EXT2_RO_LARGE_FILE       0x0002u
 #define EXT2_RO_EXTRA_ISIZE      0x0040u
@@ -5246,6 +5246,28 @@ static int dirent_split(struct ext2_mount *em, uint64_t off, const struct ext2_s
 }
 
 /**
+ * Clear the hashed-index flag of directory `d`, whose entries are about to
+ * change, and store its inode with WRITE_THROUGH before they do. 0, or
+ * -errno.
+ *
+ * This driver keeps the linear entries only, which an index leaves readable
+ * as they are: the index root lies in the slack of `..`, and each index
+ * block is one empty entry spanning it. An index left set over changed
+ * entries would be stale, so the flag goes, as Linux's ext2 drops it on
+ * every change (fs/ext2/dir.c:468, 555 and 609 in Linux 6.12.115), and
+ * e2fsck -D builds the index again. Storing the inode first means that no
+ * stop leaves a changed directory marked indexed.
+ */
+static int dir_unindex(struct ext2_mount *em, struct ext2_node *d)
+{
+    if (!(d->flags & EXT2_INDEX_FL)) {
+        return 0;
+    }
+    d->flags &= ~EXT2_INDEX_FL;
+    return inode_store(em, d);
+}
+
+/**
  * Add `name` naming `ino`, of file type `ftype`, to directory `d`: in the
  * first empty record with room, whole, or the first entry with room behind
  * its name, split; else in a new block, allocated, written zeroed with one
@@ -5277,6 +5299,10 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
     }
     if (name_len == 0 || name_len > EXT2_NAME_MAX) {
         return -ENAMETOOLONG;
+    }
+    rc = dir_unindex(em, d);
+    if (rc != 0) {
+        return rc;
     }
     window_open(em, &w);
     for (;;) {
@@ -5367,8 +5393,11 @@ static int dir_remove_at(struct ext2_mount *em, struct ext2_node *d, uint32_t at
                          const struct ext2_scan *sc)
 {
     uint64_t off;
-    int rc;
+    int rc = dir_unindex(em, d);
 
+    if (rc != 0) {
+        return rc;
+    }
     if (at % em->block_size == 0) {
         uint8_t zero[4] = {0, 0, 0, 0};
 
@@ -5421,7 +5450,7 @@ static int dir_is_empty(struct ext2_mount *em, const struct ext2_node *d, int *e
 
 /** Make the `..` entry of directory `d` name `parent`, with WRITE_THROUGH; 0,
  * -EIO for a directory without one, or -errno. */
-static int dir_set_dotdot(struct ext2_mount *em, const struct ext2_node *d, uint32_t parent)
+static int dir_set_dotdot(struct ext2_mount *em, struct ext2_node *d, uint32_t parent)
 {
     uint32_t cursor = 0;
     struct ext2_scan sc;
@@ -5438,6 +5467,9 @@ static int dir_set_dotdot(struct ext2_mount *em, const struct ext2_node *d, uint
         }
         if (sc.ino != 0 && names_equal(sc.name, "..")) {
             rc = dir_block_at(em, d, here, &off);
+            if (rc == 0) {
+                rc = dir_unindex(em, d);
+            }
             if (rc != 0) {
                 return rc;
             }
@@ -7126,6 +7158,9 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
 
         rc = dir_block_at(em, nd, nat, &off);
         if (rc == 0) {
+            rc = dir_unindex(em, nd);
+        }
+        if (rc == 0) {
             LE32_PUT(raw, n->ino);
             rc = write_bytes(em, off, raw, 4, 1);
         }
@@ -8220,8 +8255,6 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     unknown = em->ro_compat & ~(EXT2_RO_SPARSE_SUPER | EXT2_RO_LARGE_FILE | EXT2_RO_EXTRA_ISIZE);
     if (unknown != 0) {
         readonly_why = "unknown read-only-compatible feature";
-    } else if (!readonly_why && (em->compat & EXT2_COMPAT_DIR_INDEX)) {
-        readonly_why = "dir_index would be left stale by this writer";
     } else if (!readonly_why && em->block_size != 4096) {
         readonly_why = "a block size below 4096 cannot be written in order";
     }
