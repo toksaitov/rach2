@@ -707,6 +707,12 @@ void wq_wake_all(wait_queue_t *wq)
     wq_wake(wq, WQ_ALL);
 }
 
+/** Whether a sleeper is on `wq`: the parked sibling alone can be. */
+int wq_active(const wait_queue_t *wq)
+{
+    return wq != NULL && wq == parked_on;
+}
+
 /** Empty the queue `wq` and zero its counts. */
 void wait_queue_init(wait_queue_t *wq)
 {
