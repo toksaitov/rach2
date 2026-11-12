@@ -15,10 +15,13 @@
  * back or jumped would show. The rows: an offset the PLL slews, forward and
  * back, the monotonic clock with it, with the offset, the boot time and the
  * step count unmoved and no timer told; the frequency the PLL makes of a
- * second offset; a frequency, kept across a setting of the clock, with the
- * raw clock unslewed and the place within the tick slewed at 100 and 500
- * ppm; adjtime's offset slewed at 500 ppm and read back; a shift of the
- * clock, which steps it, forgets the offset, counts a step and tells the
+ * second offset, counted from the locked clock's seconds even when the
+ * fine reply time has crossed the next second; an FLL interval past 32
+ * bits, made by a clock setting without advancing its ticks; a frequency,
+ * kept across a setting of the clock, with the raw clock unslewed and the
+ * place within the tick slewed at 100 and 500 ppm; adjtime's offset slewed
+ * at 500 ppm and read back; a shift of the clock, which steps it, forgets
+ * the offset, counts a step and tells the
  * timers, and is refused, though it forgets and tells them still and counts
  * no step, for a time before the monotonic clock or before 1970, as is a
  * shift of nothing; and a leap second inserted at midnight,
@@ -309,6 +312,62 @@ static void pll_frequency_row(void)
     CHECK(tx.freq == 0);
 }
 
+/**
+ * The fine reply clock crosses second 104 before the tick after 103.999:
+ * the PLL counts three seconds since its reference at 100, so a 1 ms
+ * offset reads frequency 48000, not 64000. Enabling the PLL in that window
+ * also starts its reference at 103. Linux 6.12.115 uses the locked
+ * timekeeper's seconds for both (kernel/time/ntp.c:321-325, 708-709), and
+ * the earlier fine sample for the reply (ntp.c:829-832).
+ */
+static void pll_coarse_rows(void)
+{
+    struct ktimex tx;
+
+    restart(100);
+    pll_restart();
+    pass(3999);
+    phase_pending = 1;
+    CHECK(adj(&tx, ADJ_OFFSET, 0, 1000, 0) == TIME_OK);
+    CHECK(tx.sec == 104 && tx.usec == 0 && tx.freq == 48000);
+    phase_pending = 0;
+    adj(&tx, ADJ_STATUS | ADJ_FREQUENCY, 0, 0, 0);
+
+    restart(100);
+    pass(3999);
+    phase_pending = 1;
+    pll_restart();
+    CHECK(adj(&tx, ADJ_OFFSET, 0, 1000, 0) == TIME_OK);
+    CHECK(tx.sec == 104 && tx.freq == 0);
+    phase_pending = 0;
+    pass(1001);
+    CHECK(adj(&tx, ADJ_OFFSET, 0, 1000, 0) == TIME_OK);
+    CHECK(tx.freq == 32000);
+    adj(&tx, ADJ_STATUS | ADJ_FREQUENCY, 0, 0, 0);
+}
+
+/**
+ * A permitted step 8,000,000,000 seconds ahead preserves the PLL reference.
+ * At time constant 10, a 400 ms offset reads frequency 800000: the PLL
+ * adds 800000 and the FLL less than one readback unit. Dividing by a capped
+ * 32-bit interval gave 800001. Linux 6.12.115's div64_long uses the full
+ * interval on x86-64 (kernel/time/ntp.c:293); no ticks through it are needed.
+ */
+static void fll_long_row(void)
+{
+    struct ktimex tx = {0};
+
+    restart(100);
+    pll_restart();
+    CHECK(rtc_set_realtime(8000000100LL, 0) == 0);
+    tx.modes = ADJ_STATUS | ADJ_NANO | ADJ_TIMECONST | ADJ_FREQUENCY | ADJ_OFFSET;
+    tx.status = STA_PLL;
+    tx.constant = 10;
+    tx.offset = 400000000;
+    CHECK(rtc_adjtimex(&tx) == TIME_OK);
+    CHECK(tx.freq == 800000 && (tx.status & STA_MODE));
+}
+
 /** A frequency of 100 ppm adds 100 ns to each tick from the next, which no
  * timer is told of, and a setting of the clock keeps it; the raw clock runs
  * on unslewed, and the place within the tick and the ticks the handler has
@@ -487,10 +546,12 @@ int main(void)
 {
     offset_rows();
     pll_frequency_row();
+    pll_coarse_rows();
     frequency_row();
     singleshot_row();
     setoffset_row();
     leap_rows();
+    fll_long_row();
     if (fails != 0) {
         printf("ntp_hosttest: %d failure(s)\n", fails);
     } else {

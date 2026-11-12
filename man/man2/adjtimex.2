@@ -57,14 +57,16 @@ phase-locked loop: from the next second it slews 2^-(2 +
 .Fa constant )
 of what is left each second, and it changes the frequency by 2^-(8 + 2 *
 .Fa constant )
-of the offset times the seconds since the last offset, those seconds
-counted as at most 2^(3 +
+of the offset times the seconds since the last offset, measured from the
+clock's last timer pass, while the reply gives the fine time sampled
+before the modes were applied.
+Those seconds are counted as at most 2^(3 +
 .Fa constant ) .
 With
 .Dv STA_FLL
 set and 256 seconds or more since the last offset, or with over 2048
 seconds since it, the frequency-locked loop's change, a quarter of the
-offset over those seconds, is added too, and
+offset over the full interval in seconds, is added too, and
 .Dv STA_MODE
 is set.
 .Dv STA_FREQHOLD

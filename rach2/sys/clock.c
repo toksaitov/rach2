@@ -772,19 +772,23 @@ int rtc_shift_realtime(int64_t seconds, int32_t nanoseconds)
 /**
  * Linux reads the time before it takes its lock (kernel/time/timekeeping.c:
  * 2504-2509), so the time reported is the one before the modes changed
- * anything; the next tick takes the tick length they give
- * (`rtc_tick_advance`).
+ * anything. The modes count their interval and reference time from the
+ * clock's seconds at the last pass, read under its lock, as Linux's
+ * __ktime_get_real_seconds (ntp.c:321-325, 708-709, timekeeping.c:944-953);
+ * the next tick takes the tick length they give (`rtc_tick_advance`).
  */
 int32_t rtc_adjtimex(struct ktimex *tx)
 {
     uint32_t flags;
-    int64_t sec, nsec;
+    int64_t sec, nsec, clock_sec, clock_nsec;
     int32_t rc;
 
     rtc_realtime(&sec, &nsec);
     flags = spin_lock_irqsave(&rtc_realtime_lock);
+    rtc_coarse_since_boot(&clock_sec, &clock_nsec);
+    rtc_real_of_mono(clock_sec, clock_nsec, &clock_sec, &clock_nsec);
     tx->sec = sec;
-    rc = ntp_adjtimex(tx);
+    rc = ntp_adjtimex(tx, clock_sec);
     spin_unlock_irqrestore(&rtc_realtime_lock, flags);
     tx->usec = (tx->status & STA_NANO) ? nsec : (int64_t)((int32_t)nsec / 1000);
     return rc;
@@ -797,8 +801,8 @@ int32_t rtc_adjtimex(struct ktimex *tx)
  * is taken for the ticks after this one, within the tick's sequence count,
  * as Linux's timekeeping_adjust takes it in the same timekeeping_advance
  * (timekeeping.c:2245-2251), which the caller, the timer pass, may write
- * since it holds the big lock with interrupts off; a leap second moves the
- * offset, and the seconds after it, by its step, and the floor with it, so
+ * since it holds `clock_pass_lock` with interrupts off; a leap second moves
+ * the offset, and the seconds after it, by its step, and the floor with it, so
  * that real time can go back the second inserted, and the timers of real
  * time are told, as Linux's clock_was_set_delayed tells them
  * (timekeeping.c:2279-2283).
