@@ -191,6 +191,9 @@ void lock_ofd_gone(const struct open_file *ofd)
     (void)ofd;
 }
 
+/** The count of inotify watches, which fd.c reads at a close: none. */
+int inotify_watches;
+
 /** fd.c reports a description's close to inotify, and no row watches. */
 void inotify_desc(struct open_file *ofd, uint32_t mask)
 {

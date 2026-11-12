@@ -1060,6 +1060,9 @@ static void owned_after_failure(void)
     teardown();
 }
 
+/** The count of inotify watches, which fd.c reads at a close: none. */
+int inotify_watches;
+
 /**
  * Do nothing: fd.c reports a description's close to inotify, and no row
  * watches.
