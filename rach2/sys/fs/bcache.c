@@ -74,7 +74,8 @@ static uint64_t ahead_next;       /* reaches next; a miss there fills a run */
 static uint32_t write_gen;        /* counts the writes that reached a device, under `cache_spin` */
 /* Counts the buffers let go and the fills that ended their keep, under
  * `cache_spin`: each may make a buffer a victim search passed over fit,
- * which a search that let the lock go reads (`get`). */
+ * so a search that lets the lock go reads it to tell a turn in which
+ * something was let go from one in which nothing was (`victim_any`). */
 static uint32_t let_gos;
 static uint32_t limit_set; /* a limit given by `bcache_set_limit`, or 0 */
 static uint32_t clock_stamp;
@@ -1444,9 +1445,9 @@ static int victim_fit(const struct bbuf *b, block_device_t *filling, struct firs
  * NULL with `*more` set, for the caller to let `cache_spin` go and search
  * again, as Linux's LRU scan goes a batch at a time. A buffer let go
  * meanwhile may have been passed over and moved behind the search, fit
- * now, so the caller then sets `*passed` to 0 for a new turn (`get`).
- * `cache_spin` is held, and the big lock, which the tests of a dirty
- * buffer read under.
+ * now, so a turn that ends with nothing taken is followed by another when
+ * something was let go during it (`victim_any`). `cache_spin` is held, and
+ * the big lock, which the tests of a dirty buffer read under.
  */
 static struct bbuf *victim_find(block_device_t *filling, uint32_t *passed, int *more)
 {
@@ -1471,28 +1472,37 @@ static struct bbuf *victim_find(block_device_t *filling, uint32_t *passed, int *
     return 0;
 }
 
-/* The new turns a victim search may start because buffers were let go
- * while it let `cache_spin` go, before a miss with none fit fails: Linux's
- * allocator retries a reclaim that made no progress MAX_RECLAIM_RETRIES
- * (16) times before it gives up (mm/internal.h:464,
- * mm/page_alloc.c:4179-4185). */
+/* How many times a victim search retries a turn in which nothing was let
+ * go before a miss with none fit fails: Linux's allocator counts only the
+ * reclaim loops that made no progress, setting the count to 0 after one
+ * that made some, and retries MAX_RECLAIM_RETRIES (16) of them
+ * (mm/internal.h:460-464, mm/page_alloc.c:4179-4185). */
 #define SEARCH_TURNS 16
 
 /* A miss's search for a victim under the big lock, kept while it lets
- * `cache_spin` go between batches. */
+ * `cache_spin` go between batches. A turn begins with `passed` 0. */
 struct victim_search {
     uint32_t passed; /* the buffers this turn has passed over */
-    uint32_t seen;   /* `let_gos` at the last batch */
-    int turns;       /* the turns started over, at most SEARCH_TURNS */
+    uint32_t begun;  /* `let_gos` when this turn began */
+    int idle;        /* the turns that ended with nothing let go during them */
 };
 
 /**
  * The victim a miss under the big lock takes: an empty buffer, a new one
  * while the cache is under its limit, or the least recently released one
  * `filling` may take (`victim_find`), with `*more` set and NULL when the
- * search lets `cache_spin` go before its next batch. A buffer let go since
- * the last batch starts the turn over, at most SEARCH_TURNS times.
- * `cache_spin` is held.
+ * search lets `cache_spin` go before its next batch.
+ *
+ * A turn that passes over every buffer ends the search only when nothing
+ * was let go during it: a buffer let go may have gone fit behind the turn,
+ * and the next turn reads it. Such a turn is progress, as a reclaim that
+ * freed pages is in Linux's `should_reclaim_retry`, which then sets
+ * `no_progress_loops` to 0 (mm/page_alloc.c:4179-4180), and so is a dirty
+ * victim written (`get`); Linux's getblk itself never fails
+ * (`__getblk_slow`, fs/buffer.c:1117-1140). A turn with nothing let go is
+ * counted, and is retried SEARCH_TURNS times in a row before the miss
+ * fails, as Linux gives up once its loops without progress pass
+ * MAX_RECLAIM_RETRIES (mm/page_alloc.c:4184). `cache_spin` is held.
  */
 static struct bbuf *victim_any(block_device_t *filling, struct victim_search *s, int *more)
 {
@@ -1505,12 +1515,21 @@ static struct bbuf *victim_any(block_device_t *filling, struct victim_search *s,
     if (b) {
         return b;
     }
-    if (s->passed && let_gos != s->seen && s->turns < SEARCH_TURNS) {
-        s->passed = 0;
-        s->turns++;
+    if (s->passed == 0) {
+        s->begun = let_gos;
     }
-    s->seen = let_gos;
-    return victim_find(filling, &s->passed, more);
+    b = victim_find(filling, &s->passed, more);
+    if (b || *more || s->passed == 0) {
+        return b;
+    }
+    if (let_gos != s->begun) {
+        s->idle = 0;
+    } else if (++s->idle > SEARCH_TURNS) {
+        return 0;
+    }
+    s->passed = 0;
+    *more = 1;
+    return 0;
 }
 
 /* The buffers at the head of the release order a miss without the big lock
@@ -1778,6 +1797,7 @@ again:
                 (void)write_one(victim, 0);
             }
             search.passed = 0;
+            search.idle = 0;
             goto again;
         }
     }
