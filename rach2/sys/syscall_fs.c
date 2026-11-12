@@ -15899,8 +15899,9 @@ long sys_flock(isr_params_t *params)
 }
 
 /** F_SETFL on the held descriptor `entry`: set the O_APPEND and O_NONBLOCK
- * bits of `arg` on its description. 0, or -EPERM for a change of O_APPEND
- * on an append-only file, which Linux's setfl refuses either way. */
+ * bits of `arg` on its description, in one atomic step
+ * (`fd_ofd_status_set`). 0, or -EPERM for a change of O_APPEND on an
+ * append-only file, which Linux's setfl refuses either way. */
 static long fcntl_setfl(fd_entry_t *entry, uintptr_t arg)
 {
     if (!entry->ofd) {
@@ -15909,9 +15910,55 @@ static long fcntl_setfl(fd_entry_t *entry, uintptr_t arg)
     if (((arg ^ entry->ofd->status_flags) & OFD_APPEND) && ofd_append_only(entry->ofd)) {
         return -EPERM;
     }
-    entry->ofd->status_flags = arg & (OFD_APPEND | OFD_NONBLOCK);
+    fd_ofd_status_set(entry->ofd, OFD_APPEND | OFD_NONBLOCK, arg & (OFD_APPEND | OFD_NONBLOCK));
     return 0;
 }
+
+/* fcntl's commands besides the record locks' and the seals'. */
+enum {
+    F_DUPFD = 0,
+    F_GETFD = 1,
+    F_SETFD = 2,
+    F_GETFL = 3,
+    F_SETFL = 4,
+    F_DUPFD_CLOEXEC = 1030,
+    F_SETPIPE_SZ = 1031,
+    F_GETPIPE_SZ = 1032
+};
+
+/**
+ * Whether fcntl's command `cmd` on the held descriptor `entry` needs the big
+ * lock, which every command Linux's do_fcntl runs without one
+ * (fs/fcntl.c:446-528) does not: F_GETFD and F_GETFL read a word, F_SETFD
+ * changes the descriptor under the table's lock (`fd_set_flags`), as
+ * Linux's set_close_on_exec under `file_lock` (fs/file.c:1183-1194), F_SETFL
+ * changes the description in one atomic step, F_DUPFD and F_DUPFD_CLOEXEC
+ * take a slot and publish it under the table's lock with a reference on the
+ * description, the record locks have their own (`fcntl_lock`), and
+ * F_GETPIPE_SZ reads a word. The big lock is still taken for F_SETFL on a
+ * file whose attributes need it, which `ofd_append_only` reads, for a
+ * duplicate of a socket, whose reference count it guards, or of a file of
+ * the KRFFS root, whose holders it counts, and for the seals and
+ * F_SETPIPE_SZ, which charge and change what it guards.
+ */
+static int fcntl_big(const fd_entry_t *entry, int cmd)
+{
+    switch (cmd) {
+    case F_SETFL:
+        return entry->ofd && entry->ofd->vmnt && !file_vfs_unlocked(entry);
+    case F_DUPFD:
+    case F_DUPFD_CLOEXEC:
+        return entry->type == FD_TYPE_SOCKET || entry->node != NULL;
+    case F_ADD_SEALS:
+    case F_GET_SEALS:
+    case F_SETPIPE_SZ:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static long fcntl_cmd(fd_entry_t *entry, int cmd, uintptr_t arg);
 
 /**
  * fcntl64(2) on i386 and fcntl(2) on x86-64: the descriptor, the command
@@ -15945,6 +15992,9 @@ static long fcntl_setfl(fd_entry_t *entry, uintptr_t arg)
  * for anything else. An O_PATH descriptor takes the commands Linux lets it
  * take, the two duplications, F_GETFD, F_SETFD and F_GETFL, and is -EBADF to
  * the rest.
+ *
+ * The call runs without the big lock, and takes it only for the commands
+ * and descriptors `fcntl_big` names.
  */
 long sys_fcntl64(isr_params_t *params)
 {
@@ -15952,17 +16002,7 @@ long sys_fcntl64(isr_params_t *params)
     int cmd = (int)SC_ARG(params, 1);
     uintptr_t arg = SC_ARG(params, 2);
     fd_entry_t *entry;
-
-    enum {
-        F_DUPFD = 0,
-        F_GETFD = 1,
-        F_SETFD = 2,
-        F_GETFL = 3,
-        F_SETFL = 4,
-        F_DUPFD_CLOEXEC = 1030,
-        F_SETPIPE_SZ = 1031,
-        F_GETPIPE_SZ = 1032
-    };
+    long rc;
 
     if (!current_proc) {
         return -ESRCH;
@@ -15975,7 +16015,21 @@ long sys_fcntl64(isr_params_t *params)
         cmd != F_GETFD && cmd != F_SETFD && cmd != F_GETFL) {
         return -EBADF;
     }
+    if (bkl_held() || !fcntl_big(entry, cmd)) {
+        return fcntl_cmd(entry, cmd, arg);
+    }
+    bkl_enter();
+    rc = fcntl_cmd(entry, cmd, arg);
+    bkl_exit();
+    return rc;
+}
 
+/**
+ * fcntl's command `cmd` with its argument `arg` on the held descriptor
+ * `entry`, which `sys_fcntl64` checked, as that function describes it.
+ */
+static long fcntl_cmd(fd_entry_t *entry, int cmd, uintptr_t arg)
+{
     switch (cmd) {
     case F_GETFD:
         return (entry->flags & FD_FLAG_CLOEXEC) ? 1 : 0; /* 1 == FD_CLOEXEC */

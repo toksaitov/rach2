@@ -2221,11 +2221,7 @@ static int32_t fd_ioctl_nbio(fd_entry_t *entry, uintptr_t arg)
     if (copy_from_user(&on, (const void __user *)arg, sizeof(on)) != 0) {
         return -EFAULT;
     }
-    if (on) {
-        entry->ofd->status_flags |= OFD_NONBLOCK;
-    } else {
-        entry->ofd->status_flags &= ~(uint32_t)OFD_NONBLOCK;
-    }
+    fd_ofd_status_set(entry->ofd, OFD_NONBLOCK, on ? OFD_NONBLOCK : 0u);
     return 0;
 }
 
@@ -3564,9 +3560,10 @@ static void _syscall_handler(isr_params_t *params)
  * (`open_unlocked`), each taking the big lock for anything else; poll and
  * ppoll scan their descriptors the same way and sleep without it, taking it
  * for the signal state when the thread is marked for a signal or the call
- * changes its mask (`poll_signal_pending`, `poll_mask_set`); flock takes
- * the advisory locks' own lock (fs/lock.c), and the big lock only for a
- * file keyed by its node (`fd_locks_by_node`). Every
+ * changes its mask (`poll_signal_pending`, `poll_mask_set`); flock and
+ * fcntl's lock commands take the advisory locks' own lock (fs/lock.c), and
+ * the big lock only for a file keyed by its node (`fd_locks_by_node`), and
+ * fcntl takes it for the commands `fcntl_big` names. Every
  * other step those calls make takes the locks of what it touches; the
  * user-memory copies take the big lock until address spaces have locks of
  * their own. The forms of an architecture's own, i686's split offsets and
@@ -3578,7 +3575,7 @@ static void unlock_file_calls(void)
     static const syscall_fn_t calls[] = {
         sys_read,   sys_write, sys_pread64, sys_pwrite64,  sys_ioctl,      sys_fstat64,
         sys_close,  sys_poll,  sys_ppoll,   sys_fstatat64, sys_getdents64, sys_open,
-        sys_openat, sys_readv, sys_writev,  sys_flock,
+        sys_openat, sys_readv, sys_writev,  sys_flock,     sys_fcntl64,
     };
     uint32_t i;
 

@@ -9,13 +9,15 @@
  * host-deps: tests/host/compat/spinlock_host.c
  * host-deps: tests/host/compat/atomic_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
+ * host-cflags: -pthread
  *
  * The heap counts the allocations live in `allocations`; a row that sets
  * `fail_after` to N lets N more succeed and fails every one after. The
  * namespace lock of the model completes a pending move of a node, as a
  * writer that held the lock would, when a description's owner takes it. A
  * handle read before that wait would still name the old node, though
- * `fd_ofd_repoint` has updated the description.
+ * `fd_ofd_repoint` has updated the description. The row of the status flags
+ * runs two host threads on one description at once.
  */
 #include "fs/vfs.h"
 #include "compat/waketime_none.h"
@@ -88,6 +90,62 @@ static void check(int ok, const char *what)
         printf("fd_hosttest: fail: %s\n", what);
         fails++;
     }
+}
+
+/* The host's threads, declared here since the kernel's integer types stand
+ * in the way of <pthread.h>; a pthread_t is one word on Linux and macOS. */
+typedef unsigned long host_thread_t;
+extern int pthread_create(host_thread_t *thread, const void *attr, void *(*start)(void *),
+                          void *arg);
+extern int pthread_join(host_thread_t thread, void **ret);
+
+/* The description both threads of `status_flags_row` change, and the
+ * changes each saw lost. */
+static struct open_file status_ofd;
+static volatile int status_lost[2];
+/* Set once both threads are made, which they wait for, so that they run
+ * together. */
+static volatile int status_go;
+
+/** One thread of `status_flags_row`: set and clear its own bit of the
+ * status flags, OFD_NONBLOCK or OFD_APPEND, and count each change the other
+ * thread's change undid. */
+static void *status_rounds(void *arg)
+{
+    int me = (int)(uintptr_t)arg;
+    uint32_t bit = me ? OFD_APPEND : OFD_NONBLOCK;
+    int i;
+
+    while (!__atomic_load_n(&status_go, __ATOMIC_ACQUIRE)) {
+    }
+    for (i = 0; i < 1000000; i++) {
+        fd_ofd_status_set(&status_ofd, bit, bit);
+        status_lost[me] += !(*(volatile uint32_t *)&status_ofd.status_flags & bit);
+        fd_ofd_status_set(&status_ofd, bit, 0u);
+        status_lost[me] += (*(volatile uint32_t *)&status_ofd.status_flags & bit) != 0;
+    }
+    return NULL;
+}
+
+/**
+ * F_SETFL runs without the big lock beside FIONBIO and mq_setattr, so each
+ * change of a description's status flags is one atomic step
+ * (`fd_ofd_status_set`): two threads that change one bit each of one
+ * description lose none of their changes, which two plain stores would.
+ */
+static void status_flags_row(void)
+{
+    host_thread_t th[2];
+    int made = 0;
+
+    made += pthread_create(&th[0], NULL, status_rounds, (void *)0) == 0;
+    made += pthread_create(&th[1], NULL, status_rounds, (void *)1) == 0;
+    __atomic_store_n(&status_go, 1, __ATOMIC_RELEASE);
+    while (made > 0) {
+        pthread_join(th[--made], NULL);
+    }
+    check(status_lost[0] == 0 && status_lost[1] == 0 && status_ofd.status_flags == 0,
+          "two threads change a description's status flags without losing a change");
 }
 
 /** Zeroed host memory, counted in `allocations`, or NULL once `fail_after`
@@ -1017,6 +1075,7 @@ int main(void)
     close_finish();
     table_chunks();
     description_last();
+    status_flags_row();
     if (fd_table_init(&table) != 0 || (fd = fd_alloc(&table)) < 0) {
         return 1;
     }

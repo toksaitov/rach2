@@ -977,11 +977,7 @@ long sys_mq_getsetattr(struct isr_params *params)
         }
     }
     if (SC_ARG(params, 1)) {
-        if (a.flags & O_NONBLOCK) {
-            e->ofd->status_flags |= OFD_NONBLOCK;
-        } else {
-            e->ofd->status_flags &= ~(uint32_t)OFD_NONBLOCK;
-        }
+        fd_ofd_status_set(e->ofd, OFD_NONBLOCK, (a.flags & O_NONBLOCK) ? OFD_NONBLOCK : 0u);
     }
     return 0;
 }

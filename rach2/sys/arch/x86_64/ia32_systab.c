@@ -96,9 +96,10 @@
 
 #if RACH2_IA32
 
-/** Mark the i386 forms of the file calls and epoll_pwait2 to run without
- * the big lock, as the shared handlers do (`unlock_file_calls` and
- * `syscall_epoll_unlock` in syscall.c); the table is filled. */
+/** Mark the i386 forms of the file calls, fcntl's among them, and
+ * epoll_pwait2 to run without the big lock, as the shared handlers do
+ * (`unlock_file_calls` and `syscall_epoll_unlock` in syscall.c); the table
+ * is filled. */
 static void ia32_unlock_file_calls(void)
 {
     syscall_unlock(SYSCALL_ABI_IA32, compat_sys_ia32_pread64);
@@ -110,6 +111,7 @@ static void ia32_unlock_file_calls(void)
     syscall_unlock(SYSCALL_ABI_IA32, compat_sys_ppoll_time32);
     syscall_unlock(SYSCALL_ABI_IA32, compat_sys_ppoll_time64);
     syscall_unlock(SYSCALL_ABI_IA32, compat_sys_epoll_pwait2);
+    syscall_unlock(SYSCALL_ABI_IA32, compat_sys_fcntl64);
 }
 
 /** Mark the i386 mmap calls to run without the big lock, as the native
