@@ -768,7 +768,10 @@ void vgpu_blob_release(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
  * taking every program's mapping of them away when `zap` says so; nothing
  * for another. The free passes 0, since a mapping holds a reference to the
  * object and none can be left once it is freed, as on Linux, whose GEM
- * free unmaps nothing (drm_gem.c drm_gem_vm_open, virtgpu_vram.c:6-25). */
+ * free unmaps nothing (drm_gem.c drm_gem_vm_open, virtgpu_vram.c:6-25).
+ * The map comes off the object before the zap, which may sleep, so that no
+ * fault maps from it meanwhile and no other drop frees it twice; with `zap`
+ * set the caller holds a reference to `bo`, which the sleep could free. */
 void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, int zap);
 /** Queue the UNMAP_BLOB of a blob placed in host-visible memory; 0, or
  * -ENOMEM. */

@@ -485,6 +485,16 @@ void drm_gem_object_get(struct drm_gem_object *obj)
     }
 }
 
+/** Take a reference unless the last has gone: 1 when taken. */
+int drm_gem_object_get_unless_zero(struct drm_gem_object *obj)
+{
+    if (obj->refs == 0) {
+        return 0;
+    }
+    obj->refs++;
+    return 1;
+}
+
 static void resv_drop(struct dma_resv *resv);
 
 /** Drop one; the last frees it through its hooks and drops its device. */

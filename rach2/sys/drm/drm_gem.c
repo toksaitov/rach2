@@ -413,6 +413,11 @@ void drm_gem_object_get(struct drm_gem_object *obj)
     }
 }
 
+int drm_gem_object_get_unless_zero(struct drm_gem_object *obj)
+{
+    return refs_get_unless_zero(&obj->refs);
+}
+
 /** Take `obj` off the list at `head`, the device's objects linked through
  * `dev_next`, or with `mmap` set those with an offset, through
  * `mmap_next`. The device's `object_lock` is held. */
