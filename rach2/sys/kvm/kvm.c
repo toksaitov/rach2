@@ -493,21 +493,12 @@ static int32_t dev_attr(uintptr_t arg, int get)
     return 0;
 }
 
-/** The ioctls of /dev/kvm. */
-static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
+/** The ioctls of /dev/kvm that `dev_ioctl` runs under the big lock. */
+static int32_t dev_ioctl_locked(uint32_t request, uintptr_t arg)
 {
-    uint64_t mce = KVM_MCE_CAP_SUPPORTED;
-
-    (void)e;
     switch (request) {
-    case KVM_GET_API_VERSION:
-        return arg ? -EINVAL : KVM_API_VERSION;
     case KVM_CREATE_VM:
         return create_vm(arg);
-    case KVM_CHECK_EXTENSION:
-        return kvm_check_extension(NULL, (long)arg);
-    case KVM_GET_VCPU_MMAP_SIZE:
-        return arg ? -EINVAL : (int32_t)(KVM_MMAP_PAGES * 4096u);
     case KVM_GET_MSR_INDEX_LIST:
         return get_msr_list(arg, 0);
     case KVM_GET_MSR_FEATURE_INDEX_LIST:
@@ -518,8 +509,6 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         return get_supported_cpuid(arg, 0);
     case KVM_GET_EMULATED_CPUID:
         return get_supported_cpuid(arg, 1);
-    case KVM_X86_GET_MCE_CAP_SUPPORTED:
-        return copy_to_user((void __user *)arg, &mce, sizeof(mce)) ? -EFAULT : 0;
     case KVM_GET_SUPPORTED_HV_CPUID:
         return kvm_hv_get_cpuid(NULL, arg);
     case KVM_GET_DEVICE_ATTR:
@@ -528,6 +517,38 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         return dev_attr(arg, 0);
     default:
         return -ENOTTY;
+    }
+}
+
+/**
+ * The ioctls of /dev/kvm, called without the big lock (FILE_OPS_UNLOCKED),
+ * as Linux's kvm_dev_ioctl takes none (virt/kvm/kvm_main.c). The version,
+ * KVM_CHECK_EXTENSION, the run mapping's size and the MCE capabilities are
+ * answered from what is fixed once KVM is up: constants, the backend and
+ * its capabilities, the host's CPUID and the processor count, and the
+ * host's XCR0 that `kvm_xcr0_supported` keeps. Every other request runs
+ * under the big lock (`dev_ioctl_locked`).
+ */
+static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
+{
+    uint64_t mce = KVM_MCE_CAP_SUPPORTED;
+    int32_t r;
+
+    (void)e;
+    switch (request) {
+    case KVM_GET_API_VERSION:
+        return arg ? -EINVAL : KVM_API_VERSION;
+    case KVM_CHECK_EXTENSION:
+        return kvm_check_extension(NULL, (long)arg);
+    case KVM_GET_VCPU_MMAP_SIZE:
+        return arg ? -EINVAL : (int32_t)(KVM_MMAP_PAGES * 4096u);
+    case KVM_X86_GET_MCE_CAP_SUPPORTED:
+        return copy_to_user((void __user *)arg, &mce, sizeof(mce)) ? -EFAULT : 0;
+    default:
+        bkl_enter();
+        r = dev_ioctl_locked(request, arg);
+        bkl_exit();
+        return r;
     }
 }
 
@@ -885,7 +906,8 @@ const char *kvm_vm_irqchip_name(void *arg)
     return vm->irqchip == KVM_IRQCHIP_SPLIT ? "split" : "none";
 }
 
-static const struct file_ops dev_ops = {NULL, NULL, NULL, dev_ioctl, NULL, NULL, NULL, 0};
+static const struct file_ops dev_ops = {NULL, NULL, NULL, dev_ioctl,
+                                        NULL, NULL, NULL, FILE_OPS_UNLOCKED};
 
 /* /dev/kvm, the misc device 10:232, read and written by everyone, as
  * udev's rule for the kvm group gives it on a machine with one user. */
