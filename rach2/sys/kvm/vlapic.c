@@ -582,6 +582,26 @@ static uint64_t timer_next_ns(const struct lapic *l)
     return now + left * 1000000u / khz;
 }
 
+uint64_t kvm_lapic_run_bound(struct kvm_vcpu *v, uint64_t max)
+{
+    struct lapic *l = apic_of(v);
+    uint64_t next, now, khz;
+
+    if (!l || (l->timer_mode == TIMER_DEADLINE ? l->tscdeadline == 0 : l->expire_ns == 0)) {
+        return max;
+    }
+    next = timer_next_ns(l);
+    now = kvm_host_ns();
+    if (next <= now) {
+        return 0;
+    }
+    khz = kvm_tsc_khz();
+    if (khz == 0 || next - now >= max * 1000000u / khz) {
+        return max;
+    }
+    return (next - now) * khz / 1000000u;
+}
+
 /** IA32_TSC_DEADLINE written: in TSC-deadline mode, the new deadline,
  * 0 disarming it, as Linux's kvm_set_lapic_tscdeadline_msr. */
 static void set_tscdeadline(struct lapic *l, uint64_t value)
