@@ -60,7 +60,7 @@ Each thread's record (`proc/process.h`) has:
 * `restart_kind`, which of Linux's restart codes the handler's EINTR stands for, `restart_due`, set when the dispatcher made that code, and `restart`, the restart block from which `restart_syscall` resumes a sleep, a `poll` or a timed `futex` wait;
 * `trap_nr`, `trap_err` and `trap_addr`, the vector, error code and fault address of its last processor exception, which a frame's `sigcontext` reports;
 * `stop_seen`, set once the thread has taken the stop in effect;
-* in the leader's record, `jc_status`, the stop or continue report for the parent's wait, and `alarm_tick` and `alarm_interval`, the real-time interval timer.
+* in the leader's record, `jc_status`, the stop or continue report for the parent's wait, and `alarm_tick`, `alarm_interval` and `alarm_last`, the real-time interval timer.
 
 A pending signal is one bit, with one `struct k_siginfo` beside it. A signal posted again while it is pending changes nothing, so instances merge, and the siginfo kept is the first one's.
 

@@ -312,10 +312,11 @@ uint64_t proc_alarm_due_tick(const process_t *p)
 
 /** The tick a periodic real-time timer due at `due` is due at next: the
  * first `due` plus a whole number of `interval`s after the tick `now`, so
- * that a SIGALRM posted late does not move the timer off its grid, as
+ * that a SIGALRM taken late does not move the timer off its grid, as
  * Linux's `hrtimer_forward` steps from the old expiry
- * (kernel/time/hrtimer.c:1046-1078, from kernel/signal.c:654-662). The post
- * comes a few ticks after `due`, so the loop runs a few times. */
+ * (kernel/time/hrtimer.c:1046-1078, from kernel/signal.c:654-662). A
+ * SIGALRM taken long after `due` makes the loop run once for each interval
+ * passed. */
 static uint64_t alarm_next(uint64_t due, uint64_t interval, uint64_t now)
 {
     uint64_t next = due + interval;
@@ -326,14 +327,52 @@ static uint64_t alarm_next(uint64_t due, uint64_t interval, uint64_t now)
     return next != 0 ? next : 1u;
 }
 
+/** Stop `p`'s real-time timer once the SIGALRM the tick marked is posted,
+ * as Linux's `it_real_fn` sends SIGALRM and leaves the timer stopped
+ * (kernel/time/itimer.c:156-166): a periodic one keeps its interval and
+ * the tick it was due at, from which `proc_alarm_taken` runs it again.
+ * The caller holds the big lock and no spinlock. */
+static void alarm_stop(process_t *p)
+{
+    uint32_t flags = spin_lock_irqsave(&timer_list_lock);
+
+    p->alarm_due = 0;
+    p->alarm_last = p->alarm_tick;
+    p->alarm_tick = 0;
+    timer_update_locked(p);
+    spin_unlock_irqrestore(&timer_list_lock, flags);
+}
+
+void proc_alarm_take(process_t *to, const process_t *from)
+{
+    uint32_t flags = spin_lock_irqsave(&timer_list_lock);
+
+    to->alarm_tick = from->alarm_tick;
+    to->alarm_interval = from->alarm_interval;
+    to->alarm_last = from->alarm_last;
+    timer_update_locked(to);
+    spin_unlock_irqrestore(&timer_list_lock, flags);
+}
+
+void proc_alarm_taken(process_t *p)
+{
+    uint32_t flags = spin_lock_irqsave(&timer_list_lock);
+
+    if (p->alarm_tick == 0 && p->alarm_interval != 0) {
+        p->alarm_tick = alarm_next(p->alarm_last, p->alarm_interval, tick_count());
+        timer_update_locked(p);
+    }
+    spin_unlock_irqrestore(&timer_list_lock, flags);
+}
+
 /**
  * Post the signals `sigs` of the tick to `p`, SIGVTALRM and SIGPROF as
- * they come and SIGALRM followed by its timer's next setting, the first
- * tick of its interval's grid after the tick now, or none, as the tick
- * posted and armed it before it ran without the big lock. Only now is the
- * timer set again, so no tick marks a second SIGALRM for a setting whose
- * first is not yet posted. The caller holds the big lock, under which a
- * record is freed, and no spinlock.
+ * they come and SIGALRM followed by the stop of its timer (`alarm_stop`),
+ * as the tick would have posted them had it held the big lock. A periodic
+ * timer runs again only once a SIGALRM is taken (`proc_alarm_taken`), so
+ * while its SIGALRM is pending no tick marks another, and getitimer
+ * reports no time left with the interval, as Linux does. The caller holds
+ * the big lock, under which a record is freed, and no spinlock.
  */
 static void tick_signals_send(process_t *p, uint32_t sigs)
 {
@@ -344,11 +383,8 @@ static void tick_signals_send(process_t *p, uint32_t sigs)
         signal_post(p, SIGPROF);
     }
     if (sigs & (1u << SIGALRM)) {
-        uint64_t interval = p->alarm_interval;
-
         signal_post(p, SIGALRM);
-        (void)alarm_set(p, interval != 0 ? alarm_next(p->alarm_tick, interval, tick_count()) : 0,
-                        interval);
+        alarm_stop(p);
     }
 }
 
