@@ -774,6 +774,108 @@ static void userptr_pages(void)
     CHECK(user_pins == 0 && !user_mm.notify, "userptr: closed, frames and range gone");
 }
 
+/* ---- 84-17b.2: the free gives way wherever its holder may ---- */
+
+/** Make a bound, idle object of 1 MiB with its pages and close its handle,
+ * keeping one reference: the object, whose next put is its last. */
+static struct drm_i915_gem_object *held_bound(void)
+{
+    uint32_t h = create(&file_a, SET_BYTES);
+    struct drm_i915_gem_object *obj = object(&file_a, h);
+    struct i915_vma *v = 0;
+
+    CHECK(pin_whole(obj, 0, &v) == 0 && obj->pages.held == SET_PAGES,
+          "free: an object bound, with its pages");
+    drop_pin(&v);
+    drm_gem_object_get(&obj->base);
+    close_handle(&file_a, h);
+    return obj;
+}
+
+/** Zero the counts of clears, page frees and give-ways. */
+static void free_counts_zero(void)
+{
+    clears = 0;
+    clears_yielding = 0;
+    frees_yielding = 0;
+    give_ways = 0;
+}
+
+/** A GEM_CLOSE of a bound idle object with the GEM lock free undoes it
+ * at once, its clear and its pages giving way, as Linux's free worker
+ * does for every free (gem/i915_gem_object.c:423). */
+static void free_on_close(void)
+{
+    struct i915_vma *v = 0;
+    uint32_t h = create(&file_a, SET_BYTES);
+    int frames;
+
+    CHECK(pin_whole(object(&file_a, h), 0, &v) == 0 && v->obj->pages.held == SET_PAGES,
+          "free: an object bound, with its pages, behind its handle alone");
+    drop_pin(&v);
+    frames = frames_live;
+    free_counts_zero();
+    close_handle(&file_a, h);
+    CHECK(clears == 1 && clears_yielding == 1 && frees_yielding == 1 &&
+              frames_live == frames - (int)SET_PAGES && !dev_a->gem.freed,
+          "free: a GEM_CLOSE with the lock free clears and frees the pages giving way");
+}
+
+/** A last put under a held GEM lock, as retirement's, leaves the object on
+ * `gem.freed` until the holder that took the lock lets it go, which undoes
+ * it giving way. */
+static void free_under_lock(void)
+{
+    struct drm_i915_gem_object *obj = held_bound();
+    int frames = frames_live, taken;
+
+    free_counts_zero();
+    taken = i915_gem_lock(dev_a);
+    i915_gem_object_put(obj);
+    CHECK(taken && dev_a->gem.freed == obj && clears == 0 && frames_live == frames,
+          "free: a last put under a held lock waits on the list, undone at no point inside it");
+    i915_gem_unlock(dev_a, taken);
+    CHECK(!dev_a->gem.freed && clears == 1 && clears_yielding == 1 && frees_yielding == 1 &&
+              give_ways == 1 && frames_live == frames - (int)SET_PAGES &&
+              !mutex_held(&dev_a->gem.lock),
+          "free: the holder that took the lock frees the list as it lets go, giving way");
+}
+
+/** A last put under the shrinker, the pool's reference the last, undoes
+ * the object at once with no give-way and counts its frames; the
+ * shrinker, taking the lock in a wait's drop of it, leaves the list to the
+ * holder. */
+static void free_under_shrinker(void)
+{
+    struct mem_shrinker *sk = &dev_a->gem.shrinker.base;
+    struct drm_i915_gem_object *queued;
+    int frames, taken;
+
+    pool_parked = held_bound();
+    frames = frames_live;
+    free_counts_zero();
+    i915_gem_shrinker_register(dev_a);
+    CHECK(sk->shrink(sk, 1, 1) == SET_PAGES && !pool_parked && !dev_a->gem.freed && clears == 1 &&
+              clears_yielding == 0 && frees_yielding == 0 && give_ways == 0 &&
+              frames_live == frames - (int)SET_PAGES,
+          "free: under the shrinker, the object goes at once with no give-way, its frames counted");
+
+    queued = held_bound();
+    pool_parked = held_bound();
+    taken = i915_gem_lock(dev_a);
+    i915_gem_object_put(queued);
+    CHECK(i915_gem_lock_drop(dev_a) == 1, "free: a wait lets the lock go, the list kept");
+    free_counts_zero();
+    CHECK(sk->shrink(sk, 1, 1) == SET_PAGES && dev_a->gem.freed == queued && clears == 1 &&
+              clears_yielding == 0 && give_ways == 0 && !mutex_held(&dev_a->gem.lock),
+          "free: the shrinker, in a wait's drop of the lock, frees its own and leaves the list");
+    i915_gem_lock_retake(dev_a, 1);
+    i915_gem_unlock(dev_a, taken);
+    CHECK(!dev_a->gem.freed && clears_yielding == 1 && frees_yielding == 1 && give_ways == 1,
+          "free: the holder frees the list once it lets the lock go");
+    i915_gem_shrinker_unregister(dev_a);
+}
+
 /** Run every row: 0 when each passed. */
 /* ---- RPS's waitboost and interactive mode, which the driver calls ---- */
 
@@ -821,6 +923,9 @@ int main(void)
     userptr_refusals();
     userptr_calls();
     userptr_pages();
+    free_on_close();
+    free_under_lock();
+    free_under_shrinker();
     CHECK(!dev_a->drm.objects && !dev_a->gem.bound && !frames_live && !pins_live && !user_pins,
           "the end: no object, binding, page or pin left");
     CHECK(allocations == before, "the end: every record freed");
