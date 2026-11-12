@@ -19,7 +19,7 @@ demand_paging_test,-b,64M pass pass
 dirty_log_perf_test,-b,64M pass pass
 dirty_log_test,-i,4 pass pass passes on both; #4672: Rach2 skips its dirty-ring mode, having no KVM_CAP_DIRTY_LOG_RING (rach2/sys/kvm/kvm.c, kvm_check_extension), which Linux runs
 guest_print_test pass pass
-hardware_disable_test pass pass #4670: Rach2: KVM_CREATE_VCPU fails with ENOMEM once fork churn scatters the frames, since kvm_map_pages (rach2/sys/kvm/vcpu.c) finds no two consecutive frames for SVM's MSR permission map (svm.c, svm_vcpu_init)
+hardware_disable_test pass pass
 kvm_binary_stats_test pass pass
 kvm_create_max_vcpus pass pass
 kvm_page_table_test,-b,128M pass pass
