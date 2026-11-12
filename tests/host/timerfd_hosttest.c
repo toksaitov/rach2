@@ -348,12 +348,6 @@ static void long_rows(void)
 }
 
 /**
- * Run every row; 0 when each passes, 1 otherwise. An expiration during a
- * read's copy is kept for the next read, a second read during the copy finds
- * none, a copy that fails loses the count it took, and a read shorter than
- * eight bytes gives -EINVAL.
- */
-/**
  * A POSIX timer of one tick's interval that expires at two ticks posts no
  * signal from either: it is queued once and counts both. `ptimer_post_due`
  * posts one SIGALRM with the timer's id, value and an overrun of one, and
@@ -408,6 +402,12 @@ static void posix_rows(void)
     posix_timer = NULL;
 }
 
+/**
+ * Run every row; 0 when each passes, 1 otherwise. An expiration during a
+ * read's copy is kept for the next read, a second read during the copy finds
+ * none, a copy that fails loses the count it took, and a read shorter than
+ * eight bytes gives -EINVAL.
+ */
 int main(void)
 {
     setup();
