@@ -2,7 +2,8 @@
  * ext2_reserve_hosttest.c: the blocks a write of rach2/sys/fs/ext2.c
  * reserves: the count it needs, pointer blocks included, decided before any
  * byte is taken, and the reserved blocks kept from a caller who is not root;
- * what the batch and the allocator read and write under em->meta; and that a
+ * what the batch and the allocators read and write under their locks,
+ * `em->batch` and the groups'; and that a
  * change of a file is admitted only once it has the file's lock.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -48,8 +49,8 @@ static int failures, writes;
 /* The cache model's state: whether each block is missing from the cache, and
  * how many more reads leave it missing; the misses plans met; whether each
  * block is held by another process, as a sync holds one it writes, the
- * waits for such a block with em->meta let go and the gets of one under
- * em->meta, which would wait out the holder's write there; the order
+ * waits for such a block with the allocators' locks let go and the gets of
+ * one under them, which would wait out the holder's write there; the order
  * class each block was last dirtied with and the dirty marks without one;
  * the calls of `bcache_reserve`, the buffers the last asked for, and the
  * event count at it and at the first blank get after it; and a hook run
@@ -262,13 +263,26 @@ uint64_t tick_count(void)
     return 0;
 }
 
+/** Whether the caller holds `em->batch` or any group's lock of the volume. */
+static int alloc_locks_held(void)
+{
+    int i;
+
+    for (i = 0; i < EXT2_GROUP_LOCKS; i++) {
+        if (sleep_lock_held(&volume.group_locks[i])) {
+            return 1;
+        }
+    }
+    return sleep_lock_held(&volume.batch);
+}
+
 /** Whether block `block` is in the cache, as the model says; a block it
- * lacks asked by the planner counts in `misses`. */
+ * lacks asked by a plan counts in `misses`. */
 int bcache_cached(block_device_t *dev, uint64_t block)
 {
     (void)dev;
     if (block < TEST_BLOCKS && uncached[block]) {
-        misses += volume.planner == (int)process.pid;
+        misses += process.fs_plan == &volume;
         return 0;
     }
     return 1;
@@ -337,7 +351,7 @@ void bcache_wait_unheld(block_device_t *dev, uint64_t block)
 {
     (void)dev;
     if (block < TEST_BLOCKS && busy[block]) {
-        busy_waits += !sleep_lock_held(&volume.meta);
+        busy_waits += !alloc_locks_held();
         busy[block] = 0;
     }
 }
@@ -345,9 +359,9 @@ void bcache_wait_unheld(block_device_t *dev, uint64_t block)
 /**
  * Block `block` of the volume in memory; a block outside it fails a row and
  * gives NULL. A get of a block another process holds waits for it, and
- * counts in `busy_gets` when the caller holds em->meta. A read of a block the
- * model calls missing fails a row when the caller plans, runs `fetch_hook`
- * once, and leaves the block missing for `refetch` more reads.
+ * counts in `busy_gets` when the caller holds an allocator's lock. A read of a
+ * block the model calls missing fails a row when the caller plans, runs
+ * `fetch_hook` once, and leaves the block missing for `refetch` more reads.
  */
 struct bbuf *bcache_get(block_device_t *dev, uint64_t block)
 {
@@ -356,13 +370,13 @@ struct bbuf *bcache_get(block_device_t *dev, uint64_t block)
         return NULL;
     }
     if (busy[block]) {
-        busy_gets += sleep_lock_held(&volume.meta);
+        busy_gets += alloc_locks_held();
         busy[block] = 0;
     }
     if (uncached[block]) {
         void (*hook)(void) = fetch_hook;
 
-        check(volume.planner != (int)process.pid, "a plan reads no block the cache lacks");
+        check(process.fs_plan != &volume, "a plan reads no block the cache lacks");
         if (refetch[block] > 0) {
             refetch[block]--;
         } else {
@@ -675,7 +689,7 @@ static void reservation_rows(void)
 
     reset(11);
     ext2_node_lock(&file);
-    ext2_meta_lock(&volume);
+    ext2_batch_lock(&volume);
     check(writeback_piece(&volume, &file, 0, payload, 4096) == 0, "accept an earlier piece");
     before = file;
     remaining = (uint32_t)volume.free_blocks;
@@ -690,17 +704,17 @@ static void reservation_rows(void)
               ext2_read_data(&volume, &file, 0, result, 4096) == 0 &&
               memcmp(result, payload, 4096) == 0,
           "earlier piece survives a refused reservation");
-    ext2_meta_unlock(&volume);
+    ext2_batch_unlock(&volume);
     ext2_node_unlock(&file);
 
     reset(2);
     process.euid = 0;
     ext2_node_lock(&file);
-    ext2_meta_lock(&volume);
+    ext2_batch_lock(&volume);
     check(writeback_piece(&volume, &file, (uint64_t)1036 * 4096, payload, 4096) == -ENOSPC &&
               volume.free_blocks == 2 && batch.count == 0,
           "root cannot reserve more blocks than are free");
-    ext2_meta_unlock(&volume);
+    ext2_batch_unlock(&volume);
     ext2_node_unlock(&file);
 }
 
@@ -711,7 +725,7 @@ static int bit_on(uint32_t b)
 }
 
 /**
- * A plan under em->meta reads no block the cache lacks. The bitmap is
+ * A plan under its locks reads no block the cache lacks. The bitmap is
  * fetched before the plan and gone again when the plan asks for it: the
  * piece gives back the image it took, fetches the bitmap with the lock let
  * go and starts again, once, and ends with one image of each block. A
@@ -745,7 +759,7 @@ static void miss_rows(void)
 
 /**
  * A block another process holds, as a sync or an fsync holds one for the
- * length of its write, is waited for with em->meta let go and never under
+ * length of its write, is waited for with the locks let go and never under
  * it: by a plan that meets the bitmap held, which starts again, and by a
  * drain whose bitmap and inode table blocks are held when it would copy.
  */
@@ -754,7 +768,7 @@ static void busy_rows(void)
     reset(20);
     busy[2] = 1;
     check(ext2_write(&mount, &file, payload, 4096, 0) == 4096 && busy_waits == 1 && busy_gets == 0,
-          "a plan waits for a held bitmap with em->meta let go");
+          "a plan waits for a held bitmap with its locks let go");
     check(ext2_writeback_drain(&volume) == 0 && bit_on(TEST_BLOCKS - 20) &&
               ext2_read_data(&volume, &file, 0, result, 4096) == 0 &&
               memcmp(result, payload, 4096) == 0,
@@ -764,7 +778,7 @@ static void busy_rows(void)
     check(ext2_write(&mount, &file, payload, 4096, 0) == 4096, "a pending piece");
     busy[2] = busy[4] = 1;
     check(ext2_writeback_drain(&volume) == 0 && busy_waits == 2 && busy_gets == 0,
-          "a drain waits for its held blocks with em->meta let go");
+          "a drain waits for its held blocks with em->batch let go");
     check(bit_on(TEST_BLOCKS - 20) && ext2_le32(disk[4] + (file.ino - 1) * 128 + 4) == 4096,
           "and then copies the bitmap and the inode");
 }
@@ -788,13 +802,11 @@ static void held_block_rows(void)
     ext2_node_lock(&other);
     check(ext2_inode_store(&volume, &other) == 0, "another inode of that block is stored");
     ext2_node_unlock(&other);
-    im = ext2_writeback_find(&volume, 4);
+    im = writeback_find(&batch, 4);
     check(im && ext2_le16(im->data + at) == other.mode && ext2_le32(im->data + at + 4) == 77,
           "into the batch's image as well as the cache");
-    ext2_meta_lock(&volume);
     check(ext2_alloc_block(&volume, volume.alloc_hint, &b) == 0 && b == TEST_BLOCKS - 19,
           "a block is allocated beside the batch's reservation");
-    ext2_meta_unlock(&volume);
     check(ext2_writeback_drain(&volume) == 0, "the batch drains");
     check(ext2_le16(disk[4] + at) == other.mode && ext2_le32(disk[4] + at + 4) == 77 &&
               ext2_le32(disk[4] + (file.ino - 1) * 128 + 4) == 4096,
@@ -806,7 +818,7 @@ static void held_block_rows(void)
 
 /**
  * A drain on a mount that writes back has the cache make room for its
- * copies, one buffer each, before it takes em->meta and copies.
+ * copies, one buffer each, before it takes em->batch and copies.
  */
 static void drain_reserve_row(void)
 {
@@ -854,7 +866,7 @@ static void punch_other(void)
 
 /**
  * Two punches of two files, the second run while the first fetches its
- * bitmap with em->meta let go, as two processes would interleave at that
+ * bitmap with no lock held, as two processes would interleave at that
  * disk wait. Each keeps its own list: every block of both files is freed,
  * the counts come back whole, and the inode table block is dirtied first
  * and the bitmap and descriptor after, with no mark outside the two
@@ -922,7 +934,7 @@ static void wide_volume(void)
 /**
  * A new inode whose parent's group is full looks in another group, whose
  * inode bitmap and descriptor block the cache lacks. Neither is read under
- * em->meta: the search lets the lock go and fetches each, starting again,
+ * the group's lock: the search lets it go and fetches each, starting again,
  * and the bit and count reach the second block of descriptors. A bitmap the
  * cache keeps losing is met PLAN_TRIES times, and then read under the lock.
  */
@@ -1027,7 +1039,7 @@ int main(void)
     admission_rows();
     if (!failures) {
         printf("ext2-reserve-hosttest: result: pass: boundaries, reservation quotas, plans and "
-               "frees under em->meta, and admission\n");
+               "frees under their locks, and admission\n");
     }
     return failures != 0;
 }

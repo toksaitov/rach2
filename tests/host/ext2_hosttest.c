@@ -4008,7 +4008,7 @@ static int listing(void *h)
  * (`ext2_put_unless_last`), and a release takes it to drain the batch
  * (`ext2_release`). Once the batch is empty a read, a listing and a release
  * take it never, the batch's images being read from the cache alone
- * (`ext2_writeback_find`), and a last put takes it once (`ext2_put`).
+ * (`ext2_writeback_has`), and a last put takes it once (`ext2_put`).
  */
 static void unlocked_reader_row(void)
 {
@@ -4155,24 +4155,26 @@ static void held_block_row(void)
     check(unmount_rw() == 0, "the held-block volume unmounts again");
 }
 
-/** The holds of `em->meta`, every mount's, that crossed a disk request. */
-static uint32_t meta_crossings(void)
+/** The holds of `em->batch` and of the groups' locks, every mount's, that
+ * crossed a disk request. */
+static uint32_t alloc_crossings(void)
 {
     const struct sleep_lock_record *r;
+    uint32_t n = 0;
 
     for (r = sleep_lock_records(); r; r = r->next) {
-        if (streq(r->kind, "ext2 meta")) {
-            return r->crossings;
+        if (streq(r->kind, "ext2 batch") || streq(r->kind, "ext2 group")) {
+            n += r->crossings;
         }
     }
-    return 0;
+    return n;
 }
 
 /**
  * On a mount that writes back, under a cache of 16 buffers that another
  * file's blocks have filled with dirty ones, a write of eight blocks and
  * the fsync that drains them: the cache writes the victims before the drain
- * takes `em->meta`, so that no hold of it crosses a disk request, and both
+ * takes `em->batch`, so that no hold of it crosses a disk request, and both
  * files read back after a remount on a clean volume.
  */
 static void drain_victims_row(void)
@@ -4203,7 +4205,7 @@ static void drain_victims_row(void)
           "sixteen blocks of one file are dirty in the cache");
     y = make_file(mnt.root, "drained", &rc);
     check(y && OPS->open(&mnt, y, 2, &handle) == 0, "another file is open");
-    crossed = meta_crossings();
+    crossed = alloc_crossings();
     if (handle) {
         OPS->lock_node(&mnt, y);
         check(OPS->write(&mnt, handle, data, sizeof(data), 0) == (int32_t)sizeof(data),
@@ -4211,7 +4213,7 @@ static void drain_victims_row(void)
         OPS->unlock_node(&mnt, y);
         check(OPS->fsync(&mnt, handle) == 0, "and an fsync drains them past the victims");
     }
-    check(meta_crossings() == crossed, "with em->meta held across no disk request");
+    check(alloc_crossings() == crossed, "with em->batch held across no disk request");
     if (handle) {
         OPS->release(&mnt, handle);
     }
@@ -4280,7 +4282,7 @@ static int inodes_first(uint64_t ino, int synced)
 /**
  * Two truncates of two files of twenty blocks, on a mount that writes back:
  * process B's runs whole while process A's waits for its indirect block.
- * Neither holds `em->meta` across a disk request, each free keeps its own
+ * Neither holds a group's lock across a disk request, each free keeps its own
  * list, and the cache's two classes keep the order of both: at the sync every
  * write of the files' inode table block comes before the first of the block
  * bitmap and of the descriptors, so no pointer on the disk names a block
@@ -4327,7 +4329,7 @@ static void overlap_punch_row(void)
     overlap_done = 0;
     sleeps = 0;
     wlog_reset();
-    crossed = meta_crossings();
+    crossed = alloc_crossings();
     read_pause = overlap_turn;
     start_turns(overlap_second);
     OPS->lock_node(&mnt, x);
@@ -4337,7 +4339,7 @@ static void overlap_punch_row(void)
     read_pause = 0;
     check(rc == 0 && overlap_done == 1 && sleeps == 0,
           "one truncate runs whole while the other waits for its indirect block");
-    check(meta_crossings() == crossed, "and neither holds em->meta across a disk request");
+    check(alloc_crossings() == crossed, "and neither holds a group's lock across a disk request");
     check(OPS->sync(&mnt) == 0, "the two frees sync");
     synced = wlog_n;
     OPS->release(&mnt, handle);

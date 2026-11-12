@@ -34,7 +34,7 @@
 #define SVC_WRITE_POINTS (SVC_LONG / 16u - 1u)
 
 /* A service point's site, told by the locks its process holds: a write's
- * holds the node's lock alone, and a drain's `em->meta` too. */
+ * holds the node's lock alone, and a drain's `em->batch` too. */
 enum { SVC_SITE_WRITE, SVC_SITE_DRAIN, SVC_SITES };
 
 /* What process B does to the file of a long write, at its first turn. */
@@ -566,7 +566,7 @@ static void svc_turn_site(void)
  * runs a competing operation at each of its service points of `site`: files
  * made, written, removed and synced on the same mount. At the write's own
  * points B's drains take A's batch, and at B's the turn comes back to A,
- * whose next piece waits for it. At a drain's B waits for `em->meta`, which
+ * whose next piece waits for it. At a drain's B waits for `em->batch`, which
  * A keeps. The sites count apart, so that one cannot stand for the other.
  * The write goes whole, every file reads whole before and after a remount,
  * and e2fsck finds the volume clean.
@@ -593,8 +593,8 @@ static void svc_write_compete_row(uint32_t flags, int site)
     check(svc_sites[SVC_SITE_WRITE] == (int)SVC_WRITE_POINTS,
           "the write offers the lock each 16 pieces");
     check(site == SVC_SITE_WRITE ||
-              (svc_sites[SVC_SITE_DRAIN] >= 15 && second_wait && streq(second_wait, "ext2 meta")),
-          "and its drains, where the others wait for em->meta");
+              (svc_sites[SVC_SITE_DRAIN] >= 15 && second_wait && streq(second_wait, "ext2 batch")),
+          "and its drains, where the others wait for em->batch");
     check(svc_competitors_ok(), "the files they left read whole");
     check(svc_long_ok(node), "and so does the long write");
     svc_write_end(dir, node, handle);

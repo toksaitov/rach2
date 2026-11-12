@@ -23,16 +23,12 @@ void ext2_writeback_free(struct ext2_writeback *wb)
 }
 
 /** The batch's image of block `block`, metadata or data, or NULL; the cache
- * is neither read nor changed. NULL for a caller without the big lock, which
- * holds it whenever the batch has images (`ext2_batch_guard`). */
-struct ext2_image *ext2_writeback_find(struct ext2_mount *em, uint32_t block)
+ * is neither read nor changed. The caller holds `em->batch` or `wb->lock`,
+ * which keep the lists. */
+static struct ext2_image *writeback_find(struct ext2_writeback *wb, uint32_t block)
 {
-    struct ext2_writeback *wb = em->wb;
     int i;
 
-    if (!wb || !bkl_held()) {
-        return 0;
-    }
     for (i = 0; i < wb->metas; i++) {
         if (wb->meta[i].block == block) {
             return &wb->meta[i];
@@ -44,6 +40,58 @@ struct ext2_image *ext2_writeback_find(struct ext2_mount *em, uint32_t block)
         }
     }
     return 0;
+}
+
+/** Whether the batch has an image of block `block`: 0 for none, 1 for an
+ * image the batch has not changed, 2 for one it has, looked up under
+ * `wb->lock`. A caller without `em->batch` learns what was so at the
+ * look. */
+int ext2_writeback_has(struct ext2_mount *em, uint32_t block)
+{
+    struct ext2_writeback *wb = em->wb;
+    struct ext2_image *im;
+    uint32_t flags;
+    int has = 0;
+
+    if (!wb) {
+        return 0;
+    }
+    flags = spin_lock_irqsave(&wb->lock);
+    im = writeback_find(wb, block);
+    if (im) {
+        has = im->dirty ? 2 : 1;
+    }
+    spin_unlock_irqrestore(&wb->lock, flags);
+    return has;
+}
+
+/**
+ * Copy `len` bytes at byte `at` of the batch's image of block `block` into
+ * `buf`, or from `buf` into the image when `into` is set, in one step under
+ * `wb->lock`, so that a drain that empties the lists or a plan that gives
+ * back its images does not reuse the page under the copy. Returns 1, or 0
+ * when the batch has no image of the block. The bytes copied are kept by
+ * the caller's own lock: a node's, a group's or `em->super`.
+ */
+int ext2_writeback_copy(struct ext2_mount *em, uint32_t block, uint32_t at, void *buf, uint32_t len,
+                        int into)
+{
+    struct ext2_writeback *wb = em->wb;
+    struct ext2_image *im;
+    uint32_t flags;
+
+    if (!wb) {
+        return 0;
+    }
+    flags = spin_lock_irqsave(&wb->lock);
+    im = writeback_find(wb, block);
+    if (im && into) {
+        k_memcpy(im->data + at, buf, len);
+    } else if (im) {
+        k_memcpy(buf, im->data + at, len);
+    }
+    spin_unlock_irqrestore(&wb->lock, flags);
+    return im != 0;
 }
 
 /** Whether the batch holds images or inodes, read as single words. */
@@ -59,7 +107,7 @@ int ext2_batch_busy(const struct ext2_mount *em)
  * 1 when it took it, for the caller's `bkl_exit`. The writers fill and
  * empty the batch's arrays under the big lock, between their sleeps, so a
  * reader under it sees them whole. A reader that finds the batch empty
- * reads the cache alone (`ext2_writeback_find`), which then has what every
+ * reads the cache alone, which then has what every
  * finished write left: the reader holds its node's lock, so no write of the
  * node's own blocks runs meanwhile, and a write of another node's that does
  * is one the reader may see either before or after, as Linux's reader
@@ -92,7 +140,7 @@ int ext2_writeback_holds(const struct ext2_mount *em, const struct ext2_node *n)
 /**
  * Whether a drain still to come stores inode `n`, on a mount that writes
  * back. A drain under way has encoded its nodes and may be asleep over a
- * buffer, so it is waited for, under `em->meta`, and the answer holds until
+ * buffer, so it is waited for, under `em->batch`, and the answer holds until
  * the caller sleeps.
  */
 int ext2_writeback_keeps(struct ext2_mount *em, const struct ext2_node *n)
@@ -102,16 +150,32 @@ int ext2_writeback_keeps(struct ext2_mount *em, const struct ext2_node *n)
     if (ext2_em_strict(em) || !ext2_writeback_holds(em, n)) {
         return 0;
     }
-    ext2_meta_lock(em);
+    ext2_batch_lock(em);
     kept = ext2_writeback_holds(em, n);
-    ext2_meta_unlock(em);
+    ext2_batch_unlock(em);
     return kept;
+}
+
+/** List image `im`, whose page is filled, as block `block`'s at stage
+ * `stage`, raising the count `*count` of its list, under `wb->lock`. The
+ * caller holds `em->batch`. */
+static void writeback_list(struct ext2_writeback *wb, struct ext2_image *im, uint32_t block,
+                           int stage, int *count)
+{
+    uint32_t flags = spin_lock_irqsave(&wb->lock);
+
+    im->block = block;
+    im->stage = stage;
+    (*count)++;
+    spin_unlock_irqrestore(&wb->lock, flags);
 }
 
 /**
  * The batch's image of metadata block `block` at stage `stage`: the one it
  * has, or a new one in the next free page, zeroed with `blank` and a copy of
- * the cache's block otherwise, not yet marked changed. NULL with `*rc` set:
+ * the cache's block otherwise, not yet marked changed, listed before the
+ * cache's buffer goes, so that a write through the cache to the block from
+ * then on finds the image (`ext2_write_owned`). NULL with `*rc` set:
  * -EIO for an image the batch has at another stage or a failed read,
  * -ENOMEM for a full table, and -EAGAIN for a block the cache lacks under a
  * plan (`ext2_volume_get`). A piece that fails gives back the new images it
@@ -141,21 +205,20 @@ static struct ext2_image *writeback_meta(struct ext2_mount *em, uint32_t block, 
     }
     im = &wb->meta[wb->metas];
     im->data = wb->slot[EXT2_WB_DATA + wb->metas];
-    if (blank) {
-        k_memset(im->data, 0, BCACHE_BLOCK_BYTES);
-    } else {
-        b = ext2_volume_get(em, block, rc);
-        if (!b) {
-            return 0;
-        }
-        k_memcpy(im->data, b->data, BCACHE_BLOCK_BYTES);
-        bcache_release(b);
-    }
-    im->block = block;
-    im->stage = stage;
     im->dirty = 0;
     im->owner = 0;
-    wb->metas++;
+    if (blank) {
+        k_memset(im->data, 0, BCACHE_BLOCK_BYTES);
+        writeback_list(wb, im, block, stage, &wb->metas);
+        return im;
+    }
+    b = ext2_volume_get(em, block, rc);
+    if (!b) {
+        return 0;
+    }
+    k_memcpy(im->data, b->data, BCACHE_BLOCK_BYTES);
+    writeback_list(wb, im, block, stage, &wb->metas);
+    bcache_release(b);
     return im;
 }
 
@@ -166,25 +229,124 @@ struct ext2_reservation {
     struct ext2_image *bitmap, *descriptor;
 };
 
-/**
- * Choose a free block for the piece being planned, the next of the `count`
- * reservations in `list`, first-fit from the hint as `block_alloc` searches,
- * passing over the blocks the piece has chosen already, and take the images
- * of its bitmap and descriptor blocks. The free count already excludes the
- * blocks of committed pieces but not this piece's reservations, so those
- * are subtracted before another block is admitted, against the reserved
- * blocks for a caller that is not privileged. 0, -ENOSPC, -EIO for a clear
- * bit on a structural block, or the errors of `writeback_meta`.
+/*
+ * What a piece of a write needs before it is committed: the blocks it
+ * reserves, `allocs` of them; the images of the `paths` pointer blocks on its
+ * path, with the byte offset of the slot in each and the block each slot is
+ * to name; the images of its inode's table block and, when the file reaches
+ * 2 GiB, the superblock; the inode's pointer at the top of the path, its
+ * index and value; the data block, `fresh` when new, and its image; and the
+ * inode's place in the batch's table, `count` for a new one; and the
+ * `nlocked` groups whose locks it took for its reservations.
  */
-static int writeback_reserve(struct ext2_mount *em, struct ext2_reservation *list, int count)
-{
-    uint32_t start = em->alloc_hint;
-    uint32_t g0, tried, g, from, end, bit, block;
-    struct ext2_reservation *r = &list[count];
-    int i, rc = 0;
+struct ext2_write_plan {
+    struct ext2_reservation reservations[4];
+    struct ext2_image *parents[3], *table, *feature, *data;
+    uint32_t slots[3], children[3];
+    uint32_t root, root_slot, block;
+    uint32_t locked[4];
+    int paths, fresh, allocs, node_index, nlocked;
+};
 
-    if (em->free_blocks <= (uint32_t)count ||
-        (!ext2_may_use_reserved() && em->free_blocks - (uint32_t)count <= em->r_blocks)) {
+/**
+ * Take group `g`'s lock for the plan unless the plan holds it: 1 when it
+ * took it, as the last of `plan->locked`, and 0 when the plan held it. The
+ * second and later are told to the checker at subclasses 1 to 3: the plan
+ * holds `em->batch`, so no other holds several groups' locks to wait on.
+ */
+static int plan_group_lock(struct ext2_mount *em, struct ext2_write_plan *plan, uint32_t g)
+{
+    if (ext2_group_held(em, g)) {
+        return 0;
+    }
+    if (plan->nlocked != 0) {
+        sleep_lock_subclass(plan->nlocked);
+    }
+    ext2_group_lock(em, g);
+    plan->locked[plan->nlocked++] = g;
+    return 1;
+}
+
+/** Give back every group's lock the plan took, the last first. */
+static void plan_groups_unlock(struct ext2_mount *em, struct ext2_write_plan *plan)
+{
+    while (plan->nlocked > 0) {
+        ext2_group_unlock(em, plan->locked[--plan->nlocked]);
+    }
+}
+
+/**
+ * Reserve for the plan the first free block of group `g` from bit `from`
+ * to before bit `end` that the plan has not chosen, as `writeback_reserve`
+ * says. 0, -ENOSPC when the group has none, or -errno. The caller holds the
+ * group's lock.
+ */
+static int reserve_in(struct ext2_mount *em, struct ext2_write_plan *plan, uint32_t g,
+                      uint32_t from, uint32_t end)
+{
+    struct ext2_reservation *list = plan->reservations, *r = &list[plan->allocs];
+    uint8_t *gd = em->gd + g * 32;
+    uint32_t bit, block;
+    int i, rc;
+
+    if (ext2_le16(gd + 12) == 0) {
+        return -ENOSPC;
+    }
+    for (bit = from; bit < end; bit++) {
+        rc = ext2_bit_first_clear(em, ext2_le32(gd), bit, end, &bit);
+        if (rc != 0) {
+            return rc;
+        }
+        if (bit >= end) {
+            break;
+        }
+        block = em->first_data + g * em->bpg + bit;
+        for (i = 0; i < plan->allocs && list[i].block != block; i++) {
+        }
+        if (i != plan->allocs) {
+            continue;
+        }
+        if (!ext2_data_block_ok(em, block)) {
+            return -EIO;
+        }
+        r->bitmap = writeback_meta(em, ext2_le32(gd), WB_ALLOC, 0, &rc);
+        if (!r->bitmap) {
+            return rc;
+        }
+        r->descriptor = writeback_meta(em, em->first_data + 1 + (g * 32) / 4096, WB_ALLOC, 0, &rc);
+        if (!r->descriptor) {
+            return rc;
+        }
+        r->block = block;
+        r->group = g;
+        r->bit = bit;
+        return 0;
+    }
+    return -ENOSPC;
+}
+
+/**
+ * Choose a free block for the piece being planned, the next of the
+ * `plan->allocs` reservations, first-fit from the hint as `block_alloc`
+ * searches, passing over the blocks the piece has chosen already, and take
+ * the images of its bitmap and descriptor blocks. Each group is searched
+ * under its lock, which the plan keeps for a group it reserves in until its
+ * commit sets the bit (`writeback_try`), and gives back for one it does not.
+ * The free count already excludes the blocks of committed pieces but not
+ * this piece's reservations, so those are subtracted before another block
+ * is admitted, against the reserved blocks for a caller that is not
+ * privileged. 0, -ENOSPC, -EIO for a clear bit on a structural block, or
+ * the errors of `writeback_meta`.
+ */
+static int writeback_reserve(struct ext2_mount *em, struct ext2_write_plan *plan)
+{
+    uint32_t start = ext2_alloc_hint(em);
+    uint64_t free = ext2_free_blocks(em);
+    uint32_t g0, tried, g;
+    int count = plan->allocs, rc;
+
+    if (free <= (uint32_t)count ||
+        (!ext2_may_use_reserved() && free - (uint32_t)count <= em->r_blocks)) {
         return -ENOSPC;
     }
     if (start >= em->blocks) {
@@ -192,11 +354,11 @@ static int writeback_reserve(struct ext2_mount *em, struct ext2_reservation *lis
     }
     g0 = (start - em->first_data) / em->bpg;
     for (tried = 0; tried <= em->groups; tried++) {
-        uint8_t *gd;
+        uint32_t from, end;
+        int took;
 
         g = (g0 + tried) % em->groups;
-        gd = em->gd + g * 32;
-        if (ext2_le16(gd + 12) == 0) {
+        if (ext2_le16(em->gd + g * 32 + 12) == 0) {
             continue;
         }
         from = tried == 0 ? (start - em->first_data) % em->bpg : 0;
@@ -207,57 +369,18 @@ static int writeback_reserve(struct ext2_mount *em, struct ext2_reservation *lis
         if (tried == em->groups && end > (start - em->first_data) % em->bpg) {
             end = (start - em->first_data) % em->bpg;
         }
-        for (bit = from; bit < end; bit++) {
-            rc = ext2_bit_first_clear(em, ext2_le32(gd), bit, end, &bit);
-            if (rc != 0) {
-                return rc;
-            }
-            if (bit >= end) {
-                break;
-            }
-            block = em->first_data + g * em->bpg + bit;
-            for (i = 0; i < count && list[i].block != block; i++) {
-            }
-            if (i != count) {
-                continue;
-            }
-            if (!ext2_data_block_ok(em, block)) {
-                return -EIO;
-            }
-            r->bitmap = writeback_meta(em, ext2_le32(gd), WB_ALLOC, 0, &rc);
-            if (!r->bitmap) {
-                return rc;
-            }
-            r->descriptor =
-                writeback_meta(em, em->first_data + 1 + (g * 32) / 4096, WB_ALLOC, 0, &rc);
-            if (!r->descriptor) {
-                return rc;
-            }
-            r->block = block;
-            r->group = g;
-            r->bit = bit;
-            return 0;
+        took = plan_group_lock(em, plan, g);
+        rc = reserve_in(em, plan, g, from, end);
+        if (rc != -ENOSPC) {
+            return rc;
+        }
+        if (took) {
+            ext2_group_unlock(em, g);
+            plan->nlocked--;
         }
     }
     return -ENOSPC;
 }
-
-/*
- * What a piece of a write needs before it is committed: the blocks it
- * reserves, `allocs` of them; the images of the `paths` pointer blocks on its
- * path, with the byte offset of the slot in each and the block each slot is
- * to name; the images of its inode's table block and, when the file reaches
- * 2 GiB, the superblock; the inode's pointer at the top of the path, its
- * index and value; the data block, `fresh` when new, and its image; and the
- * inode's place in the batch's table, `count` for a new one.
- */
-struct ext2_write_plan {
-    struct ext2_reservation reservations[4];
-    struct ext2_image *parents[3], *table, *feature, *data;
-    uint32_t slots[3], children[3];
-    uint32_t root, root_slot, block;
-    int paths, fresh, allocs, node_index;
-};
 
 /**
  * Plan the pointer path and the data block of data index `index` of `n`
@@ -290,7 +413,7 @@ static int writeback_plan_map(struct ext2_mount *em, struct ext2_node *n, uint32
         int blank = block == 0;
 
         if (blank) {
-            rc = writeback_reserve(em, plan->reservations, plan->allocs);
+            rc = writeback_reserve(em, plan);
             if (rc != 0) {
                 return rc;
             }
@@ -316,7 +439,7 @@ static int writeback_plan_map(struct ext2_mount *em, struct ext2_node *n, uint32
         rest %= div;
     }
     if (block == 0) {
-        rc = writeback_reserve(em, plan->reservations, plan->allocs);
+        rc = writeback_reserve(em, plan);
         if (rc != 0) {
             return rc;
         }
@@ -389,21 +512,20 @@ static int writeback_prepare_data(struct ext2_mount *em, uint32_t owner, uint32_
             return -ENOMEM;
         }
         data = &wb->data[i];
+        data->data = wb->slot[i];
+        data->dirty = 0;
         if (!plan->fresh && len != BCACHE_BLOCK_BYTES) {
             b = ext2_volume_get(em, plan->block, &rc);
             if (!b) {
                 return rc;
             }
             k_memcpy(wb->slot[i], b->data, BCACHE_BLOCK_BYTES);
+            writeback_list(wb, data, plan->block, WB_DATA, &wb->datas);
             bcache_release(b);
         } else {
             k_memset(wb->slot[i], 0, BCACHE_BLOCK_BYTES);
+            writeback_list(wb, data, plan->block, WB_DATA, &wb->datas);
         }
-        data->block = plan->block;
-        data->stage = WB_DATA;
-        data->data = wb->slot[i];
-        data->dirty = 0;
-        wb->datas++;
     }
     plan->data = &wb->data[i];
     plan->data->owner = owner;
@@ -418,7 +540,8 @@ static int writeback_prepare_data(struct ext2_mount *em, uint32_t owner, uint32_
  * bytes copied into the data image, and the size and times raised. Reads
  * see the piece at once, since `ext2_read_bytes` looks in the images first. The
  * bitmaps, descriptors and superblock it changes are listed among `n`'s
- * shared blocks (`ext2_node_share`).
+ * shared blocks (`ext2_node_share`). The caller holds `em->batch` and the
+ * locks of the reservations' groups.
  */
 static void writeback_commit(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
                              const uint8_t *src, uint32_t len, struct ext2_write_plan *plan)
@@ -436,8 +559,7 @@ static void writeback_commit(struct ext2_mount *em, struct ext2_node *n, uint64_
         k_memcpy(r->descriptor->data + (r->group * 32) % 4096, gd, 32);
         r->descriptor->dirty = 1;
         ext2_node_share_group(em, n, r->group, 0);
-        em->free_blocks--;
-        em->alloc_hint = r->block + 1;
+        ext2_count_blocks(em, -1, r->block + 1);
     }
     for (i = 0; i < plan->paths; i++) {
         if (ext2_le32(plan->parents[i]->data + plan->slots[i]) != plan->children[i]) {
@@ -447,13 +569,16 @@ static void writeback_commit(struct ext2_mount *em, struct ext2_node *n, uint64_
     }
     if (plan->feature) {
         ext2_node_share(n, 0);
-        em->ro_compat |= EXT2_RO_LARGE_FILE;
-        LE32_PUT(plan->feature->data + 1024 + 100, em->ro_compat);
+        LE32_PUT(plan->feature->data + 1024 + 100,
+                 ext2_feature_add(em, &em->ro_compat, EXT2_RO_LARGE_FILE));
         plan->feature->dirty = 1;
     }
     if (plan->node_index == wb->count) {
+        uint32_t flags = spin_lock_irqsave(&wb->lock);
+
         wb->nodes[plan->node_index] = n;
         wb->count++;
+        spin_unlock_irqrestore(&wb->lock, flags);
         ext2_node_ref(n, 1);
     }
     n->block[plan->root_slot] = plan->root;
@@ -489,7 +614,7 @@ static void writeback_fetch(struct ext2_mount *em, struct ext2_node *n, uint64_t
         len != BCACHE_BLOCK_BYTES) {
         ext2_volume_fetch(em, block);
     }
-    ext2_group_fetch(em, em->alloc_hint);
+    ext2_group_fetch(em, ext2_alloc_hint(em));
     if (offset + len >= 0x80000000u && !(em->ro_compat & EXT2_RO_LARGE_FILE)) {
         ext2_volume_fetch(em, 0);
     }
@@ -497,10 +622,11 @@ static void writeback_fetch(struct ext2_mount *em, struct ext2_node *n, uint64_t
 
 /**
  * Plan, prepare and commit one piece, as `writeback_piece` says, under
- * `em->meta`. A failure gives back the images the piece took before it
- * returns, in the same step as the plan: once the lock goes, other writers
- * change the tables and the counts. 0, or -errno, -EAGAIN for a block the
- * cache lacks under a plan.
+ * `em->batch`, the plan taking the locks of the groups it reserves in and
+ * giving them back after the commit or the failure. A failure gives back the
+ * images the piece took before it returns, in the same step as the plan:
+ * once the lock goes, other writers change the tables and the counts. 0, or
+ * -errno, -EAGAIN for a block the cache lacks under a plan.
  */
 static int writeback_try(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
                          const uint8_t *src, uint32_t len)
@@ -508,9 +634,10 @@ static int writeback_try(struct ext2_mount *em, struct ext2_node *n, uint64_t of
     struct ext2_writeback *wb = em->wb;
     struct ext2_write_plan plan;
     int old_metas = wb->metas, old_datas = wb->datas;
+    uint32_t flags;
     int rc;
 
-    ext2_assert_meta_locked(em);
+    ext2_assert_batch_locked(em);
     k_memset(&plan, 0, sizeof(plan));
     rc = writeback_plan(em, n, offset, len, &plan);
     if (rc != 0) {
@@ -529,10 +656,14 @@ static int writeback_try(struct ext2_mount *em, struct ext2_node *n, uint64_t of
         goto fail;
     }
     writeback_commit(em, n, offset, src, len, &plan);
+    plan_groups_unlock(em, &plan);
     return 0;
 fail:
+    flags = spin_lock_irqsave(&wb->lock);
     wb->metas = old_metas;
     wb->datas = old_datas;
+    spin_unlock_irqrestore(&wb->lock, flags);
+    plan_groups_unlock(em, &plan);
     return rc;
 }
 
@@ -546,13 +677,13 @@ fail:
  * runs in the step of the commit, which copies it, and a page that is not
  * is -EFAULT with nothing committed.
  *
- * What the plan reads is fetched first with `em->meta` let go
- * (`writeback_fetch`). Under the lock the plan reads only what the cache
+ * What the plan reads is fetched first with `em->batch` let go
+ * (`writeback_fetch`). Under its locks the plan reads only what the cache
  * has and nobody holds; a block it lacks or another holds gives the piece
- * back, lets the lock go, fetches the block or waits for it and starts
- * again, and after PLAN_TRIES such starts the plan reads
- * under the lock, one request. The caller holds `n`'s lock and not
- * `em->meta`. 0, or -errno.
+ * back, lets the locks go, fetches the block or waits for it and starts
+ * again, and after PLAN_TRIES such starts the plan reads under the locks,
+ * one request. The caller holds `n`'s lock and not `em->batch`. 0, or
+ * -errno.
  */
 static int writeback_piece(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
                            const uint8_t *src, uint32_t len)
@@ -562,12 +693,11 @@ static int writeback_piece(struct ext2_mount *em, struct ext2_node *n, uint64_t 
 
     writeback_fetch(em, n, offset, len);
     for (tries = 0;; tries++) {
-        ext2_meta_lock(em);
-        em->planner = tries < PLAN_TRIES ? ext2_plan_caller() : -1;
+        ext2_batch_lock(em);
+        ext2_plan_begin(em, tries);
         rc = writeback_try(em, n, offset, src, len);
-        em->planner = -1;
-        missed = em->missed;
-        ext2_meta_unlock(em);
+        missed = ext2_plan_end(em);
+        ext2_batch_unlock(em);
         if (rc != -EAGAIN) {
             return rc;
         }
@@ -585,10 +715,15 @@ int ext2_writeback_error(struct ext2_mount *em, int rc)
 {
     struct ext2_writeback *wb = em->wb;
 
-    if (wb && !wb->error) {
-        wb->error = rc;
+    if (wb) {
+        uint32_t flags = spin_lock_irqsave(&wb->lock);
+
+        if (!wb->error) {
+            wb->error = rc;
+        }
+        spin_unlock_irqrestore(&wb->lock, flags);
     }
-    em->state |= EXT2_ERROR_FS;
+    (void)ext2_state_change(em, EXT2_ERROR_FS, 0);
     em->mnt->flags |= VFS_MS_RDONLY;
     if (!em->mnt->write_error) {
         em->mnt->write_error = rc;
@@ -629,7 +764,7 @@ static void drain_mark(struct bbuf *b, const struct ext2_image *im)
 /** Whether another process holds in the cache a block the drain will copy
  * into, a changed image at or past the drain's stage, as a sync or an
  * fsync does while it writes the block; the first such block goes in
- * `*blk`. The caller holds `em->meta`. */
+ * `*blk`. The caller holds `em->batch`. */
 static int drain_busy(struct ext2_mount *em, uint32_t *blk)
 {
     struct ext2_writeback *wb = em->wb;
@@ -647,7 +782,7 @@ static int drain_busy(struct ext2_mount *em, uint32_t *blk)
 }
 
 /**
- * Take `em->meta` for a drain once no other process holds a block it will
+ * Take `em->batch` for a drain once no other process holds a block it will
  * copy into, waiting for each such block with the lock let go, PLAN_TRIES
  * times before the drain waits under it; a strict mount takes it at once.
  * Returns 1 with the lock held, or 0 without it when the batch emptied
@@ -659,21 +794,21 @@ static int drain_lock(struct ext2_mount *em)
     int tries;
 
     for (tries = 0;; tries++) {
-        ext2_meta_lock(em);
+        ext2_batch_lock(em);
         if (!em->wb->count) {
-            ext2_meta_unlock(em);
+            ext2_batch_unlock(em);
             return 0;
         }
         if (ext2_em_strict(em) || tries >= PLAN_TRIES || !drain_busy(em, &busy)) {
             return 1;
         }
-        ext2_meta_unlock(em);
+        ext2_batch_unlock(em);
         bcache_wait_unheld(em->dev, busy);
     }
 }
 
 /**
- * Write the batch out, stage by stage, under `em->meta`: the inodes encoded
+ * Write the batch out, stage by stage, under `em->batch`: the inodes encoded
  * into their table images, then each stage's changed images copied into the
  * cache, from the allocation bitmaps and descriptors through the data, the
  * pointer blocks and the superblock to the inode tables, a file's data and
@@ -690,7 +825,7 @@ static int drain_lock(struct ext2_mount *em)
  * under it; so the lock waits on the disk only for what others took
  * meanwhile. Every EXT2_SERVICE_BLOCKS copies the drain offers the big lock,
  * with no buffer held: the point is the one where the next `bcache_get_blank`
- * may sleep, and `em->meta` keeps the batch while others run. A strict mount
+ * may sleep, and `em->batch` keeps the batch while others run. A strict mount
  * holds the
  * lock across its ordered writes, as its option asks: each stage is synced
  * and flushed before the next enters the cache, so that a sync or an
@@ -700,13 +835,13 @@ static int drain_lock(struct ext2_mount *em)
  * holds are put and the cache balanced (`ext2_em_balance`). A failure keeps the
  * images and the stage, so that the next drain resumes there, and is
  * recorded by `ext2_writeback_error`; a removed device fails at once. The
- * caller holds no `em->meta`. 0, or -errno.
+ * caller holds no `em->batch`. 0, or -errno.
  */
 int ext2_writeback_drain(struct ext2_mount *em)
 {
     struct ext2_writeback *wb = em->wb;
     struct ext2_node *held[EXT2_WB_NODES];
-    uint32_t copied = 0;
+    uint32_t copied = 0, flags;
     int i, count, rc;
 
     if (em->dev->flags & BLOCK_GONE) {
@@ -724,7 +859,7 @@ int ext2_writeback_drain(struct ext2_mount *em)
     for (i = 0; i < wb->count; i++) {
         struct ext2_node *n = wb->nodes[i];
         uint64_t at = ext2_inode_offset(em, n->ino);
-        struct ext2_image *im = ext2_writeback_find(em, (uint32_t)(at >> 12));
+        struct ext2_image *im = writeback_find(wb, (uint32_t)(at >> 12));
 
         ext2_inode_encode_noting(em, n, im->data + ((uint32_t)at & 4095u),
                                  em->inode_size > EXT2_GOOD_OLD ? EXT2_LARGE : EXT2_GOOD_OLD);
@@ -772,10 +907,12 @@ int ext2_writeback_drain(struct ext2_mount *em)
     for (i = 0; i < count; i++) {
         held[i] = wb->nodes[i];
     }
+    flags = spin_lock_irqsave(&wb->lock);
     wb->count = wb->datas = wb->metas = 0;
+    spin_unlock_irqrestore(&wb->lock, flags);
     wb->bytes = 0;
     wb->stage = 0;
-    ext2_meta_unlock(em);
+    ext2_batch_unlock(em);
     for (i = 0; i < count; i++) {
         ext2_put(em->mnt, held[i]);
     }
@@ -783,7 +920,7 @@ int ext2_writeback_drain(struct ext2_mount *em)
     return 0;
 fail:
     rc = ext2_writeback_error(em, rc);
-    ext2_meta_unlock(em);
+    ext2_batch_unlock(em);
     return rc;
 }
 
@@ -902,7 +1039,7 @@ int ext2_writeback_space(struct ext2_mount *em, struct ext2_node *n, uint64_t of
     uint32_t first = (uint32_t)(offset >> em->block_shift);
     uint32_t last = (uint32_t)((offset + count - 1) >> em->block_shift);
     uint32_t base = 0, span = 1, slot;
-    uint64_t need = 0;
+    uint64_t need = 0, free;
     int level = 0;
 
     for (slot = 0; slot < EXT2_NDIR + 3 && base <= last; slot++) {
@@ -925,8 +1062,9 @@ int ext2_writeback_space(struct ext2_mount *em, struct ext2_node *n, uint64_t of
             if (rc != 0) {
                 return rc;
             }
-            if (need > em->free_blocks ||
-                (!ext2_may_use_reserved() && need > 0 && em->free_blocks - need < em->r_blocks)) {
+            free = ext2_free_blocks(em);
+            if (need > free ||
+                (!ext2_may_use_reserved() && need > 0 && free - need < em->r_blocks)) {
                 return -ENOSPC;
             }
         }
@@ -991,6 +1129,7 @@ int ext2_writeback_init(struct ext2_mount *em)
     if (!wb) {
         return -ENOMEM;
     }
+    spin_lock_init(&wb->lock, "ext2 batch lists");
     for (i = 0; i < EXT2_WB_DATA + EXT2_WB_META; i++) {
         wb->slot[i] = kalloc_pages(1, 0);
         if (!wb->slot[i]) {
@@ -999,6 +1138,6 @@ int ext2_writeback_init(struct ext2_mount *em)
         }
     }
     em->wb = wb;
-    em->state &= ~EXT2_VALID_FS;
+    (void)ext2_state_change(em, 0, EXT2_VALID_FS);
     return ext2_sb_store(em);
 }

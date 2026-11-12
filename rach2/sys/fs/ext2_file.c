@@ -118,7 +118,7 @@ static int read_missing(struct ext2_mount *em, const struct ext2_node *n, uint64
             return 0;
         }
         *blk = off >> BCACHE_BLOCK_SHIFT;
-        if (!ext2_writeback_find(em, (uint32_t)*blk) && !bcache_cached(em->dev, *blk)) {
+        if (!ext2_writeback_has(em, (uint32_t)*blk) && !bcache_cached(em->dev, *blk)) {
             return 1;
         }
         if (level == 0) {
@@ -173,7 +173,6 @@ static int read_fetch(struct vfs_mount *mnt, struct ext2_node *n, uint64_t at)
 static int read_piece(struct ext2_mount *em, const struct ext2_node *n, uint64_t at, uint8_t *dst,
                       uint32_t len)
 {
-    struct ext2_image *pending;
     struct bbuf *buf;
     uint64_t off;
     uint32_t b, in;
@@ -191,13 +190,13 @@ static int read_piece(struct ext2_mount *em, const struct ext2_node *n, uint64_t
     }
     off = (uint64_t)b * em->block_size + ((uint32_t)at & (em->block_size - 1));
     in = (uint32_t)off & (BCACHE_BLOCK_BYTES - 1);
-    pending = ext2_writeback_find(em, (uint32_t)(off >> BCACHE_BLOCK_SHIFT));
-    if (pending) {
+    if (ext2_writeback_has(em, (uint32_t)(off >> BCACHE_BLOCK_SHIFT))) {
         if (!vm_resident((uintptr_t)dst, len, 1)) {
             return -EFAULT;
         }
-        k_memcpy(dst, pending->data + in, len);
-        return 0;
+        if (ext2_writeback_copy(em, (uint32_t)(off >> BCACHE_BLOCK_SHIFT), in, dst, len, 0)) {
+            return 0;
+        }
     }
     buf = bcache_get(em->dev, off >> BCACHE_BLOCK_SHIFT);
     if (!buf) {
@@ -344,7 +343,7 @@ static int frame_plan(struct ext2_mount *em, const struct ext2_node *n, uint32_t
     }
     off = (b << em->block_shift) + ((uint32_t)at & (em->block_size - 1));
     for (u = off >> BCACHE_BLOCK_SHIFT; u <= (off + PAGE_SIZE - 1) >> BCACHE_BLOCK_SHIFT; u++) {
-        if (ext2_writeback_find(em, (uint32_t)u) || bcache_cached(em->dev, u)) {
+        if (ext2_writeback_has(em, (uint32_t)u) || bcache_cached(em->dev, u)) {
             *plan = EXT2_PAGE_COPY;
             return 0;
         }
@@ -673,7 +672,7 @@ static int punch_from(struct ext2_mount *em, struct ext2_node *n, uint32_t keep,
  * a write through makes. A round ends at a service point, since a file of
  * gigabytes in the cache frees with no sleep and what is ready on the
  * processor waits for it; a device that failed meanwhile stops the next
- * round. The caller holds `n`'s lock and not `em->meta`. 0, or -errno.
+ * round. The caller holds `n`'s lock and not `em->batch`. 0, or -errno.
  */
 int ext2_punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
 {
@@ -750,7 +749,7 @@ static int map_point(struct ext2_mount *em, uint32_t owner, uint64_t slot_at, ui
  * so that a mount that writes back keeps that order too. A directory's
  * blocks are shared, as its entries are, and a regular file's are its own.
  * `n->blocks` and the inode's own pointers change in memory; the caller
- * stores the inode with them, and holds `n`'s lock and not `em->meta`. 0,
+ * stores the inode with them, and holds `n`'s lock and not `em->batch`. 0,
  * -EFBIG past the triple indirect's reach, -ENOSPC, or -errno.
  */
 int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, uint32_t *out,
@@ -761,7 +760,7 @@ int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, u
     uint32_t *slot;
     uint32_t held;        /* a slot's value, read from its pointer block */
     uint64_t slot_at = 0; /* 0: the slot is in the inode */
-    uint32_t hint = em->alloc_hint;
+    uint32_t hint = ext2_alloc_hint(em);
     uint32_t owner = (n->mode & S_IFMT_) == S_IFREG_ ? n->ino : 0;
     int level, rc;
 
@@ -1241,7 +1240,7 @@ static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_o
 }
 
 /**
- * The body of `fsync` and `fdatasync`: the batch drained under `em->meta`,
+ * The body of `fsync` and `fdatasync`: the batch drained under `em->batch`,
  * then a regular file's blocks written as `node_write_out` says,
  * `data_only` for `fdatasync`. Any other file, a mount that is not
  * writable, and the sync of a whole mount (a NULL `handle`) write the
@@ -1295,7 +1294,7 @@ int ext2_fdatasync(struct vfs_mount *mnt, void *handle)
  * each block. The batch drains too when its bytes, images or inodes run out,
  * and a piece that finds its tables full drains it and is tried once more.
  * Every EXT2_SERVICE_BLOCKS pieces the write offers the big lock: the node's
- * lock stays held, `em->meta` is not, no plan is held, and the next piece
+ * lock stays held, `em->batch` is not, no plan is held, and the next piece
  * looks at the user's page again, as it does after a drain that slept. A
  * write that fails after some of its bytes were accepted returns their
  * count; a failure of the batch's I/O stays recorded for `fsync`, after a
@@ -1487,9 +1486,9 @@ static void cache_data(struct ext2_cache_walk *walk, uint32_t block, uint32_t in
 {
     struct ext2_mount *em = walk->em;
     uint64_t key = ((uint64_t)block << em->block_shift) >> BCACHE_BLOCK_SHIFT;
-    struct ext2_image *pending = ext2_writeback_find(em, (uint32_t)key);
+    int pending = ext2_writeback_has(em, (uint32_t)key);
     uint32_t page = index / walk->perpage;
-    int state = pending ? (pending->dirty ? 2 : 1) : bcache_state(em->dev, key);
+    int state = pending ? pending : bcache_state(em->dev, key);
 
     if (page != walk->page) {
         cache_page_end(walk);
@@ -1507,12 +1506,11 @@ static int cache_pointer(struct ext2_mount *em, uint32_t block, uint32_t index, 
 {
     uint64_t at = ((uint64_t)block << em->block_shift) + index * 4u;
     uint32_t offset = (uint32_t)at & (BCACHE_BLOCK_BYTES - 1u);
-    struct ext2_image *pending = ext2_writeback_find(em, (uint32_t)(at >> BCACHE_BLOCK_SHIFT));
     uint8_t raw[4];
 
-    if (pending) {
-        k_memcpy(raw, pending->data + offset, sizeof(raw));
-    } else if (!bcache_copy_cached(em->dev, at >> BCACHE_BLOCK_SHIFT, offset, raw, sizeof(raw))) {
+    if (!ext2_writeback_copy(em, (uint32_t)(at >> BCACHE_BLOCK_SHIFT), offset, raw, sizeof(raw),
+                             0) &&
+        !bcache_copy_cached(em->dev, at >> BCACHE_BLOCK_SHIFT, offset, raw, sizeof(raw))) {
         return 0;
     }
     *out = ext2_le32(raw);

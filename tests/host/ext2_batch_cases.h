@@ -504,7 +504,7 @@ static void batch_stage_waiters(void)
 
 /**
  * At the flush numbered `stage_target` of process A, give process B the
- * turn, and check that it found the drain's `em->meta` held and changed
+ * turn, and check that it found the drain's `em->batch` held and changed
  * nothing.
  */
 static void batch_stage_pause(void)
@@ -517,7 +517,7 @@ static void batch_stage_pause(void)
     flush_pause = 0;
     sleeps = 0;
     pass_turn();
-    check(sleeps > 0 && stage_ran == 0, "a strict drain keeps em->meta across its flushes");
+    check(sleeps > 0 && stage_ran == 0, "a strict drain keeps em->batch across its flushes");
     check(OPS->getattr(&mnt, stage_writer, &st) == 0 && st.size == 0,
           "a queued writer cannot change the frozen generation");
 }
