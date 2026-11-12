@@ -367,7 +367,8 @@ void smp_ipi(void);
 
 /** End an idle wait on processor `cpu`, unless it is this one or not
  * online, so that it selects from its run queue now rather than at its
- * tick: a wait that polls before its halt sees its `idle_poll` turn to
+ * tick: a wait that polls before its halt, or an idle task awake after
+ * its halt (`sched_idle_awake`), sees its `idle_poll` turn to
  * CPU_POLL_KICKED and needs no interrupt, as Linux sends none to a
  * processor that polls its flags; any other gets an interprocessor
  * interrupt. */

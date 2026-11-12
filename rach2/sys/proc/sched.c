@@ -1002,6 +1002,9 @@ void schedule(void)
         fpu_restore(next->fpu);
     }
     arch_debug_switch(next);
+    if (old == cpu->idle) {
+        (void)arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_NONE);
+    }
     cpu->current = next;
     cpu->switch_prev = old;
     spin_unlock(&sched_lock);
@@ -1087,6 +1090,15 @@ void sched_idle_loop(void)
         cpu->tick_may_stop = arch_cpu_id() != 0;
         idle_wait_irq_off();
         cpu->tick_may_stop = 0;
+    }
+}
+
+void sched_idle_awake(void)
+{
+    struct percpu *cpu = this_cpu();
+
+    if (cpu->idle && cpu->current == cpu->idle) {
+        (void)arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_ON);
     }
 }
 
@@ -1667,6 +1679,8 @@ void sched_loadavg(uint32_t avg[3])
  * processor's `idle_poll` for `idle_poll_us`, then halt unless a wake
  * turned it to CPU_POLL_KICKED meanwhile (`smp_kick`). A kick that comes
  * after the poll finds it off and sends the interrupt that ends the halt.
+ * One that came while the idle task was awake (`sched_idle_awake`) ends
+ * the wait at once, with no poll or halt, so that its caller selects again.
  * The poll answers the requests other processors leave (`smp_service`), as
  * a wait for the big lock does, so that their interrupts, pending
  * meanwhile, are taken once at its end: taken one by one inside the poll,
@@ -1709,6 +1723,9 @@ static void idle_halt(void)
     uint64_t start, limit, now, look, gone;
     uint32_t grow;
 
+    if (arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_NONE) == CPU_POLL_KICKED) {
+        return;
+    }
     if (per_us == 0 || !arch_idle_poll()) {
         arch_idle_masked();
         return;
