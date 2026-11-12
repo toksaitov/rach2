@@ -472,8 +472,9 @@ void free_user_pages(page_dir_t *dir)
             uintptr_t virt_addr;
             uintptr_t phys_addr;
 
-            /* A PROT_NONE page is a user page without the user bit. */
-            if (!(pte & PTE_P) || !(pte & (PTE_U | PTE_NONE))) {
+            /* A PROT_NONE page is a user page with neither the user nor
+             * the present bit (PTE_PROTNONE). */
+            if (!PTE_MAPPED(pte) || !(pte & (PTE_U | PTE_NONE))) {
                 continue;
             }
 

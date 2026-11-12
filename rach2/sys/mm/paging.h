@@ -31,6 +31,22 @@ typedef struct page_dir page_dir_t;
 #define MMU_TABLE_SPAN ((uintptr_t)MMU_TABLE_ENTRIES * PAGE_SIZE)
 #define MMU_INDEX(va)  (((uintptr_t)(va) / PAGE_SIZE) % MMU_TABLE_ENTRIES)
 
+/*
+ * The states of a user entry beside 0 and present. A page of a PROT_NONE
+ * region keeps its frame with PTE_NONE and neither PTE_P nor PTE_U, so that
+ * every access to it, the kernel's too, faults, as Linux's PROT_NONE entry
+ * is _PAGE_PROTNONE without _PAGE_PRESENT (arch/x86/include/asm/
+ * pgtable_types.h:206). An entry that `unmap_user_range` is taking away
+ * holds its frame with PTE_NONE and PTE_U, still without PTE_P, until the
+ * flush. PTE_MAPPED is whether an entry holds a page, as Linux's
+ * pte_present reads _PAGE_PRESENT | _PAGE_PROTNONE (asm/pgtable.h:1051):
+ * every walker that keeps, moves, counts or frees the frame asks it, and
+ * only what the processor reaches asks PTE_P.
+ */
+#define PTE_PROTNONE(e) (((e) & (pte_t)(PTE_P | PTE_U | PTE_NONE)) == (pte_t)PTE_NONE)
+#define PTE_GOING(e)    (((e) & (pte_t)(PTE_P | PTE_U | PTE_NONE)) == (pte_t)(PTE_U | PTE_NONE))
+#define PTE_MAPPED(e)   (((e) & (pte_t)PTE_P) != 0 || PTE_PROTNONE(e))
+
 /**
  * The leaf table of `dir` that covers the user address `va`, an array of
  * MMU_TABLE_ENTRIES entries read and written with cpu.h's PTE_ bits, or
