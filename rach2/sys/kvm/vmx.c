@@ -26,6 +26,7 @@
 #define MSR_IA32_SYSENTER_EIP    0x176u
 #define MSR_IA32_DEBUGCTL        0x1D9u
 #define MSR_IA32_CR_PAT          0x277u
+#define MSR_IA32_TSC_DEADLINE    0x6E0u
 #define MSR_IA32_VMX_BASIC       0x480u
 #define MSR_IA32_VMX_PINBASED    0x481u
 #define MSR_IA32_VMX_PROCBASED   0x482u
@@ -3313,6 +3314,52 @@ static void vmx_inject(struct kvm_vcpu *v)
     v->dirty |= KVM_PART_EVENTS;
 }
 
+/**
+ * The backend's `fast`, as Linux's vmx_exit_handlers_fastpath
+ * (arch/x86/kvm/vmx/vmx.c:7258-7279): the guest's WRMSR of the TSC
+ * deadline, as handle_fastpath_set_msr_irqoff (x86.c:1743-1789), and the
+ * preemption timer's expiry, as handle_fastpath_preemption_timer
+ * (vmx.c:5988-6016), with the local APIC in the kernel. Each delivers the
+ * APIC timer's expiry when it is due, the new deadline's included, and
+ * injects it, since no APICv does: Linux's start_hv_timer takes a deadline
+ * already passed in the same way (lapic.c:2167-2178). Every other exit,
+ * and these under the caller's single step, while an event was under
+ * delivery, or for a WRMSR the MSR filter denies, is `exit`'s.
+ */
+static int vmx_fast(struct kvm_vcpu *v)
+{
+    struct vmx_vcpu *x = vx(v);
+    struct vmx_exit *e = &x->ex;
+    uint32_t index = (uint32_t)v->regs.rcx;
+    uint64_t value;
+
+    if (e->failed != VMX_OK || v->emul.resume || v->vm->irqchip == KVM_IRQCHIP_NONE ||
+        debugging(v, KVM_GUESTDBG_SINGLESTEP) || (e->idt_info & INTR_VALID)) {
+        return 0;
+    }
+    if (e->reason == EXIT_MSR_WRITE) {
+        if (index != MSR_IA32_TSC_DEADLINE || !kvm_msr_allowed(v, index, 1)) {
+            return 0;
+        }
+    } else if (e->reason != EXIT_PREEMPTION_TIMER) {
+        return 0;
+    }
+    /* What `exit_reason` does before it names the exit. */
+    complete_events(v);
+    v->if_flag = (v->regs.rflags & RFLAGS_IF) != 0;
+    v->irq_allowed = v->if_flag && !(e->interruptibility & (INTR_STI | INTR_MOV_SS));
+    v->exit.kind = KVM_X_AGAIN;
+    if (e->reason == EXIT_MSR_WRITE) {
+        value = (v->regs.rax & 0xFFFFFFFFull) | (v->regs.rdx << 32);
+        (void)kvm_lapic_msr(v, index, 1, &value, 0);
+        kvm_emul_skip(v, e->insn_len);
+    }
+    if (kvm_lapic_timer_expire(v)) {
+        vmx_inject(v);
+    }
+    return 1;
+}
+
 /** Single stepping and event injection are handled by the backend. */
 static int32_t vmx_check_extension(long cap)
 {
@@ -3614,4 +3661,4 @@ const struct kvm_backend kvm_vmx = {"vmx",      vmx_probe,       vmx_vm_init,
                                     vmx_enter,  vmx_exit,        vmx_complete,
                                     vmx_save,   vmx_inject,      vmx_check_extension,
                                     &vmx_tdp,   vmx_tsc_scaling, vmx_msr_filter_changed,
-                                    vmx_xsaves, vmx_put};
+                                    vmx_xsaves, vmx_put,         vmx_fast};

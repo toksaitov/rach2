@@ -398,8 +398,8 @@ A first line names the backend and the TSC's rate, a second the columns,
 then each code with exits has a line:
 .Bd -literal -offset indent
 backend vmx|svm tsc_khz KHZ
-code exits kernel user wait_cycles handle_cycles prepare_cycles entry_cycles run_cycles exit_cycles name
-0xCODE EXITS KERNEL USER WAIT HANDLE PREPARE ENTRY RUN EXIT NAME
+code exits kernel user wait_cycles handle_cycles prepare_cycles entry_cycles run_cycles exit_cycles fast name
+0xCODE EXITS KERNEL USER WAIT HANDLE PREPARE ENTRY RUN EXIT FAST NAME
 .Ed
 .Pp
 .Ar KERNEL
@@ -447,6 +447,21 @@ and
 count the runs the backend timed, and
 .Ar PREPARE
 the exits handled in the kernel.
+.Ar FAST
+counts those of the
+.Ar KERNEL
+exits that the backend's fast path handled with interrupts still off,
+entering the guest again without the run loop, as Linux's
+.Fn vmx_exit_handlers_fastpath
+and
+.Fn svm_exit_handlers_fastpath
+do: a WRMSR of the TSC deadline, and on VMX the preemption timer's
+expiry.
+Their
+.Ar HANDLE
+is the fast path's, and their
+.Ar PREPARE
+0.
 An exit whose next entry does not come, because a request or an error
 ends
 .Dv KVM_RUN

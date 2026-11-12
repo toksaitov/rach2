@@ -22,6 +22,7 @@
 #define MSR_IA32_SYSENTER_ESP 0x175u
 #define MSR_IA32_SYSENTER_EIP 0x176u
 #define MSR_IA32_CR_PAT       0x277u
+#define MSR_IA32_TSC_DEADLINE 0x6E0u
 #define MSR_APIC_BASE         0x01Bu
 #define MSR_EFER              0xC0000080u
 #define MSR_STAR              0xC0000081u
@@ -2560,6 +2561,48 @@ static void svm_inject(struct kvm_vcpu *v)
     v->dirty |= KVM_PART_EVENTS;
 }
 
+/**
+ * The backend's `fast`, as Linux's svm_exit_handlers_fastpath
+ * (arch/x86/kvm/svm/svm.c:4283-4309): the guest's WRMSR of the TSC
+ * deadline with the local APIC in the kernel, as
+ * handle_fastpath_set_msr_irqoff (x86.c:1743-1789), when the exit saved
+ * the next RIP, since no instruction is decoded with interrupts off. A
+ * deadline already passed is delivered and injected at once, as `vmx_fast`
+ * does. Linux's SVM sends this write down its slow path, for want of the
+ * preemption timer its fast path arms (kvm_can_use_hv_timer); here no
+ * timer is armed for the deadline on either path, which the host's tick
+ * bounds. Every other exit, and this one under the caller's single step,
+ * an NMI window's step, an event under delivery or the MSR filter's
+ * denial, is `exit`'s.
+ */
+static int svm_fast(struct kvm_vcpu *v)
+{
+    struct svm_vcpu *s = sv(v);
+    struct svm_exit *e = &s->ex;
+    uint32_t index = (uint32_t)v->regs.rcx;
+    uint64_t value, len = e->next_rip - v->regs.rip;
+
+    if (e->code != EXIT_MSR || !(e->info1 & 1u) || v->emul.resume ||
+        v->vm->irqchip == KVM_IRQCHIP_NONE || debugging(v, KVM_GUESTDBG_SINGLESTEP) || s->nmi_ss ||
+        (e->int_info & EV_VALID) || !e->next_rip || (len & 0xFFFFFFFFull) == 0 ||
+        (len & 0xFFFFFFFFull) > KVM_INSN_MAX || index != MSR_IA32_TSC_DEADLINE ||
+        !kvm_msr_allowed(v, index, 1)) {
+        return 0;
+    }
+    /* What `exit_code` does before it names the exit. */
+    complete_events(v);
+    v->if_flag = (v->regs.rflags & RFLAGS_IF) != 0;
+    v->irq_allowed = v->if_flag && !v->events.interrupt.shadow;
+    v->exit.kind = KVM_X_AGAIN;
+    value = (v->regs.rax & 0xFFFFFFFFull) | (v->regs.rdx << 32);
+    (void)kvm_lapic_msr(v, index, 1, &value, 0);
+    kvm_emul_skip(v, (uint32_t)(len & 0xFFFFFFFFull));
+    if (kvm_lapic_timer_expire(v)) {
+        svm_inject(v);
+    }
+    return 1;
+}
+
 /** Single stepping and event injection are handled by the backend. */
 static int32_t svm_check_extension(long cap)
 {
@@ -2771,4 +2814,5 @@ const struct kvm_backend kvm_svm = {"svm",
                                     svm_tsc_scaling,
                                     svm_msr_filter_changed,
                                     svm_xsaves,
-                                    NULL};
+                                    NULL,
+                                    svm_fast};

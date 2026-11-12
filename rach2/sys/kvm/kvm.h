@@ -313,6 +313,17 @@ struct kvm_tdp_format {
  * registers go back to the host as well. While they hold the guest's,
  * `save` of KVM_PART_FPU writes them into the image, and a change of the
  * image marks KVM_PART_FPU, so that the next entry loads it.
+ * `fast`, NULL for a backend without it, is the exit path's fast path, as
+ * Linux's vmx_exit_handlers_fastpath and svm_exit_handlers_fastpath
+ * (arch/x86/kvm/vmx/vmx.c:7258-7279, svm/svm.c:4283-4309): called after
+ * each `enter` that returned 0, still with interrupts off, it handles the
+ * exit `enter` read when it is one of the few it takes, a WRMSR of the TSC
+ * deadline and on VMX the preemption timer's expiry, with the local APIC
+ * in the kernel, in the way `exit` would, with `v->exit` KVM_X_AGAIN and
+ * the event to inject chosen when it delivered one. 1 when it handled the
+ * exit, which `exit` must then not see, and 0, with nothing changed, for
+ * every other exit. It does not sleep and takes only spinlocks taken with
+ * interrupts off: the MSR filter's and those of the APIC's delivery.
  */
 struct kvm_backend {
     const char *name;
@@ -332,6 +343,7 @@ struct kvm_backend {
     void (*msr_filter_changed)(struct kvm_vcpu *v);
     int (*xsaves)(void);
     void (*put)(struct kvm_vcpu *v, int fpu);
+    int (*fast)(struct kvm_vcpu *v);
 };
 
 /* The two backends, svm.c's and vmx.c's. */
@@ -724,6 +736,11 @@ void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t entry, uint64_t left);
  * to prepare the next entry, if an account is open and not yet marked.
  * In `v`'s thread. */
 void kvm_exitstat_prepare(struct kvm_vcpu *v);
+
+/** Count the exit of `v` whose account is open as one the backend's
+ * `fast` handled, after which the guest entered again with the run loop
+ * not run. In `v`'s thread, with interrupts off. */
+void kvm_exitstat_fast(struct kvm_vcpu *v);
 
 /** End the account of `v`'s exit, if one is open, as one that ended
  * KVM_RUN. The exit's waits for the big lock go to its row's wait, the
@@ -1680,6 +1697,20 @@ void kvm_lapic_update_ppr(struct kvm_vcpu *v);
  * -EINTR for a signal or a request to leave, with KVM_EXIT_INTR. May sleep.
  */
 int32_t kvm_lapic_prepare(struct kvm_vcpu *v);
+
+/**
+ * Deliver the local APIC timer's expiry to `v` when it is due, as
+ * `kvm_lapic_prepare` does before each entry, for the backend's `fast`,
+ * as Linux's kvm_lapic_expired_hv_timer and start_hv_timer deliver it from
+ * the fast path (arch/x86/kvm/lapic.c:2215-2232, 2167-2178) and, with
+ * APICv, which Rach2 does not use, inject it there too (1928-1932): 1 when
+ * its vector went into IRR, which the caller then injects itself with the
+ * backend's `inject`, with no KVM_REQ_EVENT set, so that the requests stay
+ * those of other threads, which the run loop answers; else 0, an expiry in
+ * a delivery mode other than fixed going the way of every other delivery.
+ * With interrupts off.
+ */
+int kvm_lapic_timer_expire(struct kvm_vcpu *v);
 
 /**
  * The host's TSC cycles `v`'s guest may run before its local APIC's timer

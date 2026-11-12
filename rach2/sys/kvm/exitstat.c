@@ -1,7 +1,8 @@
 /*
  * exitstat.c: the guests' exits counted by the processor's exit code since
  * boot, with the TSC cycles of each kind's entry, run and exit, its wait for
- * the big lock and its handling, read from the debug file kvm/exit_stats.
+ * the big lock and its handling, and the exits the backend's fast path took,
+ * read from the debug file kvm/exit_stats.
  * KVM_RUN runs without the big lock, so each processor keeps counts of its
  * own.
  */
@@ -60,10 +61,13 @@
  * A HLT the kernel handles only marks the vCPU halted, and its sleep comes
  * at the loop's top, so both `handle` and `prepare` count it. entry, run
  * and exit count only the runs whose backend timed them; `prepare` only the
- * exits handled in the kernel.
+ * exits handled in the kernel. `fast` counts those of the `kernel` exits
+ * that the backend's fast path handled and after which the guest entered
+ * again with the run loop not run, whose `handle` is the fast path's and
+ * whose `prepare` is 0.
  */
 struct row {
-    uint64_t exits, kernel, user, wait, handle, prepare, entry, run, exit;
+    uint64_t exits, kernel, user, wait, handle, prepare, entry, run, exit, fast;
 };
 
 /*
@@ -416,6 +420,15 @@ void kvm_exitstat_prepare(struct kvm_vcpu *v)
     }
 }
 
+void kvm_exitstat_fast(struct kvm_vcpu *v)
+{
+    struct row *mine = rows[arch_cpu_id()];
+
+    if (mine && v->xs_row >= 0) {
+        mine[v->xs_row].fast++;
+    }
+}
+
 void kvm_exitstat_done(struct kvm_vcpu *v)
 {
     uint32_t flags;
@@ -514,9 +527,9 @@ static void put_hex(struct out *o, uint32_t n)
  * kvm/exit_stats's text: a line with the backend and the TSC's rate, a
  * line naming the columns, then one line for each kind with exits: the
  * code, the exits, those handled in the kernel and those that ended
- * KVM_RUN, the cycles of `struct row` from `wait` to `exit`, and the name
- * last, since SVM's exceptions' names have a space. Each count is the sum
- * of the processors' rows.
+ * KVM_RUN, the cycles of `struct row` from `wait` to `exit`, the fast
+ * exits, and the name last, since SVM's exceptions' names have a space.
+ * Each count is the sum of the processors' rows.
  */
 static int32_t exitstat_show(void *data, char *buf, uint32_t cap)
 {
@@ -532,7 +545,7 @@ static int32_t exitstat_show(void *data, char *buf, uint32_t cap)
     put_str(&o, " tsc_khz ");
     put_dec(&o, kvm_tsc_khz());
     put_str(&o, "\ncode exits kernel user wait_cycles handle_cycles prepare_cycles entry_cycles "
-                "run_cycles exit_cycles name\n");
+                "run_cycles exit_cycles fast name\n");
     for (i = 0; i < ROWS; i++) {
         struct row sum;
         uint32_t code = code_of(i);
@@ -550,6 +563,7 @@ static int32_t exitstat_show(void *data, char *buf, uint32_t cap)
                 sum.entry += rows[c][i].entry;
                 sum.run += rows[c][i].run;
                 sum.exit += rows[c][i].exit;
+                sum.fast += rows[c][i].fast;
             }
         }
         if (sum.exits == 0) {
@@ -574,6 +588,8 @@ static int32_t exitstat_show(void *data, char *buf, uint32_t cap)
         put_dec(&o, sum.run);
         put_str(&o, " ");
         put_dec(&o, sum.exit);
+        put_str(&o, " ");
+        put_dec(&o, sum.fast);
         put_str(&o, " ");
         if (name) {
             put_str(&o, name);
