@@ -155,8 +155,12 @@ struct lapic {
     volatile uint32_t pv_unhalted;
     int ext_vector;      /* KVM_INTERRUPT's vector, -1 for none */
     uint32_t eoi_vector; /* the vector of KVM_EXIT_IOAPIC_EOI */
-    uint64_t wake_tick;  /* the tick a halted wait ends at for the timer, 0 for none */
-    wait_queue_t wq;     /* the vCPU's halted wait */
+    /* The vectors whose EOI goes to the caller's I/O APIC, a bit each, as
+     * Linux's ioapic_handled_vectors: found again before an entry after
+     * the routes or this APIC's destination change (KVM_REQ_SCAN_IOAPIC). */
+    uint32_t eoi_exit[8];
+    uint64_t wake_tick; /* the tick a halted wait ends at for the timer, 0 for none */
+    wait_queue_t wq;    /* the vCPU's halted wait */
 };
 
 /** The APIC of `v`, or NULL with no local APIC in the kernel. */
@@ -649,6 +653,13 @@ static int match_dest(const struct lapic *target, const struct lapic *src,
     }
 }
 
+int kvm_lapic_match_irq(struct kvm_vcpu *v, const struct kvm_lapic_irq *irq)
+{
+    struct lapic *l = apic_of(v);
+
+    return l && irq->shorthand == 0 && match_dest(l, NULL, irq);
+}
+
 int kvm_lapic_deliver_tracked(struct kvm_vm *vm, struct kvm_vcpu *src,
                               const struct kvm_lapic_irq *in, uint64_t *destinations)
 {
@@ -829,8 +840,10 @@ static void send_ipi(struct lapic *l, uint32_t low, uint32_t high)
 
 /** An EOI, as Linux's apic_set_eoi: the highest vector in service ends,
  * a SynIC's SINT of it is acknowledged, and when the caller's I/O APIC
- * routes it level-triggered, the vCPU goes to the caller with
- * KVM_EXIT_IOAPIC_EOI. */
+ * routes it level-triggered to this vCPU, or did when it was pending
+ * here (`eoi_exit`), the vCPU goes to the caller with
+ * KVM_EXIT_IOAPIC_EOI, as Linux's kvm_ioapic_send_eoi
+ * (arch/x86/kvm/lapic.c:1463-1482). */
 static void set_eoi(struct lapic *l)
 {
     int vector = vec_highest(l, APIC_ISR);
@@ -846,7 +859,7 @@ static void set_eoi(struct lapic *l)
                    (l->regs[(APIC_TMR >> 2) + ((uint32_t)vector >> 5) * 4u] &
                     (1u << ((uint32_t)vector & 31u))) != 0,
                    (reg_get(l, APIC_SPIV) & APIC_SPIV_DIRECTED) != 0);
-    if (kvm_irq_eoi_exits(l->v->vm, (uint32_t)vector)) {
+    if ((l->eoi_exit[(uint32_t)vector >> 5] >> ((uint32_t)vector & 31u)) & 1u) {
         l->eoi_vector = (uint32_t)vector;
         kvm_vcpu_kick(l->v, KVM_REQ_EOI_EXIT);
     }
@@ -923,6 +936,14 @@ static void set_tdcr(struct lapic *l, uint32_t val)
     l->expire_ns = now + left / old * l->divide + 1u;
 }
 
+/** Have `l`'s vCPU find its EOI exits again before its next entry, since
+ * the destinations it answers to changed, as Linux's
+ * kvm_recalculate_apic_map asks every vCPU (arch/x86/kvm/lapic.c:494). */
+static void dest_changed(struct lapic *l)
+{
+    kvm_vcpu_kick(l->v, KVM_REQ_SCAN_IOAPIC);
+}
+
 /** Write `val` to the register at `off`, as Linux's kvm_lapic_reg_write:
  * 0, or 1 for a register this mode does not let the guest write, which an
  * x2APIC MSR write takes as #GP. */
@@ -936,6 +957,7 @@ static int reg_write(struct lapic *l, uint32_t off, uint32_t val)
             return 1;
         }
         reg_set(l, APIC_ID, val & 0xFF000000u);
+        dest_changed(l);
         return 0;
     case APIC_TASKPRI:
         set_tpr(l, val);
@@ -948,12 +970,14 @@ static int reg_write(struct lapic *l, uint32_t off, uint32_t val)
             return 1;
         }
         reg_set(l, APIC_LDR, val & APIC_LDR_MASK);
+        dest_changed(l);
         return 0;
     case APIC_DFR:
         if (x2apic(l)) {
             return 1;
         }
         reg_set(l, APIC_DFR, val | APIC_DFR_CLUSTER);
+        dest_changed(l);
         return 0;
     case APIC_SPIV:
         mask = 0x3FFu | ((lvr_of(l->v) & APIC_LVR_DIRECTED) ? APIC_SPIV_DIRECTED : 0);
@@ -1066,6 +1090,7 @@ static void lapic_reset(struct lapic *l, int init)
     l->ext_vector = -1;
     reg_set(l, APIC_PROCPRI, 0);
     update_ppr(l);
+    dest_changed(l);
 }
 
 /* The interface. */
@@ -1130,6 +1155,9 @@ int kvm_lapic_set_base(struct kvm_vcpu *v, uint64_t value, int host)
         } else if (value & APIC_BASE_ENABLE) {
             reg_set(l, APIC_ID, v->id << 24);
         }
+    }
+    if ((old ^ value) & (APIC_BASE_ENABLE | APIC_BASE_X2APIC)) {
+        dest_changed(l);
     }
     return 0;
 }
@@ -1521,6 +1549,9 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
         timer_check(l);
         kvm_hv_stimers(v);
         accept_events(l);
+        if (kvm_vcpu_test_clear(v, KVM_REQ_SCAN_IOAPIC)) {
+            kvm_irq_scan_eoi_exits(v, l->eoi_exit); /* Linux's vcpu_scan_ioapic */
+        }
         if (kvm_vcpu_test_clear(v, KVM_REQ_EOI_EXIT)) {
             v->run->exit_reason = KVM_EXIT_IOAPIC_EOI;
             v->run->u.eoi.vector = (uint8_t)l->eoi_vector;
@@ -1617,6 +1648,7 @@ static int32_t set_lapic(struct lapic *l, uintptr_t arg)
     }
     reg_set(l, APIC_TMCCT, 0);
     kvm_ioapic_restore(l->v);
+    dest_changed(l);
     kvm_vcpu_kick(l->v, KVM_REQ_EVENT);
     return 0;
 }

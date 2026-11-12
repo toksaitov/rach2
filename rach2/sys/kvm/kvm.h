@@ -420,18 +420,19 @@ struct kvm_vm {
 
 /* The requests another thread leaves a vCPU, in `requests`, which the run
  * loop answers before each entry. */
-#define KVM_REQ_EXIT         0x1u   /* go back to the caller */
-#define KVM_REQ_EVENT        0x2u   /* an event to inject */
-#define KVM_REQ_TRIPLE_FAULT 0x4u   /* end in KVM_EXIT_SHUTDOWN */
-#define KVM_REQ_EOI_EXIT     0x8u   /* end in KVM_EXIT_IOAPIC_EOI (vlapic.c) */
-#define KVM_REQ_TLB_FLUSH    0x10u  /* the backend drops the VM's guest-physical translations */
-#define KVM_REQ_HV_EXIT      0x20u  /* end in KVM_EXIT_HYPERV (hyperv.c) */
-#define KVM_REQ_HV_CRASH     0x40u  /* end in KVM_SYSTEM_EVENT_CRASH (hyperv.c) */
-#define KVM_REQ_HV_RESET     0x80u  /* end in KVM_SYSTEM_EVENT_RESET (hyperv.c) */
-#define KVM_REQ_CLOCK_UPDATE 0x100u /* write the kvmclock again (pvclock.c) */
-#define KVM_REQ_STEAL_UPDATE 0x200u /* write the steal time again (pvclock.c) */
-#define KVM_REQ_MSR_FILTER   0x400u /* the backend's `msr_filter_changed` */
-#define KVM_REQ_PMU          0x800u /* refresh the event filter before entry */
+#define KVM_REQ_EXIT         0x1u    /* go back to the caller */
+#define KVM_REQ_EVENT        0x2u    /* an event to inject */
+#define KVM_REQ_TRIPLE_FAULT 0x4u    /* end in KVM_EXIT_SHUTDOWN */
+#define KVM_REQ_EOI_EXIT     0x8u    /* end in KVM_EXIT_IOAPIC_EOI (vlapic.c) */
+#define KVM_REQ_TLB_FLUSH    0x10u   /* the backend drops the VM's guest-physical translations */
+#define KVM_REQ_HV_EXIT      0x20u   /* end in KVM_EXIT_HYPERV (hyperv.c) */
+#define KVM_REQ_HV_CRASH     0x40u   /* end in KVM_SYSTEM_EVENT_CRASH (hyperv.c) */
+#define KVM_REQ_HV_RESET     0x80u   /* end in KVM_SYSTEM_EVENT_RESET (hyperv.c) */
+#define KVM_REQ_CLOCK_UPDATE 0x100u  /* write the kvmclock again (pvclock.c) */
+#define KVM_REQ_STEAL_UPDATE 0x200u  /* write the steal time again (pvclock.c) */
+#define KVM_REQ_MSR_FILTER   0x400u  /* the backend's `msr_filter_changed` */
+#define KVM_REQ_PMU          0x800u  /* refresh the event filter before entry */
+#define KVM_REQ_SCAN_IOAPIC  0x1000u /* find the EOI exits again (vlapic.c) */
 
 /* The requests that cancel an entry they find set once the vCPU is
  * IN_GUEST, as Linux's kvm_vcpu_exit_request cancels one for any pending
@@ -1229,11 +1230,15 @@ int32_t kvm_irq_enable_split(struct kvm_vm *vm, const struct kvm_enable_cap *cap
  * TSC_DEADLINE_TIMER. */
 int32_t kvm_irq_check_extension(long cap);
 
-/** Whether an EOI of `vector` goes to the caller's I/O APIC: some route of
- * the GSIs KVM_CAP_SPLIT_IRQCHIP reserved for its pins is a level-triggered
- * MSI of that vector, as Linux's kvm_scan_ioapic_routes finds, from a set
- * of vectors kept as the routes change. Takes no lock. */
-int kvm_irq_eoi_exits(struct kvm_vm *vm, uint32_t vector);
+/**
+ * Fill `map`, 256 bits, with the vectors whose EOI on `v` goes to the
+ * caller's I/O APIC, as Linux's kvm_scan_ioapic_routes
+ * (arch/x86/kvm/irq_comm.c:405-434): each level-triggered MSI among the
+ * GSIs KVM_CAP_SPLIT_IRQCHIP reserved for its pins whose destination is
+ * `v`, or whose vector `v` has in IRR or ISR. All clear without the split
+ * controller. In `v`'s thread; takes the controllers' lock.
+ */
+void kvm_irq_scan_eoi_exits(struct kvm_vcpu *v, uint32_t map[8]);
 
 /** Free irq.c's share of `vm`, its irqfds among them. */
 void kvm_irq_free(struct kvm_vm *vm);
@@ -1450,6 +1455,11 @@ int kvm_lapic_deliver_tracked(struct kvm_vm *vm, struct kvm_vcpu *src,
 
 /** Whether a local APIC matches a physical or logical destination. */
 int kvm_lapic_match_dest(struct kvm_vcpu *v, uint32_t id, int logical);
+
+/** Whether `v`'s local APIC is a destination of a device's `irq`, with
+ * no shorthand, as Linux's kvm_apic_match_dest with no source; 0 with no
+ * local APIC in the kernel. */
+int kvm_lapic_match_irq(struct kvm_vcpu *v, const struct kvm_lapic_irq *irq);
 
 /** Whether a vector remains in the local APIC's IRR or ISR. */
 int kvm_lapic_pending_eoi(struct kvm_vcpu *v, uint32_t vector);
