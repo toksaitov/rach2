@@ -507,6 +507,15 @@ static struct unix_cred cred_seen(struct unix_cred c)
     return c;
 }
 
+/** What SO_PEERCRED gives for the credentials `c`: with a `peer`, `c` as the
+ * caller sees them (cred_seen); with none, `c` as it is, pid 0 and ids -1,
+ * which Linux's cred_to_ucred leaves untranslated (net/core/sock.c:1666), so
+ * that a user namespace does not make them the overflow ids. */
+static struct unix_cred peercred_seen(struct unix_cred c, int peer)
+{
+    return peer ? cred_seen(c) : c;
+}
+
 /** Take the references a descriptor in a table holds, for the copy `e` of
  * it that goes in flight; `flight_drop` drops them as a close would. */
 static void flight_hold(fd_entry_t *e)
@@ -1970,6 +1979,7 @@ int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintp
     uint8_t out[16];
     uint32_t n = 4, saved;
     int32_t given, v = 0;
+    int peer = 0;
     int64_t tv[2];
 
     if (level != SOL_SOCKET) {
@@ -2025,7 +2035,8 @@ int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintp
         v = 1;
         break;
     case SO_PEERCRED:
-        if (s->has_peercred) {
+        peer = s->has_peercred;
+        if (peer) {
             c = s->peercred;
         }
         n = sizeof(c);
@@ -2048,7 +2059,7 @@ int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintp
     spin_unlock(&s->queue_lock);
     spin_unlock_irqrestore(&s->state_lock, saved);
     if (name == SO_PEERCRED) {
-        c = cred_seen(c);
+        c = peercred_seen(c, peer);
         k_memcpy(out, &c, sizeof(c));
     } else if (name != SO_RCVTIMEO_OLD && name != SO_RCVTIMEO_NEW && name != SO_SNDTIMEO_OLD &&
                name != SO_SNDTIMEO_NEW) {
