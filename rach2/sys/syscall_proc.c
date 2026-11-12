@@ -1378,10 +1378,15 @@ static int32_t exec_keep(struct exec_file *f, const struct vfs_ref *ref, struct 
  * a mount other than the KRFFS root are `vst`, for the loader to map the
  * file's segments by (`elf_load_image_at`), as Linux's `elf_map` maps them
  * from the open file. The mapping keeps a description of the file open for
- * reading, in a copy of a descriptor no table has (`filemap_new`), so the
- * image keeps its file through a close, a rename or an unlink, as a mapping
- * by mmap does. A file that is not regular gets none, and the loader copies
- * its segments. 0, or -ENOMEM or the open's error.
+ * reading, in a copy of a descriptor no table has, so the image keeps its
+ * file through a close, a rename or an unlink, as a mapping by mmap does.
+ * An ext2 file's mapping borrows the file's pages in memory, copied only at
+ * a store, as a private mmap of it does (`filemap_private`) and as Linux's
+ * `filemap_fault` maps the page cache's pages, so that each program started
+ * does not read its text again through the file system; another file's
+ * pages are read into frames of the image's own (`filemap_new`). A file that
+ * is not regular gets none, and the loader copies its segments. 0, or
+ * -ENOMEM or the open's error.
  */
 static int32_t exec_map(struct exec_file *f, const struct vfs_ref *ref, const struct vfs_stat *vst)
 {
@@ -1414,7 +1419,7 @@ static int32_t exec_map(struct exec_file *f, const struct vfs_ref *ref, const st
     e.flags = FD_FLAG_READ;
     e.ofd = ofd;
     e.node = root ? ref->node : NULL;
-    f->map = filemap_new(&e);
+    f->map = filemap_private(&e, NULL, !root && ref->mnt->type == &vfs_ext2_type);
     fd_ofd_unref(ofd);
     return f->map ? 0 : -ENOMEM;
 }
