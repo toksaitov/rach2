@@ -1527,7 +1527,10 @@ static int wake_cond(void *arg)
 }
 
 /** Wait, interruptibly, until the vCPU `v` has an event or its timer's
- * tick comes: 0, or -EINTR for a signal. */
+ * tick comes: 0, or -EINTR when the thread's signal-work flag is set. The
+ * caller holds no big lock, so the wait reads the flag alone, as Linux's
+ * kvm_vcpu_check_block (virt/kvm/kvm_main.c:3729-3747), and the KVM_RUN
+ * that returns -EINTR leaves the signal to the system call's return. */
 static int32_t block(struct kvm_vcpu *v)
 {
     struct lapic *l = apic_of(v);
@@ -1541,7 +1544,7 @@ static int32_t block(struct kvm_vcpu *v)
         l->wake_tick = tick_count() + (next > now ? (next - now + TICK_NS - 1u) / TICK_NS : 0) + 1u;
     }
     current_proc->wakeup_tick = l->wake_tick;
-    r = wq_wait_event(&l->wq, wake_cond, v);
+    r = wq_wait_event_sigflag(&l->wq, wake_cond, v, "kvm_vcpu_block");
     current_proc->wakeup_tick = 0;
     l->wake_tick = 0;
     return r;
