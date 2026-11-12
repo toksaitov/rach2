@@ -18,7 +18,10 @@
 # format, bits 5:0, which perl reads with KVM_GET_MSRS;
 # `kvm_pmu`, where /sys/module/kvm/parameters/enable_pmu reads Y; and
 # `intel`, where /proc/cpuinfo's vendor_id is GenuineIntel. A result A|B
-# takes either, for a test whose result the clock decides. Each test whose
+# takes either, for a test whose result the clock decides. A result
+# fail~SUBTEST, for a kvm-unit-test, takes a failure only when the test ran
+# to its SUMMARY line and every FAIL line of its log is the subtest SUBTEST,
+# whose message is SUBTEST with each `_` a space. Each test whose
 # EXPECT is not `excluded` runs, in the order of the list:
 #
 # * `unit`: kvm-unit-tests' run_tests.sh, once a test, from a copy of
@@ -45,6 +48,23 @@
 # pass: N as expected, M excluded` or `kvm-corpus: result: fail: K of N:
 # NAME...`, and the exit status 0 on a pass, 1 on a failure and 2 on a usage
 # error. A program's own output goes to standard error.
+
+# only_fails LOG MESSAGE: whether the kvm-unit-test log LOG ran to its
+# SUMMARY line and has FAIL lines, each of which ends in MESSAGE after the
+# subtest's prefixes.
+only_fails()
+{
+    sed "s/$(printf '\033')\\[[0-9;]*m//g; s/$(printf '\r')\$//" "$1" |
+        awk -v m="$2" '
+            /^SUMMARY: / { summary = 1 }
+            /^FAIL: / {
+                n++
+                if (length($0) < length(m) || substr($0, length($0) - length(m) + 1) != m ||
+                    substr($0, length($0) - length(m) - 1, 2) != ": ")
+                    other = 1
+            }
+            END { exit !(summary && n > 0 && !other) }'
+}
 
 usage()
 {
@@ -198,12 +218,21 @@ while read -r name expect; do
         *"|$got|"*) ok=1 ;;
         *) ok=0 ;;
     esac
+    log=$work/logs/$name/$name.log
+    if [ "$ok" = 0 ] && [ "$got" = fail ] && [ "$kind" = unit ] && [ -f "$log" ]; then
+        for e in $(echo "$expect" | tr '|' ' '); do
+            case $e in
+                fail~?*)
+                    ! only_fails "$log" "$(echo "${e#fail~}" | tr _ ' ')" || ok=1
+                    ;;
+            esac
+        done
+    fi
     if [ "$ok" = 1 ]; then
         echo "kvm-corpus: $name: $got: as expected, ${secs:-0} s"
     else
         echo "kvm-corpus: $name: $got: expected $expect, ${secs:-0} s"
         # The runner's log of the test names each subtest's result.
-        log=$work/logs/$name/$name.log
         [ "$kind" != unit ] || [ ! -f "$log" ] ||
             sed "s/$(printf '\033')\\[[0-9;]*m//g" "$log" >&2
         bad=$((bad + 1))
