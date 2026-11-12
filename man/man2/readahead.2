@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 13, 2026
 .Dt READAHEAD 2
 .Os
 .Sh NAME
@@ -12,27 +12,67 @@
 .Ft int
 .Fn posix_fadvise "int fd" "off_t offset" "off_t len" "int advice"
 .Sh DESCRIPTION
-The page cache fills a page when a read first asks for it and keeps one
-policy for every file, so neither call changes what the kernel does.
 .Fn readahead
-checks
-.Fa fd
-and returns 0, as Linux does once it has queued the reads.
-.Fn posix_fadvise
-checks
+starts the reads of the pages of the
+.Fa count
+bytes at
+.Fa offset
+of
 .Fa fd ,
+the rest of the file for a
+.Fa count
+of 0, and returns 0 without waiting for them, as
+.Fn posix_fadvise
+with
+.Dv POSIX_FADV_WILLNEED
+does.
+.Pp
+.Fn posix_fadvise
+takes one
+.Fa advice
+for the
 .Fa len
-and
-.Fa advice ,
-which is one of
-.Dv POSIX_FADV_NORMAL ,
-.Dv POSIX_FADV_RANDOM ,
-.Dv POSIX_FADV_SEQUENTIAL ,
-.Dv POSIX_FADV_WILLNEED ,
-.Dv POSIX_FADV_DONTNEED
-and
-.Dv POSIX_FADV_NOREUSE ,
-and returns 0.
+bytes at
+.Fa offset ,
+the rest of the file for a
+.Fa len
+of 0:
+.Bl -tag -width "POSIX_FADV_SEQUENTIAL"
+.It Dv POSIX_FADV_NORMAL
+Reads of the descriptor are read ahead in windows of at most 128 KiB.
+.It Dv POSIX_FADV_RANDOM
+A read that misses the page cache reads the pages it asks for and no
+more.
+.It Dv POSIX_FADV_SEQUENTIAL
+Windows of at most 256 KiB, and no
+.Dv POSIX_FADV_RANDOM .
+.It Dv POSIX_FADV_WILLNEED
+The range's pages are read into the page cache without waiting, at most
+the descriptor's window or what one request to the disk moves, whichever
+is larger.
+.It Dv POSIX_FADV_DONTNEED
+The page cache drops the range's whole pages, and a last partial page
+that ends the file.
+.It Dv POSIX_FADV_NOREUSE
+Nothing changes.
+.El
+.Pp
+Readahead is Linux's on-demand readahead.
+A read that misses the cache reads a window from the page it wants: at
+the start of the file, or going on from where the descriptor's last read
+ended, four, two or one times the pages it wants, rounded up to a power
+of two, up to the most a window takes; otherwise, when the cache holds
+more pages just before it than the read wants, as many pages as those and
+the read's together, counting those twice when they reach the file's
+start, up to the most; and else only the pages the read wants.
+A page near the window's end is marked, and a read that reaches it starts
+the next window, two to four times larger up to the most, which a kernel
+thread,
+.Sy kreadahead ,
+reads while the reader goes on; a read that reaches a page such a thread
+is reading waits for that read.
+Only the ext2 file system's regular files have a page cache that reads
+ahead; for any other file the advice is checked and returns 0.
 .Pp
 The i386 system call numbers are 225 for
 .Fn readahead ,
