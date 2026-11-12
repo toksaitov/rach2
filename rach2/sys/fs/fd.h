@@ -57,8 +57,11 @@ unsigned long fd_files_open(void);
  * fit. NULL and 0 size the text. The pid is the allocating thread group's
  * id in the initial PID namespace, 0 before a current process exists; it
  * stays with the description through transfers and after the creator's
- * exit, until its final reference goes. The snapshot holds the description
- * list's spinlock and does not sleep.
+ * exit, until its final reference goes. The walk may sleep; it holds the
+ * description list's spinlock for a bounded batch of records at a time, so
+ * a description live through the whole walk is written once, one made
+ * during it is not, and one that ends during it may be. -ENOMEM when the
+ * walk's cursor cannot be made.
  */
 int32_t fd_files_creators(char *buf, uint32_t cap);
 

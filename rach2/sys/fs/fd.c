@@ -42,17 +42,21 @@ struct access_count {
 struct ofd_rec {
     struct open_file ofd;
     wait_queue_t wq;
-    struct ofd_rec *next;
+    struct ofd_rec *next, *prev; /* the live list, newest first */
     struct access_count *spare;
     /* The allocating thread group's initial-namespace pid, or 0 at boot. */
     uint32_t creator;
+    /* Nonzero for a reader's place on the list (`fd_files_creators`), which
+     * is no description: its `ofd` is zero, so the scans pass it over. */
+    int cursor;
 };
 
 /*
  * The list of live descriptions, its count and serials, and the access
  * counts are under `ofd_lock`, a spinlock taken with interrupts off below a
  * table's lock; a description's own fields are its holders'. The scans of
- * the list read only what their callers' locks keep still.
+ * the list read only what their callers' locks keep still. The list is
+ * doubly linked, so that a description leaves it in constant time.
  */
 static struct spinlock ofd_lock = SPINLOCK_INIT;
 static struct ofd_rec *ofds;
@@ -67,35 +71,118 @@ unsigned long fd_files_open(void)
     return ofd_count;
 }
 
-/** Snapshot the description list's creator pids without sleeping. */
-int32_t fd_files_creators(char *buf, uint32_t cap)
+/** Put `rec` at the head of the live list. `ofd_lock` is held. */
+static void ofd_link(struct ofd_rec *rec)
 {
-    uint32_t flags = spin_lock_irqsave(&ofd_lock);
-    const struct ofd_rec *rec;
-    uint32_t len = 0;
+    rec->prev = NULL;
+    rec->next = ofds;
+    if (ofds) {
+        ofds->prev = rec;
+    }
+    ofds = rec;
+}
 
-    for (rec = ofds; rec; rec = rec->next) {
-        char digits[11];
-        uint32_t n = rec->creator;
-        unsigned int i = 0;
+/** Put `rec` on the live list just after `at`. `ofd_lock` is held. */
+static void ofd_link_after(struct ofd_rec *rec, struct ofd_rec *at)
+{
+    rec->prev = at;
+    rec->next = at->next;
+    if (at->next) {
+        at->next->prev = rec;
+    }
+    at->next = rec;
+}
 
-        do {
-            digits[i++] = (char)('0' + n % 10u);
-            n /= 10u;
-        } while (n);
-        while (i) {
-            if (len < cap) {
-                buf[len] = digits[i - 1u];
-            }
-            len++;
-            i--;
-        }
+/** Take `rec` off the live list. `ofd_lock` is held. */
+static void ofd_unlink(struct ofd_rec *rec)
+{
+    if (rec->prev) {
+        rec->prev->next = rec->next;
+    } else {
+        ofds = rec->next;
+    }
+    if (rec->next) {
+        rec->next->prev = rec->prev;
+    }
+    rec->next = NULL;
+    rec->prev = NULL;
+}
+
+/** Write `n` in decimal and a newline at `len` in `buf`'s `cap` bytes, and
+ * return the length after it, counting bytes that did not fit. */
+static uint32_t creator_put(char *buf, uint32_t cap, uint32_t len, uint32_t n)
+{
+    char digits[11];
+    unsigned int i = 0;
+
+    do {
+        digits[i++] = (char)('0' + n % 10u);
+        n /= 10u;
+    } while (n);
+    while (i) {
         if (len < cap) {
-            buf[len] = '\n';
+            buf[len] = digits[i - 1u];
         }
         len++;
+        i--;
     }
+    if (len < cap) {
+        buf[len] = '\n';
+    }
+    return len + 1u;
+}
+
+/* The records `fd_files_creators` passes in one hold of `ofd_lock`. */
+#define CREATORS_BATCH 32u
+
+/**
+ * The walk holds `ofd_lock` for at most CREATORS_BATCH records at a time and
+ * formats with the lock given back. Between holds a cursor record keeps its
+ * place on the list, as a cursor dentry keeps dcache_readdir's among a
+ * directory's children in Linux (`scan_positives`, fs/libfs.c:107-140): a
+ * description leaving the list unlinks itself around the cursor, and one
+ * arriving goes to the head, before it. Linux keeps no list of files at all,
+ * only the count (`nr_files`, fs/file_table.c:43 and 103-106).
+ */
+int32_t fd_files_creators(char *buf, uint32_t cap)
+{
+    struct ofd_rec *cursor = kzalloc(sizeof(*cursor));
+    uint32_t ids[CREATORS_BATCH];
+    uint32_t len = 0, flags;
+    int more;
+
+    if (!cursor) {
+        return -ENOMEM;
+    }
+    cursor->cursor = 1;
+    flags = spin_lock_irqsave(&ofd_lock);
+    ofd_link(cursor);
     spin_unlock_irqrestore(&ofd_lock, flags);
+    do {
+        struct ofd_rec *rec, *last = cursor;
+        uint32_t n = 0, steps = 0, i;
+
+        flags = spin_lock_irqsave(&ofd_lock);
+        for (rec = cursor->next; rec && steps < CREATORS_BATCH; rec = rec->next, steps++) {
+            if (!rec->cursor) {
+                ids[n++] = rec->creator;
+            }
+            last = rec;
+        }
+        more = rec != NULL;
+        if (last != cursor) {
+            ofd_unlink(cursor);
+            ofd_link_after(cursor, last);
+        }
+        spin_unlock_irqrestore(&ofd_lock, flags);
+        for (i = 0; i < n; i++) {
+            len = creator_put(buf, cap, len, ids[i]);
+        }
+    } while (more);
+    flags = spin_lock_irqsave(&ofd_lock);
+    ofd_unlink(cursor);
+    spin_unlock_irqrestore(&ofd_lock, flags);
+    kfree(cursor);
     return (int32_t)len;
 }
 
@@ -140,8 +227,7 @@ static struct open_file *ofd_alloc(void)
     wait_queue_init(&rec->wq);
     flags = spin_lock_irqsave(&ofd_lock);
     rec->ofd.serial = ++ofd_serials;
-    rec->next = ofds;
-    ofds = rec;
+    ofd_link(rec);
     ofd_count++;
     spin_unlock_irqrestore(&ofd_lock, flags);
     return &rec->ofd;
@@ -445,7 +531,6 @@ void fd_ofd_unref(struct open_file *ofd)
 {
     if (ofd && ofd->refcount > 0) {
         if (count_add(&ofd->refcount, -1) == 0) {
-            struct ofd_rec **link = &ofds;
             struct ofd_rec *rec = ofd_rec_of(ofd);
             int big = ofd_end_big(ofd);
             uint32_t flags;
@@ -504,13 +589,8 @@ void fd_ofd_unref(struct open_file *ofd)
                 vfs_desc_close(ref.mnt, ref.node, NULL);
             }
             flags = spin_lock_irqsave(&ofd_lock);
-            while (*link && *link != rec) {
-                link = &(*link)->next;
-            }
-            if (*link) {
-                *link = rec->next;
-                ofd_count--;
-            }
+            ofd_unlink(rec);
+            ofd_count--;
             spin_unlock_irqrestore(&ofd_lock, flags);
             kfree(rec);
             if (big) {
