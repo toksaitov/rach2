@@ -1,6 +1,6 @@
 #!/bin/sh
-# bkl.sh OUT GAME...: each GAME once through lenovo.sh, with the GPU's clock
-# pinned at 1000 MHz and debugfs's bkl/calls, bkl/profile, bkl/long and,
+# bkl.sh [-k] OUT GAME...: each GAME once through lenovo.sh, with the GPU's
+# clock pinned at 1000 MHz and debugfs's bkl/calls, bkl/profile, bkl/long and,
 # on a kernel that has it, bkl/tick zeroed before the run and read after it,
 # with /proc/stat around it, for 80-41's split of the kernel's time into work
 # per call and waits on the big lock and 80-75's of the tick's time into its
@@ -9,7 +9,9 @@
 # profile, tick, stat-before and stat-after. audio-* snapshots separate the
 # game from the report reads when a refill comes late; long-after-game and
 # long-after-profile keep bkl/long's holds read after the game and after
-# the profile's read. lenovo.sh is on task/2664
+# the profile's read. -k takes the profile in its whole-kernel mode, every
+# tick in kernel mode with or without the lock, in place of the lock's holds
+# (debugfs(5)). lenovo.sh is on task/2664
 # (80-7b) until that task merges: copy it beside this script by running,
 # in this script's directory:
 #   git show origin/task/2664:tests/system/games/lenovo.sh > lenovo.sh
@@ -17,7 +19,12 @@
 # interrupted run's too.
 set -u
 
-[ $# -ge 2 ] || { echo "usage: bkl.sh OUT GAME..." >&2; exit 2; }
+mode=0
+if [ "${1-}" = -k ]; then
+    mode=kernel
+    shift
+fi
+[ $# -ge 2 ] || { echo "usage: bkl.sh [-k] OUT GAME..." >&2; exit 2; }
 out=$1
 shift
 d=/sys/kernel/debug/bkl
@@ -58,7 +65,7 @@ for g; do
     audio_snapshot before
     cat /proc/stat > "$o/stat-before"
     echo 0 > "$d/calls"
-    echo 0 > "$d/profile"
+    echo "$mode" > "$d/profile"
     if [ -w "$d/long" ]; then echo 0 > "$d/long"; fi
     if [ -w "$d/tick" ]; then echo 0 > "$d/tick"; fi
     sh "$here/lenovo.sh" -n 1 "$o" "$g" || status=1
