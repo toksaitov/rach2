@@ -43,7 +43,9 @@
  * for the other vendor's hypercall, a table of the instructions Linux's
  * emulator runs with their operand on MMIO, string, far-pointer, MMX and SSE
  * forms among them, a RIP above 4 GiB, the host's
- * interrupt, NMI and machine check, the preemption timer, a triple fault and
+ * interrupt, NMI and machine check, the host's FREEZE_WHILE_SMM carried in
+ * the guest's IA32_DEBUGCTL, hidden from its reads and written back to the
+ * host's after the exit, the preemption timer, a triple fault and
  * the two kinds of failed entry; hardware task switches by CALL, IRET, JMP and
  * task gates, to 32-bit, 16-bit and virtual-8086 tasks, and their faults; a
  * move to another processor, which clears the VMCS on the one it left and
@@ -999,6 +1001,11 @@ static struct {
     int nvmcs;
     uint64_t dr[8];
     int dr6_writes;
+    /* IA32_DEBUGCTL, which every exit clears (SDM 28.5.1), its writes, and
+     * the guest's as the last entry loaded it. */
+    uint64_t debugctl;
+    int debugctl_writes;
+    uint64_t entry_debugctl;
     /* The counts of each instruction, and its failures. */
     int vmxons, vmxoffs, vmclears, vmptrlds, launches, resumes, invepts, invvpids;
     int ud, gp, bad_writes, bad_reads, misplaced;
@@ -1631,6 +1638,7 @@ static int m_run(struct kvm_regs *regs, uint64_t *cr2, int launched)
     m.entry_rflags = f[GUEST_RFLAGS];
     m.entry_intr = f[GUEST_INTERRUPTIBILITY_INFO];
     m.entry_dr0 = m.dr[0];
+    m.entry_debugctl = f[GUEST_IA32_DEBUGCTL];
     if (!check_segments(f) || !check_guest_regs(f) || !check_guest_events(f)) {
         f[VM_EXIT_REASON] = EXIT_FAILED_ENTRY | EXIT_INVALID_STATE;
         f[EXIT_QUALIFICATION] = 0;
@@ -1660,12 +1668,13 @@ static int m_run(struct kvm_regs *regs, uint64_t *cr2, int launched)
         }
     }
     exit_with(r);
+    m.debugctl = 0;
     return VMX_OK;
 }
 
 /** RDMSR of the model: the capability MSRs, the true controls and their
- * defaults, IA32_FEATURE_CONTROL, PAT and EFER; any other MSR reads as a
- * value of its own. */
+ * defaults, IA32_FEATURE_CONTROL, IA32_DEBUGCTL, PAT and EFER; any other
+ * MSR reads as a value of its own. */
 static uint64_t m_rdmsr(uint32_t msr)
 {
     switch (msr) {
@@ -1704,6 +1713,8 @@ static uint64_t m_rdmsr(uint32_t msr)
         return m.ept_vpid;
     case MSR_IA32_CR_PAT:
         return 0x0007040600070406ull;
+    case MSR_IA32_DEBUGCTL:
+        return m.debugctl;
     case MSR_EFER:
         return 0xD01ull;
     default:
@@ -1711,9 +1722,14 @@ static uint64_t m_rdmsr(uint32_t msr)
     }
 }
 
-/** WRMSR: only IA32_FEATURE_CONTROL matters, written only unlocked. */
+/** WRMSR: IA32_FEATURE_CONTROL, written only unlocked, and IA32_DEBUGCTL;
+ * the others do not matter. */
 static void m_wrmsr(uint32_t msr, uint64_t value)
 {
+    if (msr == MSR_IA32_DEBUGCTL) {
+        m.debugctl = value;
+        m.debugctl_writes++;
+    }
     if (msr == MSR_IA32_FEATURE_CONTROL) {
         CHECK(!(m.fc & FC_LOCKED), "IA32_FEATURE_CONTROL is written only while unlocked");
         m.fc = value;
@@ -2819,6 +2835,52 @@ static void host_rows(int fd)
                   (EXIT_FAILED_ENTRY | EXIT_INVALID_STATE),
           "a guest state the processor refuses is KVM_EXIT_FAIL_ENTRY with the exit reason");
     set_shadow(fd, 0);
+}
+
+/**
+ * The host's FREEZE_WHILE_SMM across a run, as Linux keeps it in
+ * HOST_OWNED_DEBUGCTL (arch/x86/kvm/vmx/main.c:45): the guest's
+ * IA32_DEBUGCTL in the VMCS carries it beside the guest's own LBR
+ * (arch/x86/kvm/vmx/vmx.h:441-447), the guest's DEBUGCTL read back after
+ * the exit never shows it (:449-452), and the host's DEBUGCTL, which the
+ * exit clears, is written back after it (arch/x86/kvm/vmx/vmx.c:7445-7446).
+ * Without the bit the guest's DEBUGCTL is its own; the host's LBR alone is
+ * written back too, but never reaches the guest.
+ */
+static void debugctl_rows(int fd)
+{
+    struct kvm_vcpu *v = vcpu_of(fd);
+    uint32_t lbr_nr = v->pmu.lbr_nr;
+    uint64_t guest = v->pmu.debugctl;
+    int writes;
+
+    v->pmu.lbr_nr = 1;
+    v->pmu.debugctl = DEBUGCTL_LBR;
+    m.debugctl = DEBUGCTL_FREEZE_SMM;
+    writes = m.debugctl_writes;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.entry_debugctl == (DEBUGCTL_LBR | DEBUGCTL_FREEZE_SMM),
+          "the guest runs with the host's FREEZE_WHILE_SMM beside its own LBR");
+    CHECK(v->pmu.debugctl == DEBUGCTL_LBR,
+          "the guest's DEBUGCTL read back after the exit lacks the host's bit");
+    CHECK(m.debugctl == DEBUGCTL_FREEZE_SMM && m.debugctl_writes == writes + 1,
+          "the host's DEBUGCTL, which the exit cleared, is written back");
+
+    m.debugctl = DEBUGCTL_LBR;
+    writes = m.debugctl_writes;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.entry_debugctl == DEBUGCTL_LBR && v->pmu.debugctl == DEBUGCTL_LBR,
+          "without the host's FREEZE_WHILE_SMM the guest's DEBUGCTL is its own");
+    CHECK(m.debugctl == DEBUGCTL_LBR && m.debugctl_writes == writes + 1,
+          "and the host's LBR is written back");
+
+    m.debugctl = 0;
+    writes = m.debugctl_writes;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.debugctl_writes == writes,
+          "a host DEBUGCTL of 0, which the exit leaves, is not written");
+    v->pmu.lbr_nr = lbr_nr;
+    v->pmu.debugctl = guest;
 }
 
 /** A state read between runs on another processor, and VMXON and VMPTRLD
@@ -4646,6 +4708,7 @@ int main(void)
     event_rows(fd);
     debug_rows(fd);
     host_rows(fd);
+    debugctl_rows(fd);
     path_rows(fd);
     pae_rows(fd);
     vpid_panic_rows(vm, fd);
