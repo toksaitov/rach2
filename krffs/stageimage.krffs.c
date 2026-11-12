@@ -300,6 +300,26 @@ static uint64_t total_free_space(struct krffs_file_system *file_system)
 }
 
 /**
+ * Returns the bytes the nodes of `file_system` hold: a header for the root and
+ * for each reserved node, and each reserved node's `data_size`. The spare
+ * bytes an allocation absorbs, a rest too small for a header, are left out,
+ * since a tight image need not have them.
+ */
+static uint64_t tree_bytes(struct krffs_file_system *file_system)
+{
+    struct krffs_node *node = file_system->node;
+    uint64_t bytes = 0;
+
+    do {
+        if (node->type != KRFFS_Free_Node) {
+            bytes += sizeof(*node) + node->data_size;
+        }
+    } while ((node = krffs_get_next_node(file_system, node)) != file_system->node);
+
+    return bytes;
+}
+
+/**
  * Reserves a node named `name` in the directory `parent_id`, with `mode`, the
  * owner `uid`:`gid`, `data_size` bytes of `data`, none copied when `data` is
  * NULL, and the fixed staged time as its three times, and syncs it. Its id is
@@ -1368,14 +1388,21 @@ static bool stage_manifest(struct krffs_file_system *file_system, const char *pa
  * Says how many bytes the tree of `manifest` takes against the `size` bytes
  * of `image`, which it did not fit. The manifest is staged again into an
  * empty file system in memory, twice the image's size and doubled while the
- * tree still does not fit, up to 64 times; its bytes used, headers included,
- * are what an image needs before any free space. A line that fails for
- * another reason prints its own message, and the tree is then not measured.
+ * tree still does not fit, up to 64 times; the headers and data of its nodes
+ * (`tree_bytes`) are what an image needs before any free space. A line that
+ * fails for another reason prints its own message, and the tree is then not
+ * measured.
+ *
+ * `in_use` is what `tree_bytes` gave for the image before staging. When the
+ * image held more than an empty root, the probe measures the tree alone, so
+ * the message gives the image's earlier contents in place of a shortfall.
+ * A fresh image whose tree measures no larger than the image, which only the
+ * allocator's absorbed spare bytes can cause, gets no shortfall either.
  *
  * The memory is not a mapping of a file, so the syncs of the staging fail
  * there, which is harmless: nothing reads the memory but this function.
  */
-static void measure_tree(const char *manifest, const char *image, uint64_t size)
+static void measure_tree(const char *manifest, const char *image, uint64_t size, uint64_t in_use)
 {
     uint64_t probe;
 
@@ -1393,13 +1420,25 @@ static void measure_tree(const char *manifest, const char *image, uint64_t size)
         out_of_space = false;
         staged = stage_manifest(&memory, manifest);
         if (staged) {
-            uint64_t used = probe - total_free_space(&memory);
+            uint64_t used = tree_bytes(&memory);
 
-            fprintf(stderr,
-                    "stageimage: the tree of '%s' needs %llu bytes and '%s' has %llu, "
-                    "%llu short.\n",
-                    manifest, (unsigned long long)used, image, (unsigned long long)size,
-                    (unsigned long long)(used - size));
+            if (in_use > sizeof(struct krffs_node)) {
+                fprintf(stderr,
+                        "stageimage: the tree of '%s' needs %llu bytes on an empty image; "
+                        "'%s' has %llu, %llu of them in use before staging.\n",
+                        manifest, (unsigned long long)used, image, (unsigned long long)size,
+                        (unsigned long long)in_use);
+            } else if (used > size) {
+                fprintf(stderr,
+                        "stageimage: the tree of '%s' needs %llu bytes and '%s' has %llu, "
+                        "%llu short.\n",
+                        manifest, (unsigned long long)used, image, (unsigned long long)size,
+                        (unsigned long long)(used - size));
+            } else {
+                fprintf(stderr,
+                        "stageimage: the tree of '%s' needs %llu bytes and '%s' has %llu.\n",
+                        manifest, (unsigned long long)used, image, (unsigned long long)size);
+            }
         }
         free(memory.node);
         if (staged || !out_of_space) {
@@ -1442,6 +1481,7 @@ int main(int argc, char **argv)
     struct krffs_file_system file_system = {.node = NULL};
     struct stat file_info;
     uint64_t free_after;
+    uint64_t in_use = 0;
 
     if (argc == 4 && strcmp(argv[2], "--tree") == 0 && argv[1][0] != '-') {
         if (krffs_host_mkdir(argv[3]) != 0) {
@@ -1521,12 +1561,13 @@ int main(int argc, char **argv)
         file_system.node->attribute_change_time = staged_time;
     }
     krffs_sync_mapping(file_system.node, sizeof(*file_system.node));
+    in_use = tree_bytes(&file_system);
 
 stage:
     if (!stage_manifest(&file_system, argv[1])) {
         exit_status = EXIT_FAILURE;
         if (out_of_space) {
-            measure_tree(argv[1], argv[2], (uint64_t)file_system.size);
+            measure_tree(argv[1], argv[2], (uint64_t)file_system.size, in_use);
         }
     }
 
