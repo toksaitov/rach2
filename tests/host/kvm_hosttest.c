@@ -32,7 +32,9 @@
  * run page, with port and MMIO reads answered on the next KVM_RUN, a HLT
  * going to the caller with no local APIC in the kernel, immediate_exit, a
  * signal, a kick from another processor and a triple fault; KVM_RUN and
- * its exits without the big lock, and interrupts off for the entry;
+ * its exits without the big lock, and interrupts off for the entry; EINTR
+ * from KVM_RUN and a state ioctl whose wait for a vCPU another process
+ * holds SIGKILL ends;
  * kvm/exit_stats's rows for VMX's and SVM's codes, summed over two
  * processors, with each exit's wait for the big lock, its clear, the
  * entry, run and exit counted only from marks in order, the preparation
@@ -1731,6 +1733,7 @@ static void startup_msrs(int vcpu)
  * registers, and KVM_RUN, which the refusing backend fails. */
 static void startup_run(int vcpu)
 {
+    struct kvm_vcpu *v = (struct kvm_vcpu *)entries[vcpu].priv;
     struct kvm_vcpu_events ev;
     struct kvm_debugregs dbg;
     struct kvm_mp_state mp = {KVM_MP_STATE_RUNNABLE};
@@ -1757,7 +1760,18 @@ static void startup_run(int vcpu)
     r = fdio(vcpu, KVM_RUN, 0);
     CHECK(r == -EOPNOTSUPP && entries_made == 1 && bkl_depth == 2 && irq_on,
           "KVM_RUN entered with the big lock held runs without it and returns with its depth");
+    /* Another process that shares the VM's memory and descriptors holds
+     * the vCPU; the waiter's SIGKILL ends its wait, as Linux's
+     * mutex_lock_killable does, and the entry's hold comes back. */
+    mutex_lock(&v->mutex);
+    entries_made = 0;
+    r = fdio(vcpu, KVM_RUN, 0);
+    CHECK(r == -EINTR && entries_made == 0 && bkl_depth == 2 && irq_on && mutex_held(&v->mutex),
+          "a KVM_RUN killed in its wait for a held vCPU returns EINTR with the entry's depth");
     bkl_depth = 0;
+    CHECK(fdio(vcpu, KVM_GET_DEBUGREGS, (uintptr_t)&dbg) == -EINTR && bkl_depth == 0,
+          "a state ioctl killed in its wait for a held vCPU returns EINTR");
+    mutex_unlock(&v->mutex);
 }
 
 /**

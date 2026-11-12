@@ -3,7 +3,9 @@
 #include "mutex.h"
 
 #include "process.h"
+#include "tgroup.h"
 #include "../lib/kerrno.h"
+#include "../lib/ksignal.h"
 #include "../panic.h"
 
 /* The checker's notes of a sleeping lock taken and let go, from the caller
@@ -95,6 +97,32 @@ int mutex_lock_interruptible(struct mutex *m)
             DEP_RELEASE(&m->dep);
             return -EINTR;
         }
+    }
+    return 0;
+}
+
+/** Whether the calling thread has SIGKILL pending, its own or its
+ * process's. */
+static int mutex_killed(void)
+{
+    return ((current_proc->sig_pending | current_proc->tg->pending) & KSIG_BIT(SIGKILL)) != 0;
+}
+
+/** The killable waiter's condition: `m` free, or the waiter killed. */
+static int mutex_free_or_killed(void *arg)
+{
+    return mutex_free(arg) || mutex_killed();
+}
+
+int mutex_lock_killable(struct mutex *m)
+{
+    DEP_ACQUIRE(&m->dep);
+    while (!mutex_take(m)) {
+        if (mutex_killed()) {
+            DEP_RELEASE(&m->dep);
+            return -EINTR;
+        }
+        (void)wq_wait_event_killable(&m->wq, mutex_free_or_killed, m, "__mutex_lock");
     }
     return 0;
 }
