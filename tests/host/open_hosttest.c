@@ -47,6 +47,8 @@
  * - an open of /proc/PID/fd/N for a device opened through a device node of
  *   a mounted type while another thread closes descriptor N, the device's
  *   last;
+ * - a followed /proc/PID/fd/N stat of a pipe, and one that fails, while
+ *   the owner closes descriptor N, its description's last;
  * - the release of the last holder of a file of the KRFFS root that lost
  *   its name, by each path a descriptor or a file mapping ends on, while
  *   another process's allocation on the root runs in the reclaim's sleep;
@@ -1634,11 +1636,42 @@ uint32_t procfs_mount_id(const struct vfs_mount *m)
     return 1;
 }
 
-/** No synthetic file system is mounted: 0. */
+/* The followed stat whose descriptor its owner closes as it runs
+ * (`proc_fd_stat_closed`): the descriptor, -1 outside the row; the heap's
+ * allocations once the close returned; the closes of the model pipe. */
+static int stat_closed_fd = -1;
+static int stat_closed_allocations, stat_pipe_closes;
+static pipe_t stat_pipe;
+
+/** Close `stat_closed_fd` once, as its owner would on another processor
+ * while a followed stat reads it, and record the allocations left. */
+static void stat_owner_closes(void)
+{
+    int fd = stat_closed_fd;
+
+    stat_closed_fd = -1;
+    check(close_fd(fd) == 0, "the owner closes the descriptor a followed stat reads");
+    stat_closed_allocations = allocations;
+}
+
+/** Count a release of the model pipe of the followed stat's row. */
+static void stat_pipe_close(fd_entry_t *e)
+{
+    check(e->priv == &stat_pipe, "the model pipe's release names it");
+    stat_pipe_closes++;
+}
+
+static const struct file_ops stat_pipe_ops = {0, 0, 0, 0, stat_pipe_close, NULL, NULL, 0};
+
+/** No synthetic file system is mounted: 0. A followed stat of a pipe asks
+ * this after it reads the pipe, and its owner's close comes then. */
 uint32_t procfs_synth_mount_id(uint64_t dev, const struct vfs_mount *hint)
 {
     (void)dev;
     (void)hint;
+    if (stat_closed_fd >= 0) {
+        stat_owner_closes();
+    }
     return 0;
 }
 
@@ -2037,11 +2070,24 @@ static void dir_unpin(struct vfs_mount *mnt, void *token)
     dir_pins--;
 }
 
-/** No row's path is a directory of /proc. */
+/** Close the descriptor of a /proc directory that the followed stat's row
+ * closes as the stat runs; fail the row for any other lookup. */
+static void resolve_closes(const struct vpath *vp)
+{
+    if (stat_closed_fd >= 0 && vp->kind == VNODE_PROC_FD_DIR) {
+        stat_owner_closes();
+    } else {
+        check(0, "unexpected /proc lookup");
+    }
+}
+
+/** -1, the process gone: only the followed stat's row has a directory of
+ * /proc (`resolve_closes`). The body stays a call and a constant, which the
+ * compiler propagates, so the lookups that would follow a found process,
+ * which no row reaches, and the procfs calls they make need no stub. */
 int procfs_resolve_id(const struct vpath *vp)
 {
-    (void)vp;
-    check(0, "unexpected /proc lookup");
+    resolve_closes(vp);
     return -1;
 }
 
@@ -3035,6 +3081,66 @@ static void proc_fd_stat_errors(void)
             check(ofd->refcount == 1 && releases == 0,
                   "a successful followed stat releases only its temporary reference");
         }
+        row_end();
+    }
+}
+
+/**
+ * A followed /proc/PID/fd link's stat of a pipe, and its stat of an O_PATH
+ * descriptor of a /proc/PID/fd directory whose process is gone, which fails
+ * with -ENOENT, hold the description while the owner closes the descriptor
+ * as the stat runs, since the last close of a pipe frees what it names
+ * without the big lock, as Linux's proc_fd_getattr holds the file
+ * (fs/proc/fd.c:182 in 6.12): the close frees nothing, and the stat's one
+ * drop of its hold ends the description and the pipe or the path once.
+ */
+static void proc_fd_stat_closed(void)
+{
+    int failing;
+
+    for (failing = 0; failing < 2; failing++) {
+        struct kstat st;
+        struct synth_path *sp;
+        fd_entry_t *e;
+        int fd, before;
+        int32_t rc;
+
+        row_begin();
+        fd = fd_alloc(proc.fds);
+        sp = failing ? kzalloc(sizeof(*sp)) : NULL;
+        check(fd >= 0 && (sp || !failing), "a descriptor for a followed stat that a close meets");
+        if (fd < 0 || (failing && !sp)) {
+            kfree(sp);
+            row_end();
+            continue;
+        }
+        e = fd_slot(proc.fds, fd);
+        if (failing) {
+            sp->vp.kind = VNODE_PROC_FD_DIR;
+            e->type = FD_TYPE_SYNTH_PATH;
+            e->flags = FD_FLAG_PATH;
+            e->priv = sp;
+        } else {
+            stat_pipe.inode = 77;
+            e->type = FD_TYPE_PIPE;
+            e->flags = FD_FLAG_READ;
+            e->ops = &stat_pipe_ops;
+            e->priv = &stat_pipe;
+        }
+        fd_install(proc.fds, fd);
+        stat_pipe_closes = 0;
+        stat_closed_fd = fd;
+        before = allocations;
+        rc = synth_fd_stat((int)proc.pid, fd, &st);
+        check(failing ? rc == -ENOENT : rc == 0 && st.st_mode == 010666 && st.st_ino == 77,
+              failing ? "a followed stat of a gone process's fd directory is ENOENT"
+                      : "a followed stat reports the pipe");
+        check(stat_closed_fd < 0 && stat_closed_allocations == before,
+              "a close while a followed stat runs frees nothing the stat holds");
+        check(allocations < before && fd_slot(proc.fds, fd)->type == FD_TYPE_NONE,
+              "the stat's drop of its hold ends the closed description");
+        check(stat_pipe_closes == !failing, "the pipe is released once, after the stat");
+        stat_closed_fd = -1;
         row_end();
     }
 }
@@ -4760,6 +4866,7 @@ int main(int argc, char **argv)
     attrs_after_move();
     stats_after_move();
     proc_fd_stat_errors();
+    proc_fd_stat_closed();
     times_after_move();
     open_last_slot();
     loop_handles();
