@@ -432,14 +432,15 @@ static void ata_unlock(struct ata_channel *ch, uint32_t flags)
 static int ata_acquire(struct ata_channel *ch)
 {
     for (;;) {
-        uint32_t flags = spin_lock_irqsave(&ch->lock);
+        uint32_t flags = ata_lock(ch);
 
         if (!ch->owner) {
             ch->owner = 1;
             spin_unlock_irqrestore(&ch->lock, flags);
             return 1;
         }
-        spin_unlock_irqrestore(&ch->lock, flags);
+        /* The owner's sleeping test may have found the lock held here. */
+        ata_unlock(ch, flags);
         if (!ata_can_sleep()) {
             return 0;
         }
