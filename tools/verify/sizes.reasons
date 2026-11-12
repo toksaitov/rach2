@@ -293,7 +293,6 @@ rach2/sys/usb/hub.c:step_hub nesting 5 a state machine, one arm per state, read 
 
 rach2/sys/usb/msc.c:msc_completion complexity 45 a state machine, one arm per state, read as a table
 rach2/sys/usb/msc.c:msc_completion lines 154 a state machine, one arm per state, read as a table
-rach2/sys/usb/msc.c:msc_step complexity 31 a state machine, one arm per state, read as a table
 rach2/sys/usb/msc.c:step_command_done complexity 39 a state machine, one arm per state, read as a table
 rach2/sys/usb/msc.c:step_command_done lines 156 a state machine, one arm per state, read as a table
 

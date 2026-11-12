@@ -33,6 +33,8 @@
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kirq.h"
+#include "../lib/spinlock.h"
+#include "../proc/smp.h"
 #include "../timer.h"
 #include "../lib/kstring.h"
 #include "core.h"
@@ -269,11 +271,26 @@ struct msc_device {
     int queue_lun[MSC_QUEUE]; /* the unit each waiting request is for */
     int queue_head;
     int queue_count;
+    /* Requests handed over by `msc_block_submit` and `msc_block_flush`, in
+     * the order they came, and not yet admitted to `queue`, which only the
+     * pump's side changes: under `msc_intake_lock`, as Linux's
+     * `queuecommand` hands its command to the control thread under the
+     * host's lock (drivers/usb/storage/scsiglue.c:360-396). */
+    struct block_request *intake[MSC_QUEUE];
+    int intake_flush[MSC_QUEUE];
+    int intake_lun[MSC_QUEUE];
+    int intake_head;
+    int intake_count;
 };
 
 /* The driver's table: an entry is a stick from `msc_attach` until the disk
  * layer has let go of it and its slot has been given back. */
 static struct msc_device sticks[MSC_MAX_DEVICES];
+
+/* Every stick's `intake`. Taken with interrupts off, inside the big lock
+ * on the pump's side and without it on a submitter's, and nothing is taken
+ * inside it. Outside the record, which `k_memset` clears. */
+static struct spinlock msc_intake_lock = SPINLOCK_INIT_NAMED("msc_intake_lock");
 
 /* The tag of the last command sent to any stick. Tags go up across every
  * stick and every attach, so a completion left over from a stick that was
@@ -288,6 +305,8 @@ static uint8_t setup_buffer[MSC_MAX_DEVICES][8];
 
 static struct block_request *queue_take(struct msc_device *m, int *flush);
 static int queue_put(struct msc_device *m, struct block_request *r, int flush, int lun);
+static void msc_admit(struct msc_device *m);
+static void msc_start_next(struct msc_device *m);
 static int status_begin(struct msc_device *m);
 static void command_end(struct msc_device *m, int status);
 static void queue_drain(struct msc_device *m, int status);
@@ -1729,6 +1748,59 @@ static int initialization_expired(struct msc_device *m, uint32_t elapsed_ms)
  * ended and after a timeout alike, so nothing a process submitted meanwhile
  * goes out ahead of it.
  */
+/** Serve the oldest waiting request when the stick is ready, idle and not
+ * recovering. In the pump, or under the big lock with interrupts off. */
+static void msc_start_next(struct msc_device *m)
+{
+    int flush = 0;
+    struct block_request *next;
+
+    if (m->stage != STAGE_IDLE || m->recover != RECOVER_NONE || m->request != 0 ||
+        m->state != MSC_STATE_READY || m->queue_count == 0) {
+        return;
+    }
+    next = queue_take(m, &flush);
+    m->request = next;
+    m->flushing = flush;
+    if ((flush ? send_synchronize(m) : send_read_write(m, next)) != 0) {
+        serve_end(m, -EIO);
+    }
+}
+
+/**
+ * Move the requests handed over to `m` into its queue, in the order they
+ * came, failing with `-EIO` each one for a stick or unit no longer served or
+ * that the queue has no room for, and serve the oldest when the stick is
+ * idle. The big lock is held and interrupts are off, as for everything else
+ * that touches the stick, as Linux's control thread takes its command under
+ * `us->dev_mutex` (drivers/usb/storage/usb.c:380-403).
+ */
+static void msc_admit(struct msc_device *m)
+{
+    for (;;) {
+        struct block_request *r = 0;
+        int flush = 0, lun = 0;
+
+        spin_lock(&msc_intake_lock);
+        if (m->intake_count > 0) {
+            r = m->intake[m->intake_head];
+            flush = m->intake_flush[m->intake_head];
+            lun = m->intake_lun[m->intake_head];
+            m->intake_head = (m->intake_head + 1) % MSC_QUEUE;
+            m->intake_count--;
+        }
+        spin_unlock(&msc_intake_lock);
+        if (!r) {
+            break;
+        }
+        if (!m->used || m->state != MSC_STATE_READY || !m->luns[lun].present ||
+            queue_put(m, r, flush, lun) != 0) {
+            block_request_complete(r, r->generation, -EIO);
+        }
+    }
+    msc_start_next(m);
+}
+
 void msc_step(uint32_t elapsed_ms)
 {
     int i;
@@ -1739,6 +1811,7 @@ void msc_step(uint32_t elapsed_ms)
         if (!m->used) {
             continue;
         }
+        msc_admit(m);
         if (m->test_gap != 0) {
             m->test_gap = (m->test_gap > elapsed_ms) ? m->test_gap - elapsed_ms : 0;
         }
@@ -1777,17 +1850,7 @@ void msc_step(uint32_t elapsed_ms)
                 step_idle(m);
             }
         }
-        if (m->stage == STAGE_IDLE && m->recover == RECOVER_NONE && m->request == 0 &&
-            m->state == MSC_STATE_READY && m->queue_count != 0) {
-            int flush = 0;
-            struct block_request *next = queue_take(m, &flush);
-
-            m->request = next;
-            m->flushing = flush;
-            if ((flush ? send_synchronize(m) : send_read_write(m, next)) != 0) {
-                serve_end(m, -EIO);
-            }
-        }
+        msc_start_next(m);
     }
 }
 
@@ -1840,25 +1903,35 @@ static void queue_drain(struct msc_device *m, int status)
 }
 
 /**
- * Take one request for a stick.
+ * Hand request `r`, a flush or not, to the stick behind `device`, from any
+ * processor and without the big lock: it goes into the stick's intake under
+ * `msc_intake_lock`, and the stick is served by its pump under the big
+ * lock, with the rest of the USB stack. When the big lock is free, or this
+ * processor holds it, the request is admitted at once (`msc_admit`); when
+ * another processor holds it, the next pump pass admits it, on the tick or
+ * the controller's interrupt, and the submitter never waits for the lock,
+ * as Linux's `queuecommand` only wakes the control thread that runs the
+ * transport (drivers/usb/storage/scsiglue.c:388-391).
  *
  * The block layer has already put the write's bytes in the request's own
  * page and will take a read's out of it, so this only has to move them. A
  * request that arrives while the stick is busy waits its turn; one for a
- * stick that has gone is refused at once, because the alternative is a
- * process asleep on a device that will never answer. A write to a
- * write-protected unit fails with -EROFS, and a request past the unit's end,
- * or one the full queue has no room for, with -EIO.
+ * stick that has gone is refused, because the alternative is a process
+ * asleep on a device that will never answer: at once when the stick is seen
+ * gone here, read without the stick's lock as Linux's `queuecommand` reads
+ * its disconnect flag (scsiglue.c:372-377), and by the admission otherwise.
+ * A write to a write-protected
+ * unit fails with -EROFS, and a request past the unit's end, or one the full
+ * intake has no room for, with -EIO; a unit's protection and size are fixed
+ * once it is published.
  *
- * This and `msc_block_flush` are the entries from a process, and everything
- * else that touches the stick runs in the pump with interrupts off, so these
- * run with them off too. The emulator completes a transfer inside the
- * doorbell write, so without that the interrupt for a wrapper could arrive
- * before the stage that sent it was recorded, the pump would find an idle
- * stick with a completion for it, and the next wrapper would go out into the
- * middle of the command.
+ * Everything that touches the stick runs with interrupts off: the emulator
+ * completes a transfer inside the doorbell write, so without that the
+ * interrupt for a wrapper could arrive before the stage that sent it was
+ * recorded, the pump would find an idle stick with a completion for it, and
+ * the next wrapper would go out into the middle of the command.
  */
-static int msc_block_submit(block_device_t *device, struct block_request *request)
+static int msc_take(block_device_t *device, struct block_request *r, int flush)
 {
     struct msc_lun *u = (struct msc_lun *)device->drvdata;
     struct msc_device *m = u ? u->owner : 0;
@@ -1868,61 +1941,50 @@ static int msc_block_submit(block_device_t *device, struct block_request *reques
     if (m == 0 || !m->used || m->state != MSC_STATE_READY || !u->present) {
         return -EIO;
     }
-    if (request->write && u->write_protect) {
+    if (!flush && r->write && u->write_protect) {
         return -EROFS;
     }
-    if (request->lba + request->count > u->blocks) {
+    if (!flush && r->lba + r->count > u->blocks) {
         return -EIO;
     }
     flags = kirq_save();
-    if (m->request == 0 && m->stage == STAGE_IDLE) {
-        m->request = request;
-        m->flushing = 0;
-        m->lun = u->index;
-        if (send_read_write(m, request) != 0) {
-            m->request = 0;
-            rc = -EIO;
-        }
-    } else if (queue_put(m, request, 0, u->index) != 0) {
+    spin_lock(&msc_intake_lock);
+    if (m->intake_count >= MSC_QUEUE) {
         rc = -EIO;
+    } else {
+        int at = (m->intake_head + m->intake_count) % MSC_QUEUE;
+
+        m->intake[at] = r;
+        m->intake_flush[at] = flush;
+        m->intake_lun[at] = u->index;
+        m->intake_count++;
+    }
+    spin_unlock(&msc_intake_lock);
+    if (rc == 0 && bkl_try_enter()) {
+        msc_admit(m);
+        bkl_exit();
     }
     kirq_restore(flags);
     return rc;
 }
 
+/** The device's `submit`: hand `r` to the stick (`msc_take`). */
+static int msc_block_submit(block_device_t *device, struct block_request *request)
+{
+    return msc_take(device, request, 0);
+}
+
 /**
- * Tell the stick to put what it has in its own cache on the medium.
+ * The device's `flush`: hand the stick a request to put what it has in its
+ * own cache on the medium (`msc_take`).
  *
  * A stick with nothing to flush answers `ILLEGAL REQUEST`, which is a stick
  * with no cache and not a failure; anything else is one, and the caller's
- * sync or unmount fails with it. Interrupts are off for the reason
- * `msc_block_submit` gives.
+ * sync or unmount fails with it.
  */
 static int msc_block_flush(block_device_t *device, struct block_request *request)
 {
-    struct msc_lun *u = (struct msc_lun *)device->drvdata;
-    struct msc_device *m = u ? u->owner : 0;
-    uint32_t flags;
-    int rc = 0;
-
-    if (m == 0 || !m->used || m->state != MSC_STATE_READY || !u->present) {
-        return -EIO;
-    }
-    flags = kirq_save();
-    if (m->request == 0 && m->stage == STAGE_IDLE) {
-        m->request = request;
-        m->flushing = 1;
-        m->lun = u->index;
-        if (send_synchronize(m) != 0) {
-            m->request = 0;
-            m->flushing = 0;
-            rc = -EIO;
-        }
-    } else if (queue_put(m, request, 1, u->index) != 0) {
-        rc = -EIO;
-    }
-    kirq_restore(flags);
-    return rc;
+    return msc_take(device, request, 1);
 }
 
 /** Fill in the block device that unit `lun` is published to the block layer
@@ -1933,7 +1995,7 @@ static void publish(struct msc_device *m, int lun)
 
     u->block.sector_size = u->block_size;
     u->block.sector_count = u->blocks;
-    u->block.flags = u->write_protect ? BLOCK_READ_ONLY : 0u;
+    u->block.flags = BLOCK_UNLOCKED | (u->write_protect ? BLOCK_READ_ONLY : 0u);
     u->block.deadline_ticks = MSC_DEADLINE_TICKS;
     u->block.max_sectors = MSC_REQ_SECTORS; /* a 512 KiB request as one command */
     u->block.read = 0;

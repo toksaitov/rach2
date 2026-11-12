@@ -37,3 +37,11 @@ int bkl_held(void)
 {
     return !bkl_host_free || depth > 0;
 }
+
+/** Take the big lock as `bkl_enter` does and return 1: the test is one
+ * thread, so no other processor holds it. */
+int bkl_try_enter(void)
+{
+    bkl_enter();
+    return 1;
+}
