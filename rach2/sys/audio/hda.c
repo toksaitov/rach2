@@ -1440,6 +1440,7 @@ static int hda_verb(uint8_t caddr, uint8_t nid, uint32_t verb, int mode, uint32_
         *response = 0;
     if (!hda_base)
         return -EIO;
+    w.start = 0;
     w.polls = 0;
     w.flags = kirq_save();
     if (mode == HDA_VERB_TRY) {

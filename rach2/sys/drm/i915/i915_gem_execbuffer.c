@@ -718,7 +718,7 @@ static void eb_relocs_out(struct eb *eb)
 static int32_t eb_relocate_vma(struct eb *eb, struct eb_vma *ev)
 {
     struct eb_reloc_cache c;
-    uint64_t presumed;
+    uint64_t presumed = 0;
     uint32_t i, n = ev->exec->relocation_count;
     int32_t err = 0;
 

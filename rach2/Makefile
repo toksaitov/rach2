@@ -60,7 +60,13 @@ ARCH_AFLAGS   = -m32
 ARCH_KFLAGS   = -m32 -mno-sse -mno-sse2
 ARCH_KLDFLAGS = -m elf_i386
 endif
-CFLAGS  = $(ARCH_KFLAGS) -g -Wall -Wextra -Wdeclaration-after-statement $(KWARN) $(WERROR) -ansi -nostdlib -nostartfiles -nodefaultlibs $(DEPFLAGS)
+# The kernel is optimised as Linux's is (Makefile:566, 810, 813, 851): -O2,
+# with no type-based alias analysis, no removal of a null check after a
+# dereference, and the frame pointer kept in every function, so that the
+# profiler and the panic's backtrace can walk the frames.
+KOPT    = -O2 -fno-strict-aliasing -fno-delete-null-pointer-checks -fno-omit-frame-pointer \
+          -fno-optimize-sibling-calls
+CFLAGS  = $(ARCH_KFLAGS) $(KOPT) -g -Wall -Wextra -Wdeclaration-after-statement $(KWARN) $(WERROR) -ansi -nostdlib -nostartfiles -nodefaultlibs $(DEPFLAGS)
 # -z noseparate-code: newer binutils split read-only data into a third
 # PT_LOAD by default; the loader and elfcheck take the two-segment layout.
 LDFLAGS = $(ARCH_KLDFLAGS) -z noseparate-code -T $(LINKER_SCRIPT).ld $(LDEXTRA)
@@ -77,7 +83,7 @@ LDEXTRA ?=
 # out of the kernel's; ACPI_CFLAGS is their share, which the style checks
 # that compile the kernel's files read through print-acpi-cflags.
 ACPI_CFLAGS = -D__RACH2__ -Isys/acpi -isystem $(ACPICA)/include
-ACPICA_CFLAGS = $(ARCH_KFLAGS) -g -Wall $(WERROR) -ansi -nostdlib -nostartfiles -nodefaultlibs \
+ACPICA_CFLAGS = $(ARCH_KFLAGS) $(KOPT) -g -Wall $(WERROR) -ansi -nostdlib -nostartfiles -nodefaultlibs \
                 $(DEPFLAGS) -D__RACH2__ -Isys/acpi -I$(ACPICA)/include \
                 $(filter-out -fsanitize%,$(KEXTRA))
 $(ACPI_OBJECTS) : CFLAGS += $(ACPI_CFLAGS)

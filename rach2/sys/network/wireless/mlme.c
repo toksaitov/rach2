@@ -4,6 +4,7 @@
  * (ieee80211_rx_mgmt_auth, ieee80211_send_assoc, ieee80211_mgd_probe_ap,
  * ieee80211_sta_process_chanswitch and ieee80211_drop_unencrypted_mgmt). */
 #include "mlme.h"
+#include "../../lib/kdef.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "../../timer.h"
@@ -546,9 +547,11 @@ static int append_rest(struct wlan_mlme *m, unsigned *pos, const uint8_t *ies, u
     return 0;
 }
 
-/** Build the station's elements of an association request at *pos. */
-static int assoc_elems(struct wlan_mlme *m, const struct wlan_mlme_assoc *req,
-                       const struct ieee80211_elems *ap, unsigned *pos)
+/** Build the station's elements of an association request at *pos, in a
+ * frame of its own, since its two element records would put its caller's
+ * past the kernel's 4 KiB limit. */
+static K_NOINLINE int assoc_elems(struct wlan_mlme *m, const struct wlan_mlme_assoc *req,
+                                  const struct ieee80211_elems *ap, unsigned *pos)
 {
     struct ieee80211_elems user;
     struct ieee80211_sta_elems p;

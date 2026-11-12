@@ -6657,7 +6657,7 @@ static int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct ext2_mount *em = em_of(mnt);
     struct ext2_node *d = dir ? dir : mnt->root;
-    struct ext2_node *n;
+    struct ext2_node *n = 0;
     struct ext2_scan sc;
     uint32_t at, prev;
     int rc;
@@ -6808,7 +6808,7 @@ static int ext2_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct ext2_mount *em = em_of(mnt);
     struct ext2_node *d = dir ? dir : mnt->root;
-    struct ext2_node *c;
+    struct ext2_node *c = 0;
     struct ext2_scan sc;
     uint32_t at, prev;
     int rc, empty = 0;
