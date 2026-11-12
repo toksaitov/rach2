@@ -8,7 +8,9 @@ WebGPU picture RUNS times as USER, in turn alone, beside threadwatch, and
 beside threadwatch with Chromium's own trace. threadwatch samples the
 threads of Chromium, Weston and Xwayland, with the GPU's clock, the i915
 interrupt's count and, on Rach2, the big lock's and the timer's counters.
-On Rach2 each bare run also keeps the kernel's profile and big lock counts.
+On Rach2 each bare run also keeps the kernel's profile of the GPU
+process's main thread, taken every 50 ms beside that thread's times, and
+the big lock's counts.
 OUT must not exist; it keeps every run and, in summary.json and stall.txt,
 the slowest gap of each run's first frames and what each thread did in it.
 """
@@ -23,6 +25,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 sys.dont_write_bytecode = True
@@ -43,6 +46,11 @@ KINDS = ("bare", "watched", "traced")
 # Rach2's profile of the kernel and counts of its big lock, which each bare
 # run zeroes before it and keeps after it.
 BKL = Path("/sys/kernel/debug/bkl")
+# Rach2 names itself Linux in uname(2)'s sysname, for the programs it runs,
+# and itself in the version.
+RACH2 = "Rach2" in os.uname().version
+# The seconds between two copies of the GPU thread's profile.
+SNAPSHOT = 0.05
 
 
 def snapshot(card, into):
@@ -70,6 +78,49 @@ def profile_keep(into):
     """Copy Rach2's profile and big lock counts into INTO."""
     for name in ("profile", "calls", "long", "tick"):
         (into / ("bkl_" + name)).write_bytes((BKL / name).read_bytes())
+
+
+def gpu_process():
+    """Return the PID of Chromium's GPU process, or None."""
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit():
+            try:
+                words = (entry / "cmdline").read_bytes().split(b"\0")
+            except OSError:
+                continue
+            if b"--type=gpu-process" in words:
+                return int(entry.name)
+    return None
+
+
+def gpu_profile(path, done):
+    """Profile the GPU process's main thread into PATH until DONE is set.
+
+    Once the process appears the kernel's profile is restarted for its main
+    thread alone, and every SNAPSHOT seconds a copy of it is appended to
+    PATH, after a line with the epoch's time and the thread's utime, stime
+    and minflt, so that two copies give the thread's kernel time between
+    them by function and path, and the page's frame times, on the epoch's
+    clock, name the copies around the first frames.
+    """
+    pid = None
+    with open(path, "w") as log:
+        while not done.is_set():
+            if pid is None:
+                pid = gpu_process()
+                if pid is not None:
+                    (BKL / "profile").write_text("kernel %d\n" % pid)
+                    log.write("# gpu %d\n" % pid)
+            if pid is not None:
+                try:
+                    stat = Path("/proc/%d/task/%d/stat" % (pid, pid)).read_text()
+                except OSError:
+                    break
+                fields = stat[stat.rindex(")") + 2:].split()
+                log.write("# snapshot %.6f utime %s stime %s minflt %s\n" % (
+                    time.time(), fields[11], fields[12], fields[7]))
+                log.write((BKL / "profile").read_text())
+            done.wait(SNAPSHOT if pid is not None else 0.005)
 
 
 def frames(picture):
@@ -161,7 +212,7 @@ def main():
         save(out / "machine.json", {"card": str(card), "icd": str(icd), "system": os.uname().sysname,
              "cmdline": Path("/proc/cmdline").read_text(), "user": user,
              "kernel": os.uname().release})
-        if os.uname().sysname == "Rach2":
+        if RACH2:
             subprocess.run(["mixer", "vol", "1"], check=True)
         end_desktop()
         weston = private_weston(user, out, env)
@@ -178,9 +229,12 @@ def main():
             here.mkdir()
             os.chown(here, account.pw_uid, account.pw_gid)
             snapshot(card, here / "before")
-            profiled = kind == "bare" and os.uname().sysname == "Rach2"
+            profiled = kind == "bare" and RACH2
+            done = threading.Event()
             if profiled:
                 profile_start()
+                gpu = threading.Thread(target=gpu_profile, args=(here / "bkl_gpu_profile", done))
+                gpu.start()
             log = here / "threadwatch.txt"
             if kind != "bare":
                 watch = subprocess.Popen([str(sampler), "-i", "1000",
@@ -192,6 +246,9 @@ def main():
                 run(["python3", str(GRAPHICS / "browser/sandbox.py"), user, "chromium",
                      str(here / "browser"), mode], here / "browser.log", env)
             finally:
+                if profiled:
+                    done.set()
+                    gpu.join()
                 if watch is not None:
                     watch.send_signal(signal.SIGTERM)
                     assert watch.wait() == 0, "threadwatch failed"
