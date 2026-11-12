@@ -531,6 +531,7 @@ int ia32_fast_syscall(isr_params_t *p, int sysenter)
     uint32_t ebp, nr = (uint32_t)p->rax;
     int ioctl = 0;
 
+    this_cpu()->entry_cycles = start;
     (void)isr_entry_lock(p);
     mm = current_proc ? current_proc->mm : NULL;
     base = mm && mm->compat ? mm->vdso : 0;
