@@ -1550,8 +1550,10 @@ static void delayed_rows(void)
  * and a later user's signal taken posts neither. A timer of SIGCONT, whose
  * post discards the stops (`sig_job_control`) while `timer_lock` is held,
  * drops a deleted SIGTSTP timer's notification without taking the lock
- * again, and the record, which counts for nothing, is freed at the next
- * dequeue.
+ * again, and the record is freed as the post lets the lock go
+ * (`timer_unlock`), as Linux frees a deleted timer's sigqueue as it
+ * discards it (kernel/signal.c:444-452, 794-795), and not at a next dequeue
+ * that may never come.
  */
 static void discard_rows(void)
 {
@@ -1599,10 +1601,10 @@ static void discard_rows(void)
     timerfd_due();
     CHECK(posts == 1 && (group.pending & KSIG_BIT(SIGCONT)) &&
               !(group.pending & KSIG_BIT(SIGTSTP)) && second.count == 0 &&
-              group.timers_gone == &second && ptimer_count(&group) == 1,
-          "the SIGCONT posted under the timers' lock drops it, its record counting for nothing");
+              group.timers_gone == NULL && gone_later == NULL && ptimer_count(&group) == 1,
+          "the SIGCONT posted under the timers' lock drops it, and its record is freed");
     (void)take_signal(SIGCONT);
-    CHECK(group.timers_gone == NULL && posts == 1, "the next dequeue frees the record");
+    CHECK(posts == 1, "the SIGCONT taken posts nothing more");
     group.timers = NULL;
     model_phase_ns = NS_PER_TICK / 2;
 }
