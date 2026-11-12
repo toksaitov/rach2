@@ -325,6 +325,14 @@ void set_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
           "only the rows between ticks set a handler, hrtimer's");
 }
 
+/** The flags of the handler between ticks: without the big lock. */
+void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flags)
+{
+    (void)handler;
+    CHECK(hr_model && vector == 64 && flags == ISR_UNLOCKED,
+          "the handler between ticks runs without the big lock");
+}
+
 /** The model's clock in the rows of the timer between ticks, with the
  * row's stop after one reading; 0, unread, for the calibrations. */
 int64_t rtc_monotonic_ns(void)
