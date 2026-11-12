@@ -103,6 +103,7 @@
 #define DIVIDE_BY_16        0x3u
 #define ICR_SELF            (1u << 18)
 #define ICR_PENDING         (1u << 12)
+#define ICR_LOGICAL         (1u << 11)
 #define ICR_NMI             (4u << 8)
 #define ICR_INIT            (5u << 8)
 #define ICR_STARTUP         (6u << 8)
@@ -793,6 +794,13 @@ static void send_command(uint32_t target, uint32_t low)
 void lapic_send_ipi(uint32_t target, uint8_t vector)
 {
     send_command(target, vector);
+}
+
+void lapic_send_ipi_cluster(uint32_t cluster, uint32_t mask, uint8_t vector)
+{
+    if (x2apic) {
+        send_command((cluster << 16) | (mask & 0xFFFFu), ICR_LOGICAL | vector);
+    }
 }
 
 void lapic_send_nmi(uint32_t target)

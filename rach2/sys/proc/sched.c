@@ -711,13 +711,7 @@ void sched_wake_due(process_t *p, uint64_t now)
 
 void sched_kick_cpus(uint64_t cpus)
 {
-    int c;
-
-    for (c = 0; cpus != 0; c++, cpus >>= 1) {
-        if (cpus & 1u) {
-            smp_kick(c);
-        }
-    }
+    smp_kick_many(cpus);
 }
 
 void sched_set_affinity(process_t *p, uint64_t mask)

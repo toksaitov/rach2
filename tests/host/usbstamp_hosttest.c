@@ -285,6 +285,12 @@ void smp_kick(int cpu)
     (void)cpu;
 }
 
+/** Do nothing, as `smp_kick`. */
+void smp_kick_many(uint64_t cpus)
+{
+    (void)cpus;
+}
+
 /** Do nothing: the idle task's loop does not run here. */
 void arch_irq_disable(void)
 {}
