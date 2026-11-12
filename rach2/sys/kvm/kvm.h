@@ -359,7 +359,8 @@ struct kvm_vm {
     struct spinlock clock_lock;
     /* The kvmclock moved since hyperv.c last looked: its reference TSC
      * page is written again (`kvm_hv_clock_changed`). Set by pvclock.c,
-     * taken by an exchange under the big lock (`kvm_hv_prepare`). */
+     * taken by an exchange under the big lock (`kvm_hv_prepare`,
+     * `kvm_hv_clock_update`). */
     volatile uint32_t hv_clock_moved;
     /* Over `msr_filter` and `pmu_filter`, which a guest's exits read
      * (msr.c, pmu.c), as Linux's kvm->srcu over both filters. */
@@ -1055,7 +1056,9 @@ int kvm_pv_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, i
 /** Write `v`'s kvmclock into guest memory before an entry, when it was
  * asked for (KVM_REQ_CLOCK_UPDATE) or, without the master clock, when the
  * vCPU moved to another processor or KVMCLOCK_SYNC_NS passed, as Linux's
- * kvm_guest_time_update. In `v`'s thread. */
+ * kvm_guest_time_update, and with it the reference TSC page, kvmclock or
+ * not (`kvm_hv_clock_update`), so that a request taken here leaves no page
+ * of the old clock to the entry. In `v`'s thread. */
 void kvm_clock_prepare(struct kvm_vcpu *v);
 
 /** KVM_KVMCLOCK_CTRL: the guest's next kvmclock says it was stopped. 0, or
@@ -1716,6 +1719,13 @@ void kvm_hv_complete(struct kvm_vcpu *v);
  * run page's exit set. */
 int32_t kvm_hv_prepare(struct kvm_vcpu *v);
 
+/** Write the reference TSC page of `v`'s VM if it waits to be written, as
+ * Linux's kvm_guest_time_update does with kvm_hv_setup_tsc_page
+ * (arch/x86/kvm/x86.c:2893), for `kvm_clock_prepare` once it takes
+ * KVM_REQ_CLOCK_UPDATE. In `v`'s thread; takes the big lock only for the
+ * work. */
+void kvm_hv_clock_update(struct kvm_vcpu *v);
+
 /** Fire `v`'s synthetic timers that are due, delivering their messages or
  * vectors, in `v`'s thread with the APIC in the kernel. */
 void kvm_hv_stimers(struct kvm_vcpu *v);
@@ -1748,7 +1758,9 @@ int kvm_hv_invtsc_suppressed(const struct kvm_vcpu *v);
 
 /** The guest's clock or TSC of `vm` moved: the reference TSC page is
  * written again before the next entry. pvclock.c, which runs without the
- * big lock, sets `hv_clock_moved` instead, which `kvm_hv_prepare` takes. */
+ * big lock, sets `hv_clock_moved` instead before it asks for
+ * KVM_REQ_CLOCK_UPDATE, which `kvm_hv_prepare` and `kvm_hv_clock_update`
+ * take. */
 void kvm_hv_clock_changed(struct kvm_vm *vm);
 
 /** Free hyperv.c's share of `v`. */
