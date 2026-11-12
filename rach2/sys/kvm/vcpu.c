@@ -793,27 +793,30 @@ static int fast_ends(struct kvm_vcpu *v)
 }
 
 /**
- * Enter the guest, with interrupts off, as the backend's `enter` needs,
- * until an exit its `fast` does not handle or one after which the loop has
- * work (`fast_ends`), as Linux's vcpu_enter_guest enters again from its
- * fast path (arch/x86/kvm/x86.c:10569-10595): 0 for an exit the backend's
- * `exit` names, 1 for one `fast` handled, -EAGAIN when a request came
- * between the check and the first entry, or the backend's error. The vCPU
- * is IN_GUEST from before its requests are read, so a kick that comes
- * after the read finds it there and interrupts the processor, as Linux's
- * vcpu_enter_guest sets IN_GUEST_MODE before kvm_vcpu_exit_request
- * (x86.c:10491, 10519); it stays IN_GUEST across the fast path's entries.
- * A request the loop has not taken cancels the entry (KVM_REQ_NOENTER):
- * one that a kick set after the loop's look would otherwise wait for the
- * next exit. So does a stop or start of the host's clock after the loop's
- * `kvm_clock_prepare` (`entry_waits`), which would otherwise enter with a
- * kvmclock that keeps PVCLOCK_TSC_STABLE_BIT. An entry on another
+ * Enter the guest, with interrupts off, as the backend's `enter` needs, until
+ * an exit its `fast` does not handle or one after which the loop has work
+ * (`fast_ends`), as Linux's vcpu_enter_guest enters again from its fast path
+ * (arch/x86/kvm/x86.c:10569-10595): 0 for an exit the backend's `exit` names, 1
+ * for one `fast` handled, -EAGAIN when a request or a switch came between the
+ * check and the first entry, or the backend's error. The vCPU is IN_GUEST from
+ * before its requests are read, so a kick that comes after the read finds it
+ * there and interrupts the processor, as Linux's vcpu_enter_guest sets
+ * IN_GUEST_MODE before kvm_vcpu_exit_request (x86.c:10491, 10519); it stays
+ * IN_GUEST across the fast path's entries. A request the loop has not taken
+ * cancels the entry (KVM_REQ_NOENTER): one that a kick set after the loop's
+ * look would otherwise wait for the next exit. So does a stop or start of the
+ * host's clock after the loop's `kvm_clock_prepare` (`entry_waits`), which
+ * would otherwise enter with a kvmclock that keeps PVCLOCK_TSC_STABLE_BIT, and
+ * so does a switch that a tick or a wake asked for after the loop's look
+ * (`need_resched`), as Linux's kvm_vcpu_exit_request reads TIF_NEED_RESCHED
+ * with interrupts off (x86.c:1715-1720, include/linux/entry-kvm.h:89), which
+ * would otherwise wait in the guest for the next exit. An entry on another
  * processor than the last asks for the kvmclock without the master clock
  * (KVM_REQ_CLOCK_UPDATE), as Linux's kvm_arch_vcpu_load does when the vCPU
- * moved (arch/x86/kvm/x86.c:4584-4605), and so cancels this entry. The
- * last exit's account closes as handled in the kernel only once the guest
- * ran; after -EAGAIN or an error it stays open, and closes as one that
- * ended KVM_RUN if KVM_RUN returns before the next entry.
+ * moved (arch/x86/kvm/x86.c:4584-4605), and so cancels this entry. The last
+ * exit's account closes as handled in the kernel only once the guest ran; after
+ * -EAGAIN or an error it stays open, and closes as one that ended KVM_RUN if
+ * KVM_RUN returns before the next entry.
  */
 static int32_t run_enter(struct kvm_vcpu *v)
 {
@@ -828,7 +831,7 @@ static int32_t run_enter(struct kvm_vcpu *v)
     }
     v->mode = KVM_MODE_IN_GUEST;
     sched_mb(); /* the kick's request and mode, read in the other order */
-    if (entry_waits(v)) {
+    if (entry_waits(v) || current_proc->need_resched) {
         v->mode = KVM_MODE_OUTSIDE;
         kirq_restore(flags);
         return -EAGAIN;

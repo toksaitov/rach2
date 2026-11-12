@@ -766,8 +766,11 @@ void kvm_lapic_pmi(struct kvm_vcpu *v)
  * the script. With `late_request` set, an exit asks for an event, and the
  * event's injection once the script is spent leaves `late_request`'s
  * request after the run loop has looked for it, so the entry that follows
- * finds it. `entry_requests` are the vCPU's requests at the last entry. */
-static int refusing = 1, refuse_at_end;
+ * finds it. With `late_resched` set the injection asks for a switch in the
+ * same way, and `resched_entered` is set when an entry found that switch
+ * still asked for. `entry_requests` are the vCPU's requests at the last
+ * entry. */
+static int refusing = 1, refuse_at_end, late_resched, resched_entered;
 static uint32_t late_request, entry_requests;
 static struct kvm_exit script[16];
 static uint32_t script_hw[16];
@@ -788,6 +791,7 @@ static int fake_enter(struct kvm_vcpu *v)
     CHECK(v->mode == KVM_MODE_IN_GUEST, "the vCPU is in the guest during the entry");
     entries_made++;
     entry_requests = v->requests;
+    resched_entered |= caller.need_resched != 0;
     if (refusing || (refuse_at_end && script_at == script_len)) {
         return -EOPNOTSUPP;
     }
@@ -822,7 +826,7 @@ static int fake_exit(struct kvm_vcpu *v)
     ring_writes = 0;
     v->if_flag = 1;
     v->irq_allowed = 1;
-    if (late_request) {
+    if (late_request || late_resched) {
         req_set(v, KVM_REQ_EVENT);
     }
     if (tick_exits && v->exit.kind == KVM_X_AGAIN) {
@@ -849,6 +853,10 @@ static void fake_inject(struct kvm_vcpu *v)
     if (late_request && script_at == script_len) {
         req_set(v, late_request);
         late_request = 0;
+    }
+    if (late_resched && script_at == script_len) {
+        caller.need_resched = 1;
+        late_resched = 0;
     }
 }
 
@@ -4666,10 +4674,14 @@ static int late_run(int fd, uint32_t request, int injected)
  * 10519-10527): a KVM_REQ_CLOCK_UPDATE is written, and a KVM_REQ_EVENT
  * injected, before the entry that follows. A KVM_REQ_TLB_FLUSH does not
  * cancel it, since the backend's entry takes that request itself and drops
- * the translations.
+ * the translations. A switch asked for at the same point cancels it too,
+ * as Linux's check reads TIF_NEED_RESCHED there, and the loop switches
+ * before the next entry.
  */
 static void entry_cancel_rows(int fd)
 {
+    unsigned long switched;
+
     host_cpu = 0;
     refusing = 0;
     refuse_at_end = 1;
@@ -4681,6 +4693,20 @@ static void entry_cancel_rows(int fd)
           "before the next");
     CHECK(late_run(fd, KVM_REQ_TLB_FLUSH, 1) && (entry_requests & KVM_REQ_TLB_FLUSH),
           "a KVM_REQ_TLB_FLUSH after the loop's look leaves the entry to drop the translations");
+    script_len = 0;
+    script_at = 0;
+    scripted(KVM_X_AGAIN);
+    script_hw[0] = 1;
+    late_resched = 1;
+    resched_entered = 0;
+    entries_made = 0;
+    switched = caller.nivcsw;
+    CHECK(fdio(fd, KVM_RUN, 0) == -EOPNOTSUPP && entries_made == 2 && !late_resched &&
+              !resched_entered && caller.nivcsw == switched + 1,
+          "a switch asked for after the loop's look cancels the entry, and the loop switches "
+          "before the next");
+    caller.need_resched = 0;
+    late_resched = 0;
     pass_guard = NULL;
     refuse_at_end = 0;
     exit_stats_write("0");
