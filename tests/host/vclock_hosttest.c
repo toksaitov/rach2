@@ -225,6 +225,29 @@ void arch_relax(void)
     }
 }
 
+/** The barrier of `sched_mb`: an exchange, on the one thread. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    unsigned int old = *p;
+
+    *p = value;
+    return old;
+}
+
+/* The kicks the clock sent other processors, the set of the last one and
+ * the generation it went after. */
+static int kicks;
+static uint64_t kicked_cpus;
+static uint32_t kicked_gen;
+
+/** The clock's kick of other processors: recorded. */
+void sched_kick_cpus(uint64_t cpus)
+{
+    kicks++;
+    kicked_cpus = cpus;
+    kicked_gen = generation;
+}
+
 /** The tick's clocks: the machine's clock, less the lag. */
 void rtc_tick_both(uint64_t *mono_ns, uint64_t *raw_ns)
 {
@@ -369,6 +392,7 @@ static void stop_rows(void)
 {
     uint64_t vdso_ns = 0, sys_ns, ns, cycles, ref, raw, before, mono0, raw0, floor0;
     int found;
+    uint32_t gen;
     int i;
 
     for (i = 0; i < 3; i++) {
@@ -427,9 +451,14 @@ static void stop_rows(void)
                      : "and so does one with the bit");
     }
     now_ns += 10000u;
+    kicks = 0;
+    gen = generation;
     vclock_tick();
     CHECK(!vclock_running() && data->mode == VCLOCK_NONE,
           "the boot processor's withdrawn bit stops the clock, its own page's set");
+    CHECK(kicks == 1 && kicked_cpus == ~(uint64_t)0 && kicked_gen == gen + 1u,
+          "and interrupts every other processor once, after the generation went up, so that "
+          "a vCPU in its guest exits and decides its master clock again");
     CHECK(near(floor_mono, now_ns, 1000u),
           "the monotonic floor is the stop's moment by KVM's clock, not the TSC a second ahead");
     CHECK(near(floor_raw, now_ns, 1000u), "and so is the raw floor");
@@ -452,6 +481,9 @@ static void stop_rows(void)
     CHECK(ref < floor_mono, "the tick's clock has not reached the stop's time at the start");
     vclock_tick();
     CHECK(vclock_running() && data->mode == VCLOCK_PVCLOCK, "the bit set again starts the clock");
+    CHECK(kicks == 1 && generation == gen + 2u,
+          "the start raises the generation and interrupts no processor, as Linux kicks only "
+          "when the clock leaves the TSC");
     found = vdso_mono(&ns);
     CHECK(found == VREAD_OK && ns == floor_mono,
           "and the vDSO reads it from the stop's time, the floor");
