@@ -3327,15 +3327,15 @@ void paging_zap_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo
 
     bkl_assert_held();
 again:
-    walk = ++zap_walks;
-    if (walk == 0) {
+    if (++zap_walks == 0) {
         for (p = proc_list; p; p = p->next) {
             if (p->mm) {
                 p->mm->zap_walk = 0;
             }
         }
-        walk = zap_walks = 1;
+        zap_walks = 1;
     }
+    walk = zap_walks;
     for (p = proc_list; p; p = p->next) {
         struct mm *mm = p->mm;
 
