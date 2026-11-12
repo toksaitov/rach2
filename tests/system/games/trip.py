@@ -143,6 +143,8 @@ def main():
     if len(sys.argv) != 3:
         raise SystemExit("usage: trip.py OUT N")
     out, count = Path(sys.argv[1]).resolve(), int(sys.argv[2])
+    if count < 1:
+        raise SystemExit("trip: runs must be positive")
     out.mkdir(parents=True, exist_ok=False)
     work = Path(tempfile.mkdtemp(prefix="rach2-trip.", dir=os.environ.get("TMPDIR", "/tmp")))
     runner = None
@@ -168,6 +170,8 @@ def main():
             status, text = runner.probe(name, {"WINEDEBUG": "-all,err+all"}, program="trip64")
             found = re.search(r"round trips in ([0-9.]+) ms", text)
             run.say("%s: exit %d ms %s" % (name, status, found.group(1) if found else None))
+            if status != 0 or found is None or "TRIP OK" not in text:
+                raise RuntimeError("%s failed or returned no round-trip result" % name)
         if (out / "strace-ioctl.txt").exists():
             for request, n in ioctls(out / "strace-ioctl.txt"):
                 run.say("ioctl %s %d" % (request, n))

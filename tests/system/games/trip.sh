@@ -31,6 +31,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 mkdir -p "$out"
+out=$(cd "$out" && pwd)
 chown "$user" "$out"
 if command -v mixer > /dev/null && [ -e /dev/mixer ]; then
     mixer vol 1
