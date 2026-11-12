@@ -32,13 +32,15 @@ static struct ext2_node **node_chain(struct ext2_mount *em, uint32_t ino)
 }
 
 /** Double the buckets of the mount's hash once its nodes outnumber them,
- * every node moved to the new table; a heap with no room for the table
- * leaves the hash as it is, its chains longer. */
+ * every node moved to the new table under `em->share_lock`, which a lookup
+ * without the big lock holds (`table_names`); a heap with no room for the
+ * table leaves the hash as it is, its chains longer. */
 static void node_hash_grow(struct ext2_mount *em)
 {
     uint32_t size = em->node_buckets * 2u;
     struct ext2_node **table, **old;
     struct ext2_node *n;
+    uint32_t flags;
 
     if (em->node_count <= em->node_buckets || size == 0) {
         return;
@@ -51,6 +53,7 @@ static void node_hash_grow(struct ext2_mount *em)
         kfree(table); /* the heap slept, and another caller grew the hash */
         return;
     }
+    flags = spin_lock_irqsave(&em->share_lock);
     old = em->node_hash;
     em->node_hash = table;
     em->node_buckets = size;
@@ -60,16 +63,22 @@ static void node_hash_grow(struct ext2_mount *em)
         n->hnext = *chain;
         *chain = n;
     }
+    spin_unlock_irqrestore(&em->share_lock, flags);
     if (old != em->node_first) {
         kfree(old);
     }
 }
 
-/** The mount's node in memory for inode `ino`, or NULL. */
+/** The mount's node in memory for inode `ino`, or NULL. The caller holds
+ * the big lock, under which the hash changes, or `em->share_lock`, under
+ * which it changes too. */
 struct ext2_node *ext2_node_find(struct ext2_mount *em, uint32_t ino)
 {
     struct ext2_node *n;
 
+    if (!em->node_hash) {
+        return 0;
+    }
     for (n = *node_chain(em, ino); n; n = n->hnext) {
         node_visits++;
         if (n->ino == ino) {
@@ -155,19 +164,20 @@ struct ext2_node *ext2_node_make(void)
 void ext2_node_publish(struct ext2_mount *em, struct ext2_node *n, uint32_t ino)
 {
     struct ext2_node **chain;
-    uint32_t flags = spin_lock_irqsave(&em->share_lock);
+    uint32_t flags;
 
-    n->ino = ino;
-    n->lost_list = em->shared_lost || em->device_lost;
-    spin_unlock_irqrestore(&em->share_lock, flags);
     n->next = em->nodes;
     if (em->nodes) {
         em->nodes->prev = n;
     }
     em->nodes = n;
+    flags = spin_lock_irqsave(&em->share_lock);
+    n->ino = ino;
+    n->lost_list = em->shared_lost || em->device_lost;
     chain = node_chain(em, ino);
     n->hnext = *chain;
     *chain = n;
+    spin_unlock_irqrestore(&em->share_lock, flags);
     em->node_count++;
     node_hash_grow(em);
 }
@@ -180,12 +190,17 @@ static void node_drop(struct ext2_mount *em, struct ext2_node *n)
     struct ext2_node **link;
     uint32_t flags;
 
+    flags = spin_lock_irqsave(&em->share_lock);
     for (link = node_chain(em, n->ino); *link; link = &(*link)->hnext) {
         if (*link == n) {
             *link = n->hnext;
             break;
         }
     }
+    if (n->state == N_LIVE && !n->unlinked && (n->nshared || n->shared_over || n->unlisted)) {
+        em->shared_lost = 1;
+    }
+    spin_unlock_irqrestore(&em->share_lock, flags);
     if (n->prev) {
         n->prev->next = n->next;
     } else {
@@ -194,11 +209,6 @@ static void node_drop(struct ext2_mount *em, struct ext2_node *n)
     if (n->next) {
         n->next->prev = n->prev;
     }
-    flags = spin_lock_irqsave(&em->share_lock);
-    if (n->state == N_LIVE && !n->unlinked && (n->nshared || n->shared_over || n->unlisted)) {
-        em->shared_lost = 1;
-    }
-    spin_unlock_irqrestore(&em->share_lock, flags);
     em->node_count--;
     kfree(n);
     em->nodes_gone++;
@@ -1513,14 +1523,12 @@ void ext2_device_write_end(struct ext2_mount *em)
  * Write the device's dirty buffers and flush the disk's cache, with no lock
  * of the mount held, as `vfs_sync_all` does, so that a disk that takes
  * seconds holds up no other call on the mount; a change made meanwhile is
- * the next sync's. The sync runs under the big lock (`ext2_big_enter`),
- * which its waits let go. A failure is recorded as the batch's error. 0, or
+ * the next sync's. A failure is recorded as the batch's error. 0, or
  * -errno.
  */
 int ext2_em_write_out(struct vfs_mount *mnt)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
-    int big = ext2_big_enter();
     int rc;
 
     ext2_device_write_begin(em);
@@ -1532,7 +1540,6 @@ int ext2_em_write_out(struct vfs_mount *mnt)
     if (rc != 0) {
         rc = ext2_writeback_error(em, rc);
     }
-    ext2_big_exit(big);
     return rc;
 }
 
@@ -1800,9 +1807,11 @@ static int table_listed(const struct ext2_node *m)
  * was lost, is not in memory or was loaded again since (`lost_list`). A
  * block a file overwrote in place is named on the device already. The
  * cache writes such a block before the table block, as it does every
- * shared block dirtied before it. Runs under the cache's walks, which hold
- * the big lock that keeps the node table, reads the lists under
- * `em->share_lock`, and sleeps nowhere.
+ * shared block dirtied before it. Runs under the cache's walks, under its
+ * write lock or its spinlock and with or without the big lock, so it looks
+ * the node up and reads its lists under `em->share_lock`, under which the
+ * hash changes and a node leaves it before it is freed (`node_drop`), and
+ * sleeps nowhere.
  */
 static int table_names(void *arg, uint64_t blk, uint64_t owner)
 {
@@ -1817,8 +1826,8 @@ static int table_names(void *arg, uint64_t blk, uint64_t owner)
     if (ext2_inode_offset(em, (uint32_t)owner) >> BCACHE_BLOCK_SHIFT != blk) {
         return 0;
     }
-    m = ext2_node_find(em, (uint32_t)owner);
     flags = spin_lock_irqsave(&em->share_lock);
+    m = ext2_node_find(em, (uint32_t)owner);
     names =
         (m && table_listed(m)) || ((!m || m->lost_list) && (em->shared_lost || em->device_lost));
     spin_unlock_irqrestore(&em->share_lock, flags);
@@ -1934,12 +1943,12 @@ int ext2_em_strict(const struct ext2_mount *em)
 }
 
 /**
- * Take the big lock for a call into the buffer cache's write side, its
- * dirty marks, writes, syncs and reserve, which keep the cache's dirty
- * lists under it (bcache.h), when the caller runs without it, as a writer
- * of a file's data does: 1 when taken, for `ext2_big_exit`, and 0 when the
- * caller held it. The caller holds no spinlock. A sleep in the call lets
- * the lock go and takes it back, as every holder's does.
+ * Take the big lock for what it still keeps when the caller runs without
+ * it, as a writer of a file's data does: the node table's walks, the user's
+ * pages under a copy from them (`vm_resident`) and the VFS's flags of the
+ * mount. 1 when taken, for `ext2_big_exit`, and 0 when the caller held it.
+ * The caller holds no spinlock. A sleep lets the lock go and takes it back,
+ * as every holder's does.
  */
 int ext2_big_enter(void)
 {
@@ -1959,19 +1968,11 @@ void ext2_big_exit(int taken)
 }
 
 /** A barrier of the order: `bcache_sync` of the mount's device on a strict
- * mount, under the big lock (`ext2_big_enter`), and nothing on one that
- * writes back, whose order is `sync`'s. 0, or -errno. */
+ * mount, and nothing on one that writes back, whose order is `sync`'s. 0,
+ * or -errno. */
 int ext2_em_sync(struct ext2_mount *em)
 {
-    int big, rc;
-
-    if (!ext2_em_strict(em)) {
-        return 0;
-    }
-    big = ext2_big_enter();
-    rc = bcache_sync(em->dev);
-    ext2_big_exit(big);
-    return rc;
+    return ext2_em_strict(em) ? bcache_sync(em->dev) : 0;
 }
 
 /** On a mount that writes back, write the device's dirty buffers in runs,
@@ -1992,11 +1993,8 @@ void ext2_em_balance(struct ext2_mount *em)
     if (!bcache_dirty_heavy()) {
         current_proc->fs_written = 0;
     } else if (current_proc->fs_written >= EXT2_BALANCE_SHARE) {
-        int big = ext2_big_enter();
-
         current_proc->fs_written = 0;
         (void)bcache_sync_unflushed(em->dev);
-        ext2_big_exit(big);
     }
 }
 
@@ -2042,15 +2040,14 @@ void ext2_node_share_group(struct ext2_mount *em, struct ext2_node *n, uint32_t 
  * same step as the buffer, so that the drain, which copies the image over
  * the cache's block, keeps them: an inode stored into a table block the
  * batch holds, a bit beside the batch's reservations, a descriptor or the
- * superblock's counts. Runs under the big lock, which it takes when the
- * caller lacks it (`ext2_big_enter`). 0, or -errno.
+ * superblock's counts. With or without the big lock: the cache's write side
+ * has a lock of its own (bcache.h). 0, or -errno.
  */
 int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const void *src,
                      uint32_t len, int sync)
 {
     const uint8_t *in = src;
     int level = sync / WRITE_LEVEL(1);
-    int big = ext2_big_enter();
     int rc = 0;
 
     sync &= WRITE_WAY;
@@ -2100,7 +2097,6 @@ int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const 
         off += take;
         len -= take;
     }
-    ext2_big_exit(big);
     return rc;
 }
 

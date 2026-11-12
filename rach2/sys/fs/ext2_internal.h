@@ -26,8 +26,9 @@
  * present is brought in with the locks let go, or, when the caller holds a
  * file lock of its own, ends the call short (`user_refault`).
  *
- * The big lock covers the node table, the cache's writes and the
- * namespace operations' steps between their sleeps. A reader may run
+ * The big lock covers the node table and the namespace operations' steps
+ * between their sleeps; the cache's writes have a lock of their own
+ * (bcache.h). A reader may run
  * without it: `read`, `readdir`, `getattr`, `open`, `release`, `hold` and
  * `put` of a node the caller holds, into kernel buffers (the type sets
  * `reads_unlocked`). So may a writer of a regular file's data: `write`,
@@ -35,12 +36,13 @@
  * `writes_unlocked`), under the file's node lock as Linux's ext2 writes
  * under the inode's `i_rwsem`, with the batch's, the groups' and the
  * superblock's locks for what they share with other files. Each takes the
- * big lock only around a call into the buffer cache's write side, whose
- * dirty marks, writes and syncs it still keeps (`ext2_big_enter`), around
- * the check and copy of a user buffer (`vm_resident`), and for the node
- * table, an error's mark, a final put and a reap. A reader holds its node's
- * lock, which every writer of the node's blocks holds too, and reads the
- * batch's images under `wb->lock`, in the step that finds them.
+ * big lock only around the check and copy of a user buffer (`vm_resident`),
+ * and for the node table, an error's mark, a final put and a reap
+ * (`ext2_big_enter`); the node hash's changes and the look of a sync's walk
+ * into it are under `em->share_lock` as well (`table_names`). A reader
+ * holds its node's lock, which every writer of the node's blocks holds too,
+ * and reads the batch's images under `wb->lock`, in the step that finds
+ * them.
  *
  * The node locks, `em->batch`, the groups' locks and `em->super` count in
  * their holder's `file_locks` (process.h), so that reclaim under any of them
@@ -380,8 +382,11 @@ struct ext2_mount {
      * `table_writing`, `unlisted`, `lost_list` and `dirty_meta`, and the
      * mount's `shared_lost`, `device_lost` and `device_writes`, as Linux
      * keeps an inode's list of metadata buffers under the mapping's
-     * `i_private_lock` (fs/buffer.c:475-486). Taken under the cache's walks
-     * (`table_names`), so nothing under it calls the cache. */
+     * `i_private_lock` (fs/buffer.c:475-486); and the node hash's chains,
+     * which change under it and the big lock both, so that a sync's walk,
+     * which may run without the big lock, looks a node up under it alone.
+     * Taken under the cache's walks and its spinlock (`table_names`), so
+     * nothing under it calls the cache. */
     struct spinlock share_lock;
     /* Where a caller sleeps for a node that is loading or dying, and a
      * writer for admission while `closing` is set. */
