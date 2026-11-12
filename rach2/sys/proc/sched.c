@@ -799,6 +799,7 @@ void schedule(void)
     next->state = PROC_RUNNING;
     sched_move(next, me);
     next->pcount++;
+    next->slice_ns = sched_clock_ns();
 
     if (old != cpu->idle) {
         fpu_save(old->fpu);
@@ -915,6 +916,42 @@ void sched_preempt(void)
         return;
     }
     schedule();
+}
+
+/* The least a thread runs once switched onto a processor before the tick
+ * gives the processor to another thread of its queue: Linux's base slice,
+ * sysctl_sched_base_slice (kernel/sched/fair.c), 0.75 ms. */
+#define SCHED_SLICE_NS 750000u
+
+/**
+ * A switch made between two ticks gives the incoming thread only what is
+ * left of the tick, and the next tick would hand the processor back to a
+ * thread that yielded to it, as KVM's steal_time selftest yields to a
+ * thread that runs for 200 us and waits for its own run_delay to grow by
+ * as much. Linux's tick ends a thread's turn only once its slice has run
+ * (update_deadline, kernel/sched/fair.c); a thread woken from a sleep, or
+ * a real-time one, takes the processor at once all the same, as Linux's
+ * wakeup preemption gives it.
+ */
+void sched_tick(void)
+{
+    process_t *p = current_proc, *q;
+    uint32_t flags;
+    int due;
+
+    if (p && p != this_cpu()->idle && sched_clock_ns() - p->slice_ns < SCHED_SLICE_NS) {
+        flags = spin_lock_irqsave(&sched_lock);
+        q = run_queues[arch_cpu_id()].head;
+        due = run_queues[arch_cpu_id()].rt_count != 0;
+        for (; q && !due; q = q->ready_next) {
+            due = q->woken;
+        }
+        spin_unlock_irqrestore(&sched_lock, flags);
+        if (!due) {
+            return;
+        }
+    }
+    sched_preempt();
 }
 
 /** `schedule` clears the request under the run queues' lock, after its

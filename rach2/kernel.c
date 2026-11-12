@@ -485,10 +485,11 @@ static void timer_locked_work(uint64_t t)
  * runs with interrupts off, which the network stack's shared buffers
  * require, and nothing it calls waits on hardware.
  *
- * Then the handler reschedules through `sched_preempt`, with the lock let
- * go: at once when the current process is in user mode, and at the call's
- * exit when it is inside a system call, since a switch in the middle of one
- * is unsafe; timer IRQs stay enabled during a call to keep the clock, the
+ * Then the handler reschedules through `sched_tick`, with the lock let go,
+ * once the current thread has run its slice or a woken thread waits: at
+ * once when the current process is in user mode, and at the call's exit
+ * when it is inside a system call, since a switch in the middle of one is
+ * unsafe; timer IRQs stay enabled during a call to keep the clock, the
  * timers and the HDA service's wake requests going. A kernel thread defers
  * the switch to its next sleep or service point (`no_tick_switch`), as
  * Linux without CONFIG_PREEMPTION does, since its work changes state that
@@ -536,7 +537,7 @@ static void timer_handler(isr_params_t *params)
         }
         bkl_exit();
     }
-    sched_preempt();
+    sched_tick();
 }
 
 /**
