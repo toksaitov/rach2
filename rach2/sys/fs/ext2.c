@@ -5257,14 +5257,31 @@ static int dirent_split(struct ext2_mount *em, uint64_t off, const struct ext2_s
  * every change (fs/ext2/dir.c:468, 555 and 609 in Linux 6.12.115), and
  * e2fsck -D builds the index again. Storing the inode first means that no
  * stop leaves a changed directory marked indexed.
+ *
+ * A failed store, such as a failed read of the inode table before any
+ * write, puts the flag back in memory, so that the next change stores the
+ * cleared flag again before it touches an entry; a flag left cleared in
+ * memory would let that change skip the store and write over the index
+ * root in the slack of `..` while the disk still marks it indexed. Linux's
+ * ext2 has no such store to fail: it clears i_flags in memory as it
+ * changes the entries, and writeback copies the flags to the disk later
+ * (fs/ext2/dir.c:468 and fs/ext2/inode.c:1567 in Linux 6.12.115). Should
+ * the failed store have reached the disk, the entries are unchanged, and
+ * the next store of the inode marks it indexed again, which is still true.
  */
 static int dir_unindex(struct ext2_mount *em, struct ext2_node *d)
 {
+    int rc;
+
     if (!(d->flags & EXT2_INDEX_FL)) {
         return 0;
     }
     d->flags &= ~EXT2_INDEX_FL;
-    return inode_store(em, d);
+    rc = inode_store(em, d);
+    if (rc != 0) {
+        d->flags |= EXT2_INDEX_FL;
+    }
+    return rc;
 }
 
 /**
