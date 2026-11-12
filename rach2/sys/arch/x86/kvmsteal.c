@@ -1,10 +1,6 @@
 /*
- * kvmsteal.c: the records of each processor of this guest that KVM writes:
- * its steal time, the nanoseconds the host kept its virtual processor ready
- * to run but ran something else, and its word for the paravirtual end of
- * interrupt; and the two uses Linux makes of KVM to reach other processors,
- * the hypercall that sends an interrupt to many and the TLB flush KVM does
- * for a processor it has preempted.
+ * KVM's per-CPU shared records for steal time and virtual interrupt
+ * completion, registered before each processor's first tick.
  */
 
 #include "kvmsteal.h"
@@ -15,23 +11,11 @@
 #include "../../lib/kint.h"
 #include "../../proc/percpu.h"
 
-#define KVM_FEATURE_STEAL_TIME   (1u << 5)
-#define KVM_FEATURE_PV_EOI       (1u << 6)
-#define KVM_FEATURE_PV_TLB_FLUSH (1u << 9)
-#define KVM_FEATURE_PV_SEND_IPI  (1u << 11)
-#define KVM_HINTS_REALTIME       (1u << 0)
-#define MSR_KVM_STEAL_TIME       0x4B564D03u
-#define MSR_KVM_PV_EOI_EN        0x4B564D04u
-#define KVM_MSR_ENABLED          1u
-#define KVM_VCPU_PREEMPTED       1u /* in `preempted` */
-#define KVM_VCPU_FLUSH_TLB       2u /* in `preempted`: flush before the next entry */
-#define KVM_HC_SEND_IPI          10u
-
-/* The bits of one KVM_HC_SEND_IPI's bitmap, two longs, as Linux's
- * KVM_IPI_CLUSTER_SIZE (arch/x86/kernel/kvm.c); KVM reads each argument
- * as 32 bits outside long mode. */
-#define LONG_BITS     (8u * (unsigned int)sizeof(unsigned long))
-#define IPI_SPAN_BITS (2u * LONG_BITS)
+#define KVM_FEATURE_STEAL_TIME (1u << 5)
+#define KVM_FEATURE_PV_EOI     (1u << 6)
+#define MSR_KVM_PV_EOI_EN      0x4B564D04u
+#define MSR_KVM_STEAL_TIME     0x4B564D03u
+#define KVM_MSR_ENABLED        1u
 
 /* Linux's struct kvm_steal_time (arch/x86/include/uapi/asm/kvm_para.h:62-
  * 69): 64 bytes, which KVM wants aligned to 64. */
@@ -53,16 +37,39 @@ struct kvm_steal_time {
 static uint64_t steal_room[(NR_CPUS + 1) * 8];
 static volatile uint8_t steal_on[NR_CPUS];
 
-/* The words for the paravirtual end of interrupt, one in each 64 bytes, so
- * that KVM's write of one processor's word leaves the others' cache lines
- * alone. */
-static volatile uint32_t eoi_words[NR_CPUS * 16];
+/* Each EOI word has a cache line of its own, aligned within this room. */
+static uint32_t eoi_room[(NR_CPUS + 1) * 16];
+static uint8_t eoi_on[NR_CPUS];
 
-/* Set on the boot processor before the others start: KVM offers
- * KVM_HC_SEND_IPI, and the KVM_VCPU_FLUSH_TLB mark; and the instruction
- * that calls it is VMMCALL. Linux turns the flush off under
- * KVM_HINTS_REALTIME, whose processors are never preempted. */
-static int pv_ipi, pv_flush, hc_vmmcall;
+/** Return CPU `cpu`'s aligned word shared with KVM. */
+static volatile uint32_t *eoi_record(int cpu)
+{
+    uintptr_t at = ((uintptr_t)eoi_room + 63u) & ~(uintptr_t)63u;
+
+    return (volatile uint32_t *)at + cpu * 16;
+}
+
+/** Finish this CPU's virtual APIC interrupt through KVM's shared bit.
+ * KVM changes the word only on this vCPU, so an unlocked bit clear suffices.
+ * Interrupts are off; return zero when the ordinary APIC EOI is needed. */
+int kvm_guest_eoi(void)
+{
+    int cpu = (int)arch_cpu_id();
+    unsigned char handled;
+    volatile uint32_t *word;
+
+    if (!eoi_on[cpu]) {
+        return 0;
+    }
+    word = eoi_record(cpu);
+#ifdef RACH2_HOSTTEST
+    handled = (unsigned char)(*word & 1u);
+    *word &= ~1u;
+#else
+    __asm__ __volatile__("btrl $0, %0; setc %1" : "+m"(*word), "=q"(handled) : : "memory", "cc");
+#endif
+    return handled;
+}
 
 /** Processor `cpu`'s record. */
 static struct kvm_steal_time *steal_record(int cpu)
@@ -76,23 +83,19 @@ void kvm_steal_cpu_setup(int cpu)
 {
     struct kvm_steal_time *st;
     uint64_t phys;
-    uint32_t features;
+    unsigned int features;
+    volatile uint32_t *word;
 
     if (cpu < 0 || cpu >= NR_CPUS || !kcpu_msr_present()) {
         return;
     }
     features = kcpu_kvm_features();
-    if (cpu == 0) {
-        hc_vmmcall = kcpu_vmmcall();
-        pv_ipi = (features & KVM_FEATURE_PV_SEND_IPI) != 0;
-        pv_flush = (features & KVM_FEATURE_PV_TLB_FLUSH) && (features & KVM_FEATURE_STEAL_TIME) &&
-                   !(kcpu_kvm_hints() & KVM_HINTS_REALTIME);
-    }
     if (features & KVM_FEATURE_PV_EOI) {
-        eoi_words[cpu * 16] = 0;
-        phys = (uint64_t)virt_to_phys(&eoi_words[cpu * 16]);
+        word = eoi_record(cpu);
+        *word = 0;
+        phys = (uint64_t)virt_to_phys(word);
         kcpu_wrmsr(MSR_KVM_PV_EOI_EN, (uint32_t)phys | KVM_MSR_ENABLED, (uint32_t)(phys >> 32));
-        lapic_set_pv_eoi(cpu, &eoi_words[cpu * 16]);
+        eoi_on[cpu] = 1;
     }
     if (!(features & KVM_FEATURE_STEAL_TIME)) {
         return;

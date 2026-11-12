@@ -61,6 +61,7 @@
 #include "../../panic.h"
 #include "ioapic.h"
 #include "kcpu.h"
+#include "kvmsteal.h"
 #include "pic.h"
 #include "../../mm/paging.h"
 #include "../../proc/percpu.h"
@@ -659,11 +660,8 @@ void lapic_set_pv_eoi(int cpu, volatile uint32_t *word)
  * every one below it for good. */
 void lapic_eoi(void)
 {
-    volatile uint32_t *w;
-    int c;
-
-    if (!ready) {
-        return;
+    if (ready && !kvm_guest_eoi()) {
+        apic_write(LAPIC_EOI, 0);
     }
     c = arch_cpu_id();
     w = pv_eoi[c];
