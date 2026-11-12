@@ -983,24 +983,18 @@ static int pkey_allows(const struct mm *mm, const vma_t *vma, int write)
  * Grow the stack down to `page` for a fault outside every region, as
  * `vm_grow_stack` does under RLIMIT_AS `as_limit`; a locked stack's growth
  * also counts against RLIMIT_MEMLOCK, as Linux's acct_stack_growth checks
- * it. 1 if grown, 0 if not. The caller holds `vm`'s lock to write, and the
- * big lock is taken across the change, as every change of the regions
- * holds it (mm.h).
+ * it. 1 if grown, 0 if not. The caller holds `vm`'s lock to write, which
+ * guards every change of the regions (mm.h).
  */
 static int grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
 {
-    const vma_t *above;
-    int grown = 0;
+    const vma_t *above = vm_lower(vm, page);
 
-    bkl_enter();
-    above = vm_lower(vm, page);
-    if (!(above && above->type == VM_STACK && (above->prot & VM_PROT_LOCKED) &&
-          page < above->start &&
-          !mem_lock_room(vm_locked(vm) / PAGE_SIZE, (above->start - page) / PAGE_SIZE))) {
-        grown = vm_grow_stack(vm, page, as_limit);
+    if (above && above->type == VM_STACK && (above->prot & VM_PROT_LOCKED) && page < above->start &&
+        !mem_lock_room(vm_locked(vm) / PAGE_SIZE, (above->start - page) / PAGE_SIZE)) {
+        return 0;
     }
-    bkl_exit();
-    return grown;
+    return vm_grow_stack(vm, page, as_limit);
 }
 
 /**
@@ -1238,9 +1232,11 @@ static int range_ready(struct mm *mm, uintptr_t start, uintptr_t end, int write)
  * caller may hold a file's lock, which comes first, or run with interrupts
  * off; a lock it cannot have now answers 0, and the caller brings the range
  * in with its own locks let go. The caller holds the big lock, which keeps
- * a present page present until it sleeps: every change that takes a page
- * away or takes a right from it, an unmap, a protection change, a move or a
- * device's or a truncation's revocation, is made under it.
+ * a present page present until it sleeps: every change of entries that
+ * takes a page away or takes a right from it, an unmap, a protection
+ * change, a move or a device's or a truncation's revocation, is made under
+ * it (`unmap_user_range`, `paging_protect_range`, `paging_move_range`),
+ * though the rest of the change of the regions is not.
  */
 int vm_resident(uintptr_t addr, uintptr_t len, int write)
 {
@@ -3449,14 +3445,18 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
 
 /**
  * Two walks: the first takes the present bit from each present entry and
- * leaves its frame in it, marked PTE_NONE, an entry no other code makes,
- * and the second, after the one flush, clears those entries and drops their
- * frames. So no processor can reach a frame after it is freed, and a large
- * unmap costs one shootdown, not one a page. The caller holds the space's
- * lock to write, or the space is no thread's, so no fault installs an entry
- * meanwhile and nothing else sees the marked entries. The big lock is taken
- * throughout, since code that reads user memory under it with no fault
- * expects a page it found to stay until it sleeps.
+ * leaves its frame in it, marked PTE_NONE, and the second, after the one
+ * flush, clears those entries and drops their frames. So no processor can
+ * reach a frame after it is freed, and a large unmap costs one shootdown,
+ * not one a page. The caller holds the space's lock to write, or the space
+ * is no thread's, so no fault installs an entry meanwhile, or holds it to
+ * read under the big lock for a zap (`paging_zap_where`); a walk under the
+ * lock to read takes a marked entry for one not present. The big lock is
+ * taken over the first walk alone: code that reads user memory under it
+ * after a residency check that took no regions' lock expects a page it
+ * found to stay until it sleeps (`vm_resident`), and such code that takes
+ * the big lock after the first walk finds the page gone, whatever another
+ * processor's translation still holds until the flush.
  */
 void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
 {
@@ -3482,6 +3482,7 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
             }
         }
     }
+    bkl_exit();
     mm_resident_add(dir, -gone);
     lo = b.lo;
     hi = b.hi;
@@ -3502,7 +3503,6 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
             }
         }
     }
-    bkl_exit();
 }
 
 /**
@@ -3641,7 +3641,8 @@ void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count)
 
 /** The tables of the new range are made first, so that the move cannot
  * stop half way. The caller holds the space's lock to write; the big lock
- * is taken, as `unmap_user_range` takes it. */
+ * is taken over the moves of the entries, as `unmap_user_range` takes it
+ * over its first walk, and the flushes follow. */
 int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t len)
 {
     uintptr_t addr, next, end = from + len;
@@ -3678,10 +3679,10 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
             }
         }
     }
+    bkl_exit();
     batch_flush(&moved);
     batch_flush(&replaced);
     mm_resident_add(dir, -gone);
-    bkl_exit();
     return 0;
 }
 
@@ -3718,9 +3719,10 @@ static void protect_page(struct flush_batch *b, pte_t *e, uintptr_t addr, uint32
     batch_add(b, addr);
 }
 
-/** The caller holds the space's lock to write; the big lock is taken, as
- * `unmap_user_range` takes it, since a page made read-only is one a write
- * under the big lock would otherwise fault on. */
+/** The caller holds the space's lock to write; the big lock is taken over
+ * the change of the entries, as `unmap_user_range` takes it over its first
+ * walk, since a page made read-only is one a write under the big lock after
+ * a residency check would otherwise fault on, and the flush follows. */
 void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint32_t prot)
 {
     struct flush_batch b;
@@ -3734,8 +3736,8 @@ void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint3
             protect_page(&b, &table[MMU_INDEX(addr)], addr, prot);
         }
     }
-    batch_flush(&b);
     bkl_exit();
+    batch_flush(&b);
 }
 
 /**
