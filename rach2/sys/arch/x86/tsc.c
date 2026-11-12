@@ -160,13 +160,24 @@ static uint64_t kvm_clock_scale(uint64_t delta, uint32_t mul, int shift)
     return (delta >> 32) * mul + (((delta & 0xFFFFFFFFu) * mul) >> 32);
 }
 
+/** KVM's clock in nanoseconds at the TSC's count `tsc` by a page's stamp
+ * `stamp`, its system time `system` and its rate, Linux's
+ * __pvclock_read_cycles (arch/x86/include/asm/pvclock.h:84-90); a count
+ * before the stamp, as another processor's can be by a few counts, is the
+ * stamp's time. Every reader of a page converts through it, the vDSO's
+ * code as well, so that the kernel and the vDSO read one clock. */
+static uint64_t kvm_clock_convert(uint64_t tsc, uint64_t stamp, uint64_t system, uint32_t mul,
+                                  int shift)
+{
+    return system + (tsc > stamp ? kvm_clock_scale(tsc - stamp, mul, shift) : 0u);
+}
+
 /** One reading of the page at `p` with the TSC between two equal even
  * versions, as Linux's __pvclock_clocksource_read makes it
  * (arch/x86/kernel/pvclock.c:75-79): the version into `*version`, the TSC
- * and KVM's clock at it into `s->tsc` and `s->ns` (pvclock.h:84-90), a
- * count before the page's own as none past it, the counts in a tick its
- * rate gives into `s->counts`, 0 for a rate that does not fit, and its
- * PVCLOCK_TSC_STABLE_BIT into `s->stable`. */
+ * and KVM's clock at it into `s->tsc` and `s->ns` (`kvm_clock_convert`),
+ * the counts in a tick its rate gives into `s->counts`, 0 for a rate that
+ * does not fit, and its PVCLOCK_TSC_STABLE_BIT into `s->stable`. */
 static void kvm_clock_read(struct kvm_clock_page *p, uint32_t *version, struct tsc_kvm_sample *s)
 {
     uint64_t stamp, system;
@@ -184,7 +195,7 @@ static void kvm_clock_read(struct kvm_clock_page *p, uint32_t *version, struct t
         s->tsc = tsc_ordered();
         arch_dma_fence();
     } while ((*version & 1u) != 0 || *version != p->version);
-    s->ns = system + (s->tsc > stamp ? kvm_clock_scale(s->tsc - stamp, mul, shift) : 0u);
+    s->ns = kvm_clock_convert(s->tsc, stamp, system, mul, shift);
     s->counts = kvm_clock_counts(mul, shift);
 }
 
@@ -296,14 +307,18 @@ int tsc_kvm_read(struct tsc_kvm_sample *s)
 /**
  * Linux's vread_pvclock (arch/x86/include/asm/vdso/gettimeofday.h:
  * 197-232): the version made even (pvclock_read_begin, asm/pvclock.h:
- * 22-29) and the bit checked before the counter is read, and the reading
+ * 22-29) and the bit checked before the counter is read, the counter
+ * converted by the page's fields read in the same pass, and the reading
  * made again when the version moved meanwhile or was odd
- * (pvclock_read_retry, pvclock.h:31-36).
+ * (pvclock_read_retry, pvclock.h:31-36); the time loses its top bit, as
+ * vread_pvclock's `ret & S64_MAX`.
  */
-int tsc_kvm_boot_stable(uint64_t *tsc)
+int tsc_kvm_boot_read(uint64_t *tsc, uint64_t *ns)
 {
     struct kvm_clock_page *p = kvm_clock_of(0);
-    uint32_t version;
+    uint64_t stamp, system;
+    uint32_t version, mul;
+    int shift;
 
     if (!kvm_kept) {
         return 0;
@@ -314,20 +329,40 @@ int tsc_kvm_boot_stable(uint64_t *tsc)
         if (!(p->flags & PVCLOCK_TSC_STABLE_BIT)) {
             return 0;
         }
+        stamp = p->tsc_timestamp;
+        system = p->system_time;
+        mul = p->tsc_to_system_mul;
+        shift = p->tsc_shift;
         *tsc = tsc_ordered();
         arch_dma_fence();
     } while (version != p->version);
+    *ns = kvm_clock_convert(*tsc, stamp, system, mul, shift) & 0x7FFFFFFFFFFFFFFFull;
     return 1;
+}
+
+/** Linux's pvclock_read_flags (arch/x86/kernel/pvclock.c:55-64), of the
+ * boot processor's page. */
+int tsc_kvm_boot_withdrawn(void)
+{
+    struct kvm_clock_page *p = kvm_clock_of(0);
+    uint32_t version;
+    int flags;
+
+    if (!kvm_kept) {
+        return 0;
+    }
+    do {
+        version = p->version & ~1u;
+        arch_dma_fence();
+        flags = p->flags;
+        arch_dma_fence();
+    } while (version != p->version);
+    return !(flags & PVCLOCK_TSC_STABLE_BIT);
 }
 
 uintptr_t tsc_kvm_page_frame(void)
 {
     return virt_to_phys(kvm_clock_room);
-}
-
-int tsc_kvm_withdrawn(void)
-{
-    return kvm_kept && !kvm_stable;
 }
 
 int tsc_kvm_stable(void)

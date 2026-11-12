@@ -14,11 +14,11 @@ struct vm_file;
 
 /*
  * What the vDSO's clock functions do: call the kernel; read the TSC; or
- * read the TSC while KVM's clock page for the boot processor, mapped below
- * the data page, has PVCLOCK_TSC_STABLE_BIT set, checked inside each
- * reading, and call the kernel when it is clear, as Linux's vDSO does in
- * VDSO_CLOCKMODE_PVCLOCK (vread_pvclock, arch/x86/include/asm/vdso/
- * gettimeofday.h:197-232).
+ * read KVM's clock, the TSC converted through KVM's clock page for the boot
+ * processor, mapped below the data page, while that page has
+ * PVCLOCK_TSC_STABLE_BIT set, checked inside each reading, and call the
+ * kernel when it is clear, as Linux's vDSO does in VDSO_CLOCKMODE_PVCLOCK
+ * (vread_pvclock, arch/x86/include/asm/vdso/gettimeofday.h:197-232).
  */
 #define VCLOCK_NONE    0u
 #define VCLOCK_TSC     1u
@@ -36,12 +36,13 @@ struct vm_file;
  *
  * The kernel changes it between two increments of `seq`, which is odd
  * meanwhile; a reader reads `seq`, the fields and the TSC, then `seq`
- * again, and reads again when it was odd or has moved. At `cycle_base`
- * counts of the TSC the monotonic clock was `mono_sec` seconds and
+ * again, and reads again when it was odd or has moved. The page's count is
+ * the TSC in VCLOCK_TSC and KVM's clock in nanoseconds in VCLOCK_PVCLOCK.
+ * At the count `cycle_base` the monotonic clock was `mono_sec` seconds and
  * `mono_nsec` nanoseconds, real time `real_sec` and `real_nsec`, and the
  * raw clock `raw_sec` and `raw_nsec`; each count since adds `mult` /
  * 2^`shift` nanoseconds to the first, `real_mult` / 2^`shift`, the same, to
- * the second, and `raw_mult` / 2^`shift` to the third, the TSC's measured
+ * the second, and `raw_mult` / 2^`shift` to the third, the count's measured
  * rate, which the NTP state's slew does not change. Each clock's rate is 8
  * bytes before its seconds. The coarse clocks are the first two times as
  * they are, without the counts since.
@@ -49,7 +50,7 @@ struct vm_file;
 struct vdso_data {
     volatile uint32_t seq; /* odd while the kernel changes the page */
     uint32_t mode;         /* VCLOCK_NONE, VCLOCK_TSC or VCLOCK_PVCLOCK */
-    uint64_t cycle_base;   /* the TSC at the times below */
+    uint64_t cycle_base;   /* the page's count at the times below */
     uint32_t mult;         /* nanoseconds a count, times 2^shift */
     uint32_t shift;        /* at most 32 */
     int64_t mono_sec;      /* CLOCK_MONOTONIC at cycle_base */
@@ -119,18 +120,18 @@ uint32_t vclock_generation(void);
 
 /**
  * Carry the clock on at the boot processor's tick, with interrupts off: the
- * page's times are moved to the TSC's count now, and the monotonic clock's
+ * page's times are moved to the page's count now, and the monotonic clock's
  * rate, the measured one at the rate of the NTP state's tick length
  * (`rtc_mono_rate`), and the raw clock's, the measured one, are each steered
  * toward the same clock of the tick (`rtc_tick_both`) by at most one part
  * in 2000, so that neither drifts from what it follows and no reading is
  * earlier than one before it. Real time is the monotonic clock plus the
- * offset (`vclock_set_wall`). On x86 it follows KVM's clock page as the
- * tick last read it: a new rate is the measured one from then on, and the
- * clock stops while the page withdraws its stable bit and starts again
- * once the bit is back, each inside `rtc_vclock_change`, so that the
- * tick's clocks go on from the stopped clock's last time and the started
- * clock from the latest reading given.
+ * offset (`vclock_set_wall`). On x86, where KVM's clock pages are kept,
+ * the page counts KVM's clock, and the clock stops while the boot
+ * processor's page withdraws its stable bit and starts again once the bit
+ * is back, each inside `rtc_vclock_change`, so that the tick's clocks go
+ * on from the stopped clock's last time and the started clock from the
+ * latest reading given.
  */
 void vclock_tick(void);
 
@@ -143,14 +144,16 @@ void vclock_tick(void);
  * clock's stop overtakes reads nothing. In VCLOCK_PVCLOCK, once KVM's page
  * for the boot processor withdraws its stable bit, where the vDSO makes
  * the system call, the clock is carried on from the page's base by KVM's
- * clock, as the stop carries it, until the tick stops the clock. Any
+ * clock read from the running processor's page, never behind a reading
+ * before it, as the stop carries it, until the tick stops the clock. Any
  * processor and any context may call it.
  */
 int vclock_read(int which, int coarse, int64_t *sec, int64_t *nsec);
 
 /**
  * The clock `which`, as for `vclock_read`, now in nanoseconds into `*ns`,
- * with the TSC count it was read at in `*cycles`, so that the two are one
+ * with the TSC it was read at in `*cycles`, in VCLOCK_PVCLOCK the TSC that
+ * KVM's page converted, so that the two are one
  * moment, as Linux's kvm_get_time_and_clockread pairs them for KVM's master
  * clock. 1, or 0 with nothing read when the clock does not run from the
  * TSC or KVM's page for the boot processor has withdrawn its stable bit.
@@ -161,7 +164,7 @@ int vclock_read_cycles(int which, uint64_t *ns, uint64_t *cycles);
  * Make real time the monotonic clock plus `sec` seconds and `nsec`
  * nanoseconds, from 0 to 10^9 - 1, the offset clock.c gives at the anchor,
  * each setting and each leap second (`rtc_offset`): the page's base moves to
- * the TSC's count now and real time there is the monotonic clock's plus the
+ * the page's count now and real time there is the monotonic clock's plus the
  * offset. The offset is kept for the clock's start when it does not run
  * yet. Interrupts may be on or off; the caller may hold clock.c's lock.
  */
