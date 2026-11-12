@@ -492,22 +492,48 @@ static int sched_pinned(const process_t *p)
 }
 
 /**
+ * The highest real-time priority on processor `cpu`: that of its current
+ * thread or of a ready thread on its queue, whichever is higher, 0 when
+ * neither is real-time, as Linux's rt.highest_prio.curr counts the running
+ * task with the queued ones (kernel/sched/rt.c:1108-1144). The run queues'
+ * lock is held.
+ */
+static unsigned int sched_cpu_rt_top(int cpu)
+{
+    unsigned int top = sched_priority(cpu_table[cpu].current);
+    process_t *q;
+
+    if (run_queues[cpu].rt_count == 0) {
+        return top;
+    }
+    for (q = run_queues[cpu].head; q; q = q->ready_next) {
+        if (q->state == PROC_READY && sched_priority(q) > top) {
+            top = sched_priority(q);
+        }
+    }
+    return top;
+}
+
+/**
  * The processor a woken real-time thread `p` goes to instead of `target`,
  * whose current thread is real-time and either ranks with `p` or above it,
  * or may run nowhere else, as Linux's select_task_rq_rt tests it
  * (kernel/sched/rt.c:1577-1597): of the started processors `p` may run on,
- * one whose current thread ranks lowest, `target` first among equals, then
- * the waker's, then the lowest number, as find_lowest_rq prefers the task's
- * last processor and then this one (rt.c:1807-1880). That one is taken
- * only when `p` outranks its current thread; otherwise `target` stays. The
- * run queues' lock is held.
+ * one whose highest real-time priority, of its current thread and its queue
+ * (`sched_cpu_rt_top`), is lowest, `target` first among equals, then the
+ * waker's, then the lowest number, as find_lowest_rq ranks each processor
+ * through cpupri_find and prefers the task's last processor and then this
+ * one (rt.c:1807-1880). That one is taken only when `p` outranks every
+ * thread there, as select_task_rq_rt moves a task only when it outranks
+ * the target queue's highest_prio.curr (rt.c:1594-1596); otherwise `target`
+ * stays. The run queues' lock is held.
  */
 static int sched_rt_place(const process_t *p, int target)
 {
     process_t *cur = cpu_table[target].current;
     int me = (int)arch_cpu_id();
     int best = -1, c;
-    unsigned int rank, best_rank = 0;
+    unsigned int top, best_top = 0, rank, best_rank = 0;
 
     if (sched_priority(p) == 0 || sched_priority(cur) == 0 ||
         (sched_priority(cur) < sched_priority(p) && !sched_pinned(cur))) {
@@ -518,13 +544,15 @@ static int sched_rt_place(const process_t *p, int target)
             continue;
         }
         /* Priority first, then target, the waker's and the lowest number. */
-        rank = sched_priority(cpu_table[c].current) * 4u + (c == target ? 0u : c == me ? 1u : 2u);
+        top = sched_cpu_rt_top(c);
+        rank = top * 4u + (c == target ? 0u : c == me ? 1u : 2u);
         if (best < 0 || rank < best_rank) {
             best = c;
+            best_top = top;
             best_rank = rank;
         }
     }
-    if (best >= 0 && sched_priority(p) > sched_priority(cpu_table[best].current)) {
+    if (best >= 0 && sched_priority(p) > best_top) {
         return best;
     }
     return target;
@@ -532,8 +560,9 @@ static int sched_rt_place(const process_t *p, int target)
 
 /**
  * Make `p` ready, on the queue `sched_place` gives it, or for a real-time
- * thread that does not outrank the real-time thread running there, on a
- * processor running lower work (`sched_rt_place`), and return the
+ * thread that does not outrank the real-time thread running there, or that
+ * thread may run nowhere else, on a processor running and holding lower
+ * work (`sched_rt_place`), and return the
  * processor to interrupt so that it selects now, as `sched_preempt_cpu`
  * gives it, or the one where `p` is halted in place as current; -1 when
  * none needs it. `sched_lock` is held.
