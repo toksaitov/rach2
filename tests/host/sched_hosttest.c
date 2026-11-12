@@ -711,7 +711,8 @@ static void accounting(void)
 }
 
 /**
- * A tick taken as interrupts come back on charges the ticks due before then,
+ * With the cycle account on (`rach2.cycleaccount`), a tick taken as
+ * interrupts come back on charges the ticks due before then,
  * which interrupts kept off in the kernel held back, where Linux would have
  * taken them: at a return to user mode as system time, and at an idle
  * wait's halt as system time, or as idle when the stretch that held them
@@ -725,6 +726,7 @@ static void accounting_held(void)
     uint64_t busy, user, idle;
     uint64_t saved_clock = clock_ns;
 
+    sched_cycle_account = 1;
     cpu->current = NULL;
     cpu->idle_wait = 0;
     cpu->entry_cycles = 1u;
@@ -784,6 +786,7 @@ static void accounting_held(void)
     cpu->idle_wait = 1;
     cpu->current = saved;
     clock_ns = saved_clock;
+    sched_cycle_account = 0;
 }
 
 /**

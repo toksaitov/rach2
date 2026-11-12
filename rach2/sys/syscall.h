@@ -7,7 +7,8 @@
 
 /** Fill the dispatch table through `arch_syscall_init`, which routes the
  * architecture's system call entry to the dispatcher, and read
- * `rach2.trace=enosys` from the command line. */
+ * `rach2.trace=enosys` and `rach2.cycleaccount` (`sched_cycle_account`)
+ * from the command line. */
 void init_syscall(void);
 
 /**

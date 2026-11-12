@@ -3755,4 +3755,5 @@ void init_syscall(void)
     syscall_futex_unlock();
 
     _trace_enosys = kcmdline_has("rach2.trace=enosys");
+    sched_cycle_account = kcmdline_has("rach2.cycleaccount");
 }
