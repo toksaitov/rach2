@@ -3613,6 +3613,115 @@ static void sync_unlocked_row(void)
     check(unmount_rw() == 0, "the unlocked-sync volume unmounts");
 }
 
+/* compat/bkl_held.c: whether a row reports the big lock free, and the
+   takes the code made of it since the row last cleared the count. */
+extern int bkl_host_free;
+extern int bkl_host_takes;
+
+/** How many of the names "busy" and "quiet" a listing of the directory
+ * open at `h` finds, from its first entry; -1 for an error. The description
+ * stays open, since its release drains the batch. */
+static int listing(void *h)
+{
+    struct vfs_dirent de;
+    uint32_t cursor = 0;
+    int seen = 0, got;
+
+    while ((got = OPS->readdir(&mnt, h, &cursor, &de)) == 1) {
+        seen += streq(de.name, "busy") || streq(de.name, "quiet");
+    }
+    return got == 0 ? seen : -1;
+}
+
+/**
+ * Open, read, list, stat and close files as the file calls do without the
+ * big lock on a type that sets `reads_unlocked`, with the lock reported
+ * free (compat/bkl_held.c), and count the takes the driver makes. While
+ * another description's write waits in the batch, a read and a listing
+ * take the lock for the batch (`batch_guard`) and read the pending bytes,
+ * a hold that is not the last is dropped without it
+ * (`ext2_put_unless_last`), and a release takes it to drain the batch
+ * (`ext2_release`). Once the batch is empty a read, a listing and a release
+ * take it never, the batch's images being read from the cache alone
+ * (`writeback_find`), and a last put takes it once (`ext2_put`).
+ */
+static void unlocked_reader_row(void)
+{
+    static unsigned char want[4096], pend[4096];
+    void *busy, *quiet, *bh = 0, *qh = 0, *rh = 0, *dh = 0;
+    struct vfs_stat st;
+    int rc, ok;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    check(mount_rw() == 0, "the unlocked reader volume mounts");
+    busy = make_file(mnt.root, "busy", &rc);
+    quiet = make_file(mnt.root, "quiet", &rc);
+    memset(want, 'q', sizeof(want));
+    memset(pend, 'b', sizeof(pend));
+    ok = busy && quiet && write_at(quiet, want, sizeof(want), 0) == 0 &&
+         OPS->open(&mnt, busy, 2, &bh) == 0;
+    check(ok, "the unlocked reader's files are made and the busy one opens for writing");
+    if (!ok) {
+        return;
+    }
+    writes_made = 0;
+    check(OPS->write(&mnt, bh, pend, sizeof(pend), 0) == (int32_t)sizeof(pend) && writes_made == 0,
+          "the busy file's write waits in the batch");
+
+    bkl_host_free = 1;
+    bkl_host_takes = 0;
+    check(OPS->open(&mnt, quiet, 0, &qh) == 0 && OPS->open(&mnt, busy, 0, &rh) == 0 &&
+              OPS->open(&mnt, mnt.root, 0, &dh) == 0 && bkl_host_takes == 0,
+          "read-only opens beside a busy batch take no big lock");
+    check(OPS->read(&mnt, qh, abuf, sizeof(want), 0) == (int32_t)sizeof(want) &&
+              memcmp(abuf, want, sizeof(want)) == 0 && bkl_host_takes == 1,
+          "a read beside a busy batch takes the big lock once and reads the file");
+    bkl_host_takes = 0;
+    check(OPS->read(&mnt, rh, abuf, sizeof(pend), 0) == (int32_t)sizeof(pend) &&
+              memcmp(abuf, pend, sizeof(pend)) == 0 && bkl_host_takes == 1,
+          "a read of a file whose write waits in the batch reads the pending bytes under it");
+    bkl_host_takes = 0;
+    check(listing(dh) == 2 && bkl_host_takes > 0,
+          "a listing beside a busy batch takes the big lock and sees both names");
+    check(OPS->getattr(&mnt, busy, &st) == 0 && st.size == sizeof(pend),
+          "a stat without the big lock gives the pending size");
+    bkl_host_takes = 0;
+    OPS->hold(&mnt, quiet);
+    OPS->put(&mnt, quiet);
+    check(bkl_host_takes == 0, "a hold that is not the last is dropped without the big lock");
+    writes_made = 0;
+    OPS->release(&mnt, rh);
+    check(bkl_host_takes == 1 && writes_made > 0,
+          "a release beside a busy batch takes the big lock and drains it");
+
+    bkl_host_takes = 0;
+    writes_made = 0;
+    check(OPS->read(&mnt, qh, abuf, sizeof(want), 0) == (int32_t)sizeof(want) &&
+              memcmp(abuf, want, sizeof(want)) == 0,
+          "a read with the batch empty reads the file");
+    check(OPS->open(&mnt, busy, 0, &rh) == 0 &&
+              OPS->read(&mnt, rh, abuf, sizeof(pend), 0) == (int32_t)sizeof(pend) &&
+              memcmp(abuf, pend, sizeof(pend)) == 0,
+          "a read with the batch empty reads the drained write from the cache");
+    check(listing(dh) == 2, "a listing with the batch empty sees both names");
+    OPS->release(&mnt, dh);
+    OPS->release(&mnt, rh);
+    OPS->release(&mnt, qh);
+    check(bkl_host_takes == 0 && writes_made == 0,
+          "reads, a listing and releases with the batch empty take no big lock and write nothing");
+    OPS->put(&mnt, quiet);
+    check(bkl_host_takes == 1, "the last put of a node takes the big lock once");
+    bkl_host_free = 0;
+
+    OPS->release(&mnt, bh);
+    OPS->put(&mnt, busy);
+    check(file_is("/busy", pend, sizeof(pend)) && file_is("/quiet", want, sizeof(want)),
+          "both files read back after the unlocked calls");
+    check(unmount_rw() == 0, "the unlocked reader volume unmounts");
+    check(e2fsck_clean(wimg), "the unlocked reader volume is clean");
+}
+
 /**
  * On a mount that writes back, calls that store inodes and change names
  * leave a pending write in the batch, and their writes into a block the
@@ -3993,6 +4102,7 @@ static void batch_rows(void)
     batch_flush_error_row(5, 1);
     batch_flush_error_row(6, 1);
     sync_unlocked_row();
+    unlocked_reader_row();
     held_block_row();
     drain_victims_row();
     overlap_punch_row();
