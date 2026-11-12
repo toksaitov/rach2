@@ -27,6 +27,16 @@ counts()
         print $1, $2
     }' /proc/stat
 }
+# A creator stays on a description until its last reference goes, even
+# after the process has been reaped and its descriptors have disappeared.
+files()
+{
+    awk -v pid="$1" '
+        $0 !~ /^[0-9]+$/ { bad=1 }
+        $1 == pid { n++ }
+        END { if (bad) exit 1; print n+0 }
+    ' /sys/kernel/debug/files/creators
+}
 fail()
 {
     echo "kvm-leak: result: fail: $1" >&2
@@ -53,6 +63,8 @@ while ! grep -q 'Linux version' "$work/console" 2>/dev/null; do
     sleep 1
 done
 echo 'kvm-leak: guest: running'
+live_files=$(files "$pid") || fail 'cannot read QEMU file descriptions'
+[ "$live_files" -ge 3 ] || fail 'QEMU has no live file descriptions'
 counts > "$work/live"
 awk '$1 == "kvm_vms" || $1 == "kvm_vcpus" || $1 == "kvm_slots" ||
      $1 == "kvm_tdp_pages" || $1 == "kvm_run_mappings" {
@@ -69,4 +81,6 @@ pid=
 [ ! -d "/proc/$old_pid" ] || fail 'QEMU still owns its address space'
 after=$(counts) || fail 'cannot read final counts'
 [ "$before" = "$after" ] || fail 'KVM resources did not return to their initial counts'
+left_files=$(files "$old_pid") || fail 'cannot read reaped QEMU file descriptions'
+[ "$left_files" = 0 ] || fail "QEMU leaked $left_files file descriptions"
 echo 'kvm-leak: result: pass'

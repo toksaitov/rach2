@@ -762,6 +762,15 @@ static int32_t sync_info_show(void *data, char *buf, uint32_t cap)
 
 static const struct debugfs_text_ops sync_info_ops = {sync_info_show, NULL};
 
+/** The creators of live descriptions, including those with no descriptor. */
+static int32_t file_creators_show(void *data, char *buf, uint32_t cap)
+{
+    (void)data;
+    return fd_files_creators(buf, cap);
+}
+
+static const struct debugfs_text_ops file_creators_ops = {file_creators_show, NULL};
+
 /** Dispatch sw_sync's open, whose descriptor is a timeline of its own. */
 static int32_t sw_sync_bind(fd_entry_t *e, int flags)
 {
@@ -780,9 +789,11 @@ int debugfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, co
         int32_t a =
             debugfs_create_file("sync/sw_sync", 0644u, &sw_sync_unbound, sw_sync_bind, NULL);
         int32_t b = debugfs_create_text("sync/info", 0444u, &sync_info_ops, NULL);
+        int32_t c = debugfs_create_text("files/creators", 0400u, &file_creators_ops, NULL);
 
-        if (a != 0 || b != 0) {
+        if (a != 0 || b != 0 || c != 0) {
             debugfs_remove("sync");
+            debugfs_remove("files");
             return -ENOMEM;
         }
         started = 1;

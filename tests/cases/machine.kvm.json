@@ -106,7 +106,7 @@
       "assertions": [
         {
           "assertion_id": "entry",
-          "checks": "svm-entry exits 0 and prints SVMENTRY OK after every guest exits through OUT and HLT and all seven live KVM counts return to their initial values",
+          "checks": "svm-entry exits 0 and prints SVMENTRY OK after every guest exits through OUT and HLT and all seven live KVM counts and its own live file-description count return to their initial values",
           "source": "scenario"
         }
       ],
@@ -390,7 +390,7 @@
     },
     {
       "case_id": "machine.kvm.leak",
-      "behavior": "Kill QEMU after its Debian guest starts, require no pinned pages, and count its VMs, vCPUs, slots, table pages, run mappings, guest-page maps and mapped guest pages back to their initial values",
+      "behavior": "Kill QEMU after its Debian guest starts, require no pinned pages or live descriptions allocated by the reaped QEMU, and count its VMs, vCPUs, slots, table pages, run mappings, guest-page maps and mapped guest pages back to their initial values",
       "units": [
         "tests/kvm/leak.sh",
         "rach2/sys/kvm/stats.h",
@@ -447,7 +447,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run leak.sh on the Debian mini-guest, kill QEMU once Linux starts, and compare the seven live KVM counts with their initial values"
+          "does": "run leak.sh on the Debian mini-guest, kill QEMU once Linux starts, compare the seven live KVM counts with their initial values, and require no live descriptions allocated by QEMU"
         }
       ],
       "machines": [
@@ -490,7 +490,7 @@
       "assertions": [
         {
           "assertion_id": "leak",
-          "checks": "leak.sh exits 0 and prints kvm-leak: result: pass after every live count returns",
+          "checks": "leak.sh exits 0 and prints kvm-leak: result: pass after every live KVM count returns and no description allocated by QEMU remains",
           "source": "scenario"
         }
       ],

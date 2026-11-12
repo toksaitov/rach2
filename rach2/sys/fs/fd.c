@@ -44,6 +44,8 @@ struct ofd_rec {
     wait_queue_t wq;
     struct ofd_rec *next;
     struct access_count *spare;
+    /* The allocating thread group's initial-namespace pid, or 0 at boot. */
+    uint32_t creator;
 };
 
 /*
@@ -63,6 +65,38 @@ unsigned long fd_file_max = ~0ul >> 1;
 unsigned long fd_files_open(void)
 {
     return ofd_count;
+}
+
+/** Snapshot the description list's creator pids without sleeping. */
+int32_t fd_files_creators(char *buf, uint32_t cap)
+{
+    uint32_t flags = spin_lock_irqsave(&ofd_lock);
+    const struct ofd_rec *rec;
+    uint32_t len = 0;
+
+    for (rec = ofds; rec; rec = rec->next) {
+        char digits[11];
+        uint32_t n = rec->creator;
+        unsigned int i = 0;
+
+        do {
+            digits[i++] = (char)('0' + n % 10u);
+            n /= 10u;
+        } while (n);
+        while (i) {
+            if (len < cap) {
+                buf[len] = digits[i - 1u];
+            }
+            len++;
+            i--;
+        }
+        if (len < cap) {
+            buf[len] = '\n';
+        }
+        len++;
+    }
+    spin_unlock_irqrestore(&ofd_lock, flags);
+    return (int32_t)len;
 }
 
 /** Add `delta`, 1 or -1, to the count at `p` in one atomic step, and return
@@ -102,6 +136,7 @@ static struct open_file *ofd_alloc(void)
         return NULL;
     }
     rec->ofd.refcount = 1;
+    rec->creator = current_proc ? current_proc->tgid : 0;
     wait_queue_init(&rec->wq);
     flags = spin_lock_irqsave(&ofd_lock);
     rec->ofd.serial = ++ofd_serials;

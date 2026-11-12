@@ -33,6 +33,14 @@ static fd_entry_t slots[64];
 static struct open_file descriptions[64];
 static int failures;
 
+/** This tree model has no global description list. */
+int32_t fd_files_creators(char *buf, uint32_t cap)
+{
+    (void)buf;
+    (void)cap;
+    return 0;
+}
+
 #define CHECK(c, s)                                \
     do {                                           \
         if (!(c)) {                                \
@@ -212,7 +220,7 @@ static void tree_cases(struct vfs_mount *m)
     CHECK(debugfs_mount(m, NULL, 0, "uid=0,gid=0,mode=700") == 0, "second mount, one tree");
     dfs_getattr(m, m->root, &st);
     CHECK(st.mode == (DFS_IFDIR | 0700u) && st.uid == 0 && st.ino == 1, "root is root's, 0700");
-    CHECK(st.nlink == 3, "root links: itself, its name and sync's ..");
+    CHECK(st.nlink == 4, "root links: itself, its name, sync and files");
     sync = look(m, NULL, "sync");
     CHECK(sync && is_dir(sync), "sync is a directory");
     if (!sync)
@@ -237,7 +245,7 @@ static void tree_cases(struct vfs_mount *m)
     CHECK(up == &root, ".. of the root is the root");
     dfs_put(m, up);
     list(m, NULL, text, sizeof(text));
-    CHECK(same(text, " . .. sync"), "the root lists sync");
+    CHECK(same(text, " . .. sync files"), "the root lists sync and files");
     list(m, sync, text, sizeof(text));
     CHECK(same(text, " . .. sw_sync info"), "sync lists its files in order");
     CHECK(dfs_path(m, sync, text, sizeof(text)) == 0 && same(text, "/sync"), "sync's path");

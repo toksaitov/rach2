@@ -108,9 +108,9 @@ extern const struct vfs_ops debugfs_vops;
 /**
  * The constructor of a debugfs mount: every mount shows the one tree, as
  * Linux's single superblock does, and the first registers the files of the
- * kernel's own, sync/sw_sync and sync/info. `options` are Linux's: `mode=`
- * in octal, `uid=` and `gid=` in decimal, for the root directory, and
- * unknown ones are passed over. 0, or -ENOMEM.
+ * kernel's own, sync/sw_sync, sync/info and files/creators. `options` are
+ * Linux's: `mode=` in octal, `uid=` and `gid=` in decimal, for the root
+ * directory, and unknown ones are passed over. 0, or -ENOMEM.
  */
 int debugfs_mount(struct vfs_mount *mnt, struct block_device *dev, uint32_t flags,
                   const char *options);

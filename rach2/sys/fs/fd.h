@@ -51,6 +51,17 @@ extern unsigned long fd_file_max;
  * fs.file-nr. */
 unsigned long fd_files_open(void);
 
+/**
+ * Write one decimal creator pid per live description into `buf`'s `cap`
+ * bytes, and return the whole text's length, including bytes that did not
+ * fit. NULL and 0 size the text. The pid is the allocating thread group's
+ * id in the initial PID namespace, 0 before a current process exists; it
+ * stays with the description through transfers and after the creator's
+ * exit, until its final reference goes. The snapshot holds the description
+ * list's spinlock and does not sleep.
+ */
+int32_t fd_files_creators(char *buf, uint32_t cap);
+
 #define FD_STDIN  0
 #define FD_STDOUT 1
 #define FD_STDERR 2
