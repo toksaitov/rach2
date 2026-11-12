@@ -137,7 +137,8 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds);
 
 /** The real time to the last tick, without the timer's place within it and
  * without `rtc_realtime`'s floor: the coarse clock, which reads no timer;
- * the TSC's clock as of its last tick while that one runs. */
+ * the TSC's clock as of its last tick while that one runs, and otherwise
+ * never before the last time that clock gave where it stopped. */
 void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds);
 
 /** The monotonic clock, to the timer's place within the tick, or by the
@@ -161,14 +162,16 @@ void rtc_raw_monotonic(int64_t *seconds, int64_t *nanoseconds);
  * less the offset, and in `*raw_ns` the raw clock's floor, in nanoseconds
  * since boot; it may move either later, to the last time of the clock it
  * stops or the time of the clock it starts, and each floor is then raised
- * to them, real time's to the monotonic time plus the offset. Interrupts
- * may be on or off; `change` runs with them off.
+ * to them, real time's to the monotonic time plus the offset, and the coarse
+ * clocks' to the monotonic time. Interrupts may be on or off; `change` runs
+ * with them off.
  */
 void rtc_vclock_change(void (*change)(uint64_t *mono_ns, uint64_t *raw_ns));
 
 /** The monotonic clock at the last tick, without the timer's place within
  * it: the coarse monotonic clock, which reads no timer; the TSC's clock as
- * of its last tick while that one runs. */
+ * of its last tick while that one runs, and otherwise never before the last
+ * time that clock gave where it stopped (`rtc_vclock_change`). */
 void rtc_coarse_monotonic(int64_t *seconds, int64_t *nanoseconds);
 
 /** The tick count of the monotonic clock now, with the ticks that have

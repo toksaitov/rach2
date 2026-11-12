@@ -600,6 +600,10 @@ static int64_t rtc_mono_seconds;
 static int64_t rtc_mono_nanoseconds;
 static int64_t rtc_raw_seconds;
 static int64_t rtc_raw_nanoseconds;
+/* The monotonic time, in nanoseconds since boot, that the coarse clocks'
+ * fallbacks to the tick read no earlier than: the last time of the vDSO's
+ * clock where it stopped (`rtc_vclock_change`). */
+static uint64_t rtc_coarse_floor_ns;
 static struct spinlock rtc_mono_lock = SPINLOCK_INIT_NAMED("rtc_mono_lock");
 
 /** Hold `*seconds` and `*nanoseconds`, whose nanoseconds may pass a second,
@@ -665,7 +669,13 @@ static uint64_t rtc_floor_ns(int64_t sec, int64_t nsec)
  * Real time's lock and the floors' are held across `change`, so that no
  * reading of real time is under way, and none that could hold a floor below
  * what `change` gives; neither lock's holder waits for the vDSO's page, as
- * real time's does in `rtc_realtime` when it is not the holder here.
+ * real time's does in `rtc_realtime` when it is not the holder here. The
+ * coarse clocks' floor is raised to the monotonic time too, which moves
+ * the coarse base on to the moment of the change as Linux's
+ * change_clocksource does by timekeeping_forward_now (kernel/time/
+ * timekeeping.c:692-710, 1479-1502), so that a coarse reading the tick
+ * gives after the vDSO's clock stops is no earlier than one that clock gave
+ * before.
  */
 void rtc_vclock_change(void (*change)(uint64_t *mono_ns, uint64_t *raw_ns))
 {
@@ -689,6 +699,9 @@ void rtc_vclock_change(void (*change)(uint64_t *mono_ns, uint64_t *raw_ns))
     rtc_normalize(0, (int64_t)raw, &sec, &ns);
     nsec = ns;
     rtc_floor(&sec, &nsec, &rtc_raw_seconds, &rtc_raw_nanoseconds);
+    if (mono > rtc_coarse_floor_ns) {
+        rtc_coarse_floor_ns = mono;
+    }
     spin_unlock(&rtc_mono_lock);
     rtc_real_of_mono(0, (int64_t)mono, &real_sec, &real_nsec);
     if (real_sec > rtc_last_seconds ||
@@ -707,6 +720,24 @@ int64_t rtc_monotonic_ns(void)
     return sec * 1000000000ll + nsec;
 }
 
+/** The monotonic clock at the last pass, as `rtc_coarse_since_boot` reads
+ * it, or the coarse clocks' floor where that is later, with interrupts off:
+ * seconds in `*seconds` and nanoseconds, which may pass a second, in
+ * `*nanoseconds`. */
+static void rtc_coarse_held(int64_t *seconds, int64_t *nanoseconds)
+{
+    uint64_t floor;
+
+    rtc_coarse_since_boot(seconds, nanoseconds);
+    spin_lock(&rtc_mono_lock);
+    floor = rtc_coarse_floor_ns;
+    spin_unlock(&rtc_mono_lock);
+    if (rtc_floor_ns(*seconds, *nanoseconds) < floor) {
+        *seconds = 0;
+        *nanoseconds = (int64_t)floor;
+    }
+}
+
 void rtc_coarse_monotonic(int64_t *seconds, int64_t *nanoseconds)
 {
     uint32_t flags;
@@ -716,7 +747,7 @@ void rtc_coarse_monotonic(int64_t *seconds, int64_t *nanoseconds)
         return;
     }
     flags = kirq_save();
-    rtc_coarse_since_boot(seconds, nanoseconds);
+    rtc_coarse_held(seconds, nanoseconds);
     kirq_restore(flags);
     rtc_normalize(*seconds, *nanoseconds, seconds, &nsec);
     *nanoseconds = nsec;
@@ -731,7 +762,7 @@ void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
         return;
     }
     flags = spin_lock_irqsave(&rtc_realtime_lock);
-    rtc_coarse_since_boot(&msec, &mnsec);
+    rtc_coarse_held(&msec, &mnsec);
     rtc_real_of_mono(msec, mnsec, seconds, nanoseconds);
     spin_unlock_irqrestore(&rtc_realtime_lock, flags);
 }

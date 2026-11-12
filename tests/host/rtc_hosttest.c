@@ -21,7 +21,9 @@
  * Port stubs also drive the real-time reader across pending interrupts and
  * counter wraps, including one during its latch, without executing I/O; and a
  * reference counter the test keeps drives the ticks each interrupt counts and
- * the clocks it keeps, on the boot processor and on another.
+ * the clocks it keeps, on the boot processor and on another. A model of the
+ * vDSO's clock checks that the coarse clocks read no earlier after its stop
+ * than before it.
  *
  * The answers are for a tick of 1000 Hz: a reload of 1193, sweeps of 499 us
  * and a reference tick of 1000 counts of the 1 MHz counter.
@@ -208,14 +210,45 @@ void arch_relax(void)
     CHECK(0);
 }
 
-/** The clock does not run from the TSC here, so clock.c keeps the time. */
+/* The vDSO's clock as `coarse_rows` runs it: whether it runs, and its
+ * coarse base in nanoseconds since boot, the monotonic clock as of its last
+ * tick. Elsewhere it does not run, and clock.c keeps the time. */
+static int vclock_on;
+static uint64_t vclock_coarse_ns;
+
+/** The coarse clock `which` from the model's base while it runs, real time
+ * the base plus clock.c's offset; 0 while it does not. */
 int vclock_read(int which, int coarse, int64_t *sec, int64_t *nsec)
 {
-    (void)which;
-    (void)coarse;
-    (void)sec;
-    (void)nsec;
-    return 0;
+    int64_t wall_sec, ns;
+    int32_t wall_nsec;
+
+    if (!vclock_on) {
+        return 0;
+    }
+    CHECK(coarse && which != VCLOCK_READ_RAW);
+    ns = (int64_t)vclock_coarse_ns;
+    if (which == VCLOCK_READ_REAL) {
+        rtc_offset(&wall_sec, &wall_nsec);
+        ns += wall_sec * 1000000000LL + wall_nsec;
+    }
+    *sec = ns / 1000000000LL;
+    *nsec = ns % 1000000000LL;
+    return 1;
+}
+
+/** The vDSO's clock's stop as vclock.c makes it inside `rtc_vclock_change`:
+ * the clock stops, and its last time, 300 us past its coarse base, raises
+ * the monotonic time it is given. */
+static void vclock_model_stop(uint64_t *mono_ns, uint64_t *raw_ns)
+{
+    uint64_t last = vclock_coarse_ns + 300000u;
+
+    (void)raw_ns;
+    vclock_on = 0;
+    if (last > *mono_ns) {
+        *mono_ns = last;
+    }
 }
 
 /** Nor, so, is it the clock source pit.c names. */
@@ -501,6 +534,36 @@ static void reference_rows(void)
     CHECK(timer_tick_clock() == 10003u);
     CHECK(!irq_disabled);
     ref_on = 0;
+}
+
+/**
+ * The coarse clocks across the vDSO's clock's stop: while it runs they read
+ * its coarse base, 5 ms ahead of the tick's coarse clock; after the stop,
+ * which hands `rtc_vclock_change` its last time, 300 us past that base,
+ * neither reads earlier than before, the tick's coarse clock held to that
+ * time until it passes it, and the tick's after that.
+ */
+static void coarse_rows(void)
+{
+    int64_t sec, ns, rsec, rns, sec1, ns1, rsec1, rns1;
+
+    kernel_uptime_seconds = 100;
+    kernel_second_ticks = 0;
+    vclock_coarse_ns = 100005000000ULL;
+    vclock_on = 1;
+    rtc_coarse_monotonic(&sec, &ns);
+    CHECK(sec == 100 && ns == 5000000);
+    rtc_coarse_realtime(&rsec, &rns);
+    rtc_vclock_change(vclock_model_stop);
+    CHECK(!vclock_on);
+    rtc_coarse_monotonic(&sec1, &ns1);
+    CHECK(sec1 == 100 && ns1 == 5300000);
+    rtc_coarse_realtime(&rsec1, &rns1);
+    CHECK(rsec1 > rsec || (rsec1 == rsec && rns1 >= rns));
+    kernel_second_ticks = 10;
+    rtc_coarse_monotonic(&sec1, &ns1);
+    CHECK(sec1 == 100 && ns1 >= 10000000 && ns1 < 11000000);
+    CHECK(!irq_disabled);
 }
 
 /** A BCD byte from a two-digit value, the way the CMOS has one. */
@@ -852,5 +915,6 @@ int main(void)
     monotonic_rows();
     clock_write_rows();
     reference_rows();
+    coarse_rows();
     return fails > 100 ? 100 : fails;
 }
