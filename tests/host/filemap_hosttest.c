@@ -18,10 +18,10 @@
  * descriptor's copy and no such number; and the release of each takes it
  * off the list of mappings, frees shared anonymous memory's pages and gives
  * the file's descriptor back. A disk file's pages may hold stores only once
- * a shared mapping maps a file of their bucket: private mappings leave the
- * bucket's count at zero, a shared one raises it for each file of the
- * bucket and no other, and the release of the last mapping of that file
- * lowers it again.
+ * a shared mapping through a descriptor open for writing maps it: private
+ * mappings and a shared one open only for reading leave it clear, a
+ * writable one marks that file and not another of its bucket, and the
+ * release of the last mapping of that file clears the mark.
  *
  * A mapping of a file of a type that reads without the big lock lets its
  * faults run without it, and one of another type, or of a file in memory,
@@ -447,20 +447,22 @@ static void anon_shared_rows(void)
 }
 
 /**
- * The word a read of a disk file without the big lock judges by
- * (`filemap_disk_stores_maybe`): whether a shared mapping has mapped a file
- * of the bucket of inode `ino`, whose pages may then hold stores the file
- * lacks. Private mappings leave it clear, as Linux's filemap_read reads the
- * file's own folios with no lock (mm/filemap.c:2614-2720); a shared one
- * sets it for its bucket alone, 7 and 263 sharing one of the 256; and the
- * release of the shared file's last mapping clears it.
+ * What a read of a disk file without the big lock judges by
+ * (`filemap_disk_stores`): whether a shared mapping through a descriptor
+ * open for writing has mapped that file, whose pages may then hold stores
+ * the file lacks. Private mappings leave it clear, as Linux's filemap_read
+ * reads the file's own folios with no lock (mm/filemap.c:2614-2720), and so
+ * does a shared mapping through a descriptor open only for reading, which
+ * can never be made writable; a writable one sets it for its file alone,
+ * not for 7, which shares a bucket of the 256 with 263; and the release of
+ * the shared file's last mapping clears it.
  */
 static void disk_stores_rows(void)
 {
-    struct vm_file *a, *b, *shared;
+    struct vm_file *a, *b, *shared, *reader;
     struct open_file ofd7, ofd263;
     struct vfs_mount disk;
-    fd_entry_t e7, e263;
+    fd_entry_t e7, e263, e263_read;
 
     k_memset(&disk, 0, sizeof(disk));
     k_memset(&ofd7, 0, sizeof(ofd7));
@@ -474,23 +476,35 @@ static void disk_stores_rows(void)
     e7.type = FD_TYPE_FILE;
     e7.ofd = &ofd7;
     e263.type = FD_TYPE_FILE;
+    e263.flags = FD_FLAG_READ | FD_FLAG_WRITE;
     e263.ofd = &ofd263;
+    e263_read = e263;
+    e263_read.flags = FD_FLAG_READ;
     shmem_frees = 0;
     a = filemap_private(&e7, NULL, 1);
     b = filemap_private(&e7, NULL, 1);
     check(a && b && filemap_shmem(a) == filemap_shmem(b) && !filemap_disk_pages(a),
           "two private mappings of a disk file share its pages and are not shared");
-    check(!filemap_disk_stores_maybe(7) && !filemap_disk_stores_maybe(263),
-          "and leave the file's bucket with no stores");
+    check(!filemap_disk_stores(&disk, 7) && !filemap_disk_stores(&disk, 263),
+          "and leave the file with no stores");
+    reader = filemap_disk_shared(&e263_read);
+    check(reader && filemap_disk_pages(reader) && !filemap_disk_stores(&disk, 263),
+          "a shared mapping through a descriptor open only for reading leaves no stores");
     shared = filemap_disk_shared(&e263);
     check(shared && filemap_disk_pages(shared), "a shared mapping of a disk file is made");
-    check(filemap_disk_stores_maybe(263) && filemap_disk_stores_maybe(7) &&
-              !filemap_disk_stores_maybe(8),
-          "and marks its bucket, and that bucket alone, as one that may hold stores");
+    check(filemap_disk_stores(&disk, 263) && !filemap_disk_stores(&disk, 7) &&
+              !filemap_disk_stores(&disk, 8),
+          "and through a descriptor open for writing marks its file, and that file alone, as "
+          "one that may hold stores");
     if (shared) {
         shared->release(shared);
     }
-    check(!filemap_disk_stores_maybe(7) && !filemap_disk_stores_maybe(263) && shmem_frees == 1,
+    check(filemap_disk_stores(&disk, 263) && shmem_frees == 0,
+          "the mark stays while a mapping of the file is left");
+    if (reader) {
+        reader->release(reader);
+    }
+    check(!filemap_disk_stores(&disk, 7) && !filemap_disk_stores(&disk, 263) && shmem_frees == 1,
           "the release of its last mapping frees its pages and clears the mark");
     if (a) {
         a->release(a);

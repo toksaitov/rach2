@@ -6809,8 +6809,8 @@ static int32_t file_read_plain(struct open_file *ofd, char __user *buf, uint32_t
  * to the size the file has at the call, as Linux's filemap_read reads the
  * shared folio, so that the read sees their stores, those an earlier buffer
  * of the same readv made among them; any other page, and any other file, is
- * read by `file_read_plain`. A caller without the big lock found no shared
- * mapping in the file's bucket (`filemap_disk_stores_maybe`), so the
+ * read by `file_read_plain`. A caller without the big lock found no
+ * writable shared mapping of the file (`filemap_disk_stores`), so the
  * file's pages in memory, if any, equal the file. The bytes read, which
  * stop at the first page that fails after some were read, 0 at the end, or
  * the type's error, or -ENOMEM for a page in memory that no temporary
@@ -6906,9 +6906,10 @@ static int32_t file_read_unwritable(struct open_file *ofd, uint64_t at)
  *
  * A file `file_vfs_unlocked` admits is read without the big lock, which the
  * read takes while a shared mapping may have stored into the file's pages,
- * to read them (`filemap_disk_stores_maybe`), and for inotify's report. A
- * private mapping of the file, whose pages equal the file, or a mapping of
- * another file does not make the read take it: Linux's filemap_read finds
+ * to read them (`filemap_disk_stores`), and for inotify's report. A private
+ * mapping of the file or a shared one through a descriptor open only for
+ * reading, whose pages equal the file, or a mapping of another file does
+ * not make the read take it: Linux's filemap_read finds
  * the file's own folios from its inode and takes no lock beyond theirs
  * (mm/filemap.c:2614-2700). Every return after the description's lock
  * leaves by one path, which lets go of both locks, as Linux's ksys_read
@@ -6933,7 +6934,7 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
     one[0].iov_base = (__force uintptr_t)buf;
     one[0].iov_len = count;
     room = iov_prefix(one, 1, 1);
-    if (!bkl_held() && filemap_disk_stores_maybe(ofd->ino)) {
+    if (!bkl_held() && filemap_disk_stores(ofd->vmnt, ofd->ino)) {
         bkl_enter();
         big = 1;
     }
