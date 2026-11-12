@@ -78,6 +78,28 @@ void rtc_monotonic(int64_t *sec, int64_t *ns)
     *ns = (int64_t)(clock_us % 1000000u) * 1000;
 }
 
+/** The explicit clock in nanoseconds, from which the scheduler accounts
+ * a processor's time. */
+int64_t rtc_monotonic_ns(void)
+{
+    return (int64_t)clock_us * 1000;
+}
+
+/** No hypervisor takes time from this model. */
+uint64_t arch_steal_ns(void)
+{
+    return 0;
+}
+
+/** Divide with the host's 64-bit division, which the kernel lacks. */
+uint64_t tick_div(uint64_t n, uint32_t d, uint32_t *rem)
+{
+    if (rem) {
+        *rem = (uint32_t)(n % d);
+    }
+    return n / d;
+}
+
 /** Timer list membership is checked by process_timer_hosttest. */
 void proc_timer_update(process_t *p)
 {
