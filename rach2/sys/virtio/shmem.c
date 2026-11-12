@@ -1696,30 +1696,6 @@ static void vshm_info(const struct vshm *vs, struct vgs_info *out)
     out->revoked = vs->revoked;
 }
 
-#ifndef RACH2_HOSTTEST
-/**
- * The caller's descriptor `fd` as a region: a tmpfs file, a memfd, sealed
- * against shrinking, whose size is a power of two the transport takes.
- * Returns its memory, or NULL with `*err` -EBADF or -EINVAL.
- */
-static struct shmem *vshm_region_of(int32_t fd, int32_t *err)
-{
-    fd_entry_t *e = fd_get(current_proc->fds, fd);
-    struct shmem *sh;
-
-    *err = -EBADF;
-    if (!e || (e->flags & FD_FLAG_PATH) || !e->ofd || !e->ofd->vmnt ||
-        e->ofd->vmnt->type != &vfs_tmpfs_type || !(sh = tmpfs_shmem(e->ofd->vnode))) {
-        return NULL;
-    }
-    *err = -EINVAL;
-    if (!(tmpfs_seals(e->ofd->vnode) & TMPFS_SEAL_SHRINK) || sh->size < VGS_REGION_MIN ||
-        sh->size > VGS_ATTACH_MAX || (sh->size & (sh->size - 1u)) != 0) {
-        return NULL;
-    }
-    return sh;
-}
-
 /**
  * Take the caller's four doorbells of `a` into `vs`, unhooked: 0, -EBADF
  * or -EINVAL for a descriptor that is not an eventfd, or -EINVAL for an
@@ -1746,6 +1722,30 @@ static int32_t vshm_bells_get(struct vshm *vs, const struct vgs_attach *a)
         }
     }
     return rc;
+}
+
+#ifndef RACH2_HOSTTEST
+/**
+ * The caller's descriptor `fd` as a region: a tmpfs file, a memfd, sealed
+ * against shrinking, whose size is a power of two the transport takes.
+ * Returns its memory, or NULL with `*err` -EBADF or -EINVAL.
+ */
+static struct shmem *vshm_region_of(int32_t fd, int32_t *err)
+{
+    fd_entry_t *e = fd_get(current_proc->fds, fd);
+    struct shmem *sh;
+
+    *err = -EBADF;
+    if (!e || (e->flags & FD_FLAG_PATH) || !e->ofd || !e->ofd->vmnt ||
+        e->ofd->vmnt->type != &vfs_tmpfs_type || !(sh = tmpfs_shmem(e->ofd->vnode))) {
+        return NULL;
+    }
+    *err = -EINVAL;
+    if (!(tmpfs_seals(e->ofd->vnode) & TMPFS_SEAL_SHRINK) || sh->size < VGS_REGION_MIN ||
+        sh->size > VGS_ATTACH_MAX || (sh->size & (sh->size - 1u)) != 0) {
+        return NULL;
+    }
+    return sh;
 }
 
 /**
