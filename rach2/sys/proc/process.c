@@ -741,8 +741,10 @@ void free_process(process_t *proc)
 /**
  * Whether the pass for the reasons `why`, at the tick `now`, the real-time
  * clock's step count `steps` and the monotonic clock's reading `clock`, is
- * to wake `p`. The caller holds the run queues' lock, under which the state
- * and the deadline are tested, so that the test holds until the wake.
+ * to wake `p`. The caller holds the run queues' lock, which a waker takes to
+ * make a sleeper ready, but a sleeper whose condition comes true leaves its
+ * wait without it and may start another, so the test is made at the
+ * collection and again at the wake (`timer_wake`).
  */
 static int timer_due(const process_t *p, int why, uint64_t now, uint32_t steps, int64_t clock)
 {
@@ -757,17 +759,25 @@ static int timer_due(const process_t *p, int why, uint64_t now, uint32_t steps, 
 }
 
 /**
- * Wake `p`, which `timer_due` says is due: as `sched_wake_due_locked` at its
- * tick, recording the expiry (`waketime_expire`); at its time of the
- * monotonic clock, recording the lateness read at the wake, and not taken
- * from the pass's one reading, which it shares with the sleepers before
- * `p` (`waketime_expire_late`); and at a setting of the real-time clock,
- * with no record, the wait then counting its tick again from the clock as
- * set. Returns the processor to interrupt, or -1. The caller holds the run
- * queues' lock.
+ * Wake `p`, which `timer_due` found due at the collection, if it is due
+ * still: as `sched_wake_due_locked` at its tick, recording the expiry
+ * (`waketime_expire`); at its time of the monotonic clock, recording the
+ * lateness read at the wake, and not taken from the pass's one reading,
+ * which it shares with the sleepers before `p` (`waketime_expire_late`); and
+ * at a setting of the real-time clock, with no record, the wait then
+ * counting its tick again from the clock as set. The test is made again
+ * here, next to the clear of `wakeup_tick`, since `p` may have left the
+ * wait collected and started another since, whose deadline the clear would
+ * otherwise take; Linux's timer callback never reaches a sleeper's next
+ * sleep, which waits for it (`hrtimer_cancel` in `do_nanosleep`,
+ * kernel/time/hrtimer.c:2096, 1501-1512). Returns the processor to
+ * interrupt, or -1. The caller holds the run queues' lock.
  */
-static int timer_wake(process_t *p, uint64_t now)
+static int timer_wake(process_t *p, int why, uint64_t now, uint32_t steps, int64_t clock)
 {
+    if (!timer_due(p, why, now, steps, clock)) {
+        return -1;
+    }
     if (now >= p->wakeup_tick) {
         return sched_wake_due_locked(p, now);
     }
@@ -835,7 +845,7 @@ static void timer_pass(int why, uint64_t now)
         }
         spin_unlock(&timer_list_lock);
         for (i = 0; i < n; i++) {
-            int kick = timer_wake(due[i], now);
+            int kick = timer_wake(due[i], why, now, steps, clock);
 
             if (kick >= 0) {
                 kicks |= (uint64_t)1 << kick;
