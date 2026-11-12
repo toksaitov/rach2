@@ -55,7 +55,7 @@ if [ ! -x "$CROSS/bin/$TARGET-gcc" ]; then
     echo "gnu: kvm: no cross compiler; run make ARCH=x86_64 gnu-toolchain first" >&2
     exit 1
 fi
-for tool in cc make tar xz gzip unshare; do
+for tool in cc make tar xz gzip patch unshare; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "gnu: kvm: $tool not found; the GNU layer builds on a Linux host with the tools ../Readme.md lists" >&2
         exit 1
@@ -135,10 +135,13 @@ step_unit()
 # Debian's, and its debugging information is stripped. The staged tree has
 # the tests where the selftests' tree has them, x86_64/ for the x86 ones,
 # with x86_64/nx_huge_pages_test.sh, the one test that is a script, and
-# list, the tests the Makefile builds for x86, one a line.
+# list, the tests the Makefile builds for x86, one a line. The tree takes
+# max-guest-memory-one-cpu.patch first, which build-info names and the
+# staged tree keeps beside the licenses.
 step_selftests()
 {
     s="$(extract linux-kvm-selftests drivers Documentation sound fs net)"
+    patch -d "$s" -p1 -F 0 --forward < "$DIR/max-guest-memory-one-cpu.patch"
     make -C "$s" ARCH=x86 headers
     rm -rf "$WORK/selftests"
     mkdir -p "$WORK/selftests"
@@ -158,8 +161,10 @@ EOF
     cp "$WORK/list" "$SELF/list"
     cp "$s/COPYING" "$SELF/COPYING"
     cp "$s/LICENSES/preferred/GPL-2.0" "$SELF/GPL-2.0"
+    cp "$DIR/max-guest-memory-one-cpu.patch" "$SELF/"
     {
         echo "linux $(pin linux-kvm-selftests) tools/testing/selftests/kvm"
+        echo "patch: max-guest-memory-one-cpu.patch"
         echo "make: ARCH=x86 CROSS_COMPILE=$TARGET- EXTRA_CFLAGS=-static"
         "$TARGET-gcc" --version | sed -n 1p
         echo "tests: $(wc -l < "$WORK/list" | tr -d ' ')"

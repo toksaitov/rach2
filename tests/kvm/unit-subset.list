@@ -19,7 +19,7 @@ emulator pass pass
 eventinj pass pass
 hypercall pass pass
 hyperv_clock pass pass
-hyperv_connections fail fail Linux: receive pending message: 0/2, as Rach2
+hyperv_connections outer_kvm?fail:pass fail Linux: receive pending message: 0/2, as Rach2
 hyperv_stimer pass pass
 hyperv_stimer_direct pass pass
 hyperv_synic pass pass

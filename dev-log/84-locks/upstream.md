@@ -23,3 +23,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: nothing in its KVM, whose `h_hypercall` raises #UD with the quirk disabled (`rach2/sys/kvm/emulate.c`); `selftests.list` expects the test to fail where the machine runs under KVM (`outer_kvm`) and to pass elsewhere.
 * Status: unreported.
 * Next: read `nested_svm_exit_special` and `handle_ud` in a current kernel to see whether a later release reflects such a #UD to the hypervisor between when vmcb12 intercepts it, or skips the patch in guest mode; check VMX's `nested_vmx_l0_wants_exit` for the same; then report it to the KVM list with the selftest as the reproduction.
+
+## Linux's max_guest_memory_test stops on a machine of one processor
+
+* Project: Linux 6.12.115, `linux-6.12.115.tar.xz` (SHA-256 0ec90fe4b20422b1b664b77e6d2dde22b40bd41e7eb2cad8ac8739a4749cb1bb), `tools/testing/selftests/kvm/max_guest_memory_test.c`.
+* Fails: on one processor the test stops with `Uh, no CPUs?` before it tests anything, whatever `-c` says. `calc_default_nr_vcpus` sets the default vCPU count to three quarters of the processors in the affinity mask, rounded down, and asserts that it is positive (lines 148-149); `main` calls it at line 186, before `getopt` reads `-c`, so one processor gives 0 and the assertion.
+* Found: 2026-11-12, by Codex's review j49 of milestone 84's branch, reading task 84-33's rows against `tools/etude/qemu_profile.c`, whose `machine_processors` gives an SVM profile one processor under TCG, as the KVM suite's cases have on the Mac.
+* Reproduction: run `max_guest_memory_test -m 4` under Linux's KVM with its affinity limited to one processor, `taskset -c 0`; it stops at line 149. Not yet run.
+* Evidence: `vendor/gnu/kvm/max-guest-memory-one-cpu.patch`; `dev-log/84-locks/84-33.md`; the row of `max_guest_memory_test,-m,4` in `tests/kvm/selftests.list`.
+* Rach2: the KVM layer builds the selftests with `vendor/gnu/kvm/max-guest-memory-one-cpu.patch`, which makes the default at least one vCPU and keeps the assertion for an empty mask; Linux's reference runs the same patched program from the same root.
+* Status: unreported.
+* Next: read `max_guest_memory_test.c` in a current kernel to see whether the default still rounds one processor down to none, then send the patch to the KVM list.

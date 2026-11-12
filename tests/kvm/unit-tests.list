@@ -11,11 +11,12 @@
 # it: a row Linux failed there expects a pass unless its EXPECT is `fail`, and
 # names Linux's failure after `Linux:`. Inside a machine of KVM, as the KVM
 # suite's cases run, FLAG `outer_kvm` holds: there `debug` and `xapic` are
-# excluded and `la57`, `pcid-disabled` and `x2apic` fail, as under Linux
-# 6.12 as the host of the same machine (dev-log/81-kvm/81-25.md). Under
-# another hypervisor, as under the Mac's TCG, `access` is excluded and
-# `debug` fails, as under Linux there. A test is expected to fail only where
-# Linux as the host of the same machine fails it, and its row names how.
+# excluded and `hyperv_connections`, `la57`, `pcid-disabled` and `x2apic`
+# fail, as under Linux 6.12 as the host of the same machine
+# (dev-log/81-kvm/81-25.md). Under another hypervisor, as under the Mac's
+# TCG, `access` is excluded and `debug` fails, as under Linux there. A test
+# is expected to fail only where Linux as the host of the same machine fails
+# it, and its row names how.
 #
 # NAME EXPECT LINUX REASON
 access outer_kvm?pass:hypervisor?excluded:pass pass not run under another hypervisor, as under the Mac's TCG, where every permutation fails with QEMU TCG's error code 8 for 9, the P bit of a reserved-bit fault's left out, under Linux 6.12 as the host too, and neither host ends: Linux's guest stopped after 64 s and 1,600 failures with its output cut in a line, and Rach2 printed 4,710 in 300 s, a byte a serial exit (dev-log/84-locks/84-33.md)
@@ -31,7 +32,7 @@ ept-mbec excluded skip nested virtualization, excluded by the owner's decision o
 eventinj pass pass
 hypercall pass pass
 hyperv_clock pass pass
-hyperv_connections fail fail Linux: 7 tests, 1 unexpected failures
+hyperv_connections outer_kvm?fail:pass fail Linux: 7 tests, 1 unexpected failures; inside a machine of KVM fails receive pending message: 0/2, as under Linux 6.12 as the host of the same machine (dev-log/84-locks/84-33.md)
 hyperv_stimer pass pass
 hyperv_stimer_direct pass pass
 hyperv_synic pass pass

@@ -18,8 +18,10 @@
 # max_guest_memory_test at 4 GiB and would take hours at its 128 GiB
 # (dev-log/84-locks/84-33.md). Inside a machine of KVM, as the KVM suite's
 # cases run, FLAG `outer_kvm` holds: there x86_64/apic_bus_clock_test and
-# x86_64/hyperv_clock are excluded and x86_64/fix_hypercall_test fails, as
-# under Linux 6.12 as the host of the same machine.
+# x86_64/hyperv_clock are excluded and memslot_perf_test and
+# x86_64/fix_hypercall_test fail, as under Linux 6.12 as the host of the same
+# machine. A test is expected to fail only where Linux as the host of the
+# same machine fails it, and its row names how.
 #
 # NAME EXPECT LINUX REASON
 access_tracking_perf_test skip skip CONFIG_IDLE_PAGE_TRACKING is not enabled
@@ -33,9 +35,9 @@ hardware_disable_test pass pass
 kvm_binary_stats_test pass pass
 kvm_create_max_vcpus pass pass
 kvm_page_table_test,-b,128M pass pass
-max_guest_memory_test,-m,4 pass pass
+max_guest_memory_test,-m,4 pass pass built with vendor/gnu/kvm/max-guest-memory-one-cpu.patch, without which its default of no vCPUs on one processor, as an SVM profile under TCG has, stops it before -c is read
 memslot_modification_stress_test,-b,64M pass pass
-memslot_perf_test hypervisor?fail:pass pass under a hypervisor, its RW case's first write of each page is a nested exit, so that a pass outlasts host_perform_sync's alarm(10) (memslot_perf_test.c:418-426), as under Linux at the same depth
+memslot_perf_test outer_kvm?fail:pass pass inside a machine of KVM, its RW case's first write of each page is a nested exit, so that a pass outlasts host_perform_sync's alarm(10) (memslot_perf_test.c:418-426), as under Linux 6.12 as the host of the same machine (dev-log/84-locks/84-33.md)
 pre_fault_memory_test pass pass
 rseq_test pass pass
 set_memory_region_test pass fail Linux: Unexpected exit mmio address = 0x180000

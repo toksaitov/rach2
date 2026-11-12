@@ -1,0 +1,20 @@
+max_guest_memory_test takes three quarters of the processors it may run on as
+its default number of vCPUs and asserts that the count is positive, before it
+reads its options, so that on one processor it stops with "Uh, no CPUs?" even
+when -c names a count. The patch keeps the assertion for no processors and
+makes the default at least one vCPU, as a machine of one processor needs.
+
+--- a/tools/testing/selftests/kvm/max_guest_memory_test.c
++++ b/tools/testing/selftests/kvm/max_guest_memory_test.c
+@@ -145,8 +145,10 @@
+ 	TEST_ASSERT(!r, "sched_getaffinity failed, errno = %d (%s)",
+ 		    errno, strerror(errno));
+ 
++	TEST_ASSERT(CPU_COUNT(&possible_mask) > 0, "Uh, no CPUs?");
+ 	nr_vcpus = CPU_COUNT(&possible_mask) * 3/4;
+-	TEST_ASSERT(nr_vcpus > 0, "Uh, no CPUs?");
++	if (!nr_vcpus)
++		nr_vcpus = 1;
+ }
+ 
+ int main(int argc, char *argv[])
