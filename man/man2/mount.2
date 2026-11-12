@@ -100,7 +100,8 @@ A mount is not made read-only while a descriptor is open on it for
 writing, or on ext2 while a file removed from it is open,
 .Er EBUSY ,
 and is not made writable on a device that refuses writes or has failed
-one,
+one, or on ext2 when the volume has a feature the driver reads but does
+not write, which mounted it read-only,
 .Er EROFS .
 With
 .Dv MS_BIND
@@ -456,9 +457,12 @@ before repair writes begin.
 A read-only mount skips repair.
 .Pp
 An ext2 volume with its valid bit clear or error bit set is checked
-before a writable mount.
-A consistent volume can mount writable; a structural fault makes it
-read-only.
+before a writable mount or remount, which goes on writable whatever the
+check finds, as on Linux.
+A structural fault sets the error bit, and a check stopped at a limit of
+its own leaves the volume's state as it was; either way the kernel logs
+that running e2fsck is recommended, and the unmount does not mark the
+volume valid.
 .Ss Unmounting
 .Fn umount2
 requires
@@ -651,7 +655,9 @@ never to clear one the mount has, as Linux locks the flags of the mounts
 a user namespace inherits.
 .It Bq Er EROFS
 A remount tried to make writable a file system whose device refuses
-writes or has failed a write, or a bind whose file system is read-only.
+writes or has failed a write, an ext2 volume mounted read-only for a
+feature the driver does not write, or a bind whose file system is
+read-only.
 .It Bq Er ESRCH
 There is no current process.
 .El

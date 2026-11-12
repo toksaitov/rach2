@@ -1574,6 +1574,12 @@ int ext2_em_write_out(struct vfs_mount *mnt)
  * The caller holds no file lock. Returns this sync's result, with a failure
  * recorded as the batch's error and for the descriptions' syncs to report
  * (`ext2_writeback_error`).
+ *
+ * A sync is outside admission, so a remount read-only can finish while it
+ * sleeps on block 0; `writable` is read again under `em->super`, under
+ * which that remount ends it, as Linux orders `sync_filesystem` and a
+ * remount by `s_umount`. A mount made read-only meanwhile keeps its
+ * superblock as the remount wrote it, and no write is refused.
  */
 static int ext2_sync(struct vfs_mount *mnt)
 {
@@ -1584,7 +1590,11 @@ static int ext2_sync(struct vfs_mount *mnt)
     em_reap(em);
     if (rc == 0 && em->writable && !(mnt->flags & VFS_MS_RDONLY)) {
         ext2_volume_fetch(em, 0);
-        rc = sb_note(em);
+        ext2_super_lock(em);
+        if (em->writable) {
+            rc = sb_note(em);
+        }
+        ext2_super_unlock(em);
     }
     return rc != 0 ? ext2_writeback_error(em, rc) : ext2_em_write_out(mnt);
 }
@@ -1614,35 +1624,50 @@ static int ext2_writeback_old(struct vfs_mount *mnt, uint64_t before)
 }
 
 /**
- * The `prepare_unmount` of `vfs_ops`, used by a remount read-only too:
- * `ext2_sync`, which leaves no final put undone, and then, on a writable
- * mount none of whose writes failed, the superblock's valid bit set again
- * when this mount cleared it and the error bit is clear, and the state
- * written to the medium under `em->super`. 0, or -errno; a
- * failed write of the state clears the valid bit again and is recorded as
- * the batch's error.
+ * The end of a writable mount's writes, for an unmount and, with `readonly`
+ * set, a remount read-only: `ext2_sync`, which leaves no final put undone,
+ * and then, on a writable mount none of whose writes failed, the
+ * superblock's valid bit set again when this mount cleared it, the error
+ * bit is clear and no check was left owed (`em->check_owed`), and the state
+ * written to the medium under `em->super`. With `readonly`, `writable` is
+ * cleared under the same hold of `em->super`, so that a sync sees the
+ * mount writable before the write of the state or read-only after it
+ * (`ext2_sync`). 0, or -errno; a failed write of the state clears the valid
+ * bit again and is recorded as the batch's error.
  */
-static int ext2_prepare_unmount(struct vfs_mount *mnt)
+static int finish_writes(struct vfs_mount *mnt, int readonly)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
     int rc = ext2_sync(mnt);
 
-    if (rc != 0 || !em->writable || (mnt->flags & VFS_MS_RDONLY) || mnt->write_error) {
+    if (rc != 0 || !em->writable) {
         return rc;
     }
     ext2_super_lock(em);
-    if (em->valid_cleared && !(em->state & EXT2_ERROR_FS)) {
-        (void)ext2_state_change(em, EXT2_VALID_FS, 0);
+    if (!(mnt->flags & VFS_MS_RDONLY) && !mnt->write_error) {
+        if (em->valid_cleared && !(em->state & EXT2_ERROR_FS) && !em->check_owed) {
+            (void)ext2_state_change(em, EXT2_VALID_FS, 0);
+        }
+        rc = ext2_sb_store(em);
+        if (rc != 0) {
+            (void)ext2_state_change(em, 0, EXT2_VALID_FS);
+            rc = ext2_writeback_error(em, rc);
+        } else {
+            em->valid_cleared = 0;
+        }
     }
-    rc = ext2_sb_store(em);
-    if (rc != 0) {
-        (void)ext2_state_change(em, 0, EXT2_VALID_FS);
-        rc = ext2_writeback_error(em, rc);
-    } else {
-        em->valid_cleared = 0;
+    if (rc == 0 && readonly) {
+        em->writable = 0;
     }
     ext2_super_unlock(em);
     return rc;
+}
+
+/** The `prepare_unmount` of `vfs_ops`: `finish_writes`, the mount left
+ * writable for `ext2_abort_unmount`. 0, or -errno. */
+static int ext2_prepare_unmount(struct vfs_mount *mnt)
+{
+    return finish_writes(mnt, 0);
 }
 
 /**
@@ -1687,7 +1712,8 @@ static void ext2_abort_unmount(struct vfs_mount *mnt)
 
 /**
  * Make a writable mount read-only, its admission closed and no writer left:
- * the volume synced and its valid bit set, as an unmount leaves it. A node
+ * the volume synced and its valid bit set, as an unmount leaves it, and the
+ * mount read-only from the write of its state on (`finish_writes`). A node
  * removed while still open prevents it, since its inode is freed at its
  * last put and a read-only mount frees nothing: -EBUSY, as on Linux for such
  * a file. The scan comes after the writers went, so that it sees what they
@@ -1696,26 +1722,21 @@ static void ext2_abort_unmount(struct vfs_mount *mnt)
 static int remount_readonly(struct vfs_mount *mnt, struct ext2_mount *em)
 {
     struct ext2_node *n;
-    int rc;
 
     for (n = em->nodes; n; n = n->next) {
         if (n->unlinked) {
             return -EBUSY;
         }
     }
-    rc = ext2_prepare_unmount(mnt);
-    if (rc == 0) {
-        em->writable = 0;
-    }
-    return rc;
+    return finish_writes(mnt, 1);
 }
 
 /**
  * Make a read-only mount writable: a volume whose valid bit is clear or
  * whose error bit is set is checked as a writable mount checks it, the batch
  * is set up when the mount has none, and the valid bit is cleared on the
- * medium. 0, -EROFS for a volume whose features or check keep it read-only,
- * -ENOMEM for a batch the heap cannot give, or -errno.
+ * medium. 0, -EROFS for a volume whose features keep it read-only
+ * (`em->readonly_why`), -ENOMEM for a batch the heap cannot give, or -errno.
  *
  * The check holds no lock: admission is closed (`em_close`) and the mount
  * is read-only, so no writer, allocation or free of an inode changes what
@@ -1724,7 +1745,6 @@ static int remount_readonly(struct vfs_mount *mnt, struct ext2_mount *em)
  */
 static int remount_writable(struct ext2_mount *em)
 {
-    const char *why = 0;
     int rc = 0;
 
     if (em->readonly_why) {
@@ -1732,11 +1752,7 @@ static int remount_writable(struct ext2_mount *em)
     }
     em->opening = 1;
     if (!(em->state & EXT2_VALID_FS) || (em->state & EXT2_ERROR_FS)) {
-        rc = ext2_check_volume(em, &why);
-        if (rc > 0) {
-            em->readonly_why = why;
-            rc = -EROFS;
-        }
+        rc = ext2_check_volume(em);
     }
     ext2_batch_lock(em);
     if (rc == 0 && !em->wb) {
@@ -2394,8 +2410,12 @@ void ext2_mark_error(struct ext2_mount *em)
     (void)ext2_state_change(em, EXT2_ERROR_FS, 0);
     if (em->wb && em->wb->count) {
         (void)ext2_writeback_error(em, -EIO);
-    } else if (em->writable) {
-        (void)ext2_sb_store(em);
+    } else {
+        ext2_super_lock(em);
+        if (em->writable) {
+            (void)ext2_sb_store(em);
+        }
+        ext2_super_unlock(em);
     }
     if (big) {
         bkl_exit();
@@ -2746,8 +2766,8 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     }
     if (!readonly_why && !(flags & VFS_MS_RDONLY) &&
         (!(em->state & EXT2_VALID_FS) || (em->state & EXT2_ERROR_FS))) {
-        rc = ext2_check_volume(em, &readonly_why);
-        if (rc < 0) {
+        rc = ext2_check_volume(em);
+        if (rc != 0) {
             node_drop(em, root);
             return rc;
         }
