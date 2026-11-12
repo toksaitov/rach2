@@ -1229,6 +1229,21 @@ int kvm_guest_phys_rw(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t n, i
     return 0;
 }
 
+/** The exchange of the steal time's `preempted`: a read and a write, since
+ * no guest runs beside the test's one thread to come between them. */
+int kvm_guest_phys_clear(struct kvm_vcpu *v, uint64_t gpa, uint32_t bits, uint32_t *old)
+{
+    uint32_t w = 0;
+
+    *old = 0;
+    if (kvm_guest_phys_rw(v, gpa, &w, 4, 0) != 0) {
+        return 1;
+    }
+    *old = w;
+    w &= ~bits;
+    return kvm_guest_phys_rw(v, gpa, &w, 4, 1);
+}
+
 /* The caller's region over the first guest page, which a row marks
  * VM_PROT_SECRET, as memfd_secret's, and the one over the second, always
  * memfd_secret's. */
@@ -1660,8 +1675,9 @@ static void check_cpuid_entry(const struct kvm_cpuid_entry2 *e)
     }
     if (e->function == KVM_CPUID_FEATURES) {
         CHECK(e->eax == ((1u << KVM_FEATURE_NOP_IO_DELAY) | (1u << KVM_FEATURE_STEAL_TIME) |
-                         (1u << KVM_FEATURE_PV_UNHALT) | (1u << KVM_FEATURE_PV_SEND_IPI) |
-                         (1u << KVM_FEATURE_POLL_CONTROL) | (1u << KVM_FEATURE_PV_SCHED_YIELD)),
+                         (1u << KVM_FEATURE_PV_UNHALT) | (1u << KVM_FEATURE_PV_TLB_FLUSH) |
+                         (1u << KVM_FEATURE_PV_SEND_IPI) | (1u << KVM_FEATURE_POLL_CONTROL) |
+                         (1u << KVM_FEATURE_PV_SCHED_YIELD)),
               "KVM's features, with no kvmclock while the TSC's rate is not known");
     }
     CHECK(e->function < 0x40000000u || e->function >= 0x80000000u ||
@@ -2393,9 +2409,9 @@ static void pv_leaf_rows(void)
 
     want = (1u << KVM_FEATURE_CLOCKSOURCE) | (1u << KVM_FEATURE_NOP_IO_DELAY) |
            (1u << KVM_FEATURE_CLOCKSOURCE2) | (1u << KVM_FEATURE_STEAL_TIME) |
-           (1u << KVM_FEATURE_PV_UNHALT) | (1u << KVM_FEATURE_PV_SEND_IPI) |
-           (1u << KVM_FEATURE_POLL_CONTROL) | (1u << KVM_FEATURE_PV_SCHED_YIELD) |
-           (1u << KVM_FEATURE_CLOCKSOURCE_STABLE_BIT);
+           (1u << KVM_FEATURE_PV_UNHALT) | (1u << KVM_FEATURE_PV_TLB_FLUSH) |
+           (1u << KVM_FEATURE_PV_SEND_IPI) | (1u << KVM_FEATURE_POLL_CONTROL) |
+           (1u << KVM_FEATURE_PV_SCHED_YIELD) | (1u << KVM_FEATURE_CLOCKSOURCE_STABLE_BIT);
     n = pv_cpuid();
     for (i = 0; i < n; i++) {
         if (CPUID_ENTRIES[i].function == KVM_CPUID_FEATURES) {
@@ -2699,6 +2715,29 @@ static void steal_block_row(int fd0, uint64_t reported)
           "switch in after it asks for a write, as KVM_RUN's start does");
 }
 
+/** The guest's mark to flush its TLB, KVM_FEATURE_PV_TLB_FLUSH, in `v0`'s
+ * steal time record `st`, which the last write left at version 26. */
+static void steal_flush_rows(struct kvm_vcpu *v0, struct kvm_steal_time *st)
+{
+    v0->requests &= ~KVM_REQ_TLB_FLUSH;
+    st->preempted = KVM_VCPU_PREEMPTED;
+    caller.pcount++;
+    kvm_steal_prepare(v0);
+    CHECK(st->version == 28 && st->preempted == 0 && !(v0->requests & KVM_REQ_TLB_FLUSH),
+          "a record that says preempted alone is cleared with no flush of the guest's TLB");
+    st->preempted = KVM_VCPU_PREEMPTED | KVM_VCPU_FLUSH_TLB;
+    st->u8_pad[0] = 0x5A;
+    caller.pcount++;
+    kvm_steal_prepare(v0);
+    CHECK(st->version == 30 && st->preempted == 0 && st->u8_pad[0] == 0x5A &&
+              (v0->requests & KVM_REQ_TLB_FLUSH),
+          "the guest's KVM_VCPU_FLUSH_TLB in a preempted record is taken with `preempted`, its "
+          "padding kept, and the entry flushes the guest's TLB, as Linux's record_steal_time "
+          "with KVM_FEATURE_PV_TLB_FLUSH");
+    v0->requests &= ~KVM_REQ_TLB_FLUSH;
+    st->u8_pad[0] = 0;
+}
+
 /** The steal time of vCPU `fd0`, as the selftest steal_time and Linux's
  * record_steal_time see it: MSR_KVM_STEAL_TIME refuses its reserved bits,
  * each write adds the thread's run_delay since the last and keeps the
@@ -2798,12 +2837,13 @@ static void steal_rows(int fd0)
           "through the caller's address, as Linux's record_steal_time, and never marked "
           "preempted without a fault");
     guest_vma.prot = 0;
+    steal_flush_rows(v0, st);
     refusing = 1;
 
     CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_GPA) == 1, "the guest turns it off");
     caller.pcount++;
     kvm_steal_prepare(v0);
-    CHECK(st->version == 26, "and nothing more is written");
+    CHECK(st->version == 30, "and nothing more is written");
 }
 
 /* A steal time record in the guest's second page, of memfd_secret. */

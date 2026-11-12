@@ -758,6 +758,7 @@ and 0x40000001 in EAX, and 0x40000001, whose EAX names
 .Dv KVM_FEATURE_NOP_IO_DELAY ,
 .Dv KVM_FEATURE_STEAL_TIME ,
 .Dv KVM_FEATURE_PV_UNHALT ,
+.Dv KVM_FEATURE_PV_TLB_FLUSH ,
 .Dv KVM_FEATURE_PV_SEND_IPI ,
 .Dv KVM_FEATURE_POLL_CONTROL
 and
@@ -853,6 +854,13 @@ time slice after the guest stopped for a host interrupt,
 says
 .Dv KVM_VCPU_PREEMPTED
 until the guest runs again.
+With
+.Dv KVM_FEATURE_PV_TLB_FLUSH
+the guest may add
+.Dv KVM_VCPU_FLUSH_TLB
+to it, in place of an interrupt to that vCPU, and the kernel takes
+.Va preempted
+in one exchange and flushes the guest's TLB before the vCPU runs.
 A guest's INIT turns the steal time and the kvmclock off.
 .Dv KVM_KVMCLOCK_CTRL
 sets

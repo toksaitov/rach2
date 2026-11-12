@@ -351,6 +351,47 @@ int kvm_guest_phys_rw(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t n, i
     return gpa_rw(v, gpa, buf, n, write);
 }
 
+int kvm_guest_phys_clear(struct kvm_vcpu *v, uint64_t gpa, uint32_t bits, uint32_t *old)
+{
+    struct kvm_slot_view s;
+    struct kvm_dirty_gfn *entry;
+    uintptr_t hva;
+    uint32_t idx, w = 0, seen = 0;
+    int r;
+
+    *old = 0;
+    if (gpa & 3u) {
+        return -EFAULT;
+    }
+    idx = kvm_srcu_read_lock(v->vm);
+    if (!kvm_slot_find_read(v->vm, gpa >> 12, &s) || (s.flags & KVM_MEM_READONLY)) {
+        r = 1;
+        goto out;
+    }
+    hva = (uintptr_t)(s.hva + (gpa & 0xFFFu));
+    r = kvm_dirty_reserve(v, &s, gpa >> 12, &entry);
+    if (r != 0) {
+        goto out;
+    }
+    r = get_user_u32(&w, hva);
+    while (r == 0 && (w & bits) != 0) {
+        r = cmpxchg_user_u32(hva, w, w & ~bits, &seen);
+        if (r != 0 || seen == w) {
+            break;
+        }
+        w = seen;
+    }
+    *old = w;
+    if (entry) {
+        kvm_dirty_publish(entry);
+    } else {
+        (void)kvm_dirty_mark(v, &s, gpa >> 12);
+    }
+out:
+    kvm_srcu_read_unlock(v->vm, idx);
+    return r;
+}
+
 /** One entry of the guest's tables at `gpa`, `size` 4 or 8 bytes: 0, or
  * nonzero as `gpa_rw` answers. */
 static int pte_read(struct kvm_vcpu *v, uint64_t gpa, uint32_t size, uint64_t *e)
