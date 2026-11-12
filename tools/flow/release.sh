@@ -50,6 +50,10 @@
 #   whole host in WSL's admission, `etude-launch alone`, keeps WSL's tests
 #   from starting; WSL refusing either claim ends the release. A release
 #   that exits or is stopped stops Windows' preparation and ends both claims.
+#   Each Windows session marks the run's start in OUT/ID.start and gives the
+#   run a TMPDIR of its own, OUT/ID.tmp; a run that a stop or a lost ssh ends
+#   is stopped on Windows too, and its TMPDIR and the collections and tooling
+#   jobs it made in the copy are removed, as winclean.sh says.
 #   The Lenovo's run, lenovo, is the native cases of tests/native on the
 #   trial boot, which `native-deploy run` starts from here with the payload
 #   the build makes, after the acceptance. The trial boot's console session
@@ -1166,13 +1170,15 @@ windows_settings()
 # windows_stop: stop Windows' preparation that runs in the background and end
 # the hold of WSL's whole host and its beat, so that a release that exits or is
 # stopped leaves none of them behind; nothing of Windows' run is left running
-# between its preparation and its cases.
+# between its preparation and its cases. When it stopped either, it stops what
+# of the run still runs on Windows and removes its scratch there.
 windows_stop()
 {
+    wstopped=
     if [ -n "$wprep" ]; then
         kill "$wprep" 2> /dev/null
         wait "$wprep"
-        wprep=
+        wprep='' wstopped=1
     fi
     if [ -n "$wbeat" ]; then
         kill "$wbeat" 2> /dev/null
@@ -1181,8 +1187,17 @@ windows_stop()
     if [ -n "$wholder" ]; then
         wsl "touch $wheld/$wid.end" > /dev/null 2>&1
         kill "$wholder" 2> /dev/null
-        wholder=
+        wholder='' wstopped=1
     fi
+    [ -z "$wstopped" ] || [ -z "$wid" ] || windows_clean "$wid"
+}
+
+# windows_clean ID: stop what is left of Windows' run ID on Windows and remove
+# the scratch it made outside its own files, as winclean.sh does.
+windows_clean()
+{
+    ssh -o BatchMode=yes testing "C:/msys64/usr/bin/bash.exe -l -s $wtree $wout $1" \
+        < "$repo/tools/flow/winclean.sh" > /dev/null 2>&1
 }
 
 # beat ID: touch ID.alive in WSL once a minute while the release runs, the
@@ -1247,14 +1262,16 @@ windows_prepare()
     # shellcheck disable=SC2086 # the suites are words
     {
         echo "cd $wtree || { echo 'status 1'; exit; }"
+        echo ": > $wout/$id.start"
         echo "git fetch -q $wout/release.bundle 'refs/remotes/origin/$branch' && git checkout -q -f --detach $sha || { echo 'status 1'; exit; }"
         downloads
         environment windows
+        echo "export TMPDIR=$wout/$id.tmp"
+        echo "mkdir -p $wout/$id \$TMPDIR"
         echo "ETUDE_SITE=$wsite make build/tools/etude/etude > $wout/$id.make.log 2>&1 || { tail -n 20 $wout/$id.make.log; echo 'status 1'; exit; }"
         echo "e=$wout/etude-$id.exe"
         echo "cp build/tools/etude/etude \"\$e\" || { echo 'status 1'; exit; }"
         echo "unset ETUDE_SITE ETUDE_ADMITTED ETUDE_PREPARATION_CLEAN"
-        echo "mkdir -p $wout/$id $wout/tmp"
         echo "ETUDE_SITE=$wsite \"\$e\" run -N -t $wtree -a $warch -A $waccel -J $wout/$id.selection.json $wwords > $wout/$id.selection.log 2>&1 || { tail -n 20 $wout/$id.selection.log; echo 'status 1'; exit; }"
         echo "ETUDE_PHASE_SELECTION_EXPORT=$wout/$id.selection.json \"\$e\" run routine-prepare phase_first_run $wtree $wout/$id $warch $id $wsite \"\$e\" $waccel $wwords > $wout/$id.prepare.console 2>&1"
         # shellcheck disable=SC2016 # the remote shell expands these
@@ -1357,6 +1374,7 @@ windows()
         rc=$(tr -d '\r' < "$state/$id.prepare" 2> /dev/null | sed -n 's/^status //p' | tail -n 1)
         if [ -z "$rc" ]; then
             say "windows: the preparation of $id ended without a status"
+            windows_clean "$id"
             continue
         fi
         if [ "$rc" != 0 ]; then
@@ -1382,7 +1400,10 @@ windows()
         # shellcheck disable=SC2086 # the suites are words
         {
             echo "cd $wtree || { echo 'status 1'; exit; }"
+            echo "[ -e $wout/$id.start ] || : > $wout/$id.start"
             environment windows
+            echo "export TMPDIR=$wout/$id.tmp"
+            echo "mkdir -p \$TMPDIR"
             echo "MSYS_NO_PATHCONV=1 wsl.exe -u root -e sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches' < /dev/null"
             echo "e=$wout/etude-$id.exe"
             echo "unset ETUDE_SITE ETUDE_ADMITTED ETUDE_PREPARATION_CLEAN"
@@ -1409,6 +1430,7 @@ windows()
         rc=$(tr -d '\r' < "$state/$id.log" | sed -n 's/^status //p' | tail -n 1)
         [ -z "$rc" ] || break
         say "windows: the run $id ended without a status"
+        windows_clean "$id"
     done
     if [ "$rc" = 0 ]; then
         mark windows "run $id"
@@ -1616,11 +1638,9 @@ END
 # Windows, which a stopped ssh leaves running, and remove its files there.
 prepare_windows_clean()
 {
-    {
-        echo "cd $wout || exit 0"
-        echo "MSYS_NO_PATHCONV=1 taskkill /F /T /IM etude-$pwid.exe > /dev/null 2>&1"
-        echo "rm -rf $pwid $pwid.* etude-$pwid.exe"
-    } | ssh -o BatchMode=yes testing 'C:/msys64/usr/bin/bash.exe -l -s' > /dev/null 2>&1
+    windows_clean "$pwid"
+    echo "cd $wout && rm -rf $pwid $pwid.* etude-$pwid.exe" |
+        ssh -o BatchMode=yes testing 'C:/msys64/usr/bin/bash.exe -l -s' > /dev/null 2>&1
 }
 
 # prepare_stop: stop each part of -p that still runs, check that none keeps a

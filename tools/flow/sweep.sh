@@ -26,7 +26,8 @@
 # loop holds no session, the images, test output and scratch unchanged for a
 # day, but `build/tests/failed`, and the run files of `build/runs` unchanged
 # for two weeks; on Windows the test collections, tooling job directories,
-# case images and scratch unchanged for a day; and here the entries of
+# case images and scratch, the old shared TMPDIR of the release runs among it,
+# unchanged for a day; and here the entries of
 # `build/tests` unchanged for two weeks. The caches, the build copies of the
 # release and of Windows, and the tooling work disks stay. Each removal, and
 # each step's total, is a line on stdout. Each step that reaches the host stops
@@ -73,7 +74,7 @@ outputs()
         echo 'b=/d/rach2/build'
         # shellcheck disable=SC2016 # the dollars are the remote shell's
         echo "stale $days \$b/tests/rach2-collection.* \$b/tooling/job-* \$b/images/cases/*" \
-            '$b/x86_64/images/cases/* $b/tmp/*'
+            '$b/x86_64/images/cases/* $b/tmp/* $b/release/tmp/*'
     } | perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         'bash -s' 2>&1 | tr -d '\000\r' | sed 's/^/windows: /'
     eval "$stale"
