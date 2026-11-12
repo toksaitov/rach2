@@ -841,7 +841,8 @@ void kvm_vcpu_fpu_sync(struct kvm_vcpu *v);
  * debug registers of a reset, keeping CR0's CD and NW, the APIC base, the
  * FPU's state, XCR0,
  * the MSRs but the kvmclock's and the steal time's, which are turned off,
- * and the TSC. vlapic.c resets the APIC itself. */
+ * and SPEC_CTRL and VIRT_SPEC_CTRL, which are cleared, and the TSC.
+ * vlapic.c resets the APIC itself. */
 void kvm_vcpu_init_reset(struct kvm_vcpu *v);
 
 /** The guest's physical address bits, from leaf 0x80000008 of `v`'s CPUID,
@@ -958,9 +959,31 @@ int kvm_msr_guest_mwait(const struct kvm_vcpu *v);
 
 #define MSR_IA32_SPEC_CTRL 0x048u
 
+/** Choose how the host carries out the SSBD a guest asks for in SVM's
+ * VIRT_SPEC_CTRL: in IA32_SPEC_CTRL where that register takes SSBD, else
+ * in the host's own VIRT_SPEC_CTRL where CPUID offers it beneath another
+ * hypervisor, else in LS_CFG on AMD's families 15h to 17h, else not at all,
+ * as Linux's x86_virt_spec_ctrl (arch/x86/kernel/cpu/bugs.c:207-242) skips
+ * it. From `kvm_start`, before any guest runs. */
+void kvm_spec_start(void);
+
+/** Whether SVM offers VIRT_SSBD in CPUID: where the host carries it out in
+ * IA32_SPEC_CTRL or in LS_CFG, as Linux's svm_set_cpu_caps offers it where
+ * the host has AMD_SSBD or LS_CFG_SSBD (arch/x86/kvm/svm/svm.c:5423-5425). */
+int kvm_virt_ssbd_offered(void);
+
 /** The IA32_SPEC_CTRL the processor holds while `v` runs: the guest's,
- * with SSBD as well where its VIRT_SPEC_CTRL asks for it. */
+ * with SSBD as well where its VIRT_SPEC_CTRL asks for it and the host
+ * carries that out in IA32_SPEC_CTRL. */
 uint64_t kvm_spec_ctrl_guest(const struct kvm_vcpu *v);
+
+/** Put the SSBD of `v`'s VIRT_SPEC_CTRL in force on processor `cpu` before
+ * an entry with `in`, or the host's back after the exit without, where the
+ * host carries it out in its own VIRT_SPEC_CTRL or in LS_CFG and the two
+ * differ, as Linux's svm_vcpu_run around the entry
+ * (arch/x86/kvm/svm/svm.c:4418-4424). Every access of the guest's exits, so
+ * the two calls of a run see one value. Interrupts off. */
+void kvm_virt_ssbd_switch(const struct kvm_vcpu *v, int cpu, int in);
 
 /** The host's IA32_SPEC_CTRL on processor `cpu`, 0 where it has none, read
  * at the first call there: the value an exit puts back. Interrupts off. */

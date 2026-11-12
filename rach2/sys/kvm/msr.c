@@ -56,6 +56,7 @@
 #define MSR_K7_HWCR            0xC0010015u
 #define MSR_AMD64_NB_CFG       0xC001001Fu
 #define MSR_AMD64_VIRT_SPEC    0xC001011Fu
+#define MSR_AMD64_LS_CFG       0xC0011020u
 
 #define EFER_SCE 0x001ull
 #define EFER_LMA 0x400ull
@@ -219,9 +220,137 @@ uint64_t kvm_spec_ctrl_host(int cpu)
     return spec_host[cpu];
 }
 
+/* How the host carries out the SSBD a guest asks for in VIRT_SPEC_CTRL,
+ * as `kvm_spec_start` chose: not at all, in IA32_SPEC_CTRL, in the host's
+ * own VIRT_SPEC_CTRL beneath another hypervisor, or in LS_CFG's bit of the
+ * processor's family. */
+enum virt_ssbd { VSSBD_NONE, VSSBD_SPEC, VSSBD_VIRT, VSSBD_LS_CFG };
+static enum virt_ssbd vssbd;
+
+/* VIRT_SPEC_CTRL's SSBD as the host had it at `kvm_spec_start`. */
+static uint64_t virt_host;
+
+/* LS_CFG as the host had it at `kvm_spec_start`, and its bit that disables
+ * speculative store bypass. */
+static uint64_t ls_cfg_base, ls_cfg_ssbd;
+
+/* With `ls_cfg_smt`, the two threads of a core share LS_CFG, as on family
+ * 17h with SMT: SSBD stays set while a guest on either asks for it.
+ * `ls_core` is each processor's core, its extended APIC ID halved, once
+ * `ls_core_known` is set there; `ls_want` whether a guest's SSBD is in force
+ * there. `ls_cfg_lock` keeps all three. */
+static int ls_cfg_smt;
+static struct spinlock ls_cfg_lock = SPINLOCK_INIT_NAMED("kvm_ls_cfg");
+static uint32_t ls_core[NR_CPUS];
+static uint8_t ls_core_known[NR_CPUS];
+static uint8_t ls_want[NR_CPUS];
+
+/** The family of a CPUID leaf 1 signature, the extended family added to
+ * family 15, as Linux's x86_family. */
+static uint32_t sig_family(uint32_t signature)
+{
+    uint32_t family = (signature >> 8) & 0xFu;
+
+    return family == 0xFu ? family + ((signature >> 20) & 0xFFu) : family;
+}
+
+void kvm_spec_start(void)
+{
+    uint32_t a = 0, b = 0, c = 0, d = 0, top, family, bit;
+    uint64_t value;
+
+    vssbd = VSSBD_NONE;
+    ls_cfg_smt = 0;
+    /* SSBD in IA32_SPEC_CTRL first: Linux clears VIRT_SSBD where the host
+     * has AMD_SSBD (arch/x86/kernel/cpu/common.c:970-974). */
+    if (spec_ctrl_ok(SPEC_CTRL_SSBD)) {
+        vssbd = VSSBD_SPEC;
+        return;
+    }
+    kcpu_id(0x80000000u, &top, &b, &c, &d);
+    if (top >= 0x80000008u) {
+        kcpu_id(0x80000008u, &a, &b, &c, &d);
+        if ((b & CPUID_X8_VIRT_SSBD) && kcpu_rdmsr_safe(MSR_AMD64_VIRT_SPEC, &value) == 0) {
+            vssbd = VSSBD_VIRT;
+            virt_host = value & SPEC_CTRL_SSBD;
+            return;
+        }
+    }
+    /* LS_CFG's bit on AMD's families 15h to 17h, where the register reads,
+     * as Linux's bsp_init_amd (arch/x86/kernel/cpu/amd.c:463-483). */
+    kcpu_id(0, &a, &b, &c, &d);
+    if (b != 0x68747541u || d != 0x69746E65u || c != 0x444D4163u) { /* AuthenticAMD */
+        return;
+    }
+    kcpu_id(1, &a, &b, &c, &d);
+    family = sig_family(a);
+    bit = family == 0x15u ? 54u : family == 0x16u ? 33u : family == 0x17u ? 10u : 0u;
+    if (bit == 0 || kcpu_rdmsr_safe(MSR_AMD64_LS_CFG, &ls_cfg_base) != 0) {
+        return;
+    }
+    ls_cfg_ssbd = 1ull << bit;
+    vssbd = VSSBD_LS_CFG;
+    /* Zen's threads share the register (arch/x86/kernel/process.c:555-561);
+     * leaf 0x8000001E's EBX names two threads to a core. */
+    if (family == 0x17u && top >= 0x8000001Eu) {
+        kcpu_id(0x8000001Eu, &a, &b, &c, &d);
+        ls_cfg_smt = ((b >> 8) & 0xFFu) == 1u;
+    }
+}
+
+int kvm_virt_ssbd_offered(void)
+{
+    return vssbd == VSSBD_SPEC || vssbd == VSSBD_LS_CFG;
+}
+
 uint64_t kvm_spec_ctrl_guest(const struct kvm_vcpu *v)
 {
-    return v->spec_ctrl | (v->virt_spec_ctrl & SPEC_CTRL_SSBD);
+    return v->spec_ctrl | (vssbd == VSSBD_SPEC ? v->virt_spec_ctrl & SPEC_CTRL_SSBD : 0);
+}
+
+/**
+ * Set LS_CFG's SSBD on processor `cpu` for a guest's entry with `in`, or
+ * clear it after the exit without. Where a core's two threads share the
+ * register, the first of them to set it writes it and the last to clear it
+ * writes it back, as Linux's amd_set_core_ssb_state
+ * (arch/x86/kernel/process.c:562-599). Interrupts off.
+ */
+static void ls_cfg_switch(int cpu, int in)
+{
+    uint32_t a = 0, b = 0, c = 0, d = 0;
+    int i, others = 0;
+
+    if (!ls_cfg_smt) {
+        (void)kcpu_wrmsr_safe(MSR_AMD64_LS_CFG, ls_cfg_base | (in ? ls_cfg_ssbd : 0));
+        return;
+    }
+    spin_lock(&ls_cfg_lock);
+    if (!ls_core_known[cpu]) {
+        kcpu_id(0x8000001Eu, &a, &b, &c, &d);
+        ls_core[cpu] = a >> 1;
+        ls_core_known[cpu] = 1;
+    }
+    for (i = 0; i < NR_CPUS; i++) {
+        if (i != cpu && ls_want[i] && ls_core[i] == ls_core[cpu]) {
+            others = 1;
+        }
+    }
+    ls_want[cpu] = (uint8_t)(in != 0);
+    if (!others) {
+        (void)kcpu_wrmsr_safe(MSR_AMD64_LS_CFG, ls_cfg_base | (in ? ls_cfg_ssbd : 0));
+    }
+    spin_unlock(&ls_cfg_lock);
+}
+
+void kvm_virt_ssbd_switch(const struct kvm_vcpu *v, int cpu, int in)
+{
+    uint64_t guest = v->virt_spec_ctrl & SPEC_CTRL_SSBD;
+
+    if (vssbd == VSSBD_VIRT && guest != virt_host) {
+        (void)kcpu_wrmsr_safe(MSR_AMD64_VIRT_SPEC, in ? guest : virt_host);
+    } else if (vssbd == VSSBD_LS_CFG && guest && !(ls_cfg_base & ls_cfg_ssbd)) {
+        ls_cfg_switch(cpu, in);
+    }
 }
 
 const uint32_t *kvm_msr_list(int feature, uint32_t *n)

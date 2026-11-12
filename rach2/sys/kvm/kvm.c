@@ -979,6 +979,7 @@ void kvm_start(void)
         return;
     }
     kvm_pmu_start();
+    kvm_spec_start();
     if (devfs_node_register(&kvm_node) != 0) {
         klog(KLOG_WARN, "kvm", "failed: /dev/kvm not registered");
         kvm_backend = NULL;
