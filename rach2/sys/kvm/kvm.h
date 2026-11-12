@@ -1198,8 +1198,10 @@ uint64_t kvm_tdp_frames(void);
  * the caller's page and the dirty log allow, uncached under the guest's
  * PAT for a device's page and write-back with the guest's PAT ignored for
  * RAM, and as a 2 MiB page where the slot and the caller's pages allow.
- * Without the big lock, under the address space's regions' lock and
- * `mmu_lock`. May sleep. 0; 1 for a frame no slot holds or a write to a
+ * It takes the address space's regions' lock to read and `mmu_lock`
+ * itself, and may be called with or without the big lock: the backends'
+ * exits call it without, KVM_PRE_FAULT_MEMORY (`kvm_tdp_pre_fault`) under
+ * it. May sleep. 0; 1 for a frame no slot holds or a write to a
  * read-only slot, which is MMIO; -EFAULT when the caller's page cannot be
  * had; -ENOMEM.
  */
@@ -1577,7 +1579,8 @@ int kvm_lapic_mmio(struct kvm_vcpu *v);
 int kvm_lapic_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host);
 
 /** Deliver a performance-counter overflow through the local LVTPC entry,
- * if it is enabled. Under the big lock, never from the backend's entry. */
+ * if it is enabled. Without the big lock, in `v`'s thread
+ * (`kvm_pmu_prepare`), never from the backend's entry. */
 void kvm_lapic_pmi(struct kvm_vcpu *v);
 
 /** Set the APIC base of `v` to `value`, with the checks of Linux's
@@ -1679,7 +1682,8 @@ int kvm_hv_set_cpuid(struct kvm_vcpu *v, const struct kvm_cpuid_entry2 *e, uint3
 int kvm_hv_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host);
 
 /** Whether `v`'s guest has Hyper-V and has written its guest OS id, so
- * that its hypercalls are Hyper-V's. */
+ * that its hypercalls are Hyper-V's. Without the big lock, in `v`'s
+ * thread, from the backends' hypercall exits. */
 int kvm_hv_hypercall_enabled(const struct kvm_vcpu *v);
 
 /** The guest's hypercall, a VMCALL or VMMCALL of `len` bytes: `v->exit`
@@ -1704,15 +1708,18 @@ int32_t kvm_hv_prepare(struct kvm_vcpu *v);
 void kvm_hv_stimers(struct kvm_vcpu *v);
 
 /** The host's ns at which `v`'s next synthetic timer is due, 1 when one
- * waits to be looked at now, or 0 for none. */
+ * waits to be looked at now, or 0 for none. Without the big lock, in
+ * `v`'s thread. */
 uint64_t kvm_hv_stimer_next(const struct kvm_vcpu *v);
 
 /** Whether `vector` of `v` is a SINT's with auto-EOI, which the APIC's
- * acknowledgement takes without putting it in service. */
+ * acknowledgement takes without putting it in service. Without the big
+ * lock, in `v`'s thread. */
 int kvm_hv_synic_auto_eoi(struct kvm_vcpu *v, uint32_t vector);
 
 /** An EOI of `vector` of `v`: a timer's message waiting for its SINT's
- * slot is tried again. */
+ * slot is tried again. Without the big lock, in `v`'s thread, whose own
+ * `stimer_pending` it changes. */
 void kvm_hv_synic_eoi(struct kvm_vcpu *v, uint32_t vector);
 
 /** Raise SINT `sint` of the vCPU of `vm` whose VP index is `vpidx`, for a
@@ -1722,7 +1729,8 @@ void kvm_hv_synic_eoi(struct kvm_vcpu *v, uint32_t vector);
 int kvm_hv_synic_set_irq(struct kvm_vm *vm, uint32_t vpidx, uint32_t sint);
 
 /** Whether `v`'s guest is to see no invariant TSC, CPUID 0x80000007 EDX
- * bit 8: Hyper-V's invariant TSC control is offered and not yet set. */
+ * bit 8: Hyper-V's invariant TSC control is offered and not yet set.
+ * Without the big lock, in `v`'s thread, from the CPUID exit. */
 int kvm_hv_invtsc_suppressed(const struct kvm_vcpu *v);
 
 /** The guest's clock or TSC of `vm` moved: the reference TSC page is
