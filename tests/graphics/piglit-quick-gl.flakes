@@ -1,0 +1,3 @@
+# piglit-quick-gl.flakes: the tests and subtests of piglit-quick-gl.txt.gz
+# that are not judged, one extended regular expression a line, searched for
+# in the name.
