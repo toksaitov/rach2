@@ -1048,9 +1048,10 @@ static struct {
     uint32_t pkru, host_pkru, image_pkru;
     uint64_t msr[5];
     int msr_writes;
-    /* What the last entry found: the processor's STAR and KERNEL_GS_BASE,
-     * XCR0 and the WRMSRs so far. */
-    uint64_t entry_star, entry_kgs, entry_xcr0;
+    int msr_faults; /* the safe WRMSRs refused with #GP */
+    /* What the last entry found: the processor's STAR, SYSCALL_MASK and
+     * KERNEL_GS_BASE, XCR0 and the WRMSRs so far. */
+    uint64_t entry_star, entry_sfmask, entry_kgs, entry_xcr0;
     int entry_msr_writes, first_msr_writes;
     /* The turn of the run loop at which it switches away
      * (`sched_take_preempt`), counting down, and the switches taken. */
@@ -1693,6 +1694,7 @@ static void note_entry(const uint64_t *f)
               f[VM_EXIT_MSR_LOAD_COUNT] == 0,
           "no MSR is switched by the entry's and the exit's lists");
     m.entry_star = m.msr[msr_slot(MSR_STAR)];
+    m.entry_sfmask = m.msr[msr_slot(MSR_SYSCALL_MASK)];
     m.entry_kgs = m.msr[msr_slot(MSR_KERNEL_GS_BASE)];
     m.entry_xcr0 = m.xcr0;
     m.entry_msr_writes = m.msr_writes;
@@ -1834,10 +1836,19 @@ static uint64_t m_rdmsr(uint32_t msr)
     }
 }
 
+/** Whether the processor refuses `value` for `msr` with #GP: bits 63:32
+ * of SYSCALL_MASK and TSC_AUX are reserved. */
+static int m_msr_refused(uint32_t msr, uint64_t value)
+{
+    return (msr == MSR_SYSCALL_MASK || msr == MSR_TSC_AUX) && (value >> 32) != 0;
+}
+
 /** WRMSR: IA32_FEATURE_CONTROL, written only unlocked, IA32_DEBUGCTL and
- * the kept MSRs, counted; the others do not matter. */
+ * the kept MSRs, counted; the others do not matter. A value the processor
+ * refuses would fault the host. */
 static void m_wrmsr(uint32_t msr, uint64_t value)
 {
+    CHECK(!m_msr_refused(msr, value), "no WRMSR that can fault the host writes a refused value");
     if (msr_slot(msr) >= 0) {
         m.msr[msr_slot(msr)] = value;
         m.msr_writes++;
@@ -1851,6 +1862,18 @@ static void m_wrmsr(uint32_t msr, uint64_t value)
         m.fc = value;
         m.fc_writes++;
     }
+}
+
+/** The safe WRMSR: -1, with the MSR unchanged, for a value the processor
+ * refuses with #GP; else `m_wrmsr`'s write and 0. */
+static int m_wrmsr_safe(uint32_t msr, uint64_t value)
+{
+    if (m_msr_refused(msr, value)) {
+        m.msr_faults++;
+        return -1;
+    }
+    m_wrmsr(msr, value);
+    return 0;
 }
 
 /** The host's CR0, CR3 and CR4. */
@@ -2004,10 +2027,10 @@ static uint64_t m_exit_rip(void)
 }
 
 static const struct vmx_ops model_ops = {
-    m_vmxon,    m_vmxoff,    m_vmclear,      m_vmptrld,       m_vmread,    m_vmwrite,   m_invept,
-    m_invvpid,  m_run,       m_rdmsr,        m_wrmsr,         m_read_cr,   m_write_cr4, m_read_dr,
-    m_write_dr, m_save_host, m_restore_host, m_fpu_load,      m_fpu_store, m_xgetbv,    m_xsetbv,
-    m_rdpkru,   m_wrpkru,    m_nmi,          m_machine_check, m_wbinvd,    m_exit_rip};
+    m_vmxon,   m_vmxoff,   m_vmclear,   m_vmptrld,      m_vmread,        m_vmwrite,   m_invept,
+    m_invvpid, m_run,      m_rdmsr,     m_wrmsr,        m_wrmsr_safe,    m_read_cr,   m_write_cr4,
+    m_read_dr, m_write_dr, m_save_host, m_restore_host, m_fpu_load,      m_fpu_store, m_xgetbv,
+    m_xsetbv,  m_rdpkru,   m_wrpkru,    m_nmi,          m_machine_check, m_wbinvd,    m_exit_rip};
 
 /** The processor `cpu`'s GS base, TSS and GDT, 4 KiB apart. */
 static void host_cpu_bases(int cpu, uint64_t *gs, uint64_t *tr, uint64_t *gdt)
@@ -2838,23 +2861,89 @@ static void msr_family_rows(int fd, uint32_t gpe)
           "WRMSR of the platform id is #GP");
 }
 
-/** The guest's WRMSR of the MSRs VMX loads between exits: STAR, and
- * SYSCALL_MASK, whose bits 63:32 are refused; `gpe` is the #GP. */
+/** KVM_SET_MSRS of `value` to SYSCALL_MASK on `fd`, with `set` 1 to
+ * get it back instead; the number of MSRs done, and the value in `*got`
+ * when getting. */
+static int32_t sfmask_io(int fd, int set, uint64_t value, uint64_t *got)
+{
+    struct {
+        struct kvm_msrs h;
+        struct kvm_msr_entry e[1];
+    } msrs;
+    int32_t r;
+
+    msrs.h.nmsrs = 1;
+    msrs.h.pad = 0;
+    k_memset(msrs.e, 0, sizeof(msrs.e));
+    msrs.e[0].index = MSR_SYSCALL_MASK;
+    msrs.e[0].data = value;
+    r = fdio(fd, set ? KVM_SET_MSRS : KVM_GET_MSRS, (uintptr_t)&msrs);
+    if (got) {
+        *got = msrs.e[0].data;
+    }
+    return r;
+}
+
+/** SYSCALL_MASK of the vCPU on `fd`, by KVM_GET_MSRS. */
+static uint64_t sfmask_of(int fd)
+{
+    uint64_t v = 0;
+
+    CHECK(sfmask_io(fd, 0, 0, &v) == 1, "KVM_GET_MSRS of SYSCALL_MASK");
+    return v;
+}
+
+/**
+ * The guest's WRMSR of the MSRs VMX loads between exits, STAR and
+ * SYSCALL_MASK, in long mode; `gpe` is the #GP. SYSCALL_MASK's bits 63:32,
+ * which the processor refuses, are kept from the guest and the caller
+ * without EFER.SCE, where Linux does not load the MSR, and refused with it,
+ * where its WRMSR fails (vmx/vmx.c:718-731, 1916-1925); the entry's load of
+ * a kept one, once EFER.SCE is on, is caught and leaves the processor's
+ * value, as Linux's (vmx/vmx.c:1302-1311).
+ */
 static void uret_msr_rows(int fd, uint32_t gpe)
 {
+    int faults;
+
     set_regs(fd, 0x1000, 0x11, MSR_STAR, 0x00230010u);
     CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 &&
               vx(vcpu_of(fd))->gmsr[0] == 0x0023001000000011ull &&
               m.msr[msr_slot(MSR_STAR)] == HOST_MSR(MSR_STAR),
           "WRMSR STAR reaches the guest's copy, and the host's is back after KVM_RUN");
+    CHECK(!(sregs_of(fd).efer & GEFER_SCE), "the rows start in long mode without EFER.SCE");
+    set_regs(fd, 0x1000, 0x700, MSR_SYSCALL_MASK, 1);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1003 &&
+              sfmask_of(fd) == 0x100000700ull,
+          "without EFER.SCE WRMSR SYSCALL_MASK with a bit of 63:32 is kept, as Linux keeps it");
+    CHECK(sfmask_io(fd, 1, 0x200000700ull, NULL) == 1 && sfmask_of(fd) == 0x200000700ull,
+          "and so is the caller's KVM_SET_MSRS of one");
+    faults = m.msr_faults;
+    set_regs(fd, 0x1000, GEFER_LME | GEFER_SCE, MSR_EFER, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && (sregs_of(fd).efer & GEFER_SCE) &&
+              m.msr_faults == faults + 1 && m.entry_sfmask == HOST_MSR(MSR_SYSCALL_MASK) &&
+              m.msr[msr_slot(MSR_SYSCALL_MASK)] == HOST_MSR(MSR_SYSCALL_MASK),
+          "once WRMSR EFER turns SCE on, the entry's WRMSR of the kept SYSCALL_MASK faults, "
+          "is caught and leaves the processor's value, as Linux's ignored failure");
     set_regs(fd, 0x1000, 0x700, MSR_SYSCALL_MASK, 1);
     CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == gpe && regs_of(fd).rip == 0x1001 &&
-              (vx(vcpu_of(fd))->gmsr[2] >> 32) == 0,
-          "WRMSR SYSCALL_MASK with a bit of 63:32 is #GP, so no entry's WRMSR can fault the host");
+              sfmask_of(fd) == 0x200000700ull,
+          "with EFER.SCE WRMSR SYSCALL_MASK with a bit of 63:32 is #GP, as Linux's failed WRMSR");
+    CHECK(sfmask_io(fd, 1, 0x100000700ull, NULL) == 0 && sfmask_of(fd) == 0x200000700ull,
+          "and the caller's KVM_SET_MSRS of one stops short of it");
+    CHECK(sfmask_io(fd, 1, 0x700u, NULL) == 1, "KVM_SET_MSRS of one within bits 31:0");
+    script(EXIT_CPUID, 0, 2);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.entry_sfmask == 0x700u &&
+              m.msr[msr_slot(MSR_SYSCALL_MASK)] == HOST_MSR(MSR_SYSCALL_MASK),
+          "reaches the processor for the runs, and the host's is back after KVM_RUN");
     set_regs(fd, 0x1000, 0x700, MSR_SYSCALL_MASK, 0);
     CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == 0 &&
-              vx(vcpu_of(fd))->gmsr[2] == 0x700u,
-          "and one within bits 31:0 reaches the guest's copy");
+              vx(vcpu_of(fd))->gmsr[2] == 0x700u && m.entry_sfmask == 0x700u,
+          "and so does the guest's WRMSR of one");
+    set_regs(fd, 0x1000, GEFER_LME, MSR_EFER, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && sregs_of(fd).efer == (GEFER_LME | GEFER_LMA),
+          "WRMSR EFER turns SCE off again");
 }
 
 /** The debug registers, MSRs, XSETBV, VMCALL and the instructions the

@@ -52,7 +52,9 @@
  * and VMX's ratios,
  * the statistics files of a VM and a vCPU, KVM_PRE_FAULT_MEMORY, 1024
  * vCPUs with ids below 4096, the CR4 bits taken before KVM_SET_CPUID2,
- * the VM's capabilities and quirks, and the synchronized registers.
+ * the VM's capabilities and quirks, and the synchronized registers; and
+ * under SVM, SYSCALL_MASK's bits 63:32 kept from the caller and refused
+ * from the guest.
  */
 #include "kvm/kvm.c"
 #include "kvm/vcpu.c"
@@ -2736,6 +2738,33 @@ static void svm_debugctl_rows(void)
     fdclose(vm);
 }
 
+/** SYSCALL_MASK's bits 63:32 under SVM, in long mode with EFER.SCE: Linux
+ * keeps the caller's value in the VMCB (arch/x86/kvm/svm/svm.c:3177-3178)
+ * and lets the guest's WRMSR reach the processor (svm.c:99), which refuses
+ * it with #GP, as msr.c refuses it here. The vCPU is VMX's fake one, read
+ * with the backend SVM's. */
+static void svm_sfmask_rows(void)
+{
+    struct kvm_vcpu *v;
+    int vm, fd;
+    uint64_t value = 0;
+
+    vm = dev(KVM_CREATE_VM, 0);
+    fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    v = (struct kvm_vcpu *)entries[fd].priv;
+    kvm_backend = &kvm_svm;
+    v->sregs.efer = 0x501u; /* LMA, LME and SCE */
+    CHECK(set_msr(fd, 0xC0000084u, 0x100000700ull) == 1 && get_msr(fd, 0xC0000084u, &value) == 1 &&
+              value == 0x100000700ull,
+          "SVM keeps the caller's SYSCALL_MASK with a bit of 63:32");
+    CHECK(kvm_msr_set(v, 0xC0000084u, 0x200000700ull, 0) == KVM_MSR_INVAL &&
+              kvm_msr_set(v, 0xC0000084u, 0x700u, 0) == 0,
+          "and refuses the guest's, as the processor its WRMSR reaches on Linux");
+    kvm_backend = &kvm_vmx;
+    fdclose(fd);
+    fdclose(vm);
+}
+
 /** /dev/kvm's attribute KVM_X86_XCOMP_GUEST_SUPP, as amx_test reads it,
  * and the debugging capabilities. */
 static void attr_rows(void)
@@ -3639,6 +3668,7 @@ static void selftest_rows(void)
     vm_cap_rows();
     feature_msr_rows();
     svm_debugctl_rows();
+    svm_sfmask_rows();
     mce_hwcr_rows();
     xsaves_rows();
     xsave_move_rows();
