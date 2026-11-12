@@ -13,9 +13,10 @@
  * wait. The big lock covers the rest, the dirty lists and every field of
  * the order the dirty marks give, and so every dirty mark, write, sync and
  * eviction of a dirty buffer. The block layer's requests need no lock of
- * the cache's: a miss reads without the big lock, which no driver needs
- * (block/block.h), and a write runs under the big lock its caller holds for
- * the dirty lists, which the request's sleep lets go. A holder without the
+ * the cache's: a miss reads with or without the big lock, which a driver
+ * that needs it, USB storage or loop, takes itself (block/block.h), and a
+ * write runs under the big lock its caller holds for the dirty lists, which
+ * the request's sleep lets go. A holder without the
  * big lock reads its buffer and marks nothing, so a buffer that no one
  * holds keeps its dirty bit while `cache_spin` is held, and a dirty one
  * keeps its key while the big lock is.
@@ -724,8 +725,9 @@ static void unhold_wake(struct bbuf *b, uint64_t *cpus)
 /**
  * Read `sectors` sectors of `dev` at `lba` into `buf` for a miss, with or
  * without the big lock: the request waits on its own completion, as Linux's
- * `submit_bio_wait` (block/bio.c:1469-1481), and no driver needs the big
- * lock. 0, or the request's error.
+ * `submit_bio_wait` (block/bio.c:1469-1481), and a driver that needs the big
+ * lock, USB storage or loop, takes it itself (block/block.h). 0, or the
+ * request's error.
  */
 static int device_read(block_device_t *dev, uint64_t lba, uint32_t sectors, void *buf)
 {
