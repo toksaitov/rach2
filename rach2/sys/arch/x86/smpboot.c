@@ -342,7 +342,12 @@ void platform_cpu_ipi(int cpu)
 }
 
 /**
- * Under KVM with KVM_FEATURE_PV_SEND_IPI the set is one hypercall
+ * A set of one processor is one message to it by its physical identity,
+ * as Linux sends a reschedule or a single call with apic->send_IPI: under
+ * KVM an x2APIC command's write is taken on KVM's fast path, in the exit
+ * handler with interrupts still off (handle_fastpath_set_msr_irqoff,
+ * arch/x86/kvm/x86.c), where a hypercall takes the whole exit. A larger
+ * set, under KVM with KVM_FEATURE_PV_SEND_IPI, is one hypercall
  * (`kvm_send_ipi_many`), as Linux's kvm_apic_init makes kvm_send_ipi_mask
  * the APIC's send_IPI_mask. Otherwise, in x2APIC mode, a processor's
  * logical ID is its x2APIC ID's cluster, bits 19:4, and one bit of 16 for
@@ -356,6 +361,15 @@ void platform_cpu_ipi_many(uint64_t cpus)
     uint64_t left = cpus, bit;
     int c;
 
+    if (cpus == 0) {
+        return;
+    }
+    if ((cpus & (cpus - 1u)) == 0) {
+        for (c = 0; !((cpus >> c) & 1u); c++) {
+        }
+        lapic_send_ipi(cpu_apic[c], IPI_VECTOR);
+        return;
+    }
     if (kvm_send_ipi_many(cpus, IPI_VECTOR)) {
         return;
     }
