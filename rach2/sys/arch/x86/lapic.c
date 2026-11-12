@@ -64,6 +64,7 @@
 #include "pic.h"
 #include "../../mm/paging.h"
 #include "../../proc/percpu.h"
+#include "exits.h"
 
 #define IA32_APIC_BASE   0x1B
 #define APIC_BASE_ENABLE (1u << 11)
@@ -634,6 +635,11 @@ uint32_t lapic_this_id(void)
  * `lapic_set_pv_eoi` gives, or NULL. */
 static volatile uint32_t *pv_eoi[NR_CPUS];
 
+/* Under `rach2.exits`, each processor's vector last entered and whether its
+ * word was set then (`lapic_eoi_enter`). */
+static uint32_t eoi_vector[NR_CPUS];
+static uint8_t eoi_word_set[NR_CPUS];
+
 void lapic_set_pv_eoi(int cpu, volatile uint32_t *word)
 {
     if (cpu >= 0 && cpu < NR_CPUS) {
@@ -654,15 +660,39 @@ void lapic_set_pv_eoi(int cpu, volatile uint32_t *word)
 void lapic_eoi(void)
 {
     volatile uint32_t *w;
+    int c;
 
     if (!ready) {
         return;
     }
-    w = pv_eoi[arch_cpu_id()];
+    c = arch_cpu_id();
+    w = pv_eoi[c];
     if (w && (*w & KVM_PV_EOI_PENDING) != 0 && (arch_atomic_xchg(w, 0) & KVM_PV_EOI_PENDING) != 0) {
+        exits_count(EXIT_EOI_PV, 0);
         return;
     }
+    exits_count(eoi_word_set[c] ? EXIT_EOI_TAKEN : EXIT_EOI_UNSET, eoi_vector[c]);
     apic_write(LAPIC_EOI, 0);
+}
+
+/** The word is read here, at the router's start, and again at the end: set
+ * at both, the end is the word's; set here alone, an exit between took it
+ * back; set at neither, KVM gave none, as it gives none to an interrupt
+ * delivered while another waits in the request register
+ * (arch/x86/kvm/lapic.c:3273-3291). A handler that turns interrupts on and
+ * takes another leaves the later vector noted. */
+void lapic_eoi_enter(uint32_t vector)
+{
+    volatile uint32_t *w;
+    int c;
+
+    if (!ready || !exits_counting()) {
+        return;
+    }
+    c = arch_cpu_id();
+    w = pv_eoi[c];
+    eoi_vector[c] = vector;
+    eoi_word_set[c] = (uint8_t)(w && (*w & KVM_PV_EOI_PENDING) != 0);
 }
 
 /** The APIC raises vector 255 when an interrupt it was about to deliver

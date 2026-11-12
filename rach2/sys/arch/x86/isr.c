@@ -1100,6 +1100,7 @@ void isr_leave(isr_params_t *params)
  */
 void isr_local_router(isr_params_t *params)
 {
+    lapic_eoi_enter((uint32_t)params->vector);
     user_entry(params);
     if (params->vector == IPI_VECTOR) {
         lapic_eoi();
@@ -1292,6 +1293,7 @@ void _irq_router(isr_params_t *params)
     uintptr_t fp = (uintptr_t)params->ebp;
 #endif
 
+    lapic_eoi_enter((uint32_t)params->vector);
     user_entry(params);
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);

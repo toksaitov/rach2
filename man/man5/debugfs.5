@@ -448,6 +448,16 @@ or
 .Ql hlt ,
 and NUMBER, in hexadecimal, the MSR, the leaf or the port, or 0 for
 .Ql hlt .
+The ends of interrupt follow as kinds of their own:
+.Ql eoipv 0x0 ,
+those ended through KVM's paravirtual word without an exit, and
+.Ql eoitaken
+and
+.Ql eoiunset
+by vector, those ended by a write of the EOI register, which exits,
+because an exit after the interrupt's router began took the word back,
+or because the word was not set when it began, as KVM leaves it for an
+interrupt delivered while another waits, or gives none at all.
 Then a line
 .Ql ipi KIND TOTAL CPU0 ...
 for each kind of interprocessor interrupt each processor sent,
