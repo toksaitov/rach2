@@ -1391,12 +1391,18 @@ static void sched_account_one(struct percpu *cpu, int mode)
  * interrupts off, so a tick that comes in the call is held and taken as
  * interrupts come back on: at the first user instruction after the call, or
  * as an idle wait's halt begins. When the timer keeps the tick's time,
- * `due`, the ticks due before that point (`user_cycles`, which `isr_leave`
- * notes, or `idle_cycles`) are charged where Linux would have taken them:
- * as system time, or as idle when the stretch that held them began at the
- * end of an idle wait (`idle_end_cycles`) and not at an entry from user mode
- * (`entry_cycles`), since Linux's idle task loops there. The rest are
- * charged to the mode the tick found.
+ * `due`, the ticks that would have come before that point (`user_cycles`,
+ * which `isr_leave` notes, or `idle_cycles`) are charged where Linux would
+ * have taken them: as system time, or as idle when the stretch that held
+ * them began at the end of an idle wait (`idle_end_cycles`) and not at an
+ * entry from user mode (`entry_cycles`), since Linux's idle task loops
+ * there. The rest are charged to the mode the tick found. A tick comes
+ * after its time by the delay of its interrupt, which a hypervisor makes
+ * microseconds long, so the time a tick would have come is its time plus
+ * the processor's average delay (`tick_late_ns`), which ticks that came
+ * with interrupts on measure; comparing the bare time would charge the
+ * ticks due in the kernel that came in user mode to the kernel, which
+ * Linux charges to the program.
  */
 void sched_account_tick(int user, int64_t due)
 {
@@ -1414,6 +1420,10 @@ void sched_account_tick(int user, int64_t due)
     cpu->accounted_ns += (int64_t)ticks * (int64_t)TICK_NS;
     if (due != 0 && found != ACCOUNT_SYSTEM) {
         on = timer_cycles_when(user ? cpu->user_cycles : cpu->idle_cycles, now);
+        if (due >= on && now >= due && now - due < (int64_t)TICK_NS) {
+            cpu->tick_late_ns += (now - due - cpu->tick_late_ns) / 8;
+        }
+        on -= cpu->tick_late_ns;
         held = ACCOUNT_SYSTEM;
         if (!user && timer_cycles_when(cpu->idle_end_cycles, now) >
                          timer_cycles_when(cpu->entry_cycles, now)) {
