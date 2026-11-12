@@ -1,0 +1,12 @@
+== debian 1
+debian-sdl-cube-1360x768@60/cube-1/record: round 15.2 s, user 6.11 s, system 3.23 s (9.34 ms a frame), busy 15.3% of 4, 22.7 frames a second
+== debian 2
+debian-sdl-cube-1360x768@60/cube-2/record: round 14.0 s, user 6.25 s, system 2.34 s (6.76 ms a frame), busy 15.3% of 4, 24.7 frames a second
+== debian 3
+debian-sdl-cube-1360x768@60/cube-3/record: round 14.6 s, user 6.34 s, system 2.38 s (6.88 ms a frame), busy 15.0% of 4, 23.8 frames a second
+== rach2 1
+rach2-sdl-cube-1360x768@60/cube-1/record: round 17.4 s, user 7.77 s, system 3.70 s (10.69 ms a frame), busy 16.5% of 4, 19.9 frames a second
+== rach2 2
+rach2-sdl-cube-1360x768@60/cube-2/record: round 15.6 s, user 7.69 s, system 2.69 s (7.77 ms a frame), busy 16.6% of 4, 22.2 frames a second
+== rach2 3
+rach2-sdl-cube-1360x768@60/cube-3/record: round 15.9 s, user 7.87 s, system 2.79 s (8.06 ms a frame), busy 16.7% of 4, 21.7 frames a second

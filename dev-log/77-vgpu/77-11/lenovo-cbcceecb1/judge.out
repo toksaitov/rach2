@@ -1,0 +1,6 @@
+judge: rate: 49.29 here, 48.18 in the reference, ratio 1.02
+judge: result: pass vkcube 2 frames in the reference, 2 here, 0 worse than Debian's
+judge: rate: 49.48 here, 51.58 in the reference, ratio 0.96
+judge: result: pass vkcube 2 frames in the reference, 2 here, 0 worse than Debian's
+judge: rate: 48.42 here, 47.51 in the reference, ratio 1.02
+judge: result: pass vkcube 2 frames in the reference, 2 here, 0 worse than Debian's
