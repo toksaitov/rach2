@@ -12,6 +12,7 @@
 #include "../lib/spinlock.h"
 #include "../lib/lockdep.h"
 #include "sched.h"
+#include "smp.h"
 #include "tgroup.h"
 #include "seccomp.h"
 #include "../rtc.h"
@@ -734,6 +735,7 @@ void free_process(process_t *proc)
     kfree(proc->exec_ws);
     path_bufs_free(proc);
     fpu_area_free(proc->fpu);
+    smp_record_quiesce();
     kfree(proc);
 }
 

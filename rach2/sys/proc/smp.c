@@ -1510,10 +1510,12 @@ static void tlb_wait(void)
  * each page that `fork` or `munmap` changes in a process that last ran
  * there.
  *
- * The caller holds the big lock, which keeps the records of other
- * processors' current threads from being freed while they are read here
- * (`proc_release` takes the lock), and has changed the pages' entries; it
- * frees a frame they named only after this returns.
+ * The records of other processors' current threads are read under
+ * `ipi_lock`, which a record's free takes after the record left every
+ * processor (`smp_record_quiesce`), so a record read here stays until the
+ * scan ends, whether or not the caller holds the big lock, as a fault's
+ * copy-on-write break does not. The caller has changed the pages' entries;
+ * it frees a frame they named only after this returns.
  */
 void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t end)
 {
@@ -1546,6 +1548,13 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t en
         tlb_counts[1] += (uint32_t)sent;
     }
     tlb_wait();
+    spin_unlock_irqrestore(&ipi_lock, flags);
+}
+
+void smp_record_quiesce(void)
+{
+    uint32_t flags = spin_lock_irqsave(&ipi_lock);
+
     spin_unlock_irqrestore(&ipi_lock, flags);
 }
 
