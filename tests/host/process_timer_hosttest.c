@@ -118,14 +118,15 @@ void sched_lock_give(uint32_t flags)
 
 /** The tick's wake, which tests the record again as the kernel's does under
  * the run queues' lock, makes a due sleeper ready and takes it off the timer
- * list, as `sched_ready_locked` does; there is one processor and no queue,
- * so no interrupt is asked for. */
+ * list, as `sched_ready_locked` does, and marks it woken; there is one
+ * processor and no queue, so no interrupt is asked for. */
 int sched_wake_due_locked(process_t *p, uint64_t now)
 {
     if (p->state != PROC_BLOCKED || p->wakeup_tick == 0 || now < p->wakeup_tick) {
         return -1;
     }
     p->wakeup_tick = 0;
+    p->woken = 1;
     p->state = PROC_READY;
     proc_timer_update(p);
     return -1;
@@ -249,8 +250,8 @@ static void sleeper_rows(void)
     CHECK(sleeper.state == PROC_BLOCKED && sleeper.wakeup_tick == 1200,
           "a sleeper is not woken before its deadline");
     tick_at(1200);
-    CHECK(sleeper.state == PROC_READY && sleeper.wakeup_tick == 0 && !sleeper.woken,
-          "and is made runnable at its deadline tick, not marked woken");
+    CHECK(sleeper.state == PROC_READY && sleeper.wakeup_tick == 0 && sleeper.woken,
+          "and is made runnable and marked woken at its deadline tick");
 
     sleeper.state = PROC_BLOCKED;
     sleeper.woken = 0;

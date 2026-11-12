@@ -718,7 +718,8 @@ static void ready_lists(void)
  * ready after the first, as Linux's `try_to_wake_up` leaves a task whose
  * state no longer matches (kernel/sched/core.c:4191-4193). A running or a
  * stopped record is left as it was. A signal's wake clears the deadline and
- * marks nothing; the tick's wakes a sleeper only once its deadline is due.
+ * marks the record woken; the tick's wakes a sleeper only once its deadline
+ * is due, and marks it woken too, so that the slice gives way to either.
  */
 static void wake_twice(void)
 {
@@ -756,17 +757,17 @@ static void wake_twice(void)
     CHECK(procs[5].state == PROC_BLOCKED && procs[5].wakeup_tick == 9,
           "the tick leaves a sleeper not yet due");
     sched_wake_signal(&procs[5]);
-    CHECK(procs[5].state == PROC_READY && procs[5].wakeup_tick == 0 && !procs[5].woken &&
+    CHECK(procs[5].state == PROC_READY && procs[5].wakeup_tick == 0 && procs[5].woken &&
               run_queues[0].tail == &procs[5],
-          "a signal's wake queues the sleeper, clears its deadline and marks nothing");
+          "a signal's wake queues the sleeper, clears its deadline and marks it");
     sched_forget(&procs[4]);
     procs[4].state = PROC_BLOCKED;
     procs[4].woken = 0;
     procs[4].wakeup_tick = 9;
     sched_wake_due(&procs[4], 9);
-    CHECK(procs[4].state == PROC_READY && procs[4].wakeup_tick == 0 && !procs[4].woken &&
+    CHECK(procs[4].state == PROC_READY && procs[4].wakeup_tick == 0 && procs[4].woken &&
               run_queues[0].tail == &procs[4],
-          "the tick's wake queues a due sleeper and clears its deadline");
+          "the tick's wake queues a due sleeper, clears its deadline and marks it");
     procs[5].wakeup_tick = 9;
     sched_wake_signal(&procs[5]);
     sched_wake_due(&procs[5], 9);
