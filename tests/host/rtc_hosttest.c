@@ -32,6 +32,7 @@
 
 #include "rtc.h"
 #include "pit.h"
+#include "tsc.h"
 #include "cmos.h"
 #include "cmdline.h"
 #include "vdso.h"
@@ -257,10 +258,17 @@ uint32_t tsc_kvm_counts_per_tick(void)
 }
 
 /** So no clock page of KVM's is followed. */
-int tsc_kvm_poll(uint32_t *counts, int *stable)
+int tsc_kvm_sample(struct tsc_kvm_sample *s)
 {
-    (void)counts;
-    (void)stable;
+    (void)s;
+    return TSC_KVM_NONE;
+}
+
+/** Nor read. */
+int tsc_kvm_now(uint64_t *tsc, uint64_t *ns)
+{
+    (void)tsc;
+    (void)ns;
     return 0;
 }
 

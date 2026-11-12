@@ -306,8 +306,8 @@ static void tsc_wait_us(uint32_t usec)
 
 /** Make `kind`, REF_TSC or REF_COUNTER, the reference, with its units and
  * its tick; the platform's counter's total starts at 0 from its reading
- * now. The caller places the tick in progress. */
-static void ref_take(int kind)
+ * `raw`. The caller places the tick in progress. */
+static void ref_take(int kind, uint32_t raw)
 {
     if (kind == REF_TSC) {
         ref.mult = 1;
@@ -318,41 +318,127 @@ static void ref_take(int kind)
     } else {
         ref.mult = TICKS_PER_SECOND;
         ref.tick = refclock_hz();
-        ref_raw = refclock_read();
+        ref_raw = raw;
         ref_total = 0;
     }
     ref_kind = kind;
 }
 
-/**
- * Follow KVM's clock page at the tick (`tsc_kvm_poll`): a new rate becomes
- * the TSC's counts in a tick, and the reference's tick while the TSC is the
- * reference; a withdrawn stable bit hands the reference to the platform's
- * counter, the clock the kernel keeps where nothing vouches for the TSC,
- * and the bit set again hands it back. `rem` is the units of the reference
- * already into the tick in progress, which the change keeps, so the count
- * of ticks and the microsecond clock go on without a step. Under
- * `rach2.tscreliable`, or with no platform counter, the TSC stays the
- * reference, as Linux's kernel goes on reading kvm-clock without the bit
- * and keeps it from running back (pvclock.c:86-110); the tick's own count
- * already never runs back.
- */
-static void ref_follow(uint32_t rem)
+/** Place the tick in progress of the reference just taken to have begun
+ * `phase_ns` before its count `count`. */
+static void ref_place(uint64_t count, uint32_t phase_ns)
 {
-    uint32_t counts, phase_ns, part, whole, raw;
-    int stable, kind;
+    uint32_t part = refclock_scale(phase_ns, ref.tick, NS_PER_TICK);
+    uint32_t whole = (part + ref.mult - 1u) / ref.mult;
 
-    if (!tsc_kvm_poll(&counts, &stable)) {
-        return;
-    }
-    phase_ns = refclock_scale(rem, NS_PER_TICK, ref.tick);
-    tsc_per_tick = counts;
-    kind = stable || !refclock_name() || kcmdline_has("rach2.tscreliable") ? REF_TSC : REF_COUNTER;
-    ref_take(kind);
-    part = refclock_scale(phase_ns, ref.tick, NS_PER_TICK);
-    whole = (part + ref.mult - 1u) / ref.mult;
-    ref.edge = ref_count(&raw) - whole; /* modulo 2^64, as every count is */
+    ref.edge = count - whole; /* modulo 2^64, as every count is */
     ref.frac = whole * ref.mult - part;
+}
+
+/*
+ * KVM's clock where the tick in progress began, in nanoseconds, while the
+ * TSC is the reference and KVM's clock pages are kept: the tick counting on
+ * any processor sets it from that processor's page (`tsc_kvm_sample`).
+ */
+static uint64_t kvm_edge_ns;
+
+/* The readings of the platform's counter `ref_bracket` chooses among. */
+#define BRACKET_TRIES 3u
+
+/**
+ * The platform's counter read between two readings of KVM's clock on this
+ * processor (`tsc_kvm_now`), of BRACKET_TRIES the pair closest together,
+ * so that a stop of the processor between the counter and KVM's clock
+ * moves neither against the other: the counter's reading is returned, and
+ * the TSC and KVM's clock at the middle of its pair go into `*tsc` and
+ * `*ns`.
+ */
+static uint32_t ref_bracket(uint64_t *tsc, uint64_t *ns)
+{
+    uint64_t t0, n0, t1, n1, spread, best_spread = 0;
+    uint32_t raw, best = 0, i;
+
+    *tsc = 0;
+    *ns = 0;
+    for (i = 0; i < BRACKET_TRIES; i++) {
+        (void)tsc_kvm_now(&t0, &n0);
+        raw = refclock_read();
+        (void)tsc_kvm_now(&t1, &n1);
+        spread = n1 - n0;
+        if (i == 0 || spread < best_spread) {
+            best = raw;
+            best_spread = spread;
+            *tsc = t0 + ((t1 - t0) >> 1);
+            *ns = n0 + (spread >> 1);
+        }
+    }
+    return best;
+}
+
+/**
+ * Count the tick with KVM's clock page `*s` changed (`tsc_kvm_sample`) and
+ * return the ticks counted. A new rate becomes the TSC's counts in a tick,
+ * and the reference's tick while the TSC is the reference; a withdrawn
+ * stable bit hands the reference to the platform's counter, the clock the
+ * kernel keeps where nothing vouches for the TSC, and the bit set again
+ * hands it back. Under `rach2.tscreliable`, or with no platform counter,
+ * the TSC stays the reference, as Linux's kernel goes on reading kvm-clock
+ * without the bit and keeps it from running back (pvclock.c:86-110); the
+ * tick's own count already never runs back.
+ *
+ * The old reference counts the ticks up to the change and the place within
+ * the tick in progress, and the new one goes on from that place at the same
+ * moment, so the count of ticks and the microsecond clock go on without a
+ * step, as Linux's change_clocksource moves the time on by the old clock
+ * before it takes the new (kernel/time/timekeeping.c:1479-1502). Where both
+ * are the TSC, one reading serves both. Otherwise the platform's counter is
+ * read between two readings of KVM's clock (`ref_bracket`), the moment both
+ * clocks are read at. Handing the reference to the counter, the time since
+ * the tick in progress began is KVM's clock's (`kvm_edge_ns`), not this
+ * processor's TSC's, which may no longer agree with the one that read the
+ * edge: KVM's clock is one clock across processors either way, as Linux's
+ * kvm-clock reads each processor's own page (kvmclock.c:74-82).
+ */
+static uint32_t ref_follow(const struct tsc_kvm_sample *s)
+{
+    uint32_t due, rem, phase_ns, raw = 0;
+    uint64_t tsc, ns, count;
+    int kind;
+
+    kind =
+        s->stable || !refclock_name() || kcmdline_has("rach2.tscreliable") ? REF_TSC : REF_COUNTER;
+    if (ref_kind == REF_COUNTER && kind == REF_COUNTER) {
+        tsc_per_tick = s->counts;
+        count = ref_count(&raw);
+        ref_total = count;
+        ref_raw = raw;
+        due = ref_due(&ref, count, &rem);
+        ref_advance(&ref, due);
+        return due;
+    }
+    if (ref_kind == REF_TSC && kind == REF_TSC) {
+        tsc = s->tsc;
+        ns = s->ns;
+        due = ref_due(&ref, tsc, &rem);
+        ref_advance(&ref, due);
+        phase_ns = refclock_scale(rem, NS_PER_TICK, ref.tick);
+    } else {
+        raw = ref_bracket(&tsc, &ns);
+        if (ref_kind == REF_TSC) {
+            due = ref_divide(ns > kvm_edge_ns ? ns - kvm_edge_ns : 0u, NS_PER_TICK, &phase_ns);
+            ref.ticks += due;
+        } else {
+            count = ref_total + ((raw - ref_raw) & refclock_mask());
+            due = ref_due(&ref, count, &rem);
+            ref_advance(&ref, due);
+            phase_ns = refclock_scale(rem, NS_PER_TICK, ref.tick);
+        }
+    }
+    tsc_per_tick = s->counts;
+    ref_take(kind, raw);
+    ref_place(kind == REF_TSC ? tsc : 0u, phase_ns);
+    kvm_edge_ns = ns - phase_ns;
+    return due;
 }
 
 /**
@@ -360,21 +446,28 @@ static void ref_follow(uint32_t rem)
  * return 0 when none is ready. The tick in progress is put to have begun half
  * a tick ago, so that an interrupt early or late by less than half a tick
  * counts the one tick it was raised for, and the microsecond clock goes on
- * from where it is.
+ * from where it is. Where KVM's clock pages are kept, the TSC's count is
+ * read from this processor's, with KVM's clock at the edge.
  */
 static int ref_start(void)
 {
     uint32_t raw, now_us;
+    uint64_t count, ns;
 
     if (tsc_per_tick && (!refclock_name() || timer_tsc_trusted())) {
-        ref_take(REF_TSC);
+        ref_take(REF_TSC, 0u);
     } else if (refclock_name()) {
-        ref_take(REF_COUNTER);
+        ref_take(REF_COUNTER, refclock_read());
     } else {
         return 0;
     }
     now_us = pit_clock_read(&clock, counter->phase_us(), counter->period_us());
-    ref.edge = ref_count(&raw) - ref.tick / ref.mult / 2u;
+    if (ref_kind == REF_TSC && tsc_kvm_now(&count, &ns)) {
+        kvm_edge_ns = ns - NS_PER_TICK / 2u;
+    } else {
+        count = ref_count(&raw);
+    }
+    ref.edge = count - ref.tick / ref.mult / 2u;
     ref.frac = 0;
     ref.ticks = 0;
     ref_us_base = now_us - US_PER_TICK / 2u;
@@ -711,14 +804,19 @@ uint32_t pit_phase_us(void)
  * counting it twice would put the clock a period ahead each period. The
  * first tick with a reference ready starts it (`ref_start`); from then on
  * the reference's whole ticks are counted, and the platform's counter's
- * reading is added to its total, so that the next reading counts from here;
- * then KVM's clock page is followed (`ref_follow`).
+ * reading is added to its total, so that the next reading counts from here.
+ * Where KVM's clock pages are kept, the TSC's count is read from this
+ * processor's page with KVM's clock at it (`tsc_kvm_sample`), which marks
+ * where the tick in progress began on KVM's clock (`kvm_edge_ns`); a page
+ * changed since the last tick is followed (`ref_follow`).
  */
 uint32_t timer_tick_clock(void)
 {
     uint32_t flags = kirq_save();
-    uint32_t raw, rem, due;
+    uint32_t raw = 0, rem, due;
     uint64_t count;
+    struct tsc_kvm_sample s;
+    int kvm;
 
     if (ref_kind == REF_NONE) {
         pit_clock_tick(&clock, counter->phase_ns() / 1000u);
@@ -726,14 +824,26 @@ uint32_t timer_tick_clock(void)
         kirq_restore(flags);
         return 1u;
     }
-    count = ref_count(&raw);
+    kvm = tsc_kvm_sample(&s);
+    if (kvm == TSC_KVM_CHANGED) {
+        due = ref_follow(&s);
+        kirq_restore(flags);
+        return due;
+    }
+    count = kvm != TSC_KVM_NONE && ref_kind == REF_TSC ? s.tsc : ref_count(&raw);
     if (ref_kind == REF_COUNTER) {
         ref_total = count;
         ref_raw = raw;
     }
     due = ref_due(&ref, count, &rem);
     ref_advance(&ref, due);
-    ref_follow(rem);
+    if (kvm != TSC_KVM_NONE && ref_kind == REF_TSC) {
+        if (due < REF_DUE_MAX) {
+            kvm_edge_ns = s.ns - refclock_scale(rem, NS_PER_TICK, ref.tick);
+        } else {
+            kvm_edge_ns += (uint64_t)due * NS_PER_TICK; /* the edge stays behind */
+        }
+    }
     kirq_restore(flags);
     return due;
 }
