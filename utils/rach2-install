@@ -20,7 +20,7 @@
 # to know which one was passed over and for what.
 #
 # Usage: rach2-install [--source DIR]
-#        rach2-install [--console term] --update IMAGE DISK
+#        rach2-install [--console term] [--i915] --update IMAGE DISK
 #        rach2-install --data DISK SIZE
 #        rach2-install --slots DISK
 #
@@ -45,8 +45,10 @@
 # boot partition becomes the EFI system partition.
 #
 # `--console term` gives the installed root's candidate, fallback and text
-# entries one rach2.console=term token. Recovery entries are left as they are;
-# without this option the update leaves the menu unchanged.
+# entries one rach2.console=term token, and `--i915` one rach2.i915 token,
+# which binds the Intel graphics driver to the machine's chip. Recovery
+# entries are left as they are; without these options the update leaves the
+# menu unchanged.
 #
 # A new install writes the image's table, a GUID table on the images this
 # system builds, and moves its backup to the disk's last sectors, where a
@@ -189,6 +191,7 @@ source_dir=""
 update_image=""
 update_disk=""
 update_console=""
+update_i915=""
 data_disk=""
 data_size=""
 slots_disk=""
@@ -216,6 +219,10 @@ while [ $# -gt 0 ]; do
             update_console=$2
             shift 2
             ;;
+        --i915)
+            update_i915=1
+            shift
+            ;;
         --update)
             [ $# -ge 3 ] || die "--update takes an image and a disk"
             update_image=$2
@@ -223,12 +230,14 @@ while [ $# -gt 0 ]; do
             shift 3
             ;;
         *)
-            die "usage: $ME [--source DIR] | $ME [--console term] --update IMAGE DISK | $ME --data DISK SIZE | $ME --slots DISK"
+            die "usage: $ME [--source DIR] | $ME [--console term] [--i915] --update IMAGE DISK | $ME --data DISK SIZE | $ME --slots DISK"
             ;;
     esac
 done
 [ -z "$update_console" ] || [ -n "$update_image" ] ||
     die "--console requires --update"
+[ -z "$update_i915" ] || [ -n "$update_image" ] ||
+    die "--i915 requires --update"
 
 # ---- the disks this machine has ----
 #
@@ -838,22 +847,29 @@ grow_slots() { # grow_slots BOOT
     return "$short"
 }
 
-# Give the installed root's boot lines one console token on BOOT. Write
+# Give the installed root's boot lines one rach2.console=term token when
+# CONSOLE is 1, and one rach2.i915 token when I915 is 1, on BOOT. Write
 # beside the menu, sync and rename it, then unmount and let bootctl read the
 # partition before the caller arms a trial. Recovery lines keep their bytes.
-set_update_console() { # set_update_console BOOT
+set_update_console() { # set_update_console BOOT CONSOLE I915
     mkdir -p "$BOOT_MNT" || die "the boot mount directory could not be made"
     mount -t vfat "$1" "$BOOT_MNT" || die "$1 would not mount to set its console"
     mounted_boot=$BOOT_MNT
     console_menu="$BOOT_MNT/boot/grub/grub.cfg"
     console_new="$console_menu.new"
-    awk '
+    awk -v console="$2" -v i915="$3" '
+        # drop: remove every whole word of the line that matches RE.
+        function drop(re) {
+            while (match($0, "[ \t]" re "([ \t]|$)"))
+                $0 = substr($0, 1, RSTART - 1) " " substr($0, RSTART + RLENGTH)
+        }
         /^[ \t]*(multiboot|multiboot2)[ \t]/ &&
         /[ \t]rach2.slot=(candidate|fallback)([ \t]|$)/ {
-            while (match($0, /[ \t]rach2.console=[^ \t]+/))
-                $0 = substr($0, 1, RSTART - 1) substr($0, RSTART + RLENGTH)
+            if (console) drop("rach2\\.console=[^ \t]+")
+            if (i915) drop("rach2\\.i915")
             sub(/[ \t]+$/, "")
-            $0 = $0 " rach2.console=term"
+            if (console) $0 = $0 " rach2.console=term"
+            if (i915) $0 = $0 " rach2.i915"
             roots++
         }
         { print }
@@ -870,7 +886,8 @@ set_update_console() { # set_update_console BOOT
     mounted_boot=""
     bootctl --target "$1" status > /dev/null ||
         die "$1, its console set, is not a boot partition bootctl reads"
-    say "console: $1 boots the installed root with term"
+    [ "$2" != 1 ] || say "console: $1 boots the installed root with term"
+    [ "$3" != 1 ] || say "i915: $1 boots the installed root with the Intel graphics driver bound"
 }
 
 # Give a menu on BOOT written before the recordfail lines what
@@ -1528,8 +1545,9 @@ root is written and its archive still says an update is in progress; run the upd
     rm -rf "$keep"
 
     set_update_recordfail "${update_disk}p1"
-    if [ -n "$update_console" ]; then
-        set_update_console "${update_disk}p1"
+    if [ -n "$update_console" ] || [ -n "$update_i915" ]; then
+        set_update_console "${update_disk}p1" "${update_console:+1}" \
+            "${update_i915:-0}"
     fi
 
     # One trial boot of the new root. The saved default is still recovery, so a
