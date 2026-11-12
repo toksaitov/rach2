@@ -140,6 +140,26 @@ void arch_run_on_stack(uintptr_t sp, void (*fn)(void))
     }
 }
 
+/* The string moves of `arch_user_copy` that touch user memory, and where a
+ * fault in each resumes (usercopy.s of i686 and x86_64). */
+extern const char arch_user_copy_words[], arch_user_copy_words_fault[];
+extern const char arch_user_copy_bytes[], arch_user_copy_bytes_fault[];
+
+int arch_user_copy_fixup(isr_params_t *p)
+{
+    uintptr_t pc = (uintptr_t)FRAME_PC(p);
+
+    if (pc == (uintptr_t)arch_user_copy_words) {
+        FRAME_PC(p) = (uintptr_t)arch_user_copy_words_fault;
+        return 1;
+    }
+    if (pc == (uintptr_t)arch_user_copy_bytes) {
+        FRAME_PC(p) = (uintptr_t)arch_user_copy_bytes_fault;
+        return 1;
+    }
+    return 0;
+}
+
 void arch_copy_words(void *dst, const void *src, size_t words)
 {
 #if defined(__x86_64__)

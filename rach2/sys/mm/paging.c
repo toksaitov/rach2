@@ -2241,6 +2241,26 @@ static int fault_resolve(isr_params_t *params, uintptr_t addr, int write, int *k
 }
 
 /**
+ * Resolve a fault at `addr`, a user address of the current process, which
+ * has an address space (`fault_resolve`, whose `key` and `mapped` these
+ * are). Returns 1 when nothing more is to be done: the page is mapped and
+ * the instruction runs again, a user's fault is to run again after its
+ * signals (`fault_retry`), or a kernel fault in a user copy resumes at the
+ * copy's fixup, which returns the bytes it left (`arch_user_copy_fixup`);
+ * 0 when the fault goes on to be ended.
+ */
+static int user_fault_done(isr_params_t *params, uintptr_t addr, int write, int *key, int *mapped)
+{
+    if (fault_resolve(params, addr, write, key, mapped)) {
+        return 1;
+    }
+    if (FAULT_USER(params)) {
+        return current_proc->fault_retry != 0;
+    }
+    return arch_user_copy_fixup(params);
+}
+
+/**
  * Resolve a page fault, or end what caused it.
  *
  * Tried in order. A fault while the panic reads the running process
@@ -2279,14 +2299,18 @@ static int fault_resolve(isr_params_t *params, uintptr_t addr, int write, int *k
  *
  * Every panic here, the page-cache window's among them, follows the fault's
  * note for the report (`note_fault`), written just before it, so that no
- * path that returns leaves a note behind. What is left panics: the
- * usercopy helpers return -EFAULT before the
- * kernel touches a bad user pointer, so a kernel-mode fault here, or one
- * with no user context, is a kernel bug. One in the guard page below the
- * running thread's kernel stack is that stack running out, and the panic
- * says so. Most overruns do not reach this handler: the fault's own frame
- * would be pushed into the same guard, and the processor raises a double
- * fault instead (`isr_double_fault`).
+ * path that returns leaves a note behind. A kernel-mode fault at a user
+ * address that no resolution serves, in the copy of the usercopy helpers
+ * (`arch_user_copy`), resumes at the copy's fixup, which ends it short, as
+ * Linux's kernel faults end at an exception table's entry
+ * (`kernelmode_fixup_or_oops`, arch/x86/mm/fault.c:721-728). What is left
+ * panics: the helpers that touch user memory otherwise check it first, so
+ * another kernel-mode fault here, or one with no user context, is a kernel
+ * bug. One in the guard page below the running thread's kernel stack is
+ * that stack running out, and the panic says so. Most overruns do not
+ * reach this handler: the fault's own frame would be pushed into the same
+ * guard, and the processor raises a double fault instead
+ * (`isr_double_fault`).
  */
 static void page_fault(isr_params_t *params, uintptr_t fault_address)
 {
@@ -2298,14 +2322,9 @@ static void page_fault(isr_params_t *params, uintptr_t fault_address)
     have_user_proc = (current_proc != NULL && current_proc->mm != NULL);
     in_user_range = (fault_address >= USER_ADDR_MIN && fault_address < USER_ADDR_MAX);
 
-    if (have_user_proc && in_user_range) {
-        resolved = fault_resolve(params, fault_address, write, &key, &mapped);
-        if (resolved) {
-            return; /* page mapped; iret retries the faulting instruction */
-        }
-        if (user_mode && current_proc->fault_retry) {
-            return; /* the signals are handled, then the instruction runs again */
-        }
+    if (have_user_proc && in_user_range &&
+        user_fault_done(params, fault_address, write, &key, &mapped)) {
+        return;
     }
 
     if (!user_mode && fault_address >= PCWIN_BASE &&

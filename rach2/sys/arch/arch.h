@@ -416,6 +416,22 @@ uint64_t arch_steal_ns(void);
  * Returns 1, or 0 when the source has none to give. */
 int arch_random(uint32_t *out, int seed);
 
+/**
+ * Copy `n` bytes from `src` to `dst`, one of them a user address, by the
+ * processor's string moves, and return the bytes not copied, 0 when all
+ * were. A fault on a user page is resolved by the page fault handler as a
+ * user's fault would be, and one it cannot resolve ends the copy there
+ * (`arch_user_copy_fixup`), as Linux's copy_user_generic ends at its
+ * exception table's entry (arch/x86/lib/copy_user_64.S). Interrupts may be
+ * on; the copy may sleep in the resolution of a fault.
+ */
+size_t arch_user_copy(void *dst, const void *src, size_t n);
+
+/** For a page fault the handler could not resolve, in kernel mode: when it
+ * was taken in `arch_user_copy`, point the frame at the copy's return of
+ * what it left and return 1; else return 0. */
+int arch_user_copy_fixup(isr_params_t *p);
+
 /** Copy `words` machine words from `src` to `dst`, which do not overlap, by
  * the processor's string instructions; defined where cpu.h defines
  * ARCH_STRING_WORDS, for k_memcpy. */

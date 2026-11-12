@@ -16,6 +16,7 @@ ARCH_ASM_SRC = sys/arch/i686/loader.s \
     sys/arch/i686/gdt_handler.s \
     sys/arch/i686/idt_handler.s \
     sys/arch/i686/switch.s \
+    sys/arch/i686/usercopy.s \
     sys/arch/i686/trampoline.s
 
 ARCH_C_SRC = sys/arch/i686/mmu.c \
