@@ -15,8 +15,9 @@
  * substitutes; a wakeup keeps the kinds of change it names, so a read must
  * wake the writers for room alone, a write the readers for data alone,
  * whether the ring had data before it or not, and a close the other end for
- * a hangup. The calls run without the big lock, which SIGPIPE alone takes,
- * after the pipe's lock is given back.
+ * a hangup. The calls run without the big lock, which they take, with the
+ * pipes' locks given back, only to post SIGPIPE and to ask `signal_pending`
+ * once the signal-work flag ends a wait.
  */
 #include "ipc/pipe.c"
 #include "ipc/pipe_ring.c"
