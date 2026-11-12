@@ -204,6 +204,7 @@ struct vm_file {
     uint32_t (*around)(struct vm_file *f, uint32_t first, uint32_t count, uintptr_t *phys,
                        int hits);
     int (*mkwrite)(struct vm_file *f, uint32_t pgoff, uintptr_t phys);
+    uint64_t dead_gen; /* last zero publication, under the reap list's lock */
 };
 
 /*
@@ -473,6 +474,16 @@ void vm_file_put(struct vm_file *f);
 /** Whether a file waits for `vm_file_reap`; read without the list's lock,
  * as a hint. */
 int vm_file_dead(void);
+
+/** Snapshot the last zero publication under the reap list's lock. A sync
+ * uses this boundary so later last puts cannot extend its drain. */
+uint64_t vm_file_reap_start(void);
+
+/** Release queued files whose zero publication is at or before `gen`, a
+ * boundary from `vm_file_reap_start`. May sleep; the caller holds the big
+ * lock and has made its regions and page tables agree, as for
+ * `vm_file_reap`. Files queued later stay for another reap. */
+void vm_file_reap_until(uint64_t gen);
 
 /**
  * Release every file whose last reference went. A release may sleep while

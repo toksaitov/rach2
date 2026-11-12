@@ -1347,6 +1347,18 @@ int vm_prefault_range(uintptr_t start, size_t len, int write)
 void vm_file_reap(void)
 {}
 
+/** No row queues a real mapping's zero publication. */
+uint64_t vm_file_reap_start(void)
+{
+    return 0;
+}
+
+/** No row queues a real mapping's last reference. */
+void vm_file_reap_until(uint64_t gen)
+{
+    (void)gen;
+}
+
 /** A quota with room, since no row maps a shared page. */
 int shmem_quota_full(const struct shmem *sh)
 {

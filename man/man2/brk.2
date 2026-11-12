@@ -229,6 +229,9 @@ with its file open until a later
 or
 .Fn msync
 writes every page back.
+A shared-page writeback holds its own backing-file description and drains
+only mapping releases published before its initial generation snapshot;
+later mappings cannot keep extending the drain.
 The next
 .Xr fsync 2
 of the file reports the writeback error, even if a retry succeeded.
