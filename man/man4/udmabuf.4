@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 12, 2026
 .Dt UDMABUF 4
 .Os
 .Sh NAME
@@ -11,7 +11,10 @@ The udmabuf character device exports ranges of tmpfs files, including
 files made by
 .Xr memfd_create 2 ,
 as dma-buf descriptors.
-The device has mode 0666.
+The kernel creates the device as root:root with mode 0600, as Linux does.
+The GNU image's udev rule gives it root:kvm and mode 0660.
+The desktop and test accounts belong to kvm.
+Images without udev keep mode 0600.
 Its ioctls use Linux's structures and numbers from
 .In linux/udmabuf.h .
 .Bl -tag -width UDMABUF_CREATE_LIST
@@ -57,6 +60,16 @@ The last descriptor and mapping release the pages.
 See
 .Xr dma-buf 7
 for size queries, synchronization and sync files.
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /sys/devices/virtual/misc/udmabuf
+The device's directory, with dev, uevent and a subsystem link to misc.
+.It Pa /sys/class/misc/udmabuf
+.It Pa /sys/dev/char/10:126
+Links to that directory, through which udev finds the device.
+.It Pa /etc/udev/rules.d/70-rach2-udmabuf.rules
+The GNU image's rule granting mode 0660 to group kvm.
+.El
 .Sh ERRORS
 .Bl -tag -width Er
 .It Bq Er EBADFD
