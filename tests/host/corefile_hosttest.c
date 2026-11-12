@@ -367,6 +367,11 @@ struct vfs_mount *vfs_root_mount(void)
 
 /* KRFFS's type, which no mount of the model has. */
 const struct vfs_type vfs_krffs_type = {"krffs", 0, &model_ops, 1, 0};
+/* The other types whose locks are found by node (`mnt_locks_by_node`),
+ * which no mount of the model has either. */
+const struct vfs_type vfs_krffs_volume_type = {"krffs", 0, 0, 1, 0};
+const struct vfs_type vfs_vfat_type = {"vfat", 0, 0, 0, 0};
+const struct vfs_type vfs_exfat_type = {"exfat", 0, 0, 0, 0};
 
 /** Resolve "core" in the working directory: the directory, with "core" in
  * `leaf`, for a walk to the parent, and the file once the open has made it,
