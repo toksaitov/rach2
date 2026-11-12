@@ -938,9 +938,10 @@ void sched_take_preempt(void)
  *
  * `schedule` passes the big lock on only past a real switch, and a call on
  * a processor with nothing else queued has none to make, so the lock goes
- * first to any processor that has claimed it (`bkl_yield`). The tick skips
- * a processor while another holds the lock, so a call that shares the lock
- * would seldom see a request: what is queued here counts as one. The caller
+ * first to any processor that has claimed it (`bkl_yield`). The tick asks
+ * a thread inside a call to switch at each tick (`sched_preempt`); what was
+ * queued here since counts as a request too, so a thread made ready
+ * between two ticks waits only for the next service point. The caller
  * is at a point where it could have slept, which the soft-lockup detector
  * counts as a schedule (`watchdog_sched`), as Linux's cond_resched would
  * switch to the stopper thread the watchdog queued.
