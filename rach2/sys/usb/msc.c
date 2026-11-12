@@ -1737,17 +1737,6 @@ static int initialization_expired(struct msc_device *m, uint32_t elapsed_ms)
     return 1;
 }
 
-/**
- * A command that ended with its data transfer still held has that transfer
- * retired and released before its end is acted on, so no buffer is reused
- * while the controller can reach it. The deadline runs through a stop, a
- * retirement and a recovery as well: past it the stick is refused and handed
- * to the core rather than left here for ever, and the request in flight is
- * kept while the controller may still reach its pages.
- * The next waiting request goes out once the stick is idle, after a command
- * ended and after a timeout alike, so nothing a process submitted meanwhile
- * goes out ahead of it.
- */
 /** Serve the oldest waiting request when the stick is ready, idle and not
  * recovering. In the pump, or under the big lock with interrupts off. */
 static void msc_start_next(struct msc_device *m)
@@ -1801,6 +1790,17 @@ static void msc_admit(struct msc_device *m)
     msc_start_next(m);
 }
 
+/**
+ * A command that ended with its data transfer still held has that transfer
+ * retired and released before its end is acted on, so no buffer is reused
+ * while the controller can reach it. The deadline runs through a stop, a
+ * retirement and a recovery as well: past it the stick is refused and handed
+ * to the core rather than left here for ever, and the request in flight is
+ * kept while the controller may still reach its pages.
+ * The next waiting request goes out once the stick is idle, after a command
+ * ended and after a timeout alike, so nothing a process submitted meanwhile
+ * goes out ahead of it.
+ */
 void msc_step(uint32_t elapsed_ms)
 {
     int i;
