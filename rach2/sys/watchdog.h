@@ -80,9 +80,9 @@ void watchdog_sched(void);
 /** Run a watchdog sample due by time from an idle event, with interrupts
  * off before any wait for the big lock. */
 void watchdog_event(isr_params_t *params);
-/** Return this CPU's next watchdog sample delay in ticks, rounded up, or
- * zero while disabled. Interrupts are off. */
-uint32_t watchdog_idle_ticks(void);
+/** Return this CPU's absolute monotonic sample deadline in ns, or zero
+ * while disabled. Interrupts are off; changed settings get a prompt event. */
+int64_t watchdog_idle_deadline(void);
 
 /**
  * Take an NMI meant for the watchdog: a backtrace request, the counter's

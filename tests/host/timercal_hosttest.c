@@ -88,6 +88,7 @@ static int fails;
  * the accesses made with interrupts on; and the accesses that read the APIC
  * timer or the TSC, which a run without a stop marks. */
 static uint64_t now_ns;
+static uint64_t phase_lag_ns, phase_stop_ns;
 static unsigned long accesses, stop_at;
 static uint64_t stop_ns;
 static unsigned long irq_on_accesses;
@@ -1044,7 +1045,7 @@ static void hr_rows(void)
 static int idle_allowed = 1;
 
 /** Check idle timer transitions against the modeled device. */
-static void idle_rows(void)
+static void idle_transitions(void)
 {
     struct hr_state *c = &hr_cpu[0];
     uint32_t writes;
@@ -1112,6 +1113,13 @@ static void idle_rows(void)
     timer_idle_exit();
     CHECK(deadline_at > tsc_ordered(), "a busy processor has its next deadline armed");
     hr_deadline = 0;
+}
+
+/** Continue with coarse-lag and first-deadline transitions. */
+static void idle_coarse(void)
+{
+    struct hr_state *c = &hr_cpu[0];
+
     now_ns = MS(600.75);
     apic_timer_start(1000000u, TICK_HZ);
     CHECK(timer_idle_enter(), "idle stops before a tick-only expiry during a slew");
@@ -1137,6 +1145,95 @@ static void idle_rows(void)
           "a failed prepare restarts an already stopped idle timer");
     idle_allowed = 1;
     hr_deadline = 0;
+}
+
+/** Continue with stable conversions, held tags and replacements. */
+static void idle_tick_cache(void)
+{
+    struct hr_state *c = &hr_cpu[0];
+    uint32_t writes;
+
+    now_ns = MS(700.25);
+    apic_timer_start(1000000u, TICK_HZ);
+    CHECK(timer_idle_enter(), "stop before converting a repeated whole-tick event");
+    phase_lag_ns = 1000;
+    timer_wake_tick(800);
+    writes = apic_writes;
+    phase_lag_ns = 0;
+    timer_wake_tick(800);
+    CHECK(c->want == (int64_t)MS(800.001) && apic_writes == writes,
+          "one live whole-tick request keeps its first conversion and device program");
+    now_ns = MS(800.002);
+    CHECK(take_hr_event(APIC_TIMER_VECTOR), "the cached whole-tick event is consumed");
+    now_ns = MS(900.25);
+    phase_stop_ns = MS(10);
+    timer_wake_tick(1000);
+    CHECK(c->want == (int64_t)MS(1000),
+          "a stop between the phase and clock reads does not postpone the target");
+    now_ns = MS(1000.002);
+    CHECK(take_hr_event(APIC_TIMER_VECTOR) && !c->want_tick,
+          "consuming an event clears its whole-tick tag");
+    now_ns = MS(1100.25);
+    apic_timer_start(1000000u, TICK_HZ);
+    CHECK(timer_idle_enter(), "stop before a held whole-tick request");
+    timer_wake_hold();
+    phase_lag_ns = 1000;
+    timer_wake_tick(1200);
+    phase_lag_ns = 0;
+    timer_wake_tick(1200);
+    CHECK(c->held == (int64_t)MS(1200.001) && c->held_tick == 1200,
+          "a held tick also keeps its first conversion");
+    timer_wake_release();
+    CHECK(c->want == (int64_t)MS(1200.001) && c->want_tick == 1200 && !c->held_tick,
+          "release transfers the deadline and tag together");
+    timer_wake_at((int64_t)MS(1100.5));
+    CHECK(!c->want_tick, "an earlier direct time replaces the tag with zero");
+    now_ns = MS(1100.501);
+    CHECK(take_hr_event(APIC_TIMER_VECTOR) && !c->want_tick, "the direct event clears its request");
+    timer_wake_tick(1200);
+    CHECK(c->want == (int64_t)MS(1200) && c->want_tick == 1200,
+          "the replaced tick may be requested again without a stale cache hit");
+}
+
+/** Continue with a staggered start, a long gap and a pending tick. */
+static void idle_phase(void)
+{
+    struct hr_state *c = &hr_cpu[0];
+
+    now_ns = MS(1700.25);
+    apic_timer_start(1000000u, TICK_HZ);
+    now_ns = MS(1700.3);
+    timer_wake_at((int64_t)MS(1750));
+    CHECK(c->tick == (int64_t)MS(1701),
+          "a staggered periodic timer joins the common monotonic tick phase");
+    CHECK(timer_idle_enter(), "stop the aligned scheduler tick");
+    now_ns = MS(1750.001);
+    CHECK(take_hr_event(APIC_TIMER_VECTOR), "the idle event is served on the shared vector");
+    now_ns = MS(6700.4);
+    timer_idle_exit();
+    CHECK(c->tick == (int64_t)MS(6701), "a long idle span keeps the common tick phase");
+    CHECK(timer_idle_enter(), "stop before an exact-edge restart");
+    now_ns = MS(6701);
+    timer_idle_exit();
+    CHECK(c->tick == (int64_t)MS(6702), "an exact edge restarts at the strictly later edge");
+    now_ns = MS(6800.25);
+    apic_timer_start(1000000u, TICK_HZ);
+    now_ns = MS(6801.3);
+    raised = APIC_TIMER_VECTOR;
+    timer_wake_at((int64_t)MS(6850));
+    raised = 0;
+    CHECK(c->tick == (int64_t)MS(6801) && (take_hr_event(APIC_TIMER_VECTOR) & APIC_HR_TICK) != 0 &&
+              c->tick == (int64_t)MS(6802),
+          "a pending periodic interrupt serves the previous common edge once");
+}
+
+/** Run the idle-event scenario and restore the calibration model. */
+static void idle_rows(void)
+{
+    idle_transitions();
+    idle_coarse();
+    idle_tick_cache();
+    idle_phase();
     hr_model = 0;
     ref_kind = REF_NONE;
     hr_vector = 0;
@@ -1271,8 +1368,12 @@ void lapic_timer_deadline(uint8_t vector)
 /** The modeled clock's whole ticks and fractional tick. */
 void rtc_tick_phase(uint64_t *ticks, uint32_t *phase)
 {
-    *ticks = now_ns / TICK_NS;
-    *phase = (uint32_t)(now_ns % TICK_NS);
+    uint64_t at = now_ns - phase_lag_ns;
+
+    *ticks = at / TICK_NS;
+    *phase = (uint32_t)(at % TICK_NS);
+    now_ns += phase_stop_ns;
+    phase_stop_ns = 0;
 }
 
 /** The model's coarse count, or its explicit lag behind the smooth clock. */
