@@ -11,6 +11,7 @@
 #include "../../cmdline.h"
 #include "../../timer.h"
 #include "../../lib/spinlock.h"
+#include "../../proc/percpu.h"
 
 /* The register `rdtscp` returns in ECX beside the counter. */
 #define MSR_TSC_AUX 0xC0000103u
@@ -64,9 +65,28 @@ struct kvm_clock_page {
     uint8_t pad[2];
 };
 
-/* Room for the page at an offset where it crosses no page boundary: of
- * the two halves of 64 bytes on an 8-byte boundary, one lies in one page. */
-static uint64_t kvm_clock_room[8];
+/* Room for a page for each processor, in room for one more so that they
+ * can start on a 32-byte boundary, where none crosses a page boundary. */
+static uint64_t kvm_clock_room[(NR_CPUS + 1) * 4];
+
+/** Processor `cpu`'s page. */
+static struct kvm_clock_page *kvm_clock_of(int cpu)
+{
+    uintptr_t at = ((uintptr_t)kvm_clock_room + 31u) & ~(uintptr_t)31u;
+
+    return (struct kvm_clock_page *)at + cpu;
+}
+
+/** Give KVM processor `cpu`'s page, the running one's, with
+ * MSR_KVM_SYSTEM_TIME_NEW, as Linux's kvm_register_clock does
+ * (arch/x86/kernel/kvmclock.c:167-177). */
+static void kvm_clock_register(int cpu)
+{
+    struct kvm_clock_page *p = kvm_clock_of(cpu);
+    uint64_t phys = (uint64_t)virt_to_phys(p);
+
+    kcpu_wrmsr(MSR_KVM_SYSTEM_TIME_NEW, (uint32_t)phys | 1u, (uint32_t)(phys >> 32));
+}
 
 /** `num` / `den`, by the bit, without i686's absent libgcc divide. */
 static uint64_t tsc_div(uint64_t num, uint32_t den)
@@ -108,36 +128,58 @@ static uint32_t kvm_clock_counts(uint32_t mul, int shift)
 }
 
 /*
- * The page as the kernel follows it: where it is, NULL while it is not
- * registered; the version, rate and stable bit it last gave; and the rate
- * at the first reading, which `tsc_kvm_counts_per_tick` keeps.
+ * The pages as the kernel follows them: whether they are kept, registered
+ * on each processor; the rate and stable bit the tick last took from one;
+ * and the rate at the first reading, which `tsc_kvm_counts_per_tick` keeps.
+ * Each processor registers its own before it counts a tick.
  */
-static struct kvm_clock_page *kvm_page;
-static uint32_t kvm_version;
+static int kvm_kept;
 static uint32_t kvm_counts;
 static int kvm_stable;
 static uint32_t kvm_boot_counts;
 
-/** One reading of the page at `p` between two equal even versions, as
- * Linux's pvclock_read_begin and pvclock_read_retry make it
- * (arch/x86/include/asm/pvclock.h:22-38): the version into `*version`, the
- * counts in a tick its rate gives into `*counts`, 0 for a rate that does
- * not fit, and its PVCLOCK_TSC_STABLE_BIT into `*stable`. */
-static void kvm_clock_read(struct kvm_clock_page *p, uint32_t *version, uint32_t *counts,
-                           int *stable)
+/** `delta` counts of the TSC in nanoseconds at a page's `mul` and `shift`,
+ * Linux's pvclock_scale_delta (arch/x86/include/asm/pvclock.h:44-81): the
+ * count shifted, then times `mul` by 2^-32, from the product of each half. */
+static uint64_t kvm_clock_scale(uint64_t delta, uint32_t mul, int shift)
 {
+    if (shift < -31 || shift > 31) {
+        return 0;
+    }
+    if (shift < 0) {
+        delta >>= -shift;
+    } else {
+        delta <<= shift;
+    }
+    return (delta >> 32) * mul + (((delta & 0xFFFFFFFFu) * mul) >> 32);
+}
+
+/** One reading of the page at `p` with the TSC between two equal even
+ * versions, as Linux's __pvclock_clocksource_read makes it
+ * (arch/x86/kernel/pvclock.c:75-79): the version into `*version`, the TSC
+ * and KVM's clock at it into `s->tsc` and `s->ns` (pvclock.h:84-90), a
+ * count before the page's own as none past it, the counts in a tick its
+ * rate gives into `s->counts`, 0 for a rate that does not fit, and its
+ * PVCLOCK_TSC_STABLE_BIT into `s->stable`. */
+static void kvm_clock_read(struct kvm_clock_page *p, uint32_t *version, struct tsc_kvm_sample *s)
+{
+    uint64_t stamp, system;
     uint32_t mul;
     int shift;
 
     do {
         *version = p->version;
         arch_dma_fence();
+        stamp = p->tsc_timestamp;
+        system = p->system_time;
         mul = p->tsc_to_system_mul;
         shift = p->tsc_shift;
-        *stable = (p->flags & PVCLOCK_TSC_STABLE_BIT) != 0;
+        s->stable = (p->flags & PVCLOCK_TSC_STABLE_BIT) != 0;
+        s->tsc = tsc_ordered();
         arch_dma_fence();
     } while ((*version & 1u) != 0 || *version != p->version);
-    *counts = kvm_clock_counts(mul, shift);
+    s->ns = system + (s->tsc > stamp ? kvm_clock_scale(s->tsc - stamp, mul, shift) : 0u);
+    s->counts = kvm_clock_counts(mul, shift);
 }
 
 /**
@@ -150,12 +192,9 @@ static void kvm_clock_read(struct kvm_clock_page *p, uint32_t *version, uint32_t
 uint32_t tsc_kvm_counts_per_tick(void)
 {
     static int asked;
-    struct kvm_clock_page *p;
-    uintptr_t at = (uintptr_t)kvm_clock_room;
+    struct tsc_kvm_sample s;
     uint32_t want = KVM_FEATURE_CLOCKSOURCE2 | KVM_FEATURE_CLOCKSOURCE_STABLE_BIT;
-    uint32_t version, counts;
-    uint64_t phys;
-    int stable;
+    uint32_t version;
 
     if (asked) {
         return kvm_boot_counts;
@@ -165,49 +204,72 @@ uint32_t tsc_kvm_counts_per_tick(void)
         (kcpu_kvm_features() & want) != want) {
         return 0;
     }
-    if ((at & 0xFFFu) > 0x1000u - sizeof(*p)) {
-        at += 32u;
-    }
-    p = (struct kvm_clock_page *)at;
-    phys = (uint64_t)virt_to_phys(p);
-    kcpu_wrmsr(MSR_KVM_SYSTEM_TIME_NEW, (uint32_t)phys | 1u, (uint32_t)(phys >> 32));
-    kvm_clock_read(p, &version, &counts, &stable);
-    if (version == 0 || !stable || counts == 0) {
+    kvm_clock_register(0);
+    kvm_clock_read(kvm_clock_of(0), &version, &s);
+    if (version == 0 || !s.stable || s.counts == 0) {
         kcpu_wrmsr(MSR_KVM_SYSTEM_TIME_NEW, 0, 0);
         return 0;
     }
-    kvm_version = version;
-    kvm_counts = counts;
+    kvm_counts = s.counts;
     kvm_stable = 1;
-    kvm_boot_counts = counts;
-    kvm_page = p;
-    return counts;
+    kvm_boot_counts = s.counts;
+    kvm_kept = 1;
+    return s.counts;
 }
 
-int tsc_kvm_poll(uint32_t *counts, int *stable)
+/** The running processor's page, or NULL when none is kept or KVM has not
+ * written it. */
+static struct kvm_clock_page *kvm_clock_here(void)
 {
+    struct kvm_clock_page *p;
+    int cpu = arch_cpu_id();
+
+    if (!kvm_kept || cpu < 0 || cpu >= NR_CPUS) {
+        return 0;
+    }
+    p = kvm_clock_of(cpu);
+    return p->version != 0 ? p : 0;
+}
+
+int tsc_kvm_sample(struct tsc_kvm_sample *s)
+{
+    struct kvm_clock_page *p = kvm_clock_here();
     uint32_t version;
 
-    if (!kvm_page || kvm_page->version == kvm_version) {
+    if (!p) {
+        return TSC_KVM_NONE;
+    }
+    kvm_clock_read(p, &version, s);
+    if (s->counts == 0) {
+        s->counts = kvm_counts; /* a rate that does not fit keeps no clock */
+        s->stable = 0;
+    }
+    if (s->counts == kvm_counts && s->stable == kvm_stable) {
+        return TSC_KVM_SAME;
+    }
+    kvm_counts = s->counts;
+    kvm_stable = s->stable;
+    return TSC_KVM_CHANGED;
+}
+
+int tsc_kvm_now(uint64_t *tsc, uint64_t *ns)
+{
+    struct kvm_clock_page *p = kvm_clock_here();
+    struct tsc_kvm_sample s;
+    uint32_t version;
+
+    if (!p) {
         return 0;
     }
-    kvm_clock_read(kvm_page, &version, counts, stable);
-    kvm_version = version;
-    if (*counts == 0) {
-        *counts = kvm_counts; /* a rate that does not fit keeps no clock */
-        *stable = 0;
-    }
-    if (*counts == kvm_counts && *stable == kvm_stable) {
-        return 0;
-    }
-    kvm_counts = *counts;
-    kvm_stable = *stable;
+    kvm_clock_read(p, &version, &s);
+    *tsc = s.tsc;
+    *ns = s.ns;
     return 1;
 }
 
 int tsc_kvm_withdrawn(void)
 {
-    return kvm_page != 0 && !kvm_stable;
+    return kvm_kept && !kvm_stable;
 }
 
 int tsc_kvm_stable(void)
@@ -227,10 +289,16 @@ int tsc_has_rdtscp(void)
     return (d & (1u << 27)) != 0;
 }
 
+/** A processor other than the boot one gives KVM its own clock page when
+ * the boot one's is kept, as Linux's kvm_setup_secondary_clock does
+ * (kvmclock.c:190-193), so that the tick it counts reads its own. */
 void tsc_cpu_setup(int cpu)
 {
     if (tsc_has_rdtscp()) {
         kcpu_wrmsr(MSR_TSC_AUX, (uint32_t)cpu & 0xFFFu, 0);
+    }
+    if (kvm_kept && cpu > 0 && cpu < NR_CPUS) {
+        kvm_clock_register(cpu);
     }
 }
 
