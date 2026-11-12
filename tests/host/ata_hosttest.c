@@ -3,6 +3,7 @@
  * a drive, for the driver's two paths meeting on one channel.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * The disk suites boot the driver on QEMU's IDE, where a command completes
  * when the emulator's main loop runs. A boot does not show the driver's two
@@ -216,6 +217,14 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     (void)vector;
     (void)handler;
     (void)name;
+}
+
+/** Mark no handler: the rows never probe, so nothing registers one. */
+void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flags)
+{
+    (void)vector;
+    (void)handler;
+    (void)flags;
 }
 
 #include "../../rach2/sys/block/disk.h"
@@ -1197,6 +1206,8 @@ int main(void)
     CHECK(masked_at_dma_cmd == 1 && masked_at_start == 1 && !unmasked_between,
           "the DMA command and its engine's start are written with interrupts off");
     CHECK(refused == 0 && garbage_reads == 0, "the owner's read met no other command");
+    CHECK(channels[0].lock.locked == 0 && channels[0].owner == 0 && channels[0].sleepers == 0,
+          "the owner's read leaves the channel's lock free and the channel unowned");
 
     model_reset(2);
     masked = 1;
@@ -1219,6 +1230,9 @@ int main(void)
     CHECK(refused == 0, "no command was written into the DMA's data phase");
     CHECK(garbage_reads == 0, "no data port read landed in the DMA's transfer");
     CHECK(pauses >= 3, "the polled read paused off the device while the DMA ran");
+    CHECK(channels[0].lock.locked == 0,
+          "the polled read inside the owner's sleep found the channel's lock free, which the "
+          "host's lock traps otherwise, and let it go");
 
     model_reset(-1);
     masked = 1;

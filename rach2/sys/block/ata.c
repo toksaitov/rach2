@@ -46,6 +46,16 @@
  * the owner's command had ended before the drive went idle, and the owner
  * finds the drive idle again when it wakes.
  *
+ * No big lock is taken. Each channel's registers and state are under its
+ * own spinlock, as libata's port is under `ap->lock` (drivers/ata/
+ * libata-core.c:5566), taken with interrupts off: the owner, the callers
+ * of every processor and the interrupt and the tick meet there. A data port
+ * sequence holds it from its wait for the idle drive to its last sector,
+ * as libata's PIO moves a sector under the lock (libata-sff.c:1210-1250),
+ * so no other caller's command can land in its data phase; an owner holds
+ * it to program and start its command (libata-core.c:5063, issued under
+ * the lock) and for each read of the status, and sleeps without it.
+ *
  * A wait for the drive sleeps when it can and polls when it must. From a
  * system call, with interrupts on, the caller reads the status register a
  * few times and then sleeps on the channel's queue, woken by the channel's
@@ -70,6 +80,7 @@
 #include "../irq.h"
 #include "../lib/kirq.h"
 #include "../lib/kstring.h"
+#include "../lib/spinlock.h"
 #include "../pci.h"
 #include "../proc/process.h"
 #include "../proc/sched.h"
@@ -200,14 +211,23 @@ void ata_set_io(const struct ata_io *ops)
 #define ATA_PROGIF_PRIMARY_NATIVE   0x01
 #define ATA_PROGIF_SECONDARY_NATIVE 0x04
 
+/*
+ * `lock` covers the channel's registers, command and control block and bus
+ * master alike, and `owner`, `sleepers`, `sleep_from`, `error_seen`,
+ * `ticks`, `seen` and `irqs`; the descriptor and the bounce buffer are the
+ * owner's. It is taken after the drivers' wait queue's and before the
+ * drivers' counters', and a wake of `wq` comes after it is given back.
+ */
 struct ata_channel {
+    struct spinlock lock;
     uint16_t io;   /* the command block */
     uint16_t ctrl; /* the control block: alternate status and device control */
     const char *name;
     uint8_t irq;
     wait_queue_t wq;         /* sleepers waiting for the drive's status */
     volatile uint32_t ticks; /* counted by ata_tick, the sleeping wait's clock */
-    uint32_t irqs;           /* interrupts taken on this channel */
+    uint32_t seen;           /* `kernel_ticks` when `ata_tick` last counted `ticks` */
+    uint32_t irqs;           /* interrupts that read the status on this channel */
     int owner;               /* 1 while a caller owns the channel */
     int sleepers;            /* callers asleep for a command, for the tick's count */
     uint32_t sleep_from;     /* `ata_clock` when `sleepers` last rose from 0 */
@@ -248,7 +268,6 @@ struct ata_drive {
     block_device_t dev;
 };
 
-static uint32_t ata_seen; /* `kernel_ticks` at `ata_tick`'s last call */
 /* Zero until `ata_init` gives each channel its legacy ports, name and line:
    an initializer would put the bounce buffers in .data, and their 128 KiB of
    zeros, with the padding their alignment takes, in the kernel file. */
@@ -267,7 +286,7 @@ static int ata_write(block_device_t *device, uint64_t lba, uint32_t count, const
 /**
  * Issue `command` to the drive selected on `ch` when the disk policy allows
  * it, and count it for `/proc/disk`. Returns 1 when it was issued, 0 when the
- * policy does not allow it.
+ * policy does not allow it. The channel's lock is held, but at the probe.
  */
 static int ata_command(const struct ata_channel *ch, uint8_t command)
 {
@@ -304,7 +323,8 @@ static void ata_settle(const struct ata_channel *ch)
  * then is ignored or, worse, answered with the other command's data. The
  * error bits an idle drive shows are the owner's command's, so they do not
  * fail that wait; they are noted in `error_seen` for the owner, since the
- * command written next clears them.
+ * command written next clears them. The channel's lock is held, but at the
+ * probe.
  */
 static int ata_status_done(struct ata_channel *ch, int want, int *rc)
 {
@@ -381,59 +401,73 @@ static int ata_free(void *arg)
     return ((struct ata_channel *)arg)->owner == 0;
 }
 
+/** Take `ch`'s lock with interrupts off and return the state
+ * `ata_unlock` puts back. */
+static uint32_t ata_lock(struct ata_channel *ch)
+{
+    return spin_lock_irqsave(&ch->lock);
+}
+
+/** Give back `ch`'s lock, and wake its sleepers, whose test of the status
+ * may have found the lock held (`ata_wait_cond`). */
+static void ata_unlock(struct ata_channel *ch, uint32_t flags)
+{
+    spin_unlock_irqrestore(&ch->lock, flags);
+    if (wq_active(&ch->wq)) {
+        wq_wake_all(&ch->wq);
+    }
+}
+
 /**
  * Take the channel for one command sequence. A caller that can sleep waits
  * on the channel's queue until no one owns it, which counts in its
- * `disk_waits` as a wait for the disk (proc/process.h). Returns 1 with the
- * channel owned, or 0 when another owns it still, as it may for a caller
- * that cannot sleep, who then waits for the drive alone and uses the data
- * port.
+ * `disk_waits` as a wait for the disk (proc/process.h), and tries again,
+ * since a caller on another processor may take it first. Returns 1 with the
+ * channel owned, or 0 when another owns it, as it may for a caller that
+ * cannot sleep, who then waits for the drive alone and uses the data port.
  */
 static int ata_acquire(struct ata_channel *ch)
 {
-    uint32_t flags;
+    for (;;) {
+        uint32_t flags = spin_lock_irqsave(&ch->lock);
 
-    if (ata_can_sleep() && !ata_free(ch)) {
+        if (!ch->owner) {
+            ch->owner = 1;
+            spin_unlock_irqrestore(&ch->lock, flags);
+            return 1;
+        }
+        spin_unlock_irqrestore(&ch->lock, flags);
+        if (!ata_can_sleep()) {
+            return 0;
+        }
         wq_wait_event_nointr(&ch->wq, ata_free, ch);
         ata_count_wait();
     }
-    flags = kirq_save();
-    if (ch->owner) {
-        kirq_restore(flags);
-        return 0;
-    }
-    ch->owner = 1;
-    kirq_restore(flags);
-    return 1;
 }
 
 /** Give up the channel and wake the callers waiting for it. */
 static void ata_release(struct ata_channel *ch)
 {
+    uint32_t flags = spin_lock_irqsave(&ch->lock);
+
     ch->owner = 0;
+    spin_unlock_irqrestore(&ch->lock, flags);
     wq_wake_all(&ch->wq);
 }
 
 /**
  * The clock of channel `ch` as it stands now: its `ticks` and the ticks
- * `kernel_ticks` has counted since `ata_tick` last ran, which a boot
- * processor's tick that found the big lock held left out. Interrupts are
- * masked across the three reads, since the tick, which a timer interrupt
- * runs on this processor inside the big lock, would otherwise mix one
- * call's `ticks` with the next call's `ata_seen`; a caller that publishes
- * what it read masks them across both.
+ * `kernel_ticks` has counted since `ata_tick` last counted them, which a
+ * boot processor's tick that found the big lock or this lock held left
+ * out. The channel's lock is held, which the tick takes to change both.
  */
 static uint32_t ata_clock(const struct ata_channel *ch)
 {
-    uint32_t flags = kirq_save();
-    uint32_t now = ch->ticks + ((uint32_t)kernel_ticks - ata_seen);
-
-    kirq_restore(flags);
-    return now;
+    return ch->ticks + ((uint32_t)kernel_ticks - ch->seen);
 }
 
 /**
- * Interrupts masked. Count toward `disk-wait-ticks` the ticks the last
+ * The channel's lock is held. Count toward `disk-wait-ticks` the ticks the last
  * sleeper of channel `ch`, waking now, slept since `ata_tick` last counted
  * them: from the later of `sleep_from` and that call to the clock now,
  * which the next call, finding no sleeper, would leave out.
@@ -448,23 +482,59 @@ static void ata_count_rest(const struct ata_channel *ch)
     }
 }
 
-/** The sleeping wait's condition: the status says the wait is over, or the
- * clock says it has lasted long enough to be a drive that never answers. */
+/**
+ * The sleeping wait's condition: the status says the wait is over, or the
+ * clock says it has lasted long enough to be a drive that never answers.
+ * Both are read under the channel's lock, taken only if it is free, since
+ * the sleeper is marked blocked here: a data port sequence holding it wakes
+ * the sleepers when it lets it go (`ata_unlock`), and the tick wakes them
+ * too.
+ */
 static int ata_wait_cond(void *arg)
 {
     struct ata_wait *w = arg;
+    struct ata_channel *ch = w->ch;
+    uint32_t flags = kirq_save();
+    unsigned status, bm;
+    int expired;
 
-    if (ata_status_done(w->ch, w->want, &w->rc)) {
+    if (!spin_trylock(&ch->lock)) {
+        kirq_restore(flags);
+        return 0;
+    }
+    if (ata_status_done(ch, w->want, &w->rc)) {
+        spin_unlock(&ch->lock);
+        kirq_restore(flags);
         return 1;
     }
-    if ((int32_t)(ata_clock(w->ch) - w->t0) > (int32_t)ATA_WAIT_TICKS) {
-        klog(KLOG_WARN, "ata", "%s: no answer in %d ticks: status 0x%X, bus master 0x%X, want %d",
-             w->ch->name, (int)ATA_WAIT_TICKS, (unsigned)ata_io->in8(w->ch->io + ATA_REG_STATUS),
-             w->ch->bm ? (unsigned)ata_io->in8(w->ch->bm + ATA_BM_STATUS) : 0u, w->want);
-        w->rc = -EIO;
-        return 1;
+    expired = (int32_t)(ata_clock(ch) - w->t0) > (int32_t)ATA_WAIT_TICKS;
+    status = expired ? (unsigned)ata_io->in8(ch->io + ATA_REG_STATUS) : 0u;
+    bm = expired && ch->bm ? (unsigned)ata_io->in8(ch->bm + ATA_BM_STATUS) : 0u;
+    spin_unlock(&ch->lock);
+    kirq_restore(flags);
+    if (!expired) {
+        return 0;
     }
-    return 0;
+    klog(KLOG_WARN, "ata", "%s: no answer in %d ticks: status 0x%X, bus master 0x%X, want %d",
+         ch->name, (int)ATA_WAIT_TICKS, status, bm, w->want);
+    w->rc = -EIO;
+    return 1;
+}
+
+/** Read the status once for a wait for `want`, as `ata_status_done`, under
+ * the channel's lock unless the caller holds it already (`held`). */
+static int ata_status_poll(struct ata_channel *ch, int want, int *rc, int held)
+{
+    uint32_t flags;
+    int done;
+
+    if (held) {
+        return ata_status_done(ch, want, rc);
+    }
+    flags = spin_lock_irqsave(&ch->lock);
+    done = ata_status_done(ch, want, rc);
+    spin_unlock_irqrestore(&ch->lock, flags);
+    return done;
 }
 
 /**
@@ -495,105 +565,127 @@ static void ata_pause(void)
  * `disk_waits` (proc/process.h), and a polled wait where it is not, whose
  * reads past the first few hundred are each preceded by a pause off the
  * device. A polled wait that gives up says so, since the caller's answer
- * to it may be a panic with no record of its own.
+ * to it may be a panic with no record of its own. A caller that holds the
+ * channel's lock (`held`), a data port sequence, polls under it with
+ * interrupts off; any other reads the status under the lock, taken for
+ * each read, and sleeps without it.
  */
-static int ata_wait_for(struct ata_channel *ch, int want)
+static int ata_wait_for(struct ata_channel *ch, int want, int held)
 {
     struct ata_wait w;
-    uint32_t flags;
+    uint32_t flags = 0;
+    unsigned status, bm;
     int spin, rc;
 
     for (spin = 0; spin < ATA_SPIN_BEFORE_SLEEP; spin++) {
-        if (ata_status_done(ch, want, &rc)) {
+        if (ata_status_poll(ch, want, &rc, held)) {
             return rc;
         }
     }
-    if (!ata_can_sleep()) {
+    if (held || !ata_can_sleep()) {
         for (spin = 0; spin < ATA_POLL_PLAIN; spin++) {
-            if (ata_status_done(ch, want, &rc)) {
+            if (ata_status_poll(ch, want, &rc, held)) {
                 return rc;
             }
         }
         for (spin = 0; spin < ATA_POLL_LIMIT; spin++) {
             ata_pause();
-            if (ata_status_done(ch, want, &rc)) {
+            if (ata_status_poll(ch, want, &rc, held)) {
                 return rc;
             }
         }
+        if (!held) {
+            flags = spin_lock_irqsave(&ch->lock);
+        }
+        status = (unsigned)ata_io->in8(ch->io + ATA_REG_STATUS);
+        bm = ch->bm ? (unsigned)ata_io->in8(ch->bm + ATA_BM_STATUS) : 0u;
+        if (!held) {
+            spin_unlock_irqrestore(&ch->lock, flags);
+        }
         klog(KLOG_ERR, "ata",
              "%s: no answer to a polled wait after %d reads: status 0x%X, bus master 0x%X, want %d",
-             ch->name, ATA_POLL_PLAIN + ATA_POLL_LIMIT,
-             (unsigned)ata_io->in8(ch->io + ATA_REG_STATUS),
-             ch->bm ? (unsigned)ata_io->in8(ch->bm + ATA_BM_STATUS) : 0u, want);
+             ch->name, ATA_POLL_PLAIN + ATA_POLL_LIMIT, status, bm, want);
         return -EIO;
     }
     w.ch = ch;
     w.want = want;
     w.rc = -EIO;
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&ch->lock);
     w.t0 = ata_clock(ch);
     if (ch->sleepers++ == 0) {
         ch->sleep_from = w.t0;
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&ch->lock, flags);
     wq_wait_event_nointr(&ch->wq, ata_wait_cond, &w);
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&ch->lock);
     if (--ch->sleepers == 0) {
         ata_count_rest(ch);
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&ch->lock, flags);
     ata_count_wait();
     return w.rc;
 }
 
 /** Wait until the drive is not busy; only a drive that never answers is
- * `-EIO`. */
-static int ata_wait_not_busy(struct ata_channel *ch)
+ * `-EIO`. `held` as `ata_wait_for`. */
+static int ata_wait_not_busy(struct ata_channel *ch, int held)
 {
-    return ata_wait_for(ch, ATA_WANT_NOT_BUSY);
+    return ata_wait_for(ch, ATA_WANT_NOT_BUSY, held);
 }
 
 /**
  * Wait until the drive has no command in any phase. A timeout is `-EIO`.
+ * `held` as `ata_wait_for`.
  *
  * This is the wait before a command from a caller that does not own the
  * channel: the owner's command may be in flight, and its data phase, DRQ
  * with BSY clear, is where a second command is ignored or answered with
- * the first one's data. The owner's DMA is issued and started with
- * interrupts off, so a caller here sees it either not yet issued or
+ * the first one's data. The owner's DMA is issued and started under the
+ * channel's lock, so a caller here sees it either not yet issued or
  * running, never issued and waiting for its engine.
  *
  * An idle drive showing ERR or DF ends this wait with success: those bits
  * belong to the owner's command, and they are recorded for it rather than
  * answered here.
  */
-static int ata_wait_idle(struct ata_channel *ch)
+static int ata_wait_idle(struct ata_channel *ch, int held)
 {
-    return ata_wait_for(ch, ATA_WANT_IDLE);
+    return ata_wait_for(ch, ATA_WANT_IDLE, held);
 }
 
-/** Wait until the drive is idle with no data pending; an error is `-EIO`. */
-static int ata_wait_ready(struct ata_channel *ch)
+/** Wait until the drive is idle with no data pending; an error is `-EIO`.
+ * `held` as `ata_wait_for`. */
+static int ata_wait_ready(struct ata_channel *ch, int held)
 {
-    return ata_wait_for(ch, ATA_WANT_READY);
+    return ata_wait_for(ch, ATA_WANT_READY, held);
 }
 
-/** Wait until the drive has a sector to move; an error is `-EIO`. */
-static int ata_wait_data(struct ata_channel *ch)
+/** Wait until the drive has a sector to move; an error is `-EIO`. The
+ * caller holds the channel's lock: only a data port sequence waits for
+ * data, but at the probe. */
+static int ata_wait_data(struct ata_channel *ch, int held)
 {
-    return ata_wait_for(ch, ATA_WANT_DATA);
+    return ata_wait_for(ch, ATA_WANT_DATA, held);
 }
 
 /**
- * The channel's interrupt: reading the status register clears the drive's
- * interrupt request, and the sleepers re-read it themselves.
+ * The channel's interrupt, which runs without the big lock (ISR_UNLOCKED),
+ * as libata's `__ata_sff_interrupt` runs under the host's lock alone
+ * (drivers/ata/libata-sff.c:1461-1471): reading the status register clears
+ * the drive's interrupt request, and the sleepers re-read it themselves.
+ * The status is read only when the channel's lock is free: a holder is
+ * reading it already, in a data port sequence that may last seconds, and
+ * the interrupt does not wait for that.
  */
 static void ata_irq(isr_params_t *params)
 {
     struct ata_channel *ch = &channels[params->vector == ATA_VECTOR_BASE + ATA_IRQ_PRIMARY ? 0 : 1];
 
-    ata_io->in8(ch->io + ATA_REG_STATUS);
-    ch->irqs++;
+    if (spin_trylock(&ch->lock)) {
+        ata_io->in8(ch->io + ATA_REG_STATUS);
+        ch->irqs++;
+        spin_unlock(&ch->lock);
+    }
     wq_wake_all(&ch->wq);
 }
 
@@ -602,28 +694,37 @@ static void ata_irq(isr_params_t *params)
  * the drive never raised, the first sector of a write among them. A channel
  * with sleepers counts toward `disk-wait-ticks` of `/proc/disk` here, since
  * this driver's transfers take no request of the block layer, which counts
- * the ticks its requests wait. Both count the ticks since the last call,
- * since the boot processor's tick does not call this on every tick
- * (`timer_lock_take`, kernel.c), but no more than have passed since the
+ * the ticks its requests wait. Both count the ticks since the channel's
+ * last count (`seen`), since the boot processor's tick does not call this
+ * on every tick (`timer_lock_take`, kernel.c) and leaves a channel whose
+ * lock is held to the next call, but no more than have passed since the
  * channel's sleepers began (`sleep_from`); the last sleeper to wake counts
- * the ticks since this call (`ata_count_rest`).
+ * the ticks since that count (`ata_count_rest`).
  */
 void ata_tick(void)
 {
-    uint32_t now = (uint32_t)kernel_ticks, passed = now - ata_seen;
+    uint32_t now = (uint32_t)kernel_ticks;
     int c;
 
     for (c = 0; c < 2; c++) {
         struct ata_channel *ch = &channels[c];
+        uint32_t flags = kirq_save(), passed;
         int32_t slept;
 
+        if (!spin_trylock(&ch->lock)) {
+            kirq_restore(flags);
+            continue;
+        }
+        passed = now - ch->seen;
         ch->ticks += passed;
+        ch->seen = now;
         slept = (int32_t)(ch->ticks - ch->sleep_from);
         if (ch->sleepers > 0 && slept > 0) {
             block_count_wait_ticks((uint32_t)slept < passed ? (uint32_t)slept : passed);
         }
+        spin_unlock(&ch->lock);
+        kirq_restore(flags);
     }
-    ata_seen = now;
     for (c = 0; c < 2; c++) {
         struct ata_channel *ch = &channels[c];
 
@@ -685,13 +786,14 @@ static uint8_t ata_program(const struct ata_drive *d, uint64_t lba, uint32_t cou
  * bus master reported failed, or for a read the disk policy does not allow,
  * and `-EPERM` for a write it does not allow.
  *
- * The command is issued and the engine started with interrupts off: a drive
- * that has the command and not the engine shows DRQ and waits, and a caller
- * that cannot sleep, arriving on a tick between the two, would wait for that
- * DRQ to clear until its bound and then fail. A caller without the channel
- * may have run a command of its own while this one slept, and the status it
- * found first was this command's: an error it saw (`error_seen`) is this
- * command's failure.
+ * The bus master is programmed, the command issued and the engine started
+ * under the channel's lock: a drive that has the command and not the engine
+ * shows DRQ and waits, and a caller that cannot sleep, arriving between the
+ * two, on this processor or another, would wait for that DRQ to clear until
+ * its bound and then fail. A caller without the channel may have run a
+ * command of its own while this one slept, and the status it found first
+ * was this command's: an error it saw (`error_seen`) is this command's
+ * failure.
  */
 static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, const void *src,
                             void *dst)
@@ -712,27 +814,32 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, c
     ch->prd.phys = (uint32_t)virt_to_phys(ch->bounce);
     ch->prd.bytes = (uint16_t)bytes;
     ch->prd.flags = ATA_PRD_EOT;
-    if (ata_wait_not_busy(ch) != 0) {
+    if (ata_wait_not_busy(ch, 0) != 0) {
         return -EIO;
     }
+    flags = spin_lock_irqsave(&ch->lock);
     ata_io->out8(ch->bm + ATA_BM_CMD, 0);
     ata_io->out8(ch->bm + ATA_BM_STATUS, ATA_BM_ERROR | ATA_BM_INTR);
     ata_io->out32(ch->bm + ATA_BM_PRD, (uint32_t)virt_to_phys(&ch->prd));
     ata_io->out8(ch->bm + ATA_BM_CMD, write ? 0 : ATA_BM_READ);
-    flags = kirq_save();
     ch->error_seen = 0;
     if (!ata_command(ch, ata_program(d, lba, count, write, 1))) {
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&ch->lock, flags);
         return write ? -EPERM : -EIO;
     }
     ata_settle(ch);
     ata_io->out8(ch->bm + ATA_BM_CMD, (uint8_t)((write ? 0 : ATA_BM_READ) | ATA_BM_START));
-    kirq_restore(flags);
-    rc = ata_wait_ready(ch);
+    spin_unlock_irqrestore(&ch->lock, flags);
+    rc = ata_wait_ready(ch, 0);
+    flags = spin_lock_irqsave(&ch->lock);
     status = ata_io->in8(ch->bm + ATA_BM_STATUS);
     ata_io->out8(ch->bm + ATA_BM_CMD, 0);
     ata_io->out8(ch->bm + ATA_BM_STATUS, ATA_BM_ERROR | ATA_BM_INTR);
-    if (rc != 0 || (status & ATA_BM_ERROR) || ch->error_seen) {
+    if (ch->error_seen) {
+        rc = -EIO;
+    }
+    spin_unlock_irqrestore(&ch->lock, flags);
+    if (rc != 0 || (status & ATA_BM_ERROR)) {
         return -EIO;
     }
     if (!write) {
@@ -747,9 +854,9 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, c
  * caller owns the channel (`owned`), and through the data port otherwise.
  * Returns 0 or `-EIO`.
  *
- * The data port's sequence runs with interrupts off, whoever the caller is:
- * a command left in its data phase while another caller ran would hand that
- * caller its sectors.
+ * The data port's sequence runs under the channel's lock, whoever the
+ * caller is: a command left in its data phase while another caller ran, on
+ * this processor or another, would hand that caller its sectors.
  */
 static int ata_read_on(struct ata_drive *d, uint64_t lba, uint32_t count, void *buffer, int owned)
 {
@@ -772,25 +879,25 @@ static int ata_read_on(struct ata_drive *d, uint64_t lba, uint32_t count, void *
             count -= chunk;
             continue;
         }
-        flags = kirq_save();
-        if (ata_wait_idle(ch) != 0) {
-            kirq_restore(flags);
+        flags = ata_lock(ch);
+        if (ata_wait_idle(ch, 1) != 0) {
+            ata_unlock(ch, flags);
             return -EIO;
         }
         if (!ata_command(ch, ata_program(d, lba, chunk, 0, 0))) {
-            kirq_restore(flags);
+            ata_unlock(ch, flags);
             return -EIO;
         }
         ata_settle(ch);
         for (i = 0; i < chunk; ++i) {
-            if (ata_wait_data(ch) != 0) {
-                kirq_restore(flags);
+            if (ata_wait_data(ch, 1) != 0) {
+                ata_unlock(ch, flags);
                 return -EIO;
             }
             ata_io->ins16(ch->io + ATA_REG_DATA, out, ATA_WORDS_PER_SECTOR);
             out += BLOCK_SECTOR_SIZE;
         }
-        kirq_restore(flags);
+        ata_unlock(ch, flags);
         lba += chunk;
         count -= chunk;
     }
@@ -818,6 +925,57 @@ static int ata_read(block_device_t *device, uint64_t lba, uint32_t count, void *
     return rc;
 }
 
+/** Select `d` and issue the flush of its cache. The channel's lock is held
+ * and the drive is idle. Returns 0, or `-EPERM` when the disk policy does
+ * not allow the flush. */
+static int ata_flush_issue(struct ata_drive *d)
+{
+    struct ata_channel *ch = d->channel;
+
+    ata_io->out8(ch->io + ATA_REG_DRIVE,
+                 (uint8_t)(ATA_DRIVE_SELECT | (d->slave ? ATA_DRIVE_SLAVE : 0)));
+    ata_settle(ch);
+    if (!ata_command(ch, d->lba48 ? ATA_CMD_FLUSH_EXT : ATA_CMD_FLUSH)) {
+        return -EPERM;
+    }
+    ata_settle(ch);
+    return 0;
+}
+
+/**
+ * Flush `d`'s cache, behind any command on its channel: the owner (`owned`)
+ * waits for the idle drive and for the flush without the channel's lock,
+ * and issues it under the lock; a caller without the channel holds the lock
+ * throughout. Returns 0, `-EIO`, or `-EPERM` when the disk policy does not
+ * allow the flush.
+ */
+static int ata_flush_on(struct ata_drive *d, int owned)
+{
+    struct ata_channel *ch = d->channel;
+    uint32_t flags;
+    int rc;
+
+    if (owned) {
+        if (ata_wait_idle(ch, 0) != 0) {
+            return -EIO;
+        }
+        flags = ata_lock(ch);
+        rc = ata_flush_issue(d);
+        ata_unlock(ch, flags);
+        if (rc != 0) {
+            return rc;
+        }
+        return ata_wait_ready(ch, 0) != 0 ? -EIO : 0;
+    }
+    flags = ata_lock(ch);
+    rc = ata_wait_idle(ch, 1) != 0 ? -EIO : ata_flush_issue(d);
+    if (rc == 0 && ata_wait_ready(ch, 1) != 0) {
+        rc = -EIO;
+    }
+    ata_unlock(ch, flags);
+    return rc;
+}
+
 /**
  * Write `count` sectors at `lba` from `buffer` as `ata_read_on` reads them,
  * and then flush the drive's cache once, after the last command. Returns 0,
@@ -827,7 +985,10 @@ static int ata_read(block_device_t *device, uint64_t lba, uint32_t count, void *
  *
  * The flush waits for the drive to be idle first, so a caller without the
  * channel flushes behind the owner's command and not into it; and it selects
- * its drive again, since that caller may have selected the other one.
+ * its drive again, since that caller may have selected the other one. The
+ * owner issues it under the channel's lock and sleeps for it without; a
+ * caller without the channel holds the lock throughout, as it does for the
+ * data port.
  */
 static int ata_write_on(struct ata_drive *d, uint64_t lba, uint32_t count, const void *buffer,
                         int owned)
@@ -848,47 +1009,34 @@ static int ata_write_on(struct ata_drive *d, uint64_t lba, uint32_t count, const
             }
             in += chunk * BLOCK_SECTOR_SIZE;
         } else {
-            flags = kirq_save();
-            if (ata_wait_idle(ch) != 0) {
-                kirq_restore(flags);
+            flags = ata_lock(ch);
+            if (ata_wait_idle(ch, 1) != 0) {
+                ata_unlock(ch, flags);
                 return -EIO;
             }
             if (!ata_command(ch, ata_program(d, lba, chunk, 1, 0))) {
-                kirq_restore(flags);
+                ata_unlock(ch, flags);
                 return -EPERM;
             }
             ata_settle(ch);
             for (i = 0; i < chunk; ++i) {
-                if (ata_wait_data(ch) != 0) {
-                    kirq_restore(flags);
+                if (ata_wait_data(ch, 1) != 0) {
+                    ata_unlock(ch, flags);
                     return -EIO;
                 }
                 ata_io->outs16(ch->io + ATA_REG_DATA, in, ATA_WORDS_PER_SECTOR);
                 in += BLOCK_SECTOR_SIZE;
             }
-            if (ata_wait_ready(ch) != 0) {
-                kirq_restore(flags);
+            if (ata_wait_ready(ch, 1) != 0) {
+                ata_unlock(ch, flags);
                 return -EIO;
             }
-            kirq_restore(flags);
+            ata_unlock(ch, flags);
         }
         lba += chunk;
         count -= chunk;
     }
-    if (ata_wait_idle(ch) != 0) {
-        return -EIO;
-    }
-    ata_io->out8(ch->io + ATA_REG_DRIVE,
-                 (uint8_t)(ATA_DRIVE_SELECT | (d->slave ? ATA_DRIVE_SLAVE : 0)));
-    ata_settle(ch);
-    if (!ata_command(ch, d->lba48 ? ATA_CMD_FLUSH_EXT : ATA_CMD_FLUSH)) {
-        return -EPERM;
-    }
-    ata_settle(ch);
-    if (ata_wait_ready(ch) != 0) {
-        return -EIO;
-    }
-    return 0;
+    return ata_flush_on(d, owned);
 }
 
 /**
@@ -949,13 +1097,13 @@ static int ata_identify(struct ata_drive *d, uint16_t *identify)
     if (status == 0 || status == 0xFF) {
         return -1;
     }
-    if (ata_wait_not_busy(ch) != 0) {
+    if (ata_wait_not_busy(ch, 0) != 0) {
         return -1;
     }
     if (ata_io->in8(ch->io + ATA_REG_LBA_MID) != 0 || ata_io->in8(ch->io + ATA_REG_LBA_HIGH) != 0) {
         return -1;
     }
-    if (ata_wait_data(ch) != 0) {
+    if (ata_wait_data(ch, 0) != 0) {
         return -1;
     }
     ata_io->ins16(ch->io + ATA_REG_DATA, identify, ATA_WORDS_PER_SECTOR);
@@ -1063,8 +1211,10 @@ int ata_init(void)
     for (c = 0; c < 2; c++) {
         struct ata_channel *ch = &channels[c];
 
+        spin_lock_init(&ch->lock, "ata_port_lock");
         wait_queue_init(&ch->wq);
         register_isr_handler((uint8_t)(ATA_VECTOR_BASE + ch->irq), ata_irq, "ata");
+        isr_register_flags((uint8_t)(ATA_VECTOR_BASE + ch->irq), ata_irq, ISR_UNLOCKED);
         /* Device control with nIEN clear: the channel raises its interrupt. */
         ata_io->out8(ch->ctrl, 0x00);
         for (s = 0; s < 2; s++) {
@@ -1086,7 +1236,7 @@ int ata_init(void)
                      !kcmdline_has("rach2.atapio");
             d->dev.sector_size = BLOCK_SECTOR_SIZE;
             d->dev.sector_count = d->sectors;
-            d->dev.flags = BLOCK_FAULT_SAFE;
+            d->dev.flags = BLOCK_FAULT_SAFE | BLOCK_UNLOCKED;
             d->dev.max_sectors = BLOCK_REQ_MAX_SECTORS;
             d->dev.read = ata_read;
             d->dev.write = ata_write;
