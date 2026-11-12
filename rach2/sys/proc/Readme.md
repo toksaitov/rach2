@@ -222,7 +222,7 @@ Each lock has a row in one order, outermost first, and a lock is taken only whil
 | 2 | a KVM vCPU's lock | | `vcpu->mutex` |
 | 3 | a description's lock, then the rename lock, directories, nodes and the namespace lock | `rename`; ext2's nodes, `ext2 node`, a rename's by subclass; a mount's `ext2 meta`; the namespace lock, `mount` | `f_pos_lock` (`fs/file.c:1167`), then `i_rwsem` (`mm/rmap.c:23`) |
 | 4 | an address space's `mmap_lock` | `mm->mmap_lock` (`../mm/mm.h`), whose holds a thread counts | `mmap_lock` (`include/linux/mmap_lock.h:102,158`) |
-| 5 | DRM's mode lock, then i915's GMBUS lock; the i915 GEM lock, a context list's lock, a GEM object's lock | i915's GMBUS lock, `gmbus_held` (`../drm/i915/intel_gmbus.c`) | `mode_config.mutex`, `gmbus.mutex`, `struct_mutex` (`include/drm/drm_device.h:158`), the object lock |
+| 5 | DRM's mode lock, then i915's GMBUS lock; the i915 GEM lock, a context list's lock, a GEM object's lock | DRM's mode lock, `drm_mode_lock` (`mode_lock`, `../drm/drm.c`); i915's GMBUS lock, `gmbus` (`gmbus_mutex`, `../drm/i915/intel_gmbus.c`); the i915 GEM lock, `i915_gem` (`gem.lock`, `../drm/i915/i915_pci.c`); a file's context list's lock, `i915_ctx_list` (`../drm/i915/i915_gem_context.c`) | `mode_config.mutex`, `gmbus.mutex`, `struct_mutex` (`include/drm/drm_device.h:158`), the object lock |
 | 6 | a reservation's lock | | the `dma_resv` lock |
 | 7 | a shared file's pages and mappings | | `i_mmap_rwsem`, `folio_lock` (`mm/rmap.c:26,29`) |
 | 8 | the dsp's stream lock | | the PCM stream's mutex |
