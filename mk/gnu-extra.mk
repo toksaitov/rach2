@@ -181,6 +181,7 @@ $(GNU_VA_STAMP): $(GNU_VA_SOURCES) | $(SHA256TOOL) $(ETUDE)
 GNU_KVM_STAMP = $(GNU_OUT)/kvm.stamp
 GNU_STEP_STAMPS += $(GNU_KVM_STAMP)
 GNU_KVM_SOURCES = vendor/gnu/kvm/build_kvm.sh vendor/gnu/kvm/qemu.list vendor/gnu/kvm/sources.txt \
+                  vendor/gnu/kvm/max-guest-memory-one-cpu.patch \
                   vendor/gnu/debian/fetch_debs.sh vendor/gnu/debian/fetch_asset.sh \
                   vendor/gnu/debian/resolve_debs.py vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
 
