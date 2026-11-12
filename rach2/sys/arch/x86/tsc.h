@@ -19,18 +19,38 @@ uint64_t tsc_ordered(void);
 int tsc_invariant(void);
 
 /**
- * The TSC's counts in a tick as KVM states them, or 0. Under KVM with its
- * second clock MSR and the stable bit (KVM_FEATURE_CLOCKSOURCE2 and
- * KVM_FEATURE_CLOCKSOURCE_STABLE_BIT), the clock page KVM fills for this
- * processor gives the rate, and its PVCLOCK_TSC_STABLE_BIT says that the
- * counter is one clock on every processor, as Linux's kvm-clock reads it
- * (arch/x86/kernel/kvmclock.c:116-120, 317-324; pvclock.c:27-37). The page
- * is registered for the reading and given up after it. 0 elsewhere, with
- * either bit clear, or once `rach2.notsc` is on the command line. The
- * answer is kept from the first call; the boot processor makes it with
- * interrupts off.
+ * The TSC's counts in a tick as KVM states them at the first call, or 0.
+ * Under KVM with its second clock MSR and the stable bit
+ * (KVM_FEATURE_CLOCKSOURCE2 and KVM_FEATURE_CLOCKSOURCE_STABLE_BIT), the
+ * clock page KVM fills for the boot processor gives the rate, and its
+ * PVCLOCK_TSC_STABLE_BIT says that the counter is one clock on every
+ * processor, as Linux's kvm-clock reads it (arch/x86/kernel/kvmclock.c:
+ * 116-120, 317-324; pvclock.c:27-37). Where the page gives both, it stays
+ * registered and `tsc_kvm_poll` follows it; otherwise it is given up. 0
+ * elsewhere, with either feature or the page's bit clear, or once
+ * `rach2.notsc` is on the command line. The answer is kept from the first
+ * call; the boot processor makes it with interrupts off.
  */
 uint32_t tsc_kvm_counts_per_tick(void);
+
+/**
+ * Whether KVM has written the page that `tsc_kvm_counts_per_tick` keeps
+ * with another rate or stable bit since the last call, which takes them:
+ * then 1, with the counts in a tick into `*counts` and the bit into
+ * `*stable`. A rate that does not fit 32 bits keeps the last one and reads
+ * as a withdrawn bit. 0, with nothing written, when nothing changed or no
+ * page is kept. One processor at a time calls it, the clock's tick's.
+ */
+int tsc_kvm_poll(uint32_t *counts, int *stable);
+
+/** Whether the page `tsc_kvm_counts_per_tick` keeps has withdrawn its
+ * stable bit as of the last `tsc_kvm_poll`, so that the TSC is no longer
+ * known to be one clock on every processor. 0 when no page is kept. */
+int tsc_kvm_withdrawn(void);
+
+/** Whether KVM states the TSC's rate and that it is one clock on every
+ * processor, as of the last `tsc_kvm_poll`. */
+int tsc_kvm_stable(void);
 
 /** Whether the processor has `rdtscp` (`cpuid` leaf 0x80000001, EDX bit
  * 27), which reads the counter and IA32_TSC_AUX together. */

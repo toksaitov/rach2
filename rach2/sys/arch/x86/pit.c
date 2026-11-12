@@ -304,6 +304,57 @@ static void tsc_wait_us(uint32_t usec)
     }
 }
 
+/** Make `kind`, REF_TSC or REF_COUNTER, the reference, with its units and
+ * its tick; the platform's counter's total starts at 0 from its reading
+ * now. The caller places the tick in progress. */
+static void ref_take(int kind)
+{
+    if (kind == REF_TSC) {
+        ref.mult = 1;
+        ref.tick = tsc_per_tick;
+        if (!udelay_wait) {
+            udelay_wait = tsc_wait_us;
+        }
+    } else {
+        ref.mult = TICKS_PER_SECOND;
+        ref.tick = refclock_hz();
+        ref_raw = refclock_read();
+        ref_total = 0;
+    }
+    ref_kind = kind;
+}
+
+/**
+ * Follow KVM's clock page at the tick (`tsc_kvm_poll`): a new rate becomes
+ * the TSC's counts in a tick, and the reference's tick while the TSC is the
+ * reference; a withdrawn stable bit hands the reference to the platform's
+ * counter, the clock the kernel keeps where nothing vouches for the TSC,
+ * and the bit set again hands it back. `rem` is the units of the reference
+ * already into the tick in progress, which the change keeps, so the count
+ * of ticks and the microsecond clock go on without a step. Under
+ * `rach2.tscreliable`, or with no platform counter, the TSC stays the
+ * reference, as Linux's kernel goes on reading kvm-clock without the bit
+ * and keeps it from running back (pvclock.c:86-110); the tick's own count
+ * already never runs back.
+ */
+static void ref_follow(uint32_t rem)
+{
+    uint32_t counts, phase_ns, part, whole, raw;
+    int stable, kind;
+
+    if (!tsc_kvm_poll(&counts, &stable)) {
+        return;
+    }
+    phase_ns = refclock_scale(rem, NS_PER_TICK, ref.tick);
+    tsc_per_tick = counts;
+    kind = stable || !refclock_name() || kcmdline_has("rach2.tscreliable") ? REF_TSC : REF_COUNTER;
+    ref_take(kind);
+    part = refclock_scale(phase_ns, ref.tick, NS_PER_TICK);
+    whole = (part + ref.mult - 1u) / ref.mult;
+    ref.edge = ref_count(&raw) - whole; /* modulo 2^64, as every count is */
+    ref.frac = whole * ref.mult - part;
+}
+
 /**
  * Start the reference at this tick, which the old count has counted, or
  * return 0 when none is ready. The tick in progress is put to have begun half
@@ -316,18 +367,9 @@ static int ref_start(void)
     uint32_t raw, now_us;
 
     if (tsc_per_tick && (!refclock_name() || timer_tsc_trusted())) {
-        ref.mult = 1;
-        ref.tick = tsc_per_tick;
-        ref_kind = REF_TSC;
-        if (!udelay_wait) {
-            udelay_wait = tsc_wait_us;
-        }
+        ref_take(REF_TSC);
     } else if (refclock_name()) {
-        ref.mult = TICKS_PER_SECOND;
-        ref.tick = refclock_hz();
-        ref_raw = refclock_read();
-        ref_total = 0;
-        ref_kind = REF_COUNTER;
+        ref_take(REF_COUNTER);
     } else {
         return 0;
     }
@@ -428,13 +470,14 @@ static uint32_t tsc_against_reference(void)
 }
 
 /**
- * `rach2.tscreliable`, or a rate and a stable bit from KVM: Linux under KVM
- * reads kvm-clock, the TSC scaled by the clock page, and leaves the HPET
- * that QEMU serves with an exit to its own process for each read.
+ * `rach2.tscreliable`, or a rate and a stable bit from KVM as its clock page
+ * gives them now: Linux under KVM reads kvm-clock, the TSC scaled by the
+ * clock page, and leaves the HPET that QEMU serves with an exit to its own
+ * process for each read.
  */
 int timer_tsc_trusted(void)
 {
-    return kcmdline_has("rach2.tscreliable") || tsc_kvm_counts_per_tick() != 0;
+    return kcmdline_has("rach2.tscreliable") || tsc_kvm_stable();
 }
 
 /**
@@ -668,7 +711,8 @@ uint32_t pit_phase_us(void)
  * counting it twice would put the clock a period ahead each period. The
  * first tick with a reference ready starts it (`ref_start`); from then on
  * the reference's whole ticks are counted, and the platform's counter's
- * reading is added to its total, so that the next reading counts from here.
+ * reading is added to its total, so that the next reading counts from here;
+ * then KVM's clock page is followed (`ref_follow`).
  */
 uint32_t timer_tick_clock(void)
 {
@@ -689,6 +733,7 @@ uint32_t timer_tick_clock(void)
     }
     due = ref_due(&ref, count, &rem);
     ref_advance(&ref, due);
+    ref_follow(rem);
     kirq_restore(flags);
     return due;
 }

@@ -210,7 +210,7 @@ The shared code is written to pass them: an address is a `uintptr_t`, a length a
 * The i686 kernel uses no PAE: it reaches the first 4 GiB of physical memory, and every page it maps is executable.
 * On i686 a program makes a system call by `int 0x80` alone; the kernel has no `sysenter`. On x86-64 it makes one by `syscall`, or an i386 call by `int $0x80`, as [ia32(7)](../../../man/man7/ia32.7) describes.
 * The i686 kernel has no vDSO: every call, `clock_gettime` among them, enters the kernel.
-* The x86-64 vDSO has no unwind tables; its clock calls enter the kernel on a machine whose TSC does not run at one rate unless `rach2.tscreliable` is given or KVM states the TSC's rate and its stable bit.
+* The x86-64 vDSO has no unwind tables; its clock calls enter the kernel on a machine whose TSC does not run at one rate unless `rach2.tscreliable` is given or KVM states the TSC's rate and its stable bit, and enter it again while KVM's clock page withdraws that bit.
 
 ## Tests
 

@@ -105,7 +105,10 @@ int vclock_running(void);
  * toward the same clock of the tick (`rtc_tick_both`) by at most one part
  * in 2000, so that neither drifts from what it follows and no reading is
  * earlier than one before it. Real time is the monotonic clock plus the
- * offset (`vclock_set_wall`).
+ * offset (`vclock_set_wall`). On x86 it follows KVM's clock page as the
+ * tick last read it: a new rate is the measured one from then on, and the
+ * clock stops while the page withdraws its stable bit and starts again
+ * once the bit is back.
  */
 void vclock_tick(void);
 

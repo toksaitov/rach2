@@ -256,6 +256,20 @@ uint32_t tsc_kvm_counts_per_tick(void)
     return 0;
 }
 
+/** So no clock page of KVM's is followed. */
+int tsc_kvm_poll(uint32_t *counts, int *stable)
+{
+    (void)counts;
+    (void)stable;
+    return 0;
+}
+
+/** Nor vouches for the counter. */
+int tsc_kvm_stable(void)
+{
+    return 0;
+}
+
 uint32_t pit_wait_counts(uint32_t counts)
 {
     (void)counts;
