@@ -5683,7 +5683,12 @@
         {"assertion_id": "short-rights-setup", "checks": "a descriptor is sent for a short control buffer", "source": "program"},
         {"assertion_id": "short-rights-length", "checks": "received into a buffer of the message's length alone, its control length is no longer than the buffer", "source": "program"},
         {"assertion_id": "short-creds-setup", "checks": "credentials are sent for a short control buffer", "source": "program"},
-        {"assertion_id": "short-creds-length", "checks": "received the same way, their control length is no longer than the buffer", "source": "program"}
+        {"assertion_id": "short-creds-length", "checks": "received the same way, their control length is no longer than the buffer", "source": "program"},
+        {"assertion_id": "timeo-setup", "checks": "a stream pair with SO_RCVTIMEO, a SIGUSR1 handler and a sibling thread that signals the process are set up", "source": "program"},
+        {"assertion_id": "timeo-eagain", "checks": "the timed receive ends with EAGAIN after the sibling's last signal, its deadline kept when the sibling took the signal that woke it", "source": "program"},
+        {"assertion_id": "timeo-sibling", "checks": "the sibling thread took at least one of the signals that woke the receive", "source": "program"},
+        {"assertion_id": "nopeer-userns", "checks": "a child in a new user namespace with no maps makes a socket and reads its SO_PEERCRED", "source": "program"},
+        {"assertion_id": "nopeer-ids", "checks": "SO_PEERCRED with no peer gives pid 0 and ids -1, untranslated", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
