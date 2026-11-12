@@ -8,11 +8,13 @@
 #endif
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -264,15 +266,47 @@ static int make_dirs(const char *path)
     return make_dir(buf) != 0 && errno != EEXIST ? -1 : 0;
 }
 
-/** Make a new directory of this process's, CACHE/PREFIX-PID-N, in `out`. */
-static int private_dir(const char *cache, const char *prefix, char *out, size_t size)
+/**
+ * Make a new directory of this process's, BASE/PREFIX-TIME-PID-N, in `out`,
+ * TIME being the clock's seconds, so that no later process takes the name of
+ * one that a stopped process left.
+ */
+static int private_dir(const char *base, const char *prefix, char *out, size_t size)
 {
+    long now = (long)time(NULL);
     unsigned n;
 
     for (n = 0; n < 1000; n++) {
-        if (fmt(out, size, "%s/%s-%ld-%u", cache, prefix, (long)getpid(), n) != 0)
+        if (fmt(out, size, "%s/%s-%ld-%ld-%u", base, prefix, now, (long)getpid(), n) != 0)
             return -1;
         if (make_dir(out) == 0) {
+            tooling_scratch("made", out);
+            return 0;
+        }
+        if (errno != EEXIST)
+            return -1;
+    }
+    return -1;
+}
+
+/**
+ * Make a new empty partial disk of this process's in the cache,
+ * CACHE/tooling-KEY.TIME-PID-N.part, in `out`, named as private_dir names a
+ * directory; the cache's pruning takes no such name for a machine.
+ */
+static int private_part(const char *cache, const char *key, char *out, size_t size)
+{
+    long now = (long)time(NULL);
+    unsigned n;
+    int fd;
+
+    for (n = 0; n < 1000; n++) {
+        if (fmt(out, size, "%s/tooling-%s.%ld-%ld-%u.part", cache, key, now, (long)getpid(), n) !=
+            0)
+            return -1;
+        fd = open(out, O_WRONLY | O_CREAT | O_EXCL, 0600);
+        if (fd >= 0) {
+            close(fd);
             tooling_scratch("made", out);
             return 0;
         }
@@ -1022,6 +1056,7 @@ static int prepare_line(const struct etude_tooling_site *site, struct work *w, u
 {
     struct shape shape;
     char seed[PATH_LEN], base[PATH_LEN];
+    const char *dirs;
     char *create[] = {"qemu-img", "create", "-q",    "-f",    "qcow2",   "-b",
                       base,       "-F",     "qcow2", w->root, DISK_SIZE, NULL};
 
@@ -1030,19 +1065,23 @@ static int prepare_line(const struct etude_tooling_site *site, struct work *w, u
     shape.network = 1;
     if (download(site, &w->m, why, whylen) != 0)
         return -1;
-    if (private_dir(site->cache, "prepare", w->dir, sizeof(w->dir)) != 0) {
+    /* The provisioning's own files go in the run's directory, if any. */
+    dirs = tooling_run_dir() ? tooling_run_dir() : site->cache;
+    if ((tooling_run_dir() && make_dirs(dirs) != 0) ||
+        private_dir(dirs, "prepare", w->dir, sizeof(w->dir)) != 0) {
         w->dir[0] = '\0';
-        return failure(why, whylen, "a directory in %s cannot be made: %s", site->cache,
-                       strerror(errno));
+        return failure(why, whylen, "a directory in %s cannot be made: %s", dirs, strerror(errno));
     }
     /* The made disk is beside its backing image, which it names relatively. */
-    if (fmt(w->root, sizeof(w->root), "%s/tooling-%s.%ld.part", site->cache, w->m.key,
-            (long)getpid()) != 0 ||
-        fmt(base, sizeof(base), "image-%s.img", w->m.image_sha256) != 0 ||
+    if (private_part(site->cache, w->m.key, w->root, sizeof(w->root)) != 0) {
+        w->root[0] = '\0';
+        return failure(why, whylen, "a partial disk in %s cannot be made: %s", site->cache,
+                       strerror(errno));
+    }
+    if (fmt(base, sizeof(base), "image-%s.img", w->m.image_sha256) != 0 ||
         fmt(seed, sizeof(seed), "%s/seed.img", w->dir) != 0 ||
         fmt(w->b.channel, sizeof(w->b.channel), "%s/channel.log", w->dir) != 0)
         return failure(why, whylen, "the path is too long");
-    tooling_scratch("made", w->root);
     if (make_seed(site, w->dir, why, whylen) != 0 || run_program(site, create, why, whylen) != 0)
         return -1;
     if (qemu_line(&w->l, site, &w->m, w->dir, w->root, &shape) != 0 ||
