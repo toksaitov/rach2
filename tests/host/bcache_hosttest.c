@@ -1751,6 +1751,47 @@ static void pause_release(void)
 }
 
 /**
+ * A miss under the big lock on a cache whose every buffer but one is held,
+ * and that one dirty with its write failed: hit and let go at every pause of
+ * the search, it stays unfit, so its releases are no progress, and the miss
+ * fails after its sixteen retries while the hits go on. Every turn ends at a
+ * service point, where the big lock may go to a writer.
+ */
+static void victim_unfit_rows(void)
+{
+    struct bbuf *b;
+    int points;
+
+    pause_fill(1);
+    b = bcache_get(&vast, PAUSE_X);
+    b->data[0] = 0x5a;
+    bcache_dirty(b);
+    bcache_release(b);
+    fail_writes = 1;
+    (void)bcache_sync(&vast);
+    b = bcache_get(&vast, PAUSE_X);
+    check(b->dirty && b->write_failed,
+          "the unfit row's one free buffer is dirty, its write failed");
+    bcache_release(b);
+    points = service_points;
+    pause_hits = 1000;
+    restore_hook = hit_x;
+    b = bcache_get_blank(&vast, 100);
+    check(b == 0 && pause_hits > 0,
+          "a miss fails while an unfit buffer is hit and let go at each pause of its search");
+    check(service_points - points > 16, "and each turn of the search ends at a service point");
+    restore_hook = 0;
+    pause_hits = 0;
+    if (b) {
+        bcache_release(b);
+    }
+    pause_release();
+    fail_writes = 0;
+    (void)bcache_sync(&vast);
+    (void)bcache_invalidate(&vast);
+}
+
+/**
  * A miss under the big lock on a cache whose every buffer but one is held:
  * the one fit buffer, hit and let go at the search's first pause, goes
  * behind the buffers the turn passed over, and the next turn takes it. Hit
@@ -1796,6 +1837,7 @@ static void victim_pause_rows(void)
     }
     pause_release();
     (void)bcache_invalidate(&vast);
+    victim_unfit_rows();
 }
 
 /* A device of more blocks than the index has buckets, which the index row
