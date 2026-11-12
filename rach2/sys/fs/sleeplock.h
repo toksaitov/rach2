@@ -37,6 +37,13 @@ struct sleep_lock_record {
 #endif
 };
 
+/* kernel.lock_stat: nonzero while the holds of the sleeping locks are
+ * timed for their records, as Linux's lock_stat sysctl turns its record of
+ * lock holds on (kernel/locking/lockdep.c); 0 at boot, since a stamp costs
+ * each take a read of the clock. A hold counts only when this was on at its
+ * take. */
+extern int sleep_lock_stat;
+
 /* A record with nothing counted yet, of the kind named `kind`. */
 #ifdef RACH2_LOCKDEP
 #define SLEEP_LOCK_RECORD(kind) {(kind), 0, 0, 0, {0}, 0, 0, {0}}
@@ -55,12 +62,13 @@ struct sleep_lock_record {
  * takes. A caller takes a place in line (`next`) and waits until the lock
  * is free and its place is the one served (`serving`), so a process that
  * gives the lock back and asks again waits behind everyone who asked
- * meanwhile. A hold lasts from the first take to the last give;
- * `taken_waits` and `taken_at` are its start, by the holder's `disk_waits`
- * and by `arch_cycles` where `timer_cycles_agree` says the processors'
- * counters can time it (`taken_by_cycles`), so that a take reads the
- * counter and no clock, as Linux's mutex_lock reads none, and by
- * `timer_now_us` elsewhere. `spin` keeps every field but `wq`.
+ * meanwhile. A hold lasts from the first take to the last give. A hold
+ * taken while `sleep_lock_stat` is on is `timed`: `taken_waits` and
+ * `taken_at` are its start, by the holder's `disk_waits` and by
+ * `arch_cycles` where `timer_cycles_agree` says the processors' counters
+ * can time it (`taken_by_cycles`), and by `timer_now_us` elsewhere. Any
+ * other hold reads neither, as Linux's mutex_lock reads no clock. `spin`
+ * keeps every field but `wq`.
  */
 struct sleep_lock {
     struct spinlock spin;
@@ -70,6 +78,7 @@ struct sleep_lock {
     uint32_t serving;
     uint64_t taken_at;
     int taken_by_cycles;
+    int timed; /* the hold is stamped, for its record */
     uint32_t taken_waits;
     int flags;                        /* SLEEP_LOCK_FILE or 0 */
     struct sleep_lock_record *record; /* its kind's, or NULL */
@@ -111,8 +120,9 @@ void sleep_lock_take(struct sleep_lock *l);
 
 /**
  * Give back one take of `l`. The last lets the next waiter in, and when
- * the hold crossed a disk wait, counts it in the lock's record and keeps it
- * there if it was the longest. Panics when the caller does not hold `l`.
+ * the hold was timed (`sleep_lock_stat`) and crossed a disk wait, counts it
+ * in the lock's record and keeps it there if it was the longest. Panics
+ * when the caller does not hold `l`.
  */
 void sleep_lock_give(struct sleep_lock *l);
 

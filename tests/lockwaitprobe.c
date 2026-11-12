@@ -15,7 +15,9 @@
  * must have finished at least one round for each of them: a slow request
  * on one file leaves the users of another file of the same mount running.
  * The kernel counts both; the clock is not read. /proc/fs/lockwait is
- * printed before the counts are judged, and must have its `mount` line.
+ * printed before the counts are judged, and must have its `mount` line;
+ * each row first turns on kernel.lock_stat, without which the kernel times
+ * no hold for it.
  *
  * `lockwaitprobe stress`, with the same volume and no lag: a child takes the
  * machine's free memory and the buffer cache's, but for a sixteenth of the
@@ -202,6 +204,19 @@ static void write_all(int fd, const unsigned char *from, unsigned len, const cha
     if (rc != (long)len) {
         fail_rc(what, rc);
     }
+}
+
+/** Turn on kernel.lock_stat, so that the sleeping locks time their holds
+ * for /proc/fs/lockwait. */
+static void lock_stat_on(void)
+{
+    int fd = syscall3(SYS_OPEN, (long)"/proc/sys/kernel/lock_stat", O_WRONLY, 0);
+
+    if (fd < 0) {
+        fail_rc("opening /proc/sys/kernel/lock_stat", fd);
+    }
+    write_all(fd, (const unsigned char *)"1\n", 2, "the write of kernel.lock_stat");
+    syscall1(SYS_CLOSE, fd);
 }
 
 /** Mount the root disk's second partition, ext2, on `dir`. */
@@ -749,6 +764,7 @@ void probe_main(unsigned long *sp)
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
 
+    lock_stat_on();
     if (argc >= 2 && same(argv[1], "lag")) {
         run_lag();
     } else if (argc >= 2 && same(argv[1], "stress")) {

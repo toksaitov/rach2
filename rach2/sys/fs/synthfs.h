@@ -394,6 +394,9 @@ int synth_sys_count(void);
 #define SYNTH_SYS_DIRTY_RATIO            81
 #define SYNTH_SYS_DIRTY_WRITEBACK        82
 #define SYNTH_SYS_DIRTYTIME_EXPIRE       83
+/* The entry of kernel/lock_stat, whose value is fs/sleeplock.h's
+ * `sleep_lock_stat`. */
+#define SYNTH_SYS_LOCK_STAT              84
 /**
  * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
  * in `*dir`, `all`, `default` or an interface's, and in `*key` the

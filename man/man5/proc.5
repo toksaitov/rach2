@@ -558,8 +558,10 @@ and
 One line for each kind of sleeping lock the kernel has used, in the order
 of first use:
 .Dl KIND HOLDS LONGEST_US PID NAME
-A hold counts when its holder finished a wait for the disk while it held
-the lock.
+A hold counts when
+.Pa /proc/sys/kernel/lock_stat
+was nonzero at its take and its holder finished a wait for the disk while
+it held the lock; it is 0 at boot, and a take then reads no clock.
 HOLDS is the number of such holds since boot, modulo 2^32; LONGEST_US is
 the longest of them in microseconds, which reads short past 71 minutes;
 PID and NAME are that hold's thread ID and name, or
@@ -1200,6 +1202,11 @@ on the boot line sets it, 30 without, and a write of any int sets it;
 on the boot line and 0 without, which a write of any int sets; an
 exception the kernel takes in its own code panics whatever the value, as
 Linux's oops does with it set;
+.Pa kernel/lock_stat ,
+0 at boot, which a write of any int sets: while it is not 0 each hold of
+a sleeping lock is timed for
+.Pa /proc/fs/lockwait ,
+as Linux's lock_stat times lock holds;
 .Pa crypto/fips_enabled ,
 0, since the kernel is not in FIPS mode, which libgcrypt and OpenSSL read;
 .Pa user/max_mnt_namespaces ,
