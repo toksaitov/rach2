@@ -1154,8 +1154,9 @@ static int unit_start(struct vtd_unit *u, const struct dmar_unit_desc *desc, int
 /**
  * Read each unit of segment 0 and leave it as the firmware left it, but
  * for translation, which goes off when it was on: the boot line's
- * `intel_iommu=off intremap=off`, under which Linux too programs no unit
- * (`intel_iommu_init` stops at `intel_disable_iommus`). The units read.
+ * `intel_iommu=off` with `nointremap` or `intremap=off`, under which Linux
+ * too programs no unit (`intel_iommu_init` stops at `intel_disable_iommus`).
+ * The units read.
  */
 static int vtd_read_only(void)
 {
@@ -1183,7 +1184,8 @@ static int vtd_read_only(void)
         }
         n++;
     }
-    klog(KLOG_INFO, "vtd", "off by intel_iommu=off intremap=off: %d units read", n);
+    klog(KLOG_INFO, "vtd", "off by intel_iommu=off and nointremap or intremap=off: %d units read",
+         n);
     return n;
 }
 

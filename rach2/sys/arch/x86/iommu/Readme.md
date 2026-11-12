@@ -19,7 +19,7 @@ Words of the boot line change this, as Linux's do ([the command line](../../../.
 * `intremap=no_x2apic_optout`: the x2APIC format is taken although the DMAR table opts out of x2APIC mode.
 * `nox2apic`: the entries keep the xAPIC format ([the PC platform](../Readme.md)).
 
-With translation and remapping both off, as on Linux, no unit is programmed: each unit's version, capabilities and status are read and logged, translation is turned off only if the firmware left it on, and nothing else is written. The log says `vtd: off by intel_iommu=off intremap=off: N units read`.
+With translation and remapping both off, as on Linux, no unit is programmed: each unit's version, capabilities and status are read and logged, translation is turned off only if the firmware left it on, and nothing else is written. The log says `vtd: off by intel_iommu=off and nointremap or intremap=off: N units read`.
 
 A blocked DMA request or interrupt is logged with Linux's words for its reason, under the rate limit Fault reports describes, and every one recorded is counted in `/proc/stat` (`iommu_dma_faults`, `iommu_irq_faults`). How the handler reads the records is in Fault reports, below. A fault that finds every record full is lost; the unit says so only by its overflow bit, which counts as one DMA fault and is logged as `vtd: fault: dmarN: faults lost, every record full: K times, so F DMA faults is a floor`, under the same limit, which logs `vtd: fault: N lines suppressed` for the lines it held back:
 

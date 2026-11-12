@@ -2365,7 +2365,8 @@ static void row_read_only(void)
               logged("vtd: dmar1: at 0xfed91000, version 1.0, cap 0xd2008020660462, ecap 0xf010da"),
           "both units read");
     check(logged("vtd: dmar0: status 0x0") && logged("vtd: dmar1: status 0x0"), "status read");
-    check(logged("vtd: off by intel_iommu=off intremap=off: 2 units read"), "logged");
+    check(logged("vtd: off by intel_iommu=off and nointremap or intremap=off: 2 units read"),
+          "logged");
     msi_of(0, DF(0x1F, 2), &a, &data);
     check(a == 0xFEE00000u && data == 50, "the message as it was");
     row_end();
