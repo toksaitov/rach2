@@ -1398,10 +1398,10 @@ static void key_held(struct bbuf *b, block_device_t *dev, uint64_t blk)
  * A hit and a miss that finds a clean victim near the head of the release
  * order (`victim_clean`) take `cache_spin` alone, so a caller without the
  * big lock reads a cached block, or one that the cache can make room for
- * with no write, without it, as Linux's `__getblk_slow` needs no global
- * lock. A miss without the big lock that finds no clean victim takes the
- * big lock for the whole search, whose writes of a dirty victim keep the
- * order the dirty marks give, and lets it go at the return.
+ * with no write, without it, as Linux's `__getblk_slow` (fs/buffer.c:1117)
+ * needs no global lock. A miss without the big lock that finds no clean
+ * victim takes the big lock for the whole search, whose writes of a dirty
+ * victim keep the order the dirty marks give, and lets it go at the return.
  */
 static struct bbuf *get(block_device_t *dev, uint64_t blk, int blank, int *fresh)
 {
