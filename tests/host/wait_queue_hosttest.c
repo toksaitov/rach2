@@ -24,10 +24,18 @@
  * blocked before it tests its condition, so a wake made during a false
  * test is not lost, and `wq_complete` sets its flag and wakes together.
  *
+ * Each queue has its own lock, and the interrupts a wake asks for go out
+ * after it: every call leaves its queue's lock free, a poller on two queues
+ * is made ready by the first wake and asks for one interrupt, and no
+ * interrupt is sent while a queue's lock is held. A wake for a waker with
+ * a lock of its own adds its interrupts to the waker's set and sends none.
+ *
  * The test defines WAIT_QUEUE_HOSTTEST, under which wait_queue.c masks no
- * interrupt, takes no lock and does not halt, and a wake marks the process
- * ready itself, and includes the file whole so that its static enqueue and
- * dequeue can be called.
+ * interrupt and does not halt, a queue's lock is a word it sets and clears
+ * and counts in `wq_host_held`, a wake marks the process ready itself, and
+ * an interrupt is counted in `wq_host_kicks`, and in `wq_host_kicks_held`
+ * when a queue's lock is held; it includes the file whole so that its
+ * static enqueue and dequeue and those counts can be reached.
  */
 #define WAIT_QUEUE_HOSTTEST
 
@@ -242,7 +250,7 @@ static int woken_in_test(void *arg)
  * A sleep files itself on its queue and is blocked before it tests its
  * condition, so a wake that comes after a false test finds it and makes it
  * ready, and it tests again instead of sleeping; and `wq_complete` sets its
- * flag and wakes the waiters in one hold of the queues' lock.
+ * flag and wakes the waiters in one hold of the queue's lock.
  */
 static void filed_first(void)
 {
@@ -269,6 +277,63 @@ static void filed_first(void)
     enqueue(&filed_wq, &waiter);
     wq_complete(&filed_wq, &done);
     CHECK(done == 1 && waiter.state == PROC_READY && total_queued(&filed_wq) == 0);
+}
+
+/**
+ * Each queue's lock is free after every call, a poller's two records make
+ * it ready once and ask for one interrupt, to the processor it ran on, and
+ * every interrupt goes out with no queue's lock held; `wq_complete` and
+ * `wq_wake_proc` send theirs the same way, and `wq_wake_all_deferred`
+ * leaves them in the caller's set.
+ */
+static void own_locks(void)
+{
+    static wait_queue_t qa, qb, qc;
+    static process_t poller, other, lone;
+    static struct wq_waiter rec[2];
+    volatile int done = 0;
+    uint64_t cpus = 0;
+    int kicks = wq_host_kicks;
+
+    wait_queue_init(&qa);
+    wait_queue_init(&qb);
+    wait_queue_init(&qc);
+    poller.cpu = 3;
+    other.cpu = 5;
+    poller.state = other.state = PROC_BLOCKED;
+    poller.woken = other.woken = 0;
+    rec[0].proc = rec[1].proc = &poller;
+    wq_poll_add(&qa, &rec[0]);
+    wq_poll_add(&qb, &rec[1]);
+    enqueue(&qa, &other);
+    CHECK(qa.lock.locked == 0 && qb.lock.locked == 0 && wq_host_held == 0);
+
+    wq_wake(&qa, WQ_DATA);
+    CHECK(poller.state == PROC_READY && poller.woken == 1);
+    CHECK(other.state == PROC_READY && other.woken == 1);
+    CHECK(wq_host_kicks == kicks + 2 && wq_host_kicks_held == 0);
+    wq_wake(&qb, WQ_DATA);
+    CHECK(wq_host_kicks == kicks + 2 && total_queued(&qb) == 0);
+    CHECK(qa.lock.locked == 0 && qb.lock.locked == 0 && wq_host_held == 0);
+
+    other.state = PROC_BLOCKED;
+    enqueue(&qc, &other);
+    wq_complete(&qc, &done);
+    CHECK(done == 1 && other.state == PROC_READY && wq_host_kicks == kicks + 3);
+    lone.cpu = 7;
+    lone.state = PROC_BLOCKED;
+    wq_wake_proc(&lone);
+    CHECK(lone.state == PROC_READY && wq_host_kicks == kicks + 4);
+    wq_wake_proc(&lone);
+    CHECK(wq_host_kicks == kicks + 4);
+
+    poller.state = other.state = PROC_BLOCKED;
+    wq_poll_add(&qa, &rec[0]);
+    enqueue(&qa, &other);
+    wq_wake_all_deferred(&qa, &cpus);
+    CHECK(cpus == (((uint64_t)1 << 3) | ((uint64_t)1 << 5)));
+    CHECK(wq_host_kicks == kicks + 4 && wq_wakes(&qa, WQ_ALL) == 4);
+    CHECK(qa.lock.locked == 0 && wq_host_held == 0 && wq_host_kicks_held == 0);
 }
 
 /** Run every check; the exit status is the count of failed checks, at most
@@ -357,10 +422,12 @@ int main(void)
         CHECK(blocks == 2);
         CHECK(deadline_at_block[0] == 77 && deadline_at_block[1] == 77);
         CHECK(sleeper.state == PROC_RUNNING && total_queued(&wq) == 0);
+        CHECK(wq.lock.locked == 0 && wq_host_held == 0);
         current_proc = 0;
     }
     wake_kinds();
     wake_order();
     filed_first();
+    own_locks();
     return fails > 255 ? 255 : fails;
 }

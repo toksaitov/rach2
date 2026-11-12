@@ -3,6 +3,7 @@
 #define _WAIT_QUEUE_H_
 
 #include "../lib/kint.h"
+#include "../lib/spinlock.h"
 #include "process.h"
 
 /*
@@ -23,9 +24,11 @@
  * poller supplies one per watched object, from an array it took from the
  * heap before it began, so entering a queue allocates nothing and no queue
  * has a size. A sleeper files itself and is marked BLOCKED before it tests
- * its condition, with interrupts off until it blocks, and the lists and
- * the wakes are under a spinlock of the wait queues', so no wake is lost
- * to a waker on any processor (wait_queue.c).
+ * its condition, with interrupts off until it blocks, and each queue's list
+ * and its wakes are under the queue's own spinlock, as Linux's
+ * `wq_head->lock` (kernel/sched/wait.c:8-13), so no wake is lost to a
+ * waker on any processor and wakers of two queues do not wait on each
+ * other (wait_queue.c).
  *
  * A wake says what kind of change it is for the pollers of the queue: data
  * to read, room to write, or a hangup or an error. The queue counts the
@@ -42,6 +45,9 @@
 typedef struct wait_queue {
     /* The sleepers' and pollers' records, the oldest first. */
     struct wq_waiter *head;
+    /* Over `head`, `wakes` and the wakes made from the list; zero is free,
+     * so a queue in a zeroed record needs no init. */
+    struct spinlock lock;
     /* The wakes of each kind, in the order of their bits. They wrap. */
     uint32_t wakes[WQ_KINDS];
 } wait_queue_t;
@@ -55,8 +61,9 @@ typedef struct wait_queue {
  */
 typedef int (*wq_cond_fn)(void *arg);
 
-/** Make `wq` an empty queue, with no wakes counted; a NULL `wq` is
- * ignored. Called once before the queue's first use. */
+/** Make `wq` an empty queue, with no wakes counted and its lock free; a
+ * NULL `wq` is ignored. Called once before the queue's first use, never on
+ * a queue in use. */
 void wait_queue_init(wait_queue_t *wq);
 
 /**
@@ -122,20 +129,31 @@ int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg);
  * socket's queue for the senders that wait on it, passes none. A NULL `wq`
  * is ignored. Safe to call from an interrupt handler, since it turns
  * interrupts off around the walk; a woken sleeper re-checks its own
- * condition, so a spurious wake is harmless.
+ * condition, so a spurious wake is harmless. The interrupts that tell other
+ * processors to select are sent after the queue's lock is let go.
  */
 void wq_wake(wait_queue_t *wq, uint32_t kinds);
+
+/**
+ * `wq_wake_all` for a waker that holds a spinlock of its own: the
+ * processors the wakes would interrupt are added to the set `*cpus`, one
+ * bit each, which the caller passes to `sched_kick_cpus` once its lock is
+ * let go, as Linux's futex_wake fills a wake_q under the bucket's lock and
+ * wakes it after (kernel/futex/waitwake.c:160-199).
+ */
+void wq_wake_all_deferred(wait_queue_t *wq, uint64_t *cpus);
 
 /** wq_wake for every kind of change: for a queue no poller watches, and for
  * a change of every kind, such as a close. */
 void wq_wake_all(wait_queue_t *wq);
 
 /**
- * Set `*done` to 1 and wake every process on `wq`, both under the wait
- * queues' lock, as Linux's `complete` sets its count under the wait's lock:
- * a waiter whose condition reads `*done` leaves its queue under the same
+ * Set `*done` to 1 and wake every process on `wq`, both under the queue's
+ * lock, as Linux's `complete` sets its count under the wait's lock: a
+ * waiter whose condition reads `*done` leaves its queue under the same
  * lock, so the caller is done with `wq` and `done` before the waiter can
- * return and let the memory that holds them go, a record on its stack.
+ * return and let the memory that holds them go, a record on its stack. The
+ * interrupts the wakes need are sent after, from the caller's stack.
  */
 void wq_complete(wait_queue_t *wq, volatile int *done);
 
