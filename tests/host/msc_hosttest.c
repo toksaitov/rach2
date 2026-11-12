@@ -4,6 +4,8 @@
  * `msc.c` is included rather than linked, so that the model can reach the
  * driver's own static state between rows and put it back.
  *
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/bkl_held.c
+ *
  * A flash drive is the one device in this kernel that can be taken out of the
  * machine in the middle of a transfer, and the states that follow from that
  * cannot be produced on demand anywhere else: a drive that fails `TEST UNIT
@@ -1020,6 +1022,37 @@ static struct block_request *make_request(int write, uint64_t lba, uint32_t coun
     return &r;
 }
 
+/* The big lock of `compat/bkl_held.c`: a row that sets `bkl_host_free`
+ * stands for a caller without it, and `bkl_host_takes` counts the driver's
+ * takes. */
+extern int bkl_host_free;
+extern int bkl_host_takes;
+
+/** A read handed over by a caller without the big lock is admitted under
+ * one take of it, which the driver gives back, and the unit is one the
+ * block layer calls without the lock. */
+static void unlocked_submit(void)
+{
+    static unsigned char buf[8 * SECTOR];
+    struct block_request *r = make_request(0, 2, 8, buf);
+    int i;
+
+    CHECK("the block layer calls the stick without the big lock",
+          (msc_block_device(0)->flags & BLOCK_UNLOCKED) != 0);
+    block.completions = 0;
+    bkl_host_free = 1;
+    bkl_host_takes = 0;
+    CHECK("a read from a caller without the big lock is taken",
+          msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+    CHECK("and admitted under one take of the big lock, which is given back",
+          bkl_host_takes == 1 && !bkl_held());
+    bkl_host_free = 0;
+    for (i = 0; i < 20 && block.completions == 0; i++) {
+        pump(1);
+    }
+    CHECK("and completes", block.completions == 1 && block.last_status == 0);
+}
+
 /**
  * Check that a stick refused at its initialization deadline stops counting
  * as starting, and then bring up a stick that comes up at once, counted as
@@ -1222,6 +1255,7 @@ int main(void)
               page[0] == dev.medium[2 * SECTOR] && page[SECTOR] == dev.medium[3 * SECTOR]);
         CHECK("as one command, counted", commands_counted == 1);
     }
+    unlocked_submit();
 
     /* A read of the driver's largest request, 1024 sectors. */
     {
