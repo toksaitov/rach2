@@ -559,12 +559,21 @@ int32_t i915_pci_probe(const pci_device_t *pdev)
     return err;
 }
 
+/** Nothing binds, the fake device included, when `i915.modeset`, Linux's
+ * int module parameter of -1 (drivers/gpu/drm/i915/i915_params.h, line 49),
+ * is 0, or is -1 under `nomodeset`, as i915_check_nomodeset keeps the
+ * whole module from loading (drivers/gpu/drm/i915/i915_module.c, lines 22
+ * to 50). */
 int32_t i915_probe(void)
 {
     pci_device_t pdev;
     int32_t err, bound = 0;
-    int i, nth;
+    int i, nth, modeset = kcmdline_param_int("i915.modeset", -1);
 
+    if (modeset == 0 || (modeset == -1 && kcmdline_setup("nomodeset"))) {
+        klog(KLOG_INFO, "i915", "KMS disabled");
+        return -ENODEV;
+    }
     for (i = 0; i < i915_nids; i++) {
         for (nth = 0; pci_find_nth_by_id(PCI_VENDOR_INTEL, i915_ids[i].device_id, nth, &pdev);
              nth++) {

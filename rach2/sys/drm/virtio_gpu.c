@@ -11,6 +11,7 @@
 #include "../dmabuf/dmabuf.h"
 
 #include "../arch/arch.h"
+#include "../cmdline.h"
 #include "../klog.h"
 #include "../lib/kdef.h"
 #include "../lib/kerrno.h"
@@ -2325,13 +2326,23 @@ static int32_t vgpu_config_init(struct virtio_gpu_device *vg)
  * registered. 0 or -errno, with the device reset. The driver calls
  * virtio_put once it is done with `vdev`: at once on an error, and at the
  * device's release otherwise.
+ *
+ * EINVAL when `virtio_gpu.modeset`, Linux's int module parameter of -1
+ * (drivers/gpu/drm/virtio/virtgpu_drv.c, lines 45 to 48), is 0, or is -1
+ * under `nomodeset`, as virtio_gpu_probe refuses the device (lines 74 to
+ * 78), so that the firmware's framebuffer stays.
  */
 int32_t virtio_gpu_bind(struct virtio_dev *vdev)
 {
     struct virtio_gpu_device *vg;
     const pci_device_t *pci = virtio_pci_function(vdev);
     int32_t rc;
+    int modeset = kcmdline_param_int("virtio_gpu.modeset", -1);
 
+    if (modeset == 0 || (modeset == -1 && kcmdline_setup("nomodeset"))) {
+        virtio_put(vdev);
+        return -EINVAL;
+    }
     vg = (struct virtio_gpu_device *)kzalloc(sizeof(*vg));
     if (!vg) {
         virtio_put(vdev);

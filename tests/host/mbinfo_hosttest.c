@@ -3,6 +3,7 @@
  * multiboot2 tag lists and Multiboot structures built here.
  *
  * host-deps: rach2/sys/arch/x86/mbinfo.c rach2/sys/cmdline.c
+ * host-deps: rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
  * Each row writes a tag list the way the Multiboot2 Specification lays it

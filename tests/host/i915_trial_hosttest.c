@@ -144,6 +144,20 @@ int kcmdline_has(const char *flag)
            (opt_nodisplay && strcmp(flag, "rach2.i915.disable_display") == 0);
 }
 
+/** No `nomodeset` on the boot line. */
+int kcmdline_setup(const char *str)
+{
+    (void)str;
+    return 0;
+}
+
+/** No module parameter on the boot line. */
+int kcmdline_param_int(const char *key, int dflt)
+{
+    (void)key;
+    return dflt;
+}
+
 /** The fake chip, which i915_fake_hosttest.c tests: no command line here
  * names it, so the probe never runs. */
 int32_t i915_fake_probe(void)

@@ -145,6 +145,19 @@ int kcmdline_bool(const char *key, int dflt);
 int kcmdline_param_bool(const char *key, int dflt);
 
 /**
+ * The int module parameter `key`, read as Linux's param_set_int reads it
+ * (Linux 6.12.115, kernel/params.c:237): each `key=value` token in the
+ * line's order whose value kstrtoint takes in base 0, an optional sign,
+ * then hexadecimal after `0x`, octal after a leading 0 or decimal, and at
+ * most one newline, all of it within an int, sets the value, so that the
+ * last such token wins. A bare `key` or any other value sets nothing, as
+ * parse_one refuses it (kernel/params.c:117-157).
+ *
+ * @return the value, or `dflt` when no token gives one.
+ */
+int kcmdline_param_int(const char *key, int dflt);
+
+/**
  * Read the text `text` as Linux's `kstrtobool` reads it, as `kcmdline_bool`
  * reads each value, and set `*out` to 1 or 0.
  *

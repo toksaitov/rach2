@@ -4,6 +4,7 @@
  */
 #include "cmdline.h"
 #include "boot.h"
+#include "lib/kstd.h"
 #include "lib/kstring.h"
 
 /* The buffer's bytes, the NUL included: one fewer than the boot record's
@@ -469,6 +470,25 @@ int kcmdline_bool(const char *key, int dflt)
 int kcmdline_param_bool(const char *key, int dflt)
 {
     return cmdline_bool(key, dflt, 1);
+}
+
+/** The value is read in place by k_strtoll, Linux's kstrtoll, whose range
+ * kstrtoint then narrows to an int (lib/kstrtox.c:156-177 and 259-271). */
+int kcmdline_param_int(const char *key, int dflt)
+{
+    size_t klen = k_strlen(key);
+    const char *p = kcmdline;
+    struct arg a;
+    long long v;
+    int value = dflt;
+
+    while (next_arg(&p, &a)) {
+        if (a.val != 0 && arg_is(&a, key, klen) && k_strtoll(a.val, a.vlen, &v) == 0 &&
+            v >= -0x7FFFFFFFLL - 1 && v <= 0x7FFFFFFFLL) {
+            value = (int)v;
+        }
+    }
+    return value;
 }
 
 int kcmdline_param_nth(const char *key, int nth, char *out, unsigned int outlen)
