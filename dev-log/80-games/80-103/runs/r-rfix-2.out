@@ -1,0 +1,13 @@
+booted rach2 kernel-rfix
+== sleep 2  2.00 s
+[?2004h
+<7>[6.313000] virtio_gpu: worker: pid 75
+<6>[6.314000] console: card0: handed to a master, the keyboard off
+[?2004l
+__END__0
+   exits=4557 halt_exits=2011 io_exits=105 mmio_exits=0 irq_exits=150 irq_window_exits=2 request_irq_exits=0 nmi_window_exits=0 insn_emulation=168 hypercalls=0 irq_injections=2017 halt_successful_poll=0 halt_wakeup=2012 req_event=4038 unnamed=2289
+== tar cf - /opt/proton | cat > /dev/null  4.26 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+__END__0
+   exits=308025 halt_exits=71650 io_exits=276 mmio_exits=154776 irq_exits=8389 irq_window_exits=7494 request_irq_exits=0 nmi_window_exits=0 insn_emulation=155067 hypercalls=0 irq_injections=80233 halt_successful_poll=58773 halt_wakeup=8239 req_event=128400 unnamed=65440
