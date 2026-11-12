@@ -214,6 +214,14 @@ int filemap_disk_shared_mapped(const struct vfs_mount *mnt, uint64_t ino)
     return mapped;
 }
 
+/** No file of the model is in memory: nothing maps its own pages. */
+int filemap_memory_shared_writable(const struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    (void)node;
+    return 0;
+}
+
 /** No row keeps resident file pages for a private mapping. */
 void filemap_disk_written(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, const void *buf,
                           uint32_t len)

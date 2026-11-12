@@ -77,6 +77,8 @@ A source descriptor is absent or does not name a tmpfs regular file.
 .It Bq Er EINVAL
 A range is misaligned, outside its file, lacks the required seal or has
 the write seal; the list or total size exceeds its bound, or is empty.
+.It Bq Er EBUSY
+A loop device stands on a memfd of the list.
 .It Bq Er EFAULT
 An argument cannot be read.
 .It Bq Er ENOMEM

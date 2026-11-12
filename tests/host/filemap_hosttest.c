@@ -392,6 +392,23 @@ int loop_backs(struct vfs_mount *mnt, void *node)
     return 0;
 }
 
+/* tmpfs's type, which no mount of the model has. */
+const struct vfs_type vfs_tmpfs_type = {"tmpfs", 0, 0, 0, 0};
+
+/** Not reached. */
+struct shmem *tmpfs_shmem(void *node)
+{
+    (void)node;
+    return NULL;
+}
+
+/** Not reached. */
+uint32_t tmpfs_seals(void *node)
+{
+    (void)node;
+    return 0;
+}
+
 /** Not reached. */
 void paging_zap_where(int (*match)(const struct vma *r, void *arg, uintptr_t *lo, uintptr_t *hi),
                       void *arg)

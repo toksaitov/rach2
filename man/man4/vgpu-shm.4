@@ -105,7 +105,8 @@ counts both in
 .It Bq Er EPERM
 The caller is not privileged.
 .It Bq Er EBUSY
-A region is already attached.
+A region is already attached, or a loop device stands on the region's
+file.
 .It Bq Er EBADF
 The region's descriptor does not name a tmpfs file, or an eventfd's
 descriptor is not an eventfd.

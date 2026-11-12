@@ -7,6 +7,7 @@
 #include "virtio.h"
 
 #include "../arch/arch.h"
+#include "../block/loop.h"
 #include "../drm/drm.h"
 #include "../fs/devfs.h"
 #include "../fs/fd.h"
@@ -1734,7 +1735,8 @@ static int32_t vshm_bells_get(struct vshm *vs, const struct vgs_attach *a)
 /**
  * The caller's descriptor `fd` as a region: a tmpfs file, a memfd, sealed
  * against shrinking, whose size is a power of two the transport takes.
- * Returns its memory, or NULL with `*err` -EBADF or -EINVAL.
+ * Returns its memory, or NULL with `*err` -EBADF, -EBUSY for a file a loop
+ * device stands on, or -EINVAL.
  */
 static struct shmem *vshm_region_of(int32_t fd, int32_t *err)
 {
@@ -1745,6 +1747,10 @@ static struct shmem *vshm_region_of(int32_t fd, int32_t *err)
     if (!e || (e->flags & FD_FLAG_PATH) || !e->ofd || !e->ofd->vmnt ||
         e->ofd->vmnt->type != &vfs_tmpfs_type || !(sh = tmpfs_shmem(e->ofd->vnode))) {
         return NULL;
+    }
+    *err = -EBUSY;
+    if (loop_backs(e->ofd->vmnt, e->ofd->vnode)) {
+        return NULL; /* its pages are reached through the device alone */
     }
     *err = -EINVAL;
     if (!(tmpfs_seals(e->ofd->vnode) & TMPFS_SEAL_SHRINK) || sh->size < VGS_REGION_MIN ||

@@ -7972,16 +7972,16 @@ static int32_t mmap_secret(const fd_entry_t *e, struct shmem *sh, int shared,
  * ext2's inode number names one file for as long as anything holds it, which
  * is what the pages are found by. Private tmpfs and ext2 mappings borrow
  * those same pages until their first store makes a copy. A shared mapping
- * through a descriptor open for writing of a file that backs a loop device
- * fails with EBUSY, as write(2)
- * to the file does. A shared mapping of a file of another disk file system,
- * whose inode numbers follow names, is served as a private one when it is
- * read-only, which reads the same bytes, and fails with ENODEV when it may be
- * written. A shared mapping served as a private one, or made through a
- * descriptor not open for writing, is given VM_PROT_NOWRITE, so that mprotect
- * cannot make it writable later. A file of memfd_secret maps as
- * `mmap_secret` says. The file's path is built at each reading of
- * /proc/PID/maps (`procfs_maps_names`), as Linux's d_path at that read.
+ * of a tmpfs or ext2 file through a descriptor open for writing fails with
+ * EBUSY while the file backs a loop device, as write(2) to the file does.
+ * A shared mapping of a file of another disk file system, whose inode
+ * numbers follow names, is served as a private one when it is read-only,
+ * which reads the same bytes, and fails with ENODEV when it may be written.
+ * A shared mapping served as a private one, or made through a descriptor
+ * not open for writing, is given VM_PROT_NOWRITE, so that mprotect cannot
+ * make it writable later. A file of memfd_secret maps as `mmap_secret`
+ * says. The file's path is built at each reading of /proc/PID/maps
+ * (`procfs_maps_names`), as Linux's d_path at that read.
  */
 static int32_t mmap_file(fd_entry_t *e, int shared, struct map_source *src)
 {
@@ -8001,7 +8001,8 @@ static int32_t mmap_file(fd_entry_t *e, int shared, struct map_source *src)
     if (shared && !sh && !disk && (src->prot & VM_PROT_WRITE)) {
         return -ENODEV;
     }
-    if (shared && disk && (e->flags & FD_FLAG_WRITE) && loop_backs(e->ofd->vmnt, e->ofd->vnode)) {
+    if (shared && (sh || disk) && (e->flags & FD_FLAG_WRITE) &&
+        loop_backs(e->ofd->vmnt, e->ofd->vnode)) {
         return -EBUSY;
     }
     if (shared && (!(e->flags & FD_FLAG_WRITE) || (!sh && !disk))) {

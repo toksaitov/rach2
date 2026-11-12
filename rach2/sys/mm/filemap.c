@@ -1289,6 +1289,25 @@ int filemap_disk_shared_mapped(const struct vfs_mount *mnt, uint64_t ino)
     return 0;
 }
 
+int filemap_memory_shared_writable(const struct vfs_mount *mnt, void *node)
+{
+    const struct shmem *sh;
+    const struct filemap *m;
+
+    if (mnt->type != &vfs_tmpfs_type || !(sh = tmpfs_shmem(node))) {
+        return 0;
+    }
+    if (tmpfs_seals(node) & TMPFS_SEAL_SHRINK) {
+        return 1;
+    }
+    for (m = maps; m; m = m->next) {
+        if (m->sh == sh && m->shared && (m->entry.flags & FD_FLAG_WRITE)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int filemap_disk_stores(const struct vfs_mount *mnt, uint64_t ino)
 {
     const struct dshare *ds;

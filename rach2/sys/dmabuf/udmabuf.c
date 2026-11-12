@@ -4,6 +4,7 @@
 #include "../fs/sysfs.h"
 #include "../fs/synthfs.h"
 #include "../fs/tmpfs.h"
+#include "../block/loop.h"
 #include "../mm/shmem.h"
 #include "../mm/paging.h"
 #include "../mm/kheap.h"
@@ -114,6 +115,10 @@ static int32_t udma_create(uint32_t flags, uint32_t count, struct udmabuf_create
         seals = tmpfs_seals(e->ofd->vnode);
         if (!(seals & TMPFS_SEAL_SHRINK) || (seals & TMPFS_SEAL_WRITE))
             goto fail;
+        if (loop_backs(e->ofd->vmnt, e->ofd->vnode)) {
+            rc = -EBUSY; /* its pages are reached through the device alone */
+            goto fail;
+        }
         if (items[i].offset > sh->size || items[i].size > sh->size - items[i].offset)
             goto fail;
         pages = (uint32_t)(items[i].size >> 12);

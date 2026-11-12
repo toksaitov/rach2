@@ -98,6 +98,17 @@ int filemap_disk_stores(const struct vfs_mount *mnt, uint64_t ino);
  * mappings alone do not prevent a loop device attaching the file. */
 int filemap_disk_shared_mapped(const struct vfs_mount *mnt, uint64_t ino);
 
+/**
+ * Whether stores may reach the pages of `node`, a file of `mnt`, without a
+ * write of the file: on tmpfs, a shared mapping through a descriptor open
+ * for writing, which maps the file's own pages, or a seal against shrinking,
+ * which /dev/udmabuf and the virtio shared-memory transport require before
+ * they hand the pages to a device or a mapping and keep no record against
+ * the file. 0 on any other type. A loop device does not attach such a file.
+ * Under the big lock, as mmap makes its backing.
+ */
+int filemap_memory_shared_writable(const struct vfs_mount *mnt, void *node);
+
 /** After a disk write, copy the `len` bytes at `off` from kernel buffer
  * `buf` into the resident clean pages of the file `ino` on `mnt`. The
  * caller holds the file's lock. Does not sleep or allocate. */

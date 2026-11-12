@@ -257,6 +257,20 @@ void filecache_dontneed(struct open_file *ofd, uint64_t offset, uint64_t len)
 }
 #include "block/loop.c"
 #include "mm/filemap.c"
+
+/** No file of the rows is on tmpfs: not reached. */
+struct shmem *tmpfs_shmem(void *node)
+{
+    (void)node;
+    return NULL;
+}
+
+/** No file of the rows is on tmpfs: not reached. */
+uint32_t tmpfs_seals(void *node)
+{
+    (void)node;
+    return 0;
+}
 #include "ns_first.h"
 
 extern int printf(const char *format, ...);
@@ -316,6 +330,8 @@ const struct vfs_type vfs_exfat_type = {"exfat", 0, 0, 0, 0};
 /* ext2, the type whose files a shared mapping keeps pages of, for the race
  * row, unserialised as it is. */
 const struct vfs_type vfs_ext2_type = {"ext2", 0, 0, 0, 0};
+/* tmpfs's type, which no mount of the rows has. */
+const struct vfs_type vfs_tmpfs_type = {"tmpfs", 0, 0, 0, 0};
 static const struct vfs_type mounted_type = {0};
 /* A mounted type whose uses are serialised under its namespace lock, as
  * KRFFS volumes and ext2 are, for the attribute rows. */
