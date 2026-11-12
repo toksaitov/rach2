@@ -211,20 +211,28 @@ void pci_enable_bus_master(pci_device_t *dev)
 
 #include "../../rach2/sys/arch/x86/isr.h"
 
-/** Register no handler. */
+/* What `ata_init` registered for the primary channel's line, 14, vector
+   46: the handler, and the handler and flags it marked. */
+static isr_handler_t handler_registered, handler_marked;
+static unsigned int handler_flags;
+
+/** Keep the primary channel's handler. */
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {
-    (void)vector;
-    (void)handler;
     (void)name;
+    if (vector == 46) {
+        handler_registered = handler;
+    }
 }
 
-/** Mark no handler: the rows never probe, so nothing registers one. */
+/** Keep the primary channel's handler's flags: ISR_UNLOCKED, which the
+ *  driver gives it. */
 void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flags)
 {
-    (void)vector;
-    (void)handler;
-    (void)flags;
+    if (vector == 46) {
+        handler_marked = handler;
+        handler_flags = flags;
+    }
 }
 
 #include "../../rach2/sys/block/disk.h"
@@ -894,6 +902,76 @@ static void wait_tick_rows(struct ata_drive *d)
           "a tick that arrives as a wait reads its start counts its one tick of sleep");
 }
 
+/**
+ * Check the paths that may find the channel's lock held, as a data port
+ * sequence on another processor holds it: the interrupt, the tick and a
+ * sleeper's test each take it only when it is free. With it held, each
+ * returns without reading the status, the interrupt counts nothing and the
+ * tick leaves the channel's clock to its next call; the host's lock traps a
+ * plain take of a held lock, so a path that returns did not spin. With the
+ * lock free again, the tick counts the ticks it left and the interrupt
+ * reads the status once.
+ */
+static void held_lock_rows(void)
+{
+    struct ata_channel *ch = &channels[0];
+    struct ata_wait w;
+    isr_params_t params;
+    uint32_t reads, irqs, ticks, seen;
+
+    model_reset(1);
+    phase = PIO_READ_BUSY; /* a status read would move it on */
+    k_memset(&params, 0, sizeof(params));
+    params.vector = ATA_VECTOR_BASE + ATA_IRQ_PRIMARY;
+    w.ch = ch;
+    w.want = ATA_WANT_IDLE;
+    w.t0 = ata_clock(ch);
+    w.rc = -EIO;
+    spin_lock(&ch->lock);
+    reads = status_reads;
+    irqs = ch->irqs;
+    ticks = ch->ticks;
+    seen = ch->seen;
+    ata_irq(&params);
+    CHECK(status_reads == reads && ch->irqs == irqs && phase == PIO_READ_BUSY,
+          "the interrupt with the channel's lock held does not wait and leaves the status alone");
+    tick(5);
+    CHECK(ch->ticks == ticks && ch->seen == seen, "the tick with the channel's lock held does not "
+                                                  "wait and leaves the clock to its next call");
+    CHECK(ata_wait_cond(&w) == 0 && status_reads == reads && w.rc == -EIO,
+          "a sleeper's test with the channel's lock held reads nothing and sleeps on");
+    CHECK(ch->lock.locked == 1 && masked == 0,
+          "and each leaves the lock to its holder and interrupts as they were");
+    spin_unlock(&ch->lock);
+    tick(0);
+    CHECK((uint32_t)kernel_ticks - seen >= 5 &&
+              ch->ticks - ticks == (uint32_t)kernel_ticks - seen &&
+              ch->seen == (uint32_t)kernel_ticks,
+          "the next tick with the lock free counts the ticks the held lock left");
+    ata_irq(&params);
+    CHECK(status_reads == reads + 1 && ch->irqs == irqs + 1 && ch->lock.locked == 0,
+          "the interrupt with the lock free reads the status once and lets the lock go");
+}
+
+/**
+ * Check what `ata_init` registers: the channel's interrupt, run without the
+ * big lock (ISR_UNLOCKED), as `nvme_hosttest` checks the NVMe queue's. The
+ * model's drive answers IDENTIFY with no sectors, so nothing is published;
+ * the row runs last, since the probe resets the drives' records.
+ */
+static void registration_rows(void)
+{
+    k_memset(identify_words, 0, sizeof(identify_words));
+    model_reset(2);
+    in_syscall = 0;
+    CHECK(ata_init() == -1, "a probe that finds no disk fails");
+    CHECK(handler_registered == ata_irq && handler_marked == ata_irq &&
+              handler_flags == ISR_UNLOCKED,
+          "the channel's interrupt is registered to run without the big lock");
+    CHECK(channels[0].lock.locked == 0 && refused == 0 && garbage_reads == 0,
+          "the probe leaves the channel's lock free and met no other command");
+}
+
 /** Four ticks while the owner sleeps: one, then three that one call
  *  counts, as after two boot ticks that found the big lock held. */
 static void ticks_while_asleep(void)
@@ -1135,6 +1213,18 @@ static void identify_rows(void)
           "bit 12 of word 106 without its valid bit says nothing of the sector");
 }
 
+/** Run the rows that follow the numbered ones of `main`, in order. */
+static void later_rows(struct ata_drive *d)
+{
+    identify_rows();
+    wait_bound_rows(d);
+    wait_tick_rows(d);
+    write_rate_rows(d);
+    durability_rows(d);
+    held_lock_rows();
+    registration_rows();
+}
+
 /**
  * Set the primary channel's master up on the model as a DMA drive of 256
  * sectors, run the rows, and return 1 when any check failed.
@@ -1166,7 +1256,8 @@ static void identify_rows(void)
  *    three of them counted by one call, are four in `disk-wait-ticks`.
  *
  * Then the rows of IDENTIFY, of the sleeping wait's bound, of the write
- * rate and of durability.
+ * rate and of durability, of the paths that find the channel's lock held,
+ * and of the interrupt's registration.
  */
 int main(void)
 {
@@ -1292,12 +1383,7 @@ int main(void)
     CHECK(rc == 0, "the owner's DMA read returns 0 with ticks inside its sleep");
     CHECK(wait_ticks == 4, "the four ticks the owner slept through are counted, three by one call");
 
-    identify_rows();
-
-    wait_bound_rows(d);
-    wait_tick_rows(d);
-    write_rate_rows(d);
-    durability_rows(d);
+    later_rows(d);
 
     if (fails) {
         printf("ata-test: %d failure(s)\n", fails);
