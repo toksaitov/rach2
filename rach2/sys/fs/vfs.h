@@ -544,6 +544,19 @@ void vfs_init(void);
 int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
                 char *leaf, uint32_t leafcap);
 
+/* `vfs_resolve_cached`'s answer for a path the name cache cannot finish. */
+#define VFS_CACHED_MISS 1
+
+/**
+ * Resolve the absolute path `path` as `vfs_resolve` does, from the name
+ * cache alone and without the big lock: 0 with `out` held and its mount
+ * entered, on a type that sets `name_cache`; -ENOENT for a name the cache
+ * holds as absent; or VFS_CACHED_MISS with nothing taken, for a path the
+ * caller resolves again under the big lock. `flags` takes VFS_WALK_NOFOLLOW,
+ * VFS_WALK_REAL_IDS and VFS_WALK_LOCK; any other is a miss.
+ */
+int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out);
+
 /**
  * Resolve `path` from the caller's root, as `vfs_resolve` does with no
  * `start`, and put in `real`, of VFS_PATH_MAX bytes, the path the walk took
@@ -668,6 +681,10 @@ int vfs_mount_slots(void);
 /** The table entry at `idx` (0..vfs_mount_slots()-1), or NULL when free; for
  * the readers of the whole table, /proc/mounts among them. */
 struct vfs_mount *vfs_mount_at(int idx);
+
+/** The slot of mount `m` in the table, read under the table's lock, so a
+ * caller without the big lock may ask; -1 when `m` has none. */
+int vfs_mount_index(const struct vfs_mount *m);
 
 /* The mount namespaces' views of the table (vfs_ns.c). */
 

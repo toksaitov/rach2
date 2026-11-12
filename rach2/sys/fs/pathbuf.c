@@ -9,6 +9,7 @@
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../lib/spinlock.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
 #include "../proc/process.h"
@@ -81,16 +82,27 @@ const char *proc_cwd(const struct process *p)
     return p->fs->cwd_long ? p->fs->cwd_long : p->fs->cwd;
 }
 
+void proc_cwd_read(const struct process *p, char *out)
+{
+    uint32_t flags = spin_lock_irqsave(&p->fs->lock);
+    const char *cwd = proc_cwd(p);
+
+    k_memcpy(out, cwd, k_strlen(cwd) + 1);
+    spin_unlock_irqrestore(&p->fs->lock, flags);
+}
+
 /**
  * Store the working directory's path: in the record when it fits `cwd`,
  * which almost every path does, and in a string from the heap when it is
  * longer. The new copy is made before the old one is freed, so `path` may
- * point at either.
+ * point at either, and the switch is made under the `fs_struct`'s lock, so
+ * that `proc_cwd_read` reads one path or the other whole.
  */
 int proc_cwd_set(struct process *p, const char *path)
 {
     uint32_t len = (uint32_t)k_strlen(path);
-    char *heap = NULL;
+    char *heap = NULL, *old;
+    uint32_t flags;
 
     if (len + 1 > VFS_PATH_MAX) {
         return -ENAMETOOLONG;
@@ -101,11 +113,15 @@ int proc_cwd_set(struct process *p, const char *path)
             return -ENOMEM;
         }
         k_memcpy(heap, path, len + 1);
-    } else {
+    }
+    flags = spin_lock_irqsave(&p->fs->lock);
+    if (!heap) {
         k_memmove(p->fs->cwd, path, len + 1);
     }
-    kfree(p->fs->cwd_long);
+    old = p->fs->cwd_long;
     p->fs->cwd_long = heap;
+    spin_unlock_irqrestore(&p->fs->lock, flags);
+    kfree(old);
     return 0;
 }
 

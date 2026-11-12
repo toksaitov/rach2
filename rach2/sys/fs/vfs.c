@@ -176,6 +176,20 @@ struct vfs_mount *vfs_mount_at(int idx)
     return mounts[idx];
 }
 
+int vfs_mount_index(const struct vfs_mount *m)
+{
+    uint32_t flags = spin_lock_irqsave(&mount_table_lock);
+    int i, at = -1;
+
+    for (i = 0; m && i < mount_slots && at < 0; i++) {
+        if (mounts[i] == m && m->state != VFS_FREE) {
+            at = i;
+        }
+    }
+    spin_unlock_irqrestore(&mount_table_lock, flags);
+    return at;
+}
+
 struct vfs_mount *vfs_root_mount(void)
 {
     return mounts[0];
@@ -2309,6 +2323,19 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     rc = resolve_full(start, path, flags, out, leaf, leafcap, record);
     bkl_exit();
     return rc;
+}
+
+int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out)
+{
+    int rc;
+
+    if (!path || path[0] != '/' || mounts[0]->state != VFS_ACTIVE ||
+        (flags & ~(VFS_WALK_NOFOLLOW | VFS_WALK_REAL_IDS | VFS_WALK_LOCK)) ||
+        (current_proc && current_proc->walk_replay)) {
+        return VFS_CACHED_MISS;
+    }
+    rc = resolve_cached(0, path, flags, out);
+    return rc == WALK_FULL ? VFS_CACHED_MISS : rc;
 }
 
 int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,

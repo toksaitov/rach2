@@ -4242,14 +4242,7 @@ uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)
 
 uint32_t procfs_mount_id(const struct vfs_mount *m)
 {
-    int j;
-
-    for (j = 0; m && j < vfs_mount_slots(); j++) {
-        if (vfs_mount_at(j) == m) {
-            return (uint32_t)j + 1u;
-        }
-    }
-    return 0;
+    return (uint32_t)(vfs_mount_index(m) + 1);
 }
 
 uint32_t procfs_synth_mount_id(uint64_t dev, const struct vfs_mount *hint)

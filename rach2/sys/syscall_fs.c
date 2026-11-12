@@ -2122,6 +2122,57 @@ static int path_from_user_dir(int dirfd, const char __user *upath, char **out, i
     return 0;
 }
 
+/* The answer of a call's path without the big lock when the call must run
+ * again under it, with nothing done that a caller sees. */
+#define CALL_LOCKED 1
+
+/**
+ * The path a caller named, as `path_from_user_dir` makes it, for a call
+ * without the big lock: an absolute path, or one relative to the working
+ * directory, whose path is copied under its `fs_struct`'s lock
+ * (`proc_cwd_read`). 0 with the page in `*out`; a negative errno of
+ * `copy_path_at`'s; or CALL_LOCKED with nothing taken, for a path relative
+ * to a descriptor, whose path the type gives, one that begins with "..",
+ * which a removed working directory answers, or a working directory
+ * outside the process's root.
+ */
+static int path_from_user_unlocked(int dirfd, const char __user *upath, char **out, int *dir)
+{
+    char *buf = path_buf_get(), *cwd = NULL;
+    int len, locked = 0;
+
+    if (!buf) {
+        return -ENOMEM;
+    }
+    len = strncpy_from_user(buf, upath, VFS_PATH_MAX);
+    if (len >= 0 && dir) {
+        *dir = path_names_dir(buf, len);
+    }
+    if (len > 0 && buf[0] != '/') {
+        cwd = dirfd == AT_FDCWD && !(buf[0] == '.' && buf[1] == '.') ? path_buf_get() : NULL;
+        if (cwd) {
+            proc_cwd_read(current_proc, cwd);
+        }
+        locked = !cwd || cwd_outside(cwd);
+        if (!locked) {
+            len = path_prepend(buf, VFS_PATH_MAX, (uint32_t)len, cwd);
+        }
+        path_buf_put(cwd);
+    }
+    if (len > 0 && !locked) {
+        len = canonicalize_abs(buf);
+        if (dir && *dir == PATH_END_DOT) {
+            len = path_put_dot(buf, len);
+        }
+    }
+    if (len <= 0 || locked) {
+        path_buf_put(buf);
+        return locked ? CALL_LOCKED : len == 0 ? -ENOENT : len;
+    }
+    *out = buf;
+    return 0;
+}
+
 /** `path_from_user_dir` for a caller that does not ask how the path ends. */
 static int path_from_user(int dirfd, const char __user *upath, char **out)
 {
@@ -8392,10 +8443,9 @@ static int32_t vfs_fill_stat64(struct kstat *kst, const struct vfs_ref *r)
         return rc;
     }
     k_memset(kst, 0, sizeof(*kst));
-    for (i = 0; i < vfs_mount_slots(); i++) {
-        if (vfs_mount_at(i) == vfs_mount_base(r->mnt)) {
-            kst->st_dev = procfs_mount_dev(i, vfs_mount_base(r->mnt));
-        }
+    i = vfs_mount_index(vfs_mount_base(r->mnt));
+    if (i >= 0) {
+        kst->st_dev = procfs_mount_dev(i, vfs_mount_base(r->mnt));
     }
     kst->st_mode = st.mode;
     kst->st_nlink = st.nlink;
@@ -10445,7 +10495,7 @@ long sys_fstat64(isr_params_t *params)
     if (!entry) {
         return -EBADF;
     }
-    big = file_ops_lock(entry);
+    big = file_read_lock(entry);
     rc = fstat_getattr(entry, &kst);
     file_ops_unlock(big);
     if (rc != 0) {
@@ -10576,6 +10626,55 @@ static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct ks
 }
 
 /**
+ * `stat_at` for a caller without the big lock: a descriptor with
+ * AT_EMPTY_PATH that `file_vfs_unlocked` admits, or a path the name cache
+ * finishes (`vfs_resolve_cached`), absolute or relative to the working
+ * directory (`path_from_user_unlocked`), as Linux's `vfs_statx` walks a path
+ * under RCU first (fs/namei.c:2651-2653). 0, a negative errno, or
+ * CALL_LOCKED with nothing done, for `stat_at` under the big lock.
+ */
+static int32_t stat_at_unlocked(int dirfd, const char __user *upath, int flags, struct kstat *kst)
+{
+    int follow = !(flags & AT_SYMLINK_NOFOLLOW);
+    struct vfs_ref ref;
+    char *pathbuf;
+    int empty = 0, dir = 0;
+    int32_t rc;
+
+    if (flags & AT_EMPTY_PATH) {
+        empty = user_path_empty(upath);
+        if (empty < 0) {
+            return empty;
+        }
+    }
+    if (empty) {
+        fd_entry_t *entry = dirfd == AT_FDCWD ? NULL : fd_get(current_proc->fds, dirfd);
+
+        return file_vfs_unlocked(entry) ? fstat_getattr(entry, kst) : CALL_LOCKED;
+    }
+    if (!upath) {
+        return -EFAULT;
+    }
+    rc = path_from_user_unlocked(dirfd, upath, &pathbuf, &dir);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = vfs_resolve_cached(pathbuf, VFS_WALK_LOCK | (follow || dir ? 0 : VFS_WALK_NOFOLLOW), &ref);
+    path_buf_put(pathbuf);
+    if (rc != 0) {
+        return rc == VFS_CACHED_MISS ? CALL_LOCKED : rc;
+    }
+    rc = vfs_fill_stat64(kst, &ref);
+    kst->st_mnt_id = procfs_mount_id(ref.mnt);
+    vfs_walk_unlock(ref.mnt);
+    vfs_ref_release(&ref);
+    if (rc == 0 && dir && (kst->st_mode & S_IFMT) != S_IFDIR) {
+        return -ENOTDIR;
+    }
+    return rc;
+}
+
+/**
  * fstatat64(2), and newfstatat(2) on x86-64: copy out the attributes
  * `stat_at` finds for the directory descriptor, the path and the flags of
  * arguments 0, 1 and 3 to the user's buffer in argument 2, with the owner
@@ -10583,7 +10682,8 @@ static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct ks
  * AT_NO_AUTOMOUNT is accepted and means nothing here, and any other flag
  * but AT_SYMLINK_NOFOLLOW and AT_EMPTY_PATH is -EINVAL before the path is
  * read. GNU libc's fstat is this call with AT_EMPTY_PATH, on i386 when
- * statx is missing.
+ * statx is missing. The call runs without the big lock, which it takes
+ * for what `stat_at_unlocked` leaves.
  */
 long sys_fstatat64(isr_params_t *params)
 {
@@ -10598,7 +10698,20 @@ long sys_fstatat64(isr_params_t *params)
     if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_NO_AUTOMOUNT)) {
         return -EINVAL;
     }
-    rc = stat_at((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1), flags, &kst);
+    rc = bkl_held() ? CALL_LOCKED
+                    : stat_at_unlocked((int)SC_ARG(params, 0),
+                                       (const char __user *)SC_ARG(params, 1), flags, &kst);
+    if (rc == CALL_LOCKED) {
+        int big = !bkl_held();
+
+        if (big) {
+            bkl_enter();
+        }
+        rc = stat_at((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1), flags, &kst);
+        if (big) {
+            bkl_exit();
+        }
+    }
     return rc != 0 ? rc : stat64_put(st, &kst);
 }
 
