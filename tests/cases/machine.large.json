@@ -9,7 +9,7 @@
       "units": ["large", "tests/bigfileprobe.c", "rach2/sys/fs/ext2.c", "rach2/sys/fs/ext2_alloc.c", "rach2/sys/fs/ext2_batch.c", "rach2/sys/fs/ext2_check.c", "rach2/sys/fs/ext2_dir.c", "rach2/sys/fs/ext2_file.c", "rach2/sys/block/ahci.c"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"file_mib": 256, "volume_mib": 6144, "limit_offset": "2196875759616"}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": [], "inputs": {"file_mib": 256, "volume_mib": 6144, "limit_offset": "2196873666560"}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "large_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machines and removes the empty disk, which it keeps after a failure"},
       "steps": [
@@ -39,9 +39,9 @@
         {"assertion_id": "verify-ok", "checks": "bigfileprobe verify says BIGFILE OK (verify) and never BIGFILE FAIL: after the new mount the file has the size the write left, every block has its number and a read at its end gives nothing", "source": "scenario"},
         {"assertion_id": "sparse-exit", "checks": "bigfileprobe sparse returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
         {"assertion_id": "sparse-ok", "checks": "bigfileprobe sparse says BIGFILE OK (sparse) and never BIGFILE FAIL: a mebibyte written astride the 4 GiB line of a new file sets its size past the line, reads back, leaves the hole below it reading zeros, and the file truncates to a block past the line", "source": "scenario"},
-        {"assertion_id": "limit-exit", "checks": "bigfileprobe limit at offset 2196875759616 returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
+        {"assertion_id": "limit-exit", "checks": "bigfileprobe limit at offset 2196873666560 returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
         {"assertion_id": "limit-ok", "checks": "bigfileprobe limit says BIGFILE OK (limit) and never BIGFILE FAIL: a one-byte write at the file limit for 4096-byte blocks is refused with EFBIG and the file stays empty", "source": "scenario"},
-        {"assertion_id": "limit-named", "checks": "the kernel's log says ext2: write: offset 2095103 MiB is past the file limit of 2095103 MiB for 4096-byte blocks", "source": "scenario"},
+        {"assertion_id": "limit-named", "checks": "the kernel's log says ext2: write: offset 2095101 MiB is past the file limit of 2095101 MiB for 4096-byte blocks", "source": "scenario"},
         {"assertion_id": "fsck", "checks": "e2fsck -fn on the volume after the machine exits 0, finding it consistent", "source": "scenario"}
       ],
       "branches": [],

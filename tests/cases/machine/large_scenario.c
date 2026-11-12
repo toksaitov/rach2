@@ -331,8 +331,8 @@ static void ext2(struct lc *l)
     if (lc_step(l, "sparse") &&
         (w = bigfile(l, m, "check", "sparse", "/dev/disk0p1 ext2 0", &at)) != NULL)
         free(w);
-    limit(l, m, "check", "/dev/disk0p1 ext2 2196875759616",
-          "ext2: write: offset 2095103 MiB is past the file limit of 2095103 MiB for 4096-byte "
+    limit(l, m, "check", "/dev/disk0p1 ext2 2196873666560",
+          "ext2: write: offset 2095101 MiB is past the file limit of 2095101 MiB for 4096-byte "
           "blocks",
           &at);
     check(l, m, fsck);

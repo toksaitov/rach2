@@ -6817,9 +6817,10 @@ static int dir_seek_size(fd_entry_t *entry, long long off, int whence, long long
  * 0xFFFFFFFF on i686. A directory's offset is the cursor of its listing, which
  * getdents64 reports after each entry as the entry's d_off: a directory of /dev
  * or /proc takes the index of any entry through 0x7FFFFFFF; one of ext2,
- * whose cursor is a byte (`dir_seeks_bytes`), any place, as Linux's
- * `generic_file_llseek` gives an ext2 directory, which its `readdir` moves to
- * the next record that starts there or after; and one of another file system
+ * whose cursor is a byte (`dir_seeks_bytes`), any place through the volume's
+ * largest file offset (`max_bytes`), as Linux's `generic_file_llseek` gives
+ * an ext2 directory through `s_maxbytes`, which its `readdir` moves to the
+ * next record that starts there or after; and one of another file system
  * the places `dir_cursor_valid` finds, so rewinddir, and seekdir to a place
  * telldir gave, move it, and no such type's `readdir` is given a place it did
  * not give. Any other place is -EINVAL, and one past `limit`, the largest
@@ -6845,7 +6846,7 @@ static int seek_listing(fd_entry_t *entry, long long off, int whence, uint64_t l
     }
     bytes = entry->type == FD_TYPE_DIR && entry->ofd->vmnt->type->dir_seeks_bytes;
     if (bytes) {
-        most = ~0ull;
+        most = vfs_mount_base(entry->ofd->vmnt)->max_bytes;
     }
     fd_ofd_lock(entry->ofd);
     if (whence == 1) {
@@ -19393,12 +19394,19 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count, int form
  * Any other directory is read under the description's lock through its
  * type's `readdir`, whose cursor is the type's own: on the KRFFS root the
  * byte offset of the last node returned plus one, and on a mounted type
- * whatever its `readdir` keeps. The offset takes the cursor only with the
- * record copied, so an entry that does not fit is read again by the next
- * call. A cursor is not a count of entries: `rm -rf` reads a batch of names,
- * unlinks them and reads again, and a cursor that counted entries would skip
- * as many survivors as the first batch removed, and leave a directory rm
- * reports as not empty (tests/unlinkdirprobe.c).
+ * whatever its `readdir` keeps. An offset past 0xFFFFFFFF, which only a
+ * directory whose cursor is a byte (`dir_seeks_bytes`) takes, lies past its
+ * end; the type's `readdir` is asked at 0xFFFFFFFF all the same, so that a
+ * failed mount answers -EIO and a removed directory -ENOENT, as Linux's
+ * `iterate_dir` checks both before the listing's end (fs/readdir.c:105),
+ * and anything else ends the listing with the offset kept.
+ *
+ * The offset takes the cursor only with the record copied, so an entry that
+ * does not fit is read again by the next call. A cursor is not a count of
+ * entries: `rm -rf` reads a batch of names, unlinks them and reads again,
+ * and a cursor that counted entries would skip as many survivors as the
+ * first batch removed, and leave a directory rm reports as not empty
+ * (tests/unlinkdirprobe.c).
  *
  * On the KRFFS root a removal moves no other node:
  * `krffs_remove_reserved_node` only widens free extents, and the allocator
@@ -19454,6 +19462,7 @@ static long getdents(int fd_num, char *buf, uint32_t count, int format)
 
     {
         struct open_file *ofd = entry->ofd;
+        struct vfs_dirent de;
         uint32_t cursor;
 
         if (!ofd || !ofd->vmnt) {
@@ -19461,13 +19470,16 @@ static long getdents(int fd_num, char *buf, uint32_t count, int format)
         }
         fd_ofd_lock(ofd);
         if (ofd->offset > 0xFFFFFFFFull) {
+            int got;
+
             /* past any directory a 32-bit cursor reaches (`dir_seeks_bytes`) */
+            cursor = 0xFFFFFFFFu;
+            got = vfs_readdir(ofd->vmnt, ofd->fhandle, &cursor, &de);
             fd_ofd_unlock(ofd);
-            return 0;
+            return got < 0 ? got : 0;
         }
         cursor = (uint32_t)ofd->offset;
         for (;;) {
-            struct vfs_dirent de;
             long n;
             int got;
 

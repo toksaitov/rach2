@@ -2494,21 +2494,36 @@ int ext2_release_inode(struct ext2_mount *em, struct ext2_node *n)
 
 /**
  * The largest regular file a volume with `1 << block_shift`-byte blocks
- * can hold: the direct, single, double and triple pointers' reach, capped
- * by the 32-bit `i_blocks` count of 512-byte units, which the pointer
- * blocks share. The cap leaves one part in `per` for those pointer blocks,
- * a little more than they take, since the kernel divides only by shifting.
+ * can hold, Linux's `s_maxbytes` for ext2 (`ext2_max_size`,
+ * fs/ext2/super.c:730): the direct, single, double and triple pointers'
+ * reach, unless a dense file that large, its pointer blocks counted, would
+ * pass the 32-bit `i_blocks` count of 512-byte units; then the most data
+ * blocks that, with the pointer blocks they need, fit that count. Linux's
+ * cap at MAX_LFS_FILESIZE never binds for blocks of 4 KiB or less, whose
+ * limit is under 2 TiB. The divisions are of 32-bit values, which the kernel
+ * makes without libgcc.
  */
 static uint64_t file_limit(uint32_t block_shift)
 {
-    uint64_t block_size = (uint64_t)1 << block_shift;
-    uint64_t per = block_size / 4;
-    uint64_t reach = (EXT2_NDIR + per + per * per + per * per * per) << block_shift;
-    uint64_t units = (uint64_t)0xFFFFFFFFu * 512u;
-    uint64_t cap = units - (units >> (block_shift - 2)) - 2 * block_size;
+    uint32_t ppb = (uint32_t)1 << (block_shift - 2);
+    uint32_t upper = 0xFFFFFFFFu >> (block_shift - 9);
+    uint32_t meta = 1 + (1 + ppb) + (1 + ppb + ppb * ppb);
+    uint64_t res = EXT2_NDIR + (uint64_t)ppb + (uint64_t)ppb * ppb + (uint64_t)ppb * ppb * ppb;
 
-    cap &= ~(block_size - 1);
-    return reach < cap ? reach : cap;
+    if (res + meta > upper) {
+        res = upper;
+        upper -= EXT2_NDIR + ppb;
+        meta = 1;
+        if (upper < ppb * ppb) {
+            meta += 1 + (upper + ppb - 1) / ppb;
+        } else {
+            meta += 1 + ppb;
+            upper -= ppb * ppb;
+            meta += 1 + (upper + ppb - 1) / ppb + (upper + ppb * ppb - 1) / (ppb * ppb);
+        }
+        res -= meta;
+    }
+    return res << block_shift;
 }
 
 /** Log `ext2: refused: FIELD` and return -EINVAL, which fails the mount on
@@ -2567,6 +2582,7 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     em->block_size = 1024u << log_size;
     em->block_shift = 10 + log_size;
     em->file_limit = file_limit(em->block_shift);
+    mnt->max_bytes = em->file_limit;
     em->inodes = ext2_le32(sb + 0);
     em->blocks = ext2_le32(sb + 4);
     em->r_blocks = ext2_le32(sb + 8);
