@@ -406,13 +406,13 @@ struct vfs_type {
      * changes, so that a slow request for one file stops only that file's
      * users. */
     int file_locked;
-    /* Nonzero for a type whose `read`, `readdir`, `getattr`, `open`,
-     * `release`, `hold` and `put` run without the big lock on a node the
-     * caller holds, into kernel buffers, each taking the lock itself for a
-     * step that needs it, as Linux's ext2 reads under the inode's own lock
-     * alone; the file calls then run without it on the type's regular files
-     * and directories. A type that sets it sets `file_locked` and
-     * `name_cache`. */
+    /* Nonzero for a type whose `read`, `readdir`, `readlink`, `getattr`,
+     * `open`, `release`, `hold` and `put` run without the big lock on a node
+     * the caller holds, into kernel buffers, each taking the lock itself
+     * for a step that needs it, as Linux's ext2 reads under the inode's own
+     * lock alone; the file calls then run without it on the type's regular
+     * files, directories and links. A type that sets it sets `file_locked`
+     * and `name_cache`. */
     int reads_unlocked;
 };
 
