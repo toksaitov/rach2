@@ -195,6 +195,19 @@ int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
     return -EIO;
 }
 
+/** No row reads through the file system's frames either. */
+int32_t vfs_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, uint32_t count,
+                        const uintptr_t *frames)
+{
+    (void)mnt;
+    (void)handle;
+    (void)first;
+    (void)count;
+    (void)frames;
+    check(0, "no row reads through the file system");
+    return -EIO;
+}
+
 /* Run once at the restore `restore_countdown` counts down to, then
    cleared. */
 static void (*restore_hook)(void);
