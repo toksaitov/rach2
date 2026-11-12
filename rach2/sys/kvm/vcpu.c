@@ -773,14 +773,20 @@ static int32_t run_begin(struct kvm_vcpu *v)
 }
 
 /** The `sched_out` of a vCPU's thread across KVM_RUN, as Linux's
- * kvm_sched_out with `wants_to_run`: `arg` is the vCPU, which a switch
- * away while its thread can still run marks preempted
- * (`kvm_steal_preempted`), and whose counters' PMI claims on the
- * processor end (`kvm_pmu_leave`), as Linux's perf stops the vCPU's
- * events at the switch. Under the run queues' lock; does not sleep. */
-static void vcpu_sched_out(void *arg)
+ * kvm_sched_out with `wants_to_run`, called at every switch away from the
+ * thread: `arg` is the vCPU, which a switch while its thread can still run,
+ * `preempted`, marks preempted (`kvm_steal_preempted`), as Linux's tests
+ * task_is_runnable (virt/kvm/kvm_main.c:6406-6409); and the record and
+ * PMI claims of its counters on the processor end at every switch
+ * (`kvm_pmu_leave`), a sleep in the exit's handling among them, as
+ * Linux's perf_event_task_sched_out stops the task's events
+ * (kernel/sched/core.c:5161). Under the run queues' lock; does not
+ * sleep. */
+static void vcpu_sched_out(void *arg, int preempted)
 {
-    kvm_steal_preempted((struct kvm_vcpu *)arg);
+    if (preempted) {
+        kvm_steal_preempted((struct kvm_vcpu *)arg);
+    }
     kvm_pmu_leave();
 }
 
@@ -804,10 +810,12 @@ static void vcpu_sched_out(void *arg)
  * top after an exit for a host interrupt: the loop clears `at_boundary`
  * right after it, as Linux clears at_instruction_boundary at the top of
  * vcpu_run's loop, since the work before the next entry may start an
- * instruction of the guest's. Each turn first ends the PMI claims of the
- * last entry's counters (`kvm_pmu_leave`): its exit is answered, and the
- * switch, a halted wait or the return that may follow gives the processor
- * to code whose NMIs are none of the guest's.
+ * instruction of the guest's. Each turn first ends the record and PMI
+ * claims of the last entry's counters (`kvm_pmu_leave`): its exit is
+ * answered, and the switch, a halted wait or the return that may follow
+ * gives the processor to code whose NMIs are none of the guest's. A switch
+ * in the exit's handling, which may sleep, ends them sooner, in
+ * `vcpu_sched_out`.
  * Returns 0 with `exit_reason` set,
  * -EINTR with it KVM_EXIT_INTR for a signal or a kick, or -errno.
  */

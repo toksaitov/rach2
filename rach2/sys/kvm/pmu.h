@@ -107,16 +107,21 @@ int32_t kvm_pmu_placed_show(void *obj, int arg, char *buf, uint32_t cap);
  * those overflows, plus each counter of a TSX-checkpointed event that
  * entry gave a PMI bit, whose own status bit a rollback may have cleared,
  * while any counter's overflow bit is set; with no counter's bit set, the
- * checkpointed counters once from the guest's run (`kvm_pmu_vmx_run`) to
- * the next entry, and 0 otherwise. 0 while no PMI bit is set. */
-int kvm_pmu_nmi(void);
+ * checkpointed counters once from the guest's run (`kvm_pmu_vmx_run`)
+ * until the claim ends (`kvm_pmu_leave`, or the next entry), and only
+ * when `others`, the sources the handler took before this, is 0; and 0
+ * otherwise. 0 while no PMI bit is set. */
+int kvm_pmu_nmi(int others);
 
-/** End the claims of the last Intel entry on this processor, when its
- * vCPU leaves the run loop or the processor, as Linux clears a counter's
- * intel_cp_status when its event stops (arch/x86/events/intel/
- * core.c:2520-2527): acknowledge the overflow of each counter it gave a
- * PMI bit that is still set, which raised no NMI, and claim none of them
- * or its checkpointed counters after. With interrupts off. */
+/** End the record and the claims of the last Intel entry on this
+ * processor before its vCPU's thread can sleep or leave the processor, as
+ * Linux stops a task's perf events at every switch (kernel/sched/
+ * core.c:5161) and clears a counter's intel_cp_status when its event stops
+ * (arch/x86/events/intel/core.c:2520-2527): at each turn of KVM_RUN's
+ * loop, at each switch away from the thread, and when KVM_RUN returns.
+ * Acknowledge the overflow still set on each counter the record names,
+ * which raised no NMI, and claim none of them or its checkpointed counters
+ * after. With interrupts off. */
 void kvm_pmu_leave(void);
 
 /** Whether the host has usable performance counters. */

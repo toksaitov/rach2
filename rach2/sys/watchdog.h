@@ -100,10 +100,12 @@ int watchdog_nmi(isr_params_t *params);
  * so that two let the next NMI, which finds nothing, be swallowed. It runs
  * before the counter's APIC entry is unmasked again, as Linux acknowledges
  * every counter's overflow first (arch/x86/events/intel/core.c:3190,
- * 3226-3227).
+ * 3226-3227). `others` is the number of sources the handler took before
+ * it, a backtrace request, so that an NMI another source took is not
+ * also counted as a guest's PMI that left no status.
  * It takes no lock and must not fault.
  */
-extern int (*watchdog_guest_nmi)(void);
+extern int (*watchdog_guest_nmi)(int others);
 
 /** Delay this processor's next soft-lockup report by a sample period, for
  * code known to keep the processor for long, as Linux's

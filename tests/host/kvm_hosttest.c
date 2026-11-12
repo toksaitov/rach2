@@ -364,7 +364,7 @@ void sched_take_preempt(void)
         }
         CHECK(caller.sched_out != NULL, "a vCPU's thread has its sched_out across KVM_RUN");
         caller.nivcsw++;
-        caller.sched_out(caller.sched_out_arg);
+        caller.sched_out(caller.sched_out_arg, 1);
         caller.run_delay += preempt_wait;
         caller.pcount++;
         preempt_seen = preempt_seen_at ? *preempt_seen_at : -1;
@@ -3406,7 +3406,7 @@ static void selftest_rows(void)
 }
 
 /* The NMI handler's hook, which kvm_pmu_start sets. */
-int (*watchdog_guest_nmi)(void);
+int (*watchdog_guest_nmi)(int others);
 
 /** The hard-lockup detector's counter does not run here. */
 int platform_pmu_armed(void)

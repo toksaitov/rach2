@@ -572,7 +572,7 @@ static void intel_placement(void)
 }
 
 /* The NMI handler's hook, which kvm_pmu_start sets. */
-int (*watchdog_guest_nmi)(void);
+int (*watchdog_guest_nmi)(int others);
 
 /* Whether the hard-lockup detector's counter runs, keeping the counters'
  * APIC entry an unmasked NMI. */
@@ -623,7 +623,7 @@ static void intel_steps(void)
     pmu_host.version = 2;
     *reg(GLOBAL_STATUS) = 1u;
     *reg(GLOBAL_OVF) = 0;
-    CHECK(watchdog_guest_nmi == kvm_pmu_nmi && !kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
+    CHECK(watchdog_guest_nmi == kvm_pmu_nmi && !kvm_pmu_nmi(0) && !*reg(GLOBAL_OVF),
           "the NMI handler calls KVM, which claims and acknowledges no overflow before a PMI bit "
           "is set");
     *reg(GLOBAL_STATUS) = 0;
@@ -663,16 +663,16 @@ static void intel_steps(void)
           "the deltas count from the written values");
     CHECK(*reg(FIXED_CTRL) == 0xB0u, "the exit clears the guest's field and keeps the host's");
     *reg(GLOBAL_STATUS) = FIXED_BIT(1);
-    CHECK(!kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
+    CHECK(!kvm_pmu_nmi(0) && !*reg(GLOBAL_OVF),
           "KVM leaves the NMI of the host's counter's overflow to the detector");
     *reg(GLOBAL_STATUS) = FIXED_BIT(1) | FIXED_BIT(0) | 2u | 1u;
     host_cpu = 1;
     *reg(GLOBAL_STATUS) = FIXED_BIT(0) | 1u;
-    CHECK(!kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
+    CHECK(!kvm_pmu_nmi(0) && !*reg(GLOBAL_OVF),
           "an NMI on another processor claims none of the counters this one gave the bits");
     *reg(GLOBAL_STATUS) = 0;
     host_cpu = 0;
-    CHECK(kvm_pmu_nmi() == 2 && *reg(GLOBAL_OVF) == (FIXED_BIT(0) | 1u),
+    CHECK(kvm_pmu_nmi(0) == 2 && *reg(GLOBAL_OVF) == (FIXED_BIT(0) | 1u),
           "and here KVM claims only the counters the last entry gave the bits, acknowledging "
           "and counting each, so that the NMI a second latched is swallowed");
     *reg(GLOBAL_STATUS) = FIXED_BIT(1) | FIXED_BIT(0) | 1u;
@@ -689,7 +689,7 @@ static void intel_steps(void)
     CHECK(*reg(GLOBAL_OVF) == (FIXED_BIT(0) | 1u),
           "and the exit acknowledges the guest counters' overflows, which raise no NMI");
     *reg(GLOBAL_OVF) = 0;
-    CHECK(!kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
+    CHECK(!kvm_pmu_nmi(0) && !*reg(GLOBAL_OVF),
           "nor does an NMI after such an entry claim any overflow");
     model_armed = 1;
     *reg(GLOBAL_STATUS) = 0;
@@ -789,7 +789,7 @@ static void intel_pmi_status(void)
           "having acknowledged the overflow firmware left on it, and on no other counter");
     *reg(GLOBAL_STATUS) = 2u;
     *reg(GLOBAL_OVF) = 0;
-    CHECK(!kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
+    CHECK(!kvm_pmu_nmi(0) && !*reg(GLOBAL_OVF),
           "so an NMI that finds only another counter's status is not KVM's");
     kvm_pmu_vmx_exit(&v, guest, 1);
     *reg(GLOBAL_STATUS) = 0;
@@ -799,34 +799,40 @@ static void intel_pmi_status(void)
               *reg(EVENTSEL0 + 2u) == (0xC4u | EV_ENABLE | EV_OS | EV_TXCP | EV_INT),
           "a checkpointed event runs on counter 2 with its interrupt bit");
     kvm_pmu_vmx_exit(&v, guest, 1);
-    CHECK(kvm_pmu_nmi() == 1 && !*reg(GLOBAL_OVF),
+    CHECK(kvm_pmu_nmi(0) == 1 && !*reg(GLOBAL_OVF),
           "an NMI that finds no status, the rollback having cleared counter 2's, is KVM's");
-    CHECK(!kvm_pmu_nmi(), "once, since the exit the NMI caused stopped the counter");
+    CHECK(!kvm_pmu_nmi(0), "once, since the exit the NMI caused stopped the counter");
     *reg(GLOBAL_STATUS) = FIXED_BIT(1);
-    CHECK(kvm_pmu_nmi() == 1 && !*reg(GLOBAL_OVF),
+    CHECK(kvm_pmu_nmi(0) == 1 && !*reg(GLOBAL_OVF),
           "while another counter's status is set the checkpointed counter counts, as Linux's");
     *reg(GLOBAL_STATUS) = 4u | 1u;
-    CHECK(kvm_pmu_nmi() == 2 && *reg(GLOBAL_OVF) == 5u,
+    CHECK(kvm_pmu_nmi(0) == 2 && *reg(GLOBAL_OVF) == 5u,
           "and its own status bit counts it once, beside the other guest counter's");
     *reg(GLOBAL_STATUS) = 0;
     *reg(GLOBAL_OVF) = 0;
     pmi_enter(&v, 0, 5u, 4u, guest, host);
-    CHECK(kvm_pmu_nmi() == 1, "the next entry lets one empty NMI be claimed again");
+    CHECK(kvm_pmu_nmi(0) == 1, "the next entry lets one empty NMI be claimed again");
     kvm_pmu_vmx_exit(&v, guest, 1);
     pmi_prepare(&v, 0, 5u, 4u, guest, host);
-    CHECK(!kvm_pmu_nmi(), "an empty NMI between the publication and the run is not KVM's");
+    CHECK(!kvm_pmu_nmi(0), "an empty NMI between the publication and the run is not KVM's");
     kvm_pmu_vmx_run();
+    CHECK(!kvm_pmu_nmi(1), "nor is one after the run that another source took, a backtrace");
     kvm_pmu_vmx_exit(&v, guest, 1);
-    CHECK(kvm_pmu_nmi() == 1, "and leaves the claim to the run's own PMI");
+    CHECK(kvm_pmu_nmi(0) == 1, "and both leave the claim to the run's own PMI");
+    *reg(GLOBAL_STATUS) = 4u;
+    CHECK(kvm_pmu_nmi(1) == 1 && *reg(GLOBAL_OVF) == 4u,
+          "a counter's own overflow is KVM's beside another source's");
+    *reg(GLOBAL_STATUS) = 0;
+    *reg(GLOBAL_OVF) = 0;
     pmi_enter(&v, 0, 5u, 4u, guest, host);
     kvm_pmu_vmx_exit(&v, guest, 1);
     pmi_enter(&v, 0, 1u, 0, guest, host);
-    CHECK(!kvm_pmu_nmi(), "an entry that gives the bit to no checkpointed counter ends the claim");
+    CHECK(!kvm_pmu_nmi(0), "an entry that gives the bit to no checkpointed counter ends the claim");
     kvm_pmu_vmx_exit(&v, guest, 1);
     *reg(GLOBAL_STATUS) = (1ull << 63) | (1ull << 58);
     pmi_enter(&v, 0, 5u, 4u, guest, host);
     kvm_pmu_vmx_exit(&v, guest, 1);
-    CHECK(kvm_pmu_nmi() == 1 && kvm_pmu_nmi() == 0,
+    CHECK(kvm_pmu_nmi(0) == 1 && kvm_pmu_nmi(0) == 0,
           "COND_CHG and LBRS_FROZEN are no counter's overflow: the empty NMI's claim, once");
     *reg(GLOBAL_STATUS) = 8u;
     *reg(GLOBAL_OVF) = 0;
@@ -839,14 +845,14 @@ static void intel_pmi_status(void)
     kvm_pmu_leave();
     CHECK(*reg(GLOBAL_OVF) == 4u, "leaving the processor acknowledges a PMI counter's status");
     *reg(GLOBAL_STATUS) = 0;
-    CHECK(!kvm_pmu_nmi(), "and claims no empty NMI for the checkpointed counter after");
+    CHECK(!kvm_pmu_nmi(0), "and claims no empty NMI for the checkpointed counter after");
     *reg(GLOBAL_STATUS) = FIXED_BIT(1);
-    CHECK(!kvm_pmu_nmi(), "nor counts it beside the detector's overflow");
+    CHECK(!kvm_pmu_nmi(0), "nor counts it beside the detector's overflow");
     *reg(GLOBAL_STATUS) = 0;
     *reg(GLOBAL_OVF) = 0;
     model_armed = 0;
     pmi_enter(&v, 0, 5u, 4u, guest, host);
-    CHECK(!kvm_pmu_nmi(), "and an entry that sets no interrupt bit lets none be claimed");
+    CHECK(!kvm_pmu_nmi(0), "and an entry that sets no interrupt bit lets none be claimed");
     kvm_pmu_vmx_exit(&v, guest, 1);
     model_armed = 1;
 }
@@ -873,7 +879,7 @@ static void intel_pmi_cpus(void)
     CHECK(!*reg(GLOBAL_OVF),
           "processor 1's exit leaves both its counters' overflows to their NMIs");
     host_cpu = 0;
-    CHECK(kvm_pmu_nmi() == 1 && *reg(GLOBAL_OVF) == 1u,
+    CHECK(kvm_pmu_nmi(0) == 1 && *reg(GLOBAL_OVF) == 1u,
           "processor 0's NMI claims only the counter its own entry gave the bit");
     *reg(GLOBAL_STATUS) = 1u;
     *reg(GLOBAL_OVF) = 0;
@@ -882,7 +888,7 @@ static void intel_pmi_cpus(void)
     CHECK(*reg(GLOBAL_OVF) == (2u | 1u),
           "processor 1's next entry acknowledges its own last entry's stale overflows");
     host_cpu = 0;
-    CHECK(!*reg(GLOBAL_OVF) && kvm_pmu_nmi() == 1 && *reg(GLOBAL_OVF) == 1u,
+    CHECK(!*reg(GLOBAL_OVF) && kvm_pmu_nmi(0) == 1 && *reg(GLOBAL_OVF) == 1u,
           "and leaves processor 0's record and status as they were");
     host_cpu = 1;
     kvm_pmu_vmx_exit(&other, guest1, 1);

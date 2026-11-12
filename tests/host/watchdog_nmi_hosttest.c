@@ -9,8 +9,9 @@
  *
  * Each row takes NMIs at given return addresses and checks which ones
  * watchdog_nmi claims: that KVM's hook runs before the detector's
- * `platform_pmu_overflow`, that each source the hook and the counter
- * report is counted, and that an NMI after one of two or more handled
+ * `platform_pmu_overflow` and is passed the sources taken before it, a
+ * backtrace request, that each source the hook and the counter report is
+ * counted, and that an NMI after one of two or more handled
  * sources, at the same address and finding nothing, is swallowed, as
  * Linux's default_do_nmi swallows it (arch/x86/kernel/nmi.c:404-405,
  * 472-475), while one after a single source is not.
@@ -29,6 +30,7 @@ static int calls;        /* calls of the hook and the check, in order */
 static int guest_at;     /* the order of the last hook call, 0 for none */
 static int overflow_at;  /* the order of the last check, 0 for none */
 static int handled_at;   /* the order of the last platform_pmu_handled */
+static int guest_others; /* the sources the hook was told of, -1 for none */
 
 /** Record one failed contract. */
 static void check(int ok, const char *what)
@@ -41,10 +43,12 @@ static void check(int ok, const char *what)
 
 /* ---- the models of the handler's sources ---- */
 
-/** KVM's hook: the number of guest overflows the row says it claims. */
-static int guest_hook(void)
+/** KVM's hook: the number of guest overflows the row says it claims,
+ * noting the sources the handler took before it. */
+static int guest_hook(int others)
 {
     guest_at = ++calls;
+    guest_others = others;
     return guest_ret;
 }
 
@@ -329,6 +333,7 @@ static int nmi_at(uintptr_t pc, int guest, int overflow)
     guest_ret = guest;
     overflow_ret = overflow;
     calls = guest_at = overflow_at = handled_at = 0;
+    guest_others = -1;
     return watchdog_nmi(&frame);
 }
 
@@ -380,11 +385,27 @@ static void single_row(void)
           "a guest overflow and the detector's in one NMI count as two sources");
 }
 
+/** A backtrace request, which the handler takes before KVM's hook, is
+ * passed to the hook as a source the NMI handled, so that the hook spends
+ * no claim on an NMI another source took (kvm/pmu.c's `kvm_pmu_nmi`). */
+static void backtrace_row(void)
+{
+    reset(1);
+    check(nmi_at(0x9000, 0, 0) == 0 && guest_others == 0,
+          "the hook is told of no other source on an NMI of none");
+    backtrace_mask[arch_cpu_id()] = 1;
+    check(nmi_at(0xA000, 0, 0) == 1 && guest_others == 1 && !backtrace_mask[arch_cpu_id()],
+          "and of the backtrace request the handler took before it");
+    check(nmi_at(0xA000, 0, 0) == 0,
+          "which alone, the hook claiming nothing, swallows no empty NMI after it");
+}
+
 int main(void)
 {
     order_row();
     swallow_row();
     single_row();
+    backtrace_row();
     if (failures) {
         printf("watchdog-nmi-hosttest: result: fail: %d checks\n", failures);
         return 1;

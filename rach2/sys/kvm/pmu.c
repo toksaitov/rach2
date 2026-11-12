@@ -264,8 +264,9 @@ static struct pmu_host pmu_host;
  * `pmu_cp[cpu]` those of them that count a TSX-checkpointed event, whose
  * PMI a transaction's rollback may leave with no status bit, and
  * `pmu_cp_due[cpu]` those whose PMI an NMI that finds no counter's status
- * may still claim, set at the guest's run (`kvm_pmu_vmx_run`) and spent by
- * one such NMI, since the NMI's exit stops the counter. `pmu_placed` is
+ * and that no other source took may still claim, set at the guest's run
+ * (`kvm_pmu_vmx_run`) and spent by one such NMI, since the NMI's exit
+ * stops the counter. `pmu_placed` is
  * the physical counters the last Intel entry gave its guest's counters,
  * which the read-only pmu_placed shows. In each, bit n is general counter
  * n and bit 32 + j fixed counter j. */
@@ -1905,13 +1906,14 @@ static void lbr_lists(struct kvm_pmu *p, struct kvm_pmu_msr *guest, uint32_t *ng
  * Publish `pmi`, the counters this entry gives a PMI bit, as the ones
  * `kvm_pmu_nmi` may claim on this processor, and `cp`, those of them
  * counting a TSX-checkpointed event, first acknowledging the overflow of
- * each counter of `pmi` and of the last entry's that is still set. The
- * last entry's overflow NMIs were taken before the exit's code reached
- * this one, forwarded at the exit or taken in the host once the exit
- * unblocked NMIs: a bit of its still set raised none, having come while
- * the counters' APIC entry was masked, and the exit counted it already. A
- * counter new to `pmi` may hold the status firmware or an earlier user
- * left, as Linux's intel_pmu_reset acknowledges whatever status it finds
+ * each counter of `pmi` and of the record's that is still set; with both
+ * 0, as `kvm_pmu_leave` calls it, only end the record. The record's
+ * overflow NMIs were taken before the exit's code went on, forwarded at
+ * the exit or taken in the host once the exit unblocked NMIs: a bit of
+ * its still set raised none, having come while the counters' APIC entry
+ * was masked, and the exit counted it already. A counter new to `pmi` may
+ * hold the status firmware or an earlier user left, as Linux's
+ * intel_pmu_reset acknowledges whatever status it finds
  * (arch/x86/events/intel/core.c:2984-2986); claimed, it would make an
  * unrelated NMI KVM's. With a checkpointed counter, which `kvm_pmu_nmi`
  * counts whenever any counter's status is set, the stale status of every
@@ -1942,9 +1944,10 @@ static void pmi_publish(uint64_t pmi, uint64_t cp, uint64_t spare)
 /**
  * Let an NMI that finds no counter's status claim the checkpointed
  * counters the entry published, once, from the guest's run on: an NMI
- * before it, such as a backtrace request between the publication and the
- * entry, cannot be their PMI, and would spend the claim that the PMI of
- * the run needs. Called with interrupts off, as the last step before the
+ * before it, between the publication and the entry, cannot be their PMI,
+ * and would spend the claim that the PMI of the run needs. One after it
+ * that another source took, such as a backtrace request, spends nothing
+ * (`kvm_pmu_nmi`). Called with interrupts off, as the last step before the
  * run, so that only an NMI in the backend's few instructions of entry
  * comes between it and the guest.
  */
@@ -2104,24 +2107,30 @@ void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest, int r
  * bit: while any counter's overflow bit is set, as Linux adds
  * `intel_cp_status` (arch/x86/events/intel/core.c:2516-2517, 3119-3124)
  * only to a status that holds more than COND_CHG, ASIF and LBRS_FROZEN
- * (core.c:3050-3057), and once, from the guest's run to the next entry, by
- * an NMI that finds no counter's bit. The status's other bits name no
- * counter's overflow: those three, which a guest's DEBUGCTL or firmware
- * may leave, and those of PEBS, Processor Trace and the uncore, which the
- * host never enables.
+ * (core.c:3050-3057), and once, from the guest's run until
+ * `kvm_pmu_leave` or the next entry ends the claim, by an NMI that finds
+ * no counter's bit and that no source before this one took. `others` is
+ * the number of sources the NMI handler took first, a backtrace request,
+ * which may come between the run's start and the entry; Linux's
+ * nmi_handle gives such an NMI to every handler of NMI_LOCAL, each of
+ * which claims only its own (arch/x86/kernel/nmi.c:136-179). The
+ * status's other bits name no counter's overflow: those three, which a
+ * guest's DEBUGCTL or firmware may leave, and those of PEBS, Processor
+ * Trace and the uncore, which the host never enables.
  * Where no counter's bit is set Linux returns 0 (arch/x86/events/intel/
  * core.c:3183-3185) and reports an NMI of unknown reason and goes on
  * (arch/x86/kernel/nmi.c:331-357, 475), where an unclaimed NMI here is a
  * hardware fault's panic; the counter, stopped by the exit the NMI caused,
- * raises no second PMI before the next entry. `kvm_pmu_leave` ends both
- * claims when the vCPU leaves the processor.
+ * raises no second PMI before the next entry. A PMI that came in the same
+ * NMI as another source's leaves the claim unspent, and it may then take
+ * one later NMI of unknown reason before it ends.
  *
  * The counter's APIC entry, which the delivery masked, is unmasked by the
  * hard-lockup detector's handler after this while its counter runs, and
  * stays masked otherwise. Only the counters' MSRs are read: an NMI may come
  * at any point of the host's code. 0 while no PMI bit is set.
  */
-int kvm_pmu_nmi(void)
+int kvm_pmu_nmi(int others)
 {
     uint32_t cpu = arch_cpu_id();
     uint64_t status, bits, all;
@@ -2138,7 +2147,7 @@ int kvm_pmu_nmi(void)
     }
     if (all & all_counters()) {
         status |= pmu_cp[cpu];
-    } else {
+    } else if (!others) {
         status = pmu_cp_due[cpu];
         pmu_cp_due[cpu] = 0;
     }

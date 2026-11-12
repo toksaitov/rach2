@@ -109,7 +109,7 @@ struct wd_cpu {
 
 static struct wd_cpu wd[NR_CPUS];
 
-int (*watchdog_guest_nmi)(void);
+int (*watchdog_guest_nmi)(int others);
 
 /* Whether `watchdog_init` has run, and whether the counter raises the NMI;
  * without it the buddy check is the hard-lockup detector. */
@@ -947,7 +947,7 @@ int watchdog_nmi(isr_params_t *params)
         handled++;
     }
     if (watchdog_guest_nmi) {
-        handled += watchdog_guest_nmi();
+        handled += watchdog_guest_nmi(handled);
     }
     if (wd_perf && platform_pmu_overflow(&due)) {
         handled++;

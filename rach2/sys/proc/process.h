@@ -327,12 +327,13 @@ struct process {
      * voluntary_ctxt_switches and nonvoluntary_ctxt_switches, and getrusage. */
     unsigned long nvcsw;
     unsigned long nivcsw;
-    /* Called with `sched_out_arg` by `schedule` at each switch counted in
-     * `nivcsw`, under the run queues' lock with interrupts off and before
-     * the process stops being current, as Linux's preempt notifier's
-     * sched_out: a vCPU's thread sets it across KVM_RUN. It must neither
-     * sleep nor fault. NULL for none. */
-    void (*sched_out)(void *arg);
+    /* Called by `schedule` at each switch away from the process, with
+     * `sched_out_arg` and whether the process could still run, the switch
+     * counted in `nivcsw`, under the run queues' lock with interrupts off
+     * and before the process stops being current, as Linux's preempt
+     * notifier's sched_out: a vCPU's thread sets it across KVM_RUN. It must
+     * neither sleep nor fault. NULL for none. */
+    void (*sched_out)(void *arg, int preempted);
     void *sched_out_arg;
     /* The scheduler's statistics of /proc/<pid>/schedstat, Linux's
      * sched_info, kept by `schedule`: the nanoseconds it waited ready on a

@@ -141,6 +141,6 @@ The format and the index of every milestone's faults are in [the upstream index]
 * Found: 2026-11-12, on the testing PC, in milestone 81, task 81-9, by reading Linux's handler while making Rach2's KVM claim a checkpointed guest counter's PMI (81-9.49).
 * Reproduction: not yet run. It needs a processor with TSX enabled, a counter on counter 2 with `in_tx_cp=1` whose overflow comes inside a transaction that then aborts, and no other overflow in the same NMI; the kernel log should then show the unknown-reason NMI.
 * Evidence: the sources at the lines named above; `rach2/sys/kvm/pmu.c`'s `kvm_pmu_nmi`.
-* Rach2: `kvm_pmu_nmi` counts the checkpointed counters while any status bit is set, as Linux does, and claims an NMI that finds no status for them once until the next entry, since Rach2 takes an unclaimed NMI for a hardware fault.
+* Rach2: `kvm_pmu_nmi` counts the checkpointed counters while any status bit is set, as Linux does, and claims an NMI that finds no status and that no other source took for them once, from the guest's run until the run loop's next turn, a switch away from the vCPU's thread or KVM_RUN's return, since Rach2 takes an unclaimed NMI for a hardware fault.
 * Status: unreported.
 * Next: read current mainline's `intel_pmu_handle_irq` for the early return, run the reproduction on a TSX processor, and report to the perf list if mainline still returns before the probe.
