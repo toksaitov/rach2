@@ -1,6 +1,7 @@
 /*
  * nvme.c: the NVMe driver: bring-up of the controllers, their admin and I/O
- * queues, the polled and the interrupt-driven transfer, and recovery.
+ * queues, the polled and the interrupt-driven transfer, and recovery, each
+ * controller under its I/O queue's locks and never the big lock.
  * `sys/block/Readme.md` describes the design.
  */
 
@@ -22,6 +23,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/kint.h"
 #include "../lib/kirq.h"
+#include "../lib/spinlock.h"
 
 /* PCI class 01 (mass storage), subclass 08 (non-volatile memory), interface
    02 (NVM Express). */
@@ -170,8 +172,33 @@ struct nvme_slot {
     uint64_t prp_phys;
 };
 
-/** One controller on the bus. */
+/**
+ * One controller on the bus.
+ *
+ * Two spinlocks of the I/O queue serialize the controller, as Linux's
+ * `nvmeq->sq_lock` and `nvmeq->cq_poll_lock` do a queue's two halves
+ * (drivers/nvme/host/pci.c:192-197), and no big lock is taken. `sq_lock`
+ * covers the submission queue's tail and its doorbell (`nvme_push`, as
+ * `nvme_queue_rq` and `nvme_submit_cmds` at pci.c:981-984, 995-1002), the
+ * slots, `seq`, `next_ns`, each namespace's queue, `wseq` and `unflushed`,
+ * and `resetting` and `dead`. `cq_poll_lock` covers the completion queue's
+ * head and phase and the right to take its entries, which the interrupt and
+ * a polled caller both do, as Linux's poll paths take it (pci.c:1210-1227);
+ * an entry taken is acted on under `sq_lock` inside it. The order is
+ * `cq_poll_lock`, `sq_lock`, then the request pool's lock, which a
+ * completion takes, and the drivers' counters' last; both are taken with
+ * interrupts off. `resetting` is set and cleared under both, so either
+ * lock reads it; while it is set the recovery alone touches the controller,
+ * its queues and `dead`, as Linux's `nvme_dev_disable` runs under
+ * `shutdown_lock` with the queues quiesced (pci.c:2785-2831). The admin
+ * queue and the identify page are the bring-up's and the recovery's alone.
+ * `bounce_lock` keeps the bounce page for one polled transfer at a time and
+ * is taken before the other two.
+ */
 struct nvme_ctrl {
+    struct spinlock sq_lock;
+    struct spinlock cq_poll_lock;
+    struct spinlock bounce_lock;
     int number;
     pci_device_t pci;
     uint64_t bar_phys;
@@ -201,7 +228,10 @@ struct nvme_ctrl {
 
 static struct nvme_ctrl nvme_ctrls[NVME_CONTROLLERS];
 static int nvme_nctrls;
-static uint32_t nvme_messages; /* messages the handler has taken */
+/* Messages the handler has taken, under `nvme_messages_lock`, since the
+ * handler runs on any processor without the big lock. */
+static struct spinlock nvme_messages_lock = SPINLOCK_INIT_NAMED("nvme_messages_lock");
+static uint32_t nvme_messages;
 
 /* Why the last bring-up step failed, for the line that reports it. */
 static const char *nvme_why = "";
@@ -230,7 +260,11 @@ void nvme_set_io(const struct nvme_io *ops)
 
 uint32_t nvme_interrupts(void)
 {
-    return nvme_messages;
+    uint32_t flags = spin_lock_irqsave(&nvme_messages_lock);
+    uint32_t n = nvme_messages;
+
+    spin_unlock_irqrestore(&nvme_messages_lock, flags);
+    return n;
 }
 
 /** Read `c`'s register at `offset`. */
@@ -822,7 +856,7 @@ static void nvme_take_namespace(struct nvme_ctrl *c, uint32_t nsid)
     ns->dev.sector_size = BLOCK_SECTOR_SIZE;
     ns->dev.sector_count = nsze;
     ns->dev.max_sectors = c->max_sectors;
-    ns->dev.flags = BLOCK_FAULT_SAFE | BLOCK_POLLABLE | BLOCK_WRITE_THROUGH;
+    ns->dev.flags = BLOCK_FAULT_SAFE | BLOCK_POLLABLE | BLOCK_WRITE_THROUGH | BLOCK_UNLOCKED;
     ns->dev.unflushed = 0;
     ns->dev.read = nvme_read;
     ns->dev.write = nvme_write;
@@ -951,6 +985,9 @@ static void nvme_discover(void)
                  (int)dev.function, NVME_CONTROLLERS);
             continue;
         }
+        spin_lock_init(&nvme_ctrls[nvme_nctrls].sq_lock, "nvme_sq_lock");
+        spin_lock_init(&nvme_ctrls[nvme_nctrls].cq_poll_lock, "nvme_cq_poll_lock");
+        spin_lock_init(&nvme_ctrls[nvme_nctrls].bounce_lock, "nvme_bounce_lock");
         nvme_ctrls[nvme_nctrls].number = nvme_nctrls;
         nvme_ctrls[nvme_nctrls].pci = dev;
         nvme_ctrls[nvme_nctrls].vector = -1;
@@ -1091,7 +1128,7 @@ static int nvme_build(const struct nvme_ctrl *c, struct nvme_slot *s, const stru
 }
 
 /** A free slot of `c`, marked busy under a fresh command identifier, or
- * NULL. Called with interrupts masked. */
+ * NULL. `sq_lock` is held. */
 static struct nvme_slot *nvme_slot_take(struct nvme_ctrl *c)
 {
     uint32_t i;
@@ -1118,7 +1155,7 @@ static struct nvme_slot *nvme_slot_take(struct nvme_ctrl *c)
 }
 
 /** A write of `ns` was answered without a flush: the disk is marked, and
- * the count of such writes moves on. */
+ * the count of such writes moves on. `sq_lock` is held. */
 static void nvme_unflushed(struct nvme_ns *ns)
 {
     ns->wseq++;
@@ -1132,7 +1169,7 @@ static void nvme_unflushed(struct nvme_ns *ns)
  * unflushed while it ran. The mark is cleared here and not at the issue,
  * so that a second caller's flush finds it set until this one has finished
  * and waits on a flush of its own instead of reporting what is not yet on
- * the medium.
+ * the medium. `sq_lock` is held.
  */
 static void nvme_flushed(struct nvme_ns *ns, uint32_t fseq)
 {
@@ -1147,8 +1184,7 @@ static void nvme_flushed(struct nvme_ns *ns, uint32_t fseq)
  * no others (NVMe 1.4, Figure 406), and a durable write, one without
  * `BLOCK_REQ_NOFLUSH`, must leave every write answered before it on the
  * medium too, as the buffer cache's write after an unflushed one expects.
- * Returns 0, or -1 when the flush cannot be built. Called with interrupts
- * masked.
+ * Returns 0, or -1 when the flush cannot be built. `sq_lock` is held.
  */
 static int nvme_flush_half(struct nvme_ctrl *c, struct nvme_slot *s, struct nvme_ns *ns)
 {
@@ -1179,8 +1215,9 @@ static int nvme_flush_half(struct nvme_ctrl *c, struct nvme_slot *s, struct nvme
  * marks the disk; a durable write, answered while the disk is marked,
  * has a flush issued in its slot before it is completed; a flush that
  * finishes well clears the mark (`nvme_flushed`). A completion whose
- * identifier matches no command in flight is dropped with a record. Called
- * with interrupts masked.
+ * identifier matches no command in flight is dropped with a record. Both
+ * `cq_poll_lock` and `sq_lock` are held, and the request is completed under
+ * them, the request pool's lock nesting inside.
  */
 static void nvme_complete(struct nvme_ctrl *c, const struct nvme_cqe *e)
 {
@@ -1220,19 +1257,24 @@ static void nvme_complete(struct nvme_ctrl *c, const struct nvme_cqe *e)
     block_request_complete(r, s->generation, rc);
 }
 
-/** Take every completion the I/O queue has. Called with interrupts
- * masked. */
+/**
+ * Take every completion the I/O queue has, as Linux's `nvme_poll_cq`
+ * (pci.c:1154-1173). `cq_poll_lock` is held, the controller is not being
+ * reset, and each entry is acted on under `sq_lock`, taken for it alone.
+ */
 static void nvme_reap(struct nvme_ctrl *c)
 {
     struct nvme_cqe e;
 
     while (nvme_pop(c, &c->io, &e)) {
+        spin_lock(&c->sq_lock);
         nvme_complete(c, &e);
+        spin_unlock(&c->sq_lock);
     }
 }
 
 /** The next namespace of `c` with a request waiting, taken in turn, or
- * NULL. */
+ * NULL. `sq_lock` is held. */
 static struct nvme_ns *nvme_next_waiting(struct nvme_ctrl *c)
 {
     int i;
@@ -1253,7 +1295,7 @@ static struct nvme_ns *nvme_next_waiting(struct nvme_ctrl *c)
  * medium when it is answered unless the request lets it stay in the disk's
  * cache, or a flush, which notes the count of unflushed writes it covers
  * (`nvme_flushed`). Returns 0, or -1 when the command cannot be built.
- * Called with interrupts masked.
+ * `sq_lock` is held.
  */
 static int nvme_issue(struct nvme_ctrl *c, struct nvme_slot *s, struct nvme_ns *ns,
                       struct block_request *r)
@@ -1292,12 +1334,10 @@ static int nvme_issue(struct nvme_ctrl *c, struct nvme_slot *s, struct nvme_ns *
 /**
  * Issue waiting requests while slots are free, the namespaces taking turns.
  * A controller being reset is left alone, and a dead one answers each
- * waiting request with EIO.
+ * waiting request with EIO. `sq_lock` is held.
  */
 static void nvme_start_next(struct nvme_ctrl *c)
 {
-    uint32_t flags = kirq_save();
-
     while (!c->resetting) {
         struct nvme_ns *ns = nvme_next_waiting(c);
         struct nvme_slot *s = 0;
@@ -1319,29 +1359,47 @@ static void nvme_start_next(struct nvme_ctrl *c)
             block_request_complete(r, r->generation, -EIO);
         }
     }
-    kirq_restore(flags);
 }
 
 /**
  * Take a slot from its owner when recovery has reset the controller: a
- * request is answered with EIO, a polled command is marked done with
- * `NVME_STATUS_RESET`, and the slot is free.
+ * request is answered with EIO and its slot is free; a polled command is
+ * marked done with `NVME_STATUS_RESET`, and its slot stays busy until its
+ * caller has read that and frees it, since a slot freed here could be taken
+ * by another command before the caller looked. `sq_lock` is held.
  */
 static void nvme_slot_fail(struct nvme_slot *s)
 {
     struct block_request *r = s->request;
 
-    if (!s->busy) {
+    if (!s->busy || s->done) {
         return;
     }
-    s->busy = 0;
-    s->request = 0;
     if (r) {
+        s->busy = 0;
+        s->request = 0;
         block_request_complete(r, s->generation, -EIO);
         return;
     }
     s->status = NVME_STATUS_RESET;
     s->done = 1;
+}
+
+/** Take both of `c`'s locks, `cq_poll_lock` first, with interrupts off, and
+ * return the state `nvme_unlock` puts back. */
+static uint32_t nvme_lock(struct nvme_ctrl *c)
+{
+    uint32_t flags = spin_lock_irqsave(&c->cq_poll_lock);
+
+    spin_lock(&c->sq_lock);
+    return flags;
+}
+
+/** Give back what `nvme_lock` took. */
+static void nvme_unlock(struct nvme_ctrl *c, uint32_t flags)
+{
+    spin_unlock(&c->sq_lock);
+    spin_unlock_irqrestore(&c->cq_poll_lock, flags);
 }
 
 /**
@@ -1355,61 +1413,97 @@ static void nvme_slot_fail(struct nvme_slot *s)
  * panic, with interrupts masked, as an AHCI engine that does not stop is.
  * One that stops and does not come back is out of use, and every later
  * command answers EIO.
+ *
+ * `resetting`, set under both locks, keeps the interrupt, the polled
+ * callers and the queue off the controller while the reset runs without
+ * the locks; a caller that finds another's recovery running waits for its
+ * end, which has aborted that caller's command too, as Linux's second
+ * reset finds the controller already resetting. The reset runs with this
+ * processor's interrupts masked, as before, so that it is not switched
+ * away from while callers on other processors wait for it.
  */
 static void nvme_recover(struct nvme_ctrl *c, const char *why)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = nvme_lock(c);
     uint32_t i;
+    int failed;
 
-    klog(KLOG_WARN, "nvme", "%d: recovery: %s; resetting the controller", c->number, why);
+    if (c->resetting) {
+        while (c->resetting) {
+            nvme_unlock(c, flags);
+            nvme_io->udelay(NVME_POLL_US);
+            flags = nvme_lock(c);
+        }
+        nvme_unlock(c, flags);
+        return;
+    }
     c->resetting = 1;
+    nvme_unlock(c, flags);
+    flags = kirq_save();
+    klog(KLOG_WARN, "nvme", "%d: recovery: %s; resetting the controller", c->number, why);
     if (nvme_disable(c) != 0) {
         k_panic("nvme: recovery: the controller did not stop; DMA buffers still owned");
     }
+    spin_lock(&c->sq_lock);
     for (i = 0; i < NVME_SLOTS; i++) {
         nvme_slot_fail(&c->slots[i]);
     }
-    if (nvme_enable(c) != 0 || nvme_create_io_queues(c) != 0) {
-        c->dead = 1;
+    spin_unlock(&c->sq_lock);
+    failed = nvme_enable(c) != 0 || nvme_create_io_queues(c) != 0;
+    if (failed) {
         (void)nvme_disable(c);
         klog(KLOG_ERR, "nvme", "%d: recovery: failed: %s; the controller is out of use", c->number,
              nvme_why);
     } else {
         klog(KLOG_WARN, "nvme", "%d: recovery: the controller answers again", c->number);
     }
+    spin_lock(&c->cq_poll_lock);
+    spin_lock(&c->sq_lock);
+    if (failed) {
+        c->dead = 1;
+    }
     c->resetting = 0;
-    kirq_restore(flags);
     nvme_start_next(c);
+    spin_unlock(&c->sq_lock);
+    spin_unlock(&c->cq_poll_lock);
+    kirq_restore(flags);
 }
 
 /**
  * A slot for a polled command, reaping completions while every slot is
  * busy. Slots that stay busy through the whole wait are a controller that
- * stopped answering, which is recovered. NULL when the controller is out of
- * use or being reset.
+ * stopped answering, which is recovered; a recovery that another caller
+ * runs is waited out. NULL when the controller is out of use.
  */
 static struct nvme_slot *nvme_slot_wait(struct nvme_ctrl *c)
 {
     uint32_t steps = nvme_cmd_steps();
-    struct nvme_slot *s = 0;
 
-    while (!c->dead && !c->resetting) {
-        uint32_t flags = kirq_save();
+    for (;;) {
+        uint32_t flags = spin_lock_irqsave(&c->cq_poll_lock);
+        struct nvme_slot *s = 0;
+        int dead, resetting = c->resetting;
 
-        nvme_reap(c);
-        s = nvme_slot_take(c);
-        kirq_restore(flags);
-        if (s) {
-            break;
+        if (!resetting) {
+            nvme_reap(c);
         }
-        if (--steps == 0) {
+        spin_lock(&c->sq_lock);
+        dead = !resetting && c->dead;
+        if (!resetting && !dead) {
+            s = nvme_slot_take(c);
+        }
+        spin_unlock(&c->sq_lock);
+        spin_unlock_irqrestore(&c->cq_poll_lock, flags);
+        if (s || dead) {
+            return s;
+        }
+        if (!resetting && --steps == 0) {
             nvme_recover(c, "no command slot came free");
             steps = nvme_cmd_steps();
             continue;
         }
         nvme_io->udelay(NVME_POLL_US);
     }
-    return s;
 }
 
 /**
@@ -1418,8 +1512,11 @@ static struct nvme_slot *nvme_slot_wait(struct nvme_ctrl *c)
  * wait, after recovery, and -1 when the command could not be built.
  *
  * The completion may be taken by this loop or by the interrupt handler,
- * which marks the slot done either way. The wait neither sleeps nor
- * allocates, so it serves a page fault with interrupts off.
+ * on any processor, which marks the slot done either way under `sq_lock`.
+ * The slot stays this caller's until it frees it: after the answer, after
+ * a recovery that took it (`nvme_slot_fail`), or after its own recovery
+ * once the wait ran out, which has aborted the command. The wait neither
+ * sleeps nor allocates, so it serves a page fault with interrupts off.
  */
 static int nvme_polled(struct nvme_ctrl *c, const struct nvme_xfer *xf)
 {
@@ -1432,48 +1529,57 @@ static int nvme_polled(struct nvme_ctrl *c, const struct nvme_xfer *xf)
     if (!s) {
         return -EIO;
     }
-    flags = kirq_save();
-    if (nvme_build(c, s, xf, &cmd) != 0) {
+    flags = spin_lock_irqsave(&c->sq_lock);
+    if (c->resetting || c->dead || s->done || nvme_build(c, s, xf, &cmd) != 0) {
+        int rc = c->resetting || c->dead || s->done ? -EIO : -1;
+
         s->busy = 0;
-        kirq_restore(flags);
         nvme_start_next(c);
-        return -1;
+        spin_unlock_irqrestore(&c->sq_lock, flags);
+        return rc;
     }
     nvme_push(c, &c->io, &cmd);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&c->sq_lock, flags);
     while (steps-- > 0) {
-        flags = kirq_save();
-        nvme_reap(c);
+        flags = spin_lock_irqsave(&c->cq_poll_lock);
+        if (!c->resetting) {
+            nvme_reap(c);
+        }
+        spin_lock(&c->sq_lock);
         block_count_poll();
         if (s->done) {
             uint16_t status = s->status;
 
             s->busy = 0;
-            kirq_restore(flags);
             nvme_start_next(c);
+            nvme_unlock(c, flags);
             return status ? -EIO : 0;
         }
-        kirq_restore(flags);
+        nvme_unlock(c, flags);
         nvme_io->udelay(NVME_POLL_US);
     }
     klog(KLOG_WARN, "nvme", "%d: namespace %d: command 0x%X failed: %s", c->number,
          (int)xf->ns->nsid, (unsigned)xf->opcode,
          masked ? "no answer in five seconds with interrupts off" : "no answer in thirty seconds");
     nvme_recover(c, "a command was not answered");
+    flags = spin_lock_irqsave(&c->sq_lock);
+    s->busy = 0;
+    nvme_start_next(c);
+    spin_unlock_irqrestore(&c->sq_lock, flags);
     return -EIO;
 }
 
 /**
  * A polled transfer of at most a page through the controller's bounce
  * page, for a buffer the PRP entries cannot describe because it is not
- * aligned to four bytes. Interrupts stay masked throughout, since the
- * bounce page is one per controller.
+ * aligned to four bytes. The bounce page is one per controller, so
+ * `bounce_lock` is held throughout, with interrupts masked.
  */
 static int nvme_bounced(struct nvme_ctrl *c, const struct nvme_xfer *xf)
 {
     struct nvme_xfer b = *xf;
     uint32_t bytes = xf->count * BLOCK_SECTOR_SIZE, i;
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&c->bounce_lock);
     int rc;
 
     b.buf = c->bounce;
@@ -1489,7 +1595,7 @@ static int nvme_bounced(struct nvme_ctrl *c, const struct nvme_xfer *xf)
             xf->out[i] = c->bounce[i];
         }
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&c->bounce_lock, flags);
     return rc;
 }
 
@@ -1534,7 +1640,8 @@ static int nvme_flush_polled(struct nvme_ns *ns);
 static int nvme_rw(block_device_t *device, uint64_t lba, uint32_t count, const void *src, void *dst)
 {
     struct nvme_xfer xf;
-    int rc;
+    uint32_t flags;
+    int rc, unflushed;
 
     if (count == 0 || lba > device->sector_count || count > device->sector_count - lba) {
         return -EIO;
@@ -1547,10 +1654,13 @@ static int nvme_rw(block_device_t *device, uint64_t lba, uint32_t count, const v
     xf.out = (uint8_t *)dst;
     xf.control = dst ? 0 : NVME_RW_FUA;
     rc = nvme_polled_rw(&xf);
-    if (rc == 0 && !dst && device->unflushed) {
-        rc = nvme_flush_polled(xf.ns);
+    if (rc != 0 || dst) {
+        return rc;
     }
-    return rc;
+    flags = spin_lock_irqsave(&xf.ns->ctrl->sq_lock);
+    unflushed = device->unflushed;
+    spin_unlock_irqrestore(&xf.ns->ctrl->sq_lock, flags);
+    return unflushed ? nvme_flush_polled(xf.ns) : 0;
 }
 
 /** The device's read, polled. */
@@ -1566,13 +1676,16 @@ static int nvme_write(block_device_t *device, uint64_t lba, uint32_t count, cons
 }
 
 /** Flush the disk's cache by polling, clearing the unflushed mark as a
- * queued flush clears it (`nvme_flushed`). */
+ * queued flush clears it (`nvme_flushed`). The count of unflushed writes is
+ * read before the flush is issued, so the flush covers at least those. */
 static int nvme_flush_polled(struct nvme_ns *ns)
 {
     struct nvme_xfer xf;
+    uint32_t flags = spin_lock_irqsave(&ns->ctrl->sq_lock);
     uint32_t fseq = ns->wseq;
     int rc;
 
+    spin_unlock_irqrestore(&ns->ctrl->sq_lock, flags);
     xf.ns = ns;
     xf.opcode = NVME_CMD_FLUSH;
     xf.lba = 0;
@@ -1583,13 +1696,17 @@ static int nvme_flush_polled(struct nvme_ns *ns)
     block_count_flush();
     rc = nvme_polled(ns->ctrl, &xf);
     if (rc == 0) {
+        flags = spin_lock_irqsave(&ns->ctrl->sq_lock);
         nvme_flushed(ns, fseq);
+        spin_unlock_irqrestore(&ns->ctrl->sq_lock, flags);
     }
     return rc;
 }
 
 /** The device's `submit`: queue `r` on its namespace and issue what the
- * free slots allow. Returns 0, or `-EIO` for a range past the disk. */
+ * free slots allow, under `sq_lock`, as Linux's `nvme_queue_rq` copies the
+ * command in under it (pci.c:959-986). Returns 0, or `-EIO` for a range
+ * past the disk. */
 static int nvme_submit(block_device_t *device, struct block_request *r)
 {
     struct nvme_ns *ns = (struct nvme_ns *)device->drvdata;
@@ -1599,16 +1716,16 @@ static int nvme_submit(block_device_t *device, struct block_request *r)
         r->count > device->sector_count - r->lba) {
         return -EIO;
     }
-    flags = kirq_save();
     r->queued = 0;
+    flags = spin_lock_irqsave(&ns->ctrl->sq_lock);
     if (ns->queue_tail) {
         ns->queue_tail->queued = r;
     } else {
         ns->queue_head = r;
     }
     ns->queue_tail = r;
-    kirq_restore(flags);
     nvme_start_next(ns->ctrl);
+    spin_unlock_irqrestore(&ns->ctrl->sq_lock, flags);
     return 0;
 }
 
@@ -1624,24 +1741,35 @@ static int nvme_flush_submit(block_device_t *device, struct block_request *r)
 }
 
 /**
- * The controllers' message: every controller moved to messages, unless it is
- * being reset, has its completions taken and its waiting requests issued.
- * The vectors of all the controllers share this handler, so it looks at each.
+ * The controllers' message, which runs without the big lock (ISR_UNLOCKED):
+ * every controller moved to messages, unless it is being reset, has its
+ * completions taken under `cq_poll_lock` and its waiting requests issued
+ * under `sq_lock`, as Linux's `nvme_irq` polls its queue's completions
+ * (pci.c:1175-1186). The vectors of all the controllers share this handler,
+ * so it looks at each.
  */
 static void nvme_handler(isr_params_t *params)
 {
+    uint32_t flags = spin_lock_irqsave(&nvme_messages_lock);
     int i;
 
     (void)params;
     nvme_messages++;
+    spin_unlock_irqrestore(&nvme_messages_lock, flags);
     for (i = 0; i < nvme_nctrls; i++) {
         struct nvme_ctrl *c = &nvme_ctrls[i];
 
-        if (c->vector < 0 || c->resetting) {
+        if (c->vector < 0) {
             continue;
         }
-        nvme_reap(c);
-        nvme_start_next(c);
+        flags = spin_lock_irqsave(&c->cq_poll_lock);
+        if (!c->resetting) {
+            nvme_reap(c);
+            spin_lock(&c->sq_lock);
+            nvme_start_next(c);
+            spin_unlock(&c->sq_lock);
+        }
+        spin_unlock_irqrestore(&c->cq_poll_lock, flags);
     }
 }
 
@@ -1687,6 +1815,7 @@ static void nvme_start_one(struct nvme_ctrl *c)
         return;
     }
     register_isr_handler((uint8_t)vector, nvme_handler, "nvme");
+    isr_register_flags((uint8_t)vector, nvme_handler, ISR_UNLOCKED);
     c->vector = vector;
     if (nvme_msix(c, (uint8_t)vector) != 0) {
         kind = "msi";
