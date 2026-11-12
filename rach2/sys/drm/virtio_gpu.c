@@ -968,7 +968,7 @@ static void obj_vm_put(void *obj)
     drm_gem_object_put((struct drm_gem_object *)obj);
 }
 
-static const struct vm_device_ops vgpu_vm_ops = {obj_vm_page, obj_vm_put, NULL};
+static const struct vm_device_ops vgpu_vm_ops = {obj_vm_page, obj_vm_put, NULL, 0};
 
 /** The `mmap` of an object: a device region over its frames, cached, as
  * Linux maps virtio-gpu's shmem objects. */
@@ -1045,8 +1045,9 @@ void vgpu_obj_free(struct drm_gem_object *obj)
     struct virtio_gpu_cmd *cmd;
 
     vgpu_resource_detach(vg, bo);
-    /* The device's pages go before the UNMAP_BLOB that lets it unpin them. */
-    vgpu_blob_pages_drop(vg, bo);
+    /* The device's pages go before the UNMAP_BLOB that lets it unpin them;
+     * no mapping is left to take away, since each held a reference. */
+    vgpu_blob_pages_drop(vg, bo, 0);
     if (bo->res_id && !vg->dead) {
         cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_UNREF,
                            sizeof(struct virtio_gpu_resource_unref));
@@ -2007,7 +2008,7 @@ void vgpu_kill(struct virtio_gpu_device *vg)
     }
     for (bo = vg->resources; bo; bo = bo->next) {
         bo->res_id = 0;
-        vgpu_blob_pages_drop(vg, bo);
+        vgpu_blob_pages_drop(vg, bo, 1);
         /* A transport's own backing is its heap's, which the reset frees;
          * a mapping that faulted in since the unplug's zap goes first. An
          * exported object keeps its frames, which an importer may hold in
