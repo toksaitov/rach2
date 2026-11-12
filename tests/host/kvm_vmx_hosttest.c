@@ -5120,6 +5120,31 @@ static void tpr_rows(void)
     fdclose(vm);
 }
 
+/** The first entry of a new vCPU in 64-bit mode with RSP all ones, a
+ * canonical stack pointer that KVM_SET_REGS takes: the VMCS gets it though
+ * the entry's cache fills its fields with all ones at the build, since its
+ * RSP, RIP and RFLAGS are known only once written, as Linux's regs_dirty
+ * makes vmx_vcpu_run write them at the first entry (x86.c:11505-11506,
+ * vmx.c:7379-7383). */
+static void first_entry_rows(int vm)
+{
+    int fd = make_vcpu(vm, 12);
+    struct kvm_regs r;
+
+    long_start(fd, "\x0F\xA2\xF4", 3);
+    r = regs_of(fd);
+    r.rsp = ~0ull;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS with RSP all ones");
+    script(EXIT_CPUID, 0, 2);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && run_of(fd)->exit_reason == KVM_EXIT_HLT,
+          "a new vCPU with RSP all ones runs CPUID, then HLT to the caller");
+    r = regs_of(fd);
+    CHECK(r.rsp == ~0ull && r.rip == 0x1003,
+          "the first entry writes RSP all ones to the VMCS, and the exit reads it back");
+    fdclose(fd);
+}
+
 /** What Linux's selftests ask of the guest's side, on a vCPU of its own
  * on `vm` in protected mode. The rows change the VM's capabilities, so
  * they come last. */
@@ -5170,6 +5195,7 @@ int main(void)
     ts_rows(vm);
     hv_rows(vm);
     selftest_rows(vm);
+    first_entry_rows(vm);
     tpr_rows();
     block_rows();
     exitstat_rows();
