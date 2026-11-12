@@ -16,9 +16,14 @@
 # musl system's; they go under /usr, as the other ports' do and Debian's
 # merged /usr has them. The install runs serially: under parallel make it may
 # link swapon again while libtool reinstalls libmount, whose library is then
-# missing for a moment.
+# missing for a moment. configure asks ncursesw6-config for ncurses' flags
+# before pkg-config, and in a cross build takes the build host's script when
+# no prefixed one exists; a Debian or Ubuntu host's answers -ltinfo, which the
+# root's ncurses does not have, since its terminfo layer is in libncursesw.
+# The root's own script answers instead.
 VERSION=2.42.4
 DEPENDS=ncurses
+CACHE="NCURSESW6_CONFIG=$ROOT/usr/bin/ncursesw6-config"
 CONFIGURE_ARGS="--bindir=/usr/bin --sbindir=/usr/sbin --libdir=/usr/lib --disable-nls --disable-static --disable-asciidoc --disable-poman \
 --disable-bash-completion --disable-makeinstall-chown --disable-makeinstall-setuid \
 --enable-write --disable-liblastlog2 --disable-pam-lastlog2 --disable-login \
