@@ -1248,6 +1248,14 @@ void vm_file_get(struct vm_file *f)
     check(0, "unexpected hold of a mapping");
 }
 
+/** Fail the row: no row holds a mapping. */
+int vm_file_tryget(struct vm_file *f)
+{
+    (void)f;
+    check(0, "unexpected hold of a mapping");
+    return 0;
+}
+
 /** Fail the row: no row puts a mapping. */
 void vm_file_put(struct vm_file *f)
 {

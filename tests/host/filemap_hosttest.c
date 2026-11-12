@@ -427,6 +427,13 @@ void vm_file_get(struct vm_file *f)
 }
 
 /** Not reached. */
+int vm_file_tryget(struct vm_file *f)
+{
+    (void)f;
+    return 0;
+}
+
+/** Not reached. */
 void vm_file_put(struct vm_file *f)
 {
     (void)f;
