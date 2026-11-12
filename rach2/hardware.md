@@ -20,7 +20,7 @@ Both kernels use these features where the processor has them, and run without th
 | NX, 1 GiB pages | x86-64 only: no-execute pages, and the direct map in large pages |
 | VMX with IA32_FEATURE_CONTROL allowing it, or SVM not disabled in VM_CR | x86-64 only: `/dev/kvm` ([kvm(4)](../man/man4/kvm.4)), absent without either |
 
-The interrupt controllers are the 8259 pair and, where the MADT lists one, the I/O APIC. Programs run on every processor the ACPI MADT lists, up to 64, and kernel code on one at a time. The local APIC runs in x2APIC mode under KVM, Hyper-V and Xen, and on bare metal where VT-d remaps interrupts in x2APIC format, as on the Lenovo; elsewhere in xAPIC mode. [The PC platform](sys/arch/x86/Readme.md) says when the other processors are started.
+The interrupt controllers are the 8259 pair and, where the MADT lists one, the I/O APIC. Programs run on every processor the ACPI MADT lists, up to 64, and kernel code on one at a time. The local APIC runs in x2APIC mode under KVM, Hyper-V and Xen, and, with the x86-64 kernel, on bare metal where VT-d remaps interrupts in x2APIC format, as on the Lenovo; elsewhere, the i686 kernel on the Lenovo among them, in xAPIC mode. [The PC platform](sys/arch/x86/Readme.md) says when the other processors are started.
 
 ## Firmware and loaders
 
