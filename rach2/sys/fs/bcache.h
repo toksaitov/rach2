@@ -332,8 +332,15 @@ void bcache_wait_unheld(block_device_t *dev, uint64_t blk);
  * `block_flush`, a `bcache_sync` or a `bcache_write`. */
 int bcache_sync_unflushed(block_device_t *dev);
 
-/** Drop `dev`'s buffers at unmount and clear its failed-write mark; -EBUSY,
- * with nothing dropped, while any is held or dirty. */
+/**
+ * Drop `dev`'s buffers at unmount and clear its failed-write mark. -EBUSY,
+ * with nothing dropped, when a first walk of the buffers finds one of
+ * `dev`'s held or dirty; 0 otherwise. Both walks let the cache's lock go
+ * between batches, so a buffer of `dev` taken behind the first walk may be
+ * held or dirty when the second reaches it: a held one is dropped at its
+ * release, and a dirty one is left for its write. The caller has stopped
+ * every use of `dev`, so that neither comes but by a race.
+ */
 int bcache_invalidate(block_device_t *dev);
 
 /**
@@ -348,7 +355,9 @@ int bcache_invalidate(block_device_t *dev);
  */
 void bcache_device_gone(block_device_t *dev);
 
-/** How many of `dev`'s buffers are held right now. */
+/** How many of `dev`'s buffers are held, each counted as a walk of the
+ * buffers reaches it: the walk lets the cache's lock go between batches,
+ * so one taken behind it is not counted, and one let go once counted is. */
 int bcache_device_holds(block_device_t *dev);
 
 /**
