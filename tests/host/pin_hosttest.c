@@ -26,7 +26,9 @@
  * a pin of an object's frames refuses a frame the allocator does not count;
  * the frame KVM shares with another program (`paging_user_ram_frame`) is
  * given for a writable private page and refused for a memfd_secret page and
- * for every page once the address space has ended, its directory gone;
+ * for every page once the address space has ended, its directory gone,
+ * and a run of them read in one walk crosses a leaf table's end and a
+ * region's and stops at the first page refused;
  * a fork copies a pinned private page for the child, and a pin of a page
  * shared copy-on-write makes it the parent's own first; an unmap of a
  * pinned page and the end of the address space tell the holder once and
@@ -293,6 +295,37 @@ static void ram_frame_rows(void)
           "no frame is given once the address space has ended");
     vm_remove(&mm_a.vm, plain, secret + P);
     unmap_user_range(&dir_a, plain, secret + P);
+}
+
+/** A run of frames read in one walk (`paging_user_ram_frames`) crosses a
+ * leaf table's end and a region's, and stops at the first page it refuses,
+ * here past the last region. */
+static void ram_run_rows(void)
+{
+    uintptr_t from = VB - 2 * P, frames[6];
+    uint32_t i;
+    int ok = 1;
+
+    check(vm_insert(&mm_a.vm, from, VB, RW, VM_ANON) == 0 &&
+              vm_insert(&mm_a.vm, VB, VB + 2 * P, RW | VM_PROT_EXEC, VM_ANON) == 0 &&
+              vm_find(&mm_a.vm, from)->end == VB,
+          "two regions meet at a leaf table's end");
+    for (i = 0; i < 4; i++) {
+        ok &= resolve_held(&mm_a, from + i * P, 1, ~(uintptr_t)0) == 1;
+    }
+    check(ok, "their four pages are written");
+    for (i = 0; i < 6; i++) {
+        frames[i] = 0;
+    }
+    check(paging_user_ram_frames(&mm_a, from, 4, frames) == 4, "a run of the four is given whole");
+    for (i = 0; i < 4; i++) {
+        ok &= frames[i] != 0 && frames[i] == PTE_ADDR(pte_of(&dir_a, from + i * P));
+    }
+    check(ok, "each frame is its page's, on both sides of the table's end and the region's");
+    check(paging_user_ram_frames(&mm_a, from + P, 5, frames) == 3,
+          "a run past the last region stops at its end");
+    vm_remove(&mm_a.vm, from, VB + 2 * P);
+    unmap_user_range(&dir_a, from, VB + 2 * P);
 }
 
 /** A fork copies a pinned private page for the child; a pin of a page
@@ -860,6 +893,7 @@ int main(void)
     pin_rows();
     frame_rows();
     ram_frame_rows();
+    ram_run_rows();
     fork_rows();
     release_rows();
     keep_rows();
