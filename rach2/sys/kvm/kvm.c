@@ -416,7 +416,7 @@ static int32_t create_vm(uintptr_t type)
     vm->refs = 1;
     spin_lock_init(&vm->mmu_lock, "kvm_mmu");
     spin_lock_init(&vm->clock_lock, "kvm_clock");
-    spin_lock_init(&vm->filter_lock, "kvm_msr_filter");
+    spin_lock_init(&vm->filter_lock, "kvm_filter");
     vm->ident_addr = KVM_IDENT_ADDR_DEFAULT;
     vm->apic_bus_ns = KVM_APIC_BUS_NS_DEFAULT;
     vm->disabled_quirks = quirks_inapplicable();
