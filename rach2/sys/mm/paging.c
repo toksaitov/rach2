@@ -724,8 +724,10 @@ static pte_t device_cache(uint32_t prot)
  * for one, and the batch is mapped only while the region and the count of
  * zaps are as they were, so that no page the object took back meanwhile is
  * mapped. The first page the object has not got, or a table that cannot be
- * had, ends the walk and leaves the rest to their faults. The caller holds
- * the regions' lock to read, as on entry to `device_fault`.
+ * had, ends the walk and leaves the rest to their faults. A region of the
+ * one page the fault mapped has nothing left, and the walk does not let the
+ * locks go for it. The caller holds the regions' lock to read, as on entry
+ * to `device_fault`.
  */
 static void device_map_rest(struct mm *mm, uintptr_t page, struct vm_file *f, uint32_t prot)
 {
@@ -736,7 +738,7 @@ static void device_map_rest(struct mm *mm, uintptr_t page, struct vm_file *f, ui
     uint32_t base, seq, n, i;
     int bkl, rc = 0;
 
-    if (!vma || vma->file != f) {
+    if (!vma || vma->file != f || vma->end - vma->start <= PAGE_SIZE) {
         return;
     }
     start = vma->start;
