@@ -23,11 +23,11 @@
  * A POSIX timer's expiration posts no signal from the tick, which runs
  * without the big lock: it is queued once, the expirations meanwhile going
  * into its count, and a holder's `ptimer_post_due` posts one signal with
- * the rest as its overrun. A timer deleted while queued posts its signal
- * with an overrun of 0 first, while its process has a thread. A
- * timer_settime before the post keeps one expiration for it; one made while
- * the timer's own signal is pending sets that signal's overrun to 0 and
- * keeps none.
+ * the rest as its overrun. A timer_settime or a delete ends the setting as
+ * Linux does: a first expiration not yet signalled is posted, or adds 1 to
+ * the timer's pending signal, and the overrun the setting's later intervals
+ * gave that signal is taken back, while what earlier settings gave it
+ * stays.
  *
  * An expiration begins the wake record of each reader on the timer's queue
  * under the queue's lock and the run queues' lock taken after it.
@@ -80,9 +80,11 @@ process_t *get_process(uint32_t pid)
 }
 
 /* The POSIX timer rows' process and its signals posted: while `posts_ok`
- * is set a post is counted and kept, and otherwise it is a failure. */
+ * is set a post is counted and kept, and otherwise it is a failure; while
+ * `posts_queue` is set the signal stays pending in the process, as a
+ * blocked one does. */
 static struct tgroup group;
-static int posts_ok, posts, post_signo;
+static int posts_ok, posts_queue, posts, post_signo;
 static struct k_siginfo post_info;
 
 /** Count a POSIX timer's signal to `target` while the rows allow one; a
@@ -95,6 +97,10 @@ void signal_post_info(process_t *target, int signo, const struct k_siginfo *info
     posts++;
     post_signo = signo;
     post_info = *info;
+    if (posts_queue) {
+        group.pending |= KSIG_BIT(signo);
+        group.info[signo] = *info;
+    }
 }
 
 /** A failure: a timerfd posts no signal. */
@@ -424,7 +430,7 @@ static void posix_setup(void)
     group.timers = &pt;
     posix_timer = &pt;
     posts = posix_freed = 0;
-    posts_ok = 0;
+    posts_ok = posts_queue = 0;
 }
 
 /**
@@ -472,48 +478,105 @@ static void posix_rows(void)
 }
 
 /**
- * timer_settime between an expiration and its post keeps that expiration,
- * and the post gives it an overrun of 0, as Linux's signal sent at expiry
- * stays queued across the set, which resets the overrun. With the timer's
- * own signal still pending, the set sets that signal's overrun to 0 and
- * keeps no expiration, as Linux moves `it_requeue_pending` on; the new
- * setting's next expiration adds 1 to the pending signal and posts none.
+ * A setting's end, at timer_settime or timer_delete, as Linux's: Linux sends
+ * a timer's signal at expiry, adds 1 to it for each setting's first
+ * expiration while it is queued (`send_sigqueue`), and counts a periodic
+ * setting's later intervals only at delivery (`posixtimer_rearm`), which a
+ * set or a delete stops.
+ *
+ * A set between an expiration and its post posts it with an overrun of 0.
+ * With SIGALRM blocked, a one-shot timer that expires, is set again and
+ * expires again leaves its signal an overrun of 1, which a further set
+ * keeps.
  */
 static void posix_set_rows(void)
 {
     struct setting every = {0, NS_PER_TICK, 0, NS_PER_TICK};
+    struct setting once = {0, 0, 0, NS_PER_TICK};
+    struct setting off = {0, 0, 0, 0};
     struct k_siginfo *held = &group.info[SIGALRM];
 
     posix_setup();
     timerfd_tick(++kernel_ticks);
     timerfd_tick(++kernel_ticks);
     CHECK(pt.fire_queued && pt.count == 2, "two expirations wait for their post");
-    CHECK(arm(&pt, 0, &every) == 0, "timer_settime between the expiration and the post");
-    CHECK(pt.fire_queued && pt.count == 1 && pt.overrun == 0,
-          "keeps one expiration and reads an overrun of 0");
     posts_ok = 1;
-    ptimer_post_due();
+    CHECK(arm(&pt, 0, &every) == 0, "timer_settime between the expiration and the post");
     CHECK(posts == 1 && post_info.pid == 7 && post_info.uid == 0,
-          "and the post gives the signal an overrun of 0");
+          "posts the expiration with an overrun of 0");
+    CHECK(!pt.fire_queued && pt.count == 0 && pt.overrun == 0 && !fire_due,
+          "and keeps none for later");
 
     posix_setup();
-    group.pending = KSIG_BIT(SIGALRM);
-    held->code = SI_TIMER;
-    held->pid = 7;
-    held->uid = 5;
+    pt.isub = 0;
+    posts_ok = posts_queue = 1;
     timerfd_tick(++kernel_ticks);
-    CHECK(pt.fire_queued, "an expiration waits while the timer's signal is pending");
-    CHECK(arm(&pt, 0, &every) == 0, "timer_settime while the timer's signal is pending");
-    CHECK(held->uid == 0 && !pt.fire_queued && pt.count == 0 && pt.overrun == 0 && !fire_due,
-          "sets the pending signal's overrun to 0 and keeps no expiration");
+    ptimer_post_due();
+    CHECK(posts == 1 && held->uid == 0 && !pt.armed,
+          "a one-shot timer's blocked signal is posted with an overrun of 0");
+    CHECK(arm(&pt, 0, &once) == 0, "the timer is set again while its signal is pending");
     kernel_ticks += 2;
     timerfd_tick(kernel_ticks);
-    posts_ok = 1;
     ptimer_post_due();
-    CHECK(posts == 0 && held->uid == 1 && pt.overrun == 1,
-          "the new setting's expiration adds 1 to the pending signal and posts none");
+    CHECK(posts == 1 && held->uid == 1 && pt.overrun == 0,
+          "its second expiration adds 1 to the pending signal");
+    CHECK(arm(&pt, 0, &off) == 0 && held->uid == 1,
+          "and a disarm keeps the overrun the earlier settings gave the signal");
     group.pending = 0;
-    posts_ok = 0;
+    posts_ok = posts_queue = 0;
+    posix_timer = NULL;
+    armed = NULL;
+}
+
+/**
+ * A periodic timer's later intervals and the end of its setting, with
+ * SIGALRM blocked. A timer whose signal has an overrun of 0 and whose next
+ * interval is queued is deleted with the signal's overrun still 0. Later
+ * intervals counted into the pending signal are taken back at a set, the
+ * new setting's first expiration adds 1 and its next interval 1 more, and a
+ * delete takes that interval back.
+ */
+static void posix_periodic_rows(void)
+{
+    struct setting every = {0, NS_PER_TICK, 0, NS_PER_TICK};
+    struct k_siginfo *held = &group.info[SIGALRM];
+
+    posix_setup();
+    posts_ok = posts_queue = 1;
+    timerfd_tick(++kernel_ticks);
+    ptimer_post_due();
+    CHECK(posts == 1 && held->uid == 0, "a periodic timer's blocked signal has an overrun of 0");
+    timerfd_tick(++kernel_ticks);
+    CHECK(pt.fire_queued && pt.count == 1, "and its next interval is queued");
+    ptimer_delete_all(&group);
+    CHECK(posts == 1 && held->uid == 0 && posix_freed == 1 && fire_head == NULL,
+          "a delete drops the queued interval and leaves the signal's overrun 0");
+    group.pending = 0;
+
+    posix_setup();
+    posts_ok = posts_queue = 1;
+    timerfd_tick(++kernel_ticks);
+    ptimer_post_due();
+    timerfd_tick(++kernel_ticks);
+    timerfd_tick(++kernel_ticks);
+    ptimer_post_due();
+    CHECK(posts == 1 && held->uid == 2 && pt.overrun == 2,
+          "a periodic timer's later intervals add to its pending signal");
+    CHECK(arm(&pt, 0, &every) == 0 && held->uid == 0 && pt.overrun == 0,
+          "timer_settime takes them back out");
+    kernel_ticks += 2;
+    timerfd_tick(kernel_ticks);
+    ptimer_post_due();
+    CHECK(posts == 1 && held->uid == 1 && pt.overrun == 0,
+          "the new setting's first expiration adds 1");
+    timerfd_tick(++kernel_ticks);
+    ptimer_post_due();
+    CHECK(posts == 1 && held->uid == 2 && pt.overrun == 1, "and its next interval 1 more");
+    ptimer_delete_all(&group);
+    CHECK(posts == 1 && held->uid == 1 && posix_freed == 1,
+          "a delete takes that interval back and keeps the first expiration's 1");
+    group.pending = 0;
+    posts_ok = posts_queue = 0;
     posix_timer = NULL;
     armed = NULL;
 }
@@ -572,6 +635,7 @@ int main(void)
     long_rows();
     posix_rows();
     posix_set_rows();
+    posix_periodic_rows();
     wake_record_rows();
     CHECK(masked == 0, "every interrupt mask is taken back");
 

@@ -57,7 +57,13 @@
  * POSIX timer's, which `tg` names and whose expirations post a signal. A
  * POSIX timer on a clock of processor time counts the ticks charged to
  * `cpu_tg`'s threads, or to its thread `cpu_tid` alone, user ticks alone for
- * `cpu_user`: `due` is then the ticks left. */
+ * `cpu_user`: `due` is then the ticks left.
+ *
+ * A setting of a POSIX timer notifies once, at its first expiration, and
+ * its later intervals add to that signal's overrun until the signal is
+ * taken: `sent` and `late` record the two while the timer's own signal is
+ * pending (`ptimer_fire`), and the end of the setting takes `late` back out
+ * of it (`ptimer_settle`). */
 struct ktimer {
     struct anon_obj anon;
     struct ktimer *next; /* the list of armed timers the tick walks */
@@ -75,7 +81,9 @@ struct ktimer {
     int signo;
     uintptr_t value;
     uint32_t tid;          /* the thread SIGEV_THREAD_ID names */
-    uint32_t overrun;      /* the overrun of the last signal posted */
+    uint32_t overrun;      /* timer_getoverrun's: `late` at the last post */
+    int sent;              /* the setting's first expiration is in its signal */
+    uint32_t late;         /* what the setting's later intervals added to it */
     struct tgroup *cpu_tg; /* held: the process whose time it counts, or NULL */
     uint32_t cpu_tid;
     int cpu_user;
@@ -130,8 +138,8 @@ static uint64_t ticks_of(uint32_t sec, uint32_t sub)
 }
 
 static void ptimer_fire(struct ktimer *t);
+static void ptimer_settle(struct ktimer *t);
 static void ptimer_free(struct ktimer **link);
-static struct k_siginfo *ptimer_own_signal(const struct ktimer *t);
 
 /**
  * Leave the expiration of the POSIX timer `t` for a holder of the big lock
@@ -484,24 +492,15 @@ static void current_setting(const struct ktimer *t, struct setting *s)
  * `clock_now`'s error. A relative time counts from the next tick, so the
  * part of the tick in progress does not shorten it.
  *
- * A POSIX timer whose expiration the tick left for posting keeps that one
- * expiration for `ptimer_fire`, so the signal it posts carries an overrun of
- * 0, and `timer_getoverrun` reads 0 until then: Linux sends the signal at
- * expiry, where it stays queued across a set, and the set resets the
- * overrun (`posix_timer_set_common`, kernel/time/posix-timers.c:878-882).
- * While the timer's own signal is pending, the set sets that signal's
- * overrun to 0 and keeps no expiration, since the pending signal stands for
- * it: Linux does not rearm a periodic timer while its signal is queued
- * (`posix_timer_fn`, :318-377), and the set moves `it_requeue_pending` on,
- * so `posixtimer_rearm` adds none of the old setting's overruns at delivery
- * (:261-276); the signal then counts only the new setting's expirations,
- * which `send_sigqueue` adds (kernel/signal.c:2025-2033).
+ * A POSIX timer's old setting ends as `ptimer_settle` says, and
+ * `timer_getoverrun` reads 0 until the next post, as Linux's set resets the
+ * timer's accounting (`posix_timer_set_common`,
+ * kernel/time/posix-timers.c:871-883). The caller holds the big lock.
  */
 static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
 {
     int on = s->vsec != 0 || s->vnsec != 0;
     uint32_t sec, sub, isec, isub;
-    struct k_siginfo *held;
     uint32_t irq;
 
     if (s->vsec < 0 || s->vnsec < 0 || s->vnsec >= NS_PER_SEC) {
@@ -529,13 +528,10 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
     if (t->armed) {
         disarm(t);
     }
-    held = t->tg ? ptimer_own_signal(t) : NULL;
-    if (held) {
-        held->uid = 0; /* si_overrun */
-        ptimer_fire_cancel(t);
-        t->count = 0;
+    if (t->tg) {
+        ptimer_settle(t);
     } else {
-        t->count = t->fire_queued ? 1u : 0u;
+        t->count = 0;
     }
     t->overrun = 0;
     if (on && t->cpu_tg) {
@@ -736,21 +732,38 @@ static struct k_siginfo *ptimer_own_signal(const struct ktimer *t)
     return held && held->code == SI_TIMER && held->pid == (uint32_t)t->id ? held : NULL;
 }
 
+/** `a` and `n` added, at most 0x7FFFFFFF, the largest overrun Linux
+ * reports (`timer_overrun_to_int`, kernel/time/posix-timers.c:237-242). */
+static uint32_t overrun_add(uint32_t a, uint64_t n)
+{
+    if (a >= 0x7FFFFFFFu || n >= 0x7FFFFFFFu - a) {
+        return 0x7FFFFFFFu;
+    }
+    return a + (uint32_t)n;
+}
+
 /**
- * The signal of the POSIX timer `t`, whose expirations since its last
- * signal are its `count`: posted, with all but one as its overrun; or, while
- * its signal is still pending, added to that signal's overrun, which is what
- * a handler is given, as Linux reports the overrun at delivery. While a
- * signal of the same number from elsewhere is pending, the expirations wait
- * for the next. SIGEV_NONE posts nothing; a signal for a thread
- * SIGEV_THREAD_ID named that has ended goes to the process. The caller holds
- * `timer_lock`.
+ * The signal of the POSIX timer `t`, whose expirations not yet signalled are
+ * its `count`. With the timer's own signal not pending, the signal is posted
+ * with all but the first as its overrun. While it is pending, the first
+ * expiration of a setting that has not yet notified adds 1 to its overrun,
+ * as Linux's `send_sigqueue` does for a signal already queued
+ * (kernel/signal.c:2029-2036), and the setting's later intervals add
+ * themselves, kept in `late`: Linux stops a periodic timer whose signal is
+ * queued (`posix_timer_fn`, kernel/time/posix-timers.c:318-377) and adds
+ * the intervals it missed at delivery (`posixtimer_rearm`, :258-279), which
+ * a handler is given, and which timer_getoverrun then reads (:776-789).
+ * While a signal of the same number from elsewhere is pending, the
+ * expirations wait for the next. SIGEV_NONE posts nothing; a signal for a
+ * thread SIGEV_THREAD_ID named that has ended goes to the process. The
+ * caller holds the big lock and `timer_lock`.
  */
 static void ptimer_fire(struct ktimer *t)
 {
     process_t *thread;
     struct k_siginfo *held;
     struct k_siginfo info;
+    uint64_t later = t->count != 0 ? t->count - 1u : 0;
 
     if (t->notify == SIGEV_NONE) {
         t->count = 0;
@@ -758,28 +771,70 @@ static void ptimer_fire(struct ktimer *t)
     }
     thread = ptimer_thread(t);
     held = ptimer_held(t, thread);
-    if (held) {
-        if (held->code == SI_TIMER && held->pid == (uint32_t)t->id) {
-            held->uid =
-                held->uid + t->count > 0x7FFFFFFFu ? 0x7FFFFFFFu : held->uid + (uint32_t)t->count;
-            t->overrun = held->uid;
-            t->count = 0;
-        }
+    if (held && (held->code != SI_TIMER || held->pid != (uint32_t)t->id)) {
         return;
     }
-    t->overrun = t->count - 1u > 0x7FFFFFFFu ? 0x7FFFFFFFu : (uint32_t)(t->count - 1u);
-    t->count = 0;
-    k_memset(&info, 0, sizeof(info));
-    info.code = SI_TIMER;
-    info.pid = (uint32_t)t->id; /* si_timerid, where a child's pid is */
-    info.uid = t->overrun;      /* si_overrun */
-    info.value = t->value;      /* si_value */
-    info.status = (int32_t)t->value;
-    if (thread) {
-        signal_post_thread(thread, t->signo, &info);
+    if (held) {
+        uint32_t before;
+
+        if (t->sent) {
+            later = t->count;
+        } else {
+            held->uid = overrun_add(held->uid, 1u);
+        }
+        before = held->uid;
+        held->uid = overrun_add(held->uid, later);
+        t->late += held->uid - before;
     } else {
-        signal_post_info(t->tg->leader, t->signo, &info);
+        t->late = overrun_add(0, later);
+        k_memset(&info, 0, sizeof(info));
+        info.code = SI_TIMER;
+        info.pid = (uint32_t)t->id; /* si_timerid, where a child's pid is */
+        info.uid = t->late;         /* si_overrun */
+        info.value = t->value;      /* si_value */
+        info.status = (int32_t)t->value;
+        if (thread) {
+            signal_post_thread(thread, t->signo, &info);
+        } else {
+            signal_post_info(t->tg->leader, t->signo, &info);
+        }
     }
+    t->sent = 1;
+    t->overrun = t->late;
+    t->count = 0;
+}
+
+/**
+ * End the setting of the POSIX timer `t`, at timer_settime or timer_delete,
+ * as Linux ends it. The later intervals the setting added to the timer's
+ * pending signal are taken back out of its overrun, since Linux would add
+ * them only at delivery, which no longer rearms the timer: the set moves
+ * `it_requeue_pending` on (`posix_timer_set_common`,
+ * kernel/time/posix-timers.c:871-883), and the delete frees the timer and
+ * clears SIGQUEUE_PREALLOC on its queued signal (`sigqueue_free`,
+ * kernel/signal.c:1961-1985), so `collect_signal` asks for no rearm
+ * (:590-593). The overrun the signal holds otherwise, from earlier settings,
+ * stays. An expiration the tick counted for a setting that has not yet
+ * notified is that setting's notification, which Linux sent at expiry: it is
+ * posted, or adds 1 to the pending signal, before the setting ends, and its
+ * later intervals are dropped. The caller holds the big lock and
+ * `timer_lock`, and the timer is disarmed.
+ */
+static void ptimer_settle(struct ktimer *t)
+{
+    struct k_siginfo *held = ptimer_own_signal(t);
+
+    ptimer_fire_cancel(t);
+    if (held) {
+        held->uid -= t->late < held->uid ? t->late : held->uid;
+    }
+    if (t->count != 0 && !(held && t->sent)) {
+        t->count = 1;
+        ptimer_fire(t);
+    }
+    t->count = 0;
+    t->sent = 0;
+    t->late = 0;
 }
 
 /** The calling process's POSIX timer `id`, or NULL. */
@@ -936,15 +991,14 @@ long sys_timer_getoverrun(struct isr_params *params)
 
 /**
  * Take the timer `link` names out of its process's list, disarmed, let go
- * of the process whose time it counts, and free it. An expiration the tick
- * left for posting is posted first, with an overrun of 0, while the process
- * has a thread left: Linux sends the signal at expiry, and freeing the timer
- * leaves a signal already queued to be delivered (`posix_timer_free`,
- * kernel/time/posix-timers.c:423-428, and `sigqueue_free`,
- * kernel/signal.c:1961-1985), at timer_delete and at exec's `exit_itimers`
- * alike (fs/exec.c:1226, kernel/time/posix-timers.c:1119-1134). After the
- * last thread has ended nothing is posted, since none is left to take it.
- * The caller holds the big lock.
+ * of the process whose time it counts, and free it. While the process has a
+ * thread left, its setting ends first as `ptimer_settle` says: freeing the
+ * timer leaves a signal already queued to be delivered, without the later
+ * intervals (`posix_timer_free`, kernel/time/posix-timers.c:424-429, and
+ * `sigqueue_free`, kernel/signal.c:1961-1985), at timer_delete and at exec's
+ * `exit_itimers` alike (fs/exec.c:1226, kernel/time/posix-timers.c:1119-1134).
+ * After the last thread has ended nothing is posted, since none is left to
+ * take it. The caller holds the big lock.
  */
 static void ptimer_free(struct ktimer **link)
 {
@@ -954,12 +1008,10 @@ static void ptimer_free(struct ktimer **link)
     if (t->armed) {
         disarm(t);
     }
-    if (t->fire_queued) {
+    if (t->tg->live != 0) {
+        ptimer_settle(t);
+    } else {
         ptimer_fire_cancel(t);
-        if (t->tg->live != 0) {
-            t->count = 1;
-            ptimer_fire(t);
-        }
     }
     *link = t->in_group;
     spin_unlock_irqrestore(&timer_lock, irq);
