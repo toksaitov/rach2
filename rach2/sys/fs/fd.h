@@ -438,17 +438,14 @@ void fd_free_after(fd_table_t *table, int fd);
  */
 fd_entry_t *fd_get(fd_table_t *table, int fd);
 
-/** `fd_peek`'s `ref`: a reference to the description always, or only to
- * one on a mount, a file or a directory with `vmnt`, whose last release
- * does no more than end the description. */
-#define FD_PEEK_REF     1
-#define FD_PEEK_MOUNTED 2
+/** `fd_peek`'s `ref`: a reference to the description. */
+#define FD_PEEK_REF 1
 
 /** A copy of the entry for `fd` in `table`, another process's or the
  * caller's own, into `*out`, taken under the lock, with a reference to its
- * description as `ref` asks (0 for none), which the caller gives back as a
- * descriptor in flight is released or, for FD_PEEK_MOUNTED, with
- * `fd_ofd_unref`; 0, or -EBADF when `fd_get` would find nothing. */
+ * description when `ref` is FD_PEEK_REF (0 for none), which the caller
+ * gives back as a descriptor in flight is released; 0, or -EBADF when
+ * `fd_get` would find nothing. */
 int fd_peek(fd_table_t *table, int fd, fd_entry_t *out, int ref);
 
 /** Whether `e`, an entry of a table whose lock the caller holds, is open:
