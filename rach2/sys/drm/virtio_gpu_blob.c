@@ -94,7 +94,7 @@ void vgpu_blob_release(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
 {
     struct virtio_gpu_object **p;
 
-    vgpu_blob_pages_drop(vg, bo);
+    vgpu_blob_pages_drop(vg, bo, 0);
     if (bo->vmap) {
         mmio_unmap(bo->vmap, (size_t)bo->shmem.base.size);
         bo->vmap = 0;
@@ -124,12 +124,14 @@ static void pages_revoked(void *owner)
     bo->map_ok = 0;
 }
 
-void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
+void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, int zap)
 {
     if (!bo->pages_map) {
         return;
     }
-    paging_zap_device(&bo->shmem.base, 0, (uint32_t)(bo->shmem.base.size >> PAGE_SHIFT));
+    if (zap) {
+        paging_zap_device(&bo->shmem.base, 0, (uint32_t)(bo->shmem.base.size >> PAGE_SHIFT));
+    }
     virtio_map_free(vg->vdev, bo->pages_map);
     bo->pages_map = NULL;
     bo->map_ok = 0;
@@ -357,13 +359,15 @@ static void host_vm_put(void *obj)
     drm_gem_object_put((struct drm_gem_object *)obj);
 }
 
-static const struct vm_device_ops host_vm_ops = {host_vm_page, host_vm_put, NULL};
+static const struct vm_device_ops host_vm_ops = {host_vm_page, host_vm_put, NULL, 1};
 
 /**
  * The `mmap` of a blob of host memory, Linux's virtio_gpu_vram_mmap: the
  * whole of a mappable blob that MAP_BLOB placed, with the cache type the
- * host answered, write-combining or uncached, else cached. EINVAL for a
- * blob not mappable or not mapped, or a mapping of part of it.
+ * host answered, write-combining or uncached, else cached, and every page
+ * mapped at the first fault (`whole`), as Linux's io_remap_pfn_range maps
+ * them at the mmap. EINVAL for a blob not mappable or not mapped, or a
+ * mapping of part of it.
  */
 static int32_t host_mmap(struct drm_gem_object *obj, vma_t *vma)
 {

@@ -785,8 +785,11 @@ void vgpu_obj_free(struct drm_gem_object *obj);
  * and the kernel's window onto it, given back. */
 void vgpu_blob_release(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
 /** Let go of the frames of a blob mapped from the device's pages, after
- * taking every program's mapping of them away; nothing for another. */
-void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
+ * taking every program's mapping of them away when `zap` says so; nothing
+ * for another. The free passes 0, since a mapping holds a reference to the
+ * object and none can be left once it is freed, as on Linux, whose GEM
+ * free unmaps nothing (drm_gem.c drm_gem_vm_open, virtgpu_vram.c:6-25). */
+void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, int zap);
 /** Queue the UNMAP_BLOB of a blob placed in host-visible memory; 0, or
  * -ENOMEM. */
 int32_t vgpu_blob_unmap(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
