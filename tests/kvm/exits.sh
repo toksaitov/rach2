@@ -15,15 +15,19 @@
 # The output, after COMMAND's own, is
 #
 #   kvm-exits: kernel: rach2|linux RELEASE
+#   kvm-exits: backend vmx|svm tsc_khz KHZ
 #   kvm-exits: code CODE exits N [kernel K user U wait_cycles W
 #       handle_cycles H] NAME
 #   kvm-exits: total: N exits in S s
+#   kvm-exits: debugfs: exits D
 #
 # a line for each code with exits, CODE in hexadecimal and NAME Linux's for
-# it, which Rach2's file gives and Linux's histogram does not; the
-# bracketed fields are Rach2's alone. S is COMMAND's time on the host's
-# clock, for the record. The status is COMMAND's, or 2 when neither source
-# of counts is there.
+# it, which Rach2's file gives and Linux's histogram does not. The backend
+# line, with the TSC's rate in kHz, and the bracketed fields are Rach2's
+# alone; the debugfs line, the exits /sys/kernel/debug/kvm/exits counted
+# meanwhile, is Linux's alone. S is COMMAND's time on the host's clock, for
+# the record. The status is COMMAND's, or 2 when neither source of counts
+# is there.
 
 if [ $# -lt 1 ]; then
     echo "usage: exits.sh COMMAND [ARGUMENT...]" >&2
