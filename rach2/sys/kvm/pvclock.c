@@ -800,21 +800,32 @@ int kvm_pv_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, i
 #define ST_PREEMPTED 16u
 
 /**
- * Write `v`'s steal time, as Linux's record_steal_time without
- * KVM_FEATURE_PV_TLB_FLUSH: `preempted` cleared, the version odd, the
- * thread's run_delay since the last write added to `steal`, the version
- * even. A version the guest left odd is made even first. A record that
- * misses guest memory, or lies in a read-only slot, is not written. The
- * structure is 64 bytes at a 64-byte boundary, so within one page. 0 when
- * the record was written whole.
+ * Write `v`'s steal time, as Linux's record_steal_time: `preempted`
+ * cleared, the version odd, the thread's run_delay since the last write
+ * added to `steal`, the version even. A version the guest left odd is
+ * made even first. A record that misses guest memory, or lies in a
+ * read-only slot, is not written. The structure is 64 bytes at a 64-byte
+ * boundary, so within one page. With KVM_FEATURE_PV_TLB_FLUSH the guest
+ * may add KVM_VCPU_FLUSH_TLB to a record that says preempted, instead of
+ * interrupting the vCPU, so `preempted` is taken with one exchange, its
+ * three bytes of padding kept, and a mark found there flushes the guest's
+ * TLB at this entry (KVM_REQ_TLB_FLUSH), as Linux's
+ * kvm_vcpu_flush_tlb_guest. 0 when the record was written whole.
  */
 static int steal_write(struct kvm_vcpu *v)
 {
     uint64_t gpa = v->st_msr & KVM_STEAL_VALID_BITS, steal, delay = current_proc->run_delay;
-    uint32_t version;
+    uint32_t version, was;
     uint8_t zero = 0;
 
-    if (kvm_guest_phys_rw(v, gpa + ST_PREEMPTED, &zero, 1, 1) != 0) {
+    if (kvm_pv_has(v, KVM_FEATURE_PV_TLB_FLUSH)) {
+        if (kvm_guest_phys_clear(v, gpa + ST_PREEMPTED, 0xFFu, &was) != 0) {
+            return -1;
+        }
+        if (was & KVM_VCPU_FLUSH_TLB) {
+            kvm_vcpu_kick(v, KVM_REQ_TLB_FLUSH);
+        }
+    } else if (kvm_guest_phys_rw(v, gpa + ST_PREEMPTED, &zero, 1, 1) != 0) {
         return -1;
     }
     v->st_preempted = 0;

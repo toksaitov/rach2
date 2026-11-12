@@ -2097,6 +2097,15 @@ int kvm_guest_translate(struct kvm_vcpu *v, uint64_t la, uint32_t access, uint64
  * for a byte in no slot or a write to a read-only one; -EFAULT. */
 int kvm_guest_phys_rw(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t n, int write);
 
+/** Clear the bits `bits` of the aligned 32-bit word at `v`'s guest-physical
+ * `gpa` in one compare-and-exchange no access of the guest's comes
+ * between, as Linux's record_steal_time takes `preempted` with an `xchgb`,
+ * and give the word as it was in `*old`. 0; 1 for memory in no slot or in
+ * a read-only one; -EFAULT for an address not aligned or for the caller's
+ * memory that cannot be touched; or `kvm_dirty_reserve`'s error. In the
+ * vCPU's thread; may sleep. */
+int kvm_guest_phys_clear(struct kvm_vcpu *v, uint64_t gpa, uint32_t bits, uint32_t *old);
+
 /** Read or write `n` bytes at `seg`:`ea` (KVM_SEG_*) of `v`, through its
  * page tables: 0; -1 with #PF queued; 1 for memory in no slot; -EFAULT. */
 int kvm_guest_rw(struct kvm_vcpu *v, uint32_t seg, uint64_t ea, void *buf, uint32_t n, int write);

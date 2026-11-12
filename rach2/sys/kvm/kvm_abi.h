@@ -496,6 +496,7 @@ struct kvm_clock_data {
 #define KVM_FEATURE_CLOCKSOURCE2           3
 #define KVM_FEATURE_STEAL_TIME             5
 #define KVM_FEATURE_PV_UNHALT              7
+#define KVM_FEATURE_PV_TLB_FLUSH           9
 #define KVM_FEATURE_PV_SEND_IPI            11
 #define KVM_FEATURE_POLL_CONTROL           12
 #define KVM_FEATURE_PV_SCHED_YIELD         13
@@ -556,7 +557,8 @@ struct pvclock_wall_clock {
 /* A vCPU's steal time in guest memory, Linux's kvm_steal_time: the ns its
  * thread waited for a host processor while the guest could have run,
  * `version` odd while the host writes it, and KVM_VCPU_PREEMPTED in
- * `preempted` while the host has taken the processor from it. 64 bytes,
+ * `preempted` while the host has taken the processor from it, to which
+ * the guest may add KVM_VCPU_FLUSH_TLB (KVM_FEATURE_PV_TLB_FLUSH). 64 bytes,
  * at a 64-byte aligned address: MSR_KVM_STEAL_TIME's bits 1 to 5 are
  * reserved, and bits 6 up are the address. */
 struct kvm_steal_time {
@@ -569,6 +571,7 @@ struct kvm_steal_time {
 };
 
 #define KVM_VCPU_PREEMPTED      0x1u
+#define KVM_VCPU_FLUSH_TLB      0x2u /* the guest's: flush its TLB before the next entry */
 #define KVM_STEAL_VALID_BITS    (~0x3Full)
 #define KVM_STEAL_RESERVED_MASK 0x3Eull
 

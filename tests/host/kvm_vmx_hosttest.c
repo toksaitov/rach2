@@ -242,6 +242,33 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
     return 0;
 }
 
+/** As `copy_from_user`, one aligned word. */
+int get_user_u32(uint32_t *val, uintptr_t src)
+{
+    if (!src || (src & 3u)) {
+        return -EFAULT;
+    }
+    slot_access((const void *)src);
+    *val = *(volatile uint32_t *)src;
+    return 0;
+}
+
+/** As `copy_to_user`, one aligned word, compared and exchanged. */
+int cmpxchg_user_u32(uintptr_t dst, uint32_t old, uint32_t value, uint32_t *prev)
+{
+    volatile uint32_t *p = (volatile uint32_t *)dst;
+
+    if (!dst || (dst & 3u)) {
+        return -EFAULT;
+    }
+    slot_access((const void *)dst);
+    *prev = *p;
+    if (*prev == old) {
+        *p = value;
+    }
+    return 0;
+}
+
 int fd_alloc(fd_table_t *t)
 {
     int i;

@@ -344,8 +344,9 @@ static int indexed(uint32_t leaf, uint32_t *n)
 uint32_t kvm_pv_supported(void)
 {
     uint32_t f = (1u << KVM_FEATURE_NOP_IO_DELAY) | (1u << KVM_FEATURE_STEAL_TIME) |
-                 (1u << KVM_FEATURE_PV_UNHALT) | (1u << KVM_FEATURE_PV_SEND_IPI) |
-                 (1u << KVM_FEATURE_POLL_CONTROL) | (1u << KVM_FEATURE_PV_SCHED_YIELD);
+                 (1u << KVM_FEATURE_PV_UNHALT) | (1u << KVM_FEATURE_PV_TLB_FLUSH) |
+                 (1u << KVM_FEATURE_PV_SEND_IPI) | (1u << KVM_FEATURE_POLL_CONTROL) |
+                 (1u << KVM_FEATURE_PV_SCHED_YIELD);
 
     /* Without the TSC's rate no kvmclock can be written, and a guest that
      * enabled one would read a clock that never moves. */
