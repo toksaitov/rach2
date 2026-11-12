@@ -787,7 +787,7 @@ void timerfd_due(void)
         expire(first, now, pass_read(&p, first->base));
     }
     for (t = armed; t; t = t->next) {
-        if (t->armed && t->between && (r = pass_read(&p, t->base)) != NULL) {
+        if (t->armed && t->between && pass_read(&p, t->base) != NULL) {
             arm_between(t, &p);
         }
     }
