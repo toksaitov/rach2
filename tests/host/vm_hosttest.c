@@ -20,9 +20,27 @@
  * release, which waits for vm_file_reap after the last one goes, with the
  * list of those waiting answering `vm_file_dead`; `--dead-only` runs that
  * row alone.
+ *
+ * Two rows put a change of the regions, made through mm/regions.c as
+ * mmap's MAP_FIXED makes it, a removal of a mapped range and the insertion
+ * of a new region there, against another thread that comes in while the
+ * pages go: a fault at an address of the range, which must find a region
+ * there, and a reader of /proc/PID/status, which must find the address
+ * space's size unchanged. The other thread takes the regions' lock to read
+ * as the fault and the reader do, and a model of the lock makes it wait
+ * for a writer, running it when the writer lets go. With the big lock
+ * taken out of a change and no regions' lock in its place, the other
+ * thread runs between the removal and the insertion, finds the gap, and
+ * the row fails. `--regions-only` runs those two rows alone.
+ *
+ * host-deps: rach2/sys/mm/regions.c
  */
 
 #include "mm/vm.h"
+#include "mm/mm.h"
+#include "mm/paging.h"
+#include "mm/regions.h"
+#include "proc/process.h"
 
 /* The host's allocator stands in for the kernel heap; declared here, since
  * the kernel's headers define the types the host's stdlib.h would define
@@ -506,14 +524,218 @@ static void run_mapping_edges(void)
  * free range found is the highest that fits below hi and at or above lo; a
  * hole a removal left is used again, and 0 is returned when nothing fits.
  */
+/* ---- a change of the regions against another thread (mm/regions.c) ---- */
+
+struct percpu cpu_table[NR_CPUS];
+static process_t changer, other;
+static struct mm space;
+
+/* The regions' lock of `space`: the thread that holds it to write, or
+ * NULL, and the readers; what the other thread does once it may run; and
+ * whether it waited, ran, and what it found. */
+static process_t *writer;
+static int readers;
+static void (*pending)(void);
+static int other_waited, other_ran, other_found;
+static uintptr_t other_size;
+static int big_lock, reaps, unmaps, notices;
+
+/** Take `mm`'s regions' lock to write: the changer is the only writer. */
+void mmap_write_lock(struct mm *mm)
+{
+    CHECK(mm == &space && writer == NULL && readers == 0);
+    writer = current_proc;
+}
+
+/** Take `mm`'s regions' lock to read without a wait: refused while another
+ * thread holds it to write. */
+int mmap_read_trylock(struct mm *mm)
+{
+    CHECK(mm == &space);
+    if (writer != NULL && writer != current_proc) {
+        return 0;
+    }
+    readers++;
+    return 1;
+}
+
+/** Give back a hold of `mm`'s regions' lock. A writer's release lets the
+ * thread that waited for it run, as that thread's wake would. */
+void mmap_unlock(struct mm *mm)
+{
+    void (*run)(void) = pending;
+
+    CHECK(mm == &space);
+    if (writer == current_proc) {
+        writer = NULL;
+        pending = NULL;
+        if (run) {
+            run();
+        }
+        return;
+    }
+    CHECK(readers > 0);
+    readers--;
+}
+
+/** Count a reap of the files a change let go: it must come once the change
+ * holds no regions' lock. */
+void mm_reap(void)
+{
+    CHECK(writer != current_proc);
+    reaps++;
+}
+
+/** Count the big lock's holds, which a change takes only around its steps
+ * that reach what has no lock of its own. */
+void bkl_enter(void)
+{
+    big_lock++;
+}
+
+/** Let the big lock go. */
+void bkl_exit(void)
+{
+    big_lock--;
+}
+
+/** The caches' balance, which nothing here needs. */
+void mem_balance(void)
+{}
+
+/** The anonymous mark, which no page here has. */
+void mm_note_anon(struct mm *mm, uintptr_t start, uintptr_t end)
+{
+    (void)mm;
+    (void)start;
+    (void)end;
+}
+
+/** Count a change notice: no range is registered here. */
+void mmn_notify(struct mm *mm, int event, uintptr_t start, uintptr_t end)
+{
+    (void)mm;
+    (void)event;
+    (void)start;
+    (void)end;
+    notices++;
+}
+
+/** What the other thread does as a fault at 0x52000: a region must hold the
+ * address, since the change replaces the mapping and never leaves it out. */
+static void other_fault(void)
+{
+    other_found = vm_find(&space.vm, 0x52000) != NULL;
+}
+
+/** What the other thread does as a reader of /proc/PID/status: the size of
+ * the address space, which a replacement of equal length keeps. */
+static void other_status(void)
+{
+    other_size = vm_total(&space.vm);
+}
+
+/* The other thread's work, run once while the pages go. */
+static void (*other_work)(void);
+
+/** Run the other thread's work under the regions' lock to read, now or,
+ * when a writer holds the lock, once the writer lets go. */
+static void other_runs(void)
+{
+    process_t *was = current_proc;
+
+    cpu_table[0].current = &other;
+    if (!mmap_read_trylock(&space)) {
+        other_waited = 1;
+        pending = other_runs;
+        cpu_table[0].current = was;
+        return;
+    }
+    other_work();
+    other_ran = 1;
+    mmap_unlock(&space);
+    cpu_table[0].current = was;
+}
+
+/** Take the pages of [start, end) away, which the changer does after the
+ * removal and before the insertion: the other thread comes in here, as it
+ * would on another processor while the pages go. */
+void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
+{
+    void (*work)(void) = other_work;
+
+    (void)dir;
+    (void)start;
+    (void)end;
+    unmaps++;
+    if (work) {
+        other_runs();
+        other_work = work; /* `other_runs` may still owe it */
+    }
+}
+
+/** Replace [0x50000, 0x54000) of `space` as mmap's MAP_FIXED does, through
+ * regions.c, with `work` the other thread's, and say what it found. */
+static void replace_against(void (*work)(void))
+{
+    struct mm *mm;
+
+    vm_init(&space.vm);
+    CHECK(vm_insert(&space.vm, 0x50000, 0x54000, VM_PROT_READ | VM_PROT_WRITE, VM_ANON) == 0);
+    CHECK(vm_insert(&space.vm, 0x60000, 0x61000, VM_PROT_READ, VM_ANON) == 0);
+    changer.mm = &space;
+    cpu_table[0].current = &changer;
+    other_work = work;
+    other_waited = other_ran = other_found = 0;
+    other_size = 0;
+    big_lock = reaps = unmaps = notices = 0;
+
+    mm = regions_begin();
+    CHECK(mm == &space && big_lock == 0);
+    CHECK(vm_reserve(&mm->vm, 2) == 0);
+    CHECK(regions_unmap(mm, 0x50000, 0x54000) == 0);
+    CHECK(vm_insert(&mm->vm, 0x50000, 0x54000, VM_PROT_READ, VM_ANON) == 0);
+    regions_end(mm);
+    other_work = NULL;
+
+    CHECK(unmaps == 1 && notices == 1 && reaps == 1 && big_lock == 0);
+    CHECK(writer == NULL && readers == 0 && pending == NULL);
+    CHECK(other_waited && other_ran); /* it waited for the change and then ran */
+    cpu_table[0].current = NULL;
+    vm_free(&space.vm);
+}
+
+/** A fault and a /proc reader that come in while a change takes pages away
+ * wait for the change and find the regions whole. */
+static void regions_rows(void)
+{
+    replace_against(other_fault);
+    CHECK(other_found);
+    replace_against(other_status);
+    CHECK(other_size == 0x5000);
+}
+
+/** Run the rows `option` names alone, `--dead-only` or `--regions-only`:
+ * the failures, at most 100, or 100 for an option of neither. */
+static int rows_alone(const char *option)
+{
+    if (__builtin_strcmp(option, "--dead-only") == 0) {
+        dead_rows();
+    } else if (__builtin_strcmp(option, "--regions-only") == 0) {
+        regions_rows();
+    } else {
+        return 100;
+    }
+    return fails > 100 ? 100 : fails;
+}
+
 int main(int argc, char **argv)
 {
     vm_space_t vm = {0};
     vma_t *r;
 
-    if (argc == 2 && __builtin_strcmp(argv[1], "--dead-only") == 0) {
-        dead_rows();
-        return fails > 100 ? 100 : fails;
+    if (argc == 2) {
+        return rows_alone(argv[1]);
     }
     vm_init(&vm);
     CHECK(vm.count == 0);
@@ -750,5 +972,6 @@ int main(int argc, char **argv)
     dead_rows();
     tree_rows();
     limit_rows();
+    regions_rows();
     return (fails > 100) ? 100 : fails;
 }
