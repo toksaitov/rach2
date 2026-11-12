@@ -782,10 +782,13 @@ static int32_t run_begin(struct kvm_vcpu *v)
 /** The `sched_out` of a vCPU's thread across KVM_RUN, as Linux's
  * kvm_sched_out with `wants_to_run`: `arg` is the vCPU, which a switch
  * away while its thread can still run marks preempted
- * (`kvm_steal_preempted`). Under the run queues' lock; does not sleep. */
+ * (`kvm_steal_preempted`), and whose counters' PMI claims on the
+ * processor end (`kvm_pmu_leave`), as Linux's perf stops the vCPU's
+ * events at the switch. Under the run queues' lock; does not sleep. */
 static void vcpu_sched_out(void *arg)
 {
     kvm_steal_preempted((struct kvm_vcpu *)arg);
+    kvm_pmu_leave();
 }
 
 /**
@@ -808,7 +811,10 @@ static void vcpu_sched_out(void *arg)
  * top after an exit for a host interrupt: the loop clears `at_boundary`
  * right after it, as Linux clears at_instruction_boundary at the top of
  * vcpu_run's loop, since the work before the next entry may start an
- * instruction of the guest's.
+ * instruction of the guest's. Each turn first ends the PMI claims of the
+ * last entry's counters (`kvm_pmu_leave`): its exit is answered, and the
+ * switch, a halted wait or the return that may follow gives the processor
+ * to code whose NMIs are none of the guest's.
  * Returns 0 with `exit_reason` set,
  * -EINTR with it KVM_EXIT_INTR for a signal or a kick, or -errno.
  */
@@ -825,6 +831,7 @@ static int32_t run_loop(struct kvm_vcpu *v)
     }
     for (;;) {
         flags = kirq_save();
+        kvm_pmu_leave(); /* the exit is answered, and the next steps may sleep */
         sched_take_preempt();
         v->at_boundary = 0; /* the steps below may start an instruction */
         kirq_restore(flags);
@@ -905,6 +912,7 @@ static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
 {
     struct kvm_run *run = v->run;
     uint64_t old = 0;
+    uint32_t flags;
     int32_t r;
 
     if (arg) {
@@ -925,6 +933,9 @@ static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
             current_proc->sched_out = vcpu_sched_out;
             r = run_loop(v);
             current_proc->sched_out = NULL;
+            flags = kirq_save();
+            kvm_pmu_leave();
+            kirq_restore(flags);
         }
     }
     kvm_exitstat_done(v, 1);
