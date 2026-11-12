@@ -1,0 +1,25 @@
+hasvk: action: su -s /bin/sh gfx -c 'exec sh -c '"'"'. /srv/t3504/tests/graphics/guest-env.sh && graphics_env'"'"''
+hasvk: child: /srv/t3504/out/environment.log: exit 0
+hasvk: action: su -s /bin/sh gfx -c 'exec sh -c '"'"'. /srv/t3504/tests/graphics/guest-env.sh && exec vkcube --wsi wayland --c 300'"'"''
+hasvk: child: /srv/t3504/out/cube.log: exit 0
+hasvk: action: python3 /srv/t3504/tests/graphics/browser/sandbox.py gfx chromium /srv/t3504/out/run-0/browser webgpu-frames
+hasvk: child: /srv/t3504/out/run-0/browser.log: exit 0
+stall: run 0: bare: gap 16.8 ms after frame 2, steady 60.00 FPS, 0 late, 7.9907 s
+hasvk: action: python3 /srv/t3504/tests/graphics/browser/sandbox.py gfx chromium /srv/t3504/out/run-1/browser webgpu-frames
+hasvk: child: /srv/t3504/out/run-1/browser.log: exit 0
+stall: run 1: watched: gap 33.4 ms after frame 1, steady 60.00 FPS, 0 late, 8.0071 s
+hasvk: action: python3 /srv/t3504/tests/graphics/browser/sandbox.py gfx chromium /srv/t3504/out/run-2/browser webgpu-trace
+hasvk: child: /srv/t3504/out/run-2/browser.log: exit 0
+stall: run 2: traced: gap 16.8 ms after frame 4, steady 60.00 FPS, 0 late, 7.9822 s
+hasvk: action: python3 /srv/t3504/tests/graphics/browser/sandbox.py gfx chromium /srv/t3504/out/run-3/browser webgpu-frames
+hasvk: child: /srv/t3504/out/run-3/browser.log: exit 0
+stall: run 3: bare: gap 16.7 ms after frame 9, steady 60.03 FPS, 0 late, 7.9923 s
+hasvk: action: python3 /srv/t3504/tests/graphics/browser/sandbox.py gfx chromium /srv/t3504/out/run-4/browser webgpu-frames
+hasvk: child: /srv/t3504/out/run-4/browser.log: exit 0
+stall: run 4: watched: gap 33.4 ms after frame 1, steady 60.02 FPS, 0 late, 8.0040 s
+hasvk: action: python3 /srv/t3504/tests/graphics/browser/sandbox.py gfx chromium /srv/t3504/out/run-5/browser webgpu-trace
+hasvk: child: /srv/t3504/out/run-5/browser.log: exit 0
+stall: run 5: traced: gap 16.8 ms after frame 4, steady 60.02 FPS, 0 late, 7.9902 s
+stall: result: 6 runs, gaps [16.8, 33.4, 16.8, 16.7, 33.4, 16.8] ms
+stall: evidence: /srv/t3504/out
+exit 0

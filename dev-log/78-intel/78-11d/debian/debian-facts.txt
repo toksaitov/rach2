@@ -1,0 +1,12 @@
+BOOT_IMAGE=/run2/vmlinuz root=PARTUUID=f640712e-b236-4c5a-b7d8-1b149d598ec0 ro ds=nocloud modprobe.blacklist=ath9k,snd_hda_intel panic=10 intel_iommu=off
+6.12.115+deb13.1-amd64
+chromium	156.0.8078.79-1~deb13u1
+gcc	4:14.2.0-1
+libgl1-mesa-dri:amd64	25.0.7-2+deb13u1
+mesa-vulkan-drivers:amd64	25.0.7-2+deb13u1
+seatd	0.9.1-1
+weston	14.0.2-1
+active
+uid=1000(gfx) gid=1000(gfx) groups=1000(gfx),44(video),995(input),992(kvm),991(render)
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda5        32G   26G  4.6G  85% /
