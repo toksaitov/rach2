@@ -3034,6 +3034,14 @@ int32_t vfs_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, uin
     return mnt->type->ops->read_frames(mount_base(mnt), handle, first, count, frames);
 }
 
+/** The node behind `handle`, a handle the open of a file on `mnt` gave:
+ * the type's `handle_node`, or the handle for a type whose handle is its
+ * node. */
+static void *handle_node(struct vfs_mount *mnt, void *handle)
+{
+    return mnt->type->ops->handle_node ? mnt->type->ops->handle_node(handle) : handle;
+}
+
 int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                   uint64_t offset)
 {
@@ -3046,7 +3054,7 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
         return -EROFS;
     }
     n = mnt->type->ops->write(mount_base(mnt), handle, buf, count, offset);
-    filecache_forget(mnt, handle);
+    filecache_forget(mnt, handle_node(mnt, handle));
     return n;
 }
 
@@ -3064,7 +3072,7 @@ int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         return -EROFS;
     }
     rc = mnt->type->ops->truncate(mount_base(mnt), handle, size);
-    filecache_forget(mnt, handle);
+    filecache_forget(mnt, handle_node(mnt, handle));
     return rc;
 }
 
@@ -3104,13 +3112,12 @@ int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t o
     if (!mnt->type->ops->fallocate) {
         return -EOPNOTSUPP;
     }
-    /* The handle of a type with the operation is its node. */
-    if ((guard_node(mnt, handle) & VFS_FL_IMMUTABLE) ||
-        ((guard_node(mnt, handle) & VFS_FL_APPEND) && (mode & ~1u))) {
+    if ((guard_node(mnt, handle_node(mnt, handle)) & VFS_FL_IMMUTABLE) ||
+        ((guard_node(mnt, handle_node(mnt, handle)) & VFS_FL_APPEND) && (mode & ~1u))) {
         return -EPERM; /* vfs_fallocate's rule */
     }
     rc = mnt->type->ops->fallocate(mount_base(mnt), handle, mode, offset, len);
-    filecache_forget(mnt, handle);
+    filecache_forget(mnt, handle_node(mnt, handle));
     return rc;
 }
 
@@ -4122,6 +4129,7 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* put_unless_last */
     0,                           /* readlink_cached */
     0,                           /* read_frames */
+    0,                           /* handle_node */
 };
 
 /** The constructor of the root's entry: the mount's root is the image's root
@@ -4747,6 +4755,7 @@ static const struct vfs_ops devfs_vops = {
     0, /* put_unless_last */
     0, /* readlink_cached */
     0, /* read_frames */
+    0, /* handle_node */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -4791,6 +4800,7 @@ static const struct vfs_ops procfs_vops = {
     0, /* put_unless_last */
     0, /* readlink_cached */
     0, /* read_frames */
+    0, /* handle_node */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -4835,6 +4845,7 @@ static const struct vfs_ops sysfs_vops = {
     0, /* put_unless_last */
     0, /* readlink_cached */
     0, /* read_frames */
+    0, /* handle_node */
 };
 
 /** The constructor of a synthetic mount: its root is a node of the
