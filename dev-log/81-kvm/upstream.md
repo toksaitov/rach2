@@ -132,4 +132,15 @@ The format and the index of every milestone's faults are in [the upstream index]
 * Evidence: `dev-log/81-kvm/81-9/linux-wsl-pmu.*.log`, `linux-nested-pmu.log` and `rach2-nested-pmu.log`; `dev-log/81-kvm/81-9.md`.
 * Rach2: Rach2's KVM keeps every counter stopped while it switches them, so a guest counter counts as little of Rach2 as the processor's VMRUN allows; `tests/kvm/unit-tests.list` expects `pmu` to fail under a hypervisor, as Linux's does.
 * Status: unreported.
-* Next: check whether a later QEMU accepts a busy type in `get_ss_esp_from_tss` or loads TR with the busy bit in `helper_ltr` as hardware does; then report it with a kvm-unit-tests case that VMRUNs a 32-bit guest whose VMCB TR is type 0xB and takes an interrupt at CPL 3.
+* Next: read current mainline's `svm/pmu.c` for Host-only and Guest-only support, measure which layer counts the handling of an exit by running the reproduction under a Linux KVM on bare metal, and report to the KVM list if mainline still drops the bits.
+
+## Linux's Intel PMI handler skips its checkpointed counters when a rollback left no status
+
+* Project: Linux 6.12.115, `arch/x86/events/intel/core.c` (SHA-256 46ec7a496c3cc423ffbee0fa62f9537c9f7b7afa682434895227656ece1953e9) and `arch/x86/kernel/nmi.c` (5dfdc85e3242e180e440d058f448de233d1ec71a6fa869a674e1bc94f3a31c5e), read from kernel.org's stable tree at tag v6.12.115.
+* Fails: the PMI of a counter counting a TSX-checkpointed event that overflowed alone is reported as an NMI of unknown reason. The handler's comment says checkpointed counters must always be probed, since the rollback the PMI causes clears the overflow bit, and it ORs `intel_cp_status` into the status (core.c lines 3119 to 3124); but `intel_pmu_handle_irq` reads the status first and jumps to `done` when it is 0 (lines 3183 to 3185), so the probe never runs and the handler returns 0. `default_do_nmi` then calls `unknown_nmi_error` (nmi.c line 475), which prints "Uhhuh. NMI received for unknown reason" and goes on, or panics under `unknown_nmi_panic` (lines 331 to 357). KVM gives a guest's checkpointed event no sample period (`arch/x86/kvm/pmu.c` lines 196 to 202), so perf counts it to its maximum period with the interrupt bit set (`arch/x86/events/core.c` lines 487 to 488 and 618), and its overflow raises such a PMI.
+* Found: 2026-11-12, on the testing PC, in milestone 81, task 81-9, by reading Linux's handler while making Rach2's KVM claim a checkpointed guest counter's PMI (81-9.49).
+* Reproduction: not yet run. It needs a processor with TSX enabled, a counter on counter 2 with `in_tx_cp=1` whose overflow comes inside a transaction that then aborts, and no other overflow in the same NMI; the kernel log should then show the unknown-reason NMI.
+* Evidence: the sources at the lines named above; `rach2/sys/kvm/pmu.c`'s `kvm_pmu_nmi` at 889e192bf.
+* Rach2: not affected. Its KVM sets no interrupt bit on a guest's counters, so no guest counter raises a PMI in the host; the claim `kvm_pmu_nmi` made for a checkpointed counter went with the measuring knob after 81-9's third Lenovo trial.
+* Status: unreported.
+* Next: read current mainline's `intel_pmu_handle_irq` for the early return, run the reproduction on a TSX processor, and report to the perf list if mainline still returns before the probe.
