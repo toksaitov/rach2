@@ -1,0 +1,31 @@
+total kernel-mode interrupts over the tar: 13475
+ 11133 0xffffffff803812b4 kirq_restore rach2/sys/arch/x86/kirq.c:45
+   329 0xffffffff80359cf4 arch_copy_words rach2/sys/arch/x86/cpu.c:176
+   257 0xffffffff801143b9 _syscall_handler rach2/sys/syscall.c:3569
+   216 0xffffffff80101575 arch_user_copy rach2/sys/arch/x86_64/usercopy.s:20
+   163 0xffffffff80359c42 arch_relax rach2/sys/arch/x86/cpu.c:77
+    87 0xffffffff803599ff outb rach2/sys/arch/x86/portio.c:14
+    52 0xffffffff803812a1 kirq_save rach2/sys/arch/x86/kirq.c:17
+    47 0xffffffff80101578 arch_user_copy rach2/sys/arch/x86_64/usercopy.s:21
+    32 0xffffffff803812a2 kirq_save rach2/sys/arch/x86/kirq.c:17
+    30 0xffffffff80359a8b inb rach2/sys/arch/x86/portio.c:51
+    23 0xffffffff80359cf7 arch_copy_words rach2/sys/arch/x86/cpu.c:180
+    22 0xffffffff80359d17 arch_fill_words rach2/sys/arch/x86/cpu.c:203
+    17 0xffffffff8010157c arch_user_copy rach2/sys/arch/x86_64/usercopy.s:25
+    13 0xffffffff803812a0 kirq_save rach2/sys/arch/x86/kirq.c:17
+    13 0xffffffff8023511b slot_unready rach2/sys/fs/fd.c:755
+    12 0xffffffff80173a8f block_flags rach2/sys/block/block.c:69
+    11 0xffffffff8021dfbe inotify_file rach2/sys/io/inotify.c:196
+    10 0xffffffff801f61c9 bkl_spin_ok rach2/sys/proc/smp.c:1304
+    10 0xffffffff801a0c80 ext2_data_block_ok rach2/sys/fs/ext2.c:887
+    10 0xffffffff801146f2 _syscall_handler rach2/sys/syscall.c:3598
+     9 0xffffffff802cc744 k_memcpy rach2/sys/lib/kstring.c:93
+     9 0xffffffff8020bc2d pipe_link_plan rach2/sys/ipc/pipe.c:1833
+     9 0xffffffff801f2887 sched_spin_on rach2/sys/proc/sched.c:1349 (discriminator 3)
+     9 0xffffffff801a0137 ext2_em_of rach2/sys/fs/ext2.c:283
+     9 0xffffffff8017bc21 bcache_cached rach2/sys/fs/bcache.c:1857
+     8 0xffffffff80359d1a arch_fill_words rach2/sys/arch/x86/cpu.c:207
+     8 0xffffffff801a0ca7 ext2_data_block_ok rach2/sys/fs/ext2.c:903 (discriminator 1)
+     7 0xffffffff803812c2 kirq_enabled rach2/sys/arch/x86/kirq.c:58
+     7 0xffffffff801e05ef vm_lower rach2/sys/mm/vm.c:271
+     7 0xffffffff801b0055 frame_blocks rach2/sys/fs/ext2_file.c:302 (discriminator 2)
