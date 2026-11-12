@@ -535,9 +535,38 @@ static void restart_rows(void)
     proc_timer_update(&runner);
 }
 
-/** Run every check; 0 when each passes, 1 otherwise. */
-int main(void)
+/** A remote pass expires a due sleep but rearms no other CPU's future event. */
+static void event_owner_rows(void)
 {
+    sleeper.state = PROC_BLOCKED;
+    sleeper.wakeup_tick = 100;
+    sleeper.wakeup_ns = 10000000;
+    sleeper.wakeup_cpu = 1;
+    proc_timer_update(&sleeper);
+    wake_arms = 0;
+    clock_ns = 9000000;
+    proc_wake_due();
+    CHECK(wake_arms == 0 && sleeper.state == PROC_BLOCKED,
+          "a remote pass does not copy a future event onto this processor");
+    sleeper.wakeup_cpu = 0;
+    proc_wake_due();
+    CHECK(wake_arms == 1 && wake_ns == sleeper.wakeup_ns,
+          "the owning processor rearms its pending event");
+    sleeper.wakeup_cpu = 1;
+    clock_ns = sleeper.wakeup_ns;
+    proc_wake_due();
+    CHECK(sleeper.state == PROC_READY && !sleeper.timer_linked,
+          "a remote processor can still expire the sleep once its time comes");
+}
+
+/** Run every check; 0 when each passes, 1 otherwise. */
+int main(int argc, char **argv)
+{
+    if (argc == 2 && __builtin_strcmp(argv[1], "--event-owner") == 0) {
+        event_owner_rows();
+        printf("process-timer-test: event owner: %s\n", failures ? "fail" : "pass");
+        return failures != 0;
+    }
     alarm_rows();
     alarm_take_rows();
     own_rows();
@@ -547,6 +576,7 @@ int main(void)
     step_rows();
     between_rows();
     restart_rows();
+    event_owner_rows();
     if (failures) {
         return 1;
     }

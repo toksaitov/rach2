@@ -200,6 +200,7 @@ struct process {
     uintptr_t tls_base;           /* The thread pointer (arch_tls_set) */
     struct mm *mm;                /* The address space, shared by CLONE_VM (mm/mm.h) */
     uint64_t wakeup_tick;         /* The tick a timed sleep ends at, 0 for none */
+    unsigned int wakeup_cpu;      /* processor which owns the sleep's event */
     struct wake_record wake_time; /* timed wakes through the return to user mode */
     /* Signal state: the dispositions, `sigacts[signo]` with index 0 unused,
      * which are the thread group's (`tg->action`), and this thread's 64-bit
@@ -401,6 +402,7 @@ struct process {
      * counted from `alarm_last`, the tick it was last due at. A fork starts
      * with all zero, since the child inherits no timer; an exec keeps them. */
     uint64_t alarm_tick;
+    unsigned int alarm_cpu; /* processor which owns the real alarm's event */
     uint64_t alarm_interval;
     uint64_t alarm_last;
     /* The signals of the tick, as bits `1u << signo` of SIGALRM, SIGVTALRM
@@ -728,7 +730,7 @@ struct process {
     /* With `wakeup_tick`, the time of the monotonic clock in nanoseconds
      * since boot at which the sleep ends, before that tick, or 0 for a
      * sleep that ends at its tick: the interrupt `timer_wake_at` arms makes
-     * it ready then (`proc_wake_due`). */
+     * it ready then (`proc_wake_sleepers`). */
     int64_t wakeup_ns;
     /* Nonzero while a fault from user mode runs with interrupts on; the
      * tick then leaves its switch for the fault's end, as in a system call
@@ -1169,8 +1171,9 @@ void proc_wake_sleepers(uint64_t now);
 /**
  * Make ready each process BLOCKED in a timed sleep whose `wakeup_ns` the
  * monotonic clock has reached, before its tick, and arm the time of each
- * other again (`timer_wake_at`). The interrupt between ticks calls it,
- * with interrupts off (`timer_hr_pass`); it takes the locks it needs.
+ * other again on its owning CPU (`timer_wake_at`). This time-only form
+ * takes its own locks, with interrupts off; the kernel's event uses the
+ * combined time and tick pass after advancing the clock.
  */
 void proc_wake_due(void);
 

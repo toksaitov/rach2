@@ -193,14 +193,17 @@ static void timer_update_locked(process_t *p)
 {
     int active;
 
-    if (p->state == PROC_BLOCKED && p->wakeup_tick != 0) {
+    if (p->state == PROC_BLOCKED && p == current_proc) {
+        p->wakeup_cpu = arch_cpu_id();
+    }
+    if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 && p->wakeup_cpu == arch_cpu_id()) {
         if (p->wakeup_ns != 0) {
             timer_wake_at(p->wakeup_ns);
         } else {
             timer_wake_tick(p->wakeup_tick);
         }
     }
-    if (p->alarm_tick != 0 && !p->alarm_due) {
+    if (p->alarm_tick != 0 && !p->alarm_due && p->alarm_cpu == arch_cpu_id()) {
         timer_wake_tick(p->alarm_tick);
     }
     active =
@@ -293,6 +296,7 @@ static int alarm_set(process_t *p, uint64_t tick, uint64_t interval)
     int marked = p->alarm_due;
 
     p->alarm_tick = tick;
+    p->alarm_cpu = arch_cpu_id();
     p->alarm_interval = tick != 0 ? interval : 0;
     if (marked) {
         p->alarm_due = 0;
@@ -371,6 +375,7 @@ void proc_alarm_take(process_t *to, const process_t *from)
     uint32_t flags = spin_lock_irqsave(&timer_list_lock);
 
     to->alarm_tick = from->alarm_tick;
+    to->alarm_cpu = from->alarm_cpu;
     to->alarm_interval = from->alarm_interval;
     to->alarm_last = from->alarm_last;
     timer_update_locked(to);
@@ -383,6 +388,7 @@ void proc_alarm_taken(process_t *p)
 
     if (p->alarm_tick == 0 && p->alarm_interval != 0) {
         p->alarm_tick = alarm_next(p->alarm_last, p->alarm_interval, tick_count());
+        p->alarm_cpu = arch_cpu_id();
         timer_update_locked(p);
     }
     spin_unlock_irqrestore(&timer_list_lock, flags);
@@ -860,14 +866,16 @@ static void timer_pass(int why, uint64_t now)
                     break;
                 }
                 due[n++] = p;
-            } else if (p->state == PROC_BLOCKED && p->wakeup_tick != 0) {
+            } else if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 &&
+                       p->wakeup_cpu == arch_cpu_id()) {
                 if (p->wakeup_ns != 0) {
                     timer_wake_at(p->wakeup_ns);
                 } else {
                     timer_wake_tick(p->wakeup_tick);
                 }
             }
-            if (p->alarm_tick != 0 && !p->alarm_due && now < p->alarm_tick) {
+            if (p->alarm_tick != 0 && !p->alarm_due && now < p->alarm_tick &&
+                p->alarm_cpu == arch_cpu_id()) {
                 timer_wake_tick(p->alarm_tick);
             }
             if ((why & PASS_TICK) && p->alarm_tick != 0 && now >= p->alarm_tick && !p->alarm_due) {
