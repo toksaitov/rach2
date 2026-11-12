@@ -871,6 +871,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "ioapic",
+          "checks": "tests/host/ioapic_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "lapic",
           "checks": "tests/host/lapic_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

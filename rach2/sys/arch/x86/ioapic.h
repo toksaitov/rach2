@@ -23,6 +23,22 @@
  * booted on.
  */
 
+/*
+ * The registers of the I/O APIC of id `id`, by the index the select
+ * register takes, reached through this interface so that a host test can
+ * model them, as `lapic_io` lets it model the local APIC. Without a call to
+ * `ioapic_set_io` the driver maps each I/O APIC and reaches its registers
+ * through the select register and the window.
+ */
+struct ioapic_io {
+    uint32_t (*read)(uint8_t id, uint32_t reg);
+    void (*write)(uint8_t id, uint32_t reg, uint32_t value);
+};
+
+/** Reach every I/O APIC's registers through `ops` in place of the mapped
+ * pair, for a host test; NULL reads and writes the pair. */
+void ioapic_set_io(const struct ioapic_io *ops);
+
 /**
  * Whether the boot line keeps the I/O APIC off: `noapic`, or `maxcpus=0`,
  * which Linux 6.12.115 turns into the same disable_ioapic_support

@@ -63,15 +63,27 @@ static struct {
 /* The interrupt remapper in place, or NULL. */
 static const struct ioapic_remap *remap;
 
+/* A host test's access to the registers, or NULL. */
+static const struct ioapic_io *io;
+
+void ioapic_set_io(const struct ioapic_io *ops)
+{
+    io = ops;
+}
+
 /** Read the internal register `reg` of `c` through its select register and
- * window. */
+ * window, or through `io` when a host test gave one. */
 static uint32_t reg_read(const struct ioapic *c, uint32_t reg)
 {
     uint32_t flags = kirq_save();
     uint32_t v;
 
-    c->regs[IOAPIC_SELECT] = reg;
-    v = c->regs[IOAPIC_WINDOW];
+    if (io) {
+        v = io->read(c->id, reg);
+    } else {
+        c->regs[IOAPIC_SELECT] = reg;
+        v = c->regs[IOAPIC_WINDOW];
+    }
     kirq_restore(flags);
     return v;
 }
@@ -81,8 +93,12 @@ static void reg_write(const struct ioapic *c, uint32_t reg, uint32_t value)
 {
     uint32_t flags = kirq_save();
 
-    c->regs[IOAPIC_SELECT] = reg;
-    c->regs[IOAPIC_WINDOW] = value;
+    if (io) {
+        io->write(c->id, reg, value);
+    } else {
+        c->regs[IOAPIC_SELECT] = reg;
+        c->regs[IOAPIC_WINDOW] = value;
+    }
     kirq_restore(flags);
 }
 
