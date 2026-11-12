@@ -1,0 +1,8 @@
+sleep 2
+mount -t tracefs nodev /sys/kernel/tracing 2>/dev/null; echo 'hist:keys=msr:sort=hitcount' >> /sys/kernel/tracing/events/msr/write_msr/trigger; echo 'hist:keys=msr:sort=hitcount' >> /sys/kernel/tracing/events/msr/read_msr/trigger; echo ok
+cat /proc/interrupts
+tar cf - /opt/proton | cat > /dev/null
+cat /proc/interrupts; cat /sys/kernel/tracing/events/msr/write_msr/hist | grep -v "^#"; cat /sys/kernel/tracing/events/msr/read_msr/hist | grep -v "^#"
+/t/load sleep 5000
+cat /proc/interrupts; cat /sys/kernel/tracing/events/msr/write_msr/hist | grep -v "^#"
+grep -i "hz\|NO_HZ\|PARAVIRT_SPIN\|KVM_GUEST" /boot/config-$(uname -r) 2>/dev/null | head; cat /proc/cmdline; dmesg | grep -i "x2apic\|kvm-guest\|pv eoi\|PV\|clocksource\|tsc-deadline\|haltpoll\|cpuidle" | head -20
