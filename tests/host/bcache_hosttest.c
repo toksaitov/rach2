@@ -235,6 +235,8 @@ static int drop_at = -1, tear_at = -1, tear_bytes;
 static uint64_t fail_lba;
 /* Another process's write of the device fails while the next write sleeps. */
 static int failed_during_write;
+/* Run once at the end of the next write's hooks, then cleared. */
+static void (*write_hook)(void);
 /* Two interleavings. `write_during_fill` is a block written through the
    cache, synced and dropped from it while a run read that covers it is
    inside the device, as another process's write lands during the fill's
@@ -361,8 +363,8 @@ static void hook_marks(block_device_t *d)
  * hooks that are set, each once: `gone_during_write` marks the device gone,
  * `failed_during_write` marks it as having failed a write,
  * `first_during_sync` dirties that block as a `first` with 0xF1 as
- * `hook_proc`, then the marks of `hook_marks`, and `fill_during_write` keys
- * that block blank with 0xAB. It
+ * `hook_proc`, then the marks of `hook_marks`, `fill_during_write` keys
+ * that block blank with 0xAB, and `write_hook` runs. It
  * records the request flags of `watch_blk`'s write, the LBAs of the first
  * eight writes and the count of the last. Write number `drop_at` reports
  * success and copies nothing; write number `tear_at` copies only
@@ -405,6 +407,12 @@ static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const voi
             keyed->data[0] = 0xAB;
             bcache_release(keyed);
         }
+    }
+    if (write_hook) {
+        void (*fn)(void) = write_hook;
+
+        write_hook = 0;
+        fn();
     }
     if (watch_blk != 0 && lba == watch_blk * 8) {
         watch_flags = blockmax_last_flags;
@@ -1457,8 +1465,9 @@ static void writeback_rows(void)
  * released. A write run of 40 blank dirty blocks goes out in two runs of
  * 20, not one that holds every buffer while the request sleeps. The rows of
  * a file's own writeback, of the blocks written last and what they name, of
- * the reserve, of a reclaim after a failed write and of a sort end the run
- * (`writeback_rows`).
+ * the reserve, of a reclaim after a failed write and of a sort follow
+ * (`writeback_rows`), and the rows of what other callers do while a walk
+ * has let `cache_spin` go end the run (`pause_rows`).
  */
 /** Fill the cache of forty with blocks 1 to 40 of `vast`, the first `clean`
  * of them clean and the rest dirty, as a caller with the big lock. */
@@ -1611,6 +1620,346 @@ static void release_wake_rows(void)
     check(wakes_made == 1 && last_woken == queue, "the release wakes the buffer's queue once");
     check(wakes_at_reclaim == 1, "before the lock goes and the shrink can free the buffer");
     check(last_kicked == WAKE_CPU, "and kicks the processor the wake reported after it");
+}
+
+/* The rows of the pauses. Each stands for another processor that takes
+ * `cache_spin` the moment a walk lets it go, through `restore_hook`, or for
+ * a fill that comes as a write lets its buffer go, through `write_hook`. */
+
+/** A fill that takes the buffer the reclaim has just written and let go,
+ *  and empties it again, as `fill_run` does after a write it overtook:
+ *  here the invalidate of the buffer's device, which empties it too. */
+static void empty_after_let_go(void)
+{
+    (void)bcache_invalidate(&fake);
+}
+
+/** The count of the write as it gives `cache_spin` back; the next give is
+ *  the write's release, where the fill comes. */
+static void after_wrote(void)
+{
+    restore_hook = empty_after_let_go;
+}
+
+/** The end of the reclaim's write inside the device. */
+static void arm_after_write(void)
+{
+    restore_hook = after_wrote;
+}
+
+/**
+ * A reclaim that writes a dirty buffer, which a fill takes and empties again
+ * as the write lets it go, leaves the buffer on the empties and does not
+ * free it, and the next miss takes it from there.
+ */
+static void reclaim_empty_row(void)
+{
+    uint32_t written = 0;
+    struct bbuf *b, *c;
+
+    (void)bcache_shrink(100000, 1, &written);
+    b = bcache_get_blank(&fake, 4);
+    bcache_dirty(b);
+    bcache_release(b);
+    check(bcache_resident() == 1, "the reclaim row starts with one dirty buffer");
+    written = 0;
+    write_hook = arm_after_write;
+    (void)bcache_shrink(BCACHE_BUFFERS, 1, &written);
+    check(write_hook == 0 && restore_hook == 0, "the fill comes as the reclaim's write lets go");
+    check(written == 0 && bcache_resident() == 1 && !bcache_cached(&fake, 4),
+          "a reclaim leaves a buffer a fill emptied after its write, on the empties");
+    if (bcache_resident() == 1) {
+        c = bcache_get_blank(&fake, 5);
+        check(c == b, "and the next miss takes it from there");
+        bcache_release(c);
+    }
+    restore_hook = 0;
+    (void)bcache_invalidate(&fake);
+}
+
+/* The block of `vast` the victim rows hit and let go at a search's pauses,
+ * the processes that hold the rest of a cache of forty, the buffers they
+ * hold and how many, and the pauses at which the block is hit still to
+ * come. */
+#define PAUSE_X 36u
+static process_t pause_holders[10];
+static struct bbuf *pause_held[40];
+static unsigned pause_count;
+static int pause_hits;
+
+/** Another process hits block `PAUSE_X` of `vast` and lets it go, which
+ *  moves it to the tail of the release order; again at the next give of
+ *  `cache_spin` while `pause_hits` lasts and the block is cached. */
+static void hit_x(void)
+{
+    struct process *was = current_proc;
+    struct bbuf *x;
+
+    if (!bcache_cached(&vast, PAUSE_X)) {
+        pause_hits = 0;
+        return;
+    }
+    current_proc = &proc_b;
+    x = bcache_get_blank(&vast, PAUSE_X);
+    if (x) {
+        bcache_release(x);
+    }
+    current_proc = was;
+    if (--pause_hits > 0) {
+        restore_hook = hit_x;
+    }
+}
+
+/** Fill the cache of forty with blocks 1 to 40 of `vast`, each held by one
+ *  of ten other processes, four at most each; with `with_x`, block
+ *  `PAUSE_X` is let go instead, and the 35 blocks before it come ahead of
+ *  it in the release order. */
+static void pause_fill(int with_x)
+{
+    uint32_t written = 0;
+    unsigned i;
+
+    (void)bcache_sync(&vast);
+    (void)bcache_invalidate(&vast);
+    (void)bcache_shrink(100000, 1, &written);
+    bcache_set_limit(40);
+    pause_count = 0;
+    for (i = 1; i <= 40; i++) {
+        if (with_x && i == PAUSE_X) {
+            bcache_release(bcache_get_blank(&vast, i));
+            continue;
+        }
+        pause_holders[pause_count / 4].pid = 70 + (int)(pause_count / 4);
+        current_proc = &pause_holders[pause_count / 4];
+        pause_held[pause_count++] = bcache_get_blank(&vast, i);
+    }
+    current_proc = &proc_a;
+    check(bcache_resident() == 40, "the victim rows fill the cache of forty");
+}
+
+/** Let go of the buffers `pause_fill` gave the other processes. */
+static void pause_release(void)
+{
+    unsigned i;
+
+    for (i = 0; i < pause_count; i++) {
+        current_proc = &pause_holders[i / 4];
+        bcache_release(pause_held[i]);
+    }
+    current_proc = &proc_a;
+    pause_count = 0;
+}
+
+/**
+ * A miss under the big lock on a cache whose every buffer but one is held:
+ * the one fit buffer, hit and let go at the search's first pause, goes
+ * behind the buffers the turn passed over, and the next turn takes it. Hit
+ * and let go at each of sixty pauses, more than the sixteen retries of a
+ * turn with nothing let go, it stays behind every turn, and the miss still
+ * takes it once the hits stop, since a turn with a release is progress. A
+ * miss with every buffer held fails once its turns let nothing go.
+ */
+static void victim_pause_rows(void)
+{
+    struct bbuf *b;
+
+    pause_fill(1);
+    pause_hits = 1;
+    restore_hook = hit_x;
+    b = bcache_get_blank(&vast, 100);
+    check(b != 0 && pause_hits == 0,
+          "a miss takes the one fit buffer, hit and let go at its search's first pause");
+    restore_hook = 0;
+    if (b) {
+        bcache_release(b);
+    }
+    pause_release();
+
+    pause_fill(1);
+    pause_hits = 60;
+    restore_hook = hit_x;
+    b = bcache_get_blank(&vast, 100);
+    check(b != 0 && pause_hits == 0,
+          "and one hit and let go at each of sixty pauses, once the hits stop");
+    restore_hook = 0;
+    pause_hits = 0;
+    if (b) {
+        bcache_release(b);
+    }
+    pause_release();
+
+    pause_fill(0);
+    b = bcache_get_blank(&vast, 100);
+    check(b == 0, "a miss with every buffer held fails once its turns let nothing go");
+    if (b) {
+        bcache_release(b);
+    }
+    pause_release();
+    (void)bcache_invalidate(&vast);
+}
+
+/* A device of more blocks than the index has buckets, which the index row
+ * keys blank and never reads or writes. */
+#define ROOMY_BLOCKS 20000u
+
+/** The read of `roomy`, which no row makes. */
+static int roomy_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
+{
+    (void)d;
+    (void)lba;
+    (void)count;
+    (void)buf;
+    check(0, "the index row reads nothing");
+    return -5;
+}
+
+/** The write of `roomy`, which no row makes. */
+static int roomy_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
+{
+    (void)d;
+    (void)lba;
+    (void)count;
+    (void)buf;
+    check(0, "the index row writes nothing");
+    return -5;
+}
+
+static block_device_t roomy = {
+    512, ROOMY_BLOCKS * 8u, BLOCK_FAULT_SAFE, 0, 0, 0, roomy_read, roomy_write, 0, 0, 0, 0};
+
+/* The index's buckets before the move, the blocks keyed before the one
+ * whose keying starts it, and how many of those and that one a lookup
+ * during the move found, or -1 before it. */
+static uint32_t index_old;
+static uint32_t index_keys;
+static int index_found;
+
+/** The first give of `cache_spin` once the index has its new table, which
+ *  is a pause of the move (`index_fit`): another process looks up every
+ *  keyed block, takes one of them, and keys a new one, `index_keys + 1`.
+ *  Until then it waits for the next give. */
+static void index_mid_move(void)
+{
+    struct process *was = current_proc;
+    uint32_t i;
+    int found = 0;
+
+    if (bcache_buckets() == index_old) {
+        restore_hook = index_mid_move;
+        return;
+    }
+    for (i = 0; i <= index_keys; i++) {
+        found += bcache_cached(&roomy, i);
+    }
+    current_proc = &proc_b;
+    bcache_release(bcache_get_blank(&roomy, 2));
+    bcache_release(bcache_get_blank(&roomy, index_keys + 1));
+    current_proc = was;
+    index_found = found;
+}
+
+/**
+ * A lookup and a keying while the index moves to a larger table, a bucket
+ * of the old one at a time: a lookup finds every keyed block, in whichever
+ * table its bucket is, a hit takes one, and a block keyed then is found
+ * once the move ends, with every other.
+ */
+static void index_move_row(void)
+{
+    uint32_t written = 0, i;
+    struct bbuf *b;
+    int all = 1;
+
+    (void)bcache_shrink(100000, 1, &written);
+    index_old = bcache_buckets();
+    if (bcache_resident() != 0 || index_old + 2 > ROOMY_BLOCKS) {
+        check(0, "the index row starts with an empty cache and a device past the buckets");
+        return;
+    }
+    bcache_set_limit(index_old + 64);
+    index_keys = index_old;
+    for (i = 0; i < index_keys; i++) {
+        bcache_release(bcache_get_blank(&roomy, i));
+    }
+    index_found = -1;
+    restore_hook = index_mid_move;
+    b = bcache_get_blank(&roomy, index_keys);
+    restore_hook = 0;
+    check(bcache_buckets() > index_old && index_found == (int)index_keys + 1,
+          "a lookup while the index moves finds every keyed block");
+    for (i = 0; i <= index_keys + 1; i++) {
+        all &= bcache_cached(&roomy, i);
+    }
+    check(all, "and the block keyed during the move is found after it, with every other");
+    if (b) {
+        bcache_release(b);
+    }
+    (void)bcache_invalidate(&roomy);
+    (void)bcache_shrink(100000, 1, &written);
+}
+
+/* The gives of `cache_spin` before `take_behind` takes its block, and the
+ * buffer it took. */
+static int invalidate_gives;
+static struct bbuf *taken_behind;
+
+/** Another process takes block 1 of `vast` at the `invalidate_gives`-th
+ *  give of `cache_spin`. */
+static void take_behind(void)
+{
+    struct process *was = current_proc;
+
+    if (--invalidate_gives > 0) {
+        restore_hook = take_behind;
+        return;
+    }
+    current_proc = &proc_b;
+    taken_behind = bcache_get_blank(&vast, 1);
+    current_proc = was;
+}
+
+/**
+ * A buffer taken while the second walk of an invalidate has let the lock
+ * go, ahead of that walk, is marked when the walk reaches it, the call
+ * still answers 0, and the buffer is dropped at its release with the rest.
+ * With forty buffers, the oldest block 1's at the end of the list of all
+ * buffers, the first walk lets the lock go once, after its 32nd buffer, and
+ * the second, whose count goes on from the first's 39 steps, after its
+ * 25th.
+ */
+static void invalidate_walk_row(void)
+{
+    int rc, any = 0;
+    unsigned i;
+
+    fill_forty(40);
+    check(bcache_resident() == 40, "the invalidate row fills the cache of forty");
+    taken_behind = 0;
+    invalidate_gives = 2;
+    restore_hook = take_behind;
+    rc = bcache_invalidate(&vast);
+    restore_hook = 0;
+    check(rc == 0 && invalidate_gives == 0 && taken_behind != 0,
+          "an invalidate whose second walk lets go before a block taken then answers 0");
+    if (taken_behind) {
+        current_proc = &proc_b;
+        bcache_release(taken_behind);
+        current_proc = &proc_a;
+    }
+    for (i = 1; i <= 40; i++) {
+        any |= bcache_cached(&vast, i);
+    }
+    check(!any, "and the block taken is dropped at its release, with the rest");
+}
+
+/** Run the rows of the pauses. */
+static void pause_rows(void)
+{
+    reclaim_empty_row();
+    victim_pause_rows();
+    index_move_row();
+    invalidate_walk_row();
+    bcache_set_limit(BCACHE_BUFFERS);
 }
 
 int main(int argc, char **argv)
@@ -2214,6 +2563,7 @@ int main(int argc, char **argv)
     writeback_rows();
     reader_rows();
     release_wake_rows();
+    pause_rows();
 
     if (fails == 0) {
         printf("bcache_hosttest: OK\n");
