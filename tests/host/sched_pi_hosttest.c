@@ -1,4 +1,7 @@
-/* Real-time and inherited priorities in the kernel's actual ready queues. */
+/* Real-time and inherited priorities in the kernel's actual ready queues.
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c rach2/sys/tick.c
+ * host-cflags: -DRACH2_HOST_CPU
+ */
 #define main ordinary_sched_rows
 #include "sched_hosttest.c"
 #undef main
