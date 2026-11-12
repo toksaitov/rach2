@@ -1248,10 +1248,14 @@ int32_t kvm_dirty_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg);
  * -EINVAL for an option Linux does not take. */
 int32_t kvm_dirty_enable_manual(struct kvm_vm *vm, const struct kvm_enable_cap *cap);
 
-/** Mark the frame `gfn` of `vm` dirty in its slot's log, for a write of the
- * kernel's own to guest memory; nothing when its slot does not log. Takes
- * `mmu_lock`. */
-void kvm_dirty_mark(struct kvm_vm *vm, uint64_t gfn);
+/** Mark the frame `gfn` of `vm` dirty in the log of `s`, the view of its
+ * slot that a write of the kernel's own to guest memory found and copied
+ * through, as Linux's mark_page_dirty_in_slot (virt/kvm/kvm_main.c:3624):
+ * nothing when that slot did not log. The caller holds the slots' readers'
+ * lock from the lookup, so the log is not yet freed, and a move of the slot
+ * meanwhile keeps the log and the frame's place in it, as Linux reuses the
+ * bitmap (kvm_main.c:1671-1675). Takes `mmu_lock`. */
+void kvm_dirty_mark(struct kvm_vm *vm, const struct kvm_slot_view *s, uint64_t gfn);
 
 /* irq.c: interrupt routing, irqfd and MSIs. */
 

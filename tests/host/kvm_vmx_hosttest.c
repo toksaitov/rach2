@@ -659,9 +659,10 @@ int kvm_slot_find(struct kvm_vm *vm, uint64_t gfn, struct kvm_slot_view *out)
     return 1;
 }
 
-void kvm_dirty_mark(struct kvm_vm *vm, uint64_t gfn)
+void kvm_dirty_mark(struct kvm_vm *vm, const struct kvm_slot_view *s, uint64_t gfn)
 {
     (void)vm;
+    (void)s;
     (void)gfn;
     dirty_marks++;
 }

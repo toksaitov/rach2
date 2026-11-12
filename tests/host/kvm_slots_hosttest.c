@@ -38,13 +38,15 @@
  * tables map of it and asking every vCPU to flush, a change to one page of a
  * 2 MiB leaf dropping the leaf; the end of the address space; dirty logging
  * with KVM_GET_DIRTY_LOG and, under KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2,
- * KVM_CLEAR_DIRTY_LOG, their refusals, and no 2 MiB leaf in a slot that
- * logs; kvm_tdp_write_nofault refusing a read-only slot, a page not yet
- * stored into, read-only, a device's or absent, a write across a page or
- * of nothing, an address of no slot, a caller's check made before the
- * tables last changed and a thread of another address space, and writing
- * a stored-into page of RAM at its offset, logged; a slot moved, its flags
- * changed and deleted with its leaves and tables gone; and every
+ * KVM_CLEAR_DIRTY_LOG, their refusals, a kernel's write logged in the slot
+ * it copied through while a move or a deletion of the slot waits for it, and
+ * no 2 MiB leaf in a slot that logs; kvm_tdp_write_nofault refusing a
+ * read-only slot, a page not yet stored into, read-only, a device's or
+ * absent, a write across a page or of nothing, an address of no slot, a
+ * caller's check made before the tables last changed and a thread of
+ * another address space, and writing a stored-into page of RAM at its
+ * offset, logged; a slot moved, its flags changed and deleted with its
+ * leaves and tables gone; and every
  * allocation and frame given back.
  */
 #include "kvm/dirty.c"
@@ -330,8 +332,11 @@ void smp_service(void)
 {}
 
 /* The slots' readers' lock: the waits of a change for the copies through
- * a slot, which the rows count. */
+ * a slot, which the rows count, and the rest of a copy under way, which a
+ * row sets to run while a change waits for it, as another thread's copy
+ * would end then. */
 static int slot_syncs;
+static void (*copy_rest)(void);
 
 /** Make `s` free. */
 void rwsem_init_key(struct rwsem *s, const char *name, const struct lockdep_key *key)
@@ -353,9 +358,16 @@ void up_read(struct rwsem *s)
     s->count--;
 }
 
-/** A change's wait for the copies, none of which is under way here. */
+/** A change's wait for the copies: the rest of the one under way runs,
+ * and must give its hold back; with none to run, none may be held. */
 void down_write(struct rwsem *s)
 {
+    void (*rest)(void) = copy_rest;
+
+    if (s->count != 0 && rest) {
+        copy_rest = NULL;
+        rest();
+    }
     if (s->count != 0) {
         __builtin_trap();
     }
@@ -923,6 +935,63 @@ static int32_t clear_dirty(uint32_t slot, uint64_t first, uint32_t n, uint64_t *
     return kvm_dirty_ioctl(&vm, KVM_CLEAR_DIRTY_LOG, (uintptr_t)&c);
 }
 
+/* A kernel's write to guest memory under way: the view of the slot it
+ * found and copied through, and the frame it wrote. */
+static struct kvm_slot_view copy_view;
+static uint64_t copy_gfn;
+
+/** The end of that write, as `gpa_rw_page` ends it: the mark in the slot it
+ * copied through, then the readers' lock given back. */
+static void copy_mark(void)
+{
+    kvm_dirty_mark(&vm, &copy_view, copy_gfn);
+    kvm_slots_read_unlock(&vm);
+}
+
+/** Begin a kernel's write to the frame `gfn`, as `gpa_rw_page` does, whose
+ * mark and end run while the next change of the slots waits: 1 when a slot
+ * holds the frame. */
+static int copy_begin(uint64_t gfn)
+{
+    kvm_slots_read_lock(&vm);
+    copy_gfn = gfn;
+    if (!kvm_slot_find(&vm, gfn, &copy_view)) {
+        kvm_slots_read_unlock(&vm);
+        return 0;
+    }
+    copy_rest = copy_mark;
+    return 1;
+}
+
+/**
+ * A kernel's write that a move of its slot overtakes, and one that a
+ * deletion does, in slot 5 at `gfn`, of 100 pages at `a`, which logs under
+ * manual protection: each change waits for the write, whose mark goes to
+ * the page it wrote, in the log the move keeps, and to a log the deletion
+ * has not yet freed. Deletes the slot.
+ */
+static void overtaken_rows(uint64_t gfn, uintptr_t a)
+{
+    uint64_t bits[2];
+    int syncs;
+
+    bits[0] = ~0ull;
+    bits[1] = ~0ull;
+    CHECK(clear_dirty(5, 0, 64, bits) == 0 && clear_dirty(5, 64, 36, bits) == 0 &&
+              get_dirty(5, bits) == 0 && bits[0] == 0 && bits[1] == 0,
+          "the log cleared");
+    syncs = slot_syncs;
+    CHECK(copy_begin(gfn + 9), "a kernel's write finds its slot");
+    CHECK(set(5, KVM_MEM_LOG_DIRTY_PAGES, (gfn + 0x100) * 4096u, 100 * 4096u, a) == 0 &&
+              copy_rest == NULL && slot_syncs == syncs + 1,
+          "a move of the slot waits for the write");
+    CHECK(get_dirty(5, bits) == 0 && bits[0] == 1ull << 9 && bits[1] == 0,
+          "which is logged at the page it wrote");
+    CHECK(copy_begin(gfn + 0x100 + 3), "a write at the slot's new place");
+    CHECK(set(5, 0, 0, 0, 0) == 0 && copy_rest == NULL && slot_syncs == syncs + 2,
+          "deleted, once the write through it has ended");
+}
+
 /** The dirty log, GET and CLEAR, and manual protection. */
 static void dirty_rows(void)
 {
@@ -979,9 +1048,10 @@ static void dirty_rows(void)
     CHECK(get_dirty(5, bits) == 0 && bits[1] == 0, "cleared, the bits past the end ignored");
     CHECK(clear_dirty(6, 0, 64, bits) == -ENOENT, "CLEAR of no slot");
     CHECK(kvm_tdp_fault(&vm, gfn + 64, 1) == 0, "a write after CLEAR");
-    kvm_dirty_mark(&vm, gfn + 65);
+    CHECK(kvm_slot_find(&vm, gfn + 65, &copy_view), "a kernel's write finds its slot");
+    kvm_dirty_mark(&vm, &copy_view, gfn + 65);
     CHECK(get_dirty(5, bits) == 0 && bits[1] == 3, "is logged, and so is a kernel's write");
-    CHECK(set(5, 0, 0, 0, 0) == 0, "deleted");
+    overtaken_rows(gfn, a);
     vm.dirty_manual = 0;
 
     /* No 2 MiB leaf in a slot that logs. */

@@ -277,7 +277,10 @@ void kvm_emul_skip(struct kvm_vcpu *v, uint32_t len)
  * slot's readers' lock is held from the lookup through the copy and the
  * dirty log's mark, so a change of the slot waits for the copy before the
  * caller may unmap the memory, as Linux's exits run under kvm->srcu
- * (arch/x86/kvm/x86.c:10673, virt/kvm/kvm_main.c:1633).
+ * (arch/x86/kvm/x86.c:10673, virt/kvm/kvm_main.c:1633). The mark goes to
+ * the log of the slot the copy went through, as Linux's
+ * __kvm_write_guest_page marks its memslot (kvm_main.c:3405-3420), since a
+ * move made meanwhile has the frame's address name another page or none.
  */
 static int gpa_rw_page(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t chunk, int write)
 {
@@ -296,7 +299,7 @@ static int gpa_rw_page(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t chu
             r = -EFAULT;
             goto out;
         }
-        kvm_dirty_mark(v->vm, gpa >> 12);
+        kvm_dirty_mark(v->vm, &s, gpa >> 12);
     } else if (copy_from_user(buf, hva, chunk) != 0) {
         r = -EFAULT;
     }
