@@ -177,9 +177,11 @@ int32_t i915_ggtt_insert(struct drm_i915_private *i915, uint64_t offset, const u
  * stays reserved to its caller, which releases it only after the clear, so
  * no other thread reaches the entries between two batches. Only a caller
  * that may sleep sets it, as only such a caller of Linux's unbind reaches a
- * cond_resched (i915_gem_evict.c:270): a give-way lets the big lock go, and
- * an MMU notifier's callback, the shrinker and whatever runs inside them
- * hold it across a change that must look whole to every other thread.
+ * cond_resched (i915_gem_evict.c:270, gem/i915_gem_object.c:423): the
+ * ioctls, eviction and an object's free that took the GEM lock itself. A
+ * give-way lets the big lock go, and an MMU notifier's callback, the
+ * shrinker and whatever runs inside them hold it across a change that must
+ * look whole to every other thread.
  */
 int32_t i915_ggtt_clear_range(struct drm_i915_private *i915, uint64_t offset, uint64_t size,
                               int may_yield)
