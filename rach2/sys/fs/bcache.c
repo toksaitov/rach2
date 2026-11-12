@@ -69,7 +69,11 @@ static struct bbuf *kernel_held;  /* held with no process current */
 static block_device_t *ahead_dev; /* the device and block a sequential reader */
 static uint64_t ahead_next;       /* reaches next; a miss there fills a run */
 static uint32_t write_gen;        /* counts the writes that reached a device, under `cache_spin` */
-static uint32_t limit_set;        /* a limit given by `bcache_set_limit`, or 0 */
+/* Counts the buffers let go and the fills that ended their keep, under
+ * `cache_spin`: each may make a buffer a victim search passed over fit,
+ * which a search that let the lock go reads (`get`). */
+static uint32_t let_gos;
+static uint32_t limit_set; /* a limit given by `bcache_set_limit`, or 0 */
 static uint32_t clock_stamp;
 static uint64_t stat_hits, stat_fills, stat_waits;
 /* Every buffer a walk of the cache's lists reads: the whole list, the release
@@ -143,8 +147,6 @@ uint64_t bcache_stat_visits(void)
     return stat_visits;
 }
 
-static void index_fit(void);
-
 /** A buffer from the heap, empty and unheld, on the list; NULL when the
  * heap has no room for it. */
 static struct bbuf *buffer_new(void)
@@ -168,7 +170,6 @@ static struct bbuf *buffer_new(void)
     }
     bufs = b;
     nbufs++;
-    index_fit();
     return b;
 }
 
@@ -184,6 +185,12 @@ static struct bbuf *buffer_new(void)
  * boot, and when the buffers outnumber the buckets `index_fit` moves it to
  * a table from the heap sized from the limit. A heap that has no run for
  * the table leaves the index as it is until the buffers have doubled.
+ *
+ * The move goes a bucket of the old table at a time and lets `cache_spin`
+ * go between batches, as Linux's rhashtable moves its buckets to a new
+ * table with a `cond_resched` between (lib/rhashtable.c:319-355). Until
+ * the move ends, a buffer whose bucket of the old table has not been moved
+ * is found there, and every other one in the new table (`bucket_head`).
  */
 #define BHASH_FIRST       4096u
 #define BHASH_FIRST_SHIFT 12
@@ -193,86 +200,55 @@ static struct bbuf *bhash_first[BHASH_FIRST];
 static struct bbuf **bhash = bhash_first;
 static uint32_t bhash_size = BHASH_FIRST; /* a power of two */
 static uint32_t bhash_shift = BHASH_FIRST_SHIFT;
-static uint32_t bhash_retry; /* buffers below which a refused table is not asked again */
+static uint32_t bhash_retry;     /* buffers below which a refused table is not asked again */
+static struct bbuf **bhash_from; /* the table a move empties, or NULL with none under way */
+static uint32_t from_shift;      /* its buckets' shift; it has 1 << from_shift */
+static uint32_t from_moved;      /* its buckets below this one have been moved */
 
 uint32_t bcache_buckets(void)
 {
     return bhash_size;
 }
 
-/** The bucket of the index for block `blk` of `dev`. The block's number,
- * its high bits folded onto the low, gives consecutive blocks consecutive
- * buckets, which no two of them share; the device moves its blocks to a
- * place of their own, the top bits of its address's product with the golden
- * ratio's fraction (Knuth's multiplicative hashing), which every bit of the
- * address reaches, so that devices whose records lie a power of two apart
- * are not put on the same buckets. */
-static uint32_t bucket_of(const block_device_t *dev, uint64_t blk)
+/** The bucket for block `blk` of `dev` in a table of `1 << shift`
+ * buckets. The block's number, its high bits folded onto the low, gives
+ * consecutive blocks consecutive buckets, which no two of them share; the
+ * device moves its blocks to a place of their own, the top bits of its
+ * address's product with the golden ratio's fraction (Knuth's
+ * multiplicative hashing), which every bit of the address reaches, so that
+ * devices whose records lie a power of two apart are not put on the same
+ * buckets. */
+static uint32_t bucket_in(const block_device_t *dev, uint64_t blk, uint32_t shift)
 {
     uint32_t lo = (uint32_t)blk;
-    uint32_t at = lo ^ (lo >> bhash_shift) ^ (uint32_t)(blk >> 32);
-    uint32_t place = ((uint32_t)((uintptr_t)dev >> 4) * 0x9E3779B1u) >> (32 - bhash_shift);
+    uint32_t at = lo ^ (lo >> shift) ^ (uint32_t)(blk >> 32);
+    uint32_t place = ((uint32_t)((uintptr_t)dev >> 4) * 0x9E3779B1u) >> (32 - shift);
 
-    return (at + place) & (bhash_size - 1u);
+    return (at + place) & ((1u << shift) - 1u);
 }
 
-/** Give the index a bucket for each buffer the limit allows, once the
- * buffers outnumber its buckets: a table from the heap, every keyed buffer
- * moved to it, and the old table given back unless it is the first. */
-static void index_fit(void)
+/** The head of the bucket that holds block `blk` of `dev`: in the table a
+ * move empties while the block's bucket there has not been moved, in the
+ * index's table otherwise. `cache_spin` is held. */
+static struct bbuf **bucket_head(const block_device_t *dev, uint64_t blk)
 {
-    uint32_t most = bcache_limit(), size = bhash_size, shift = bhash_shift;
-    uint32_t pages, old_pages = 0;
-    struct bbuf **table, **old = bhash;
-    struct bbuf *b;
+    if (bhash_from) {
+        uint32_t h = bucket_in(dev, blk, from_shift);
 
-    if (nbufs <= bhash_size || nbufs < bhash_retry) {
-        return;
-    }
-    if (most < nbufs) {
-        most = nbufs;
-    }
-    while (size < most && size < BHASH_MOST) {
-        size <<= 1;
-        shift++;
-    }
-    if (size == bhash_size) {
-        return;
-    }
-    pages = (uint32_t)((size * sizeof(*table) + PAGE_SIZE - 1) / PAGE_SIZE);
-    table = kalloc_pages_try(pages, 0);
-    if (!table) {
-        bhash_retry = nbufs * 2u;
-        return;
-    }
-    k_memset(table, 0, (size_t)pages * PAGE_SIZE);
-    if (old != bhash_first) {
-        old_pages = (uint32_t)((bhash_size * sizeof(*table) + PAGE_SIZE - 1) / PAGE_SIZE);
-    }
-    bhash = table;
-    bhash_size = size;
-    bhash_shift = shift;
-    for (b = bufs; b; b = b->next) {
-        stat_visits++;
-        if (b->dev) {
-            uint32_t h = bucket_of(b->dev, b->blk);
-
-            b->hnext = bhash[h];
-            bhash[h] = b;
+        if (h >= from_moved) {
+            return &bhash_from[h];
         }
     }
-    if (old_pages) {
-        kfree_pages(old, old_pages);
-    }
+    return &bhash[bucket_in(dev, blk, bhash_shift)];
 }
 
 /** Put the keyed buffer `b` in its bucket of the index. */
 static void index_add(struct bbuf *b)
 {
-    uint32_t h = bucket_of(b->dev, b->blk);
+    struct bbuf **head = bucket_head(b->dev, b->blk);
 
-    b->hnext = bhash[h];
-    bhash[h] = b;
+    b->hnext = *head;
+    *head = b;
 }
 
 /** Take `b` out of the index before its device is cleared; an empty
@@ -284,7 +260,7 @@ static void index_del(struct bbuf *b)
     if (!b->dev) {
         return;
     }
-    for (link = &bhash[bucket_of(b->dev, b->blk)]; *link; link = &(*link)->hnext) {
+    for (link = bucket_head(b->dev, b->blk); *link; link = &(*link)->hnext) {
         stat_visits++;
         if (*link == b) {
             *link = b->hnext;
@@ -299,7 +275,7 @@ static struct bbuf *index_find(const block_device_t *dev, uint64_t blk)
 {
     struct bbuf *b;
 
-    for (b = bhash[bucket_of(dev, blk)]; b; b = b->hnext) {
+    for (b = *bucket_head(dev, blk); b; b = b->hnext) {
         stat_visits++;
         if (b->dev == dev && b->blk == blk) {
             return b;
@@ -544,6 +520,118 @@ static uint32_t walk_pause(struct bbuf *keep, struct bbuf **reap, uint32_t flags
     return flags;
 }
 
+/**
+ * The buffer after `b` on the list of all buffers, for a walk of the list
+ * under `cache_spin`, taken with `*flags`, that lets the lock go every
+ * WALK_BATCH buffers, counted in `*n` (`walk_pause`). The buffer returned is
+ * kept meanwhile, so no shrink takes it off the list; a buffer made
+ * meanwhile goes on at the list's head, behind the walk.
+ */
+static struct bbuf *bufs_next(struct bbuf *b, uint32_t *n, uint32_t *flags)
+{
+    struct bbuf *next = b->next;
+
+    if (next && ++*n % WALK_BATCH == 0) {
+        *flags = walk_pause(next, 0, *flags);
+    }
+    return next;
+}
+
+/** Whether the buffers outnumber the index's buckets with no move under
+ * way, for the caller to call `index_fit` once `cache_spin`, held, is let
+ * go. */
+static int index_due(void)
+{
+    return !bhash_from && nbufs > bhash_size && nbufs >= bhash_retry;
+}
+
+/**
+ * Give the index a bucket for each buffer the limit allows, once the
+ * buffers outnumber its buckets: a table from the heap, every keyed buffer
+ * moved to it a bucket of the old table at a time, and the old table given
+ * back unless it is the first. The table is taken and the old one given
+ * back with `cache_spin` let go, since a free of pages flushes every
+ * processor's translations (`kfree_pages`), and the move lets the lock go
+ * every WALK_BATCH buckets and buffers (`walk_pause`). A second caller
+ * while a move is under way leaves it to the first. Called without
+ * `cache_spin`.
+ */
+static void index_fit(void)
+{
+    uint32_t flags = cache_lock();
+    uint32_t most = bcache_limit(), size = bhash_size, shift = bhash_shift;
+    uint32_t pages, from_pages = 0, n = 0;
+    struct bbuf **table, **from;
+
+    if (!index_due()) {
+        cache_unlock(flags);
+        return;
+    }
+    if (most < nbufs) {
+        most = nbufs;
+    }
+    while (size < most && size < BHASH_MOST) {
+        size <<= 1;
+        shift++;
+    }
+    if (size == bhash_size) {
+        cache_unlock(flags);
+        return;
+    }
+    cache_unlock(flags);
+    pages = (uint32_t)((size * sizeof(*table) + PAGE_SIZE - 1) / PAGE_SIZE);
+    table = kalloc_pages_try(pages, 0);
+    if (table) {
+        k_memset(table, 0, (size_t)pages * PAGE_SIZE);
+    }
+    flags = cache_lock();
+    if (!table) {
+        bhash_retry = nbufs * 2u;
+        cache_unlock(flags);
+        return;
+    }
+    if (bhash_from || bhash_size >= size) {
+        cache_unlock(flags);
+        kfree_pages(table, pages);
+        return;
+    }
+    bhash_from = bhash;
+    from_shift = bhash_shift;
+    from_moved = 0;
+    bhash = table;
+    bhash_size = size;
+    bhash_shift = shift;
+    while (from_moved < (1u << from_shift)) {
+        struct bbuf *b = bhash_from[from_moved];
+
+        bhash_from[from_moved++] = 0;
+        while (b) {
+            struct bbuf *next = b->hnext;
+            uint32_t h = bucket_in(b->dev, b->blk, bhash_shift);
+
+            stat_visits++;
+            n++;
+            b->hnext = bhash[h];
+            bhash[h] = b;
+            b = next;
+        }
+        if (++n >= WALK_BATCH) {
+            n = 0;
+            flags = walk_pause(0, 0, flags);
+        }
+    }
+    from = bhash_from;
+    if (from != bhash_first) {
+        from_pages =
+            (uint32_t)((((size_t)1 << from_shift) * sizeof(*table) + PAGE_SIZE - 1) / PAGE_SIZE);
+    }
+    bhash_from = 0;
+    cache_unlock(flags);
+    if (from_pages) {
+        kfree_pages(from, from_pages);
+    }
+}
+
 /** The pid that holds a buffer for the caller: the current process, or 0
  * with no process current. */
 static int caller_pid(void)
@@ -579,11 +667,13 @@ static void hold(struct bbuf *b)
     *head = b;
 }
 
-/** Take `b` off the caller's list and mark it unheld; `cache_spin` is
- * held. */
+/** Take `b` off the caller's list and mark it unheld, counted in
+ * `let_gos`; `cache_spin` is held. */
 static void unhold(struct bbuf *b)
 {
     struct bbuf **link;
+
+    let_gos++;
 
     for (link = held_list(); *link; link = &(*link)->hold_next) {
         stat_visits++;
@@ -1357,8 +1447,11 @@ static int victim_fit(const struct bbuf *b, block_device_t *filling, struct firs
  * over, reaches the count of buffers, which means every buffer was passed
  * over. It reads at most WALK_BATCH buffers in one call and then answers
  * NULL with `*more` set, for the caller to let `cache_spin` go and search
- * again, as Linux's LRU scan goes a batch at a time. `cache_spin` is held,
- * and the big lock, which the tests of a dirty buffer read under.
+ * again, as Linux's LRU scan goes a batch at a time. A buffer let go
+ * meanwhile may have been passed over and moved behind the search, fit
+ * now, so the caller then sets `*passed` to 0 for a new turn (`get`).
+ * `cache_spin` is held, and the big lock, which the tests of a dirty
+ * buffer read under.
  */
 static struct bbuf *victim_find(block_device_t *filling, uint32_t *passed, int *more)
 {
@@ -1381,6 +1474,48 @@ static struct bbuf *victim_find(block_device_t *filling, uint32_t *passed, int *
         (*passed)++;
     }
     return 0;
+}
+
+/* The new turns a victim search may start because buffers were let go
+ * while it let `cache_spin` go, before a miss with none fit fails: Linux's
+ * allocator retries a reclaim that made no progress MAX_RECLAIM_RETRIES
+ * (16) times before it gives up (mm/internal.h:464,
+ * mm/page_alloc.c:4179-4185). */
+#define SEARCH_TURNS 16
+
+/* A miss's search for a victim under the big lock, kept while it lets
+ * `cache_spin` go between batches. */
+struct victim_search {
+    uint32_t passed; /* the buffers this turn has passed over */
+    uint32_t seen;   /* `let_gos` at the last batch */
+    int turns;       /* the turns started over, at most SEARCH_TURNS */
+};
+
+/**
+ * The victim a miss under the big lock takes: an empty buffer, a new one
+ * while the cache is under its limit, or the least recently released one
+ * `filling` may take (`victim_find`), with `*more` set and NULL when the
+ * search lets `cache_spin` go before its next batch. A buffer let go since
+ * the last batch starts the turn over, at most SEARCH_TURNS times.
+ * `cache_spin` is held.
+ */
+static struct bbuf *victim_any(block_device_t *filling, struct victim_search *s, int *more)
+{
+    struct bbuf *b = take_empty();
+
+    *more = 0;
+    if (!b && nbufs < bcache_limit()) {
+        b = buffer_new();
+    }
+    if (b) {
+        return b;
+    }
+    if (s->passed && let_gos != s->seen && s->turns < SEARCH_TURNS) {
+        s->passed = 0;
+        s->turns++;
+    }
+    s->seen = let_gos;
+    return victim_find(filling, &s->passed, more);
 }
 
 /* The buffers at the head of the release order a miss without the big lock
@@ -1589,9 +1724,10 @@ static void key_held(struct bbuf *b, block_device_t *dev, uint64_t blk)
  */
 static struct bbuf *get(block_device_t *dev, uint64_t blk, int blank, int *fresh)
 {
+    struct victim_search search = {0, 0, 0};
     struct bbuf *victim, *b;
-    uint32_t flags, passed = 0;
-    int big = 0, filled = blank, more;
+    uint32_t flags;
+    int big = 0, filled = blank, more, grow;
 
     if (fresh) {
         *fresh = 0;
@@ -1630,16 +1766,10 @@ again:
             goto again;
         }
     } else {
-        victim = take_empty();
-        if (!victim && nbufs < bcache_limit()) {
-            victim = buffer_new();
-        }
-        if (!victim) {
-            victim = victim_find(dev, &passed, &more);
-            if (more) {
-                cache_unlock(flags);
-                goto again;
-            }
+        victim = victim_any(dev, &search, &more);
+        if (more) {
+            cache_unlock(flags);
+            goto again;
         }
         if (!victim) {
             cache_unlock(flags);
@@ -1651,12 +1781,16 @@ again:
             if (victim->order != BCACHE_ORDER_AFTER || write_firsts(victim->dev) == 0) {
                 (void)write_one(victim, 0);
             }
-            passed = 0;
+            search.passed = 0;
             goto again;
         }
     }
     key_held(victim, dev, blk);
+    grow = index_due();
     cache_unlock(flags);
+    if (grow) {
+        index_fit();
+    }
     if (fresh) {
         *fresh = 1;
     }
@@ -1786,6 +1920,7 @@ static int fill_run(block_device_t *dev, uint64_t blk)
     }
     flags = cache_lock();
     fill_keep = 0;
+    let_gos++;
     run_stage_busy = 0;
     ahead_dev = dev;
     ahead_next = blk + n;
@@ -2327,16 +2462,22 @@ int bcache_sync_block(block_device_t *dev, uint64_t blk)
     }
 }
 
+/* The walk lets `cache_spin` go every WALK_BATCH buffers (`bufs_next`), as
+ * Linux's invalidate goes a batch at a time (mm/truncate.c:509-541). The
+ * big lock, held throughout, keeps every buffer's dirty mark; a buffer a
+ * reader takes meanwhile is dropped at its release, as one held when the
+ * walk reaches it is, and a miss for `dev` meanwhile fails its read and
+ * empties its buffer. */
 void bcache_device_gone(block_device_t *dev)
 {
     struct bbuf *b;
-    uint32_t flags;
+    uint32_t flags, n = 0;
 
     bkl_assert_held();
     vfs_device_failed(dev, 0, -EIO);
     dev->flags |= BLOCK_GONE;
     flags = cache_lock();
-    for (b = bufs; b; b = b->next) {
+    for (b = bufs; b; b = bufs_next(b, &n, &flags)) {
         stat_visits++;
         if (b->dev != dev) {
             continue;
@@ -2351,13 +2492,15 @@ void bcache_device_gone(block_device_t *dev)
     cache_unlock(flags);
 }
 
+/* The walk lets `cache_spin` go every WALK_BATCH buffers (`bufs_next`),
+ * so the count is of each buffer as the walk reaches it. */
 int bcache_device_holds(block_device_t *dev)
 {
-    const struct bbuf *b;
-    uint32_t flags = cache_lock();
+    struct bbuf *b;
+    uint32_t flags = cache_lock(), n = 0;
     int held = 0;
 
-    for (b = bufs; b; b = b->next) {
+    for (b = bufs; b; b = bufs_next(b, &n, &flags)) {
         stat_visits++;
         if (b->dev == dev && b->holder != -1) {
             held++;
@@ -2582,21 +2725,34 @@ uint32_t bcache_reserve(block_device_t *dev, uint32_t n)
     }
 }
 
+/* Two walks of every buffer, the first to find one held or dirty and the
+ * second to drop them, each letting `cache_spin` go every WALK_BATCH
+ * buffers (`bufs_next`), as Linux's invalidate goes a batch at a time with
+ * a `cond_resched` between (mm/truncate.c:509-541). A buffer of `dev` a
+ * process takes while the second walk has let the lock go is dropped at
+ * its release, as at a device's loss, and one dirtied meanwhile is left
+ * for its write; the callers, an unmount and a detach, have stopped every
+ * use of `dev` before. */
 int bcache_invalidate(block_device_t *dev)
 {
     struct bbuf *b;
-    uint32_t flags = cache_lock();
+    uint32_t flags = cache_lock(), n = 0;
 
-    for (b = bufs; b; b = b->next) {
+    for (b = bufs; b; b = bufs_next(b, &n, &flags)) {
         stat_visits++;
         if (b->dev == dev && (b->holder != -1 || b->dirty)) {
             cache_unlock(flags);
             return -EBUSY;
         }
     }
-    for (b = bufs; b; b = b->next) {
+    for (b = bufs; b; b = bufs_next(b, &n, &flags)) {
         stat_visits++;
-        if (b->dev == dev) {
+        if (b->dev != dev) {
+            continue;
+        }
+        if (b->holder != -1) {
+            b->discard = 1;
+        } else if (!b->dirty) {
             make_empty(b);
         }
     }
