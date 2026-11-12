@@ -131,14 +131,17 @@
 /*
  * A vCPU's local APIC. `regs` is the register page as the guest reads it,
  * but for LVR, which follows the guest's CPUID, and TMCCT, which the timer
- * gives; in x2APIC mode ID holds the whole x2APIC id. IRR and TMR change
- * by atomic operations, since another processor's delivery sets them; the
- * rest change on the vCPU's own thread, under its mutex, as Linux's
- * kvm_lapic changes in the vCPU's thread without kvm->lock, but for TPR,
- * which the processor writes itself while the guest runs under VMX's TPR
- * shadow. The page is a page of its own, at `regs_pa`, since the shadow
- * takes it as the virtual-APIC page, as Linux's kvm_create_lapic gives
- * `apic->regs` a page.
+ * gives; in x2APIC mode ID holds the whole x2APIC id. Another processor's
+ * delivery (`accept`), such as an IPI or `kvm_lapic_pit_nmi` under the
+ * controllers' lock, sets IRR and TMR, adds to `nmis` and sets `events`
+ * by atomic operations, and stores `sipi_vector` before EV_SIPI and
+ * `pv_unhalted`; the vCPU's own thread takes each of these by an exchange
+ * or clears it. The rest change on the vCPU's own thread, under its mutex,
+ * as Linux's kvm_lapic changes in the vCPU's thread without kvm->lock, but
+ * for TPR, which the processor writes itself while the guest runs under
+ * VMX's TPR shadow. The page is a page of its own, at `regs_pa`, since the
+ * shadow takes it as the virtual-APIC page, as Linux's kvm_create_lapic
+ * gives `apic->regs` a page.
  */
 struct lapic {
     volatile uint32_t *regs; /* KVM_APIC_REG_SIZE bytes at the start of `page` */

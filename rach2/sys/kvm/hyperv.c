@@ -5,7 +5,15 @@
  * controller (SynIC) and its timers, and KVM_GET_SUPPORTED_HV_CPUID.
  * Its state is the big lock's: KVM_RUN, which runs without it, takes it
  * for the entry points below that change it (`kvm_bkl_enter`), and only
- * when the guest has the enlightenments and there is work for them.
+ * when the guest has the enlightenments and there is work for them. A
+ * vCPU's own record changes only in its thread, under its mutex, so that
+ * thread reads it, and changes `stimer_pending` in `kvm_hv_synic_eoi`,
+ * without the big lock; `kvm_hv_synic_auto_eoi`, `kvm_hv_stimer_next`,
+ * `kvm_hv_hypercall_enabled` and `kvm_hv_invtsc_suppressed` read without
+ * it too, the last two a word of the VM's that another vCPU's MSR write
+ * changes under it, as Linux's kvm_hv_hypercall_enabled reads
+ * hv_guest_os_id with no lock (hyperv.h:98-101). `kvm_hv_synic_set_irq`
+ * reads the target's SINTs from any processor, as Linux's synic_set_irq.
  */
 
 #include "kvm.h"
