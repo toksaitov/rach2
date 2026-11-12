@@ -412,16 +412,21 @@ static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, int flus
  * (`unlocked`), finds a resident page and adds one it read under the file's
  * lock alone, and takes the big lock only when the page's leaf of the table
  * must be made, since readers under the big lock alone walk the table's
- * arrays (struct dshare). Returns 0 with a resident mapping reference in
- * `phys`, 1 after reading the file, or a negative errno.
+ * arrays (struct dshare). A page not resident is copied from the file page
+ * cache when it has the page, and a page read from the file leaves a copy
+ * there, so the pages outlive the file's last mapping, as Linux's page cache
+ * outlives the mappings of its folios: a program started again or a library
+ * mapped again does not come from the disk again. Returns 0 with a resident
+ * mapping reference in `phys`, 1 after reading the file, or a negative errno.
  */
 static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
 {
     struct vfs_ref file;
     struct vfs_stat st;
     uint8_t *page;
-    int32_t got;
-    int rc = 0, big;
+    uint32_t epoch;
+    int32_t got = PAGE_SIZE;
+    int rc = 0, big, cached;
 
     file.mnt = m->entry.ofd->vmnt;
     file.node = m->entry.ofd->vnode;
@@ -438,19 +443,26 @@ static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
     } else if ((*phys = alloc_user_frame()) == 0) {
         rc = -ENOMEM;
     } else {
-        page = kmap_temp(*phys);
-        got = page ? filemap_read(m, page, pgoff) : -EIO;
-        if (got >= 0 && got < (int32_t)PAGE_SIZE) {
-            k_memset(page + got, 0, PAGE_SIZE - (uint32_t)got);
-        }
-        if (page) {
-            kunmap_temp(page);
+        epoch = filecache_epoch(file.mnt, file.node);
+        cached = filecache_read(&m->entry, pgoff, *phys);
+        if (!cached) {
+            page = kmap_temp(*phys);
+            got = page ? filemap_read(m, page, pgoff) : -EIO;
+            if (got >= 0 && got < (int32_t)PAGE_SIZE) {
+                k_memset(page + got, 0, PAGE_SIZE - (uint32_t)got);
+            }
+            if (page) {
+                kunmap_temp(page);
+            }
         }
         if (got < 0) {
             free_frame(*phys);
             *phys = 0;
             rc = got;
         } else {
+            if (!cached && got > 0) {
+                filecache_store(&m->entry, pgoff, *phys, epoch);
+            }
             big = !bkl_held() && !shmem_has_leaf(m->sh, pgoff);
             if (big) {
                 bkl_enter();
@@ -459,7 +471,7 @@ static int filemap_disk_page(struct filemap *m, uint32_t pgoff, uintptr_t *phys)
             if (big) {
                 bkl_exit();
             }
-            rc = *phys ? 1 : -ENOMEM;
+            rc = !*phys ? -ENOMEM : cached ? 0 : 1;
         }
     }
     vfs_node_unlock(&file);
