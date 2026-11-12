@@ -255,6 +255,20 @@ uint64_t timer_cycles_us(uint64_t cycles);
  * handler, with interrupts off. */
 int64_t timer_tick_due(void);
 
+/**
+ * Start this processor's tick again where it would have been, once its idle
+ * task, which a tick in its wait stopped (apictimer.c), switches to a
+ * thread, as Linux's tick_nohz_idle_exit restarts the tick
+ * (kernel/time/tick-sched.c:1395-1420). Nothing when the tick runs.
+ * Interrupts are off.
+ */
+void timer_idle_exit(void);
+
+/** Whether processor `cpu`'s tick is stopped in its idle wait, for another
+ * processor's tick, which kicks it when it has work for it
+ * (`sched_idle_balance`). Any context; the answer may be stale. */
+int timer_tick_stopped(int cpu);
+
 /** The time on the monotonic clock, to the microsecond, at which this
  * processor's counter read `cycles` (`arch_cycles`), given that it reads
  * `at` while the clock reads `now`, at the calibrated rate; 0, the clock's

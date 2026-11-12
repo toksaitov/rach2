@@ -65,6 +65,7 @@ struct percpu {
     volatile int online;                        /* started, and taking work */
     volatile unsigned int admit;                /* CPU_STARTING, ADMITTED or REFUSED */
     volatile int idle_wait;                     /* halted in an idle wait, for a tick to see */
+    int tick_may_stop;                          /* its idle task waits: a tick may stop it */
     volatile unsigned int idle_poll;            /* CPU_POLL_: polling before a halt, or kicked */
     uint32_t idle_poll_us;                      /* the poll's length now, 0 to IDLE_POLL_MAX_US */
     volatile int in_nmi;                        /* NMIs it is handling, nested */

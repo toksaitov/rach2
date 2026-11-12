@@ -166,10 +166,21 @@ void sched_set_affinity(process_t *p, uint64_t mask);
  * The body of each processor's idle task, which does not return: switch to
  * whatever its queue, or the busiest other queue, has to run, and with
  * nothing, wait for an interrupt with the big lock let go
- * (`idle_wait_irq_off`). Entered holding no big lock, which the idle task
- * never holds but to drain the loopback ring.
+ * (`idle_wait_irq_off`), in which a processor other than the boot one lets
+ * a tick stop its tick (`tick_may_stop`, apictimer.c). Entered holding no
+ * big lock, which the idle task never holds but to drain the loopback ring.
  */
 void sched_idle_loop(void);
+
+/**
+ * Kick a processor whose tick is stopped in its idle wait
+ * (`timer_tick_stopped`) when this processor's queue holds a thread it may
+ * take, so that it steals it (`sched_steal`) at once, as Linux's busy
+ * processor kicks an idle one into NO_HZ balancing (nohz_balancer_kick,
+ * kernel/sched/fair.c:12286-12390): a processor that ticked took such a
+ * thread at its next tick. From the tick, with interrupts off.
+ */
+void sched_idle_balance(void);
 
 /**
  * The tail of a switch, run by the incoming thread on its own stack with

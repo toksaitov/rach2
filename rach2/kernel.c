@@ -588,6 +588,7 @@ static void timer_handler(isr_params_t *params)
         }
         bkl_exit();
     }
+    sched_idle_balance();
     sched_tick();
 }
 

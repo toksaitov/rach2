@@ -818,6 +818,13 @@ static void watchdog_restart(struct wd_cpu *w)
  * Linux's hrtimer fires as soon as interrupts let it, in the context that
  * held them off.
  */
+uint32_t watchdog_idle_ticks(void)
+{
+    uint32_t half = sample_ticks() / 2u;
+
+    return half != 0 ? half : TICK_HZ;
+}
+
 void watchdog_tick(isr_params_t *params)
 {
     struct wd_cpu *w = &wd[arch_cpu_id()];

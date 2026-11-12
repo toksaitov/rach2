@@ -989,6 +989,9 @@ void schedule(void)
     cpu->current = next;
     cpu->switch_prev = old;
     spin_unlock(&sched_lock);
+    if (old == cpu->idle) {
+        timer_idle_exit();
+    }
     old->bkl_depth = bkl_drop();
     sched_wait_off_cpu(next);
     next->on_cpu = 1;
@@ -1047,13 +1050,52 @@ void sched_wait_off_cpu(const process_t *p)
  * are let go). The
  * idle task holds no big lock: its selection and its halt need none, and a
  * thread it switches to takes the lock in its tail when it holds it.
+ *
+ * A tick taken in the wait of a processor other than the boot one stops its
+ * tick (`tick_may_stop`), whose next tick is then up to half the watchdog's
+ * sample period away, as Linux's NO_HZ idle stops it: an idle processor's
+ * tick only charged an idle tick and looked for work on the other queues,
+ * which a busy processor's tick now offers it (`sched_idle_balance`), and
+ * under KVM each tick cost two exits, its halt and the timer's count. The
+ * switch to a thread starts it again (`timer_idle_exit`), and the end of
+ * each wait charges the ticks skipped so far as idle.
  */
 void sched_idle_loop(void)
 {
+    struct percpu *cpu;
+
     for (;;) {
         arch_irq_disable();
         schedule();
+        cpu = this_cpu();
+        cpu->tick_may_stop = arch_cpu_id() != 0;
         idle_wait_irq_off();
+        cpu->tick_may_stop = 0;
+    }
+}
+
+void sched_idle_balance(void)
+{
+    int me = (int)arch_cpu_id(), c, kick = -1;
+    uint32_t flags;
+
+    if (run_queues[me].count == 0) {
+        return;
+    }
+    for (c = 0; c < NR_CPUS && !timer_tick_stopped(c); c++) {
+    }
+    if (c == NR_CPUS) {
+        return;
+    }
+    flags = spin_lock_irqsave(&sched_lock);
+    for (c = 0; c < NR_CPUS && kick < 0; c++) {
+        if (c != me && timer_tick_stopped(c) && sched_cpu_idle(c) && sched_find(me, c, 0)) {
+            kick = c;
+        }
+    }
+    spin_unlock_irqrestore(&sched_lock, flags);
+    if (kick >= 0) {
+        smp_kick(kick);
     }
 }
 
@@ -1745,6 +1787,9 @@ void idle_wait_irq_off(void)
     depth = bkl_drop();
     idle_halt();
     this_cpu()->idle_end_cycles = arch_cycles();
+    if (timer_tick_stopped((int)arch_cpu_id())) {
+        sched_account_tick(0, 0); /* the ticks the stop skipped, as idle */
+    }
     bkl_take_as(depth, BKL_KEY_IDLE);
     this_cpu()->idle_wait = 0;
 }
