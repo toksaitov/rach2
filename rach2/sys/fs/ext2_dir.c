@@ -337,24 +337,19 @@ static int dir_next(struct ext2_mount *em, struct ext2_node *d, uint32_t *cursor
  * from the entry's file-type byte when the volume has the filetype feature,
  * and from the inode's mode otherwise, which costs a read of the inode. 1
  * with `ent` filled, 0 at the end, -ENOTDIR, -ENOENT for a directory removed
- * while held, or -EIO. Takes the directory's lock (`dir_next`), and the big
- * lock while the batch is not empty (`ext2_batch_guard`).
+ * while held, or -EIO. Takes the directory's lock (`dir_next`).
  */
 int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vfs_dirent *ent)
 {
     struct ext2_node *d = handle;
-    int rc, big;
+    int rc;
 
     if ((d->mode & S_IFMT_) != S_IFDIR_) {
         return -ENOTDIR;
     }
     ext2_node_lock(d);
-    big = ext2_batch_guard(ext2_em_of(mnt));
     rc = dir_next(ext2_em_of(mnt), d, cursor, ent);
     ext2_node_unlock(d);
-    if (big) {
-        bkl_exit();
-    }
     return rc;
 }
 
@@ -405,24 +400,19 @@ static int link_target(struct ext2_mount *em, const struct ext2_node *n, char *b
  * the length; -ENAMETOOLONG when `cap` cannot hold it; -EINVAL for a node
  * that is not a link; or -EIO for a size of a block or more, a link of 60
  * bytes or more without blocks, a long link without its block, or a failed
- * read. Takes the link's lock (`link_target`), and the big lock while the
- * batch is not empty (`ext2_batch_guard`), as a read does.
+ * read. Takes the link's lock (`link_target`), as a read does.
  */
 int ext2_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     struct ext2_node *n = node;
-    int rc, big;
+    int rc;
 
     if ((n->mode & S_IFMT_) != S_IFLNK_) {
         return -EINVAL;
     }
     ext2_node_lock(n);
-    big = ext2_batch_guard(ext2_em_of(mnt));
     rc = link_target(ext2_em_of(mnt), n, buf, cap);
     ext2_node_unlock(n);
-    if (big) {
-        bkl_exit();
-    }
     return rc;
 }
 

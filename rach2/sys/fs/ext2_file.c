@@ -25,24 +25,13 @@ int ext2_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
 
 /** The `release` of `vfs_ops`, at a description's last close: the batch
  * drained, a failure kept for the next `fsync`, and the hold `ext2_open`
- * took put. A caller without the big lock takes it for a drain of a batch
- * that is not empty, or of a device that went, which records the failure. */
+ * took put. The drain, of a batch that is not empty or of a device that
+ * went, which records the failure, takes the big lock for the cache's
+ * write side when the caller lacks it, and the put for a last hold. */
 void ext2_release(struct vfs_mount *mnt, void *handle)
 {
-    struct ext2_mount *em = ext2_em_of(mnt);
-    int big = 0;
-
-    if (!bkl_held() && (ext2_batch_busy(em) || (em->dev->flags & BLOCK_GONE))) {
-        bkl_enter();
-        big = 1;
-    }
-    if (big || bkl_held()) {
-        (void)ext2_writeback_drain(em);
-    }
+    (void)ext2_writeback_drain(ext2_em_of(mnt));
     ext2_put(mnt, handle);
-    if (big) {
-        bkl_exit();
-    }
 }
 
 /* The most times a read or a write brings the pages of a user buffer in
@@ -220,9 +209,11 @@ static int read_piece(struct ext2_mount *em, const struct ext2_node *n, uint64_t
  * lets go (`read_fetch`); the access time does not change. A page of the
  * buffer that is not present at the copy is brought in with the lock let
  * go (`user_refault`), or ends the read short when the caller holds a file
- * lock. A caller without the big lock passes a kernel buffer, and takes the
- * lock while the batch is not empty (`ext2_batch_guard`). The bytes read,
- * -EISDIR, -EFAULT, or -EIO.
+ * lock. A caller without the big lock passes a kernel buffer; the batch's
+ * images it finds are copied under the batch's lists' lock in the step
+ * that finds them (`ext2_writeback_copy`), and a drain puts an image in the
+ * cache before it lets the image go. The bytes read, -EISDIR, -EFAULT, or
+ * -EIO.
  */
 int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count, uint64_t offset)
 {
@@ -230,7 +221,7 @@ int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count
     struct ext2_node *n = handle;
     uint8_t *out = buf;
     uint32_t done = 0;
-    int rc = 0, fetches = 0, refaults = 0, big = 0;
+    int rc = 0, fetches = 0, refaults = 0;
 
     if ((n->mode & S_IFMT_) == S_IFDIR_) {
         return -EISDIR;
@@ -239,10 +230,6 @@ int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count
     while (rc == 0 && done < count && offset + done < n->size) {
         uint64_t at = offset + done;
         uint32_t take = em->block_size - ((uint32_t)at & (em->block_size - 1));
-
-        if (!big) {
-            big = ext2_batch_guard(em);
-        }
 
         if (fetches < EXT2_FETCHES && read_fetch(mnt, n, at)) {
             fetches++;
@@ -271,9 +258,6 @@ int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count
         }
     }
     ext2_node_unlock(n);
-    if (big) {
-        bkl_exit();
-    }
     if (rc == -EFAULT && done > 0) {
         rc = 0;
     }
@@ -327,9 +311,10 @@ static int frame_blocks(struct ext2_mount *em, const struct ext2_node *n, uint32
  * cache holds, either of which may be newer than the device, or a page of
  * smaller blocks that are not one run, as Linux's `do_mpage_readpage` gives
  * such a page to `block_read_full_folio`. 0, or the errors of `ext2_block_at`.
- * The caller holds `n`'s lock, and the big lock while the batch is not
- * empty (`ext2_batch_guard`), so that no write of the file changes a block
- * after the look.
+ * The caller holds `n`'s lock, so that no write of the file changes a
+ * block after the look; a drain of another file's write moves this file's
+ * images into the cache before it lets them go, so a block is in one or the
+ * other at every look.
  */
 static int frame_plan(struct ext2_mount *em, const struct ext2_node *n, uint32_t pg, uint64_t *plan)
 {
@@ -430,8 +415,7 @@ static int32_t frame_fill(struct vfs_mount *mnt, struct ext2_node *n, uint32_t p
  * The node's lock is held across each plan and its transfers, so that no
  * write, truncation or free of the file changes a planned block before it
  * is read, as Linux's locked folio holds off a truncation of its page until
- * its read ends (`truncate_inode_pages_range`, mm/truncate.c); the
- * big lock only across the plan, while the batch is not empty. The pages
+ * its read ends (`truncate_inode_pages_range`, mm/truncate.c). The pages
  * filled, 0 at or past the end, -EISDIR, or the first page's error.
  */
 int32_t ext2_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, uint32_t count,
@@ -442,7 +426,7 @@ int32_t ext2_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, ui
     uint64_t plan[EXT2_FRAMES_PLAN], size;
     uint32_t done = 0, pages, left, i;
     int32_t got;
-    int rc = 0, big;
+    int rc = 0;
 
     if ((n->mode & S_IFMT_) != S_IFREG_) {
         return (n->mode & S_IFMT_) == S_IFDIR_ ? -EISDIR : -EINVAL;
@@ -459,15 +443,11 @@ int32_t ext2_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, ui
     }
     while (done < count) {
         left = count - done < EXT2_FRAMES_PLAN ? count - done : EXT2_FRAMES_PLAN;
-        big = ext2_batch_guard(em);
         for (i = 0; i < left; i++) {
             rc = frame_plan(em, n, first + done + i, &plan[i]);
             if (rc != 0) {
                 break;
             }
-        }
-        if (big) {
-            bkl_exit();
         }
         if (i == 0) {
             break;
@@ -1003,46 +983,53 @@ int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
  * next call's, and a failure leaves `n`'s next `fsync` the whole device.
  * `n->writing` shows the blocks to other callers until they are written:
  * they wait for it (`node_writes_wait`) before they count on them, and find
- * a failure recorded when they wake. The caller has no batch pending, since
- * what the list names may be in its images. 0, or -errno.
+ * a failure recorded when they wake. The list and the count change under
+ * `em->share_lock`. The caller holds the big lock and has no batch
+ * pending, since what the list names may be in its images. 0, or -errno.
  */
 static int node_blocks_write(struct ext2_mount *em, struct ext2_node *n)
 {
     uint32_t shared[EXT2_NODE_SHARED];
+    uint32_t flags = spin_lock_irqsave(&em->share_lock);
     int count = n->nshared;
-    int i, rc = 0;
+    int i, rc = 0, last;
 
     k_memcpy(shared, n->shared, sizeof(shared));
     n->nshared = 0;
     n->writing++;
+    spin_unlock_irqrestore(&em->share_lock, flags);
     for (i = 0; rc == 0 && i < count; i++) {
         rc = bcache_sync_block(em->dev, shared[i]);
     }
     if (rc == 0) {
         rc = bcache_sync_owned(em->dev, n->ino);
     }
+    flags = spin_lock_irqsave(&em->share_lock);
     if (rc != 0) {
         n->shared_over = 1;
+    }
+    last = --n->writing == 0;
+    spin_unlock_irqrestore(&em->share_lock, flags);
+    if (rc != 0) {
         rc = ext2_writeback_error(em, rc);
     }
-    n->writing--;
-    if (n->writing == 0) {
+    if (last) {
         wq_wake_all(&em->node_wq);
     }
     return rc;
 }
 
-/** The wait condition of `node_writes_wait`. */
+/** The wait condition of `node_writes_wait`, read as one word. */
 static int node_not_writing(void *arg)
 {
-    return ((const struct ext2_node *)arg)->writing == 0;
+    return ((const volatile struct ext2_node *)arg)->writing == 0;
 }
 
 /** Wait for the `node_blocks_write` under way of `n`, which the caller
  * holds. No lock is held: such a write waits only for the disk. */
 static void node_writes_wait(struct ext2_mount *em, struct ext2_node *n)
 {
-    while (n->writing) {
+    while (!node_not_writing(n)) {
         wq_wait_event_nointr(&em->node_wq, node_not_writing, n);
     }
 }
@@ -1052,7 +1039,9 @@ static void node_writes_wait(struct ext2_mount *em, struct ext2_node *n)
  * of `ino` itself, whose shared blocks are listed or not yet written, or
  * NULL. A write of that block puts its inode on the device, pointers and
  * all, so what the inode depends on must go first. A dying node is left
- * out: its inode is going, and a failed one has no inode.
+ * out: its inode is going, and a failed one has no inode. The caller holds
+ * the big lock, which keeps the node table, and the lists are read under
+ * `em->share_lock`.
  */
 static struct ext2_node *table_unsynced(struct ext2_mount *em, uint32_t ino)
 {
@@ -1067,10 +1056,17 @@ static struct ext2_node *table_unsynced(struct ext2_mount *em, uint32_t ino)
     last = last > em->inodes ? em->inodes : last;
     for (i = first; i <= last; i++) {
         struct ext2_node *m = ext2_node_find(em, i);
+        uint32_t flags;
+        int listed;
 
-        if (m && (m->state == N_LIVE || m->state == N_LOADING) &&
-            (m->nshared || m->shared_over || m->writing || m->unlisted) &&
-            ext2_inode_offset(em, i) >> BCACHE_BLOCK_SHIFT == table) {
+        if (!m || (m->state != N_LIVE && m->state != N_LOADING) ||
+            ext2_inode_offset(em, i) >> BCACHE_BLOCK_SHIFT != table) {
+            continue;
+        }
+        flags = spin_lock_irqsave(&em->share_lock);
+        listed = m->nshared || m->shared_over || m->writing || m->unlisted;
+        spin_unlock_irqrestore(&em->share_lock, flags);
+        if (listed) {
             return m;
         }
     }
@@ -1092,12 +1088,12 @@ static int node_write_ready(struct ext2_mount *em, struct ext2_node *n, int *who
         if (em->mnt->write_error) {
             return em->mnt->write_error;
         }
-        if (em->wb && em->wb->count) {
+        if (ext2_batch_pending(em)) {
             rc = ext2_writeback_drain(em);
             if (rc != 0) {
                 return rc;
             }
-        } else if (n->writing) {
+        } else if (!node_not_writing(n)) {
             node_writes_wait(em, n);
         } else {
             return 0;
@@ -1133,18 +1129,23 @@ static int table_write_ready(struct ext2_mount *em, struct ext2_node *n, uint64_
 
     for (tries = 0; tries < EXT2_TABLE_TRIES; tries++) {
         struct ext2_node *m;
+        uint32_t flags;
+        int lost, writing;
 
         if (em->mnt->write_error) {
             return em->mnt->write_error;
         }
-        if (em->wb && em->wb->count) {
+        if (ext2_batch_pending(em)) {
             rc = ext2_writeback_drain(em);
             if (rc != 0) {
                 return rc;
             }
             continue;
         }
-        if (em->shared_lost || em->device_lost) {
+        flags = spin_lock_irqsave(&em->share_lock);
+        lost = em->shared_lost || em->device_lost;
+        spin_unlock_irqrestore(&em->share_lock, flags);
+        if (lost) {
             break;
         }
         m = table_unsynced(em, n->ino);
@@ -1155,12 +1156,16 @@ static int table_write_ready(struct ext2_mount *em, struct ext2_node *n, uint64_
             }
             continue;
         }
-        if (m->shared_over || m->unlisted || (m->mode & S_IFMT_) != S_IFREG_) {
+        flags = spin_lock_irqsave(&em->share_lock);
+        lost = m->shared_over || m->unlisted;
+        writing = m->writing;
+        spin_unlock_irqrestore(&em->share_lock, flags);
+        if (lost || (m->mode & S_IFMT_) != S_IFREG_) {
             break;
         }
         ext2_node_ref(m, 1);
         rc = 0;
-        if (m->writing) {
+        if (writing) {
             node_writes_wait(em, m);
         } else {
             rc = node_blocks_write(em, m);
@@ -1194,21 +1199,29 @@ static int table_write_ready(struct ext2_mount *em, struct ext2_node *n, uint64_
  * A list that overflowed, or went with its node or to a write of the whole
  * device under way, makes it the whole device's `bcache_sync`, as a table
  * block's neighbours may. A failure is recorded as the batch's error and
- * leaves the next call the whole device. 0, or -errno.
+ * leaves the next call the whole device. The caller holds the big lock,
+ * which the cache's syncs keep, and which makes each check and the step of
+ * the cache that follows it one step against the stores of other writers:
+ * a writer lists a block for its node before the store that names it
+ * (`ext2_node_share`), and every store into the cache holds the big lock
+ * (`ext2_write_owned`). 0, or -errno.
  */
 static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_only)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
     uint64_t table = ext2_inode_offset(em, n->ino) >> BCACHE_BLOCK_SHIFT;
     int whole = 0, with_table, device, rc;
+    uint32_t flags;
 
     rc = node_write_ready(em, n, &whole);
+    flags = spin_lock_irqsave(&em->share_lock);
     whole |= n->shared_over || n->unlisted || em->shared_lost || em->device_lost;
     with_table = !data_only || n->dirty_meta || n->table_writing;
     if (with_table) {
         n->dirty_meta = 0;
         n->table_writing++;
     }
+    spin_unlock_irqrestore(&em->share_lock, flags);
     if (rc == 0 && !whole) {
         rc = node_blocks_write(em, n);
     }
@@ -1228,12 +1241,16 @@ static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_o
     if (device) {
         ext2_device_write_end(em);
     }
+    flags = spin_lock_irqsave(&em->share_lock);
     if (with_table) {
         n->table_writing--;
     }
     if (rc != 0) {
         n->shared_over = 1;
         n->dirty_meta |= with_table;
+    }
+    spin_unlock_irqrestore(&em->share_lock, flags);
+    if (rc != 0) {
         rc = ext2_writeback_error(em, rc);
     }
     return rc;
@@ -1247,12 +1264,18 @@ static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_o
  * device's dirty buffers instead (`ext2_em_write_out`): a directory's entries
  * are not tagged as its own. A failure is recorded as the batch's error,
  * and the mount's first failure, of this call or any before, is what it
- * returns; 0 when there has been none.
+ * returns; 0 when there has been none. The call takes no node lock, as
+ * Linux's takes none (`ext2_fsync` and `generic_buffers_fsync`,
+ * fs/ext2/file.c:153-163 and fs/buffer.c:595-622 in 6.12.115): a write
+ * that races it lands on either side. A caller without the big lock has it
+ * taken here for the cache's syncs (`ext2_big_enter`), which their waits
+ * let go.
  */
 static int file_sync(struct vfs_mount *mnt, void *handle, int data_only)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
     struct ext2_node *n = handle;
+    int big = ext2_big_enter();
     int rc;
 
     rc = ext2_writeback_drain(em);
@@ -1267,6 +1290,7 @@ static int file_sync(struct vfs_mount *mnt, void *handle, int data_only)
     if (mnt->write_error) {
         rc = mnt->write_error;
     }
+    ext2_big_exit(big);
     return rc;
 }
 

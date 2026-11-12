@@ -155,9 +155,11 @@ struct ext2_node *ext2_node_make(void)
 void ext2_node_publish(struct ext2_mount *em, struct ext2_node *n, uint32_t ino)
 {
     struct ext2_node **chain;
+    uint32_t flags = spin_lock_irqsave(&em->share_lock);
 
     n->ino = ino;
     n->lost_list = em->shared_lost || em->device_lost;
+    spin_unlock_irqrestore(&em->share_lock, flags);
     n->next = em->nodes;
     if (em->nodes) {
         em->nodes->prev = n;
@@ -176,6 +178,7 @@ void ext2_node_publish(struct ext2_mount *em, struct ext2_node *n, uint32_t ino)
 static void node_drop(struct ext2_mount *em, struct ext2_node *n)
 {
     struct ext2_node **link;
+    uint32_t flags;
 
     for (link = node_chain(em, n->ino); *link; link = &(*link)->hnext) {
         if (*link == n) {
@@ -191,9 +194,11 @@ static void node_drop(struct ext2_mount *em, struct ext2_node *n)
     if (n->next) {
         n->next->prev = n->prev;
     }
+    flags = spin_lock_irqsave(&em->share_lock);
     if (n->state == N_LIVE && !n->unlinked && (n->nshared || n->shared_over || n->unlisted)) {
         em->shared_lost = 1;
     }
+    spin_unlock_irqrestore(&em->share_lock, flags);
     em->node_count--;
     kfree(n);
     em->nodes_gone++;
@@ -270,6 +275,8 @@ static void em_locks_init(struct ext2_mount *em)
     }
     sleep_lock_init(&em->super, &super_record, SLEEP_LOCK_FILE);
     spin_lock_init(&em->count_lock, "ext2 counts");
+    spin_lock_init(&em->admit_lock, "ext2 admission");
+    spin_lock_init(&em->share_lock, "ext2 shared lists");
     wait_queue_init(&em->node_wq);
     em->reap = 0;
     em->writers = 0;
@@ -479,10 +486,25 @@ uint32_t ext2_feature_add(struct ext2_mount *em, uint32_t *word, uint32_t bits)
     return v;
 }
 
-/** The wait condition of `em_enter`: admission is open on the mount `arg`. */
+/** The wait condition of `em_enter`: admission is open on the mount `arg`,
+ * read as one word. */
 static int em_admitting(void *arg)
 {
-    return !((const struct ext2_mount *)arg)->closing;
+    return !((const volatile struct ext2_mount *)arg)->closing;
+}
+
+/** Count a writer in `em->writers` unless a remount keeps writers out,
+ * under `em->admit_lock`: 1 when counted, 0 when `closing` is set. */
+static int em_admit(struct ext2_mount *em)
+{
+    uint32_t flags = spin_lock_irqsave(&em->admit_lock);
+    int in = !em->closing;
+
+    if (in) {
+        em->writers++;
+    }
+    spin_unlock_irqrestore(&em->admit_lock, flags);
+    return in;
 }
 
 /**
@@ -496,13 +518,14 @@ static int em_admitting(void *arg)
  * inode's: the remount waits for every admitted writer, and one that slept
  * on a lock held by a writer that waits here would never end. A change of
  * one file, which not every caller locks, is admitted by `em_enter_node`.
+ * The count and the gate change under `em->admit_lock`, since a writer of a
+ * file's data comes without the big lock.
  */
 static void em_enter(struct ext2_mount *em)
 {
-    while (em->closing) {
+    while (!em_admit(em)) {
         wq_wait_event_nointr(&em->node_wq, em_admitting, em);
     }
-    em->writers++;
 }
 
 /** Take node `n`'s lock, which the caller may hold already, and admit a
@@ -517,17 +540,43 @@ static void em_enter_node(struct ext2_mount *em, struct ext2_node *n)
  * last. */
 static void em_leave(struct ext2_mount *em)
 {
-    em->writers--;
-    if (em->writers == 0 && em->closing) {
+    uint32_t flags = spin_lock_irqsave(&em->admit_lock);
+    int last = --em->writers == 0 && em->closing;
+
+    spin_unlock_irqrestore(&em->admit_lock, flags);
+    if (last) {
         wq_wake_all(&em->node_wq);
     }
 }
 
+/** Close the gate of the mount `em` (`em->closing`) when it is open: 1 when
+ * this call closed it, 0 when a remount had it closed already. */
+static int em_gate_close(struct ext2_mount *em)
+{
+    uint32_t flags = spin_lock_irqsave(&em->admit_lock);
+    int closed = !em->closing;
+
+    em->closing = 1;
+    spin_unlock_irqrestore(&em->admit_lock, flags);
+    return closed;
+}
+
+/** The writers admitted to the mount `em`, read under `em->admit_lock`. */
+static uint32_t em_writers(struct ext2_mount *em)
+{
+    uint32_t flags = spin_lock_irqsave(&em->admit_lock);
+    uint32_t writers = em->writers;
+
+    spin_unlock_irqrestore(&em->admit_lock, flags);
+    return writers;
+}
+
 /** The wait condition of `em_close`: no writer is left on the mount `arg`,
- * or a node waits on its list for a caller free to reap it. */
+ * or a node waits on its list for a caller free to reap it, each read as
+ * one word. */
 static int em_settled(void *arg)
 {
-    const struct ext2_mount *em = arg;
+    const volatile struct ext2_mount *em = arg;
 
     return em->writers == 0 || em->reap != 0;
 }
@@ -543,12 +592,11 @@ static void em_reap(struct ext2_mount *em);
  */
 static void em_close(struct ext2_mount *em)
 {
-    while (em->closing) {
+    while (!em_gate_close(em)) {
         wq_wait_event_nointr(&em->node_wq, em_admitting, em);
     }
-    em->closing = 1;
     em_reap(em);
-    while (em->writers) {
+    while (em_writers(em)) {
         wq_wait_event_nointr(&em->node_wq, em_settled, em);
         em_reap(em);
     }
@@ -607,26 +655,29 @@ static int em_close_until(struct ext2_mount *em, uint64_t deadline)
 
     d.em = em;
     d.deadline = deadline;
-    while (em->closing && tick_count() < deadline) {
+    while (!em_gate_close(em)) {
+        if (tick_count() >= deadline) {
+            return -EBUSY;
+        }
         em_wait_until(&d, em_open_by);
     }
-    if (em->closing) {
-        return -EBUSY;
-    }
-    em->closing = 1;
     em_reap(em);
-    while (em->writers && tick_count() < deadline) {
+    while (em_writers(em) && tick_count() < deadline) {
         em_wait_until(&d, em_settled_by);
         em_reap(em);
     }
-    return em->writers ? -EBUSY : 0;
+    return em_writers(em) ? -EBUSY : 0;
 }
 
 /** Let writers in again after `em_close`. */
 static void em_open(struct ext2_mount *em)
 {
-    if (em->closing) {
-        em->closing = 0;
+    uint32_t flags = spin_lock_irqsave(&em->admit_lock);
+    int opened = em->closing;
+
+    em->closing = 0;
+    spin_unlock_irqrestore(&em->admit_lock, flags);
+    if (opened) {
         wq_wake_all(&em->node_wq);
     }
 }
@@ -1095,8 +1146,11 @@ static void node_free(struct ext2_mount *em, struct ext2_node *n)
  */
 static void node_final(struct ext2_mount *em, struct ext2_node *n)
 {
+    uint32_t flags = spin_lock_irqsave(&em->admit_lock);
+
     n->state = N_DYING;
     em->writers++;
+    spin_unlock_irqrestore(&em->admit_lock, flags);
     if (file_locks_held()) {
         n->queued = 1;
         n->reap_next = em->reap;
@@ -1411,53 +1465,62 @@ static int ext2_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
  * node `device_lost` until `ext2_device_write_end`, so that an `fsync`
  * meanwhile does not take their blocks for written. A pending batch keeps the
  * lists, since what they name may be in its images and not yet in the cache.
+ * Takes the big lock, which keeps the list of nodes, and `em->share_lock`.
  */
 void ext2_device_write_begin(struct ext2_mount *em)
 {
     struct ext2_node *n;
+    int big = ext2_big_enter();
+    uint32_t flags = spin_lock_irqsave(&em->share_lock);
 
     em->device_writes++;
-    if (em->wb && em->wb->count) {
-        return;
+    if (!ext2_batch_pending(em)) {
+        for (n = em->nodes; n; n = n->next) {
+            n->unlisted |= n->nshared || n->shared_over;
+            n->nshared = n->shared_over = 0;
+        }
+        em->device_lost |= em->shared_lost;
+        em->shared_lost = 0;
     }
-    for (n = em->nodes; n; n = n->next) {
-        n->unlisted |= n->nshared || n->shared_over;
-        n->nshared = n->shared_over = 0;
-    }
-    em->device_lost |= em->shared_lost;
-    em->shared_lost = 0;
+    spin_unlock_irqrestore(&em->share_lock, flags);
+    ext2_big_exit(big);
 }
 
 /**
  * End a write of the whole device. The last one ending has put what the
  * lists named on the device, or failed, which leaves the mount read-only,
  * so that every later `fsync` writes the device and reports the failure.
+ * Takes the locks `ext2_device_write_begin` does.
  */
 void ext2_device_write_end(struct ext2_mount *em)
 {
     struct ext2_node *n;
+    int big = ext2_big_enter();
+    uint32_t flags = spin_lock_irqsave(&em->share_lock);
 
-    em->device_writes--;
-    if (em->device_writes) {
-        return;
+    if (--em->device_writes == 0) {
+        for (n = em->nodes; n; n = n->next) {
+            n->unlisted = 0;
+            n->lost_list &= em->shared_lost;
+        }
+        em->device_lost = 0;
     }
-    for (n = em->nodes; n; n = n->next) {
-        n->unlisted = 0;
-        n->lost_list &= em->shared_lost;
-    }
-    em->device_lost = 0;
+    spin_unlock_irqrestore(&em->share_lock, flags);
+    ext2_big_exit(big);
 }
 
 /**
  * Write the device's dirty buffers and flush the disk's cache, with no lock
  * of the mount held, as `vfs_sync_all` does, so that a disk that takes
  * seconds holds up no other call on the mount; a change made meanwhile is
- * the next sync's. A failure is recorded as the batch's error. 0, or
+ * the next sync's. The sync runs under the big lock (`ext2_big_enter`),
+ * which its waits let go. A failure is recorded as the batch's error. 0, or
  * -errno.
  */
 int ext2_em_write_out(struct vfs_mount *mnt)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
+    int big = ext2_big_enter();
     int rc;
 
     ext2_device_write_begin(em);
@@ -1466,7 +1529,11 @@ int ext2_em_write_out(struct vfs_mount *mnt)
         rc = block_flush(em->dev);
     }
     ext2_device_write_end(em);
-    return rc != 0 ? ext2_writeback_error(em, rc) : 0;
+    if (rc != 0) {
+        rc = ext2_writeback_error(em, rc);
+    }
+    ext2_big_exit(big);
+    return rc;
 }
 
 /**
@@ -1718,7 +1785,8 @@ static int block_in_table(void *arg, uint64_t blk)
 }
 
 /** Whether node `m` has blocks listed or under write that the device may
- * lack, so that its table block waits for them (`table_names`). */
+ * lack, so that its table block waits for them (`table_names`). The caller
+ * holds `em->share_lock`. */
 static int table_listed(const struct ext2_node *m)
 {
     return m->nshared || m->shared_over || m->writing || m->unlisted;
@@ -1732,13 +1800,16 @@ static int table_listed(const struct ext2_node *m)
  * was lost, is not in memory or was loaded again since (`lost_list`). A
  * block a file overwrote in place is named on the device already. The
  * cache writes such a block before the table block, as it does every
- * shared block dirtied before it. Runs under the cache's walks, and sleeps
- * nowhere.
+ * shared block dirtied before it. Runs under the cache's walks, which hold
+ * the big lock that keeps the node table, reads the lists under
+ * `em->share_lock`, and sleeps nowhere.
  */
 static int table_names(void *arg, uint64_t blk, uint64_t owner)
 {
     struct ext2_mount *em = arg;
     struct ext2_node *m;
+    uint32_t flags;
+    int names;
 
     if (owner == 0 || owner > em->inodes) {
         return 1;
@@ -1747,10 +1818,11 @@ static int table_names(void *arg, uint64_t blk, uint64_t owner)
         return 0;
     }
     m = ext2_node_find(em, (uint32_t)owner);
-    if (m && table_listed(m)) {
-        return 1;
-    }
-    return (!m || m->lost_list) && (em->shared_lost || em->device_lost);
+    flags = spin_lock_irqsave(&em->share_lock);
+    names =
+        (m && table_listed(m)) || ((!m || m->lost_list) && (em->shared_lost || em->device_lost));
+    spin_unlock_irqrestore(&em->share_lock, flags);
+    return names;
 }
 
 /** The `unmount` of `vfs_ops`: the mount's nodes, batch, descriptors and
@@ -1861,12 +1933,45 @@ int ext2_em_strict(const struct ext2_mount *em)
     return em->mnt && (em->mnt->flags & (VFS_MS_SYNCHRONOUS | VFS_MS_DIRSYNC)) != 0;
 }
 
+/**
+ * Take the big lock for a call into the buffer cache's write side, its
+ * dirty marks, writes, syncs and reserve, which keep the cache's dirty
+ * lists under it (bcache.h), when the caller runs without it, as a writer
+ * of a file's data does: 1 when taken, for `ext2_big_exit`, and 0 when the
+ * caller held it. The caller holds no spinlock. A sleep in the call lets
+ * the lock go and takes it back, as every holder's does.
+ */
+int ext2_big_enter(void)
+{
+    if (bkl_held()) {
+        return 0;
+    }
+    bkl_enter();
+    return 1;
+}
+
+/** Give back the big lock `ext2_big_enter` took when `taken` says it did. */
+void ext2_big_exit(int taken)
+{
+    if (taken) {
+        bkl_exit();
+    }
+}
+
 /** A barrier of the order: `bcache_sync` of the mount's device on a strict
- * mount, and nothing on one that writes back, whose order is `sync`'s. 0,
- * or -errno. */
+ * mount, under the big lock (`ext2_big_enter`), and nothing on one that
+ * writes back, whose order is `sync`'s. 0, or -errno. */
 int ext2_em_sync(struct ext2_mount *em)
 {
-    return ext2_em_strict(em) ? bcache_sync(em->dev) : 0;
+    int big, rc;
+
+    if (!ext2_em_strict(em)) {
+        return 0;
+    }
+    big = ext2_big_enter();
+    rc = bcache_sync(em->dev);
+    ext2_big_exit(big);
+    return rc;
 }
 
 /** On a mount that writes back, write the device's dirty buffers in runs,
@@ -1887,35 +1992,41 @@ void ext2_em_balance(struct ext2_mount *em)
     if (!bcache_dirty_heavy()) {
         current_proc->fs_written = 0;
     } else if (current_proc->fs_written >= EXT2_BALANCE_SHARE) {
+        int big = ext2_big_enter();
+
         current_proc->fs_written = 0;
         (void)bcache_sync_unflushed(em->dev);
+        ext2_big_exit(big);
     }
 }
 
 /** List shared block `block` among those `n`'s next `fsync` writes, or
- * mark the list overflowed when it is full. */
-void ext2_node_share(struct ext2_node *n, uint32_t block)
+ * mark the list overflowed when it is full, under `em->share_lock`, since
+ * an `fsync` takes the list without `n`'s lock. The caller lists a block
+ * before the store that names it, so that an `fsync` that finds no list
+ * finds no such store either. */
+void ext2_node_share(struct ext2_mount *em, struct ext2_node *n, uint32_t block)
 {
+    uint32_t flags = spin_lock_irqsave(&em->share_lock);
     int i;
 
-    for (i = 0; i < n->nshared; i++) {
-        if (n->shared[i] == block) {
-            return;
-        }
+    for (i = 0; i < n->nshared && n->shared[i] != block; i++) {
     }
-    if (n->nshared == EXT2_NODE_SHARED) {
+    if (i < n->nshared) {
+    } else if (n->nshared == EXT2_NODE_SHARED) {
         n->shared_over = 1;
-        return;
+    } else {
+        n->shared[n->nshared++] = block;
     }
-    n->shared[n->nshared++] = block;
+    spin_unlock_irqrestore(&em->share_lock, flags);
 }
 
 /** List for `n` the bitmap at byte `bitmap` of group `g`'s descriptor, 0
  * for blocks and 4 for inodes, and the block of that descriptor. */
 void ext2_node_share_group(struct ext2_mount *em, struct ext2_node *n, uint32_t g, uint32_t bitmap)
 {
-    ext2_node_share(n, ext2_le32(em->gd + g * 32 + bitmap));
-    ext2_node_share(n, em->first_data + 1 + (g * 32) / BCACHE_BLOCK_BYTES);
+    ext2_node_share(em, n, ext2_le32(em->gd + g * 32 + bitmap));
+    ext2_node_share(em, n, em->first_data + 1 + (g * 32) / BCACHE_BLOCK_BYTES);
 }
 
 /**
@@ -1931,32 +2042,36 @@ void ext2_node_share_group(struct ext2_mount *em, struct ext2_node *n, uint32_t 
  * same step as the buffer, so that the drain, which copies the image over
  * the cache's block, keeps them: an inode stored into a table block the
  * batch holds, a bit beside the batch's reservations, a descriptor or the
- * superblock's counts. 0, or -errno.
+ * superblock's counts. Runs under the big lock, which it takes when the
+ * caller lacks it (`ext2_big_enter`). 0, or -errno.
  */
 int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const void *src,
                      uint32_t len, int sync)
 {
     const uint8_t *in = src;
     int level = sync / WRITE_LEVEL(1);
+    int big = ext2_big_enter();
+    int rc = 0;
 
     sync &= WRITE_WAY;
-    while (len > 0) {
+    while (rc == 0 && len > 0) {
         uint64_t blk = off >> BCACHE_BLOCK_SHIFT;
         uint32_t at = (uint32_t)off & (BCACHE_BLOCK_BYTES - 1);
         uint32_t take = BCACHE_BLOCK_BYTES - at;
         struct bbuf *b;
-        int rc = 0;
 
         if (take > len) {
             take = len;
         }
         b = take == BCACHE_BLOCK_BYTES ? bcache_get_blank(em->dev, blk) : bcache_get(em->dev, blk);
         if (!b) {
-            return -EIO;
+            rc = -EIO;
+            break;
         }
         if (at + take > b->bytes) {
             bcache_release(b);
-            return -EIO;
+            rc = -EIO;
+            break;
         }
         if (in) {
             k_memcpy(b->data + at, in, take);
@@ -1982,13 +2097,11 @@ int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const 
             bcache_dirty(b);
         }
         bcache_release(b);
-        if (rc != 0) {
-            return rc;
-        }
         off += take;
         len -= take;
     }
-    return 0;
+    ext2_big_exit(big);
+    return rc;
 }
 
 /** `ext2_write_owned` of a block no one file owns: an inode table, a bitmap, a
@@ -2053,15 +2166,18 @@ static int large_file_flag(struct ext2_mount *em)
  * Encode the fields of `n` this driver keeps into the inode `raw`, leaving
  * its other bytes as they are; the deletion time is cleared. On a volume of
  * large inodes `raw` has EXT2_LARGE bytes or more, and the extra size and
- * the extra fields it covers are written too.
+ * the extra fields it covers are written too. The size is read whole
+ * (`node_size`), since a drain encodes a node another process may be
+ * resizing under its own lock.
  */
 static void inode_encode(const struct ext2_mount *em, const struct ext2_node *n, uint8_t *raw)
 {
+    uint64_t size = node_size(n);
     int i;
 
     LE16_PUT(raw + 0, n->mode);
     LE16_PUT(raw + 2, n->uid & 0xFFFFu);
-    LE32_PUT(raw + 4, (uint32_t)n->size);
+    LE32_PUT(raw + 4, (uint32_t)size);
     time_put(n, raw, 8, EXT2_ATIME_EXTRA, n->atime);
     time_put(n, raw, 12, EXT2_CTIME_EXTRA, n->ctime);
     time_put(n, raw, 16, EXT2_MTIME_EXTRA, n->mtime);
@@ -2078,7 +2194,7 @@ static void inode_encode(const struct ext2_mount *em, const struct ext2_node *n,
     LE16_PUT(raw + 120, (n->uid >> 16) & 0xFFFFu);
     LE16_PUT(raw + 122, (n->gid >> 16) & 0xFFFFu);
     if ((n->mode & S_IFMT_) == S_IFREG_) {
-        LE32_PUT(raw + 108, (uint32_t)(n->size >> 32));
+        LE32_PUT(raw + 108, (uint32_t)(size >> 32));
     }
     if (em->inode_size > EXT2_GOOD_OLD) {
         LE16_PUT(raw + EXT2_EXTRA_ISIZE, n->extra_isize);
@@ -2095,9 +2211,19 @@ static int inode_time_byte(uint32_t at)
     return (at >= 8 && at < 20) || (at >= EXT2_CTIME_EXTRA && at < EXT2_CRTIME_EXTRA + 4);
 }
 
+/** Set `n->dirty_meta` under `em->share_lock`, which an `fsync` clears
+ * without `n`'s lock. */
+static void node_meta_dirty(struct ext2_mount *em, struct ext2_node *n)
+{
+    uint32_t flags = spin_lock_irqsave(&em->share_lock);
+
+    n->dirty_meta = 1;
+    spin_unlock_irqrestore(&em->share_lock, flags);
+}
+
 /** `inode_encode` of `n` over the `len` bytes of its slot at `raw`, setting
  * `n->dirty_meta` when a byte other than a time's changes. */
-void ext2_inode_encode_noting(const struct ext2_mount *em, struct ext2_node *n, uint8_t *raw,
+void ext2_inode_encode_noting(struct ext2_mount *em, struct ext2_node *n, uint8_t *raw,
                               uint32_t len)
 {
     uint8_t was[EXT2_LARGE];
@@ -2105,8 +2231,11 @@ void ext2_inode_encode_noting(const struct ext2_mount *em, struct ext2_node *n, 
 
     k_memcpy(was, raw, len);
     inode_encode(em, n, raw);
-    for (i = 0; i < len && !n->dirty_meta; i++) {
-        n->dirty_meta = raw[i] != was[i] && !inode_time_byte(i);
+    for (i = 0; i < len; i++) {
+        if (raw[i] != was[i] && !inode_time_byte(i)) {
+            node_meta_dirty(em, n);
+            break;
+        }
     }
 }
 
@@ -2138,7 +2267,7 @@ int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int 
     if (fresh) {
         len = em->inode_size;
         k_memset(raw, 0, len);
-        n->dirty_meta = 1;
+        node_meta_dirty(em, n);
         inode_encode(em, n, raw);
     } else {
         rc = ext2_read_bytes(em, at, raw, len);
@@ -2149,7 +2278,7 @@ int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int 
     }
     if ((n->mode & S_IFMT_) == S_IFREG_ && n->size >= 0x80000000u &&
         !(em->ro_compat & EXT2_RO_LARGE_FILE)) {
-        ext2_node_share(n, 0);
+        ext2_node_share(em, n, 0);
         rc = large_file_flag(em);
         if (rc != 0) {
             return rc;
@@ -2872,8 +3001,8 @@ static int attr_replace(struct vfs_mount *mnt, struct ext2_node *n, const uint8_
         ext2_group_fetch(em, old);
         ext2_block_fetch(em, (uint64_t)old * em->block_size);
         rc = ext2_attr_release(em, n->ino, old);
-        ext2_node_share(n, ext2_le32(em->gd + g * 32));
-        ext2_node_share(n, em->first_data + 1 + (g * 32) / em->block_size);
+        ext2_node_share(em, n, ext2_le32(em->gd + g * 32));
+        ext2_node_share(em, n, em->first_data + 1 + (g * 32) / em->block_size);
     }
     if (!rc)
         rc = ext2_em_write_out(mnt);
@@ -2965,4 +3094,4 @@ static const struct vfs_ops ext2_ops = {
     ext2_read_frames,
 };
 
-const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 0, 0, 1, 1, 1};
+const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 0, 0, 1, 1, 1, 1};

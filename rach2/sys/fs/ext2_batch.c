@@ -94,37 +94,21 @@ int ext2_writeback_copy(struct ext2_mount *em, uint32_t block, uint32_t at, void
     return im != 0;
 }
 
-/** Whether the batch holds images or inodes, read as single words. */
-int ext2_batch_busy(const struct ext2_mount *em)
+/** Whether the batch holds inodes, which every commit adds and only a
+ * drain takes out, read as one word: a caller without `em->batch` learns
+ * what was so at the look. */
+int ext2_batch_pending(const struct ext2_mount *em)
 {
     const volatile struct ext2_writeback *wb = em->wb;
 
-    return wb && (wb->datas != 0 || wb->metas != 0 || wb->count != 0);
-}
-
-/**
- * Take the big lock for a reader without it while the batch is not empty:
- * 1 when it took it, for the caller's `bkl_exit`. The writers fill and
- * empty the batch's arrays under the big lock, between their sleeps, so a
- * reader under it sees them whole. A reader that finds the batch empty
- * reads the cache alone, which then has what every
- * finished write left: the reader holds its node's lock, so no write of the
- * node's own blocks runs meanwhile, and a write of another node's that does
- * is one the reader may see either before or after, as Linux's reader
- * under the inode's lock sees another inode's write. The caller holds its
- * node's lock, and looks again each time it takes that lock back.
- */
-int ext2_batch_guard(struct ext2_mount *em)
-{
-    if (bkl_held() || !ext2_batch_busy(em)) {
-        return 0;
-    }
-    bkl_enter();
-    return 1;
+    return wb && wb->count != 0;
 }
 
 /** Whether the file-write batch holds node `n`, whose pending pieces may
- * name blocks a free of `n` would give up. */
+ * name blocks a free of `n` would give up, read without the batch's locks:
+ * the caller holds `n`'s lock, under which alone `n` joins the batch, so a
+ * 1 holds until a drain, and a drain under way meanwhile makes a 1 only a
+ * drain too many. */
 int ext2_writeback_holds(const struct ext2_mount *em, const struct ext2_node *n)
 {
     int i;
@@ -568,7 +552,7 @@ static void writeback_commit(struct ext2_mount *em, struct ext2_node *n, uint64_
         }
     }
     if (plan->feature) {
-        ext2_node_share(n, 0);
+        ext2_node_share(em, n, 0);
         LE32_PUT(plan->feature->data + 1024 + 100,
                  ext2_feature_add(em, &em->ro_compat, EXT2_RO_LARGE_FILE));
         plan->feature->dirty = 1;
@@ -625,7 +609,13 @@ static void writeback_fetch(struct ext2_mount *em, struct ext2_node *n, uint64_t
  * `em->batch`, the plan taking the locks of the groups it reserves in and
  * giving them back after the commit or the failure. A failure gives back the
  * images the piece took before it returns, in the same step as the plan:
- * once the lock goes, other writers change the tables and the counts. 0, or
+ * once the lock goes, other writers change the tables and the counts. A
+ * piece whose bytes the batch has no room left for is -ENOMEM, looked at
+ * under the lock, since another writer may have filled it since the
+ * caller's look (`ext2_writeback_fit`). The
+ * check that the user's pages are present and the commit that copies them
+ * run under the big lock, taken for them when the caller lacks it, since
+ * every change that takes a page away holds it (`vm_resident`). 0, or
  * -errno, -EAGAIN for a block the cache lacks under a plan.
  */
 static int writeback_try(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
@@ -635,10 +625,13 @@ static int writeback_try(struct ext2_mount *em, struct ext2_node *n, uint64_t of
     struct ext2_write_plan plan;
     int old_metas = wb->metas, old_datas = wb->datas;
     uint32_t flags;
-    int rc;
+    int rc, big;
 
     ext2_assert_batch_locked(em);
     k_memset(&plan, 0, sizeof(plan));
+    if (len > EXT2_WB_BYTES - wb->bytes) {
+        return -ENOMEM;
+    }
     rc = writeback_plan(em, n, offset, len, &plan);
     if (rc != 0) {
         goto fail;
@@ -651,11 +644,14 @@ static int writeback_try(struct ext2_mount *em, struct ext2_node *n, uint64_t of
         rc = -EIO;
         goto fail;
     }
+    big = ext2_big_enter();
     if (!vm_resident((uintptr_t)src, len, 0)) {
+        ext2_big_exit(big);
         rc = -EFAULT;
         goto fail;
     }
     writeback_commit(em, n, offset, src, len, &plan);
+    ext2_big_exit(big);
     plan_groups_unlock(em, &plan);
     return 0;
 fail:
@@ -709,11 +705,13 @@ static int writeback_piece(struct ext2_mount *em, struct ext2_node *n, uint64_t 
  * Record a failure `rc` of the batch: the first one's errno kept for the
  * mount's life, the error bit set in memory, the mount made read-only, and
  * the mount's `write_error` set when it has none, which every later
- * `fsync` reports. Returns `rc`.
+ * `fsync` reports. The mount's flags and `write_error` are the VFS's,
+ * which the big lock keeps, so it is taken for them. Returns `rc`.
  */
 int ext2_writeback_error(struct ext2_mount *em, int rc)
 {
     struct ext2_writeback *wb = em->wb;
+    int big;
 
     if (wb) {
         uint32_t flags = spin_lock_irqsave(&wb->lock);
@@ -724,10 +722,12 @@ int ext2_writeback_error(struct ext2_mount *em, int rc)
         spin_unlock_irqrestore(&wb->lock, flags);
     }
     (void)ext2_state_change(em, EXT2_ERROR_FS, 0);
+    big = ext2_big_enter();
     em->mnt->flags |= VFS_MS_RDONLY;
     if (!em->mnt->write_error) {
         em->mnt->write_error = rc;
     }
+    ext2_big_exit(big);
     return rc;
 }
 
@@ -835,25 +835,30 @@ static int drain_lock(struct ext2_mount *em)
  * holds are put and the cache balanced (`ext2_em_balance`). A failure keeps the
  * images and the stage, so that the next drain resumes there, and is
  * recorded by `ext2_writeback_error`; a removed device fails at once. The
- * caller holds no `em->batch`. 0, or -errno.
+ * reserve and the copies into the cache run under the big lock, which the
+ * cache's write side keeps and the drain takes when its caller lacks it
+ * (`ext2_big_enter`), let go and taken back at each sleep. The caller holds
+ * no `em->batch`. 0, or -errno.
  */
 int ext2_writeback_drain(struct ext2_mount *em)
 {
     struct ext2_writeback *wb = em->wb;
     struct ext2_node *held[EXT2_WB_NODES];
     uint32_t copied = 0, flags;
-    int i, count, rc;
+    int i, count, rc, big;
 
     if (em->dev->flags & BLOCK_GONE) {
         return ext2_writeback_error(em, -EIO);
     }
-    if (!wb || !wb->count) {
+    if (!ext2_batch_pending(em)) {
         return 0;
     }
+    big = ext2_big_enter();
     if (!ext2_em_strict(em)) {
         (void)bcache_reserve(em->dev, writeback_dirty(wb));
     }
     if (!drain_lock(em)) {
+        ext2_big_exit(big);
         return 0;
     }
     for (i = 0; i < wb->count; i++) {
@@ -913,6 +918,7 @@ int ext2_writeback_drain(struct ext2_mount *em)
     wb->bytes = 0;
     wb->stage = 0;
     ext2_batch_unlock(em);
+    ext2_big_exit(big);
     for (i = 0; i < count; i++) {
         ext2_put(em->mnt, held[i]);
     }
@@ -921,6 +927,7 @@ int ext2_writeback_drain(struct ext2_mount *em)
 fail:
     rc = ext2_writeback_error(em, rc);
     ext2_batch_unlock(em);
+    ext2_big_exit(big);
     return rc;
 }
 
@@ -1104,7 +1111,7 @@ int ext2_writeback_room(struct ext2_mount *em, int synchronous)
 {
     const struct ext2_writeback *wb = em->wb;
 
-    if (synchronous || wb->bytes == EXT2_WB_BYTES || wb->datas == EXT2_WB_DATA ||
+    if (synchronous || wb->bytes >= EXT2_WB_BYTES || wb->datas == EXT2_WB_DATA ||
         wb->metas == EXT2_WB_META || wb->count == EXT2_WB_NODES) {
         return ext2_writeback_drain(em);
     }

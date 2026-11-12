@@ -26,15 +26,21 @@
  * present is brought in with the locks let go, or, when the caller holds a
  * file lock of its own, ends the call short (`user_refault`).
  *
- * The big lock covers the node table, the cache's writes and the writers'
- * steps between their sleeps. A reader may run without it: `read`, `readdir`,
- * `getattr`, `open`, `release`, `hold` and `put` of a node the caller
- * holds, into kernel buffers (the type sets `reads_unlocked`). Such a
- * reader holds its node's lock, which every writer of the node's blocks
- * holds too, takes the big lock while the batch has images
- * (`ext2_batch_guard`), so that it finds them as a reader under it does, and
- * takes it for the steps that write: an error's mark, a drain, a final put and
- * a reap.
+ * The big lock covers the node table, the cache's writes and the
+ * namespace operations' steps between their sleeps. A reader may run
+ * without it: `read`, `readdir`, `getattr`, `open`, `release`, `hold` and
+ * `put` of a node the caller holds, into kernel buffers (the type sets
+ * `reads_unlocked`). So may a writer of a regular file's data: `write`,
+ * `truncate`, `fallocate`, `fsync` and `fdatasync` (the type sets
+ * `writes_unlocked`), under the file's node lock as Linux's ext2 writes
+ * under the inode's `i_rwsem`, with the batch's, the groups' and the
+ * superblock's locks for what they share with other files. Each takes the
+ * big lock only around a call into the buffer cache's write side, whose
+ * dirty marks, writes and syncs it still keeps (`ext2_big_enter`), around
+ * the check and copy of a user buffer (`vm_resident`), and for the node
+ * table, an error's mark, a final put and a reap. A reader holds its node's
+ * lock, which every writer of the node's blocks holds too, and reads the
+ * batch's images under `wb->lock`, in the step that finds them.
  *
  * The node locks, `em->batch`, the groups' locks and `em->super` count in
  * their holder's `file_locks` (process.h), so that reclaim under any of them
@@ -366,6 +372,17 @@ struct ext2_mount {
      * functions beside it). A 32-bit one of them may be read alone as a
      * single word, which is current at some moment of the read. */
     struct spinlock count_lock;
+    /* Keeps `writers` and `closing`, which a writer without the big lock
+     * changes on its admission (`em_enter`). */
+    struct spinlock admit_lock;
+    /* Keeps what an `fsync` reads of the lists of shared blocks: each
+     * node's `shared`, `nshared`, `shared_over`, `writing`,
+     * `table_writing`, `unlisted`, `lost_list` and `dirty_meta`, and the
+     * mount's `shared_lost`, `device_lost` and `device_writes`, as Linux
+     * keeps an inode's list of metadata buffers under the mapping's
+     * `i_private_lock` (fs/buffer.c:475-486). Taken under the cache's walks
+     * (`table_names`), so nothing under it calls the cache. */
+    struct spinlock share_lock;
     /* Where a caller sleeps for a node that is loading or dying, and a
      * writer for admission while `closing` is set. */
     wait_queue_t node_wq;
@@ -501,16 +518,18 @@ struct ext2_time ext2_time_fit(const struct ext2_node *n, uint32_t extra_end, in
                                int64_t nsec);
 void ext2_stamp(struct ext2_node *n, int which);
 int ext2_em_strict(const struct ext2_mount *em);
+int ext2_big_enter(void);
+void ext2_big_exit(int taken);
 int ext2_em_sync(struct ext2_mount *em);
 void ext2_em_balance(struct ext2_mount *em);
-void ext2_node_share(struct ext2_node *n, uint32_t block);
+void ext2_node_share(struct ext2_mount *em, struct ext2_node *n, uint32_t block);
 void ext2_node_share_group(struct ext2_mount *em, struct ext2_node *n, uint32_t g, uint32_t bitmap);
 int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const void *src,
                      uint32_t len, int sync);
 int ext2_write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uint32_t len, int sync);
 int ext2_assert_writable(struct vfs_mount *mnt, struct ext2_mount *em);
 uint64_t ext2_inode_offset(const struct ext2_mount *em, uint32_t ino);
-void ext2_inode_encode_noting(const struct ext2_mount *em, struct ext2_node *n, uint8_t *raw,
+void ext2_inode_encode_noting(struct ext2_mount *em, struct ext2_node *n, uint8_t *raw,
                               uint32_t len);
 int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int how);
 int ext2_inode_store(struct ext2_mount *em, struct ext2_node *n);
@@ -540,8 +559,7 @@ void ext2_writeback_free(struct ext2_writeback *wb);
 int ext2_writeback_has(struct ext2_mount *em, uint32_t block);
 int ext2_writeback_copy(struct ext2_mount *em, uint32_t block, uint32_t at, void *buf, uint32_t len,
                         int into);
-int ext2_batch_busy(const struct ext2_mount *em);
-int ext2_batch_guard(struct ext2_mount *em);
+int ext2_batch_pending(const struct ext2_mount *em);
 int ext2_writeback_holds(const struct ext2_mount *em, const struct ext2_node *n);
 int ext2_writeback_keeps(struct ext2_mount *em, const struct ext2_node *n);
 int ext2_writeback_error(struct ext2_mount *em, int rc);

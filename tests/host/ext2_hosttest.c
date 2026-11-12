@@ -4004,12 +4004,12 @@ static int listing(void *h)
  * big lock on a type that sets `reads_unlocked`, with the lock reported
  * free (compat/bkl_held.c), and count the takes the driver makes. While
  * another description's write waits in the batch, a read and a listing
- * take the lock for the batch (`ext2_batch_guard`) and read the pending bytes,
- * a hold that is not the last is dropped without it
- * (`ext2_put_unless_last`), and a release takes it to drain the batch
- * (`ext2_release`). Once the batch is empty a read, a listing and a release
- * take it never, the batch's images being read from the cache alone
- * (`ext2_writeback_has`), and a last put takes it once (`ext2_put`).
+ * take no lock but the batch's own and read the pending bytes from its
+ * images, a hold that is not the last is dropped without it
+ * (`ext2_put_unless_last`), and a release takes it to drain the batch into
+ * the cache (`ext2_writeback_drain`). Once the batch is empty a read, a
+ * listing and a release take it never, and a last put takes it once
+ * (`ext2_put`).
  */
 static void unlocked_reader_row(void)
 {
@@ -4041,15 +4041,15 @@ static void unlocked_reader_row(void)
               OPS->open(&mnt, mnt.root, 0, &dh) == 0 && bkl_host_takes == 0,
           "read-only opens beside a busy batch take no big lock");
     check(OPS->read(&mnt, qh, abuf, sizeof(want), 0) == (int32_t)sizeof(want) &&
-              memcmp(abuf, want, sizeof(want)) == 0 && bkl_host_takes == 1,
-          "a read beside a busy batch takes the big lock once and reads the file");
+              memcmp(abuf, want, sizeof(want)) == 0 && bkl_host_takes == 0,
+          "a read beside a busy batch takes no big lock and reads the file");
     bkl_host_takes = 0;
     check(OPS->read(&mnt, rh, abuf, sizeof(pend), 0) == (int32_t)sizeof(pend) &&
-              memcmp(abuf, pend, sizeof(pend)) == 0 && bkl_host_takes == 1,
-          "a read of a file whose write waits in the batch reads the pending bytes under it");
+              memcmp(abuf, pend, sizeof(pend)) == 0 && bkl_host_takes == 0,
+          "a read of a file whose write waits in the batch reads the pending bytes without it");
     bkl_host_takes = 0;
-    check(listing(dh) == 2 && bkl_host_takes > 0,
-          "a listing beside a busy batch takes the big lock and sees both names");
+    check(listing(dh) == 2 && bkl_host_takes == 0,
+          "a listing beside a busy batch takes no big lock and sees both names");
     check(OPS->getattr(&mnt, busy, &st) == 0 && st.size == sizeof(pend),
           "a stat without the big lock gives the pending size");
     bkl_host_takes = 0;
