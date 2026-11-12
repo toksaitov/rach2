@@ -363,6 +363,9 @@ static int accept(block_device_t *dev, struct block_request *r)
 
 static int waits;
 static void (*wait_step)(wait_queue_t *, wq_cond_fn, void *);
+/* The last queue a waker woke while it held a lock of its own, which only a
+ * request's own caller's queue is. */
+static wait_queue_t *last_woken;
 static uint8_t output[BLOCK_SECTOR_SIZE];
 
 /** Complete a synchronous write or flush only after its caller blocks. */
@@ -374,14 +377,15 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
         wait_step(wq, cond, arg);
         return 0;
     }
-    (void)wq;
+    check(wq == r->waiter && wq != &pool_wq, "the caller sleeps on a queue of its own");
+    last_woken = 0;
     check(!irq_depth && !cond(arg), "the caller waits with interrupts enabled");
     check(r->held_by_caller && r->held_by_device,
           "both owners retain the request while the caller waits");
     check(r->page != output, "the device owns a private page");
     waits++;
     check(block_lag_answer(r->generation, 0) == 0, "the blocked call can be answered");
-    check(cond(arg), "the completion satisfies the wait condition");
+    check(cond(arg) && last_woken == wq, "the completion wakes the caller's own queue");
     check(block_lag_answer(r->generation, 1) == 0, "a duplicate before caller release is dropped");
     check(r->status == 0 && r->held_by_caller && !r->held_by_device,
           "a duplicate preserves the completed result and caller ownership");
@@ -392,6 +396,25 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
+}
+
+/** A wake under the waker's lock: record the queue. */
+void wq_wake_all_deferred(wait_queue_t *wq, uint64_t *cpus)
+{
+    (void)cpus;
+    last_woken = wq;
+}
+
+/** A queue on a caller's stack needs nothing here. */
+void wait_queue_init(wait_queue_t *wq)
+{
+    (void)wq;
+}
+
+/** No processor is interrupted in the model. */
+void sched_kick_cpus(uint64_t cpus)
+{
+    (void)cpus;
 }
 
 /** Require a successful fixture setup before dereferencing a request. */
@@ -570,14 +593,15 @@ static void interrupt_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     int held = bkl_depth;
     uint32_t flags;
 
-    (void)wq;
-    check(r == unlocked_held && !cond(arg) && !irq_depth,
-          "the caller waits on its own request with interrupts on");
+    check(r == unlocked_held && !cond(arg) && !irq_depth && wq == r->waiter,
+          "the caller waits on its own request's queue with interrupts on");
     bkl_depth = 0; /* the sleep lets the big lock go */
+    last_woken = 0;
     flags = kirq_save();
     block_request_complete(r, r->generation, 0);
     kirq_restore(flags);
-    check(cond(arg), "a completion from the interrupt without the big lock ends the wait");
+    check(cond(arg) && last_woken == wq,
+          "a completion from the interrupt without the big lock wakes the caller's queue");
     bkl_depth = held; /* and the wake takes it back */
 }
 
@@ -736,9 +760,9 @@ static void flush_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     struct block_request *r = arg;
     unsigned ticks = flush_expires ? 8 : 4;
 
-    (void)wq;
-    check(!irq_depth && !cond(arg) && (r->flags & BLOCK_REQ_FLUSH),
-          "a flush blocks with an owned request and interrupts enabled");
+    check(!irq_depth && !cond(arg) && (r->flags & BLOCK_REQ_FLUSH) && wq == r->waiter,
+          "a flush blocks on its own queue with an owned request and interrupts enabled");
+    last_woken = 0;
     flush_generation = r->generation;
     advance(ticks - 1);
     check(!cond(arg) && r->state == BLOCK_REQ_IN_FLIGHT && r->held_by_device,
@@ -752,7 +776,7 @@ static void flush_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg)
               "an overdue flush still waits for the device");
         check(block_lag_answer(r->generation, 0) == 0, "deliver the overdue flush");
     }
-    check(cond(arg), "the flush caller wakes on completion or quarantine");
+    check(cond(arg) && last_woken == wq, "the flush caller wakes on completion or quarantine");
 }
 
 /** Check late flush success and ownership after the final deadline. */

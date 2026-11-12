@@ -290,6 +290,7 @@ void block_partition_init(block_partition_t *partition, block_device_t *backing,
  * a request that is no longer live, or a generation that is not its, is
  * dropped and logged.
  */
+struct wait_queue;
 struct block_request {
     struct block_request *next;   /* the list of live requests */
     struct block_request *queued; /* the device's own queue, oldest first */
@@ -311,6 +312,11 @@ struct block_request {
     int held_by_device;  /* until the device has answered */
     uint32_t taken_us;   /* when it was taken, for the completion's delay */
     uint32_t flags;      /* BLOCK_REQ_NOFLUSH, BLOCK_REQ_FLUSH or 0 */
+    /* The queue on its caller's stack that the caller sleeps on for the
+     * answer, which only the answer or the quarantine wakes, or NULL; set
+     * and cleared by the caller and read by the waker, all under the
+     * pool's lock (request.c). */
+    struct wait_queue *waiter;
 };
 
 /* A write a `BLOCK_WRITE_THROUGH` disk answers without flushing its cache,
