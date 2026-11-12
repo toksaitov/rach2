@@ -3313,6 +3313,184 @@ static void dir_index_row(void)
           "and debugfs and the reader see the changed names");
 }
 
+/* The volume block that holds /many's inode, whose first read the
+   failed-store row fails, or -1 when the row is not failing one. */
+static int64_t dx_inode_block = -1;
+
+/** Fail the read that covers `dx_inode_block`, once. */
+static void dx_fail_inode_read(void)
+{
+    if (dx_inode_block >= 0 && (uint64_t)dx_inode_block >= request_block &&
+        (uint64_t)dx_inode_block < request_block + request_blocks) {
+        read_pause = 0;
+        dx_inode_block = -1;
+        read_fails = 1;
+    }
+}
+
+/** The volume block of `img` that holds the inode of `path`, by debugfs's
+ * `imap`, or -1. */
+static int64_t inode_block_of(const char *img, const char *path)
+{
+    char request[300], line[300];
+    const char *at;
+    int64_t found = -1;
+    void *f;
+
+    snprintf(request, sizeof request, "imap %s", path);
+    if (!ext2_fixture_debugfs(img, request, 0, fix_path("debugfs.txt"))) {
+        return -1;
+    }
+    f = fopen(fix_path("debugfs.txt"), "r");
+    while (f && fgets(line, sizeof line, f)) {
+        at = strstr(line, "located at block ");
+        if (at) {
+            found = (int64_t)strtoul(at + 17, 0, 10);
+        }
+    }
+    if (f) {
+        fclose(f);
+    }
+    return found;
+}
+
+/**
+ * Bring the failed-store row's volume to its retry: /many indexed by
+ * `e2fsck -fyD` and mounted writable, /many and its file7.txt held, the
+ * cache emptied, and an unlink of file7.txt whose store of the cleared
+ * index flag fails at the read of /many's inode-table block, before any
+ * write. The held directory must keep its flag in memory, so that the
+ * retry stores the cleared flag again. `*d` and `*c` are left held, or
+ * NULL; 1, or 0 when the volume did not come to the retry. With `judge`
+ * the claims are checked, which the first run does.
+ */
+static int dx_failed_store(void **d, void **c, int judge)
+{
+    int64_t block;
+    int st, err, rc;
+
+    *d = *c = 0;
+    wbytes = build_image(wimg, 4096, 128, PROFILE_DIR_INDEX, 16, "tree");
+    use_image(wimg, wbytes);
+    st = ext2_fixture_fsck(wimg, "-fyD", fix_path("fsck.out"));
+    block = inode_block_of(wimg, "/many");
+    if (judge) {
+        check(st >= 0 && st <= 1 && debugfs_says(wimg, "stat /many", "Flags: 0x1000") && block > 0,
+              "e2fsck -D indexes the failed-store row's directory");
+    }
+    stop_after = -1;
+    if (block <= 0 || mount_rw() != 0) {
+        check(0, "the failed-store row's volume mounts writable");
+        return 0;
+    }
+    *d = walk("/many", &err);
+    *c = walk("/many/file7.txt", &err);
+    if (!*d || !*c) {
+        check(0, "the failed-store row's directory and file are held");
+        return 0;
+    }
+    check(OPS->sync(&mnt) == 0 && bcache_invalidate(&dev) == 0,
+          "the failed-store row's cache is emptied");
+    dx_inode_block = block;
+    read_pause = dx_fail_inode_read;
+    rc = OPS->unlink(&mnt, *d, "file7.txt");
+    read_pause = 0;
+    if (judge) {
+        check(rc == -EIO && dx_inode_block == -1 && (mnt.flags & VFS_MS_RDONLY) == 0,
+              "an unlink whose index-flag store fails at the inode-table read fails with EIO, "
+              "the mount writable");
+        check(index_flag("/many") == 1,
+              "and the held directory keeps its index flag in memory for the retry");
+    }
+    dx_inode_block = -1;
+    return rc == -EIO;
+}
+
+/** The failed-store row's retry: the unlink of file7.txt again, then a
+ * create of added.txt, which goes into the slack of `..` that holds the
+ * index root. 0, or the first error. */
+static int dx_retry(void *d)
+{
+    int rc = OPS->unlink(&mnt, d, "file7.txt");
+    void *n = rc == 0 ? make_file(d, "added.txt", &rc) : 0;
+
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    return rc;
+}
+
+/**
+ * A failed store of a directory's cleared index flag leaves the flag set in
+ * memory, so that a later change stores it again before any entry changes.
+ * The retry, an unlink and a create, runs once whole to count its writes,
+ * and then on a fresh volume for each count k, stopped after write k: at
+ * every stop, a /many still marked indexed on the disk must hold its
+ * entries as e2fsck -D left them, file7.txt and no added.txt.
+ */
+static void dir_index_failed_store_row(void)
+{
+    void *d, *c;
+    int k, n, rc;
+    char what[200];
+
+    if (!dx_failed_store(&d, &c, 1)) {
+        if (c) {
+            OPS->put(&mnt, c);
+        }
+        if (d) {
+            OPS->put(&mnt, d);
+        }
+        unmount_image();
+        return;
+    }
+    writes_made = 0;
+    rc = dx_retry(d);
+    n = writes_made;
+    check(rc == 0 && index_flag("/many") == 0,
+          "the retry changes the directory and clears its flag");
+    OPS->put(&mnt, c);
+    OPS->put(&mnt, d);
+    check(unmount_rw() == 0 && !debugfs_says(wimg, "stat /many", "Flags: 0x1000") &&
+              !debugfs_lists(wimg, "/many", "file7.txt") &&
+              debugfs_lists(wimg, "/many", "added.txt"),
+          "and debugfs sees the flag cleared and the changed names");
+    for (k = 0; k < n; k++) {
+        if (!dx_failed_store(&d, &c, 0)) {
+            if (c) {
+                OPS->put(&mnt, c);
+            }
+            if (d) {
+                OPS->put(&mnt, d);
+            }
+            unmount_image();
+            snprintf(what, sizeof what, "the failed store before stop %d of %d fails", k, n);
+            check(0, what);
+            return;
+        }
+        writes_made = 0;
+        stop_after = k;
+        (void)dx_retry(d);
+        OPS->put(&mnt, c);
+        OPS->put(&mnt, d);
+        OPS->put(&mnt, mnt.root);
+        OPS->unmount(&mnt);
+        mnt.root = 0;
+        bcache_device_gone(&dev);
+        dev.flags = BLOCK_FAULT_SAFE;
+        stop_after = -1;
+        use_image(wimg, wbytes);
+        snprintf(what, sizeof what,
+                 "the retry stopped after write %d of %d leaves no changed directory "
+                 "marked indexed",
+                 k, n);
+        check(!debugfs_says(wimg, "stat /many", "Flags: 0x1000") ||
+                  (debugfs_lists(wimg, "/many", "file7.txt") &&
+                   !debugfs_lists(wimg, "/many", "added.txt")),
+              what);
+    }
+}
+
 /**
  * A remount read-only syncs the volume and leaves it as an unmount does, a
  * create on it fails with `EROFS`, and a remount writable takes a create
@@ -4236,6 +4414,7 @@ static void batch_rows(void)
     default_mount_row();
     held_rmdir_row();
     dir_index_row();
+    dir_index_failed_store_row();
     remount_row();
     remount_nomem_row();
     batch_error_row();
