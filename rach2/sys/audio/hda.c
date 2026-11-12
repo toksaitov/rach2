@@ -4176,10 +4176,10 @@ uint32_t hda_delay_frames(void)
     return frames;
 }
 
-void hda_read_queue(void)
+/** The body of `hda_read_queue`; the caller holds the stream lock. */
+static void hda_read_queue_locked(void)
 {
     hda_queue_report_t *q = &hda_report.queue;
-    uint32_t flags = spin_lock_irqsave(&stream_lock);
 
     q->lpib = hda_base && hda_report.ready ? hda_stream_position() : 0;
     q->fill = ring_available();
@@ -4197,6 +4197,13 @@ void hda_read_queue(void)
     hda_report.service.usec = timer_cycles_us(service_cycles);
     hda_report.service.max_usec = timer_cycles_us(service_max_cycles);
 #endif
+}
+
+void hda_read_queue(void)
+{
+    uint32_t flags = spin_lock_irqsave(&stream_lock);
+
+    hda_read_queue_locked();
     spin_unlock_irqrestore(&stream_lock, flags);
 }
 
@@ -4206,9 +4213,11 @@ void hda_copy_report(hda_report_t *out, int *mode)
 
     mutex_lock(&stream_mutex);
     flags = spin_lock_irqsave(&cap_lock);
-    hda_read_queue();
+    spin_lock(&stream_lock);
+    hda_read_queue_locked();
     *out = hda_report;
     *mode = (int)hda_output_mode;
+    spin_unlock(&stream_lock);
     spin_unlock_irqrestore(&cap_lock, flags);
     mutex_unlock(&stream_mutex);
 }
