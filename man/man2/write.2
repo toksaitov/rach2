@@ -495,6 +495,8 @@ or vector list cannot be read as required.
 .It Er EFBIG
 A file write exceeds the file system's size or addressing limit, or a
 framebuffer write starts past the mode's end.
+On ext2 only a write that starts at or past the limit fails; one that
+crosses it writes the bytes below it and returns their count, as on Linux.
 .It Er EINTR
 A signal interrupted a wait, or a background terminal write posted
 .Dv SIGTTOU .

@@ -4644,14 +4644,63 @@ static void snapshot(const char *img, uint64_t bytes)
 }
 
 /**
+ * The edges of the file limit L of 4096-byte blocks, 0x1FF7FDFE000, on a
+ * new file of the mounted volume, as Linux's `s_maxbytes` draws them: a
+ * truncate to L+1 is `EFBIG`, a two-byte write at L-1 writes the one byte
+ * below L and returns 1 (`generic_write_check_limits`), and a file larger
+ * than L, as a volume written under a larger limit holds, shrinks to a size
+ * still above L but does not grow (`inode_newsize_ok`). The file ends
+ * empty.
+ */
+static void limit_edge_rows(void)
+{
+    struct ext2_node *e;
+    struct vfs_stat st;
+    unsigned char two[2] = {0, 0};
+    void *h = 0;
+    int rc;
+
+    e = make_file(mnt.root, "limit.bin", &rc);
+    check(e != 0, "a file for the limit's edges is made");
+    if (!e) {
+        return;
+    }
+    if (OPS->open(&mnt, e, 1, &h) == 0) {
+        check(OPS->truncate(&mnt, h, 0x1FF7FDFE001ull) == -EFBIG,
+              "a truncate past the limit answers EFBIG");
+        check(OPS->write(&mnt, h, pattern, 2, 0x1FF7FDFDFFFull) == 1,
+              "a two-byte write at the limit less one writes one byte");
+        check(OPS->getattr(&mnt, e, &st) == 0 && st.size == 0x1FF7FDFE000ull,
+              "and the size is the limit");
+        check(read_at(e, two, 2, 0x1FF7FDFDFFFull) == 1 && two[0] == pattern[0],
+              "and the byte below the limit reads back");
+        ext2_node_lock(e);
+        ext2_node_size_set(e, 0x1FF7FE00000ull);
+        rc = ext2_inode_store(ext2_em_of(&mnt), e);
+        ext2_node_unlock(e);
+        check(rc == 0, "the file is given the size L+8192 an older limit allowed");
+        check(OPS->truncate(&mnt, h, 0x1FF7FDFF000ull) == 0 && OPS->getattr(&mnt, e, &st) == 0 &&
+                  st.size == 0x1FF7FDFF000ull,
+              "a truncate of the oversized file to L+4096 shrinks it");
+        check(OPS->truncate(&mnt, h, 0x1FF7FE00000ull) == -EFBIG,
+              "and a truncate back to L+8192 answers EFBIG");
+        check(OPS->truncate(&mnt, h, 0) == 0 && OPS->getattr(&mnt, e, &st) == 0 && st.size == 0,
+              "and a truncate to 0 empties it");
+        OPS->release(&mnt, h);
+    }
+    OPS->put(&mnt, e);
+}
+
+/**
  * The failures the writer must decide before it writes anything, on a
  * volume of 4 MiB: a name of 256 bytes is `ENAMETOOLONG` and a write at
  * the format's file limit `EFBIG`, each leaving the volume byte for byte
- * as it was, and a truncate past the limit is `EFBIG`. A byte written at
- * 4 GiB is accepted, sets large_file and keeps the high half of the size
- * across a remount. A caller who is not root gets `ENOSPC` at the reserved
- * blocks, and root writes into them. A hundred new files are held at
- * once, and the volume ends clean.
+ * as it was; a truncate past the limit, a write astride it and a shrink of
+ * a file above it are `limit_edge_rows`. A byte written at 4 GiB is
+ * accepted, sets large_file and keeps the high half of the size across a
+ * remount. A caller who is not root gets `ENOSPC` at the reserved blocks,
+ * and root writes into them. A hundred new files are held at once, and the
+ * volume ends clean.
  */
 static void refusal_write_rows(void)
 {
@@ -4694,16 +4743,7 @@ static void refusal_write_rows(void)
               "a write at the format's limit answers EFBIG by name");
         bcache_sync(&dev);
         check(image_equals_snap(wimg, wbytes), "and the volume is as it was");
-        {
-            void *h = 0;
-
-            check(OPS->open(&mnt, n, 1, &h) == 0 &&
-                      OPS->truncate(&mnt, h, 0x1FF7FDFE001ull) == -EFBIG,
-                  "a truncate past it answers EFBIG");
-            if (h) {
-                OPS->release(&mnt, h);
-            }
-        }
+        limit_edge_rows();
         check(write_at(n, pattern, 1, 0x100000000ull) == 0, "a byte written at 4 GiB is accepted");
         bcache_sync(&dev);
         {
