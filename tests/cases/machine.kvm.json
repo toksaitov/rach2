@@ -106,7 +106,7 @@
       "assertions": [
         {
           "assertion_id": "entry",
-          "checks": "svm-entry exits 0 and prints SVMENTRY OK after every guest exits through OUT and HLT",
+          "checks": "svm-entry exits 0 and prints SVMENTRY OK after every guest exits through OUT and HLT and all seven live KVM counts return to their initial values",
           "source": "scenario"
         }
       ],
@@ -390,7 +390,7 @@
     },
     {
       "case_id": "machine.kvm.leak",
-      "behavior": "Kill QEMU after its Debian guest starts, require no pinned pages, and count its VMs, vCPUs, slots, table pages, run mappings and file descriptions back to their initial values",
+      "behavior": "Kill QEMU after its Debian guest starts, require no pinned pages, and count its VMs, vCPUs, slots, table pages, run mappings, guest-page maps and mapped guest pages back to their initial values",
       "units": [
         "tests/kvm/leak.sh",
         "rach2/sys/kvm/stats.h",
@@ -447,7 +447,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run leak.sh on the Debian mini-guest, kill QEMU once Linux starts, and compare every live resource count with its initial value"
+          "does": "run leak.sh on the Debian mini-guest, kill QEMU once Linux starts, and compare the seven live KVM counts with their initial values"
         }
       ],
       "machines": [
