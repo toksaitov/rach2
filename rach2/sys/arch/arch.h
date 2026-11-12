@@ -120,8 +120,8 @@ void arch_invalid_opcode(void);
  * when this returns. */
 void arch_idle_masked(void);
 
-/** Whether a device's interrupt waits to be taken on this processor while
- * its interrupts are off; the timer's and the processors' own do not
+/** Whether a device's or the timer's interrupt waits to be taken on this
+ * processor while its interrupts are off; the processors' own do not
  * count. */
 int arch_irq_waiting(void);
 

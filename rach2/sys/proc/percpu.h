@@ -33,7 +33,7 @@ struct page_dir;
  * guest_halt_poll_grow_start of cpuidle-haltpoll. */
 #define IDLE_POLL_MAX_US   200u
 #define IDLE_POLL_START_US 50u
-#define IDLE_POLL_CHECK_US 10u /* between two looks for a device's interrupt */
+#define IDLE_POLL_CHECK_US 10u /* between two looks for a device's or timer's interrupt */
 
 /*
  * What the shared kernel keeps for each processor: the process it runs and

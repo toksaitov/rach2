@@ -1520,13 +1520,12 @@ void sched_loadavg(uint32_t avg[3])
  * its exits, and a churn of short processes, whose exits flush every
  * processor, ran 1.5 times as long. Linux sends no such flush to an idle
  * processor in lazy TLB mode (should_flush_tlb, arch/x86/mm/tlb.c:
- * 912-914). A device's completion, which Linux's poll would take at once,
- * the poll looks for every IDLE_POLL_CHECK_US (`arch_irq_waiting`), and
- * halts on it, which takes it: held to the poll's end, it made each of a
- * disk's random reads some 90 us longer. The tick and the other processors'
- * interrupts it holds are taken once the processor runs the thread it
- * switched to; taken inside the wait, before the switch, they made each
- * wake of the churn later.
+ * 912-914). A device's completion or a timer's interrupt, which Linux's
+ * poll would take at once, the poll looks for every IDLE_POLL_CHECK_US
+ * (`arch_irq_waiting`), and halts on it, which takes it while the processor
+ * is still marked idle: held to the poll's end, a disk's completion made
+ * each of its random reads some 90 us longer, and a tick held past a kick
+ * was charged to the thread the processor switched to.
  *
  * The length adapts as Linux 6.12.115's haltpoll governor adapts its own
  * (adjust_poll_limit, drivers/cpuidle/governors/haltpoll.c): a wait the
