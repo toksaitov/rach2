@@ -76,8 +76,11 @@ A write with no whole chunk before the end fails with nothing written,
 so on a file under 2 MiB any write past the end does.
 An
 .Xr fallocate 2
-past the end is refused with or without
-.Dv FALLOC_FL_KEEP_SIZE .
+that allocates past the end is refused with or without
+.Dv FALLOC_FL_KEEP_SIZE ,
+but a hole punched with
+.Dv FALLOC_FL_PUNCH_HOLE
+may reach past it, as on Linux.
 .It Dv F_SEAL_WRITE , F_SEAL_FUTURE_WRITE
 Refuse a
 .Xr write 2 ,
