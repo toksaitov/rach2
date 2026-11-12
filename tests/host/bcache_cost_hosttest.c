@@ -8,6 +8,8 @@
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/blockmax_host.c
  * host-deps: tests/host/compat/pressure_host.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
+ * host-deps: tests/host/compat/bkl_held.c
  *
  * The cache counts every buffer a walk of one of its lists reads
  * (`bcache_stat_visits`), and these rows hold that count under bounds that
