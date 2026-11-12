@@ -13381,7 +13381,9 @@ static int32_t do_link(const char *oldname, const char *newname, int follow, int
 
         rc = dir_lock(&parent, leaf, RECHECK_WRITE | RECHECK_NEW);
         if (own) {
+            sleep_lock_subclass(2);
             vfs_node_lock(&src);
+            sleep_lock_subclass(0);
         }
         if (rc == 0) {
             rc = vfs_link(parent.mnt, parent.node, leaf, src.node);

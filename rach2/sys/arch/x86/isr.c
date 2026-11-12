@@ -16,6 +16,7 @@
 #include "../../mm/pressure.h"
 
 #include "../../lib/ksignal.h"
+#include "../../lib/kirq.h"
 #include "../../lib/kstring.h"
 #include "../../proc/process.h"
 #include "../../proc/ptrace.h"
@@ -884,10 +885,14 @@ void isr_paranoid_router(isr_params_t *params)
  * area to update, as Linux's `exit_to_user_mode_loop` acts only on the work
  * its flags name (kernel/entry/common.c:90-127). Interrupts are off. A
  * forked child's first return comes here too, with the depth its fork gave
- * it.
+ * it. The user copies of signal and rseq work run with interrupts on;
+ * after they go off again, a migration or tick during that work makes it
+ * run again, as Linux's exit_to_user_mode_loop does.
  */
 void isr_leave(isr_params_t *params)
 {
+    uint32_t flags;
+
     if (!bkl_frame_pop()) {
         if (!FRAME_USER(params)) {
             return;
@@ -900,11 +905,14 @@ void isr_leave(isr_params_t *params)
         bkl_enter();
     }
     if (FRAME_USER(params)) {
-        proc_tick_signals_own();
-    }
-    deliver_signals(params);
-    if (FRAME_USER(params)) {
-        rseq_return(params);
+        flags = kirq_save();
+        do {
+            proc_tick_signals_own();
+            kirq_restore(flags | 0x200u);
+            deliver_signals(params);
+            rseq_return(params);
+            flags = kirq_save();
+        } while (current_proc->rseq_notify || current_proc->tick_sigs);
         debugreg_resume();
         waketime_return();
     }
