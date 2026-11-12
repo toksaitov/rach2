@@ -757,7 +757,7 @@ static int32_t realtime_set(int64_t seconds, int64_t nanoseconds)
     if (seconds < 0 || nanoseconds < 0 || nanoseconds > 999999999) {
         return -EINVAL;
     }
-    rtc_set_realtime(seconds, (int32_t)nanoseconds);
+    rtc_set_realtime(seconds, (int32_t)nanoseconds, 0);
     return 0;
 }
 
@@ -835,8 +835,9 @@ struct ktimex {
 };
 
 /** Step the real time by `sec` seconds and `nsec` nanoseconds, each
- * earlier when negative, `nsec` less than a second either way. */
-static void realtime_step(int64_t sec, int32_t nsec)
+ * earlier when negative, `nsec` less than a second either way; `slew` as
+ * `rtc_set_realtime` takes it. */
+static void realtime_step(int64_t sec, int32_t nsec, int slew)
 {
     int64_t now, now_ns;
 
@@ -851,7 +852,7 @@ static void realtime_step(int64_t sec, int32_t nsec)
         now++;
     }
     if (now >= 0) {
-        rtc_set_realtime(now, (int32_t)now_ns);
+        rtc_set_realtime(now, (int32_t)now_ns, slew);
     }
 }
 
@@ -871,10 +872,11 @@ static int32_t offset_ns(int64_t v, int nano)
  * reading what a single-shot adjustment has left. This clock has no slew:
  * an offset, at most the half second Linux takes, a single-shot adjustment
  * and ADJ_SETOFFSET step the real time at once, so none is left in
- * progress, and the frequency, the time constant and the errors are kept
- * and reported but change nothing; a tick other than 10000 microseconds is
- * -EINVAL, since the timer's period is fixed. Returns Linux's state,
- * TIME_ERROR while STA_UNSYNC is set and TIME_OK otherwise.
+ * progress; the two offsets, which Linux slews, cancel no
+ * TFD_TIMER_CANCEL_ON_SET timerfd. The frequency, the time constant and the
+ * errors are kept and reported but change nothing; a tick other than 10000
+ * microseconds is -EINVAL, since the timer's period is fixed. Returns
+ * Linux's state, TIME_ERROR while STA_UNSYNC is set and TIME_OK otherwise.
  */
 static int32_t ktimex_adjust(struct ktimex *tx)
 {
@@ -885,7 +887,7 @@ static int32_t ktimex_adjust(struct ktimex *tx)
         return -EPERM;
     }
     if (m == ADJ_OFFSET_SINGLESHOT) {
-        realtime_step(0, offset_ns(tx->offset, 0));
+        realtime_step(0, offset_ns(tx->offset, 0), 1);
     } else if (m != ADJ_OFFSET_SS_READ) {
         if ((m & ADJ_TICK) && tx->tick != NTP_TICK_US) {
             return -EINVAL;
@@ -921,10 +923,10 @@ static int32_t ktimex_adjust(struct ktimex *tx)
             ntp.tai = (int32_t)tx->constant;
         }
         if (m & ADJ_SETOFFSET) {
-            realtime_step(tx->sec, (int32_t)(tx->usec * ((m & ADJ_NANO) ? 1 : 1000)));
+            realtime_step(tx->sec, (int32_t)(tx->usec * ((m & ADJ_NANO) ? 1 : 1000)), 0);
         }
         if (m & ADJ_OFFSET) {
-            realtime_step(0, offset_ns(tx->offset, (ntp.status & STA_NANO) != 0));
+            realtime_step(0, offset_ns(tx->offset, (ntp.status & STA_NANO) != 0), 1);
         }
     }
     rtc_realtime(&sec, &nsec);
@@ -1213,19 +1215,36 @@ static void sleep_begin(uintptr_t urem, int wide)
 
 /**
  * End a sleep a signal cut short before its deadline, the tick `target`: the
- * process runs again, the kernel counts the sleep, and with `rem` the time
- * left to that tick, less how far into the tick in progress the timer is
- * (`rtc_tick_phase`), goes where the call asked (`sleep_rem_put`). Returns
- * -EINTR, or -EFAULT when the remainder cannot be written, as Linux
- * answers.
+ * process runs again, and with `rem` the time left goes where the call asked
+ * (`sleep_rem_put`). The time left is to the sleep's end (`wakeup_ns`) by
+ * the monotonic clock where the sleep would end then, by the interrupt
+ * between ticks (`timer_wakes_between`), as Linux reports the time left to
+ * its hrtimer's expiry (kernel/time/hrtimer.c:2106-2114); otherwise it is to
+ * that tick, less how far into the tick in progress the timer is
+ * (`rtc_tick_phase`). Returns -EINTR, or -EFAULT when the remainder cannot
+ * be written, as Linux answers; 0 when a remainder was asked for and none
+ * is left, by the clock or by the tick, as Linux's do_nanosleep returns 0
+ * for a remainder of 0 or less (kernel/time/hrtimer.c:2107-2111). The
+ * caller counts the sleep as cut short once it returns -EINTR
+ * (`sleep_cut_short`).
  */
 static int32_t nanosleep_interrupted(int rem, uint64_t target)
 {
+    int64_t end = current_proc->wakeup_ns;
+    struct kernel_timespec left;
+
     current_proc->wakeup_tick = 0;
     current_proc->state = PROC_RUNNING;
-    process_count_sleep_cut_short();
-    if (rem) {
-        struct kernel_timespec left;
+    if (!rem) {
+        return -EINTR;
+    }
+    if (end != 0 && timer_wakes_between()) {
+        int64_t to = end - rtc_monotonic_ns();
+        uint32_t rest;
+
+        left.tv_sec = to > 0 ? (long)tick_div((uint64_t)to, 1000000000u, &rest) : 0;
+        left.tv_nsec = to > 0 ? (long)rest : 0;
+    } else {
         uint64_t now;
         uint32_t phase_ns, rest;
         int32_t ns;
@@ -1238,11 +1257,71 @@ static int32_t nanosleep_interrupted(int rem, uint64_t target)
             ns += 1000000000;
         }
         left.tv_nsec = ns > 0 ? ns : 0;
-        if (sleep_rem_put(&left) != 0) {
-            return -EFAULT;
-        }
     }
-    return -EINTR;
+    if (left.tv_sec == 0 && left.tv_nsec == 0 && current_proc->restart.urem != 0) {
+        return 0;
+    }
+    return sleep_rem_put(&left) != 0 ? -EFAULT : -EINTR;
+}
+
+/**
+ * Count the sleep that ends with `rc` as one a signal cut short when `rc` is
+ * -EINTR, and not when its remainder came to none and it returns 0, nor for
+ * -EFAULT (`process_count_sleep_cut_short`, /proc/stat's
+ * sleeps_interrupted). Returns `rc`.
+ */
+static int32_t sleep_cut_short(int32_t rc)
+{
+    if (rc == -EINTR) {
+        process_count_sleep_cut_short();
+    }
+    return rc;
+}
+
+/**
+ * Whether the current sleep's time of the monotonic clock, `wakeup_ns`, has
+ * come. When it has not, the sleep goes on the timer list now, before the
+ * interrupt between ticks can look for it, and that interrupt is armed for
+ * its time (`timer_wake_at`), however far it is, as Linux starts the
+ * sleep's hrtimer when the sleep begins (kernel/time/hrtimer.c:2085-2093),
+ * so that no pass of the timer needs to come before its time to arm it. The
+ * clock decides, not the tick count, which runs behind it by up to half a
+ * tick and the ticks whose pass found the big lock held. The process is
+ * marked blocked, and interrupts are off.
+ */
+static int sleep_time_come(void)
+{
+    int64_t want = current_proc->wakeup_ns, now;
+
+    if (want == 0) {
+        return 0;
+    }
+    now = rtc_monotonic_ns();
+    if (now >= want) {
+        return 1;
+    }
+    proc_timer_update(current_proc);
+    timer_wake_at(want);
+    return 0;
+}
+
+/* Policy: how long a sleep of zero lasts, Linux's default timer slack of a
+ * thread that is not real-time, 50 us, to which a zero relative sleep's
+ * timer may expire. */
+#define SLEEP_SLACK_NS 50000
+
+/**
+ * `sec` seconds and `nsec` nanoseconds since boot as nanoseconds, for a
+ * sleep's `wakeup_ns`; 0, a sleep that ends at its tick, for a time before
+ * boot or one that does not fit, as Linux's ktime_set takes such a time as
+ * KTIME_MAX (include/linux/ktime.h:36-41): one centuries away.
+ */
+static int64_t sleep_ns(int64_t sec, int64_t nsec)
+{
+    if (sec < 0 || sec >= 9223372036ll) {
+        return 0;
+    }
+    return sec * 1000000000ll + nsec;
 }
 
 /**
@@ -1262,11 +1341,22 @@ static int32_t nanosleep_interrupted(int rem, uint64_t target)
  * write fails; a wake by one it does not act on sends it back to sleep with
  * the deadline stored again.
  *
+ * A sleep whose `rt_steps` the caller set, to an absolute time of real time,
+ * returns 1 once the clock has been set since (`rtc_step_count`), for the
+ * caller to count its tick again from the clock as set; the tick wakes it
+ * for that (`proc_wake_sleepers`).
+ *
+ * A sleep whose `wakeup_ns` the caller set, the time of the monotonic clock
+ * it ends at, ends at that time, by the interrupt between ticks
+ * (`sleep_time_come`), as Linux's hrtimer ends it, and not at the tick.
+ *
  * `wchan` names the sleep for /proc/PID/wchan as Linux's wchan names the
  * caller's: the first function on Linux's stack that is not `__sched`.
  */
 static int32_t sleep_until(uint64_t target, int rem, const char *wchan)
 {
+    int32_t rc = 0;
+
     for (;;) {
         uint32_t flags = kirq_save();
 
@@ -1274,7 +1364,13 @@ static int32_t sleep_until(uint64_t target, int rem, const char *wchan)
         current_proc->wakeup_tick = target != 0 ? target : 1u;
         current_proc->wchan = wchan;
         sched_set_current_state(PROC_BLOCKED);
-        if (tick_count() >= target) {
+        if (current_proc->rt_steps != 0 && current_proc->rt_steps != rtc_step_count()) {
+            current_proc->state = PROC_RUNNING;
+            kirq_restore(flags);
+            rc = 1;
+            break;
+        }
+        if (tick_count() >= target || sleep_time_come()) {
             current_proc->state = PROC_RUNNING;
             kirq_restore(flags);
             break;
@@ -1295,7 +1391,7 @@ static int32_t sleep_until(uint64_t target, int rem, const char *wchan)
     }
     current_proc->wakeup_tick = 0;
     current_proc->state = PROC_RUNNING;
-    return 0;
+    return rc;
 }
 
 /** A nonnegative interval as whole ticks, rounded up, so any nonzero
@@ -1330,40 +1426,67 @@ static int time_reached(enum kclock_kind kind, const struct kernel_timespec *whe
 /**
  * Sleep until real time or time since boot, `kind`, reads `when` or later.
  *
- * Both clocks advance with the tick: real time is the boot's epoch, from
- * `rtc_boot_epoch`, plus the time since boot, and time since boot at a tick
+ * Both clocks advance with the tick: real time is the clock's offset, from
+ * `rtc_offset`, to the nanosecond, plus the time since boot, so a deadline
+ * of real time less the offset is one of time since boot, as Linux's
+ * hrtimer subtracts its base's whole offset (kernel/time/hrtimer.c:922,
+ * 2140); and time since boot at a tick
  * is that tick's count in TICK_HZ parts of a second. So the sleep ends at the
  * first tick whose count reaches `when`, and a program that reads the clock
  * then reads `when` or later. Both are read to the microsecond, within the
  * tick, so a time the clock has reached returns at once, before the deadline
  * is rounded up to a tick. The tick count and the time since boot are read
- * as one reading (`tick_now`), since the tick changes both. Returns 0, or
+ * as one reading (`tick_now`), since the tick changes both. A setting of the
+ * real-time clock during a sleep on it wakes the sleep, which counts its
+ * tick again from the clock as set; the step count (`rt_steps`) is read
+ * before the clock, so that a setting between the two is not missed. A step
+ * forward past `when` thus ends the sleep at the next tick, and a step back
+ * keeps it sleeping until the clock reaches `when`, as
+ * Linux's clock_was_set retriggers the hrtimer of an absolute sleep on
+ * CLOCK_REALTIME (kernel/time/hrtimer.c:951-987, 2133-2142). Returns 0, or
  * -EINTR when a signal the process acts on comes first. `wchan` names the
  * sleep, as for `sleep_until`.
  */
 static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_timespec *when,
                                 const char *wchan)
 {
-    uint32_t seconds32, ticks32;
+    uint32_t seconds32, ticks32, steps;
     uint64_t now, base, due;
-    int64_t sec = when->tv_sec;
+    int64_t sec, offset_sec;
+    int32_t rc, nsec, offset_nsec;
 
-    if (time_reached(kind, when)) {
-        return 0;
-    }
-    tick_now(&seconds32, &ticks32, &base);
-    now = (uint64_t)seconds32 * TICK_HZ + ticks32;
-    if (kind == KCLOCK_REAL) {
-        sec -= rtc_boot_epoch();
-    }
-    if (sec < 0) {
-        return 0;
-    }
-    due = tick_span(sec, (uint32_t)when->tv_nsec);
-    if (due <= now) {
-        return 0;
-    }
-    return sleep_until(base + (due - now), 0, wchan);
+    do {
+        steps = rtc_step_count();
+        if (time_reached(kind, when)) {
+            return 0;
+        }
+        tick_now(&seconds32, &ticks32, &base);
+        now = (uint64_t)seconds32 * TICK_HZ + ticks32;
+        sec = when->tv_sec;
+        nsec = (int32_t)when->tv_nsec;
+        if (kind == KCLOCK_REAL) {
+            rtc_offset(&offset_sec, &offset_nsec);
+            sec -= offset_sec;
+            nsec -= offset_nsec;
+            if (nsec < 0) {
+                nsec += 1000000000;
+                sec--;
+            }
+        }
+        if (sec < 0) {
+            return 0;
+        }
+        due = tick_span(sec, (uint32_t)nsec);
+        if (due <= now) {
+            return 0;
+        }
+        current_proc->rt_steps = kind == KCLOCK_REAL ? steps : 0;
+        current_proc->wakeup_ns = sleep_ns(sec, nsec);
+        rc = sleep_until(base + (due - now), 0, wchan);
+        current_proc->wakeup_ns = 0;
+        current_proc->rt_steps = 0;
+    } while (rc == 1);
+    return rc;
 }
 
 static long sleep_resume(isr_params_t *params);
@@ -1371,8 +1494,14 @@ static long sleep_resume(isr_params_t *params);
 /**
  * Sleep to the tick `target` and then, unless `end` has no seconds and no
  * nanoseconds, until time since boot reaches `end`, the deadline
- * `sleep_for` fixed. A signal's remainder is the time left to `target`,
- * and once that tick has come the time left until the clock reaches `end`.
+ * `sleep_for` fixed; the sleep to the tick ends at `end` when that comes
+ * first (`wakeup_ns`). A signal's remainder is the time left to `end` where
+ * the interrupt between ticks ends the sleep, otherwise to `target`, and
+ * once that tick has come the time left until the clock reaches `end`. A
+ * remainder of none, with a place for it, returns 0, as Linux's
+ * do_nanosleep does for a remainder of 0 or less (kernel/time/hrtimer.c:
+ * 2107-2111), and the sleep is counted as cut short only when it returns
+ * -EINTR (`sleep_cut_short`).
  *
  * When a signal cuts the sleep short, the deadline goes into the thread's
  * restart block and the call stands for Linux's ERESTART_RESTARTBLOCK: a
@@ -1387,7 +1516,11 @@ static int32_t sleep_to(uint64_t target, const struct kernel_timespec *end, cons
     int64_t sec, nsec;
     int32_t rc;
 
+    if (end->tv_sec != 0 || end->tv_nsec != 0) {
+        current_proc->wakeup_ns = sleep_ns(end->tv_sec, end->tv_nsec);
+    }
     rc = sleep_until(target, 1, wchan);
+    current_proc->wakeup_ns = 0;
     if (rc == 0 && (end->tv_sec != 0 || end->tv_nsec != 0)) {
         rc = sleep_until_time(KCLOCK_MONO, end, wchan);
         if (rc != 0) {
@@ -1400,7 +1533,10 @@ static int32_t sleep_to(uint64_t target, const struct kernel_timespec *end, cons
                 rem.tv_sec--;
                 rem.tv_nsec += 1000000000L;
             }
-            if (rem.tv_sec < 0) {
+            if (rem.tv_sec < 0 || (rem.tv_sec == 0 && rem.tv_nsec == 0)) {
+                if (b->urem != 0) {
+                    return 0; /* none left: do_nanosleep's rem <= 0 */
+                }
                 rem.tv_sec = 0;
                 rem.tv_nsec = 0;
             }
@@ -1410,6 +1546,7 @@ static int32_t sleep_to(uint64_t target, const struct kernel_timespec *end, cons
         }
     }
     if (rc == -EINTR) {
+        sleep_cut_short(rc);
         b->fn = sleep_resume;
         b->tick = target;
         b->sec = end->tv_sec;
@@ -1435,16 +1572,20 @@ static int32_t sleep_to(uint64_t target, const struct kernel_timespec *end, cons
  * clock showed it had lasted `req`. A sleep that `tick_span` cuts ends at
  * its tick.
  *
- * A zero interval blocks until the next tick, as Linux arms a timer even
- * for a zero relative sleep; a caller can give a woken thread time to run.
+ * A zero interval blocks for SLEEP_SLACK_NS and ends between ticks, as
+ * Linux arms a zero relative sleep's timer to expire within its default
+ * slack (kernel/time/hrtimer.c:2141, init/init_task.c:142), so a caller can
+ * give a woken thread time to run; where there is no interrupt between
+ * ticks, it lasts to the first tick after that time.
  *
- * A signal's remainder is the time left to the deadline tick, so a caller
- * that sleeps again for the remainder ends at the first sleep's deadline,
- * and later by the time it takes to call again; once that tick has come, it
- * is the time left until the clock reaches the end. A remainder that cannot
- * be written makes the call -EFAULT, and a sleep that completes writes none.
- * A signal that runs no handler resumes the sleep to the same deadline
- * (`sleep_to`).
+ * A signal's remainder is the time left to the end where the interrupt
+ * between ticks ends the sleep, and otherwise to the deadline tick, so a
+ * caller that sleeps again for the remainder ends where the first sleep
+ * would have, and later by the time it takes to call again; once that tick
+ * has come, it is the time left until the clock reaches the end. A
+ * remainder that cannot be written makes the call -EFAULT, and a sleep that
+ * completes writes none. A signal that runs no handler resumes the sleep to
+ * the same deadline (`sleep_to`).
  */
 static int32_t sleep_for(const struct kernel_timespec *req)
 {
@@ -1455,11 +1596,18 @@ static int32_t sleep_for(const struct kernel_timespec *req)
 
     end.tv_sec = 0;
     end.tv_nsec = 0;
+    rtc_monotonic(&sec, &nsec);
     /* Linux's do_nanosleep is __sched, so wchan shows its caller. */
     if (req->tv_sec == 0 && req->tv_nsec == 0) {
+        nsec += SLEEP_SLACK_NS;
+        if (nsec >= 1000000000) {
+            nsec -= 1000000000;
+            sec++;
+        }
+        end.tv_sec = (long)sec;
+        end.tv_nsec = (long)nsec;
         return sleep_to(tick_count() + 1u, &end, "hrtimer_nanosleep");
     }
-    rtc_monotonic(&sec, &nsec);
     rtc_tick_phase(&now, &phase_ns);
     us = phase_ns / 1000u + ((uint32_t)req->tv_nsec + 999u) / 1000u;
     ticks = tick_span(req->tv_sec, 0) + (us + (TICK_US - 1u)) / TICK_US;
@@ -1532,7 +1680,7 @@ static int32_t sleep_until_cpu(int32_t clk, uint64_t due, int rem)
 static int32_t sleep_cpu_for(int32_t clk, uint64_t due)
 {
     struct restart_block *b = &current_proc->restart;
-    int32_t rc = sleep_until_cpu(clk, due, 1);
+    int32_t rc = sleep_cut_short(sleep_until_cpu(clk, due, 1));
 
     if (rc == -EINTR) {
         b->fn = sleep_resume;
@@ -1659,7 +1807,7 @@ long clock_nanosleep_core(int32_t clk, unsigned long flags, const struct kernel_
     } else {
         rc = sleep_until_time(c.kind, req, "hrtimer_nanosleep");
     }
-    if (rc == -EINTR) {
+    if (sleep_cut_short(rc) == -EINTR) {
         /* An absolute sleep restarts with its own arguments. */
         current_proc->restart_kind = RESTART_NOHAND;
     }
@@ -2975,7 +3123,7 @@ long sys_syslog(isr_params_t *params)
         }
         while ((syslog_read_at = klog_clamp(syslog_read_at)) == klog_written()) {
             if (sleep_until(tick_count() + MS_TO_TICKS(100), 0, "syslog_print") != 0) {
-                return -EINTR;
+                return sleep_cut_short(-EINTR);
             }
         }
         return syslog_copy(ubuf, (uint32_t)len, &syslog_read_at);

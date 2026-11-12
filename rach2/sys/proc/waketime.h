@@ -41,6 +41,11 @@ uint32_t waketime_clock(void);
  * its first deadline, including a later block before returning to user. */
 void waketime_expire(struct process *p, uint64_t due);
 
+/** Start a timed wake of `p` as `waketime_expire` does, for a deadline that
+ * is a time and not a tick, the clock `late_ns` nanoseconds past it, as the
+ * interrupt between ticks finds one (`proc_wake_due`, timerfd.c). */
+void waketime_expire_late(struct process *p, int64_t late_ns);
+
 /** Account a change to phase 1 (queued), 2 (running), or 3 (blocked again).
  * For a queued thread `cpu` is its destination. The big lock is held with
  * interrupts off; a thread with no timed wake costs no clock reading. */

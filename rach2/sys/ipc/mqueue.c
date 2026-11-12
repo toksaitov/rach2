@@ -40,6 +40,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/ksignal.h"
 #include "../lib/kstring.h"
+#include "../rtc.h"
 #include "../timer.h"
 #include "../syscall.h"
 #include "../syscall_internal.h"
@@ -555,37 +556,82 @@ long sys_mq_unlink(struct isr_params *params)
 }
 
 /* What a sender or a receiver sleeps for: a change of the queue, or the
- * deadline. `from` is the queue's `gen` when the sleep began, and `target`
- * the deadline, a tick count, when `timed`. */
+ * deadline. `from` is the queue's `gen` when the sleep began; with `timed`,
+ * the deadline is the time `sec` and `nsec` of real time, and `target` its
+ * tick, counted at the clock's step count `steps` (`mq_count`). */
 struct mq_wait {
     const struct mqueue *q;
     uint32_t from;
     int timed;
     uint64_t target;
+    uint32_t steps;
+    int64_t sec;
+    int64_t nsec;
 };
 
-/** The wait condition of the `struct mq_wait` at `arg`. */
+/** Count the tick of `w`'s deadline from the real-time clock now, after the
+ * clock's step count, which is read first so that a setting between the two
+ * readings leaves it behind; a time already past is the tick now. */
+static void mq_count(struct mq_wait *w)
+{
+    int64_t now, now_ns, dsec, dns;
+
+    w->steps = rtc_step_count();
+    get_current_time(&now, &now_ns);
+    dsec = w->sec - now;
+    dns = w->nsec - now_ns;
+    if (dns < 0) {
+        dns += 1000000000;
+        dsec--;
+    }
+    w->target = tick_count();
+    if (dsec >= 0) {
+        w->target += tick_span(dsec, (uint32_t)dns);
+    }
+}
+
+/** The wait condition of the `struct mq_wait` at `arg`: a change, the
+ * deadline's tick, or a setting of the clock since it was counted. */
 static int mq_wait_done(void *arg)
 {
     const struct mq_wait *w = arg;
 
-    return w->q->gen != w->from || (w->timed && tick_count() >= w->target);
+    return w->q->gen != w->from ||
+           (w->timed && (tick_count() >= w->target || w->steps != rtc_step_count()));
 }
 
-/** Sleep on `q` for what `w` waits for: 0 for a change, -ETIMEDOUT at the
- * deadline, -EINTR for a signal. */
+/**
+ * Sleep on `q` for what `w` waits for: 0 for a change, -ETIMEDOUT at the
+ * deadline, -EINTR for a signal. A setting of the real-time clock wakes the
+ * sleep at the next tick (`rt_steps`), which counts the deadline's tick again
+ * from the clock as set and sleeps on while the time is still to come, as
+ * Linux's wq_sleep waits on an hrtimer of CLOCK_REALTIME that clock_was_set
+ * moves (ipc/mqueue.c:728-729, kernel/time/hrtimer.c:951-987).
+ */
 static int32_t mq_sleep(struct mqueue *q, struct mq_wait *w)
 {
     int rc;
 
     w->from = q->gen;
-    current_proc->wakeup_tick = w->timed ? (w->target != 0 ? w->target : 1u) : 0;
-    rc = wq_wait_event(&q->wq, mq_wait_done, w);
-    current_proc->wakeup_tick = 0;
-    if (q->gen != w->from) {
-        return 0;
+    for (;;) {
+        if (w->timed && w->steps != rtc_step_count()) {
+            mq_count(w);
+        }
+        current_proc->wakeup_tick = w->timed ? (w->target != 0 ? w->target : 1u) : 0;
+        current_proc->rt_steps = w->timed ? w->steps : 0;
+        rc = wq_wait_event(&q->wq, mq_wait_done, w);
+        current_proc->wakeup_tick = 0;
+        current_proc->rt_steps = 0;
+        if (q->gen != w->from) {
+            return 0;
+        }
+        if (rc != 0) {
+            return -EINTR;
+        }
+        if (w->steps == rtc_step_count()) {
+            return -ETIMEDOUT;
+        }
     }
-    return rc != 0 ? -EINTR : -ETIMEDOUT;
 }
 
 /**
@@ -600,7 +646,7 @@ static int32_t mq_sleep(struct mqueue *q, struct mq_wait *w)
  */
 static int32_t mq_deadline(const void __user *uts, int wide, struct mq_wait *w)
 {
-    int64_t sec, nsec, now, now_ns, dsec, dns;
+    int64_t sec, nsec;
     long tsl[2];
     int64_t ts64[2];
 
@@ -635,17 +681,9 @@ static int32_t mq_deadline(const void __user *uts, int wide, struct mq_wait *w)
     if (sec < 0 || nsec < 0 || nsec >= 1000000000) {
         return -EINVAL;
     }
-    get_current_time(&now, &now_ns);
-    dsec = sec - now;
-    dns = nsec - now_ns;
-    if (dns < 0) {
-        dns += 1000000000;
-        dsec--;
-    }
-    w->target = tick_count();
-    if (dsec >= 0) {
-        w->target += tick_span(dsec, (uint32_t)dns);
-    }
+    w->sec = sec;
+    w->nsec = nsec;
+    mq_count(w);
     return 0;
 }
 

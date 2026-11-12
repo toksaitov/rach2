@@ -161,6 +161,56 @@ int timer_tick_shared(void);
 uint32_t timer_late_passes(void);
 
 /**
+ * Have this processor's timer interrupt at `ns`, nanoseconds since boot on
+ * the monotonic clock, besides its ticks, so that a timed sleep or a timer
+ * whose time falls between two ticks ends at that time, as Linux's hrtimers
+ * end one, and not at the tick after it. A sleep or a timer asks when it is
+ * set, however far its time, as Linux starts an hrtimer then. The interrupt
+ * makes the pass `timer_hr_pass` describes. The processor keeps the
+ * earliest time asked for until an interrupt serves it; every pass, that
+ * interrupt's and each tick's, then asks again for each time still to come,
+ * so a time an earlier one put aside is armed once that is served
+ * (apictimer.c). Nothing is armed where the local APIC's timer is not the
+ * tick or before a reference keeps the clock (`timer_tick_shared`), whose
+ * clock the timer's own count then is. Any context; interrupts are left as
+ * they were.
+ */
+void timer_wake_at(int64_t ns);
+
+/**
+ * Begin a pass over many sleepers or timers on this processor, during which
+ * `timer_wake_at` only keeps the earliest time asked of it, until the
+ * matching `timer_wake_release` programs the timer once for that time, as
+ * Linux's hrtimer_interrupt sets in_hrtirq so that a timer started by a
+ * callback does not program the device, and programs the next event once
+ * after the queues have run (kernel/time/hrtimer.c:907, 1863-1893). Passes
+ * nest. Interrupts are off from the hold through its release, so that both
+ * run on the same processor.
+ */
+void timer_wake_hold(void);
+
+/** End the pass `timer_wake_hold` began; the outermost release asks
+ * `timer_wake_at` for the earliest time asked during it. Interrupts are
+ * off. */
+void timer_wake_release(void);
+
+/** Whether `timer_wake_at` arms anything, so that a sleep ends at its time
+ * and not at its tick: the local APIC's timer is the tick, has a vector for
+ * its interrupts between ticks, and a reference keeps the clock. Any
+ * context. */
+int timer_wakes_between(void);
+
+/**
+ * The pass of an interrupt `timer_wake_at` armed: make ready the timed
+ * sleepers whose time of the monotonic clock has come before their tick
+ * (`proc_wake_due`), and expire the timers whose clock has reached their
+ * time (`timerfd_due`), each of which arms again every time still to come,
+ * however far. kernel.c defines it; the caller holds the big lock with
+ * interrupts off.
+ */
+void timer_hr_pass(void);
+
+/**
  * Whether the clock's arithmetic is right, on fixed readings: the period
  * accounting of `timer_now_us` and `timer_tick_clock` without a reference,
  * and the reference's count of whole ticks with a fraction of a count in

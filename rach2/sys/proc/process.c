@@ -9,10 +9,12 @@
 #include "../panic.h"
 #include "../mm/kheap.h"
 #include "../lib/kirq.h"
+#include "../lib/spinlock.h"
 #include "../lib/lockdep.h"
 #include "sched.h"
 #include "tgroup.h"
 #include "seccomp.h"
+#include "../rtc.h"
 #include "../timer.h"
 #include "ns.h"
 #include "../tty/tty.h"
@@ -694,33 +696,81 @@ void free_process(process_t *proc)
  * lets the lock go and walks the list again. */
 #define WAKE_BATCH 16
 
+/* The reasons a pass wakes a timed sleeper for (`timer_pass`): its tick, a
+ * setting of the real-time clock (`rt_steps`), or its time of the monotonic
+ * clock (`wakeup_ns`). */
+#define PASS_TICK 1
+#define PASS_TIME 2
+
 /**
- * The timed sleepers are nanosleep, poll with a deadline and a wait-queue
- * wait with one, such as the kernel's ping. `signal_post` makes a blocked
- * process ready too: a nanosleep it wakes then ends with -EINTR if it runs
- * again before its deadline tick and the process acts on SIGALRM, and
- * returns 0 if it first runs at that tick or later; a wait that goes on
- * arms its deadline again. The tick count is 64 bits wide and does not wrap,
- * so a deadline is compared with it as it stands.
- *
- * The pass runs without the big lock, in three steps under the run queues'
- * lock, as Linux's timer base expires its timers under its own lock and
- * wakes each sleeper through `try_to_wake_up` (kernel/time/timer.c:1772-
- * 1789, 2389-2410): the records due are collected under the timer list's
- * lock, which is let go, and then each is woken as `sched_wake_due` wakes
- * it, its state and deadline tested again, so a wait queue's waker and the
- * tick do not both make one ready, and marked woken, as a wait queue's
- * wake marks it, so that the current thread's slice gives way to it
- * (`sched_tick`). The run queues' lock is held across the three, so that
- * no record collected is freed before its wake: `free_process` takes that
- * lock (`sched_forget`) before it frees. A real-time timer that is due is
- * marked for a holder of the big lock (`proc_tick_signal`), since a signal
- * is posted under it, and stays due until then; `alarm_due` keeps the next
- * passes from marking it again. The interrupts the wakes ask for go out
- * after the lock.
+ * Whether the pass for the reasons `why`, at the tick `now`, the real-time
+ * clock's step count `steps` and the monotonic clock's reading `clock`, is
+ * to wake `p`. The caller holds the run queues' lock, under which the state
+ * and the deadline are tested, so that the test holds until the wake.
  */
-void proc_wake_sleepers(uint64_t now)
+static int timer_due(const process_t *p, int why, uint64_t now, uint32_t steps, int64_t clock)
 {
+    if (p->state != PROC_BLOCKED || p->wakeup_tick == 0) {
+        return 0;
+    }
+    if ((why & PASS_TICK) &&
+        (now >= p->wakeup_tick || (p->rt_steps != 0 && p->rt_steps != steps))) {
+        return 1;
+    }
+    return (why & PASS_TIME) && p->wakeup_ns != 0 && clock >= p->wakeup_ns;
+}
+
+/**
+ * Wake `p`, which `timer_due` says is due: as `sched_wake_due_locked` at its
+ * tick, recording the expiry (`waketime_expire`); at its time of the
+ * monotonic clock, recording the lateness read at the wake, and not taken
+ * from the pass's one reading, which it shares with the sleepers before
+ * `p` (`waketime_expire_late`); and at a setting of the real-time clock,
+ * with no record, the wait then counting its tick again from the clock as
+ * set. Returns the processor to interrupt, or -1. The caller holds the run
+ * queues' lock.
+ */
+static int timer_wake(process_t *p, uint64_t now)
+{
+    if (now >= p->wakeup_tick) {
+        return sched_wake_due_locked(p, now);
+    }
+    if (p->wakeup_ns != 0) {
+        int64_t late = rtc_monotonic_ns() - p->wakeup_ns;
+
+        if (late >= 0) {
+            waketime_expire_late(p, late);
+        }
+    }
+    return sched_wake_time_locked(p);
+}
+
+/**
+ * A pass over the timer list for the reasons `why`, at the tick `now`. It
+ * runs without the big lock, in three steps under the run queues' lock, as
+ * Linux's timer base expires its timers under its own lock and wakes each
+ * sleeper through `try_to_wake_up` (kernel/time/timer.c:1772-1789,
+ * 2389-2410): the records due are collected under the timer list's lock,
+ * which is let go, and then each is woken (`timer_wake`), its state and
+ * deadline tested under the run queues' lock, so a wait queue's waker and
+ * the pass do not both make one ready, and marked woken, as a wait queue's
+ * wake marks it, so that the current thread's slice gives way to it
+ * (`sched_tick`). The run queues' lock is held across the three, so that no
+ * record collected is freed before its wake: `free_process` takes that lock
+ * (`sched_forget`) before it frees. A sleeper with a time of the monotonic
+ * clock still to come has the interrupt between ticks armed for it again
+ * (`timer_wake_at`), however far, since a processor keeps only the earliest
+ * time asked of it. At the tick, a real-time timer that is due is marked
+ * for a holder of the big lock (`proc_tick_signal`), since a signal is
+ * posted under it, and stays due until then; `alarm_due` keeps the next
+ * passes from marking it again. The interrupts the wakes ask for go out
+ * after the lock. The clocks are read once a pass; the clock decides a
+ * time, not the tick count, which runs behind it by up to half a tick.
+ */
+static void timer_pass(int why, uint64_t now)
+{
+    uint32_t steps = rtc_step_count();
+    int64_t clock = rtc_monotonic_ns();
     process_t *due[WAKE_BATCH];
     process_t *p;
     int n, i;
@@ -734,20 +784,22 @@ void proc_wake_sleepers(uint64_t now)
         work_count[3]++;
         for (p = timers; p; p = p->timer_next) {
             work_count[2]++;
-            if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 && now >= p->wakeup_tick) {
+            if (timer_due(p, why, now, steps, clock)) {
                 if (n == WAKE_BATCH) {
                     break;
                 }
                 due[n++] = p;
+            } else if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 && p->wakeup_ns != 0) {
+                timer_wake_at(p->wakeup_ns);
             }
-            if (p->alarm_tick != 0 && now >= p->alarm_tick && !p->alarm_due) {
+            if ((why & PASS_TICK) && p->alarm_tick != 0 && now >= p->alarm_tick && !p->alarm_due) {
                 p->alarm_due = 1;
                 proc_tick_signal(p, SIGALRM);
             }
         }
         spin_unlock(&timer_list_lock);
         for (i = 0; i < n; i++) {
-            int kick = sched_wake_due_locked(due[i], now);
+            int kick = timer_wake(due[i], now);
 
             if (kick >= 0) {
                 kicks |= (uint64_t)1 << kick;
@@ -756,6 +808,37 @@ void proc_wake_sleepers(uint64_t now)
         sched_lock_give(flags);
         sched_kick_cpus(kicks);
     } while (n == WAKE_BATCH);
+}
+
+/**
+ * The timed sleepers are nanosleep, poll with a deadline and a wait-queue
+ * wait with one, such as the kernel's ping. `signal_post` makes a blocked
+ * process ready too: a nanosleep it wakes then ends with -EINTR if it runs
+ * again before its deadline tick and the process acts on SIGALRM, and
+ * returns 0 if it first runs at that tick or later; a wait that goes on
+ * arms its deadline again. The tick count is 64 bits wide and does not wrap,
+ * so a deadline is compared with it as it stands. A sleep to an absolute
+ * time of real time is woken at the first tick after a setting of the clock
+ * (`rt_steps`), and counts its tick again from the clock as set. A sleep
+ * with a time of the monotonic clock (`wakeup_ns`) is woken once the clock
+ * reaches it, and has the interrupt between ticks armed for it again. The
+ * pass is `timer_pass`'s.
+ */
+void proc_wake_sleepers(uint64_t now)
+{
+    timer_pass(PASS_TICK | PASS_TIME, now);
+}
+
+/**
+ * A sleeper woken here is made ready as the tick makes one, and finds its
+ * time come when it runs (`sleep_until`, syscall.c). One whose time is
+ * still ahead, since the interrupt came a few counts early or was armed for
+ * another's time, has its time armed again. The pass is `timer_pass`'s, for
+ * the times alone, and reads the clock itself.
+ */
+void proc_wake_due(void)
+{
+    timer_pass(PASS_TIME, tick_count());
 }
 
 uint64_t proc_alarm_at(uint64_t now, uint64_t ticks)

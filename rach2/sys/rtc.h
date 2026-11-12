@@ -102,6 +102,9 @@ void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds);
  * Setting the clock does not move it. */
 void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds);
 
+/** `rtc_monotonic` as nanoseconds since boot. */
+int64_t rtc_monotonic_ns(void);
+
 /** The time since boot to the last tick, without the timer's place within
  * it: the coarse monotonic clock, which reads no timer; the TSC's clock as
  * of its last tick while that one runs. */
@@ -123,10 +126,27 @@ uint64_t rtc_ticks_now(void);
  * Make the real time `seconds` and `nanoseconds` now, as clock_settime,
  * settimeofday and stime do for a privileged caller; the caller checks the
  * privilege. Real time goes on from it at the tick's rate, its floor starts
- * over, and `rtc_boot_epoch` moves by the same step. The machine's clock is
+ * over, and `rtc_boot_epoch` moves by the same step. The timers of real
+ * time are told (`timerfd_clock_was_set`), and the step count moves on
+ * (`rtc_step_count`). With `slew`, the step stands for adjtimex's
+ * ADJ_OFFSET or ADJ_OFFSET_SINGLESHOT, which Linux slews and never reports
+ * as a setting (kernel/time/ntp.c:754-755, kernel/time/timekeeping.c:
+ * 2490-2532): the deadlines are counted again, since this clock does jump,
+ * but no TFD_TIMER_CANCEL_ON_SET timerfd is canceled. The machine's clock is
  * not written (`rtc_write_clock`).
  */
-void rtc_set_realtime(int64_t seconds, int32_t nanoseconds);
+void rtc_set_realtime(int64_t seconds, int32_t nanoseconds, int slew);
+
+/**
+ * The count of the settings of the real-time clock, never 0, which moves on
+ * as `rtc_set_realtime` stores the new time. A sleep to an absolute time of
+ * real time reads it before the clock, counts its tick from the clock, and
+ * keeps it in `rt_steps` (proc/process.h); a later setting makes the two
+ * differ, the timer tick wakes the sleep, and the sleep counts its tick again
+ * from the clock as set, as Linux's clock_was_set moves the hrtimers of the
+ * real-time base (kernel/time/hrtimer.c:951-987).
+ */
+uint32_t rtc_step_count(void);
 
 /**
  * Read the machine's clock now, as the boot reads it: two samples that agree,

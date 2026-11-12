@@ -8,8 +8,9 @@
  * first expiration, relative or absolute on its clock, and an interval; a
  * read of eight bytes returns the expirations since the last read and waits
  * while there are none; poll and epoll report it readable while there are
- * some. The kernel keeps time in ticks of TICK_HZ, so an expiration is
- * rounded up to a tick. The tick handler calls `timerfd_tick`.
+ * some. A timer expires when its clock reaches its time: the tick handler
+ * calls `timerfd_tick`, and a time between two ticks is armed on the
+ * timer's interrupt between them, which calls `timerfd_due`.
  */
 
 struct isr_params;
@@ -25,16 +26,19 @@ long sys_timerfd_create(struct isr_params *params);
  * struct itimerspec and the address for the old one, or 0. The setting arms
  * the timer, at a time absolute on its clock under TFD_TIMER_ABSTIME, or
  * disarms it for a first expiration of zero, and drops the expirations not
- * read. TFD_TIMER_CANCEL_ON_SET is taken and does nothing. Returns 0,
- * -EBADF, -EINVAL for a descriptor that is not a timerfd, another flag or a
- * time out of range, or -EFAULT.
+ * read. An absolute time of CLOCK_REALTIME moves with a setting of that
+ * clock (`timerfd_clock_was_set`). TFD_TIMER_CANCEL_ON_SET with
+ * TFD_TIMER_ABSTIME on CLOCK_REALTIME makes the next read after a setting of
+ * the clock fail with ECANCELED, and the next setting arm the timer and fail
+ * with it. Returns 0, -EBADF, -EINVAL for a descriptor that is not a
+ * timerfd, another flag or a time out of range, -ECANCELED, or -EFAULT.
  */
 long sys_timerfd_settime(struct isr_params *params);
 
 /** timerfd_gettime(2) takes the descriptor and the address for its struct
- * itimerspec: the time to the next expiration and the interval, both zero
- * while it is disarmed. Returns 0, -EBADF, -EINVAL for a descriptor that is
- * not a timerfd, or -EFAULT. */
+ * itimerspec: the time to the next expiration, zero while it is disarmed,
+ * and the interval it was last set with. Returns 0, -EBADF, -EINVAL for a
+ * descriptor that is not a timerfd, or -EFAULT. */
 long sys_timerfd_gettime(struct isr_params *params);
 
 /** timerfd_settime with i386's struct of 64-bit times, the time64 call. */
@@ -46,10 +50,13 @@ long sys_timerfd_gettime64(struct isr_params *params);
 /*
  * POSIX timers, timer_create's, which share the timer of a timerfd: each
  * belongs to its process, by an id from 0, and its expiration posts a
- * signal with SI_TIMER, its id, its value and the overrun, the expirations
- * it went on to count while the signal was pending, to the process or, for
- * SIGEV_THREAD_ID, one of its threads, or nothing for SIGEV_NONE. A process
- * keeps at most PTIMER_MAX; exec and the end of the process delete them.
+ * signal with SI_TIMER, its id, its value and the overrun, every interval
+ * that ended after the first expiration and before the signal was taken,
+ * pending or not, under the setting in force when it is taken, to the
+ * process or, for SIGEV_THREAD_ID, one of its threads, or nothing for
+ * SIGEV_NONE. A process keeps at most PTIMER_MAX, deleted timers whose
+ * notifications wait to be posted among them; exec and the end of the
+ * process delete them all, and exec discards their pending signals.
  */
 #define PTIMER_MAX 64
 
@@ -71,12 +78,13 @@ long sys_timer_create(struct isr_params *params);
 
 /** timer_settime(2) takes the id, the flags, of which TIMER_ABSTIME is the
  * one, the address of the new struct itimerspec and the address for the old
- * one, or 0, and sets the timer as timerfd_settime does. The old setting's
- * first expiration not yet signalled is signalled, and the overrun its
- * later intervals gave the timer's pending signal is taken back; the rest of
- * that signal's overrun stays. Returns 0, -EINVAL for an id the process does
- * not have, another flag, a null setting or a time out of range, or
- * -EFAULT. */
+ * one, or 0, and sets the timer as timerfd_settime does. An expiration of
+ * the old setting that the tick counted and no holder of the big lock has
+ * signalled yet is signalled first, as Linux signals it at the expiry; the
+ * old setting's later expirations are dropped, and a signal of it still
+ * pending forwards nothing when taken. Returns 0, -EINVAL for an id the
+ * process does not have, another flag, a null setting or a time out of
+ * range, or -EFAULT. */
 long sys_timer_settime(struct isr_params *params);
 
 /** timer_gettime(2) takes the id and the address for the timer's struct
@@ -90,21 +98,31 @@ long sys_timer_settime64(struct isr_params *params);
 /** timer_gettime with i386's struct of 64-bit times, the time64 call. */
 long sys_timer_gettime64(struct isr_params *params);
 
-/** timer_getoverrun(2) takes the id. Returns the overrun the later
- * intervals of the timer's setting gave its last signal, at most 0x7FFFFFFF,
- * and 0 from a timer_settime until the next signal, or -EINVAL for an id the
- * process does not have. */
+/** timer_getoverrun(2) takes the id. Returns the overrun the setting in
+ * force counted for the timer's last periodic signal delivered, at most
+ * 0x7FFFFFFF, or -EINVAL for an id the process does not have. */
 long sys_timer_getoverrun(struct isr_params *params);
 
-/** timer_delete(2) takes the id and deletes the timer, first ending its
- * setting as timer_settime does. Returns 0, or -EINVAL for an id the
- * process does not have. */
+/** timer_delete(2) takes the id and deletes the timer, whose notification
+ * that waits for another sender's signal of its number is posted once that
+ * signal is taken, with its own overrun. Returns 0, or -EINVAL for an id
+ * the process does not have. */
 long sys_timer_delete(struct isr_params *params);
 
-/** Delete the POSIX timers of `tg`, at an exec, which first ends each
- * one's setting as timer_settime does, and when its last thread ends,
- * which posts nothing. The caller holds the big lock. */
+/** Delete the POSIX timers of `tg` when its last thread ends, and the
+ * notifications of deleted ones that still wait, as Linux's exit_itimers
+ * (kernel/exit.c:919). */
 void ptimer_delete_all(struct tgroup *tg);
+
+/** Delete the POSIX timers of the process of `self`, the one thread left
+ * at an exec, as `ptimer_delete_all` does, and discard their signals still
+ * pending, as Linux's posixtimer_exec (fs/exec.c:1220-1229). */
+void ptimer_exec(struct process *self);
+
+/** Discard the waiting notifications of `tg`'s POSIX timers of the signals
+ * `bits`, which have just been discarded from the process and its threads,
+ * and free the deleted timers they kept; with interrupts off. */
+void ptimer_discard(struct tgroup *tg, uint64_t bits);
 
 /** Count the expirations due by the tick `now`, and wake the readers or
  * leave the signals for a holder of the big lock to post
@@ -120,6 +138,35 @@ int ptimer_posts_due(void);
 /** Post the signals of the POSIX timers that expired since the last call,
  * in the order they expired. The caller holds the big lock. */
 void ptimer_post_due(void);
+
+struct k_siginfo;
+
+/** After the signal `signo` of the process `tg`, whose information `info`
+ * is, has been taken: a periodic POSIX timer's signal of the setting in
+ * force has that setting's expirations past the one it stands for added to
+ * its overrun in `info`, which timer_getoverrun then reports, and the timer
+ * moved past the clock and armed between ticks again, as Linux's
+ * posixtimer_rearm restarts a timer at the delivery of its signal
+ * (kernel/time/posix-timers.c:258-279); and the timers' notifications that
+ * waited for that signal number are posted, oldest first.
+ * Process context, with interrupts off from the signal's dequeue through
+ * the call, so that no tick posts the timer's signal again before its
+ * overrun is counted, as dequeue_signal calls posixtimer_rearm before it
+ * lets interrupts on (kernel/signal.c:682-699). */
+void ptimer_rearm(struct tgroup *tg, int signo, struct k_siginfo *info);
+
+/** Expire the timers armed between ticks whose clock has reached their
+ * time, leaving the POSIX timers' signals for `ptimer_post_due`, and arm the
+ * rest again, from the interrupt between ticks (`timer_hr_pass`), with
+ * interrupts off. */
+void timerfd_due(void);
+
+/** Count the ticks of the timers of CLOCK_REALTIME again, and with `cancel`
+ * cancel the timerfds set to be canceled, after a step of that clock; called
+ * by `rtc_set_realtime`, with interrupts on or off, after it lets go of the
+ * clock's lock. `cancel` is 0 for adjtimex's slewing offsets, which Linux
+ * does not count as settings. */
+void timerfd_clock_was_set(int cancel);
 
 /**
  * The clocks' part, in syscall.c: the time on clock `clk` as clock_gettime

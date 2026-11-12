@@ -334,10 +334,12 @@ static int tick_arrives(uint32_t before)
  * Once interrupts are on, the tick must arrive within 50 ms, measured by
  * the 8254's counter or the reference counter, which need no interrupt.
  * With the I/O APIC, a local APIC timer measured wrong or one that does not
- * interrupt gives way to the 8254 through the I/O APIC. With the 8259, a
- * tick that does not arrive is a `LINT0` that the firmware or the emulator
- * masked, and the entry is written again; without that a masked entry would
- * show as a machine that boots and never ticks, with nothing said. Under
+ * interrupt gives way to the 8254 through the I/O APIC; one that ticks
+ * also takes its vector for interrupts between ticks (apictimer.c). With
+ * the 8259, a tick that does not arrive is a `LINT0` that the firmware or
+ * the emulator masked, and the entry is written again; without that a
+ * masked entry would show as a machine that boots and never ticks, with
+ * nothing said. Under
  * `rach2.tscreliable` the TSC is measured here, before the first tick, so
  * that the tick makes it the reference (pit.c).
  */
@@ -388,6 +390,9 @@ void platform_timer_start(isr_handler_t tick)
 
     if (apic) {
         if (tick_arrives((uint32_t)kernel_ticks)) {
+            if (tick_local) {
+                apic_hr_init(tick_counts);
+            }
             return;
         }
         if (tick_local) {

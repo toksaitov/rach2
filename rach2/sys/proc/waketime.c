@@ -56,26 +56,25 @@ static void account(struct wake_record *w, uint32_t now)
     w->since = now;
 }
 
-/** Start a blocked user thread's first timed wake at `due`, under the run
- * queues' lock with interrupts off, so that a wake from elsewhere does not
- * move the stage between the test and the start; an unfinished wake keeps
- * its first deadline.
- * Kernel threads have no user return at which to complete a record. */
-void waketime_expire(process_t *p, uint64_t due)
+/** Whether `p` starts a timed wake record: a blocked user thread with no
+ * wake unfinished. Kernel threads have no user return at which to complete
+ * a record. */
+static int wake_starts(const process_t *p)
+{
+    return p->mm && p->state == PROC_BLOCKED && !p->wake_time.phase;
+}
+
+/** Start `p`'s timed wake `late` microseconds after its deadline, split by
+ * this processor's last timer interrupt into the interrupt's delay, its wait
+ * for the big lock and the timer's work since (`_irq_router`). */
+static void wake_start(process_t *p, uint32_t late)
 {
     struct wake_record *w = &p->wake_time;
     struct percpu *cpu = this_cpu();
-    uint64_t ticks;
-    uint32_t ns, now, late, before_lock, before_irq;
+    uint32_t now = waketime_clock();
+    uint32_t before_lock = now - cpu->wake_irq_locked;
+    uint32_t before_irq = now - cpu->wake_irq_start;
 
-    if (!p->mm || p->state != PROC_BLOCKED || w->phase) {
-        return;
-    }
-    rtc_tick_phase(&ticks, &ns);
-    now = waketime_clock();
-    late = (uint32_t)(ticks - due) * TICK_US + ns / 1000u;
-    before_lock = now - cpu->wake_irq_locked;
-    before_irq = now - cpu->wake_irq_start;
     if (before_lock > late) {
         before_lock = late;
     }
@@ -88,6 +87,50 @@ void waketime_expire(process_t *p, uint64_t due)
     w->part[WAKE_TIMER] = before_lock;
     w->phase = 4;
     w->since = now;
+}
+
+/** Start a blocked user thread's first timed wake at `due`, under the run
+ * queues' lock with interrupts off, so that a wake from elsewhere does not
+ * move the stage between the test and the start; an unfinished wake keeps
+ * its first deadline. A tick not yet counted, as at a deadline the clock
+ * reached first, is no delay. */
+void waketime_expire(process_t *p, uint64_t due)
+{
+    uint64_t ticks;
+    uint32_t ns;
+
+    if (!wake_starts(p)) {
+        return;
+    }
+    rtc_tick_phase(&ticks, &ns);
+    wake_start(p, ticks >= due ? (uint32_t)(ticks - due) * TICK_US + ns / 1000u : 0u);
+}
+
+/**
+ * `ns` in whole microseconds, or all ones when that is past 32 bits, by
+ * 32-bit divisions in 16-bit steps, since a 64-bit division calls libgcc on
+ * i686.
+ */
+static uint32_t ns_to_us(uint64_t ns)
+{
+    uint32_t hi = (uint32_t)(ns >> 32), lo = (uint32_t)ns, mid, low;
+
+    if (hi >= 1000u) {
+        return 0xFFFFFFFFu;
+    }
+    mid = (hi << 16) | (lo >> 16);
+    low = ((mid % 1000u) << 16) | (lo & 0xFFFFu);
+    return ((mid / 1000u) << 16) | (low / 1000u);
+}
+
+/** The delay is converted to microseconds whole, and one past 2^32 of them
+ * counts as that. */
+void waketime_expire_late(process_t *p, int64_t late_ns)
+{
+    if (!wake_starts(p)) {
+        return;
+    }
+    wake_start(p, late_ns < 0 ? 0u : ns_to_us((uint64_t)late_ns));
 }
 
 /** Move an active wake to a queued, running or blocked stage under the big

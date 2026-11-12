@@ -2233,7 +2233,9 @@ static void exec_files(struct exec_state *s)
  * effective ones again; resets what pointed into the old
  * image: caught signals' handlers (SIG_IGN, the blocked mask and the pending
  * signals are kept, as POSIX says), the alternate signal stack, the TLS base
- * and the floating-point state, and deletes the POSIX timers, as POSIX says.
+ * and the floating-point state, and deletes the POSIX timers, as POSIX says,
+ * with their pending signals (`ptimer_exec`), as Linux's posixtimer_exec
+ * does (fs/exec.c:1220-1229).
  * Then it switches to the new address space and puts the old one, which the
  * parent of a vfork child keeps, lets that parent go, and points the return
  * frame at the entry with the stack pointer at argc. A fresh image has no TLS
@@ -2256,7 +2258,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     if (current_proc != current_proc->tg->leader) {
         exec_take_leader();
     }
-    ptimer_delete_all(current_proc->tg);
+    ptimer_exec(current_proc);
     current_proc->tg->execed = 1;
     current_proc->tg->no_child_signal = 0;
     proc_exec_generation(current_proc);
@@ -4446,7 +4448,10 @@ static void sig_recalc(void)
 }
 
 /** Clear the signals `bits` from the process of `target` and from each of
- * its threads. */
+ * its threads, with interrupts off, and the notifications of its POSIX
+ * timers that wait for them (`ptimer_discard`), as Linux 6.12.115's
+ * flush_sigqueue_mask takes every sigqueue of those numbers off the queues
+ * (kernel/signal.c:782-798). */
 static void sig_discard(process_t *target, uint64_t bits)
 {
     process_t *t;
@@ -4457,6 +4462,7 @@ static void sig_discard(process_t *target, uint64_t bits)
             t->sig_pending &= ~bits;
         }
     }
+    ptimer_discard(target->tg, bits);
 }
 
 /**
@@ -5983,7 +5989,16 @@ static void sig_park(void)
  * Take a signal of `wanted`, one of which is pending, off the current
  * thread's pending signals into `*info`, as Linux's `dequeue_signal` takes
  * it: the lowest of the thread's own, or, when the thread has none of
- * `wanted`, the lowest of its process's. Returns the signal.
+ * `wanted`, the lowest of its process's. A POSIX timer's signal has its
+ * timer's late intervals added to its overrun and the timer armed between
+ * ticks again, and so has each timer whose expirations waited for the
+ * signal's number (`ptimer_rearm`), before interrupts are on again, so that
+ * no tick posts the timer's signal between its dequeue and the count of its
+ * overrun, as dequeue_signal rearms the timer with interrupts still off and
+ * then clears the mark that asks for it, so that a signal put back does not
+ * rearm it twice (kernel/signal.c:682-699); the timer's key goes too, so
+ * that such a signal takes none of its timer's later expirations. Returns
+ * the signal.
  */
 static int sig_dequeue(uint64_t wanted, struct k_siginfo *info)
 {
@@ -6005,6 +6020,9 @@ static int sig_dequeue(uint64_t wanted, struct k_siginfo *info)
         *info = current_proc->tg->info[signo];
     }
     sig_recalc();
+    ptimer_rearm(current_proc->tg, signo, info);
+    info->timer_gen = 0;
+    info->timer_key = 0;
     sig_irq_restore(flags);
     return signo;
 }

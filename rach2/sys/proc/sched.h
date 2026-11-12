@@ -136,6 +136,14 @@ void sched_wake_due(process_t *p, uint64_t now);
  * to `sched_kick_cpus` once it has let the lock go, or -1. */
 int sched_wake_due_locked(process_t *p, uint64_t now);
 
+/** Make `p` ready, clearing its deadline, and mark it woken, if it is
+ * blocked with a deadline, for a timed wait whose end has come by another
+ * measure than its tick: its time of the monotonic clock, or a setting of
+ * the real-time clock that its wait must count again from (`rt_steps`). The
+ * caller holds the run queues' lock (`sched_lock_take`) and passes the
+ * processor returned, or -1, to `sched_kick_cpus` once it has let it go. */
+int sched_wake_time_locked(process_t *p);
+
 /** `smp_kick` each processor whose bit is set in `cpus`: the interrupts a
  * waker's `sched_wake_blocked` calls asked for, sent after its locks, as
  * Linux's `wake_up_q` wakes after the futex bucket's lock

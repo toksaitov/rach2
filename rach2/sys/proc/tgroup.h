@@ -40,6 +40,9 @@ struct tgroup {
     struct k_sigaction action[KSIG_MAX + 1];
     uint64_t pending;      /* signals sent to the process, which any thread takes */
     struct ktimer *timers; /* timer_create's, in the order of their ids */
+    /* Deleted POSIX timers whose expirations wait for another sender's
+     * signal of their number to be taken (`ptimer_rearm`). */
+    struct ktimer *timers_gone;
     /* The siginfo of each signal pending in `pending`, by signal number. */
     struct k_siginfo info[KSIG_MAX + 1];
     uint32_t stop;             /* the signal of a stop in effect, 0 for none */

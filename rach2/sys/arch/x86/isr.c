@@ -5,6 +5,7 @@
  * pair or the I/O APIC.
  */
 
+#include "apictimer.h"
 #include "ioapic.h"
 #include "lapic.h"
 #include "../../klog.h"
@@ -956,6 +957,15 @@ static void irq_dispatch(isr_params_t *params)
     irq_leave();
 }
 
+/** Whether `vector` is one of the timer's: the tick's, or the local APIC
+ * timer's between ticks (`apic_hr_vector`). */
+static int timer_vector(uint32_t vector)
+{
+    int hr = apic_hr_vector();
+
+    return vector == IRQ_VECTOR(0) || (hr != 0 && vector == (uint32_t)hr);
+}
+
 /**
  * Take the big lock, unless every handler of the chain runs without it
  * (`isr_register_flags`) or the vector is the tick's, count a device's
@@ -1002,9 +1012,20 @@ static void irq_dispatch(isr_params_t *params)
  * A holder of the lock on another processor, such as the sound mix's, so
  * takes nothing from this processor's ticks or from its user code.
  *
- * Every tick runs the lockup detectors' part first (`watchdog_tick`),
- * since a processor locked up with interrupts off may hold the big lock for
- * good.
+ * Every interrupt first lets the local APIC timer go on from an interrupt
+ * between ticks or a tick (`apic_hr_entry`), before the big lock, so that a
+ * wait for the lock does not hold back the next tick; an interrupt at the
+ * tick's vector that the clock says is not the tick is acknowledged and
+ * goes no further, returning as a tick does, with a frame of its own that
+ * holds no lock, so that `isr_leave` pops no frame of the code it
+ * interrupted. The timer's
+ * interrupts, the tick and the one between ticks, note when they came and
+ * when they went on, which a timed wake they make is measured from
+ * (`waketime_expire`). The interrupt between ticks takes the big lock, as a
+ * device's does, so that it posts the signals of the POSIX timers it
+ * expires at once (`timer_hr_pass`). Every tick runs the lockup detectors'
+ * part (`watchdog_tick`) first, since a processor locked up with interrupts
+ * off may hold the big lock for good.
  *
  * An interrupt that ended a halt, which it knows by the frame's address,
  * resumes with interrupts off. Otherwise a tick already pending at the
@@ -1015,7 +1036,8 @@ static void irq_dispatch(isr_params_t *params)
 void _irq_router(isr_params_t *params)
 {
     struct percpu *cpu = this_cpu();
-    uint32_t wake_irq = params->vector == IRQ_VECTOR(0) ? waketime_clock() : 0;
+    int timer = timer_vector(params->vector);
+    uint32_t wake_irq = timer ? waketime_clock() : 0;
     int locked = 1;
 #if defined(__x86_64__)
     uintptr_t fp = (uintptr_t)params->rbp;
@@ -1029,6 +1051,11 @@ void _irq_router(isr_params_t *params)
     } else if (params->vector == IRQ_VECTOR(0) && !FRAME_USER(params)) {
         bkl_profile_sample((uintptr_t)FRAME_PC(params), fp);
     }
+    if (!apic_hr_entry(params->vector)) {
+        lapic_eoi();
+        bkl_frame_push(0); /* isr_leave pops it as a tick's without the lock */
+        return;
+    }
     if (params->vector == IRQ_VECTOR(0)) {
         watchdog_tick(params);
     }
@@ -1041,7 +1068,7 @@ void _irq_router(isr_params_t *params)
         locked = 0;
     }
     bkl_frame_push(locked);
-    if (params->vector == IRQ_VECTOR(0)) {
+    if (timer) {
         cpu->wake_irq_start = wake_irq;
         cpu->wake_irq_locked = waketime_clock();
     }
