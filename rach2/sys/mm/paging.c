@@ -648,7 +648,8 @@ static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write
 
 /* The pages a read fault of a file maps at most, its own among them:
  * Linux's fault_around_bytes, 64 KiB (mm/memory.c:5194-5195). */
-#define FAULT_AROUND 16u
+#define FAULT_AROUND      16u
+#define FAULT_AROUND_SPAN ((uintptr_t)FAULT_AROUND * PAGE_SIZE)
 
 /**
  * Map the pages of the file `f` around `page`, which a read fault of its
@@ -678,12 +679,12 @@ static void share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t
     if (!vma || vma->file != f || !f->around) {
         return;
     }
-    from = page & ~(FAULT_AROUND * PAGE_SIZE - 1);
+    from = page & ~(FAULT_AROUND_SPAN - 1);
     if (from < vma->start) {
         from = vma->start;
     }
     end = (page & ~(MMU_TABLE_SPAN - 1)) + MMU_TABLE_SPAN;
-    to = from + FAULT_AROUND * PAGE_SIZE;
+    to = from + FAULT_AROUND_SPAN;
     if (end != 0 && to > end) {
         to = end;
     }
