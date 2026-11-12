@@ -1,0 +1,121 @@
+j5: 23:42:07 end rach2-jB1 status 0 loading time: 9.29 seconds
+j5: 23:42:38 end linux-jL1 status 0 loading time: 8.87 seconds
+j5: 23:43:16 end rach2-jN1 status 0 loading time: 9.13 seconds
+j5: 23:43:56 end rach2-jA1 status 0 loading time: 9.12 seconds
+j5: 23:44:36 end rach2-jB2 status 0 loading time: 9.06 seconds
+j5: 23:45:08 end linux-jL2 status 0 loading time: 8.65 seconds
+j5: 23:45:46 end rach2-jN2 status 0 loading time: 9.12 seconds
+j5: 23:46:26 end rach2-jA2 status 0 loading time: 8.99 seconds
+j5: 23:47:09 end rach2-jB3 status 0 loading time: 17.24 seconds
+j5: 23:47:40 end linux-jL3 status 0 loading time: 8.79 seconds
+j5: 23:48:17 end rach2-jN3 status 0 loading time: 9.75 seconds
+j5: 23:48:57 end rach2-jA3 status 0 loading time: 9.13 seconds
+j5: 23:49:37 end rach2-jB4 status 0 loading time: 9.03 seconds
+j5: 23:50:09 end linux-jL4 status 0 loading time: 8.66 seconds
+j5: 23:50:49 end rach2-jN4 status 0 loading time: 9.16 seconds
+j5: 23:51:25 end rach2-jA4 status 0 loading time: 9.80 seconds
+j5: 23:52:02 end rach2-jB5 status 0 loading time: 9.51 seconds
+j5: 23:52:34 end linux-jL5 status 0 loading time: 8.84 seconds
+j5: 23:53:12 end rach2-jN5 status 0 loading time: 10.13 seconds
+j5: 23:53:54 end rach2-jA5 status 0 loading time: 10.37 seconds
+j5: done
+j6: 23:54:45 end rach2-kB1 status 0 loading time: 10.13 seconds
+j6: 23:55:17 end linux-kL1 status 0 loading time: 9.06 seconds
+j6: 23:56:00 end rach2-kE1 status 0 loading time: 12.52 seconds
+j6: 23:56:37 end rach2-kB2 status 0 loading time: 9.98 seconds
+j6: 23:57:12 end linux-kL2 status 0 loading time: 9.25 seconds
+j6: 23:57:52 end rach2-kE2 status 0 loading time: 8.83 seconds
+j6: 23:58:29 end rach2-kB3 status 0 loading time: 8.94 seconds
+j6: 23:59:01 end linux-kL3 status 0 loading time: 8.61 seconds
+j6: 23:59:38 end rach2-kE3 status 0 loading time: 9.43 seconds
+j6: 00:00:15 end rach2-kB4 status 0 loading time: 9.74 seconds
+j6: 00:00:47 end linux-kL4 status 0 loading time: 8.70 seconds
+j6: 00:01:23 end rach2-kE4 status 0 loading time: 9.36 seconds
+j6: 00:02:04 end rach2-kB5 status 0 loading time: 9.04 seconds
+j6: 00:02:38 end linux-kL5 status 0 loading time: 8.65 seconds
+j6: 00:03:16 end rach2-kE5 status 0 loading time: 9.09 seconds
+j6: done
+j7: 00:15:50 end rach2-hB1 status 0 loading time: 9.18 seconds
+j7: 00:16:22 end linux-hL1 status 0 loading time: 8.98 seconds
+j7: 00:17:02 end rach2-hE1 status 0 loading time: 9.60 seconds
+j7: 00:17:42 end rach2-hN1 status 0 loading time: 9.05 seconds
+j7: 00:18:22 end rach2-hB2 status 0 loading time: 8.99 seconds
+j7: 00:18:54 end linux-hL2 status 0 loading time: 8.73 seconds
+j7: 00:19:31 end rach2-hE2 status 0 loading time: 9.47 seconds
+j7: 00:20:07 end rach2-hN2 status 0 loading time: 9.80 seconds
+j7: done
+
+rach2-jB1      load   9.29  main  673+225  llvmpipe  690+14  all 1457+395  steal    1 qemu-host 2177+187 
+rach2-jB2      load   9.06  main  613+219  llvmpipe  522+11  all 1243+377  steal    1 qemu-host 1850+161 
+rach2-jB3      load  17.24  main  960+400  llvmpipe  570+28  all 1737+799  steal 1762 qemu-host 2925+325 
+rach2-jB4      load   9.03  main  631+218  llvmpipe  452+9   all 1135+321  steal    0 qemu-host 1751+195 
+rach2-jB5      load   9.51  main  646+216  llvmpipe  438+10  all 1164+367  steal    0 qemu-host 1801+190 
+rach2-kB1      load  10.13  main  637+221  llvmpipe  526+13  all 1249+408  steal    0 qemu-host 1969+204 
+rach2-kB2      load   9.98  main  681+239  llvmpipe  575+12  all 1357+405  steal    0 qemu-host 2082+223 
+rach2-kB3      load   8.94  main  610+211  llvmpipe  573+13  all 1234+321  steal    0 qemu-host 1868+221 
+rach2-kB4      load   9.74  main  692+238  llvmpipe  557+12  all 1328+381  steal    1 qemu-host 2052+199 
+rach2-kB5      load   9.04  main  631+219  llvmpipe  455+11  all 1135+330  steal    1 qemu-host 1776+198 
+rach2-hB1      load   9.18  main  637+206  llvmpipe  488+11  all 1224+366  steal    0 qemu-host 1836+175 
+rach2-hB2      load   8.99  main  617+209  llvmpipe  506+10  all 1199+347  steal    0 qemu-host 1839+188 
+linux-jL1      load   8.87  main  586+163  llvmpipe  517+14  all 1216+254  steal    0 qemu-host 1621+220 
+linux-jL2      load   8.65  main  613+206  llvmpipe  608+13  all 1343+311  steal    0 qemu-host 1785+276 
+linux-jL3      load   8.79  main  579+165  llvmpipe  564+14  all 1252+253  steal    0 qemu-host 1657+223 
+linux-jL4      load   8.66  main  626+200  llvmpipe  596+17  all 1332+303  steal    0 qemu-host 1759+275 
+linux-jL5      load   8.84  main  581+180  llvmpipe  498+12  all 1179+273  steal    1 qemu-host 1584+227 
+linux-kL1      load   9.06  main  590+190  llvmpipe  434+12  all 1140+300  steal    0 qemu-host 1585+227 
+linux-kL2      load   9.25  main  623+203  llvmpipe  597+17  all 1354+313  steal    0 qemu-host 1818+255 
+linux-kL3      load   8.61  main  619+195  llvmpipe  633+19  all 1360+324  steal    0 qemu-host 1821+255 
+linux-kL4      load   8.70  main  573+180  llvmpipe  528+16  all 1199+279  steal    0 qemu-host 1618+230 
+linux-kL5      load   8.65  main  624+198  llvmpipe  580+15  all 1315+308  steal    0 qemu-host 1729+274 
+linux-hL1      load   8.98  main  573+194  llvmpipe  478+16  all 1155+303  steal    0 qemu-host 1598+217 
+linux-hL2      load   8.73  main  560+175  llvmpipe  585+19  all 1243+273  steal    1 qemu-host 1658+232 
+rach2-jN1      load   9.13  main  642+199  llvmpipe  425+15  all 1123+335  steal    1 qemu-host 1594+280 
+rach2-jN2      load   9.12  main  623+189  llvmpipe  531+15  all 1224+326  steal    0 qemu-host 1644+293 
+rach2-jN3      load   9.75  main  678+227  llvmpipe  595+15  all 1373+400  steal    1 qemu-host 1944+264 
+rach2-jN4      load   9.16  main  628+198  llvmpipe  482+12  all 1169+326  steal    1 qemu-host 1638+266 
+rach2-jN5      load  10.13  main  695+246  llvmpipe  435+17  all 1229+473  steal    1 qemu-host 1911+286 
+rach2-hN1      load   9.05  main  625+208  llvmpipe  453+13  all 1126+329  steal    1 qemu-host 1632+274 
+rach2-hN2      load   9.80  main  696+216  llvmpipe  543+17  all 1329+384  steal    0 qemu-host 1847+317 
+rach2-jA1      load   9.12  main  617+223  llvmpipe  419+9   all 1083+320  steal    1 qemu-host 1778+158 
+rach2-jA2      load   8.99  main  618+208  llvmpipe  546+10  all 1215+324  steal    1 qemu-host 1890+166 
+rach2-jA3      load   9.13  main  637+208  llvmpipe  462+10  all 1152+325  steal    1 qemu-host 1789+203 
+rach2-jA4      load   9.80  main  687+238  llvmpipe  504+12  all 1252+374  steal    1 qemu-host 1998+228 
+rach2-jA5      load  10.37  main  647+227  llvmpipe  494+13  all 1254+415  steal    1 qemu-host 1940+204 
+rach2-kE1      load  12.52  main  862+278  llvmpipe  528+20  all 1558+726  steal    4 qemu-host 2857+220 
+rach2-kE2      load   8.83  main  620+202  llvmpipe  526+10  all 1197+320  steal    0 qemu-host 1851+169 
+rach2-kE3      load   9.43  main  646+208  llvmpipe  431+12  all 1185+387  steal    0 qemu-host 1791+180 
+rach2-kE4      load   9.36  main  678+220  llvmpipe  719+16  all 1487+377  steal    1 qemu-host 2152+235 
+rach2-kE5      load   9.09  main  623+202  llvmpipe  499+11  all 1167+297  steal    1 qemu-host 1789+222 
+rach2-hE1      load   9.60  main  699+217  llvmpipe  594+13  all 1368+363  steal    1 qemu-host 2055+238 
+rach2-hE2      load   9.47  main  677+236  llvmpipe  613+14  all 1350+373  steal    0 qemu-host 2083+242 
+
+                             rach2-kB2   rach2-kB3   rach2-kB4   rach2-kB5   linux-kL2   linux-kL3   linux-kL4   linux-kL5   rach2-kE2   rach2-kE3   rach2-kE4   rach2-kE5
+blocking                            -2          -2          -3          -3          -1          -2           1          -3          -3          -3          -2          -2
+directed_yield_attempted             0           0           0           0           0           0           1           1           0           0           0           0
+exits                           899359      820265      915356      830784      199791      208191      181729      203139      815774      812406      985701      826460
+fpu_reload                       32551       31753       33164       32504       25751       27360       24547       26789       32231       32143       33008       32122
+halt_attempted_poll              17879       14603       16244       15614       44461       47631       41628       46030       15165       15264       17404       15756
+halt_exits                       51497       46931       52152       48397       59085       62422       54426       61430       47780       47051       50625       48058
+halt_poll_fail_ns            320617943   294106797   306323451   297509513   815362979   787263444   752282144   801942729   287175167   272596690   322155526   297615542
+halt_poll_success_hist              13          19          15          20         167         205         186         176          21          15          16          25
+halt_poll_success_ns          39119093    41996992    41771653    38585057   695783746   737282459   661516841   713267968    42339637    29472600    42524963    34779824
+halt_successful_poll              1713        1570        1652        1583       23746       27379       22334       25522        1623        1355        1770        1523
+halt_wait_ns               22358155019 19934327119 22744594702 20975661715 21815266109 21443717736 19541879068 22365768370 20159853537 20843873253 21465845052 20306693175
+halt_wakeup                      43567       39126       43829       40517       33525       33174       30685       33887       39830       39310       41534       40136
+host_state_reload                75966       70744       76827       72840       59254       60493       55195       60639       71922       71255       74384       72117
+hypercalls                           0           0           0           0         260          64         153         187           0           0           0           0
+insn_emulation                   26022       26082       26700       26146       26079       27675       24829       27107       26070       26022       26214       26106
+io_exits                          6529        5671        6464        6358           1           1           1           1        6161        6116        6794        6016
+irq_exits                        50408       46017       50475       42689       17643       17143       14560       16146       45020       44084       54932       45022
+irq_injections                   98349       89025       99013       87200       75005       78107       67524       76108       87958       87066       99681       88264
+irq_window_exits                 28341       25713       29149       24780        5179        5579        4614        5135       24368       24663       28968       24369
+mmio_exits                       26022       26082       26700       26146       25750       27359       24546       26788       26070       26022       26214       26106
+nmi_injections                       1           1           1           1           0           0           0           0           1           1           1           1
+nmi_window_exits                     1           1           1           1           0           0           0           0           1           1           1           1
+pages_2m                           508         511         518         512         557         574         526         572         510         508         515         510
+pf_fixed                           508         511         518         512         557         574         525         572         510         508         515         510
+pf_spurious                          8          20           9          13           0           3           2           1          13          28          21          16
+pf_taken                           516         531         527         525         557         577         527         573         523         536         536         526
+preemption_other                     8           4           5           1           0           1           0           0           6           3           7           6
+preemption_reported                 20          24          43          11          25          20          14          11          22          18          47          32
+req_event                       219231      199840      222492      195946       91126       94809       82411       92206      187655      185569      213467      188701
