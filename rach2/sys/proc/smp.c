@@ -165,6 +165,8 @@ static struct spinlock profile_lock = SPINLOCK_INIT_NAMED("bkl_profile");
 /* Nonzero for the whole-kernel mode: every tick in kernel mode samples,
  * with or without the big lock. */
 static volatile int bkl_profile_whole;
+/* The thread the whole-kernel mode samples alone, by its ID; 0 for all. */
+static volatile uint32_t bkl_profile_tid;
 
 /* The tick's parts by row (`bkl_tick_charge`), in TSC cycles, kept by each
  * processor for its own ticks, which run without the big lock: a processor
@@ -707,6 +709,9 @@ void bkl_profile_sample(uintptr_t pc, uintptr_t fp)
     if (!bkl_profile_whole && cpu->bkl_depth < 1) {
         return;
     }
+    if (bkl_profile_tid != 0 && (!cpu->current || cpu->current->pid != bkl_profile_tid)) {
+        return;
+    }
     sample_chain(chain, pc, fp, cpu->current ? cpu->current->kernel_stack : 0);
     entry = cpu->current ? cpu->current->bkl_entry : 0;
     cmd = cpu->current ? cpu->current->bkl_cmd : 0;
@@ -1037,20 +1042,27 @@ int32_t smp_profile_show(void *data, char *buf, uint32_t cap)
 int32_t smp_profile_store(void *data, const char __user *buf, uint32_t len)
 {
     static const char kernel[6] = {'k', 'e', 'r', 'n', 'e', 'l'};
-    char word[6];
+    char word[24];
+    uint32_t i, n, tid = 0;
     int whole;
-    uint32_t i;
 
     (void)data;
-    whole = len >= sizeof(word) && copy_from_user(word, buf, sizeof(word)) == 0;
-    for (i = 0; whole && i < sizeof(word); i++) {
+    n = len < sizeof(word) ? len : sizeof(word);
+    whole = n >= sizeof(kernel) && copy_from_user(word, buf, n) == 0;
+    for (i = 0; whole && i < sizeof(kernel); i++) {
         whole = word[i] == kernel[i];
+    }
+    for (; whole && i < n && word[i] == ' '; i++) {
+    }
+    for (; whole && i < n && word[i] >= '0' && word[i] <= '9' && tid < 100000000u; i++) {
+        tid = tid * 10u + (uint32_t)(word[i] - '0');
     }
     profile_hold(1);
     k_memset(bkl_profile, 0, sizeof(bkl_profile));
     bkl_profile_samples = 0;
     bkl_profile_lost = 0;
     bkl_profile_whole = whole;
+    bkl_profile_tid = whole ? tid : 0;
     profile_hold(0);
     return (int32_t)len;
 }
