@@ -24,7 +24,8 @@ struct speaker_counters {
     uint32_t divisor;      /* the last tone's or sound's divisor */
     uint32_t ms;           /* the last tone's length in ms; 0 for a sound */
     uint32_t beeps;        /* tones and sounds the beep generator began */
-    uint32_t beep_divider; /* the generator's divider as last sent; 0 silent */
+    uint32_t beep_divider; /* the generator's divider as last given, sent or
+                              handed to its driver's thread; 0 silent */
     uint32_t beep_retries; /* stops the tick found the generator busy for and
                               sent again at a later tick */
 };
@@ -47,9 +48,10 @@ void speaker_off(void);
  * request, as KIOCSOUND does. A divisor of 0, or one whose pitch is not
  * between 21 and 32766 Hz, silences the speaker, as Linux's console does.
  * Each call ends the tone or sound before it, and sounds or stops the beep
- * generator too, where there is one (speaker_set_beep), which may wait for
- * the codec's answers. Takes the speaker's lock with interrupts off; any
- * context but the tick's.
+ * generator too, where there is one (speaker_set_beep): its driver hands
+ * the divider to its own thread, or, while that does not run, sends it here,
+ * waiting for the device with interrupts off. Takes the speaker's lock with
+ * interrupts off; any context but the tick's.
  */
 void speaker_tone(uint32_t divisor, uint32_t ms);
 
