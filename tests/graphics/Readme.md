@@ -63,6 +63,15 @@ The runners draw on the guest's GPU when told to: `piglit.sh -g` and `webgl.sh -
 
 On Rach2 the `virgl` suite, `tests/run virgl`, runs them, a case such as `machine.virgl.renderer`, `machine.virgl.piglit-07`, `machine.virgl.deqp-gles31-sample`, `machine.virgl.webgl-chromium-webgl2-03` or `machine.virgl.device-lost` ([virgl's GL](#virgls-gl)).
 
+The GLES subset, every 10th case of each suite of the virgl list, runs in both profiles, so that what Rach2 lacks against Linux on virgl over the GPU and on virgl over the host's llvmpipe compares case by case; a suite takes one boot in each guest:
+
+    sh tests/graphics/runners/debian.sh deqp -p virgl -c 8 OUT -v 1.4.1.1 -e 10 -s 1 \
+        -l /tmp/deqp-gles-virgl.txt.gz gles3
+    sh tests/graphics/runners/debian.sh deqp -p venus -c 8 OUT -v 1.4.1.1 -e 10 -s 1 \
+        -l /tmp/deqp-gles-virgl.txt.gz gles3
+    RACH2_QEMU_ACCEL=kvm ARCH=x86_64 RACH2_CASES=machine.virgl.deqp-gles3-subset tests/run virgl
+    RACH2_QEMU_ACCEL=kvm ARCH=x86_64 RACH2_CASES=machine.venus.deqp-gles3-subset tests/run venus
+
 [`runners/vkcube.sh`](runners/vkcube.sh) presents vkcube to a Weston of its own on the guest's card, as root, holds it at two frames and reads each back inside the guest; `-i` names the Vulkan ICD file to use alone, `-m OUTPUT=MODE` a mode of the connector's list for Weston's output, such as `Virtual-1=1360x768@60`, through a `weston.ini` of that one `[output]` section, kept in the output and passed by its absolute name, in place of `--no-config`, and `-o` the output. Weston drives the preferred mode, and says nothing, when the connector lists no such mode or output, so the runner reads the mode Weston marks current in `weston.log` and fails unless its name, and its rate to the nearest hertz when MODE gives one, are MODE's. `debian.sh vkcube` runs it in the Debian guest, as the reference was made, and the `vkpresent` suite, `tests/run vkpresent`, on Rach2, as the case `machine.vkpresent.vkcube` ([vkcube presenting](#vkcube-presenting)):
 
     sh tests/graphics/runners/debian.sh vkcube -p venus -c 8 OUT \
@@ -306,6 +315,7 @@ The `venus` suite runs dEQP-VK 1.4.1.1 through Venus on Rach2's GNU root and com
 * `machine.venus.sample` runs every 500th case of the list, with the flakes named.
 * `machine.venus.fraction-N`, N from 1 to 8, runs every 8th case from the Nth, so that the eight run the list once whole, as the release does; the checkpoint's slice runs a part.
 * `machine.venus.device-lost` kills the host's render server under four dEQP-VK processes and asks that the guest see the loss as the Debian guest does, as below.
+* `machine.venus.deqp-gles2-subset`, `-gles3-subset` and `-gles31-subset` run the GLES subset of the `virgl` suite ([virgl's GL](#virgls-gl)) with `glcts` on the profile's GL, virgl over the host's llvmpipe, which offers OpenGL ES 3.2, and compare each case with the Debian guest's run of the same subset on the profile, [`ref/venus-wsl/gles/`](ref/venus-wsl/Readme.md); the record's renderer must be the reference's, so that a run on the guest's own llvmpipe fails.
 
 Each case boots the x86-64 GNU root with the `venus` display, 8 CPUs and 8 GiB, and runs `deqp.sh` as the test account with Venus's ICD alone; `judge.py deqp` compares its results with the reference's whole run. The runners, the lists and the references come from the read-only data disk `graphics.ext2`, as every graphics case's do. The case prints the runner's own lines, its result among them, to the run's log. Rach2 runs part 1 at 0.78 of the Debian guest's rate under the same QEMU ([`ref/venus-wsl`](ref/venus-wsl/Readme.md#results)).
 
@@ -323,7 +333,7 @@ Each list's header names what it leaves out and why: the cases that end the test
 
 * `machine.virgl.renderer` runs `glinfo.sh` and compares its renderer lines with the Debian guest's: `virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER))`, OpenGL 4.2 core and compatibility, OpenGL ES 3.1, from `eglinfo` on surfaceless EGL and from `glxinfo` on Xwayland under Weston's GL renderer.
 * `machine.virgl.piglit-sample` runs every 200th test of the piglit list, and `machine.virgl.piglit-NN`, NN from 01 to 16, every 16th from the NNth, one test at a time with `piglit.sh -g`, so that the sixteen run the list once whole.
-* `machine.virgl.deqp-gles2-sample`, `-gles3-sample` and `-gles31-sample` run every 200th case of a suite, and `machine.virgl.deqp-gles2-N`, `-gles3-N` and `-gles31-N` the suite whole in two, four and four parts, each with four `glcts` processes.
+* `machine.virgl.deqp-gles2-sample`, `-gles3-sample` and `-gles31-sample` run every 200th case of a suite, `machine.virgl.deqp-gles2-subset`, `-gles3-subset` and `-gles31-subset` every 10th, the GLES subset, 9,729 cases of the three suites, which the `venus` suite also runs on its profile's GL, and `machine.virgl.deqp-gles2-N`, `-gles3-N` and `-gles31-N` the suite whole in two, four and four parts, each with four `glcts` processes.
 * `machine.virgl.webgl-BROWSER-webglV-NN` runs chunk NN of 250 pages of WebGL V in Chromium or Firefox, under Weston's GL renderer with `webgl.sh -g`, which draws WebGL on virgl in both browsers.
 * `machine.virgl.device-lost` resets the virtio-gpu device under a robust GL context and a Weston, as below.
 
