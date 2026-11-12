@@ -902,6 +902,9 @@ int netconf_set_up(struct netdev *nd, int up)
         }
     }
     nd->up = up;
+    if (up != was) {
+        netdev_carrier_changed(nd);
+    }
     if (nd->up && !nd->loopback) {
         link_local_up(nd);
         nd6_if_up(nd);

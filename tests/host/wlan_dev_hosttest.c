@@ -37,6 +37,9 @@
 #include "lib/kerrno.h"
 #include "lib/kstring.h"
 
+/* The tick count netdev.c reads; the rows do not move it. */
+volatile uint64_t kernel_ticks;
+
 extern int printf(const char *format, ...);
 extern int memcmp(const void *a, const void *b, unsigned long n);
 extern unsigned long kheap_host_largest;

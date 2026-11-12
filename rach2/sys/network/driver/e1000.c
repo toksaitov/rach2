@@ -838,9 +838,12 @@ static void e1000_irq(isr_params_t *params)
  * next interrupt. The guard of 64 reads bounds the loop should a cause stay
  * set. Reading `ICR` is what clears it. An overflow is counted as a drop and
  * recovered by draining the ring: the descriptors are returned to the card
- * by the tail write e1000_rx ends with. A link change needs nothing done,
- * since the card renegotiates on its own and print_info reads the current
- * state.
+ * by the tail write e1000_rx ends with. A link change makes the interface
+ * forget the carrier it kept (`netdev_carrier_changed`), so that the next
+ * question reads the card, as Linux's handler has its watchdog read the
+ * link at once (e1000_intr,
+ * drivers/net/ethernet/intel/e1000/e1000_main.c:3757 of 6.12.115); the
+ * card renegotiates on its own.
  */
 static void e1000_service(struct e1000 *e)
 {
@@ -851,6 +854,9 @@ static void e1000_service(struct e1000 *e)
         cause = io->r32(e, E1000_ICR);
         if ((cause & E1000_INT_MASK) == 0) {
             break;
+        }
+        if (cause & E1000_INT_LSC) {
+            netdev_carrier_changed(e->nd);
         }
         if (cause & (E1000_INT_RXT0 | E1000_INT_RXDMT0)) {
             e1000_rx(e);

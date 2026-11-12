@@ -74,6 +74,9 @@ int ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short typ
 static unsigned note_rx_errors;
 static unsigned note_rx_drops;
 
+/* The link changes the driver reported (`netdev_carrier_changed`). */
+static int carrier_changes;
+
 /** Count a frame in error. */
 void ethernet_note_rx_error(struct netdev *nd)
 {
@@ -86,6 +89,13 @@ void ethernet_note_rx_drop(struct netdev *nd)
 {
     (void)nd;
     note_rx_drops++;
+}
+
+/** Count a link change the driver reported. */
+void netdev_carrier_changed(struct netdev *nd)
+{
+    (void)nd;
+    carrier_changes++;
 }
 
 /** Discard console text. */
@@ -759,6 +769,17 @@ void mmio_unmap(uintptr_t va, size_t size)
     (void)size;
 }
 
+/** A link change's cause is read clear and reported to the interface, so
+ * that the interface reads the link again. */
+static void check_link_change(void)
+{
+    carrier_changes = 0;
+    model_reg[E1000_ICR / 4] |= E1000_INT_LSC;
+    e1000_irq(0);
+    CHECK(carrier_changes == 1 && model_reg[E1000_ICR / 4] == 0,
+          "a link change is read clear and reported, so the interface reads the link again");
+}
+
 /**
  * Run the rows, each on a model put back to its cold state:
  *
@@ -985,6 +1006,7 @@ int main(void)
     e1000_irq(0);
     CHECK(rx_calls == 1 && rx_last_len == 80,
           "the frame after a split one is delivered, so the discard ended with it");
+    check_link_change();
 
     model_reset();
     CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes");

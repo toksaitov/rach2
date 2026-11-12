@@ -1326,6 +1326,7 @@ static void r8168_note_sources(uint16_t status)
         r8168_rxerr_reports++;
     }
     if (status & R8168_INTR_LINKCHG) {
+        netdev_carrier_changed(rtl8168_iface);
         r8168_log_link();
     }
 }
