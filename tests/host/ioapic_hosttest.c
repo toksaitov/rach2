@@ -348,6 +348,17 @@ static const struct {
     {"maxcpus=0 maxcpus=4", 1}, /* and none undoes the disable */
     {"maxcpus=4 maxcpus= maxcpus=2", 0},
     {"maxcpus=000000000000000000000000000000000", 1}, /* 33 bytes, read in place */
+    {"maxcpus=\"0\"", 1},                             /* next_arg drops a value's quotes */
+    {"maxcpus=\"4\"", 0},
+    {"\"maxcpus=0\"", 1},     /* and a word's */
+    {"maxcpus=\"0", 1},       /* an opening quote alone */
+    {"maxcpus=\"\"", 0},      /* empty once the quotes go */
+    {"a=\"x maxcpus=0\"", 0}, /* a quoted space ends no word */
+    {"-- maxcpus=0", 0},      /* parse_args stops at a bare double dash */
+    {"\"--\" noapic", 0},     /* quoted too */
+    {"maxcpus=0 --", 1},
+    {"--=1 maxcpus=0", 1}, /* a double dash with a value is a parameter */
+    {"--x noapic", 1},
 };
 
 /** The `maxcpus=` parse of every occurrence, and `kcmdline_option`'s values. */
@@ -366,6 +377,8 @@ static void rows_parse(void)
     }
     (void)kcmdline_capture("maxcpus=0x1f");
     check(kcmdline_option("maxcpus", &v) == 1 && v == 31, "option: hexadecimal");
+    (void)kcmdline_capture("maxcpus=\"0x1f\"");
+    check(kcmdline_option("maxcpus", &v) == 1 && v == 31, "option: quoted hexadecimal");
     (void)kcmdline_capture("maxcpus=017");
     check(kcmdline_option("maxcpus", &v) == 1 && v == 15, "option: octal");
     (void)kcmdline_capture("maxcpus=-2,3");

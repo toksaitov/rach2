@@ -8,13 +8,140 @@
 
 /* The buffer's bytes, the NUL included: one fewer than the boot record's
  * (boot.h), so that a line the record cut at its own limit, perhaps inside a
- * token, is too long here and is cut again at a delimiter. */
+ * word, is too long here and is cut again before that word. */
 #define KCMDLINE_MAX (BOOT_CMDLINE_MAX - 1)
 
 static char kcmdline[KCMDLINE_MAX];
 
+const char *kcmdline_get(void)
+{
+    return kcmdline;
+}
+
+/** Whether `c` is a space as Linux's isspace takes it (include/linux/ctype.h,
+ * line 33; lib/ctype.c, lines 14, 17 and 31): a tab, a line feed, a vertical
+ * tab, a form feed, a carriage return, a space or Latin-1's no-break space. */
+static int is_space(char c)
+{
+    unsigned char u = (unsigned char)c;
+
+    return u == ' ' || (u >= '\t' && u <= '\r') || u == 0xa0;
+}
+
+/** One word of the line, as Linux's next_arg splits it. */
+struct arg {
+    const char *word; /* where the word begins, its opening quote included */
+    const char *name; /* the parameter's name, without its quote */
+    size_t nlen;
+    const char *val; /* after the first `=`, its quotes left out; NULL for none */
+    size_t vlen;
+    int whole; /* 1 when a space ends the word, 0 when the line's end does */
+};
+
+/**
+ * Split the next word from `*p` as Linux's next_arg does (lib/cmdline.c,
+ * lines 227 to 274), and advance `*p` past it; 0 when the line has no more.
+ *
+ * Spaces inside double quotes do not end a word. A word that begins with a
+ * quote loses it, and loses its last byte when that is a quote; a value that
+ * begins with a quote loses it, and loses the word's last byte when that is
+ * a quote. next_arg drops these bytes by writing NULs, so the name and the
+ * value are the bytes before the first NUL it would write. A `=` at the
+ * word's first byte, the quote dropped, gives no value, as next_arg's
+ * `equals` of 0 means none.
+ */
+static int split_word(const char **p, struct arg *a)
+{
+    const char *s = *p;
+    size_t i, equals = 0, cut, off;
+    int in_quote = 0, quoted = 0;
+
+    while (is_space(*s)) {
+        s++;
+    }
+    if (*s == '\0') {
+        *p = s;
+        return 0;
+    }
+    a->word = s;
+    if (*s == '"') {
+        s++;
+        in_quote = 1;
+        quoted = 1;
+    }
+    for (i = 0; s[i] != '\0'; i++) {
+        if (is_space(s[i]) && !in_quote) {
+            break;
+        }
+        if (equals == 0 && s[i] == '=') {
+            equals = i;
+        }
+        if (s[i] == '"') {
+            in_quote = !in_quote;
+        }
+    }
+    cut = i;
+    if (i > 0 && s[i - 1] == '"' && (quoted || (equals != 0 && s[equals + 1] == '"'))) {
+        cut = i - 1;
+    }
+    a->name = s;
+    if (equals == 0) {
+        a->nlen = cut;
+        a->val = 0;
+        a->vlen = 0;
+    } else {
+        off = equals + 1 + (s[equals + 1] == '"' ? 1 : 0);
+        a->nlen = equals;
+        a->val = s + off;
+        a->vlen = cut > off ? cut - off : 0;
+    }
+    a->whole = s[i] != '\0';
+    *p = s + i;
+    return 1;
+}
+
+/**
+ * Split the next word as `split_word` does, and stop at a bare `--`, as
+ * Linux's parse_args stops there (kernel/params.c, lines 181 to 184): the
+ * words after it are init's, and no lookup here reads them. Returns 0 at
+ * the line's end or at the `--`, and leaves `*p` at the `--`, so that
+ * another call stops there again.
+ */
+static int next_arg(const char **p, struct arg *a)
+{
+    const char *s = *p;
+
+    if (!split_word(p, a)) {
+        return 0;
+    }
+    if (a->val == 0 && a->nlen == 2 && a->name[0] == '-' && a->name[1] == '-') {
+        *p = s;
+        return 0;
+    }
+    return 1;
+}
+
+/** Whether the word `a` names the parameter `key`, of length `klen`. */
+static int arg_is(const struct arg *a, const char *key, size_t klen)
+{
+    size_t i;
+
+    if (a->nlen != klen) {
+        return 0;
+    }
+    for (i = 0; i < klen && a->name[i] == key[i]; i++) {
+        /* match each byte of the name against the key */
+    }
+    return i == klen;
+}
+
+/** A line that goes on past the buffer is cut before the word that the
+ * buffer's end ends, which `split_word` finds as the lookups do, a quoted
+ * value's spaces included. */
 int kcmdline_capture(const char *cmdline)
 {
+    const char *p = kcmdline;
+    struct arg a;
     size_t i;
 
     if (cmdline == 0) {
@@ -25,58 +152,17 @@ int kcmdline_capture(const char *cmdline)
         kcmdline[i] = cmdline[i];
     }
     kcmdline[i] = '\0';
-
-    if (cmdline[i] != '\0') {
-        while (i > 0 && kcmdline[i - 1] != ' ' && kcmdline[i - 1] != '\t') {
-            i--;
-        }
-        kcmdline[i] = '\0';
-        return 1;
-    }
-    return 0;
-}
-
-const char *kcmdline_get(void)
-{
-    return kcmdline;
-}
-
-/**
- * Advance `*p` past the next token, delimited by spaces and tabs, and set
- * `*start` and `*len` to where it begins and how long it is; 0 when the line
- * has no more. `kcmdline_value_nth` and `kcmdline_count` scan with it.
- */
-static int next_token(const char **p, const char **start, size_t *len)
-{
-    while (**p == ' ' || **p == '\t') {
-        (*p)++;
-    }
-    if (**p == '\0') {
+    if (cmdline[i] == '\0') {
         return 0;
     }
-    *start = *p;
-    while (**p != '\0' && **p != ' ' && **p != '\t') {
-        (*p)++;
+
+    while (split_word(&p, &a)) {
+        if (!a.whole) {
+            kcmdline[a.word - kcmdline] = '\0';
+            break;
+        }
     }
-    *len = (size_t)(*p - *start);
     return 1;
-}
-
-/** Whether the first `klen` bytes of `tok` are `key`'s. */
-static int token_is(const char *tok, const char *key, size_t klen)
-{
-    size_t i;
-
-    for (i = 0; i < klen && tok[i] == key[i]; i++) {
-        /* match each byte of the token against the key */
-    }
-    return i == klen;
-}
-
-/** Whether `tok` of length `len` is `key` followed by `=`. */
-static int token_has_key(const char *tok, size_t len, const char *key, size_t klen)
-{
-    return len >= klen + 1 && tok[klen] == '=' && token_is(tok, key, klen);
 }
 
 int kcmdline_value(const char *key, char *out, unsigned int outlen)
@@ -117,24 +203,23 @@ int kcmdline_list(const char *key, const char *flag, const char *const *words, i
 {
     size_t klen = k_strlen(key), flen = flag != 0 ? k_strlen(flag) : 0;
     const char *p = kcmdline;
-    const char *tok, *s, *end;
-    size_t len;
+    const char *s, *end;
+    struct arg a;
     int seen = 0, w;
 
-    while (next_token(&p, &tok, &len)) {
-        if (flag != 0 && len >= flen && token_is(tok, flag, flen) &&
-            (len == flen || tok[flen] == '=')) {
+    while (next_arg(&p, &a)) {
+        if (flag != 0 && arg_is(&a, flag, flen)) {
             seen |= 1;
             if (last != 0) {
                 *last = 0;
             }
             continue;
         }
-        if (!token_has_key(tok, len, key, klen)) {
+        if (a.val == 0 || !arg_is(&a, key, klen)) {
             continue;
         }
-        end = tok + len;
-        for (s = tok + klen + 1; s < end;) {
+        end = a.val + a.vlen;
+        for (s = a.val; s < end;) {
             w = list_word(s, end, words, nwords);
             if (w >= 0) {
                 seen |= 1 << w;
@@ -157,32 +242,26 @@ int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
 {
     size_t klen = k_strlen(key);
     const char *p = kcmdline;
-    const char *tok;
-    size_t len;
+    struct arg a;
+    size_t i;
     int seen = 0;
 
     if (outlen == 0) {
         return 0;
     }
     out[0] = '\0';
-    while (next_token(&p, &tok, &len)) {
-        if (token_has_key(tok, len, key, klen)) {
-            size_t vlen = len - klen - 1;
-            size_t i;
-
-            if (seen++ != nth) {
-                continue;
-            }
-
-            if (vlen + 1 > (size_t)outlen) {
-                return 0;
-            }
-            for (i = 0; i < vlen; i++) {
-                out[i] = tok[klen + 1 + i];
-            }
-            out[vlen] = '\0';
-            return 1;
+    while (next_arg(&p, &a)) {
+        if (a.val == 0 || !arg_is(&a, key, klen) || seen++ != nth) {
+            continue;
         }
+        if (a.vlen + 1 > (size_t)outlen) {
+            return 0;
+        }
+        for (i = 0; i < a.vlen; i++) {
+            out[i] = a.val[i];
+        }
+        out[a.vlen] = '\0';
+        return 1;
     }
     return 0;
 }
@@ -203,55 +282,61 @@ static unsigned int digit_value(char c)
 }
 
 /**
- * The value of the `nth` `key=value` token, counting from zero, as a pointer
- * into the line, so that a value of any length is read in place; NULL when
- * the line has no such token. The value ends at the token's end, a space, a
- * tab or the NUL.
+ * Find the `nth` `key=value` word, counting from zero, and set `*a` to it,
+ * so that a value of any length is read in place, without the quotes
+ * `split_word` leaves out. Returns 0 when the line has no such word.
  */
-static const char *value_in_place(const char *key, int nth)
+static int find_value(const char *key, int nth, struct arg *a)
 {
     size_t klen = k_strlen(key);
     const char *p = kcmdline;
-    const char *tok;
-    size_t len;
     int seen = 0;
 
-    while (next_token(&p, &tok, &len)) {
-        if (token_has_key(tok, len, key, klen) && seen++ == nth) {
-            return tok + klen + 1;
+    while (next_arg(&p, a)) {
+        if (a->val != 0 && arg_is(a, key, klen) && seen++ == nth) {
+            return 1;
         }
     }
     return 0;
 }
 
+/** The byte `i` of the value `a`, or NUL past its end, where next_arg ends
+ * the value with a NUL. */
+static char val_at(const struct arg *a, size_t i)
+{
+    return i < a->vlen ? a->val[i] : '\0';
+}
+
 /** The base is chosen as Linux's _parse_integer_fixup_radix chooses it
  * (lib/kstrtox.c, lines 26 to 40), and the digits wrap as its unsigned
- * long long does, whose low 32 bits are what the int keeps. A space or a
- * tab is no digit, so the digits stop at the token's end. */
+ * long long does, whose low 32 bits are what the int keeps. The digits
+ * stop at the value's end, where next_arg puts a NUL. */
 int kcmdline_option_nth(const char *key, int nth, int *out)
 {
-    const char *s = value_in_place(key, nth);
+    struct arg a;
     unsigned int base = 10u, value = 0u, d;
+    size_t i = 0;
     int neg = 0;
 
-    if (s == 0) {
+    if (!find_value(key, nth, &a)) {
         return -1;
     }
-    if (*s == '\0' || *s == ' ' || *s == '\t') {
+    if (a.vlen == 0) {
         return 0;
     }
-    if (*s == '-') {
+    if (val_at(&a, 0) == '-') {
         neg = 1;
-        s++;
+        i++;
     }
-    if (s[0] == '0') {
+    if (val_at(&a, i) == '0') {
         base = 8u;
-        if ((s[1] == 'x' || s[1] == 'X') && digit_value(s[2]) < 16u) {
+        if ((val_at(&a, i + 1) == 'x' || val_at(&a, i + 1) == 'X') &&
+            digit_value(val_at(&a, i + 2)) < 16u) {
             base = 16u;
-            s += 2;
+            i += 2;
         }
     }
-    for (; (d = digit_value(*s)) < base; s++) {
+    for (; (d = digit_value(val_at(&a, i))) < base; i++) {
         value = value * base + d;
     }
     *out = (int)(neg ? 0u - value : value);
@@ -319,20 +404,20 @@ static int cmdline_bool(const char *key, int dflt, int bare)
 {
     size_t klen = k_strlen(key);
     const char *p = kcmdline;
-    const char *tok;
-    size_t len;
+    struct arg a;
     int value = dflt;
 
-    while (next_token(&p, &tok, &len)) {
-        if (bare && len == klen && token_is(tok, key, klen)) {
-            value = 1;
+    while (next_arg(&p, &a)) {
+        if (!arg_is(&a, key, klen)) {
             continue;
         }
-        if (!token_has_key(tok, len, key, klen)) {
+        if (a.val == 0) {
+            if (bare) {
+                value = 1;
+            }
             continue;
         }
-        (void)bool_text(len > klen + 1 ? tok[klen + 1] : '\0',
-                        len > klen + 2 ? tok[klen + 2] : '\0', &value);
+        (void)bool_text(val_at(&a, 0), val_at(&a, 1), &value);
     }
     return value;
 }
@@ -351,28 +436,27 @@ int kcmdline_param_nth(const char *key, int nth, char *out, unsigned int outlen)
 {
     size_t klen = k_strlen(key);
     const char *p = kcmdline;
-    const char *tok;
-    size_t len, vlen, i;
+    struct arg a;
+    size_t i;
     int seen = 0;
 
     if (outlen > 0) {
         out[0] = '\0';
     }
-    while (next_token(&p, &tok, &len)) {
-        if (len == klen && token_is(tok, key, klen)) {
-            if (seen++ == nth) {
-                return 0;
-            }
-        } else if (token_has_key(tok, len, key, klen) && seen++ == nth) {
-            vlen = len - klen - 1;
-            if (vlen + 1 <= (size_t)outlen) {
-                for (i = 0; i < vlen; i++) {
-                    out[i] = tok[klen + 1 + i];
-                }
-                out[vlen] = '\0';
-            }
-            return 1;
+    while (next_arg(&p, &a)) {
+        if (!arg_is(&a, key, klen) || seen++ != nth) {
+            continue;
         }
+        if (a.val == 0) {
+            return 0;
+        }
+        if (a.vlen + 1 <= (size_t)outlen) {
+            for (i = 0; i < a.vlen; i++) {
+                out[i] = a.val[i];
+            }
+            out[a.vlen] = '\0';
+        }
+        return 1;
     }
     return -1;
 }
@@ -381,12 +465,11 @@ int kcmdline_count(const char *key)
 {
     size_t klen = k_strlen(key);
     const char *p = kcmdline;
-    const char *tok;
-    size_t len;
+    struct arg a;
     int n = 0;
 
-    while (next_token(&p, &tok, &len)) {
-        if (token_has_key(tok, len, key, klen)) {
+    while (next_arg(&p, &a)) {
+        if (a.val != 0 && arg_is(&a, key, klen)) {
             n++;
         }
     }
@@ -397,12 +480,11 @@ int kcmdline_bare_count(const char *flag)
 {
     size_t flen = k_strlen(flag);
     const char *p = kcmdline;
-    const char *tok;
-    size_t len;
+    struct arg a;
     int n = 0;
 
-    while (next_token(&p, &tok, &len)) {
-        if (len == flen && token_is(tok, flag, flen)) {
+    while (next_arg(&p, &a)) {
+        if (a.val == 0 && arg_is(&a, flag, flen)) {
             n++;
         }
     }
