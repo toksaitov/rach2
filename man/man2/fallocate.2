@@ -112,6 +112,8 @@ with
 The file system has no room for the range, or a tmpfs's
 .Ql size=
 none.
+.It Bq Er EBUSY
+The file backs a loop device.
 .It Bq Er EPERM
 A seal of a tmpfs file forbids the change, the file is immutable, or it
 is append-only and
