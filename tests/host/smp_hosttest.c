@@ -45,6 +45,7 @@
 #include "compat/waketime_none.h"
 
 #include <setjmp.h>
+#include <string.h>
 
 extern int printf(const char *format, ...);
 extern void *calloc(unsigned long count, unsigned long size);
@@ -565,6 +566,55 @@ static void row_bkl_counts(void)
     bkl_tally[1] = NULL;
 }
 
+/** A kernel thread's entry, which the rows never run. */
+static void kthread_model(void)
+{}
+
+/**
+ * A kernel thread's own holds, its take after a switch and its own
+ * `bkl_enter` outside any entry, count under its pid and name in bkl/calls,
+ * and not under `take 1` or `vector 0` as well; an interrupt's hold while
+ * it runs stays under the interrupt's vector; and a write zeroes the
+ * threads' lines.
+ */
+static void row_kthread_counts(void)
+{
+    static char text[16384];
+    static process_t worker;
+
+    bkl_booted = 1;
+    k_memset(&worker, 0, sizeof(worker));
+    worker.pid = 41;
+    k_memcpy(worker.comm, "kmodel", 7);
+    worker.kthread_entry = kthread_model;
+    cpu_table[0].current = &worker;
+    cpu_table[0].bkl_depth = 0;
+    (void)smp_calls_store(NULL, NULL, 1);
+
+    bkl_take_as(1, BKL_KEY_SWITCH);
+    (void)bkl_drop();
+    bkl_enter();
+    bkl_exit();
+    text[smp_calls_show(NULL, text, sizeof(text) - 1)] = 0;
+    check(has_line(text, "kthread 41 0 0 2 ") && strstr(text, " kmodel\n") != NULL,
+          "a kernel thread's take after a switch and its own enter count under its pid and name");
+    check(bkl_calls[BKL_KEY_SWITCH].holds == 0 && bkl_calls[BKL_ENTRY_SYSCALLS].holds == 0 &&
+              !has_line(text, "take 1 ") && !has_line(text, "vector 0 "),
+          "and under no key besides");
+
+    worker.bkl_entry = BKL_ENTRY_SYSCALLS + 32u + 1u;
+    bkl_enter();
+    bkl_exit();
+    worker.bkl_entry = 0;
+    check(bkl_calls[BKL_ENTRY_SYSCALLS + 32].holds == 1,
+          "an interrupt's hold while the kernel thread runs counts under its vector");
+
+    (void)smp_calls_store(NULL, NULL, 1);
+    text[smp_calls_show(NULL, text, sizeof(text) - 1)] = 0;
+    check(!has_line(text, "kthread "), "a write zeroes the kernel threads' lines");
+    cpu_table[0].current = &self;
+}
+
 /* What the borrower of a loan of the big lock found while it held it, and
  * after it gave it back. */
 static int borrowed, returned;
@@ -805,6 +855,7 @@ int main(void)
 
     row_sample_stack();
     row_bkl_counts();
+    row_kthread_counts();
     row_bkl_lend();
     row_call();
 

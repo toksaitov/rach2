@@ -247,10 +247,10 @@ void bkl_profile_sample(uintptr_t pc, uintptr_t fp);
 
 /** Write the call counts as debugfs's `bkl/calls` shows them, as far as `cap`
  * bytes at `buf` go, and return the whole text's length: for each system call,
- * entry vector and ioctl request with any count, the calls, their time from
- * entry to return, the holds of the big lock charged to it, and their time
- * and their waits for the lock, in microseconds. The caller holds the big
- * lock. */
+ * entry vector, kernel thread and ioctl request with any count, the calls,
+ * their time from entry to return, the holds of the big lock charged to it,
+ * and their time and their waits for the lock, in microseconds, and a kernel
+ * thread's name. The caller holds the big lock. */
 int32_t smp_calls_show(void *data, char *buf, uint32_t cap);
 
 /** Zero the call counts, keeping the requests in their slots; `len`. */
