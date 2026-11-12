@@ -85,10 +85,11 @@ def gpu_process():
     for entry in Path("/proc").iterdir():
         if entry.name.isdigit():
             try:
-                words = (entry / "cmdline").read_bytes().split(b"\0")
+                line = (entry / "cmdline").read_bytes()
             except OSError:
                 continue
-            if b"--type=gpu-process" in words:
+            # Chromium rewrites its title, its arguments joined by spaces.
+            if b"--type=gpu-process" in line:
                 return int(entry.name)
     return None
 
