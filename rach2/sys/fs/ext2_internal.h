@@ -26,9 +26,9 @@
  * present is brought in with the locks let go, or, when the caller holds a
  * file lock of its own, ends the call short (`user_refault`).
  *
- * The big lock covers the node table and the namespace operations' steps
- * between their sleeps; the cache's writes have a lock of their own
- * (bcache.h). A reader may run
+ * The big lock covers the node table, and a lookup's and a change of
+ * attributes' steps between their sleeps; the cache's writes have a lock of
+ * their own (bcache.h). A reader may run
  * without it: `read`, `readdir`, `getattr`, `open`, `release`, `hold` and
  * `put` of a node the caller holds, into kernel buffers (the type sets
  * `reads_unlocked`). So may a writer of a regular file's data: `write`,
@@ -43,6 +43,18 @@
  * holds its node's lock, which every writer of the node's blocks holds too,
  * and reads the batch's images under `wb->lock`, in the step that finds
  * them.
+ *
+ * The operations on names, create, mknod, unlink, mkdir, rmdir, link,
+ * symlink and rename, let the big lock go once admitted (`names_begin` in
+ * ext2.c) and run under the directories' locks the VFS took, as a writer of
+ * a file's data runs under its node's. They search, decide and write under
+ * those locks and the groups', and take the big lock (`ext2_big_enter`) only
+ * for the node table: a node had or given back (`ext2_node_for`,
+ * `ext2_node_unhold`, `ext2_node_settle`), a new inode published
+ * (`inode_new`), and the count of a node's holds when its last name goes,
+ * with its free (`child_unlinked`). The walk of `..` entries in `is_below`
+ * takes none: each read copies from a buffer it holds, as each write
+ * copies into one.
  *
  * The node locks, `em->batch`, the groups' locks and `em->super` count in
  * their holder's `file_locks` (process.h), so that reclaim under any of them
@@ -189,7 +201,11 @@ struct ext2_node {
     /* A fast link, its target in `block`: decided once, when the inode is
      * read or the link made, as Linux sets `i_link` (`readlink_cached`). */
     int fast_target;
-    uint32_t add_from;           /* a directory's offset of the block where the last entry went */
+    uint32_t add_from; /* a directory's offset of the block where the last entry went */
+    /* A directory's block where its next lookup starts, the one its last
+     * lookup found a name in, kept under its lock, as Linux keeps
+     * `i_dir_start_lookup` (fs/ext2/dir.c:356 and 395). */
+    uint32_t lookup_from;
     int unlinked;                /* no name left; the inode and its blocks go at the last put */
     int state;                   /* N_LOADING, N_LIVE, N_DYING or N_FAILED */
     int load_error;              /* the -errno of a load that failed */
@@ -301,10 +317,6 @@ struct ext2_writeback {
     struct spinlock lock;
 };
 
-/* The directories whose last lookup a mount remembers, enough for the walk
- * of a path eight directories deep. */
-#define EXT2_LOOKUP_HINTS 8
-
 /* The groups' locks a mount has, which the group numbers hash to by their
  * low bits, as Linux's `bgl_lock_ptr` hashes them to NR_BG_LOCKS; a power
  * of two. */
@@ -353,15 +365,6 @@ struct ext2_mount {
     uint32_t node_buckets;
     uint32_t node_count;
     struct ext2_node *node_first[EXT2_NODE_FIRST];
-    /* Where the last lookups found their names, one slot for each of the
-     * last EXT2_LOOKUP_HINTS directories, since a path's walk looks up a
-     * name in every directory on the way: the directory's inode and the
-     * block where the next lookup in it starts. `lookup_next` is the slot a
-     * directory without one takes. */
-    struct {
-        uint32_t dir, block;
-    } lookup_hint[EXT2_LOOKUP_HINTS];
-    int lookup_next;
     /* The locks ext2.Readme.md's Locks section lists: the batch's
      * (`ext2_batch_lock`), the groups', which group `g` takes at
      * `g % EXT2_GROUP_LOCKS` (`ext2_group_lock`), and the superblock's

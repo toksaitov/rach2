@@ -134,19 +134,6 @@ static int names_equal(const char *a, const char *b)
     return *a == *b;
 }
 
-/** The lookup-hint slot of directory inode `dir`, or -1 when it has none. */
-static int lookup_slot(const struct ext2_mount *em, uint32_t dir)
-{
-    int i;
-
-    for (i = 0; i < EXT2_LOOKUP_HINTS; i++) {
-        if (em->lookup_hint[i].dir == dir) {
-            return i;
-        }
-    }
-    return -1;
-}
-
 /**
  * Find `name` in directory `d`, whose lock the caller holds, for a lookup:
  * 1 with the inode it names in `*ino` and the entry's byte in `*at`, 0 when
@@ -154,22 +141,22 @@ static int lookup_slot(const struct ext2_mount *em, uint32_t dir)
  *
  * A directory of this format has no index, so the lookup reads entries
  * until it finds the name. It starts at the block where the last lookup in
- * the same directory found its name and wraps around to it, as Linux's
- * ext2 does: `ls` and `find` look up the names of a directory in the order
- * it lists them, so each is found near the one before, and a directory of
- * n names is listed in time proportional to n and not to n squared. A block
- * starts an entry whatever was written since, since no entry crosses one.
+ * the same directory found its name (`lookup_from`) and wraps around to it,
+ * as Linux's ext2 does (fs/ext2/dir.c:356-395): `ls` and `find` look up the
+ * names of a directory in the order it lists them, so each is found near
+ * the one before, and a directory of n names is listed in time proportional
+ * to n and not to n squared. A block starts an entry whatever was written
+ * since, since no entry crosses one.
  */
-static int dir_lookup(struct ext2_mount *em, const struct ext2_node *d, const char *name,
-                      uint32_t *ino, uint32_t *at)
+static int dir_lookup(struct ext2_mount *em, struct ext2_node *d, const char *name, uint32_t *ino,
+                      uint32_t *at)
 {
     uint32_t start = 0, cursor, limit;
     struct ext2_window w;
-    int pass, slot;
+    int pass;
 
-    slot = lookup_slot(em, d->ino);
-    if (slot >= 0 && ((uint64_t)em->lookup_hint[slot].block << em->block_shift) < d->size) {
-        start = em->lookup_hint[slot].block << em->block_shift;
+    if (((uint64_t)d->lookup_from << em->block_shift) < d->size) {
+        start = d->lookup_from << em->block_shift;
     }
     window_open(em, &w);
     for (pass = 0; pass < 2; pass++) {
@@ -189,12 +176,7 @@ static int dir_lookup(struct ext2_mount *em, const struct ext2_node *d, const ch
                 break;
             }
             if (sc.ino != 0 && names_equal(sc.name, name)) {
-                if (slot < 0) {
-                    slot = em->lookup_next;
-                    em->lookup_next = (em->lookup_next + 1) % EXT2_LOOKUP_HINTS;
-                    em->lookup_hint[slot].dir = d->ino;
-                }
-                em->lookup_hint[slot].block = *at >> em->block_shift;
+                d->lookup_from = *at >> em->block_shift;
                 window_close(&w);
                 *ino = sc.ino;
                 return 1;
@@ -1084,10 +1066,14 @@ static int dir_set_dotdot(struct ext2_mount *em, struct ext2_node *d, uint32_t p
  *
  * The caller holds the mount's rename lock, under which no directory
  * changes its parent, and may hold the locks of directories on the way;
- * so the walk reads copies of the inodes and takes no lock, since one of
- * an ancestor would come after its descendant's. An entry is changed in
- * one step between sleeps, so a `..` read while another call adds a name
- * beside it is whole.
+ * so the walk reads copies of the inodes and takes no node lock, since one
+ * of an ancestor would come after its descendant's, and no big lock. Each
+ * read of an inode or of an entry's head copies from the block's buffer
+ * while it holds it, or from the batch's image under the batch's spinlock
+ * (`ext2_read_bytes`), as each write through the cache copies into both
+ * while it holds the buffer (`ext2_write_owned`); so a `..` read while
+ * another call adds or removes a name beside it, under that directory's
+ * lock alone, is whole, its record length before the change or after.
  */
 static int is_below(struct ext2_mount *em, uint32_t ino, uint32_t ancestor, int *below)
 {
@@ -1151,11 +1137,13 @@ static int is_below(struct ext2_mount *em, uint32_t ino, uint32_t ancestor, int 
  * the lock, so that the holder waits on the disk only for a block evicted
  * again.
  * The caller locks the new inode at subclass 4, below the published nodes
- * the VFS holds, until it has a directory entry.
+ * the VFS holds, until it has a directory entry. The big lock is taken for
+ * the whole of it (`inode_new`), since the allocator looks the number up in
+ * the node table and publishes the node there.
  * 0, -ENOSPC, -ENOMEM, or -errno; a failure frees the inode.
  */
-static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_t mode, int store,
-                     struct ext2_node **out)
+static int inode_make(struct ext2_mount *em, const struct ext2_node *dir, uint32_t mode, int store,
+                      struct ext2_node **out)
 {
     uint32_t parent_ino = dir->ino;
     int is_dir = (mode & S_IFMT_) == S_IFDIR_;
@@ -1216,6 +1204,18 @@ static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_
     return 0;
 }
 
+/** `inode_make` under the big lock, taken for an operation on names, which
+ * runs without it. */
+static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_t mode, int store,
+                     struct ext2_node **out)
+{
+    int big = ext2_big_enter();
+    int rc = inode_make(em, dir, mode, store, out);
+
+    ext2_big_exit(big);
+    return rc;
+}
+
 /**
  * The node of inode `ino`, which an entry of a directory whose lock the
  * caller holds names, held and locked, into `*out`: the one node every
@@ -1249,16 +1249,21 @@ static void child_give(struct ext2_mount *em, struct ext2_node *c)
  * as having no name, with its change time set: freed at once when the
  * caller's is its only hold, since nothing else can reach it, and
  * otherwise stored with its count of 0, for e2fsck to read it as deleted
- * after a crash, and freed at its last put. 0, or -errno.
+ * after a crash, and freed at its last put. The count of holds is read
+ * under the big lock, with the free begun in the same step, since only
+ * `ext2_node_for` under it gives a new hold on a node nothing else holds.
+ * 0, or -errno.
  */
 static int child_unlinked(struct ext2_mount *em, struct ext2_node *c)
 {
+    int big = ext2_big_enter();
+    int rc;
+
     ext2_stamp(c, T_CTIME);
     c->unlinked = 1;
-    if (c->refs == 1) {
-        return ext2_release_inode(em, c);
-    }
-    return ext2_inode_store(em, c);
+    rc = c->refs == 1 ? ext2_release_inode(em, c) : ext2_inode_store(em, c);
+    ext2_big_exit(big);
+    return rc;
 }
 
 /**

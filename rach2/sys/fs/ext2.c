@@ -219,9 +219,12 @@ static void node_drop(struct ext2_mount *em, struct ext2_node *n)
  * free the node with the last: a load that failed, or a new inode's. */
 void ext2_node_unhold(struct ext2_mount *em, struct ext2_node *n)
 {
+    int big = ext2_big_enter();
+
     if (ext2_node_ref(n, -1) == 0) {
         node_drop(em, n);
     }
+    ext2_big_exit(big);
 }
 
 /** End the N_LOADING of node `n`, held by the caller: N_LIVE for an `rc` of
@@ -229,12 +232,15 @@ void ext2_node_unhold(struct ext2_mount *em, struct ext2_node *n)
  * caller waiting for it. */
 void ext2_node_settle(struct ext2_mount *em, struct ext2_node *n, int rc)
 {
+    int big = ext2_big_enter();
+
     n->state = rc == 0 ? N_LIVE : N_FAILED;
     n->load_error = rc;
     wq_wake_all(&em->node_wq);
     if (rc != 0) {
         ext2_node_unhold(em, n);
     }
+    ext2_big_exit(big);
 }
 
 /** Free every node of the mount and its hash's table, at its unmount or a
@@ -1069,16 +1075,8 @@ static struct ext2_node *node_join(struct ext2_mount *em, struct ext2_node *n, i
     return n;
 }
 
-/**
- * The node for inode `ino`, held once more if the mount has it in memory
- * and loaded into a new record otherwise; NULL with `*rc` set, -ENOMEM when
- * the heap has no room or -EIO when the inode cannot be read. The record is
- * published N_LOADING before the load, which sleeps in the cache, so that a
- * second lookup meanwhile waits for it and does not make another; a dying
- * node is waited for, and the inode then looked up anew. The caller may hold
- * node locks: the load holds none, and a node that dies holds none it needs.
- */
-struct ext2_node *ext2_node_for(struct ext2_mount *em, uint32_t ino, int *rc)
+/** `ext2_node_for` under the big lock, which keeps the node table. */
+static struct ext2_node *node_for(struct ext2_mount *em, uint32_t ino, int *rc)
 {
     struct ext2_node *n, *fresh = 0;
 
@@ -1111,6 +1109,26 @@ struct ext2_node *ext2_node_for(struct ext2_mount *em, uint32_t ino, int *rc)
     *rc = ext2_inode_load(em, ino, fresh);
     ext2_node_settle(em, fresh, *rc);
     return *rc == 0 ? fresh : 0;
+}
+
+/**
+ * The node for inode `ino`, held once more if the mount has it in memory
+ * and loaded into a new record otherwise; NULL with `*rc` set, -ENOMEM when
+ * the heap has no room or -EIO when the inode cannot be read. The record is
+ * published N_LOADING before the load, which sleeps in the cache, so that a
+ * second lookup meanwhile waits for it and does not make another; a dying
+ * node is waited for, and the inode then looked up anew. The caller may hold
+ * node locks: the load holds none, and a node that dies holds none it needs.
+ * A caller without the big lock, an operation on names, has it taken for the
+ * search and the hold, since the node table is the big lock's.
+ */
+struct ext2_node *ext2_node_for(struct ext2_mount *em, uint32_t ino, int *rc)
+{
+    int big = ext2_big_enter();
+    struct ext2_node *n = node_for(em, ino, rc);
+
+    ext2_big_exit(big);
+    return n;
 }
 
 /** The `hold` of `vfs_ops`: one more hold on `node`, which takes no lock
@@ -1944,11 +1962,12 @@ int ext2_em_strict(const struct ext2_mount *em)
 
 /**
  * Take the big lock for what it still keeps when the caller runs without
- * it, as a writer of a file's data does: the node table's walks, the user's
- * pages under a copy from them (`vm_resident`) and the VFS's flags of the
- * mount. 1 when taken, for `ext2_big_exit`, and 0 when the caller held it.
- * The caller holds no spinlock. A sleep lets the lock go and takes it back,
- * as every holder's does.
+ * it, as a writer of a file's data and an operation on names do: the node
+ * table's walks and changes, the user's pages under a copy from them
+ * (`vm_resident`) and the VFS's flags of the mount. 1 when taken, for
+ * `ext2_big_exit`, and 0 when the caller held it. The caller holds no
+ * spinlock. A sleep lets the lock go and takes it back, as every holder's
+ * does.
  */
 int ext2_big_enter(void)
 {
@@ -2040,8 +2059,11 @@ void ext2_node_share_group(struct ext2_mount *em, struct ext2_node *n, uint32_t 
  * same step as the buffer, so that the drain, which copies the image over
  * the cache's block, keeps them: an inode stored into a table block the
  * batch holds, a bit beside the batch's reservations, a descriptor or the
- * superblock's counts. With or without the big lock: the cache's write side
- * has a lock of its own (bcache.h). 0, or -errno.
+ * superblock's counts. The buffer is held across both copies, as the
+ * batch holds it to list an image and the drain to copy one over the
+ * block, so a reader that holds the buffer or copies under the batch's
+ * spinlock sees each write whole; the cache's write lock keeps the marks
+ * and writes (bcache.h), so the caller needs no big lock. 0, or -errno.
  */
 int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const void *src,
                      uint32_t len, int sync)
@@ -2251,7 +2273,10 @@ void ext2_inode_encode_noting(struct ext2_mount *em, struct ext2_node *n, uint8_
  * mount drains the batch before any store but the batch's own
  * (`ext2_assert_writable`). A change of a field but the times sets
  * `n->dirty_meta`, and the superblock is listed among `n`'s shared blocks
- * when `large_file` is set for it. 0, or -errno.
+ * when `large_file` is set for it. The caller holds `n`'s lock, or has `n`
+ * alone, a new inode or one freed at its last put; that keeps the slot's
+ * bytes and the batch's hold on `n` from changing under the read, the batch
+ * test and the write, so it needs no big lock. 0, or -errno.
  */
 int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int how)
 {
@@ -2746,6 +2771,38 @@ static void em_finish_node(struct ext2_mount *em, struct ext2_node *n)
     em_reap(em);
 }
 
+/**
+ * Admit an operation on names to mount `em` and let the big lock go for it:
+ * the operation runs under the directories' locks the VFS took, as Linux's
+ * ext2 runs under the directories' `i_rwsem` (fs/namei.c:4121, 4482 and
+ * 4615; `lock_rename`, 3250-3258), and takes the big lock for the steps
+ * that still need it (`ext2_big_enter`). A caller that holds the big lock,
+ * as a system call's router took it, has one hold let go and taken back by
+ * `names_end`, which is what a sleep in the operation does anyway; a
+ * caller that holds it deeper keeps the rest, and the operation runs under
+ * it. 1 when a hold was let go.
+ */
+static int names_begin(struct ext2_mount *em)
+{
+    em_enter(em);
+    if (bkl_held()) {
+        bkl_exit();
+        return 1;
+    }
+    return 0;
+}
+
+/** End an operation `names_begin` admitted, with the final puts it left,
+ * and give the caller back the big lock that `names_begin` let go, as
+ * `gave` says. */
+static void names_end(struct ext2_mount *em, int gave)
+{
+    if (gave) {
+        bkl_enter();
+    }
+    em_finish(em);
+}
+
 /** The `setattr` of `vfs_ops`: `ext2_setattr`, admitted under the node's
  * lock. */
 static int admit_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
@@ -2783,94 +2840,102 @@ static int admit_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     return rc;
 }
 
-/** The `create` of `vfs_ops`: `ext2_create`, admitted. */
+/** The `create` of `vfs_ops`: `ext2_create`, admitted, without the big lock
+ * (`names_begin`). */
 static int admit_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
                         void **node)
 {
-    int rc;
+    int gave, rc;
 
-    em_enter(ext2_em_of(mnt));
+    gave = names_begin(ext2_em_of(mnt));
     rc = ext2_create(mnt, dir, name, mode, node);
-    em_finish(ext2_em_of(mnt));
+    names_end(ext2_em_of(mnt), gave);
     return rc;
 }
 
-/** The `unlink` of `vfs_ops`: `ext2_unlink`, admitted. */
+/** The `unlink` of `vfs_ops`: `ext2_unlink`, admitted, without the big lock
+ * (`names_begin`). */
 static int admit_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 {
-    int rc;
+    int gave, rc;
 
-    em_enter(ext2_em_of(mnt));
+    gave = names_begin(ext2_em_of(mnt));
     rc = ext2_unlink(mnt, dir, name);
-    em_finish(ext2_em_of(mnt));
+    names_end(ext2_em_of(mnt), gave);
     return rc;
 }
 
-/** The `mkdir` of `vfs_ops`: `ext2_mkdir`, admitted. */
+/** The `mkdir` of `vfs_ops`: `ext2_mkdir`, admitted, without the big lock
+ * (`names_begin`). */
 static int admit_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
-    int rc;
+    int gave, rc;
 
-    em_enter(ext2_em_of(mnt));
+    gave = names_begin(ext2_em_of(mnt));
     rc = ext2_mkdir(mnt, dir, name, mode);
-    em_finish(ext2_em_of(mnt));
+    names_end(ext2_em_of(mnt), gave);
     return rc;
 }
 
-/** The `rmdir` of `vfs_ops`: `ext2_rmdir`, admitted. */
+/** The `rmdir` of `vfs_ops`: `ext2_rmdir`, admitted, without the big lock
+ * (`names_begin`). */
 static int admit_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 {
-    int rc;
+    int gave, rc;
 
-    em_enter(ext2_em_of(mnt));
+    gave = names_begin(ext2_em_of(mnt));
     rc = ext2_rmdir(mnt, dir, name);
-    em_finish(ext2_em_of(mnt));
+    names_end(ext2_em_of(mnt), gave);
     return rc;
 }
 
-/** The `rename` of `vfs_ops`: `ext2_rename`, admitted. */
+/** The `rename` of `vfs_ops`: `ext2_rename`, admitted, without the big lock
+ * (`names_begin`). */
 static int admit_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                         const char *newname)
 {
-    int rc;
+    int gave, rc;
 
-    em_enter(ext2_em_of(mnt));
+    gave = names_begin(ext2_em_of(mnt));
     rc = ext2_rename(mnt, olddir, oldname, newdir, newname);
-    em_finish(ext2_em_of(mnt));
+    names_end(ext2_em_of(mnt), gave);
     return rc;
 }
 
-/** The `link` of `vfs_ops`: `ext2_link`, admitted. */
+/** The `link` of `vfs_ops`: `ext2_link`, admitted, without the big lock
+ * (`names_begin`). */
 static int admit_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
 {
-    int rc;
+    int gave, rc;
 
-    em_enter(ext2_em_of(mnt));
+    gave = names_begin(ext2_em_of(mnt));
     rc = ext2_link(mnt, dir, name, node);
-    em_finish(ext2_em_of(mnt));
+    names_end(ext2_em_of(mnt), gave);
     return rc;
 }
 
-/** The `symlink` of `vfs_ops`: `ext2_symlink`, admitted. */
+/** The `symlink` of `vfs_ops`: `ext2_symlink`, admitted, without the big lock
+ * (`names_begin`). */
 static int admit_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *target)
 {
-    int rc;
+    int gave, rc;
 
-    em_enter(ext2_em_of(mnt));
+    gave = names_begin(ext2_em_of(mnt));
     rc = ext2_symlink(mnt, dir, name, target);
-    em_finish(ext2_em_of(mnt));
+    names_end(ext2_em_of(mnt), gave);
     return rc;
 }
 
-/** The `mknod` of `vfs_ops`: `ext2_mknod`, admitted. */
+/** The `mknod` of `vfs_ops`: `ext2_mknod`, admitted, without the big lock
+ * (`names_begin`). */
 static int admit_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
                        uint32_t rdev, void **node)
 {
-    int rc;
+    int gave, rc;
 
-    em_enter(ext2_em_of(mnt));
+    gave = names_begin(ext2_em_of(mnt));
     rc = ext2_mknod(mnt, dir, name, mode, rdev, node);
-    em_finish(ext2_em_of(mnt));
+    names_end(ext2_em_of(mnt), gave);
     return rc;
 }
 
