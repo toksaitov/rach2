@@ -599,6 +599,13 @@ void shmem_free(struct shmem *sh)
     sh->held = 0;
 }
 
+/** An object's free that took the GEM lock itself frees its pages giving
+ * way; here one leaf holds them all, so it frees them as `shmem_free`. */
+void shmem_free_yielding(struct shmem *sh)
+{
+    shmem_free(sh);
+}
+
 int pin_frames(struct mm *mm, const uintptr_t *frames, uint32_t count,
                const struct pin_holder *holder, struct pin **out)
 {

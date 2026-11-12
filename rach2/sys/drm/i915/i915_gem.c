@@ -321,6 +321,17 @@ void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj, int le
  * the chip has not passed holds: every binding undone, its mmap offsets
  * taken out of the device's space, its pages unpinned and freed, a userptr
  * object's range taken off. The DRM core has let its fences go by then.
+ *
+ * A free that takes the GEM lock itself, from GEM_CLOSE, a file's close, a
+ * region's release (`vm_file_reap`) or an exit, may sleep in that take,
+ * so it gives way every 512 entries of its clears and every leaf of its
+ * pages, as Linux's free worker calls cond_resched after each object
+ * (gem/i915_gem_object.c:423) and between batches of its pages
+ * (gem/i915_gem_shmem.c:29). No other thread reaches the object, its last
+ * reference gone, and the GEM lock keeps its bindings' range whole. A free
+ * under its caller's GEM lock, from retirement or the shrinker, gives no
+ * way, since that caller may be part way through a change that every other
+ * thread must see whole.
  */
 static void i915_gem_object_free(struct drm_gem_object *base)
 {
@@ -328,7 +339,7 @@ static void i915_gem_object_free(struct drm_gem_object *base)
     struct drm_i915_private *i915 = to_i915(base->dev);
     int i, taken = i915_gem_lock(i915);
 
-    (void)i915_gem_object_unbind(obj, 0);
+    (void)i915_gem_object_unbind(obj, taken);
     if (i915_gem_object_is_userptr(obj)) {
         i915_gem_userptr_release(obj);
     }
@@ -337,7 +348,11 @@ static void i915_gem_object_free(struct drm_gem_object *base)
     }
     unpin(obj->pin);
     kfree(obj->frames);
-    shmem_free(&obj->pages);
+    if (taken) {
+        shmem_free_yielding(&obj->pages);
+    } else {
+        shmem_free(&obj->pages);
+    }
     i915_gem_unlock(i915, taken);
     kfree(obj);
 }

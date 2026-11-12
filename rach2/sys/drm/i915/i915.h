@@ -2524,10 +2524,11 @@ void i915_vma_flush_writes(struct i915_vma *vma);
  * entries and pages must stay until the work is done: a caller that may
  * sleep waits with `i915_gem_object_wait_idle` first, where Linux's
  * unbind waits itself. Never sleeps. `may_yield` is the clear's
- * (`i915_ggtt_clear_range`): set by a caller that may sleep, the ioctls
- * and eviction, and clear in an MMU notifier's revoke, an object's free,
- * an unpin and the shrinker, as Linux's shrinker and notifier never reach
- * a cond_resched.
+ * (`i915_ggtt_clear_range`): set by a caller that may sleep, the ioctls,
+ * eviction and an object's free that took the GEM lock itself, and clear
+ * in an MMU notifier's revoke, a free under its caller's GEM lock, an
+ * unpin and the shrinker, as Linux's shrinker and notifier never reach a
+ * cond_resched.
  *
  * @return 0, -EAGAIN while it is pinned, or -EBUSY while its object is
  *         active.
