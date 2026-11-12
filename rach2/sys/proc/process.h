@@ -1156,13 +1156,14 @@ void signal_set_blocked(uint64_t mask);
  * or KSIG_SETMASK, which the caller has checked) and `set`, less SIGKILL and
  * SIGSTOP, under the signal state's lock alone, without the big lock, as
  * Linux 6.12.115's __set_current_blocked takes only sighand->siglock
- * (kernel/signal.c:3205-3215). Returns 1 when it changed the mask, and marks
- * signal work when the new mask lets a pending signal through. Returns 0,
- * changing nothing, when the change needs the big lock and the caller must
- * make it with `signal_set_blocked`: the new mask blocks a signal pending
- * for the process, for which another thread must be woken, or signal work
- * is marked already, which only a holder of the big lock clears. The caller
- * does not hold the big lock. Defined in syscall_proc.c.
+ * (kernel/signal.c:3097-3136). Returns 1 when it changed the mask, marking
+ * signal work when the new mask lets a pending signal through, and when the
+ * mask stays as it was, which changes nothing, as Linux's returns then. Returns
+ * 0, changing nothing, when the change needs the big lock and the caller must
+ * make it with `signal_set_blocked`: the new mask blocks a signal pending for
+ * the process, for which another thread must be woken, or signal work is
+ * marked already, which only a holder of the big lock clears. The caller does
+ * not hold the big lock. Defined in syscall_proc.c.
  */
 int signal_change_blocked_unlocked(int how, uint64_t set);
 
