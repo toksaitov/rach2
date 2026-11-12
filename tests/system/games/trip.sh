@@ -32,8 +32,10 @@ case $proton in
 esac
 made=
 home=
+debugmode=
 trap '[ -z "$made" ] || rm -f /opt/proton
-      [ -z "$home" ] || rm -rf "$home"' EXIT
+      [ -z "$home" ] || rm -rf "$home"
+      [ -z "$debugmode" ] || debugfs_mode "$debugmode"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -41,6 +43,30 @@ trap 'exit 143' TERM
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 chown "$user" "$out"
+
+# Set the mode of debugfs's root, which every mount of it shares, through the
+# mode= option of a mount of its own that is unmounted at once, since Rach2's
+# debugfs has no chmod.
+debugfs_mode() {
+    mkdir "$out/debugfs" &&
+        mount -t debugfs -o "mode=$1" debugfs "$out/debugfs" &&
+        umount "$out/debugfs"
+    rmdir "$out/debugfs"
+}
+
+# trip.py reads Rach2's bkl/calls as USER for the holds by entry and the takes
+# after a switch by the call they slept in, but debugfs's root is root's alone
+# (0700) by default: open it for the run and put its mode back on exit.
+calls=/sys/kernel/debug/bkl/calls
+if [ -e "$calls" ] && ! su -s /bin/sh "$user" -c "test -r $calls"; then
+    was=$(stat -c %a /sys/kernel/debug)
+    if debugfs_mode 755 && su -s /bin/sh "$user" -c "test -r $calls"; then
+        debugmode=$was
+    else
+        debugfs_mode "$was" || true
+        echo "trip: $calls: not readable by $user; holds by entry from /proc/stat alone" >&2
+    fi
+fi
 if command -v mixer > /dev/null && [ -e /dev/mixer ]; then
     mixer vol 1
 fi
