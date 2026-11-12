@@ -922,6 +922,18 @@ static void fc_job_read(struct fc_job *j)
     fc_run_free(&r);
 }
 
+/** Let go of a job's mount and then of its description `ofd`, which still
+ * holds the mount across the leave. The description's last unref reaches
+ * `vfs_desc_close`, whose reap of a lazily unmounted mount skips one that an
+ * operation is still in (`vfs_reap_detached`), and a leave reaps nothing, so
+ * the leave goes first, as Linux's last `mntput` of a detached mount
+ * schedules its cleanup from any context (fs/namespace.c:1426-1454). */
+static void fc_job_drop(struct open_file *ofd)
+{
+    vfs_leave(ofd->vmnt);
+    fd_ofd_unref(ofd);
+}
+
 /** A worker, kreadahead: take the oldest waiting job, read it, end it and
  * wake its waiters, and sleep while no job waits. It reads without the big
  * lock, as ext2 reads a file (`reads_unlocked`), and marks itself in a call
@@ -931,7 +943,6 @@ static void fc_worker(void)
 {
     struct fc_job *j;
     struct open_file *ofd;
-    struct vfs_mount *mnt;
     uint32_t i, flags;
 
     bkl_exit();
@@ -962,15 +973,13 @@ static void fc_worker(void)
         fc_job_read(j);
         flags = spin_lock_irqsave(&fc_lock);
         ofd = j->ofd;
-        mnt = ofd->vmnt;
         j->ofd = NULL;
         j->serial = 0;
         j->running = 0;
         workers_busy--;
         spin_unlock_irqrestore(&fc_lock, flags);
         wq_wake_all(&done_wq);
-        fd_ofd_unref(ofd);
-        vfs_leave(mnt);
+        fc_job_drop(ofd);
         current_proc->in_syscall = 0;
     }
 }
@@ -1038,10 +1047,7 @@ static void fc_cancel_orphans(void)
         wq_wake_all(&done_wq);
     }
     for (i = 0; i < n; i++) {
-        struct vfs_mount *mnt = ofds[i]->vmnt;
-
-        fd_ofd_unref(ofds[i]);
-        vfs_leave(mnt);
+        fc_job_drop(ofds[i]);
     }
 }
 
@@ -1099,8 +1105,7 @@ static void fc_queue(struct open_file *ofd, const struct fc_file *f, uint32_t st
     more = slot >= 0 && workers < FC_WORKERS && waiting + 1u > workers - workers_busy;
     spin_unlock_irqrestore(&fc_lock, flags);
     if (slot < 0) {
-        fd_ofd_unref(ofd);
-        vfs_leave(ofd->vmnt);
+        fc_job_drop(ofd);
         return;
     }
     if (more) {
