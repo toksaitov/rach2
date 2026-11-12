@@ -24,11 +24,15 @@ It needs at least 4 MiB of video memory in BAR 0, and reads the DISPI
 registers through BAR 2 when the device has it and through the ports
 0x1ce and 0x1cf otherwise.
 A device whose DISPI id is not 0xb0c0 to 0xb0cf is not bound.
-.Cm nomodeset
-or
 .Cm bochs.modeset=0
 on the kernel command line keeps the driver off, and the screen goes to
 .Xr fbdrm 4 .
+So does
+.Cm nomodeset ,
+unless a
+.Cm bochs.modeset
+word gives another value than \-1, as on Linux; the last word whose value
+is an integer counts.
 .Pp
 Before it touches the device the driver removes the firmware's framebuffer
 from every memory BAR the device decodes, so that
