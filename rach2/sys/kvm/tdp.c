@@ -290,13 +290,18 @@ static int zap_level(struct tdp *t, uint64_t *table, int level, uint64_t base, u
     return cleared;
 }
 
+/* The frames of one batch of a zap between two holds of `mmu_lock`: 64
+ * tables of 4 KiB leaves, 128 MiB of the guest. */
+#define TDP_ZAP_BATCH (64ull * TDP_ENTRIES)
+
 /** A table on the dead list is freed only after the flush, and a table
  * that goes needs the flush even when no leaf did. The count moves first,
  * whatever the tables held, so that a fault that read the caller's entry
- * before the change maps nothing from it. */
-void kvm_tdp_zap_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages)
+ * before the change maps nothing from it, and again after each break. */
+void kvm_tdp_zap_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages, uint32_t *flags)
 {
     struct tdp *t = (struct tdp *)vm->tdp;
+    uint64_t end, stop;
 
     if (!t) {
         return;
@@ -305,14 +310,25 @@ void kvm_tdp_zap_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages)
     if (npages == 0 || gfn >= kvm_tdp_frames()) {
         return;
     }
-    if (zap_level(t, table_at(t->root), TDP_LEVELS, 0, gfn, gfn + npages) || t->dead) {
-        kvm_tdp_flush(vm);
-    }
-    while (t->dead) {
-        uint64_t p = t->dead;
+    end = gfn + npages;
+    for (;;) {
+        stop = end - gfn > TDP_ZAP_BATCH ? gfn + TDP_ZAP_BATCH : end;
+        if (zap_level(t, table_at(t->root), TDP_LEVELS, 0, gfn, stop) || t->dead) {
+            kvm_tdp_flush(vm);
+        }
+        while (t->dead) {
+            uint64_t p = t->dead;
 
-        t->dead = table_at(p)[0];
-        table_free(t, p);
+            t->dead = table_at(p)[0];
+            table_free(t, p);
+        }
+        if (stop == end) {
+            return;
+        }
+        gfn = stop;
+        kvm_mmu_unlock(vm, *flags);
+        *flags = kvm_mmu_lock(vm);
+        vm->mmu_seq++;
     }
 }
 
@@ -320,7 +336,7 @@ void kvm_tdp_zap(struct kvm_vm *vm, uint64_t gfn, uint64_t npages)
 {
     uint32_t flags = kvm_mmu_lock(vm);
 
-    kvm_tdp_zap_locked(vm, gfn, npages);
+    kvm_tdp_zap_locked(vm, gfn, npages, &flags);
     kvm_mmu_unlock(vm, flags);
 }
 
@@ -752,7 +768,7 @@ void kvm_tdp_noncoherent(struct kvm_vm *vm, int assigned)
      * type, so every leaf goes and the next fault makes it anew, as Linux's
      * kvm_noncoherent_dma_assignment_start_or_stop zaps them. */
     if ((before == 0) != (vm->noncoherent == 0)) {
-        kvm_tdp_zap_locked(vm, 0, kvm_tdp_frames());
+        kvm_tdp_zap_locked(vm, 0, kvm_tdp_frames(), &flags);
     }
     kvm_mmu_unlock(vm, flags);
 }

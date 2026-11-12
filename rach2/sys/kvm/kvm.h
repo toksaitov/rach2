@@ -1206,8 +1206,19 @@ int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range)
  * freed. Takes `mmu_lock` and moves `mmu_seq`. Does not sleep. */
 void kvm_tdp_zap(struct kvm_vm *vm, uint64_t gfn, uint64_t npages);
 
-/** `kvm_tdp_zap` for a caller that holds `mmu_lock`. */
-void kvm_tdp_zap_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages);
+/**
+ * `kvm_tdp_zap` for a caller that holds `mmu_lock`, taken with the flags
+ * `*flags`. A range wider than a batch, TDP_ZAP_BATCH frames, is zapped a
+ * batch at a time, each flushed and its tables freed before `mmu_lock` is
+ * let go and taken again, `*flags` with it, and `mmu_seq` moved again, as
+ * Linux's tdp_mmu_zap_leafs yields (arch/x86/kvm/mmu/tdp_mmu.c:705-735,
+ * 848-861): the processor takes its interrupts and the other vCPUs their
+ * faults between batches, and a fault that spans a batch's end maps
+ * nothing. Neither sleeps nor gives way, so a change notice may call it.
+ * The caller makes its change to the slots before the zap, so a fault
+ * between batches maps by the new rules.
+ */
+void kvm_tdp_zap_locked(struct kvm_vm *vm, uint64_t gfn, uint64_t npages, uint32_t *flags);
 
 /** Count a device that does not snoop the processor's caches assigned to
  * `vm` (`assigned` 1) or taken from it (0). While one is assigned, RAM is
