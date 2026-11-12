@@ -279,6 +279,11 @@ uint32_t block_flags(block_device_t *dev)
     return dev->flags;
 }
 
+/* Whether the opener sleeps in the namespace lock's wait, for `wq_active`;
+ * changed only across a hand-off of the threads' mutex
+ * (krffs_open_threads.c). */
+static int opener_asleep;
+
 /** The namespace-lock wait: check that the opener is the waiter, count the
  * wait, and suspend the opener until the writer has finished its
  * relocation, when the lock must be free. */
@@ -287,7 +292,9 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     (void)wq;
     check(current_proc == &reader, "only opener waits for namespace lock");
     lock_waits++;
+    opener_asleep = 1;
     open_thread_wait();
+    opener_asleep = 0;
     check(cond(arg), "writer releases namespace lock before opener resumes");
     return 0;
 }
@@ -295,12 +302,12 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 /* kernel.lock_stat, off as at boot: the extracted lock times no hold. */
 int sleep_lock_stat;
 
-/** No waiter is ever queued: the opener is resumed by its thread, and
- * `wq_wake_all` is a no-op. */
+/** Whether a thread sleeps in a lock's wait: the opener, from its wait for
+ * the namespace lock until the writer resumes it. */
 int wq_active(const wait_queue_t *wq)
 {
     (void)wq;
-    return 0;
+    return opener_asleep;
 }
 
 /* The loop devices, which `loop_backs` of rach2/sys/block/loop.c reads
