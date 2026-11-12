@@ -48,7 +48,8 @@
  * task gates, to 32-bit, 16-bit and virtual-8086 tasks, and their faults; a
  * move to another processor, which clears the VMCS on the one it left and
  * launches it again; a state read between runs on another processor; VMXON
- * and VMPTRLD failing; a failed VMWRITE reported once; VPIDs; two vCPUs on
+ * and VMPTRLD failing; a failed VMWRITE reported once; VPIDs; the TPR
+ * shadow, its threshold and its exit, with the APIC in the kernel; two vCPUs on
  * one processor, each resumed; a panic inside a run, which clears every
  * VMCS active there and turns VMX off; the VMCSs cleared as the vCPUs are
  * freed; and what Linux's selftests ask of the guest's side:
