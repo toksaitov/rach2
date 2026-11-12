@@ -140,7 +140,12 @@ or
 .Pa /proc
 takes the place of any entry through 2147483647.
 A directory of ext2, whose place is a byte of the directory, takes any
-place, as on Linux, and
+place through the largest offset a file of its volume takes, as on Linux,
+where it is the volume's
+.Va s_maxbytes :
+17247252480 for blocks of 1024 bytes, 275415851008 for 2048 and
+2196873666560 for 4096.
+It takes
 .Dv SEEK_END ,
 .Dv SEEK_DATA
 and
@@ -248,7 +253,9 @@ file, the position is not a place in the listing of such a directory, or it is
 past 4294967295 on a
 .Pa /proc
 file other than
-.Pa /proc/ Ns Ar pid Ns Pa /mem .
+.Pa /proc/ Ns Ar pid Ns Pa /mem ,
+or past the largest offset a file of the volume takes on an ext2
+directory.
 The devices that always seek to zero do not check the origin.
 .It Bq Er EIO
 The file's metadata could not be read or its device was removed.
