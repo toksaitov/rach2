@@ -759,6 +759,12 @@ int copy_to_user(void __user *dst, const void *src, size_t size)
     return copy_from_user(dst, src, size);
 }
 
+/** `copy_to_user` with its bytes not copied: all of them or none. */
+size_t copy_to_user_left(void __user *dst, const void *src, size_t size)
+{
+    return copy_to_user(dst, src, size) == 0 ? 0 : size;
+}
+
 /** The disk at `index`, which no row looks up. */
 struct disk *disk_at(int index)
 {

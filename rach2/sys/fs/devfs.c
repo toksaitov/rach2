@@ -75,11 +75,14 @@ static int32_t dev_sink_write(fd_entry_t *e, const char __user *buf, uint32_t co
 }
 
 /** Copy `count` zero bytes, or random ones when `random`, to `buf`; the
- * bytes copied, or -EFAULT when none were. */
+ * bytes copied, those before a fault among them, or -EFAULT when none were,
+ * as Linux's read_zero counts what clear_user cleared
+ * (drivers/char/mem.c:504-519). */
 static int32_t dev_fill_read(fd_entry_t *e, char __user *buf, uint32_t count, int random)
 {
     char tmp[256];
     uint32_t done = 0;
+    size_t left;
 
     (void)e;
     if (!random) {
@@ -93,10 +96,11 @@ static int32_t dev_fill_read(fd_entry_t *e, char __user *buf, uint32_t count, in
         if (random) {
             krandom_bytes(tmp, chunk);
         }
-        if (copy_to_user((void __user *)(buf + done), tmp, chunk) != 0) {
+        left = copy_to_user_left((void __user *)(buf + done), tmp, chunk);
+        done += chunk - (uint32_t)left;
+        if (left != 0) {
             return done > 0 ? (int32_t)done : -EFAULT;
         }
-        done += chunk;
     }
     return (int32_t)count;
 }
