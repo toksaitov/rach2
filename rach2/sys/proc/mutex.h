@@ -74,7 +74,9 @@ void mutex_lock(struct mutex *m);
 
 /** Take `m` as `mutex_lock` does, but end the wait at a signal, as
  * Linux's `mutex_lock_interruptible`: 0 once held, or -EINTR with `m` not
- * taken. */
+ * taken. The wait tests the signal-work flag; with no mutex held it
+ * judges a signal under the big lock, which can discard an ignored one.
+ * A caller without the big lock holds no lock ordered after it. */
 int mutex_lock_interruptible(struct mutex *m);
 
 /** Take `m` as `mutex_lock` does, but end the wait at SIGKILL pending for

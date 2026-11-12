@@ -4,6 +4,7 @@
 
 #include "process.h"
 #include "tgroup.h"
+#include "smp.h"
 #include "../lib/kerrno.h"
 #include "../lib/ksignal.h"
 #include "../panic.h"
@@ -89,16 +90,36 @@ void mutex_unlock(struct mutex *m)
     wq_wake_all(&m->wq);
 }
 
+/** Judge a signal-work flag with no mutex held, under the big lock that
+ * signal_pending needs while it removes ignored signals from the queues. */
+static int mutex_signal_pending(void)
+{
+    int big = !bkl_held();
+    int pending;
+
+    if (big) {
+        bkl_enter();
+    }
+    pending = signal_pending();
+    if (big) {
+        bkl_exit();
+    }
+    return pending;
+}
+
 int mutex_lock_interruptible(struct mutex *m)
 {
-    DEP_ACQUIRE(&m->dep);
-    while (!mutex_take(m)) {
-        if (wq_wait_event(&m->wq, mutex_free, m) != 0) {
-            DEP_RELEASE(&m->dep);
+    for (;;) {
+        DEP_ACQUIRE(&m->dep);
+        if (mutex_take(m)) {
+            return 0;
+        }
+        DEP_RELEASE(&m->dep);
+        if (wq_wait_event_sigflag(&m->wq, mutex_free, m, "mutex_lock_interruptible") != 0 &&
+            mutex_signal_pending()) {
             return -EINTR;
         }
     }
-    return 0;
 }
 
 /** Whether the calling thread has SIGKILL pending, its own or its

@@ -9,9 +9,9 @@
  * host-deps: rach2/sys/fs/sleeplock.c
  * host-deps: tests/host/compat/fd_flat.c
  *
- * `ipc/unix.c`, `ipc/pipe.c` and the checked user copy are the kernel's,
- * included whole to reach their static state. The descriptor table the
- * threads share, the heap, the wait queues and the file system's socket
+ * `ipc/unix.c`, `ipc/pipe.c`, the mutex and the checked user copy are the
+ * kernel's, included whole to reach their static state. The descriptor table
+ * the threads share, the heap, the wait queues and the file system's socket
  * files are models; user memory is eight model pages. A copy that reaches a
  * page not yet present sleeps while the page comes in, and there the model
  * runs the call a row gives the other thread, the sibling, on a stack of
@@ -52,6 +52,7 @@
 #include "ipc/pipe.c"
 #include "ipc/pipe_ring.c"
 #include "mm/usercopy.c"
+#include "proc/mutex.c"
 
 /** The compare-and-exchange `cmpxchg_user_u32` makes, which no row reaches,
  * on the host's one thread. */
@@ -198,6 +199,9 @@ static int seen[FILES];
 static uint32_t name_len;
 
 static int failures, live, sigpipes;
+static int model_big, signal_checks, signal_without_big, ignore_signal;
+static int check_signal_context;
+static struct mutex *signal_unlock;
 static uint32_t inodes;
 
 /** Report `detail` when `condition` is false, and return the condition, so
@@ -609,6 +613,9 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     while (!cond(arg)) {
         if (!park_active()) {
+            if (check_signal_context) {
+                (void)signal_pending();
+            }
             return -EINTR;
         }
         sleep_on(wq);
@@ -623,18 +630,43 @@ int wq_wait_event_as(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *n
     return wq_wait_event(wq, cond, arg);
 }
 
-/** A wait the signal-work flag ends, which the model takes as
- * `wq_wait_event`: its -EINTR stands for the flag set. */
+/** A flag wait never examines the signal queues; -EINTR stands for the
+ * flag set, for its caller to judge under the big lock. */
 int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
 {
     (void)name;
-    return wq_wait_event(wq, cond, arg);
+    while (!cond(arg)) {
+        if (!park_active()) {
+            return -EINTR;
+        }
+        sleep_on(wq);
+    }
+    return 0;
 }
 
-/** 1: the signal that set the flag ends the wait. */
+/** Judge the model signal and record whether its queue was protected. An
+ * ignored signal can coincide with the holder giving its mutex back. */
 int signal_pending(void)
 {
+    if (check_signal_context) {
+        signal_checks++;
+        signal_without_big += !bkl_held();
+    }
+    if (ignore_signal) {
+        ignore_signal = 0;
+        if (signal_unlock) {
+            mutex_unlock(signal_unlock);
+            signal_unlock = NULL;
+        }
+        return 0;
+    }
     return 1;
+}
+
+/** A killable wait, which this model never calls in a row. */
+int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    return wq_wait_event_sigflag(wq, cond, arg, name);
 }
 
 /** An uninterruptible wait, which only a sibling can make and sleep in. */
@@ -1165,6 +1197,8 @@ static void setup(void)
     sibling_rc[0] = sibling_rc[1] = 0;
     sigpipes = 0;
     closing_on_get = -1;
+    signal_checks = signal_without_big = ignore_signal = check_signal_context = 0;
+    signal_unlock = NULL;
 }
 
 /**
@@ -1893,64 +1927,6 @@ void spin_unlock(struct spinlock *lock)
     lock->locked = 0;
 }
 
-/** Initialize a mutex and the queue on which a parked sibling waits. */
-void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key *key)
-{
-    (void)name;
-    (void)key;
-    m->owner = NULL;
-    wait_queue_init(&m->wq);
-}
-
-/** Whether the model mutex is free. */
-static int model_mutex_free(void *arg)
-{
-    return ((const struct mutex *)arg)->owner == NULL;
-}
-
-/** Wait for a socket's receive mutex, preserving a parked sibling's stack. */
-void mutex_lock(struct mutex *m)
-{
-    while (m->owner) {
-        wq_wait_event_nointr(&m->wq, model_mutex_free, m);
-    }
-    m->owner = m;
-}
-
-/** Wait for a bind mutex, allowing the model's signal to end the wait. */
-int mutex_lock_interruptible(struct mutex *m)
-{
-    while (m->owner) {
-        if (wq_wait_event(&m->wq, model_mutex_free, m)) {
-            return -EINTR;
-        }
-    }
-    m->owner = m;
-    return 0;
-}
-
-/** Release a mutex and wake a sibling parked on it. */
-void mutex_unlock(struct mutex *m)
-{
-    if (!m->owner) {
-        k_panic("free mutex");
-    }
-    m->owner = NULL;
-    wq_wake_all(&m->wq);
-}
-
-/** No big lock is dropped in this one-processor model. */
-int bkl_drop(void)
-{
-    return 0;
-}
-
-/** Restore the model's unchanged big-lock depth. */
-void bkl_take(int depth)
-{
-    (void)depth;
-}
-
 /** Take `lock` with interrupts off: one thread, so nothing waits. */
 uint32_t spin_lock_irqsave(struct spinlock *lock)
 {
@@ -1965,19 +1941,66 @@ void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
     spin_unlock(lock);
 }
 
-/** 1: the test runs as the kernel, under the big lock. */
-int bkl_held(void)
+/** Give back the model's big-lock depth. */
+int bkl_drop(void)
 {
-    return 1;
+    int depth = model_big;
+
+    model_big = 0;
+    return depth;
 }
 
-/** Nothing: there is no big lock. */
-void bkl_enter(void)
-{}
+/** Restore the model's inherited depth. */
+void bkl_take(int depth)
+{
+    model_big += depth;
+}
 
-/** Nothing: there is no big lock. */
+/** Whether the model holds the big lock. */
+int bkl_held(void)
+{
+    return model_big != 0;
+}
+
+/** Take the model's big lock. */
+void bkl_enter(void)
+{
+    model_big++;
+}
+
+/** Give back one model take. */
 void bkl_exit(void)
-{}
+{
+    model_big--;
+}
+
+/** A contended interruptible mutex checks signals only under the big
+ * lock, returning EINTR for a real signal and retrying an ignored one. */
+static void mutex_signal_row(void)
+{
+    struct mutex m;
+
+    setup();
+    mutex_init(&m, "signal row");
+    mutex_lock(&m);
+    check_signal_context = 1;
+    check(mutex_lock_interruptible(&m) == -EINTR && signal_checks == 1 && signal_without_big == 0 &&
+              model_big == 0,
+          "mutex signal: a pending signal is judged under the big lock");
+    mutex_unlock(&m);
+    end_row("mutex signal");
+
+    setup();
+    mutex_init(&m, "ignored row");
+    mutex_lock(&m);
+    check_signal_context = ignore_signal = 1;
+    signal_unlock = &m;
+    check(mutex_lock_interruptible(&m) == 0 && signal_checks == 1 && signal_without_big == 0 &&
+              model_big == 0,
+          "mutex signal: an ignored signal retries and takes the free mutex");
+    mutex_unlock(&m);
+    end_row("ignored mutex signal");
+}
 
 /** Set up the process and its shared table, and run every row; 0 when
  * each passes, 1 otherwise. */
@@ -2004,6 +2027,11 @@ int main(int argc, char **argv)
         dprintf(1, "unix-hosttest: result: rights-close: %d failures\n", failures);
         return failures ? 1 : 0;
     }
+    if (argc == 2 && same(argv[1], "mutex-signal")) {
+        mutex_signal_row();
+        dprintf(1, "unix-hosttest: result: mutex-signal: %d failures\n", failures);
+        return failures ? 1 : 0;
+    }
     accept_row();
     socketpair_row();
     rights_row();
@@ -2025,6 +2053,7 @@ int main(int argc, char **argv)
     flight_lock_row();
     vector_row();
     vector_write_row();
+    mutex_signal_row();
     dprintf(1, "unix-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }
