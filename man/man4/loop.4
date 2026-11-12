@@ -126,8 +126,11 @@ These operations fail with
 .Pp
 Detach fails with
 .Er EBUSY
-while the device has a mount, a buffer is held, or an attachment
-is still in progress.
+while the device has a mount, a buffer is held, a transfer is in
+progress, or an attachment is still in progress, and with
+.Er ENXIO
+when another detach released the device while this one wrote its
+buffers.
 Removing a medium marks the loop devices attached to files on it as gone;
 one with a mount or a transfer in progress is released when that ends.
 .Pp
@@ -160,7 +163,8 @@ node is not of whole sectors.
 .It Er ELOOP
 The file is on a loop-mounted volume.
 .It Er ENXIO
-Nothing is attached to the device.
+Nothing is attached to the device, or it was detached while a detach
+wrote its buffers.
 .El
 .Sh SEE ALSO
 .Xr mount 2 ,
