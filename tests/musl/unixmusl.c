@@ -36,6 +36,9 @@
  * with EFAULT and leaves the message for the next receive. A descriptor of a
  * KRFFS file in /tmp, sent before a write moves the file and received after
  * the sender's close and the unlink, has the file's size and reads its bytes.
+ * A receive under SO_RCVTIMEO whose waking signals a sibling thread takes
+ * still times out with EAGAIN. SO_PEERCRED of a socket with no peer gives pid
+ * 0 and ids -1 inside a user namespace with no maps.
  *
  * It prints "UNIXMUSL OK" and exits 0 on success, or prints "UNIXMUSL FAIL
  * (detail: errno N)" and exits 1 at the first failure. Ids 1000 and 65534 are
@@ -52,12 +55,14 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
+#include <sched.h>
 #include <signal.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -166,7 +171,12 @@ static const char *const assertion_id[] = {"stream-pair",
                                            "short-rights-setup",
                                            "short-rights-length",
                                            "short-creds-setup",
-                                           "short-creds-length"};
+                                           "short-creds-length",
+                                           "timeo-setup",
+                                           "timeo-eagain",
+                                           "timeo-sibling",
+                                           "nopeer-userns",
+                                           "nopeer-ids"};
 
 #define ASSERTIONS (sizeof(assertion_id) / sizeof(assertion_id[0]))
 
@@ -768,14 +778,12 @@ static int listening(void)
     return 0;
 }
 
-/** The state letter /proc/<pid>/stat gives process `pid`, or 0 when it has
- * no stat file. */
-static int proc_state(pid_t pid)
+/** The state letter of the stat file `path`, or 0 when there is none. */
+static int stat_state(const char *path)
 {
-    char path[64], line[256], *state;
+    char line[256], *state;
     int fd, n;
 
-    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
     fd = open(path, O_RDONLY);
     if (fd < 0) {
         return 0;
@@ -788,6 +796,16 @@ static int proc_state(pid_t pid)
     line[n] = '\0';
     state = strrchr(line, ')');
     return state && state[1] == ' ' ? state[2] : 0;
+}
+
+/** The state letter /proc/<pid>/stat gives process `pid`, or 0 when it has
+ * no stat file. */
+static int proc_state(pid_t pid)
+{
+    char path[64];
+
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    return stat_state(path);
 }
 
 /**
@@ -1359,6 +1377,141 @@ static int short_control(void)
     return 0;
 }
 
+/* The rounds of `sibling_signals`, a signal each, and the time limit in
+ * microseconds of the receive they interrupt. */
+#define SIBLING_ROUNDS 50
+#define SIBLING_TIMEO  100000
+
+/* The thread that sends `timed_after_signals`' signals, the number of them
+ * it took itself, and whether it has sent the last. */
+static pthread_t sibling;
+static volatile sig_atomic_t sibling_took;
+static volatile sig_atomic_t sibling_done;
+
+/** Count a SIGUSR1 that the sibling thread takes. */
+static void took_usr1(int signo)
+{
+    (void)signo;
+    if (pthread_equal(pthread_self(), sibling)) {
+        sibling_took++;
+    }
+}
+
+/**
+ * The sibling of `timed_after_signals`: once the leader, `*arg`, is seen
+ * asleep, send SIGUSR1 to the process, which wakes the sleeping leader, and
+ * at once unblock SIGUSR1 again, which makes this thread see the signal
+ * pending and take it itself, most often before the leader looks.
+ */
+static void *sibling_signals(void *arg)
+{
+    pid_t leader = *(pid_t *)arg;
+    char path[64];
+    sigset_t usr1;
+    int i, j;
+
+    snprintf(path, sizeof(path), "/proc/self/task/%d/stat", (int)leader);
+    sigemptyset(&usr1);
+    sigaddset(&usr1, SIGUSR1);
+    for (i = 0; i < SIBLING_ROUNDS; i++) {
+        while (stat_state(path) != 'S') {
+            sched_yield();
+        }
+        kill(leader, SIGUSR1);
+        for (j = 0; j < 64; j++) {
+            sigprocmask(SIG_UNBLOCK, &usr1, NULL);
+        }
+    }
+    sibling_done = 1;
+    return NULL;
+}
+
+/**
+ * Check that a receive under SO_RCVTIMEO still ends with EAGAIN when the
+ * signals that wake it are taken by a sibling thread: its wait then goes on,
+ * and must keep its deadline, as Linux's does (net/unix/af_unix.c:2608). The
+ * leader receives again after each EINTR it takes itself, until a receive
+ * after the sibling's last signal times out; a wait that lost its deadline
+ * sleeps for ever, and the case's watchdog ends it. Returns 0, or 1 after
+ * the failure is printed.
+ */
+static int timed_after_signals(void)
+{
+    struct sigaction sa, old;
+    struct timeval tv;
+    pid_t self = getpid();
+    char byte;
+    int sv[2];
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = took_usr1;
+    sigemptyset(&sa.sa_mask);
+    tv.tv_sec = 0;
+    tv.tv_usec = SIBLING_TIMEO;
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
+        setsockopt(sv[0], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0 ||
+        sigaction(SIGUSR1, &sa, &old) != 0 ||
+        pthread_create(&sibling, NULL, sibling_signals, &self) != 0) {
+        return fail("setup for a timed receive under a sibling's signals");
+    }
+    row_held();
+    for (;;) {
+        if (recv(sv[0], &byte, 1, 0) != -1 || (errno != EINTR && errno != EAGAIN)) {
+            return fail("a timed receive under signals ended other than EINTR or EAGAIN");
+        }
+        if (errno == EAGAIN && sibling_done) {
+            break;
+        }
+    }
+    row_held();
+    if (pthread_join(sibling, NULL) != 0 || sibling_took == 0) {
+        return fail("no signal of the process was taken by the sibling thread");
+    }
+    row_held();
+    sigaction(SIGUSR1, &old, NULL);
+    close(sv[0]);
+    close(sv[1]);
+    return 0;
+}
+
+/**
+ * Check that SO_PEERCRED of a socket with no peer gives pid 0 and ids -1
+ * inside a user namespace with no maps, untranslated, as Linux does
+ * (net/core/sock.c:1666); translated, -1 would be the overflow id 65534.
+ * Returns 0, or 1 after the failure is printed.
+ */
+static int no_peer_userns(void)
+{
+    pid_t pid = fork();
+    int status, code;
+
+    if (pid == 0) {
+        struct ucred cr;
+        socklen_t len = sizeof(cr);
+        int s;
+
+        if (unshare(CLONE_NEWUSER) != 0 || (s = socket(AF_UNIX, SOCK_STREAM, 0)) < 0 ||
+            getsockopt(s, SOL_SOCKET, SO_PEERCRED, &cr, &len) != 0 || len != sizeof(cr)) {
+            _exit(2);
+        }
+        _exit(cr.pid == 0 && cr.uid == (uid_t)-1 && cr.gid == (gid_t)-1 ? 0 : 3);
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
+        return fail("the user namespace child did not exit");
+    }
+    code = WEXITSTATUS(status);
+    held_before(code, 2, 2);
+    if (code == 3) {
+        return fail("SO_PEERCRED with no peer was not pid 0 and ids -1 in a user namespace");
+    }
+    if (code != 0) {
+        return fail("unshare of a user namespace or SO_PEERCRED of a lone socket failed");
+    }
+    row_held();
+    row_held();
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     probe_args(argc, argv);
@@ -1367,7 +1520,8 @@ int main(int argc, char **argv)
     if (stream_pair() || message_pairs() || rights_and_creds() || thread_creds() || named() ||
         listening() || backlog_growth() || datagram_peers() || full_receiver_shut() ||
         full_with_fds() || chain_close() || datagram_names() || waiting() || shut_writable() ||
-        recvfrom_no_length() || moved_in_flight() || short_control()) {
+        recvfrom_no_length() || moved_in_flight() || short_control() || timed_after_signals() ||
+        no_peer_userns()) {
         return 1;
     }
     report_end();
