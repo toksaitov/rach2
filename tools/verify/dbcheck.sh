@@ -144,6 +144,9 @@ guest() {
             grep -qF " $base" tests/system/games/build.sh ;;
         tests/graphics/runners/*.c)
             grep -qF "\"\$RUNNER_DIR/$base\"" tests/graphics/runners/*.sh ;;
+        tests/graphics/lenovo/vahash.c)
+            # Built by hand on Debian, as the graphics Readme writes it.
+            grep -qE "\`$base\` built with \`[^\`]* gcc [^\`]* lenovo/$base " tests/graphics/Readme.md ;;
         tests/graphics/lenovo/*.c)
             grep -qF "$base" tests/graphics/lenovo/*.sh tests/graphics/lenovo/*.py ;;
         tests/kvm/nocopy.c)
