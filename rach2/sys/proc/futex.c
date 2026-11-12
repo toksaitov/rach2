@@ -153,6 +153,11 @@ struct futex_vec {
 struct futex_hb {
     struct spinlock lock;
     struct futex_q *head;
+    /* The processors the wakes made under the lock would interrupt, a bit
+     * each, which `futex_hb_unlock` interrupts once the lock is let go, as
+     * Linux's futex_wake wakes its wake_q after (kernel/futex/waitwake.c:
+     * 198-199); 0 while the lock is free. */
+    uint64_t kicks;
 };
 
 /* Every bucket's lock is of one class, keyed by `futex_hb_key`, as Linux's
@@ -160,9 +165,9 @@ struct futex_hb {
  * are taken at once only in address order (`futex_hb_lock2`). */
 #ifdef RACH2_LOCKDEP
 static struct lockdep_key futex_hb_key;
-#define FUTEX_HB_INIT {{0, {"futex_hb", &futex_hb_key, 0, 0}}, NULL}
+#define FUTEX_HB_INIT {{0, {"futex_hb", &futex_hb_key, 0, 0}}, NULL, 0}
 #else
-#define FUTEX_HB_INIT {{0}, NULL}
+#define FUTEX_HB_INIT {{0}, NULL, 0}
 #endif
 #define FUTEX_HB_INIT4  FUTEX_HB_INIT, FUTEX_HB_INIT, FUTEX_HB_INIT, FUTEX_HB_INIT
 #define FUTEX_HB_INIT16 FUTEX_HB_INIT4, FUTEX_HB_INIT4, FUTEX_HB_INIT4, FUTEX_HB_INIT4
@@ -183,10 +188,23 @@ static uint32_t futex_hb_lock(struct futex_hb *hb)
     return spin_lock_irqsave(&hb->lock);
 }
 
-/** Give back the lock `futex_hb_lock` took. */
+/** Let `hb`'s lock go and return the processors its wakes would
+ * interrupt, with interrupts still off. */
+static uint64_t futex_hb_release(struct futex_hb *hb)
+{
+    uint64_t cpus = hb->kicks;
+
+    hb->kicks = 0;
+    spin_unlock(&hb->lock);
+    return cpus;
+}
+
+/** Give back the lock `futex_hb_lock` took, and then send the interrupts
+ * of the wakes made under it. */
 static void futex_hb_unlock(struct futex_hb *hb, uint32_t flags)
 {
-    spin_unlock_irqrestore(&hb->lock, flags);
+    sched_kick_cpus(futex_hb_release(hb));
+    kirq_restore(flags);
 }
 
 /**
@@ -207,13 +225,17 @@ static uint32_t futex_hb_lock2(struct futex_hb *a, struct futex_hb *b)
     return flags;
 }
 
-/** Give back the locks `futex_hb_lock2` took of `a` and `b`. */
+/** Give back the locks `futex_hb_lock2` took of `a` and `b`, and then send
+ * the interrupts of the wakes made under either. */
 static void futex_hb_unlock2(struct futex_hb *a, struct futex_hb *b, uint32_t flags)
 {
+    uint64_t cpus = 0;
+
     if (a != b) {
-        spin_unlock(&a->lock);
+        cpus = futex_hb_release(a);
     }
-    futex_hb_unlock(b, flags);
+    sched_kick_cpus(cpus | futex_hb_release(b));
+    kirq_restore(flags);
 }
 
 /* The ticks from now until the absolute time of `sec` seconds and `nsec`
@@ -606,7 +628,8 @@ static int futex_addr_check(uintptr_t addr, int shared)
 /**
  * Wake the waiter `q`, which the caller has taken off the list of its
  * bucket, whose lock it holds: mark it and its sleeper, wake the sleeper's
- * own queue, so the bucket's other sleepers stay asleep, and then set its
+ * own queue, so the bucket's other sleepers stay asleep, with the interrupt
+ * the wake needs left in the bucket for its unlock, and then set its
  * bucket NULL. The waiter and its sleeper are in the waiting thread's
  * memory, which it may free once it reads that NULL, so that store comes
  * last, as Linux's smp_store_release of lock_ptr (kernel/futex/waitwake.c:
@@ -618,7 +641,7 @@ static void futex_wake_one(struct futex_q *q)
 {
     q->woken = 1;
     q->s->woken = 1;
-    wq_wake_all(&q->s->wq);
+    wq_wake_all_deferred(&q->s->wq, &q->hb->kicks);
     k_barrier();
     q->hb = NULL;
 }
