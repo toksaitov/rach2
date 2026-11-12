@@ -10,15 +10,22 @@ On the Mac, by a loop of the owner's under the Lenovo's lock, in the main clone,
 
 ```
 mkdir build/flow/lenovo && echo 3513 > build/flow/lenovo/issue
-L() { ssh -i krffs/rach2_demo_ed25519 -o BatchMode=yes -o ConnectTimeout=5 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o ServerAliveInterval=5 -o ServerAliveCountMax=3 root@192.168.0.106 "$@"; }
-up() { while :; do if ping -c 1 -t 1 192.168.0.106 > /dev/null 2>&1; then echo "$(date +%T) up"; else echo "$(date +%T) down"; fi; sleep 1; done; }
-back() { i=0; until L true 2> /dev/null; do i=$((i + 1)); [ $i -ge 180 ] && { echo "no answer"; return 1; }; sleep 2; done; L 'mixer vol 1'; echo "$(date +%T) answered"; }
+L() { ssh -i krffs/rach2_demo_ed25519 -o BatchMode=yes -o ConnectTimeout=5 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o ServerAliveInterval=5 -o ServerAliveCountMax=3 root@192.168.0.106 'test "$(cat /sys/class/net/eth0/address)" = 28:d2:44:7e:e0:af && grep -q S6P2NX0T381638Z /proc/disk && '"$*"; }
+back() { i=0; until L "test \"\$(cat /proc/sys/kernel/random/boot_id)\" != \"$BOOT_ID\"" 2> /dev/null; do i=$((i + 1)); [ $i -ge 180 ] && { echo "no answer"; return 1; }; sleep 2; done; L 'mixer vol 1'; echo "$(date +%T) answered"; }
 T=build/worktrees/t3513
 R=build/runs/t3513; mkdir -p $R
 D=$T/tools/lenovo/debian-ref
 ```
 
-`back` waits six minutes at most for SSH and sets the volume at once.
+`back` waits six minutes at most for SSH on a new boot, identified by `boot_id`, and sets the volume at once. `BOOT_ID` is read before each reboot so the old system cannot satisfy the wait during the delayed reboot.
+
+## Continuation on 2026-11-12
+
+The manager gave the go on the issue, then assigned the GL loop, 78-11d's browser frames and 83-6c's reversed native-context path to one trial boot. The order is task 84-25, task 77-11, then this shared step. The branch now merges the milestone's scheduler locks; its idle polls keep the new `BKL_KEY_IDLE` accounting and the host model keeps one copy of each stub. Both kernels and the scheduler host model compile; no suite or host test was run by hand. The x86-64 kernel built in this continuation is 3,518,432 bytes, below the installed 4,194,304-byte slot.
+
+The commands below describe the GL step by itself. For the manager's shared step, build one trial head with `task/3513`, `task/3504` and `task/2669` merged onto the current milestone, as the issue directs. Keep i915's display enabled: omit `rach2.i915.disable_display` from step 7, since the browser needs the panel. Post the screen notice for all three steps ten minutes before the first reboot, including the panel's loss and return during assignment. Run each card's measurements in the manager's order, with two vCPUs for 83-6c since the halted-vCPU wake fix is on the milestone. Put each result on its own card and in its own dev-log. The GL loop still uses a private headless Weston, with no sound.
+
+The current worker's Linux build uses `/home/testing/rach2/build/worktrees/codex`, rather than the example `t3513` copy below. Its prepared root is `build/t3513-root.ext2.gz` and its probes are `build/tests/system/games/bundle.tar`; fetch those with `RACH2_TESTING_COPY=/home/testing/rach2/build/worktrees/codex sh tools/dev/testing.sh get build/t3513-root.ext2.gz build/tests/system/games/bundle.tar`. Its bundle includes the failure check: every loop must exit 0, give a round-trip time and print `TRIP OK`, and a nonpositive run count is refused. A relative output directory is resolved before the runner changes directory.
 
 ## Build
 
@@ -91,22 +98,24 @@ L "sha256sum /data/trial3513/kernel-$KS /data/trial3513/root-$IS.img /dev/shm/bo
 ```
 
    Passes: the digests of the build, the image's whole, not its first 16 digits.
+Before step 7, read the Mac's address with `ipconfig getifaddr en0` and its station address from the Lenovo's `/proc/net/arp`. Set `NET=netconsole=6665@192.168.0.106/,6666@IP/STATION` with those values. Start `nc -lu 6666 > "$R/netconsole.log"` in the tool's background session and keep its session or PID until the trial is over. Stop that receiver after step 10; it must not survive the worker session.
+
 7. Stage the kernel and arm one boot of the trial root with [`78-10d/trialroot.sh`](../../78-intel/78-10d/trialroot.sh), the driver without its display, the trace of missing calls, and the IOMMU's translation off, as Linux's boot had it:
 
 ```
 L "bootctl kernel /data/trial3513/kernel-$KS && umount /data && sync"
-L "sh -s /trial3513/root-$IS.img rach2.i915 rach2.i915.disable_display rach2.trace=enosys intel_iommu=off intremap=off" < $T/dev-log/78-intel/78-10d/trialroot.sh | tee $R/armed.txt
+L "sh -s /trial3513/root-$IS.img rach2.i915 rach2.i915.disable_display rach2.trace=enosys intel_iommu=off intremap=off $NET" < $T/dev-log/78-intel/78-10d/trialroot.sh | tee $R/armed.txt
 ```
 
    Passes: the block's two `multiboot2` lines are `rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial3513/root-IS.img rach2.slot=trialroot`, the release's other words and the five words above; `armed: the next boot tries trialroot once`; `saved_entry: fallback`, `next_entry: trialroot`.
-8. `up > $R/ping.txt &`, `L '(nohup sh -c "sleep 2; reboot" > /dev/null 2>&1 &)'`, `back`, then
+8. `BOOT_ID=$(L 'cat /proc/sys/kernel/random/boot_id'); L '(nohup sh -c "sleep 2; reboot" > /dev/null 2>&1 &)'`, `back`, then
 
 ```
 L 'cat /proc/cmdline; uname -a; bootctl status; grep -e " / " -e " /data " /proc/mounts; ls /dev/dri; cat /sys/kernel/debug/dri/0/name; ls /usr/share/vulkan/icd.d/; cat /opt/proton/version' | tee $R/trial-root.txt
 L dmesg > $R/dmesg-boot.txt; grep -E 'i915|vtd: fault|root: image|not implemented' $R/dmesg-boot.txt
 ```
 
-   Passes: the line of step 7; `booted: trialroot`; `/dev/loop0 / ext2 rw` and `/dev/disk0p6` on `/data`; `card0` and `renderD128`, and `i915` in the name file; `intel_hasvk_icd.json` present; GE-Proton11-12; and in the log `root: image: /trial3513/root-IS.img on /dev/disk0p6`, `i915: display: disabled by rach2.i915.disable_display; the firmware's framebuffer stays`, `i915: rings: rcs0, bcs0, vcs0 and vecs0 started`, `i915: registered: i915 1.6.0 for pci:0000:00:02.0 on card 0`, and no `timeout after`, `rings: not started`, `wedged` or `vtd: fault` line. Kill `up`. If SSH does not answer within 6 minutes, the machine waits for the owner; record what `ping.txt` shows on this issue and stop.
+   Passes: the line of step 7; `booted: trialroot`; `/dev/loop0 / ext2 rw` and `/dev/disk0p6` on `/data`; `card0` and `renderD128`, and `i915` in the name file; `intel_hasvk_icd.json` present; GE-Proton11-12; and in the log `root: image: /trial3513/root-IS.img on /dev/disk0p6`, `i915: display: disabled by rach2.i915.disable_display; the firmware's framebuffer stays`, `i915: rings: rcs0, bcs0, vcs0 and vecs0 started`, `i915: registered: i915 1.6.0 for pci:0000:00:02.0 on card 0`, and no `timeout after`, `rings: not started`, `wedged` or `vtd: fault` line. If SSH does not answer within 6 minutes, the machine waits for the owner; record the netconsole log on this issue and stop.
 9. The round trips:
 
 ```
@@ -119,11 +128,11 @@ L 'dmesg | grep -E "i915: (reset|hangcheck)|wedged|vtd: fault|vm: fault"; mixer'
 
 ## Put it back
 
-10. `L 'sync; (nohup sh -c "sleep 2; reboot" > /dev/null 2>&1 &)'`, `back`, `L 'cat /proc/cmdline; bootctl status'`: `rach2.slot=fallback`, the release's line without the five words. Then the menu and the release in both slots:
+10. `BOOT_ID=$(L 'cat /proc/sys/kernel/random/boot_id'); L 'sync; (nohup sh -c "sleep 2; reboot" > /dev/null 2>&1 &)'`, `back`, `L 'cat /proc/cmdline; bootctl status'`: `rach2.slot=fallback`, the release's line without the five words. Then the menu and the release in both slots:
 
 ```
 L 'mount -t ext2 /dev/disk0p6 /data && bootctl config /data/trial3513/original.cfg && bootctl kernel /data/trial3513/release-kernel && umount /data && sync'
-L '(nohup sh -c "sleep 2; reboot" > /dev/null 2>&1 &)'; back
+BOOT_ID=$(L 'cat /proc/sys/kernel/random/boot_id'); L '(nohup sh -c "sleep 2; reboot" > /dev/null 2>&1 &)'; back
 L 'bootctl commit && bootctl fallback && bootctl status'
 RACH2_MEASURE_SLOT=candidate RACH2_MEASURE_KERNEL=$R/release-kernel sh tools/dev/machine_identity.sh $R/identity-after.txt ssh -i krffs/rach2_demo_ed25519 -o BatchMode=yes -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no root@192.168.0.106
 L 'mount -t ext2 /dev/disk0p6 /data && rm -rf /data/trial3513 && ls /data && umount /data'
