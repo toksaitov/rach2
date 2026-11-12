@@ -190,9 +190,18 @@ int vfs_mount_index(const struct vfs_mount *m)
     return at;
 }
 
+/* Read under `mount_table_lock`, since a caller without the big lock, such
+ * as the unlocked close, may read while a mount grows the array and frees
+ * the old one, as Linux's `lookup_mnt` reads the mount hash under the
+ * `mount_lock` seqlock (fs/namespace.c:835-849). The record itself is
+ * permanent. */
 struct vfs_mount *vfs_root_mount(void)
 {
-    return mounts[0];
+    uint32_t flags = spin_lock_irqsave(&mount_table_lock);
+    struct vfs_mount *root = mounts[0];
+
+    spin_unlock_irqrestore(&mount_table_lock, flags);
+    return root;
 }
 
 int vfs_mount_gone(const struct vfs_mount *mnt)

@@ -718,7 +718,8 @@ void vfs_mount_view_free(struct vfs_mount *m);
  * error that leaves `m` mounted (vfs.c). */
 int vfs_unmount_record(struct vfs_mount *m);
 
-/** Entry zero, the root of the mount table. */
+/** Entry zero, the root of the mount table, read under the table's lock,
+ * so a caller need not hold the big lock. */
 struct vfs_mount *vfs_root_mount(void);
 
 /** Whether the device under `mnt` has gone, by its own flags or, for a
