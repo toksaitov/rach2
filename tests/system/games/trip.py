@@ -90,9 +90,12 @@ def summary(start, end):
     t1, s1, h1, b = parse(end)
     lines = ["window %.1f ms" % ((t1 - t0) * 1000)]
     lines += ["%s %d" % (k, s1[k] - s0[k]) for k in STAT_KEYS if k in s0 and k in s1]
+    # The kernel prints a slept row only after its first hold, so a row first
+    # seen during the loop starts at zero.
     for key in sorted(h1, key=lambda k: -(h1[k][1] - h0.get(k, (0, 0))[1])):
-        if key in h0 and h1[key][0] > h0[key][0]:
-            n, us = h1[key][0] - h0[key][0], h1[key][1] - h0[key][1]
+        n0, us0 = h0.get(key, (0, 0))
+        if h1[key][0] > n0:
+            n, us = h1[key][0] - n0, h1[key][1] - us0
             lines.append("hold %s: %d holds, %d us, %.1f us each" % (key, n, us, us / n))
     for tid, y in sorted(b.items()):
         x = a.get(tid, {})
