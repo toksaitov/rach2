@@ -671,7 +671,7 @@ static void share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t
 {
     const vma_t *vma = vm_find(&mm->vm, page);
     uintptr_t phys[FAULT_AROUND];
-    uintptr_t from, to, end;
+    uintptr_t from, to, last;
     uint32_t prot, pgoff, seq, n, i, lock;
     pte_t *table;
     int bkl;
@@ -683,10 +683,10 @@ static void share_around(struct mm *mm, uintptr_t page, struct vm_file *f, pte_t
     if (from < vma->start) {
         from = vma->start;
     }
-    end = (page & ~(MMU_TABLE_SPAN - 1)) + MMU_TABLE_SPAN;
+    last = page | (MMU_TABLE_SPAN - 1);
     to = from + FAULT_AROUND_SPAN;
-    if (end != 0 && to > end) {
-        to = end;
+    if (to - 1 > last) {
+        to = last + 1;
     }
     if (to > vma->end) {
         to = vma->end;
