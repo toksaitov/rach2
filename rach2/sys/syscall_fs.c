@@ -4955,11 +4955,11 @@ static void open_done(int fd, const char *name, int flags)
  * the hold, the record and a reference on the mount, and the entry is
  * published last. What `open_done` does for such an open, the description's
  * watch flags and inotify's report of the open, under the big lock while a
- * watch is on the file's file system, is done to the description before the entry is published,
- * as Linux's `vfs_open` reports the open before `fd_install` (fs/open.c):
- * once published, another thread may close the descriptor and open another
- * file in its slot. The descriptor, or a negative errno with everything
- * given back.
+ * watch is on the file's file system (`inotify_mount_watched`), is done to
+ * the description before the entry is published, as Linux's `vfs_open`
+ * reports the open before `fd_install` (fs/open.c): once published, another
+ * thread may close the descriptor and open another file in its slot. The
+ * descriptor, or a negative errno with everything given back.
  */
 static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry, int fd,
                                      const char *name, int flags, const struct vfs_stat *st)
