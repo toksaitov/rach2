@@ -9,12 +9,13 @@
  * A mutex has one holder, who may sleep while holding it, and a waiter
  * sleeps until it is free, as Linux's `struct mutex` (kernel/locking/
  * mutex.c). A rwsem has any number of readers or one writer, as Linux's
- * `struct rw_semaphore` (kernel/locking/rwsem.c). Each keeps its state
- * under a spinlock of its own and its sleepers on a wait queue: a sleeper
- * files itself before it tests the lock (`wq_wait_event_nointr`), and the
- * holder gives the lock up under the spinlock before it wakes them, so no
- * wake is lost. A sleep gives up the big lock, as every sleep does, and
- * neither is taken in an interrupt or under a spinlock.
+ * `struct rw_semaphore` (kernel/locking/rwsem.c). A mutex keeps its state
+ * under a spinlock of its own, a rwsem in an atomic word, and each its
+ * sleepers on a wait queue: a sleeper files itself before it tests the
+ * lock (`wq_wait_event_nointr`), and the holder gives the lock up in a
+ * full barrier before it looks for sleepers to wake, so no wake is lost.
+ * A sleep gives up the big lock, as every sleep does, and neither is taken
+ * in an interrupt or under a spinlock.
  */
 struct mutex {
     struct spinlock spin; /* keeps `owner` */
@@ -26,14 +27,24 @@ struct mutex {
 };
 
 /*
- * `count` is the readers that hold the lock, or -1 while a writer holds it;
- * a reader waits while a writer waits too (`writers`), so that readers that
- * keep coming do not keep a writer out, as Linux's readers queue behind a
- * waiting writer (`rwsem_down_read_slowpath`).
+ * `state` is one word, changed only by an atomic compare-and-exchange: the
+ * readers that hold the lock in RWSEM_READERS, RWSEM_WRITER while a writer
+ * holds it and RWSEM_WAITING while a writer waits. A take that finds the
+ * lock free for it and a release that wakes nobody are one exchange each,
+ * as Linux's fast paths are one atomic operation on `count`
+ * (kernel/locking/rwsem.c:248-272, 1336-1349); the spinlock keeps only the
+ * count of waiting writers and its bit. A reader waits while a writer
+ * waits too, so that readers that keep coming do not keep a writer out, as
+ * Linux's readers queue behind a waiting writer
+ * (`rwsem_down_read_slowpath`).
  */
+#define RWSEM_READERS 0x3FFFFFFFu
+#define RWSEM_WRITER  0x40000000u
+#define RWSEM_WAITING 0x80000000u
+
 struct rwsem {
-    struct spinlock spin;
-    int count;
+    struct spinlock spin; /* keeps `writers` and the RWSEM_WAITING bit */
+    volatile unsigned int state;
     int writers;        /* writers waiting */
     const void *wowner; /* the writer's record while one holds it */
     wait_queue_t wq;
