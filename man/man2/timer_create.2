@@ -145,7 +145,10 @@ A
 .Fn timer_settime
 or a
 .Fn timer_delete
-posts such a signal first, as Linux sent it at expiration; an
+posts such a signal first, as Linux sent it at expiration, whether its
+expiration is the setting's first or one after the setting's last signal
+was taken, and drops the expirations that joined it, since Linux stops the
+timer once its signal is queued; an
 .Xr execve 2
 drops it with the timers' other signals.
 .Pp
