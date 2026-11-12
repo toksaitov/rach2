@@ -38,6 +38,7 @@
 #include "debugfs.h"
 #include "../pstore/pstore.h"
 #include "../mm/filecache.h"
+#include "../mm/filemap.h"
 #include "../io/inotify.h"
 
 #define VFS_S_IFMT       0170000u
@@ -6386,6 +6387,7 @@ static int unmount_mount(struct vfs_mount *m)
     }
     inotify_unmount(m);
     filecache_forget_mount(m);
+    filemap_forget_mount(m);
     if (m->type->ops->unmount) {
         m->type->ops->unmount(m);
     }

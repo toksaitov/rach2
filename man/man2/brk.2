@@ -223,10 +223,15 @@ A truncation takes the pages past the new end out of every mapping.
 Writeback zeros the page's tail past EOF before a later growth can expose
 it as file data.
 A page that cannot go back when its last mapping goes stays in memory
-with its file open for a later sync to retry.
+with its file open until a later
+.Xr sync 2 ,
+.Xr fsync 2
+or
+.Fn msync
+writes every page back.
 The next
 .Xr fsync 2
-reports the writeback error, even if its retry succeeds.
+of the file reports the writeback error, even if a retry succeeded.
 A shared mapping through a descriptor open for writing of a file a loop
 device stands on is refused with
 .Er EBUSY ,

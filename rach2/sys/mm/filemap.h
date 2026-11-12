@@ -79,7 +79,8 @@ struct vm_file *filemap_disk_shared(const fd_entry_t *e);
 int filemap_disk_pages(const struct vm_file *f);
 
 /** Whether the file `ino` of `mnt` has resident pages for any private or
- * shared mapping, which descriptor writes must update. With or without the
+ * shared mapping, which descriptor writes must update, or a writeback error
+ * its last mapping left for fsync (`filemap_sync_file`). With or without the
  * big lock: asked under the file's lock (`vfs_node_lock`), a no stays true
  * until it is let go, since a page joins a file's pages only at a fault,
  * which takes that lock. */
@@ -136,10 +137,17 @@ void filemap_file_written(fd_entry_t *e, uint64_t off, uint32_t len);
  * (`shmem_truncate`). */
 void filemap_file_truncated(const struct vfs_mount *mnt, uint64_t ino, uint64_t size);
 
-/** For fsync, reap pending mapping releases and retry the file's pages;
- * 0, or the first unreported writeback error, consumed by this call. A
- * failed last unmap keeps its file and pages until retry and reporting. */
-int filemap_sync_file(const struct vfs_mount *mnt, uint64_t ino);
+/** For fsync of the file `ofd` is open on, reap pending mapping releases
+ * and write the file's pages back; 0, or the first writeback error no fsync
+ * has reported, which this call consumes. A failed last unmap keeps its file
+ * and pages until a write-back of every page succeeds, and the error until
+ * an fsync reports it. Under the big lock. */
+int filemap_sync_file(const struct open_file *ofd);
+
+/** Free the records of the files of `mnt` that hold only a writeback error
+ * no fsync reported, at its unmount, when no mapping of its files is left.
+ * Takes the big lock when the caller lacks it. */
+void filemap_forget_mount(const struct vfs_mount *mnt);
 
 /** For sync, write back the pages in memory of every file a shared mapping
  * maps; a failure is not reported. */
