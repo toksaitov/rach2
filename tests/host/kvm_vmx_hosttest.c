@@ -1239,6 +1239,9 @@ static struct {
     uint32_t injected, injected_error;
     uint64_t entry_cr0, entry_proc, entry_rflags, entry_dr0, entry_intr;
     const char *why; /* the last entry check that failed */
+    /* The VMREADs and VMWRITEs of each field that succeeded, by encoding,
+     * which a row clears before the exits it counts. */
+    uint32_t reads[0x7000], writes[0x7000];
 } m;
 
 /* The MSRs the model keeps, as `msr` holds them. */
@@ -1502,6 +1505,7 @@ static int m_vmread(uint64_t field, uint64_t *value)
         return VMX_FAIL_VALID;
     }
     *value = m.cur->f[field];
+    m.reads[field]++;
     model_tsc += tsc_steps && field == VM_EXIT_REASON ? 7u : 0u;
     return VMX_OK;
 }
@@ -1526,6 +1530,7 @@ static int m_vmwrite(uint64_t field, uint64_t value)
         return VMX_FAIL_VALID;
     }
     m.cur->f[field] = value & field_mask((uint32_t)field);
+    m.writes[field]++;
     return VMX_OK;
 }
 
@@ -2974,6 +2979,56 @@ static void cr_owned_rows(int fd)
     CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == 0 && sregs_of(fd).gdt.limit == 0x7F,
           "KVM_GET_SREGS after KVM_SET_SREGS gives the state set, not the VMCS's");
     CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&was) == 0, "KVM_SET_SREGS");
+}
+
+/** A write of CR0 that changes WP alone, as kvm-unit-tests' toggle_cr0_wp
+ * makes it, costs what Linux's handle_cr does: the exit reads CR0 and not
+ * CR3 or CR4, and the entry writes the two CR0 fields and neither EFER nor
+ * the entry controls, which LMA alone changes; a write of CR4 reads CR4
+ * alone; and clearing PG in 64-bit code is #GP, as Linux's kvm_set_cr0.
+ * In long mode, as `cr_rows` leaves the vCPU. */
+static void cr_cost_rows(int fd)
+{
+    struct kvm_vcpu *v = vcpu_of(fd);
+    uint64_t *f = fields(fd);
+    uint64_t cr0 = 0x80000011u;
+
+    CHECK(v->sregs.efer == (GEFER_LME | GEFER_LMA) && f[GUEST_CR0] == 0x80000031u,
+          "long mode, PG, PE and ET");
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0, "CPUID, which loads the KVM_SET_SREGS before it");
+    set_regs(fd, 0x1000, cr0 | CR0_WP, 0, 0);
+    memset(m.reads, 0, sizeof(m.reads));
+    memset(m.writes, 0, sizeof(m.writes));
+    CHECK(exits(fd, EXIT_CR_ACCESS, 0, 3) == 0 && regs_of(fd).rip == 0x1004 &&
+              f[CR0_READ_SHADOW] == (cr0 | CR0_WP) && f[GUEST_CR0] == (0x80000031u | CR0_WP),
+          "MOV CR0 sets WP");
+    CHECK(m.writes[GUEST_IA32_EFER] == 0 && m.writes[VM_ENTRY_CONTROLS] == 0,
+          "and the entry writes neither EFER nor the entry controls");
+    CHECK(m.reads[GUEST_CR3] == 0 && m.reads[GUEST_CR4] == 0 && m.reads[GUEST_CR0] == 1,
+          "and its exit reads CR0 alone");
+    CHECK(m.writes[CR0_READ_SHADOW] == 1 && m.writes[GUEST_CR0] == 1 &&
+              m.writes[CR4_READ_SHADOW] == 0 && m.writes[GUEST_CR4] == 0,
+          "the entry writes CR0's two fields once and neither of CR4's");
+    set_regs(fd, 0x1000, cr0, 0, 0);
+    CHECK(exits(fd, EXIT_CR_ACCESS, 0, 3) == 0 && f[CR0_READ_SHADOW] == cr0 &&
+              m.writes[GUEST_IA32_EFER] == 0 && m.writes[VM_ENTRY_CONTROLS] == 0,
+          "MOV CR0 clears WP the same way");
+
+    set_regs(fd, 0x1000, CR4_PAE | CR4_TSD, 0, 0);
+    memset(m.reads, 0, sizeof(m.reads));
+    CHECK(exits(fd, EXIT_CR_ACCESS, 4, 3) == 0 && f[CR4_READ_SHADOW] == (CR4_PAE | CR4_TSD),
+          "MOV CR4 sets TSD");
+    CHECK(m.reads[GUEST_CR4] == 1 && m.reads[GUEST_CR0] == 0 && m.reads[GUEST_CR3] == 0,
+          "and its exit reads CR4 alone");
+    set_regs(fd, 0x1000, CR4_PAE, 0, 0);
+    CHECK(exits(fd, EXIT_CR_ACCESS, 4, 3) == 0 && f[CR4_READ_SHADOW] == CR4_PAE, "MOV CR4");
+
+    set_regs(fd, 0x1000, cr0 & ~CR0_PG, 0, 0);
+    CHECK(exits(fd, EXIT_CR_ACCESS, 0, 3) == 0 && regs_of(fd).rip == 0x1001 &&
+              v->sregs.efer == (GEFER_LME | GEFER_LMA) && f[CR0_READ_SHADOW] == cr0,
+          "MOV CR0 clearing PG in 64-bit code does not complete and keeps long mode");
+    CHECK(m.injected == (GP_VECTOR | (TYPE_HW_EXC << 8) | INTR_ERRCODE | INTR_VALID),
+          "and the next entry delivers #GP(0)");
 }
 
 /** The guest's KERNEL_GS_BASE as KVM_GET_MSRS reads it. */
@@ -5499,6 +5554,7 @@ int main(void)
     ept_rows(fd);
     cr_rows(fd);
     cr_owned_rows(fd);
+    cr_cost_rows(fd);
     insn_rows(fd);
     load_rows(fd);
     linux_rows(fd);
