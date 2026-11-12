@@ -1068,14 +1068,18 @@ static uint32_t pipe_buf_head_len(const pipe_t *p)
  * thread's unmap comes before or after it and a page it took away ends the
  * copy with -EFAULT (`pipe_iov_fill`); the head moves past a buffer once
  * its copy is whole. The lock is the pipe's alone: the read takes no big
- * lock, and nothing but the lock holder moves the ring.
+ * lock, and nothing but the lock holder moves the ring. The writers are
+ * woken once, after the lock is given back, as Linux's `pipe_read` wakes
+ * them (fs/pipe.c:399-402), and not at each buffer: a writer woken at the
+ * first would run on another processor, fill the one slot and wait again,
+ * at the cost of a wake for each page.
  */
 static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n)
 {
     pipe_t *p = (pipe_t *)e->priv;
     uint32_t count = 0, done = 0, off = 0;
     int32_t err = 0;
-    int i, k = 0;
+    int i, k = 0, room = 0;
 
     if (!(e->flags & FD_FLAG_READ)) {
         return -EBADF;
@@ -1130,9 +1134,12 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int 
         pipe_ring_consume(p, len);
         pipe_buf_drop(p);
         done += len;
-        pipe_wake(p, &p->write_wq, WQ_ROOM);
+        room = 1;
     }
     pipe_unlock(p, NULL);
+    if (room) {
+        pipe_wake(p, &p->write_wq, WQ_ROOM);
+    }
     return (done > 0) ? (int32_t)done : err;
 }
 
@@ -1203,6 +1210,13 @@ static void pipe_buf_fault(pipe_t *p)
  *
  * A free slot means a page of the ring is free, since each buffer holds a
  * page at most and the ring has a page for each slot.
+ *
+ * The readers are woken once for the bytes the call put in, before it
+ * waits for room and after it gives the lock back, as Linux's `pipe_write`
+ * wakes them (fs/pipe.c:575-577, 587-602), and not at each page: a reader
+ * woken at the first would run on another processor, take one page and wait
+ * again, at the cost of a wake for each page. An edge-triggered epoll
+ * registration of the read end is told once for each write, as Linux's.
  */
 static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n, uint32_t count,
                             int nonblock)
@@ -1211,7 +1225,7 @@ static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n
     uint32_t how = PUT_MERGE | (nonblock ? PUT_NONBLOCK : 0u);
     uint32_t done = 0, fill, last, off = 0;
     int32_t err = 0;
-    int i, k = 0;
+    int i, k = 0, data = 0;
 
     if (!(e->flags & FD_FLAG_WRITE)) {
         return -EBADF;
@@ -1251,6 +1265,10 @@ static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n
             len = pipe_free_space(p);
         }
         if (!pipe_put_room(p, fill == 0)) {
+            if (data) {
+                pipe_wake(p, &p->read_wq, WQ_DATA);
+                data = 0;
+            }
             rc = pipe_put_wait(p, how, done, fill == 0);
             if (rc < 0) {
                 err = rc;
@@ -1269,9 +1287,12 @@ static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n
         pipe_ring_produce(p, len);
         last = p->tail;
         done += len;
-        pipe_wake(p, &p->read_wq, WQ_DATA);
+        data = 1;
     }
     pipe_unlock(p, NULL);
+    if (data) {
+        pipe_wake(p, &p->read_wq, WQ_DATA);
+    }
     if (err == -EPIPE) {
         pipe_sigpipe();
     }
