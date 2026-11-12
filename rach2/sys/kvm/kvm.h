@@ -1130,8 +1130,11 @@ int32_t kvm_slots_set(struct kvm_vm *vm, const struct kvm_userspace_memory_regio
  * A slot as its users see it: its first frame, its frames, its flags, its
  * number, the caller's address of the frame asked for, and its dirty log,
  * a bit for each page from `base_gfn` in 64-bit words, or NULL when it does
- * not log. The log may be read or written only under `mmu_lock`, held from
- * the lookup, since a change of the slot frees it.
+ * not log. A change of the slot frees the log, so a view's log is used in
+ * one of two ways: under `mmu_lock` held from the lookup to the last use;
+ * or under `kvm_slots_read_lock` held from before the lookup to the last
+ * use, which the change waits for, with `mmu_lock` held at each read or
+ * write of the log, as `kvm_dirty_mark` does.
  */
 struct kvm_slot_view {
     uint64_t base_gfn;
