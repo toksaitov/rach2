@@ -1792,7 +1792,7 @@ int32_t unix_getname(fd_entry_t *e, uintptr_t addr, uintptr_t addrlen_ptr, int p
         return -ENOTCONN;
     }
     flags = state_pair(s, p);
-    n = peer ? p->name : s->name;
+    n = p ? p->name : s->name;
     state_unpair(s, p, flags);
     if (p) {
         unix_put(p);
@@ -1962,7 +1962,7 @@ int32_t unix_setsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uint3
 int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintptr_t len_ptr)
 {
     struct unix_sock *s = sock_of(e);
-    struct unix_cred c;
+    struct unix_cred c = {0, 0xFFFFFFFFu, 0xFFFFFFFFu};
     uint8_t out[16];
     uint32_t n = 4, saved;
     int32_t given, v = 0;
@@ -2021,9 +2021,6 @@ int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintp
         v = 1;
         break;
     case SO_PEERCRED:
-        c.pid = 0;
-        c.uid = 0xFFFFFFFFu;
-        c.gid = 0xFFFFFFFFu;
         if (s->has_peercred) {
             c = s->peercred;
         }
