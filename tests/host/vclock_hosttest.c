@@ -10,17 +10,22 @@
  * is one clock on every processor, and a TSC of 2 GHz, two counts a
  * nanosecond, on the boot processor; the processor running the code may
  * have a TSC some counts ahead of it (`tsc_ahead`). KVM's clock pages, when
- * kept, give each processor's TSC with KVM's clock at it. The tick's clocks,
- * which the clock is steered toward, read the machine's clock exactly, and
- * `rtc_vclock_change` keeps clock.c's floors as clock.c does.
+ * kept, give each processor's TSC with KVM's clock at it, and the boot
+ * processor's page, which the vDSO checks, its stable bit, which KVM
+ * withdraws before the tick reads its own page. The tick's clocks, which
+ * the clock is steered toward, read the machine's clock, less a lag a row
+ * may set, and `rtc_vclock_change` keeps clock.c's floors as clock.c does.
  *
  * The rows check that a timer interrupt reading the clock at any step of
  * the data page's build, before and after the frame is cleared, reads
- * nothing and does not wait on the frame's count (`page_rows`); and that
- * the stop, made on a processor whose TSC is a second ahead of the one the
- * page's base was read on, carries the clock on by KVM's clock and raises
- * the floors to the moment of the stop and no further, and that the clock
- * started again begins at the floors (`stop_rows`).
+ * nothing and does not wait on the frame's count (`page_rows`); that a
+ * reading the vDSO makes between the stable bit's withdrawal and the stop,
+ * on a processor whose TSC is a second ahead of the one the page's base
+ * was read on, reads nothing, so that the system call reads the clock,
+ * carried on by KVM's clock; that the stop then raises the floors to its
+ * moment by KVM's clock and no further, at or past every reading given;
+ * and that the clock started again while the tick's clock is still behind
+ * the stop's time begins at the floors (`stop_rows`).
  */
 
 #include "arch/x86_64/vclock.c"
@@ -45,6 +50,12 @@ static uint64_t now_ns;
 static uint64_t tsc_ahead;
 static int kvm_kept_model;
 static int kvm_withdrawn_model;
+
+/* Whether the boot processor's page has withdrawn its stable bit, which
+ * the vDSO reads inside each reading; and how far the tick's clocks are
+ * behind the machine's, in nanoseconds. */
+static int kvm_boot_withdrawn;
+static uint64_t tick_lag_ns;
 
 /* The interrupt model: whether a step of the page's build reads the clock
  * as a timer interrupt would, the readings it made, those that read
@@ -94,7 +105,18 @@ int tsc_kvm_now(uint64_t *tsc, uint64_t *ns)
     return 1;
 }
 
-/** Whether the pages have withdrawn their stable bit. */
+/** The TSC read while the boot processor's page keeps its stable bit. */
+int tsc_kvm_boot_stable(uint64_t *tsc)
+{
+    if (!kvm_kept_model || kvm_boot_withdrawn) {
+        return 0;
+    }
+    *tsc = tsc_ordered();
+    return 1;
+}
+
+/** Whether the pages have withdrawn their stable bit, as the last tick
+ * read them. */
 int tsc_kvm_withdrawn(void)
 {
     return kvm_kept_model && kvm_withdrawn_model;
@@ -175,11 +197,11 @@ void arch_relax(void)
     }
 }
 
-/** The tick's clocks: the machine's clock. */
+/** The tick's clocks: the machine's clock, less the lag. */
 void rtc_tick_both(uint64_t *mono_ns, uint64_t *raw_ns)
 {
-    *mono_ns = now_ns;
-    *raw_ns = now_ns;
+    *mono_ns = now_ns - tick_lag_ns;
+    *raw_ns = now_ns - tick_lag_ns;
 }
 
 /** The NTP state slews nothing. */
@@ -194,14 +216,19 @@ int64_t rtc_mono_rate(void)
     return 0;
 }
 
-/** clock.c's hand-over: `change` is given the floors and raises them. */
+/** clock.c's hand-over: `change` is given the floors, which are raised to
+ * what it gives back and never lowered, as `rtc_floor` keeps them. */
 void rtc_vclock_change(void (*change)(uint64_t *mono_ns, uint64_t *raw_ns))
 {
     uint64_t mono = floor_mono, raw = floor_raw;
 
     change(&mono, &raw);
-    floor_mono = mono;
-    floor_raw = raw;
+    if (mono > floor_mono) {
+        floor_mono = mono;
+    }
+    if (raw > floor_raw) {
+        floor_raw = raw;
+    }
 }
 
 /** Discard the log. */
@@ -241,38 +268,89 @@ static void page_rows(void)
           "and reads the machine's clock");
 }
 
+/** The monotonic clock as the system call reads it, clock.c's
+ * `rtc_monotonic`: the clock, or the tick's clock while it does not run,
+ * held to the floor, which it raises. */
+static uint64_t syscall_mono(void)
+{
+    int64_t sec, nsec;
+    uint64_t ns, raw;
+
+    if (vclock_read(VCLOCK_READ_MONO, 0, &sec, &nsec)) {
+        ns = (uint64_t)sec * NSEC_PER_SEC + (uint64_t)nsec;
+    } else {
+        rtc_tick_both(&ns, &raw);
+    }
+    if (ns < floor_mono) {
+        ns = floor_mono;
+    }
+    floor_mono = ns;
+    return ns;
+}
+
 /**
- * Ticks a millisecond apart, then KVM's stable bit withdrawn and the stop
- * made 300 us after the last tick on a processor whose TSC is a second
- * ahead: the floors become the moment of the stop, by KVM's clock, and not
- * the second ahead. The bit set again, on a processor whose TSC agrees,
- * starts the clock at the floors.
+ * Ticks a millisecond apart, then, 300 us after the last, KVM's stable bit
+ * withdrawn on the boot processor's page, which the tick has not read yet,
+ * and a program on a processor whose TSC is a second ahead reading the
+ * clock: the system call reads the clock carried on by KVM's clock, and
+ * pairs no TSC count with the time; 5 us later the vDSO's reading,
+ * `vclock_pass` as vdsocode.s makes it, reads nothing, where without the
+ * check of the page it reads the TSC a second ahead, 6.003305 s, which
+ * updates no floor. The stop, 10 us later on the same processor, makes the
+ * floors the moment of the stop, by KVM's clock, 5.003315 s, at or past
+ * every reading given and not the second ahead. The bit set again, on a
+ * processor whose TSC agrees, starts the clock while the tick's clock, a
+ * millisecond behind the machine's, has not reached the stop's time, so
+ * that only the floor puts the clock's first reading at or past it.
  */
 static void stop_rows(void)
 {
-    int64_t sec, nsec;
+    uint64_t vdso_ns = 0, sys_ns, ns, cycles, ref, raw;
+    int64_t sec;
+    int found;
     int i;
 
     for (i = 0; i < 3; i++) {
         now_ns += TICK_NS;
         vclock_tick();
     }
+    CHECK(data->mode == VCLOCK_PVCLOCK, "the clock reads KVM's page where its pages are kept");
     now_ns += 300000u;
     tsc_ahead = 2000000000u;
+    kvm_boot_withdrawn = 1;
+    sys_ns = syscall_mono();
+    CHECK(near(sys_ns, now_ns, 1000u),
+          "after the withdrawal the system call reads the clock carried by KVM's clock, "
+          "not the TSC a second ahead");
+    CHECK(!vclock_read_cycles(VCLOCK_READ_RAW, &ns, &cycles),
+          "and the kernel pairs no TSC count with the time");
+    now_ns += 5000u;
+    found = vclock_pass(VCLOCK_READ_MONO, 0, &sec, &ns, &cycles);
+    if (found == VREAD_OK) {
+        vdso_ns = (uint64_t)sec * NSEC_PER_SEC + ns;
+    }
+    CHECK(found != VREAD_OK, "the vDSO's reading after the withdrawal makes the system call");
+    now_ns += 10000u;
     kvm_withdrawn_model = 1;
     vclock_tick();
     CHECK(!vclock_running() && data->mode == VCLOCK_NONE, "a withdrawn stable bit stops the clock");
     CHECK(near(floor_mono, now_ns, 1000u),
           "the monotonic floor is the stop's moment by KVM's clock, not the TSC a second ahead");
     CHECK(near(floor_raw, now_ns, 1000u), "and so is the raw floor");
+    CHECK(floor_mono >= vdso_ns && floor_mono >= sys_ns,
+          "and no reading given before the stop is later than the floor");
     tsc_ahead = 0;
+    kvm_boot_withdrawn = 0;
     kvm_withdrawn_model = 0;
-    now_ns += TICK_NS;
+    tick_lag_ns = TICK_NS;
+    now_ns += 100000u;
+    rtc_tick_both(&ref, &raw);
+    CHECK(ref < floor_mono, "the tick's clock has not reached the stop's time at the start");
     vclock_tick();
-    CHECK(vclock_running() && data->mode == VCLOCK_TSC, "the bit set again starts the clock");
-    CHECK(vclock_read(VCLOCK_READ_MONO, 0, &sec, &nsec) &&
-              (uint64_t)sec * NSEC_PER_SEC + (uint64_t)nsec >= floor_mono,
-          "at or past the floor");
+    CHECK(vclock_running() && data->mode == VCLOCK_PVCLOCK, "the bit set again starts the clock");
+    found = vclock_pass(VCLOCK_READ_MONO, 0, &sec, &ns, &cycles);
+    CHECK(found == VREAD_OK && (uint64_t)sec * NSEC_PER_SEC + ns >= floor_mono,
+          "and the vDSO reads it at or past the floor");
 }
 
 /** Run the rows: 0 when every check passes, 1 otherwise. */
