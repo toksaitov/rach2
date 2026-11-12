@@ -1,0 +1,50 @@
+mounted
+
+booted linux none
+== sleep 2  2.15 s
+__END__0
+   exits=2673 halt_exits=527 io_exits=0 mmio_exits=728 irq_exits=45 irq_window_exits=36 request_irq_exits=0 nmi_window_exits=0 insn_emulation=749 hypercalls=0 irq_injections=583 halt_successful_poll=98 halt_wakeup=424 req_event=831 unnamed=1337
+== grep CAL /proc/interrupts  0.13 s
+CAL:       6926       9796       5677       9622   Function call interrupts
+__END__0
+   exits=1468 halt_exits=305 io_exits=0 mmio_exits=75 irq_exits=30 irq_window_exits=19 request_irq_exits=0 nmi_window_exits=0 insn_emulation=93 hypercalls=0 irq_injections=339 halt_successful_poll=30 halt_wakeup=273 req_event=416 unnamed=1039
+== tar cf - /opt/proton | /t/rcat  4.88 s
+tar: Removing leading `/' from member names
+rcat: reads 106319 bytes 1610649600 nvcsw 39200 nivcsw 1 by 10k: 77970 19873 2959 869 667 1714 2267 0
+__END__0
+   exits=339226 halt_exits=82966 io_exits=1 mmio_exits=181230 irq_exits=3556 irq_window_exits=3097 request_irq_exits=0 nmi_window_exits=0 insn_emulation=181251 hypercalls=1 irq_injections=86567 halt_successful_poll=61025 halt_wakeup=15826 req_event=134276 unnamed=68375
+== tar cf - /opt/proton > /dev/zero  0.40 s
+tar: Removing leading `/' from member names
+__END__0
+   exits=1778 halt_exits=369 io_exits=0 mmio_exits=9 irq_exits=173 irq_window_exits=30 request_irq_exits=0 nmi_window_exits=0 insn_emulation=26 hypercalls=0 irq_injections=477 halt_successful_poll=28 halt_wakeup=337 req_event=617 unnamed=1197
+== tar cf - /opt/proton > /dev/zero  0.38 s
+tar: Removing leading `/' from member names
+__END__0
+   exits=1710 halt_exits=349 io_exits=0 mmio_exits=2 irq_exits=157 irq_window_exits=22 request_irq_exits=0 nmi_window_exits=0 insn_emulation=18 hypercalls=0 irq_injections=444 halt_successful_poll=19 halt_wakeup=326 req_event=568 unnamed=1180
+== grep CAL /proc/interrupts  0.13 s
+CAL:      23163      22779      33736       9788   Function call interrupts
+__END__0
+   exits=1316 halt_exits=262 io_exits=0 mmio_exits=0 irq_exits=29 irq_window_exits=19 request_irq_exits=0 nmi_window_exits=0 insn_emulation=18 hypercalls=0 irq_injections=297 halt_successful_poll=22 halt_wakeup=240 req_event=355 unnamed=1006
+== tar cf - /opt/proton | /t/rcat  0.90 s
+tar: Removing leading `/' from member names
+rcat: reads 104989 bytes 1610649600 nvcsw 55738 nivcsw 0 by 10k: 55022 48981 330 236 148 132 140 0
+__END__0
+   exits=114584 halt_exits=55961 io_exits=0 mmio_exits=5 irq_exits=856 irq_window_exits=259 request_irq_exits=0 nmi_window_exits=0 insn_emulation=24 hypercalls=0 irq_injections=56424 halt_successful_poll=50277 halt_wakeup=470 req_event=57233 unnamed=57503
+== grep CAL /proc/interrupts  0.13 s
+CAL:      23373      76708      33912      11378   Function call interrupts
+__END__0
+   exits=1372 halt_exits=284 io_exits=0 mmio_exits=0 irq_exits=35 irq_window_exits=25 request_irq_exits=0 nmi_window_exits=0 insn_emulation=15 hypercalls=0 irq_injections=320 halt_successful_poll=28 halt_wakeup=253 req_event=382 unnamed=1028
+== tar cf - /opt/proton | /t/rcat  0.89 s
+tar: Removing leading `/' from member names
+rcat: reads 104230 bytes 1610649600 nvcsw 54921 nivcsw 0 by 10k: 53469 49777 358 196 171 120 139 0
+__END__0
+   exits=113101 halt_exits=55276 io_exits=0 mmio_exits=5 irq_exits=787 irq_window_exits=260 request_irq_exits=0 nmi_window_exits=0 insn_emulation=21 hypercalls=0 irq_injections=55720 halt_successful_poll=51007 halt_wakeup=477 req_event=56477 unnamed=56773
+== tar cf - /opt/proton | /t/rcat  0.88 s
+tar: Removing leading `/' from member names
+rcat: reads 104085 bytes 1610649600 nvcsw 54747 nivcsw 3 by 10k: 53222 49882 317 246 139 146 133 0
+__END__0
+   exits=112507 halt_exits=55038 io_exits=0 mmio_exits=4 irq_exits=793 irq_window_exits=218 request_irq_exits=0 nmi_window_exits=0 insn_emulation=20 hypercalls=0 irq_injections=55465 halt_successful_poll=50919 halt_wakeup=444 req_event=56167 unnamed=56454
+== grep CAL /proc/interrupts  0.12 s
+CAL:      23724      77065     143112      11506   Function call interrupts
+__END__0
+   exits=1338 halt_exits=281 io_exits=0 mmio_exits=1 irq_exits=29 irq_window_exits=20 request_irq_exits=0 nmi_window_exits=0 insn_emulation=17 hypercalls=0 irq_injections=312 halt_successful_poll=36 halt_wakeup=242 req_event=364 unnamed=1007

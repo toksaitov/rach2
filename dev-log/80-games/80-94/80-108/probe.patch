@@ -1,0 +1,288 @@
+diff --git a/rach2/sys/arch/x86/exits.c b/rach2/sys/arch/x86/exits.c
+index 2eae7ebc2..f011d32da 100644
+--- a/rach2/sys/arch/x86/exits.c
++++ b/rach2/sys/arch/x86/exits.c
+@@ -27,6 +27,7 @@ struct exits_cpu {
+     uint32_t lost; /* counts that found every slot taken */
+ };
+ 
++extern uint32_t pp_cnt[NR_CPUS][128];
+ static struct exits_cpu exits_cpus[NR_CPUS];
+ 
+ /* 0 until every processor's own record is reachable (`exits_start`). */
+@@ -203,6 +204,14 @@ int32_t exits_show(void *data, char *buf, uint32_t cap)
+         put_str(&t, smp_ipi_name(k));
+         put_counts(&t, per, ncpu);
+     }
++    for (k = 0; k < 128; k++) {
++        for (d = 0; d < ncpu; d++) {
++            per[d] = pp_cnt[d][k];
++        }
++        put_str(&t, "pp ");
++        put_num(&t, (uint32_t)k, 0);
++        put_counts(&t, per, ncpu);
++    }
+     for (d = 0; d < ncpu; d++) {
+         per[d] = exits_cpus[d].lost;
+     }
+diff --git a/rach2/sys/fs/sleeplock.c b/rach2/sys/fs/sleeplock.c
+index bcccc5a2b..bb538ad5c 100644
+--- a/rach2/sys/fs/sleeplock.c
++++ b/rach2/sys/fs/sleeplock.c
+@@ -15,6 +15,7 @@
+ /* The kinds of lock, in the order a lock first named each, and the lock of
+  * the list and of the records' counts. */
+ static struct sleep_lock_record *records;
++extern uint32_t pp_cnt[NR_CPUS][128];
+ static struct spinlock records_lock = SPINLOCK_INIT_NAMED("sleep_lock_records");
+ 
+ int sleep_lock_stat;
+@@ -164,6 +165,12 @@ void sleep_lock_take(struct sleep_lock *l)
+     turn.place = sleep_place(l);
+     while (!sleep_my_turn(&turn)) {
+         if (!sleep_spin(&turn)) {
++            if (current_proc && current_proc->comm[0] == 'r' && current_proc->comm[1] == 'c') {
++                pp_cnt[arch_cpu_id()][7]++;
++            }
++            if (current_proc && current_proc->comm[0] == 't' && current_proc->comm[1] == 'a') {
++                pp_cnt[arch_cpu_id()][8]++;
++            }
+             wq_wait_event_nointr(&l->wq, sleep_my_turn, &turn);
+         }
+     }
+diff --git a/rach2/sys/ipc/pipe.c b/rach2/sys/ipc/pipe.c
+index 190ac76b3..ea064334e 100644
+--- a/rach2/sys/ipc/pipe.c
++++ b/rach2/sys/ipc/pipe.c
+@@ -44,6 +44,40 @@ static struct spinlock pipes_lock = SPINLOCK_INIT_NAMED("pipes_lock");
+  * from the disk makes. */
+ static struct sleep_lock_record pipe_lock_record = SLEEP_LOCK_RECORD("pipe");
+ 
++
++/* PROBE: never committed. */
++uint32_t pp_cnt[NR_CPUS][128];
++static uint64_t pp_tsc(void)
++{
++    uint32_t lo, hi;
++    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
++    return ((uint64_t)hi << 32) | lo;
++}
++static void pp(int k)
++{
++    pp_cnt[arch_cpu_id()][k]++;
++}
++static void pp_add(int k, uint32_t n)
++{
++    pp_cnt[arch_cpu_id()][k] += n;
++}
++static void pp_hist(int base, uint64_t cyc)
++{
++    int b = 0;
++    while (cyc > 1) {
++        cyc >>= 1;
++        b++;
++    }
++    b -= 8;
++    if (b < 0) {
++        b = 0;
++    }
++    if (b > 15) {
++        b = 15;
++    }
++    pp(base + b);
++}
++
+ uint32_t pipe_max_size = PIPE_MAX_SIZE;
+ unsigned long pipe_user_pages_soft = PIPE_USER_PAGES_SOFT;
+ unsigned long pipe_user_pages_hard;
+@@ -1079,7 +1113,7 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int
+     pipe_t *p = (pipe_t *)e->priv;
+     uint32_t count = 0, done = 0, off = 0;
+     int32_t err = 0;
+-    int i, k = 0, room = 0;
++    int i, k = 0, room = 0, slept = 0;
+ 
+     if (!(e->flags & FD_FLAG_READ)) {
+         return -EBADF;
+@@ -1093,6 +1127,13 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int
+     if (count == 0) {
+         return 0;
+     }
++    if (count == 131072) {
++        uint64_t now = pp_tsc();
++        p->pp_probe = 1;
++        if (p->pp_rret) {
++            pp_hist(48, now - p->pp_rret);
++        }
++    }
+ 
+     pipe_lock(p, NULL);
+     while (done < count) {
+@@ -1107,10 +1148,26 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int
+                 err = -EAGAIN;
+                 break;
+             }
++            if (count == 131072) {
++                p->pp_sleep = pp_tsc();
++            }
+             if (pipe_sleep(p, NULL, &p->read_wq, pipe_readable, p, "pipe_read") < 0) {
+                 err = -EINTR;
+                 break;
+             }
++            if (count == 131072) {
++                if (!slept) {
++                    pp(4);
++                }
++                slept = 1;
++                if (p->pp_wake) {
++                    if (p->pp_wcpu == (int)arch_cpu_id()) {
++                        pp(6);
++                    }
++                    pp_hist(16, pp_tsc() - p->pp_wake);
++                    p->pp_wake = 0;
++                }
++            }
+             continue;
+         }
+         if (p->spliced) {
+@@ -1140,6 +1197,11 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int
+     if (room) {
+         pipe_wake(p, &p->write_wq, WQ_ROOM);
+     }
++    if (count == 131072) {
++        pp(3);
++        pp_add(5, done / 1024);
++        p->pp_rret = pp_tsc();
++    }
+     return (done > 0) ? (int32_t)done : err;
+ }
+ 
+@@ -1225,7 +1287,8 @@ static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n
+     uint32_t how = PUT_MERGE | (nonblock ? PUT_NONBLOCK : 0u);
+     uint32_t done = 0, fill, last, off = 0;
+     int32_t err = 0;
+-    int i, k = 0, data = 0;
++    int i, k = 0, data = 0, woke = 0;
++    uint64_t t_in;
+ 
+     if (!(e->flags & FD_FLAG_WRITE)) {
+         return -EBADF;
+@@ -1239,7 +1302,19 @@ static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n
+         }
+     }
+ 
++    t_in = pp_tsc();
+     pipe_lock(p, NULL);
++    if (p->pp_probe && count == 10240) {
++        uint64_t now = t_in;
++        pp(0);
++        if (p->pp_wlast) {
++            pp_hist(32, now - p->pp_wlast);
++        }
++        p->pp_wlast = now;
++        if (pipe_available(p) == 0) {
++            pp(1);
++        }
++    }
+     fill = pipe_buf_merge_room(p, count);
+     last = p->tail;
+     while (done < count) {
+@@ -1291,7 +1366,21 @@ static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n
+     }
+     pipe_unlock(p, NULL);
+     if (data) {
++        if (p->pp_probe && count == 10240 && wq_active(&p->read_wq)) {
++            pp(2);
++            p->pp_wcpu = (int)arch_cpu_id();
++            p->pp_wake = pp_tsc();
++            woke = 1;
++            if (p->pp_sleep && p->pp_wake > p->pp_sleep) {
++                pp_hist(96, p->pp_wake - p->pp_sleep);
++            }
++        }
+         pipe_wake(p, &p->read_wq, WQ_DATA);
++        if (woke) {
++            uint64_t now = pp_tsc();
++            pp_hist(64, now - t_in);
++            pp_hist(80, now - p->pp_wake);
++        }
+     }
+     if (err == -EPIPE) {
+         pipe_sigpipe();
+diff --git a/rach2/sys/ipc/pipe.h b/rach2/sys/ipc/pipe.h
+index ee43ba781..b8be54152 100644
+--- a/rach2/sys/ipc/pipe.h
++++ b/rach2/sys/ipc/pipe.h
+@@ -134,6 +134,8 @@ typedef struct pipe {
+      * lock (FILE_OPS_UNLOCKED), and a tee takes two, the lower address
+      * first, the second by subclass, as Linux's `pipe_double_lock`. */
+     struct sleep_lock lock;
++    int pp_probe, pp_wcpu;
++    uint64_t pp_wake, pp_wlast, pp_rret, pp_sleep;
+ } pipe_t;
+ 
+ /** Empty the list of live pipes; called once at boot. Each pipe comes from
+diff --git a/rach2/sys/proc/sched.c b/rach2/sys/proc/sched.c
+index 7a65128a0..647c4f689 100644
+--- a/rach2/sys/proc/sched.c
++++ b/rach2/sys/proc/sched.c
+@@ -29,6 +29,34 @@ static volatile int _sched_enabled = 0;
+ 
+ /* The big lock precedes this lock; interrupts cannot see partial links. */
+ static struct spinlock sched_lock = SPINLOCK_INIT_NAMED("sched_lock");
++extern uint32_t pp_cnt[NR_CPUS][128];
++static uint64_t ps_tsc(void)
++{
++    uint32_t lo, hi;
++    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
++    return ((uint64_t)hi << 32) | lo;
++}
++static void ps_hist(int base, uint64_t cyc)
++{
++    int b = 0;
++    while (cyc > 1) {
++        cyc >>= 1;
++        b++;
++    }
++    b -= 8;
++    if (b < 0) {
++        b = 0;
++    }
++    if (b > 15) {
++        b = 15;
++    }
++    pp_cnt[arch_cpu_id()][base + b]++;
++}
++static int ps_tar(void)
++{
++    return current_proc && current_proc->comm[0] == 't' && current_proc->comm[1] == 'a' &&
++           current_proc->comm[2] == 'r';
++}
+ 
+ struct ready_queue {
+     process_t *head, *tail;
+@@ -650,9 +678,12 @@ void sched_priority_changed(process_t *p)
+ 
+ int sched_wake_blocked(process_t *p)
+ {
++    uint64_t t0 = ps_tsc();
+     uint32_t flags = spin_lock_irqsave(&sched_lock);
+     int kick = -1;
+ 
++    (void)t0;
++
+     if (p->state == PROC_BLOCKED) {
+         p->woken = 1;
+         kick = sched_ready_locked(p);
+@@ -721,7 +752,11 @@ void sched_wake_due(process_t *p, uint64_t now)
+ 
+ void sched_kick_cpus(uint64_t cpus)
+ {
++    uint64_t t0 = ps_tsc();
+     smp_kick_many(cpus);
++    if (ps_tar() && cpus) {
++        ps_hist(112, ps_tsc() - t0);
++    }
+ }
+ 
+ void sched_set_affinity(process_t *p, uint64_t mask)

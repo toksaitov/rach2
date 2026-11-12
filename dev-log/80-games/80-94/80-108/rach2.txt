@@ -1,0 +1,11 @@
+sleep 2
+cat /sys/kernel/debug/exits | grep -E '^(ipi kick|pp |hlt)'
+tar cf - /opt/proton | /t/rcat
+tar cf - /opt/proton > /dev/zero
+tar cf - /opt/proton > /dev/zero
+cat /sys/kernel/debug/exits | grep -E '^(ipi kick|pp |hlt)'
+tar cf - /opt/proton | /t/rcat
+cat /sys/kernel/debug/exits | grep -E '^(ipi kick|pp |hlt)'
+tar cf - /opt/proton | /t/rcat
+tar cf - /opt/proton | /t/rcat
+cat /sys/kernel/debug/exits | grep -E '^(ipi kick|pp |hlt)'

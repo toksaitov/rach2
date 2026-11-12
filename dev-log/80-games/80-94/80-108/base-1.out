@@ -1,0 +1,68 @@
+booted rach2 R/build/tmp/4850/kernel-base
+== sleep 2  2.00 s
+[?2004h
+<6>[5.477000] net: eth0: IPv6 fec0::4af0:b743:c9d4:2860/64 added
+<6>[5.477000] net: eth0: IPv6 fec0::6984:3b7:e175:a388/64 added
+<7>[6.146000] virtio_gpu: worker: pid 77
+<6>[6.146000] console: card0: handed to a master, the keyboard off
+[?2004l
+__END__0
+   exits=4440 halt_exits=2016 io_exits=155 mmio_exits=0 irq_exits=11 irq_window_exits=8 request_irq_exits=0 nmi_window_exits=0 insn_emulation=168 hypercalls=0 irq_injections=2027 halt_successful_poll=0 halt_wakeup=2017 req_event=4064 unnamed=2250
+== cat /sys/kernel/debug/exits | grep -E '^(ipi kick|pp |hlt)'  0.01 s
+[?2004h[?2004l
+hlt 0 12877 10157 905 585 1230
+ipi kick 1836 1135 359 219 123
+__END__0
+   exits=1021 halt_exits=40 io_exits=350 mmio_exits=90 irq_exits=9 irq_window_exits=8 request_irq_exits=0 nmi_window_exits=0 insn_emulation=478 hypercalls=0 irq_injections=58 halt_successful_poll=15 halt_wakeup=25 req_event=175 unnamed=524
+== tar cf - /opt/proton | /t/rcat  4.85 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 89911 bytes 1610649600 nvcsw 59590 nivcsw 1 by 10k: 50013 29993 3093 1000 860 1558 3394 0
+__END__0
+   exits=467656 halt_exits=128079 io_exits=479 mmio_exits=154575 irq_exits=18835 irq_window_exits=17183 request_irq_exits=0 nmi_window_exits=0 insn_emulation=155127 hypercalls=0 irq_injections=146138 halt_successful_poll=100135 halt_wakeup=19840 req_event=226347 unnamed=148505
+== tar cf - /opt/proton > /dev/zero  0.48 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+__END__0
+   exits=2774 halt_exits=478 io_exits=263 mmio_exits=0 irq_exits=600 irq_window_exits=142 request_irq_exits=0 nmi_window_exits=0 insn_emulation=291 hypercalls=0 irq_injections=956 halt_successful_poll=1 halt_wakeup=478 req_event=2073 unnamed=1291
+== tar cf - /opt/proton > /dev/zero  0.45 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+__END__0
+   exits=2638 halt_exits=454 io_exits=262 mmio_exits=0 irq_exits=561 irq_window_exits=117 request_irq_exits=0 nmi_window_exits=0 insn_emulation=291 hypercalls=0 irq_injections=907 halt_successful_poll=0 halt_wakeup=455 req_event=1958 unnamed=1244
+== cat /sys/kernel/debug/exits | grep -E '^(ipi kick|pp |hlt)'  0.01 s
+[?2004h[?2004l
+hlt 0 141929 51137 45243 41743 3806
+ipi kick 120146 67654 34239 17371 882
+__END__0
+   exits=917 halt_exits=15 io_exits=374 mmio_exits=0 irq_exits=9 irq_window_exits=6 request_irq_exits=0 nmi_window_exits=0 insn_emulation=400 hypercalls=0 irq_injections=27 halt_successful_poll=0 halt_wakeup=16 req_event=110 unnamed=513
+== tar cf - /opt/proton | /t/rcat  1.01 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 114435 bytes 1610649600 nvcsw 75532 nivcsw 0 by 10k: 84745 25775 547 403 296 319 2350 0
+__END__0
+   exits=166894 halt_exits=76907 io_exits=472 mmio_exits=0 irq_exits=3601 irq_window_exits=2085 request_irq_exits=0 nmi_window_exits=0 insn_emulation=550 hypercalls=0 irq_injections=79665 halt_successful_poll=72649 halt_wakeup=2581 req_event=86404 unnamed=83829
+== cat /sys/kernel/debug/exits | grep -E '^(ipi kick|pp |hlt)'  0.01 s
+[?2004h[?2004l
+hlt 0 218852 81579 78170 51570 7533
+ipi kick 198490 100817 61734 30553 5386
+__END__0
+   exits=918 halt_exits=10 io_exits=377 mmio_exits=0 irq_exits=15 irq_window_exits=6 request_irq_exits=0 nmi_window_exits=0 insn_emulation=398 hypercalls=0 irq_injections=21 halt_successful_poll=1 halt_wakeup=9 req_event=96 unnamed=510
+== tar cf - /opt/proton | /t/rcat  1.01 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 115155 bytes 1610649600 nvcsw 75700 nivcsw 0 by 10k: 86391 24738 580 507 310 314 2315 0
+__END__0
+   exits=167140 halt_exits=76987 io_exits=475 mmio_exits=0 irq_exits=3399 irq_window_exits=2152 request_irq_exits=0 nmi_window_exits=0 insn_emulation=550 hypercalls=0 irq_injections=79786 halt_successful_poll=72446 halt_wakeup=2644 req_event=86559 unnamed=84127
+== tar cf - /opt/proton | /t/rcat  0.99 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 116184 bytes 1610649600 nvcsw 75423 nivcsw 0 by 10k: 88829 23307 512 458 319 317 2442 0
+__END__0
+   exits=167011 halt_exits=76580 io_exits=473 mmio_exits=0 irq_exits=3700 irq_window_exits=2297 request_irq_exits=0 nmi_window_exits=0 insn_emulation=550 hypercalls=0 irq_injections=79549 halt_successful_poll=72301 halt_wakeup=2622 req_event=86644 unnamed=83961
+== cat /sys/kernel/debug/exits | grep -E '^(ipi kick|pp |hlt)'  0.01 s
+[?2004h[?2004l
+hlt 0 372435 142755 141731 74267 13682
+ipi kick 355350 161652 117673 62301 13724
+__END__0
+   exits=929 halt_exits=13 io_exits=387 mmio_exits=0 irq_exits=7 irq_window_exits=5 request_irq_exits=0 nmi_window_exits=0 insn_emulation=403 hypercalls=0 irq_injections=26 halt_successful_poll=0 halt_wakeup=14 req_event=105 unnamed=517
