@@ -6,17 +6,14 @@
 extern int printf(const char *format, ...);
 extern void *malloc(unsigned long n);
 extern void free(void *p);
-extern int memcmp(const void *a, const void *b, unsigned long n);
 
 static int failures, live, alloc_fail, copy_fail, pmi_count, fault_count;
 static int model_intel, model_ext, model_v2, model_missing, model_ignored, model_lbr, model_notsx;
 static int model_hybrid, model_bld;
 static uint32_t model_amd_sig; /* AMD's leaf 1 signature, 0 for family 0 */
 static uint32_t irq_flags = 0x200u;
-unsigned int host_cpu; /* the processor the model runs as, for `arch_cpu_id` */
-/* Each of the two processors' MSRs, indexed by `host_cpu`. */
-static uint64_t physical[2][160];
-static uint32_t physical_index[2][160], physical_n[2];
+static uint64_t physical[160];
+static uint32_t physical_index[160], physical_n;
 const struct kvm_backend kvm_vmx, kvm_svm;
 const struct kvm_backend *kvm_backend;
 static struct kvm_vm vm;
@@ -142,28 +139,21 @@ void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
     kcpu_id_sub(leaf, 0, a, b, c, d);
 }
 
-/** Find a physical register of the processor `host_cpu` names in a
- * bounded table. The full-width aliases of the general counters are the
- * counters themselves. */
+/** Find a physical register in a bounded table. */
 static uint64_t *reg(uint32_t index)
 {
-    uint32_t i, c = host_cpu;
-    CHECK(c < 2u, "the model runs as processor 0 or 1");
-    c &= 1u;
-    if (index - FULL_PMC0 < 8u) {
-        index = index - FULL_PMC0 + PMC0;
-    }
-    for (i = 0; i < physical_n[c]; i++) {
-        if (physical_index[c][i] == index) {
-            return &physical[c][i];
+    uint32_t i;
+    for (i = 0; i < physical_n; i++) {
+        if (physical_index[i] == index) {
+            return &physical[i];
         }
     }
-    CHECK(physical_n[c] < 160u, "physical register table fits");
-    if (physical_n[c] == 160u) {
-        return &physical[c][0];
+    CHECK(physical_n < 160u, "physical register table fits");
+    if (physical_n == 160u) {
+        return &physical[0];
     }
-    physical_index[c][physical_n[c]] = index;
-    return &physical[c][physical_n[c]++];
+    physical_index[physical_n] = index;
+    return &physical[physical_n++];
 }
 
 /** Read the register bank used by the production switching code. */
@@ -265,8 +255,7 @@ static void setup(int intel, int ext, int v2)
     k_memset(&other, 0, sizeof(other));
     k_memset(cpuid, 0, sizeof(cpuid));
     k_memset(physical, 0, sizeof(physical));
-    physical_n[0] = physical_n[1] = 0;
-    host_cpu = 0;
+    physical_n = 0;
     if (intel && model_lbr) {
         *reg(PERF_CAP) = FW_WRITES | 4u;
     }
@@ -571,326 +560,6 @@ static void intel_placement(void)
     kvm_pmu_vmx_exit(&v, guest, 1);
 }
 
-/* The NMI handler's hook, which kvm_pmu_start sets. */
-int (*watchdog_guest_nmi)(void);
-
-/* Whether the hard-lockup detector's counter runs, keeping the counters'
- * APIC entry an unmasked NMI. */
-static int model_armed = 1;
-
-int platform_pmu_armed(void)
-{
-    return model_armed;
-}
-
-/** Write `text` to the measuring knob; its return. */
-static int32_t steps(const char *text)
-{
-    uint32_t n = 0;
-    while (text[n]) {
-        n++;
-    }
-    return kvm_pmu_steps_store(NULL, 0, text, n);
-}
-
-/** Drive kvm_intel's pmu_steps: its text, the bits it refuses, and each
- * step on the switching: Linux's order, the counters written to minus
- * their periods, the interrupt bits and the NMI they raise, and the fixed
- * field cleared at the exit; and pmu_placed. `intel_step_limits` goes on
- * from the state this leaves. */
-static void intel_steps(void)
-{
-    struct kvm_pmu_msr guest[KVM_PMU_LIST_MAX], host[KVM_PMU_LIST_MAX];
-    uint64_t global[2], watch_global = FIXED_BIT(1);
-    uint32_t ng, nh;
-    char text[24];
-    setup(1, 0, 0);
-    CHECK(steps("0x08") < 0, "FREEZE_WHILE_SMM is refused where PERF_CAPABILITIES lacks it");
-    *reg(PERF_CAP) = FW_WRITES | SMM_FREEZE;
-    kvm_pmu_start();
-    CHECK(kvm_pmu_steps_show(NULL, 0, text, sizeof(text)) == 5 && text[2] == '0' &&
-              text[3] == '0' && text[4] == '\n',
-          "pmu_steps reads 0x00 at boot");
-    CHECK(steps("0x04") < 0 && steps("0x20") < 0 && steps("0x") < 0 && steps("0x123") < 0 &&
-              steps("1 ") < 0 && steps("") < 0,
-          "it refuses the PMI bits alone, an unknown bit and other text");
-    CHECK(steps("21\n") == 3 && kvm_pmu_steps_show(NULL, 0, text, sizeof(text)) == 5 &&
-              text[2] == '1' && text[3] == '5',
-          "it takes decimal and reads back in hex");
-    CHECK(steps("0x1F") == 4, "and takes every step at once");
-    pmu_host.version = 1;
-    CHECK(steps("0x05") < 0, "it refuses the PMI bits without the global status");
-    pmu_host.version = 2;
-    *reg(GLOBAL_STATUS) = 1u;
-    *reg(GLOBAL_OVF) = 0;
-    CHECK(watchdog_guest_nmi == kvm_pmu_nmi && !kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
-          "the NMI handler calls KVM, which claims and acknowledges no overflow before a PMI bit "
-          "is set");
-    *reg(GLOBAL_STATUS) = 0;
-    CHECK(kvm_pmu_placed_show(NULL, 0, text, sizeof(text)) == 4 && !memcmp(text, "0x0\n", 4),
-          "pmu_placed reads 0x0 before any entry");
-    CHECK(steps("0x17") == 4, "and Linux's order, the writes, the PMI bits and the field");
-    *reg(GLOBAL_CTRL) = watch_global;
-    *reg(FIXED_CTRL) = 0xB0u;
-    *reg(FIXED0) = 77;
-    *reg(PMC0) = 300;
-    v.pmu.fixed_ctrl = 2;
-    v.pmu.fixed[0] = 0;
-    v.pmu.eventsel[0] = 0xC4u | EV_ENABLE | EV_OS;
-    v.pmu.counter[0] = v.pmu.gp_mask - 3;
-    v.pmu.global_ctrl = 1u | FIXED_BIT(0);
-    kvm_pmu_prepare(&v);
-    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
-    CHECK(v.pmu.phys[KVM_PMU_GP_MAX] == 32u && v.pmu.phys[0] == 0,
-          "Linux's order puts fixed counter 0 on its own counter on Haswell");
-    CHECK(*reg(FIXED0) == 0x800000000001ull && *reg(PMC0) == mask_bits(48) - 31u,
-          "each counter starts at minus its period, perf's max_period at most and Haswell's "
-          "32 at least");
-    CHECK(kvm_pmu_placed_show(NULL, 0, text, sizeof(text)) == 12 &&
-              !memcmp(text, "0x100000001\n", 12),
-          "pmu_placed gives fixed counter 0 and general counter 0");
-    CHECK(*reg(FIXED_CTRL) == 0xBAu && *reg(EVENTSEL0) == (0xC4u | EV_ENABLE | EV_OS | EV_INT),
-          "and has its interrupt bit");
-    *reg(FIXED0) += 5;
-    *reg(PMC0) += 2;
-    *reg(GLOBAL_STATUS) = FIXED_BIT(1) | FIXED_BIT(0) | 1u;
-    *reg(GLOBAL_OVF) = 0;
-    kvm_pmu_vmx_exit(&v, guest, 1);
-    CHECK(!*reg(GLOBAL_OVF),
-          "with the detector on, the exit leaves the overflows of the guest counters that have "
-          "their interrupt bits to their NMIs, which come after it");
-    CHECK(v.pmu.fixed[0] == 5 && v.pmu.counter[0] == v.pmu.gp_mask - 1,
-          "the deltas count from the written values");
-    CHECK(*reg(FIXED_CTRL) == 0xB0u, "the exit clears the guest's field and keeps the host's");
-    *reg(GLOBAL_STATUS) = FIXED_BIT(1);
-    CHECK(!kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
-          "KVM leaves the NMI of the host's counter's overflow to the detector");
-    *reg(GLOBAL_STATUS) = FIXED_BIT(1) | FIXED_BIT(0) | 2u | 1u;
-    host_cpu = 1;
-    *reg(GLOBAL_STATUS) = FIXED_BIT(0) | 1u;
-    CHECK(!kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
-          "an NMI on another processor claims none of the counters this one gave the bits");
-    *reg(GLOBAL_STATUS) = 0;
-    host_cpu = 0;
-    CHECK(kvm_pmu_nmi() == 2 && *reg(GLOBAL_OVF) == (FIXED_BIT(0) | 1u),
-          "and here KVM claims only the counters the last entry gave the bits, acknowledging "
-          "and counting each, so that the NMI a second latched is swallowed");
-    *reg(GLOBAL_STATUS) = FIXED_BIT(1) | FIXED_BIT(0) | 1u;
-    *reg(GLOBAL_OVF) = 0;
-    model_armed = 0;
-    kvm_pmu_prepare(&v);
-    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
-    CHECK(*reg(GLOBAL_OVF) == (FIXED_BIT(0) | 1u),
-          "the next entry acknowledges an overflow with the bit whose NMI never came");
-    CHECK(*reg(FIXED_CTRL) == 0xB2u && *reg(EVENTSEL0) == (0xC4u | EV_ENABLE | EV_OS),
-          "with the detector's counter stopped the entry sets no interrupt bit");
-    *reg(GLOBAL_OVF) = 0;
-    kvm_pmu_vmx_exit(&v, guest, 1);
-    CHECK(*reg(GLOBAL_OVF) == (FIXED_BIT(0) | 1u),
-          "and the exit acknowledges the guest counters' overflows, which raise no NMI");
-    *reg(GLOBAL_OVF) = 0;
-    CHECK(!kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
-          "nor does an NMI after such an entry claim any overflow");
-    model_armed = 1;
-    *reg(GLOBAL_STATUS) = 0;
-}
-
-/** Go on from `intel_steps`: the model's limits on a counter's start,
- * FREEZE_WHILE_SMM in the VMCS's DEBUGCTL alone, and pmu_placed after an
- * entry that places no counter. */
-static void intel_step_limits(void)
-{
-    struct kvm_pmu_msr guest[KVM_PMU_LIST_MAX], host[KVM_PMU_LIST_MAX];
-    uint64_t global[2], value;
-    uint32_t ng, nh;
-    char text[24];
-
-    v.pmu.eventsel[1] = 0x1C0u | EV_ENABLE | EV_OS;
-    v.pmu.counter[1] = v.pmu.gp_mask - 3;
-    CHECK(start_count(&v.pmu, 1) == mask_bits(48) - 127u,
-          "INST_RETIRED.ALL starts 128 counts from its overflow at least on Haswell");
-    pmu_host.table = c_bdw;
-    CHECK(start_count(&v.pmu, 0) == mask_bits(48) - 1u &&
-              start_count(&v.pmu, 1) == mask_bits(48) - 127u,
-          "on Broadwell only INST_RETIRED.ALL is limited, to 128 at least");
-    v.pmu.counter[1] = v.pmu.gp_mask - 199;
-    CHECK(start_count(&v.pmu, 1) == mask_bits(48) - 191u, "with its low six bits clear");
-    pmu_host.table = c_nehalem;
-    CHECK(start_count(&v.pmu, 0) == mask_bits(48) - 31u, "and on Nehalem every event to 32");
-    pmu_host.table = c_hsw;
-    v.pmu.eventsel[1] = 0;
-    CHECK(steps("0x08") == 4, "FREEZE_WHILE_SMM is taken where PERF_CAPABILITIES offers it");
-    kvm_pmu_prepare(&v);
-    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
-    CHECK(kvm_pmu_vmcs_debugctl(&v) & KVM_DEBUGCTL_FREEZE_IN_SMM,
-          "and the VMCS's DEBUGCTL carries it");
-    CHECK(kvm_pmu_debugctl(&v, 0, &value, 0) == 0 && !(value & KVM_DEBUGCTL_FREEZE_IN_SMM),
-          "while the guest's DEBUGCTL does not");
-    CHECK(v.pmu.phys[KVM_PMU_GP_MAX] == 1u && *reg(FIXED_CTRL) == 0xB0u,
-          "without 0x10 Haswell's fixed counter 0 is placed last again");
-    kvm_pmu_vmx_exit(&v, guest, 1);
-    CHECK(steps("0") == 1, "and 0 takes no step");
-    kvm_pmu_prepare(&v);
-    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
-    CHECK(!(kvm_pmu_vmcs_debugctl(&v) & KVM_DEBUGCTL_FREEZE_IN_SMM), "nor FREEZE_WHILE_SMM");
-    kvm_pmu_vmx_exit(&v, guest, 1);
-    v.pmu.global_ctrl = 0;
-    kvm_pmu_prepare(&v);
-    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
-    CHECK(kvm_pmu_placed_show(NULL, 0, text, sizeof(text)) == 4 && !memcmp(text, "0x0\n", 4),
-          "an entry that places no counter gives pmu_placed 0x0");
-    kvm_pmu_vmx_exit(&v, guest, 1);
-}
-
-/** Prepare `w`'s entry with pmu_steps 0x05 on processor `cpu`, with its
- * general counters `run` counting UOPS_RETIRED.ALL, those of `cp`
- * checkpointed, each two counts from its overflow, into the lists `guest`
- * and `host`, and stop short of the run. */
-static void pmi_prepare(struct kvm_vcpu *w, unsigned int cpu, uint32_t run, uint32_t cp,
-                        struct kvm_pmu_msr *guest, struct kvm_pmu_msr *host)
-{
-    uint64_t global[2];
-    uint32_t ng, nh, i;
-
-    host_cpu = cpu;
-    for (i = 0; i < 4u; i++) {
-        w->pmu.eventsel[i] =
-            (run & (1u << i)) ? (0xC4u | EV_ENABLE | EV_OS | ((cp & (1u << i)) ? EV_TXCP : 0)) : 0;
-        w->pmu.counter[i] = w->pmu.gp_mask - 1;
-    }
-    w->pmu.global_ctrl = run;
-    kvm_pmu_prepare(w);
-    kvm_pmu_vmx_enter(w, guest, host, &ng, &nh, global);
-}
-
-/** Enter `w` as `pmi_prepare` does, and begin the guest's run. */
-static void pmi_enter(struct kvm_vcpu *w, unsigned int cpu, uint32_t run, uint32_t cp,
-                      struct kvm_pmu_msr *guest, struct kvm_pmu_msr *host)
-{
-    pmi_prepare(w, cpu, run, cp, guest, host);
-    kvm_pmu_vmx_run();
-}
-
-/** Drive the status an entry finds: the overflow firmware left on a
- * counter, acknowledged before the counter is given its PMI bit, and a
- * TSX-checkpointed counter's PMI, whose status a rollback cleared, claimed
- * as Linux's intel_pmu_handle_irq adds intel_cp_status. */
-static void intel_pmi_status(void)
-{
-    struct kvm_pmu_msr guest[KVM_PMU_LIST_MAX], host[KVM_PMU_LIST_MAX];
-
-    setup(1, 0, 0);
-    CHECK(steps("0x05") == 4, "the PMI bits are taken with the writes");
-    *reg(GLOBAL_STATUS) = 2u | 1u;
-    pmi_enter(&v, 0, 1u, 0, guest, host);
-    CHECK(v.pmu.phys[0] == 0 && *reg(EVENTSEL0) == (0xC4u | EV_ENABLE | EV_OS | EV_INT),
-          "the first entry gives general counter 0 its interrupt bit");
-    CHECK(*reg(GLOBAL_OVF) == 1u,
-          "having acknowledged the overflow firmware left on it, and on no other counter");
-    *reg(GLOBAL_STATUS) = 2u;
-    *reg(GLOBAL_OVF) = 0;
-    CHECK(!kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
-          "so an NMI that finds only another counter's status is not KVM's");
-    kvm_pmu_vmx_exit(&v, guest, 1);
-    *reg(GLOBAL_STATUS) = 0;
-    *reg(GLOBAL_OVF) = 0;
-    pmi_enter(&v, 0, 5u, 4u, guest, host);
-    CHECK(v.pmu.phys[2] == 2 &&
-              *reg(EVENTSEL0 + 2u) == (0xC4u | EV_ENABLE | EV_OS | EV_TXCP | EV_INT),
-          "a checkpointed event runs on counter 2 with its interrupt bit");
-    kvm_pmu_vmx_exit(&v, guest, 1);
-    CHECK(kvm_pmu_nmi() == 1 && !*reg(GLOBAL_OVF),
-          "an NMI that finds no status, the rollback having cleared counter 2's, is KVM's");
-    CHECK(!kvm_pmu_nmi(), "once, since the exit the NMI caused stopped the counter");
-    *reg(GLOBAL_STATUS) = FIXED_BIT(1);
-    CHECK(kvm_pmu_nmi() == 1 && !*reg(GLOBAL_OVF),
-          "while another counter's status is set the checkpointed counter counts, as Linux's");
-    *reg(GLOBAL_STATUS) = 4u | 1u;
-    CHECK(kvm_pmu_nmi() == 2 && *reg(GLOBAL_OVF) == 5u,
-          "and its own status bit counts it once, beside the other guest counter's");
-    *reg(GLOBAL_STATUS) = 0;
-    *reg(GLOBAL_OVF) = 0;
-    pmi_enter(&v, 0, 5u, 4u, guest, host);
-    CHECK(kvm_pmu_nmi() == 1, "the next entry lets one empty NMI be claimed again");
-    kvm_pmu_vmx_exit(&v, guest, 1);
-    pmi_prepare(&v, 0, 5u, 4u, guest, host);
-    CHECK(!kvm_pmu_nmi(), "an empty NMI between the publication and the run is not KVM's");
-    kvm_pmu_vmx_run();
-    kvm_pmu_vmx_exit(&v, guest, 1);
-    CHECK(kvm_pmu_nmi() == 1, "and leaves the claim to the run's own PMI");
-    pmi_enter(&v, 0, 5u, 4u, guest, host);
-    kvm_pmu_vmx_exit(&v, guest, 1);
-    pmi_enter(&v, 0, 1u, 0, guest, host);
-    CHECK(!kvm_pmu_nmi(), "an entry that gives the bit to no checkpointed counter ends the claim");
-    kvm_pmu_vmx_exit(&v, guest, 1);
-    *reg(GLOBAL_STATUS) = (1ull << 63) | (1ull << 58);
-    pmi_enter(&v, 0, 5u, 4u, guest, host);
-    kvm_pmu_vmx_exit(&v, guest, 1);
-    CHECK(kvm_pmu_nmi() == 1 && kvm_pmu_nmi() == 0,
-          "COND_CHG and LBRS_FROZEN are no counter's overflow: the empty NMI's claim, once");
-    *reg(GLOBAL_STATUS) = 8u;
-    *reg(GLOBAL_OVF) = 0;
-    pmi_enter(&v, 0, 5u, 4u, guest, host);
-    CHECK(*reg(GLOBAL_OVF) == 8u,
-          "a checkpointed entry acknowledges the stale overflow of a counter nobody holds");
-    *reg(GLOBAL_STATUS) = 4u;
-    *reg(GLOBAL_OVF) = 0;
-    kvm_pmu_vmx_exit(&v, guest, 1);
-    kvm_pmu_leave();
-    CHECK(*reg(GLOBAL_OVF) == 4u, "leaving the processor acknowledges a PMI counter's status");
-    *reg(GLOBAL_STATUS) = 0;
-    CHECK(!kvm_pmu_nmi(), "and claims no empty NMI for the checkpointed counter after");
-    *reg(GLOBAL_STATUS) = FIXED_BIT(1);
-    CHECK(!kvm_pmu_nmi(), "nor counts it beside the detector's overflow");
-    *reg(GLOBAL_STATUS) = 0;
-    *reg(GLOBAL_OVF) = 0;
-    model_armed = 0;
-    pmi_enter(&v, 0, 5u, 4u, guest, host);
-    CHECK(!kvm_pmu_nmi(), "and an entry that sets no interrupt bit lets none be claimed");
-    kvm_pmu_vmx_exit(&v, guest, 1);
-    model_armed = 1;
-}
-
-/** Drive two processors: each entry, exit and NMI reads its own
- * processor's record of the counters given a PMI bit. */
-static void intel_pmi_cpus(void)
-{
-    struct kvm_pmu_msr guest[KVM_PMU_LIST_MAX], host[KVM_PMU_LIST_MAX];
-    struct kvm_pmu_msr guest1[KVM_PMU_LIST_MAX], host1[KVM_PMU_LIST_MAX];
-
-    setup(1, 0, 0);
-    CHECK(steps("0x05") == 4, "the PMI bits are taken with the writes");
-    pmi_enter(&v, 0, 1u, 0, guest, host);
-    pmi_enter(&other, 1, 3u, 0, guest1, host1);
-    CHECK(other.pmu.phys[0] == 0 && other.pmu.phys[1] == 1 &&
-              *reg(EVENTSEL0 + 1u) == (0xC4u | EV_ENABLE | EV_OS | EV_INT),
-          "processor 1's entry gives its general counters 0 and 1 the interrupt bit");
-    *reg(GLOBAL_STATUS) = 2u | 1u;
-    host_cpu = 0;
-    *reg(GLOBAL_STATUS) = 2u | 1u;
-    host_cpu = 1;
-    kvm_pmu_vmx_exit(&other, guest1, 1);
-    CHECK(!*reg(GLOBAL_OVF),
-          "processor 1's exit leaves both its counters' overflows to their NMIs");
-    host_cpu = 0;
-    CHECK(kvm_pmu_nmi() == 1 && *reg(GLOBAL_OVF) == 1u,
-          "processor 0's NMI claims only the counter its own entry gave the bit");
-    *reg(GLOBAL_STATUS) = 1u;
-    *reg(GLOBAL_OVF) = 0;
-    model_armed = 0;
-    pmi_enter(&other, 1, 3u, 0, guest1, host1);
-    CHECK(*reg(GLOBAL_OVF) == (2u | 1u),
-          "processor 1's next entry acknowledges its own last entry's stale overflows");
-    host_cpu = 0;
-    CHECK(!*reg(GLOBAL_OVF) && kvm_pmu_nmi() == 1 && *reg(GLOBAL_OVF) == 1u,
-          "and leaves processor 0's record and status as they were");
-    host_cpu = 1;
-    kvm_pmu_vmx_exit(&other, guest1, 1);
-    host_cpu = 0;
-    kvm_pmu_vmx_exit(&v, guest, 1);
-    model_armed = 1;
-}
-
 /** Drive the guest's LBR stack: PERF_CAPABILITIES, DEBUGCTL, its MSRs,
  * the lists while DEBUGCTL.LBR is set, and the freeze on a PMI. */
 static void intel_lbr(void)
@@ -1090,10 +759,6 @@ int main(void)
     filters();
     intel_switch();
     intel_placement();
-    intel_steps();
-    intel_step_limits();
-    intel_pmi_status();
-    intel_pmi_cpus();
     intel_lbr();
     amd_switch();
     amd_constraints();

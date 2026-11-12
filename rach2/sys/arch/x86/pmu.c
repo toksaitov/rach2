@@ -485,11 +485,6 @@ void platform_pmu_handled(void)
     }
 }
 
-int platform_pmu_armed(void)
-{
-    return kind != PMU_NONE && pmc[arch_cpu_id()].on;
-}
-
 /**
  * An NMI the counter raised may come after the code that would have taken
  * it: one in flight as the counter is loaded again or stopped finds no

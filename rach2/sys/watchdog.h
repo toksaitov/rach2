@@ -72,10 +72,9 @@ void watchdog_sched(void);
  * Take an NMI meant for the watchdog: a backtrace request, the counter's
  * overflow, which runs the hard-lockup check, or the stop of a panic that
  * the interprocessor interrupt did not reach (`smp_stop_others`), which
- * `smp_stop_nmi` takes and does not return from; and a guest counter's
- * overflow, which KVM takes (`watchdog_guest_nmi`). 1 when the NMI was one
- * of these or came late for the watchdog, 0 for one of another source,
- * which the caller reports as a fault of the machine.
+ * `smp_stop_nmi` takes and does not return from. 1 when the NMI was the
+ * watchdog's or came late for it, 0 for one of another source, which the
+ * caller reports as a fault of the machine.
  *
  * The processor latches one NMI while it handles another. When an NMI
  * handles two sources, a backtrace request and the counter's overflow, the
@@ -90,20 +89,6 @@ void watchdog_sched(void);
  * the overflow has run.
  */
 int watchdog_nmi(isr_params_t *params);
-
-/**
- * Set by KVM where a guest's counters may raise a PMI (kvm/pmu.c's
- * `kvm_pmu_nmi`), NULL otherwise: called by `watchdog_nmi` on every NMI
- * before the detector's `platform_pmu_overflow`, it acknowledges the
- * overflow of each counter the last entry on this processor gave a PMI
- * bit and returns how many there were, each a handled source of the NMI,
- * so that two let the next NMI, which finds nothing, be swallowed. It runs
- * before the counter's APIC entry is unmasked again, as Linux acknowledges
- * every counter's overflow first (arch/x86/events/intel/core.c:3190,
- * 3226-3227).
- * It takes no lock and must not fault.
- */
-extern int (*watchdog_guest_nmi)(void);
 
 /** Delay this processor's next soft-lockup report by a sample period, for
  * code known to keep the processor for long, as Linux's

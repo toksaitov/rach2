@@ -1731,7 +1731,6 @@ static int vmx_enter(struct kvm_vcpu *v)
     vmcs_write(VM_EXIT_MSR_LOAD_COUNT, hbase + nh);
     vmx_op->fpu_load(x->host_fpu, v->xsave, v->xcr0);
     dr_load(v, &host_dr7, host_db);
-    kvm_pmu_vmx_run();
     x->ex.failed = vmx_op->run(&v->regs, &v->sregs.cr2, x->launched);
     dr_store(v, host_dr7, host_db);
     vmx_op->fpu_store(x->host_fpu, v->xsave, v->xcr0);
@@ -1743,7 +1742,7 @@ static int vmx_enter(struct kvm_vcpu *v)
         (x->debugctl & DEBUGCTL_LBR)) {
         /* A #DB in the guest clears DEBUGCTL.LBR, and the exit saved it. */
         x->debugctl &= vmcs_read(GUEST_IA32_DEBUGCTL);
-        v->pmu.debugctl = x->debugctl & ~KVM_DEBUGCTL_FREEZE_IN_SMM;
+        v->pmu.debugctl = x->debugctl;
     }
     if (x->ex.failed == VMX_OK) {
         nmi = exit_is_nmi(&x->ex);
