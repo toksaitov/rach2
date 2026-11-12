@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 12, 2026
 .Dt SYSFS 5
 .Os
 .Sh NAME
@@ -40,6 +40,13 @@ with its own limits; the arguments a
 .Pa uevent
 write gives its uevent fill at most 256 bytes.
 .Bl -tag -width Ds
+.It Pa /sys/class/misc/udmabuf
+.It Pa /sys/dev/char/10:126
+Links to
+.Pa /sys/devices/virtual/misc/udmabuf ,
+with the device number in dev, its variables in uevent and a subsystem
+link to misc, through which udev finds
+.Xr udmabuf 4 .
 .It Pa /sys/bus/pci/devices/0000:BB:DD.F
 A symbolic link for each PCI function, named by its bus, device and
 function in lowercase hexadecimal, to

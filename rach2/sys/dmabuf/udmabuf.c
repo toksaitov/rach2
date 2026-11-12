@@ -1,6 +1,8 @@
 /* /dev/udmabuf exports pinned ranges of sealed tmpfs files as dma-bufs. */
 #include "dmabuf.h"
 #include "../fs/devfs.h"
+#include "../fs/sysfs.h"
+#include "../fs/synthfs.h"
 #include "../fs/tmpfs.h"
 #include "../mm/shmem.h"
 #include "../mm/paging.h"
@@ -177,10 +179,86 @@ static int32_t udma_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 }
 
 static const struct file_ops udma_file_ops = {NULL, NULL, NULL, udma_ioctl, NULL, NULL, NULL, 0};
-static struct devfs_node udma_node = {"udmabuf", 10, 126, 0666, &udma_file_ops, NULL, NULL};
+/* Linux 6.12.115: udmabuf.c:503-507, devtmpfs.c:122-130. */
+static struct devfs_node udma_node = {"udmabuf", 10, 126, 0600, &udma_file_ops, NULL, NULL};
+
+/** Read the device number, or with arg 1 the variables of its uevent. */
+static int32_t udma_show(void *obj, int arg, char *buf, uint32_t cap)
+{
+    const char *text = arg ? "MAJOR=10\nMINOR=126\nDEVNAME=udmabuf\n" : "10:126\n";
+    uint32_t len = 0;
+
+    (void)obj;
+    while (text[len]) {
+        if (len < cap)
+            buf[len] = text[len];
+        len++;
+    }
+    return (int32_t)len;
+}
+
+/** Find a shared directory: its handle or -errno.
+ * Set made to its handle if made here, else 0. */
+static int udma_dir(int parent, const char *name, int len, int *made)
+{
+    int h = sysfs_node_child(parent, name, len);
+
+    *made = 0;
+    if (h > 0)
+        return h;
+    h = sysfs_add_dir(parent, name);
+    if (h > 0)
+        *made = h;
+    return h;
+}
+
+/** Publish the misc device under the big lock.
+ * Return 0, or -errno with additions undone. */
+static int udma_sysfs(void)
+{
+    static const struct sysfs_attr dev = {"dev", 0444u, udma_show, NULL};
+    int made[6] = {0, 0, 0, 0, 0, 0};
+    int cls, virt, misc, dir, h, i;
+
+    cls = udma_dir(sysfs_anchor(SYSFS_CLASS, 0), "misc", 4, &made[0]);
+    if ((h = cls) < 0)
+        goto fail;
+    virt = udma_dir(sysfs_anchor(SYSFS_DEVICES, 0), "virtual", 7, &made[1]);
+    if ((h = virt) < 0)
+        goto fail;
+    misc = udma_dir(virt, "misc", 4, &made[2]);
+    if ((h = misc) < 0)
+        goto fail;
+    made[3] = dir = sysfs_add_dir(misc, "udmabuf");
+    if ((h = dir) < 0)
+        goto fail;
+    if ((h = sysfs_add_attr(dir, &dev, NULL, 0)) < 0 ||
+        (h = sysfs_add_uevent(dir, udma_show, NULL, 1)) < 0 ||
+        (h = sysfs_add_link(dir, "subsystem", cls)) < 0)
+        goto fail;
+    made[4] = h = sysfs_add_link(cls, "udmabuf", dir);
+    if (h < 0)
+        goto fail;
+    made[5] = h = sysfs_add_link(sysfs_anchor(SYSFS_DEV_CHAR, 0), "10:126", dir);
+    if (h < 0)
+        goto fail;
+    sysfs_uevent(dir, "add", NULL);
+    return 0;
+fail:
+    for (i = 5; i >= 0; i--)
+        sysfs_remove(made[i]);
+    return h;
+}
 
 /** Publish the udmabuf misc device during DRM startup. */
 int32_t udmabuf_start(void)
 {
-    return devfs_node_register(&udma_node);
+    int32_t rc = devfs_node_register(&udma_node);
+
+    if (rc)
+        return rc;
+    rc = udma_sysfs();
+    if (rc)
+        devfs_node_unregister(&udma_node);
+    return rc;
 }
