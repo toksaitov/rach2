@@ -27,13 +27,13 @@ idt_test pass pass
 intel_iommu pass pass
 ioapic pass pass
 kvmclock_test pass pass
-la57 pass fail Linux: la57.c:230: assert failed: write_cr4_safe(read_cr4() | X86_CR4_PCIDE) == 0, as Rach2
+la57 outer_kvm?fail:pass fail Linux: la57.c:230: assert failed: write_cr4_safe(read_cr4() | X86_CR4_PCIDE) == 0, as Rach2
 lam pass pass
 memory pass pass
 msr pass pass
 msr64 pass pass
 pcid-asymmetric pass pass
-pcid-disabled pass fail Linux: FAIL: Test on INVPCID when disabled, as Rach2
+pcid-disabled outer_kvm?fail:pass fail Linux: FAIL: Test on INVPCID when disabled, as Rach2
 pcid-enabled pass pass
 pks skip skip PKS not enabled: the processor has no PKS
 pku skip skip PKU not enabled
@@ -67,5 +67,5 @@ vmexit_tscdeadline pass pass
 vmexit_tscdeadline_immed pass pass
 vmexit_vmcall pass pass
 vmware_backdoors skip skip /sys/module/kvm/parameters/enable_vmware_backdoor not equal to Y
-x2apic pass fail Linux: nmi-after-sti fails, as under Rach2; TMCCT should not be reset to TMICT value passed in each of the 3 Linux runs kept and in 1 of 4 Rach2 runs, as a report line between its two reads spans several timer periods there; the test takes 640 to 849 s
+x2apic outer_kvm?fail:pass fail Linux: nmi-after-sti fails, as under Rach2; TMCCT should not be reset to TMICT value passed in each of the 3 Linux runs kept and in 1 of 4 Rach2 runs, as a report line between its two reads spans several timer periods there; the test takes 640 to 849 s
 xsave pass pass
