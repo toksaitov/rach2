@@ -1525,7 +1525,11 @@ void sched_loadavg(uint32_t avg[3])
  * (`arch_irq_waiting`), and halts on it, which takes it while the processor
  * is still marked idle: held to the poll's end, a disk's completion made
  * each of its random reads some 90 us longer, and a tick held past a kick
- * was charged to the thread the processor switched to.
+ * was charged to the thread the processor switched to. A kicked poll
+ * likewise lets interrupts in for one instruction before it returns, so
+ * that one pending then, seen or not, is taken while the processor is
+ * still marked idle, not after its caller waited for the big lock or
+ * switched threads.
  *
  * The length adapts as Linux 6.12.115's haltpoll governor adapts its own
  * (adjust_poll_limit, drivers/cpuidle/governors/haltpoll.c): a wait the
@@ -1571,6 +1575,8 @@ static void idle_halt(void)
             arch_relax();
         }
         if (arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_NONE) == CPU_POLL_KICKED) {
+            arch_irq_enable(); /* `sti` lets a pending interrupt in after the return */
+            arch_irq_disable();
             return;
         }
     }
