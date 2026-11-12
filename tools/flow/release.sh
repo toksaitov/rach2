@@ -1604,9 +1604,19 @@ lenovo_run()
 # its last twenty lines when none does.
 failing()
 {
-    { tr -d '\r' < "$1" |
-        grep -E 'error:|Error [0-9]|\*\*\*|FAIL|[Ff]ailed|refused|[Cc]annot|missing|not found|No such' |
-        tail -n 20 | grep . || tr -d '\r' < "$1" | tail -n 20; } 2> /dev/null | sed 's/^/    /'
+    # A parallel make prints other jobs' configure noise after the error, so
+    # the twelve lines before the first make error come first.
+    { tr -d '\r' < "$1" | awk '
+        { line[NR] = $0 }
+        !first && /make(\[[0-9]+\])?: \*\*\* \[/ { first = NR }
+        END {
+            if (first)
+                for (i = (first > 12 ? first - 12 : 1); i <= first; i++)
+                    print line[i]
+        }'
+        tr -d '\r' < "$1" |
+            grep -E 'error:|Error [0-9]|FAIL|result: fail|step: .*failed|refused|No such' |
+            tail -n 8 | grep . || tr -d '\r' < "$1" | tail -n 20; } 2> /dev/null | sed 's/^/    /'
 }
 
 # prepare_wsl: build SHA for both architectures, as the full run does, and run
