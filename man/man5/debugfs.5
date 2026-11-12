@@ -164,8 +164,15 @@ request for which none of the 32 slots its hash names is free or its own
 count in
 .Ql ioctl_lost ,
 which can count while most slots are free.
-No disk driver takes the lock, since each serializes on locks of its own,
-and the AHCI, NVMe and ATA interrupts run without it.
+The block layer takes no big lock: each disk driver serializes on locks
+of its own, and the AHCI, NVMe and ATA interrupts run without it.
+Two drivers take it under the block layer.
+USB storage takes it, only when it is free, to move a submitted request
+from its intake into the stick's queue and start it; when it is held,
+the USB pump, which runs under the lock, does that on its next pass.
+A loop device takes it around each operation of the file system its
+backing file is on, as a descriptor's call does, except a read of a file
+system that reads without it.
 A write of anything zeroes the counts.
 .It Pa bkl/profile
 Mode 0644.
