@@ -43,6 +43,21 @@ static uint32_t reg[REGS];
 static int reset_completes;
 static int handoff_answers;
 static int link_comes_up;
+/* Ports, as a mask, whose link stays down after a reset, and whose DET reads
+   1 after it: a device seen that never negotiates. */
+static uint32_t empty_ports;
+static uint32_t det_one_ports;
+/* Whether port 0's DET turns between 1 and 3 at each read of PxSSTS: a link
+   that never holds. */
+static int link_flaps;
+/* The order of two events, in a count the model keeps: port 0's PxSIG read,
+   and the COMRESET of port 1. */
+static unsigned model_seq;
+static unsigned p0_sig_read_at;
+static unsigned p1_reset_at;
+/* Calls of the kernel's delay, which the link's debounce counts its polls
+   in. */
+static unsigned delays;
 static int command_completes;
 static int fatal_status;
 static int engine_stuck;
@@ -118,7 +133,9 @@ static unsigned ci_reads;
  *
  * A read of PxCMD while the engine is stuck is counted in `stop_reads`. A
  * read of PxCI is counted in `ci_reads`, and the read that ends a slow
- * command's `complete_after` clears PxCI and runs `on_command_issued`.
+ * command's `complete_after` clears PxCI and runs `on_command_issued`. A read
+ * of port 0's PxSIG is stamped in `p0_sig_read_at`, and with `link_flaps` a
+ * read of its PxSSTS turns its DET between 1 and 3 first.
  */
 static uint32_t model_r32(uint32_t off)
 {
@@ -127,6 +144,12 @@ static uint32_t model_r32(uint32_t off)
     }
     if (off == P0 + P_CMD && engine_stuck) {
         stop_reads++;
+    }
+    if (off == P0 + P_SIG) {
+        p0_sig_read_at = ++model_seq;
+    }
+    if (off == P0 + P_SSTS && link_flaps) {
+        reg[off] ^= 0x122u; /* DET 3, IPM 1 to DET 1, IPM 0, and back */
     }
     if (off == P0 + P_CI) {
         ci_reads++;
@@ -180,6 +203,27 @@ static void model_issue(uint32_t base, uint32_t v)
 }
 
 /**
+ * Write `v` to the PxSCTL of the port whose registers start at `base`: DET 1
+ * takes the link down, and DET 0 brings it up when `link_comes_up`, unless
+ * the port is one of `empty_ports`, to DET 1 for one of `det_one_ports`. Port
+ * 1's COMRESET is stamped in `p1_reset_at`.
+ */
+static void model_sctl(uint32_t base, uint32_t v)
+{
+    uint32_t bit = 1u << ((base - P0) / 0x80);
+
+    reg[base + P_SCTL] = v;
+    if ((v & 0xFu) == 1u) {
+        reg[base + P_SSTS] = 0x000u;
+        if (base == P1) {
+            p1_reset_at = ++model_seq;
+        }
+    } else if ((v & 0xFu) == 0u && link_comes_up && !(empty_ports & bit)) {
+        reg[base + P_SSTS] = (det_one_ports & bit) ? 0x001u : 0x123u;
+    }
+}
+
+/**
  * Write `v` to register `off` of the model, which moves its state as a
  * controller's would; an offset past the array is dropped.
  *
@@ -188,11 +232,11 @@ static void model_issue(uint32_t base, uint32_t v)
  * not set AE again afterwards fails. The firmware answers BOHC.OOS by
  * clearing its BOS. A PxSCTL write of DET 1 takes the link down, and DET 0
  * brings it up when `link_comes_up`, so a port that starts with no link gets
- * one only through a reset. PxCMD.CR and FR follow ST and FRE, except that a
- * stuck engine keeps CR; an engine that stops clears PxCI. IS, PxIS and
- * PxSERR are write-one-to-clear, and a bit of IS cleared while its port's
- * PxIS is still set comes back, since IS latches the ports' status (AHCI
- * 1.3.1, 10.6.2). A write of PxCI issues commands.
+ * one only through a reset (`model_sctl`). PxCMD.CR and FR follow ST and
+ * FRE, except that a stuck engine keeps CR; an engine that stops clears PxCI.
+ * IS, PxIS and PxSERR are write-one-to-clear, and a bit of IS cleared while
+ * its port's PxIS is still set comes back, since IS latches the ports' status
+ * (AHCI 1.3.1, 10.6.2). A write of PxCI issues commands.
  */
 static void model_w32(uint32_t off, uint32_t v)
 {
@@ -219,12 +263,7 @@ static void model_w32(uint32_t off, uint32_t v)
         return;
     }
     if (off == base + P_SCTL) {
-        reg[off] = v;
-        if ((v & 0xFu) == 1u) {
-            reg[base + P_SSTS] = 0x000u;
-        } else if ((v & 0xFu) == 0u && link_comes_up) {
-            reg[base + P_SSTS] = 0x123u;
-        }
+        model_sctl(base, v);
         return;
     }
     if (off == base + P_CMD) {
@@ -375,6 +414,7 @@ static void release_other_claim(void);
 void k_udelay(uint32_t us)
 {
     (void)us;
+    delays++;
     if (claim_release_after && ++claim_waits == claim_release_after) {
         release_other_claim();
     }
@@ -799,6 +839,10 @@ static void model_reset(void)
     reset_completes = 1;
     handoff_answers = 1;
     link_comes_up = 1;
+    empty_ports = det_one_ports = 0;
+    link_flaps = 0;
+    model_seq = p0_sig_read_at = p1_reset_at = 0;
+    delays = 0;
     command_completes = 1;
     fatal_status = 0;
     engine_stuck = 0;
@@ -997,6 +1041,58 @@ static void answer_port(int port, uint32_t bytes)
     reg[base + P_IS] |= 1;
     reg[R_IS] |= 1u << port;
     ahci_handler(0);
+}
+
+/**
+ * The link's debounce, in the polls of 5 ms that Linux's `sata_link_debounce`
+ * takes with its normal timings: a port settles after 100 ms of one DET, 21
+ * polls, except that a DET of 1 waits for the 2 s deadline, 400, and a DET
+ * that never holds settles one poll past it. Every count also has the two
+ * delays before the polls, COMRESET held and the PHY's 200 ms. The ports are
+ * reset together, both before port 0's signature is read, unless the
+ * controller has staggered spin-up, when port 1 is reset only after it.
+ */
+static void link_rows(void)
+{
+    const unsigned before = 2;
+
+    model_reset();
+    reg[R_PI] = 3;
+    empty_ports = 2;
+    CHECK("an empty port beside a disk is skipped",
+          ahci_select_port() == 0 && ahci_ndisks == 1 && ahci_port == 0);
+    CHECK("after 100 ms of polls, with the disk's in the same polls",
+          delays == before + AHCI_DEB_STEADY + 1);
+    CHECK("and the empty port is stopped", (reg[P1 + P_CMD] & (CMD_FRE | CMD_FR)) == 0);
+
+    model_reset();
+    det_one_ports = 1;
+    CHECK("a port whose DET stays 1 is refused", ahci_select_port() != 0);
+    CHECK("after the 2 s deadline of polls", delays == before + AHCI_DEB_LIMIT);
+
+    model_reset();
+    link_flaps = 1;
+    (void)ahci_select_port();
+    CHECK("a link that never holds settles one poll past the deadline",
+          delays == before + AHCI_DEB_LIMIT + 1);
+
+    model_reset();
+    reg[R_PI] = 3;
+    reg[P1 + P_SIG] = 0x101;
+    CHECK("two disks are taken", ahci_select_port() == 0 && ahci_ndisks == 2);
+    CHECK("their links reset together, before a signature is read",
+          p1_reset_at != 0 && p1_reset_at < p0_sig_read_at);
+    CHECK("in one debounce", delays == before + AHCI_DEB_STEADY + 1);
+
+    model_reset();
+    reg[R_CAP] |= AHCI_CAP_SSS;
+    reg[R_PI] = 3;
+    reg[P1 + P_SIG] = 0x101;
+    CHECK("with staggered spin-up two disks are taken",
+          ahci_select_port() == 0 && ahci_ndisks == 2);
+    CHECK("port 1 reset only once port 0's signature is read",
+          p0_sig_read_at != 0 && p1_reset_at > p0_sig_read_at);
+    CHECK("each in a debounce of its own", delays == 2 * (before + AHCI_DEB_STEADY + 1));
 }
 
 /** A held read or write flush on port zero cannot hold a read on port one. */
@@ -1547,6 +1643,8 @@ int main(void)
     model_reset();
     reg[R_PI] = 0; /* no port implemented at all */
     CHECK("a controller with no implemented port is refused", ahci_select_port() != 0);
+
+    link_rows();
 
     model_reset();
     CHECK("a port can be selected", ahci_select_port() == 0);
