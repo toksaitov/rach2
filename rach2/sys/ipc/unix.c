@@ -2541,7 +2541,7 @@ static int32_t send_dgram(struct unix_sock *s, int nonblock, const struct kernel
                           uint32_t iovlen, uint32_t total, const struct unix_name *to,
                           struct unix_out *out)
 {
-    struct unix_sock *t;
+    struct unix_sock *t = NULL;
     struct unix_msg *m;
     uint64_t timeo;
     uint32_t flags;
@@ -2562,22 +2562,35 @@ static int32_t send_dgram(struct unix_sock *s, int nonblock, const struct kernel
     if (rc) {
         return rc;
     }
-    t = to ? lookup(to, SOCK_DGRAM, &rc) : peer_get(s);
-    if (!t) {
-        return to ? rc : -ENOTCONN;
-    }
-    if (t->type != SOCK_DGRAM) {
-        unix_put(t);
-        return -EPROTOTYPE;
+    if (!to) {
+        t = peer_get(s);
+        if (!t) {
+            return -ENOTCONN;
+        }
     }
     m = build(s, iov, iovlen, 0, total, out, &rc);
     if (!m) {
-        unix_put(t);
+        if (t) {
+            unix_put(t);
+        }
         return rc;
     }
+    /* copy, time limit, then the named lookup: af_unix.c:2063-2075 */
     flags = spin_lock_irqsave(&s->state_lock);
-    timeo = timeo_of(s->sndtimeo, nonblock); /* after the copy, af_unix.c:2044 */
+    timeo = timeo_of(s->sndtimeo, nonblock);
     spin_unlock_irqrestore(&s->state_lock, flags);
+    if (to) {
+        t = lookup(to, SOCK_DGRAM, &rc);
+        if (!t) {
+            msg_free(m);
+            return rc;
+        }
+    }
+    if (t->type != SOCK_DGRAM) {
+        msg_free(m);
+        unix_put(t);
+        return -EPROTOTYPE;
+    }
     for (;;) {
         flags = state_pair(s, t);
         rc = dgram_refusal(s, t, to, &drop_peer);
