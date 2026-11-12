@@ -2087,7 +2087,7 @@ static int32_t get_rights(uintptr_t data, uint32_t n, struct unix_out *out)
     kfree(old);
     for (i = 0; i < n; i++) {
         int32_t fd;
-        fd_entry_t *e;
+        fd_entry_t *e, copy;
 
         if (copy_from_user(&fd, (const void __user *)(data + 4u * i), sizeof(fd)) != 0) {
             return -EFAULT;
@@ -2096,10 +2096,13 @@ static int32_t get_rights(uintptr_t data, uint32_t n, struct unix_out *out)
         if (!e) {
             return -EBADF;
         }
-        flight_hold(e);
+        flags = fd_table_lock(table());
+        copy = *e;
+        fd_table_unlock(table(), flags);
+        copy.flags &= ~(uint32_t)(FD_FLAG_CLOEXEC | FD_FLAG_CLOSING | FD_FLAG_RELEASING);
+        flight_hold(&copy);
         flags = spin_lock_irqsave(&flight_lock);
-        out->flight.fds[out->flight.nfds] = *e;
-        out->flight.fds[out->flight.nfds].flags &= ~(uint32_t)FD_FLAG_CLOEXEC;
+        out->flight.fds[out->flight.nfds] = copy;
         out->flight.nfds++;
         spin_unlock_irqrestore(&flight_lock, flags);
     }

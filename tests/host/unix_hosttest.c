@@ -155,6 +155,7 @@ int cred_privileged(void)
 static struct fs_struct dirs;
 static fd_table_t shared;
 static fd_entry_t slots[SLOTS];
+static int closing_on_get = -1; /* close begins just after this lookup */
 static uint8_t memory[PAGES * PAGE_SIZE];
 static int pages[PAGES];
 
@@ -764,7 +765,14 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
         return NULL;
     }
     e = &table->chunks[0][fd];
-    return e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING) ? NULL : e;
+    if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING)) {
+        return NULL;
+    }
+    if (closing_on_get == fd) {
+        e->flags |= FD_FLAG_CLOSING;
+        closing_on_get = -1;
+    }
+    return e;
 }
 
 /** The current node of a model KRFFS regular file descriptor. */
@@ -1156,6 +1164,7 @@ static void setup(void)
     reserved[0] = reserved[1] = -1;
     sibling_rc[0] = sibling_rc[1] = 0;
     sigpipes = 0;
+    closing_on_get = -1;
 }
 
 /**
@@ -1329,6 +1338,31 @@ static void socketpair_row(void)
               "the sibling's file");
     }
     end_row("failed socketpair");
+}
+
+/** A close begun after a send pins its source descriptor must not mark
+ * the received copy closing; close-on-exec also belongs to the source. */
+static void rights_close_row(void)
+{
+    int f;
+    uint32_t received;
+
+    setup();
+    check(pair(SOCK_STREAM) == 0, "rights close: a stream pair");
+    f = open_orphan(0);
+    fd_at(f)->flags |= FD_FLAG_CLOEXEC;
+    closing_on_get = f;
+    check(send_rights(0, &f, 1) == 1 && closing_on_get == -1,
+          "rights close: a close begins after the sender pins its source");
+    check(recv_rights(1, AT(2, 0), CMSG_HDR + 4u) == 1,
+          "rights close: the receive returns a descriptor");
+    received = word(AT(2, CMSG_HDR));
+    check(received == 3 && fd_get(&shared, (int)received) != NULL &&
+              !(fd_at((int)received)->flags &
+                (FD_FLAG_CLOEXEC | FD_FLAG_CLOSING | FD_FLAG_RELEASING)),
+          "rights close: the received descriptor is open without the source flags");
+    fd_at(f)->flags &= ~(uint32_t)FD_FLAG_CLOSING;
+    end_row("rights close");
 }
 
 /**
@@ -1965,9 +1999,15 @@ int main(int argc, char **argv)
         dprintf(1, "unix-hosttest: result: vector-write: %d failures\n", failures);
         return failures ? 1 : 0;
     }
+    if (argc == 2 && same(argv[1], "rights-close")) {
+        rights_close_row();
+        dprintf(1, "unix-hosttest: result: rights-close: %d failures\n", failures);
+        return failures ? 1 : 0;
+    }
     accept_row();
     socketpair_row();
     rights_row();
+    rights_close_row();
     pipe_row();
     connect_row(0);
     connect_row(1);
