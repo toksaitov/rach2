@@ -1936,12 +1936,10 @@ static void itimer_read(int32_t which, struct kernel_itimerval *out)
 }
 
 /**
- * Arm or disarm the current process's timer `which`: the first signal
- * `value` units from now and then every `interval`, or disarmed for a value
- * of 0. Real time uses nanoseconds and its own event. Processor time uses
- * accounting ticks. A timer of processor time
- * counts the ticks the tick handler charges to the process's threads.
- * Interrupts are off.
+ * Arm or disarm timer `which`, after `value` units and then each `interval`,
+ * or disarm it for zero value. Real time uses nanoseconds and its own event;
+ * processor time uses accounting ticks charged to the process's threads.
+ * The caller has interrupts off and holds the big lock.
  */
 static void itimer_set(int32_t which, uint64_t value, uint64_t interval)
 {
