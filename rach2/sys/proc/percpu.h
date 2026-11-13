@@ -89,7 +89,7 @@ struct percpu {
     volatile int64_t accounted_ns;              /* the monotonic time its counts reach, ns */
     int idle_short;            /* last halt ended before a scheduler period without a tick */
     volatile int tick_stopped; /* idle span projected by sched_cpu_ticks */
-    volatile uint32_t tick_stop_period; /* its scheduler period, ms, as its tick stopped */
+    volatile uint32_t tick_stop_period; /* its scheduler period, in ticks, as it stopped */
     uint64_t user_cycles;               /* cycle count at its last return to user mode */
     uint64_t entry_cycles;              /* cycle count at its last entry from user mode */
     uint64_t idle_cycles;               /* cycle count as its last idle wait began */

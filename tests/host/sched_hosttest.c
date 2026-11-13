@@ -1537,7 +1537,9 @@ void bkl_note_switch(const struct process *old, const struct process *next, int 
 }
 
 /** Check idle projection, steal subtraction, catch-up and the first
- * busy tick. */
+ * busy tick. The counts are kernel ticks of TICK_NS, 4 ms at 250 Hz, and
+ * each wake comes more than half a tick past its edge, where rounding to
+ * the nearest tick would count one tick more than the edge does. */
 static void nohz_accounting(void)
 {
     uint64_t user, busy, idle, steal;
@@ -1549,59 +1551,72 @@ static void nohz_accounting(void)
     this_cpu()->idle_wait = 1;
     this_cpu()->tick_stop_period = 1;
     this_cpu()->tick_stopped = 1;
+    /* 500 ticks of idle and a quarter tick, 31 1/4 ticks of them stolen. */
     this_cpu()->accounted_ns = 1000000000;
-    clock_ns = 3125000000u;
-    steal_clock_ns = 125000000u;
+    clock_ns = 1000000000u + 500u * (uint64_t)TICK_NS + TICK_NS / 4u;
+    steal_clock_ns = 31u * (uint64_t)TICK_NS + TICK_NS / 4u;
     host_cpu = 1;
     sched_cpu_ticks(0, &user, &busy, &idle, &steal);
-    CHECK(user == 0 && busy == 0 && idle == 2000 && steal == 125,
+    CHECK(user == 0 && busy == 0 && idle == 469 && steal == 31,
           "a remote reading projects the idle span less its steal time");
     CHECK(cpu_table[0].idle_ticks == 0 && cpu_table[0].steal_ticks == 0,
           "a projected reading changes no stored account");
     host_cpu = 0;
     sched_account_tick(0, 0);
-    CHECK(this_cpu()->idle_ticks == 2000 && this_cpu()->steal_ticks == 125 &&
-              this_cpu()->accounted_ns == 3125000000u,
+    CHECK(this_cpu()->idle_ticks == 469 && this_cpu()->steal_ticks == 31 &&
+              this_cpu()->accounted_ns == 3000000000,
           "waking accounts the idle span and steal time once");
     sched_account_tick(0, 0);
-    CHECK(this_cpu()->idle_ticks == 2000, "a second accounting counts no tick twice");
+    CHECK(this_cpu()->idle_ticks == 469, "a second accounting counts no tick twice");
     this_cpu()->tick_stopped = 0;
     this_cpu()->idle_wait = 0;
     clock_ns += TICK_NS;
     sched_account_tick(1, 0);
-    CHECK(procs[0].utime == 1 && this_cpu()->user_ticks == 1 && this_cpu()->idle_ticks == 2000,
+    CHECK(procs[0].utime == 1 && this_cpu()->user_ticks == 1 && this_cpu()->idle_ticks == 469,
           "the first busy tick charges no idle span to the new thread");
-    /* A guest's 4 ms period: the thread ran 2.5 ms past the edge at
-     * 3128 ms and halted, and the processor woke at 3141 ms. */
-    this_cpu()->accounted_ns = 3128000000u;
+    /* A one-tick period: the thread ran 2.5 ms past the edge at 3004 ms
+     * and halted, and the processor woke at 3019 ms, 3 ms past the edge at
+     * 3016 ms. Rounding would charge idle to 3020 ms. */
+    this_cpu()->accounted_ns = 3004000000;
     this_cpu()->idle_wait = 1;
-    this_cpu()->tick_stop_period = 4;
+    this_cpu()->tick_stop_period = 1;
     this_cpu()->tick_stopped = 1;
-    clock_ns = 3141000000u;
+    clock_ns = 3019000000u;
     host_cpu = 1;
     sched_cpu_ticks(0, &user, &busy, &idle, &steal);
-    CHECK(idle == 2012 && steal == 125,
-          "a remote reading projects a stopped span to its last edge");
+    CHECK(idle == 472 && steal == 31, "a remote reading projects a stopped span to its last edge");
     host_cpu = 0;
     sched_account_tick(0, 0);
-    CHECK(this_cpu()->idle_ticks == 2012 && this_cpu()->accounted_ns == 3140000000u,
+    CHECK(this_cpu()->idle_ticks == 472 && this_cpu()->accounted_ns == 3016000000,
           "waking charges idle the periods whose edges the stopped tick passed");
     this_cpu()->tick_stopped = 0;
     this_cpu()->idle_wait = 0;
-    clock_ns = 3144000000u;
+    clock_ns = 3020000000u;
     sched_account_tick(1, 0);
-    CHECK(procs[0].utime == 5 && this_cpu()->idle_ticks == 2012,
+    CHECK(procs[0].utime == 2 && this_cpu()->idle_ticks == 472,
           "the next tick charges its whole period to the thread, the run before the halt with it");
-    /* A halt under a running tick, whose ticks charged its edges. */
+    /* A halt under a running tick, whose ticks charged its edges, ending
+     * 2.5 ms past the edge at 3020 ms. */
     this_cpu()->idle_wait = 1;
-    clock_ns = 3146500000u;
+    clock_ns = 3022500000u;
     sched_idle_account(this_cpu());
-    CHECK(this_cpu()->idle_ticks == 2012 && this_cpu()->accounted_ns == 3144000000u,
+    CHECK(this_cpu()->idle_ticks == 472 && this_cpu()->accounted_ns == 3020000000,
           "the end of a halt under a running tick charges the last thread's run to no one");
     this_cpu()->idle_wait = 0;
-    clock_ns = 3148000000u;
+    clock_ns = 3024000000u;
     sched_account_tick(1, 0);
-    CHECK(procs[0].utime == 9, "the tick after it charges that run with its period");
+    CHECK(procs[0].utime == 3, "the tick after it charges that run with its period");
+    /* A two-tick period, 8 ms: the wake at 3037 ms is 5 ms past the
+     * period's edge at 3032 ms and 1 ms past the tick's at 3036 ms. */
+    this_cpu()->idle_wait = 1;
+    this_cpu()->tick_stop_period = 2;
+    this_cpu()->tick_stopped = 1;
+    clock_ns = 3037000000u;
+    sched_account_tick(0, 0);
+    CHECK(this_cpu()->idle_ticks == 474 && this_cpu()->accounted_ns == 3032000000,
+          "a stopped span ends at the edge of its own period, not of a tick");
+    this_cpu()->tick_stopped = 0;
+    this_cpu()->idle_wait = 0;
     load_tick = 1000;
     load_wait = 5001;
     kernel_ticks = 5999;
@@ -1632,11 +1647,13 @@ static void nohz_switch(void)
     schedule();
     CHECK(current_proc == &procs[0] && this_cpu()->tick_stopped && !idle_timer_exits,
           "an empty run queue keeps the stopped tick across a selection");
-    clock_ns += 10u * TICK_NS;
+    /* Three quarters of a tick past the tenth edge: rounding would count
+     * eleven. */
+    clock_ns += 10u * (uint64_t)TICK_NS + 3u * TICK_NS / 4u;
     sched_make_ready(&procs[1]);
     schedule();
     CHECK(current_proc == &procs[1] && !this_cpu()->tick_stopped && idle_timer_exits == 1 &&
-              this_cpu()->idle_ticks == 8 && !procs[1].stime,
+              this_cpu()->idle_ticks == 10 && !procs[1].stime,
           "the switch accounts the idle span to its last edge and restarts before the new thread");
     idle_timer_ready = 0;
 }
