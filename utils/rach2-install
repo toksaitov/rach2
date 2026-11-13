@@ -748,16 +748,27 @@ keep_serial() { # keep_serial SAVED NODE SCRATCH
     done
 }
 
+# Status 0 when the directory COPY holds the files and directories of DIR
+# and no others, each file with DIR's bytes; status 1 otherwise.
+same_tree() { # same_tree DIR COPY
+    [ "$(cd "$1" && find . | sort)" = "$(cd "$2" && find . | sort)" ] || return 1
+    (cd "$1" && find . -type f) | {
+        while IFS= read -r slot_f; do
+            cmp -s "$1/$slot_f" "$2/$slot_f" || exit 1
+        done
+    }
+}
+
 # Make the file system of the boot partition BOOT again, one UEFI firmware
 # reads, with what it held put back. Its first sector and its files are kept
-# on the recovery partition first, mounted at $RECOVERY_MNT, and marked whole
-# by the file `complete`, written last. A stop part way leaves a boot
-# partition the BIOS core reads no menu from, and it starts the recovery
-# system from partition 2 by its label instead; the update run again there
-# finds the files and finishes the job (`resume_boot_partition`). Returns 1,
-# with nothing written to BOOT, when the files could not be kept on the
-# recovery partition, which is mostly for want of room; any other failure
-# ends the run.
+# on the recovery partition first, mounted at $RECOVERY_MNT, compared whole
+# with BOOT once synced, and marked whole by the file `complete`, written
+# last. A stop part way leaves a boot partition the BIOS core reads no menu
+# from, and it starts the recovery system from partition 2 by its label
+# instead; the update run again there finds the files and finishes the job
+# (`resume_boot_partition`). Returns 1, with nothing written to BOOT, when
+# the files could not be kept whole on the recovery partition, which is
+# mostly for want of room; any other failure ends the run.
 remake_boot_partition() { # remake_boot_partition BOOT
     boot_keep="$RECOVERY_MNT/rach2-boot-keep"
     rm -rf "$boot_keep" || die "an old copy of $1's files could not be removed; nothing was written"
@@ -767,6 +778,8 @@ remake_boot_partition() { # remake_boot_partition BOOT
     if ! { mkdir -p "$boot_keep/files" &&
         dd if="$1" of="$boot_keep/sector" bs=512 count=1 2>/dev/null &&
         cp -R "$BOOT_MNT/." "$boot_keep/files/" && sync &&
+        dd if="$1" bs=512 count=1 2>/dev/null | cmp -s - "$boot_keep/sector" &&
+        same_tree "$BOOT_MNT" "$boot_keep/files" &&
         echo whole > "$boot_keep/complete" && sync; }; then
         rm -rf "$boot_keep"
         umount "$BOOT_MNT" || die "$1 would not unmount; nothing was written"
@@ -779,8 +792,13 @@ remake_boot_partition() { # remake_boot_partition BOOT
 }
 
 # Make the file system of BOOT again from the first sector and the files kept
-# in KEEP, and drop KEEP once `bootctl` reads what was made. A failure ends
-# the run and leaves KEEP for the update run again.
+# in KEEP, and drop KEEP once what was made, mounted again read-only, holds
+# KEEP's files whole and `bootctl` reads it. The menu goes back last, through
+# grub.cfg.new and a rename, once the environment block, whose saved default
+# is recovery, and the kernels are back, synced and compared: until it has
+# its name the BIOS core and the EFI image find no menu and start the
+# recovery system. A failure ends the run and leaves KEEP for the update run
+# again.
 rebuild_boot_partition() { # rebuild_boot_partition BOOT KEEP
     boot_kept="its files are kept on the recovery partition, and this update run again \
 from the recovery system puts them back"
@@ -792,8 +810,31 @@ from the recovery system puts them back"
     mkdir -p "$BOOT_MNT" 2>/dev/null
     mount -t vfat "$1" "$BOOT_MNT" || die "$1's new file system would not mount; $boot_kept"
     mounted_boot=$BOOT_MNT
-    cp -R "$2/files/." "$BOOT_MNT/" || die "$1's files were not put back; $boot_kept"
-    sync
+    boot_menu=boot/grub/grub.cfg
+    { (cd "$2/files" && find . -type d) | {
+        while IFS= read -r slot_f; do
+            mkdir -p "$BOOT_MNT/$slot_f" || exit 1
+        done
+    } && (cd "$2/files" && find . -type f ! -path "./$boot_menu") | {
+        while IFS= read -r slot_f; do
+            cp "$2/files/$slot_f" "$BOOT_MNT/$slot_f" || exit 1
+        done
+    } && sync && (cd "$2/files" && find . -type f ! -path "./$boot_menu") | {
+        while IFS= read -r slot_f; do
+            cmp -s "$2/files/$slot_f" "$BOOT_MNT/$slot_f" || exit 1
+        done
+    }; } || die "$1's files were not put back; $boot_kept"
+    if [ -f "$2/files/$boot_menu" ]; then
+        { cp "$2/files/$boot_menu" "$BOOT_MNT/$boot_menu.new" && sync &&
+            cmp -s "$2/files/$boot_menu" "$BOOT_MNT/$boot_menu.new" &&
+            mv "$BOOT_MNT/$boot_menu.new" "$BOOT_MNT/$boot_menu" && sync; } ||
+            die "$1's menu was not put back; $boot_kept"
+    fi
+    umount "$BOOT_MNT" || die "$1 would not unmount; $boot_kept"
+    mounted_boot=""
+    mount -t vfat -o ro "$1" "$BOOT_MNT" || die "$1, made again, would not mount to be compared; $boot_kept"
+    mounted_boot=$BOOT_MNT
+    same_tree "$2/files" "$BOOT_MNT" || die "$1, made again, does not hold its kept files whole; $boot_kept"
     umount "$BOOT_MNT" || die "$1 would not unmount; $boot_kept"
     mounted_boot=""
     bootctl --target "$1" status > /dev/null ||
@@ -819,6 +860,47 @@ resume_boot_partition() { # resume_boot_partition BOOT
     mounted_recovery=""
 }
 
+# A file of the boot partition that is replaced whole, the menu or GRUB's
+# EFI image, is replaced so that a stop leaves it whole under its name or
+# under FILE.keep. FAT32 renames over a name by freeing the old file's
+# entries and the new one's before it writes the name again (fat_rename in
+# fat32.c), so a stop between those writes leaves neither name. The new
+# bytes are written to FILE.new; a copy of them, FILE.keep, is compared and
+# synced before FILE.new is renamed over FILE; and FILE.keep is removed only
+# once FILE has its name again. So FILE.keep is whole whenever FILE is not
+# there. While the rename runs, UEFI firmware finds no loader by its name,
+# and a stop there leaves the loader to be put back by this program run
+# again, from the install stick or a BIOS boot; a missing menu sends the
+# BIOS core and the EFI image to the recovery partition's own menu.
+
+# Status 0 when FILE, on a boot partition mounted writable, is whole under
+# its name: put back from FILE.keep when a stop in `publish_file` took its
+# name, and with the spare copies of a replacement removed. A file with no
+# kept copy that is not there is left as it is. Status 1 when a write fails.
+finish_file() { # finish_file FILE
+    if [ ! -e "$1" ] && [ -e "$1.keep" ]; then
+        { rm -f "$1.new" && cp "$1.keep" "$1.new" && sync &&
+            cmp -s "$1.keep" "$1.new" && mv "$1.new" "$1" && sync; } || return 1
+        say "$1, whose name a stop took while it was replaced, is put back from its kept copy"
+    fi
+    [ -e "$1" ] || return 0
+    rm -f "$1.new" "$1.keep" && sync
+}
+
+# Give FILE, on a boot partition mounted writable, the bytes of FILE.new,
+# which the caller has written whole after `finish_file`, in the order above;
+# a FILE not there yet has nothing to keep and takes FILE.new's name alone.
+# Status 1 when a write or a comparison fails; FILE.keep stays when FILE
+# may have lost its name.
+publish_file() { # publish_file FILE
+    sync || return 1
+    if [ -e "$1" ]; then
+        { rm -f "$1.keep" && cp "$1.new" "$1.keep" && sync &&
+            cmp -s "$1.new" "$1.keep"; } || return 1
+    fi
+    mv -f "$1.new" "$1" && sync && rm -f "$1.keep" && sync
+}
+
 # Finish or undo what a stop left of a slot's move on the boot partition
 # BOOT, so that bootctl reads it again: it refuses a volume without both
 # /boot/kernel and /boot/fallback. A slot's grown copy, kernel.new or
@@ -831,12 +913,17 @@ resume_boot_partition() { # resume_boot_partition BOOT
 # fallback.tmp, which a stop leaves partial and the next run removes first,
 # compared with the other slot and synced, and only then renamed: both names
 # are 8.3, so the rename rewrites the copy's one directory entry in place,
-# and the slot's name never holds part of a kernel. The caller has proved
-# that BOOT is this system's, with `bootctl status` or `slots_owned`.
+# and the slot's name never holds part of a kernel. The menu and GRUB's EFI
+# image are put back first when a stop took their names while they were
+# replaced (`finish_file`). The caller has proved that BOOT is this system's
+# by reads alone (`boot_ours`).
 finish_slots() { # finish_slots BOOT
     mkdir -p "$BOOT_MNT" 2>/dev/null
     mount -t vfat "$1" "$BOOT_MNT" || die "$1 would not mount to look at its kernel slots"
     mounted_boot=$BOOT_MNT
+    for slot_file in "$BOOT_MNT/boot/grub/grub.cfg" "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI"; do
+        finish_file "$slot_file" || die "$slot_file, which a stop left, could not be put back"
+    done
     for slot in kernel fallback; do
         slot_copy="$BOOT_MNT/boot/$slot.tmp"
         [ -e "$slot_copy" ] || continue
@@ -879,42 +966,36 @@ finish_slots() { # finish_slots BOOT
 
 # Status 0 when DIR, the files of a boot partition, carry what only this
 # system writes beside its kernel slots: the 1024-byte environment block and
-# a menu with entries for both slots' kernels. It sets slot_count to the
-# number of the two slots, /boot/kernel and /boot/fallback, that are files,
-# and slot_moving to 1 when a copy that only `grow_slots` or `finish_slots`
-# writes, kernel.new, fallback.new, kernel.tmp or fallback.tmp, is there,
-# and to 0 when none is.
+# a menu with entries for both slots' kernels, read from grub.cfg.keep when
+# a stop in its replacement took grub.cfg's name. It sets slot_count to the
+# number of the two slots, /boot/kernel and /boot/fallback, that are files.
 boot_marked() { # boot_marked DIR
     slot_count=0
     for slot in kernel fallback; do
         [ ! -f "$1/boot/$slot" ] || slot_count=$((slot_count + 1))
     done
-    slot_moving=0
-    for slot in kernel.new fallback.new kernel.tmp fallback.tmp; do
-        [ ! -e "$1/boot/$slot" ] || slot_moving=1
-    done
+    slot_menu="$1/boot/grub/grub.cfg"
+    [ -e "$slot_menu" ] || slot_menu="$slot_menu.keep"
     [ -f "$1/boot/grub/grubenv" ] &&
         [ "$(wc -c < "$1/boot/grub/grubenv")" -eq 1024 ] &&
-        grep -q 'rach2\.slot=candidate' "$1/boot/grub/grub.cfg" 2>/dev/null &&
-        grep -q 'rach2\.slot=fallback' "$1/boot/grub/grub.cfg" 2>/dev/null
+        grep -q 'rach2\.slot=candidate' "$slot_menu" 2>/dev/null &&
+        grep -q 'rach2\.slot=fallback' "$slot_menu" 2>/dev/null
 }
 
-# Status 0 when the boot partition of DISK, a whole disk, is this system's
-# and a stop in `grow_slots` or `finish_slots` left it as `bootctl status`
-# refuses it: boot_marked, with one of its two slots, or with both and a
-# copy of a slot's move beside them. A stop while a grown copy was padded
-# leaves both slots and a copy whose chain FAT extended before it wrote the
-# larger size, which bootctl refuses until a writable mount trims it. Status
+# Status 0 when the boot partition of DISK, a whole disk, is this system's:
+# boot_marked, with one of its two slots or both. `bootctl status` is no
+# proof, since it reads the slots' names and the volume's structure and
+# neither the kernels nor the menu, and it refuses states a stop leaves that
+# the writes after this repair: a slot missing, a grown copy whose chain FAT
+# extended before it wrote the larger size, or two FATs that disagree. Status
 # 1 otherwise. The partition is mounted read-only.
-slots_marked() { # slots_marked DISK
+boot_ours() { # boot_ours DISK
     mkdir -p "$BOOT_MNT" 2>/dev/null
     mount -t vfat -o ro "${1}p1" "$BOOT_MNT" 2>/dev/null || return 1
     mounted_boot=$BOOT_MNT
     slot_ours=1
-    if boot_marked "$BOOT_MNT"; then
-        if [ "$slot_count" -eq 1 ] || { [ "$slot_count" -eq 2 ] && [ "$slot_moving" -eq 1 ]; }; then
-            slot_ours=0
-        fi
+    if boot_marked "$BOOT_MNT" && [ "$slot_count" -ge 1 ]; then
+        slot_ours=0
     fi
     umount "$BOOT_MNT" || die "${1}p1 would not unmount"
     mounted_boot=""
@@ -925,7 +1006,7 @@ slots_marked() { # slots_marked DISK
 # files of its boot partition marked whole, as `remake_boot_partition` keeps
 # them before it makes the file system again, and they are a boot partition
 # of this system with both slots: a stop there leaves a boot partition that
-# neither bootctl nor `slots_marked` reads, and only this copy says whose it
+# neither bootctl nor `boot_ours` reads, and only this copy says whose it
 # was. Status 1 otherwise. Every partition is mounted read-only.
 boot_kept() { # boot_kept DISK
     find_recovery "${1#/dev/disk}" ro || return 1
@@ -981,12 +1062,13 @@ root_owned() { # root_owned DISK
     return 1
 }
 
-# Status 0 when DISK, a whole disk, is one this system installed and its
-# boot partition is as `slots_marked` says a stop in a slot's move leaves
-# it; status 1 otherwise. It stands in for `bootctl status`, which refuses
-# such a volume, before `finish_slots` changes a file, and so it only reads.
+# Status 0 when DISK, a whole disk, is one this system installed: its boot
+# partition is this system's (`boot_ours`) and it carries a root of this
+# system or an archive of its configuration (`root_owned`); status 1
+# otherwise. `--slots` proves it before `finish_slots` changes a file, and
+# so it only reads.
 slots_owned() { # slots_owned DISK
-    slots_marked "$1" && root_owned "$1"
+    boot_ours "$1" && root_owned "$1"
 }
 
 # Grow each kernel slot of the boot partition BOOT, /boot/kernel and then
@@ -1040,14 +1122,16 @@ grow_slots() { # grow_slots BOOT
 }
 
 # Give the installed root's boot lines one rach2.console=term token when
-# CONSOLE is 1, and one rach2.i915 token when I915 is 1, on BOOT. Write
-# beside the menu, sync and rename it, then unmount and let bootctl read the
-# partition before the caller arms a trial. Recovery lines keep their bytes.
+# CONSOLE is 1, and one rach2.i915 token when I915 is 1, on BOOT. The new
+# menu is written beside the old one and put in place by `publish_file`,
+# then the partition is unmounted and bootctl reads it before the caller
+# arms a trial. Recovery lines keep their bytes.
 set_update_console() { # set_update_console BOOT CONSOLE I915
     mkdir -p "$BOOT_MNT" || die "the boot mount directory could not be made"
     mount -t vfat "$1" "$BOOT_MNT" || die "$1 would not mount to set its console"
     mounted_boot=$BOOT_MNT
     console_menu="$BOOT_MNT/boot/grub/grub.cfg"
+    finish_file "$console_menu" || die "the menu of $1 that a stop left could not be put back"
     console_new="$console_menu.new"
     awk -v console="$2" -v i915="$3" '
         # drop: remove every whole word of the line that matches RE.
@@ -1070,8 +1154,7 @@ set_update_console() { # set_update_console BOOT CONSOLE I915
     if cmp -s "$console_menu" "$console_new"; then
         rm -f "$console_new" || die "the spare menu could not be removed"
     else
-        { sync && mv -f "$console_new" "$console_menu" && sync; } ||
-            die "the console menu could not be put in place"
+        publish_file "$console_menu" || die "the console menu could not be put in place"
     fi
     console_new=""
     umount "$BOOT_MNT" || die "$1 would not unmount after setting its console"
@@ -1089,14 +1172,15 @@ set_update_console() { # set_update_console BOOT CONSOLE I915
 # fallback while recordfail stays set. An update writes only the root and no
 # bootctl verb rewrites the fixed menu, so without this a committed
 # candidate that panics at boot resets into itself for ever. A menu that has
-# the test, or that lacks the line it follows, is left as it is. Written
-# beside the menu, synced and renamed, then bootctl reads the partition, as
-# for the console.
+# the test, or that lacks the line it follows, is left as it is. The menu
+# is written and put in place, and bootctl reads the partition, as for the
+# console.
 set_update_recordfail() { # set_update_recordfail BOOT
     mkdir -p "$BOOT_MNT" || die "the boot mount directory could not be made"
     mount -t vfat "$1" "$BOOT_MNT" || die "$1 would not mount to add its recordfail lines"
     mounted_boot=$BOOT_MNT
     console_menu="$BOOT_MNT/boot/grub/grub.cfg"
+    finish_file "$console_menu" || die "the menu of $1 that a stop left could not be put back"
     console_new="$console_menu.new"
     if grep -q 'recordfail}" = "1"' "$console_menu"; then
         rf_said="$1 has its recordfail lines"
@@ -1128,7 +1212,7 @@ set_update_recordfail() { # set_update_recordfail BOOT
         { print }
         END { if (inside) printf "%s\n", entry; if (entries == 0 || tests != 1) exit 1 }
     ' "$console_menu" > "$console_new"; then
-        { sync && mv -f "$console_new" "$console_menu" && sync; } ||
+        publish_file "$console_menu" ||
             die "the menu with its recordfail lines could not be put in place"
         rf_said="recordfail: $1 boots the previous kernel after a candidate that never reaches user space"
     else
@@ -1149,10 +1233,10 @@ set_update_recordfail() { # set_update_recordfail BOOT
 # alone, with a note, and the update goes on; an EFI image that fails its
 # checks, or a failure while the boot partition is changed, ends the run.
 #
-# A new loader is written beside the old one and takes its name only once it
-# is whole on the disk, so that a stop part way leaves the old one; UEFI
-# firmware knows the loader by that one name, and the rename's few writes are
-# the only time the disk has none. The same loader is left as it is.
+# A new loader is written beside the old one, compared with the image, and
+# put in place by `publish_file`, so that a stop leaves the old one or the
+# new one whole; UEFI firmware knows the loader by that one name. The same
+# loader is left as it is.
 convert_mbr_disk() {
     efi_image="$(dirname "$update_image")/bootx64.efi"
     boot="${update_disk}p1"
@@ -1183,7 +1267,7 @@ system is made again, so it boots by BIOS alone"
         if ! remake_boot_partition "$boot"; then
             umount "$RECOVERY_MNT" || die "the recovery partition would not unmount"
             mounted_recovery=""
-            say "the recovery partition has no room for $boot's files, so $update_disk boots by BIOS alone"
+            say "the recovery partition could not keep $boot's files whole, mostly for want of room, so $update_disk boots by BIOS alone"
             return 0
         fi
         umount "$RECOVERY_MNT" || die "the recovery partition would not unmount"
@@ -1193,12 +1277,15 @@ system is made again, so it boots by BIOS alone"
     mount -t vfat "$boot" "$BOOT_MNT" || die "$boot would not mount; the root is not written"
     mounted_boot=$BOOT_MNT
     efi_dir="$BOOT_MNT/EFI/BOOT"
-    if cmp -s "$efi_image" "$efi_dir/BOOTX64.EFI"; then
+    efi_file="$efi_dir/BOOTX64.EFI"
+    { mkdir -p "$efi_dir" && finish_file "$efi_file"; } ||
+        die "GRUB's EFI image that a stop left on $boot could not be put back; the root is not written"
+    if cmp -s "$efi_image" "$efi_file"; then
         say "GRUB's EFI image on $boot is already this one"
     else
-        { mkdir -p "$efi_dir" && rm -f "$efi_dir/BOOTX64.NEW" &&
-            cp "$efi_image" "$efi_dir/BOOTX64.NEW" && sync &&
-            mv -f "$efi_dir/BOOTX64.NEW" "$efi_dir/BOOTX64.EFI" && sync; } ||
+        # BOOTX64.NEW is the copy an older version of this program wrote.
+        { rm -f "$efi_dir/BOOTX64.NEW" && cp "$efi_image" "$efi_file.new" && sync &&
+            cmp -s "$efi_image" "$efi_file.new" && publish_file "$efi_file"; } ||
             die "GRUB's EFI image was not put on $boot; the root is not written"
     fi
     umount "$BOOT_MNT" || die "$boot would not unmount; the root is not written"
@@ -1342,11 +1429,10 @@ if [ -n "$slots_disk" ]; then
     if where=$(mounted_elsewhere "$slots_boot"); then
         die "$slots_boot is mounted at $where; unmount it first"
     fi
-    # Nothing is written to a disk not proved this system's: by `bootctl`,
-    # or, when a stop left a slot missing, by `slots_owned`, which only reads.
-    if ! bootctl --target "$slots_boot" status > /dev/null; then
-        slots_owned "$slots_disk" || die "$slots_boot is not a boot partition bootctl reads"
-    fi
+    # Nothing is written to a disk not proved this system's by reads alone,
+    # whether or not `bootctl` reads its boot partition.
+    slots_owned "$slots_disk" ||
+        die "$slots_disk does not carry this system's boot partition and root; it was not installed from here"
     finish_slots "$slots_boot"
     slots_status=$(bootctl --target "$slots_boot" status) ||
         die "$slots_boot is not a boot partition bootctl reads"
@@ -1434,15 +1520,14 @@ only copy of its homes; update $kept_disk again before $update_disk"
     # from here has no partition this may claim. It is proved before anything
     # of it is mounted writable, since a writable mount of a FAT volume left
     # dirty repairs it, and so by reads alone. Two things say so together.
-    # The boot partition is this system's: `bootctl` reads it, which is this
-    # system's own menu and slots; or a stop in a slot's move left it as
-    # `slots_marked` reads it; or a stop in its conversion left it unreadable
-    # and its files kept whole on the recovery partition, as `boot_kept`
-    # reads them. And the disk carries a root of this system, or an archive
-    # of its configuration (`root_owned`), or an update of this boot wrote
-    # its root and stopped.
-    if bootctl --target "${update_disk}p1" status > /dev/null 2>&1 ||
-        slots_marked "$update_disk" || boot_kept "$update_disk"; then
+    # The boot partition is this system's: it holds this system's menu,
+    # environment block and slots, whatever a stop in a slot's move left of
+    # them (`boot_ours`); or a stop in its conversion left it unreadable and
+    # its files kept whole on the recovery partition, as `boot_kept` reads
+    # them. And the disk carries a root of this system, or an archive of its
+    # configuration (`root_owned`), or an update of this boot wrote its root
+    # and stopped.
+    if boot_ours "$update_disk" || boot_kept "$update_disk"; then
         [ -n "$kept_entry" ] || root_owned "$update_disk" ||
             die "$update_disk carries no root of this system and no archive of its configuration; \
 it was not installed from here"
@@ -1451,18 +1536,15 @@ it was not installed from here"
 $update_disk was not installed from here"
     fi
 
-    # A stopped conversion is finished first. A stop while a slot grew may
-    # leave the partition without one of its slots, or with a copy whose
-    # chain is longer than its size, which `bootctl` refuses: `finish_slots`
-    # then makes the slots whole, as `--slots` would. Copies left beside two
-    # whole slots that bootctl reads wait for `grow_slots`, which finishes
-    # them first.
+    # A stopped conversion is finished first. Then `finish_slots` puts back
+    # what a stop left of a slot's move, the menu or GRUB's EFI image, as
+    # `--slots` would: a slot missing or a copy whose chain is longer than its
+    # size, which `bootctl` refuses, and its writable mount repairs a volume a
+    # stop left dirty.
     resume_boot_partition "${update_disk}p1"
-    if ! bootctl --target "${update_disk}p1" status > /dev/null 2>&1; then
-        finish_slots "${update_disk}p1"
-        bootctl --target "${update_disk}p1" status > /dev/null ||
-            die "${update_disk}p1, its kernel slots made whole, is not a boot partition bootctl reads"
-    fi
+    finish_slots "${update_disk}p1"
+    bootctl --target "${update_disk}p1" status > /dev/null ||
+        die "${update_disk}p1, its kernel slots made whole, is not a boot partition bootctl reads"
 
     root_entry=""
     if [ -n "$kept_entry" ]; then
