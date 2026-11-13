@@ -527,7 +527,9 @@ void ip_loop_drain_from(int from)
 }
 
 /** Reset seven processes, 0 running and the rest ready, on one list, with
- * interrupts on and the scheduler started. */
+ * interrupts on and the scheduler started, and no request left on 0: the
+ * six are queued as if 0 had been asked already, so that their starts ask
+ * it nothing (`sched_wake_preempt`). */
 static void setup(void)
 {
     unsigned i;
@@ -554,9 +556,11 @@ static void setup(void)
     switches = 0;
     irq_flags = 0x200;
     init_sched();
+    procs[0].need_resched = 1;
     for (i = 1; i < 7; i++) {
         sched_make_ready(&procs[i]);
     }
+    procs[0].need_resched = 0;
     sched_enable();
 }
 
@@ -1031,8 +1035,10 @@ static void ready_lists(void)
  * Of two wakes of one blocked record, the first makes it ready, marks it
  * woken and asks for an interrupt to the processor it outranks the current
  * thread of, whose `need_resched` it sets, as Linux's resched_curr
- * (kernel/sched/core.c:1094-1116); the second, finding it ready under the
- * run queues' lock, asks for none and leaves it where it is in its list,
+ * (kernel/sched/core.c:1094-1116), and so does an ordinary record woken
+ * where an ordinary thread runs (`sched_wake_preempt`); the second,
+ * finding it ready under the run queues' lock, asks for none and leaves it
+ * where it is in its list,
  * ahead of a record made ready after the first, as Linux's `try_to_wake_up`
  * leaves a task whose state no longer matches (kernel/sched/core.c:4191-
  * 4193). A running or a stopped record is left as it was. A signal's wake
@@ -1055,8 +1061,8 @@ static void wake_twice(void)
     current_proc->need_resched = 0;
     CHECK(p->state == PROC_READY && p->woken && p->ready_linked, "the first wake queues and marks");
     CHECK(run_queues[0].count == 5 && run_queues[0].tail == p, "the first wake queues at the tail");
-    CHECK(sched_wake_blocked(&procs[4]) == -1 && !current_proc->need_resched,
-          "an equal record asks for no interrupt and no switch");
+    CHECK(sched_wake_blocked(&procs[4]) == 0 && current_proc->need_resched,
+          "an equal ordinary record asks the ordinary thread to switch, with an interrupt");
     CHECK(sched_wake_blocked(p) == -1, "the second wake asks for no interrupt");
     CHECK(run_queues[0].count == 6 && run_queues[0].tail == &procs[4],
           "the second wake leaves the record ahead of a later one");
@@ -1121,6 +1127,124 @@ static void migration(void)
     CHECK(current_proc == &procs[4] && current_proc->state == PROC_RUNNING,
           "in-place wake continues when no other local process is ready");
     cpu_table[1].online = 0;
+    init_sched();
+}
+
+/** Block procs[1] to procs[6] off every list and clear the request and the
+ * kicks of the threads the rows run, for a row's next wake. */
+static void wake_quiet(void)
+{
+    unsigned int i;
+
+    for (i = 1; i < 7; i++) {
+        sched_forget(&procs[i]);
+        procs[i].state = PROC_BLOCKED;
+        procs[i].need_resched = 0;
+        procs[i].work = 0;
+    }
+    procs[0].need_resched = 0;
+    procs[0].work = 0;
+    k_memset(cpu_kicks, 0, sizeof(cpu_kicks));
+}
+
+/**
+ * A wake of an ordinary thread where an ordinary thread runs asks that
+ * thread to switch and kicks its processor, as Linux's
+ * check_preempt_wakeup_fair calls resched_curr (kernel/sched/fair.c:
+ * 8862-8951), once: a second wake before the switch sends no second kick.
+ * A SCHED_BATCH or SCHED_IDLE thread preempts nothing; a SCHED_IDLE thread
+ * gives way to an ordinary one and not to another SCHED_IDLE one
+ * (fair.c:8911-8925); and a kernel thread (`no_tick_switch`) is asked with
+ * no kick, since the interrupt would switch nothing. An affinity change
+ * that moves a woken thread to a busy processor's queue asks the same of
+ * the thread running there, as move_queued_task calls wakeup_preempt
+ * (kernel/sched/core.c:2449-2465).
+ */
+static void wake_preempt(void)
+{
+    setup();
+    wake_quiet();
+    CHECK(sched_wake_blocked(&procs[1]) == 0 && procs[0].need_resched &&
+              (procs[0].work & WORK_RESCHED),
+          "an ordinary wake asks the ordinary thread running to switch, with a kick");
+    CHECK(sched_wake_blocked(&procs[2]) == -1 && procs[0].need_resched,
+          "a second wake before the switch sends no second kick");
+
+    wake_quiet();
+    procs[1].sched_policy = SCHED_BATCH;
+    CHECK(sched_wake_blocked(&procs[1]) == -1 && !procs[0].need_resched,
+          "a woken SCHED_BATCH thread preempts nothing");
+    wake_quiet();
+    procs[1].sched_policy = SCHED_IDLE;
+    CHECK(sched_wake_blocked(&procs[1]) == -1 && !procs[0].need_resched,
+          "a woken SCHED_IDLE thread preempts nothing");
+    wake_quiet();
+    procs[0].sched_policy = SCHED_IDLE;
+    CHECK(sched_wake_blocked(&procs[1]) == -1 && !procs[0].need_resched,
+          "a SCHED_IDLE thread does not give way to another");
+    wake_quiet();
+    procs[1].sched_policy = SCHED_OTHER;
+    CHECK(sched_wake_blocked(&procs[1]) == 0 && procs[0].need_resched,
+          "a SCHED_IDLE thread gives way to a woken ordinary one");
+    wake_quiet();
+    procs[0].sched_policy = SCHED_OTHER;
+    procs[0].no_tick_switch = 1;
+    CHECK(sched_wake_blocked(&procs[1]) == -1 && procs[0].need_resched,
+          "a kernel thread is asked to switch, with no kick");
+    procs[0].no_tick_switch = 0;
+
+    wake_quiet();
+    cpu_table[1].online = 1;
+    cpu_table[1].current = &procs[3];
+    procs[3].state = PROC_RUNNING;
+    procs[3].cpu = 1;
+    CHECK(sched_wake_blocked(&procs[1]) == 0 && procs[1].cpu == 0 && procs[1].woken,
+          "a wake queues on the waker's processor, which shares no cache with another");
+    procs[0].need_resched = 0;
+    sched_set_affinity(&procs[1], 2);
+    CHECK(procs[1].cpu == 1 && run_queues[1].count == 1 && procs[3].need_resched &&
+              (procs[3].work & WORK_RESCHED) && cpu_kicks[1] == 1,
+          "an affinity move onto a busy processor asks its ordinary thread to switch, with a kick");
+    cpu_table[1].online = 0;
+    init_sched();
+}
+
+/**
+ * Of four processors sharing a cache, 0 and 1 one core and 2 and 3 another,
+ * a wake whose last processor, 0, is busy goes to the idle core before 0's
+ * idle sibling, as Linux's select_idle_cpu takes a whole idle core first
+ * (select_idle_core, kernel/sched/fair.c:7720-7748, 7843-7848); with no
+ * core all idle, it goes to 0's idle sibling (select_idle_smt,
+ * fair.c:7751-7768, 8035-8041).
+ */
+static void wake_place_core(void)
+{
+    int c;
+
+    setup();
+    wake_quiet();
+    for (c = 1; c < 4; c++) {
+        cpu_table[c].online = 1;
+        cpu_table[c].current = cpu_table[c].idle = &procs[3 + c];
+        procs[3 + c].state = PROC_RUNNING;
+        procs[3 + c].cpu = c;
+    }
+    for (c = 0; c < 4; c++) {
+        host_cpu = (unsigned int)c;
+        sched_cache_join(0xF, c < 2 ? 0x3 : 0xC);
+    }
+    host_cpu = 0;
+    CHECK(sched_wake_blocked(&procs[1]) == 2 && procs[1].cpu == 2 && procs[5].need_resched &&
+              !procs[4].need_resched,
+          "a wake goes to an idle core before the busy core's idle sibling");
+    CHECK(sched_wake_blocked(&procs[2]) == 1 && procs[2].cpu == 1 && procs[4].need_resched,
+          "with no core all idle, a wake goes to its last processor's idle sibling");
+    k_memset(cache_peers, 0, sizeof(cache_peers));
+    k_memset(core_peers, 0, sizeof(core_peers));
+    smt_active = 0;
+    for (c = 1; c < 4; c++) {
+        cpu_table[c].online = 0;
+    }
     init_sched();
 }
 
@@ -2107,6 +2231,8 @@ int main(int argc, char **argv)
     ready_lists();
     wake_twice();
     migration();
+    wake_preempt();
+    wake_place_core();
     run_delay();
     tick_slice();
     slice_events();
@@ -2132,7 +2258,8 @@ int main(int argc, char **argv)
                "preempt due, "
                "accounting, "
                "load phase, "
-               "idle machine, ready lists, wake twice, migration, run delay, tick slice, tick rr, "
+               "idle machine, ready lists, wake twice, migration, wake preempt, wake place core, "
+               "run delay, tick slice, tick rr, "
                "tick rt, idle cancel drains, idle cancel ready, idle kicked, balance once\n");
     return 0;
 }
