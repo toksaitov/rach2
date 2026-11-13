@@ -23,8 +23,9 @@
 # that no copy uses. It runs `tidy` in each worker's clone too, since a loop
 # tidies only while it runs. `outputs` removes what a build or a run makes
 # again and what nothing needs once its run has ended: in each tree on the
-# testing host whose loop holds no session, the images, test output and scratch
-# unchanged for a day, but `build/tests/failed`, and the run files of
+# testing host where no session's supervisor holds STATE/session.live, the
+# images, test output and scratch unchanged for a day, but
+# `build/tests/failed`, and the run files of
 # `build/runs` unchanged for two weeks; on Windows the test collections,
 # tooling job directories, case images and scratch, the old shared TMPDIR of
 # the release runs among it, unchanged for a day, but what the record or KEPT
@@ -52,6 +53,14 @@ TESTING=testing
 # kept run uses, whatever its age.
 # shellcheck disable=SC2016 # the dollars are the function's
 stale='
+# busy LOCK: succeed while a process holds the lock LOCK, as a session'"'"'s
+# supervisor holds STATE/session.live; a lock that cannot be probed counts as
+# held.
+busy()
+{
+    perl -MFcntl=:flock -e '"'"'open(L, "<", shift) or exit($!{ENOENT} ? 1 : 0);
+        exit(flock(L, LOCK_SH | LOCK_NB) ? 1 : 0)'"'"' "$1"
+}
 stale()
 {
     days=$1
@@ -87,7 +96,7 @@ outputs()
         printf '%s\n' "$stale"
         for h in $HOMES; do
             b=$h/rach2/build
-            printf '%s\n' "[ -s $b/flow/claude/session ] || stale $days $b/images/* $b/x86_64/images/*" \
+            printf '%s\n' "busy $b/flow/claude/session.live || stale $days $b/images/* $b/x86_64/images/*" \
                 "$b/i686/images/* $b/tests/* $b/x86_64/tests/* $b/i686/tests/* $b/tmp/*" |
                 paste -s -d ' ' -
             echo "stale 14 $b/runs/*"

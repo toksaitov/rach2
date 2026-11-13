@@ -4,8 +4,13 @@
 #
 # Usage: perl session.pl RECORD LOG LIMIT COMMAND...
 #
-# The supervisor, this process, leaves the loop's process group first, so a
-# hangup that ends the loop reaches neither it nor the session. It forks the
+# The supervisor, this process, first takes RECORD.live, a lock that it holds
+# exclusively for its whole life and that no child keeps, so that a looker
+# tells a live supervisor from a RECORD that a killed one left by probing the
+# lock, never by a number; a supervisor that cannot take it, since another
+# holds it, exits 125 having started nothing. It then leaves the loop's
+# process group, so a hangup that ends the loop reaches neither it nor the
+# session. It forks the
 # group's leader, the anchor: a child that leads a group of its own, whose id
 # is the anchor's pid, ignores HUP, INT and TERM, and exits once the
 # supervisor closes the pipe to it or dies. It then forks the session into
@@ -13,7 +18,8 @@
 # set, does it let the session exec COMMAND: a session runs only once its
 # group is recorded and its limit is set, and when the record cannot be
 # written, or the supervisor dies first, the child exits without running
-# COMMAND.
+# COMMAND, as it does when a TERM, an INT or RECORD.stop came before its go;
+# the supervisor then exits as for a stop, below.
 #
 # Every signal to the group goes while the anchor is an unreaped child of
 # the supervisor, so the group's number is still the anchor's and has passed
@@ -42,6 +48,7 @@
 
 use strict;
 use warnings;
+use Fcntl qw(:flock O_CREAT O_RDWR);
 use POSIX qw(strftime WNOHANG);
 
 my ($record, $log, $limit, @command) = @ARGV;
@@ -72,6 +79,13 @@ for my $name ('TERM', 'INT') {
 }
 $SIG{ALRM} = sub { $expired = 1 };
 
+# The lock, which Perl closes on exec and the anchor closes at its start.
+my $live;
+if (!sysopen($live, "$record.live", O_RDWR | O_CREAT, 0644) || !flock($live, LOCK_EX | LOCK_NB)) {
+    note("$record.live cannot be taken: $!; another supervisor may run; not starting the session");
+    exit 125;
+}
+
 setpgrp(0, 0) or die "session: setpgrp: $!\n";
 pipe(my $hold_r, my $hold_w) or die "session: pipe: $!\n";
 my $group = fork;
@@ -79,6 +93,7 @@ defined $group or die "session: fork: $!\n";
 if ($group == 0) {
     # The anchor: it leads the group and waits for the end of the pipe.
     close($hold_w);
+    close($live);
     $SIG{$_} = 'IGNORE' for qw(HUP INT TERM ALRM);
     setpgrp(0, 0);
     while (1) {
@@ -137,6 +152,14 @@ sub members
     return [map { /^\s*(\d+)\s+(\d+)\s+(.*)$/ && $1 == $group && $2 != $group ? "$2 $3" : () } @ps];
 }
 
+# A stop that came before the go starts nothing.
+if (defined $signal || -e "$record.stop") {
+    close($go_w);
+    waitpid($pid, 0);
+    unlink($record);
+    note("session group $group stopped before it started");
+    end(128 + (($signal // 'TERM') eq 'INT' ? POSIX::SIGINT : POSIX::SIGTERM));
+}
 alarm($limit);
 syswrite($go_w, 'x', 1);
 close($go_w);

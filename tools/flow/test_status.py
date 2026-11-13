@@ -199,14 +199,24 @@ def boot_id():
 
 
 def group_runs(pgid):
-    """Say whether a process group may have a member."""
+    """Say whether a process group may have a member, from /proc, for display
+    only: nothing is signalled, and a group that cannot be read may run."""
     try:
-        os.killpg(int(pgid), 0)
-    except ProcessLookupError:
-        return False
+        want = int(pgid)
+        names = os.listdir(PROC_ROOT)
     except (OSError, ValueError):
         return True
-    return True
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            stat = (PROC_ROOT / name / "stat").read_text()
+        except OSError:
+            continue
+        fields = stat[stat.rfind(")") + 2:].split()
+        if len(fields) > 2 and fields[2] == str(want):
+            return True
+    return False
 
 
 def confirmed(directory, ident):

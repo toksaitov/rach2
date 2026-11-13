@@ -39,7 +39,11 @@
 # session that is running, and before it takes or starts a task, within five
 # seconds of any wait; tools/flow/stop.sh also leaves STATE/session.stop, on
 # which session.pl stops the session, and which the loop removes before each
-# session.
+# session. The loop holds STATE/loop.live, a lock on descriptor 7, for its
+# whole life, through its exec of master's copy, and closes it for each
+# session, whose supervisor holds STATE/session.live; stop.sh and status.sh
+# probe the two locks to tell whether the loop and its session run. A loop
+# that finds STATE/loop.live held exits, since another loop has STATE.
 # Sessions run with RACH2_MIN_FREE_GIB at 40 unless the environment gives
 # another, so that a build they start stops before it fills the disk, and
 # with RACH2_WORKER_STATE set to STATE, so that `board.sh release` of the
@@ -202,6 +206,17 @@ main()
     [ -n "$state" ] || state=$flowdir/$agent
     mkdir -p "$state" "$flowdir"
     state=$(cd "$state" && pwd)
+    # The lock passes to master's copy on the exec below, with
+    # RACH2_LOOP_LIVE naming the file it holds.
+    if [ "${RACH2_LOOP_LIVE-}" != "$state/loop.live" ]; then
+        exec 7>> "$state/loop.live"
+        perl -MFcntl=:flock -e 'open(L, ">&=7") && flock(L, LOCK_EX | LOCK_NB) or exit 1' || {
+            echo "worker: another loop holds $state/loop.live" >&2
+            exit 1
+        }
+        RACH2_LOOP_LIVE=$state/loop.live
+        export RACH2_LOOP_LIVE
+    fi
     cd "$repo" || exit 1
     echo "$repo" > "$state/repo"
     echo "${RACH2_TESTING_COPY:-}" > "$state/copy"
