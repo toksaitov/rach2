@@ -1386,6 +1386,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "syscall250",
+          "checks": "tests/host/syscall250_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "sysv_detach",
           "checks": "tests/host/sysv_detach_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

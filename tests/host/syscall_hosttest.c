@@ -1568,14 +1568,14 @@ static int32_t cpu_clock_id(uint32_t id, int thread, uint32_t which)
 /**
  * The eight clocks and the CPU clocks by id.
  *
- * Five hundredths into second 42, the four clocks of time since boot read
- * 42.05 s and coarse real time the boot's epoch plus that; the two CPU clocks
+ * Four hundredths into second 42, the four clocks of time since boot read
+ * 42.04 s and coarse real time the boot's epoch plus that; the two CPU clocks
  * read the 2.5 s of user and 1.2 s of system time the process was charged. A
  * process's CPU clock by id reads that process's time, pid 0 reading the
  * caller's; one clock reads user time alone. A thread clock names only the
  * caller, and a clock of no such process, a descriptor's clock and ids 8 and
  * above fail with -EINVAL. With the timer 41 us into the tick, time since
- * boot, raw and boot time read 42.050041 s and the coarse clock 42.05 s. Real
+ * boot, raw and boot time read 42.040041 s and the coarse clock 42.04 s. Real
  * time and time since boot resolve to the microsecond and the coarse and CPU
  * clocks to the tick, and a resolution may be asked for with no timespec to
  * write.
@@ -1586,30 +1586,30 @@ static void clock_ids(void)
     isr_params_t p;
     int32_t clk;
 
-    kernel_ticks = 42u * TICK_HZ + 5u * TICK_HZ / 100u;
+    kernel_ticks = 42u * TICK_HZ + 4u * TICK_HZ / 100u;
     kernel_uptime_seconds = 42;
-    kernel_second_ticks = 5u * TICK_HZ / 100u;
+    kernel_second_ticks = 4u * TICK_HZ / 100u;
     proc.pid = proc.tgid = 3;
     proc.utime = 250u * TICK_HZ / 100u;
     proc.stime = 120u * TICK_HZ / 100u;
     other.pid = other.tgid = 9;
-    other.utime = 7u * TICK_HZ / 100u;
-    other.stime = 1u * TICK_HZ / 100u;
+    other.utime = 6u * TICK_HZ / 100u;
+    other.stime = 2u * TICK_HZ / 100u;
     for (clk = 1; clk <= 7; clk++) {
         if (clk == 2 || clk == 3 || clk == 5) {
             continue;
         }
-        CHECK(read_clock(clk, &ts) == 0 && ts.tv_sec == 42 && ts.tv_nsec == 50000000,
+        CHECK(read_clock(clk, &ts) == 0 && ts.tv_sec == 42 && ts.tv_nsec == 40000000,
               "the clocks of time since boot read the uptime");
     }
-    CHECK(read_clock(5, &ts) == 0 && ts.tv_sec == 1000042 && ts.tv_nsec == 50000000,
+    CHECK(read_clock(5, &ts) == 0 && ts.tv_sec == 1000042 && ts.tv_nsec == 40000000,
           "coarse real time is the boot's epoch plus the uptime at the tick");
     mono_phase_ns = 41000;
-    CHECK(read_clock(1, &ts) == 0 && ts.tv_sec == 42 && ts.tv_nsec == 50041000 &&
-              read_clock(4, &ts) == 0 && ts.tv_nsec == 50041000 && read_clock(7, &ts) == 0 &&
-              ts.tv_nsec == 50041000,
+    CHECK(read_clock(1, &ts) == 0 && ts.tv_sec == 42 && ts.tv_nsec == 40041000 &&
+              read_clock(4, &ts) == 0 && ts.tv_nsec == 40041000 && read_clock(7, &ts) == 0 &&
+              ts.tv_nsec == 40041000,
           "time since boot, raw and boot time read the place within the tick");
-    CHECK(read_clock(6, &ts) == 0 && ts.tv_sec == 42 && ts.tv_nsec == 50000000,
+    CHECK(read_clock(6, &ts) == 0 && ts.tv_sec == 42 && ts.tv_nsec == 40000000,
           "coarse time since boot stops at the tick");
     mono_phase_ns = 0;
     CHECK(read_clock(2, &ts) == 0 && ts.tv_sec == 3 && ts.tv_nsec == 700000000,
@@ -1618,7 +1618,7 @@ static void clock_ids(void)
           "the thread CPU clock reads the process's time");
     CHECK(read_clock(cpu_clock_id(9, 0, 2), &ts) == 0 && ts.tv_sec == 0 && ts.tv_nsec == 80000000,
           "a CPU clock by pid reads that process's time");
-    CHECK(read_clock(cpu_clock_id(9, 0, 1), &ts) == 0 && ts.tv_nsec == 70000000,
+    CHECK(read_clock(cpu_clock_id(9, 0, 1), &ts) == 0 && ts.tv_nsec == 60000000,
           "a CPU clock of user time reads user time alone");
     CHECK(read_clock(cpu_clock_id(0, 0, 0), &ts) == 0 && ts.tv_sec == 3 && ts.tv_nsec == 700000000,
           "a CPU clock of pid 0 reads the caller's time");
@@ -1870,58 +1870,61 @@ static void clock_sleeps(void)
 }
 
 /** Put an absolute clock_nanosleep on CLOCK_REALTIME until `tick` ticks
- * past the boot's epoch, 1000000 s, and start the model at tick 1000, real
- * time 1000001 s, with the clock's offset 1000000 s on the second. */
+ * past the boot's epoch, 1000000 s, and start the model a second after
+ * boot, at tick TICK_HZ, real time 1000001 s, with the clock's offset
+ * 1000000 s on the second. */
 static void ask_rt_sleep(isr_params_t *p, uint64_t tick)
 {
     model_epoch = 1000000;
     model_epoch_ns = 0;
     ask_clock_tick(p, 0, 1, 1000000, tick, 0);
-    uptime_at(1000);
+    uptime_at(TICK_HZ);
 }
 
 /**
  * An absolute clock_nanosleep on CLOCK_REALTIME follows a setting of the
  * clock, as Linux's clock_was_set retriggers its hrtimer
- * (kernel/time/hrtimer.c:951-987, 2133-2142). From tick 1000, real time
- * 1000001 s, until 10 ms past that: a step back of a second during the sleep
- * wakes it at the next tick, which counts its tick again and sleeps on to
- * 2010; a step forward of a second past the time ends it at that tick; and a
+ * (kernel/time/hrtimer.c:951-987, 2133-2142). From a second after boot,
+ * real time 1000001 s, until ten ticks past that: a step back of a second
+ * during the sleep wakes it at the next tick, which counts its tick again
+ * and sleeps on a second more; a step forward of a second past the time
+ * ends it at that tick; and a
  * step right after the sleep turns its time into time since boot
  * (`rtc_mono_of_real`), before it blocks, sends it to count again without
- * a block, so that it blocks once, until 2010. A sleep until 1000012 s
+ * a block, so that it blocks once, until then. A sleep until 1000012 s
  * counts the offset to the nanosecond, as Linux subtracts its base's whole
  * offset (kernel/time/hrtimer.c:922, 2140): after a step of half a second
- * forward it sleeps on to tick 11500, and after one of half a second back
- * to tick 12500.
+ * forward it sleeps on to the tick of 11.5 s, and after one of half a
+ * second back to that of 12.5 s.
  */
 static void realtime_steps(void)
 {
     isr_params_t p;
 
-    ask_rt_sleep(&p, 1010);
+    ask_rt_sleep(&p, TICK_HZ + 10u);
     step_in_sleep = -1000000000LL;
-    CHECK(clock_sleep_call(&p) == 0 && first_blocked_until == 1010 && blocked_until == 2010 &&
-              kernel_ticks == 2010,
+    CHECK(clock_sleep_call(&p) == 0 && first_blocked_until == TICK_HZ + 10u &&
+              blocked_until == 2u * TICK_HZ + 10u && kernel_ticks == 2u * TICK_HZ + 10u,
           "a step back during an absolute sleep on real time sleeps on to the time");
-    ask_rt_sleep(&p, 1010);
+    ask_rt_sleep(&p, TICK_HZ + 10u);
     step_in_sleep = 1000000000LL;
-    CHECK(clock_sleep_call(&p) == 0 && kernel_ticks == 1001 && blocks == 1,
+    CHECK(clock_sleep_call(&p) == 0 && kernel_ticks == TICK_HZ + 1u && blocks == 1,
           "a step forward past the time ends an absolute sleep on real time at the next tick");
-    ask_rt_sleep(&p, 1010);
+    ask_rt_sleep(&p, TICK_HZ + 10u);
     step_after_offset = -1000000000LL;
-    CHECK(clock_sleep_call(&p) == 0 && first_blocked_until == 2010 && kernel_ticks == 2010,
+    CHECK(clock_sleep_call(&p) == 0 && first_blocked_until == 2u * TICK_HZ + 10u &&
+              kernel_ticks == 2u * TICK_HZ + 10u,
           "a step between the sleep's reading of the clock and its block is counted first");
     CHECK(current_proc->rt_steps == 0, "the sleep leaves no step count behind");
-    ask_rt_sleep(&p, 12000);
+    ask_rt_sleep(&p, 12u * TICK_HZ);
     step_in_sleep = 500000000LL;
-    CHECK(clock_sleep_call(&p) == 0 && first_blocked_until == 12000 && blocked_until == 11500 &&
-              kernel_ticks == 11500,
+    CHECK(clock_sleep_call(&p) == 0 && first_blocked_until == 12u * TICK_HZ &&
+              blocked_until == 23u * TICK_HZ / 2u && kernel_ticks == 23u * TICK_HZ / 2u,
           "a step of half a second forward brings the sleep's tick half a second nearer");
-    ask_rt_sleep(&p, 12000);
+    ask_rt_sleep(&p, 12u * TICK_HZ);
     step_in_sleep = -500000000LL;
-    CHECK(clock_sleep_call(&p) == 0 && first_blocked_until == 12000 && blocked_until == 12500 &&
-              kernel_ticks == 12500,
+    CHECK(clock_sleep_call(&p) == 0 && first_blocked_until == 12u * TICK_HZ &&
+              blocked_until == 25u * TICK_HZ / 2u && kernel_ticks == 25u * TICK_HZ / 2u,
           "a step of half a second back moves the sleep's tick half a second on");
     model_epoch = 1000000;
     model_epoch_ns = 0;
