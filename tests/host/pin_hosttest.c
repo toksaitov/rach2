@@ -151,6 +151,21 @@ void pci_msi_message(uint8_t vector, uint32_t *address, uint32_t *data)
     *data = 0;
 }
 
+/** The one processor of this pin model. */
+uint64_t pci_msi_cpus(void)
+{
+    return 1;
+}
+
+/** No row enables a message; retain the platform's message interface. */
+void pci_msi_message_cpu(uint8_t vector, int cpu, uint32_t *address, uint32_t *data,
+                         uint32_t *destination)
+{
+    (void)cpu;
+    *destination = 0;
+    pci_msi_message(vector, address, data);
+}
+
 /* ---- the holder of the pins ---- */
 
 /* The releases the holder was told of, and the pin of the last. */

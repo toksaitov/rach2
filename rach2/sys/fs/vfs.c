@@ -4739,7 +4739,8 @@ static int synth_dir_kind(int kind)
            kind == VNODE_PROC_TASK_DIR || kind == VNODE_SYS_DIR || kind == VNODE_SYS_LINK ||
            kind == VNODE_PROC_SYSVIPC_DIR || kind == VNODE_PROC_NET_STAT_DIR ||
            kind == VNODE_PROC_NS_DIR || kind == VNODE_PROC_FDINFO_DIR || kind == VNODE_DEV_SUBDIR ||
-           kind == VNODE_PROC_ACPI_DIR || kind == VNODE_PROC_FS_DIR || kind == VNODE_PROC_SYS_DIR;
+           kind == VNODE_PROC_IRQ_DIR || kind == VNODE_PROC_ACPI_DIR || kind == VNODE_PROC_FS_DIR ||
+           kind == VNODE_PROC_SYS_DIR;
 }
 
 /** The `getattr` of the synthetic types, what the resolver needs of a node:

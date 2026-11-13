@@ -513,11 +513,11 @@ if [ -z "$INTR" ]; then
     bad "/proc/interrupts is not there; this kernel does not provide it"
 else
     echo "$INTR" | while read -r line; do note "interrupts: $line"; done
-    timer="$(echo "$INTR" | awk -F'\t' '$1 == "32:" { print $2 }')"
+    timer="$(echo "$INTR" | awk -F'\t' '$1 == "32:" { n=0; for(i=2;$i ~ /^[0-9]+$/;i++) n+=$i; print n }')"
     # By the device's name and not by a number: a vector is given to a device
     # when it enables its messages, so the number is the next one free.
-    usb_vector="$(echo "$INTR" | awk -F'\t' '$4 ~ /xhci/ { print $2 }')"
-    audio_vector="$(echo "$INTR" | awk -F'\t' '$4 ~ /hda/ { print $2 }')"
+    usb_vector="$(echo "$INTR" | awk -F'\t' '$NF ~ /xhci/ { n=0; for(i=2;$i ~ /^[0-9]+$/;i++) n+=$i; print n }')"
+    audio_vector="$(echo "$INTR" | awk -F'\t' '$NF ~ /hda/ { n=0; for(i=2;$i ~ /^[0-9]+$/;i++) n+=$i; print n }')"
     fallback="$(echo "$INTR" | awk -F'\t' '$1 == "FBK:" { print $2 }')"
     spurious="$(echo "$INTR" | awk -F'\t' '$1 == "SPU:" { print $2 }')"
 

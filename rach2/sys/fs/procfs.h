@@ -89,6 +89,16 @@ int procfs_fd_count(int pid);
  */
 int procfs_open(const struct vpath *vp, int flags);
 
+/** The inode of /proc/irq for vector -1, its vector's directory at attr 0,
+ * or its requested and effective mask files at attrs 1 and 2. */
+uint32_t procfs_ino_irq(int vector, int attr);
+
+/** The inode of /proc/irq. */
+uint32_t procfs_ino_irqdir(void);
+
+/** Whether an enabled message owns `vector`, under the PCI message lock. */
+int procfs_irq_exists(int vector);
+
 /** Whether `e` is a descriptor of a /proc/PID/mem, whose offset is an
  * address. */
 int procfs_is_mem(const struct fd_entry *e);

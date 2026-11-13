@@ -172,7 +172,11 @@ void sched_lock_give(uint32_t flags)
     (void)flags;
 }
 
-/** No performance counter here: a stopped processor has none to stop. */
+/** No device message is pending in this stop model. */
+void isr_cpu_offline(void)
+{}
+
+/** Stop the model's local performance counter. */
 void platform_pmu_disable(void)
 {}
 

@@ -14,6 +14,7 @@
 #include "../../acpi/acpica.h"
 #include "../../klog.h"
 #include "../../power.h"
+#include "../../pci.h"
 #include "../../proc/smp.h"
 
 #include "smbios.h"
@@ -607,6 +608,7 @@ void power_stop(int how)
     if (k_panic_hook) {
         k_panic_hook();
     }
+    pci_msi_shutdown((int)arch_cpu_id());
     smp_stop_others();
 
     if (how == POWER_OFF) {
