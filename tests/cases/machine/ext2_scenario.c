@@ -990,17 +990,18 @@ static void kept(struct lc *l)
 {
     char vol[1100], path[1100];
     char *before = NULL, *after = NULL;
+    size_t bn = 0, an = 0;
 
     if (!volume(l, "root-disk", PART1, vol, sizeof(vol)) ||
         !debugfs(l, 0, "cat /etc/hostname", vol, "hostname.after"))
         return;
     if (evidence(l, "hostname.before", path, sizeof(path)))
-        before = slurp(path, NULL);
+        before = slurp(path, &bn);
     if (evidence(l, "hostname.after", path, sizeof(path)))
-        after = slurp(path, NULL);
+        after = slurp(path, &an);
     lc_assert(l, "repair-kept",
-              before != NULL && after != NULL && strstr(before, "not found") == NULL &&
-                  strcmp(before, after) == 0,
+              before != NULL && after != NULL && strstr(before, "not found") == NULL && bn == an &&
+                  memcmp(before, after, bn) == 0,
               "debugfs does not read /etc/hostname after the repair as it did before the damage");
     free(before);
     free(after);
