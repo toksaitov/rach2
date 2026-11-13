@@ -22,20 +22,23 @@ static const struct {
 
 /**
  * Read a register of `reg_read_allowed` for a program, as Linux's
- * i915_reg_read_ioctl, under forcewake: with I915_REG_READ_8B_WA in the
- * offset's low bits as Linux's intel_uncore_read64_2x32 reads it, so that
- * a carry between the halves is never seen half done; with no flag the
- * low half and then the high, as 32-bit Linux's readq does.
+ * i915_reg_read_ioctl, under forcewake and the register lock
+ * (`i915_uncore_read64`): with I915_REG_READ_8B_WA in the offset's low
+ * bits as Linux's intel_uncore_read64_2x32 reads it, so that a carry
+ * between the halves is never seen half done; with no flag the low half
+ * and then the high, as 32-bit Linux's readq does. The row runs without
+ * the big lock; the register lock keeps an unbind's `i915_uncore_fini`
+ * from revoking forcewake during the reads.
  *
  * @return 0 with the value in `val`; -EINVAL for a register not allowed or
- *         another flag; the error of i915_forcewake_get.
+ *         another flag; -ENODEV once the device is unbound; -ETIMEDOUT
+ *         when the GT did not wake.
  */
 int32_t i915_reg_read_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_i915_reg_read *reg = (struct drm_i915_reg_read *)data;
     struct drm_i915_private *i915 = to_i915(dev);
     uint32_t flags = (uint32_t)(reg->offset & 7u), i, n;
-    int32_t err;
 
     (void)file;
     n = sizeof(reg_read_allowed) / sizeof(reg_read_allowed[0]);
@@ -47,16 +50,6 @@ int32_t i915_reg_read_ioctl(struct drm_device *dev, void *data, struct drm_file 
     if (i == n || (flags != 0 && flags != I915_REG_READ_8B_WA)) {
         return -EINVAL;
     }
-    err = i915_forcewake_get(i915);
-    if (err < 0) {
-        return err;
-    }
-    if (flags == I915_REG_READ_8B_WA) {
-        reg->val = i915_read64_2x32(&i915->hw, reg_read_allowed[i].lo, reg_read_allowed[i].hi);
-    } else {
-        reg->val = i915_read(&i915->hw, reg_read_allowed[i].lo);
-        reg->val |= (uint64_t)i915_read(&i915->hw, reg_read_allowed[i].hi) << 32;
-    }
-    i915_forcewake_put(i915);
-    return 0;
+    return i915_uncore_read64(i915, reg_read_allowed[i].lo, reg_read_allowed[i].hi,
+                              flags == I915_REG_READ_8B_WA, &reg->val);
 }

@@ -1630,6 +1630,22 @@ void i915_forcewake_put(struct drm_i915_private *i915);
  */
 uint32_t i915_uncore_read(struct drm_i915_private *i915, uint32_t reg);
 
+/**
+ * Read the GT's register of 8 bytes whose halves are `lo` and `hi` into
+ * `*val`, whole under the register lock and forcewake, as Linux's
+ * intel_uncore_read64_2x32 when `whole` is set, so that a carry between
+ * the halves is never seen half done; otherwise the low half and then the
+ * high, as 32-bit Linux's readq. Forcewake is taken as `i915_uncore_read`
+ * takes it. Holding the lock across the reads keeps `i915_uncore_fini`
+ * from revoking forcewake between them.
+ *
+ * @return 0; -ENODEV once `i915_uncore_fini` has run; -ETIMEDOUT when the
+ *         GT did not wake, as `i915_forcewake_get`. On an error `*val` is
+ *         not written.
+ */
+int32_t i915_uncore_read64(struct drm_i915_private *i915, uint32_t lo, uint32_t hi, int whole,
+                           uint64_t *val);
+
 /** Run the release timer once due, rearming for one millisecond
  * if a reference was taken or dropped since it was armed, and otherwise
  * withdraw the request unless a reference is held, as Linux's
