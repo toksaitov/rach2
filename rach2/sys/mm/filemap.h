@@ -162,6 +162,13 @@ int filemap_sync_file(const struct open_file *ofd);
  * fsync and syncfs (`vfs_wb_err_set`). */
 void filemap_sync_all(void);
 
+/** For the unmount of `mnt`, once its operations have drained: when the
+ * only references left to it are those of descriptions only a file's
+ * pages in memory hold, write those pages, drop what cannot be written, and
+ * let the descriptions go, so that the unmount can proceed. Otherwise do
+ * nothing. Under the big lock; this may sleep. */
+void filemap_unmount(struct vfs_mount *mnt);
+
 /** msync of the mapping `f` of a region: its file's pages written back
  * when it maps a disk file's, and with `flush`, for MS_SYNC, the file
  * system's fsync after them through `f`'s own description, whose cursor

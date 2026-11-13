@@ -42,7 +42,11 @@
  * release's failure keeps the later store, in either order, and a
  * truncation to zero takes the dirty page with the rest. A descriptor
  * write's copy into a dirty page reads the written bytes again when a read
- * fails, so the page's write-back keeps the write.
+ * fails, so the page's write-back keeps the write. A failed write on a
+ * mount whose device has gone or which no namespace sees drops the page,
+ * and an unmount that only a writer holds the mount for writes the page,
+ * drops it if the write fails and lets the writer go, while any other hold
+ * leaves both.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -575,6 +579,24 @@ void vfs_writeback_aged(const struct vfs_mount *mnt, uint64_t born)
 }
 
 /** Not reached. */
+/* Whether the model mount's device has gone, and whether no namespace
+ * sees the mount. */
+static int mount_gone, mount_unseen;
+
+/** The model device's state. */
+int vfs_mount_gone(const struct vfs_mount *mnt)
+{
+    (void)mnt;
+    return mount_gone;
+}
+
+/** The model mount's view. */
+int vfs_mount_unseen(const struct vfs_mount *m)
+{
+    (void)m;
+    return mount_unseen;
+}
+
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
     return m;
@@ -1466,6 +1488,80 @@ static void written_copy_rows(void)
           "and the page's write-back keeps the descriptor's write");
 }
 
+/** A failed final write on a mount whose device has gone, or which no
+ * namespace sees, drops the dirty page, so that neither the record nor its
+ * writer's description keeps the mount; the failure is recorded once. */
+static void gone_rows(void)
+{
+    struct vfs_mount mnt;
+    struct open_file ofd;
+    struct vm_file *f;
+    int released, pass;
+
+    for (pass = 0; pass < 2; pass++) {
+        k_memset(&mnt, 0, sizeof(mnt));
+        k_memset(&ofd, 0, sizeof(ofd));
+        f = writeback_file(&mnt, &ofd);
+        if (!f) {
+            return;
+        }
+        released = backing_releases;
+        disk_error = -EIO;
+        mount_gone = pass == 0;
+        mount_unseen = pass == 1;
+        vm_file_put(f);
+        vm_file_reap();
+        check(!maps && dshare_count == 0 && backing_releases == released + 1 &&
+                  mnt.wb_err_records == 1,
+              pass == 0 ? "a failed final write on a gone device drops the page and lets go"
+                        : "a failed final write on a detached mount drops the page and lets go");
+        mount_gone = mount_unseen = 0;
+        disk_error = 0;
+        (void)model_fsync(&ofd);
+    }
+}
+
+/** The unmount of a mount that only a failed release's writer holds writes
+ * the page, drops what fails and lets the writer go, and leaves every page
+ * dirty while anything else holds the mount. */
+static void unmount_rows(void)
+{
+    struct vfs_mount mnt;
+    struct open_file ofd;
+    struct vm_file *f;
+    struct dshare *ds;
+    int released, fail;
+
+    for (fail = 0; fail < 2; fail++) {
+        k_memset(&mnt, 0, sizeof(mnt));
+        k_memset(&ofd, 0, sizeof(ofd));
+        f = writeback_file(&mnt, &ofd);
+        if (!f) {
+            return;
+        }
+        ds = record_of(f);
+        released = backing_releases;
+        disk_error = -EIO;
+        vm_file_put(f);
+        vm_file_reap();
+        ofd.refcount = 1;
+        mnt.refs = 2;
+        disk_writes = 0;
+        filemap_unmount(&mnt);
+        check(disk_writes == 0 && dshare_count == 1 && ds->ndirty == 1 && ds->wr.ofd == &ofd,
+              "an unmount with another hold of the mount leaves the dirty page and writer");
+        mnt.refs = 1;
+        disk_error = fail ? -EIO : 0;
+        filemap_unmount(&mnt);
+        check(dshare_count == 0 && backing_releases == released + 1 &&
+                  mnt.wb_err_records == (uint32_t)(1 + fail) && (fail || disk_bytes[0] == 0x65),
+              fail ? "the unmount drops a page it cannot write and lets the writer go"
+                   : "the unmount writes the page and lets the writer go");
+        disk_error = 0;
+        (void)model_fsync(&ofd);
+    }
+}
+
 /** Stores beyond EOF are zeroed before a later growth can expose them. */
 static void writeback_tail_rows(void)
 {
@@ -1508,6 +1604,8 @@ int main(void)
     retry_rows();
     truncate_rows();
     written_copy_rows();
+    gone_rows();
+    unmount_rows();
     writeback_tail_rows();
     if (fails) {
         printf("filemap-hosttest: %d failed\n", fails);

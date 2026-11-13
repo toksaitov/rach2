@@ -6571,6 +6571,8 @@ static int unmount_mount(struct vfs_mount *m)
     while (*(volatile uint32_t *)&m->inprogress > 0) {
         wq_wait_event_nointr(&m->drain_wq, drained, m);
     }
+    /* The descriptions a file's dirty pages keep are let go of first. */
+    filemap_unmount(m);
     if (m->refs > 0) {
         m->state = VFS_ACTIVE;
         return -EBUSY;
