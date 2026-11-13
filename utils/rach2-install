@@ -1669,6 +1669,11 @@ whole configuration archived on its recovery partition; its accounts are not the
     if [ -n "$mounted_root" ]; then
         keep_root_directory /home "$keep/home" || die "the home directories could not be kept"
         keep_root_directory /root "$keep/root-home" || die "root's home directory could not be kept"
+        # A /root kept as its link into /home is root's home in the copy too,
+        # where the archive and the restore read root's keys.
+        if [ -L "$keep/root-home" ]; then
+            cp -a "$keep/root-home" "$keep/root" || die "root's home directory could not be kept"
+        fi
     fi
     # Each home is read inside the old root and kept at the same home read
     # inside the copy, and a .ssh that is a link leading out of /home is kept
