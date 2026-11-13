@@ -1652,8 +1652,9 @@ int ext2_fdatasync(struct vfs_mount *mnt, void *handle)
  * caller brings the page in (`user_refault`). A write that starts below the
  * volume's file limit and crosses it is clipped at the limit, and one that
  * starts at or past it is -EFBIG, as Linux's `generic_write_check_limits`
- * does with `s_maxbytes`. Returns the bytes accepted, -EISDIR, -EFBIG,
- * -EROFS, -ENOSPC, -EFAULT, or -errno. The caller holds the node's lock.
+ * does with `s_maxbytes`. A fenced node (`n->fenced`) is -EIO, since the
+ * batch's drain would store it. Returns the bytes accepted, -EISDIR, -EFBIG,
+ * -EIO, -EROFS, -ENOSPC, -EFAULT, or -errno. The caller holds the node's lock.
  */
 int32_t ext2_file_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                         uint64_t offset)
@@ -1669,6 +1670,9 @@ int32_t ext2_file_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
     }
     if (count == 0) {
         return 0;
+    }
+    if (n->fenced) {
+        return -EIO;
     }
     if (offset >= em->file_limit) {
         return past_limit(em, "write", offset);

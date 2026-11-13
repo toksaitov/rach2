@@ -239,6 +239,13 @@ struct ext2_node {
      * entries stores it first (`dir_settle`). The batch sets no mark: it
      * holds its nodes and its drain stores them. */
     int unstored;
+    /* Set when a store found a field changed in memory without the mark
+     * (`ext2_inode_write`), so that what the node holds cannot be trusted:
+     * no store of it is made again, a write to it is refused, and it counts
+     * as marked for a sync, the valid bit and a remount's check
+     * (`node_owes`) until it is dropped, at its last put without a store. No
+     * store clears it. */
+    int fenced;
     int unlinked;                /* no name left; the inode and its blocks go at the last put */
     int state;                   /* N_LOADING, N_LIVE, N_DYING or N_FAILED */
     int load_error;              /* the -errno of a load that failed */
