@@ -26,7 +26,9 @@
 # tools/etude/wincheck.sh with MinGW-w64, which the host's databases cannot
 # describe; such a source passes when that script names it, or when
 # tools/etude/sources.mk lists it for the Windows etude that the script
-# builds.
+# builds. The release's Job Object helper, tools/flow/winjob.c, is compiled
+# on Windows with MSYS2's gcc by the lines that tools/flow/winjob.sh prints;
+# it passes when that script names it.
 # A program that runs on another machine is compiled there, by the script
 # that runs it or by hand as the Readme beside it says, against that
 # machine's libraries: MinGW's in the Debian guest, Weston's, FFmpeg's, X11's
@@ -117,6 +119,9 @@ windows() {
     case $1 in
         tools/etude/win/*) grep -qF "${1##*/}" tools/etude/wincheck.sh ||
             grep -qF "$1" tools/etude/sources.mk ;;
+        tools/flow/winjob.c)
+            # shellcheck disable=SC2016 # the script's own words, unexpanded
+            grep -qF 'src=$(dirname "$0")/winjob.c' tools/flow/winjob.sh ;;
         tests/host/compat/scenario_guest.c)
             grep -qF "\"$1\"" tools/etude/host_prepare.c ;;
         tools/setup/mandoc-win/main.c|tools/setup/mandoc-win/mmap.c)
