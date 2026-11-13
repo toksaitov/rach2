@@ -1770,6 +1770,19 @@ static int panic_record(const char *s, size_t n)
 }
 
 /**
+ * Returns 1 when the `n` bytes at `s`, a critical record, are a line of a
+ * panic's report. The kernel prints those only after the panic's own
+ * record, `panic: stopped:`, which is judged by itself.
+ */
+static int report_record(const char *s, size_t n)
+{
+    const char *close = memchr(s, ']', n);
+
+    return close != NULL && (size_t)(s + n - close) >= 17 &&
+           memcmp(close, "] panic: report: ", 17) == 0;
+}
+
+/**
  * Checks that the console `k` of `j`, of the boot `boot`, shows the fault
  * `fault`: for the end `panic`, a record of the kernel's panic; and each of
  * the fault's records in a critical record, in the order given, each after
@@ -1884,8 +1897,8 @@ static int fault_outcome(const struct judging *j, const char *state, char *out, 
  * `panics` set, so is a record of the subsystem `panic`. On the console of
  * a boot that a machine record gives the end of its machine's fault, a line
  * with one of the fault's records is passed by as well, and when that end is
- * `panic`, so is every record of the subsystem `panic`, the panic's report
- * among them. Returns 1 when there is one, and 0 when not.
+ * `panic`, so is every record of the subsystem `panic`. A line of a panic's
+ * report is always passed by. Returns 1 when there is one, and 0 when not.
  */
 static int console_fault(const struct judging *j, int panics, char *out, size_t size)
 {
@@ -1906,7 +1919,7 @@ static int console_fault(const struct judging *j, int panics, char *out, size_t 
             }
             for (end = i; end < len && c[end] != '\r' && c[end] != '\n'; end++) {
             }
-            if (panicked && panic_record(c + i, end - i)) {
+            if ((panicked && panic_record(c + i, end - i)) || report_record(c + i, end - i)) {
                 continue;
             }
             if (allowed != NULL && line_has(c + i, end - i, allowed)) {
