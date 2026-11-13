@@ -714,8 +714,9 @@ static void device_option(int fd)
     }
 }
 
-/** accept on a stream socket that never listened, and on a datagram socket,
- * is EINVAL. */
+/** accept on a stream socket that never listened is EINVAL, as Linux's
+ * inet_accept answers, and on a datagram socket EOPNOTSUPP, as its
+ * sock_no_accept answers. */
 static void invalid_accept(void)
 {
     unsigned long args[3];
@@ -732,7 +733,7 @@ static void invalid_accept(void)
         args[0] = (uint32_t)fd;
         args[1] = 0;
         args[2] = 0;
-        if (socketcall(SC_ACCEPT, args) != -EINVAL) {
+        if (socketcall(SC_ACCEPT, args) != (type == SOCK_STREAM ? -EINVAL : -EOPNOTSUPP)) {
             fail("accept did not refuse a socket that never listened");
         }
         sys_close(fd);

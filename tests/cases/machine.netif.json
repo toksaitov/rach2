@@ -217,7 +217,7 @@
         {"assertion_id": "second-back-up", "checks": "eth1 is brought back up, and the link dump reports it up", "source": "scenario"},
         {"assertion_id": "proc-net-dev", "checks": "/proc/net/dev names eth0 and eth1", "source": "scenario"},
         {"assertion_id": "bind-device", "checks": "SO_BINDTODEVICE takes eth1 and reads it back, answers ENODEV for eth9 and keeps eth1, and clears with an empty name", "source": "scenario"},
-        {"assertion_id": "invalid-accept", "checks": "accept on a stream socket that never listened and on a datagram socket answers EINVAL", "source": "scenario"},
+        {"assertion_id": "invalid-accept", "checks": "accept on a stream socket that never listened answers EINVAL, as Linux's inet_accept, and on a datagram socket EOPNOTSUPP, as its sock_no_accept", "source": "scenario"},
         {"assertion_id": "tcp-second-address", "checks": "both ends of a TCP connection to 10.0.3.5 have that address, and accept on either answers EINVAL", "source": "scenario"},
         {"assertion_id": "packet-names", "checks": "getsockname of a packet socket bound to no interface reports none and no hardware address, and of those bound to eth0 and eth1 the interface and its card's Ethernet address", "source": "scenario"},
         {"assertion_id": "packet-second-arp", "checks": "an ARP request for 10.0.3.2 sent through the packet socket bound to eth1 is answered on eth1, over Ethernet, to this machine or to everyone", "source": "scenario"},
