@@ -947,6 +947,22 @@ int ext2_fast_link(const struct ext2_mount *em, const struct ext2_node *n)
 }
 
 /**
+ * Report an inode's table block that cannot be read, when `rc` is -EIO, as
+ * Linux's `ext2_get_inode` reports it to `ext2_error` for a load and for a
+ * store alike (fs/ext2/inode.c:1348): logged with the inode and the block
+ * at byte `at`, and the mount's policy applied (`ext2_mark_error`). Any
+ * other `rc` is left to the caller. The caller holds no buffer.
+ */
+static void table_unread(struct ext2_mount *em, uint32_t ino, uint64_t at, int rc)
+{
+    if (rc == -EIO) {
+        klog(KLOG_WARN, "ext2", "inode %d: its table block %d cannot be read", (int)ino,
+             (int)(at >> em->block_shift));
+        ext2_mark_error(em);
+    }
+}
+
+/**
  * Load inode `ino` into `n`: its number checked against the count, its
  * table found through its group's descriptor. The first 128 bytes of the
  * slot are read, and of a larger slot the extra fields up to EXT2_LARGE;
@@ -983,10 +999,8 @@ static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n, 
     table = ext2_le32(em->gd + g * 32 + 8);
     at = (uint64_t)table * em->block_size + (uint64_t)index * em->inode_size;
     rc = ext2_read_bytes(em, at, raw, em->inode_size > EXT2_GOOD_OLD ? EXT2_LARGE : EXT2_GOOD_OLD);
-    if (rc == -EIO && report) {
-        klog(KLOG_WARN, "ext2", "inode %d: its table block %d cannot be read", (int)ino,
-             (int)(at >> em->block_shift));
-        ext2_mark_error(em);
+    if (report) {
+        table_unread(em, ino, at, rc);
     }
     if (rc != 0) {
         return rc;
@@ -2508,14 +2522,15 @@ int ext2_inode_encode(struct ext2_mount *em, struct ext2_node *n, uint8_t *raw, 
  * has not put in the cache yet, and the table block in the cache goes to the
  * device with any neighbour's sync. The drain encodes the node. A strict
  * mount drains the batch before any store but the batch's own
- * (`ext2_assert_writable`). A change of a field but the times sets
- * `n->dirty_meta` after the store, even on error so a retry covers any
- * dirty buffer left by the failed write. The superblock is listed among
- * `n`'s shared blocks when `large_file` is set for it. The caller holds
- * `n`'s lock, or has `n` alone, a new inode or one freed at its last put;
- * that keeps the slot's
- * bytes and the batch's hold on `n` from changing under the read, the batch
- * test and the write, so it needs no big lock. 0, or -errno.
+ * (`ext2_assert_writable`). A table block that cannot be read is reported
+ * to the mount's policy, as for a load (`table_unread`). A change of a
+ * field but the times sets `n->dirty_meta` after the store, even on error
+ * so a retry covers any dirty buffer left by the failed write. The
+ * superblock is listed among `n`'s shared blocks when `large_file` is set
+ * for it. The caller holds `n`'s lock, or has `n` alone, a new inode or one
+ * freed at its last put; that keeps the slot's bytes and the batch's hold
+ * on `n` from changing under the read, the batch test and the write, so it
+ * needs no big lock. 0, or -errno.
  */
 int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int how)
 {
@@ -2530,6 +2545,7 @@ int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int 
         inode_encode(em, n, raw);
     } else {
         rc = ext2_read_bytes(em, at, raw, len);
+        table_unread(em, n->ino, at, rc);
         if (rc != 0) {
             return rc;
         }
