@@ -153,6 +153,13 @@ unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value);
  * step no other processor's access comes between, and as a full barrier. */
 unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value);
 
+/** `arch_atomic_xchg` of a word as wide as a pointer, for a lock word that
+ * holds its holder's record. */
+uintptr_t arch_atomic_xchg_ptr(volatile uintptr_t *p, uintptr_t value);
+
+/** `arch_atomic_cmpxchg` of a word as wide as a pointer. */
+uintptr_t arch_atomic_cmpxchg_ptr(volatile uintptr_t *p, uintptr_t old, uintptr_t value);
+
 /**
  * Leave the current stack for the one ending at `sp`, allow interrupts, and
  * run `fn`, which does not return: how a process that ends hands its

@@ -78,6 +78,37 @@ unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
     *p = value;
     return was;
 }
+
+/** The compare-and-exchange of the mutex's word, on the host's one thread. */
+uintptr_t arch_atomic_cmpxchg_ptr(volatile uintptr_t *p, uintptr_t old, uintptr_t value)
+{
+    uintptr_t was = *p;
+
+    if (was == old) {
+        *p = value;
+    }
+    return was;
+}
+
+/** The exchange of the mutex's word, on the host's one thread. */
+uintptr_t arch_atomic_xchg_ptr(volatile uintptr_t *p, uintptr_t value)
+{
+    uintptr_t was = *p;
+
+    *p = value;
+    return was;
+}
+
+/** No hypervisor preempts the host's processors here. */
+int arch_cpu_preempted(int cpu)
+{
+    (void)cpu;
+    return 0;
+}
+
+/** A spinner's pause, which no row reaches (`sched_spin_pinned`). */
+void arch_relax(void)
+{}
 #include "ns_first.h"
 
 extern void *malloc(unsigned long n);
@@ -760,6 +791,18 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds)
     }
     if (wq == parked_on) {
         parked_wakes++;
+    }
+}
+
+/** A handoff of a mutex to the parked sibling, which runs as the row's own
+ * process, or to no one, counted as a wake of the sibling's queue. */
+void wq_wake_first(wait_queue_t *wq, void (*fn)(struct process *first, void *arg), void *arg)
+{
+    if (wq == parked_on) {
+        fn(current_proc, arg);
+        parked_wakes++;
+    } else {
+        fn(NULL, arg);
     }
 }
 

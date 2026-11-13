@@ -168,6 +168,16 @@ void wq_each_waiter(wait_queue_t *wq, void (*fn)(struct process *p, uint64_t arg
  */
 void wq_wake_all_deferred(wait_queue_t *wq, uint64_t *cpus);
 
+/**
+ * Call `fn` with the process of the oldest sleeper on `wq`, or NULL when no
+ * sleeper is on it, and `arg`, then make that sleeper alone runnable, all
+ * under the queue's lock, for a sleeping lock that hands itself to its
+ * oldest waiter, as Linux's __mutex_unlock_slowpath hands the mutex to its
+ * first waiter and wakes that one (kernel/locking/mutex.c:950-976). The
+ * others stay on the queue. `fn` must not sleep or take the queue's lock.
+ * Counts no wake for the pollers.
+ */
+void wq_wake_first(wait_queue_t *wq, void (*fn)(struct process *first, void *arg), void *arg);
 /** wq_wake for every kind of change: for a queue no poller watches, and for
  * a change of every kind, such as a close. */
 void wq_wake_all(wait_queue_t *wq);

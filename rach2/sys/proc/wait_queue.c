@@ -400,6 +400,41 @@ void wq_complete(wait_queue_t *wq, volatile int *done)
     irq_restore(flags);
 }
 
+/**
+ * The sleeper is taken off the queue under its lock before its wake, as
+ * `wq_wake_locked` takes each, and goes back on at the tail when it files
+ * itself again; a poller's record, which has no process, is passed over.
+ */
+void wq_wake_first(wait_queue_t *wq, void (*fn)(struct process *first, void *arg), void *arg)
+{
+    struct wq_waiter **link, *w = NULL;
+    uint64_t cpus = 0;
+    uint32_t flags;
+
+    if (!wq || !fn) {
+        return;
+    }
+    flags = irq_save();
+    wq_lock(wq);
+    for (link = &wq->head; *link; link = &(*link)->next) {
+        if ((*link)->proc) {
+            w = *link;
+            break;
+        }
+    }
+    fn(w ? w->proc : NULL, arg);
+    if (w) {
+        *link = w->next;
+        w->next = NULL;
+        if (w->proc->state == PROC_BLOCKED) {
+            wq_kick_add(&cpus, wq_ready(w->proc));
+        }
+    }
+    wq_unlock(wq);
+    wq_kick(cpus);
+    irq_restore(flags);
+}
+
 void wq_wake_all(wait_queue_t *wq)
 {
     wq_wake(wq, WQ_ALL);

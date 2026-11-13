@@ -15,20 +15,36 @@
  * the lock up in a full barrier before it looks for sleepers to wake, so
  * no wake is lost.
  * A sleep gives up the big lock, as every sleep does, and neither is taken
- * in an interrupt or under a spinlock.
+ * in an interrupt or under a spinlock. A record of zeroes is a free mutex.
  */
 /*
- * `locked` is 1 while the mutex is held and 0 while it is free, changed only
- * by an atomic exchange, so that a take that finds it free and a release
- * are one exchange each, as Linux's `__mutex_trylock_fast` and
- * `__mutex_unlock_fast` are one compare-and-exchange of `owner`
- * (kernel/locking/mutex.c:166-182). `owner` is written by the holder
- * alone: after its take and before its release.
+ * `owner` is the holder's record, a thread's or a processor's before the
+ * first thread, with MUTEX_HANDOFF in its low bit, and 0 while the mutex is
+ * free, changed only by an atomic exchange, as Linux's `owner` holds its
+ * task and flags (kernel/locking/mutex.c:52-78): a take that finds it free
+ * is one compare-and-exchange that records the holder with it, and a
+ * release that finds no flag is one more (mutex.c:166-182). Records are at
+ * least two bytes aligned, so the low bit is free for the flag.
+ *
+ * A taker that finds the mutex held spins while the holder runs on another
+ * processor and sleeps only when it does not, as Linux's
+ * `mutex_optimistic_spin` (mutex.c:441-510). `owner_cpu` is the processor
+ * the holder took the mutex on, a hint the spinner checks against what that
+ * processor runs (`sched_spin_on`). The spinners queue on `osq`, each on a
+ * record of its processor's, so that one at a time tries the lock word, as
+ * Linux's `osq_lock` (kernel/locking/osq_lock.c). A waiter that slept and,
+ * woken, finds the mutex taken again sets MUTEX_HANDOFF, and the holder's
+ * release then gives the mutex to the oldest sleeper instead of freeing it,
+ * as Linux's MUTEX_FLAG_HANDOFF (mutex.c:62-75, 920-976), so that spinners
+ * do not starve the sleepers.
  */
+#define MUTEX_HANDOFF 1u
+
 struct mutex {
-    volatile unsigned int locked; /* 1 while held */
-    const void *owner;            /* the holder's record, NULL while free */
-    wait_queue_t wq;              /* its waiters */
+    volatile uintptr_t owner;  /* the holder's record and MUTEX_HANDOFF, 0 while free */
+    volatile int owner_cpu;    /* the processor the holder took it on, -1 if not known */
+    volatile unsigned int osq; /* the last spinner's processor + 1, 0 with none */
+    wait_queue_t wq;           /* its sleepers */
 #ifdef RACH2_LOCKDEP
     struct lockdep_map dep; /* its class, for the lock-order checker */
 #endif
@@ -85,9 +101,11 @@ struct rwsem {
 void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key *key);
 
 /**
- * Take `m`, sleeping until it is free; a signal does not end the wait, as
- * Linux's `mutex_lock` sleeps in TASK_UNINTERRUPTIBLE (mutex.c:281). From
- * a context that may sleep, never with `m` held already.
+ * Take `m`, spinning while its holder runs on another processor and
+ * sleeping until it is free or handed over otherwise; a signal does not end
+ * the wait, as Linux's `mutex_lock` sleeps in TASK_UNINTERRUPTIBLE
+ * (mutex.c:281). From a context that may sleep, never with `m` held
+ * already.
  */
 void mutex_lock(struct mutex *m);
 
