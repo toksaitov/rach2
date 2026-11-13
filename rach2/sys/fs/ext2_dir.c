@@ -1587,6 +1587,48 @@ static int child_unlinked(struct ext2_mount *em, struct ext2_node *c)
 }
 
 /**
+ * Lower the link count of node `c`, whose lock the caller holds and one of
+ * whose names a change of an entry on the device has just removed: the
+ * inode freed, or stored with its count of 0, when no name is left
+ * (`child_unlinked`), and otherwise stored with its change time. The
+ * operation has happened once the entry is gone, so nothing here fails it,
+ * as Linux's `ext2_unlink` answers for the entry alone (fs/ext2/namei.c:
+ * 284-287): a store that fails keeps the node's mark, which its next store
+ * settles, at its last put at the latest, and a free that fails is made
+ * again at the last put, which logs one that fails there. Either failure
+ * was reported where it arose or is a device's.
+ */
+static void child_drop_link(struct ext2_mount *em, struct ext2_node *c)
+{
+    if (c->nlink > 0) {
+        nlink_set(c, c->nlink - 1);
+    }
+    if (c->nlink == 0) {
+        (void)child_unlinked(em, c);
+    } else {
+        ext2_stamp(c, T_CTIME);
+        (void)ext2_inode_store(em, c);
+    }
+}
+
+/**
+ * Lower the link count of directory `d`, one of whose subdirectories a
+ * change of an entry on the device has just removed or moved away, when
+ * `lose` is set and the count is above 2, and store `d` with its times. The
+ * entry is gone, so a failed store fails nothing: it keeps `d`'s mark, which
+ * its next store settles, at its last put at the latest; the failure was
+ * reported where it arose or is a device's.
+ */
+static void dir_lose_parent(struct ext2_mount *em, struct ext2_node *d, int lose)
+{
+    if (lose && d->nlink > 2) {
+        nlink_set(d, d->nlink - 1);
+    }
+    ext2_stamp(d, T_MTIME | T_CTIME);
+    (void)ext2_inode_store(em, d);
+}
+
+/**
  * The `create` of `vfs_ops`: a new regular file `name` in `dir`, the root for
  * NULL, with the permission bits of `mode`: the inode allocated and written
  * whole, then the entry that names it, then the directory's times into the
@@ -1726,8 +1768,10 @@ int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
  * holder shares, under its lock (`child_take`). The inode goes with its last
  * name when nothing else holds it, and at the last put otherwise, its count
  * of zero stored meanwhile, so that after a crash e2fsck and the check read
- * it as deleted (`child_unlinked`). The batch is drained first. The caller
- * holds the directory's lock. 0, -ENOENT, -EISDIR, -EROFS, or -errno.
+ * it as deleted (`child_unlinked`). Once the entry is gone the call has
+ * happened, and a failed store of the times or of the count fails nothing
+ * (`child_drop_link`). The batch is drained first. The caller holds the
+ * directory's lock. 0, -ENOENT, -EISDIR, -EROFS, or -errno.
  */
 int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 {
@@ -1757,18 +1801,8 @@ int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     rc = (n->mode & S_IFMT_) == S_IFDIR_ ? -EISDIR : dir_remove_at(em, d, at, prev, &sc);
     if (rc == 0) {
         ext2_stamp(d, T_MTIME | T_CTIME);
-        rc = ext2_inode_times_later(em, d);
-    }
-    if (rc == 0) {
-        if (n->nlink > 0) {
-            nlink_set(n, n->nlink - 1);
-        }
-        if (n->nlink == 0) {
-            rc = child_unlinked(em, n);
-        } else {
-            ext2_stamp(n, T_CTIME);
-            rc = ext2_inode_store(em, n);
-        }
+        (void)ext2_inode_times_later(em, d);
+        child_drop_link(em, n);
     }
     child_give(em, n);
     return rc;
@@ -1880,8 +1914,10 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
  * (`vfs_cover_lock`). One that a working directory or an open description
  * holds keeps its inode and its blocks until its last put, as an open file
  * does; nothing can be added to it, and a listing of it is -ENOENT, as on
- * Linux. The batch is drained first. The caller holds the parent's lock.
- * 0, -ENOENT, -ENOTDIR, -ENOTEMPTY, -EROFS, or -errno.
+ * Linux. Once the entry is gone the call has happened, and a failed store
+ * of the parent or the free of the inode fails nothing (`dir_lose_parent`,
+ * `child_unlinked`). The batch is drained first. The caller holds the
+ * parent's lock. 0, -ENOENT, -ENOTDIR, -ENOTEMPTY, -EROFS, or -errno.
  */
 int ext2_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 {
@@ -1918,14 +1954,8 @@ int ext2_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     if (rc == 0) {
         nlink_set(c, 0);
         c->unlinked = 1;
-        if (d->nlink > 2) {
-            nlink_set(d, d->nlink - 1);
-        }
-        ext2_stamp(d, T_MTIME | T_CTIME);
-        rc = ext2_inode_store(em, d);
-    }
-    if (rc == 0) {
-        rc = child_unlinked(em, c);
+        dir_lose_parent(em, d, 1);
+        (void)child_unlinked(em, c);
     }
     child_give(em, c);
     return rc;
@@ -1934,8 +1964,9 @@ int ext2_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 /**
  * The name `name` in directory `d` for the file `n`, for `ext2_link`, whose
  * caller holds both locks: the count raised and stored, then the name
- * written, then the directory's times. 0, -ENOENT for a file with no name
- * left, -EMLINK, -EEXIST, or -errno.
+ * written, then the directory's times, whose failed store, once the name is
+ * there, fails nothing and keeps the directory's mark. 0, -ENOENT for a file
+ * with no name left, -EMLINK, -EEXIST, or -errno.
  */
 static int link_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
                     struct ext2_node *n)
@@ -1970,7 +2001,8 @@ static int link_add(struct ext2_mount *em, struct ext2_node *d, const char *name
         return rc;
     }
     ext2_stamp(d, T_MTIME | T_CTIME);
-    return ext2_inode_times_later(em, d);
+    (void)ext2_inode_times_later(em, d);
+    return 0;
 }
 
 /**
@@ -2155,8 +2187,10 @@ struct ext2_rename_names {
  * when it is not NULL, for `ext2_rename`, whose caller holds every lock: the
  * victim removed as rmdir removes it, then the new entry, then `..` rewritten
  * and the new parent's count raised when the parents differ, then the old
- * entry removed and the old parent's count lowered. 0, -ENOENT, -EMLINK, or
- * -errno.
+ * entry removed and the old parent's count lowered. A failed store of a
+ * count or of times after an entry change is on the device fails nothing:
+ * the node keeps its mark, which its next store settles. 0, -ENOENT,
+ * -EMLINK, or -errno.
  */
 static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
                       struct ext2_node *victim, const struct ext2_scan *nsc, uint32_t nat,
@@ -2179,16 +2213,8 @@ static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
         }
         nlink_set(victim, 0);
         victim->unlinked = 1;
-        if (nd->nlink > 2) {
-            nlink_set(nd, nd->nlink - 1);
-        }
-        rc = ext2_inode_store(em, nd);
-        if (rc == 0) {
-            rc = child_unlinked(em, victim);
-        }
-        if (rc != 0) {
-            return rc;
-        }
+        dir_lose_parent(em, nd, 0);
+        (void)child_unlinked(em, victim);
     }
     rc = dir_add(em, nd, r->newname, n->ino, 2);
     if (rc != 0) {
@@ -2201,24 +2227,17 @@ static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
         }
         nlink_set(nd, nd->nlink + 1);
         ext2_stamp(nd, T_MTIME | T_CTIME);
-        rc = ext2_inode_store(em, nd);
-        if (rc != 0) {
-            return rc;
-        }
+        (void)ext2_inode_store(em, nd);
     }
     rc = dir_find(em, od, r->oldname, &oat, &oprev, &osc);
     if (rc <= 0) {
         return rc < 0 ? rc : -ENOENT;
     }
     rc = dir_remove_at(em, od, oat, oprev, &osc);
-    if (rc != 0) {
-        return rc;
+    if (rc == 0) {
+        dir_lose_parent(em, od, od != nd);
     }
-    if (od != nd && od->nlink > 2) {
-        nlink_set(od, od->nlink - 1);
-    }
-    ext2_stamp(od, T_MTIME | T_CTIME);
-    return ext2_inode_store(em, od);
+    return rc;
 }
 
 /**
@@ -2227,7 +2246,10 @@ static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
  * not NULL, for `ext2_rename`, whose caller holds every lock: the count
  * raised, the new entry written or the victim's entry pointed at `n`, the
  * victim's count lowered as unlink lowers it, the old entry removed and the
- * count lowered again. 0, -ENOENT, or -errno.
+ * count lowered again. A failed store of a count or of times after an entry
+ * change is on the device fails nothing: the node keeps its mark, which its
+ * next store settles, so a rename whose entries both changed succeeds. 0,
+ * -ENOENT, or -errno.
  *
  * The victim's entry takes `n`'s inode number and file type, 0 on a volume
  * without the filetype feature, in one write of its 8-byte header, as
@@ -2275,18 +2297,7 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
         if (rc != 0) {
             return rc;
         }
-        if (victim->nlink > 0) {
-            nlink_set(victim, victim->nlink - 1);
-        }
-        if (victim->nlink == 0) {
-            rc = child_unlinked(em, victim);
-        } else {
-            ext2_stamp(victim, T_CTIME);
-            rc = ext2_inode_store(em, victim);
-        }
-        if (rc != 0) {
-            return rc;
-        }
+        child_drop_link(em, victim);
     } else {
         rc = dir_add(em, nd, r->newname, n->ino, ext2_ftype_of(n->mode));
         if (rc != 0) {
@@ -2303,19 +2314,16 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
         return rc;
     }
     nlink_set(n, n->nlink - 1);
-    rc = ext2_inode_store(em, n);
-    if (rc != 0) {
-        return rc;
-    }
+    (void)ext2_inode_store(em, n);
     ext2_stamp(od, T_MTIME | T_CTIME);
-    rc = ext2_inode_store(em, od);
-    if (rc == 0 && od != nd) {
+    (void)ext2_inode_store(em, od);
+    if (od != nd) {
         ext2_node_dirty(nd);
         nd->mtime = ext2_time_fit(nd, EXT2_MTIME_EXTRA + 4, od->mtime.sec, od->mtime.nsec);
         nd->ctime = ext2_time_fit(nd, EXT2_CTIME_EXTRA + 4, od->mtime.sec, od->mtime.nsec);
-        rc = ext2_inode_store(em, nd);
+        (void)ext2_inode_store(em, nd);
     }
-    return rc;
+    return 0;
 }
 
 /**

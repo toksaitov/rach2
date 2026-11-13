@@ -3172,8 +3172,9 @@ static void inode_blocks_fetch(struct ext2_mount *em, const struct ext2_node *n)
  * its extended-attribute block (`ext2_attr_release`), then its bit and counts,
  * these two under their groups' locks with the blocks they read fetched
  * first, so that a lock waits on the disk only for a block evicted again.
- * The node's `unlinked` mark is cleared, and once the bit is free its
- * `unstored` mark, since nothing of it is left to store. Each step reads
+ * Once the slot is written zeroed the node's `unstored` mark is cleared,
+ * since nothing of it is left to store, and the `unlinked` mark before the
+ * bit is freed. Each step reads
  * through the reclaim reader (`ext2_read_reclaim`), which reports a damaged
  * or unread block and leaves what it holds taken, so a step returns only a
  * failed write, after which nothing further would land. 0, or -errno.
@@ -3200,6 +3201,7 @@ int ext2_release_inode(struct ext2_mount *em, struct ext2_node *n)
     if (rc != 0) {
         return rc;
     }
+    n->unstored = 0;
     inode_blocks_fetch(em, n);
     if (n->file_acl != 0) {
         rc = ext2_attr_release(em, n->ino, n->file_acl);
@@ -3207,9 +3209,6 @@ int ext2_release_inode(struct ext2_mount *em, struct ext2_node *n)
     if (rc == 0) {
         n->unlinked = 0;
         rc = ext2_inode_bit_free(em, n->ino, was_dir);
-    }
-    if (rc == 0) {
-        n->unstored = 0;
     }
     return rc;
 }
