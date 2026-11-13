@@ -1345,8 +1345,9 @@ mac_start()
 }
 
 # mac_launch ID AT: record that the Mac's run ID started, and start it at the
-# commit AT, detached, as `release.sh -m ID M AT`, under a hold.pl -g that
-# leads a process group of its own, in the run's own directory,
+# commit AT, detached, as `release.sh -m ID M AT`, under a hold.pl -g -D that
+# leads a process group of its own and outlives the release, whose own
+# holder's drain leaves it alone on Linux, in the run's own directory,
 # build/machines/mac/held/ID, made new, which the Mac's `run` file names with
 # ID before the start; the hold.pl sends the group TERM once that
 # directory's stop exists, and KILL half an hour later. No run starts while
@@ -1362,7 +1363,7 @@ mac_launch()
     { mkdir -p "$macdir/held" && mkdir "$ml_dir"; } || fail mac "$ml_dir cannot be made"
     { echo "$ml_dir $1" > "$macdir/run.new" && mv "$macdir/run.new" "$macdir/run"; } ||
         fail mac "$macdir/run cannot be written"
-    nohup perl "$repo/tools/flow/hold.pl" run -g -k 1800 "$ml_dir" sh "$repo/tools/flow/release.sh" \
+    nohup perl "$repo/tools/flow/hold.pl" run -g -D -k 1800 "$ml_dir" sh "$repo/tools/flow/release.sh" \
         -s "$state" -m "$1" "$milestone" "$2" > /dev/null 2>&1 < /dev/null 8>&- 9>&- &
     say "mac: started the run $1"
 }
@@ -3011,7 +3012,7 @@ restart()
             { mkdir -p "$state/held" && mkdir "$rs_dir"; } || later "$rs_dir cannot be made"
             { echo "$rs_dir" > "$state/windows.run.new" && mv "$state/windows.run.new" "$state/windows.run"; } ||
                 later "$state/windows.run cannot be written"
-            nohup perl "$repo/tools/flow/hold.pl" run -g -k 3600 "$rs_dir" sh "$repo/tools/flow/release.sh" \
+            nohup perl "$repo/tools/flow/hold.pl" run -g -D -k 3600 "$rs_dir" sh "$repo/tools/flow/release.sh" \
                 -s "$state" -w "$id" "$milestone" "$at" > /dev/null 2>&1 < /dev/null 8>&- 9>&- &
             say "windows: started the run $id" ;;
     esac

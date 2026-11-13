@@ -3,7 +3,7 @@
 # hold.pl: run a job as this process's child in a run directory of its own,
 # and be the only process that signals it.
 #
-# Usage: perl hold.pl run [-g] [-P] [-k SECONDS] DIR COMMAND...
+# Usage: perl hold.pl run [-g] [-P] [-D] [-k SECONDS] DIR COMMAND...
 #        perl hold.pl run [-P] [-k SECONDS] DIR -p PID
 #        perl hold.pl state DIR
 #        perl hold.pl stop DIR SECONDS
@@ -80,10 +80,19 @@
 # to each and to the group on every turn, since a child that a KILL ends
 # hands its own children to the holder. It reaps the anchor last, once ps
 # shows nothing else in its group, and ends the drain only once waitpid finds
-# no child at all: a drain that it confirms, since only it reaps them and no
-# number it signals can have passed to another process. On the Mac, which
-# has no subreaper, a process that leaves the group escapes the holder, and
-# stop.sh lists such a process without signalling it.
+# no child at all, or each child left is a detached holder, below: a drain
+# that it confirms, since only it reaps them and no number it signals can
+# have passed to another process. On the Mac, which has no subreaper, a
+# process that leaves the group escapes the holder, and stop.sh lists such a
+# process without signalling it.
+#
+# With -D the run is detached: it is started in the background to outlive the
+# job that started it, as release.sh's run on the Mac outlives the release
+# that waits for it, and has a stop of its own. A holder whose drain adopts
+# such a holder on Linux, once the job above it has ended, leaves it and its
+# group alone: it knows one by its command line in /proc, a hold.pl run with
+# -D, neither signals it nor waits for it, and reaps it if it ends first. The
+# orphans of a detached run go to its own holder, a subreaper too.
 #
 # The holder then writes DIR/end and exits with the job's status; 143 when a
 # stop came before the job ran, and 125 when DIR/live could not be taken, or
@@ -131,7 +140,7 @@ use Errno qw(ENOENT EWOULDBLOCK EINTR ECHILD);
 use Fcntl qw(:flock O_CREAT O_EXCL O_RDWR O_WRONLY);
 use POSIX qw(WNOHANG);
 
-my $usage = "usage: hold.pl run [-g] [-P] [-k SECONDS] DIR COMMAND... | run [-P] [-k SECONDS] DIR -p PID | " .
+my $usage = "usage: hold.pl run [-g] [-P] [-D] [-k SECONDS] DIR COMMAND... | run [-P] [-k SECONDS] DIR -p PID | " .
     "state DIR | stop DIR SECONDS | clear [-n] ROOT...\n";
 
 # create FILE TEXT: create FILE holding TEXT whole, by a link that fails when
@@ -323,10 +332,12 @@ if ($mode eq 'clear') {
 $mode eq 'run' or die $usage;
 
 my ($group, $bound, $orphan) = ('', 300, '');
-while (@ARGV && $ARGV[0] =~ /^-[gkP]$/) {
+while (@ARGV && $ARGV[0] =~ /^-[gkPD]$/) {
     my $o = shift;
     if ($o eq '-g') {
         $group = 1;
+    } elsif ($o eq '-D') {
+        # Read only by a holder above, from the command line.
     } elsif ($o eq '-P') {
         $orphan = getppid();
     } else {
@@ -506,6 +517,24 @@ sub children
     return \@kids;
 }
 
+# detached PID: succeed when the process PID is a detached holder, a
+# `hold.pl run` with -D among its options, as /proc/PID/cmdline shows it.
+sub detached
+{
+    open(my $f, '<', "/proc/$_[0]/cmdline") or return 0;
+    local $/;
+    my @arg = split(/\0/, <$f> // '');
+    shift(@arg) while @arg && $arg[0] !~ m{(^|/)hold\.pl$};
+    shift(@arg);
+    return 0 unless @arg && shift(@arg) eq 'run';
+    while (@arg && $arg[0] =~ /^-[gkPD]$/) {
+        my $o = shift(@arg);
+        return 1 if $o eq '-D';
+        shift(@arg) if $o eq '-k';
+    }
+    return 0;
+}
+
 # Once the job has ended, the drain of what it left, as the header says. The
 # turns count on from a stop's, so that the KILL comes SECONDS after the
 # stop's TERM, not after the job's end.
@@ -519,7 +548,7 @@ while ($anchor || $reaper) {
         waitpid($_, WNOHANG) for grep { $_ != $anchor } @$kids;
         $kids = children();
     }
-    my @left = grep { $_ != $anchor } @{$kids // []};
+    my @left = grep { $_ != $anchor && !detached($_) } @{$kids // []};
     my $n = $anchor ? members($anchor, $anchor) : 0;
     if (defined $n && $n == 0 && $kids && !@left) {
         if ($anchor) {
@@ -531,6 +560,9 @@ while ($anchor || $reaper) {
         my $r = waitpid(-1, WNOHANG);
         last if $r < 0 && $! == ECHILD;
         next if $r > 0;
+        # Children remain; the drain ends when each is a detached holder.
+        my $now = children();
+        last if $r == 0 && $now && !grep { !detached($_) } @$now;
     }
     print STDERR "hold: the job left processes behind; stopping them\n" if !$told++;
     # Each number here is an unreaped child, or the anchor's group while the
