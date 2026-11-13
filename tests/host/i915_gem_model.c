@@ -852,7 +852,7 @@ void wq_wake_all(wait_queue_t *wq)
 
 /** A sleep: the call the test named runs (`during_wait`), and then the
  * fence the test named signals, or the clock reaches the sleeper's
- * timeout. */
+ * timeout, a tick count of TICK_NS each, without running backward. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -866,7 +866,11 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
         dma_fence_signal(signal_on_wait);
         signal_on_wait = 0;
     } else {
-        now_ns = (int64_t)current_proc->wakeup_tick * 1000000;
+        int64_t wake_ns = (int64_t)current_proc->wakeup_tick * TICK_NS;
+
+        if (wake_ns > now_ns) {
+            now_ns = wake_ns;
+        }
     }
     (void)cond;
     (void)arg;

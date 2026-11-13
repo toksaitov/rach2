@@ -992,7 +992,7 @@ static void copy_refit(void)
 /* The tick at which a timed row's read begins, and the ticks of a tenth of
  * a second, VTIME's unit. */
 #define T0 1000u
-#define V  TTY_TICKS_PER_VTIME
+#define V  MS_TO_TICKS(TTY_VTIME_MS)
 
 /* A step of a timed row, run while the reader waits: the tick it runs at,
  * the bytes that arrive then, or NULL for the timer's wake, and the deadline

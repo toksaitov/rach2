@@ -10,6 +10,14 @@ int i915_gem_lock(struct drm_i915_private *i915)
     return 0;
 }
 
+/** Try the GEM lock: always had, and nothing to give back. */
+int i915_gem_trylock(struct drm_i915_private *i915, int *taken)
+{
+    (void)i915;
+    *taken = 0;
+    return 1;
+}
+
 /** Give the GEM lock back. */
 void i915_gem_unlock(struct drm_i915_private *i915, int taken)
 {

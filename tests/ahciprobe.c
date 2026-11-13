@@ -150,12 +150,19 @@ static int count_for_named(const char *name, const char *file)
             continue;
         }
         p++;
-        while (*p == ' ' || *p == '\t') {
-            p++;
-        }
-        while (*p >= '0' && *p <= '9') {
-            count = count * 10 + (*p - '0');
-            p++;
+        for (;;) {
+            int value = 0;
+
+            while (*p == ' ' || *p == '\t') {
+                p++;
+            }
+            if (*p < '0' || *p > '9') {
+                break;
+            }
+            while (*p >= '0' && *p <= '9') {
+                value = value * 10 + (*p++ - '0');
+            }
+            count += value;
         }
         for (q = p; *q && *q != '\n'; q++) {
             int k;

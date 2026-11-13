@@ -1,0 +1,22 @@
+== rach2/freq-freq.txt
+window 319.5 ms
+gt_act_freq_mhz: 16 samples, min 200, median 200, mean 234, max 650
+== rach2/freq-pin.txt
+window 312.3 ms
+gt_act_freq_mhz: 14 samples, min 200, median 200, mean 204, max 250
+== linux/freq-linux2-freq-1.txt
+window 233.8 ms
+gt_act_freq_mhz: 11 samples, min 200, median 450, mean 418, max 500
+== linux/freq-linux2-freq-2.txt
+window 255.4 ms
+gt_act_freq_mhz: 12 samples, min 200, median 500, mean 425, max 650
+== linux/freq-linux2-trace.txt
+window 360.1 ms
+gt_act_freq_mhz: 17 samples, min 200, median 200, mean 200, max 200
+
+i915 interrupts over each window, from the raw samples' /proc/interrupts (Rach2's has one count per line; Linux's one per processor):
+rach2-freq: i915 interrupts from 14.2 ms before to 23.5 ms after: [1006]
+rach2-pin: i915 interrupts from 1.1 ms before to 13.6 ms after: [1004]
+linux2-freq-1: i915 interrupts from 0.1 ms before to 15.2 ms after: [1014, 0, 0, 0]
+linux2-freq-2: i915 interrupts from 12.6 ms before to 2.1 ms after: [1017, 0, 0, 0]
+linux2-trace: i915 interrupts from 2.3 ms before to 14.7 ms after: [1015, 0, 0, 0]

@@ -277,8 +277,13 @@ int32_t smp_calls_show(void *data, char *buf, uint32_t cap);
  * the thread they count from now on: the thread whose ID is TID for a
  * write of `thread TID`, each thread named NAME for `thread NAME`, a name
  * of up to 15 bytes that is not all digits, and every thread for any other
- * write. `len`, or -EINVAL for a `thread` write with no name or one too
- * long. Takes the run queues' lock, under which switches are noted.
+ * write; a name of digits alone is a TID, and -EINVAL past 2147483647.
+ * `len`, or -EINVAL for a `thread` write with no name or one too long. The
+ * caller holds the big lock, under which holds are counted, and the hold
+ * under way, begun before the zeroing, counts in none. Takes the run
+ * queues' lock, under which switches are noted; the processors' call
+ * tallies, which count without either lock, start again at their next
+ * count in a new generation.
  */
 int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len);
 

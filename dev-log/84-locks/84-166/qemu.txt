@@ -1,0 +1,62 @@
+## rach2-after
+> exec /musl/wakemusl 2000 50 busy
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 2000 rounds
+wakemusl: futex wake onto a spinning thread's processor after 50 us: wake to run mean 10.020 us, median 7.815, p90 11.662, p99 26.601; waker's call 4.980 us
+wakemusl: two futex wakes in one call, last processors busy, after 50 us: 1 of 2000 rounds on one processor, 1997 with a spinner preempted
+wakemusl: two wakes, processors run on: 0 0, 1 1353, 2 1333, 3 1314, other 0
+wakemusl: two wakes, first to run: mean 7.133 us, median 6.702, p90 8.816, p99 15.760
+wakemusl: two wakes, second to run: mean 10.641 us, median 8.556, p90 14.357, p99 32.431
+WAKEMUSL OK
+## rach2-before
+> exec /musl/wakemusl 2000 50 busy
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 2000 rounds
+wakemusl: futex wake onto a spinning thread's processor after 50 us: wake to run mean 828.345 us, median 871.952, p90 966.881, p99 3952.728; waker's call 0.649 us
+wakemusl: two futex wakes in one call, last processors busy, after 50 us: 1996 of 2000 rounds on one processor, 0 with a spinner preempted
+wakemusl: two wakes, processors run on: 0 2, 1 1997, 2 1995, 3 6, other 0
+wakemusl: two wakes, first to run: mean 9.246 us, median 5.901, p90 10.961, p99 24.617
+wakemusl: two wakes, second to run: mean 30.444 us, median 26.770, p90 31.960, p99 51.938
+WAKEMUSL OK
+## rach2-after-idle
+> exec /musl/wakemusl 20000 50
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.067 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.067 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.067 us a call
+wakemusl: sched_yield, sibling idle: 0.041 us a call
+wakemusl: sched_yield, sibling spins: 0.041 us a call
+wakemusl: sched_yield, sibling yields: 0.041 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.179 us a call
+wakemusl: futex wake after 50 us: wake to run mean 6.209 us, median 5.631, p90 7.675, p99 14.718; waker's call 4.313 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 6.238 us, median 5.631, p90 7.835, p99 15.559; waker's call 4.320 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 6.394 us, median 5.730, p90 8.035, p99 17.302; waker's call 4.436 us
+wakemusl: futex hand-off and back after 50 us: 12.261 us a round
+WAKEMUSL OK
+## rach2-before-idle
+> exec /musl/wakemusl 20000 50
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 20000 rounds
+wakemusl: getrusage(RUSAGE_THREAD), sibling idle: 0.067 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling spins: 0.067 us a call
+wakemusl: getrusage(RUSAGE_THREAD), sibling yields: 0.068 us a call
+wakemusl: sched_yield, sibling idle: 0.040 us a call
+wakemusl: sched_yield, sibling spins: 0.041 us a call
+wakemusl: sched_yield, sibling yields: 0.041 us a call
+wakemusl: yield turn (getrusage, sched_yield, getrusage), sibling spins: 0.178 us a call
+wakemusl: futex wake after 50 us: wake to run mean 6.123 us, median 5.500, p90 7.514, p99 14.978; waker's call 4.187 us
+wakemusl: eventfd write to epoll_pwait2 after 50 us: wake to run mean 6.132 us, median 5.581, p90 7.815, p99 14.678; waker's call 4.221 us
+wakemusl: pipe write to epoll_pwait2 after 50 us: wake to run mean 6.487 us, median 5.751, p90 8.005, p99 15.930; waker's call 4.373 us
+wakemusl: futex hand-off and back after 50 us: 12.816 us a round
+WAKEMUSL OK
+## linux
+linux: 6.12.107+deb13-cloud-amd64 console=ttyS0 quiet wake="2000 50 busy"
+linux: cpu0 package 0 l3 0-3
+linux: cpu1 package 0 l3 0-3
+linux: cpu2 package 0 l3 0-3
+linux: cpu3 package 0 l3 0-3
+wakemusl: 4 processors, 4192.0 cycles a microsecond, 2000 rounds
+wakemusl: futex wake onto a spinning thread's processor after 50 us: wake to run mean 12.933 us, median 8.156, p90 10.921, p99 18.074; waker's call 5.376 us
+wakemusl: two futex wakes in one call, last processors busy, after 50 us: 2 of 2000 rounds on one processor, 1997 with a spinner preempted
+wakemusl: two wakes, processors run on: 0 2, 1 1017, 2 1490, 3 1491, other 0
+wakemusl: two wakes, first to run: mean 9.530 us, median 6.483, p90 10.079, p99 28.084
+wakemusl: two wakes, second to run: mean 74.368 us, median 12.484, p90 16.982, p99 3694.478
+WAKEMUSL OK
+linux: done

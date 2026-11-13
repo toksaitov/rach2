@@ -158,6 +158,20 @@ void kunmap_temp(void *va)
     (void)va;
 }
 
+/** The pool page of the frame at `phys`, as `kmap_temp` gives it. */
+void *kmap_cpu(uintptr_t phys, uint32_t *flags)
+{
+    *flags = 0;
+    return pool[frame_index(phys)];
+}
+
+/** End a map `kmap_cpu` made, which has nothing to undo. */
+void kunmap_cpu(void *va, uint32_t flags)
+{
+    (void)va;
+    (void)flags;
+}
+
 /** Zero the frame at `phys`. Returns 0. */
 int paging_zero_frame(uintptr_t phys)
 {

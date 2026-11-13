@@ -6,6 +6,8 @@
  */
 
 #include "apictimer.h"
+#include "smpboot.h"
+#include "../../pci.h"
 #include "ioapic.h"
 #include "lapic.h"
 #include "../../klog.h"
@@ -18,6 +20,7 @@
 #include "../../lib/ksignal.h"
 #include "../../lib/kirq.h"
 #include "../../lib/kstring.h"
+#include "../../lib/spinlock.h"
 #include "../../proc/process.h"
 #include "../../proc/ptrace.h"
 #include "../../proc/rseq.h"
@@ -65,6 +68,10 @@ static volatile uint32_t irq_count = 0;
 /* One count per vector this kernel takes interrupts on, 32 to ISR_MSI_LAST,
  * which is what /proc/interrupts reports. */
 static volatile uint32_t vector_count[ISR_MSI_LAST - 31];
+/* Messages acknowledged at entry but whose chain has not finished. */
+static volatile uint32_t vector_active[256];
+static volatile uint32_t cpu_vector_count[NR_CPUS][ISR_MSI_LAST - 31];
+static struct spinlock handler_lock = SPINLOCK_INIT_NAMED("isr_handlers");
 
 /*
  * Each vector has a short chain of handlers, so that devices that share one
@@ -502,6 +509,16 @@ static void count_up(volatile uint32_t *count)
     } while (arch_atomic_cmpxchg(count, n, n + 1u) != n);
 }
 
+/** Complete one message entry, which may have resumed on another CPU. */
+static void count_down(volatile uint32_t *count)
+{
+    uint32_t n;
+
+    do {
+        n = *count;
+    } while (arch_atomic_cmpxchg(count, n, n - 1u) != n);
+}
+
 /** Set `vector`'s mark from its chain: nonzero when it has a handler and
  * every handler on it carries ISR_UNLOCKED. Called with the big lock held,
  * after a change of the chain or its flags. */
@@ -618,8 +635,10 @@ int isr_alloc_vector_aligned(int align)
 void isr_free_vector(int vector)
 {
     int i;
+    uint32_t flags = spin_lock_irqsave(&handler_lock);
 
-    if (!vector_give(vector)) {
+    if (!vector_taken(vector)) {
+        spin_unlock_irqrestore(&handler_lock, flags);
         return;
     }
     vector_relock((uint8_t)vector);
@@ -628,6 +647,8 @@ void isr_free_vector(int vector)
         _isr_names[vector][i] = 0;
         _isr_flags[vector][i] = 0;
     }
+    (void)vector_give(vector);
+    spin_unlock_irqrestore(&handler_lock, flags);
 }
 
 /**
@@ -642,9 +663,11 @@ void isr_free_vector(int vector)
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {
     int i;
+    uint32_t irqflags = spin_lock_irqsave(&handler_lock);
 
     for (i = 0; i < ISR_MAX_VECTOR_HANDLERS; i++) {
         if (_isr_handlers[vector][i] == handler) {
+            spin_unlock_irqrestore(&handler_lock, irqflags);
             return;
         }
     }
@@ -655,31 +678,38 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
             _isr_handlers[vector][i] = handler;
             _isr_names[vector][i] = name;
             vector_registered(vector);
+            spin_unlock_irqrestore(&handler_lock, irqflags);
             return;
         }
     }
     klog(KLOG_ERR, "isr", "handler: vector %d chain full", vector);
+    spin_unlock_irqrestore(&handler_lock, irqflags);
 }
 
 void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flags)
 {
     int i;
+    uint32_t irqflags = spin_lock_irqsave(&handler_lock);
 
     for (i = 0; i < ISR_MAX_VECTOR_HANDLERS; i++) {
         if (_isr_handlers[vector][i] == handler && handler != 0) {
             _isr_flags[vector][i] = (uint8_t)flags;
             vector_unlocked(vector);
+            spin_unlock_irqrestore(&handler_lock, irqflags);
             return;
         }
     }
     klog(KLOG_ERR, "isr", "handler: not on vector %d's chain", vector);
+    spin_unlock_irqrestore(&handler_lock, irqflags);
 }
 
 void exception_unlock(uint8_t vector)
 {
     int i;
+    uint32_t irqflags = spin_lock_irqsave(&handler_lock);
 
     if (vector >= 32) {
+        spin_unlock_irqrestore(&handler_lock, irqflags);
         return;
     }
     for (i = 0; i < ISR_MAX_VECTOR_HANDLERS; i++) {
@@ -688,6 +718,7 @@ void exception_unlock(uint8_t vector)
         }
     }
     vector_unlocked(vector);
+    spin_unlock_irqrestore(&handler_lock, irqflags);
 }
 
 /**
@@ -700,6 +731,7 @@ void exception_unlock(uint8_t vector)
 void set_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {
     int i;
+    uint32_t irqflags = spin_lock_irqsave(&handler_lock);
 
     vector_relock(vector);
     _isr_flags[vector][0] = 0;
@@ -711,6 +743,7 @@ void set_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
         _isr_flags[vector][i] = 0;
     }
     vector_registered(vector);
+    spin_unlock_irqrestore(&handler_lock, irqflags);
 }
 
 /**
@@ -721,14 +754,39 @@ void set_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
  */
 static void _dispatch(isr_params_t *params)
 {
-    int i;
-    isr_handler_t handler;
+    isr_handler_t handlers[ISR_MAX_VECTOR_HANDLERS];
+    uint32_t flags;
+    int i, needs_lock = 0, took_lock = 0;
 
-    for (i = 0; i < ISR_MAX_VECTOR_HANDLERS; i++) {
-        handler = _isr_handlers[params->vector][i];
-        if (handler) {
-            handler(params);
+    if (params->vector == 2 || params->vector == 8 || params->vector == 18) {
+        /* These chains are immutable once processors take NMIs. */
+        for (i = 0; i < ISR_MAX_VECTOR_HANDLERS; i++) {
+            if (_isr_handlers[params->vector][i]) {
+                _isr_handlers[params->vector][i](params);
+            }
         }
+        return;
+    }
+    flags = spin_lock_irqsave(&handler_lock);
+    for (i = 0; i < ISR_MAX_VECTOR_HANDLERS; i++) {
+        handlers[i] = _isr_handlers[params->vector][i];
+        if (handlers[i] && !(_isr_flags[params->vector][i] & ISR_UNLOCKED)) {
+            needs_lock = 1;
+        }
+    }
+    spin_unlock_irqrestore(&handler_lock, flags);
+    if (needs_lock && params->vector > IRQ_VECTOR(0) && params->vector <= ISR_MSI_LAST &&
+        params->vector != ISR_SYSCALL_VECTOR && !this_cpu()->bkl_depth) {
+        bkl_enter();
+        took_lock = 1;
+    }
+    for (i = 0; i < ISR_MAX_VECTOR_HANDLERS; i++) {
+        if (handlers[i]) {
+            handlers[i](params);
+        }
+    }
+    if (took_lock) {
+        bkl_exit();
     }
 }
 
@@ -1135,6 +1193,14 @@ int arch_irq_waiting(void)
     return 0;
 }
 
+/** Keep a PCI message pending in software until its chain completes. */
+static void message_enter(uint32_t vector, int timer)
+{
+    if (!timer && vector >= ISR_MSI_FIRST && vector <= ISR_MSI_LAST) {
+        count_up(&vector_active[vector]);
+    }
+}
+
 /**
  * Take the big lock, unless every handler of the chain runs without it
  * (`isr_register_flags`) or the vector is the tick's, count a device's
@@ -1227,6 +1293,7 @@ void _irq_router(isr_params_t *params)
     uintptr_t fp = (uintptr_t)params->ebp;
 #endif
 
+    message_enter(params->vector, timer);
     user_entry(params);
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);
@@ -1241,6 +1308,7 @@ void _irq_router(isr_params_t *params)
     if (!timer_kind) {
         count_up(&irq_count);
         count_up(&vector_count[params->vector - 32]);
+        count_up(&cpu_vector_count[arch_cpu_id()][params->vector - 32]);
         bkl_frame_push(0); /* isr_leave pops it as a tick's without the lock */
         return;
     }
@@ -1270,6 +1338,7 @@ void _irq_router(isr_params_t *params)
     count_up(&irq_count);
     if (params->vector >= 32 && params->vector <= ISR_MSI_LAST) {
         count_up(&vector_count[params->vector - 32]);
+        count_up(&cpu_vector_count[arch_cpu_id()][params->vector - 32]);
     }
 
 #ifdef DEBUG
@@ -1278,6 +1347,9 @@ void _irq_router(isr_params_t *params)
 
     if (params->vector >= 48) {
         irq_dispatch_edge(params);
+        if (!timer) {
+            count_down(&vector_active[params->vector]);
+        }
         sched_tick(); /* a woken reader runs now, or at the call's exit */
         return;
     }
@@ -1331,10 +1403,25 @@ uint32_t isr_vector_count(int vector)
  */
 const char *isr_vector_name(int vector, int slot)
 {
+    uint32_t flags;
+    const char *name;
+
     if (vector < 0 || vector >= 256 || slot < 0 || slot >= ISR_MAX_VECTOR_HANDLERS) {
         return 0;
     }
-    return _isr_names[vector][slot];
+    flags = spin_lock_irqsave(&handler_lock);
+    name = _isr_names[vector][slot];
+    spin_unlock_irqrestore(&handler_lock, flags);
+    return name;
+}
+
+/** Read the count owned by one processor, zero outside the table. */
+uint32_t isr_vector_cpu_count(int vector, int cpu)
+{
+    if (vector < 32 || vector > ISR_MSI_LAST || cpu < 0 || cpu >= NR_CPUS) {
+        return 0;
+    }
+    return cpu_vector_count[cpu][vector - 32];
 }
 
 /** Every interrupt routed since the boot, for /proc/stat's `intr` line. */
@@ -1366,17 +1453,70 @@ int isr_msi_ready(void)
 int isr_line_pending(int line)
 {
     if (lines_apic) {
-        return lapic_requested((uint8_t)IRQ_VECTOR(line)) || ioapic_line_pending(line);
+        return isr_vector_pending(IRQ_VECTOR(line)) || ioapic_line_pending(line);
     }
     return pic_irq_pending((uint8_t)line);
 }
 
+/* A synchronous APIC query; only the callback writes pending. */
+struct pending_query {
+    uint8_t vector;
+    int pending;
+};
+
+/** Read only this processor's controller; no locks or big lock are taken. */
+static void pending_on_cpu(void *arg)
+{
+    struct pending_query *q = arg;
+
+    q->pending = lapic_pending(q->vector);
+}
+
+/** Read every online controller, since a migrated vector can still be
+ * pending on a previous destination. An acknowledged entry waiting for
+ * the big lock or running its chain remains pending in vector_active. */
 int isr_vector_pending(int vector)
 {
-    return lapic_pending((uint8_t)vector);
+    struct pending_query q;
+    int c;
+
+    if (vector < 0 || vector >= 256) {
+        return 0;
+    }
+    if (vector_active[vector] || lapic_pending((uint8_t)vector)) {
+        return 1;
+    }
+    q.vector = (uint8_t)vector;
+    for (c = 0; c < NR_CPUS; c++) {
+        if (c == (int)arch_cpu_id() || !cpu_table[c].online) {
+            continue;
+        }
+        q.pending = 0;
+        smp_call(c, pending_on_cpu, &q);
+        if (q.pending || vector_active[vector]) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 uint32_t isr_spurious_count(void)
 {
     return lapic_spurious_count();
+}
+
+/** Forward PCI messages pending at normal shutdown, after PCI has moved
+ * their destinations, before the processor halts. No lock is taken, so
+ * a panic's NMI stop can call this too, with no shutdown table published. */
+void isr_cpu_offline(void)
+{
+    int v;
+
+    for (v = ISR_MSI_FIRST; v <= ISR_MSI_LAST; v++) {
+        int cpu = pci_msi_stop_target(v);
+
+        if (cpu >= 0 && cpu != (int)arch_cpu_id() && lapic_pending((uint8_t)v)) {
+            lapic_send_ipi(smpboot_apic_id(cpu), (uint8_t)v);
+        }
+    }
 }

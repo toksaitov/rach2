@@ -41,6 +41,7 @@
 #include "ipc/pipe.h"
 #include "ipc/mqueue.h"
 #include "io/poll.h"
+#include "io/epoll.h"
 #include "tty/tty.h"
 #include "tty/pty.h"
 #include "rtc.h"
@@ -432,7 +433,9 @@ static void fd_close_locks(const fd_entry_t *e)
  * Which descriptor is the last is decided in one atomic step on the count
  * (`fd_ofd_unref_unless_last`), since two descriptors of one description
  * may close at once in two tables, one of them without the big lock; the
- * last releases the objects and then ends the description. The
+ * last takes the description's epoll registrations off the queues of what
+ * it names (`epoll_release_file`), before the socket's reference goes,
+ * releases the objects and then ends the description. The
  * framebuffer's close drops one open description's ownership reference
  * (display/fbdev.c). The socket reference is counted for each descriptor
  * (`socket_ref` on dup and fork) and is dropped every time. No descriptor
@@ -446,11 +449,17 @@ static void fd_close_locks(const fd_entry_t *e)
  */
 static void fd_release_objects(fd_entry_t *e)
 {
+    int last;
+
     fd_release_orphan(e);
+    last = e->ofd && !fd_ofd_unref_unless_last(e->ofd);
+    if (last) {
+        epoll_release_file(e->ofd);
+    }
     if (e->type == FD_TYPE_SOCKET && e->sock) {
         socket_unref(e->sock);
     }
-    if (!e->ofd || fd_ofd_unref_unless_last(e->ofd)) {
+    if (!last) {
         return;
     }
     if ((e->type == FD_TYPE_SYNTH_DIR || e->type == FD_TYPE_SYNTH_PATH) && e->priv) {
@@ -2656,6 +2665,7 @@ static void ofd_record_path(struct open_file *ofd, const char *name)
 }
 
 static int32_t synth_open_dir(const struct vpath *vp, int flags);
+static int synth_kind_is_dir(int kind);
 static uint32_t synth_pid_dir_mode(const struct vpath *vp);
 
 /** Whether `m` is one of the permanent mounts (VFS_PERMANENT), the system's
@@ -3218,6 +3228,8 @@ static int32_t proc_fd_reopen_device(fd_entry_t *src, int flags)
     return rc != 0 ? rc : devfs_open(name, flags);
 }
 
+static int32_t proc_fd_open_from(const struct vpath *vp, process_t *p, fd_entry_t *src, int flags);
+
 /**
  * open(2) of /proc/PID/fd/N, which /dev/fd/N, /dev/stdin, /dev/stdout and
  * /dev/stderr are for the caller, following the link to what the descriptor
@@ -3232,8 +3244,6 @@ static int32_t proc_fd_reopen_device(fd_entry_t *src, int flags)
  * the new descriptor, or a negative errno: an error of `proc_fd_entry`,
  * -EACCES, -ENOTDIR, or the open's.
  */
-static int32_t proc_fd_open_from(const struct vpath *vp, process_t *p, fd_entry_t *src, int flags);
-
 static int32_t proc_fd_open(const struct vpath *vp, int flags)
 {
     process_t *p;
@@ -3362,6 +3372,9 @@ static int32_t synth_open_root(const struct vpath *vp, int flags, uint32_t mode,
  */
 static int32_t synth_open(const struct vpath *vp, int flags)
 {
+    if (synth_kind_is_dir(vp->kind)) {
+        return synth_open_dir(vp, flags);
+    }
     switch (vp->kind) {
     case VNODE_DEV: {
         uint32_t dmode, uid, gid;
@@ -3410,6 +3423,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_AUDIO:
     case VNODE_PROC_USB:
     case VNODE_PROC_FILESYSTEMS:
+    case VNODE_PROC_IRQ_FILE:
     case VNODE_PROC_INTERRUPTS:
     case VNODE_PROC_CONSOLE:
     case VNODE_PROC_NET_ROUTE:
@@ -3424,24 +3438,6 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         return synth_open_root(vp, flags, 0400u, CRED_R);
     case VNODE_PROC_ACPI_CALL:
         return synth_open_root(vp, flags, 0600u, open_want(flags));
-    case VNODE_DEV_DIR:
-    case VNODE_PTS_DIR:
-    case VNODE_DEV_SUBDIR:
-    case VNODE_PROC_DIR:
-    case VNODE_PROC_ACPI_DIR:
-    case VNODE_PROC_FS_DIR:
-    case VNODE_PROC_NET_DIR:
-    case VNODE_PROC_NET_STAT_DIR:
-    case VNODE_PROC_SYSVIPC_DIR:
-    case VNODE_PROC_SYS_DIR:
-    case VNODE_PROC_PID:
-    case VNODE_PROC_FD_DIR:
-    case VNODE_PROC_FDINFO_DIR:
-    case VNODE_PROC_TASK_DIR:
-    case VNODE_PROC_NS_DIR:
-    case VNODE_SYS_DIR:
-    case VNODE_SYS_LINK:
-        return synth_open_dir(vp, flags);
     case VNODE_DEV_MADE:
         return devtree_is_dir(vp->syskey) == 1 ? synth_open_dir(vp, flags) : -ENOENT;
     case VNODE_ENOTDIR:
@@ -3524,6 +3520,21 @@ static int32_t proc_fd_dir_access(int kind, int pid, int want, const struct synt
     return cred_access_bits(uid, gid, 0500, want, 0);
 }
 
+/** Whether a device directory or message directory still exists at open. */
+static int synth_dir_present(const struct vpath *vp)
+{
+    if ((vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) && SYSFS_KEYED(vp->sysent)) {
+        return sysfs_device_exists(vp->sysent, vp->syskey);
+    }
+    if (vp->kind == VNODE_DEV_SUBDIR) {
+        return devfs_subdir_present(vp->devdir);
+    }
+    if (vp->kind == VNODE_PROC_IRQ_DIR && vp->pid >= 0) {
+        return procfs_irq_exists(vp->pid);
+    }
+    return 1;
+}
+
 /**
  * Open a synthetic directory (/dev, /proc, /proc/<pid> and its fd, fdinfo
  * and ns, a thread's under /proc/<pid>/task, a directory of /proc/sys or of
@@ -3576,15 +3587,13 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     if (fd != 0) {
         return fd;
     }
-    if ((vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) && SYSFS_KEYED(vp->sysent) &&
-        !sysfs_device_exists(vp->sysent, vp->syskey)) {
-        return -ENOENT;
-    }
-    if (vp->kind == VNODE_DEV_SUBDIR && !devfs_subdir_present(vp->devdir)) {
+    if (!synth_dir_present(vp)) {
         return -ENOENT;
     }
     if (vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) {
         sd = synth_dir_alloc(VNODE_SYS_DIR, vp->sysent, vp->syskey);
+    } else if (vp->kind == VNODE_PROC_IRQ_DIR) {
+        sd = synth_dir_alloc(vp->kind, vp->pid, 0);
     } else if (vp->kind == VNODE_DEV_SUBDIR) {
         sd = synth_dir_alloc(VNODE_DEV_SUBDIR, vp->devdir, 0);
     } else if (vp->kind == VNODE_DEV_MADE) {
@@ -6059,101 +6068,6 @@ static void fd_teardown(fd_table_t *table, int fd)
     }
 }
 
-/** Whether `t`, a sharer of the caller's table, is in an epoll_wait that
- * holds descriptor `fd` of the table and does not wait on the set `fd`
- * itself. The caller holds the table's lock. */
-static int epoll_wait_holds(const process_t *t, int fd)
-{
-    return t != current_proc && t->epoll_waiting && t->epoll_wait_fd != fd &&
-           fd / 32 < t->fd_holding && (t->fd_held[fd / 32] & (1u << (fd % 32)));
-}
-
-/**
- * Whether no sharer of `table` but the caller is inside an epoll_wait, read
- * under the table's lock after the caller marked its descriptor closing. A
- * wait sets `epoll_waiting` before its scan takes any hold, each under the
- * table's lock, so a hold taken before the mark shows its flag here, and a
- * scan after the mark takes no hold on the descriptor.
- */
-static int epoll_waits_none(fd_table_t *table)
-{
-    process_t *t;
-    uint32_t flags = fd_table_lock(table);
-    int none = 1;
-
-    for (t = table->sharers; t && none; t = t->fd_sharer_next) {
-        none = t == current_proc || !t->epoll_waiting;
-    }
-    fd_table_unlock(table, flags);
-    return none;
-}
-
-/** Whether an epoll_wait of another sharer of `table` holds descriptor
- * `fd` (`epoll_wait_holds`); the table's lock is taken. */
-static int epoll_waits_hold(fd_table_t *table, int fd)
-{
-    process_t *t;
-    uint32_t flags = fd_table_lock(table);
-    int held = 0;
-
-    for (t = table->sharers; t && !held; t = t->fd_sharer_next) {
-        held = epoll_wait_holds(t, fd);
-    }
-    fd_table_unlock(table, flags);
-    return held;
-}
-
-/**
- * Let go of descriptor `fd` of `table` in each epoll_wait of another sharer
- * that holds it, so that a close releases it at once, as a close on Linux
- * does while a thread waits in epoll_wait. A wait that is quiet, its last
- * scan before its sleep done, comes off every queue it sleeps on, each of
- * which the release may free, with the queue forgotten (`poll_let_go`),
- * its hold on `fd` goes, and it is woken to scan its set again, through
- * its own descriptors. A wait that is not may be reading what `fd` names:
- * it keeps its hold and is asked to give back its holds of descriptors
- * being closed before it sleeps (`fd_holds_release_closing`), and the last
- * of them to go releases `fd`, as the last call's hold does. The set's own
- * descriptor stays held, since the wait reads the set until it ends.
- * Returns whether every such wait let go; one that holds `fd` still makes
- * it 0.
- *
- * The caller has marked `fd` closing, so that no scan takes a new hold on
- * it; dup2, which has not, takes the slot right after (`dup_clear`). The
- * sharers are found under the table's lock and each wait's quiet mark
- * read under `poll_lock`, so a wait is seen quiet, with its queues
- * published, or is asked, and none sleeps on with the hold. The scans of
- * epoll_wait run without the big lock, and so does this.
- *
- * A table whose sharers have no epoll_wait under way is passed by
- * (`epoll_waits_none`).
- */
-static int epoll_waits_let_go(fd_table_t *table, int fd)
-{
-    process_t *t;
-    uint32_t flags;
-    int all = 1, any = 0;
-
-    if (table->refs < 2 || epoll_waits_none(table)) {
-        return 0;
-    }
-    flags = fd_table_lock(table);
-    for (t = table->sharers; t; t = t->fd_sharer_next) {
-        if (!epoll_wait_holds(t, fd)) {
-            continue;
-        }
-        any = 1;
-        if (!poll_let_go(t)) {
-            all = 0;
-            continue;
-        }
-        t->fd_held[fd / 32] &= ~(1u << (fd % 32));
-        wq_wake_proc(t);
-    }
-    fd_table_unlock(table, flags);
-    return any && all;
-}
-
 /**
  * Close descriptor `fd` of the caller's table. The table's record locks on
  * the file go as soon as the descriptor is claimed, as Linux drops them at
@@ -6170,14 +6084,11 @@ static int epoll_waits_let_go(fd_table_t *table, int fd)
  * of the table before `filp_close` drops its locks (fs/file.c:654-665), so
  * that a lock command of another sharer either finds the descriptor closing
  * after it sets its lock or has set it before the close looks
- * (`fd_lock_still_open`). An epoll_wait asleep does not keep the
- * descriptors it watches (`epoll_waits_let_go`), since Linux's epoll takes
- * no reference to them:
- * when the holds that kept the slot were such waits', the close releases
- * it itself (`fd_close_finish`), or the last of them does, when one was in
- * the middle of its scan. The claim comes first, so that no wait
- * takes a hold after the close has looked. Runs without the big lock but
- * where a step needs it. 0, or -EBADF.
+ * (`fd_lock_still_open`). An epoll_wait holds only its set's descriptor,
+ * since a registration polls through its own copy of the descriptor it was
+ * made of (io/epoll.c), as Linux's epoll takes no reference to what it
+ * watches. Runs without the big lock but where a step needs it. 0, or
+ * -EBADF.
  */
 static int32_t close_fd(int fd)
 {
@@ -6191,9 +6102,6 @@ static int32_t close_fd(int fd)
     rc = fd_close_claim(table, fd);
     if (rc >= 0) {
         fd_close_locks(e);
-    }
-    if (rc == 0 && epoll_waits_let_go(table, fd)) {
-        rc = fd_close_finish(table, fd);
     }
     if (rc == 1) {
         fd_teardown(table, fd);
@@ -6213,16 +6121,6 @@ void fd_holds_release(void)
     int fd = 0;
 
     while ((fd = fd_holds_claim(fd)) >= 0) {
-        fd_teardown(current_proc->fds, fd);
-        fd++;
-    }
-}
-
-void fd_holds_release_closing(int keep)
-{
-    int fd = 0;
-
-    while ((fd = fd_holds_claim_closing(fd, keep)) >= 0) {
         fd_teardown(current_proc->fds, fd);
         fd++;
     }
@@ -7419,9 +7317,8 @@ static int32_t file_read_plain(struct open_file *ofd, char __user *buf, uint32_t
  * any other from `file_read_plain`, whose bytes are the page's when it was
  * chosen, since a mapping that brings the page in while that read sleeps
  * can hold only stores made after it. The bytes read, which stop at the
- * first page that fails after
- * some were read, 0 at the end, or the type's error, or -ENOMEM for a page
- * in memory that no temporary mapping is free for.
+ * first page that fails after some were read, 0 at the end, or the type's
+ * error.
  */
 static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_t count,
                                 uint64_t pos, int *big)
@@ -8249,31 +8146,16 @@ long sys_dup(isr_params_t *params)
  * another thread sharing the table holds its descriptor, or the descriptor
  * a close left to such a call, or a close of it is still releasing it,
  * where Linux replaces the descriptor and the call or the close keeps its
- * file. An epoll_wait lets the descriptor go first (`epoll_waits_let_go`);
- * one in the middle of a scan holds it until its scan is done, which the
- * call waits for with the big lock lent to a processor that waits for it,
- * since the scan may need it.
+ * file.
  */
 static int32_t dup_clear(int fd)
 {
     fd_table_t *table = current_proc->fds;
     int rc;
 
-    for (;;) {
-        uint32_t irq;
-
-        epoll_waits_let_go(table, fd);
-        while ((rc = fd_dup_target(table, fd)) == 1) {
-            fd_close_locks(fd_slot(table, fd));
-            fd_teardown(table, fd);
-        }
-        if (rc != -EBUSY || !epoll_waits_hold(table, fd)) {
-            break;
-        }
-        irq = kirq_save();
-        bkl_yield();
-        kirq_restore(irq);
-        arch_relax();
+    while ((rc = fd_dup_target(table, fd)) == 1) {
+        fd_close_locks(fd_slot(table, fd));
+        fd_teardown(table, fd);
     }
     return rc == 0 ? 0 : -EBUSY;
 }
@@ -8344,7 +8226,7 @@ static int synth_kind_is_dir(int kind)
            kind == VNODE_SYS_LINK || kind == VNODE_PROC_SYSVIPC_DIR ||
            kind == VNODE_PROC_NET_STAT_DIR || kind == VNODE_PROC_NS_DIR ||
            kind == VNODE_PROC_FDINFO_DIR || kind == VNODE_DEV_SUBDIR ||
-           kind == VNODE_PROC_ACPI_DIR || kind == VNODE_PROC_FS_DIR;
+           kind == VNODE_PROC_IRQ_DIR || kind == VNODE_PROC_ACPI_DIR || kind == VNODE_PROC_FS_DIR;
 }
 
 /** The entry root made under /dev (devtree.h) that the descriptor `e` is
@@ -9513,6 +9395,28 @@ static int32_t synth_stat_pid_dir(const struct vpath *vp, struct kstat *kst, int
     return 0;
 }
 
+/** Stat one fixed directory of procfs. */
+static int synth_proc_dir_stat(struct kstat *kst, uint32_t ino)
+{
+    kst->st_dev = PROCFS_FSID;
+    kst->st_mode = S_IFDIR | 0555;
+    kst->st_ino = ino;
+    return 0;
+}
+
+/** Stat an enabled message's directory or affinity file. */
+static int synth_irq_stat(const struct vpath *vp, struct kstat *kst)
+{
+    if (vp->pid >= 0 && !procfs_irq_exists(vp->pid)) {
+        return -ENOENT;
+    }
+    kst->st_dev = PROCFS_FSID;
+    kst->st_mode =
+        vp->kind == VNODE_PROC_IRQ_DIR ? S_IFDIR | 0555 : S_IFREG | (vp->procfile ? 0444 : 0644);
+    kst->st_ino = procfs_ino_irq(vp->pid, vp->kind == VNODE_PROC_IRQ_DIR ? 0 : vp->procfile + 1);
+    return 0;
+}
+
 /**
  * Fill `kst` with the attributes stat gives the /dev, /proc or /sys node
  * `vp`, a /proc link followed to what it names when `follow`. Returns 0, or
@@ -9654,21 +9558,18 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
         return synth_proc_stat(kst, procfs_ino_net(vp->procfile));
     case VNODE_PROC_SYSVIPC:
         return synth_proc_stat(kst, procfs_ino_sysvipc(vp->procfile));
+    case VNODE_PROC_IRQ_DIR:
+    case VNODE_PROC_IRQ_FILE:
+        return synth_irq_stat(vp, kst);
     case VNODE_PROC_ACPI_DIR:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFDIR | 0555;
-        kst->st_ino = procfs_ino_acpidir();
-        return 0;
+        return synth_proc_dir_stat(kst, procfs_ino_acpidir());
     case VNODE_PROC_ACPI_CALL:
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = S_IFREG | 0600;
         kst->st_ino = procfs_ino_acpicall();
         return 0;
     case VNODE_PROC_FS_DIR:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFDIR | 0555;
-        kst->st_ino = procfs_ino_fsdir();
-        return 0;
+        return synth_proc_dir_stat(kst, procfs_ino_fsdir());
     case VNODE_SYS_DIR:
     case VNODE_SYS_LINK:
     case VNODE_SYS_FILE:
@@ -12836,6 +12737,8 @@ static int vfs_chown_plan(struct vfs_stat *vst, uint32_t uid, uint32_t gid)
     return what;
 }
 
+static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid);
+
 /**
  * chown of the /dev or /proc node `vp`, for the path forms and for a
  * descriptor opened with O_PATH on one. A pty slave keeps its owner and group
@@ -12845,8 +12748,6 @@ static int vfs_chown_plan(struct vfs_stat *vst, uint32_t uid, uint32_t gid)
  * for 0 or -1 in each field succeeds and changes nothing, and any other is
  * -EPERM.
  */
-static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid);
-
 static int32_t chown_synth(const struct vpath *vp, uint32_t uid, uint32_t gid)
 {
     if (vp->kind == VNODE_PROC_FD_LINK) {
@@ -19353,6 +19254,7 @@ static const struct {
                           {"mounts", procfs_ino_mounts, DT_REG},
                           {"net", procfs_ino_netdir, DT_DIR},
                           {"sysvipc", procfs_ino_sysvipcdir, DT_DIR},
+                          {"irq", procfs_ino_irqdir, DT_DIR},
                           {"acpi", procfs_ino_acpidir, DT_DIR},
                           {"fs", procfs_ino_fsdir, DT_DIR},
                           {"sys", procfs_ino_sysdir, DT_DIR},
@@ -19363,6 +19265,37 @@ static const struct {
                           {"audio", procfs_ino_audio, DT_REG},
                           {"interrupts", procfs_ino_interrupts, DT_REG},
                           {"filesystems", procfs_ino_filesystems, DT_REG}};
+
+/** List one message directory, the live message numbers, or the fixed
+ * files of /proc/acpi and /proc/fs. */
+static int synth_small_proc_dirent(const struct synth_dir *sd, int n, char *name, uint64_t *ino,
+                                   uint8_t *dtype)
+{
+    int v, seen = 0;
+
+    if (sd->kind == VNODE_PROC_ACPI_DIR) {
+        return synth_entry(n == 0 ? "call" : NULL, procfs_ino_acpicall(), DT_REG, name, ino, dtype);
+    }
+    if (sd->kind == VNODE_PROC_FS_DIR) {
+        return synth_entry(n == 0 ? "lockwait" : NULL, procfs_ino_lockwait(), DT_REG, name, ino,
+                           dtype);
+    }
+    if (sd->pid >= 0) {
+        return synth_entry(n == 0   ? "smp_affinity"
+                           : n == 1 ? "effective_affinity"
+                                    : NULL,
+                           procfs_ino_irq(sd->pid, n + 1), DT_REG, name, ino, dtype);
+    }
+    for (v = 0; v < 256; v++) {
+        if (procfs_irq_exists(v) && seen++ == n) {
+            synth_u32_str(name, (uint32_t)v);
+            *ino = procfs_ino_irq(v, 0);
+            *dtype = DT_DIR;
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /**
  * The entry at position `*pos` of a synthetic directory, from the directory
@@ -19422,12 +19355,13 @@ static int synth_dirent_at(const struct synth_dir *sd, int *pos, char *name, uin
     if (kind == VNODE_DEV_MADE) {
         return synth_dev_any_dirent(-1, sd->pid, n, name, ino, dtype);
     }
-    if (kind == VNODE_PROC_ACPI_DIR) {
-        return synth_entry(n == 0 ? "call" : NULL, procfs_ino_acpicall(), DT_REG, name, ino, dtype);
-    }
-    if (kind == VNODE_PROC_FS_DIR) {
-        return synth_entry(n == 0 ? "lockwait" : NULL, procfs_ino_lockwait(), DT_REG, name, ino,
-                           dtype);
+    switch (kind) {
+    case VNODE_PROC_IRQ_DIR:
+    case VNODE_PROC_ACPI_DIR:
+    case VNODE_PROC_FS_DIR:
+        return synth_small_proc_dirent(sd, n, name, ino, dtype);
+    default:
+        break;
     }
     if (kind == VNODE_PTS_DIR) {
         int i, c = 0;

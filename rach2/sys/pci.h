@@ -235,7 +235,7 @@ void pci_msi_message(uint8_t vector, uint32_t *address, uint32_t *data);
 
 /**
  * Program one message on `dev`, the architecture's message for `vector`
- * (`pci_msi_message`), and enable it, with MSI-X disabled and the vector's
+ * (`pci_msi_message_cpu`), and enable it, with MSI-X disabled and the vector's
  * own mask cleared where the device has one: 0, or -1 with the reason in the
  * log when the device has no MSI capability or one that runs past the end of
  * its configuration space. A device that offers several vectors is told to
@@ -311,17 +311,52 @@ void pci_msix_entry_clear(const pci_device_t *dev, unsigned int index);
  * entries are programmed. */
 void pci_msix_unmask(const pci_device_t *dev);
 
+/** The processors an unremapped message can reach, as a bit mask. */
+uint64_t pci_msi_cpus(void);
+
+/** Compose a message for logical processor `cpu`; return its whole APIC id
+ * in `*destination`, including the bits interrupt remapping carries. */
+void pci_msi_message_cpu(uint8_t vector, int cpu, uint32_t *address, uint32_t *data,
+                         uint32_t *destination);
+
+/** Read a live message vector's requested and effective processor masks.
+ * Return 0, or -ENOENT when no enabled message owns `vector`. */
+int pci_irq_affinity(int vector, uint64_t *requested, uint64_t *effective);
+
+/** Move a live message to the least allocated online processor in `mask`.
+ * Return 0, -ENOENT, or -EINVAL for no reachable processor. The vector stays
+ * reserved on every processor throughout the move, including messages
+ * in flight. */
+int pci_irq_set_affinity(int vector, uint64_t mask);
+
+/** Spread messages enabled before the other processors started. */
+void pci_msi_rebalance(void);
+
+/** Route messages to `cpu` before the other processors stop at shutdown.
+ * Called in normal shutdown, never in a panic or an NMI. */
+void pci_msi_shutdown(int cpu);
+
+/** The destination published at normal shutdown for forwarding a PCI
+ * message pending on a departing processor; -1 before shutdown or for a
+ * vector no PCI message uses. This read takes no lock, also in an NMI. */
+int pci_msi_stop_target(int vector);
+
 /*
  * An interrupt remapper's way to the messages devices send. `map` takes an
  * entry of the remapper's table for the compatibility-format message
  * (address, data) that `pci_msi_message` made for `dev`, and gives the
  * remapped address and data to write in its place: the entry's handle, or
- * -1. `unmap` gives a handle's entry back.
+ * -1. `destination` is the whole physical processor id, which the
+ * compatibility address can hold only in part. `unmap` gives an entry
+ * back; `move` changes only its destination without releasing the handle,
+ * and `cpus` gives the online processors reached by the remapper.
  */
 struct pci_msi_remap {
-    int (*map)(const pci_device_t *dev, uint32_t address, uint32_t data, uint32_t *raddress,
-               uint32_t *rdata);
+    int (*map)(const pci_device_t *dev, uint32_t address, uint32_t data, uint32_t destination,
+               uint32_t *raddress, uint32_t *rdata);
     void (*unmap)(int handle);
+    void (*move)(int handle, uint32_t destination);
+    uint64_t (*cpus)(void); /* online processors reached by this remapper */
 };
 
 /**

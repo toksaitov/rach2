@@ -12,8 +12,9 @@
  *
  * A wake is counted in the queue's `wakes` for each kind of change it names,
  * data, room or hangup, with waiters or none, and wq_wake_all names all three;
- * an edge-triggered epoll registration reads the kinds it watches to tell
- * that its object changed. A wake that names none still wakes every waiter,
+ * an epoll registration's wake function matches the kinds a wake names
+ * against the events it watches. A wake that names none still wakes every
+ * waiter,
  * and wq_wakes sums the kinds asked for.
  *
  * `wq_wait_event_sigflag` ends on the signal-work flag set before it or by
@@ -35,6 +36,13 @@
  * is made ready by the first wake and asks for one interrupt, and no
  * interrupt is sent while a queue's lock is held. A wake for a waker with
  * a lock of its own adds its interrupts to the waker's set and sends none.
+ *
+ * A record with a wake function, as Linux's wait entry, stays on its queue
+ * through every wake, which calls the function with the kinds it names: each
+ * record without WQ_EXCLUSIVE, then the exclusive ones in turn until one
+ * returns nonzero. `wq_wake_free` calls each with WQ_FREE and takes it off,
+ * and `wq_entry_remove` of a record so taken does nothing. The `entries`
+ * argument runs that row alone.
  *
  * The test defines WAIT_QUEUE_HOSTTEST, under which wait_queue.c masks no
  * interrupt and does not halt, a queue's lock is a word it sets and clears
@@ -403,9 +411,70 @@ static void own_locks(void)
     CHECK(qa.lock.locked == 0 && wq_host_held == 0 && wq_host_kicks_held == 0);
 }
 
-/** Run every check; the exit status is the count of failed checks, at most
- * 255. */
-int main(void)
+/* The records of the `entries` row, the calls of each, and the kinds and
+ * the return value of the last. */
+static struct wq_waiter entry_recs[4];
+static int entry_calls[4], entry_says[4];
+static uint32_t entry_kinds[4];
+
+/** The wake function of a record of the `entries` row: count the call and
+ * return what the row set for the record. */
+static int entry_wake(struct wq_waiter *w, uint32_t kinds, unsigned int nest, uint64_t *cpus)
+{
+    int i = (int)(w - entry_recs);
+
+    (void)nest;
+    (void)cpus;
+    entry_calls[i]++;
+    entry_kinds[i] = kinds;
+    return entry_says[i];
+}
+
+/**
+ * Records with a wake function: two plain ones and two exclusive, filed
+ * with `wq_entry_add`, stay through wakes; every plain one is called at
+ * each wake, the exclusive ones in turn until one says it woke; and the
+ * queue's end calls each with WQ_FREE and takes it off.
+ */
+static void entries(void)
+{
+    static wait_queue_t q;
+    static process_t lone;
+    int i;
+
+    wait_queue_init(&q);
+    for (i = 0; i < 4; i++) {
+        entry_recs[i].proc = &lone;
+        entry_recs[i].func = entry_wake;
+        entry_recs[i].flags = i >= 2 ? WQ_EXCLUSIVE : 0;
+        entry_calls[i] = 0;
+        entry_says[i] = 1;
+        wq_entry_add(&q, &entry_recs[i]);
+        CHECK(entry_recs[i].wq == &q);
+    }
+    lone.state = PROC_BLOCKED;
+    enqueue(&q, &lone);
+    wq_wake(&q, WQ_DATA);
+    CHECK(entry_calls[0] == 1 && entry_calls[1] == 1);
+    CHECK(entry_calls[2] == 1 && entry_calls[3] == 0);
+    CHECK(entry_kinds[0] == WQ_DATA && lone.state == PROC_READY);
+    CHECK(total_queued(&q) == 4);
+    entry_says[2] = 0;
+    wq_wake(&q, WQ_ROOM);
+    CHECK(entry_calls[2] == 2 && entry_calls[3] == 1 && entry_kinds[3] == WQ_ROOM);
+    wq_entry_remove(&entry_recs[0]);
+    CHECK(entry_recs[0].wq == 0 && total_queued(&q) == 3);
+    wq_wake_free(&q);
+    CHECK(entry_calls[0] == 2 && entry_calls[1] == 3 && entry_kinds[1] == WQ_FREE);
+    CHECK(entry_calls[3] == 2 && entry_kinds[3] == WQ_FREE);
+    CHECK(total_queued(&q) == 0 && entry_recs[1].wq == 0 && entry_recs[3].wq == 0);
+    wq_entry_remove(&entry_recs[1]);
+    CHECK(total_queued(&q) == 0 && q.lock.locked == 0 && wq_host_held == 0);
+}
+
+/** Run every check, or with the argument `entries` that row alone; the exit
+ * status is the count of failed checks, at most 255. */
+int main(int argc, char **argv)
 {
     wait_queue_t wq;
     /* Static, so that each record is whole before it is queued: a wake
@@ -413,6 +482,10 @@ int main(void)
     static process_t a, b, c;
     int i;
 
+    if (argc == 2 && argv[1][0] == 'e') {
+        entries();
+        return fails > 255 ? 255 : fails;
+    }
     wait_queue_init(&wq);
     CHECK(total_queued(&wq) == 0);
 
@@ -496,5 +569,6 @@ int main(void)
     filed_first();
     own_locks();
     sigflag_rows();
+    entries();
     return fails > 255 ? 255 : fails;
 }

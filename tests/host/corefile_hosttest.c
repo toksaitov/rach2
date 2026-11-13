@@ -779,6 +779,13 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
+/** No row puts a file in an epoll set, so a last close has no
+ * registration to take. */
+void epoll_release_file(struct open_file *ofd)
+{
+    (void)ofd;
+}
+
 /** No row waits for a description; a call fails the row. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
@@ -1279,6 +1286,21 @@ uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)
 /** The inode number of /proc, which no row reads: 0. */
 uint32_t procfs_ino_dir(void)
 {
+    return 0;
+}
+
+/** No message interrupt is present in the core-file model: 0. */
+int procfs_irq_exists(int vector)
+{
+    (void)vector;
+    return 0;
+}
+
+/** The inode number of an interrupt affinity file, which no row reads: 0. */
+uint32_t procfs_ino_irq(int vector, int attr)
+{
+    (void)vector;
+    (void)attr;
     return 0;
 }
 

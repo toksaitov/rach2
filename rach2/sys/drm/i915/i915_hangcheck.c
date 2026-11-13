@@ -64,7 +64,8 @@ void i915_hangcheck_enable(struct drm_i915_private *i915, int on)
 }
 
 /** The last request of `e` given to the chip whose breadcrumb is not yet
- * written, or NULL. Under the big kernel lock, which keeps the list. */
+ * written, or NULL. Under the GEM lock, without which no request leaves
+ * the list. */
 static struct i915_request *last_on_chip(struct i915_engine *e)
 {
     struct i915_request *rq, *last = 0;

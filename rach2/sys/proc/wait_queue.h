@@ -31,16 +31,33 @@
  * other (wait_queue.c).
  *
  * A wake says what kind of change it is for the pollers of the queue: data
- * to read, room to write, or a hangup or an error. The queue counts the
- * wakes of each kind, whoever was on it, so a reader can tell that its
- * object changed in a way it watches since it looked, as an edge-triggered
- * epoll registration does.
+ * to read, room to write, or a hangup or an error, as the key of Linux's
+ * wake (include/linux/poll.h); an epoll registration is told only of the
+ * kinds its events watch. The queue counts the wakes of each kind, whoever
+ * was on it.
+ *
+ * A record with a function (`struct wq_waiter`'s `func`) stays on the
+ * queue through every wake, which calls the function under the queue's
+ * lock, as Linux's wait entries with a wake function stay
+ * (kernel/sched/wait.c:73-97): a poll's records, until the poll ends, and
+ * an epoll registration's, until it is removed. A record marked
+ * WQ_EXCLUSIVE is one of the queue's exclusive records: a wake calls
+ * every other record and the exclusive ones in turn until one of their
+ * functions says it woke a waiter, as Linux's wake of one exclusive waiter
+ * (`nr_exclusive`, wait.c:92).
  */
 #define WQ_DATA   1u
 #define WQ_ROOM   2u
 #define WQ_HANGUP 4u
 #define WQ_ALL    (WQ_DATA | WQ_ROOM | WQ_HANGUP)
 #define WQ_KINDS  3
+/* The kind a record's function is told of when its queue is about to be
+ * freed (`wq_wake_free`), Linux's POLLFREE; it is counted as no wake. */
+#define WQ_FREE   8u
+
+/* The flag of a record (`struct wq_waiter`'s `flags`) that is one of its
+ * queue's exclusive records. */
+#define WQ_EXCLUSIVE 1u
 
 typedef struct wait_queue {
     /* The sleepers' and pollers' records, the oldest first. */
@@ -65,6 +82,22 @@ typedef int (*wq_cond_fn)(void *arg);
  * NULL `wq` is ignored. Called once before the queue's first use, never on
  * a queue in use. */
 void wait_queue_init(wait_queue_t *wq);
+
+/** `wait_queue_init` with the queue's lock of the lock-order checker's
+ * class `key`, named `name`, for a queue whose lock is taken under another
+ * queue's; `wait_queue_init_named` passes its site's key, as Linux's
+ * `init_waitqueue_head` makes a class of each site. */
+void wait_queue_init_key(wait_queue_t *wq, const char *name, const struct lockdep_key *key);
+
+#ifdef RACH2_LOCKDEP
+#define wait_queue_init_named(wq, name)              \
+    do {                                             \
+        static struct lockdep_key wq_key_;           \
+        wait_queue_init_key((wq), (name), &wq_key_); \
+    } while (0)
+#else
+#define wait_queue_init_named(wq, name) wait_queue_init_key((wq), (name), 0)
+#endif
 
 /**
  * Block the current process on `wq` until `cond(arg)` returns nonzero.
@@ -168,6 +201,16 @@ void wq_each_waiter(wait_queue_t *wq, void (*fn)(struct process *p, uint64_t arg
  */
 void wq_wake_all_deferred(wait_queue_t *wq, uint64_t *cpus);
 
+/**
+ * Call `fn` with the process of the oldest sleeper on `wq`, or NULL when no
+ * sleeper is on it, and `arg`, then make that sleeper alone runnable, all
+ * under the queue's lock, for a sleeping lock that hands itself to its
+ * oldest waiter, as Linux's __mutex_unlock_slowpath hands the mutex to its
+ * first waiter and wakes that one (kernel/locking/mutex.c:950-976). The
+ * others stay on the queue. `fn` must not sleep or take the queue's lock.
+ * Counts no wake for the pollers.
+ */
+void wq_wake_first(wait_queue_t *wq, void (*fn)(struct process *first, void *arg), void *arg);
 /** wq_wake for every kind of change: for a queue no poller watches, and for
  * a change of every kind, such as a close. */
 void wq_wake_all(wait_queue_t *wq);
@@ -186,18 +229,62 @@ void wq_complete(wait_queue_t *wq, volatile int *done);
  * for a waker that has taken it off its queues itself. */
 void wq_wake_proc(process_t *p);
 
+/**
+ * Make `p` runnable if it is blocked, from a record's function, which runs
+ * under its queue's lock: the processor to interrupt goes to `*cpus`,
+ * which the wake interrupts once the lock is let go. Returns 1 when `p` was
+ * blocked, as Linux's `default_wake_function` returns whether it woke the
+ * task (kernel/sched/core.c).
+ */
+int wq_ready_deferred(process_t *p, uint64_t *cpus);
+
+/**
+ * The wake of `wq` for the kinds `kinds` from a record's function, which
+ * holds the lock of the queue it was called from: the lock of `wq` is
+ * taken as the `nest`th of the queues held at once (`spin_lock_nested`),
+ * the functions of its records are called with `nest`, and the processors
+ * to interrupt go to `*cpus`. Interrupts are off. Linux's
+ * `ep_poll_safewake` wakes a set's poll queue so (fs/eventpoll.c:776-821).
+ */
+void wq_wake_nested(wait_queue_t *wq, uint32_t kinds, unsigned int nest, uint64_t *cpus);
+
+/**
+ * Put the record `w`, whose `func` is set, at the tail of `wq` and record
+ * the queue in `w->wq`, as Linux's `add_wait_queue`; a record with
+ * WQ_EXCLUSIVE goes there too (`add_wait_queue_exclusive`). Interrupts may
+ * be on.
+ */
+void wq_entry_add(wait_queue_t *wq, struct wq_waiter *w);
+
+/**
+ * Take the record `w` off the queue `wq_entry_add` put it on, unless
+ * `wq_wake_free` has taken it already, and clear `w->wq`. The queue is
+ * read and left under one lock that `wq_wake_free` also takes, so the
+ * queue is not freed between, as Linux's `ep_remove_wait_queue` reads
+ * `whead` under RCU (fs/eventpoll.c:823-838). Interrupts may be on.
+ */
+void wq_entry_remove(struct wq_waiter *w);
+
+/**
+ * Tell every record with a function on `wq` that the queue is about to be
+ * freed, with the kind WQ_FREE, and take each off it, clearing its `wq`,
+ * as Linux's `wake_up_pollfree` (kernel/sched/wait.c:209-214): for a
+ * queue whose memory goes while an epoll registration made through it may
+ * last, the signalfd's queue of a thread group. Interrupts may be on.
+ */
+void wq_wake_free(wait_queue_t *wq);
+
 /** The wakes `wq` has counted of the kinds among `kinds`, summed. */
 uint32_t wq_wakes(const wait_queue_t *wq, uint32_t kinds);
 
 /**
  * poll/select support: a poller puts a record of its own on every polled
- * object's queue with wq_poll_add, sleeps once, and on any wake takes each
- * record off with wq_poll_remove; a wake of any object's queue wakes it. Both
- * are idempotent (a wake already removed the waiter), ignore a NULL `wq` or
- * `w`, and must be called with interrupts off. They do not block or change
- * the process's state; the poll core makes the BLOCKED, schedule() and
- * RUNNING steps itself, in the order wq_wait_event makes them, so that no
- * wake is lost.
+ * object's queue with wq_poll_add and takes each off with wq_poll_remove
+ * when its wait ends; a record without a function leaves its queue at a
+ * wake, and one with a function stays. Both are idempotent, ignore a NULL
+ * `wq` or `w`, and must be called with interrupts off. They do not block or
+ * change the process's state; the poll core makes the BLOCKED, schedule()
+ * and RUNNING steps itself, so that no wake is lost.
  */
 void wq_poll_add(wait_queue_t *wq, struct wq_waiter *w);
 void wq_poll_remove(wait_queue_t *wq, struct wq_waiter *w);

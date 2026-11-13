@@ -67,8 +67,11 @@ struct mm {
      * second phase of the change (`mm_ptl_lock`). */
     struct spinlock ptl;
     /* Changed by `paging_zap_device` and a truncation's cut, under the
-     * write lock: a fault that let the lock go across a file's or a
-     * device's operation maps nothing if it moved meanwhile. */
+     * write lock, and by a write-back's write-protecting walk under the
+     * page-table lock as well (`paging_wrprotect_where`): a fault that let
+     * the lock go across a file's or a device's operation maps nothing if
+     * it moved meanwhile, and a fault that makes a shared page writable
+     * reads it again under the page-table lock. */
     uint32_t zaps;
     /* The changes of present pages under way and finished that holders of
      * `mmap_lock` to read make, a copy-on-write break and a truncation's

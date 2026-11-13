@@ -201,8 +201,8 @@ at
 .Xr fsync 2
 and
 .Xr sync 2 ,
-when a mapping through a descriptor open for writing is unmapped or its
-process ends, and before a
+when the flusher runs, when the last mapping through a descriptor open
+for writing is unmapped or its process ends, and before a
 .Xr read 2
 of the bytes they hold, and the bytes a
 .Xr write 2
@@ -222,19 +222,26 @@ An access to a page wholly past the end raises
 A truncation takes the pages past the new end out of every mapping.
 Writeback zeros the page's tail past EOF before a later growth can expose
 it as file data.
+A write-back first makes the page read-only in every mapping, then
+clears its mark and writes it, so the next store faults and marks it
+again, and each write-back writes only the pages stored since their last
+write, as on Linux.
+A page whose write fails stays marked, and so does a page a device holds
+pinned, which each write-back writes again until the pin goes.
+A truncation clears the marks of the pages it frees.
 A page that cannot go back when its last mapping goes stays in memory
 with its file open until a later
 .Xr sync 2 ,
-.Xr fsync 2
-or
-.Fn msync
-writes every page back.
-A shared-page writeback holds its own backing-file description and drains
-only mapping releases published before its initial generation snapshot;
-later mappings cannot keep extending the drain.
+.Xr fsync 2 ,
+.Fn msync ,
+unmap or the flusher writes it; when the device has gone, the mount was
+detached, or the file system is unmounted, it is dropped instead, as
+.Xr sync 2
+says.
+The write-back waits for no release, and later mappings do not extend it.
 The next
 .Xr fsync 2
-of the file reports the writeback error, even if a retry succeeded.
+of the file reports the writeback error once, even if a retry succeeded.
 A shared mapping of a tmpfs or ext2 file through a descriptor open for
 writing is refused with
 .Er EBUSY

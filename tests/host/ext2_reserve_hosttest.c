@@ -753,7 +753,9 @@ static void existing_rows(void)
           "existing root and missing leaf use exactly three blocks");
 
     reset(20);
-    file.size = (uint64_t)2059 * 4096;
+    ext2_node_lock(&file);
+    ext2_node_size_set(&file, (uint64_t)2059 * 4096);
+    ext2_node_unlock(&file);
     check(ext2_write(&mount, &file, payload, 4096, file.size) == 4096 && batch.count == 1,
           "append retains a pending pointer path");
     volume.r_blocks = (uint32_t)volume.free_blocks - 2;
@@ -886,8 +888,8 @@ static void held_block_rows(void)
     reset(20);
     check(ext2_write(&mount, &file, payload, 4096, 0) == 4096 && batch.count == 1,
           "a pending piece holds the inode table's block");
-    other.size = 77;
     ext2_node_lock(&other);
+    ext2_node_size_set(&other, 77);
     check(ext2_inode_store(&volume, &other) == 0, "another inode of that block is stored");
     ext2_node_unlock(&other);
     im = writeback_find(&batch, 4);

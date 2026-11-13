@@ -20,7 +20,6 @@ struct vm_chunk {
 int randomize_va_space = ASLR_MMAP_PAGES != 0 ? 2 : 0;
 int vm_max_map_count = VMA_LIMIT;
 static struct vm_file *vm_dead;
-static uint64_t vm_dead_gen; /* zero publications, under `vm_dead_lock` */
 /* Covers `vm_dead`, which a fault's last reference reaches without the
  * regions' write lock, and each file's count falling to 0 (`vm_file_put`). */
 static struct spinlock vm_dead_lock = SPINLOCK_INIT_NAMED("vm_dead_lock");
@@ -94,7 +93,6 @@ void vm_file_put(struct vm_file *f)
     }
     flags = spin_lock_irqsave(&vm_dead_lock);
     if (ref_add(&f->refs, -1) == 0) {
-        f->dead_gen = ++vm_dead_gen;
         f->dead = vm_dead;
         vm_dead = f;
     }
@@ -214,28 +212,16 @@ int vm_policy_equal(const struct vm_policy *a, const struct vm_policy *b)
     return 1;
 }
 
-uint64_t vm_file_reap_start(void)
-{
-    uint32_t flags = spin_lock_irqsave(&vm_dead_lock);
-    uint64_t gen = vm_dead_gen;
-
-    spin_unlock_irqrestore(&vm_dead_lock, flags);
-    return gen;
-}
-
-void vm_file_reap_until(uint64_t gen)
+void vm_file_reap(void)
 {
     struct vm_file *f;
-    struct vm_file **link;
     uint32_t flags;
 
     for (;;) {
         flags = spin_lock_irqsave(&vm_dead_lock);
-        for (link = &vm_dead; *link && (*link)->dead_gen > gen; link = &(*link)->dead) {
-        }
-        f = *link;
+        f = vm_dead;
         if (f) {
-            *link = f->dead;
+            vm_dead = f->dead;
             f->dead = NULL;
         }
         spin_unlock_irqrestore(&vm_dead_lock, flags);
@@ -244,11 +230,6 @@ void vm_file_reap_until(uint64_t gen)
         }
         f->release(f);
     }
-}
-
-void vm_file_reap(void)
-{
-    vm_file_reap_until(~(uint64_t)0);
 }
 
 vma_t *vm_first(const vm_space_t *vm)

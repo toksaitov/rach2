@@ -57,17 +57,19 @@ which returns
 .Er EBADF
 before anything is flushed, as on Linux; it does not check the
 descriptor's type.
-It first writes resident shared-mapping pages of the file.
-A failed write at the last unmap keeps its pages and file open until a
-sync, fsync or msync writes every page back;
-the next fsync of the file reports that error once, even if a retry by
-any of them succeeded.
-The shared-page writeback drains and waits for mapping releases whose
-last reference went before its initial generation snapshot.
-It holds a backing-file description of its own, so a last reference
-that goes after the snapshot cannot hide earlier stores.
-Later mappings and releases do not extend that drain, and its page
-range is bounded before draining.
+It first writes the file's dirty shared-mapping pages, those of
+mappings whose release is still queued among them; it waits for no
+release.
+A page whose write fails stays dirty, and its file open, until a later
+sync, fsync, msync, unmap or the flusher writes it, or a truncation
+frees it; the next fsync of the file reports that error once, even if a
+retry succeeded.
+When the device has gone, or no mount namespace sees the mount, a failed
+write drops the dirty pages once no writable mapping is left, and an
+unmount whose mount only such pages hold writes them and drops what
+fails, as Linux evicts pages whose write-back failed.
+The write-back holds a description of its own, and its page range is
+bounded before it starts, so later mappings do not extend it.
 For a descriptor on a mounted file system, it runs that file system's
 fsync operation, or writes the device's dirty buffers if the file
 system has no such operation.

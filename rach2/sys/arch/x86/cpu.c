@@ -129,6 +129,36 @@ unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, uns
     return old;
 }
 
+/** The exchange of `arch_atomic_xchg` at the width of a pointer: `xchgq` on
+ * x86-64 and `xchgl` on i686. */
+uintptr_t arch_atomic_xchg_ptr(volatile uintptr_t *p, uintptr_t value)
+{
+#if defined(__x86_64__)
+    __asm__ __volatile__("xchgq %0, %1" : "+r"(value), "+m"(*p) : : "memory");
+#else
+    __asm__ __volatile__("xchgl %0, %1" : "+r"(value), "+m"(*p) : : "memory");
+#endif
+    return value;
+}
+
+/** The compare-and-exchange of `arch_atomic_cmpxchg` at the width of a
+ * pointer. */
+uintptr_t arch_atomic_cmpxchg_ptr(volatile uintptr_t *p, uintptr_t old, uintptr_t value)
+{
+#if defined(__x86_64__)
+    __asm__ __volatile__("lock; cmpxchgq %2, %1"
+                         : "+a"(old), "+m"(*p)
+                         : "r"(value)
+                         : "memory", "cc");
+#else
+    __asm__ __volatile__("lock; cmpxchgl %2, %1"
+                         : "+a"(old), "+m"(*p)
+                         : "r"(value)
+                         : "memory", "cc");
+#endif
+    return old;
+}
+
 void arch_run_on_stack(uintptr_t sp, void (*fn)(void))
 {
 #if defined(__x86_64__)

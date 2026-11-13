@@ -131,7 +131,7 @@ static int32_t sw_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         return fd;
     }
     for (link = &t->points;
-         *link && (int32_t)((uint32_t)(*link)->fence.seqno - (uint32_t)data.value) <= 0;
+         *link && !dma_fence_seqno_is_later((*link)->fence.seqno, data.value, &sw_ops);
          link = &(*link)->next) {
     }
     point->next = *link;

@@ -39,7 +39,11 @@
 # session that is running, and before it takes or starts a task, within five
 # seconds of any wait; tools/flow/stop.sh also leaves STATE/session.stop, on
 # which session.pl stops the session, and which the loop removes before each
-# session.
+# session. The loop holds STATE/loop.live, a lock on descriptor 7, for its
+# whole life, through its exec of master's copy, and closes it for each
+# session, whose supervisor holds STATE/session.live; stop.sh and status.sh
+# probe the two locks to tell whether the loop and its session run. A loop
+# that finds STATE/loop.live held exits, since another loop has STATE.
 # Sessions run with RACH2_MIN_FREE_GIB at 40 unless the environment gives
 # another, so that a build they start stops before it fills the disk, and
 # with RACH2_WORKER_STATE set to STATE, so that `board.sh release` of the
@@ -63,7 +67,8 @@
 # hours is stopped, with every process in its group. A loop that starts while
 # a session of the loop before it still runs, as one does after that loop's
 # tmux session is killed, waits for the session to end before it does anything
-# in the clone.
+# in the clone; and a session whose supervisor was killed keeps the next one
+# from starting until session.pl has proved its group gone.
 #
 # While it holds no task, before it claims one, the loop removes what
 # finished work left in its clone, as `tidy` in lib.sh says, and prunes its
@@ -202,6 +207,17 @@ main()
     [ -n "$state" ] || state=$flowdir/$agent
     mkdir -p "$state" "$flowdir"
     state=$(cd "$state" && pwd)
+    # The lock passes to master's copy on the exec below, with
+    # RACH2_LOOP_LIVE naming the file it holds.
+    if [ "${RACH2_LOOP_LIVE-}" != "$state/loop.live" ]; then
+        exec 7>> "$state/loop.live"
+        perl -MFcntl=:flock -e 'open(L, ">&=7") && flock(L, LOCK_EX | LOCK_NB) or exit 1' || {
+            echo "worker: another loop holds $state/loop.live" >&2
+            exit 1
+        }
+        RACH2_LOOP_LIVE=$state/loop.live
+        export RACH2_LOOP_LIVE
+    fi
     cd "$repo" || exit 1
     echo "$repo" > "$state/repo"
     echo "${RACH2_TESTING_COPY:-}" > "$state/copy"
@@ -214,7 +230,11 @@ main()
         refresh
         while update worker.sh 2>> "$state/loop.log"; [ $? -eq 2 ]; do
             log "update failed"
-            sleep 60
+            nap 60
+            if [ -e "$state/stop" ]; then
+                log stopped
+                exit 0
+            fi
         done
         log "loop starts: $agent in $repo"
         exec sh "$state/run/worker.sh" -a "$agent" -s "$state" -r "$repo"

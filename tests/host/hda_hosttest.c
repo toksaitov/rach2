@@ -3016,7 +3016,7 @@ void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key 
 {
     (void)name;
     (void)key;
-    m->owner = NULL;
+    m->owner = 0;
 }
 /** The model has one thread, which never waits: a mutex taken is free, and
  * it is never taken in an interrupt or under a spinlock. */
@@ -3024,14 +3024,14 @@ void mutex_lock(struct mutex *m)
 {
     check(!m->owner, "a mutex taken is free");
     check(irqs_on, "a mutex is taken with interrupts on");
-    m->owner = m;
+    m->owner = (uintptr_t)m;
     mutex_takes++;
 }
 /** Give `m` back. */
 void mutex_unlock(struct mutex *m)
 {
-    check(m->owner == m, "a mutex given back is held");
-    m->owner = NULL;
+    check(m->owner == (uintptr_t)m, "a mutex given back is held");
+    m->owner = 0;
 }
 /** Model the speaker's ports: 0x61, and channel 2's count, low byte first. */
 void outb(uint16_t port, uint8_t val)

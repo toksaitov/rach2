@@ -1,0 +1,243 @@
+<6>[0.000000] boot: Rach2 Booting
+<6>[0.000000] boot: loader: qemu, by multiboot
+<6>[0.000000] boot: screen: text; the loader described none
+<7>[0.000000] module: found 1
+<7>[0.000000] module: 0: 0xA810C0 to 0x1A810C0, 16777216 bytes [build/tmp/4893/root.krffs]
+<6>[0.000000] panic: timeout: 0 seconds
+<6>[0.000000] vga: font: loaded: code page 437 box drawing with Cyrillic
+<7>[0.000000] boot: Initializing system components
+<6>[0.000000] cpu: page attributes: 0x0007040600070106; the framebuffer is mapped write-combining
+<7>[0.000000] boot: gdt: ready
+<7>[0.000000] boot: tss: ready
+<7>[0.000000] boot: idt: ready
+<7>[0.000000] boot: isr: ready
+<7>[0.000000] fpu: fxsr: on, sse: on, xsave: on, xcr0: 0xe7, area: 2432 bytes, pkeys: off
+<7>[0.000000] boot: memory manager: ready
+<7>[0.000000] memory: map: 0x0000000000000000-0x000000000009FC00 available
+<7>[0.000000] memory: map: 0x000000000009FC00-0x00000000000A0000 reserved
+<7>[0.000000] memory: map: 0x00000000000F0000-0x0000000000100000 reserved
+<7>[0.000000] memory: map: 0x0000000000100000-0x000000001FFD6000 available
+<7>[0.000000] memory: map: 0x000000001FFD6000-0x0000000020000000 reserved
+<7>[0.000000] memory: map: 0x00000000B0000000-0x00000000C0000000 reserved
+<7>[0.000000] memory: map: 0x00000000FED1C000-0x00000000FED20000 reserved
+<7>[0.000000] memory: map: 0x00000000FEFFC000-0x00000000FF000000 reserved
+<7>[0.000000] memory: map: 0x00000000FFFC0000-0x0000000100000000 reserved
+<7>[0.000000] memory: map: 0x000000FD00000000-0x0000010000000000 reserved
+<6>[0.000000] memory: usable 523735 KiB, unreachable 0 KiB, reserved 27755 KiB, managed 495980 KiB
+<7>[0.000000] boot: paging: ready
+<7>[0.000000] pci: list: 9 functions
+<7>[0.000000] boot: page cache: ready
+<7>[0.000000] acpi: rsdp: at 0xf5270, from the bios area
+<6>[0.000000] acpi: tables: rsdt at 0x1ffe249b, revision 0, BOCHS : FACP APIC HPET MCFG WAET DSDT
+<6>[0.000000] acpi: madt: 4 processors (4 usable), 1 ioapics, 5 overrides, 1 nmi inputs, an 8259 pair
+<7>[0.000000] acpi: madt: override: isa 0 to gsi 2, flags 0x0
+<7>[0.000000] acpi: madt: override: isa 5 to gsi 5, flags 0xd
+<7>[0.000000] acpi: madt: override: isa 9 to gsi 9, flags 0xd
+<7>[0.000000] acpi: madt: override: isa 10 to gsi 10, flags 0xd
+<7>[0.000000] acpi: madt: override: isa 11 to gsi 11, flags 0xd
+<6>[0.000000] acpi: fadt: revision 3, pm1a 0x604, pm timer 0x608 (24-bit), reset register, 8042 yes, century 50
+<6>[0.000000] acpi: dsdt: \_S5 sleep types 0 and 0
+<6>[0.000000] acpi: hpet: at 0xfed00000
+<6>[0.000000] acpi: mcfg: segment 0, buses 0 to 255 at 0xb0000000
+<6>[0.000000] pci: ecam: buses 0 to 0 of segment 0 at 0xb0000000
+<6>[0.000000] pci: ecam: 0 functions with extended capabilities
+<6>[0.000000] hpet: ready: 100000000 Hz, period 10000000 fs
+<7>[0.000000] lapic: ready: id 0, version 0x14, x2apic mode
+<6>[0.000000] ioapic: ready: id 0 at 0xfec00000, version 0x11, gsi 0 to 23
+<6>[0.000000] lapic: tick: 249998 counts, measured against the hpet
+<6>[0.000000] ioapic: interrupts: lines through the ioapic, the 8259 masked
+<6>[0.008000] lapic: timer: vector 32 for ticks and events
+<7>[0.008000] boot: timer: ready
+<6>[0.008000] rtc: 2026-11-13 04:03:13 UTC
+<7>[0.012000] clock: ready
+<6>[0.012000] entropy: ready: RDSEED, trusted
+<6>[0.016000] board: ich9: ACPI enabled
+<6>[0.016000] board: ich9: masked the SCI on IRQ 9
+<6>[0.020000] board: ready: ich9
+<6>[0.020000] watchdog: ready: TCO version 2 at 660, running, fed by the kernel until opened, heartbeat 30 s, nowayout 0
+<7>[0.024000] ioapic: route: line 1 to gsi 1, vector 33, edge, active high
+<6>[0.028000] console: blank: after 600 seconds without input
+<7>[0.028000] ioapic: route: line 4 to gsi 4, vector 36, edge, active high
+<7>[0.032000] boot: keyboard: ready
+<7>[0.032000] boot: syscall: ready
+<7>[0.032000] boot: process: ready
+<7>[0.032000] boot: scheduler: ready
+<7>[0.036000] acpi: acpica: RSDP 0x00000000000F5270 000014 (v00 BOCHS )
+<7>[0.036000] acpi: acpica: RSDT 0x000000001FFE249B 000038 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.040000] acpi: acpica: FACP 0x000000001FFE227B 0000F4 (v03 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.044000] acpi: acpica: DSDT 0x000000001FFE0040 00223B (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.048000] acpi: acpica: FACS 0x000000001FFE0000 000040
+<7>[0.048000] acpi: acpica: APIC 0x000000001FFE236F 000090 (v03 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.052000] acpi: acpica: HPET 0x000000001FFE23FF 000038 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.052000] acpi: acpica: MCFG 0x000000001FFE2437 00003C (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.056000] acpi: acpica: WAET 0x000000001FFE2473 000028 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.060000] acpi: acpica: 1 ACPI AML tables successfully acquired and loaded
+<7>[0.064000] ioapic: route: line 9 to gsi 9, vector 41, level, active high
+<7>[0.064000] acpi: sci: line 9
+<6>[0.068000] acpi: pnp: i8042 kbd: PNP: PNP0303
+<6>[0.068000] acpi: pnp: i8042 aux: PNP: PNP0f13
+<7>[0.072000] acpi: acpica: Enabled 2 GPEs in block 00 to 3F
+<6>[0.072000] acpi: acpica: 282 objects, 0 errors
+<7>[0.076000] vtd: none: no DMAR table
+<7>[0.076000] mouse: started
+<7>[0.076000] ioapic: route: line 12 to gsi 12, vector 44, edge, active high
+<7>[3.084000] mouse: ready
+<7>[3.084000] audio: started
+<7>[3.200000] ioapic: route: line 11 to gsi 11, vector 43, level, active high
+<7>[3.204000] pci: msi: 0:2.0 on vector 48
+<6>[3.204000] audio: interrupts: messages on vector 48
+<6>[3.204000] audio: ready: Intel HD Audio, codec 0x1af40022
+<6>[3.208000] disk: policy: read-write
+<6>[3.208000] modules: found 1
+<6>[3.212000] modules: ram disk: 0xffffc180000000c0, 16777216 bytes
+<6>[3.212000] block: started
+<7>[3.216000] ahci: found: 8086:2922 at 0:4.0, prog-if 1, BAR5 FEBFD000
+<7>[3.528000] ahci: port 1: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[3.528000] ahci: port 2: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[3.532000] ahci: port 3: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[3.536000] ahci: port 4: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[3.540000] ahci: port 5: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<6>[3.544000] disk: disk0: ahci 0: 32768 sectors, model QEMU HARDDISK
+<6>[3.548000] ahci: port 0: 32768 sectors, 16 MiB
+<7>[3.548000] nvme: 0: found: 1B36:10 at 0:5.0
+<6>[3.552000] nvme: 0: ready: version 1.4, 8 slots, 512 KiB a command
+<6>[3.552000] nvme: 0: namespace 1: 16 MiB
+<6>[3.556000] disk: disk1: nvme 0: 32768 sectors, model QEMU NVMe Ctrl
+<7>[3.560000] ioapic: route: line 14 to gsi 14, vector 46, edge, active high
+<7>[3.560000] ioapic: route: line 15 to gsi 15, vector 47, edge, active high
+<4>[3.564000] block: no MBR signature; no boot devices
+<6>[3.564000] krffs: mounted: 5 files
+<6>[3.568000] usb: started
+<6>[3.568000] usb: controller: 0:3.0 xhci interface 0x30 1033:194 bar0 0xFEBF4004
+<6>[3.572000] usb: found: xhci0: 1033:194 at 0:3.0, aperture 0xFEBF4000
+<7>[3.572000] usb: caps: hcs1 0x8001040 hcs2 0xF hcc1 0x87001 pagesize 0x1
+<7>[3.576000] usb: caps: scratchpads 0, contexts 32 bytes, 64-bit 1
+<6>[3.580000] usb: ready: xhci0: version 100, 8 ports, 64 slots, 32-byte contexts
+<7>[3.688000] usb: port: xhci0.2: a device; its reset tells full from high speed
+<7>[3.688000] usb: port: xhci0.5: a device; its reset tells full from high speed
+<6>[3.744000] usbdisk: found: device 1 on endpoints 3 and 4
+<6>[3.744000] usb: device: port 2: 46f4:1, class 8 protocol 80, endpoints 1 and 2
+<6>[3.812000] usb: hid: device 2 interface 0: QEMU QEMU USB Keyboard on usb-2/input0, input devices: 1
+<6>[3.812000] usb: device: port 5: 627:1, class 3 protocol 1, endpoint 1, HID interfaces 1 of 1
+<6>[3.864000] usbdisk: ready: device 1: lun 0, 32768 sectors of 512 bytes
+<6>[3.864000] disk: disk2: usb 0: 32768 sectors, and it gives no model
+<6>[3.868000] usb: devices: 2 configured
+<7>[3.872000] pci: msi: 0:3.0 on vector 49
+<6>[3.872000] usbdisk: disk2: none: 16 MiB, 0 partitions, 0 passed over
+<6>[3.876000] usb: interrupts: xhci0: messages on vector 49
+<7>[3.876000] pci: msi: 0:4.0 on vector 50
+<6>[3.876000] ahci: interrupts: messages on vector 50, 1 disks queued
+<7>[3.880000] pci: msi-x: 0:5.0 on vector 51
+<6>[3.880000] nvme: interrupts: messages on vector 51, msi-x, 1 disks queued
+<6>[3.884000] net: started
+<4>[3.884000] net: absent: no supported network card
+<6>[3.888000] drm: start
+<7>[3.904000] drm: worker: kdrm is pid 1
+<6>[3.904000] drm: bochs-drm: card0
+<6>[3.904000] console: card0: a native display
+<6>[3.908000] bochs: registered: bochs-drm, id 0xb0c5, 16384 KiB of video memory at 0xfd000000, registers in BAR 2, EDID, card 0
+<6>[3.912000] kvm: ready: svm
+<6>[3.912000] vfio: ready: 0 groups of 0 functions, no IOMMU unit translates
+<6>[4.188000] timing: tick 250 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 2000 us
+<6>[4.192000] clock: reference: the tsc; a tick the timer misses or delays is counted
+<6>[4.208000] smp: cpu1: tsc: synchronized with cpu0
+<6>[4.220000] smp: cpu2: tsc: synchronized with cpu0
+<6>[4.236000] smp: cpu3: tsc: synchronized with cpu0
+<6>[4.236000] smp: processors: 4 online of 4
+<6>[4.240000] nmi_watchdog: counter: amd core version 0, counter 0, 48 bits, 4192 MHz
+<6>[4.244000] nmi_watchdog: enabled: permanently consumes one hw-PMU counter
+<6>[4.244000] vdso: clock: the tsc, 16768192 counts a tick
+<6>[4.248000] boot: starting /sbin/init
+<7>[4.248000] acpi: thread: kacpid is pid 5
+<7>[4.252000] mouse: worker: kpsmoused is pid 6
+<7>[4.252000] watchdog: worker: watchdogd is pid 7
+<7>[4.252000] audio: thread: khda is pid 8
+<7>[4.256000] input: sysfs: worker: kinputd is pid 9
+AFFINITY BOOT
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+        CPU0	CPU1	CPU2	CPU3	
+32:	1008	4	4	3	LAPIC	timer
+33:	3	0	0	0	IO-APIC	kbd
+49:	1	0	0	0	MSI	xhci
+51:	1	0	0	0	MSI	nvme
+SPU:	0	spurious
+FBK:	0	usb fallback
+/proc/irq/48/smp_affinity f
+1
+/proc/irq/49/smp_affinity f
+2
+/proc/irq/50/smp_affinity f
+4
+/proc/irq/51/smp_affinity f
+8
+AFFINITY MOVE
+/proc/irq/48/smp_affinity 8
+/proc/irq/49/smp_affinity 8
+/proc/irq/50/smp_affinity 8
+/proc/irq/51/smp_affinity 8
+128+0 records in
+128+0 records out
+524288 bytes (512.0KB) copied, 0.018263 seconds, 27.4MB/s
+AFFINITY READ /dev/disk0 0
+128+0 records in
+128+0 records out
+524288 bytes (512.0KB) copied, 0.016313 seconds, 30.7MB/s
+AFFINITY READ /dev/disk1 0
+128+0 records in
+128+0 records out
+524288 bytes (512.0KB) copied, 0.026540 seconds, 18.8MB/s
+AFFINITY READ /dev/disk2 0
+        CPU0	CPU1	CPU2	CPU3	
+32:	1149	10	7	24	LAPIC	timer
+33:	3	0	0	0	IO-APIC	kbd
+49:	1	0	0	384	MSI	xhci
+50:	0	0	0	128	MSI	ahci
+51:	1	0	0	128	MSI	nvme
+SPU:	0	spurious
+FBK:	0	usb fallback
+AFFINITY AUDIO
+8+0 records in
+8+0 records out
+32768 bytes (32.0KB) copied, 4.078487 seconds, 7.8KB/s
+AFFINITY AUDIO STATUS 0
+AFFINITY RACE
+AFFINITY RACE STATUS 0
+        CPU0	CPU1	CPU2	CPU3	
+32:	6314	16	13	149	LAPIC	timer
+33:	3	0	0	0	IO-APIC	kbd
+48:	0	0	0	176	MSI	hda
+49:	1	0	0	3456	MSI	xhci
+50:	16	18	15	1103	MSI	ahci
+51:	1	0	0	1152	MSI	nvme
+SPU:	0	spurious
+FBK:	0	usb fallback
+AFFINITY RETURN
+/proc/irq/48/smp_affinity 1
+/proc/irq/49/smp_affinity 1
+/proc/irq/50/smp_affinity 1
+/proc/irq/51/smp_affinity 1
+128+0 records in
+128+0 records out
+524288 bytes (512.0KB) copied, 0.015151 seconds, 33.0MB/s
+128+0 records in
+128+0 records out
+524288 bytes (512.0KB) copied, 0.014859 seconds, 33.6MB/s
+128+0 records in
+128+0 records out
+524288 bytes (512.0KB) copied, 0.025923 seconds, 19.3MB/s
+        CPU0	CPU1	CPU2	CPU3	
+32:	6423	16	13	155	LAPIC	timer
+33:	3	0	0	0	IO-APIC	kbd
+48:	0	0	0	176	MSI	hda
+49:	385	0	0	3456	MSI	xhci
+50:	144	18	15	1103	MSI	ahci
+51:	129	0	0	1152	MSI	nvme
+SPU:	0	spurious
+FBK:	0	usb fallback
+AFFINITY DONE
+<6>[9.000000] poweroff: acpica: \_PTS(5) run, gpes disabled
+<6>[9.004000] shutdown: root: not on a disk; nothing to unmount
+<6>[9.004000] shutdown: Stopping the system. Goodbye!
+<6>[9.004000] usb: stop: the controller is halted
+<6>[9.004000] poweroff: acpica: status cleared
+<6>[9.004000] poweroff: powering off

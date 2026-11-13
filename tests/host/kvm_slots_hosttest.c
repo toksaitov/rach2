@@ -444,7 +444,7 @@ void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key 
 {
     (void)name;
     (void)key;
-    m->owner = NULL;
+    m->owner = 0;
 }
 
 /** Take `m`: while `gp_rows` runs, a held one gives the turn back until it
@@ -454,12 +454,12 @@ void mutex_lock(struct mutex *m)
     int me = gp_threads ? __atomic_load_n(&gp_turn, __ATOMIC_SEQ_CST) : 0;
 
     while (m->owner) {
-        if (!gp_threads || m->owner == &gp_holder[me]) {
+        if (!gp_threads || m->owner == (uintptr_t)&gp_holder[me]) {
             __builtin_trap();
         }
         gp_yield(me);
     }
-    m->owner = &gp_holder[me];
+    m->owner = (uintptr_t)&gp_holder[me];
 }
 
 /** Give `m` back; it must be held. */
@@ -468,7 +468,7 @@ void mutex_unlock(struct mutex *m)
     if (!m->owner) {
         __builtin_trap();
     }
-    m->owner = NULL;
+    m->owner = 0;
 }
 
 /** A change's wait for a count: the rest of the copy under way runs, and

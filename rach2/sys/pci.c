@@ -12,6 +12,7 @@
 #include "klog.h"
 #include "pci.h"
 #include "kio.h"
+#include "proc/percpu.h"
 #include "lib/kerrno.h"
 #include "lib/kirq.h"
 #include "lib/kstring.h"
@@ -794,7 +795,10 @@ static struct msi_record {
     uintptr_t entry;  /* the MSI-X table entry, mapped */
     uint32_t address; /* the compatibility-format message */
     uint32_t data;
-    int handle; /* the remapper's entry, or -1 */
+    int handle;           /* the remapper's entry, or -1 */
+    int cpu;              /* logical destination, serialized with the device by msi_lock */
+    uint32_t destination; /* the whole APIC id, also in x2APIC mode */
+    uint64_t affinity;    /* requested mask; zero until first composition */
 } msi_records[MSI_RECORDS];
 
 /* The remapper in place, or NULL; it and the records are under the lock,
@@ -802,6 +806,11 @@ static struct msi_record {
  * another processor never meets a message half written. */
 static const struct pci_msi_remap *msi_remap;
 static struct spinlock msi_lock = SPINLOCK_INIT_NAMED("msi_lock");
+/* Published before normal shutdown stops another processor; zero means
+ * no PCI message, otherwise the destination's logical number plus one. */
+static volatile unsigned int msi_stop_targets[256];
+/* Processors observed online, retained if one later goes offline. */
+static uint64_t msi_possible;
 
 /** The record of `dev`'s message of `kind` at `index`, its MSI-X entry,
  * or NULL. */
@@ -840,6 +849,8 @@ static struct msi_record *msi_record_get_at(const pci_device_t *dev, int kind, u
             r->kind = (uint8_t)kind;
             r->index = (uint16_t)index;
             r->handle = -1;
+            r->affinity = 0;
+            r->cpu = -1;
         }
     }
     if (r == NULL) {
@@ -900,6 +911,35 @@ static void msi_record_drop(struct msi_record *r)
     r->handle = -1;
 }
 
+/** Pick the online processor with the fewest allocated messages, with
+ * Linux's matrix_find_best_cpu's first-processor tie break. The caller
+ * holds msi_lock; `skip` is the message being moved, or NULL. */
+static int msi_choose(uint64_t mask, const struct msi_record *skip)
+{
+    unsigned int load[NR_CPUS];
+    unsigned int least = MSI_RECORDS + 1u;
+    int c, i, best = -1;
+    uint64_t online = msi_remap ? msi_remap->cpus() : pci_msi_cpus();
+
+    k_memset(load, 0, sizeof(load));
+    for (i = 0; i < MSI_RECORDS; i++) {
+        const struct msi_record *r = &msi_records[i];
+
+        if (r != skip && r->kind && r->cpu >= 0) {
+            load[r->cpu]++;
+        }
+    }
+    msi_possible |= online;
+    mask &= online;
+    for (c = 0; c < NR_CPUS; c++) {
+        if ((mask & ((uint64_t)1 << c)) && load[c] < least) {
+            least = load[c];
+            best = c;
+        }
+    }
+    return best;
+}
+
 /**
  * The message `dev` is to send for `vector`, in `*address` and `*data`: the
  * remapper's, with its entry in `*handle`, while one is in place, and the
@@ -912,12 +952,19 @@ static int msi_compose(struct msi_record *r, uint8_t vector, uint32_t *address, 
 {
     uint32_t was_address = r->address, was_data = r->data;
 
-    pci_msi_message(vector, &r->address, &r->data);
+    if (!r->affinity) {
+        r->affinity = ~(uint64_t)0;
+        r->cpu = msi_choose(r->affinity, r);
+    }
+    if (r->cpu < 0) {
+        return -1;
+    }
+    pci_msi_message_cpu(vector, r->cpu, &r->address, &r->data, &r->destination);
     *address = r->address;
     *data = r->data;
     *handle = -1;
     if (msi_remap != NULL) {
-        *handle = msi_remap->map(&r->dev, r->address, r->data, address, data);
+        *handle = msi_remap->map(&r->dev, r->address, r->data, r->destination, address, data);
         if (*handle < 0) {
             r->address = was_address;
             r->data = was_data;
@@ -948,6 +995,9 @@ static void msi_disable_locked(const pci_device_t *dev)
     }
 }
 
+/** Disable MSI-X and drop every entry's message record, with msi_lock held. */
+static void msix_disable_locked(const pci_device_t *dev);
+
 /**
  * The order is the one the PCI specification requires and no other: the
  * enable bit is cleared first, in case firmware left it set, and the count
@@ -969,8 +1019,7 @@ static void msi_disable_locked(const pci_device_t *dev)
 int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
 {
     uint8_t cap = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSI);
-    uint8_t msix = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSIX);
-    struct msi_record *r, *rx;
+    struct msi_record *r;
     uint16_t control;
     uint32_t address, data, flags;
     unsigned int last;
@@ -1010,19 +1059,7 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
     }
     control = (uint16_t)(control & ~(PCI_MSI_ENABLE | PCI_MSI_MULTIPLE_ENABLE));
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2), control);
-    if (msix != 0) {
-        uint16_t mxc = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(msix + 2));
-
-        rx = msi_record_find(dev, MSI_KIND_MSIX);
-        if (rx != NULL) {
-            msi_record_drop(rx);
-        }
-        if ((mxc & PCI_MSIX_ENABLE) != 0) {
-            /* MSI beside an enabled MSI-X is undefined by the specification. */
-            pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(msix + 2),
-                               (uint16_t)(mxc & ~PCI_MSIX_ENABLE));
-        }
-    }
+    msix_disable_locked(dev);
     pci_write_config32(dev->bus, dev->device, dev->function, (uint8_t)(cap + 4), address);
     if ((control & PCI_MSI_64BIT) != 0) {
         pci_write_config32(dev->bus, dev->device, dev->function, (uint8_t)(cap + 8), 0);
@@ -1234,18 +1271,16 @@ void pci_msix_unmask(const pci_device_t *dev)
 
 /** The function mask goes on before the entries are rewritten, so that the
  * device sends nothing between its last remapped message and the end. */
-void pci_msix_disable(const pci_device_t *dev)
+static void msix_disable_locked(const pci_device_t *dev)
 {
     uint8_t cap = pci_msix_capability(dev);
     struct msi_record *r;
     uint16_t control;
-    uint32_t flags;
     int i;
 
     if (cap == 0) {
         return;
     }
-    flags = spin_lock_irqsave(&msi_lock);
     control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
                        (uint16_t)(control | PCI_MSIX_MASK_ALL));
@@ -1258,6 +1293,14 @@ void pci_msix_disable(const pci_device_t *dev)
     }
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
                        (uint16_t)((control | PCI_MSIX_MASK_ALL) & ~PCI_MSIX_ENABLE));
+}
+
+/** Mask a function's MSI-X messages and release every recorded entry. */
+void pci_msix_disable(const pci_device_t *dev)
+{
+    uint32_t flags = spin_lock_irqsave(&msi_lock);
+
+    msix_disable_locked(dev);
     spin_unlock_irqrestore(&msi_lock, flags);
 }
 
@@ -1281,7 +1324,7 @@ int pci_msi_remap_start(const struct pci_msi_remap *ops)
         if (r->kind == 0) {
             continue;
         }
-        r->handle = ops->map(&r->dev, r->address, r->data, &address, &data);
+        r->handle = ops->map(&r->dev, r->address, r->data, r->destination, &address, &data);
         if (r->handle < 0) {
             for (j = 0; j < i; j++) {
                 if (msi_records[j].kind != 0 && msi_records[j].handle >= 0) {
@@ -1547,4 +1590,136 @@ int pci_reset_function(const pci_device_t *dev, pci_sleep_t msleep)
          : method == PCI_RESET_AF_FLR ? "advanced features function-level reset"
                                       : "power management");
     return 0;
+}
+
+/** Find the enabled message on `vector`, with msi_lock held. */
+static struct msi_record *msi_vector(int vector)
+{
+    int i;
+
+    for (i = 0; i < MSI_RECORDS; i++) {
+        if (msi_records[i].kind && (int)(msi_records[i].data & 255u) == vector) {
+            return &msi_records[i];
+        }
+    }
+    return NULL;
+}
+
+/** Read both masks under the same lock that serializes the device. */
+int pci_irq_affinity(int vector, uint64_t *requested, uint64_t *effective)
+{
+    uint32_t flags = spin_lock_irqsave(&msi_lock);
+    struct msi_record *r = msi_vector(vector);
+    int rc = r ? 0 : -ENOENT;
+
+    if (r) {
+        *requested = r->affinity & msi_possible;
+        *effective = (uint64_t)1 << r->cpu;
+    }
+    spin_unlock_irqrestore(&msi_lock, flags);
+    return rc;
+}
+
+/** Retarget one live message under msi_lock, retaining its vector on all
+ * processors. Only the address changes without remapping. An old message
+ * therefore invokes the same chain, serialized by irq_dispatch_edge.
+ * A remapped move changes the destination in the same remapping entry
+ * and invalidates its cached copy; an in-flight message keeps its handle. */
+static int msi_retarget(struct msi_record *r, int cpu)
+{
+    uint32_t address, data, destination, wire_address, wire_data;
+    int handle = -1;
+
+    pci_msi_message_cpu((uint8_t)r->data, cpu, &address, &data, &destination);
+    wire_address = address;
+    wire_data = data;
+    if (msi_remap && r->handle >= 0) {
+        msi_remap->move(r->handle, destination);
+        handle = r->handle;
+    } else {
+        msi_record_write(r, wire_address, wire_data, 0);
+        if (r->kind == MSI_KIND_MSIX) {
+            (void)mmio_read32(r->entry);
+        } else {
+            (void)pci_read_config32(r->dev.bus, r->dev.device, r->dev.function,
+                                    (uint8_t)(r->cap + 4));
+        }
+    }
+    r->handle = handle;
+    r->address = address;
+    r->data = data;
+    r->destination = destination;
+    r->cpu = cpu;
+    return 0;
+}
+
+/** Move one enabled vector to an online processor in the requested mask. */
+int pci_irq_set_affinity(int vector, uint64_t mask)
+{
+    uint32_t flags = spin_lock_irqsave(&msi_lock);
+    struct msi_record *r = msi_vector(vector);
+    int cpu = msi_choose(mask, r);
+    int rc = !r ? -ENOENT : cpu < 0 ? -EINVAL : msi_retarget(r, cpu);
+
+    if (!rc) {
+        r->affinity = mask;
+    }
+    spin_unlock_irqrestore(&msi_lock, flags);
+    return rc;
+}
+
+/** Spread early boot messages, or move a message off an offline target.
+ * A request with no processor left online falls back to all online CPUs. */
+void pci_msi_rebalance(void)
+{
+    uint32_t flags = spin_lock_irqsave(&msi_lock);
+    int i;
+
+    for (i = 0; i < MSI_RECORDS; i++) {
+        if (msi_records[i].kind) {
+            msi_records[i].cpu = -1;
+        }
+    }
+    for (i = 0; i < MSI_RECORDS; i++) {
+        struct msi_record *r = &msi_records[i];
+        int cpu;
+
+        if (!r->kind) {
+            continue;
+        }
+        cpu = msi_choose(r->affinity, r);
+        if (cpu < 0) {
+            cpu = msi_choose(~(uint64_t)0, r);
+        }
+        if (cpu >= 0 && cpu != r->cpu) {
+            (void)msi_retarget(r, cpu);
+        }
+    }
+    spin_unlock_irqrestore(&msi_lock, flags);
+}
+
+/** Move messages before shutdown stops processors, then publish the
+ * vector destinations their stop paths use to forward pending requests. */
+void pci_msi_shutdown(int cpu)
+{
+    uint32_t flags = spin_lock_irqsave(&msi_lock);
+    int i;
+
+    for (i = 0; i < MSI_RECORDS; i++) {
+        struct msi_record *r = &msi_records[i];
+
+        if (r->kind) {
+            if (r->cpu != cpu) {
+                (void)msi_retarget(r, cpu);
+            }
+            msi_stop_targets[r->data & 255u] = (unsigned int)cpu + 1u;
+        }
+    }
+    spin_unlock_irqrestore(&msi_lock, flags);
+}
+
+/** Read the shutdown destination without taking a lock in a stop NMI. */
+int pci_msi_stop_target(int vector)
+{
+    return vector >= 0 && vector < 256 ? (int)msi_stop_targets[vector] - 1 : -1;
 }

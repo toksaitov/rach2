@@ -9,7 +9,9 @@
 # accesses by number and direction go to kvm-hist.txt, from hist triggers
 # on the kvm_exit and kvm_msr trace events, which count every VM's.
 # Ends once the file STOP names holds STOPWORD, or on SIGINT, SIGTERM or
-# SIGHUP, and removes the triggers it installed on every exit.
+# SIGHUP, and removes the triggers it installed on every exit. A signal only
+# records the cancellation, which the main loop reads, so that no second
+# signal can interrupt the removal.
 # Usage: kvmstat.py WORKDIR STOP STOPWORD
 import os, pathlib, re, signal, sys, time
 
@@ -21,6 +23,7 @@ tr = pathlib.Path('/sys/kernel/tracing/events/kvm')
 hists = {'kvm_exit': 'hist:keys=exit_reason:sort=hitcount:size=256',
          'kvm_msr': 'hist:keys=ecx,write:sort=hitcount:size=256'}
 installed = []  # the events whose trigger is this run's to remove
+cancelled = 0  # the signal that ended the run, or 0
 
 
 def trigger(ev, text):
@@ -57,7 +60,10 @@ def vm_rows(d):
 
 
 def ended(sig, frame):
-    raise SystemExit(128 + sig)
+    """Record the first ending signal; raising here could abandon the
+    triggers' removal."""
+    global cancelled
+    cancelled = cancelled or sig
 
 
 end_signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
@@ -66,16 +72,14 @@ for s in end_signals:
 
 try:
     for ev, h in hists.items():
-        mask = signal.pthread_sigmask(signal.SIG_BLOCK, end_signals)
+        if cancelled:
+            break
         try:
-            try:
-                trigger(ev, h)
-            except FileExistsError:
-                pass  # left by a run that ended without removing it; ours to remove
-            installed.append(ev)
-        finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
-    while True:
+            trigger(ev, h)
+        except FileExistsError:
+            pass  # left by a run that ended without removing it; ours to remove
+        installed.append(ev)
+    while not cancelled:
         vms = list(kvm.glob('*-*'))
         qemus = []
         for p in pathlib.Path('/proc').glob('[0-9]*'):
@@ -107,10 +111,10 @@ try:
             break
         time.sleep(0.02)
 finally:
-    for s in end_signals:
-        signal.signal(s, signal.SIG_IGN)
     for ev in installed:
         try:
             trigger(ev, '!' + hists[ev])
         except OSError as e:
             sys.stderr.write('kvmstat: %s: trigger left installed: %s\n' % (ev, e))
+if cancelled:
+    sys.exit(128 + cancelled)
