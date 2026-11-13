@@ -1487,6 +1487,7 @@ static void nohz_accounting(void)
     host_cpu = 0;
     current_proc = &procs[0];
     this_cpu()->idle_wait = 1;
+    this_cpu()->tick_stop_period = 1;
     this_cpu()->tick_stopped = 1;
     this_cpu()->accounted_ns = 1000000000;
     clock_ns = 3125000000u;
@@ -1510,6 +1511,28 @@ static void nohz_accounting(void)
     sched_account_tick(1, 0);
     CHECK(procs[0].utime == 1 && this_cpu()->user_ticks == 1 && this_cpu()->idle_ticks == 2000,
           "the first busy tick charges no idle span to the new thread");
+    /* A guest's 4 ms period: the thread ran 2.5 ms past the edge at
+     * 3128 ms and halted, and the processor woke at 3141 ms. */
+    this_cpu()->accounted_ns = 3128000000u;
+    this_cpu()->idle_wait = 1;
+    this_cpu()->tick_stop_period = 4;
+    this_cpu()->tick_stopped = 1;
+    clock_ns = 3141000000u;
+    host_cpu = 1;
+    sched_cpu_ticks(0, &user, &busy, &idle, &steal);
+    CHECK(idle == 2012 && steal == 125,
+          "a remote reading projects a stopped span to its last edge");
+    host_cpu = 0;
+    sched_account_tick(0, 0);
+    CHECK(this_cpu()->idle_ticks == 2012 && this_cpu()->accounted_ns == 3140000000u,
+          "waking charges idle the periods whose edges the stopped tick passed");
+    this_cpu()->tick_stopped = 0;
+    this_cpu()->idle_wait = 0;
+    clock_ns = 3144000000u;
+    sched_account_tick(1, 0);
+    CHECK(procs[0].utime == 5 && this_cpu()->idle_ticks == 2012,
+          "the next tick charges its whole period to the thread, the stretch before the halt with "
+          "it");
     load_tick = 1000;
     load_wait = 5001;
     kernel_ticks = 5999;

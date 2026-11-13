@@ -1326,6 +1326,26 @@ void sched_give_way(void)
     }
 }
 
+/**
+ * Give the whole ticks from `cpu`'s count to the last scheduler edge at or
+ * before `now`, the edges its stopped tick passed. Linux charges a stopped
+ * idle span by the jiffies it crossed (tick_nohz_account_idle_time,
+ * kernel/time/tick-sched.c:1395-1415), so the time from the last edge
+ * before the halt to the halt, and from the wake to the next edge, is the
+ * thread's that the next tick finds. Counting to `now` would charge to idle
+ * the stretch the last thread ran after its last tick, two milliseconds a
+ * sleep at a guest's 4 ms period.
+ */
+static uint64_t sched_stopped_ticks(const struct percpu *cpu, int64_t now)
+{
+    uint64_t rem;
+    int64_t gap;
+
+    (void)tick_div64((uint64_t)now, (uint64_t)cpu->tick_stop_period * TICK_NS, &rem);
+    gap = now - (int64_t)rem - cpu->accounted_ns + (int64_t)(TICK_NS / 2u);
+    return gap < (int64_t)TICK_NS ? 0 : tick_div64((uint64_t)gap, TICK_NS, NULL);
+}
+
 /*
  * Each processor's idle marker and four tick counters are in its record
  * (percpu.h). They are `volatile` because the timer handler reads the marker
@@ -1340,7 +1360,6 @@ void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle, uint
 {
     const struct percpu *cpu = &cpu_table[c];
     uint32_t seq;
-    int64_t gap;
     uint64_t pending, stolen;
 
     for (;;) {
@@ -1358,16 +1377,13 @@ void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle, uint
         *idle = cpu->idle_ticks;
         *steal = cpu->steal_ticks;
         if (cpu->tick_stopped) {
-            gap = rtc_monotonic_ns() - cpu->accounted_ns + (int64_t)(TICK_NS / 2u);
-            if (gap > 0) {
-                pending = tick_div64((uint64_t)gap, TICK_NS, NULL);
-                stolen = tick_div64(arch_cpu_steal_ns(c) - cpu->steal_ns, TICK_NS, NULL);
-                if (stolen > pending) {
-                    stolen = pending;
-                }
-                *idle += pending - stolen;
-                *steal += stolen;
+            pending = sched_stopped_ticks(cpu, rtc_monotonic_ns());
+            stolen = tick_div64(arch_cpu_steal_ns(c) - cpu->steal_ns, TICK_NS, NULL);
+            if (stolen > pending) {
+                stolen = pending;
             }
+            *idle += pending - stolen;
+            *steal += stolen;
         }
         if (cpu->ticks_seq == seq) {
             return;
@@ -1611,8 +1627,12 @@ void sched_account_tick(int user, int64_t due)
     }
     stolen = arch_steal_ns() - cpu->steal_ns;
     if (found == ACCOUNT_IDLE && (due == 0 || cpu->tick_stopped)) {
-        uint64_t take = tick_div64(stolen, TICK_NS, NULL);
+        uint64_t take;
 
+        if (cpu->tick_stopped) {
+            ticks = sched_stopped_ticks(cpu, now);
+        }
+        take = tick_div64(stolen, TICK_NS, NULL);
         if (take > ticks) {
             take = ticks;
         }
@@ -1757,6 +1777,7 @@ static int idle_stop_tick(void)
     int stopped;
 
     cpu->ticks_seq++;
+    cpu->tick_stop_period = timer_tick_period();
     cpu->tick_stopped = 1;
     cpu->ticks_seq++;
     stopped = timer_idle_enter();
