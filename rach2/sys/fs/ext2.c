@@ -1478,9 +1478,9 @@ static int sb_note(struct ext2_mount *em);
  * store does a table block it cannot write (`ext2_inode_write`), and a
  * failed write is recorded as one, so the mount's error bit or its failure
  * keeps the valid bit off the volume. An unlinked inode's write-back error
- * sequence goes with it (`vfs_ino_err_forget`), since its number may name
- * the next file made. The caller holds no file lock. Ends the count
- * `node_final` took.
+ * sequence goes before its bit is freed (`ext2_release_inode`), or here on
+ * a mount that writes nothing, where it would otherwise stay until the
+ * unmount. The caller holds no file lock. Ends the count `node_final` took.
  */
 static void node_free(struct ext2_mount *em, struct ext2_node *n)
 {
@@ -1498,8 +1498,7 @@ static void node_free(struct ext2_mount *em, struct ext2_node *n)
             klog(KLOG_WARN, "ext2", "inode %d: not %s at its last put", (int)n->ino,
                  freed ? "freed" : "stored");
         }
-    }
-    if (n->unlinked) {
+    } else if (n->unlinked) {
         vfs_ino_err_forget(em->mnt, n->ino);
     }
     node_drop(em, n);
@@ -3352,26 +3351,31 @@ static void inode_blocks_fetch(struct ext2_mount *em, const struct ext2_node *n)
 }
 
 /**
- * Free inode `n`, which has no name and no holder: the blocks of a regular
- * file, a directory or a long symbolic link from the end (`ext2_punch`), then
- * the inode written zeroed with its deletion time, then its reference to
- * its extended-attribute block (`ext2_attr_release`), then its bit and counts,
- * these two under their groups' locks with the blocks they read fetched
- * first, so that a lock waits on the disk only for a block evicted again.
- * Once the slot is written zeroed the node's `unstored` mark is cleared,
- * since nothing of it is left to store, and the `unlinked` mark before the
- * bit is freed. Each step reads
- * through the reclaim reader (`ext2_read_reclaim`), which reports a damaged
- * or unread block and leaves what it holds taken, so a step returns only a
- * failed write, after which nothing further would land. A fenced node
- * (`n->fenced`) is -EIO before any of it, since its pointers and its
- * attribute block may name another file's blocks. 0, or -errno.
+ * Free inode `n`, which has no name and no holder: its write-back error
+ * sequence first (`vfs_ino_err_forget`), since nothing can open the file
+ * again and the number its freed bit gives up may name the next file made,
+ * whose sequence starts empty, as Linux's new inode's does (fs/inode.c:209);
+ * then the blocks of a regular file, a directory or a long symbolic link
+ * from the end (`ext2_punch`), then the inode written zeroed with its
+ * deletion time, then its reference to its extended-attribute block
+ * (`ext2_attr_release`), then its bit and counts, these two under their
+ * groups' locks with the blocks they read fetched first, so that a lock
+ * waits on the disk only for a block evicted again. Once the slot is
+ * written zeroed the node's `unstored` mark is cleared, since nothing of it
+ * is left to store, and the `unlinked` mark before the bit is freed. Each
+ * step reads through the reclaim reader (`ext2_read_reclaim`), which
+ * reports a damaged or unread block and leaves what it holds taken, so a
+ * step returns only a failed write, after which nothing further would land.
+ * A fenced node (`n->fenced`) is -EIO before any step on the disk, since its
+ * pointers and its attribute block may name another file's blocks. 0, or
+ * -errno.
  */
 int ext2_release_inode(struct ext2_mount *em, struct ext2_node *n)
 {
     int was_dir = (n->mode & S_IFMT_) == S_IFDIR_;
     int rc;
 
+    vfs_ino_err_forget(em->mnt, n->ino);
     if (n->fenced) {
         return -EIO;
     }
