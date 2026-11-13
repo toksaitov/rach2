@@ -377,8 +377,13 @@ int main(int argc, char **argv)
     while (now_us() - t0 < 200000) {
     }
     cycles_per_us = (tsc() - c0) / (now_us() - t0);
-    printf("wakemusl: %ld processors, %.1f cycles a microsecond, %d rounds\n", cpus, cycles_per_us,
-           rounds);
+    printf("wakemusl: %ld processors, %.1f cycles a microsecond, %d rounds%s\n", cpus,
+           cycles_per_us, rounds, loaded ? ", under load" : "");
+    l0 = now_us();
+    if (loaded && (pthread_create(&loaders[0], NULL, load, (void *)0L) != 0 ||
+                   pthread_create(&loaders[1], NULL, load, (void *)1L) != 0)) {
+        fail("pthread_create");
+    }
     per_call("getrusage(RUSAGE_THREAD)", SIB_IDLE);
     per_call("getrusage(RUSAGE_THREAD)", SIB_SPIN);
     per_call("getrusage(RUSAGE_THREAD)", SIB_YIELD);
