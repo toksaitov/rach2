@@ -156,16 +156,18 @@ Dropbear's host keys under
 .Pa rach2-config-a/etc/dropbear
 and OpenSSH's under
 .Pa rach2-config-a/etc/ssh ,
-and each account's home
+and the tree of each account's home
 .Pa .ssh
-contents under
-.Pa rach2-config-a/keys/UID .
+in the tar file
+.Pa rach2-config-a/keys/UID.tar ,
+which keeps its names and links as they are on the root.
 Root's keys use UID 0.
-The home comes from passwd, and only the first entry for a shared UID
+The home comes from passwd, read inside the root with its links followed
+there and
+.Pa ..
+stopped at the root, and only the first entry for a shared UID
 supplies keys.
-Numeric directory names cannot collide by case on FAT32.
-Within each account's .ssh, names that differ only in case are refused
-before the root is written, with both paths in the diagnostic.
+Numeric file names cannot collide by case on FAT32.
 Normal updates preserve .ssh in every passwd home, including homes outside
 .Pa /home ,
 with their owners and modes.
@@ -177,6 +179,9 @@ Host keys are owned by 0:0; account keys return to the home from the
 archived passwd with its uid and gid.
 Missing homes are created with mode 700 and that owner.
 Keys for UIDs absent from that file are ignored.
+The directory
+.Pa keys/UID
+that an older version wrote is restored as well.
 An older archive without UID key directories cannot restore account keys.
 The archive has two slots,
 .Pa rach2-config-a

@@ -237,21 +237,36 @@ Dropbear's host keys go in
 .Pa rach2-config-a/etc/dropbear ,
 and OpenSSH's, which a GNU root's server has, in
 .Pa rach2-config-a/etc/ssh .
-For each account in passwd, the contents of its home directory's
+For each account in passwd, the tree of its home directory's
 .Pa .ssh
-go in
-.Pa rach2-config-a/keys/UID ,
+goes in the tar file
+.Pa rach2-config-a/keys/UID.tar ,
 including root's keys in
-.Pa keys/0 .
+.Pa keys/0.tar .
 The home is the passwd home field, which need not match the account name.
 For a shared UID, only the first passwd entry supplies keys.
-Numeric directory names keep accounts whose names differ only in case
-separate on FAT32.
-Within each account's .ssh, names that differ only in case are refused
-before the root is written, with both paths in the diagnostic.
+Numeric file names keep accounts whose names differ only in case
+separate on FAT32, and the tar file keeps the names, symbolic links and
+hard links of the tree, which FAT32 would fold to one case, match to a short
+alias or refuse.
+A restore reads
+.Pa keys/UID
+as a directory when an archive written by an older version has one.
+A home is read inside the root it belongs to, as a process whose root
+directory is that root would find it: each symbolic link along it is
+followed within the root, and
+.Pa ..
+stops at the root, so a home such as
+.Pa /../../mnt/other
+is that root's
+.Pa /mnt/other
+and never a directory outside the disk.
+A home that leads through more than 40 links stops the update before the
+root is written.
 Normal updates preserve .ssh in every passwd home, including homes outside
 .Pa /home ,
-with their owners and modes.
+with their owners and modes; a .ssh that is a symbolic link is kept as the
+tree it leads to.
 Before restoring retained keys, the image's .ssh is removed from every
 account home outside /home, including accounts with no archived keys.
 Passwords are stored as hashes.
@@ -388,8 +403,8 @@ The next update, when the copy in
 .Pa /dev/shm
 is gone, uses the marked archive, preserving the server's identity
 and the accounts' keys.
-FAT32 stores neither owners nor modes, so restored key directories receive
-mode 700 and key files mode 600.
+Restored key directories receive mode 700 and key files mode 600, and a
+symbolic link keeps its own mode.
 The server's host keys receive owner 0:0.
 Each archived account receives its UID's keys in the home from passwd,
 with that account's uid and gid.

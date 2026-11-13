@@ -457,7 +457,6 @@ write_archive() { # write_archive ROOTDIR [MARK]
     for f in $ARCHIVE_NEEDS; do
         [ -f "$1/$f" ] || die "$f is not among the files to archive"
     done
-    archive_account_keys "$1" check || die "the account key names could not be archived"
     [ "$generation" -lt 2147483647 ] || die "the archive generation counter is exhausted"
     next_archive="$RECOVERY_MNT/rach2-config-a"
     if [ "$archive" = "$next_archive" ]; then
@@ -495,34 +494,69 @@ write_archive() { # write_archive ROOTDIR [MARK]
         die "the legacy archives could not be removed"
 }
 
-# check_key_names DIR: prints the two names and exits 1 when two names in DIR,
-# or in a directory below it, differ only in ASCII case: FAT32 folds case, so
-# on the recovery partition one would replace the other without a word. It
-# runs in a subshell, so its `die` ends only the subshell.
-check_key_names() (
-    for entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
-        [ -e "$entry" ] || [ -L "$entry" ] || continue
-        folded=$(printf '%s' "${entry##*/}" | LC_ALL=C tr '[:upper:]' '[:lower:]')
-        for other in "$1"/* "$1"/.[!.]* "$1"/..?*; do
-            [ -e "$other" ] || [ -L "$other" ] || continue
-            [ "$entry" != "$other" ] || continue
-            other_folded=$(printf '%s' "${other##*/}" | LC_ALL=C tr '[:upper:]' '[:lower:]')
-            [ "$folded" != "$other_folded" ] ||
-                die "ssh key names collide on FAT32: $entry and $other"
-        done
-        if [ -d "$entry" ] && [ ! -L "$entry" ]; then
-            check_key_names "$entry" || exit 1
+# root_path ROOT PATH: prints where PATH leads in the tree at ROOT, as a
+# process whose root directory is ROOT finds it, with ROOT in front. Each
+# symbolic link along PATH is followed with ROOT as `/`, and `..` at ROOT
+# stays there, so the result is ROOT or a path below it however PATH or the
+# links in the tree are written. A home field of passwd is read this way
+# before anything is copied from it, removed or given an owner: a home of
+# `/../../mnt/other`, or one through a link to `/mnt`, would otherwise reach
+# outside the disk being written. A component that does not exist is taken as
+# written. Status 1 after 40 links, as Linux's ELOOP, or when a link cannot be
+# read. Run it in a command substitution.
+root_path() { # root_path ROOT PATH
+    rest=$2
+    done_path=""
+    links=0
+    while [ -n "$rest" ]; do
+        case "$rest" in
+            /*)
+                rest=${rest#/}
+                continue
+                ;;
+        esac
+        part=${rest%%/*}
+        if [ "$part" = "$rest" ]; then
+            rest=""
+        else
+            rest=${rest#*/}
         fi
+        case "$part" in
+            .) continue ;;
+            ..)
+                done_path=${done_path%/*}
+                continue
+                ;;
+        esac
+        if [ -L "$1$done_path/$part" ]; then
+            links=$((links + 1))
+            [ "$links" -le 40 ] || return 1
+            link=$(readlink "$1$done_path/$part") || return 1
+            case "$link" in /*) done_path="" ;; esac
+            rest=$link${rest:+/$rest}
+            continue
+        fi
+        done_path=$done_path/$part
     done
-)
+    printf '%s\n' "$1$done_path"
+}
 
-# archive_account_keys ROOTDIR [check]: copies the .ssh directory of each
-# account of ROOTDIR/etc/passwd with a numeric id and an absolute home into
-# keys/UID of the slot next_archive names. The directory is named by the id,
-# which has no case for FAT32 to fold, and when accounts share an id the
-# first of them in passwd has it, whether or not that account has keys. With
-# `check`, the key names are checked and nothing is copied. It runs in a
-# subshell, and its status is 1 when a check or a copy failed.
+# Whether the resolved path PATH is ROOT/home or a path below it.
+under_home() { # under_home ROOT PATH
+    case "$2" in "$1/home" | "$1/home/"*) return 0 ;; esac
+    return 1
+}
+
+# archive_account_keys ROOTDIR: stores the .ssh directory of each account of
+# ROOTDIR/etc/passwd with a numeric id and an absolute home in the tar file
+# keys/UID.tar of the slot next_archive names, the home read inside ROOTDIR
+# by root_path. A tar file keeps the tree's names as they are, where FAT32
+# would fold their case and match a name such as `ABCDEF~1` to the short
+# alias of another, and keeps its symbolic and hard links, which FAT32 cannot
+# hold. The file is named by the id, which has no case to fold, and when
+# accounts share an id the first of them in passwd has it, whether or not
+# that account has keys. It runs in a subshell, and its status is 1 when a
+# home could not be read or a tree could not be stored.
 archive_account_keys() (
     seen=" "
     while IFS=: read -r _name _password uid _gid _gecos home _shell; do
@@ -530,11 +564,10 @@ archive_account_keys() (
         case "$seen" in *" $uid "*) continue ;; esac
         seen="$seen$uid "
         case "$home" in /*) ;; *) continue ;; esac
-        [ -d "$1$home/.ssh" ] || continue
-        check_key_names "$1$home/.ssh" || exit 1
-        [ "${2:-}" != check ] || continue
-        destination="$next_archive/keys/$uid"
-        { mkdir -p "$destination" && cp -R "$1$home/.ssh/." "$destination/"; } ||
+        keys=$(root_path "$1" "$home/.ssh") || die "$home/.ssh leads through too many links"
+        [ -d "$keys" ] || continue
+        { mkdir -p "$next_archive/keys" &&
+            tar -cf "$next_archive/keys/$uid.tar" -C "$keys" .; } ||
             die "$home/.ssh could not be archived"
     done < "$1/etc/passwd"
 )
@@ -600,13 +633,20 @@ keep_image_accounts() {
     add_lines "$2/etc/shadow" "$lines"
 }
 
-# Copies the key directory SOURCE, taken from the archive, to DESTINATION with
+# Copies the key tree SOURCE, taken from the archive, to DESTINATION with
 # OWNER, mode 700 on its directories and 600 on its files, and ends the run
-# when it cannot. FAT32 records neither owners nor modes, and SSH checks
-# them, so they are set here, before cp -a puts the copy on the new root.
+# when it cannot. SOURCE is a tar file, as archive_account_keys writes, or a
+# directory, as an archive of an older version holds. FAT32 records neither
+# owners nor modes, and SSH checks them, so they are set here, before cp -a
+# puts the copy on the new root; a symbolic link is given the owner and not
+# followed.
 restore_key_directory() { # restore_key_directory SOURCE DESTINATION OWNER
-    if ! { mkdir -p "$2" && cp -R "$1/." "$2/" &&
-        chown -R "$3" "$2" &&
+    if [ -f "$1" ]; then
+        mkdir -p "$2" && tar -xf "$1" -C "$2"
+    else
+        mkdir -p "$2" && cp -R "$1/." "$2/"
+    fi || die "$1 could not be restored to $2"
+    if ! { chown -R -h "$3" "$2" &&
         find "$2" -type d -exec chmod 700 {} + &&
         find "$2" -type f -exec chmod 600 {} +; }; then
         die "$1 could not be restored with its owner and modes"
@@ -618,7 +658,10 @@ restore_key_directory() { # restore_key_directory SOURCE DESTINATION OWNER
 # keep/etc/passwd with an id of 1000 or more and a home under /home is given
 # that home, empty when the archive has no keys for it, since the copy's home
 # tree replaces all of the image's homes after the write. An account has keys
-# only when the archive has keys/UID for its id. The recovery partition must
+# only when the archive has keys/UID.tar for its id, or keys/UID from an older
+# version. A home is read inside `keep` by root_path, and one that is not
+# there yet is made with the account's owner and mode 700; one that is there
+# keeps its own. The recovery partition must
 # be mounted at RECOVERY_MNT. It runs in a subshell, and its status is 1 when
 # a home or a key could not be restored.
 restore_archive_keys() (
@@ -635,18 +678,21 @@ restore_archive_keys() (
     while IFS=: read -r _name _password uid gid _gecos home _shell; do
         case "$uid" in "" | *[!0-9]*) continue ;; esac
         case "$home" in /*) ;; *) continue ;; esac
-        case "$home" in
-            /home/*)
-                if [ "$uid" -ge 1000 ]; then
-                    mkdir -p "$keep$home" && chmod 700 "$keep$home" &&
-                        chown "$uid:$gid" "$keep$home" || exit 1
-                fi
-                ;;
+        dir=$(root_path "$keep" "$home") || exit 1
+        keys=""
+        if [ -f "$archive/keys/$uid.tar" ]; then
+            keys=$archive/keys/$uid.tar
+        elif [ -d "$archive/keys/$uid" ]; then
+            keys=$archive/keys/$uid
+        fi
+        case "$dir" in
+            "$keep/home/"*) [ "$uid" -ge 1000 ] || [ -n "$keys" ] || continue ;;
+            *) [ -n "$keys" ] || continue ;;
         esac
-        [ -d "$archive/keys/$uid" ] || continue
-        mkdir -p "$keep$home" && chmod 700 "$keep$home" &&
-            chown "$uid:$gid" "$keep$home" || exit 1
-        restore_key_directory "$archive/keys/$uid" "$keep$home/.ssh" "$uid:$gid"
+        if [ ! -d "$dir" ]; then
+            mkdir -p "$dir" && chmod 700 "$dir" && chown "$uid:$gid" "$dir" || exit 1
+        fi
+        [ -z "$keys" ] || restore_key_directory "$keys" "$dir/.ssh" "$uid:$gid"
     done < "$keep/etc/passwd"
 )
 
@@ -1527,11 +1573,18 @@ whole configuration archived on its recovery partition; its accounts are not the
     if [ -d "$TARGET_MNT/root" ] && [ -n "$mounted_root" ]; then
         cp -a "$TARGET_MNT/root" "$keep/root-home" || die "root's home directory could not be kept"
     fi
+    # Each home is read inside the old root and kept at the same home read
+    # inside the copy, and a .ssh that is a link is kept as the tree it
+    # leads to, which may not be on the new root.
     if [ -n "$mounted_root" ]; then
         while IFS=: read -r _name _password _uid _gid _gecos home _shell; do
-            case "$home" in /home | /home/*) continue ;; /*) ;; *) continue ;; esac
-            [ -d "$TARGET_MNT$home/.ssh" ] || continue
-            { mkdir -p "$keep$home" && cp -a "$TARGET_MNT$home/.ssh" "$keep$home/"; } ||
+            case "$home" in /*) ;; *) continue ;; esac
+            from=$(root_path "$TARGET_MNT" "$home/.ssh") || die "$home/.ssh leads through too many links"
+            under_home "$TARGET_MNT" "$from" && continue
+            [ -d "$from" ] || continue
+            to=$(root_path "$keep" "$home") || die "$home leads through too many links in $keep"
+            [ ! -e "$to/.ssh" ] && [ ! -L "$to/.ssh" ] || continue
+            { mkdir -p "$to" && cp -a "$from" "$to/.ssh"; } ||
                 die "$home/.ssh could not be kept"
         done < "$keep/etc/passwd"
     fi
@@ -1672,11 +1725,16 @@ whole configuration archived on its recovery partition; its accounts are not the
         cp -a "$keep/home" "$TARGET_MNT/home" || die "the home directories could not be put back"
     else
         mkdir -p "$TARGET_MNT/home" || die "the home directory could not be made"
-        awk -F: '$3 >= 1000 && $6 ~ /^\/home\// { print $3, $4, $6 }' "$TARGET_MNT/etc/passwd" |
-        while read -r uid gid home; do
-            { mkdir -p "$TARGET_MNT$home" && chmod 700 "$TARGET_MNT$home" &&
-                chown "$uid:$gid" "$TARGET_MNT$home"; } || die "$home could not be made"
-        done
+        while IFS=: read -r _name _password uid gid _gecos home _shell; do
+            case "$uid" in "" | *[!0-9]*) continue ;; esac
+            [ "$uid" -ge 1000 ] || continue
+            case "$home" in /*) ;; *) continue ;; esac
+            dir=$(root_path "$TARGET_MNT" "$home") || die "$home leads through too many links"
+            case "$dir" in "$TARGET_MNT/home/"*) ;; *) continue ;; esac
+            [ ! -d "$dir" ] || continue
+            { mkdir -p "$dir" && chmod 700 "$dir" && chown "$uid:$gid" "$dir"; } ||
+                die "$home could not be made"
+        done < "$TARGET_MNT/etc/passwd"
     fi
     # Root's home is the machine's where it was kept; its keys are put back
     # with the other homes' below.
@@ -1685,17 +1743,22 @@ whole configuration archived on its recovery partition; its accounts are not the
         cp -a "$keep/root-home" "$TARGET_MNT/root" || die "root's home directory could not be put back"
     fi
     # The image's keys go from every home outside /home, kept keys or not.
+    # Each home is read inside the new root and inside the copy by root_path,
+    # so that a home such as `/../../mnt/other`, or one through a link, is
+    # the root's own and not a directory of another disk.
     rm -rf "$TARGET_MNT/root/.ssh" || die "the image's keys for root could not be removed"
     while IFS=: read -r _name _password uid gid _gecos home _shell; do
-        case "$home" in /home | /home/*) continue ;; /*) ;; *) continue ;; esac
-        rm -rf "$TARGET_MNT$home/.ssh" || die "$home/.ssh could not be removed"
-        [ -d "$keep$home/.ssh" ] || continue
-        if [ ! -d "$TARGET_MNT$home" ]; then
-            { mkdir -p "$TARGET_MNT$home" && chmod 700 "$TARGET_MNT$home" &&
-                chown "$uid:$gid" "$TARGET_MNT$home"; } || die "$home could not be made"
+        case "$home" in /*) ;; *) continue ;; esac
+        to=$(root_path "$TARGET_MNT" "$home") || die "$home leads through too many links"
+        under_home "$TARGET_MNT" "$to" && continue
+        rm -rf "$to/.ssh" || die "$home/.ssh could not be removed"
+        from=$(root_path "$keep" "$home") || die "$home leads through too many links in $keep"
+        [ -d "$from/.ssh" ] || continue
+        if [ ! -d "$to" ]; then
+            { mkdir -p "$to" && chmod 700 "$to" && chown "$uid:$gid" "$to"; } ||
+                die "$home could not be made"
         fi
-        cp -a "$keep$home/.ssh" "$TARGET_MNT$home/.ssh" ||
-            die "$home/.ssh could not be put back"
+        cp -a "$from/.ssh" "$to/.ssh" || die "$home/.ssh could not be put back"
     done < "$keep/etc/passwd"
     sync
     umount "$TARGET_MNT" || die "the new root would not unmount"
