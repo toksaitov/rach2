@@ -2419,8 +2419,12 @@ static int dir_frozen(struct ex_mount *em, struct ex_node *d)
  * Grow directory `d` by one cluster, zeroed and chained, and publish its new
  * length; the root, which has no length, is grown by its chain alone. A
  * contiguous directory another writer made has its run written into the FAT
- * and its flag cleared first, so that the chain can be followed. 0, -ENOSPC
- * for a directory that would pass 256 MiB, or -errno.
+ * and its flag cleared first, so that the chain can be followed. A join
+ * whose write fails may still be in the cache, and a later sync would write
+ * it, so the new cluster is freed only once the tail's end is written again;
+ * otherwise it stays allocated, a surplus tail the dirty-volume check frees,
+ * or lost, which it counts, when the end set in the cache reaches the disk
+ * later. 0, -ENOSPC for a directory that would pass 256 MiB, or -errno.
  */
 static int dir_grow_publish(struct ex_mount *em, struct ex_node *d)
 {
@@ -2484,7 +2488,9 @@ static int dir_grow_publish(struct ex_mount *em, struct ex_node *d)
     }
     rc = fat_set(em, tail, newc, 1);
     if (rc != 0) {
-        free_chain(em, newc, 0, 0);
+        if (fat_set(em, tail, EX_EOC, 1) == 0) {
+            free_chain(em, newc, 0, 0);
+        }
         return rc;
     }
     d->hint_cluster = 0;
@@ -3385,11 +3391,14 @@ static int zero_gap(struct ex_mount *em, struct ex_node *n, uint32_t file, uint6
  * joined to the chain with one FAT entry and a flush, and the new lengths
  * and modification time published.
  *
- * When the join's flush fails, the old tail is ended again and the run
- * freed; the end reaches the medium at the flush `free_chain` begins with,
- * before a cluster is freed. A tail that cannot be ended keeps the run, as a
- * surplus tail the dirty-volume check frees, rather than a chain that runs
- * into free clusters, and so does a publication that fails. The node's
+ * When the join's write or its flush fails, the old tail is ended again
+ * and the run freed, since a failed write through leaves the join dirty in
+ * the cache (`bcache_write`) for a later sync to put on the disk; the end
+ * reaches the medium at the flush `free_chain` begins with, before a
+ * cluster is freed. A tail whose end is not written keeps the run, as a
+ * surplus tail the dirty-volume check frees, or lost clusters it counts
+ * when the end set in the cache reaches the disk later, rather than a chain
+ * that runs into free clusters; so does a publication that fails. The node's
  * place in its chain stays good, since a write changes no cluster the chain
  * had, and the next append walks from there.
  *
@@ -3474,8 +3483,8 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
     if (run_first != 0 && have > 0) {
         rc = chain_at(em, n, n->first, 0, 0, (uint32_t)(have - 1), &tail);
         if (rc == 0) {
+            joined = 1;
             rc = fat_set(em, tail, run_first, 1);
-            joined = rc == 0;
         }
         if (rc == 0) {
             rc = bcache_flush(em->dev);
@@ -3514,10 +3523,11 @@ out:
 /**
  * Join the run from `run_first` to the tail of `n`'s `have` clusters and
  * flush the join. On a failure the run is freed, after the tail is ended
- * again when the join was written; when that write fails too, as every
- * write through does on a device whose flush failed (`bcache_write`), the
- * join may be on the medium, and the run stays allocated, a surplus tail,
- * as a failed `ex_write` leaves it. 0 or -errno.
+ * again once the join's write was tried, since a failed write leaves the
+ * join dirty in the cache for a later sync; when the end's write fails too,
+ * as every write through does on a device whose write or flush failed
+ * (`bcache_write`), the join may yet reach the medium, and the run stays
+ * allocated, a surplus tail, as a failed `ex_write` leaves it. 0 or -errno.
  */
 static int join_run(struct ex_mount *em, struct ex_node *n, uint64_t have, uint32_t run_first)
 {
@@ -3528,9 +3538,9 @@ static int join_run(struct ex_mount *em, struct ex_node *n, uint64_t have, uint3
         rc = fat_set(em, tail, run_first, 1);
         if (rc == 0) {
             rc = bcache_flush(em->dev);
-            if (rc != 0 && fat_set(em, tail, EX_EOC, 1) != 0) {
-                return rc;
-            }
+        }
+        if (rc != 0 && fat_set(em, tail, EX_EOC, 1) != 0) {
+            return rc;
         }
     }
     if (rc != 0) {
