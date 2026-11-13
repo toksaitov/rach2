@@ -101,7 +101,7 @@ it is in seconds and nanoseconds.
 A null pointer waits indefinitely; a zero interval performs one scan
 without waiting.
 With no selected descriptors, a finite interval acts as a sleep.
-A timeout ends at the first 1 ms timer tick at or after its end, measured from
+A timeout ends at the first 4 ms timer tick at or after its end, measured from
 where in the tick in progress the call is, so a timeout never expires
 before the time asked, up to the limits below, and at most a tick after
 it.
