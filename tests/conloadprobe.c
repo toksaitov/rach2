@@ -43,14 +43,17 @@
 
 #include "probe.h"
 
-#define O_RDONLY  0
-#define O_WRONLY  1
-#define O_CREAT   0100
-#define O_TRUNC   01000
-#define SIGINT    2
-#define SIGKILL   9
-#define TIOCSPGRP 0x5410
-#define POLLIN    0x001
+#define O_RDONLY    0
+#define O_WRONLY    1
+#define O_CREAT     0100
+#define O_TRUNC     01000
+#define SIGINT      2
+#define SIGKILL     9
+#define SIGTTOU     22
+#define TIOCSPGRP   0x5410
+#define SIG_BLOCK   0
+#define SIG_SETMASK 2
+#define POLLIN      0x001
 
 struct pollfd {
     int fd;
@@ -496,10 +499,14 @@ static void require(int good, int count, const char *stage)
 
 /** Stage C's first half: fork a child that spins in a group of its own,
  * give it the terminal, print "CONLOAD C", and require that the interrupt
- * character the suite then types kills it; then take the terminal back. A
- * failure kills and reaps the child before it exits. */
+ * character the suite then types kills it; then take the terminal back with
+ * SIGTTOU blocked, as a shell does, since the probe is then a background
+ * process and Linux's tiocspgrp stops one that lets SIGTTOU through, or
+ * refuses it ENOTTY in an orphaned group, which the probe's is. A failure
+ * kills and reaps the child before it exits. */
 static void interrupt_child(void)
 {
+    unsigned ttou[2], old[2];
     int child, status, pgid;
 
     child = syscall1(SYS_FORK, 0);
@@ -526,9 +533,15 @@ static void interrupt_child(void)
         fail("the foreground child did not die of the interrupt character");
     }
     pgid = syscall1(SYS_GETPID, 0);
+    ttou[0] = 1u << (SIGTTOU - 1);
+    ttou[1] = 0;
+    if (syscall4(SYS_RT_SIGPROCMASK, SIG_BLOCK, (long)ttou, (long)old, 8) != 0) {
+        fail("blocking SIGTTOU");
+    }
     if (syscall3(SYS_IOCTL, 0, TIOCSPGRP, (long)&pgid) != 0) {
         fail("the terminal back to the parent");
     }
+    syscall4(SYS_RT_SIGPROCMASK, SIG_SETMASK, (long)old, 0, 8);
 }
 
 void probe_main(unsigned long *sp);
