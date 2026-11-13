@@ -52,7 +52,7 @@ struct ofd_rec {
 };
 
 /*
- * The list of live descriptions, its count and serials, and the access
+ * The list of live descriptions, its count, and the access
  * counts are under `ofd_lock`, a spinlock taken with interrupts off below a
  * table's lock; a description's own fields are its holders'. The scans of
  * the list read only what their callers' locks keep still. The list is
@@ -60,7 +60,6 @@ struct ofd_rec {
  */
 static struct spinlock ofd_lock = SPINLOCK_INIT;
 static struct ofd_rec *ofds;
-static uint32_t ofd_serials;
 static unsigned long ofd_count; /* records on `ofds` */
 
 int fd_nr_open = FD_NR_OPEN;
@@ -228,7 +227,6 @@ static struct open_file *ofd_alloc(void)
     rec->creator = current_proc ? current_proc->tgid : 0;
     wait_queue_init(&rec->wq);
     flags = spin_lock_irqsave(&ofd_lock);
-    rec->ofd.serial = ++ofd_serials;
     ofd_link(rec);
     ofd_count++;
     spin_unlock_irqrestore(&ofd_lock, flags);
@@ -440,22 +438,6 @@ int fd_node_busy(struct vfs_mount *mnt, void *node)
     }
     spin_unlock_irqrestore(&ofd_lock, flags);
     return busy;
-}
-
-int fd_ofd_live(const struct open_file *ofd, uint32_t serial)
-{
-    uint32_t flags = spin_lock_irqsave(&ofd_lock);
-    const struct ofd_rec *rec;
-    int live = 0;
-
-    for (rec = ofds; rec; rec = rec->next) {
-        if (&rec->ofd == ofd) {
-            live = rec->ofd.refcount > 0 && rec->ofd.serial == serial;
-            break;
-        }
-    }
-    spin_unlock_irqrestore(&ofd_lock, flags);
-    return live;
 }
 
 int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct open_file *going)
@@ -1027,24 +1009,6 @@ int fd_close_claim(fd_table_t *table, int fd)
     } else {
         e->flags |= FD_FLAG_CLOSING | FD_FLAG_RELEASING;
         rc = 1;
-    }
-    fd_table_unlock(table, flags);
-    return rc;
-}
-
-int fd_close_finish(fd_table_t *table, int fd)
-{
-    uint32_t flags = fd_table_lock(table);
-    fd_entry_t *e;
-    int rc = 0;
-
-    if (fd >= 0 && fd < table->cap) {
-        e = fd_slot(table, fd);
-        if ((e->flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)) == FD_FLAG_CLOSING &&
-            !fd_held_elsewhere(table, fd)) {
-            e->flags |= FD_FLAG_RELEASING;
-            rc = 1;
-        }
     }
     fd_table_unlock(table, flags);
     return rc;
