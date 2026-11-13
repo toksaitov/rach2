@@ -581,6 +581,22 @@ int cpuinfo_cache(int cpu, int index, struct cpu_cache *cache)
     return 1;
 }
 
+uint64_t cpuinfo_llc_shared(int cpu)
+{
+    struct cpu_cache cache;
+    uint64_t shared = 0;
+    uint32_t level = 0;
+    int i;
+
+    for (i = 0; cpuinfo_cache(cpu, i, &cache); i++) {
+        if (cache.type != 2 && cache.level >= level) {
+            level = cache.level;
+            shared = cache.shared;
+        }
+    }
+    return shared ? shared : cpuinfo_siblings(cpu, CPUINFO_PACKAGE) | (uint64_t)1 << cpu;
+}
+
 /**
  * The family and model are the displayed ones of the processor manuals: the
  * extended family is added to a family of 15, and the extended model is put
