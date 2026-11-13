@@ -1,0 +1,425 @@
+4893: hashing the existing trial root
+4893: root d4d1da30b4f6cb509d2e9e8122aea4749cd80917438a012ed0228cdbeab95a8c
+4893: staging the trial partition
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+0551508fc47dc46c716be4cc4f242a407b2dd0aa4ab5790e80e3c3054c52eb5b  build/tmp/4893-proof/kernel-mac
+c06784c412ca2edc9406a92f056a4dfaf1b7a083ba0b61db45686c31b38f7224  build/tmp/4893-proof/bundle.tar
+4893: starting the trial kernel
+<6>[0.000000] boot: Rach2 Booting
+<6>[0.000000] boot: loader: qemu, by multiboot
+<6>[0.000000] boot: screen: text; the loader described none
+<7>[0.000000] module: none: the loader carried no module
+<6>[0.000000] vga: font: loaded: code page 437 box drawing with Cyrillic
+<7>[0.000000] boot: Initializing system components
+<6>[0.000000] cpu: page attributes: 0x0007040600070106; the framebuffer is mapped write-combining
+<7>[0.000000] boot: gdt: ready
+<7>[0.000000] boot: tss: ready
+<7>[0.000000] boot: idt: ready
+<7>[0.000000] boot: isr: ready
+<7>[0.000000] fpu: fxsr: on, sse: on, xsave: on, xcr0: 0xe7, area: 2432 bytes, pkeys: off
+<7>[0.000000] boot: memory manager: ready
+<7>[0.000000] memory: map: 0x0000000000000000-0x000000000009FC00 available
+<7>[0.000000] memory: map: 0x000000000009FC00-0x00000000000A0000 reserved
+<7>[0.000000] memory: map: 0x00000000000F0000-0x0000000000100000 reserved
+<7>[0.000000] memory: map: 0x0000000000100000-0x00000000BFFDF000 available
+<7>[0.000000] memory: map: 0x00000000BFFDF000-0x00000000C0000000 reserved
+<7>[0.000000] memory: map: 0x00000000FEFFC000-0x00000000FF000000 reserved
+<7>[0.000000] memory: map: 0x00000000FFFC0000-0x0000000100000000 reserved
+<7>[0.000000] memory: map: 0x0000000100000000-0x0000000240000000 available
+<7>[0.000000] memory: map: 0x000000FD00000000-0x0000010000000000 reserved
+<6>[0.000000] memory: usable 8388091 KiB, unreachable 0 KiB, reserved 20347 KiB, managed 8367744 KiB
+<7>[0.000000] boot: paging: ready
+<7>[0.000000] pci: list: 7 functions
+<7>[0.000000] boot: page cache: ready
+<7>[0.000000] acpi: rsdp: at 0xf5250, from the bios area
+<6>[0.000000] acpi: tables: rsdt at 0xbffe2437, revision 0, BOCHS : FACP APIC HPET WAET DSDT
+<6>[0.000000] acpi: madt: 4 processors (4 usable), 1 ioapics, 5 overrides, 1 nmi inputs, an 8259 pair
+<7>[0.000000] acpi: madt: override: isa 0 to gsi 2, flags 0x0
+<7>[0.000000] acpi: madt: override: isa 5 to gsi 5, flags 0xd
+<7>[0.000000] acpi: madt: override: isa 9 to gsi 9, flags 0xd
+<7>[0.000000] acpi: madt: override: isa 10 to gsi 10, flags 0xd
+<7>[0.000000] acpi: madt: override: isa 11 to gsi 11, flags 0xd
+<6>[0.000000] acpi: fadt: revision 1, pm1a 0x604, pm timer 0x608 (24-bit), reset none, 8042 yes, century 50
+<6>[0.000000] acpi: dsdt: \_S5 sleep types 0 and 0
+<6>[0.000000] acpi: hpet: at 0xfed00000
+<6>[0.000000] hpet: ready: 100000000 Hz, period 10000000 fs
+<7>[0.000000] lapic: ready: id 0, version 0x14, x2apic mode
+<6>[0.000000] ioapic: ready: id 0 at 0xfec00000, version 0x11, gsi 0 to 23
+<6>[0.000000] lapic: tick: 62499 counts, measured against the hpet
+<6>[0.000000] ioapic: interrupts: lines through the ioapic, the 8259 masked
+<6>[0.002000] lapic: timer: vector 48 between ticks
+<7>[0.004000] boot: timer: ready
+<6>[0.005000] rtc: 2026-11-13 04:05:52 UTC
+<7>[0.006000] clock: ready
+<6>[0.007000] entropy: ready: RDSEED, trusted
+<6>[0.008000] board: ready: piix4
+<7>[0.009000] ioapic: route: line 1 to gsi 1, vector 33, edge, active high
+<6>[0.011000] console: blank: after 600 seconds without input
+<7>[0.012000] ioapic: route: line 4 to gsi 4, vector 36, edge, active high
+<7>[0.015000] boot: keyboard: ready
+<7>[0.015000] boot: syscall: ready
+<7>[0.016000] boot: process: ready
+<7>[0.016000] boot: scheduler: ready
+<7>[0.017000] acpi: acpica: RSDP 0x00000000000F5250 000014 (v00 BOCHS )
+<7>[0.020000] acpi: acpica: RSDT 0x00000000BFFE2437 000034 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.022000] acpi: acpica: FACP 0x00000000BFFE22D3 000074 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.024000] acpi: acpica: DSDT 0x00000000BFFE0040 002293 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.027000] acpi: acpica: FACS 0x00000000BFFE0000 000040
+<7>[0.029000] acpi: acpica: APIC 0x00000000BFFE2347 000090 (v03 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.031000] acpi: acpica: HPET 0x00000000BFFE23D7 000038 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.033000] acpi: acpica: WAET 0x00000000BFFE240F 000028 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.036000] acpi: acpica: 1 ACPI AML tables successfully acquired and loaded
+<7>[0.039000] ioapic: route: line 9 to gsi 9, vector 41, level, active high
+<7>[0.040000] acpi: sci: line 9
+<6>[0.041000] acpi: pnp: i8042 kbd: PNP: PNP0303
+<6>[0.043000] acpi: pnp: i8042 aux: PNP: PNP0f13
+<7>[0.044000] acpi: acpica: Enabled 2 GPEs in block 00 to 0F
+<6>[0.046000] acpi: acpica: 362 objects, 0 errors
+<7>[0.047000] vtd: none: no DMAR table
+<7>[0.048000] mouse: started
+<7>[0.048000] ioapic: route: line 12 to gsi 12, vector 44, edge, active high
+<7>[3.056000] mouse: ready
+<7>[3.057000] audio: started
+<6>[3.060000] audio: ready: PC Speaker fallback
+<6>[3.062000] disk: policy: read-write
+<6>[3.063000] modules: none
+<6>[3.064000] block: started
+<7>[3.065000] ahci: found: 8086:2922 at 0:2.0, prog-if 1, BAR5 FEBB0000
+<7>[3.379000] ahci: port 1: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[3.382000] ahci: port 2: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[3.385000] ahci: port 3: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[3.388000] ahci: port 4: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[3.391000] ahci: port 5: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<6>[3.395000] disk: disk0: ahci 0: 58724352 sectors, model QEMU HARDDISK
+<6>[3.397000] ahci: port 0: 58724352 sectors, 28674 MiB
+<6>[3.399000] nvme: none: no NVMe controller on the bus
+<7>[3.402000] ioapic: route: line 14 to gsi 14, vector 46, edge, active high
+<7>[3.404000] ioapic: route: line 15 to gsi 15, vector 47, edge, active high
+<4>[3.406000] block: entry 0 is not a boot partition; /dev/bootpart absent
+<6>[3.412000] ext2: mounted: 7340032 blocks of 4096, 1835008 inodes, 224 groups
+<6>[3.414000] ext2: root: /dev/disk0p1
+<6>[3.416000] loop: loop0: /trial4893/root-d4d1da30b4f6cb50.img, 0 bytes, read-write
+<6>[3.423000] ext2: mounted: 6291456 blocks of 4096, 1572864 inodes, 192 groups
+<6>[3.425000] root: image: /trial4893/root-d4d1da30b4f6cb50.img on /dev/disk0p1, ext2 through /dev/loop0; /data is /dev/disk0p1
+<6>[3.430000] usb: started
+<7>[3.431000] usb: controller: none
+<6>[3.432000] usb: absent: no xHCI controller on the bus
+<7>[3.434000] pci: msi: 0:2.0 on vector 49
+<6>[3.435000] ahci: interrupts: messages on vector 49, 1 disks queued
+<6>[3.437000] net: started
+<7>[3.451000] ioapic: route: line 11 to gsi 11, vector 43, level, active high
+<6>[3.453000] net: eth0: IPv6 fe80::5054:ff:fe12:3456/64 added
+<6>[3.455000] net: ready: e1000
+<6>[3.456000] net: eth0: e1000, station 52:54:00:12:34:56
+<7>[3.459000] e1000: 82540EM, MMIO 0x32000, IRQ 11, MAC 52:54:00:12:34:56
+<6>[3.460000] e1000: link 1000 Mb/s, full duplex
+<6>[3.462000] e1000: rx 0 (0 error, 0 dropped), tx 1 (0 stalled)
+<6>[3.464000] net: eth0: IPv4 10.0.2.15/24, gateway 10.0.2.2
+<6>[3.467000] drm: start
+<6>[3.469000] virtio: found: virtio0: 00:03.0 gpu, common bar 2+0x1000, notify bar 2+0x3000 x4, isr bar 2+0x1800, device bar 2+0x2000, 2 queues
+<6>[3.474000] virtio_gpu: pci: virtio-vga detected at 0000:00:03.0
+<6>[3.488000] virtio: features: virtio0: offered 101:30000002, taken 1:30000002
+<6>[3.491000] virtio: interrupts: virtio0: msi-x, a vector for each of 2 queues and the configuration
+<6>[3.495000] virtio_gpu: features: -virgl +edid -resource_blob -host_visible
+<6>[3.497000] virtio_gpu: features: -context_init
+<6>[3.499000] virtio: queue: virtio0: 0 of 64 entries, vector 1, indirect
+<6>[3.502000] virtio: queue: virtio0: 1 of 16 entries, vector 2, indirect
+<6>[3.504000] virtio_gpu: number of scanouts: 1
+<6>[3.506000] virtio_gpu: number of cap sets: 0
+<6>[3.508000] virtio_gpu: display: scanout 0: 1280x800+0+0
+<7>[3.510000] drm: worker: kdrm is pid 1
+<6>[3.511000] drm: virtio_gpu: card0
+<6>[3.512000] console: card0: a native display
+<6>[3.515000] kvm: ready: svm
+<6>[3.516000] vfio: ready: 0 groups of 0 functions, no IOMMU unit translates
+<6>[3.790000] timing: tick 1000 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 2001 us
+<6>[3.794000] clock: reference: the tsc; a tick the timer misses or delays is counted
+<6>[3.809000] smp: cpu1: tsc: synchronized with cpu0
+<6>[3.823000] smp: cpu2: tsc: synchronized with cpu0
+<6>[3.838000] smp: cpu3: tsc: synchronized with cpu0
+<6>[3.839000] smp: processors: 4 online of 4
+<6>[3.842000] nmi_watchdog: counter: amd core version 0, counter 0, 48 bits, 4192 MHz
+<6>[3.844000] nmi_watchdog: enabled: permanently consumes one hw-PMU counter
+<6>[3.847000] vdso: clock: the tsc, 4192048 counts a tick
+<6>[3.851000] boot: starting /sbin/init
+<7>[3.856000] acpi: thread: kacpid is pid 5
+<7>[3.857000] mouse: worker: kpsmoused is pid 6
+<7>[3.859000] input: sysfs: worker: kinputd is pid 7
+init: sshd: started as pid 12
+rach2 login: root
+Password: 
+Rach2
+
+The log of this boot is in /dev/bootlog, for root.
+What the services print is in /var/log/services.
+Type su to become root.
+
+<7>[3.971000] filecache: readahead: worker: kreadahead is pid 23
+[?2004hroot@rach2:~# uname -a; cat /proc/cmdline; grep -e ' / ' -e ' /data ' /proc/mounts; ls -ld /sys/kernel/debug; echo 0 > /proc/sys/vm/dirty_expire_centisecs; echo 100 > /proc/sys/vm/dirty_writeback_centisecs; dd if=/dev/urandom of=/root/wbtest bs=4096 count=256; dd if=/dev/urandom of=/data/trial4893/wbtest bs=4096 count=256; sleep 10; echo WB_SURVIVED; sh /data/trial4893/probes/trip.sh -r llvmpipe -n 1 -t wined3d_cs /data/trial4893/out; echo TRIP_STATUS=$?; sync; ls -ld /sys/kernel/debug; grep -c debugfs /proc/mounts; grep -c '^thread' /sys/kernel/debug/bkl/calls; dmesg | grep -E 'panic|vm: fault|lockup|ext2.*error|sleeping device'; sync; echo ALL_DONE; poweroff -f
+[?2004lLinux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+build/tmp/4893-proof/kernel-mac rach2.rootimage=LABEL=trialdata:/trial4893/root-d4d1da30b4f6cb50.img rach2.disk=ahci
+/dev/loop0 / ext2 rw,relatime 0 0
+/dev/disk0p1 /data ext2 rw 0 0
+drwx------ 7 root root 0 Jan  1  1970 /sys/kernel/debug
+256+0 records in
+256+0 records out
+1048576 bytes (1.0 MB, 1.0 MiB) copied, 0.004404 s, 238 MB/s
+256+0 records in
+256+0 records out
+1048576 bytes (1.0 MB, 1.0 MiB) copied, 0.00441237 s, 238 MB/s
+<6>[5.256000] net: eth0: IPv6 fec0::9782:435f:da4e:cead/64 added
+<6>[5.256000] net: eth0: IPv6 fec0::5139:744a:4af6:4fb8/64 added
+<7>[6.373000] virtio_gpu: worker: pid 78
+<6>[6.373000] console: card0: handed to a master, the keyboard off
+WB_SURVIVED
+<6>[14.141000] vfs: mounted: debugfs on /data/trial4893/out/debugfs (debugfs)
+<6>[14.145000] vfs: unmounted /data/trial4893/out/debugfs: 0 opens, 0 releases
+<7>[14.343000] filecache: readahead: worker: kreadahead is pid 121
+games: weston: renderer llvmpipe (LLVM 19.1.7, 256 bits) display :1
+<7>[18.299000] filecache: readahead: worker: kreadahead is pid 234
+<7>[18.405000] filecache: readahead: worker: kreadahead is pid 242
+games: prefix: status 0 rach2-game: prefix: made /data/trial4893/out/rach2-trip.tzfv50h_/compat/pfx
+games: trip-gl-0: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl-0: feature level: 0xb000
+games: trip-gl-0: tripprobe: 1000 round trips in 57.8 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-0: TRIP OK
+games: trip-gl-0: window 58.9 ms
+games: trip-gl-0: ctxt 12991
+games: trip-gl-0: bkl_wait_us 5679
+games: trip-gl-0: scheduler_picks 13205
+games: trip-gl-0: tlb_shootdown_ipis 27
+games: trip-gl-0: hold vector 0: 1252 holds, 197 us, 0.2 us each
+games: trip-gl-0: hold vector 32: 53 holds, 43 us, 0.8 us each
+games: trip-gl-0: hold syscall 11: 1 holds, 14 us, 14.0 us each
+games: trip-gl-0: hold syscall 39: 2 holds, 1 us, 0.5 us each
+games: trip-gl-0: hold syscall 10: 2 holds, 0 us, 0.0 us each
+games: trip-gl-0: profile kernel 0: 8 samples
+games: trip-gl-0: profile syscall 257: 5 samples
+games: trip-gl-0: profile syscall 67: 2 samples
+games: trip-gl-0: profile syscall 0: 1 samples
+games: trip-gl-0: thread 477 trip64.exe: utime 2 stime 4 voluntary 0 involuntary 23
+games: trip-gl-0: thread 477 trip64.exe: ran 58.0 ms, waited ready 0.1 ms
+games: trip-gl-0: thread 485 llvmpipe-0: utime 0 stime 0 voluntary 1993 involuntary 7
+games: trip-gl-0: thread 485 llvmpipe-0: ran 8.0 ms, waited ready 13.0 ms
+games: trip-gl-0: thread 486 llvmpipe-1: utime 0 stime 0 voluntary 2067 involuntary 7
+games: trip-gl-0: thread 486 llvmpipe-1: ran 4.0 ms, waited ready 14.3 ms
+games: trip-gl-0: thread 487 llvmpipe-2: utime 0 stime 0 voluntary 2067 involuntary 4
+games: trip-gl-0: thread 487 llvmpipe-2: ran 4.0 ms, waited ready 13.1 ms
+games: trip-gl-0: thread 488 llvmpipe-3: utime 0 stime 0 voluntary 1880 involuntary 1
+games: trip-gl-0: thread 488 llvmpipe-3: ran 4.0 ms, waited ready 12.8 ms
+games: trip-gl-0: thread 489 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 489 trip64.exe: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-0: thread 490 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 490 trip64.exe: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-0: thread 491 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 491 trip64.exe: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-0: thread 492 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 492 trip64.exe: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-0: thread 493 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 493 trip64.:disk$0: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-0: thread 505 wined3d_cs: utime 1 stime 3 voluntary 1292 involuntary 11
+games: trip-gl-0: thread 505 wined3d_cs: ran 44.0 ms, waited ready 8.1 ms
+games: trip-gl-0: filter thread wined3d_cs
+games: trip-gl-0: filter sleep in syscall 202: 1243
+games: trip-gl-0: filter sleep in syscall 0: 52
+games: trip-gl-0: filter switch to 487 llvmpipe-2: 0 yields, 3 preemptions
+games: trip-gl-0: filter switch to 485 llvmpipe-0: 0 yields, 2 preemptions
+games: trip-gl-0: filter switch to 506 DeviceHotplugTh: 0 yields, 2 preemptions
+games: trip-gl-0: filter switch to 486 llvmpipe-1: 0 yields, 2 preemptions
+games: trip-gl-0: filter sleep in syscall 7: 2
+games: trip-gl-0: filter switch to 427 winedevice.exe: 0 yields, 1 preemptions
+games: trip-gl-0: filter switch to 488 llvmpipe-3: 0 yields, 1 preemptions
+games: trip-gl-0: exit 0 ms 57.8
+games: trip-gl-strace: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl-strace: feature level: 0xb000
+games: trip-gl-strace: tripprobe: 1000 round trips in 3089.3 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: TRIP OK
+games: trip-gl-strace: window 3092.4 ms
+games: trip-gl-strace: ctxt 421902
+games: trip-gl-strace: bkl_wait_us 3101518
+games: trip-gl-strace: scheduler_picks 486823
+games: trip-gl-strace: tlb_shootdown_ipis 1
+games: trip-gl-strace: hold slept 202: 39871 holds, 77790 us, 2.0 us each
+games: trip-gl-strace: hold take 1: 25269 holds, 53703 us, 2.1 us each
+games: trip-gl-strace: hold syscall 202: 17383 holds, 13361 us, 0.8 us each
+games: trip-gl-strace: hold vector 0: 16553 holds, 4588 us, 0.3 us each
+games: trip-gl-strace: hold slept 9: 2 holds, 4 us, 2.0 us each
+games: trip-gl-strace: hold slept 10: 2 holds, 3 us, 1.5 us each
+games: trip-gl-strace: hold vector 32: 2 holds, 2 us, 1.0 us each
+games: trip-gl-strace: hold syscall 9: 1 holds, 1 us, 1.0 us each
+games: trip-gl-strace: hold syscall 10: 1 holds, 1 us, 1.0 us each
+games: trip-gl-strace: profile syscall 101: 1385 samples
+games: trip-gl-strace: profile syscall 61: 1257 samples
+games: trip-gl-strace: profile syscall 202: 1034 samples
+games: trip-gl-strace: profile kernel 0: 356 samples
+games: trip-gl-strace: profile syscall 98: 318 samples
+games: trip-gl-strace: profile syscall 230: 170 samples
+games: trip-gl-strace: profile syscall 24: 170 samples
+games: trip-gl-strace: profile syscall 14: 147 samples
+games: trip-gl-strace: profile syscall 0: 143 samples
+games: trip-gl-strace: profile syscall 7: 107 samples
+games: trip-gl-strace: profile syscall 441: 105 samples
+games: trip-gl-strace: profile syscall 1: 88 samples
+games: trip-gl-strace: profile syscall 20: 50 samples
+games: trip-gl-strace: profile syscall 262: 24 samples
+games: trip-gl-strace: profile syscall 72: 20 samples
+games: trip-gl-strace: profile syscall 257: 19 samples
+games: trip-gl-strace: thread 613 trip64.exe: utime 2 stime 57 voluntary 58999 involuntary 892
+games: trip-gl-strace: thread 613 trip64.exe: ran 580.0 ms, waited ready 449.6 ms
+games: trip-gl-strace: thread 628 llvmpipe-0: utime 0 stime 15 voluntary 17691 involuntary 5
+games: trip-gl-strace: thread 628 llvmpipe-0: ran 152.0 ms, waited ready 128.2 ms
+games: trip-gl-strace: thread 629 llvmpipe-1: utime 0 stime 15 voluntary 18947 involuntary 2
+games: trip-gl-strace: thread 629 llvmpipe-1: ran 150.0 ms, waited ready 126.9 ms
+games: trip-gl-strace: thread 630 llvmpipe-2: utime 0 stime 24 voluntary 19933 involuntary 7
+games: trip-gl-strace: thread 630 llvmpipe-2: ran 247.0 ms, waited ready 130.1 ms
+games: trip-gl-strace: thread 631 llvmpipe-3: utime 0 stime 18 voluntary 19525 involuntary 7
+games: trip-gl-strace: thread 631 llvmpipe-3: ran 179.0 ms, waited ready 127.4 ms
+games: trip-gl-strace: thread 632 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 632 trip64.exe: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-strace: thread 633 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 633 trip64.exe: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-strace: thread 634 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 634 trip64.exe: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-strace: thread 635 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 635 trip64.exe: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-strace: thread 636 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 636 trip64.:disk$0: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-strace: thread 640 wined3d_cs: utime 7 stime 40 voluntary 39907 involuntary 6
+games: trip-gl-strace: thread 640 wined3d_cs: ran 477.0 ms, waited ready 345.9 ms
+games: trip-gl-strace: filter thread wined3d_cs
+games: trip-gl-strace: filter sleep in syscall 202: 39877
+games: trip-gl-strace: filter sleep in syscall 11: 18
+games: trip-gl-strace: filter sleep in syscall 10: 4
+games: trip-gl-strace: filter sleep in syscall 14: 4
+games: trip-gl-strace: filter sleep in syscall 39: 4
+games: trip-gl-strace: filter switch to 562 winedevice.exe: 0 yields, 3 preemptions
+games: trip-gl-strace: filter switch to 518 Thread-2 (watch: 0 yields, 1 preemptions
+games: trip-gl-strace: filter switch to 1 init: 0 yields, 1 preemptions
+games: trip-gl-strace: filter switch to 519 strace: 0 yields, 1 preemptions
+games: trip-gl-strace: exit 0 ms 3089.3
+games: trip-gl-ioctl: adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0xffffffff device 0xffffffff
+games: trip-gl-ioctl: feature level: 0xb000
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 3029.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: TRIP OK
+games: trip-gl-ioctl: window 3035.1 ms
+games: trip-gl-ioctl: ctxt 419573
+games: trip-gl-ioctl: bkl_wait_us 3371913
+games: trip-gl-ioctl: scheduler_picks 477291
+games: trip-gl-ioctl: tlb_shootdown_ipis 0
+games: trip-gl-ioctl: hold slept 202: 39010 holds, 75942 us, 1.9 us each
+games: trip-gl-ioctl: hold take 1: 24871 holds, 53325 us, 2.1 us each
+games: trip-gl-ioctl: hold syscall 202: 17035 holds, 12801 us, 0.8 us each
+games: trip-gl-ioctl: hold vector 0: 16557 holds, 3101 us, 0.2 us each
+games: trip-gl-ioctl: hold slept 9: 2 holds, 5 us, 2.5 us each
+games: trip-gl-ioctl: hold slept 10: 2 holds, 3 us, 1.5 us each
+games: trip-gl-ioctl: hold syscall 10: 1 holds, 1 us, 1.0 us each
+games: trip-gl-ioctl: hold vector 32: 1 holds, 1 us, 1.0 us each
+games: trip-gl-ioctl: hold syscall 9: 1 holds, 0 us, 0.0 us each
+games: trip-gl-ioctl: profile syscall 101: 1313 samples
+games: trip-gl-ioctl: profile syscall 61: 1261 samples
+games: trip-gl-ioctl: profile syscall 202: 1188 samples
+games: trip-gl-ioctl: profile kernel 0: 409 samples
+games: trip-gl-ioctl: profile syscall 98: 380 samples
+games: trip-gl-ioctl: profile syscall 24: 202 samples
+games: trip-gl-ioctl: profile syscall 0: 176 samples
+games: trip-gl-ioctl: profile syscall 230: 159 samples
+games: trip-gl-ioctl: profile syscall 14: 139 samples
+games: trip-gl-ioctl: profile syscall 441: 106 samples
+games: trip-gl-ioctl: profile syscall 7: 103 samples
+games: trip-gl-ioctl: profile syscall 1: 98 samples
+games: trip-gl-ioctl: profile syscall 20: 45 samples
+games: trip-gl-ioctl: profile syscall 262: 23 samples
+games: trip-gl-ioctl: profile syscall 310: 17 samples
+games: trip-gl-ioctl: profile syscall 72: 16 samples
+games: trip-gl-ioctl: thread 748 trip64.exe: utime 1 stime 59 voluntary 58073 involuntary 952
+games: trip-gl-ioctl: thread 748 trip64.exe: ran 602.0 ms, waited ready 435.5 ms
+games: trip-gl-ioctl: thread 763 llvmpipe-0: utime 0 stime 18 voluntary 17767 involuntary 8
+games: trip-gl-ioctl: thread 763 llvmpipe-0: ran 179.0 ms, waited ready 122.4 ms
+games: trip-gl-ioctl: thread 764 llvmpipe-1: utime 0 stime 20 voluntary 18609 involuntary 8
+games: trip-gl-ioctl: thread 764 llvmpipe-1: ran 199.0 ms, waited ready 119.6 ms
+games: trip-gl-ioctl: thread 765 llvmpipe-2: utime 0 stime 18 voluntary 19892 involuntary 11
+games: trip-gl-ioctl: thread 765 llvmpipe-2: ran 183.0 ms, waited ready 122.0 ms
+games: trip-gl-ioctl: thread 766 llvmpipe-3: utime 0 stime 20 voluntary 19021 involuntary 4
+games: trip-gl-ioctl: thread 766 llvmpipe-3: ran 203.0 ms, waited ready 116.4 ms
+games: trip-gl-ioctl: thread 767 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 767 trip64.exe: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-ioctl: thread 768 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 768 trip64.exe: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-ioctl: thread 769 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 769 trip64.exe: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-ioctl: thread 770 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 770 trip64.exe: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-ioctl: thread 771 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 771 trip64.:disk$0: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-ioctl: thread 775 wined3d_cs: utime 7 stime 45 voluntary 39026 involuntary 15
+games: trip-gl-ioctl: thread 775 wined3d_cs: ran 529.0 ms, waited ready 235.5 ms
+games: trip-gl-ioctl: filter thread wined3d_cs
+games: trip-gl-ioctl: filter sleep in syscall 202: 38999
+games: trip-gl-ioctl: filter sleep in syscall 11: 18
+games: trip-gl-ioctl: filter switch to 698 winedevice.exe: 0 yields, 9 preemptions
+games: trip-gl-ioctl: filter switch to 653 Thread-3 (watch: 0 yields, 4 preemptions
+games: trip-gl-ioctl: filter sleep in syscall 10: 4
+games: trip-gl-ioctl: filter sleep in syscall 14: 4
+games: trip-gl-ioctl: filter sleep in syscall 39: 4
+games: trip-gl-ioctl: filter switch to 764 llvmpipe-1: 0 yields, 1 preemptions
+games: trip-gl-ioctl: filter switch to 661 wineserver: 0 yields, 1 preemptions
+games: trip-gl-ioctl: exit 0 ms 3029.9
+games: ioctl VFAT_IOCTL_READDIR_BOTH 846
+games: ioctl FS_IOC_GETFLAGS 544
+games: ioctl DRM_IOCTL_ETNAVIV_GEM_INFO 213
+games: ioctl DRM_IOCTL_VERSION 48
+games: ioctl TCGETS2 36
+games: ioctl UDMABUF_CREATE 6
+games: ioctl DMA_BUF_IOCTL_EXPORT_SYNC_FILE 6
+games: ioctl TIOCGPGRP 2
+games: ioctl SIOCGIFHWADDR 2
+games: ioctl SIOCGIFFLAGS 2
+games: ioctl SIOCGIFMTU 2
+games: ioctl TIOCGWINSZ 1
+games: ioctl FIOCLEX 1
+games: ioctl SIOCGIWNAME 1
+TRIPS OK
+trip: result: status 0, results in /data/trial4893/out/trip
+<6>[72.238000] vfs: mounted: debugfs on /data/trial4893/out/debugfs (debugfs)
+<6>[72.241000] vfs: unmounted /data/trial4893/out/debugfs: 0 opens, 0 releases
+TRIP_STATUS=0
+drwx------ 7 root root 0 Jan  1  1970 /sys/kernel/debug
+1
+0
+ALL_DONE
+<6>[72.404000] poweroff: acpica: \_PTS(5) run, gpes disabled
+<6>[72.407000] shutdown: /dev/disk0p1: unmounted
+<6>[72.408000] shutdown: root: unmounted
+<6>[72.409000] shutdown: Stopping the system. Goodbye!
+<6>[72.411000] poweroff: acpica: status cleared
+<6>[72.411000] poweroff: powering off
+QEMU-RESULT p1 {'panic': False, 'survived': True, 'trip': 1}
