@@ -314,7 +314,7 @@ static int reserve_in(struct ext2_mount *em, struct ext2_write_plan *plan, uint3
         return -ENOSPC;
     }
     for (bit = from; bit < end; bit++) {
-        rc = ext2_bit_first_clear(em, ext2_le32(gd), bit, end, &bit);
+        rc = ext2_bit_first_clear(em, g, EXT2_BLOCK_BITMAP, bit, end, &bit);
         if (rc != 0) {
             return rc;
         }
@@ -327,7 +327,7 @@ static int reserve_in(struct ext2_mount *em, struct ext2_write_plan *plan, uint3
         if (i != plan->allocs) {
             continue;
         }
-        rc = ext2_block_refused(em, ext2_le32(gd), bit, block);
+        rc = ext2_block_refused(em, g, bit);
         if (rc > 0) {
             rc = ext2_allocates(em) ? 0 : -EROFS;
             if (rc == 0) {

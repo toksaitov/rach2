@@ -43,8 +43,8 @@ int ext2_gd_store(struct ext2_mount *em, uint32_t g)
  * does not read each of its bits through the cache alone. 0, or the
  * errors of the read primitive, a failed read reported (READ_BITMAP).
  */
-int ext2_bit_first_clear(struct ext2_mount *em, uint32_t bitmap_block, uint32_t from,
-                         uint32_t count, uint32_t *out)
+static int bits_first_clear(struct ext2_mount *em, uint32_t bitmap_block, uint32_t from,
+                            uint32_t count, uint32_t *out)
 {
     uint8_t chunk[64];
     uint32_t i = from;
@@ -77,19 +77,105 @@ int ext2_bit_first_clear(struct ext2_mount *em, uint32_t bitmap_block, uint32_t 
     return 0;
 }
 
-/** Set bit `index` of the bitmap in block `bitmap_block` to `value`, written
- * in the way `how` says; 0, 1 with nothing written when a bit to clear is
- * clear already, which only damage gives and the caller reports, or the
- * errors of the read primitive (READ_BITMAP). The caller holds the lock of
- * the bitmap's group, so that no other change of the byte comes between its
- * read and its write. */
-static int bit_write(struct ext2_mount *em, uint32_t bitmap_block, uint32_t index, int value,
+/** Whether bits `from` to before `to` of the bitmap in block `bitmap_block`
+ * are all set: 1 or 0, or the errors of `bits_first_clear`. */
+static int bits_set(struct ext2_mount *em, uint32_t bitmap_block, uint32_t from, uint32_t to)
+{
+    uint32_t clear;
+    int rc = bits_first_clear(em, bitmap_block, from, to, &clear);
+
+    return rc != 0 ? rc : clear >= to;
+}
+
+/**
+ * Check group `g`'s block bitmap once a mount, at its first read, as Linux's
+ * `read_block_bitmap` checks one it reads (fs/ext2/balloc.c:85-120): it must
+ * mark used the group's block bitmap, inode bitmap and inode table. One
+ * that does not is logged as `ext2: group G: block bitmap B does not mark
+ * the group's tables used`, reported to the mount's policy
+ * (`ext2_mark_error`), and used still, as Linux goes on with it
+ * (fs/ext2/balloc.c:155-163); the allocators refuse a block of those tables
+ * all the same (`ext2_block_refused`). The group's byte after the
+ * descriptors (`em->gd`) records the check once it has read the bits; one
+ * read that fails is checked again at the next. The caller holds the
+ * group's lock and no buffer. 0, or the errors of the read primitive.
+ */
+static int bitmap_check(struct ext2_mount *em, uint32_t g)
+{
+    uint8_t *done = em->gd + em->groups * 32 + g;
+    const uint8_t *gd = em->gd + g * 32;
+    uint32_t base = em->first_data + g * em->bpg;
+    uint32_t bitmap = ext2_le32(gd + 0), table = ext2_le32(gd + 8) - base;
+    int rc;
+
+    if (*done) {
+        return 0;
+    }
+    rc = bits_set(em, bitmap, bitmap - base, bitmap - base + 1);
+    if (rc == 1) {
+        rc = bits_set(em, bitmap, ext2_le32(gd + 4) - base, ext2_le32(gd + 4) - base + 1);
+    }
+    if (rc == 1) {
+        rc = bits_set(em, bitmap, table, table + ext2_inode_table_blocks(em));
+    }
+    if (rc < 0) {
+        return rc;
+    }
+    *done = 1;
+    if (rc == 0) {
+        klog(KLOG_WARN, "ext2", "group %d: block bitmap %d does not mark the group's tables used",
+             (int)g, (int)bitmap);
+        ext2_mark_error(em);
+    }
+    return 0;
+}
+
+/**
+ * The bitmap of group `g` that `which` names, EXT2_BLOCK_BITMAP or
+ * EXT2_INODE_BITMAP, into `*block`, once a block bitmap has passed its check
+ * (`bitmap_check`). 0, or the errors of that check. The caller holds the
+ * group's lock.
+ */
+static int bitmap_of(struct ext2_mount *em, uint32_t g, int which, uint32_t *block)
+{
+    *block = ext2_le32(em->gd + g * 32 + which);
+    return which == EXT2_BLOCK_BITMAP ? bitmap_check(em, g) : 0;
+}
+
+/**
+ * The first clear bit at or after `from` and before `count` of group `g`'s
+ * bitmap that `which` names (`bitmap_of`), into `*out`, or `count` when
+ * every one is set (`bits_first_clear`). 0, or the errors of the read
+ * primitive. The caller holds the group's lock.
+ */
+int ext2_bit_first_clear(struct ext2_mount *em, uint32_t g, int which, uint32_t from,
+                         uint32_t count, uint32_t *out)
+{
+    uint32_t bitmap;
+    int rc = bitmap_of(em, g, which, &bitmap);
+
+    return rc != 0 ? rc : bits_first_clear(em, bitmap, from, count, out);
+}
+
+/** Set bit `index` of group `g`'s bitmap that `which` names (`bitmap_of`)
+ * to `value`, written in the way `how` says; 0, 1 with nothing written when
+ * a bit to clear is clear already, which only damage gives and the caller
+ * reports, or the errors of the read primitive (READ_BITMAP). The caller
+ * holds the group's lock, so that no other change of the byte comes between
+ * its read and its write. */
+static int bit_write(struct ext2_mount *em, uint32_t g, int which, uint32_t index, int value,
                      int how)
 {
-    uint64_t at = (uint64_t)bitmap_block * em->block_size + index / 8;
+    uint32_t bitmap;
+    uint64_t at;
     uint8_t byte;
-    int rc = ext2_read_bytes(em, READ_BITMAP, 0, at, &byte, 1);
+    int rc = bitmap_of(em, g, which, &bitmap);
 
+    if (rc != 0) {
+        return rc;
+    }
+    at = (uint64_t)bitmap * em->block_size + index / 8;
+    rc = ext2_read_bytes(em, READ_BITMAP, 0, at, &byte, 1);
     if (rc != 0) {
         return rc;
     }
@@ -105,9 +191,9 @@ static int bit_write(struct ext2_mount *em, uint32_t bitmap_block, uint32_t inde
 }
 
 /** `bit_write` with WRITE_THROUGH. */
-static int bit_put(struct ext2_mount *em, uint32_t bitmap_block, uint32_t index, int value)
+static int bit_put(struct ext2_mount *em, uint32_t g, int which, uint32_t index, int value)
 {
-    return bit_write(em, bitmap_block, index, value, WRITE_THROUGH);
+    return bit_write(em, g, which, index, value, WRITE_THROUGH);
 }
 
 /** Whether the caller may take the blocks the superblock reserves: a
@@ -118,9 +204,9 @@ int ext2_may_use_reserved(void)
 }
 
 /**
- * Refuse block `b`, which bit `bit` of the bitmap in block `bitmap` calls
- * free, when it may not hold data (`ext2_data_block_ok`): a superblock, a
- * descriptor table, a bitmap or an inode table, as Linux's
+ * Refuse block `b`, bit `bit` of group `g`'s block bitmap, which that
+ * bitmap calls free, when it may not hold data (`ext2_data_block_ok`): a
+ * superblock, a descriptor table, a bitmap or an inode table, as Linux's
  * `ext2_new_blocks` refuses a block in the system zone
  * (fs/ext2/balloc.c:1377-1392). The bit is set, so that no search offers
  * the block again, the counts are left as they are, and the fault is
@@ -128,14 +214,15 @@ int ext2_may_use_reserved(void)
  * when it may hold data, or the bit's -errno. The caller holds the lock of
  * the bitmap's group and no buffer.
  */
-int ext2_block_refused(struct ext2_mount *em, uint32_t bitmap, uint32_t bit, uint32_t b)
+int ext2_block_refused(struct ext2_mount *em, uint32_t g, uint32_t bit)
 {
+    uint32_t b = em->first_data + g * em->bpg + bit;
     int rc;
 
     if (ext2_data_block_ok(em, b)) {
         return 0;
     }
-    rc = bit_put(em, bitmap, bit, 1);
+    rc = bit_put(em, g, EXT2_BLOCK_BITMAP, bit, 1);
     if (rc != 0) {
         return rc;
     }
@@ -146,15 +233,15 @@ int ext2_block_refused(struct ext2_mount *em, uint32_t bitmap, uint32_t bit, uin
 
 /**
  * Take the first free block of group `g` at or after bit `from` and before
- * bit `count` of its bitmap in block `bitmap`, into `*bit`: the bit set, the
+ * bit `count` of its block bitmap, into `*bit`: the bit set, the
  * group's count lowered and written, and the free count lowered with the
  * hint after it. A clear bit on a block that may not hold data is refused
  * (`ext2_block_refused`) and the search goes on past it, unless the fault
  * stopped the mount's allocations (`ext2_allocates`). -ENOSPC when the
  * group has none, -EROFS, or -errno. The caller holds the group's lock.
  */
-static int group_take_block(struct ext2_mount *em, uint32_t g, uint32_t bitmap, uint32_t from,
-                            uint32_t count, uint32_t *bit)
+static int group_take_block(struct ext2_mount *em, uint32_t g, uint32_t from, uint32_t count,
+                            uint32_t *bit)
 {
     uint8_t *gd = em->gd + g * 32;
     uint32_t i;
@@ -164,14 +251,14 @@ static int group_take_block(struct ext2_mount *em, uint32_t g, uint32_t bitmap, 
         return -ENOSPC;
     }
     for (;;) {
-        rc = ext2_bit_first_clear(em, bitmap, from, count, &i);
+        rc = ext2_bit_first_clear(em, g, EXT2_BLOCK_BITMAP, from, count, &i);
         if (rc != 0) {
             return rc;
         }
         if (i >= count) {
             return -ENOSPC;
         }
-        rc = ext2_block_refused(em, bitmap, i, em->first_data + g * em->bpg + i);
+        rc = ext2_block_refused(em, g, i);
         if (rc == 0) {
             break;
         }
@@ -183,7 +270,7 @@ static int group_take_block(struct ext2_mount *em, uint32_t g, uint32_t bitmap, 
         }
         from = i + 1;
     }
-    rc = bit_put(em, bitmap, i, 1);
+    rc = bit_put(em, g, EXT2_BLOCK_BITMAP, i, 1);
     if (rc != 0) {
         return rc;
     }
@@ -231,7 +318,7 @@ static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
     g0 = (hint - em->first_data) / em->bpg;
     start_in = (hint - em->first_data) % em->bpg;
     for (tried = 0; tried <= em->groups; tried++) {
-        uint32_t i, count, base, bitmap, from;
+        uint32_t i, count, base, from;
         uint8_t *gd;
         int rc;
 
@@ -239,7 +326,6 @@ static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
         gd = em->gd + g * 32;
         base = em->first_data + g * em->bpg;
         count = em->blocks - base < em->bpg ? em->blocks - base : em->bpg;
-        bitmap = ext2_le32(gd + 0);
         from = tried == 0 ? start_in : 0;
         if (tried == em->groups) {
             count = start_in < count ? start_in : count;
@@ -248,7 +334,7 @@ static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
             continue;
         }
         ext2_group_lock(em, g);
-        rc = group_take_block(em, g, bitmap, from, count, &i);
+        rc = group_take_block(em, g, from, count, &i);
         ext2_group_unlock(em, g);
         if (rc == 0) {
             *out = base + i;
@@ -296,7 +382,7 @@ static int block_free(struct ext2_mount *em, uint32_t b)
     i = (b - em->first_data) % em->bpg;
     gd = em->gd + g * 32;
     ext2_group_lock(em, g);
-    rc = bit_put(em, ext2_le32(gd + 0), i, 0);
+    rc = bit_put(em, g, EXT2_BLOCK_BITMAP, i, 0);
     if (rc > 0) {
         block_free_refused(em, b, 1);
         ext2_group_unlock(em, g);
@@ -335,7 +421,7 @@ static int group_take_inode(struct ext2_mount *em, uint32_t g, int is_dir, struc
         limit = em->inodes - base;
     }
     for (;;) {
-        rc = ext2_bit_first_clear(em, ext2_le32(gd + 4), from, limit, &i);
+        rc = ext2_bit_first_clear(em, g, EXT2_INODE_BITMAP, from, limit, &i);
         if (rc != 0) {
             return rc;
         }
@@ -354,7 +440,7 @@ static int group_take_inode(struct ext2_mount *em, uint32_t g, int is_dir, struc
     (void)ext2_plan_end(em);
     ext2_node_publish(em, n, base + i + 1);
     ext2_node_share_group(em, n, g, 4);
-    rc = bit_write(em, ext2_le32(gd + 4), i, 1, WRITE_UNFLUSHED);
+    rc = bit_write(em, g, EXT2_INODE_BITMAP, i, 1, WRITE_UNFLUSHED);
     if (rc != 0) {
         return rc;
     }
@@ -438,7 +524,7 @@ int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir)
         return 0;
     }
     ext2_group_lock(em, g);
-    rc = bit_put(em, ext2_le32(gd + 4), i, 0);
+    rc = bit_put(em, g, EXT2_INODE_BITMAP, i, 0);
     if (rc > 0) {
         ext2_group_unlock(em, g);
         klog(KLOG_WARN, "ext2", "free of inode %d, whose bit is clear", (int)ino);
@@ -581,7 +667,8 @@ int ext2_punch_free(struct ext2_mount *em, struct ext2_node *n, struct punch_lis
                 list->blocks[left++] = b;
                 continue;
             }
-            err = bit_write(em, ext2_le32(gd + 0), (b - em->first_data) % em->bpg, 0, WRITE_AFTER);
+            err =
+                bit_write(em, g, EXT2_BLOCK_BITMAP, (b - em->first_data) % em->bpg, 0, WRITE_AFTER);
             if (err > 0) {
                 block_free_refused(em, b, 1);
                 continue;
