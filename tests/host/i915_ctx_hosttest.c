@@ -339,9 +339,11 @@ int kcmdline_has(const char *flag)
 static struct drm_i915_private dev;
 static int sleeps, stuck_sleeps;
 
+/** The model's clock in the kernel's ticks, TICK_HZ a second, as the
+ * driver's deadlines count them. */
 uint64_t rtc_ticks_now(void)
 {
-    return bus ? bus->now_us / 1000u : 0;
+    return bus ? bus->now_us / TICK_US : 0;
 }
 
 void rtc_monotonic(int64_t *sec, int64_t *nsec)
@@ -1642,8 +1644,8 @@ static void row_park_unwatched(void)
     CHECK("park: its pass retires the engine and parks the GT",
           !i915->gt.awake && parks == p + 1 && !rcs->requests && !rcs->unretired);
     CHECK("park: on the first whole second after a second from the unpark",
-          at % 1000u == 0 && at - i915->gt.unpark_ticks > 1000u &&
-              at - i915->gt.unpark_ticks <= 2000u);
+          at % TICK_HZ == 0 && at - i915->gt.unpark_ticks > TICK_HZ &&
+              at - i915->gt.unpark_ticks <= 2u * TICK_HZ);
     i915_request_put(rq);
     intel_context_put(r);
     done(&m);
