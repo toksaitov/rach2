@@ -795,6 +795,7 @@ void drm_client_dev_register(struct drm_device *dev)
     k_memset(&con.file, 0, sizeof(con.file));
     con.file.dev = dev;
     con.file.minor_type = DRM_MINOR_PRIMARY;
+    con.file.console = 1;
     con.dev = dev;
     con.firmware = drm_aperture_is_firmware(dev);
     con.handed = 0;

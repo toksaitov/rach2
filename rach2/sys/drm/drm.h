@@ -783,6 +783,7 @@ struct drm_file {
     int is_master;
     int was_master;
     int set_busid; /* its master record has the bus name: SET_VERSION 1.1 or later */
+    int console;   /* the console's own file (drm_client.c), never a node's */
     int universal_planes, atomic, aspect_ratio, writeback_connectors, stereo_allowed,
         supports_virtualized_cursor_plane;
     struct drm_handles objects;  /* buffer object handles */

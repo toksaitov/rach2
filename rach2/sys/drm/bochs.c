@@ -73,6 +73,7 @@ struct bochs_bo {
     struct drm_gem_object base;
     struct shmem pages;
     int in_vram;
+    int low; /* the console's: placed from the bottom of video memory */
     uint32_t offset;
     uint32_t pin_count;
     uint32_t last_use;
@@ -223,11 +224,15 @@ static void bochs_set_base(struct bochs_device *b, uint32_t px, uint32_t py, uin
  */
 
 /**
- * Find room for `size` bytes in video memory, the highest that fits, so
- * that the low part, where the firmware's screen and the console are, is
- * used last. 0 with the offset in `*offset`, or -ENOSPC.
+ * Find room for `size` bytes in video memory: for an ordinary buffer the
+ * highest that fits, so that the low part, where the firmware's screen and
+ * the console are, is used last; for the console's (`low`) the lowest, as
+ * Linux's fbdev emulation has its buffer at offset 0, so that the console's
+ * buffer, pinned while it is shown, leaves the rest of video memory in one
+ * piece for a master's largest mode. 0 with the offset in `*offset`, or
+ * -ENOSPC.
  */
-static int32_t bochs_vram_find(struct bochs_device *b, uint32_t size, uint32_t *offset)
+static int32_t bochs_vram_find(struct bochs_device *b, uint32_t size, int low, uint32_t *offset)
 {
     struct bochs_bo *bo;
     uint32_t start = 0, end, found = 0;
@@ -236,8 +241,11 @@ static int32_t bochs_vram_find(struct bochs_device *b, uint32_t size, uint32_t *
     for (bo = b->vram_bos;; bo = bo->vram_next) {
         end = bo ? bo->offset : b->vram_size;
         if (end >= start && end - start >= size) {
-            found = end - size;
+            found = low ? start : end - size;
             have = 1;
+            if (low) {
+                break;
+            }
         }
         if (!bo) {
             break;
@@ -301,16 +309,18 @@ static int32_t bochs_bo_evict(struct bochs_device *b, struct bochs_bo *bo)
 }
 
 /**
- * Room for `size` bytes in video memory, made by moving unpinned objects
- * out, the least recently scanned out first. 0 with `*offset`, or -ENOMEM
- * when the pinned objects leave no room or system memory has none.
+ * Room for `size` bytes in video memory, placed as `bochs_vram_find` places
+ * a buffer of `low`, made by moving unpinned objects out, the least
+ * recently scanned out first. 0 with `*offset`, or -ENOMEM when the pinned
+ * objects leave no room or system memory has none.
  */
-static int32_t bochs_vram_make_room(struct bochs_device *b, uint32_t size, uint32_t *offset)
+static int32_t bochs_vram_make_room(struct bochs_device *b, uint32_t size, int low,
+                                    uint32_t *offset)
 {
     struct bochs_bo *bo, *victim;
     int32_t err;
 
-    while (bochs_vram_find(b, size, offset) != 0) {
+    while (bochs_vram_find(b, size, low, offset) != 0) {
         victim = NULL;
         for (bo = b->vram_bos; bo; bo = bo->vram_next) {
             if (bo->pin_count == 0 && (!victim || bo->last_use < victim->last_use)) {
@@ -344,7 +354,7 @@ static int32_t bochs_bo_to_vram(struct bochs_device *b, struct bochs_bo *bo)
     if (size > b->vram_size) {
         return -ENOMEM;
     }
-    err = bochs_vram_make_room(b, size, &offset);
+    err = bochs_vram_make_room(b, size, bo->low, &offset);
     if (err != 0) {
         return err;
     }
@@ -450,7 +460,8 @@ static const struct drm_gem_object_funcs bochs_bo_funcs = {
  * MODE_CREATE_DUMB, Linux's drm_gem_vram_fill_create_dumb: rows of `width`
  * pixels with no alignment, a whole number of pages, zeroed; in video
  * memory when it has room without moving another buffer, else in system
- * memory until a scanout moves it. 0, -EINVAL or -ENOMEM.
+ * memory until a scanout moves it. The console's file makes a buffer that
+ * `bochs_vram_find` places from the bottom. 0, -EINVAL or -ENOMEM.
  */
 static int32_t bochs_dumb_create(struct drm_file *file, struct drm_device *dev,
                                  struct drm_mode_create_dumb *args)
@@ -471,7 +482,8 @@ static int32_t bochs_dumb_create(struct drm_file *file, struct drm_device *dev,
     drm_gem_object_init(dev, &bo->base, size, &bochs_bo_funcs);
     bo->base.map_wc = 1;
     bo->pages.size = size;
-    if (bochs_vram_find(b, size, &offset) == 0) {
+    bo->low = file->console;
+    if (bochs_vram_find(b, size, bo->low, &offset) == 0) {
         k_memset((void *)(b->vram + offset), 0, size);
         bochs_vram_insert(b, bo, offset);
     }
