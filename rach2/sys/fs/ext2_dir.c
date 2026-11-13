@@ -2174,12 +2174,16 @@ struct ext2_rename_names {
  * The rename of directory `n` from `r->oldname` in `r->od` to `r->newname`
  * in `r->nd`, over the empty directory `victim` at `nsc`, `nat` and `nprev`
  * when it is not NULL, for `ext2_rename`, whose caller holds every lock: the
- * victim removed as rmdir removes it, then the new entry, then `..` rewritten
- * and the new parent's count raised when the parents differ, then the old
- * entry removed and the old parent's count lowered. A failed store of a
- * count or of times after an entry change is on the device fails nothing:
- * the node keeps its mark, which its next store settles. 0, -ENOENT,
- * -EMLINK, or -errno.
+ * victim removed as rmdir removes it, the new parent's count lowered for the
+ * victim's `..`, then the new entry, then `..` rewritten and the new parent's
+ * count raised when the parents differ, then the old entry removed and the old
+ * parent's count lowered when the parents differ. Within one parent the count
+ * falls by one, for the victim; between two, the new parent's is unchanged
+ * with a victim and the old parent's falls by one, as Linux's `ext2_rename`
+ * leaves `new_dir` with a target and drops `old_dir`
+ * (fs/ext2/namei.c:354-396). A failed store of a count or of times after an
+ * entry change is on the device fails nothing: the node keeps its mark, which
+ * its next store settles. 0, -ENOENT, -EMLINK, or -errno.
  */
 static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
                       struct ext2_node *victim, const struct ext2_scan *nsc, uint32_t nat,
@@ -2202,7 +2206,7 @@ static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
         }
         ext2_node_nlink_set(victim, 0);
         victim->unlinked = 1;
-        dir_lose_parent(em, nd, 0);
+        dir_lose_parent(em, nd, 1);
         (void)child_unlinked(em, victim);
     }
     rc = dir_add(em, nd, r->newname, n->ino, 2);
