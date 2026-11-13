@@ -19,6 +19,7 @@
 #include "../lib/ksignal.h"
 
 #include "../lib/kirq.h"
+#include "../lib/rcu.h"
 #include "../lib/spinlock.h"
 #include "../mm/pressure.h"
 #include "smp.h"
@@ -1284,6 +1285,7 @@ void schedule(void)
     lockdep_switch((uintptr_t)(const char *)__builtin_return_address(0));
 
     saved_flags = spin_lock_irqsave(&sched_lock);
+    rcu_qs();
     me = (int)arch_cpu_id();
     cpu = &cpu_table[me];
     old = cpu->current;
@@ -1685,6 +1687,7 @@ void sched_service_point(void)
 {
     uint32_t flags = kirq_save();
 
+    rcu_qs();
     watchdog_sched();
     bkl_yield();
     if (current_proc && current_proc != this_cpu()->idle) {
@@ -2388,7 +2391,13 @@ void idle_wait_irq_off(void)
     this_cpu()->idle_wait = 1;
     depth = bkl_drop();
     if (!scheduler_idle || !current_proc->need_resched) {
+        if (scheduler_idle) {
+            rcu_idle_enter();
+        }
         idle_halt(scheduler_idle);
+        if (scheduler_idle) {
+            rcu_idle_exit();
+        }
         this_cpu()->idle_end_cycles = arch_cycles();
         if (scheduler_idle) {
             sched_idle_account(this_cpu());
