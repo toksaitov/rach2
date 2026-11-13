@@ -9784,11 +9784,15 @@ static int sched_may_change(const process_t *p)
  * Give way to the other ready processes (sched_yield).
  *
  * The caller is put behind them in the round-robin order and runs again when
- * its turn comes, at once when no other process is ready. Returns 0.
+ * its turn comes, at once when no other process is ready, which needs no
+ * selection and takes no lock (`sched_yield_alone`). Returns 0.
  */
 long sys_sched_yield(isr_params_t *params)
 {
     (void)params;
+    if (sched_yield_alone()) {
+        return 0;
+    }
     current_proc->sched_yielded = 1;
     schedule();
     return 0;
