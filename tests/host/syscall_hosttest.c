@@ -11,6 +11,7 @@
  * host-deps: rach2/sys/tick.c tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/spinlock_host.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
+ * host-cflags: -DTICK_HZ=1000
  *
  * The system calls no row makes are declared static before the sources are
  * included, so that the compiler removes them and the hardware they reach. A
@@ -208,10 +209,11 @@ void raw_echo_hold(struct socket *s)
 }
 
 /** Whether [addr, addr + len) lies in the model's user memory, `user`;
- * address 0 does not. */
+ * address 0 does not, but an empty range anywhere does, as usercopy.c's
+ * `user_range_ok` takes it. */
 int user_range_ok(uintptr_t addr, size_t len)
 {
-    return addr && addr <= sizeof(user) && len <= sizeof(user) - addr;
+    return len == 0 || (addr && addr <= sizeof(user) && len <= sizeof(user) - addr);
 }
 
 /** Whether the range lies in user memory, every page of which is
@@ -321,24 +323,25 @@ void kirq_restore(uint32_t flags)
     }
 }
 
-/* The real time the model reads, a distinct value to check clock selection
- * unless a row sets another. */
-static int64_t real_sec = 123;
-static int64_t real_nsec = 450000000;
-
-/** Supply the model's real time. */
-void get_current_time(int64_t *seconds, int64_t *nanoseconds)
-{
-    *seconds = real_sec;
-    *nanoseconds = real_nsec;
-}
-
 /* Real time less time since boot, in seconds and nanoseconds below a
  * second, and the nanoseconds a setting of the clock moves it by right after
  * the next reading of it, or in the next sleep; 0 for none. */
 static int64_t model_epoch = 1000000;
 static int32_t model_epoch_ns;
 static int64_t step_after_offset, step_in_sleep;
+
+/** Real time as the clock keeps it: time since boot plus the offset, the
+ * boot's epoch, which a setting of the clock moves. */
+void get_current_time(int64_t *seconds, int64_t *nanoseconds)
+{
+    rtc_monotonic(seconds, nanoseconds);
+    *seconds += model_epoch;
+    *nanoseconds += model_epoch_ns;
+    if (*nanoseconds >= 1000000000) {
+        *nanoseconds -= 1000000000;
+        (*seconds)++;
+    }
+}
 
 /** Add `ns` nanoseconds to the time `*sec` and `*nsec`, keeping `*nsec`
  * within the second. */
@@ -356,13 +359,12 @@ static void add_ns(int64_t *sec, int64_t *nsec, int64_t ns)
 }
 
 /** A setting of the real-time clock `ns` nanoseconds on from where it is, as
- * `rtc_set_realtime` makes on another processor: the real time and the
- * clock's offset move by it, and so does the step count. */
+ * `rtc_set_realtime` makes on another processor: the clock's offset, and so
+ * real time, move by it, and so does the step count. */
 static void model_step(int64_t ns)
 {
     int64_t offset_ns = model_epoch_ns;
 
-    add_ns(&real_sec, &real_nsec, ns);
     add_ns(&model_epoch, &offset_ns, ns);
     model_epoch_ns = (int32_t)offset_ns;
     model_steps++;
@@ -1040,7 +1042,7 @@ static void sleep_edges(void)
     post_at_block = wake_at_deadline = 1;
     rc = sleep_call(&p);
     rem = remainder();
-    CHECK(rc == 0 && cut_short == 0 && rem.tv_sec == 0 && rem.tv_nsec == 0,
+    CHECK(rc == 0 && cut_short == 0 && remainder_untouched(),
           "a signal at the deadline ends nothing");
 
     ask_sleep(&p, 0, TICKS_NS(3));
@@ -1489,8 +1491,8 @@ static void timer_marked(void)
 /**
  * Coarse time since boot reads the uptime and its ticks across 2^32 ticks
  * and into the next second, and leaves interrupts as it found them. Real
- * time reads the model's; clock 12 gives -EINVAL, and a null timespec
- * -EFAULT.
+ * time reads the boot's epoch plus time since boot; clock 12 gives -EINVAL,
+ * and a null timespec -EFAULT.
  */
 static void clocks(void)
 {
@@ -1517,7 +1519,8 @@ static void clocks(void)
     p.ebx = 0;
     CHECK(sys_clock_gettime(&p) == 0, "read realtime clock");
     k_memcpy(&ts, user + 16, sizeof(ts));
-    CHECK(ts.tv_sec == 123 && ts.tv_nsec == 450000000, "realtime unchanged");
+    CHECK(ts.tv_sec == (long)(model_epoch + ticks[4] / TICK_HZ) && ts.tv_nsec == 0,
+          "real time reads the boot's epoch plus time since boot");
     p.ebx = 12;
     CHECK(sys_clock_gettime(&p) == -EINVAL, "unknown clock refused");
     p.ebx = 1;
@@ -1815,8 +1818,7 @@ static void clock_sleeps(void)
     uptime_at(1000);
     pending = 1;
     CHECK(clock_sleep_call(&p) == 0 && sleeps == 0, "a real time before the boot returns at once");
-    real_sec = 1000000 + 1000 / TICK_HZ;
-    real_nsec = (int64_t)(1000 % TICK_HZ * TICK_NS) + TICKS_NS(1) / 2;
+    model_epoch_ns = TICKS_NS(1) / 2;
     ask_clock_tick(&p, 0, 1, 1000000, 1000, TICKS_NS(4) / 10);
     uptime_at(1000);
     pending = 1;
@@ -1837,8 +1839,7 @@ static void clock_sleeps(void)
     CHECK(clock_sleep_call(&p) == 0 && blocked_until == 1001,
           "a time since boot still ahead within the tick is reached at the next tick");
     mono_phase_ns = 0;
-    real_sec = 123;
-    real_nsec = 450000000;
+    model_epoch_ns = 0;
     ask_clock_tick(&p, 1, 1, 0, 1003, TICKS_NS(1) / 2);
     uptime_at(1000);
     pending = 1;
@@ -1875,8 +1876,6 @@ static void ask_rt_sleep(isr_params_t *p, uint64_t tick)
 {
     model_epoch = 1000000;
     model_epoch_ns = 0;
-    real_sec = 1000001;
-    real_nsec = 0;
     ask_clock_tick(p, 0, 1, 1000000, tick, 0);
     uptime_at(1000);
 }
@@ -1899,7 +1898,6 @@ static void ask_rt_sleep(isr_params_t *p, uint64_t tick)
 static void realtime_steps(void)
 {
     isr_params_t p;
-    int64_t sec = real_sec, nsec = real_nsec;
 
     ask_rt_sleep(&p, 1010);
     step_in_sleep = -1000000000LL;
@@ -1927,8 +1925,6 @@ static void realtime_steps(void)
           "a step of half a second back moves the sleep's tick half a second on");
     model_epoch = 1000000;
     model_epoch_ns = 0;
-    real_sec = sec;
-    real_nsec = nsec;
 }
 
 /** Run every row; 0 when each passes, 1 otherwise. */
