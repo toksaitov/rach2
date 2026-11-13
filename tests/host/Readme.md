@@ -520,3 +520,5 @@ The virtual channel rows of `dsp_hosttest.c` also cover two readers receiving th
 `itco_hosttest`'s elapsed rows check irregular service spans, zero elapsed time, the open deadline, and the next service across a tick-count wrap. The ordinary run ends with them, and `--elapsed-only` runs them alone. `timercal_hosttest --idle` also checks the guest's 4 ms scheduler phase and an independent 1 ms event.
 
 `process_timer_hosttest --fine-alarm` runs its fine-alarm rows alone: expiry and posting without a coarse tick, nanosecond readback, phase after late signal consumption and units preserved by exec. The ordinary run includes these rows.
+
+`timercal_hosttest --hz250` runs only its physical/guest common-phase row at the production rate, with a fine event and a stopped idle span. Its other event rows express positions in logical tick units and counts at the model's actual device rate.

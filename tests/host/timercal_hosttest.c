@@ -644,7 +644,7 @@ static void stop_rows(int path, uint32_t truth)
 }
 
 /* The rows' times, in milliseconds on the model's clock. */
-#define EDGE(x)         ((uint64_t)((x) * TICK_NS + 0.5))
+#define EDGE(x)         ((uint64_t)((x) * (double)TICK_NS + 0.5))
 #define APIC_COUNTS(ns) ((uint32_t)(ns) + 1u)
 
 /** The first time asked between ticks from tick 10 ticks, the interrupts
@@ -1349,6 +1349,14 @@ int main(int argc, char **argv)
 {
     uint32_t counts;
 
+    if (argc == 2 && strcmp(argv[1], "--hz250") == 0) {
+        hr_model = 1;
+        apic_khz = 1000000u;
+        ref_kind = REF_TSC;
+        idle_guest_period();
+        printf("timercal 250 Hz: %s\n", fails ? "FAIL" : "OK");
+        return fails != 0;
+    }
     if (argc == 2 && strcmp(argv[1], "--idle") == 0) {
         idle_rows();
         printf("timercal idle: %s\n", fails ? "FAIL" : "OK");
