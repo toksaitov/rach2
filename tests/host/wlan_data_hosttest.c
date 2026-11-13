@@ -39,6 +39,8 @@ static unsigned failures;
             ++failures;                                                          \
         }                                                                        \
     } while (0)
+/* Linux's msecs_to_jiffies of ms at TICK_HZ: whole ticks, rounded up. */
+#define JIFFIES(ms) (((uint64_t)(ms) * TICK_HZ + 999u) / 1000u)
 
 static const uint8_t sta[6] = {0x02, 0, 0, 0, 0, 0x01};
 static const uint8_t bssid[6] = {0x02, 0, 0, 0, 0, 0xaa};
@@ -810,7 +812,7 @@ static void check_fragments(void)
     len = ap_frame(f, sta, 1, 0, 44, 0, 1, body, 100);
     ap_ccmp(&ap_ptk, f, &len, 140, 0);
     CHECK(rx(f, len) == 0);
-    now += WLAN_DATA_FRAG_TIMEOUT;
+    now += JIFFIES(WLAN_DATA_FRAG_TIMEOUT);
     len = ap_frame(f, sta, 1, 0, 44, 1, 0, body + 100, 100);
     ap_ccmp(&ap_ptk, f, &len, 141, 0);
     CHECK(rx(f, len) == -EINVAL && n_got == 1);
@@ -1124,7 +1126,7 @@ static void check_rekey_slot(void)
     CHECK(rx_opened(109, 1, 300) == -ESTALE && n_got == 5);
     CHECK(rx_opened(109, 1, 301) == -ESTALE && n_got == 5);
     /* Once the AP's queue has gone, a number that far on is the new key's. */
-    now += WLAN_DATA_REKEY_SETTLE;
+    now += JIFFIES(WLAN_DATA_REKEY_SETTLE);
     CHECK(rx_opened(110, 1, 446) == 0 && n_got == 6);
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 446);
 }
@@ -1207,14 +1209,14 @@ static void check_ba_idle(void)
     f[29] = 100; /* 102.4 ms, rounded up to 103 ticks */
     CHECK(wlan_data_rx_action(d, f, len, 0) == 0 && d->ba[0].timeout == 100);
     CHECK(sent[0].frame[31] == 100); /* echoed */
-    now += 60;
+    now += JIFFIES(60);
     run_work();
     CHECK(rx_sn(100) == 0 && d->ba[0].head == 101);
-    now += 60;
+    now += JIFFIES(60);
     run_work();
     CHECK(d->ba[0].active);
     n_sent = 0;
-    now += 103;
+    now += JIFFIES(103);
     run_work();
     CHECK(!d->ba[0].active && n_sent == 1 && sent_delba(0, 0x0000, 39));
 
@@ -1235,7 +1237,7 @@ static void check_ba_idle(void)
     f[29] = 100;
     f[30] = 0;
     CHECK(wlan_data_rx_action(d, f, len, 0) == 0 && d->ba[0].timeout == 100);
-    now += 103;
+    now += JIFFIES(103);
     run_work();
     CHECK(!d->ba[0].active && d->ba[1].active && d->ba[2].active);
 
@@ -1244,7 +1246,7 @@ static void check_ba_idle(void)
     d->privacy = 0;
     len = addba_req(f, 0, 8, 100);
     CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
-    now += 1000000;
+    now += JIFFIES(1000000);
     run_work();
     CHECK(d->ba[0].active);
 }
@@ -1269,11 +1271,11 @@ static void check_ba_stale(void)
     CHECK(d->ba[0].head == 120);
     n_sent = 0;
     for (i = 0; i < 3; ++i) {
-        now += 30;
+        now += JIFFIES(30);
         run_work();
         CHECK(rx_sn(115) == -EALREADY && d->ba[0].active);
     }
-    now += 13;
+    now += JIFFIES(13);
     run_work();
     CHECK(!d->ba[0].active && n_sent == 1 && sent_delba(0, 0x0000, 39));
 
@@ -1380,13 +1382,13 @@ static void check_ba_stale_time(void)
     n = n_got;
     n_sent = 0;
     for (i = 0; d->ba[0].active && i < 64; ++i) {
-        now += 500;
-        if (now - taken < WLAN_BA_STALE_WAIT)
+        now += JIFFIES(500);
+        if (now - taken < JIFFIES(WLAN_BA_STALE_WAIT))
             CHECK(rx_sn(i) == -EALREADY && n_sent == 0);
         else
             CHECK(rx_sn(i) == 0);
     }
-    CHECK(!d->ba[0].active && now == taken + WLAN_BA_STALE_WAIT);
+    CHECK(!d->ba[0].active && now == taken + JIFFIES(WLAN_BA_STALE_WAIT));
     CHECK(n_sent == 1 && sent_delba(0, 0x0000, WLAN_REASON_UNSPECIFIED));
     CHECK(n_got == n + 1 && got_sn(n) == 3);
 }
@@ -1438,7 +1440,7 @@ static void check_ba_jump(void)
     dups = counters.rx_duplicates;
     n_sent = 0;
     CHECK(rx_sn(0) == 0 && rx_sn(1) == 0 && rx_sn(2) == 0 && d->ba[0].stored == 3);
-    now += WLAN_BA_TIMEOUT;
+    now += JIFFIES(WLAN_BA_TIMEOUT);
     run_work();
     CHECK(n_got == n + 3 && got_sn(n) == 0 && got_sn(n + 2) == 2 && d->ba[0].head == 3);
     CHECK(rx_sn(3) == 0 && n_got == n + 4 && d->ba[0].active && n_sent == 0);
@@ -1460,7 +1462,7 @@ static void check_rekey_sessions(void)
     CHECK(wlan_data_rx_action(d, f, len, 0) == 0 && d->ba[0].active);
     d->ba_tx[0].state = WLAN_BA_TX_ACTIVE;
     d->ba_tx[3].state = WLAN_BA_TX_REQUESTED;
-    d->ba_tx[5].retry_at = now + 1000; /* a refusal's wait stands */
+    d->ba_tx[5].retry_at = now + JIFFIES(1000); /* a refusal's wait stands */
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
     CHECK(d->ba[0].active && d->ba_tx[0].state == WLAN_BA_TX_ACTIVE);
     n_sent = 0;
@@ -1473,7 +1475,7 @@ static void check_rekey_sessions(void)
     CHECK(!d->ba[0].active && d->ba_tx[0].state == WLAN_BA_TX_IDLE);
     CHECK(d->ba_tx[0].retry_at == 0);
     CHECK(d->ba_tx[3].state == WLAN_BA_TX_IDLE && d->ba_tx[3].retry_at == 0);
-    CHECK(d->ba_tx[5].retry_at == now + 1000);
+    CHECK(d->ba_tx[5].retry_at == now + JIFFIES(1000));
 
     setup(1);
     len = addba_req(f, 0, 8, 100);
@@ -1492,7 +1494,7 @@ static void check_rekey_sessions(void)
     radio_full = 1;
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == -EINPROGRESS);
     CHECK(d->ba[0].active && wlan_data_pairwise_key(d, 0)->key.hw_slot == 0);
-    now += WLAN_DATA_BA_WAIT - 1;
+    now += JIFFIES(WLAN_DATA_BA_WAIT) - 1;
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == -EINPROGRESS);
     /* Meanwhile no session starts, either way. */
     CHECK(d->ba_blocked);
@@ -1517,7 +1519,7 @@ static void check_rekey_sessions(void)
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
     radio_full = 1;
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == -EINPROGRESS);
-    now += WLAN_DATA_BA_WAIT;
+    now += JIFFIES(WLAN_DATA_BA_WAIT);
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
     radio_full = 0;
     CHECK(!d->ba[0].active && wlan_data_pairwise_key(d, 0)->key.hw_slot == 1);
@@ -1605,7 +1607,7 @@ static void check_renewal_wait(void)
     CHECK(rx_key(102, 2, 0x13ca) == 0 && d->renewing == 0);    /* message 3 */
     CHECK(rx_key(103, 3, 0x008a) == 0 && d->renewing == now);
     began = now;
-    now += 1000;
+    now += JIFFIES(1000);
     CHECK(rx_key(104, 4, 0x008a) == 0 && d->renewing == began);
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0 && d->renewing == began);
     CHECK(d->renewed == now);
@@ -1837,7 +1839,7 @@ static void mon_beacons(unsigned ms)
     static const uint8_t fixed[12] = {0, 0, 0, 0, 0, 0, 0, 0, 100, 0, 0x11, 0};
 
     for (; ms >= 100 && mon.state == WLAN_STA_ASSOCIATED; ms -= 100) {
-        now += 100;
+        now += JIFFIES(100);
         run_work();
         if (mon_poll) {
             status_of(mon_poll_sent, WLAN_TX_ACKED);
@@ -1854,7 +1856,7 @@ static void renewal_to_message4(void)
 {
     setup(1);
     takes_keys = 1;
-    now += 1000;
+    now += JIFFIES(1000);
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
     CHECK(rx_key(103, 3, 0x008a) == 0 && d->renewing == now);
     send_eapol();
@@ -1874,14 +1876,14 @@ static void check_renewal_message4(void)
     uint64_t keyed;
 
     renewal_to_message4();
-    now += 5;
+    now += JIFFIES(5);
     keyed = now;
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
-    now += 20;
+    now += JIFFIES(20);
     status_of(1, 0);
     CHECK(wlan_data_renewal(d, &cause) == keyed && cause == WLAN_RESCUE_MESSAGE4);
     acked_poll();
-    now += 9000;
+    now += JIFFIES(9000);
     acked_poll();
     CHECK(rx_opened(104, 0, 444) == -ESTALE);
     CHECK(wlan_data_renewal(d, &cause) == keyed && cause == WLAN_RESCUE_MESSAGE4);
@@ -1901,7 +1903,7 @@ static void check_renewal_message4(void)
     renewal_to_message4();
     keyed = now;
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
-    now += WLAN_MLME_KEY_WAIT;
+    now += JIFFIES(WLAN_MLME_KEY_WAIT);
     CHECK(wlan_data_renewal(d, &cause) == keyed && cause == WLAN_RESCUE_MESSAGE4);
 }
 
@@ -1918,19 +1920,19 @@ static void check_renewal_idle(void)
     status_of(1, WLAN_TX_ACKED);
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
     CHECK(wlan_data_renewal(d, 0) == 0 && d->renewing != 0);
-    now += WLAN_MLME_KEY_WAIT - 1;
+    now += JIFFIES(WLAN_MLME_KEY_WAIT) - 1;
     acked_poll();
     CHECK(wlan_data_renewal(d, 0) == 0 && d->renewing != 0 && d->renew_acked == 0);
     now += 1;
     CHECK(wlan_data_renewal(d, 0) == 0 && d->renewing != 0);
-    now += 100000;
+    now += JIFFIES(100000);
     acked_poll();
     CHECK(wlan_data_renewal(d, 0) == 0 && d->renewing != 0 && d->renew_acked == 0);
     send_data();
     status_of(n_sent - 1, WLAN_TX_ACKED);
     acked = now;
     CHECK(wlan_data_renewal(d, &cause) == acked && cause == WLAN_RESCUE_SILENT);
-    now += 5000;
+    now += JIFFIES(5000);
     CHECK(rx_opened(105, 1, 1) == 0 && wlan_data_renewal(d, 0) == acked);
     CHECK(wlan_data_renewal_ask(d, 1) == 1);
     /* A question that did not leave has no answer. */
@@ -1957,7 +1959,7 @@ static void check_replay_run(void)
     wlan_data_renewal_ask(d, 1);
     wlan_data_renewal_asked(d);
     CHECK(rx_arp_reply(201, 1, 2) == 0 && d->renewing == 0);
-    now += WLAN_DATA_REKEY_SETTLE;
+    now += JIFFIES(WLAN_DATA_REKEY_SETTLE);
     mon_connect();
     CHECK(rx_opened(202, 1, 100000) == 0);
     for (i = 0; i + 1 < WLAN_DATA_REPLAY_RUN; ++i)
@@ -1993,7 +1995,7 @@ static void check_replay_run_tid(void)
     CHECK(wlan_data_renewal_ask(d, 1) == 1);
     wlan_data_renewal_asked(d);
     CHECK(rx_arp_reply(200, 1, 1) == 0 && d->renewing == 0);
-    now += WLAN_DATA_REKEY_SETTLE;
+    now += JIFFIES(WLAN_DATA_REKEY_SETTLE);
     CHECK(rx_opened_tid(1, 201, 1, 5000) == 0);
     for (i = 0; i < WLAN_DATA_REPLAY_RUN; ++i)
         CHECK(rx_opened_tid(1, 202 + i, 1, 3 + i) == -ESTALE);
@@ -2028,7 +2030,7 @@ static void check_replay_run_monitor(void)
     CHECK(wlan_data_renewal_ask(d, 1) == 1);
     wlan_data_renewal_asked(d);
     CHECK(rx_arp_reply(200, 1, 1) == 0 && d->renewing == 0);
-    now += WLAN_DATA_REKEY_SETTLE;
+    now += JIFFIES(WLAN_DATA_REKEY_SETTLE);
     mon_connect();
     CHECK(rx_opened_tid(1, 201, 1, 5000) == 0);
     for (i = 0; i < WLAN_DATA_REPLAY_RUN; ++i)
@@ -2063,7 +2065,7 @@ static void check_renewal_tkip(void)
     renewal_to_message4();
     status_of(1, WLAN_TX_ACKED);
     CHECK(install(WLAN_CIPHER_SUITE_TKIP, 0, 1, tkip_key, 32, 0) == 0);
-    now += WLAN_DATA_REKEY_SETTLE;
+    now += JIFFIES(WLAN_DATA_REKEY_SETTLE);
     send_data();
     status_of(n_sent - 1, WLAN_TX_ACKED);
     CHECK(wlan_data_renewal_ask(d, 1) == 1);
@@ -2090,7 +2092,7 @@ static void check_replay_run_idle(void)
     renewal_to_message4();
     status_of(1, WLAN_TX_ACKED);
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
-    now += WLAN_DATA_REKEY_SETTLE;
+    now += JIFFIES(WLAN_DATA_REKEY_SETTLE);
     CHECK(rx_opened(200, 1, 100000) == 0);
     CHECK(wlan_data_renewal(d, 0) == 0);
     for (i = 0; i < WLAN_DATA_REPLAY_RUN; ++i)
@@ -2219,7 +2221,7 @@ static void check_renewal_traffic(void)
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
     status_of(2, WLAN_TX_ACKED);
     CHECK(d->renew_acked == 0 && wlan_data_renewal(d, 0) == 0);
-    now += 1000;
+    now += JIFFIES(1000);
     send_data();
     CHECK(wlan_data_renewal(d, 0) == 0);
     status_of(3, 0);
@@ -2228,7 +2230,7 @@ static void check_renewal_traffic(void)
     status_of(4, WLAN_TX_ACKED);
     acked = now;
     CHECK(wlan_data_renewal(d, &cause) == acked && cause == WLAN_RESCUE_SILENT);
-    now += 500;
+    now += JIFFIES(500);
     CHECK(rx_opened(104, 0, 444) == -ESTALE && d->renewing != 0);
     CHECK(rx_opened(105, 1, 1) == 0 && d->renewing != 0);
     CHECK(wlan_data_renewal_ask(d, 1) == 1);
@@ -2256,11 +2258,11 @@ static void check_renewal_silent(void)
     renewal_to_message4();
     status_of(1, WLAN_TX_ACKED);
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
-    now += 200;
+    now += JIFFIES(200);
     send_data();
     status_of(2, WLAN_TX_ACKED);
     acked = now;
-    now += 9000;
+    now += JIFFIES(9000);
     send_data();
     status_of(3, WLAN_TX_ACKED);
     acked_poll();
@@ -2274,7 +2276,7 @@ static void check_renewal_silent(void)
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
     send_data();
     status_of(2, WLAN_TX_ACKED);
-    now += 100;
+    now += JIFFIES(100);
     CHECK(rx_key_slot(106, 1, 1, 0x008a) == 0 && d->renewing == now);
     CHECK(d->renewed == 0 && d->renew_acked == 0);
 
@@ -2341,7 +2343,7 @@ static void renewal_to_silence(void)
     send_data();
     status_of(2, WLAN_TX_ACKED);
     acked = now;
-    now += WLAN_MLME_KEY_WAIT;
+    now += JIFFIES(WLAN_MLME_KEY_WAIT);
     CHECK(wlan_data_renewal(d, &cause) == acked && cause == WLAN_RESCUE_SILENT);
 }
 
@@ -2356,7 +2358,7 @@ static void check_renewal_question(void)
     renewal_to_silence();
     CHECK(wlan_data_renewal_ask(d, 1) == 1 && d->renewing != 0);
     wlan_data_renewal_asked(d);
-    now += 1000;
+    now += JIFFIES(1000);
     CHECK(rx_opened(104, 0, 444) == -ESTALE && d->renewing != 0 && counters.rescue_saved == 0);
     CHECK(rx_opened(105, 1, 1) == 0 && d->renewing != 0 && counters.rescue_saved == 0);
     CHECK(rx_arp(1, 106, 1, 2) == 0 && d->renewing != 0 && counters.rescue_saved == 0);
@@ -2369,7 +2371,7 @@ static void check_renewal_question(void)
     renewal_to_silence();
     CHECK(wlan_data_renewal_ask(d, 1) == 1);
     wlan_data_renewal_asked(d);
-    now += WLAN_MLME_ASK_WAIT;
+    now += JIFFIES(WLAN_MLME_ASK_WAIT);
     CHECK(wlan_data_renewal(d, &cause) != 0 && cause == WLAN_RESCUE_SILENT);
     wlan_data_renewal_rescued(d);
     CHECK(counters.rescues[WLAN_RESCUE_SILENT] == 1 && counters.rescue_saved == 0);
@@ -2403,7 +2405,7 @@ static void check_renewal_no_question(void)
     renewal_to_message4();
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
     status_of(1, 0);
-    now += WLAN_MLME_KEY_WAIT;
+    now += JIFFIES(WLAN_MLME_KEY_WAIT);
     CHECK(wlan_data_renewal(d, &cause) != 0 && cause == WLAN_RESCUE_MESSAGE4);
     CHECK(wlan_data_renewal_ask(d, 1) == 0 && wlan_data_renewal_ask(d, 0) == 0);
     CHECK(d->renew_asked == 0 && d->renewing != 0);
@@ -2412,7 +2414,7 @@ static void check_renewal_no_question(void)
 
     /* No key: no question either. */
     renewal_to_message4();
-    now += WLAN_MLME_KEY_WAIT;
+    now += JIFFIES(WLAN_MLME_KEY_WAIT);
     CHECK(wlan_data_renewal(d, &cause) != 0 && cause == WLAN_RESCUE_KEY);
     CHECK(wlan_data_renewal_ask(d, 1) == 0 && wlan_data_renewal_ask(d, 0) == 0);
     CHECK(d->renew_asked == 0 && d->renewing != 0);
@@ -2421,7 +2423,7 @@ static void check_renewal_no_question(void)
     renewal_to_message4();
     status_of(1, WLAN_TX_ACKED);
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
-    now += WLAN_MLME_KEY_WAIT;
+    now += JIFFIES(WLAN_MLME_KEY_WAIT);
     CHECK(wlan_data_renewal_ask(d, 1) == -1 && d->renew_asked == 0);
 }
 
@@ -2442,12 +2444,12 @@ static void check_sealed_move(void)
     CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
     CHECK(rx_opened(100, 0, 1) == 0 && n_got == 1 && d->sealed == now);
     /* 101 is lost; 102 waits for it from before the move. */
-    now += 10;
+    now += JIFFIES(10);
     CHECK(rx_opened(102, 0, 3) == 0 && n_got == 1 && d->ba[0].stored == 1);
-    now += 10;
+    now += JIFFIES(10);
     moved = now;
     wlan_data_set_frequency(d, 2437);
-    now += 10;
+    now += JIFFIES(10);
     /* The BlockAckReq gives up on 101 and lets 102 go. */
     k_memset(f, 0, 20);
     f[0] = IEEE80211_FTYPE_CTL | IEEE80211_STYPE_BACK_REQ;
@@ -2458,9 +2460,9 @@ static void check_sealed_move(void)
     f[19] = (uint8_t)(103 >> 4);
     CHECK(rx(f, 20) == 0 && n_got == 2 && got_sn(1) == 102 && d->ba[0].stored == 0);
     CHECK(d->sealed < moved);
-    now += 10;
+    now += JIFFIES(10);
     CHECK(rx_opened_on(2412, 0, 103, 0, 4) == 0 && n_got == 3 && d->sealed < moved);
-    now += 10;
+    now += JIFFIES(10);
     CHECK(rx_opened_on(2437, 0, 104, 0, 5) == 0 && n_got == 4 && d->sealed == now);
 }
 
@@ -2504,7 +2506,7 @@ static void check_blockack(void)
     CHECK(n_got == 6 && got_sn(4) == 108 && got_sn(5) == 110 && d->ba[0].head == 113);
     /* The hole before 120 times out. */
     CHECK(d->ba[0].stored == 1);
-    now += WLAN_BA_TIMEOUT - 1;
+    now += JIFFIES(WLAN_BA_TIMEOUT) - 1;
     run_work();
     CHECK(n_got == 6);
     now += 1;

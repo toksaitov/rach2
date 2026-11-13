@@ -45,7 +45,9 @@ static unsigned failures;
 
 /* The radio's ring, smaller than the adapter's queue so that the queue
  * fills behind it. */
-#define RING 4
+#define RING        4
+/* Linux's msecs_to_jiffies of ms at TICK_HZ: whole ticks, rounded up. */
+#define JIFFIES(ms) (((uint64_t)(ms) * TICK_HZ + 999u) / 1000u)
 
 /* Where an Ethernet frame's mark, its number, lands: byte 10 of the
  * payload, which follows a 24-byte header and an 8-byte LLC/SNAP header. */
@@ -1156,7 +1158,7 @@ static void check_rekey_eapol_full_ring(void)
     run_work();
     CHECK(wlan_data_eapol_queued(wlan_data_of(&wlan)));
     CHECK(pairwise(2) == -EINPROGRESS);
-    now += WLAN_DATA_REKEY_WAIT;
+    now += JIFFIES(WLAN_DATA_REKEY_WAIT);
     CHECK(pairwise(2) == -ETIMEDOUT);
     CHECK(wlan_data_of(&wlan)->pairwise[0].key.hw_slot == 0);
     CHECK(!wlan_data_of(&wlan)->install_wait);
@@ -1179,7 +1181,7 @@ static void check_rekey_eapol_stopped(void)
     CHECK(send_type(0, 0x888e) == 0);
     run_work();
     CHECK(pairwise(2) == -EINPROGRESS);
-    now += WLAN_DATA_REKEY_WAIT;
+    now += JIFFIES(WLAN_DATA_REKEY_WAIT);
     CHECK(pairwise(2) == -ETIMEDOUT);
     CHECK(d->pairwise[0].key.hw_slot == 0);
     wlan_data_stop_tx(d, 0);
@@ -1388,10 +1390,10 @@ static void check_ba_no_room(void)
         CHECK(send(i) == 0);
     run_work();
     d->ba_tx[0].state = WLAN_BA_TX_REQUESTED;
-    d->ba_tx[0].since = now - WLAN_BA_TX_RESPONSE;
-    CHECK(wlan_ba_tx_waits(d, 0) == now + WLAN_BA_TX_AGAIN);
+    d->ba_tx[0].since = now - JIFFIES(WLAN_BA_TX_RESPONSE);
+    CHECK(wlan_ba_tx_waits(d, 0) == now + JIFFIES(WLAN_BA_TX_AGAIN));
     CHECK(d->ba_tx[0].state == WLAN_BA_TX_REQUESTED);
-    now += WLAN_BA_TX_RESPONSE;
+    now += JIFFIES(WLAN_BA_TX_RESPONSE);
     CHECK(wlan_ba_tx_waits(d, 0) == 0 && d->ba_tx[0].state == WLAN_BA_TX_IDLE);
     complete(RING, 1);
     run_work();
@@ -1431,7 +1433,7 @@ static void check_ba_request_holds(void)
     CHECK(send(3) == 0);
     run_due_all();
     CHECK(n_taken == 2 && waiting() == 1);
-    now += WLAN_BA_TX_RESPONSE - 1;
+    now += JIFFIES(WLAN_BA_TX_RESPONSE) - 1;
     run_due_all();
     CHECK(n_taken == 2);
     now += 1;
@@ -1446,7 +1448,7 @@ static void check_ba_request_holds(void)
     d->rekey_due = now + 1000;
     CHECK(wlan_ba_tx_waits(d, 0) == 0 && d->ba_tx[0].state == WLAN_BA_TX_REQUESTED);
     d->rekey_due = 0;
-    CHECK(wlan_ba_tx_waits(d, 0) == now + WLAN_BA_TX_RESPONSE);
+    CHECK(wlan_ba_tx_waits(d, 0) == now + JIFFIES(WLAN_BA_TX_RESPONSE));
     wlan_ba_tx_stop(d, 0, 0);
     wlan_data_detach(&wlan);
 }

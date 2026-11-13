@@ -37,6 +37,9 @@ static struct ath9k ah;
 static struct ath9k_model model;
 
 /* The machine and the parts of other tasks the radio calls. */
+/* Linux's msecs_to_jiffies of ms at TICK_HZ: whole ticks, rounded up. */
+#define JIFFIES(ms) (((uint64_t)(ms) * TICK_HZ + 999u) / 1000u)
+
 static uint64_t now = 1000;
 static uint32_t irq_flag = 1;
 static unsigned warnings, resets;
@@ -712,27 +715,27 @@ static void test_work(void)
     /* A normal sample: I 1/256 of the power, Q balanced. */
     card_running();
     t = now;
-    CHECK(wlan_work_next_due() == t + 1000);
+    CHECK(wlan_work_next_due() == t + JIFFIES(1000));
     iq_meas(0x10000, 0x10000, 0x100);
     ath9k_model_log_clear(&model);
-    now = t + 999;
+    now = t + JIFFIES(1000) - 1;
     CHECK(wlan_work_run_due(now) == 0);
-    now = t + 1000;
+    now = t + JIFFIES(1000);
     CHECK(wlan_work_run_due(now) == 1);
     CHECK(field(AR_PHY_RX_IQCAL_CORR_B0, AR_PHY_RX_IQCAL_CORR_IQCORR_Q_I_COFF) == 0x7f);
     CHECK(field(AR_PHY_RX_IQCAL_CORR_B0, AR_PHY_RX_IQCAL_CORR_IQCORR_Q_Q_COFF) == 0);
     CHECK(field(AR_PHY_RX_IQCAL_CORR_B0, AR_PHY_RX_IQCAL_CORR_IQCORR_ENABLE) == 1);
     CHECK(ah.cal.done && ah.cal.iq_valid && ah.cal.iq_state == ATH9K_CAL_DONE);
-    CHECK(wlan_work_next_due() == t + 2000);
+    CHECK(wlan_work_next_due() == t + JIFFIES(2000));
     /* Done: no further sample. */
     ath9k_model_log_clear(&model);
-    now = t + 2000;
+    now = t + JIFFIES(2000);
     CHECK(wlan_work_run_due(now) == 1);
     CHECK(ath9k_model_count(&model, ATH9K_MODEL_WRITE, AR_PHY_CALMODE) == 0);
     /* The thermometer is read. */
     ath9k_model_poke(&model, AR_PHY_BB_THERM_ADC_4,
                      SM(0x55, AR_PHY_BB_THERM_ADC_4_LATEST_THERM_VALUE));
-    now = t + 3000;
+    now = t + JIFFIES(3000);
     CHECK(wlan_work_run_due(now) == 1);
     CHECK(ah.cal.temp == 0x55);
     /* While interrupts are off, as in a reset that failed, the work reads
@@ -740,17 +743,17 @@ static void test_work(void)
     ah.mac.irq_on = 0;
     ath9k_model_log_clear(&model);
     model.log_reads = 1;
-    now = t + 4000;
+    now = t + JIFFIES(4000);
     CHECK(wlan_work_run_due(now) == 1);
-    CHECK(model.log_count == 0 && wlan_work_next_due() == t + 5000);
+    CHECK(model.log_count == 0 && wlan_work_next_due() == t + JIFFIES(5000));
     model.log_reads = 0;
     ah.mac.irq_on = 1;
     /* Twenty minutes on, it starts again, and the next second's sample
      * finishes it. */
-    now = t + 1000 + ATH9K_RESTART_CAL_MS;
+    now = t + JIFFIES(1000) + JIFFIES(ATH9K_RESTART_CAL_MS);
     CHECK(wlan_work_run_due(now) == 1);
     CHECK(!ah.cal.done && !ah.cal.iq_valid);
-    now += 1000;
+    now += JIFFIES(1000);
     CHECK(wlan_work_run_due(now) == 1);
     CHECK(ah.cal.done && ah.cal.iq_valid);
     ath9k_cal_stop(&ah);
@@ -769,7 +772,7 @@ static void test_work_refused(void)
     t = now;
     iq_meas(0x10000, 0x10000, 0x10000);
     ath9k_model_log_clear(&model);
-    now = t + 1000;
+    now = t + JIFFIES(1000);
     CHECK(wlan_work_run_due(now) == 1);
     CHECK(ath9k_model_count(&model, ATH9K_MODEL_WRITE, AR_PHY_RX_IQCAL_CORR_B0) == 0);
     CHECK(ah.cal.done);
@@ -778,7 +781,7 @@ static void test_work_refused(void)
     t = now;
     iq_meas(0x10000, 0x10000, 0xffff0000u);
     ath9k_model_log_clear(&model);
-    now = t + 1000;
+    now = t + JIFFIES(1000);
     CHECK(wlan_work_run_due(now) == 1);
     CHECK(ath9k_model_count(&model, ATH9K_MODEL_WRITE, AR_PHY_RX_IQCAL_CORR_B0) == 0);
     ath9k_cal_stop(&ah);
@@ -789,7 +792,7 @@ static void test_work_refused(void)
     keep_do_cal = 1;
     ath9k_model_poke(&model, AR_PHY_TIMING4,
                      ath9k_model_peek(&model, AR_PHY_TIMING4) | AR_PHY_TIMING4_DO_CAL);
-    now = t + 1000;
+    now = t + JIFFIES(1000);
     CHECK(wlan_work_run_due(now) == 1);
     CHECK(!ah.cal.done && ah.cal.samples == 0);
     ath9k_cal_stop(&ah);
@@ -801,7 +804,7 @@ static void test_work_refused(void)
     t = now;
     ath9k_model_poke(&model, AR_PHY_AGC_CONTROL, 0);
     cca(-90);
-    for (now = t + 1000; now < t + ATH9K_LONG_CAL_MS; now += 1000)
+    for (now = t + JIFFIES(1000); now < t + JIFFIES(ATH9K_LONG_CAL_MS); now += JIFFIES(1000))
         CHECK(wlan_work_run_due(now) == 1);
     ath9k_model_log_clear(&model);
     CHECK(wlan_work_run_due(now) == 1);
@@ -811,7 +814,7 @@ static void test_work_refused(void)
     ath9k_model_poke(&model, AR_PHY_AGC_CONTROL, 0);
     stuck_nf = 1;
     t = now;
-    for (now = t + 1000; now < t + ATH9K_LONG_CAL_MS; now += 1000)
+    for (now = t + JIFFIES(1000); now < t + JIFFIES(ATH9K_LONG_CAL_MS); now += JIFFIES(1000))
         CHECK(wlan_work_run_due(now) == 1);
     CHECK(resets == 0);
     CHECK(wlan_work_run_due(now) == 1);

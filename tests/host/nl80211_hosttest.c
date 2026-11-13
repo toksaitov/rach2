@@ -1185,12 +1185,12 @@ static void scan(void)
         CHECK(parse(&replies[i]) == NL80211_CMD_NEW_SCAN_RESULTS);
         CHECK(u32_of(tb[NL80211_ATTR_GENERATION]) == table.generation);
         parse_nest(tb[NL80211_ATTR_BSS], b, NL80211_BSS_LAST_SEEN_BOOTTIME);
-        CHECK(u32_of(b[NL80211_BSS_SEEN_MS_AGO]) == 50);
+        CHECK(u32_of(b[NL80211_BSS_SEEN_MS_AGO]) == 50 * 1000 / TICK_HZ);
         CHECK(u16_of(b[NL80211_BSS_BEACON_INTERVAL]) == 100);
         CHECK(u16_of(b[NL80211_BSS_CAPABILITY]) == 0x0411);
         CHECK(b[NL80211_BSS_TSF] && nla_get_u64(b[NL80211_BSS_TSF]) == 0x42);
         CHECK(b[NL80211_BSS_LAST_SEEN_BOOTTIME] &&
-              nla_get_u64(b[NL80211_BSS_LAST_SEEN_BOOTTIME]) == (uint64_t)1100 * 1000000);
+              nla_get_u64(b[NL80211_BSS_LAST_SEEN_BOOTTIME]) == (uint64_t)1100 * TICK_NS);
         CHECK(b[NL80211_BSS_INFORMATION_ELEMENTS] &&
               nla_data(b[NL80211_BSS_INFORMATION_ELEMENTS])[0] == WLAN_EID_SSID);
         if (has_bytes(b[NL80211_BSS_BSSID], ap1, 6)) {
@@ -1423,8 +1423,8 @@ static void join_wpa2(void)
     status_now.state = WLAN_STA_AUTHORIZED;
 
     /* signal_poll: GET_STATION, then GET_SURVEY for the noise. */
-    now += 2500;
-    status_now.last_rx = now - 20;
+    now += TICK_HZ * 5 / 2;
+    status_now.last_rx = now - TICK_HZ / 50;
     rq_begin(NL80211_CMD_GET_STATION, 0);
     rq_u32(NL80211_ATTR_IFINDEX, 2);
     rq_put(NL80211_ATTR_MAC, ap1, 6);
@@ -1548,7 +1548,7 @@ static void join_after_leave(void)
     now += 5;
     auth_request(NL80211_AUTHTYPE_OPEN_SYSTEM);
     CHECK(rq_send() == 0 && last.kind == CALL_AUTH);
-    CHECK(now == left + LEAVE_SETTLE);
+    CHECK(now == left + (LEAVE_SETTLE * TICK_HZ + 999) / 1000);
 
     left = now;
     auth_request(NL80211_AUTHTYPE_OPEN_SYSTEM);

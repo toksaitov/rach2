@@ -47,6 +47,7 @@
 #include "lib/kerrno.h"
 #include "lib/kstring.h"
 #include "mm/kheap.h"
+#include "timer.h"
 
 extern int printf(const char *format, ...);
 
@@ -75,8 +76,10 @@ static int same(const uint8_t *a, const uint8_t *b, unsigned n)
 /* DMA memory: pages whose bus addresses the model's dma hook maps.     */
 /* ------------------------------------------------------------------ */
 
-#define PAGES    200
-#define BUS_BASE 0x10000000u
+/* Linux's msecs_to_jiffies of ms at TICK_HZ: whole ticks, rounded up. */
+#define JIFFIES(ms) (((uint64_t)(ms) * TICK_HZ + 999u) / 1000u)
+#define PAGES       200
+#define BUS_BASE    0x10000000u
 
 static unsigned char pages[PAGES][ATH9K_DMA_PAGE] __attribute__((aligned(4096)));
 static unsigned pages_used;
@@ -672,7 +675,7 @@ static void test_refusal(void)
         CHECK(addba_resp(req[2], WLAN_STATUS_REQUEST_DECLINED, 0x0002 | 64 << 6) == 0);
     CHECK(d->ba_tx[0].state == WLAN_BA_TX_IDLE && !ah.ampdu.tid[0].active);
     finish_all();
-    now += WLAN_BA_TX_RETRY - 1;
+    now += JIFFIES(WLAN_BA_TX_RETRY) - 1;
     CHECK(send(0, 100, 0) == 0);
     CHECK(model.tx[3].count == 0);
     finish_all();
@@ -683,12 +686,12 @@ static void test_refusal(void)
 
     /* No answer in a second: the next frame ends the request with a DELBA,
      * since the AP may have taken it, and waits again. */
-    now += WLAN_BA_TX_RESPONSE;
+    now += JIFFIES(WLAN_BA_TX_RESPONSE);
     CHECK(send(0, 100, 0) == 0);
     req = action_sent();
     CHECK(req && req[1] == WLAN_ACTION_DELBA && req[2] == 0x00 && req[3] == 0x08 && req[4] == 37);
     CHECK(d->ba_tx[0].state == WLAN_BA_TX_IDLE);
-    CHECK(d->ba_tx[0].retry_at == now + WLAN_BA_TX_RETRY);
+    CHECK(d->ba_tx[0].retry_at == now + JIFFIES(WLAN_BA_TX_RETRY));
     finish_all();
 
     /* The AP's DELBA as recipient stops the radio's session; one as
@@ -699,7 +702,7 @@ static void test_refusal(void)
     CHECK(ah.ampdu.tid[0].active && d->ba_tx[0].state == WLAN_BA_TX_ACTIVE);
     CHECK(delba(0, 0) == 0);
     CHECK(!ah.ampdu.tid[0].active && d->ba_tx[0].state == WLAN_BA_TX_IDLE);
-    CHECK(d->ba_tx[0].retry_at == now + WLAN_BA_TX_RETRY);
+    CHECK(d->ba_tx[0].retry_at == now + JIFFIES(WLAN_BA_TX_RETRY));
 
     /* A disconnection stops it too. */
     setup();
@@ -725,7 +728,7 @@ static void test_option(void)
     req = action_sent();
     CHECK(req && req[1] == WLAN_ACTION_DELBA && req[2] == 0x00 && req[3] == 0x08 && req[4] == 37);
     finish_all();
-    now += WLAN_BA_TX_RETRY;
+    now += JIFFIES(WLAN_BA_TX_RETRY);
     CHECK(send(0, 100, 0) == 0);
     CHECK(model.tx[3].count == 0);
     CHECK(ath9k_ampdu_action(&ah, WLAN_AMPDU_TX_START, ap, 0, 0, 64) == -EOPNOTSUPP);

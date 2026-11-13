@@ -33,6 +33,7 @@
 #include "irq.h"
 #include "lib/kerrno.h"
 #include "lib/kstring.h"
+#include "timer.h"
 
 extern int printf(const char *format, ...);
 
@@ -99,12 +100,15 @@ static void *dma_map(struct ath9k_model *m, uint32_t bus, unsigned len)
 /* The kernel and the other parts, as the driver sees them.             */
 /* ------------------------------------------------------------------ */
 
-static uint64_t now_ms = 1000;
+/* Linux's msecs_to_jiffies of ms at TICK_HZ: whole ticks, rounded up. */
+#define JIFFIES(ms) (((uint64_t)(ms) * TICK_HZ + 999u) / 1000u)
+
+static uint64_t now_tick = 1000; /* the kernel's tick count */
 static unsigned logs;
 
 uint64_t tick_count(void)
 {
-    return now_ms;
+    return now_tick;
 }
 
 void klog(int level, const char *subsystem, const char *format, ...)
@@ -248,7 +252,7 @@ void wlan_cancel_work(struct wlan_work *work)
             queued[i] = 0;
 }
 
-/** Run the queued work that is due by now_ms; returns how many ran. */
+/** Run the queued work that is due by now_tick; returns how many ran. */
 static unsigned run_work(void)
 {
     unsigned i, n = 0;
@@ -256,7 +260,7 @@ static unsigned run_work(void)
     for (i = 0; i < MAX_WORK; i++) {
         struct wlan_work *w = queued[i];
 
-        if (w && w->due <= now_ms) {
+        if (w && w->due <= now_tick) {
             queued[i] = 0;
             work_running = w;
             w->run(w);
@@ -1538,13 +1542,13 @@ static void recover_rx_stall(const struct wlan_key *ccmp, int slot, uint32_t mac
     unsigned len, i;
 
     len = beacon(f, 64);
-    now_ms += 4000;
+    now_tick += JIFFIES(4000);
     for (i = 0; i < 4; i++) {
         CHECK(receive(0, f, len, 0x1b, 20, 0) == 0);
         interrupt();
     }
     CHECK(ath9k_hang_check(&ah) == -1);
-    now_ms += 4000;
+    now_tick += JIFFIES(4000);
     CHECK(receive(0, f, len, 0x1b, 20, 0) == 0);
     interrupt();
     CHECK(ath9k_hang_check(&ah) == ATH9K_RESET_RX_STALL);
@@ -1552,7 +1556,7 @@ static void recover_rx_stall(const struct wlan_key *ccmp, int slot, uint32_t mac
     check_restored(ccmp, slot, mac1);
     ah.mac.associated = 0;
     ath9k_mac_set_bssid(&ah, (const uint8_t *)"\0\0\0\0\0\0", 0);
-    now_ms += 4000;
+    now_tick += JIFFIES(4000);
     CHECK(ath9k_hang_check(&ah) == -1); /* not associated: not judged */
     CHECK(ah.rx.hw_filter & ATH9K_RX_FILTER_BEACON);
 }
@@ -1727,9 +1731,9 @@ static void test_recover(void)
 
     /* The hang check is queued on the worker and finds nothing. */
     CHECK(queued[0] == &ah.recover.work[0].work);
-    now_ms += ATH9K_HANG_MS;
+    now_tick += JIFFIES(ATH9K_HANG_MS);
     CHECK(run_work() == 1 && queued[0] == &ah.recover.work[1].work && hw_resets == 1);
-    now_ms += ATH9K_HANG_MS;
+    now_tick += JIFFIES(ATH9K_HANG_MS);
     CHECK(run_work() == 1 && queued[0] == &ah.recover.work[0].work && hw_resets == 1);
 
     recover_tx_hang(&ccmp, slot, mac1);
