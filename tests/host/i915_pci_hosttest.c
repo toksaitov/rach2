@@ -832,9 +832,9 @@ static void check_identity(const struct drm_device *dev, const struct drm_i915_p
     CHECK("identity: 1.6.0 of 20230929", id->major == 1 && id->minor == 6 && id->patchlevel == 0 &&
                                              strcmp(id->date, "20230929") == 0);
     CHECK("identity: on the PCI bus", id->bus == DRM_BUS_PCI && dev->pci == &i915->pci);
-    CHECK("identity: GEM, mode setting, render nodes and sync objects",
+    CHECK("identity: GEM, mode setting, render nodes, sync objects and KMS without the big lock",
           dev->features == (DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_RENDER |
-                            DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE));
+                            DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE | DRIVER_KMS_UNLOCKED));
     CHECK("identity: the record found from the device", to_i915(dev) == i915);
 }
 
