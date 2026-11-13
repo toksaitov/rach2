@@ -79,8 +79,10 @@ fetch()
     mkdir -p "$cache"
     if [ ! -f "$base" ]; then
         echo "debian-ref: fetching $url"
-        curl -sSfL -o "$base.part" "$url"
-        mv "$base.part" "$base"
+        # Several suites fetch at once: each into its own file, and the rename
+        # makes the image appear whole.
+        curl -sSfL -o "$base.part.$$" "$url" || { rm -f "$base.part.$$"; die "cannot fetch $url"; }
+        mv -f "$base.part.$$" "$base"
     fi
     [ "$(wc -c < "$base")" -eq "$(pin size)" ] || die "$base: not $(pin size) bytes"
     echo "$(pin sha512)  $base" | sha512sum -c --quiet - || die "$base: SHA-512 differs"
