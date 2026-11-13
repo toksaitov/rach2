@@ -2113,6 +2113,37 @@ static void invalidate_walk_row(void)
     check(!any, "and the block taken is dropped at its release, with the rest");
 }
 
+/**
+ * The unmount's drop (`bcache_drop`) takes what an invalidate refuses: a
+ * dirty buffer is dropped unwritten and counted, a held one stays until its
+ * release, which drops it, and the device's failed-write mark is cleared.
+ */
+static void drop_rows(void)
+{
+    struct bbuf *held, *b;
+    int dropped;
+
+    b = bcache_get_blank(&fake, 3);
+    b->data[0] = 0xD0;
+    bcache_dirty(b);
+    bcache_release(b);
+    held = bcache_get(&fake, 5);
+    fake.flags |= BLOCK_WRITE_FAILED;
+    check(held && bcache_invalidate(&fake) == -16,
+          "an invalidate refuses a device with a dirty and a held buffer");
+    writes_made = 0;
+    dropped = bcache_drop(&fake);
+    check(dropped == 1 && writes_made == 0 && !bcache_cached(&fake, 3) &&
+              !(fake.flags & BLOCK_WRITE_FAILED),
+          "the unmount's drop gives up the dirty buffer unwritten and clears the failed mark");
+    check(bcache_cached(&fake, 5), "and keeps the held buffer until its release");
+    if (held) {
+        bcache_release(held);
+    }
+    check(!bcache_cached(&fake, 5) && bcache_invalidate(&fake) == 0,
+          "which drops it, leaving the device nothing");
+}
+
 /** Run the rows of the pauses. */
 static void pause_rows(void)
 {
@@ -2725,6 +2756,7 @@ int main(int argc, char **argv)
     reader_rows();
     release_wake_rows();
     pause_rows();
+    drop_rows();
     check(wb_depth == 0, "every call gives the write lock back");
 
     if (fails == 0) {
