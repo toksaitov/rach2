@@ -18,7 +18,10 @@
  * a spin, so the row times only their calls.
  *
  * Arguments: [CALLS], 200000 calls a thread by default. Prints one line a
- * row and "MUTEXMUSL OK", or "MUTEXMUSL FAIL (detail)" and exits 1.
+ * row and "MUTEXMUSL OK", or "MUTEXMUSL FAIL (detail)" and exits 1. Run as
+ * process 1, the init of a private root, it waits for the console to send
+ * what it wrote and powers the machine off, so that a boot of it ends by
+ * itself on either system.
  */
 
 #define _GNU_SOURCE
@@ -28,8 +31,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/reboot.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -74,11 +79,24 @@ static double now_us(void)
     return t.tv_sec * 1e6 + t.tv_nsec / 1e3;
 }
 
+/** Exit with `status`, or as process 1 let the console drain and power the
+ * machine off, since the kernel would stop at the exit of its init. */
+static void finish(int status)
+{
+    if (getpid() == 1) {
+        fflush(stdout);
+        tcdrain(STDOUT_FILENO);
+        sync();
+        reboot(RB_POWER_OFF);
+    }
+    exit(status);
+}
+
 /** Print the failure of `what` with errno and exit 1. */
 static void fail(const char *what)
 {
     printf("MUTEXMUSL FAIL (%s: errno %d)\n", what, errno);
-    exit(1);
+    finish(1);
 }
 
 /** Keep the calling thread on processor `cpu`. */
@@ -170,11 +188,11 @@ int main(int argc, char **argv)
     }
     if (calls <= 0) {
         printf("MUTEXMUSL FAIL (CALLS must be positive)\n");
-        return 1;
+        finish(1);
     }
     if (ncpu < 2) {
         printf("MUTEXMUSL FAIL (%ld processor; two are needed)\n", ncpu);
-        return 1;
+        finish(1);
     }
     if (ncpu > MAX_THREADS) {
         ncpu = MAX_THREADS;
@@ -196,5 +214,6 @@ int main(int argc, char **argv)
     close(sv[0]);
     close(sv[1]);
     printf("MUTEXMUSL OK\n");
+    finish(0);
     return 0;
 }

@@ -161,10 +161,12 @@ static unsigned int osq_wait_next(volatile unsigned int *tail, struct osq_node *
  * Take the head of `m`'s queue of spinners: 1 once the caller is the one
  * spinner that tries the lock word, or 0 when it should sleep instead,
  * having left the queue, as Linux's osq_lock (osq_lock.c:91-210). A queued
- * spinner waits on its own place, so the spinners behind the head touch no
- * shared line, and leaves when the holder stops running, the processor
- * ahead is preempted by its hypervisor or the caller must give way
- * (`mutex_owner_runs`); the place ahead is then unlinked in Linux's three
+ * spinner waits on its own place and reads neither the lock word nor the
+ * holder, so the spinners behind the head touch no line the holder writes;
+ * it leaves when the processor ahead is preempted by its hypervisor or the
+ * caller must give way, a claim of the big lock it holds among the reasons
+ * (`sched_spin_on`), and the head that finds the holder asleep passes the
+ * queue on and leaves too. The place ahead is unlinked in Linux's three
  * steps: take back its pointer to this one, wait for the one behind or
  * become the last, and link the two.
  */
@@ -183,7 +185,7 @@ static int osq_lock(struct mutex *m)
     node->prev = prev;
     osq_nodes[prev - 1u].next = curr;
     while (!node->locked) {
-        if (arch_cpu_preempted((int)node->prev - 1) || !mutex_owner_runs(m, m->owner)) {
+        if (arch_cpu_preempted((int)node->prev - 1) || !sched_spin_on(0, -1)) {
             break;
         }
     }
