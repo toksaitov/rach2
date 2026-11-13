@@ -227,9 +227,10 @@ def snapshot():
         except OSError:
             pass
     # The lines of the thread bkl/calls counts alone, which trip.sh -t
-    # chooses: its switches away by the thread switched to, and its sleeps.
+    # chooses: its switches away by the thread switched to, the switches to
+    # threads past the kernel's 32 slots, and its sleeps.
     text += ["filter " + line + "\n" for line in bkl.get("calls", "").splitlines()
-             if line.startswith(("thread ", "switch ", "block "))]
+             if line.startswith(("thread ", "switch ", "switch_lost ", "block "))]
     return "".join(text)
 
 
@@ -326,9 +327,17 @@ def summary(start, end):
     return lines
 
 
+# The key of filtered's line of the switches lost to full slots.
+LOST = "switches to threads past the slots"
+
+
 def filtered(start, end):
     """Lines that give the changes of the chosen thread's switches away, by
-    the thread switched to, and of its sleeps, by call and ioctl request."""
+    the thread switched to, and of its sleeps, by call and ioctl request,
+    and the switches the kernel counted under no thread, once its 32 slots
+    were taken; the slots last until bkl/calls is written, so a run's
+    switches can be lost to threads of earlier runs, and the line is given
+    whenever the counts have it."""
     def counts(text):
         found, name = {}, None
         for line in text.splitlines():
@@ -337,6 +346,8 @@ def filtered(start, end):
                 name = f[2]
             elif line.startswith("filter switch ") and len(f) >= 5:
                 found["switch to %s %s" % (f[2], " ".join(f[5:]))] = (int(f[3]), int(f[4]))
+            elif line.startswith("filter switch_lost ") and len(f) == 3:
+                found[LOST] = (int(f[2]), 0)
             elif line.startswith("filter block ") and len(f) == 5:
                 found["sleep in %s %s" % (f[2], f[3])] = (int(f[4]), 0)
         return name, found
@@ -349,7 +360,7 @@ def filtered(start, end):
         x, y = a.get(key, (0, 0)), b[key]
         if key.startswith("switch") and y != x:
             lines.append("filter %s: %d yields, %d preemptions" % (key, y[0] - x[0], y[1] - x[1]))
-        elif y[0] != x[0]:
+        elif y[0] != x[0] or key == LOST:
             lines.append("filter %s: %d" % (key, y[0] - x[0]))
     return lines
 
