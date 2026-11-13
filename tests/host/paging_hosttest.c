@@ -78,6 +78,14 @@
  * run the resolution again and not end in SIGSEGV; and a present read-only
  * page that is not copy-on-write, which stays refused.
  *
+ * Three rows run a write-back's walk (`paging_wrprotect_where`) between a
+ * shared store's mark and its entry, through the real walk and both fault
+ * paths: a fault of an absent page installs nothing (`install_entry`), and
+ * one of a read-only page leaves it read-only (`shared_mkwrite`), each
+ * because the walk moved the space's count of zaps under the page-table
+ * lock; and a walk over two regions of a space takes write access from
+ * both with one flush of the span it changed, as paging.h says.
+ *
  * Returns 0 when every row passes, 1 otherwise.
  */
 
@@ -291,7 +299,8 @@ int vm_device_whole(const struct vm_file *f)
     return 0;
 }
 
-/* The processes whose address spaces a device zap walks: none. */
+/* The processes whose address spaces a walk changes: none, but for the
+ * fault-race rows' one. */
 process_t *proc_list;
 
 /** The write-combining bits, which no row maps. */
@@ -376,11 +385,18 @@ void terminate_current_process(int32_t signo)
     (void)signo;
 }
 
-/** 0: no address is in a mapping. */
+/* The one region of the fault-race rows, in the space whose regions are
+ * `race_space`, or NULL for none. */
+static vma_t *race_vma;
+static vm_space_t *race_space;
+
+/** `race_vma` for an address within it in `race_space`; 0 for any other
+ * address, which no region holds. */
 vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
 {
-    (void)vm;
-    (void)addr;
+    if (race_vma && vm == race_space && addr >= race_vma->start && addr < race_vma->end) {
+        return race_vma;
+    }
     return 0;
 }
 
@@ -442,12 +458,17 @@ void arch_space_load(uintptr_t root)
     space_loads++;
 }
 
-/** One processor: no other has a translation to drop. */
+/* The flushes of user translations, one each, and the span of the last. */
+static int shootdowns;
+static uintptr_t shot_start, shot_end;
+
+/** One processor: no other has a translation to drop. Counted. */
 void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t end)
 {
     (void)dir;
-    (void)start;
-    (void)end;
+    shootdowns++;
+    shot_start = start;
+    shot_end = end;
 }
 
 /** Count a change of kernel mappings. */
@@ -1024,6 +1045,135 @@ static void cow_race_rows(void)
     free(dir);
 }
 
+/* ---- a write-back's walk between a shared fault's mark and its entry ---- */
+
+/* The page-table lock's hook, from mmap_lock_host.c. */
+extern void (*host_ptl_hook)(struct mm *mm);
+
+/* The file of the fault-race rows, the frame its page has, and the marks
+ * its `mkwrite` made. */
+static struct vm_file race_file;
+#define RACE_FRAME 0x7000000u
+static int race_marks;
+
+/** The page of `race_file`: `RACE_FRAME`, in memory, so 0. */
+static int race_share(struct vm_file *f, uint32_t pgoff, uintptr_t *phys)
+{
+    (void)f;
+    (void)pgoff;
+    *phys = RACE_FRAME;
+    return 0;
+}
+
+/** The `match` of the walk: the whole of a region that maps `race_file`. */
+static int race_match(const struct vma *r, void *arg, uintptr_t *lo, uintptr_t *hi)
+{
+    (void)arg;
+    if (r->file != &race_file) {
+        return 0;
+    }
+    *lo = r->start;
+    *hi = r->end;
+    return 1;
+}
+
+/** A write-back's walk of every space, as filemap.c's pass makes it after
+ * the mark, run from the page-table lock's hook. */
+static void race_walk(struct mm *mm)
+{
+    (void)mm;
+    paging_wrprotect_where(race_match, 0);
+}
+
+/** Count the mark and have the walk run before the fault's next take of
+ * the page-table lock, which comes after the fault's look at its region
+ * (`region_same`) and is the lock its recheck is made under. */
+static int race_mkwrite(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
+{
+    (void)f;
+    (void)pgoff;
+    (void)phys;
+    race_marks++;
+    host_ptl_hook = race_walk;
+    return 0;
+}
+
+/**
+ * A write-back's walk (`paging_wrprotect_where`) that runs after a shared
+ * store's fault had its file's `mkwrite` mark the page, and after the fault
+ * found its region unchanged, but before the fault takes the page-table
+ * lock for its entry: the walk moves the space's count of zaps and the
+ * fault makes no entry writable, as the mark it made is the one the
+ * write-back cleared. A write fault of an absent page installs nothing
+ * (`install_entry`), and one of a present read-only page leaves it
+ * read-only (`shared_mkwrite`); each answers -1, so the store faults and
+ * marks again. Without the recheck under the lock, either would leave a
+ * writable entry whose stores no mark records. The real walk, the real
+ * fault paths and one address space on the process list.
+ */
+static void fault_race_rows(void)
+{
+    static process_t proc;
+    static struct mm mm;
+    static vma_t vma, other;
+    page_dir_t *dir = calloc(1, sizeof(*dir));
+    page_table_t *table = calloc(1, sizeof(*table));
+    uintptr_t addr = USER_ADDR_MIN + 0x400000u;
+    pte_t *e = &table->pages[MMU_INDEX(addr)];
+    pte_t *o = &table->pages[MMU_INDEX(addr + 8u * PAGE_SIZE)];
+    int rc;
+
+    dir->logical_page_tables[(uint32_t)addr / PAGE_SIZE / 1024u] = table;
+    mm.dir = dir;
+    vma.start = addr;
+    vma.end = addr + 4u * PAGE_SIZE;
+    vma.prot = VM_PROT_READ | VM_PROT_WRITE;
+    vma.type = VM_SHARED;
+    vma.file = &race_file;
+    other = vma;
+    other.start = addr + 8u * PAGE_SIZE;
+    other.end = other.start + PAGE_SIZE;
+    other.pgoff = 8;
+    vma.next = &other;
+    mm.vm.first = &vma;
+    mm.vm.last = &other;
+    race_file.share = race_share;
+    race_file.mkwrite = race_mkwrite;
+    race_vma = &vma;
+    race_space = &mm.vm;
+    proc.mm = &mm;
+    proc_list = &proc;
+
+    mmap_read_lock(&mm);
+    race_marks = 0;
+    rc = shared_fault(&mm, &vma, addr, 1);
+    check(rc == -1 && race_marks == 1 && *e == 0 && mm.zaps == 1 && !host_ptl_hook,
+          "a store's fault of an absent page that a write-back's walk passes between its mark "
+          "and its entry installs nothing and resolves again");
+    *e = (pte_t)RACE_FRAME | PTE_P | PTE_U;
+    rc = shared_mkwrite(&mm, &vma, addr);
+    check(rc == -1 && race_marks == 2 && *e == ((pte_t)RACE_FRAME | PTE_P | PTE_U) &&
+              mm.zaps == 2 && !host_ptl_hook,
+          "a store's fault of a read-only page that a write-back's walk passes between its "
+          "mark and its entry leaves it read-only and resolves again");
+    *e = (pte_t)RACE_FRAME | PTE_P | PTE_U | PTE_W;
+    *o = (pte_t)RACE_FRAME | PTE_P | PTE_U | PTE_W;
+    shootdowns = 0;
+    paging_wrprotect_where(race_match, 0);
+    check(*e == ((pte_t)RACE_FRAME | PTE_P | PTE_U) && *o == ((pte_t)RACE_FRAME | PTE_P | PTE_U) &&
+              mm.zaps == 3 && mm.changing == 0 && mm.changes == 3,
+          "the walk takes write access from both regions' entries, the space under way once");
+    check(shootdowns == 1 && shot_start == addr && shot_end == addr + 9u * PAGE_SIZE,
+          "with one flush for the space, over the span of the pages it changed");
+    mmap_unlock(&mm);
+
+    proc_list = 0;
+    race_vma = 0;
+    race_space = 0;
+    free(table);
+    free(dir);
+}
+
 /** The protection keys are off in the host test, as on a processor without
  * them. */
 int fpu_pkeys(void)
@@ -1079,6 +1229,7 @@ int main(void)
     fault_rows();
     recovered_rows();
     cow_race_rows();
+    fault_race_rows();
     give_way_rows();
     check(boot_carves == 0, "no row reached the boot allocator after the heap exists");
 
