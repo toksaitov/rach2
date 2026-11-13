@@ -101,13 +101,14 @@ struct tgroup {
     unsigned long maxrss_kb;
     unsigned long cmaxrss_kb;
     /* The interval timers of the process's processor time, setitimer's
-     * ITIMER_VIRTUAL and ITIMER_PROF, at 0 and 1: the ticks left before
-     * SIGVTALRM, counted in user mode, or SIGPROF, counted in both modes,
-     * 0 when disarmed, and the ticks to arm the timer with again, 0 for a
-     * single signal. A fork starts with both disarmed and an exec keeps
-     * them, as on Linux. The tick handler of each processor counts them
-     * down without the big lock, under `cpu_lock`, which setitimer and
-     * getitimer take too. */
+     * ITIMER_VIRTUAL and ITIMER_PROF, at 0 and 1: the nanoseconds left
+     * before SIGVTALRM, counted in user mode, or SIGPROF, counted in both
+     * modes, 0 when disarmed, and the nanoseconds to arm the timer with
+     * again, 0 for a single signal, as Linux's `struct cpu_itimer` keeps
+     * them. Each tick charged takes TICK_NS off. A fork starts with both
+     * disarmed and an exec keeps them, as on Linux. The tick handler of
+     * each processor counts them down without the big lock, under
+     * `cpu_lock`, which setitimer and getitimer take too. */
     uint64_t cpu_left[2];
     uint64_t cpu_interval[2];
     struct spinlock cpu_lock;

@@ -1853,8 +1853,10 @@ int sched_spin_pinned(void)
 
 /**
  * Count a tick of `p`'s processor time against its process's timer `k`
- * when `counts`, and when the timer runs out arm it again for its interval
- * and leave `signo` for a holder of the big lock to post
+ * when `counts`, and when the timer runs out arm it again for its interval,
+ * less the part of the tick past its expiry, so that its signals come at
+ * the interval's mean rate as Linux's `expires += incr` gives them, and
+ * leave `signo` for a holder of the big lock to post
  * (`proc_tick_signal`). The group's timers are under its `cpu_lock`, since
  * the ticks of its threads on every processor count them, as Linux's
  * `check_cpu_itimer` runs under the signal handler's lock
@@ -1869,8 +1871,13 @@ static void cpu_timer_tick(process_t *p, int k, int counts, int signo)
         return;
     }
     spin_lock(&tg->cpu_lock);
-    if (tg->cpu_left[k] != 0 && --tg->cpu_left[k] == 0) {
-        tg->cpu_left[k] = tg->cpu_interval[k];
+    if (tg->cpu_left[k] > TICK_NS) {
+        tg->cpu_left[k] -= TICK_NS;
+    } else if (tg->cpu_left[k] != 0) {
+        uint64_t over = TICK_NS - tg->cpu_left[k];
+        uint64_t next = tg->cpu_interval[k];
+
+        tg->cpu_left[k] = next == 0 ? 0 : next > over ? next - over : 1u;
         fired = 1;
     }
     spin_unlock(&tg->cpu_lock);

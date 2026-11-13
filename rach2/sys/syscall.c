@@ -1858,30 +1858,6 @@ struct kernel_itimerval {
     long value_usec;
 };
 
-/** A time in seconds and microseconds as whole ticks, rounded up
- * (`tick_span`). Zero only for a time of zero. */
-static uint64_t itimer_ticks(long sec, long usec)
-{
-    return tick_span(sec, (uint32_t)usec * 1000u);
-}
-
-/** `ticks` as the seconds and microseconds of an itimerval, cut to the
- * longest time a long holds: the longest timer of the i686, 2^31 - 1 s and
- * 999999 us, rounds up to 2^31 s of ticks. */
-static void itimer_put(uint64_t ticks, long *sec, long *usec)
-{
-    uint32_t rest;
-    uint64_t s = tick_div(ticks, TICK_HZ, &rest);
-
-    if (s > (uint64_t)(~0UL >> 1)) {
-        *sec = (long)(~0UL >> 1);
-        *usec = 999999L;
-        return;
-    }
-    *sec = (long)s;
-    *usec = (long)(rest * TICK_US);
-}
-
 /** Convert a validated timeval to nanoseconds, saturating at ktime's
  * signed limit, as Linux's timeval_to_ktime does. */
 static uint64_t itimer_ns(long sec, long usec)
@@ -1930,15 +1906,16 @@ static void itimer_read(int32_t which, struct kernel_itimerval *out)
         left = g->cpu_left[which - 1];
         interval = g->cpu_interval[which - 1];
         spin_unlock(&g->cpu_lock);
-        itimer_put(left, &out->value_sec, &out->value_usec);
-        itimer_put(interval, &out->interval_sec, &out->interval_usec);
+        itimer_put_ns(left, &out->value_sec, &out->value_usec);
+        itimer_put_ns(interval, &out->interval_sec, &out->interval_usec);
     }
 }
 
 /**
- * Arm or disarm timer `which`, after `value` units and then each `interval`,
- * or disarm it for zero value. Real time uses nanoseconds and its own event;
- * processor time uses accounting ticks charged to the process's threads.
+ * Arm or disarm timer `which`, after `value` nanoseconds and then each
+ * `interval`, or disarm it for zero value. Real time has its own event;
+ * processor time is counted down by the ticks charged to the process's
+ * threads (`cpu_timer_tick`).
  * The caller has interrupts off and holds the big lock.
  */
 static void itimer_set(int32_t which, uint64_t value, uint64_t interval)
@@ -1966,7 +1943,8 @@ static void itimer_set(int32_t which, uint64_t value, uint64_t interval)
  * profil and gprof's sampling use. Another `which` is EINVAL, as is a negative
  * time or microseconds past a second. A value of zero disarms the timer;
  * otherwise the first signal is due that long from now, then every interval,
- * or only once for an interval of zero. CPU time rounds up to ticks. `old`
+ * or only once for an interval of zero. Processor time is charged by the
+ * tick, so its signal comes at the first tick that reaches the time. `old`
  * receives the timer's setting before the call.
  */
 long sys_setitimer(isr_params_t *params)
@@ -1990,11 +1968,8 @@ long sys_setitimer(isr_params_t *params)
     }
     flags = kirq_save();
     itimer_read(which, &was);
-    itimer_set(which,
-               which == ITIMER_REAL ? itimer_ns(set.value_sec, set.value_usec)
-                                    : itimer_ticks(set.value_sec, set.value_usec),
-               which == ITIMER_REAL ? itimer_ns(set.interval_sec, set.interval_usec)
-                                    : itimer_ticks(set.interval_sec, set.interval_usec));
+    itimer_set(which, itimer_ns(set.value_sec, set.value_usec),
+               itimer_ns(set.interval_sec, set.interval_usec));
     kirq_restore(flags);
     if (uold && copy_to_user(uold, &was, sizeof(was)) != 0) {
         return -EFAULT;
