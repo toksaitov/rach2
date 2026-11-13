@@ -8,18 +8,19 @@
  * index, and the page directory is a table of the pages mapped. Each row
  * builds a stack through the calls execve makes and reads it back through
  * that table, as the new image reads it: argc, the pointer arrays and their
- * NULLs, the strings, the auxiliary vector, AT_RANDOM's bytes, the 16-byte
- * alignment, and the zeroed bytes below, on one page and on many; the
- * budget of a quarter of the stack limit between 128 KiB and 6 MiB with the
- * pointers set aside first; a string of 128 KiB with its NUL and one of a
- * byte more; a string cut where it was measured; argv[0] dropped for a
- * script's interpreter; and a failed frame, mapping or temporary mapping.
- * After every row each frame is mapped or given back, and no temporary
- * mapping is left open.
+ * NULLs, the strings, the auxiliary vector with rseq's size and alignment,
+ * AT_RANDOM's bytes, the 16-byte alignment, and the zeroed bytes below, on
+ * one page and on many; the budget of a quarter of the stack limit between
+ * 128 KiB and 6 MiB with the pointers set aside first; a string of 128 KiB
+ * with its NUL and one of a byte more; a string cut where it was measured;
+ * argv[0] dropped for a script's interpreter; and a failed frame, mapping
+ * or temporary mapping. After every row each frame is mapped or given back,
+ * and no temporary mapping is left open.
  */
 
 #include "uimage.h"
 #include "auxv.h"
+#include "rseq.h"
 #include "lib/kerrno.h"
 #include "lib/kstring.h"
 #include "mm/paging.h"
@@ -355,7 +356,10 @@ static void check_auxv(uintptr_t va, const elf_image_t *img, const uint8_t rnd[1
     CHECK(str_is(word(va + 27u * W), path), "AT_EXECFN points at the program's path");
     CHECK(word(va + 28u * W) == AT_MINSIGSTKSZ && word(va + 29u * W) == 3389u,
           "AT_MINSIGSTKSZ gives the stack a signal frame needs");
-    CHECK(word(va + 30u * W) == AT_NULL && word(va + 31u * W) == 0,
+    CHECK(word(va + 30u * W) == AT_RSEQ_FEATURE_SIZE && word(va + 31u * W) == RSEQ_FEATURE_SIZE &&
+              word(va + 32u * W) == AT_RSEQ_ALIGN && word(va + 33u * W) == RSEQ_ALIGN,
+          "AT_RSEQ_FEATURE_SIZE and AT_RSEQ_ALIGN give the rseq area's size and alignment");
+    CHECK(word(va + 34u * W) == AT_NULL && word(va + 35u * W) == 0,
           "the auxiliary vector ends in AT_NULL");
     CHECK((rnd_at & 15u) == 0, "AT_RANDOM is aligned to 16 bytes");
     for (i = 0; i < 16; i++) {
