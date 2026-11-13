@@ -1227,6 +1227,9 @@ int main(void)
     evict_live();
     CHECK(!dev_a->drm.objects && !dev_a->gem.bound && !frames_live && !pins_live && !user_pins,
           "the end: no object, binding, page or pin left");
+    /* The file's handle and prime tables, which grow and stay until it
+     * closes, as Linux's idr keeps its nodes. */
+    drm_gem_release(&file_a);
     CHECK(allocations == before, "the end: every record freed");
     free(user_mem);
     free(chip_a.regs);
