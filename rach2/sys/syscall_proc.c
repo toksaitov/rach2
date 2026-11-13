@@ -4372,12 +4372,17 @@ static uint32_t id_seen_free(uint32_t kid, int group)
     return id;
 }
 
-/** The kernel's PID `kid` as the caller's PID namespace sees it
- * (`pid_seen`), under the lock `ids_lock` decides. */
-static uint32_t pid_seen_free(uint32_t kid)
+/** The kernel's PID in the word `kid` of the caller's record as the
+ * caller's PID namespace sees it (`pid_seen`). The word is read after
+ * `ids_lock` and translated under the same hold, as Linux reads
+ * `real_parent` and its number in one RCU section (kernel/sys.c:988): a
+ * parent that exits and is reaped between a read before the lock and its
+ * translation would leave a PID no namespace maps, and getppid would give
+ * 0. */
+static uint32_t pid_seen_free(const uint32_t *kid)
 {
     int taken = ids_lock(0);
-    uint32_t pid = pid_seen(kid);
+    uint32_t pid = pid_seen(*kid);
 
     ids_unlock(taken);
     return pid;
@@ -6800,7 +6805,7 @@ long sys_getpid(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    return (int32_t)pid_seen_free(current_proc->tgid);
+    return (int32_t)pid_seen_free(&current_proc->tgid);
 }
 
 /**
@@ -6814,7 +6819,7 @@ long sys_gettid(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    return (int32_t)pid_seen_free(current_proc->pid);
+    return (int32_t)pid_seen_free(&current_proc->pid);
 }
 
 /** Give every thread of the process of `p` the session `sid` and the
@@ -6951,7 +6956,7 @@ long sys_getpgrp(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    return (int32_t)pid_seen_free(current_proc->pgid);
+    return (int32_t)pid_seen_free(&current_proc->pgid);
 }
 
 /**
@@ -6978,7 +6983,9 @@ long sys_getsid(isr_params_t *params)
 
 /** The parent's PID (getppid(2)). The parent's exit moves the caller to a
  * new parent under the big lock, and a call beside it reads the old PID or
- * the new one, as Linux's reads `real_parent` under RCU alone. */
+ * the new one, as Linux's reads `real_parent` under RCU alone; below the
+ * first PID namespace the read and its translation share one hold of the
+ * big lock (`pid_seen_free`), so the PID read is never one already freed. */
 long sys_getppid(isr_params_t *params)
 {
     (void)params;
@@ -6986,7 +6993,7 @@ long sys_getppid(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    return (int32_t)pid_seen_free(current_proc->parent_pid);
+    return (int32_t)pid_seen_free(&current_proc->parent_pid);
 }
 
 /**

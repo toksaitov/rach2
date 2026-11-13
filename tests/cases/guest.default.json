@@ -5941,7 +5941,7 @@
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
       "execution": {"program": "nsmusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
       "assertions": [
         {"assertion_id": "segment", "checks": "shmget makes the System V segment the IPC row looks for", "source": "program"},
@@ -5961,6 +5961,7 @@
         {"assertion_id": "pid-proc-inode", "checks": "the entry 1 in a listing of /proc has the inode of /proc/1", "source": "program"},
         {"assertion_id": "pid-own-fd-dir", "checks": "a name relative to its descriptor of /proc/self/fd reaches its own descriptors", "source": "program"},
         {"assertion_id": "pid-reaped-leader-group", "checks": "in a new PID namespace a group whose leader its init has reaped keeps the leader's number there: getpgid of the member reads it and kill of its negation with signal 0 succeeds, as Linux's struct pid lasts while a member has it", "source": "program"},
+        {"assertion_id": "pid-parent-reaped", "checks": "in a new PID namespace getppid of a child whose parent ends and is reaped by its init while it calls gives the parent's number or 1, never 0, over 16 rounds", "source": "program"},
         {"assertion_id": "orphans-parent-exits", "checks": "the process that made a PID namespace below and a sibling of its init exits", "source": "program"},
         {"assertion_id": "orphans-adopted", "checks": "the namespace's init adopts the orphans, including the init below and its sibling, and reaps them", "source": "program"},
         {"assertion_id": "pid-status-both-numbers", "checks": "the parent outside the namespace sees both numbers in its child's status file", "source": "program"},

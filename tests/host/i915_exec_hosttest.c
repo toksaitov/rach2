@@ -33,7 +33,9 @@
  * ring that refuses the commands; the heap's blocks a call shaped as
  * Crocus makes it takes on an idle ring and on a busy one (84-146); and
  * the GT's parks and unparks, the interrupt's unmasks, the shadow's pages
- * and the heap's blocks of such calls each waited for (84-157).
+ * and the heap's blocks of such calls each waited for (84-157); and the
+ * retire worker's pass that only tries the GEM lock, with the call
+ * retiring its own engine (84-164).
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -452,9 +454,8 @@ static void ring_write(struct chip *c, uint32_t reg, uint32_t value)
     }
 }
 
-/** Take the user interrupts the rings raised, then retire what completed,
- * as the interrupt and the next request would. */
-static void idle(void)
+/** Take the user interrupts the rings raised. */
+static void interrupts(void)
 {
     uint32_t pending = irq_pending;
     int b;
@@ -465,6 +466,13 @@ static void idle(void)
             irq_fn[b](dev_a, 1u << b, irq_data[b]);
         }
     }
+}
+
+/** Take the user interrupts the rings raised, then retire what completed,
+ * as the interrupt and the next request would. */
+static void idle(void)
+{
+    interrupts();
     i915_retire_requests(dev_a);
 }
 
@@ -1863,6 +1871,74 @@ static void park_per_call(void)
     close_handle(&file_a, b);
 }
 
+/* Another thread's mark on a mutex it holds, which compat/mutex_none.c
+ * tells from the test's own. */
+static char other_thread;
+
+/**
+ * 84-164: the retire worker, woken by a request that signalled to its
+ * listener, only tries the GEM lock and leaves the engine to the holder,
+ * as Linux's engine_retire only tries the timeline's mutex
+ * (gt/intel_gt_requests.c:77-80); EXECBUFFER2 retires its own engine,
+ * as Linux's eb_request_add does after it queues the request
+ * (gem/i915_gem_execbuffer.c:3104-3106); and with the lock free the
+ * worker retires at once. A worker that waited for the lock would stop
+ * the test, since in one thread the other holder never lets it go.
+ */
+static void retire_in_caller(void)
+{
+    uint32_t b = batch_end(), t = create(&file_a, 8192), so = syncobj_new();
+    struct i915_engine *e = &dev_a->gt.engine[I915_RCS0];
+    struct drm_i915_gem_exec_object2 o[2];
+    struct drm_i915_gem_exec_fence f;
+    struct drm_i915_gem_execbuffer2 a;
+    struct i915_request *first;
+    struct dma_fence_cb cb;
+    struct dma_fence *sf;
+    int ok;
+
+    entry_init(&o[0], b);
+    entry_init(&o[1], t);
+    o[1].flags = EXEC_OBJECT_WRITE;
+    k_memset(&f, 0, sizeof(f));
+    f.handle = so;
+    f.flags = I915_EXEC_FENCE_SIGNAL;
+    args_init(&a, o, 2,
+              I915_EXEC_RENDER | I915_EXEC_NO_RELOC | I915_EXEC_HANDLE_LUT | I915_EXEC_BATCH_FIRST |
+                  I915_EXEC_FENCE_ARRAY);
+    a.batch_len = 8;
+    a.cliprects_ptr = (uintptr_t)&f;
+    a.num_cliprects = 1;
+    idle();
+    kick();
+    ring_hold(I915_RCS0);
+    ok = execbuf(&a) == 0;
+    sf = syncobj_fence(so);
+    ok &= sf && dma_fence_add_callback(sf, &cb, listen_cb) == 0;
+    first = e->requests_tail;
+    ring_release(I915_RCS0);
+    interrupts();
+    CHECK(ok && first && dma_fence_is_signaled(&first->fence.base) && e->requests == first,
+          "retire: the call's request signalled to its listener and waits for retirement");
+    dev_a->gem.lock.owner = &other_thread;
+    kick();
+    CHECK(e->requests == first, "retire: the worker's pass leaves the engine while another thread "
+                                "holds the GEM lock");
+    dev_a->gem.lock.owner = 0;
+    ring_hold(I915_RCS0);
+    ok = execbuf(&a) == 0;
+    CHECK(ok && e->requests && e->requests != first && e->requests == e->requests_tail,
+          "retire: the next call retired the finished request itself");
+    sf = syncobj_fence(so);
+    ok = sf && dma_fence_add_callback(sf, &cb, listen_cb) == 0;
+    ring_release(I915_RCS0);
+    interrupts();
+    kick();
+    CHECK(ok && !e->requests, "retire: with the lock free the worker's pass retires at once");
+    close_handle(&file_a, t);
+    close_handle(&file_a, b);
+}
+
 int main(void)
 {
     uint32_t tl;
@@ -1897,6 +1973,7 @@ int main(void)
     lifetime();
     heap_per_call();
     park_per_call();
+    retire_in_caller();
     idle();
     /* The pool keeps its shadows past the rows until the GT parks. */
     i915_gem_pool_trim(dev_a, I915_POOL_ALL);

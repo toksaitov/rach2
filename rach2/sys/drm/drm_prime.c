@@ -2,6 +2,7 @@
 #include "drm.h"
 #include "../dmabuf/dmabuf.h"
 #include "../lib/kerrno.h"
+#include "../proc/smp.h"
 
 /** Map the exporter's pages; its mmap takes the new object reference. */
 static int32_t prime_mmap(struct dma_buf *buf, vma_t *vma)
@@ -23,18 +24,46 @@ static int32_t prime_mmap(struct dma_buf *buf, vma_t *vma)
     return rc;
 }
 
+#ifndef RACH2_HOSTTEST
+/** Whether a put of `dev`'s object must take the big lock: the device
+ * keeps its objects under it and the caller does not hold it. */
+static int prime_big_needed(struct drm_device *dev)
+{
+    return !drm_core_check_feature(dev, DRIVER_KMS_UNLOCKED) && !bkl_held();
+}
+#else
+/** The host tests have no big lock. */
+static int prime_big_needed(struct drm_device *dev)
+{
+    (void)dev;
+    return 0;
+}
+#endif
+
 /** Clear the weak export pointer, if it still names `buf`, before
- * releasing the exporter's object. */
+ * releasing the exporter's object. The last put of an import may come
+ * without the big lock, from an importer's call or retirement that runs
+ * without it (i915's), and an exporter whose device lacks
+ * DRIVER_KMS_UNLOCKED, virtio-gpu's, keeps its objects' state and its
+ * transport under the big lock, so the put takes it for such a device. */
 static void prime_release(struct dma_buf *buf)
 {
     struct drm_gem_object *obj = buf->priv;
     uint32_t flags = spin_lock_irqsave(&obj->dev->object_lock);
+    int big;
 
     if (obj->dma_buf == buf) {
         obj->dma_buf = NULL;
     }
     spin_unlock_irqrestore(&obj->dev->object_lock, flags);
+    big = prime_big_needed(obj->dev);
+    if (big) {
+        bkl_enter();
+    }
     drm_gem_object_put(obj);
+    if (big) {
+        bkl_exit();
+    }
 }
 
 /** Give an importer a borrowed frame, or 0 on failure. The exporter's

@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <pwd.h>
 #include <signal.h>
 #include <stdio.h>
@@ -404,8 +405,12 @@ static int testing_mock(const char *command)
         return windows_mock(command);
     if (strstr(command, "wsl.exe -- bash -s"))
         return wsl_mock();
-    /* stop.sh's script for WSL, run here while RELEASE_TEST_WSL is set. */
-    if (strstr(command, "wsl.exe -u root -- sh -s") && *ev("RELEASE_TEST_WSL")) {
+    /* A script for WSL as root, stop.sh's or -p's preparation's, runs here
+     * while RELEASE_TEST_WSL is set, and is recorded as wsl_mock records
+     * one otherwise. */
+    if (strstr(command, "wsl.exe -u root -- sh -s")) {
+        if (!*ev("RELEASE_TEST_WSL"))
+            return wsl_mock();
         execl("/bin/sh", "sh", "-s", (char *)NULL);
         return 127;
     }
@@ -575,8 +580,22 @@ static int ssh_mock(int argc, char **argv)
         append(ev("RELEASE_TEST_CALLS"), "machine read\n");
         return 1;
     }
+    /* While RELEASE_TEST_BOOT is set, the console's login 4711 stands in for
+     * term in the boot whose ID is aaaa, and the boot is another once it is
+     * `again`. */
+    if (strstr(command, "kill -HUP ")) {
+        if (!strcmp(ev("RELEASE_TEST_BOOT"), "again") || !strstr(command, "= 'aaaa' ]") ||
+            !strstr(command, "= 'login' ]") || !strstr(command, "kill -HUP 4711")) {
+            append(ev("RELEASE_TEST_CALLS"), "machine read\n");
+            return 1;
+        }
+        append(ev("RELEASE_TEST_CALLS"), "machine write hup 4711\n");
+        return 0;
+    }
     if (strstr(command, "(term)")) {
         append(ev("RELEASE_TEST_CALLS"), "machine write stop term\n");
+        if (*ev("RELEASE_TEST_BOOT"))
+            puts("4711 login aaaa");
         return 0;
     }
     if (!strcmp(command, "bootctl status")) {
@@ -677,9 +696,9 @@ static int git_mock(int argc, char **argv)
  * cases run. The first sleep of the part's poll that windows_detach waits for
  * asks the release's hold.pl, the leader of the process group that the
  * fixture starts, to send the release TERM, as stop.sh -r does, by creating
- * STATE/held/release/stop, STATE being the directory `state` beside the
- * calls, and lasts until the release has ended, so that the part is still
- * running when the release stops it.
+ * the stop of the run directory that STATE/run names, STATE being the
+ * directory `state` beside the calls, and lasts until the release has ended,
+ * so that the part is still running when the release stops it.
  */
 static void stop_release(void)
 {
@@ -687,7 +706,8 @@ static void stop_release(void)
     const char *slash = strrchr(calls, '/');
     struct timespec pause = {0, 20000000};
     pid_t release = getpgrp();
-    char stop[4200];
+    char stop[4200], *dir;
+    size_t n;
     int i;
     if (strcmp(hold, "stop") && strcmp(hold, "stuck") && strcmp(hold, "stuck-cases"))
         return;
@@ -696,8 +716,15 @@ static void stop_release(void)
         fx_has(ev("RELEASE_TEST_CALLS"), "\nrelease stopped\n"))
         return;
     append(ev("RELEASE_TEST_CALLS"), "release stopped\n");
-    snprintf(stop, sizeof(stop), "%.*s/state/held/release/stop", slash ? (int)(slash - calls) : 1,
+    snprintf(stop, sizeof(stop), "%.*s/state/run", slash ? (int)(slash - calls) : 1,
              slash ? calls : ".");
+    dir = fx_read(stop);
+    n = dir ? strcspn(dir, "\n") : 0;
+    if (n)
+        snprintf(stop, sizeof(stop), "%.*s/stop", (int)n, dir);
+    free(dir);
+    if (!n)
+        return;
     fx_text(stop, "");
     for (i = 0; i < 6000 && kill(release, 0) == 0; i++) {
         /* interval: poll for the release's end every 20 ms */
@@ -2305,6 +2332,224 @@ static int claim_rows(struct release *r)
     return ok;
 }
 /*
+ * The driver of hold_rows: it runs tools/flow/hold.pl on a run directory of
+ * its own, DIR/run, made new for each scenario, and prints what scenario
+ * SCENARIO saw. The `fast` scenario's job is forked as release.sh's `held`
+ * forks one, behind the gate DIR/run/go, and a perl that sleeps a second
+ * stands between the fork and hold.pl, so that a job that could end at once
+ * would have ended before its holder ran. The `lost` scenario's holder is
+ * killed by the perl whose unreaped child it is. The `jobfast` and `jobstop`
+ * scenarios run release.sh's own job_dir, held, job_wait and job_stop, the
+ * first with a perl on the path that waits a second before it runs; `drain`
+ * runs its mac_live and held_gone on a run whose job has ended and left a
+ * process in its group; `session` runs lib.sh's wait_session and locked; and
+ * `prepare` runs prepare_host's script for WSL here, through an ssh that
+ * runs it with sh. Usage: sh driver DIR HOLD SCENARIO RELEASE.
+ */
+static const char hold_driver[] =
+    "H=$1 P=$2 how=$3 R=$4\n"
+    "d=$H/run repo=${P%/tools/flow/hold.pl}\n"
+    "rm -rf \"$d\" \"$H/ran\" \"$H/ready\" \"$H/state\" \"$H/bin\" \"$H/left\" \"$H/copy\"\n"
+    "mkdir \"$d\" || exit 1\n"
+    "look() { perl \"$P\" state \"$d\"; }\n"
+    "pause() { perl -e 'select(undef, undef, undef, 0.1)'; }\n"
+    "case $how in\n"
+    "early)\n"
+    "    : > \"$d/stop\"\n"
+    "    perl \"$P\" run \"$d\" sh -c ': > \"$1/ran\"' sh \"$H\"\n"
+    "    echo \"status $?\"\n"
+    "    look\n"
+    "    [ -e \"$H/ran\" ] || echo 'ran nothing' ;;\n"
+    "fast | gated)\n"
+    "    mkfifo \"$d/go\" || exit 1\n"
+    "    [ \"$how\" != gated ] || : > \"$d/stop\"\n"
+    "    (\n"
+    "        { IFS= read -r g < \"$d/go\" && [ \"$g\" = go ] || exit 143; : > \"$H/ran\"; exit 3; "
+    "} &\n"
+    "        exec 6<> \"$d/go\"\n"
+    "        exec perl -e 'sleep 1; exec @ARGV' perl \"$P\" run \"$d\" -p \"$!\" < /dev/null\n"
+    "    )\n"
+    "    echo \"status $?\"\n"
+    "    look\n"
+    "    [ -e \"$H/ran\" ] || echo 'ran nothing' ;;\n"
+    "kill)\n"
+    "    perl \"$P\" run -k 1 \"$d\" perl -e '$SIG{TERM} = \"IGNORE\"; open(R, \">\", shift) && "
+    "close(R); sleep 60' \"$H/ready\" &\n"
+    "    i=0\n"
+    "    until [ -e \"$H/ready\" ] || [ \"$i\" -ge 150 ]; do i=$((i + 1)); pause; done\n"
+    "    perl \"$P\" stop \"$d\" 30\n"
+    "    echo \"stop $?\" ;;\n"
+    "again)\n"
+    "    perl \"$P\" run \"$d\" true\n"
+    "    perl \"$P\" run \"$d\" true 2> /dev/null\n"
+    "    echo \"status $?\"\n"
+    "    look ;;\n"
+    "lost)\n"
+    "    perl -e 'my $c = fork(); defined $c or exit 1; if (!$c) { exec @ARGV or exit 127 }\n"
+    "        for (1 .. 150) { last if -e \"$ENV{RUN}/live\"; select(undef, undef, undef, 0.1) }\n"
+    "        kill(\"KILL\", $c); waitpid($c, 0)' perl \"$P\" run \"$d\" sleep 2\n"
+    "    look ;;\n"
+    "jobfast | jobstop)\n"
+    "    eval \"$(sed -n '/^# job_dir NAME:/,/^# tssh ARG/p' \"$R\")\"\n"
+    "    state=$H/state HOLD_KILL=1\n"
+    "    j=$(job_dir t) || exit 1\n"
+    "    if [ \"$how\" = jobfast ]; then\n"
+    "        # A perl that waits a second before it runs holds back hold.pl's\n"
+    "        # start, while the job, which ends at once, waits at its gate.\n"
+    "        real=$(command -v perl)\n"
+    "        mkdir \"$H/bin\" || exit 1\n"
+    "        printf '#!/bin/sh\\n\"%s\" -e \"select(undef, undef, undef, 1)\"\\nexec \"%s\" "
+    "\"$@\"\\n' \"$real\" \"$real\" > \"$H/bin/perl\"\n"
+    "        chmod +x \"$H/bin/perl\"\n"
+    "        (PATH=$H/bin:$PATH; held \"$j\" sh -c 'exit 3') &\n"
+    "        job=\"$! $j\"\n"
+    "        job_wait \"$job\"\n"
+    "    else\n"
+    "        held \"$j\" perl -e '$SIG{TERM} = \"IGNORE\"; open(R, \">\", shift) && close(R); "
+    "sleep 60' \"$H/ready\" 2> /dev/null &\n"
+    "        job=\"$! $j\"\n"
+    "        i=0\n"
+    "        until [ -e \"$H/ready\" ] || [ \"$i\" -ge 150 ]; do i=$((i + 1)); pause; done\n"
+    "        job_stop \"$job\"\n"
+    "    fi\n"
+    "    echo \"status $?\"\n"
+    "    [ -d \"$j\" ] || echo removed ;;\n"
+    "drain)\n"
+    "    eval \"$(sed -n '/^# mac_live DIR:/,/^# mac_start:/p' \"$R\")\"\n"
+    "    # The job leaves a process in its group that ignores TERM and writes its\n"
+    "    # number to ready, and then ends.\n"
+    "    printf '%s\\n' '$SIG{TERM} = \"IGNORE\";' 'open(R, \">\", \"$ARGV[0].part\") or exit 1;' "
+    "'print R $$; close(R); rename(\"$ARGV[0].part\", $ARGV[0]); sleep 60;' > \"$H/left\"\n"
+    "    perl \"$P\" run -g -k 60 \"$d\" sh -c 'perl \"$1/left\" \"$1/ready\" &\n"
+    "        until [ -s \"$1/ready\" ]; do perl -e \"select(undef, undef, undef, 0.05)\"; done' sh "
+    "\"$H\" > /dev/null 2>&1 &\n"
+    "    i=0\n"
+    "    until [ -s \"$H/ready\" ] || [ \"$i\" -ge 150 ]; do i=$((i + 1)); pause; done\n"
+    "    pause\n"
+    "    ! mac_live \"$d\" || echo live\n"
+    "    held_gone \"$d\" || echo kept\n"
+    "    [ -e \"$d/end\" ] || echo 'no end'\n"
+    "    kill -KILL \"$(cat \"$H/ready\")\"\n"
+    "    perl \"$P\" stop \"$d\" 30\n"
+    "    wait\n"
+    "    held_gone \"$d\" && [ ! -d \"$d\" ] && echo removed ;;\n"
+    "session)\n"
+    "    . \"$repo/tools/flow/lib.sh\"\n"
+    "    state=$H/state\n"
+    "    mkdir \"$state\" || exit 1\n"
+    "    echo 4242 > \"$state/session\"\n"
+    "    wait_session\n"
+    "    [ -e \"$state/session\" ] || echo 'stale session removed'\n"
+    "    perl -MFcntl=:flock -e 'open(L, \">>\", shift) && flock(L, LOCK_EX) or exit 1;\n"
+    "        open(R, \">\", shift) && close(R); sleep 60' \"$state/session.live\" \"$H/ready\" &\n"
+    "    i=0\n"
+    "    until [ -e \"$H/ready\" ] || [ \"$i\" -ge 150 ]; do i=$((i + 1)); pause; done\n"
+    "    ! locked \"$state/session.live\" || echo held\n"
+    "    kill \"$!\"\n"
+    "    wait\n"
+    "    locked \"$state/session.live\" || echo free ;;\n"
+    "prepare)\n"
+    "    # WSL's script runs here, as a user whose scan of the copy's processes\n"
+    "    # cannot read every process's directory, or /proc at all.\n"
+    "    eval \"$(sed -n '/^prepare_host()$/,/^}$/p' \"$R\")\"\n"
+    "    PREPARE_COPY=$H/copy\n"
+    "    mkdir -p \"$H/copy/build/held\" \"$H/bin\" || exit 1\n"
+    "    printf '#!/bin/sh\\nexec /bin/sh -s\\n' > \"$H/bin/ssh\"\n"
+    "    chmod +x \"$H/bin/ssh\"\n"
+    "    out=$( (PATH=$H/bin:$PATH; prepare_host) 2> /dev/null)\n"
+    "    echo \"status $?\"\n"
+    "    printf '%s\\n' \"$out\" | sed \"s|$H|H|g\"\n"
+    "    [ ! -d \"$H/copy\" ] || echo kept ;;\n"
+    "esac\n";
+/**
+ * Succeed when a scan of this machine's processes by procs.pl -d cannot read
+ * every process's directory, as for a user who is not root, or has no /proc.
+ */
+static int prepare_scan_fails(void)
+{
+    char link[4096];
+    return readlink("/proc/1/cwd", link, sizeof(link)) < 0;
+}
+/** Run hold_driver's SCENARIO, and succeed when it printed WANT whole. */
+static int hold_saw(struct release *r, const char *scenario, const char *want)
+{
+    struct fixture *f = r->f;
+    const char *a[] = {"/bin/sh", NULL, NULL, NULL, scenario, NULL, NULL};
+    a[1] = flow_path(f, "hold/driver");
+    a[2] = flow_path(f, "hold");
+    a[3] = flow_source(f, "tools/flow/hold.pl");
+    a[5] = flow_source(f, "tools/flow/release.sh");
+    fx_env("RUN", flow_path(f, "hold/run"));
+    fx_run(f, a, f->work, NULL, NULL);
+    fx_env("RUN", NULL);
+    if (f->out && !strcmp(f->out, want))
+        return 1;
+    fprintf(stderr, "hold: %s printed:\n%s", scenario, f->out ? f->out : "");
+    return 0;
+}
+/**
+ * hold.pl's own protocol, on a run directory of its own: a stop that exists
+ * before the start runs nothing and ends 143 (j141 2); a job behind held's
+ * gate cannot end before its holder runs, so a fast job's status is its own
+ * and not 127 (j141 4), and a stop before the gate opens runs nothing; a job
+ * that ignores TERM ends by the KILL of -k, and hold.pl stop waits for it
+ * (medium 3); a second holder of the same directory is refused and its
+ * `end` stays the first one's (j141 3); and a holder killed outright reads
+ * lost. release.sh's own jobs do the same through held, job_wait and
+ * job_stop; a Mac run is live, and its directory stays, until what its job
+ * left in its group has ended, so that no new run starts beside it; a stale
+ * STATE/session is removed without a look at its number; and -p's
+ * preparation keeps its copy when the scan of its processes fails.
+ */
+static int hold_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    int ok;
+    fx_remove(flow_path(f, "hold"));
+    if (!flow_put(f, "hold/driver", hold_driver))
+        return check(r, 0, "the hold rows' files are written");
+    ok = check(r, hold_saw(r, "early", "status 143\nended 143\nran nothing\n"),
+               "a stop that exists before the start runs nothing, and the run ends 143");
+    ok = check(r, hold_saw(r, "fast", "status 3\nended 3\n"),
+               "a job behind held's gate that ends at once ends with its own status") &&
+         ok;
+    ok = check(r, hold_saw(r, "gated", "status 143\nended 143\nran nothing\n"),
+               "a stop before the gate opens runs nothing behind it") &&
+         ok;
+    ok = check(r, hold_saw(r, "kill", "ended 137\nstop 0\n"),
+               "a job that ignores TERM ends by the KILL of -k, which hold.pl stop waits for") &&
+         ok;
+    ok = check(r, hold_saw(r, "again", "status 125\nended 0\n"),
+               "a second holder of a run's directory is refused and leaves the first end") &&
+         ok;
+    ok = check(r, hold_saw(r, "lost", "lost\n"), "a holder killed outright reads lost") && ok;
+    ok = check(r, hold_saw(r, "jobfast", "status 3\nremoved\n"),
+               "release.sh's held job that ends at once, while its hold.pl is slow to start, "
+               "ends with its own status, and job_wait removes its directory") &&
+         ok;
+    ok = check(r, hold_saw(r, "jobstop", "status 137\nremoved\n"),
+               "release.sh's job_stop ends a job that ignores TERM by the KILL of HOLD_KILL") &&
+         ok;
+    ok = check(r, hold_saw(r, "drain", "live\nkept\nno end\nended 0\nremoved\n"),
+               "a Mac run whose job has ended stays live, without its end, while a process it "
+               "left runs in its group, and held_gone keeps its directory until the run ends") &&
+         ok;
+    ok = check(r, hold_saw(r, "session", "stale session removed\nheld\nfree\n"),
+               "wait_session removes a STATE/session whose supervisor is gone, and locked reads "
+               "a lock as held while a process holds it") &&
+         ok;
+    if (prepare_scan_fails())
+        ok = check(r,
+                   hold_saw(r, "prepare",
+                            "status 1\nthe processes in H/copy could not be read\n"
+                            "the copy H/copy stays\nkept\n"),
+                   "-p's preparation keeps its copy in WSL when the scan of its processes "
+                   "fails") &&
+             ok;
+    fx_remove(flow_path(f, "hold"));
+    return ok;
+}
+/*
  * The driver of observer_rows: it runs release.sh's windows_detach, with its
  * jobs under DIR/tools/flow/hold.pl, the
  * start read as started and each poll run here by sh, or sweep.sh's outputs,
@@ -2802,34 +3047,196 @@ static unsigned count_text(const char *text, const char *word)
 static int stop_unknown_rows(struct release *r);
 static int stop_wsl_rows(struct release *r);
 /**
- * Run stop.sh -n, which changes nothing, from the work tree, whose
- * build/flow/release holds the release's records.
+ * Run stop.sh with FLAG, or with none when FLAG is NULL, from the work tree,
+ * whose build/flow/release holds the release's records.
  */
-static void stop_list(struct release *r)
+static void stop_run(struct release *r, const char *flag)
 {
     struct fixture *f = r->f;
-    const char *a[] = {"/bin/sh", NULL, "-n", NULL};
+    const char *a[] = {"/bin/sh", NULL, NULL, NULL};
     char path[4096];
     snprintf(path, sizeof(path), "%s/tools/flow/stop.sh", r->tree);
     a[1] = path;
+    a[2] = flag;
     flow_put(f, "calls", "");
     fx_env("RELEASE_TEST_CALLS", flow_path(f, "calls"));
     fx_run(f, a, f->work, NULL, NULL);
 }
+/** Run stop.sh -n, which changes nothing, as stop_run does. */
+static void stop_list(struct release *r)
+{
+    stop_run(r, "-n");
+}
 /**
- * stop.sh's selection, G12 of dev-log/84-locks/84-111-lifecycle.md: a
- * command line that holds tools/flow/release.sh is never one of the
- * processes it stops, and is a release only while STATE/pid names it with
- * its start (F2); and in WSL as stop_wsl_rows says.
+ * Start perl with CODE, which prints a line in each process it makes once
+ * that process is ready, wait for LINES lines and return its process, or -1.
+ */
+static pid_t stop_perl(const char *code, int lines)
+{
+    int fd[2];
+    pid_t c;
+    char ch;
+    if (pipe(fd))
+        return -1;
+    c = fork();
+    if (c == 0) {
+        dup2(fd[1], 1);
+        close(fd[0]);
+        close(fd[1]);
+        execlp("perl", "perl", "-e", code, (char *)NULL);
+        _exit(127);
+    }
+    close(fd[1]);
+    while (c > 0 && lines > 0 && read(fd[0], &ch, 1) == 1)
+        if (ch == '\n')
+            lines--;
+    close(fd[0]);
+    return c > 0 && !lines ? c : -1;
+}
+/**
+ * Start the work tree's hold.pl on the run directory DIR, made new here, in
+ * a process group of its own, for a perl that creates DIR.ready and sleeps,
+ * ignoring TERM when IGNORE is set; return the holder once its job is
+ * ready, or -1.
+ */
+static pid_t stop_holder(struct release *r, const char *dir, int ignore)
+{
+    char hold[4200], ready[4300];
+    pid_t c;
+    int i;
+    snprintf(hold, sizeof(hold), "%s/tools/flow/hold.pl", r->tree);
+    snprintf(ready, sizeof(ready), "%s.ready", dir);
+    fx_remove(dir);
+    remove(ready);
+    if (!fx_mkdir(dir))
+        return -1;
+    c = fork();
+    if (c == 0) {
+        int null = open("/dev/null", O_RDWR);
+        setpgid(0, 0);
+        if (null < 0 || dup2(null, 0) < 0 || dup2(null, 1) < 0 || dup2(null, 2) < 0)
+            _exit(126);
+        execlp("perl", "perl", hold, "run", dir, "perl", "-e",
+               "$SIG{TERM} = 'IGNORE' if shift; open(R, '>', shift) && close(R); sleep 600",
+               ignore ? "1" : "0", ready, (char *)NULL);
+        _exit(127);
+    }
+    if (c > 0)
+        setpgid(c, c);
+    for (i = 0; c > 0 && i < 1500 && !fx_exists(ready); i++)
+        fx_pause();
+    return c > 0 && fx_exists(ready) ? c : -1;
+}
+/** Kill the process group that the holder HOLDER leads, and reap it. */
+static void stop_reap(pid_t holder)
+{
+    if (holder > 0) {
+        kill(-holder, SIGKILL);
+        waitpid(holder, NULL, 0);
+    }
+}
+/**
+ * stop.sh without -n, while the release whose directory is RELEASE runs
+ * under its holder HELD: it lists and counts a process on the Mac that no
+ * hold.pl holds and leaves it running, leaves the release, and halt asks each
+ * loop and its session to stop by their files, counts a lock it cannot probe
+ * as held and reports a STATE/session whose supervisor is gone.
+ */
+static int stop_loop_rows(struct release *r, const char *release, pid_t held)
+{
+    struct fixture *f = r->f;
+    char path[4300], text[9000], w1[4200], w2[4200];
+    int ok, unreadable, stopped;
+    pid_t loose;
+    snprintf(w1, sizeof(w1), "%s", flow_path(f, "tree/tools/flow/build/flow/w1"));
+    snprintf(w2, sizeof(w2), "%s", flow_path(f, "tree/tools/flow/build/flow/w2"));
+    snprintf(path, sizeof(path), "%s/session.live", w1);
+    flow_put(f, "tree/tools/flow/build/flow/w1/loop.log", "");
+    fx_text(path, "");
+    chmod(path, 0);
+    unreadable = access(path, R_OK) != 0;
+    flow_put(f, "tree/tools/flow/build/flow/w2/loop.log", "");
+    flow_put(f, "tree/tools/flow/build/flow/w2/session", "4242\n");
+    loose = stop_perl("$| = 1; $0 = 'qemu-system-i386 stoprow'; print qq(\\n); sleep 600", 1);
+    stop_run(r, NULL);
+    snprintf(text, sizeof(text), "stop: left: mac: %ld qemu-system-i386 stoprow\n", (long)loose);
+    ok = check(r,
+               loose > 0 && f->status == 1 && f->out && strstr(f->out, text) && kill(loose, 0) == 0,
+               "stop.sh lists and counts a process on the Mac that no hold.pl holds, and "
+               "leaves it running");
+    snprintf(text, sizeof(text), "stop: left: mac: release %s: running\n", release);
+    ok = check(r, f->out && strstr(f->out, text) && held > 0 && kill(held, 0) == 0,
+               "stop.sh without -r leaves a running release and counts it") &&
+         ok;
+    snprintf(path, sizeof(path), "%s/stop", w1);
+    stopped = fx_exists(path);
+    snprintf(path, sizeof(path), "%s/session.stop", w2);
+    stopped = stopped && fx_exists(path);
+    ok = check(r,
+               stopped && f->out &&
+                   (!unreadable ||
+                    strstr(f->out, "/build/flow/w1: its session.pl has not ended in ninety "
+                                   "seconds\n")) &&
+                   strstr(f->out, "/build/flow/w2/session names process group 4242, whose "
+                                  "session.pl is gone; a person checks it\n"),
+               "halt asks each loop and session to stop by its files, counts a lock it cannot "
+               "probe as held, and reports a STATE/session whose supervisor is gone") &&
+         ok;
+    snprintf(path, sizeof(path), "%s/session.live", w1);
+    chmod(path, 0600);
+    fx_remove(w1);
+    fx_remove(w2);
+    if (loose > 0) {
+        kill(loose, SIGKILL);
+        waitpid(loose, NULL, 0);
+    }
+    return ok;
+}
+/**
+ * stop.sh -r, while the release whose directory is RELEASE runs, and beside
+ * it a Mac run whose job ignores TERM: the release ends through its hold.pl,
+ * and the Mac run, which -r cannot end in its ten minutes, is listed and
+ * counted.
+ */
+static int stop_release_rows(struct release *r, const char *release)
+{
+    struct fixture *f = r->f;
+    char text[9000], mac[4200];
+    int kept, left, ended;
+    pid_t held_mac;
+    snprintf(mac, sizeof(mac), "%s", flow_path(f, "tree/tools/flow/build/machines/mac/held/m1"));
+    held_mac = stop_holder(r, mac, 1);
+    snprintf(text, sizeof(text), "%s m1\n", mac);
+    flow_put(f, "tree/tools/flow/build/machines/mac/run", text);
+    stop_run(r, "-r");
+    snprintf(text, sizeof(text), "stop: left: mac: mac %s: running\n", mac);
+    kept = held_mac > 0 && f->status == 1 && f->out && strstr(f->out, text) &&
+           strstr(f->out, "stop: the release did not end in ten minutes; it stays\n");
+    left = f->out && strstr(f->out, "stop: left: mac: release ") != NULL;
+    snprintf(text, sizeof(text), "perl tree/tools/flow/hold.pl state '%s'", release);
+    fx_sh(f, text);
+    ended = f->out && !strcmp(f->out, "ended 143\n");
+    stop_reap(held_mac);
+    return check(r, kept && !left && ended,
+                 "stop.sh -r ends a release through its hold.pl, and lists and counts a Mac run "
+                 "whose job ignores TERM");
+}
+/**
+ * stop.sh's selection, G12 and G19 of dev-log/84-locks/84-111-lifecycle.md:
+ * a command line that holds tools/flow/release.sh is never one of the
+ * processes it stops; a release is a run whose hold.pl holds its run
+ * directory's lock, as STATE/run and the Mac's run file name it, and is
+ * listed as left until it ends; a stop without -n as stop_loop_rows says,
+ * with -r as stop_release_rows says, and in WSL as stop_wsl_rows says.
  */
 static int stop_rows(struct release *r)
 {
     struct fixture *f = r->f;
-    char path[4096], text[400], command[8000];
+    char path[4096], text[9000], release[4200];
     int fd[2], ok;
-    pid_t c;
-    const char *files[] = {"stop.sh",   "lib.sh",   "machines", "winclean.sh",
-                           "winjob.sh", "winjob.c", "bound.pl", "procs.pl"};
+    pid_t c, held_release;
+    const char *files[] = {"stop.sh",  "lib.sh",   "machines", "winclean.sh", "winjob.sh",
+                           "winjob.c", "bound.pl", "procs.pl", "hold.pl"};
     unsigned i;
     for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
         snprintf(path, sizeof(path), "%s/tools/flow/%s", r->tree, files[i]);
@@ -2859,23 +3266,20 @@ static int stop_rows(struct release *r)
     snprintf(text, sizeof(text), "stop: left: mac: %ld ", (long)c);
     ok = check(r, c > 0 && f->out && !strstr(f->out, text),
                "stop.sh takes no process for its command line's release.sh");
-    snprintf(command, sizeof(command),
-             "mkdir -p tree/tools/flow/build/flow/release && echo \"%ld $(ps -o lstart= -p %ld | "
-             "awk '{ $1 = $1; print }')\" > tree/tools/flow/build/flow/release/pid",
-             (long)c, (long)c);
-    fx_sh(f, command);
+    snprintf(release, sizeof(release), "%s",
+             flow_path(f, "tree/tools/flow/build/flow/release/held/release-1"));
+    held_release = stop_holder(r, release, 0);
+    snprintf(text, sizeof(text), "%s\n", release);
+    flow_put(f, "tree/tools/flow/build/flow/release/run", text);
     stop_list(r);
-    ok = check(r, f->out && count_text(f->out, text) == 1,
-               "stop.sh takes as a release the process that STATE/pid names with its start") &&
+    snprintf(text, sizeof(text), "stop: left: mac: release %s: running\n", release);
+    ok = check(r, held_release > 0 && f->out && strstr(f->out, text) && f->status == 1,
+               "stop.sh -n lists and counts as left a release whose hold.pl holds its run's "
+               "lock") &&
          ok;
-    snprintf(command, sizeof(command),
-             "echo '%ld Thu Jan  1 00:00:00 1970' > tree/tools/flow/build/flow/release/pid",
-             (long)c);
-    fx_sh(f, command);
-    stop_list(r);
-    ok = check(r, f->out && !strstr(f->out, text),
-               "stop.sh takes as no release a number whose start is not the record's") &&
-         ok;
+    ok = stop_loop_rows(r, release, held_release) && ok;
+    ok = stop_release_rows(r, release) && ok;
+    stop_reap(held_release);
     close(fd[1]);
     if (c > 0) {
         kill(c, SIGKILL);
@@ -2885,31 +3289,36 @@ static int stop_rows(struct release *r)
     return stop_wsl_rows(r) && stop_unknown_rows(r) && ok;
 }
 #ifdef __linux__
-/**
- * Start perl with CODE, which prints a line in each process it makes once
- * that process is ready, wait for LINES lines and return its process, or -1.
- */
-static pid_t stop_perl(const char *code, int lines)
+/** Return how many processes /proc lists. */
+static int proc_count(void)
 {
-    int fd[2];
-    pid_t c;
-    char ch;
-    if (pipe(fd))
-        return -1;
-    c = fork();
-    if (c == 0) {
-        dup2(fd[1], 1);
-        close(fd[0]);
-        close(fd[1]);
-        execlp("perl", "perl", "-e", code, (char *)NULL);
-        _exit(127);
-    }
-    close(fd[1]);
-    while (c > 0 && lines > 0 && read(fd[0], &ch, 1) == 1)
-        if (ch == '\n')
-            lines--;
-    close(fd[0]);
-    return c > 0 && !lines ? c : -1;
+    DIR *d = opendir("/proc");
+    struct dirent *e;
+    int n = 0;
+    while (d && (e = readdir(d)) != NULL)
+        n += isdigit((unsigned char)e->d_name[0]) != 0;
+    if (d)
+        closedir(d);
+    return n;
+}
+/**
+ * Put in BUF, of N bytes, field 22 of the proc(5) stat of process PID, its
+ * start in clock ticks after the boot, or `?` when it cannot be read.
+ */
+static void proc_start(pid_t pid, char *buf, size_t n)
+{
+    char path[64], *text, *p;
+    int field;
+    snprintf(path, sizeof(path), "/proc/%ld/stat", (long)pid);
+    text = fx_read(path);
+    p = text ? strrchr(text, ')') : NULL;
+    /* P is at the end of field 2; each space before it opens the next. */
+    for (field = 2; p && field < 22; field++)
+        p = strchr(p + 1, ' ');
+    snprintf(buf, n, "?");
+    if (p)
+        snprintf(buf, n, "%.*s", (int)strcspn(p + 1, " \n"), p + 1);
+    free(text);
 }
 /** Succeed when a line of OUT that begins `stop: left: wsl: ` holds TEXT. */
 static int wsl_line(const char *out, const char *text)
@@ -2933,15 +3342,16 @@ static int wsl_line(const char *out, const char *text)
  * dev-log/84-locks/84-111-lifecycle.md, which procs.pl makes from /proc
  * through pidfds, here on this machine's own processes: a QEMU is one of
  * them, a claim's session, by its runner as leader, is spared (F3), and so
- * is a command line that holds release.sh. Linux alone has pidfds; elsewhere
- * the row passes unchecked.
+ * is a command line that holds release.sh; and a scan that cannot read every
+ * process fails whole. Linux alone has pidfds; elsewhere the row passes
+ * unchecked.
  */
 static int stop_wsl_rows(struct release *r)
 {
 #ifdef __linux__
     struct fixture *f = r->f;
     struct passwd *pw = getpwuid(getuid());
-    char text[400];
+    char text[400], start[32], command[5000];
     int ok;
     pid_t claim, qemu, release;
     claim = stop_perl("use POSIX; POSIX::setsid(); $| = 1; "
@@ -2956,8 +3366,9 @@ static int stop_wsl_rows(struct release *r)
     fx_env("RELEASE_TEST_WSL", "1");
     stop_list(r);
     fx_env("RELEASE_TEST_WSL", NULL);
-    snprintf(text, sizeof(text), "stop: left: wsl: %ld %s qemu-system-x86_64 -x /etude z\n",
-             (long)qemu, pw ? pw->pw_name : "?");
+    proc_start(qemu, start, sizeof(start));
+    snprintf(text, sizeof(text), "stop: left: wsl: %ld %s %s qemu-system-x86_64 -x /etude z\n",
+             (long)qemu, start, pw ? pw->pw_name : "?");
     ok = check(r,
                claim > 0 && qemu > 0 && release > 0 && pw && f->out && strstr(f->out, text) &&
                    !wsl_line(f->out, "etude launch build env") &&
@@ -2975,6 +3386,18 @@ static int stop_wsl_rows(struct release *r)
     if (release > 0) {
         kill(release, SIGKILL);
         waitpid(release, NULL, 0);
+    }
+    /* Each process that -e selects keeps its pidfd until the scan ends, so
+     * that sixteen descriptors run out among more than forty processes. */
+    if (proc_count() > 40) {
+        snprintf(command, sizeof(command), "ulimit -n 16 && exec perl '%s' -e .",
+                 flow_source(f, "tools/flow/procs.pl"));
+        fx_sh(f, command);
+        ok =
+            check(r, f->status == 1 && (!f->out || !*f->out) && f->err && strstr(f->err, "procs: "),
+                  "procs.pl fails a scan that runs out of descriptors whole, and prints "
+                  "nothing") &&
+            ok;
     }
     return ok;
 #else
@@ -3023,6 +3446,7 @@ static int windows_rows(struct release *r)
     ok = windows_hold_rows(r) && ok;
     ok = windows_stop_rows(r) && ok;
     ok = claim_rows(r) && ok;
+    ok = hold_rows(r) && ok;
     ok = observer_rows(r) && ok;
     ok = winclean_rows(r) && ok;
     ok = stop_rows(r) && ok;
@@ -3098,6 +3522,23 @@ static int lenovo_rows(struct release *r)
                        count(flow_path(f, "calls"), "^machine write stop term$") &&
                    !called(r, "^gh issue"),
                "native failure is recorded and keeps the trial uncommitted") &&
+         ok;
+    fx_env("RELEASE_TEST_BOOT", "same");
+    run(r, &(struct release_row){
+               .record = r->tried, .accept = "pass", .machines = LENOVO, .native = "fail"});
+    ok = check(r, called(r, "^machine write hup 4711$"),
+               "the console's login that took term's place is ended by its number in the boot "
+               "whose ID the release read") &&
+         ok;
+    fx_env("RELEASE_TEST_BOOT", "again");
+    run(r, &(struct release_row){
+               .record = r->tried, .accept = "pass", .machines = LENOVO, .native = "fail"});
+    fx_env("RELEASE_TEST_BOOT", NULL);
+    ok = check(r,
+               !called(r, "^machine write hup") && f->out &&
+                   strstr(f->out, "lenovo: the console's login 4711 was gone, "
+                                  "or the machine had booted again"),
+               "no signal goes to the login's number once the Lenovo has booted again") &&
          ok;
     return ok;
 }

@@ -11,6 +11,8 @@
  * the page is resident must hit without a read, an eviction must write back
  * only a dirty page, and a dirty page evicted and read again must come back
  * with its bytes. The writer can sleep while another cache operation runs.
+ * A failed write before the failure hook is installed is handed to the hook
+ * once at its installation, and dropped by a new backing.
  *
  * Compiled with PAGECACHE_SYNC_HOSTTEST as well, as mk/host-fixtures.mk
  * compiles it, the test also runs `sys_sync`, which that file's rule
@@ -147,6 +149,53 @@ static void touch(uint32_t p, int write, uint8_t marker)
             page[0] = marker;
         }
     }
+}
+
+/* What the failure hook was told: its calls and the last answer. */
+static int hook_calls, hook_rc;
+
+/** The file system's failure hook: count the call. */
+static void failure_hook(int rc)
+{
+    hook_calls++;
+    hook_rc = rc;
+}
+
+/**
+ * A failed write before a hook is installed is held and handed to the hook
+ * once, at its installation, as the boot's write of the root before the
+ * root is mounted is; with a hook, each failed write calls it, and a write
+ * that succeeds does not; a new backing drops a held failure.
+ */
+static void test_failure_hook(void)
+{
+    pc_on_failure(0);
+    init_pagecache();
+    pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+    hook_calls = 0;
+    touch(25, 1, 0xC5u);
+    fake_write_fail = 25;
+    CHECK(pc_sync() == PC_SYNC_FAILED);
+    CHECK(hook_calls == 0);
+    pc_on_failure(failure_hook);
+    CHECK(hook_calls == 1 && hook_rc == -1);
+    pc_on_failure(failure_hook);
+    CHECK(hook_calls == 1);
+    CHECK(pc_sync() == PC_SYNC_FAILED);
+    CHECK(hook_calls == 2 && hook_rc == -1);
+    fake_write_fail = FAKE_NO_FAIL;
+    CHECK(pc_sync() == 0);
+    CHECK(hook_calls == 2 && fake_disk[25][0] == 0xC5u);
+
+    pc_on_failure(0);
+    touch(26, 1, 0xC6u);
+    fake_write_fail = 26;
+    CHECK(pc_sync() == PC_SYNC_FAILED);
+    fake_write_fail = FAKE_NO_FAIL;
+    pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+    pc_on_failure(failure_hook);
+    CHECK(hook_calls == 2);
+    pc_on_failure(0);
 }
 
 /* What runs while a writeback of page 0 sleeps: a reclaim, a miss that
@@ -382,8 +431,8 @@ static void test_sync_wait(void)
  *   past one slot then write each of the four through the reclaim alone; had
  *   the capacity fallen to one, slots 1 to 3 would be out of its reach and
  *   never written.
- * - `test_sleeping_writeback`, and with PAGECACHE_SYNC_HOSTTEST
- *   `test_sync_wait`.
+ * - `test_sleeping_writeback`, `test_failure_hook`, and with
+ *   PAGECACHE_SYNC_HOSTTEST `test_sync_wait`.
  */
 int main(void)
 {
@@ -479,6 +528,7 @@ int main(void)
     }
 
     test_sleeping_writeback();
+    test_failure_hook();
 #ifdef PAGECACHE_SYNC_HOSTTEST
     test_sync_wait();
 #endif

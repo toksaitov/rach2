@@ -353,6 +353,50 @@ static int sched_cpu_idle(int cpu)
 }
 
 /**
+ * Whether processor `cpu` is idle with nothing on its way to it: it runs
+ * its idle task, its queue is empty and no wake has asked it to select
+ * (its idle task's `need_resched`), as Linux's idle_cpu requires an empty
+ * queue and no pending wake besides the idle task
+ * (kernel/sched/syscalls.c:202-218). Two wakes from one interrupt then go
+ * to two processors, where the first one's queued thread left its
+ * processor counted idle for the second. The run queues' lock is held.
+ */
+static int sched_cpu_free(int cpu)
+{
+    const process_t *idle = cpu_table[cpu].idle;
+
+    return idle && cpu_table[cpu].current == idle && run_queues[cpu].count == 0 &&
+           !idle->need_resched;
+}
+
+/* The processors that share each processor's last-level cache, a bit each,
+ * itself left out; written by `sched_cache_join` as each one starts, under
+ * sched_lock, and read under it. */
+static uint64_t cache_peers[NR_CPUS];
+
+void sched_cache_join(uint64_t shared)
+{
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+    int me = (int)arch_cpu_id(), c;
+
+    shared &= ~((uint64_t)1 << me);
+    cache_peers[me] |= shared;
+    for (c = 0; c < NR_CPUS; c++) {
+        if ((shared >> c) & 1u) {
+            cache_peers[c] |= (uint64_t)1 << me;
+        }
+    }
+    spin_unlock_irqrestore(&sched_lock, flags);
+}
+
+/** Whether processors `a` and `b` share a last-level cache, as Linux's
+ * cpus_share_cache tests their sd_llc_id. The run queues' lock is held. */
+static int sched_share_cache(int a, int b)
+{
+    return a == b || ((cache_peers[a] >> b) & 1u) != 0;
+}
+
+/**
  * Whether `p` may be selected on processor `cpu` now: ready, of those a
  * suspend to idle lets run (`suspend_lets_run`), with `cpu` in its
  * affinity, and not another processor's current process, whose stack and
@@ -422,20 +466,21 @@ static process_t *sched_steal(int cpu)
 }
 
 /**
- * The processor a ready process of `p`'s affinity joins: the one it ran on
- * last, unless that one is busy and another it may run on is idle, where
- * it then goes. The run queues' lock is held.
+ * The processor a ready process of `p`'s affinity joins when it is moved
+ * off one it may no longer run on: the one it ran on last, unless that one
+ * is busy and another it may run on is idle with nothing on its way
+ * (`sched_cpu_free`), where it then goes. The run queues' lock is held.
  */
 static int sched_choose(const process_t *p)
 {
     int last = p->cpu;
     int c;
 
-    if (sched_allowed(p, last) && sched_cpu_idle(last)) {
+    if (sched_allowed(p, last) && sched_cpu_free(last)) {
         return last;
     }
     for (c = 0; c < NR_CPUS; c++) {
-        if (sched_allowed(p, c) && sched_cpu_idle(c)) {
+        if (sched_allowed(p, c) && sched_cpu_free(c)) {
             return c;
         }
     }
@@ -450,14 +495,93 @@ static int sched_choose(const process_t *p)
     return last;
 }
 
+/** The threads running or queued on processor `cpu`, its idle task left
+ * out, the load Linux's wake_affine_weight compares. The run queues' lock
+ * is held. */
+static unsigned int sched_cpu_load(int cpu)
+{
+    return run_queues[cpu].count + !sched_cpu_idle(cpu);
+}
+
 /**
- * The processor whose queue a process made ready joins, as `sched_choose`
- * gives it; a process that is still a processor's current, woken before its
- * switch away, stays where it runs. The run queues' lock is held.
+ * Whether processor `cpu`, which `p` may use, may take a wake at once, as
+ * Linux's select_idle_sibling takes a processor that is idle
+ * (available_idle_cpu) or runs only SCHED_IDLE work (sched_idle_cpu,
+ * kernel/sched/fair.c:7949-7951): it is idle with nothing on its way
+ * (`sched_cpu_free`), or it runs a SCHED_IDLE thread with an empty queue
+ * and no request to select, which the wake preempts (`sched_wake_preempt`).
+ * The run queues' lock is held.
+ */
+static int sched_cpu_takes(const process_t *p, int cpu)
+{
+    const process_t *cur = cpu_table[cpu].current;
+
+    if (!sched_allowed(p, cpu)) {
+        return 0;
+    }
+    return sched_cpu_free(cpu) ||
+           (cur && !sched_cpu_idle(cpu) && cur->sched_policy == SCHED_IDLE &&
+            sched_priority(cur) == 0 && run_queues[cpu].count == 0 && !cur->need_resched);
+}
+
+/**
+ * The processor a woken or new thread `p` joins, by Linux's choice for a
+ * wake (select_task_rq_fair, kernel/sched/fair.c:8686-8755). First the
+ * target, between the waker's processor and `p`'s last (wake_affine,
+ * fair.c:7443-7542): the waker's when it is idle, as it is when an
+ * interrupt ends its halt, and shares a cache with the last one, unless
+ * the last one is idle too; else the last one when it is idle; else the
+ * waker's when it is less loaded, by the count of its threads and the
+ * imbalance margin Linux gives a cache domain (WA_BIAS, imbalance_pct 117);
+ * else the last one. Then an idle processor near the target
+ * (select_idle_sibling, fair.c:7934-8058): the target when it takes the
+ * wake at once (`sched_cpu_takes`), else the last one when it shares the
+ * target's cache and does, else the first that does among those sharing
+ * the target's cache, scanned from the one after the target, as
+ * select_idle_cpu scans with for_each_cpu_wrap (fair.c:7799-7862), else
+ * the target. A target `p` may not run on gives way to `sched_choose`.
+ * Linux's sync wakes, per-processor kernel threads and recently used
+ * processor have no counterpart here. The run queues' lock is held.
+ */
+static int sched_wake_choose(const process_t *p)
+{
+    int prev = p->cpu, me = (int)arch_cpu_id(), target = prev, c, i;
+
+    if (me != prev && sched_allowed(p, me)) {
+        if (sched_cpu_free(me) && sched_share_cache(me, prev)) {
+            target = sched_cpu_free(prev) ? prev : me;
+        } else if (!sched_cpu_free(prev) &&
+                   (sched_cpu_load(me) + 1u) * 100u < sched_cpu_load(prev) * 108u) {
+            target = me;
+        }
+    }
+    if (!sched_allowed(p, target)) {
+        return sched_choose(p);
+    }
+    if (sched_cpu_takes(p, target)) {
+        return target;
+    }
+    if (prev != target && sched_share_cache(prev, target) && sched_cpu_takes(p, prev)) {
+        return prev;
+    }
+    for (i = 1; i < NR_CPUS; i++) {
+        c = (target + i) % NR_CPUS;
+        if (sched_share_cache(c, target) && sched_cpu_takes(p, c)) {
+            return c;
+        }
+    }
+    return target;
+}
+
+/**
+ * The processor whose queue a process made ready joins, as
+ * `sched_wake_choose` gives it; a process that is still a processor's
+ * current, woken before its switch away, stays where it runs. The run
+ * queues' lock is held.
  */
 static int sched_place(const process_t *p)
 {
-    return cpu_table[p->cpu].current == p ? p->cpu : sched_choose(p);
+    return cpu_table[p->cpu].current == p ? p->cpu : sched_wake_choose(p);
 }
 
 /**
@@ -499,6 +623,50 @@ static int sched_preempt_cpu(const process_t *p, int cpu)
         return cpu;
     }
     return -1;
+}
+
+/**
+ * Ask processor `cpu`, on whose queue `p` has just been woken or started,
+ * to select now, as `sched_preempt_cpu` asks it, and besides when `p` and
+ * the thread running there are both ordinary and `p` should run first by
+ * Linux's rule (check_preempt_wakeup_fair, kernel/sched/fair.c:8862-8951):
+ * a SCHED_IDLE thread gives way to a woken thread of another policy, never
+ * to one of its own; a SCHED_BATCH or SCHED_IDLE thread preempts nothing;
+ * and a thread already asked to select is not asked again, since that
+ * request has sent its interrupt. Linux preempts otherwise when the woken
+ * thread is the one pick_eevdf would take, which within the current
+ * thread's protected slice is only when the current thread is no longer
+ * eligible (fair.c:926-944). Rach2 keeps no virtual runtime to judge that
+ * by, and takes every woken ordinary thread as the one to pick, as its
+ * interrupts already do within the slice (`sched_tick`), so that a reader
+ * on a busy processor runs when its data comes and not at that processor's
+ * next interrupt, yield or block.
+ *
+ * The request is the thread's `need_resched`: a thread in user mode
+ * switches in the interrupt the kick sends (`isr_local_router`), one inside
+ * a call at the call's exit, and a kernel thread at its next service point
+ * or sleep (`sched_service_point`), where Linux's kernel thread without
+ * CONFIG_PREEMPTION takes TIF_NEED_RESCHED at cond_resched or schedule;
+ * so a kernel thread is sent no kick, whose interrupt would switch nothing.
+ * Return the processor to kick, or -1. The run queues' lock is held.
+ */
+static int sched_wake_preempt(const process_t *p, int cpu)
+{
+    process_t *cur = cpu_table[cpu].current;
+    int kick = sched_preempt_cpu(p, cpu);
+
+    if (kick >= 0 || sched_cpu_idle(cpu) || cur->need_resched || sched_priority(p) != 0 ||
+        sched_priority(cur) != 0) {
+        return kick;
+    }
+    if (cur->sched_policy == SCHED_IDLE
+            ? p->sched_policy == SCHED_IDLE
+            : p->sched_policy == SCHED_BATCH || p->sched_policy == SCHED_IDLE) {
+        return -1;
+    }
+    cur->need_resched = 1;
+    proc_work_set(cur, WORK_RESCHED);
+    return cur->no_tick_switch ? -1 : cpu;
 }
 
 /** Whether `p` may run on one started processor only. The run queues' lock
@@ -585,7 +753,7 @@ static int sched_rt_place(const process_t *p, int target)
  * thread that does not outrank the real-time thread running there, or that
  * thread may run nowhere else, on a processor running and holding lower
  * work (`sched_rt_place`), and return the
- * processor to interrupt so that it selects now, as `sched_preempt_cpu`
+ * processor to interrupt so that it selects now, as `sched_wake_preempt`
  * gives it, or the one where `p` is halted in place as current; -1 when
  * none needs it. `sched_lock` is held.
  *
@@ -616,7 +784,7 @@ static int sched_ready_locked(process_t *p)
     }
     sched_move(p, target);
     sched_append(p);
-    return sched_preempt_cpu(p, target);
+    return sched_wake_preempt(p, target);
 }
 
 void sched_make_ready(process_t *p)
@@ -1350,8 +1518,10 @@ void sched_preempt(void)
  * drops it from the pick, protection and all (fair.c:940-941), when it is
  * of the idle policy and the woken one is not (fair.c:8911-8917), or when
  * the woken thread's shorter custom slice cancels the protection
- * (fair.c:8938-8939). Here every wake lets the interrupt select, so that a
- * reader runs soon after its data comes.
+ * (fair.c:8938-8939). Here a wake of an ordinary thread asks its
+ * processor to select at once (`sched_wake_preempt`), and every interrupt
+ * selects while a woken thread waits, so that a reader runs soon after its
+ * data comes.
  *
  * Called with interrupts off, at the end of an interrupt's handler.
  */

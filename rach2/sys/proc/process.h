@@ -324,8 +324,9 @@ struct process {
      * TIF_NEED_RESCHED: by an interrupt it could not take it in, being
      * inside a system call, a fault or klog, or deferring the tick's switch
      * (`no_tick_switch`); or by a wake, a priority change or an affinity
-     * move that queued a thread outranking it, perhaps from another
-     * processor, whose interrupt then switches it in user mode
+     * move that queued a thread outranking it, or a wake that queued an
+     * ordinary thread to run before it (`sched_wake_preempt`), perhaps
+     * from another processor, whose interrupt then switches it in user mode
      * (`isr_local_router`). A call's exit, a fault's end and a service
      * point take it (`sched_take_preempt`), and `schedule` clears it at
      * each selection, as Linux's __schedule clears TIF_NEED_RESCHED

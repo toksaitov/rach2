@@ -69,4 +69,10 @@ struct cpu_cache {
  */
 int cpuinfo_cache(int cpu, int index, struct cpu_cache *cache);
 
+/** The processors started that share processor `cpu`'s last-level cache, a
+ * bit each, `cpu`'s own among them: the `shared` of its highest-level data
+ * or unified cache (`cpuinfo_cache`), or its package's processors when it
+ * describes none. */
+uint64_t cpuinfo_llc_shared(int cpu);
+
 #endif /* _CPUINFO_H_ */

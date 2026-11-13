@@ -58,7 +58,9 @@
  *   its name, by each path a descriptor or a file mapping ends on, while
  *   another process's allocation on the root runs in the reclaim's sleep;
  * - a read of a disk file whose pages a shared mapping holds in memory
- *   when no temporary mapping is free for one of them;
+ *   when no slot of `kmap_temp` is free, which maps each page with the
+ *   processor's own slot and holds no mapping across its copy to user
+ *   memory;
  * - a read of an ext2 file without the big lock while another thread, as
  *   the read's first page waits for the disk, maps the file shared and
  *   writable and stores into its second page, through the file system and
@@ -502,9 +504,14 @@ int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
     return -ENAMETOOLONG;
 }
 
+/* The frames `kmap_cpu` has mapped and not yet given back, which no copy to
+ * user memory, whose fault may wait for a lock, may hold. */
+static int cpu_maps;
+
 /** Copy to user memory, which in the model is the caller's own. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
+    check(cpu_maps == 0, "no copy to user memory holds a processor's own mapping");
     k_memcpy(dst, src, n);
     return 0;
 }
@@ -822,7 +829,7 @@ struct vfs_mount *vfs_root_mount(void)
     return &mount;
 }
 
-/* The resident-read row (`resident_unmapped`): set while it runs, the two
+/* The resident-read row (`resident_copied`): set while it runs, the two
  * pages a shared mapping of its disk file holds in memory, the page
  * `kmap_temp` finds no free slot for, and the references its reads hold. */
 static int resident_row;
@@ -1176,10 +1183,34 @@ void *kmap_temp(uintptr_t phys)
     return NULL;
 }
 
+/** A read of what a write left in a file fails in no row, so nothing gives
+ * way between its tries. */
+void sched_service_point(void)
+{}
+
 /** Unmap nothing: `kmap_temp` maps nothing. */
 void kunmap_temp(void *va)
 {
     (void)va;
+}
+
+/** Map a page of the resident-read row as `kmap_temp` does, counted in
+ * `cpu_maps`, which never fails. */
+void *kmap_cpu(uintptr_t phys, uint32_t *flags)
+{
+    *flags = 0;
+    check(resident_row || race_mapped, "unexpected processor mapping of a page");
+    check(cpu_maps == 0, "a processor maps one frame of its own at a time");
+    cpu_maps++;
+    return (void *)phys;
+}
+
+/** Give back what `kmap_cpu` mapped. */
+void kunmap_cpu(void *va, uint32_t flags)
+{
+    (void)va;
+    (void)flags;
+    cpu_maps--;
 }
 
 /* inotify, which no row watches, and the heap an open's name is kept in
@@ -1394,18 +1425,6 @@ int vm_prefault_range(uintptr_t start, size_t len, int write)
 void vm_file_reap(void)
 {}
 
-/** No row queues a real mapping's zero publication. */
-uint64_t vm_file_reap_start(void)
-{
-    return 0;
-}
-
-/** No row queues a real mapping's last reference. */
-void vm_file_reap_until(uint64_t gen)
-{
-    (void)gen;
-}
-
 /** A quota with room, since no row maps a shared page. */
 int shmem_quota_full(const struct shmem *sh)
 {
@@ -1536,6 +1555,13 @@ void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
 {
     (void)mnt;
     (void)rc;
+}
+
+/** The records of failed write-backs, of which no row makes any. */
+uint32_t vfs_wb_err_sets(struct vfs_mount *mnt)
+{
+    (void)mnt;
+    return 0;
 }
 
 /** The fdatasync of a file, which no row makes. */
@@ -4122,6 +4148,20 @@ static void mapping_reclaims(void)
 }
 
 /** A mount is its own base here: no row makes a bind mount. */
+/** No model device goes. */
+int vfs_mount_gone(const struct vfs_mount *mnt)
+{
+    (void)mnt;
+    return 0;
+}
+
+/** Every model mount is seen. */
+int vfs_mount_unseen(const struct vfs_mount *m)
+{
+    (void)m;
+    return 0;
+}
+
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
     return m;
@@ -4661,12 +4701,13 @@ static void file_locked_mount_rmdir(void)
 
 /**
  * A read of a disk file whose two pages a shared mapping holds in memory,
- * with stores not written back, when `kmap_temp` has no free slot for a
- * page: the read returns the pages before that page, or -ENOMEM when it is
- * the first, and never reads the file's stale bytes in its place, as
- * Linux's filemap_read fails rather than read around a folio it has.
+ * with stores not written back, while `kmap_temp` has no free slot: the
+ * read maps each page with the processor's own slot (`kmap_cpu`), which
+ * cannot fail, copies it through a buffer on the stack with no mapping held
+ * across the copy to user memory, and returns both pages, never the file's
+ * stale bytes, as Linux's filemap_read copies the folio it has.
  */
-static void resident_unmapped(void)
+static void resident_copied(void)
 {
     static struct dshare ds;
     static char out[2 * PAGE_SIZE];
@@ -4690,13 +4731,12 @@ static void resident_unmapped(void)
 
     resident_fail = (uintptr_t)resident_pages[1];
     k_memset(out, 0, sizeof(out));
-    check(file_read_locked(&ofd, (char __user *)out, sizeof(out), 0, &big) == PAGE_SIZE &&
-              out[0] == 'a' && out[PAGE_SIZE - 1] == 'a' && out[PAGE_SIZE] == 0,
-          "a resident read returns the page before the one it cannot map");
-    resident_fail = (uintptr_t)resident_pages[0];
-    check(file_read_locked(&ofd, (char __user *)out, sizeof(out), 0, &big) == -ENOMEM,
-          "a resident read of a first page it cannot map fails with ENOMEM");
-    check(resident_refs == 0, "a resident read lets every page's reference go");
+    check(file_read_locked(&ofd, (char __user *)out, sizeof(out), 0, &big) == 2 * PAGE_SIZE &&
+              out[0] == 'a' && out[PAGE_SIZE - 1] == 'a' && out[PAGE_SIZE] == 'b' &&
+              out[2 * PAGE_SIZE - 1] == 'b',
+          "a resident read returns a page `kmap_temp` has no slot for");
+    check(cpu_maps == 0 && resident_refs == 0,
+          "a resident read lets every page's mapping and reference go");
     check(big == 0, "a resident read under the big lock takes it no more");
 
     resident_row = 0;
@@ -5122,7 +5162,7 @@ int main(int argc, char **argv)
     mapping_reclaims();
     file_locked_orders();
     file_locked_mount_rmdir();
-    resident_unmapped();
+    resident_copied();
     resident_race();
     mapped_writers();
     read_end_past_unlocked();
