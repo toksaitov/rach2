@@ -23,8 +23,8 @@
 #include "../syscall_internal.h"
 #include "../timer.h"
 
-/* The longest a reader that finds its pipe empty spins for the next write
- * before it sleeps, in microseconds (`pipe_read_spin`). */
+/* The longest a reader or a splice that finds its pipe empty spins for the
+ * next write before it sleeps, in microseconds (`pipe_read_spin`). */
 #define PIPE_SPIN_US 4u
 
 /* Linux ioctls a pipe answers. */
@@ -380,13 +380,14 @@ static void pipe_note_writer(pipe_t *p)
 }
 
 /**
- * Spin, with the lock of `p` given back, until `p` is readable
- * (`pipe_readable`), for at most PIPE_SPIN_US, while the thread that wrote
- * it last runs on another processor (`sched_spin_on`), as Linux's
+ * Spin, with the locks of `p` and `q` given back (`pipe_lock`), until `p` is
+ * readable (`pipe_readable`), for at most PIPE_SPIN_US, while the thread that
+ * wrote it last runs on another processor (`sched_spin_on`), as Linux's
  * mutex_optimistic_spin spins while a mutex's owner runs
- * (kernel/locking/mutex.c:350-385). Returns 1 when it spun, with the lock
- * held again, and the caller judges the pipe again; 0 when it did not,
- * since no writer runs elsewhere or the counter's rate is not known.
+ * (kernel/locking/mutex.c:350-385). `q` is NULL but for a tee or a splice
+ * from `p` into the pipe `q`. Returns 1 when it spun, with the locks held
+ * again, and the caller judges the pipes again; 0 when it did not, since no
+ * writer runs elsewhere or the counter's rate is not known.
  *
  * A sleep costs the writer the interprocessor interrupt that wakes the
  * reader, an exit of 2 to 4 us under KVM, and the reader a halt, and a
@@ -396,7 +397,7 @@ static void pipe_note_writer(pipe_t *p)
  * writes, so that a spin that ends in a sleep costs at most twice what the
  * sleep alone would.
  */
-static int pipe_read_spin(pipe_t *p)
+static int pipe_read_spin(pipe_t *p, pipe_t *q)
 {
     const process_t *w = p->writer;
     int cpu = p->writer_cpu;
@@ -406,7 +407,7 @@ static int pipe_read_spin(pipe_t *p)
         !sched_spin_on(w, cpu)) {
         return 0;
     }
-    pipe_unlock(p, NULL);
+    pipe_unlock(p, q);
     start = arch_cycles();
     for (;;) {
         if (pipe_readable(p) || *(volatile uint32_t *)&current_proc->sig_woken ||
@@ -414,7 +415,7 @@ static int pipe_read_spin(pipe_t *p)
             break;
         }
     }
-    pipe_lock(p, NULL);
+    pipe_lock(p, q);
     return 1;
 }
 
@@ -1164,7 +1165,7 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int 
             }
             if (!spun) {
                 spun = 1;
-                if (pipe_read_spin(p)) {
+                if (pipe_read_spin(p, NULL)) {
                     continue;
                 }
             }
@@ -1595,10 +1596,13 @@ int32_t pipe_splice_room(fd_entry_t *e, int nonblock, uint32_t src)
  * the wait. The empty buffers at the front, which faulted writes left, are
  * let go of first, as a read lets go of them (`pipe_buf_skip_empty`) and as
  * Linux's `splice_from_pipe_next` eats them (fs/splice.c:495-507 and 551 in
- * 6.12), so the splice waits for bytes.
+ * 6.12), so the splice waits for bytes. A wait spins once for the next write
+ * before it sleeps, as a read does (`pipe_read_spin`).
  */
 static int32_t pipe_wait_data(pipe_t *p, int nonblock)
 {
+    int spun = 0;
+
     for (;;) {
         pipe_buf_skip_empty(p);
         if (pipe_available(p) != 0) {
@@ -1609,6 +1613,12 @@ static int32_t pipe_wait_data(pipe_t *p, int nonblock)
         }
         if (nonblock) {
             return -EAGAIN;
+        }
+        if (!spun) {
+            spun = 1;
+            if (pipe_read_spin(p, NULL)) {
+                continue;
+            }
         }
         if (pipe_sleep(p, NULL, &p->read_wq, pipe_readable, p, NULL) < 0) {
             return -EINTR;
@@ -1843,9 +1853,15 @@ void pipe_splice_consume(fd_entry_t *e, uint32_t n)
  * is 0, as Linux's `link_pipe` and `splice_pipe_to_pipe` check
  * `opipe->readers` first in their loops (fs/splice.c:1778-1783 and
  * 1902-1907 in 6.12), which `ipipe_prep` reaches with 0 for such an `a`.
+ * An empty `a` is waited for as a read waits, with one spin for the next
+ * write before the sleep (`pipe_read_spin`): GNU cat splices its input pipe
+ * into a pipe of its own, and without the spin each of the writer's records
+ * would cost it a wake of the sleeping splice.
  */
 static int32_t pipe_link_ready(pipe_t *a, pipe_t *b, int nonblock)
 {
+    int spun = 0;
+
     for (;;) {
         if (!pipe_holds(a)) {
             if (!a->write_open) {
@@ -1856,6 +1872,12 @@ static int32_t pipe_link_ready(pipe_t *a, pipe_t *b, int nonblock)
             }
             if (nonblock) {
                 return -EAGAIN;
+            }
+            if (!spun) {
+                spun = 1;
+                if (pipe_read_spin(a, b)) {
+                    continue;
+                }
             }
             if (pipe_sleep(a, b, &a->read_wq, pipe_readable, a, NULL) < 0) {
                 return -EINTR;
