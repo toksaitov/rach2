@@ -12,7 +12,9 @@
  * its entry in a listing of /proc has the inode of /proc/1; a name relative
  * to its descriptor of /proc/self/fd reaches its own descriptor; and a group
  * whose leader it has reaped keeps the leader's number there, which getpgid
- * of a member reads and kill of its negation reaches. The
+ * of a member reads and kill of its negation reaches; getppid of a child whose
+ * parent ends and is reaped while it calls gives the parent's number or 1,
+ * never 0. The
  * caller of unshare keeps its own pid. When it ends, its namespace's init
  * adopts its children, including the init of a namespace below it and that
  * init's sibling. In a new network namespace a
@@ -109,6 +111,7 @@ enum row {
     R_PID_INODE,
     R_PID_FD,
     R_PID_GROUP,
+    R_PID_PARENT,
     R_ORPHAN_PARENT,
     R_ORPHAN_ADOPT,
     R_PID_BOTH,
@@ -165,6 +168,7 @@ static const char *const assertion_id[ROWS] = {"segment",
                                                "pid-proc-inode",
                                                "pid-own-fd-dir",
                                                "pid-reaped-leader-group",
+                                               "pid-parent-reaped",
                                                "orphans-parent-exits",
                                                "orphans-adopted",
                                                "pid-status-both-numbers",
@@ -605,13 +609,116 @@ static int pid_group_reaped(void)
     return rc;
 }
 
+/* The rounds of `pid_parent_reaped`, and the getppid calls each child makes
+ * once it has seen its new parent. */
+#define PARENT_ROUNDS 16
+#define PARENT_CALLS  2000
+
+/**
+ * The child of `parent_of_caller`: tell its parent `self` through `go` that
+ * it has begun, then call getppid until it has seen 1, its new parent,
+ * PARENT_CALLS times. Exits 0, 2 for a number that is neither `self` nor
+ * 1, and 1 when it cannot write `go`.
+ */
+static void call_getppid(pid_t self, int go)
+{
+    int seen = 0;
+    pid_t pp;
+
+    if (write(go, "x", 1) != 1) {
+        _exit(1);
+    }
+    while (seen < PARENT_CALLS) {
+        pp = getppid();
+        if (pp == 1) {
+            seen++;
+        } else if (pp != self) {
+            _exit(2);
+        }
+    }
+    _exit(0);
+}
+
+/**
+ * The parent of `pid_parent_reaped`'s round: fork a child that calls
+ * getppid, send its pid on `rep`, wait on `go` until it has begun, and end.
+ * Exits 0, or 1 on a failure.
+ */
+static void parent_of_caller(int go[2], int rep)
+{
+    pid_t self = getpid(), c;
+    char ch;
+
+    c = fork();
+    if (c == 0) {
+        close(rep);
+        close(go[0]);
+        call_getppid(self, go[1]);
+    }
+    close(go[1]);
+    _exit(c > 0 && write(rep, &c, sizeof(c)) == (ssize_t)sizeof(c) && read(go[0], &ch, 1) == 1 ? 0
+                                                                                               : 1);
+}
+
+/**
+ * Check, as the first process of a PID namespace, that getppid of a child
+ * whose parent ends and is reaped while it calls gives the parent's number
+ * or 1, the init that adopts it, and never 0, as Linux reads `real_parent`
+ * and translates it in one RCU section. A parent forks a child, which tells
+ * it that it has begun and calls getppid (`parent_of_caller`,
+ * `call_getppid`); the parent then ends, and this process reaps it at once
+ * while the child calls, and then reaps the child. The window lies between
+ * the read of the parent's ID and its translation, so PARENT_ROUNDS rounds
+ * run. Returns 0, or 1 after printing the failure.
+ */
+static int pid_parent_reaped(void)
+{
+    int round, go[2], rep[2], status, rc = 0;
+    pid_t parent, child;
+
+    for (round = 0; round < PARENT_ROUNDS && !rc; round++) {
+        if (pipe(go) != 0) {
+            return fail(R_PID_PARENT, "a pipe for a reaped parent's child");
+        }
+        if (pipe(rep) != 0) {
+            close(go[0]);
+            close(go[1]);
+            return fail(R_PID_PARENT, "a pipe for a reaped parent's child");
+        }
+        parent = fork();
+        if (parent == 0) {
+            close(rep[0]);
+            parent_of_caller(go, rep[1]);
+        }
+        close(go[0]);
+        close(go[1]);
+        close(rep[1]);
+        child = -1;
+        if (parent < 0 || read(rep[0], &child, sizeof(child)) != (ssize_t)sizeof(child) ||
+            waitpid(parent, &status, 0) != parent || !WIFEXITED(status) ||
+            WEXITSTATUS(status) != 0) {
+            rc = fail(R_PID_PARENT, "a parent that forked a calling child ends and is reaped");
+        }
+        close(rep[0]);
+        if (child > 0 &&
+            (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+             WEXITSTATUS(status) != 0) &&
+            !rc) {
+            rc = fail(R_PID_PARENT, "getppid of a child whose parent is reaped gives its number "
+                                    "or 1, never 0");
+        }
+    }
+    return rc;
+}
+
 /**
  * Check, as the first process of a new PID namespace, that it is pid 1 with
  * parent 0, that its child is 2, that its NSpid line has the one number, that
  * get_robust_list of pid 1 gives the head it set, that get_robust_list and
  * kill of pid 99, which the namespace has not given, fail with ESRCH, and
- * then `proc_own_number`, `own_fd_dir` and `pid_group_reaped`. Returns 0, or
- * 1 after printing the failure.
+ * then `proc_own_number`, `own_fd_dir`, `pid_group_reaped`,
+ * `pid_parent_reaped` and `pid_orphans`. Returns 0, or 1 after printing the
+ * failure.
  */
 static int pid_first(void)
 {
@@ -649,7 +756,8 @@ static int pid_first(void)
     if (kill(99, 0) != -1 || errno != ESRCH) {
         return fail(R_PID_KILL_ESRCH, "kill of a pid the namespace has not given is ESRCH");
     }
-    return proc_own_number() || own_fd_dir() || pid_group_reaped() || pid_orphans();
+    return proc_own_number() || own_fd_dir() || pid_group_reaped() || pid_parent_reaped() ||
+           pid_orphans();
 }
 
 /**
