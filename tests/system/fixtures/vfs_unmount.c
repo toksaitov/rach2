@@ -220,8 +220,8 @@ static int bcache_sync(struct block_device *d)
     (void)d;
     return 0;
 }
-/** Count a device flush. */
-static int block_flush(struct block_device *d)
+/** Count a device flush, which records a failure itself (`bcache_flush`). */
+static int bcache_flush(struct block_device *d)
 {
     (void)d;
     flushes++;
@@ -243,15 +243,6 @@ static void devfs_release_claim(int claim)
 static void mount_release(struct vfs_mount *m)
 {
     m->state = 0;
-}
-
-/** A failed flush, which the unmount path reports to the device layer;
- * ignored. */
-static void vfs_device_failed(struct block_device *dev, unsigned long long lba, int rc)
-{
-    (void)dev;
-    (void)lba;
-    (void)rc;
 }
 
 /** Drop the inotify watches on the files of `m`; there are none. */
