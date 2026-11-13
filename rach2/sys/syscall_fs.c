@@ -6934,6 +6934,38 @@ static int dir_seek_size(fd_entry_t *entry, long long off, int whence, long long
 }
 
 /**
+ * lseek(2) and _llseek(2) on /proc/PID/mem, whose offset is an address:
+ * SEEK_SET takes any offset and SEEK_CUR adds to it modulo 2^64, as Linux's
+ * mem_lseek stores either in its unsigned f_pos (fs/proc/base.c), and a read
+ * past the machine's addresses is then -EIO (`procfs_mem_access`). Another
+ * `whence` is -EINVAL, and an offset past `limit`, the largest the call can
+ * return, -EOVERFLOW, as Linux's lseek answers when its result does not fit.
+ * The offset is stored under the description's lock and returned in `*out`.
+ */
+static int seek_mem(fd_entry_t *entry, long long off, int whence, uint64_t limit, long long *out)
+{
+    uint64_t at;
+    int rc = 0;
+
+    if (!entry->ofd) {
+        return -EBADF;
+    }
+    if (whence != 0 && whence != 1) {
+        return -EINVAL;
+    }
+    fd_ofd_lock(entry->ofd);
+    at = (uint64_t)off + (whence == 1 ? entry->ofd->offset : 0);
+    if (at > limit) {
+        rc = -EOVERFLOW;
+    } else {
+        entry->ofd->offset = at;
+        *out = (long long)at;
+    }
+    fd_ofd_unlock(entry->ofd);
+    return rc;
+}
+
+/**
  * lseek(2) and _llseek(2) on a directory or a /proc file: the offset
  * `whence` and `off` give, stored in the description under its lock and
  * returned in `*out`, or a negative errno with the offset unchanged. A read
@@ -6944,9 +6976,9 @@ static int dir_seek_size(fd_entry_t *entry, long long off, int whence, long long
  * files and tmpfs directories answer, since neither has a size to seek from,
  * except on a directory of a type whose cursor is a byte (`dir_seek_size`). A
  * /proc file's offset is a byte of its text, the snapshot its open took or the
- * text a read of oom_score_adj makes, through 0xFFFFFFFF, or, for
- * /proc/PID/mem, an address, so it takes any place through the last address,
- * 0xFFFFFFFF on i686. A directory's offset is the cursor of its listing, which
+ * text a read of oom_score_adj makes, through 0xFFFFFFFF; /proc/PID/mem
+ * seeks as `seek_mem` says.
+ * A directory's offset is the cursor of its listing, which
  * getdents64 reports after each entry as the entry's d_off: a directory of /dev
  * or /proc takes the index of any entry through 0x7FFFFFFF; one of ext2,
  * whose cursor is a byte (`dir_seeks_bytes`), any place through the volume's
@@ -6967,9 +6999,8 @@ static int seek_listing(fd_entry_t *entry, long long off, int whence, uint64_t l
     int bytes, rc = 0;
 
     if (procfs_is_mem(entry)) {
-        most = (uint64_t)(uintptr_t)-1;
+        return seek_mem(entry, off, whence, limit, out);
     }
-
     if (!entry->ofd || (entry->type == FD_TYPE_DIR && !entry->ofd->vmnt)) {
         return -EBADF;
     }
