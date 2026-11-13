@@ -215,8 +215,8 @@ break_lock()
     if mkdir "$LOCK.break" 2>/dev/null; then
         BREAKING=1
         [ "$(readlink "$LOCK" 2>/dev/null)" != "$1" ] || rm -f "$LOCK"
-        rmdir "$LOCK.break"
         BREAKING=
+        rmdir "$LOCK.break"
     else
         [ -z "$(find "$LOCK.break" -prune -mmin +1 2>/dev/null)" ] || rmdir "$LOCK.break" 2>/dev/null
         sleep 1
