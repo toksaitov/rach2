@@ -6150,6 +6150,8 @@ static void remount_policy_row(void);
 static void extra_isize_row(void);
 static void pending_damage_row(void);
 static void runtime_damage_rows(void);
+static void policy_mode_rows(void);
+static void policy_kind_rows(void);
 
 /**
  * Mount a clean volume read-only, read a file and a deep path on it, sync
@@ -6219,6 +6221,8 @@ static void readonly_rows(void)
     extra_isize_row();
     pending_damage_row();
     runtime_damage_rows();
+    policy_mode_rows();
+    policy_kind_rows();
 }
 
 /* The result of process B's sync in `sync_remount_row`. */
@@ -7369,6 +7373,8 @@ static void fail_block_reads(void)
         read_fails = 1;
     }
 }
+
+#include "ext2_policy_rows.h"
 
 /**
  * A symlink whose name is on the device keeps its inode when the store of
