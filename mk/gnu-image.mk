@@ -22,11 +22,11 @@
 #
 # os-real-gnu.ext2 for x86-64 made on that host also has IGT's tests and
 # VK-GL-CTS (mk/gnu-extra.mk), which install_root.sh stages when GNU_IGT and
-# GNU_VK_GL_CTS are 1, and gnu-test.ext2, the volume of the disk the machine
-# cases boot, which removes it (tests/system/suites.mk), has VK-GL-CTS; the
-# tooling machine cannot run the builder guest, so an image it makes has
-# neither. Both have the rebuilt Weston on that host (gnu-weston), which
-# install_games.sh stages when GNU_WESTON is 1.
+# GNU_VK_GL_CTS are 1, and so does gnu-test.ext2, the volume of the disk the
+# machine cases boot, the igt suite's among them, which removes it
+# (tests/system/suites.mk); the tooling machine cannot run the builder guest,
+# so an image it makes has neither. Both have the rebuilt Weston on that
+# host (gnu-weston), which install_games.sh stages when GNU_WESTON is 1.
 # The x86-64 root, the gnu-test image and the agents' root have the i386
 # layer (vendor/gnu/Readme.md, The i386 layer) unless GNU_I386 is 0, which
 # makes the root of the pure 64-bit profile; the i686 root has none to leave
@@ -122,15 +122,15 @@ ifeq ($(GNU_TOOLING),)
 # Linux host without it, such as the Windows collection machine, makes the
 # images without them, as the tooling machine does.
 GNU_BUILDER_ON ?= $(if $(filter x86_64,$(ARCH)),$(if $(shell command -v qemu-system-x86_64 2>/dev/null),1))
+GNU_IGT_ON = $(GNU_BUILDER_ON)
 $(GNU_TEST_EXT2): $(GNU_IMAGE_DEPS) $(GNU_TEST_MANIFEST_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) \
     $(GNU_SANITIZERS_STAMP) $(GNU_FSTOOLS_STAMP) tests/cases/host/fstool.c \
-    $(if $(GNU_BUILDER_ON),$(GNU_VK_GL_CTS_STAMP) $(GNU_WESTON_STAMP)) | $(GNU_IMAGE_ORDER)
+    $(if $(GNU_IGT_ON),$(GNU_IGT_STAMP) $(GNU_VK_GL_CTS_STAMP) $(GNU_WESTON_STAMP)) | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_TEST_PRODUCTS=1 GNU_I386=$(GNU_I386_ON) \
-	    GNU_VK_GL_CTS=$(GNU_BUILDER_ON) GNU_WESTON=$(GNU_BUILDER_ON) \
+	    GNU_IGT=$(GNU_IGT_ON) GNU_VK_GL_CTS=$(GNU_IGT_ON) GNU_WESTON=$(GNU_IGT_ON) \
 	    sh tools/image/mkext2.sh --overlay vendor/gnu/install_root.sh \
 	    $(GNU_TEST_MANIFEST) $@ 24576
 
-GNU_IGT_ON = $(GNU_BUILDER_ON)
 $(OS_REAL_GNU_EXT2): $(GNU_IMAGE_DEPS) $(GNU_ROOT_MANIFEST_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) $(GNU_LOGINS_STAMP) \
                      $(if $(GNU_IGT_ON),$(GNU_IGT_STAMP) $(GNU_VK_GL_CTS_STAMP) $(GNU_WESTON_STAMP)) tools/image/stage_logins.sh | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_IGT=$(GNU_IGT_ON) GNU_VK_GL_CTS=$(GNU_IGT_ON) GNU_WESTON=$(GNU_IGT_ON) \
