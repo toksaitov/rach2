@@ -348,6 +348,10 @@ follow()
 
 take_lock
 sweep
+# The old image goes now, once make has chosen to build it again, so that it
+# and the new one never fill the disk together; a stopped build leaves no image,
+# which the next make builds again. A dry run writes no image and keeps it.
+[ -n "$DRY" ] || rm -f "$OUT"
 STAGE=$(mktemp -d "$GNU_OUT/.tooling.XXXXXX")
 tooling check > /dev/null 2>&1 || tooling prepare -c "$CPUS"
 stage_tree

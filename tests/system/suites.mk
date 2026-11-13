@@ -929,7 +929,7 @@ GNU_TEST_DISK = $(IMAGES_DIR)/gnu-test.disk
 .INTERMEDIATE: $(GNU_TEST_EXT2)
 $(GNU_TEST_DISK): $(GNU_TEST_EXT2) $(MKMBR)
 	@mkdir -p $(@D)
-	rm -f $@.tmp
+	rm -f $@ $@.tmp
 	mib=$$(($$(wc -c < $(GNU_TEST_EXT2)) / 1048576)) && \
 	dd if=/dev/zero of=$@.tmp bs=1048576 count=0 seek=$$((mib + 2)) 2>/dev/null && \
 	dd if=$(GNU_TEST_EXT2) of=$@.tmp bs=1048576 seek=1 conv=notrunc,sparse 2>/dev/null && \
@@ -2130,7 +2130,7 @@ $(GAMES_DIR)/save-volume.ext2: vendor/e2fsprogs/mke2fs.conf
 DESKTOP_TEST_DISK = $(IMAGES_DIR)/desktop-test.disk
 $(DESKTOP_TEST_DISK): $(OS_REAL_GNU_EXT2) $(MKMBR)
 	@mkdir -p $(@D)
-	rm -f $@.tmp
+	rm -f $@ $@.tmp
 	mib=$$(($$(wc -c < $(OS_REAL_GNU_EXT2)) / 1048576)) && \
 	dd if=/dev/zero of=$@.tmp bs=1048576 count=0 seek=$$((mib + 2)) 2>/dev/null && \
 	dd if=$(OS_REAL_GNU_EXT2) of=$@.tmp bs=1048576 seek=1 conv=notrunc,sparse 2>/dev/null && \

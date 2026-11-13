@@ -123,6 +123,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 WORK=$(mktemp -d "$(dirname "$OUT")/.mkext2.XXXXXX") || exit 1
+# The old image goes now, once make has chosen to build it again, so that it
+# and the new one never fill the disk together; a stopped build leaves no image,
+# which the next make builds again.
+rm -f "$OUT"
 STAMP="${SOURCE_DATE_EPOCH:-$(git -C "$REPO" log -1 --format=%ct HEAD 2>/dev/null || true)}"
 case "$STAMP" in
     '' | *[!0-9]*) STAMP=1 ;;

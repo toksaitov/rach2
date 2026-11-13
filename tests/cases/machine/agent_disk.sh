@@ -9,6 +9,9 @@ trap '[ -z "$work" ] || rm -f "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# The old disk goes first, so that it and its new copy never fill the disk
+# together; a stopped run leaves no disk, which the next make builds again.
+rm -f "$disk"
 work=$(mktemp "$disk.XXXXXX")
 size=$(($(wc -c < "$image") / 1048576))
 dd if=/dev/zero of="$work" bs=1048576 count=0 seek=$((size + 2)) 2>/dev/null
