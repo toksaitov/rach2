@@ -77,7 +77,7 @@ Both contexts run with interrupts off, and the pump restores the interrupt flag 
 
 Each controller gets its own MSI vector from `isr_alloc_vector`, 48 to 239, when the local APIC is in use and the controller has an MSI capability; a controller whose MSI enable fails gives the vector back, with its handler. Otherwise it raises its PCI line, IRQ 1 to 15, through the I/O APIC, or through the 8259 when there is no I/O APIC in use, as under `rach2.nomsi`; the handler is registered first, since a level-triggered line the firmware left asserted would otherwise reach no handler. A controller with neither is left to the timer. Every handler is named `xhci` and drains every controller.
 
-Once any controller's interrupts are on, a timer pass that took events while no USB interrupt was pending adds one to the fallback count, `FBK` in `/proc/interrupts`. The pending state is read after the drain and again after the core's step, since a message can arrive after its event; a message still in flight at both reads is counted too.
+Once any controller's interrupts are on, a timer pass that took events while no USB interrupt was pending adds one to the fallback count, `FBK` in `/proc/interrupts`. The pending state includes the APICs of every online processor and message entries already acknowledged but waiting for the big lock or running their handler. It is read after the drain and again after the core's step, since a message can arrive after its event; a message still in flight at both reads is counted too.
 
 ### Enumeration
 

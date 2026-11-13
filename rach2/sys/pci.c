@@ -1676,6 +1676,11 @@ void pci_msi_rebalance(void)
     int i;
 
     for (i = 0; i < MSI_RECORDS; i++) {
+        if (msi_records[i].kind) {
+            msi_records[i].cpu = -1;
+        }
+    }
+    for (i = 0; i < MSI_RECORDS; i++) {
         struct msi_record *r = &msi_records[i];
         int cpu;
 

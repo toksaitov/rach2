@@ -67,6 +67,8 @@ static volatile uint32_t irq_count = 0;
 /* One count per vector this kernel takes interrupts on, 32 to ISR_MSI_LAST,
  * which is what /proc/interrupts reports. */
 static volatile uint32_t vector_count[ISR_MSI_LAST - 31];
+/* Messages acknowledged at entry but whose chain has not finished. */
+static volatile uint32_t vector_active[256];
 static volatile uint32_t cpu_vector_count[NR_CPUS][ISR_MSI_LAST - 31];
 static struct spinlock handler_lock = SPINLOCK_INIT_NAMED("isr_handlers");
 
@@ -504,6 +506,16 @@ static void count_up(volatile uint32_t *count)
     do {
         n = *count;
     } while (arch_atomic_cmpxchg(count, n, n + 1u) != n);
+}
+
+/** Complete one message entry, which may have resumed on another CPU. */
+static void count_down(volatile uint32_t *count)
+{
+    uint32_t n;
+
+    do {
+        n = *count;
+    } while (arch_atomic_cmpxchg(count, n, n - 1u) != n);
 }
 
 /** Set `vector`'s mark from its chain: nonzero when it has a handler and
@@ -1248,6 +1260,14 @@ int arch_irq_waiting(void)
     return 0;
 }
 
+/** Keep a PCI message pending in software until its chain completes. */
+static void message_enter(uint32_t vector, int timer)
+{
+    if (!timer && vector >= ISR_MSI_FIRST && vector <= ISR_MSI_LAST) {
+        count_up(&vector_active[vector]);
+    }
+}
+
 /**
  * Take the big lock, unless every handler of the chain runs without it
  * (`isr_register_flags`) or the vector is the tick's, count a device's
@@ -1337,6 +1357,7 @@ void _irq_router(isr_params_t *params)
     uintptr_t fp = (uintptr_t)params->ebp;
 #endif
 
+    message_enter(params->vector, timer);
     user_entry(params);
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);
@@ -1392,6 +1413,7 @@ void _irq_router(isr_params_t *params)
         } else {
             lapic_eoi(); /* a message is an edge, see above */
             irq_dispatch_edge(params);
+            count_down(&vector_active[params->vector]);
         }
         sched_tick(); /* a woken reader runs now, or at the call's exit */
         return;
@@ -1493,14 +1515,51 @@ int isr_msi_ready(void)
 int isr_line_pending(int line)
 {
     if (lines_apic) {
-        return lapic_requested((uint8_t)IRQ_VECTOR(line)) || ioapic_line_pending(line);
+        return isr_vector_pending(IRQ_VECTOR(line)) || ioapic_line_pending(line);
     }
     return pic_irq_pending((uint8_t)line);
 }
 
+/* A synchronous APIC query; only the callback writes pending. */
+struct pending_query {
+    uint8_t vector;
+    int pending;
+};
+
+/** Read only this processor's controller; no locks or big lock are taken. */
+static void pending_on_cpu(void *arg)
+{
+    struct pending_query *q = arg;
+
+    q->pending = lapic_pending(q->vector);
+}
+
+/** Read every online controller, since a migrated vector can still be
+ * pending on a previous destination. An acknowledged entry waiting for
+ * the big lock or running its chain remains pending in vector_active. */
 int isr_vector_pending(int vector)
 {
-    return lapic_pending((uint8_t)vector);
+    struct pending_query q;
+    int c;
+
+    if (vector < 0 || vector >= 256) {
+        return 0;
+    }
+    if (vector_active[vector] || lapic_pending((uint8_t)vector)) {
+        return 1;
+    }
+    q.vector = (uint8_t)vector;
+    for (c = 0; c < NR_CPUS; c++) {
+        if (c == (int)arch_cpu_id() || !cpu_table[c].online) {
+            continue;
+        }
+        q.pending = 0;
+        smp_call(c, pending_on_cpu, &q);
+        if (q.pending || vector_active[vector]) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 uint32_t isr_spurious_count(void)

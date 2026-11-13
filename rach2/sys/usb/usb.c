@@ -298,9 +298,10 @@ static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
 /**
  * Whether any controller's interrupt has been raised and not yet taken.
  *
- * A controller's message vector is checked at the local APIC, and its PCI
- * line at the local APIC and the I/O APIC when the I/O APIC routes the
- * lines, or at the 8259 otherwise (`isr_line_pending`).
+ * A controller's message vector is checked on every online processor,
+ * including an entry waiting for the big lock or running its handler. Its
+ * PCI line is checked there and at the I/O APIC when it routes the lines,
+ * or at the 8259 otherwise (`isr_line_pending`).
  */
 static int interrupt_pending(void)
 {
