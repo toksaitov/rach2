@@ -982,9 +982,31 @@ static void qmp_reply(struct etude_machine *m, long id, const struct eh_json *re
 }
 
 /**
- * Act on QMP's event `ev`: only SHUTDOWN tells the launcher anything. The
- * console is read first, so that the offset of the end counts every byte
- * QEMU wrote before it sent the event.
+ * Take QMP's BLOCK_IO_ERROR `data`: when QEMU stopped the guest at a write
+ * that found the host's file system full, which its default `werror=enospc`
+ * does, keep the event's reason and quit QEMU, since the guest cannot go on
+ * until space is freed and a case would otherwise wait out its bound.
+ */
+static void io_error(struct etude_machine *m, const struct eh_json *data)
+{
+    const struct eh_json *action = eh_json_get(data, "action");
+    const struct eh_json *nospace = eh_json_get(data, "nospace");
+    const struct eh_json *reason = eh_json_get(data, "reason");
+
+    if (m->r.host_full[0] || action == NULL || action->type != 's' ||
+        strcmp(action->string, "stop") != 0 || nospace == NULL || nospace->type != 't')
+        return;
+    snprintf(m->r.host_full, sizeof(m->r.host_full), "%s",
+             reason != NULL && reason->type == 's' ? reason->string : "no space");
+    m->changed = 1;
+    machine_quit(m);
+}
+
+/**
+ * Act on QMP's event `ev`: SHUTDOWN, and a BLOCK_IO_ERROR that stopped the
+ * guest for want of space on the host. The console is read first, so that
+ * the offset of the end counts every byte QEMU wrote before it sent the
+ * event.
  *
  * On Windows a process that exits resets its loopback connections, and the
  * reset discards what the launcher has not yet read of them. QEMU runs there
@@ -1000,6 +1022,10 @@ static void qmp_event(struct etude_machine *m, const struct eh_json *ev)
     const struct eh_json *reason = eh_json_get(data, "reason");
     const struct eh_json *guest = eh_json_get(data, "guest");
 
+    if (name != NULL && name->type == 's' && strcmp(name->string, "BLOCK_IO_ERROR") == 0) {
+        io_error(m, data);
+        return;
+    }
     if (name == NULL || name->type != 's' || strcmp(name->string, "SHUTDOWN") != 0 || m->shutdown)
         return;
     m->shutdown = 1;
@@ -1169,6 +1195,8 @@ static enum etude_end machine_end(const struct etude_machine *m)
 
     if (m->accel_wrong)
         return ETUDE_END_ACCEL_FAILED;
+    if (m->r.host_full[0])
+        return ETUDE_END_LOST;
     if (m->cancelled)
         return ETUDE_END_STOPPED;
     if (m->shutdown && m->r.by_guest) {

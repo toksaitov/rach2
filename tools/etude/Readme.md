@@ -1114,6 +1114,7 @@ The end of a machine is told by these rules, in order:
 | End | Observed |
 | --- | --- |
 | `accel_failed` | QMP named another accelerator, and the launcher made QEMU quit; or QEMU ended before the machine ran with a line of its standard error that its location of the option begins, `PROGRAM: -accel NAME: `, as QEMU writes when it cannot start an accelerator or does not have it |
+| `lost` | QMP's event `BLOCK_IO_ERROR`, with `nospace` and the action `stop`, said that QEMU stopped the guest at a write that found the host's file system full, as QEMU's default `werror=enospc` does; the launcher makes QEMU quit at once, since the guest cannot go on until space is freed, and keeps the event's reason in the result's `host_full`, which `libetude-case` prints at the attempt's end as `etude-case: machine MACHINE.N: the host's disk is full: ...` and counts as a fault |
 | `stopped` | The caller cancelled the machine before its end |
 | `shutdown`, `reset`, `panic` | QMP's event `SHUTDOWN` of the guest, with the reason `guest-shutdown`, `guest-reset` or `guest-panic` |
 | `qemu_exited` | QEMU ended otherwise: a `SHUTDOWN` of the host, such as a signal, or an exit without an event, whose status the executor keeps |

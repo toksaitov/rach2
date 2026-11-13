@@ -4544,6 +4544,20 @@ static void console_saved(struct etude_case *c, const struct etude_case_machine 
     c->unsaved = 1;
 }
 
+/** Count a fault of the case, and say why, when QEMU stopped boot `m`'s
+ * guest at a write that found the host's file system full: the guest's
+ * end was never reached, and the host, not the system under test, failed. */
+static void host_space(struct etude_case *c, const struct etude_case_machine *m)
+{
+    const struct etude_machine_result *r = mres(m);
+
+    if (!r->host_full[0])
+        return;
+    diag("machine %s.%u: the host's disk is full: QEMU stopped the guest at a write: %s",
+         m->decl->id, m->boot, r->host_full);
+    c->faults++;
+}
+
 /**
  * End what the attempt owns within the cleanup's bound: after a failure or a
  * stop, collect the machines' diagnostics first; then stop every service and
@@ -4574,6 +4588,7 @@ static void end_all(struct etude_case *c, int failing)
             r->qemu->cleanup != ETUDE_CLEANUP_CONFIRMED)
             c->unconfirmed = 1;
         console_saved(c, m);
+        host_space(c, m);
         if (failing)
             keep_qemu_error(m);
     }

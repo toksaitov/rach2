@@ -385,6 +385,10 @@ struct etude_machine_result {
     const char *method;          /* how it was confirmed: "query-accelerators",
                                     "query-kvm", or NULL */
     char reason[64];             /* the reason of QEMU's SHUTDOWN event, or "" */
+    char host_full[64];          /* the reason of the BLOCK_IO_ERROR at which
+                                    QEMU stopped the guest for want of space
+                                    on the host, or ""; the machine then
+                                    ends lost */
     int by_guest;                /* the event's `guest` */
     struct etude_output console; /* what the console wrote; `closed` once QEMU
                                     closed it */
