@@ -2031,13 +2031,19 @@ static int sync_volume(struct vfs_mount *mnt, int *settle, int owner)
     return rc != 0 ? ext2_writeback_error(em, rc) : ext2_em_write_out(mnt);
 }
 
-/** `sync_volume`, by the gate's owner when `owner` is set: its result, or
- * the settle's failure when the writes succeeded. */
+/**
+ * `sync_volume`, by the gate's owner when `owner` is set: the result of its
+ * writes alone. A store that failed was reported where it arose or is a
+ * device's, and its node keeps its mark, which withholds the valid bit
+ * (`finish_writes`), so it fails no sync and no unmount, as Linux's
+ * `generic_shutdown_super` ignores `sync_filesystem` (fs/super.c:618) and
+ * the writeback drops a `write_inode` failure (fs/fs-writeback.c:2028).
+ */
 static int sync_by(struct vfs_mount *mnt, int owner)
 {
-    int settle, rc = sync_volume(mnt, &settle, owner);
+    int settle;
 
-    return rc != 0 ? rc : settle;
+    return sync_volume(mnt, &settle, owner);
 }
 
 /** The `sync` of `vfs_ops`: `sync_by` a caller that does not own the gate. */

@@ -184,7 +184,7 @@ A failed store keeps the mark, and the inode is stored again before its node goe
 
 * by the next change of a directory's entries (`dir_settle`);
 * at the last put, which on a mount that writes (`ext2_writes`) sends a marked node down the path of an unlinked one (`node_final`), and logs `ext2: inode N: not stored at its last put` when that store fails too;
-* by `sync` and the unmount's prepare step, which after the drain and the reap store every marked node of the mount (`nodes_settle`) and write the valid bit only when none failed;
+* by `sync` and the unmount's prepare step, which after the drain and the reap store every marked node of the mount (`nodes_settle`) and write the valid bit only when none failed. A store that failed fails neither: it was reported where it arose, and the node's mark withholds the valid bit, as Linux's `generic_shutdown_super` ignores `sync_filesystem` (fs/super.c:618), so an unmount goes on and leaves the volume for e2fsck;
 * by `fsync` and `fdatasync` of the file;
 * by a remount writable, STOPPED or read-only, before its check, which a node still marked refuses.
 
