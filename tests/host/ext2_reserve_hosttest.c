@@ -478,6 +478,13 @@ void vfs_wb_err_set(struct vfs_mount *m, int rc)
     (void)rc;
 }
 
+/** Do nothing: no row records a file's own write-back error. */
+void vfs_ino_err_forget(struct vfs_mount *mnt, uint64_t ino)
+{
+    (void)mnt;
+    (void)ino;
+}
+
 /** Do nothing: no shared mapping holds a node of these rows. */
 void filemap_evict_unlinked(struct vfs_mount *mnt, uint64_t ino, void *node)
 {

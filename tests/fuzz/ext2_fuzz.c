@@ -91,6 +91,14 @@ void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
     (void)rc;
 }
 
+/** The free of a file's own write-back error sequence: nothing, since no
+ * input records one. */
+void vfs_ino_err_forget(struct vfs_mount *mnt, uint64_t ino)
+{
+    (void)mnt;
+    (void)ino;
+}
+
 /** The put of an unlinked file a shared mapping's record holds: nothing,
  * since no input maps a file. */
 void filemap_evict_unlinked(struct vfs_mount *mnt, uint64_t ino, void *node)

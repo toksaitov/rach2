@@ -559,6 +559,23 @@ void vfs_wb_err_sample(struct vfs_mount *mnt, uint32_t *file, uint32_t *fs)
     *fs = 0;
 }
 
+/** Start a description's cursor into its file's sequence at none. */
+uint32_t vfs_ino_err_sample(struct vfs_mount *mnt, uint64_t ino)
+{
+    (void)mnt;
+    (void)ino;
+    return 0;
+}
+
+/** The report of the file's own sequence, which holds no error in a row. */
+int vfs_ino_err_check(struct vfs_mount *mnt, uint64_t ino, uint32_t *seen)
+{
+    (void)mnt;
+    (void)ino;
+    (void)seen;
+    return 0;
+}
+
 /** The model type counts no calls in progress. */
 void vfs_leave(struct vfs_mount *mnt)
 {

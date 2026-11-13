@@ -1587,11 +1587,30 @@ void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
     (void)rc;
 }
 
-/** The record of a failed pass for syncfs, which no row makes. */
-void vfs_sb_err_set(struct vfs_mount *mnt, int rc)
+/** The record of a failed pass in the file's own sequence, which no row
+ * makes. */
+void vfs_ino_err_set(struct vfs_mount *mnt, uint64_t ino, int rc)
 {
     (void)mnt;
+    (void)ino;
     (void)rc;
+}
+
+/** Start a description's cursor into its file's sequence at none. */
+uint32_t vfs_ino_err_sample(struct vfs_mount *mnt, uint64_t ino)
+{
+    (void)mnt;
+    (void)ino;
+    return 0;
+}
+
+/** The report of the file's own sequence, which holds no error in a row. */
+int vfs_ino_err_check(struct vfs_mount *mnt, uint64_t ino, uint32_t *seen)
+{
+    (void)mnt;
+    (void)ino;
+    (void)seen;
+    return 0;
 }
 
 /** The fdatasync of a file, which no row makes. */

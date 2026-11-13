@@ -325,6 +325,13 @@ void vfs_wb_err_set(struct vfs_mount *m, int rc)
     wb_err_last = rc;
 }
 
+/** Do nothing: no row records a file's own write-back error. */
+void vfs_ino_err_forget(struct vfs_mount *mnt, uint64_t ino)
+{
+    (void)mnt;
+    (void)ino;
+}
+
 /* The node and the handle of a shared mapping's record that holds an
  * unlinked file (`lifecycle_record_row`), and the calls that let it go. */
 static void *evict_node, *evict_handle;

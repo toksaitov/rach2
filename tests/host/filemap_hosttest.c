@@ -39,9 +39,10 @@
  * mapping and its descriptor go and leaves the page, its bit and the
  * handle, which sync(2), inside the mount, fsync, msync, the flusher and a
  * later release each write through, and which the record lets go with
- * itself once the page is clean; the failure is recorded on each
- * description of the file then open, which reports it once at its next
- * fsync or MS_SYNC after any of those retries. A release's or a
+ * itself once the page is clean; the failure is recorded in the file's
+ * own error sequence, which each description of the file opened before its
+ * first report reports once at its next fsync or MS_SYNC after any of those
+ * retries. A release's or a
  * sync's success before a later release's failure keeps the later store,
  * in either order, and a truncation to zero takes the dirty page with the
  * rest. A descriptor write puts its bytes into a dirty page from its own
@@ -667,7 +668,7 @@ int shmem_truncate(struct shmem *sh, uint64_t size)
 #define MODEL_ERR_SEEN 0x1000u
 #define MODEL_ERR_STEP 0x2000u
 
-/* The records `vfs_wb_err_set` and `vfs_sb_err_set` have made, which a row
+/* The records `vfs_wb_err_set` and `vfs_ino_err_set` have made, which a row
  * clears. */
 static int err_records, sb_records;
 
@@ -691,15 +692,6 @@ void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
     model_err_record(&mnt->wb_err, rc);
     model_err_record(&mnt->sb_wb_err, rc);
     err_records++;
-}
-
-/** Record `rc` in the errors of the file system `mnt` shows for syncfs
- * alone, as vfs.c does for a failed pass. */
-void vfs_sb_err_set(struct vfs_mount *mnt, int rc)
-{
-    mnt = mnt->bind_of ? mnt->bind_of : mnt;
-    model_err_record(&mnt->sb_wb_err, rc);
-    sb_records++;
 }
 
 /** The errno `*seq` holds since the cursor `*seen` last looked, with the
@@ -740,49 +732,88 @@ int vfs_fsync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
     return vfs_fsync_error(mnt, seen);
 }
 
-/* The descriptions a row has open, which fd.c's walk of the live
- * descriptions finds (`fd_ofd_map_err_set`); `writeback_file` starts the
- * list again for each row. */
-#define MODEL_OFDS 8
-static struct open_file *model_ofds[MODEL_OFDS];
-static int model_nofds;
+/* The files' own error sequences, as vfs.c keeps them on their base mount
+ * (`vfs_ino_err_set`); `writeback_file` empties them for each row, since a
+ * row's mount may lie where the last row's did. */
+#define MODEL_INO_ERRS 8
+static struct {
+    const struct vfs_mount *base;
+    uint64_t ino;
+    uint32_t seq;
+} model_ino_errs[MODEL_INO_ERRS];
+static int model_nino_errs;
 
-/** Put `ofd` on the descriptions a failed pass may mark. */
-static void model_open(struct open_file *ofd)
-{
-    check(model_nofds < MODEL_OFDS, "the model has room for the row's descriptions");
-    if (model_nofds < MODEL_OFDS) {
-        model_ofds[model_nofds++] = ofd;
-    }
-}
-
-/** Record `rc` on each open description of the file `ino` of the file
- * system `mnt` shows, as fd.c does. */
-void fd_ofd_map_err_set(const struct vfs_mount *mnt, uint64_t ino, int rc)
+/** The sequence of the file `ino` of the file system `mnt` shows, made when
+ * `make` and there is none, or NULL. */
+static uint32_t *model_ino_seq(const struct vfs_mount *mnt, uint64_t ino, int make)
 {
     int i;
 
-    for (i = 0; i < model_nofds; i++) {
-        struct open_file *o = model_ofds[i];
-
-        if (o->vmnt && vfs_mount_base(o->vmnt) == vfs_mount_base(mnt) && o->ino == ino) {
-            o->map_err = (uint32_t)-rc;
+    mnt = vfs_mount_base(mnt);
+    for (i = 0; i < model_nino_errs; i++) {
+        if (model_ino_errs[i].base == mnt && model_ino_errs[i].ino == ino) {
+            return &model_ino_errs[i].seq;
         }
     }
+    check(!make || model_nino_errs < MODEL_INO_ERRS, "the model has room for the row's files");
+    if (!make || model_nino_errs == MODEL_INO_ERRS) {
+        return NULL;
+    }
+    model_ino_errs[model_nino_errs].base = mnt;
+    model_ino_errs[model_nino_errs].ino = ino;
+    model_ino_errs[model_nino_errs].seq = 0;
+    return &model_ino_errs[model_nino_errs++].seq;
 }
 
-/** Take the failure recorded on `ofd`, as fd.c does. */
-int fd_ofd_map_err_take(struct open_file *ofd)
+/** The errno the file `ino` of `mnt` last recorded, 0 for none. */
+static int model_ino_errno(const struct vfs_mount *mnt, uint64_t ino)
 {
-    int rc = -(int)ofd->map_err;
+    uint32_t *seq = model_ino_seq(mnt, ino, 0);
 
-    ofd->map_err = 0;
-    return rc;
+    return seq ? (int)(*seq & MODEL_ERR_MASK) : 0;
+}
+
+/** Record `rc` in the sequence of the file `ino` of the file system `mnt`
+ * shows and for syncfs, as vfs.c does for a failed pass. */
+void vfs_ino_err_set(struct vfs_mount *mnt, uint64_t ino, int rc)
+{
+    uint32_t *seq = model_ino_seq(mnt, ino, 1);
+
+    if (seq) {
+        model_err_record(seq, rc);
+    }
+    model_err_record(&vfs_mount_base(mnt)->sb_wb_err, rc);
+    sb_records++;
+}
+
+/** The cursor a new description of the file `ino` of `mnt` starts with, as
+ * vfs.c samples it. */
+uint32_t vfs_ino_err_sample(struct vfs_mount *mnt, uint64_t ino)
+{
+    uint32_t *seq = model_ino_seq(mnt, ino, 0);
+
+    return seq && (*seq & MODEL_ERR_SEEN) ? *seq : 0u;
+}
+
+/** The errno the file `ino` of `mnt` recorded since the cursor `*seen` last
+ * looked, with the cursor moved past it, else 0, as vfs.c's check. */
+int vfs_ino_err_check(struct vfs_mount *mnt, uint64_t ino, uint32_t *seen)
+{
+    uint32_t *seq = model_ino_seq(mnt, ino, 0);
+
+    return seq ? model_err_check(seq, seen) : 0;
+}
+
+/** Start the description `ofd`, whose mount and inode are set, at its
+ * file's sequence, as an open does. */
+static void model_open(struct open_file *ofd)
+{
+    ofd->ino_seen = vfs_ino_err_sample(ofd->vmnt, ofd->ino);
 }
 
 /** The cursors a description `ofd` of a file of `mnt` opened now starts
- * with, as `vfs_wb_err_sample` gives them: before an error nobody has
- * reported. The description joins those a failed pass marks. */
+ * with, as `vfs_wb_err_sample` and `vfs_ino_err_sample` give them: before
+ * an error nobody has reported. */
 static void model_sample(struct open_file *ofd, const struct vfs_mount *mnt)
 {
     mnt = vfs_mount_base(mnt);
@@ -793,14 +824,14 @@ static void model_sample(struct open_file *ofd, const struct vfs_mount *mnt)
 
 /** fsync(2) of the description `ofd`, as syscall_fs.c's `sync_entry` makes
  * it: the file's shared pages written back, then the file system's fsync
- * through the description's cursor, then the failure of an earlier pass
- * left on the description, taken whatever the answer, and the write-back's
- * own errno first. */
+ * through the description's cursor, then the file's own sequence through
+ * its cursor, moved whatever the answer, and the write-back's own errno
+ * first. */
 static int model_fsync(struct open_file *ofd)
 {
     int mapped = filemap_sync_file(ofd);
     int rc = vfs_fsync(ofd->vmnt, ofd->fhandle, &ofd->wb_seen);
-    int kept = fd_ofd_map_err_take(ofd);
+    int kept = vfs_ino_err_check(ofd->vmnt, ofd->ino, &ofd->ino_seen);
 
     return mapped != 0 ? mapped : rc != 0 ? rc : kept;
 }
@@ -1177,7 +1208,7 @@ static struct vm_file *writeback_file(struct vfs_mount *mnt, struct open_file *o
     e.ofd = ofd;
     ofd->vmnt = mnt;
     ofd->ino = 93;
-    model_nofds = 0;
+    model_nino_errs = 0;
     model_open(ofd);
     f = filemap_disk_shared(&e);
     check(f != NULL, "a shared writeback mapping is made");
@@ -1198,8 +1229,8 @@ static struct vm_file *writeback_file(struct vfs_mount *mnt, struct open_file *o
 
 /** A failed final write lets the mapping and its descriptor go and keeps
  * the dirty page, its bit and the record's own writer, opened at the
- * mapping, and records its failure for syncfs and on the description; fsync
- * writes the page, lets the writer and the record go, and reports the
+ * mapping, and records its failure for syncfs and in the file's sequence;
+ * fsync writes the page, lets the writer and the record go, and reports the
  * release's failure, which its own pass repaired, once, as Linux's fsync
  * reports the inode's error through the file's cursor (j168's finding 1). */
 static void writeback_retry_rows(void)
@@ -1227,8 +1258,8 @@ static void writeback_retry_rows(void)
               writers_open() == 1 && writer_mount == &mnt,
           "a failed final write frees the mapping and its descriptor and keeps its page, bit "
           "and the record's writer");
-    check(err_records == 0 && sb_records == 1 && ofd.map_err == EIO,
-          "and records its failure once for syncfs and on the description");
+    check(err_records == 0 && sb_records == 1 && model_ino_errno(&mnt, ofd.ino) == EIO,
+          "and records its failure once for syncfs and in the file's own sequence");
     disk_error = 0;
     check(model_fsync(&ofd) == -EIO && disk_bytes[0] == 0x65 && disk_bytes[PAGE_SIZE - 1] == 0x65,
           "fsync retries the stored bytes and reports the release's failure");
@@ -1362,17 +1393,22 @@ static void writeback_bounded_rows(void)
 }
 
 /** A retry by sync(2) alone frees what a failed release kept, the file's
- * record with it, and leaves the error on the description, which its next
- * fsync reports once: the case of j168's finding 1. */
+ * record with it, and leaves the error in the file's own sequence, which
+ * the next fsync of the description reports once: the case of j168's
+ * finding 1. A description opened after the failure and before anyone
+ * reported it reports it once too, and one opened after the report does
+ * not: the case of j169's finding 1. */
 static void writeback_sync_retry_rows(void)
 {
     struct vfs_mount mnt;
-    struct open_file ofd;
+    struct open_file ofd, between, after;
     struct vm_file *f;
     int released;
 
     k_memset(&mnt, 0, sizeof(mnt));
     k_memset(&ofd, 0, sizeof(ofd));
+    k_memset(&between, 0, sizeof(between));
+    k_memset(&after, 0, sizeof(after));
     f = writeback_file(&mnt, &ofd);
     if (!f) {
         return;
@@ -1382,6 +1418,9 @@ static void writeback_sync_retry_rows(void)
     vm_file_put(f);
     vm_file_reap();
     check(!maps && dshare_count == 1, "the failed final write keeps the file's record");
+    between.vmnt = &mnt;
+    between.ino = ofd.ino;
+    model_sample(&between, &mnt);
     disk_error = 0;
     filemap_sync_all();
     check(!maps && !model_dead && backing_releases == released + 1 && disk_bytes[0] == 0x65 &&
@@ -1391,6 +1430,13 @@ static void writeback_sync_retry_rows(void)
           "the mount");
     check(model_fsync(&ofd) == -EIO, "the next fsync reports the release's failure");
     check(model_fsync(&ofd) == 0, "and reports it once");
+    after.vmnt = &mnt;
+    after.ino = ofd.ino;
+    model_sample(&after, &mnt);
+    check(model_fsync(&between) == -EIO,
+          "a description opened after the failure, before its report, reports it");
+    check(model_fsync(&between) == 0, "once");
+    check(model_fsync(&after) == 0, "and one opened after the report does not");
 }
 
 /** A shared mapping of the file of `ofd` through the description `own`,
@@ -1411,8 +1457,8 @@ static struct vm_file *second_mapping(struct open_file *ofd, struct open_file *o
 }
 
 /**
- * A failed release records its failure for syncfs and on each description
- * of the file then open, and MS_SYNC after it, whose retry writes every
+ * A failed release records its failure for syncfs and in the file's own
+ * sequence, and MS_SYNC after it, whose retry writes every
  * store, reports it through the region's description, as Linux's msync
  * checks the file's cursor into the inode's error; the fsync of that
  * description and of a descriptor dup(2) or fork(2) made of it answer 0
