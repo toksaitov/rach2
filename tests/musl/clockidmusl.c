@@ -94,7 +94,7 @@ struct kts {
 #endif
 
 /* One tick, the granularity of the coarse and CPU clocks, in nanoseconds. */
-#define TICK_NS 1000000L
+#define TICK_NS 4000000L
 
 /* One count of the clock_t that times reports, USER_HZ's 100 a second. */
 #define CLOCK_T_NS 10000000L
