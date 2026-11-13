@@ -115,9 +115,9 @@ Faults this milestone found in another project's code, one section each, in the 
 ## libdrm's modetest reports DIRTYFB's error in place of SETCRTC's
 
 * Project: libdrm 2.4.124, Debian 13's `libdrm-tests`, whose `modetest` the GNU root stages; Rach2 keeps no copy of its source.
-* Fails: when `modetest -s` cannot set a mode, it prints `failed to set mode:` with the `errno` of a DRM_IOCTL_MODE_DIRTYFB made after the failed DRM_IOCTL_MODE_SETCRTC, so a driver without a dirty hook, such as bochs-drm on Linux or Rach2, reports `Function not implemented` (ENOSYS) whatever SETCRTC said. The call is in `set_mode` of `tests/modetest/modetest.c`; its line is missing from the records.
+* Fails: when `modetest -s` cannot set a mode, it prints `failed to set mode:` with the `errno` of a DRM_IOCTL_MODE_DIRTYFB made after the failed DRM_IOCTL_MODE_SETCRTC, so on a driver without a dirty hook, such as Rach2's bochs-drm, it reports `Function not implemented` (ENOSYS) whatever SETCRTC said. The call is in `set_mode` of `tests/modetest/modetest.c`; its line is missing from the records.
 * Found: 2026-11-13, the testing host's WSL, milestone 84, task 84-244: `machine.modetest.std-vga` on x86-64 printed `failed to set mode: Function not implemented` for both 1920x1080 modes, while a log line added to Rach2's SETCRTC showed it returning -12 (ENOMEM) from bochs's pin of the new framebuffer.
-* Reproduction: on a bochs-drm card, run `modetest -M bochs-drm -s CONNECTOR:#INDEX` for a mode whose frame does not fit in the video memory left free; it prints ENOSYS where SETCRTC failed with ENOMEM.
+* Reproduction: on Rach2's bochs-drm card, run `modetest -M bochs-drm -s CONNECTOR:#INDEX` for a mode whose frame does not fit in the video memory left free; it prints ENOSYS where SETCRTC failed with ENOMEM.
 * Evidence: the commit that places the console's bochs buffer from the bottom of video memory names the cause; the debug run's console is not kept.
 * Rach2: nothing in Rach2; the mode's failure is a result that `judge.py modes` compares with Debian's.
 * Status: unreported.
