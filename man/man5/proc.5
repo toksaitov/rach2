@@ -660,7 +660,8 @@ disk window's, and the file page cache's, the pages of ext2 files that
 .Xr read 2 ,
 exec and private mappings read, kept while memory is free.
 .Li MemAvailable
-is free memory plus both caches.
+is free memory plus both caches and
+.Li KReclaimable .
 .Li SwapCached
 is
 .Ql 0 kB ,
@@ -677,6 +678,9 @@ and
 .Li SwapFree
 are both
 .Ql 0 kB .
+.Li KReclaimable
+is the kernel heap's freed runs, kept mapped for reuse, which reclaim gives
+back.
 .Li Slab ,
 the last line, is the kernel heap's pages but the buffer cache's, which
 the heap holds, in kibibytes; BusyBox's nmeter reads it to count the memory

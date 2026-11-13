@@ -136,22 +136,33 @@ void kfree_pages(void *p, uint32_t count);
  * marked taken and never mapped: a guard, which no other allocation is
  * given, so an access that runs off the low end of the pages faults. A
  * kernel stack comes this way. The guard takes no frame. `count` is 1 to
- * 63, and the pages never come from the reserve. NULL, with a record, for
+ * 63, and the pages never come from the reserve. A guarded run of `count`
+ * pages given back and waiting to be unmapped is taken first, mapped and
+ * holding what its last owner left there. NULL, with a record, for
  * another count, or when the region has no free run of `count + 1` pages or
  * the frames run out. Freed with `kfree_guarded`.
  */
 void *kalloc_guarded(uint32_t count);
 
 /**
- * Give back what `kalloc_guarded` returned, and its guard page with it.
- * Pages with no guard below them are refused with a record and kept, since
- * clearing the page below would free another allocation's page.
+ * Give back what `kalloc_guarded` returned, and its guard page with it: the
+ * run waits mapped with its guard, as `kfree_pages` leaves a run, for the
+ * next guarded run of its length, and the guard comes free when the run is
+ * unmapped. Pages with no guard below them are refused with a record and
+ * kept, since clearing the page below would free another allocation's page,
+ * and so is a run that waits already, a second free of it.
  */
 void kfree_guarded(void *p, uint32_t count);
 
 /** Pages the heap holds now, and bytes in use inside them; either pointer
  * may be NULL. */
 void kheap_stats(uint32_t *pages, size_t *bytes);
+
+/** The pages among those the heap holds that its shrinker gives back, the
+ * kept runs and the runs that wait to be unmapped: Linux's
+ * NR_KERNEL_MISC_RECLAIMABLE, which /proc/meminfo counts in KReclaimable
+ * and MemAvailable. */
+uint32_t kheap_reclaimable(void);
 
 /** One size class of the heap, as /proc/slabinfo reports it. */
 struct kheap_class {

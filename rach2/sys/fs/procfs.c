@@ -3963,8 +3963,10 @@ static void ap_frames_as_kb(struct procfs_text *t, size_t frames)
  * The pool is the whole of what this machine manages, so MemTotal and MemFree
  * are the two counts outright. Buffers and Cached are what the buffer cache
  * and the page caches hold, the disk window's and the file page cache's,
- * which reclaim gives back under pressure, so
- * MemAvailable is the free count and the two together. SwapCached, which
+ * and KReclaimable the heap's freed runs it keeps mapped for reuse
+ * (`kheap_reclaimable`), all of which reclaim gives back under pressure, so
+ * MemAvailable is the free count and the three together, as Linux's
+ * si_mem_available adds its reclaimable kernel memory. SwapCached, which
  * IGT adds to Cached, is 0, as SwapTotal and SwapFree are, since nothing is
  * swapped. HeapPages and
  * HeapUsed are the kernel heap's pages and the bytes in use inside it, for a
@@ -3982,6 +3984,7 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     size_t free_frames = frame_free_count();
     uint32_t buffers = bcache_resident();
     uint32_t cached = pc_resident() + filecache_pages();
+    uint32_t kreclaim = kheap_reclaimable();
     uint32_t heap_pages = 0;
     size_t heap_bytes = 0;
 
@@ -3992,7 +3995,7 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     ap_str(t, "MemFree:        ");
     ap_frames_as_kb(t, free_frames);
     ap_str(t, "MemAvailable:   ");
-    ap_frames_as_kb(t, free_frames + buffers + cached);
+    ap_frames_as_kb(t, free_frames + buffers + cached + kreclaim);
     ap_str(t, "Buffers:        ");
     ap_frames_as_kb(t, buffers);
     ap_str(t, "Cached:         ");
@@ -4006,6 +4009,8 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     ap_str(t, "\n");
     ap_str(t, "SwapTotal:             0 kB\n");
     ap_str(t, "SwapFree:              0 kB\n");
+    ap_str(t, "KReclaimable:   ");
+    ap_frames_as_kb(t, kreclaim);
     ap_str(t, "Slab:           ");
     ap_frames_as_kb(t, heap_pages > buffers ? heap_pages - buffers : 0);
     return t->len;

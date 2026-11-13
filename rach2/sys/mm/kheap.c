@@ -106,12 +106,17 @@ static uint32_t kept_runs[KHEAP_KEEP_PAGES];
  * (`lazy_take`), KHEAP_LAZY_RUNS runs or KHEAP_LAZY_PAGES pages wait, an
  * allocation finds no room or no frame, or reclaim asks (`lazy_purge`, from
  * `release_run` and `kept_drain`); a run longer, or in the reserve, goes
- * back at once. */
+ * back at once. A guarded run waits with its guard, still taken, and only
+ * a guarded request of its length takes it back, as Linux's fork takes a
+ * cached kernel stack before it asks vmalloc for one (alloc_thread_stack_node
+ * and free_thread_stack, kernel/fork.c): a stack freed at each reap would
+ * otherwise hold its frames here while each fork mapped fresh ones. */
 #define KHEAP_LAZY_RUNS  64u
 #define KHEAP_LAZY_PAGES 512u
 struct lazy_run {
     uint32_t page;
     uint32_t count;
+    int guarded; /* the page below is its guard, taken and unmapped */
 };
 static struct lazy_run lazy[KHEAP_LAZY_RUNS];
 static uint32_t lazy_runs;                      /* the entries of `lazy` in use */
@@ -410,6 +415,10 @@ static uint32_t lazy_purge(void)
         }
         pages_held -= lazy[r].count;
         run_free(lazy[r].page, lazy[r].count);
+        if (lazy[r].guarded) {
+            page_set(lazy[r].page - 1u, 0);
+            ends_widen(lazy[r].page - 1u, lazy[r].page - 1u);
+        }
     }
     lazy_runs = 0;
     lazy_pages = 0;
@@ -424,14 +433,17 @@ static uint32_t lazy_purge(void)
  * pages are taken down from the region's top, and every page from
  * `high_free` up is taken, so a page there is the cache's (`high`,
  * `kalloc_cache_page`) and one below it the rest's, and neither takes the
- * other's. `heap_pages` when there is none. `heap_lock` is held.
+ * other's. A `guarded` request takes only a guarded run, which comes with
+ * its guard, and any other request only a run with none. `heap_pages` when
+ * there is none. `heap_lock` is held.
  */
-static uint32_t lazy_take(uint32_t count, int high)
+static uint32_t lazy_take(uint32_t count, int high, int guarded)
 {
     uint32_t r, page;
 
     for (r = lazy_runs; r-- > 0;) {
-        if (lazy[r].count == count && (lazy[r].page >= high_free) == (high != 0)) {
+        if (lazy[r].count == count && lazy[r].guarded == guarded &&
+            (guarded || (lazy[r].page >= high_free) == (high != 0))) {
             break;
         }
     }
@@ -447,12 +459,17 @@ static uint32_t lazy_take(uint32_t count, int high)
 /** Give a run back, the one way pages leave the heap, whoever allocated
  * them: into `lazy`, after a purge when it has no room, or at once for a
  * run longer than KHEAP_LAZY_PAGES or in the reserve, whose runs are few
- * and large. `heap_lock` is held. */
-static void release_run(uint32_t page, uint32_t count)
+ * and large. A `guarded` run's guard waits with it and comes free with its
+ * pages. `heap_lock` is held. */
+static void release_run(uint32_t page, uint32_t count, int guarded)
 {
     if (count > KHEAP_LAZY_PAGES || page >= reserve_first) {
         unmap_run(page, count);
         run_free(page, count);
+        if (guarded) {
+            page_set(page - 1u, 0);
+            ends_widen(page - 1u, page - 1u);
+        }
         return;
     }
     if (lazy_runs == KHEAP_LAZY_RUNS || lazy_pages + count > KHEAP_LAZY_PAGES) {
@@ -460,6 +477,7 @@ static void release_run(uint32_t page, uint32_t count)
     }
     lazy[lazy_runs].page = page;
     lazy[lazy_runs].count = count;
+    lazy[lazy_runs].guarded = guarded;
     lazy_runs++;
     lazy_pages += count;
 }
@@ -476,7 +494,7 @@ static uint32_t kept_drain(void)
             struct kept_run *k = kept[i];
 
             kept[i] = k->next;
-            release_run((uint32_t)(((uintptr_t)&k->hdr - KVA_HEAP) / PAGE_SIZE), i + 1u);
+            release_run((uint32_t)(((uintptr_t)&k->hdr - KVA_HEAP) / PAGE_SIZE), i + 1u, 0);
         }
         kept_runs[i] = 0;
     }
@@ -502,7 +520,7 @@ static uint32_t kept_shrink(struct mem_shrinker *s, uint32_t want, int may_sleep
  * kept runs. `heap_lock` is held. */
 static uint32_t take_pages_once(uint32_t count)
 {
-    uint32_t page = lazy_take(count, 0);
+    uint32_t page = lazy_take(count, 0, 0);
 
     if (page < heap_pages) {
         return page;
@@ -643,7 +661,7 @@ void *kalloc_contig(uint32_t count, uintptr_t *phys)
  * `heap_lock` is held. */
 static uint32_t cache_take(void)
 {
-    uint32_t page = lazy_take(1, 1);
+    uint32_t page = lazy_take(1, 1, 0);
 
     if (page < heap_pages) {
         return page;
@@ -685,18 +703,23 @@ void kfree_pages(void *p, uint32_t count)
         return;
     }
     flags = spin_lock_irqsave(&heap_lock);
-    release_run((uint32_t)((va - KVA_HEAP) / PAGE_SIZE), count);
+    release_run((uint32_t)((va - KVA_HEAP) / PAGE_SIZE), count, 0);
     spin_unlock_irqrestore(&heap_lock, flags);
 }
 
 /** The guard of a run of `count` pages and a guard below them, with the
- * pages mapped and the guard not yet marked taken; `heap_pages` when there is
- * no such run or no frames for it. `heap_lock` is held. */
+ * pages mapped and the guard not yet marked taken, or a guarded run waiting
+ * in `lazy`, whose guard is still marked; `heap_pages` when there is no such
+ * run or no frames for it. `heap_lock` is held. */
 static uint32_t guarded_take(uint32_t count)
 {
     uint32_t guard = heap_pages;
 
     if (count > 0 && count < KHEAP_RUN_LEAST) {
+        guard = lazy_take(count, 0, 1);
+        if (guard < heap_pages) {
+            return guard - 1u;
+        }
         guard = find_run(count + 1);
     }
     if (guard < heap_pages && map_run(guard + 1, count) != 0) {
@@ -727,10 +750,25 @@ void *kalloc_guarded(uint32_t count)
     return (void *)(KVA_HEAP + ((uintptr_t)guard + 1) * PAGE_SIZE);
 }
 
+/** Whether the run at `page` waits in `lazy`. `heap_lock` is held. */
+static int lazy_holds(uint32_t page)
+{
+    uint32_t r;
+
+    for (r = 0; r < lazy_runs; r++) {
+        if (lazy[r].page == page) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** A guard is a page below the reserve that is taken and has no mapping.
  * Below the first page of any other run is a mapped page, a free page or
  * the region's start: every taken page outside the reserve is mapped
- * except a guard, and the page above a guard begins the guard's own run. */
+ * except a guard, and the page above a guard begins the guard's own run.
+ * A run that waits in `lazy` keeps its guard, so a second free of it is
+ * found there and refused. */
 void kfree_guarded(void *p, uint32_t count)
 {
     uintptr_t va = (uintptr_t)p;
@@ -748,9 +786,12 @@ void kfree_guarded(void *p, uint32_t count)
         klog(KLOG_ERR, "kheap", "free of pages with no guard below them: %p", p);
         return;
     }
-    release_run(page, count);
-    page_set(page - 1, 0);
-    ends_widen(page - 1, page - 1);
+    if (lazy_holds(page)) {
+        spin_unlock_irqrestore(&heap_lock, flags);
+        klog(KLOG_ERR, "kheap", "second free of guarded pages: %p", p);
+        return;
+    }
+    release_run(page, count, 1);
     spin_unlock_irqrestore(&heap_lock, flags);
 }
 
@@ -902,7 +943,7 @@ void kfree(void *p)
             kept[count - 1] = k;
             kept_runs[count - 1]++;
         } else {
-            release_run((uint32_t)(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE), count);
+            release_run((uint32_t)(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE), count, 0);
         }
         spin_unlock_irqrestore(&heap_lock, flags);
         return;
@@ -923,7 +964,7 @@ void kfree(void *p)
         drop_class_page(hdr, hdr->cls);
         class_pages[hdr->cls]--;
         hdr->magic = 0;
-        release_run((uint32_t)(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE), 1);
+        release_run((uint32_t)(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE), 1, 0);
     }
     spin_unlock_irqrestore(&heap_lock, flags);
 }
@@ -936,6 +977,18 @@ void kheap_stats(uint32_t *pages, size_t *bytes)
     if (bytes) {
         *bytes = bytes_used;
     }
+}
+
+uint32_t kheap_reclaimable(void)
+{
+    uint32_t flags = spin_lock_irqsave(&heap_lock);
+    uint32_t i, pages = lazy_pages;
+
+    for (i = 0; i < KHEAP_KEEP_PAGES; i++) {
+        pages += kept_runs[i] * (i + 1u);
+    }
+    spin_unlock_irqrestore(&heap_lock, flags);
+    return pages;
 }
 
 int kheap_class(uint32_t cls, struct kheap_class *out)

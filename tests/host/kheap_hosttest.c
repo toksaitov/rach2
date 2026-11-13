@@ -600,6 +600,42 @@ static void lazy_rows(void)
           "a run longer than the batch goes back at once, with a flush for each 16 pages");
 }
 
+/**
+ * A guarded run given back, a kernel stack's, waits with its guard and is
+ * counted reclaimable; a second free of it is refused, a plain run of its
+ * length passes it, and the next guarded run of its length takes it back.
+ * Its guard comes free when it is unmapped.
+ */
+static void guarded_lazy_rows(void)
+{
+    unsigned base, was;
+    char *a, *b, *c;
+
+    frames_out = 0;
+    kheap_init(SMALL_REGION);
+    base = frames_out;
+    a = kalloc_guarded(4);
+    was = flushes;
+    kfree_guarded(a, 4);
+    CHECK(a != 0 && frames_out == base + 4 && flushes == was && kheap_reclaimable() == 4 &&
+              mapped[region_page((uintptr_t)a)] && page_taken(region_page((uintptr_t)a) - 1u),
+          "a guarded run given back waits mapped with its guard, and is counted reclaimable");
+    klogs = 0;
+    kfree_guarded(a, 4);
+    CHECK(klogs == 1 && lazy_runs == 1, "and a second free of it is refused");
+    b = kalloc_pages(4, 0);
+    CHECK(b != 0 && b != a && frames_out == base + 8, "a plain run of its length passes it");
+    c = kalloc_guarded(4);
+    CHECK(c == a && frames_out == base + 8 && kheap_reclaimable() == 0,
+          "and the next guarded run of its length takes it back");
+    kfree_pages(b, 4);
+    kfree_guarded(c, 4);
+    settle();
+    CHECK(frames_out == base && !page_taken(region_page((uintptr_t)a) - 1u) &&
+              kheap_reclaimable() == 0,
+          "and its guard comes free when the run is unmapped");
+}
+
 /** With room below the reserve, a large run is taken there, and the
  * reserve stays whole. */
 static void room_rows(void)
@@ -737,6 +773,7 @@ int main(void)
     guard_rows();
     kept_rows();
     lazy_rows();
+    guarded_lazy_rows();
     ends_rows();
     size_rows();
     region_rows();
