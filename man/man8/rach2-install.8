@@ -74,6 +74,14 @@ The
 .Fl -source Ar DIR
 option reads the image and manifest from an already mounted directory.
 .Pp
+One run works at a time: each takes an exclusive
+.Xr flock 2
+lock on
+.Pa /tmp/rach2-install.lock
+before it looks at a disk, and a second run started meanwhile stops at once
+and says so.
+The lock goes with the run however it ends.
+.Pp
 All questions precede the first write.
 The final question confirms the disk to overwrite.
 Invalid disk, password, account name, key-file and recovery-key answers

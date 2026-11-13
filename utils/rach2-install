@@ -239,6 +239,15 @@ done
 [ -z "$update_i915" ] || [ -n "$update_image" ] ||
     die "--i915 requires --update"
 
+# One run at a time. Every mode mounts at the same points, and an update
+# keeps its copy of a root's homes in one directory: a second run would mount
+# over the first's volumes, or remove that copy while the first still needs
+# it. The lock is flock(2)'s on descriptor 9, which the kernel drops when the
+# run ends however it ends; /tmp is in RAM, so a power cut takes it too.
+LOCK=/tmp/rach2-install.lock
+{ exec 9> "$LOCK"; } 2>/dev/null || die "the lock $LOCK could not be opened"
+flock -n 9 || die "another $ME is running; let it end and run this again"
+
 # ---- the disks this machine has ----
 #
 # `/proc/disk` names each registered disk on a `disk` line and describes it on
