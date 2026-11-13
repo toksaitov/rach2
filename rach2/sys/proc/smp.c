@@ -835,7 +835,7 @@ static uint32_t entry_of(const struct process *p, uint32_t *cmd)
 
 void bkl_note_switch(const struct process *old, const struct process *next, int yielded)
 {
-    struct bkl_switch_count *spare = NULL, *c;
+    struct bkl_switch_count *spare = NULL, *c = NULL;
     uint32_t cmd;
     int i, key;
 
