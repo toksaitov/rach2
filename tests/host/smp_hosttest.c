@@ -313,14 +313,22 @@ void sched_account_start(void)
 {}
 
 /** Nothing: no row places a wake. */
-void sched_cache_join(uint64_t shared)
+void sched_cache_join(uint64_t shared, uint64_t core)
 {
     (void)shared;
+    (void)core;
 }
 
 /** The processor alone: no row reads the cache's sharing. */
 uint64_t cpuinfo_llc_shared(int cpu)
 {
+    return (uint64_t)1 << cpu;
+}
+
+/** The processor alone: no row reads the topology. */
+uint64_t cpuinfo_siblings(int cpu, int level)
+{
+    (void)level;
     return (uint64_t)1 << cpu;
 }
 

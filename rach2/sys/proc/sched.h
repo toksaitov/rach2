@@ -67,24 +67,35 @@ int sched_is_enabled(void);
 void schedule(void);
 
 /**
- *  Make `p`, blocked or stopped, ready to run, on the queue of the processor
- * it last ran on, unless that one is busy and another it may run on is idle,
- * or its affinity no longer has it; a process still current on its processor,
- * woken before its switch away, stays there. A real-time `p` that does not
- * outrank the real-time thread running there, or that thread may run nowhere
- * else, goes instead to the processor it may run on whose highest real-time
- * priority, of its current thread and its queue, is lowest, when it outranks
- * every thread there. Its processor is kicked so that it selects now rather
- * than at its tick when it is idle, halted in place with `p` current, or runs
- * a thread `p` outranks, whose `need_resched` is set, so that the interrupt
- * switches it in user mode and a call on that processor switches at its exit.
- * An idle target records its reschedule request for the idle loop, which
- * checks it before halting. The state is not tested again: this is for a new
- * thread, and for a stopped one, which only the big lock's holder stops and
- * makes ready. A blocked thread, which wakers without the big lock may race
- * for, is woken by `sched_wake_blocked`, `sched_wake_signal` or
- * `sched_wake_due`, which test the state under the run queues' lock, so that
- * one of them makes it ready.
+ * Make `p`, blocked or stopped, ready to run, on the queue of the processor
+ * Linux's choice for a wake gives it (`sched_wake_choose`): of the waker's
+ * processor and the one `p` last ran on, the target, by which is idle and
+ * shares the other's last-level cache, or by their loads; then the target
+ * when it is idle, else the last one when it shares the target's cache and
+ * is idle, else an idle processor sharing the target's cache, one of a
+ * core whose SMT siblings are all idle first, else the target. A processor
+ * its affinity does not have gives way to an idle one it has, else to the
+ * first it has; a process still current on its processor, woken before its
+ * switch away, stays there. A real-time `p` that does not outrank the
+ * real-time thread running there, or that thread may run nowhere else, goes
+ * instead to the processor it may run on whose highest real-time priority,
+ * of its current thread and its queue, is lowest, when it outranks every
+ * thread there. Its processor is kicked so that it selects now rather than
+ * at its tick when it is idle, halted in place with `p` current, or runs a
+ * thread `p` outranks, or runs an ordinary thread that ordinary `p` should
+ * run before by Linux's check_preempt_wakeup_fair, which is every one but
+ * a SCHED_BATCH or SCHED_IDLE `p`, or a SCHED_IDLE `p` over a SCHED_IDLE
+ * thread (`sched_wake_preempt`). The thread there has its `need_resched`
+ * set, once, so that the interrupt switches it in user mode and a call on
+ * that processor switches at its exit; a kernel thread is sent no kick and
+ * switches at its next sleep or service point. An idle target records its
+ * reschedule request for the idle loop, which checks it before halting.
+ * The state is not tested again: this is for a new thread, and for a
+ * stopped one, which only the big lock's holder stops and makes ready. A
+ * blocked thread, which wakers without the big lock may race for, is woken
+ * by `sched_wake_blocked`, `sched_wake_signal` or `sched_wake_due`, which
+ * test the state under the run queues' lock, so that one of them makes it
+ * ready.
  */
 void sched_make_ready(process_t *p);
 
@@ -429,11 +440,11 @@ extern int sched_cycle_account;
 void sched_account_start(void);
 
 /** Record that this processor, now online, shares its last-level cache
- * with the processors of `shared`, a bit each, and they with it, for the
- * placement of a wake (`sched_wake_choose`). Called by each application
- * processor as it comes online; the boot processor learns its peers from
- * theirs. */
-void sched_cache_join(uint64_t shared);
+ * with the processors of `shared` and its core with those of `core`, its
+ * SMT siblings, a bit each, and they with it, for the placement of a wake
+ * (`sched_wake_choose`). Called by each application processor as it comes
+ * online; the boot processor learns its peers from theirs. */
+void sched_cache_join(uint64_t shared, uint64_t core);
 
 /** Fold the processes running or ready to run into the load averages every
  * five seconds and a tick (`sched_loadavg`). Called by the boot

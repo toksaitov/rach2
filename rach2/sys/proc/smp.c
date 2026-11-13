@@ -2203,7 +2203,7 @@ static void smp_cpu_main(int cpu)
     }
     sched_account_start();
     self->online = 1;
-    sched_cache_join(cpuinfo_llc_shared(cpu));
+    sched_cache_join(cpuinfo_llc_shared(cpu), cpuinfo_siblings(cpu, CPUINFO_CORE));
     bkl_take(1);
     (void)bkl_drop();
     sched_idle_loop();
