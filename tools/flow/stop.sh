@@ -7,32 +7,34 @@
 #
 # It stops each loop that `workers` lists and each other loop with a state
 # directory under build/flow of this clone's main working tree: it leaves
-# STATE/stop, sends TERM to the session's supervisor, the session.pl whose
-# command line names STATE/session, which stops the session's group, TERM and
-# then KILL half a minute later, and exits once the group is gone, and ends
-# the loop itself. A group that STATE/session names and that has no
-# supervisor is not signalled, since its number may now be another's; it is
-# a line `stop: left: STATE: ...`, as is a supervisor that has not ended in
-# ninety seconds and a loop whose host did not answer, and each counts in
-# the final count and status. It then stops what the sessions
-# left running on the Mac, in WSL and on Windows: QEMU guests, test runs, the
-# worker scripts and the board's watches, selecting and signalling each in
-# one pass, so that no process number waits between the two. On Windows it
-# looks only at programs under D:\rach2 and at the Job Objects of release
-# runs' parts, so that Hyper-V and its machines are never touched: winclean.sh
-# -a first makes the current run none, so that a part's start still on its
-# way starts nothing, and then stops each release run that `winclean.sh -l`
-# lists from Windows' output directory, by its parts' jobs, which end
-# everything the parts started, and removes the run's scratch there; then
-# each other program under D:\rach2 is stopped through its own handle. Then
-# it brings the board up to date, runs sweep.sh, with -a unless a release
-# still runs, and prints what is still there: a line `stop: left: MACHINE:
-# WHAT` for each process, each job and each claim of the admission ledger,
-# and a line `stop: left: MACHINE: unknown: WHY` for each look that cannot
-# be read and each list or stop on Windows that failed. It ends with
-# `stop: everything is stopped` and status 0, or `stop: N left` and status
-# 1. dev-log/84-locks/84-111-lifecycle.md gives the model of a release's
-# Windows parts and WSL claims that this follows.
+# STATE/stop, which ends the loop once its session has ended, and
+# STATE/session.stop, on which the session's supervisor, the session.pl whose
+# command line names STATE/session, stops the session's group, TERM and then
+# KILL half a minute later, and exits once the group is gone; it then waits for
+# both to end, signalling neither. A group that STATE/session names and that has
+# no supervisor is not signalled, since its number may now be another's; it is a
+# line `stop: left: STATE: ...`, as is a supervisor or a loop that has not ended
+# in ninety seconds and a loop whose host did not answer, and each counts in the
+# final count and status. It then stops what the sessions left running on the
+# Mac, in WSL and on Windows: QEMU guests, test runs and the board's watches,
+# but never a loop, which it only lists. In WSL procs.pl reads each from /proc
+# and signals it through a pidfd, which names that process and no other; on the
+# Mac, where no process holds them and there is no pidfd, each is selected and
+# signalled in one pass, so that no process number waits between the two. On
+# Windows it looks only at programs under D:\rach2 and at the Job Objects of
+# release runs' parts, so that Hyper-V and its machines are never touched:
+# winclean.sh -a first makes the current run none, so that a part's start still
+# on its way starts nothing, and then stops each release run that `winclean.sh
+# -l` lists from Windows' output directory, by its parts' jobs, which end
+# everything the parts started, and removes the run's scratch there; then each
+# other program under D:\rach2 is stopped through its own handle. Then it brings
+# the board up to date, runs sweep.sh, with -a unless a release still runs, and
+# prints what is still there: a line `stop: left: MACHINE: WHAT` for each
+# process, each job and each claim of the admission ledger, and a line `stop:
+# left: MACHINE: unknown: WHY` for each look that cannot be read and each list
+# or stop on Windows that failed. It ends with `stop: everything is stopped` and
+# status 0, or `stop: N left` and status 1. dev-log/84-locks/84-111-lifecycle.md
+# gives the model of a release's Windows parts and WSL claims that this follows.
 #
 # -n changes nothing and prints only what runs now, in the same form. A running
 # release is left alone and counts as left, since it costs hours to repeat:
@@ -41,11 +43,13 @@
 # the copy of -p's preparation. A release runs while STATE/pid or
 # STATE/windows.run of build/flow/release names a process with the start the
 # file records that runs tools/flow/release.sh; a command line that merely
-# holds release.sh is never stopped. -r stops the release too, with TERM to
-# each such process and to the group of its Mac run while that group's leader
-# is the run's release.sh -m, whose traps stop its machines and end its
-# claims, and waits up to ten minutes for them to end before it stops the
-# rest; a release still running then stays, as without -r. `release.sh -r`
+# holds release.sh is never stopped. -r stops the release too, through the
+# hold.pl that holds each part: it leaves the stop of STATE/held/release, of
+# STATE/held/windows and of build/machines/mac/held, on which each hold.pl
+# sends TERM to the release, to the -a Windows run's group and to the Mac
+# run's group, whose traps stop its machines and end its claims, and waits
+# up to ten minutes for them to end before it stops the rest; a release
+# still running then stays, as without -r. `release.sh -r`
 # goes on from it later. The session of a claim of WSL's admission that a
 # Windows run holds, whose leader is the perl that runs LOCKS/ID.KIND.N.pl
 # with `run`, LOCKS being build/flow/claims of the owner's clone in WSL, is
@@ -67,39 +71,39 @@ RUNNERS='actions.runner.toksaitov-rach2.rach2-ci-1.service actions.runner.toksai
 WHAT='qemu-system|/worker\.sh|board\.sh watch|tests/run|/etude |/rach2-etude'
 
 # halt is the script that stops the loop whose state directory is its
-# argument, relative to the home directory or absolute. The session is
-# signalled only through its supervisor, which run_session in lib.sh starts as
-# `perl STATE/run/session.pl STATE/session ...`, STATE being absolute as the
-# loop makes it, and which stops the group it made while the group's leader,
-# its anchor, is its unreaped child, and removes STATE/session once the
-# group is gone. The anchor has the supervisor's command line and ignores
-# the TERM. The wait counts ninety seconds, which covers the TERM, thirty
-# turns and the KILL.
+# argument, relative to the home directory or absolute. Nothing in it sends
+# a signal. The session is stopped only through its supervisor, which
+# run_session in lib.sh starts as `perl STATE/run/session.pl STATE/session
+# ...`, STATE being absolute as the loop makes it, and which, once
+# STATE/session.stop exists, stops the group it made while the group's
+# leader, its anchor, is its unreaped child, and removes STATE/session once
+# the group is gone. The anchor has the supervisor's command line. The loop
+# ends by itself once STATE/stop exists and its session has ended, within
+# five seconds of a wait. The wait counts ninety seconds, which covers the
+# TERM, thirty turns, the KILL and the loop's end.
 halt='
 st=$1
 case $st in "~"*) st=$HOME${st#"~"} ;; esac
 [ -d "$st" ] || exit 0
 st=$(cd "$st" && pwd) || exit 0
-touch "$st/stop"
+touch "$st/stop" "$st/session.stop"
 supervisor="/session\.pl $st/session "
-if pkill -TERM -f "$supervisor" 2> /dev/null; then
-    i=0
-    while pgrep -f "$supervisor" > /dev/null 2>&1 && [ "$i" -lt 90 ]; do
-        sleep 1
-        i=$((i + 1))
-    done
-    if pgrep -f "$supervisor" > /dev/null 2>&1; then
-        echo "stop: left: $st: its session.pl has not ended in ninety seconds"
-    else
-        echo "stop: the session of $st ended"
-    fi
+loop="$st/run/worker\.sh"
+i=0
+while { pgrep -f "$supervisor" || pgrep -f "$loop"; } > /dev/null 2>&1 && [ "$i" -lt 90 ]; do
+    sleep 1
+    i=$((i + 1))
+done
+group=$(cat "$st/session" 2> /dev/null)
+if pgrep -f "$supervisor" > /dev/null 2>&1; then
+    echo "stop: left: $st: its session.pl has not ended in ninety seconds"
+elif [ -n "$group" ] && kill -0 -"$group" 2> /dev/null; then
+    echo "stop: left: $st: process group $group, which $st/session names, has no session.pl; a person checks it"
+elif pgrep -f "$loop" > /dev/null 2>&1; then
+    echo "stop: left: $st: its loop has not ended in ninety seconds"
 else
-    group=$(cat "$st/session" 2> /dev/null)
-    if [ -n "$group" ] && kill -0 -"$group" 2> /dev/null; then
-        echo "stop: left: $st: process group $group, which $st/session names, has no session.pl; a person checks it"
-    fi
+    echo "stop: the loop of $st ended"
 fi
-pkill -f "$st/run/worker.sh" 2> /dev/null
 exit 0
 '
 
@@ -211,22 +215,10 @@ lstart()
     ps -o lstart= -p "$1" 2> /dev/null | tr -s ' ' | sed 's/^ //; s/ $//'
 }
 
-# macrun: print the process group of the release's run on the Mac that
-# build/machines/mac/run names, while its leader is the release.sh -m of
-# that run (G12).
-macrun()
-{
-    mr_pg='' mr_id=''
-    [ ! -f "$top/build/machines/mac/run" ] || read -r mr_pg mr_id < "$top/build/machines/mac/run"
-    [ -n "$mr_pg" ] && [ -n "$mr_id" ] || return 0
-    case $(ps -o command= -p "$mr_pg" 2> /dev/null) in
-        *tools/flow/release.sh*" -m $mr_id "*) echo "$mr_pg" ;;
-    esac
-}
-
 # mac_procs [kill]: print a line `mac: PID ARGS` for each process on the Mac
 # that WHAT names, and with `kill` send it TERM as it is read, so that no
-# number waits between the selection and the signal (G19). A command line
+# number waits between the selection and the signal (G19), but a loop,
+# which halt ends, and which no signal reaches. A command line
 # that merely holds release.sh is never one (G12). Without -r, while a
 # release runs, the group of its Mac run and every descendant of that group,
 # such as etude's held commands, which have groups of their own, do not
@@ -238,7 +230,7 @@ mac_procs()
         spare=$(cut -d ' ' -f 1 "$top/build/machines/mac/run" 2> /dev/null)
     # WHAT goes in the environment, so that awk's own command line holds
     # none of it.
-    ps -axo pid=,ppid=,pgid=,command= | WHAT=$WHAT awk -v g="$spare" '
+    ps -axo pid=,ppid=,pgid=,command= | WHAT=$WHAT awk -v g="$spare" -v k="${1-}" '
         {
             pid[NR] = $1; pp[NR] = $2; pg[NR] = $3
             c = $0
@@ -260,7 +252,8 @@ mac_procs()
                 } while (more)
             }
             for (i = 1; i <= NR; i++)
-                if (!(pid[i] in s) && cmd[i] ~ ENVIRON["WHAT"] && cmd[i] !~ /grep|stop\.sh|release\.sh/)
+                if (!(pid[i] in s) && cmd[i] ~ ENVIRON["WHAT"] && cmd[i] !~ /grep|stop\.sh|release\.sh/ &&
+                    !(k == "kill" && cmd[i] ~ /\/worker\.sh/))
                     print pid[i], cmd[i]
         }' | while read -r pid args; do
         [ "${1-}" != kill ] || kill "$pid" 2> /dev/null
@@ -269,37 +262,36 @@ mac_procs()
 }
 
 # wsl_procs [kill]: print a line `wsl: PID USER ARGS` for each process in WSL
-# that WHAT names, and with `kill` signal it as it is read (G19). A command
-# line that merely holds release.sh is never one (G12). The session of a
-# claim of WSL's admission never counts: each session whose leader, in the
-# same reading of ps, is the perl that runs LOCKS/ID.KIND.N.pl with `run`, as
-# release.sh's claim_start starts it (G15). Without -r, while a release runs,
-# the GitHub runners' jobs and the copy of -p's preparation are its own and
-# do not count.
+# that WHAT names, and with `kill` send it TERM, but a loop, as procs.pl
+# does: through a pidfd opened before the process was read, which names that
+# process and no other (G19). A command line that merely holds release.sh is
+# never one (G12). The session of a claim of WSL's admission never counts:
+# each session whose leader is the perl that runs LOCKS/ID.KIND.N.pl with
+# `run`, as release.sh's claim_start starts it (G15). Without -r, while a
+# release runs, the GitHub runners' jobs and the copy of -p's preparation
+# are its own and do not count.
 wsl_procs()
 {
     {
         echo "release='$release' live='$(releases | head -n 1)' copy='$prepare' mode='${1-}'"
         echo "what='$WHAT'"
+        echo "procs() { perl - \"\$@\" << 'END_OF_PROCS'"
+        cat "$here/procs.pl"
+        echo 'END_OF_PROCS'
+        echo '}'
         cat << 'END'
-p=$(ps -eo pid=,sid=,user=,args=) || exit 1
-claims=" $(printf '%s\n' "$p" |
-    awk '$1 == $2 && $4 == "perl" && $6 == "run" &&
-        $5 ~ /\/build\/flow\/claims\/[^\/]+\.(claim|hold)\.[0-9]+\.pl$/ { print $2 }' | tr -s '\n' ' ') "
-printf '%s\n' "$p" | grep -E "$what" | grep -v -E 'grep|stop\.sh|release\.sh' |
-    while read -r pid sid user args; do
-        case $claims in *" $sid "*) continue ;; esac
-        if [ -z "$release" ]; then
-            [ "$user" != ghrunner ] || continue
-            if [ -n "$live" ]; then
-                case $(readlink "/proc/$pid/cwd" 2> /dev/null) in
-                    "$copy" | "$copy"/*) continue ;;
-                esac
-            fi
-        fi
-        [ "$mode" != kill ] || kill "$pid" 2> /dev/null
-        echo "wsl: $pid $user $args"
-    done
+set -- -c -e "$what"
+if [ "$mode" = kill ]; then
+    set -- "$@" -k -v 'grep|stop\.sh|release\.sh|/worker\.sh'
+else
+    set -- "$@" -v 'grep|stop\.sh|release\.sh'
+fi
+if [ -z "$release" ]; then
+    set -- "$@" -u ghrunner
+    [ -z "$live" ] || set -- "$@" -D "$copy"
+fi
+out=$(procs "$@") || exit 1
+[ -z "$out" ] || printf '%s\n' "$out" | sed 's/^/wsl: /'
 END
     } | wsl
 }
@@ -457,10 +449,11 @@ if [ -n "$dry" ]; then
 fi
 loops
 if [ -n "$release" ]; then
-    pids=$(releases) group=$(macrun)
-    # shellcheck disable=SC2086 # the ids are a word each
-    [ -z "$pids" ] || kill -TERM $pids 2> /dev/null
-    [ -z "$group" ] || kill -TERM -"$group" 2> /dev/null
+    # Each hold.pl sends TERM to what it holds once its stop exists.
+    for h in "$top/build/flow/release/held/release" "$top/build/flow/release/held/windows" \
+        "$top/build/machines/mac/held"; do
+        [ ! -d "$h" ] || touch "$h/stop"
+    done
     i=0
     while [ -n "$(releases)" ] && [ "$i" -lt 120 ]; do
         sleep 5
