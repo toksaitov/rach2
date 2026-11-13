@@ -503,11 +503,11 @@ static void step_clock(int64_t ns)
     timerfd_clock_was_set();
 }
 
-/** An absolute timer of real time for 2 s, armed at 1 s: a step forward
- * past it expires it at the next tick, and a step back of half a second
- * moves its tick to 2500 at the step, before any tick, so that the row needs
- * timerfd_clock_was_set's recount and not only expire's own check of the
- * clock, and keeps it waiting to 2.5 s. A relative one of a second runs on
+/** An absolute timer of real time for 2 s, armed at 1 s, tick TICK_HZ: a step
+ * forward past it expires it at the next tick, and a step back of half a second
+ * moves its tick to 2.5 s at the step, before any tick, so that the row needs
+ * timerfd_clock_was_set's recount and not only expire's own check of the clock,
+ * and keeps it waiting to 2.5 s. A relative one of a second runs on
  * CLOCK_MONOTONIC and its tick does not move at the step, as Linux's
  * clock_was_set retriggers only the real-time base. */
 static void step_rows(void)
@@ -517,32 +517,35 @@ static void step_rows(void)
     uint64_t due;
 
     reset();
+    kernel_ticks = TICK_HZ;
     timer.clock = CLOCK_REALTIME;
     model_phase_ns = 0;
     CHECK(arm(&timer, TFD_TIMER_ABSTIME, &at2) == 0, "an absolute timer of real time arms");
     step_clock(2 * (int64_t)NS_PER_SEC);
-    tick(1001);
+    tick(TICK_HZ + 1u);
     CHECK(timer.count == 1 && !timer.armed, "a step forward past its time expires it at once");
 
     reset();
+    kernel_ticks = TICK_HZ;
     timer.clock = CLOCK_REALTIME;
     model_phase_ns = 0;
     CHECK(arm(&timer, TFD_TIMER_ABSTIME, &at2) == 0, "an absolute timer of real time arms");
     step_clock(-(int64_t)NS_PER_SEC / 2);
-    CHECK(timer.due == 2500u, "a step back moves its tick to 2.5 s at the step");
+    CHECK(timer.due == 5u * TICK_HZ / 2u, "a step back moves its tick to 2.5 s at the step");
     tick(2u * TICK_HZ);
     CHECK(timer.count == 0 && timer.armed, "a step back keeps it waiting past its old tick");
     tick(5u * TICK_HZ / 2u);
     CHECK(timer.count == 1, "until the clock reaches its time again");
 
     reset();
+    kernel_ticks = TICK_HZ;
     timer.clock = CLOCK_REALTIME;
     model_phase_ns = 0;
     CHECK(arm(&timer, 0, &in1) == 0, "a relative timer of real time arms");
     due = timer.due;
     step_clock(5 * (int64_t)NS_PER_SEC);
     CHECK(timer.due == due, "a step leaves its tick where it was");
-    tick(1001);
+    tick(TICK_HZ + 1u);
     CHECK(timer.count == 0 && timer.armed, "a step does not move it");
     tick(2u * TICK_HZ);
     CHECK(timer.count == 1, "it expires a second after its arm by time since boot");
@@ -561,16 +564,23 @@ static void open_entry(int nonblock)
 }
 
 /** Arm `timer` from `s` as a timerfd of real time with TFD_TIMER_ABSTIME and
- * TFD_TIMER_CANCEL_ON_SET, as tick 1000 begins, behind a descriptor that is
+ * TFD_TIMER_CANCEL_ON_SET, as tick `at` begins, behind a descriptor that is
  * nonblocking with `nonblock`. */
-static void cancel_arm(const struct setting *s, int nonblock)
+static void cancel_arm_at(const struct setting *s, int nonblock, uint64_t at)
 {
     reset();
+    kernel_ticks = at;
     timer.clock = CLOCK_REALTIME;
     model_phase_ns = 0;
     open_entry(nonblock);
     CHECK(arm(&timer, TFD_TIMER_ABSTIME | TFD_TIMER_CANCEL_ON_SET, s) == 0,
           "a timerfd canceled by a setting of the clock arms");
+}
+
+/** `cancel_arm_at` as tick 1000 begins. */
+static void cancel_arm(const struct setting *s, int nonblock)
+{
+    cancel_arm_at(s, nonblock, 1000);
 }
 
 /** Whether a poll finds the timerfd readable. */
@@ -624,25 +634,25 @@ static void cancel_refused_rows(void)
           "a step there and back cancels it, as the first step did");
 }
 
-/** A timerfd canceled by a setting of the clock, every tick from 1.001 s,
- * expired at tick 1001 and then stepped: with nothing between, its canceled
- * read leaves it disarmed, and it reports no time left and its interval, as
- * Linux's stopped timer does (fs/timerfd.c:286-289, 567-568); with
+/** A timerfd canceled by a setting of the clock, every tick from a second and a
+ * tick, expired at that tick and then stepped: with nothing between, its
+ * canceled read leaves it disarmed, and it reports no time left and its
+ * interval, as Linux's stopped timer does (fs/timerfd.c:286-289, 567-568); with
  * timerfd_gettime between, it runs on, since gettime started it again
  * (fs/timerfd.c:552-565). One at 2 s every second, expired at 2 s and then
  * stepped back to 1.5 s, stays stopped at 2 s until timerfd_gettime, which
- * forwards it against the clock as set: a time still ahead moves nothing
- * and takes back the expiration it counted, as hrtimer_forward_now's 0
- * less one does (kernel/time/hrtimer.c:1046-1079), so gettime reports half
- * a second and the timer expires again at 2 s, after the canceled read. */
+ * forwards it against the clock as set: a time still ahead moves nothing and
+ * takes back the expiration it counted, as hrtimer_forward_now's 0 less one
+ * does (kernel/time/hrtimer.c:1046-1079), so gettime reports half a second and
+ * the timer expires again at 2 s, after the canceled read. */
 static void cancel_periodic_rows(void)
 {
     struct setting every = {0, NS_PER_TICK, 1, NS_PER_TICK};
     struct setting at2 = {1, 0, 2, 0};
     struct setting got;
 
-    cancel_arm(&every, 1);
-    tick(1001);
+    cancel_arm_at(&every, 1, TICK_HZ);
+    tick(TICK_HZ + 1u);
     CHECK(timer.count == 1, "the periodic timer expires");
     step_clock((int64_t)NS_PER_SEC);
     CHECK(timerfd_read(&entry, (char *)user, 8) == -ECANCELED, "its read fails with ECANCELED");
@@ -651,25 +661,25 @@ static void cancel_periodic_rows(void)
     CHECK(got.vsec == 0 && got.vnsec == 0 && got.isec == 0 && got.insec == NS_PER_TICK,
           "it reports no time left and its interval");
 
-    cancel_arm(&every, 1);
-    tick(1001);
+    cancel_arm_at(&every, 1, TICK_HZ);
+    tick(TICK_HZ + 1u);
     current_setting(&timer, &got);
     step_clock((int64_t)NS_PER_SEC);
     CHECK(timerfd_read(&entry, (char *)user, 8) == -ECANCELED, "its read fails with ECANCELED");
     CHECK(timer.armed && timer.count == 0, "a timer timerfd_gettime touched runs on");
-    tick(1002);
+    tick(TICK_HZ + 2u);
     CHECK(timer.count != 0, "and expires at the next tick");
 
-    cancel_arm(&at2, 1);
-    tick(2000);
+    cancel_arm_at(&at2, 1, TICK_HZ);
+    tick(2u * TICK_HZ);
     CHECK(timer.count == 1 && timer.expired, "a timer every second from 2 s expires at 2 s");
     step_clock(-(int64_t)NS_PER_SEC / 2);
     current_setting(&timer, &got);
     CHECK(got.vsec == 0 && got.vnsec == NS_PER_SEC / 2 && timer.count == 0,
           "after a step back to 1.5 s, timerfd_gettime reports the half second to 2 s");
     CHECK(timerfd_read(&entry, (char *)user, 8) == -ECANCELED, "its read fails with ECANCELED");
-    CHECK(timer.armed && timer.due == 2500u, "and it runs on to 2 s, at tick 2500");
-    tick(2500);
+    CHECK(timer.armed && timer.due == 5u * TICK_HZ / 2u, "and it runs on to 2 s, half a second on");
+    tick(5u * TICK_HZ / 2u);
     CHECK(timer.count == 1, "where it expires again");
     model_phase_ns = NS_PER_TICK / 2;
 }

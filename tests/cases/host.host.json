@@ -1446,6 +1446,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "timerfd250",
+          "checks": "tests/host/timerfd250_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "tlb",
           "checks": "tests/host/tlb_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
