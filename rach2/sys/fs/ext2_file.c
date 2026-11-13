@@ -1560,11 +1560,13 @@ static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_o
  * policy (`ext2_mark_error`), so that errors=panic stops the kernel, as Linux's
  * `ext2_fsync` reports one to `ext2_error` (fs/ext2/file.c:161); a failure
  * of an earlier write-back, which the mount records, `vfs_fsync` reports
- * once to each description. The call takes no node lock, as Linux's takes
- * none (`ext2_fsync` and `generic_buffers_fsync`,
- * fs/ext2/file.c:153-163 and fs/buffer.c:595-622 in 6.12.115): a write
- * that races it lands on either side, since a writer dirties a block before
- * it lists it, as Linux's `mark_buffer_dirty_inode` does. A caller without
+ * once to each description. The call takes the node's lock and admission
+ * only for the store of the inode (`ext2_node_write_marked`), and none for
+ * the writes of its blocks, as Linux's takes none (`ext2_fsync` and
+ * `generic_buffers_fsync`, fs/ext2/file.c:153-163 and fs/buffer.c:595-622 in
+ * 6.12.115): a write that races them lands on either side, since a writer
+ * dirties a block before it lists it, as Linux's `mark_buffer_dirty_inode`
+ * does. A caller without
  * the big lock has it taken here (`ext2_big_enter`) for the node table,
  * which the look at the neighbours in the node's table block walks
  * (`table_unsynced`); the waits let it go.

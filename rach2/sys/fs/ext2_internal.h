@@ -446,7 +446,7 @@ struct ext2_mount {
      * functions beside it). A 32-bit one of them may be read alone as a
      * single word, which is current at some moment of the read. */
     struct spinlock count_lock;
-    /* Keeps `writers`, `closing`, `closed` and `holding`, which a writer
+    /* Keeps `writers`, `closing` and `holding`, which a writer
      * without the big lock changes or reads on its admission (`em_enter`). */
     struct spinlock admit_lock;
     /* Keeps what an `fsync` reads of the lists of shared blocks: each
@@ -475,9 +475,6 @@ struct ext2_mount {
     /* Nonzero while a remount checks the volume (`em_hold`): a final put
      * leaves its node on `reap`, which nobody reaps until `em_open`. */
     int holding;
-    /* Nonzero once `em_close` has waited out the writers, until `em_open`:
-     * no node changes then but a dying one (`em_quiet`). */
-    int closed;
     /* A node with shared blocks listed was freed, so the next `fsync` of
      * any file writes the whole device. */
     int shared_lost;
