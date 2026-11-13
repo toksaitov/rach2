@@ -7322,12 +7322,188 @@ static void reuse_row(void)
 }
 
 /**
+ * Make `retry_row`'s volume: /dst with its first `blocks` blocks full
+ * (`growth_fill`) and an empty /src whose inode lies in another table block
+ * than /dst's, each one made in its place being renamed aside until one
+ * does, synced on a mount that writes back. The block of /dst's inode goes
+ * in `*table`. Returns 0, or the first error, with the volume unmounted.
+ */
+static int retry_mount(int blocks, int64_t *table)
+{
+    char name[16];
+    uint64_t dst_ino = 0, ino = 0;
+    void *n;
+    int i, rc;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    stop_after = -1;
+    rc = mount_flags(0);
+    if (rc == 0) {
+        rc = growth_fill(blocks);
+    }
+    if (rc == 0) {
+        n = walk("/dst", &rc);
+        if (n) {
+            dst_ino = held_ino(&mnt, n);
+            OPS->put(&mnt, n);
+        }
+    }
+    for (i = 0; rc == 0 && i < 64; i++) {
+        n = make_file(mnt.root, "src", &rc);
+        if (!n) {
+            break;
+        }
+        ino = held_ino(&mnt, n);
+        OPS->put(&mnt, n);
+        if ((ino - 1) / 32 != (dst_ino - 1) / 32) { /* 32 inodes of 128 bytes a block */
+            break;
+        }
+        snprintf(name, sizeof name, "pad%d", i);
+        rc = OPS->rename(&mnt, mnt.root, "src", mnt.root, name);
+    }
+    if (rc == 0 && (ino - 1) / 32 == (dst_ino - 1) / 32) {
+        rc = -EIO;
+    }
+    if (rc == 0) {
+        rc = OPS->sync(&mnt);
+    }
+    if (rc == 0) {
+        fflush(image);
+        *table = inode_block_of(wimg, "/dst");
+        if (*table <= 0 || *table == inode_block_of(wimg, "/src")) {
+            rc = -EIO;
+        }
+    }
+    if (rc != 0) {
+        printf("  rc %d\n", rc);
+        unmount_image();
+    }
+    return rc;
+}
+
+/**
+ * Hold /dst in `*dst`, empty the cache, and rename /src to /dst/moved
+ * `attempts` times while every read of /dst's table block `table` fails, so
+ * that the store of its grown inode fails each time. Returns the attempts
+ * that failed, or -1 when /dst is not held or the cache would not empty,
+ * with nothing held.
+ */
+static int retry_fail(int64_t table, int attempts, void **dst)
+{
+    int i, rc, failed = 0;
+
+    *dst = walk("/dst", &rc);
+    if (!*dst) {
+        return -1;
+    }
+    if (OPS->sync(&mnt) != 0 || bcache_invalidate(&dev) != 0) {
+        OPS->put(&mnt, *dst);
+        *dst = 0;
+        return -1;
+    }
+    fail_read_block = table;
+    fail_read_hits = 0;
+    read_pause = fail_block_reads;
+    for (i = 0; i < attempts; i++) {
+        failed += OPS->rename(&mnt, mnt.root, "src", *dst, "moved") != 0;
+    }
+    read_pause = 0;
+    read_fails = 0;
+    fail_read_block = -1;
+    return failed;
+}
+
+/**
+ * A rename into a directory whose growth failed to store its inode, retried
+ * with /dst held, puts its new name on the device only once the inode that
+ * covers it is (`dir_settle`). /dst has its first `blocks` blocks full, and
+ * every read of its table block fails for `attempts` renames: at one full
+ * block the first fails at the store of the grown size; at twelve the
+ * first fails at the store of the new single indirect pointer and the
+ * second at the store of the size. Each must fail. The rename is then
+ * retried with the reads whole, once to its end and synced, which must
+ * grow /dst by one block and leave the volume clean, and once stopped after
+ * each of its writes and judged after a crash as `growth_row` judges.
+ * Returns the stops walked, or -1 when a volume would not mount or take its
+ * files.
+ */
+static int retry_row(int blocks, int attempts)
+{
+    char what[240];
+    uint64_t size;
+    int64_t table = -1;
+    void *dst;
+    int k, n, rc, ok, failed;
+
+    if (retry_mount(blocks, &table) != 0) {
+        return -1;
+    }
+    failed = retry_fail(table, attempts, &dst);
+    if (failed < 0) {
+        unmount_image();
+        return -1;
+    }
+    snprintf(what, sizeof what,
+             "on a mount that writes back, %d rename(s) into a directory of %d full blocks "
+             "whose table block cannot be read fail",
+             attempts, blocks);
+    check(failed == attempts && fail_read_hits > 0, what);
+    if (failed != attempts || fail_read_hits == 0) {
+        printf("  failed %d of %d, failed reads %d\n", failed, attempts, fail_read_hits);
+    }
+    writes_made = 0;
+    rc = growth_run(&size);
+    n = writes_made;
+    OPS->put(&mnt, dst);
+    check(rc == 0 && size == (uint64_t)(blocks + 1) * 4096u,
+          "and the rename retried with the reads whole grows it by one block");
+    if (rc != 0 || size != (uint64_t)(blocks + 1) * 4096u) {
+        printf("  rc %d, size %lu\n", rc, (unsigned long)size);
+    }
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume is clean");
+    for (k = 0; k <= n; k++) {
+        if (retry_mount(blocks, &table) != 0) {
+            return -1;
+        }
+        if (retry_fail(table, attempts, &dst) < 0) {
+            unmount_image();
+            return -1;
+        }
+        writes_made = 0;
+        stop_after = k;
+        (void)growth_run(&size);
+        OPS->put(&mnt, dst);
+        drop_as_crash();
+        snprintf(what, sizeof what,
+                 "a rename into a directory of %d full blocks retried after %d failed "
+                 "store(s), stopped after write %d of %d, leaves e2fsck counts and bitmaps "
+                 "to repair",
+                 blocks, attempts, k, n);
+        ok = fsck_judged(wimg) >= 0 &&
+             findings_among(growth_findings, sizeof(growth_findings) / sizeof(growth_findings[0]));
+        check(ok, what);
+        if (!ok) {
+            ext2_fixture_head(fix_path("fsck.out"), 30);
+        }
+        snprintf(what, sizeof what,
+                 "a rename into a directory of %d full blocks retried after %d failed "
+                 "store(s), stopped after write %d of %d, leaves the file a name",
+                 blocks, attempts, k, n);
+        check(growth_named(wimg), what);
+    }
+    return n + 1;
+}
+
+/**
  * The rows of what a change of names puts on the device before its next
  * step on a mount that writes back: a rename into a directory that grows,
  * its second direct block and its first behind the single indirect,
  * stopped after each write (`growth_row`), as Linux's `ext2_handle_dirsync`
  * writes the directory's inode before the rename removes the old name
- * (fs/ext2/dir.c:440-447 and namei.c:376-390 in Linux 6.12.115); a symlink
+ * (fs/ext2/dir.c:440-447 and namei.c:376-390 in Linux 6.12.115); the same
+ * rename retried after attempts whose store of the grown inode failed
+ * (`retry_row`); a symlink
  * whose name reached the device and whose directory's times then fail
  * (`symlink_kept_row`); and a block freed by a truncate and taken again
  * by a directory under reclaim (`reuse_row`).
@@ -7347,6 +7523,27 @@ static void dir_commit_rows(void)
     }
     total += got;
     printf("ext2_hosttest: %d stops of renames into a growing directory walked\n", total);
+    total = 0;
+    got = retry_row(1, 1);
+    if (got >= 0) {
+        total += got;
+        got = retry_row(1, 2);
+    }
+    if (got >= 0) {
+        total += got;
+        got = retry_row(12, 1);
+    }
+    if (got >= 0) {
+        total += got;
+        got = retry_row(12, 2);
+    }
+    if (got < 0) {
+        check(0, "the volume of the retried growth rows mounts and takes its files");
+    } else {
+        total += got;
+        printf("ext2_hosttest: %d stops of retried renames into a growing directory walked\n",
+               total);
+    }
     symlink_kept_row();
     reuse_row();
 }
