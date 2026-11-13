@@ -9,7 +9,7 @@
  *
  * The file is included whole. Its consumers are models: the event devices,
  * the console's keyboard and the console's raw view record what they are
- * given, and the tick's count is a variable the rows advance.
+ * given, and a millisecond clock is a variable the rows advance.
  */
 
 #include "input.c"
@@ -26,12 +26,12 @@ static int fails;
         }                                           \
     } while (0)
 
-volatile uint64_t kernel_ticks;
+static uint64_t clock_ms;
 
-/** The model's explicit tick count also drives its fine clock. */
+/** The model advances milliseconds independently of the coarse tick. */
 int64_t rtc_monotonic_ns(void)
 {
-    return (int64_t)kernel_ticks * TICK_NS;
+    return (int64_t)clock_ms * 1000000u;
 }
 
 /** No interrupts to mask on the host: nothing to save. */
@@ -216,14 +216,13 @@ static int kd_count(int value)
 }
 
 /* The tick count `ms` milliseconds past 10 s, where the repeat rows run. */
-#define TICK_MS (1000u / TICK_HZ)
-#define AT(ms)  ((10000u + (ms)) / TICK_MS)
+#define AT(ms) ((10000u + (ms)))
 
 /** Run the tick once at each count from the one after now to `to`. */
 static void tick_to(uint32_t to)
 {
-    while (kernel_ticks != to) {
-        kernel_ticks++;
+    while (clock_ms != to) {
+        clock_ms++;
         input_tick();
     }
 }
@@ -232,8 +231,8 @@ static void tick_to(uint32_t to)
  * only at those ticks, as it would when ticks are late. */
 static void tick_by_10ms(uint32_t to)
 {
-    while (kernel_ticks != to) {
-        kernel_ticks += 10u / TICK_MS;
+    while (clock_ms != to) {
+        clock_ms += 10u;
         input_tick();
     }
 }
@@ -498,7 +497,7 @@ static void test_repeat(struct input_keyboard *kb1, struct input_keyboard *kb2)
     input_get_repeat(&delay, &period);
     CHECK("the repeat starts at Linux's 250 and 33 ms", delay == 250 && period == 33);
 
-    kernel_ticks = AT(0);
+    clock_ms = AT(0);
     clear();
     key(kb1, KEY_A, 1);
     tick_to(AT(240));
@@ -558,7 +557,7 @@ static void test_repeat(struct input_keyboard *kb1, struct input_keyboard *kb2)
     clear();
     key(kb1, KEY_A, 1);
     tick_to(AT(4250));
-    kernel_ticks = AT(5250);
+    clock_ms = AT(5250);
     input_tick();
     CHECK("a late tick sends at most four", kd_count(KD_KEY_REPEAT) == 5);
     tick_to(AT(5280));
@@ -602,7 +601,7 @@ static void test_detach(struct input_keyboard *kb1, struct input_keyboard *kb2)
           n_kd == 4 && kd_count(KD_KEY_RELEASE) == 2 && input_modifiers() == 0);
     CHECK("its event device is taken away", unregistered == 1 && kb2->dev == NULL);
     clear();
-    tick_to((uint32_t)kernel_ticks + 1000u / TICK_MS);
+    tick_to((uint32_t)clock_ms + 1000u);
     CHECK("and its repeat stops", n_kd == 0);
     input_set_leds(LED_NUM);
     CHECK("the LEDs reach the keyboards attached", leds[slot_of(kb1->dev)] == 1u << LED_NUML);
