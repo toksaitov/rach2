@@ -308,10 +308,13 @@ static int poll_expired(struct poll_deadline *d)
 /**
  * Sleep until a wake of a queue the thread has a record on, its deadline
  * `d` when set, or a signal, unless a wake came since its mark was cleared
- * (`poll_woken`), as Linux's `poll_schedule_timeout` (fs/select.c:234-258).
- * The thread is marked BLOCKED, with the barrier `sched_set_current_state`
- * makes, before it reads its mark: a wake after that read finds it blocked
- * and makes it ready, so `schedule` keeps it running or returns. A finite
+ * (`poll_woken`) or signal work was posted since the caller's check of it
+ * (`sig_woken`), as Linux's `poll_schedule_timeout` (fs/select.c:234-258)
+ * and `__schedule`'s `signal_pending_state` (kernel/sched/core.c). The
+ * thread is marked BLOCKED, with the barrier `sched_set_current_state`
+ * makes, before it reads either flag: a wake or a post after that read finds
+ * it blocked and makes it ready (`sig_wake`), so `schedule` keeps it
+ * running or returns. The caller scans again and judges the signal. A finite
  * timeout sets the timer wake, `wakeup_tick`, which `proc_wake_sleepers`
  * acts on at the deadline: with another process runnable, schedule() does
  * not return here on its own. A computed tick of 0 is stored as 1, since 0
@@ -328,7 +331,7 @@ static void poll_sleep(struct poll_deadline *d, const char *wchan)
     }
     current_proc->wchan = wchan;
     sched_set_current_state(PROC_BLOCKED);
-    if (!current_proc->poll_woken) {
+    if (!current_proc->poll_woken && !*(volatile uint32_t *)&current_proc->sig_woken) {
         schedule();
         flags = irq_save();
         if (current_proc->state == PROC_BLOCKED) {
