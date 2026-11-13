@@ -857,6 +857,11 @@ static int race_reads;
 static void race_map(void);
 static int mapped_write_row, mapped_write_ready;
 static uint8_t mapped_disk[2 * PAGE_SIZE];
+/* The snapshot row's model: its reads of the file, whether each fails, and
+ * the caller's buffer, which a write changes once it has accepted the bytes,
+ * as another thread of the caller may store into it then. */
+static int mapped_reads, mapped_read_fails;
+static char *mapped_caller;
 
 /** Report an accessible regular file with set-id bits, or in the mkdir rows
  * the directory a name is made in. A read the mount's lock does not cover
@@ -1355,6 +1360,10 @@ int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
 
     (void)handle;
     if (mapped_write_row) {
+        mapped_reads++;
+        if (mapped_read_fails) {
+            return -EIO;
+        }
         check(offset + count <= sizeof(mapped_disk), "mapped write reads within its file");
         k_memcpy(buf, mapped_disk + (uint32_t)offset, count);
         return (int32_t)count;
@@ -1393,6 +1402,10 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
         }
         check(offset + count <= sizeof(mapped_disk), "the write fits the model disk");
         k_memcpy(mapped_disk + (uint32_t)offset, buf, count);
+        if (mapped_caller) {
+            k_memset(mapped_caller, 'X', 2);
+            mapped_caller = NULL;
+        }
         return (int32_t)count;
     }
     check(0, "unexpected write of a mapped file");
@@ -4908,6 +4921,77 @@ static void mapped_writers(void)
     row_end();
 }
 
+/**
+ * A descriptor write to a file whose page a shared mapping holds, dirty,
+ * puts into the page the bytes the file system accepted, from the kernel's
+ * copy of the caller's buffer (`file_write_piece`), and reads nothing: the
+ * caller's buffer changes once the write has accepted the bytes, and every
+ * read of the file fails. The page's write-back then puts the same bytes in
+ * the file (j165's finding 2).
+ */
+static void mapped_snapshot(void)
+{
+    struct open_file ofd;
+    fd_entry_t e;
+    struct file_write_state state;
+    char caller[2];
+    uint64_t at = PAGE_SIZE + 4;
+    int handle;
+
+    row_begin();
+    k_memset(&ofd, 0, sizeof(ofd));
+    k_memset(&e, 0, sizeof(e));
+    k_memset(&state, 0, sizeof(state));
+    race_mount.type = &mounted_type;
+    ofd.vmnt = &race_mount;
+    ofd.vnode = &node;
+    ofd.ino = 77;
+    e.type = FD_TYPE_FILE;
+    e.flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    e.ofd = &ofd;
+    state.file.mnt = &race_mount;
+    state.file.node = &node;
+    state.own = 1;
+    proc.rlim[RLIM_FSIZE].cur = RLIM_INFINITY;
+    mapped_write_row = race_row = 1;
+    mapped_write_ready = 1;
+    k_memset(mapped_disk, 'b', sizeof(mapped_disk));
+    race_map();
+    check(dshare_mark(&race_ds, 1) == 0, "the mapping's store has made its page dirty");
+    caller[0] = 'W';
+    caller[1] = 'R';
+    mapped_caller = caller;
+    mapped_reads = 0;
+    mapped_read_fails = 1;
+    vfs_node_lock(&state.file);
+    check(file_write_locked(&e, (const char __user *)caller, 2, &at, &state) == 2 &&
+              mapped_disk[PAGE_SIZE + 4] == 'W' && mapped_disk[PAGE_SIZE + 5] == 'R' &&
+              caller[0] == 'X' && caller[1] == 'X',
+          "the file accepts the caller's bytes, which change after the write accepts them");
+    vfs_node_unlock(&state.file);
+    check(resident_pages[1][4] == 'W' && resident_pages[1][5] == 'R' &&
+              resident_pages[1][3] == 'S' && resident_pages[1][6] == 'S' && mapped_reads == 0,
+          "the dirty page takes the accepted bytes, not the changed buffer, with no read");
+    mapped_read_fails = 0;
+    k_memset(mapped_disk, 'b', sizeof(mapped_disk));
+    race_ds.wr_node = &node;
+    race_ds.wr_handle = &handle;
+    check(dshare_pass(&race_ds, 0, 2) == 0 && mapped_disk[PAGE_SIZE + 4] == 'W' &&
+              mapped_disk[PAGE_SIZE + 5] == 'R' && mapped_disk[PAGE_SIZE + 3] == 'S' &&
+              dshare_dirty(&race_ds) == 0 && mapped_reads == 0,
+          "and the page's write-back keeps the descriptor's write");
+    (void)dshare_unmark_from(&race_ds, 0);
+    kfree(race_ds.stored);
+    race_ds.stored = NULL;
+    race_ds.nstored = 0;
+    race_ds.wr_node = race_ds.wr_handle = NULL;
+    mapped_write_row = race_row = race_mapped = mapped_write_ready = 0;
+    dshare_stores_in[dshare_index(77)] = 0;
+    *dshare_bucket(77) = NULL;
+    dshare_count = 0;
+    row_end();
+}
+
 /** The race row, through the file system and through the file page cache
  * (`resident_race_once`). */
 static void resident_race(void)
@@ -5200,6 +5284,7 @@ int main(int argc, char **argv)
     resident_copied();
     resident_race();
     mapped_writers();
+    mapped_snapshot();
     read_end_past_unlocked();
     unlocked_open_one();
     protected_links();
