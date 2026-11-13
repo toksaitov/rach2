@@ -2109,7 +2109,7 @@ static void ext2_abort_unmount(struct vfs_mount *mnt)
     ext2_super_lock(em);
     LE16_PUT(raw, ext2_state_change(em, 0, EXT2_VALID_FS));
     em->valid_cleared = 1;
-    rc = ext2_write_bytes(em, 1024 + 58, raw, 2, 0);
+    rc = ext2_write_bytes(em, 1024 + 58, raw, 2, WRITE_KIND(READ_SUPER));
     ext2_super_unlock(em);
     if (rc == 0) {
         rc = bcache_sync(em->dev);
@@ -2644,13 +2644,17 @@ void ext2_node_share_group(struct ext2_mount *em, struct ext2_node *n, uint32_t 
  * write funnel: a mount that does not write (`ext2_writes`), read-only
  * outside the check and the opening of a writable mount or remount, or
  * failed, writes nothing: -EROFS, logged as `ext2: write refused: the mount
- * is read-only: block B`. 0, or -errno.
+ * is read-only: block B`. A part of a block the cache lacks is read first,
+ * the only read a write makes, under the kind `sync` names (`WRITE_KIND`):
+ * a failed read is logged and reported as the read primitive's of that kind
+ * is (`read_failed`), and -EIO. Its zone was checked by the read of the
+ * same block that gave the caller what it writes. 0, or -errno.
  */
 int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const void *src,
                      uint32_t len, int sync)
 {
     const uint8_t *in = src;
-    int level = sync / WRITE_LEVEL(1);
+    int level = (sync >> 4) & 15, kind = (sync >> 8) & 15;
     int rc = 0;
 
     if (!ext2_writes(em)) {
@@ -2670,7 +2674,9 @@ int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const 
         }
         b = take == BCACHE_BLOCK_BYTES ? bcache_get_blank(em->dev, blk) : bcache_get(em->dev, blk);
         if (!b) {
-            rc = -EIO;
+            rc = take == BCACHE_BLOCK_BYTES
+                     ? -EIO
+                     : read_failed(em, kind, 0, (uint32_t)(off >> em->block_shift), -EIO);
             break;
         }
         if (at + take > b->bytes) {
@@ -2810,7 +2816,7 @@ static int large_file_flag(struct ext2_mount *em)
 
     ext2_super_lock(em);
     LE32_PUT(raw, ext2_feature_add(em, &em->ro_compat, EXT2_RO_LARGE_FILE));
-    rc = ext2_write_bytes(em, 1024 + 100, raw, 4, 1);
+    rc = ext2_write_bytes(em, 1024 + 100, raw, 4, WRITE_THROUGH | WRITE_KIND(READ_SUPER));
     ext2_super_unlock(em);
     return rc;
 }
@@ -2910,25 +2916,6 @@ int ext2_inode_encode(struct ext2_mount *em, struct ext2_node *n, uint8_t *raw, 
 }
 
 /**
- * The end of a store of inode `n` whose write failed with `rc`: on a mount
- * whose device has not failed, an -EIO is the write funnel's, which could
- * not read again the block it writes in part (`ext2_write_owned`), a fault
- * no reader met, so it is logged as `ext2: inode N: not stored: a block
- * cannot be read again` and reported (`ext2_mark_error`), as Linux reports
- * an inode whose table block it cannot read (fs/ext2/inode.c:1348); the
- * error bit then keeps the valid bit off the volume while the node's change
- * is not on it. A device's failure is recorded as one already. Returns `rc`.
- */
-static int store_failed(struct ext2_mount *em, const struct ext2_node *n, int rc)
-{
-    if (rc == -EIO && !ext2_failed(em)) {
-        klog(KLOG_WARN, "ext2", "inode %d: not stored: a block cannot be read again", (int)n->ino);
-        ext2_mark_error(em);
-    }
-    return rc;
-}
-
-/**
  * Write inode `n` in the way `how` says, over the bytes its slot has, or over
  * zeros when `fresh`, for an inode just allocated: a freed inode's slot keeps
  * what it had, and the encoder writes only the fields this driver keeps. A
@@ -2943,8 +2930,8 @@ static int store_failed(struct ext2_mount *em, const struct ext2_node *n, int rc
  * device with any neighbour's sync. The drain encodes the node. A strict
  * mount drains the batch before any store but the batch's own
  * (`ext2_assert_writable`). A table block that cannot be read is reported
- * to the mount's policy, as for a load (READ_SLOT), and so is a block the
- * write cannot read again (`store_failed`). A change of a field but the
+ * to the mount's policy, as for a load (READ_SLOT), whether the read or the
+ * write meets it (`ext2_write_owned`). A change of a field but the
  * times sets `n->dirty_meta` after the store, even on error so a retry
  * covers any dirty buffer left by the failed write. The
  * superblock is listed among `n`'s shared blocks when `large_file` is set
@@ -2994,19 +2981,19 @@ int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int 
         ext2_node_share(em, n, 0);
         rc = large_file_flag(em);
         if (rc != 0) {
-            return store_failed(em, n, rc);
+            return rc;
         }
     }
     if (!fresh && ext2_writeback_keeps(em, n)) {
         n->unstored = 0;
         return 0;
     }
-    rc = ext2_write_bytes(em, at, raw, len, how);
+    rc = ext2_write_bytes(em, at, raw, len, how | WRITE_KIND(READ_SLOT));
     if (changed) {
         ext2_node_meta_dirty(em, n);
     }
     if (rc != 0) {
-        return store_failed(em, n, rc);
+        return rc;
     }
     n->unstored = 0;
     return 0;
@@ -3100,9 +3087,9 @@ static int sb_write(struct ext2_mount *em, int sync)
     LE32_PUT(raw + 4, (uint32_t)em->free_inodes);
     LE16_PUT(state, em->state);
     spin_unlock_irqrestore(&em->count_lock, flags);
-    rc = ext2_write_bytes(em, 1024 + 12, raw, 8, sync);
+    rc = ext2_write_bytes(em, 1024 + 12, raw, 8, sync | WRITE_KIND(READ_SUPER));
     if (rc == 0) {
-        rc = ext2_write_bytes(em, 1024 + 58, state, 2, sync);
+        rc = ext2_write_bytes(em, 1024 + 58, state, 2, sync | WRITE_KIND(READ_SUPER));
     }
     ext2_super_unlock(em);
     return rc;
@@ -3196,7 +3183,8 @@ int ext2_release_inode(struct ext2_mount *em, struct ext2_node *n)
 
         k_memset(raw, 0, sizeof(raw));
         LE32_PUT(raw + 20, now_seconds()); /* i_dtime */
-        rc = ext2_write_bytes(em, ext2_inode_offset(em, n->ino), raw, sizeof(raw), 1);
+        rc = ext2_write_bytes(em, ext2_inode_offset(em, n->ino), raw, sizeof(raw),
+                              WRITE_THROUGH | WRITE_KIND(READ_SLOT));
     }
     if (rc != 0) {
         return rc;
@@ -3769,12 +3757,13 @@ static int attr_feature(struct ext2_mount *em)
         LE32_PUT(raw, 1);
         LE32_PUT(raw + 8, em->first_ino);
         LE16_PUT(raw + 12, em->inode_size);
-        rc = ext2_write_bytes(em, 1024 + 76, raw, sizeof(raw), WRITE_DURABLE);
+        rc = ext2_write_bytes(em, 1024 + 76, raw, sizeof(raw),
+                              WRITE_DURABLE | WRITE_KIND(READ_SUPER));
     }
     if (!rc && !(em->compat & 8u)) {
         /* EXT2_FEATURE_COMPAT_EXT_ATTR precedes i_file_acl. */
         LE32_PUT(feature, ext2_feature_add(em, &em->compat, 8u));
-        rc = ext2_write_bytes(em, 1024 + 92, feature, 4, WRITE_DURABLE);
+        rc = ext2_write_bytes(em, 1024 + 92, feature, 4, WRITE_DURABLE | WRITE_KIND(READ_SUPER));
     }
     ext2_super_unlock(em);
     return rc;
