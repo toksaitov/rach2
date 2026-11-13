@@ -37,7 +37,6 @@
 /* The tick rate `apic_timer_start` was given, which the counter's
  * arithmetic divides a second by. */
 static uint32_t tick_hz = TICK_HZ;
-/* Scheduler periods are separate from the millisecond clock units. */
 
 /* The one-shot timer keeps the next scheduler tick and the earliest event
  * on one vector. Its entry serves both when they coincide. Tick phase moves

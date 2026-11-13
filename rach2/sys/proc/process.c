@@ -346,6 +346,9 @@ uint64_t proc_alarm_read_ns(const process_t *p, uint64_t *interval)
         left *= TICK_NS;
         *interval *= TICK_NS;
     }
+    if (!p->alarm_due && p->alarm_tick != 0 && left == 0) {
+        left = 1000;
+    }
     spin_unlock_irqrestore(&timer_list_lock, flags);
     return left;
 }
@@ -355,6 +358,9 @@ uint64_t proc_alarm_due_tick(const process_t *p)
     uint32_t flags = spin_lock_irqsave(&timer_list_lock);
     uint64_t tick = p->alarm_due ? 0 : p->alarm_tick;
 
+    if (tick != 0 && p->alarm_fine) {
+        tick = tick_div64(tick + TICK_NS - 1u, TICK_NS, NULL);
+    }
     spin_unlock_irqrestore(&timer_list_lock, flags);
     return tick;
 }
