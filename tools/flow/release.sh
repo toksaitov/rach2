@@ -2212,8 +2212,14 @@ windows_forget()
 }
 
 # screen_free: stop the trial boot's console session, `term`, which holds the
-# framebuffer, and set `login` to the process of the kernel console's login
-# that init starts in its place; leave `login` empty when no `term` runs.
+# framebuffer, and set `login` to `PID COMM BOOT`, the process of the kernel
+# console's login that init starts in its place, its name as its stat gives
+# it, and the boot's /proc/sys/kernel/random/boot_id; leave `login` empty when
+# no `term` runs. The look and the TERM to `term` are one script on the
+# machine. Rach2 gives no process number twice within a boot before two
+# thousand million processes, its pid_next only counting up
+# (rach2/sys/proc/Readme.md), so a number with the boot's ID names one
+# process.
 screen_free()
 {
     # shellcheck disable=SC2016 # the script expands on the Lenovo
@@ -2221,6 +2227,7 @@ screen_free()
             read -r pid comm s ppid r < $p/stat 2> /dev/null && [ "$ppid" = 1 ] && echo "$pid $comm"; done; }
         t=$(kids | sed -n "s/ (term)\$//p")
         [ -n "$t" ] || exit 0
+        read -r b < /proc/sys/kernel/random/boot_id || exit 1
         before=" $(kids | cut -d " " -f 1 | tr "\n" " ")"
         kill $t || exit 1
         n=0
@@ -2228,21 +2235,28 @@ screen_free()
             sleep 1
             n=$((n + 1))
             [ ! -d /proc/$t ] || continue
-            for k in $(kids | cut -d " " -f 1); do
-                case $before in *" $k "*) ;; *) echo $k; exit 0 ;; esac
-            done
+            new=$(kids | while read -r k c; do
+                case $before in *" $k "*) ;; *) echo "$k $c"; break ;; esac
+            done)
+            [ -z "$new" ] || { echo "$new $b"; exit 0; }
         done
         exit 1') || fail lenovo "the console's term would not give up the screen"
-    [ -z "$login" ] || say "lenovo: stopped the console's term for the run; login $login stands in"
+    [ -z "$login" ] || say "lenovo: stopped the console's term for the run; login ${login%% *} stands in"
 }
 
 # screen_back: end the kernel console's login that screen_free left, so that
-# init starts `term` again.
+# init starts `term` again: HUP, in one script on the machine, only while the
+# boot's ID is the one screen_free read and the process with that number is
+# init's child with the name screen_free read.
 screen_back()
 {
     [ -n "$login" ] || return 0
-    lenovo "read -r pid comm s ppid r < /proc/$login/stat 2> /dev/null && [ \"\$ppid\" = 1 ] &&
-        kill -HUP $login" > /dev/null 2>&1 || say "lenovo: the console's login $login was gone"
+    # shellcheck disable=SC2086 # the login is three words
+    set -- $login
+    lenovo "read -r b < /proc/sys/kernel/random/boot_id && [ \"\$b\" = '$3' ] &&
+        read -r pid comm s ppid r < /proc/$1/stat 2> /dev/null && [ \"\$ppid\" = 1 ] &&
+        [ \"\$comm\" = '$2' ] && kill -HUP $1" > /dev/null 2>&1 ||
+        say "lenovo: the console's login $1 was gone, or the machine had booted again"
     login=''
 }
 
