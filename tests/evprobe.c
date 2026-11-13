@@ -35,10 +35,12 @@
  * open, which then reads ENODEV, set another's clock to
  * CLOCK_MONOTONIC and print "EVPROBE: move the mouse". The suite then moves
  * the mouse by 10 and 5 through QMP, presses and releases the left button,
- * and turns the wheel up a detent and down one; the monotonic open and a
- * second, on the real time, must each read the motion, the button and both
- * turns, REL_WHEEL_HI_RES of 120 with each on USB, every record stamped
- * between the clock_gettime calls before and after on its own clock.
+ * and turns the wheel up a detent and down one, each event once the
+ * monotonic open has printed "EVPROBE: mouse: packet N read" for the one
+ * before; that open and a second, on the real time, must each read the
+ * motion, the button and both turns, REL_WHEEL_HI_RES of 120 with each on
+ * USB, every record stamped between the clock_gettime calls before and after
+ * on its own clock.
  *
  * `evprobe touchpad`, run by hand on the Lenovo, finds the Synaptics
  * touchpad's event device, prints its block as Linux's
@@ -51,7 +53,8 @@
  * what Linux gives it, prints "EVPROBE: move the tablet", and must read,
  * record by record, what evtest prints on Linux when the suite moves it to
  * 10000 and 20000 through QMP, clicks the left button and turns the wheel
- * up and down.
+ * up and down, each event once the probe has printed "EVPROBE: tablet:
+ * packet N read" for the one before.
  *
  * Prints "EVPROBE OK" and exits 0. Freestanding; direct system calls
  * (probe.h).
@@ -662,7 +665,23 @@ struct mouse_read {
     int scans; /* MSC_SCAN records of the left button, 0x90001 */
     int dx;    /* the motion summed */
     int dy;
+    int packets; /* the SYN_REPORTs read */
 };
+
+static void put_dec(long v);
+
+/** Print "EVPROBE: `what`: packet N read", N the packets read so far, for
+ * the suite to send the next event only once the guest has taken this one,
+ * which QEMU's devices need (`packets` in tests/cases/machine/
+ * input_scenario.c). */
+static void packet_read(const char *what, int n)
+{
+    puts("EVPROBE: ");
+    puts(what);
+    puts(": packet ");
+    put_dec(n);
+    puts(" read\n");
+}
 
 /** Take the record `ev` into `r`; fail the probe, naming the reader `who`,
  * for a record a mouse does not send. */
@@ -694,9 +713,10 @@ static void take_record(const struct input_event *ev, struct mouse_read *r, cons
  * REL_WHEEL_HI_RES of 120 beside each turn and MSC_SCAN 0x90001 before each
  * press and release of the button when `usb`; each record must be
  * stamped between `from` and the time of `clock` after the read. `who`
- * names the reader.
+ * names the reader. With `announce`, each packet read is printed
+ * (`packet_read`), which the suite waits for before it sends the next.
  */
-static void read_mouse(int fd, int usb, int clock, long long from, const char *who)
+static void read_mouse(int fd, int usb, int clock, long long from, const char *who, int announce)
 {
     struct input_event ev[16];
     struct mouse_read r;
@@ -721,6 +741,9 @@ static void read_mouse(int fd, int usb, int clock, long long from, const char *w
                           (long)(at - from));
             }
             take_record(&ev[i], &r, who);
+            if (announce && ev[i].type == EV_SYN && ev[i].code == SYN_REPORT) {
+                packet_read("mouse", ++r.packets);
+            }
         }
     }
     if (r.dx != 10 || r.dy != 5) {
@@ -814,8 +837,8 @@ static void mouse(int usb)
     mono = now_usec(CLOCK_MONOTONIC);
     real = now_usec(CLOCK_REALTIME);
     puts("EVPROBE: move the mouse\n");
-    read_mouse(a, usb, CLOCK_MONOTONIC, mono, "the monotonic reader");
-    read_mouse(b, usb, CLOCK_REALTIME, real, "the real-time reader");
+    read_mouse(a, usb, CLOCK_MONOTONIC, mono, "the monotonic reader", 1);
+    read_mouse(b, usb, CLOCK_REALTIME, real, "the real-time reader", 0);
     puts("EVPROBE: mouse: read by both readers\n");
     syscall3(SYS_CLOSE, a, 0, 0);
     syscall3(SYS_CLOSE, b, 0, 0);
@@ -1324,13 +1347,14 @@ static int tablet_block(int fd)
  * The run of `evprobe usbtablet`: find QEMU's USB tablet, require its block
  * to be Linux's, print "EVPROBE: move the tablet", and read the records the
  * suite's moves, clicks and turns through QMP give, printing each as evtest
- * does and requiring the run of tablet_events.
+ * does and each packet's end (`packet_read`), and requiring the run of
+ * tablet_events.
  */
 static void tablet(void)
 {
     const char *path = find_device("QEMU QEMU USB Tablet");
     int n = (int)(sizeof(tablet_events) / sizeof(tablet_events[0]));
-    int fd, at = 0;
+    int fd, at = 0, packets = 0;
 
     fd = open_or_fail(path, O_RDONLY, "the tablet did not open");
     if (!tablet_block(fd)) {
@@ -1359,6 +1383,9 @@ static void tablet(void)
             if (ev[i].type != tablet_events[at].type || ev[i].code != tablet_events[at].code ||
                 ev[i].value != tablet_events[at].value) {
                 fail_with("the tablet read another record than Linux gives", 1, at);
+            }
+            if (ev[i].type == EV_SYN && ev[i].code == SYN_REPORT) {
+                packet_read("tablet", ++packets);
             }
         }
     }

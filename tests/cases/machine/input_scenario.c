@@ -3,6 +3,7 @@
  * keyboards' and mice's event devices and the mixer, each case a boot of its
  * own.
  */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -65,12 +66,43 @@ static void send(struct usb_boot *b, const char *events)
     usb_qmp(b, "input-send-event", "{\"events\": %s}", events);
 }
 
+/* The mouse's and the tablet's events, each a QMP command of its own so
+ * that each is a packet: the left button pressed and released, and the
+ * wheel turned up a detent and down one. */
+#define LEFT_DOWN "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"left\"}}]"
+#define LEFT_UP   "[{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"left\"}}]"
+#define TURN(b)                                                                 \
+    "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"" b "\"}}, " \
+    "{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"" b "\"}}]"
+
+/** Send the `n` commands of `events`, each once evprobe has printed that
+ * it read the packet of the one before, "EVPROBE: `what`: packet N read",
+ * and wait for the last's. QEMU's USB HID folds an event into the report
+ * the guest has not taken when its buttons are the same, which sums the
+ * wheel's two turns to nothing, and its PS/2 mouse keeps a packet that does
+ * not fit its queue of 16 bytes until the next event. Sent together, the
+ * events never all reach a slow guest, Linux as much as this kernel. */
+static void packets(struct usb_boot *b, const char *what, const char *const events[], int n)
+{
+    char line[64];
+    int i;
+
+    for (i = 0; i < n; i++) {
+        send(b, events[i]);
+        snprintf(line, sizeof(line), "EVPROBE: %s: packet %d read", what, i + 1);
+        usb_wait(b, line);
+    }
+}
+
 /** Run `command`, evprobe of a mouse; when it asks, move the mouse by 10
- * and 5, press and release the left button, and turn the wheel up and down,
- * each a QMP command of its own so that each is a packet; report assertion
- * `mouse` of its run. */
+ * and 5, press and release the left button, and turn the wheel up and down
+ * (`packets`); report assertion `mouse` of its run. */
 static int mouse(struct usb_case *u, const char *record, const char *command)
 {
+    static const char *const events[] = {
+        "[{\"type\": \"rel\", \"data\": {\"axis\": \"x\", \"value\": 10}}, "
+        "{\"type\": \"rel\", \"data\": {\"axis\": \"y\", \"value\": 5}}]",
+        LEFT_DOWN, LEFT_UP, TURN("wheel-up"), TURN("wheel-down")};
     struct usb_boot b;
     struct usb_run r;
     uint64_t from;
@@ -79,14 +111,7 @@ static int mouse(struct usb_case *u, const char *record, const char *command)
     usb_step(u, "mouse");
     from = usb_start(&b, command);
     usb_wait(&b, "EVPROBE: move the mouse");
-    send(&b, "[{\"type\": \"rel\", \"data\": {\"axis\": \"x\", \"value\": 10}}, "
-             "{\"type\": \"rel\", \"data\": {\"axis\": \"y\", \"value\": 5}}]");
-    send(&b, "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"left\"}}]");
-    send(&b, "[{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"left\"}}]");
-    send(&b, "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"wheel-up\"}}, "
-             "{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"wheel-up\"}}]");
-    send(&b, "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"wheel-down\"}}, "
-             "{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"wheel-down\"}}]");
+    packets(&b, "mouse", events, (int)(sizeof(events) / sizeof(events[0])));
     usb_finish(&b, from, &r);
     usb_probe(u, "mouse", &r, "EVPROBE");
     free(r.text);
@@ -95,10 +120,13 @@ static int mouse(struct usb_case *u, const char *record, const char *command)
 
 /** Run evprobe of QEMU's tablet; when it asks, move the tablet to 10000
  * and 20000, press and release the left button, and turn the wheel up and
- * down, each a QMP command of its own so that each is a report; report
- * assertion `tablet` of its run. */
+ * down (`packets`); report assertion `tablet` of its run. */
 static int tablet(struct usb_case *u)
 {
+    static const char *const events[] = {
+        "[{\"type\": \"abs\", \"data\": {\"axis\": \"x\", \"value\": 10000}}, "
+        "{\"type\": \"abs\", \"data\": {\"axis\": \"y\", \"value\": 20000}}]",
+        LEFT_DOWN, LEFT_UP, TURN("wheel-up"), TURN("wheel-down")};
     struct usb_boot b;
     struct usb_run r;
     uint64_t from;
@@ -107,14 +135,7 @@ static int tablet(struct usb_case *u)
     usb_step(u, "tablet");
     from = usb_start(&b, "/evprobe usbtablet");
     usb_wait(&b, "EVPROBE: move the tablet");
-    send(&b, "[{\"type\": \"abs\", \"data\": {\"axis\": \"x\", \"value\": 10000}}, "
-             "{\"type\": \"abs\", \"data\": {\"axis\": \"y\", \"value\": 20000}}]");
-    send(&b, "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"left\"}}]");
-    send(&b, "[{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"left\"}}]");
-    send(&b, "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"wheel-up\"}}, "
-             "{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"wheel-up\"}}]");
-    send(&b, "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"wheel-down\"}}, "
-             "{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"wheel-down\"}}]");
+    packets(&b, "tablet", events, (int)(sizeof(events) / sizeof(events[0])));
     usb_finish(&b, from, &r);
     usb_probe(u, "tablet", &r, "EVPROBE");
     free(r.text);

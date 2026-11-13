@@ -366,7 +366,7 @@
         {
           "step_id": "mouse",
           "stage": "execute",
-          "does": "run evprobe mouse, move the mouse by 10 and 5, press and release the left button and turn the wheel up and down through QMP",
+          "does": "run evprobe mouse, move the mouse by 10 and 5, press and release the left button and turn the wheel up and down through QMP, each event once evprobe has read the packet of the one before",
           "machine": "input"
         }
       ],
@@ -518,7 +518,7 @@
         {
           "step_id": "mouse",
           "stage": "execute",
-          "does": "run evprobe usbmouse, move the mouse by 10 and 5, press and release the left button and turn the wheel up and down through QMP",
+          "does": "run evprobe usbmouse, move the mouse by 10 and 5, press and release the left button and turn the wheel up and down through QMP, each event once evprobe has read the packet of the one before",
           "machine": "input"
         }
       ],
@@ -684,7 +684,7 @@
         {
           "step_id": "tablet",
           "stage": "execute",
-          "does": "run evprobe usbtablet, move the tablet to 10000 and 20000, press and release the left button and turn the wheel up and down through QMP",
+          "does": "run evprobe usbtablet, move the tablet to 10000 and 20000, press and release the left button and turn the wheel up and down through QMP, each event once evprobe has read the packet of the one before",
           "machine": "input"
         }
       ],
