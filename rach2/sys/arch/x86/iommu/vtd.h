@@ -175,6 +175,7 @@ struct vtd_unit {
     unsigned long overflows; /* passes that found PFO set: faults lost */
     unsigned long errors;    /* invalidation errors */
     int fault_again;         /* a pass left full records for the next tick */
+    int cfi_unreported;      /* GSTS.CFIS did not follow a set of GCMD.CFI */
     struct spinlock lock;    /* the registers and the tables */
 };
 

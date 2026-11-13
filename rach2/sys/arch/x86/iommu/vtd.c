@@ -108,8 +108,10 @@ static int wait_status(const struct vtd_unit *u, uint32_t mask, uint32_t want, c
  * keeping the others as they were set, and wait for the status to follow.
  * The status register holds the one-shot bits too, so the command written
  * is the persistent bits kept in `u->gcmd`, never the status read back.
- * CFI is waited for a millisecond and no longer, without a record, since
- * QEMU's unit leaves its status clear whatever the command says.
+ * CFI is waited for a millisecond and no longer, since QEMU's unit leaves
+ * its status clear whatever the command says; the first set the status does
+ * not follow is recorded once, since such a unit may deliver the
+ * compatibility format with CFI clear, as QEMU 10.2.1's does.
  */
 void vtd_set_gcmd(struct vtd_unit *u, uint32_t bit, int on)
 {
@@ -127,6 +129,13 @@ void vtd_set_gcmd(struct vtd_unit *u, uint32_t bit, int on)
     }
     for (i = 0; i < 1000u && (rd32(u, VTD_GSTS) & bit) != (on ? bit : 0u); i++) {
         vtd_hw_udelay(1);
+    }
+    if (on && (rd32(u, VTD_GSTS) & bit) == 0 && !u->cfi_unreported) {
+        u->cfi_unreported = 1;
+        klog(KLOG_INFO, "vtd",
+             "dmar%d: compatibility format: GSTS.CFIS does not follow GCMD.CFI, "
+             "so the unit may deliver it with CFI clear",
+             u->index);
     }
 }
 
