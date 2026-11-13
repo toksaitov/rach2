@@ -61,8 +61,22 @@
 # connection frees the lock while this caller still works in the copy, so the
 # caller watches it: a sync whose holder has ended fails and says so, `run`
 # starts its command only while the holder lives, and a command whose holder
-# ends first is stopped here and the run fails and says so. The command's side
-# on the host is not stopped with it.
+# ends first is stopped here and on the host, and the run fails and says so.
+#
+# Each process this script starts in the background, the lock's connection,
+# the command's and the feeder of the command's input, runs under
+# tools/flow/hold.pl in a run directory of its own under the temporary
+# directory, which alone signals it and whose lock says whether it runs, so
+# that no number is read or signalled here; each such hold.pl stops what it
+# holds once this script has gone. On the host the command runs under the
+# copy's own tools/flow/hold.pl, in the run directory build/held/NAME of the
+# copy, NAME being RACH2_TESTING_HELD or one made of this machine's name, this
+# script's number and a random part, made new once the directories of the runs
+# there that have ended are removed: a run that this script stops,
+# or whose lock's connection ends, is stopped there through that directory's
+# stop, with everything it started, which that hold.pl, a child subreaper,
+# holds; and a caller that stops what works in the copy, as release.sh -p
+# does, stops each run under build/held the same way.
 #
 # `wait` watches a run started on the host as RUNS/NAME.sh, by any path to
 # it, such as `sh build/runs/NAME.sh` from the copy or `sh NAME.sh` in RUNS,
@@ -114,10 +128,15 @@ case $DEST in
     *) echo "testing: not a copy's path: $DEST" >&2; exit 2 ;;
 esac
 RSYNC_PATH='MSYS_NO_PATHCONV=1 wsl.exe -- rsync'
+HELD=${RACH2_TESTING_HELD:-run-$(hostname -s | tr -cd 'A-Za-z0-9-')-$$-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')}
+case $HELD in
+    ''|*[!A-Za-z0-9._-]*) echo "testing: not a run's name: $HELD" >&2; exit 2 ;;
+esac
 hold=
 holder=
 feeder=
-trap 'stop_feeder; release_copy; [ -z "$hold" ] || rm -rf "$hold"' EXIT
+command=
+trap 'stop_command; stop_feeder; release_copy; [ -z "$hold" ] || rm -rf "$hold"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -219,8 +238,10 @@ hold_copy()
 {
     hold=$(mktemp -d "${TMPDIR:-/tmp}/rach2-testing.XXXXXX") || return 1
     mkfifo "$hold/in" "$hold/out" || return 1
+    mkdir "$hold/holder" || return 1
     { hold_script "$1 from $(hostname -s):$REPO"; cat; } < "$hold/in" |
-        ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -- bash -s -- $DEST" \
+        perl "$REPO/tools/flow/hold.pl" run -P -k 10 "$hold/holder" \
+            ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -- bash -s -- $DEST" \
             > "$hold/out" 2> "$hold/err" &
     holder=$!
     exec 3> "$hold/in" 4< "$hold/out"
@@ -249,6 +270,16 @@ release_copy()
     exec 3>&- 4<&-
     wait "$holder" 2>/dev/null || :
     holder=
+}
+
+# runs DIR: succeed while the hold.pl of the run directory DIR holds what it
+# runs, or is about to.
+runs()
+{
+    case $(perl "$REPO/tools/flow/hold.pl" state "$1") in
+        running | starting) return 0 ;;
+    esac
+    return 1
 }
 
 # holder_lost WHEN: say that the connection that holds the sync lock ended
@@ -301,13 +332,13 @@ sync_tree()
             --filter='+ /ports/doom/doom1.wad' --filter=':- .gitignore' \
             "$REPO/" "$HOST:$DEST/"
     fi
-    kill -0 "$holder" 2>/dev/null ||
+    runs "$hold/holder" ||
         holder_lost "during the sync; another caller may have synced over it"
 }
 
 # run_held COMMAND: run COMMAND in the copy while the holder lives. The
 # command's ssh runs in the background, so that the holder can be watched; if
-# the holder ends first, the ssh is stopped.
+# the holder ends first, the command is stopped, here and on the host.
 #
 # COMMAND travels on the ssh's input, as one line of base64 ahead of this
 # script's own input, which the command reads after it. sshd hands the ssh
@@ -320,43 +351,62 @@ sync_tree()
 # command and has no double quote, `%` or `!`, and its `&&`, `<` and parentheses
 # stay inside cmd's quotes. Bash in WSL reads the first line of its input a byte
 # at a time, as it reads any input it cannot seek, so that the rest is left for
-# the command; it decodes the line from a here-string and sources the text,
-# where a quoted `eval` would need double quotes. `-e` makes wsl.exe start bash
-# with its arguments as given, and MSYS_NO_PATHCONV keeps MSYS from rewriting an
-# argument it takes for a path. The feeder that writes the input is stopped once
-# the command ends, since it may wait on a terminal nobody types in.
+# the command; it decodes the line from a here-string into a process
+# substitution, where a quoted `eval` would need double quotes, and execs the
+# copy's hold.pl, which runs bash on that text in the run directory
+# build/held/NAME, made new. `-e` makes wsl.exe start bash with its arguments
+# as given, and MSYS_NO_PATHCONV keeps MSYS from rewriting an argument it takes
+# for a path. The feeder that writes the input is stopped once the command
+# ends, since it may wait on a terminal nobody types in.
 run_held()
 {
     exec 5<&0
     mkfifo "$hold/command"
-    { {
-        printf '%s' "$*"
-    } | base64 | tr -d '\n'; echo; exec cat; } \
+    mkdir "$hold/feeder" "$hold/cmd"
+    perl "$REPO/tools/flow/hold.pl" run -P -k 10 "$hold/feeder" \
+        sh -c 'printf "%s" "$1" | base64 | tr -d "\n"; echo; exec cat' sh "$*" \
         <&5 5<&- > "$hold/command" 3>&- &
     feeder=$!
-    ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg RACH2_MIN_FREE_GIB=40 && read -r c && bash <(base64 -d <<< \$c)'" \
+    perl "$REPO/tools/flow/hold.pl" run -P -k 10 "$hold/cmd" \
+        ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg RACH2_MIN_FREE_GIB=40 && mkdir -p build/held && perl tools/flow/hold.pl sweep build/held && mkdir build/held/$HELD && read -r c && exec perl tools/flow/hold.pl run -P -k 60 build/held/$HELD bash <(base64 -d <<< \$c)'" \
         < "$hold/command" 3>&- 5<&- &
     command=$!
     exec 5<&-
-    while kill -0 "$command" 2>/dev/null; do
-        if ! kill -0 "$holder" 2>/dev/null; then
-            kill "$command" 2>/dev/null || :
-            wait "$command" 2>/dev/null || :
-            holder_lost "while the command ran; it was stopped here, and its side on the host may still run"
+    while runs "$hold/cmd"; do
+        if ! runs "$hold/holder"; then
+            stop_command
+            holder_lost "while the command ran; it was stopped here and on the host"
         fi
         sleep 2
     done
     status=0
     wait "$command" || status=$?
+    command=
     stop_feeder
     return "$status"
+}
+
+# stop_command: stop the command that run_held started, if it has not ended:
+# its ssh here, through its hold.pl, and its run on the host, through the
+# stop of build/held/NAME there, waiting two minutes at most for that run to
+# end; say so when that is not confirmed.
+stop_command()
+{
+    [ -n "$command" ] || return 0
+    perl "$REPO/tools/flow/hold.pl" stop "$hold/cmd" 30 > /dev/null || :
+    wait "$command" 2>/dev/null || :
+    command=
+    perl "$REPO/tools/flow/bound.pl" 180 ssh -o BatchMode=yes "$HOST" \
+        "MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && perl tools/flow/hold.pl stop build/held/$HELD 120'" \
+        < /dev/null > /dev/null 2>&1 ||
+        echo "testing: the run build/held/$HELD in $DEST is not confirmed stopped on the host" >&2
 }
 
 # stop_feeder: stop the process that writes the command's input, if any.
 stop_feeder()
 {
     [ -n "$feeder" ] || return 0
-    kill "$feeder" 2>/dev/null || :
+    perl "$REPO/tools/flow/hold.pl" stop "$hold/feeder" 10 > /dev/null || :
     wait "$feeder" 2>/dev/null || :
     feeder=
 }

@@ -246,15 +246,16 @@ mac_procs()
         }'
 }
 
-# wsl_procs [kill]: print a line `wsl: PID USER ARGS` for each process in WSL
-# that WHAT names, and with `kill` send it TERM, but a loop, as procs.pl
-# does: through a pidfd opened before the process was read, which names that
-# process and no other (G19). A command line that merely holds release.sh is
-# never one (G12). The session of a claim of WSL's admission never counts:
-# each session whose leader is the perl that runs LOCKS/ID.KIND.N.pl with
-# `run`, as release.sh's claim_start starts it (G15). Without -r, while a
-# release runs, the GitHub runners' jobs and the copy of -p's preparation
-# are its own and do not count.
+# wsl_procs [kill]: print a line `wsl: PID START USER ARGS` for each process
+# in WSL that WHAT names, and with `kill` send it TERM, but a loop, as
+# procs.pl does: through a pidfd opened before the process was read, which
+# names that process and no other, and a scan that cannot read the whole of
+# /proc fails, which counts as a look that cannot be read (G19). A command
+# line that merely holds release.sh is never one (G12). The session of a
+# claim of WSL's admission never counts: each session whose leader is the
+# perl that runs LOCKS/ID.KIND.N.pl with `run`, as release.sh's claim_start
+# starts it (G15). Without -r, while a release runs, the GitHub runners' jobs
+# and the copy of -p's preparation are its own and do not count.
 wsl_procs()
 {
     {
