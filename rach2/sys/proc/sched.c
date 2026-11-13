@@ -1003,9 +1003,7 @@ void schedule(void)
     process_t *old;
     struct percpu *cpu;
     uint32_t saved_flags;
-    int me;
-    int kick = -1;
-    int yielded;
+    int me, kick, yielded;
 
     if (!_sched_enabled || !current_proc) {
         return;
