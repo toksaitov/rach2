@@ -446,8 +446,8 @@ struct ext2_mount {
      * functions beside it). A 32-bit one of them may be read alone as a
      * single word, which is current at some moment of the read. */
     struct spinlock count_lock;
-    /* Keeps `writers` and `closing`, which a writer without the big lock
-     * changes on its admission (`em_enter`). */
+    /* Keeps `writers`, `closing`, `closed` and `holding`, which a writer
+     * without the big lock changes or reads on its admission (`em_enter`). */
     struct spinlock admit_lock;
     /* Keeps what an `fsync` reads of the lists of shared blocks: each
      * node's `shared`, `nshared`, `shared_over`, `writing`,
@@ -468,9 +468,16 @@ struct ext2_mount {
      * path to an unmount passes `ext2_sync`, which empties it, and the
      * record outlives it. */
     struct ext2_node *reap;
+    uint32_t reap_count; /* the nodes on `reap` */
     uint32_t nodes_gone; /* nodes freed, so that a waiter sees one go */
     uint32_t writers;    /* writers and final puts under way */
     int closing;         /* nonzero while a remount keeps new writers out */
+    /* Nonzero while a remount checks the volume (`em_hold`): a final put
+     * leaves its node on `reap`, which nobody reaps until `em_open`. */
+    int holding;
+    /* Nonzero once `em_close` has waited out the writers, until `em_open`:
+     * no node changes then but a dying one (`em_quiet`). */
+    int closed;
     /* A node with shared blocks listed was freed, so the next `fsync` of
      * any file writes the whole device. */
     int shared_lost;

@@ -321,8 +321,11 @@ static void em_locks_init(struct ext2_mount *em)
     spin_lock_init(&em->share_lock, "ext2 shared lists");
     wait_queue_init(&em->node_wq);
     em->reap = 0;
+    em->reap_count = 0;
     em->writers = 0;
     em->closing = 0;
+    em->holding = 0;
+    em->closed = 0;
 }
 
 /** Whether the caller holds a node's lock or an allocator's, of any mount,
@@ -578,12 +581,14 @@ static void em_enter_node(struct ext2_mount *em, struct ext2_node *n)
     em_enter(em);
 }
 
-/** End a writer `em_enter` admitted, waking a remount that waits for the
- * last. */
+/** End a writer `em_enter` admitted, or a final put, waking a remount that
+ * waits for the last, or for the final puts under way (`em_hold`). */
 static void em_leave(struct ext2_mount *em)
 {
     uint32_t flags = spin_lock_irqsave(&em->admit_lock);
-    int last = --em->writers == 0 && em->closing;
+    int last = --em->writers == 0 || em->holding;
+
+    last = last && em->closing;
 
     spin_unlock_irqrestore(&em->admit_lock, flags);
     if (last) {
@@ -625,6 +630,53 @@ static int em_settled(void *arg)
 
 static void em_reap(struct ext2_mount *em);
 
+/** Record that the closed mount `em` has no writer left (`em->closed`),
+ * under `em->admit_lock`. */
+static void em_closed(struct ext2_mount *em)
+{
+    uint32_t flags = spin_lock_irqsave(&em->admit_lock);
+
+    em->closed = 1;
+    spin_unlock_irqrestore(&em->admit_lock, flags);
+}
+
+/** The wait condition of `em_hold`: every final put under way on the mount
+ * `arg` has ended, its writers being the nodes held on `reap`, each read as
+ * one word. */
+static int em_held(void *arg)
+{
+    const volatile struct ext2_mount *em = arg;
+
+    return em->writers == em->reap_count;
+}
+
+/**
+ * Hold back every final put of the closed mount `em` until `em_open`, for a
+ * check of the volume, which reads the bitmaps and counts a free would
+ * change: a last put from now on leaves its node on `em->reap`, counted as
+ * a writer, and no caller reaps the list (`node_final`, `em_reap`); then wait
+ * for the final puts under way to end. The caller has closed the mount
+ * (`em_close`) and holds no file lock. As Linux's remount runs its check
+ * with no inode evicted, since `s_umount` keeps eviction out.
+ */
+static void em_hold(struct ext2_mount *em)
+{
+    uint32_t flags = spin_lock_irqsave(&em->admit_lock);
+
+    em->holding = 1;
+    spin_unlock_irqrestore(&em->admit_lock, flags);
+    while (!em_held(em)) {
+        wq_wait_event_nointr(&em->node_wq, em_held, em);
+    }
+}
+
+/** The wait condition of `node_outlive` while a remount holds the final
+ * puts back: the hold has ended on the mount `arg`, read as one word. */
+static int em_unheld(void *arg)
+{
+    return !((const volatile struct ext2_mount *)arg)->holding;
+}
+
 /**
  * Close the mount to new writers for a remount and wait for those inside
  * and for every final put, reaping what is left on the mount's list, since
@@ -642,6 +694,7 @@ static void em_close(struct ext2_mount *em)
         wq_wait_event_nointr(&em->node_wq, em_settled, em);
         em_reap(em);
     }
+    em_closed(em);
 }
 
 /* A shutdown's wait on the mount `em`, which ends at the tick `deadline`
@@ -708,16 +761,23 @@ static int em_close_until(struct ext2_mount *em, uint64_t deadline)
         em_wait_until(&d, em_settled_by);
         em_reap(em);
     }
-    return em_writers(em) ? -EBUSY : 0;
+    if (em_writers(em)) {
+        return -EBUSY;
+    }
+    em_closed(em);
+    return 0;
 }
 
-/** Let writers in again after `em_close`. */
+/** Let writers in again after `em_close`, and end a hold of the final puts
+ * (`em_hold`), whose nodes the caller then reaps. */
 static void em_open(struct ext2_mount *em)
 {
     uint32_t flags = spin_lock_irqsave(&em->admit_lock);
     int opened = em->closing;
 
     em->closing = 0;
+    em->closed = 0;
+    em->holding = 0;
     spin_unlock_irqrestore(&em->admit_lock, flags);
     if (opened) {
         wq_wake_all(&em->node_wq);
@@ -1271,6 +1331,7 @@ static int node_outlive(struct ext2_mount *em, struct ext2_node *n)
         if (file_locks_held()) {
             return -ESTALE;
         }
+        wq_wait_event_nointr(&em->node_wq, em_unheld, em);
         em_reap(em);
         return 0;
     }
@@ -1296,6 +1357,7 @@ static void node_revive(struct ext2_mount *em, struct ext2_node *n)
     for (link = &em->reap; *link; link = &(*link)->reap_next) {
         if (*link == n) {
             *link = n->reap_next;
+            em->reap_count--;
             break;
         }
     }
@@ -1446,19 +1508,24 @@ static void node_free(struct ext2_mount *em, struct ext2_node *n)
  * remount that is closing the mount must see it and the caller may be a
  * writer it waits for. A caller with no file lock frees or stores it now;
  * any other leaves it on `em->reap`, since the free takes node locks and a
- * group's lock out of order and both wait on the disk.
+ * group's lock out of order and both wait on the disk, and so does every
+ * caller while a remount checks the volume (`em_hold`). The hold is read
+ * under `em->admit_lock` with the count, so that a put that finds none is
+ * one the remount waits for.
  */
 static void node_final(struct ext2_mount *em, struct ext2_node *n)
 {
     uint32_t flags = spin_lock_irqsave(&em->admit_lock);
+    int held = em->holding;
 
     n->state = N_DYING;
     em->writers++;
     spin_unlock_irqrestore(&em->admit_lock, flags);
-    if (file_locks_held()) {
+    if (held || file_locks_held()) {
         n->queued = 1;
         n->reap_next = em->reap;
         em->reap = n;
+        em->reap_count++;
         if (em->closing) {
             wq_wake_all(&em->node_wq);
         }
@@ -1468,11 +1535,12 @@ static void node_final(struct ext2_mount *em, struct ext2_node *n)
 }
 
 /**
- * Free the nodes `em->reap` holds, each after a drain of the batch, so that
- * no block is freed while an older write is pending, unless the caller
- * holds a file lock, which leaves them for the next caller. Called at the
- * end of an operation, at the last unlock of a node, at a put and in
- * `ext2_sync`, so an unmount leaves none. A caller without the big lock
+ * Free the nodes `em->reap` holds, each after a drain of the batch, so that no
+ * block is freed while an older write is pending, unless the caller holds a
+ * file lock, which leaves them for the next caller, or while a remount checks
+ * the volume (`em_hold`), which reaps them once it has opened the mount again.
+ * Called at the end of an operation, at the last unlock of a node, at a put and
+ * in `ext2_sync`, so an unmount leaves none. A caller without the big lock
  * takes it when the list has a node.
  */
 static void em_reap(struct ext2_mount *em)
@@ -1484,10 +1552,11 @@ static void em_reap(struct ext2_mount *em)
         bkl_enter();
         big = 1;
     }
-    while (em->reap && !file_locks_held()) {
+    while (em->reap && !file_locks_held() && !em->holding) {
         struct ext2_node *n = em->reap;
 
         em->reap = n->reap_next;
+        em->reap_count--;
         n->queued = 0;
         if (em->wb && em->wb->count) {
             (void)ext2_writeback_drain(em);
@@ -1834,13 +1903,13 @@ int ext2_em_write_out(struct vfs_mount *mnt)
 }
 
 /** Whether admission to the mount is closed with no writer inside
- * (`em_close`): no node changes then, and a writer that waits at the gate
- * may hold a node's lock, which a settle must not wait for. Read under
- * `em->admit_lock`. */
+ * (`em->closed`): no node changes then but a dying one, which a settle does
+ * not store, and a writer that waits at the gate may hold a node's lock,
+ * which a settle must not wait for. Read under `em->admit_lock`. */
 static int em_quiet(struct ext2_mount *em)
 {
     uint32_t flags = spin_lock_irqsave(&em->admit_lock);
-    int quiet = em->closing && em->writers == 0;
+    int quiet = em->closed;
 
     spin_unlock_irqrestore(&em->admit_lock, flags);
     return quiet;
@@ -2194,24 +2263,23 @@ static int remount_readonly(struct vfs_mount *mnt, struct ext2_mount *em)
 }
 
 /**
- * Make a read-only mount writable, or one a fault stopped
- * (EXT2_MODE_STOPPED), whose operations under way `em_close` waited for:
- * the only way a stop ends. The writes the batch accepted before the fault
- * (`ext2_mark_error`) are drained, and a stopped mount's marked nodes stored
- * (`nodes_settle`), so that the check reads the volume they leave; a volume
- * whose valid bit is clear or whose error bit is set is checked as a
- * writable mount checks it, the batch set up when the mount has none, the
- * valid bit cleared on the medium, and the mode set EXT2_MODE_RW under
- * `em->super`.
- * 0, -EROFS for a volume whose features keep it read-only
- * (`em->readonly_why`) or a failed mount (`ext2_failed`), -ENOMEM for a
- * batch the heap cannot give, the drain's or a marked node's store's
- * -errno, or -errno.
+ * Make a read-only mount writable, or one a fault stopped (EXT2_MODE_STOPPED),
+ * whose operations under way `em_close` waited for: the only way a stop ends.
+ * The writes the batch accepted before the fault (`ext2_mark_error`) are
+ * drained, and a stopped mount's marked nodes stored (`nodes_settle`), so that
+ * the check reads the volume they leave; a volume whose valid bit is clear or
+ * whose error bit is set is checked as a writable mount checks it, the batch
+ * set up when the mount has none, the valid bit cleared on the medium, and the
+ * mode set EXT2_MODE_RW under `em->super`. 0, -EROFS for a volume whose
+ * features keep it read-only (`em->readonly_why`) or a failed mount
+ * (`ext2_failed`), -ENOMEM for a batch the heap cannot give, the drain's or a
+ * marked node's store's -errno, or -errno.
  *
- * The check holds no lock: admission is closed (`em_close`) and the mount
- * admits no change and allocates nothing, so no writer, allocation or free
- * of an inode changes what it reads. The batch is set up under
- * `em->batch`, and the state written under `em->super`.
+ * The check holds no lock: admission is closed (`em_close`), the mount admits
+ * no change and allocates nothing, and the final puts are held back until the
+ * caller opens the mount again (`em_hold`), so no writer, allocation or free of
+ * an inode changes what it reads. The batch is set up under `em->batch`, and
+ * the state written under `em->super`.
  */
 static int remount_writable(struct ext2_mount *em)
 {
@@ -2227,6 +2295,7 @@ static int remount_writable(struct ext2_mount *em)
     if (rc != 0) {
         return rc;
     }
+    em_hold(em);
     em->opening = 1;
     if (!(em->state & EXT2_VALID_FS) || (em->state & EXT2_ERROR_FS)) {
         rc = ext2_check_volume(em);
@@ -2255,7 +2324,8 @@ static int remount_writable(struct ext2_mount *em)
  * (`errors_option`) once that succeeds, as Linux's `ext2_remount` sets the
  * options it parsed at its end; a remount that keeps the mount as it is
  * changes only the policy, and other options are ignored. -EINVAL for a
- * bad `errors=`, before anything changes. Admission is closed first, so
+ * bad `errors=`, before anything changes. The final puts a check held back
+ * are reaped once the mount is open again. Admission is closed first, so
  * that no writer is inside while the mount changes and new ones wait
  * (`em_close`), and so is a second remount, which then reads the policy
  * this one left: a remount without `errors=` keeps the policy in force
@@ -2295,6 +2365,7 @@ static int ext2_remount(struct vfs_mount *mnt, uint32_t flags, const char *optio
         em->errors = errors;
     }
     em_open(em);
+    em_reap(em);
     return rc;
 }
 
