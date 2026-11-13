@@ -1558,9 +1558,11 @@ uint32_t netconsole_idle_ticks(void)
     if (starting && !nc_sending) {
         uint64_t now = tick_count();
 
-        wait = nc_tick_next > now && nc_tick_next - now < TICK_HZ ? (uint32_t)(nc_tick_next - now)
-               : nc_tick_next <= now                              ? 1u
-                                                                  : TICK_HZ;
+        if (nc_tick_next <= now) {
+            wait = 1;
+        } else if (nc_tick_next - now < TICK_HZ) {
+            wait = (uint32_t)(nc_tick_next - now);
+        }
     }
     return wait;
 }

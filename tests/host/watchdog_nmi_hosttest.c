@@ -280,6 +280,18 @@ int smp_cpu_count(void)
     return 1;
 }
 
+/** The unused scheduler clock stays at boot time in the NMI model. */
+int64_t rtc_monotonic_ns(void)
+{
+    return 0;
+}
+
+/** Nothing: no row changes a watchdog setting on another processor. */
+void smp_kick(int cpu)
+{
+    (void)cpu;
+}
+
 uint64_t tick_count(void)
 {
     return 0;

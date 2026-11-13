@@ -275,6 +275,15 @@ uint64_t rtc_ticks_now(void)
     return (uint64_t)now_ns / (1000000000ull / TICK_HZ);
 }
 
+/** Divide with the host's 64-bit division, for any divisor. */
+uint64_t tick_div64(uint64_t n, uint64_t d, uint64_t *rem)
+{
+    if (rem) {
+        *rem = n % d;
+    }
+    return n / d;
+}
+
 uint64_t tick_div(uint64_t n, uint32_t d, uint32_t *rem)
 {
     if (rem) {
