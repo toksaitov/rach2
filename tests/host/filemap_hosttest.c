@@ -1942,6 +1942,56 @@ static void clean_store_rows(struct vm_file *f, struct open_file *ofd, struct ds
           "and the next pass writes it");
 }
 
+/* The mapping whose pin goes during a write (`pin_gone`), and whether its
+ * release marks the page dirty, as i915's userptr does. */
+static struct vm_file *pin_file;
+static int pin_marks;
+
+/** A device's last store into the page, then its pin's release, during
+ * the write of the page's first piece. */
+static void pin_gone(void)
+{
+    model_bytes[0] = 0x77;
+    if (pin_marks) {
+        filemap_pin_dirty(pin_file, 0, MODEL_FRAME);
+    }
+    model_pinned = 0;
+}
+
+/** A device's pin that goes while a pass writes the page, through the
+ * shared mapping `f` of the file of `ofd`, whose record is `ds`, and the
+ * release of a write pin that marks its page (`filemap_pin_dirty`). */
+static void pin_rows(struct vm_file *f, struct open_file *ofd, struct dshare *ds)
+{
+    check(model_store(f, 0x76) == 1, "a store marks the page before a device pins it");
+    pin_file = f;
+    pin_marks = 0;
+    model_pinned = 1;
+    model_write_hook = pin_gone;
+    check(filemap_sync_file(ofd) == 0 && disk_bytes[0] == 0x76 && ds->ndirty == 1 &&
+              dshare_stored(ds, 0) && !model_pinned,
+          "a pin that goes during the write, after the device's last store, leaves the page "
+          "dirty, since the pass saw it before the copy");
+    check(filemap_sync_file(ofd) == 0 && disk_bytes[0] == 0x77 && ds->ndirty == 0,
+          "and the next pass writes the device's last store");
+    check(model_store(f, 0x78) == 1, "a store marks the page once more");
+    pin_marks = 1;
+    model_pinned = 1;
+    model_write_hook = pin_gone;
+    check(filemap_sync_file(ofd) == 0 && disk_bytes[0] == 0x78 && ds->ndirty == 1 &&
+              dshare_stored(ds, 0),
+          "a release that marks the page during the write leaves it dirty, counted once");
+    check(filemap_sync_file(ofd) == 0 && disk_bytes[0] == 0x77 && ds->ndirty == 0,
+          "and the next pass writes the device's last store");
+    model_bytes[0] = 0x79;
+    filemap_pin_dirty(f, 0, MODEL_FRAME + PAGE_SIZE);
+    check(ds->ndirty == 0, "a release of a frame that is no longer the file's page marks nothing");
+    filemap_pin_dirty(f, 0, MODEL_FRAME);
+    check(ds->ndirty == 1 && dshare_stored(ds, 0) && filemap_sync_file(ofd) == 0 &&
+              disk_bytes[0] == 0x79 && ds->ndirty == 0,
+          "a release after the last pass marks the page, and the next pass writes it");
+}
+
 /**
  * A pass writes only the pages stored since the last write of each, while a
  * writable mapping lives, as Linux's clear_page_dirty_for_io and
@@ -1951,7 +2001,9 @@ static void clean_store_rows(struct vm_file *f, struct open_file *ofd, struct ds
  * it again; a pass with no store between writes nothing; a sync between a
  * fault's mark and its entry makes the store fault again; a failed write
  * keeps the page for the next pass; a page a device holds keeps its bit
- * while the pin lasts; and a private mapping of the file is not walked.
+ * while the pin lasts, and when the pin goes during the write; the release
+ * of a write pin marks the page it held; and a private mapping of the file
+ * is not walked or marked.
  */
 static void clean_rows(void)
 {
@@ -1986,7 +2038,10 @@ static void clean_rows(void)
           "after taking write access from the shared mapping's entry alone and clearing the bit");
     clean_store_rows(f, &ofd, ds);
     clean_keep_rows(f, &ofd, ds);
+    pin_rows(f, &ofd, ds);
     if (p) {
+        filemap_pin_dirty(p, 0, MODEL_FRAME);
+        check(ds->ndirty == 0, "a release through a private mapping marks nothing");
         vm_file_put(p);
     }
     vm_file_put(f);
