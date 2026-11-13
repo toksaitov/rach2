@@ -4,9 +4,9 @@
 # vtest relay to the vtest server guest, booted in the GNU root's QEMU, and
 # check it against the triangle Rach2's llvmpipe draws.
 #
-# Usage: vtest-rach2.sh [-a ACCEL] [-s CPUS] [-m MIB] [-p PORT] [-w SECONDS]
-#                       [-g BDF] [-x MEASURE -o OUT [-S SCENES] [-t SECONDS]]
-#                       DIR
+# Usage: vtest-rach2.sh [-a ACCEL] [-s CPUS] [-m MIB] [-p PORT]
+#                       [-g BDF [-w SECONDS]]
+#                       [-x MEASURE -o OUT [-S SCENES] [-t SECONDS]] DIR
 #
 # DIR holds what `vtest-guest.sh stage` puts on the bed-vtest data disk: the
 # prepared image, prepared.qcow2, its backing file, the cloud image, by the
@@ -29,11 +29,14 @@
 # it. It passes when both pictures check and their checksums are equal.
 #
 # The guest's console is read once a second, and each 60 s its size and last
-# line are printed; QEMU's end before the server is ready, or SECONDS without
-# a byte on it (600), fails the run. That bound is on silence, not on the
-# boot's length, and it bounds each question to QMP the same way: QMP silent
-# for SECONDS before it has answered ends the question. At each 120 s of silence, and before that failure, the
-# runner prints what tells where the guest waits: the KVM lines of
+# line are printed; QEMU's end before the server is ready fails the run, and
+# the runner waits as long as QEMU runs, leaving a hung guest to its caller's
+# bound. Only with -g, SECONDS without a byte on the console (600) fails
+# the run too, so that a hung guest gives the function back: that bound is
+# on silence, not on the boot's length, and it bounds each question to QMP
+# the same way, QMP silent for SECONDS before it has answered ending the
+# question. At each 120 s of silence, and before that failure, the runner
+# prints what tells where the guest waits: the KVM lines of
 # /proc/stat, the interrupt counts in the fdinfo of QEMU's VM descriptor,
 # and over QMP QEMU's interrupt controllers, each vCPU's local APIC and the
 # vCPUs' registers. Once the guest is ready it prints the counts and QEMU's
@@ -75,12 +78,12 @@
 # scene's last line is printed as `vtest-rach2: measure: ...`; a scene that
 # fails fails the run.
 
-accel=tcg cpus=2 mib=2048 port=5555 silence=600
+accel=tcg cpus=2 mib=2048 port=5555 silence=''
 bdf='' measure='' results='' scenes='glmark2 piglit' seconds=''
 usage()
 {
-    echo "usage: vtest-rach2.sh [-a ACCEL] [-s CPUS] [-m MIB] [-p PORT] [-w SECONDS]" >&2
-    echo "                      [-g BDF] [-x MEASURE -o OUT [-S SCENES] [-t SECONDS]] DIR" >&2
+    echo "usage: vtest-rach2.sh [-a ACCEL] [-s CPUS] [-m MIB] [-p PORT] [-g BDF [-w SECONDS]]" >&2
+    echo "                      [-x MEASURE -o OUT [-S SCENES] [-t SECONDS]] DIR" >&2
     exit 2
 }
 while getopts a:s:m:p:w:g:x:o:S:t: o; do
@@ -104,7 +107,16 @@ dir=$(cd "$1" 2>/dev/null && pwd) || {
     echo "vtest-rach2: result: fail: no directory $1"
     exit 1
 }
-for n in "$cpus" "$mib" "$port" "$silence"; do
+# The silence bound is -g's alone, 600 s by default.
+if [ -n "$bdf" ]; then
+    silence=${silence:-600}
+    case $silence in
+        '' | *[!0-9]*) usage ;;
+    esac
+elif [ -n "$silence" ]; then
+    usage
+fi
+for n in "$cpus" "$mib" "$port"; do
     case $n in
         '' | *[!0-9]*) usage ;;
     esac
@@ -177,8 +189,8 @@ fail()
 
 # qmp COMMAND...: send QMP's capabilities negotiation and each COMMAND, a JSON
 # object, to QEMU's monitor over TCP with socat, and print what QEMU answers
-# once it has answered each, once QEMU or socat ends, or once QMP has been
-# silent for SECONDS. Until then a newline, which QMP's parser skips, goes
+# once it has answered each, once QEMU or socat ends, or, with -g, once QMP
+# has been silent for SECONDS. Until then a newline, which QMP's parser skips, goes
 # each second, so that a socat that has ended ends the writer too.
 qmp()
 {
@@ -189,7 +201,7 @@ qmp()
         echo '{"execute":"qmp_capabilities"}'
         printf '%s\n' "$@"
         heard='' still=0
-        while kill -0 "$qemu" 2>/dev/null && [ "$still" -lt "$silence" ] &&
+        while kill -0 "$qemu" 2>/dev/null && { [ -z "$silence" ] || [ "$still" -lt "$silence" ]; } &&
             [ "$(tr -d '\r' < "$work/qmp.out" | grep -c '^{"\(return\|error\)"')" -lt "$answers" ]; do
             sleep 1
             echo || break
@@ -300,8 +312,8 @@ else
     : > "$work/qemu.err"
 fi
 
-# Read the console until the server is ready, the guest fails, QEMU ends or
-# the console is silent too long.
+# Read the console until the server is ready, the guest fails, QEMU ends or,
+# with -g, the console is silent too long.
 quiet=0 waited=0 last=''
 while :; do
     [ -n "$qemu" ] || [ ! -s "$work/qemu.pid" ] || qemu=$(cat "$work/qemu.pid")
@@ -323,7 +335,7 @@ while :; do
     else
         quiet=$((quiet + 1))
     fi
-    if [ "$quiet" -ge "$silence" ]; then
+    if [ -n "$silence" ] && [ "$quiet" -ge "$silence" ]; then
         dump all
         fail "the console was silent for $silence s"
     fi
