@@ -1280,9 +1280,34 @@ mac_wait()
 reap()
 {
     wait "$1"
-    while kill -0 "$1" 2> /dev/null; do
+    while ours "$1"; do
         wait "$1"
     done
+}
+
+# ours PID: succeed while ps gives process PID, running or ended and not yet
+# reaped, as a child of this shell's own process, which a subshell's $$ does
+# not name. sh reaps a job as soon as it ends, and its number may then pass
+# to another process, so a job is signalled only after this look: the
+# number can change hands only in the moment between the look and the
+# signal, never in the hours a job may have been gone.
+ours()
+{
+    [ -n "$1" ] &&
+        [ "$(ps -o ppid= -p "$1" 2> /dev/null | tr -d ' ')" = "$(exec sh -c 'echo $PPID')" ]
+}
+
+# signal_job PID: send TERM to the job PID while ours finds it.
+signal_job()
+{
+    ! ours "$1" || kill "$1" 2> /dev/null
+}
+
+# stop_job PID: send TERM to the job PID while ours finds it, and reap it.
+stop_job()
+{
+    signal_job "$1"
+    reap "$1"
 }
 
 tssh()
@@ -1349,7 +1374,7 @@ windows_detach()
     wd_nonce=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
     : > "$wd_file"
     exec 3<&0
-    trap '[ -z "$wd_start" ] || { kill "$wd_start" 2> /dev/null; reap "$wd_start"; }; exit 143' TERM
+    trap '[ -z "$wd_start" ] || stop_job "$wd_start"; exit 143' TERM
     {
         echo "b=$wd_base"
         echo "n=$wd_nonce id=$1 o=$wout"
@@ -1503,17 +1528,15 @@ windows_stop()
 {
     wstopped='' wleft=''
     if [ -n "$wprep" ]; then
-        kill "$wprep" 2> /dev/null
-        reap "$wprep"
+        stop_job "$wprep"
         wprep='' wstopped=1
     fi
     if [ -n "$wobs" ]; then
-        kill "$wobs" 2> /dev/null
-        reap "$wobs"
+        stop_job "$wobs"
         wobs='' wstopped=1
     fi
     if [ -n "$wbeat" ]; then
-        kill "$wbeat" 2> /dev/null
+        signal_job "$wbeat"
         wbeat=
     fi
     [ -z "$wholding" ] || wstopped=1
@@ -1755,8 +1778,8 @@ windows_ended()
 # STATE/ID.claim gets the claim's output. Run in the background.
 windows_prepare()
 {
-    id=$1 beater='' wd_sleep='' wd_obs='' wstarted=''
-    trap 'kill $beater $wd_sleep $wd_obs 2> /dev/null
+    id=$1 beater='' wd_sleep='' wd_obs='' wstarted='' wp_job=''
+    trap 'for wp_job in $beater $wd_sleep $wd_obs; do signal_job "$wp_job"; done
         [ -z "$wd_obs" ] || reap "$wd_obs"
         if [ -z "$wstarted" ] || windows_clean "$id"; then
             wsl "touch $wheld/$id.prepared" > /dev/null 2>&1
@@ -1818,7 +1841,7 @@ windows_prepare()
     wd_obs=$!
     wait "$wd_obs"
     wd_obs=
-    kill "$beater" 2> /dev/null
+    signal_job "$beater"
     if ! grep -q '^status ' "$state/$id.prepare" 2> /dev/null && ! windows_clean "$id"; then
         echo "release: $(unstopped "$id")" >> "$state/$id.claim"
         return 1
@@ -1998,7 +2021,7 @@ windows()
         wobs=$!
         wait "$wobs"
         wobs=
-        kill "$wbeat" 2> /dev/null
+        signal_job "$wbeat"
         wbeat=
         rc=$(tr -d '\r' < "$state/$id.log" | sed -n 's/^status //p' | tail -n 1)
         if [ -z "$rc" ] && ! windows_clean "$id"; then
@@ -2268,17 +2291,18 @@ prepare_windows_clean()
 prepare_stop()
 {
     if [ -n "$pwsl" ]; then
-        kill "$pwsl" 2> /dev/null
-        reap "$pwsl"
+        stop_job "$pwsl"
         pwsl=
     fi
     if [ -n "$pwin" ]; then
-        kill "$pwin" 2> /dev/null
-        reap "$pwin"
+        stop_job "$pwin"
         pwin=
     fi
     if [ -n "$pmac" ]; then
-        kill -TERM -"$pmac" 2> /dev/null
+        # The group only while its leader, the job pmac, is not reaped, so
+        # that its number is still the job's; a group whose leader has
+        # ended is waited for, never signalled, as STATE/session's is.
+        ! ours "$pmac" || kill -TERM -"$pmac" 2> /dev/null
         i=0
         while kill -0 -"$pmac" 2> /dev/null && [ "$i" -lt 30 ]; do
             i=$((i + 1))
