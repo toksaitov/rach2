@@ -36,6 +36,25 @@ static const char *ev(const char *n)
     const char *v = getenv(n);
     return v ? v : "";
 }
+/**
+ * Wait until the release's own holder, in the run directory that
+ * FLOW_WORK/state/run names, has written its end: the Mac's run, which
+ * calls this from its make, then still runs once the release and its
+ * holder's drain have ended, as a run on a slow machine does.
+ */
+static void release_ended(void)
+{
+    char path[4200], *dir;
+    snprintf(path, sizeof(path), "%s/state/run", ev("FLOW_WORK"));
+    dir = fx_read(path);
+    if (!dir)
+        return;
+    dir[strcspn(dir, "\n")] = 0;
+    snprintf(path, sizeof(path), "%s/end", dir);
+    free(dir);
+    while (!fx_exists(path))
+        fx_pause();
+}
 static void append(const char *file, const char *text)
 {
     FILE *f = fopen(file, "ab");
@@ -830,6 +849,9 @@ int flow_release_mock(int argc, char **argv)
         return git_mock(argc, argv);
     if (!strcmp(name, "make") || !strcmp(name, "scp")) {
         call(!strcmp(name, "make") ? "make " : "scp ", argc, argv, 1);
+        if (!strcmp(name, "make") && *ev("RELEASE_TEST_DETACH") && argc > 1 &&
+            !strcmp(argv[1], "build/tools/etude/etude"))
+            release_ended();
         return 0;
     }
     if (!strcmp(name, "etude")) {
@@ -871,7 +893,8 @@ struct release_row {
     const char *record, *sha, *writes, *runs, *git, *accept, *machines, *windows, *native,
         *failures, *milestone, *ancestor, *master, *push, *lenovo, *prepare, *hold, *testing,
         *cmdline, *open, *slots;
-    const char *again; /* the machine of -a, or NULL for a release */
+    const char *detach; /* the Mac's run waits until the release has ended */
+    const char *again;  /* the machine of -a, or NULL for a release */
     int rerun, preparing, only;
 };
 
@@ -981,6 +1004,7 @@ static void run(struct release *r, const struct release_row *spec)
     spec_env("RELEASE_TEST_CMDLINE", spec->cmdline);
     spec_env("RELEASE_TEST_OPEN", spec->open);
     spec_env("RELEASE_TEST_SLOTS", spec->slots);
+    spec_env("RELEASE_TEST_DETACH", spec->detach);
     if (spec->native) {
         flow_put(f, "state/wt/build/tools/dev/native-hostpeer", "");
         fx_copy(f->self, flow_path(f, "state/wt/build/tools/dev/native-deploy"));
@@ -1740,8 +1764,12 @@ static int mac_rows(struct release *r)
         return 0;
     snprintf(text, sizeof(text), "milestone 7\nsha %s\nbranch %s\nchosen %s\ntouched %s\n", C,
              BRANCH, T, T);
-    run(r, &(struct release_row){
-               .record = text, .sha = C, .runs = "none", .git = "yes", .machines = MAC});
+    run(r, &(struct release_row){.record = text,
+                                 .sha = C,
+                                 .runs = "none",
+                                 .git = "yes",
+                                 .machines = MAC,
+                                 .detach = "yes"});
     ok = check(r,
                f->status == 75 && count(record(r), "^mac started ") == 1 &&
                    mac_ran(r, id, sizeof(id)) && !strncmp(id, "milestone7-222222222222-mac-", 28) &&
