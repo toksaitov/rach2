@@ -22,9 +22,14 @@
  * The last row is the futex hand-off of 80-27's pingpong: a wake and the
  * woken thread's wake back, the round's time.
  *
- * Arguments: [ROUNDS [PAUSE]], 20000 wakes a row and 50 us by default.
- * Prints one line for each row and "WAKEMUSL OK", or "WAKEMUSL FAIL
- * (detail)" and exits 1. It needs at least two processors.
+ * With the third argument `load`, two more threads on processors 2 and 3
+ * hand a futex back and forth between them for the whole run, so that
+ * every row runs while other processors block and wake, as the loop's
+ * other threads do; that needs four processors.
+ *
+ * Arguments: [ROUNDS [PAUSE [load]]], 20000 wakes a row and 50 us by
+ * default. Prints one line for each row and "WAKEMUSL OK", or "WAKEMUSL
+ * FAIL (detail)" and exits 1. It needs at least two processors.
  */
 
 #define _GNU_SOURCE
@@ -73,6 +78,9 @@ static int wake_kind;
 static int efd = -1;
 static int pfd[2] = {-1, -1};
 static int epfd = -1;
+static volatile int load_word[2]; /* the load's hand-off, one word a side */
+static volatile int load_stop;
+static unsigned long load_rounds;
 
 /** The time-stamp counter, ordered with the loads and stores around it. */
 static uint64_t tsc(void)
@@ -206,6 +214,34 @@ static void *waiter(void *arg)
     return NULL;
 }
 
+/** One side of the load, on processor 2 + `arg`: wait for its word to
+ * change, then change and wake the other side's. */
+static void *load(void *arg)
+{
+    int me = (int)(long)arg;
+    int seen = 0;
+    int first = me == 0;
+
+    pin(2 + me);
+    while (!load_stop) {
+        if (!first) {
+            while (load_word[me] == seen && !load_stop) {
+                futex(&load_word[me], FUTEX_WAIT_PRIVATE, seen);
+            }
+            seen = load_word[me];
+        }
+        first = 0;
+        __atomic_store_n(&load_word[!me], load_word[!me] + 1, __ATOMIC_SEQ_CST);
+        futex(&load_word[!me], FUTEX_WAKE_PRIVATE, 1);
+        if (me == 0) {
+            load_rounds++;
+        }
+    }
+    __atomic_store_n(&load_word[!me], load_word[!me] + 1, __ATOMIC_SEQ_CST);
+    futex(&load_word[!me], FUTEX_WAKE_PRIVATE, 1);
+    return NULL;
+}
+
 /** qsort's order of two counter values, smallest first. */
 static int by_value(const void *a, const void *b)
 {
@@ -316,6 +352,9 @@ int main(int argc, char **argv)
     double t0;
     uint64_t c0;
     long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    int loaded = argc > 3 && strcmp(argv[3], "load") == 0;
+    pthread_t loaders[2];
+    double l0;
 
     setvbuf(stdout, NULL, _IOLBF, 0);
     if (argc > 1) {
@@ -324,9 +363,9 @@ int main(int argc, char **argv)
     if (argc > 2) {
         pause_us = atof(argv[2]);
     }
-    if (rounds < 100 || cpus < 2) {
+    if (rounds < 100 || cpus < (loaded ? 4 : 2)) {
         errno = 0;
-        fail(cpus < 2 ? "fewer than two processors" : "fewer than 100 rounds");
+        fail(rounds < 100 ? "fewer than 100 rounds" : "too few processors");
     }
     latency = calloc((size_t)rounds, sizeof latency[0]);
     if (!latency) {
@@ -351,6 +390,13 @@ int main(int argc, char **argv)
     wake_row("eventfd write to epoll_pwait2", WAKE_EVENTFD);
     wake_row("pipe write to epoll_pwait2", WAKE_PIPE);
     wake_row("futex hand-off and back", WAKE_PINGPONG);
+    if (loaded) {
+        load_stop = 1;
+        pthread_join(loaders[0], NULL);
+        pthread_join(loaders[1], NULL);
+        printf("wakemusl: load: %lu hand-offs, %.3f us each\n", load_rounds,
+               (now_us() - l0) / (load_rounds ? load_rounds : 1));
+    }
     printf("WAKEMUSL OK\n");
     return 0;
 }
