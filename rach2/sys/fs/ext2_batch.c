@@ -494,13 +494,15 @@ static int writeback_plan_map(struct ext2_mount *em, struct ext2_node *n, uint32
 /**
  * Plan a piece of `len` bytes at `offset` of `n`: its place in the batch's
  * inode table, -ENOMEM when that is full; the image of its inode's table
- * block; the superblock's image when the file reaches 2 GiB without
- * `large_file`; and the block mapping, by `writeback_plan_map`.
+ * block, found through the slot getter (`ext2_slot_at`); the superblock's
+ * image when the file reaches 2 GiB without `large_file`; and the block
+ * mapping, by `writeback_plan_map`.
  */
 static int writeback_plan(struct ext2_mount *em, struct ext2_node *n, uint64_t offset, uint32_t len,
                           struct ext2_write_plan *plan)
 {
     struct ext2_writeback *wb = em->wb;
+    uint64_t at;
     int rc = 0;
 
     for (plan->node_index = 0; plan->node_index < wb->count; plan->node_index++) {
@@ -511,8 +513,11 @@ static int writeback_plan(struct ext2_mount *em, struct ext2_node *n, uint64_t o
     if (plan->node_index == wb->count && wb->count == EXT2_WB_NODES) {
         return -ENOMEM;
     }
-    plan->table = writeback_meta(em, READ_SLOT, n->ino,
-                                 (uint32_t)(ext2_inode_offset(em, n->ino) >> 12), WB_INODE, &rc);
+    rc = ext2_slot_at(em, READ_SLOT, n->ino, &at);
+    if (rc != 0) {
+        return rc;
+    }
+    plan->table = writeback_meta(em, READ_SLOT, n->ino, (uint32_t)(at >> 12), WB_INODE, &rc);
     if (!plan->table) {
         return rc;
     }
