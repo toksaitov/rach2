@@ -1,7 +1,7 @@
 /**
  * Drive the production USB recorder and scheduler with explicit event order.
  *
- * host-deps:
+ * host-deps: tests/host/compat/rcu_none.c
  *
  * The clock, interrupt mask and CPU switch are substituted. An optional
  * argument emits one record for the USB suite's own AWK checker.

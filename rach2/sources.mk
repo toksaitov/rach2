@@ -253,6 +253,7 @@ C_SRC_SHARED = kernel.c \
     sys/lib/idset.c \
     sys/lib/spinlock.c \
     sys/lib/lockdep.c \
+    sys/lib/rcu.c \
     sys/lib/krandom.c \
     sys/lib/ksha256.c \
     sys/lib/crc32.c \

@@ -51,6 +51,7 @@
 #include "sys/proc/uimage.h"
 #include "sys/lib/kirq.h"
 #include "sys/lib/krandom.h"
+#include "sys/lib/rcu.h"
 #include "sys/lib/ksignal.h"
 #include "sys/rtc.h"
 #include "sys/fs/krffs.h"
@@ -790,10 +791,11 @@ void timer_idle_work(void)
  * it only when the boot processor's is late (`timer_pass_late`), and none
  * makes it while another is in it. Every tick then accounts itself as idle
  * or busy (`sched_account_tick`) and reads the watched TSC's span where it
- * is the processor's turn (`vclock_watch_cpu`), and the tick that made the
- * clock's pass makes the timer pass, which wakes the sleepers and timerfds
- * whose time has come (`timer_wake_pass`). On the boot processor the
- * periodic work that has locks of its own follows (`timer_own_work`): the
+ * is the processor's turn (`vclock_watch_cpu`), one that came in user mode
+ * is a quiescent state of its processor (`rcu_tick`), and the tick that
+ * made the clock's pass makes the timer pass, which wakes the sleepers and
+ * timerfds whose time has come (`timer_wake_pass`). On the boot processor
+ * the periodic work that has locks of its own follows (`timer_own_work`): the
  * HDA tick, the lag device, the block requests' deadlines, the end of a
  * speaker's tone and the i915's release of forcewake. A signal the
  * accounting or the timer pass finds due, SIGALRM, SIGVTALRM, SIGPROF or a
@@ -863,6 +865,7 @@ static void timer_handler(isr_params_t *params)
         t = bkl_tick_charge(BKL_TICK_CLOCK, t);
     }
     sched_account_tick(FRAME_USER(params) != 0, timer_tick_due());
+    rcu_tick(FRAME_USER(params) != 0);
     t = bkl_tick_charge(BKL_TICK_ACCOUNT, t);
     if (!boot && timer_pass_late()) {
         passed = timer_clock_try(1);
@@ -4659,8 +4662,8 @@ static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
 #endif
 
 /** Start the processors past the first (`smp_start`) and register their
- * devices (`platform_cpus_started`), the lockup
- * detectors on all of them (`watchdog_init`) and the flusher
+ * devices (`platform_cpus_started`), the lockup detectors on all of them
+ * (`watchdog_init`), the grace-period thread (`rcu_init`) and the flusher
  * (`writeback_init`), then register bkl/calls, bkl/profile, bkl/long,
  * bkl/tick, cputime_test and, with the checker, lockdep/inject in
  * debugfs; a failure there is logged. */
@@ -4670,6 +4673,7 @@ static void start_processors(void)
     platform_cpus_started();
     pci_msi_rebalance();
     watchdog_init();
+    rcu_init();
     writeback_init();
     if (debugfs_create_text("bkl/calls", 0644u, &bkl_calls_ops, NULL) != 0 ||
         debugfs_create_text("bkl/profile", 0644u, &bkl_profile_ops, NULL) != 0 ||
