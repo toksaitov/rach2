@@ -533,6 +533,12 @@ void dma_fence_unwrap_end(struct dma_fence_unwrap *cursor)
     cursor->array = NULL;
 }
 
+/** Whether `f` holds other fences: an array or a chain's point. */
+int dma_fence_is_container(const struct dma_fence *f)
+{
+    return f && (f->ops == &array_ops || f->ops == &chain_ops);
+}
+
 /** Count the leaves that Linux's dma_fence_unwrap visits. */
 uint32_t dma_fence_count(struct dma_fence *f)
 {
