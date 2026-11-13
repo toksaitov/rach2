@@ -18,19 +18,19 @@
 #include "bootslot.h"
 #include "lifecycle.h"
 
-/* The root's partition on the ext2 disk: 96 MiB at LBA 2048. */
+/* The root's partition on the ext2 disk: 128 MiB at LBA 2048. */
 #define PART_OFFSET 1048576L
-#define PART_SIZE   100663296L
+#define PART_SIZE   134217728L
 
 /* The root's partition on the KRFFS disk, which suites.mk makes with
- * `96 80`: 80 MiB at LBA 2048, larger than the LC_PART_SIZE of os-real's
+ * `128 112`: 112 MiB at LBA 2048, larger than the LC_PART_SIZE of os-real's
  * other disks. */
-#define KRFFS_PART_SIZE "83886080"
+#define KRFFS_PART_SIZE "117440512"
 
 /* The free bytes a build needs on the root: the copied source tree, the
  * objects, the response file and the kernel set aside, with margin. The
- * x86-64 build with ACPICA takes about 22 MiB and its kernel 3.3 MB. */
-#define NEED_BYTES 33554432L
+ * x86-64 build with ACPICA takes about 39 MiB and its kernel 3.1 MB. */
+#define NEED_BYTES 50331648L
 
 /* The least a kernel can be: the tcc-linked kernel is about 1.7 MB on i686
  * and 2.0 MB on x86-64, and a smaller file is a build that stopped short. */
