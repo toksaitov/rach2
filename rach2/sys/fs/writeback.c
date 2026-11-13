@@ -46,7 +46,7 @@ static process_t *flusher;
 /** The expiry period in ticks. */
 static uint64_t expire_ticks(void)
 {
-    return (uint64_t)(uint32_t)dirty_expire_interval * (TICK_HZ / 100u);
+    return tick_centisecs((uint32_t)dirty_expire_interval);
 }
 
 /** Keep the count of marks read at tick `now`, unless the last reading is
@@ -163,7 +163,7 @@ static void flusher_main(void)
         arg.gen = flusher_gen;
         now = tick_count();
         period = expire_ticks();
-        interval = (uint64_t)(uint32_t)dirty_writeback_interval * (TICK_HZ / 100u);
+        interval = tick_centisecs((uint32_t)dirty_writeback_interval);
         reading_add(now, bcache_marks());
         if (interval != 0 && now - last_turn >= interval) {
             last_turn = now;

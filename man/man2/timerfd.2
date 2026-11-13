@@ -122,7 +122,7 @@ A timer keeps its time and interval to the nanosecond, as Linux does, and
 reports both so.
 A timer expires when its clock reaches its time, as Linux's
 high-resolution timers expire, never earlier: the kernel arms its local
-APIC timer to interrupt at that time between its 1 ms ticks.
+APIC timer to interrupt at that time between its 4 ms ticks.
 Where that timer is not the tick, or before a reference counter keeps the
 clock, a timer expires at the first tick at or after its time, measured
 from the clock's place within the tick in progress, and is late by under a

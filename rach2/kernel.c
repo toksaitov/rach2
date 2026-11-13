@@ -343,10 +343,11 @@ void timer_hr_pass(void)
             ptimer_post_due();
             bkl_exit();
         } else {
-            timer_wake_at(rtc_monotonic_ns() + TICK_NS);
+            timer_wake_at(rtc_monotonic_ns() + 1000000);
         }
     }
     timer_service_event();
+    sched_slice_rearm();
     timer_wake_release();
 }
 
@@ -498,9 +499,20 @@ static void timer_locked_work(uint64_t t)
 /* The boot processor's next service tick while parked, written under the
  * big lock and compared there by other processors before they release it. */
 static volatile uint32_t idle_boot_until;
+static volatile uint32_t idle_poll_us;   /* raw microsecond poll deadline, zero for none */
 static volatile uint32_t service_kicked; /* an earlier target awaits CPU0's IPI */
 
 static void timer_service_install(void);
+
+/** Keep millisecond polling independent of the scheduler tick. The caller
+ * holds the big lock with interrupts off. Longer deadlines keep their
+ * whole-tick target and its stable hardware conversion. */
+static void timer_service_target(uint32_t wait)
+{
+    idle_boot_until = (uint32_t)kernel_ticks + wait;
+    idle_poll_us = wait == 1u ? (timer_now_us() + 1000u) | 1u : 0;
+    timer_service_install();
+}
 
 /** Read each service's next deadline, under the big lock with interrupts
  * off. The one-second bound extends the reference counter before it wraps
@@ -541,8 +553,7 @@ static void timer_service_rearm(void)
 {
     uint32_t wait = timer_service_ticks();
 
-    idle_boot_until = (uint32_t)kernel_ticks + wait;
-    timer_wake_tick(tick_count() + wait);
+    timer_service_target(wait);
 }
 
 /** Run a due boot-processor service event without waiting for the big
@@ -555,7 +566,8 @@ static void timer_service_event(void)
     if (arch_cpu_id() != 0) {
         return;
     }
-    if ((int32_t)((uint32_t)kernel_ticks - idle_boot_until) < 0) {
+    if ((int32_t)((uint32_t)kernel_ticks - idle_boot_until) < 0 &&
+        (idle_poll_us == 0 || (int32_t)(timer_now_us() - idle_poll_us) < 0)) {
         timer_service_install();
         return;
     }
@@ -564,8 +576,8 @@ static void timer_service_event(void)
         timer_locked_work(t);
         bkl_exit();
     } else {
-        idle_boot_until = (uint32_t)kernel_ticks + 1u;
-        timer_wake_tick(tick_count() + 1);
+        idle_poll_us = (timer_now_us() + 1000u) | 1u;
+        timer_service_install();
     }
 }
 
@@ -576,8 +588,15 @@ static void timer_service_install(void)
 {
     uint64_t now;
     int32_t left;
+    uint32_t poll;
 
     if (arch_cpu_id() != 0) {
+        return;
+    }
+    poll = idle_poll_us;
+    if (poll != 0) {
+        left = (int32_t)(poll - timer_now_us());
+        timer_wake_at(rtc_monotonic_ns() + (left > 0 ? (int64_t)left * 1000 : 1));
         return;
     }
     now = tick_count();
@@ -633,8 +652,7 @@ int timer_idle_prepare(void)
         return timer_idle_woken() ? -1 : 0;
     }
     wait = timer_service_ticks();
-    idle_boot_until = (uint32_t)kernel_ticks + wait;
-    timer_wake_tick(tick_count() + wait);
+    timer_service_target(wait);
     latency_idle_begin();
     bkl_exit();
     return timer_idle_woken() ? -1 : 1;
@@ -650,8 +668,10 @@ void timer_idle_notify(void)
         return;
     }
     next = (uint32_t)kernel_ticks + timer_service_ticks();
-    if ((int32_t)(next - idle_boot_until) < 0) {
+    if ((int32_t)(next - idle_boot_until) < 0 ||
+        (next == (uint32_t)kernel_ticks + 1u && idle_poll_us == 0)) {
         idle_boot_until = next;
+        idle_poll_us = next == (uint32_t)kernel_ticks + 1u ? (timer_now_us() + 1000u) | 1u : 0;
         service_kicked = 1;
         smp_kick(0);
     }
@@ -680,7 +700,7 @@ void timer_idle_work(void)
 }
 
 /**
- * Service a processor's scheduler tick, account its elapsed millisecond
+ * Service a processor's scheduler tick, account its elapsed kernel tick
  * units, and preempt its current process.
  *
  * The tick runs without the big lock, as Linux's does

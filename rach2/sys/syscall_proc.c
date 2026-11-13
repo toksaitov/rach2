@@ -10347,8 +10347,9 @@ long sys_sched_rr_get_interval(isr_params_t *params)
         return -ESRCH;
     }
     slice.tv_sec = 0;
-    slice.tv_nsec =
-        p->sched_policy == SCHED_FIFO || p->sched_policy == SCHED_DEADLINE ? 0 : (long)TICK_NS;
+    slice.tv_nsec = p->sched_policy == SCHED_FIFO || p->sched_policy == SCHED_DEADLINE
+                        ? 0
+                        : (long)SCHED_INTERVAL_NS;
     if (copy_to_user((void __user *)SC_ARG(params, 1), &slice, sizeof(slice)) != 0) {
         return -EFAULT;
     }

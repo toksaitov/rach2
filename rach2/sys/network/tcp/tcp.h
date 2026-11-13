@@ -70,7 +70,7 @@
 
 /* The timers are written in milliseconds and kept in ticks of the kernel's
  * clock; TCP_MS rounds up, so that no timer is shorter than asked or 0. */
-#define TCP_MS(ms)               (((uint32_t)(ms) * TICK_HZ + 999u) / 1000u)
+#define TCP_MS(ms)               MS_TO_TICKS(ms)
 /* The retransmission timeout: 1 s before a round trip is measured (RFC
  * 6298), then the smoothed round trip plus four deviations, at least 200 ms,
  * Linux's floor, which covers a peer's delayed acknowledgement, and at most

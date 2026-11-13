@@ -289,7 +289,7 @@ static uint32_t max_delay(const uint8_t *msg, int is_v1)
     if (!is_v1 && code >= 32768u) {
         ms = ((code & 0x0fffu) | 0x1000u) << (((code >> 12) & 7) + 3);
     }
-    return ms / 1000u * TICK_HZ + ms % 1000u * TICK_HZ / 1000u;
+    return MS_TO_TICKS(ms);
 }
 
 /** The answer of a slot or of the card is due by `limit` ticks from now:

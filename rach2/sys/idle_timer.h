@@ -15,6 +15,7 @@
     } while (0)
 
 /* Each query returns the ticks until its next service, from 1 to TICK_HZ.
+ * A one-tick request retains a separate one-millisecond poll event.
  * TICK_HZ is also the clock maintenance bound when the service has no work.
  * The caller holds the big lock with interrupts off; a service whose state
  * changes outside it takes its own lock. Queries leave that state alone. */

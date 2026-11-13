@@ -202,7 +202,7 @@ static int due(uint32_t t)
 static void draw_reachable(struct nd6_if *ni)
 {
     uint32_t ms = ni->reachable_ms ? ni->reachable_ms : REACHABLE_TIME_MS;
-    uint32_t ticks = ms / 1000u * TICK_HZ + ms % 1000u * TICK_HZ / 1000u;
+    uint32_t ticks = MS_TO_TICKS(ms);
 
     ni->reachable = ticks / 2 + nd6_random_below(ticks + 1);
     if (ni->reachable == 0) {
@@ -1317,7 +1317,7 @@ static void rx_ra(struct netdev *nd, struct nd6_if *ni, const uint8_t *src, cons
     }
     retrans = read32be(msg + 12);
     if (retrans != 0) {
-        ni->retrans = retrans / 1000u * TICK_HZ + retrans % 1000u * TICK_HZ / 1000u;
+        ni->retrans = MS_TO_TICKS(retrans);
         if (ni->retrans == 0) {
             ni->retrans = 1;
         }

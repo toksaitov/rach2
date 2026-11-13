@@ -629,7 +629,7 @@ static void con_thread_main(void)
     arch_irq_enable();
     for (;;) {
         sched_service_point();
-        con_deadline = con_shadowed() ? rtc_ticks_now() + CON_FLUSH_MS * TICK_HZ / 1000u : 0;
+        con_deadline = con_shadowed() ? rtc_ticks_now() + MS_TO_TICKS(CON_FLUSH_MS) : 0;
         current_proc->wakeup_tick = con_deadline;
         (void)wq_wait_event_idle(&con_wake, con_flush_ready, NULL);
         current_proc->wakeup_tick = 0;

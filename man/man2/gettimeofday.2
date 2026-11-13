@@ -117,7 +117,7 @@ The same real time reported by
 .Fn gettimeofday .
 .It Dv CLOCK_MONOTONIC
 ID 1.
-Time since boot: the 1 ms ticks of the timer counted at the length
+Time since boot: the 4 ms ticks of the timer counted at the length
 .Xr adjtimex 2
 gives each, with the place within the current tick added from the
 reference that keeps the clock, the HPET, the PM timer, the TSC or the
@@ -181,7 +181,7 @@ unless it is null: for
 and
 .Dv CLOCK_BOOTTIME ,
 one count of the reference, rounded up to a nanosecond, and 1 microsecond
-with the 8254; and the 1 ms tick for every other clock, the coarse and CPU
+with the 8254; and the 4 ms tick for every other clock, the coarse and CPU
 clocks.
 Each clock advances in steps of its resolution.
 .Pp

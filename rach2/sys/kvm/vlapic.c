@@ -623,7 +623,7 @@ static uint64_t timer_next_ns(const struct lapic *l)
     }
     khz = l->v->tsc_khz;
     if (khz == 0) {
-        return now + TICK_NS;
+        return now + 1000000u;
     }
     left = l->tscdeadline - tsc;
     if (left / khz >= MAX_WAIT_NS / 1000000u) {

@@ -336,8 +336,7 @@ static int32_t waiter_sleep(struct waiter *w)
     current_proc->wakeup_tick = 0;
     if (w->deadline != NO_DEADLINE) {
         left = w->deadline - dma_fence_now();
-        delta = tick_div((uint64_t)(left > 0 ? left : 0), 1000, NULL);
-        delta = tick_div(delta + 999, 1000, NULL);
+        delta = tick_div64((uint64_t)(left > 0 ? left : 0) + TICK_NS - 1u, TICK_NS, NULL);
         current_proc->wakeup_tick = rtc_ticks_now() + delta + 1;
     }
     rc = wq_wait_event(&w->wq, waiter_ready, w);

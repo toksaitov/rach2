@@ -14,10 +14,10 @@
 #include "../proc/sched.h"
 #include "../timer.h"
 
-/** `ms` milliseconds as whole ticks, rounded down. */
+/** `ms` milliseconds as whole ticks, rounded up. */
 static uint32_t ms_ticks(uint32_t ms)
 {
-    return ms / 1000u * TICK_HZ + ms % 1000u * TICK_HZ / 1000u;
+    return MS_TO_TICKS(ms);
 }
 
 /** The low word of the tick count, which the tests' intervals are measured
@@ -304,7 +304,10 @@ static void audio_run_scale_test(uint32_t duration_ms)
                    audio_get_driver_name());
 
     total = (uint32_t)SCALE_NOTES * (_scale_note_frames + _scale_rest_frames);
-    limit = now_ticks() + 4u * (total / (sample_rate / TICK_HZ)) + TICK_HZ;
+    limit =
+        now_ticks() +
+        (uint32_t)tick_div64((uint64_t)4u * total * TICK_HZ + sample_rate - 1u, sample_rate, NULL) +
+        TICK_HZ;
     while (_scale_frames < total && (int32_t)(now_ticks() - limit) < 0) {
         idle_wait_irq_on();
     }

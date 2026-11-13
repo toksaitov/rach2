@@ -65,12 +65,12 @@ struct hr_state {
 /* The time before a tick's time at which an interrupt still counts as the
  * tick: the timer's rate measured against the reference can make it run a
  * little fast, and an interrupt so early is the tick, not a second one. */
-#define HR_SLACK_NS (TICK_NS / 16u)
+#define HR_SLACK_NS 62500u
 
 /* The ticks a processor may fall behind and keep its tick's phase; past
  * them, as after a virtual machine stood still, its tick starts again a
  * common tick edge. */
-#define HR_BEHIND_MAX 4000u
+#define HR_BEHIND_MAX TICK_HZ * 4u
 
 static struct hr_state hr_cpu[NR_CPUS];
 /* The vector of the timer's interrupts between ticks, 0 until
@@ -552,7 +552,7 @@ int apic_hr_entry(uint32_t vector)
     return result;
 }
 
-/** Return the current scheduler period in millisecond clock units. */
+/** Return the current scheduler period in kernel tick units. */
 uint32_t timer_tick_period(void)
 {
     return hr_vector != 0 && timer_tick_shared() && hr_cpu[arch_cpu_id()].oneshot
@@ -649,7 +649,7 @@ void apic_hr_init(uint32_t counts)
     }
     hr_tick_counts = counts;
     kcpu_id(1, &a, &b, &c, &d);
-    hr_sched_ns = (c & (1u << 31)) != 0 ? 4u * TICK_NS : TICK_NS;
+    hr_sched_ns = TICK_NS;
     hr_deadline = (c & (1u << 24)) != 0 && timer_calibrate() != 0;
     hr_vector = APIC_TIMER_VECTOR;
     klog(KLOG_INFO, "lapic", "timer: vector %d for ticks and events", hr_vector);
