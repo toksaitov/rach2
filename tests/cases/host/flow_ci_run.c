@@ -615,8 +615,9 @@ static int both_chosen_rows(struct run_fixture *r)
     return ok;
 }
 
-/** The ia32 profile's run, `RACH2_KERNEL=ia32 ARCH=i686 tests/run`, after
- * both architectures, and its `ia32:NAME` failures. */
+/** The ia32 profile's run, `RACH2_KERNEL=ia32 ARCH=i686 tests/run` of the
+ * suites of ia32-suites less those of ia32-deferred, after both
+ * architectures, and its `ia32:NAME` failures. */
 static int ia32_rows(struct run_fixture *r)
 {
     static const struct run_case rows[] = {
@@ -665,6 +666,12 @@ static int ia32_rows(struct run_fixture *r)
     c.status = 2;
     r->suites = "ia32:fpu";
     ok = row(r, &c) && words(r, path("calls.make"), "") && ok;
+    c.name = "ia32: a deferred suite";
+    c.failed = "";
+    c.status = 0;
+    r->suites = "ia32:shutdown";
+    ok = row(r, &c) && words(r, path("calls.make"), "") &&
+         fx_exists(output_path(r, "full-ia32/skipped")) && ok;
     r->suites = "";
     return ok;
 }
