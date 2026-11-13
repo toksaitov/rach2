@@ -390,7 +390,8 @@ int main(int argc, char **argv)
     snprintf(subdir, sizeof(subdir), "%s/lchowndir", dir);
     snprintf(decoy_dir, sizeof(decoy_dir), "%s/lchowndecoy", dir);
     snprintf(decoy, sizeof(decoy), "%s/lchown.tmp", decoy_dir);
-    tidy();
+    /* Made here or refused: an existing path, perhaps a link, is never
+     * walked, and tidy removes only what this run made. */
     if (mkdir(work, 0755) != 0) {
         return fail(MAKE_FILE);
     }
