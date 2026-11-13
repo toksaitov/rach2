@@ -1069,15 +1069,6 @@ static long ctl_locked(struct epoll *ep, int op, int fd, fd_entry_t *target, con
 }
 
 /**
- * The change runs without the big lock but where the target's poll needs
- * it, under the set's `mtx`, and `ep_nest_mtx` before it when the
- * descriptor added, changed or removed is a set, as Linux's `do_epoll_ctl`
- * (fs/eventpoll.c:2479-2619). EPOLLEXCLUSIVE is refused with EPOLL_CTL_MOD,
- * on a set, and with an event outside EP_EXCLUSIVE_OK, as Linux refuses
- * them. The registration's record comes from the heap before the locks,
- * so an add with no room fails with ENOMEM before the other checks.
- */
-/**
  * The checks of the epoll_ctl of `params` on the set `ep` and the
  * descriptor `target` it names, with the event read into `ev` unless the
  * operation is EPOLL_CTL_DEL: 0, or -EBADF, -EINVAL, -EPERM or -EFAULT, as
@@ -1112,6 +1103,16 @@ static long ctl_check(struct isr_params *params, struct epoll *ep, fd_entry_t *t
     return 0;
 }
 
+/**
+ * The change runs without the big lock but where the target's poll needs
+ * it, under the set's `mtx`, and `ep_nest_mtx` before it when the
+ * descriptor added, changed or removed is a set, as Linux's `do_epoll_ctl`
+ * (fs/eventpoll.c:2479-2619). EPOLLEXCLUSIVE is refused with EPOLL_CTL_MOD,
+ * on a set, and with an event outside EP_EXCLUSIVE_OK, as Linux refuses
+ * them. The registration's record comes from the heap before the locks,
+ * so an add with no room fails with ENOMEM before the checks made under
+ * them, EEXIST and ELOOP, where Linux's allocates after those.
+ */
 long sys_epoll_ctl(struct isr_params *params)
 {
     int epfd = (int)SC_ARG(params, 0);

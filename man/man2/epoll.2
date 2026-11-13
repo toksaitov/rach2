@@ -63,10 +63,9 @@ A registration is level-triggered: a wait reports it while its
 descriptor is ready.
 With
 .Dv EPOLLET
-it is edge-triggered: a wait reports it when an event appears, or when
-the descriptor has changed since its last report in a way its events
-watch, as a pipe drained and filled again between two waits has, and not
-again until then.
+it is edge-triggered: a wait reports it after a change its events watch,
+if an event is ready then, and not again until the next such change, as
+in Linux.
 A change is data that came, which
 .Dv EPOLLIN ,
 .Dv EPOLLPRI ,
@@ -91,10 +90,13 @@ With
 .Dv EPOLLONESHOT
 the first report disables it, errors and hangups included, until an
 .Dv EPOLL_CTL_MOD .
-.Dv EPOLLEXCLUSIVE
-is accepted at
+With
+.Dv EPOLLEXCLUSIVE ,
+which only
 .Dv EPOLL_CTL_ADD
-and changes nothing, since each wait here wakes its own process.
+takes, a change wakes one of the sets that watch the descriptor so and
+have a process waiting, not each of them, as in Linux; a set with no
+process waiting is told of the change all the same.
 .Pp
 .Fn epoll_wait ,
 number 256 on i386 and 232 on x86-64, waits until a descriptor of the set is ready, a signal
@@ -121,7 +123,7 @@ of 64-bit seconds and nanoseconds; negative seconds are
 .Er EINVAL ,
 and a timeout longer than 2147483647 milliseconds, about 24.8 days, is
 shortened to that.
-A timeout ends at the first 1 ms tick at or after its end, and not
+A timeout ends at the first 4 ms tick at or after its end, and not
 before
 .Dv CLOCK_MONOTONIC
 has advanced by it, as
@@ -130,21 +132,17 @@ describes.
 .Pp
 A registration belongs to the descriptor number and the open file it
 named when it was added, and lasts while that open file is open in any
-process, as in Linux: a child of
-.Xr fork 2
-that closes its copy of the number leaves the registration to its
-parent, and the wait after the open file's last close drops it.
-A wait reports a registration only while the caller's descriptor at its
-number names its open file, since a wait sleeps only on what the
-caller's own descriptors keep open; Linux reports it through the open
-file whatever became of the number.
-A wait asleep does not keep those descriptors, as on Linux: a close of
+process, whatever became of the number, as in Linux: it reports the open
+file's events after the number is closed while another descriptor, in
+this process or a child of
+.Xr fork 2 ,
+keeps the open file, and the open file's last close removes it.
+A wait does not keep the descriptors of its set, as on Linux: a close of
 one, or a
 .Xr dup2 2
-onto it, by another thread sharing the descriptor table takes the wait
-off every queue it sleeps on, releases the descriptor at once, and wakes
-the wait to look at its set again, so that a pipe's write end closed in
-this way ends a read of the pipe with the end of file.
+onto it, by another thread sharing the descriptor table releases it at
+once, so that a pipe's write end closed in this way ends a read of the
+pipe with the end of file and a wait on the read end reports the hangup.
 .Xr poll 2
 and
 .Xr select 2
@@ -204,7 +202,17 @@ is not one of those above;
 is not positive;
 .Dv EPOLL_CTL_MOD
 touched
-.Dv EPOLLEXCLUSIVE ;
+.Dv EPOLLEXCLUSIVE ,
+or
+.Dv EPOLL_CTL_ADD
+gave it with a set or with an event other than
+.Dv EPOLLIN ,
+.Dv EPOLLOUT ,
+.Dv EPOLLERR ,
+.Dv EPOLLHUP ,
+.Dv EPOLLWAKEUP
+and
+.Dv EPOLLET ;
 or the timeout of
 .Fn epoll_pwait2
 has negative seconds, or nanoseconds outside 0 to 999999999.
