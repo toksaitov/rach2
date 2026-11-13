@@ -317,6 +317,7 @@ void init_sched(void)
     _sched_enabled = 0;
     waits_held = 0;
     pick_count = pick_steps = 0;
+    rt_queued = 0;
     for (c = 0; c < NR_CPUS; c++) {
         run_queues[c].head = run_queues[c].tail = NULL;
         run_queues[c].count = run_queues[c].rt_count = 0;
@@ -819,8 +820,10 @@ void sched_priority_changed(process_t *p)
         struct ready_queue *q = &run_queues[p->cpu];
 
         q->rt_count -= p->ready_rt;
+        rt_queued -= p->ready_rt;
         p->ready_rt = sched_priority(p) != 0;
         q->rt_count += p->ready_rt;
+        rt_queued += p->ready_rt;
     }
     if (cpu_table[p->cpu].current == p) {
         if (sched_rt_outranks(p->cpu, p)) {
