@@ -3250,6 +3250,23 @@ int vfs_fdatasync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
     return sync_handle(mnt, handle, ops->fdatasync ? ops->fdatasync : ops->fsync, seen);
 }
 
+/** Whether a mount in a slot before `i` is on `dev` and shows the file
+ * system `mounts[i]` shows, whose failure that mount's turn in
+ * `vfs_device_failed` has recorded. Under the big lock. */
+static int failed_base_seen(block_device_t *dev, int i)
+{
+    struct vfs_mount *base = mount_base(mounts[i]);
+    int j;
+
+    for (j = 0; j < i; j++) {
+        if (mounts[j] && mounts[j]->state != VFS_FREE && mounts[j]->dev == dev &&
+            mount_base(mounts[j]) == base) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
 {
     int i;
@@ -3261,7 +3278,9 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
         if (!mounts[i]->write_error) {
             mounts[i]->write_error = rc;
         }
-        vfs_wb_err_set(mounts[i], rc);
+        if (!failed_base_seen(dev, i)) {
+            vfs_wb_err_set(mounts[i], rc); /* once for a base and its binds */
+        }
         mounts[i]->flags |= VFS_MS_RDONLY;
         klog(KLOG_WARN, "vfs", "read-only: %s: write of sector %d failed (%d)",
              mounts[i]->covered_path, (int)lba, rc);
@@ -3926,8 +3945,7 @@ static void kfs_page_failed(int rc)
 {
     uint32_t flags = spin_lock_irqsave(&mount_table_lock);
 
-    if (mounts && mounts[0] && mounts[0]->state != VFS_FREE &&
-        mounts[0]->type == &vfs_krffs_type) {
+    if (mounts && mounts[0] && mounts[0]->state != VFS_FREE && mounts[0]->type == &vfs_krffs_type) {
         vfs_wb_err_set(mounts[0], rc);
     }
     spin_unlock_irqrestore(&mount_table_lock, flags);

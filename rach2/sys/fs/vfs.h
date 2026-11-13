@@ -1179,11 +1179,12 @@ int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options);
 
 /**
  * A write to `dev` failed at `lba` with `rc`: every mount on the device goes
- * read-only for the rest of its life, with a record in the kernel log,
- * keeps the first such error in `write_error`, and records this one for the
- * syncs to report (`vfs_wb_err_set`). The buffer cache calls it for a failed
- * write or flush and for a device that has gone, and `vfs_fsync`,
- * `vfs_sync_all` and the unmount for a failed flush of the device.
+ * read-only for the rest of its life, with a record in the kernel log, and
+ * keeps the first such error in `write_error`, and each file system on the
+ * device records this one once for the syncs to report (`vfs_wb_err_set`),
+ * however many binds show it, so that a sync between two records does not
+ * report one failure twice. The buffer cache calls it for a failed write or
+ * flush (`bcache_flush`) and for a device that has gone. Under the big lock.
  */
 void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc);
 
