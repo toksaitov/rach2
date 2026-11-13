@@ -130,6 +130,63 @@ struct bkl_thread_count {
 };
 static struct bkl_thread_count bkl_threads[BKL_THREAD_SLOTS];
 
+/* The thread bkl/calls counts alone, which a write of `thread TID` or
+ * `thread NAME` chooses (`smp_calls_store`): FILTER_NONE counts every
+ * thread, FILTER_TID the thread whose ID is `filter_tid` and FILTER_COMM
+ * each thread whose name is `filter_comm`, as Wine names its command
+ * thread `wined3d_cs` before a program's loop gives it an ID. */
+#define FILTER_NONE 0
+#define FILTER_TID  1
+#define FILTER_COMM 2
+static volatile int filter_kind;
+static uint32_t filter_tid;
+static char filter_comm[16];
+
+/* The chosen thread's switches away while it could still run, by the
+ * thread switched to (`bkl_note_switch`): those of a sched_yield, and the
+ * others, the tick's, an interrupt's or a call's exit. A slot is the
+ * incoming thread's from its first such switch until the counts are
+ * zeroed; one that finds every slot taken counts in `switches_lost`. The
+ * run queues' lock, under which every switch is noted, guards them. */
+#define SWITCH_SLOTS 32
+struct bkl_switch_count {
+    uint32_t pid; /* the thread switched to, 0 for a free slot */
+    char comm[16];
+    uint32_t yields;
+    uint32_t preempts;
+};
+static struct bkl_switch_count switches[SWITCH_SLOTS];
+static uint32_t switches_lost;
+
+/* The chosen thread's sleeps by the system call it slept in, any number
+ * from BKL_ENTRY_SYSCALLS up and a sleep outside a call counted at
+ * BKL_ENTRY_SYSCALLS; a sleep in an ioctl counts under its request's slot
+ * too (`bkl_ioctl_count.blocks`). Guarded as `switches`. */
+static uint32_t blocks[BKL_ENTRY_SYSCALLS + 1];
+
+/** Whether bkl/calls counts what thread `p` does: every thread while none
+ * is chosen, else the chosen one alone. */
+static int filter_wants(const struct process *p)
+{
+    int i;
+
+    if (filter_kind == FILTER_NONE) {
+        return 1;
+    }
+    if (!p) {
+        return 0;
+    }
+    if (filter_kind == FILTER_TID) {
+        return p->pid == filter_tid;
+    }
+    for (i = 0; i < (int)sizeof(filter_comm) && filter_comm[i] == p->comm[i]; i++) {
+        if (filter_comm[i] == '\0') {
+            return 1;
+        }
+    }
+    return i == (int)sizeof(filter_comm);
+}
+
 /* A processor's own calls and their time for each key, then for each ioctl
  * slot, which a call counts with or without the big lock and a read of
  * bkl/calls sums over the processors, as Linux keeps per-processor counters
@@ -150,6 +207,7 @@ struct bkl_ioctl_count {
     uint32_t cmd;
     volatile uint32_t used; /* IOCTL_FREE, IOCTL_CLAIM or IOCTL_USED */
     struct bkl_call_count count;
+    uint32_t blocks; /* the chosen thread's sleeps in the request (`blocks`) */
 };
 static struct bkl_ioctl_count bkl_ioctls[BKL_IOCTL_SLOTS];
 static volatile uint32_t bkl_ioctls_lost; /* calls of a request no slot took */
@@ -414,6 +472,28 @@ static struct bkl_call_count *thread_count(const struct percpu *cpu)
     return &spare->count;
 }
 
+/** Charge a hold of `held` cycles that waited `waited` under its entry
+ * `key`, its kernel thread's line, the call it slept in and its ioctl
+ * request's slot plus one `ioctl`, as bkl/calls shows them. */
+static void bkl_hold_count(const struct percpu *cpu, int key, int ioctl, uint64_t held,
+                           uint64_t waited)
+{
+    struct bkl_call_count *mine;
+
+    mine = key == BKL_ENTRY_SYSCALLS || key == BKL_KEY_SWITCH || key == BKL_KEY_IDLE
+               ? thread_count(cpu)
+               : NULL;
+    call_hold(mine ? mine : &bkl_calls[key], held, waited);
+    if (key == BKL_KEY_SWITCH && cpu->bkl_slept >= 0) {
+        call_hold(
+            &bkl_slept[cpu->bkl_slept < BKL_ENTRY_SYSCALLS ? cpu->bkl_slept : BKL_ENTRY_SYSCALLS],
+            held, waited);
+    }
+    if (ioctl > 0) {
+        call_hold(&bkl_ioctls[ioctl - 1].count, held, waited);
+    }
+}
+
 /** Count the hold that ends now on `cpu`, which still holds the lock, under
  * its entry and against the longest. The first hold to end, the boot
  * processor's start-up, which nobody waits on, is left out. A take after an
@@ -424,7 +504,6 @@ static void bkl_hold_end(struct percpu *cpu)
     int c = arch_cpu_id();
     int key = hold_key(cpu), ioctl;
     int32_t nr = cpu->bkl_nr;
-    struct bkl_call_count *mine;
 
     bkl_recent[bkl_releases % BKL_WAIT_HOLDS].cycles = held;
     bkl_recent[bkl_releases % BKL_WAIT_HOLDS].vector = cpu->bkl_vector;
@@ -440,17 +519,8 @@ static void bkl_hold_end(struct percpu *cpu)
     }
     bkl_entry_cycles[key] += held;
     bkl_entry_holds[key]++;
-    mine = key == BKL_ENTRY_SYSCALLS || key == BKL_KEY_SWITCH || key == BKL_KEY_IDLE
-               ? thread_count(cpu)
-               : NULL;
-    call_hold(mine ? mine : &bkl_calls[key], held, waited);
-    if (key == BKL_KEY_SWITCH && cpu->bkl_slept >= 0) {
-        call_hold(
-            &bkl_slept[cpu->bkl_slept < BKL_ENTRY_SYSCALLS ? cpu->bkl_slept : BKL_ENTRY_SYSCALLS],
-            held, waited);
-    }
-    if (ioctl > 0) {
-        call_hold(&bkl_ioctls[ioctl - 1].count, held, waited);
+    if (!cpu->bkl_unfiltered) {
+        bkl_hold_count(cpu, key, ioctl, held, waited);
     }
     if (held > bkl_hold_max_cycles) {
         bkl_hold_max_cycles = held;
@@ -505,7 +575,7 @@ void bkl_note_entry(uint32_t vector, int32_t nr, int locked)
             cpu->bkl_ioctl = 0;
         }
     }
-    if (nr < 0) {
+    if (nr < 0 && filter_wants(cpu->current)) {
         t = tally_of(BKL_ENTRY_SYSCALLS + (int)(vector & 0xffu));
         if (t) {
             t->calls++;
@@ -694,6 +764,9 @@ void smp_call_end(uint32_t nr, int ioctl, uint64_t start)
     uint64_t wall = start != 0 ? arch_cycles() - start : 0;
     struct bkl_tally *t = tally_of(nr < BKL_ENTRY_SYSCALLS ? (int)nr : BKL_KEY_BIGCALL);
 
+    if (!filter_wants(current_proc)) {
+        return;
+    }
     if (t) {
         t->calls++;
         t->wall += wall;
@@ -758,6 +831,53 @@ static uint32_t entry_of(const struct process *p, uint32_t *cmd)
     }
     key = isr_call_entry(p, cmd);
     return key < 0 ? 0u : (uint32_t)key + 1u;
+}
+
+void bkl_note_switch(const struct process *old, const struct process *next, int yielded)
+{
+    struct bkl_switch_count *spare = NULL, *c;
+    uint32_t cmd;
+    int i, key;
+
+    if (filter_kind == FILTER_NONE || !filter_wants(old)) {
+        return;
+    }
+    if (old->state != PROC_READY) {
+        key = (int)entry_of(old, &cmd) - 1;
+        if (key == BKL_PROFILE_IOCTL) {
+            i = ioctl_slot(cmd);
+            if (i > 0) {
+                bkl_ioctls[i - 1].blocks++;
+            }
+            key = old->orig_nr;
+        }
+        blocks[key >= 0 && key < BKL_ENTRY_SYSCALLS ? key : BKL_ENTRY_SYSCALLS]++;
+        return;
+    }
+    for (i = 0; i < SWITCH_SLOTS; i++) {
+        c = &switches[i];
+        if (c->pid == next->pid) {
+            break;
+        }
+        if (c->pid == 0 && !spare) {
+            spare = c;
+        }
+    }
+    if (i == SWITCH_SLOTS) {
+        if (!spare) {
+            switches_lost++;
+            return;
+        }
+        c = spare;
+        c->pid = next->pid;
+        k_memcpy(c->comm, next->comm, sizeof(c->comm));
+        c->comm[sizeof(c->comm) - 1] = '\0';
+    }
+    if (yielded) {
+        c->yields++;
+    } else {
+        c->preempts++;
+    }
 }
 
 /** Count the sample `chain` in the entry `entry`, the ioctl request `cmd`
@@ -940,6 +1060,56 @@ static void text_thread(struct bkl_text *t, const struct bkl_thread_count *k)
     text_ch(t, '\n');
 }
 
+/** Append the chosen thread's lines: `thread` with its ID or name, its
+ * switches away by the thread switched to, and its sleeps by system call
+ * and by ioctl request. */
+static void text_filter(struct bkl_text *t)
+{
+    int i;
+
+    text_str(t, "thread ");
+    if (filter_kind == FILTER_TID) {
+        text_dec(t, filter_tid);
+    } else {
+        text_str(t, filter_comm);
+    }
+    text_ch(t, '\n');
+    for (i = 0; i < SWITCH_SLOTS; i++) {
+        if (switches[i].pid != 0) {
+            text_str(t, "switch ");
+            text_dec(t, switches[i].pid);
+            text_ch(t, ' ');
+            text_dec(t, switches[i].yields);
+            text_ch(t, ' ');
+            text_dec(t, switches[i].preempts);
+            text_ch(t, ' ');
+            text_str(t, switches[i].comm);
+            text_ch(t, '\n');
+        }
+    }
+    text_str(t, "switch_lost ");
+    text_dec(t, switches_lost);
+    text_ch(t, '\n');
+    for (i = 0; i <= BKL_ENTRY_SYSCALLS; i++) {
+        if (blocks[i] != 0) {
+            text_str(t, "block syscall ");
+            text_dec(t, (uint64_t)i);
+            text_ch(t, ' ');
+            text_dec(t, blocks[i]);
+            text_ch(t, '\n');
+        }
+    }
+    for (i = 0; i < BKL_IOCTL_SLOTS; i++) {
+        if (bkl_ioctls[i].used == IOCTL_USED && bkl_ioctls[i].blocks != 0) {
+            text_str(t, "block ioctl ");
+            text_hex(t, bkl_ioctls[i].cmd);
+            text_ch(t, ' ');
+            text_dec(t, bkl_ioctls[i].blocks);
+            text_ch(t, '\n');
+        }
+    }
+}
+
 int32_t smp_calls_show(void *data, char *buf, uint32_t cap)
 {
     struct bkl_text t;
@@ -979,20 +1149,59 @@ int32_t smp_calls_show(void *data, char *buf, uint32_t cap)
     text_str(&t, "ioctl_lost ");
     text_dec(&t, bkl_ioctls_lost);
     text_ch(&t, '\n');
+    if (filter_kind != FILTER_NONE) {
+        text_filter(&t);
+    }
     return (int32_t)t.len;
 }
 
 int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len)
 {
-    int i;
+    static const char thread[7] = {'t', 'h', 'r', 'e', 'a', 'd', ' '};
+    char word[32];
+    uint32_t n = len < sizeof(word) ? len : sizeof(word), i, tid = 0, digit;
+    int kind = FILTER_NONE, digits = 1;
+    uint32_t flags;
 
     (void)data;
-    (void)buf;
+    if (n >= sizeof(thread) && copy_from_user(word, buf, n) == 0) {
+        for (i = 0; i < sizeof(thread) && word[i] == thread[i]; i++) {
+        }
+        kind = i == sizeof(thread) ? FILTER_COMM : FILTER_NONE;
+    }
+    if (kind != FILTER_NONE) {
+        if (n == sizeof(word) && n < len) {
+            return -EINVAL;
+        }
+        while (n > sizeof(thread) && (word[n - 1] == '\n' || word[n - 1] == ' ')) {
+            n--;
+        }
+        if (n == sizeof(thread) || n - sizeof(thread) >= sizeof(filter_comm)) {
+            return -EINVAL;
+        }
+        for (i = sizeof(thread); i < n; i++) {
+            if (word[i] < '0' || word[i] > '9') {
+                digits = 0;
+            } else if (digits) {
+                digit = (uint32_t)(word[i] - '0');
+                if (tid > (0x7fffffffu - digit) / 10u) {
+                    return -EINVAL;
+                }
+                tid = tid * 10u + digit;
+            }
+        }
+        if (digits) {
+            kind = FILTER_TID;
+        }
+    }
+    flags = sched_lock_take();
+    filter_kind = FILTER_NONE;
     k_memset(bkl_calls, 0, sizeof(bkl_calls));
     k_memset(bkl_slept, 0, sizeof(bkl_slept));
     k_memset(bkl_threads, 0, sizeof(bkl_threads));
     for (i = 0; i < BKL_IOCTL_SLOTS; i++) {
         k_memset(&bkl_ioctls[i].count, 0, sizeof(bkl_ioctls[i].count));
+        bkl_ioctls[i].blocks = 0;
     }
     for (i = 0; i < NR_CPUS; i++) {
         if (bkl_tally[i]) {
@@ -1000,6 +1209,16 @@ int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len)
         }
     }
     bkl_ioctls_lost = 0;
+    k_memset(switches, 0, sizeof(switches));
+    switches_lost = 0;
+    k_memset(blocks, 0, sizeof(blocks));
+    k_memset(filter_comm, 0, sizeof(filter_comm));
+    if (kind == FILTER_COMM) {
+        k_memcpy(filter_comm, word + sizeof(thread), n - sizeof(thread));
+    }
+    filter_tid = tid;
+    filter_kind = kind;
+    sched_lock_give(flags);
     return (int32_t)len;
 }
 
@@ -1276,6 +1495,7 @@ static void bkl_mark_hold(struct percpu *cpu)
     cpu->bkl_vector = 0;
     cpu->bkl_nr = -1;
     cpu->bkl_ioctl = 0;
+    cpu->bkl_unfiltered = !filter_wants(p);
     if (key == BKL_PROFILE_IOCTL) {
         cpu->bkl_vector = BKL_CALL_VECTOR;
         cpu->bkl_nr = p->orig_nr;
