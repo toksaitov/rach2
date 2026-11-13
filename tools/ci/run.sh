@@ -208,7 +208,8 @@ share() { # share [finished]
 # Each architecture is cleaned, then each is built, and the suites of every
 # architecture that built run as one run of tests/run, `bigmem` after it as a
 # run of its own, and last, once both architectures have built, the ia32
-# profile's `all` as a run of `RACH2_KERNEL=ia32 ARCH=i686 tests/run`, which
+# profile's suites, as tools/ci/ia32-suites and ia32-deferred give them, as a
+# run of `RACH2_KERNEL=ia32 ARCH=i686 tests/run`, which
 # boots the i686 build's cases on the x86-64 build's kernel (tests/Readme.md,
 # The ia32 profile); a failure is `ARCH:build`, and `ia32:build` when the
 # profile could not run for want of a build. With SUITES, the run runs
@@ -253,6 +254,19 @@ else
     done
     ia32=${ia32# }
     [ -z "$ia32" ] || echo "ci: full: running again on ia32: $ia32" | copy -a "$out/log"
+fi
+# The profile runs the suites tools/ci/ia32-suites names in place of `all`,
+# and leaves out those tools/ci/ia32-deferred names; etude refuses a named
+# suite that has no case under the profile.
+if [ -n "$ia32" ]; then
+    deferred=$(sed -e 's/#.*//' -e '/^ *$/d' tools/ci/ia32-deferred)
+    [ "$ia32" != all ] || ia32=$(sed -e 's/#.*//' -e '/^ *$/d' tools/ci/ia32-suites)
+    kept=""
+    for n in $ia32; do
+        echo "$deferred" | grep -qx "$n" || kept="$kept $n"
+    done
+    ia32=${kept# }
+    echo "ci: full: ia32 leaves out: $(echo "$deferred" | tr '\n' ' ')" | copy -a "$out/log"
 fi
 builds=$tested
 [ -z "$ia32" ] || builds="i686 x86_64"
