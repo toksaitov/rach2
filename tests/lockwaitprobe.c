@@ -7,17 +7,17 @@
  * no two of its blocks are next to each other on the disk, and a small file
  * `near` beside them; the volume is unmounted and mounted again, which
  * leaves nothing of it in the caches. A child then reads `near`, rewrites a
- * block of it, and makes and removes a file `t` in the same directory, over
- * and over, counting each round in a page it shares with the parent, while
- * the parent reads `slow` whole in one read(2), every block of which the
- * lag device answers late. The read must have waited for at least 32 of the
- * lag device's answers (`lag-completions` in /proc/disk), and the child
- * must have finished at least one round for each of them: a slow request
- * on one file leaves the users of another file of the same mount running.
- * The kernel counts both; the clock is not read. /proc/fs/lockwait is
- * printed before the counts are judged, and must have its `mount` line;
- * each row first turns on kernel.lock_stat, without which the kernel times
- * no hold for it.
+ * block of it, opens it by its name with O_CREAT and unlinks a name `t` that
+ * is not there, over and over, counting each round in a page it shares with
+ * the parent, while the parent reads `slow` whole in one read(2), every
+ * block of which the lag device answers late. The read must have waited for
+ * at least 32 of the lag device's answers (`lag-completions` in /proc/disk),
+ * and the child must have finished at least one round for each of them: a
+ * slow request on one file leaves the users of another file of the same
+ * mount running. The kernel counts both; the clock is not read.
+ * /proc/fs/lockwait is printed before the counts are judged, and must have
+ * its `mount` line; each row first turns on kernel.lock_stat, without which
+ * the kernel times no hold for it.
  *
  * `lockwaitprobe stress`, with the same volume and no lag: a child takes the
  * machine's free memory and the buffer cache's, but for a sixteenth of the
@@ -282,14 +282,20 @@ struct shared {
 
 /**
  * One round of the lag row's child on `near`, open for reading and writing:
- * a block read, a block rewritten in place, and the file `t` made, written
- * and removed beside it. 0, or the failed call's result with `*step` set.
+ * a block read, a block rewritten in place, an open with O_CREAT of `near`
+ * by its name and an unlink of the name `t`, which is not there, the last
+ * two taking the directory's lock as a change of its names does. No call of
+ * the round changes a name, since Linux 6.12's ext2 writes each change of a
+ * directory to the device before the call returns (fs/ext2/dir.c:440-447),
+ * and so does Rach2's: a round that made and removed a file would wait for
+ * the lag device twice itself. 0, or the failed call's result with `*step`
+ * set.
  */
 static long near_round(int fd, long *step)
 {
     static unsigned char block[BLOCK];
     long rc;
-    int t;
+    int again;
 
     *step = 1;
     if ((rc = syscall3(SYS_LSEEK, fd, 0, 0)) != 0 ||
@@ -302,18 +308,14 @@ static long near_round(int fd, long *step)
         return rc < 0 ? rc : -1000;
     }
     *step = 3;
-    t = syscall3(SYS_OPEN, (long)"/lw/t", O_WRONLY | O_CREAT | O_EXCL, 0644);
-    if (t < 0) {
-        return t;
+    again = syscall3(SYS_OPEN, (long)"/lw/near", O_WRONLY | O_CREAT, 0644);
+    if (again < 0) {
+        return again;
     }
-    rc = syscall3(SYS_WRITE, t, (long)block, 64);
-    syscall1(SYS_CLOSE, t);
-    if (rc != 64) {
-        return rc < 0 ? rc : -1000;
-    }
+    syscall1(SYS_CLOSE, again);
     *step = 4;
     rc = syscall1(SYS_UNLINK, (long)"/lw/t");
-    return rc;
+    return rc == -ENOENT ? 0 : rc < 0 ? rc : -1000;
 }
 
 /** The lag row's child: rounds on `near` until the parent says stop. */

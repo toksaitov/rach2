@@ -713,7 +713,7 @@
     },
     {
       "case_id": "machine.ext2.lockwait",
-      "behavior": "On a disk whose requests answer late, one read(2) of a cold file of the ext2 volume on the root disk's second partition waits for the disk on each of its blocks while a child reads, rewrites, makes and removes files beside it on the same mount, finishing at least one round for each wait, and /proc/fs/lockwait lists the mounts' lock",
+      "behavior": "On a disk whose requests answer late, one read(2) of a cold file of the ext2 volume on the root disk's second partition waits for the disk on each of its blocks while a child reads and rewrites another file beside it on the same mount and opens and unlinks names in their directory without changing one, finishing at least one round for each wait, and /proc/fs/lockwait lists the mounts' lock",
       "units": ["ext2", "rach2/sys/fs/sleeplock.c", "rach2/sys/fs/procfs.c", "tests/lockwaitprobe.c"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
