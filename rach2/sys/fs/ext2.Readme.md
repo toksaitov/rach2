@@ -63,7 +63,7 @@ The mode changes in four places only:
 * The mount sets RO or RW.
 * `ext2_mark_error` moves RW to STOPPED under `errors=remount-ro`, and sets `VFS_MS_RDONLY` in the same hold of `em->super`, so that no change is admitted between the two.
 * `finish_writes`, for a remount read-only and the unmount's prepare step, moves RW to RO.
-* `remount_writable` moves RO or STOPPED to RW, under `em->super` inside `em->batch`, after it has waited for the operations inside, stored every marked node of a STOPPED mount (`nodes_settle`) and checked the volume. It is the only end of a stop, and refuses a FAILED mount with `EROFS`.
+* `remount_writable` moves RO or STOPPED to RW, under `em->super` inside `em->batch`, after it has waited for the operations inside, stored every marked node (`nodes_settle`), held back the final puts (`em_hold`), refused the check with `EIO` while a node keeps its mark, logged as `ext2: remount: inode N: not stored before the check`, and checked the volume. It is the only end of a stop, and refuses a FAILED mount with `EROFS`.
 
 `ext2_remount` toward read-only does work only on a mount that is RW and has not failed. On one that is STOPPED or FAILED it takes the options and succeeds, as Linux's `ext2_remount` returns early on a file system already read-only (fs/ext2/super.c:1352), so a removed file open does not make it `EBUSY`. Toward writable it runs `remount_writable` from RO or STOPPED, and is `EROFS` on a mount that is RW and failed.
 
@@ -186,7 +186,7 @@ A failed store keeps the mark, and the inode is stored again before its node goe
 * at the last put, which on a mount that writes (`ext2_writes`) sends a marked node down the path of an unlinked one (`node_final`), and logs `ext2: inode N: not stored at its last put` when that store fails too;
 * by `sync` and the unmount's prepare step, which after the drain and the reap store every marked node of the mount (`nodes_settle`) and write the valid bit only when none failed, without the node's lock once admission is closed and no writer is inside, since a waiter at the gate may hold it;
 * by `fsync` and `fdatasync` of the file;
-* by a remount writable of a STOPPED mount, before its check.
+* by a remount writable, STOPPED or read-only, before its check, which a node still marked refuses.
 
 A failed operation takes back in memory what it changed, with no store that could fail in turn, as Linux's `out_fail` does (fs/ext2/namei.c:157-266), and the node keeps its mark, so that the next store writes what memory holds. A block taken that nothing names is freed again and `i_blocks` lowered (`ext2_block_unwind`), as `ext2_alloc_branch` frees its blocks (fs/ext2/inode.c:549-555), and a free that fails is logged as `ext2: block B: not freed after its operation failed`. A failed shrink puts the old size back. A raised link count is lowered. A new inode no entry names gets a count of 0 and is freed at its last put (`inode_abandon`). An attribute block that the inode could not be stored with is given back, and the old one named again. Once a change of entries is on the device, a failed store of a count or of times no longer fails the operation: `unlink`, `rmdir`, `link` and both renames succeed and leave the node marked. A store whose write cannot read its table block again is reported as the read of the slot is (READ_SLOT).
 
