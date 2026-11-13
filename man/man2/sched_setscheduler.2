@@ -61,10 +61,22 @@ and
 have priority 0 and rotate in the ordinary ready order, and so does
 .Dv SCHED_DEADLINE ,
 below.
-Each processor has its own run queue: a woken process joins the
-processor it last ran on unless that one is busy and another it may run
-on is idle, and a processor with nothing to run takes a process from the
+Each processor has its own run queue.
+A woken process joins, as Linux places a wake, the waker's processor or
+the one it last ran on, by which is idle and shares a last-level cache
+with the other or else by their counts of threads, or an idle processor
+sharing that one's last-level cache, one of a core whose hyperthreads are
+all idle first; a processor with nothing to run takes a process from the
 busiest queue.
+A woken ordinary thread, or one an affinity change moves to another
+processor's queue, preempts the ordinary thread running there at once,
+unless it is
+.Dv SCHED_BATCH
+or
+.Dv SCHED_IDLE ,
+or that thread is
+.Dv SCHED_IDLE
+and it is too.
 A
 .Fa pid
 of 0 names the caller; any other names a process that has not been

@@ -370,21 +370,33 @@ static int sched_cpu_free(int cpu)
            !idle->need_resched;
 }
 
-/* The processors that share each processor's last-level cache, a bit each,
- * itself left out; written by `sched_cache_join` as each one starts, under
- * sched_lock, and read under it. */
+/* The processors that share each processor's last-level cache, and those
+ * that share its core, its SMT siblings, a bit each, itself left out;
+ * written by `sched_cache_join` as each one starts, under sched_lock, and
+ * read under it. `smt_active` is 1 once any processor has a sibling, as
+ * Linux's sched_smt_present. */
 static uint64_t cache_peers[NR_CPUS];
+static uint64_t core_peers[NR_CPUS];
+static int smt_active;
 
-void sched_cache_join(uint64_t shared)
+void sched_cache_join(uint64_t shared, uint64_t core)
 {
     uint32_t flags = spin_lock_irqsave(&sched_lock);
+    uint64_t me_bit;
     int me = (int)arch_cpu_id(), c;
 
-    shared &= ~((uint64_t)1 << me);
+    me_bit = (uint64_t)1 << me;
+    shared &= ~me_bit;
+    core &= ~me_bit;
     cache_peers[me] |= shared;
+    core_peers[me] |= core;
+    smt_active |= core != 0;
     for (c = 0; c < NR_CPUS; c++) {
         if ((shared >> c) & 1u) {
-            cache_peers[c] |= (uint64_t)1 << me;
+            cache_peers[c] |= me_bit;
+        }
+        if ((core >> c) & 1u) {
+            core_peers[c] |= me_bit;
         }
     }
     spin_unlock_irqrestore(&sched_lock, flags);
@@ -526,6 +538,100 @@ static int sched_cpu_takes(const process_t *p, int cpu)
 }
 
 /**
+ * Whether every processor of processor `cpu`'s core is idle with nothing on
+ * its way (`sched_cpu_free`), as Linux's select_idle_core tests the core's
+ * SMT mask with available_idle_cpu (kernel/sched/fair.c:7720-7748). The
+ * run queues' lock is held.
+ */
+static int sched_core_free(int cpu)
+{
+    uint64_t core = core_peers[cpu] | (uint64_t)1 << cpu;
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        if (((core >> c) & 1u) && !sched_cpu_free(c)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Whether a started processor sharing `target`'s cache has a core all
+ * idle (`sched_core_free`), which Linux keeps as a hint for the cache
+ * domain, has_idle_cores, and reads by test_idle_cores
+ * (kernel/sched/fair.c:7666-7718); this reads the state itself. The run
+ * queues' lock is held. */
+static int sched_idle_core_near(int target)
+{
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        if (cpu_table[c].online && sched_share_cache(c, target) && sched_core_free(c)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * The processor near `target` that a wake of `p`, last on `prev`, takes
+ * when neither of the two takes it at once, as the rest of Linux's
+ * select_idle_sibling (kernel/sched/fair.c:8028-8058). Where processors
+ * share cores (`smt_active`) and no core sharing the target's cache is all
+ * idle, the last one's sibling that takes the wake (`sched_cpu_takes`),
+ * when the last one shares the target's cache (select_idle_smt,
+ * fair.c:7751-7768, 8035-8041). Then the processors sharing the target's
+ * cache, scanned from the one after the target, as select_idle_cpu scans
+ * with for_each_cpu_wrap (fair.c:7799-7862): while a core there is all
+ * idle, the first processor met of such a core, else the first met that
+ * takes the wake on a core that is not, as select_idle_core keeps it
+ * (fair.c:7720-7748); with no idle core, the first that takes the wake.
+ * Else the target. The run queues' lock is held.
+ */
+static int sched_idle_near(const process_t *p, int prev, int target)
+{
+    int idle_core = 0, fallback = -1, c, d, i;
+    uint64_t done = 0, core;
+
+    if (smt_active) {
+        idle_core = sched_idle_core_near(target);
+        if (!idle_core && sched_share_cache(prev, target)) {
+            for (c = 0; c < NR_CPUS; c++) {
+                if (((core_peers[prev] >> c) & 1u) && sched_share_cache(c, target) &&
+                    sched_cpu_takes(p, c)) {
+                    return c;
+                }
+            }
+        }
+    }
+    for (i = 1; i <= NR_CPUS; i++) {
+        c = (target + i) % NR_CPUS;
+        if (((done >> c) & 1u) || !sched_share_cache(c, target) || !sched_allowed(p, c)) {
+            continue;
+        }
+        if (!idle_core) {
+            if (sched_cpu_takes(p, c)) {
+                return c;
+            }
+            continue;
+        }
+        if (sched_core_free(c)) {
+            return c;
+        }
+        /* A busy core: keep its first processor that takes the wake. */
+        core = core_peers[c] | (uint64_t)1 << c;
+        for (d = 0; d < NR_CPUS && fallback < 0; d++) {
+            if (((core >> d) & 1u) && !((done >> d) & 1u) && sched_share_cache(d, target) &&
+                sched_cpu_takes(p, d)) {
+                fallback = d;
+            }
+        }
+        done |= core;
+    }
+    return fallback >= 0 ? fallback : target;
+}
+
+/**
  * The processor a woken or new thread `p` joins, by Linux's choice for a
  * wake (select_task_rq_fair, kernel/sched/fair.c:8686-8755). First the
  * target, between the waker's processor and `p`'s last (wake_affine,
@@ -537,16 +643,14 @@ static int sched_cpu_takes(const process_t *p, int cpu)
  * else the last one. Then an idle processor near the target
  * (select_idle_sibling, fair.c:7934-8058): the target when it takes the
  * wake at once (`sched_cpu_takes`), else the last one when it shares the
- * target's cache and does, else the first that does among those sharing
- * the target's cache, scanned from the one after the target, as
- * select_idle_cpu scans with for_each_cpu_wrap (fair.c:7799-7862), else
- * the target. A target `p` may not run on gives way to `sched_choose`.
- * Linux's sync wakes, per-processor kernel threads and recently used
- * processor have no counterpart here. The run queues' lock is held.
+ * target's cache and does, else one `sched_idle_near` finds. A target `p`
+ * may not run on gives way to `sched_choose`. Linux's sync wakes,
+ * per-processor kernel threads and recently used processor have no
+ * counterpart here. The run queues' lock is held.
  */
 static int sched_wake_choose(const process_t *p)
 {
-    int prev = p->cpu, me = (int)arch_cpu_id(), target = prev, c, i;
+    int prev = p->cpu, me = (int)arch_cpu_id(), target = prev;
 
     if (me != prev && sched_allowed(p, me)) {
         if (sched_cpu_free(me) && sched_share_cache(me, prev)) {
@@ -565,13 +669,7 @@ static int sched_wake_choose(const process_t *p)
     if (prev != target && sched_share_cache(prev, target) && sched_cpu_takes(p, prev)) {
         return prev;
     }
-    for (i = 1; i < NR_CPUS; i++) {
-        c = (target + i) % NR_CPUS;
-        if (sched_share_cache(c, target) && sched_cpu_takes(p, c)) {
-            return c;
-        }
-    }
-    return target;
+    return sched_idle_near(p, prev, target);
 }
 
 /**
@@ -628,7 +726,9 @@ static int sched_preempt_cpu(const process_t *p, int cpu)
 
 /**
  * Ask processor `cpu`, on whose queue `p` has just been woken or started,
- * to select now, as `sched_preempt_cpu` asks it, and besides when `p` and
+ * or moved by an affinity change, as Linux's move_queued_task calls
+ * wakeup_preempt (kernel/sched/core.c:2449-2465), to select now, as
+ * `sched_preempt_cpu` asks it, and besides when `p` and
  * the thread running there are both ordinary and `p` should run first by
  * Linux's rule (check_preempt_wakeup_fair, kernel/sched/fair.c:8862-8951):
  * a SCHED_IDLE thread gives way to a woken thread of another policy, never
@@ -936,7 +1036,7 @@ void sched_set_affinity(process_t *p, uint64_t mask)
         sched_remove(p);
         sched_move(p, sched_choose(p));
         sched_append(p);
-        kick = sched_preempt_cpu(p, p->cpu);
+        kick = sched_wake_preempt(p, p->cpu);
     }
     if (remote) {
         p->need_resched = 1;
@@ -999,7 +1099,7 @@ static process_t *sched_select(int me, process_t *old)
 }
 
 /** Refresh the outgoing task's state and placement before selection.
- * Returns the processor a moved task asks to select (`sched_preempt_cpu`),
+ * Returns the processor a moved task asks to select (`sched_wake_preempt`),
  * to kick after selection, or -1. */
 static int sched_prepare_old(process_t *old, struct percpu *cpu, int me)
 {
@@ -1016,7 +1116,7 @@ static int sched_prepare_old(process_t *old, struct percpu *cpu, int me)
         !((old->affinity >> me) & 1u)) {
         old->state = PROC_READY;
         sched_move(old, sched_choose(old));
-        kick = sched_preempt_cpu(old, old->cpu);
+        kick = sched_wake_preempt(old, old->cpu);
     }
     if (cpu->idle && old != cpu->idle && old->state == PROC_RUNNING && !suspend_lets_run(old)) {
         old->state = PROC_READY;
