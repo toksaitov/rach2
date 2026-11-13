@@ -5,8 +5,16 @@
 #include "lockdep.h"
 
 /*
- * A spinlock: a word that one processor at a time sets, which the others
- * wait on by reading it in a loop.
+ * A spinlock: Linux's queued spinlock, a word whose locked byte one
+ * processor at a time sets, and which hands the lock to its waiters in the
+ * order they came (spinlock.Readme.md).
+ *
+ * Taking a free lock is one compare-and-exchange, and giving it back one
+ * store. The first waiter sets the word's pending bit and spins on the
+ * locked byte; the others queue, each spinning on a place of its own
+ * processor's, and only the queue's head reads the word. A holder that
+ * gives the lock back cannot take it again ahead of a waiter, and a
+ * trylock fails while any waits.
  *
  * A subsystem that every processor enters on its ticks, faults and
  * allocations has one of these over its data, taken with interrupts off,
@@ -15,10 +23,13 @@
  * (proc/smp.h), never before it, and is held for a short region that does
  * not sleep. A processor that waits for one still answers the requests
  * other processors leave it, the TLB's and the stop's, since the holder may
- * be waiting for its answer.
+ * be waiting for its answer. What that answer runs, and an NMI's handler,
+ * may wait for another lock, up to four levels deep, but not for the lock
+ * the wait it interrupted is for, which would be queued behind its own
+ * place: that stops with a panic, and such code takes a lock by a try.
  */
 struct spinlock {
-    volatile unsigned int locked; /* 1 while a processor holds it, else 0 */
+    volatile unsigned int locked; /* the locked byte, pending byte and tail; 0 when free */
 #ifdef RACH2_LOCKDEP
     struct lockdep_map dep; /* its class, for the lock-order checker */
 #endif
@@ -57,7 +68,8 @@ void spin_lock(struct spinlock *lock);
 void spin_lock_nested(struct spinlock *lock, unsigned int subclass);
 
 /** Take `lock` if it is free, with interrupts already off: 1 when this
- * call took it, 0 when it was held, in which case nothing changed. A
+ * call took it, 0 when it was held or waited for, in which case nothing
+ * changed, so a try never takes the lock ahead of a waiter. A
  * caller that an interrupt may have stopped in the middle of the holder's
  * region, on the same processor, takes the lock this way, since spinning
  * there would never end. */
