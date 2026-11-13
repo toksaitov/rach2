@@ -45,3 +45,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: `ahci_links_reset` starts the limit at the controller's speeds, CAP.ISS, so a step with no speed known drops the fastest of those.
 * Status: unreported.
 * Next: read `sata_down_spd_limit` in a current kernel to see whether it still lets the top bit of UINT_MAX stand for a step down, confirm on hardware or QEMU what SControl reads after such a step, then propose that the limit start at the host's supported speeds or that the step return when no speed is known.
+
+## QEMU aborts in iotlb_to_section while Venus runs Vulkan under TCG
+
+* Project: QEMU 10.2.1 (Ubuntu's 1:10.2.1+ds-1ubuntu3.3) with virglrenderer 1.10.0, on Ubuntu in WSL.
+* Fails: QEMU stops on its own assertion, `system/physmem.c:760: iotlb_to_section: Assertion 'section_index < d->map.sections_nb' failed`, while a guest runs dEQP's Vulkan cases through virtio-gpu's Venus contexts under TCG; virglrenderer's render server then reports each Venus context destroyed with a valid instance. The section index a TCG translation kept no longer names a section of the address space's current map; which change of the map, such as a Venus blob region added or removed, races with it is not yet known.
+* Found: 2026-11-13, on the testing host's WSL, in milestone 84's release run at 08c7795ac: four of the six cases of `tests/run venus` (fraction-1, 2, 4 and 5 on x86-64) ended with "Rach2 SSH client: the machine or its transport was lost" while the guest's console showed dEQP running normally.
+* Reproduction: `tests/run venus` on WSL under TCG lost four of six cases; a load that makes the abort certain is still needed.
+* Evidence: `gnu.1.qemu.stderr` of each case kept under `/home/ghrunner/rach2-ci-2/_work/_temp/full-results.9NfifA/kept/` on WSL.
+* Rach2: nothing in Rach2; the release leaves `x86_64:venus` out of WSL's rerun, and issue 4972 takes it up in milestone 85.
+* Status: unreported.
+* Next: force the abort with tracing, check it against current QEMU, and find whether KVM or QEMU's fix ends it.
