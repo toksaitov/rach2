@@ -202,7 +202,11 @@ main()
         refresh
         while update worker.sh 2>> "$state/loop.log"; [ $? -eq 2 ]; do
             log "update failed"
-            sleep 60
+            nap 60
+            if [ -e "$state/stop" ]; then
+                log stopped
+                exit 0
+            fi
         done
         log "loop starts: $agent in $repo"
         exec sh "$state/run/worker.sh" -a "$agent" -s "$state" -r "$repo"
