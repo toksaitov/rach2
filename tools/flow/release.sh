@@ -1257,8 +1257,8 @@ held_clear()
     hc_bad=$(printf '%s\n' "$hc_out" | while read -r hc_dir hc_state; do
         [ -n "$hc_dir" ] || continue
         case $hc_state in
-            running | starting)
-                case $hc_ok in *" $hc_dir "*) continue ;; esac ;;
+            (running | starting)
+                case $hc_ok in (*" $hc_dir "*) continue ;; esac ;;
         esac
         echo "$hc_dir $hc_state"
     done)
