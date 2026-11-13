@@ -422,11 +422,19 @@ static uint32_t dshare_generation(struct vfs_mount *mnt, void *node)
     return vfs_getattr(mnt, node, &st) == 0 ? st.generation : 0;
 }
 
-/** Keep `rc`, a failed write-back or flush of `ds` through `m`, as the
- * file's error for the next fsync, unless an earlier one is kept. */
-static void dshare_failed(struct dshare *ds, struct filemap *m, int rc)
+/** Record `rc`, a failed write of pages of `ds` through `m`, in the
+ * write-back errors of the file's file system (`vfs_wb_err_set`), so that
+ * each description's next fsync and syncfs report it, as Linux's
+ * `mapping_set_error` records a failed write-back of a file's folios
+ * (include/linux/pagemap.h:43). With `keep`, when nobody has been told yet,
+ * keep it as the file's error for its next fsync too, unless an earlier one
+ * is kept; an msync that answers it has moved its own description's cursor
+ * past it instead (`dshare_sync`), and a keep would tell that description
+ * twice. */
+static void dshare_failed(struct dshare *ds, struct filemap *m, int rc, int keep)
 {
-    if (ds->error == 0) {
+    vfs_wb_err_set(m->entry.ofd->vmnt, rc);
+    if (keep && ds->error == 0) {
         ds->error = rc;
         ds->gen = dshare_generation(m->entry.ofd->vmnt, m->entry.ofd->vnode);
     }
@@ -589,22 +597,33 @@ static int dshare_retried(struct dshare *ds)
 }
 
 /**
- * Write the pages of `ds` from `first` up to `end` back and, with `flush`,
- * run the file system's fsync after them. Take a zero-publication boundary
- * and an own backing-file reference before sleeping: only releases at or
- * before that boundary are drained or waited for. The own descriptor also
- * writes stores of a mapping whose last put follows the boundary, including
- * one between the reap and the write, without waiting for its release.
- * The page range is bounded before the drain, so later mappings and faults
- * cannot extend the call. A failure stays for fsync (`dshare_failed`), and
- * a successful full write drops failed releases' holds (`dshare_retried`)
- * for a later reap. Under the big lock. Returns 0 or the first failure.
+ * Write the pages of `ds` from `first` up to `end` back through a shared
+ * mapping's description open for writing, and with `own`, the mapping an
+ * msync with MS_SYNC was given, run the file system's fsync after them
+ * through `own`'s description, whose cursor into the write-back errors moves,
+ * as Linux's msync syncs the region's own file (mm/msync.c:87). Take a
+ * zero-publication boundary and own references to both descriptions before
+ * sleeping: only releases at or before that boundary are drained or waited
+ * for. The backing descriptor also writes stores of a mapping whose last
+ * put follows the boundary, including one between the reap and the write,
+ * without waiting for its release. The page range is bounded before the
+ * drain, so later mappings and faults cannot extend the call.
+ *
+ * A failed page write is recorded for every description (`dshare_failed`)
+ * and, without `own`, kept for the file's next fsync; with `own` it is the
+ * answer, and `own`'s cursor moves past it, as Linux's fsync reports a
+ * failed write-back once to the file that ran it. What the fsync answers
+ * is never kept: a failure it meets is recorded where it happens, and an
+ * error it reports through the cursor has been told. A successful full
+ * write drops failed releases' holds (`dshare_retried`) for a later reap.
+ * Under the big lock. Returns 0 or the first failure.
  */
-static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, int flush)
+static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, struct filemap *own)
 {
     struct filemap backing;
     struct dshare_drain drain;
-    int have, rc = 0;
+    struct open_file *mine = NULL;
+    int have, rc = 0, synced;
 
     ds->users++;
     drain.ds = ds;
@@ -612,22 +631,22 @@ static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, int flus
     end = end < ds->sh.npages ? end : ds->sh.npages;
     k_memset(&backing, 0, sizeof(backing));
     have = dshare_backing(ds, 1, &backing);
-    if (!have && flush) {
-        have = dshare_backing(ds, 0, &backing);
+    if (own && own->entry.ofd && own->entry.ofd->vmnt) {
+        mine = own->entry.ofd;
+        fd_ofd_ref(mine);
     }
     vm_file_reap_until(drain.gen);
     (void)wq_wait_event_nointr(&ds->left, dshare_settled, &drain);
     if (have) {
-        if (backing.shared && (backing.entry.flags & FD_FLAG_WRITE)) {
-            rc = dshare_write_back(ds, &backing, first, end);
-        }
-        if (rc == 0 && flush) {
-            rc = vfs_fsync(backing.entry.ofd->vmnt, backing.entry.ofd->fhandle,
-                           &backing.entry.ofd->wb_seen);
-        }
+        rc = dshare_write_back(ds, &backing, first, end);
         if (rc != 0) {
-            dshare_failed(ds, &backing, rc);
+            dshare_failed(ds, &backing, rc, mine == NULL);
         }
+    }
+    if (mine) {
+        synced = rc == 0 ? vfs_fsync(mine->vmnt, mine->fhandle, &mine->wb_seen)
+                         : vfs_fsync_error(mine->vmnt, &mine->wb_seen);
+        rc = rc != 0 ? rc : synced;
     }
     if (rc == 0 && first == 0 && end >= ds->sh.npages) {
         (void)dshare_retried(ds);
@@ -635,6 +654,9 @@ static int dshare_sync(struct dshare *ds, uint32_t first, uint32_t end, int flus
     dshare_put(ds);
     if (have) {
         fd_ofd_unref(backing.entry.ofd);
+    }
+    if (mine) {
+        fd_ofd_unref(mine);
     }
     return rc;
 }
@@ -1072,7 +1094,7 @@ static void filemap_release(struct vm_file *f)
         if (rc != 0) {
             m->retained = 1;
             vm_file_get(f);
-            dshare_failed(m->ds, m, rc);
+            dshare_failed(m->ds, m, rc, 1);
             klog(KLOG_WARN, "mm", "shared mapping: %s: write-back failed: %d",
                  m->vf.path ? m->vf.path : "a file", rc);
             return;
@@ -1463,7 +1485,7 @@ int filemap_sync_file(const struct open_file *ofd)
     ds->users++;
     error = ds->error;
     ds->error = 0;
-    rc = dshare_sync(ds, 0, 0xFFFFFFFFu, 0);
+    rc = dshare_sync(ds, 0, 0xFFFFFFFFu, NULL);
     if (error == 0) {
         error = ds->error;
     }
@@ -1507,7 +1529,7 @@ void filemap_sync_all(void)
                 continue;
             }
             ds->users++;
-            (void)dshare_sync(ds, 0, 0xFFFFFFFFu, 0);
+            (void)dshare_sync(ds, 0, 0xFFFFFFFFu, NULL);
             next = ds->next;
             dshare_put(ds);
         }
@@ -1518,7 +1540,8 @@ int filemap_msync(struct vm_file *f, int flush)
 {
     struct filemap *m = (struct filemap *)f;
 
-    return f->share == filemap_share_disk ? dshare_sync(m->ds, 0, 0xFFFFFFFFu, flush) : 0;
+    return f->share == filemap_share_disk ? dshare_sync(m->ds, 0, 0xFFFFFFFFu, flush ? m : NULL)
+                                          : 0;
 }
 
 /* The name /proc/PID/maps gives shared anonymous memory, Linux's for the

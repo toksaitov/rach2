@@ -456,6 +456,22 @@ int vfs_fsync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
     return 0;
 }
 
+/** Not reached: no row runs an msync with MS_SYNC. */
+int vfs_fsync_error(struct vfs_mount *mnt, uint32_t *seen)
+{
+    (void)mnt;
+    (void)seen;
+    return 0;
+}
+
+/** A failed write-back's record for the descriptions' syncs, which no row
+ * reads: the rows read the error kept for the file's fsync. */
+void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
+{
+    (void)mnt;
+    (void)rc;
+}
+
 /** The clock, which no row reads. */
 uint64_t tick_count(void)
 {
