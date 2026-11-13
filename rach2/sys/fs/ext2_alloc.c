@@ -36,11 +36,28 @@ int ext2_gd_store(struct ext2_mount *em, uint32_t g)
 }
 
 /**
+ * Report a failed read of the bitmap in block `bitmap_block`, as Linux's
+ * `read_block_bitmap` and `read_inode_bitmap` report one to `ext2_error`
+ * (fs/ext2/balloc.c:142-156, ialloc.c:58): an EIO is logged and reported to
+ * the mount's policy (`ext2_mark_error`); -EAGAIN, a block the cache lacks
+ * under a plan, is no failure. Returns `rc`. The caller holds no buffer.
+ */
+static int bitmap_unread(struct ext2_mount *em, uint32_t bitmap_block, int rc)
+{
+    if (rc == -EIO) {
+        klog(KLOG_WARN, "ext2", "bitmap block %d cannot be read", (int)bitmap_block);
+        ext2_mark_error(em);
+    }
+    return rc;
+}
+
+/**
  * The first clear bit at or after `from` and before `count` of the bitmap
  * in block `bitmap_block`, into `*out`, or `count` when every one is set.
  * The bitmap is read 64 bytes at a time and a byte with every bit set is
  * passed over whole, so an allocation in a group whose first part is full
- * does not read each of its bits through the cache alone. 0, or -EIO.
+ * does not read each of its bits through the cache alone. 0, or the
+ * errors of `bitmap_unread`.
  */
 int ext2_bit_first_clear(struct ext2_mount *em, uint32_t bitmap_block, uint32_t from,
                          uint32_t count, uint32_t *out)
@@ -58,7 +75,7 @@ int ext2_bit_first_clear(struct ext2_mount *em, uint32_t bitmap_block, uint32_t 
         }
         rc = ext2_read_bytes(em, (uint64_t)bitmap_block * em->block_size + first, chunk, take);
         if (rc != 0) {
-            return rc;
+            return bitmap_unread(em, bitmap_block, rc);
         }
         for (; i < count && i / 8 < first + take; i++) {
             uint8_t b = chunk[i / 8 - first];
@@ -76,9 +93,11 @@ int ext2_bit_first_clear(struct ext2_mount *em, uint32_t bitmap_block, uint32_t 
 }
 
 /** Set bit `index` of the bitmap in block `bitmap_block` to `value`, written
- * in the way `how` says; 0, or -errno. The caller holds the lock of the
- * bitmap's group, so that no other change of the byte comes between its
- * read and its write. */
+ * in the way `how` says; 0, 1 with nothing written when a bit to clear is
+ * clear already, which only damage gives and the caller reports, or the
+ * errors of `bitmap_unread`. The caller holds the lock of the bitmap's
+ * group, so that no other change of the byte comes between its read and
+ * its write. */
 static int bit_write(struct ext2_mount *em, uint32_t bitmap_block, uint32_t index, int value,
                      int how)
 {
@@ -87,7 +106,10 @@ static int bit_write(struct ext2_mount *em, uint32_t bitmap_block, uint32_t inde
     int rc = ext2_read_bytes(em, at, &byte, 1);
 
     if (rc != 0) {
-        return rc;
+        return bitmap_unread(em, bitmap_block, rc);
+    }
+    if (!value && !(byte & (1u << (index % 8)))) {
+        return 1;
     }
     if (value) {
         byte = (uint8_t)(byte | (1u << (index % 8)));
@@ -268,10 +290,27 @@ static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
     return -ENOSPC;
 }
 
+/** Report a free of block `b` that only damage asks for, as Linux's
+ * `ext2_free_blocks` reports one to `ext2_error` (fs/ext2/balloc.c:498-547):
+ * a block outside the data zone, or one whose bit is clear already with
+ * `cleared`. Logged and reported to the mount's policy (`ext2_mark_error`);
+ * the caller frees nothing and counts nothing for it. The caller holds no
+ * buffer. */
+static void block_free_refused(struct ext2_mount *em, uint32_t b, int cleared)
+{
+    if (cleared) {
+        klog(KLOG_WARN, "ext2", "free of block %d, whose bit is clear", (int)b);
+    } else {
+        klog(KLOG_WARN, "ext2", "free of block %d, which is out of range", (int)b);
+    }
+    ext2_mark_error(em);
+}
+
 /** Free block `b`: its bit cleared and its group's count raised, as
- * `bit_put` and `ext2_gd_store` write them. 0, -EIO with a record for a block
- * that may not hold data, or -errno, under the group's lock, which the
- * caller may hold already. */
+ * `bit_put` and `ext2_gd_store` write them, under the group's lock, which
+ * the caller may hold already. A block that may not hold data, or whose
+ * bit is clear already, is refused (`block_free_refused`). 0, -EIO for a
+ * block out of range, or -errno. */
 static int block_free(struct ext2_mount *em, uint32_t b)
 {
     uint32_t g, i;
@@ -279,7 +318,7 @@ static int block_free(struct ext2_mount *em, uint32_t b)
     int rc;
 
     if (!ext2_data_block_ok(em, b)) {
-        klog(KLOG_WARN, "ext2", "free of block %d, which is out of range", (int)b);
+        block_free_refused(em, b, 0);
         return -EIO;
     }
     g = (b - em->first_data) / em->bpg;
@@ -287,6 +326,11 @@ static int block_free(struct ext2_mount *em, uint32_t b)
     gd = em->gd + g * 32;
     ext2_group_lock(em, g);
     rc = bit_put(em, ext2_le32(gd + 0), i, 0);
+    if (rc > 0) {
+        block_free_refused(em, b, 1);
+        ext2_group_unlock(em, g);
+        return 0;
+    }
     if (rc == 0) {
         LE16_PUT(gd + 12, ext2_le16(gd + 12) + 1);
         rc = ext2_gd_store(em, g);
@@ -405,7 +449,11 @@ int ext2_inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, str
 }
 /** Clear the bit of inode `ino` and raise its group's free count, lowering
  * the directory count for `was_dir`, once the inode itself was written
- * freed, under the group's lock; 0, or -errno. */
+ * freed, under the group's lock. A reserved inode, one past the count, and
+ * one whose bit is clear already are refused as Linux's `ext2_free_inode`
+ * refuses them (fs/ext2/ialloc.c:129-147): logged and reported to the
+ * mount's policy (`ext2_mark_error`), with nothing freed or counted. 0, or
+ * -errno. */
 int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir)
 {
     uint32_t g = (ino - 1) / em->ipg;
@@ -413,8 +461,19 @@ int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir)
     uint8_t *gd = em->gd + g * 32;
     int rc;
 
+    if (ino < em->first_ino || ino > em->inodes) {
+        klog(KLOG_WARN, "ext2", "free of inode %d, which is reserved or past the count", (int)ino);
+        ext2_mark_error(em);
+        return 0;
+    }
     ext2_group_lock(em, g);
     rc = bit_put(em, ext2_le32(gd + 4), i, 0);
+    if (rc > 0) {
+        ext2_group_unlock(em, g);
+        klog(KLOG_WARN, "ext2", "free of inode %d, whose bit is clear", (int)ino);
+        ext2_mark_error(em);
+        return 0;
+    }
     if (rc == 0) {
         LE16_PUT(gd + 14, ext2_le16(gd + 14) + 1);
         if (was_dir && ext2_le16(gd + 16) > 0) {
@@ -436,10 +495,12 @@ int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir)
  * `ext2_xattr_delete_inode` does, so that a block several inodes share
  * stays until the last of them goes. A block out of range, or whose header
  * lacks the magic number or a length of one block, is left as it is with
- * the error bit set, for e2fsck. The count is read and written under the
- * lock of the block's group, which the free takes again, so that two
- * inodes that share the block and go at once each count once, as Linux
- * holds the block's buffer lock for it. 0, or -errno.
+ * the error bit set, for e2fsck, and a failed read of it is reported too,
+ * as Linux's `ext2_xattr_delete_inode` reports each
+ * (fs/ext2/xattr.c:835-853). The count is read and written under the lock
+ * of the block's group, which the free takes again, so that two inodes that
+ * share the block and go at once each count once, as Linux holds the
+ * block's buffer lock for it. 0, or -errno.
  */
 int ext2_attr_release(struct ext2_mount *em, uint32_t ino, uint32_t b)
 {
@@ -456,6 +517,10 @@ int ext2_attr_release(struct ext2_mount *em, uint32_t ino, uint32_t b)
     g = (b - em->first_data) / em->bpg;
     ext2_group_lock(em, g);
     rc = ext2_read_bytes(em, at, raw, sizeof(raw));
+    if (rc == -EIO) {
+        klog(KLOG_WARN, "ext2", "inode %d: attribute block %d cannot be read", (int)ino, (int)b);
+        ext2_mark_error(em);
+    }
     if (rc == 0 && (ext2_le32(raw) != EXT2_XATTR_MAGIC || ext2_le32(raw + 8) != 1)) {
         klog(KLOG_WARN, "ext2", "inode %d: attribute block %d has no valid header", (int)ino,
              (int)b);
@@ -520,9 +585,10 @@ int ext2_alloc_block(struct ext2_mount *em, uint32_t hint, uint32_t *out)
  * fetched with no lock held, then under the group's lock each bit cleared and
  * the counts raised, the bitmap and descriptor dirtied `after`, so that they
  * reach the device after every pointer and inode dirtied `first`, and
- * listed among `n`'s shared blocks. The list is emptied. A
- * block that may not hold data is skipped with a record and makes the
- * answer -EIO. 0, or -errno.
+ * listed among `n`'s shared blocks. The list is emptied. A block that may
+ * not hold data, or whose bit is clear already, is skipped and reported
+ * (`block_free_refused`), as Linux's `ext2_free_blocks` skips it, so that
+ * the file's other blocks and its inode are still freed. 0, or -errno.
  */
 int ext2_punch_free(struct ext2_mount *em, struct ext2_node *n, struct punch_list *list)
 {
@@ -534,9 +600,8 @@ int ext2_punch_free(struct ext2_mount *em, struct ext2_node *n, struct punch_lis
         int freed = 0, left = 0;
 
         if (!ext2_data_block_ok(em, first)) {
-            klog(KLOG_WARN, "ext2", "free of block %d, which is out of range", (int)first);
+            block_free_refused(em, first, 0);
             list->blocks[0] = list->blocks[--list->count];
-            rc = -EIO;
             continue;
         }
         g = (first - em->first_data) / em->bpg;
@@ -552,6 +617,10 @@ int ext2_punch_free(struct ext2_mount *em, struct ext2_node *n, struct punch_lis
                 continue;
             }
             err = bit_write(em, ext2_le32(gd + 0), (b - em->first_data) % em->bpg, 0, WRITE_AFTER);
+            if (err > 0) {
+                block_free_refused(em, b, 1);
+                continue;
+            }
             if (err != 0) {
                 rc = rc != 0 ? rc : err;
                 continue;

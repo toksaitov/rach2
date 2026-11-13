@@ -485,8 +485,10 @@ A fault an ext2 mount meets later sets the error bit on a writable
 mount and then, as Linux's
 .Ql errors=
 says, continues, makes the mount read-only, or stops the kernel.
-A mount made read-only by a fault writes only the file data it accepted
-before, and a remount writable checks the volume again.
+A mount made read-only by a fault admits no new change and allocates
+nothing; the operations already under way finish or undo their changes,
+the file data it accepted before is written, and a remount writable
+checks the volume again.
 A remount without
 .Ql errors=
 keeps the policy in force.

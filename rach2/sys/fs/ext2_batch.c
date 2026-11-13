@@ -160,7 +160,9 @@ static void writeback_list(struct ext2_writeback *wb, struct ext2_image *im, uin
  * the cache's block otherwise, not yet marked changed, listed before the
  * cache's buffer goes, so that a write through the cache to the block from
  * then on finds the image (`ext2_write_owned`). NULL with `*rc` set:
- * -EIO for an image the batch has at another stage or a failed read,
+ * -EIO for a failed read, or for an image the batch has at another stage,
+ * which only crossed maps give and which is logged and reported to the
+ * mount's policy (`ext2_mark_error`),
  * -ENOMEM for a full table, and -EAGAIN for a block the cache lacks under a
  * plan (`ext2_volume_get`). A piece that fails gives back the new images it
  * took (`writeback_try`); an image the batch had is not changed here.
@@ -177,6 +179,9 @@ static struct ext2_image *writeback_meta(struct ext2_mount *em, uint32_t block, 
         im = &wb->meta[i];
         if (im->block == block) {
             if (im->stage != stage) {
+                klog(KLOG_WARN, "ext2", "block %d is named at two levels of the files' maps",
+                     (int)block);
+                ext2_mark_error(em);
                 *rc = -EIO;
                 return 0;
             }
@@ -384,7 +389,10 @@ static int writeback_reserve(struct ext2_mount *em, struct ext2_write_plan *plan
  * reserved and blank, and a missing data block reserved, nothing yet taken.
  * The arithmetic is for 4 KiB blocks of 1024 pointers, which a writable
  * mount has. 0, -EIO for a block out of range, or the errors of
- * `writeback_reserve` and `writeback_meta`.
+ * `writeback_reserve` and `writeback_meta`. A block out of range is not
+ * reported here: `writeback_fetch` walked the same index by `ext2_block_at`,
+ * which reports it, under the same hold of `n`'s lock, so the fault is
+ * reported once.
  */
 static int writeback_plan_map(struct ext2_mount *em, struct ext2_node *n, uint32_t index,
                               struct ext2_write_plan *plan)

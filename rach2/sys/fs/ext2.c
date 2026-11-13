@@ -956,7 +956,16 @@ int ext2_fast_link(const struct ext2_mount *em, const struct ext2_node *n)
  * not a multiple of 4 or passes the slot are logged and -EIO, as Linux's
  * `ext2_get_inode` and ext4's `__ext4_iget` refuse them, and with `report`
  * set are reported to the mount's policy (`ext2_mark_error`), as they report
- * them to `ext2_error`. 0, the read's -errno, or -EIO.
+ * them to `ext2_error`. With `report` set, the loader of a file met at run
+ * time, three more are refused as Linux's `ext2_get_inode` and `ext2_iget`
+ * refuse them (fs/ext2/inode.c:1348, 1436, 1455): a table block that cannot
+ * be read, a live inode with no links, a mode and no deletion time, and an
+ * attribute block outside the data zone, each logged, reported and -EIO;
+ * and a freed inode, one with no links and no mode or a deletion time, is
+ * -ESTALE with no report, since a walk without its directory's lock may
+ * meet one that was freed after it read the number, and the caller that
+ * holds the lock reports it (`ext2_stale`), as Linux's `ext2_lookup` does.
+ * 0, the read's -errno, -EIO, or -ESTALE.
  */
 static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n, int report)
 {
@@ -974,6 +983,11 @@ static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n, 
     table = ext2_le32(em->gd + g * 32 + 8);
     at = (uint64_t)table * em->block_size + (uint64_t)index * em->inode_size;
     rc = ext2_read_bytes(em, at, raw, em->inode_size > EXT2_GOOD_OLD ? EXT2_LARGE : EXT2_GOOD_OLD);
+    if (rc == -EIO && report) {
+        klog(KLOG_WARN, "ext2", "inode %d: its table block %d cannot be read", (int)ino,
+             (int)(at >> em->block_shift));
+        ext2_mark_error(em);
+    }
     if (rc != 0) {
         return rc;
     }
@@ -1000,10 +1014,23 @@ static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n, 
         n->crtime = time_load(n, raw, EXT2_CRTIME, EXT2_CRTIME_EXTRA);
     }
     n->nlink = ext2_le16(raw + 26);
+    if (report && n->nlink == 0) {
+        if (n->mode == 0 || ext2_le32(raw + 20) != 0) {
+            return -ESTALE;
+        }
+        klog(KLOG_WARN, "ext2", "inode %d has no links, mode 0%o and no deletion time", (int)ino,
+             (unsigned)n->mode);
+        goto damaged;
+    }
     n->blocks = ext2_le32(raw + 28);
     n->flags = ext2_le32(raw + 32);
     n->generation = ext2_le32(raw + 100);
     n->file_acl = ext2_le32(raw + 104);
+    if (report && n->file_acl != 0 && !ext2_data_block_ok(em, n->file_acl)) {
+        klog(KLOG_WARN, "ext2", "inode %d: attribute block %d is out of range", (int)ino,
+             (int)n->file_acl);
+        goto damaged;
+    }
     for (i = 0; i < (int)EXT2_NBLOCKS; i++) {
         n->block[i] = ext2_le32(raw + 40 + i * 4);
     }
@@ -1020,10 +1047,24 @@ damaged:
 }
 
 /** `inode_load` of a file the mount meets at run time, its damage reported
- * to the mount's policy. The caller holds no buffer. 0, or -errno. */
+ * to the mount's policy. The caller holds no buffer. 0, -ESTALE for a freed
+ * inode, or -errno. */
 int ext2_inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
 {
     return inode_load(em, ino, n, 1);
+}
+
+/**
+ * Report that a name read under its directory's lock names inode `ino`,
+ * which is freed, as Linux's `ext2_lookup` reports `deleted inode
+ * referenced` (fs/ext2/namei.c:73): logged, reported to the mount's policy
+ * (`ext2_mark_error`) and -EIO. The caller holds no buffer.
+ */
+int ext2_stale(struct ext2_mount *em, uint32_t ino)
+{
+    klog(KLOG_WARN, "ext2", "inode %d: a name references it, freed", (int)ino);
+    ext2_mark_error(em);
+    return -EIO;
 }
 
 /** `inode_load` for the check of a writable mount or remount
@@ -1055,9 +1096,11 @@ static int node_went(void *arg)
  * Wait for the dying node `n` to go, after which the caller looks in the
  * hash again; `n` is not to be read after. A node on the list that no thread
  * is freeing is reaped here, since the thread that left it may be the
- * caller. One that a caller under a file lock cannot reap is -EIO: a
- * directory names an inode with no link count, which only damage does. 0,
- * or -EIO.
+ * caller. One that a caller under a file lock cannot reap is -ESTALE, as a
+ * freed inode's load is (`inode_load`): a name read under its directory's
+ * lock that names an inode with no link count is damage, which that caller
+ * reports (`ext2_stale`), and one read without the lock may have gone
+ * since. 0, or -ESTALE.
  */
 static int node_outlive(struct ext2_mount *em, struct ext2_node *n)
 {
@@ -1065,8 +1108,7 @@ static int node_outlive(struct ext2_mount *em, struct ext2_node *n)
 
     if (n->queued) {
         if (file_locks_held()) {
-            klog(KLOG_WARN, "ext2", "inode %d: named while it is freed", (int)n->ino);
-            return -EIO;
+            return -ESTALE;
         }
         em_reap(em);
         return 0;
@@ -1142,7 +1184,9 @@ static struct ext2_node *node_for(struct ext2_mount *em, uint32_t ino, int *rc)
 /**
  * The node for inode `ino`, held once more if the mount has it in memory
  * and loaded into a new record otherwise; NULL with `*rc` set, -ENOMEM when
- * the heap has no room or -EIO when the inode cannot be read. The record is
+ * the heap has no room, -ESTALE for a freed inode (`inode_load`,
+ * `node_outlive`), which the caller reports when it read the number under
+ * its directory's lock (`ext2_stale`), or the load's -errno. The record is
  * published N_LOADING before the load, which sleeps in the cache, so that a
  * second lookup meanwhile waits for it and does not make another; a dying
  * node is waited for, and the inode then looked up anew. The caller may hold
@@ -1386,9 +1430,11 @@ int ext2_block_at(struct ext2_mount *em, const struct ext2_node *n, uint32_t ind
 }
 
 /** Copy `len` bytes of `n`'s data at `off` into `dst`, a hole read as zeros;
- * 0, or the errors of `ext2_block_at`. */
+ * 0, the errors of `ext2_block_at`, or a failed read's -errno, which sets
+ * `*unread` when that is not NULL: the caller that reports a failed read of
+ * a directory's block tells it from damage `ext2_block_at` has reported. */
 int ext2_read_data(struct ext2_mount *em, const struct ext2_node *n, uint64_t off, void *dst,
-                   uint32_t len)
+                   uint32_t len, int *unread)
 {
     uint8_t *out = dst;
 
@@ -1411,6 +1457,9 @@ int ext2_read_data(struct ext2_mount *em, const struct ext2_node *n, uint64_t of
         } else {
             rc = ext2_read_bytes(em, (uint64_t)b * em->block_size + in, out, take);
             if (rc != 0) {
+                if (unread) {
+                    *unread = 1;
+                }
                 return rc;
             }
         }
@@ -2926,7 +2975,7 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     }
     root = ext2_node_for(em, EXT2_ROOT_INO, &rc);
     if (!root) {
-        return rc;
+        return rc == -ESTALE ? refuse("the root inode is freed") : rc;
     }
     if ((root->mode & S_IFMT_) != S_IFDIR_) {
         node_drop(em, root); /* not ext2_put: the mount is not on `mnt` yet */
@@ -3209,7 +3258,11 @@ static int admit_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, u
 }
 
 /** Read a node's external attribute block into a private checked copy.
- * The node is locked; NULL in `*out` means no block. Returns 0 or -errno. */
+ * A block out of range or malformed is logged, reported to the mount's
+ * policy (`ext2_mark_error`) and -EIO, as Linux's `ext2_xattr_get` reports a
+ * bad block (fs/ext2/xattr.c:229); a failed read is returned unreported, as
+ * there. The node is locked; NULL in `*out` means no block. Returns 0 or
+ * -errno. */
 static int attr_read(struct ext2_mount *em, struct ext2_node *n, uint8_t **out)
 {
     int rc;
@@ -3218,6 +3271,8 @@ static int attr_read(struct ext2_mount *em, struct ext2_node *n, uint8_t **out)
     if (!n->file_acl)
         return 0;
     if (!ext2_data_block_ok(em, n->file_acl)) {
+        klog(KLOG_WARN, "ext2", "inode %d: attribute block %d is out of range", (int)n->ino,
+             (int)n->file_acl);
         ext2_mark_error(em);
         return -EIO;
     }
@@ -3225,10 +3280,14 @@ static int attr_read(struct ext2_mount *em, struct ext2_node *n, uint8_t **out)
     if (!*out)
         return -ENOMEM;
     rc = ext2_read_bytes(em, (uint64_t)n->file_acl * em->block_size, *out, em->block_size);
-    if (!rc)
+    if (!rc) {
         rc = ext2_xattr_check(*out, em->block_size);
-    if (rc == -EIO)
-        ext2_mark_error(em);
+        if (rc != 0) {
+            klog(KLOG_WARN, "ext2", "inode %d: attribute block %d is malformed", (int)n->ino,
+                 (int)n->file_acl);
+            ext2_mark_error(em);
+        }
+    }
     return rc;
 }
 

@@ -563,11 +563,12 @@ int ext2_extra_has(const struct ext2_node *n, uint32_t end);
 int ext2_fast_link(const struct ext2_mount *em, const struct ext2_node *n);
 int ext2_inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n);
 int ext2_inode_check_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n);
+int ext2_stale(struct ext2_mount *em, uint32_t ino);
 struct ext2_node *ext2_node_for(struct ext2_mount *em, uint32_t ino, int *rc);
 void ext2_put(struct vfs_mount *mnt, void *node);
 int ext2_block_at(struct ext2_mount *em, const struct ext2_node *n, uint32_t index, uint32_t *out);
 int ext2_read_data(struct ext2_mount *em, const struct ext2_node *n, uint64_t off, void *dst,
-                   uint32_t len);
+                   uint32_t len, int *unread);
 void ext2_device_write_begin(struct ext2_mount *em);
 void ext2_device_write_end(struct ext2_mount *em);
 int ext2_em_write_out(struct vfs_mount *mnt);

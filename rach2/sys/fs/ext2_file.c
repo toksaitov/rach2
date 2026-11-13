@@ -626,6 +626,41 @@ struct punch_walk {
 };
 
 /**
+ * Refuse pointer block `b`, at `*slot` of walk `w`, which lies outside the
+ * data zone: logged and reported to the mount's policy (`ext2_mark_error`).
+ * When the walk frees all it covers (`whole`), its pointer is cleared at
+ * `slot_at`, dirtied `first`, or for 0 in the inode in memory, with nothing
+ * below it read or freed, as Linux's `ext2_free_branches` clears the
+ * pointer and its `ext2_free_blocks` refuses the block
+ * (fs/ext2/balloc.c:498), so that the rest of the file and its inode can
+ * still be freed, and `*emptied` is set; a block whose range the walk keeps
+ * in part stays, -EIO. 0, or -errno.
+ */
+static int punch_refused(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, uint32_t b,
+                         int whole, int *emptied)
+{
+    struct ext2_mount *em = w->em;
+    int rc;
+
+    klog(KLOG_WARN, "ext2", "inode %d: pointer block %d is out of range", (int)w->n->ino, (int)b);
+    ext2_mark_error(em);
+    if (!whole) {
+        return -EIO;
+    }
+    if (slot_at != 0) {
+        uint8_t zero[4] = {0, 0, 0, 0};
+
+        rc = ext2_write_owned(em, w->n->ino, slot_at, zero, 4, WRITE_FIRST);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    *slot = 0;
+    *emptied = 1;
+    return 0;
+}
+
+/**
  * Clear the pointers of `n`'s blocks from data index `keep` on below the
  * pointer `*slot`, of `level` (0 for a data block) and covering the data
  * from index `base`, from the end, and list each block whose pointer is
@@ -635,9 +670,12 @@ struct punch_walk {
  * changes here. `*emptied` says whether the pointer is now 0, and
  * `n->blocks` is kept current. A slot's read may sleep, so a service point
  * before it asks nothing more of the walk: every removal so far is whole,
- * and the listed blocks stay taken until the round frees them. 0, PUNCH_FULL
- * when the list has no room for the next block, or -errno, -EIO for a
- * pointer block out of range.
+ * and the listed blocks stay taken until the round frees them. A pointer
+ * block out of range is refused (`punch_refused`), and a pointer
+ * block that cannot be read is logged and reported to the mount's policy,
+ * as Linux's `ext2_free_branches` reports it (fs/ext2/inode.c:1153), and
+ * ends the walk. 0, PUNCH_FULL when the list has no room for the next
+ * block, or -errno.
  */
 static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, int level,
                        uint32_t base, int *emptied)
@@ -665,7 +703,7 @@ static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, i
         uint32_t k;
 
         if (!ext2_data_block_ok(em, b)) {
-            return -EIO;
+            return punch_refused(w, slot, slot_at, b, base >= keep, emptied);
         }
         for (k = per; k > 0; k--) {
             uint32_t child_base = base + (k - 1) * (span / per);
@@ -684,6 +722,11 @@ static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, i
             }
             rc = ext2_read_bytes(em, at, ptr, 4);
             if (rc != 0) {
+                if (rc == -EIO) {
+                    klog(KLOG_WARN, "ext2", "inode %d: pointer block %d cannot be read",
+                         (int)n->ino, (int)b);
+                    ext2_mark_error(em);
+                }
                 return rc;
             }
             child = ext2_le32(ptr);
@@ -909,6 +952,16 @@ static int map_zero(struct ext2_mount *em, uint32_t owner, uint32_t b, int level
     return rc;
 }
 
+/** Refuse block `b`, which `n`'s map names outside the data zone: logged,
+ * reported to the mount's policy (`ext2_mark_error`) and -EIO, as
+ * `ext2_block_at` refuses it. The caller holds no buffer. */
+static int map_refused(struct ext2_mount *em, const struct ext2_node *n, uint32_t b)
+{
+    klog(KLOG_WARN, "ext2", "inode %d: block %d is out of range", (int)n->ino, (int)b);
+    ext2_mark_error(em);
+    return -EIO;
+}
+
 /**
  * The block for data index `index` of `n`, allocated when missing, into
  * `*out`, with `*fresh` set for a new data block. A missing pointer block is
@@ -923,7 +976,8 @@ static int map_zero(struct ext2_mount *em, uint32_t owner, uint32_t b, int level
  * blocks are shared, as its entries are, and a regular file's are its own.
  * `n->blocks` and the inode's own pointers change in memory; the caller
  * stores the inode with them, and holds `n`'s lock and not `em->batch`. 0,
- * -EFBIG past the triple indirect's reach, -ENOSPC, or -errno.
+ * -EFBIG past the triple indirect's reach, -ENOSPC, -EIO for a block out of
+ * range (`map_refused`), or -errno.
  */
 int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, uint32_t *out,
                    int *fresh)
@@ -993,7 +1047,7 @@ int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, u
             }
             b = *slot;
             if (!ext2_data_block_ok(em, b)) {
-                return -EIO;
+                return map_refused(em, n, b);
             }
             slot_at = (uint64_t)b * em->block_size + (uint64_t)(rest / div) * 4;
             rc = ext2_read_bytes(em, slot_at, ptr, 4);
@@ -1027,7 +1081,7 @@ int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, u
         *slot = b;
         *fresh = 1;
     } else if (!ext2_data_block_ok(em, *slot)) {
-        return -EIO;
+        return map_refused(em, n, *slot);
     }
     *out = *slot;
     return 0;
@@ -1461,10 +1515,12 @@ static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_o
  * writable, and the sync of a whole mount (a NULL `handle`) write the
  * device's dirty buffers instead (`ext2_em_write_out`): a directory's entries
  * are not tagged as its own. A failure is recorded as the batch's error
- * and returned; a failure of an earlier write-back, which the mount
- * records, `vfs_fsync` reports once to each description. The call takes no
- * node lock, as
- * Linux's takes none (`ext2_fsync` and `generic_buffers_fsync`,
+ * and returned, and an EIO of a file's fsync is also reported to the mount's
+ * policy (`ext2_mark_error`), so that errors=panic stops the kernel, as Linux's
+ * `ext2_fsync` reports one to `ext2_error` (fs/ext2/file.c:161); a failure
+ * of an earlier write-back, which the mount records, `vfs_fsync` reports
+ * once to each description. The call takes no node lock, as Linux's takes
+ * none (`ext2_fsync` and `generic_buffers_fsync`,
  * fs/ext2/file.c:153-163 and fs/buffer.c:595-622 in 6.12.115): a write
  * that races it lands on either side, since a writer dirties a block before
  * it lists it, as Linux's `mark_buffer_dirty_inode` does. A caller without
@@ -1487,6 +1543,10 @@ static int file_sync(struct vfs_mount *mnt, void *handle, int data_only)
         rc = ext2_em_write_out(mnt);
     } else {
         rc = node_write_out(mnt, n, data_only);
+    }
+    if (rc == -EIO && n) {
+        klog(KLOG_WARN, "ext2", "fsync: a write of the device failed");
+        ext2_mark_error(em);
     }
     ext2_big_exit(big);
     return rc;
