@@ -299,8 +299,8 @@ static void mutex_ask_handoff(struct mutex *m)
  * killable wait. A test after the first follows a sleep, and one that then
  * finds `m` held asks for the handoff, as Linux's first waiter sets
  * MUTEX_FLAG_HANDOFF when it wakes to a mutex taken again
- * (kernel/locking/mutex.c:654-662). The sleeper is on the queue, so a
- * release after the test wakes it.
+ * (kernel/locking/mutex.c:110-121, 693-699). The sleeper is on the queue,
+ * so a release after the test wakes it.
  */
 static int mutex_wait_cond(void *arg)
 {
@@ -356,7 +356,7 @@ void mutex_lock(struct mutex *m)
 /**
  * Hand `m` to the oldest sleeper `first`, or free it when none sleeps, under
  * the queue's lock (`wq_wake_first`), as Linux's __mutex_handoff gives the
- * first waiter the word (kernel/locking/mutex.c:197-221). The word goes from
+ * first waiter the word (kernel/locking/mutex.c:225-248). The word goes from
  * holder to sleeper in one exchange, so no spinner takes it between them;
  * the sleeper's processor is not known until it runs.
  */
