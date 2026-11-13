@@ -438,6 +438,31 @@ static void disk(struct acceptance *a)
         message(a, 0, "disk: not the drive the baseline describes, so nothing is compared");
 }
 
+/** Sum the online processors' counts on one /proc/interrupts line. */
+static unsigned long long interrupt_total(const char *line)
+{
+    const char *q = strchr(line, ':');
+    unsigned long long total = 0;
+
+    if (!q) {
+        return 0;
+    }
+    q++;
+    for (;;) {
+        char *end;
+
+        while (*q == ' ' || *q == '\t') {
+            q++;
+        }
+        if (*q < '0' || *q > '9') {
+            break;
+        }
+        total += strtoull(q, &end, 10);
+        q = end;
+    }
+    return total;
+}
+
 /** Read the boot log once and judge the hardware inventory from it. */
 static void inventory(struct acceptance *a)
 {
@@ -480,7 +505,8 @@ static void inventory(struct acceptance *a)
         message(a, 1, "/proc/interrupts is not available");
     else {
         lines(a, interrupts, "", "interrupts: ");
-        field(record_line(interrupts, "32:", line), 2, count, sizeof(count));
+        snprintf(count, sizeof(count), "%llu",
+                 interrupt_total(record_line(interrupts, "32:", line)));
         if (count[0] == '\0' || strspn(count, "0123456789") != strlen(count))
             message(a, 1, "the timer's vector has no interrupt count");
         else

@@ -516,6 +516,12 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
     } else if (kind == VNODE_DEV_SUBDIR && synth_dev_dir_at(pid)) {
         synth_put(out, cap, &pos, "/dev/");
         synth_put(out, cap, &pos, synth_dev_dirs[pid].name);
+    } else if (kind == VNODE_PROC_IRQ_DIR) {
+        synth_put(out, cap, &pos, "/proc/irq");
+        if (pid >= 0) {
+            synth_put(out, cap, &pos, "/");
+            synth_put_uint(out, cap, &pos, (unsigned int)pid);
+        }
     } else if (kind == VNODE_PROC_ACPI_DIR) {
         synth_put(out, cap, &pos, "/proc/acpi");
     } else if (kind == VNODE_PROC_FS_DIR) {
@@ -2075,6 +2081,21 @@ static int synth_classify_dev(const struct comp *c, int n, struct vpath *vp)
     return vp->kind;
 }
 
+/** Classify /proc/irq and one vector's two affinity files. */
+static int synth_classify_irq(const struct comp *c, int n, struct vpath *vp)
+{
+    vp->pid = n == 2 ? -1 : comp_uint(c[2]);
+    vp->kind = VNODE_ENOENT;
+    if (n == 2 || (vp->pid >= 0 && vp->pid < 256 && n == 3)) {
+        vp->kind = VNODE_PROC_IRQ_DIR;
+    } else if (vp->pid >= 0 && vp->pid < 256 && n >= 4 &&
+               (comp_eq(c[3], "smp_affinity") || comp_eq(c[3], "effective_affinity"))) {
+        vp->procfile = comp_eq(c[3], "effective_affinity");
+        vp->kind = n == 4 ? VNODE_PROC_IRQ_FILE : VNODE_ENOTDIR;
+    }
+    return vp->kind;
+}
+
 /** Classify the components `c` of `n` from "proc": its fixed names first,
  * since `cmdline`, `self` and the rest are not numbers, then a process by
  * its pid; a pid of 0, the kernel's idle context, is no process's. */
@@ -2108,6 +2129,9 @@ static int synth_classify_proc(const struct comp *c, int n, struct vpath *vp)
     }
     if (comp_eq(c[1], "sysvipc")) {
         return synth_classify_sysvipc(c + 2, n - 2, vp);
+    }
+    if (comp_eq(c[1], "irq")) {
+        return synth_classify_irq(c, n, vp);
     }
     if (comp_eq(c[1], "acpi")) {
         vp->kind = n == 2                   ? VNODE_PROC_ACPI_DIR

@@ -33,6 +33,8 @@
 #include "../../../klog.h"
 #include "../../../pci.h"
 #include "../ioapic.h"
+#include "../smpboot.h"
+#include "../../../proc/percpu.h"
 
 #define IRTE_PRESENT 1ull
 
@@ -105,8 +107,8 @@ static uint64_t irte_low(unsigned int vector, unsigned int apic, unsigned int le
 /**
  * The APIC id of the processor a compatibility-format interrupt names by
  * the eight bits `dest8`: in the x2APIC format, the boot processor's whole
- * x2APIC id when its low eight bits are these, since every interrupt goes
- * to it and that format's message and redirection entry hold no more.
+ * x2APIC id when its low eight bits are these. This is for I/O APIC lines,
+ * which stay on the boot processor; PCI messages carry their whole id.
  * The x2APIC id, not the id of the mode the APIC is in: the entries are
  * written while it is still in xAPIC mode, whose id is eight bits, and
  * read once it is in x2APIC mode. Linux's prepare_irte writes the whole
@@ -180,8 +182,8 @@ static struct vtd_unit *handle_unit(int handle)
  * the compatibility-format (address, data), verifying the requester id
  * the bridges above it give, and the remapped address and data.
  */
-static int msi_map(const pci_device_t *dev, uint32_t address, uint32_t data, uint32_t *raddress,
-                   uint32_t *rdata)
+static int msi_map(const pci_device_t *dev, uint32_t address, uint32_t data, uint32_t destination,
+                   uint32_t *raddress, uint32_t *rdata)
 {
     uint8_t devfn = (uint8_t)((dev->device << 3) | (dev->function & 7u));
     int ui = dmar_unit_for(&vtd_dmar, dev->bus, devfn), index;
@@ -200,7 +202,7 @@ static int msi_map(const pci_device_t *dev, uint32_t address, uint32_t data, uin
         return -1;
     }
     msi_source(dev->bus, devfn, &svt, &sid);
-    dest = irte_dest((address >> 12) & 0xFFu);
+    dest = eim ? destination : ((address >> 12) & 0xFFu);
     irte_set(u, index,
              irte_low(data & 0xFFu, dest, (data >> 15) & 1u, (data >> 8) & 7u, (address >> 2) & 1u,
                       (address >> 3) & 1u),
@@ -261,7 +263,39 @@ static void entry_unmap(int handle)
     }
 }
 
-static const struct pci_msi_remap msi_ops = {msi_map, entry_unmap};
+/** Change only the destination of a live MSI entry, with the PCI
+ * message lock held. The source and present bit never change; x86-64's
+ * aligned 64-bit table write publishes either whole destination. */
+static void msi_move(int handle, uint32_t destination)
+{
+    struct vtd_unit *u = handle_unit(handle);
+    int index = handle & 0xFFFF;
+    uint64_t lo = u->irt[2 * index];
+    uint64_t dest = eim ? (uint64_t)destination : (uint64_t)((destination & 255u) << 8);
+
+    lo = (lo & 0xFFFFFFFFull) | (dest << 32);
+    vtd_write_table(u, &u->irt[2 * index], lo);
+    (void)vtd_inv_iec(u, index);
+}
+
+/** Online processors reached by this remapper's destination format. */
+static uint64_t msi_cpus(void)
+{
+    uint64_t mask = 0;
+    int c;
+
+    if (!eim) {
+        return pci_msi_cpus();
+    }
+    for (c = 0; c < NR_CPUS; c++) {
+        if (cpu_table[c].online) {
+            mask |= (uint64_t)1 << c;
+        }
+    }
+    return mask ? mask : 1;
+}
+
+static const struct pci_msi_remap msi_ops = {msi_map, entry_unmap, msi_move, msi_cpus};
 static const struct ioapic_remap ioapic_ops = {ioapic_map, entry_unmap};
 
 /**

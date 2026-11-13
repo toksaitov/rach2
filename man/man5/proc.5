@@ -579,9 +579,10 @@ between two directories.
 A test that slows the disk reads it to see that no lock was held across
 another file's request.
 .It Pa /proc/interrupts
-One line per device vector, numbered 32 through 63, with a nonzero
-interrupt count:
-.Dl VECTOR: COUNT SOURCE NAMES
+A heading names each online processor, followed by one line per device
+vector, numbered 32 through 239 except 128, with a nonzero interrupt count:
+.Dl VECTOR: CPU0_COUNT CPU1_COUNT ... SOURCE NAMES
+Each count belongs to the processor named in its heading column.
 The source is
 .Ql PIC
 for a line the 8259 pair delivers,
@@ -602,6 +603,25 @@ for APIC spurious interrupts and USB timer drains that found work without
 an observed pending USB interrupt after any USB interrupt source was enabled.
 The USB pump checks each configured controller's MSI vector or PCI IRQ.
 A message still in transit can also increase the fallback count.
+.It Pa /proc/irq/N/smp_affinity
+The requested processor mask of enabled PCI message vector N, in hexadecimal,
+with a comma between 32-bit words, the highest word first.
+A privileged write moves the message to the least allocated reachable online
+processor in the mask.
+A zero mask restores the default of all reachable online processors.
+A mask with no reachable online processor fails with EINVAL.
+Before the other processors start, messages go to the boot processor;
+afterwards they are spread by the number allocated to each processor.
+The requested mask is retained when its last online processor departs and
+placement falls back to the remaining processors.
+There is no runtime processor-hotplug interface.
+The directory and its files disappear when the message is disabled.
+.It Pa /proc/irq/N/effective_affinity
+The processor actually chosen for message vector N, in the same hexadecimal
+format as smp_affinity.
+This file is read-only.
+A message already sent to the old processor before migration still reaches
+the same vector's handler.
 .It Pa /proc/loadavg
 One line, as Linux writes it: the load averages over one, five and fifteen
 minutes with two decimals, the processes running or ready to run and all

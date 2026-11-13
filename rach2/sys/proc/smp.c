@@ -11,6 +11,7 @@
 #include "../klog.h"
 #include "../panic.h"
 #include "../platform.h"
+#include "../irq.h"
 #include "../lib/kerrno.h"
 #include "../lib/kirq.h"
 #include "../lib/spinlock.h"
@@ -1739,6 +1740,7 @@ static void smp_stop_here(struct percpu *cpu)
         k_panic_hook();
     }
     platform_pmu_disable();
+    isr_cpu_offline();
     cpu->online = 0;
     cpu->stopped = 1;
     arch_stop();

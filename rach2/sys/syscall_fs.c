@@ -2656,6 +2656,7 @@ static void ofd_record_path(struct open_file *ofd, const char *name)
 }
 
 static int32_t synth_open_dir(const struct vpath *vp, int flags);
+static int synth_kind_is_dir(int kind);
 static uint32_t synth_pid_dir_mode(const struct vpath *vp);
 
 /** Whether `m` is one of the permanent mounts (VFS_PERMANENT), the system's
@@ -3362,6 +3363,9 @@ static int32_t synth_open_root(const struct vpath *vp, int flags, uint32_t mode,
  */
 static int32_t synth_open(const struct vpath *vp, int flags)
 {
+    if (synth_kind_is_dir(vp->kind)) {
+        return synth_open_dir(vp, flags);
+    }
     switch (vp->kind) {
     case VNODE_DEV: {
         uint32_t dmode, uid, gid;
@@ -3410,6 +3414,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_AUDIO:
     case VNODE_PROC_USB:
     case VNODE_PROC_FILESYSTEMS:
+    case VNODE_PROC_IRQ_FILE:
     case VNODE_PROC_INTERRUPTS:
     case VNODE_PROC_CONSOLE:
     case VNODE_PROC_NET_ROUTE:
@@ -3424,24 +3429,6 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         return synth_open_root(vp, flags, 0400u, CRED_R);
     case VNODE_PROC_ACPI_CALL:
         return synth_open_root(vp, flags, 0600u, open_want(flags));
-    case VNODE_DEV_DIR:
-    case VNODE_PTS_DIR:
-    case VNODE_DEV_SUBDIR:
-    case VNODE_PROC_DIR:
-    case VNODE_PROC_ACPI_DIR:
-    case VNODE_PROC_FS_DIR:
-    case VNODE_PROC_NET_DIR:
-    case VNODE_PROC_NET_STAT_DIR:
-    case VNODE_PROC_SYSVIPC_DIR:
-    case VNODE_PROC_SYS_DIR:
-    case VNODE_PROC_PID:
-    case VNODE_PROC_FD_DIR:
-    case VNODE_PROC_FDINFO_DIR:
-    case VNODE_PROC_TASK_DIR:
-    case VNODE_PROC_NS_DIR:
-    case VNODE_SYS_DIR:
-    case VNODE_SYS_LINK:
-        return synth_open_dir(vp, flags);
     case VNODE_DEV_MADE:
         return devtree_is_dir(vp->syskey) == 1 ? synth_open_dir(vp, flags) : -ENOENT;
     case VNODE_ENOTDIR:
@@ -3524,6 +3511,21 @@ static int32_t proc_fd_dir_access(int kind, int pid, int want, const struct synt
     return cred_access_bits(uid, gid, 0500, want, 0);
 }
 
+/** Whether a device directory or message directory still exists at open. */
+static int synth_dir_present(const struct vpath *vp)
+{
+    if ((vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) && SYSFS_KEYED(vp->sysent)) {
+        return sysfs_device_exists(vp->sysent, vp->syskey);
+    }
+    if (vp->kind == VNODE_DEV_SUBDIR) {
+        return devfs_subdir_present(vp->devdir);
+    }
+    if (vp->kind == VNODE_PROC_IRQ_DIR && vp->pid >= 0) {
+        return procfs_irq_exists(vp->pid);
+    }
+    return 1;
+}
+
 /**
  * Open a synthetic directory (/dev, /proc, /proc/<pid> and its fd, fdinfo
  * and ns, a thread's under /proc/<pid>/task, a directory of /proc/sys or of
@@ -3576,15 +3578,13 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     if (fd != 0) {
         return fd;
     }
-    if ((vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) && SYSFS_KEYED(vp->sysent) &&
-        !sysfs_device_exists(vp->sysent, vp->syskey)) {
-        return -ENOENT;
-    }
-    if (vp->kind == VNODE_DEV_SUBDIR && !devfs_subdir_present(vp->devdir)) {
+    if (!synth_dir_present(vp)) {
         return -ENOENT;
     }
     if (vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) {
         sd = synth_dir_alloc(VNODE_SYS_DIR, vp->sysent, vp->syskey);
+    } else if (vp->kind == VNODE_PROC_IRQ_DIR) {
+        sd = synth_dir_alloc(vp->kind, vp->pid, 0);
     } else if (vp->kind == VNODE_DEV_SUBDIR) {
         sd = synth_dir_alloc(VNODE_DEV_SUBDIR, vp->devdir, 0);
     } else if (vp->kind == VNODE_DEV_MADE) {
@@ -8344,7 +8344,7 @@ static int synth_kind_is_dir(int kind)
            kind == VNODE_SYS_LINK || kind == VNODE_PROC_SYSVIPC_DIR ||
            kind == VNODE_PROC_NET_STAT_DIR || kind == VNODE_PROC_NS_DIR ||
            kind == VNODE_PROC_FDINFO_DIR || kind == VNODE_DEV_SUBDIR ||
-           kind == VNODE_PROC_ACPI_DIR || kind == VNODE_PROC_FS_DIR;
+           kind == VNODE_PROC_IRQ_DIR || kind == VNODE_PROC_ACPI_DIR || kind == VNODE_PROC_FS_DIR;
 }
 
 /** The entry root made under /dev (devtree.h) that the descriptor `e` is
@@ -9513,6 +9513,28 @@ static int32_t synth_stat_pid_dir(const struct vpath *vp, struct kstat *kst, int
     return 0;
 }
 
+/** Stat one fixed directory of procfs. */
+static int synth_proc_dir_stat(struct kstat *kst, uint32_t ino)
+{
+    kst->st_dev = PROCFS_FSID;
+    kst->st_mode = S_IFDIR | 0555;
+    kst->st_ino = ino;
+    return 0;
+}
+
+/** Stat an enabled message's directory or affinity file. */
+static int synth_irq_stat(const struct vpath *vp, struct kstat *kst)
+{
+    if (vp->pid >= 0 && !procfs_irq_exists(vp->pid)) {
+        return -ENOENT;
+    }
+    kst->st_dev = PROCFS_FSID;
+    kst->st_mode =
+        vp->kind == VNODE_PROC_IRQ_DIR ? S_IFDIR | 0555 : S_IFREG | (vp->procfile ? 0444 : 0644);
+    kst->st_ino = procfs_ino_irq(vp->pid, vp->kind == VNODE_PROC_IRQ_DIR ? 0 : vp->procfile + 1);
+    return 0;
+}
+
 /**
  * Fill `kst` with the attributes stat gives the /dev, /proc or /sys node
  * `vp`, a /proc link followed to what it names when `follow`. Returns 0, or
@@ -9654,21 +9676,18 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
         return synth_proc_stat(kst, procfs_ino_net(vp->procfile));
     case VNODE_PROC_SYSVIPC:
         return synth_proc_stat(kst, procfs_ino_sysvipc(vp->procfile));
+    case VNODE_PROC_IRQ_DIR:
+    case VNODE_PROC_IRQ_FILE:
+        return synth_irq_stat(vp, kst);
     case VNODE_PROC_ACPI_DIR:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFDIR | 0555;
-        kst->st_ino = procfs_ino_acpidir();
-        return 0;
+        return synth_proc_dir_stat(kst, procfs_ino_acpidir());
     case VNODE_PROC_ACPI_CALL:
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = S_IFREG | 0600;
         kst->st_ino = procfs_ino_acpicall();
         return 0;
     case VNODE_PROC_FS_DIR:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFDIR | 0555;
-        kst->st_ino = procfs_ino_fsdir();
-        return 0;
+        return synth_proc_dir_stat(kst, procfs_ino_fsdir());
     case VNODE_SYS_DIR:
     case VNODE_SYS_LINK:
     case VNODE_SYS_FILE:
@@ -19353,6 +19372,7 @@ static const struct {
                           {"mounts", procfs_ino_mounts, DT_REG},
                           {"net", procfs_ino_netdir, DT_DIR},
                           {"sysvipc", procfs_ino_sysvipcdir, DT_DIR},
+                          {"irq", procfs_ino_irqdir, DT_DIR},
                           {"acpi", procfs_ino_acpidir, DT_DIR},
                           {"fs", procfs_ino_fsdir, DT_DIR},
                           {"sys", procfs_ino_sysdir, DT_DIR},
@@ -19363,6 +19383,37 @@ static const struct {
                           {"audio", procfs_ino_audio, DT_REG},
                           {"interrupts", procfs_ino_interrupts, DT_REG},
                           {"filesystems", procfs_ino_filesystems, DT_REG}};
+
+/** List one message directory, the live message numbers, or the fixed
+ * files of /proc/acpi and /proc/fs. */
+static int synth_small_proc_dirent(const struct synth_dir *sd, int n, char *name, uint64_t *ino,
+                                   uint8_t *dtype)
+{
+    int v, seen = 0;
+
+    if (sd->kind == VNODE_PROC_ACPI_DIR) {
+        return synth_entry(n == 0 ? "call" : NULL, procfs_ino_acpicall(), DT_REG, name, ino, dtype);
+    }
+    if (sd->kind == VNODE_PROC_FS_DIR) {
+        return synth_entry(n == 0 ? "lockwait" : NULL, procfs_ino_lockwait(), DT_REG, name, ino,
+                           dtype);
+    }
+    if (sd->pid >= 0) {
+        return synth_entry(n == 0   ? "smp_affinity"
+                           : n == 1 ? "effective_affinity"
+                                    : NULL,
+                           procfs_ino_irq(sd->pid, n + 1), DT_REG, name, ino, dtype);
+    }
+    for (v = 0; v < 256; v++) {
+        if (procfs_irq_exists(v) && seen++ == n) {
+            synth_u32_str(name, (uint32_t)v);
+            *ino = procfs_ino_irq(v, 0);
+            *dtype = DT_DIR;
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /**
  * The entry at position `*pos` of a synthetic directory, from the directory
@@ -19422,12 +19473,13 @@ static int synth_dirent_at(const struct synth_dir *sd, int *pos, char *name, uin
     if (kind == VNODE_DEV_MADE) {
         return synth_dev_any_dirent(-1, sd->pid, n, name, ino, dtype);
     }
-    if (kind == VNODE_PROC_ACPI_DIR) {
-        return synth_entry(n == 0 ? "call" : NULL, procfs_ino_acpicall(), DT_REG, name, ino, dtype);
-    }
-    if (kind == VNODE_PROC_FS_DIR) {
-        return synth_entry(n == 0 ? "lockwait" : NULL, procfs_ino_lockwait(), DT_REG, name, ino,
-                           dtype);
+    switch (kind) {
+    case VNODE_PROC_IRQ_DIR:
+    case VNODE_PROC_ACPI_DIR:
+    case VNODE_PROC_FS_DIR:
+        return synth_small_proc_dirent(sd, n, name, ino, dtype);
+    default:
+        break;
     }
     if (kind == VNODE_PTS_DIR) {
         int i, c = 0;
