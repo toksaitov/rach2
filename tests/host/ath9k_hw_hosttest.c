@@ -296,7 +296,7 @@ static void run_queued(void)
     w->run(w);
 }
 
-/** The clock, in milliseconds. */
+/** The clock, in ticks. */
 uint64_t tick_count(void)
 {
     return 5000;
@@ -879,7 +879,8 @@ static void test_recorded(void)
     CHECK(logged("ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026"));
     CHECK(n_lines == 1);
     CHECK(registered == &card.radio);
-    CHECK(n_queued == 1 && queued == &card.bus.rfkill_work[0] && queued_due == 5000 + 1000);
+    CHECK(n_queued == 1 && queued == &card.bus.rfkill_work[0] &&
+          queued_due == 5000 + MS_TO_TICKS(RFKILL_POLL_MS));
     CHECK(card.radio.ops == &ath9k_radio_ops && card.radio.priv == &card);
     CHECK(streq(card.radio.name, "ath9k"));
     CHECK(minstrel_calls == 1);

@@ -31,7 +31,7 @@ static unsigned failures;
 
 /* ---- the machine around the code ---- */
 
-static uint64_t now = 5000;
+static uint64_t now = 5000;      /* the kernel's ticks, and the medium's milliseconds */
 static const char *cmdline_wsim; /* the value of rach2.wsim, or NULL */
 static unsigned logs;
 
@@ -328,7 +328,7 @@ static void row_start(void)
     CHECK(wsim_ioctl(&e0, WSIM_IOC_INFO, (uintptr_t)&wi) == 0);
     CHECK(wi.started == 1 && wi.frequency == 2437 && wi.radio == 0);
     now += 7;
-    CHECK(r0->ops->get_tsf(r0, &tsf) == 0 && tsf == 7000);
+    CHECK(r0->ops->get_tsf(r0, &tsf) == 0 && tsf == 7 * (uint64_t)TICK_US);
     medium_init(&m0, 0, 0, mac0, -50, 100);
     medium_init(&m1, 1, 0, mac1, -42, 100);
 }
@@ -358,7 +358,7 @@ static void row_unicast(void)
     CHECK(rxs[rx_before].len == len && memcmp(rxs[rx_before].frame, f, len) == 0);
     CHECK(rxs[rx_before].status.frequency == 2437 && rxs[rx_before].status.signal == -42);
     CHECK(rxs[rx_before].status.rate == 3 && rxs[rx_before].status.rate_flags == 0);
-    CHECK(rxs[rx_before].status.hw_key == -1 && rxs[rx_before].status.tsf == 7000);
+    CHECK(rxs[rx_before].status.hw_key == -1 && rxs[rx_before].status.tsf == 7 * (uint64_t)TICK_US);
     CHECK(n_tx == tx_before + 1 && txs[tx_before].radio == r0);
     CHECK(txs[tx_before].status.cookie == 0x1234);
     CHECK(txs[tx_before].status.flags == WLAN_TX_ACKED && txs[tx_before].status.ack_signal == -42);
