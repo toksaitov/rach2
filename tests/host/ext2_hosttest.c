@@ -9025,10 +9025,11 @@ static void stop_settle_row(void)
  * A bitmap check that stops the mount takes no block after it
  * (`group_take_block`). Under `errors=remount-ro`, /many/file0.txt and
  * file1.txt share an attribute block, and the bit of the group's inode
- * table, below that block, is clear; a change of file0's attribute, which
- * replaces the shared block and so searches for a block from it, meets the
- * bitmap's check, which stops the mount. The change must fail, no block be
- * taken, and the shared block stay file0's with its count.
+ * table, below that block, is clear on a volume marked clean, so that no
+ * check at the mount finds the bit first; a change of file0's attribute,
+ * which replaces the shared block and so searches for a block from it,
+ * meets the bitmap's check, which stops the mount. The change must fail, no
+ * block be taken, and the shared block stay file0's with its count.
  */
 static void stop_alloc_row(void)
 {
@@ -9041,7 +9042,7 @@ static void stop_alloc_row(void)
     void *n;
     int rc = -1, err = 0;
 
-    snprintf(script, sizeof(script), "freeb %ld\n", (long)blk);
+    snprintf(script, sizeof(script), "freeb %ld\nssv state 1\n", (long)blk);
     if (blk <= 0 || !debugfs_script(img, script)) {
         check(0, "the allocation row's volume is made");
         return;
@@ -9094,12 +9095,12 @@ static void stop_free_turn(void)
 }
 
 /**
- * Unlink /hello.txt on a fresh volume under `errors=remount-ro`, its cache
- * emptied, under reclaim at every read, with each read of the block bitmap
- * from the `from`th on failed (none for 0); the reads of it in `*reads`, the
- * free inodes before the unlink in `*ffree`, and the unlink's result
- * returned, or 1 when the volume would not come to it. The volume is left
- * mounted.
+ * Unlink /hello.txt on a fresh volume under `errors=remount-ro`, its other
+ * name /hello.link removed first and its cache emptied, under reclaim at
+ * every read, with each read of the block bitmap from the `from`th on
+ * failed (none for 0); the reads of it in `*reads`, the free inodes before
+ * the unlink in `*ffree`, and the unlink's result returned, or 1 when the
+ * volume would not come to it. The volume is left mounted.
  */
 static int stop_free_run(int from, int *reads, uint64_t *ffree)
 {
@@ -9108,6 +9109,10 @@ static int stop_free_run(int from, int *reads, uint64_t *ffree)
 
     *reads = 0;
     if (!damage_mount(img, 0, 0, "the free row's volume mounts")) {
+        return 1;
+    }
+    if (OPS->unlink(&mnt, mnt.root, "hello.link") != 0) {
+        unmount_image();
         return 1;
     }
     *ffree = policy_ffree();
