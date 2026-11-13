@@ -189,8 +189,8 @@ static int tests(int argc, char **argv)
         return 2;
     strcat(line, " with ");
     strcat(line, *env("RACH2_RESULTS") ? env("RACH2_RESULTS") : "no results");
-    snprintf(arch, sizeof(arch), "%s%s%s", env("ARCH"), *env("RACH2_KERNEL") ? " under " : "",
-             env("RACH2_KERNEL"));
+    snprintf(arch, sizeof(arch), "%s%s%s%s", env("ARCH"), *env("RACH2_KERNEL") ? " under " : "",
+             env("RACH2_KERNEL"), strcmp(env("RACH2_QEMU_ACCEL"), "kvm") ? "" : " on kvm");
     if (!append(path("calls"), line) || !append(path("calls.arch"), arch))
         return 2;
     keep = strdup(env("CI_RUN_TEST_KEEP"));
@@ -669,11 +669,47 @@ static int ia32_rows(struct run_fixture *r)
     return ok;
 }
 
+/** The suites of tools/ci/kvm-suites, run after the others as a run of
+ * their own under `RACH2_QEMU_ACCEL=kvm`, which the runs after it do not
+ * keep. */
+static int kvm_rows(struct run_fixture *r)
+{
+    struct run_case c = {"kvm: every suite", "none", "", 0, 0, NULL, NULL, NULL};
+    int ok = 1;
+    if (!flow_put(r->f, "tree/tools/ci/kvm-suites", "# the suites\ntcp\n\nfpu\n"))
+        return 0;
+    r->suites = "";
+    ok = row(r, &c) && ok;
+    ok = words(r, path("calls"),
+               "tests/run style host default shutdown tests/run tcp fpu tests/run bigmem "
+               "tests/run default tcp") &&
+         words(r, path("calls.arch"), "i686 x86_64 i686 x86_64 on kvm x86_64 i686 under ia32") &&
+         ok;
+    c.name = "kvm: failed suite";
+    c.set = "tcp";
+    c.err = "run: x86_64:fpu: FAIL in 3s\nrun: result: failed: x86_64:fpu\n";
+    c.status = 1;
+    c.failed = "x86_64:fpu";
+    ok = row(r, &c) && ok;
+    c.name = "kvm: chosen suites";
+    c.set = "none";
+    c.err = NULL;
+    c.status = 0;
+    c.failed = "";
+    r->suites = "i686:default x86_64:tcp";
+    ok = row(r, &c) && ok;
+    ok = words(r, path("calls"), "tests/run i686:default tests/run x86_64:tcp") &&
+         words(r, path("calls.arch"), "i686 x86_64 i686 x86_64 on kvm") && ok;
+    r->suites = "";
+    return fx_remove(path("tree/tools/ci/kvm-suites")) && ok;
+}
+
 static int prepare(struct fixture *f)
 {
     fx_env("FLOW_CI_RUN", "1");
     fx_env("CI_RUN_WORK", f->work);
     fx_env("RACH2_KERNEL", NULL);
+    fx_env("RACH2_QEMU_ACCEL", "tcg");
     if (!flow_copy(f, "tools/ci/run.sh", "tree/tools/ci/run.sh") || !fx_mock(f, "git") ||
         !fx_mock(f, "make") || !fx_mock(f, "ci-run-watch") ||
         !fx_copy(f->self, path("tree/tests/run")))
@@ -702,5 +738,6 @@ int flow_ci_run(struct fixture *f)
     ok = both_rows(&r) && ok;
     ok = both_chosen_rows(&r) && ok;
     ok = ia32_rows(&r) && ok;
+    ok = kvm_rows(&r) && ok;
     return ok;
 }

@@ -1,0 +1,7 @@
+# kvm-suites: the suites the release's full run runs under KVM, whatever
+# accelerator the site names, one per line (run.sh). Each judges a browser in
+# Rach2's guest against the Debian guest's references, which were taken under
+# KVM (tests/graphics/Readme.md, Accelerators).
+browser
+video
+webgl

@@ -228,17 +228,18 @@ share() { # share [finished]
 }
 
 # Each architecture is cleaned, then each is built, and the suites of every
-# architecture that built run as one run of tests/run, `bigmem` after it as a
-# run of its own, and last, once both architectures have built, the ia32
-# profile's suites, as tools/ci/ia32-suites and ia32-deferred give them, as a
-# run of `RACH2_KERNEL=ia32 ARCH=i686 tests/run`, which
-# boots the i686 build's cases on the x86-64 build's kernel (tests/Readme.md,
-# The ia32 profile); a failure is `ARCH:build`, and `ia32:build` when the
-# profile could not run for want of a build. With SUITES, the run runs
-# `ARCH:SUITE` for each word and the SUITE of each `ia32:SUITE` word under the
-# profile. An architecture that SUITES names nothing of is `skipped`, and is
-# not built unless the profile needs it; the profile is `skipped` when SUITES
-# names nothing of it.
+# architecture that built run as one run of tests/run under the site's
+# accelerator, those tools/ci/kvm-suites names after it as one run under KVM,
+# `bigmem` after them as a run of its own, and last, once both architectures
+# have built, the ia32 profile's suites, as tools/ci/ia32-suites and
+# ia32-deferred give them, as a run of `RACH2_KERNEL=ia32 ARCH=i686 tests/run`,
+# which boots the i686 build's cases on the x86-64 build's kernel
+# (tests/Readme.md, The ia32 profile); a failure is `ARCH:build`, and
+# `ia32:build` when the profile could not run for want of a build. With SUITES,
+# the run runs `ARCH:SUITE` for each word and the SUITE of each `ia32:SUITE`
+# word under the profile. An architecture that SUITES names nothing of is
+# `skipped`, and is not built unless the profile needs it; the profile is
+# `skipped` when SUITES names nothing of it.
 echo "ci: full: architectures i686 and x86_64 at $(git rev-parse --short HEAD)"
 tested=""
 words=""
@@ -326,8 +327,31 @@ if [ -n "$ARCH" ]; then
         fi
     done
     [ -n "${SUITES:-}" ] || rest=$(for w in $rest; do echo "${w#*:}"; done | awk '!seen[$0]++')
+    # The suites of tools/ci/kvm-suites leave the site's run for one of their
+    # own under KVM.
+    kvm=""
+    if [ -f tools/ci/kvm-suites ]; then
+        listed=$(sed -e 's/#.*//' -e '/^ *$/d' tools/ci/kvm-suites)
+        others=""
+        for w in $rest; do
+            if echo "$listed" | grep -qx "${w#*:}"; then
+                kvm="$kvm $w"
+            else
+                others="$others $w"
+            fi
+        done
+        rest=$others
+    fi
     # shellcheck disable=SC2086 # a suite name is one word by format
     [ -z "$rest" ] || run_set all $rest
+    if [ -n "$kvm" ]; then
+        accel=${RACH2_QEMU_ACCEL-}
+        RACH2_QEMU_ACCEL=kvm
+        export RACH2_QEMU_ACCEL
+        # shellcheck disable=SC2086 # a suite name is one word by format
+        run_set all $kvm
+        RACH2_QEMU_ACCEL=$accel
+    fi
     if [ -n "$bigmem" ]; then
         ARCH=x86_64
         run_set bigmem bigmem
