@@ -25,6 +25,7 @@ struct percpu cpu_table[NR_CPUS];
 process_t *proc_idle;
 volatile uint64_t kernel_ticks;
 unsigned int host_cpu;
+extern int bkl_host_free, bkl_host_takes;
 
 static void poll_wake_step(void);
 
@@ -130,9 +131,24 @@ int in_interrupt(void)
     return 0;
 }
 
-/* The halts the idle waits made, and the windows of one instruction with
- * interrupts on that they opened instead (`idle_kicked_window`). */
-static unsigned int irq_windows;
+/* The windows of one instruction with interrupts on that the idle waits
+ * opened in place of a halt (`idle_kicked_window`): inside the idle marker,
+ * and before it, where a loopback drain or ready work ends the wait before
+ * the marker is set. */
+static unsigned int irq_windows, irq_early_windows;
+/* Nonzero while a row drives a wait that ends before the idle marker, the
+ * one place a window may open unmarked. */
+static int irq_early_ok;
+/* An interrupt the row made pending, which the next window takes, and the
+ * interrupts windows took. */
+static int irq_pending;
+static unsigned int irq_taken;
+/* A loopback datagram waiting (`ip_loop_pending`), and the drains made. */
+static int loop_pending;
+static unsigned int loop_drains;
+/* Nonzero to make a thread ready when the idle wait lets the big lock go,
+ * after the idle marker is set: a wake from another processor there. */
+static int resched_on_drop;
 
 /** Count a halt; the interrupt that would end it is not modeled. */
 void arch_idle_masked(void)
@@ -380,6 +396,10 @@ int bkl_drop(void)
     int depth = this_cpu()->bkl_depth;
 
     this_cpu()->bkl_depth = 0;
+    if (resched_on_drop) {
+        resched_on_drop = 0;
+        sched_make_ready(&procs[1]);
+    }
     return depth;
 }
 
@@ -441,12 +461,21 @@ void arch_irq_disable(void)
     irq_flags = 0;
 }
 
-/** Count an idle wait's window with interrupts on, which must open while
- * the processor is still marked idle, and set the model's flag. */
+/** Count an idle wait's window with interrupts on, marked idle or, where
+ * the row expects it (`irq_early_ok`), before the marker, take a pending
+ * interrupt and set the model's flag. */
 void arch_irq_enable(void)
 {
-    CHECK(this_cpu()->idle_wait, "an interrupt window opened outside the idle marker");
-    irq_windows++;
+    if (this_cpu()->idle_wait) {
+        irq_windows++;
+    } else {
+        CHECK(irq_early_ok, "an interrupt window opened outside the idle marker");
+        irq_early_windows++;
+    }
+    if (irq_pending) {
+        irq_pending = 0;
+        irq_taken++;
+    }
     irq_flags = 0x200;
 }
 
@@ -456,16 +485,21 @@ int signal_pending(void)
     return 0;
 }
 
-/** 0: no loopback packet is pending. */
+/** Whether the row left a loopback datagram waiting. */
 int ip_loop_pending(void)
 {
-    return 0;
+    return loop_pending;
 }
 
-/** Nothing: no loopback packet is pending. */
+/** Deliver the waiting datagram, which an idle wait does with interrupts
+ * off and with the big lock, and count the drain. */
 void ip_loop_drain_from(int from)
 {
-    (void)from;
+    CHECK(from == IP_LOOP_FROM_IDLE && !irq_flags && !this_cpu()->idle_wait &&
+              (this_cpu()->bkl_depth > 0 || bkl_held()),
+          "an idle wait drains the loopback ring with interrupts off and the big lock, unmarked");
+    loop_pending = 0;
+    loop_drains++;
 }
 
 /** Reset seven processes, 0 running and the rest ready, on one list, with
@@ -1524,7 +1558,9 @@ static void nohz_ready_entry(void)
     CHECK(current_proc == &procs[0] && this_cpu()->idle_wait && !switches,
           "a service point cannot switch inside post-halt idle work");
     this_cpu()->idle_wait = 0;
+    irq_early_ok = 1;
     idle_wait_irq_off();
+    irq_early_ok = 0;
     CHECK(!idle_timer_enters && !idle_halts,
           "work already ready avoids idle timer programming and a halt");
     schedule();
@@ -1542,6 +1578,106 @@ static void nohz_ready_entry(void)
     CHECK(idle_timer_enters == 1 && !idle_halts && procs[0].need_resched,
           "a wake during preparation is checked again before the halt");
     idle_timer_ready = 0;
+}
+
+/** Make the scheduler's idle task current on one processor with nothing
+ * ready, interrupts off, the stopped tick's timer ready and the counts of
+ * the idle wait's halts, windows, interrupts and drains cleared. */
+static void cancel_setup(void)
+{
+    unsigned int i;
+
+    setup();
+    for (i = 1; i < 7; i++) {
+        sched_forget(&procs[i]);
+    }
+    this_cpu()->idle = &procs[0];
+    irq_flags = 0;
+    idle_timer_ready = 1;
+    idle_timer_enters = idle_halts = 0;
+    irq_windows = irq_early_windows = irq_taken = 0;
+    loop_drains = 0;
+    irq_pending = 1;
+}
+
+/** Whether the idle wait just made took the row's pending interrupt
+ * through one window, before the marker when `early` is set and marked idle
+ * otherwise, and returned unmarked with interrupts off and no halt. */
+static int cancel_taken(int early)
+{
+    return irq_early_windows == (early ? 1u : 0u) && irq_windows == (early ? 0u : 1u) &&
+           irq_taken == 1 && !irq_pending && !irq_flags && !idle_halts && !this_cpu()->idle_wait;
+}
+
+/** Run `idle_wait_irq_off` where the row expects it to end before the idle
+ * marker. */
+static void cancel_early(void)
+{
+    irq_early_ok = 1;
+    idle_wait_irq_off();
+    irq_early_ok = 0;
+}
+
+/**
+ * A loopback drain in an idle wait takes a pending interrupt through its
+ * window of one instruction before the idle marker is set, and returns with
+ * interrupts off and no halt, with the big lock held as it was, or with a
+ * tried lock taken for the drain and let go.
+ */
+static void idle_cancel_drains(void)
+{
+    cancel_setup();
+    this_cpu()->bkl_depth = 1;
+    loop_pending = 1;
+    cancel_early();
+    CHECK(loop_drains == 1 && !loop_pending && cancel_taken(1) && this_cpu()->bkl_depth == 1,
+          "a drain under the big lock takes a pending interrupt before the marker, then returns");
+    this_cpu()->bkl_depth = 0;
+
+    cancel_setup();
+    bkl_host_free = 1;
+    bkl_host_takes = 0;
+    loop_pending = 1;
+    cancel_early();
+    CHECK(loop_drains == 1 && !loop_pending && bkl_host_takes == 1 && !bkl_held() &&
+              cancel_taken(1),
+          "a drain under a tried big lock lets it go and takes a pending interrupt before the "
+          "marker");
+    bkl_host_free = 0;
+    irq_pending = 0;
+    idle_timer_ready = 0;
+    irq_flags = 0x200;
+}
+
+/**
+ * Ready work that cancels the scheduler idle task's wait takes a pending
+ * interrupt through its window of one instruction and returns with
+ * interrupts off and no halt: before the idle marker when it was ready
+ * before the marker was set, and marked idle when it came once the marker
+ * was set or while the tick stopped, which declines the sleep.
+ */
+static void idle_cancel_ready(void)
+{
+    cancel_setup();
+    sched_make_ready(&procs[1]);
+    cancel_early();
+    CHECK(cancel_taken(1) && !idle_timer_enters && procs[0].need_resched,
+          "ready work before the marker takes a pending interrupt, unmarked, with no halt");
+
+    cancel_setup();
+    resched_on_drop = 1;
+    idle_wait_irq_off();
+    CHECK(!resched_on_drop && cancel_taken(0) && !idle_timer_enters && procs[0].need_resched,
+          "ready work after the marker takes a pending interrupt marked idle, with no halt");
+
+    cancel_setup();
+    idle_wake_on_enter = 1;
+    idle_wait_irq_off();
+    CHECK(!idle_wake_on_enter && idle_timer_enters == 1 && cancel_taken(0) && procs[0].need_resched,
+          "a sleep a wake declines while the tick stops takes a pending interrupt marked idle");
+    irq_pending = 0;
+    idle_timer_ready = 0;
+    irq_flags = 0x200;
 }
 
 /** Deliver a ready thread from another modeled CPU during the poll. */
@@ -1814,6 +1950,8 @@ int main(int argc, char **argv)
         nohz_accounting();
         nohz_switch();
         nohz_ready_entry();
+        idle_cancel_drains();
+        idle_cancel_ready();
         nohz_poll_before_stop();
         nohz_short_waits();
         nohz_poll_tick();
@@ -1848,6 +1986,8 @@ int main(int argc, char **argv)
     nohz_accounting();
     nohz_switch();
     nohz_ready_entry();
+    idle_cancel_drains();
+    idle_cancel_ready();
     nohz_poll_before_stop();
     nohz_short_waits();
     nohz_poll_tick();
@@ -1863,7 +2003,7 @@ int main(int argc, char **argv)
                "accounting, "
                "load phase, "
                "idle machine, ready lists, wake twice, migration, run delay, tick slice, tick rr, "
-               "tick rt, idle kicked, balance once\n");
+               "tick rt, idle cancel drains, idle cancel ready, idle kicked, balance once\n");
     return 0;
 }
 
