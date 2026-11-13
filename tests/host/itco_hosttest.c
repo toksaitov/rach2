@@ -614,8 +614,9 @@ static void line(void)
     (void)kcmdline_capture(0);
 }
 
-/** Check elapsed countdowns, exact open expiry and projected deadlines. */
-static int elapsed_rows(void)
+/** Check elapsed countdowns, exact open expiry and projected deadlines. The
+ * ordinary run ends with these rows; `--elapsed-only` runs them alone. */
+static void elapsed_rows(void)
 {
     unsigned before;
 
@@ -648,8 +649,6 @@ static int elapsed_rows(void)
     CHECK(itco_idle_ticks() == 7);
     kernel_ticks += 7;
     CHECK(itco_idle_ticks() == 1);
-    printf("itco-hosttest: elapsed: %s\n", failures ? "fail" : "pass");
-    return failures != 0;
 }
 
 /** Check actual writes, expiry, failures, exclusive open and the ioctl ABI. */
@@ -663,7 +662,9 @@ int main(int argc, char **argv)
     } info;
 
     if (argc == 2 && strcmp(argv[1], "--elapsed-only") == 0) {
-        return elapsed_rows();
+        elapsed_rows();
+        printf("itco_hosttest: elapsed: %s\n", failures ? "failed" : "ok");
+        return failures != 0;
     }
     setup();
     CHECK(itco_attach(&watchdog, 30) == 0);
@@ -748,6 +749,7 @@ int main(int argc, char **argv)
     model.stuck_halt = 1;
     model.words[TCO1_CNT / 2] &= (uint16_t)~TCO_HALT;
     CHECK(itco_attach(&watchdog, 30) == -EIO);
+    elapsed_rows();
     printf("itco_hosttest: %s\n", failures ? "failed" : "ok");
     return failures != 0;
 }
