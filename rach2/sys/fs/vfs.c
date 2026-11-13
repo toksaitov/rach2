@@ -3915,8 +3915,27 @@ static int kfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     return 0;
 }
 
+/** Record `rc`, a failed write of a page of the KRFFS root, in the root's
+ * write-back errors (`vfs_wb_err_set`) for each description's next fsync and
+ * syncfs to report, as the buffer cache records a failed block write of a
+ * mount's device (`vfs_device_failed`): the root is on no mount's device, and
+ * the page cache keeps the page dirty for a later write that may succeed.
+ * The page cache calls it from any context (`pc_on_failure`), a page fault's
+ * eviction among them, so entry zero is read under `mount_table_lock`. */
+static void kfs_page_failed(int rc)
+{
+    uint32_t flags = spin_lock_irqsave(&mount_table_lock);
+
+    if (mounts && mounts[0] && mounts[0]->state != VFS_FREE &&
+        mounts[0]->type == &vfs_krffs_type) {
+        vfs_wb_err_set(mounts[0], rc);
+    }
+    spin_unlock_irqrestore(&mount_table_lock, flags);
+}
+
 /** The `sync` of the KRFFS root: write the dirty pages of the page cache
- * (`pc_sync`); 0, or -EIO when a page failed or was busy. */
+ * (`pc_sync`), a failure of which is recorded as it happens
+ * (`kfs_page_failed`); 0, or -EIO when a page failed or was busy. */
 static int kfs_sync(struct vfs_mount *mnt)
 {
     (void)mnt;
@@ -5211,6 +5230,7 @@ void vfs_init(void)
     root_installed = 1;
     mount_table_init();
     install(0, &vfs_krffs_type, "/", 0, 0);
+    pc_on_failure(kfs_page_failed);
     install_permanent();
 }
 

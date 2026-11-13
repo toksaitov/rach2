@@ -71,6 +71,16 @@ uint32_t pc_resident(void);
 void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size);
 
 /**
+ * Have `failed` called with what the backing's write answered for each
+ * write of a page that fails, whoever wrote it, a sync, the flusher or an
+ * eviction, so that the file system the window holds records the failure
+ * for its syncs to report: the page stays dirty, and a later write of it
+ * that succeeds would otherwise hide the failure. `failed` may be called
+ * with interrupts off, from a page fault; NULL calls nothing.
+ */
+void pc_on_failure(void (*failed)(int rc));
+
+/**
  * Serve a kernel fault at `fault_address` in the window: the page is read in
  * when it is not resident, and mapped read-only for a read, or writable and
  * marked dirty for a `write`. Returns 1 when the page is mapped; 0, on which

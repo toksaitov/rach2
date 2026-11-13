@@ -105,6 +105,7 @@ static uint32_t pc_fs_size;             /* backed size; 0 means no backing */
 
 static pc_read_fn pc_read;
 static pc_write_fn pc_write;
+static void (*pc_failed)(int rc); /* told of each failed write, or NULL */
 
 static uint32_t pc_reads;
 static uint32_t pc_evicts;
@@ -301,6 +302,9 @@ static int pc_writeback(struct pc_entry *e)
         klog(KLOG_ERR, "pagecache", "writeback failed at disk offset 0x%X; the page stays dirty",
              e->disk_off);
         e->dirty = 1;
+        if (pc_failed) {
+            pc_failed(rc);
+        }
     } else {
         ++pc_writebacks;
     }
@@ -486,6 +490,11 @@ int pc_sync(void)
     }
 
     return result;
+}
+
+void pc_on_failure(void (*failed)(int rc))
+{
+    pc_failed = failed;
 }
 
 /** The size is clamped to the window before it is rounded up to a page, so
