@@ -135,6 +135,14 @@ void kfree(void *ptr)
     frees++;
 }
 
+/** The model's one thread finds the big lock free: nothing to take. */
+void bkl_enter(void)
+{}
+
+/** Give back what `bkl_enter` took: nothing here. */
+void bkl_exit(void)
+{}
+
 /* The interrupt flag of the model's one processor. */
 static uint32_t irq_on = 1;
 

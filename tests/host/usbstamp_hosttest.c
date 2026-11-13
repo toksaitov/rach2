@@ -514,6 +514,14 @@ void bkl_take_as(int depth, int key)
     (void)key;
 }
 
+/** No thread is counted alone in `bkl/calls` here: nothing to note. */
+void bkl_note_switch(const struct process *old, const struct process *next, int yielded)
+{
+    (void)old;
+    (void)next;
+    (void)yielded;
+}
+
 /** Set `*done` and wake `wq`'s sleepers, as the kernel's does under the
  * queues' lock. */
 void wq_complete(wait_queue_t *wq, volatile int *done)
