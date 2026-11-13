@@ -129,12 +129,14 @@ int fd_free(fd_table_t *t, int fd)
     return 0;
 }
 
-/** Call close once, at the final reference, as syscall_fs.c does. */
+/** Call close once, at the final reference, and drop the descriptor's
+ * reference to its description, as syscall_fs.c does. */
 void fd_release_backing(fd_entry_t *e)
 {
     if (e->ofd->refcount == 1 && e->ops && e->ops->close) {
         e->ops->close(e);
     }
+    fd_ofd_unref(e->ofd);
 }
 
 /** Model the VM's address-space check. */
@@ -212,11 +214,13 @@ static int source_open(int kind)
     return fd;
 }
 
-/** Close the descriptor without touching a file still held by the bridge. */
+/** Close the descriptor without touching a file still held by the bridge:
+ * release what it holds, its description's reference among them, and clear
+ * its slot, as close does with fd_free_after. */
 static void close_fd(int fd)
 {
     fd_release_backing(&entries[fd]);
-    fd_free(&table, fd);
+    zero(&entries[fd], sizeof(entries[fd]));
 }
 
 /** Set one attribute with Linux's pointer-to-fd payload. */
