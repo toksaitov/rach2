@@ -83,7 +83,7 @@ A check passes only after exit status zero, confirmed process cleanup and unchan
 
 `sched_hosttest.c` also checks slice events with only lower-priority work, a single selection request at expiry and a competitor becoming ineligible before selection.
 
-The wireless station and ath9k fixtures whose literal clocks count milliseconds declare `TICK_HZ=1000`; production uses 250 Hz. `i915_base_hosttest.c` selects its device's register lock in the shared time stub, which traps if a service deadline is published while that lock is held. The forcewake row also checks the published timestamp and its independent two-millisecond deadline.
+The wireless station and ath9k fixtures whose literal clocks count milliseconds, and `procfs_hosttest.c` and `unix_hosttest.c`, whose times and time limits count whole hundredths of a second and milliseconds in ticks, declare `TICK_HZ=1000`; production uses 250 Hz. `i915_base_hosttest.c` selects its device's register lock in the shared time stub, which traps if a service deadline is published while that lock is held. The forcewake row also checks the published timestamp and its independent two-millisecond deadline.
 
 ## Design
 
