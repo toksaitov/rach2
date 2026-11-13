@@ -1214,7 +1214,7 @@
     },
     {
       "case_id": "machine.usbdisk.vfs-unmount",
-      "behavior": "the unmount functions of rach2/sys/fs/vfs.c that a pulled stick's mounts go through, compiled with counting substitutes under ASan and UBSan, release the mounts they should and write nothing to a device that is gone",
+      "behavior": "the unmount functions of rach2/sys/fs/vfs.c that a pulled stick's mounts go through, compiled with counting substitutes under ASan and UBSan, release the mounts they should, write nothing to a device that is gone, and complete an unmount whose sync, writeback or flush failed with no preparation or writeback after the failure",
       "units": ["usbdisk", "`tests/system/vfs_unmount_test.sh`", "`tests/system/fixtures/vfs_unmount.c`"],
       "domain": "host",
       "architectures": "none",
@@ -1232,7 +1232,7 @@
       "assertions": [
         {
           "assertion_id": "unmount-cases",
-          "checks": "the fixture prepared from the unmount functions of vfs.c and fixtures/vfs_unmount.c under the sanitizers exits 0 after its 18 cases pass",
+          "checks": "the fixture prepared from the unmount functions of vfs.c and fixtures/vfs_unmount.c under the sanitizers exits 0 after its 26 cases pass",
           "source": "program"
         }
       ],

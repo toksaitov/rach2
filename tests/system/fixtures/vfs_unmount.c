@@ -1,6 +1,6 @@
 /**
  * vfs_unmount: the unmount functions of rach2/sys/fs/vfs.c, compiled whole
- * with substitutes for the calls they make, and checked in 21 cases, for
+ * with substitutes for the calls they make, and checked in 26 cases, for
  * the vfs-unmount case of tests/run usbdisk.
  *
  * Preparation copies the functions into unmount.inc. The substitutes for the
@@ -14,8 +14,12 @@
  * The pages in memory of a mount's files are ended (`filemap_unmount`) only
  * for a mount that is no bind, once nothing holds it and its operations
  * have drained, and before its file system is synced, and a bind's unmount
- * leaves them to its base. The USB disk rows test the same path with a real
- * device.
+ * leaves them to its base. The failure cases check that a failed sync, an
+ * earlier failed write, and a writeback or a flush that fails after the
+ * preparation each let the unmount complete, as Linux's does, with no
+ * preparation or writeback after the failure, the preparation put back after
+ * it, and the device's buffers dropped. The USB disk rows test the same path
+ * with a real device.
  */
 #include <errno.h>
 #include <stdint.h>
@@ -27,8 +31,9 @@
 #define VFS_UNMOUNTING       3
 #define VFS_COVERED_PATH_MAX 256
 #define BLOCK_GONE           1
+#define BLOCK_WRITE_FAILED   2
 #define KLOG_INFO            0
-#define klog(...)            ((void)0)
+#define KLOG_WARN            1
 #define k_strlen             strlen
 #define k_memcpy             memcpy
 /* This model's permanent entries, the root and two others; the kernel has
@@ -82,6 +87,7 @@ static struct block_device disks[6];
 static int mount_slots = 6;
 static int lookup_error, resolve_calls, syncs, prepares, flushes, invalidates;
 static int puts_count, releases, claims, locks, waits, sync_error, failures;
+static int writeback_error, flush_error, aborts, warnings, dirty_left;
 static struct fs_struct caller_fs;
 static struct process caller = {&caller_fs};
 static struct process *current_proc = &caller;
@@ -97,6 +103,15 @@ static unsigned block_flags(struct block_device *d)
 {
     return d->backing_flags;
 }
+/** Count a warning the unmount logs; the text is not read. */
+static void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)subsystem;
+    (void)format;
+    if (level == KLOG_WARN)
+        warnings++;
+}
+
 /** Count a file system sync; `sync_error` is its result. */
 static int sync_mount(struct vfs_mount *m)
 {
@@ -124,7 +139,13 @@ static void unmount_fs(struct vfs_mount *m)
     (void)m;
     releases++;
 }
-static struct vfs_ops ops = {sync_mount, prepare, NULL, put, unmount_fs};
+/** Count the preparation put back (`abort_unmount`). */
+static void abort_prepare(struct vfs_mount *m)
+{
+    (void)m;
+    aborts++;
+}
+static struct vfs_ops ops = {sync_mount, prepare, abort_prepare, put, unmount_fs};
 static struct vfs_type type = {&ops};
 
 /**
@@ -218,25 +239,27 @@ static void wq_wait_event_nointr(int *q, int (*ready)(struct vfs_mount *), struc
     waits++;
     m->inprogress = 0;
 }
-/** The block cache has nothing to write. */
+/** The block cache's writeback of `d`, which `writeback_error` fails. */
 static int bcache_sync(struct block_device *d)
 {
     (void)d;
-    return 0;
+    return writeback_error;
 }
-/** Count a device flush, which records a failure itself (`bcache_flush`). */
+/** Count a device flush, which records a failure itself (`bcache_flush`);
+ * `flush_error` is its result. */
 static int bcache_flush(struct block_device *d)
 {
     (void)d;
     flushes++;
-    return 0;
+    return flush_error;
 }
-/** Count the block cache of a device dropped. */
-static int bcache_invalidate(struct block_device *d)
+/** Count the block cache of a device dropped, `dirty_left` dirty buffers
+ * among its buffers, and clear its failed-write mark. */
+static int bcache_drop(struct block_device *d)
 {
-    (void)d;
+    d->flags &= ~BLOCK_WRITE_FAILED;
     invalidates++;
-    return 0;
+    return dirty_left;
 }
 /** Count the claims given back. */
 static void devfs_release_claim(int claim)
@@ -358,6 +381,7 @@ static void setup(void)
     lookup_error = -EIO;
     resolve_calls = syncs = prepares = flushes = invalidates = 0;
     puts_count = releases = claims = locks = waits = sync_error = 0;
+    writeback_error = flush_error = aborts = warnings = dirty_left = 0;
     memset(&caller_fs, 0, sizeof(caller_fs));
     root_path = NULL;
     root_holds = ref_releases = 0;
@@ -419,6 +443,47 @@ static void bind_cases(void)
           "a bind's unmount lets its base go and leaves the base's files' pages to the base");
 }
 
+/** The cases of an unmount whose sync failed, or whose device's earlier
+ * write did, which completes, as Linux's does, with no preparation or
+ * writeback after the failure, the device's buffers dropped and one
+ * warning. */
+static void failure_cases(void)
+{
+    setup();
+    sync_error = -EIO;
+    dirty_left = 2;
+    check(vfs_do_umount("/mnt/a/b", 0) == 0 && records[3].refs == 0 && claims == 1 &&
+              !records[4].state && !locks && releases == 1,
+          "a failed sync does not keep the mount");
+    check(syncs == 1 && !prepares && flushes == 1 && !aborts && invalidates == 1 && warnings == 1,
+          "a failed sync skips the preparation and the writeback, flushes and drops the buffers");
+    setup();
+    disks[4].flags = BLOCK_WRITE_FAILED;
+    check(vfs_do_umount("/mnt/a/b", 0) == 0 && !records[4].state && syncs == 1 && !prepares &&
+              flushes == 1 && invalidates == 1 && warnings == 1 && !disks[4].flags,
+          "a device whose earlier write failed is unmounted without the preparation");
+}
+
+/** The cases of an unmount whose writeback or flush fails after the
+ * preparation, which the type puts back before the unmount completes, and of
+ * one whose writes all succeed, which logs nothing. */
+static void prepared_failure_cases(void)
+{
+    setup();
+    writeback_error = -EIO;
+    check(vfs_do_umount("/mnt/a/b", 0) == 0 && !records[4].state && prepares == 1 && aborts == 1 &&
+              flushes == 1 && invalidates == 1 && warnings == 1,
+          "a writeback failed after the preparation puts it back and unmounts");
+    setup();
+    flush_error = -EIO;
+    check(vfs_do_umount("/mnt/a/b", 0) == 0 && !records[4].state && prepares == 1 && aborts == 1 &&
+              invalidates == 1 && warnings == 1,
+          "a flush failed after the preparation puts it back and unmounts");
+    setup();
+    check(vfs_do_umount("/mnt/a/b", 0) == 0 && !aborts && !warnings,
+          "an unmount that writes everything logs no warning");
+}
+
 /** Run the cases; 0 when all pass, 1 otherwise. */
 int main(void)
 {
@@ -427,11 +492,8 @@ int main(void)
     disks[4].backing_flags = BLOCK_GONE;
     check(vfs_do_umount("/mnt/a/b", 0) == 0 && !syncs && !prepares && !flushes,
           "removed child backing receives no writes");
-    setup();
-    sync_error = -EIO;
-    check(vfs_do_umount("/mnt/a/b", 0) == -EIO && records[3].refs == 1 && !claims &&
-              records[4].state == VFS_ACTIVE && !locks,
-          "live child sync failure retains ownership");
+    failure_cases();
+    prepared_failure_cases();
     setup();
     lookup_error = -ENOENT;
     check(vfs_do_umount("/mnt/a/b", 0) == -ENOENT, "ordinary lookup error is retained");
@@ -482,6 +544,6 @@ int main(void)
     bind_cases();
     if (failures)
         return 1;
-    puts("vfs-unmount: result: 21 checks passed");
+    puts("vfs-unmount: result: 26 checks passed");
     return 0;
 }
