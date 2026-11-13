@@ -49,6 +49,7 @@
 #include "udelay.h"
 #include "i915_model.h"
 #include "i915_lenovo.h"
+#include "i915_model_base.h"
 #include "i915_model_ring.h"
 
 extern int printf(const char *format, ...);
