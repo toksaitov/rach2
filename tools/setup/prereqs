@@ -140,6 +140,25 @@ need curl
 probe curl --version
 admin apt-get install -y curl
 
+# The suites that fetch Debian's images and packages check them with
+# sha256sum and sha512sum and unpack them with ar, xz and zstd
+# (tests/registry).
+need sha256sum sha512sum
+probe command -v @TOOL@
+admin apt-get install -y coreutils
+
+need ar
+probe ar --version
+admin apt-get install -y binutils
+
+need xz
+probe xz --version
+admin apt-get install -y xz-utils
+
+need zstd
+probe zstd --version
+admin apt-get install -y zstd
+
 need mkfs.exfat fsck.exfat
 probe command -v @TOOL@
 admin apt-get install -y exfatprogs
@@ -213,8 +232,18 @@ need tmux
 probe tmux -V
 user brew install tmux
 
+# Homebrew's coreutils names sha256sum and sha512sum without the g that it
+# puts before the commands macOS has itself.
+need sha256sum sha512sum
+probe command -v @TOOL@
+user brew install coreutils
+
+need xz zstd
+probe @TOOL@ --version
+user brew install xz zstd
+
 # macOS has these itself.
-need awk sed tar gzip bzip2 patch ssh ssh-keygen scp sftp nc shasum curl openssl hdiutil newfs_exfat
+need ar awk sed tar gzip bzip2 patch ssh ssh-keygen scp sftp nc shasum curl openssl hdiutil newfs_exfat
 probe command -v @TOOL@
 manual # part of macOS: install the system again or repair it
 
@@ -231,7 +260,11 @@ need cc gcc
 probe Runs C:\msys64\ucrt64\bin\gcc.exe
 manual # the existing UCRT64 compiler builds native Windows programs
 
-need make awk sed tar gzip bzip2 patch ssh ssh-keygen scp sftp openssl git curl python3 nc shasum tmux
+need ar
+probe Runs C:\msys64\ucrt64\bin\ar.exe
+manual # the existing UCRT64 binutils, beside its compiler
+
+need make awk sed tar gzip bzip2 patch ssh ssh-keygen scp sftp openssl git curl python3 nc shasum tmux sha256sum sha512sum xz zstd
 probe Has C:\msys64\usr\bin\@TOOL@.exe
 manual # use the supporting programs already present in MSYS2
 
