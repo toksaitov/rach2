@@ -1,7 +1,12 @@
 # kvm-suites: the suites the release's full run runs under KVM, whatever
-# accelerator the site names, one per line (run.sh). Each judges a browser in
-# Rach2's guest against the Debian guest's references, which were taken under
-# KVM (tests/graphics/Readme.md, Accelerators).
+# accelerator the site names, one per line (run.sh). The first three judge a
+# browser in Rach2's guest against the Debian guest's references, which were
+# taken under KVM (tests/graphics/Readme.md, Accelerators). The testbed's two
+# boot a Debian guest inside Rach2, under QEMU's TCG or Rach2's KVM, which
+# with Rach2 itself under TCG is emulated twice and did not reach its
+# server in the release's run (bed/Readme.md, Tests).
 browser
 video
 webgl
+bed-vtest
+bed-forward
