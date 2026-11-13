@@ -712,8 +712,8 @@ static void missing(struct sealed *s)
 
 /** The root made faulty under an armed trial: a reached inode's bit in the
  * bitmap cleared and the valid bit clear, so the check runs, finds the
- * fault and mounts the root writable with the error bit set, as Linux
- * mounts a volume with errors; nothing commits it. */
+ * fault and leaves the root read-only with the error bit set; nothing
+ * commits it. */
 static void faulty(struct sealed *s)
 {
     char *text;
@@ -723,7 +723,7 @@ static void faulty(struct sealed *s)
     debugfs(s, "freei /etc/hostname", "freei");
     debugfs(s, "ssv state 0", "faulty.state");
     power_on(s);
-    net_wait(&s->b, "ext2: mounting with errors, running e2fsck is recommended");
+    net_wait(&s->b, ": read-only with errors, run e2fsck");
     net_assert(&s->u, "faulty-errors", 1, "");
     cut(s);
     text = console(s);

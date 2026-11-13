@@ -25,6 +25,7 @@
 
 /* The line /proc/mounts gives the ext2 root mounted writable. */
 static const char rw_line[] = "/dev/disk0p1 / ext2 rw,relatime 0 0";
+static const char ro_line[] = "/dev/disk0p1 / ext2 ro,relatime 0 0";
 
 /* The probes of the `probe-NAME` cases, by NAME and their path on the root. */
 struct probe {
@@ -950,14 +951,11 @@ static int miscounted(const char *text)
 
 /**
  * The fault of case `repair`: with the link count of /etc/hostname above
- * its names, the root names the fault and mounts writable with Linux's
- * warning for a volume with errors, and the poweroff leaves the error bit
- * set. The boot's init writes, as any boot's does, so the fault is one
- * that no new file or block can take: a free bit on an inode or block in
- * use would let a file the boot makes overwrite it, on Linux as here. Its
- * bytes before the damage are kept as evidence `hostname.before` for
- * `repair-kept`. Assertions `fault-writable`, `fault-record`,
- * `fault-reason` and `fault-error-bit`.
+ * its names, the check stops, names the fault, sets the error bit and
+ * leaves the root read-only for e2fsck, so that the boot's writes allocate
+ * and free nothing on it. Its bytes before the damage are kept as evidence
+ * `hostname.before` for `repair-kept`. Assertions `fault-readonly`,
+ * `fault-record`, `fault-reason` and `fault-error-bit`.
  */
 static void fault(struct lc *l)
 {
@@ -969,13 +967,13 @@ static void fault(struct lc *l)
         !debugfs(l, 1, "sif /etc/hostname links_count 3", vol, "sif") || !lc_step(l, "fault") ||
         !start(l, "root", 5, &b))
         return;
-    expect(l, &b, "cat /proc/mounts; echo MOUNTS\"\"END\r", "MOUNTSEND", "fault-writable", rw_line);
+    expect(l, &b, "cat /proc/mounts; echo MOUNTS\"\"END\r", "MOUNTSEND", "fault-readonly", ro_line);
     free(poweroff(l, &b));
     if ((w = window(l, b.console, 0, b.at)) == NULL)
         return;
     lc_assert(l, "fault-record", miscounted(w),
               "the kernel did not name the link count that does not match its names");
-    seen(l, w, "fault-reason", "ext2: mounting with errors, running e2fsck is recommended");
+    seen(l, w, "fault-reason", "ext2: /dev/disk0p1: read-only with errors, run e2fsck");
     free(w);
     state(l, "fault-error-bit", 2);
 }
@@ -1092,7 +1090,7 @@ int etude_scenario(struct etude_case *c)
         "dirty-checked",   "dirty-valid",     "dirty-e2fsck",
         "lost-mounted",    "lost-write",      "lost-record",
         "lost-error-bit",  "lost-e2fsck",     "lost-bitmap",
-        "fault-writable",  "fault-record",    "fault-reason",
+        "fault-readonly",  "fault-record",    "fault-reason",
         "fault-error-bit", "look-same",       "look-no-e2fsck",
         "repair-root",     "repair-second",   "repair-copy",
         "node-writes",     "repair-e2fsck",   "repair-valid",
