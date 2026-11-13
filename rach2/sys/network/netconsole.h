@@ -150,8 +150,10 @@ void netconsole_enable(void);
  * lose what it sends the moment its link comes up. Every record written
  * before the settle ends waits with the held ones, so the records go out in
  * order. `netconsole_tick` ends the start and sends the held records; a panic
- * and `netconsole_shutdown` end it at once. After the start a sender sends
- * whenever its link is up.
+ * and `netconsole_shutdown` end it at once. A flush in which the settle ended
+ * a start with records held logs `netconsole: settled:` once the drains it
+ * made are done, which a suite waits for to know that they were sent. After
+ * the start a sender sends whenever its link is up.
  *
  * Does nothing while a frame or datagram is being sent. While a sender is in
  * its start, while its link is down, while a target's source address is not

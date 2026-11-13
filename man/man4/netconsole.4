@@ -45,6 +45,8 @@ when the two seconds end, in order, since frames sent the moment a link
 comes up can be lost beyond the card.
 The wait holds its records even when the link was up from the start,
 as on a virtual card.
+Once they are sent, the kernel logs
+.Ql netconsole: settled: .
 After the wait, records are sent when they are written, while the link
 is up; a
 record written while it is down waits for the next record after the

@@ -132,6 +132,10 @@ static const uint8_t nc_broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 #define NC_LINK_SETTLE_MS 2000
 static uint32_t nc_settle_ticks = MS_TO_TICKS(NC_LINK_SETTLE_MS);
 
+/* The starts the settle ended with records held since `netconsole_flush`
+ * last said so, under `net_lock`. */
+static int nc_settled;
+
 /* The longest a sender's start waits for carrier, in seconds: Linux's
  * `carrier_timeout`, the boot option `netpoll.carrier_timeout=`
  * (net/core/netpoll.c:58-59). */
@@ -532,6 +536,9 @@ static int nc_link_ready(struct netdev *nd, struct nc_start *s, uint32_t waiting
         s->up = now;
     }
     if (waiting == 0 || now - s->up >= nc_settle_ticks) {
+        if (waiting != 0) {
+            nc_settled++;
+        }
         s->begun = 0;
         return 1;
     }
@@ -1065,8 +1072,19 @@ static void nc_flush_targets(void)
 
 void netconsole_flush(void)
 {
+    uint32_t flags;
+    int settled;
+
     nc_flush_frames();
     nc_flush_targets();
+    flags = net_lock();
+    settled = nc_settled;
+    nc_settled = 0;
+    net_unlock(flags);
+    if (settled != 0) {
+        klog(KLOG_INFO, "netconsole", "settled: held records sent after %d ms of link",
+             NC_LINK_SETTLE_MS);
+    }
 }
 
 void netconsole_tick(void)
