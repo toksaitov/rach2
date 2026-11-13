@@ -10,7 +10,9 @@
 # The kernel is built for the i686 (-march=i686), so its code has cmov and
 # executes cpuid and rdtsc. Before any of it runs, _start checks that the
 # processor has the three, and on a processor without one it says which on
-# the first serial port and stops.
+# the first serial port and stops. Before that, before it touches the stack
+# or any other byte of .bss, it checks that the machine's memory reaches the
+# kernel's end, as the next comment says.
 
 .set MULTIBOOT_MAGIC,     0x1BADB002
 .set MULTIBOOT_PAGEALIGN, 1
@@ -43,6 +45,13 @@
 
 .set COM1, 0x3F8
 
+# What a Multiboot loader leaves in EAX, and the bit of its information's
+# flags that says mem_upper, at offset 8, is valid: the KiB of memory that
+# runs on from 1 MiB without a hole, where the loader put the kernel.
+.set MULTIBOOT_LOADER_MAGIC, 0x2BADB002
+.set MULTIBOOT_INFO_MEMORY,  1 << 0
+.set MULTIBOOT_INFO_MEM_UPPER, 8
+
 .text
 .align 4
 
@@ -69,6 +78,22 @@
 
 .globl _start
 _start:
+    # A Multiboot loader such as QEMU's -kernel copies the kernel to 1 MiB
+    # whether or not the machine's memory reaches its end, and the stack and
+    # the rest of .bss past that end are no memory at all: the first call
+    # would fault with nothing printed. Refuse such a machine here, with
+    # registers alone. GRUB's multiboot2 loader refuses it itself, as it
+    # finds no memory for the kernel.
+    cmpl $MULTIBOOT_LOADER_MAGIC, %eax
+    jne memory_reaches
+    testl $MULTIBOOT_INFO_MEMORY, (%ebx)
+    jz memory_reaches
+    movl $(_end + 1023 - 0x100000), %ecx
+    shrl $10, %ecx
+    movl $no_memory_msg, %esi
+    cmpl %ecx, MULTIBOOT_INFO_MEM_UPPER(%ebx)
+    jb refuse
+memory_reaches:
     movl $(stack + KERNEL_STACK_SIZE), %esp
 
     pushl %ebx # the loader's information
@@ -124,7 +149,7 @@ k_stop:
     hlt
     jmp k_stop
 
-# A processor without what this kernel needs cannot run it: write the
+# A machine without what this kernel needs cannot run it: write the
 # message at ESI on the first serial port and stop.
 refuse:
     movb (%esi), %al
@@ -181,6 +206,9 @@ arch_enter_user:
 
 .section .rodata
 
+no_memory_msg:
+    .ascii "memory: refused: the kernel ends past the memory the loader reports\n"
+    .asciz "memory: too little for this kernel\n"
 no_cpuid_msg:
     .asciz "boot: refused: the processor has no cpuid, and this kernel is i686\n"
 no_tsc_msg:

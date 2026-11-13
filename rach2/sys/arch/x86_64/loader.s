@@ -15,11 +15,12 @@
 #
 # The kernel is linked at KVA_IMAGE plus its physical address (link.ld), so
 # the 32-bit code below runs at addresses that are not its own and names
-# every symbol as the symbol less KVA_IMAGE. It checks that the processor
-# has long mode, builds the first page tables, turns on PAE, long mode, NX
-# where the processor has it, paging and write protection, and jumps into
-# 64-bit code, which moves to the kernel's own addresses and calls k_main
-# (x86/boot.c) on the boot stack.
+# every symbol as the symbol less KVA_IMAGE. It checks that the machine's
+# memory reaches _end and that the processor has long mode, builds the
+# first page tables, turns on PAE, long mode, NX where the processor has
+# it, paging and write protection, and jumps into 64-bit code, which moves
+# to the kernel's own addresses and calls k_main (x86/boot.c) on the boot
+# stack.
 #
 # The first tables map the first 4 GiB in 2 MiB pages three times: at 0,
 # for the instructions between paging and the jump to the upper half; at
@@ -76,6 +77,13 @@
 
 .set COM1, 0x3F8
 
+# What a Multiboot loader leaves in EAX, and the bit of its information's
+# flags that says mem_upper, at offset 8, is valid: the KiB of memory that
+# runs on from 1 MiB without a hole, where the loader put the kernel.
+.set MULTIBOOT_LOADER_MAGIC, 0x2BADB002
+.set MULTIBOOT_INFO_MEMORY,  1 << 0
+.set MULTIBOOT_INFO_MEM_UPPER, 8
+
 .text
 .code32
 .align 4
@@ -121,6 +129,23 @@ multiboot2_header:
 _start:
     cli
     cld
+
+    # QEMU's -kernel copies the kernel to 1 MiB whether or not the machine's
+    # memory reaches _end, and the stack, the first page tables and the rest
+    # of .bss past that end are no memory at all: the boot would fault with
+    # nothing printed. Refuse such a machine here, with registers alone.
+    # GRUB's multiboot2 loader refuses it itself, as it finds no memory for
+    # the kernel.
+    cmpl $MULTIBOOT_LOADER_MAGIC, %eax
+    jne memory_reaches
+    testl $MULTIBOOT_INFO_MEMORY, (%ebx)
+    jz memory_reaches
+    movl $(_end + 1023 - 0x100000), %ecx
+    shrl $10, %ecx
+    movl $(no_memory_msg - KVA_IMAGE), %esi
+    cmpl %ecx, MULTIBOOT_INFO_MEM_UPPER(%ebx)
+    jb refuse
+memory_reaches:
     movl %eax, boot_magic - KVA_IMAGE
     movl %ebx, boot_info - KVA_IMAGE
     movl $(stack + KERNEL_STACK_SIZE - KVA_IMAGE), %esp
@@ -192,22 +217,24 @@ efer_ready:
     lgdt boot_gdt_ptr - KVA_IMAGE
     ljmp $0x10, $(long_mode_low - KVA_IMAGE)
 
-# A processor without long mode cannot run this kernel: say so on the first
-# serial port and stop.
+# A processor without long mode cannot run this kernel.
 no_long_mode:
     movl $(no_long_mode_msg - KVA_IMAGE), %esi
-no_long_mode_putc:
+
+# A machine without what this kernel needs cannot run it: write the message
+# at ESI, a physical address, on the first serial port and stop.
+refuse:
     movb (%esi), %al
     testb %al, %al
-    jz no_long_mode_stop
+    jz refuse_stop
     movw $COM1, %dx
     outb %al, %dx
     incl %esi
-    jmp no_long_mode_putc
-no_long_mode_stop:
+    jmp refuse
+refuse_stop:
     cli
     hlt
-    jmp no_long_mode_stop
+    jmp refuse_stop
 
 .code64
 
@@ -261,6 +288,9 @@ k_stop:
 
 .section .rodata
 
+no_memory_msg:
+    .ascii "memory: refused: the kernel ends past the memory the loader reports\n"
+    .asciz "memory: too little for this kernel\n"
 no_long_mode_msg:
     .asciz "boot: refused: the processor has no long mode, and this kernel is x86-64\n"
 
