@@ -47,6 +47,14 @@ and
 .Xr epoll 2
 report the descriptor readable while the counter is not zero and
 writable while 1 more fits.
+Only the kernel's own signals, such as those of
+.Xr kvm 4 ,
+carry the counter to 0xffffffffffffffff; there every write waits until a
+read, and
+.Xr poll 2
+reports
+.Dv POLLERR ,
+as in Linux.
 .Pa /proc/ Ns Ar pid Ns Pa /fd
 names it
 .Dq anon_inode:[eventfd] .

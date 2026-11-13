@@ -9,9 +9,9 @@
  * to the counter, and a read of eight bytes takes the counter and sets it to
  * zero, or with EFD_SEMAPHORE takes one; a read while the counter is zero
  * waits, and so does a write that would carry the counter past
- * 0xfffffffffffffffe. poll reports
- * the descriptor readable while the counter is not zero and writable while
- * another 1 fits.
+ * 0xfffffffffffffffe. poll reports the descriptor readable while the
+ * counter is not zero, writable while another 1 fits, and in error at
+ * 0xffffffffffffffff, which only `eventfd_signal` reaches.
  */
 
 struct isr_params;
