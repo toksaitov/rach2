@@ -1881,6 +1881,14 @@ The arguments as the program's initial stack has them, each ended by a
 NUL; a process with no address space, as one that has ended has none,
 shows its program name alone, where Linux shows nothing for one that has
 ended.
+A program whose last argument no longer ends in a NUL has set a title over
+them, as
+.Xr setproctitle 3
+and Perl's
+.Va $0
+do, perhaps on into the environment strings that follow them; it shows,
+as on Linux, the title alone: the first page from its first argument, up
+to and with the first NUL.
 At most the first 128 KiB of them are read, so a longer list ends inside
 a string, without that string's NUL, and a page the address space cannot
 read ends it early.

@@ -1186,12 +1186,48 @@ static void ap_memory(struct procfs_text *t, const process_t *p, uintptr_t start
 }
 
 /**
+ * Append to `t` the bytes of `p`'s memory from `start` through the first NUL
+ * before `end`, that NUL included, or up to `end` when there is none; a page
+ * the address space cannot read ends it early.
+ */
+static void ap_string(struct procfs_text *t, const process_t *p, uintptr_t start, uintptr_t end)
+{
+    struct mm *mm = p->mm;
+    char chunk[128];
+
+    mm_get(mm);
+    while (start < end) {
+        uint32_t n =
+            end - start < sizeof(chunk) ? (uint32_t)(end - start) : (uint32_t)sizeof(chunk);
+        uint32_t i;
+
+        if (paging_access(mm, start, chunk, n, 0) != 0) {
+            break;
+        }
+        for (i = 0; i < n; i++) {
+            ap_ch(t, chunk[i]);
+            if (chunk[i] == '\0') {
+                procfs_mm_put(mm);
+                return;
+            }
+        }
+        start += n;
+    }
+    procfs_mm_put(mm);
+}
+
+/**
  * Format /proc/<pid>/cmdline into `t`, returning its length or -ENOENT.
  *
  * The arguments as the program's initial stack has them, each ended by a
  * NUL, read through its address space: a program that rewrote them shows
- * what it wrote, as on Linux. A process with no address space, or none of
- * its arguments kept, shows its name as the one argument.
+ * what it wrote, as on Linux. One whose last argument no longer ends in a
+ * NUL has set a title over them, as setproctitle(3) and Perl's $0 do, which
+ * may run on into the environment strings that follow them; then, as Linux
+ * does (fs/proc/base.c, get_mm_cmdline), the title alone shows: the first
+ * page from the first argument, within the arguments and an environment
+ * that follows them, up to its first NUL. A process with no address space,
+ * or none of its arguments kept, shows its name as the one argument.
  */
 static int procfs_gen_cmdline(struct procfs_text *t, int pid)
 {
@@ -1204,8 +1240,23 @@ static int procfs_gen_cmdline(struct procfs_text *t, int pid)
     if (p->mm && p->mm->arg_end > p->mm->arg_start) {
         uintptr_t start = p->mm->arg_start;
         uintptr_t end = p->mm->arg_end;
+        char last = '\0';
+        int titled;
 
-        ap_memory(t, p, start, end);
+        mm_get(p->mm);
+        titled = paging_access(p->mm, end - 1, &last, 1, 0) == 0 && last != '\0';
+        procfs_mm_put(p->mm);
+        if (!titled) {
+            ap_memory(t, p, start, end);
+            return t->len;
+        }
+        if (p->mm->env_start == end && p->mm->env_end > end) {
+            end = p->mm->env_end;
+        }
+        if (end - start > PAGE_SIZE) {
+            end = start + PAGE_SIZE;
+        }
+        ap_string(t, p, start, end);
         return t->len;
     }
     for (i = 0; i < (int)sizeof(p->comm) && p->comm[i]; i++) {
