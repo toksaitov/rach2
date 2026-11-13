@@ -93,7 +93,11 @@
 #   there, at SHA: the record says `again MACHINE WORD...`. A machine whose
 #   failures are not all `ARCH:SUITE`s of suites that SHA's tests/registry
 #   has for ARCH, i686 for ia32, or native cases, runs again what its own
-#   `again` line in that record named, or everything when it had none. A Mac
+#   `again` line in that record named, or everything when it had none. Of
+#   the suites of WSL and the Mac it runs only the cases that did not pass,
+#   as the record's `cases MACHINE CASE...` line names them: those whose
+#   lines in the failed run say failure, incomplete or cancelled. A machine
+#   runs its suites whole when that run named no case of one of them. A Mac
 #   or Windows run that the record started last and that has no result there,
 #   as a run of -a may not, is taken over: the new record keeps a Mac run that
 #   has since passed and runs again only the suites of one that has failed,
@@ -695,6 +699,39 @@ suites()
     done
 }
 
+# failed_cases FILE: print, one a line, the identities of the cases that did
+# not pass in the run whose lines FILE holds: those of the lines
+# `run: ARCH:SUITE: CASE: failure:`, `incomplete:` or `cancelled:`, CASE
+# followed by ` on ARCH` when it has an architecture.
+failed_cases()
+{
+    tr -d '\r' < "$1" 2> /dev/null |
+        sed -nE 's/^run: (i686|x86_64|ia32):[a-z0-9-]+: ([a-z0-9_.-]+)( on [a-z0-9_]+)?: (failure|incomplete|cancelled):.*/\2/p' |
+        sort -u
+}
+
+# cases_line MACHINE ID WORD...: print `cases MACHINE CASE...`, the cases of
+# the failed run ID of MACHINE, full or mac, that did not pass, when they name
+# at least one case of each suite of the ARCH:SUITE WORDs; a case identity's
+# second part is its suite. Print nothing otherwise, so that the suites run
+# whole.
+cases_line()
+{
+    cl_m=$1 cl_id=$2
+    shift 2
+    case $cl_m in
+        mac) cl_ids=$(failed_cases "$runs/$cl_id.console") ;;
+        full) cl_ids=$(awk 'NF == 2 { print $2 }' "$state/full-$cl_id/cases" 2> /dev/null | sort -u) ;;
+        *) return 0 ;;
+    esac
+    [ -n "$cl_ids" ] || return 0
+    for w in "$@"; do
+        printf '%s\n' "$cl_ids" | awk -F. -v s="${w#*:}" '$2 == s { found = 1 } END { exit !found }' ||
+            return 0
+    done
+    echo "cases $cl_m $(printf '%s\n' "$cl_ids" | tr '\n' ' ' | sed 's/ $//')"
+}
+
 # again: print the lines that make the new record of -r run again only what
 # failed in the last record, as the header says: `again MACHINE WORD...` for
 # each machine whose failures can run alone, the passes the new record keeps,
@@ -707,6 +744,7 @@ again()
         set -- $last
         case $last in
             "failure $m "*)
+                ag_id=$3
                 shift 3
                 # A run that ended without naming failed suites runs again
                 # what the machine's earlier run did.
@@ -717,7 +755,8 @@ again()
                         esac ;;
                     *) suites "$@" || { previous "$m"; continue; } ;;
                 esac
-                echo "again $m $*" ;;
+                echo "again $m $*"
+                cases_line "$m" "$ag_id" "$@" ;;
             "$m done "*)
                 [ "$m" != lenovo ] || continue
                 if newer "$m" "$(echo "$last" | awk '{ print $NF }')"; then
@@ -768,6 +807,8 @@ adopt()
                     # shellcheck disable=SC2086 # the suites are words
                     if [ -n "$words" ] && suites $words; then
                         echo "again mac $words"
+                        # shellcheck disable=SC2086 # the suites are words
+                        cases_line mac "$2" $words
                     else
                         previous mac
                     fi ;;
@@ -845,6 +886,8 @@ full()
         note "dispatched $(date +%s)"
         set -- -f sha="$sha" -f title="$title"
         [ -z "$listed" ] || set -- "$@" -f suites="$listed"
+        fl_cases=$(sed -n 's/^cases full //p' "$state/record")
+        [ -z "$fl_cases" ] || set -- "$@" -f cases="$fl_cases"
         net gh workflow run full.yml --repo "$REPO" --ref "$branch" "$@" ||
             later "the full run could not be started"
         say "full: started a run of $sha${listed:+ for $listed only}"
@@ -1170,6 +1213,9 @@ mac_run()
         # The Mac's disk works down to 5 GiB, as AGENTS.md says; 40 is WSL's.
         export RACH2_MIN_FREE_GIB="${RACH2_MIN_FREE_GIB:-10}"
         export ETUDE_RUN_DIR="$rdir" TMPDIR="$rdir/tmp"
+        RACH2_CASES=
+        [ -n "$prepare" ] || RACH2_CASES=$(sed -n 's/^cases mac //p' "$state/record")
+        export RACH2_CASES
         cd "$tree" && git checkout -q -f --detach "$sha" && mkdir -p "$TMPDIR" &&
             make build/tools/etude/etude build/tools/etude/etude-volume &&
             cp build/tools/etude/etude build/tools/etude/etude-volume "$site/bin/" &&

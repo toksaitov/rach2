@@ -3,8 +3,10 @@
 # i686 cases on the x86-64 kernel, `ia32`, or only the ARCH:SUITE words of
 # `suites`, ARCH being i686, x86_64 or ia32. The commit's tools/ci/site
 # selects the runner and accelerator.
-# The failures go to the artifact `failures`, one ARCH:ITEM a line, which
-# release.sh downloads. Native preparation, execution and cleanup share the
+# `cases`, case identities, limits the suites to those cases. The failures go
+# to the artifact `failures`, one ARCH:ITEM a line, beside `cases`, one
+# `ARCH:SUITE CASE` line for each case that did not pass, which release.sh
+# downloads. Native preparation, execution and cleanup share the
 # four-hour ceiling.
 name: Release tests
 run-name: ${{ inputs.title || format('Release tests of {0}', inputs.sha) }}
@@ -21,6 +23,10 @@ on:
         default: ''
       suites:
         description: Only these suites, as ARCH:SUITE words, ARCH being i686, x86_64 or ia32; empty for every suite
+        required: false
+        default: ''
+      cases:
+        description: Only these cases of the suites, as case identities; empty for every case
         required: false
         default: ''
 
@@ -50,7 +56,11 @@ jobs:
         env:
           SHA: ${{ inputs.sha }}
           SUITES: ${{ inputs.suites }}
+          CASES: ${{ inputs.cases }}
         run: |
+          case "$CASES" in
+              *[!a-z0-9_.\ -]*) echo "full: refused: the cases are not case identities: $CASES" >&2; exit 1 ;;
+          esac
           case "$SHA" in
               ''|*[!0-9a-f]*) echo "full: refused: '$SHA' is not a commit's whole hash" >&2; exit 1 ;;
           esac
@@ -149,6 +159,7 @@ jobs:
         env:
           ARCH: i686 x86_64
           SUITES: ${{ inputs.suites }}
+          RACH2_RERUN_CASES: ${{ inputs.cases }}
           # The testing host's 32 threads and 125 GiB; the defaults are 8
           # workers and 16 GiB.
           RACH2_WORKERS: 20
@@ -210,13 +221,15 @@ jobs:
         env:
           SHA: ${{ inputs.sha }}
           SUITES: ${{ inputs.suites }}
-        run: sh tools/ci/report.sh "$SHA" "${ETUDE_RESULTS:-$RUNNER_TEMP/unallocated-results}" "$RUNNER_TEMP/failures"
+        run: sh tools/ci/report.sh "$SHA" "${ETUDE_RESULTS:-$RUNNER_TEMP/unallocated-results}" "$RUNNER_TEMP/failures" "$RUNNER_TEMP/cases"
 
       - name: Upload the failures
         if: ${{ !cancelled() && steps.report.outcome != 'skipped' }}
         uses: actions/upload-artifact@v7
         with:
           name: failures
-          path: ${{ runner.temp }}/failures
+          path: |
+            ${{ runner.temp }}/failures
+            ${{ runner.temp }}/cases
           if-no-files-found: ignore
           retention-days: 3

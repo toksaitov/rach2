@@ -2,7 +2,7 @@
 #
 # tools/ci/report.sh: write down what a full run of the release tests failed.
 #
-#   tools/ci/report.sh SHA DIR FILE
+#   tools/ci/report.sh SHA DIR FILE [CASES]
 #
 # DIR has one directory for each architecture, `full-ARCH`, written by
 # tools/ci/run.sh at the commit SHA, and `full-ia32` for the i686 cases on the
@@ -13,6 +13,10 @@
 # of the step that failed without naming a suite, as run.sh writes them, or
 # `unfinished` for an architecture whose directory has no `done`. full.yml
 # uploads FILE as the artifact `failures`, which tools/flow/release.sh reads.
+# CASES, when given, gets a line `ARCH:SUITE CASE` for each case that did not
+# pass, as the failed architecture's `err` names it with failure, incomplete
+# or cancelled; the artifact carries it beside FILE, and a release's -r runs
+# again only those cases.
 #
 # Native result directories have `native` and `suites`; their shared parent
 # has one history and store. The strict C verdict validates that complete
@@ -32,6 +36,7 @@ set -u
 sha=${1-}
 dir=${2-}
 file=${3-}
+cases=${4-}
 [ -n "$sha" ] && [ -n "$dir" ] && [ -n "$file" ] ||
     { echo "usage: tools/ci/report.sh SHA DIR FILE" >&2; exit 2; }
 short=$(echo "$sha" | cut -c 1-8)
@@ -41,6 +46,7 @@ failing='^run: (result: (failed|incomplete|refused|interrupted)|voided: )|: (FAI
 native_expected=
 grep -qx 'results=native' tools/ci/run.sh 2> /dev/null && native_expected=1
 : > "$file" || exit 2
+[ -z "$cases" ] || : > "$cases" || exit 2
 
 # Append each LINE to the job's summary.
 summarize() { # summarize LINE...
@@ -122,6 +128,11 @@ for arch in $arches; do
         echo "$arch:$i"
     done >> "$file"
     summarize "$arch failed: $items." ""
+    if [ -n "$cases" ] && [ -f "$result/err" ]; then
+        tr -d '\r' < "$result/err" |
+            sed -nE "s/^run: (i686|x86_64|ia32):([a-z0-9-]+): ([a-z0-9_.-]+)( on [a-z0-9_]+)?: (failure|incomplete|cancelled):.*/$arch:\\2 \\3/p" |
+            sort -u >> "$cases"
+    fi
     if [ -f "$result/err" ]; then
         lines=$(grep -E "$failing" "$result/err" | head -n 8)
         [ -z "$lines" ] || summarize '```' "$lines" '```' ""

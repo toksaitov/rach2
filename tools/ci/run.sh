@@ -1,8 +1,10 @@
 #!/bin/sh
 # Run every suite of both architectures, then the i686 cases on the x86-64
 # kernel, the ia32 profile, or only the ARCH:SUITE and ia32:SUITE words of
-# SUITES, with the in-house code built from clean and the vendor and GNU
-# builds taken from the host's step store, and keep each one's results.
+# SUITES, with the in-house code built from clean, or built incrementally
+# when SUITES runs some again, and the vendor and GNU builds taken from the
+# host's step store, and keep each one's results. RACH2_RERUN_CASES, case
+# identities, limits each run of tests/run to those of its suites.
 # Native entry requires an installed immutable ETUDE and version-two site.
 # The lines entry remains active until native activation.
 set -u
@@ -119,6 +121,7 @@ step() {
 # RACH2_KERNEL=ia32 each is written as `ia32:NAME` instead.
 run_set() { # run_set NAME ARGS...
     name=$1; shift
+    rerun_cases "$@"
     : > "$out/set.log"
     : > "$out/set.err"
     rm -f "$out/rc"
@@ -141,6 +144,25 @@ run_set() { # run_set NAME ARGS...
         esac
     done >> "$out/failed"
     return 1
+}
+
+# Set RACH2_CASES to the identities of RACH2_RERUN_CASES that belong to the
+# suites of WORDS, SUITE or ARCH:SUITE, a case identity's second part being
+# its suite, when they name at least one case of each; otherwise unset it, so
+# that the suites run whole.
+rerun_cases() { # rerun_cases WORD...
+    unset RACH2_CASES
+    [ -n "${RACH2_RERUN_CASES:-}" ] || return 0
+    rc_ids=""
+    for w in "$@"; do
+        # shellcheck disable=SC2086 # the identities are words
+        rc_one=$(printf '%s\n' $RACH2_RERUN_CASES | awk -F. -v s="${w#*:}" '$2 == s')
+        [ -n "$rc_one" ] || return 0
+        rc_ids="$rc_ids $rc_one"
+    done
+    # shellcheck disable=SC2086 # the identities are words
+    RACH2_CASES=$(printf '%s\n' $rc_ids | awk '!seen[$0]++' | tr '\n' ' ' | sed 's/ $//')
+    export RACH2_CASES
 }
 
 # Print each of NAMES, the suites ARCH runs, that SUITES names as an
@@ -271,9 +293,10 @@ fi
 builds=$tested
 [ -z "$ia32" ] || builds="i686 x86_64"
 built=""
+# A run of some suites again builds on what the last run built.
 for a in $builds; do
     ARCH=$a
-    step make clean || echo "$a:build" >> "$out/failed"
+    [ -n "${SUITES:-}" ] || step make clean || echo "$a:build" >> "$out/failed"
 done
 for a in $builds; do
     ARCH=$a
