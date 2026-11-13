@@ -3464,14 +3464,20 @@ static void open_last_slot(void)
     row_end();
 }
 
-/** While a close's release sleeps, its descriptor is closed to a lookup and
- * to a dup2 onto it. */
+/** While a close's release sleeps, its descriptor is closed to a lookup,
+ * and a dup2 onto it gives the number a new entry and leaves the entry to
+ * the release, as Linux's dup2 finds the slot empty once a close has taken
+ * the file out. The new entry is given back unfilled. */
 static void release_closed(void)
 {
-    check(fd_get(proc.fds, releasing) == NULL &&
-              (fd_slot(proc.fds, releasing)->flags & FD_FLAG_RELEASING),
+    fd_entry_t *was = fd_slot(proc.fds, releasing);
+
+    check(fd_get(proc.fds, releasing) == NULL && (was->flags & FD_FLAG_RELEASING),
           "a descriptor being released is closed to lookups");
-    check(dup_clear(releasing) == -EBUSY, "dup2 onto a descriptor being released is busy");
+    check(dup_clear(releasing) == 0 && fd_slot(proc.fds, releasing) != was &&
+              fd_slot(proc.fds, releasing)->pending && was->type == FD_TYPE_FILE,
+          "dup2 onto a descriptor being released reserves a new entry");
+    fd_free(proc.fds, releasing);
 }
 
 /** Close a descriptor whose release sleeps in the file system's release. */
@@ -4095,7 +4101,7 @@ static void orphan_dup2(void)
 static void orphan_table_end(void)
 {
     fd_release_backing(fd_slot(proc.fds, orphan_fd));
-    fd_free_after(proc.fds, orphan_fd);
+    fd_free_after(proc.fds, orphan_fd, fd_slot(proc.fds, orphan_fd));
 }
 
 /** The close of the descriptor while another process's call holds it, which

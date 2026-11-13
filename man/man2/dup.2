@@ -38,21 +38,25 @@ onto
 If
 .Fa newfd
 is open, the kernel closes it first; close errors are ignored.
+A call of another thread sharing the descriptor table that uses the
+descriptor there, or one a close left to such a call, keeps the file it
+began with until it ends, and so does a close in another thread that is
+still releasing it, while
+.Fa newfd
+names the copy at once, as on Linux.
 The destination is busy, and the call fails with
 .Er EBUSY ,
 while an
-.Xr open 2
-in another thread has reserved it, or while a call of another thread
-sharing the descriptor table uses the descriptor there, or the one a
-close left to such a call, or while a close in another thread is still
-releasing it; Linux gives
+.Xr open 2 ,
+or a
+.Fn dup2
+or
+.Fn dup3 ,
+in another thread has reserved it and not yet filled it; Linux gives
 .Er EBUSY
-for the first.
-A wait asleep in
-.Xr epoll_wait 2
-does not keep the descriptor there busy, as
-.Xr close 2
-describes.
+for the open alone, and musl's
+.Fn dup2
+makes the call again for as long as it fails so.
 If both arguments are equal and valid, and below the current descriptor
 limit, the call returns
 .Fa newfd
@@ -151,10 +155,11 @@ was given equal descriptors or flags other than 0 or
 .Fn dup
 has no free descriptor below the limit.
 .It Bq Er ENOMEM
-The kernel heap has no room for a larger descriptor table, or for the
+The kernel heap has no room for a larger descriptor table, for the
 open file description
 .Fn dup
-makes.
+makes, or for the entry that takes the place of a descriptor another
+thread's call keeps.
 .It Bq Er ESRCH
 There is no current process.
 .El

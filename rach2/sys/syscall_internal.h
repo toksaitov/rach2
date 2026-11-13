@@ -43,7 +43,8 @@ struct vfs_mount *fd_release_lock(const fd_entry_t *e);
 /**
  * At the end of a system call: let go of the descriptors the call held in its
  * shared table, and release those another sharer closed meanwhile that no other
- * call holds (`fd_teardown`). May sleep.
+ * call holds, and the entries another sharer's dup2 replaced that no other call
+ * keeps (`fd_teardown`). May sleep.
  */
 void fd_holds_release(void);
 

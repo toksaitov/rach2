@@ -120,6 +120,7 @@ struct fs_struct {
 struct vfs_mount;
 struct mm;
 struct tgroup;
+struct fd_gone_hold;
 
 /* A record on a wait queue: one is in every process record, for the one
  * queue a process sleeps on, `poll` supplies one per watched object from an
@@ -635,6 +636,11 @@ struct process {
     /* The next sharer of its descriptor table (`fd_table_t.sharers`). The
      * map, this link and `fd_holding` change under the table's lock. */
     struct process *fd_sharer_next;
+    /* The entries dup2 replaced while the current call held them, which
+     * the call keeps until it ends (`fd_gone_claim`, fs/fd.c): pushed by
+     * the replacing thread under the table's lock and taken off only by
+     * the thread itself. NULL when there are none. */
+    struct fd_gone_hold *fd_gone;
     /* Set by a wake of a queue a `poll_wait` of the thread has a record
      * on, and cleared by the wait before each scan, as Linux's
      * `poll_wqueues.triggered` (fs/select.c:208-258): a wait whose scan

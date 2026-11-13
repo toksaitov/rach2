@@ -172,6 +172,7 @@ static void synth_dir_vpath(const struct synth_dir *sd, struct vpath *vp)
  */
 static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
 {
+    const fd_entry_t *gone;
     int held = 0;
     process_t *pr;
     int i;
@@ -187,9 +188,14 @@ static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
         }
         flags = fd_table_lock(pr->fds);
         for (i = 0; i < pr->fds->cap; i++) {
-            fd_entry_t *e = fd_slot(pr->fds, i);
+            const fd_entry_t *e = fd_table_entry(pr->fds, i);
 
             if (e != except && fd_root_node(e) == node) {
+                held++;
+            }
+        }
+        for (i = 0; (gone = fd_gone_entry(pr->fds, i)) != NULL; i++) {
+            if (gone != except && fd_root_node(gone) == node) {
                 held++;
             }
         }
@@ -6098,13 +6104,15 @@ static int fd_change_lock(int fd)
 }
 
 /**
- * Release descriptor `fd` of `table`, which the caller has marked closing
- * and releasing (`fd_close_claim`, `fd_holds_claim`), with every backing it
- * holds but the record locks, which the close that ends it drops itself,
- * and free its slot. The release may sleep, in a file system's release of
- * the description's last reference among other places: while it does, a
- * lookup, a dup onto the slot, a copy of the table and another release all
- * pass the entry by, and none of them can take a reference to a
+ * Release `e`, an entry of descriptor `fd` of `table` that the caller has
+ * marked closing and releasing (`fd_close_claim`, `fd_holds_claim`,
+ * `fd_gone_claim`), with every backing it holds but the record locks, which
+ * the close or dup2 that ends it drops itself, and free its slot, or the
+ * entry alone when a dup2 has put another in its place (`fd_free_after`).
+ * The release may sleep, in a file system's release of the description's
+ * last reference among other places: while it does, a lookup, a copy of
+ * the table and another release all pass the entry by, a dup onto the slot
+ * leaves the entry to it, and none of them can take a reference to a
  * description that is going.
  *
  * The release runs under the big lock, which the objects of every type not
@@ -6114,16 +6122,15 @@ static int fd_change_lock(int fd)
  * `file_vfs_unlocked` admits, whose description's end takes the big lock
  * where it needs it (`fd_ofd_unref`).
  */
-static void fd_teardown(fd_table_t *table, int fd)
+static void fd_teardown(fd_table_t *table, int fd, fd_entry_t *e)
 {
-    fd_entry_t *e = fd_slot(table, fd);
     int big = !file_ops_unlocked(e) && !file_vfs_unlocked(e);
 
     if (big) {
         bkl_enter();
     }
     fd_release_objects(e);
-    fd_free_after(table, fd);
+    fd_free_after(table, fd, e);
     if (big) {
         bkl_exit();
     }
@@ -6160,12 +6167,12 @@ static int32_t close_fd(int fd)
     if (!e) {
         return -EBADF;
     }
-    rc = fd_close_claim(table, fd);
+    rc = fd_close_claim(table, fd, &e);
     if (rc >= 0) {
         fd_close_locks(e);
     }
     if (rc == 1) {
-        fd_teardown(table, fd);
+        fd_teardown(table, fd, e);
     }
     return rc < 0 ? rc : 0;
 }
@@ -6179,11 +6186,16 @@ static int32_t close_fd(int fd)
  */
 void fd_holds_release(void)
 {
+    fd_table_t *table;
+    fd_entry_t *e;
     int fd = 0;
 
-    while ((fd = fd_holds_claim(fd)) >= 0) {
-        fd_teardown(current_proc->fds, fd);
+    while ((fd = fd_holds_claim(fd, &e)) >= 0) {
+        fd_teardown(current_proc->fds, fd, e);
         fd++;
+    }
+    while ((fd = fd_gone_claim(&table, &e)) >= 0) {
+        fd_teardown(table, fd, e);
     }
 }
 
@@ -8264,26 +8276,31 @@ long sys_dup(isr_params_t *params)
 
 /**
  * Take slot `fd` for dup2 and dup3 to put a copy in, closing the
- * descriptor there if there is one, with every backing it held
- * (`fd_teardown`), which may sleep; the slot is reserved under the table's
- * lock (`fd_dup_target`), so no other sharer's open takes it between. 0,
- * or -EBUSY when the slot cannot be had: an open has reserved it and not
- * yet filled it, which is when Linux's dup2 answers EBUSY; or a call of
- * another thread sharing the table holds its descriptor, or the descriptor
- * a close left to such a call, or a close of it is still releasing it,
- * where Linux replaces the descriptor and the call or the close keeps its
- * file.
+ * descriptor there if there is one, as Linux's do_dup2 does
+ * (fs/file.c:1205-1248): the table's record locks on its file go, and the
+ * entry is released with every backing it held (`fd_teardown`), which may
+ * sleep, or, while a call of another thread sharing the table holds it, a
+ * close left it to such a call or a release of it is under way, kept for
+ * those to end with, the number leading to a new entry meanwhile
+ * (`fd_dup_target`). The slot's entry is reserved under the table's lock,
+ * so no other sharer's open takes it between. 0, -EBUSY when an open has
+ * reserved the slot and not yet filled it, which is when Linux's dup2
+ * answers EBUSY, or -ENOMEM when the heap has no room for the new entry.
  */
 static int32_t dup_clear(int fd)
 {
     fd_table_t *table = current_proc->fds;
+    fd_entry_t *e;
     int rc;
 
-    while ((rc = fd_dup_target(table, fd)) == 1) {
-        fd_close_locks(fd_slot(table, fd));
-        fd_teardown(table, fd);
+    while ((rc = fd_dup_target(table, fd, &e)) == 1) {
+        fd_close_locks(e);
+        fd_teardown(table, fd, e);
     }
-    return rc == 0 ? 0 : -EBUSY;
+    if (rc == 0 && e) {
+        fd_close_locks(e);
+    }
+    return rc;
 }
 
 /**
@@ -8292,8 +8309,9 @@ static int32_t dup_clear(int fd)
  * `newfd`, or a negative errno. A bad `oldfd`, and a `newfd` that is
  * negative or past the process's limit, is -EBADF, and when the two are
  * equal the call checks `oldfd` and changes nothing. A `newfd` past the
- * end of the table grows it, and a heap with no room for that is -ENOMEM;
- * a slot `dup_clear` cannot take is -EBUSY.
+ * end of the table grows it, and a heap with no room for that or for the
+ * entry that replaces a held one is -ENOMEM; a slot an open has reserved
+ * and not yet filled is -EBUSY (`dup_clear`).
  *
  * The copy shares the open file description, and with it the offset, as
  * POSIX has it, and the object behind it with its vtable; a socket gains a
@@ -8328,8 +8346,9 @@ static long dup_to(int oldfd, int newfd, int cloexec)
     if (rc != 0) {
         return rc;
     }
-    if (dup_clear(newfd) != 0) {
-        return -EBUSY;
+    rc = dup_clear(newfd);
+    if (rc != 0) {
+        return rc;
     }
     dup_fill(fd_slot(current_proc->fds, newfd), old_entry, cloexec);
     fd_install(current_proc->fds, newfd);
@@ -17414,7 +17433,7 @@ out:
     }
     kfree(notes);
     fd_release_backing(entry);
-    fd_free_after(current_proc->fds, fd);
+    fd_free_after(current_proc->fds, fd, entry);
     return rc;
 }
 

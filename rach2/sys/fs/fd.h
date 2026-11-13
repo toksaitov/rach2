@@ -348,11 +348,28 @@ typedef struct fd_entry {
  * (`fd_peek`). A slot that a call has looked up or reserved is held by the
  * call (`fd_get`), so that no other sharer releases what it names until
  * the call ends.
+ *
+ * A descriptor that dup2 replaces while calls of other sharers hold it
+ * stays where those calls read it until the last of them ends, as Linux's
+ * calls keep the file `fdget` gave them (fs/file.c:1205-1248), and its
+ * number leads to a spare entry from the heap meanwhile (`moved`): the
+ * number's entry is the spare while `moved` names one, and the slot's own
+ * entry otherwise. A spare stays until it is free and the slot's own entry
+ * no longer kept, when the number leads back to the slot. The entries kept
+ * for calls are on `gone`, and every spare, kept or not, on `spares`.
  */
 struct process;
+struct fd_spare;
+struct fd_gone;
 
 typedef struct fd_table {
     fd_entry_t *chunks[FD_CHUNKS]; /* NULL past the last */
+    /* Per chunk, NULL or an array of its size from the heap whose element
+     * is NULL or the spare a slot's number leads to; written under the
+     * lock and read with none in a table only the caller has. */
+    fd_entry_t **moved[FD_CHUNKS];
+    struct fd_spare *spares;
+    struct fd_gone *gone;
     int cap;
     int refs;
     /* No slot below it is free: where a search for the lowest free
@@ -428,11 +445,25 @@ int fd_table_fit(fd_table_t *table, int cap);
 /** How many entries the table has now: the bound of a walk over it. */
 int fd_table_cap(const fd_table_t *table);
 
-/** The slot of descriptor `fd`, 0 <= `fd` < `fd_table_cap`: an address
- * that stays the slot's for the table's life. Reading what it holds, unless
- * the caller's call holds the slot or the table is the caller's own and
+/** The entry of descriptor `fd`, 0 <= `fd` < `fd_table_cap`, as the
+ * calling thread's call sees it: the entry dup2 replaced while the call
+ * held it, until the call looks the descriptor up again, and otherwise
+ * the entry the table has now (`fd_table_entry`). Its address stays the
+ * same while the caller's call holds it. Reading what it holds, unless the
+ * caller's call holds the slot or the table is the caller's own and
  * unshared, takes the lock. */
 fd_entry_t *fd_slot(const fd_table_t *table, int fd);
+
+/** The entry `table` has now for descriptor `fd`, 0 <= `fd` <
+ * `fd_table_cap`: the slot's own, or the spare its number leads to after a
+ * dup2 replaced a held descriptor. For a walk over the table under its
+ * lock, or a table only the caller has. */
+fd_entry_t *fd_table_entry(const fd_table_t *table, int fd);
+
+/** The `i`th entry of `table` that dup2 replaced and the calls that held
+ * it keep, or NULL past the last, for a walk under the table's lock that
+ * must meet every entry that holds an object. */
+const fd_entry_t *fd_gone_entry(const fd_table_t *table, int i);
 
 /** Take and give back `table`'s lock, for a walk over its slots; the walk
  * does not sleep. */
@@ -503,9 +534,12 @@ void fd_install(fd_table_t *table, int fd);
  * a mounted file system, which may sleep. */
 int fd_free(fd_table_t *table, int fd);
 
-/** Clear a descriptor's slot whose reference to its description the caller
- * has already given up (`fd_ofd_unref_unless_last`). */
-void fd_free_after(fd_table_t *table, int fd);
+/** Clear `e`, the entry of descriptor `fd` that the caller marked
+ * releasing and has released, whose reference to its description the
+ * caller has already given up (`fd_ofd_unref_unless_last`): the slot of
+ * `fd` when `e` is still its entry, else the entry dup2 replaced, which is
+ * cleared or freed and the slot's number left as it is. */
+void fd_free_after(fd_table_t *table, int fd, fd_entry_t *e);
 
 /**
  * The entry for fd, or NULL if fd is out of range, free, not yet published
@@ -515,10 +549,12 @@ void fd_free_after(fd_table_t *table, int fd);
  * marks the descriptor held by the call until it ends, as Linux's
  * `__fget_files` (fs/file.c:1006) takes a reference: a close by another
  * sharer then leaves the slot and what it names in place until the call
- * ends (`fd_holds_claim`), so the entry may be read through the address for
- * the length of the call, sleeps included, and only its flags change
- * meanwhile, under the lock (`fd_set_flags`). The entry is not copied,
- * since a copy would not be one of the table's (`fd_in_table`).
+ * ends (`fd_holds_claim`), and a dup2 by one leaves the entry where it is
+ * for the call and gives the number another (`fd_dup_target`), so the
+ * entry may be read through the address for the length of the call, sleeps
+ * included, and only its flags change meanwhile, under the lock
+ * (`fd_set_flags`). The entry is not copied, since a copy would not be one
+ * of the table's (`fd_in_table`).
  */
 fd_entry_t *fd_get(fd_table_t *table, int fd);
 
@@ -552,32 +588,58 @@ int fd_held_elsewhere(fd_table_t *table, int fd);
 
 /**
  * Begin the close of descriptor `fd` of `table` under its lock: -EBADF when
- * it is not open; 0 when a call of another sharer holds it, with the slot
+ * it is not open; 0 when a call of another sharer holds it, with the entry
  * marked closing, which the last call to hold it releases as it ends
- * (`fd_holds_claim`); 1 when the caller is to release it now, with the slot
- * marked closing and releasing.
+ * (`fd_holds_claim`); 1 when the caller is to release it now, with the
+ * entry marked closing and releasing. `*e` gets the entry claimed, for 0
+ * and 1.
  */
-int fd_close_claim(fd_table_t *table, int fd);
+int fd_close_claim(fd_table_t *table, int fd, fd_entry_t **e);
 
 /**
- * Take slot `fd` of `table` for dup2 under its lock: 0 when it was free,
- * now reserved and held by the call, for the caller to fill and publish
- * (`fd_install`); 1 when it is open and no other sharer's call holds it,
- * marked closing and releasing for the caller to release and clear before
- * it asks again; -EBUSY when an open has reserved it, or it is closing or
- * held by another sharer's call; -EBADF when it is outside the table.
+ * Take slot `fd` of `table` for dup2 under its lock: 0 when the slot's
+ * number now leads to an entry reserved and held by the call, for the
+ * caller to fill and publish (`fd_install`): the free entry it had, or a
+ * spare in place of an entry that calls of other sharers hold or that is
+ * closing, which those calls, or the release under way, keep until they
+ * end, as Linux's dup2 replaces a file other calls still use. `*e` is
+ * then the replaced entry when it was open, whose record locks the caller
+ * drops, and which the caller's call holds until it ends, or NULL. 1 when
+ * the entry is open and no call holds it, marked closing and releasing,
+ * with `*e` the entry, for the caller to release and clear before it asks
+ * again. -EBUSY when an open has reserved the slot and not yet published
+ * it, as Linux's dup2 answers; -ENOMEM when the heap has no room for the
+ * spare; -EBADF when `fd` is outside the table.
  */
-int fd_dup_target(fd_table_t *table, int fd);
+int fd_dup_target(fd_table_t *table, int fd, fd_entry_t **e);
 
 /**
  * Let go of the calling thread's holds from descriptor `from` up, and
  * return the first of them that is closing, held by no other sharer and not
- * yet being released, marked releasing for the caller to release, or -1
- * once none is left, when the thread holds nothing more. The dispatcher
- * calls it from 0, and again past each descriptor it releases, as each call
- * ends (`fd_holds_release`).
+ * yet being released, marked releasing for the caller to release, with
+ * `*e` its entry, or -1 once none is left, when the thread holds nothing
+ * more. The dispatcher calls it from 0, and again past each descriptor it
+ * releases, as each call ends (`fd_holds_release`).
  */
-int fd_holds_claim(int from);
+int fd_holds_claim(int from, fd_entry_t **e);
+
+/**
+ * Let go of the calling thread's holds on entries dup2 replaced (`fd_gone`
+ * in process.h), and return the descriptor of the first that no other call
+ * keeps and whose release has not begun, marked releasing for the caller
+ * to release and clear (`fd_free_after`), with `*table` its table and `*e`
+ * the entry; or -1 once the thread keeps none. Called as each call ends,
+ * after `fd_holds_claim` (`fd_holds_release`).
+ */
+int fd_gone_claim(fd_table_t **table, fd_entry_t **e);
+
+/**
+ * The descriptor of an entry dup2 replaced in `table` whose release has not
+ * begun, marked releasing, with `*e` the entry, for the release of a table
+ * whose sharers have all gone, whatever calls the entry was kept for; or
+ * -1 when none is left.
+ */
+int fd_gone_take(fd_table_t *table, fd_entry_t **e);
 
 /**
  * Add or drop a reference to an open file description, each in one atomic
@@ -673,10 +735,10 @@ int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct o
 int fd_is_valid(fd_table_t *table, int fd);
 
 /**
- * Whether `e` is one of `table`'s slots, and not a copy of one that a file
- * mapping or a message in flight keeps: a close of a descriptor of the
- * table drops the table's record locks, and the release of such a copy
- * does not.
+ * Whether `e` is one of `table`'s entries, a slot's own or a spare, and not
+ * a copy of one that a file mapping or a message in flight keeps: a close
+ * of a descriptor of the table drops the table's record locks, and the
+ * release of such a copy does not.
  */
 int fd_in_table(const fd_table_t *table, const fd_entry_t *e);
 

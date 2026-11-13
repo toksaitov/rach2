@@ -665,12 +665,168 @@ static int chunk_size(int k)
     return k == 0 ? FD_TABLE_FIRST : FD_TABLE_FIRST << (k - 1);
 }
 
-fd_entry_t *fd_slot(const fd_table_t *table, int fd)
+/*
+ * An entry dup2 put in place of one that calls of other sharers held
+ * (`fd_dup_target`): the number's entry until it is free and the slot's own
+ * entry is no longer kept, on its table's `spares`. The entry is the first
+ * member, so that its address is the spare's.
+ */
+struct fd_spare {
+    fd_entry_t entry;
+    struct fd_spare *next;
+};
+
+/*
+ * An entry dup2 replaced, kept for the calls that held it, as Linux's
+ * calls keep the file by the reference `fdget` took: on its table's `gone`
+ * until the last of `holders` ends and its release, claimed then or under
+ * way when dup2 came, clears it (`fd_free_after`).
+ */
+struct fd_gone {
+    struct fd_gone *next;
+    fd_entry_t *entry; /* the slot's own entry or a spare */
+    int fd;
+    int holders;   /* the calls that keep it and have not ended */
+    int releasing; /* its release has been claimed */
+};
+
+/*
+ * A call's hold on an entry dup2 replaced, on its thread's `fd_gone`:
+ * pushed by the replacing thread under the table's lock and taken off only
+ * by the thread itself, so the thread reads its list with no lock. `fd` is
+ * the descriptor whose number leads the thread's `fd_slot` to the kept
+ * entry, or -1 once the call has looked the number up again or reserved it.
+ */
+struct fd_gone_hold {
+    struct fd_gone_hold *next;
+    struct fd_gone *gone;
+    fd_table_t *table;
+    fd_entry_t *entry;
+    int fd;
+};
+
+/** The slot's own entry for descriptor `fd`. */
+static fd_entry_t *slot_home(const fd_table_t *table, int fd)
 {
     int first;
     int k = chunk_of(fd, &first);
 
     return &table->chunks[k][fd - first];
+}
+
+fd_entry_t *fd_table_entry(const fd_table_t *table, int fd)
+{
+    int first;
+    int k = chunk_of(fd, &first);
+    fd_entry_t **moved = *(fd_entry_t * *const volatile *)&table->moved[k];
+
+    if (moved) {
+        fd_entry_t *e = *(fd_entry_t *const volatile *)&moved[fd - first];
+
+        if (e) {
+            return e;
+        }
+    }
+    return &table->chunks[k][fd - first];
+}
+
+/**
+ * A call that held a descriptor dup2 then replaced reads what it held
+ * through the number for the rest of the call, as it did before the
+ * replacement, until it looks the number up again (`gone_shadow`): code
+ * that publishes a descriptor and then fills in its description by number
+ * keeps writing to its own.
+ */
+fd_entry_t *fd_slot(const fd_table_t *table, int fd)
+{
+    const process_t *p = current_proc;
+    const struct fd_gone_hold *h;
+
+    if (p && p->fd_gone && table == p->fds) {
+        for (h = p->fd_gone; h; h = h->next) {
+            if (h->fd == fd && h->table == table) {
+                return h->entry;
+            }
+        }
+    }
+    return fd_table_entry(table, fd);
+}
+
+const fd_entry_t *fd_gone_entry(const fd_table_t *table, int i)
+{
+    const struct fd_gone *g = table->gone;
+
+    while (g && i-- > 0) {
+        g = g->next;
+    }
+    return g ? g->entry : NULL;
+}
+
+/** The calling thread's holds on kept entries of `fd` in `table` lead its
+ * `fd_slot` there no longer, since its call now looks the number up or
+ * reserves it. The thread alone writes the holds' `fd`. */
+static void gone_shadow(fd_table_t *table, int fd)
+{
+    struct fd_gone_hold *h;
+
+    for (h = current_proc ? current_proc->fd_gone : NULL; h; h = h->next) {
+        if (h->fd == fd && h->table == table) {
+            h->fd = -1;
+        }
+    }
+}
+
+/** The record of `e` on `table`'s `gone`, or NULL; the caller holds the
+ * lock. */
+static struct fd_gone *gone_of(const fd_table_t *table, const fd_entry_t *e)
+{
+    struct fd_gone *g;
+
+    for (g = table->gone; g && g->entry != e; g = g->next) {
+    }
+    return g;
+}
+
+/** Take `e` off `table`'s `spares` and free it when it is a spare, and
+ * return 1; 0 for a slot's own entry. The caller holds the lock. */
+static int spare_drop(fd_table_t *table, fd_entry_t *e)
+{
+    struct fd_spare **link;
+
+    for (link = &table->spares; *link; link = &(*link)->next) {
+        if (&(*link)->entry == e) {
+            struct fd_spare *sp = *link;
+
+            *link = sp->next;
+            kfree(sp);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Whether `e` is a free entry: no type, no description and no
+ * reservation. */
+static int entry_free(const fd_entry_t *e)
+{
+    return e->type == FD_TYPE_NONE && e->ofd == NULL && !e->pending;
+}
+
+/** Lead the number `fd` back to its slot's own entry when it leads to a
+ * spare that is free and the slot's own entry is no longer kept, and free
+ * the spare. The caller holds the lock, and no call holds a free spare. */
+static void slot_settle(fd_table_t *table, int fd)
+{
+    int first;
+    int k = chunk_of(fd, &first);
+    fd_entry_t *cur;
+
+    if (!table->moved[k] || !(cur = table->moved[k][fd - first]) || !entry_free(cur) ||
+        gone_of(table, &table->chunks[k][fd - first])) {
+        return;
+    }
+    *(fd_entry_t *volatile *)(void *)&table->moved[k][fd - first] = NULL;
+    spare_drop(table, cur);
 }
 
 uint32_t fd_table_lock(fd_table_t *table)
@@ -715,6 +871,9 @@ int fd_table_init(fd_table_t *table)
         return -1;
     }
     k_memset(table->chunks, 0, sizeof(table->chunks));
+    k_memset(table->moved, 0, sizeof(table->moved));
+    table->spares = NULL;
+    table->gone = NULL;
     table->cap = 0;
     table->next_free = 0;
     table->sharers = NULL;
@@ -722,6 +881,10 @@ int fd_table_init(fd_table_t *table)
     return chunks_reach(table, FD_TABLE_FIRST) == 0 ? 0 : -1;
 }
 
+/**
+ * The spares and the records of kept entries go too; a release of the table
+ * has released every entry they hold (`fd_gone_take`).
+ */
 void fd_table_free(fd_table_t *table)
 {
     int k;
@@ -729,9 +892,23 @@ void fd_table_free(fd_table_t *table)
     if (!table) {
         return;
     }
+    while (table->gone) {
+        struct fd_gone *g = table->gone;
+
+        table->gone = g->next;
+        kfree(g);
+    }
+    while (table->spares) {
+        struct fd_spare *sp = table->spares;
+
+        table->spares = sp->next;
+        kfree(sp);
+    }
     for (k = 0; k < FD_CHUNKS; k++) {
         kfree(table->chunks[k]);
         table->chunks[k] = NULL;
+        kfree(table->moved[k]);
+        table->moved[k] = NULL;
     }
     table->cap = 0;
     table->next_free = 0;
@@ -795,9 +972,9 @@ static int entries_copy(fd_table_t *dst, fd_table_t *src, int take)
         return -ENOMEM;
     }
     for (i = 0; i < src->cap; i++) {
-        fd_entry_t *d = fd_slot(dst, i);
+        fd_entry_t *d = slot_home(dst, i);
 
-        *d = *fd_slot(src, i);
+        *d = *fd_table_entry(src, i);
         if (d->type == FD_TYPE_NONE || (take && (d->pending || (d->flags & FD_FLAG_CLOSING)))) {
             k_memset(d, 0, sizeof(*d));
         } else if (take) {
@@ -937,6 +1114,26 @@ void fd_table_join(fd_table_t *table, struct process *p)
     fd_table_unlock(table, flags);
 }
 
+/** Let go of `p`'s holds on entries of `table` that dup2 replaced, as `p`
+ * leaves the table, so that a release of the table frees them
+ * (`fd_gone_take`). The caller holds the lock. */
+static void holds_forget(fd_table_t *table, process_t *p)
+{
+    struct fd_gone_hold **link = &p->fd_gone;
+
+    while (*link) {
+        struct fd_gone_hold *h = *link;
+
+        if (h->table != table) {
+            link = &h->next;
+            continue;
+        }
+        *link = h->next;
+        h->gone->holders--;
+        kfree(h);
+    }
+}
+
 int fd_table_put(struct process *p)
 {
     fd_table_t *table = p->fds;
@@ -947,6 +1144,7 @@ int fd_table_put(struct process *p)
         return 0;
     }
     flags = fd_table_lock(table);
+    holds_forget(table, p);
     if (table->refs <= 1) {
         fd_table_unlock(table, flags);
         return 1;
@@ -997,13 +1195,17 @@ int fd_table_fit(fd_table_t *table, int cap)
 /** Mark descriptor `fd` held by the current call when `table` is the
  * caller's and shared, as `fd_get` and `fd_alloc` hold one: a close by
  * another sharer then waits for the call to end. `fd_holding` is one more
- * than the highest word of the map with a bit set. The caller holds the
- * table's lock. */
+ * than the highest word of the map with a bit set. The call's `fd_slot`
+ * then finds the entry the number has now (`gone_shadow`). The caller
+ * holds the table's lock. */
 static void fd_hold(fd_table_t *table, int fd)
 {
     process_t *p = current_proc;
     int w = fd / 32;
 
+    if (p && p->fd_gone) {
+        gone_shadow(table, fd);
+    }
     if (table->refs > 1 && p && table == p->fds && w < p->fd_held_words) {
         p->fd_held[w] |= 1u << (fd % 32);
         if (p->fd_holding <= w) {
@@ -1028,7 +1230,7 @@ int fd_held_elsewhere(fd_table_t *table, int fd)
     return 0;
 }
 
-int fd_close_claim(fd_table_t *table, int fd)
+int fd_close_claim(fd_table_t *table, int fd, fd_entry_t **claimed)
 {
     uint32_t flags = fd_table_lock(table);
     fd_entry_t *e;
@@ -1038,7 +1240,7 @@ int fd_close_claim(fd_table_t *table, int fd)
         fd_table_unlock(table, flags);
         return -EBADF;
     }
-    e = fd_slot(table, fd);
+    e = fd_table_entry(table, fd);
     if (slot_unready(e) || (e->flags & FD_FLAG_CLOSING)) {
         rc = -EBADF;
     } else if (fd_held_elsewhere(table, fd)) {
@@ -1048,36 +1250,212 @@ int fd_close_claim(fd_table_t *table, int fd)
         e->flags |= FD_FLAG_CLOSING | FD_FLAG_RELEASING;
         rc = 1;
     }
+    if (rc >= 0) {
+        *claimed = e;
+    }
     fd_table_unlock(table, flags);
     return rc;
 }
 
-int fd_dup_target(fd_table_t *table, int fd)
+/** Whether thread `t` marks descriptor `fd` held; the caller holds the
+ * lock of `t`'s table. */
+static int held_by(const process_t *t, int fd)
+{
+    return fd / 32 < t->fd_holding && (t->fd_held[fd / 32] & (1u << (fd % 32)));
+}
+
+/** A hold of `t`'s call on `g`'s entry, pushed on its `fd_gone` with the
+ * number `fd` leading its `fd_slot` there, and counted; the caller holds
+ * the lock of `g`'s table, and `h` is from the heap. */
+static void gone_push(process_t *t, struct fd_gone *g, struct fd_gone_hold *h, fd_table_t *table,
+                      int fd)
+{
+    h->gone = g;
+    h->table = table;
+    h->entry = g->entry;
+    h->fd = fd;
+    h->next = t->fd_gone;
+    k_barrier();
+    *(struct fd_gone_hold *volatile *)(void *)&t->fd_gone = h;
+    g->holders++;
+}
+
+/**
+ * Put a spare in place of `old`, the entry of `fd`, for dup2, and keep `old`
+ * for the calls that hold it: each sharer whose call holds `fd` lets the
+ * number go and keeps `old` instead, its `fd_slot` still leading there, and
+ * the caller keeps it too when it was open, so that it may drop its record
+ * locks after the table's lock goes, or when no call or release would end
+ * it otherwise. An entry whose release is under way is that release's
+ * alone: the calls that hold it let the number go and keep nothing. The
+ * spare is reserved and held by the caller. Everything is taken from the
+ * heap first, under the lock, which the heap allows. 0, or -ENOMEM with
+ * nothing changed. The caller holds the lock.
+ */
+static int gone_make(fd_table_t *table, int fd, fd_entry_t *old)
+{
+    process_t *self = current_proc;
+    int first, k = chunk_of(fd, &first);
+    int releasing = (old->flags & FD_FLAG_RELEASING) != 0;
+    int was_open = !(old->flags & FD_FLAG_CLOSING);
+    struct fd_gone_hold *holds = NULL, *h;
+    struct fd_spare *sp;
+    struct fd_gone *g;
+    process_t *t;
+    int need = 1, self_held = 0;
+
+    for (t = table->sharers; t; t = t->fd_sharer_next) {
+        if (held_by(t, fd)) {
+            need++;
+        }
+    }
+    if (!table->moved[k]) {
+        fd_entry_t **moved = kzalloc(sizeof(fd_entry_t *) * (size_t)chunk_size(k));
+
+        if (!moved) {
+            return -ENOMEM;
+        }
+        *(fd_entry_t * *volatile *)(void *)&table->moved[k] = moved;
+    }
+    sp = kzalloc(sizeof(*sp));
+    g = kzalloc(sizeof(*g));
+    while (sp && g && need-- > 0 && (h = kzalloc(sizeof(*h))) != NULL) {
+        h->next = holds;
+        holds = h;
+    }
+    if (!sp || !g || need >= 0) {
+        kfree(sp);
+        kfree(g);
+        while (holds) {
+            h = holds;
+            holds = h->next;
+            kfree(h);
+        }
+        return -ENOMEM;
+    }
+    if (was_open) {
+        old->flags |= FD_FLAG_CLOSING;
+    }
+    g->entry = old;
+    g->fd = fd;
+    g->releasing = releasing;
+    for (t = table->sharers; t; t = t->fd_sharer_next) {
+        if (!held_by(t, fd)) {
+            continue;
+        }
+        t->fd_held[fd / 32] &= ~(1u << (fd % 32));
+        if (releasing) {
+            continue;
+        }
+        h = holds;
+        holds = h->next;
+        gone_push(t, g, h, table, fd);
+        self_held |= t == self;
+    }
+    if (!releasing && !self_held && self && (was_open || g->holders == 0)) {
+        h = holds;
+        holds = h->next;
+        gone_push(self, g, h, table, -1);
+    }
+    while (holds) {
+        h = holds;
+        holds = h->next;
+        kfree(h);
+    }
+    g->next = table->gone;
+    table->gone = g;
+    sp->entry.pending = 1;
+    sp->next = table->spares;
+    table->spares = sp;
+    k_barrier();
+    *(fd_entry_t *volatile *)(void *)&table->moved[k][fd - first] = &sp->entry;
+    fd_hold(table, fd);
+    return 0;
+}
+
+int fd_dup_target(fd_table_t *table, int fd, fd_entry_t **was)
 {
     uint32_t flags = fd_table_lock(table);
     fd_entry_t *e;
     int rc;
 
+    *was = NULL;
     if (fd < 0 || fd >= table->cap) {
         fd_table_unlock(table, flags);
         return -EBADF;
     }
-    e = fd_slot(table, fd);
-    if (e->type == FD_TYPE_NONE && !e->ofd && !e->pending) {
+    e = fd_table_entry(table, fd);
+    if (entry_free(e)) {
         e->pending = 1;
         fd_hold(table, fd);
         rc = 0;
-    } else if (slot_unready(e) || (e->flags & FD_FLAG_CLOSING) || fd_held_elsewhere(table, fd)) {
+    } else if (slot_unready(e)) {
         rc = -EBUSY;
+    } else if ((e->flags & FD_FLAG_CLOSING) || fd_held_elsewhere(table, fd) ||
+               (current_proc && table == current_proc->fds && held_by(current_proc, fd))) {
+        int open = !(e->flags & FD_FLAG_CLOSING);
+
+        rc = gone_make(table, fd, e);
+        if (rc == 0 && open) {
+            *was = e;
+        }
     } else {
         e->flags |= FD_FLAG_CLOSING | FD_FLAG_RELEASING;
+        *was = e;
         rc = 1;
     }
     fd_table_unlock(table, flags);
     return rc;
 }
 
-int fd_holds_claim(int from)
+int fd_gone_claim(fd_table_t **tablep, fd_entry_t **e)
+{
+    process_t *p = current_proc;
+    struct fd_gone_hold *h;
+
+    while (p && p->fd_gone) {
+        fd_table_t *table;
+        struct fd_gone *g;
+        uint32_t flags;
+
+        h = p->fd_gone;
+        table = h->table;
+        flags = fd_table_lock(table);
+        p->fd_gone = h->next;
+        g = h->gone;
+        kfree(h);
+        if (--g->holders == 0 && !g->releasing) {
+            g->releasing = 1;
+            g->entry->flags |= FD_FLAG_RELEASING;
+            *tablep = table;
+            *e = g->entry;
+            fd_table_unlock(table, flags);
+            return g->fd;
+        }
+        fd_table_unlock(table, flags);
+    }
+    return -1;
+}
+
+int fd_gone_take(fd_table_t *table, fd_entry_t **e)
+{
+    uint32_t flags = fd_table_lock(table);
+    struct fd_gone *g;
+    int fd = -1;
+
+    for (g = table->gone; g && g->releasing; g = g->next) {
+    }
+    if (g) {
+        g->releasing = 1;
+        g->entry->flags |= FD_FLAG_RELEASING;
+        *e = g->entry;
+        fd = g->fd;
+    }
+    fd_table_unlock(table, flags);
+    return fd;
+}
+
+int fd_holds_claim(int from, fd_entry_t **claimed)
 {
     process_t *p = current_proc;
     fd_table_t *table = p ? p->fds : NULL;
@@ -1106,10 +1484,11 @@ int fd_holds_claim(int from)
         if (fd >= table->cap) {
             continue;
         }
-        e = fd_slot(table, fd);
+        e = fd_table_entry(table, fd);
         if ((e->flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)) == FD_FLAG_CLOSING &&
             !fd_held_elsewhere(table, fd)) {
             e->flags |= FD_FLAG_RELEASING;
+            *claimed = e;
             fd_table_unlock(table, flags);
             return fd;
         }
@@ -1143,7 +1522,7 @@ int fd_init_stdio(fd_table_t *table, uint32_t hangups)
 
     for (i = FD_STDIN; i <= FD_STDERR; i++) {
         struct open_file *ofd = ofd_alloc();
-        fd_entry_t *e = fd_slot(table, i);
+        fd_entry_t *e = fd_table_entry(table, i);
 
         if (!ofd) {
             while (i > FD_STDIN) {
@@ -1168,7 +1547,7 @@ static int free_slot(fd_table_t *table, int from, int limit)
     int i;
 
     for (i = from; i < table->cap && i < limit; i++) {
-        const fd_entry_t *e = fd_slot(table, i);
+        const fd_entry_t *e = fd_table_entry(table, i);
 
         if (e->type == FD_TYPE_NONE && e->ofd == NULL && !e->pending) {
             break;
@@ -1222,7 +1601,7 @@ int fd_alloc_from(fd_table_t *table, int minfd)
         fd_ofd_unref(ofd);
         return rc;
     }
-    e = fd_slot(table, i);
+    e = fd_table_entry(table, i);
     k_memset(e, 0, sizeof(*e));
     e->ofd = ofd;
     e->pending = 1;
@@ -1243,7 +1622,7 @@ void fd_install(fd_table_t *table, int fd)
 {
     uint32_t flags = fd_table_lock(table);
 
-    fd_slot(table, fd)->pending = 0;
+    fd_table_entry(table, fd)->pending = 0;
     fd_table_unlock(table, flags);
 }
 
@@ -1261,10 +1640,10 @@ int fd_free(fd_table_t *table, int fd)
     if (!table || fd < 0 || fd >= fd_table_cap(table)) {
         return -1;
     }
-    e = fd_slot(table, fd);
     flags = fd_table_lock(table);
+    e = fd_table_entry(table, fd);
     ofd = e->ofd;
-    if (e->type == FD_TYPE_NONE && ofd == NULL && !e->pending) {
+    if (entry_free(e)) {
         fd_table_unlock(table, flags);
         return -1;
     }
@@ -1276,19 +1655,38 @@ int fd_free(fd_table_t *table, int fd)
     if (fd < table->next_free) {
         table->next_free = fd;
     }
+    slot_settle(table, fd);
     fd_table_unlock(table, flags);
     return 0;
 }
 
-void fd_free_after(fd_table_t *table, int fd)
+/**
+ * An entry dup2 replaced leaves `gone` and is freed when it is a spare or
+ * cleared when it is the slot's own, which the number may then lead back
+ * to (`slot_settle`); the number's own entry is cleared in place.
+ */
+void fd_free_after(fd_table_t *table, int fd, fd_entry_t *e)
 {
-    fd_entry_t *e = fd_slot(table, fd);
     uint32_t flags = fd_table_lock(table);
+    struct fd_gone **link;
 
-    k_memset(e, 0, sizeof(*e));
-    if (fd < table->next_free) {
-        table->next_free = fd;
+    for (link = &table->gone; *link && (*link)->entry != e; link = &(*link)->next) {
     }
+    if (*link) {
+        struct fd_gone *g = *link;
+
+        *link = g->next;
+        kfree(g);
+        if (!spare_drop(table, e)) {
+            k_memset(e, 0, sizeof(*e));
+        }
+    } else {
+        k_memset(e, 0, sizeof(*e));
+        if (fd < table->next_free) {
+            table->next_free = fd;
+        }
+    }
+    slot_settle(table, fd);
     fd_table_unlock(table, flags);
 }
 
@@ -1331,12 +1729,18 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
         if (fd >= table->cap) {
             return NULL;
         }
-        e = fd_slot(table, fd);
-        return slot_unready(e) || (e->flags & FD_FLAG_CLOSING) ? NULL : e;
+        e = fd_table_entry(table, fd);
+        if (slot_unready(e) || (e->flags & FD_FLAG_CLOSING)) {
+            return NULL;
+        }
+        if (current_proc->fd_gone) {
+            gone_shadow(table, fd);
+        }
+        return e;
     }
     flags = fd_table_lock(table);
     if (fd < table->cap) {
-        e = fd_slot(table, fd);
+        e = fd_table_entry(table, fd);
         if (slot_unready(e) || (e->flags & FD_FLAG_CLOSING)) {
             e = NULL;
         } else {
@@ -1357,7 +1761,7 @@ int fd_peek(fd_table_t *table, int fd, fd_entry_t *out, int ref)
     }
     flags = fd_table_lock(table);
     if (fd < table->cap) {
-        const fd_entry_t *e = fd_slot(table, fd);
+        const fd_entry_t *e = fd_table_entry(table, fd);
 
         if (fd_entry_open(e)) {
             *out = *e;
@@ -1386,7 +1790,7 @@ int fd_next_open(fd_table_t *table, int from)
     }
     flags = fd_table_lock(table);
     for (fd = from; fd < table->cap; fd++) {
-        if (fd_entry_open(fd_slot(table, fd))) {
+        if (fd_entry_open(fd_table_entry(table, fd))) {
             found = fd;
             break;
         }
@@ -1405,11 +1809,17 @@ void fd_set_flags(fd_table_t *table, fd_entry_t *e, uint32_t clear, uint32_t set
 
 int fd_in_table(const fd_table_t *table, const fd_entry_t *e)
 {
+    const struct fd_spare *sp;
     uintptr_t x = (uintptr_t)e;
     int k;
 
     if (!table) {
         return 0;
+    }
+    for (sp = table->spares; sp; sp = sp->next) {
+        if (&sp->entry == e) {
+            return 1;
+        }
     }
     for (k = 0; k < FD_CHUNKS && table->chunks[k]; k++) {
         uintptr_t a = (uintptr_t)table->chunks[k];
@@ -1442,10 +1852,18 @@ int fd_can_alloc(fd_table_t *table)
 void fd_table_repoint(fd_table_t *table, const void *from, void *to)
 {
     uint32_t flags = fd_table_lock(table);
+    struct fd_gone *g;
     int i;
 
     for (i = 0; i < table->cap; i++) {
-        fd_entry_t *e = fd_slot(table, i);
+        fd_entry_t *e = fd_table_entry(table, i);
+
+        if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && (const void *)e->node == from) {
+            e->node = to;
+        }
+    }
+    for (g = table->gone; g; g = g->next) {
+        fd_entry_t *e = g->entry;
 
         if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && (const void *)e->node == from) {
             e->node = to;

@@ -253,20 +253,24 @@ static void sig_recalc(void);
  * (the seek offset), and its slot is cleared. `proc_files_put` calls it when
  * the last reference to the table goes, which both ends of a process reach
  * (`proc_exit_cleanup`), so sockets, port bindings, TCBs and descriptions
- * are freed however a process ends. A second call finds every slot free and
- * does nothing.
+ * are freed however a process ends. An entry dup2 replaced that the calls
+ * of a sharer kept is released too, its calls having ended. A second call
+ * finds every slot free and does nothing.
  */
 void release_fd_table(fd_table_t *table)
 {
+    fd_entry_t *e;
     int fdi;
 
     if (!table) {
         return;
     }
     for (fdi = 0; fdi < fd_table_cap(table); fdi++) {
-        fd_entry_t *e = fd_slot(table, fdi);
         uint32_t flags = fd_table_lock(table);
-        int open = e->type != FD_TYPE_NONE && !(e->flags & FD_FLAG_RELEASING);
+        int open;
+
+        e = fd_table_entry(table, fdi);
+        open = e->type != FD_TYPE_NONE && !(e->flags & FD_FLAG_RELEASING);
 
         if (open) {
             e->flags |= FD_FLAG_CLOSING | FD_FLAG_RELEASING;
@@ -276,7 +280,11 @@ void release_fd_table(fd_table_t *table)
             continue;
         }
         fd_release_backing(e);
-        fd_free_after(table, fdi);
+        fd_free_after(table, fdi, e);
+    }
+    while ((fdi = fd_gone_take(table, &e)) >= 0) {
+        fd_release_backing(e);
+        fd_free_after(table, fdi, e);
     }
 }
 
@@ -325,7 +333,7 @@ static void files_take(fd_table_t *table)
     int fdi;
 
     for (fdi = 0; fdi < table->cap; fdi++) {
-        fd_entry_t *e = fd_slot(table, fdi);
+        fd_entry_t *e = fd_table_entry(table, fdi);
 
         if (e->type == FD_TYPE_SOCKET && e->sock) {
             socket_ref(e->sock);
@@ -648,11 +656,11 @@ static void close_cloexec_fds(void)
         fd_entry_t *entry = fd_get(current_proc->fds, fd);
 
         if (!entry || !(entry->flags & FD_FLAG_CLOEXEC) ||
-            fd_close_claim(current_proc->fds, fd) != 1) {
+            fd_close_claim(current_proc->fds, fd, &entry) != 1) {
             continue;
         }
         fd_release_backing(entry);
-        fd_free_after(current_proc->fds, fd);
+        fd_free_after(current_proc->fds, fd, entry);
     }
 }
 

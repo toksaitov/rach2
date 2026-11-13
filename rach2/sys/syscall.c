@@ -3437,11 +3437,12 @@ static void syscall_relock_end(int relock)
 }
 
 /** Let go of the descriptors the call of thread `p`, the current one, held
- * (`fd_holds_release`), when it held any; each release takes the big lock
- * when its object needs it (`fd_teardown`). */
+ * or kept after a dup2 replaced them (`fd_holds_release`), when there are
+ * any; each release takes the big lock when its object needs it
+ * (`fd_teardown`). */
 static void syscall_holds_release(const process_t *p)
 {
-    if (p->fd_holding) {
+    if (p->fd_holding || p->fd_gone) {
         fd_holds_release();
     }
 }

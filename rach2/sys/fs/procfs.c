@@ -744,7 +744,7 @@ int procfs_fd_count(int pid)
     }
     flags = fd_table_lock(p->fds);
     for (fd = 0; fd < p->fds->cap; fd++) {
-        const fd_entry_t *e = fd_slot(p->fds, fd);
+        const fd_entry_t *e = fd_table_entry(p->fds, fd);
 
         if ((e->type != FD_TYPE_NONE || e->ofd != NULL) && !(e->flags & FD_FLAG_CLOSING)) {
             n++;
@@ -1129,7 +1129,7 @@ int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, i
         return -ENOENT;
     }
     flags = fd_table_lock(p->fds);
-    e = vp->procfd < p->fds->cap ? fd_slot(p->fds, vp->procfd) : NULL;
+    e = vp->procfd < p->fds->cap ? fd_table_entry(p->fds, vp->procfd) : NULL;
     if (!e || !fd_entry_open(e)) {
         rc = -ENOENT;
     } else if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && e->ofd && e->ofd->vmnt) {
