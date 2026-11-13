@@ -233,23 +233,26 @@ static int git(struct fixture *f, const char *const command[], const char *cwd)
         if (!git(f, a, cwd))                   \
             return 0;                          \
     } while (0)
+/* A row: its loop's waits, `waits`, are in seconds, a line each, which the
+ * loop's nap sleeps in steps of five, and STATE/stop is made at the last
+ * step of the last wait. */
 struct worker_test {
-    const char *name, *last, *issue, *data, *sessions, *sleeps, *logged;
+    const char *name, *issue, *data, *sessions, *waits, *logged;
 };
 static const struct worker_test tests[] = {
-    {"claim", "2", NULL, "70|OPEN|-|milestone/01-a|a task|close\n", "70 milestone/01-a\n",
-     "20\n300\n", " took #70\n"},
-    {"resume", "2", "50",
+    {"claim", NULL, "70|OPEN|-|milestone/01-a|a task|close\n", "70 milestone/01-a\n", "20\n300\n",
+     " took #70\n"},
+    {"resume", "50",
      "50|OPEN|me|milestone/02-b|a task begun|close\n70|OPEN|zed|milestone/01-a|taken|close\n",
      "50 milestone/02-b\n", "20\n300\n", " #50 is closed or no longer this account's\n"},
-    {"lost", "2", "50",
+    {"lost", "50",
      "50|OPEN|zed|milestone/01-a|given away|close\n70|OPEN|-|milestone/01-a|a task|close\n",
      "70 milestone/01-a\n", "20\n300\n", " #50 is closed or no longer this account's\n"},
-    {"limit", "2", "50",
+    {"limit", "50",
      "50|OPEN|me|milestone/01-a|a task begun|limit\n71|OPEN|-|milestone/01-a|another|close\n",
      "50 milestone/01-a\n71 milestone/01-a\n", "900\n20\n",
      " limit: hit your session limit, resets 3am\n"},
-    {"no-branch", "1", NULL, "72|OPEN|-|-|a task of no milestone|close\n", "", "300\n",
+    {"no-branch", NULL, "72|OPEN|-|-|a task of no milestone|close\n", "", "300\n",
      " #72: no usable milestone branch\n"}};
 
 static int worker_setup(struct fixture *f)
@@ -279,9 +282,27 @@ static int worker_setup(struct fixture *f)
     fx_env("FLOW_WORKER", "1");
     return 1;
 }
+/**
+ * Write to STEPS the sleeps by which nap makes the waits WAITS, a line `5`
+ * for each five seconds of each, and to LAST their number.
+ */
+static void worker_steps(const char *waits, char *steps, size_t size, char *last, size_t n)
+{
+    const char *p;
+    unsigned count = 0, w;
+    size_t used = 0;
+    steps[0] = '\0';
+    for (p = waits; *p; p = strchr(p, '\n') ? strchr(p, '\n') + 1 : p + strlen(p))
+        for (w = (unsigned)atoi(p); w > 0 && used + 3 < size; w = w > 5 ? w - 5 : 0) {
+            memcpy(steps + used, "5\n", 3);
+            used += 2;
+            count++;
+        }
+    snprintf(last, n, "%u", count);
+}
 static int worker_row(struct fixture *f, const struct worker_test *t)
 {
-    char cwd[4096], origin[4096], clone[4096], source[4096];
+    char cwd[4096], origin[4096], clone[4096], source[4096], steps[4096], last[16];
     const char *a[5];
     int held;
     snprintf(origin, sizeof(origin), "%s/origin.git", f->work);
@@ -305,7 +326,8 @@ static int worker_row(struct fixture *f, const struct worker_test *t)
     fx_env("WORKER_TEST_SESSIONS", flow_path(f, "sessions"));
     fx_env("WORKER_TEST_SLEEPS", flow_path(f, "sleeps"));
     fx_env("WORKER_TEST_STATE", flow_path(f, "state"));
-    fx_env("WORKER_TEST_LAST", t->last);
+    worker_steps(t->waits, steps, sizeof(steps), last, sizeof(last));
+    fx_env("WORKER_TEST_LAST", last);
     snprintf(source, sizeof(source), "%s/tools/flow/worker.sh", clone);
     a[0] = "/bin/sh";
     a[1] = source;
@@ -313,7 +335,7 @@ static int worker_row(struct fixture *f, const struct worker_test *t)
     a[3] = flow_path(f, "state");
     a[4] = NULL;
     held = !fx_run(f, a, clone, NULL, NULL) && fx_equal(flow_path(f, "sessions"), t->sessions) &&
-           fx_equal(flow_path(f, "sleeps"), t->sleeps) &&
+           fx_equal(flow_path(f, "sleeps"), steps) &&
            fx_has(flow_path(f, "state/loop.log"), t->logged);
     if (t->issue)
         held = held && !fx_has(flow_path(f, "calls"), "board take 50");
