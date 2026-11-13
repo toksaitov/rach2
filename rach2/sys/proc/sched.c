@@ -1744,7 +1744,8 @@ static int idle_stop_tick(void)
 /** Halt with the idle tick stopped for a long wait, or retained after a
  * short non-tick wake, as Linux's idle governors retain it for a predicted
  * interval below one tick. IRQs are off and no lock is held. Return one
- * after a halt, zero when ready work declines it. A real scheduler tick
+ * after a halt, zero when ready work declines it, which the caller answers
+ * through `idle_kicked_window`. A real scheduler tick
  * clears the prediction, so a quiet CPU stops at its next idle entry. */
 static int idle_sleep(int stop_tick, uint32_t per_us)
 {
@@ -1872,6 +1873,7 @@ static void idle_halt(int stop_tick)
         }
     }
     if (!idle_sleep(stop_tick, per_us)) {
+        idle_kicked_window();
         return;
     }
     if (!polling) {
@@ -1902,6 +1904,12 @@ static void idle_halt(int stop_tick)
  *
  * Anything on the loopback ring is delivered before the processor is parked,
  * and this returns without halting so the caller checks its condition again.
+ * Every return without a halt, that one and a scheduler idle task's that
+ * ready work cancels, lets a pending interrupt in for one instruction first
+ * (`idle_kicked_window`), as a kicked halt does, so that it is not held
+ * across the caller's next check, its selection or the incoming thread's
+ * wait for the big lock, as Linux's `call_cpuidle` enables interrupts when
+ * a reschedule request cancels the idle entry (kernel/sched/idle.c:144).
  * The drain needs the big lock: a caller without it, the idle task, tries
  * the lock, and when another processor holds it leaves the ring to that
  * holder, whose call's exit drains it, or to the next tick that has the
@@ -1928,16 +1936,19 @@ void idle_wait_irq_off(void)
     if (ip_loop_pending()) {
         if (this_cpu()->bkl_depth > 0) {
             ip_loop_drain_from(IP_LOOP_FROM_IDLE);
+            idle_kicked_window();
             return;
         }
         if (bkl_try_enter()) {
             ip_loop_drain_from(IP_LOOP_FROM_IDLE);
             bkl_exit();
+            idle_kicked_window();
             return;
         }
     }
     scheduler_idle = sched_is_enabled() && current_proc && current_proc == this_cpu()->idle;
     if (scheduler_idle && current_proc->need_resched) {
+        idle_kicked_window();
         return;
     }
     this_cpu()->idle_cycles = arch_cycles();
@@ -1950,6 +1961,8 @@ void idle_wait_irq_off(void)
             sched_account_tick(0, 0);
             timer_idle_work();
         }
+    } else {
+        idle_kicked_window();
     }
     bkl_take_as(depth, BKL_KEY_IDLE);
     this_cpu()->idle_wait = 0;
