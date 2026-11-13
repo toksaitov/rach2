@@ -1,0 +1,348 @@
+84-165a: mutexmusl in QEMU under KVM on the testing PC, four processors,
+2 GiB, serial console, one machine at a time, 2026-11-13 UTC+6. The run
+lines' clock is the testing host's, an hour behind UTC+6.
+
+Kernels (x86-64, SHA-256):
+  trace   92cd6c0eb with the scratch counters        4ad2b174323840a6...
+  base    92cd6c0eb, the milestone head              fcec380c31a9d7a5...
+  fix     430e9b9c6, this change on it               21b5fa6aa6c6bb9f...
+  tfix    fix with the scratch counters              81be283941b49ce7...
+  nofd    fix with fd_get taking no table lock       (experiment)
+  store   fix with raw_spin_unlock a plain store     (experiment)
+  linux   Debian 6.12.107+deb13-cloud-amd64; linuxnm is the same with
+          mitigations=off                            75d7f9be0da1b6f6...
+mutexmusl aaa0aaec16f98d02..., the init of a KRFFS root for Rach2 and of
+an initramfs for Linux.
+
+The counters' lines: "row" and "end" sum the row before them, recv the
+receives, mtx_lock the mutex's takes, fast those at once, spun those after
+a spin, spinloops the spin's turns, slept the sleeps, bkl the big lock's
+takes. Each "lock" line is one lock and call site: its takes, the takes
+whose first exchange failed and the cycles they then waited. In the trace
+kernel, state ffffc0000019c610 and queue ffffc0000019c614 are the socket's
+locks, fdtable ffffc0000016c8cc the descriptor table's, ffffffff8069d0e0
+flight_lock; the callers, by addr2line, are
+  ffffffff80215e88 recv_stream, state and SO_RCVTIMEO
+  ffffffff80215f09 recv_stream, state lock to look for a message
+  ffffffff80215f1d recv_stream, queue lock nested in it
+  ffffffff80215038 wait_data, state lock
+  ffffffff80215044 wait_data, queue lock nested in it
+  ffffffff8021a30f flight_enter from transit_enter
+  ffffffff8021a397 release_in
+  ffffffff8021a3c1 flight_leave from transit_leave
+  ffffffff8023d1fd fd_get
+  ffffffff8023c74f fd_holds_claim
+and in tfix ffffffff802164e7 and ffffffff80216537 are stream_look's state
+and queue locks, ffffffff8023d1bd fd_get and ffffffff8023c70f
+fd_holds_claim.
+
+== 10:26, trace ==
+== trace.1 09:26:55
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.160 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+[3.668000] trace: row: recv 200000 mtx_lock 200000 fast 200000 spun 0 spinloops 0 slept 0 osqfail 0 bkl 15 bklcont 1
+[3.672000] trace: names: state ffffc0000019c610 queue ffffc0000019c614 iolock ffffc0000019c640 fdtable ffffc0000016c8cc iolockwq ffffc0000019c650
+[3.672000] trace: lock ffffc0000019c610 caller ffffffff80215f09 takes 200000 contended 0 waitcyc 0
+[3.676000] trace: lock ffffc0000019c614 caller ffffffff80215f1d takes 200000 contended 0 waitcyc 0
+[3.676000] trace: lock ffffc0000016c8cc caller ffffffff8023c74f takes 200000 contended 0 waitcyc 0
+[3.680000] trace: lock ffffc0000019c610 caller ffffffff80215038 takes 200000 contended 0 waitcyc 0
+[3.680000] trace: lock ffffc0000019c614 caller ffffffff80215044 takes 200000 contended 0 waitcyc 0
+[3.680000] trace: lock ffffffff8069d0e0 caller ffffffff8021a30f takes 200000 contended 0 waitcyc 0
+[3.684000] trace: lock ffffc0000019c610 caller ffffffff80215e88 takes 200000 contended 0 waitcyc 0
+[3.684000] trace: lock ffffc0000016c8cc caller ffffffff8023d1fd takes 200000 contended 0 waitcyc 0
+[3.684000] trace: lock ffffffff8069d0e0 caller ffffffff8021a3c1 takes 200000 contended 0 waitcyc 0
+[3.684000] trace: lock ffffffff8069d0e0 caller ffffffff8021a397 takes 200000 contended 0 waitcyc 0
+mutexmusl: 2 threads, 200000 calls each: 0.238 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+[3.740000] trace: row: recv 400000 mtx_lock 400000 fast 380875 spun 19125 spinloops 16488 slept 0 osqfail 0 bkl 22 bklcont 2
+[3.744000] trace: names: state ffffc0000019c610 queue ffffc0000019c614 iolock ffffc0000019c640 fdtable ffffc0000016c8cc iolockwq ffffc0000019c650
+[3.744000] trace: lock ffffc0000019c610 caller ffffffff80215f09 takes 400000 contended 89 waitcyc 6910
+[3.748000] trace: lock ffffc0000019c614 caller ffffffff80215f1d takes 400000 contended 0 waitcyc 0
+[3.748000] trace: lock ffffc0000016c8cc caller ffffffff8023c74f takes 400000 contended 17741 waitcyc 2765246
+[3.752000] trace: lock ffffc0000019c610 caller ffffffff80215038 takes 400000 contended 1074 waitcyc 93826
+[3.752000] trace: lock ffffc0000019c614 caller ffffffff80215044 takes 400000 contended 0 waitcyc 0
+[3.752000] trace: lock ffffffff8069d0e0 caller ffffffff8021a30f takes 400000 contended 5536 waitcyc 1083484
+[3.756000] trace: lock ffffc0000019c610 caller ffffffff80215e88 takes 400000 contended 6456 waitcyc 1462856
+[3.756000] trace: lock ffffc0000016c8cc caller ffffffff8023d1fd takes 400000 contended 20224 waitcyc 2331561
+[3.756000] trace: lock ffffffff8069d0e0 caller ffffffff8021a3c1 takes 400000 contended 395 waitcyc 52361
+[3.756000] trace: lock ffffffff8069d0e0 caller ffffffff8021a397 takes 400000 contended 2735 waitcyc 339721
+mutexmusl: 3 threads, 200000 calls each: 0.346 us a call, 15 voluntary switches (0.03 per 1000 calls), 0 involuntary
+[3.840000] trace: row: recv 600000 mtx_lock 600000 fast 442971 spun 157012 spinloops 278192 slept 17 osqfail 1 bkl 27 bklcont 5
+[3.840000] trace: names: state ffffc0000019c610 queue ffffc0000019c614 iolock ffffc0000019c640 fdtable ffffc0000016c8cc iolockwq ffffc0000019c650
+[3.840000] trace: lock ffffc0000019c610 caller ffffffff80215f09 takes 600000 contended 7504 waitcyc 812623
+[3.840000] trace: lock ffffc0000019c614 caller ffffffff80215f1d takes 600000 contended 0 waitcyc 0
+[3.840000] trace: lock ffffc0000016c8cc caller ffffffff8023c74f takes 600000 contended 65812 waitcyc 11673905
+[3.840000] trace: lock ffffc0000019c610 caller ffffffff80215038 takes 600000 contended 15608 waitcyc 2139180
+[3.852000] trace: lock ffffc0000019c614 caller ffffffff80215044 takes 600000 contended 0 waitcyc 0
+[3.852000] trace: lock ffffffff8069d0e0 caller ffffffff8021a30f takes 600000 contended 61616 waitcyc 11212213
+[3.852000] trace: lock ffffc0000019c610 caller ffffffff80215e88 takes 600000 contended 62447 waitcyc 14953449
+[3.852000] trace: lock ffffc0000016c8cc caller ffffffff8023d1fd takes 600000 contended 72126 waitcyc 10755171
+[3.852000] trace: lock ffffffff8069d0e0 caller ffffffff8021a3c1 takes 600000 contended 16043 waitcyc 3218175
+[3.852000] trace: lock ffffffff8069d0e0 caller ffffffff8021a397 takes 600000 contended 25807 waitcyc 6182295
+mutexmusl: 4 threads, 200000 calls each: 0.678 us a call, 46 voluntary switches (0.06 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+[4.004000] trace: end: recv 800000 mtx_lock 800000 fast 422696 spun 377257 spinloops 1362186 slept 47 osqfail 1 bkl 22 bklcont 6
+[4.008000] trace: names: state ffffc0000019c610 queue ffffc0000019c614 iolock ffffc0000019c640 fdtable ffffc0000016c8cc iolockwq ffffc0000019c650
+[4.012000] trace: lock ffffc0000019c610 caller ffffffff80215f09 takes 800000 contended 34142 waitcyc 4773305
+[4.012000] trace: lock ffffc0000019c614 caller ffffffff80215f1d takes 800000 contended 0 waitcyc 0
+[4.016000] trace: lock ffffc0000016c8cc caller ffffffff8023c74f takes 800000 contended 104418 waitcyc 44826932
+[4.016000] trace: lock ffffc0000019c610 caller ffffffff80215038 takes 800000 contended 48557 waitcyc 8245045
+[4.016000] trace: lock ffffc0000019c614 caller ffffffff80215044 takes 800000 contended 0 waitcyc 0
+[4.020000] trace: lock ffffffff8069d0e0 caller ffffffff8021a30f takes 800000 contended 303114 waitcyc 146603103
+[4.020000] trace: lock ffffc0000019c610 caller ffffffff80215e88 takes 800000 contended 155454 waitcyc 53501959
+[4.020000] trace: lock ffffc0000016c8cc caller ffffffff8023d1fd takes 800000 contended 79060 waitcyc 29422055
+[4.020000] trace: lock ffffffff8069d0e0 caller ffffffff8021a3c1 takes 800000 contended 143933 waitcyc 95322335
+[4.020000] trace: lock ffffffff8069d0e0 caller ffffffff8021a397 takes 800000 contended 217746 waitcyc 121881882
+
+== 10:45, base, fix, linux, linuxnm (linuxnm failed to start: its option was split) ==
+== base.1 09:45:21
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.178 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.244 us a call, 2 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.355 us a call, 9 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.654 us a call, 49 voluntary switches (0.06 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== fix.1 09:45:26
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.104 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.155 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.282 us a call, 4 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.525 us a call, 18 voluntary switches (0.02 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== linux.1 09:45:30
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.322 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.322 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.322 us a call, 0 voluntary switches (0.00 per 1000 calls), 2 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.321 us a call, 0 voluntary switches (0.00 per 1000 calls), 3 involuntary
+MUTEXMUSL OK
+== linuxnm.1 09:45:31
+qemu rc=1
+== base.2 09:45:31
+mutexmusl: 4 processors, 4192.1 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.182 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.248 us a call, 2 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.356 us a call, 13 voluntary switches (0.02 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.630 us a call, 50 voluntary switches (0.06 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== fix.2 09:45:35
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.104 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.159 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.282 us a call, 12 voluntary switches (0.02 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.530 us a call, 10 voluntary switches (0.01 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== linux.2 09:45:39
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.320 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.322 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.323 us a call, 0 voluntary switches (0.00 per 1000 calls), 2 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.324 us a call, 0 voluntary switches (0.00 per 1000 calls), 4 involuntary
+MUTEXMUSL OK
+== linuxnm.2 09:45:40
+qemu rc=1
+== base.3 09:45:40
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.184 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.245 us a call, 3 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.356 us a call, 12 voluntary switches (0.02 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.648 us a call, 46 voluntary switches (0.06 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== fix.3 09:45:44
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.104 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.166 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.271 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.531 us a call, 11 voluntary switches (0.01 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== linux.3 09:45:49
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.321 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.319 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.321 us a call, 2 voluntary switches (0.00 per 1000 calls), 2 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.324 us a call, 0 voluntary switches (0.00 per 1000 calls), 3 involuntary
+MUTEXMUSL OK
+== linuxnm.3 09:45:50
+qemu rc=1
+== base.4 09:45:50
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.181 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.240 us a call, 3 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.350 us a call, 11 voluntary switches (0.02 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.654 us a call, 64 voluntary switches (0.08 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== fix.4 09:45:54
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.103 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.155 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.283 us a call, 7 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.518 us a call, 14 voluntary switches (0.02 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== linux.4 09:45:58
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.320 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.322 us a call, 0 voluntary switches (0.00 per 1000 calls), 2 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.321 us a call, 0 voluntary switches (0.00 per 1000 calls), 2 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.324 us a call, 0 voluntary switches (0.00 per 1000 calls), 5 involuntary
+MUTEXMUSL OK
+== linuxnm.4 09:45:59
+qemu rc=1
+
+== 10:47, tfix, linuxnm ==
+== tfix.1 09:47:01
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.110 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+[3.672000] trace: row: recv 200000 mtx_lock 200000 fast 200000 spun 0 spinloops 0 slept 0 osqfail 0 bkl 15 bklcont 0
+[3.672000] trace: names: state ffffc0000019c610 queue ffffc0000019c614 iolock ffffc0000019c640 fdtable ffffc0000016c8cc iolockwq ffffc0000019c650
+[3.676000] trace: lock ffffc0000019c614 caller ffffffff80216537 takes 200000 contended 0 waitcyc 0
+[3.680000] trace: lock ffffc0000016c8cc caller ffffffff8023c70f takes 200000 contended 0 waitcyc 0
+[3.680000] trace: lock ffffc0000016c8cc caller ffffffff8023d1bd takes 200000 contended 0 waitcyc 0
+[3.680000] trace: lock ffffc0000019c610 caller ffffffff802164e7 takes 200000 contended 0 waitcyc 0
+mutexmusl: 2 threads, 200000 calls each: 0.173 us a call, 2 voluntary switches (0.01 per 1000 calls), 0 involuntary
+[3.724000] trace: row: recv 400000 mtx_lock 400000 fast 386890 spun 13108 spinloops 12630 slept 2 osqfail 0 bkl 23 bklcont 3
+[3.728000] trace: names: state ffffc0000019c610 queue ffffc0000019c614 iolock ffffc0000019c640 fdtable ffffc0000016c8cc iolockwq ffffc0000019c650
+[3.728000] trace: lock ffffc0000019c614 caller ffffffff80216537 takes 400000 contended 0 waitcyc 0
+[3.732000] trace: lock ffffc0000016c8cc caller ffffffff8023c70f takes 400000 contended 35380 waitcyc 4786704
+[3.732000] trace: lock ffffc0000016c8cc caller ffffffff8023d1bd takes 400000 contended 20450 waitcyc 3028684
+[3.736000] trace: lock ffffc0000019c610 caller ffffffff802164e7 takes 400000 contended 0 waitcyc 0
+mutexmusl: 3 threads, 200000 calls each: 0.259 us a call, 4 voluntary switches (0.01 per 1000 calls), 0 involuntary
+[3.792000] trace: row: recv 600000 mtx_lock 600000 fast 505347 spun 94646 spinloops 103712 slept 7 osqfail 1 bkl 30 bklcont 5
+[3.792000] trace: names: state ffffc0000019c610 queue ffffc0000019c614 iolock ffffc0000019c640 fdtable ffffc0000016c8cc iolockwq ffffc0000019c650
+[3.800000] trace: lock ffffc0000019c614 caller ffffffff80216537 takes 600000 contended 0 waitcyc 0
+[3.800000] trace: lock ffffc0000016c8cc caller ffffffff8023c70f takes 600000 contended 165507 waitcyc 48463705
+[3.800000] trace: lock ffffc0000016c8cc caller ffffffff8023d1bd takes 600000 contended 134579 waitcyc 48226731
+[3.800000] trace: lock ffffc0000019c610 caller ffffffff802164e7 takes 600000 contended 0 waitcyc 0
+mutexmusl: 4 threads, 200000 calls each: 0.632 us a call, 7 voluntary switches (0.01 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+[3.936000] trace: end: recv 800000 mtx_lock 800000 fast 732885 spun 67107 spinloops 59278 slept 8 osqfail 2 bkl 22 bklcont 7
+[3.936000] trace: names: state ffffc0000019c610 queue ffffc0000019c614 iolock ffffc0000019c640 fdtable ffffc0000016c8cc iolockwq ffffc0000019c650
+[3.936000] trace: lock ffffc0000019c614 caller ffffffff80216537 takes 800000 contended 0 waitcyc 0
+[3.936000] trace: lock ffffc0000016c8cc caller ffffffff8023c70f takes 800000 contended 546773 waitcyc 915836798
+[3.948000] trace: lock ffffc0000016c8cc caller ffffffff8023d1bd takes 800000 contended 123393 waitcyc 160239898
+[3.948000] trace: lock ffffc0000019c610 caller ffffffff802164e7 takes 800000 contended 0 waitcyc 0
+== linuxnm.1 09:47:06
+[    0.015690] ftrace: allocating 42485 entries in 168 pages
+[    0.015692] ftrace: allocated 168 pages with 3 groups
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.073 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.104 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.132 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.373 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+MUTEXMUSL OK
+
+== 10:48, nofd, fix ==
+== nofd.1 09:48:23
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.080 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.104 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.268 us a call, 21 voluntary switches (0.04 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.443 us a call, 115 voluntary switches (0.14 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== fix.1 09:48:27
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.103 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.154 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.276 us a call, 13 voluntary switches (0.02 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.505 us a call, 12 voluntary switches (0.01 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== nofd.2 09:48:31
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.080 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.102 us a call, 3 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.269 us a call, 8 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.442 us a call, 121 voluntary switches (0.15 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== fix.2 09:48:35
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.100 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.149 us a call, 2 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.269 us a call, 2 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.501 us a call, 8 voluntary switches (0.01 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== nofd.3 09:48:39
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.080 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.102 us a call, 2 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.267 us a call, 9 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.460 us a call, 131 voluntary switches (0.16 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== fix.3 09:48:43
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.099 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.147 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.270 us a call, 4 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.498 us a call, 7 voluntary switches (0.01 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+
+== 10:49, store, fix, linuxnm ==
+== store.1 09:49:30
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.099 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.138 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.282 us a call, 2 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.553 us a call, 17 voluntary switches (0.02 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== fix.1 09:49:34
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.100 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.149 us a call, 2 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.253 us a call, 3 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.503 us a call, 23 voluntary switches (0.03 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== linuxnm.1 09:49:38
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.079 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.106 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.114 us a call, 0 voluntary switches (0.00 per 1000 calls), 2 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.358 us a call, 1 voluntary switches (0.00 per 1000 calls), 3 involuntary
+MUTEXMUSL OK
+== store.2 09:49:39
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.097 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.136 us a call, 2 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.283 us a call, 3 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.567 us a call, 10 voluntary switches (0.01 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== fix.2 09:49:43
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.101 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.147 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.245 us a call, 8 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.502 us a call, 14 voluntary switches (0.02 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== linuxnm.2 09:49:47
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.072 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.100 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.131 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.353 us a call, 2 voluntary switches (0.00 per 1000 calls), 4 involuntary
+MUTEXMUSL OK
+== store.3 09:49:48
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.099 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.136 us a call, 2 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.288 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.540 us a call, 5 voluntary switches (0.01 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== fix.3 09:49:52
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.100 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.148 us a call, 1 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.266 us a call, 4 voluntary switches (0.01 per 1000 calls), 0 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.502 us a call, 9 voluntary switches (0.01 per 1000 calls), 0 involuntary
+MUTEXMUSL OK
+== linuxnm.3 09:49:56
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.068 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.096 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.114 us a call, 0 voluntary switches (0.00 per 1000 calls), 2 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.366 us a call, 1 voluntary switches (0.00 per 1000 calls), 8 involuntary
+MUTEXMUSL OK
+
+== 10:45, linux ==
+== linux.1 09:45:04
+mutexmusl: 4 processors, 4192.0 cycles a microsecond
+mutexmusl: 1 thread, 200000 calls each: 0.322 us a call, 0 voluntary switches (0.00 per 1000 calls), 0 involuntary
+mutexmusl: 2 threads, 200000 calls each: 0.328 us a call, 0 voluntary switches (0.00 per 1000 calls), 1 involuntary
+mutexmusl: 3 threads, 200000 calls each: 0.329 us a call, 0 voluntary switches (0.00 per 1000 calls), 2 involuntary
+mutexmusl: 4 threads, 200000 calls each: 0.330 us a call, 3 voluntary switches (0.00 per 1000 calls), 5 involuntary
+MUTEXMUSL OK
