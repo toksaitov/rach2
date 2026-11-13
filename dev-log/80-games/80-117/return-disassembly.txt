@@ -1,0 +1,282 @@
+base a0818d8d2, i686, kernel.debug SHA-256 ec74f5ee5c84f26a93381577eb12e044a00b1a78f044313a792192b3f93a79db
+
+isr_leave: 30ab10..30ab4e, 19 instructions
+  30ab10:	push   %ebp
+  30ab11:	mov    %esp,%ebp
+  30ab13:	push   %ebx
+  30ab14:	sub    $0x14,%esp
+  30ab17:	mov    0x8(%ebp),%ebx
+  30ab1a:	mov    %fs:0x0,%eax
+  30ab20:	imul   $0xf0,%eax,%eax
+  30ab26:	mov    0x517060(%eax),%edx
+  30ab2c:	test   %edx,%edx
+  30ab2e:	je     30abd0 <isr_leave+0xc0>
+  30ab34:	mov    0xf0c(%edx),%eax
+  30ab3a:	mov    %eax,%ecx
+  30ab3c:	shr    $1,%eax
+  30ab3e:	mov    %eax,0xf0c(%edx)
+  30ab44:	and    $0x1,%ecx
+  30ab47:	mov    0x3c(%ebx),%eax
+  30ab4a:	not    %eax
+  30ab4c:	test   $0x3,%al
+  30ab4e:	je     30ab60 <isr_leave+0x50>
+
+isr_leave: 30ab60..30ab71, 4 instructions
+  30ab60:	mov    0xf6c(%edx),%eax
+  30ab66:	and    $0xf7,%eax
+  30ab6b:	or     0x517040,%eax
+  30ab71:	je     30abb0 <isr_leave+0xa0>
+
+isr_leave: 30abb0..30abb2, 2 instructions
+  30abb0:	test   %ecx,%ecx
+  30abb2:	je     30ab7a <isr_leave+0x6a>
+
+isr_leave: 30ab7a..30ab81, 3 instructions
+  30ab7a:	mov    0x51b0c0,%eax
+  30ab7f:	test   %eax,%eax
+  30ab81:	je     30ab54 <isr_leave+0x44>
+
+isr_leave: 30ab54..30ab58, 3 instructions
+  30ab54:	mov    -0x4(%ebp),%ebx
+  30ab57:	leave
+  30ab58:	ret
+
+isr_leave total: 31 instructions
+
+assembly return: 100236..10024f, 14 instructions
+  100236:	push   %esp
+  100237:	call   30ab10 <isr_leave>
+  10023c:	add    $0x4,%esp
+  10023f:	pop    %eax
+  100240:	mov    %eax,%gs
+  100242:	pop    %eax
+  100243:	mov    %eax,%fs
+  100245:	pop    %eax
+  100246:	mov    %eax,%es
+  100248:	pop    %eax
+  100249:	mov    %eax,%ds
+  10024b:	popa
+  10024c:	add    $0x8,%esp
+  10024f:	iret
+
+base a0818d8d2, x86_64, kernel.debug SHA-256 ecad73152b674793705f46095a0e8fc99bcae744990de264758e1db4be571f12
+
+isr_leave: ffffffff80371f40..ffffffff80371f8a, 19 instructions
+ffffffff80371f40:	push   %rbp
+ffffffff80371f41:	mov    %rsp,%rbp
+ffffffff80371f44:	sub    $0x20,%rsp
+ffffffff80371f48:	mov    %gs:0x18,%eax
+ffffffff80371f50:	mov    %eax,%eax
+ffffffff80371f52:	lea    (%rax,%rax,8),%rax
+ffffffff80371f56:	shl    $0x5,%rax
+ffffffff80371f5a:	mov    -0x7fa48780(%rax),%rsi
+ffffffff80371f61:	test   %rsi,%rsi
+ffffffff80371f64:	je     ffffffff80372010 <isr_leave+0xd0>
+ffffffff80371f6a:	mov    0x12b0(%rsi),%ecx
+ffffffff80371f70:	mov    %ecx,%edx
+ffffffff80371f72:	shr    $1,%ecx
+ffffffff80371f74:	mov    %ecx,0x12b0(%rsi)
+ffffffff80371f7a:	and    $0x1,%edx
+ffffffff80371f7d:	mov    0x90(%rdi),%rcx
+ffffffff80371f84:	not    %rcx
+ffffffff80371f87:	and    $0x3,%ecx
+ffffffff80371f8a:	je     ffffffff80371f98 <isr_leave+0x58>
+
+isr_leave: ffffffff80371f98..ffffffff80371faa, 4 instructions
+ffffffff80371f98:	mov    0x1344(%rsi),%ecx
+ffffffff80371f9e:	and    $0xf7,%ecx
+ffffffff80371fa4:	or     0x2458b6(%rip),%ecx        # ffffffff805b7860 <proc_dead_threads>
+ffffffff80371faa:	je     ffffffff80371ff0 <isr_leave+0xb0>
+
+isr_leave: ffffffff80371ff0..ffffffff80371ff2, 2 instructions
+ffffffff80371ff0:	test   %edx,%edx
+ffffffff80371ff2:	je     ffffffff80371fb1 <isr_leave+0x71>
+
+isr_leave: ffffffff80371fb1..ffffffff80371fb9, 3 instructions
+ffffffff80371fb1:	mov    0x24a949(%rip),%eax        # ffffffff805bc900 <sched_cycle_account>
+ffffffff80371fb7:	test   %eax,%eax
+ffffffff80371fb9:	je     ffffffff80371f90 <isr_leave+0x50>
+
+isr_leave: ffffffff80371f90..ffffffff80371f91, 2 instructions
+ffffffff80371f90:	leave
+ffffffff80371f91:	ret
+
+isr_leave total: 30 instructions
+
+assembly return: ffffffff8010061b..ffffffff801006a6, 35 instructions
+ffffffff8010061b:	mov    %rsp,%rdi
+ffffffff8010061e:	call   ffffffff80371f40 <isr_leave>
+ffffffff80100623:	mov    0x60(%rsp),%rcx
+ffffffff80100628:	cmp    0x88(%rsp),%rcx
+ffffffff80100630:	jne    ffffffff801003c7 <isr_exit>
+ffffffff80100636:	mov    0x20(%rsp),%r11
+ffffffff8010063b:	cmp    0x98(%rsp),%r11
+ffffffff80100643:	jne    ffffffff801003c7 <isr_exit>
+ffffffff80100649:	test   $0x10100,%r11
+ffffffff80100650:	jne    ffffffff801003c7 <isr_exit>
+ffffffff80100656:	cmpq   $0x33,0x90(%rsp)
+ffffffff8010065f:	jne    ffffffff801003c7 <isr_exit>
+ffffffff80100665:	cmpq   $0x2b,0xa8(%rsp)
+ffffffff8010066e:	jne    ffffffff801003c7 <isr_exit>
+ffffffff80100674:	movabs $0x7ffffffff000,%rax
+ffffffff8010067e:	cmp    %rax,%rcx
+ffffffff80100681:	jae    ffffffff801003c7 <isr_exit>
+ffffffff80100687:	pop    %r15
+ffffffff80100689:	pop    %r14
+ffffffff8010068b:	pop    %r13
+ffffffff8010068d:	pop    %r12
+ffffffff8010068f:	pop    %r11
+ffffffff80100691:	pop    %r10
+ffffffff80100693:	pop    %r9
+ffffffff80100695:	pop    %r8
+ffffffff80100697:	pop    %rbp
+ffffffff80100698:	pop    %rdi
+ffffffff80100699:	pop    %rsi
+ffffffff8010069a:	pop    %rdx
+ffffffff8010069b:	pop    %rcx
+ffffffff8010069c:	pop    %rbx
+ffffffff8010069d:	pop    %rax
+ffffffff8010069e:	mov    0x28(%rsp),%rsp
+ffffffff801006a3:	swapgs
+ffffffff801006a6:	sysretq
+
+head 325d89059, i686, kernel.debug SHA-256 24aa3e23663fafd79bbb6b882ed8f86220c66fdd2ef6525456205a669112a7c3
+
+isr_leave: 310300..31033e, 19 instructions
+  310300:	push   %ebp
+  310301:	mov    %esp,%ebp
+  310303:	push   %ebx
+  310304:	sub    $0x14,%esp
+  310307:	mov    0x8(%ebp),%ecx
+  31030a:	mov    %fs:0x0,%eax
+  310310:	imul   $0xf8,%eax,%eax
+  310316:	mov    0x51f560(%eax),%edx
+  31031c:	test   %edx,%edx
+  31031e:	je     3103c0 <isr_leave+0xc0>
+  310324:	mov    0xf18(%edx),%eax
+  31032a:	mov    %eax,%ebx
+  31032c:	shr    $1,%eax
+  31032e:	mov    %eax,0xf18(%edx)
+  310334:	and    $0x1,%ebx
+  310337:	mov    0x3c(%ecx),%eax
+  31033a:	not    %eax
+  31033c:	test   $0x3,%al
+  31033e:	je     310350 <isr_leave+0x50>
+
+isr_leave: 310350..310361, 4 instructions
+  310350:	mov    0xf78(%edx),%eax
+  310356:	and    $0xf7,%eax
+  31035b:	or     0x51f540,%eax
+  310361:	je     3103a0 <isr_leave+0xa0>
+
+isr_leave: 3103a0..3103a2, 2 instructions
+  3103a0:	test   %ebx,%ebx
+  3103a2:	je     310371 <isr_leave+0x71>
+
+isr_leave: 310371..310378, 3 instructions
+  310371:	mov    0x5237c0,%eax
+  310376:	test   %eax,%eax
+  310378:	je     310344 <isr_leave+0x44>
+
+isr_leave: 310344..310348, 3 instructions
+  310344:	mov    -0x4(%ebp),%ebx
+  310347:	leave
+  310348:	ret
+
+isr_leave total: 31 instructions
+
+assembly return: 100236..10024f, 14 instructions
+  100236:	push   %esp
+  100237:	call   310300 <isr_leave>
+  10023c:	add    $0x4,%esp
+  10023f:	pop    %eax
+  100240:	mov    %eax,%gs
+  100242:	pop    %eax
+  100243:	mov    %eax,%fs
+  100245:	pop    %eax
+  100246:	mov    %eax,%es
+  100248:	pop    %eax
+  100249:	mov    %eax,%ds
+  10024b:	popa
+  10024c:	add    $0x8,%esp
+  10024f:	iret
+
+head 325d89059, x86_64, kernel.debug SHA-256 895e776c647db1b3129b9f6b21c7c73eb7d9e7c21af40143aae3d0bbe9e649b6
+
+isr_leave: ffffffff80376d90..ffffffff80376dd9, 18 instructions
+ffffffff80376d90:	push   %rbp
+ffffffff80376d91:	mov    %rsp,%rbp
+ffffffff80376d94:	sub    $0x20,%rsp
+ffffffff80376d98:	mov    %gs:0x18,%eax
+ffffffff80376da0:	mov    %eax,%eax
+ffffffff80376da2:	imul   $0x128,%rax,%rax
+ffffffff80376da9:	mov    -0x7fa38660(%rax),%rsi
+ffffffff80376db0:	test   %rsi,%rsi
+ffffffff80376db3:	je     ffffffff80376e60 <isr_leave+0xd0>
+ffffffff80376db9:	mov    0x12c8(%rsi),%ecx
+ffffffff80376dbf:	mov    %ecx,%edx
+ffffffff80376dc1:	shr    $1,%ecx
+ffffffff80376dc3:	mov    %ecx,0x12c8(%rsi)
+ffffffff80376dc9:	and    $0x1,%edx
+ffffffff80376dcc:	mov    0x90(%rdi),%rcx
+ffffffff80376dd3:	not    %rcx
+ffffffff80376dd6:	and    $0x3,%ecx
+ffffffff80376dd9:	je     ffffffff80376de8 <isr_leave+0x58>
+
+isr_leave: ffffffff80376de8..ffffffff80376dfa, 4 instructions
+ffffffff80376de8:	mov    0x135c(%rsi),%ecx
+ffffffff80376dee:	and    $0xf7,%ecx
+ffffffff80376df4:	or     0x250b86(%rip),%ecx        # ffffffff805c7980 <proc_dead_threads>
+ffffffff80376dfa:	je     ffffffff80376e40 <isr_leave+0xb0>
+
+isr_leave: ffffffff80376e40..ffffffff80376e42, 2 instructions
+ffffffff80376e40:	test   %edx,%edx
+ffffffff80376e42:	je     ffffffff80376e01 <isr_leave+0x71>
+
+isr_leave: ffffffff80376e01..ffffffff80376e09, 3 instructions
+ffffffff80376e01:	mov    0x255e19(%rip),%eax        # ffffffff805ccc20 <sched_cycle_account>
+ffffffff80376e07:	test   %eax,%eax
+ffffffff80376e09:	je     ffffffff80376ddf <isr_leave+0x4f>
+
+isr_leave: ffffffff80376ddf..ffffffff80376de0, 2 instructions
+ffffffff80376ddf:	leave
+ffffffff80376de0:	ret
+
+isr_leave total: 29 instructions
+
+assembly return: ffffffff8010061b..ffffffff801006a6, 35 instructions
+ffffffff8010061b:	mov    %rsp,%rdi
+ffffffff8010061e:	call   ffffffff80376d90 <isr_leave>
+ffffffff80100623:	mov    0x60(%rsp),%rcx
+ffffffff80100628:	cmp    0x88(%rsp),%rcx
+ffffffff80100630:	jne    ffffffff801003c7 <isr_exit>
+ffffffff80100636:	mov    0x20(%rsp),%r11
+ffffffff8010063b:	cmp    0x98(%rsp),%r11
+ffffffff80100643:	jne    ffffffff801003c7 <isr_exit>
+ffffffff80100649:	test   $0x10100,%r11
+ffffffff80100650:	jne    ffffffff801003c7 <isr_exit>
+ffffffff80100656:	cmpq   $0x33,0x90(%rsp)
+ffffffff8010065f:	jne    ffffffff801003c7 <isr_exit>
+ffffffff80100665:	cmpq   $0x2b,0xa8(%rsp)
+ffffffff8010066e:	jne    ffffffff801003c7 <isr_exit>
+ffffffff80100674:	movabs $0x7ffffffff000,%rax
+ffffffff8010067e:	cmp    %rax,%rcx
+ffffffff80100681:	jae    ffffffff801003c7 <isr_exit>
+ffffffff80100687:	pop    %r15
+ffffffff80100689:	pop    %r14
+ffffffff8010068b:	pop    %r13
+ffffffff8010068d:	pop    %r12
+ffffffff8010068f:	pop    %r11
+ffffffff80100691:	pop    %r10
+ffffffff80100693:	pop    %r9
+ffffffff80100695:	pop    %r8
+ffffffff80100697:	pop    %rbp
+ffffffff80100698:	pop    %rdi
+ffffffff80100699:	pop    %rsi
+ffffffff8010069a:	pop    %rdx
+ffffffff8010069b:	pop    %rcx
+ffffffff8010069c:	pop    %rbx
+ffffffff8010069d:	pop    %rax
+ffffffff8010069e:	mov    0x28(%rsp),%rsp
+ffffffff801006a3:	swapgs
+ffffffff801006a6:	sysretq
