@@ -8,23 +8,28 @@
 #
 # It runs `tidy` from lib.sh in this checkout, which removes its landed
 # worktrees and branches that no process and no run evidence or loop state
-# keeps; prunes, as `prune_logs` in lib.sh does, the session logs of each loop
-# state directory under this checkout's build/flow, which a loop itself prunes
-# only while it runs and holds no task; and runs `scratch.pl` with the stems of
-# master's scratch names, here on this checkout's build/tmp and on that of the
-# Mac's release copy, build/machines/mac/tree, with the release runs'
-# directories there that hold no KEPT, and as root on the testing host on its
-# /tmp and on the build/tmp of the owner's copy and of each account's clone,
+# keeps, unless `session.pl -q` says of a loop's STATE under this checkout's
+# build/flow that its session may have outlived its supervisor; prunes, as
+# `prune_logs` in lib.sh does, the session logs of each loop state directory
+# under this checkout's build/flow, which a loop itself prunes only while it
+# runs and holds no task; and runs `scratch.pl` with the stems of master's
+# scratch names, here on this checkout's build/tmp and on that of the Mac's
+# release copy, build/machines/mac/tree, with the release runs' directories
+# there that hold no KEPT, and as root on the testing host on its /tmp and on
+# the build/tmp of the owner's copy and of each account's clone,
 # which removes the scratch of tests that were killed before their traps ran.
 # It then runs `leftovers.pl`, through `leftovers` in lib.sh, on the host and
 # here, which removes failed tests' directories, loose scratch in home
 # directories and copies of the repository whose work master has; and runs
 # `store_expire`, which removes the entries of the host's store of step outputs
 # that no copy uses. It runs `tidy` in each worker's clone too, since a loop
-# tidies only while it runs. `outputs` removes what a build or a run makes
-# again and what nothing needs once its run has ended: in each tree on the
-# testing host whose loop holds no session, the images, test output and scratch
-# unchanged for a day, but `build/tests/failed`, and the run files of
+# tidies only while it runs, unless session.pl -q says the same of that
+# loop's STATE. `outputs` removes what a build or a run makes again and what
+# nothing needs once its run has ended: in each tree on the testing host in
+# which session.pl -q says, of each loop's STATE that `workers` names there
+# and of each other STATE under its build/flow, that no session runs or may
+# still run, the images, test output and scratch unchanged for a day, but
+# `build/tests/failed`, and the run files of
 # `build/runs` unchanged for two weeks; on Windows the test collections,
 # tooling job directories, case images and scratch, the old shared TMPDIR of
 # the release runs among it, unchanged for a day, but what the record or KEPT
@@ -32,8 +37,13 @@
 # directories in build/tmp unchanged for a day that hold no KEPT, whose parts'
 # jobs are absent and whose parts have ended; each release run,
 # with its files, its etude and its kept directory, of a milestone whose
-# release closed; and here the entries of `build/tests` unchanged for two weeks
-# and the Mac's kept run directories of a milestone whose release closed. The
+# release closed; in WSL the files of such a run's claims of WSL's admission
+# in build/flow/claims of the owner's clone, but those of the run that
+# Windows' windows.current names and those of a claim whose lock a process
+# holds; and here the entries of `build/tests` unchanged for two weeks
+# and the Mac's kept run directories of a milestone whose release closed,
+# while `hold.pl clear -n` finds no run directory under
+# build/machines/mac/held. The
 # caches, the build copies of the release and of Windows, and the tooling work
 # disks stay. Each removal, and each step's total, is a line on stdout. Each
 # step that reaches the host stops itself after ten minutes. With -a, which
@@ -80,16 +90,51 @@ closed()
 # outputs: remove what the header says from each machine.
 outputs()
 {
+    rels=$(awk '!/^#/ && NF >= 3 && $2 != "-" { print $3 }' "$(dirname "$0")/workers" | sort -u)
     {
         printf '%s\n' "$stale"
+        query_script
+        printf '%s\n' "$quiet"
         for h in $HOMES; do
             b=$h/rach2/build
-            printf '%s\n' "[ -s $b/flow/claude/session ] || stale $days $b/images/* $b/x86_64/images/*" \
+            sts=
+            for r in $rels; do
+                sts="$sts $h/$r"
+            done
+            printf '%s\n' "quiet$sts $b/flow/* && stale $days $b/images/* $b/x86_64/images/*" \
                 "$b/i686/images/* $b/tests/* $b/x86_64/tests/* $b/i686/tests/* $b/tmp/*" |
                 paste -s -d ' ' -
             echo "stale 14 $b/runs/*"
         done
-    } | perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
+        # The files of a closed milestone's claims of WSL's admission, which
+        # release.sh's claim_start and claim.pl make in LOCKS, but those of
+        # the run that OUT/windows.current names, which a late start reads,
+        # and those of a claim with an attempt whose lock is held; none while
+        # OUT/windows.current cannot be read.
+        echo "closed=' $(closed | tr '\n' ' ')' locks=/home/testing/rach2/build/flow/claims"
+        o=$(awk '$1 == "windows" && $2 == "out" { print $3; exit }' "$(dirname "$0")/machines")
+        echo "current=/mnt/$(echo "$o" | cut -c 1 | tr '[:upper:]' '[:lower:]')$(echo "$o" | cut -c 3-)/windows.current"
+        cat << 'END'
+current=$(tr -d '\r' < "$current" 2> /dev/null) || closed=
+for m in $closed; do
+    for f in "$locks"/milestone"$m"-*-windows-*.*; do
+        [ -e "$f" ] || continue
+        n=${f##*/}
+        id=${n%%.*} kind=${n#*.}
+        kind=${kind%%.*}
+        [ "$id" != "$current" ] || continue
+        # Held while a process holds a lock of the claim; a lock that cannot
+        # be opened counts as held.
+        perl -MFcntl=:flock -e 'for (@ARGV) {
+                open(my $l, "<", $_) or ($!{ENOENT} ? next : exit 0);
+                flock($l, LOCK_SH | LOCK_NB) or exit 0;
+            }
+            exit 1' "$locks/$id.$kind".*.live "$locks/$id.$kind".*.granted && continue
+        rm -f "$f" && echo "sweep: removed $f"
+    done
+done
+END
+    } | perl "$(dirname "$0")/bound.pl" 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         'MSYS_NO_PATHCONV=1 wsl.exe -u root -- sh -s' 2>&1 | tr -d '\000\r' | sed "s/^/$TESTING: /"
     {
         printf '%s\n' "$stale"
@@ -109,14 +154,15 @@ outputs()
 nl='
 '
 keep= live=
-# unended ID: succeed when a part of run ID has a token in OUT and neither a
-# status file nor a stopped file.
+# unended ID: succeed when a part of run ID has a token in OUT and no
+# stopped file, as winclean.sh -l judges it: a status file comes before the
+# job's end.
 unended()
 {
     for u in prepare cases; do
         u=$b/release/$1.$u
         [ -e "$u.token" ] || continue
-        [ -e "$u.rc" ] || [ -e "$u.stopped" ] || return 0
+        [ -e "$u.stopped" ] || return 0
     done
     return 1
 }
@@ -163,28 +209,82 @@ END
             echo "stale 0 \$b/release/milestone$m-*-windows-* \$b/release/etude-milestone$m-*-windows-*" \
                 "\$b/tmp/milestone$m-*-windows-*"
         done
-    } | perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
+    } | perl "$(dirname "$0")/bound.pl" 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         'bash -s' 2>&1 | tr -d '\000\r' | sed 's/^/windows: /'
     eval "$stale"
     stale 14 "$repo"/build/tests/* 2>&1 | sed "s/^/$(hostname -s): /"
     # The Mac's kept runs, which scratch.pl leaves, of a milestone whose
-    # release closed.
-    for m in $(closed); do
-        stale 0 "$repo"/build/machines/mac/tree/build/tmp/milestone"$m"-*-mac-*
-    done 2>&1 | sed "s/^/$(hostname -s): /"
+    # release closed, while no run there may still run.
+    if mh_left=$(perl "$(dirname "$0")/hold.pl" clear -n "$repo/build/machines/mac/held"); then
+        for m in $(closed); do
+            stale 0 "$repo"/build/machines/mac/tree/build/tmp/milestone"$m"-*-mac-*
+        done 2>&1 | sed "s/^/$(hostname -s): /"
+    else
+        printf '%s\n' "$mh_left" | sed "s/^/$(hostname -s): sweep: keeps the Mac's runs, since a run may still run: /"
+    fi
     git worktree prune
 }
 
-# clones: run `tidy` in each worker's clone, as its account.
+# quiet is the shell function that `outputs` runs as root on the testing
+# host, after a function `query RECORD` that runs session.pl -q there:
+# quiet DIR... succeeds when each DIR that is a loop's STATE, with a
+# loop.log or a session record, has a session that `query` says ended.
+# shellcheck disable=SC2016 # the dollars are the function's
+quiet='
+quiet()
+{
+    for q in "$@"; do
+        [ -f "$q/loop.log" ] || [ -e "$q/session" ] || continue
+        [ "$(query "$q/session")" = ended ] || return 1
+    done
+}
+'
+
+# query_script: print the definition of the shell function `query RECORD`,
+# which runs this clone's session.pl -q on RECORD, the program sent with it.
+query_script()
+{
+    echo "query() { perl - -q \"\$1\" << 'END_OF_SESSION'"
+    cat "$(dirname "$0")/session.pl"
+    echo 'END_OF_SESSION'
+    echo '}'
+}
+
+# idle: succeed unless session.pl -q says of a loop's STATE under this
+# checkout's build/flow that its session may have outlived its supervisor,
+# lost or unknown; say which.
+idle()
+{
+    for q in "$repo"/build/flow/*; do
+        [ -f "$q/loop.log" ] || continue
+        case $(perl "$(dirname "$0")/session.pl" -q "$q/session") in
+            ended | running) ;;
+            *)
+                echo "sweep: tidy keeps this checkout as it is: the session of $q may still run"
+                return 1 ;;
+        esac
+    done
+}
+
+# clones: run `tidy` in each worker's clone, as its account, unless
+# session.pl -q says that the session of its loop, whose STATE `workers`
+# names, may have outlived its supervisor, lost or unknown.
 clones()
 {
-    grep -v '^#' "$(dirname "$0")/workers" | while read -r name host _; do
+    grep -v '^#' "$(dirname "$0")/workers" | while read -r name host st; do
         [ -n "$name" ] && [ "$host" != - ] || continue
         {
             cat "$(dirname "$0")/lib.sh"
-            # shellcheck disable=SC2016 # the dollar is the remote shell's
-            printf '%s\n' 'log() { echo "$*"; }' 'cd rach2 && git fetch -q origin && tidy'
-        } | perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" \
+            query_script
+            echo "st='$st'"
+            # shellcheck disable=SC2016 # the dollars are the remote shell's
+            printf '%s\n' 'log() { echo "$*"; }' \
+                'case $(query "$st/session") in' \
+                '    ended | running) ;;' \
+                '    *) echo "sweep: tidy keeps the clone as it is: the session of $st may still run"; exit 0 ;;' \
+                'esac' \
+                'cd rach2 && git fetch -q origin && tidy'
+        } | perl "$(dirname "$0")/bound.pl" 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" \
             sh -s 2>&1 | sed "s/^/$name: /"
     done
 }
@@ -199,7 +299,7 @@ main()
     cd "$repo" || exit 1
     git fetch -q origin || echo "sweep: the fetch failed; master's stems may be old"
     state=
-    tidy
+    ! idle || tidy
     for state in "$repo"/build/flow/*; do
         [ -f "$state/loop.log" ] && prune_logs 's-*'
     done
@@ -214,7 +314,7 @@ main()
     for h in $HOMES; do
         dirs="$dirs -d $h/rach2/build/tmp"
     done
-    perl -e 'alarm shift; exec @ARGV' 600 \
+    perl "$(dirname "$0")/bound.pl" 600 \
         ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         "MSYS_NO_PATHCONV=1 wsl.exe -u root -- perl - $dirs $age $stems" \
         < "$(dirname "$0")/scratch.pl" 2>&1 | sed "s/^/$TESTING: /"

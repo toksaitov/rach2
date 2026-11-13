@@ -16,7 +16,10 @@
 # the tasks the loops hold; the release; and the resources.
 #
 # A loop's line says whether the loop runs, has been asked to stop, or is
-# stopped; the task in its STATE/issue; whether its account is out of its
+# stopped; what `session.pl -q`, run with this clone's session.pl on the
+# loop's host, says of its session: running, ended, `lost GROUP` for one
+# whose supervisor was killed and whose group may still run, or `unknown`;
+# the task in its STATE/issue; whether its account is out of its
 # usage limit, and since when in UTC, which holds while the last session
 # that ended was followed by a `limit:` line of the log, counted from the
 # first such line after the last session that did not end on the limit; the
@@ -64,7 +67,8 @@ TESTING=testing
 here=$(primary "$(dirname "$0")")
 
 # probe is the script that reads a loop's state directory, given as its
-# argument, on the host the loop runs on, and prints the loop's line.
+# argument, on the host the loop runs on, and prints the loop's line, after
+# the function `query RECORD` that probe_script defines.
 probe='
 st=$1
 case $st in "~"*) st=$HOME${st#"~"} ;; esac
@@ -87,8 +91,8 @@ limit=$(awk "
 cur=$(ls -t "$st"/s-*.jsonl "$st"/s-*.err 2> /dev/null | head -n 1)
 silent=none
 [ -z "$cur" ] || silent=$(perl -e "print int((time - (stat shift)[9]) / 60)" "$cur")m
-echo "loop $loop | task ${task:+#}${task:-none} | ${limit:-within limit} | silent $silent |" \
-    "$(tail -n 1 "$st/loop.log" 2> /dev/null)"
+echo "loop $loop | session $(query "$st/session") | task ${task:+#}${task:-none} |" \
+    "${limit:-within limit} | silent $silent | $(tail -n 1 "$st/loop.log" 2> /dev/null)"
 '
 
 # readings: print one line for each resource the header names, as `NAME KIND
@@ -186,6 +190,17 @@ sizes()
 }
 
 
+# probe_script: print probe after the function `query RECORD`, which runs
+# this clone's session.pl -q on RECORD, the program sent with the script.
+probe_script()
+{
+    echo "query() { perl - -q \"\$1\" << 'END_OF_SESSION'"
+    cat "$(dirname "$0")/session.pl"
+    echo 'END_OF_SESSION'
+    echo '}'
+    printf '%s' "$probe"
+}
+
 # loops: print a line for each loop, as the header says.
 loops()
 {
@@ -194,9 +209,9 @@ loops()
         printf '%s: ' "$name"
         if [ "$host" = - ]; then
             case $st in /*|"~"*) ;; *) st=$here/$st ;; esac
-            printf '%s' "$probe" | sh -s "$st" 2>&1
+            probe_script | sh -s "$st" 2>&1
         else
-            printf '%s' "$probe" | ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" sh -s "$st" 2>&1
+            probe_script | ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" sh -s "$st" 2>&1
         fi
     done
     listed=$(grep -v '^#' "$(dirname "$0")/workers" |
@@ -205,7 +220,7 @@ loops()
         [ -f "$st/loop.log" ] || continue
         printf '%s\n' "$listed" | grep -q -F -x "$st" && continue
         printf '%s: ' "${st##*/}"
-        printf '%s' "$probe" | sh -s "$st" 2>&1
+        probe_script | sh -s "$st" 2>&1
     done
 }
 

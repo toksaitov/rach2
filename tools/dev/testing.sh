@@ -75,8 +75,11 @@
 # run. On the host the command runs under the copy's own tools/flow/hold.pl, in
 # the run directory build/held/NAME of the copy, NAME being RACH2_TESTING_HELD
 # or one made of this machine's name, this script's number and a random part,
-# made new once the directories of the runs there that have ended are removed: a
-# run that this script stops, or whose lock's connection ends, is stopped there
+# made new only once `hold.pl clear` has removed the directories of the runs
+# there that have ended and finds none that stays, which it lists on the
+# command's output: a run there that runs, or whose holder was killed, may
+# still work in the copy, and no command starts beside it. A run that this
+# script stops, or whose lock's connection ends, is stopped there
 # through that directory's stop, with everything it started, which that hold.pl,
 # a child subreaper, holds; and a caller that stops what works in the copy, as
 # release.sh -p does, stops each run under build/held the same way.
@@ -171,15 +174,26 @@ hold_script()
 {
     printf "who='%s'\n" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
     cat <<'EOF'
-# probe COPY: print what works in COPY: a live holder of its run lock, and
-# each process with its working directory in it but a person's shell.
+# probe COPY: print what works in COPY: its run lock while its owner runs,
+# by the start that the owner record's identity gives and not by the number
+# alone, or the group the record names has a process left, as etude's lock
+# tree decides before it takes the lock over; and each process with its
+# working directory in it but a person's shell.
 probe()
 {
     lock=$1/build/.run.lock
     if [ -d "$lock" ]; then
         pid=$(sed -n 's/^pid //p' "$lock/owner" 2>/dev/null)
-        [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null &&
-            echo "the run lock, held by pid $pid: $(sed -n 's/^args //p' "$lock/owner" 2>/dev/null)"
+        start=$(sed -n 's/^identity //p' "$lock/owner" 2>/dev/null | cut -d ' ' -f 3)
+        group=$(sed -n 's/^job //p' "$lock/owner" 2>/dev/null)
+        case $group in ''|0) group=$(sed -n 's/^pgid //p' "$lock/owner" 2>/dev/null) ;; esac
+        now=$(sed 's/.*) //' "/proc/${pid:-0}/stat" 2>/dev/null | cut -d ' ' -f 20)
+        args=$(sed -n 's/^args //p' "$lock/owner" 2>/dev/null)
+        if [ -n "$now" ] && { [ -z "$start" ] || [ "$now" = "$start" ]; }; then
+            echo "the run lock, held by pid $pid: $args"
+        elif [ -n "$group" ] && ps -A -o pgid= | grep -qx " *$group"; then
+            echo "the run lock, left by pid $pid, whose group $group has processes left: $args"
+        fi
     fi
     for d in /proc/[0-9]*; do
         case "$(readlink "$d/cwd" 2>/dev/null)" in
@@ -414,7 +428,7 @@ run_held()
         <&5 5<&- > "$hold/command" 3>&- &
     feeder=$!
     perl "$REPO/tools/flow/hold.pl" run -P -k 10 "$hold/cmd" \
-        ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg RACH2_MIN_FREE_GIB=40 && mkdir -p build/held && perl tools/flow/hold.pl sweep build/held && mkdir build/held/$HELD && read -r c && exec perl tools/flow/hold.pl run -P -k 60 build/held/$HELD bash <(base64 -d <<< \$c)'" \
+        ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg RACH2_MIN_FREE_GIB=40 && mkdir -p build/held && perl tools/flow/hold.pl clear build/held && mkdir build/held/$HELD && read -r c && exec perl tools/flow/hold.pl run -P -k 60 build/held/$HELD bash <(base64 -d <<< \$c)'" \
         < "$hold/command" 3>&- 5<&- &
     command=$!
     exec 5<&-
