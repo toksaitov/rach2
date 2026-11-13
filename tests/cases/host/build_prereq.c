@@ -592,7 +592,9 @@ static int elfwrap_toolchain(struct fixture *f, struct elfwrap_paths *w, const c
         if (!fx_write(tool, "", 0, 0755))
             return 0;
     }
-    return fx_copy(f->self, w->gcc) && fx_text(w->cc1, "cc1 1\n");
+    /* The fixture's own program may be read-only, as a prepared product is;
+     * the stand-in compiler must take the byte that elfwrap_grow appends. */
+    return fx_copy(f->self, w->gcc) && !chmod(w->gcc, 0755) && fx_text(w->cc1, "cc1 1\n");
 }
 
 static void elfwrap_check(struct fixture *f, const struct elfwrap_paths *w, int held,
@@ -618,13 +620,16 @@ static int elfwrap_replaces(struct fixture *f, const struct elfwrap_paths *w)
            fx_copy(w->wrapper, w->first);
 }
 
-/* Append a byte to the program PATH, which leaves it runnable. */
+/* Append a byte to the program PATH, which leaves it runnable; say on
+ * stderr why it could not. */
 static int elfwrap_grow(const char *path)
 {
     FILE *s = fopen(path, "ab");
     int ok = s && fputc(0, s) == 0;
     if (s && fclose(s))
         ok = 0;
+    if (!ok)
+        fprintf(stderr, "elfwrap: %s: %s\n", path, strerror(errno));
     return ok;
 }
 
