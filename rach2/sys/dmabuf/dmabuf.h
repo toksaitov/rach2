@@ -99,6 +99,9 @@ struct dma_fence *dma_fence_unwrap_merge(struct dma_fence **fences, uint32_t cou
  * them with a `struct dma_fence_unwrap` instead. */
 uint32_t dma_fence_count(struct dma_fence *fence);
 struct dma_fence *dma_fence_at(struct dma_fence *fence, uint32_t index);
+/** Whether a fence holds others, an array or a chain's point, as Linux's
+ * dma_fence_is_container. Any context. */
+int dma_fence_is_container(const struct dma_fence *fence);
 
 /*
  * A walk over the leaves of a fence in the order of dma_fence_count, as
