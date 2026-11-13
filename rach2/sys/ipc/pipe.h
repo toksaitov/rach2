@@ -107,8 +107,9 @@ typedef struct pipe {
     wait_queue_t rdwr_wq;
     /* Set by the first poll, select or epoll that asks about an end
      * (`pipe_poll`), and never cleared, as Linux's `poll_usage`: from then
-     * on every change wakes its queues, whose count of wakes epoll's edge
-     * test reads (`wq_wakes`); before, a change wakes only a sleeper. */
+     * on every change wakes its queues, which puts an epoll registration
+     * of the end on its set's ready list; before, a change wakes only a
+     * sleeper. */
     volatile int polled;
     /* Set while a splice holds the bytes at the front of the ring that it
      * copied out (`pipe_splice_peek`) and is writing, until it takes them
