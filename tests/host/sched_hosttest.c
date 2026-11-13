@@ -169,6 +169,18 @@ void timer_service_ipi(void)
     }
 }
 
+/** Selection rows have no real device to program. */
+void timer_wake_at(int64_t ns)
+{
+    (void)ns;
+}
+
+/** A local event timer is present in the idle prediction model. */
+int timer_wakes_between(void)
+{
+    return 1;
+}
+
 /** This model normally has no deferred hardware change. */
 int timer_idle_pending(void)
 {
@@ -182,10 +194,10 @@ void timer_idle_retain(void)
     idle_hw_pending = 0;
 }
 
-/** The model selects the guest's four-millisecond scheduler period. */
+/** The model selects one four-millisecond scheduler tick. */
 uint32_t timer_tick_period(void)
 {
-    return 4;
+    return 1;
 }
 
 /** Return the last modeled scheduler tick's expiry. */

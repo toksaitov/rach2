@@ -2,7 +2,7 @@
  * lag_hosttest.c: the queue of the lag wrapper, rach2/sys/block/lag.c, under
  * a transfer that sleeps.
  *
- * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c rach2/sys/tick.c
  * host-deps: tests/host/compat/spinlock_host.c
  *
  * The wrapper runs each transfer in the caller's context and answers it
@@ -158,7 +158,7 @@ static int backing_write(block_device_t *device, uint64_t lba, uint32_t count, c
         int mine = tick_inside;
 
         tick_inside = -1;
-        ticks((int)(lag_delay / LAG_UNIT) + 3);
+        ticks((int)(lag_delay * 100u / TICK_HZ) + 3);
         CHECK(answered[mine] == 0 && duplicated[mine] == 0,
               "a claimed slot whose transfer has not returned is not delivered");
     }
@@ -208,10 +208,10 @@ static void request_init(int i, int write)
 }
 
 /** Run the wrapper's timer for `n` hundredths of a second, the unit of the
- *  options' times, `LAG_UNIT` ticks each. */
+ *  options' times, rounded up to whole ticks. */
 static void ticks(int n)
 {
-    n *= (int)LAG_UNIT;
+    n = (int)LAG_TICKS((uint32_t)n);
     while (n-- > 0) {
         kernel_ticks++;
         block_lag_tick();
@@ -292,7 +292,7 @@ int main(void)
     refusals();
     lag = block_lag_wrap(&backing);
     CHECK(lag == &lag_device, "the wrapper installs over the backing");
-    CHECK(lag_delay == 3 * LAG_UNIT, "the lag is the three hundredths the option named");
+    CHECK(lag_delay == LAG_TICKS(3), "the lag is the three hundredths the option named");
     CHECK(fail_write_at == 0, "rach2.blockfail=3x arms no write");
     CHECK(lag->flags == BLOCK_READ_ONLY, "the wrapper keeps only the backing's read-only flag");
     k_memset(&other, 0, sizeof(other));
@@ -344,22 +344,22 @@ int main(void)
 
     request_init(2, 1);
     CHECK(lag_submit(lag, &reqs[2]) == 0, "a write is taken before ticks the timer skips");
-    kernel_ticks += 3 * LAG_UNIT;
+    kernel_ticks += LAG_TICKS(3);
     block_lag_tick();
     CHECK(answered[2] == 1, "one call after the lag's ticks answers it");
-    kernel_ticks += 2 * LAG_UNIT;
+    kernel_ticks += LAG_TICKS(2);
     block_lag_tick();
     CHECK(duplicated[2] == 1, "and one call after two units more its duplicate");
     request_init(3, 1);
     kernel_ticks += 2;
     CHECK(lag_submit(lag, &reqs[3]) == 0, "a write is taken two ticks into a skipped span");
-    kernel_ticks += 3 * LAG_UNIT - 1;
+    kernel_ticks += LAG_TICKS(3) - 1;
     block_lag_tick();
     CHECK(answered[3] == 0, "its lag counts from when it was taken: not answered a tick early");
     kernel_ticks++;
     block_lag_tick();
     CHECK(answered[3] == 1, "and answered at its lag");
-    kernel_ticks += 2 * LAG_UNIT;
+    kernel_ticks += LAG_TICKS(2);
     block_lag_tick();
     CHECK(duplicated[3] == 1, "with its duplicate after");
 
