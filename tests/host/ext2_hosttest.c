@@ -8691,6 +8691,55 @@ static void stop_put_row(void)
 }
 
 /**
+ * A remount writable whose check stops leaves a stopped mount read-only, so
+ * that the final puts it held back free nothing on a volume the check found
+ * faulty. /dir/big.bin's link count is 3 against its one name, which a clean
+ * mount does not check; under `errors=remount-ro` a file is made, held open
+ * and removed, and a lookup whose table block cannot be read stops the
+ * mount. The remount writable runs while another process closes the file
+ * during the check, which stops at the link count. The remount must be
+ * EROFS with the mount read-only, and the file's inode stay used, for
+ * e2fsck to find.
+ */
+static void stop_check_row(void)
+{
+    const char *img = fix_path("stop.ext2");
+    uint64_t ffree;
+    int rc = 0, hits;
+
+    if (!damage_mount(img, "sif /dir/big.bin links_count 3\n", 0,
+                      "the stopped check's volume mounts")) {
+        return;
+    }
+    ffree = policy_ffree();
+    stop_node = policy_open("held", &stop_handle);
+    check(stop_node && stop_handle && OPS->unlink(&mnt, mnt.root, "held") == 0,
+          "a file is made, held open and removed on a volume with a wrong link count");
+    stop_bitmap = debugfs_number(img, "stats", "inode bitmap at ");
+    hits = policy_unread(inode_block_of(img, "/hello.txt"), stop_lookup, &rc);
+    check(hits > 0 && rc == -EIO && (mnt.flags & VFS_MS_RDONLY) != 0,
+          "and a lookup whose table block cannot be read stops the mount");
+    if (!stop_node || !stop_handle || OPS->sync(&mnt) != 0 || bcache_invalidate(&dev) != 0) {
+        check(0, "the stopped check's cache is emptied");
+        unmount_image();
+        return;
+    }
+    stop_seen = stop_passed = 0;
+    last_check[0] = 0;
+    read_pause = stop_turn;
+    start_turns(stop_close);
+    rc = OPS->remount(&mnt, rw_flags, NULL);
+    read_pause = 0;
+    finish_turns();
+    check(rc == -EROFS && stop_passed && (mnt.flags & VFS_MS_RDONLY) != 0 &&
+              strstr(last_check, "a link count that does not match its names") != 0,
+          "a remount writable whose check stops while the file is closed is EROFS");
+    check(policy_ffree() == ffree - 1 && make_file(mnt.root, "new", &rc) == 0 && rc == -EROFS,
+          "and the mount is read-only, the file's inode not freed at its last put");
+    check(unmount_rw() == 0 && disk_state(img) == 2, "and the unmount keeps the error bit");
+}
+
+/**
  * The free of an inode reports a table block it cannot read, as a load
  * does: under `errors=remount-ro` an empty file is made, held open and
  * removed, the cache emptied, and its last close made while every read of
@@ -8943,7 +8992,8 @@ static void stop_free_row(void)
 
 /**
  * The rows of the error policy's stops beside the paths review j140 named:
- * a final put while a remount checks the volume (`stop_put_row`), the free
+ * a final put while a remount checks the volume (`stop_put_row`), and while
+ * a remount's check stops (`stop_check_row`), the free
  * of an inode whose table block cannot be read (`stop_release_row`), a
  * directory left marked by a stop before a remount writable
  * (`stop_settle_row`), a bitmap check that stops the mount during a search
@@ -8953,6 +9003,7 @@ static void stop_free_row(void)
 static void stop_rows(void)
 {
     stop_put_row();
+    stop_check_row();
     stop_release_row();
     stop_settle_row();
     stop_alloc_row();

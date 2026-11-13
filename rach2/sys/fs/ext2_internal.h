@@ -164,7 +164,8 @@
  * which a fault under EXT2_ERRORS_RO makes of RW, admits no change and
  * allocates nothing, while what is under way still finishes, rolls back,
  * reclaims and drains, as Linux's ext2 goes on under SB_RDONLY, until a
- * remount writable checks the volume. A mount whose device write failed is
+ * remount writable checks the volume, which makes it RW, or RO when the
+ * check stops. A mount whose device write failed is
  * FAILED whatever its mode (`ext2_failed`), and writes nothing more.
  */
 #define EXT2_MODE_RO      0

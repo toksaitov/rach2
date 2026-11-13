@@ -2329,9 +2329,13 @@ static int nodes_unstored(struct ext2_mount *em)
  * volume whose valid bit is clear or whose error bit is set is checked as a
  * writable mount checks it, the batch set up when the mount has none, the valid
  * bit cleared on the medium, and the mode set EXT2_MODE_RW under `em->super`.
+ * A check that stops sets EXT2_MODE_RO and the VFS's read-only flag under
+ * `em->super` instead, as a mount whose check stops does (`mount_mode`), before
+ * the caller lets the held final puts go: a stopped mount would free their
+ * inodes and blocks (`ext2_writes`) on a volume the check found faulty.
  * 0, -EROFS for a volume whose features keep it read-only (`em->readonly_why`),
- * a failed mount (`ext2_failed`) or a check that stopped, which leaves the mode
- * as it was, -ENOMEM for a batch the heap cannot give,
+ * a failed mount (`ext2_failed`) or a check that stopped, -ENOMEM for a batch
+ * the heap cannot give,
  * the drain's or a marked node's store's -errno, -EIO for a node still marked,
  * or -errno.
  *
@@ -2361,6 +2365,10 @@ static int remount_writable(struct ext2_mount *em)
     if (rc == 0 && (!(em->state & EXT2_VALID_FS) || (em->state & EXT2_ERROR_FS))) {
         rc = ext2_check_volume(em);
         if (rc > 0) {
+            ext2_super_lock(em);
+            em->mode = EXT2_MODE_RO;
+            em->mnt->flags |= VFS_MS_RDONLY;
+            ext2_super_unlock(em);
             rc = -EROFS;
         }
     }
@@ -2405,7 +2413,8 @@ static int remount_writable(struct ext2_mount *em)
  * file system already SB_RDONLY (fs/ext2/super.c:1352), so a stopped mount
  * stays stopped. Toward writable, EXT2_MODE_RO and EXT2_MODE_STOPPED both
  * go through `remount_writable` and its check, the one exit from a stop; a
- * check that stops refuses it with -EROFS.
+ * check that stops refuses it with -EROFS and leaves the mount EXT2_MODE_RO,
+ * so that the final puts it held back free nothing.
  */
 static int ext2_remount(struct vfs_mount *mnt, uint32_t flags, const char *options)
 {
