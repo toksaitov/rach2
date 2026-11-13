@@ -780,7 +780,7 @@ static void existing_rows(void)
 }
 
 /**
- * Call `writeback_piece`, the batch's admission of a piece, directly. A
+ * Call `ext2_writeback_fit`, the batch's admission of a piece, directly. A
  * piece that needs more blocks than are free once an earlier pending
  * piece's reservation is counted fails with `ENOSPC` and leaves the earlier
  * piece pending and intact; it then drains and reads back. Root cannot
@@ -795,12 +795,12 @@ static void reservation_rows(void)
     reset(11);
     ext2_node_lock(&file);
     ext2_batch_lock(&volume);
-    check(writeback_piece(&volume, &file, 0, payload, 4096) == 0, "accept an earlier piece");
+    check(ext2_writeback_fit(&volume, &file, 0, payload, 4096) == 0, "accept an earlier piece");
     before = file;
     remaining = (uint32_t)volume.free_blocks;
     metas = batch.metas;
     datas = batch.datas;
-    check(writeback_piece(&volume, &file, (uint64_t)1049612 * 4096, payload, 4096) == -ENOSPC,
+    check(ext2_writeback_fit(&volume, &file, (uint64_t)1049612 * 4096, payload, 4096) == -ENOSPC,
           "piece quota includes uncommitted reservations");
     check(volume.free_blocks == remaining && memcmp(&before, &file, sizeof(file)) == 0 &&
               batch.metas == metas && batch.datas == datas && batch.count == 1 && writes == 0,
@@ -816,7 +816,7 @@ static void reservation_rows(void)
     process.euid = 0;
     ext2_node_lock(&file);
     ext2_batch_lock(&volume);
-    check(writeback_piece(&volume, &file, (uint64_t)1036 * 4096, payload, 4096) == -ENOSPC &&
+    check(ext2_writeback_fit(&volume, &file, (uint64_t)1036 * 4096, payload, 4096) == -ENOSPC &&
               volume.free_blocks == 2 && batch.count == 0,
           "root cannot reserve more blocks than are free");
     ext2_batch_unlock(&volume);

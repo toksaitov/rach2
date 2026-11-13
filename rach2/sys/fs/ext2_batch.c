@@ -5,6 +5,7 @@
  */
 
 #include "ext2_internal.h"
+#include "../lib/ksignal.h"
 
 /** Give back a write batch and every buffer page it holds; NULL is nothing. */
 void ext2_writeback_free(struct ext2_writeback *wb)
@@ -663,14 +664,14 @@ static void writeback_fetch(struct ext2_mount *em, struct ext2_node *n, uint64_t
 }
 
 /**
- * Plan, prepare and commit one piece, as `writeback_piece` says, under
+ * Plan, prepare and commit one piece, as `ext2_writeback_fit` says, under
  * `em->batch`, the plan taking the locks of the groups it reserves in and
  * giving them back after the commit or the failure. A failure gives back the
  * images the piece took before it returns, in the same step as the plan:
  * once the lock goes, other writers change the tables and the counts. A
- * piece whose bytes the batch has no room left for is -ENOMEM, looked at
- * under the lock, since another writer may have filled it since the
- * caller's look (`ext2_writeback_fit`). The
+ * piece the batch has no room left for, in its bytes or its tables, is
+ * -ENOMEM, which only a batch that holds something gives, since an empty
+ * one takes any one piece. The
  * check that the user's pages are present and the commit that copies them
  * run under the big lock, taken for them when the caller lacks it, since
  * every change that takes a page away holds it (`vm_resident`). 0, or
@@ -723,45 +724,6 @@ fail:
     spin_unlock_irqrestore(&wb->lock, flags);
     plan_groups_unlock(em, &plan);
     return rc;
-}
-
-/**
- * Accept one piece of a write, `len` bytes from `src` at `offset` of `n`
- * within one block: planned, its data image prepared, and committed. No
- * image readers see changes until every read and reservation has
- * succeeded, and a piece that fails gives back the images it took. A
- * removed device or one that failed a write is -EIO, and a mount made
- * read-only, by a failed write or a fault, -EROFS. `src` may be a user
- * buffer: the check that its pages are present
- * runs in the step of the commit, which copies it, and a page that is not
- * is -EFAULT with nothing committed.
- *
- * What the plan reads is fetched first with `em->batch` let go
- * (`writeback_fetch`). Under its locks the plan reads only what the cache
- * has and nobody holds; a block it lacks or another holds gives the piece
- * back, lets the locks go, fetches the block or waits for it and starts
- * again, and after PLAN_TRIES such starts the plan reads under the locks,
- * one request. The caller holds `n`'s lock and not `em->batch`. 0, or
- * -errno.
- */
-static int writeback_piece(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
-                           const uint8_t *src, uint32_t len)
-{
-    uint32_t missed;
-    int tries, rc;
-
-    writeback_fetch(em, n, offset, len);
-    for (tries = 0;; tries++) {
-        ext2_batch_lock(em);
-        ext2_plan_begin(em, tries);
-        rc = writeback_try(em, n, offset, src, len);
-        missed = ext2_plan_end(em);
-        ext2_batch_unlock(em);
-        if (rc != -EAGAIN) {
-            return rc;
-        }
-        ext2_volume_fetch(em, missed);
-    }
 }
 
 /**
@@ -850,22 +812,17 @@ static int drain_busy(struct ext2_mount *em, uint32_t *blk)
  * Take `em->batch` for a drain once no other process holds a block it will
  * copy into, waiting for each such block with the lock let go, PLAN_TRIES
  * times before the drain waits under it; a strict mount takes it at once.
- * Returns 1 with the lock held, or 0 without it when the batch emptied
- * meanwhile.
+ * Returns with the lock held, the batch emptied by another meanwhile or not.
  */
-static int drain_lock(struct ext2_mount *em)
+static void drain_lock(struct ext2_mount *em)
 {
     uint32_t busy;
     int tries;
 
     for (tries = 0;; tries++) {
         ext2_batch_lock(em);
-        if (!em->wb->count) {
-            ext2_batch_unlock(em);
-            return 0;
-        }
-        if (ext2_em_strict(em) || tries >= PLAN_TRIES || !drain_busy(em, &busy)) {
-            return 1;
+        if (!em->wb->count || ext2_em_strict(em) || tries >= PLAN_TRIES || !drain_busy(em, &busy)) {
+            return;
         }
         ext2_batch_unlock(em);
         bcache_wait_unheld(em->dev, busy);
@@ -895,55 +852,43 @@ static void drain_inode_marks(struct ext2_mount *em, const struct ext2_image *im
 }
 
 /**
- * Write the batch out, stage by stage, under `em->batch`: the inodes encoded
- * into their table images, then each stage's changed images copied into the
- * cache, from the allocation bitmaps and descriptors through the data, the
- * pointer blocks and the superblock to the inode tables, a file's data and
- * pointer blocks tagged as its own and each pointer block marked at its
- * level after the blocks below it, so that the cache writes it after them
- * (`bcache_dirty_pointer`). No buffer is held across a sync, which may
- * reach a backing file. Changed inode fields are kept in `inode_dirty`,
- * a bit per node, across a failed drain; each mark is published under
- * `em->share_lock` only after its table image is dirty in the cache.
+ * Write the batch out, stage by stage, under `em->batch`, which the caller
+ * holds and keeps: the inodes encoded into their table images, then each
+ * stage's changed images copied into the cache, from the allocation bitmaps
+ * and descriptors through the data, the pointer blocks and the superblock to
+ * the inode tables, a file's data and pointer blocks tagged as its own and
+ * each pointer block marked at its level after the blocks below it, so that
+ * the cache writes it after them (`bcache_dirty_pointer`). No buffer is held
+ * across a sync, which may reach a backing file. Changed inode fields are
+ * kept in `inode_dirty`, a bit per node, across a failed drain; each mark is
+ * published under `em->share_lock` only after its table image is dirty in
+ * the cache.
  *
- * On a mount that writes back the copies are all the work: the cache first
- * writes dirty victims with no lock taken until it can give a buffer for
- * each copy without a write (`bcache_reserve`), and a block another process
- * holds, which a sync or an fsync holds for the length of its write, is
- * waited for with the lock let go, PLAN_TRIES times before the drain waits
- * under it; so the lock waits on the disk only for what others took
+ * On a mount that writes back the copies are all the work, since the caller
+ * made the cache's room and waited out others' holds of the blocks
+ * (`drain_enter`); so the lock waits on the disk only for what others took
  * meanwhile. Every EXT2_SERVICE_BLOCKS copies the drain offers the big lock,
  * with no buffer held: the point is the one where the next `bcache_get_blank`
- * may sleep, and `em->batch` keeps the batch while others run. A strict mount
- * holds the
- * lock across its ordered writes, as its option asks: each stage is synced
- * and flushed before the next enters the cache, so that a sync or an
- * eviction can write only a stage whose dependencies are on the medium.
+ * may sleep, and `em->batch` keeps the batch while others run. A strict
+ * mount holds the lock across its ordered writes, as its option asks: each
+ * stage is synced and flushed before the next enters the cache, so that a
+ * sync or an eviction can write only a stage whose dependencies are on the
+ * medium.
  *
- * At the end the batch is emptied, and with the lock let go its inodes'
- * holds are put and the cache balanced (`ext2_em_balance`). A failure keeps the
- * images and the stage, so that the next drain resumes there, and is
- * recorded by `ext2_writeback_error`; a removed device fails at once. The
- * drain runs with or without the big lock, which the cache's write side
- * does not need (bcache.h). The caller holds no `em->batch`. 0, or -errno.
+ * At the end the batch is emptied and its inodes, whose holds the caller
+ * puts with the lock let go (`drain_release`), go in `held`, their number
+ * in `*held_count`, 0 when the batch was empty. A failure keeps the images
+ * and the stage, so that the next drain resumes there, and is recorded by
+ * `ext2_writeback_error`. 0, or -errno.
  */
-int ext2_writeback_drain(struct ext2_mount *em)
+static int drain_stages(struct ext2_mount *em, struct ext2_node **held, int *held_count)
 {
     struct ext2_writeback *wb = em->wb;
-    struct ext2_node *held[EXT2_WB_NODES];
     uint32_t copied = 0, flags;
     int i, count, rc;
 
-    if (em->dev->flags & BLOCK_GONE) {
-        return ext2_writeback_error(em, -EIO);
-    }
-    if (!ext2_batch_pending(em)) {
-        return 0;
-    }
-    if (!ext2_em_strict(em)) {
-        (void)bcache_reserve(em->dev, writeback_dirty(wb));
-    }
-    if (!drain_lock(em)) {
+    *held_count = 0;
+    if (!wb->count) {
         return 0;
     }
     for (i = 0; i < wb->count; i++) {
@@ -996,24 +941,77 @@ int ext2_writeback_drain(struct ext2_mount *em)
             }
         }
     }
-    count = wb->count;
-    for (i = 0; i < count; i++) {
+    for (i = 0; i < wb->count; i++) {
         held[i] = wb->nodes[i];
     }
+    *held_count = wb->count;
     flags = spin_lock_irqsave(&wb->lock);
     wb->count = wb->datas = wb->metas = 0;
     spin_unlock_irqrestore(&wb->lock, flags);
     wb->bytes = 0;
     wb->stage = 0;
-    ext2_batch_unlock(em);
+    return 0;
+fail:
+    return ext2_writeback_error(em, rc);
+}
+
+/** Put the `count` holds a drain took off the batch's inodes `held` and
+ * balance the cache (`ext2_em_balance`), with `em->batch` let go, since a
+ * last put may free an inode. Nothing for a count of 0. */
+static void drain_release(struct ext2_mount *em, struct ext2_node **held, int count)
+{
+    int i;
+
     for (i = 0; i < count; i++) {
         ext2_put(em->mnt, held[i]);
     }
-    ext2_em_balance(em);
+    if (count) {
+        ext2_em_balance(em);
+    }
+}
+
+/**
+ * Make ready for a drain and take `em->batch` for it: a removed device
+ * fails at once, recorded (`ext2_writeback_error`); on a mount that writes
+ * back the cache first writes dirty victims with no lock taken until it can
+ * give a buffer for each copy without a write (`bcache_reserve`); and the
+ * lock is taken as `drain_lock` says. 0 with the lock held, or -EIO without
+ * it.
+ */
+static int drain_enter(struct ext2_mount *em)
+{
+    if (em->dev->flags & BLOCK_GONE) {
+        return ext2_writeback_error(em, -EIO);
+    }
+    if (!ext2_em_strict(em)) {
+        (void)bcache_reserve(em->dev, writeback_dirty(em->wb));
+    }
+    drain_lock(em);
     return 0;
-fail:
-    rc = ext2_writeback_error(em, rc);
+}
+
+/**
+ * Write the batch out (`drain_stages`), its inodes' holds put and the cache
+ * balanced after the lock goes (`drain_release`). A removed device fails at
+ * once, also with nothing in the batch. The drain runs with or without the
+ * big lock, which the cache's write side does not need (bcache.h). The
+ * caller holds no `em->batch`. 0, or -errno.
+ */
+int ext2_writeback_drain(struct ext2_mount *em)
+{
+    struct ext2_node *held[EXT2_WB_NODES];
+    int count, rc;
+
+    if (!(em->dev->flags & BLOCK_GONE) && !ext2_batch_pending(em)) {
+        return 0;
+    }
+    rc = drain_enter(em);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = drain_stages(em, held, &count);
     ext2_batch_unlock(em);
+    drain_release(em, held, count);
     return rc;
 }
 
@@ -1162,36 +1160,82 @@ int ext2_writeback_space(struct ext2_mount *em, struct ext2_node *n, uint64_t of
     return 0;
 }
 
-/**
- * Put one piece of a write into the batch, after a drain when its bytes
- * would overflow the batch's room, and after a drain again each time the
- * batch's bytes or tables are full. The drain lets `em->batch` go before the
- * next try, so other writers may fill the batch again in between; the piece
- * waits for room as many drains as that takes, as Linux's writer waits in
- * `balance_dirty_pages` (mm/page-writeback.c) and is never refused for
- * dirty memory. An empty batch takes any one piece, so -ENOMEM comes back
- * only from a batch the drain left empty. `writeback_piece`'s answer or the
- * drain's error.
- */
-int ext2_writeback_fit(struct ext2_mount *em, struct ext2_node *n, uint64_t at, const uint8_t *in,
-                       uint32_t take)
+/** Whether the calling thread has SIGKILL pending in its own set, where a
+ * signal that ends its process puts one for every thread (`sig_group_end`):
+ * Linux's `fatal_signal_pending`, which the core file's writer reads too
+ * (`core_file_put`). 0 for a caller with no process. */
+static int write_killed(void)
 {
-    struct ext2_writeback *wb = em->wb;
-    int rc;
+    return current_proc && (current_proc->sig_pending & KSIG_BIT(SIGKILL)) != 0;
+}
 
-    if (take > EXT2_WB_BYTES - wb->bytes) {
-        rc = ext2_writeback_drain(em);
-        if (rc != 0) {
+/**
+ * Accept one piece of a write, `len` bytes from `src` at `offset` of `n`
+ * within one block: planned, its data image prepared, and committed. No
+ * image readers see changes until every read and reservation has
+ * succeeded, and a piece that fails gives back the images it took. A
+ * removed device or one that failed a write is -EIO, and a mount made
+ * read-only, by a failed write or a fault, -EROFS, and a caller with
+ * SIGKILL pending -EINTR before anything is tried. `src` may be a user
+ * buffer: the check that its pages are present runs in the step of the
+ * commit, which copies it, and a page that is not is -EFAULT with nothing
+ * committed.
+ *
+ * What the plan reads is fetched first with `em->batch` let go
+ * (`writeback_fetch`). Under its locks the plan reads only what the cache
+ * has and nobody holds; a block it lacks or another holds gives the piece
+ * back, lets the locks go, fetches the block or waits for it and starts
+ * again, and after PLAN_TRIES such starts the plan reads under the locks,
+ * one request.
+ *
+ * A piece the batch has no room for waits for one drain, as Linux's writer
+ * waits in `balance_dirty_pages` (mm/page-writeback.c) and is never refused
+ * for dirty memory. The drain and the piece's next try run under one hold of
+ * `em->batch`, the plan reading under it, so that no other writer fills the
+ * batch between them: the piece then goes into a batch that is empty, which
+ * takes any one piece, and is never refused for room. So a writer that finds
+ * the batch full progresses after one drain however many others write, and
+ * -ENOMEM, which only a full batch gives, never comes back. The caller holds
+ * `n`'s lock and not `em->batch`. 0, or -errno: `writeback_try`'s or the
+ * drain's.
+ */
+int ext2_writeback_fit(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
+                       const uint8_t *src, uint32_t len)
+{
+    struct ext2_node *held[EXT2_WB_NODES];
+    uint32_t missed;
+    int tries, rc, count;
+
+    if (write_killed()) {
+        return -EINTR;
+    }
+    writeback_fetch(em, n, offset, len);
+    for (tries = 0;; tries++) {
+        ext2_batch_lock(em);
+        ext2_plan_begin(em, tries);
+        rc = writeback_try(em, n, offset, src, len);
+        missed = ext2_plan_end(em);
+        ext2_batch_unlock(em);
+        if (rc == -ENOMEM) {
+            break;
+        }
+        if (rc != -EAGAIN) {
             return rc;
         }
+        ext2_volume_fetch(em, missed);
     }
-    rc = writeback_piece(em, n, at, in, take);
-    while (rc == -ENOMEM && ext2_batch_pending(em)) {
-        rc = ext2_writeback_drain(em);
-        if (rc == 0) {
-            rc = writeback_piece(em, n, at, in, take);
-        }
+    rc = drain_enter(em);
+    if (rc != 0) {
+        return rc;
     }
+    rc = drain_stages(em, held, &count);
+    if (rc == 0) {
+        ext2_plan_begin(em, PLAN_TRIES);
+        rc = writeback_try(em, n, offset, src, len);
+        (void)ext2_plan_end(em);
+    }
+    ext2_batch_unlock(em);
+    drain_release(em, held, count);
     return rc;
 }
 

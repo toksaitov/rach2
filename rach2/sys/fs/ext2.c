@@ -379,8 +379,9 @@ void ext2_assert_node_locked(const struct ext2_node *n)
  * process holds it; the holder takes it again by depth. Taken after every
  * node lock the caller needs and before any group's lock or `em->super`,
  * and held across a disk wait only for one block evicted after its fetch,
- * or held by another's write PLAN_TRIES times over, or by a strict mount
- * for its ordered writes.
+ * or held by another's write PLAN_TRIES times over, for the blocks a piece
+ * reads right after the drain it waited for (`ext2_writeback_fit`), or by a
+ * strict mount for its ordered writes.
  */
 void ext2_batch_lock(struct ext2_mount *em)
 {

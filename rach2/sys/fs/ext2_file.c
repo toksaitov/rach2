@@ -1642,7 +1642,11 @@ int ext2_fdatasync(struct vfs_mount *mnt, void *handle)
  * overwrite inside the file's blocks or a contiguous append joins the batch
  * a block at a time; any other write drains the batch before it and after
  * each block. The batch drains too when its bytes, images or inodes run out,
- * and a piece that finds its tables full drains it and is tried once more.
+ * and a piece that finds it full waits for one drain (`ext2_writeback_fit`).
+ * A piece refused for a pending SIGKILL ends the write with the bytes
+ * accepted, or -EINTR for none, as Linux's `generic_perform_write` checks
+ * `fatal_signal_pending`, so that a killed writer does not wait out the
+ * drains of a long write with the node's lock held.
  * Every EXT2_SERVICE_BLOCKS pieces the write offers the big lock: the node's
  * lock stays held, `em->batch` is not, no plan is held, and the next piece
  * looks at the user's page again, as it does after a drain that slept. A
@@ -1666,7 +1670,8 @@ int ext2_fdatasync(struct vfs_mount *mnt, void *handle)
  * starts at or past it is -EFBIG, as Linux's `generic_write_check_limits`
  * does with `s_maxbytes`. A fenced node (`n->fenced`) is -EIO, since the
  * batch's drain would store it. Returns the bytes accepted, -EISDIR, -EFBIG,
- * -EIO, -EROFS, -ENOSPC, -EFAULT, or -errno. The caller holds the node's lock.
+ * -EIO, -EROFS, -ENOSPC, -EFAULT, -EINTR, or -errno. The caller holds the
+ * node's lock.
  */
 int32_t ext2_file_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                         uint64_t offset)

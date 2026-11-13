@@ -724,8 +724,8 @@ int ext2_writeback_contiguous(struct ext2_mount *em, struct ext2_node *n, uint64
                               uint32_t count);
 int ext2_writeback_space(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
                          uint32_t count);
-int ext2_writeback_fit(struct ext2_mount *em, struct ext2_node *n, uint64_t at, const uint8_t *in,
-                       uint32_t take);
+int ext2_writeback_fit(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
+                       const uint8_t *src, uint32_t len);
 int ext2_writeback_room(struct ext2_mount *em, int synchronous);
 int ext2_writeback_init(struct ext2_mount *em);
 
