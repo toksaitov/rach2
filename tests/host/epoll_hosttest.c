@@ -5,35 +5,42 @@
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/fd_flat.c
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/mutex_none.c
+ * host-deps: tests/host/compat/atomic_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * `io/epoll.c` and `proc/wait_queue.c` are included whole. A descriptor is an
  * entry of one model table: an epoll set that `epoll_create1` made, or a model
  * object whose poll reports the events a row sets and names the object's own
- * wait queue, which the row wakes for the kinds of change it chooses. A wait
- * takes no time: the model `poll_wait` scans once. A user address is an offset
- * in an arena.
+ * wait queue, which the row wakes for the kinds of change it chooses, and
+ * counts the polls of it. A wait takes no time: the model `poll_wait_queue`
+ * looks at the ready list once. A user address is an offset in an arena.
  *
  * An edge-triggered registration is reported again for a wake of a kind its
  * events watch and for no other: data for input, room for output, and a
  * hangup for every registration; a set inside another is an edge of the
- * outer one for the kinds its own registrations watch. An EPOLL_CTL_ADD that
+ * outer one for the kinds its own registrations watch. A one-shot
+ * registration reports once and then nothing until EPOLL_CTL_MOD. A wait on
+ * a set of many registrations polls only those a wake or an earlier report
+ * put on its ready list. A wake of an object that two sets watch with
+ * EPOLLEXCLUSIVE, each with a sleeper, wakes one sleeper and readies one
+ * set, and with no sleeper readies both, as Linux's; EPOLLEXCLUSIVE with
+ * EPOLL_CTL_MOD, with a set or with EPOLLPRI is EINVAL. An EPOLL_CTL_ADD that
  * would nest sets more than four deep below the outermost, or make a cycle,
  * is ELOOP, whether the chain would grow above the set added to, below the
  * set added, or both, and a set held by two paths counts by the longer. Five
  * sets nest, and a wait on the first reports an object in the fifth.
  *
  * A registration lasts while its open file is open, whatever became of the
- * number it was added by: a wait of a caller whose number names the file no
- * more reports nothing of it and keeps it, and the wait after the file's
- * last close drops it. A registration of a set holds the set in the nesting
- * count while it lasts, for a fork's child that closed its copy of the
- * number too, and the child's waits leave it to the parent. The last close
+ * number it was added by, and reports its file's events as in Linux; the
+ * file's last close takes it (`epoll_release_file`). A registration of a set
+ * holds the set in the nesting count while it lasts, for a fork's child that
+ * closed its copy of the number too, and the child's waits report through
+ * it as the parent's do. The last close
  * of a set takes the registrations of it in other sets, and the closes of
  * sets that hold or are held leave every list whole, which AddressSanitizer
  * checks. A fork is a second table whose descriptors share the first's open
- * files, and the list of live descriptions `fd_ofd_live` reads is the
- * model's own.
+ * files.
  */
 #define WAIT_QUEUE_HOSTTEST
 #include "proc/wait_queue.c"
@@ -53,11 +60,10 @@ struct percpu cpu_table[NR_CPUS];
 static process_t proc, child;
 static fd_table_t table, child_table;
 static fd_entry_t entries[SLOTS], child_entries[SLOTS];
-/* The open files of both tables, as fd.c lists the live descriptions. */
-static struct open_file *live[2 * SLOTS];
 static uint8_t arena[1024];
-static uint32_t serials;
 static int failures;
+/* The polls of model objects since a row last cleared the count. */
+static int polls;
 
 /** Count and print a failure when `condition` is false. */
 #define CHECK(condition, detail)                            \
@@ -83,6 +89,7 @@ static short model_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct model *m = (struct model *)e->priv;
 
+    polls++;
     if (wq) {
         *wq = &m->wq;
     }
@@ -122,21 +129,8 @@ fd_entry_t *fd_get(fd_table_t *t, int fd)
     return &t->chunks[0][fd];
 }
 
-/** Put `ofd` on the list of live descriptions, or with `gone` take it off. */
-static void list_live(struct open_file *ofd, int gone)
-{
-    int i;
-
-    for (i = 0; i < 2 * SLOTS; i++) {
-        if (live[i] == (gone ? ofd : NULL)) {
-            live[i] = gone ? NULL : ofd;
-            return;
-        }
-    }
-}
-
 /** The lowest free number above the standard three, with a new open file
- * description of its own and the next serial. */
+ * description of its own. */
 int fd_alloc(fd_table_t *t)
 {
     int fd;
@@ -149,27 +143,11 @@ int fd_alloc(fd_table_t *t)
                 return -1;
             }
             ofd->refcount = 1;
-            ofd->serial = ++serials;
-            list_live(ofd, 0);
             t->chunks[0][fd].ofd = ofd;
             return fd;
         }
     }
     return -1;
-}
-
-/** Whether `ofd`, made with `serial`, is on the list of live descriptions;
- * one that is not is not read, as in fd.c. */
-int fd_ofd_live(const struct open_file *ofd, uint32_t serial)
-{
-    int i;
-
-    for (i = 0; i < 2 * SLOTS; i++) {
-        if (live[i] == ofd) {
-            return ofd->refcount > 0 && ofd->serial == serial;
-        }
-    }
-    return 0;
 }
 
 /**
@@ -216,45 +194,15 @@ int bkl_held(void)
     return bkl_depth > 0;
 }
 
-/** Store `value` at `*p` when it is `old`, one processor's step: what was
- * there. */
-unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
+/** One look at `ready`, since a wait here ends at once: 1 when it holds,
+ * else 0, the deadline's. */
+int poll_wait_queue(struct wait_queue *wq, int (*ready)(void *ctx), void *ctx,
+                    struct poll_deadline *d, const char *wchan)
 {
-    unsigned int was = *p;
-
-    if (was == old) {
-        *p = value;
-    }
-    return was;
-}
-
-/** No row closes a descriptor a wait holds, so no close asks: 0. */
-int poll_drop_take(void)
-{
-    return 0;
-}
-
-/** No row's wait is asked to give back its holds. */
-void fd_holds_release_closing(int keep)
-{
-    (void)keep;
-}
-
-/** One scan, with a record for each queue it may name: a wait here ends at
- * once. */
-int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d, const char *wchan)
-{
-    struct wait_queue **wqs = kzalloc(sizeof(*wqs) * (n ? n : 1u));
-    int rc;
-
+    (void)wq;
     (void)d;
     (void)wchan;
-    if (!wqs) {
-        return -ENOMEM;
-    }
-    rc = scan(ctx, wqs);
-    kfree(wqs);
-    return rc;
+    return ready(ctx) ? 1 : 0;
 }
 
 /** Every wait has a deadline, which a model wait does not read: tick 0. */
@@ -375,18 +323,19 @@ static int dup_fd(int fd)
     return -1;
 }
 
-/** Close the number `fd`: the last close of its open file runs the close of
- * what it is, as fd_release_backing does. */
+/** Close the number `fd`: the last close of its open file takes its
+ * registrations from the sets they are in and then runs the close of what
+ * it is, as fd_release_objects does. */
 static void close_fd(int fd)
 {
     fd_entry_t *e = slot(fd);
     struct open_file *ofd = e->ofd;
 
     if (--ofd->refcount == 0) {
+        epoll_release_file(ofd);
         if (e->ops && e->ops->close) {
             e->ops->close(e);
         }
-        list_live(ofd, 1);
         kfree(ofd);
     }
     e->type = FD_TYPE_NONE;
@@ -430,8 +379,8 @@ static uint32_t registrations(int ep)
     return ((struct epoll *)slot(ep)->priv)->count;
 }
 
-/** EPOLL_CTL_ADD of `fd` to the set `ep` for `events`. */
-static int32_t add(int ep, int fd, uint32_t events)
+/** The operation `op` of epoll_ctl on `fd` in the set `ep`, for `events`. */
+static int32_t ctl(int ep, int op, int fd, uint32_t events)
 {
     struct isr_params params;
     uint32_t ev[3];
@@ -442,10 +391,16 @@ static int32_t add(int ep, int fd, uint32_t events)
     copy_to_user((void *)(unsigned long)EVENT_AT, ev, sizeof(ev));
     clear_params(&params);
     params.ebx = (uint32_t)ep;
-    params.ecx = EPOLL_CTL_ADD;
+    params.ecx = (uint32_t)op;
     params.edx = (uint32_t)fd;
     params.esi = EVENT_AT;
     return sys_epoll_ctl(&params);
+}
+
+/** EPOLL_CTL_ADD of `fd` to the set `ep` for `events`. */
+static int32_t add(int ep, int fd, uint32_t events)
+{
+    return ctl(ep, EPOLL_CTL_ADD, fd, events);
 }
 
 /** A wait on the set `ep` with a timeout of 0: the events it reports. */
@@ -671,8 +626,8 @@ static void nest_after_close(void)
 /**
  * A registration of an object lasts while the object's open file is open,
  * whatever became of its number: with the number closed and a second one
- * keeping the file open, a wait reports nothing of it and keeps it, and the
- * wait after the second number's close drops it.
+ * keeping the file open, a wait reports it still, as in Linux, and the
+ * second number's close, the file's last, takes it.
  */
 static void kept_open(void)
 {
@@ -684,11 +639,11 @@ static void kept_open(void)
     CHECK(add(ep, fd, EPOLLIN) == 0 && wait_set(ep) == 1, "a ready object in a set");
     second = dup_fd(fd);
     close_fd(fd);
-    CHECK(wait_set(ep) == 0 && registrations(ep) == 1,
-          "a registration whose number was closed stays while another number keeps its file");
+    CHECK(wait_set(ep) == 1 && registrations(ep) == 1,
+          "a registration whose number was closed reports while another number keeps its file");
     close_fd(second);
-    CHECK(wait_set(ep) == 0 && registrations(ep) == 0,
-          "a registration whose file has closed everywhere is dropped");
+    CHECK(registrations(ep) == 0 && wait_set(ep) == 0,
+          "the last close of a registration's file takes the registration");
     close_fd(ep);
 }
 
@@ -697,9 +652,9 @@ static void kept_open(void)
  * to s4, and a ready object is in s4. The child closes its copy of s1's
  * number, which the parent's keeps open, so s0's registration of s1 holds
  * s1 still: the child's add of a sixth set under s4 is ELOOP, and so is its
- * add of s0 under a sixth. The child's wait on s0 cannot look into s1 and
- * reports nothing, and leaves the registration, so the parent's wait on s0
- * reports the object after the child has gone.
+ * add of s0 under a sixth. The child's wait on s0 reports the object
+ * through the registration, as in Linux, and so does the parent's after the
+ * child has gone.
  */
 static void nest_forked(void)
 {
@@ -723,16 +678,133 @@ static void nest_forked(void)
           "a child's add under five sets, one of whose numbers it closed, is ELOOP");
     CHECK(add(above, s[0], EPOLLIN) == -ELOOP,
           "a child's add of five sets, one of whose numbers it closed, under a sixth is ELOOP");
-    CHECK(wait_set(s[0]) == 0, "a child's wait does not look into a set whose number it closed");
-    exit_model();
     CHECK(wait_set(s[0]) == 1,
-          "a child's wait on a set whose registration's number it closed leaves it to the parent");
+          "a child's wait looks into a set through a registration whose number it closed");
+    exit_model();
+    CHECK(wait_set(s[0]) == 1, "the parent's wait reports the object after the child has gone");
     close_fd(fd);
     close_fd(sixth);
     close_fd(above);
     for (i = 0; i < 5; i++) {
         close_fd(s[i]);
     }
+}
+
+/** A one-shot registration of a ready object: reported once, then not for
+ * a wake, and again after EPOLL_CTL_MOD turns it on. */
+static void one_shot(void)
+{
+    static struct model m;
+    int ep = create();
+    int fd = open_model(&m, POLLIN);
+
+    CHECK(add(ep, fd, EPOLLIN | EPOLLONESHOT) == 0 && wait_set(ep) == 1,
+          "a one-shot registration reports once");
+    wq_wake(&m.wq, WQ_DATA);
+    CHECK(wait_set(ep) == 0, "a one-shot registration that reported ignores a wake");
+    CHECK(ctl(ep, EPOLL_CTL_MOD, fd, EPOLLIN | EPOLLONESHOT) == 0 && wait_set(ep) == 1,
+          "EPOLL_CTL_MOD turns a one-shot registration on again");
+    close_fd(fd);
+    close_fd(ep);
+}
+
+/* The objects of the large set's row, and the one of them that turns ready. */
+#define MANY  40
+#define WOKEN 17
+
+/**
+ * A set of MANY registrations, one ready: each wait polls only the
+ * registrations on the ready list, which a level-triggered report keeps
+ * there and a wake puts there, and one found not ready leaves it.
+ */
+static void large_set(void)
+{
+    static struct model m[MANY];
+    int fd[MANY];
+    int ep = create();
+    int i;
+
+    for (i = 0; i < MANY; i++) {
+        fd[i] = open_model(&m[i], i == 0 ? POLLIN : 0);
+        CHECK(fd[i] >= 0 && add(ep, fd[i], EPOLLIN) == 0, "a registration in a large set");
+    }
+    polls = 0;
+    CHECK(wait_set(ep) == 1 && polls == 1, "a wait over a large set polls its one ready entry");
+    m[WOKEN].ready = POLLIN;
+    wq_wake(&m[WOKEN].wq, WQ_DATA);
+    polls = 0;
+    CHECK(wait_set(ep) == 2 && polls == 2, "a wake puts its registration on the ready list");
+    m[WOKEN].ready = 0;
+    polls = 0;
+    CHECK(wait_set(ep) == 1 && polls == 2, "a registration no longer ready is polled once more");
+    polls = 0;
+    CHECK(wait_set(ep) == 1 && polls == 1, "and leaves the ready list");
+    for (i = 0; i < MANY; i++) {
+        close_fd(fd[i]);
+    }
+    close_fd(ep);
+}
+
+/* The model sleepers of epoll_wait on two sets, and the wakes of each. */
+static struct wq_waiter sleepers[2];
+static int sleeper_wakes[2];
+
+/** The wake of a model sleeper of epoll_wait: counted, and woken, so an
+ * exclusive turn ends with it. */
+static int sleeper_wake(struct wq_waiter *w, uint32_t kinds, unsigned int nest, uint64_t *cpus)
+{
+    (void)kinds;
+    (void)nest;
+    (void)cpus;
+    sleeper_wakes[w - sleepers]++;
+    return 1;
+}
+
+/**
+ * An object that two sets watch with EPOLLEXCLUSIVE, as Linux's: with a
+ * sleeper on each set, a wake for data wakes one sleeper and readies one
+ * set; with none, it readies both. EPOLLEXCLUSIVE with EPOLL_CTL_MOD, with
+ * a set, or with EPOLLPRI, is EINVAL.
+ */
+static void exclusive(void)
+{
+    static struct model m;
+    static process_t sleeper;
+    int ep[2], i;
+    int fd = open_model(&m, 0);
+
+    for (i = 0; i < 2; i++) {
+        ep[i] = create();
+        CHECK(add(ep[i], fd, EPOLLIN | EPOLLEXCLUSIVE) == 0, "an exclusive registration");
+        sleepers[i].proc = &sleeper;
+        sleepers[i].func = sleeper_wake;
+        sleepers[i].flags = WQ_EXCLUSIVE;
+        wq_entry_add(&((struct epoll *)slot(ep[i])->priv)->wq, &sleepers[i]);
+    }
+    m.ready = POLLIN;
+    wq_wake(&m.wq, WQ_DATA);
+    CHECK(sleeper_wakes[0] + sleeper_wakes[1] == 1, "an exclusive wake wakes one sleeper");
+    CHECK(wait_set(ep[0]) + wait_set(ep[1]) == 1, "an exclusive wake readies one set");
+    for (i = 0; i < 2; i++) {
+        wq_entry_remove(&sleepers[i]);
+    }
+    wq_wake(&m.wq, WQ_DATA);
+    CHECK(wait_set(ep[0]) == 1 && wait_set(ep[1]) == 1,
+          "an exclusive wake with no sleeper readies every set");
+    CHECK(ctl(ep[0], EPOLL_CTL_MOD, fd, EPOLLIN) == -EINVAL,
+          "EPOLL_CTL_MOD of an exclusive registration is EINVAL");
+    CHECK(ctl(ep[0], EPOLL_CTL_DEL, fd, 0) == 0 && add(ep[0], fd, EPOLLIN) == 0 &&
+              ctl(ep[0], EPOLL_CTL_MOD, fd, EPOLLIN | EPOLLEXCLUSIVE) == -EINVAL,
+          "EPOLL_CTL_MOD to EPOLLEXCLUSIVE is EINVAL");
+    CHECK(add(ep[0], ep[1], EPOLLIN | EPOLLEXCLUSIVE) == -EINVAL,
+          "EPOLLEXCLUSIVE with a set is EINVAL");
+    close_fd(fd);
+    fd = open_model(&m, 0);
+    CHECK(add(ep[0], fd, EPOLLIN | EPOLLPRI | EPOLLEXCLUSIVE) == -EINVAL,
+          "EPOLLEXCLUSIVE with EPOLLPRI is EINVAL");
+    close_fd(fd);
+    close_fd(ep[0]);
+    close_fd(ep[1]);
 }
 
 /**
@@ -766,6 +838,9 @@ int main(void)
     nest_after_close();
     kept_open();
     nest_forked();
+    one_shot();
+    large_set();
+    exclusive();
     printf("epoll-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }
