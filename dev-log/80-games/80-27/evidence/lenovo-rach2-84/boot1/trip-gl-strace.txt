@@ -1,0 +1,4 @@
+adapter: Mesa Intel(R) HD Graphics 4400 (HSW GT2) vendor 0x8086 device 0x0a16
+feature level: 0xb000
+tripprobe: 1000 round trips in 3718.6 ms, last pixel 0 255 0 255, 0 wrong
+TRIP OK
