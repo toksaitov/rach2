@@ -115,12 +115,15 @@ extern uint32_t host_free_frames;
 static char last_warn[160];
 /* The last record of the mount's check, which precedes a read-only reason. */
 static char last_check[160];
+/* Every record of the mount's check since a row last emptied it, each line
+   ended by a newline, as many as fit. */
+static char check_log[1024];
 extern int vsnprintf(char *s, unsigned long n, const char *fmt, __builtin_va_list ap);
 
 /**
  * Keep the record in `last_log`; a record at warning level (4) also in
  * `last_warn`, and a record of the mount's check, which begins "check: ",
- * also in `last_check`.
+ * also in `last_check` and at the end of `check_log`.
  */
 void klog(int level, const char *sys, const char *fmt, ...)
 {
@@ -134,7 +137,14 @@ void klog(int level, const char *sys, const char *fmt, ...)
         __builtin_memcpy(last_warn, last_log, sizeof(last_warn));
     }
     if (memcmp(last_log, "check: ", 7) == 0) {
+        unsigned long used = strlen(check_log), len = strlen(last_log);
+
         __builtin_memcpy(last_check, last_log, sizeof(last_check));
+        if (used + len + 2 <= sizeof(check_log)) {
+            __builtin_memcpy(check_log + used, last_log, len);
+            check_log[used + len] = '\n';
+            check_log[used + len + 1] = 0;
+        }
     }
 }
 
@@ -5642,11 +5652,12 @@ static int copy_file(const char *src, const char *dst)
 
 /**
  * Whether the mount's check accepts a copy of the crash state in `img`: a
- * writable mount, or a read-only one whose fault is one the order writes
- * in more than one step: a size or an i_blocks after the pointers, and,
- * where `counts_written` says the sequence writes counts apart from their
- * entries, a link count after its entry or a directory's two entries and
- * its `..` across a move.
+ * writable mount whose check finds no fault, or, where `counts_written`
+ * says the sequence writes counts apart from their entries, only a fault
+ * the order writes in more than one step: a link count after its entry or
+ * a directory's two entries and its `..` across a move. A file's size or
+ * `i_blocks` behind its pointers the check keeps for e2fsck, and a bit
+ * behind a pointer it sets, so neither is a fault.
  */
 static int check_accepts(const char *img, uint64_t bytes, int counts_written)
 {
@@ -5657,29 +5668,24 @@ static int check_accepts(const char *img, uint64_t bytes, int counts_written)
         "a directory with two parents",
         "a second entry that is not the parent",
     };
-    static const char *const sizes[] = {
-        "a block past the size",
-        "a pointer block past the size",
-        "i_blocks that does not match its pointers",
-    };
-    int ok, i;
+    int ok, faulted, i;
 
     if (!copy_file(img, fix_path("check.ext2"))) {
         return 0;
     }
     use_image(fix_path("check.ext2"), bytes);
     last_check[0] = 0;
+    last_warn[0] = 0;
     if (mount_image() != 0) {
         printf("  the check refused the stop: %s\n", last_warn);
         return 0;
     }
-    ok = (mnt.flags & VFS_MS_RDONLY) == 0;
-    for (i = 0; !ok && i < 3; i++) {
-        ok = strstr(last_check, sizes[i]) != 0;
-    }
+    faulted = streq(last_warn, "mounting with errors, running e2fsck is recommended");
+    ok = !faulted;
     for (i = 0; !ok && counts_written && i < 5; i++) {
         ok = strstr(last_check, counts[i]) != 0;
     }
+    ok = ok && (mnt.flags & VFS_MS_RDONLY) == 0;
     if (!ok) {
         printf("  the check found: %s\n", last_check);
     }
@@ -5900,12 +5906,15 @@ static void fault_row(const char *img, const char *script, const char *fault, co
  * - a lost block is kept out of the allocator's reach and the error bit
  *   stays set, through a mount and an unmount, until `e2fsck -p` repairs
  *   it;
- * - an orphan inode is kept whole, with its blocks, for e2fsck;
- * - each fault (a used block marked free, a block claimed twice, a reached
- *   inode marked free, wrong link counts, a directory with two parents, a
- *   size or i_blocks behind its pointers, an entry of the wrong form) is
- *   named and mounts writable with the error bit set, as Linux mounts a
- *   volume with errors;
+ * - an orphan inode is kept whole, with its blocks, for e2fsck, and a block
+ *   of its that the bitmap calls free has its bit set;
+ * - a regular file's size or i_blocks behind its pointers is kept for
+ *   e2fsck, counted, with the error bit set;
+ * - each fault (a block claimed twice, a reached inode marked free, wrong
+ *   link counts, a directory with two parents, a directory's i_blocks that
+ *   does not match its pointers, an entry of the wrong form, a block of the
+ *   volume's tables marked free) is named and mounts writable with the
+ *   error bit set, as Linux mounts a volume with errors;
  * - a read-only mount runs no check and writes nothing.
  */
 static int lost_block_reported(void)
@@ -5920,6 +5929,61 @@ static int orphan_reported(long ino)
     snprintf(text, sizeof text, "Unattached inode %ld", ino);
     return ext2_fixture_contains(fix_path("fsck.out"), text) &&
            !ext2_fixture_contains(fix_path("fsck.out"), "Multiply");
+}
+
+/**
+ * Make a dirty volume whose file /hello.txt has lost its name and the bit
+ * of its block, as a stop leaves a pointer before its bit: the check must
+ * set the bit and count the orphan, and e2fsck after the unmount must find
+ * the orphan kept and no bitmap difference.
+ */
+static void orphan_freed_row(const char *img)
+{
+    char script[128];
+    uint64_t bytes;
+    long blk, ino;
+
+    build_image(img, 4096, 128, PROFILE, 16, "tree");
+    blk = debugfs_number(img, "blocks /hello.txt", "");
+    ino = debugfs_number(img, "stat /hello.txt", "Inode: ");
+    snprintf(script, sizeof(script), "unlink /hello.txt\nunlink /hello.link\nfreeb %ld\n", blk);
+    bytes = dirty_image(img, script);
+    use_image(img, bytes);
+    last_check[0] = 0;
+    check_log[0] = 0;
+    check(blk > 0 && ino > 0 && mount_rw() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 &&
+              strstr(check_log, "check: 1 blocks named by files were free, marked used\n") != 0 &&
+              strstr(last_check, "0 lost blocks, 1 orphan inodes") != 0,
+          "an orphan whose block the bitmap calls free mounts writable with the bit set");
+    check(unmount_rw() == 0 && disk_state(img) == 2 && e2fsck_status(img) == 4 &&
+              orphan_reported(ino) &&
+              !ext2_fixture_contains(fix_path("fsck.out"), "Block bitmap differences"),
+          "and e2fsck finds the bit set and the orphan kept");
+}
+
+/**
+ * Make a dirty volume with `script` applied, which leaves /dir/big.bin with
+ * a size or i_blocks behind its pointers, and require the check to count
+ * the file and keep it for e2fsck, with no fault, the mount writable and
+ * the error bit set through the unmount; e2fsck then names the file with
+ * `finding`.
+ */
+static void kept_size_row(const char *img, const char *script, const char *finding,
+                          const char *what)
+{
+    uint64_t bytes = dirty_image(img, script);
+
+    use_image(img, bytes);
+    last_check[0] = 0;
+    last_warn[0] = 0;
+    check(mount_rw() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 &&
+              strstr(last_check, "check: 1 files with a size or i_blocks that does not match their "
+                                 "blocks, kept for e2fsck") != 0 &&
+              !streq(last_warn, "mounting with errors, running e2fsck is recommended"),
+          what);
+    check(unmount_rw() == 0 && disk_state(img) == 2 && e2fsck_status(img) == 4 &&
+              ext2_fixture_contains(fix_path("fsck.out"), finding),
+          "and its unmount keeps the error bit, and e2fsck finds the file");
 }
 
 /**
@@ -6210,11 +6274,7 @@ static void dirty_rows(void)
               orphan_reported(ino),
           "and filling the volume leaves the orphan and its blocks to e2fsck");
 
-    bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
-    blk = debugfs_number(img, "blocks /hello.txt", "");
-    snprintf(script, sizeof(script), "unlink /hello.txt\nunlink /hello.link\nfreeb %ld\n", blk);
-    fault_row(img, script, "a used block the bitmap calls free",
-              "an orphan whose block the bitmap calls free mounts writable with errors");
+    orphan_freed_row(img);
     if (host_read(img, b, 4, 4096 + 8) == 4) {
         table = b[0] | (b[1] << 8) | (b[2] << 16) | ((long)b[3] << 24);
         snprintf(script, sizeof(script), "sif /dir/big.bin block[0] %ld\n", table);
@@ -6233,10 +6293,12 @@ static void dirty_rows(void)
     fault_row(img, "link /dir/sub /many/twice\nsif /many links_count 3\n",
               "a directory with two parents",
               "a directory named twice mounts writable with errors");
-    fault_row(img, "sif /dir/big.bin size 100\n", "past the size",
-              "a size behind its pointers mounts writable with errors");
-    fault_row(img, "sif /dir/big.bin i_blocks 8\n", "i_blocks that does not match its pointers",
-              "an i_blocks behind its pointers mounts writable with errors");
+    kept_size_row(img, "sif /dir/big.bin size 100\n", "i_size is",
+                  "a file's size behind its pointers is kept for e2fsck");
+    kept_size_row(img, "sif /dir/big.bin i_blocks 8\n", "i_blocks is",
+                  "a file's i_blocks behind its pointers is kept for e2fsck");
+    fault_row(img, "sif /dir i_blocks 64\n", "i_blocks that does not match its pointers",
+              "a directory's i_blocks above its pointers mounts writable with errors");
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
     root_block = debugfs_number(img, "blocks /", "");
     if (root_block > 0) {
