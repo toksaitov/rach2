@@ -8,18 +8,24 @@
 # exclusively for its whole life and that no child keeps, so that a looker
 # tells a live supervisor from a RECORD that a killed one left by probing the
 # lock, never by a number; a supervisor that cannot take it, since another
-# holds it, exits 125 having started nothing. It then leaves the loop's
-# process group, so a hangup that ends the loop reaches neither it nor the
-# session. It forks the
-# group's leader, the anchor: a child that leads a group of its own, whose id
-# is the anchor's pid, ignores HUP, INT and TERM, and exits once the
-# supervisor closes the pipe to it or dies. It then forks the session into
-# that group and writes the group's id to RECORD. Only then, with the limit
-# set, does it let the session exec COMMAND: a session runs only once its
-# group is recorded and its limit is set, and when the record cannot be
-# written, or the supervisor dies first, the child exits without running
-# COMMAND, as it does when a TERM, an INT or RECORD.stop came before its go;
-# the supervisor then exits as for a stop, below.
+# holds it, exits 125 having started nothing. A RECORD that exists once it
+# holds the lock was left by a supervisor that was killed, whose session may
+# still run: it removes RECORD only once the boot RECORD names is not this
+# one, or a ps that succeeds shows no process in the group RECORD names, and
+# otherwise exits 125 having started nothing, as the loop's short-session
+# wait then tries again. It then leaves the loop's process group, so a hangup
+# that ends the loop reaches neither it nor the session. It forks the group's
+# leader, the anchor: a child that leads a group of its own, whose id is the
+# anchor's pid, ignores HUP, INT and TERM, and exits once the supervisor
+# closes the pipe to it or dies. It then forks the session into that group
+# and writes `GROUP BOOT` to RECORD, the group's id and the ID of this boot,
+# /proc/sys/kernel/random/boot_id on Linux and `sysctl -n
+# kern.bootsessionuuid` on the Mac, or `-` when it cannot be read. Only then,
+# with the limit set, does it let the session exec COMMAND: a session runs
+# only once its group is recorded and its limit is set, and when the record
+# cannot be written, or the supervisor dies first, the child exits without
+# running COMMAND, as it does when a HUP, INT, TERM or RECORD.stop came
+# before its go; the supervisor then exits as for a stop, below.
 #
 # Every signal to the group goes while the anchor is an unreaped child of
 # the supervisor, so the group's number is still the anchor's and has passed
@@ -31,20 +37,21 @@
 # A session still running after LIMIT seconds gets TERM, its whole group, and
 # KILL thirty turns later if any of it is left, so that a child that outlives
 # the TERM, such as an emulator, does not outlive the session, and the
-# supervisor exits 124. A TERM or INT sent to the supervisor stops the session's
-# group the same way, and the supervisor exits 128 plus the signal's number only
-# once the group is gone, so that a stop of either group stops the session
-# before the loop can start another. So does RECORD.stop, which stop.sh leaves
-# so that no signal of its own goes to the supervisor, whose number only the
-# loop holds; the supervisor then exits 143, and the loop removes the file
-# before it starts the next session. A session that ends by itself gives its
-# status, as sh reports one, and the processes it left in its group are logged
-# to LOG and stopped the same way: a session should leave none, and one it
-# leaves, such as a `tests/run` that holds the clone's run lock, would keep the
-# next session's suite from running. A process that outlives the KILL keeps the
-# supervisor, the anchor and RECORD until it is gone, as LOG notes. The
-# supervisor removes RECORD once the group is gone. It exits 125 when it could
-# not start the session.
+# supervisor exits 124. A HUP, INT or TERM sent to the supervisor stops the
+# session's group the same way, and the supervisor exits 128 plus the signal's
+# number only once the group is gone, so that a stop of either group stops the
+# session before the loop can start another; only a KILL can end the
+# supervisor first, which leaves RECORD. So does RECORD.stop, which stop.sh
+# leaves so that no signal of its own goes to the supervisor, whose number
+# only the loop holds; the supervisor then exits 143, and the loop removes the
+# file before it starts the next session. A session that ends by itself gives
+# its status, as sh reports one, and the processes it left in its group are
+# logged to LOG and stopped the same way: a session should leave none, and one
+# it leaves, such as a `tests/run` that holds the clone's run lock, would keep
+# the next session's suite from running. A process that outlives the KILL
+# keeps the supervisor, the anchor and RECORD until it is gone, as LOG notes.
+# The supervisor removes RECORD once the group is gone. It exits 125 when it
+# could not start the session.
 
 use strict;
 use warnings;
@@ -62,28 +69,75 @@ sub note
     close($f);
 }
 
-# Write GROUP to RECORD through a new file and a rename, so that a reader
-# finds the old record or the whole new one; return whether all of it worked.
+# boot: return the ID of this boot, as the header says, or `-`.
+sub boot
+{
+    my $b;
+    if (open(my $f, '<', '/proc/sys/kernel/random/boot_id')) {
+        $b = <$f>;
+    } elsif ($^O eq 'darwin') {
+        $b = `/usr/sbin/sysctl -n kern.bootsessionuuid 2> /dev/null`;
+        $b = undef if $? != 0;
+    }
+    chomp $b if defined $b;
+    return defined $b && $b =~ /^\S+$/ ? $b : '-';
+}
+
+# Write `GROUP BOOT` to RECORD through a new file and a rename, so that a
+# reader finds the old record or the whole new one; return whether all of it
+# worked.
 sub save
 {
     my $group = shift;
     open(my $f, '>', "$record.new") or return 0;
-    print $f "$group\n" or return 0;
+    print $f "$group ", boot(), "\n" or return 0;
     close($f) or return 0;
     return rename("$record.new", $record);
 }
 
+# gone GROUP BOOT: return whether nothing of the session that a killed
+# supervisor recorded as GROUP BOOT can still run, as the header says.
+sub gone
+{
+    my ($group, $then) = @_;
+    my $now = boot();
+    return 1 if defined $then && $then ne '-' && $now ne '-' && $then ne $now;
+    return 0 unless defined $group && $group =~ /^\d+$/;
+    my @ps = `ps -A -o pgid=`;
+    return 0 if $? != 0;
+    return !grep { /^\s*(\d+)\s*$/ && $1 == $group } @ps;
+}
+
 my ($signal, $expired);
-for my $name ('TERM', 'INT') {
+for my $name ('HUP', 'TERM', 'INT') {
     $SIG{$name} = sub { $signal //= $name };
 }
 $SIG{ALRM} = sub { $expired = 1 };
+my %number = (HUP => POSIX::SIGHUP, INT => POSIX::SIGINT, TERM => POSIX::SIGTERM);
 
 # The lock, which Perl closes on exec and the anchor closes at its start.
 my $live;
 if (!sysopen($live, "$record.live", O_RDWR | O_CREAT, 0644) || !flock($live, LOCK_EX | LOCK_NB)) {
     note("$record.live cannot be taken: $!; another supervisor may run; not starting the session");
     exit 125;
+}
+
+# A record that a killed supervisor left.
+if (-e $record) {
+    my ($group, $then);
+    if (open(my $f, '<', $record)) {
+        ($group, $then) = split(' ', <$f> // '');
+    }
+    if (!gone($group, $then)) {
+        note("$record names group " . ($group // '?') . " of a supervisor that was killed, which " .
+            "may still run; not starting the session");
+        exit 125;
+    }
+    note("the group " . ($group // '?') . " that $record names is gone; removing it");
+    if (!unlink($record)) {
+        note("$record cannot be removed: $!; not starting the session");
+        exit 125;
+    }
 }
 
 setpgrp(0, 0) or die "session: setpgrp: $!\n";
@@ -125,7 +179,7 @@ if (!defined $pid) {
 if ($pid == 0) {
     close($go_w);
     close($hold_w);
-    $SIG{$_} = 'DEFAULT' for qw(TERM INT ALRM);
+    $SIG{$_} = 'DEFAULT' for qw(HUP TERM INT ALRM);
     setpgrp(0, $group);
     sysread($go_r, my $go, 1) == 1 or POSIX::_exit(125);
     close($go_r);
@@ -158,7 +212,7 @@ if (defined $signal || -e "$record.stop") {
     waitpid($pid, 0);
     unlink($record);
     note("session group $group stopped before it started");
-    end(128 + (($signal // 'TERM') eq 'INT' ? POSIX::SIGINT : POSIX::SIGTERM));
+    end(128 + $number{$signal // 'TERM'});
 }
 alarm($limit);
 syswrite($go_w, 'x', 1);
@@ -201,7 +255,7 @@ alarm(0);
 unlink($record);
 if (defined $signal) {
     note("session group $group stopped on SIG$signal");
-    end(128 + ($signal eq 'TERM' ? POSIX::SIGTERM : POSIX::SIGINT));
+    end(128 + $number{$signal});
 }
 end(124) if $expired;
 if ($asked) {

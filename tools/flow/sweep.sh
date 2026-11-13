@@ -23,8 +23,10 @@
 # that no copy uses. It runs `tidy` in each worker's clone too, since a loop
 # tidies only while it runs. `outputs` removes what a build or a run makes
 # again and what nothing needs once its run has ended: in each tree on the
-# testing host where no session's supervisor holds STATE/session.live, the
-# images, test output and scratch unchanged for a day, but
+# testing host where no session's supervisor holds STATE/session.live and
+# no STATE/session is left, which a killed supervisor leaves while its
+# session may still run, the images, test output and scratch unchanged for a
+# day, but
 # `build/tests/failed`, and the run files of
 # `build/runs` unchanged for two weeks; on Windows the test collections,
 # tooling job directories, case images and scratch, the old shared TMPDIR of
@@ -96,7 +98,7 @@ outputs()
         printf '%s\n' "$stale"
         for h in $HOMES; do
             b=$h/rach2/build
-            printf '%s\n' "busy $b/flow/claude/session.live || stale $days $b/images/* $b/x86_64/images/*" \
+            printf '%s\n' "busy $b/flow/claude/session.live || [ -e $b/flow/claude/session ] || stale $days $b/images/* $b/x86_64/images/*" \
                 "$b/i686/images/* $b/tests/* $b/x86_64/tests/* $b/i686/tests/* $b/tmp/*" |
                 paste -s -d ' ' -
             echo "stale 14 $b/runs/*"
