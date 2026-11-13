@@ -2305,6 +2305,111 @@ static int claim_rows(struct release *r)
     return ok;
 }
 /*
+ * The driver of hold_rows: it runs tools/flow/hold.pl on a run directory of
+ * its own, DIR/run, made new for each scenario, and prints what scenario
+ * SCENARIO saw. The `fast` scenario's job is forked as release.sh's `held`
+ * forks one, behind the gate DIR/run/go, and a perl that sleeps a second
+ * stands between the fork and hold.pl, so that a job that could end at once
+ * would have ended before its holder ran. The `lost` scenario's holder is
+ * killed by the perl whose unreaped child it is. Usage: sh driver DIR HOLD
+ * SCENARIO.
+ */
+static const char hold_driver[] =
+    "H=$1 P=$2 how=$3\n"
+    "d=$H/run\n"
+    "rm -rf \"$d\" \"$H/ran\" \"$H/ready\"\n"
+    "mkdir \"$d\" || exit 1\n"
+    "look() { perl \"$P\" state \"$d\"; }\n"
+    "pause() { perl -e 'select(undef, undef, undef, 0.1)'; }\n"
+    "case $how in\n"
+    "early)\n"
+    "    : > \"$d/stop\"\n"
+    "    perl \"$P\" run \"$d\" sh -c ': > \"$1/ran\"' sh \"$H\"\n"
+    "    echo \"status $?\"\n"
+    "    look\n"
+    "    [ -e \"$H/ran\" ] || echo 'ran nothing' ;;\n"
+    "fast | gated)\n"
+    "    mkfifo \"$d/go\" || exit 1\n"
+    "    [ \"$how\" != gated ] || : > \"$d/stop\"\n"
+    "    (\n"
+    "        { IFS= read -r g < \"$d/go\" && [ \"$g\" = go ] || exit 143; : > \"$H/ran\"; exit 3; "
+    "} &\n"
+    "        exec 6<> \"$d/go\"\n"
+    "        exec perl -e 'sleep 1; exec @ARGV' perl \"$P\" run \"$d\" -p \"$!\" < /dev/null\n"
+    "    )\n"
+    "    echo \"status $?\"\n"
+    "    look\n"
+    "    [ -e \"$H/ran\" ] || echo 'ran nothing' ;;\n"
+    "kill)\n"
+    "    perl \"$P\" run -k 1 \"$d\" perl -e '$SIG{TERM} = \"IGNORE\"; open(R, \">\", shift) && "
+    "close(R); sleep 60' \"$H/ready\" &\n"
+    "    i=0\n"
+    "    until [ -e \"$H/ready\" ] || [ \"$i\" -ge 150 ]; do i=$((i + 1)); pause; done\n"
+    "    perl \"$P\" stop \"$d\" 30\n"
+    "    echo \"stop $?\" ;;\n"
+    "again)\n"
+    "    perl \"$P\" run \"$d\" true\n"
+    "    perl \"$P\" run \"$d\" true 2> /dev/null\n"
+    "    echo \"status $?\"\n"
+    "    look ;;\n"
+    "lost)\n"
+    "    perl -e 'my $c = fork(); defined $c or exit 1; if (!$c) { exec @ARGV or exit 127 }\n"
+    "        for (1 .. 150) { last if -e \"$ENV{RUN}/live\"; select(undef, undef, undef, 0.1) }\n"
+    "        kill(\"KILL\", $c); waitpid($c, 0)' perl \"$P\" run \"$d\" sleep 2\n"
+    "    look ;;\n"
+    "esac\n";
+/** Run hold_driver's SCENARIO, and succeed when it printed WANT whole. */
+static int hold_saw(struct release *r, const char *scenario, const char *want)
+{
+    struct fixture *f = r->f;
+    const char *a[] = {"/bin/sh", NULL, NULL, NULL, scenario, NULL};
+    a[1] = flow_path(f, "hold/driver");
+    a[2] = flow_path(f, "hold");
+    a[3] = flow_source(f, "tools/flow/hold.pl");
+    fx_env("RUN", flow_path(f, "hold/run"));
+    fx_run(f, a, f->work, NULL, NULL);
+    fx_env("RUN", NULL);
+    if (f->out && !strcmp(f->out, want))
+        return 1;
+    fprintf(stderr, "hold: %s printed:\n%s", scenario, f->out ? f->out : "");
+    return 0;
+}
+/**
+ * hold.pl's own protocol, on a run directory of its own: a stop that exists
+ * before the start runs nothing and ends 143 (j141 2); a job behind held's
+ * gate cannot end before its holder runs, so a fast job's status is its own
+ * and not 127 (j141 4), and a stop before the gate opens runs nothing; a job
+ * that ignores TERM ends by the KILL of -k, and hold.pl stop waits for it
+ * (medium 3); a second holder of the same directory is refused and its
+ * `end` stays the first one's (j141 3); and a holder killed outright reads
+ * lost.
+ */
+static int hold_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    int ok;
+    fx_remove(flow_path(f, "hold"));
+    if (!flow_put(f, "hold/driver", hold_driver))
+        return check(r, 0, "the hold rows' files are written");
+    ok = check(r, hold_saw(r, "early", "status 143\nended 143\nran nothing\n"),
+               "a stop that exists before the start runs nothing, and the run ends 143");
+    ok = check(r, hold_saw(r, "fast", "status 3\nended 3\n"),
+               "a job behind held's gate that ends at once ends with its own status") &&
+         ok;
+    ok = check(r, hold_saw(r, "gated", "status 143\nended 143\nran nothing\n"),
+               "a stop before the gate opens runs nothing behind it") &&
+         ok;
+    ok = check(r, hold_saw(r, "kill", "ended 137\nstop 0\n"),
+               "a job that ignores TERM ends by the KILL of -k, which hold.pl stop waits for") &&
+         ok;
+    ok = check(r, hold_saw(r, "again", "status 125\nended 0\n"),
+               "a second holder of a run's directory is refused and leaves the first end") &&
+         ok;
+    ok = check(r, hold_saw(r, "lost", "lost\n"), "a holder killed outright reads lost") && ok;
+    fx_remove(flow_path(f, "hold"));
+    return ok;
+}
+/*
  * The driver of observer_rows: it runs release.sh's windows_detach, with its
  * jobs under DIR/tools/flow/hold.pl, the
  * start read as started and each poll run here by sh, or sweep.sh's outputs,
@@ -3023,6 +3128,7 @@ static int windows_rows(struct release *r)
     ok = windows_hold_rows(r) && ok;
     ok = windows_stop_rows(r) && ok;
     ok = claim_rows(r) && ok;
+    ok = hold_rows(r) && ok;
     ok = observer_rows(r) && ok;
     ok = winclean_rows(r) && ok;
     ok = stop_rows(r) && ok;
