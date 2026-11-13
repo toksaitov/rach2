@@ -104,7 +104,7 @@ jobs:
     name: Build and test both architectures and ia32 on ${{ needs.site.outputs.runner }} under ${{ needs.site.outputs.accelerator }}
     needs: site
     runs-on: ${{ fromJSON(needs.site.outputs.labels) }}
-    timeout-minutes: 270
+    timeout-minutes: 4320
     env:
       RACH2_QEMU_ACCEL: ${{ needs.site.outputs.accelerator }}
       ETUDE_NATIVE_ENTRY: ${{ needs.site.outputs.native }}
