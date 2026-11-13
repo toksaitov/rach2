@@ -92,7 +92,9 @@ struct eb_hold {
  * index by its handle, open addressed with `lut_mask + 1` slots that hold
  * index + 1, NULL with I915_EXEC_HANDLE_LUT, where relocations name the
  * index itself. `has_reloc` is set while relocations must be applied and,
- * once the objects are placed, while their offsets go back to the program.
+ * once the objects are placed, while their offsets go back to the program;
+ * `relocs_in` once the relocations are copied in, which with
+ * I915_EXEC_NO_RELOC waits until an object moves.
  * `shadow` is the parser's copy of the batch, with a reference, and
  * `shadow_vma` its pinned binding, which run in the batch's place. `hold`
  * goes to the request.
@@ -111,6 +113,7 @@ struct eb {
     uint32_t batch_len;
     uint32_t dispatch;
     uint8_t has_reloc;
+    uint8_t relocs_in;
     struct i915_gem_context *ctx;
     struct intel_context *ce;
     struct eb_fence *fences;
@@ -685,6 +688,7 @@ static int32_t eb_relocs_copy(struct eb *eb)
             return -EFAULT;
         }
     }
+    eb->relocs_in = 1;
     return 0;
 }
 
@@ -1543,17 +1547,33 @@ static void eb_release(struct eb *eb)
     kfree(eb->lut);
 }
 
+/* What `eb_locked` returns when an object moved before the relocations
+ * were copied in. */
+#define EB_COPY_RELOCS 1
+
 /**
  * The part of the call under the GEM lock, `err` the error of what came
  * before: the objects placed and relocated, the batch checked, and its
  * request built and added. A failure before relocations are done clears
  * `has_reloc`, since a program that presumes offsets must not see new ones
  * in its entries.
+ *
+ * @return 0; an error; or EB_COPY_RELOCS, with every pin let go, when an
+ *         object moved under I915_EXEC_NO_RELOC, whose relocations the
+ *         caller copies in with the lock let go before it calls again.
  */
 static int32_t eb_locked(struct eb *eb, int32_t err, struct dma_fence *in, int32_t out_fd)
 {
+    uint32_t i;
+
     if (err == 0) {
         err = eb_reserve(eb);
+    }
+    if (err == 0 && eb->has_reloc && !eb->relocs_in) {
+        for (i = 0; i < eb->count; i++) {
+            eb_unpin(&eb->ev[i]);
+        }
+        return EB_COPY_RELOCS;
     }
     if (err == 0) {
         err = eb_relocate(eb);
@@ -1572,10 +1592,16 @@ static int32_t eb_locked(struct eb *eb, int32_t err, struct dma_fence *in, int32
  * The call once its objects' entries are copied in, as Linux's
  * i915_gem_do_execbuffer: secure batches, extensions, the fence array and
  * the in-fence checked, the out-fence's descriptor kept, the context and
- * its state on the engine found, the objects looked up and their
+ * its state on the engine found, the objects looked up and, unless
+ * I915_EXEC_NO_RELOC says the program's offsets are right, their
  * relocations copied in, all before the GEM lock is taken, as Linux's
  * (gem/i915_gem_execbuffer.c:3438-3450); then `eb_locked`'s part and the
- * call's release under it, and the out-fence's descriptor after.
+ * call's release under it, and the out-fence's descriptor after. With
+ * I915_EXEC_NO_RELOC the relocations are read only when an object has
+ * moved, as Linux's eb_relocate_parse reads them only then
+ * (gem/i915_gem_execbuffer.c:1912-1924): the lock is let go for the copy
+ * and the objects are placed again, as its eb_relocate_parse_slow does
+ * (gem/i915_gem_execbuffer.c:1779-1821).
  */
 static int32_t eb_do(struct eb *eb)
 {
@@ -1621,11 +1647,17 @@ static int32_t eb_do(struct eb *eb)
     if (err == 0) {
         err = eb_lookup(eb);
     }
-    if (err == 0) {
+    if (err == 0 && eb->has_reloc) {
         err = eb_relocs_copy(eb);
     }
     taken = i915_gem_lock(eb->i915);
     err = eb_locked(eb, err, in, out_fd);
+    if (err == EB_COPY_RELOCS) {
+        i915_gem_unlock(eb->i915, taken);
+        err = eb_relocs_copy(eb);
+        taken = i915_gem_lock(eb->i915);
+        err = eb_locked(eb, err, in, out_fd);
+    }
     eb_release(eb);
     i915_gem_unlock(eb->i915, taken);
     /* The out-fence's descriptor goes in after the lock, as Linux's
