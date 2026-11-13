@@ -117,6 +117,9 @@ struct i915_uncore {
     uint32_t active;      /* a reference was taken or dropped since the timer
                            * was armed, so that it runs once more before it
                            * lets go */
+    uint32_t gone;        /* the device is being torn down: forcewake is
+                           * released, references are revoked, and no
+                           * GT register is read through forcewake again */
 };
 
 /*
@@ -1606,7 +1609,7 @@ void i915_uncore_init(struct drm_i915_private *i915);
  * @return 0, or -ETIMEDOUT when an acknowledgement did not come, with the
  *         wait's name, "forcewake ack clear" or "forcewake ack", in
  *         `hw.last_timeout`; then no reference is held and the request is
- *         withdrawn.
+ *         withdrawn. -ENODEV once `i915_uncore_fini` has run.
  */
 int32_t i915_forcewake_get(struct drm_i915_private *i915);
 
@@ -1634,8 +1637,13 @@ uint32_t i915_uncore_read(struct drm_i915_private *i915, uint32_t reg);
  * `i915_tick`, with interrupts off; takes the register lock. */
 void i915_uncore_tick(struct drm_i915_private *i915);
 
-/** Disarm the release timer at once, withdrawing the request unless a
- * reference is held, for an unbind, after which no tick serves the device. */
+/** Withdraw the kernel's request at once and revoke every reference,
+ * the timer's and any a holder such as debugfs's i915_forcewake_user still
+ * keeps, as Linux's intel_uncore_forcewake_reset at teardown. Afterwards a
+ * get fails with -ENODEV, a put does nothing and a GT register reads all
+ * ones. For an unbind or a failed bind, after the last access to the GT
+ * and before the registers are unmapped, since no tick serves the device
+ * once it is out of the table. */
 void i915_uncore_fini(struct drm_i915_private *i915);
 
 /**

@@ -392,6 +392,23 @@ static void row_forcewake_timer(void)
               i915_model_forcewake(&m)->req == 0);
     i915_uncore_fini(i915);
     CHECK("fini: with no timer armed, nothing", i915->uncore.wake_count == 0);
+    i915_uncore_init(i915);
+    CHECK("fini: a reference held, as debugfs's i915_forcewake_user holds one",
+          i915_forcewake_get(i915) == 0 && i915_model_forcewake(&m)->req == 1u);
+    i915_uncore_fini(i915);
+    CHECK("fini: the held reference revoked and the request released at once",
+          i915->uncore.wake_count == 0 && i915->uncore.timer_ticks == 0 &&
+              i915_model_forcewake(&m)->req == 0);
+    i915_forcewake_put(i915);
+    i915_uncore_tick(i915);
+    i915_uncore_tick(i915);
+    CHECK("fini: the holder's later put and the ticks change nothing",
+          i915->uncore.wake_count == 0 && i915->uncore.timer_ticks == 0 &&
+              i915_model_forcewake(&m)->req == 0);
+    CHECK("fini: a get refused, a GT register all ones, the GT not woken",
+          i915_forcewake_get(i915) == -ENODEV &&
+              i915_uncore_read(i915, RING_TIMESTAMP(RENDER_RING_BASE)) == 0xffffffffu &&
+              i915->uncore.wake_count == 0 && i915_model_forcewake(&m)->req == 0);
     done(&m);
 }
 
