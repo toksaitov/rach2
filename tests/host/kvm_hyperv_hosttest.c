@@ -173,7 +173,7 @@ void arch_relax(void)
 /* The clocks: the host's ns, and a TSC of 2.4 GHz from `tsc_base`. */
 static uint64_t mono_ns = 5000000000ull;
 static const uint64_t tsc_base = 777;
-static uint32_t tsc_per_tick = 2400000u;
+static uint32_t tsc_per_tick = 2400000000u / TICK_HZ;
 
 uint64_t kvm_host_ns(void)
 {
@@ -791,7 +791,7 @@ static void tsc_rows(struct kvm_vcpu *v)
           "no TSC rate: the page left at sequence 0");
     CHECK(rd(v, HV_MSR_TIME_REF_COUNT, 0, &r) == (mono_ns + 123456789u) / 100u,
           "a broken page leaves the counter on the kvmclock");
-    tsc_per_tick = 2400000u;
+    tsc_per_tick = 2400000000u / TICK_HZ;
     CHECK(wr(v, HV_MSR_REFERENCE_TSC, 0, 0) == 0 && h->tsc_status == TSC_UNSET, "the TSC page off");
     CHECK(tsc_scale(10000000u) == 0 && tsc_scale(1ull << 62) == 0, "scales that do not fit");
 }
@@ -859,11 +859,13 @@ static void vcpu_msr_rows(struct kvm_vcpu *v)
 
     caller.utime = 3;
     caller.stime = 4;
-    CHECK(rd(v, HV_MSR_VP_RUNTIME, 0, &r) == 70000u, "the runtime is the thread's CPU time");
+    CHECK(rd(v, HV_MSR_VP_RUNTIME, 0, &r) == 7u * (TICK_NS / 100u),
+          "the runtime is the thread's CPU time");
     CHECK(wr(v, HV_MSR_VP_RUNTIME, 5, 0) == -1 && wr(v, HV_MSR_VP_RUNTIME, 100000, 1) == 0,
           "the runtime is set by the caller alone");
     caller.utime = 5;
-    CHECK(rd(v, HV_MSR_VP_RUNTIME, 0, &r) == 120000u, "the runtime counts on from the caller's");
+    CHECK(rd(v, HV_MSR_VP_RUNTIME, 0, &r) == 100000u + 2u * (TICK_NS / 100u),
+          "the runtime counts on from the caller's");
 }
 
 /** The invariant TSC, the TSC emulation, MSRs KVM does not know and the

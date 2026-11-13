@@ -75,6 +75,7 @@
 #include "kvm/vcpu.c"
 #include "fs/debugfs.h"
 #include "lib/kstring.h"
+#include "timer.h"
 #include "vdso.h"
 
 extern int printf(const char *format, ...);
@@ -3064,7 +3065,7 @@ static void pv_rows(void)
     struct kvm_clock_data clk;
     int vm, fd0, fd1;
 
-    tick_counts = 2000000;
+    tick_counts = 2000000000u / TICK_HZ;
     vclock_on = 1;
     guest_mem = 1;
     pv_leaf_rows();
@@ -3849,7 +3850,7 @@ static void tsc_scaled_rows(uint32_t bits, uint64_t ratio, uint32_t past)
  * ratio and with VMX's. */
 static void tsc_rows(void)
 {
-    tick_counts = 2000000;
+    tick_counts = 2000000000u / TICK_HZ;
     vclock_on = 1;
     tsc_unscaled_rows();
     tsc_scaled_rows(32, 0x12c3f2d3cull, 511999999u);
