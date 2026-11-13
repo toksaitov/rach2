@@ -56,3 +56,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: nothing in Rach2; the release leaves `x86_64:venus` out of WSL's rerun, and issue 4972 takes it up in milestone 85.
 * Status: unreported.
 * Next: force the abort with tracing, check it against current QEMU, and find whether KVM or QEMU's fix ends it.
+
+## QEMU's TCG aborts an interrupt from CPL 3 through a busy 32-bit TSS
+
+* Project: QEMU, Homebrew's build on the Mac, 11.1.3 by `tests/kvm/Readme.md`; the run's evidence does not record its version. QEMU's master at 11.1.90, read on 2026-11-13, has the same code. `target/i386/tcg/seg_helper.c`.
+* Fails: an interrupt or exception that moves a 32-bit guest from CPL 3 to CPL 0 stops QEMU with `qemu: fatal: invalid tss type` when the TR it caches has the busy type, 11, which the processor's TR holds after every LTR. `get_ss_esp_from_tss` aborts unless `(type & 7) == 1` (lines 237-240), which only the available types 1 and 9 satisfy. QEMU's own LTR caches the descriptor before it sets the busy bit (lines 1395-1402) and its task switch clears the bit in the cache (line 515), so TCG alone never caches type 11; VMLOAD does, since it loads TR's attributes from the VMCB as they are (`target/i386/tcg/system/svm_helper.c`, line 505). Long mode's `get_rsp_from_tss` checks only the present bit (lines 930-932), so a 64-bit guest is not affected.
+* Found: 2026-11-13, the Mac, milestone 84's release run at 08c7795ac, task 84-230: `machine.kvm.boot-rach2-kvm` on x86-64, the x86-64 Rach2 under TCG running the i686 Rach2 guest in Debian's QEMU under its KVM, lost its transport when the outer QEMU aborted, with the nested guest at CPL 3 and TR `0028 00740780 00000067 00008b00 ... TSS32-busy`.
+* Reproduction: under QEMU's TCG with SVM, have a hypervisor write type 11 into a 32-bit guest's VMCB TR, VMLOAD and VMRUN it, and let a timer interrupt arrive while the guest runs at CPL 3. Rach2's KVM wrote that TR before its fix, whenever any part of the special registers was written back; Linux's writes it whenever KVM_SET_SREGS hands back the busy TR that `svm_get_segment` reports.
+* Evidence: `gnu.1.qemu.stderr` and `gnu.1.console` under `build/machines/mac/runs/milestone21-08c7795ac733-mac-1113-130411-d5f552/failed-evidence/milestone21-08c7795ac733-mac-1113-130411-d5f552.machine.kvm.boot-rach2-kvm.x86_64.r0/evidence/` on the Mac.
+* Rach2: `rach2/sys/kvm/svm.c` keeps the TR attributes VMSAVE stored when the record's TR is still the one the last exit reported, so that only a TR the caller changed reaches the VMCB, as Linux writes TR only through `svm_set_segment`.
+* Status: unreported.
+* Next: reproduce it with Linux's KVM as the hypervisor under TCG, through a KVM_GET_SREGS and KVM_SET_SREGS of a running 32-bit guest, then report that `get_ss_esp_from_tss` should take types 3 and 11, as the processor does, for example by testing `(type & 5) == 1`.

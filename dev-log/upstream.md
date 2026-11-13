@@ -160,3 +160,4 @@ The bullets state only what the records show. A fact the records do not hold, su
 | Linux's max_guest_memory_test stops on a machine of one processor | Linux 6.12.115 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#linuxs-max_guest_memory_test-stops-on-a-machine-of-one-processor) |
 | QEMU aborts in iotlb_to_section while Venus runs Vulkan under TCG | QEMU 10.2.1 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#qemu-aborts-in-iotlb_to_section-while-venus-runs-vulkan-under-tcg) |
 | Linux lowers a link whose speed it has not seen to a reserved SPD | Linux 6.12.115 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#linux-lowers-a-link-whose-speed-it-has-not-seen-to-a-reserved-spd) |
+| QEMU's TCG aborts an interrupt from CPL 3 through a busy 32-bit TSS | QEMU 11.1.3 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#qemus-tcg-aborts-an-interrupt-from-cpl-3-through-a-busy-32-bit-tss) |
