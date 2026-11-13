@@ -49,11 +49,20 @@
 #define BOOTSLOT_MAX_CLUSTERS      131072
 #define BOOTSLOT_MAX_FILE_CLUSTERS (BOOTSLOT_SLOT_BYTES / BOOTSLOT_SECTOR)
 
-/** Sector I/O over the boot partition, supplied by the caller. `lba` is
- *  partition-relative; both return 0 or -1. */
+/* The most sectors one call of the caller's I/O moves: 1 MiB, the most a
+ * write to a Rach2 disk node moves in one driver command, which ends with one
+ * flush of the drive's cache (DEVFS_RAW_BATCH_SECTORS, rach2/sys/fs/devfs.h).
+ * A slot written a sector a call would cost a flush per sector, 32768 for a
+ * 16 MiB slot, which under QEMU are as many fdatasyncs of the image. */
+#define BOOTSLOT_RUN_SECTORS 2048
+
+/** Sector I/O over the boot partition, supplied by the caller: `count`
+ *  sectors, 1 to BOOTSLOT_RUN_SECTORS, from `lba`, which is
+ *  partition-relative. Both return 0, or -1 when any sector of the run
+ *  failed; a write that fails may have stored some of its sectors. */
 struct bootslot_io {
-    int (*read)(void *ctx, uint32_t lba, void *buf);
-    int (*write)(void *ctx, uint32_t lba, const void *buf);
+    int (*read)(void *ctx, uint32_t lba, uint32_t count, void *buf);
+    int (*write)(void *ctx, uint32_t lba, uint32_t count, const void *buf);
     void *ctx;
 };
 
@@ -151,9 +160,9 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
  * Install the kernel `image` of `size` bytes into the candidate slot for one
  * trial boot, in the interruption-matrix order: check the image; read and
  * check the fallback file's headers; write `saved_entry=fallback` and drop
- * any `next_entry` in one write of the block; write the slot sector by
- * sector, zeros to its end; read the whole slot back and compare byte for
- * byte; then write `next_entry=candidate`.
+ * any `next_entry` in one write of the block; write the slot in runs of
+ * consecutive sectors, from its start, zeros to its end; read the whole slot
+ * back and compare byte for byte; then write `next_entry=candidate`.
  *
  * Fails with nothing written for an image that does not check or does not
  * fit the slot, a slot that is not a whole number of sectors, or a fallback
@@ -183,9 +192,10 @@ int bootslot_commit(struct bootslot *bs, char *err, size_t errlen);
  * relying on it.
  *
  * The fallback's first sector is zeroed first, the remaining sectors are
- * copied and compared, and only then is the first sector restored and
- * compared. A failure before that final write leaves no valid ELF header; a
- * failure during it may leave a partial header.
+ * copied in runs from the second on and compared, and only then is the
+ * first sector restored and compared. A failure before that final write
+ * leaves no valid ELF header; a failure during it may leave a partial
+ * header.
  */
 int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen);
 

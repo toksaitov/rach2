@@ -42,37 +42,47 @@ static void check(int ok, const char *message)
     }
 }
 
-/** Read sector `lba` of the model into `out`. Returns 0, or -1 for the
- *  sector `bad_read` names and for one past the model. */
-static int read_sector(void *ctx, uint32_t lba, void *out)
+/** Read `count` sectors of the model from `lba` into `out`. Returns 0, or
+ *  -1 for a run that holds the sector `bad_read` names or one past the
+ *  model. */
+static int read_sector(void *ctx, uint32_t lba, uint32_t count, void *out)
 {
+    uint8_t *to = out;
+
     (void)ctx;
-    if (lba >= ENV_SECTOR + 2 || (int)lba == bad_read) {
-        return -1;
+    for (; count > 0; count--, lba++, to += BOOTSLOT_SECTOR) {
+        if (lba >= ENV_SECTOR + 2 || (int)lba == bad_read) {
+            return -1;
+        }
+        memcpy(to, disk[lba], BOOTSLOT_SECTOR);
     }
-    memcpy(out, disk[lba], BOOTSLOT_SECTOR);
     return 0;
 }
 
-/** Write sector `lba` of the model from `in`, counting the write. Write
- *  number `drop_write` is dropped and reported done; write number
- *  `tear_write` stores 16 bytes and fails; others store the whole sector.
- *  Returns 0, or -1 for a torn write and for a sector past the model. */
-static int write_sector(void *ctx, uint32_t lba, const void *in)
+/** Write `count` sectors of the model from `lba`, counting each sector as
+ *  one write, first to last. Write number `drop_write` is dropped and
+ *  reported done; write number `tear_write` stores 16 bytes and fails the
+ *  run there; others store the whole sector. Returns 0, or -1 for a torn
+ *  write and for a sector past the model. */
+static int write_sector(void *ctx, uint32_t lba, uint32_t count, const void *in)
 {
+    const uint8_t *from = in;
+
     (void)ctx;
-    if (lba >= ENV_SECTOR + 2) {
-        return -1;
+    for (; count > 0; count--, lba++, from += BOOTSLOT_SECTOR) {
+        if (lba >= ENV_SECTOR + 2) {
+            return -1;
+        }
+        writes++;
+        if (writes == drop_write) {
+            continue;
+        }
+        if (writes == tear_write) {
+            memcpy(disk[lba], from, 16);
+            return -1;
+        }
+        memcpy(disk[lba], from, BOOTSLOT_SECTOR);
     }
-    writes++;
-    if (writes == drop_write) {
-        return 0;
-    }
-    if (writes == tear_write) {
-        memcpy(disk[lba], in, 16);
-        return -1;
-    }
-    memcpy(disk[lba], in, BOOTSLOT_SECTOR);
     return 0;
 }
 
@@ -393,7 +403,7 @@ static void check_fallback(void)
     static const uint8_t zero[BOOTSLOT_SECTOR];
 
     setup();
-    drop_write = 1 + SLOT_SECTORS - BAD_SECTOR;
+    drop_write = 1 + BAD_SECTOR;
     check(bootslot_fallback(&bs, err, sizeof(err)) == -1 &&
               strstr(err, "do not match the candidate's") != NULL,
           "dropped payload write fails readback");

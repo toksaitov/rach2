@@ -103,24 +103,45 @@ static int devfd = -1;
 static const char default_boot_partition[] = "/dev/bootpart";
 static const char *boot_partition = default_boot_partition;
 
-/** Read sector `lba` of the open boot partition into `buf`; 0, or -1. */
-static int dev_read(void *ctx, uint32_t lba, void *buf)
+/**
+ * Move `count` sectors between `buf` and the open boot partition from sector
+ * `lba`, in one call where the kernel takes it whole, so that a run of a
+ * slot is one write command and one cache flush (bootslot.h). Returns 0, or
+ * -1 when the device fails or ends.
+ */
+static int dev_move(uint32_t lba, uint32_t count, uint8_t *buf, int writing)
 {
-    (void)ctx;
+    size_t want = (size_t)count * BOOTSLOT_SECTOR, done = 0;
+    ssize_t n;
+
     if (lseek(devfd, (off_t)lba * BOOTSLOT_SECTOR, SEEK_SET) < 0) {
         return -1;
     }
-    return read(devfd, buf, BOOTSLOT_SECTOR) == BOOTSLOT_SECTOR ? 0 : -1;
+    while (done < want) {
+        n = writing ? write(devfd, buf + done, want - done) : read(devfd, buf + done, want - done);
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n <= 0) {
+            return -1;
+        }
+        done += (size_t)n;
+    }
+    return 0;
 }
 
-/** Write `buf` to sector `lba` of the open boot partition; 0, or -1. */
-static int dev_write(void *ctx, uint32_t lba, const void *buf)
+/** Read `count` sectors of the open boot partition from `lba`; 0, or -1. */
+static int dev_read(void *ctx, uint32_t lba, uint32_t count, void *buf)
 {
     (void)ctx;
-    if (lseek(devfd, (off_t)lba * BOOTSLOT_SECTOR, SEEK_SET) < 0) {
-        return -1;
-    }
-    return write(devfd, buf, BOOTSLOT_SECTOR) == BOOTSLOT_SECTOR ? 0 : -1;
+    return dev_move(lba, count, (uint8_t *)buf, 0);
+}
+
+/** Write `count` sectors of the open boot partition from `lba`; 0, or -1. */
+static int dev_write(void *ctx, uint32_t lba, uint32_t count, const void *buf)
+{
+    (void)ctx;
+    return dev_move(lba, count, (uint8_t *)buf, 1);
 }
 
 static char cmdline[512];
@@ -845,7 +866,7 @@ static int boot_serial(char serial[10])
     uint32_t id;
     int at;
 
-    if (dev_read(0, 0, sector) != 0) {
+    if (dev_read(0, 0, 1, sector) != 0) {
         fprintf(stderr, "bootctl: the boot partition's first sector does not read\n");
         return -1;
     }

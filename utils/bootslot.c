@@ -148,24 +148,61 @@ static int walk_chain(struct bootslot *bs, uint32_t first, struct bootslot_file 
     }
 }
 
+/* Two runs of the caller's I/O, for the copies and read-backs of a slot. */
+static uint8_t run_a[BOOTSLOT_RUN_SECTORS * BOOTSLOT_SECTOR];
+static uint8_t run_b[BOOTSLOT_RUN_SECTORS * BOOTSLOT_SECTOR];
+
+/** The volume's sector, partition-relative, of the `n`-th sector of `file`. */
+static uint32_t file_lba(const struct bootslot *bs, const struct bootslot_file *file, uint32_t n)
+{
+    return cluster_sector(bs, file->chain[n / bs->cluster_sectors]) + n % bs->cluster_sectors;
+}
+
+/**
+ * Read or write `count` sectors of `file`'s chain from its `n`-th, at most
+ * BOOTSLOT_RUN_SECTORS, in one call of the caller's I/O for each run of them
+ * that lies in consecutive sectors of the volume, first to last. Returns 0,
+ * or -1 at the first run that fails.
+ */
+static int file_io(struct bootslot *bs, const struct bootslot_file *file, uint32_t n,
+                   uint32_t count, uint8_t *buf, int writing)
+{
+    uint32_t lba, k;
+
+    while (count > 0) {
+        lba = file_lba(bs, file, n);
+        for (k = 1; k < count && file_lba(bs, file, n + k) == lba + k; k++) {
+        }
+        if ((writing ? bs->io.write(bs->io.ctx, lba, k, buf)
+                     : bs->io.read(bs->io.ctx, lba, k, buf)) != 0) {
+            return -1;
+        }
+        n += k;
+        count -= k;
+        buf += k * BOOTSLOT_SECTOR;
+    }
+    return 0;
+}
+
 /** Read the `n`-th sector of `file`'s chain. */
 static int file_read_sector(struct bootslot *bs, const struct bootslot_file *file, uint32_t n,
                             uint8_t *buf)
 {
-    uint32_t cluster = file->chain[n / bs->cluster_sectors];
-    uint32_t within = n % bs->cluster_sectors;
-
-    return bs->io.read(bs->io.ctx, cluster_sector(bs, cluster) + within, buf);
+    return file_io(bs, file, n, 1, buf, 0);
 }
 
 /** Write the `n`-th sector of `file`'s chain. */
 static int file_write_sector(struct bootslot *bs, const struct bootslot_file *file, uint32_t n,
                              const uint8_t *buf)
 {
-    uint32_t cluster = file->chain[n / bs->cluster_sectors];
-    uint32_t within = n % bs->cluster_sectors;
+    return file_io(bs, file, n, 1, (uint8_t *)buf, 1);
+}
 
-    return bs->io.write(bs->io.ctx, cluster_sector(bs, cluster) + within, buf);
+/** The sectors of a run from the `s`-th of `total`: BOOTSLOT_RUN_SECTORS, or
+ *  the rest when fewer remain. */
+static uint32_t run_length(uint32_t s, uint32_t total)
+{
+    return total - s < BOOTSLOT_RUN_SECTORS ? total - s : BOOTSLOT_RUN_SECTORS;
 }
 
 /** Match a directory entry's 11-byte padded name case-insensitively. */
@@ -345,26 +382,25 @@ static int resolve_file(struct bootslot *bs, uint32_t first, uint32_t size,
  * admit the smaller volumes of an older disk, down to 16 MiB. They are
  * stated as bounds and not as a FAT-type threshold: a 16 MiB FAT32 volume
  * has fewer than the 65525 clusters that conventionally mark FAT32. The FATs
- * are compared sector by sector as the first is kept. The scan marks every
- * chain it reaches, so the bitmap is cleared before each named file's chain
- * is walked again alone; the scan has already proved them disjoint. A menu
- * slot that is empty or not a whole number of sectors is a disk built wrong
- * and cannot be rewritten whole, so it fails here, where the volume is
- * judged, and not later, where a write would half-succeed.
+ * are read and compared a run at a time as the first is kept. The scan
+ * marks every chain it reaches, so the bitmap is cleared before each named
+ * file's chain is walked again alone; the scan has already proved them
+ * disjoint. A menu slot that is empty or not a whole number of sectors is a
+ * disk built wrong and cannot be rewritten whole, so it fails here, where
+ * the volume is judged, and not later, where a write would half-succeed.
  */
 int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, size_t errlen)
 {
     static uint8_t bpb[BOOTSLOT_SECTOR];
-    static uint8_t fat2[BOOTSLOT_SECTOR];
     struct scan_state st;
     uint32_t bytes_per_sector, reserved, nfats, total, fatsz, root_cluster;
-    uint32_t s;
+    uint32_t s, k;
 
     memset(bs->visited, 0, sizeof(bs->visited));
     memset(&st, 0, sizeof(st));
     bs->io = *io;
 
-    if (io->read(io->ctx, 0, bpb) != 0) {
+    if (io->read(io->ctx, 0, 1, bpb) != 0) {
         return fail(err, errlen,
                     "the first sector does not read, so the device is gone "
                     "or failing");
@@ -422,14 +458,15 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
         return fail(err, errlen, "the root cluster is out of range");
     }
 
-    for (s = 0; s < fatsz; s++) {
-        if (io->read(io->ctx, bs->fat_start + s, bs->fat + s * BOOTSLOT_SECTOR) != 0) {
+    for (s = 0; s < fatsz; s += k) {
+        k = run_length(s, fatsz);
+        if (io->read(io->ctx, bs->fat_start + s, k, bs->fat + s * BOOTSLOT_SECTOR) != 0) {
             return fail(err, errlen, "the first FAT does not read");
         }
-        if (io->read(io->ctx, bs->fat_start + fatsz + s, fat2) != 0) {
+        if (io->read(io->ctx, bs->fat_start + fatsz + s, k, run_a) != 0) {
             return fail(err, errlen, "the second FAT does not read");
         }
-        if (memcmp(bs->fat + s * BOOTSLOT_SECTOR, fat2, BOOTSLOT_SECTOR) != 0) {
+        if (memcmp(bs->fat + s * BOOTSLOT_SECTOR, run_a, k * BOOTSLOT_SECTOR) != 0) {
             return fail(err, errlen, "the two FAT copies disagree");
         }
     }
@@ -1005,6 +1042,19 @@ int bootslot_read_env(struct bootslot *bs, uint8_t *out, char *err, size_t errle
     return 0;
 }
 
+/** Fill `out` with the `k` sectors of a slot holding `image`, `size` bytes,
+ *  from its `s`-th: the image's bytes there, and zeros past its end. */
+static void slot_run(const uint8_t *image, uint32_t size, uint32_t s, uint32_t k, uint8_t *out)
+{
+    uint32_t from = s * BOOTSLOT_SECTOR, bytes = k * BOOTSLOT_SECTOR, have;
+
+    have = from >= size ? 0 : size - from < bytes ? size - from : bytes;
+    if (have > 0) {
+        memcpy(out, image + from, have);
+    }
+    memset(out + have, 0, bytes - have);
+}
+
 /**
  * The fallback must check as a bootable kernel before the saved default is
  * pointed at it, so a machine whose fallback does not check gets no install
@@ -1018,11 +1068,10 @@ int bootslot_read_env(struct bootslot *bs, uint8_t *out, char *err, size_t errle
 int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, char *err,
                      size_t errlen)
 {
-    static uint8_t sector[BOOTSLOT_SECTOR];
     static uint8_t head[MULTIBOOT_SEARCH];
     uint32_t slot_bytes = bs->kernel.size;
     uint32_t nsectors = slot_bytes / BOOTSLOT_SECTOR;
-    uint32_t s, b, want;
+    uint32_t s, k, want;
 
     if (slot_bytes % BOOTSLOT_SECTOR != 0) {
         return fail(err, errlen, "the candidate slot is not sector-sized");
@@ -1035,10 +1084,9 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
     }
 
     want = bs->fallback.size < MULTIBOOT_SEARCH ? bs->fallback.size : MULTIBOOT_SEARCH;
-    for (s = 0; s * BOOTSLOT_SECTOR < want; s++) {
-        if (file_read_sector(bs, &bs->fallback, s, head + s * BOOTSLOT_SECTOR) != 0) {
-            return fail(err, errlen, "the fallback file does not read");
-        }
+    if (want > 0 && file_io(bs, &bs->fallback, 0, (want + BOOTSLOT_SECTOR - 1) / BOOTSLOT_SECTOR,
+                            head, 0) != 0) {
+        return fail(err, errlen, "the fallback file does not read");
     }
     if (bootslot_validate_kernel(head, want, bs->fallback.size, err, errlen) != 0) {
         return fail(err, errlen, "the fallback file is not a bootable kernel");
@@ -1048,28 +1096,22 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
         return -1;
     }
 
-    for (s = 0; s < nsectors; s++) {
-        for (b = 0; b < BOOTSLOT_SECTOR; b++) {
-            uint32_t src = s * BOOTSLOT_SECTOR + b;
-
-            sector[b] = src < size ? image[src] : 0;
-        }
-        if (file_write_sector(bs, &bs->kernel, s, sector) != 0) {
+    for (s = 0; s < nsectors; s += k) {
+        k = run_length(s, nsectors);
+        slot_run(image, size, s, k, run_a);
+        if (file_io(bs, &bs->kernel, s, k, run_a, 1) != 0) {
             return fail(err, errlen, "the candidate slot does not write");
         }
     }
 
-    for (s = 0; s < nsectors; s++) {
-        if (file_read_sector(bs, &bs->kernel, s, sector) != 0) {
+    for (s = 0; s < nsectors; s += k) {
+        k = run_length(s, nsectors);
+        if (file_io(bs, &bs->kernel, s, k, run_a, 0) != 0) {
             return fail(err, errlen, "the candidate slot does not read back");
         }
-        for (b = 0; b < BOOTSLOT_SECTOR; b++) {
-            uint32_t src = s * BOOTSLOT_SECTOR + b;
-            uint8_t expect = src < size ? image[src] : 0;
-
-            if (sector[b] != expect) {
-                return fail(err, errlen, "the slot's bytes do not match what was written");
-            }
+        slot_run(image, size, s, k, run_b);
+        if (memcmp(run_a, run_b, k * BOOTSLOT_SECTOR) != 0) {
+            return fail(err, errlen, "the slot's bytes do not match what was written");
         }
     }
 
@@ -1125,7 +1167,7 @@ int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
     char want[BOOTSLOT_ENTRY_MAX + 16];
     const char *id = "candidate";
     uint32_t nsectors = bs->kernel.size / BOOTSLOT_SECTOR;
-    uint32_t present, s;
+    uint32_t present, s, k;
     int committed = 0;
 
     if (bs->kernel.size % BOOTSLOT_SECTOR != 0 || bs->fallback.size % BOOTSLOT_SECTOR != 0) {
@@ -1151,10 +1193,9 @@ int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
                     "before it becomes the fallback");
     }
     present = bs->kernel.size < MULTIBOOT_SEARCH ? bs->kernel.size : MULTIBOOT_SEARCH;
-    for (s = 0; s * BOOTSLOT_SECTOR < present; s++) {
-        if (file_read_sector(bs, &bs->kernel, s, head + s * BOOTSLOT_SECTOR) != 0) {
-            return fail(err, errlen, "the candidate slot does not read");
-        }
+    if (present > 0 && file_io(bs, &bs->kernel, 0,
+                               (present + BOOTSLOT_SECTOR - 1) / BOOTSLOT_SECTOR, head, 0) != 0) {
+        return fail(err, errlen, "the candidate slot does not read");
     }
     if (bootslot_validate_kernel(head, present, bs->kernel.size, err, errlen) != 0) {
         return -1;
@@ -1163,20 +1204,22 @@ int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
     if (file_write_sector(bs, &bs->fallback, 0, sector) != 0) {
         return fail(err, errlen, "the fallback file does not write");
     }
-    for (s = nsectors; s-- > 1;) {
-        if (file_read_sector(bs, &bs->kernel, s, sector) != 0) {
+    for (s = 1; s < nsectors; s += k) {
+        k = run_length(s, nsectors);
+        if (file_io(bs, &bs->kernel, s, k, run_a, 0) != 0) {
             return fail(err, errlen, "the candidate slot does not read");
         }
-        if (file_write_sector(bs, &bs->fallback, s, sector) != 0) {
+        if (file_io(bs, &bs->fallback, s, k, run_a, 1) != 0) {
             return fail(err, errlen, "the fallback file does not write");
         }
     }
-    for (s = 1; s < nsectors; s++) {
-        if (file_read_sector(bs, &bs->kernel, s, sector) != 0 ||
-            file_read_sector(bs, &bs->fallback, s, back) != 0) {
+    for (s = 1; s < nsectors; s += k) {
+        k = run_length(s, nsectors);
+        if (file_io(bs, &bs->kernel, s, k, run_a, 0) != 0 ||
+            file_io(bs, &bs->fallback, s, k, run_b, 0) != 0) {
             return fail(err, errlen, "the fallback file does not read back");
         }
-        if (memcmp(sector, back, BOOTSLOT_SECTOR) != 0) {
+        if (memcmp(run_a, run_b, k * BOOTSLOT_SECTOR) != 0) {
             return fail(err, errlen, "the fallback's bytes do not match the candidate's");
         }
     }

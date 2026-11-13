@@ -53,44 +53,49 @@ static struct {
     long count; /* writes so far, the first counted as 1 */
 } img;
 
-/** Read sector `lba` of the image into `buf`. Returns 0, or -1 for a sector
- *  past the image. */
-static int io_read(void *ctx, uint32_t lba, void *buf)
+/** Read `count` sectors of the image from `lba` into `buf`. Returns 0, or
+ *  -1 for a run past the image. */
+static int io_read(void *ctx, uint32_t lba, uint32_t count, void *buf)
 {
     (void)ctx;
-    if ((long)lba * 512 + 512 > IMG_BYTES) {
+    if (((long)lba + (long)count) * 512 > IMG_BYTES) {
         return -1;
     }
-    memcpy(buf, img.data + (long)lba * 512, 512);
+    memcpy(buf, img.data + (long)lba * 512, (size_t)count * 512);
     return 0;
 }
 
 /**
- * Write sector `lba` of the image from `buf`, through the injector. The
- * write numbered `drop_at` is reported done and not made. The one numbered
- * `tear_at` stores its first `tear_bytes` and fails, a cut inside the
- * sector. When `writes_left` counts down to 0 the write fails and stores
- * nothing, a cut after the write before it. Returns 0, or -1 for a cut and
- * for a sector past the image.
+ * Write `count` sectors of the image from `lba`, through the injector, which
+ * counts each sector as one write, first to last. The write numbered
+ * `drop_at` is reported done and not made. The one numbered `tear_at` stores
+ * its first `tear_bytes` and fails the run, a cut inside the sector. When
+ * `writes_left` counts down to 0 the write fails and stores nothing, a cut
+ * after the write before it. Returns 0, or -1 for a cut and for a sector
+ * past the image.
  */
-static int io_write(void *ctx, uint32_t lba, const void *buf)
+static int io_write(void *ctx, uint32_t lba, uint32_t count, const void *buf)
 {
+    const uint8_t *from = buf;
+
     (void)ctx;
-    if ((long)lba * 512 + 512 > IMG_BYTES) {
-        return -1;
+    for (; count > 0; count--, lba++, from += 512) {
+        if ((long)lba * 512 + 512 > IMG_BYTES) {
+            return -1;
+        }
+        img.count++;
+        if (img.count == img.drop_at) {
+            continue;
+        }
+        if (img.count == img.tear_at) {
+            memcpy(img.data + (long)lba * 512, from, (size_t)img.tear_bytes);
+            return -1;
+        }
+        if (img.writes_left > 0 && --img.writes_left == 0) {
+            return -1;
+        }
+        memcpy(img.data + (long)lba * 512, from, 512);
     }
-    img.count++;
-    if (img.count == img.drop_at) {
-        return 0;
-    }
-    if (img.count == img.tear_at) {
-        memcpy(img.data + (long)lba * 512, buf, (size_t)img.tear_bytes);
-        return -1;
-    }
-    if (img.writes_left > 0 && --img.writes_left == 0) {
-        return -1;
-    }
-    memcpy(img.data + (long)lba * 512, buf, 512);
     return 0;
 }
 
@@ -452,7 +457,7 @@ int main(void)
                ((long)bs.data_start + ((long)bs.fallback.chain[2] - 2) * bs.cluster_sectors) * 512,
            0xEE, 512);
     img.count = 0;
-    img.drop_at = 1 + (long)(bs.kernel.size / 512) - 2;
+    img.drop_at = 1 + 2;
     CHECK(bootslot_fallback(&bs, err, sizeof(err)) == -1 &&
               strstr(err, "do not match the candidate's") != NULL,
           "a fallback write the device dropped is caught by the readback");
@@ -654,7 +659,7 @@ int main(void)
                                (bs.menu.chain[i / (bs.cluster_sectors * 512)] - 2) *
                                    bs.cluster_sectors +
                                ((i / 512) % bs.cluster_sectors)),
-                              sector) == 0,
+                              1, sector) == 0,
                       "the slot reads back");
             }
             seen[i] = sector[i % 512];

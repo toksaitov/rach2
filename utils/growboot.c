@@ -25,28 +25,36 @@ static unsigned present; /* a bit for each environment sector in `environment` *
 static unsigned char environment[BOOTSLOT_ENV_BYTES];
 
 /** Read edited sectors from memory and every other sector from the backup. */
-static int read_sector(void *ctx, uint32_t lba, void *buf)
+static int read_sector(void *ctx, uint32_t lba, uint32_t count, void *buf)
 {
+    unsigned char *out = buf;
+
     (void)ctx;
-    if (lba >= first && lba - first < 2 && (present & (1u << (lba - first)))) {
-        memcpy(buf, environment + (lba - first) * 512, 512);
-        return 0;
+    for (; count > 0; count--, lba++, out += 512) {
+        if (lba >= first && lba - first < 2 && (present & (1u << (lba - first)))) {
+            memcpy(out, environment + (lba - first) * 512, 512);
+        } else if (fseeko(source, (off_t)lba * 512, SEEK_SET) != 0 ||
+                   fread(out, 1, 512, source) != 512) {
+            return -1;
+        }
     }
-    return fseeko(source, (off_t)lba * 512, SEEK_SET) == 0 && fread(buf, 1, 512, source) == 512
-               ? 0
-               : -1;
+    return 0;
 }
 
 /** Accept only the environment sectors, retaining both entirely in memory;
  *  -1 for any other sector. */
-static int write_sector(void *ctx, uint32_t lba, const void *buf)
+static int write_sector(void *ctx, uint32_t lba, uint32_t count, const void *buf)
 {
+    const unsigned char *in = buf;
+
     (void)ctx;
-    if (lba < first || lba - first >= 2) {
-        return -1;
+    for (; count > 0; count--, lba++, in += 512) {
+        if (lba < first || lba - first >= 2) {
+            return -1;
+        }
+        memcpy(environment + (lba - first) * 512, in, 512);
+        present |= 1u << (lba - first);
     }
-    memcpy(environment + (lba - first) * 512, buf, 512);
-    present |= 1u << (lba - first);
     return 0;
 }
 
