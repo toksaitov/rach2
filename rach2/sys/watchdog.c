@@ -90,6 +90,7 @@ struct wd_cpu {
     uint32_t ticks;
     uint64_t timer_tsc;
     int64_t timer_ns; /* monotonic time of the last watchdog sample */
+    int timer_unset;  /* restarted in a wait; the next run sets timer_ns */
     volatile int kicked;
     volatile uint32_t touch_ts;
     volatile uint32_t report_ts;
@@ -800,9 +801,13 @@ void watchdog_reconfigure(void)
  * them through `watchdog_enable` (kernel/watchdog.c:875-878): the timer
  * starts a new sample period, and the timestamps are touched, so that no
  * check reads a time from before the write, while the detector was off or
- * its threshold longer.
+ * its threshold longer. The new period's start is the monotonic time
+ * `now`, or, for a restart from a wait with interrupts off, which may be a
+ * wait inside a clock lock (`rtc_vclock_change` holds `rtc_mono_lock` while
+ * it waits for `vclock_lock`), the time of the next tick or idle event,
+ * which reads the clock anyway (`watchdog_run`): such a wait reads no clock.
  */
-static void watchdog_restart(struct wd_cpu *w)
+static void watchdog_restart(struct wd_cpu *w, int64_t now, int unset)
 {
     w->gen = wd_gen;
     w->enabled = 0;
@@ -810,7 +815,8 @@ static void watchdog_restart(struct wd_cpu *w)
     w->kicked = 0;
     w->ticks = 0;
     w->timer_tsc = w->tick_tsc;
-    w->timer_ns = rtc_monotonic_ns();
+    w->timer_ns = now;
+    w->timer_unset = unset;
     watchdog_enable(w, watchdog_enabled());
 }
 
@@ -844,7 +850,11 @@ static void watchdog_run(isr_params_t *params)
         watchdog_enable(w, watchdog_enabled());
     }
     if (w->gen != wd_gen) {
-        watchdog_restart(w);
+        watchdog_restart(w, now, 0);
+    }
+    if (w->timer_unset) {
+        w->timer_unset = 0;
+        w->timer_ns = now;
     }
     if (klog_kept()) {
         flush_for_holder((int)arch_cpu_id());
@@ -878,8 +888,9 @@ void watchdog_event(isr_params_t *params)
 }
 
 /** Return the next sample's absolute monotonic deadline, or zero while
- * disabled. A CPU with changed settings gets a prompt event to apply them.
- * Interrupts are off on the processor queried. */
+ * disabled. A CPU with changed settings, or whose restart in a wait left
+ * its period's start unset, gets a prompt event to apply them. Interrupts
+ * are off on the processor queried, and it holds no lock. */
 int64_t watchdog_idle_deadline(void)
 {
     struct wd_cpu *w = &wd[arch_cpu_id()];
@@ -888,7 +899,7 @@ int64_t watchdog_idle_deadline(void)
     if (!wd_ready) {
         return 0;
     }
-    if (!w->primed || w->gen != wd_gen) {
+    if (!w->primed || w->gen != wd_gen || w->timer_unset) {
         return rtc_monotonic_ns() + 1;
     }
     if (!watchdog_enabled()) {
@@ -913,7 +924,9 @@ int64_t watchdog_idle_deadline(void)
  * with interrupts off, and two that wait on each other are both reported;
  * without a counter, each third sample period of the wait runs its own
  * buddy check. Every 64th turn reads the TSC, and a period counts only
- * once the processor has gone a period without a tick.
+ * once the processor has gone a period without a tick. The wait reads no
+ * monotonic clock, since it may run inside a clock lock's wait
+ * (`watchdog_restart`).
  */
 void watchdog_wait(void)
 {
@@ -935,7 +948,7 @@ void watchdog_wait(void)
     }
     if (w->gen != wd_gen) {
         w->in_wait = 1;
-        watchdog_restart(w);
+        watchdog_restart(w, 0, 1);
         w->wait_tsc = now;
         w->in_wait = 0;
         return;
