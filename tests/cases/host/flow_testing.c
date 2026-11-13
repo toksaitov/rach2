@@ -258,7 +258,10 @@ static int worktree(struct testing *t)
     snprintf(expected, sizeof(expected), "%sHEAD:second\n", commit);
     free(commit);
     snprintf(script, sizeof(script), "%s/tools/dev/testing.sh", wt);
+    /* testing.sh holds its background processes with these. */
     if (!fx_copy(t->script, script) ||
+        !flow_copy(f, "tools/flow/hold.pl", "wt/tools/flow/hold.pl") ||
+        !flow_copy(f, "tools/flow/bound.pl", "wt/tools/flow/bound.pl") ||
         !fx_copy(flow_path(f, "wt/.git"), flow_path(f, "wtcopy/.git")))
         return 0;
     fx_env("RACH2_TESTING_COPY", copy);
@@ -376,7 +379,11 @@ int flow_testing(struct fixture *f)
     snprintf(t.host, sizeof(t.host), "%s/host/home", f->work);
     snprintf(runs, sizeof(runs), "%s/rach2/build/runs", t.host);
     snprintf(t.name, sizeof(t.name), "testingwait%ld", (long)getpid());
-    if (!fx_copy(flow_source(f, "tools/dev/testing.sh"), t.script) || !fx_mock(f, "ssh") ||
+    /* testing.sh holds its background processes with hold.pl and bounds
+     * its stops with bound.pl, here and, through the sync, in the copy. */
+    if (!fx_copy(flow_source(f, "tools/dev/testing.sh"), t.script) ||
+        !flow_copy(f, "tools/flow/hold.pl", "tree/tools/flow/hold.pl") ||
+        !flow_copy(f, "tools/flow/bound.pl", "tree/tools/flow/bound.pl") || !fx_mock(f, "ssh") ||
         !fx_mock(f, "rsync") || !fx_mock(f, "wsl.exe") || !fx_mkdir(runs) ||
         !fx_mkdir(flow_path(f, "copy")))
         return 0;
