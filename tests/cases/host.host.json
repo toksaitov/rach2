@@ -672,7 +672,7 @@
         },
         {
           "assertion_id": "i915_exec",
-          "checks": "tests/host/i915_exec_hosttest.c runs the Intel graphics driver's EXECBUFFER2 on the chip of i915_gem_model.c, whose rings run the requests and the batches' stores: each of Linux's refusals of the call, relocations with presumed offsets, NO_RELOC, HANDLE_LUT, signed deltas and BATCH_FIRST, objects pinned, padded and aligned, the batch started on the render and blitter rings, the stream output reset, the in-fence, submit fence, out-fence and fence array, an in-fence's error skipping the batch, the command parser's shadow and trampoline, the objects held until the request retires, a ring that refuses the commands and the heap's blocks a call shaped as Crocus makes it takes, under ASan and UBSan and exits 0",
+          "checks": "tests/host/i915_exec_hosttest.c runs the Intel graphics driver's EXECBUFFER2 on the chip of i915_gem_model.c, whose rings run the requests and the batches' stores: each of Linux's refusals of the call, relocations with presumed offsets, NO_RELOC, HANDLE_LUT, signed deltas and BATCH_FIRST, objects pinned, padded and aligned, the batch started on the render and blitter rings, the stream output reset, the in-fence, submit fence, out-fence and fence array, an in-fence's error skipping the batch, the command parser's shadow and trampoline, the objects held until the request retires, a ring that refuses the commands, the heap's blocks a call shaped as Crocus makes it takes, and the GT kept awake, its interrupt armed and the parser's shadow reused across such calls each waited for, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
