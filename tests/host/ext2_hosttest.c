@@ -5914,7 +5914,8 @@ static void fault_row(const char *img, const char *script, const char *fault, co
  *   link counts, a directory with two parents, a directory's i_blocks that
  *   does not match its pointers, an entry of the wrong form, a block of the
  *   volume's tables marked free) is named and mounts writable with the
- *   error bit set, as Linux mounts a volume with errors;
+ *   error bit set, as Linux mounts a volume with errors, and the reached
+ *   inode has its bit set again, so that no new file takes it;
  * - a read-only mount runs no check and writes nothing.
  */
 static int lost_block_reported(void)
@@ -6255,6 +6256,68 @@ static void protect_rows(void)
           "and its unmount leaves the valid bit clear for the next mount to check");
 }
 
+/**
+ * Mount a dirty volume whose inode bitmap calls /dir/big.bin's inode free,
+ * a fault that stops the check. The pass after the stop must set the
+ * inode's bit again, so that files then made in its directory and the
+ * root take other inodes, and after the unmount /dir/big.bin keeps its
+ * blocks and e2fsck finds no bitmap difference.
+ */
+static void live_inode_row(void)
+{
+    const char *img = fix_path("live.ext2");
+    char name[16];
+    void *dir, *n;
+    long blk, after;
+    uint64_t bytes;
+    int rc, err, i, made = 0;
+
+    build_image(img, 4096, 128, PROFILE, 16, "tree");
+    blk = debugfs_number(img, "blocks /dir/big.bin", "");
+    bytes = dirty_image(img, "freei /dir/big.bin\n");
+    use_image(img, bytes);
+    last_check[0] = 0;
+    last_warn[0] = 0;
+    check_log[0] = 0;
+    rc = mount_rw();
+    if (blk <= 0 || rc != 0 || (mnt.flags & VFS_MS_RDONLY) != 0 ||
+        !strstr(last_check, "a reached inode the bitmap calls free") ||
+        !strstr(check_log, "check: 1 live inodes were free, marked used\n") ||
+        !streq(last_warn, "mounting with errors, running e2fsck is recommended")) {
+        printf("  block %ld, mount %d, flags 0x%x, check: %s", blk, rc, (unsigned)mnt.flags,
+               check_log);
+        check(0, "a reached inode whose bit is clear mounts writable with errors, its bit set");
+    } else {
+        check(1, "a reached inode whose bit is clear mounts writable with errors, its bit set");
+    }
+    if (rc != 0) {
+        return;
+    }
+    dir = walk("/dir", &err);
+    for (i = 0; dir && i < 8; i++) {
+        snprintf(name, sizeof(name), "new%d", i);
+        n = make_file(i & 1 ? mnt.root : dir, name, &rc);
+        if (n) {
+            OPS->put(&mnt, n);
+            made++;
+        }
+    }
+    if (dir) {
+        OPS->put(&mnt, dir);
+    }
+    check(made == 8 && unmount_rw() == 0 && disk_state(img) == 2,
+          "and files made after it there unmount with the error bit kept");
+    after = debugfs_number(img, "blocks /dir/big.bin", "");
+    e2fsck_status(img);
+    if (after != blk || ext2_fixture_contains(fix_path("fsck.out"), "Inode bitmap differences") ||
+        ext2_fixture_contains(fix_path("fsck.out"), "Block bitmap differences")) {
+        printf("  blocks of /dir/big.bin %ld, then %ld\n", blk, after);
+        check(0, "and none of them takes its inode");
+    } else {
+        check(1, "and none of them takes its inode");
+    }
+}
+
 /** A volume whose valid bit is clear: checked at a writable mount, mounted
  * unchecked by name when memory is short, and marked valid again only by
  * an unmount that follows a clean check. */
@@ -6352,8 +6415,7 @@ static void dirty_rows(void)
     } else {
         check(0, "the descriptor read for the inode-table row");
     }
-    fault_row(img, "freei /dir/big.bin\n", "a reached inode the bitmap calls free",
-              "a reached inode whose bit is clear mounts writable with errors");
+    live_inode_row();
     fault_row(img, "sif /dir/big.bin links_count 3\n", "a link count that does not match its names",
               "a link count above its names mounts writable with errors");
     fault_row(img, "sif /dir links_count 9\n",
@@ -8865,6 +8927,7 @@ static const struct {
     {"--xattr-only", xattr_rows},
     {"--dirty-only", dirty_rows},
     {"--protect-only", protect_rows},
+    {"--live-inode-only", live_inode_row},
     {"--readonly-only", readonly_rows},
     {"--ftype-only", ftype_rows},
     {"--removal-only", removal_rows},
