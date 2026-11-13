@@ -317,8 +317,8 @@ static const char *child_name(struct dma_fence *f)
     return "child";
 }
 
-static const struct dma_fence_ops child_ops = {child_name, child_name,     NULL,
-                                               NULL,       child_signaled, NULL};
+static const struct dma_fence_ops child_ops = {child_name,     child_name, NULL, NULL,
+                                               child_signaled, NULL,       0};
 
 /** Allocate an unsignalled child of `enable_cases`'s array. */
 static struct dma_fence *new_child(uint64_t context)
@@ -569,6 +569,74 @@ static void timeline_cases(void)
     close_fd(&table, data.fence);
     dma_fence_put(f);
 }
+/** Make a pending software point `value` on `timeline`; its sync file in
+ * `*fd`, its fence with a reference returned. */
+static struct dma_fence *wrap_point(fd_entry_t *timeline, uint32_t value, int *fd)
+{
+    struct sw_sync_create_fence_data data;
+    k_memset(&data, 0, sizeof(data));
+    data.value = value;
+    CHECK(!sw_ioctl(timeline, SW_SYNC_IOC_CREATE_FENCE, (uintptr_t)&data), "a wrap point");
+    *fd = data.fence;
+    return sync_file_get_fence(data.fence);
+}
+
+/** Order a 32-bit timeline's points across its wrap, as Linux's
+ * dma_fence_is_later: on a timeline at 0xfffffffc, point 1 comes after
+ * 0xfffffffe, so a reservation that takes them as readers in that order,
+ * and a merge of the two in either order, keep point 1. */
+static void wrap_cases(void)
+{
+    struct dma_buf *b = dma_buf_export(4096, &model_ops, NULL, NULL);
+    struct dma_buf_import_sync_file data;
+    struct dma_fence *late, *early, *inputs[2], *f;
+    struct wait_queue *q;
+    fd_entry_t timeline, *e;
+    uint32_t step = 0xfffffffcu;
+    int fd = dma_buf_fd(b, 0), late_fd, early_fd;
+    e = fd_get(&table, fd);
+    k_memset(&timeline, 0, sizeof(timeline));
+    CHECK(!sw_sync_open(&timeline), "open software timeline");
+    sw_ioctl(&timeline, SW_SYNC_IOC_INC, (uintptr_t)&step);
+    late = wrap_point(&timeline, 1, &late_fd);
+    early = wrap_point(&timeline, 0xfffffffeu, &early_fd);
+    CHECK(dma_fence_is_later(late, early) && !dma_fence_is_later(early, late),
+          "point 1 comes after 0xfffffffe across the wrap");
+    data.flags = DMA_BUF_SYNC_READ;
+    data.fd = late_fd;
+    CHECK(!buf_ioctl(e, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, (uintptr_t)&data), "import point 1");
+    data.fd = early_fd;
+    CHECK(!buf_ioctl(e, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, (uintptr_t)&data),
+          "import point 0xfffffffe");
+    CHECK(b->resv->nreads == 1 && b->resv->reads[0] == late,
+          "the earlier point does not replace the later reader across the wrap");
+    inputs[0] = late;
+    inputs[1] = early;
+    f = dma_fence_merge(inputs, 2);
+    CHECK(f == late, "a merge keeps the later point across the wrap");
+    dma_fence_put(f);
+    inputs[0] = early;
+    inputs[1] = late;
+    f = dma_fence_merge(inputs, 2);
+    CHECK(f == late, "a merge keeps the later point whichever comes first");
+    dma_fence_put(f);
+    step = 2;
+    sw_ioctl(&timeline, SW_SYNC_IOC_INC, (uintptr_t)&step);
+    CHECK(dma_fence_status(early) == 1 && !dma_fence_status(late), "0xfffffffe signals first");
+    CHECK(buf_poll(e, 5, &q) == 1, "the pending reader still holds write access");
+    step = 3;
+    sw_ioctl(&timeline, SW_SYNC_IOC_INC, (uintptr_t)&step);
+    CHECK(dma_fence_status(late) == 1 && buf_poll(e, 5, &q) == 5,
+          "write ready once point 1 signals");
+    sw_close(&timeline);
+    close_fd(&table, late_fd);
+    close_fd(&table, early_fd);
+    close_fd(&table, fd);
+    dma_buf_put(b);
+    dma_fence_put(late);
+    dma_fence_put(early);
+}
+
 /** Whether only descriptor `fd` is in use or reserved. */
 static int only_fd(int fd)
 {
@@ -762,6 +830,7 @@ int main(int argc, char **argv)
     sync_cases();
     import_cases();
     timeline_cases();
+    wrap_cases();
     copy_out_cases();
     buffer_answers();
     name_cases();
