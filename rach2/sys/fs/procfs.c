@@ -1151,69 +1151,46 @@ int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, i
 }
 
 /**
- * Append the bytes of `p`'s memory from `start` to `end`, read through its
- * address space, at most 128 KiB: the strings of its arguments or its
- * environment, as its initial stack has them.
+ * Append to `t` the bytes of `mm` from `start` to `end`, at most 128 KiB, or,
+ * when `to_nul` is set, through the first NUL among them, that NUL included:
+ * the strings of a program's arguments or its environment, as its initial
+ * stack has them.
  *
- * A read may sleep, bringing in a page of a file the process maps, and the
- * process may end and be reaped meanwhile, so the address space is held for
- * the length of the reads, and `p`, whose record the reap frees, is read
- * only before the first; the caller took `start` and `end` from it before.
+ * The caller holds a user's count of `mm` for the reads, which may sleep,
+ * bringing in a page of a file the process maps; the process may end, be
+ * reaped or execute another program meanwhile, so nothing of the process is
+ * read here. Each read stays within one page, so a page the address space
+ * cannot read ends the text there and keeps the bytes before it, as Linux's
+ * access_remote_vm does.
  */
-static void ap_memory(struct procfs_text *t, const process_t *p, uintptr_t start, uintptr_t end)
+static void ap_memory(struct procfs_text *t, struct mm *mm, uintptr_t start, uintptr_t end,
+                      int to_nul)
 {
-    struct mm *mm = p->mm;
     char chunk[128];
 
     if (end > start + 131072u) {
         end = start + 131072u;
     }
-    mm_get(mm);
     while (start < end) {
+        uintptr_t page_left = (uintptr_t)PAGE_SIZE - (start & ((uintptr_t)PAGE_SIZE - 1));
         uint32_t n =
             end - start < sizeof(chunk) ? (uint32_t)(end - start) : (uint32_t)sizeof(chunk);
         uint32_t i;
 
+        if (n > page_left) {
+            n = (uint32_t)page_left;
+        }
         if (paging_access(mm, start, chunk, n, 0) != 0) {
-            break;
+            return;
         }
         for (i = 0; i < n; i++) {
             ap_ch(t, chunk[i]);
-        }
-        start += n;
-    }
-    procfs_mm_put(mm);
-}
-
-/**
- * Append to `t` the bytes of `p`'s memory from `start` through the first NUL
- * before `end`, that NUL included, or up to `end` when there is none; a page
- * the address space cannot read ends it early.
- */
-static void ap_string(struct procfs_text *t, const process_t *p, uintptr_t start, uintptr_t end)
-{
-    struct mm *mm = p->mm;
-    char chunk[128];
-
-    mm_get(mm);
-    while (start < end) {
-        uint32_t n =
-            end - start < sizeof(chunk) ? (uint32_t)(end - start) : (uint32_t)sizeof(chunk);
-        uint32_t i;
-
-        if (paging_access(mm, start, chunk, n, 0) != 0) {
-            break;
-        }
-        for (i = 0; i < n; i++) {
-            ap_ch(t, chunk[i]);
-            if (chunk[i] == '\0') {
-                procfs_mm_put(mm);
+            if (to_nul && chunk[i] == '\0') {
                 return;
             }
         }
         start += n;
     }
-    procfs_mm_put(mm);
 }
 
 /**
@@ -1228,35 +1205,41 @@ static void ap_string(struct procfs_text *t, const process_t *p, uintptr_t start
  * page from the first argument, within the arguments and an environment
  * that follows them, up to its first NUL. A process with no address space,
  * or none of its arguments kept, shows its name as the one argument.
+ *
+ * The address space and its bounds are read from `p` once, before the first
+ * read, which may sleep, and one count of that address space is held across
+ * every read: an exec meanwhile replaces `p->mm`, and a reap frees `p`.
  */
 static int procfs_gen_cmdline(struct procfs_text *t, int pid)
 {
     process_t *p = procfs_proc(pid);
+    struct mm *mm;
     int i;
 
     if (!p) {
         return -ENOENT;
     }
-    if (p->mm && p->mm->arg_end > p->mm->arg_start) {
-        uintptr_t start = p->mm->arg_start;
-        uintptr_t end = p->mm->arg_end;
+    mm = p->mm;
+    if (mm && mm->arg_end > mm->arg_start) {
+        uintptr_t start = mm->arg_start;
+        uintptr_t end = mm->arg_end;
+        uintptr_t env_start = mm->env_start;
+        uintptr_t env_end = mm->env_end;
         char last = '\0';
-        int titled;
 
-        mm_get(p->mm);
-        titled = paging_access(p->mm, end - 1, &last, 1, 0) == 0 && last != '\0';
-        procfs_mm_put(p->mm);
-        if (!titled) {
-            ap_memory(t, p, start, end);
-            return t->len;
+        mm_get(mm);
+        if (paging_access(mm, end - 1, &last, 1, 0) != 0 || last == '\0') {
+            ap_memory(t, mm, start, end, 0);
+        } else {
+            if (env_start == end && env_end > end) {
+                end = env_end;
+            }
+            if (end - start > PAGE_SIZE) {
+                end = start + PAGE_SIZE;
+            }
+            ap_memory(t, mm, start, end, 1);
         }
-        if (p->mm->env_start == end && p->mm->env_end > end) {
-            end = p->mm->env_end;
-        }
-        if (end - start > PAGE_SIZE) {
-            end = start + PAGE_SIZE;
-        }
-        ap_string(t, p, start, end);
+        procfs_mm_put(mm);
         return t->len;
     }
     for (i = 0; i < (int)sizeof(p->comm) && p->comm[i]; i++) {
@@ -1273,6 +1256,7 @@ static int procfs_gen_cmdline(struct procfs_text *t, int pid)
 static int procfs_gen_environ(struct procfs_text *t, int pid)
 {
     process_t *p = procfs_proc(pid);
+    struct mm *mm;
 
     if (!p) {
         return -ENOENT;
@@ -1280,11 +1264,14 @@ static int procfs_gen_environ(struct procfs_text *t, int pid)
     if (!procfs_may_read_mem(p)) {
         return -EACCES;
     }
-    if (p->mm && p->mm->env_end > p->mm->env_start) {
-        uintptr_t start = p->mm->env_start;
-        uintptr_t end = p->mm->env_end;
+    mm = p->mm;
+    if (mm && mm->env_end > mm->env_start) {
+        uintptr_t start = mm->env_start;
+        uintptr_t end = mm->env_end;
 
-        ap_memory(t, p, start, end);
+        mm_get(mm);
+        ap_memory(t, mm, start, end, 0);
+        procfs_mm_put(mm);
     }
     return t->len;
 }

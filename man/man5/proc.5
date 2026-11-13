@@ -1891,7 +1891,7 @@ as on Linux, the title alone: the first page from its first argument, up
 to and with the first NUL.
 At most the first 128 KiB of them are read, so a longer list ends inside
 a string, without that string's NUL, and a page the address space cannot
-read ends it early.
+read ends it where that page begins.
 .It Pa /proc/PID/fd/N
 The directory has mode 0500 and is owned by the process's effective IDs
 while it is dumpable and by root otherwise.
