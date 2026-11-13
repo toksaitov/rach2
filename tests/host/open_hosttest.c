@@ -1587,6 +1587,13 @@ void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
     (void)rc;
 }
 
+/** The record of a failed pass for syncfs, which no row makes. */
+void vfs_sb_err_set(struct vfs_mount *mnt, int rc)
+{
+    (void)mnt;
+    (void)rc;
+}
+
 /** The fdatasync of a file, which no row makes. */
 int vfs_fdatasync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
 {

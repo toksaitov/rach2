@@ -769,6 +769,58 @@ static void description_last(void)
 }
 
 /**
+ * A remount read-only is refused while a description holds a write
+ * reservation through what it makes read-only, EBUSY: a base counts those
+ * through any bind of it, a bind only its own, as Linux's
+ * sb_prepare_remount_readonly counts every mount of the superblock and
+ * mnt_make_readonly one mount. Once begun, a reservation for writing through
+ * it is EROFS, and so is a second remount, EBUSY, until it ends; a writer
+ * through a read-only base is EROFS after it.
+ */
+static void remount_writers(void)
+{
+    struct vfs_mount base = {0}, bind = {0}, bind2 = {0};
+    struct open_file *w = fd_ofd_new(), *n = fd_ofd_new();
+    struct vfs_ref ref, ref2;
+    int node;
+
+    check(w && n, "descriptions for the remount rows");
+    if (!w || !n) {
+        fd_ofd_unref(w);
+        fd_ofd_unref(n);
+        return;
+    }
+    bind.bind_of = &base;
+    bind2.bind_of = &base;
+    ref.mnt = &bind;
+    ref.node = &node;
+    ref2.mnt = &bind2;
+    ref2.node = &node;
+    check(fd_ofd_access(w, &ref, 1) == 0,
+          "a description reserves a file for writing through a bind");
+    check(fd_mount_readonly_begin(&base) == -EBUSY && !base.readonly_pending,
+          "the base's remount read-only is refused while it lives");
+    check(fd_mount_readonly_begin(&bind2) == 0 && bind2.readonly_pending,
+          "another bind's is not, since no description writes through it");
+    check(fd_ofd_access(n, &ref2, 1) == -EROFS && n->access == 0,
+          "a writer through that bind is refused while its remount runs");
+    fd_mount_readonly_end(&bind2);
+    check(fd_ofd_access(n, &ref2, 1) == 0, "and admitted after it ends");
+    fd_ofd_access_drop(n);
+    fd_ofd_access_drop(w);
+    check(fd_mount_readonly_begin(&base) == 0 && fd_mount_readonly_begin(&base) == -EBUSY,
+          "with no writer the base's remount begins, and a second one is refused");
+    check(fd_ofd_access(n, &ref, 1) == -EROFS, "a writer through a bind of the base is refused");
+    base.flags = VFS_MS_RDONLY;
+    fd_mount_readonly_end(&base);
+    check(fd_ofd_access(n, &ref, 1) == -EROFS && fd_ofd_access(n, &ref, 2) == 0,
+          "and through the read-only base after, while an executable reservation is not");
+    fd_ofd_unref(w);
+    fd_ofd_unref(n);
+    check(allocations == 0, "the remount rows free their descriptions");
+}
+
+/**
  * Copy a table with a slot another thread's open has reserved and one
  * descriptor that is open: the reservation is free in the copy, and the open
  * descriptor is there with the description it shares.
@@ -923,10 +975,11 @@ static void description_watch(void)
     check(allocations == 0, "and both are freed");
 }
 
-/** A mount is its own base: no row makes a bind mount. */
+/** The mount a bind shows, or the mount itself, as vfs.c's: the remount
+ * rows alone make binds, of a base that is no bind. */
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
-    return m;
+    return m->bind_of ? m->bind_of : m;
 }
 
 /**
@@ -966,6 +1019,7 @@ int main(void)
     shared_closes();
     table_chunks();
     description_last();
+    remount_writers();
     status_flags_row();
     if (fd_table_init(&table) != 0 || (fd = fd_alloc(&table)) < 0) {
         return 1;

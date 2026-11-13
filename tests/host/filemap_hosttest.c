@@ -665,23 +665,60 @@ int shmem_truncate(struct shmem *sh, uint64_t size)
 #define MODEL_ERR_SEEN 0x1000u
 #define MODEL_ERR_STEP 0x2000u
 
-/* The records `vfs_wb_err_set` has made, which a row clears. */
-static int err_records;
+/* The records `vfs_wb_err_set` and `vfs_sb_err_set` have made, which a row
+ * clears. */
+static int err_records, sb_records;
 
-/** Record `rc` in the write-back errors of the file system `mnt` shows, as
- * vfs.c's errseq_set does: the errno replaced, and the count moved after a
- * report. */
-void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
+/** Record `rc` in the errors `*seq` keeps, as vfs.c's errseq_set does: the
+ * errno replaced, and the count moved after a report. */
+static void model_err_record(uint32_t *seq, int rc)
 {
-    uint32_t next;
+    uint32_t next = (*seq & ~(MODEL_ERR_MASK | MODEL_ERR_SEEN)) | ((uint32_t)-rc & MODEL_ERR_MASK);
 
-    mnt = mnt->bind_of ? mnt->bind_of : mnt;
-    next = (mnt->wb_err & ~(MODEL_ERR_MASK | MODEL_ERR_SEEN)) | ((uint32_t)-rc & MODEL_ERR_MASK);
-    if (mnt->wb_err & MODEL_ERR_SEEN) {
+    if (*seq & MODEL_ERR_SEEN) {
         next += MODEL_ERR_STEP;
     }
-    mnt->wb_err = next;
+    *seq = next;
+}
+
+/** Record `rc` in the write-back errors of the file system `mnt` shows, for
+ * fsync and for syncfs, as vfs.c does. */
+void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
+{
+    mnt = mnt->bind_of ? mnt->bind_of : mnt;
+    model_err_record(&mnt->wb_err, rc);
+    model_err_record(&mnt->sb_wb_err, rc);
     err_records++;
+}
+
+/** Record `rc` in the errors of the file system `mnt` shows for syncfs
+ * alone, as vfs.c does for a failed pass. */
+void vfs_sb_err_set(struct vfs_mount *mnt, int rc)
+{
+    mnt = mnt->bind_of ? mnt->bind_of : mnt;
+    model_err_record(&mnt->sb_wb_err, rc);
+    sb_records++;
+}
+
+/** The errno `*seq` holds since the cursor `*seen` last looked, with the
+ * cursor moved past it, else 0, as vfs.c's check and advance. */
+static int model_err_check(uint32_t *seq, uint32_t *seen)
+{
+    if (*seq == *seen) {
+        return 0;
+    }
+    *seq |= MODEL_ERR_SEEN;
+    *seen = *seq;
+    return -(int)(*seq & MODEL_ERR_MASK);
+}
+
+/** syncfs(2) of the description `ofd`, which writes nothing in the model:
+ * the errors of its file system that its own cursor has not seen. */
+static int model_syncfs(struct open_file *ofd)
+{
+    struct vfs_mount *mnt = ofd->vmnt->bind_of ? ofd->vmnt->bind_of : ofd->vmnt;
+
+    return model_err_check(&mnt->sb_wb_err, &ofd->sb_seen);
 }
 
 /** The errno recorded on the file system `mnt` shows since the cursor
@@ -690,12 +727,7 @@ void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
 int vfs_fsync_error(struct vfs_mount *mnt, uint32_t *seen)
 {
     mnt = mnt->bind_of ? mnt->bind_of : mnt;
-    if (mnt->wb_err == *seen) {
-        return 0;
-    }
-    mnt->wb_err |= MODEL_ERR_SEEN;
-    *seen = mnt->wb_err;
-    return -(int)(mnt->wb_err & MODEL_ERR_MASK);
+    return model_err_check(&mnt->wb_err, seen);
 }
 
 /** The file system's fsync, which writes nothing in the model, and then the
@@ -706,23 +738,25 @@ int vfs_fsync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
     return vfs_fsync_error(mnt, seen);
 }
 
-/** The cursor a description of a file of `mnt` opened now starts with, as
- * `vfs_wb_err_sample` gives it: before an error nobody has reported. */
-static uint32_t model_sample(const struct vfs_mount *mnt)
+/** The cursors a description `ofd` of a file of `mnt` opened now starts
+ * with, as `vfs_wb_err_sample` gives them: before an error nobody has
+ * reported. */
+static void model_sample(struct open_file *ofd, const struct vfs_mount *mnt)
 {
     mnt = vfs_mount_base(mnt);
-    return (mnt->wb_err & MODEL_ERR_SEEN) ? mnt->wb_err : 0u;
+    ofd->wb_seen = (mnt->wb_err & MODEL_ERR_SEEN) ? mnt->wb_err : 0u;
+    ofd->sb_seen = (mnt->sb_wb_err & MODEL_ERR_SEEN) ? mnt->sb_wb_err : 0u;
 }
 
 /** fsync(2) of the description `ofd`, as syscall_fs.c's `sync_entry` makes
  * it: the file's shared pages written back, then the file system's fsync
- * through the description's cursor. */
+ * through the description's cursor, and the write-back's own errno first. */
 static int model_fsync(struct open_file *ofd)
 {
     int mapped = filemap_sync_file(ofd);
     int rc = vfs_fsync(ofd->vmnt, ofd->fhandle, &ofd->wb_seen);
 
-    return mapped != 0 ? -EIO : rc;
+    return mapped != 0 ? mapped : rc;
 }
 
 /** The clock, which no row reads. */
@@ -1109,15 +1143,17 @@ static struct vm_file *writeback_file(struct vfs_mount *mnt, struct open_file *o
     k_memset(model_bytes, 0x65, sizeof(model_bytes));
     k_memset(disk_bytes, 0, sizeof(disk_bytes));
     disk_writes = disk_error = 0;
-    err_records = 0;
+    err_records = sb_records = 0;
     check(f->mkwrite(f, 0, model_page) == 0, "the page is marked for a shared store");
     return f;
 }
 
 /** A failed final write lets the mapping and its descriptor go and keeps
  * the dirty page, its bit and the record's own writer, opened at the
- * mapping; fsync writes the page, lets the writer and the record go, and
- * reports the release's error through the description's cursor, once. */
+ * mapping, and records its failure for syncfs alone; fsync writes the page,
+ * lets the writer and the record go, and answers 0, since its own pass
+ * wrote every store, where a record for fsync would answer the release's
+ * failure the retry repaired. */
 static void writeback_retry_rows(void)
 {
     struct vfs_mount mnt;
@@ -1143,13 +1179,13 @@ static void writeback_retry_rows(void)
               writers_open() == 1 && writer_mount == &mnt,
           "a failed final write frees the mapping and its descriptor and keeps its page, bit "
           "and the record's writer");
-    check(err_records == 1, "and records its failure once");
+    check(err_records == 0 && sb_records == 1, "and records its failure once, for syncfs alone");
     disk_error = 0;
-    check(model_fsync(&ofd) == -EIO && disk_bytes[0] == 0x65 && disk_bytes[PAGE_SIZE - 1] == 0x65,
-          "fsync retries the stored bytes and reports the earlier release error");
+    check(model_fsync(&ofd) == 0 && disk_bytes[0] == 0x65 && disk_bytes[PAGE_SIZE - 1] == 0x65,
+          "fsync retries the stored bytes and answers its own pass, which wrote them");
     check(dshare_count == 0 && shmem_frees == freed + 1 && backing_releases == released + 1 &&
               writers_open() == 0 && node_holds == 0 && model_fsync(&ofd) == 0,
-          "the successful retry frees the record and its writer and reports the error once");
+          "the successful retry frees the record and its writer, and fsync hears nothing after");
 }
 
 /** Final release allocates no buffer, and fsync writes the stores of a
@@ -1324,16 +1360,18 @@ static struct vm_file *second_mapping(struct open_file *ofd, struct open_file *o
 }
 
 /**
- * MS_SYNC after a failed release and a successful retry answers the
- * release's error through the region's own description, which then is not
- * told it again: not by its fsync, nor by the fsync of a descriptor dup(2)
- * or fork(2) made, which shares the description, nor by a description
- * opened after the report; a description open before the failure is told
- * once. A failed write MS_ASYNC answers moves the region's description past
- * it too, as Linux's fsync moves past what it answers (mm/filemap.c:726).
- * The region here maps through a description open only for reading, so the
- * failed release is the file's last writer; the retry writes through the
- * record's own writer, and the later failure through a new writable mapping.
+ * A failed release records its failure for syncfs alone, and MS_SYNC after
+ * it, whose retry writes every store, answers 0, as do the fsync of the
+ * region's description, of a descriptor dup(2) or fork(2) made, of a
+ * description opened after the failure and of one open before it: a
+ * failure a later pass repaired is no fsync's to report, and Linux reports
+ * a write-back's error only to the files of its inode. The description open
+ * before the failure hears it once at syncfs. A failed write is MS_ASYNC's
+ * answer, and again is told to no other description's fsync and once to its
+ * syncfs. The region here maps through a description open only for reading,
+ * so the failed release is the file's last writer; the retry writes through
+ * the record's own writer, and the later failure through a new writable
+ * mapping.
  */
 static void msync_retry_rows(void)
 {
@@ -1362,7 +1400,7 @@ static void msync_retry_rows(void)
     }
     early.vmnt = &mnt;
     early.ino = ofd.ino;
-    early.wb_seen = model_sample(&mnt);
+    model_sample(&early, &mnt);
     disk_error = -EIO;
     vm_file_put(f);
     vm_file_reap();
@@ -1370,17 +1408,18 @@ static void msync_retry_rows(void)
     disk_error = 0;
     k_memset(disk_bytes, 0, sizeof(disk_bytes));
     rc = filemap_msync(g, 1);
-    check(rc == -EIO && disk_bytes[0] == 0x65 && disk_bytes[PAGE_SIZE - 1] == 0x65,
-          "MS_SYNC retries the stored bytes and answers the release's error");
-    check(model_fsync(&ofd2) == 0, "fsync of the msync's description does not report it again");
+    check(rc == 0 && disk_bytes[0] == 0x65 && disk_bytes[PAGE_SIZE - 1] == 0x65,
+          "MS_SYNC retries the stored bytes and answers its own pass, which wrote them");
+    check(model_fsync(&ofd2) == 0, "fsync of the msync's description does not report it");
     dup.ofd = &ofd2;
     check(model_fsync(dup.ofd) == 0, "nor does fsync of a dup'd or forked descriptor");
     late.vmnt = &mnt;
     late.ino = ofd.ino;
-    late.wb_seen = model_sample(&mnt);
-    check(model_fsync(&late) == 0, "nor of a description opened after the report");
-    check(model_fsync(&early) == -EIO, "a description open before the failure is told");
-    check(model_fsync(&early) == 0, "once");
+    model_sample(&late, &mnt);
+    check(model_fsync(&late) == 0, "nor of a description opened after the failure");
+    check(model_fsync(&early) == 0, "nor fsync of a description open before the failure");
+    check(model_syncfs(&early) == -EIO, "whose syncfs is told");
+    check(model_syncfs(&early) == 0, "once");
     check(maps == (struct filemap *)g && !maps->next && !ds->wr_handle && ds->ndirty == 0 &&
               writers_open() == 0,
           "the retry cleaned the page and let the record's writer go");
@@ -1390,8 +1429,8 @@ static void msync_retry_rows(void)
     check(filemap_msync(g, 0) == -EIO, "MS_ASYNC answers a failed write");
     disk_error = 0;
     check(model_fsync(&ofd2) == 0, "which fsync of the same description does not report again");
-    check(model_fsync(&early) == -EIO && model_fsync(&early) == 0,
-          "while another description is told once");
+    check(model_fsync(&early) == 0 && model_syncfs(&early) == -EIO && model_syncfs(&early) == 0,
+          "while another description's fsync hears nothing and its syncfs is told once");
     if (h) {
         vm_file_put(h);
     }
@@ -1653,8 +1692,9 @@ static void written_copy_rows(void)
 }
 
 /** A failed final write on a mount whose device has gone drops the dirty
- * page, so that the record and its writer go; the failure is recorded
- * once. */
+ * page, so that the record and its writer go; the pass's failure is
+ * recorded once for syncfs, and the lost stores once for every
+ * description's fsync (`dshare_drop`), since no later pass answers them. */
 static void gone_rows(void)
 {
     struct vfs_mount mnt;
@@ -1674,11 +1714,12 @@ static void gone_rows(void)
     vm_file_put(f);
     vm_file_reap();
     check(!maps && dshare_count == 0 && backing_releases == released + 1 && err_records == 1 &&
-              writers_open() == 0 && node_holds == 0,
-          "a failed final write on a gone device drops the page and lets the writer go");
+              sb_records == 1 && writers_open() == 0 && node_holds == 0 &&
+              model_fsync(&ofd) == -EIO,
+          "a failed final write on a gone device drops the page, lets the writer go and tells "
+          "fsync of the lost stores");
     mount_gone = 0;
     disk_error = 0;
-    (void)model_fsync(&ofd);
 }
 
 /** The unmount of the base mount of a file whose failed release left its
@@ -1723,6 +1764,88 @@ static void unmount_rows(void)
 }
 
 /**
+ * A remount read-only writes the dirty pages of the files of its base mount
+ * first (`filemap_sync_mount`), and none of another mount's, as Linux syncs
+ * the file system before the change; a failed write is the remount's
+ * answer, with the page still dirty and the writer kept, so that the
+ * remount is refused and no store is lost, and one that succeeds lets the
+ * writer and the record go.
+ */
+static void remount_rows(void)
+{
+    struct vfs_mount mnt, other;
+    struct open_file ofd;
+    struct vm_file *f;
+    struct dshare *ds;
+
+    k_memset(&mnt, 0, sizeof(mnt));
+    k_memset(&other, 0, sizeof(other));
+    k_memset(&ofd, 0, sizeof(ofd));
+    f = writeback_file(&mnt, &ofd);
+    if (!f) {
+        return;
+    }
+    ds = record_of(f);
+    disk_error = -EIO;
+    vm_file_put(f);
+    vm_file_reap();
+    disk_error = 0;
+    disk_writes = 0;
+    check(filemap_sync_mount(&other) == 0 && disk_writes == 0 && dshare_count == 1 &&
+              ds->ndirty == 1,
+          "a remount of another mount writes nothing of the file");
+    disk_error = -ENOSPC;
+    check(filemap_sync_mount(&mnt) == -ENOSPC && dshare_count == 1 && ds->ndirty == 1 &&
+              ds->wr_handle,
+          "a write that fails is the remount's answer and keeps the page dirty");
+    disk_error = 0;
+    check(filemap_sync_mount(&mnt) == 0 && disk_bytes[0] == 0x65 && dshare_count == 0 &&
+              writers_open() == 0 && node_holds == 0,
+          "a remount that can write the page writes it, and the record goes");
+}
+
+/**
+ * The put of a file with no name left that leaves only its record's
+ * writer's holds drops its dirty page unwritten and lets the writer and the
+ * record go (`filemap_evict_unlinked`), as Linux's evict drops an unlinked
+ * inode's pages, since nothing can read them; while a mapping of the file
+ * lives, and for another node, it does nothing.
+ */
+static void evict_rows(void)
+{
+    struct vfs_mount mnt;
+    struct open_file ofd;
+    struct vm_file *f;
+    struct dshare *ds;
+    void *node;
+    int other;
+
+    k_memset(&mnt, 0, sizeof(mnt));
+    k_memset(&ofd, 0, sizeof(ofd));
+    f = writeback_file(&mnt, &ofd);
+    if (!f) {
+        return;
+    }
+    ds = record_of(f);
+    node = ds->wr_node;
+    filemap_evict_unlinked(&mnt, ofd.ino, node);
+    check(dshare_count == 1 && ds->ndirty == 1 && ds->wr_handle,
+          "nothing is dropped while a mapping lives");
+    disk_error = -EIO;
+    vm_file_put(f);
+    vm_file_reap();
+    disk_error = 0;
+    disk_writes = 0;
+    filemap_evict_unlinked(&mnt, ofd.ino, &other);
+    check(dshare_count == 1 && ds->ndirty == 1 && ds->wr_handle, "nor for another node");
+    filemap_evict_unlinked(&mnt, ofd.ino, node);
+    check(dshare_count == 0 && writers_open() == 0 && node_holds == 0 && disk_writes == 0 &&
+              err_records == 0,
+          "the last put drops the page unwritten, records no error, and lets the writer and "
+          "the record go");
+}
+
+/**
  * A page stored to through a bind mount, whose last write failed with
  * ENOSPC, survives the bind: the record's writer is opened on the base, the
  * mapping's description, the bind's last hold, goes with the mapping, and
@@ -1755,7 +1878,7 @@ static void bind_rows(void)
     vm_file_put(f);
     vm_file_reap();
     check(!maps && backing_releases == released + 1 && ds->ndirty == 1 && ds->wr_handle &&
-              err_records == 1,
+              err_records == 0 && sb_records == 1,
           "a final write that fails with ENOSPC lets the mapping and its description go and "
           "keeps the page dirty");
     filemap_unmount(&bind);
@@ -1784,19 +1907,20 @@ static struct open_file *other_ofd, *watch_ofd;
 static int watch_said;
 
 /** While the first pass writes: a pass over another file of the same file
- * system fails and records, and a description's fsync reports that. */
+ * system fails and records, and a description's syncfs reports that. */
 static void other_pass_fails(void)
 {
     check(filemap_sync_file(other_ofd) == -ENOSPC, "the other file's pass fails");
-    watch_said = model_fsync(watch_ofd);
+    watch_said = model_syncfs(watch_ofd);
 }
 
 /**
  * Two passes over two files of one file system that each fail record each
- * failure: a record the second made while the first slept, and an fsync
- * that reported it, do not keep the first from recording its own, so the
- * description hears it at its next fsync (j153's finding 3), as Linux's
- * write-back records at each failing site.
+ * failure for syncfs: a record the second made while the first slept, and a
+ * syncfs that reported it, do not keep the first from recording its own, so
+ * the description hears it at its next syncfs (j153's finding 3), as Linux's
+ * write-back records at each failing site. The fsync of a third file hears
+ * neither, as Linux reports a write-back's error only to its inode's files.
  */
 static void two_pass_rows(void)
 {
@@ -1826,16 +1950,18 @@ static void two_pass_rows(void)
     check(g && g->mkwrite(g, 0, model_page) == 0, "a second file of the mount is stored to");
     watch.vmnt = &mnt;
     watch.ino = 95;
-    watch.wb_seen = model_sample(&mnt);
+    model_sample(&watch, &mnt);
     other_ofd = &other;
     watch_ofd = &watch;
     watch_said = 0;
     disk_error = -ENOSPC;
     model_write_hook = other_pass_fails;
-    check(filemap_sync_file(&ofd) == -ENOSPC && watch_said == -ENOSPC && err_records == 2,
+    check(filemap_sync_file(&ofd) == -ENOSPC && watch_said == -ENOSPC && sb_records == 2 &&
+              err_records == 0,
           "a pass that fails after another pass recorded and was reported records its own");
-    check(model_fsync(&watch) == -ENOSPC, "so a description that heard the other's hears it");
-    check(model_fsync(&watch) == 0, "once");
+    check(model_syncfs(&watch) == -ENOSPC, "so a description that heard the other's hears it");
+    check(model_syncfs(&watch) == 0, "once");
+    check(model_fsync(&watch) == 0, "and fsync of a third file hears neither");
     disk_error = 0;
     if (g) {
         vm_file_put(g);
@@ -2132,6 +2258,8 @@ int main(void)
     written_copy_rows();
     gone_rows();
     unmount_rows();
+    remount_rows();
+    evict_rows();
     bind_rows();
     two_pass_rows();
     writeback_tail_rows();

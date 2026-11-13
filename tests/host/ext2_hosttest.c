@@ -325,6 +325,28 @@ void vfs_wb_err_set(struct vfs_mount *m, int rc)
     wb_err_last = rc;
 }
 
+/* The node and the handle of a shared mapping's record that holds an
+ * unlinked file (`lifecycle_record_row`), and the calls that let it go. */
+static void *evict_node, *evict_handle;
+static int evict_calls;
+
+/** Let the record's writer go, as filemap.c's `filemap_evict_unlinked`
+ * does at the put that leaves only its two holds: its handle released and
+ * its node put, under the caller's hold. */
+void filemap_evict_unlinked(struct vfs_mount *mnt, uint64_t ino, void *node)
+{
+    void *handle = evict_handle;
+
+    (void)ino;
+    if (node != evict_node || !handle) {
+        return;
+    }
+    evict_calls++;
+    evict_handle = 0;
+    vfs_ext2_type.ops->release(mnt, handle);
+    vfs_ext2_type.ops->put(mnt, node);
+}
+
 /**
  * Record a failed write on the mounted device as the VFS does: keep the
  * first error in `write_error`, record this one for the syncs to report,

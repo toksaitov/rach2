@@ -478,6 +478,14 @@ void vfs_wb_err_set(struct vfs_mount *m, int rc)
     (void)rc;
 }
 
+/** Do nothing: no shared mapping holds a node of these rows. */
+void filemap_evict_unlinked(struct vfs_mount *mnt, uint64_t ino, void *node)
+{
+    (void)mnt;
+    (void)ino;
+    (void)node;
+}
+
 /** Count a write to the cache in `writes`, and one without an order class
  * in `unordered`. */
 void bcache_dirty(struct bbuf *buffer)

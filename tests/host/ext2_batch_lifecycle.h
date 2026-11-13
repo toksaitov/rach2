@@ -2,7 +2,8 @@
  * ext2_batch_lifecycle.h: rows of ext2_hosttest.c, which includes this file
  * after ext2_batch_cases.h, for the life of the file-write batch of
  * rach2/sys/fs/ext2.c: inodes that share a table block, a last close that
- * fails, an unlinked inode released in either order, and a drain stopped
+ * fails, an unlinked inode released in either order and one a shared
+ * mapping's record holds, and a drain stopped
  * at each of its writes. The rows read the image file directly, through
  * the open image of ext2_hosttest.c, to see what is on the disk apart from
  * the driver's pending state.
@@ -240,6 +241,49 @@ static void lifecycle_unlinked_row(int put_first)
 }
 
 /**
+ * An unlinked file that a shared mapping's record still holds, by a node
+ * hold and a handle of its own, frees its blocks at its description's last
+ * close: the put that leaves only the record's two holds lets the record's
+ * writer go (`filemap_evict_unlinked`), as Linux's evict drops an unlinked
+ * inode's pages (fs/inode.c), where the record would keep the blocks until
+ * the unmount. An earlier put, with the description still open, does not.
+ */
+static void lifecycle_record_row(void)
+{
+    void *node, *handle = 0;
+    struct vfs_statfs before, after;
+    unsigned char data[4096];
+    int rc;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    check(mount_rw() == 0, "the record lifecycle volume mounts");
+    node = make_file(mnt.root, "mapped-unlinked", &rc);
+    evict_handle = 0;
+    check(node && OPS->open(&mnt, node, 2, &handle) == 0 &&
+              OPS->open(&mnt, node, 2, &evict_handle) == 0 && OPS->statfs(&mnt, &before) == 0,
+          "the description and the record's handle open");
+    if (!node || !handle || !evict_handle) {
+        return;
+    }
+    OPS->hold(&mnt, node);
+    evict_node = node;
+    evict_calls = 0;
+    memset(data, 0x5A, sizeof(data));
+    check(OPS->write(&mnt, handle, data, sizeof(data), 0) == sizeof(data) &&
+              OPS->unlink(&mnt, mnt.root, "mapped-unlinked") == 0,
+          "the record's file is written and unlinked");
+    OPS->put(&mnt, node);
+    check(evict_calls == 0 && evict_handle, "a put with the description open keeps the record");
+    OPS->release(&mnt, handle);
+    check(evict_calls == 1 && !evict_handle && OPS->statfs(&mnt, &after) == 0 &&
+              after.bfree == before.bfree,
+          "the description's last close lets the record go and frees every data block");
+    evict_node = 0;
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "the record's unlinked file leaves no orphan");
+}
+
+/**
  * Make 33 files and open the first and the last, whose inodes lie in two
  * table blocks of 32 inodes each, truncated to `first` blocks. Their nodes
  * and descriptions go to `nodes` and `handles`. Returns 1, or 0 when a
@@ -399,6 +443,7 @@ static void batch_lifecycle_rows(void)
     lifecycle_failed_close_row();
     lifecycle_unlinked_row(0);
     lifecycle_unlinked_row(1);
+    lifecycle_record_row();
     for (i = 0; i < 2; i++) {
         count = lifecycle_interrupt_one(first[i], -1);
         check(count > 0, "the successful generation supplies interruption stops");
