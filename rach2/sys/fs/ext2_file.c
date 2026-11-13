@@ -1538,8 +1538,7 @@ static int file_sync(struct vfs_mount *mnt, void *handle, int data_only)
     rc = ext2_writeback_drain(em);
     if (rc != 0) {
         rc = ext2_writeback_error(em, rc);
-    } else if (!n || (n->mode & S_IFMT_) != S_IFREG_ || !em->writable ||
-               (mnt->flags & VFS_MS_RDONLY)) {
+    } else if (!n || (n->mode & S_IFMT_) != S_IFREG_ || !ext2_admits(em)) {
         rc = ext2_em_write_out(mnt);
     } else {
         rc = node_write_out(mnt, n, data_only);
@@ -1622,7 +1621,7 @@ int32_t ext2_file_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
     }
     ext2_assert_node_locked(n);
 again:
-    if (!em->writable || (mnt->flags & VFS_MS_RDONLY)) {
+    if (!ext2_admits(em)) {
         rc = -EROFS;
         goto out;
     }

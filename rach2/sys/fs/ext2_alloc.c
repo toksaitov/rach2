@@ -133,19 +133,6 @@ int ext2_may_use_reserved(void)
 }
 
 /**
- * Whether a fault under errors=remount-ro has stopped the mount's
- * allocations (`em->stopped`): -EROFS then, 0 otherwise. An operation
- * already inside that needs a block or an inode gives up as at ENOSPC and
- * rolls back what it changed, which it may still write, so that the fault
- * leaves no half-made file. Read without a lock, as one word: an
- * allocation that races the fault ends as an operation under way does.
- */
-int ext2_alloc_stopped(struct ext2_mount *em)
-{
-    return em->stopped ? -EROFS : 0;
-}
-
-/**
  * Refuse block `b`, which bit `bit` of the bitmap in block `bitmap` calls
  * free, when it may not hold data (`ext2_data_block_ok`): a superblock, a
  * descriptor table, a bitmap or an inode table, as Linux's
@@ -178,7 +165,7 @@ int ext2_block_refused(struct ext2_mount *em, uint32_t bitmap, uint32_t bit, uin
  * group's count lowered and written, and the free count lowered with the
  * hint after it. A clear bit on a block that may not hold data is refused
  * (`ext2_block_refused`) and the search goes on past it, unless the fault
- * stopped the mount's allocations (`ext2_alloc_stopped`). -ENOSPC when the
+ * stopped the mount's allocations (`ext2_allocates`). -ENOSPC when the
  * group has none, -EROFS, or -errno. The caller holds the group's lock.
  */
 static int group_take_block(struct ext2_mount *em, uint32_t g, uint32_t bitmap, uint32_t from,
@@ -206,9 +193,8 @@ static int group_take_block(struct ext2_mount *em, uint32_t g, uint32_t bitmap, 
         if (rc < 0) {
             return rc;
         }
-        rc = ext2_alloc_stopped(em);
-        if (rc != 0) {
-            return rc;
+        if (!ext2_allocates(em)) {
+            return -EROFS;
         }
         from = i + 1;
     }
@@ -233,7 +219,7 @@ static int group_take_block(struct ext2_mount *em, uint32_t g, uint32_t bitmap, 
  * returned, so that no pointer ever names a free block, and the block after
  * it becomes the mount's hint. 0, -ENOSPC when none is free or only the
  * reserved blocks are and the caller is not privileged, -EROFS once a fault
- * stopped the mount's allocations (`ext2_alloc_stopped`), or -errno. Each
+ * stopped the mount's allocations (`ext2_allocates`), or -errno. Each
  * group is searched and changed under its lock, one at a time, as Linux's
  * `ext2_new_blocks` sets a bit under `sb_bgl_lock`; the free count read
  * first is a hint, as Linux's counter is. Under a plan (`ext2_volume_get`) a
@@ -247,7 +233,7 @@ static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
     uint32_t start_in;
     uint64_t free;
 
-    if (ext2_alloc_stopped(em)) {
+    if (!ext2_allocates(em)) {
         return -EROFS;
     }
     free = ext2_free_blocks(em);
@@ -416,7 +402,7 @@ static int group_take_inode(struct ext2_mount *em, uint32_t g, int is_dir, struc
  * the locks. Each group is searched and changed under its lock, one at a
  * time, as Linux's `ext2_new_inode` sets the bit under `sb_bgl_lock`. 0,
  * -ENOSPC, -EROFS once a fault stopped the mount's allocations
- * (`ext2_alloc_stopped`), or -errno, with `n->ino` nonzero when `n` was
+ * (`ext2_allocates`), or -errno, with `n->ino` nonzero when `n` was
  * published. The caller holds no group's lock.
  */
 int ext2_inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, struct ext2_node *n)
@@ -424,7 +410,7 @@ int ext2_inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, str
     uint32_t g0 = (parent_ino - 1) / em->ipg;
     uint32_t tried;
 
-    if (ext2_alloc_stopped(em)) {
+    if (!ext2_allocates(em)) {
         return -EROFS;
     }
     if (ext2_free_inodes(em) == 0) {

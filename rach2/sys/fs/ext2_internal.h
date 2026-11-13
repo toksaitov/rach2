@@ -158,6 +158,19 @@
 #define EXT2_TIME_MAX32     2147483647
 #define EXT2_TIME_MAX_EXTRA (((int64_t)3 << 32) + 2147483647)
 
+/*
+ * The modes of a mount (`em->mode`). RO writes nothing but at its opening;
+ * RW admits changes, allocates and keeps the superblock's state; STOPPED,
+ * which a fault under EXT2_ERRORS_RO makes of RW, admits no change and
+ * allocates nothing, while what is under way still finishes, rolls back,
+ * reclaims and drains, as Linux's ext2 goes on under SB_RDONLY, until a
+ * remount writable checks the volume. A mount whose device write failed is
+ * FAILED whatever its mode (`ext2_failed`), and writes nothing more.
+ */
+#define EXT2_MODE_RO      0
+#define EXT2_MODE_RW      1
+#define EXT2_MODE_STOPPED 2
+
 /* A time of an inode: seconds, and nanoseconds where the inode keeps them. */
 struct ext2_time {
     int64_t sec;
@@ -370,23 +383,15 @@ struct ext2_mount {
     /* The generation the next inode made gets, counted from the mount's
      * second, so a number reused for another file has another generation. */
     uint32_t next_generation;
-    /* Whether the mount writes. A remount read-only clears it under
-     * `em->super`, where a sync reads it again before it notes the
-     * superblock (`ext2_sync`), and under `count_lock` in one step with its
-     * last look at `state` (`finish_writes`). */
-    int writable;
-    /* Set under `em->super` by a fault under EXT2_ERRORS_RO on a writable
-     * mount (`ext2_mark_error`), which makes the mount read-only: no new
-     * operation is admitted to change the volume and no block or inode is
-     * allocated (`ext2_alloc_stopped`), while the operations already inside
-     * still write, so that each finishes or rolls back what it changed, as
-     * Linux's ext2 goes on under SB_RDONLY. `writable` stays set; only a
-     * remount writable, which checks the volume, clears it
-     * (`remount_writable`). */
-    int stopped;
+    /* EXT2_MODE_RO, EXT2_MODE_RW or EXT2_MODE_STOPPED, asked only through
+     * the predicates `ext2_admits`, `ext2_allocates`, `ext2_writes` and
+     * `ext2_keeps_state`, and changed only by the mount, `ext2_mark_error`,
+     * `finish_writes` and `remount_writable`, each under `em->super`. Read
+     * without a lock, as one word. */
+    int mode;
     /* Set while a writable mount or remount checks and opens the volume,
-     * before `writable` is: the only time a mount that is not writable may
-     * write (`ext2_write_owned`). */
+     * before the mode is EXT2_MODE_RW: the only time a mount that is not
+     * writable may write (`ext2_writes`). */
     int opening;
     /* The free counts, kept equal to the sums of the descriptors'. */
     uint64_t free_blocks, free_inodes;
@@ -585,6 +590,11 @@ void ext2_node_share_group(struct ext2_mount *em, struct ext2_node *n, uint32_t 
 int ext2_write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, const void *src,
                      uint32_t len, int sync);
 int ext2_write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uint32_t len, int sync);
+int ext2_failed(const struct ext2_mount *em);
+int ext2_admits(const struct ext2_mount *em);
+int ext2_allocates(const struct ext2_mount *em);
+int ext2_writes(const struct ext2_mount *em);
+int ext2_keeps_state(const struct ext2_mount *em);
 int ext2_assert_writable(struct vfs_mount *mnt, struct ext2_mount *em);
 uint64_t ext2_inode_offset(const struct ext2_mount *em, uint32_t ino);
 void ext2_node_meta_dirty(struct ext2_mount *em, struct ext2_node *n);
@@ -604,7 +614,6 @@ int ext2_gd_store(struct ext2_mount *em, uint32_t g);
 int ext2_bit_first_clear(struct ext2_mount *em, uint32_t bitmap_block, uint32_t from,
                          uint32_t count, uint32_t *out);
 int ext2_may_use_reserved(void);
-int ext2_alloc_stopped(struct ext2_mount *em);
 int ext2_block_refused(struct ext2_mount *em, uint32_t bitmap, uint32_t bit, uint32_t b);
 int ext2_inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, struct ext2_node *n);
 int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir);

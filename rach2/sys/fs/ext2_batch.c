@@ -297,7 +297,7 @@ static int reserve_in(struct ext2_mount *em, struct ext2_write_plan *plan, uint3
         }
         rc = ext2_block_refused(em, ext2_le32(gd), bit, block);
         if (rc > 0) {
-            rc = ext2_alloc_stopped(em);
+            rc = ext2_allocates(em) ? 0 : -EROFS;
             if (rc == 0) {
                 continue;
             }
@@ -333,8 +333,8 @@ static int reserve_in(struct ext2_mount *em, struct ext2_write_plan *plan, uint3
  * is admitted, against the reserved blocks for a caller that is not
  * privileged. A clear bit on a block that may not hold data is refused
  * (`ext2_block_refused`) and the search goes on past it, unless the fault
- * stopped the mount's allocations. 0, -ENOSPC, -EROFS once a fault stopped
- * them (`ext2_alloc_stopped`), or the errors of `writeback_meta`.
+ * stopped the mount's allocations. 0, -ENOSPC, -EROFS on a mount that
+ * allocates nothing (`ext2_allocates`), or the errors of `writeback_meta`.
  */
 static int writeback_reserve(struct ext2_mount *em, struct ext2_write_plan *plan)
 {
@@ -343,7 +343,7 @@ static int writeback_reserve(struct ext2_mount *em, struct ext2_write_plan *plan
     uint32_t g0, tried, g;
     int count = plan->allocs, rc;
 
-    if (ext2_alloc_stopped(em)) {
+    if (!ext2_allocates(em)) {
         return -EROFS;
     }
     if (free <= (uint32_t)count ||
@@ -667,7 +667,7 @@ static int writeback_try(struct ext2_mount *em, struct ext2_node *n, uint64_t of
         rc = -EIO;
         goto fail;
     }
-    if (em->mnt->flags & VFS_MS_RDONLY) {
+    if (!ext2_admits(em)) {
         rc = -EROFS;
         goto fail;
     }
