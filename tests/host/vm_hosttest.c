@@ -321,7 +321,11 @@ static void tree_check(vm_space_t *vm)
 /** Insert in descending and permuted order, split and merge the middle,
  * then remove in a permutation that exercises all deletion shapes. Nodes
  * outside each change must keep their addresses through allocation and
- * rotations. The small page model checks every boundary and gap. */
+ * rotations. The small page model checks every boundary and gap. The
+ * regions are read-only anonymous memory with no commit mark, as Linux
+ * gives a PROT_READ mapping no VM_ACCOUNT, so the middle, which mprotect
+ * marks as it makes it writable and unmarks as it takes write from it
+ * unwritten, matches its neighbours again. */
 static void tree_rows(void)
 {
     vm_space_t vm = {0};
@@ -333,7 +337,7 @@ static void tree_rows(void)
     for (i = 256; i > 0; i--) {
         j = i - 1;
         at = 0x100000u + j * 4 * PG;
-        CHECK(vm_insert(&vm, at, at + 3 * PG, VM_PROT_READ | VM_PROT_ACCOUNT, VM_ANON) == 0);
+        CHECK(vm_insert(&vm, at, at + 3 * PG, VM_PROT_READ, VM_ANON) == 0);
         saved[j] = vm_find(&vm, at);
         present[j] = 1;
         tree_check(&vm);
@@ -349,7 +353,7 @@ static void tree_rows(void)
         CHECK(vm_remove(&vm, at + PG, at + 2 * PG) == 0);
         CHECK(vm_find(&vm, at + PG) == NULL);
         tree_check(&vm);
-        CHECK(vm_insert(&vm, at + PG, at + 2 * PG, VM_PROT_READ | VM_PROT_ACCOUNT, VM_ANON) == 0);
+        CHECK(vm_insert(&vm, at + PG, at + 2 * PG, VM_PROT_READ, VM_ANON) == 0);
         tree_check(&vm);
     }
     for (i = 0; i < 256; i++) {
