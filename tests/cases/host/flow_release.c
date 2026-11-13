@@ -2338,18 +2338,39 @@ static int claim_rows(struct release *r)
  * forks one, behind the gate DIR/run/go, and a perl that sleeps a second
  * stands between the fork and hold.pl, so that a job that could end at once
  * would have ended before its holder ran. The `lost` scenario's holder is
- * killed by the perl whose unreaped child it is. The `jobfast` and `jobstop`
- * scenarios run release.sh's own job_dir, held, job_wait and job_stop, the
- * first with a perl on the path that waits a second before it runs; `drain`
- * runs its mac_live and held_gone on a run whose job has ended and left a
- * process in its group; `session` runs lib.sh's wait_session and locked; and
- * `prepare` runs prepare_host's script for WSL here, through an ssh that
- * runs it with sh. Usage: sh driver DIR HOLD SCENARIO RELEASE.
+ * killed by the perl whose unreaped child it is, and so is `lostgroup`'s,
+ * a -g holder whose job then runs in its group. `groupkill` stops a -g job
+ * that ignores TERM; `adopt` runs a job whose child, which ignores TERM, has
+ * a child that ignores it too. The `jobfast` and `jobstop` scenarios run
+ * release.sh's own job_dir, held, job_wait and job_stop, the first with a
+ * perl on the path that waits a second before it runs, and `jobwriter` the
+ * same with held's job opening its reader a second late; `drain` runs its
+ * mac_live and held_gone on a run whose job has ended and left a process in
+ * its group; `session` runs lib.sh's wait_session and locked, and
+ * `lostsession` session.pl and wait_session after a supervisor is killed
+ * while its session runs; and `prepare` and `recovery` run prepare_host's
+ * script for WSL here, through an ssh that runs it with sh, with an etude
+ * that recovers the ledger and one that fails. Usage: sh driver DIR HOLD
+ * SCENARIO RELEASE.
  */
 static const char hold_driver[] =
     "H=$1 P=$2 how=$3 R=$4\n"
     "d=$H/run repo=${P%/tools/flow/hold.pl}\n"
-    "rm -rf \"$d\" \"$H/ran\" \"$H/ready\" \"$H/state\" \"$H/bin\" \"$H/left\" \"$H/copy\"\n"
+    "# A scenario that orphans processes runs below a perl that adopts and reaps\n"
+    "# them, as init does, since a runner above may adopt them and reap none.\n"
+    "case $how in\n"
+    "lostgroup | lostsession)\n"
+    "    [ -n \"${REAPED-}\" ] || exec env REAPED=1 perl -MConfig -e '\n"
+    "        my %n = (x86_64 => 157, aarch64 => 167, i686 => 172, i386 => 172);\n"
+    "        my ($m) = $Config{archname} =~ /^([^-]+)/;\n"
+    "        syscall($n{$m}, 36, 1, 0, 0, 0) if $^O eq \"linux\" && defined $m && $n{$m};\n"
+    "        my $c = fork(); defined $c or exit 1;\n"
+    "        exec(@ARGV) or exit 127 if !$c;\n"
+    "        while ((my $p = waitpid(-1, 0)) > 0) { exit($? >> 8) if $p == $c }\n"
+    "        exit 1' /bin/sh \"$0\" \"$@\" ;;\n"
+    "esac\n"
+    "rm -rf \"$d\" \"$H/ran\" \"$H/ready\" \"$H/state\" \"$H/bin\" \"$H/left\" \"$H/copy\" "
+    "\"$H/ledger\" \"$H/survived\"\n"
     "mkdir \"$d\" || exit 1\n"
     "look() { perl \"$P\" state \"$d\"; }\n"
     "pause() { perl -e 'select(undef, undef, undef, 0.1)'; }\n"
@@ -2364,9 +2385,9 @@ static const char hold_driver[] =
     "    mkfifo \"$d/go\" || exit 1\n"
     "    [ \"$how\" != gated ] || : > \"$d/stop\"\n"
     "    (\n"
-    "        { IFS= read -r g < \"$d/go\" && [ \"$g\" = go ] || exit 143; : > \"$H/ran\"; exit 3; "
-    "} &\n"
     "        exec 6<> \"$d/go\"\n"
+    "        { exec 5< \"$d/go\" 6<&-; IFS= read -r g <&5 && [ \"$g\" = go ] || exit 143; : > "
+    "\"$H/ran\"; exit 3; } &\n"
     "        exec perl -e 'sleep 1; exec @ARGV' perl \"$P\" run \"$d\" -p \"$!\" < /dev/null\n"
     "    )\n"
     "    echo \"status $?\"\n"
@@ -2379,6 +2400,26 @@ static const char hold_driver[] =
     "    until [ -e \"$H/ready\" ] || [ \"$i\" -ge 150 ]; do i=$((i + 1)); pause; done\n"
     "    perl \"$P\" stop \"$d\" 30\n"
     "    echo \"stop $?\" ;;\n"
+    "groupkill)\n"
+    "    perl \"$P\" run -g -k 1 \"$d\" perl -e '$SIG{TERM} = \"IGNORE\"; open(R, \">\", shift) && "
+    "close(R); sleep 60' \"$H/ready\" &\n"
+    "    i=0\n"
+    "    until [ -e \"$H/ready\" ] || [ \"$i\" -ge 150 ]; do i=$((i + 1)); pause; done\n"
+    "    perl \"$P\" stop \"$d\" 30\n"
+    "    echo \"stop $?\"\n"
+    "    wait ;;\n"
+    "adopt)\n"
+    "    # The job's child ignores TERM and has a child that ignores it too and\n"
+    "    # would write survived after twenty seconds; the job then ends.\n"
+    "    printf '%s\\n' '$SIG{TERM} = \"IGNORE\";' 'my $g = fork(); defined $g or exit 1;' \\\n"
+    "        'if (!$g) { sleep 20; open(S, \">\", \"$ARGV[0]/survived\"); exit 0 }' \\\n"
+    "        'open(R, \">\", \"$ARGV[0]/ready\") && close(R); sleep 60;' > \"$H/left\"\n"
+    "    perl \"$P\" run -k 1 \"$d\" sh -c 'perl \"$1/left\" \"$1\" &\n"
+    "        until [ -e \"$1/ready\" ]; do perl -e \"select(undef, undef, undef, 0.05)\"; done' sh "
+    "\"$H\" 2> /dev/null\n"
+    "    echo \"status $?\"\n"
+    "    look\n"
+    "    [ ! -e \"$H/survived\" ] || echo survived ;;\n"
     "again)\n"
     "    perl \"$P\" run \"$d\" true\n"
     "    perl \"$P\" run \"$d\" true 2> /dev/null\n"
@@ -2389,6 +2430,36 @@ static const char hold_driver[] =
     "        for (1 .. 150) { last if -e \"$ENV{RUN}/live\"; select(undef, undef, undef, 0.1) }\n"
     "        kill(\"KILL\", $c); waitpid($c, 0)' perl \"$P\" run \"$d\" sleep 2\n"
     "    look ;;\n"
+    "lostgroup)\n"
+    "    # A -g holder killed outright reads lost while its job runs in its group,\n"
+    "    # and ended once the group is empty.\n"
+    "    perl -e 'my $c = fork(); defined $c or exit 1; if (!$c) { exec @ARGV or exit 127 }\n"
+    "        for (1 .. 150) { last if -s \"$ENV{RUN}/../ready\"; select(undef, undef, undef, 0.1) "
+    "}\n"
+    "        kill(\"KILL\", $c); waitpid($c, 0)' perl \"$P\" run -g \"$d\" sh -c 'echo $$ > "
+    "\"$1/ready.part\"\n"
+    "        mv \"$1/ready.part\" \"$1/ready\"; exec sleep 60' sh \"$H\"\n"
+    "    look\n"
+    "    g=$(cat \"$d/group\")\n"
+    "    kill -KILL \"$(cat \"$H/ready\")\"\n"
+    "    i=0\n"
+    "    while ps -A -o pgid= | grep -qx \" *$g\" && [ \"$i\" -lt 150 ]; do i=$((i + 1)); pause; "
+    "done\n"
+    "    look ;;\n"
+    "jobwriter)\n"
+    "    # held's job opens its reader a second late, after hold.pl has written\n"
+    "    # its go and closed its end of the gate.\n"
+    "    job=$(sed -n '/^# job_dir NAME:/,/^# tssh ARG/p' \"$R\")\n"
+    "    late=$(printf '%s\\n' \"$job\" | sed 's/^\\( *\\)exec 5< /\\1perl -e \"sleep 1\"; exec 5< "
+    "/')\n"
+    "    [ \"$late\" != \"$job\" ] || echo 'no reader of its own'\n"
+    "    eval \"$late\"\n"
+    "    state=$H/state HOLD_KILL=1\n"
+    "    j=$(job_dir t) || exit 1\n"
+    "    held \"$j\" sh -c 'exit 3' &\n"
+    "    job_wait \"$! $j\"\n"
+    "    echo \"status $?\"\n"
+    "    [ -d \"$j\" ] || echo removed ;;\n"
     "jobfast | jobstop)\n"
     "    eval \"$(sed -n '/^# job_dir NAME:/,/^# tssh ARG/p' \"$R\")\"\n"
     "    state=$H/state HOLD_KILL=1\n"
@@ -2437,9 +2508,10 @@ static const char hold_driver[] =
     "    . \"$repo/tools/flow/lib.sh\"\n"
     "    state=$H/state\n"
     "    mkdir \"$state\" || exit 1\n"
-    "    echo 4242 > \"$state/session\"\n"
+    "    # A group that no process can be in, beyond every system's pid_max.\n"
+    "    echo '99999999 -' > \"$state/session\"\n"
     "    wait_session\n"
-    "    [ -e \"$state/session\" ] || echo 'stale session removed'\n"
+    "    [ ! -e \"$state/session\" ] || echo 'record kept'\n"
     "    perl -MFcntl=:flock -e 'open(L, \">>\", shift) && flock(L, LOCK_EX) or exit 1;\n"
     "        open(R, \">\", shift) && close(R); sleep 60' \"$state/session.live\" \"$H/ready\" &\n"
     "    i=0\n"
@@ -2448,14 +2520,47 @@ static const char hold_driver[] =
     "    kill \"$!\"\n"
     "    wait\n"
     "    locked \"$state/session.live\" || echo free ;;\n"
-    "prepare)\n"
+    "lostsession)\n"
+    "    # A session whose supervisor is killed while its group runs keeps its\n"
+    "    # record, and no other session starts until the group is gone.\n"
+    "    . \"$repo/tools/flow/lib.sh\"\n"
+    "    state=$H/state S=$repo/tools/flow/session.pl\n"
+    "    mkdir \"$state\" || exit 1\n"
+    "    perl \"$S\" \"$state/session\" \"$state/log\" 600 sh -c 'echo $$ > \"$1/ready.part\"\n"
+    "        mv \"$1/ready.part\" \"$1/ready\"; exec sleep 60' sh \"$H\" &\n"
+    "    sup=$!\n"
+    "    i=0\n"
+    "    until [ -s \"$H/ready\" ] || [ \"$i\" -ge 150 ]; do i=$((i + 1)); pause; done\n"
+    "    kill -KILL \"$sup\"\n"
+    "    wait \"$sup\" 2> /dev/null\n"
+    "    wait_session\n"
+    "    [ ! -e \"$state/session\" ] || echo kept\n"
+    "    perl \"$S\" \"$state/session\" \"$state/log\" 600 sh -c ': > \"$1/ran\"' sh \"$H\"\n"
+    "    echo \"status $?\"\n"
+    "    [ -e \"$H/ran\" ] || echo 'ran nothing'\n"
+    "    g=$(cut -d ' ' -f 1 \"$state/session\")\n"
+    "    kill -KILL \"$(cat \"$H/ready\")\"\n"
+    "    i=0\n"
+    "    while ps -A -o pgid= | grep -qx \" *$g\" && [ \"$i\" -lt 150 ]; do i=$((i + 1)); pause; "
+    "done\n"
+    "    perl \"$S\" \"$state/session\" \"$state/log\" 600 sh -c ': > \"$1/ran\"' sh \"$H\"\n"
+    "    echo \"status $?\"\n"
+    "    [ -e \"$H/ran\" ] && [ ! -e \"$state/session\" ] && echo 'ran; record removed' ;;\n"
+    "prepare | recovery)\n"
     "    # WSL's script runs here, as a user whose scan of the copy's processes\n"
-    "    # cannot read every process's directory, or /proc at all.\n"
-    "    eval \"$(sed -n '/^prepare_host()$/,/^}$/p' \"$R\")\"\n"
+    "    # cannot read every process's directory, or /proc at all, with an etude\n"
+    "    # and a ledger of its own; recovery's etude fails.\n"
+    "    eval \"$(sed -n '/^prepare_host()$/,/^}$/p' \"$R\" |\n"
+    "        sed -e \"s|/usr/local/libexec/rach2/etude|$H/bin/etude|\" -e "
+    "\"s|/var/lib/rach2-etude/ledger|$H/ledger|\")\"\n"
     "    PREPARE_COPY=$H/copy\n"
-    "    mkdir -p \"$H/copy/build/held\" \"$H/bin\" || exit 1\n"
+    "    mkdir -p \"$H/copy/build/held\" \"$H/bin\" \"$H/ledger\" || exit 1\n"
+    "    echo 'etude-ledger 1' > \"$H/ledger/claims\"\n"
     "    printf '#!/bin/sh\\nexec /bin/sh -s\\n' > \"$H/bin/ssh\"\n"
-    "    chmod +x \"$H/bin/ssh\"\n"
+    "    printf '#!/bin/sh\\nshift\\nexec \"$@\"\\n' > \"$H/bin/timeout\"\n"
+    "    printf '#!/bin/sh\\nexit %s\\n' \"$([ \"$how\" = prepare ] && echo 0 || echo 1)\" > "
+    "\"$H/bin/etude\"\n"
+    "    chmod +x \"$H/bin/ssh\" \"$H/bin/timeout\" \"$H/bin/etude\"\n"
     "    out=$( (PATH=$H/bin:$PATH; prepare_host) 2> /dev/null)\n"
     "    echo \"status $?\"\n"
     "    printf '%s\\n' \"$out\" | sed \"s|$H|H|g\"\n"
@@ -2493,13 +2598,19 @@ static int hold_saw(struct release *r, const char *scenario, const char *want)
  * gate cannot end before its holder runs, so a fast job's status is its own
  * and not 127 (j141 4), and a stop before the gate opens runs nothing; a job
  * that ignores TERM ends by the KILL of -k, and hold.pl stop waits for it
- * (medium 3); a second holder of the same directory is refused and its
- * `end` stays the first one's (j141 3); and a holder killed outright reads
- * lost. release.sh's own jobs do the same through held, job_wait and
- * job_stop; a Mac run is live, and its directory stays, until what its job
- * left in its group has ended, so that no new run starts beside it; a stale
- * STATE/session is removed without a look at its number; and -p's
- * preparation keeps its copy when the scan of its processes fails.
+ * (medium 3), and with -g so does the group's, which the holder outlives to
+ * write the end (j154 2); a second holder of the same directory is refused
+ * and its `end` stays the first one's (j141 3); a holder killed outright
+ * reads lost, and a -g one reads ended once its group is empty (j154 1); on
+ * Linux a drain KILLs a child it adopts after the KILL's turn (j154 4).
+ * release.sh's own jobs do the same through held, job_wait and job_stop,
+ * and a job that opens its reader after hold.pl has written its go still
+ * reads it (j154 3); a Mac run is live, and its directory stays, until what
+ * its job left in its group has ended, so that no new run starts beside it;
+ * a STATE/session whose supervisor is gone stays, and session.pl starts no
+ * session until the group it names is gone (j154 1); and -p's preparation
+ * keeps its copy when the scan of its processes fails, or when the ledger's
+ * recovery fails (j154 5).
  */
 static int hold_rows(struct release *r)
 {
@@ -2522,10 +2633,28 @@ static int hold_rows(struct release *r)
     ok = check(r, hold_saw(r, "again", "status 125\nended 0\n"),
                "a second holder of a run's directory is refused and leaves the first end") &&
          ok;
+    ok = check(r, hold_saw(r, "groupkill", "ended 137\nstop 0\n"),
+               "a -g job that ignores TERM ends by the group's KILL, which the holder outlives "
+               "to write the end") &&
+         ok;
     ok = check(r, hold_saw(r, "lost", "lost\n"), "a holder killed outright reads lost") && ok;
+    ok = check(r, hold_saw(r, "lostgroup", "lost\nended 137\n"),
+               "a -g holder killed outright reads lost while its group runs, and ended once "
+               "the group is empty") &&
+         ok;
+#ifdef __linux__
+    ok = check(r, hold_saw(r, "adopt", "status 0\nended 0\n"),
+               "a drain KILLs a child it adopts after the KILL's turn, and ends once it has "
+               "no child") &&
+         ok;
+#endif
     ok = check(r, hold_saw(r, "jobfast", "status 3\nremoved\n"),
                "release.sh's held job that ends at once, while its hold.pl is slow to start, "
                "ends with its own status, and job_wait removes its directory") &&
+         ok;
+    ok = check(r, hold_saw(r, "jobwriter", "status 3\nremoved\n"),
+               "release.sh's held job that opens its reader after hold.pl has written its go "
+               "and closed its end still reads it") &&
          ok;
     ok = check(r, hold_saw(r, "jobstop", "status 137\nremoved\n"),
                "release.sh's job_stop ends a job that ignores TERM by the KILL of HOLD_KILL") &&
@@ -2534,9 +2663,15 @@ static int hold_rows(struct release *r)
                "a Mac run whose job has ended stays live, without its end, while a process it "
                "left runs in its group, and held_gone keeps its directory until the run ends") &&
          ok;
-    ok = check(r, hold_saw(r, "session", "stale session removed\nheld\nfree\n"),
-               "wait_session removes a STATE/session whose supervisor is gone, and locked reads "
+    ok = check(r, hold_saw(r, "session", "record kept\nheld\nfree\n"),
+               "wait_session keeps a STATE/session whose supervisor is gone, and locked reads "
                "a lock as held while a process holds it") &&
+         ok;
+    ok = check(r,
+               hold_saw(r, "lostsession",
+                        "kept\nstatus 125\nran nothing\nstatus 0\nran; record removed\n"),
+               "a session whose supervisor was killed keeps its record, and session.pl starts "
+               "no other until its group is gone, and then removes the record") &&
          ok;
     if (prepare_scan_fails())
         ok = check(r,
@@ -2545,6 +2680,14 @@ static int hold_rows(struct release *r)
                             "the copy H/copy stays\nkept\n"),
                    "-p's preparation keeps its copy in WSL when the scan of its processes "
                    "fails") &&
+             ok;
+    if (prepare_scan_fails())
+        ok = check(r,
+                   hold_saw(r, "recovery",
+                            "status 1\nthe processes in H/copy could not be read\n"
+                            "etude status did not recover H/ledger/claims\n"
+                            "the copy H/copy stays\nkept\n"),
+                   "-p's preparation keeps its copy in WSL when the ledger's recovery fails") &&
              ok;
     fx_remove(flow_path(f, "hold"));
     return ok;
@@ -3145,18 +3288,24 @@ static void stop_reap(pid_t holder)
 static int stop_loop_rows(struct release *r, const char *release, pid_t held)
 {
     struct fixture *f = r->f;
-    char path[4300], text[9000], w1[4200], w2[4200];
+    char path[4300], text[9000], w1[4200], w2[4200], w3[4200];
     int ok, unreadable, stopped;
     pid_t loose;
     snprintf(w1, sizeof(w1), "%s", flow_path(f, "tree/tools/flow/build/flow/w1"));
     snprintf(w2, sizeof(w2), "%s", flow_path(f, "tree/tools/flow/build/flow/w2"));
+    snprintf(w3, sizeof(w3), "%s", flow_path(f, "tree/tools/flow/build/flow/w3"));
     snprintf(path, sizeof(path), "%s/session.live", w1);
     flow_put(f, "tree/tools/flow/build/flow/w1/loop.log", "");
     fx_text(path, "");
     chmod(path, 0);
     unreadable = access(path, R_OK) != 0;
     flow_put(f, "tree/tools/flow/build/flow/w2/loop.log", "");
-    flow_put(f, "tree/tools/flow/build/flow/w2/session", "4242\n");
+    /* w2's names this process's group, which runs; w3's a group that no
+     * process can be in, beyond every system's pid_max. */
+    snprintf(text, sizeof(text), "%ld -\n", (long)getpgrp());
+    flow_put(f, "tree/tools/flow/build/flow/w2/session", text);
+    flow_put(f, "tree/tools/flow/build/flow/w3/loop.log", "");
+    flow_put(f, "tree/tools/flow/build/flow/w3/session", "99999999 -\n");
     loose = stop_perl("$| = 1; $0 = 'qemu-system-i386 stoprow'; print qq(\\n); sleep 600", 1);
     stop_run(r, NULL);
     snprintf(text, sizeof(text), "stop: left: mac: %ld qemu-system-i386 stoprow\n", (long)loose);
@@ -3172,20 +3321,27 @@ static int stop_loop_rows(struct release *r, const char *release, pid_t held)
     stopped = fx_exists(path);
     snprintf(path, sizeof(path), "%s/session.stop", w2);
     stopped = stopped && fx_exists(path);
+    snprintf(text, sizeof(text),
+             "/build/flow/w2/session names process group %ld, whose session.pl was killed, and "
+             "the group is not proved gone; a person checks it\n",
+             (long)getpgrp());
+    snprintf(path, sizeof(path), "%s/session", w3);
     ok = check(r,
                stopped && f->out &&
                    (!unreadable ||
                     strstr(f->out, "/build/flow/w1: its session.pl has not ended in ninety "
                                    "seconds\n")) &&
-                   strstr(f->out, "/build/flow/w2/session names process group 4242, whose "
-                                  "session.pl is gone; a person checks it\n"),
+                   strstr(f->out, text) && strstr(f->out, "/build/flow/w3 ended\n") &&
+                   !fx_exists(path),
                "halt asks each loop and session to stop by its files, counts a lock it cannot "
-               "probe as held, and reports a STATE/session whose supervisor is gone") &&
+               "probe as held, reports a STATE/session whose supervisor is gone while its "
+               "group runs, and removes one whose group is gone") &&
          ok;
     snprintf(path, sizeof(path), "%s/session.live", w1);
     chmod(path, 0600);
     fx_remove(w1);
     fx_remove(w2);
+    fx_remove(w3);
     if (loose > 0) {
         kill(loose, SIGKILL);
         waitpid(loose, NULL, 0);
