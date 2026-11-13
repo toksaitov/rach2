@@ -56,7 +56,12 @@
  * description's cursor reports it once, at its fsync, fdatasync, syncfs or
  * msync with MS_SYNC, as Linux's mapping_set_error records it and
  * file_check_and_advance_wb_err reports it (mm/filemap.c:726). The record
- * keeps no error of its own and goes with its last mapping.
+ * keeps no error of its own. A page whose write fails keeps its dirty bit
+ * for the next pass, and the record goes only once it has no mapping and no
+ * dirty page, as Linux frees no dirty folio; until then the last writable
+ * mapping's descriptor is its own (`wr`). A device that has gone, a mount no
+ * namespace sees and an unmount drop the pages that cannot be written
+ * (`dshare_drop`, `filemap_unmount`).
  */
 struct dshare {
     struct dshare *next;
@@ -65,7 +70,7 @@ struct dshare {
     uint32_t users; /* the mappings of it */
     int stores;     /* a shared mapping through a descriptor open for
                        writing has mapped it, so its pages may hold stores
-                       the file lacks; cleared when its last mapping goes */
+                       the file lacks; kept while the record lives */
     /* The faults that read the file less the faults that found their page
      * in memory and the pages a fault mapped from memory before any read,
      * as Linux keeps a file's mmap_miss (mm/filemap.c:3187-3189,
