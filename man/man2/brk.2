@@ -641,10 +641,12 @@ which reports a write-back error recorded since that description last
 looked and moves its place past it, as
 .Xr sync 2
 describes;
-a failed page write is recorded for every description, and after
+a failed page write is recorded for every description and is the answer,
+with
 .Dv MS_ASYNC
-also kept for the file's next
-.Xr fsync 2 ;
+or
+.Dv MS_SYNC ,
+and the mapping's description is not told it again;
 a shared mapping of a file in memory maps the file's pages themselves,
 and a private mapping has nothing to write.
 It checks its arguments and the range first.

@@ -149,20 +149,17 @@ void filemap_file_written(fd_entry_t *e, uint64_t off, uint32_t len);
 void filemap_file_truncated(const struct vfs_mount *mnt, uint64_t ino, uint64_t size);
 
 /** For fsync of the file `ofd` is open on, reap pending mapping releases
- * and write the file's pages back; 0, or the first writeback error no fsync
- * has reported, which this call consumes. A failed last unmap keeps its file
- * and pages until a write-back of every page succeeds, and the error until
- * an fsync reports it. Under the big lock. */
+ * and write the file's pages back; 0, or the failure of this write-back. A
+ * failure, this one's or an earlier one's, a failed last unmap's among them,
+ * is recorded only in the file system's write-back errors, which the
+ * caller's fsync reports through the description's cursor (`vfs_fsync`). A
+ * failed last unmap keeps its file and pages until a write-back of every
+ * page succeeds. Under the big lock. */
 int filemap_sync_file(const struct open_file *ofd);
-
-/** Free the records of the files of `mnt` that hold only a writeback error
- * no fsync reported, at its unmount, when no mapping of its files is left.
- * Takes the big lock when the caller lacks it. */
-void filemap_forget_mount(const struct vfs_mount *mnt);
 
 /** For sync, write back the pages in memory of every file a shared mapping
  * maps; a failure is not answered here but recorded for each description's
- * fsync and syncfs (`vfs_wb_err_set`) and kept for the file's next fsync. */
+ * fsync and syncfs (`vfs_wb_err_set`). */
 void filemap_sync_all(void);
 
 /** msync of the mapping `f` of a region: its file's pages written back
@@ -170,8 +167,8 @@ void filemap_sync_all(void);
  * system's fsync after them through `f`'s own description, whose cursor
  * into the write-back errors moves past what it answers, as Linux's msync
  * syncs the region's file (mm/msync.c:87); 0 or the first failure. A failed
- * page write is recorded for every description, and without `flush` kept
- * for the file's next fsync as well. */
+ * page write is recorded for every description's sync and, being answered,
+ * moves `f`'s description's cursor past it, with or without `flush`. */
 int filemap_msync(struct vm_file *f, int flush);
 
 /**

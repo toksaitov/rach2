@@ -447,29 +447,62 @@ int shmem_truncate(struct shmem *sh, uint64_t size)
     return 0;
 }
 
-/** Not reached. */
-int vfs_fsync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
-{
-    (void)mnt;
-    (void)handle;
-    (void)seen;
-    return 0;
-}
+/* The fields of the model mount's write-back errors (`wb_err`), as vfs.c
+ * keeps them: the errno, the bit set once a sync has reported it, and the
+ * step of the count above them. */
+#define MODEL_ERR_MASK 0xfffu
+#define MODEL_ERR_SEEN 0x1000u
+#define MODEL_ERR_STEP 0x2000u
 
-/** Not reached: no row runs an msync with MS_SYNC. */
-int vfs_fsync_error(struct vfs_mount *mnt, uint32_t *seen)
-{
-    (void)mnt;
-    (void)seen;
-    return 0;
-}
-
-/** A failed write-back's record for the descriptions' syncs, which no row
- * reads: the rows read the error kept for the file's fsync. */
+/** Record `rc` in the write-back errors of `mnt`, as vfs.c's errseq_set
+ * does: the errno replaced, and the count moved after a report. */
 void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
 {
-    (void)mnt;
-    (void)rc;
+    uint32_t next =
+        (mnt->wb_err & ~(MODEL_ERR_MASK | MODEL_ERR_SEEN)) | ((uint32_t)-rc & MODEL_ERR_MASK);
+
+    if (mnt->wb_err & MODEL_ERR_SEEN) {
+        next += MODEL_ERR_STEP;
+    }
+    mnt->wb_err = next;
+}
+
+/** The errno recorded on `mnt` since the cursor `*seen` last looked, with
+ * the cursor moved past it, else 0, as vfs.c's check and advance. */
+int vfs_fsync_error(struct vfs_mount *mnt, uint32_t *seen)
+{
+    if (mnt->wb_err == *seen) {
+        return 0;
+    }
+    mnt->wb_err |= MODEL_ERR_SEEN;
+    *seen = mnt->wb_err;
+    return -(int)(mnt->wb_err & MODEL_ERR_MASK);
+}
+
+/** The file system's fsync, which writes nothing in the model, and then the
+ * description's report (`vfs_fsync_error`). */
+int vfs_fsync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
+{
+    (void)handle;
+    return vfs_fsync_error(mnt, seen);
+}
+
+/** The cursor a description of a file of `mnt` opened now starts with, as
+ * `vfs_wb_err_sample` gives it: before an error nobody has reported. */
+static uint32_t model_sample(const struct vfs_mount *mnt)
+{
+    return (mnt->wb_err & MODEL_ERR_SEEN) ? mnt->wb_err : 0u;
+}
+
+/** fsync(2) of the description `ofd`, as syscall_fs.c's `sync_entry` makes
+ * it: the file's shared pages written back, then the file system's fsync
+ * through the description's cursor. */
+static int model_fsync(struct open_file *ofd)
+{
+    int mapped = filemap_sync_file(ofd);
+    int rc = vfs_fsync(ofd->vmnt, ofd->fhandle, &ofd->wb_seen);
+
+    return mapped != 0 ? -EIO : rc;
 }
 
 /** The clock, which no row reads. */
@@ -894,7 +927,8 @@ static struct vm_file *writeback_file(struct vfs_mount *mnt, struct open_file *o
     return f;
 }
 
-/** Failed unmaps keep stores; fsync reports the error after a good retry. */
+/** Failed unmaps keep stores; fsync reports the error after a good retry,
+ * through the description's cursor, once. */
 static void writeback_retry_rows(void)
 {
     struct vfs_mount mnt;
@@ -917,12 +951,11 @@ static void writeback_retry_rows(void)
               backing_releases == released && dshare_count == 1,
           "a failed final write keeps its page, mark, file and mapping for retry");
     disk_error = 0;
-    check(filemap_sync_file(&ofd) == -EIO && disk_bytes[0] == 0x65 &&
-              disk_bytes[PAGE_SIZE - 1] == 0x65,
+    check(model_fsync(&ofd) == -EIO && disk_bytes[0] == 0x65 && disk_bytes[PAGE_SIZE - 1] == 0x65,
           "fsync retries the stored bytes and reports the earlier release error");
     vm_file_reap();
     check(!maps && dshare_count == 0 && shmem_frees == freed + 1 &&
-              backing_releases == released + 1 && filemap_sync_file(&ofd) == 0,
+              backing_releases == released + 1 && model_fsync(&ofd) == 0,
           "the successful retry frees the keeper and reports its error once");
 }
 
@@ -1034,7 +1067,8 @@ static void writeback_bounded_rows(void)
           "cleanup frees the later mapping, its pages and its description");
 }
 
-/** A retry by sync(2) alone frees what a failed release kept, not its error. */
+/** A retry by sync(2) alone frees what a failed release kept, the file's
+ * record with it, and leaves the error to the descriptions' cursors. */
 static void writeback_sync_retry_rows(void)
 {
     struct vfs_mount mnt;
@@ -1060,13 +1094,81 @@ static void writeback_sync_retry_rows(void)
     vm_file_reap();
     ds = dshare_of(&mnt, ofd.ino);
     check(!maps && !model_dead && backing_releases == released + 1 && disk_bytes[0] == 0x65 &&
-              dshare_count == 1 && ds && ds->users == 0 && ds->error == -EIO,
-          "a successful sync(2) frees the kept pages, descriptor and mapping, and keeps the error");
-    filemap_sync_all();
-    check(dshare_count == 1, "sync(2) leaves a record holding only an error alone");
-    check(filemap_sync_file(&ofd) == -EIO && dshare_count == 0,
-          "the next fsync reports the error and frees the record");
-    check(filemap_sync_file(&ofd) == 0, "and reports it once");
+              dshare_count == 0 && !ds,
+          "a successful sync(2) frees the kept pages, descriptor, mapping and the file's record");
+    check(model_fsync(&ofd) == -EIO, "the next fsync reports the error through the cursor");
+    check(model_fsync(&ofd) == 0, "and reports it once");
+}
+
+/**
+ * MS_SYNC after a failed release and a successful retry answers the
+ * release's error through the region's own description, which then is not
+ * told it again: not by its fsync, nor by the fsync of a descriptor dup(2)
+ * or fork(2) made, which shares the description, nor by a description
+ * opened after the report; a description open before the failure is told
+ * once. A failed write MS_ASYNC answers moves the region's description past
+ * it too, as Linux's fsync moves past what it answers (mm/filemap.c:726).
+ */
+static void msync_retry_rows(void)
+{
+    struct vfs_mount mnt;
+    struct open_file ofd, ofd2, early, late;
+    fd_entry_t e2, dup;
+    struct vm_file *f, *g;
+    int rc;
+
+    k_memset(&mnt, 0, sizeof(mnt));
+    k_memset(&ofd, 0, sizeof(ofd));
+    k_memset(&ofd2, 0, sizeof(ofd2));
+    k_memset(&early, 0, sizeof(early));
+    k_memset(&late, 0, sizeof(late));
+    f = writeback_file(&mnt, &ofd);
+    if (!f) {
+        return;
+    }
+    ofd2.vmnt = &mnt;
+    ofd2.ino = ofd.ino;
+    k_memset(&e2, 0, sizeof(e2));
+    e2.type = FD_TYPE_FILE;
+    e2.flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    e2.ofd = &ofd2;
+    g = filemap_disk_shared(&e2);
+    check(g != NULL, "a second shared mapping, through its own description, is made");
+    if (!g) {
+        return;
+    }
+    early.vmnt = &mnt;
+    early.ino = ofd.ino;
+    early.wb_seen = model_sample(&mnt);
+    disk_error = -EIO;
+    vm_file_put(f);
+    vm_file_reap();
+    check(((struct filemap *)f)->retained == 1, "the failed final write keeps its mapping");
+    disk_error = 0;
+    k_memset(disk_bytes, 0, sizeof(disk_bytes));
+    rc = filemap_msync(g, 1);
+    check(rc == -EIO && disk_bytes[0] == 0x65 && disk_bytes[PAGE_SIZE - 1] == 0x65,
+          "MS_SYNC retries the stored bytes and answers the release's error");
+    check(model_fsync(&ofd2) == 0, "fsync of the msync's description does not report it again");
+    dup = e2;
+    check(model_fsync(dup.ofd) == 0, "nor does fsync of a dup'd or forked descriptor");
+    late.vmnt = &mnt;
+    late.ino = ofd.ino;
+    late.wb_seen = model_sample(&mnt);
+    check(model_fsync(&late) == 0, "nor of a description opened after the report");
+    check(model_fsync(&early) == -EIO, "a description open before the failure is told");
+    check(model_fsync(&early) == 0, "once");
+    check(!maps->next && maps == (struct filemap *)g && !model_dead,
+          "the retry let the failed release's mapping go");
+    disk_error = -EIO;
+    check(filemap_msync(g, 0) == -EIO, "MS_ASYNC answers a failed write");
+    disk_error = 0;
+    check(model_fsync(&ofd2) == 0, "which fsync of the same description does not report again");
+    check(model_fsync(&early) == -EIO && model_fsync(&early) == 0,
+          "while another description is told once");
+    vm_file_put(g);
+    vm_file_reap();
+    check(!maps && dshare_count == 0 && !model_dead, "the msync rows leave no mapping");
 }
 
 /** Stores beyond EOF are zeroed before a later growth can expose them. */
@@ -1105,6 +1207,7 @@ int main(void)
     writeback_late_put_rows();
     writeback_bounded_rows();
     writeback_sync_retry_rows();
+    msync_retry_rows();
     writeback_tail_rows();
     if (fails) {
         printf("filemap-hosttest: %d failed\n", fails);
