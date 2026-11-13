@@ -147,6 +147,8 @@ static int together_tree(struct fixture *f)
                            "tests/system/suites.mk",
                            "tests/system/wifi/wifi.mk",
                            "tests/system/wifi/hwsimrelay.mk",
+                           "tests/system/games/rules.mk",
+                           "tests/graphics/d3d/rules.mk",
                            NULL};
     char target[4096];
     snprintf(target, sizeof(target), "%s", bp(f->work, "tree"));
