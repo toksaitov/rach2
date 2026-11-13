@@ -15,55 +15,65 @@
 <7>[0.000000] memory: map: 0x0000000000000000-0x000000000009FC00 available
 <7>[0.000000] memory: map: 0x000000000009FC00-0x00000000000A0000 reserved
 <7>[0.000000] memory: map: 0x00000000000F0000-0x0000000000100000 reserved
-<7>[0.000000] memory: map: 0x0000000000100000-0x000000000FFE0000 available
-<7>[0.000000] memory: map: 0x000000000FFE0000-0x0000000010000000 reserved
+<7>[0.000000] memory: map: 0x0000000000100000-0x000000001FFE0000 available
+<7>[0.000000] memory: map: 0x000000001FFE0000-0x0000000020000000 reserved
+<7>[0.000000] memory: map: 0x00000000B0000000-0x00000000C0000000 reserved
+<7>[0.000000] memory: map: 0x00000000FED1C000-0x00000000FED20000 reserved
 <7>[0.000000] memory: map: 0x00000000FFFC0000-0x0000000100000000 reserved
-<6>[0.000000] memory: usable 261631 KiB, unreachable 0 KiB, reserved 12211 KiB, managed 249420 KiB
+<7>[0.000000] memory: map: 0x000000FD00000000-0x0000010000000000 reserved
+<6>[0.000000] memory: usable 523775 KiB, unreachable 0 KiB, reserved 12475 KiB, managed 511300 KiB
 <7>[0.000000] boot: paging: ready
 <7>[0.000000] pci: list: 4 functions
 <7>[0.000000] boot: page cache: ready
 <7>[0.000000] acpi: rsdp: at 0xf52e0, from the bios area
-<6>[0.000000] acpi: tables: rsdt at 0xffe234b, revision 0, BOCHS : FACP APIC WAET DSDT
+<6>[0.000000] acpi: tables: rsdt at 0x1ffe2325, revision 0, BOCHS : FACP APIC MCFG WAET DSDT
 <6>[0.000000] acpi: madt: 4 processors (4 usable), 1 ioapics, 5 overrides, 1 nmi inputs, an 8259 pair
 <7>[0.000000] acpi: madt: override: isa 0 to gsi 2, flags 0x0
 <7>[0.000000] acpi: madt: override: isa 5 to gsi 5, flags 0xd
 <7>[0.000000] acpi: madt: override: isa 9 to gsi 9, flags 0xd
 <7>[0.000000] acpi: madt: override: isa 10 to gsi 10, flags 0xd
 <7>[0.000000] acpi: madt: override: isa 11 to gsi 11, flags 0xd
-<6>[0.000000] acpi: fadt: revision 1, pm1a 0x604, pm timer 0x608 (24-bit), reset none, 8042 yes, century 50
+<6>[0.000000] acpi: fadt: revision 3, pm1a 0x604, pm timer 0x608 (24-bit), reset register, 8042 yes, century 50
 <6>[0.000000] acpi: dsdt: \_S5 sleep types 0 and 0
+<6>[0.000000] acpi: mcfg: segment 0, buses 0 to 255 at 0xb0000000
+<6>[0.000000] pci: ecam: buses 0 to 0 of segment 0 at 0xb0000000
+<6>[0.000000] pci: ecam: 0 functions with extended capabilities
 <6>[0.000000] pmtimer: ready: 24-bit at 0x608
 <7>[0.000000] lapic: ready: id 0, version 0x14, xapic mode
 <6>[0.000000] ioapic: ready: id 0 at 0xfec00000, version 0x20, gsi 0 to 23
-<6>[0.000000] lapic: tick: 249881 counts, measured against the pm timer
+<6>[0.000000] lapic: tick: 249893 counts, measured against the pm timer
 <6>[0.000000] ioapic: interrupts: lines through the ioapic, the 8259 masked
-<6>[0.008000] lapic: timer: vector 32 for ticks and events
+<6>[0.004000] lapic: timer: vector 32 for ticks and events
 <7>[0.008000] boot: timer: ready
-<6>[0.008000] rtc: 2026-11-13 00:47:24 UTC
+<6>[0.008000] rtc: 2026-11-13 01:43:58 UTC
 <7>[0.008000] clock: ready
 <6>[0.008000] entropy: ready: RDSEED, trusted
-<6>[0.008000] board: ready: piix4
-<7>[0.008000] ioapic: route: line 1 to gsi 1, vector 33, edge, active high
+<6>[0.008000] board: ich9: ACPI enabled
+<6>[0.008000] board: ich9: masked the SCI on IRQ 9
+<6>[0.008000] board: ready: ich9
+<6>[0.012000] watchdog: ready: TCO version 2 at 660, running, fed by the kernel until opened, heartbeat 30 s, nowayout 0
+<7>[0.012000] ioapic: route: line 1 to gsi 1, vector 33, edge, active high
 <6>[0.012000] console: blank: after 600 seconds without input
 <7>[0.012000] ioapic: route: line 4 to gsi 4, vector 36, edge, active high
 <7>[0.012000] boot: keyboard: ready
-<7>[0.012000] boot: syscall: ready
-<7>[0.012000] boot: process: ready
-<7>[0.012000] boot: scheduler: ready
+<7>[0.016000] boot: syscall: ready
+<7>[0.016000] boot: process: ready
+<7>[0.016000] boot: scheduler: ready
 <7>[0.020000] acpi: acpica: RSDP 0x00000000000F52E0 000014 (v00 BOCHS )
-<7>[0.020000] acpi: acpica: RSDT 0x000000000FFE234B 000030 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
-<7>[0.020000] acpi: acpica: FACP 0x000000000FFE221F 000074 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
-<7>[0.020000] acpi: acpica: DSDT 0x000000000FFE0040 0021DF (v01 BOCHS  BXPC     00000001 BXPC 00000001)
-<7>[0.020000] acpi: acpica: FACS 0x000000000FFE0000 000040
-<7>[0.020000] acpi: acpica: APIC 0x000000000FFE2293 000090 (v03 BOCHS  BXPC     00000001 BXPC 00000001)
-<7>[0.020000] acpi: acpica: WAET 0x000000000FFE2323 000028 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.020000] acpi: acpica: RSDT 0x000000001FFE2325 000034 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.020000] acpi: acpica: FACP 0x000000001FFE213D 0000F4 (v03 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.020000] acpi: acpica: DSDT 0x000000001FFE0040 0020FD (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.020000] acpi: acpica: FACS 0x000000001FFE0000 000040
+<7>[0.024000] acpi: acpica: APIC 0x000000001FFE2231 000090 (v03 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.024000] acpi: acpica: MCFG 0x000000001FFE22C1 00003C (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+<7>[0.024000] acpi: acpica: WAET 0x000000001FFE22FD 000028 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
 <7>[0.040000] acpi: acpica: 1 ACPI AML tables successfully acquired and loaded
-<7>[0.044000] ioapic: route: line 9 to gsi 9, vector 41, level, active high
-<7>[0.044000] acpi: sci: line 9
+<7>[0.048000] ioapic: route: line 9 to gsi 9, vector 41, level, active high
+<7>[0.048000] acpi: sci: line 9
 <6>[0.056000] acpi: pnp: i8042 kbd: PNP: PNP0303
 <6>[0.056000] acpi: pnp: i8042 aux: PNP: PNP0f13
-<7>[0.060000] acpi: acpica: Enabled 2 GPEs in block 00 to 0F
-<6>[0.060000] acpi: acpica: 349 objects, 0 errors
+<7>[0.060000] acpi: acpica: Enabled 2 GPEs in block 00 to 3F
+<6>[0.060000] acpi: acpica: 255 objects, 0 errors
 <7>[0.060000] mouse: started
 <7>[0.060000] ioapic: route: line 12 to gsi 12, vector 44, edge, active high
 <7>[0.064000] mouse: ready
@@ -72,36 +82,62 @@
 <6>[0.064000] disk: policy: read-write
 <6>[0.064000] modules: found 1
 <6>[0.064000] modules: ram disk: 0xf8400000, 2097152 bytes
-<6>[0.064000] block: skipped: rach2.nodisk
-<6>[0.068000] krffs: mounted: 2 files
-<6>[0.068000] usb: started
-<7>[0.068000] usb: controller: none
-<6>[0.068000] usb: absent: no xHCI controller on the bus
-<6>[0.068000] net: started
-<4>[0.068000] net: absent: no supported network card
-<6>[0.068000] drm: start
-<6>[0.360000] timing: tick 250 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 2000 us
-<6>[0.360000] clock: reference: the pm timer; a tick the timer misses or delays is counted
-<6>[0.372000] smp: cpu1: tsc: not checked: no rate was measured
-<6>[0.380000] smp: cpu2: tsc: not checked: no rate was measured
-<6>[0.392000] smp: cpu3: tsc: not checked: no rate was measured
-<6>[0.392000] smp: processors: 4 online of 4
-<6>[0.404000] nmi_watchdog: no counter: the processor lists no cycles counter
-<6>[0.408000] watchdog: hard lockup: buddy check of the next processor
-<6>[0.408000] boot: starting /sbin/init
-<7>[0.412000] acpi: thread: kacpid is pid 4
-<7>[0.416000] mouse: worker: kpsmoused is pid 5
-<7>[0.420000] input: sysfs: worker: kinputd is pid 6
+<6>[0.064000] block: started
+<7>[0.064000] ahci: found: 8086:2922 at 0:31.2, prog-if 1, BAR5 FEBFF000
+<7>[0.372000] ahci: port 0: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[0.372000] ahci: port 1: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[0.372000] ahci: port 2: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[0.372000] ahci: port 3: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[0.376000] ahci: port 4: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[0.376000] ahci: port 5: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<3>[0.376000] ahci: unusable: no port has a disk
+ahci: CAP=C0141F05 GHC=80000000 PI=3F VS=10000 ports=6 active=-1
+ahci: CAP2=0 BOHC=0 PCS=0
+ahci:  port 0: SSTS=0 (DET=0) SIG=FFFF0101 TFD=50 CMD=6 CLB=4C1400
+ahci:  port 0: SCTL=700 SERR=0
+ahci:  port 1: SSTS=0 (DET=0) SIG=FFFF0101 TFD=50 CMD=6 CLB=4C1400
+ahci:  port 1: SCTL=700 SERR=0
+ahci:  port 2: SSTS=0 (DET=0) SIG=FFFF0101 TFD=50 CMD=6 CLB=4C1400
+ahci:  port 2: SCTL=700 SERR=0
+ahci:  port 3: SSTS=0 (DET=0) SIG=FFFF0101 TFD=50 CMD=6 CLB=4C1400
+ahci:  port 3: SCTL=700 SERR=0
+ahci:  port 4: SSTS=0 (DET=0) SIG=FFFF0101 TFD=50 CMD=6 CLB=4C1400
+ahci:  port 4: SCTL=700 SERR=0
+ahci:  port 5: SSTS=0 (DET=0) SIG=FFFF0101 TFD=50 CMD=6 CLB=4C1400
+ahci:  port 5: SCTL=700 SERR=0
+<6>[0.376000] nvme: none: no NVMe controller on the bus
+<7>[0.376000] ioapic: route: line 14 to gsi 14, vector 46, edge, active high
+<7>[0.376000] ioapic: route: line 15 to gsi 15, vector 47, edge, active high
+<6>[0.380000] krffs: mounted: 2 files
+<6>[0.380000] usb: started
+<7>[0.380000] usb: controller: none
+<6>[0.380000] usb: absent: no xHCI controller on the bus
+<6>[0.380000] net: started
+<4>[0.384000] net: absent: no supported network card
+<6>[0.384000] drm: start
+<6>[0.668000] timing: tick 250 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 2001 us
+<6>[0.668000] clock: reference: the pm timer; a tick the timer misses or delays is counted
+<6>[0.680000] smp: cpu1: tsc: not checked: no rate was measured
+<6>[0.688000] smp: cpu2: tsc: not checked: no rate was measured
+<6>[0.700000] smp: cpu3: tsc: not checked: no rate was measured
+<6>[0.700000] smp: processors: 4 online of 4
+<6>[0.712000] nmi_watchdog: no counter: the processor lists no cycles counter
+<6>[0.712000] watchdog: hard lockup: buddy check of the next processor
+<6>[0.712000] boot: starting /sbin/init
+<7>[0.720000] acpi: thread: kacpid is pid 4
+<7>[0.720000] mouse: worker: kpsmoused is pid 5
+<7>[0.720000] watchdog: worker: watchdogd is pid 6
+<7>[0.724000] input: sysfs: worker: kinputd is pid 7
 TICK250 busy CPU ns: 1000000000
 TICK250 busy USER_HZ ns: 1000000000
 TICK250 one-ms sleeps under one tick: 128
-32:	530	LAPIC	timer
+32:	607	LAPIC	timer
 33:	3	IO-APIC	kbd
 SPU:	0	spurious
 FBK:	0	usb fallback
 TICK250 OK
-<6>[1.640000] poweroff: acpica: \_PTS(5) run, gpes disabled
-<6>[1.640000] shutdown: root: not on a disk; nothing to unmount
-<6>[1.640000] shutdown: Stopping the system. Goodbye!
-<6>[1.640000] poweroff: acpica: status cleared
-<6>[1.640000] poweroff: powering off
+<6>[1.944000] poweroff: acpica: \_PTS(5) run, gpes disabled
+<6>[1.944000] shutdown: root: not on a disk; nothing to unmount
+<6>[1.944000] shutdown: Stopping the system. Goodbye!
+<6>[1.944000] poweroff: acpica: status cleared
+<6>[1.944000] poweroff: powering off
