@@ -1038,7 +1038,7 @@ static void plane_wait_next(uint32_t timeout_ms, int delayed_worker)
     CHECK(!c.f[1].base.listened && !c.f[1].enables && tail_waits == 1,
           "planes: the callback leaves the next wait to process context");
     if (delayed_worker) {
-        model_now_ns = (int64_t)(c.deadline + 1) * 1000000ll;
+        model_now_ns = (int64_t)(c.deadline + 1) * TICK_NS;
     }
     CHECK(drm_atomic_commit_work() == 0 && c.f[1].base.listened && c.f[1].enables == 1 &&
               c.f[1].base.cbs && tail_waits == 2 && tail_wait == &c.f[1].base && works &&
