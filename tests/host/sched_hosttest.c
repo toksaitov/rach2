@@ -403,6 +403,13 @@ void spin_unlock(struct spinlock *lock)
     (void)lock;
 }
 
+/** Nothing: one processor needs no lock, at any nesting `subclass`. */
+void spin_lock_nested(struct spinlock *lock, unsigned int subclass)
+{
+    (void)lock;
+    (void)subclass;
+}
+
 /* The big lock's takes the model saw: how many, and the last one's key. */
 static int bkl_takes, bkl_last_key;
 

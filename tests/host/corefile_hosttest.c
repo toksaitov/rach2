@@ -779,6 +779,13 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
+/** No row puts a file in an epoll set, so a last close has no
+ * registration to take. */
+void epoll_release_file(struct open_file *ofd)
+{
+    (void)ofd;
+}
+
 /** No row waits for a description; a call fails the row. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {

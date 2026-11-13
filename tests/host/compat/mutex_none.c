@@ -22,6 +22,14 @@ void mutex_lock(struct mutex *m)
     m->owner = m;
 }
 
+/** Take `m`, which must be free; the lock class's `subclass` is not
+ * modelled. */
+void mutex_lock_nested(struct mutex *m, unsigned int subclass)
+{
+    (void)subclass;
+    mutex_lock(m);
+}
+
 /** Take `m`, which must be free; no signal comes to a host test. */
 int mutex_lock_interruptible(struct mutex *m)
 {
