@@ -31,7 +31,7 @@
           "step_id": "capture",
           "stage": "capture",
           "machine": "card",
-          "does": "end the machine through QMP, then run pcapcheck netconsole on its card's frames"
+          "does": "wait for the record `netconsole: settled:`, which says the records held while the link settled were sent, end the machine through QMP, then run pcapcheck netconsole on its card's frames"
         }
       ],
       "machines": [

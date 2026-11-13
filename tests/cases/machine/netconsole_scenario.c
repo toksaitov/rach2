@@ -87,8 +87,9 @@ static const char *capture_of(struct net_boot *b)
     return path;
 }
 
-/** The `boot` case: boot to the shell, end the machine, and read the
- * frames. */
+/** The `boot` case: boot to the shell, wait for netconsole's record that
+ * the records held while the link settled were sent, end the machine, and
+ * read the frames. */
 static void boot_case(struct net_case *u, struct net_boot *b)
 {
     static const char *const contract[] = {NULL};
@@ -102,6 +103,7 @@ static void boot_case(struct net_case *u, struct net_boot *b)
 
     net_assert(u, "shell", 1, "");
     net_step(u, "capture");
+    net_seen(b, "] netconsole: settled:");
     if (net_ok(u) && etude_qmp(b->m, "quit", NULL, &reply) == ETUDE_FAILED)
         net_fail(u, "QEMU refused to quit");
     free(reply);
