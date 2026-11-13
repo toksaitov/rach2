@@ -9,10 +9,10 @@ When each check runs, and in what order with the reviews, is in the Testing sect
 
 ## The machines
 
-* The testing host is a Windows PC with an AMD Ryzen 9 7950X3D, 32 threads and 200 GB of memory. Its WSL2 distribution, Ubuntu 26.04, has 128 GB of it; `tools/Readme.md` describes its setup. The release also runs every suite on Windows itself, on the same PC, and on the Mac, as `tools/flow/machines` says, and installs on the Lenovo.
+* The testing host is a Windows PC with an AMD Ryzen 9 7950X3D, 32 threads and 200 GB of memory. Its WSL2 distribution, Ubuntu 26.04, has 128 GB of it; `tools/Readme.md` describes its setup. Until the owner says otherwise, the release runs its full suites in WSL alone, as `tools/flow/machines` says; Windows itself, on the same PC, and the Mac take only a check that needs one of them. The release also installs on the Lenovo.
 * Each team member works in their own account there, reached as `ssh rach2`, in a clone of their own; the account's `.bashrc` gives each run 8 workers and 16 GiB of guest memory. Each run claims a block of host ports for its network suites, so several clones can run the same suite at once. The PC also runs Hyper-V guests for other work.
 * The owner reaches the copy `/home/testing/rach2` from the Mac through `tools/dev/testing.sh`: `sync` replaces the copy with the Mac's tree, `run COMMAND` syncs and runs the command there, `sh` opens a shell, and `wait NAME SEEN` watches a run started as `build/runs/NAME.sh`. The copy is never edited on the host. It has no GitHub login, so a `git fetch` there waits on the terminal for ever; bring a commit to it with a bundle, or set `GIT_TERMINAL_PROMPT=0`.
-* The Mac runs no suites but the release's; a worker there compiles, and boots its build in QEMU or on the Lenovo.
+* The Mac runs no full suites; a worker there compiles, and boots its build in QEMU or on the Lenovo.
 * `sh tools/setup/prereq.sh` checks a machine for every tool the build and the suites need and prints the commands that install what is missing.
 
 ## Reaching the testing host from the Mac

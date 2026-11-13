@@ -3,6 +3,12 @@
 # MACHINE NAME VALUE. An `env` line sets a variable of the run, and a `path`
 # line puts a directory before the run's PATH, in the order of the lines.
 
+# Until the owner says otherwise, the release's full run is WSL's alone: the
+# line below gives every start of release.sh -o, which leaves out the Mac and
+# Windows. A check that needs one of them runs there by hand. Remove the line
+# to run their full suites again.
+release full wsl
+
 # The Mac, which runs release.sh: QEMU under TCG, in the copy and the
 # admission site under build/machines/mac of the clone that runs it. Its
 # guests share 14 GiB of its 24.

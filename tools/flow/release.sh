@@ -135,7 +135,8 @@
 #   Windows, whatever the machines file names, and files no cards for them.
 #   The record says `only wsl lenovo`. Every later start of the same release,
 #   -r among them, takes -o again; the owner decides when a release may skip
-#   them.
+#   them. The line `release full wsl` of the machines file gives every start
+#   -o, so that the release's full run is WSL's alone.
 # * -x MACHINE: leave out MACHINE, mac or windows, as -o leaves out both, and
 #   file no card for it. The record says `skip MACHINE`. Every later start of
 #   the same release takes the same -x again; the owner decides when a release
@@ -3164,6 +3165,7 @@ main()
         restart "$restart"
         exit 0
     fi
+    [ "$(setting release full)" != wsl ] || only=1
     wprep='' wobs='' wholding='' wbeat='' wgiven=''
     if [ -n "$detached" ]; then
         branch=$(sed -n 's/^branch //p' "$state/record")
