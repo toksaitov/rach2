@@ -439,8 +439,8 @@ struct bbuf *bcache_get(block_device_t *dev, uint64_t block)
     }
     if (table_tracking && block == 4 && ++table_gets == 2) {
         store_pauses++;
-        check(ext2_fdatasync(&mount, &file) == 0,
-              "fdatasync completes between the inode encode and its store");
+        check(file.unstored == EXT2_STORING && sleep_lock_held(&file.lock),
+              "between the inode encode and its store the node owes a store and its lock is held");
     }
     return &buffers[block];
 }
@@ -1179,8 +1179,11 @@ int kirq_enabled(void)
     return irq_on;
 }
 
-/** Force fdatasync between a truncation's encode and table store, then
- * require the next fdatasync to put the completed size change on disk. */
+/** Stop a truncation between its inode encode and table store, where an
+ * fdatasync of another process, which reads the node's word without the
+ * lock, finds it owes a store (EXT2_STORING) and waits for the store on the
+ * node's lock, which the truncation holds; then require that fdatasync, run
+ * once the store is done, to put the completed size change on disk. */
 static void inode_store_sync_row(void)
 {
     uint32_t at;
@@ -1192,9 +1195,9 @@ static void inode_store_sync_row(void)
     table_gets = table_syncs = store_pauses = 0;
     table_tracking = 1;
     check(ext2_truncate(&mount, &file, 8192) == 0 && store_pauses == 1,
-          "a growth stores its inode after the forced fdatasync");
-    check(ext2_le32(durable_table + at + 4) == 0,
-          "the racing fdatasync precedes the size store on disk");
+          "a growth stores its inode, stopped once between its encode and its store");
+    check(ext2_le32(durable_table + at + 4) == 0 && table_syncs == 0,
+          "the truncation leaves the size store in the cache");
     check(file.dirty_meta != 0, "the completed size store retains its metadata dirty mark");
     check(ext2_fdatasync(&mount, &file) == 0 && table_syncs == 1 &&
               ext2_le32(durable_table + at + 4) == 8192 && !file.dirty_meta,
