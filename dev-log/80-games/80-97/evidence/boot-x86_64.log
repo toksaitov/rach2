@@ -36,21 +36,21 @@
 <6>[0.000000] pmtimer: ready: 24-bit at 0x608
 <7>[0.000000] lapic: ready: id 0, version 0x14, xapic mode
 <6>[0.000000] ioapic: ready: id 0 at 0xfec00000, version 0x20, gsi 0 to 23
-<6>[0.000000] lapic: tick: 62477 counts, measured against the pm timer
+<6>[0.000000] lapic: tick: 62481 counts, measured against the pm timer
 <6>[0.000000] ioapic: interrupts: lines through the ioapic, the 8259 masked
 <6>[0.003000] lapic: timer: vector 32 for ticks and events
 <7>[0.003000] boot: timer: ready
-<6>[0.005000] rtc: 2026-11-12 23:41:15 UTC
+<6>[0.005000] rtc: 2026-11-13 00:28:05 UTC
 <7>[0.005000] clock: ready
-<6>[0.006000] entropy: ready: RDSEED, trusted
-<6>[0.006000] board: ready: piix4
-<7>[0.008000] ioapic: route: line 1 to gsi 1, vector 33, edge, active high
-<6>[0.008000] console: blank: after 600 seconds without input
-<7>[0.008000] ioapic: route: line 4 to gsi 4, vector 36, edge, active high
-<7>[0.008000] boot: keyboard: ready
-<7>[0.009000] boot: syscall: ready
-<7>[0.009000] boot: process: ready
-<7>[0.009000] boot: scheduler: ready
+<6>[0.005000] entropy: ready: RDSEED, trusted
+<6>[0.005000] board: ready: piix4
+<7>[0.006000] ioapic: route: line 1 to gsi 1, vector 33, edge, active high
+<6>[0.006000] console: blank: after 600 seconds without input
+<7>[0.006000] ioapic: route: line 4 to gsi 4, vector 36, edge, active high
+<7>[0.006000] boot: keyboard: ready
+<7>[0.008000] boot: syscall: ready
+<7>[0.008000] boot: process: ready
+<7>[0.008000] boot: scheduler: ready
 <7>[0.012000] acpi: acpica: RSDP 0x00000000000F52E0 000014 (v00 BOCHS )
 <7>[0.012000] acpi: acpica: RSDT 0x000000000FFE234B 000030 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
 <7>[0.012000] acpi: acpica: FACP 0x000000000FFE221F 000074 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
@@ -63,134 +63,134 @@
 <7>[0.032000] acpi: sci: line 9
 <6>[0.041000] acpi: pnp: i8042 kbd: PNP: PNP0303
 <6>[0.041000] acpi: pnp: i8042 aux: PNP: PNP0f13
-<7>[0.044000] acpi: acpica: Enabled 2 GPEs in block 00 to 0F
-<6>[0.044000] acpi: acpica: 349 objects, 0 errors
+<7>[0.041000] acpi: acpica: Enabled 2 GPEs in block 00 to 0F
+<6>[0.041000] acpi: acpica: 349 objects, 0 errors
 <7>[0.044000] vtd: none: no DMAR table
 <7>[0.044000] mouse: started
 <7>[0.044000] ioapic: route: line 12 to gsi 12, vector 44, edge, active high
-<7>[0.049000] mouse: ready
-<7>[0.049000] audio: started
-<6>[0.049000] audio: ready: PC Speaker fallback
-<6>[0.049000] disk: policy: read-write
-<6>[0.049000] modules: found 1
-<6>[0.050000] modules: ram disk: 0xffffc180000000c0, 2097152 bytes
-<6>[0.050000] block: started
-<7>[0.050000] ahci: no match: 0:31.2 reads FFFF:FFFF class FF:FF prog-if FF
-<6>[0.050000] ahci: none: no SATA controller in AHCI mode on the bus
-<6>[0.050000] nvme: none: no NVMe controller on the bus
-<7>[0.050000] ioapic: route: line 14 to gsi 14, vector 46, edge, active high
-<7>[0.052000] ioapic: route: line 15 to gsi 15, vector 47, edge, active high
-<6>[0.052000] krffs: mounted: 2 files
-<6>[0.052000] usb: started
-<7>[0.052000] usb: controller: none
-<6>[0.052000] usb: absent: no xHCI controller on the bus
-<6>[0.052000] net: started
-<4>[0.052000] net: absent: no supported network card
-<6>[0.052000] drm: start
-<6>[0.056000] kvm: ready: svm
-<6>[0.056000] vfio: ready: 0 groups of 0 functions, no IOMMU unit translates
+<7>[0.044000] mouse: ready
+<7>[0.044000] audio: started
+<6>[0.044000] audio: ready: PC Speaker fallback
+<6>[0.044000] disk: policy: read-write
+<6>[0.044000] modules: found 1
+<6>[0.044000] modules: ram disk: 0xffffc180000000c0, 2097152 bytes
+<6>[0.044000] block: started
+<7>[0.044000] ahci: no match: 0:31.2 reads FFFF:FFFF class FF:FF prog-if FF
+<6>[0.044000] ahci: none: no SATA controller in AHCI mode on the bus
+<6>[0.044000] nvme: none: no NVMe controller on the bus
+<7>[0.048000] ioapic: route: line 14 to gsi 14, vector 46, edge, active high
+<7>[0.048000] ioapic: route: line 15 to gsi 15, vector 47, edge, active high
+<6>[0.050000] krffs: mounted: 2 files
+<6>[0.050000] usb: started
+<7>[0.050000] usb: controller: none
+<6>[0.050000] usb: absent: no xHCI controller on the bus
+<6>[0.050000] net: started
+<4>[0.050000] net: absent: no supported network card
+<6>[0.050000] drm: start
+<6>[0.053000] kvm: ready: svm
+<6>[0.053000] vfio: ready: 0 groups of 0 functions, no IOMMU unit translates
 <6>[0.340000] timing: tick 1000 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 2001 us
 <6>[0.344000] clock: reference: the pm timer; a tick the timer misses or delays is counted
-<6>[0.352000] smp: cpu1: tsc: not checked: no rate was measured
+<6>[0.353000] smp: cpu1: tsc: not checked: no rate was measured
 <6>[0.364000] smp: cpu2: tsc: not checked: no rate was measured
-<6>[0.377000] smp: cpu3: tsc: not checked: no rate was measured
-<6>[0.377000] smp: processors: 4 online of 4
-<6>[0.388000] nmi_watchdog: no counter: the processor lists no cycles counter
+<6>[0.376000] smp: cpu3: tsc: not checked: no rate was measured
+<6>[0.376000] smp: processors: 4 online of 4
+<6>[0.385000] nmi_watchdog: no counter: the processor lists no cycles counter
 <6>[0.388000] watchdog: hard lockup: buddy check of the next processor
 <6>[0.388000] vdso: clock: the system call; no tsc at one rate was measured
-<6>[0.392000] boot: starting /sbin/init
-<7>[0.397000] acpi: thread: kacpid is pid 4
-<7>[0.397000] mouse: worker: kpsmoused is pid 5
-<7>[0.401000] input: sysfs: worker: kinputd is pid 6
+<6>[0.388000] boot: starting /sbin/init
+<7>[0.395000] acpi: thread: kacpid is pid 4
+<7>[0.395000] mouse: worker: kpsmoused is pid 5
+<7>[0.398000] input: sysfs: worker: kinputd is pid 6
 NOHZPROBE interrupts before
-32:	132	LAPIC	timer
+32:	125	LAPIC	timer
 33:	3	IO-APIC	kbd
 46:	1	IO-APIC	ata
 47:	1	IO-APIC	ata
 SPU:	0	spurious
 FBK:	0	usb fallback
 NOHZPROBE interrupts after
-32:	200	LAPIC	timer
+32:	192	LAPIC	timer
 33:	3	IO-APIC	kbd
 46:	1	IO-APIC	ata
 47:	1	IO-APIC	ata
 SPU:	0	spurious
 FBK:	0	usb fallback
 NOHZPROBE slew interrupts before
-32:	210	LAPIC	timer
+32:	202	LAPIC	timer
 33:	3	IO-APIC	kbd
 46:	1	IO-APIC	ata
 47:	1	IO-APIC	ata
 SPU:	0	spurious
 FBK:	0	usb fallback
 NOHZPROBE slew interrupts after
-32:	5027	LAPIC	timer
+32:	5276	LAPIC	timer
 33:	3	IO-APIC	kbd
 46:	1	IO-APIC	ata
 47:	1	IO-APIC	ata
 SPU:	0	spurious
 FBK:	0	usb fallback
 NOHZPROBE watchdog hard begin
-<2>[22.144000] watchdog: watchdog detected hard LOCKUP on cpu 0
-<6>[22.144000] nmi_backtrace: sending NMI from CPU 3 to CPUs 0:
-<4>[22.144000] nmi_backtrace: NMI backtrace for cpu 0
-<4>[22.144000] nmi_backtrace: CPU: 0 PID: 1 Comm: init Not tainted 6.18.0-rach2
-<4>[22.144000] nmi_backtrace: RIP: 0010:0xffffffff8037050f
-<4>[22.144000] nmi_backtrace: RSP: 0018:ffffffff80484c10 EFLAGS: 00010046
-<4>[22.144000] nmi_backtrace: RAX: 0000000000000000 RBX: 0000000000000043 RCX: 00000000000001f4
-<4>[22.144000] nmi_backtrace: RDX: 0000000000000043 RSI: 0000000000000043 RDI: 0000000000000005
-<4>[22.144000] nmi_backtrace: RBP: ffffffff80484c20 R08: 0000000000000006 R09: 0000000000400e37
-<4>[22.144000] nmi_backtrace: R10: 0000000000000000 R11: 0000000000000206 R12: 0000000000000000
-<4>[22.144000] nmi_backtrace: R13: 00000000000008e6 R14: 00000000000000f4 R15: 0000000000000087
-<4>[22.144000] nmi_backtrace: Call Trace:
-<4>[22.144000] nmi_backtrace:  0xffffffff80397fdc
-<4>[22.144000] nmi_backtrace:  0xffffffff803980a4
-<4>[22.144000] nmi_backtrace:  0xffffffff801776fd
-<4>[22.144000] nmi_backtrace:  0xffffffff8017785a
-<4>[22.144000] nmi_backtrace:  0xffffffff8027003a
-<4>[22.144000] nmi_backtrace:  0xffffffff80148b5e
-<4>[22.144000] nmi_backtrace:  0xffffffff80148faa
-<4>[22.144000] nmi_backtrace:  0xffffffff80114b61
-<4>[22.144000] nmi_backtrace:  0xffffffff80374704
-<4>[22.144000] nmi_backtrace:  0xffffffff8010061b
-<2>[24.947000] watchdog: BUG: soft lockup - CPU#0 stuck for 5s! [init:1]
-<3>[24.947000] watchdog: CPU: 0 PID: 1 Comm: init Not tainted 6.18.0-rach2
-<3>[24.947000] watchdog: RIP: 0010:0xffffffff803999b4
-<3>[24.947000] watchdog: RSP: 0018:ffffffff80484c98 EFLAGS: 00010246
-<3>[24.947000] watchdog: RAX: 0000000000000958 RBX: 0000000000000000 RCX: 00000000000002f1
-<3>[24.947000] watchdog: RDX: 0000000000000040 RSI: 0000000000000040 RDI: 0000000000000246
-<3>[24.947000] watchdog: RBP: ffffffff80484cc0 R08: 0000000000000006 R09: 0000000000400e37
-<3>[24.947000] watchdog: R10: 0000000000000000 R11: 0000000000000206 R12: 0000000000001388
-<3>[24.947000] watchdog: R13: ffffc000000940e8 R14: 0000000000000246 R15: 0000000000000007
-<3>[24.947000] watchdog: Call Trace:
-<3>[24.947000] watchdog:  0xffffffff8017785a
-<3>[24.947000] watchdog:  0xffffffff8027003a
-<3>[24.947000] watchdog:  0xffffffff80148b5e
-<3>[24.947000] watchdog:  0xffffffff80148faa
-<3>[24.947000] watchdog:  0xffffffff80114b61
-<3>[24.947000] watchdog:  0xffffffff80374704
-<3>[24.947000] watchdog:  0xffffffff8010061b
+<2>[21.930000] watchdog: watchdog detected hard LOCKUP on cpu 0
+<6>[21.930000] nmi_backtrace: sending NMI from CPU 3 to CPUs 0:
+<4>[21.930000] nmi_backtrace: NMI backtrace for cpu 0
+<4>[21.930000] nmi_backtrace: CPU: 0 PID: 1 Comm: init Not tainted 6.18.0-rach2
+<4>[21.930000] nmi_backtrace: RIP: 0010:0xffffffff80370dcf
+<4>[21.930000] nmi_backtrace: RSP: 0018:ffffffff80484c10 EFLAGS: 00010046
+<4>[21.930000] nmi_backtrace: RAX: 0000000000000000 RBX: 0000000000000043 RCX: 00000000000002d3
+<4>[21.930000] nmi_backtrace: RDX: 0000000000000043 RSI: 0000000000000043 RDI: 0000000000000005
+<4>[21.930000] nmi_backtrace: RBP: ffffffff80484c20 R08: 0000000000000006 R09: 0000000000400ff7
+<4>[21.930000] nmi_backtrace: R10: 0000000000000000 R11: 0000000000000206 R12: 0000000000000000
+<4>[21.930000] nmi_backtrace: R13: 000000000000054e R14: 00000000000000d3 R15: 0000000000000083
+<4>[21.930000] nmi_backtrace: Call Trace:
+<4>[21.930000] nmi_backtrace:  0xffffffff80398bdc
+<4>[21.930000] nmi_backtrace:  0xffffffff80398ca4
+<4>[21.930000] nmi_backtrace:  0xffffffff801776fd
+<4>[21.930000] nmi_backtrace:  0xffffffff8017785a
+<4>[21.930000] nmi_backtrace:  0xffffffff8027073a
+<4>[21.930000] nmi_backtrace:  0xffffffff80148b5e
+<4>[21.930000] nmi_backtrace:  0xffffffff80148faa
+<4>[21.930000] nmi_backtrace:  0xffffffff80114b61
+<4>[21.930000] nmi_backtrace:  0xffffffff80374fc4
+<4>[21.930000] nmi_backtrace:  0xffffffff8010061b
+<2>[24.736000] watchdog: BUG: soft lockup - CPU#0 stuck for 5s! [init:1]
+<3>[24.736000] watchdog: CPU: 0 PID: 1 Comm: init Not tainted 6.18.0-rach2
+<3>[24.736000] watchdog: RIP: 0010:0xffffffff8039a5b4
+<3>[24.736000] watchdog: RSP: 0018:ffffffff80484c98 EFLAGS: 00010246
+<3>[24.736000] watchdog: RAX: 000000000000095e RBX: 0000000000000000 RCX: 00000000000000aa
+<3>[24.736000] watchdog: RDX: 0000000000000040 RSI: 0000000000000040 RDI: 0000000000000246
+<3>[24.736000] watchdog: RBP: ffffffff80484cc0 R08: 0000000000000006 R09: 0000000000400ff7
+<3>[24.736000] watchdog: R10: 0000000000000000 R11: 0000000000000206 R12: 0000000000001388
+<3>[24.736000] watchdog: R13: ffffc000000940e8 R14: 0000000000000246 R15: 0000000000000007
+<3>[24.736000] watchdog: Call Trace:
+<3>[24.736000] watchdog:  0xffffffff8017785a
+<3>[24.736000] watchdog:  0xffffffff8027073a
+<3>[24.736000] watchdog:  0xffffffff80148b5e
+<3>[24.736000] watchdog:  0xffffffff80148faa
+<3>[24.736000] watchdog:  0xffffffff80114b61
+<3>[24.736000] watchdog:  0xffffffff80374fc4
+<3>[24.736000] watchdog:  0xffffffff8010061b
 NOHZPROBE watchdog hard end
 NOHZPROBE stat
-cpu  0 0 1005 8878 0 0 0 0 0 0
-cpu0 0 0 545 1951 0 0 0 0 0 0
-cpu1 0 0 0 2462 0 0 0 0 0 0
-cpu2 0 0 458 2003 0 0 0 0 0 0
-cpu3 0 0 0 2460 0 0 0 0 0 0
-intr 5093
-ctxt 8224
-btime 1794526875
+cpu  0 0 945 8845 0 0 0 0 0 0
+cpu0 0 0 543 1931 0 0 0 0 0 0
+cpu1 0 0 402 2037 0 0 0 0 0 0
+cpu2 0 0 0 2438 0 0 0 0 0 0
+cpu3 0 0 0 2437 0 0 0 0 0 0
+intr 5347
+ctxt 8222
+btime 1794529685
 processes 7
 sleeps_interrupted 0
 process_pid_steps 5
 process_uid_steps 6
-process_timer_steps 25330
-process_timer_passes 9939
+process_timer_steps 26823
+process_timer_passes 10444
 timer_passes_late 0
 tlb_shootdowns 0
 tlb_shootdown_ipis 0
-scheduler_picks 9045
-scheduler_steps 4127
+scheduler_picks 9308
+scheduler_steps 4121
 vm_gap_steps 0
 clock_calls 2
 vdso_tsc 0
@@ -201,7 +201,7 @@ bkl_wait_max_hold 128 1 0
 bkl_hold_max_us 0
 bkl_hold_max_entry 128 1
 bkl_hold_sample_us 0
-bkl_hold_sample_pc ffffffff80113050 ffffffff801083c1 ffffffff8036f7e8 ffffffff801002b4
+bkl_hold_sample_pc ffffffff801855db ffffffff8018580e ffffffff8018588e ffffffff80190012 ffffffff80109129 ffffffff803700a8 ffffffff801002b4
 bkl_hold_max_mark 1 0
 bkl_hold_max_mark 2 0
 bkl_hold_max_mark 4 0
@@ -217,12 +217,12 @@ bkl_hold_entry syscall 38 1 0
 bkl_hold_entry syscall 127 1 0
 bkl_hold_entry syscall 159 2 0
 bkl_hold_entry syscall 203 1 0
+bkl_hold_entry syscall 222 1 0
+bkl_hold_entry syscall 223 1 0
+bkl_hold_entry syscall 224 1 0
+bkl_hold_entry syscall 226 1 0
 bkl_hold_entry syscall 228 2 0
 bkl_hold_entry syscall 283 1 0
-bkl_hold_entry syscall 286 1 0
-bkl_hold_entry vector 0 14566 0
-bkl_hold_entry vector 32 405 0
-bkl_hold_entry take 0 5 0
 kvm_vms 0
 kvm_vcpus 0
 kvm_slots 0
@@ -242,7 +242,7 @@ iommu_dma_faults 0
 iommu_irq_faults 0
 msi_vectors_free 191
 virtio_gpu_copied_bytes 0
-latency_timer_us 401389
+latency_timer_us 400953
 latency_disk_us 0
 latency_diskwait_us 0
 latency_console_us 0
@@ -271,8 +271,8 @@ ext2_node_visits 0
 procs_running 2
 procs_blocked 0
 NOHZPROBE OK
-<6>[24.996000] poweroff: acpica: \_PTS(5) run, gpes disabled
-<6>[24.996000] shutdown: root: not on a disk; nothing to unmount
-<6>[24.996000] shutdown: Stopping the system. Goodbye!
-<6>[24.996000] poweroff: acpica: status cleared
-<6>[24.996000] poweroff: powering off
+<6>[24.760000] poweroff: acpica: \_PTS(5) run, gpes disabled
+<6>[24.760000] shutdown: root: not on a disk; nothing to unmount
+<6>[24.760000] shutdown: Stopping the system. Goodbye!
+<6>[24.760000] poweroff: acpica: status cleared
+<6>[24.760000] poweroff: powering off

@@ -2136,14 +2136,14 @@ void ptimer_exec(process_t *self)
     kirq_restore(irq);
 }
 
-/** Return the poll deadline of timers which currently defer to whole ticks. */
+/** Return the poll deadline of notifying timers deferred to whole ticks. */
 uint32_t timerfd_idle_ticks(void)
 {
     const struct ktimer *t;
     uint32_t wait = TICK_HZ, flags = spin_lock_irqsave(&timer_lock);
 
     for (t = armed; t; t = t->next) {
-        if (t->armed && !t->between) {
+        if (t->armed && !t->between && t->notify != SIGEV_NONE) {
             wait = 1;
             break;
         }
