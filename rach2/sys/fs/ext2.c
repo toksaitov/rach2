@@ -1357,9 +1357,12 @@ static int sb_note(struct ext2_mount *em);
  * Free the dying node `n` and its inode, on a mount that writes
  * (`ext2_writes`), a stopped one among them, as Linux's `ext2_evict_inode`
  * frees under SB_RDONLY; a read-only or failed mount frees no inode, so one
- * left there is an orphan for e2fsck, and so is one whose free fails, which
- * sets the error bit with the record `ext2: inode N: not freed at its last
- * put`. The caller holds no file lock. Ends the count `node_final` took.
+ * left there is an orphan for e2fsck, and so is one whose free fails,
+ * logged as `ext2: inode N: not freed at its last put` and not reported
+ * again, as Linux's `ext2_evict_inode` ignores a failure there
+ * (fs/ext2/inode.c:86-110): the reclaim reader reported the damage it met,
+ * and a failed write is recorded as one. The caller holds no file lock.
+ * Ends the count `node_final` took.
  */
 static void node_free(struct ext2_mount *em, struct ext2_node *n)
 {
@@ -1371,7 +1374,6 @@ static void node_free(struct ext2_mount *em, struct ext2_node *n)
         ext2_node_unlock(n);
         if (rc != 0) {
             klog(KLOG_WARN, "ext2", "inode %d: not freed at its last put", (int)n->ino);
-            ext2_mark_error(em);
         }
     }
     node_drop(em, n);

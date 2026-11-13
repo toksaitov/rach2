@@ -1492,6 +1492,22 @@ static int inode_make(struct ext2_mount *em, const struct ext2_node *dir, uint32
     return 0;
 }
 
+/**
+ * Undo the inode `n` an operation on names made and could not name: its
+ * link count 0 and the inode freed (`ext2_release_inode`). A free that fails
+ * leaves an orphan for e2fsck, logged as `ext2: inode N: not freed after its
+ * operation failed`; the reader reported the fault it met, and a failed
+ * write is recorded as one, so nothing is reported again. The caller holds
+ * `n`'s lock.
+ */
+static void inode_undo(struct ext2_mount *em, struct ext2_node *n)
+{
+    n->nlink = 0;
+    if (ext2_release_inode(em, n) != 0) {
+        klog(KLOG_WARN, "ext2", "inode %d: not freed after its operation failed", (int)n->ino);
+    }
+}
+
 /** `inode_make` under the big lock, taken for an operation on names, which
  * runs without it. */
 static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_t mode, int store,
@@ -1560,8 +1576,10 @@ static int child_unlinked(struct ext2_mount *em, struct ext2_node *c)
  * The `create` of `vfs_ops`: a new regular file `name` in `dir`, the root for
  * NULL, with the permission bits of `mode`: the inode allocated and written
  * whole, then the entry that names it, then the directory's times into the
- * cache. A failure to add the entry frees the inode; a failure to store the
- * times sets the error bit and is not the call's, since the entry is there.
+ * cache. A failure to add the entry frees the inode (`inode_undo`); a
+ * failure to store the times is not the call's, since the entry is there,
+ * and is not reported again: a failed read of the table block was reported
+ * as it was met (READ_SLOT).
  * The batch is drained first. The caller holds the directory's lock, and
  * the new node's is held until it is named. 0 with the node held, -ENOENT
  * for a removed directory, -EEXIST, -ENAMETOOLONG, -EROFS, -ENOSPC,
@@ -1603,17 +1621,13 @@ int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mod
     sleep_lock_subclass(0);
     rc = dir_add(em, d, name, n->ino, 1);
     if (rc != 0) {
-        n->nlink = 0;
-        ext2_release_inode(em, n);
+        inode_undo(em, n);
         ext2_node_unlock(n);
         ext2_node_unhold(em, n);
         return rc;
     }
     ext2_stamp(d, T_MTIME | T_CTIME);
-    rc = ext2_inode_times_later(em, d);
-    if (rc != 0) {
-        ext2_mark_error(em);
-    }
+    (void)ext2_inode_times_later(em, d);
     ext2_node_unlock(n);
     *node = n;
     return 0;
@@ -1683,17 +1697,13 @@ int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         rc = dir_add(em, d, name, n->ino, ext2_ftype_of(n->mode));
     }
     if (rc != 0) {
-        n->nlink = 0;
-        ext2_release_inode(em, n);
+        inode_undo(em, n);
         ext2_node_unlock(n);
         ext2_node_unhold(em, n);
         return rc;
     }
     ext2_stamp(d, T_MTIME | T_CTIME);
-    rc = ext2_inode_times_later(em, d);
-    if (rc != 0) {
-        ext2_mark_error(em);
-    }
+    (void)ext2_inode_times_later(em, d);
     ext2_node_unlock(n);
     *node = n;
     return 0;
@@ -1842,8 +1852,7 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         }
     }
     if (rc != 0) {
-        n->nlink = 0;
-        ext2_release_inode(em, n);
+        inode_undo(em, n);
         ext2_node_unlock(n);
         ext2_node_unhold(em, n);
         return rc;
@@ -1998,9 +2007,9 @@ int ext2_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
  * shorter than 60 bytes is kept in the inode's pointer words, and a longer one
  * in a block of its own, written first (`shared_block_new`); then the inode,
  * then the entry, then the directory's times. A failure to add the entry frees
- * the inode; a failure to store the times sets the error bit and is not the
- * call's, since the entry, on the device on a mount that writes back, names the
- * inode, as in `ext2_create`. The batch is drained first. The caller holds the
+ * the inode; a failure to store the times is not the call's, since the
+ * entry, on the device on a mount that writes back, names the inode, as in
+ * `ext2_create`. The batch is drained first. The caller holds the
  * directory's lock, and the link's is held until it is named. 0, -ENOENT for a
  * removed directory, -ENAMETOOLONG for a name past 255 bytes or for a target
  * that is empty or of a block or more, -EEXIST, -EROFS, -ENOSPC, -ENOMEM, or
@@ -2068,17 +2077,13 @@ int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char 
         rc = dir_add(em, d, name, n->ino, 7);
     }
     if (rc != 0) {
-        n->nlink = 0;
-        ext2_release_inode(em, n);
+        inode_undo(em, n);
         ext2_node_unlock(n);
         ext2_node_unhold(em, n);
         return rc;
     }
     ext2_stamp(d, T_MTIME | T_CTIME);
-    rc = ext2_inode_times_later(em, d);
-    if (rc != 0) {
-        ext2_mark_error(em);
-    }
+    (void)ext2_inode_times_later(em, d);
     ext2_node_unlock(n);
     ext2_node_unhold(em, n);
     return 0;
