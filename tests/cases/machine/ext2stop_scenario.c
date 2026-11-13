@@ -614,9 +614,10 @@ static int only_freed(const char *list, long *inodes)
  * documented state of an unclean stop allows, given the inodes `held`: a
  * pass's heading, a removed inode's zero deletion time, a block the bitmap
  * marks used and nothing points to, an inode the bitmap marks used and
- * nothing uses, an inode in use that no name reaches (`Unattached inode N`)
- * other than a held one, the free counts, a question e2fsck asks and is
- * told no, or its summary. The inodes no name reaches are counted in `*t`.
+ * nothing uses, an inode in use that no name reaches (`Unattached inode N`,
+ * after `Unattached zero-length inode N` when it has no blocks) other than
+ * a held one, the free counts, a question e2fsck asks and is told no, or
+ * its summary. The inodes no name reaches are counted in `*t`.
  *
  * Beyond the held inodes, those are the files a writer removed: the removal
  * writes the entry to the disk at once, so that no name there names a freed
@@ -637,6 +638,7 @@ static int allowed(const char *line, size_t len, const long held[HELD], struct t
                                         "",
                                         NULL};
     static const char deleted[] = "Deleted inode ", unattached[] = "Unattached inode ",
+                      empty[] = "Unattached zero-length inode ",
                       blocks[] = "Block bitmap differences:",
                       inodes[] = "Inode bitmap differences:";
     char text[512], *end;
@@ -653,6 +655,10 @@ static int allowed(const char *line, size_t len, const long held[HELD], struct t
     if (strncmp(text, deleted, strlen(deleted)) == 0) {
         ino = strtol(text + strlen(deleted), &end, 10);
         return ino > 10 && strcmp(end, " has zero dtime.  Fix? no") == 0;
+    }
+    if (strncmp(text, empty, strlen(empty)) == 0) {
+        ino = strtol(text + strlen(empty), &end, 10);
+        return ino > 10 && strcmp(end, ".  Clear? no") == 0 && !is_held(ino, held);
     }
     if (strncmp(text, unattached, strlen(unattached)) == 0) {
         ino = strtol(text + strlen(unattached), &end, 10);
