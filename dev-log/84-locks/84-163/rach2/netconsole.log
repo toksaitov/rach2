@@ -1,0 +1,523 @@
+<6>[0.000000] boot: Rach2 Booting
+<6>[0.000000] boot: loader: GRUB 2.12-1ubuntu7.3, by multiboot2 on UEFI
+<6>[0.000000] boot: screen: framebuffer, rgb, 1366x768, 32 bits, pitch 5504, at 0xb0000000
+<7>[0.000000] module: none: the loader carried no module
+<6>[0.000000] console: framebuffer: 1366x768, 32 bits a pixel; the font at 2x, 85x24 cells
+<6>[0.000000] console: font: drawn: code page 437 box drawing with Cyrillic
+<7>[0.000000] boot: Initializing system components
+<6>[0.000000] cpu: page attributes: 0x0007040600070106; the framebuffer is mapped write-combining
+<7>[0.000000] boot: gdt: ready
+<7>[0.000000] boot: tss: ready
+<7>[0.000000] boot: idt: ready
+<7>[0.000000] boot: isr: ready
+<7>[0.000000] fpu: fxsr: on, sse: on, xsave: on, xcr0: 0x7, area: 832 bytes, pkeys: off
+<7>[0.000000] boot: memory manager: ready
+<7>[0.000000] memory: map: 0x0000000000000000-0x000000000006F000 available
+<7>[0.000000] memory: map: 0x000000000006F000-0x0000000000070000 reserved
+<7>[0.000000] memory: map: 0x0000000000070000-0x0000000000088000 available
+<7>[0.000000] memory: map: 0x0000000000088000-0x00000000000A0000 reserved
+<7>[0.000000] memory: map: 0x0000000000100000-0x00000000A56B0000 available
+<7>[0.000000] memory: map: 0x00000000A56B0000-0x00000000A5EB0000 reserved
+<7>[0.000000] memory: map: 0x00000000A5EB0000-0x00000000AA6BF000 available
+<7>[0.000000] memory: map: 0x00000000AA6BF000-0x00000000AAEBF000 reserved
+<7>[0.000000] memory: map: 0x00000000AAEBF000-0x00000000AAFBF000 nvs
+<7>[0.000000] memory: map: 0x00000000AAFBF000-0x00000000AAFFF000 acpi
+<7>[0.000000] memory: map: 0x00000000AAFFF000-0x00000000AB000000 available
+<7>[0.000000] memory: map: 0x0000000100000000-0x000000044F600000 available
+<7>[0.000000] memory: map: 0x00000000000A0000-0x00000000000C0000 reserved
+<7>[0.000000] memory: map: 0x00000000AB000000-0x00000000AFA00000 reserved
+<7>[0.000000] memory: map: 0x00000000E0000000-0x00000000F0000000 reserved
+<7>[0.000000] memory: map: 0x00000000FE101000-0x00000000FE113000 reserved
+<7>[0.000000] memory: map: 0x00000000FEB00000-0x00000000FEB10000 reserved
+<7>[0.000000] memory: map: 0x00000000FEC00000-0x00000000FEC01000 reserved
+<7>[0.000000] memory: map: 0x00000000FED00000-0x00000000FEE01000 reserved
+<7>[0.000000] memory: map: 0x00000000FFC00000-0x0000000100000000 reserved
+<6>[0.000000] i915: stolen: reserving [mem 0xaba00000-0xaf9fffff], 0 KiB of it usable memory
+<6>[0.000000] memory: usable 16666908 KiB, unreachable 0 KiB, reserved 28920 KiB, managed 16637988 KiB
+<7>[0.000000] boot: paging: ready
+<7>[0.000000] pci: list: 14 functions
+<7>[0.000000] boot: page cache: ready
+<7>[0.000000] acpi: rsdp: at 0x9ade6c, from the boot record
+<6>[0.000000] acpi: tables: xsdt at 0xaaffe210, revision 2, LENOVO: FACP SLIC UEFI FPDT POAT ASF? HPET APIC MCFG WDAT SSDT BOOT LPIT ASPT DBGP SSDT SSDT SSDT DMAR BGRT DSDT
+<6>[0.000000] acpi: madt: 4 processors (4 usable), 1 ioapics, 2 overrides, 0 nmi inputs, an 8259 pair
+<7>[0.000000] acpi: madt: override: isa 0 to gsi 2, flags 0x0
+<7>[0.000000] acpi: madt: override: isa 9 to gsi 9, flags 0xd
+<6>[0.000000] acpi: fadt: revision 5, pm1a 0x1804, pm timer 0x1808 (24-bit), reset register, 8042 yes, century 0
+<6>[0.000000] acpi: dsdt: \_S5 sleep types 7 and 0
+<6>[0.000000] acpi: hpet: at 0xfed00000
+<6>[0.000000] acpi: mcfg: segment 0, buses 0 to 255 at 0xe0000000
+<6>[0.000000] pci: ecam: buses 0 to 2 of segment 0 at 0xe0000000
+<7>[0.000000] pci: ecam: 0:1b.0: extended capability 0x2, version 1, at 0x100
+<7>[0.000000] pci: ecam: 0:1c.0: extended capability 0x0, version 0, at 0x100
+<7>[0.000000] pci: ecam: 0:1c.3: extended capability 0x0, version 0, at 0x100
+<7>[0.000000] pci: ecam: 1:0.0: extended capability 0x1, version 2, at 0x100
+<7>[0.000000] pci: ecam: 2:0.0: extended capability 0x1, version 1, at 0x100
+<6>[0.000000] pci: ecam: 5 functions with extended capabilities
+<6>[0.000000] hpet: ready: 14318179 Hz, period 69841279 fs
+<7>[0.000000] lapic: ready: id 0, version 0x15, xapic mode
+<6>[0.000000] ioapic: ready: id 2 at 0xfec00000, version 0x20, gsi 0 to 39
+<6>[0.000000] lapic: tick: 6235 counts, measured against the hpet
+<6>[0.000000] ioapic: interrupts: lines through the ioapic, the 8259 masked
+<6>[0.001000] lapic: timer: vector 48 between ticks
+<7>[0.001000] boot: timer: ready
+<6>[0.001000] rtc: 2026-11-13 03:37:07 UTC
+<7>[0.001000] clock: ready
+<6>[0.001000] entropy: ready: RDRAND, trusted
+<6>[0.003000] board: lynxpoint-lp: ACPI enabled
+<6>[0.006000] board: lynxpoint-lp: masked the SCI on IRQ 9
+<6>[0.008000] board: ready: lynxpoint-lp
+<6>[0.011000] watchdog: ready: TCO version 2 at 1860, halted, heartbeat 30 s, nowayout 0
+<7>[0.014000] ioapic: route: line 1 to gsi 1, vector 33, edge, active high
+<6>[0.014000] console: blank: after 600 seconds without input
+<6>[0.016000] backlight: intel_backlight: lynxpoint-lp PWM, levels 0 to 937, at 937, off by the panel's enable
+<7>[0.021000] boot: keyboard: ready
+<7>[0.021000] boot: syscall: ready
+<7>[0.021000] boot: process: ready
+<7>[0.021000] boot: scheduler: ready
+<7>[0.021000] acpi: acpica: RSDP 0x00000000009ADE6C 000024 (v02 LENOVO)
+<7>[0.021000] acpi: acpica: XSDT 0x00000000AAFFE210 0000C4 (v01 LENOVO CB-01    00000001      01000013)
+<7>[0.021000] acpi: acpica: FACP 0x00000000AAFF7000 00010C (v05 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.026000] acpi: acpica: DSDT 0x00000000AAFE4000 00F4BB (v02 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.026000] acpi: acpica: FACS 0x00000000AAFBA000 000040
+<7>[0.026000] acpi: acpica: SLIC 0x00000000AAFFD000 000176 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.026000] acpi: acpica: UEFI 0x00000000AAFFC000 000236 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.026000] acpi: acpica: FPDT 0x00000000AAFFA000 000044 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.026000] acpi: acpica: POAT 0x00000000AAFF9000 000055 (v03 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.026000] acpi: acpica: ASF! 0x00000000AAFF8000 0000A5 (v32 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.026000] acpi: acpica: HPET 0x00000000AAFF6000 000038 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.026000] acpi: acpica: APIC 0x00000000AAFF5000 00008C (v03 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.026000] acpi: acpica: MCFG 0x00000000AAFF4000 00003C (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.026000] acpi: acpica: WDAT 0x00000000AAFE3000 000224 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.027000] acpi: acpica: SSDT 0x00000000AAFE0000 002028 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.027000] acpi: acpica: BOOT 0x00000000AAFDE000 000028 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.027000] acpi: acpica: LPIT 0x00000000AAFDD000 000094 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.027000] acpi: acpica: ASPT 0x00000000AAFDB000 000034 (v07 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.027000] acpi: acpica: DBGP 0x00000000AAFDA000 000034 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.027000] acpi: acpica: SSDT 0x00000000AAFD2000 0004D6 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.027000] acpi: acpica: SSDT 0x00000000AAFD1000 000AD8 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.028000] acpi: acpica: SSDT 0x00000000AAFCD000 0034F8 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.028000] acpi: acpica: DMAR 0x00000000AAFCB000 0000B0 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.028000] acpi: acpica: BGRT 0x00000000AAFCC000 000038 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.062000] acpi: acpica: 5 ACPI AML tables successfully acquired and loaded
+<7>[0.064000] acpi: ec: \_SB.PCI0.LPCB.EC0 at ports 0x62 and 0x66, gpe 0x7
+<7>[0.064000] ioapic: route: line 9 to gsi 9, vector 41, level, active high
+<7>[0.064000] acpi: sci: line 9
+<7>[0.068000] acpi: ec: gpe 0x7 enabled, status 0x00
+<7>[0.072000] acpi: video: bus \_SB.PCI0.GFX0, outputs 16
+<7>[0.076000] acpi: ideapad: \_SB.PCI0.LPCB.EC0.VPC0: cfg 0xfde104, wifi 0, ideapad_wlan
+<7>[0.078000] acpi: ideapad: radio switch 1
+<6>[0.079000] acpi: pnp: i8042 kbd: PNP: PNP0303
+<6>[0.082000] acpi: pnp: i8042 aux: PNP: SYN2b37 PNP0f13 SYN0002 SYN2b00
+<7>[0.086000] acpi: acpica: Enabled 8 GPEs in block 00 to 7F
+<7>[0.087000] acpi: ec: query 0x42
+<6>[0.088000] acpi: acpica: 2872 objects, 0 errors
+<7>[0.091000] vtd: dmar: host address width 39, flags 0x1
+<7>[0.091000] vtd: dmar: unit at 0xfed90000, segment 0, flags 0x0
+<7>[0.091000] vtd: dmar: device 0:2.0
+<7>[0.091000] vtd: dmar: unit at 0xfed91000, segment 0, flags 0x1
+<7>[0.091000] vtd: dmar: ioapic id 2 at f0:1f.0
+<7>[0.091000] vtd: dmar: hpet id 0 at f0:f.0
+<7>[0.091000] vtd: dmar: reserved region 0xaae11000 to 0xaae30fff
+<7>[0.091000] vtd: dmar: reserved region 0xab800000 to 0xaf9fffff
+<6>[0.091000] vtd: dmar0: at 0xfed90000, version 1.0, cap 0xc0000020660462, ecap 0xf0101a
+<6>[0.093000] vtd: dmar0: status 0x0
+<6>[0.095000] vtd: dmar1: at 0xfed91000, version 1.0, cap 0xd2008020660462, ecap 0xf010da
+<6>[0.098000] vtd: dmar1: status 0x0
+<6>[0.100000] vtd: off by intel_iommu=off and nointremap or intremap=off: 2 units read
+<7>[0.103000] mouse: started
+<6>[0.103000] synaptics: found: touchpad model 1, fw 8.1, id 0x1e2b1, caps 0xd00123/0x840300/0x2a800/0x0, board id 2848, fw id 1581875
+<7>[0.103000] ioapic: route: line 12 to gsi 12, vector 44, edge, active high
+<7>[1.435000] mouse: ready
+<7>[1.435000] audio: started
+<6>[1.435000] audio: not driven: 8086:a0c at 00:03.0
+<7>[1.554000] pci: msi: 0:1b.0 on vector 49
+<6>[1.554000] audio: interrupts: messages on vector 49
+<6>[1.556000] audio: ready: Intel HD Audio, codec 0x14f1510f
+<6>[1.559000] disk: policy: read-write
+<6>[1.561000] modules: none
+<6>[1.564000] block: started
+<7>[1.566000] ahci: found: 8086:9C03 at 0:31.2, prog-if 1, BAR5 C061B000
+<7>[2.185000] ahci: port 1: signature EB140101 is not a disk; skipped
+<7>[2.494000] ahci: port 2: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<7>[2.804000] ahci: port 3: no link after 305 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+<6>[2.807000] disk: disk0: ahci 0: 488397168 sectors, model Samsung SSD 870 EVO 250GB
+<6>[2.810000] ahci: port 0: 488397168 sectors, 238475 MiB
+<6>[2.812000] nvme: none: no NVMe controller on the bus
+<7>[2.815000] ioapic: route: line 14 to gsi 14, vector 46, edge, active high
+<7>[2.815000] ioapic: route: line 15 to gsi 15, vector 47, edge, active high
+<6>[2.815000] devfs: /dev/grubcore: BIOS boot partition 4, 2014 sectors at LBA 34
+<6>[2.820000] ext2: mounted: 35850496 blocks of 4096, 2242560 inodes, 1095 groups
+<6>[2.823000] ext2: root: /dev/disk0p6
+<6>[2.826000] loop: loop0: /trial4889/root-d4d1da30b4f6cb50.img, 0 bytes, read-write
+<6>[2.832000] ext2: mounted: 6291456 blocks of 4096, 1572864 inodes, 192 groups
+<6>[2.835000] root: image: /trial4889/root-d4d1da30b4f6cb50.img on /dev/disk0p6, ext2 through /dev/loop0; /data is /dev/disk0p6
+<6>[2.840000] usb: started
+<6>[2.843000] usb: controller: 0:14.0 xhci interface 0x30 8086:9c31 bar0 0xC0600004
+<6>[2.846000] usb: routing: usb2 0xA of 0x1FF, usb3 0x1 of 0xF, as the firmware left it
+<6>[2.848000] usb: controller: 0:1d.0 ehci interface 0x20 8086:9c26 bar0 0xC061C000
+<6>[2.852000] usb: handoff: ehci at 00:1d.0: taken from the firmware, halted
+<6>[2.855000] usb: routing: usb2 0x1FF of 0x1FF, usb3 0xF of 0xF, taken
+<6>[2.858000] usb: found: xhci0: 8086:9c31 at 0:20.0, aperture 0xC0600000
+<6>[2.860000] usb: unsupported: ehci at 00:1d.0
+<7>[2.863000] usb: caps: hcs1 0xD000820 hcs2 0x84000054 hcc1 0x200077C1 pagesize 0x1
+<7>[2.863000] usb: caps: scratchpads 16, contexts 32 bytes, 64-bit 1
+<7>[2.863000] usb: handoff: legsup 0x10801 legctl 0xC0012000 before
+<7>[2.865000] usb: handoff: legsup 0x1000801 legctl 0x0 after
+<6>[2.866000] usb: ready: xhci0: version 100, 13 ports, 32 slots, 32-byte contexts
+<7>[2.969000] usb: port: xhci0.2: a device; its reset tells full from high speed
+<7>[2.969000] usb: port: xhci0.4: a device; its reset tells full from high speed
+<7>[2.969000] usb: port: xhci0.6: a device; its reset tells full from high speed
+<7>[2.969000] usb: port: xhci0.7: a device; its reset tells full from high speed
+<7>[2.969000] usb: port: xhci0.10: a device; its reset tells full from high speed
+<6>[3.031000] usb: device: port 10: 35d6:3510, class 9 protocol 0, endpoint 1, a hub
+<6>[3.150000] usb: device: port 2: 35d6:2510, class 9 protocol 1, endpoint 1, a hub
+<6>[3.264000] usb: device: port 4: bda:129, class 0: no driver for it here
+<6>[3.413000] usb: device: port 6: bda:579a, class 0: no driver for it here
+<6>[3.528000] usb: device: port 7: cf3:3004, class 0: no driver for it here
+<7>[3.533000] usb: slot: 3: given back
+<7>[3.534000] usb: slot: 4: given back
+<7>[3.535000] usb: slot: 5: given back
+<6>[3.639000] usb: hub: device 2: 4 ports, power mode 0, think time 1
+<6>[3.639000] usb: hub: device 1: 4 ports, power mode 0, think time 0
+<6>[3.827000] usb: hid: device 3 interface 0: Logitech USB Keyboard on usb-3/input0, input devices: 1
+<6>[3.835000] usb: hid: device 3 interface 1: Logitech USB Keyboard on usb-3/input1, input devices: 1
+<6>[3.835000] usb: device: port 2.1: 46d:c34b, class 3 protocol 1, endpoint 1, HID interfaces 2 of 2
+<6>[3.940000] usb: hid: device 4 interface 0: Logitech USB Optical Mouse on usb-4/input0, input devices: 1
+<6>[3.940000] usb: device: port 2.3: 46d:c077, class 3 protocol 2, endpoint 1, HID interfaces 1 of 1
+<6>[3.951000] usb: devices: 4 configured
+<7>[3.953000] pci: msi: 0:14.0 on vector 50
+<6>[3.953000] usb: interrupts: xhci0: messages on vector 50
+<7>[3.956000] pci: msi: 0:1f.2 on vector 51
+<6>[3.956000] ahci: interrupts: messages on vector 51, 1 disks queued
+<6>[3.959000] net: started
+<7>[3.970000] pci: msi: 1:0.0 on vector 52
+<6>[3.970000] rtl8168: interrupts: messages on vector 52
+<6>[3.973000] net: eth0: IPv6 fe80::2ad2:44ff:fe7e:e0af/64 added
+<6>[3.976000] net: ready: RTL8168GU
+<6>[3.978000] netconsole: udp: 6665@192.168.0.106/eth0,6666@192.168.0.100/D0:11:E5:C8:0D:59
+<6>[3.981000] netconsole: started: network logging, targets 1
+<6>[3.984000] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
+<7>[3.987000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC 28:D2:44:7E:E0:AF
+<6>[3.987000] rtl8168: no link yet
+<6>[3.989000] rtl8168: messages on vector 52: none yet, 0 by the tick
+<6>[3.992000] net: eth0: no address
+<6>[3.995000] netconsole: broadcast, ethertype 0x88b5, boot id 0x7b41d53d, 0 frames, 0 characters dropped
+<6>[4.000000] netconsole: udp: port 6666 of eth0: 0 datagrams, held, 0 characters dropped
+<7>[4.013000] pci: msi: 2:0.0 on vector 56
+<6>[4.013000] ath9k: interrupts: messages on vector 56
+<6>[4.016000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+<6>[4.022000] drm: start
+<6>[4.025000] i915: uncore: an unclaimed access before the bind, cleared
+<6>[4.028000] i915: stolen: [mem 0xaba00000-0xaf9fffff], 64512 KiB usable, inside the device's reserved region
+<6>[4.033000] i915: gtt: pipe A's firmware surface at 0x0, 4128 KiB, kept
+<6>[4.038000] i915: gtt: 2048 MiB, 256 MiB of it through the aperture; 523256 entries to the scratch page, 1032 kept
+<6>[4.044000] i915: opregion: version 2.0.0 at 0xaafb4018, mailboxes 0x1f; VBT in mailbox 4
+<6>[4.047000] i915: vbt: "$VBT HASWELL        " from the OpRegion (Mailbox #4), version 177, 3 outputs
+<6>[4.053000] i915: gem: 32 fences, swizzle 9/10 for X tiles and 9 for Y
+<7>[4.057000] pci: msi: 0:2.0 on vector 53
+<6>[4.057000] i915: interrupts: messages on vector 53
+<6>[4.060000] i915: rps: RPn 200 MHz, RP1 200 MHz, RP0 1000 MHz, RPe 500 MHz, max 1000 MHz
+<6>[4.063000] i915: ppgtt: aliasing, 2048 MiB shared, directory at 0x7fde0000
+<6>[4.066000] i915: rings: rcs0, bcs0, vcs0 and vecs0 started: 16 KiB each at 0x7fffb000, 0x7fff6000, 0x7fff1000 and 0x7ffec000, status pages at 0x7ffff000, 0x7fffa000, 0x7fff5000 and 0x7fff0000
+<6>[4.076000] i915: workarounds: applied: 3 of the GT and 6 of rcs0, 0 lost
+<7>[4.079000] i915: pcode: read of command 0x5: error -6
+<6>[4.079000] i915: found: 00:02.0: haswell/ult (device id 0a16), graphics 7.5, display version 7.00, gt2, revision 0b
+<6>[4.086000] i915: display: disabled by rach2.i915.disable_display; the firmware's framebuffer stays
+<7>[4.092000] drm: worker: kdrm is pid 1
+<6>[4.092000] drm: i915: card0
+<6>[4.095000] i915: registered: i915 1.6.0 for pci:0000:00:02.0 on card 0
+<6>[4.099000] drm: simpledrm: card1
+<6>[4.102000] console: card1: the firmware's framebuffer
+<6>[4.105000] fbdrm: registered: simpledrm 1366x768, XR24, pitch 5504, at 0xb0000000, card 1
+<6>[4.108000] kvm: ready: vmx
+<6>[4.111000] vfio: ready: 0 groups of 0 functions, no IOMMU unit translates
+<6>[4.445000] timing: tick 1000 Hz, 200 ms delay measured 201 ms, 2000 us wait measured 2011 us
+<6>[4.449000] clock: reference: the hpet; a tick the timer misses or delays is counted
+<6>[4.465000] smp: cpu1: tsc: synchronized with cpu0
+<6>[4.481000] smp: cpu2: tsc: synchronized with cpu0
+<6>[4.497000] smp: cpu3: tsc: synchronized with cpu0
+<6>[4.500000] smp: processors: 4 online of 4
+<6>[4.503000] nmi_watchdog: counter: intel arch version 3, fixed counter 1, 48 bits, 1895 MHz
+<6>[4.506000] nmi_watchdog: enabled: permanently consumes one hw-PMU counter
+<6>[4.510000] vdso: clock: the tsc, 1895613 counts a tick
+<6>[4.517000] boot: starting /sbin/init
+<7>[4.519000] acpi: thread: kacpid is pid 5
+<7>[4.519000] wlan: worker: kwlan is pid 6
+<7>[4.519000] mouse: worker: kpsmoused is pid 7
+<7>[4.519000] watchdog: worker: watchdogd is pid 8
+<7>[4.519000] audio: thread: khda is pid 9
+<7>[4.520000] input: sysfs: worker: kinputd is pid 10
+<7>[4.551000] filecache: readahead: worker: kreadahead is pid 17
+<7>[4.551000] filecache: readahead: worker: kreadahead is pid 18
+<6>[7.023000] rtl8168: link 1000 Mb/s, full duplex, pause both ways
+<6>[7.101000] net: eth0: IPv4 192.168.0.106/24
+<6>[8.576000] net: eth0: IPv6 fd91:381e:e667:4a0c:5c3b:c386:dd79:14a6/64 added
+<6>[8.576000] net: eth0: IPv6 fd91:381e:e667:4a0c:2a40:9f08:e023:7bb5/64 added
+<6>[9.607000] console: card1: handed to a master, the keyboard off
+<4>[14.607000] syscall: 430: not implemented (asked for by mount)
+<6>[14.607000] vfs: mounted: debugfs on /data/trial4889/out-cs/debugfs (debugfs)
+<6>[14.610000] vfs: unmounted /data/trial4889/out-cs/debugfs: 0 opens, 0 releases
+<7>[15.424000] i915: worker: ki915 is pid 196
+<4>[20.877000] syscall: 323: not implemented (asked for by wine)
+<4>[21.156000] syscall: 323: not implemented (asked for by wine64)
+<4>[21.442000] syscall: 323: not implemented (asked for by wine64)
+<4>[21.501000] syscall: 323: not implemented (asked for by wine64)
+<4>[21.561000] syscall: 323: not implemented (asked for by wine64)
+<4>[21.737000] syscall: 323: not implemented (asked for by wine64)
+<4>[21.805000] syscall: 323: not implemented (asked for by wine64)
+<4>[22.262000] syscall: 323: not implemented (asked for by wine64)
+<4>[22.465000] syscall: 323: not implemented (asked for by wine64)
+<4>[23.281000] syscall: 323: not implemented (asked for by wine64)
+<4>[23.334000] syscall: 323: not implemented (asked for by wine64)
+<4>[23.454000] syscall: 323: not implemented (asked for by wine64)
+<4>[23.602000] syscall: 323: not implemented (asked for by wine64)
+<4>[23.653000] syscall: 323: not implemented (asked for by wine64)
+<4>[23.704000] syscall: 323: not implemented (asked for by wine64)
+<7>[23.742000] filecache: readahead: worker: kreadahead is pid 293
+<4>[24.039000] syscall: 323: not implemented (asked for by wine64)
+<7>[24.843000] filecache: readahead: worker: kreadahead is pid 318
+<4>[28.235000] syscall: 323: not implemented (asked for by wine64)
+<4>[28.551000] syscall: 323: not implemented (asked for by wine)
+<4>[32.597000] syscall: 323: not implemented (asked for by wine)
+<4>[33.698000] syscall: 323: not implemented (asked for by wine)
+<4>[33.784000] syscall: 323: not implemented (asked for by wine64)
+<4>[33.831000] syscall: 323: not implemented (asked for by wine64)
+<4>[33.890000] syscall: 323: not implemented (asked for by wine64)
+<4>[33.943000] syscall: 323: not implemented (asked for by wine64)
+<4>[34.060000] syscall: 323: not implemented (asked for by wine64)
+<4>[34.122000] syscall: 323: not implemented (asked for by wine64)
+<4>[34.464000] syscall: 323: not implemented (asked for by wine64)
+<4>[34.735000] syscall: 323: not implemented (asked for by wine64)
+<4>[35.025000] syscall: 323: not implemented (asked for by wine64)
+<4>[35.077000] syscall: 323: not implemented (asked for by wine64)
+<4>[35.195000] syscall: 323: not implemented (asked for by wine64)
+<4>[35.329000] syscall: 323: not implemented (asked for by wine64)
+<4>[35.387000] syscall: 323: not implemented (asked for by wine64)
+<4>[36.587000] syscall: 323: not implemented (asked for by wine)
+<4>[36.673000] syscall: 323: not implemented (asked for by wine64)
+<4>[36.720000] syscall: 323: not implemented (asked for by wine64)
+<4>[36.778000] syscall: 323: not implemented (asked for by wine64)
+<4>[36.831000] syscall: 323: not implemented (asked for by wine64)
+<4>[36.946000] syscall: 323: not implemented (asked for by wine64)
+<4>[37.005000] syscall: 323: not implemented (asked for by wine64)
+<4>[37.354000] syscall: 323: not implemented (asked for by wine64)
+<4>[37.513000] syscall: 323: not implemented (asked for by wine64)
+<4>[37.802000] syscall: 323: not implemented (asked for by wine64)
+<4>[37.856000] syscall: 323: not implemented (asked for by wine64)
+<4>[37.971000] syscall: 323: not implemented (asked for by wine64)
+<4>[38.119000] syscall: 323: not implemented (asked for by wine64)
+<4>[38.179000] syscall: 323: not implemented (asked for by wine64)
+<4>[39.898000] syscall: 323: not implemented (asked for by wine)
+<4>[39.991000] syscall: 323: not implemented (asked for by wine64)
+<4>[40.054000] syscall: 323: not implemented (asked for by wine64)
+<4>[40.143000] syscall: 323: not implemented (asked for by wine64)
+<4>[40.219000] syscall: 323: not implemented (asked for by wine64)
+<4>[40.391000] syscall: 323: not implemented (asked for by wine64)
+<4>[40.468000] syscall: 323: not implemented (asked for by wine64)
+<4>[40.855000] syscall: 323: not implemented (asked for by wine64)
+<4>[41.014000] syscall: 323: not implemented (asked for by wine64)
+<4>[41.319000] syscall: 323: not implemented (asked for by wine64)
+<4>[41.373000] syscall: 323: not implemented (asked for by wine64)
+<4>[41.490000] syscall: 323: not implemented (asked for by wine64)
+<4>[41.631000] syscall: 323: not implemented (asked for by wine64)
+<4>[41.699000] syscall: 323: not implemented (asked for by wine64)
+<4>[43.648000] syscall: 323: not implemented (asked for by wine)
+<4>[43.853000] syscall: 323: not implemented (asked for by wine64)
+<4>[44.366000] syscall: 323: not implemented (asked for by wine64)
+<4>[45.140000] syscall: 323: not implemented (asked for by wine64)
+<4>[45.848000] syscall: 323: not implemented (asked for by wine64)
+<4>[47.346000] syscall: 323: not implemented (asked for by wine64)
+<4>[48.284000] syscall: 323: not implemented (asked for by wine64)
+<4>[53.698000] syscall: 323: not implemented (asked for by wine64)
+<4>[56.185000] syscall: 323: not implemented (asked for by wine64)
+<4>[60.966000] syscall: 323: not implemented (asked for by wine64)
+<4>[61.781000] syscall: 323: not implemented (asked for by wine64)
+<4>[63.691000] syscall: 323: not implemented (asked for by wine64)
+<4>[65.826000] syscall: 323: not implemented (asked for by wine64)
+<4>[67.205000] syscall: 323: not implemented (asked for by wine64)
+<4>[81.780000] syscall: 323: not implemented (asked for by wine)
+<4>[81.978000] syscall: 323: not implemented (asked for by wine64)
+<4>[82.464000] syscall: 323: not implemented (asked for by wine64)
+<4>[83.198000] syscall: 323: not implemented (asked for by wine64)
+<4>[83.852000] syscall: 323: not implemented (asked for by wine64)
+<4>[85.264000] syscall: 323: not implemented (asked for by wine64)
+<4>[86.157000] syscall: 323: not implemented (asked for by wine64)
+<4>[91.558000] syscall: 323: not implemented (asked for by wine64)
+<4>[94.004000] syscall: 323: not implemented (asked for by wine64)
+<4>[98.803000] syscall: 323: not implemented (asked for by wine64)
+<4>[99.614000] syscall: 323: not implemented (asked for by wine64)
+<4>[101.497000] syscall: 323: not implemented (asked for by wine64)
+<4>[103.401000] syscall: 323: not implemented (asked for by wine64)
+<4>[104.795000] syscall: 323: not implemented (asked for by wine64)
+<4>[119.473000] syscall: 430: not implemented (asked for by mount)
+<6>[119.473000] vfs: mounted: debugfs on /data/trial4889/out-cs/debugfs (debugfs)
+<6>[119.476000] vfs: unmounted /data/trial4889/out-cs/debugfs: 0 opens, 0 releases
+<4>[119.954000] syscall: 430: not implemented (asked for by mount)
+<6>[119.955000] vfs: mounted: debugfs on /data/trial4889/out-freq/debugfs (debugfs)
+<6>[119.956000] vfs: unmounted /data/trial4889/out-freq/debugfs: 0 opens, 0 releases
+<4>[123.846000] syscall: 323: not implemented (asked for by wine)
+<4>[123.933000] syscall: 323: not implemented (asked for by wine64)
+<4>[123.981000] syscall: 323: not implemented (asked for by wine64)
+<4>[124.039000] syscall: 323: not implemented (asked for by wine64)
+<4>[124.093000] syscall: 323: not implemented (asked for by wine64)
+<4>[124.214000] syscall: 323: not implemented (asked for by wine64)
+<4>[124.273000] syscall: 323: not implemented (asked for by wine64)
+<4>[124.717000] syscall: 323: not implemented (asked for by wine64)
+<4>[124.880000] syscall: 323: not implemented (asked for by wine64)
+<4>[125.498000] syscall: 323: not implemented (asked for by wine64)
+<4>[125.552000] syscall: 323: not implemented (asked for by wine64)
+<4>[125.666000] syscall: 323: not implemented (asked for by wine64)
+<4>[125.808000] syscall: 323: not implemented (asked for by wine64)
+<4>[125.857000] syscall: 323: not implemented (asked for by wine64)
+<4>[125.909000] syscall: 323: not implemented (asked for by wine64)
+<4>[126.258000] syscall: 323: not implemented (asked for by wine64)
+<4>[129.699000] syscall: 323: not implemented (asked for by wine64)
+<4>[130.063000] syscall: 323: not implemented (asked for by wine)
+<4>[133.256000] syscall: 323: not implemented (asked for by wine)
+<4>[134.336000] syscall: 323: not implemented (asked for by wine)
+<4>[134.424000] syscall: 323: not implemented (asked for by wine64)
+<4>[134.471000] syscall: 323: not implemented (asked for by wine64)
+<4>[134.530000] syscall: 323: not implemented (asked for by wine64)
+<4>[134.585000] syscall: 323: not implemented (asked for by wine64)
+<4>[134.702000] syscall: 323: not implemented (asked for by wine64)
+<4>[134.762000] syscall: 323: not implemented (asked for by wine64)
+<4>[135.095000] syscall: 323: not implemented (asked for by wine64)
+<4>[135.255000] syscall: 323: not implemented (asked for by wine64)
+<4>[135.557000] syscall: 323: not implemented (asked for by wine64)
+<4>[135.612000] syscall: 323: not implemented (asked for by wine64)
+<4>[135.728000] syscall: 323: not implemented (asked for by wine64)
+<4>[135.867000] syscall: 323: not implemented (asked for by wine64)
+<4>[135.922000] syscall: 323: not implemented (asked for by wine64)
+<4>[137.130000] syscall: 323: not implemented (asked for by wine)
+<4>[137.217000] syscall: 323: not implemented (asked for by wine64)
+<4>[137.264000] syscall: 323: not implemented (asked for by wine64)
+<4>[137.326000] syscall: 323: not implemented (asked for by wine64)
+<4>[137.380000] syscall: 323: not implemented (asked for by wine64)
+<4>[137.497000] syscall: 323: not implemented (asked for by wine64)
+<4>[137.557000] syscall: 323: not implemented (asked for by wine64)
+<4>[137.899000] syscall: 323: not implemented (asked for by wine64)
+<4>[138.062000] syscall: 323: not implemented (asked for by wine64)
+<4>[138.370000] syscall: 323: not implemented (asked for by wine64)
+<4>[138.425000] syscall: 323: not implemented (asked for by wine64)
+<4>[138.542000] syscall: 323: not implemented (asked for by wine64)
+<4>[138.685000] syscall: 323: not implemented (asked for by wine64)
+<4>[138.752000] syscall: 323: not implemented (asked for by wine64)
+<4>[140.701000] syscall: 323: not implemented (asked for by wine)
+<4>[140.911000] syscall: 323: not implemented (asked for by wine64)
+<4>[141.443000] syscall: 323: not implemented (asked for by wine64)
+<4>[142.247000] syscall: 323: not implemented (asked for by wine64)
+<4>[142.989000] syscall: 323: not implemented (asked for by wine64)
+<4>[144.553000] syscall: 323: not implemented (asked for by wine64)
+<4>[145.525000] syscall: 323: not implemented (asked for by wine64)
+<4>[151.106000] syscall: 323: not implemented (asked for by wine64)
+<4>[153.684000] syscall: 323: not implemented (asked for by wine64)
+<4>[158.860000] syscall: 323: not implemented (asked for by wine64)
+<4>[159.691000] syscall: 323: not implemented (asked for by wine64)
+<4>[161.646000] syscall: 323: not implemented (asked for by wine64)
+<4>[163.604000] syscall: 323: not implemented (asked for by wine64)
+<4>[165.010000] syscall: 323: not implemented (asked for by wine64)
+<4>[179.838000] syscall: 323: not implemented (asked for by wine)
+<4>[180.048000] syscall: 323: not implemented (asked for by wine64)
+<4>[180.563000] syscall: 323: not implemented (asked for by wine64)
+<4>[181.338000] syscall: 323: not implemented (asked for by wine64)
+<4>[182.028000] syscall: 323: not implemented (asked for by wine64)
+<4>[183.493000] syscall: 323: not implemented (asked for by wine64)
+<4>[184.402000] syscall: 323: not implemented (asked for by wine64)
+<4>[189.942000] syscall: 323: not implemented (asked for by wine64)
+<4>[192.386000] syscall: 323: not implemented (asked for by wine64)
+<4>[197.014000] syscall: 323: not implemented (asked for by wine64)
+<4>[197.820000] syscall: 323: not implemented (asked for by wine64)
+<4>[199.725000] syscall: 323: not implemented (asked for by wine64)
+<4>[201.676000] syscall: 323: not implemented (asked for by wine64)
+<4>[203.096000] syscall: 323: not implemented (asked for by wine64)
+<4>[218.398000] syscall: 430: not implemented (asked for by mount)
+<6>[218.398000] vfs: mounted: debugfs on /data/trial4889/out-freq/debugfs (debugfs)
+<6>[218.400000] vfs: unmounted /data/trial4889/out-freq/debugfs: 0 opens, 0 releases
+<4>[218.918000] syscall: 430: not implemented (asked for by mount)
+<6>[218.918000] vfs: mounted: debugfs on /data/trial4889/out-pin/debugfs (debugfs)
+<6>[218.920000] vfs: unmounted /data/trial4889/out-pin/debugfs: 0 opens, 0 releases
+<4>[222.835000] syscall: 323: not implemented (asked for by wine)
+<4>[222.925000] syscall: 323: not implemented (asked for by wine64)
+<4>[222.973000] syscall: 323: not implemented (asked for by wine64)
+<4>[223.031000] syscall: 323: not implemented (asked for by wine64)
+<4>[223.085000] syscall: 323: not implemented (asked for by wine64)
+<4>[223.210000] syscall: 323: not implemented (asked for by wine64)
+<4>[223.271000] syscall: 323: not implemented (asked for by wine64)
+<4>[223.637000] syscall: 323: not implemented (asked for by wine64)
+<4>[223.800000] syscall: 323: not implemented (asked for by wine64)
+<4>[224.415000] syscall: 323: not implemented (asked for by wine64)
+<4>[224.471000] syscall: 323: not implemented (asked for by wine64)
+<4>[224.594000] syscall: 323: not implemented (asked for by wine64)
+<4>[224.740000] syscall: 323: not implemented (asked for by wine64)
+<4>[224.788000] syscall: 323: not implemented (asked for by wine64)
+<4>[224.841000] syscall: 323: not implemented (asked for by wine64)
+<4>[225.199000] syscall: 323: not implemented (asked for by wine64)
+<4>[228.647000] syscall: 323: not implemented (asked for by wine64)
+<4>[228.967000] syscall: 323: not implemented (asked for by wine)
+<4>[232.311000] syscall: 323: not implemented (asked for by wine)
+<4>[233.398000] syscall: 323: not implemented (asked for by wine)
+<4>[233.487000] syscall: 323: not implemented (asked for by wine64)
+<4>[233.537000] syscall: 323: not implemented (asked for by wine64)
+<4>[233.597000] syscall: 323: not implemented (asked for by wine64)
+<4>[233.652000] syscall: 323: not implemented (asked for by wine64)
+<4>[233.771000] syscall: 323: not implemented (asked for by wine64)
+<4>[233.831000] syscall: 323: not implemented (asked for by wine64)
+<4>[234.177000] syscall: 323: not implemented (asked for by wine64)
+<4>[234.340000] syscall: 323: not implemented (asked for by wine64)
+<4>[234.643000] syscall: 323: not implemented (asked for by wine64)
+<4>[234.698000] syscall: 323: not implemented (asked for by wine64)
+<4>[234.815000] syscall: 323: not implemented (asked for by wine64)
+<4>[234.955000] syscall: 323: not implemented (asked for by wine64)
+<4>[235.011000] syscall: 323: not implemented (asked for by wine64)
+<4>[236.247000] syscall: 323: not implemented (asked for by wine)
+<4>[236.334000] syscall: 323: not implemented (asked for by wine64)
+<4>[236.383000] syscall: 323: not implemented (asked for by wine64)
+<4>[236.442000] syscall: 323: not implemented (asked for by wine64)
+<4>[236.496000] syscall: 323: not implemented (asked for by wine64)
+<4>[236.619000] syscall: 323: not implemented (asked for by wine64)
+<4>[236.681000] syscall: 323: not implemented (asked for by wine64)
+<4>[237.045000] syscall: 323: not implemented (asked for by wine64)
+<4>[237.205000] syscall: 323: not implemented (asked for by wine64)
+<4>[237.511000] syscall: 323: not implemented (asked for by wine64)
+<4>[237.570000] syscall: 323: not implemented (asked for by wine64)
+<4>[237.690000] syscall: 323: not implemented (asked for by wine64)
+<4>[237.833000] syscall: 323: not implemented (asked for by wine64)
+<4>[237.911000] syscall: 323: not implemented (asked for by wine64)
+<4>[239.887000] syscall: 323: not implemented (asked for by wine)
+<4>[240.101000] syscall: 323: not implemented (asked for by wine64)
+<4>[240.643000] syscall: 323: not implemented (asked for by wine64)
+<4>[241.457000] syscall: 323: not implemented (asked for by wine64)
+<4>[242.184000] syscall: 323: not implemented (asked for by wine64)
+<4>[243.724000] syscall: 323: not implemented (asked for by wine64)
+<4>[244.768000] syscall: 323: not implemented (asked for by wine64)
+<4>[250.408000] syscall: 323: not implemented (asked for by wine64)
+<4>[252.977000] syscall: 323: not implemented (asked for by wine64)
+<4>[257.862000] syscall: 323: not implemented (asked for by wine64)
+<4>[258.691000] syscall: 323: not implemented (asked for by wine64)
+<4>[260.636000] syscall: 323: not implemented (asked for by wine64)
+<4>[262.584000] syscall: 323: not implemented (asked for by wine64)
+<4>[263.994000] syscall: 323: not implemented (asked for by wine64)
+<4>[279.281000] syscall: 323: not implemented (asked for by wine)
+<4>[279.486000] syscall: 323: not implemented (asked for by wine64)
+<4>[280.030000] syscall: 323: not implemented (asked for by wine64)
+<4>[280.803000] syscall: 323: not implemented (asked for by wine64)
+<4>[281.493000] syscall: 323: not implemented (asked for by wine64)
+<4>[282.974000] syscall: 323: not implemented (asked for by wine64)
+<4>[283.901000] syscall: 323: not implemented (asked for by wine64)
+<4>[289.457000] syscall: 323: not implemented (asked for by wine64)
+<4>[291.973000] syscall: 323: not implemented (asked for by wine64)
+<4>[296.751000] syscall: 323: not implemented (asked for by wine64)
+<4>[297.568000] syscall: 323: not implemented (asked for by wine64)
+<4>[299.501000] syscall: 323: not implemented (asked for by wine64)
+<4>[301.475000] syscall: 323: not implemented (asked for by wine64)
+<4>[302.916000] syscall: 323: not implemented (asked for by wine64)
+<4>[318.411000] syscall: 430: not implemented (asked for by mount)
+<6>[318.411000] vfs: mounted: debugfs on /data/trial4889/out-pin/debugfs (debugfs)
+<6>[318.413000] vfs: unmounted /data/trial4889/out-pin/debugfs: 0 opens, 0 releases
+<6>[334.671000] console: card1: taken back from a master, the keyboard on
+<6>[334.671000] console: card1: the firmware's framebuffer again
+<6>[334.727000] net: eth0: IPv4 none
+<6>[334.852000] shutdown: /dev/disk0p6: unmounted
+<6>[334.852000] shutdown: root: unmounted
+<6>[334.852000] shutdown: Stopping the system. Goodbye!
+<6>[334.852000] usb: stop: the controller is halted
