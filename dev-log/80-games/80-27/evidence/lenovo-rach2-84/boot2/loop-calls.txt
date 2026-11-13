@@ -1,0 +1,72 @@
+# trip-gl-0 of the second boot, rach2.cycleaccount: each system call's and ioctl request's
+# calls and wall time over the loop, all processes, most time first (bkl/calls)
+syscall 271        calls       1 wall_us   997325 each 997325.0
+syscall 230        calls     525 wall_us   715534 each 1362.9
+syscall 232        calls     107 wall_us   639687 each 5978.4
+syscall 449        calls      16 wall_us   580907 each 36306.7
+syscall 441        calls     707 wall_us   367873 each 520.3
+syscall 16         calls   12101 wall_us   258826 each 21.4
+syscall 202        calls    1986 wall_us   254026 each 127.9
+syscall 98         calls  486746 wall_us   148196 each 0.3
+ioctl 0x40406469   calls    1003 wall_us   121887 each 121.5
+ioctl 0xc02864c3   calls    2945 wall_us   114776 each 39.0
+syscall 24         calls  243311 wall_us   100659 each 0.4
+syscall 0          calls    3698 wall_us    93343 each 25.2
+syscall 7          calls    1188 wall_us    52499 each 44.2
+syscall 257        calls     922 wall_us    25960 each 28.2
+syscall 10         calls     222 wall_us    10034 each 45.2
+ioctl 0x400c645f   calls       2 wall_us     9828 each 4914.0
+syscall 217        calls     212 wall_us     9478 each 44.7
+syscall 262        calls     700 wall_us     8820 each 12.6
+syscall 87         calls      99 wall_us     6594 each 66.6
+ioctl 0xc00c6466   calls    4026 wall_us     4249 each 1.1
+syscall 3          calls     801 wall_us     4183 each 5.2
+ioctl 0xc0086457   calls    2009 wall_us     3145 each 1.6
+ioctl 0xc00864c0   calls    1001 wall_us     3114 each 3.1
+syscall 47         calls     585 wall_us     2903 each 5.0
+syscall 20         calls     837 wall_us     2593 each 3.1
+syscall 1          calls    1149 wall_us     2511 each 2.2
+syscall 5          calls     839 wall_us     2447 each 2.9
+syscall 17         calls      35 wall_us     1969 each 56.3
+syscall 89         calls     270 wall_us     1966 each 7.3
+syscall 8          calls    1081 wall_us     1594 each 1.5
+
+# bkl/profile, whole-kernel mode, over the loop: samples at 1000 Hz a processor by entry,
+# and the paths of the busiest entries, innermost first; a sample at kirq_restore was due
+# while interrupts were off, in the function under it
+syscall 98             168
+ioctl 0x40406469       126
+syscall 24             96
+kernel 0               75
+syscall 257            36
+syscall 441            30
+ioctl 0xc02864c3       18
+syscall 0              14
+syscall 230            10
+syscall 262            9
+syscall 217            8
+syscall 10             5
+
+ioctl 0x40406469 126
+    62 kirq_restore < i915_forcewake_get < i915_uncore_read
+     3 i915_ggtt_find < ggtt_room < vma_create
+     3 _syscall_handler < syscall_run < syscall_entry
+     3 kirq_restore < kmalloc < kmalloc
+     2 cursor_at < cursor_get < eb_parse
+     2 i915_read < i915_engine_irq_get < i915_request_add
+
+syscall 98 168
+    41 _syscall_handler < syscall_run < syscall_entry
+    33 tick_div < syscall_holds_release < syscall_run
+    16 arch_user_copy < copy_to_user < rusage_put
+    13 sys_getrusage < syscall_holds_release < syscall_run
+     9 arch_fill_words < rusage_from_ticks < syscall_holds_release
+     7 user_copy < copy_to_user < rusage_put
+
+syscall 24 96
+    57 kirq_restore < schedule < schedule
+    27 _syscall_handler < syscall_run < syscall_entry
+     6 sys_sched_yield < syscall_holds_release < syscall_run
+     3 syscall_holds_release < syscall_run < syscall_entry
+     1 spin_unlock_irqrestore < schedule < schedule
+     1 schedule < schedule < sys_sched_yield

@@ -1,0 +1,1392 @@
+time 120.576048
+cpu  2385 0 13412 31085 0 0 0 0 0 0
+cpu0 872 0 5316 5869 0 0 0 0 0 0
+cpu1 760 0 4199 6650 0 0 0 0 0 0
+cpu2 432 0 2397 8778 0 0 0 0 0 0
+cpu3 320 0 1498 9787 0 0 0 0 0 0
+intr 582752
+ctxt 6662849
+btime 1794526203
+processes 806
+sleeps_interrupted 3
+process_pid_steps 6720341
+process_uid_steps 1437
+process_timer_steps 4833501
+process_timer_passes 321211
+timer_passes_late 377
+tlb_shootdowns 5360
+tlb_shootdown_ipis 6327
+scheduler_picks 8261341
+scheduler_steps 6138284
+vm_gap_steps 3705767
+clock_calls 0
+vdso_tsc 1
+bkl_wait_us 40029293
+bkl_wait_max_us 145899
+bkl_wait_max_holds 3
+bkl_wait_max_hold take 1 145878
+bkl_wait_max_hold 128 7 1
+bkl_wait_max_hold 128 0 20
+bkl_hold_max_us 341256
+bkl_hold_max_entry take 0
+bkl_hold_sample_us 4048826
+bkl_hold_sample_pc ffffffff80396574 ffffffff80112694 ffffffff8026f8f0 ffffffff8010843c ffffffff8036cda8 ffffffff801002b4
+bkl_hold_max_mark 1 0
+bkl_hold_max_mark 2 0
+bkl_hold_max_mark 4 0
+bkl_hold_max_mark 8 0
+bkl_hold_max_mark 16 0
+bkl_hold_entry syscall 61 3756008 30634820
+bkl_hold_entry take 1 3536880 26512152
+bkl_hold_entry syscall 101 4242667 3894285
+bkl_hold_entry syscall 257 112161 1186953
+bkl_hold_entry syscall 262 88764 665445
+bkl_hold_entry syscall 88 12272 511417
+bkl_hold_entry vector 0 456855 493657
+bkl_hold_entry syscall 0 213928 475311
+bkl_hold_entry syscall 14 163492 396530
+bkl_hold_entry syscall 89 82483 365705
+bkl_hold_entry syscall 231 950 360592
+bkl_hold_entry take 0 5 341256
+bkl_hold_entry vector 32 46549 308864
+bkl_hold_entry syscall 191 29846 291285
+bkl_hold_entry syscall 39 238461 278947
+bkl_hold_entry syscall 230 83436 262625
+kvm_vms 0
+kvm_vcpus 0
+kvm_slots 0
+kvm_tdp_pages 0
+kvm_run_mappings 0
+kvm_gpa_maps 0
+kvm_gpa_map_pages 0
+kvm_ioeventfd_signals 0
+kvm_irqfd_raises 0
+vfio_groups 0
+vfio_devices 0
+vfio_dma_mappings 0
+vfio_dma_pages 0
+vfio_dma_io_pages 0
+kvm_exits 0
+iommu_dma_faults 0
+iommu_irq_faults 0
+msi_vectors_free 184
+virtio_gpu_copied_bytes 0
+latency_timer_us 1332744
+latency_disk_us 4751
+latency_diskwait_us 0
+latency_console_us 0
+wlan_refused_tcp 0
+wlan_refused_ack 0
+wlan_refused_other 0
+wlan_rx_held 0
+wlan_rx_wait_most 0
+wlan_tx_status_lost 0
+wlan_rescue_key 0
+wlan_rescue_message4 0
+wlan_rescue_silent 0
+wlan_rescue_saved 0
+wlan_rx_old_far 0
+loopback_dropped 0
+loopback_peak 2
+loopback_delivered_tick 2
+loopback_delivered_idle 0
+loopback_delivered_call 6
+loopback_left_idle 0
+namecache_hits 4817674
+namecache_misses 15103
+namecache_entries 8192
+namecache_negative 1304
+ext2_node_visits 147439
+procs_running 3
+procs_blocked 0
+bkl_calls_complete
+syscall 0 871248 0 213930 475315 1372713
+syscall 1 405123 0 116990 251685 373993
+syscall 2 586 0 600 11020 7333
+syscall 3 134353 0 74104 253409 594494
+syscall 4 13 0 13 87 0
+syscall 5 124477 0 40497 76631 183358
+syscall 6 1 0 1 6 0
+syscall 7 156062 0 131471 239511 1040034
+syscall 8 42515 0 11768 14778 31680
+syscall 9 80701 0 160915 122868 203627
+syscall 10 62633 0 62664 68639 169163
+syscall 11 30759 0 50336 144825 85554
+syscall 12 3355 0 3501 3848 13286
+syscall 13 4889 0 4889 4803 12806
+syscall 14 797853 0 163493 396532 928990
+syscall 15 1924 0 1924 4759 21725
+syscall 16 56593 0 45852 109419 382457
+syscall 17 29281 0 28069 26564 24328
+syscall 18 16 0 16 1226 3
+syscall 19 2 0 2 4 0
+syscall 20 238568 0 50026 128585 253437
+syscall 21 14029 0 4035 14301 26339
+syscall 22 3 0 3 13 0
+syscall 24 362902 0 9012 22808 68841
+syscall 25 54 0 62 135 1691
+syscall 28 153 0 123 233 600
+syscall 29 6 0 6 805 47
+syscall 30 12 0 12 206 85
+syscall 31 12 0 12 8765 38
+syscall 32 2582 0 2582 6783 3016
+syscall 33 409 0 409 951 5954
+syscall 38 19757 0 19757 23398 150582
+syscall 39 238461 0 238461 278947 662093
+syscall 40 2 0 2 1 0
+syscall 41 1349 0 1449 5035 14005
+syscall 42 182 0 314 1138 1522
+syscall 43 126 0 9 22 0
+syscall 44 206 0 83 411 434
+syscall 45 2274 0 408 1032 6412
+syscall 46 13310 0 5228 13535 25161
+syscall 47 73387 0 43495 104141 421820
+syscall 48 123 0 22 50 187
+syscall 49 119 0 151 555 410
+syscall 50 18 0 6 35 0
+syscall 51 171 0 131 115 246
+syscall 52 171 0 144 237 1107
+syscall 53 97 0 250 881 409
+syscall 54 386 0 344 455 1806
+syscall 55 452 0 120 105 637
+syscall 56 316 0 316 204481 1901
+syscall 57 14 0 14 686 59
+syscall 58 11 0 11 263 22
+syscall 59 318 0 653 68019 19970
+syscall 60 2 0 334 15889 15201
+syscall 61 3756010 0 3756018 30634956 5832474
+syscall 62 104 0 104 359 6422
+syscall 63 8595 0 8595 13269 43376
+syscall 67 6 0 10 4882 233
+syscall 72 38034 0 8227 20419 45077
+syscall 73 14051 0 380 941 2878
+syscall 74 2 0 2 311 60
+syscall 77 550 0 548 391 319
+syscall 79 134 0 134 215 334
+syscall 80 116 0 116 2244 65
+syscall 81 1802 0 1802 65967 4127
+syscall 82 127 0 573 29644 6418
+syscall 83 655 0 1516 15655 429
+syscall 84 6 0 20 340 433
+syscall 85 1 0 3 34 11
+syscall 86 14 0 27 357 93
+syscall 87 2441 0 10801 206540 6183
+syscall 88 3068 0 12272 511417 2871
+syscall 89 368311 0 82483 365705 187294
+syscall 90 295 0 295 6397 2929
+syscall 91 262 0 262 998 2176
+syscall 92 2 0 2 25 0
+syscall 93 1 0 1 3 0
+syscall 95 232 0 232 214 210
+syscall 98 725804 0 18024 46462 141205
+syscall 99 266 0 266 2399 1214
+syscall 100 19 0 19 214 95
+syscall 101 4242681 0 4242681 3894307 3414117
+syscall 102 904 0 904 829 2575
+syscall 103 2 0 2 63 0
+syscall 104 698 0 698 568 1817
+syscall 105 12 0 12 8 0
+syscall 106 21 0 21 12 0
+syscall 107 685 0 685 638 1990
+syscall 108 615 0 615 476 1553
+syscall 110 118 0 118 80 307
+syscall 111 32 0 32 17 234
+syscall 112 97 0 97 623 5989
+syscall 115 30 0 30 7 0
+syscall 116 67 0 67 36 2
+syscall 117 65 0 65 29 4
+syscall 118 270 0 270 349 1027
+syscall 119 61 0 61 19 0
+syscall 120 270 0 270 325 832
+syscall 124 1 0 1 0 0
+syscall 125 53 0 53 64 1357
+syscall 126 1 0 1 1 0
+syscall 128 164 0 165 744 940
+syscall 131 430 0 430 533 2018
+syscall 135 1 0 1 1 7
+syscall 137 32 0 32 304 784
+syscall 138 12262 0 12262 64769 15783
+syscall 141 53 0 53 340 392
+syscall 144 42 0 42 91 495
+syscall 145 1 0 1 0 0
+syscall 157 1115 0 1115 1304 5053
+syscall 158 76468 0 76468 30133 5525
+syscall 159 7 0 7 56 12
+syscall 161 5 0 5 132 0
+syscall 162 2 0 2 47439 0
+syscall 165 1 0 1 38 0
+syscall 166 1 0 1 918 0
+syscall 186 737 0 737 770 10999
+syscall 191 29846 0 29846 291285 50930
+syscall 193 14994 0 14994 29970 4182
+syscall 195 1 0 1 3 0
+syscall 199 171 0 171 774 15
+syscall 202 41781 0 13754 36462 98208
+syscall 203 450 0 450 1021 1386
+syscall 204 59 0 59 115 260
+syscall 213 5 0 5 11 2
+syscall 217 13130 0 4873 23463 29764
+syscall 218 271 0 271 236 525
+syscall 221 273 0 273 972 658
+syscall 230 83435 0 83436 262625 637191
+syscall 231 0 0 950 360592 28823
+syscall 232 12453 0 5197 21014 216100
+syscall 233 2182 0 462 1237 2293
+syscall 234 1959 0 1959 5822 58775
+syscall 243 4 0 4 4 0
+syscall 247 70 0 70 781 2151
+syscall 253 1 0 1 2 0
+syscall 254 23 0 23 137 102
+syscall 257 146066 0 112163 1189916 503243
+syscall 258 30 0 60 950 2557
+syscall 260 16 0 16 96 120
+syscall 262 298398 0 88764 665445 403959
+syscall 263 11 0 37 660 500
+syscall 264 18 0 18 377 348
+syscall 266 23 0 38 809 1479
+syscall 267 1719 0 1719 16419 9285
+syscall 270 13 0 14 55 22
+syscall 271 871 0 3598 22921 11270
+syscall 273 975 0 271 575 2763
+syscall 280 194 0 194 1190 470
+syscall 283 24 0 24 61 377
+syscall 285 22 0 342 1064 38
+syscall 286 1111 0 1111 3069 16696
+syscall 288 24 0 0 0 0
+syscall 289 36 0 36 69 540
+syscall 290 16 0 16 32 33
+syscall 291 54 0 54 156 1095
+syscall 293 1408 0 1408 10973 5309
+syscall 294 9 0 9 19 13
+syscall 302 832 0 832 1662 1383
+syscall 303 10 0 10 17 1
+syscall 310 1230 0 1230 4112 821
+syscall 312 234 0 234 340 972
+syscall 318 5857 0 5861 11904 34204
+syscall 319 93 0 93 425 833
+syscall 323 75 0 75 687 50
+syscall 326 806 0 867 152106 671
+syscall 332 4029 0 4029 7119 17568
+syscall 334 659 0 659 1353 1556
+syscall 430 1 0 1 12 0
+syscall 434 36 0 36 121 1768
+syscall 435 449 0 449 4613 1180
+syscall 436 68 0 68 455 276
+syscall 439 3480 0 2441 18089 12655
+syscall 441 277937 0 58349 163513 270906
+syscall 449 9736 0 2890 4917 48057
+syscall 452 19 0 19 39 303
+vector 0 0 0 456712 486385 1782423
+vector 13 1 0 0 0 0
+vector 14 538021 0 46953 58479 227406
+vector 32 353159 0 46549 308864 48191
+vector 33 4 0 0 0 0
+vector 41 28 0 0 0 0
+vector 48 202837 0 0 0 0
+vector 49 470 0 0 0 0
+vector 50 1 0 0 0 0
+vector 51 22271 0 0 0 0
+vector 52 911 0 763 6909 6376
+vector 53 3082 0 0 0 0
+take 0 0 0 5 341256 0
+take 1 0 0 2696310 19322633 11828789
+slept 0 0 0 418055 1141084 2414486
+slept 1 0 0 156337 602513 706672
+slept 2 0 0 149 2343 700
+slept 3 0 0 67194 265621 450376
+slept 5 0 0 54686 177771 411340
+slept 7 0 0 194948 648757 1385063
+slept 8 0 0 9652 26535 50363
+slept 9 0 0 53151 240460 277468
+slept 10 0 0 46997 175137 287169
+slept 11 0 0 20308 167417 116349
+slept 12 0 0 2042 7268 9279
+slept 13 0 0 1270 3606 4182
+slept 14 0 0 326989 853553 2258103
+slept 15 0 0 612 2903 3506
+slept 16 0 0 39204 72438 338719
+slept 17 0 0 15140 84439 49510
+slept 18 0 0 12 116 13
+slept 20 0 0 92418 370725 468148
+slept 21 0 0 8007 54065 57933
+slept 24 0 0 18220 45680 125423
+slept 25 0 0 32 166 37
+slept 28 0 0 96 648 1043
+slept 29 0 0 4 23 70
+slept 30 0 0 4 35 32
+slept 31 0 0 4 1405 88
+slept 32 0 0 1338 5232 4025
+slept 33 0 0 140 453 1177
+slept 39 0 0 208072 479550 1302866
+slept 41 0 0 144 436 1091
+slept 42 0 0 96 145 1105
+slept 43 0 0 4 7 5
+slept 44 0 0 20 49 118
+slept 45 0 0 307 489 2764
+slept 46 0 0 5152 7530 22548
+slept 47 0 0 31976 46507 268625
+slept 48 0 0 22 32 238
+slept 49 0 0 25 86 234
+slept 50 0 0 4 5 5
+slept 51 0 0 20 53 130
+slept 52 0 0 88 121 889
+slept 53 0 0 56 79 259
+slept 54 0 0 156 271 927
+slept 55 0 0 28 63 278
+slept 56 0 0 180 84351 915
+slept 58 0 0 11 29 1
+slept 59 0 0 666 27389 14112
+slept 60 0 0 206 1310 1622
+slept 61 0 0 914492 12523266 1107148
+slept 62 0 0 42 109 378
+slept 63 0 0 6554 16739 53672
+slept 67 0 0 1 5 0
+slept 72 0 0 16412 42286 92420
+slept 73 0 0 760 2264 6322
+slept 74 0 0 68 815 569
+slept 77 0 0 90 456 412
+slept 79 0 0 84 229 488
+slept 80 0 0 70 996 121
+slept 81 0 0 1172 32595 5410
+slept 82 0 0 3431 46369 83502
+slept 83 0 0 174 1934 261
+slept 85 0 0 1 2 11
+slept 86 0 0 5 300 346
+slept 87 0 0 463 7821 4920
+slept 88 0 0 132 4565 153
+slept 89 0 0 132177 762183 476364
+slept 90 0 0 228 4284 318
+slept 95 0 0 120 335 519
+slept 98 0 0 36048 91465 246273
+slept 99 0 0 206 982 1065
+slept 100 0 0 14 73 42
+slept 102 0 0 436 1014 3250
+slept 104 0 0 384 892 3545
+slept 107 0 0 324 728 2539
+slept 108 0 0 320 734 2806
+slept 110 0 0 12 30 15
+slept 111 0 0 4 10 5
+slept 112 0 0 56 261 1208
+slept 118 0 0 188 459 1950
+slept 120 0 0 188 421 1579
+slept 128 0 0 164 615 9323
+slept 131 0 0 328 786 4174
+slept 137 0 0 4 15 55
+slept 138 0 0 3652 28338 24049
+slept 141 0 0 32 182 327
+slept 144 0 0 24 72 70
+slept 157 0 0 614 1509 5776
+slept 158 0 0 544 1206 4039
+slept 161 0 0 1 31 0
+slept 162 0 0 665 40487 2656
+slept 186 0 0 364 798 3418
+slept 191 0 0 9756 94534 58899
+slept 193 0 0 136 535 783
+slept 202 0 0 30754 98486 215353
+slept 203 0 0 348 1102 1324
+slept 204 0 0 44 124 354
+slept 213 0 0 4 14 4
+slept 217 0 0 8430 244059 51336
+slept 218 0 0 80 188 273
+slept 221 0 0 182 928 1099
+slept 230 0 0 153402 522891 2360388
+slept 231 0 0 446 41206 12467
+slept 233 0 0 922 3604 2681
+slept 234 0 0 1300 5343 3087
+slept 254 0 0 9 68 234
+slept 257 0 0 88394 1120160 703513
+slept 262 0 0 152441 959874 905526
+slept 266 0 0 1 12 286
+slept 267 0 0 1093 10373 11245
+slept 270 0 0 21 126 92
+slept 273 0 0 542 1229 5020
+slept 283 0 0 4 21 50
+slept 290 0 0 8 40 87
+slept 291 0 0 4 16 5
+slept 293 0 0 1028 8660 9069
+slept 294 0 0 4 21 40
+slept 302 0 0 472 1593 1994
+slept 310 0 0 128 460 319
+slept 318 0 0 3388 8961 23642
+slept 319 0 0 78 394 508
+slept 323 0 0 56 506 236
+slept 326 0 0 2528 392705 14848
+slept 332 0 0 2288 6536 23624
+slept 334 0 0 422 1035 3850
+slept 435 0 0 538 4034 3161
+slept 436 0 0 8 77 31
+slept 439 0 0 2290 18021 14929
+slept 441 0 0 167317 2396309 660655
+slept 449 0 0 4971 20636 36280
+== 780 780
+780 (trip64.exe) R 1 780 780 0 -1 0 10971 8 0 0 26 231 0 0 20 0 5 0 10997 701431808 29740
+Name:	trip64.exe
+Umask:	0022
+State:	t (tracing stop)
+Tgid:	780
+Ngid:	0
+Pid:	780
+PPid:	1
+TracerPid:	690
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	780
+NSpid:	780
+NSpgid:	780
+NSsid:	780
+VmPeak:	  684992 kB
+VmSize:	  684992 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	  118960 kB
+VmRSS:	  118960 kB
+RssAnon:	   41440 kB
+RssFile:	   77460 kB
+RssShmem:	      60 kB
+VmData:	  403648 kB
+VmStk:	     140 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	5
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	0000000010012a07
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	103862
+nonvoluntary_ctxt_switches:	77
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
+== 780 789
+789 (trip64.:disk$0) S 1 780 780 0 -1 0 5 8 0 0 0 0 0 0 39 19 5 0 11600 701431808 29740
+Name:	trip64.:disk$0
+Umask:	0022
+State:	S (sleeping)
+Tgid:	780
+Ngid:	0
+Pid:	789
+PPid:	1
+TracerPid:	690
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	780
+NSpid:	789
+NSpgid:	780
+NSsid:	780
+VmPeak:	  684992 kB
+VmSize:	  684992 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	  118960 kB
+VmRSS:	  118960 kB
+RssAnon:	   41440 kB
+RssFile:	   77460 kB
+RssShmem:	      60 kB
+VmData:	  403648 kB
+VmStk:	     140 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	5
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	fffffffe3ffbfaff
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	39
+nonvoluntary_ctxt_switches:	0
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
+== 780 791
+791 (trip64.:disk$0) S 1 780 780 0 -1 0 6 8 0 0 0 0 0 0 39 19 5 0 11634 701431808 29740
+Name:	trip64.:disk$0
+Umask:	0022
+State:	S (sleeping)
+Tgid:	780
+Ngid:	0
+Pid:	791
+PPid:	1
+TracerPid:	690
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	780
+NSpid:	791
+NSpgid:	780
+NSsid:	780
+VmPeak:	  684992 kB
+VmSize:	  684992 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	  118960 kB
+VmRSS:	  118960 kB
+RssAnon:	   41440 kB
+RssFile:	   77460 kB
+RssShmem:	      60 kB
+VmData:	  403648 kB
+VmStk:	     140 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	5
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	fffffffe3ffbfaff
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	37
+nonvoluntary_ctxt_switches:	0
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
+== 780 801
+801 (wined3d_cs) S 1 780 780 0 -1 0 2914 8 0 0 6 19 0 0 20 0 5 0 11959 701431808 29740
+Name:	wined3d_cs
+Umask:	0022
+State:	S (sleeping)
+Tgid:	780
+Ngid:	0
+Pid:	801
+PPid:	1
+TracerPid:	690
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	780
+NSpid:	801
+NSpgid:	780
+NSsid:	780
+VmPeak:	  684992 kB
+VmSize:	  684992 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	  118960 kB
+VmRSS:	  118960 kB
+RssAnon:	   41440 kB
+RssFile:	   77460 kB
+RssShmem:	      60 kB
+VmData:	  403648 kB
+VmStk:	     140 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	5
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	0000000000000000
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	6427
+nonvoluntary_ctxt_switches:	3
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
+== 780 802
+802 (trip64.e:gdrv0) S 1 780 780 0 -1 0 0 8 0 0 0 0 0 0 20 0 5 0 11995 701431808 29740
+Name:	trip64.e:gdrv0
+Umask:	0022
+State:	S (sleeping)
+Tgid:	780
+Ngid:	0
+Pid:	802
+PPid:	1
+TracerPid:	690
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	780
+NSpid:	802
+NSpgid:	780
+NSsid:	780
+VmPeak:	  684992 kB
+VmSize:	  684992 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	  118960 kB
+VmRSS:	  118960 kB
+RssAnon:	   41440 kB
+RssFile:	   77460 kB
+RssShmem:	      60 kB
+VmData:	  403648 kB
+VmStk:	     140 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	5
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	fffffffe3ffbfaff
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	11
+nonvoluntary_ctxt_switches:	0
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
+
+==== end
+time 124.482834
+cpu  2597 0 14097 31751 0 0 0 0 0 0
+cpu0 938 0 5506 6003 0 0 0 0 0 0
+cpu1 806 0 4385 6808 0 0 0 0 0 0
+cpu2 484 0 2559 8955 0 0 0 0 0 0
+cpu3 368 0 1645 9984 0 0 0 0 0 0
+intr 609010
+ctxt 6935477
+btime 1794526203
+processes 811
+sleeps_interrupted 3
+process_pid_steps 7053441
+process_uid_steps 1447
+process_timer_steps 5088084
+process_timer_passes 334761
+timer_passes_late 384
+tlb_shootdowns 5372
+tlb_shootdown_ipis 6339
+scheduler_picks 8564946
+scheduler_steps 6412145
+vm_gap_steps 3706363
+clock_calls 0
+vdso_tsc 1
+bkl_wait_us 42679347
+bkl_wait_max_us 145899
+bkl_wait_max_holds 3
+bkl_wait_max_hold take 1 145878
+bkl_wait_max_hold 128 7 1
+bkl_wait_max_hold 128 0 20
+bkl_hold_max_us 341256
+bkl_hold_max_entry take 0
+bkl_hold_sample_us 4048826
+bkl_hold_sample_pc ffffffff80396574 ffffffff80112694 ffffffff8026f8f0 ffffffff8010843c ffffffff8036cda8 ffffffff801002b4
+bkl_hold_max_mark 1 0
+bkl_hold_max_mark 2 0
+bkl_hold_max_mark 4 0
+bkl_hold_max_mark 8 0
+bkl_hold_max_mark 16 0
+bkl_hold_entry syscall 61 3929973 32908821
+bkl_hold_entry take 1 3688573 27392285
+bkl_hold_entry syscall 101 4444696 4108818
+bkl_hold_entry syscall 257 112910 1194751
+bkl_hold_entry syscall 262 89764 667879
+bkl_hold_entry syscall 88 12272 511417
+bkl_hold_entry vector 0 465587 501605
+bkl_hold_entry syscall 0 218941 489226
+bkl_hold_entry syscall 14 168606 408932
+bkl_hold_entry syscall 89 82934 366789
+bkl_hold_entry syscall 231 950 360592
+bkl_hold_entry take 0 5 341256
+bkl_hold_entry vector 32 46962 313684
+bkl_hold_entry syscall 191 29858 291312
+bkl_hold_entry syscall 1 157667 282761
+bkl_hold_entry syscall 39 238493 278982
+kvm_vms 0
+kvm_vcpus 0
+kvm_slots 0
+kvm_tdp_pages 0
+kvm_run_mappings 0
+kvm_gpa_maps 0
+kvm_gpa_map_pages 0
+kvm_ioeventfd_signals 0
+kvm_irqfd_raises 0
+vfio_groups 0
+vfio_devices 0
+vfio_dma_mappings 0
+vfio_dma_pages 0
+vfio_dma_io_pages 0
+kvm_exits 0
+iommu_dma_faults 0
+iommu_irq_faults 0
+msi_vectors_free 184
+virtio_gpu_copied_bytes 0
+latency_timer_us 1332744
+latency_disk_us 4751
+latency_diskwait_us 0
+latency_console_us 0
+wlan_refused_tcp 0
+wlan_refused_ack 0
+wlan_refused_other 0
+wlan_rx_held 0
+wlan_rx_wait_most 0
+wlan_tx_status_lost 0
+wlan_rescue_key 0
+wlan_rescue_message4 0
+wlan_rescue_silent 0
+wlan_rescue_saved 0
+wlan_rx_old_far 0
+loopback_dropped 0
+loopback_peak 2
+loopback_delivered_tick 2
+loopback_delivered_idle 0
+loopback_delivered_call 6
+loopback_left_idle 0
+namecache_hits 4857688
+namecache_misses 15110
+namecache_entries 8190
+namecache_negative 1306
+ext2_node_visits 148092
+procs_running 4
+procs_blocked 0
+bkl_calls_complete
+syscall 0 879832 0 218943 489230 1415877
+syscall 1 427177 0 157669 282766 450936
+syscall 2 594 0 608 11122 7400
+syscall 3 136743 0 74685 254796 599013
+syscall 4 13 0 13 87 0
+syscall 5 126608 0 40841 77351 186124
+syscall 6 1 0 1 6 0
+syscall 7 162288 0 137506 254460 1085102
+syscall 8 44422 0 11886 14959 33261
+syscall 9 80899 0 161113 123349 205243
+syscall 10 63006 0 63037 69523 171910
+syscall 11 30814 0 50391 144955 85974
+syscall 12 3355 0 3501 3848 13286
+syscall 13 4889 0 4889 4803 12806
+syscall 14 802977 0 168607 408934 980275
+syscall 15 1945 0 1945 4807 21954
+syscall 16 66041 0 64112 156712 616081
+syscall 17 29351 0 28139 26733 24652
+syscall 18 16 0 16 1226 3
+syscall 19 2 0 2 4 0
+syscall 20 240069 0 51327 131697 266474
+syscall 21 14099 0 4041 14314 26416
+syscall 22 3 0 3 13 0
+syscall 24 369064 0 15174 37009 105046
+syscall 25 54 0 62 135 1691
+syscall 28 153 0 123 233 600
+syscall 29 6 0 6 805 47
+syscall 30 12 0 12 206 85
+syscall 31 12 0 12 8765 38
+syscall 32 2591 0 2591 6805 3111
+syscall 33 409 0 409 951 5954
+syscall 38 20079 0 20079 23865 156242
+syscall 39 238493 0 238493 278982 662464
+syscall 40 2 0 2 1 0
+syscall 41 1375 0 1479 5162 14420
+syscall 42 184 0 320 1163 1630
+syscall 43 128 0 9 22 0
+syscall 44 206 0 83 411 434
+syscall 45 2278 0 416 1056 6586
+syscall 46 13362 0 5300 13701 25869
+syscall 47 74368 0 44642 107123 441463
+syscall 48 123 0 22 50 187
+syscall 49 119 0 151 555 410
+syscall 50 18 0 6 35 0
+syscall 51 171 0 131 115 246
+syscall 52 173 0 148 245 1163
+syscall 53 97 0 250 881 409
+syscall 54 386 0 344 455 1806
+syscall 55 456 0 120 105 637
+syscall 56 316 0 316 204481 1901
+syscall 57 14 0 14 686 59
+syscall 58 11 0 11 263 22
+syscall 59 318 0 653 68019 19970
+syscall 60 2 0 334 15889 15201
+syscall 61 3929977 0 3929985 32909011 6154159
+syscall 62 104 0 104 359 6422
+syscall 63 8690 0 8690 13489 44578
+syscall 67 6 0 10 4882 233
+syscall 72 38504 0 8693 21519 48022
+syscall 73 14063 0 392 965 2992
+syscall 74 2 0 2 311 60
+syscall 77 550 0 548 391 319
+syscall 79 134 0 134 215 334
+syscall 80 116 0 116 2244 65
+syscall 81 1802 0 1802 65967 4127
+syscall 82 130 0 596 34186 6887
+syscall 83 655 0 1516 15655 429
+syscall 84 6 0 20 340 433
+syscall 85 1 0 3 34 11
+syscall 86 14 0 27 357 93
+syscall 87 2442 0 10806 206700 6187
+syscall 88 3068 0 12272 511417 2871
+syscall 89 368762 0 82934 366789 189946
+syscall 90 295 0 295 6397 2929
+syscall 91 262 0 262 998 2176
+syscall 92 2 0 2 25 0
+syscall 93 1 0 1 3 0
+syscall 95 232 0 232 214 210
+syscall 98 738128 0 30348 76864 210494
+syscall 99 273 0 273 2417 1271
+syscall 100 19 0 19 214 95
+syscall 101 4444709 0 4444709 4108837 3701815
+syscall 102 912 0 912 847 2665
+syscall 103 2 0 2 63 0
+syscall 104 706 0 706 584 1961
+syscall 105 12 0 12 8 0
+syscall 106 21 0 21 12 0
+syscall 107 691 0 691 651 2048
+syscall 108 621 0 621 487 1613
+syscall 110 118 0 118 80 307
+syscall 111 32 0 32 17 234
+syscall 112 97 0 97 623 5989
+syscall 115 30 0 30 7 0
+syscall 116 67 0 67 36 2
+syscall 117 65 0 65 29 4
+syscall 118 274 0 274 357 1076
+syscall 119 61 0 61 19 0
+syscall 120 274 0 274 334 887
+syscall 124 1 0 1 0 0
+syscall 125 53 0 53 64 1357
+syscall 126 1 0 1 1 0
+syscall 128 168 0 169 762 979
+syscall 131 435 0 435 545 2086
+syscall 135 1 0 1 1 7
+syscall 137 32 0 32 304 784
+syscall 138 12424 0 12424 65177 16862
+syscall 141 53 0 53 340 392
+syscall 144 42 0 42 91 495
+syscall 145 1 0 1 0 0
+syscall 157 1120 0 1120 1313 5079
+syscall 158 76473 0 76473 30146 5583
+syscall 159 7 0 7 56 12
+syscall 161 5 0 5 132 0
+syscall 162 2 0 2 47439 0
+syscall 165 1 0 1 38 0
+syscall 166 1 0 1 918 0
+syscall 186 742 0 742 781 11062
+syscall 191 29858 0 29858 291312 50975
+syscall 193 15002 0 15002 29986 4204
+syscall 195 1 0 1 3 0
+syscall 199 171 0 171 774 15
+syscall 202 48037 0 20011 53526 156665
+syscall 203 455 0 455 1032 1423
+syscall 204 59 0 59 115 260
+syscall 213 5 0 5 11 2
+syscall 217 13548 0 5291 24577 32676
+syscall 218 271 0 271 236 525
+syscall 221 274 0 274 977 660
+syscall 230 87372 0 87373 276576 675776
+syscall 231 0 0 950 360592 28823
+syscall 232 12664 0 5327 21667 217488
+syscall 233 2202 0 478 1280 2389
+syscall 234 1980 0 1980 5871 58869
+syscall 243 4 0 4 4 0
+syscall 247 70 0 70 781 2151
+syscall 253 1 0 1 2 0
+syscall 254 23 0 23 137 102
+syscall 257 148591 0 112912 1197726 510366
+syscall 258 30 0 60 950 2557
+syscall 260 16 0 16 96 120
+syscall 262 301185 0 89764 667879 411449
+syscall 263 11 0 37 660 500
+syscall 264 18 0 18 377 348
+syscall 266 23 0 38 809 1479
+syscall 267 1719 0 1719 16419 9285
+syscall 270 14 0 15 58 28
+syscall 271 876 0 3610 22927 11428
+syscall 273 980 0 276 585 2861
+syscall 280 194 0 194 1190 470
+syscall 283 24 0 24 61 377
+syscall 285 22 0 342 1064 38
+syscall 286 1156 0 1156 3208 17140
+syscall 288 24 0 0 0 0
+syscall 289 36 0 36 69 540
+syscall 290 16 0 16 32 33
+syscall 291 54 0 54 156 1095
+syscall 293 1423 0 1423 11005 5522
+syscall 294 9 0 9 19 13
+syscall 302 832 0 832 1662 1383
+syscall 303 10 0 10 17 1
+syscall 310 1389 0 1389 5241 1004
+syscall 312 234 0 234 340 972
+syscall 318 5858 0 5862 11905 34204
+syscall 319 93 0 93 425 833
+syscall 323 75 0 75 687 50
+syscall 326 806 0 867 152106 671
+syscall 332 4029 0 4029 7119 17568
+syscall 334 664 0 664 1366 1636
+syscall 430 1 0 1 12 0
+syscall 434 36 0 36 121 1768
+syscall 435 454 0 454 4624 1216
+syscall 436 68 0 68 455 276
+syscall 439 3480 0 2441 18089 12655
+syscall 441 279686 0 60099 168151 281930
+syscall 449 9802 0 2961 5089 48842
+syscall 452 19 0 19 39 303
+vector 0 0 0 465443 494331 1874723
+vector 13 1 0 0 0 0
+vector 14 544632 0 46996 58558 227814
+vector 32 368742 0 46962 313684 49900
+vector 33 4 0 0 0 0
+vector 41 28 0 0 0 0
+vector 48 212485 0 0 0 0
+vector 49 470 0 0 0 0
+vector 50 1 0 0 0 0
+vector 51 22271 0 0 0 0
+vector 52 928 0 771 6978 6391
+vector 53 4099 0 0 0 0
+take 0 0 0 5 341256 0
+take 1 0 0 2799709 19860172 12611636
+slept 0 0 0 429575 1177782 2498029
+slept 1 0 0 163514 639068 749739
+slept 2 0 0 149 2343 700
+slept 3 0 0 68197 271033 455315
+slept 5 0 0 55226 179758 414272
+slept 7 0 0 207018 694160 1457120
+slept 8 0 0 9744 26792 51275
+slept 9 0 0 53547 242443 279614
+slept 10 0 0 47743 178728 292409
+slept 11 0 0 20418 168086 116875
+slept 12 0 0 2042 7268 9279
+slept 13 0 0 1270 3606 4182
+slept 14 0 0 337218 879915 2361920
+slept 15 0 0 633 3050 3843
+slept 16 0 0 57678 103566 567669
+slept 17 0 0 15280 87147 49872
+slept 18 0 0 12 116 13
+slept 20 0 0 94716 380283 487911
+slept 21 0 0 8019 54170 58111
+slept 24 0 0 30671 76251 219994
+slept 25 0 0 32 166 37
+slept 28 0 0 96 648 1043
+slept 29 0 0 4 23 70
+slept 30 0 0 4 35 32
+slept 31 0 0 4 1405 88
+slept 32 0 0 1356 5296 4093
+slept 33 0 0 140 453 1177
+slept 39 0 0 208088 479591 1303085
+slept 41 0 0 148 447 1147
+slept 42 0 0 100 152 1153
+slept 43 0 0 4 7 5
+slept 44 0 0 20 49 118
+slept 45 0 0 315 505 2890
+slept 46 0 0 5224 7658 23273
+slept 47 0 0 33104 48252 282917
+slept 48 0 0 22 32 238
+slept 49 0 0 25 86 234
+slept 50 0 0 4 5 5
+slept 51 0 0 20 53 130
+slept 52 0 0 92 126 931
+slept 53 0 0 56 79 259
+slept 54 0 0 156 271 927
+slept 55 0 0 28 63 278
+slept 56 0 0 180 84351 915
+slept 58 0 0 11 29 1
+slept 59 0 0 666 27389 14112
+slept 60 0 0 206 1310 1622
+slept 61 0 0 927514 12807229 1132787
+slept 62 0 0 42 109 378
+slept 63 0 0 6744 17255 55860
+slept 67 0 0 1 5 0
+slept 72 0 0 17344 44725 96813
+slept 73 0 0 784 2329 6646
+slept 74 0 0 68 815 569
+slept 77 0 0 90 456 412
+slept 79 0 0 84 229 488
+slept 80 0 0 70 996 121
+slept 81 0 0 1172 32595 5410
+slept 82 0 0 3437 48295 83543
+slept 83 0 0 174 1934 261
+slept 85 0 0 1 2 11
+slept 86 0 0 5 300 346
+slept 87 0 0 465 7855 4927
+slept 88 0 0 132 4565 153
+slept 89 0 0 133079 768152 479350
+slept 90 0 0 228 4284 318
+slept 95 0 0 120 335 519
+slept 98 0 0 60696 155290 427681
+slept 99 0 0 220 1055 1123
+slept 100 0 0 14 73 42
+slept 102 0 0 452 1049 3451
+slept 104 0 0 400 926 3870
+slept 107 0 0 336 751 2770
+slept 108 0 0 332 759 3028
+slept 110 0 0 12 30 15
+slept 111 0 0 4 10 5
+slept 112 0 0 56 261 1208
+slept 118 0 0 196 476 2092
+slept 120 0 0 196 438 1647
+slept 128 0 0 168 630 9365
+slept 131 0 0 338 813 4293
+slept 137 0 0 4 15 55
+slept 138 0 0 3976 30969 25555
+slept 141 0 0 32 182 327
+slept 144 0 0 24 72 70
+slept 157 0 0 624 1530 5995
+slept 158 0 0 554 1230 4166
+slept 161 0 0 1 31 0
+slept 162 0 0 665 40487 2656
+slept 186 0 0 374 825 3533
+slept 191 0 0 9780 94850 59062
+slept 193 0 0 152 607 819
+slept 202 0 0 46059 152675 369649
+slept 203 0 0 358 1132 1337
+slept 204 0 0 44 124 354
+slept 213 0 0 4 14 4
+slept 217 0 0 9258 265054 55151
+slept 218 0 0 80 188 273
+slept 221 0 0 184 934 1105
+slept 230 0 0 161645 554025 2457535
+slept 231 0 0 446 41206 12467
+slept 233 0 0 954 3759 2740
+slept 234 0 0 1342 5508 3154
+slept 254 0 0 9 68 234
+slept 257 0 0 89718 1145945 711635
+slept 262 0 0 154441 980628 915552
+slept 266 0 0 1 12 286
+slept 267 0 0 1093 10373 11245
+slept 270 0 0 24 139 108
+slept 273 0 0 552 1257 5168
+slept 283 0 0 4 21 50
+slept 290 0 0 8 40 87
+slept 291 0 0 4 16 5
+slept 293 0 0 1058 9071 9445
+slept 294 0 0 4 21 40
+slept 302 0 0 472 1593 1994
+slept 310 0 0 128 460 319
+slept 318 0 0 3388 8961 23642
+slept 319 0 0 78 394 508
+slept 323 0 0 56 506 236
+slept 326 0 0 2528 392705 14848
+slept 332 0 0 2288 6536 23624
+slept 334 0 0 432 1057 4028
+slept 435 0 0 553 4176 3242
+slept 436 0 0 8 77 31
+slept 439 0 0 2290 18021 14929
+slept 441 0 0 172068 2512217 684524
+slept 449 0 0 5188 21695 38050
+== 780 780
+780 (trip64.exe) t 1 780 780 0 -1 0 11070 8 0 0 30 299 0 0 20 0 5 0 10997 767832064 29906
+Name:	trip64.exe
+Umask:	0022
+State:	t (tracing stop)
+Tgid:	780
+Ngid:	0
+Pid:	780
+PPid:	1
+TracerPid:	690
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	780
+NSpid:	780
+NSpgid:	780
+NSsid:	780
+VmPeak:	  749836 kB
+VmSize:	  749836 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	  119624 kB
+VmRSS:	  119624 kB
+RssAnon:	   42008 kB
+RssFile:	   77556 kB
+RssShmem:	      60 kB
+VmData:	  403648 kB
+VmStk:	     140 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	5
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	0000000000000000
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	146594
+nonvoluntary_ctxt_switches:	223
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
+== 780 789
+789 (trip64.:disk$0) S 1 780 780 0 -1 0 5 8 0 0 0 0 0 0 39 19 5 0 11600 767832064 29906
+Name:	trip64.:disk$0
+Umask:	0022
+State:	S (sleeping)
+Tgid:	780
+Ngid:	0
+Pid:	789
+PPid:	1
+TracerPid:	690
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	780
+NSpid:	789
+NSpgid:	780
+NSsid:	780
+VmPeak:	  749836 kB
+VmSize:	  749836 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	  119624 kB
+VmRSS:	  119624 kB
+RssAnon:	   42008 kB
+RssFile:	   77556 kB
+RssShmem:	      60 kB
+VmData:	  403648 kB
+VmStk:	     140 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	5
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	fffffffe3ffbfaff
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	39
+nonvoluntary_ctxt_switches:	0
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
+== 780 791
+791 (trip64.:disk$0) S 1 780 780 0 -1 0 6 8 0 0 0 0 0 0 39 19 5 0 11634 767832064 29906
+Name:	trip64.:disk$0
+Umask:	0022
+State:	S (sleeping)
+Tgid:	780
+Ngid:	0
+Pid:	791
+PPid:	1
+TracerPid:	690
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	780
+NSpid:	791
+NSpgid:	780
+NSsid:	780
+VmPeak:	  749836 kB
+VmSize:	  749836 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	  119624 kB
+VmRSS:	  119624 kB
+RssAnon:	   42008 kB
+RssFile:	   77556 kB
+RssShmem:	      60 kB
+VmData:	  403648 kB
+VmStk:	     140 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	5
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	fffffffe3ffbfaff
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	37
+nonvoluntary_ctxt_switches:	0
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
+== 780 801
+801 (wined3d_cs) R 1 780 780 0 -1 0 2978 8 0 0 26 101 0 0 20 0 5 0 11959 767832064 29906
+Name:	wined3d_cs
+Umask:	0022
+State:	R (running)
+Tgid:	780
+Ngid:	0
+Pid:	801
+PPid:	1
+TracerPid:	690
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	780
+NSpid:	801
+NSpgid:	780
+NSsid:	780
+VmPeak:	  749836 kB
+VmSize:	  749836 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	  119624 kB
+VmRSS:	  119624 kB
+RssAnon:	   42008 kB
+RssFile:	   77556 kB
+RssShmem:	      60 kB
+VmData:	  403648 kB
+VmStk:	     140 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	5
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	0000000000000000
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	33030
+nonvoluntary_ctxt_switches:	23
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
+== 780 802
+802 (trip64.e:gdrv0) S 1 780 780 0 -1 0 0 8 0 0 0 0 0 0 20 0 5 0 11995 767832064 29906
+Name:	trip64.e:gdrv0
+Umask:	0022
+State:	S (sleeping)
+Tgid:	780
+Ngid:	0
+Pid:	802
+PPid:	1
+TracerPid:	690
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000 44 104 202 
+NStgid:	780
+NSpid:	802
+NSpgid:	780
+NSsid:	780
+VmPeak:	  749836 kB
+VmSize:	  749836 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	  119624 kB
+VmRSS:	  119624 kB
+RssAnon:	   42008 kB
+RssFile:	   77556 kB
+RssShmem:	      60 kB
+VmData:	  403648 kB
+VmStk:	     140 kB
+VmExe:	       8 kB
+VmLib:	  275812 kB
+VmSwap:	       0 kB
+Threads:	5
+SigQ:	0/64
+SigPnd:	0000000000000000
+ShdPnd:	0000000000000000
+SigBlk:	fffffffe3ffbfaff
+SigIgn:	0000000000001000
+SigCgt:	00000001400006fe
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	000001ffffffffff
+CapAmb:	0000000000000000
+NoNewPrivs:	0
+Seccomp:	0
+Seccomp_filters:	0
+Cpus_allowed:	f
+Cpus_allowed_list:	0-3
+voluntary_ctxt_switches:	11
+nonvoluntary_ctxt_switches:	0
+TimedWakeCount:	0
+TimedWakeLast:	0 0 0 0 0 0 0 0
+TimedWakeWorst:	0 0 0 0 0 0 0 0
+TimedWakeSum:	0 0 0 0 0 0 0 0
