@@ -286,9 +286,11 @@ struct percpu cpu_table[NR_CPUS];
 static struct drm_i915_private dev;
 static int sleeps, wakes, stuck_sleeps;
 
+/** The model's clock in the kernel's ticks, TICK_HZ a second, as the
+ * driver's deadlines count them. */
 uint64_t rtc_ticks_now(void)
 {
-    return bus ? bus->now_us / 1000u : 0;
+    return bus ? bus->now_us / TICK_US : 0;
 }
 
 /** Take every message the model has pending, while the processor's
