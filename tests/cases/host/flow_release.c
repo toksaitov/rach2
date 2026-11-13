@@ -359,8 +359,8 @@ static int windows_mock(const char *command)
     char line[20000], b[4096];
     const char *out;
     int start = 0, poll = 0, prepare = 0, clean = 0;
-    int gate = strstr(command, "bash.exe -l -s -g ") != NULL;
-    int list = strstr(command, "bash.exe -l -s -l ") != NULL;
+    int gate = strstr(command, "bash.exe -l -s -- -g ") != NULL;
+    int list = strstr(command, "bash.exe -l -s -- -l ") != NULL;
     while (fgets(b, sizeof(b), stdin)) {
         snprintf(line, sizeof(line), "%s %s", gate ? "gate" : list ? "list" : "windows", b);
         append(ev("RELEASE_TEST_CALLS"), line);
