@@ -2910,6 +2910,25 @@ int ext2_inode_encode(struct ext2_mount *em, struct ext2_node *n, uint8_t *raw, 
 }
 
 /**
+ * The end of a store of inode `n` whose write failed with `rc`: on a mount
+ * whose device has not failed, an -EIO is the write funnel's, which could
+ * not read again the block it writes in part (`ext2_write_owned`), a fault
+ * no reader met, so it is logged as `ext2: inode N: not stored: a block
+ * cannot be read again` and reported (`ext2_mark_error`), as Linux reports
+ * an inode whose table block it cannot read (fs/ext2/inode.c:1348); the
+ * error bit then keeps the valid bit off the volume while the node's change
+ * is not on it. A device's failure is recorded as one already. Returns `rc`.
+ */
+static int store_failed(struct ext2_mount *em, const struct ext2_node *n, int rc)
+{
+    if (rc == -EIO && !ext2_failed(em)) {
+        klog(KLOG_WARN, "ext2", "inode %d: not stored: a block cannot be read again", (int)n->ino);
+        ext2_mark_error(em);
+    }
+    return rc;
+}
+
+/**
  * Write inode `n` in the way `how` says, over the bytes its slot has, or over
  * zeros when `fresh`, for an inode just allocated: a freed inode's slot keeps
  * what it had, and the encoder writes only the fields this driver keeps. A
@@ -2924,9 +2943,10 @@ int ext2_inode_encode(struct ext2_mount *em, struct ext2_node *n, uint8_t *raw, 
  * device with any neighbour's sync. The drain encodes the node. A strict
  * mount drains the batch before any store but the batch's own
  * (`ext2_assert_writable`). A table block that cannot be read is reported
- * to the mount's policy, as for a load (`table_unread`). A change of a
- * field but the times sets `n->dirty_meta` after the store, even on error
- * so a retry covers any dirty buffer left by the failed write. The
+ * to the mount's policy, as for a load (READ_SLOT), and so is a block the
+ * write cannot read again (`store_failed`). A change of a field but the
+ * times sets `n->dirty_meta` after the store, even on error so a retry
+ * covers any dirty buffer left by the failed write. The
  * superblock is listed among `n`'s shared blocks when `large_file` is set
  * for it. The caller holds `n`'s lock, or has `n` alone, a new inode or one
  * freed at its last put; that keeps the slot's bytes and the batch's hold
@@ -2938,9 +2958,9 @@ int ext2_inode_encode(struct ext2_mount *em, struct ext2_node *n, uint8_t *raw, 
  * leaves it, so that the next settle stores the node again. A slot whose
  * fields but the times and the deletion time would change on a node that
  * has no mark, and that the batch does not hold, is a change made without
- * `ext2_node_dirty`, and
- * panics, as `ext2_assert_node_locked` does for a change outside the lock,
- * so that any test that runs the operation finds the missed site.
+ * `ext2_node_dirty`, and panics, as `ext2_assert_node_locked` does for a
+ * change outside the lock, so that any test that runs the operation finds
+ * the missed site.
  */
 int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int how)
 {
@@ -2974,7 +2994,7 @@ int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int 
         ext2_node_share(em, n, 0);
         rc = large_file_flag(em);
         if (rc != 0) {
-            return rc;
+            return store_failed(em, n, rc);
         }
     }
     if (!fresh && ext2_writeback_keeps(em, n)) {
@@ -2985,10 +3005,11 @@ int ext2_inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int 
     if (changed) {
         ext2_node_meta_dirty(em, n);
     }
-    if (rc == 0) {
-        n->unstored = 0;
+    if (rc != 0) {
+        return store_failed(em, n, rc);
     }
-    return rc;
+    n->unstored = 0;
+    return 0;
 }
 
 /** Write inode `n` as `ext2_inode_write` does with WRITE_THROUGH: the fields
@@ -3779,16 +3800,24 @@ static int attr_inplace(struct vfs_mount *mnt, struct ext2_node *n, const uint8_
     return rc;
 }
 
-/** Replace an inode's attribute block without changing a shared block.
- * The node is locked. Allocation and contents reach disk before the inode;
- * the old block's reference goes only after the inode is durable, on every
- * mount. A failed write leaves allocated blocks for e2fsck, never reuses a
- * block an uncertain inode write may name. Returns 0 or -errno. */
+/**
+ * Replace an inode's attribute block without changing a shared block. The
+ * node is locked. Allocation and contents reach disk before the inode; the
+ * old block's reference goes only after the inode is durable, on every
+ * mount. A failure before the inode names the new block frees it again
+ * (`ext2_block_unwind`); a failed store of the inode puts the old block and
+ * `i_blocks` back in memory, where Linux's `ext2_xattr_set2` keeps the old
+ * block's reference but names the new block (fs/ext2/xattr.c:781-790), and
+ * frees the new one, which the store did not write: its read of the table
+ * block failed before any write, and a write that reached the device's cache
+ * and failed there leaves a failed mount, which writes nothing more and
+ * frees nothing. Returns 0 or -errno.
+ */
 static int attr_replace(struct vfs_mount *mnt, struct ext2_node *n, const uint8_t *raw,
                         int nonempty, int exclusive)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
-    uint32_t old = n->file_acl, fresh = 0;
+    uint32_t old = n->file_acl, fresh = 0, blocks = n->blocks;
     int rc;
 
     if (!old && nonempty && n->blocks > 0xFFFFFFFFu - em->block_size / 512)
@@ -3807,16 +3836,24 @@ static int attr_replace(struct vfs_mount *mnt, struct ext2_node *n, const uint8_
                               WRITE_DURABLE);
     if (!rc && nonempty)
         rc = attr_feature(em);
-    if (rc)
+    if (rc) {
+        if (fresh)
+            ext2_block_unwind(em, fresh);
         return rc;
+    }
     ext2_node_dirty(n);
     n->file_acl = fresh;
     n->blocks += (fresh != 0 ? em->block_size / 512 : 0);
     n->blocks -= (old != 0 ? em->block_size / 512 : 0);
     ext2_stamp(n, T_CTIME);
     rc = ext2_inode_write(em, n, 0, WRITE_DURABLE);
-    if (rc)
+    if (rc) {
+        n->file_acl = old;
+        n->blocks = blocks;
+        if (fresh)
+            ext2_block_unwind(em, fresh);
         return rc;
+    }
     if (old) {
         uint32_t g = (old - em->first_data) / em->bpg;
         ext2_group_fetch(em, old);
