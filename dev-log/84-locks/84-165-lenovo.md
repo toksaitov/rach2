@@ -17,18 +17,18 @@ In QEMU under KVM with four processors `mutexmusl` ran to the end on nine boots 
 
 ## The head
 
-84-157's trial head: b3363a531 with `git cherry-pick 3bf804bc9 02b1c5490`, then this task's three kernel commits from `milestone/76-display`, in order, whose messages begin "Have a kernel mutex spin while its holder runs", "Have a queued mutex spinner watch only its own place" and "Keep a Unix stream receive that may not wait", each ending "(84-165)"; the comment on #4891 that hands the step over names their hashes. The first conflicts only in host tests and `rach2/sys/proc/Readme.md`, which the kernel does not build from; the second in `tests/musl/mutexmusl.c`, which the head does not have. The probe and host-test commits are not needed.
+84-157's trial head: b3363a531 with `git cherry-pick 3bf804bc9 02b1c5490`, then this task's three kernel commits from `milestone/76-display`, in order: 3897b53f0, the mutex's spin, queue and handoff; ada1bfe50, the queued spinner that watches only its own place; abe3d326e, the Unix receive. The first and third apply cleanly; the second conflicts in `tests/musl/mutexmusl.c`, which the head does not have: `git rm tests/musl/mutexmusl.c && git cherry-pick --continue`. The probe and host-test commits are not needed.
 
 ```
 T=build/worktrees/t4891; R=build/runs/t4891; mkdir -p $R
 git fetch origin && git worktree add --detach $T b3363a531
 (cd $T && git cherry-pick 3bf804bc9 02b1c5490)   # the test file's conflict, as 84-157's step: git checkout --ours tests/host/i915_exec_hosttest.c && git add it && git cherry-pick --continue
-(cd $T && git cherry-pick MUTEX OSQ UNIX)         # each conflict as the comment on #4891 gives it
+(cd $T && git cherry-pick 3897b53f0 ada1bfe50 abe3d326e)   # the probe's conflict: git rm tests/musl/mutexmusl.c && git cherry-pick --continue
 make -C $T ARCH=x86_64 rach2 utils
 ls -l $T/build/x86_64/rach2/kernel; shasum -a 256 $T/build/x86_64/rach2/kernel
 ```
 
-Passes: the kernel is under 4,194,304 bytes, the candidate slot's size in 84-157's `bootctl status`. Keep `$T/build/x86_64/rach2/kernel.debug` for the profile's names.
+Passes: the kernel is under 4,194,304 bytes, the candidate slot's size in 84-157's `bootctl status`. Built so on the Mac on 2026-11-13 it was 3,621,184 bytes, SHA-256 `f874b7eaf0a23f4b...`, and `build/worktrees/t4891` holds it. Keep `$T/build/x86_64/rach2/kernel.debug` for the profile's names.
 
 The trial root and the bundle are 84-157's, which were 84-151's: 84-58's x86-64 `gnu-test.ext2` (`d4d1da30b4f6cb50...`, checked whole) and 84-151's bundle (`b945408e2c017b4c...`), whose `trip.sh` has `-t`. This task changes no program the root holds and no script of the bundle. Use them where 84-151's record names them and they are still kept, or the copies 84-164's step keeps under `build/runs/t4890`; otherwise build them as 84-151's step on #4871 says.
 
