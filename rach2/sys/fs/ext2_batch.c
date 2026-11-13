@@ -655,8 +655,12 @@ static int writeback_try(struct ext2_mount *em, struct ext2_node *n, uint64_t of
     if (rc != 0) {
         goto fail;
     }
-    if (em->dev->flags & (BLOCK_GONE | BLOCK_WRITE_FAILED) || em->mnt->flags & VFS_MS_RDONLY) {
+    if (em->dev->flags & (BLOCK_GONE | BLOCK_WRITE_FAILED)) {
         rc = -EIO;
+        goto fail;
+    }
+    if (em->mnt->flags & VFS_MS_RDONLY) {
+        rc = -EROFS;
         goto fail;
     }
     big = ext2_big_enter();
@@ -683,8 +687,9 @@ fail:
  * within one block: planned, its data image prepared, and committed. No
  * image readers see changes until every read and reservation has
  * succeeded, and a piece that fails gives back the images it took. A
- * removed device, one that failed a write, or a mount made read-only is
- * -EIO. `src` may be a user buffer: the check that its pages are present
+ * removed device or one that failed a write is -EIO, and a mount made
+ * read-only, by a failed write or a fault, -EROFS. `src` may be a user
+ * buffer: the check that its pages are present
  * runs in the step of the commit, which copies it, and a page that is not
  * is -EFAULT with nothing committed.
  *
