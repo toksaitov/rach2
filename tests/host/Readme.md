@@ -517,4 +517,4 @@ The virtual channel rows of `dsp_hosttest.c` also cover two readers receiving th
 
 `kvmguest_hosttest` models the guest's KVM records: independent feature setup, per-CPU EOI word registration and local and remote steal-time reads.
 
-The task's `itco_hosttest --elapsed-only` rows check irregular service spans, zero elapsed time, the open deadline, and the next service across a tick-count wrap. `timercal_hosttest --idle` also checks the guest's 4 ms scheduler phase and an independent 1 ms event.
+`itco_hosttest`'s elapsed rows check irregular service spans, zero elapsed time, the open deadline, and the next service across a tick-count wrap. The ordinary run ends with them, and `--elapsed-only` runs them alone. `timercal_hosttest --idle` also checks the guest's 4 ms scheduler phase and an independent 1 ms event.
