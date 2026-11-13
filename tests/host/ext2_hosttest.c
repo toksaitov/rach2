@@ -5995,7 +5995,7 @@ static void kept_size_row(const char *img, const char *script, const char *findi
     check(mount_rw() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 &&
               strstr(last_check, "check: 1 files with a size or i_blocks that does not match their "
                                  "blocks, kept for e2fsck") != 0 &&
-              !streq(last_warn, "mounting with errors, running e2fsck is recommended"),
+              !streq(last_warn, STOPPED_WARN),
           what);
     check(unmount_rw() == 0 && disk_state(img) == 2 && e2fsck_status(img) == 4 &&
               ext2_fixture_contains(fix_path("fsck.out"), finding),
