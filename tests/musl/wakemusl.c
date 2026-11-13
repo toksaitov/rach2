@@ -22,6 +22,13 @@
  * The last row is the futex hand-off of 80-27's pingpong: a wake and the
  * woken thread's wake back, the round's time.
  *
+ * The set rows hold IDLE eventfds that never become ready, as a server's
+ * idle connections: the cost of one epoll_wait with a zero timeout on a set
+ * of them and one eventfd that is ready, and of one poll of all of them;
+ * and the eventfd wake row again with the idle ones in the waiter's set.
+ * Linux's wait looks only at the ready registration, and its poll at every
+ * descriptor.
+ *
  * With the third argument `load`, two more threads on processors 2 and 3
  * hand a futex back and forth between them for the whole run, so that
  * every row runs while other processors block and wake, as the loop's
@@ -41,6 +48,7 @@
 
 #define _GNU_SOURCE
 #include <errno.h>
+#include <poll.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdint.h>
@@ -65,10 +73,13 @@
 #define SYS_epoll_pwait2 441
 #endif
 
-#define CALLS 200000
+#define CALLS     200000
+/* The idle eventfds of the set rows, and the calls of their per-call rows. */
+#define IDLE      500
+#define SET_CALLS 20000
 
 enum sibling { SIB_IDLE, SIB_SPIN, SIB_YIELD };
-enum waker { WAKE_FUTEX, WAKE_EVENTFD, WAKE_PIPE, WAKE_PINGPONG };
+enum waker { WAKE_FUTEX, WAKE_EVENTFD, WAKE_PIPE, WAKE_PINGPONG, WAKE_EVENTFD_SET };
 
 static double cycles_per_us;
 static int rounds = 20000;
@@ -87,6 +98,7 @@ static int wake_kind;
 static int efd = -1;
 static int pfd[2] = {-1, -1};
 static int epfd = -1;
+static int idle[IDLE];            /* the set rows' eventfds, never written */
 static volatile int load_word[2]; /* the load's hand-off, one word a side */
 static int load_side[2] = {0, 1}; /* each load thread's argument */
 static volatile int load_stop;
@@ -188,6 +200,80 @@ static void per_call(const char *what, int mode)
     }
 }
 
+/** Open the IDLE eventfds of the set rows. */
+static void idle_open(void)
+{
+    int i;
+
+    for (i = 0; i < IDLE; i++) {
+        idle[i] = eventfd(0, 0);
+        if (idle[i] < 0) {
+            fail("eventfd for the set rows");
+        }
+    }
+}
+
+/** Add every idle eventfd to the set `ep`, watched for input. */
+static void idle_add(int ep)
+{
+    struct epoll_event ev;
+    int i;
+
+    memset(&ev, 0, sizeof ev);
+    ev.events = EPOLLIN;
+    for (i = 0; i < IDLE; i++) {
+        if (epoll_ctl(ep, EPOLL_CTL_ADD, idle[i], &ev) != 0) {
+            fail("epoll_ctl of an idle eventfd");
+        }
+    }
+}
+
+/** Print the mean cost of one epoll_wait with a zero timeout on a set of
+ * the idle eventfds and one ready, and of one poll of them all. */
+static void set_calls(void)
+{
+    static struct pollfd fds[IDLE + 1];
+    struct epoll_event ev;
+    uint64_t one = 1, c0;
+    int ep = epoll_create1(0);
+    int ready = eventfd(0, 0);
+    int i;
+
+    if (ep < 0 || ready < 0 || write(ready, &one, sizeof one) != sizeof one) {
+        fail("setup of the set rows");
+    }
+    idle_add(ep);
+    memset(&ev, 0, sizeof ev);
+    ev.events = EPOLLIN;
+    if (epoll_ctl(ep, EPOLL_CTL_ADD, ready, &ev) != 0) {
+        fail("epoll_ctl of the ready eventfd");
+    }
+    c0 = tsc();
+    for (i = 0; i < SET_CALLS; i++) {
+        if (epoll_wait(ep, &ev, 1, 0) != 1) {
+            fail("epoll_wait of the set row");
+        }
+    }
+    printf("wakemusl: epoll_wait, %d idle and 1 ready: %.3f us a call\n", IDLE,
+           (tsc() - c0) / cycles_per_us / SET_CALLS);
+    for (i = 0; i < IDLE; i++) {
+        fds[i].fd = idle[i];
+        fds[i].events = POLLIN;
+    }
+    fds[IDLE].fd = ready;
+    fds[IDLE].events = POLLIN;
+    c0 = tsc();
+    for (i = 0; i < SET_CALLS; i++) {
+        if (poll(fds, IDLE + 1, 0) != 1) {
+            fail("poll of the set row");
+        }
+    }
+    printf("wakemusl: poll, %d idle and 1 ready: %.3f us a call\n", IDLE,
+           (tsc() - c0) / cycles_per_us / SET_CALLS);
+    close(ready);
+    close(ep);
+}
+
 /** The thread woken in the wake rows, on processor 1. */
 static void *waiter(void *arg)
 {
@@ -209,7 +295,8 @@ static void *waiter(void *arg)
             }
         }
         latency[r] = tsc() - sent;
-        if (wake_kind == WAKE_EVENTFD && read(efd, &value, sizeof value) != sizeof value) {
+        if ((wake_kind == WAKE_EVENTFD || wake_kind == WAKE_EVENTFD_SET) &&
+            read(efd, &value, sizeof value) != sizeof value) {
             fail("read eventfd");
         }
         if (wake_kind == WAKE_PIPE && read(pfd[0], &byte, 1) != 1) {
@@ -296,6 +383,55 @@ static int by_value(const void *a, const void *b)
     return x < y ? -1 : x > y;
 }
 
+/** Make the set, and the eventfd or the pipe in it, that the waiter of a
+ * wake row of the kind `kind` sleeps on; a futex row needs none. */
+static void wake_set_up(int kind)
+{
+    struct epoll_event ev;
+
+    if (kind != WAKE_EVENTFD && kind != WAKE_EVENTFD_SET && kind != WAKE_PIPE) {
+        return;
+    }
+    epfd = epoll_create1(0);
+    if (epfd < 0) {
+        fail("epoll_create1");
+    }
+    if (kind == WAKE_EVENTFD_SET) {
+        idle_add(epfd);
+    }
+    if (kind != WAKE_PIPE) {
+        efd = eventfd(0, 0);
+        if (efd < 0) {
+            fail("eventfd");
+        }
+    } else if (pipe(pfd) != 0) {
+        fail("pipe");
+    }
+    memset(&ev, 0, sizeof ev);
+    ev.events = EPOLLIN;
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, kind == WAKE_PIPE ? pfd[0] : efd, &ev) != 0) {
+        fail("epoll_ctl");
+    }
+}
+
+/** Close what `wake_set_up` made. */
+static void wake_tear_down(void)
+{
+    if (epfd >= 0) {
+        close(epfd);
+        epfd = -1;
+    }
+    if (efd >= 0) {
+        close(efd);
+        efd = -1;
+    }
+    if (pfd[0] >= 0) {
+        close(pfd[0]);
+        close(pfd[1]);
+        pfd[0] = pfd[1] = -1;
+    }
+}
+
 /** Run one wake row of the kind `kind` and print it. */
 static void wake_row(const char *name, int kind)
 {
@@ -305,32 +441,13 @@ static void wake_row(const char *name, int kind)
     uint64_t total = 0;
     uint64_t start;
     uint64_t one = 1;
-    struct epoll_event ev;
     int r;
 
     wake_kind = kind;
     word = 0;
     back = 0;
     answered = 0;
-    if (kind == WAKE_EVENTFD || kind == WAKE_PIPE) {
-        epfd = epoll_create1(0);
-        if (epfd < 0) {
-            fail("epoll_create1");
-        }
-        if (kind == WAKE_EVENTFD) {
-            efd = eventfd(0, 0);
-            if (efd < 0) {
-                fail("eventfd");
-            }
-        } else if (pipe(pfd) != 0) {
-            fail("pipe");
-        }
-        memset(&ev, 0, sizeof ev);
-        ev.events = EPOLLIN;
-        if (epoll_ctl(epfd, EPOLL_CTL_ADD, kind == WAKE_EVENTFD ? efd : pfd[0], &ev) != 0) {
-            fail("epoll_ctl");
-        }
-    }
+    wake_set_up(kind);
     if (pthread_create(&t, NULL, waiter, NULL) != 0) {
         fail("pthread_create");
     }
@@ -342,7 +459,7 @@ static void wake_row(const char *name, int kind)
         if (kind == WAKE_FUTEX || kind == WAKE_PINGPONG) {
             __atomic_store_n(&word, r + 1, __ATOMIC_SEQ_CST);
             futex(&word, FUTEX_WAKE_PRIVATE, 1);
-        } else if (kind == WAKE_EVENTFD) {
+        } else if (kind == WAKE_EVENTFD || kind == WAKE_EVENTFD_SET) {
             if (write(efd, &one, sizeof one) != sizeof one) {
                 fail("write eventfd");
             }
@@ -377,19 +494,7 @@ static void wake_row(const char *name, int kind)
                latency[rounds * 9 / 10] / cycles_per_us, latency[rounds * 99 / 100] / cycles_per_us,
                call / cycles_per_us / rounds);
     }
-    if (epfd >= 0) {
-        close(epfd);
-        epfd = -1;
-    }
-    if (efd >= 0) {
-        close(efd);
-        efd = -1;
-    }
-    if (pfd[0] >= 0) {
-        close(pfd[0]);
-        close(pfd[1]);
-        pfd[0] = pfd[1] = -1;
-    }
+    wake_tear_down();
 }
 
 int main(int argc, char **argv)
@@ -440,6 +545,8 @@ int main(int argc, char **argv)
     per_call("sched_yield", SIB_SPIN);
     per_call("sched_yield", SIB_YIELD);
     per_call("yield turn (getrusage, sched_yield, getrusage)", SIB_SPIN);
+    idle_open();
+    set_calls();
     if (calls && calls_write("thread wakewaiter\n") != 0) {
         printf("wakemusl: no bkl/calls\n");
         calls = 0;
@@ -447,6 +554,7 @@ int main(int argc, char **argv)
     wake_row("futex wake", WAKE_FUTEX);
     wake_row("eventfd write to epoll_pwait2", WAKE_EVENTFD);
     wake_row("pipe write to epoll_pwait2", WAKE_PIPE);
+    wake_row("eventfd write to epoll_pwait2 over 500 idle", WAKE_EVENTFD_SET);
     wake_row("futex hand-off and back", WAKE_PINGPONG);
     if (calls) {
         calls_print();
