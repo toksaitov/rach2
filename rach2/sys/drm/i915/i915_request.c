@@ -1027,6 +1027,8 @@ static int retire_pass(struct drm_i915_private *i915, int park, int worker)
     }
     if (park && gt->awake && !held) {
         gt_park(i915);
+    } else if (gt->awake && !held) {
+        gt->idle_passes++;
     }
     if (park) {
         /* Under the lock, so that a shadow's last put joins `gem.freed`

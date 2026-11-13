@@ -449,6 +449,9 @@ struct i915_ppgtt {
  * error state counts its uptime; `awake_ticks` counts the ticks the GT
  * was awake before its last park, and `unpark_ticks` is the tick of its
  * last unpark, as Linux's intel_gt_get_awake_time adds them.
+ * `idle_passes` counts the retire passes that found every engine retired
+ * and idle while the GT stayed awake, where Linux's engines would start to
+ * park, for i915_engine_info.
  */
 /* The buckets of the GT's pool of shadow batches, Linux's
  * intel_gt_buffer_pool's four. */
@@ -477,6 +480,7 @@ struct i915_gt {
     uint64_t init_ticks;
     uint64_t awake_ticks;
     uint64_t unpark_ticks;
+    uint32_t idle_passes;
     /* The command parser's shadow batches, kept for the next batch their
      * bucket fits, as Linux's intel_gt_buffer_pool: `pool[n]` lists objects
      * of 2^n pages, the last bucket those of 8 pages or more, each with the

@@ -833,7 +833,8 @@ device's flags, the GT's information and the driver's capabilities, one
 a line, in Linux's order.
 .It Pa dri/DEVICE/i915_engine_info
 Mode 0444.
-The GT's awake count and the CS timestamp's frequency, then for each
+The GT's awake count, the retire passes that found every engine idle
+while the GT stayed awake, and the CS timestamp's frequency, then for each
 running engine its state, registers, requests on the chip with the
 commands of each, status page and interrupts, as Linux's
 .Fn intel_engine_dump
