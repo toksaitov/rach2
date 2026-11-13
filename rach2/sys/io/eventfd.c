@@ -9,6 +9,7 @@
 #include "../fs/fd.h"
 #include "../fs/file.h"
 #include "../proc/process.h"
+#include "../proc/smp.h"
 #include "../proc/wait_queue.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
@@ -28,9 +29,11 @@
 
 /*
  * The counter. `lock` is over `count` and `hooks`, which a kernel signal
- * from an interrupt handler changes and walks; `refs` counts the open
- * description, until its last close, and each kernel holder, all under the
- * big lock.
+ * from an interrupt handler changes and walks, `closed`, and `refs`, which
+ * counts the open description, until its last close, and each kernel
+ * holder: the descriptor's calls and its last close run without the big
+ * lock (FILE_OPS_UNLOCKED), beside holders that take and drop references
+ * with or without it, as Linux's eventfd_ctx keeps a kref.
  */
 struct eventfd {
     struct anon_obj anon;
@@ -214,8 +217,9 @@ static short eventfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     return (short)(mask & events);
 }
 
-/** The last close of an eventfd: each hook leaves the list and is told,
- * and the description's reference goes. */
+/** The last close of an eventfd, which runs without the big lock: each
+ * hook leaves the list and is told, under the big lock, which a hangup
+ * expects (`eventfd_hook`), and the description's reference goes. */
 static void eventfd_close(fd_entry_t *e)
 {
     struct eventfd *ev = (struct eventfd *)e->priv;
@@ -227,20 +231,33 @@ static void eventfd_close(fd_entry_t *e)
     h = ev->hooks;
     ev->hooks = NULL;
     spin_unlock_irqrestore(&ev->lock, flags);
-    for (; h; h = next) {
-        next = h->next;
-        h->next = NULL;
-        if (h->hangup) {
-            h->hangup(h);
+    if (h) {
+        bkl_enter();
+    }
+    for (next = h; next;) {
+        struct eventfd_hook *cur = next;
+
+        next = cur->next;
+        cur->next = NULL;
+        if (cur->hangup) {
+            cur->hangup(cur);
         }
+    }
+    if (h) {
+        bkl_exit();
     }
     e->priv = NULL;
     eventfd_put(ev);
 }
 
-static const struct file_ops eventfd_ops = {eventfd_read, eventfd_write,         eventfd_poll,
-                                            NULL,         eventfd_close,         NULL,
-                                            NULL,         FILE_OPS_POLL_UNLOCKED};
+/* Every operation runs without the big lock, under the counter's lock and
+ * its wait queue's, as Linux's eventfd_read, eventfd_write and
+ * eventfd_release take only ctx->wqh.lock (fs/eventfd.c:109-116, 214-280):
+ * a write that ends another thread's epoll wait takes no lock of the whole
+ * kernel. */
+static const struct file_ops eventfd_ops = {
+    eventfd_read,  eventfd_write, eventfd_poll, NULL,
+    eventfd_close, NULL,          NULL,         FILE_OPS_UNLOCKED | FILE_OPS_POLL_UNLOCKED};
 
 /** A new eventfd with the counter `count` and the flags `flags`, and a
  * descriptor of the caller's on it: the descriptor, -EINVAL for another
@@ -298,6 +315,7 @@ struct eventfd *eventfd_get(int fd, int32_t *err)
 {
     fd_entry_t *e = current_proc ? fd_get(current_proc->fds, fd) : NULL;
     struct eventfd *ev;
+    uint32_t flags;
 
     if (!e) {
         *err = -EBADF;
@@ -308,13 +326,19 @@ struct eventfd *eventfd_get(int fd, int32_t *err)
         return NULL;
     }
     ev = (struct eventfd *)e->priv;
+    flags = spin_lock_irqsave(&ev->lock);
     ev->refs++;
+    spin_unlock_irqrestore(&ev->lock, flags);
     return ev;
 }
 
 void eventfd_put(struct eventfd *ev)
 {
-    if (--ev->refs == 0) {
+    uint32_t flags = spin_lock_irqsave(&ev->lock);
+    uint32_t left = --ev->refs;
+
+    spin_unlock_irqrestore(&ev->lock, flags);
+    if (left == 0) {
         kfree(ev);
     }
 }
