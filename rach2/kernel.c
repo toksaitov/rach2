@@ -509,12 +509,12 @@ static uint32_t timer_service_ticks(void)
 {
     uint32_t wait = TICK_HZ, next;
     static uint32_t (*const queries[])(void) = {
-        netdev_idle_ticks,  ath9k_idle_ticks,      netconsole_idle_ticks,    tcp_idle_ticks,
-        ip_frag_idle_ticks, frag6_idle_ticks,      nd6_idle_ticks,           netlink_idle_ticks,
-        usb_idle_ticks,     input_idle_ticks,      ps2kbd_idle_ticks,        alps_idle_ticks,
-        itco_idle_ticks,    ata_idle_ticks,        block_request_idle_ticks, block_lag_idle_ticks,
-        speaker_idle_ticks, hda_idle_ticks,        blank_idle_ticks,         vkms_idle_ticks,
-        tty_idle_ticks,     sched_load_idle_ticks, timerfd_idle_ticks};
+        netdev_idle_ticks,  ath9k_idle_ticks, netconsole_idle_ticks,    tcp_idle_ticks,
+        ip_frag_idle_ticks, frag6_idle_ticks, nd6_idle_ticks,           netlink_idle_ticks,
+        usb_idle_ticks,     input_idle_ticks, ps2kbd_idle_ticks,        alps_idle_ticks,
+        itco_idle_ticks,    ata_idle_ticks,   block_request_idle_ticks, block_lag_idle_ticks,
+        speaker_idle_ticks, hda_idle_ticks,   blank_idle_ticks,         vkms_idle_ticks,
+        i915_idle_ticks,    tty_idle_ticks,   sched_load_idle_ticks,    timerfd_idle_ticks};
     unsigned int i;
 
     if (ip_loop_pending() || klog_kept()) {
@@ -696,14 +696,15 @@ void timer_idle_work(void)
  * makes the timer pass, which wakes the sleepers and timerfds whose time
  * has come (`timer_wake_pass`). On the boot processor the periodic work
  * that has locks of its own follows (`timer_own_work`): the HDA tick, the
- * lag device, the block requests' deadlines and the end of a speaker's
- * tone. A signal the accounting or the timer pass
- * finds due, SIGALRM, SIGVTALRM, SIGPROF or a POSIX timer's, is left for a
- * holder of the big lock to post (`proc_tick_signal`, `ptimer_fire_later`,
- * timerfd.c), since signals are posted under it. The real-time timer is set
- * again only once its SIGALRM is posted; the timers of SIGVTALRM and
- * SIGPROF and the POSIX timers are set again at the tick, and expirations
- * before the post go into the one signal, a POSIX timer's into its overrun.
+ * lag device, the block requests' deadlines, the end of a speaker's tone
+ * and the i915's release of forcewake. A signal the accounting or the
+ * timer pass finds due, SIGALRM, SIGVTALRM, SIGPROF or a POSIX timer's, is
+ * left for a holder of the big lock to post (`proc_tick_signal`,
+ * `ptimer_fire_later`, timerfd.c), since signals are posted under it. The
+ * real-time timer is set again only once its SIGALRM is posted; the timers of
+ * SIGVTALRM and SIGPROF and the POSIX timers are set again at the tick, and
+ * expirations before the post go into the one signal, a POSIX timer's into its
+ * overrun.
  *
  * The second part takes the big lock, by a try, for the work that still
  * needs it (`timer_lock_take`): the signals of the tick are posted, and on

@@ -115,6 +115,9 @@
 #include "i915_model_sink.h"
 #include "i915_lenovo.h"
 
+/* The boot processor's tick count, which forcewake's release timer reads. */
+volatile uint64_t kernel_ticks;
+
 extern int vsnprintf(char *s, unsigned long n, const char *format, va_list ap);
 extern char *strstr(const char *s, const char *t);
 extern int strncmp(const char *s, const char *t, unsigned long n);

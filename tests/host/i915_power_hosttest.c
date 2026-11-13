@@ -49,6 +49,9 @@
 #include "i915_model_rc6.h"
 #include "i915_model_ring.h"
 
+/* The boot processor's tick count, which forcewake's release timer reads. */
+volatile uint64_t kernel_ticks;
+
 extern int printf(const char *format, ...);
 extern int vsnprintf(char *s, unsigned long n, const char *format, va_list ap);
 extern char *strstr(const char *s, const char *t);
@@ -312,6 +315,12 @@ static void done(struct i915_model *m)
     bus = 0;
 }
 
+/** The ticks until forcewake's release timer runs, 0 when it is not armed. */
+static uint32_t fw_left(const struct drm_i915_private *i915)
+{
+    return i915->uncore.timer_armed ? i915->uncore.timer_due - (uint32_t)kernel_ticks : 0;
+}
+
 /** Let `ms` milliseconds pass on the model's clock, the boot processor's
  * 1000 Hz tick at the end of each, which runs forcewake's release timer as
  * `i915_tick` does. The tick is modelled here, outside the driver's waits,
@@ -323,6 +332,7 @@ static void pass_ms(struct i915_model *m, uint32_t ms)
 
     for (i = 0; i < ms; i++) {
         i915_delay_us(&m->hw, 1000);
+        kernel_ticks++;
         i915_uncore_tick(&dev);
     }
 }
@@ -333,11 +343,11 @@ static void fw_settle(struct i915_model *m)
 {
     uint32_t n;
 
-    for (n = 0; n < 8 && dev.uncore.timer_ticks != 0; n++) {
+    for (n = 0; n < 8 && fw_left(&dev) != 0; n++) {
         pass_ms(m, 1);
     }
     CHECK("forcewake: released by the timer",
-          dev.uncore.wake_count == 0 && dev.uncore.timer_ticks == 0 &&
+          dev.uncore.wake_count == 0 && fw_left(&dev) == 0 &&
               (i915_model_peek(m, FORCEWAKE_ACK_HSW) & 1u) == 0);
 }
 
@@ -379,7 +389,7 @@ static void row_rc6_enable(void)
     CHECK("rc6 init: the firmware's RC6 turned off under forcewake",
           i915_model_peek(&m, GEN6_RC_CONTROL) == 0 && i915_model_peek(&m, GEN6_RC_STATE) == 0 &&
               at(&m, FORCEWAKE_MT, 0x00010001u) < at(&m, GEN6_RC_CONTROL, 0) &&
-              i915->uncore.wake_count == 0 && i915->uncore.timer_ticks != 0);
+              i915->uncore.wake_count == 0 && fw_left(i915) != 0);
 
     fw_settle(&m);
     m.nlog = 0;
@@ -409,7 +419,7 @@ static void row_rc6_enable(void)
           i915_model_count(&m, I915_MODEL_WRITE, GEN6_RC_CONTROL) == 0);
     CHECK("rc6 enable: the pcode's voltages read, under forcewake, left to the timer",
           i915_model_rc6(&m)->last_cmd == GEN6_PCODE_READ_RC6VIDS && i915->uncore.wake_count == 0 &&
-              i915->uncore.timer_ticks != 0 &&
+              fw_left(i915) != 0 &&
               at(&m, FORCEWAKE_MT, 0x00010001u) < at(&m, GEN6_RC6_THRESHOLD, 50000) &&
               at(&m, FORCEWAKE_MT, 0x00010000u) == 1L << 30);
     fw_settle(&m);
@@ -477,10 +487,10 @@ static void row_rc6_idle(void)
     i915_forcewake_put(i915);
     pass_ms(&m, 1);
     CHECK("rc6: not for a tick after the put, the timer holding the GT awake",
-          !r->in_rc6 && i915->uncore.timer_ticks == 1 && i915_rc6_residency_ms(i915) == before);
+          !r->in_rc6 && fw_left(i915) == 1 && i915_rc6_residency_ms(i915) == before);
     pass_ms(&m, 1);
     CHECK("forcewake: released by the timer two ticks after the put",
-          i915->uncore.timer_ticks == 0 && (i915_model_peek(&m, FORCEWAKE_ACK_HSW) & 1u) == 0 &&
+          fw_left(i915) == 0 && (i915_model_peek(&m, FORCEWAKE_ACK_HSW) & 1u) == 0 &&
               i915_rc6_residency_ms(i915) == before);
     pass_ms(&m, 300);
     CHECK("rc6: again once it is released", i915_rc6_residency_ms(i915) == before + 300);

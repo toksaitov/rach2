@@ -49,6 +49,9 @@
 
 #include "drm/i915/i915_ring.c"
 
+/* The boot processor's tick count, which forcewake's release timer reads. */
+volatile uint64_t kernel_ticks;
+
 extern int printf(const char *format, ...);
 extern int vsnprintf(char *s, unsigned long n, const char *format, va_list ap);
 extern int posix_memalign(void **p, unsigned long align, unsigned long size);

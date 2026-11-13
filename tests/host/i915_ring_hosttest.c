@@ -52,6 +52,9 @@
 #include "i915_model_base.h"
 #include "i915_model_ring.h"
 
+/* The boot processor's tick count, which forcewake's release timer reads. */
+volatile uint64_t kernel_ticks;
+
 extern int printf(const char *format, ...);
 extern int vsnprintf(char *s, unsigned long n, const char *format, va_list ap);
 extern int posix_memalign(void **p, unsigned long align, unsigned long size);
@@ -515,7 +518,9 @@ static void row_start(void)
                   ((i915->ggtt.total - 4u * (4096u + I915_RING_SIZE) - I915_PPGTT_PD_BYTES) &
                    ~(uint64_t)(I915_PPGTT_PD_ALIGN - 1u)) &&
               i915->gt.ggtt_bottom == i915->gt.ppgtt.pd_ggtt);
+    kernel_ticks++;
     i915_uncore_tick(i915);
+    kernel_ticks++;
     i915_uncore_tick(i915);
     wake = at(&m, FORCEWAKE_MT, 0x00010001u);
     release = last_write(&m, FORCEWAKE_MT);

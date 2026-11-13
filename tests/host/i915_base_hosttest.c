@@ -18,16 +18,15 @@
  * owns, and the IOMMU names the Lenovo's reserved region for the GPU.
  *
  * The rows: forcewake's request, acknowledgement and reference count, its
- * release timer, a slow and a stuck acknowledgement, a stuck release, the
- * GT's threads, and the reads that take it; the GT FIFO's reserve, a slow
- * and a stuck FIFO; the power well taken over from the BIOS, turned off,
- * kept on while the firmware's pipe needs it, held on by another request,
- * slow and stuck;
- * stolen memory reserved from the boot's map, found, checked against the
- * allocator, the RMRR and the firmware's reserved part; and the global
- * GTT: its size, the aperture's, the scratch page, the firmware's entries
- * kept, the entries' format, insert and clear and their refusals, and the
- * MMIO backend's write-combining map of the entries.
+ * release timer and its deadline as the idle service, a slow and a stuck
+ * acknowledgement, a stuck release, the GT's threads, and the reads that take
+ * it; the GT FIFO's reserve, a slow and a stuck FIFO; the power well taken over
+ * from the BIOS, turned off, kept on while the firmware's pipe needs it, held
+ * on by another request, slow and stuck; stolen memory reserved from the boot's
+ * map, found, checked against the allocator, the RMRR and the firmware's
+ * reserved part; and the global GTT: its size, the aperture's, the scratch
+ * page, the firmware's entries kept, the entries' format, insert and clear and
+ * their refusals, and the MMIO backend's write-combining map of the entries.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -36,6 +35,7 @@
 
 #include "drm/i915/i915.h"
 #include "drm/i915/i915_reg.h"
+#include "idle_timer.h"
 #include "iommu.h"
 #include "lib/kerrno.h"
 #include "lib/kirq.h"
@@ -45,6 +45,9 @@
 #include "i915_model.h"
 #include "i915_lenovo.h"
 #include "i915_model_base.h"
+
+/* The boot processor's tick count, which forcewake's release timer reads. */
+volatile uint64_t kernel_ticks;
 
 extern int printf(const char *format, ...);
 extern int vsnprintf(char *s, unsigned long n, const char *format, va_list ap);
@@ -262,6 +265,20 @@ static void done(struct i915_model *m)
 
 /* ---- forcewake ---- */
 
+/** Count the boot processor's next tick and run its tick work, as the
+ * tick or the service event that ends a stopped tick does. */
+static void fw_tick(struct drm_i915_private *i915)
+{
+    kernel_ticks++;
+    i915_uncore_tick(i915);
+}
+
+/** The ticks until the release timer runs, 0 when it is not armed. */
+static uint32_t fw_left(const struct drm_i915_private *i915)
+{
+    return i915->uncore.timer_armed ? i915->uncore.timer_due - (uint32_t)kernel_ticks : 0;
+}
+
 /** The load: the firmware's errors cleared, every request released. */
 static void row_uncore_init(void)
 {
@@ -323,18 +340,18 @@ static void row_forcewake(void)
           i915->uncore.wake_count == 1 && i915_model_forcewake(&m)->req == 1u);
     i915_forcewake_put(i915);
     CHECK("put: the last arms the release timer, the request kept",
-          i915->uncore.wake_count == 0 && i915->uncore.timer_ticks == 2 &&
+          i915->uncore.wake_count == 0 && fw_left(i915) == 2 &&
               i915_model_forcewake(&m)->req == 1u &&
               i915_model_find_write(&m, FORCEWAKE_MT, 0x00010000u, 0) < 0);
-    i915_uncore_tick(i915);
+    fw_tick(i915);
     CHECK("tick: the first keeps the request",
-          i915->uncore.timer_ticks == 1 && i915_model_forcewake(&m)->req == 1u);
-    i915_uncore_tick(i915);
+          fw_left(i915) == 1 && i915_model_forcewake(&m)->req == 1u);
+    fw_tick(i915);
     CHECK("tick: the second releases the request",
-          i915->uncore.wake_count == 0 && i915->uncore.timer_ticks == 0 &&
+          i915->uncore.wake_count == 0 && fw_left(i915) == 0 &&
               i915_model_forcewake(&m)->req == 0 &&
               i915_model_find_write(&m, FORCEWAKE_MT, 0x00010000u, 0) >= 0);
-    i915_uncore_tick(i915);
+    fw_tick(i915);
     CHECK("tick: with no timer armed, nothing",
           i915->uncore.wake_count == 0 &&
               i915_model_count(&m, I915_MODEL_WRITE, FORCEWAKE_MT) == 3);
@@ -357,39 +374,37 @@ static void row_forcewake_timer(void)
     i915_uncore_init(i915);
     CHECK("timer: woken", i915_forcewake_get(i915) == 0);
     i915_forcewake_put(i915);
-    i915_uncore_tick(i915);
+    fw_tick(i915);
     m.nlog = 0;
     CHECK("timer: a get under it makes no handshake",
           i915_forcewake_get(i915) == 0 && i915->uncore.wake_count == 1 &&
               i915_model_count(&m, I915_MODEL_WRITE, FORCEWAKE_MT) == 0);
     i915_forcewake_put(i915);
-    i915_uncore_tick(i915);
+    fw_tick(i915);
     CHECK("timer: a reference taken meanwhile keeps the request a tick more",
-          i915->uncore.wake_count == 0 && i915->uncore.timer_ticks == 1 &&
+          i915->uncore.wake_count == 0 && fw_left(i915) == 1 &&
               i915_model_forcewake(&m)->req == 1u);
-    i915_uncore_tick(i915);
-    CHECK("timer: then it releases",
-          i915->uncore.timer_ticks == 0 && i915_model_forcewake(&m)->req == 0);
-    CHECK("timer: woken and armed", i915_forcewake_get(i915) == 0 &&
-                                        (i915_forcewake_put(i915), i915->uncore.timer_ticks == 2));
+    fw_tick(i915);
+    CHECK("timer: then it releases", fw_left(i915) == 0 && i915_model_forcewake(&m)->req == 0);
+    CHECK("timer: woken and armed",
+          i915_forcewake_get(i915) == 0 && (i915_forcewake_put(i915), fw_left(i915) == 2));
     CHECK("timer: a reference taken under it", i915_forcewake_get(i915) == 0);
-    i915_uncore_tick(i915);
-    i915_uncore_tick(i915);
-    i915_uncore_tick(i915);
+    fw_tick(i915);
+    fw_tick(i915);
+    fw_tick(i915);
     CHECK("timer: run out under a reference, the request kept",
-          i915->uncore.timer_ticks == 0 && i915->uncore.wake_count == 1 &&
+          fw_left(i915) == 0 && i915->uncore.wake_count == 1 &&
               i915_model_forcewake(&m)->req == 1u);
     i915_forcewake_put(i915);
-    i915_uncore_tick(i915);
-    i915_uncore_tick(i915);
+    fw_tick(i915);
+    fw_tick(i915);
     CHECK("timer: the reference's put arms it again, and it releases",
           i915->uncore.wake_count == 0 && i915_model_forcewake(&m)->req == 0);
     CHECK("timer: woken again", i915_forcewake_get(i915) == 0);
     i915_forcewake_put(i915);
     i915_uncore_fini(i915);
     CHECK("fini: the timer disarmed and the request released at once",
-          i915->uncore.wake_count == 0 && i915->uncore.timer_ticks == 0 &&
-              i915_model_forcewake(&m)->req == 0);
+          i915->uncore.wake_count == 0 && fw_left(i915) == 0 && i915_model_forcewake(&m)->req == 0);
     i915_uncore_fini(i915);
     CHECK("fini: with no timer armed, nothing", i915->uncore.wake_count == 0);
     i915_uncore_init(i915);
@@ -397,18 +412,57 @@ static void row_forcewake_timer(void)
           i915_forcewake_get(i915) == 0 && i915_model_forcewake(&m)->req == 1u);
     i915_uncore_fini(i915);
     CHECK("fini: the held reference revoked and the request released at once",
-          i915->uncore.wake_count == 0 && i915->uncore.timer_ticks == 0 &&
-              i915_model_forcewake(&m)->req == 0);
+          i915->uncore.wake_count == 0 && fw_left(i915) == 0 && i915_model_forcewake(&m)->req == 0);
     i915_forcewake_put(i915);
-    i915_uncore_tick(i915);
-    i915_uncore_tick(i915);
+    fw_tick(i915);
+    fw_tick(i915);
     CHECK("fini: the holder's later put and the ticks change nothing",
-          i915->uncore.wake_count == 0 && i915->uncore.timer_ticks == 0 &&
-              i915_model_forcewake(&m)->req == 0);
+          i915->uncore.wake_count == 0 && fw_left(i915) == 0 && i915_model_forcewake(&m)->req == 0);
     CHECK("fini: a get refused, a GT register all ones, the GT not woken",
           i915_forcewake_get(i915) == -ENODEV &&
               i915_uncore_read(i915, RING_TIMESTAMP(RENDER_RING_BASE)) == 0xffffffffu &&
               i915->uncore.wake_count == 0 && i915_model_forcewake(&m)->req == 0);
+    done(&m);
+}
+
+/** The release timer as the boot processor's idle service: the query
+ * gives its deadline, tick work run again within one tick leaves it, tick
+ * work run late after a stopped tick releases once, and the deadline holds
+ * across the tick count's wrap. */
+static void row_forcewake_idle(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m);
+
+    i915_uncore_init(i915);
+    CHECK("idle: nothing armed, the query's bound",
+          i915_uncore_idle_ticks(i915) == TICK_HZ && i915_model_forcewake(&m)->req == 0);
+    CHECK("idle: armed, the query gives its two ticks",
+          i915_forcewake_get(i915) == 0 && (i915_forcewake_put(i915), fw_left(i915) == 2) &&
+              i915_uncore_idle_ticks(i915) == 2);
+    i915_uncore_tick(i915);
+    i915_uncore_tick(i915);
+    i915_uncore_tick(i915);
+    CHECK("idle: tick work run again within one tick changes nothing",
+          fw_left(i915) == 2 && i915_uncore_idle_ticks(i915) == 2 &&
+              i915_model_forcewake(&m)->req == 1u);
+    m.nlog = 0;
+    kernel_ticks += 50;
+    CHECK("idle: a stopped tick past the deadline, the query asks for the next count",
+          i915_uncore_idle_ticks(i915) == 1 && i915_model_forcewake(&m)->req == 1u);
+    i915_uncore_tick(i915);
+    CHECK("idle: the late tick work releases once",
+          !i915->uncore.timer_armed && i915_model_forcewake(&m)->req == 0 &&
+              i915_model_count(&m, I915_MODEL_WRITE, FORCEWAKE_MT) == 1);
+    kernel_ticks = 0xffffffffu;
+    CHECK("idle: armed across the counter's wrap",
+          i915_forcewake_get(i915) == 0 && (i915_forcewake_put(i915), fw_left(i915) == 2) &&
+              i915->uncore.timer_due == 1u && i915_uncore_idle_ticks(i915) == 2);
+    fw_tick(i915);
+    CHECK("idle: one tick after, kept", fw_left(i915) == 1 && i915_model_forcewake(&m)->req == 1u);
+    fw_tick(i915);
+    CHECK("idle: released at its tick",
+          !i915->uncore.timer_armed && i915_model_forcewake(&m)->req == 0);
     done(&m);
 }
 
@@ -427,8 +481,8 @@ static void row_forcewake_slow_stuck(void)
     CHECK("slow ack: no timeout", i915->hw.timeouts == 0);
     m.now_us = 0;
     i915_forcewake_put(i915);
-    i915_uncore_tick(i915);
-    i915_uncore_tick(i915);
+    fw_tick(i915);
+    fw_tick(i915);
     CHECK("slow release: the request withdrawn by the timer, no wait",
           m.now_us == 0 && i915_model_forcewake(&m)->req == 0);
     m.now_us = 0;
@@ -488,17 +542,15 @@ static void row_uncore_read(void)
     CHECK("read: taken for the release timer",
           i915_model_find_write(&m, FORCEWAKE_MT, 0x00010001u, 0) >= 0 &&
               i915_model_find_write(&m, FORCEWAKE_MT, 0x00010000u, 0) < 0 &&
-              i915->uncore.wake_count == 0 && i915->uncore.timer_ticks == 2);
+              i915->uncore.wake_count == 0 && fw_left(i915) == 2);
     m.nlog = 0;
     CHECK("read: a second under the timer's reference, no handshake",
           i915_uncore_read(i915, RING_TIMESTAMP(RENDER_RING_BASE)) == 0x1234u &&
-              i915_model_count(&m, I915_MODEL_WRITE, FORCEWAKE_MT) == 0 &&
-              i915->uncore.timer_ticks == 2);
-    i915_uncore_tick(i915);
-    i915_uncore_tick(i915);
+              i915_model_count(&m, I915_MODEL_WRITE, FORCEWAKE_MT) == 0 && fw_left(i915) == 2);
+    fw_tick(i915);
+    fw_tick(i915);
     CHECK("read: released by the timer's second tick",
-          i915_model_find_write(&m, FORCEWAKE_MT, 0x00010000u, 0) >= 0 &&
-              i915->uncore.timer_ticks == 0);
+          i915_model_find_write(&m, FORCEWAKE_MT, 0x00010000u, 0) >= 0 && fw_left(i915) == 0);
     m.nlog = 0;
     i915_model_poke(&m, DEIMR, 0x55u);
     CHECK("read: a display register directly",
@@ -510,12 +562,12 @@ static void row_uncore_read(void)
           i915_uncore_read(i915, RING_TIMESTAMP(RENDER_RING_BASE)) == 0x1234u &&
               i915_model_count(&m, I915_MODEL_WRITE, FORCEWAKE_MT) == 0);
     i915_forcewake_put(i915);
-    i915_uncore_tick(i915);
-    i915_uncore_tick(i915);
+    fw_tick(i915);
+    fw_tick(i915);
     i915_model_forcewake(&m)->ack_stuck = 1;
     CHECK("read: a GT register without forcewake reads all ones",
           i915_uncore_read(i915, RING_TIMESTAMP(RENDER_RING_BASE)) == 0xffffffffu &&
-              i915->uncore.wake_count == 0 && i915->uncore.timer_ticks == 0);
+              i915->uncore.wake_count == 0 && fw_left(i915) == 0);
     done(&m);
 }
 
@@ -1149,6 +1201,7 @@ int main(void)
     row_uncore_init();
     row_forcewake();
     row_forcewake_timer();
+    row_forcewake_idle();
     row_forcewake_slow_stuck();
     row_uncore_read();
     row_fifo();

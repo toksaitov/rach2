@@ -2258,9 +2258,10 @@ int32_t bochs_probe(void);
 int32_t fbdrm_probe(void);
 /** Intel's graphics, when `rach2.i915` asks for it; see i915/Readme.md. */
 int32_t i915_probe(void);
-/** The i915 devices' timer, from the boot processor's tick with interrupts
- * off: forcewake's release (`i915_uncore_tick`). Nothing while no device is
- * bound. */
+/** The i915 devices' timer, from the boot processor's tick or its service
+ * event with interrupts off: forcewake's release once its tick has come
+ * (`i915_uncore_tick`). Nothing while no device is bound. Its deadline is
+ * `i915_idle_ticks`, in idle_timer.h. */
 void i915_tick(void);
 /** The virtio GPUs on virtio-pci. */
 int32_t virtio_gpu_probe(void);
