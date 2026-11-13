@@ -132,6 +132,10 @@
 #   The record says `only wsl lenovo`. Every later start of the same release,
 #   -r among them, takes -o again; the owner decides when a release may skip
 #   them.
+# * -x MACHINE: leave out MACHINE, mac or windows, as -o leaves out both, and
+#   file no card for it. The record says `skip MACHINE`. Every later start of
+#   the same release takes the same -x again; the owner decides when a release
+#   may skip a machine.
 # * -a MACHINE: while the release of M runs, or after it ended on a failure,
 #   start the failed run of MACHINE, mac or windows, again at SHA, a commit of
 #   M's branch that contains the record's SHA; it need not contain
@@ -313,8 +317,8 @@ COPY=$OWNER/build/worktrees/release
 ARCH_DIR=build/x86_64
 RECOVERY_IMAGE=images/rach2-recovery-with-key.krffs
 WSL='MSYS_NO_PATHCONV=1 wsl.exe -- bash -s'
-USAGE='usage: release.sh [-r] [-o] [-c N]... [-s STATE] M SHA
-       release.sh -p [-o] [-s STATE] M SHA
+USAGE='usage: release.sh [-r] [-o] [-x MACHINE]... [-c N]... [-s STATE] M SHA
+       release.sh -p [-o] [-x MACHINE]... [-s STATE] M SHA
        release.sh -a MACHINE [-s STATE] M SHA'
 PREPARE_COPY=$OWNER/build/worktrees/prepare
 # The commands that put the testing host's Doom WAD in a copy there. Git
@@ -1067,11 +1071,14 @@ setting()
 }
 
 # has MACHINE: succeed when the machines file has a setting for MACHINE and
-# -o does not leave it out.
+# neither -o nor -x leaves it out.
 has()
 {
     case $1 in
         mac|windows) [ -z "$only" ] || return 1 ;;
+    esac
+    case " $skip " in
+        *" $1 "*) return 1 ;;
     esac
     awk -v m="$1" '$1 == m { found = 1 } END { exit !found }' "$repo/tools/flow/machines"
 }
@@ -3045,7 +3052,8 @@ main()
     detached=
     also=
     only=
-    while getopts a:c:m:oprs:w: o; do
+    skip=
+    while getopts a:c:m:oprs:w:x: o; do
         case $o in
             a) restart=$OPTARG ;;
             c)
@@ -3059,12 +3067,17 @@ main()
             r) rerun=1 ;;
             s) state=$OPTARG ;;
             w) detached=$OPTARG ;;
+            x)
+                case $OPTARG in
+                    mac|windows) skip="$skip $OPTARG" ;;
+                    *) echo "release.sh: -x takes mac or windows, not '$OPTARG'" >&2; exit 2 ;;
+                esac ;;
             *) echo "$USAGE" >&2; exit 2 ;;
         esac
     done
     shift $((OPTIND - 1))
     if [ $# -ne 2 ] || { [ -n "$prepare" ] && [ -n "$rerun$also" ]; } ||
-        { [ -n "$restart" ] && [ -n "$prepare$rerun$macrun$detached$also$only" ]; }; then
+        { [ -n "$restart" ] && [ -n "$prepare$rerun$macrun$detached$also$only$skip" ]; }; then
         echo "$USAGE" >&2
         exit 2
     fi
@@ -3135,6 +3148,9 @@ main()
         for n in $also; do
             rl_also="$rl_also -c $n"
         done
+        for m in $skip; do
+            rl_also="$rl_also -x $m"
+        done
         # shellcheck disable=SC2086 # the flags are a word each
         exec perl "$repo/tools/flow/hold.pl" run -k 3600 "$rl_dir" sh "$repo/tools/flow/release.sh" \
             ${rerun:+-r} ${only:+-o} ${prepare:+-p} $rl_also -s "$state" "$milestone" "$sha"
@@ -3173,6 +3189,7 @@ main()
                 "$(date -u '+%FT%TZ')"
             for n in $also; do printf 'also %s\n' "$n"; done
             [ -z "$only" ] || echo 'only wsl lenovo'
+            for m in $skip; do printf 'skip %s\n' "$m"; done
             [ -z "$kept" ] || printf '%s\n' "$kept"
             [ -z "$old" ] || ! grep -qx "milestone $milestone" "$state/record" ||
                 grep -q '^closed ' "$state/record" || grep '^card ' "$state/record"
