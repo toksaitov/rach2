@@ -129,14 +129,18 @@ int pf_exists(const char *path)
     return lstat(path, &st) == 0;
 }
 
-/** Copy the file `from` to `to` with its mode, as cp -p does; 0 or -1. */
+/**
+ * Copy the file `from` to `to` with its mode and the owner's write bit; 0 or
+ * -1. The bit lets a row copy a file again or edit its copy when the tree it
+ * copies from is sealed, as the GNU helper's is, where every file is 0444.
+ */
 int pf_copy(const char *from, const char *to)
 {
     struct stat st;
     size_t size;
     char *bytes = pf_read(from, &size);
     int bad = bytes == NULL || stat(from, &st) || pf_write(to, bytes, size) ||
-              chmod(to, st.st_mode & 07777);
+              chmod(to, (st.st_mode & 07777) | 0200);
 
     free(bytes);
     return bad ? -1 : 0;
