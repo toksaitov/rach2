@@ -142,8 +142,9 @@
 #   record first says `failure newer MACHINE ID SHA`: the release then ends
 #   once its runs are over, before the build, and a release of SHA with -r
 #   keeps the run's pass. The Mac's run starts as the release starts its own.
-#   Windows' run, preparation and cases, runs detached in a process of its
-#   own, `release.sh -w ID M SHA`, whose number STATE/windows.run holds, with
+#   Windows' run, preparation and cases, runs detached as `release.sh -w ID
+#   M SHA` under a hold.pl that leads a process group of its own, whose
+#   number STATE/windows.run holds, with
 #   the claims in WSL that the release's own run takes; it writes its result
 #   to the record itself. A release under way that has recorded Windows'
 #   failure waits for it after the Mac's run; a release started on new
@@ -255,11 +256,15 @@
 # `failed STEP: WHY` or `closed TIME`; `record.lock`, which each append to the
 # record and -r's rewrite of it hold; `log`, everything the script prints;
 # `wt`, the worktree; `pid`, the process of the release that holds `lock`,
-# with its start as `ps -o lstart` gives it, which stop.sh -r stops;
-# `windows.run`, the process of a Windows run of -a and its start, which that
-# process removes as it exits; `prepare/windows`, the ID of -p's Windows
-# preparation until its cleanup confirmed it stopped; `again.lock`, which one
-# -a holds at a time; and the records of releases that ended, as
+# with its start as `ps -o lstart` gives it; `held/release`, the directory
+# of the hold.pl whose child the release is, which sends it TERM once
+# `held/release/stop` exists, as stop.sh -r asks; `windows.run`, the hold.pl
+# that leads the group of a Windows run of -a, and its start, which the run
+# removes as it exits; `held/windows`, that hold.pl's directory; `jobs`, a
+# directory for each job of the release's shell, which hold.pl holds and
+# signals, removed once the job has ended; `prepare/windows`, the ID of -p's
+# Windows preparation until its cleanup confirmed it stopped; `again.lock`,
+# which one -a holds at a time; and the records of releases that ended, as
 # `M-SHA-TIME`, with the build's digests beside each closed one as
 # `M-SHA-TIME.sha256`. A release that closes its milestone copies the digests
 # out of `wt` and then removes `wt`, with the build's products in it, last. A
@@ -1158,16 +1163,18 @@ mac_clean()
 }
 
 # mac_stop: stop the Mac's run that still runs, which belongs to an earlier
-# record, with its process group, and check that the ledger has none of its
-# claims.
+# record, with its process group, through the hold.pl that leads the group,
+# and check that the ledger has none of its claims.
 mac_stop()
 {
     [ -f "$macdir/run" ] || return 0
     read -r pg last < "$macdir/run"
-    # V7: the group only while its leader is the run's release.sh -m (G12).
-    if mac_leads "$pg" "$last" && kill -TERM -"$pg" 2> /dev/null; then
+    if mac_live "$pg"; then
+        [ -d "$macdir/held" ] ||
+            fail mac "the earlier run on the Mac, process group $pg, has no hold.pl in $macdir/held; a person stops it"
+        : > "$macdir/held/stop"
         i=0
-        while kill -0 -"$pg" 2> /dev/null; do
+        while mac_live "$pg"; do
             [ "$i" -lt 30 ] || fail mac "the earlier run on the Mac, process group $pg, did not stop"
             i=$((i + 1))
             sleep 10
@@ -1180,15 +1187,13 @@ mac_stop()
         fail mac "the stopped run $last keeps a claim in $site/ledger/claims; a person checks it and removes it"
 }
 
-# mac_leads PGRP ID: succeed while process PGRP is the release.sh -m that
-# runs the Mac's run ID, whose group PGRP is (G12).
-mac_leads()
+# mac_live PGRP: succeed while the Mac's run whose process group is PGRP
+# runs: the hold.pl that leads the group has not written
+# build/machines/mac/held/end, which it does once nothing else is in the
+# group, and the group has a process.
+mac_live()
 {
-    [ -n "$1" ] && [ -n "$2" ] || return 1
-    case $(ps -o command= -p "$1" 2> /dev/null) in
-        *tools/flow/release.sh*" -m $2 "*) return 0 ;;
-    esac
-    return 1
+    [ -n "$1" ] && [ ! -e "$macdir/held/end" ] && kill -0 -"$1" 2> /dev/null
 }
 
 # mac_start: start the run of the release tests on the Mac, detached, as
@@ -1207,13 +1212,17 @@ mac_start()
 }
 
 # mac_launch ID AT: record that the Mac's run ID started, and start it at the
-# commit AT, detached, as `release.sh -m ID M AT`, in a process group of its
-# own whose number goes in the Mac's `run` file.
+# commit AT, detached, as `release.sh -m ID M AT`, under a hold.pl -g that
+# leads a process group of its own, whose number goes in the Mac's `run`
+# file, and that sends the group TERM once build/machines/mac/held/stop
+# exists.
 mac_launch()
 {
     mkdir -p "$runs/$1"
     note "mac started $1"
-    nohup perl -e 'setpgrp(0, 0); exec @ARGV' sh "$repo/tools/flow/release.sh" -s "$state" \
+    rm -rf "$macdir/held"
+    mkdir -p "$macdir/held"
+    nohup perl "$repo/tools/flow/hold.pl" -g "$macdir/held" sh "$repo/tools/flow/release.sh" -s "$state" \
         -m "$1" "$milestone" "$2" > /dev/null 2>&1 < /dev/null 8>&- 9>&- &
     echo "$! $1" > "$macdir/run"
     say "mac: started the run $1"
@@ -1222,8 +1231,7 @@ mac_launch()
 # mac_alive ID: succeed when the Mac's run ID still runs.
 mac_alive()
 {
-    pg=$(awk -v id="$1" '$2 == id { print $1 }' "$macdir/run" 2> /dev/null)
-    [ -n "$pg" ] && kill -0 -"$pg" 2> /dev/null
+    mac_live "$(awk -v id="$1" '$2 == id { print $1 }' "$macdir/run" 2> /dev/null)"
 }
 
 # mac_told: say once, while the release waits for another machine, that the
@@ -1250,7 +1258,7 @@ mac_wait()
         rc=$(sed -n 's/^rc=//p' "$runs/$id.times" 2> /dev/null)
         [ -z "$rc" ] || break
         pg=$(cut -d ' ' -f 1 "$macdir/run" 2> /dev/null)
-        if [ -z "$pg" ] || ! kill -0 -"$pg" 2> /dev/null; then
+        if ! mac_live "$pg"; then
             rm -f "$macdir/run"
             if [ "$(starts mac)" -ge 3 ]; then
                 failure mac "$id" runner
@@ -1272,44 +1280,67 @@ mac_wait()
     failure mac "$id" $(failed_in "$runs/$id.console" | grep . || echo runner)
 }
 
+# job_dir NAME: make a directory of its own for a job named NAME, under
+# STATE/jobs, and print it.
+job_dir()
+{
+    mkdir -p "$state/jobs" && mktemp -d "$state/jobs/$1.XXXXXX"
+}
+
+# held DIR COMMAND...: run COMMAND, a function of this script or a program,
+# as a job that hold.pl holds, with DIR from job_dir; run as `held DIR
+# COMMAND... &`, and keep `$! DIR` as the job. The subshell that `&` makes
+# starts COMMAND as its own child, with its standard input, and then execs
+# hold.pl in its own place, so that COMMAND is hold.pl's unreaped child and
+# only hold.pl signals it: sh reaps a job as soon as it ends, and its number
+# may then pass to another process, so the shell never signals a job by
+# number.
+held()
+{
+    hd_dir=$1
+    shift
+    { "$@" <&4 4<&- & } 4<&0
+    exec perl "$repo/tools/flow/hold.pl" "$hd_dir" -p "$!" < /dev/null
+}
+
+# job_ask JOB: ask hold.pl to send TERM to the job JOB, `PID DIR` as held
+# gives it, by creating DIR/stop.
+job_ask()
+{
+    : > "${1#* }/stop"
+}
+
+# job_wait JOB: wait until the job JOB, `PID DIR`, has ended, remove DIR and
+# return the job's status, which hold.pl writes to DIR/end. A signal that
+# the shell traps ends a wait with a status above 128 before hold.pl does,
+# and DIR/end tells such a wait from hold.pl's end; a status of 128 or less
+# without DIR/end means that hold.pl did not run or could not hold the job.
+job_wait()
+{
+    jw_pid=${1%% *} jw_dir=${1#* }
+    wait "$jw_pid"
+    jw_rc=$?
+    while [ ! -e "$jw_dir/end" ] && [ "$jw_rc" -gt 128 ]; do
+        sleep 1
+        wait "$jw_pid"
+        jw_rc=$?
+    done
+    [ ! -e "$jw_dir/end" ] || jw_rc=$(cat "$jw_dir/end")
+    rm -rf "$jw_dir"
+    return "$jw_rc"
+}
+
+# job_stop JOB: send TERM to the job JOB, `PID DIR`, through hold.pl, and
+# wait for it to end, as job_ask and job_wait do.
+job_stop()
+{
+    job_ask "$1"
+    job_wait "$1"
+}
+
 # tssh ARG...: ssh to the testing host with ARGs. The keepalives end a session
 # whose link has dropped within a minute, with ssh's status 255, where TCP
 # alone would leave it waiting for hours.
-# reap PID: wait until the child PID has ended, since a signal that the
-# shell traps ends a wait before the child does.
-reap()
-{
-    wait "$1"
-    while ours "$1"; do
-        wait "$1"
-    done
-}
-
-# ours PID: succeed while ps gives process PID, running or ended and not yet
-# reaped, as a child of this shell's own process, which a subshell's $$ does
-# not name. sh reaps a job as soon as it ends, and its number may then pass
-# to another process, so a job is signalled only after this look: the
-# number can change hands only in the moment between the look and the
-# signal, never in the hours a job may have been gone.
-ours()
-{
-    [ -n "$1" ] &&
-        [ "$(ps -o ppid= -p "$1" 2> /dev/null | tr -d ' ')" = "$(exec sh -c 'echo $PPID')" ]
-}
-
-# signal_job PID: send TERM to the job PID while ours finds it.
-signal_job()
-{
-    ! ours "$1" || kill "$1" 2> /dev/null
-}
-
-# stop_job PID: send TERM to the job PID while ours finds it, and reap it.
-stop_job()
-{
-    signal_job "$1"
-    reap "$1"
-}
-
 tssh()
 {
     ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 testing "$@"
@@ -1372,9 +1403,10 @@ windows_detach()
     wd_base=$wout/$1.$2 wd_file=$3 wd_console=$wout/$4
     wd_poll=$state/$1.$2.poll wd_err=$state/$1.$2.err wd_start=''
     wd_nonce=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
+    wd_job=$(job_dir start) || { echo "lost: no directory for its start" > "$wd_file"; return; }
     : > "$wd_file"
     exec 3<&0
-    trap '[ -z "$wd_start" ] || stop_job "$wd_start"; exit 143' TERM
+    trap '[ -z "$wd_start" ] || job_stop "$wd_start"; exit 143' TERM
     {
         echo "b=$wd_base"
         echo "n=$wd_nonce id=$1 o=$wout"
@@ -1429,9 +1461,9 @@ case $l in
 *) echo "start: no status from Win32_Process.Create: $l" ;;
 esac
 END
-    } | tssh 'C:/msys64/usr/bin/bash.exe -l -s' > "$wd_err.start" 2>&1 &
-    wd_start=$!
-    wait "$wd_start"
+    } | held "$wd_job" tssh 'C:/msys64/usr/bin/bash.exe -l -s' > "$wd_err.start" 2>&1 &
+    wd_start="$! $wd_job"
+    job_wait "$wd_start"
     wd_start=
     trap - TERM
     exec 3<&-
@@ -1527,16 +1559,19 @@ windows_settings()
 windows_stop()
 {
     wstopped='' wleft=''
+    for wx_job in "$wprep" "$wobs" "$wbeat"; do
+        [ -z "$wx_job" ] || job_ask "$wx_job"
+    done
     if [ -n "$wprep" ]; then
-        stop_job "$wprep"
+        job_wait "$wprep"
         wprep='' wstopped=1
     fi
     if [ -n "$wobs" ]; then
-        stop_job "$wobs"
+        job_wait "$wobs"
         wobs='' wstopped=1
     fi
     if [ -n "$wbeat" ]; then
-        signal_job "$wbeat"
+        job_wait "$wbeat"
         wbeat=
     fi
     [ -z "$wholding" ] || wstopped=1
@@ -1554,7 +1589,7 @@ windows_stop()
         fi
     fi
     [ -z "$wid" ] || rm -f "$state/$wid".*.poll "$state/$wid".*.err "$state/$wid".*.err.start
-    [ -z "$detached" ] || [ "$(cut -d ' ' -f 1 "$state/windows.run" 2> /dev/null)" != $$ ] ||
+    [ -z "$detached" ] || [ "$(cut -d ' ' -f 1 "$state/windows.run" 2> /dev/null)" != "$PPID" ] ||
         rm -f "$state/windows.run"
 }
 
@@ -1702,7 +1737,7 @@ claim_stop()
 # runs, the minute passing in WSL. A claim's holder in WSL's admission ends
 # once that file has not grown in ten minutes of its looks, so that it lasts
 # as long as the step it holds for and ends soon after a release that is
-# gone. Run in the background, and kill it when the step ends.
+# gone. Run it as a job that held starts, and stop it when the step ends.
 beat()
 {
     # G12: the release's number with its start, which no other process has.
@@ -1756,6 +1791,26 @@ windows_ended()
     echo '[ "$rc" != 0 ] || [ -e "$run/KEPT" ] || rm -rf "$run"'
 }
 
+# wp_halt: stop windows_prepare's jobs, and, once windows_clean has
+# confirmed that its preparation on Windows has stopped or when it never
+# started, end its claim; otherwise say in STATE/ID.claim what stays.
+wp_halt()
+{
+    for wh_job in "$beater" "$wd_sleep" "$wd_obs"; do
+        [ -z "$wh_job" ] || job_ask "$wh_job"
+    done
+    for wh_job in "$beater" "$wd_sleep" "$wd_obs"; do
+        [ -z "$wh_job" ] || job_wait "$wh_job"
+    done
+    beater='' wd_sleep='' wd_obs=''
+    if [ -z "$wstarted" ] || windows_clean "$id"; then
+        wsl "touch $wheld/$id.prepared" > /dev/null 2>&1
+        claim_stop "$id" claim >> "$state/$id.claim" 2>&1
+    else
+        echo "release: $(unstopped "$id")" >> "$state/$id.claim"
+    fi
+}
+
 # windows_prepare ID: build the preparation of Windows' run ID with `etude run
 # routine-prepare`, its output in STATE/ID.prepare, while a claim in WSL's
 # admission, `etude-launch build` with Windows' JOBS, holds the memory that the
@@ -1768,26 +1823,19 @@ windows_ended()
 # TERM of a stop at once. The claim ends with the preparation, which touches
 # OUT/ID.prepared once the preparation has ended or, when it ended without a
 # status, windows_clean has stopped it, or as beat says once both the release
-# and the preparation are gone. A stop kills the observer, stops the
+# and the preparation are gone. A stop stops its jobs, stops the
 # preparation on Windows with windows_clean once it has started, and then
 # ends the claim with claim_stop, whether it was granted or still waits, so
 # that WSL admits other work only once Windows has stopped. When windows_clean
 # cannot confirm that, OUT/ID.prepared stays missing and the claim lasts
 # until OUT/ID.alive, which the preparation appends to, has not grown for ten
-# minutes.
+# minutes. A job directory that cannot be made ends the preparation as a
+# stop does, without a status.
 # STATE/ID.claim gets the claim's output. Run in the background.
 windows_prepare()
 {
     id=$1 beater='' wd_sleep='' wd_obs='' wstarted='' wp_job=''
-    trap 'for wp_job in $beater $wd_sleep $wd_obs; do signal_job "$wp_job"; done
-        [ -z "$wd_obs" ] || reap "$wd_obs"
-        if [ -z "$wstarted" ] || windows_clean "$id"; then
-            wsl "touch $wheld/$id.prepared" > /dev/null 2>&1
-            claim_stop "$id" claim >> "$state/$id.claim" 2>&1
-        else
-            echo "release: $(unstopped "$id")" >> "$state/$id.claim"
-        fi
-        exit 143' TERM
+    trap 'wp_halt; exit 143' TERM
     tries=1
     claim_start "$id" claim "$tries" "JOBS=$wjobs /usr/local/libexec/rach2/etude-launch build env" \
         "$id.prepared" > "$state/$id.claim" 2>&1
@@ -1810,14 +1858,17 @@ windows_prepare()
                     "$id.prepared" >> "$state/$id.claim" 2>&1
                 continue ;;
         esac
-        sleep 30 &
-        wd_sleep=$!
-        wait "$wd_sleep"
+        wp_job=$(job_dir sleep) || { wp_halt; return 1; }
+        held "$wp_job" sleep 30 &
+        wd_sleep="$! $wp_job"
+        job_wait "$wd_sleep"
         wd_sleep=
     done
-    beat "$id" &
-    beater=$!
+    wp_job=$(job_dir beat) || { wp_halt; return 1; }
+    held "$wp_job" beat "$id" &
+    beater="$! $wp_job"
     wstarted=1
+    wp_obs=$(job_dir observer) || { wp_halt; return 1; }
     # shellcheck disable=SC2086 # the suites are words
     {
         echo "cd $wtree || { echo 'status 1'; exit; }"
@@ -1837,11 +1888,12 @@ windows_prepare()
         echo "tail -n 40 $wout/$id.prepare.console"
         # shellcheck disable=SC2016 # the remote shell expands these
         echo 'echo "status $rc"'
-    } | windows_detach "$id" prepare "$state/$id.prepare" "$id.prepare.console" &
-    wd_obs=$!
-    wait "$wd_obs"
+    } | held "$wp_obs" windows_detach "$id" prepare "$state/$id.prepare" "$id.prepare.console" &
+    wd_obs="$! $wp_obs"
+    job_wait "$wd_obs"
     wd_obs=
-    signal_job "$beater"
+    job_stop "$beater"
+    beater=
     if ! grep -q '^status ' "$state/$id.prepare" 2> /dev/null && ! windows_clean "$id"; then
         echo "release: $(unstopped "$id")" >> "$state/$id.claim"
         return 1
@@ -1940,8 +1992,9 @@ windows_start()
     trap 'windows_stop; trap - EXIT TERM; kill -TERM $$' TERM
     trap 'windows_stop; trap - EXIT INT; kill -INT $$' INT
     trap 'windows_stop; trap - EXIT HUP; kill -HUP $$' HUP
-    windows_prepare "$wid" > /dev/null 2>&1 9>&- &
-    wprep=$!
+    ws_job=$(job_dir prepare) || later "no directory for a job under $state/jobs"
+    held "$ws_job" windows_prepare "$wid" > /dev/null 2>&1 9>&- &
+    wprep="$! $ws_job"
     say "windows: preparing the run $wid"
 }
 
@@ -1960,7 +2013,7 @@ windows()
             windows_start || return 0
         fi
         say "windows: waiting for the preparation of $wid"
-        wait "$wprep"
+        job_wait "$wprep"
         wprep='' id=$wid
         grep -q '^claim refused: ' "$state/$id.prepare" 2> /dev/null &&
             fail windows "WSL's admission did not give the preparation's claim: $(sed -n 's/^claim refused: //p' "$state/$id.prepare")"
@@ -1998,8 +2051,10 @@ windows()
             sleep 30
         done
         say "windows: the cases of the run $id start"
-        beat "$id" 9>&- &
-        wbeat=$!
+        ws_job=$(job_dir beat) || later "no directory for a job under $state/jobs"
+        held "$ws_job" beat "$id" 9>&- &
+        wbeat="$! $ws_job"
+        ws_job=$(job_dir observer) || later "no directory for a job under $state/jobs"
         # shellcheck disable=SC2086 # the suites are words
         {
             echo "cd $wtree || { echo 'status 1'; exit; }"
@@ -2017,11 +2072,11 @@ windows()
             echo "grep -aE '^run: (result: failed: |(i686|x86_64):[a-z0-9-]+: ([^:]+: (failure|incomplete): |FAIL in |INCOMPLETE in ))' $wout/$id.console"
             # shellcheck disable=SC2016 # the remote shell expands these
             echo 'echo "status $rc"'
-        } | windows_detach "$id" cases "$state/$id.log" "$id.console" 9>&- &
-        wobs=$!
-        wait "$wobs"
+        } | held "$ws_job" windows_detach "$id" cases "$state/$id.log" "$id.console" 9>&- &
+        wobs="$! $ws_job"
+        job_wait "$wobs"
         wobs=
-        signal_job "$wbeat"
+        job_stop "$wbeat"
         wbeat=
         rc=$(tr -d '\r' < "$state/$id.log" | sed -n 's/^status //p' | tail -n 1)
         if [ -z "$rc" ] && ! windows_clean "$id"; then
@@ -2086,14 +2141,17 @@ windows_wait()
 }
 
 # windows_halt: stop the Windows run that -a started, with its process group,
-# when the record no longer waits for it.
+# when the record no longer waits for it, through the hold.pl that leads the
+# group, which sends it TERM once STATE/held/windows/stop exists.
 windows_halt()
 {
     [ -f "$state/windows.run" ] && ! windows_detached || return 0
     pid=$(windows_runner)
-    if [ -n "$pid" ] && kill -TERM -"$pid" 2> /dev/null; then
+    if [ -n "$pid" ]; then
+        : > "$state/held/windows/stop" 2> /dev/null ||
+            later "the Windows run of -a, process $pid, has no hold.pl in $state/held/windows; a person stops it"
         i=0
-        while kill -0 "$pid" 2> /dev/null; do
+        while [ -n "$(windows_runner)" ]; do
             [ "$i" -lt 30 ] || later "the Windows run of -a, process $pid, did not stop"
             i=$((i + 1))
             sleep 10
@@ -2232,26 +2290,24 @@ prepare_wsl()
 
 # prepare_host: stop each process on the testing host whose working directory
 # is in the copy of prepare_wsl, which a stopped testing.sh leaves running,
-# and remove the copy; print a line for each stopped process whose claim stays
-# in WSL's admission ledger.
+# through procs.pl, which sends each TERM through a pidfd, and remove the
+# copy; print a line for each stopped process whose claim stays in WSL's
+# admission ledger.
 prepare_host()
 {
     {
         echo "copy=$PREPARE_COPY"
+        echo "procs() { perl - \"\$@\" << 'END_OF_PROCS'"
+        cat "$repo/tools/flow/procs.pl"
+        echo 'END_OF_PROCS'
+        echo '}'
         cat << 'END'
 ledger=/var/lib/rach2-etude/ledger/claims
 [ -d "$copy" ] || exit 0
-pids=
-for p in /proc/[0-9]*; do
-    case $(readlink "$p/cwd" 2> /dev/null) in
-        "$copy" | "$copy"/*) pids="$pids ${p#/proc/}" ;;
-    esac
-done
-alive() { for p in $pids; do kill -0 "$p" 2> /dev/null && return 0; done; return 1; }
+pids=$(procs -k -d "$copy" | cut -d ' ' -f 1)
 if [ -n "$pids" ]; then
-    kill -TERM $pids 2> /dev/null
     i=0
-    while alive && [ "$i" -lt 30 ]; do i=$((i + 1)); sleep 2; done
+    while [ -n "$(procs -d "$copy")" ] && [ "$i" -lt 30 ]; do i=$((i + 1)); sleep 2; done
     for p in $pids; do
         ! grep -q "^owner $p " "$ledger" 2> /dev/null ||
             echo "the stopped process $p keeps a claim in $ledger; a person checks it and removes it"
@@ -2290,26 +2346,28 @@ prepare_windows_clean()
 # reaches too.
 prepare_stop()
 {
+    for px_job in "$pwsl" "$pwin"; do
+        [ -z "$px_job" ] || job_ask "$px_job"
+    done
     if [ -n "$pwsl" ]; then
-        stop_job "$pwsl"
+        job_wait "$pwsl"
         pwsl=
     fi
     if [ -n "$pwin" ]; then
-        stop_job "$pwin"
+        job_wait "$pwin"
         pwin=
     fi
     if [ -n "$pmac" ]; then
-        # The group only while its leader, the job pmac, is not reaped, so
-        # that its number is still the job's; a group whose leader has
-        # ended is waited for, never signalled, as STATE/session's is.
-        ! ours "$pmac" || kill -TERM -"$pmac" 2> /dev/null
+        # The hold.pl that leads the group sends it TERM, and writes
+        # held/end once nothing else is in it.
+        : > "$macdir/held/stop"
         i=0
-        while kill -0 -"$pmac" 2> /dev/null && [ "$i" -lt 30 ]; do
+        while [ ! -e "$macdir/held/end" ] && [ "$i" -lt 30 ]; do
             i=$((i + 1))
             sleep 10
         done
         pstuck=
-        ! kill -0 -"$pmac" 2> /dev/null ||
+        [ -e "$macdir/held/end" ] ||
             { pstuck=1; say "prepare: mac: process group $pmac did not stop; a person stops it"; }
         pmac=
     fi
@@ -2357,7 +2415,7 @@ prepare_all()
     mkdir -p "$pdir"
     : > "$log"
     check
-    if [ -f "$macdir/run" ] && kill -0 -"$(cut -d ' ' -f 1 "$macdir/run")" 2> /dev/null; then
+    if [ -f "$macdir/run" ] && mac_live "$(cut -d ' ' -f 1 "$macdir/run")"; then
         later "a release's run on the Mac, $(cut -d ' ' -f 2 "$macdir/run"), still runs"
     fi
     # -a starts runs on the machines that -p prepares, in the same copies.
@@ -2378,8 +2436,9 @@ prepare_all()
         pwid=milestone$milestone-$short-windows-prepare-$(stamp)
         windows_gate "$pwid"
         windows_bundle
-        windows_prepare "$pwid" > /dev/null 2>&1 9>&- &
-        pwin=$!
+        ps_job=$(job_dir prepare) || later "no directory for a job under $state/jobs"
+        held "$ps_job" windows_prepare "$pwid" > /dev/null 2>&1 9>&- &
+        pwin="$! $ps_job"
         say "prepare: windows: preparing $pwid"
     fi
     if has mac; then
@@ -2387,7 +2446,9 @@ prepare_all()
             later "the Mac has no copy at $tree or no admission site at $site"
         pmid=milestone$milestone-$short-mac-prepare-$(stamp)
         mkdir -p "$runs/$pmid"
-        perl -e 'setpgrp(0, 0); exec @ARGV' sh "$repo/tools/flow/release.sh" -s "$state" \
+        rm -rf "$macdir/held"
+        mkdir -p "$macdir/held"
+        perl "$repo/tools/flow/hold.pl" -g "$macdir/held" sh "$repo/tools/flow/release.sh" -s "$state" \
             -p -m "$pmid" "$milestone" "$sha" > /dev/null 2>&1 < /dev/null 8>&- 9>&- &
         pmac=$!
         echo "$pmac $pmid" > "$macdir/run"
@@ -2399,10 +2460,11 @@ prepare_all()
     rm -rf "$pdir/wt"
     git -C "$repo" worktree prune
     if git -C "$repo" worktree add -q --detach "$pdir/wt" "$sha" >> "$pdir/wsl.log" 2>&1; then
-        prepare_wsl >> "$pdir/wsl.log" 2>&1 9>&- &
-        pwsl=$!
+        ps_job=$(job_dir wsl) || later "no directory for a job under $state/jobs"
+        held "$ps_job" prepare_wsl >> "$pdir/wsl.log" 2>&1 9>&- &
+        pwsl="$! $ps_job"
         say "prepare: wsl: building in $PREPARE_COPY"
-        wait "$pwsl"
+        job_wait "$pwsl"
         rc=$?
         pwsl=
     else
@@ -2410,7 +2472,7 @@ prepare_all()
     fi
     prepare_report wsl "$rc" "$pdir/wsl.log"
     if [ -n "$pwin" ]; then
-        wait "$pwin"
+        job_wait "$pwin"
         pwin=
         rc=$(tr -d '\r' < "$state/$pwid.prepare" 2> /dev/null | sed -n 's/^status //p' | tail -n 1)
         {
@@ -2568,7 +2630,7 @@ restart()
             refuse "the Mac has no copy at $tree or no admission site at $site"
         [ ! -f "$macdir/run" ] || {
             read -r pg last < "$macdir/run"
-            ! kill -0 -"$pg" 2> /dev/null || refuse "the run $last still runs on the Mac"
+            ! mac_live "$pg" || refuse "the run $last still runs on the Mac"
             [ -z "$last" ] || ! grep -qF "$last" "$site/ledger/claims" 2> /dev/null ||
                 refuse "the run $last keeps a claim in $site/ledger/claims; a person checks it and removes it"
         }
@@ -2581,8 +2643,10 @@ restart()
         mac) mac_launch "$id" "$at" ;;
         windows)
             note "windows started $id"
-            nohup perl -e 'setpgrp(0, 0); exec @ARGV' sh "$repo/tools/flow/release.sh" -s "$state" \
-                -w "$id" "$milestone" "$at" > /dev/null 2>&1 < /dev/null 8>&- 9>&- &
+            rm -rf "$state/held/windows"
+            mkdir -p "$state/held/windows"
+            nohup perl "$repo/tools/flow/hold.pl" -g "$state/held/windows" sh "$repo/tools/flow/release.sh" \
+                -s "$state" -w "$id" "$milestone" "$at" > /dev/null 2>&1 < /dev/null 8>&- 9>&- &
             echo "$! $(lstart $!)" > "$state/windows.run"
             say "windows: started the run $id" ;;
     esac
@@ -2739,9 +2803,26 @@ main()
         windows
         exit 0
     fi
-    exec 9>> "$state/lock"
-    perl -MFcntl=:flock -e 'open(L, ">&=9") && flock(L, LOCK_EX | LOCK_NB) or exit 1' ||
-        later "another release runs"
+    if [ -z "${RACH2_RELEASE_HELD-}" ]; then
+        exec 9>> "$state/lock"
+        perl -MFcntl=:flock -e 'open(L, ">&=9") && flock(L, LOCK_EX | LOCK_NB) or exit 1' ||
+            later "another release runs"
+        # The release goes on as the child of a hold.pl, which sends it TERM
+        # once STATE/held/release/stop exists, as stop.sh -r asks; both keep
+        # the lock on descriptor 9.
+        rm -rf "$state/held/release"
+        mkdir -p "$state/held/release" || later "$state/held/release cannot be made"
+        RACH2_RELEASE_HELD=1
+        export RACH2_RELEASE_HELD
+        rl_also=
+        for n in $also; do
+            rl_also="$rl_also -c $n"
+        done
+        # shellcheck disable=SC2086 # the flags are a word each
+        exec perl "$repo/tools/flow/hold.pl" "$state/held/release" sh "$repo/tools/flow/release.sh" \
+            ${rerun:+-r} ${only:+-o} ${prepare:+-p} $rl_also -s "$state" "$milestone" "$sha"
+    fi
+    unset RACH2_RELEASE_HELD
     echo "$$ $(lstart $$)" > "$state/pid"
     [ -z "$prepare" ] || prepare_all
     chmod 600 "$repo/krffs/rach2_demo_ed25519"
