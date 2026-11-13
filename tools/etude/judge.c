@@ -1883,30 +1883,30 @@ static int fault_outcome(const struct judging *j, const char *state, char *out, 
  * the console's machine declares as `critical` is passed by, and with
  * `panics` set, so is a record of the subsystem `panic`. On the console of
  * a boot that a machine record gives the end of its machine's fault, a line
- * with one of the fault's records is passed by as well. Returns 1 when there
- * is one, and 0 when not.
+ * with one of the fault's records is passed by as well, and when that end is
+ * `panic`, so is every record of the subsystem `panic`, the panic's report
+ * among them. Returns 1 when there is one, and 0 when not.
  */
 static int console_fault(const struct judging *j, int panics, char *out, size_t size)
 {
-    const char *c, *close, *allowed;
+    const char *c, *allowed;
     const struct json *fault;
     size_t i, end, len;
-    int k;
+    int k, panicked;
 
     for (k = 0; k < j->nconsoles; k++) {
         c = j->console[k];
         len = j->console_len[k];
         allowed = machine_critical(j->c, j->console_file[k]);
         fault = observed_fault(j, k);
+        panicked = panics || (fault != NULL && same(json_text(fault, "end"), "panic"));
         for (i = 0; i + 4 <= len; i++) {
             if ((i > 0 && c[i - 1] != '\n') || memcmp(c + i, "<2>[", 4) != 0) {
                 continue;
             }
             for (end = i; end < len && c[end] != '\r' && c[end] != '\n'; end++) {
             }
-            close = memchr(c + i, ']', end - i);
-            if (panics && close != NULL && (size_t)(c + end - close) >= 9 &&
-                memcmp(close, "] panic: ", 9) == 0) {
+            if (panicked && panic_record(c + i, end - i)) {
                 continue;
             }
             if (allowed != NULL && line_has(c + i, end - i, allowed)) {
