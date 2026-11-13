@@ -31,7 +31,9 @@
  * its interrupt is taken, idle to WAIT and BUSY with the GT left awake
  * (80-61); the unbind wait's signal asked for before its spin (80-72.1); a
  * ring that refuses the commands; the heap's blocks a call shaped as
- * Crocus makes it takes on an idle ring and on a busy one (84-146).
+ * Crocus makes it takes on an idle ring and on a busy one (84-146); and
+ * the GT's parks and unparks, the interrupt's unmasks, the shadow's pages
+ * and the heap's blocks of such calls each waited for (84-157).
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
