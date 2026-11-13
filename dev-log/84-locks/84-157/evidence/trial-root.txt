@@ -1,0 +1,29 @@
+rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial4879/root-d4d1da30b4f6cb50.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 rach2.i915.disable_display rach2.trace=enosys rach2.cycleaccount intel_iommu=off intremap=off netconsole=6665@192.168.0.106/,6666@192.168.0.100/d0:11:e5:c8:0d:59
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+bootctl: candidate: first sector 11848, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: first sector 2053, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: runs: 2053+4096 20040+4096
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: fallback
+bootctl: next_entry: empty (a trial was consumed)
+bootctl: trial root: GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial4879/root-d4d1da30b4f6cb50.img
+bootctl: booted: trialroot, the candidate's kernel on a root image
+bootctl: slot size: 16777216 bytes
+bootctl: slot size: the kernel slots are smaller than this version's; move the disk to them with rach2-install --slots DISK
+/dev/loop0 / ext2 rw,relatime 0 0
+/dev/disk0p6 /data ext2 rw 0 0
+by-path
+card0
+card1
+renderD128
+i915 dev=0000:00:02.0 unique=0000:00:02.0
+1793687165 GE-Proton11-12
+drwx------ 7 root root 0 Jan  1  1970 /sys/kernel/debug
+vol 1:1
+pcm 100:100
+speaker 100:100
+mic 100:100
+rec 93:93
+igain 67:67
+monitor 100:100 rec

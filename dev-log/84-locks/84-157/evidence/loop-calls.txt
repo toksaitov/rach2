@@ -1,0 +1,72 @@
+# trip-gl-0 of 84-157's trial boot, rach2.cycleaccount, bkl/profile in its whole-kernel mode: each
+# system call's and ioctl request's calls and wall time over the loop (trip.py's call lines), the
+# profile's samples by entry, and the paths of EXECBUFFER2 and SYNCOBJ_WAIT, innermost first, four
+# frames, named from the trial kernel's kernel.debug (ee4592a0...)
+call syscall 16: 12017 calls, 152201 us, 12.7 us each
+call ioctl 0xc02864c3: 2994 calls, 104070 us, 34.8 us each
+call ioctl 0x40406469: 1001 calls, 26574 us, 26.5 us each
+call ioctl 0x400c645f: 1 calls, 10321 us, 10321.0 us each
+call syscall 10: 71 calls, 7529 us, 106.0 us each
+call syscall 87: 98 calls, 6317 us, 64.5 us each
+call syscall 257: 300 calls, 4963 us, 16.5 us each
+call ioctl 0xc00c6466: 4016 calls, 3834 us, 1.0 us each
+call ioctl 0xc0086457: 2004 calls, 3060 us, 1.5 us each
+call ioctl 0xc00864c0: 999 calls, 3026 us, 3.0 us each
+call syscall 202: 6 calls, 2436 us, 406.0 us each
+call syscall 3: 300 calls, 2038 us, 6.8 us each
+call syscall 0: 751 calls, 1698 us, 2.3 us each
+call ioctl 0xc00864bf: 1001 calls, 1297 us, 1.3 us each
+call syscall 83: 49 calls, 1099 us, 22.4 us each
+call syscall 5: 450 calls, 813 us, 1.8 us each
+profile syscall 98: 130 samples
+profile syscall 441: 33 samples
+profile ioctl 0x40406469: 29 samples
+profile kernel 0: 25 samples
+profile syscall 24: 25 samples
+profile syscall 257: 17 samples
+profile syscall 0: 14 samples
+profile ioctl 0xc02864c3: 10 samples
+profile syscall 217: 8 samples
+profile ioctl 0xc00864c0: 8 samples
+profile vector 14: 6 samples
+profile syscall 87: 6 samples
+profile syscall 232: 6 samples
+profile syscall 262: 5 samples
+profile syscall 230: 4 samples
+profile ioctl 0xc00c6466: 4 samples
+
+ioctl 0x40406469 29
+    3 kirq_restore < engine_submit < i915_request_add < eb_submit
+    2 cursor_get < eb_parse < eb_do < ioctl_call
+    2 find_cmd < eb_parse < eb_do < ioctl_call
+    2 render_length_mask < eb_parse < eb_do < ioctl_call
+    1 arch_atomic_cmpxchg < dma_resv_add_fence_locked < eb_move_to_gpu < eb_do
+    1 check_cmd < eb_parse < eb_do < ioctl_call
+    1 cmd_bucket < eb_parse < eb_do < ioctl_call
+    1 cmd_key_shift < eb_parse < eb_do < ioctl_call
+    1 eb_release < ioctl_call < drm_node_ioctl < ioctl_fd
+    1 engine_submit < i915_request_add < eb_submit < eb_do
+    1 i915_cmd_parser < eb_parse < eb_do < ioctl_call
+    1 i915_gem_object_is_active_locked < i915_gem_object_wait < i915_gem_object_set_to_cpu_domain < pool_get
+    1 i915_gem_object_pin_pages < i915_gem_object_prepare_read < eb_parse < eb_do
+    1 i915_request_signal < engine_retire < retire_pass < i915_request_create_room
+    1 i915_vma_pin_args < eb_pin_first < eb_do < ioctl_call
+    1 k_memset < ioctl_call < drm_node_ioctl < ioctl_fd
+    1 kirq_restore < drm_handle_find_get < drm_syncobj_find < eb_fence_array
+    1 kirq_restore < fd_table_unlock < fd_holds_release < _syscall_handler
+    1 kirq_restore < i915_gem_context_engine < eb_select_engine < ioctl_call
+    1 kirq_restore < kmalloc < kmalloc < eb_fences_grow
+    1 kirq_restore < request_new < i915_request_create_room < eb_submit
+    1 mutex_take < context_find < eb_do < ioctl_call
+    1 mutex_unlock < i915_gem_context_lookup < eb_do < ioctl_call
+    1 vma_pin_place < eb_parse < eb_do < ioctl_call
+
+ioctl 0xc02864c3 10
+    2 arch_fill_words < kzalloc < array_find < wait_ioctl
+    2 kirq_restore < schedule < irq_save < wq_wait_signal
+    1 _syscall_handler < syscall_run < syscall_entry < ??
+    1 arch_atomic_cmpxchg < array_free < drm_syncobj_wait_ioctl < ioctl_call
+    1 arch_fill_words < drm_syncobj_wait_ioctl < ioctl_call < drm_node_ioctl
+    1 kirq_restore < drm_handle_find_get < array_find < wait_ioctl
+    1 kirq_restore < kfree < array_wait_finish < array_wait
+    1 kirq_restore < wq_wait_signal < wq_wait_event < arch_cpu_id
