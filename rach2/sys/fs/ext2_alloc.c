@@ -283,8 +283,10 @@ int ext2_block_refused(struct ext2_mount *em, uint32_t g, uint32_t bit)
  * group's count lowered and written, and the free count lowered with the
  * hint after it. A clear bit on a block that may not hold data is refused
  * (`ext2_block_refused`) and the search goes on past it, unless the fault
- * stopped the mount's allocations (`ext2_allocates`). -ENOSPC when the
- * group has none, -EROFS, or -errno. The caller holds the group's lock.
+ * stopped the mount's allocations (`ext2_allocates`), which is asked again
+ * before the bit is set, since the bitmap's check (`bitmap_check`) may have
+ * stopped them and found a block all the same. -ENOSPC when the group has
+ * none, -EROFS, or -errno. The caller holds the group's lock.
  */
 static int group_take_block(struct ext2_mount *em, uint32_t g, uint32_t from, uint32_t count,
                             uint32_t *bit)
@@ -315,6 +317,9 @@ static int group_take_block(struct ext2_mount *em, uint32_t g, uint32_t from, ui
             return -EROFS;
         }
         from = i + 1;
+    }
+    if (!ext2_allocates(em)) {
+        return -EROFS;
     }
     rc = bit_put(em, g, EXT2_BLOCK_BITMAP, i, 1);
     if (rc != 0) {
