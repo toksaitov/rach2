@@ -1,0 +1,8 @@
+010fc9d6118a0881536a18a8115b2505dd9992406390686e3c61da559b06db85  /data/trial4871/kernel-010fc9d6118a0881
+d4d1da30b4f6cb509d2e9e8122aea4749cd80917438a012ed0228cdbeab95a8c  /data/trial4871/root-d4d1da30b4f6cb50.img
+f82b9f83f20f9096c0edbaf5810c3a85318162d8df4921ff5f112858b20a790c  /dev/shm/bootctl
+c74ae604bc778c02c302633c028bb8f7031d2e6108865ce8226aebb31d0a0ea8  /data/trial4871/probes/trip.sh
+f9ba21de2a7da5dc53da97e26fb129f8cc2084ebb46fdb604f46df46bfae4f33  /data/trial4871/probes/trip.py
+1
+Filesystem     1K-blocks      Used Available Use% Mounted on
+/dev/disk0p6   142831984 124565588  11096300  92% /data

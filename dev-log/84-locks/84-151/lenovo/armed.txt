@@ -1,0 +1,29 @@
+# bootctl rootimage: one boot of a root image
+menuentry "Start Rach2 once from the root image GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial4871/root-d4d1da30b4f6cb50.img" --id trialroot {
+    search --no-floppy --fs-uuid --set=root 1ACE-F00D
+    multiboot2 /boot/kernel rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial4871/root-d4d1da30b4f6cb50.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 rach2.i915.disable_display rach2.trace=enosys rach2.cycleaccount intel_iommu=off intremap=off netconsole=6665@192.168.0.106/,6666@192.168.0.100/d0:11:e5:c8:0d:59
+    if [ "$grub_platform" = pc ]; then set gfxpayload=auto; fi
+    boot
+}
+if [ "${next_entry}" = "trialroot" ]; then
+    set next_entry=
+    save_env next_entry
+    search --no-floppy --fs-uuid --set=root 1ACE-F00D
+    multiboot2 /boot/kernel rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial4871/root-d4d1da30b4f6cb50.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 rach2.i915.disable_display rach2.trace=enosys rach2.cycleaccount intel_iommu=off intremap=off netconsole=6665@192.168.0.106/,6666@192.168.0.100/d0:11:e5:c8:0d:59
+    if [ "$grub_platform" = pc ]; then set gfxpayload=auto; fi
+    boot
+fi
+# bootctl rootimage: end
+bootctl: staged: 1447 bytes of menu in a 8192-byte slot
+bootctl: armed: the next boot tries trialroot once
+bootctl: candidate: first sector 11848, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: first sector 2053, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: runs: 2053+4096 20040+4096
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: fallback
+bootctl: next_entry: trialroot
+bootctl: trial root: GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial4871/root-d4d1da30b4f6cb50.img
+bootctl: booted: candidate
+bootctl: slot size: 16777216 bytes
+bootctl: slot size: the kernel slots are smaller than this version's; move the disk to them with rach2-install --slots DISK

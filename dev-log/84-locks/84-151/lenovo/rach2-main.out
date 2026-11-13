@@ -1,0 +1,266 @@
+games: weston: renderer Mesa Intel(R) HD Graphics 4400 (HSW GT2) display :1
+games: prefix: status 0 rach2-game: prefix: made /data/trial4871/out-main/rach2-trip.3x8e9h4z/compat/pfx
+games: trip-gl-0: adapter: Mesa Intel(R) HD Graphics 4400 (HSW GT2) vendor 0x8086 device 0x0a16
+games: trip-gl-0: feature level: 0xb000
+games: trip-gl-0: tripprobe: 1000 round trips in 334.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-0: TRIP OK
+games: trip-gl-0: window 333.2 ms
+games: trip-gl-0: ctxt 8101
+games: trip-gl-0: bkl_wait_us 63464
+games: trip-gl-0: scheduler_picks 10425
+games: trip-gl-0: tlb_shootdown_ipis 0
+games: trip-gl-0: hold vector 32: 272 holds, 2911 us, 10.7 us each
+games: trip-gl-0: hold vector 0: 263 holds, 369 us, 1.4 us each
+games: trip-gl-0: hold syscall 1: 150 holds, 46 us, 0.3 us each
+games: trip-gl-0: hold take 1: 2 holds, 4 us, 2.0 us each
+games: trip-gl-0: hold vector 14: 1 holds, 3 us, 3.0 us each
+games: trip-gl-0: call syscall 98: 437976 calls, 140419 us, 0.3 us each
+games: trip-gl-0: call syscall 24: 218965 calls, 38645 us, 0.2 us each
+games: trip-gl-0: call syscall 1: 75 calls, 257 us, 3.4 us each
+games: trip-gl-0: call syscall 202: 2 calls, 4 us, 2.0 us each
+games: trip-gl-0: profile syscall 98: 168 samples
+games: trip-gl-0: profile kernel 0: 50 samples
+games: trip-gl-0: profile ioctl 0x40406469: 38 samples
+games: trip-gl-0: profile syscall 24: 23 samples
+games: trip-gl-0: profile syscall 257: 22 samples
+games: trip-gl-0: profile syscall 441: 21 samples
+games: trip-gl-0: profile ioctl 0xc02864c3: 16 samples
+games: trip-gl-0: profile syscall 0: 14 samples
+games: trip-gl-0: profile ioctl 0xc00c6466: 9 samples
+games: trip-gl-0: profile syscall 262: 8 samples
+games: trip-gl-0: profile syscall 3: 7 samples
+games: trip-gl-0: profile ioctl 0xc00864c0: 5 samples
+games: trip-gl-0: profile syscall 87: 5 samples
+games: trip-gl-0: profile syscall 230: 5 samples
+games: trip-gl-0: profile ioctl 0xc0086457: 5 samples
+games: trip-gl-0: profile syscall 7: 4 samples
+games: trip-gl-0: thread 1184 trip64.exe: utime 12 stime 19 voluntary 0 involuntary 178
+games: trip-gl-0: thread 1184 trip64.exe: ran 313.0 ms, waited ready 4.7 ms
+games: trip-gl-0: thread 1194 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 1194 trip64.:disk$0: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-0: thread 1197 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 1197 trip64.:disk$0: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-0: thread 1206 wined3d_cs: utime 10 stime 9 voluntary 1155 involuntary 177
+games: trip-gl-0: thread 1206 wined3d_cs: ran 190.0 ms, waited ready 12.1 ms
+games: trip-gl-0: thread 1217 trip64.e:gdrv0: utime 0 stime 0 voluntary 1 involuntary 0
+games: trip-gl-0: thread 1217 trip64.e:gdrv0: ran 0.0 ms, waited ready 0.7 ms
+games: trip-gl-0: filter thread trip64.exe
+games: trip-gl-0: filter switch to 1206 wined3d_cs: 110 yields, 1 preemptions
+games: trip-gl-0: filter switch to 190 ki915: 13 yields, 1 preemptions
+games: trip-gl-0: filter switch to 1141 winedevice.exe: 0 yields, 13 preemptions
+games: trip-gl-0: filter switch to 1103 wineserver: 4 yields, 0 preemptions
+games: trip-gl-0: filter switch to 1179 xalia.exe: 1 yields, 0 preemptions
+games: trip-gl-0: filter switch to 915 Xwayland: 1 yields, 0 preemptions
+games: trip-gl-0: filter switch to 1211 trip64.e:gdrv0: 1 yields, 0 preemptions
+games: trip-gl-0: exit 0 ms 334.9
+games: trip-gl-strace: adapter: Mesa Intel(R) HD Graphics 4400 (HSW GT2) vendor 0x8086 device 0x0a16
+games: trip-gl-strace: feature level: 0xb000
+games: trip-gl-strace: tripprobe: 1000 round trips in 3687.8 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: TRIP OK
+games: trip-gl-strace: window 3732.1 ms
+games: trip-gl-strace: ctxt 268841
+games: trip-gl-strace: bkl_wait_us 2526770
+games: trip-gl-strace: scheduler_picks 293919
+games: trip-gl-strace: tlb_shootdown_ipis 5
+games: trip-gl-strace: hold take 1: 27530 holds, 73375 us, 2.7 us each
+games: trip-gl-strace: hold slept 98: 23884 holds, 64889 us, 2.7 us each
+games: trip-gl-strace: hold syscall 98: 11942 holds, 34357 us, 2.9 us each
+games: trip-gl-strace: hold slept 24: 12061 holds, 30193 us, 2.5 us each
+games: trip-gl-strace: hold slept 202: 5726 holds, 20771 us, 3.6 us each
+games: trip-gl-strace: hold syscall 24: 5971 holds, 16708 us, 2.8 us each
+games: trip-gl-strace: hold syscall 202: 2863 holds, 8152 us, 2.8 us each
+games: trip-gl-strace: hold slept 1: 82 holds, 576 us, 7.0 us each
+games: trip-gl-strace: hold slept 262: 66 holds, 474 us, 7.2 us each
+games: trip-gl-strace: hold vector 0: 152 holds, 145 us, 1.0 us each
+games: trip-gl-strace: hold syscall 1: 41 holds, 129 us, 3.1 us each
+games: trip-gl-strace: hold syscall 262: 33 holds, 74 us, 2.2 us each
+games: trip-gl-strace: hold slept 14: 20 holds, 55 us, 2.8 us each
+games: trip-gl-strace: hold syscall 14: 10 holds, 34 us, 3.4 us each
+games: trip-gl-strace: hold slept 0: 9 holds, 27 us, 3.0 us each
+games: trip-gl-strace: hold slept 8: 2 holds, 22 us, 11.0 us each
+games: trip-gl-strace: hold vector 32: 2 holds, 17 us, 8.5 us each
+games: trip-gl-strace: hold slept 3: 2 holds, 10 us, 5.0 us each
+games: trip-gl-strace: hold syscall 0: 3 holds, 9 us, 3.0 us each
+games: trip-gl-strace: hold slept 20: 2 holds, 9 us, 4.5 us each
+games: trip-gl-strace: hold syscall 47: 3 holds, 8 us, 2.7 us each
+games: trip-gl-strace: hold slept 17: 2 holds, 6 us, 3.0 us each
+games: trip-gl-strace: hold slept 72: 2 holds, 6 us, 3.0 us each
+games: trip-gl-strace: hold syscall 3: 1 holds, 4 us, 4.0 us each
+games: trip-gl-strace: hold syscall 17: 1 holds, 3 us, 3.0 us each
+games: trip-gl-strace: hold syscall 8: 1 holds, 2 us, 2.0 us each
+games: trip-gl-strace: hold syscall 20: 1 holds, 2 us, 2.0 us each
+games: trip-gl-strace: hold slept 47: 2 holds, 2 us, 1.0 us each
+games: trip-gl-strace: hold syscall 72: 1 holds, 1 us, 1.0 us each
+games: trip-gl-strace: hold vector 14: 1 holds, 1 us, 1.0 us each
+games: trip-gl-strace: call syscall 98: 11942 calls, 2108483 us, 176.6 us each
+games: trip-gl-strace: call syscall 24: 5971 calls, 1047581 us, 175.4 us each
+games: trip-gl-strace: call syscall 202: 2863 calls, 478796 us, 167.2 us each
+games: trip-gl-strace: call syscall 1: 41 calls, 23774 us, 579.9 us each
+games: trip-gl-strace: call syscall 0: 3 calls, 8904 us, 2968.0 us each
+games: trip-gl-strace: call syscall 262: 33 calls, 7913 us, 239.8 us each
+games: trip-gl-strace: call syscall 14: 10 calls, 4540 us, 454.0 us each
+games: trip-gl-strace: call syscall 8: 1 calls, 458 us, 458.0 us each
+games: trip-gl-strace: call syscall 72: 1 calls, 317 us, 317.0 us each
+games: trip-gl-strace: call syscall 20: 1 calls, 297 us, 297.0 us each
+games: trip-gl-strace: call syscall 17: 1 calls, 237 us, 237.0 us each
+games: trip-gl-strace: call syscall 3: 1 calls, 203 us, 203.0 us each
+games: trip-gl-strace: call syscall 47: 1 calls, 191 us, 191.0 us each
+games: trip-gl-strace: profile syscall 61: 2823 samples
+games: trip-gl-strace: profile syscall 101: 603 samples
+games: trip-gl-strace: profile syscall 98: 361 samples
+games: trip-gl-strace: profile syscall 202: 256 samples
+games: trip-gl-strace: profile syscall 230: 205 samples
+games: trip-gl-strace: profile ioctl 0xc00c6466: 195 samples
+games: trip-gl-strace: profile syscall 7: 190 samples
+games: trip-gl-strace: profile kernel 0: 184 samples
+games: trip-gl-strace: profile syscall 14: 173 samples
+games: trip-gl-strace: profile syscall 24: 171 samples
+games: trip-gl-strace: profile syscall 0: 166 samples
+games: trip-gl-strace: profile syscall 441: 142 samples
+games: trip-gl-strace: profile ioctl 0x40406469: 141 samples
+games: trip-gl-strace: profile ioctl 0xc0086457: 101 samples
+games: trip-gl-strace: profile syscall 1: 78 samples
+games: trip-gl-strace: profile syscall 257: 77 samples
+games: trip-gl-strace: thread 1314 trip64.exe: utime 3 stime 67 voluntary 41857 involuntary 138
+games: trip-gl-strace: thread 1314 trip64.exe: ran 696.0 ms, waited ready 116.3 ms
+games: trip-gl-strace: thread 1323 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 1323 trip64.:disk$0: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-strace: thread 1324 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 1324 trip64.:disk$0: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-strace: thread 1335 wined3d_cs: utime 21 stime 69 voluntary 26687 involuntary 13
+games: trip-gl-strace: thread 1335 wined3d_cs: ran 901.0 ms, waited ready 72.9 ms
+games: trip-gl-strace: filter thread trip64.exe
+games: trip-gl-strace: filter sleep in syscall 98: 23999
+games: trip-gl-strace: filter sleep in syscall 24: 12000
+games: trip-gl-strace: filter sleep in syscall 202: 5727
+games: trip-gl-strace: filter sleep in syscall 1: 152
+games: trip-gl-strace: filter switch to 1335 wined3d_cs: 87 yields, 0 preemptions
+games: trip-gl-strace: filter switch to 1269 winedevice.exe: 9 yields, 4 preemptions
+games: trip-gl-strace: filter switch to 1337 DeviceHotplugTh: 10 yields, 0 preemptions
+games: trip-gl-strace: filter switch to 1224 strace: 5 yields, 2 preemptions
+games: trip-gl-strace: filter switch to 1223 Thread-2 (watch: 1 yields, 5 preemptions
+games: trip-gl-strace: filter switch to 1231 wineserver: 2 yields, 0 preemptions
+games: trip-gl-strace: exit 0 ms 3687.8
+games: trip-gl-ioctl: adapter: Mesa Intel(R) HD Graphics 4400 (HSW GT2) vendor 0x8086 device 0x0a16
+games: trip-gl-ioctl: feature level: 0xb000
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 4194.3 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: TRIP OK
+games: trip-gl-ioctl: window 4244.5 ms
+games: trip-gl-ioctl: ctxt 267837
+games: trip-gl-ioctl: bkl_wait_us 3864661
+games: trip-gl-ioctl: scheduler_picks 292188
+games: trip-gl-ioctl: tlb_shootdown_ipis 6
+games: trip-gl-ioctl: hold take 1: 27513 holds, 74640 us, 2.7 us each
+games: trip-gl-ioctl: hold slept 98: 24324 holds, 65869 us, 2.7 us each
+games: trip-gl-ioctl: hold syscall 98: 12162 holds, 32274 us, 2.7 us each
+games: trip-gl-ioctl: hold slept 24: 12264 holds, 30499 us, 2.5 us each
+games: trip-gl-ioctl: hold slept 202: 5510 holds, 21602 us, 3.9 us each
+games: trip-gl-ioctl: hold syscall 24: 6081 holds, 15148 us, 2.5 us each
+games: trip-gl-ioctl: hold syscall 202: 2755 holds, 7984 us, 2.9 us each
+games: trip-gl-ioctl: hold slept 262: 66 holds, 494 us, 7.5 us each
+games: trip-gl-ioctl: hold slept 1: 72 holds, 437 us, 6.1 us each
+games: trip-gl-ioctl: hold vector 0: 151 holds, 108 us, 0.7 us each
+games: trip-gl-ioctl: hold syscall 1: 36 holds, 95 us, 2.6 us each
+games: trip-gl-ioctl: hold syscall 262: 33 holds, 90 us, 2.7 us each
+games: trip-gl-ioctl: hold slept 14: 20 holds, 64 us, 3.2 us each
+games: trip-gl-ioctl: hold vector 32: 5 holds, 62 us, 12.4 us each
+games: trip-gl-ioctl: hold syscall 14: 10 holds, 28 us, 2.8 us each
+games: trip-gl-ioctl: hold slept 0: 9 holds, 28 us, 3.1 us each
+games: trip-gl-ioctl: hold slept 3: 2 holds, 11 us, 5.5 us each
+games: trip-gl-ioctl: hold syscall 0: 3 holds, 9 us, 3.0 us each
+games: trip-gl-ioctl: hold slept 20: 2 holds, 8 us, 4.0 us each
+games: trip-gl-ioctl: hold syscall 47: 3 holds, 7 us, 2.3 us each
+games: trip-gl-ioctl: hold slept 8: 2 holds, 7 us, 3.5 us each
+games: trip-gl-ioctl: hold slept 17: 2 holds, 6 us, 3.0 us each
+games: trip-gl-ioctl: hold slept 72: 2 holds, 6 us, 3.0 us each
+games: trip-gl-ioctl: hold syscall 8: 1 holds, 3 us, 3.0 us each
+games: trip-gl-ioctl: hold syscall 17: 1 holds, 3 us, 3.0 us each
+games: trip-gl-ioctl: hold slept 47: 2 holds, 3 us, 1.5 us each
+games: trip-gl-ioctl: hold syscall 3: 1 holds, 2 us, 2.0 us each
+games: trip-gl-ioctl: hold syscall 20: 1 holds, 2 us, 2.0 us each
+games: trip-gl-ioctl: hold syscall 72: 1 holds, 2 us, 2.0 us each
+games: trip-gl-ioctl: hold vector 14: 1 holds, 1 us, 1.0 us each
+games: trip-gl-ioctl: call syscall 98: 12162 calls, 2568895 us, 211.2 us each
+games: trip-gl-ioctl: call syscall 24: 6081 calls, 1087961 us, 178.9 us each
+games: trip-gl-ioctl: call syscall 202: 2755 calls, 482510 us, 175.1 us each
+games: trip-gl-ioctl: call syscall 1: 36 calls, 29654 us, 823.7 us each
+games: trip-gl-ioctl: call syscall 262: 33 calls, 9088 us, 275.4 us each
+games: trip-gl-ioctl: call syscall 0: 3 calls, 7253 us, 2417.7 us each
+games: trip-gl-ioctl: call syscall 14: 10 calls, 4103 us, 410.3 us each
+games: trip-gl-ioctl: call syscall 3: 1 calls, 969 us, 969.0 us each
+games: trip-gl-ioctl: call syscall 20: 1 calls, 309 us, 309.0 us each
+games: trip-gl-ioctl: call syscall 8: 1 calls, 292 us, 292.0 us each
+games: trip-gl-ioctl: call syscall 17: 1 calls, 292 us, 292.0 us each
+games: trip-gl-ioctl: call syscall 72: 1 calls, 236 us, 236.0 us each
+games: trip-gl-ioctl: call syscall 47: 1 calls, 226 us, 226.0 us each
+games: trip-gl-ioctl: profile syscall 61: 2816 samples
+games: trip-gl-ioctl: profile kernel 0: 576 samples
+games: trip-gl-ioctl: profile syscall 101: 479 samples
+games: trip-gl-ioctl: profile syscall 98: 361 samples
+games: trip-gl-ioctl: profile ioctl 0xc00c6466: 265 samples
+games: trip-gl-ioctl: profile syscall 1: 264 samples
+games: trip-gl-ioctl: profile syscall 202: 257 samples
+games: trip-gl-ioctl: profile syscall 0: 210 samples
+games: trip-gl-ioctl: profile syscall 24: 203 samples
+games: trip-gl-ioctl: profile syscall 230: 201 samples
+games: trip-gl-ioctl: profile syscall 7: 196 samples
+games: trip-gl-ioctl: profile syscall 14: 184 samples
+games: trip-gl-ioctl: profile syscall 441: 138 samples
+games: trip-gl-ioctl: profile ioctl 0x40406469: 120 samples
+games: trip-gl-ioctl: profile ioctl 0xc0086457: 120 samples
+games: trip-gl-ioctl: profile syscall 257: 84 samples
+games: trip-gl-ioctl: thread 1442 trip64.exe: utime 2 stime 67 voluntary 42227 involuntary 124
+games: trip-gl-ioctl: thread 1442 trip64.exe: ran 697.0 ms, waited ready 149.4 ms
+games: trip-gl-ioctl: thread 1451 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 1451 trip64.:disk$0: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-ioctl: thread 1452 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 1452 trip64.:disk$0: ran 0.0 ms, waited ready 0.0 ms
+games: trip-gl-ioctl: thread 1463 wined3d_cs: utime 22 stime 82 voluntary 26463 involuntary 19
+games: trip-gl-ioctl: thread 1463 wined3d_cs: ran 1043.0 ms, waited ready 78.2 ms
+games: trip-gl-ioctl: thread 1464 trip64.e:gdrv0: utime 0 stime 0 voluntary 5 involuntary 0
+games: trip-gl-ioctl: thread 1464 trip64.e:gdrv0: ran 0.0 ms, waited ready 0.1 ms
+games: trip-gl-ioctl: filter thread trip64.exe
+games: trip-gl-ioctl: filter sleep in syscall 98: 24377
+games: trip-gl-ioctl: filter sleep in syscall 24: 12190
+games: trip-gl-ioctl: filter sleep in syscall 202: 5513
+games: trip-gl-ioctl: filter sleep in syscall 1: 152
+games: trip-gl-ioctl: exit 0 ms 4194.3
+games: ioctl DRM_IOCTL_I915_GEM_MADVISE 5614
+games: ioctl DRM_IOCTL_I915_GEM_BUSY 2940
+games: ioctl DRM_IOCTL_SYNCOBJ_CREATE 1185
+games: ioctl DRM_IOCTL_SYNCOBJ_DESTROY 1183
+games: ioctl DRM_IOCTL_I915_GEM_EXECBUFFER2 1160
+games: ioctl VFAT_IOCTL_READDIR_BOTH 846
+games: ioctl FS_IOC_GETFLAGS 544
+games: ioctl DRM_IOCTL_I915_GEM_SET_TILING 244
+games: ioctl DRM_IOCTL_I915_GEM_WAIT 138
+games: ioctl DRM_IOCTL_I915_GEM_CREATE 92
+games: ioctl DRM_IOCTL_I915_GEM_SET_DOMAIN 80
+games: ioctl DRM_IOCTL_I915_GEM_MMAP_OFFSET 73
+games: ioctl DRM_IOCTL_I915_GETPARAM 54
+games: ioctl DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM 47
+games: ioctl DRM_IOCTL_I915_QUERY 39
+games: ioctl TCGETS2 36
+games: ioctl DRM_IOCTL_GEM_CLOSE 27
+games: ioctl DRM_IOCTL_VERSION 24
+games: ioctl DRM_IOCTL_I915_GEM_CONTEXT_CREATE 22
+games: ioctl DRM_IOCTL_I915_GEM_CONTEXT_DESTROY 20
+games: ioctl DRM_IOCTL_I915_GEM_GET_TILING 12
+games: ioctl DRM_IOCTL_PRIME_HANDLE_TO_FD 11
+games: ioctl DRM_IOCTL_I915_GEM_GET_APERTURE 9
+games: ioctl DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM 9
+games: ioctl DRM_IOCTL_GET_CAP 6
+games: ioctl SIOCGIFHWADDR 3
+games: ioctl SIOCGIFFLAGS 3
+games: ioctl SIOCGIFMTU 3
+games: ioctl UDMABUF_CREATE 3
+games: ioctl DMA_BUF_IOCTL_EXPORT_SYNC_FILE 3
+games: ioctl DRM_IOCTL_SYNCOBJ_WAIT 3
+games: ioctl DRM_IOCTL_I915_REG_READ 3
+games: ioctl TIOCGPGRP 2
+games: ioctl SIOCGIWNAME 2
+games: ioctl TIOCGWINSZ 1
+games: ioctl FIOCLEX 1
+TRIPS OK
+trip: result: status 0, results in /data/trial4871/out-main/trip
+TRIP_STATUS=0

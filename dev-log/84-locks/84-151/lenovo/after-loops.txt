@@ -1,0 +1,10 @@
+0
+drwx------ 7 root root 0 Jan  1  1970 /sys/kernel/debug
+1
+vol 1:1
+pcm 100:100
+speaker 100:100
+mic 100:100
+rec 93:93
+igain 67:67
+monitor 100:100 rec

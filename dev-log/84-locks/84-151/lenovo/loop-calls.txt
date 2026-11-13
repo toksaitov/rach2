@@ -1,0 +1,156 @@
+# wined3d_cs: the counted thread's bkl/calls rows over the loop
+# kind number calls wall_us holds held_us wait_us
+syscall 16 11948 235365 0 0 0
+ioctl 0xc02864c3 2926 116760 0 0 0
+ioctl 0x40406469 1001 81661 0 0 0
+ioctl 0x400c645f 1 24514 0 0 0
+vector 32 203 0 54 711 13452
+vector 0 0 0 1258 2307 11376
+syscall 87 98 6563 196 5439 382
+syscall 39 2 2851 2 38 2815
+syscall 257 300 4745 300 4083 446
+ioctl 0xc00c6466 4015 4240 0 0 0
+ioctl 0xc0086457 2004 3391 0 0 0
+ioctl 0xc00864c0 999 3311 0 0 0
+syscall 3 300 1992 300 529 972
+syscall 0 751 1677 0 0 0
+ioctl 0xc00864bf 1001 1455 0 0 0
+syscall 83 49 1144 49 1128 21
+syscall 10 71 775 71 22 85
+syscall 5 450 839 0 0 0
+syscall 8 808 712 0 0 0
+syscall 202 5 572 0 0 0
+syscall 73 600 520 0 0 0
+syscall 72 300 167 0 0 0
+ioctl 0xc0206464 1 30 0 0 0
+vector 14 108 0 17 26 27
+syscall 1 1 23 2 3 0
+syscall 9 1 18 2 9 3
+syscall 47 2 14 0 0 0
+syscall 14 2 2 0 0 0
+take 1 0 0 15 22 1
+vector 53 3 0 0 0 0
+vector 48 344 0 0 0 0
+# wined3d_cs: whole-kernel profile over the loop, every thread, by entry (samples)
+syscall 98 188
+syscall 441 63
+kernel 0 52
+ioctl 0x40406469 51
+syscall 24 39
+syscall 257 25
+syscall 0 18
+vector 14 13
+syscall 3 9
+syscall 87 8
+ioctl 0xc0086457 8
+ioctl 0xc02864c3 8
+syscall 262 7
+syscall 7 7
+syscall 217 7
+syscall 230 7
+# wined3d_cs: its five largest entries by call path, innermost first
+syscall 98 65 _syscall_handler < isr_syscall < syscall_entry < 0x0
+syscall 98 30 tick_div < _syscall_handler < isr_syscall < syscall_entry
+syscall 98 13 arch_fill_words < sys_getrusage < _syscall_handler < isr_syscall
+syscall 98 12 sys_getrusage < _syscall_handler < isr_syscall < syscall_entry
+syscall 98 12 arch_user_copy_bytes < copy_to_user < rusage_put < sys_getrusage
+syscall 98 9 kirq_restore < _syscall_handler < isr_syscall < syscall_entry
+syscall 98 8 arch_user_copy_words < copy_to_user < rusage_put < sys_getrusage
+syscall 98 6 user_copy < copy_to_user < rusage_put < sys_getrusage
+syscall 441 58 kirq_restore < epoll_wait_common < sys_epoll_pwait2 < _syscall_handler
+syscall 441 1 copy_from_user < sys_epoll_pwait2 < _syscall_handler < isr_syscall
+syscall 441 1 kirq_restore < kmalloc.part.0 < kzalloc < poll_wait
+syscall 441 1 k_memset < kzalloc < poll_wait < epoll_wait_common
+syscall 441 1 kirq_restore < schedule < poll_wait < epoll_wait_common
+syscall 441 1 kirq_restore < poll_ms_deadline < sys_epoll_pwait2 < _syscall_handler
+kernel 0 18 kirq_restore < isr_leave < syscall_entry < 0x0
+kernel 0 11 kirq_restore < schedule < wq_wait < wq_wait_event_idle
+kernel 0 2 kirq_restore < i915_hangcheck < submit_thread_main < kthread_start
+kernel 0 2 kirq_restore < wq_wait_event_idle < submit_thread_main < kthread_start
+kernel 0 2 kirq_restore < sched_give_way < cut_pages < free_all
+kernel 0 2 kirq_restore < k_udelay < mmio_udelay < ath9k_wait
+kernel 0 1 eb_hold_release < i915_retire_requests < i915_submit_work < submit_thread_main
+kernel 0 1 kfree < drm_gem_object_put < i915_gem_object_put < i915_gem_pool_trim
+ioctl 0x40406469 5 i915_cmd_parser < eb_locked < i915_gem_execbuffer2_ioctl < drm_ioctl
+ioctl 0x40406469 5 kirq_restore < drm_gem_object_lookup < i915_gem_object_lookup < i915_gem_execbuffer2_ioctl
+ioctl 0x40406469 4 i915_ggtt_find < ggtt_room < vma_create < vma_pin_place
+ioctl 0x40406469 3 kirq_restore < i915_irq_unmask < i915_engine_irq_get < i915_request_add
+ioctl 0x40406469 2 kirq_restore < i915_rps_unpark < i915_gt_unpark < request_new
+ioctl 0x40406469 2 kirq_restore < i915_uncore_read < i915_engine_irq_get < i915_request_add
+ioctl 0x40406469 2 kirq_restore < kmalloc.part.0 < kzalloc < request_new
+ioctl 0x40406469 2 kirq_restore < i915_irq_register < i915_rps_unpark < i915_gt_unpark
+syscall 24 29 _syscall_handler < isr_syscall < syscall_entry < 0x0
+syscall 24 6 kirq_restore < sys_sched_yield < _syscall_handler < isr_syscall
+syscall 24 3 kirq_save < sys_sched_yield < _syscall_handler < isr_syscall
+syscall 24 1 sys_sched_yield < _syscall_handler < isr_syscall < syscall_entry
+
+# main: the counted thread's bkl/calls rows over the loop
+# kind number calls wall_us holds held_us wait_us
+syscall 98 437976 140419 0 0 0
+syscall 24 218965 38645 0 0 0
+vector 32 318 0 272 2911 1057
+vector 0 0 0 263 369 782
+syscall 1 75 257 150 46 0
+take 1 0 0 2 4 11
+syscall 202 2 4 0 0 0
+vector 53 1003 0 0 0 0
+vector 51 1 0 0 0 0
+vector 48 432 0 0 0 0
+vector 14 99 0 1 3 0
+# main: whole-kernel profile over the loop, every thread, by entry (samples)
+syscall 98 168
+kernel 0 50
+ioctl 0x40406469 38
+syscall 24 23
+syscall 257 22
+syscall 441 21
+ioctl 0xc02864c3 16
+syscall 0 14
+ioctl 0xc00c6466 9
+syscall 262 8
+syscall 3 7
+syscall 87 5
+ioctl 0xc0086457 5
+syscall 230 5
+ioctl 0xc00864c0 5
+syscall 7 4
+# main: its five largest entries by call path, innermost first
+syscall 98 46 _syscall_handler < isr_syscall < syscall_entry < 0x0
+syscall 98 32 tick_div < _syscall_handler < isr_syscall < syscall_entry
+syscall 98 18 sys_getrusage < _syscall_handler < isr_syscall < syscall_entry
+syscall 98 11 user_copy < copy_to_user < rusage_put < sys_getrusage
+syscall 98 10 arch_fill_words < sys_getrusage < _syscall_handler < isr_syscall
+syscall 98 10 arch_user_copy_bytes < copy_to_user < rusage_put < sys_getrusage
+syscall 98 8 arch_user_copy_words < copy_to_user < rusage_put < sys_getrusage
+syscall 98 6 kirq_restore < _syscall_handler < isr_syscall < syscall_entry
+kernel 0 19 kirq_restore < isr_leave < syscall_entry < 0x0
+kernel 0 9 kirq_restore < schedule < wq_wait < wq_wait_event_idle
+kernel 0 3 kirq_restore < i915_submit_work < submit_thread_main < kthread_start
+kernel 0 3 kirq_restore < i915_gem_pool_trim < i915_retire_requests < i915_submit_work
+kernel 0 2 kirq_restore < i915_retire_requests < i915_submit_work < submit_thread_main
+kernel 0 2 kirq_restore < i915_ggtt_clear_range < vma_evict < i915_gem_object_force_unbind
+kernel 0 2 kirq_restore < i915_irq_unregister < rps_disable_interrupts < i915_rps_park
+kernel 0 1 kirq_restore < i915_hangcheck < submit_thread_main < kthread_start
+ioctl 0x40406469 6 i915_cmd_parser < eb_locked < i915_gem_execbuffer2_ioctl < drm_ioctl
+ioctl 0x40406469 2 i915_gem_execbuffer2_ioctl < drm_ioctl < drm_node_ioctl < ioctl_fd
+ioctl 0x40406469 2 kirq_restore < i915_rps_unpark < i915_gt_unpark < request_new
+ioctl 0x40406469 2 kirq_restore < wq_wake_all < request_new < i915_request_create
+ioctl 0x40406469 1 kirq_restore < i915_irq_unmask < i915_engine_irq_get < i915_request_add
+ioctl 0x40406469 1 i915_gem_object_put < drm_ioctl < drm_node_ioctl < ioctl_fd
+ioctl 0x40406469 1 i915_ggtt_find < ggtt_room < vma_create < vma_pin_place
+ioctl 0x40406469 1 i915_hw_fault < i915_request_begin < eb_locked < i915_gem_execbuffer2_ioctl
+syscall 24 16 _syscall_handler < isr_syscall < syscall_entry < 0x0
+syscall 24 3 kirq_restore < sys_sched_yield < _syscall_handler < isr_syscall
+syscall 24 1 sys_sched_yield < _syscall_handler < isr_syscall < syscall_entry
+syscall 24 1 arch_irq_disable < isr_syscall < syscall_entry < 0x0
+syscall 24 1 sys_sched_yield < isr_syscall < syscall_entry < 0x0
+syscall 24 1 sched_yield_alone < sys_sched_yield < _syscall_handler < isr_syscall
+syscall 257 6 timer_cycles_us < smp_entry_hold < procfs_work_counts < procfs_gen_text.constprop.0
+syscall 257 2 paging_user_count < procfs_gen_status.constprop.0 < procfs_gen_pid_file.constprop.0 < procfs_gen_text.constprop.0
+syscall 257 1 kirq_restore < kmalloc.part.0 < kzalloc < ofd_alloc
+syscall 257 1 ext2_getattr < may_search < resolve_full < vfs_resolve_entry
+syscall 257 1 ap_cpu_mask < procfs_gen_status.constprop.0 < procfs_gen_pid_file.constprop.0 < procfs_gen_text.constprop.0
+syscall 257 1 ext2_getattr < may_search < resolve_cached < vfs_resolve_cached
+syscall 257 1 arch_fill_words < k_strncpy < name_new.constprop.0 < vfs_name_capture
+syscall 257 1 dcache_lookup_hit < resolve_cached < vfs_resolve_cached < open_unlocked
+
