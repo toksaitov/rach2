@@ -38,19 +38,20 @@
  * out of range, an inode not a regular file whose pointers do not match its
  * size or its `i_blocks`, an attribute block of the wrong form or named by
  * more inodes than its count, a directory with two parents or without its
- * parent, an orphan directory whose `..` names no directory the check
- * walked, an entry of the wrong form, a link count that does not match the
- * entries of the live directories, a block of the volume's tables or a
- * reached inode the bitmap calls free. So does one of the check's own
- * limits, below. A check that stops has not compared the bitmaps with the
- * blocks files name, and the faults it stops at are the ones under which a
- * free could take a block or an inode something else still names: a block
- * claimed twice, an attribute block's count below its sharers, a link
- * count below the names, an orphan directory's `..` naming an inode nothing
- * holds. So the volume mounts read-only, and nothing is
- * allocated, freed or reclaimed on it before `e2fsck` has run or a later
- * writable remount's check ends; a fault sets the error bit on the disk, as
- * Linux's `ext2_error` writes it before it makes a mount read-only.
+ * parent, an orphan directory whose `..` names anything but the root or a
+ * directory of an orphan tree, an entry of the wrong form, a link count
+ * that does not match the entries of the live directories, a block of the
+ * volume's tables or a reached inode the bitmap calls free. So does one of
+ * the check's own limits, below. A check that stops has not compared the
+ * bitmaps with the blocks files name, and the faults it stops at are the
+ * ones under which a free could take a block or an inode something else
+ * still names: a block claimed twice, an attribute block's count below its
+ * sharers, a link count below the names, an orphan directory's `..` naming
+ * an inode that an unlink, an rmdir or a rename could free. So the volume
+ * mounts read-only, and nothing is allocated, freed or reclaimed on it
+ * before `e2fsck` has run or a later writable remount's check ends; a fault
+ * sets the error bit on the disk, as Linux's `ext2_error` writes it before
+ * it makes a mount read-only.
  *
  * The walk keeps its state on the heap rather than on the stack: the node
  * of each directory level, the hard links, the live orphans and the shared
@@ -855,41 +856,31 @@ static int check_orphan_dirs(struct ext2_check *c)
 
 /**
  * Require the `..` of each orphan directory no entry names, which
- * `check_dots` kept in its record unjudged, to name a directory the check
- * walked: the root, or a directory at or past `s_first_ino` in the set of
- * reached inodes, every one of which was walked from the root or as an
- * orphan. Anything else, a file above all, is a fault: the volume would
- * mount writable while `..` names an inode whose free nothing holds back,
- * and an unlink of that file would free an inode and blocks the kept
- * directory still names. An orphan directory an entry named had its `..`
- * judged by `check_dir` or `check_child`. 0, or -EIO with the fault
- * recorded or for a failed read.
+ * `check_dots` kept in its record unjudged, to name the root or a directory
+ * of an orphan tree (`check_orphan_dirs`), which keeps a record: inodes no
+ * path from the root reaches, so that no unlink, rmdir or rename frees them
+ * while the kept directory names them, and the root, which none frees.
+ * Anything else is a fault: a file, which an unlink would free, or a
+ * directory the walk from the root reached, which an rmdir or a rename over
+ * it that finds it empty would free, since a directory's link count holds
+ * only its named subdirectories, while `..` still names it. An orphan
+ * directory an entry named had its `..` judged by `check_dir` or
+ * `check_child`. 0, or -EIO with the fault recorded.
  */
 static int check_orphan_parents(struct ext2_check *c)
 {
-    struct ext2_mount *em = c->em;
-    struct ext2_link *link;
-    uint32_t i, up;
-    int rc;
+    struct ext2_link *link, *up;
+    uint32_t i;
 
     for (i = 0; i < EXT2_CHECK_LINK_BUCKETS; i++) {
         for (link = c->link[i]; link; link = link->next) {
-            if (!link->dir || !link->orphan) {
+            if (!link->dir || !link->orphan || link->parent == EXT2_ROOT_INO) {
                 continue;
             }
-            up = link->parent;
-            if (up == EXT2_ROOT_INO) {
-                continue;
-            }
-            if (up < em->first_ino || up > em->inodes || !seen_test(c, up)) {
-                return check_fault(c, link->ino, "an orphan directory whose .. names no directory");
-            }
-            rc = ext2_inode_check_load(em, up, &c->node[0]);
-            if (rc != 0) {
-                return rc;
-            }
-            if ((c->node[0].mode & S_IFMT_) != S_IFDIR_) {
-                return check_fault(c, link->ino, "an orphan directory whose .. names no directory");
+            up = check_link_find(c, link->parent);
+            if (!up || !up->dir) {
+                return check_fault(c, link->ino,
+                                   "an orphan directory whose .. names no orphan directory");
             }
         }
     }
