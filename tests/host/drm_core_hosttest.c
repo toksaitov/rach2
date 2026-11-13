@@ -533,6 +533,27 @@ int32_t epoll_target(const fd_entry_t *e, int tfd, uint32_t toff, const struct o
     return 0;
 }
 
+/* The holds KCMP_EPOLL_TFD takes on a set's descriptor and has not given
+ * back. */
+static int epoll_holds;
+
+/** A copy of descriptor `fd` with a hold, as syscall_fs.c's, counted. */
+int fd_peek_hold(struct fd_table *table, int fd, struct fd_entry *out)
+{
+    if (fd_peek(table, fd, out, FD_PEEK_REF) != 0) {
+        return -EBADF;
+    }
+    epoll_holds++;
+    return 0;
+}
+
+/** Give back the hold `fd_peek_hold` took. */
+void fd_peek_drop(struct fd_entry *copy)
+{
+    (void)copy;
+    epoll_holds--;
+}
+
 static const void *undo_owner;
 
 const void *sysv_sem_undo_list(const struct tgroup *tg)
@@ -1906,6 +1927,7 @@ static void test_kcmp(void)
     CHECK("a set that is not one", KCMP(200, 201, KCMP_EPOLL_TFD, 4, (uintptr_t)&slot) == -EINVAL);
     slot.efd = 6;
     CHECK("a set not open", KCMP(200, 201, KCMP_EPOLL_TFD, 4, (uintptr_t)&slot) == -EBADF);
+    CHECK("every lookup gives back the set it held", epoll_holds == 0);
 done:
     CHECK("a slot that faults", KCMP(200, 201, KCMP_EPOLL_TFD, 4, 16) == -EFAULT);
 #undef KCMP
