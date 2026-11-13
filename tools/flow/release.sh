@@ -711,7 +711,8 @@ failed_cases()
 }
 
 # cases_line MACHINE ID WORD...: print `cases MACHINE CASE...`, the cases of
-# the failed run ID of MACHINE, full or mac, that did not pass, when they name
+# the failed run ID of MACHINE, full or mac, that did not pass, or a Mac run's
+# RUNS/ID.cases when none ended, when they name
 # at least one case of each suite of the ARCH:SUITE WORDs; a case identity's
 # second part is its suite. Print nothing otherwise, so that the suites run
 # whole.
@@ -720,7 +721,10 @@ cases_line()
     cl_m=$1 cl_id=$2
     shift 2
     case $cl_m in
-        mac) cl_ids=$(failed_cases "$runs/$cl_id.console") ;;
+        mac)
+            cl_ids=$(failed_cases "$runs/$cl_id.console")
+            # A run that failed before any case ended carries its selection.
+            [ -n "$cl_ids" ] || cl_ids=$(tr -s ' ' '\n' < "$runs/$cl_id.cases" 2> /dev/null | grep . | sort -u) ;;
         full) cl_ids=$(awk 'NF == 2 { print $2 }' "$state/full-$cl_id/cases" 2> /dev/null | sort -u) ;;
         *) return 0 ;;
     esac
