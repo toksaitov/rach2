@@ -67,3 +67,47 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: `rach2/sys/kvm/svm.c` keeps the TR attributes VMSAVE stored when the record's TR is still the one the last exit reported, so that only a TR the caller changed reaches the VMCB, as Linux writes TR only through `svm_set_segment`.
 * Status: unreported.
 * Next: reproduce it with Linux's KVM as the hypervisor under TCG, through a KVM_GET_SREGS and KVM_SET_SREGS of a running 32-bit guest, then report that `get_ss_esp_from_tss` should take types 3 and 11, as the processor does, for example by testing `(type & 5) == 1`.
+
+## QEMU's TCG loads non-canonical bases without a #GP
+
+* Project: QEMU 11.1.3, Homebrew's build on the Mac, read at the tag `v11.1.3`; 10.2.0 has the same WRMSR code. `target/i386/tcg`.
+* Fails: in 64-bit mode a processor raises #GP for a WRMSR of a non-canonical FS_BASE or GS_BASE and for a non-canonical base loaded by LGDT, LIDT, LLDT or LTR. TCG stores each unchecked: WRMSR in `system/misc_helper.c` (lines 222-227), LGDT and LIDT in `translate.c` (lines 3029-3059), the upper half of a 64-bit LDT or TSS descriptor in `seg_helper.c` (lines 1326-1330 and 1383-1391).
+* Found: 2026-11-13, the Mac, milestone 84's release run at 08c7795ac, task 84-239: kvm-unit-tests' `msr`, `msr64` and `la57` failed in a guest of Rach2's KVM, which passes these MSRs through and intercepts no descriptor-table load, as Linux's SVM does.
+* Reproduction: under TCG, in 64-bit mode at CPL 0, run `wrmsr` to 0xC0000100 with 0xaaaaaaaaaaaaaaaa, or `lgdt` of a pseudo-descriptor with that base; neither faults. kvm-unit-tests' `msr` and `la57` under `-accel tcg` show it.
+* Evidence: [84-239.md](84-239.md); the case logs of `machine.kvm.unit-tests` under `build/machines/mac/runs/milestone21-08c7795ac733-mac-1113-130411-d5f552/failed-evidence/` on the Mac.
+* Rach2: nothing; the rows of `tests/kvm/unit-tests.list` expect the failure under another hypervisor.
+* Status: unreported.
+* Next: run kvm-unit-tests' `msr` under `-accel tcg` with QEMU's master to confirm, then report.
+
+## QEMU's TCG raises #GP for a non-canonical stack access
+
+* Project: QEMU 11.1.3, Homebrew's build on the Mac, read at the tag `v11.1.3`; 10.2.0 has the same code. `target/i386/tcg/system/excp_helper.c`.
+* Fails: a non-canonical access through SS, as by RSP or RBP, raises #SS(0) on the processor. TCG's translation raises #GP for every non-canonical address, whatever the segment (lines 589-598).
+* Found: 2026-11-13, the Mac, milestone 84's release run at 08c7795ac, task 84-239: kvm-unit-tests' `emulator` failed `non-canonical rsp-based access, should #SS(0), got #GP(0)` and the same for RBP in a guest of Rach2's KVM.
+* Reproduction: under TCG, in 64-bit mode, run `orq $0, (%rsp,%rax,1)` with RAX making the address non-canonical; the vector is 13, not 12. kvm-unit-tests' `emulator` under `-accel tcg` shows it.
+* Evidence: [84-239.md](84-239.md); the case log as above.
+* Rach2: nothing; the row of `emulator` expects the failure under another hypervisor.
+* Status: unreported.
+* Next: check QEMU's master and its bug tracker for a report, then report.
+
+## QEMU's TCG takes XSETBV's intercept before CR4.OSXSAVE's #UD
+
+* Project: QEMU 11.1.3, Homebrew's build on the Mac, read at the tag `v11.1.3`; 10.2.0 has the same code. `target/i386/tcg`.
+* Fails: with CR4.OSXSAVE clear, XSETBV raises #UD, which on the processor takes priority over SVM's XSETBV intercept. TCG checks the intercept when it translates the instruction (`translate.c`, lines 2906-2911) and the #UD only in `helper_xsetbv` (`fpu_helper.c`, lines 3219-3222), so the hypervisor sees an exit, and Linux's KVM, which leaves that #UD to the processor (`arch/x86/kvm/x86.c:1304-1311`), sets XCR0.
+* Found: 2026-11-13, the Mac, milestone 84's release run at 08c7795ac, task 84-239: kvm-unit-tests' `xsave` failed `Write XCR0=(FP|SSE) without XSAVE support - expect #UD` in a guest of Rach2's KVM.
+* Reproduction: under TCG with SVM, intercept XSETBV in a guest's VMCB and have the guest clear CR4.OSXSAVE and run XSETBV; the hypervisor gets exit 0x8D.
+* Evidence: [84-239.md](84-239.md); the case log as above.
+* Rach2: nothing; Rach2's `kvm_emul_xsetbv` follows Linux's, and the row of `xsave` expects the failure under another hypervisor.
+* Status: unreported.
+* Next: check QEMU's master, then report with the reproduction.
+
+## QEMU's TCG checks INT3 against SVM's INTn intercept
+
+* Project: QEMU 11.1.3, Homebrew's build on the Mac, read at the tag `v11.1.3`; 10.2.0 has the same code. `target/i386/tcg/excp_helper.c`.
+* Fails: on the processor INT3 raises #BP as an exception, which SVM's exception intercept for vector 3 catches, and the INTn intercept does not apply to it. TCG raises INT3 through `raise_interrupt` as a software interrupt (line 120), and `raise_interrupt2` checks a software interrupt against the INTn intercept alone (lines 100-106), so a hypervisor that intercepts #BP never sees the guest's INT3.
+* Found: 2026-11-13, the Mac, milestone 84's release run at 08c7795ac, task 84-239: Linux's selftest `x86_64/debug_regs` failed with the guest's own `Unhandled exception '0x3'` at its `sw_bp`, under Rach2's KVM, which sets the #BP intercept for KVM_GUESTDBG_USE_SW_BP as Linux's `svm.c:1979` does.
+* Reproduction: under TCG with SVM, set the exception intercept of vector 3 in a guest's VMCB and have the guest run INT3; the guest's IDT handler runs and no exit comes.
+* Evidence: [84-239.md](84-239.md); the case log of `machine.kvm.selftests` under the run's failed evidence on the Mac.
+* Rach2: nothing; the row of `x86_64/debug_regs` expects the failure under another hypervisor.
+* Status: unreported.
+* Next: check QEMU's master, then report with the reproduction.

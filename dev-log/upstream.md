@@ -161,3 +161,7 @@ The bullets state only what the records show. A fact the records do not hold, su
 | QEMU aborts in iotlb_to_section while Venus runs Vulkan under TCG | QEMU 10.2.1 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#qemu-aborts-in-iotlb_to_section-while-venus-runs-vulkan-under-tcg) |
 | Linux lowers a link whose speed it has not seen to a reserved SPD | Linux 6.12.115 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#linux-lowers-a-link-whose-speed-it-has-not-seen-to-a-reserved-spd) |
 | QEMU's TCG aborts an interrupt from CPL 3 through a busy 32-bit TSS | QEMU 11.1.3 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#qemus-tcg-aborts-an-interrupt-from-cpl-3-through-a-busy-32-bit-tss) |
+| QEMU's TCG loads non-canonical bases without a #GP | QEMU 11.1.3 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#qemus-tcg-loads-non-canonical-bases-without-a-gp) |
+| QEMU's TCG raises #GP for a non-canonical stack access | QEMU 11.1.3 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#qemus-tcg-raises-gp-for-a-non-canonical-stack-access) |
+| QEMU's TCG takes XSETBV's intercept before CR4.OSXSAVE's #UD | QEMU 11.1.3 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#qemus-tcg-takes-xsetbvs-intercept-before-cr4osxsaves-ud) |
+| QEMU's TCG checks INT3 against SVM's INTn intercept | QEMU 11.1.3 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#qemus-tcg-checks-int3-against-svms-intn-intercept) |
