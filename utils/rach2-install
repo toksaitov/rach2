@@ -539,8 +539,11 @@ write_archive() { # write_archive ROOTDIR [MARK]
 # outside the disk being written. A component that does not exist is taken as
 # written. Status 1 after 40 links, as Linux's ELOOP, or when a link cannot be
 # read. With LINKS, the path inside ROOT of each link followed is appended to
-# the file LINKS, a line each. Run it in a command substitution.
-root_path() { # root_path ROOT PATH [LINKS]
+# the file LINKS, a line each. With `dirs` as the fourth argument, each
+# directory inside ROOT that a name is looked up in, which a process must be
+# able to search to reach PATH, is printed before the result, a line each.
+# Run it in a command substitution.
+root_path() { # root_path ROOT PATH [LINKS [dirs]]
     rest=$2
     done_path=""
     links=0
@@ -557,8 +560,9 @@ root_path() { # root_path ROOT PATH [LINKS]
         else
             rest=${rest#*/}
         fi
+        case "$part" in .) continue ;; esac
+        [ "${4:-}" != dirs ] || printf '%s\n' "${done_path:-/}"
         case "$part" in
-            .) continue ;;
             ..)
                 done_path=${done_path%/*}
                 continue
@@ -613,6 +617,14 @@ kept_within() { # kept_within LIST PATH
         END { exit !found }' "$1"
 }
 
+# Prints the first path of the list in the file LIST that lies below PATH,
+# or nothing.
+kept_below() { # kept_below LIST PATH
+    [ -f "$1" ] || return 0
+    KEPT_PATH=$2 awk 'BEGIN { p = ENVIRON["KEPT_PATH"] "/" }
+        index($0, p) == 1 { print; exit }' "$1"
+}
+
 # Adds PATH to the list in the file LIST and takes from it the paths below
 # PATH, which PATH's tree holds.
 kept_add() { # kept_add LIST PATH
@@ -622,6 +634,70 @@ kept_add() { # kept_add LIST PATH
             mv "$1.new" "$1" || return 1
     fi
     printf '%s\n' "$2" >> "$1"
+}
+
+# account_groups ROOT NAME GID: prints the groups of the account NAME of the
+# root at ROOT, for can_search: its primary GID and each group of
+# ROOT/etc/group that lists it, as decimal numbers with a space before and
+# after each. Status 1 when the group file could not be read.
+account_groups() { # account_groups ROOT NAME GID
+    ag_file=/dev/null
+    [ ! -f "$1/etc/group" ] || ag_file=$1/etc/group
+    N=$2 G=$3 awk -F: 'BEGIN { printf " "; if (ENVIRON["G"] ~ /^[0-9]+$/) printf "%d ", ENVIRON["G"] + 0 }
+        { k = split($4, m, ",")
+          for (i = 1; i <= k; i++) if (m[i] == ENVIRON["N"]) { printf "%d ", $3 + 0; break } }
+        END { printf "\n" }' "$ag_file"
+}
+
+# can_search DIR UID GROUPS: whether the account of UID, whose groups are
+# GROUPS as account_groups prints them, may search the directory DIR, as the
+# kernel decides by its owner, its group and its mode: the owner's bits for
+# its owner, the group's for a member and the others' for the rest. Root may
+# search any directory. Status 1 too when DIR cannot be read.
+can_search() { # can_search DIR UID GROUPS
+    [ "$2" != 0 ] || return 0
+    cs_stat=$(stat -c '%u %g %a' "$1") || return 1
+    cs_owner=${cs_stat%% *}
+    cs_group=${cs_stat#* }
+    cs_group=${cs_group%% *}
+    cs_mode=00${cs_stat##* }
+    if [ "$cs_owner" = "$2" ]; then
+        cs_mode=${cs_mode%??}
+    else
+        case "$3" in
+            *" $cs_group "*) cs_mode=${cs_mode%?} ;;
+        esac
+    fi
+    case "$cs_mode" in *[1357]) return 0 ;; esac
+    return 1
+}
+
+# key_reach ROOT LINK TARGET ACCOUNTS: ends the run when an account of
+# ACCOUNTS, lines of `UID:GID:NAME`, may not search each directory on the way
+# from the root at ROOT along the path LINK inside it to the regular file
+# TARGET, which pin_key_links is to copy into that account's .ssh. The copy
+# keeps the file's owner and mode, so a file such as one of root's with mode
+# 644 in a directory of mode 700 would become readable to the account; the
+# update refuses instead.
+key_reach() { # key_reach ROOT LINK TARGET ACCOUNTS
+    kr_dirs=$(root_path "$1" "$2" "" dirs) || die "$2 leads through too many links"
+    kr_dirs=$(printf '%s\n' "$kr_dirs" | sed '$d' | sort -u)
+    while IFS=: read -r kr_uid kr_gid kr_name; do
+        [ -n "$kr_uid" ] || continue
+        kr_groups=$(account_groups "$1" "$kr_name" "$kr_gid") ||
+            die "the groups of $kr_name could not be read"
+        while IFS= read -r kr_dir; do
+            [ -n "$kr_dir" ] || continue
+            can_search "$1$kr_dir" "$kr_uid" "$kr_groups" ||
+                die "$2 leads to $3 through $kr_dir, which $kr_name may not search, and a \
+copy of it in the .ssh would let $kr_name read it; copy what the link needs into that .ssh or remove \
+the link, and run this again; nothing was written"
+        done <<EOF
+$kr_dirs
+EOF
+    done <<EOF
+$4
+EOF
 }
 
 # make_parents FROM TO PATH: makes each directory above PATH in the tree at
@@ -648,7 +724,7 @@ make_parents() { # make_parents FROM TO PATH
     done
 }
 
-# pin_key_links ROOT TREE COPY [KEPT]: makes each symbolic link of COPY, a
+# pin_key_links ROOT TREE COPY [KEPT [ACCOUNTS]]: makes each symbolic link of COPY, a
 # copy of the key directory TREE of the root at ROOT, lead where it led in
 # TREE. TREE is a path root_path printed, ROOT in front. COPY goes back at
 # another depth, or into a root that has nothing of TREE's surroundings, so
@@ -664,8 +740,11 @@ make_parents() { # make_parents FROM TO PATH
 # is written as the absolute path it leads to in the archive's copy, and
 # with KEPT ends the run, before the root is written: the update would lose
 # what it leads to, or let it lead to the new image's file of that name. A
-# name with a newline in COPY ends the run too.
-pin_key_links() { # pin_key_links ROOT TREE COPY [KEPT]
+# name with a newline in COPY ends the run too. With ACCOUNTS, the accounts
+# whose .ssh TREE is, as key_reach takes them, a link to a file that is to be
+# copied ends the run when one of them may not reach that file in ROOT. KEPT
+# may be empty.
+pin_key_links() { # pin_key_links ROOT TREE COPY [KEPT [ACCOUNTS]]
     pin_bad=$(find "$3" -name '*
 *') || die "${2#"$1"} could not be read"
     [ -z "$pin_bad" ] || die "${2#"$1"} holds a name with a newline, which the update cannot keep"
@@ -693,6 +772,7 @@ pin_key_links() { # pin_key_links ROOT TREE COPY [KEPT]
             continue
         fi
         if [ -f "$pin_t" ]; then
+            [ -z "${5:-}" ] || key_reach "$1" "${2#"$1"}/$pin_p" "$pin_abs" "$5"
             pin_id=$(stat -c %d:%i "$pin_t") || die "$pin_abs could not be read"
             pin_first=$(printf '%s' "$pin_made" | awk -v id="$pin_id" '$1 == id {
                 print substr($0, length(id) + 2); exit }')
@@ -757,7 +837,8 @@ keep_tree() { # keep_tree PATH
 # hold. The tree is copied first to a scratch directory under /dev/shm, or
 # /tmp where there is none, and its links made by pin_key_links to lead where
 # they led in ROOTDIR, so that a key that is a link out of .ssh is archived
-# with its bytes. The file is named by the id, which has no case to fold, and
+# with its bytes, unless the account may not reach that key in ROOTDIR,
+# which ends the run as key_reach says. The file is named by the id, which has no case to fold, and
 # when accounts share an id the first of them in passwd has it, whether or
 # not that account has keys. A .ssh that leads to ROOTDIR itself is not
 # stored. It runs in a subshell, and its status is 1 when a home could not be
@@ -769,7 +850,7 @@ archive_account_keys() (
         die "there is nowhere to stage the account keys"
     trap 'rm -rf "$stage"' EXIT
     seen=" "
-    while IFS=: read -r _name _password uid _gid _gecos home _shell; do
+    while IFS=: read -r name _password uid gid _gecos home _shell; do
         case "$uid" in "" | *[!0-9]*) continue ;; esac
         case "$seen" in *" $uid "*) continue ;; esac
         seen="$seen$uid "
@@ -778,7 +859,7 @@ archive_account_keys() (
         [ "$keys" != "$1" ] && [ -d "$keys" ] || continue
         { rm -rf "$stage/keys" && cp -a "$keys" "$stage/keys"; } ||
             die "$home/.ssh could not be archived"
-        pin_key_links "$1" "$keys" "$stage/keys"
+        pin_key_links "$1" "$keys" "$stage/keys" "" "$uid:$gid:$name"
         { mkdir -p "$next_archive/keys" &&
             tar -cf "$next_archive/keys/$uid.tar" -C "$stage/keys" .; } ||
             die "$home/.ssh could not be archived"
@@ -847,6 +928,46 @@ keep_image_accounts() {
     add_lines "$2/etc/shadow" "$lines"
 }
 
+# nested_home_fault ROOT: prints why the accounts of ROOT/etc/passwd, and
+# root's /root, cannot be kept by an update, or nothing when they can: an
+# account's home, read inside ROOT by root_path, is or lies inside the .ssh
+# of another account. A restore from the archive puts back each .ssh whole
+# in place of what is there, so the outer .ssh would destroy the inner
+# account's home and keys, and the update refuses such a layout before
+# anything is written. Status 1 when a path could not be read.
+nested_home_fault() { # nested_home_fault ROOT
+    nh_list=""
+    while IFS=: read -r nh_name _password _uid _gid _gecos nh_home _shell; do
+        case "$nh_home" in /*) ;; *) continue ;; esac
+        nh_h=$(root_path "$1" "$nh_home") || return 1
+        nh_s=$(root_path "$1" "$nh_home/.ssh") || return 1
+        nh_list="$nh_list$nh_name:h:$nh_h
+$nh_name:s:$nh_s
+"
+    done <<EOF
+root:x:0:0::/root:
+$(cat "$1/etc/passwd")
+EOF
+    printf '%s' "$nh_list" | R=$1 awk '
+        {
+            n = substr($0, 1, index($0, ":") - 1)
+            p = substr($0, length(n) + 4)
+            if (substr($0, length(n) + 2, 1) == "h") { hn[++h] = n; hp[h] = p }
+            else { sn[++k] = n; sp[k] = p }
+        }
+        END {
+            r = length(ENVIRON["R"])
+            for (j = 1; j <= k; j++)
+                for (i = 1; i <= h; i++)
+                    if (hn[i] != sn[j] && (hp[i] == sp[j] || index(hp[i], sp[j] "/") == 1)) {
+                        s = substr(sp[j], r + 1); if (s == "") s = "/"
+                        printf "the home of %s, %s, lies inside %s, the .ssh of %s, which an update \
+would put back over it\n", hn[i], substr(hp[i], r + 1), s, sn[j]
+                        exit
+                    }
+        }'
+}
+
 # Copies the key tree SOURCE, taken from the archive, to DESTINATION, and
 # ends the run when it cannot. SOURCE is a tar file, as archive_account_keys
 # writes, or a directory, as an archive of an older version holds. A tar file
@@ -889,7 +1010,10 @@ restore_key_directory() { # restore_key_directory SOURCE DESTINATION OWNER
 # whose .ssh is one directory share it, which the archive holds once for
 # each id: it is restored once, from the first of them in passwd, and the
 # others' copies must be the same, or the run ends before the root is
-# written, since the update cannot give that .ssh to both. Each account with
+# written, since the update cannot give that .ssh to both. A .ssh whose
+# place holds a home or a .ssh restored before it ends the run as well,
+# since it would replace them; nested_home_fault refuses such a layout
+# before this is called. Each account with
 # an id of 1000 or more and a home under /home is given that home, empty
 # when it has no keys, since the image's homes are removed after the write.
 # A home is read inside `keep` by root_path, and one that is not there yet is
@@ -953,6 +1077,9 @@ of different ids, and the update cannot restore both; the root was not written"
         fi
         restored="$restored$keys $to
 "
+        held=$(kept_below "$list" "$path") || exit 1
+        [ -z "$held" ] || die "the keys of $home/.ssh would replace $held, restored before them; the \
+root was not written"
         mkdir -p "${to%/*}" || exit 1
         restore_key_directory "$keys" "$to" "$uid:$gid"
         kept_within "$list" "$path" || kept_add "$list" "$path" || exit 1
@@ -2293,6 +2420,8 @@ whole configuration archived on its recovery partition; its accounts are not the
                 keep_copy "$archive/$f" "$keep/$f" || die "$f could not be taken from the archive"
             fi
         done
+        fault=$(nested_home_fault "$keep") || die "the archived homes could not be read"
+        [ -z "$fault" ] || die "$fault; nothing more was written"
         restore_archive_keys || die "the archived keys and homes could not be restored"
     elif [ -z "$kept_entry" ]; then
         say "copying this machine's accounts, policy and keys off the root"
@@ -2345,8 +2474,11 @@ whole configuration archived on its recovery partition; its accounts are not the
     # leads where nothing may be kept stays a link, and what it leads to is
     # the image's after the write. Then the links inside each .ssh kept are
     # made by pin_key_links to lead where they led in the old root, or the
-    # update stops here.
+    # update stops here. A home inside another account's .ssh stops it
+    # first, as nested_home_fault says.
     if [ -n "$mounted_root" ]; then
+        fault=$(nested_home_fault "$TARGET_MNT") || die "the homes could not be read"
+        [ -z "$fault" ] || die "$fault; move that home, and run this again; nothing was written"
         rm -f "$keep/$KEPT_PATHS" || die "the list of what the copy keeps could not be begun"
         keep_tree /home
         keep_tree /root
@@ -2369,19 +2501,32 @@ whole configuration archived on its recovery partition; its accounts are not the
             keep_tree "$home/.ssh"
         done < "$keep/etc/passwd"
         rm -f "$keep.links"
-        pinned="
-"
-        while IFS=: read -r _name _password _uid _gid _gecos home _shell; do
+        # Each .ssh is pinned once, for every account whose .ssh it is.
+        owners=""
+        while IFS=: read -r name _password uid gid _gecos home _shell; do
             case "$home" in /*) ;; *) continue ;; esac
             from=$(root_path "$TARGET_MNT" "$home/.ssh") || die "$home/.ssh leads through too many links"
             [ -d "$from" ] || continue
+            owners="$owners$uid:$gid:$name:$from
+"
+        done < "$keep/etc/passwd"
+        pinned="
+"
+        while IFS=: read -r _uid _gid _name from; do
+            [ -n "$from" ] || continue
             case "$pinned" in *"
 $from
 "*) continue ;; esac
             pinned="$pinned$from
 "
-            pin_key_links "$TARGET_MNT" "$from" "$keep${from#"$TARGET_MNT"}" "$keep/$KEPT_PATHS"
-        done < "$keep/etc/passwd"
+            accounts=$(printf '%s' "$owners" | F=$from awk '{
+                s = $0
+                for (i = 0; i < 3; i++) s = substr(s, index(s, ":") + 1)
+                if (s == ENVIRON["F"]) print substr($0, 1, length($0) - length(s) - 1) }')
+            pin_key_links "$TARGET_MNT" "$from" "$keep${from#"$TARGET_MNT"}" "$keep/$KEPT_PATHS" "$accounts"
+        done <<EOF
+$owners
+EOF
     fi
     if [ -n "$mounted_root" ]; then
         umount "$TARGET_MNT" || die "the root would not unmount"
@@ -2572,15 +2717,25 @@ $from
     # Then the image's keys go from /root and from every home, read inside
     # the new root by root_path, wherever that .ssh is not one the copy put
     # back, so that an account without keys before the update has none after
-    # it.
+    # it. A .ssh of the image's that is a symbolic link is removed and not
+    # what it leads to, which may be a directory the copy put back, such as
+    # /home; a directory that holds one is left whole and the run ends.
     { echo "root:x:0:0::/root:"; cat "$keep/etc/passwd"; } |
         while IFS=: read -r _name _password _uid _gid _gecos home _shell; do
             case "$home" in /*) ;; *) continue ;; esac
-            to=$(root_path "$TARGET_MNT" "$home/.ssh") || die "$home/.ssh leads through too many links"
+            dir=$(root_path "$TARGET_MNT" "$home") || die "$home leads through too many links"
+            to=$dir/.ssh
             [ -e "$to" ] || [ -L "$to" ] || continue
             path=${to#"$TARGET_MNT"}
-            [ -z "$(kept_path_fault "$path")" ] || continue
             kept_within "$keep/$KEPT_PATHS" "$path" && continue
+            if [ -L "$to" ]; then
+                rm -f "$to" || die "the image's link $path could not be removed"
+                continue
+            fi
+            held=$(kept_below "$keep/$KEPT_PATHS" "$path") ||
+                die "the list of what the copy kept could not be read"
+            [ -z "$held" ] || die "the image's $path, the .ssh of $home, holds $held, which the \
+update put back, and was not removed; the image's keys there remain"
             rm -rf "$to" || die "the image's keys in $home/.ssh could not be removed"
         done || exit 1
     sync

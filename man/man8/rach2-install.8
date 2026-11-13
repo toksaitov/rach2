@@ -269,6 +269,9 @@ a regular file elsewhere is replaced by a copy of that file with its owner
 and mode, a later link to the same file, by name or by a hard link, becoming
 a link to that copy, and any other is written as the absolute path it led
 to.
+A link to a file on a path through a directory that the account may not
+search stops the update before the root is written, since the copy would
+let the account read that file.
 A restore reads
 .Pa keys/UID
 as a directory when an archive written by an older version has one.
@@ -294,7 +297,8 @@ Each symbolic link inside a kept .ssh is made to lead where it led in the
 old root: one into the same .ssh is written relative to its place, one into
 a kept tree or link as the absolute path it led to, and one to a regular
 file elsewhere is replaced by a copy of that file with its owner and mode, a
-later link to the same file becoming a link to that copy.
+later link to the same file becoming a link to that copy, unless an account
+whose .ssh it is may not search a directory on the way to that file.
 A link that leads to a directory, a device or nothing that is not kept
 stops the update before the root is written, since the update would lose
 what it leads to or let it lead to the image's file of that name.
@@ -302,6 +306,11 @@ After the kept trees are back, the image's .ssh is removed from
 .Pa /root
 and from every account home, each read inside the new root, wherever it is
 not one of the kept trees, including accounts with no archived keys.
+An image's .ssh that is a symbolic link is removed as the link, never what
+it leads to, and one that holds a kept tree is left and stops the update.
+An update stops before anything is written when an account's home is, or
+lies inside, the .ssh of another account, since that .ssh put back whole
+would replace the home.
 Passwords are stored as hashes.
 The archive preserves accounts and keys for an update when the root cannot
 be read.
