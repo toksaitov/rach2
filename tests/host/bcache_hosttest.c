@@ -1823,8 +1823,9 @@ static void pause_release(void)
  * A miss under the big lock on a cache whose every buffer but one is held,
  * and that one dirty with its write failed: hit and let go at every pause of
  * the search, it stays unfit, so its releases are no progress, and the miss
- * fails after its sixteen retries while the hits go on. Every turn ends at a
- * service point, where the write lock may go to a writer.
+ * fails after its sixteen retries while the hits go on. Each retry follows
+ * a service point, where the write lock may go to a writer; the seventeenth
+ * turn, which fails, gives way to nobody.
  */
 static void victim_unfit_rows(void)
 {
@@ -1848,7 +1849,7 @@ static void victim_unfit_rows(void)
     b = bcache_get_blank(&vast, 100);
     check(b == 0 && pause_hits > 0,
           "a miss fails while an unfit buffer is hit and let go at each pause of its search");
-    check(service_points - points > 16, "and each turn of the search ends at a service point");
+    check(service_points - points == 16, "and each of its sixteen retries follows a service point");
     restore_hook = 0;
     pause_hits = 0;
     if (b) {
