@@ -136,13 +136,14 @@ wsl()
     unknown wsl "$ws_rc"
 }
 
-# windows: run standard input as a PowerShell script on the testing host, and
-# print `windows: unknown: WHY` as wsl does.
+# windows: run standard input as a script for the testing host's MSYS2 bash,
+# print each line it prints after `windows: `, and print `windows: unknown:
+# WHY` as wsl does.
 windows()
 {
-    wn_out=$(ssh_host "$TESTING" 'powershell -NoProfile -NonInteractive -Command -' 2> /dev/null)
+    wn_out=$(ssh_host "$TESTING" 'C:/msys64/usr/bin/bash.exe -l -s' 2> /dev/null)
     wn_rc=$?
-    [ -z "$wn_out" ] || printf '%s\n' "$wn_out" | tr -d '\000\r'
+    [ -z "$wn_out" ] || printf '%s\n' "$wn_out" | tr -d '\000\r' | sed 's/^/windows: /'
     unknown windows "$wn_rc"
 }
 
@@ -285,17 +286,21 @@ END
 # windows_procs [kill]: print a line `windows: PID NAME` for each program
 # under D:\rach2 on Windows and `windows: job ID.PART STATE` for each job of
 # a release run's part that `winclean.sh -l` lists and whose state is not
-# absent; with `kill`, stop each program under D:\rach2 through its own
-# handle as it is selected (G19). The parts' jobs are winclean.sh's to stop.
+# absent; with `kill`, stop each program under D:\rach2 through the one
+# handle through which winjob's `strays` read its path, so that no other
+# process is ever stopped (G19). The parts' jobs are winclean.sh's to stop.
 # Hyper-V and its machines are never touched. A release that stays keeps
 # what it runs on Windows.
 windows_procs()
 {
     [ -n "$release" ] || ! live_release || return 0
-    k=
-    [ "${1-}" != kill ] || k='; try { $_.Kill() } catch { }'
-    echo "Get-Process | Where-Object { \$_.Path -like 'D:\\rach2\\*' -or \$_.Path -like 'D:/rach2/*' } |
-        ForEach-Object { 'windows: {0} {1}' -f \$_.Id, \$_.ProcessName$k }" | windows
+    {
+        sh "$here/winjob.sh" "$(machine out)"
+        # shellcheck disable=SC2016 # the remote shell expands these
+        echo '[ -x "$winjob" ] || exit 3'
+        # shellcheck disable=SC2016 # the remote shell expands these
+        echo '"$winjob" strays D:/rach2 '"$([ "${1-}" != kill ] || echo stop)"
+    } | windows
     [ "${1-}" != kill ] || return 0
     if ! wp_ids=$(orphans); then
         echo "windows: unknown: the release runs that may still run could not be listed"
