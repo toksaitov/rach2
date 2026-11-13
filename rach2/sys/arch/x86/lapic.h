@@ -183,14 +183,15 @@ uint32_t lapic_x2apic_id(void);
 uint32_t lapic_this_id(void);
 
 /** End an interrupt that arrived through the APIC; nothing while the APIC
- * is not enabled. */
-void lapic_eoi(void);
+ * is not enabled. With interrupts off, pass its vector and the reading
+ * `lapic_eoi_enter` returned at its router's start for the exit counters. */
+void lapic_eoi(uint32_t vector, int word_set);
 
-/** Note, under `rach2.exits`, the vector a router has begun to take on this
- * processor and whether KVM's paravirtual word was set then, so that
- * `lapic_eoi` counts its end by how it went (exits.h's EXIT_EOI_*). Called
- * first in each router that ends an interrupt, with interrupts off. */
-void lapic_eoi_enter(uint32_t vector);
+/** Return whether KVM's paravirtual word is set, or zero with no APIC or
+ * exit counting off. Called first in each router that ends an interrupt,
+ * with interrupts off; keep the result in the router's saved context for
+ * `lapic_eoi` to count its end by how it went (exits.h's EXIT_EOI_*). */
+int lapic_eoi_enter(void);
 
 /** Have processor `cpu` end its interrupts through `word`, which it gave
  * KVM for the paravirtual end of interrupt (kvmsteal.c), where `lapic_eoi`

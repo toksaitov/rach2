@@ -546,7 +546,7 @@ static void rows_x2apic_hypervisor(void)
     check(apic_page[0xF0 / 4] == (0x100u | 0xFFu) && apic_page[0x80 / 4] == 0,
           "the spurious register and the task priority are written through their MSRs");
     apic_page[0xB0 / 4] = 0x1234;
-    lapic_eoi();
+    lapic_eoi(48, lapic_eoi_enter());
     check(apic_page[0xB0 / 4] == 0, "the end-of-interrupt is one write of zero to 0x80B");
     lapic_send_ipi(5, 0xF0);
     check(icr_writes == 1 && icr_hi == 5 && icr_lo == 0xF0,
@@ -850,7 +850,7 @@ static void rows_x2apic_moves(void)
     check(apic_page[0x380 / 4] == 777 && apic_page[0x360 / 4] == 0x400u &&
               apic_page[0xF0 / 4] == (0x100u | 0xFFu),
           "and every register is as it was");
-    lapic_eoi();
+    lapic_eoi(48, lapic_eoi_enter());
     check(writes == 0 && faults == 0, "after which the page is never touched");
 
     reset_model(0x8700);
@@ -950,7 +950,7 @@ int main(void)
     check(wrmsr_calls == 0, "an APIC already enabled in the register is not written again");
 
     apic_page[0xB0 / 4] = 0x1234;
-    lapic_eoi();
+    lapic_eoi(48, lapic_eoi_enter());
     check(apic_page[0xB0 / 4] == 0, "the end-of-interrupt is one write of zero to 0xB0");
 
     reset_model(0x8700);
@@ -999,7 +999,7 @@ int main(void)
     check(lapic_init() == -1, "rach2.nomsi refuses");
     check(writes == 0, "and nothing is written");
     apic_page[0xB0 / 4] = 0x1234;
-    lapic_eoi();
+    lapic_eoi(48, lapic_eoi_enter());
     check(apic_page[0xB0 / 4] == 0x1234,
           "and an end-of-interrupt on a refused APIC writes nothing");
 

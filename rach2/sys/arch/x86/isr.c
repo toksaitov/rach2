@@ -1018,7 +1018,8 @@ void isr_leave(isr_params_t *params)
  */
 void isr_local_router(isr_params_t *params)
 {
-    lapic_eoi_enter((uint32_t)params->vector);
+    int eoi_word_set = lapic_eoi_enter();
+
     user_entry(params);
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         sched_idle_awake();
@@ -1026,7 +1027,7 @@ void isr_local_router(isr_params_t *params)
         this_cpu()->idle_poll = CPU_POLL_KICKED;
     }
     if (params->vector == IPI_VECTOR) {
-        lapic_eoi();
+        lapic_eoi((uint32_t)params->vector, eoi_word_set);
         smp_ipi();
         timer_service_ipi();
         if (FRAME_USER(params) && current_proc &&
@@ -1215,6 +1216,7 @@ int arch_irq_waiting(void)
  */
 void _irq_router(isr_params_t *params)
 {
+    int eoi_word_set = lapic_eoi_enter();
     struct percpu *cpu = this_cpu();
     int timer = timer_vector(params->vector);
     uint32_t wake_irq = timer ? waketime_clock() : 0;
@@ -1225,7 +1227,6 @@ void _irq_router(isr_params_t *params)
     uintptr_t fp = (uintptr_t)params->ebp;
 #endif
 
-    lapic_eoi_enter((uint32_t)params->vector);
     user_entry(params);
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);
@@ -1234,7 +1235,7 @@ void _irq_router(isr_params_t *params)
         cpu->idle_poll = CPU_POLL_KICKED;
     }
     if (lines_apic && (timer || params->vector >= 48)) {
-        lapic_eoi();
+        lapic_eoi((uint32_t)params->vector, eoi_word_set);
     }
     timer_kind = apic_hr_entry(params->vector);
     if (!timer_kind) {
@@ -1290,7 +1291,7 @@ void _irq_router(isr_params_t *params)
             return;
         }
         irq_dispatch(params, timer_kind);
-        lapic_eoi();
+        lapic_eoi((uint32_t)params->vector, eoi_word_set);
         sched_tick();
         return;
     }
