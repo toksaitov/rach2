@@ -222,6 +222,12 @@ up to the data partition when there is one, and into the rest of the
 disk otherwise.
 .El
 .Pp
+The recovery partition is the FAT32 volume among the first four partitions
+that holds
+.Pa /boot/recovery ;
+each is looked at mounted read-only, since a writable mount of a FAT
+volume left dirty repairs it, and only the one found is mounted again to
+be written.
 If the installer finds a recovery partition, it archives the three account
 files, the SSH policy,
 .Pa /etc/vconsole.conf ,
@@ -295,19 +301,24 @@ The partition table is changed only to grow that partition into the
 free space after it.
 The data partition is neither written nor moved, and the files on it are
 kept.
-The disk must have a first partition that
-.Xr bootctl 8
-can read as a boot partition and an installed root containing
+The disk must have a first partition that holds this system's boot files
+and an installed root containing
 .Pa /etc/rach2 .
 Both are proved by reads alone, with every partition mounted read-only,
 before any partition of the disk is mounted writable, since a writable
 mount of a FAT volume left dirty repairs it.
-A boot partition that a stop in its conversion or in a slot's growth left
-as
-.Xr bootctl 8
-refuses it is accepted as described below, and a root that does not read
-is accepted when the recovery partition holds the recovery kernel and a
-whole archive of the configuration.
+The boot partition must hold the 1024-byte environment block, a menu with
+entries for both kernel slots, and one slot or both;
+.Ql bootctl status
+alone is no proof, since it reads neither the kernels nor the menu.
+A boot partition that a stop in its conversion left unreadable is
+accepted as described below, and a root that does not read is accepted
+when the recovery partition holds the recovery kernel and a whole archive
+of the configuration.
+Then what a stop left of a slot's growth, of the menu's replacement or of
+GRUB's EFI image's is finished, as
+.Fl -slots
+finishes it, below.
 .Pp
 The optional
 .Fl -console Cm term
@@ -323,7 +334,8 @@ sets the same lines to carry
 exactly once, which binds the Intel graphics driver to the machine's chip
 .Pq Xr i915 4 .
 Recovery lines are unchanged.
-The new menu is written beside the old one, synced and renamed over it,
+The new menu is replaced as described under
+.Sx Replacing a boot file ,
 then the partition is unmounted and checked with
 .Ql bootctl --target DISKp1 status
 before the trial is armed.
@@ -441,26 +453,33 @@ UEFI firmware reads a FAT32 volume only when it has 65525 clusters or more,
 and the 64 MiB boot partition such a disk has, at eight sectors to a
 cluster, has 16348; its first sector and its files are copied to
 .Pa rach2-boot-keep
-on the recovery partition, marked whole by a file
+on the recovery partition, compared whole with the partition once synced,
+and marked whole by a file
 .Pa complete
-written last, its file system is made again with
+written last; its file system is made again with
 .Ql mkfs.vfat ,
 which takes one sector to a cluster, its serial, by which the menu finds
 it, is written back into the new boot sector and its backup, and the
-files are copied back, after which
+files are copied back.
+The environment block, whose saved default is
+.Ql recovery
+by then, and the kernels go back first and are synced and compared, and
+the menu goes back last, through a copy renamed to its name, so that a
+stop before it leaves a partition with no menu, from which GRUB starts the
+recovery system.
+The copy is removed once the volume, mounted again read-only, holds every
+kept file whole and
 .Xr bootctl 8
-must read the volume and the copy is removed.
+reads it.
 A boot partition of less than 33 MiB holds no such volume, and its disk is
 left to boot by BIOS alone, as one is when
 .Pa bootx64.efi
 is not beside the image, when the disk has no recovery partition, or when
 the recovery partition has no room for the copy.
-GRUB's EFI image is copied to the boot partition as
-.Pa \eEFI\eBOOT\eBOOTX64.NEW
-and renamed
-.Pa BOOTX64.EFI
-once it is on the disk, so that a stop leaves the old one; the rename's few
-writes are the only time the partition has none.
+GRUB's EFI image is put on the boot partition as
+.Pa \eEFI\eBOOT\eBOOTX64.EFI ,
+replaced as described under
+.Sx Replacing a boot file .
 The image is left alone when the partition has it already, as it does at
 every update after the first, since the disk keeps its MBR.
 Its prefix opens the menu the BIOS core opens, and
@@ -500,7 +519,8 @@ boots the candidate slot sets
 .Ql recordfail=1
 and saves it before it loads the kernel, and the test that boots the
 fallback while it stays set follows the saved default's candidate line.
-The new menu is written beside the old one, synced and renamed over it,
+The new menu is replaced as described under
+.Sx Replacing a boot file ,
 and checked with
 .Ql bootctl --target DISKp1 status
 before the trial is armed.
@@ -595,25 +615,55 @@ compared with the other slot and synced before it takes the slot's name,
 so that a stop leaves no part of a kernel under the slot's name.
 Both names are 8.3 names, so the rename rewrites one directory entry in
 place.
+A menu or EFI image whose name a stop took while it was replaced is put
+back from its kept copy first.
 .Ql bootctl status
-refuses a boot partition that lacks a slot, and one where a stop while a
-copy was padded left both slots and a copy whose cluster chain is longer
-than its size, which a writable mount trims.
-So nothing is changed on such a disk until reads alone, with every
-partition mounted read-only, show it is this system's: the boot partition
-holds the environment block, a menu with entries for both slots, and one
-slot, or both with a copy of a slot's move beside them, and a root carries
+refuses a boot partition that lacks a slot, one where a stop while a copy
+was padded left both slots and a copy whose cluster chain is longer than
+its size, and one whose two FATs a stop left disagreeing, which a writable
+mount repairs; and it reads neither the kernels nor the menu.
+So nothing is changed on any disk until reads alone, with every partition
+mounted read-only, show it is this system's: the boot partition holds the
+environment block, a menu with entries for both slots, and one slot or
+both, and a root carries
 .Pa /etc/rach2
 or the recovery partition holds the recovery kernel and a whole archive of
 the configuration.
-An update that finds such a partition finishes it in the same way before
-it goes on.
+An update finishes such a partition in the same way before it goes on.
 It finds the saved default at
 .Ql recovery
 and leaves it there, saying which command sets it.
 Growing the fallback takes the most room, two new slots and the old
 fallback: 36 MiB on a disk with 4 MiB slots, which the 64 MiB boot
 partition of an installed disk has.
+.Ss Replacing a boot file
+The menu,
+.Pa /boot/grub/grub.cfg ,
+and GRUB's EFI image,
+.Pa \eEFI\eBOOT\eBOOTX64.EFI ,
+are replaced whole on the boot partition.
+FAT32 renames over a name by freeing the old file's directory entries and
+the new one's before it writes the name again, so a stop between those
+writes leaves neither name.
+So the new bytes are written beside the file as
+.Pa FILE.new ;
+a copy of them,
+.Pa FILE.keep ,
+is synced and compared before
+.Pa FILE.new
+is renamed over the file, and is removed only once the file has its name
+again.
+A stop leaves the old file or the new one whole under its name, or no file
+and a whole
+.Pa FILE.keep ,
+which the next update or
+.Fl -slots
+puts back before it changes anything else; the menu is read from
+.Pa grub.cfg.keep
+meanwhile when the disk is proved this system's.
+While the rename runs, UEFI firmware finds no loader by its name; GRUB,
+started by BIOS or by the EFI image, opens the recovery partition's menu
+when the boot partition has none.
 .Sh EXIT STATUS
 The exit status is 0 when the disk contains the installed system,
 for an update, when the new root is on disk and armed for a trial boot,
