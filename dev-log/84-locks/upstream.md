@@ -122,3 +122,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: nothing in Rach2; the mode's failure is a result that `judge.py modes` compares with Debian's.
 * Status: unreported.
 * Next: read `set_mode` in libdrm's current source to confirm that DIRTYFB still comes between SETCRTC and the report, and propose saving `errno` before it or calling it only on success.
+
+## Linux's memslot_perf_test ends a progressing guest on an alarm
+
+* Project: Linux 6.12.115, `linux-6.12.115.tar.xz`, SHA-256 0ec90fe4b20422b1b664b77e6d2dde22b40bd41e7eb2cad8ac8739a4749cb1bb, `tools/testing/selftests/kvm/memslot_perf_test.c`.
+* Fails: `host_perform_sync` arms `alarm(10)` before setting `sync_flag` and waiting for the guest to clear it (lines 418-426). A guest's RW pass that takes longer than ten seconds ends the process with SIGALRM even while the guest makes progress. The timeout follows emulation and nested exits, rather than a count of completed guest work.
+* Found: task 84-33 measured the RW timeout under both Rach2 and Linux as the KVM host inside the testing PC's KVM. The WSL release run 43430545575 at 08c7795ac also ended the program with status 142 in its RW phase under Rach2 inside TCG; the Mac's TCG run at the same head passed it.
+* Reproduction: run the program's default RW case two hypervisors deep, or under TCG on a loaded host, so that a guest's pass cannot finish within ten seconds. The runner prints `Testing RW performance`, then the shell reports `Alarm clock`.
+* Evidence: [84-33.md](84-33.md) records its author's Linux comparison; [84-256.md](84-256.md) gives the WSL release's own output and evidence paths. The source is the pinned Linux tarball.
+* Rach2: the release runs the KVM suite under KVM, as its nested cases require. Its `outer_kvm` row expects the failure already measured under Linux there. The program and the TCG row are unchanged.
+* Status: unreported.
+* Next: propose making the sync timeout optional for emulated and nested hosts, with the external runner's progress watchdog detecting a stopped guest.

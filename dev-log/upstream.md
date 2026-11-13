@@ -166,3 +166,4 @@ The bullets state only what the records show. A fact the records do not hold, su
 | QEMU's TCG takes XSETBV's intercept before CR4.OSXSAVE's #UD | QEMU 11.1.3 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#qemus-tcg-takes-xsetbvs-intercept-before-cr4osxsaves-ud) |
 | QEMU's TCG checks INT3 against SVM's INTn intercept | QEMU 11.1.3 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#qemus-tcg-checks-int3-against-svms-intn-intercept) |
 | libdrm's modetest reports DIRTYFB's error in place of SETCRTC's | libdrm 2.4.124 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#libdrms-modetest-reports-dirtyfbs-error-in-place-of-setcrtcs) |
+| Linux's memslot_perf_test ends a progressing guest on an alarm | Linux 6.12.115 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#linuxs-memslot_perf_test-ends-a-progressing-guest-on-an-alarm) |

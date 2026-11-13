@@ -4,9 +4,12 @@
 # taken under KVM (tests/graphics/Readme.md, Accelerators). The testbed's two
 # boot a Debian guest inside Rach2, under QEMU's TCG or Rach2's KVM, which
 # with Rach2 itself under TCG is emulated twice and did not reach its
-# server in the release's run (bed/Readme.md, Tests).
+# server in the release's run (bed/Readme.md, Tests). The KVM suite
+# includes host-svm cases whose SVM features TCG cannot provide
+# (tests/kvm/Readme.md, Running).
 browser
 video
 webgl
 bed-vtest
 bed-forward
+kvm

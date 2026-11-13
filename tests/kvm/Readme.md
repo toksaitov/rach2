@@ -20,7 +20,7 @@ The KVM suite runs Rach2's KVM the way a person uses it: Debian's QEMU on the x8
 
 A corpus case reports the progress `test` as each test ends, on `corpus.sh`'s line `kvm-corpus: done: N of M`, so that the gap bound is one test's and not the whole corpus's.
 
-The accelerator outside is the run's, as for every case: on the testing PC KVM, so that Rach2 runs its guests under nested KVM, and on the Mac TCG, which emulates SVM; `RACH2_QEMU_ACCEL=tcg` runs the `max-svm` cases under TCG on the testing PC too. `host-svm` starts only under KVM. Under TCG the outer machine has one processor, whatever the case asks ([etude](../../tools/etude/Readme.md)), for two faults of QEMU's that Results names.
+The accelerator outside is the run's, as for every case: on the testing PC KVM, so that Rach2 runs its guests under nested KVM, and on the Mac TCG, which emulates SVM; `RACH2_QEMU_ACCEL=tcg` runs the `max-svm` cases under TCG on the testing PC too. `host-svm` starts only under KVM. The release runs this suite under KVM through [`tools/ci/kvm-suites`](../../tools/ci/kvm-suites), even when its site selects TCG for the other suites; a manual run that includes the `-nested` cases must set `RACH2_QEMU_ACCEL=kvm`. Under TCG the outer machine has one processor, whatever the case asks ([etude](../../tools/etude/Readme.md)), for two faults of QEMU's that Results names.
 
 `svm-entry race SECONDS CPU`, which no case runs, checks an outer TCG for the first of them: a guest on processor CPU reads a byte through nested paging and writes it to a port, while a child on another processor runs FXRSTOR without end, for SECONDS. It prints `svm-entry: race: pass: N exits in S s on processor CPU`, or the first exit that is not the port with the byte.
 
