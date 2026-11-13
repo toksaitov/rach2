@@ -1,0 +1,79 @@
+booted rach2 ./kernel-head
+== sleep 2  2.00 s
+[?2004h
+<6>[5.367000] net: eth0: IPv6 fec0::45e1:99f7:3012:8eb3/64 added
+<6>[5.367000] net: eth0: IPv6 fec0::fae4:e643:27f9:c544/64 added
+<7>[6.223000] virtio_gpu: worker: pid 59
+<6>[6.223000] console: card0: handed to a master, the keyboard off
+[?2004l
+__END__0
+   exits=4827 halt_exits=2244 io_exits=106 mmio_exits=0 irq_exits=9 irq_window_exits=2 request_irq_exits=0 nmi_window_exits=0 insn_emulation=168 hypercalls=0 irq_injections=2250 halt_successful_poll=0 halt_wakeup=2245 req_event=4504 unnamed=2466
+   host eoi writes 2 2; tsc deadline writes 0 
+== grep '^ipi kick' /sys/kernel/debug/exits  0.01 s
+[?2004h[?2004l
+ipi kick 1867 1266 234 245 122
+__END__0
+   exits=1089 halt_exits=208 io_exits=257 mmio_exits=90 irq_exits=8 irq_window_exits=5 request_irq_exits=0 nmi_window_exits=0 insn_emulation=368 hypercalls=0 irq_injections=216 halt_successful_poll=11 halt_wakeup=197 req_event=468 unnamed=521
+   host eoi writes 2 2; tsc deadline writes 0 
+== tar cf - /opt/proton | cat > /dev/null  4.13 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+__END__0
+   exits=311915 halt_exits=73498 io_exits=275 mmio_exits=154764 irq_exits=8930 irq_window_exits=7773 request_irq_exits=0 nmi_window_exits=0 insn_emulation=155055 hypercalls=0 irq_injections=82968 halt_successful_poll=61794 halt_wakeup=7513 req_event=131690 unnamed=66675
+   host eoi writes 2098 1232 825 40 1; tsc deadline writes 0 
+== grep '^ipi kick' /sys/kernel/debug/exits  0.01 s
+[?2004h[?2004l
+ipi kick 50323 41498 7771 925 129
+__END__0
+   exits=912 halt_exits=162 io_exits=247 mmio_exits=0 irq_exits=5 irq_window_exits=5 request_irq_exits=0 nmi_window_exits=0 insn_emulation=281 hypercalls=0 irq_injections=170 halt_successful_poll=0 halt_wakeup=163 req_event=382 unnamed=493
+   host eoi writes 2 2; tsc deadline writes 0 
+== tar cf - /opt/proton | cat > /dev/null  0.98 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+__END__0
+   exits=155786 halt_exits=73494 io_exits=278 mmio_exits=0 irq_exits=2458 irq_window_exits=1173 request_irq_exits=0 nmi_window_exits=0 insn_emulation=291 hypercalls=0 irq_injections=75205 halt_successful_poll=66108 halt_wakeup=2535 req_event=80239 unnamed=78383
+   host eoi writes 814 405 255 97 57; tsc deadline writes 0 
+== grep '^ipi kick' /sys/kernel/debug/exits  0.01 s
+[?2004h[?2004l
+ipi kick 122824 64831 33917 16858 7218
+__END__0
+   exits=989 halt_exits=178 io_exits=258 mmio_exits=0 irq_exits=22 irq_window_exits=5 request_irq_exits=0 nmi_window_exits=0 insn_emulation=286 hypercalls=0 irq_injections=187 halt_successful_poll=0 halt_wakeup=179 req_event=420 unnamed=526
+   host eoi writes 2 2; tsc deadline writes 0 
+== tar cf - /opt/proton | /t/rcat  0.65 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 151566 bytes 1610649600 nvcsw 7214 nivcsw 0 by 10k: 149647 828 117 85 82 106 701 0
+__END__0
+   exits=20745 halt_exits=8015 io_exits=477 mmio_exits=108 irq_exits=1791 irq_window_exits=285 request_irq_exits=0 nmi_window_exits=0 insn_emulation=653 hypercalls=0 irq_injections=9085 halt_successful_poll=7042 halt_wakeup=795 req_event=11478 unnamed=10069
+   host eoi writes 140 94 44 2; tsc deadline writes 0 
+== grep '^ipi kick' /sys/kernel/debug/exits  0.01 s
+[?2004h[?2004l
+ipi kick 130398 69561 36471 17139 7227
+__END__0
+   exits=933 halt_exits=166 io_exits=257 mmio_exits=0 irq_exits=5 irq_window_exits=4 request_irq_exits=0 nmi_window_exits=0 insn_emulation=286 hypercalls=0 irq_injections=174 halt_successful_poll=0 halt_wakeup=166 req_event=392 unnamed=501
+   host eoi writes 2 2; tsc deadline writes 0 
+== tar cf - /opt/proton | cat > /dev/null  0.99 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+__END__0
+   exits=157171 halt_exits=74623 io_exits=279 mmio_exits=0 irq_exits=2538 irq_window_exits=1213 request_irq_exits=0 nmi_window_exits=0 insn_emulation=291 hypercalls=0 irq_injections=76390 halt_successful_poll=67085 halt_wakeup=2558 req_event=81589 unnamed=78518
+   host eoi writes 890 410 270 148 62; tsc deadline writes 0 
+== grep '^ipi kick' /sys/kernel/debug/exits  0.01 s
+[?2004h[?2004l
+ipi kick 204054 96437 57878 35503 14236
+__END__0
+   exits=1053 halt_exits=223 io_exits=262 mmio_exits=0 irq_exits=6 irq_window_exits=3 request_irq_exits=0 nmi_window_exits=0 insn_emulation=287 hypercalls=0 irq_injections=231 halt_successful_poll=0 halt_wakeup=224 req_event=504 unnamed=559
+   host eoi writes 2 2; tsc deadline writes 0 
+== tar cf - /opt/proton | /t/rcat  0.63 s
+[?2004h[?2004l
+tar: Removing leading `/' from member names
+rcat: reads 151784 bytes 1610649600 nvcsw 7041 nivcsw 0 by 10k: 149886 836 145 79 85 97 656 0
+__END__0
+   exits=20097 halt_exits=7794 io_exits=467 mmio_exits=0 irq_exits=1694 irq_window_exits=289 request_irq_exits=0 nmi_window_exits=0 insn_emulation=544 hypercalls=0 irq_injections=8847 halt_successful_poll=6820 halt_wakeup=856 req_event=11025 unnamed=9853
+   host eoi writes 119 56 55 7 1; tsc deadline writes 0 
+== grep '^ipi kick' /sys/kernel/debug/exits  0.01 s
+[?2004h[?2004l
+ipi kick 211423 100513 60851 35763 14296
+__END__0
+   exits=1106 halt_exits=247 io_exits=266 mmio_exits=0 irq_exits=4 irq_window_exits=4 request_irq_exits=0 nmi_window_exits=0 insn_emulation=288 hypercalls=0 irq_injections=256 halt_successful_poll=0 halt_wakeup=248 req_event=553 unnamed=585
+   host eoi writes 2 2; tsc deadline writes 0 
