@@ -82,7 +82,8 @@ static int hr_deadline;
 static void hr_set_deadline(uint64_t at)
 {
 #ifndef RACH2_HOSTTEST
-    __asm__ __volatile__("mfence" ::: "memory");
+    /* mfence as bytes: i686 tcc has no mnemonic for it. */
+    __asm__ __volatile__(".byte 0x0f, 0xae, 0xf0" ::: "memory");
 #endif
     kcpu_wrmsr(0x6E0u, (uint32_t)at, (uint32_t)(at >> 32));
 }
