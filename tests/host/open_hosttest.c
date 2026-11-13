@@ -1538,6 +1538,13 @@ void vfs_wb_err_set(struct vfs_mount *mnt, int rc)
     (void)rc;
 }
 
+/** The records of failed write-backs, of which no row makes any. */
+uint32_t vfs_wb_err_sets(struct vfs_mount *mnt)
+{
+    (void)mnt;
+    return 0;
+}
+
 /** The fdatasync of a file, which no row makes. */
 int vfs_fdatasync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
 {

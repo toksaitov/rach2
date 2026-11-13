@@ -506,6 +506,10 @@ struct vfs_mount {
      * Under `wb_err_lock` (vfs.c). */
     uint32_t wb_err;
     uint32_t sb_wb_err;
+    /* How many records `vfs_wb_err_set` has made in them, which wraps, so
+     * that a writer that failed can tell whether a lower layer recorded its
+     * failure already (`vfs_wb_err_sets`). Under `wb_err_lock`. */
+    uint32_t wb_err_records;
     /* The tick since which what a write-back of shared mappings' pages put
      * in the file system may have been dirty, the oldest kept, on the base
      * mount; 0 for none (`vfs_writeback_aged`). Under the big lock. */
@@ -1196,6 +1200,17 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc);
  * with interrupts off.
  */
 void vfs_wb_err_set(struct vfs_mount *mnt, int rc);
+
+/**
+ * How many records `vfs_wb_err_set` has made in the file system `mnt`
+ * shows, a count that wraps: a writer that reads it before a write and
+ * again after the write failed records the failure itself only when it has
+ * not moved, since a lower layer that recorded the same failure, ext2's
+ * batch (`ext2_writeback_error`) or the device (`vfs_device_failed`), moved
+ * it, and a second record after a sync reported the first would report the
+ * one failure twice. Any context.
+ */
+uint32_t vfs_wb_err_sets(struct vfs_mount *mnt);
 
 /**
  * The cursors a new description of a file of `mnt` starts with: `*file`
